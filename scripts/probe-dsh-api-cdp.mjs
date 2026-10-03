@@ -47,24 +47,44 @@ const waitPort = async (host, port, ms, died) => {
 
 export const httpRequest = (options, body, ms = HTTP_MS) =>
   new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
-      const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () =>
-        resolve({
-          status: res.statusCode ?? 0,
-          headers: res.headers,
-          body: Buffer.concat(chunks).toString('utf8'),
-        }),
-      );
-    });
-    req.setTimeout(ms, () => {
-      req.destroy();
-      reject(new Error('http-timeout'));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+    let settled = false;
+    let req;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(arg);
+    };
+    const timer = setTimeout(() => {
+      req?.destroy();
+      finish(reject, new Error('http-timeout'));
+    }, ms);
+    try {
+      req = http.request(options, (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () =>
+          finish(resolve, {
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          }),
+        );
+        res.on('aborted', () => finish(reject, new Error('http-timeout')));
+        res.on('error', (error) => finish(reject, error));
+        res.on('close', () => {
+          if (!settled) finish(reject, new Error('http-timeout'));
+        });
+      });
+      req.on('error', (error) => finish(reject, error));
+      req.on('close', () => {
+        if (!settled) finish(reject, new Error('http-timeout'));
+      });
+      if (body) req.write(body);
+      req.end();
+    } catch (error) {
+      finish(reject, error);
+    }
   });
 
 const drain = (pending, reason) => {

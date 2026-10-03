@@ -35,10 +35,14 @@ int_env PROBE_BROWSER_SECONDS "$browser_seconds" 300
 int_env PROBE_TASK_SECONDS "$task_seconds" 300
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
-for bin in docker node; do
+for bin in docker node timeout; do
   command -v "$bin" >/dev/null 2>&1 || { echo "probe-dsh-api: $bin is not on PATH" >&2; exit 2; }
 done
 [ -n "${DMXAPI_KEY:-}" ] || { echo "probe-dsh-api: DMXAPI_KEY is missing" >&2; exit 2; }
+case "$(timeout --version 2>/dev/null || true)" in
+  *'GNU coreutils'*) ;;
+  *) echo "probe-dsh-api: GNU timeout is required" >&2; exit 2 ;;
+esac
 if [ -z "${CHROME_BIN:-}" ] || [ ! -x "${CHROME_BIN}" ]; then
   echo "probe-dsh-api: CHROME_BIN must be an executable browser path" >&2
   exit 2
@@ -72,29 +76,12 @@ work_dir=""
 build_seconds=180
 docker_seconds=30
 chrome_wait=12
-drive_seconds=$((startup_seconds + browser_seconds * 7 + task_seconds * 9 + 180))
+drive_seconds=$((startup_seconds + browser_seconds * 10 + task_seconds * 9 + 180))
 note_cleanup_failure() { echo "probe-dsh-api: cleanup failed: $1" >&2; cleanup_failed=1; }
 run_bound() {
-  local seconds="$1" status
+  local seconds="$1"
   shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout --foreground "$seconds" "$@"
-    return $?
-  fi
-  "$@" &
-  local pid=$!
-  local elapsed=0
-  while [ "$elapsed" -lt "$seconds" ]; do
-    if ! kill -0 "$pid" >/dev/null 2>&1; then
-      wait "$pid"
-      return $?
-    fi
-    sleep 1
-    elapsed=$((elapsed + 1))
-  done
-  kill "$pid" >/dev/null 2>&1 || true
-  wait "$pid" >/dev/null 2>&1 || true
-  return 124
+  timeout --foreground --kill-after=5 "$seconds" "$@"
 }
 stop_chrome() {
   local pid="" waited=0
@@ -126,19 +113,26 @@ remove_owned() {
   note_cleanup_failure "docker ${kind} -f ${target}"
 }
 scrub_binds() {
-  [ "$image_owned" -eq 1 ] || return 0
-  [ -n "$workdir" ] || return 0
   local helper="${prefix}-scrub" err status=0
+  if [ "$image_owned" -eq 1 ] && [ -n "$workdir" ]; then
+    set +e
+    err="$(run_bound "$docker_seconds" docker run --rm --pull=never --name "$helper" --user 0:0 \
+      --mount "type=bind,src=${home_dir},dst=/s/home" \
+      --mount "type=bind,src=${work_dir},dst=/s/work" \
+      "$image" sh -c 'find /s/home /s/work -mindepth 1 -delete' 2>&1)"
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+      case "$err" in *"No such image"* | *"Unable to find image"*) ;; *) note_cleanup_failure "scrub bind dirs" ;; esac
+    fi
+  fi
   set +e
-  err="$(run_bound "$docker_seconds" docker run --rm --name "$helper" --user 0:0 \
-    --mount "type=bind,src=${home_dir},dst=/s/home" \
-    --mount "type=bind,src=${work_dir},dst=/s/work" \
-    "$image" sh -c 'find /s/home /s/work -mindepth 1 -delete' 2>&1)"
+  err="$(run_bound "$docker_seconds" docker rm -f "$helper" 2>&1)"
   status=$?
   set -e
-  [ "$status" -eq 0 ] && return 0
-  case "$err" in *"No such image"* | *"Unable to find image"*) return 0 ;; esac
-  note_cleanup_failure "scrub bind dirs"
+  if [ "$status" -ne 0 ]; then
+    case "$err" in *"No such container"*) ;; *) note_cleanup_failure "docker rm -f ${helper}" ;; esac
+  fi
 }
 cleanup() {
   [ "$cleaned" -eq 1 ] && return 0
@@ -166,8 +160,8 @@ mkdir -p "$home_dir" "$work_dir" "${workdir}/chrome"
 chmod 777 "$home_dir" "$work_dir"
 cp "$overlay_src" "$overlay"
 echo "probe-dsh-api: run_id=${run_id} image=${image} port=${port} workdir=${workdir} evidence=${evidence}"
-image_owned=1
 run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" "${repo_root}/images/dsh-user" >/dev/null
+image_owned=1
 container_owned=1
 run_bound "$docker_seconds" docker run -d --name "$container" --user 1001:1001 --hostname "u-probe-${run_id}" \
   -p "127.0.0.1:${port}:3080" --security-opt "seccomp=${seccomp}" -e DMXAPI_KEY \

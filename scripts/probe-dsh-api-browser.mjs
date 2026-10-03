@@ -10,12 +10,24 @@ const SECRET = /^(token|access_token|api[_-]?key|authorization|cookie)$/i;
 const MSG = /^(text|content|message|prompt|body)$/i;
 const NEW_BTN = 'button[aria-label="New session"],button[aria-label="新建会话"]';
 const SEND_BTN = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
+const STOP_BTN = 'button[aria-label="Stop generating"],button[aria-label="停止生成"]';
+const WORKSPACE_BTN = 'button[aria-label="Choose workspace"],button[aria-label="选择工作区"]';
+const EDIT_PATH = 'input[aria-label="Edit path"],input[aria-label="编辑路径"]';
+const EDIT_ZONE = 'button[aria-label="Edit path"],button[aria-label="编辑路径"]';
 const MARKER = 'dsh-team-probe';
+const WORKSPACE_PATH = '/data/work';
 const out = (line) => process.stdout.write(`${line}\n`);
 const fail = (message, code = 1) => {
   process.stderr.write(`probe-dsh-api: ${message}\n`);
   process.exitCode = code;
   throw Object.assign(new Error(message), { code, probeFail: true });
+};
+const stageFail = (stage, code, cause) => {
+  const error = new Error(`stage=${stage} error=${code}`);
+  error.stage = stage;
+  error.errorCode = code;
+  if (cause !== undefined) error.cause = cause;
+  throw error;
 };
 const env = (name) => {
   const value = process.env[name];
@@ -42,9 +54,23 @@ const redact = (value, key = '') => {
   return value;
 };
 const errorCode = (text) => {
-  const raw = String(text ?? 'error');
+  const raw = String(text?.message ?? text ?? 'error');
+  const staged = raw.match(/^stage=([a-z0-9-]+) error=([a-z0-9._:-]+)$/i);
+  if (staged) return raw;
+  if (raw.startsWith('chrome-start ')) return raw;
+  if (raw.startsWith('oracle-invalid-')) return raw;
+  if (raw.startsWith('timed out waiting for ')) {
+    return `wait-timeout:${raw.slice('timed out waiting for '.length).replace(/\s+/g, '-')}`;
+  }
+  if (/^(http|ws|cdp)-(timeout|error|closed)$/.test(raw)) return raw;
+  if (raw.startsWith('missing ')) return 'missing-control';
+  if (raw === 'composer missing' || raw === 'missing edit-path') return raw.replace(/\s+/g, '-');
   const match = raw.match(/\b(?:[A-Z][A-Za-z]+Error|HTTP[/_-]?\d{3}|E[A-Z0-9_]+|net::[A-Z_]+)\b/);
   return match?.[0] ?? 'error';
+};
+const formatFailure = (error) => {
+  if (error?.stage && error?.errorCode) return `stage=${error.stage} error=${error.errorCode}`;
+  return errorCode(error);
 };
 const tally = (codes) => {
   const counts = {};
@@ -59,12 +85,8 @@ const tally = (codes) => {
 const waitFor = async (fn, ms, label) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    try {
-      const value = await fn();
-      if (value) return value;
-    } catch {
-      /* retry until deadline */
-    }
+    const value = await fn();
+    if (value) return value;
     await sleep(250);
   }
   throw new Error(`timed out waiting for ${label}`);
@@ -135,7 +157,10 @@ const evalJson = async (page, expression) => {
     returnByValue: true,
     awaitPromise: true,
   });
-  if (result.exceptionDetails) throw new Error(errorCode(result.exceptionDetails.text));
+  if (result.exceptionDetails) {
+    const details = result.exceptionDetails;
+    throw new Error(errorCode(details.exception?.className ?? details.text));
+  }
   return result.result?.value;
 };
 const clickSelector = async (page, selector) => {
@@ -145,6 +170,41 @@ const clickSelector = async (page, selector) => {
   );
   if (!ok) throw new Error(`missing ${selector}`);
 };
+const clickTextButton = async (page, labels) => {
+  const ok = await evalJson(
+    page,
+    `(function(){
+      const labels=new Set(${JSON.stringify(labels)});
+      const el=[...document.querySelectorAll("button")].find((node)=>{
+        const text=(node.textContent||"").trim();
+        return labels.has(text) && !node.disabled;
+      });
+      if(!el)return false;
+      el.click();
+      return true;
+    })()`,
+  );
+  if (!ok) throw new Error(`missing ${labels.join('|')}`);
+};
+const queryPresent = (page, selector) =>
+  evalJson(
+    page,
+    `(function(){return Boolean(document.querySelector(${JSON.stringify(selector)}));})()`,
+  );
+const queryEnabled = (page, selector) =>
+  evalJson(
+    page,
+    `(function(){const el=document.querySelector(${JSON.stringify(selector)});return Boolean(el&&!el.disabled);})()`,
+  );
+const buttonState = (page, labels, enabled) =>
+  evalJson(
+    page,
+    `(function(){
+      const labels=new Set(${JSON.stringify(labels)});
+      const hits=[...document.querySelectorAll("button")].filter((el)=>labels.has((el.textContent||"").trim()));
+      return ${JSON.stringify(enabled)} ? hits.some((el)=>!el.disabled) : hits.length > 0;
+    })()`,
+  );
 const scanState = async (home) => {
   const names = [];
   let scanError = null;
@@ -173,8 +233,8 @@ const scanState = async (home) => {
   };
 };
 const snapshot = (bucket, phase) => {
-  const httpPaths = [...bucket.http].sort();
-  const wsUrls = [...bucket.ws].sort();
+  const httpPaths = [...new Set(bucket.http.map((row) => row.path))].sort();
+  const wsUrls = [...new Set(bucket.ws.map((row) => row.path))].sort();
   out(`phase ${phase} http=${httpPaths.join(',') || '(none)'} ws=${wsUrls.join(',') || '(none)'}`);
   return { phase, http: httpPaths, ws: wsUrls };
 };
@@ -220,20 +280,16 @@ const sample = async (origin, cookie, home, mux, sessionId, from, until, label) 
   );
   return { http: httpSample, ws: wsSample, files };
 };
-const waitComposer = (page, ms) =>
-  waitFor(
-    () =>
-      evalJson(
-        page,
-        `(function(){return Boolean(document.querySelector('[contenteditable="true"]'));})()`,
-      ),
-    ms,
-    'composer',
+const composerReady = (page) =>
+  evalJson(
+    page,
+    `(function(){const el=document.querySelector('[contenteditable="true"]');return Boolean(el&&!el.closest('[inert]'));})()`,
   );
+const waitComposer = (page, ms) => waitFor(() => composerReady(page), ms, 'composer');
 const typeComposer = async (page, text) => {
   const focused = await evalJson(
     page,
-    `(function(){const el=document.querySelector('[contenteditable="true"]');if(!el)return false;el.focus();return true;})()`,
+    `(function(){const el=document.querySelector('[contenteditable="true"]');if(!el||el.closest('[inert]'))return false;el.focus();return true;})()`,
   );
   if (!focused) throw new Error('composer missing');
   await page.send('Input.insertText', { text });
@@ -266,18 +322,22 @@ const waitQuiet = async (pending, ms) => {
     await sleep(50);
   }
 };
-const waitPhaseEvent = async (bucket, kind, test, ms, label) => {
-  const prev = new Set(bucket[kind]);
-  await waitFor(
-    () => {
-      for (const value of bucket[kind]) {
-        if (!prev.has(value) && test(value)) return true;
-      }
-      return false;
-    },
+const cursor = (bucket) => ({ http: bucket.seq.http, ws: bucket.seq.ws });
+const eventsAfter = (rows, mark) => rows.filter((row) => row.seq > mark);
+const waitRelevantHttp = async (bucket, test, mark, ms, label) => {
+  const found = await waitFor(
+    () => eventsAfter(bucket.http, mark).find((row) => test(row.path)),
     ms,
     label,
   );
+  const requestId = found.requestId;
+  if (!requestId) return found;
+  await waitFor(
+    () => bucket.done.has(requestId) || bucket.failed.has(requestId),
+    ms,
+    `${label}-response`,
+  );
+  return found;
 };
 const markerExists = async (path) => {
   try {
@@ -314,6 +374,86 @@ const waitOracle = async (startPath, completePath, wantComplete, ms, label) => {
     throw new Error(`oracle-invalid-${label}`);
   }
 };
+const waitTurnIdle = (page, ms, label) =>
+  waitFor(
+    async () => !(await queryPresent(page, STOP_BTN)) && (await queryPresent(page, SEND_BTN)),
+    ms,
+    label,
+  );
+const waitHomepage = (page, ms) =>
+  waitFor(() => evalJson(page, 'document.readyState==="complete"'), ms, 'homepage');
+const clickIfPresent = async (page, selector) => {
+  if (await queryEnabled(page, selector)) {
+    await clickSelector(page, selector);
+    return true;
+  }
+  return false;
+};
+const dismissNotice = async (page, ms) => {
+  const labels = ['Continue', '继续'];
+  if (!(await buttonState(page, labels, false))) return;
+  await waitFor(
+    async () =>
+      !(await buttonState(page, labels, false)) || (await buttonState(page, labels, true)),
+    ms,
+    'notice',
+  );
+  if (!(await buttonState(page, labels, false))) return;
+  await clickTextButton(page, labels);
+  await waitFor(async () => !(await buttonState(page, labels, false)), ms, 'notice-closed');
+};
+const enterWorkspacePath = async (page) => {
+  if (!(await queryPresent(page, EDIT_PATH))) {
+    if (!(await clickIfPresent(page, EDIT_ZONE))) throw new Error('missing edit-path');
+    await waitFor(() => queryPresent(page, EDIT_PATH), 8_000, 'edit-path');
+  }
+  const focused = await evalJson(
+    page,
+    `(function(){
+      const el=document.querySelector(${JSON.stringify(EDIT_PATH)});
+      if(!el||el.disabled)return false;
+      el.focus();
+      el.select?.();
+      return true;
+    })()`,
+  );
+  if (!focused) throw new Error('missing edit-path');
+  await page.send('Input.insertText', { text: WORKSPACE_PATH });
+  for (const type of ['keyDown', 'keyUp']) {
+    await page.send('Input.dispatchKeyEvent', {
+      type,
+      key: 'Enter',
+      code: 'Enter',
+      windowsVirtualKeyCode: 13,
+    });
+  }
+};
+const openWorkspace = async (page, ms) => {
+  const labels = ['Open', '打开'];
+  await waitFor(
+    async () => (await composerReady(page)) || (await buttonState(page, labels, true)),
+    ms,
+    'workspace-open',
+  );
+  if (await composerReady(page)) return;
+  await clickTextButton(page, labels);
+};
+const setupFirstRun = async (page, ms) => {
+  await dismissNotice(page, ms);
+  if (await composerReady(page)) return;
+  const pickerOpen = (await queryPresent(page, EDIT_PATH)) || (await queryPresent(page, EDIT_ZONE));
+  if (!pickerOpen) {
+    await waitFor(() => queryEnabled(page, WORKSPACE_BTN), ms, 'workspace');
+    await clickSelector(page, WORKSPACE_BTN);
+  }
+  await waitFor(
+    async () => (await queryPresent(page, EDIT_PATH)) || (await queryPresent(page, EDIT_ZONE)),
+    ms,
+    'workspace-picker',
+  );
+  await enterWorkspacePath(page);
+  await openWorkspace(page, ms);
+};
 const report = (httpOk, wsOk, inventory) => {
   out('path-inventory');
   const last = new Map(inventory.map((row) => [row.phase, row]));
@@ -338,21 +478,41 @@ const report = (httpOk, wsOk, inventory) => {
     process.exitCode = 1;
   }
 };
+const emptyBucket = () => ({
+  http: [],
+  ws: [],
+  seq: { http: 0, ws: 0 },
+  done: new Set(),
+  failed: new Set(),
+});
+const waitHttpResponse = async (bucket, requestId, ms, label) => {
+  if (!requestId) return;
+  await waitFor(() => bucket.done.has(requestId) || bucket.failed.has(requestId), ms, label);
+};
+const sampleRunning = async (ctx, from, label) => {
+  const listed = await sampleHttp(ctx.origin, ctx.cookie);
+  let sessionId = listed.items?.find((item) => item.running)?.sessionId ?? '';
+  if (!sessionId) {
+    sessionId =
+      [...ctx.mux.store.events].reverse().find((event) => event.t >= from && event.running)
+        ?.sessionId ?? '';
+  }
+  return {
+    sessionId,
+    observed: await sample(
+      ctx.origin,
+      ctx.cookie,
+      ctx.home,
+      ctx.mux,
+      sessionId,
+      from,
+      Date.now(),
+      label,
+    ),
+  };
+};
 const runCycle = async (ctx, index) => {
-  const {
-    page,
-    origin,
-    cookie,
-    home,
-    work,
-    mux,
-    buckets,
-    current,
-    pending,
-    inventory,
-    browserMs,
-    taskMs,
-  } = ctx;
+  const { page, work, buckets, current, pending, inventory, browserMs, taskMs } = ctx;
   const tag = `${MARKER}-${index}-${randomUUID().slice(0, 8)}`;
   const startPath = join(work, `${tag}.start`);
   const completePath = join(work, `${tag}.complete`);
@@ -361,12 +521,13 @@ const runCycle = async (ctx, index) => {
     `touch /data/work/${tag}.start; sleep 8; touch /data/work/${tag}.complete. ` +
     `Do not skip the sleep or the marker files.`;
   current.value = 'message';
+  const beforeMessage = cursor(buckets.message);
   await typeComposer(page, prompt);
   await clickSelector(page, SEND_BTN);
-  await waitPhaseEvent(
+  await waitRelevantHttp(
     buckets.message,
-    'http',
     (path) => path.includes('/api/session/'),
+    beforeMessage.http,
     8_000,
     'message-http',
   );
@@ -383,35 +544,24 @@ const runCycle = async (ctx, index) => {
     `cycle-${index}-approve`,
   );
   await waitOracle(startPath, completePath, false, taskMs, `cycle-${index}-running`);
-  const listed = await sampleHttp(origin, cookie);
-  let sessionId = listed.items?.find((item) => item.running)?.sessionId ?? '';
-  if (!sessionId) {
-    const hit = [...mux.store.events]
-      .reverse()
-      .find((event) => event.t >= runFrom && event.running);
-    sessionId = hit?.sessionId ?? '';
-  }
-  const running = await sample(
-    origin,
-    cookie,
-    home,
-    mux,
-    sessionId,
+  const { sessionId, observed: running } = await sampleRunning(
+    ctx,
     runFrom,
-    Date.now(),
     `cycle-${index}-running`,
   );
+  const runningOpen = (await markerExists(startPath)) && !(await markerExists(completePath));
+  if (!runningOpen) stageFail('oracle-idle', `cycle-${index}-running-closed`);
   await waitQuiet(pending, 1_000);
   inventory.push(snapshot(buckets.running, 'running'));
   current.value = 'complete';
   const idleFrom = Date.now();
   await waitOracle(startPath, completePath, true, taskMs, `cycle-${index}-complete`);
-  await waitComposer(page, browserMs);
+  await waitTurnIdle(page, browserMs, `cycle-${index}-idle`);
   const idle = await sample(
-    origin,
-    cookie,
-    home,
-    mux,
+    ctx.origin,
+    ctx.cookie,
+    ctx.home,
+    ctx.mux,
     sessionId,
     idleFrom,
     Date.now(),
@@ -421,20 +571,144 @@ const runCycle = async (ctx, index) => {
   inventory.push(snapshot(buckets.complete, 'complete'));
   return { running, idle };
 };
+const openSession = async (ctx) => {
+  const { page, buckets, current, pending, inventory, browserMs } = ctx;
+  current.value = 'new-session';
+  const before = cursor(buckets['new-session']);
+  await clickSelector(page, NEW_BTN);
+  try {
+    await waitComposer(page, browserMs);
+  } catch (error) {
+    stageFail('new-session', errorCode(error), error);
+  }
+  const created = eventsAfter(buckets['new-session'].http, before.http).find((row) =>
+    row.path.includes('/api/'),
+  );
+  if (created)
+    await waitHttpResponse(
+      buckets['new-session'],
+      created.requestId,
+      8_000,
+      'new-session-http-response',
+    );
+  await waitQuiet(pending, 2_000);
+  inventory.push(snapshot(buckets['new-session'], 'new-session'));
+};
+const runLabeled = async (ctx, index) => {
+  try {
+    return await runCycle(ctx, index);
+  } catch (error) {
+    if (error?.stage) throw error;
+    const code = errorCode(error);
+    const stage =
+      code.includes('idle') || code.startsWith('oracle-invalid-') ? 'oracle-idle' : 'message';
+    stageFail(stage, code, error);
+  }
+};
+const captureHomepage = async (page, screenshot, pending, buckets, errors) => {
+  await waitQuiet(pending, 2_000);
+  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
+  await mkdir(dirname(screenshot), { recursive: true });
+  await writeFile(screenshot, Buffer.from(shot.data, 'base64'));
+  out(`screenshot ${screenshot} bytes=${(await stat(screenshot)).size}`);
+  const inventory = [snapshot(buckets.homepage, 'homepage')];
+  const baseline = errors.slice();
+  out(`console baseline ${tally(baseline)}`);
+  return { inventory, baseline };
+};
 const attachPage = (page, buckets, current, pending, errors) => {
   page.on('Network.requestWillBeSent', (p) => {
     pending.count += 1;
-    if (p.request?.url) buckets[current.value].http.add(redactUrl(p.request.url));
+    const bucket = buckets[current.value];
+    if (p.request?.url) {
+      bucket.seq.http += 1;
+      bucket.http.push({
+        seq: bucket.seq.http,
+        path: redactUrl(p.request.url),
+        requestId: p.requestId,
+      });
+    }
+  });
+  page.on('Network.loadingFinished', (p) => {
+    if (p.requestId) buckets[current.value].done.add(p.requestId);
+  });
+  page.on('Network.loadingFailed', (p) => {
+    if (p.requestId) buckets[current.value].failed.add(p.requestId);
   });
   page.on('Network.webSocketCreated', (p) => {
     pending.count += 1;
-    if (p.url) buckets[current.value].ws.add(redactUrl(p.url));
+    const bucket = buckets[current.value];
+    if (p.url) {
+      bucket.seq.ws += 1;
+      bucket.ws.push({ seq: bucket.seq.ws, path: redactUrl(p.url), requestId: p.requestId });
+    }
   });
   page.on('Runtime.exceptionThrown', (p) => errors.push(errorCode(p.exceptionDetails?.text)));
+  page.on('Runtime.consoleAPICalled', (p) => {
+    if (p.type === 'error') {
+      errors.push(errorCode(p.args?.[0]?.description ?? p.args?.[0]?.value ?? p.type));
+    }
+  });
   page.on('Log.entryAdded', (p) => {
     if (p.entry?.level === 'error') errors.push(errorCode(p.entry.text));
   });
 };
+const connectSession = async (origin, cookie, buckets, current, pending, errors) => {
+  const chrome = await startChrome(env('CHROME_BIN'), env('PROBE_PROFILE'), env('PROBE_PID_FILE'));
+  const page = await connectPage(chrome.browserWs);
+  for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
+  attachPage(page, buckets, current, pending, errors);
+  const mux = await muxListen(origin, cookie, { ready: false, events: [] });
+  await page.send('Network.setCookie', {
+    name: cookie.split('=', 1)[0],
+    value: cookie.slice(cookie.indexOf('=') + 1),
+    url: origin,
+    httpOnly: true,
+    sameSite: 'Strict',
+    path: '/',
+  });
+  return { chrome, page, mux };
+};
+const reachComposer = async (page, origin, browserMs) => {
+  const loaded = new Promise((resolve) => {
+    page.on('Page.loadEventFired', () => resolve(true));
+  });
+  await page.send('Page.navigate', { url: `${origin}/` });
+  await Promise.race([loaded, sleep(browserMs)]);
+  try {
+    await waitHomepage(page, browserMs);
+  } catch (error) {
+    stageFail('startup', errorCode(error), error);
+  }
+  try {
+    await setupFirstRun(page, browserMs);
+  } catch (error) {
+    const code = errorCode(error);
+    const stage = code.includes('notice') ? 'notice' : 'workspace';
+    stageFail(stage, code, error);
+  }
+  try {
+    await waitComposer(page, browserMs);
+  } catch (error) {
+    stageFail('composer', errorCode(error), error);
+  }
+};
+const distinctHttp = (cycles) =>
+  cycles.every(
+    (c) =>
+      c.running.http.available &&
+      c.running.http.anyRunning === true &&
+      c.idle.http.available &&
+      c.idle.http.anyRunning === false,
+  );
+const distinctWs = (cycles) =>
+  cycles.every(
+    (c) =>
+      c.running.ws.available &&
+      c.idle.ws.available &&
+      c.running.ws.last === true &&
+      c.idle.ws.last === false,
+  );
 const drive = async () => {
   const origin = env('PROBE_ORIGIN');
   const cookie = await readSecret('PROBE_COOKIE_FILE');
@@ -443,9 +717,7 @@ const drive = async () => {
   const screenshot = env('PROBE_SCREENSHOT');
   const browserMs = Number(env('PROBE_BROWSER_SECONDS')) * 1000;
   const taskMs = Number(env('PROBE_TASK_SECONDS')) * 1000;
-  const buckets = Object.fromEntries(
-    PHASES.map((phase) => [phase, { http: new Set(), ws: new Set() }]),
-  );
+  const buckets = Object.fromEntries(PHASES.map((phase) => [phase, emptyBucket()]));
   const current = { value: 'homepage' };
   const errors = [];
   const pending = { count: 0 };
@@ -453,30 +725,22 @@ const drive = async () => {
   let page;
   let mux;
   try {
-    chrome = await startChrome(env('CHROME_BIN'), env('PROBE_PROFILE'), env('PROBE_PID_FILE'));
-    page = await connectPage(chrome.browserWs);
-    for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
-    attachPage(page, buckets, current, pending, errors);
-    mux = await muxListen(origin, cookie, { ready: false, events: [] });
-    await page.send('Network.setCookie', {
-      name: cookie.split('=', 1)[0],
-      value: cookie.slice(cookie.indexOf('=') + 1),
-      url: origin,
-      httpOnly: true,
-      sameSite: 'Strict',
-      path: '/',
-    });
-    await page.send('Page.navigate', { url: `${origin}/` });
-    await waitFor(() => evalJson(page, 'document.readyState==="complete"'), browserMs, 'homepage');
-    await waitComposer(page, browserMs);
-    await waitQuiet(pending, 2_000);
-    const shot = await page.send('Page.captureScreenshot', { format: 'png' });
-    await mkdir(dirname(screenshot), { recursive: true });
-    await writeFile(screenshot, Buffer.from(shot.data, 'base64'));
-    out(`screenshot ${screenshot} bytes=${(await stat(screenshot)).size}`);
-    const inventory = [snapshot(buckets.homepage, 'homepage')];
-    const baseline = errors.slice();
-    out(`console baseline ${tally(baseline)}`);
+    ({ chrome, page, mux } = await connectSession(
+      origin,
+      cookie,
+      buckets,
+      current,
+      pending,
+      errors,
+    ));
+    await reachComposer(page, origin, browserMs);
+    const { inventory, baseline } = await captureHomepage(
+      page,
+      screenshot,
+      pending,
+      buckets,
+      errors,
+    );
     const ctx = {
       page,
       origin,
@@ -491,44 +755,16 @@ const drive = async () => {
       browserMs,
       taskMs,
     };
-    const openSession = async () => {
-      current.value = 'new-session';
-      await clickSelector(page, NEW_BTN);
-      await waitComposer(page, browserMs);
-      await waitPhaseEvent(
-        buckets['new-session'],
-        'http',
-        (path) => path.includes('/api/'),
-        8_000,
-        'new-session-http',
-      );
-      await waitQuiet(pending, 2_000);
-      inventory.push(snapshot(buckets['new-session'], 'new-session'));
-    };
-    await openSession();
-    const cycles = [await runCycle(ctx, 1)];
-    await openSession();
-    cycles.push(await runCycle(ctx, 2));
-    await openSession();
-    cycles.push(await runCycle(ctx, 3));
-    out(`console new ${tally(errors.slice(baseline.length))}`);
-    report(
-      cycles.every(
-        (c) =>
-          c.running.http.available &&
-          c.running.http.anyRunning === true &&
-          c.idle.http.available &&
-          c.idle.http.anyRunning === false,
-      ),
-      cycles.every(
-        (c) =>
-          c.running.ws.available &&
-          c.idle.ws.available &&
-          c.running.ws.last === true &&
-          c.idle.ws.last === false,
-      ),
-      inventory,
-    );
+    await openSession(ctx);
+    const cycles = [await runLabeled(ctx, 1)];
+    await openSession(ctx);
+    cycles.push(await runLabeled(ctx, 2));
+    await openSession(ctx);
+    cycles.push(await runLabeled(ctx, 3));
+    const added = errors.slice(baseline.length);
+    out(`console new ${tally(added)}`);
+    if (added.length) stageFail('console', tally(added));
+    report(distinctHttp(cycles), distinctWs(cycles), inventory);
   } finally {
     try {
       mux?.close();
@@ -551,10 +787,7 @@ const run = async () => {
 };
 run().catch((error) => {
   if (!error?.probeFail) {
-    const text = String(error?.message ?? error);
-    process.stderr.write(
-      `probe-dsh-api: ${text.startsWith('chrome-start ') ? text : errorCode(error)}\n`,
-    );
+    process.stderr.write(`probe-dsh-api: ${formatFailure(error)}\n`);
     process.exitCode ||= 1;
   }
 });
