@@ -2,6 +2,10 @@ name: CI
 
 on:
   pull_request:
+    # labeled/unlabeled: the diff-size and lockfile jobs read the exemption labels, so a
+    # label change must re-run them; a label set while opening the PR is not in the
+    # `opened` payload.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
