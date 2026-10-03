@@ -15,7 +15,7 @@ EOF
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
 
 timeout_seconds="${PROBE_TIMEOUT_SECONDS-90}"
-if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || [ "$timeout_seconds" -gt 600 ]; then
+if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]{0,2}$ ]] || [ "$timeout_seconds" -gt 600 ]; then
   echo "probe-sandbox: PROBE_TIMEOUT_SECONDS must be a positive integer 1-600, got ${timeout_seconds:-<empty>}" >&2
   exit 2
 fi
@@ -40,7 +40,6 @@ cleaned=0
 workdir=""
 
 note_cleanup_failure() { echo "probe-sandbox: cleanup failed: $1" >&2; cleanup_failed=1; }
-
 remove_owned() {
   local kind="$1" target="$2" err
   err="$(docker "$kind" -f "$target" 2>&1)" && return 0
@@ -74,10 +73,7 @@ write_custom_seccomp() {
   local raw="${workdir}/moby-default.json" actual
   curl -fsSL "$seccomp_url" -o "$raw"
   actual="$(node -e 'const fs=require("node:fs"); const c=require("node:crypto"); process.stdout.write(c.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"))' "$raw")"
-  [ "$actual" = "$seccomp_sha256" ] || {
-    echo "probe-sandbox: seccomp digest mismatch: expected ${seccomp_sha256} got ${actual}" >&2
-    return 1
-  }
+  [ "$actual" = "$seccomp_sha256" ] || { echo "probe-sandbox: seccomp digest mismatch: expected ${seccomp_sha256} got ${actual}" >&2; return 1; }
   node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); p.syscalls=[...p.syscalls,{names:["clone","unshare","mount","umount2","pivot_root"],action:"SCMP_ACT_ALLOW"}]; fs.writeFileSync(process.argv[2], JSON.stringify(p));' "$raw" "$seccomp_file"
   echo "seccomp source=${seccomp_url} sha256=${actual} extra=clone,unshare,mount,umount2,pivot_root"
 }
@@ -88,12 +84,13 @@ wait_for_container() {
     wait_out="${wait_out%%$'\n'*}"
     case "$wait_out" in '' | *[!0-9]*) echo "docker wait returned non-integer: ${wait_out}" >&2; return 2 ;; esac
     return "$wait_out"
+  else
+    wait_status=$?
+    docker kill "$container" >/dev/null 2>&1 || true
+    if [ "$wait_status" -eq 124 ]; then echo "level timeout after ${timeout_seconds}s" >&2; return 124; fi
+    echo "docker wait failed: status=${wait_status}" >&2
+    return "$wait_status"
   fi
-  wait_status=$?
-  docker kill "$container" >/dev/null 2>&1 || true
-  if [ "$wait_status" -eq 124 ]; then echo "level timeout after ${timeout_seconds}s" >&2; return 124; fi
-  echo "docker wait failed: status=${wait_status}" >&2
-  return "$wait_status"
 }
 
 collect_result() {
@@ -104,7 +101,7 @@ collect_result() {
 const fs=require("node:fs");
 const lines=fs.readFileSync(process.argv[1],"utf8").split(/\r?\n/).filter(l=>l.startsWith("PROBE_RESULT "));
 if(lines.length!==1){process.stdout.write("malformed or duplicate PROBE_RESULT");process.exit(2);}
-let rec;try{rec=JSON.parse(lines[0].slice(13));}catch{process.stdout.write("malformed PROBE_RESULT");process.exit(2);}
+let rec;try{rec=JSON.parse(lines[0].slice(13));}catch{rec=null;}
 if(!rec||typeof rec!=="object"){process.stdout.write("malformed PROBE_RESULT");process.exit(2);}
 if(rec.usable===true&&rec.wsOk===true&&rec.stateDenied===true&&rec.statePresent===false) process.exit(0);
 process.stdout.write(typeof rec.reason==="string"&&rec.reason?rec.reason:"PROBE_RESULT not usable");
@@ -112,18 +109,13 @@ process.exit(1);
 ' "$log")"
   parse_status=$?
   set -e
-  if [ "$docker_status" -ne 0 ]; then
-    echo "level ${name}: unusable (container exit=${docker_status}${parse_out:+; ${parse_out}})"
-    return 1
-  fi
+  if [ "$docker_status" -ne 0 ]; then echo "level ${name}: unusable (container exit=${docker_status}${parse_out:+; ${parse_out}})"; return 1; fi
   if [ "$parse_status" -eq 0 ]; then
     echo "level ${name}: usable"
     echo "workspace write succeeded; state directory write rejected"
     return 0
   fi
-  if [ "$parse_status" -eq 1 ]; then echo "level ${name}: unusable (${parse_out})"; else
-    echo "level ${name}: unusable (${parse_out:-malformed or duplicate PROBE_RESULT}; docker_status=${docker_status})"
-  fi
+  if [ "$parse_status" -eq 1 ]; then echo "level ${name}: unusable (${parse_out})"; else echo "level ${name}: unusable (${parse_out:-malformed or duplicate PROBE_RESULT}; docker_status=${docker_status})"; fi
   return 1
 }
 
@@ -159,11 +151,7 @@ if [ -z "$first_usable" ]; then
   if run_level custom-seccomp --security-opt "seccomp=${seccomp_file}"; then first_usable="custom-seccomp"; else failures+=(custom-seccomp); fi
 fi
 if [ -z "$first_usable" ]; then
-  if run_level custom-seccomp-systempaths --security-opt "seccomp=${seccomp_file}" --security-opt systempaths=unconfined; then
-    first_usable="custom-seccomp-systempaths"
-  else
-    failures+=(custom-seccomp-systempaths)
-  fi
+  if run_level custom-seccomp-systempaths --security-opt "seccomp=${seccomp_file}" --security-opt systempaths=unconfined; then first_usable="custom-seccomp-systempaths"; else failures+=(custom-seccomp-systempaths); fi
 fi
 
 echo

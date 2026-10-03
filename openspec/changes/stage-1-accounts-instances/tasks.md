@@ -17,7 +17,7 @@
 依赖：无。
 
 - [x] 1.1 新建 `images/dsh-user/Dockerfile`：基础镜像、bubblewrap、pnpm、钉定版本的 DSH、uid 1001 的非 root 用户、`DSH_HOME=/data/home`、工作目录 `/data/work`、`DSH_TELEMETRY_DISABLED=1`；构建时校验解析到的 DSH 版本等于钉定值，不等则失败。验证：在 giap-vps 上构建成功，`docker run --rm <镜像> dsh --version` 输出钉定版本；把钉定值改成不存在的版本后构建失败。
-- [ ] 1.2 新建 `scripts/probe-sandbox.sh`：构建镜像，按“Docker 默认 → 自定义 seccomp → 再加 `/proc` 屏蔽放开”逐级启动容器，每一级用 DSH 的 `bash` 工具在“工作区内修改”模式下分别向工作目录和状态目录写文件，打印每一级的结果和最小可用组合；任何一级都不可用时非零退出并列出每一级的失败原因；只创建带 `dsh-team` 前缀的镜像和容器，退出时（含失败和中断）删除。验证：`pnpm lint:shell` 通过；在 giap-vps 上执行后 `docker ps -a` 和 `docker images` 里没有它创建的资源。
+- [x] 1.2 新建 `scripts/probe-sandbox.sh`：构建镜像，按“Docker 默认 → 自定义 seccomp → 再加 `/proc` 屏蔽放开”逐级启动容器，每一级用 DSH 的 `bash` 工具在“工作区内修改”模式下分别向工作目录和状态目录写文件，打印每一级的结果和最小可用组合；任何一级都不可用时非零退出并列出每一级的失败原因；只创建带 `dsh-team` 前缀的镜像和容器，退出时（含失败和中断）删除。验证：`pnpm lint:shell` 通过；在 giap-vps 上执行后 `docker ps -a` 和 `docker images` 里没有它创建的资源。
 - [ ] 1.3 在 giap-vps（amd64，Ubuntu 24.04）上执行探针，把得到的最小组合存为 `images/seccomp/dsh-user.json` 和一份记录所需其他容器选项的说明。验证：探针零状态退出；输出里“工作区写入成功、状态目录写入被拒绝”出现在选定的那一级；去掉该组合里任意一项后重跑，该级报告不可用；结束后机器上没有带 `dsh-team` 前缀的镜像和容器。
 - [ ] 1.4 把结论写回 `design.md` 的决定 12 和 Open Questions 第一条：VPS 上的最小组合、与阶段 0 在 arm64 上的结论是否一致、目标机 Ubuntu 22.04 待项目方执行同一脚本。验证：`design.md` 里这两处不再写“由探针定”，而是写出具体组合。
 
@@ -59,6 +59,8 @@ Runtime evidence (2026-10-03, giap-vps Linux amd64, Docker 29.1.3): the minimal 
 - Documentation / migration notes — selected: usage and output interpretation in script help/comments and PR runtime evidence; final host-policy conclusions remain #6.
 
 Run `pnpm check` locally after implementation and the probe scenarios on giap-vps. The fixture review must not assume the unknown minimal working security combination; the probe measures it.
+
+Task 1.2 runtime evidence (2026-10-03): giap-vps Docker 29.1.3 / Linux amd64, actual DSH 0.2.0-rc.2 tool reported Docker default usable (workspace exact bytes, explicit state sandbox denial). All 17 success/failure/timeout/INT/TERM/cleanup/config-boundary scenarios passed after two fixes; normal/failure/interruption runs left no owned resources. Injected cleanup failure was reported nonzero and its exact resources were recovered by the verifier. Final minimum-policy artifact and host conclusions remain task 1.3/1.4.
 
 ## 2. 探针：DSH Web 接口和空闲信号（任务包 1.1）
 
