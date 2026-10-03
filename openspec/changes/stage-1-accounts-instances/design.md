@@ -142,7 +142,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 - 基础 `node:24-bookworm-slim`；装 bubblewrap、Python 3 和 `python-docx`（公文写作 Agent 生成 DOCX 用）、pnpm、`@deepseek-ai/dsh@0.2.0-rc.2`；非 root 用户 uid 1001；`DSH_HOME=/data/home`，工作目录 `/data/work`。
 - 镜像里预置 `$DSH_HOME/profiles/web/`（含办公 Agent 的 bundle），并把整个 `$DSH_HOME/profiles/` 目录原样拷贝一份到 `/opt/dsh-team/profile-seed/`（即 `profile-seed/web/` 对应 `profiles/web/`）。新用户的状态卷第一次挂载时 Docker 会把镜像里的目录内容带进去（T5 前半，阶段 0 已实测）。
-- 容器安全设置由任务包 1.0 的探针定：从 Docker 默认开始逐级放宽，取 DSH 自己的 `bash` 工具在“工作区内修改”模式下可用的最小组合，产出 `images/seccomp/` 下的配置文件。阶段 0 在 arm64 的 Docker Desktop 上需要同时放开 seccomp 和 `/proc` 屏蔽两项（T8）。
+- 2026-10-03 在 giap-vps（amd64、Ubuntu 24.04、Linux `6.8.0-117-generic`、Docker 29.1.3）实测最小额外放宽集合为空：Docker 内嵌默认即能让 DSH `0.2.0-rc.2` 的真实 `bash` 工具在“工作区内修改”模式下写工作区并拒绝写状态目录。另对交付的 `images/seccomp/dsh-user.json` 独立验证通过：该文件与 Moby `seccomp/v0.2.3` 默认策略语义相同，不追加 syscall allow，不增加 capabilities，不使用 `systempaths=unconfined` 或 privileged；来源哈希及显式调用见 `images/seccomp/README.md`。两次均保留 Landlock partial-ABI 警告。阶段 0 的 arm64 Docker Desktop 需要 seccomp 与 `/proc` 两项放宽（T8），与本次不同；差异根因未证明，不能由 VPS 结果替代目标机验证。
 - 探针是一个可重复执行的脚本：在项目方的 VPS（amd64，Ubuntu 24.04）上由 Agent 执行（D16）；目标机 Ubuntu 22.04 上由项目方再执行一次。本阶段其余需要 Docker 的构建、测试和整套部署也都在这台 VPS 上做（D16）。VPS 上只创建带 `dsh-team` 前缀的镜像、容器、卷和网络，结束时删除，不动机器上其他项目的东西。
 
 ### 13. 权限三档
@@ -203,7 +203,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 ## Open Questions
 
-- **目标机 Ubuntu 22.04 上 shell 沙箱的最终确认。** 由项目方在目标机执行任务包 1.0 交付的探测脚本。在此之前用 VPS 上得到的配置开发。结论不改变规格；只可能改变 `images/seccomp/` 的内容和容器安全选项。
+- **目标机 Ubuntu 22.04 上 shell 沙箱的最终确认。** VPS 已验证“钉定 Moby 默认 seccomp、零额外安全放宽”，配置和调用方式见 `images/seccomp/`；删除额外放宽项的集合为空，不虚构删除试验。移除 Landlock syscall allow 的临时更严策略使真实工具报告 `SANDBOX_UNAVAILABLE`，作为独立负对照。项目方仍须在 Ubuntu 22.04 执行同一探针并验证显式交付策略；若不可用，记录各级失败原因并交项目方确认，不能自动降为无 shell 沙箱。
 - **DSH 0.2.0-rc.2 的 HTTP 接口实际路径，以及“是否有运行中任务”的判断方式。** 任务包 1.1 的探针回答。已定退路见风险表：找不到可靠信号就只按连接和活动时间判定。结论写回决定 9。
 - **预置工作区、中文界面、关闭公告的做法。** 任务包 1.2 的探针回答，结论写回决定 10 和 12。
 - **Auto review 在开发模型上是否可用。** 任务包 1.13 验证；不可用时 Auto 档暂时等同人工批准。
@@ -241,3 +241,19 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 ## Epic execution review timing
 
 On 2026-10-03 the user confirmed PR #108 had received human review and explicitly moved subsequent human critical-path review to one batch after all Epic #3 issues and PR merges. Each affected PR records that decision and the deferred review list; runtime, agent-review, CI and fix-pass gates remain mandatory.
+
+## Issue #6 implementation boundary
+
+- Change surface: `images/seccomp/dsh-user.json`, its options/provenance note, and measured conclusions in decision 12 / Open Questions 1; tasks 1.3/1.4 only.
+- Governing invariant: ship no unmeasured security relaxation; real DSH Workspace Write must permit the workspace and deny state writes using the exact delivered settings.
+- Must preserve: pinned DSH, non-root uid 1001, platform behavior, upstream DSH source, and unrelated VPS resources.
+- Measured input: #5 found Docker's embedded default usable on giap-vps via Landlock. This does not yet prove that a separately downloaded Moby profile is identical or usable.
+- Candidate artifact: unmodified pinned Moby default seccomp JSON (`seccomp/v0.2.3`, SHA256 `536529b665dd0972c37bfb569f5d4ac8a53592e7b00752bc39ff063ca9864c74`), with no extra syscall allows, no capabilities, no systempaths relaxation.
+- Required evidence: fresh probe chooses default; separately use the exact shipped JSON as `security-opt seccomp=<file>` with the existing real-tool driver and assert workspace exact bytes / state denial. Compare policy semantics with the pinned upstream source; formatting may change bytes but not policy.
+- Minimality evidence: if both default and the pinned artifact work with zero added relaxations, there are no relaxation items to remove. Record that fact explicitly; do not call an unrelated syscall deletion the required relaxation-removal test or invent a non-minimal configuration to manufacture one.
+- Sibling surfaces: upstream profile provenance, shipped JSON parser compatibility, Docker launch options, real release driver, docs consumed by #28/#36, and target-host verification.
+- Failure evidence: a disposable deliberately restrictive policy must fail the real tool control; this demonstrates a negative control, not equivalence to the empty relaxation-removal set.
+- Non-goals: Ubuntu 22.04 execution (project party), orchestrator behavior, modifying the probe, speculative attribution of native-Linux / Docker-Desktop differences.
+- Review focus: distinguish embedded-default evidence from explicit-profile evidence; report partial Landlock ABI warning and unsupported-host limits; no extra privileges or silent fallback.
+- Packaging: retain readable upstream policy rather than minify to evade the line limit; if it exceeds 400 lines, use the repository's `diff-limit-exempt` mechanism with vendored-policy provenance/atomicity justification in the PR.
+- Human review: `images/seccomp/` is a critical path; the PR must declare human white-box review of every changed line and record the user's epic-end deferral plus an entry in the deferred-review ledger.

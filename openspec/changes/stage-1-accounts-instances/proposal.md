@@ -70,3 +70,12 @@
 - Blast radius: false sandbox success would misconfigure every future instance; cleanup must not affect unrelated host resources.
 - Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
 - Evidence floor: actual pinned DSH tool workspace/state outcomes per level, all-failure exit, interruption cleanup, no owned resource leaks, and `pnpm check`.
+
+## Issue #6 fixture
+
+- Issue type: feature
+- Fixture level: expanded
+- Upstream suggested level: expanded (agree: shipped seccomp policy is a critical production boundary)
+- Blast radius: every user instance's sandbox; inaccurate host conclusions could grant unnecessary privileges.
+- Selected risk packs: Config / project setup; File IO / path safety / overwrite; Schema / columns / units / field names; Auth / permissions / secrets; Error handling / rollback / partial outputs; Release / packaging / dependency compatibility; Documentation / migration notes.
+- Evidence floor: fresh giap-vps probe, separate real-tool run with the exact committed profile, byte/semantic provenance comparison, denied state write, cleanup, and `pnpm check`.
