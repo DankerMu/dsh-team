@@ -1,71 +1,74 @@
 #!/usr/bin/env bash
-# scripts/probe-sandbox.sh — task 1.2 sandbox probe. Invoke: pnpm probe:sandbox
-#
-# Builds images/dsh-user, then tries Docker default, custom seccomp
-# (moby/profiles seccomp/v0.2.3 + clone/unshare/mount/umount2/pivot_root),
-# then that policy plus systempaths=unconfined. Each level runs the pinned
-# DSH bash tool in Workspace Write. Usable = workspace marker written exactly
-# and DSH_HOME marker absent. No --privileged / seccomp=unconfined.
-# Cleanup on EXIT/INT/TERM removes only this run's dsh-team-probe-sandbox-* resources.
+# scripts/probe-sandbox.sh — task 1.2. pnpm probe:sandbox
+# Docker default → custom seccomp → +systempaths. Owned-object cleanup.
 set -euo pipefail
 
 usage() {
   cat <<'EOF'
 Usage: pnpm probe:sandbox
-
 Probes DSH bash under Workspace Write through three Docker security levels.
 Prints each level's options, failure reason, and the first usable combination.
-
-Env: PROBE_TIMEOUT_SECONDS (default 90)
+Env: PROBE_TIMEOUT_SECONDS (positive integer 1-600, default 90)
 EOF
 }
 
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
 
+timeout_seconds="${PROBE_TIMEOUT_SECONDS-90}"
+if ! [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ ]] || [ "$timeout_seconds" -gt 600 ]; then
+  echo "probe-sandbox: PROBE_TIMEOUT_SECONDS must be a positive integer 1-600, got ${timeout_seconds:-<empty>}" >&2
+  exit 2
+fi
+
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
-for bin in docker curl node; do
+for bin in docker curl node timeout; do
   command -v "$bin" >/dev/null 2>&1 || { echo "probe-sandbox: $bin is not on PATH" >&2; exit 2; }
 done
 
 run_id="$(date +%s)-$$"
 prefix="dsh-team-probe-sandbox-${run_id}"
 image="${prefix}-image"
-workdir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX")"
-seccomp_file="${workdir}/dsh-user-seccomp.json"
-driver="${repo_root}/scripts/probe-sandbox-bash-tool.mjs"
-timeout_seconds="${PROBE_TIMEOUT_SECONDS:-90}"
 seccomp_url="https://raw.githubusercontent.com/moby/profiles/seccomp/v0.2.3/seccomp/default.json"
 seccomp_sha256="536529b665dd0972c37bfb569f5d4ac8a53592e7b00752bc39ff063ca9864c74"
-level_names=(docker-default custom-seccomp custom-seccomp-systempaths)
+driver="${repo_root}/scripts/probe-sandbox-bash-tool.mjs"
+owned_containers=()
+image_owned=0
 probe_status=0
 cleanup_failed=0
 cleaned=0
+workdir=""
 
 note_cleanup_failure() { echo "probe-sandbox: cleanup failed: $1" >&2; cleanup_failed=1; }
 
+remove_owned() {
+  local kind="$1" target="$2" err
+  err="$(docker "$kind" -f "$target" 2>&1)" && return 0
+  case "$err" in *"No such container"* | *"No such image"*) return 0 ;; esac
+  note_cleanup_failure "docker ${kind} -f ${target}: ${err}"
+}
+
 cleanup() {
   [ "$cleaned" -eq 1 ] && return 0
+  trap '' INT TERM
+  local target
+  for target in "${owned_containers[@]}"; do remove_owned rm "$target"; done
+  [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
+  [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || note_cleanup_failure "rm -rf $workdir"; }
   cleaned=1
-  local name
-  for name in "${level_names[@]}"; do
-    docker inspect "${prefix}-${name}" >/dev/null 2>&1 || continue
-    docker rm -f "${prefix}-${name}" >/dev/null 2>&1 || note_cleanup_failure "docker rm -f ${prefix}-${name}"
-  done
-  if docker image inspect "$image" >/dev/null 2>&1; then
-    docker rmi -f "$image" >/dev/null 2>&1 || note_cleanup_failure "docker rmi -f $image"
-  fi
-  [ -d "$workdir" ] && { rm -rf "$workdir" || note_cleanup_failure "rm -rf $workdir"; }
   [ "$cleanup_failed" -ne 0 ] && [ "$probe_status" -eq 0 ] && probe_status=1
+  trap - INT TERM
   return 0
 }
 
 # shellcheck disable=SC2317
-on_signal() { probe_status="$1"; cleanup; trap - EXIT; exit "$probe_status"; }
-
+on_signal() { probe_status="$1"; cleanup; trap - EXIT INT TERM; exit "$probe_status"; }
 trap cleanup EXIT
 trap 'on_signal 130' INT
 trap 'on_signal 143' TERM
+
+workdir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX")"
+seccomp_file="${workdir}/dsh-user-seccomp.json"
 
 write_custom_seccomp() {
   local raw="${workdir}/moby-default.json" actual
@@ -80,36 +83,47 @@ write_custom_seccomp() {
 }
 
 wait_for_container() {
-  local container="$1" waiter waited=0
-  docker wait "$container" >/dev/null 2>&1 &
-  waiter=$!
-  while kill -0 "$waiter" 2>/dev/null; do
-    if [ "$waited" -ge "$timeout_seconds" ]; then
-      echo "level timeout after ${timeout_seconds}s" >&2
-      docker kill "$container" >/dev/null 2>&1 || true
-      wait "$waiter" 2>/dev/null || true
-      return 124
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  wait "$waiter" || true
+  local container="$1" wait_out wait_status
+  if wait_out="$(timeout --foreground "$timeout_seconds" docker wait "$container")"; then
+    wait_out="${wait_out%%$'\n'*}"
+    case "$wait_out" in '' | *[!0-9]*) echo "docker wait returned non-integer: ${wait_out}" >&2; return 2 ;; esac
+    return "$wait_out"
+  fi
+  wait_status=$?
+  docker kill "$container" >/dev/null 2>&1 || true
+  if [ "$wait_status" -eq 124 ]; then echo "level timeout after ${timeout_seconds}s" >&2; return 124; fi
+  echo "docker wait failed: status=${wait_status}" >&2
+  return "$wait_status"
 }
 
 collect_result() {
-  local name="$1" log="$2" docker_status="$3" result=""
-  [ -s "$log" ] && { cat "$log"; result="$(grep '^PROBE_RESULT ' "$log" | tail -n 1 || true)"; }
-  if [ -z "$result" ]; then
-    echo "level ${name}: unusable (no PROBE_RESULT; docker_status=${docker_status})"
+  local name="$1" log="$2" docker_status="$3" parse_out parse_status
+  [ -s "$log" ] && cat "$log"
+  set +e
+  parse_out="$(node -e '
+const fs=require("node:fs");
+const lines=fs.readFileSync(process.argv[1],"utf8").split(/\r?\n/).filter(l=>l.startsWith("PROBE_RESULT "));
+if(lines.length!==1){process.stdout.write("malformed or duplicate PROBE_RESULT");process.exit(2);}
+let rec;try{rec=JSON.parse(lines[0].slice(13));}catch{process.stdout.write("malformed PROBE_RESULT");process.exit(2);}
+if(!rec||typeof rec!=="object"){process.stdout.write("malformed PROBE_RESULT");process.exit(2);}
+if(rec.usable===true&&rec.wsOk===true&&rec.stateDenied===true&&rec.statePresent===false) process.exit(0);
+process.stdout.write(typeof rec.reason==="string"&&rec.reason?rec.reason:"PROBE_RESULT not usable");
+process.exit(1);
+' "$log")"
+  parse_status=$?
+  set -e
+  if [ "$docker_status" -ne 0 ]; then
+    echo "level ${name}: unusable (container exit=${docker_status}${parse_out:+; ${parse_out}})"
     return 1
   fi
-  echo "$result"
-  if grep -q '"usable":true' <<<"$result"; then
+  if [ "$parse_status" -eq 0 ]; then
     echo "level ${name}: usable"
     echo "workspace write succeeded; state directory write rejected"
     return 0
   fi
-  echo "level ${name}: unusable (${result#PROBE_RESULT })"
+  if [ "$parse_status" -eq 1 ]; then echo "level ${name}: unusable (${parse_out})"; else
+    echo "level ${name}: unusable (${parse_out:-malformed or duplicate PROBE_RESULT}; docker_status=${docker_status})"
+  fi
   return 1
 }
 
@@ -122,6 +136,7 @@ run_level() {
   echo "=== level ${name} ==="
   if [ "$#" -eq 0 ]; then echo "security-opt: Docker default (engine embedded profile)"; else echo "security-opt: $*"; fi
   set +e
+  owned_containers+=("$container")
   docker run -d --name "$container" --user 1001:1001 \
     --mount "type=bind,src=${driver},dst=/probe/probe-sandbox-bash-tool.mjs,ro" \
     "$@" "$image" node /probe/probe-sandbox-bash-tool.mjs >/dev/null
@@ -133,6 +148,7 @@ run_level() {
 }
 
 echo "probe-sandbox: run_id=${run_id} image=${image} workdir=${workdir}"
+image_owned=1
 docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" "${repo_root}/images/dsh-user"
 write_custom_seccomp
 
