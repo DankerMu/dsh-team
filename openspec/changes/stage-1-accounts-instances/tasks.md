@@ -89,6 +89,20 @@ Tasks 1.3/1.4 evidence (2026-10-03): fresh probe exit 0 selects Docker default; 
 Suggested fixture level: compact - 只新增一个探测脚本和文档结论，不改平台运行时代码
 Minimal mergeable slice: atomic - 2.1 的路径清单是 2.2 的输入，结论只有三步都做完才成立，拆开合入的中间状态没有可用产出
 
+### Issue #7 risk/evidence map (tasks 2.1–2.3 only)
+
+- Public API / CLI / script entry — selected: run the root probe command on giap-vps and record real UI HTTP/WS paths per required phase.
+- Config / project setup — selected: pinned image/model and explicit required browser/model environment; missing prerequisites fail loud.
+- File IO / path safety / overwrite — selected: inspect only fresh test-owned state metadata; targeted cleanup of unique probe resources.
+- Schema / columns / units / field names — selected: runtime values and adopted signal predicate matched to actual npm release, not route guesses.
+- Auth / permissions / secrets — selected: Host-bound token exchange; all displayed/persisted evidence excludes credentials and message contents.
+- Concurrency / shared state / ordering — selected: real task start/running/completed/idle transitions sampled in order for three cycles; errors/disconnects are not idle.
+- Resource limits / large input / discovery — selected: bounded startup/browser/task waits and constrained, redacted signal observations.
+- Legacy compatibility / examples — not selected: no prior shipped API probe or platform consumer to migrate.
+- Error handling / rollback / partial outputs — selected: unavailable channels/missing prerequisites clearly fail or record unavailable; no-signal fallback stops for user approval; failure/interruption cleanup.
+- Release / packaging / dependency compatibility — selected: real Docker/browser on giap-vps against pinned DSH; verification-only browser tooling does not silently change production dependencies.
+- Documentation / migration notes — selected: decision 9 / Open Questions 2 name observed paths, predicate, three-cycle evidence and limits; no spec fallback without approval.
+
 ## 3. 探针：预置工作区、中文界面、关闭公告（任务包 1.2）
 
 依赖：第 1 组。

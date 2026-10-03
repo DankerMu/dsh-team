@@ -257,3 +257,19 @@ On 2026-10-03 the user confirmed PR #108 had received human review and explicitl
 - Review focus: distinguish embedded-default evidence from explicit-profile evidence; report partial Landlock ABI warning and unsupported-host limits; no extra privileges or silent fallback.
 - Packaging: retain readable upstream policy rather than minify to evade the line limit; if it exceeds 400 lines, use the repository's `diff-limit-exempt` mechanism with vendored-policy provenance/atomicity justification in the PR.
 - Human review: `images/seccomp/` is a critical path; the PR must declare human white-box review of every changed line and record the user's epic-end deferral plus an entry in the deferred-review ledger.
+
+## Issue #7 implementation boundary
+
+- Change surface: `scripts/probe-dsh-api.sh`, minimal probe driver/support under `scripts/`, root command entry, and measured decision 9 / Open Questions 2; no platform runtime or idle-reaper implementation.
+- Governing invariant: the adopted signal must distinguish an actually running DSH task from idle in three observed cycles; unknown/error/disconnected cannot silently mean idle.
+- Must preserve: DSH npm `0.2.0-rc.2`, source unchanged, explicit Host-based launch-token exchange, existing platform checks, and unrelated VPS services/resources.
+- Must add: start a disposable instance, exchange launch token server-side, drive the actual Web UI through homepage/new Session/message/running/completed phases, and record observed HTTP paths and WS addresses (secrets removed).
+- Required signal evidence: try HTTP responses, WS events and test-owned state-directory metadata; record running/idle values or explicit unavailability for each method in each of three cycles. Use real submitted/completed tasks, not a mocked status source or static code-derived endpoint list.
+- Browser evidence: use an actual browser on giap-vps; capture request events and at least a screenshot of the exercised UI, with no new unhandled browser console errors. Source inspection may discover candidate routes but is not runtime proof.
+- Model boundary: use the configured `DMXAPI_KEY` environment and baseline endpoint/model for real test messages when needed; missing credentials must fail explicitly. Never inspect/print the secret file or values; no model content in output artifacts.
+- Secrets: strip token/query credentials, cookies, Authorization, model keys and message content from logs, screenshots and endpoint inventories; do not print raw container startup logs.
+- Sibling surfaces: launch/Host exchange, browser HTTP+WS traffic, task lifecycle, all three signal channels, redaction, failure exits/timeouts, and container/browser/temp-resource cleanup.
+- Required success: a named predicate with running/idle samples from three cycles, concrete observed paths per phase, clean shutdown, then write measured conclusions. Do not assume the running field or route from newer upstream source.
+- Required failure: unsupported channels explicitly recorded; missing browser/model/API prerequisite fails rather than fabricating a signal; all probes bounded and owned resources cleaned on failure/interruption.
+- Stop rule: if no reliable signal is observed, report “未找到可靠信号”, preserve findings and request project-party confirmation of the specific longer-idle fallback before changing the spec or task 2.3 completion.
+- Non-goals: gateway, idle-reaper production code, real user data, Ubuntu 22.04 execution, guessing future signal behavior beyond measured release.
