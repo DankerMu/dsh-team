@@ -17,7 +17,7 @@
 依赖：无。
 
 - [x] 1.1 新建 `images/dsh-user/Dockerfile`：基础镜像、bubblewrap、pnpm、钉定版本的 DSH、uid 1001 的非 root 用户、`DSH_HOME=/data/home`、工作目录 `/data/work`、`DSH_TELEMETRY_DISABLED=1`；构建时校验解析到的 DSH 版本等于钉定值，不等则失败。验证：在 giap-vps 上构建成功，`docker run --rm <镜像> dsh --version` 输出钉定版本；把钉定值改成不存在的版本后构建失败。
-- [ ] 1.2 新建 `scripts/probe-sandbox.sh`：构建镜像，按“Docker 默认 → 自定义 seccomp → 再加 `/proc` 屏蔽放开”逐级启动容器，每一级用 DSH 的 `bash` 工具在“工作区内修改”模式下分别向工作目录和状态目录写文件，打印每一级的结果和最小可用组合；任何一级都不可用时非零退出并列出每一级的失败原因；只创建带 `dsh-team` 前缀的镜像和容器，退出时（含失败和中断）删除。验证：`pnpm lint:shell` 通过；在 giap-vps 上执行后 `docker ps -a` 和 `docker images` 里没有它创建的资源。
+- [x] 1.2 新建 `scripts/probe-sandbox.sh`：构建镜像，按“Docker 默认 → 自定义 seccomp → 再加 `/proc` 屏蔽放开”逐级启动容器，每一级用 DSH 的 `bash` 工具在“工作区内修改”模式下分别向工作目录和状态目录写文件，打印每一级的结果和最小可用组合；任何一级都不可用时非零退出并列出每一级的失败原因；只创建带 `dsh-team` 前缀的镜像和容器，退出时（含失败和中断）删除。验证：`pnpm lint:shell` 通过；在 giap-vps 上执行后 `docker ps -a` 和 `docker images` 里没有它创建的资源。
 - [ ] 1.3 在 giap-vps（amd64，Ubuntu 24.04）上执行探针，把得到的最小组合存为 `images/seccomp/dsh-user.json` 和一份记录所需其他容器选项的说明。验证：探针零状态退出；输出里“工作区写入成功、状态目录写入被拒绝”出现在选定的那一级；去掉该组合里任意一项后重跑，该级报告不可用；结束后机器上没有带 `dsh-team` 前缀的镜像和容器。
 - [ ] 1.4 把结论写回 `design.md` 的决定 12 和 Open Questions 第一条：VPS 上的最小组合、与阶段 0 在 arm64 上的结论是否一致、目标机 Ubuntu 22.04 待项目方执行同一脚本。验证：`design.md` 里这两处不再写“由探针定”，而是写出具体组合。
 
@@ -43,6 +43,24 @@ Minimal mergeable slice: 1.1 的 Dockerfile 单独合入（约 60 行，不改�
 The first slice uses disposable runtime assertions, not a source-text test or an early duplicate of task 7.1's Docker harness. Run `pnpm check` once after implementation; critical-path human review is required before merge.
 
 Runtime evidence (2026-10-03, giap-vps Linux amd64, Docker 29.1.3): the minimal image built successfully; `dsh --version` returned `0.2.0-rc.2`, pnpm `10.34.6`, bubblewrap `0.8.0`, uid `1001`, home `/data/home`, cwd `/data/work`, telemetry `1`; writing and reading separate files in both directories succeeded. Disposable builds with nonexistent DSH `0.0.0-does-not-exist` and mismatched expected version `0.2.0-rc` each exited 1 for the intended reason. The original image still returned the pinned version afterward; verification containers and the tagged image were removed.
+
+### Issue #5 risk/evidence map (task 1.2 only)
+
+- Public API / CLI / script entry — selected: execute the probe on giap-vps; exit 0 only for a valid workspace/state outcome; nonzero when all levels fail.
+- Config / project setup — selected: report the effective Docker security options per attempted level.
+- File IO / path safety / overwrite — selected: workspace marker exists with exact contents; denied state marker remains absent; clean up only run-owned paths/resources.
+- Schema / columns / units / field names — selected: custom seccomp JSON is accepted by Docker, and tool result handling matches the installed DSH npm release.
+- Auth / permissions / secrets — selected: DSH Workspace Write permission context; non-root container; no secret-bearing model call or privileged/unconfined fallback.
+- Concurrency / shared state / ordering — selected: unique run ownership and failure/interruption cleanup without affecting a concurrent or unrelated resource.
+- Resource limits / large input / discovery — selected: bounded tool execution; a hung level cannot prevent eventual failure and cleanup.
+- Legacy compatibility / examples — not selected: no previous production probe; phase-0 scripts remain evidence only.
+- Error handling / rollback / partial outputs — selected: actual unsupported-level reasons, all-failure nonzero exit, success/failure/interruption resource checks.
+- Release / packaging / dependency compatibility — selected: pinned npm release on Linux amd64; do not base a success claim on newer local DSH source.
+- Documentation / migration notes — selected: usage and output interpretation in script help/comments and PR runtime evidence; final host-policy conclusions remain #6.
+
+Run `pnpm check` locally after implementation and the probe scenarios on giap-vps. The fixture review must not assume the unknown minimal working security combination; the probe measures it.
+
+Task 1.2 runtime evidence (2026-10-03): giap-vps Docker 29.1.3 / Linux amd64, actual DSH 0.2.0-rc.2 tool reported Docker default usable (workspace exact bytes, explicit state sandbox denial). All 17 success/failure/timeout/INT/TERM/cleanup/config-boundary scenarios passed after two fixes; normal/failure/interruption runs left no owned resources. Injected cleanup failure was reported nonzero and its exact resources were recovered by the verifier. Final minimum-policy artifact and host conclusions remain task 1.3/1.4.
 
 ## 2. 探针：DSH Web 接口和空闲信号（任务包 1.1）
 

@@ -12,3 +12,4 @@ reports/
 .run/
 *.db
 *.tsbuildinfo
+.review-gate.json

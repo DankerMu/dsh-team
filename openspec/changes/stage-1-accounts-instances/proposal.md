@@ -61,3 +61,12 @@
 - Selected risk packs: Public API / CLI / script entry; Config / project setup; File IO / path safety / overwrite; Auth / permissions / secrets; Error handling / rollback / partial outputs; Release / packaging / dependency compatibility; Documentation / migration notes.
 - Evidence floor: giap-vps image build, exact DSH version, uid/directories/environment/tool checks, nonexistent-version build rejection, resource cleanup, and `pnpm check`.
 - Shared fixture: each issue reviews its own task slice; archive this change only after the whole epic is complete.
+
+## Issue #5 fixture
+
+- Issue type: feature
+- Fixture level: expanded
+- Upstream suggested level: expanded (agree: executable Docker security probe and resource lifecycle)
+- Blast radius: false sandbox success would misconfigure every future instance; cleanup must not affect unrelated host resources.
+- Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
+- Evidence floor: actual pinned DSH tool workspace/state outcomes per level, all-failure exit, interruption cleanup, no owned resource leaks, and `pnpm check`.
