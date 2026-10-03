@@ -44,6 +44,22 @@ The first slice uses disposable runtime assertions, not a source-text test or an
 
 Runtime evidence (2026-10-03, giap-vps Linux amd64, Docker 29.1.3): the minimal image built successfully; `dsh --version` returned `0.2.0-rc.2`, pnpm `10.34.6`, bubblewrap `0.8.0`, uid `1001`, home `/data/home`, cwd `/data/work`, telemetry `1`; writing and reading separate files in both directories succeeded. Disposable builds with nonexistent DSH `0.0.0-does-not-exist` and mismatched expected version `0.2.0-rc` each exited 1 for the intended reason. The original image still returned the pinned version afterward; verification containers and the tagged image were removed.
 
+### Issue #5 risk/evidence map (task 1.2 only)
+
+- Public API / CLI / script entry — selected: execute the probe on giap-vps; exit 0 only for a valid workspace/state outcome; nonzero when all levels fail.
+- Config / project setup — selected: report the effective Docker security options per attempted level.
+- File IO / path safety / overwrite — selected: workspace marker exists with exact contents; denied state marker remains absent; clean up only run-owned paths/resources.
+- Schema / columns / units / field names — selected: custom seccomp JSON is accepted by Docker, and tool result handling matches the installed DSH npm release.
+- Auth / permissions / secrets — selected: DSH Workspace Write permission context; non-root container; no secret-bearing model call or privileged/unconfined fallback.
+- Concurrency / shared state / ordering — selected: unique run ownership and failure/interruption cleanup without affecting a concurrent or unrelated resource.
+- Resource limits / large input / discovery — selected: bounded tool execution; a hung level cannot prevent eventual failure and cleanup.
+- Legacy compatibility / examples — not selected: no previous production probe; phase-0 scripts remain evidence only.
+- Error handling / rollback / partial outputs — selected: actual unsupported-level reasons, all-failure nonzero exit, success/failure/interruption resource checks.
+- Release / packaging / dependency compatibility — selected: pinned npm release on Linux amd64; do not base a success claim on newer local DSH source.
+- Documentation / migration notes — selected: usage and output interpretation in script help/comments and PR runtime evidence; final host-policy conclusions remain #6.
+
+Run `pnpm check` locally after implementation and the probe scenarios on giap-vps. The fixture review must not assume the unknown minimal working security combination; the probe measures it.
+
 ## 2. 探针：DSH Web 接口和空闲信号（任务包 1.1）
 
 依赖：第 1 组（需要镜像）。

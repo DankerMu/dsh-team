@@ -223,3 +223,21 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - Resource safety: use uniquely named `dsh-team` resources, remove only resources this verification creates, and leave no test containers or tagged images.
 - Review focus: exact-version validation is not a substring match; non-root permissions; no secrets or privileged options; task 1.1 scope.
 - Merge gate: changes under `images/dsh-user/` require human white-box review of every diff line.
+
+## Issue #5 implementation boundary
+
+- Change surface: `scripts/probe-sandbox.sh` and its smallest required release-tool driver; task 1.2 only.
+- Governing invariant: a level is usable only when the pinned release's actual DSH `bash` tool in Workspace Write mode writes the workspace and rejects writes to DSH state; a raw bubblewrap check is insufficient.
+- Must preserve: task 1.1 image contract, unrelated host resources, all platform behavior, and upstream DSH source.
+- Must add: an executable probe that builds the image and tries Docker default, a narrowly relaxed custom seccomp policy, then that policy plus `systempaths=unconfined`; prints results/reasons and the first usable level, or exits nonzero if none works.
+- Sibling surfaces: image builder, custom-policy producer, Docker launch arguments, release tool invocation, permission context, result parser, and cleanup on success/failure/interruption.
+- Seams under test: real Docker on giap-vps and the installed npm release's tool boundary, without requiring a probabilistic model response.
+- Required evidence: real `bash` write/read of a workspace marker succeeds, state marker is absent after the tool rejects its write; each attempted level reports its result. Unsupported levels fail closed rather than bypassing sandboxing.
+- Failure evidence: an all-levels-fail run exits nonzero with reasons; interrupt a running probe and verify cleanup; clean exit leaves no resources created by the run.
+- Resource safety: unique `dsh-team` names, targeted cleanup, no global prune, no secrets, no privileged mode or `seccomp=unconfined`; preserve probe exit status if cleanup fails and report cleanup failures.
+- Non-goals: choosing/committing final `images/seccomp/dsh-user.json`, target Ubuntu 22.04 execution, and writing final minimum-policy conclusions into decision 12 (owned by #6).
+- Review focus: real release/tool provenance, no success from shell text alone, denied state writes, smallest security relaxation, and exact cleanup ownership.
+
+## Epic execution review timing
+
+On 2026-10-03 the user confirmed PR #108 had received human review and explicitly moved subsequent human critical-path review to one batch after all Epic #3 issues and PR merges. Each affected PR records that decision and the deferred review list; runtime, agent-review, CI and fix-pass gates remain mandatory.
