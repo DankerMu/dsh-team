@@ -1,0 +1,1 @@
+{"date":"2026-10-03","change":"stage-1-accounts-instances","grill_gate":"passed:branches=14,open=5","rounds":2,"gate_net_catch":1,"p0":{"in":0,"resolved":0,"residual":0},"p1":{"resolved":36},"regressions":1,"approx_subagent_calls":7,"verdict":"clean"}
