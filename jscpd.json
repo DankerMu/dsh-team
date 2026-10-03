@@ -1,0 +1,6 @@
+{
+  "reporters": ["console"],
+  "ignore": ["**/node_modules/**", "**/dist/**", "**/coverage/**", "**/*.test.ts"],
+  "format": ["typescript", "javascript", "tsx"],
+  "gitignore": true
+}

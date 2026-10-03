@@ -1,0 +1,255 @@
+# constraints.yaml — machine-readable engineering constraints.
+# Canonical source for every numeric threshold and naming pattern. Lint, coverage,
+# duplicate-code and hook scripts read this file at runtime (scripts/constraints.mjs,
+# .git-hooks/check-naming.sh); do not hardcode duplicates elsewhere.
+# Enforcement vocabulary: advice < review-only < warn < block < gate.
+
+strictness_profile:
+  schema_version: "3.6.0"
+  level: "L3"
+  chosen_by_user: true
+  # Deviations below the L3 default. Each names the trigger that ends it.
+  downgrades:
+    - control: ui_e2e_tests
+      profile_default: required
+      chosen: deferred
+      reason: "No UI exists yet. Add the Playwright baseline in the first PR that creates platform/web (plan task 1.11)."
+    - control: integration_tests_real_db
+      profile_default: required
+      chosen: deferred
+      reason: "No database exists yet. Add real-SQLite integration tests, migration verification and seed data in the PR that creates platform/src/db (plan task 1.3). Until then integration tests exercise the HTTP server on a real TCP port."
+    - control: release_pipeline
+      profile_default: automated
+      chosen: none
+      reason: "Internal single-server deployment with no package consumers; delivery is the offline bundle built in plan stage 3."
+    - control: codeowners_required_review
+      profile_default: optional
+      chosen: review-only
+      reason: "Single maintainer: required code-owner review would block the maintainer's own PRs. Revisit when a second maintainer joins."
+
+generated_sections:
+  agents_md:
+    - title: "Code Canonicality"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Project Identity"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Stack & Versions"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Directory Map"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Development Workflow"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Verification Matrix"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Runtime Lifecycle"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Important Development Notes"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Conventions"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Code Review Self-Check"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Architecture Discipline"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Critical Paths"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Observability"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Agent Operating Rules"
+      owner: "eng-init"
+      template_version: "3.6.0"
+    - title: "Enforcement Index"
+      owner: "eng-init"
+      template_version: "3.6.0"
+  preserve_unknown_sections: true
+  backup_policy: "none; git history is the rollback path"
+
+code_canonicality:
+  forbidden_suffixes:
+    description: "File names and identifiers matching these patterns are rejected"
+    patterns:
+      - "(_v[0-9]+|_new|_old|_backup|_temp|_copy|_final|_real|_improved|_refactored|_fixed|_legacy|_deprecated)$"
+      - "(V[0-9]+|New|Old|Backup|Temp|Copy|Final|Real|Improved|Refactored|Fixed|Legacy|Deprecated)$"
+    enforced_by: ".git-hooks/check-naming.sh (paths) + eslint.config.mjs naming-convention (identifiers)"
+  scratchpad_directories:
+    description: "Directories that must never appear in commits"
+    paths: ["tmp", "scratch", "backup", "_old", "deprecated", "archive", "wip"]
+    enforced_by: ".git-hooks/check-naming.sh"
+
+size_limits:
+  max_file_lines:
+    value: 800
+    severity: "block"
+    enforced_by: "eslint.config.mjs (max-lines)"
+  max_complexity:
+    value: 15
+    severity: "block"
+    enforced_by: "eslint.config.mjs (complexity)"
+  max_function_lines:
+    value: 200
+    severity: "block"
+    enforced_by: "eslint.config.mjs (max-lines-per-function)"
+  max_pr_diff_lines:
+    value: 400
+    description: "PRs exceeding this are split, or carry the diff-limit-exempt label with a justification"
+    severity: "block"
+    enforced_by: ".github/workflows/ci.yml job diff-size-guard"
+
+testing:
+  min_line_coverage:
+    value: 80
+    scope: "per-file"
+    severity: "block"
+    enforced_by: "vitest.config.ts (coverage thresholds, perFile)"
+  tdd_mode:
+    value: "required"
+    description: "Every production source file has a sibling test file"
+    enforced_by: "scripts/check-test-pairing.sh"
+  forbid_mock_of_system_under_test:
+    value: true
+    description: "Mock dependencies, never the system under test"
+
+dependencies:
+  min_release_age_days:
+    value: 7
+    enforced_by: "pnpm-workspace.yaml (minimumReleaseAge, in minutes) + .github/dependabot.yml (cooldown)"
+  no_circular_dependencies:
+    value: true
+    enforced_by: ".dependency-cruiser.cjs (no-circular)"
+  new_dependency_requires_justification:
+    value: true
+    description: "The PR description explains why existing dependencies cannot do the job"
+
+anti_drift:
+  duplicate_code_threshold_percent:
+    value: 3
+    severity: "block"
+    enforced_by: "jscpd (jscpd.json, threshold passed from this file)"
+  dead_code:
+    value: true
+    severity: "block"
+    enforced_by: "knip (knip.json)"
+
+module_boundaries:
+  layers: ["platform/src/<module>", "plugins/<plugin>"]
+  allowed_dependency_directions:
+    - "a platform module imports another platform module only through its index.ts"
+    - "only platform/src/db imports a SQLite driver"
+  forbidden_import_patterns:
+    - "platform <-> plugins in either direction"
+    - "circular imports"
+  enforced_by: "dependency-cruiser (.dependency-cruiser.cjs)"
+
+commits:
+  conventional_commits_required:
+    value: true
+    allowed_types: ["feat", "fix", "refactor", "chore", "docs", "test", "ci", "build", "perf"]
+    enforced_by: "commitlint (commitlint.config.cjs) via .husky/commit-msg"
+    agent_co_author_required: true
+
+ci:
+  risk_layers: 5
+  fast_checks_timeout_minutes: 5
+  matrix: ["ubuntu-latest / Node from .tool-versions"]
+
+# Machine-readable mirror of the AGENTS.md Verification Matrix.
+verification:
+  health_url: "http://127.0.0.1:8080/healthz"
+  dev_port: 8080
+  surfaces:
+    liveness:
+      command: "pnpm dev:status"
+      evidence: "process-live+health-ok"
+      required_at: "L2+"
+    api:
+      command: "pnpm smoke"
+      evidence: "http-status+body"
+      required_at: "L2+"
+    built_artifact:
+      command: "pnpm e2e"
+      evidence: "build+http-status+body against platform/dist"
+      required_at: "L3+"
+  enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
+
+# Permanent, justified opt-outs. Every entry names an existing path.
+exemptions:
+  entries:
+    - path: "docs/"
+      rules: [format, lint]
+      reason: "Requirement and analysis prose written before the toolchain existed; reformatting would rewrite reviewed tables without changing content."
+      expires: never
+      exit_condition: "none"
+    - path: "verify/phase0/"
+      rules: [format, lint, duplicate_code, dead_code, coverage]
+      reason: "One-off phase-0 verification scripts kept as evidence; docs/IMPLEMENTATION_PLAN.md states they are not the starting point of platform code."
+      expires: never
+      exit_condition: "delete the directory once stage 1 integration tests cover the same scenarios"
+    - path: "schemas/"
+      rules: [format]
+      reason: "Generated by platform/scripts/openapi.ts; byte equality with the generator output is the gate."
+      expires: never
+      exit_condition: "none"
+    - path: "platform/src/main.ts"
+      rules: [coverage, test_pairing]
+      reason: "Process entry point: reads the environment and binds the port. Exercised by pnpm e2e against the built artifact instead of unit tests."
+      expires: never
+      exit_condition: "none"
+  enforced_by: "eslint.config.mjs ignores + .prettierignore + vitest.config.ts coverage.exclude + scripts/check-test-pairing.sh"
+
+baseline:
+  mode: "none"
+  rev: ""
+  counts:
+    duplicate_code: 0
+    dead_code: 0
+    size_violations: 0
+    coverage_gap: 0
+  enforced_by: "not applicable: greenfield repository with no legacy violations"
+
+rehabilitation:
+  active: false
+  phase: "none"
+  baseline_frozen: false
+  command_entrypoint: "pnpm check"
+  runtime_verifier: "pnpm smoke"
+  broad_refactor_allowed: true
+  work_unit_protocol: "issue-tracker"
+  readiness_gaps: []
+  enforced_by: "not applicable: no degraded-project overlay"
+
+refactor_contract:
+  active: false
+  kind: "none"
+  source_of_truth: []
+  compare_depth: "none"
+  cutover_policy: "none"
+  forbidden_moves: []
+  work_ownership: "none"
+  human_gates: []
+  enforced_by: "not applicable: no large-refactor overlay"
+
+iteration_gates:
+  max_fix_cycles: 3
+  checkpoint_commit_at_green: true
+  test_weakening_forbidden: true
+  one_task_one_branch: true
+  enforced_by: "AGENTS.md Agent Operating Rules (review-only)"
+
+environments:
+  local: "full"
+  staging: "none exists"
+  prod: "none"
+  enforced_by: "credential scoping + AGENTS.md Environment tiers"

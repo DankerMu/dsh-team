@@ -1,0 +1,218 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  HURL_VERSION: "8.0.1"
+  GITLEAKS_VERSION: "8.30.1"
+
+jobs:
+  layer1-fast-checks:
+    name: Fast checks (fmt + lint + typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm fmt:check
+      - run: pnpm lint
+      - run: pnpm typecheck
+
+  layer2-unit-tests:
+    name: Unit tests + per-file coverage
+    needs: layer1-fast-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+
+  layer3-integration:
+    name: Integration, build, contract, e2e
+    needs: layer2-unit-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:integration
+      - run: pnpm build
+      - run: pnpm contract:check
+      - name: Install hurl
+        run: |
+          curl -fsSL --retry 3 -o /tmp/hurl.deb \
+            "https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl_${HURL_VERSION}_amd64.deb"
+          sudo dpkg -i /tmp/hurl.deb
+      - name: Smoke against the dev server
+        run: |
+          pnpm dev:bg
+          pnpm dev:status
+          pnpm smoke
+          pnpm dev:stop
+      - name: End-to-end against the built artifact
+        run: pnpm e2e
+
+  layer4-anti-drift:
+    name: Anti-drift (duplicate + dead code)
+    needs: layer1-fast-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm duplicate-code
+      - run: pnpm dead-code
+
+  layer5-secret-scan:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -fsSL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" |
+            sudo tar -xz -C /usr/local/bin gitleaks
+      - run: gitleaks git --redact --no-banner .
+
+  sast:
+    name: Static security analysis (Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: semgrep/semgrep:1.179.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # --error makes any finding fail the job; rule packs are fetched from the Semgrep registry.
+      - run: semgrep scan --config p/default --error --metrics=off
+
+  guardrails:
+    name: Guardrail self-test (every gate rejects its violation)
+    needs: layer1-fast-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install gitleaks
+        run: |
+          curl -fsSL --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" |
+            sudo tar -xz -C /usr/local/bin gitleaks
+      - run: pnpm test:guardrails
+
+  # Outside the aggregator: these two run only on pull_request events and would
+  # report "skipped" on push builds.
+  lockfile-consistency:
+    name: Lockfile-manifest consistency
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check lockfile–manifest pairs
+        if: "!contains(github.event.pull_request.labels.*.name, 'lockfile-refresh')"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          if echo "$changed" | grep -qx "pnpm-lock.yaml" &&
+            ! echo "$changed" | grep -qE '(^|/)package\.json$'; then
+            echo "::error::pnpm-lock.yaml changed but no package.json did. Lockfile-only changes are unreviewed dependency drift. Revert the lockfile, or add the 'lockfile-refresh' label with a justification in the PR description."
+            exit 1
+          fi
+          echo "lockfile-consistency: lockfile and manifests agree."
+
+  diff-size-guard:
+    name: PR diff size guard
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .tool-versions
+      - name: Enforce max PR diff lines
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'diff-limit-exempt') }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          MAX_DIFF_LINES="$(node scripts/constraints.mjs size_limits max_pr_diff_lines)"
+          LINES=$(git diff --diff-filter=ACMR --ignore-all-space "$BASE_SHA"...HEAD -- . \
+            ':(exclude)pnpm-lock.yaml' ':(exclude)schemas/openapi.json' | grep -c '^[+-][^+-]' || true)
+          echo "Changed lines (excluding lockfile and generated contract): $LINES (limit: $MAX_DIFF_LINES)"
+          if [ "$LINES" -gt "$MAX_DIFF_LINES" ]; then
+            echo "::error::PR exceeds the ${MAX_DIFF_LINES}-line diff limit. Split it, or add the 'diff-limit-exempt' label with a justification in the PR description."
+            exit 1
+          fi
+
+  # Branch protection requires ONLY this check. GitHub treats a skipped required
+  # check as passing, so `if: always()` is load-bearing: this job always runs and
+  # fails when any dependency failed, was cancelled, or was skipped.
+  all-checks-passed:
+    name: All checks passed
+    if: always()
+    needs:
+      - layer1-fast-checks
+      - layer2-unit-tests
+      - layer3-integration
+      - layer4-anti-drift
+      - layer5-secret-scan
+      - sast
+      - guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fail on any failed, cancelled, or skipped required job
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS"
+          if echo "$NEEDS" | grep -Eq '"result": "(failure|cancelled|skipped)"'; then
+            echo "::error::A required job failed, was cancelled, or was skipped. Skipped counts as failure because GitHub counts a skipped required check as passing."
+            exit 1
+          fi

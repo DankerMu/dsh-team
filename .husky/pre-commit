@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# Each line is one gate; scripts/test-guardrails.sh proves every one rejects a violation.
+set -e
+
+bash .git-hooks/check-naming.sh
+bash scripts/check-test-pairing.sh
+
+command -v gitleaks >/dev/null 2>&1 || {
+  echo "pre-commit: gitleaks is not installed — secret scanning cannot run (brew install gitleaks)" >&2
+  exit 1
+}
+gitleaks git --pre-commit --staged --redact --no-banner
+
+pnpm exec lint-staged
+pnpm dead-code

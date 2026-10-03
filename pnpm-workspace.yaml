@@ -1,0 +1,15 @@
+packages:
+  - platform
+
+# Supply-chain settings (enforced by the Semgrep job in CI).
+# Install only versions published at least 7 days ago (minutes).
+minimumReleaseAge: 10080
+# Refuse an update whose publishing trust level is lower than the installed version's.
+trustPolicy: no-downgrade
+# Transitive dependencies must come from the registry, never from git or tarball URLs.
+blockExoticSubdeps: true
+
+# vitest pulls vite in as a peer and would resolve the newest release, which the
+# minimumReleaseAge rule rejects. Pin it here; raise it together with vitest.
+overrides:
+  vite: 8.3.1
