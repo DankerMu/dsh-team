@@ -1,0 +1,7 @@
+.omp/
+.claude/
+resource/
+assets/fonts/
+.DS_Store
+node_modules/
+.env*

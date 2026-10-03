@@ -1,0 +1,29 @@
+- id: webserver
+  config:
+    host: 0.0.0.0
+    port: 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+- id: llm-pi-ai
+  config:
+    providers:
+      intranet:
+        displayName: 内网模型
+        apiKeyEnv: DMXAPI_KEY
+        api: openai-completions
+        baseURL: https://www.dmxapi.cn/v1
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+- id: agent-default-model
+  config:
+    provider: intranet
+    model: deepseek-v4.1-flash
+- id: dsh-sidebar-onlyoffice
+  config:
+    jwtSecret: poc-jwt-secret-not-for-production
+    documentServerUrl: http://oo-ds
+    internalBaseUrl: http://dsh-a:3080
+    publicBaseUrl: http://localhost:8080
+    username: 用户a
