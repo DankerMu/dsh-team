@@ -143,7 +143,7 @@ docs/  verify/  resource/（只读参考，不入库）
 
 ## 6. 仓库约定
 
-- 远程仓库 `DankerMu/dsh-team`，私有，商业付费条款（`LICENSE`）。
+- 远程仓库 `DankerMu/dsh-team`，公开（2026-10-03 由私有改为公开，以启用分支保护），商业付费条款（`LICENSE`）：代码可读，但未经授权不得使用。
 - 字体不入库：`assets/fonts/` 已加入 `.gitignore`，由离线交付包单独携带；开发机需自行放置该目录（`verify/phase0/up-office.sh` 从这里挂载）。
 - `resource/` 下的四个上游仓库只作参考，不入库。
 - 复用 `dsh-team-hub` 等 MIT 代码时保留其版权声明。

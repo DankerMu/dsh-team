@@ -1,0 +1,70 @@
+{
+  "name": "dsh-team",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.6",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "dev": "node --watch --env-file-if-exists=.env platform/src/main.ts",
+    "dev:bg": "bash scripts/dev-server.sh start",
+    "dev:stop": "bash scripts/dev-server.sh stop",
+    "dev:status": "bash scripts/dev-server.sh status",
+    "logs": "bash scripts/dev-server.sh logs",
+    "start": "node --env-file-if-exists=.env platform/dist/main.js",
+    "check": "pnpm fmt:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm build && pnpm contract:check && pnpm anti-drift",
+    "check:fast": "pnpm fmt:check && pnpm lint && pnpm typecheck",
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check .",
+    "lint": "eslint . --max-warnings 0 && pnpm lint:deps && pnpm lint:tests && pnpm lint:shell && pnpm lint:agents",
+    "lint:deps": "depcruise platform $([ -d plugins ] && echo plugins) --config .dependency-cruiser.cjs",
+    "lint:tests": "bash scripts/check-test-pairing.sh",
+    "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
+    "lint:agents": "bash scripts/check-agents-commands.sh",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --project unit --coverage",
+    "test:integration": "vitest run --project integration",
+    "build": "tsc -p platform/tsconfig.build.json",
+    "contract:write": "node platform/scripts/openapi.ts --write",
+    "contract:check": "node platform/scripts/openapi.ts --check",
+    "duplicate-code": "jscpd platform --threshold \"$(node scripts/constraints.mjs anti_drift duplicate_code_threshold_percent)\"",
+    "dead-code": "knip",
+    "anti-drift": "pnpm duplicate-code && pnpm dead-code",
+    "smoke": "hurl --test --variable base_url=\"http://127.0.0.1:${PLATFORM_PORT:-8080}\" smoke/health.hurl",
+    "e2e": "bash scripts/e2e.sh",
+    "test:guardrails": "bash scripts/test-guardrails.sh",
+    "change-scope": "bash scripts/change-scope.sh"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,mjs,cjs}": [
+      "eslint --max-warnings 0 --no-warn-ignored",
+      "prettier --write --ignore-unknown"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write --ignore-unknown"
+    ]
+  },
+  "devDependencies": {
+    "@commitlint/cli": "21.2.3",
+    "@commitlint/config-conventional": "21.2.3",
+    "@eslint/compat": "2.1.1",
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.13.6",
+    "@vitest/coverage-v8": "5.0.2",
+    "dependency-cruiser": "18.4.0",
+    "eslint": "10.11.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.12.0",
+    "husky": "9.1.7",
+    "jscpd": "5.3.2",
+    "knip": "6.38.0",
+    "lint-staged": "17.5.1",
+    "prettier": "3.9.9",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.1",
+    "vitest": "5.0.2"
+  }
+}

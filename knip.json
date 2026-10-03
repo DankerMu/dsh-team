@@ -1,0 +1,14 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"],
+      "project": ["*.{ts,mjs,cjs}", "scripts/*.mjs"]
+    },
+    "platform": {
+      "entry": ["scripts/*.ts", "test/**/*.test.ts", "src/**/*.test.ts"],
+      "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+    }
+  },
+  "ignoreBinaries": ["hurl", "shellcheck"]
+}

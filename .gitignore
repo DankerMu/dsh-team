@@ -5,3 +5,10 @@ assets/fonts/
 .DS_Store
 node_modules/
 .env*
+!.env.example
+dist/
+coverage/
+reports/
+.run/
+*.db
+*.tsbuildinfo

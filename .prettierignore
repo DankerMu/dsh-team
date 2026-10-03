@@ -1,0 +1,6 @@
+# Each entry is registered with its reason in constraints.yaml `exemptions`.
+docs/
+verify/
+schemas/
+pnpm-lock.yaml
+LICENSE
