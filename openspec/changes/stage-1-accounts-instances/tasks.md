@@ -16,13 +16,33 @@
 
 依赖：无。
 
-- [ ] 1.1 新建 `images/dsh-user/Dockerfile`：基础镜像、bubblewrap、pnpm、钉定版本的 DSH、uid 1001 的非 root 用户、`DSH_HOME=/data/home`、工作目录 `/data/work`、`DSH_TELEMETRY_DISABLED=1`；构建时校验解析到的 DSH 版本等于钉定值，不等则失败。验证：在 giap-vps 上构建成功，`docker run --rm <镜像> dsh --version` 输出钉定版本；把钉定值改成不存在的版本后构建失败。
+- [x] 1.1 新建 `images/dsh-user/Dockerfile`：基础镜像、bubblewrap、pnpm、钉定版本的 DSH、uid 1001 的非 root 用户、`DSH_HOME=/data/home`、工作目录 `/data/work`、`DSH_TELEMETRY_DISABLED=1`；构建时校验解析到的 DSH 版本等于钉定值，不等则失败。验证：在 giap-vps 上构建成功，`docker run --rm <镜像> dsh --version` 输出钉定版本；把钉定值改成不存在的版本后构建失败。
 - [ ] 1.2 新建 `scripts/probe-sandbox.sh`：构建镜像，按“Docker 默认 → 自定义 seccomp → 再加 `/proc` 屏蔽放开”逐级启动容器，每一级用 DSH 的 `bash` 工具在“工作区内修改”模式下分别向工作目录和状态目录写文件，打印每一级的结果和最小可用组合；任何一级都不可用时非零退出并列出每一级的失败原因；只创建带 `dsh-team` 前缀的镜像和容器，退出时（含失败和中断）删除。验证：`pnpm lint:shell` 通过；在 giap-vps 上执行后 `docker ps -a` 和 `docker images` 里没有它创建的资源。
 - [ ] 1.3 在 giap-vps（amd64，Ubuntu 24.04）上执行探针，把得到的最小组合存为 `images/seccomp/dsh-user.json` 和一份记录所需其他容器选项的说明。验证：探针零状态退出；输出里“工作区写入成功、状态目录写入被拒绝”出现在选定的那一级；去掉该组合里任意一项后重跑，该级报告不可用；结束后机器上没有带 `dsh-team` 前缀的镜像和容器。
 - [ ] 1.4 把结论写回 `design.md` 的决定 12 和 Open Questions 第一条：VPS 上的最小组合、与阶段 0 在 arm64 上的结论是否一致、目标机 Ubuntu 22.04 待项目方执行同一脚本。验证：`design.md` 里这两处不再写“由探针定”，而是写出具体组合。
 
 Suggested fixture level: expanded - 产出的 seccomp 配置和容器选项是生产配置，且是关键路径
 Minimal mergeable slice: 1.1 的 Dockerfile 单独合入（约 60 行，不改任何平台代码，`pnpm check` 不受影响）
+
+### Issue #4 risk/evidence map (task 1.1 only)
+
+| Risk pack                                      | Selection and evidence                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Public API / CLI / script entry                | Selected: runtime `dsh --version`, `pnpm --version`, and `bwrap --version` on giap-vps.                             |
+| Config / project setup                         | Selected: inspect effective `DSH_HOME`, telemetry switch, uid, and work directory in the running image.             |
+| File IO / path safety / overwrite              | Selected: uid 1001 can write both distinct directories; verification removes only its own uniquely named resources. |
+| Schema / columns / units / field names         | Not selected: no database or serialized application schema changes.                                                 |
+| Auth / permissions / secrets                   | Selected: uid 1001, directory ownership, no credentials in image; no runtime privilege relaxation in this issue.    |
+| Concurrency / shared state / ordering          | Not selected: no shared application state; isolated verification resource names.                                    |
+| Resource limits / large input / discovery      | Not selected: orchestration and resource limits are later issues.                                                   |
+| Legacy compatibility / examples                | Not selected: no existing production image or caller is replaced.                                                   |
+| Error handling / rollback / partial outputs    | Selected: nonexistent version and wrong expected-version assertion each fail the build; cleanup runs on failure.    |
+| Release / packaging / dependency compatibility | Selected: build on Linux amd64 giap-vps; exact installed DSH release equals the baseline pin.                       |
+| Documentation / migration notes                | Selected: record build/run and negative-case evidence in PR; mark task 1.1 complete only after verification.        |
+
+The first slice uses disposable runtime assertions, not a source-text test or an early duplicate of task 7.1's Docker harness. Run `pnpm check` once after implementation; critical-path human review is required before merge.
+
+Runtime evidence (2026-10-03, giap-vps Linux amd64, Docker 29.1.3): the minimal image built successfully; `dsh --version` returned `0.2.0-rc.2`, pnpm `10.34.6`, bubblewrap `0.8.0`, uid `1001`, home `/data/home`, cwd `/data/work`, telemetry `1`; writing and reading separate files in both directories succeeded. Disposable builds with nonexistent DSH `0.0.0-does-not-exist` and mismatched expected version `0.2.0-rc` each exited 1 for the intended reason. The original image still returned the pinned version afterward; verification containers and the tagged image were removed.
 
 ## 2. 探针：DSH Web 接口和空闲信号（任务包 1.1）
 

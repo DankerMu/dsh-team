@@ -208,3 +208,18 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - **预置工作区、中文界面、关闭公告的做法。** 任务包 1.2 的探针回答，结论写回决定 10 和 12。
 - **Auto review 在开发模型上是否可用。** 任务包 1.13 验证；不可用时 Auto 档暂时等同人工批准。
 - **`qwen3.6` 上的工具调用、子 Agent 委派、Auto review。** 留到生产联调，本阶段不处理。
+
+## Issue #4 implementation boundary
+
+- Change surface: `images/dsh-user/Dockerfile`; task 1.1 only.
+- Must preserve: platform `/healthz`, all existing checks, upstream DSH source, and unrelated VPS resources.
+- Must add: the minimal Node 24 bookworm image, bubblewrap, pinned pnpm and DSH, uid 1001, writable `/data/home` and `/data/work`, and telemetry disabled.
+- Governing invariant: a successful image build contains the exact pinned DSH release and runs commands as uid 1001 with separate writable state and work directories.
+- Sibling surfaces: npm installation, build-time version assertion, runtime `dsh --version`, effective uid, filesystem ownership, environment, and later sandbox probe consumers.
+- Seams under test: real Docker build/run on giap-vps; existing platform checks locally.
+- Required evidence: pinned build exits 0; `dsh --version` identifies `0.2.0-rc.2`; `id -u` returns 1001; both directories are writable; `pwd` is `/data/work`; telemetry is `1`; pnpm and bubblewrap execute.
+- Failure evidence: nonexistent DSH version causes a nonzero build exit; a deliberately incorrect expected-version assertion rejects an otherwise installed release.
+- Non-goals: Python/DOCX, profile seeds, office agents, web readiness, seccomp selection, Docker test harness, or platform behavior. These have separate issues.
+- Resource safety: use uniquely named `dsh-team` resources, remove only resources this verification creates, and leave no test containers or tagged images.
+- Review focus: exact-version validation is not a substring match; non-root permissions; no secrets or privileged options; task 1.1 scope.
+- Merge gate: changes under `images/dsh-user/` require human white-box review of every diff line.
