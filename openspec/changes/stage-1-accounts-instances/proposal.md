@@ -50,4 +50,4 @@
 - 依赖：新增 better-sqlite3（原生模块）、React 18 和 Vite。Docker Engine API 和 WebSocket 转发用 Node 自带模块实现，不引入客户端库。
 - 外部系统：平台进程需要访问宿主机的 Docker socket；开发期用 dmxapi 的 `deepseek-v4.1-flash`，密钥只从环境变量 `DMXAPI_KEY` 读取。
 - 关键路径：`platform/src/orchestrator/`、`images/seccomp/`、`images/dsh-user/` 的改动需要人工逐行审查（`AGENTS.md`）。
-- 验证主机：任务包 1.0 在项目方的 VPS 上执行（D16）。
+- 验证主机：任务包 1.0 的探针，以及本阶段所有需要 Docker 的构建、测试和整套部署，都在项目方的 VPS 上执行（D16）。

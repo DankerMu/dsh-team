@@ -235,7 +235,7 @@ Agents may commit to feature branches, open PRs targeting `main`, run every loca
 - Push to `main`, force-push a shared branch, or use `--no-verify`.
 - Modify DSH source, or reset, clean, or check out anything under `resource/`.
 - Write to RAGFlow, or to any existing intranet service (RAGFlow, Document Server, model gateway).
-- Run destructive container, volume, or database operations against anything but local test resources.
+- Run destructive container, volume, or database operations against anything but test resources this project created (`dsh-team` prefix), locally or on the verification host (decision D16).
 - Upgrade a major dependency version, or change `.github/workflows/`, without flagging it in the PR description.
 - Weaken, skip, or delete a test or a gate to get green.
 
