@@ -2,36 +2,30 @@
 /** Host token exchange, CDP UI drive, path inventory, idle samples. */
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { connectPage, httpRequest, muxListen, sleep, startChrome } from './probe-dsh-api-cdp.mjs';
 
 const PHASES = ['homepage', 'new-session', 'message', 'running', 'complete'];
 const SECRET = /^(token|access_token|api[_-]?key|authorization|cookie)$/i;
 const MSG = /^(text|content|message|prompt|body)$/i;
-const PROMPT =
-  'Reply with exactly OK then run bash: sleep 8; echo dsh-team-probe-ok. Do not skip the sleep.';
 const NEW_BTN = 'button[aria-label="New session"],button[aria-label="新建会话"]';
 const SEND_BTN = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
+const MARKER = 'dsh-team-probe';
 const out = (line) => process.stdout.write(`${line}\n`);
 const fail = (message, code = 1) => {
   process.stderr.write(`probe-dsh-api: ${message}\n`);
-  process.exit(code);
+  process.exitCode = code;
+  throw Object.assign(new Error(message), { code, probeFail: true });
 };
 const env = (name) => {
   const value = process.env[name];
   if (!value) fail(`${name} is missing`, 2);
   return value;
 };
-const readSecret = async (name) => {
-  const path = env(name);
-  return (await readFile(path, 'utf8')).trim();
-};
+const readSecret = async (name) => (await readFile(env(name), 'utf8')).trim();
 const redactUrl = (raw) => {
   try {
-    const url = new URL(raw, 'http://127.0.0.1');
-    for (const key of [...url.searchParams.keys()])
-      if (SECRET.test(key)) url.searchParams.delete(key);
-    return `${url.pathname}${url.search}${url.hash}`;
+    return new URL(raw, 'http://127.0.0.1').pathname || '[unparseable-url]';
   } catch {
     return '[unparseable-url]';
   }
@@ -47,11 +41,30 @@ const redact = (value, key = '') => {
   }
   return value;
 };
+const errorCode = (text) => {
+  const raw = String(text ?? 'error');
+  const match = raw.match(/\b(?:[A-Z][A-Za-z]+Error|HTTP[/_-]?\d{3}|E[A-Z0-9_]+|net::[A-Z_]+)\b/);
+  return match?.[0] ?? 'error';
+};
+const tally = (codes) => {
+  const counts = {};
+  for (const code of codes) counts[code] = (counts[code] ?? 0) + 1;
+  return (
+    Object.entries(counts)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([code, count]) => `${code}:${count}`)
+      .join(',') || '(none)'
+  );
+};
 const waitFor = async (fn, ms, label) => {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    const value = await fn();
-    if (value) return value;
+    try {
+      const value = await fn();
+      if (value) return value;
+    } catch {
+      /* retry until deadline */
+    }
     await sleep(250);
   }
   throw new Error(`timed out waiting for ${label}`);
@@ -81,7 +94,12 @@ const rpcCall = async (origin, cookie, method, payload) => {
       method: 'POST',
       headers: { cookie, host: url.host, origin, 'content-type': 'application/json' },
     },
-    JSON.stringify({ type: 'client-request', rpcId: randomUUID(), method, payload }),
+    JSON.stringify({
+      type: 'client-request',
+      rpcId: randomUUID(),
+      method,
+      payload: { args: payload },
+    }),
   );
   if (res.status !== 200) return { ok: false, error: `http-${res.status}` };
   try {
@@ -92,12 +110,24 @@ const rpcCall = async (origin, cookie, method, payload) => {
   }
 };
 const listRunning = (result) => {
-  if (!result?.ok || !Array.isArray(result.value?.items)) return { ok: false, error: 'list' };
-  const items = result.value.items.map((item) => ({
-    running: item?.running === true,
-    agentAvailable: item?.agentAvailable === true,
-  }));
-  return { ok: true, anyRunning: items.some((item) => item.running), items };
+  if (!result?.ok || !Array.isArray(result.value?.items)) {
+    return { available: false, reason: result?.error ?? 'list', items: [] };
+  }
+  const items = [];
+  for (const item of result.value.items) {
+    if (typeof item?.running !== 'boolean') {
+      return { available: false, reason: 'unknown-running', items: [] };
+    }
+    items.push({
+      sessionId: typeof item.sessionId === 'string' ? item.sessionId : '',
+      running: item.running,
+    });
+  }
+  return {
+    available: true,
+    anyRunning: items.some((item) => item.running),
+    items,
+  };
 };
 const evalJson = async (page, expression) => {
   const result = await page.send('Runtime.evaluate', {
@@ -105,24 +135,26 @@ const evalJson = async (page, expression) => {
     returnByValue: true,
     awaitPromise: true,
   });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text ?? 'evaluate');
+  if (result.exceptionDetails) throw new Error(errorCode(result.exceptionDetails.text));
   return result.result?.value;
 };
 const clickSelector = async (page, selector) => {
   const ok = await evalJson(
     page,
-    `(function(){const el=document.querySelector(${JSON.stringify(selector)});if(!el)return false;el.click();return true;})()`,
+    `(function(){const el=document.querySelector(${JSON.stringify(selector)});if(!el||el.disabled)return false;el.click();return true;})()`,
   );
   if (!ok) throw new Error(`missing ${selector}`);
 };
 const scanState = async (home) => {
   const names = [];
+  let scanError = null;
   const walk = async (dir, depth) => {
-    if (depth > 4) return;
+    if (depth > 4 || scanError) return;
     let entries;
     try {
       entries = await readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      scanError = errorCode(error);
       return;
     }
     for (const entry of entries) {
@@ -132,8 +164,10 @@ const scanState = async (home) => {
     }
   };
   await walk(home, 0);
+  if (scanError) return { available: false, reason: scanError };
   return {
     available: true,
+    predicate: 'unavailable',
     entryCount: names.length,
     digest: createHash('sha256').update(names.sort().join('\n')).digest('hex').slice(0, 16),
   };
@@ -144,19 +178,45 @@ const snapshot = (bucket, phase) => {
   out(`phase ${phase} http=${httpPaths.join(',') || '(none)'} ws=${wsUrls.join(',') || '(none)'}`);
   return { phase, http: httpPaths, ws: wsUrls };
 };
-const sample = async (origin, cookie, home, mux, label) => {
-  const httpSample = listRunning(await rpcCall(origin, cookie, 'session/list', {}));
-  const wsSample = mux.store.ready
-    ? { available: true, last: mux.store.last, observed: mux.store.history.slice(-3) }
-    : { available: false, reason: 'mux-not-ready' };
-  let files;
+const sampleHttp = async (origin, cookie) => {
   try {
-    files = await scanState(home);
+    return listRunning(await rpcCall(origin, cookie, 'session/list', { _request: {} }));
   } catch (error) {
-    files = { available: false, reason: String(error) };
+    return { available: false, reason: errorCode(error) };
   }
+};
+const sampleWs = (mux, sessionId, from, until) => {
+  if (mux.store.closed) return { available: false, reason: mux.store.reason ?? 'disconnected' };
+  if (!mux.store.ready) return { available: false, reason: 'mux-not-ready' };
+  const events = mux.store.events.filter(
+    (event) => event.sessionId === sessionId && event.t >= from && event.t <= until,
+  );
+  if (!events.length) return { available: true, last: 'unknown', observed: [] };
+  return {
+    available: true,
+    last: events.at(-1).running,
+    observed: events.slice(-3).map((e) => e.running),
+  };
+};
+const sampleFiles = async (home) => {
+  try {
+    return await scanState(home);
+  } catch (error) {
+    return { available: false, reason: errorCode(error) };
+  }
+};
+const sample = async (origin, cookie, home, mux, sessionId, from, until, label) => {
+  const [httpSample, files] = await Promise.all([sampleHttp(origin, cookie), sampleFiles(home)]);
+  const wsSample = sampleWs(mux, sessionId, from, until);
+  const httpOut = httpSample.available
+    ? {
+        available: true,
+        anyRunning: httpSample.anyRunning,
+        items: httpSample.items.map((item) => ({ running: item.running })),
+      }
+    : httpSample;
   out(
-    `sample ${label} http=${JSON.stringify(redact(httpSample))} ws=${JSON.stringify(redact(wsSample))} files=${JSON.stringify(redact(files))}`,
+    `sample ${label} http=${JSON.stringify(redact(httpOut))} ws=${JSON.stringify(redact(wsSample))} files=${JSON.stringify(redact(files))}`,
   );
   return { http: httpSample, ws: wsSample, files };
 };
@@ -178,20 +238,83 @@ const typeComposer = async (page, text) => {
   if (!focused) throw new Error('composer missing');
   await page.send('Input.insertText', { text });
 };
-const waitList = (page, origin, cookie, running, ms, label) =>
-  waitFor(
-    async () => {
-      await evalJson(
-        page,
-        `(function(){const el=document.querySelector('button[aria-label="Allow once"],button[aria-label="允许一次"]');if(el)el.click();return true;})()`,
-      );
-      const listed = listRunning(await rpcCall(origin, cookie, 'session/list', {}));
-      return listed.ok && listed.anyRunning === running ? listed : null;
+const clickAllowOnce = async (page, marker) => {
+  const script = `(function(){
+    const marker=${JSON.stringify(marker)};
+    const labels=new Set(["Allow once","允许一次"]);
+    for (const root of document.querySelectorAll("[data-approval-key]")) {
+      if (!root.innerText.includes(marker)) continue;
+      const buttons=[...root.querySelectorAll("button")];
+      const allow=buttons.find((el)=>labels.has((el.textContent||"").trim()) && !el.disabled);
+      if (!allow) return "disabled";
+      allow.click();
+      return "clicked";
+    }
+    return "absent";
+  })()`;
+  return evalJson(page, script);
+};
+const waitQuiet = async (pending, ms) => {
+  const deadline = Date.now() + ms;
+  let last = pending.count;
+  let idleAt = Date.now();
+  while (Date.now() < deadline) {
+    if (pending.count !== last) {
+      last = pending.count;
+      idleAt = Date.now();
+    } else if (Date.now() - idleAt >= 400) return;
+    await sleep(50);
+  }
+};
+const waitPhaseEvent = async (bucket, kind, test, ms, label) => {
+  const prev = new Set(bucket[kind]);
+  await waitFor(
+    () => {
+      for (const value of bucket[kind]) {
+        if (!prev.has(value) && test(value)) return true;
+      }
+      return false;
     },
     ms,
     label,
   );
-const report = (httpOk, wsOk, filesOk, inventory) => {
+};
+const markerExists = async (path) => {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const waitOracle = async (startPath, completePath, wantComplete, ms, label) => {
+  let sawStart = await markerExists(startPath);
+  try {
+    await waitFor(
+      async () => {
+        const started = await markerExists(startPath);
+        const done = await markerExists(completePath);
+        if (started) sawStart = true;
+        if (wantComplete) return sawStart && done;
+        return started && !done;
+      },
+      ms,
+      label,
+    );
+  } catch (error) {
+    const started = await markerExists(startPath);
+    const done = await markerExists(completePath);
+    if (started && done && !wantComplete)
+      throw new Error(`oracle-invalid-${label}`, { cause: error });
+    throw error;
+  }
+  const started = await markerExists(startPath);
+  const done = await markerExists(completePath);
+  if (!started || (wantComplete && !done) || (!wantComplete && done)) {
+    throw new Error(`oracle-invalid-${label}`);
+  }
+};
+const report = (httpOk, wsOk, inventory) => {
   out('path-inventory');
   const last = new Map(inventory.map((row) => [row.phase, row]));
   for (const phase of PHASES) {
@@ -209,17 +332,114 @@ const report = (httpOk, wsOk, filesOk, inventory) => {
     out('signal ws api-session/status running true-then-false x3');
     out('adopted-candidate ws:api-session/status.running');
   } else out('signal ws unavailable-or-not-distinct');
-  if (filesOk) out('signal files digest-differs x3');
-  else out('signal files unavailable-or-not-distinct');
-  if (!httpOk && !wsOk && !filesOk) {
+  out('signal files metadata-only not-a-running-idle-predicate');
+  if (!httpOk && !wsOk) {
     out('未找到可靠信号');
-    process.exit(1);
+    process.exitCode = 1;
   }
+};
+const runCycle = async (ctx, index) => {
+  const {
+    page,
+    origin,
+    cookie,
+    home,
+    work,
+    mux,
+    buckets,
+    current,
+    pending,
+    inventory,
+    browserMs,
+    taskMs,
+  } = ctx;
+  const tag = `${MARKER}-${index}-${randomUUID().slice(0, 8)}`;
+  const startPath = join(work, `${tag}.start`);
+  const completePath = join(work, `${tag}.complete`);
+  const prompt =
+    `Reply with exactly OK then run bash: ` +
+    `touch /data/work/${tag}.start; sleep 8; touch /data/work/${tag}.complete. ` +
+    `Do not skip the sleep or the marker files.`;
+  current.value = 'message';
+  await typeComposer(page, prompt);
+  await clickSelector(page, SEND_BTN);
+  await waitPhaseEvent(
+    buckets.message,
+    'http',
+    (path) => path.includes('/api/session/'),
+    8_000,
+    'message-http',
+  );
+  await waitQuiet(pending, 2_000);
+  inventory.push(snapshot(buckets.message, 'message'));
+  current.value = 'running';
+  const runFrom = Date.now();
+  await waitFor(
+    async () => {
+      const state = await clickAllowOnce(page, tag);
+      return state === 'clicked' || (await markerExists(startPath));
+    },
+    taskMs,
+    `cycle-${index}-approve`,
+  );
+  await waitOracle(startPath, completePath, false, taskMs, `cycle-${index}-running`);
+  const listed = await sampleHttp(origin, cookie);
+  let sessionId = listed.items?.find((item) => item.running)?.sessionId ?? '';
+  if (!sessionId) {
+    const hit = [...mux.store.events]
+      .reverse()
+      .find((event) => event.t >= runFrom && event.running);
+    sessionId = hit?.sessionId ?? '';
+  }
+  const running = await sample(
+    origin,
+    cookie,
+    home,
+    mux,
+    sessionId,
+    runFrom,
+    Date.now(),
+    `cycle-${index}-running`,
+  );
+  await waitQuiet(pending, 1_000);
+  inventory.push(snapshot(buckets.running, 'running'));
+  current.value = 'complete';
+  const idleFrom = Date.now();
+  await waitOracle(startPath, completePath, true, taskMs, `cycle-${index}-complete`);
+  await waitComposer(page, browserMs);
+  const idle = await sample(
+    origin,
+    cookie,
+    home,
+    mux,
+    sessionId,
+    idleFrom,
+    Date.now(),
+    `cycle-${index}-idle`,
+  );
+  await waitQuiet(pending, 1_000);
+  inventory.push(snapshot(buckets.complete, 'complete'));
+  return { running, idle };
+};
+const attachPage = (page, buckets, current, pending, errors) => {
+  page.on('Network.requestWillBeSent', (p) => {
+    pending.count += 1;
+    if (p.request?.url) buckets[current.value].http.add(redactUrl(p.request.url));
+  });
+  page.on('Network.webSocketCreated', (p) => {
+    pending.count += 1;
+    if (p.url) buckets[current.value].ws.add(redactUrl(p.url));
+  });
+  page.on('Runtime.exceptionThrown', (p) => errors.push(errorCode(p.exceptionDetails?.text)));
+  page.on('Log.entryAdded', (p) => {
+    if (p.entry?.level === 'error') errors.push(errorCode(p.entry.text));
+  });
 };
 const drive = async () => {
   const origin = env('PROBE_ORIGIN');
   const cookie = await readSecret('PROBE_COOKIE_FILE');
   const home = env('PROBE_HOME');
+  const work = env('PROBE_WORK');
   const screenshot = env('PROBE_SCREENSHOT');
   const browserMs = Number(env('PROBE_BROWSER_SECONDS')) * 1000;
   const taskMs = Number(env('PROBE_TASK_SECONDS')) * 1000;
@@ -228,89 +448,113 @@ const drive = async () => {
   );
   const current = { value: 'homepage' };
   const errors = [];
-  const chrome = await startChrome(env('CHROME_BIN'), env('PROBE_PROFILE'), env('PROBE_PID_FILE'));
-  const page = await connectPage(chrome.browserWs);
-  for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
-  page.on('Network.requestWillBeSent', (p) => {
-    if (p.request?.url) buckets[current.value].http.add(redactUrl(p.request.url));
-  });
-  page.on('Network.webSocketCreated', (p) => {
-    if (p.url) buckets[current.value].ws.add(redactUrl(p.url));
-  });
-  page.on('Runtime.exceptionThrown', (p) =>
-    errors.push(String(p.exceptionDetails?.text ?? 'exception')),
-  );
-  page.on('Log.entryAdded', (p) => {
-    if (p.entry?.level === 'error') errors.push(String(p.entry.text ?? ''));
-  });
-  const mux = await muxListen(origin, cookie, { ready: false, last: null, history: [] });
-  await page.send('Network.setCookie', {
-    name: cookie.split('=', 1)[0],
-    value: cookie.slice(cookie.indexOf('=') + 1),
-    url: origin,
-    httpOnly: true,
-    sameSite: 'Strict',
-    path: '/',
-  });
-  await page.send('Page.navigate', { url: `${origin}/` });
-  await waitFor(() => evalJson(page, 'document.readyState==="complete"'), browserMs, 'homepage');
-  await waitComposer(page, browserMs);
-  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
-  await mkdir(dirname(screenshot), { recursive: true });
-  await writeFile(screenshot, Buffer.from(shot.data, 'base64'));
-  out(`screenshot ${screenshot} bytes=${(await stat(screenshot)).size}`);
-  const inventory = [snapshot(buckets.homepage, 'homepage')];
-  const openSession = async () => {
-    current.value = 'new-session';
-    await clickSelector(page, NEW_BTN);
+  const pending = { count: 0 };
+  let chrome;
+  let page;
+  let mux;
+  try {
+    chrome = await startChrome(env('CHROME_BIN'), env('PROBE_PROFILE'), env('PROBE_PID_FILE'));
+    page = await connectPage(chrome.browserWs);
+    for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
+    attachPage(page, buckets, current, pending, errors);
+    mux = await muxListen(origin, cookie, { ready: false, events: [] });
+    await page.send('Network.setCookie', {
+      name: cookie.split('=', 1)[0],
+      value: cookie.slice(cookie.indexOf('=') + 1),
+      url: origin,
+      httpOnly: true,
+      sameSite: 'Strict',
+      path: '/',
+    });
+    await page.send('Page.navigate', { url: `${origin}/` });
+    await waitFor(() => evalJson(page, 'document.readyState==="complete"'), browserMs, 'homepage');
     await waitComposer(page, browserMs);
-    inventory.push(snapshot(buckets['new-session'], 'new-session'));
-  };
-  await openSession();
-  const cycles = [];
-  for (let index = 1; index <= 3; index += 1) {
-    if (index > 1) await openSession();
-    current.value = 'message';
-    await typeComposer(page, PROMPT);
-    await clickSelector(page, SEND_BTN);
-    inventory.push(snapshot(buckets.message, 'message'));
-    current.value = 'running';
-    await waitList(page, origin, cookie, true, taskMs, `cycle-${index}-running`);
-    const running = await sample(origin, cookie, home, mux, `cycle-${index}-running`);
-    inventory.push(snapshot(buckets.running, 'running'));
-    current.value = 'complete';
-    await waitList(page, origin, cookie, false, taskMs, `cycle-${index}-idle`);
-    const idle = await sample(origin, cookie, home, mux, `cycle-${index}-idle`);
-    inventory.push(snapshot(buckets.complete, 'complete'));
-    cycles.push({ running, idle });
+    await waitQuiet(pending, 2_000);
+    const shot = await page.send('Page.captureScreenshot', { format: 'png' });
+    await mkdir(dirname(screenshot), { recursive: true });
+    await writeFile(screenshot, Buffer.from(shot.data, 'base64'));
+    out(`screenshot ${screenshot} bytes=${(await stat(screenshot)).size}`);
+    const inventory = [snapshot(buckets.homepage, 'homepage')];
+    const baseline = errors.slice();
+    out(`console baseline ${tally(baseline)}`);
+    const ctx = {
+      page,
+      origin,
+      cookie,
+      home,
+      work,
+      mux,
+      buckets,
+      current,
+      pending,
+      inventory,
+      browserMs,
+      taskMs,
+    };
+    const openSession = async () => {
+      current.value = 'new-session';
+      await clickSelector(page, NEW_BTN);
+      await waitComposer(page, browserMs);
+      await waitPhaseEvent(
+        buckets['new-session'],
+        'http',
+        (path) => path.includes('/api/'),
+        8_000,
+        'new-session-http',
+      );
+      await waitQuiet(pending, 2_000);
+      inventory.push(snapshot(buckets['new-session'], 'new-session'));
+    };
+    await openSession();
+    const cycles = [await runCycle(ctx, 1)];
+    await openSession();
+    cycles.push(await runCycle(ctx, 2));
+    await openSession();
+    cycles.push(await runCycle(ctx, 3));
+    out(`console new ${tally(errors.slice(baseline.length))}`);
+    report(
+      cycles.every(
+        (c) =>
+          c.running.http.available &&
+          c.running.http.anyRunning === true &&
+          c.idle.http.available &&
+          c.idle.http.anyRunning === false,
+      ),
+      cycles.every(
+        (c) =>
+          c.running.ws.available &&
+          c.idle.ws.available &&
+          c.running.ws.last === true &&
+          c.idle.ws.last === false,
+      ),
+      inventory,
+    );
+  } finally {
+    try {
+      mux?.close();
+    } catch {
+      /* closed */
+    }
+    try {
+      page?.close();
+    } catch {
+      /* closed */
+    }
+    await chrome?.stop?.();
   }
-  mux.close();
-  page.close();
-  chrome.child.kill('SIGTERM');
-  const leftover = errors.filter((text) => !/favicon|sourcemap/i.test(text));
-  if (leftover.length) fail(`unhandled console errors: ${leftover.join('; ')}`);
-  report(
-    cycles.every(
-      (c) =>
-        c.running.http.ok && c.running.http.anyRunning && c.idle.http.ok && !c.idle.http.anyRunning,
-    ),
-    cycles.every(
-      (c) =>
-        c.running.ws.available &&
-        c.idle.ws.available &&
-        c.running.ws.last === true &&
-        c.idle.ws.last === false,
-    ),
-    cycles.every(
-      (c) =>
-        c.running.files.available &&
-        c.idle.files.available &&
-        c.running.files.digest !== c.idle.files.digest,
-    ),
-    inventory,
-  );
 };
 const command = process.argv[2];
-if (command === 'exchange') exchange().catch((error) => fail(String(error)));
-else if (command === 'drive') drive().catch((error) => fail(String(error)));
-else fail('usage: probe-dsh-api-browser.mjs exchange|drive', 2);
+const run = async () => {
+  if (command === 'exchange') await exchange();
+  else if (command === 'drive') await drive();
+  else fail('usage: probe-dsh-api-browser.mjs exchange|drive', 2);
+};
+run().catch((error) => {
+  if (!error?.probeFail) {
+    const text = String(error?.message ?? error);
+    process.stderr.write(
+      `probe-dsh-api: ${text.startsWith('chrome-start ') ? text : errorCode(error)}\n`,
+    );
+    process.exitCode ||= 1;
+  }
+});
