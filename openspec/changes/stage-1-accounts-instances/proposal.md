@@ -88,3 +88,13 @@
 - Blast radius: a false idle signal could stop live tasks in #59; leaked probe credentials or resources affect the verification host.
 - Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
 - Evidence floor: actual Web UI request paths at five phases, HTTP/WS/file running-versus-idle observations over three real task cycles, redacted output, cleanup, and `pnpm check`.
+
+## Issue #8 fixture
+
+- Issue type: feature
+- Fixture level: expanded
+- Upstream suggested level: compact (override: real launch credentials, browser automation, state-file writes, VPS resource lifecycle and a repo-owned client plugin trigger expanded review)
+- Blast radius: incorrect first-run conclusions would propagate into image preseed (#27), managed configuration (#29+) and first-entry behavior (#57).
+- Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
+- Evidence floor: fresh-instance baseline plus overlay/file/CLI method matrix and the approved plugin-composition candidate, real non-loopback Chinese/no-notice/editable-composer screenshots, reload and model-selection preservation, exact working artifacts, resource cleanup and `pnpm check`.
+- Project-party decision (2026-10-04): user selected “扩大到插件或镜像定制”; expand #8 to a minimal repo-owned client plugin and supported roster composition without weakening F15/F44 or modifying DSH source. Existing image preseed (#27) and managed-config generation (#29) remain separate; the probe must load the same deliverable plugin bytes.

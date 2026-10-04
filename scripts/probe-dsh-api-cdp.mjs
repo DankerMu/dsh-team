@@ -211,7 +211,47 @@ const stopChild = async (child) => {
   }
 };
 
-export const startChrome = async (bin, profile, pidFile) => {
+export const exchangeLaunchToken = async ({ host, port, token, cookieHost }) => {
+  const authority = `${cookieHost ?? host}:${port}`;
+  const res = await httpRequest({
+    host,
+    port,
+    path: `/?token=${encodeURIComponent(token)}`,
+    method: 'GET',
+    headers: { host: authority },
+  });
+  const set = res.headers['set-cookie']?.[0];
+  if (res.status !== 303 || !set) throw new Error(`token exchange status=${res.status}`);
+  return set.split(';', 1)[0] ?? '';
+};
+
+export const rpcCall = async (origin, cookie, method, payload, connectHost) => {
+  const url = new URL(origin);
+  const res = await httpRequest(
+    {
+      host: connectHost ?? url.hostname,
+      port: Number(url.port || 80),
+      path: `/api/${method}`,
+      method: 'POST',
+      headers: { cookie, host: url.host, origin, 'content-type': 'application/json' },
+    },
+    JSON.stringify({
+      type: 'client-request',
+      rpcId: randomUUID(),
+      method,
+      payload: { args: payload },
+    }),
+  );
+  if (res.status !== 200) return { ok: false, error: `http-${res.status}` };
+  try {
+    const parsed = JSON.parse(res.body);
+    return parsed?.type === 'server-response' ? parsed.result : { ok: false, error: 'envelope' };
+  } catch {
+    return { ok: false, error: 'json' };
+  }
+};
+
+export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
   await mkdir(profile, { recursive: true });
   const debugPort = await new Promise((resolve) => {
     const server = net.createServer();
@@ -233,6 +273,7 @@ export const startChrome = async (bin, profile, pidFile) => {
     '--no-default-browser-check',
     '--disable-dev-shm-usage',
     '--no-sandbox',
+    ...extraFlags,
     'about:blank',
   ];
   const child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -311,4 +352,142 @@ export const muxListen = async (origin, cookie, store) => {
       ws.close();
     },
   };
+};
+
+const WELCOME_CONTROLLER_DECL = 'const welcomeController = new WelcomeNoticeStore';
+const READ_WELCOME_SNAPSHOT =
+  'function(){const s=this.store.getSnapshot();return {status:s.status,acknowledged:s.acknowledged};}';
+
+const ignoreCdp = async (promise) => {
+  try {
+    await promise;
+  } catch {
+    /* closed */
+  }
+};
+
+const lineAfterNeedle = (source, needle) => {
+  const pos = source.indexOf(needle);
+  if (pos === -1) return -1;
+  return source.slice(0, pos).split('\n').length;
+};
+
+const createWelcomeObserver = (page) => {
+  const state = {
+    controllerId: undefined,
+    instrumentation: undefined,
+    targetBreakpoint: undefined,
+    failure: undefined,
+    paused: false,
+  };
+  const removeBreakpoints = async () => {
+    const target = state.targetBreakpoint;
+    const instrumentation = state.instrumentation;
+    state.targetBreakpoint = undefined;
+    state.instrumentation = undefined;
+    if (target) await ignoreCdp(page.send('Debugger.removeBreakpoint', { breakpointId: target }));
+    if (instrumentation) {
+      await ignoreCdp(page.send('Debugger.removeBreakpoint', { breakpointId: instrumentation }));
+    }
+  };
+  const resumeIfPaused = async () => {
+    if (!state.paused) return;
+    state.paused = false;
+    await ignoreCdp(page.send('Debugger.resume'));
+  };
+  const captureController = async (event) => {
+    const frameId = event.callFrames?.[0]?.callFrameId;
+    if (!frameId) {
+      state.failure = 'controller-unavailable';
+      return;
+    }
+    const found = await page.send('Debugger.evaluateOnCallFrame', {
+      callFrameId: frameId,
+      expression: 'welcomeController',
+      returnByValue: false,
+    });
+    if (found.exceptionDetails || !found.result?.objectId) {
+      state.failure = 'controller-unavailable';
+      return;
+    }
+    state.controllerId = found.result.objectId;
+    await removeBreakpoints();
+  };
+  const armScriptBreakpoint = async (event) => {
+    if (state.targetBreakpoint || state.controllerId) return;
+    const scriptId = event.callFrames?.[0]?.location?.scriptId;
+    if (!scriptId) return;
+    const { scriptSource } = await page.send('Debugger.getScriptSource', { scriptId });
+    const lineNumber = lineAfterNeedle(scriptSource, WELCOME_CONTROLLER_DECL);
+    if (lineNumber < 0) return;
+    const set = await page.send('Debugger.setBreakpoint', {
+      location: { scriptId, lineNumber },
+    });
+    state.targetBreakpoint = set.breakpointId;
+  };
+  const onPaused = async (event) => {
+    state.paused = true;
+    try {
+      if (state.failure) return;
+      if (state.targetBreakpoint && event.hitBreakpoints?.includes(state.targetBreakpoint)) {
+        await captureController(event);
+        return;
+      }
+      await armScriptBreakpoint(event);
+    } catch {
+      state.failure = 'debugger-observation-failed';
+    } finally {
+      await resumeIfPaused();
+    }
+  };
+  return {
+    state,
+    onPaused,
+    removeBreakpoints,
+    resumeIfPaused,
+    cleanup: async () => {
+      await removeBreakpoints();
+      await resumeIfPaused();
+      await ignoreCdp(page.send('Debugger.disable'));
+    },
+  };
+};
+
+export const armWelcomeStoreObserver = async (page) => {
+  const observer = createWelcomeObserver(page);
+  page.on('Debugger.paused', observer.onPaused);
+  await page.send('Debugger.enable');
+  const set = await page.send('Debugger.setInstrumentationBreakpoint', {
+    instrumentation: 'beforeScriptExecution',
+  });
+  observer.state.instrumentation = set.breakpointId;
+  return observer;
+};
+
+const readWelcomeSnapshot = async (page, objectId) => {
+  const result = await page.send('Runtime.callFunctionOn', {
+    objectId,
+    functionDeclaration: READ_WELCOME_SNAPSHOT,
+    returnByValue: true,
+    throwOnSideEffect: true,
+  });
+  if (result.exceptionDetails) throw new Error('readonly-store-observation-failed');
+  return result.result?.value;
+};
+
+export const waitWelcomeStoreReady = async (page, observer, ms) => {
+  const deadline = Date.now() + ms;
+  try {
+    while (Date.now() < deadline) {
+      if (observer.state.failure) throw new Error(observer.state.failure);
+      if (observer.state.controllerId) {
+        const snapshot = await readWelcomeSnapshot(page, observer.state.controllerId);
+        if (snapshot?.status === 'ready') return snapshot;
+      }
+      await sleep(100);
+    }
+    throw new Error('initialization-unobserved');
+  } finally {
+    await observer.cleanup();
+  }
 };

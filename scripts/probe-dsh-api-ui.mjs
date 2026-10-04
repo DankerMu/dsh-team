@@ -6,12 +6,22 @@ import { sleep } from './probe-dsh-api-cdp.mjs';
 export const NEW_BTN = 'button[aria-label="New session"],button[aria-label="新建会话"]';
 export const SEND_BTN = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
 const STOP_BTN = 'button[aria-label="Stop generating"],button[aria-label="停止生成"]';
-const WORKSPACE_BTN = 'button[aria-label="Choose workspace"],button[aria-label="选择工作区"]';
+export const WORKSPACE_BTN =
+  'button[aria-label="Choose workspace"],button[aria-label="选择工作区"]';
 const EDIT_PATH = 'input[aria-label="Edit path"],input[aria-label="编辑路径"]';
 const EDIT_ZONE = 'button[aria-label="Edit path"],button[aria-label="编辑路径"]';
-const WORKSPACE_PATH = '/data/work';
-const NOTICE_LABELS = ['Continue', '继续'];
+export const WORKSPACE_PATH = '/data/work';
+export const NOTICE_LABELS = ['Continue', '继续'];
 const OPEN_LABELS = ['Open', '打开'];
+export const ZH_CONTROL_LABELS = ['新建会话', '发送消息', '选择工作区', '探索未至之境'];
+export const EN_CONTROL_LABELS = [
+  'New session',
+  'Send message',
+  'Choose workspace',
+  'Into the Unknown',
+];
+export const FIRST_RUN_MARKER = 'dsh-team-first-run';
+export const FIRST_RUN_HOST = 'dsh-team-probe.invalid';
 const CONTROL_LABELS = {
   'New session': 'new-session',
   新建会话: 'new-session',
@@ -341,4 +351,213 @@ export const reportDiagnostic = async (page, screenshot, current) => {
   } catch (error) {
     out(`diagnostic-screenshot error=${errorCode(error)}`);
   }
+};
+
+export const evalPage = evalJson;
+
+export const classifyFirstRunWorkspace = ({
+  chipVisible,
+  chipLabel,
+  pickerOpen,
+  editorPresent,
+}) => {
+  const chooseLabels = new Set(['Choose workspace', '选择工作区']);
+  const chipPlaceholder = Boolean(chipVisible && chooseLabels.has(chipLabel));
+  const workspaceSelected = Boolean(
+    chipVisible && Boolean(chipLabel) && !chipPlaceholder && !pickerOpen,
+  );
+  const workspaceChoice = Boolean(
+    pickerOpen || chipPlaceholder || (!chipVisible && !editorPresent),
+  );
+  return { chipPlaceholder, workspaceSelected, workspaceChoice };
+};
+
+export const observeFirstRun = (page) =>
+  evalJson(
+    page,
+    `(function(){
+      const noticeLabels=new Set(${JSON.stringify(NOTICE_LABELS)});
+      const noticeTitles=new Set(["Preview Notice","预览版说明"]);
+      const zhLabels=${JSON.stringify(ZH_CONTROL_LABELS)};
+      const enLabels=${JSON.stringify(EN_CONTROL_LABELS)};
+      const classify=${classifyFirstRunWorkspace.toString()};
+      const textOf=(el)=>(el.getAttribute("aria-label")||el.textContent||"").replace(/\\s+/g," ").trim();
+      const visibleText=(el)=>(el.textContent||"").replace(/\\s+/g," ").trim();
+      const nodes=[...document.querySelectorAll("button,input,[contenteditable],[role='heading'],h1,h2,p,span,div")];
+      const visible=(el)=>Boolean(el&&el.getClientRects().length);
+      const noticeTitle=nodes.some((el)=>visible(el)&&noticeTitles.has(visibleText(el)));
+      const noticeButton=[...document.querySelectorAll("button")].some((el)=>{
+        const text=(el.textContent||"").trim();
+        return noticeLabels.has(text) && !el.disabled && !el.closest("[inert]");
+      });
+      const notice=Boolean(noticeTitle&&noticeButton);
+      const editor=document.querySelector('[contenteditable="true"]');
+      const pathPicker=Boolean(
+        document.querySelector(${JSON.stringify(EDIT_PATH)}) ||
+        document.querySelector(${JSON.stringify(EDIT_ZONE)})
+      );
+      const chip=[...document.querySelectorAll("button[aria-label='Choose workspace'],button[aria-label='选择工作区']")].find(visible);
+      const chipLabel=chip?visibleText(chip.querySelector("span")||chip):"";
+      const pickerOpen=Boolean(pathPicker||(chip&&chip.getAttribute("aria-expanded")==="true"));
+      const classified=classify({
+        chipVisible:Boolean(chip),
+        chipLabel:chipLabel,
+        pickerOpen:pickerOpen,
+        editorPresent:Boolean(editor)
+      });
+      const zhVisible=zhLabels.filter((label)=>nodes.some((el)=>visible(el)&&textOf(el).includes(label)));
+      const enVisible=enLabels.filter((label)=>nodes.some((el)=>visible(el)&&textOf(el).includes(label)));
+      const chromeReady=Boolean(
+        document.querySelector(${JSON.stringify(NEW_BTN)}) ||
+        chip ||
+        editor ||
+        notice
+      );
+      return {
+        hostname:location.hostname,
+        languages:[...navigator.languages],
+        navigatorLanguage:navigator.language,
+        lang:document.documentElement.lang||"",
+        notice,
+        editable:Boolean(editor&&!editor.closest("[inert]")),
+        composerPresent:Boolean(editor),
+        workspaceChoice:classified.workspaceChoice,
+        workspaceSelected:classified.workspaceSelected,
+        workspaceLabel:chipLabel,
+        pickerOpen,
+        zhVisible,
+        enVisible,
+        chromeReady,
+        onboardingResolved:notice,
+        readyState:document.readyState
+      };
+    })()`,
+  );
+
+const observationFingerprint = (state) =>
+  JSON.stringify({
+    hostname: state?.hostname,
+    languages: state?.languages,
+    lang: state?.lang,
+    notice: state?.notice,
+    editable: state?.editable,
+    workspaceChoice: state?.workspaceChoice,
+    workspaceSelected: state?.workspaceSelected,
+    workspaceLabel: state?.workspaceLabel,
+    pickerOpen: state?.pickerOpen,
+    zhVisible: state?.zhVisible,
+    enVisible: state?.enVisible,
+    onboardingResolved: state?.onboardingResolved,
+  });
+
+const sameObservation = (left, right) =>
+  observationFingerprint(left) === observationFingerprint(right);
+
+const waitFontsReady = async (page, ms) => {
+  const remaining = Math.max(0, ms);
+  await evalJson(
+    page,
+    `(function(ms){
+      const ready=document.fonts&&document.fonts.ready?document.fonts.ready.then(()=>true):Promise.resolve(true);
+      const timeout=new Promise((resolve)=>setTimeout(()=>resolve(false), ms));
+      return Promise.race([ready, timeout]);
+    })(${JSON.stringify(remaining)})`,
+  );
+};
+
+export const waitAppReady = async (page, ms) => {
+  await waitFor(
+    async () => {
+      const state = await observeFirstRun(page);
+      return state.chromeReady ? state : null;
+    },
+    ms,
+    'app-ready',
+  );
+};
+
+export const waitFirstRunInitialized = async (page, ms, noticeSeen = false, store) => {
+  const deadline = Date.now() + ms;
+  await waitFontsReady(page, remainingMs(deadline, 'fonts'));
+  let last = await observeFirstRun(page);
+  let seen = noticeSeen || Boolean(last.notice);
+  const acknowledged = Boolean(store?.acknowledged);
+  const storeReady = store?.status === 'ready';
+  while (Date.now() < deadline) {
+    if (last.notice) seen = true;
+    if (storeReady && (acknowledged || seen)) {
+      return { last, noticeSeen: seen, initialized: true, store };
+    }
+    await sleep(250);
+    last = await observeFirstRun(page);
+  }
+  return {
+    last,
+    noticeSeen: seen,
+    initialized: Boolean(storeReady && (acknowledged || seen)),
+    store,
+  };
+};
+
+export const settleFirstRun = async (page, ms, noticeSeen = false) => {
+  const until = Date.now() + ms;
+  await waitFontsReady(page, remainingMs(until, 'fonts'));
+  let previous = await observeFirstRun(page);
+  let seen = noticeSeen || Boolean(previous.notice);
+  while (Date.now() < until) {
+    await sleep(400);
+    const next = await observeFirstRun(page);
+    if (next.notice) seen = true;
+    if (sameObservation(previous, next)) {
+      return { last: next, noticeSeen: seen };
+    }
+    previous = next;
+  }
+  return { last: previous, noticeSeen: seen };
+};
+
+export const captureSettledScreenshot = async (page, screenshot) => {
+  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
+  await mkdir(dirname(screenshot), { recursive: true });
+  await writeFile(screenshot, Buffer.from(shot.data, 'base64'));
+  return { screenshot, bytes: (await stat(screenshot)).size };
+};
+
+export const composerText = (page) =>
+  evalJson(
+    page,
+    `(function(){
+      const el=document.querySelector('[contenteditable="true"]');
+      return el?(el.innerText||el.textContent||""):"";
+    })()`,
+  );
+
+export const clearComposer = async (page) => {
+  const focused = await evalJson(
+    page,
+    `(function(){
+      const el=document.querySelector('[contenteditable="true"]');
+      if(!el||el.closest("[inert]"))return false;
+      el.focus();
+      const range=document.createRange();
+      range.selectNodeContents(el);
+      const sel=window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return true;
+    })()`,
+  );
+  if (!focused) throw new Error('composer missing');
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+  });
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+  });
 };

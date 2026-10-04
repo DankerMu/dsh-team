@@ -1,0 +1,7 @@
+# Retain General settings, model execution, and the independent model selector.
+# Remove only the personal-provider page and its Notice/API-key onboarding.
+- id: ui-settings-models
+  disabled: true
+- insert:
+    - id: zh-locale
+      name: "@dsh-team/zh-locale"

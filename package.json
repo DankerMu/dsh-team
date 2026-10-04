@@ -24,7 +24,7 @@
     "lint:tests": "bash scripts/check-test-pairing.sh",
     "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
     "lint:agents": "bash scripts/check-agents-commands.sh",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p plugins/zh-locale/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "vitest run --project integration",
     "build": "tsc -p platform/tsconfig.build.json",
@@ -38,7 +38,8 @@
     "test:guardrails": "bash scripts/test-guardrails.sh",
     "change-scope": "bash scripts/change-scope.sh",
     "probe:sandbox": "bash scripts/probe-sandbox.sh",
-    "probe:dsh-api": "bash scripts/probe-dsh-api.sh"
+    "probe:dsh-api": "bash scripts/probe-dsh-api.sh",
+    "probe:first-run": "bash scripts/probe-first-run.sh"
   },
   "lint-staged": {
     "*.{ts,tsx,mjs,cjs}": [
