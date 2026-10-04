@@ -73,7 +73,10 @@ export const verifyPreservation = async (page, modelNames, ms, requests) => {
     const current=dialog&&[...dialog.querySelectorAll('nav button[aria-current="true"]')]
       .some(el=>el.textContent.trim()==='通用设置');
     const items=dialog&&dialog.querySelector('[data-slot="settings.general.item"]');
-    return Boolean(current&&items&&items.getClientRects().length&&items.textContent.includes('语言')&&items.textContent.includes('当前版本'));
+    const visible=(el)=>Boolean(el&&el.getClientRects().length);
+    const visibleText=(el)=>(el.textContent||'').replace(/\\s+/g,' ').trim();
+    const visibleRow=(root,needle)=>Boolean(root&&[...root.querySelectorAll('*')].some((el)=>visible(el)&&visibleText(el).includes(needle)));
+    return Boolean(current&&visibleRow(items,'语言')&&visibleRow(items,'当前版本'));
   })()`,
       ),
     budget(),

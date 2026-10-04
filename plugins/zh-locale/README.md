@@ -134,9 +134,13 @@ The parent owns this independent UI exercise and the API three-cycle regression.
 
 ## Verification status
 
-No runtime, tests, build, lint, or formatter was executed by this implementation
-leaf. Parent-run first-entry/reload, counterexample, General/model UI, API
-regression, formatting and check evidence are required before claiming success.
+Parent verification on giap-vps (DSH 0.2.0-rc.2, Node 24.13.1, Chrome 140):
+the root first-run probe passed on a fresh non-loopback English-language browser
+and on reload, with Chinese controls, no Notice, successful marker type/clear,
+and no console errors. The configured-model run passed General settings and
+selection of both fixture models without a prompt request. All three documented
+composition fault cases returned harness-inconclusive rather than success.
+These results do not establish production image population or target Ubuntu 22.04 behavior.
 The package has no branching application logic to unit-test without mock-wiring;
 the real pinned browser/probe boundary is the verification oracle. The existing
 JS lint and dependency checks include `plugins/`, with browser globals declared

@@ -113,13 +113,13 @@ Minimal mergeable slice: atomic - 2.1 的路径清单是 2.2 的输入，结论�
 
 - [x] 3.1 新建 `scripts/probe-first-run.sh`：用空状态卷起实例，记录首次打开界面时是否需要选择或创建工作区、界面语言、是否弹出公告。验证：脚本输出这三项的现状。
 - [x] 3.2 在探针里依次尝试用受管覆盖层、预置配置目录里的文件、启动参数三种办法，使新实例首次打开即可输入、界面为中文、没有公告；记录每种办法是否生效。验证：输出里三项各有一种生效的办法，或明确写“无法做到”及现象。
-- [ ] 3.2a 按项目方 2026-10-04 “扩大到插件或镜像定制”的选择，增加本仓库客户端插件与受支持的 roster 组合候选；不修改 DSH 源码，不降低原验收。验证：非 loopback hostname、English navigator、全新状态和浏览器下，工作区绑定 `/data/work`、界面中文、初始化完成后无公告、输入及清除标记成功；刷新后重复通过。模型切换及 General 设置仍可用，错误/缺失插件或恢复公告组件的反例被拒绝；不靠探针点击或改设置取得通过。
-- [ ] 3.3 把结论写回 `design.md` 决定 10、12 和 Open Questions 第三条。三项都能做到：写出具体做法（哪个配置键或哪个文件）。有一项做不到：停下来把现象交项目方确认；确认后在同一个 PR 里改写 `instance-lifecycle` 规格“新实例可以直接使用”的要求和场景。验证：这三处写出具体做法；有做不到的项时 PR 描述里有项目方的确认，且规格与设计一致。
+- [x] 3.2a 按项目方 2026-10-04 “扩大到插件或镜像定制”的选择，增加本仓库客户端插件与受支持的 roster 组合候选；不修改 DSH 源码，不降低原验收。验证：非 loopback hostname、English navigator、全新状态和浏览器下，工作区绑定 `/data/work`、界面中文、初始化完成后无公告、输入及清除标记成功；刷新后重复通过。模型切换及 General 设置仍可用，错误/缺失插件或恢复公告组件的反例被拒绝；不靠探针点击或改设置取得通过。
+- [x] 3.3 把结论写回 `design.md` 决定 10、12 和 Open Questions 第三条。三项都能做到：写出具体做法（哪个配置键或哪个文件）。有一项做不到：停下来把现象交项目方确认；确认后在同一个 PR 里改写 `instance-lifecycle` 规格“新实例可以直接使用”的要求和场景。验证：这三处写出具体做法；有做不到的项时 PR 描述里有项目方的确认，且规格与设计一致。
 
 Suggested fixture level: expanded - 经用户批准扩展到客户端插件、组件组合和真实浏览器验收；保留最初三种方法的实测
 Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回才有可合入的产出
 
-验证记录（#8）：VPS 非 loopback hostname + English navigator 的原三方法矩阵中，预置文件/组合方法选中并绑定 `/data/work`，中文和 Preview Notice 抑制均未生效，明确输出“无法做到”；这是有效的受限方法结果，不是普遍不可定制的结论。loopback 校准使用同一接受驱动通过全部判据；不冒充平台矩阵。延迟初始化、超时与 post-snapshot 故障的证据保留。项目方于 2026-10-04 选择“扩大到插件或镜像定制”，授权 3.2a，不批准需求偏离；3.3 仍未完成，原规格不改。
+验证记录（#8）：原三方法矩阵中，预置文件/组合方法只实现 `/data/work` 绑定，中文和公告抑制未生效。项目方于 2026-10-04 选择“扩大到插件或镜像定制”，未批准需求降级。新增 `plugins/zh-locale/` 及 canonical patch 的实际 composition 试验，在非 loopback hostname + English navigator 下首次进入、刷新均 `accepted: true`，中文、无公告、输入及清除成功且 consoleErrors 为空；General 设置及两个配置模型的 UI 切换通过，无模型请求。缺失插件、错误注册和恢复公告组件均为 harness-inconclusive；真实插件 apply 延迟 10 秒在 60 秒预算下通过，在 5 秒预算下非零/inconclusive，未提前认定无公告。原初始化与 post-snapshot 故障证据保留。决定 10、12、Open Questions 第三条及规格实现说明已同步，原验收要求不变；#27/#29 负责生产接线，不复制探针 Session 状态。
 
 ### Issue #8 risk/evidence map (tasks 3.1–3.3, including approved 3.2a)
 

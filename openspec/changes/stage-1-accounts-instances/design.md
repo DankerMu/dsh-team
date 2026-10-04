@@ -128,9 +128,9 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - 模型：一个 OpenAI 兼容的 provider（地址、密钥所在的环境变量名、模型清单，模型带上下文窗口时写出 `contextWindow`），以及默认模型（F17）。模型地址、密钥、清单、默认模型任一项未配置时不生成覆盖层，也不启动实例，状态接口返回“未配置模型”。
 - 去掉每个预设的联网搜索和网页抓取工具（F24）。
 - 默认权限档（D23）。
-- 界面语言为中文、关闭首次公告（F44）仍是要求。任务包 1.2 在 `0.2.0-rc.2` 实测：`locale.config.preference: zh` 与 `ui-settings-general.config.welcomeNoticeVersion: "2026-09-28.1"` 在 loopback 浏览器生效，但在模拟平台的非 loopback authority 下，宿主配置虽已加载，界面仍为英文且出现 Preview Notice。项目方于 2026-10-04 选择“扩大到插件或镜像定制”，不批准需求降级。新候选使用本仓库客户端插件调用公开的 `ctx.locale.setLocale('zh')`，并通过受管 patch 停用 `ui-settings-models` 行；仍须真实非 loopback 验证，不能把 loopback 控制组冒充平台方案。
-- `ui-settings-models.config.credentialOnboarding: false` 可关闭独立的 API-key 引导，不等于关闭 Preview Notice。该已发布配置允许不加载模型密钥就验证输入框；探针没有提交模型消息。
-- 候选停用的是员工个人 provider/密钥管理页及其公告、API-key 引导，不是模型执行或切换服务。D6/F17/F18 要求模型由管理员统一配置，未要求保留该个人管理页；独立的 `ui-model-selection`、composer 模型位和 `/model` 必须保留。若组合导致这些功能不可用，候选失败，不能以关闭更多界面规避。不通过修改 DSH 源码、伪造 native/localhost 权限、CSS 隐藏或插入永不完成的 onboarding 步骤实现。
+- 中文界面和无首次公告（F44）的已验证机制是 `plugins/zh-locale/`：客户端通过公开的 `ctx.locale.setLocale('zh')` 在每次加载时设置中文，canonical `cordis.patch.yml` 插入该插件并仅停用 `ui-settings-models` 行。2026-10-04 在 giap-vps 的 DSH `0.2.0-rc.2`、非 loopback hostname、English navigator 下，首次进入和真实页面刷新均通过中文、无公告、输入及清除标记判据，consoleErrors 为空；不是 loopback 对照的替代结论。
+- 原配置/文件/启动参数方法的负结果保留：宿主 `locale.config.preference: zh` 和 `ui-settings-general.config.welcomeNoticeVersion: "2026-09-28.1"` 不控制远程浏览器；`ui-settings-models.config.credentialOnboarding: false` 只关闭独立 API-key 引导。项目方选择“扩大到插件或镜像定制”，没有批准需求降级；受管配置生成（#29）应复用插件的 canonical patch，不再把这三个无效/不完整的键当作远程首次进入配方。
+- 停用的组件拥有员工个人 provider/密钥管理页及公告、API-key 引导，不是模型执行或切换服务。D6/F17/F18 要求模型由管理员统一配置，未要求保留该个人管理页。独立的 `ui-model-selection`、composer 模型位和 `/model` 保留在 roster；实际 UI 已验证 General 设置可用，并列出、逐个选择两个配置模型。无模型消息提交，不修改 DSH 源码、不伪造 native/localhost 权限、不以 CSS 隐藏或永不完成的 onboarding 步骤遮挡公告。
 
 本阶段各实例的覆盖层内容相同；按实例生成是因为阶段 2 的 Office 插件配置每个实例不同，现在就按最终形态建立路径。
 
@@ -147,6 +147,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - 基础 `node:24-bookworm-slim`；装 bubblewrap、Python 3 和 `python-docx`（公文写作 Agent 生成 DOCX 用）、pnpm、`@deepseek-ai/dsh@0.2.0-rc.2`；非 root 用户 uid 1001；`DSH_HOME=/data/home`，工作目录 `/data/work`。
 - 镜像里预置 `$DSH_HOME/profiles/web/`（含办公 Agent 的 bundle），并把整个 `$DSH_HOME/profiles/` 目录原样拷贝一份到 `/opt/dsh-team/profile-seed/`（即 `profile-seed/web/` 对应 `profiles/web/`）。新用户的状态卷第一次挂载时 Docker 会把镜像里的目录内容带进去（T5 前半，阶段 0 已实测）。
 - 任务包 1.2 已验证工作区文件机制：`$DSH_HOME/storages/workspace.json` 使用 `unit: { name: "workspace", version: 2 }`、`global` 和 `tables.workspaces`，目标记录的 `path` 为 `/data/work`。新实例读取预置记录后选中 `work`，其 Session cwd 也是 `/data/work`；发现阶段产生的 Session 标识不是生产种子契约。生产镜像预置仍由任务 7.3 实现，本 PR 不把测试状态整树复制进镜像。`workspace-controller.config.documentsDirectory` 会追加 `deepseek-harness/default-workspace`，不能直接替代 `/data/work` 记录。
+- 中文插件的交付文件为 `plugins/zh-locale/{package.json,index.js,client.js,cordis.patch.yml}`；放到 `$DSH_HOME/profiles/web/node_modules/@dsh-team/zh-locale/`，再应用 canonical patch。探针复制同一组文件并记录哈希，运行前严格比对 `dsh --version` 与插件精确 peer pin；不运行包管理器、不联网安装。#27 的镜像预置和 #29 的受管配置生成应复用这些文件及版本约束；本次 bind-mount 探针不冒充 Docker 命名卷首次填充或生产镜像升级验证。
 - 2026-10-03 在 giap-vps（amd64、Ubuntu 24.04、Linux `6.8.0-117-generic`、Docker 29.1.3）实测最小额外放宽集合为空：Docker 内嵌默认即能让 DSH `0.2.0-rc.2` 的真实 `bash` 工具在“工作区内修改”模式下写工作区并拒绝写状态目录。另对交付的 `images/seccomp/dsh-user.json` 独立验证通过：该文件与 Moby `seccomp/v0.2.3` 默认策略语义相同，不追加 syscall allow，不增加 capabilities，不使用 `systempaths=unconfined` 或 privileged；来源哈希及显式调用见 `images/seccomp/README.md`。两次均保留 Landlock partial-ABI 警告。阶段 0 的 arm64 Docker Desktop 需要 seccomp 与 `/proc` 两项放宽（T8），与本次不同；差异根因未证明，不能由 VPS 结果替代目标机验证。
 - 探针是一个可重复执行的脚本：在项目方的 VPS（amd64，Ubuntu 24.04）上由 Agent 执行（D16）；目标机 Ubuntu 22.04 上由项目方再执行一次。本阶段其余需要 Docker 的构建、测试和整套部署也都在这台 VPS 上做（D16）。VPS 上只创建带 `dsh-team` 前缀的镜像、容器、卷和网络，结束时删除，不动机器上其他项目的东西。
 
@@ -210,7 +211,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 - **目标机 Ubuntu 22.04 上 shell 沙箱的最终确认。** VPS 已验证“钉定 Moby 默认 seccomp、零额外安全放宽”，配置和调用方式见 `images/seccomp/`；删除额外放宽项的集合为空，不虚构删除试验。移除 Landlock syscall allow 的临时更严策略使真实工具报告 `SANDBOX_UNAVAILABLE`，作为独立负对照。项目方仍须在 Ubuntu 22.04 执行同一探针并验证显式交付策略；若不可用，记录各级失败原因并交项目方确认，不能自动降为无 shell 沙箱。
 - **DSH 接口和运行中任务信号已由任务包 1.1 确认。** 实际 UI 观察到 `/api/session/create`、`/api/session/prompt` 等 HTTP 路径及 WS `/api/remote.mux`；采用 `POST /api/session/list` 的 `result.value.items[].running`，三次真实任务均观察到 `true → false`。协议、未知状态处理和观测限制见决定 9；完整阶段路径清单由 `pnpm probe:dsh-api` 输出，不采用 F13 退路。
-- **首次进入的定制机制已获授权，结果待验证。** 配置/文件/参数方法在非 loopback 下只能实现工作区预置；原负结果及 loopback 对照保留。项目方于 2026-10-04 选择“扩大到插件或镜像定制”：保留原规格，用本仓库插件加受支持的组件组合验证中文和无公告。具体候选、保护边界和验收见 Issue #8 implementation boundary；通过真实首次进入、刷新和模型切换回归后才写入最终做法并完成 3.3。
+- **首次进入已由任务包 1.2 验证。** 工作区采用上述 `storages/workspace.json`；中文及无公告采用 `plugins/zh-locale/` 和其 canonical roster patch（见决定 10、12）。项目方授权扩大机制而非降低要求；非 loopback 首次进入、刷新、General 设置和两个配置模型的 UI 切换均通过，缺失/错误插件及恢复公告组件的反例被拒绝。`instance-lifecycle` 原验收要求保留；生产镜像预置和受管配置接线仍由 #27/#29 实现。
 - **Auto review 在开发模型上是否可用。** 任务包 1.13 验证；不可用时 Auto 档暂时等同人工批准。
 - **`qwen3.6` 上的工具调用、子 Agent 委派、Auto review。** 留到生产联调，本阶段不处理。
 
