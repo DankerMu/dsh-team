@@ -2,6 +2,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -52,6 +53,26 @@ describe('private sqlite files', () => {
 
     expect(statSync(join(dir, 'not-a-db')).isDirectory()).toBe(true);
     expect(statSync(join(dir, 'not-a-db')).mode).toBe(before);
+  });
+
+  it('does not chmod a directory when tightening sqlite files', () => {
+    dir = mkdtempSync(join(tmpdir(), 'dsh-team-db-file-'));
+    const destination = join(dir, 'not-a-db');
+    mkdirSync(destination, { mode: 0o750 });
+    chmodSync(destination, 0o750);
+    const child = join(destination, 'sentinel.txt');
+    writeFileSync(child, 'keep-me');
+
+    try {
+      expect(() => {
+        tightenSqliteFiles(destination);
+      }).toThrow();
+      expect(statSync(destination).isDirectory()).toBe(true);
+      expect(statSync(destination).mode & 0o777).toBe(0o750);
+      expect(readFileSync(child, 'utf8')).toBe('keep-me');
+    } finally {
+      chmodSync(destination, 0o750);
+    }
   });
 
   it('propagates a filesystem error for a self-referential symlink', () => {

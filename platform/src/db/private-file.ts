@@ -34,6 +34,10 @@ export function preparePrivateDatabaseFile(filename: string): void {
     closeSync(fd);
   }
 
+  if (!statSync(filename).isFile()) {
+    return;
+  }
+
   chmodSync(filename, PRIVATE_FILE_MODE);
 }
 
@@ -43,6 +47,10 @@ export function tightenSqliteFiles(filename: string): void {
   }
 
   const main = realpathSync(filename);
+  if (!statSync(main).isFile()) {
+    throw new Error(`Database path must be a regular file, got ${JSON.stringify(filename)}`);
+  }
+
   chmodSync(main, PRIVATE_FILE_MODE);
   for (const sidecar of [`${main}-wal`, `${main}-shm`]) {
     try {

@@ -114,14 +114,31 @@ describe('openDatabase on a file', () => {
     }
   });
 
-  it('propagates an error when the path is an existing directory', () => {
+  it.each([
+    { kind: 'direct directory', viaAlias: false },
+    { kind: 'symlink to a directory', viaAlias: true },
+  ])('rejects $kind without changing mode or child access', ({ viaAlias }) => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-team-db-'));
-    const dbPath = join(dir, 'not-a-db');
-    mkdirSync(dbPath);
+    const destination = join(dir, 'not-a-db');
+    mkdirSync(destination, { mode: 0o750 });
+    chmodSync(destination, 0o750);
+    const child = join(destination, 'sentinel.txt');
+    writeFileSync(child, 'keep-me');
+    const requested = viaAlias ? join(dir, 'alias.db') : destination;
+    if (viaAlias) {
+      symlinkSync(destination, requested);
+    }
 
-    expect(() => {
-      openDatabase(dbPath);
-    }).toThrow();
+    try {
+      expect(() => {
+        openDatabase(requested);
+      }).toThrow();
+      expect(statSync(destination).isDirectory()).toBe(true);
+      expect(statSync(destination).mode & 0o777).toBe(0o750);
+      expect(readFileSync(child, 'utf8')).toBe('keep-me');
+    } finally {
+      chmodSync(destination, 0o750);
+    }
   });
 
   it('rejects a relative filename whose spelling the driver would trim', () => {
