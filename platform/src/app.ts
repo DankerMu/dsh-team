@@ -1,6 +1,7 @@
 import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { PlatformConfig } from './config.ts';
+import type { DatabaseHandle } from './db/index.ts';
 import { healthRoutes } from './health.ts';
 
 /**
@@ -24,6 +25,7 @@ export interface LogDestination {
 /** Builds the platform HTTP application without binding a port. */
 export async function buildApp(
   config: PlatformConfig,
+  database: DatabaseHandle,
   logDestination?: LogDestination,
 ): Promise<FastifyInstance> {
   const app = Fastify({
@@ -34,13 +36,22 @@ export async function buildApp(
     },
   });
 
-  await app.register(swagger, {
-    openapi: {
-      openapi: '3.1.0',
-      info: { title: 'DSH Team Platform API', version: '0.1.0' },
-    },
-  });
-  await app.register(healthRoutes);
+  try {
+    await app.register(swagger, {
+      openapi: {
+        openapi: '3.1.0',
+        info: { title: 'DSH Team Platform API', version: '0.1.0' },
+      },
+    });
+    await app.register(healthRoutes);
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
 
+  app.addHook('onClose', (_instance, done) => {
+    database.close();
+    done();
+  });
   return app;
 }

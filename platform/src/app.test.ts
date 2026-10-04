@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { FastifyPluginCallback } from 'fastify';
 import { buildApp } from './app.ts';
+import { applyMigrations, openDatabase, readSettings } from './db/index.ts';
 
 const SILENT_CONFIG = {
   host: '127.0.0.1',
@@ -8,14 +10,43 @@ const SILENT_CONFIG = {
   dataDir: './data',
 } as const;
 
+const healthFault = vi.hoisted(() => ({
+  failWith: undefined as Error | undefined,
+  closeHookRan: false,
+}));
+
+vi.mock('./health.ts', async (importOriginal) => {
+  const actual = await importOriginal<{ healthRoutes: FastifyPluginCallback }>();
+  const wrapped: FastifyPluginCallback = (app, options, done) => {
+    const failure = healthFault.failWith;
+    if (failure !== undefined) {
+      app.addHook('onClose', (_instance, closeDone) => {
+        healthFault.closeHookRan = true;
+        closeDone();
+      });
+      done(failure);
+      return;
+    }
+    actual.healthRoutes(app, options, done);
+  };
+  return { healthRoutes: wrapped };
+});
+
 function captureLog(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];
   return { lines, write: (line) => lines.push(line) };
 }
 
 describe('buildApp', () => {
+  afterEach(() => {
+    healthFault.failWith = undefined;
+    healthFault.closeHookRan = false;
+  });
+
   it('serves the health route', async () => {
-    const app = await buildApp(SILENT_CONFIG);
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp(SILENT_CONFIG, database);
 
     const response = await app.inject({ method: 'GET', url: '/healthz' });
     await app.close();
@@ -24,7 +55,9 @@ describe('buildApp', () => {
   });
 
   it('answers 404 for an unknown route', async () => {
-    const app = await buildApp(SILENT_CONFIG);
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp(SILENT_CONFIG, database);
 
     const response = await app.inject({ method: 'GET', url: '/no-such-route' });
     await app.close();
@@ -33,7 +66,9 @@ describe('buildApp', () => {
   });
 
   it('describes the health route in the OpenAPI document', async () => {
-    const app = await buildApp(SILENT_CONFIG);
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp(SILENT_CONFIG, database);
     await app.ready();
 
     const document = app.swagger();
@@ -44,7 +79,9 @@ describe('buildApp', () => {
 
   it('writes structured JSON log lines at the configured level', async () => {
     const log = captureLog();
-    const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, log);
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, database, log);
 
     app.log.debug('below the configured level');
     app.log.info('instance started');
@@ -56,7 +93,9 @@ describe('buildApp', () => {
 
   it('redacts credentials before they reach the log', async () => {
     const log = captureLog();
-    const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, log);
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, database, log);
 
     app.log.info({
       req: { headers: { authorization: 'Bearer launch-token', cookie: 'dsh=signed-cookie' } },
@@ -75,5 +114,21 @@ describe('buildApp', () => {
       expect(written).not.toContain(secret);
     }
     expect(written).toContain('[redacted]');
+  });
+
+  it('leaves the caller-owned database open after construction failure', async () => {
+    const failure = new Error('health plugin refused');
+    healthFault.failWith = failure;
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+
+    try {
+      await expect(buildApp(SILENT_CONFIG, database)).rejects.toBe(failure);
+      expect(healthFault.closeHookRan).toBe(true);
+      expect(database.open).toBe(true);
+      expect(readSettings(database).idleMinutes).toBe(30);
+    } finally {
+      database.close();
+    }
   });
 });

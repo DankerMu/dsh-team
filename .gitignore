@@ -10,6 +10,7 @@ dist/
 coverage/
 reports/
 .run/
+/data/
 *.db
 *.tsbuildinfo
 .review-gate.json

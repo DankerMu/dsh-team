@@ -2,22 +2,37 @@
 //   --write  regenerate the committed file
 //   --check  exit 1 when the committed file differs from a fresh render (CI mode)
 import { readFileSync, writeFileSync } from 'node:fs';
+import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.ts';
+import { applyMigrations, openDatabase } from '../src/db/index.ts';
 
 const TARGET = new URL('../../schemas/openapi.json', import.meta.url);
 const USAGE = 'usage: node platform/scripts/openapi.ts --write | --check';
 
 async function render(): Promise<string> {
-  const app = await buildApp({
-    host: '127.0.0.1',
-    port: 0,
-    logLevel: 'silent',
-    dataDir: './data',
-  });
-  await app.ready();
-  const document = app.swagger();
-  await app.close();
-  return `${JSON.stringify(document, null, 2)}\n`;
+  const database = openDatabase(':memory:');
+  let app: FastifyInstance | undefined;
+  try {
+    applyMigrations(database);
+    app = await buildApp(
+      {
+        host: '127.0.0.1',
+        port: 0,
+        logLevel: 'silent',
+        dataDir: 'unused',
+      },
+      database,
+    );
+    await app.ready();
+    const document = app.swagger();
+    return `${JSON.stringify(document, null, 2)}\n`;
+  } finally {
+    if (app === undefined) {
+      database.close();
+    } else {
+      await app.close();
+    }
+  }
 }
 
 function readCommitted(): string {

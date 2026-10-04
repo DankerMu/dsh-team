@@ -46,15 +46,15 @@ Commented-out code has no machine check; it is listed as `review-only` in the En
 
 ## Stack & Versions
 
-| Layer       | Choice                    | Version | Why                                             |
-| ----------- | ------------------------- | ------- | ----------------------------------------------- |
-| Language    | TypeScript                | 6.0     | upper bound supported by typescript-eslint      |
-| Runtime     | Node.js                   | 24      | runs `.ts` sources directly; matches user image |
-| Framework   | Fastify                   | 5       | route schemas feed the OpenAPI contract         |
-| Persistence | SQLite                    | planned | decision D8; arrives with task 1.3              |
-| Test runner | Vitest + v8 coverage      | 5       |                                                 |
-| Linter      | ESLint, typescript-eslint | 10, 8   | strict type-checked rule set                    |
-| Formatter   | Prettier                  | 3       |                                                 |
+| Layer       | Choice                    | Version | Why                                                       |
+| ----------- | ------------------------- | ------- | --------------------------------------------------------- |
+| Language    | TypeScript                | 6.0     | upper bound supported by typescript-eslint                |
+| Runtime     | Node.js                   | 24      | runs `.ts` sources directly; matches user image           |
+| Framework   | Fastify                   | 5       | route schemas feed the OpenAPI contract                   |
+| Persistence | SQLite                    | 3       | better-sqlite3; `PLATFORM_DATA_DIR/platform.db` (D8, D19) |
+| Test runner | Vitest + v8 coverage      | 5       |                                                           |
+| Linter      | ESLint, typescript-eslint | 10, 8   | strict type-checked rule set                              |
+| Formatter   | Prettier                  | 3       |                                                           |
 
 ### Dependency policy
 
@@ -125,19 +125,20 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 
 ### Environment
 
-- `.env.example` lists the variables (`PLATFORM_HOST`, `PLATFORM_PORT`, `PLATFORM_LOG_LEVEL`). Copy to `.env` for local runs. Invalid values stop the process at startup.
+- `.env.example` lists the variables (`PLATFORM_HOST`, `PLATFORM_PORT`, `PLATFORM_LOG_LEVEL`, `PLATFORM_DATA_DIR`). Copy to `.env` for local runs. Invalid values stop the process at startup.
 - No secret is needed by the current skeleton. Model and RAGFlow keys arrive later through environment variables only.
 
 ## Verification Matrix
 
-| Surface           | Verify with                                 | Command           | Evidence required                       |
-| ----------------- | ------------------------------------------- | ----------------- | --------------------------------------- |
-| Liveness / health | Probe of `/healthz` on the dev server       | `pnpm dev:status` | exit 0 and `health: OK`                 |
-| API endpoint      | hurl suite against the running dev server   | `pnpm smoke`      | HTTP status and response body per route |
-| Built artifact    | Build, start `platform/dist`, run the suite | `pnpm e2e`        | build output and hurl summary           |
+| Surface           | Verify with                                 | Command                 | Evidence required                                       |
+| ----------------- | ------------------------------------------- | ----------------------- | ------------------------------------------------------- |
+| Liveness / health | Probe of `/healthz` on the dev server       | `pnpm dev:status`       | exit 0 and `health: OK`                                 |
+| API endpoint      | hurl suite against the running dev server   | `pnpm smoke`            | HTTP status and response body per route                 |
+| Database          | Real-file SQLite migrate, settings, reopen  | `pnpm test:integration` | tempfile `platform.db`, one ledger row, closed handle   |
+| Built artifact    | Build, start `platform/dist`, run the suite | `pnpm e2e`              | build output, hurl summary, `platform.db` schema/ledger |
 
 - Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
-- No UI, database, or background-job surface exists yet. The PR that creates one adds its row and command in the same change.
+- No UI or background-job surface exists yet. The PR that creates one adds its row and command in the same change.
 - A surface with no verification command is review-only, and the PR must say so.
 
 Every row requires fresh evidence from the current session — see `## Agent Operating Rules`.
