@@ -45,7 +45,9 @@ const env = (name) => {
 const readSecret = async (name) => (await readFile(env(name), 'utf8')).trim();
 const redactUrl = (raw) => {
   try {
-    return new URL(raw, 'http://127.0.0.1').pathname || '[unparseable-url]';
+    const url = new URL(raw, 'http://127.0.0.1');
+    if (!/^(https?|wss?):$/.test(url.protocol)) return '[non-network-url]';
+    return url.pathname || '[unparseable-url]';
   } catch {
     return '[unparseable-url]';
   }

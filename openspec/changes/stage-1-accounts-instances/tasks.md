@@ -105,6 +105,8 @@ Minimal mergeable slice: atomic - 2.1 的路径清单是 2.2 的输入，结论�
 
 验证记录（#7）：giap-vps 上 `pnpm probe:dsh-api` 的等价 root-script 调用 `node --run probe:dsh-api` exit 0，DSH `0.2.0-rc.2`，三周期 HTTP `items[].running` 均为 `true → false`；WS 运行值未知、结束 `false`，文件扫描 `EACCES`，均明确不采用。实际首页截图已保存，浏览器 console baseline/new 均为 `(none)`；独立 Docker 查询无 probe 容器或命名镜像残留。`pnpm check` 和 OpenSpec strict 验证通过。原 Preview Notice 异步渲染导致 composer inert 的失败已用实际截图定位，修复为等待真实可交互公告控件后普通 UI 关闭，未改 DSH 或预置配置。
 
+路径库存只允许 HTTP/HTTPS/WS/WSS 的 pathname，其他协议（包括 data/blob）统一输出不含内容的占位符，避免将内嵌图像或其他 payload 当作路径记录。新增脱敏边界验证覆盖非网络协议、大 data payload、HTTP 查询参数去除及无效 URL；不放宽任何信号或日志验收要求。
+
 ## 3. 探针：预置工作区、中文界面、关闭公告（任务包 1.2）
 
 依赖：第 1 组。
