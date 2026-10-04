@@ -181,6 +181,15 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 
 验证记录（#10）：真实内存 SQLite 逐步 RED/GREEN，重复邮箱、非法角色/状态、外键、单用户实例唯一、端口整数范围、删除平台会话不影响用户及其他用户会话均覆盖；审查后补充 NULL 主键、重复身份键和端口1/65535边界。五表数据重放不丢失、迁移记录仅一次。`pnpm check` 通过（49 unit、14 integration）。原仅 tsc 的编译产物实际调用默认迁移后报 `no such table: users`；加入 SQL 交付后，源 API 与复制到独立临时目录的 dist API 均在默认路径迁移真实文件库、写入五表、重开重放并逐行比对通过，不读取源 SQL。没有启动接线或仓储行为，临时文件均已清理。
 
+### Issue #11 risk/evidence map (task 4.4 only)
+
+- Public API / CLI / script entry and Config / project setup — selected: exported repository read/write, explicit defaults and unchanged app startup, direct source/built API smoke.
+- Schema / columns / units / field names — selected: JSON per owned key, MiB/minutes/cores, platform tier IDs, optional model context and positive safe integers.
+- Error handling / rollback / partial outputs and Concurrency / shared state / ordering — selected: invalid patch leaves prior rows, corrupt stored values fail loudly, injected later-row SQL failure rolls back the complete patch; no cache or multi-process coordination.
+- File IO / path safety / overwrite and Release / packaging / dependency compatibility — selected: owned file DB reopen smoke through existing private open/compiled migrations; no new path handling or dependency.
+- Documentation / migration notes — selected: design boundary records units/ownership and deferred model API fields.
+- Auth / permissions / secrets, Resource limits / large input / discovery and Legacy compatibility / examples — not selected: no model keys/auth, discovery or previous settings API; fractional CPU and finite bounds are value validation, not a new resource scheduler.
+
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
 依赖：第 4 组。
