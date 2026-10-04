@@ -128,7 +128,8 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - 模型：一个 OpenAI 兼容的 provider（地址、密钥所在的环境变量名、模型清单，模型带上下文窗口时写出 `contextWindow`），以及默认模型（F17）。模型地址、密钥、清单、默认模型任一项未配置时不生成覆盖层，也不启动实例，状态接口返回“未配置模型”。
 - 去掉每个预设的联网搜索和网页抓取工具（F24）。
 - 默认权限档（D23）。
-- 界面语言为中文、关闭首次公告（F44）——写法取决于任务包 1.2 探针。
+- 界面语言为中文、关闭首次公告（F44）仍是要求。任务包 1.2 在 `0.2.0-rc.2` 实测：`locale.config.preference: zh` 与 `ui-settings-general.config.welcomeNoticeVersion: "2026-09-28.1"` 在 loopback 浏览器生效，但在模拟平台的非 loopback authority 下，宿主配置虽已加载，界面仍为英文且出现 Preview Notice。覆盖层、预置 home patch 和已发布启动参数未提供通过的非 loopback 方案；按 3.3 等待项目方确认处理，不能把本地控制组冒充平台可用方案。
+- `ui-settings-models.config.credentialOnboarding: false` 可关闭独立的 API-key 引导，不等于关闭 Preview Notice。该已发布配置允许不加载模型密钥就验证输入框；探针没有提交模型消息。
 
 本阶段各实例的覆盖层内容相同；按实例生成是因为阶段 2 的 Office 插件配置每个实例不同，现在就按最终形态建立路径。
 
@@ -144,6 +145,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 - 基础 `node:24-bookworm-slim`；装 bubblewrap、Python 3 和 `python-docx`（公文写作 Agent 生成 DOCX 用）、pnpm、`@deepseek-ai/dsh@0.2.0-rc.2`；非 root 用户 uid 1001；`DSH_HOME=/data/home`，工作目录 `/data/work`。
 - 镜像里预置 `$DSH_HOME/profiles/web/`（含办公 Agent 的 bundle），并把整个 `$DSH_HOME/profiles/` 目录原样拷贝一份到 `/opt/dsh-team/profile-seed/`（即 `profile-seed/web/` 对应 `profiles/web/`）。新用户的状态卷第一次挂载时 Docker 会把镜像里的目录内容带进去（T5 前半，阶段 0 已实测）。
+- 任务包 1.2 已验证工作区文件机制：`$DSH_HOME/storages/workspace.json` 使用 `unit: { name: "workspace", version: 2 }`、`global` 和 `tables.workspaces`，目标记录的 `path` 为 `/data/work`。新实例读取预置记录后选中 `work`，其 Session cwd 也是 `/data/work`；发现阶段产生的 Session 标识不是生产种子契约。生产镜像预置仍由任务 7.3 实现，本 PR 不把测试状态整树复制进镜像。`workspace-controller.config.documentsDirectory` 会追加 `deepseek-harness/default-workspace`，不能直接替代 `/data/work` 记录。
 - 2026-10-03 在 giap-vps（amd64、Ubuntu 24.04、Linux `6.8.0-117-generic`、Docker 29.1.3）实测最小额外放宽集合为空：Docker 内嵌默认即能让 DSH `0.2.0-rc.2` 的真实 `bash` 工具在“工作区内修改”模式下写工作区并拒绝写状态目录。另对交付的 `images/seccomp/dsh-user.json` 独立验证通过：该文件与 Moby `seccomp/v0.2.3` 默认策略语义相同，不追加 syscall allow，不增加 capabilities，不使用 `systempaths=unconfined` 或 privileged；来源哈希及显式调用见 `images/seccomp/README.md`。两次均保留 Landlock partial-ABI 警告。阶段 0 的 arm64 Docker Desktop 需要 seccomp 与 `/proc` 两项放宽（T8），与本次不同；差异根因未证明，不能由 VPS 结果替代目标机验证。
 - 探针是一个可重复执行的脚本：在项目方的 VPS（amd64，Ubuntu 24.04）上由 Agent 执行（D16）；目标机 Ubuntu 22.04 上由项目方再执行一次。本阶段其余需要 Docker 的构建、测试和整套部署也都在这台 VPS 上做（D16）。VPS 上只创建带 `dsh-team` 前缀的镜像、容器、卷和网络，结束时删除，不动机器上其他项目的东西。
 
@@ -207,7 +209,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 - **目标机 Ubuntu 22.04 上 shell 沙箱的最终确认。** VPS 已验证“钉定 Moby 默认 seccomp、零额外安全放宽”，配置和调用方式见 `images/seccomp/`；删除额外放宽项的集合为空，不虚构删除试验。移除 Landlock syscall allow 的临时更严策略使真实工具报告 `SANDBOX_UNAVAILABLE`，作为独立负对照。项目方仍须在 Ubuntu 22.04 执行同一探针并验证显式交付策略；若不可用，记录各级失败原因并交项目方确认，不能自动降为无 shell 沙箱。
 - **DSH 接口和运行中任务信号已由任务包 1.1 确认。** 实际 UI 观察到 `/api/session/create`、`/api/session/prompt` 等 HTTP 路径及 WS `/api/remote.mux`；采用 `POST /api/session/list` 的 `result.value.items[].running`，三次真实任务均观察到 `true → false`。协议、未知状态处理和观测限制见决定 9；完整阶段路径清单由 `pnpm probe:dsh-api` 输出，不采用 F13 退路。
-- **预置工作区、中文界面、关闭公告的做法。** 任务包 1.2 的探针回答，结论写回决定 10 和 12。
+- **首次进入的剩余决策待项目方确认。** 工作区通过上述 `storages/workspace.json` 预置机制已验证；相同 locale/notice 配置在 loopback 控制组得到中文、无公告、可输入，在非 loopback 平台 authority 下仍英文并显示公告。实际发行版没有专用 workspace/locale/notice 启动参数，`--patch` 仍属于覆盖层方法。探针已输出“无法做到”（限本次支持的配置/文件/参数方法），并保留初始化完成与独立控制组证据；是否改变实现机制或批准需求偏离须由项目方决定，`instance-lifecycle` 原要求未放宽。
 - **Auto review 在开发模型上是否可用。** 任务包 1.13 验证；不可用时 Auto 档暂时等同人工批准。
 - **`qwen3.6` 上的工具调用、子 Agent 委派、Auto review。** 留到生产联调，本阶段不处理。
 

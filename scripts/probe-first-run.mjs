@@ -321,9 +321,9 @@ const collectObservation = async ({ origin, cookie, extraFlags, screenshot, brow
       notice,
     );
     if (!started.initialized) {
-      return captureUnfinished(page, screenshot, origin, cookie, last, noticeSeen, errors);
+      return await captureUnfinished(page, screenshot, origin, cookie, last, noticeSeen, errors);
     }
-    return captureInitialized({
+    return await captureInitialized({
       page,
       until,
       screenshot,
@@ -339,12 +339,7 @@ const collectObservation = async ({ origin, cookie, extraFlags, screenshot, brow
     if (!isInitObservationError(error)) throw error;
     fail(`stage=initialization error=unknown ${errorCode(error)}`, 2);
   } finally {
-    try {
-      page?.close();
-    } catch {
-      /* closed */
-    }
-    await chrome?.stop?.();
+    await closeMapped(page, chrome, welcome);
   }
 };
 
