@@ -145,7 +145,7 @@ Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回�
 - [x] 4.3 第一份迁移：`users`、`platform_sessions`、`instances`（含上游地址和端口）、`settings`、`audit_events` 五张表及索引和约束（邮箱唯一、角色和状态的取值约束、外键）。验证：单元测试——重复邮箱插入失败、非法角色插入失败、删除用户的平台会话行不影响用户行。
 - [x] 4.4 `settings` 的读写函数和默认值（空闲 30 分钟、2 核、4G、同时运行 60、默认权限档 Yolo；模型清单每项是模型名加可选的上下文窗口）。验证：单元测试——空库读到默认值；写入后读到新值；非法取值（负数、未知档位、上下文窗口不是正整数）被拒绝。
 - [x] 4.5 平台启动时打开数据库并应用迁移；`buildApp` 接收数据库句柄。删除 `constraints.yaml` 里 `integration_tests_real_db` 这条延后项，在 `AGENTS.md` 验证矩阵里补上数据库一行。验证：集成测试——重新打开同一数据库文件后数据还在；`pnpm e2e` 通过且数据目录里生成了数据库文件；`pnpm check` 通过。
-- [ ] 4.6 基础配置项：平台对外地址、cookie 仅 HTTPS 发送、受信代理列表（默认为空）。加进 `config.ts` 和 `.env.example`；对外地址缺失或不合法时启动失败并指名该项；从对外地址导出 authority 供后续模块使用。验证：单元测试——三项各自的合法和非法取值；缺少对外地址时错误信息含该变量名（`deployment` 规格“配置项明确且缺失时启动失败”的“缺少对外地址”场景）。
+- [x] 4.6 基础配置项：平台对外地址、cookie 仅 HTTPS 发送、受信代理列表（默认为空）。加进 `config.ts` 和 `.env.example`；对外地址缺失或不合法时启动失败并指名该项；从对外地址导出 authority 供后续模块使用。验证：单元测试——三项各自的合法和非法取值；缺少对外地址时错误信息含该变量名（`deployment` 规格“配置项明确且缺失时启动失败”的“缺少对外地址”场景）。
 
 Suggested fixture level: expanded - 新建持久化表结构和迁移机制，后续每个模块都依赖它
 Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器和它们的测试，约 250 行；此时没有任何迁移文件，平台行为不变）
@@ -207,6 +207,8 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - Error handling / rollback / partial outputs and File IO / path safety / overwrite — selected: invalid config before database creation/listen; no fallback or partial startup.
 - Release / packaging / dependency compatibility and Documentation / migration notes — selected: source and built runtime rejection plus healthy e2e, existing URL/net APIs, exact example/env documentation.
 - Concurrency / shared state / ordering and Resource limits / large input / discovery — not selected: pure finite config parsing; no network discovery or request policy.
+
+验证记录（#13）：URL配置41个语义失败、cookie/proxy配置30个语义失败先RED后GREEN；最终190 unit（85 config）/15 integration及完整检查、strict OpenSpec、固定版SAST通过，config statements100%/branches98.3%。源/编译入口各验证缺失URL、相对URL、userinfo、非法cookie布尔、非法proxy均exit1且不建数据目录/不监听/不回显值；合法HTTPS外部origin与独立false cookie配置归一化正确，实际HTTP健康及数据库创建正常。e2e在三个配置均为非法环境值时仍用自己的显式配置通过schema/HTTP探针。所有临时进程/目录清理，HTTP契约不变，尚未启用请求侧代理信任或cookie行为。
 
 ## 5. 审计写入（任务包 1.14 的写入部分）
 

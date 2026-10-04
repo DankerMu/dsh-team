@@ -37,14 +37,17 @@ trap 'exit 143' TERM
 log="$(mktemp "${TMPDIR:-/tmp}/dsh-team-e2e.XXXXXX")"
 data_dir="$(mktemp -d "${TMPDIR:-/tmp}/dsh-team-e2e-data.XXXXXX")"
 
+base_url="http://127.0.0.1:${port}"
 export PLATFORM_HOST=127.0.0.1
 export PLATFORM_PORT="$port"
 export PLATFORM_LOG_LEVEL=info
 export PLATFORM_DATA_DIR="$data_dir"
+export PLATFORM_PUBLIC_URL="$base_url"
+export PLATFORM_COOKIE_SECURE=false
+export PLATFORM_TRUSTED_PROXIES=
 node platform/dist/main.js >"$log" 2>&1 &
 server_pid=$!
 
-base_url="http://127.0.0.1:${port}"
 ready=0
 for _ in $(seq 1 30); do
   if curl -fsS "$base_url/healthz" >/dev/null 2>&1; then

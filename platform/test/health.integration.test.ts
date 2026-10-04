@@ -19,6 +19,10 @@ describe('platform over a real TCP port', () => {
           port: 0,
           logLevel: 'silent',
           dataDir: './data',
+          publicUrl: 'http://127.0.0.1',
+          authority: '127.0.0.1',
+          cookieSecure: false,
+          trustedProxies: [],
         },
         database,
       );
