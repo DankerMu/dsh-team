@@ -123,3 +123,7 @@
 ## Issue #13 fixture
 
 - Feature; expanded task4.6 configuration boundary for future authority, cookie and proxy consumers. The Issue #13 design boundary and risk map define required origin parsing, explicit optional settings and fail-fast runtime evidence; no request-handling policy is activated.
+
+## Issue #14 fixture
+
+- Feature; expanded task5.1 persisted audit writer and credential/content exclusion boundary. Agree with upstream. The Issue #14 design boundary and tasks risk map define closed events, detail projection and real SQLite evidence; query, logging and business callers remain separate.

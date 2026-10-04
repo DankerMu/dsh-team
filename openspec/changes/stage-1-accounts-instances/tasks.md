@@ -221,6 +221,15 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 Suggested fixture level: expanded - 持久化记录，且承担“不落凭据”的安全要求
 Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150 行，没有调用方时不改变平台行为）
 
+### Issue #14 risk/evidence map (task 5.1 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names and Auth / permissions / secrets — selected: public writer persists exact metadata and projected JSON; unknown/prototype event types and invalid stop reasons insert nothing; credentials/content and nested payloads cannot survive detail filtering.
+- Error handling / rollback / partial outputs — selected: DB failures propagate; invalid input has no inserted row. Single INSERT preserves caller transaction ownership.
+- File IO / path safety / overwrite and Release / packaging / dependency compatibility — selected: source/compiled public API write/reopen smoke in owned temporary file databases; reuse existing DB/migration/build behavior without new dependencies.
+- Config / project setup and Documentation / migration notes — selected: narrow audit in-memory unit-test permission in platform/AGENTS.md, no file-backed unit tests or gate changes; record runtime evidence here and flag rule-file review.
+- Concurrency / shared state / ordering, Resource limits / large input / discovery and Legacy compatibility / examples — not selected: synchronous one-row insert, no queries/retention/discovery, no prior audit writer or callers to migrate. Discarded detail values are not traversed.
+- Evidence floor: parent-observed staged RED/GREEN, `pnpm check`, strict OpenSpec validation, source and compiled file-backed smoke; three initial review seats (correctness, test-evidence+spec-compliance, security-perf).
+
 ## 6. 账号（任务包 1.4）
 
 依赖：第 4、5 组。模块在 `platform/src/auth/`。
