@@ -216,7 +216,7 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 
 - [x] 5.1 `platform/src/audit/` 提供记录事件的函数：事件类型是一个封闭的列表（见 `audit-log` 规格“记录的事件范围”），每种类型有一份允许出现在细节里的字段白名单，白名单之外的字段被丢弃。验证：单元测试——未知事件类型被拒绝；细节里带 `password`、`token`、`cookie`、`apiKey` 字段时写入的记录里没有这些字段。
 - [x] 5.2 审计查询函数：按时间倒序，按事件类型、账号邮箱（作为操作者或对象）、时间范围筛选，分页。验证：单元测试（内存库）——三种筛选各自只返回匹配的记录；分页的两页不重叠也不遗漏。
-- [ ] 5.3 平台日志的脱敏：Fastify 日志配置里屏蔽 `Cookie`、`Set-Cookie`、`Authorization` 请求头和响应头，以及请求体里的密码字段。验证：集成测试——带这些头和字段发请求后，捕获的日志输出里找不到它们的原文。
+- [x] 5.3 平台日志的脱敏：Fastify 日志配置里屏蔽 `Cookie`、`Set-Cookie`、`Authorization` 请求头和响应头，以及请求体里的密码字段。验证：集成测试——带这些头和字段发请求后，捕获的日志输出里找不到它们的原文。
 
 Suggested fixture level: expanded - 持久化记录，且承担“不落凭据”的安全要求
 Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150 行，没有调用方时不改变平台行为）
@@ -250,6 +250,8 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: captured destination, source/compiled real-server smoke, owned process/handle cleanup, existing contract/build and evidence record; no files/dependencies added by production behavior.
 - Concurrency / shared state / ordering and Resource limits / large input / discovery — not selected: static redaction paths, no scheduling/retention/discovery or new payload logging.
 - Evidence floor: real-TCP leak RED/GREEN; `pnpm check`, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
+验证记录（#16）：真实TCP请求的Set-Cookie原文出现在子序列化日志中，先RED；补充四条脱敏路径后六个头字段和req.body.password在info/error日志中精确censor，安全相邻字段保留，完整输出无哨兵。255 unit/16 integration及完整检查通过；普通Fastify日志仍省略敏感容器。源/编译应用独立真实TCP探针通过，HTTP请求/响应凭据未被日志脱敏修改，app/DB关闭。只移除原单元测试中被默认序列化器丢弃的假req头断言，user凭据保护加强；未开启生产载荷日志。
 
 ## 6. 账号（任务包 1.4）
 
