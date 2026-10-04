@@ -243,6 +243,14 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 
 验证记录（#15）：tracer缺函数、13项筛选错误、4项分页校验/JSON错误先RED后GREEN；分页排序与DB错误传播首次即GREEN，不声称独立RED。255 unit（21 query）/15 integration及完整检查通过，query覆盖率100%；review补强同刻错误类型/邮箱及时间外干扰行，交集精确断言通过。源/编译API真实文件重开后验证同刻分页`[4,3]/[2,1]`、邮箱角色并集和包含端点；非法分页与损坏JSON拒绝，查询不改变存储，临时文件清理。额外探针验证空过滤值、零时间、安全整数上界、调用方事务和JSON原始值；HTTP授权/调用方及跨写入快照不在本项范围。
 
+### Issue #16 risk/evidence map (task 5.3 only)
+
+- Public API / CLI / script entry, Config / project setup, Auth / permissions / secrets and Error handling / rollback / partial outputs — selected: real HTTP credentials/body, inherited child-logger redaction at info/error levels, harmless siblings retained, HTTP values unmodified; default serializer omission explicitly separate.
+- Schema / columns / units / field names and Legacy compatibility / examples — selected: exact normalized req/res paths, preserved user password/token/apiKey unit protection, default metadata/status logging and logger-level behavior.
+- File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: captured destination, source/compiled real-server smoke, owned process/handle cleanup, existing contract/build and evidence record; no files/dependencies added by production behavior.
+- Concurrency / shared state / ordering and Resource limits / large input / discovery — not selected: static redaction paths, no scheduling/retention/discovery or new payload logging.
+- Evidence floor: real-TCP leak RED/GREEN; `pnpm check`, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
 ## 6. 账号（任务包 1.4）
 
 依赖：第 4、5 组。模块在 `platform/src/auth/`。
