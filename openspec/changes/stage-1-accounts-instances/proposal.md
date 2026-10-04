@@ -79,3 +79,12 @@
 - Blast radius: every user instance's sandbox; inaccurate host conclusions could grant unnecessary privileges.
 - Selected risk packs: Config / project setup; File IO / path safety / overwrite; Schema / columns / units / field names; Auth / permissions / secrets; Error handling / rollback / partial outputs; Release / packaging / dependency compatibility; Documentation / migration notes.
 - Evidence floor: fresh giap-vps probe, separate real-tool run with the exact committed profile, byte/semantic provenance comparison, denied state write, cleanup, and `pnpm check`.
+
+## Issue #7 fixture
+
+- Issue type: feature
+- Fixture level: expanded
+- Upstream suggested level: compact (override: executable Docker/browser probe handles launch credentials, remote protocols and resource lifecycle)
+- Blast radius: a false idle signal could stop live tasks in #59; leaked probe credentials or resources affect the verification host.
+- Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
+- Evidence floor: actual Web UI request paths at five phases, HTTP/WS/file running-versus-idle observations over three real task cycles, redacted output, cleanup, and `pnpm check`.

@@ -82,12 +82,30 @@ Tasks 1.3/1.4 evidence (2026-10-03): fresh probe exit 0 selects Docker default; 
 
 依赖：第 1 组（需要镜像）。
 
-- [ ] 2.1 新建 `scripts/probe-dsh-api.sh`：用第 1 组的镜像起一个实例，换到 DSH cookie，记录界面在“打开首页、新建 Session、发一条消息、任务运行中、任务结束”各时刻实际请求的 HTTP 路径和 WebSocket 地址。验证：脚本输出一份路径清单；结束后不留容器。
-- [ ] 2.2 在探针里找出“该实例是否有运行中的任务”的判断方式：依次尝试 DSH 的 HTTP 接口、WebSocket 事件、状态目录里的文件，对每种方式记录在“任务运行中”和“空闲”两种状态下的取值。验证：输出里至少一种方式在两种状态下取值不同并可重复三次；若都不行，输出明确写“未找到可靠信号”。
-- [ ] 2.3 把结论写回 `design.md` 决定 9 和 Open Questions 第二条。找到信号：写出采用的信号。没找到：这是对 F13 的偏离，停下来把现象和退路（只按连接和活动时间判定，默认空闲时间调长到的具体数值）交项目方确认；确认后在同一个 PR 里改写 `instance-lifecycle` 规格“空闲后停止”的要求和“有运行中的任务时不回收”场景。验证：决定 9 不再写“取决于探针”；走退路时 PR 描述里有项目方的确认，且规格与决定 9 一致。
+- [x] 2.1 新建 `scripts/probe-dsh-api.sh`：用第 1 组的镜像起一个实例，换到 DSH cookie，记录界面在“打开首页、新建 Session、发一条消息、任务运行中、任务结束”各时刻实际请求的 HTTP 路径和 WebSocket 地址。验证：脚本输出一份路径清单；结束后不留容器。
+- [x] 2.2 在探针里找出“该实例是否有运行中的任务”的判断方式：依次尝试 DSH 的 HTTP 接口、WebSocket 事件、状态目录里的文件，对每种方式记录在“任务运行中”和“空闲”两种状态下的取值。验证：输出里至少一种方式在两种状态下取值不同并可重复三次；若都不行，输出明确写“未找到可靠信号”。
+- [x] 2.3 把结论写回 `design.md` 决定 9 和 Open Questions 第二条。找到信号：写出采用的信号。没找到：这是对 F13 的偏离，停下来把现象和退路（只按连接和活动时间判定，默认空闲时间调长到的具体数值）交项目方确认；确认后在同一个 PR 里改写 `instance-lifecycle` 规格“空闲后停止”的要求和“有运行中的任务时不回收”场景。验证：决定 9 不再写“取决于探针”；走退路时 PR 描述里有项目方的确认，且规格与决定 9 一致。
 
 Suggested fixture level: compact - 只新增一个探测脚本和文档结论，不改平台运行时代码
 Minimal mergeable slice: atomic - 2.1 的路径清单是 2.2 的输入，结论只有三步都做完才成立，拆开合入的中间状态没有可用产出
+
+### Issue #7 risk/evidence map (tasks 2.1–2.3 only)
+
+- Public API / CLI / script entry — selected: run the root probe command on giap-vps and record real UI HTTP/WS paths per required phase.
+- Config / project setup — selected: pinned image/model and explicit required browser/model environment; missing prerequisites fail loud.
+- File IO / path safety / overwrite — selected: inspect only fresh test-owned state metadata; targeted cleanup of unique probe resources.
+- Schema / columns / units / field names — selected: runtime values and adopted signal predicate matched to actual npm release, not route guesses.
+- Auth / permissions / secrets — selected: Host-bound token exchange; all displayed/persisted evidence excludes credentials and message contents.
+- Concurrency / shared state / ordering — selected: real task start/running/completed/idle transitions sampled in order for three cycles; errors/disconnects are not idle.
+- Resource limits / large input / discovery — selected: bounded startup/browser/task waits and constrained, redacted signal observations.
+- Legacy compatibility / examples — not selected: no prior shipped API probe or platform consumer to migrate.
+- Error handling / rollback / partial outputs — selected: unavailable channels/missing prerequisites clearly fail or record unavailable; no-signal fallback stops for user approval; failure/interruption cleanup.
+- Release / packaging / dependency compatibility — selected: real Docker/browser on giap-vps against pinned DSH; verification-only browser tooling does not silently change production dependencies.
+- Documentation / migration notes — selected: decision 9 / Open Questions 2 name observed paths, predicate, three-cycle evidence and limits; no spec fallback without approval.
+
+验证记录（#7）：giap-vps 上 `pnpm probe:dsh-api` 的等价 root-script 调用 `node --run probe:dsh-api` exit 0，DSH `0.2.0-rc.2`，三周期 HTTP `items[].running` 均为 `true → false`；WS 运行值未知、结束 `false`，文件扫描 `EACCES`，均明确不采用。实际首页截图已保存，浏览器 console baseline/new 均为 `(none)`；独立 Docker 查询无 probe 容器或命名镜像残留。`pnpm check` 和 OpenSpec strict 验证通过。原 Preview Notice 异步渲染导致 composer inert 的失败已用实际截图定位，修复为等待真实可交互公告控件后普通 UI 关闭，未改 DSH 或预置配置。
+
+路径库存只允许 HTTP/HTTPS/WS/WSS 的 pathname，其他协议（包括 data/blob）统一输出不含内容的占位符，避免将内嵌图像或其他 payload 当作路径记录。新增脱敏边界验证覆盖非网络协议、大 data payload、HTTP 查询参数去除及无效 URL；不放宽任何信号或日志验收要求。
 
 ## 3. 探针：预置工作区、中文界面、关闭公告（任务包 1.2）
 

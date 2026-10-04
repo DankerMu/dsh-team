@@ -37,7 +37,8 @@
     "e2e": "bash scripts/e2e.sh",
     "test:guardrails": "bash scripts/test-guardrails.sh",
     "change-scope": "bash scripts/change-scope.sh",
-    "probe:sandbox": "bash scripts/probe-sandbox.sh"
+    "probe:sandbox": "bash scripts/probe-sandbox.sh",
+    "probe:dsh-api": "bash scripts/probe-dsh-api.sh"
   },
   "lint-staged": {
     "*.{ts,tsx,mjs,cjs}": [
