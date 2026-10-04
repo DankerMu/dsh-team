@@ -111,3 +111,7 @@
 ## Issue #10 fixture
 
 - Feature; expanded fixture for task4.3 persistence/schema risk. Scope, must-preserve behavior, required evidence and exclusions are specified in the Issue #10 design boundary and tasks risk map, including necessary compiled SQL asset delivery.
+
+## Issue #11 fixture
+
+- Feature; expanded fixture for task4.4 persisted settings validation. The Issue #11 design boundary and tasks risk map define units, partial updates, read defaults and required real-SQLite evidence; no route or startup change.
