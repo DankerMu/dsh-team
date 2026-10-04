@@ -232,6 +232,15 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 
 验证记录（#14）：写入tracer先缺模块RED后行为通过；封闭类型/凭据投影29个语义失败后GREEN。最终234 unit（42 audit）/15 integration及完整`pnpm check`通过，writer覆盖率100%。源/编译公共API实际文件写入、关闭重开后精确保留安全行，非法类型/结构化原因无新增行，settings保留且调用方事务回滚有效；临时数据库已清理。新增停止原因/DB错误/事务断言在实现后补齐，不声称这些断言单独先RED。业务调用方、查询和日志脱敏尚不在本项范围。
 
+### Issue #15 risk/evidence map (task 5.2 only)
+
+- Public API / CLI / script entry and Schema / columns / units / field names — selected: exact mapped row, three independent filters plus intersection, inclusive timestamps and email role union; existing schema only.
+- Auth / permissions / secrets and Error handling / rollback / partial outputs — selected: bound SQL-like inputs, safe malformed-JSON errors, invalid pagination and propagated DB errors; read-only behavior. HTTP authorization remains #73.
+- Concurrency / shared state / ordering and Resource limits / large input / discovery — selected: equal-time ID tie-break and fixed-dataset page completeness; safe LIMIT/OFFSET arithmetic, no table-scale discovery or concurrent snapshot guarantee.
+- File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled temporary-file reopen/query smoke, existing DB ownership, no migration/dependency change, evidence recorded here.
+- Config / project setup and Legacy compatibility / examples — not selected: no new config or existing reader/caller to migrate. Existing audit unit-memory permission suffices.
+- Evidence floor: staged RED/GREEN, `pnpm check`, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, invariant-state).
+
 ## 6. 账号（任务包 1.4）
 
 依赖：第 4、5 组。模块在 `platform/src/auth/`。

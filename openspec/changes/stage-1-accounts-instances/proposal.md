@@ -127,3 +127,7 @@
 ## Issue #14 fixture
 
 - Feature; expanded task5.1 persisted audit writer and credential/content exclusion boundary. Agree with upstream. The Issue #14 design boundary and tasks risk map define closed events, detail projection and real SQLite evidence; query, logging and business callers remain separate.
+
+## Issue #15 fixture
+
+- Feature; expanded task5.2 persisted audit read/filter/pagination boundary (agree with upstream). The Issue #15 design and risk map define deterministic ordering, filter composition and public-API runtime proof; no HTTP authorization or UI is introduced.
