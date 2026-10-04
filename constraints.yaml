@@ -14,10 +14,6 @@ strictness_profile:
       profile_default: required
       chosen: deferred
       reason: "No UI exists yet. Add the Playwright baseline in the first PR that creates platform/web (plan task 1.11)."
-    - control: integration_tests_real_db
-      profile_default: required
-      chosen: deferred
-      reason: "No database exists yet. Add real-SQLite integration tests, migration verification and seed data in the PR that creates platform/src/db (plan task 1.3). Until then integration tests exercise the HTTP server on a real TCP port."
     - control: release_pipeline
       profile_default: automated
       chosen: none
@@ -178,9 +174,13 @@ verification:
       command: "pnpm smoke"
       evidence: "http-status+body"
       required_at: "L2+"
+    database:
+      command: "pnpm test:integration"
+      evidence: "real-file SQLite migrate/settings reopen and close-lifetime"
+      required_at: "L3+"
     built_artifact:
       command: "pnpm e2e"
-      evidence: "build+http-status+body against platform/dist"
+      evidence: "build+http-status+body against platform/dist plus platform.db schema/ledger"
       required_at: "L3+"
   enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
 

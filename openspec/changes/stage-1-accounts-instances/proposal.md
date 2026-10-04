@@ -115,3 +115,7 @@
 ## Issue #11 fixture
 
 - Feature; expanded fixture for task4.4 persisted settings validation. The Issue #11 design boundary and tasks risk map define units, partial updates, read defaults and required real-SQLite evidence; no route or startup change.
+
+## Issue #12 fixture
+
+- Feature; expanded task4.5 startup/lifetime integration, with the issue's multi-path width exception. The Issue #12 design boundary and tasks map cover existing DB composition, all buildApp callers, isolated built e2e and retiring the real-database deferral.

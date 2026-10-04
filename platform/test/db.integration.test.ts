@@ -13,7 +13,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDatabase } from '../src/db/index.ts';
+import { buildApp } from '../src/app.ts';
+import {
+  applyMigrations,
+  openDatabase,
+  readSettings,
+  writeSettings,
+  type DatabaseHandle,
+} from '../src/db/index.ts';
 
 describe('openDatabase on a file', () => {
   let dir = '';
@@ -277,6 +284,51 @@ describe('openDatabase on a file', () => {
       }
     } finally {
       first.close();
+    }
+  });
+});
+
+describe('platform startup on a real database file', () => {
+  let dir = '';
+  let live: DatabaseHandle | undefined;
+
+  afterEach(() => {
+    if (live?.open === true) {
+      live.close();
+    }
+    live = undefined;
+    if (dir !== '') {
+      rmSync(dir, { recursive: true, force: true });
+      dir = '';
+    }
+  });
+
+  it('closes the acquired handle on app shutdown and keeps settings after reopen', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'dsh-team-startup-'));
+    const dbPath = join(dir, 'platform.db');
+    const db = openDatabase(dbPath);
+    live = db;
+    applyMigrations(db);
+    writeSettings(db, { idleMinutes: 15 });
+    expect(db.open).toBe(true);
+
+    const app = await buildApp(
+      { host: '127.0.0.1', port: 0, logLevel: 'silent', dataDir: dir },
+      db,
+    );
+    await app.close();
+
+    expect(db.open).toBe(false);
+
+    const reopened = openDatabase(dbPath);
+    try {
+      applyMigrations(reopened);
+      expect(readSettings(reopened).idleMinutes).toBe(15);
+      expect(
+        reopened.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
+      ).toEqual([{ version: 1 }]);
+    } finally {
+      reopened.close();
     }
   });
 });

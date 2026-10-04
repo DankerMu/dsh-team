@@ -144,7 +144,7 @@ Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回�
 - [x] 4.2 迁移执行器：按编号读取 `platform/src/db/migrations/` 下的 SQL 文件，在一个事务里应用未应用的部分并记入 `schema_migrations`。验证：单元测试（内存库）——空库全量应用成功；再次执行不重复应用；一个迁移里有错误语句时整批回滚、`schema_migrations` 不变。
 - [x] 4.3 第一份迁移：`users`、`platform_sessions`、`instances`（含上游地址和端口）、`settings`、`audit_events` 五张表及索引和约束（邮箱唯一、角色和状态的取值约束、外键）。验证：单元测试——重复邮箱插入失败、非法角色插入失败、删除用户的平台会话行不影响用户行。
 - [x] 4.4 `settings` 的读写函数和默认值（空闲 30 分钟、2 核、4G、同时运行 60、默认权限档 Yolo；模型清单每项是模型名加可选的上下文窗口）。验证：单元测试——空库读到默认值；写入后读到新值；非法取值（负数、未知档位、上下文窗口不是正整数）被拒绝。
-- [ ] 4.5 平台启动时打开数据库并应用迁移；`buildApp` 接收数据库句柄。删除 `constraints.yaml` 里 `integration_tests_real_db` 这条延后项，在 `AGENTS.md` 验证矩阵里补上数据库一行。验证：集成测试——重新打开同一数据库文件后数据还在；`pnpm e2e` 通过且数据目录里生成了数据库文件；`pnpm check` 通过。
+- [x] 4.5 平台启动时打开数据库并应用迁移；`buildApp` 接收数据库句柄。删除 `constraints.yaml` 里 `integration_tests_real_db` 这条延后项，在 `AGENTS.md` 验证矩阵里补上数据库一行。验证：集成测试——重新打开同一数据库文件后数据还在；`pnpm e2e` 通过且数据目录里生成了数据库文件；`pnpm check` 通过。
 - [ ] 4.6 基础配置项：平台对外地址、cookie 仅 HTTPS 发送、受信代理列表（默认为空）。加进 `config.ts` 和 `.env.example`；对外地址缺失或不合法时启动失败并指名该项；从对外地址导出 authority 供后续模块使用。验证：单元测试——三项各自的合法和非法取值；缺少对外地址时错误信息含该变量名（`deployment` 规格“配置项明确且缺失时启动失败”的“缺少对外地址”场景）。
 
 Suggested fixture level: expanded - 新建持久化表结构和迁移机制，后续每个模块都依赖它
@@ -189,6 +189,16 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - File IO / path safety / overwrite and Release / packaging / dependency compatibility — selected: owned file DB reopen smoke through existing private open/compiled migrations; no new path handling or dependency.
 - Documentation / migration notes — selected: design boundary records units/ownership and deferred model API fields. 验证记录（#11）：`pnpm check` 118 unit/14 integration 通过；69个 settings 用例覆盖默认、部分更新、验证、损坏值、非对象模型条目、继承属性档位拒绝和事务回滚，settings逐项覆盖率100%；源API及独立复制dist的真实文件库重开smoke均通过，非JSON非本模块键保持不变，错误不回显值，临时资源已清理。
 - Auth / permissions / secrets, Resource limits / large input / discovery and Legacy compatibility / examples — not selected: no model keys/auth, discovery or previous settings API; fractional CPU and finite bounds are value validation, not a new resource scheduler.
+
+### Issue #12 risk/evidence map (task 4.5 only)
+
+- Public API / CLI / script entry and Legacy compatibility / examples — selected: required buildApp handle, complete caller migration, unchanged HTTP/OpenAPI, source and built startup.
+- Config / project setup and Documentation / migration notes — selected: PLATFORM_DATA_DIR/platform.db, matched verification matrix, real-DB deferral removal, injected-memory unit rule and local data ignore. Remove the matrix footnote's now-false “no database surface” claim and update the same operating document's planned-persistence wording to the implemented SQLite driver.
+- File IO / path safety / overwrite, Auth / permissions / secrets and Resource limits / large input / discovery — selected: existing0600/WAL opener, no DB content logged, only owned temp files removed, no leaked process/connection.
+- Schema / columns / units / field names and Release / packaging / dependency compatibility — selected: default SQL assets migrate before health, one ledger record, settings survive file reopen and built-process restart.
+- Error handling / rollback / partial outputs and Concurrency / shared state / ordering — selected: migrate before listen, ownership transfer on successful build, onClose release, failed startup exits and closes resources; no multi-process migration coordinator.
+
+验证记录（#12）：应用关闭句柄的集成反例先失败，源进程曾健康但未创建数据库的独立反例先失败；修复后119 unit/15 integration、完整检查、37项guardrail和固定版本SAST均通过。`pnpm e2e` 输出 database schema/migration OK 与1条HTTP smoke成功。源/编译进程分别验证0600数据库、迁移后健康、设置17跨重启保留、SIGTERM正常退出；非法目录、迁移冲突、端口占用均非零退出，已有数据不变，失败迁移无ledger。构建应用失败时真实Fastify清理钩子执行、数据库仍由调用方持有；OpenAPI生成不创建配置数据目录。仅移除已完成的真实数据库延后项，未改阈值或新增coverage例外。
 
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
