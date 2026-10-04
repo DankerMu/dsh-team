@@ -20,48 +20,31 @@ PROBE_BROWSER_SECONDS (1-300, default 120); PROBE_TASK_SECONDS (1-300, default 1
 EOF
 }
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
-int_env() {
-  local name="$1" value="$2" max="$3" min="${4:-1}"
-  if ! [[ "$value" =~ ^[1-9][0-9]{0,5}$ ]] || [ "$value" -gt "$max" ] || [ "$value" -lt "$min" ]; then
-    echo "probe-dsh-api: ${name} must be an integer ${min}-${max}, got ${value:-<empty>}" >&2
-    exit 2
-  fi
-}
+probe_name="probe-dsh-api"
+# shellcheck source=scripts/probe-dsh-api-lifecycle.sh
+. "$(cd "$(dirname "$0")" && pwd)/probe-dsh-api-lifecycle.sh"
 startup_seconds="${PROBE_STARTUP_SECONDS-60}"
 browser_seconds="${PROBE_BROWSER_SECONDS-120}"
 task_seconds="${PROBE_TASK_SECONDS-180}"
-int_env PROBE_STARTUP_SECONDS "$startup_seconds" 180
-int_env PROBE_BROWSER_SECONDS "$browser_seconds" 300
-int_env PROBE_TASK_SECONDS "$task_seconds" 300
+probe_int_env PROBE_STARTUP_SECONDS "$startup_seconds" 180
+probe_int_env PROBE_BROWSER_SECONDS "$browser_seconds" 300
+probe_int_env PROBE_TASK_SECONDS "$task_seconds" 300
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$repo_root"
-for bin in docker node timeout; do
-  command -v "$bin" >/dev/null 2>&1 || { echo "probe-dsh-api: $bin is not on PATH" >&2; exit 2; }
-done
+probe_require_bins
 [ -n "${DMXAPI_KEY:-}" ] || { echo "probe-dsh-api: DMXAPI_KEY is missing" >&2; exit 2; }
-case "$(timeout --version 2>/dev/null || true)" in
-  *'GNU coreutils'*) ;;
-  *) echo "probe-dsh-api: GNU timeout is required" >&2; exit 2 ;;
-esac
-if [ -z "${CHROME_BIN:-}" ] || [ ! -x "${CHROME_BIN}" ]; then
-  echo "probe-dsh-api: CHROME_BIN must be an executable browser path" >&2
-  exit 2
-fi
+probe_require_gnu_timeout
+probe_require_chrome
 seccomp="${repo_root}/images/seccomp/dsh-user.json"
 overlay_src="${repo_root}/verify/phase0/managed.patch.yml"
 driver="${repo_root}/scripts/probe-dsh-api-browser.mjs"
 ui="${repo_root}/scripts/probe-dsh-api-ui.mjs"
 cdp="${repo_root}/scripts/probe-dsh-api-cdp.mjs"
-for f in "$seccomp" "$overlay_src" "$driver" "$ui" "$cdp"; do
+lifecycle="${repo_root}/scripts/probe-dsh-api-lifecycle.sh"
+for f in "$seccomp" "$overlay_src" "$driver" "$ui" "$cdp" "$lifecycle"; do
   [ -f "$f" ] || { echo "probe-dsh-api: missing $f" >&2; exit 2; }
 done
-if [ -n "${PROBE_PORT:-}" ]; then
-  int_env PROBE_PORT "$PROBE_PORT" 65535 1024
-  port="$PROBE_PORT"
-else
-  port="$(node -e 'import("node:net").then(({createServer})=>{const s=createServer();s.listen(0,"127.0.0.1",()=>{process.stdout.write(String(s.address().port));s.close();});})')"
-  int_env PROBE_PORT "$port" 65535 1024
-fi
+port="$(probe_pick_port)"
 run_id="$(date +%s)-$$"
 prefix="dsh-team-probe-api-${run_id}"
 image="${prefix}-image"
@@ -79,73 +62,20 @@ build_seconds=180
 docker_seconds=30
 chrome_wait=12
 drive_seconds=$((startup_seconds + browser_seconds * 10 + task_seconds * 9 + 180))
-note_cleanup_failure() { echo "probe-dsh-api: cleanup failed: $1" >&2; cleanup_failed=1; }
-run_bound() {
-  local seconds="$1"
-  shift
-  timeout --foreground --kill-after=5 "$seconds" "$@"
-}
-stop_chrome() {
-  local pid="" waited=0
-  [ -n "$workdir" ] && [ -f "${workdir}/chrome.pid" ] || return 0
-  pid="$(cat "${workdir}/chrome.pid" 2>/dev/null || true)"
-  [[ "${pid:-}" =~ ^[1-9][0-9]{0,9}$ ]] || return 0
-  kill "$pid" >/dev/null 2>&1 || true
-  while [ "$waited" -lt "$chrome_wait" ]; do
-    kill -0 "$pid" >/dev/null 2>&1 || return 0
-    sleep 1
-    waited=$((waited + 1))
-  done
-  kill -9 "$pid" >/dev/null 2>&1 || true
-  waited=0
-  while [ "$waited" -lt 3 ]; do
-    kill -0 "$pid" >/dev/null 2>&1 || return 0
-    sleep 1
-    waited=$((waited + 1))
-  done
-}
-remove_owned() {
-  local kind="$1" target="$2" err status=0
-  set +e
-  err="$(run_bound "$docker_seconds" docker "$kind" -f "$target" 2>&1)"
-  status=$?
-  set -e
-  [ "$status" -eq 0 ] && return 0
-  case "$err" in *"No such container"* | *"No such image"*) return 0 ;; esac
-  note_cleanup_failure "docker ${kind} -f ${target}"
-}
-scrub_binds() {
-  local helper="${prefix}-scrub" err status=0
-  if [ "$image_owned" -eq 1 ] && [ -n "$workdir" ]; then
-    set +e
-    err="$(run_bound "$docker_seconds" docker run --rm --pull=never --name "$helper" --user 0:0 \
-      --mount "type=bind,src=${home_dir},dst=/s/home" \
-      --mount "type=bind,src=${work_dir},dst=/s/work" \
-      "$image" sh -c 'find /s/home /s/work -mindepth 1 -delete' 2>&1)"
-    status=$?
-    set -e
-    if [ "$status" -ne 0 ]; then
-      case "$err" in *"No such image"* | *"Unable to find image"*) ;; *) note_cleanup_failure "scrub bind dirs" ;; esac
-    fi
-  fi
-  set +e
-  err="$(run_bound "$docker_seconds" docker rm -f "$helper" 2>&1)"
-  status=$?
-  set -e
-  if [ "$status" -ne 0 ]; then
-    case "$err" in *"No such container"*) ;; *) note_cleanup_failure "docker rm -f ${helper}" ;; esac
-  fi
-}
+run_bound() { probe_run_bound "$@"; }
+stop_chrome() { probe_stop_chrome "${workdir:+${workdir}/chrome.pid}"; }
+remove_owned() { probe_remove_owned "$@"; }
+scrub_binds() { probe_scrub_binds "$image" "$home_dir" "$work_dir" "${prefix}-scrub"; }
 cleanup() {
   [ "$cleaned" -eq 1 ] && return 0
   trap '' INT TERM
   stop_chrome
   [ "$container_owned" -eq 1 ] && remove_owned rm "$container"
-  scrub_binds
+  [ "$image_owned" -eq 1 ] && [ -n "$workdir" ] && scrub_binds
   [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
-  [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || note_cleanup_failure "rm -rf workdir"; }
+  [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || probe_note_cleanup_failure "rm -rf workdir"; }
   cleaned=1
-  [ "$cleanup_failed" -ne 0 ] && [ "$probe_status" -eq 0 ] && probe_status=1
+  probe_has_cleanup_failure && [ "$probe_status" -eq 0 ] && probe_status=1
   trap - INT TERM
 }
 # shellcheck disable=SC2317
@@ -173,19 +103,16 @@ run_bound "$docker_seconds" docker run -d --name "$container" --user 1001:1001 -
   --mount "type=bind,src=${work_dir},dst=/data/work" \
   "$image" dsh --profile web --patch /managed/patch.yml --no-open --trusted-host "127.0.0.1:${port}" >/dev/null
 token=""
-elapsed=0
-while [ "$elapsed" -lt "$startup_seconds" ]; do
-  run_bound "$docker_seconds" docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null | grep -q true || {
-    echo "probe-dsh-api: container exited before token line" >&2
-    probe_status=1
-    cleanup; trap - EXIT INT TERM; exit "$probe_status"
-  }
-  token="$(run_bound "$docker_seconds" docker logs "$container" 2>&1 | node -e 'const t=require("node:fs").readFileSync(0,"utf8");const m=t.match(/dsh web: http:\/\/127\.0\.0\.1:\d+\/\?token=([A-Za-z0-9_-]+)/);if(m)process.stdout.write(m[1]);')"
-  [ -n "$token" ] && break
-  sleep 1
-  elapsed=$((elapsed + 1))
-done
-[ -n "$token" ] || { echo "probe-dsh-api: no launch-token line within ${startup_seconds}s" >&2; probe_status=1; cleanup; trap - EXIT INT TERM; exit "$probe_status"; }
+set +e
+token="$(probe_wait_launch_token "$container" "$startup_seconds")"
+probe_status=$?
+set -e
+if [ "$probe_status" -ne 0 ] || [ -z "$token" ]; then
+  probe_status=1
+  cleanup
+  trap - EXIT INT TERM
+  exit "$probe_status"
+fi
 printf '%s' "$token" >"${workdir}/launch.token"
 chmod 600 "${workdir}/launch.token"
 set +e
@@ -194,7 +121,9 @@ probe_status=$?
 set -e
 if [ "$probe_status" -ne 0 ]; then
   echo "probe-dsh-api: token exchange failed" >&2
-  cleanup; trap - EXIT INT TERM; exit "$probe_status"
+  cleanup
+  trap - EXIT INT TERM
+  exit "$probe_status"
 fi
 chmod 600 "${workdir}/cookie.hdr"
 set +e

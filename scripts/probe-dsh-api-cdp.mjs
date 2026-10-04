@@ -211,7 +211,47 @@ const stopChild = async (child) => {
   }
 };
 
-export const startChrome = async (bin, profile, pidFile) => {
+export const exchangeLaunchToken = async ({ host, port, token, cookieHost }) => {
+  const authority = `${cookieHost ?? host}:${port}`;
+  const res = await httpRequest({
+    host,
+    port,
+    path: `/?token=${encodeURIComponent(token)}`,
+    method: 'GET',
+    headers: { host: authority },
+  });
+  const set = res.headers['set-cookie']?.[0];
+  if (res.status !== 303 || !set) throw new Error(`token exchange status=${res.status}`);
+  return set.split(';', 1)[0] ?? '';
+};
+
+export const rpcCall = async (origin, cookie, method, payload, connectHost) => {
+  const url = new URL(origin);
+  const res = await httpRequest(
+    {
+      host: connectHost ?? url.hostname,
+      port: Number(url.port || 80),
+      path: `/api/${method}`,
+      method: 'POST',
+      headers: { cookie, host: url.host, origin, 'content-type': 'application/json' },
+    },
+    JSON.stringify({
+      type: 'client-request',
+      rpcId: randomUUID(),
+      method,
+      payload: { args: payload },
+    }),
+  );
+  if (res.status !== 200) return { ok: false, error: `http-${res.status}` };
+  try {
+    const parsed = JSON.parse(res.body);
+    return parsed?.type === 'server-response' ? parsed.result : { ok: false, error: 'envelope' };
+  } catch {
+    return { ok: false, error: 'json' };
+  }
+};
+
+export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
   await mkdir(profile, { recursive: true });
   const debugPort = await new Promise((resolve) => {
     const server = net.createServer();
@@ -233,6 +273,7 @@ export const startChrome = async (bin, profile, pidFile) => {
     '--no-default-browser-check',
     '--disable-dev-shm-usage',
     '--no-sandbox',
+    ...extraFlags,
     'about:blank',
   ];
   const child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });

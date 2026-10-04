@@ -6,12 +6,22 @@ import { sleep } from './probe-dsh-api-cdp.mjs';
 export const NEW_BTN = 'button[aria-label="New session"],button[aria-label="新建会话"]';
 export const SEND_BTN = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
 const STOP_BTN = 'button[aria-label="Stop generating"],button[aria-label="停止生成"]';
-const WORKSPACE_BTN = 'button[aria-label="Choose workspace"],button[aria-label="选择工作区"]';
+export const WORKSPACE_BTN =
+  'button[aria-label="Choose workspace"],button[aria-label="选择工作区"]';
 const EDIT_PATH = 'input[aria-label="Edit path"],input[aria-label="编辑路径"]';
 const EDIT_ZONE = 'button[aria-label="Edit path"],button[aria-label="编辑路径"]';
-const WORKSPACE_PATH = '/data/work';
-const NOTICE_LABELS = ['Continue', '继续'];
+export const WORKSPACE_PATH = '/data/work';
+export const NOTICE_LABELS = ['Continue', '继续'];
 const OPEN_LABELS = ['Open', '打开'];
+export const ZH_CONTROL_LABELS = ['新建会话', '发送消息', '选择工作区', '探索未至之境'];
+export const EN_CONTROL_LABELS = [
+  'New session',
+  'Send message',
+  'Choose workspace',
+  'Into the Unknown',
+];
+export const FIRST_RUN_MARKER = 'dsh-team-first-run';
+export const FIRST_RUN_HOST = 'dsh-team-probe.invalid';
 const CONTROL_LABELS = {
   'New session': 'new-session',
   新建会话: 'new-session',
@@ -341,4 +351,153 @@ export const reportDiagnostic = async (page, screenshot, current) => {
   } catch (error) {
     out(`diagnostic-screenshot error=${errorCode(error)}`);
   }
+};
+
+export const evalPage = evalJson;
+
+export const observeFirstRun = (page) =>
+  evalJson(
+    page,
+    `(function(){
+      const noticeLabels=new Set(${JSON.stringify(NOTICE_LABELS)});
+      const zhLabels=${JSON.stringify(ZH_CONTROL_LABELS)};
+      const enLabels=${JSON.stringify(EN_CONTROL_LABELS)};
+      const textOf=(el)=>(el.getAttribute("aria-label")||el.textContent||"").replace(/\\s+/g," ").trim();
+      const nodes=[...document.querySelectorAll("button,input,[contenteditable],[role='heading'],h1,h2,p,span,div")];
+      const visible=(el)=>Boolean(el&&el.getClientRects().length);
+      const notice=[...document.querySelectorAll("button")].some((el)=>{
+        const text=(el.textContent||"").trim();
+        return noticeLabels.has(text) && !el.disabled && !el.closest("[inert]");
+      });
+      const editor=document.querySelector('[contenteditable="true"]');
+      const workspaceChoice=Boolean(
+        document.querySelector(${JSON.stringify(WORKSPACE_BTN)}) ||
+        document.querySelector(${JSON.stringify(EDIT_PATH)}) ||
+        document.querySelector(${JSON.stringify(EDIT_ZONE)})
+      );
+      const zhVisible=zhLabels.filter((label)=>nodes.some((el)=>visible(el)&&textOf(el).includes(label)));
+      const enVisible=enLabels.filter((label)=>nodes.some((el)=>visible(el)&&textOf(el).includes(label)));
+      const chromeReady=Boolean(
+        document.querySelector(${JSON.stringify(NEW_BTN)}) ||
+        document.querySelector(${JSON.stringify(WORKSPACE_BTN)}) ||
+        editor ||
+        notice
+      );
+      return {
+        hostname:location.hostname,
+        languages:[...navigator.languages],
+        navigatorLanguage:navigator.language,
+        lang:document.documentElement.lang||"",
+        notice,
+        editable:Boolean(editor&&!editor.closest("[inert]")),
+        composerPresent:Boolean(editor),
+        workspaceChoice,
+        zhVisible,
+        enVisible,
+        chromeReady,
+        readyState:document.readyState
+      };
+    })()`,
+  );
+
+const observationFingerprint = (state) =>
+  JSON.stringify({
+    hostname: state?.hostname,
+    languages: state?.languages,
+    lang: state?.lang,
+    notice: state?.notice,
+    editable: state?.editable,
+    workspaceChoice: state?.workspaceChoice,
+    zhVisible: state?.zhVisible,
+    enVisible: state?.enVisible,
+  });
+
+const sameObservation = (left, right) =>
+  observationFingerprint(left) === observationFingerprint(right);
+
+export const waitAppReady = async (page, ms) => {
+  await waitFor(
+    async () => {
+      const state = await observeFirstRun(page);
+      return state.chromeReady ? state : null;
+    },
+    ms,
+    'app-ready',
+  );
+};
+
+export const watchFirstRun = async (page, ms) => {
+  const until = Date.now() + ms;
+  let last = await observeFirstRun(page);
+  let noticeSeen = Boolean(last.notice);
+  while (Date.now() < until) {
+    await sleep(250);
+    const next = await observeFirstRun(page);
+    if (next.notice) noticeSeen = true;
+    last = next;
+  }
+  return { last, noticeSeen };
+};
+
+export const settleFirstRun = async (page, ms) => {
+  await evalJson(page, 'document.fonts.ready.then(()=>true)');
+  const until = Date.now() + ms;
+  let previous = await observeFirstRun(page);
+  let noticeSeen = Boolean(previous.notice);
+  while (Date.now() < until) {
+    await sleep(400);
+    const next = await observeFirstRun(page);
+    if (next.notice) noticeSeen = true;
+    if (sameObservation(previous, next)) {
+      return { last: next, noticeSeen };
+    }
+    previous = next;
+  }
+  return { last: previous, noticeSeen };
+};
+
+export const captureSettledScreenshot = async (page, screenshot) => {
+  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
+  await mkdir(dirname(screenshot), { recursive: true });
+  await writeFile(screenshot, Buffer.from(shot.data, 'base64'));
+  return { screenshot, bytes: (await stat(screenshot)).size };
+};
+
+export const composerText = (page) =>
+  evalJson(
+    page,
+    `(function(){
+      const el=document.querySelector('[contenteditable="true"]');
+      return el?(el.innerText||el.textContent||""):"";
+    })()`,
+  );
+
+export const clearComposer = async (page) => {
+  const focused = await evalJson(
+    page,
+    `(function(){
+      const el=document.querySelector('[contenteditable="true"]');
+      if(!el||el.closest("[inert]"))return false;
+      el.focus();
+      const range=document.createRange();
+      range.selectNodeContents(el);
+      const sel=window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return true;
+    })()`,
+  );
+  if (!focused) throw new Error('composer missing');
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+  });
+  await page.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Backspace',
+    code: 'Backspace',
+    windowsVirtualKeyCode: 8,
+  });
 };

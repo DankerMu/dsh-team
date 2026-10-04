@@ -3,7 +3,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { connectPage, httpRequest, muxListen, sleep, startChrome } from './probe-dsh-api-cdp.mjs';
+import {
+  connectPage,
+  exchangeLaunchToken,
+  muxListen,
+  rpcCall,
+  sleep,
+  startChrome,
+} from './probe-dsh-api-cdp.mjs';
 import {
   NEW_BTN,
   SEND_BTN,
@@ -81,40 +88,10 @@ const exchange = async () => {
   const host = env('PROBE_HOST');
   const port = Number(env('PROBE_PORT'));
   const token = await readSecret('PROBE_TOKEN_FILE');
-  const res = await httpRequest({
-    host,
-    port,
-    path: `/?token=${encodeURIComponent(token)}`,
-    method: 'GET',
-    headers: { host: `${host}:${port}` },
-  });
-  const set = res.headers['set-cookie']?.[0];
-  if (res.status !== 303 || !set) fail(`token exchange status=${res.status}`);
-  process.stdout.write(set.split(';', 1)[0] ?? '');
-};
-const rpcCall = async (origin, cookie, method, payload) => {
-  const url = new URL(origin);
-  const res = await httpRequest(
-    {
-      host: url.hostname,
-      port: Number(url.port || 80),
-      path: `/api/${method}`,
-      method: 'POST',
-      headers: { cookie, host: url.host, origin, 'content-type': 'application/json' },
-    },
-    JSON.stringify({
-      type: 'client-request',
-      rpcId: randomUUID(),
-      method,
-      payload: { args: payload },
-    }),
-  );
-  if (res.status !== 200) return { ok: false, error: `http-${res.status}` };
   try {
-    const parsed = JSON.parse(res.body);
-    return parsed?.type === 'server-response' ? parsed.result : { ok: false, error: 'envelope' };
-  } catch {
-    return { ok: false, error: 'json' };
+    process.stdout.write(await exchangeLaunchToken({ host, port, token }));
+  } catch (error) {
+    fail(error?.message ?? 'token exchange failed');
   }
 };
 const listRunning = (result) => {
