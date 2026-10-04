@@ -3,11 +3,13 @@
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import {
+  armWelcomeStoreObserver,
   connectPage,
   exchangeLaunchToken,
   rpcCall,
   sleep,
   startChrome,
+  waitWelcomeStoreReady,
 } from './probe-dsh-api-cdp.mjs';
 import {
   FIRST_RUN_HOST,
@@ -22,8 +24,8 @@ import {
   setupFirstRun,
   typeComposer,
   waitAppReady,
+  waitFirstRunInitialized,
   waitFor,
-  watchFirstRun,
 } from './probe-dsh-api-ui.mjs';
 
 const out = (line) => process.stdout.write(`${line}\n`);
@@ -93,6 +95,7 @@ const openMappedPage = async ({ origin, cookie, extraFlags }) => {
   for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
   attachErrors(page, errors);
   attachNetwork(page, requests);
+  const welcome = await armWelcomeStoreObserver(page);
   await page.send('Network.setCookie', {
     name: cookie.split('=', 1)[0],
     value: cookie.slice(cookie.indexOf('=') + 1),
@@ -101,7 +104,7 @@ const openMappedPage = async ({ origin, cookie, extraFlags }) => {
     sameSite: 'Strict',
     path: '/',
   });
-  return { chrome, page, errors, requests };
+  return { chrome, page, errors, requests, welcome };
 };
 
 const navigateReady = async (page, origin, ms) => {
@@ -112,6 +115,11 @@ const navigateReady = async (page, origin, ms) => {
   await page.send('Page.navigate', { url: `${origin}/` });
   await Promise.race([loaded, sleep(remainingMs(until, 'startup'))]);
   await waitAppReady(page, remainingMs(until, 'app-ready'));
+};
+
+const trackNotice = async (page, notice) => {
+  const state = await observeFirstRun(page);
+  return { last: state, noticeSeen: notice.seen || Boolean(state.notice) };
 };
 
 const assertAttribution = (state) => {
@@ -138,6 +146,9 @@ const summarizeState = (state, extras = {}) => ({
   notice: state.notice,
   editable: state.editable,
   workspaceChoice: state.workspaceChoice,
+  workspaceSelected: Boolean(state.workspaceSelected),
+  workspaceLabel: state.workspaceLabel ?? '',
+  pickerOpen: Boolean(state.pickerOpen),
   zhVisible: state.zhVisible,
   enVisible: state.enVisible,
   ...extras,
@@ -163,10 +174,8 @@ const sessionCwds = (result) => {
   if (!result?.ok || !Array.isArray(result.value?.items)) {
     return { available: false, reason: result?.error ?? 'rpc', cwds: [] };
   }
-  return {
-    available: true,
-    cwds: result.value.items.map((item) => item?.cwd).filter((cwd) => typeof cwd === 'string'),
-  };
+  const cwds = result.value.items.map((item) => item?.cwd);
+  return { available: true, cwds };
 };
 
 const sampleHost = async (origin, cookie) => {
@@ -184,23 +193,151 @@ const sampleHost = async (origin, cookie) => {
   };
 };
 
+const workBoundFromHost = (host) => {
+  if (host?.workspace?.available !== true) return { workBound: false, unknown: true };
+  if (host?.sessions?.available !== true) return { workBound: false, unknown: true };
+  const cwds = Array.isArray(host.sessions.cwds) ? host.sessions.cwds : [];
+  if (!cwds.length) return { workBound: false, unknown: true };
+  if (cwds.some((cwd) => typeof cwd !== 'string')) return { workBound: false, unknown: true };
+  const bound = host.workspace.workBound === true && cwds.every((cwd) => cwd === '/data/work');
+  return { workBound: bound, unknown: false };
+};
+
+const unfinishedObservation = (last, noticeSeen, host, shot, errors) => {
+  const binding = workBoundFromHost(host);
+  return {
+    ui: summarizeState(last, {
+      noticeSeen,
+      initialized: false,
+      chinese: last.zhVisible.length >= 2 && String(last.lang).toLowerCase().startsWith('zh'),
+      workspaceSelected: Boolean(last.workspaceSelected),
+      workspaceChoice: Boolean(last.workspaceChoice),
+      inputUsable: Boolean(last.editable) && !last.notice,
+      noNotice: false,
+      consoleErrors: errors.slice(),
+    }),
+    host,
+    screenshot: shot,
+    errors: errors.slice(),
+    initialized: false,
+    workBound: binding.workBound,
+    workBoundUnknown: binding.unknown,
+  };
+};
+
+const isInitObservationError = (error) =>
+  /initialization|unobserved|controller-unavailable|debugger-observation-failed|readonly-store/.test(
+    errorCode(error) + error?.message,
+  );
+
+const awaitWelcomeInit = async (page, welcome, until, notice) => {
+  notice.seen = (await trackNotice(page, notice)).noticeSeen;
+  const store = await waitWelcomeStoreReady(
+    page,
+    welcome,
+    remainingMs(until, 'first-run-initialized'),
+  );
+  const started = await waitFirstRunInitialized(
+    page,
+    remainingMs(until, 'first-run-initialized'),
+    notice.seen,
+    store,
+  );
+  const last = started.last;
+  const noticeSeen = started.noticeSeen || notice.seen || Boolean(last.notice);
+  assertAttribution(last);
+  return { store, started, last, noticeSeen };
+};
+
+const captureUnfinished = async (page, screenshot, origin, cookie, last, noticeSeen, errors) => {
+  const observed = (await trackNotice(page, { seen: noticeSeen })).last;
+  const shot = await captureSettledScreenshot(page, screenshot);
+  const host = await sampleHost(origin, cookie);
+  return unfinishedObservation(
+    observed,
+    noticeSeen || Boolean(observed.notice),
+    host,
+    shot,
+    errors,
+  );
+};
+
+const captureInitialized = async ({
+  page,
+  until,
+  screenshot,
+  origin,
+  cookie,
+  noticeSeen,
+  store,
+  errors,
+}) => {
+  const settled = await settleFirstRun(
+    page,
+    Math.min(4_000, remainingMs(until, 'settle')),
+    noticeSeen,
+  );
+  let next = settled.last;
+  let seen = noticeSeen || settled.noticeSeen || Boolean(next.notice);
+  next = (await trackNotice(page, { seen })).last;
+  seen = seen || Boolean(next.notice);
+  const shot = await captureSettledScreenshot(page, screenshot);
+  const host = await sampleHost(origin, cookie);
+  const binding = workBoundFromHost(host);
+  const noNotice = Boolean(store.acknowledged) && !seen && !next.notice;
+  return {
+    ui: summarizeState(next, {
+      noticeSeen: seen,
+      initialized: true,
+      welcomeStatus: store.status,
+      welcomeAcknowledged: store.acknowledged,
+      noNotice,
+      consoleErrors: errors.slice(),
+    }),
+    host,
+    screenshot: shot,
+    errors: errors.slice(),
+    initialized: true,
+    workBound: binding.workBound,
+    workBoundUnknown: binding.unknown,
+  };
+};
+
 const collectObservation = async ({ origin, cookie, extraFlags, screenshot, browserMs }) => {
-  const { chrome, page, errors } = await openMappedPage({ origin, cookie, extraFlags });
+  const { chrome, page, errors, welcome } = await openMappedPage({
+    origin,
+    cookie,
+    extraFlags,
+  });
+  const notice = { seen: false };
   try {
-    await navigateReady(page, origin, browserMs);
-    const watched = await watchFirstRun(page, Math.min(8_000, browserMs));
-    const settled = await settleFirstRun(page, Math.min(4_000, browserMs));
-    const last = settled.last;
-    const noticeSeen = watched.noticeSeen || settled.noticeSeen || Boolean(last.notice);
-    assertAttribution(last);
-    const shot = await captureSettledScreenshot(page, screenshot);
-    const host = await sampleHost(origin, cookie);
-    return {
-      ui: summarizeState(last, { noticeSeen, consoleErrors: errors.slice() }),
-      host,
-      screenshot: shot,
-      errors: errors.slice(),
-    };
+    const until = Date.now() + browserMs;
+    notice.seen = (await trackNotice(page, notice)).noticeSeen;
+    await navigateReady(page, origin, remainingMs(until, 'startup'));
+    const { store, started, last, noticeSeen } = await awaitWelcomeInit(
+      page,
+      welcome,
+      until,
+      notice,
+    );
+    if (!started.initialized) {
+      return captureUnfinished(page, screenshot, origin, cookie, last, noticeSeen, errors);
+    }
+    return captureInitialized({
+      page,
+      until,
+      screenshot,
+      origin,
+      cookie,
+      last,
+      noticeSeen,
+      store,
+      errors,
+    });
+  } catch (error) {
+    await welcome?.cleanup?.();
+    if (!isInitObservationError(error)) throw error;
+    fail(`stage=initialization error=unknown ${errorCode(error)}`, 2);
   } finally {
     try {
       page?.close();
@@ -227,17 +364,22 @@ const proveComposer = async (page, requests) => {
   return { typed: true, cleared: true, modelSend: false };
 };
 
-const workBoundFromHost = (host) =>
-  host.workspace.workBound === true && host.sessions.cwds.every((cwd) => cwd === '/data/work');
+const acceptVerdict = (last, noticeSeen, store) => {
+  const acknowledged = Boolean(store?.acknowledged);
+  return {
+    chinese: last.zhVisible.length >= 2 && last.lang.toLowerCase().startsWith('zh'),
+    workspaceSelected: Boolean(last.workspaceSelected),
+    workspaceChoice: Boolean(last.workspaceChoice),
+    inputUsable: Boolean(last.editable) && !last.notice,
+    noNotice: acknowledged && !noticeSeen && !last.notice,
+    noticeSeen,
+    welcomeStatus: store?.status,
+    welcomeAcknowledged: acknowledged,
+  };
+};
 
-const acceptVerdict = (last, noticeSeen) => ({
-  chinese: last.zhVisible.length >= 2 && last.lang.toLowerCase().startsWith('zh'),
-  workspaceReady: last.editable && !last.workspaceChoice,
-  noNotice: !noticeSeen,
-  noticeSeen,
-});
-
-const closeMapped = async (page, chrome) => {
+const closeMapped = async (page, chrome, welcome) => {
+  await welcome?.cleanup?.();
   try {
     page?.close();
   } catch {
@@ -246,68 +388,96 @@ const closeMapped = async (page, chrome) => {
   await chrome?.stop?.();
 };
 
-const acceptReady = async ({
-  page,
-  requests,
-  errors,
-  origin,
-  cookie,
-  screenshot,
-  last,
-  verdict,
-}) => {
-  const shot = await captureSettledScreenshot(page, screenshot);
-  const input = await proveComposer(page, requests);
-  const host = await sampleHost(origin, cookie);
-  const workBound = workBoundFromHost(host);
-  const added = errors.slice();
-  if (added.length) throw new Error(`stage=console error=${tally(added)}`);
-  return {
-    accepted: Boolean(workBound),
-    ui: summarizeState(last, verdict),
-    host,
-    input,
-    screenshot: shot,
-    consoleErrors: added,
-    workBound,
-  };
+const unusedInput = () => ({ typed: false, cleared: false, modelSend: false });
+
+const maybeProveInput = async (page, requests, last) => {
+  if (!last.editable || last.notice) return unusedInput();
+  return proveComposer(page, requests);
 };
 
+const acceptedFrom = (binding, verdict, input) =>
+  Boolean(
+    !binding.unknown &&
+    binding.workBound &&
+    verdict.workspaceSelected &&
+    verdict.chinese &&
+    verdict.noNotice &&
+    verdict.inputUsable &&
+    input.typed &&
+    input.cleared,
+  );
+
 const acceptObservation = async ({ origin, cookie, extraFlags, screenshot, browserMs }) => {
-  const { chrome, page, errors, requests } = await openMappedPage({ origin, cookie, extraFlags });
+  const { chrome, page, errors, requests, welcome } = await openMappedPage({
+    origin,
+    cookie,
+    extraFlags,
+  });
+  const notice = { seen: false };
   try {
-    await navigateReady(page, origin, browserMs);
-    const watched = await watchFirstRun(page, Math.min(8_000, browserMs));
-    const settled = await settleFirstRun(page, Math.min(4_000, browserMs));
-    const last = settled.last;
-    const noticeSeen = watched.noticeSeen || settled.noticeSeen || Boolean(last.notice);
+    const until = Date.now() + browserMs;
+    notice.seen = (await trackNotice(page, notice)).noticeSeen;
+    await navigateReady(page, origin, remainingMs(until, 'startup'));
+    notice.seen = (await trackNotice(page, notice)).noticeSeen;
+    const store = await waitWelcomeStoreReady(
+      page,
+      welcome,
+      remainingMs(until, 'first-run-initialized'),
+    );
+    const started = await waitFirstRunInitialized(
+      page,
+      remainingMs(until, 'first-run-initialized'),
+      notice.seen,
+      store,
+    );
+    let last = started.last;
+    let noticeSeen = started.noticeSeen || notice.seen || Boolean(last.notice);
     assertAttribution(last);
-    const verdict = acceptVerdict(last, noticeSeen);
-    if (verdict.workspaceReady && verdict.chinese && verdict.noNotice) {
-      return await acceptReady({
-        page,
-        requests,
-        errors,
-        origin,
-        cookie,
-        screenshot,
-        last,
-        verdict,
-      });
+    if (!started.initialized) {
+      last = (await trackNotice(page, { seen: noticeSeen })).last;
+      const shot = await captureSettledScreenshot(page, screenshot);
+      const host = await sampleHost(origin, cookie);
+      const partial = {
+        ...unfinishedObservation(last, noticeSeen || Boolean(last.notice), host, shot, errors),
+        accepted: false,
+        input: unusedInput(),
+        consoleErrors: errors.slice(),
+      };
+      out(JSON.stringify({ mode: 'accept', ...partial }));
+      fail('stage=initialization error=unknown', 2);
     }
+    const settled = await settleFirstRun(
+      page,
+      Math.min(4_000, remainingMs(until, 'settle')),
+      noticeSeen,
+    );
+    last = settled.last;
+    noticeSeen = noticeSeen || settled.noticeSeen || Boolean(last.notice);
+    const input = await maybeProveInput(page, requests, last);
+    last = (await trackNotice(page, { seen: noticeSeen })).last;
+    noticeSeen = noticeSeen || Boolean(last.notice);
+    const added = errors.slice();
+    if (added.length) throw new Error(`stage=console error=${tally(added)}`);
     const shot = await captureSettledScreenshot(page, screenshot);
     const host = await sampleHost(origin, cookie);
+    const binding = workBoundFromHost(host);
+    const verdict = acceptVerdict(last, noticeSeen, store);
     return {
-      accepted: false,
-      ui: summarizeState(last, verdict),
+      accepted: acceptedFrom(binding, verdict, input),
+      ui: summarizeState(last, { ...verdict, initialized: true }),
       host,
-      input: { typed: false, cleared: false, modelSend: false },
+      input,
       screenshot: shot,
-      consoleErrors: errors.slice(),
-      workBound: false,
+      consoleErrors: added,
+      workBound: binding.workBound,
+      workBoundUnknown: binding.unknown,
+      initialized: true,
     };
+  } catch (error) {
+    await welcome?.cleanup?.();
+    throw error;
   } finally {
-    await closeMapped(page, chrome);
+    await closeMapped(page, chrome, welcome);
   }
 };
 
@@ -337,6 +507,7 @@ const observe = async () => {
     screenshot,
     browserMs,
   });
+  if (result.initialized === false) fail('stage=initialization error=unknown', 2);
   out(JSON.stringify({ mode: 'observe', ...result }));
 };
 
@@ -358,7 +529,7 @@ const discover = async () => {
         const state = await observeFirstRun(page);
         return state.editable ? state : null;
       },
-      browserMs,
+      remainingMs(Date.now() + browserMs, 'discover-composer'),
       'discover-composer',
     );
   } finally {

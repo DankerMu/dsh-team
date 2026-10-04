@@ -157,7 +157,7 @@ probe_chown_tree() {
   set +e
   probe_run_bound "$docker_seconds" docker run --rm --pull=never --name "$helper" --user 0:0 \
     --mount "type=bind,src=${target},dst=/s/tree" \
-    "$image" sh -c 'chown -R 1001:1001 /s/tree' >/dev/null 2>&1
+    "$image" sh -c 'chmod -R a+rwX /s/tree && chown -R 1001:1001 /s/tree' >/dev/null 2>&1
   status=$?
   set -e
   if [ "$status" -ne 0 ]; then

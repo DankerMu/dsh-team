@@ -355,31 +355,61 @@ export const reportDiagnostic = async (page, screenshot, current) => {
 
 export const evalPage = evalJson;
 
+export const classifyFirstRunWorkspace = ({
+  chipVisible,
+  chipLabel,
+  pickerOpen,
+  editorPresent,
+}) => {
+  const chooseLabels = new Set(['Choose workspace', '选择工作区']);
+  const chipPlaceholder = Boolean(chipVisible && chooseLabels.has(chipLabel));
+  const workspaceSelected = Boolean(
+    chipVisible && Boolean(chipLabel) && !chipPlaceholder && !pickerOpen,
+  );
+  const workspaceChoice = Boolean(
+    pickerOpen || chipPlaceholder || (!chipVisible && !editorPresent),
+  );
+  return { chipPlaceholder, workspaceSelected, workspaceChoice };
+};
+
 export const observeFirstRun = (page) =>
   evalJson(
     page,
     `(function(){
       const noticeLabels=new Set(${JSON.stringify(NOTICE_LABELS)});
+      const noticeTitles=new Set(["Preview Notice","预览版说明"]);
       const zhLabels=${JSON.stringify(ZH_CONTROL_LABELS)};
       const enLabels=${JSON.stringify(EN_CONTROL_LABELS)};
+      const classify=${classifyFirstRunWorkspace.toString()};
       const textOf=(el)=>(el.getAttribute("aria-label")||el.textContent||"").replace(/\\s+/g," ").trim();
+      const visibleText=(el)=>(el.textContent||"").replace(/\\s+/g," ").trim();
       const nodes=[...document.querySelectorAll("button,input,[contenteditable],[role='heading'],h1,h2,p,span,div")];
       const visible=(el)=>Boolean(el&&el.getClientRects().length);
-      const notice=[...document.querySelectorAll("button")].some((el)=>{
+      const noticeTitle=nodes.some((el)=>visible(el)&&noticeTitles.has(visibleText(el)));
+      const noticeButton=[...document.querySelectorAll("button")].some((el)=>{
         const text=(el.textContent||"").trim();
         return noticeLabels.has(text) && !el.disabled && !el.closest("[inert]");
       });
+      const notice=Boolean(noticeTitle&&noticeButton);
       const editor=document.querySelector('[contenteditable="true"]');
-      const workspaceChoice=Boolean(
-        document.querySelector(${JSON.stringify(WORKSPACE_BTN)}) ||
+      const pathPicker=Boolean(
         document.querySelector(${JSON.stringify(EDIT_PATH)}) ||
         document.querySelector(${JSON.stringify(EDIT_ZONE)})
       );
+      const chip=[...document.querySelectorAll("button[aria-label='Choose workspace'],button[aria-label='选择工作区']")].find(visible);
+      const chipLabel=chip?visibleText(chip.querySelector("span")||chip):"";
+      const pickerOpen=Boolean(pathPicker||(chip&&chip.getAttribute("aria-expanded")==="true"));
+      const classified=classify({
+        chipVisible:Boolean(chip),
+        chipLabel:chipLabel,
+        pickerOpen:pickerOpen,
+        editorPresent:Boolean(editor)
+      });
       const zhVisible=zhLabels.filter((label)=>nodes.some((el)=>visible(el)&&textOf(el).includes(label)));
       const enVisible=enLabels.filter((label)=>nodes.some((el)=>visible(el)&&textOf(el).includes(label)));
       const chromeReady=Boolean(
         document.querySelector(${JSON.stringify(NEW_BTN)}) ||
-        document.querySelector(${JSON.stringify(WORKSPACE_BTN)}) ||
+        chip ||
         editor ||
         notice
       );
@@ -391,10 +421,14 @@ export const observeFirstRun = (page) =>
         notice,
         editable:Boolean(editor&&!editor.closest("[inert]")),
         composerPresent:Boolean(editor),
-        workspaceChoice,
+        workspaceChoice:classified.workspaceChoice,
+        workspaceSelected:classified.workspaceSelected,
+        workspaceLabel:chipLabel,
+        pickerOpen,
         zhVisible,
         enVisible,
         chromeReady,
+        onboardingResolved:notice,
         readyState:document.readyState
       };
     })()`,
@@ -408,12 +442,28 @@ const observationFingerprint = (state) =>
     notice: state?.notice,
     editable: state?.editable,
     workspaceChoice: state?.workspaceChoice,
+    workspaceSelected: state?.workspaceSelected,
+    workspaceLabel: state?.workspaceLabel,
+    pickerOpen: state?.pickerOpen,
     zhVisible: state?.zhVisible,
     enVisible: state?.enVisible,
+    onboardingResolved: state?.onboardingResolved,
   });
 
 const sameObservation = (left, right) =>
   observationFingerprint(left) === observationFingerprint(right);
+
+const waitFontsReady = async (page, ms) => {
+  const remaining = Math.max(0, ms);
+  await evalJson(
+    page,
+    `(function(ms){
+      const ready=document.fonts&&document.fonts.ready?document.fonts.ready.then(()=>true):Promise.resolve(true);
+      const timeout=new Promise((resolve)=>setTimeout(()=>resolve(false), ms));
+      return Promise.race([ready, timeout]);
+    })(${JSON.stringify(remaining)})`,
+  );
+};
 
 export const waitAppReady = async (page, ms) => {
   await waitFor(
@@ -426,34 +476,44 @@ export const waitAppReady = async (page, ms) => {
   );
 };
 
-export const watchFirstRun = async (page, ms) => {
-  const until = Date.now() + ms;
+export const waitFirstRunInitialized = async (page, ms, noticeSeen = false, store) => {
+  const deadline = Date.now() + ms;
+  await waitFontsReady(page, remainingMs(deadline, 'fonts'));
   let last = await observeFirstRun(page);
-  let noticeSeen = Boolean(last.notice);
-  while (Date.now() < until) {
+  let seen = noticeSeen || Boolean(last.notice);
+  const acknowledged = Boolean(store?.acknowledged);
+  const storeReady = store?.status === 'ready';
+  while (Date.now() < deadline) {
+    if (last.notice) seen = true;
+    if (storeReady && (acknowledged || seen)) {
+      return { last, noticeSeen: seen, initialized: true, store };
+    }
     await sleep(250);
-    const next = await observeFirstRun(page);
-    if (next.notice) noticeSeen = true;
-    last = next;
+    last = await observeFirstRun(page);
   }
-  return { last, noticeSeen };
+  return {
+    last,
+    noticeSeen: seen,
+    initialized: Boolean(storeReady && (acknowledged || seen)),
+    store,
+  };
 };
 
-export const settleFirstRun = async (page, ms) => {
-  await evalJson(page, 'document.fonts.ready.then(()=>true)');
+export const settleFirstRun = async (page, ms, noticeSeen = false) => {
   const until = Date.now() + ms;
+  await waitFontsReady(page, remainingMs(until, 'fonts'));
   let previous = await observeFirstRun(page);
-  let noticeSeen = Boolean(previous.notice);
+  let seen = noticeSeen || Boolean(previous.notice);
   while (Date.now() < until) {
     await sleep(400);
     const next = await observeFirstRun(page);
-    if (next.notice) noticeSeen = true;
+    if (next.notice) seen = true;
     if (sameObservation(previous, next)) {
-      return { last: next, noticeSeen };
+      return { last: next, noticeSeen: seen };
     }
     previous = next;
   }
-  return { last: previous, noticeSeen };
+  return { last: previous, noticeSeen: seen };
 };
 
 export const captureSettledScreenshot = async (page, screenshot) => {

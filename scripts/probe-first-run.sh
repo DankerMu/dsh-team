@@ -127,6 +127,9 @@ write_overlay() {
 - id: ui-settings-general
   config:
     welcomeNoticeVersion: "2026-09-28.1"
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false
 - id: workspace-controller
   config:
     documentsDirectory: /data
@@ -191,8 +194,14 @@ drive_cmd() {
   local shot="$3"
   local port="${trial_ports[$name]}"
   local status=0
+  local snap_status=0
+  local reason="ok"
   if [ "$cmd" != "discover" ]; then
-    snapshot_home "$name" "${workdir}/${name}/workspace-snapshot" || return 2
+    if ! snapshot_home "$name" "${workdir}/${name}/workspace-snapshot"; then
+      printf '%s\n' "2" >"${workdir}/${name}/drive.status"
+      printf '%s\n' "pre-snapshot" >"${workdir}/${name}/drive.reason"
+      return 2
+    fi
   fi
   if probe_run_bound $((startup_seconds + browser_seconds + 30)) env \
     PROBE_PORT="$port" PROBE_COOKIE_FILE="${workdir}/${name}/cookie.hdr" \
@@ -206,30 +215,83 @@ drive_cmd() {
     status=0
   else
     status=$?
+    reason="driver"
   fi
-  snapshot_home "$name" "${evidence}/${name}-home-after" || return 2
+  if snapshot_home "$name" "${evidence}/${name}-home-after"; then
+    snap_status=0
+  else
+    snap_status=$?
+  fi
+  if [ "$snap_status" -ne 0 ]; then
+    echo "probe-first-run: ${name} ${cmd} snapshot failed" >&2
+    reason="snapshot"
+    if [ "$status" -eq 0 ]; then
+      status=2
+    fi
+  fi
+  mkdir -p "${workdir}/${name}" "${evidence}/${name}"
+  printf '%s\n' "$status" >"${workdir}/${name}/drive.status"
+  printf '%s\n' "$reason" >"${workdir}/${name}/drive.reason"
+  cp "${workdir}/${name}/drive.status" "${evidence}/${name}/drive.status"
+  cp "${workdir}/${name}/drive.reason" "${evidence}/${name}/drive.reason"
   return "$status"
 }
 snapshot_home() {
   local name="$1"
   local dest="$2"
-  rm -rf "$dest"
-  mkdir -p "$dest"
+  rm -rf "$dest" || return 1
+  mkdir -p "$dest" || return 1
   probe_copy_permitted_home "$image" "${trial_homes[$name]}" "$dest" "${prefix}-${name}-snap-${dest##*/}" || return 1
 }
 seed_home() {
   local dest="$1"
   local src="$2"
   local trial="${dest%/home}"
-  mkdir -p "$dest"
-  tar -C "$src" -cf - . | tar -C "$dest" -xf -
+  mkdir -p "$dest" || return 1
+  tar -C "$src" -cf - . | tar -C "$dest" -xf - || return 1
   probe_chown_tree "$image" "$dest" "${prefix}-seed-chown-${trial##*/}" || return 1
-  chmod 777 "$dest"
 }
 print_json_file() {
   local label="$1"
   local file="$2"
   echo "${label} $(tr '\n' ' ' <"$file")"
+}
+record_drive() {
+  local name="$1"
+  local file="$2"
+  local status="$3"
+  local label="$4"
+  local reason="missing-status"
+  mkdir -p "${workdir}/${name}" "${evidence}/${name}"
+  if [ -f "${workdir}/${name}/drive.reason" ]; then
+    reason="$(tr -d '\n' <"${workdir}/${name}/drive.reason")"
+  fi
+  printf '%s\n' "$status" >"${workdir}/${name}/drive.status"
+  printf '%s\n' "$reason" >"${workdir}/${name}/drive.reason"
+  cp "${workdir}/${name}/drive.status" "${evidence}/${name}/drive.status"
+  cp "${workdir}/${name}/drive.reason" "${evidence}/${name}/drive.reason"
+  if [ "$status" -eq 0 ]; then
+    print_json_file "$label" "$file"
+    return 0
+  fi
+  probe_status=2
+  if [ -s "$file" ]; then
+    echo "${label} partial reason=${reason} drive-status-${status} $(tr '\n' ' ' <"$file")"
+  else
+    echo "${label} error=harness reason=${reason} drive-status-${status}"
+  fi
+}
+run_trial_accept() {
+  local name="$1"
+  local shot="$2"
+  local label="$3"
+  local status=0
+  if drive_cmd "$name" accept "$shot" >"${workdir}/${name}/accept.json"; then
+    status=0
+  else
+    status=$?
+  fi
+  record_drive "$name" "${workdir}/${name}/accept.json" "$status" "$label"
 }
 run_help_container() {
   local helper="$1"
@@ -286,35 +348,38 @@ if ! start_instance baseline "${workdir}/baseline/patch.yml"; then
   trap - EXIT INT TERM
   exit "$probe_status"
 fi
-if ! drive_cmd baseline observe "baseline-homepage.png" >"${workdir}/baseline/observe.json"; then
+if drive_cmd baseline observe "baseline-homepage.png" >"${workdir}/baseline/observe.json"; then
+  print_json_file "baseline" "${workdir}/baseline/observe.json"
+else
   echo "probe-first-run: baseline observe failed" >&2
   probe_status=2
+  if [ -s "${workdir}/baseline/observe.json" ]; then
+    echo "baseline partial reason=drive-status-nonzero $(tr '\n' ' ' <"${workdir}/baseline/observe.json")"
+  fi
   cleanup
   trap - EXIT INT TERM
   exit "$probe_status"
 fi
-print_json_file "baseline" "${workdir}/baseline/observe.json"
 stop_instance baseline
 
 prepare_trial_dirs overlay
 write_overlay "${workdir}/overlay/patch.yml" first-run
 if start_instance overlay "${workdir}/overlay/patch.yml"; then
-  if drive_cmd overlay accept "overlay-homepage.png" >"${workdir}/overlay/accept.json"; then
-    print_json_file "method overlay" "${workdir}/overlay/accept.json"
-  elif [ -s "${workdir}/overlay/accept.json" ]; then
-    print_json_file "method overlay" "${workdir}/overlay/accept.json"
-  else
-    echo "method overlay error=harness"
-    probe_status=2
-  fi
+  run_trial_accept overlay "overlay-homepage.png" "method overlay"
 else
   echo "method overlay error=harness"
   probe_status=2
+  mkdir -p "${workdir}/overlay" "${evidence}/overlay"
+  printf '%s\n' "2" >"${workdir}/overlay/drive.status"
+  printf '%s\n' "start" >"${workdir}/overlay/drive.reason"
+  cp "${workdir}/overlay/drive.status" "${evidence}/overlay/drive.status"
+  cp "${workdir}/overlay/drive.reason" "${evidence}/overlay/drive.reason"
 fi
 stop_instance overlay
 
 prepare_trial_dirs discovery
 write_overlay "${workdir}/discovery/patch.yml" webserver
+seeded=0
 if start_instance discovery "${workdir}/discovery/patch.yml"; then
   if snapshot_home discovery "${workdir}/discovery/before" &&
     drive_cmd discovery discover "discovery-homepage.png" >"${workdir}/discovery/discover.json" &&
@@ -329,7 +394,12 @@ if start_instance discovery "${workdir}/discovery/patch.yml"; then
 - id: ui-settings-general
   config:
     welcomeNoticeVersion: "2026-09-28.1"
+- id: ui-settings-models
+  config:
+    credentialOnboarding: false
 EOF
+    echo "discovery fact=ui-settings-models.config.credentialOnboarding=false disables credential onboarding only"
+    seeded=1
   else
     echo "discovery error=harness"
     probe_status=2
@@ -342,21 +412,36 @@ stop_instance discovery
 
 prepare_trial_dirs preseed
 write_overlay "${workdir}/preseed/patch.yml" webserver
-if [ -d "${workdir}/preseed-files" ]; then
-  seed_home "${trial_homes[preseed]}" "${workdir}/preseed-files" || probe_status=2
-fi
-if start_instance preseed "${workdir}/preseed/patch.yml"; then
-  if drive_cmd preseed accept "preseed-homepage.png" >"${workdir}/preseed/accept.json"; then
-    print_json_file "method preseed" "${workdir}/preseed/accept.json"
-  elif [ -s "${workdir}/preseed/accept.json" ]; then
-    print_json_file "method preseed" "${workdir}/preseed/accept.json"
+if [ "$seeded" -eq 1 ]; then
+  if seed_home "${trial_homes[preseed]}" "${workdir}/preseed-files"; then
+    if start_instance preseed "${workdir}/preseed/patch.yml"; then
+      run_trial_accept preseed "preseed-homepage.png" "method preseed"
+    else
+      echo "method preseed error=harness"
+      probe_status=2
+      mkdir -p "${workdir}/preseed" "${evidence}/preseed"
+      printf '%s\n' "2" >"${workdir}/preseed/drive.status"
+      printf '%s\n' "start" >"${workdir}/preseed/drive.reason"
+      cp "${workdir}/preseed/drive.status" "${evidence}/preseed/drive.status"
+      cp "${workdir}/preseed/drive.reason" "${evidence}/preseed/drive.reason"
+    fi
   else
-    echo "method preseed error=harness"
+    echo "method preseed error=harness reason=seed"
     probe_status=2
+    mkdir -p "${workdir}/preseed" "${evidence}/preseed"
+    printf '%s\n' "2" >"${workdir}/preseed/drive.status"
+    printf '%s\n' "seed" >"${workdir}/preseed/drive.reason"
+    cp "${workdir}/preseed/drive.status" "${evidence}/preseed/drive.status"
+    cp "${workdir}/preseed/drive.reason" "${evidence}/preseed/drive.reason"
   fi
 else
-  echo "method preseed error=harness"
+  echo "method preseed error=harness reason=unseeded"
   probe_status=2
+  mkdir -p "${workdir}/preseed" "${evidence}/preseed"
+  printf '%s\n' "2" >"${workdir}/preseed/drive.status"
+  printf '%s\n' "unseeded" >"${workdir}/preseed/drive.reason"
+  cp "${workdir}/preseed/drive.status" "${evidence}/preseed/drive.status"
+  cp "${workdir}/preseed/drive.reason" "${evidence}/preseed/drive.reason"
 fi
 stop_instance preseed
 
@@ -367,24 +452,37 @@ fi
 prepare_trial_dirs cli
 echo "method cli: no dedicated first-run flags; --patch is recorded under overlay, not a distinct recipe"
 
-if [ -d "${workdir}/preseed-files" ]; then
+if [ "$seeded" -eq 1 ]; then
   prepare_trial_dirs combined
   write_overlay "${workdir}/combined/patch.yml" first-run
-  seed_home "${trial_homes[combined]}" "${workdir}/preseed-files" || probe_status=2
-  if start_instance combined "${workdir}/combined/patch.yml"; then
-    if drive_cmd combined accept "combined-homepage.png" >"${workdir}/combined/accept.json"; then
-      print_json_file "combined" "${workdir}/combined/accept.json"
-    elif [ -s "${workdir}/combined/accept.json" ]; then
-      print_json_file "combined" "${workdir}/combined/accept.json"
+  if seed_home "${trial_homes[combined]}" "${workdir}/preseed-files"; then
+    if start_instance combined "${workdir}/combined/patch.yml"; then
+      run_trial_accept combined "combined-homepage.png" "combined"
     else
       echo "combined error=harness"
       probe_status=2
+      mkdir -p "${workdir}/combined" "${evidence}/combined"
+      printf '%s\n' "2" >"${workdir}/combined/drive.status"
+      printf '%s\n' "start" >"${workdir}/combined/drive.reason"
+      cp "${workdir}/combined/drive.status" "${evidence}/combined/drive.status"
+      cp "${workdir}/combined/drive.reason" "${evidence}/combined/drive.reason"
     fi
   else
-    echo "combined error=harness"
+    echo "combined error=harness reason=seed"
     probe_status=2
+    mkdir -p "${workdir}/combined" "${evidence}/combined"
+    printf '%s\n' "2" >"${workdir}/combined/drive.status"
+    printf '%s\n' "seed" >"${workdir}/combined/drive.reason"
+    cp "${workdir}/combined/drive.status" "${evidence}/combined/drive.status"
+    cp "${workdir}/combined/drive.reason" "${evidence}/combined/drive.reason"
   fi
   stop_instance combined
+else
+  mkdir -p "${workdir}/combined" "${evidence}/combined"
+  printf '%s\n' "2" >"${workdir}/combined/drive.status"
+  printf '%s\n' "unseeded" >"${workdir}/combined/drive.reason"
+  cp "${workdir}/combined/drive.status" "${evidence}/combined/drive.status"
+  cp "${workdir}/combined/drive.reason" "${evidence}/combined/drive.reason"
 fi
 
 set +e
@@ -402,43 +500,84 @@ def load(path):
     text = path.read_text().strip()
     if not text:
         return None
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
 
-def goal_from_accept(data):
+def drive_status(name):
+    path = root / name / "drive.status"
+    if not path.exists():
+        return None
+    return path.read_text().strip()
+
+def trial_ok(name):
+    return drive_status(name) == "0"
+
+def goal_from_accept(name, data):
+    status = drive_status(name)
+    if status != "0":
+        ui = (data or {}).get("ui") or {}
+        return {g: "error" for g in goals} | {"accepted": False, "inputUsable": False, "initialized": False, "ui": ui}
     if not data or data.get("mode") != "accept":
-        return {g: "error" for g in goals} | {"accepted": False}
+        return {g: "error" for g in goals} | {"accepted": False, "inputUsable": False, "initialized": False}
     ui = data.get("ui") or {}
-    host = data.get("host") or {}
-    workspace = bool(ui.get("workspaceReady") and data.get("workBound"))
+    if data.get("initialized") is False or ui.get("initialized") is False:
+        return {g: "unknown" for g in goals} | {"accepted": False, "inputUsable": False, "initialized": False, "ui": ui}
     language = bool(ui.get("chinese"))
     notice = bool(ui.get("noNotice"))
+    input_proof = data.get("input") or {}
+    typed = bool(input_proof.get("typed") and input_proof.get("cleared"))
+    if data.get("workBoundUnknown"):
+        workspace = "unknown"
+    else:
+        workspace = "true" if bool(ui.get("workspaceSelected") and data.get("workBound")) else "false"
     return {
-        "workspace": "true" if workspace else "false",
+        "workspace": workspace,
         "language": "true" if language else "false",
         "notice": "true" if notice else "false",
         "accepted": bool(data.get("accepted")),
+        "inputUsable": bool(ui.get("inputUsable")),
+        "typed": typed,
+        "initialized": True,
         "ui": ui,
-        "host": host,
     }
 
 baseline = load(root / "baseline" / "observe.json")
 methods = {
-    "overlay": goal_from_accept(load(root / "overlay" / "accept.json")),
-    "preseed": goal_from_accept(load(root / "preseed" / "accept.json")),
-    "cli": {g: ("unsupported" if (evidence / "cli-help" / "status").exists() else "unknown") for g in goals} | {"accepted": False},
+    "overlay": goal_from_accept("overlay", load(root / "overlay" / "accept.json")),
+    "preseed": goal_from_accept("preseed", load(root / "preseed" / "accept.json")),
+    "cli": {g: ("unsupported" if (evidence / "cli-help" / "status").exists() else "unknown") for g in goals} | {"accepted": False, "inputUsable": False},
 }
+combined_row = goal_from_accept("combined", load(root / "combined" / "accept.json")) if (root / "combined").exists() else None
 print("matrix")
 if baseline:
     ui = (baseline.get("ui") or {})
     print(
-        "  baseline workspaceChoice=%s lang=%s notice=%s editable=%s hostname=%s"
-        % (ui.get("workspaceChoice"), ui.get("lang"), ui.get("notice"), ui.get("editable"), ui.get("hostname"))
+        "  baseline workspaceChoice=%s workspaceSelected=%s lang=%s notice=%s editable=%s hostname=%s initialized=%s"
+        % (
+            ui.get("workspaceChoice"),
+            ui.get("workspaceSelected"),
+            ui.get("lang"),
+            ui.get("notice"),
+            ui.get("editable"),
+            ui.get("hostname"),
+            ui.get("initialized"),
+        )
     )
 for name, row in methods.items():
-    print("  %s workspace=%s language=%s notice=%s" % (name, row["workspace"], row["language"], row["notice"]))
+    print(
+        "  %s workspace=%s language=%s notice=%s inputUsable=%s typed=%s"
+        % (name, row["workspace"], row["language"], row["notice"], row.get("inputUsable"), row.get("typed"))
+    )
+if combined_row:
+    print(
+        "  combined workspace=%s language=%s notice=%s inputUsable=%s typed=%s"
+        % (combined_row["workspace"], combined_row["language"], combined_row["notice"], combined_row.get("inputUsable"), combined_row.get("typed"))
+    )
 winners = {g: [] for g in goals}
 errored = sys.argv[3] == "2"
-for name, row in methods.items():
+for name, row in list(methods.items()) + ([("combined", combined_row)] if combined_row else []):
     for g in goals:
         if row[g] == "true":
             winners[g].append(name)
@@ -454,15 +593,15 @@ if any(not winners[g] for g in goals):
     print("evidence=%s" % evidence)
     sys.exit(1)
 combined = load(root / "combined" / "accept.json")
-accepted = [(name, load(root / name / "accept.json")) for name in methods]
-if combined:
+accepted = [(name, load(root / name / "accept.json")) for name in methods if trial_ok(name)]
+if combined and trial_ok("combined"):
     accepted.append(("combined", combined))
-recipes = [name for name, row in accepted if row and row.get("accepted")]
+recipes = [name for name, row in accepted if row and row.get("accepted") and row.get("initialized") is not False]
 if not recipes:
     print("无法做到: no fresh complete recipe accepted")
     sys.exit(1)
 for name in recipes:
-    print("accepted recipe=%s; locale.preference=zh; ui-settings-general.welcomeNoticeVersion=2026-09-28.1" % name)
+    print("accepted recipe=%s; locale.preference=zh; ui-settings-general.welcomeNoticeVersion=2026-09-28.1; ui-settings-models.credentialOnboarding=false" % name)
     print("workspace files: %s" % sorted(str(path.relative_to(root / "preseed-files")) for path in (root / "preseed-files").rglob("*") if path.is_file()))
 print("evidence=%s" % evidence)
 sys.exit(0)
