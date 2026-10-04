@@ -102,4 +102,23 @@ describe('private sqlite files', () => {
       tightenSqliteFiles(filename);
     }).toThrow(/ELOOP/);
   });
+
+  it('tightens sidecars of the resolved main file, not the alias spelling', () => {
+    dir = mkdtempSync(join(tmpdir(), 'dsh-team-db-file-'));
+    const target = join(dir, 'target.db');
+    const alias = join(dir, 'alias.db');
+    writeFileSync(target, '');
+    writeFileSync(`${target}-wal`, '');
+    writeFileSync(`${target}-shm`, '');
+    chmodSync(target, 0o644);
+    chmodSync(`${target}-wal`, 0o644);
+    chmodSync(`${target}-shm`, 0o644);
+    symlinkSync(target, alias);
+
+    tightenSqliteFiles(alias);
+
+    expect(statSync(target).mode & 0o777).toBe(0o600);
+    expect(statSync(`${target}-wal`).mode & 0o777).toBe(0o600);
+    expect(statSync(`${target}-shm`).mode & 0o777).toBe(0o600);
+  });
 });

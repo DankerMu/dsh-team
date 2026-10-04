@@ -1,3 +1,6 @@
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 import { openDatabase } from './index.ts';
@@ -37,6 +40,28 @@ describe('openDatabase', () => {
       expect(handles[0]?.open).toBe(false);
     } finally {
       spy.mockRestore();
+    }
+  });
+
+  it('rejects a padded :memory: filename without creating a cwd-relative file', () => {
+    const previous = process.cwd();
+    const owned = mkdtempSync(join(tmpdir(), 'dsh-team-db-unit-'));
+    let leaked: Database.Database | undefined;
+
+    try {
+      process.chdir(owned);
+      try {
+        leaked = openDatabase(' :memory: ');
+      } catch {
+        leaked = undefined;
+      }
+      leaked?.close();
+      expect(leaked).toBeUndefined();
+      expect(readdirSync(owned)).toEqual([]);
+    } finally {
+      leaked?.close();
+      process.chdir(previous);
+      rmSync(owned, { recursive: true, force: true });
     }
   });
 });

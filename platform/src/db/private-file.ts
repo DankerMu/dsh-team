@@ -1,4 +1,12 @@
-import { chmodSync, closeSync, constants, mkdirSync, openSync, statSync } from 'node:fs';
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  mkdirSync,
+  openSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 
 const PRIVATE_FILE_MODE = 0o600;
@@ -34,8 +42,9 @@ export function tightenSqliteFiles(filename: string): void {
     return;
   }
 
-  chmodSync(filename, PRIVATE_FILE_MODE);
-  for (const sidecar of [`${filename}-wal`, `${filename}-shm`]) {
+  const main = realpathSync(filename);
+  chmodSync(main, PRIVATE_FILE_MODE);
+  for (const sidecar of [`${main}-wal`, `${main}-shm`]) {
     try {
       if (statSync(sidecar).isFile()) {
         chmodSync(sidecar, PRIVATE_FILE_MODE);

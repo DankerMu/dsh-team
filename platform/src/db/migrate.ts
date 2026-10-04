@@ -75,6 +75,7 @@ function appliedVersions(db: Database.Database): Set<number> {
 /**
  * Apply pending numbered SQL files in one transaction with their ledger rows.
  * Caller owns the database handle; already committed versions are left unchanged on failure.
+ * Trusted migration SQL must not contain BEGIN, COMMIT, or ROLLBACK; the runner owns the batch transaction.
  */
 export function applyMigrations(db: Database.Database, directory?: string): void {
   const files = loadMigrationFiles(directory);
