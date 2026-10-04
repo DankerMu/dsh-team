@@ -100,6 +100,8 @@ describe('loadConfig', () => {
     'example.com',
     'ftp://example.com',
     'http://',
+    'http://example.com:',
+    'http://[::1]:',
     'http://example.com:0',
     'http://example.com:65536',
     'http://example.com:abc',

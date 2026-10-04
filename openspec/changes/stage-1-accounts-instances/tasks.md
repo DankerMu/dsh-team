@@ -208,7 +208,7 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - Release / packaging / dependency compatibility and Documentation / migration notes — selected: source and built runtime rejection plus healthy e2e, existing URL/net APIs, exact example/env documentation.
 - Concurrency / shared state / ordering and Resource limits / large input / discovery — not selected: pure finite config parsing; no network discovery or request policy.
 
-验证记录（#13）：URL配置41个语义失败、cookie/proxy配置30个语义失败先RED后GREEN；最终190 unit（85 config）/15 integration及完整检查、strict OpenSpec、固定版SAST通过，config statements100%/branches98.3%。源/编译入口各验证缺失URL、相对URL、userinfo、非法cookie布尔、非法proxy均exit1且不建数据目录/不监听/不回显值；合法HTTPS外部origin与独立false cookie配置归一化正确，实际HTTP健康及数据库创建正常。e2e在三个配置均为非法环境值时仍用自己的显式配置通过schema/HTTP探针。所有临时进程/目录清理，HTTP契约不变，尚未启用请求侧代理信任或cookie行为。
+验证记录（#13）：URL配置41个语义失败、cookie/proxy配置30个语义失败先RED后GREEN；补充空端口边界后192 unit（87 config）/15 integration及完整检查、strict OpenSpec通过，config statements100%/branches98.3%，固定版SAST无发现。源/编译入口各验证缺失URL、相对URL、userinfo、非法cookie布尔、非法proxy均exit1且不建数据目录/不监听，凭据标记未回显；其他输入不回显由独立单元哨兵支持。e2e忽略非法继承配置仍通过schema/HTTP；CI dev启动漏传必填URL的失败在隔离副本复现，显式提供本地origin后dev:bg/status/smoke/stop均通过。合法外部HTTPS origin与独立cookie配置不改变平台HTTP监听。所有临时进程/目录清理，契约不变，尚未启用请求侧策略。
 
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
