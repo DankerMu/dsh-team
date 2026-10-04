@@ -88,3 +88,12 @@
 - Blast radius: a false idle signal could stop live tasks in #59; leaked probe credentials or resources affect the verification host.
 - Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
 - Evidence floor: actual Web UI request paths at five phases, HTTP/WS/file running-versus-idle observations over three real task cycles, redacted output, cleanup, and `pnpm check`.
+
+## Issue #8 fixture
+
+- Issue type: feature
+- Fixture level: expanded
+- Upstream suggested level: compact (override: real launch credentials, browser automation, state-file writes and VPS resource lifecycle trigger expanded review)
+- Blast radius: incorrect first-run conclusions would propagate into image preseed (#27), managed configuration (#29+) and first-entry behavior (#57).
+- Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
+- Evidence floor: fresh-instance baseline plus overlay/file/CLI method matrix, real Chinese/no-notice/editable-composer screenshots, exact working keys/files/arguments, resource cleanup and `pnpm check`; inability stops for user confirmation.

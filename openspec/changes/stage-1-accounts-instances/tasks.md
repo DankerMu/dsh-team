@@ -118,6 +118,21 @@ Minimal mergeable slice: atomic - 2.1 的路径清单是 2.2 的输入，结论�
 Suggested fixture level: compact - 只新增一个探测脚本和文档结论
 Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回才有可合入的产出
 
+### Issue #8 risk/evidence map (tasks 3.1–3.3 only)
+
+- Public API / CLI / script entry — selected: root probe command prints baseline and all three method outcomes for workspace/language/notice; invalid prerequisites fail.
+- Config / project setup — selected: exact pinned-release keys/files/arguments and fresh combined-recipe UI run; no inferred success.
+- File IO / path safety / overwrite — selected: fresh owned state/work volumes and browser profile per trial; whole-file preseed/overlay; independent cleanup query.
+- Schema / columns / units / field names — selected: record concrete released settings namespace/key and persisted data shape from discovery, then verify by fresh launch.
+- Auth / permissions / secrets — selected: internal Host-bound token/cookie exchange, non-root instance, no credentials or content in diagnostic artifacts.
+- Concurrency / shared state / ordering — selected: await async app/settings/notice readiness; no cross-trial state or automatic UI setup masking candidate failure.
+- Resource limits / large input / discovery — selected: bounded launch/browser/cleanup; only allowlisted first-run observations and scoped state differences.
+- Legacy compatibility / examples — not selected: no older first-run probe exists; shared #7 entrypoint is instead covered by the required regression evidence.
+- Error handling / rollback / partial outputs — selected: failure/interruption cleanup and explicit unknown/unsupported versus “无法做到”; no unapproved fallback.
+- Release / packaging / dependency compatibility — selected: actual npm `0.2.0-rc.2` and giap-vps Docker/Chrome; real release CLI help/parser establishes unsupported flags.
+- Documentation / migration notes — selected: decisions 10/12/OQ3 name the tested recipe; preserve first-entry spec unless project party explicitly approves an impossibility fallback.
+- Authority/locale attribution control: baseline and every adopted recipe use a non-loopback test hostname mapped only inside Chrome to the loopback published port; report/assert hostname and English navigator language. Loopback discoveries are not accepted as gateway-authority success.
+
 ## 4. 数据库和基础配置（任务包 1.3 的剩余部分）
 
 依赖：无。
