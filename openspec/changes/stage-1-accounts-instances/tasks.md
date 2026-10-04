@@ -190,6 +190,14 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - Documentation / migration notes — selected: design boundary records units/ownership and deferred model API fields. 验证记录（#11）：`pnpm check` 118 unit/14 integration 通过；69个 settings 用例覆盖默认、部分更新、验证、损坏值、非对象模型条目、继承属性档位拒绝和事务回滚，settings逐项覆盖率100%；源API及独立复制dist的真实文件库重开smoke均通过，非JSON非本模块键保持不变，错误不回显值，临时资源已清理。
 - Auth / permissions / secrets, Resource limits / large input / discovery and Legacy compatibility / examples — not selected: no model keys/auth, discovery or previous settings API; fractional CPU and finite bounds are value validation, not a new resource scheduler.
 
+### Issue #12 risk/evidence map (task 4.5 only)
+
+- Public API / CLI / script entry and Legacy compatibility / examples — selected: required buildApp handle, complete caller migration, unchanged HTTP/OpenAPI, source and built startup.
+- Config / project setup and Documentation / migration notes — selected: PLATFORM_DATA_DIR/platform.db, matched verification matrix, real-DB deferral removal, injected-memory unit rule and local data ignore. Remove the matrix footnote's now-false “no database surface” claim and update the same operating document's planned-persistence wording to the implemented SQLite driver.
+- File IO / path safety / overwrite, Auth / permissions / secrets and Resource limits / large input / discovery — selected: existing0600/WAL opener, no DB content logged, only owned temp files removed, no leaked process/connection.
+- Schema / columns / units / field names and Release / packaging / dependency compatibility — selected: default SQL assets migrate before health, one ledger record, settings survive file reopen and built-process restart.
+- Error handling / rollback / partial outputs and Concurrency / shared state / ordering — selected: migrate before listen, ownership transfer on successful build, onClose release, failed startup exits and closes resources; no multi-process migration coordinator.
+
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
 依赖：第 4 组。
