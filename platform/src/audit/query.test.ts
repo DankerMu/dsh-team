@@ -30,7 +30,6 @@ const FILTER_CASES: readonly [string, AuditFilters, readonly number[]][] = [
   ['returns only matching event types from mixed events', { eventType: 'login.succeeded' }, [5, 4]],
   ['matches actor or target email once', { email: ALICE }, [5, 4, 2]],
   ['matches email as actor-only or target-only for a different account', { email: BOB }, [5, 1]],
-  ['ANDs type, email, time', { eventType: 'login.succeeded', email: ALICE, from: T5, to: T5 }, [5]],
   ['includes records on both from and to time bounds', { from: T3, to: T5 }, [5, 4, 3]],
   ['applies an open-ended from bound', { from: T5 }, [6, 5]],
   ['applies an open-ended to bound', { to: T2 }, [2, 1]],
@@ -43,11 +42,7 @@ const FILTER_CASES: readonly [string, AuditFilters, readonly number[]][] = [
 ];
 
 function seedMixedEvents(db: DatabaseHandle): void {
-  recordAuditEvent(db, {
-    type: 'login.failed',
-    createdAt: T1,
-    actorEmail: BOB,
-  });
+  recordAuditEvent(db, { type: 'login.failed', createdAt: T1, actorEmail: BOB });
   recordAuditEvent(db, {
     type: 'account.disabled',
     createdAt: T2,
@@ -72,11 +67,7 @@ function seedMixedEvents(db: DatabaseHandle): void {
     actorEmail: ALICE,
     targetEmail: BOB,
   });
-  recordAuditEvent(db, {
-    type: 'logout.succeeded',
-    createdAt: T6,
-    actorEmail: SQL_EMAIL,
-  });
+  recordAuditEvent(db, { type: 'logout.succeeded', createdAt: T6, actorEmail: SQL_EMAIL });
 }
 
 function queryError(db: DatabaseHandle, query: { page: number; pageSize: number }): Error {
@@ -104,10 +95,7 @@ describe('queryAuditEvents', () => {
   });
 
   it('returns seeded events newest first with parsed details and null omitted metadata', () => {
-    recordAuditEvent(db, {
-      type: 'login.succeeded',
-      createdAt: 1_700_000_001_000,
-    });
+    recordAuditEvent(db, { type: 'login.succeeded', createdAt: 1_700_000_001_000 });
     recordAuditEvent(db, {
       type: 'instance.stopped',
       createdAt: 1_700_000_002_000,
@@ -142,6 +130,24 @@ describe('queryAuditEvents', () => {
         details: {},
       },
     ]);
+  });
+
+  it('ANDs type, email, and time as the intersection of matching rows', () => {
+    recordAuditEvent(db, { type: 'login.succeeded', createdAt: T1, actorEmail: ALICE });
+    recordAuditEvent(db, { type: 'login.succeeded', createdAt: T3, actorEmail: ALICE });
+    recordAuditEvent(db, { type: 'login.failed', createdAt: T3, actorEmail: ALICE });
+    recordAuditEvent(db, { type: 'login.succeeded', createdAt: T3, actorEmail: BOB });
+
+    const cases: readonly [AuditFilters, readonly number[]][] = [
+      [{ eventType: 'login.succeeded' }, [4, 2, 1]],
+      [{ email: ALICE }, [3, 2, 1]],
+      [{ from: T3, to: T3 }, [4, 3, 2]],
+      [{ eventType: 'login.succeeded', email: ALICE, from: T3, to: T3 }, [2]],
+    ];
+    for (const [filters, expectedIds] of cases) {
+      const rows = queryAuditEvents(db, { page: 1, pageSize: 10, ...filters });
+      expect(rows.map((row) => row.id)).toEqual(expectedIds);
+    }
   });
 
   describe('filters', () => {

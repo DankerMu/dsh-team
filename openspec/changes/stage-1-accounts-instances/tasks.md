@@ -241,7 +241,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - Config / project setup and Legacy compatibility / examples — not selected: no new config or existing reader/caller to migrate. Existing audit unit-memory permission suffices.
 - Evidence floor: staged RED/GREEN, `pnpm check`, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, invariant-state).
 
-验证记录（#15）：tracer缺函数、13项筛选错误、4项分页/JSON错误先RED后GREEN；255 unit（21 query）/15 integration及完整检查通过，query覆盖率100%。源/编译API真实文件重开后验证同刻分页`[4,3]/[2,1]`、邮箱角色并集、三条件交集和包含端点；负页大小与损坏JSON拒绝，查询前后存储不变，临时文件已清理。HTTP授权/调用方及跨写入快照不在本项范围。
+验证记录（#15）：tracer缺函数、13项筛选错误、4项分页校验/JSON错误先RED后GREEN；分页排序与DB错误传播首次即GREEN，不声称独立RED。255 unit（21 query）/15 integration及完整检查通过，query覆盖率100%；review补强同刻错误类型/邮箱及时间外干扰行，交集精确断言通过。源/编译API真实文件重开后验证同刻分页`[4,3]/[2,1]`、邮箱角色并集和包含端点；非法分页与损坏JSON拒绝，查询不改变存储，临时文件清理。额外探针验证空过滤值、零时间、安全整数上界、调用方事务和JSON原始值；HTTP授权/调用方及跨写入快照不在本项范围。
 
 ## 6. 账号（任务包 1.4）
 
