@@ -265,7 +265,10 @@ export const muxListen = async (origin, cookie, store) => {
   store.reason = null;
   store.events = [];
   const url = new URL(origin);
-  const ws = await openWs(`ws://${url.host}/api/remote.mux`, {
+  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') {
+    throw new Error('mux requires a loopback HTTP origin');
+  }
+  const ws = await openWs(`ws://127.0.0.1:${url.port || '80'}/api/remote.mux`, {
     headers: { cookie, host: url.host, origin },
   });
   const streamId = randomUUID();
