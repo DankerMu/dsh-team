@@ -50,7 +50,9 @@ fi
 seccomp="${repo_root}/images/seccomp/dsh-user.json"
 overlay_src="${repo_root}/verify/phase0/managed.patch.yml"
 driver="${repo_root}/scripts/probe-dsh-api-browser.mjs"
-for f in "$seccomp" "$overlay_src" "$driver"; do
+ui="${repo_root}/scripts/probe-dsh-api-ui.mjs"
+cdp="${repo_root}/scripts/probe-dsh-api-cdp.mjs"
+for f in "$seccomp" "$overlay_src" "$driver" "$ui" "$cdp"; do
   [ -f "$f" ] || { echo "probe-dsh-api: missing $f" >&2; exit 2; }
 done
 if [ -n "${PROBE_PORT:-}" ]; then

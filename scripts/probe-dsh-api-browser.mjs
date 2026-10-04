@@ -4,18 +4,26 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { connectPage, httpRequest, muxListen, sleep, startChrome } from './probe-dsh-api-cdp.mjs';
+import {
+  NEW_BTN,
+  SEND_BTN,
+  clickAllowOnce,
+  clickSelector,
+  errorCode,
+  remainingMs,
+  reportDiagnostic,
+  setupFirstRun,
+  typeComposer,
+  waitComposer,
+  waitFor,
+  waitHomepage,
+  waitTurnIdle,
+} from './probe-dsh-api-ui.mjs';
 
 const PHASES = ['homepage', 'new-session', 'message', 'running', 'complete'];
 const SECRET = /^(token|access_token|api[_-]?key|authorization|cookie)$/i;
 const MSG = /^(text|content|message|prompt|body)$/i;
-const NEW_BTN = 'button[aria-label="New session"],button[aria-label="新建会话"]';
-const SEND_BTN = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
-const STOP_BTN = 'button[aria-label="Stop generating"],button[aria-label="停止生成"]';
-const WORKSPACE_BTN = 'button[aria-label="Choose workspace"],button[aria-label="选择工作区"]';
-const EDIT_PATH = 'input[aria-label="Edit path"],input[aria-label="编辑路径"]';
-const EDIT_ZONE = 'button[aria-label="Edit path"],button[aria-label="编辑路径"]';
 const MARKER = 'dsh-team-probe';
-const WORKSPACE_PATH = '/data/work';
 const out = (line) => process.stdout.write(`${line}\n`);
 const fail = (message, code = 1) => {
   process.stderr.write(`probe-dsh-api: ${message}\n`);
@@ -53,21 +61,6 @@ const redact = (value, key = '') => {
   }
   return value;
 };
-const errorCode = (text) => {
-  const raw = String(text?.message ?? text ?? 'error');
-  const staged = raw.match(/^stage=([a-z0-9-]+) error=([a-z0-9._:-]+)$/i);
-  if (staged) return raw;
-  if (raw.startsWith('chrome-start ')) return raw;
-  if (raw.startsWith('oracle-invalid-')) return raw;
-  if (raw.startsWith('timed out waiting for ')) {
-    return `wait-timeout:${raw.slice('timed out waiting for '.length).replace(/\s+/g, '-')}`;
-  }
-  if (/^(http|ws|cdp)-(timeout|error|closed)$/.test(raw)) return raw;
-  if (raw.startsWith('missing ')) return 'missing-control';
-  if (raw === 'composer missing' || raw === 'missing edit-path') return raw.replace(/\s+/g, '-');
-  const match = raw.match(/\b(?:[A-Z][A-Za-z]+Error|HTTP[/_-]?\d{3}|E[A-Z0-9_]+|net::[A-Z_]+)\b/);
-  return match?.[0] ?? 'error';
-};
 const formatFailure = (error) => {
   if (error?.stage && error?.errorCode) return `stage=${error.stage} error=${error.errorCode}`;
   return errorCode(error);
@@ -81,15 +74,6 @@ const tally = (codes) => {
       .map(([code, count]) => `${code}:${count}`)
       .join(',') || '(none)'
   );
-};
-const waitFor = async (fn, ms, label) => {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    const value = await fn();
-    if (value) return value;
-    await sleep(250);
-  }
-  throw new Error(`timed out waiting for ${label}`);
 };
 const exchange = async () => {
   const host = env('PROBE_HOST');
@@ -151,60 +135,6 @@ const listRunning = (result) => {
     items,
   };
 };
-const evalJson = async (page, expression) => {
-  const result = await page.send('Runtime.evaluate', {
-    expression,
-    returnByValue: true,
-    awaitPromise: true,
-  });
-  if (result.exceptionDetails) {
-    const details = result.exceptionDetails;
-    throw new Error(errorCode(details.exception?.className ?? details.text));
-  }
-  return result.result?.value;
-};
-const clickSelector = async (page, selector) => {
-  const ok = await evalJson(
-    page,
-    `(function(){const el=document.querySelector(${JSON.stringify(selector)});if(!el||el.disabled)return false;el.click();return true;})()`,
-  );
-  if (!ok) throw new Error(`missing ${selector}`);
-};
-const clickTextButton = async (page, labels) => {
-  const ok = await evalJson(
-    page,
-    `(function(){
-      const labels=new Set(${JSON.stringify(labels)});
-      const el=[...document.querySelectorAll("button")].find((node)=>{
-        const text=(node.textContent||"").trim();
-        return labels.has(text) && !node.disabled;
-      });
-      if(!el)return false;
-      el.click();
-      return true;
-    })()`,
-  );
-  if (!ok) throw new Error(`missing ${labels.join('|')}`);
-};
-const queryPresent = (page, selector) =>
-  evalJson(
-    page,
-    `(function(){return Boolean(document.querySelector(${JSON.stringify(selector)}));})()`,
-  );
-const queryEnabled = (page, selector) =>
-  evalJson(
-    page,
-    `(function(){const el=document.querySelector(${JSON.stringify(selector)});return Boolean(el&&!el.disabled);})()`,
-  );
-const buttonState = (page, labels, enabled) =>
-  evalJson(
-    page,
-    `(function(){
-      const labels=new Set(${JSON.stringify(labels)});
-      const hits=[...document.querySelectorAll("button")].filter((el)=>labels.has((el.textContent||"").trim()));
-      return ${JSON.stringify(enabled)} ? hits.some((el)=>!el.disabled) : hits.length > 0;
-    })()`,
-  );
 const scanState = async (home) => {
   const names = [];
   let scanError = null;
@@ -280,36 +210,6 @@ const sample = async (origin, cookie, home, mux, sessionId, from, until, label) 
   );
   return { http: httpSample, ws: wsSample, files };
 };
-const composerReady = (page) =>
-  evalJson(
-    page,
-    `(function(){const el=document.querySelector('[contenteditable="true"]');return Boolean(el&&!el.closest('[inert]'));})()`,
-  );
-const waitComposer = (page, ms) => waitFor(() => composerReady(page), ms, 'composer');
-const typeComposer = async (page, text) => {
-  const focused = await evalJson(
-    page,
-    `(function(){const el=document.querySelector('[contenteditable="true"]');if(!el||el.closest('[inert]'))return false;el.focus();return true;})()`,
-  );
-  if (!focused) throw new Error('composer missing');
-  await page.send('Input.insertText', { text });
-};
-const clickAllowOnce = async (page, marker) => {
-  const script = `(function(){
-    const marker=${JSON.stringify(marker)};
-    const labels=new Set(["Allow once","允许一次"]);
-    for (const root of document.querySelectorAll("[data-approval-key]")) {
-      if (!root.innerText.includes(marker)) continue;
-      const buttons=[...root.querySelectorAll("button")];
-      const allow=buttons.find((el)=>labels.has((el.textContent||"").trim()) && !el.disabled);
-      if (!allow) return "disabled";
-      allow.click();
-      return "clicked";
-    }
-    return "absent";
-  })()`;
-  return evalJson(page, script);
-};
 const waitQuiet = async (pending, ms) => {
   const deadline = Date.now() + ms;
   let last = pending.count;
@@ -373,86 +273,6 @@ const waitOracle = async (startPath, completePath, wantComplete, ms, label) => {
   if (!started || (wantComplete && !done) || (!wantComplete && done)) {
     throw new Error(`oracle-invalid-${label}`);
   }
-};
-const waitTurnIdle = (page, ms, label) =>
-  waitFor(
-    async () => !(await queryPresent(page, STOP_BTN)) && (await queryPresent(page, SEND_BTN)),
-    ms,
-    label,
-  );
-const waitHomepage = (page, ms) =>
-  waitFor(() => evalJson(page, 'document.readyState==="complete"'), ms, 'homepage');
-const clickIfPresent = async (page, selector) => {
-  if (await queryEnabled(page, selector)) {
-    await clickSelector(page, selector);
-    return true;
-  }
-  return false;
-};
-const dismissNotice = async (page, ms) => {
-  const labels = ['Continue', '继续'];
-  if (!(await buttonState(page, labels, false))) return;
-  await waitFor(
-    async () =>
-      !(await buttonState(page, labels, false)) || (await buttonState(page, labels, true)),
-    ms,
-    'notice',
-  );
-  if (!(await buttonState(page, labels, false))) return;
-  await clickTextButton(page, labels);
-  await waitFor(async () => !(await buttonState(page, labels, false)), ms, 'notice-closed');
-};
-const enterWorkspacePath = async (page) => {
-  if (!(await queryPresent(page, EDIT_PATH))) {
-    if (!(await clickIfPresent(page, EDIT_ZONE))) throw new Error('missing edit-path');
-    await waitFor(() => queryPresent(page, EDIT_PATH), 8_000, 'edit-path');
-  }
-  const focused = await evalJson(
-    page,
-    `(function(){
-      const el=document.querySelector(${JSON.stringify(EDIT_PATH)});
-      if(!el||el.disabled)return false;
-      el.focus();
-      el.select?.();
-      return true;
-    })()`,
-  );
-  if (!focused) throw new Error('missing edit-path');
-  await page.send('Input.insertText', { text: WORKSPACE_PATH });
-  for (const type of ['keyDown', 'keyUp']) {
-    await page.send('Input.dispatchKeyEvent', {
-      type,
-      key: 'Enter',
-      code: 'Enter',
-      windowsVirtualKeyCode: 13,
-    });
-  }
-};
-const openWorkspace = async (page, ms) => {
-  const labels = ['Open', '打开'];
-  await waitFor(
-    async () => (await composerReady(page)) || (await buttonState(page, labels, true)),
-    ms,
-    'workspace-open',
-  );
-  if (await composerReady(page)) return;
-  await clickTextButton(page, labels);
-};
-const setupFirstRun = async (page, ms) => {
-  await dismissNotice(page, ms);
-  if (await composerReady(page)) return;
-  const pickerOpen = (await queryPresent(page, EDIT_PATH)) || (await queryPresent(page, EDIT_ZONE));
-  if (!pickerOpen) {
-    await waitFor(() => queryEnabled(page, WORKSPACE_BTN), ms, 'workspace');
-    await clickSelector(page, WORKSPACE_BTN);
-  }
-  await waitFor(
-    async () => (await queryPresent(page, EDIT_PATH)) || (await queryPresent(page, EDIT_ZONE)),
-    ms,
-    'workspace-picker',
-  );
-  await enterWorkspacePath(page);
-  await openWorkspace(page, ms);
 };
 const report = (httpOk, wsOk, inventory) => {
   out('path-inventory');
@@ -670,25 +490,26 @@ const connectSession = async (origin, cookie, buckets, current, pending, errors)
   return { chrome, page, mux };
 };
 const reachComposer = async (page, origin, browserMs) => {
+  const until = Date.now() + browserMs;
   const loaded = new Promise((resolve) => {
     page.on('Page.loadEventFired', () => resolve(true));
   });
   await page.send('Page.navigate', { url: `${origin}/` });
-  await Promise.race([loaded, sleep(browserMs)]);
+  await Promise.race([loaded, sleep(remainingMs(until, 'startup'))]);
   try {
-    await waitHomepage(page, browserMs);
+    await waitHomepage(page, remainingMs(until, 'homepage'));
   } catch (error) {
     stageFail('startup', errorCode(error), error);
   }
   try {
-    await setupFirstRun(page, browserMs);
+    await setupFirstRun(page, until);
   } catch (error) {
     const code = errorCode(error);
     const stage = code.includes('notice') ? 'notice' : 'workspace';
     stageFail(stage, code, error);
   }
   try {
-    await waitComposer(page, browserMs);
+    await waitComposer(page, remainingMs(until, 'composer'));
   } catch (error) {
     stageFail('composer', errorCode(error), error);
   }
@@ -765,6 +586,13 @@ const drive = async () => {
     out(`console new ${tally(added)}`);
     if (added.length) stageFail('console', tally(added));
     report(distinctHttp(cycles), distinctWs(cycles), inventory);
+  } catch (error) {
+    try {
+      await reportDiagnostic(page, screenshot, current);
+    } catch {
+      /* diagnostic must not replace the original error */
+    }
+    throw error;
   } finally {
     try {
       mux?.close();

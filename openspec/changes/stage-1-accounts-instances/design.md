@@ -116,7 +116,9 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 网关记录每个用户的活动连接数和最后活动时间。一个后台定时器每分钟检查一次：实例处于“运行中”、没有任何活动连接、没有运行中的任务、且这一状态已持续达到配置的空闲分钟数（默认 30，D5），就停止它。
 
-“有没有运行中的任务”怎么从平台侧判断，取决于任务包 1.1 探针的结论，见 Open Questions。
+采用 DSH `0.2.0-rc.2` 的 `POST /api/session/list`：平台带该实例的 DSH cookie 和匹配的 Host，发送 `client-request` envelope（`method: "session/list"`，`payload: { args: { _request: {} } }`），读取成功 `server-response` 的 `result.value.items[].running`。任一条为 `true` 表示有运行中任务；只有完整、有效的列表全部为 `false` 才可判空闲。请求失败、超时、响应结构不符均为未知，不得据此停止实例。生产回收实现须覆盖全部 Session（若列表分页，遍历全部页或验证服务端运行中过滤），不能把不完整列表当作空闲。
+
+任务包 1.1 在 giap-vps（Ubuntu 24.04 / amd64、Docker 29.1.3）通过实际 Web UI 完成三次真实工具任务：HTTP 值每次均为运行中 `true`、结束后 `false`，实例累计 1–3 个 Session。运行窗口由工具创建的开始/完成标记独立确认，结束还等待 UI 停止生成控件消失。WS `/api/remote.mux` 的 `api-session/status` 在采样窗口内仅观察到结束 `false`，运行中为未知，不采用；宿主扫描状态目录返回 `EACCES`，不采用文件通道。本结论只覆盖该发行版与本次小规模样本，不宣称 WS/文件永远不可用；未走 F13 退路，默认空闲时间仍为 30 分钟。
 
 ### 10. 受管覆盖层
 
@@ -204,7 +206,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 ## Open Questions
 
 - **目标机 Ubuntu 22.04 上 shell 沙箱的最终确认。** VPS 已验证“钉定 Moby 默认 seccomp、零额外安全放宽”，配置和调用方式见 `images/seccomp/`；删除额外放宽项的集合为空，不虚构删除试验。移除 Landlock syscall allow 的临时更严策略使真实工具报告 `SANDBOX_UNAVAILABLE`，作为独立负对照。项目方仍须在 Ubuntu 22.04 执行同一探针并验证显式交付策略；若不可用，记录各级失败原因并交项目方确认，不能自动降为无 shell 沙箱。
-- **DSH 0.2.0-rc.2 的 HTTP 接口实际路径，以及“是否有运行中任务”的判断方式。** 任务包 1.1 的探针回答。已定退路见风险表：找不到可靠信号就只按连接和活动时间判定。结论写回决定 9。
+- **DSH 接口和运行中任务信号已由任务包 1.1 确认。** 实际 UI 观察到 `/api/session/create`、`/api/session/prompt` 等 HTTP 路径及 WS `/api/remote.mux`；采用 `POST /api/session/list` 的 `result.value.items[].running`，三次真实任务均观察到 `true → false`。协议、未知状态处理和观测限制见决定 9；完整阶段路径清单由 `pnpm probe:dsh-api` 输出，不采用 F13 退路。
 - **预置工作区、中文界面、关闭公告的做法。** 任务包 1.2 的探针回答，结论写回决定 10 和 12。
 - **Auto review 在开发模型上是否可用。** 任务包 1.13 验证；不可用时 Auto 档暂时等同人工批准。
 - **`qwen3.6` 上的工具调用、子 Agent 委派、Auto review。** 留到生产联调，本阶段不处理。
