@@ -88,7 +88,7 @@ describe('settings', () => {
 
       expect(() => {
         writeSettings(db, { [field]: value });
-      }).toThrow(new RegExp(field));
+      }).toThrow(field);
       expect(readSettings(db)).toEqual(PRIOR);
     });
 
@@ -123,7 +123,7 @@ describe('settings', () => {
 
       expect(() => {
         writeSettings(db, { [field]: value });
-      }).toThrow(new RegExp(field));
+      }).toThrow(field);
       expect(readSettings(db)).toEqual(PRIOR);
     });
 
@@ -134,7 +134,7 @@ describe('settings', () => {
 
         expect(() => {
           writeSettings(db, { [field]: 1 });
-        }).toThrow(new RegExp(field));
+        }).toThrow(field);
         expect(readSettings(db)).toEqual(PRIOR);
       },
     );
@@ -148,7 +148,7 @@ describe('settings', () => {
 
       expect(() => {
         writeSettings(db, patch);
-      }).toThrow(new RegExp(label));
+      }).toThrow(label);
       expect(readSettings(db)).toEqual(PRIOR);
     });
   });
@@ -168,7 +168,7 @@ describe('settings', () => {
 
       expect(() => {
         readSettings(db);
-      }).toThrow(new RegExp(field));
+      }).toThrow(field);
       try {
         readSettings(db);
       } catch (error) {
