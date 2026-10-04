@@ -7,7 +7,12 @@ describe('platform over a real TCP port', () => {
   let close: () => Promise<void> = () => Promise.resolve();
 
   beforeAll(async () => {
-    const app = await buildApp({ host: '127.0.0.1', port: 0, logLevel: 'silent' });
+    const app = await buildApp({
+      host: '127.0.0.1',
+      port: 0,
+      logLevel: 'silent',
+      dataDir: './data',
+    });
     await app.listen({ host: '127.0.0.1', port: 0 });
     const address = app.server.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${String(address.port)}`;

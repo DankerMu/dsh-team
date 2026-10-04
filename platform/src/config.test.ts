@@ -5,7 +5,7 @@ describe('loadConfig', () => {
   it('uses local defaults when no variable is set', () => {
     const config = loadConfig({});
 
-    expect(config).toEqual({ host: '127.0.0.1', port: 8080, logLevel: 'info' });
+    expect(config).toEqual({ host: '127.0.0.1', port: 8080, logLevel: 'info', dataDir: './data' });
   });
 
   it('reads host, port and log level from the environment', () => {
@@ -15,7 +15,7 @@ describe('loadConfig', () => {
       PLATFORM_LOG_LEVEL: 'debug',
     });
 
-    expect(config).toEqual({ host: '0.0.0.0', port: 9090, logLevel: 'debug' });
+    expect(config).toEqual({ host: '0.0.0.0', port: 9090, logLevel: 'debug', dataDir: './data' });
   });
 
   it.each(['0', '65536', '-1', '80.5', 'abc', ''])('rejects port "%s"', (port) => {
@@ -31,5 +31,19 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ PLATFORM_LOG_LEVEL: 'verbose' })).toThrow(
       /PLATFORM_LOG_LEVEL must be one of .* got "verbose"/,
     );
+  });
+
+  it('maps PLATFORM_DATA_DIR to dataDir', () => {
+    const config = loadConfig({ PLATFORM_DATA_DIR: '/srv/dsh-team' });
+
+    expect(config.dataDir).toBe('/srv/dsh-team');
+  });
+
+  it.each(['', '   '])('rejects blank PLATFORM_DATA_DIR "%s" and names the variable', (dataDir) => {
+    expect(() => loadConfig({ PLATFORM_DATA_DIR: dataDir })).toThrow(/PLATFORM_DATA_DIR/);
+  });
+
+  it('rejects PLATFORM_DATA_DIR containing NUL and names the variable', () => {
+    expect(() => loadConfig({ PLATFORM_DATA_DIR: 'data\0dir' })).toThrow(/PLATFORM_DATA_DIR/);
   });
 });

@@ -13,3 +13,7 @@ blockExoticSubdeps: true
 # minimumReleaseAge rule rejects. Pin it here; raise it together with vitest.
 overrides:
   vite: 8.3.1
+
+# Native module: better-sqlite3 must run its install script (D19).
+onlyBuiltDependencies:
+  - better-sqlite3
