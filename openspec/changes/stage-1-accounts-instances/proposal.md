@@ -107,3 +107,11 @@
 - Selected risk packs: all except Legacy compatibility / examples; precise scope and evidence are mapped under tasks 4.1–4.2.
 - Evidence floor: parent-observed RED/GREEN, real in-memory SQLite constraint and rollback cases, temporary file mode/WAL/reopen integration, direct public-API smoke and `pnpm check`.
 - Boundary: no business migration files or HTTP/startup database wiring; tasks 4.3–4.6 remain separate. The task 4.5 `integration_tests_real_db` deferral removal stays with #12.
+
+## Issue #10 fixture
+
+- Issue type: feature; fixture level: expanded, matching the upstream persistence/schema risk.
+- Scope: task4.3 only, one numbered SQL migration and real-memory constraint tests; minimal root build-command asset copy is necessary to ship the same SQL beside compiled db code.
+- Must preserve: existing migration transaction/replay/error behavior, private database files, module boundary and unchanged HTTP/startup behavior.
+- Evidence: parent-observed semantic RED/GREEN; real constraints and retained data after replay; source and compiled default-location migration smoke with file-backed reopen; full `pnpm check`.
+- Risk packs and exclusions are mapped in tasks.md. No settings defaults/repositories (#11), startup wiring (#12), or account/audit business logic.

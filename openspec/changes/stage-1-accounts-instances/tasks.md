@@ -166,6 +166,20 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 
 验证记录（#9）：`openDatabase` / `applyMigrations` 经 `db/index.ts` 导出。37 个单元测试、8 个集成测试和 `pnpm check` 通过，所有有逻辑的源文件逐文件覆盖率 100%。真实独立 API smoke 在 Node 24.13.1 / SQLite 3.53.4 上验证主文件及 WAL/SHM 均为 0600、WAL/外键开启、2→10 数字顺序、重放不重复、后续失败同时回滚数据/DDL/迁移记录、关闭重开保留数据。默认目录存在但某个 SQL 文件缺失的真实反例先失败；修复 ENOENT 捕获范围后拒绝缺失文件，只有默认目录本身缺失视为空集。配置项先 RED 后 GREEN；新 API 的初始缺失属于 setup RED，另有原生驱动 0644/delete 及逐文件事务残留数据的独立负对照。实际 HTTP health smoke 通过，配置数据目录未被创建，证实 #12 的启动接线尚未提前实现。
 
+### Issue #10 risk/evidence map (task 4.3 only)
+
+- Public API / CLI / script entry — selected: existing default `applyMigrations(db)` path in source and compiled API smoke.
+- Config / project setup — selected: root build copies SQL into generated db directory; no environment/startup change.
+- File IO / path safety / overwrite — selected: replace only generated SQL output; smoke uses owned temporary DB and cleanup.
+- Schema / columns / units / field names — selected: five usable tables, explicit keys/nullable fields/millisecond timestamps, role/status/foreign-key/uniqueness constraints and query indexes.
+- Auth / permissions / secrets — selected: session rows store hash field, account references cannot be orphaned, deleting sessions cannot remove users; no secret-bearing test/log fixtures.
+- Concurrency / shared state / ordering — selected: retain existing one-batch migration transaction and replay ledger; no new multi-process behavior.
+- Resource limits / large input / discovery — not selected: one finite trusted SQL asset; existing runner discovery unchanged.
+- Legacy compatibility / examples — not selected: first business schema, no deployed prior business tables.
+- Error handling / rollback / partial outputs — selected: SQL rejection preserves valid rows; existing batch rollback regression retained.
+- Release / packaging / dependency compatibility — selected: root build and standalone compiled default-location smoke, no new dependency.
+- Documentation / migration notes — selected: schema decisions above, task4.3 completion/evidence; other group4 tasks remain separate.
+
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
 依赖：第 4 组。
