@@ -6,11 +6,13 @@ export interface PlatformConfig {
   readonly host: string;
   readonly port: number;
   readonly logLevel: LogLevel;
+  readonly dataDir: string;
 }
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = '8080';
 const DEFAULT_LOG_LEVEL = 'info';
+const DEFAULT_DATA_DIR = './data';
 const MAX_PORT = 65535;
 
 function parsePort(raw: string): number {
@@ -31,6 +33,13 @@ function parseLogLevel(raw: string): LogLevel {
   return level;
 }
 
+function parseDataDir(raw: string): string {
+  if (raw.trim() === '' || raw.includes('\0')) {
+    throw new Error(`PLATFORM_DATA_DIR must be a nonempty path, got ${JSON.stringify(raw)}`);
+  }
+  return raw;
+}
+
 /**
  * Resolve the platform configuration from environment variables.
  * Invalid values throw at startup; they are never replaced by a default.
@@ -40,5 +49,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
     host: env.PLATFORM_HOST ?? DEFAULT_HOST,
     port: parsePort(env.PLATFORM_PORT ?? DEFAULT_PORT),
     logLevel: parseLogLevel(env.PLATFORM_LOG_LEVEL ?? DEFAULT_LOG_LEVEL),
+    dataDir: parseDataDir(env.PLATFORM_DATA_DIR ?? DEFAULT_DATA_DIR),
   };
 }

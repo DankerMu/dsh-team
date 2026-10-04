@@ -98,3 +98,12 @@
 - Selected risk packs: all except Legacy compatibility / examples, as mapped in tasks.md.
 - Evidence floor: fresh-instance baseline plus overlay/file/CLI method matrix and the approved plugin-composition candidate, real non-loopback Chinese/no-notice/editable-composer screenshots, reload and model-selection preservation, exact working artifacts, resource cleanup and `pnpm check`.
 - Project-party decision (2026-10-04): user selected “扩大到插件或镜像定制”; expand #8 to a minimal repo-owned client plugin and supported roster composition without weakening F15/F44 or modifying DSH source. Existing image preseed (#27) and managed-config generation (#29) remain separate; the probe must load the same deliverable plugin bytes.
+
+## Issue #9 fixture
+
+- Issue type: feature
+- Fixture level: expanded (agree with upstream: persisted database, atomic migrations and native dependency)
+- Blast radius: later account/settings/audit storage relies on foreign keys, private files and all-or-nothing migrations.
+- Selected risk packs: all except Legacy compatibility / examples; precise scope and evidence are mapped under tasks 4.1–4.2.
+- Evidence floor: parent-observed RED/GREEN, real in-memory SQLite constraint and rollback cases, temporary file mode/WAL/reopen integration, direct public-API smoke and `pnpm check`.
+- Boundary: no business migration files or HTTP/startup database wiring; tasks 4.3–4.6 remain separate. The task 4.5 `integration_tests_real_db` deferral removal stays with #12.

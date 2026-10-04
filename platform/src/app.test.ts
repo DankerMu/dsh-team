@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { buildApp } from './app.ts';
 
-const SILENT_CONFIG = { host: '127.0.0.1', port: 8080, logLevel: 'silent' } as const;
+const SILENT_CONFIG = {
+  host: '127.0.0.1',
+  port: 8080,
+  logLevel: 'silent',
+  dataDir: './data',
+} as const;
 
 function captureLog(): { lines: string[]; write: (line: string) => void } {
   const lines: string[] = [];

@@ -8,7 +8,12 @@ const TARGET = new URL('../../schemas/openapi.json', import.meta.url);
 const USAGE = 'usage: node platform/scripts/openapi.ts --write | --check';
 
 async function render(): Promise<string> {
-  const app = await buildApp({ host: '127.0.0.1', port: 0, logLevel: 'silent' });
+  const app = await buildApp({
+    host: '127.0.0.1',
+    port: 0,
+    logLevel: 'silent',
+    dataDir: './data',
+  });
   await app.ready();
   const document = app.swagger();
   await app.close();

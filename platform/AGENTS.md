@@ -28,7 +28,7 @@ The test is the specification. Write the test before the implementation; if the 
 
 - Test names are sentences describing behaviour: `rejects port "0"`, `answers 404 for an unknown route`.
 - Three blocks per test, separated by blank lines: arrange, act, assert. One concept per test.
-- Unit tests sit next to the source: `src/foo.ts` → `src/foo.test.ts`. Tests that bind a port, start a container, or touch a real database go in `platform/test/*.integration.test.ts`.
+- Unit tests sit next to the source: `src/foo.ts` → `src/foo.test.ts`. Tests that bind a port, start a container, or touch a real database go in `platform/test/*.integration.test.ts`. The `db` module is the exception: its unit tests may use in-memory SQLite (`:memory:`); file-backed SQLite stays in `platform/test/*.integration.test.ts`. `openDatabase` rejects a filename that the SQLite driver would trim, keeps exact `:memory:`, follows a symlink to the real regular file for WAL/SHM permissions, and rejects a directory (direct or via symlink) without changing its mode.
 
 ### What gets tested
 

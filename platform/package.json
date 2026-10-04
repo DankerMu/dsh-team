@@ -5,6 +5,10 @@
   "type": "module",
   "dependencies": {
     "@fastify/swagger": "9.9.0",
+    "better-sqlite3": "13.0.3",
     "fastify": "5.12.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0"
   }
 }
