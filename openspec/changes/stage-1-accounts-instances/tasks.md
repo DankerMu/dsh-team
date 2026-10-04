@@ -215,7 +215,7 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 依赖：第 4 组。
 
 - [x] 5.1 `platform/src/audit/` 提供记录事件的函数：事件类型是一个封闭的列表（见 `audit-log` 规格“记录的事件范围”），每种类型有一份允许出现在细节里的字段白名单，白名单之外的字段被丢弃。验证：单元测试——未知事件类型被拒绝；细节里带 `password`、`token`、`cookie`、`apiKey` 字段时写入的记录里没有这些字段。
-- [ ] 5.2 审计查询函数：按时间倒序，按事件类型、账号邮箱（作为操作者或对象）、时间范围筛选，分页。验证：单元测试（内存库）——三种筛选各自只返回匹配的记录；分页的两页不重叠也不遗漏。
+- [x] 5.2 审计查询函数：按时间倒序，按事件类型、账号邮箱（作为操作者或对象）、时间范围筛选，分页。验证：单元测试（内存库）——三种筛选各自只返回匹配的记录；分页的两页不重叠也不遗漏。
 - [ ] 5.3 平台日志的脱敏：Fastify 日志配置里屏蔽 `Cookie`、`Set-Cookie`、`Authorization` 请求头和响应头，以及请求体里的密码字段。验证：集成测试——带这些头和字段发请求后，捕获的日志输出里找不到它们的原文。
 
 Suggested fixture level: expanded - 持久化记录，且承担“不落凭据”的安全要求
@@ -240,6 +240,8 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled temporary-file reopen/query smoke, existing DB ownership, no migration/dependency change, evidence recorded here.
 - Config / project setup and Legacy compatibility / examples — not selected: no new config or existing reader/caller to migrate. Existing audit unit-memory permission suffices.
 - Evidence floor: staged RED/GREEN, `pnpm check`, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, invariant-state).
+
+验证记录（#15）：tracer缺函数、13项筛选错误、4项分页/JSON错误先RED后GREEN；255 unit（21 query）/15 integration及完整检查通过，query覆盖率100%。源/编译API真实文件重开后验证同刻分页`[4,3]/[2,1]`、邮箱角色并集、三条件交集和包含端点；负页大小与损坏JSON拒绝，查询前后存储不变，临时文件已清理。HTTP授权/调用方及跨写入快照不在本项范围。
 
 ## 6. 账号（任务包 1.4）
 
