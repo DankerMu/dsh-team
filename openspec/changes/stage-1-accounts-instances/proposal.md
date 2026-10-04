@@ -119,3 +119,7 @@
 ## Issue #12 fixture
 
 - Feature; expanded task4.5 startup/lifetime integration, with the issue's multi-path width exception. The Issue #12 design boundary and tasks map cover existing DB composition, all buildApp callers, isolated built e2e and retiring the real-database deferral.
+
+## Issue #13 fixture
+
+- Feature; expanded task4.6 configuration boundary for future authority, cookie and proxy consumers. The Issue #13 design boundary and risk map define required origin parsing, explicit optional settings and fail-fast runtime evidence; no request-handling policy is activated.

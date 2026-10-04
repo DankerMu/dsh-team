@@ -200,6 +200,14 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 
 验证记录（#12）：应用关闭句柄的集成反例先失败，源进程曾健康但未创建数据库的独立反例先失败；修复后119 unit/15 integration、完整检查、37项guardrail和固定版本SAST均通过。`pnpm e2e` 输出 database schema/migration OK 与1条HTTP smoke成功。源/编译进程分别验证0600数据库、迁移后健康、设置17跨重启保留、SIGTERM正常退出；非法目录、迁移冲突、端口占用均非零退出，已有数据不变，失败迁移无ledger。构建应用失败时真实Fastify清理钩子执行、数据库仍由调用方持有；OpenAPI生成不创建配置数据目录。仅移除已完成的真实数据库延后项，未改阈值或新增coverage例外。
 
+### Issue #13 risk/evidence map (task 4.6 only)
+
+- Public API / CLI / script entry, Config / project setup and Legacy compatibility / examples — selected: required config fields, all literals/e2e migrated, safe example and missing-variable startup exit.
+- Schema / columns / units / field names and Auth / permissions / secrets — selected: canonical origin/authority, independent strict cookie boolean, explicit IP-only trust list with empty default, error messages exclude input values.
+- Error handling / rollback / partial outputs and File IO / path safety / overwrite — selected: invalid config before database creation/listen; no fallback or partial startup.
+- Release / packaging / dependency compatibility and Documentation / migration notes — selected: source and built runtime rejection plus healthy e2e, existing URL/net APIs, exact example/env documentation.
+- Concurrency / shared state / ordering and Resource limits / large input / discovery — not selected: pure finite config parsing; no network discovery or request policy.
+
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
 依赖：第 4 组。
