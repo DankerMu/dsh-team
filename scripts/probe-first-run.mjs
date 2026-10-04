@@ -20,6 +20,7 @@ import {
   errorCode,
   observeFirstRun,
   remainingMs,
+  reportDiagnostic,
   settleFirstRun,
   setupFirstRun,
   typeComposer,
@@ -27,6 +28,14 @@ import {
   waitFirstRunInitialized,
   waitFor,
 } from './probe-dsh-api-ui.mjs';
+import {
+  assertCompositionRoster,
+  expectedCompositionRoster,
+  prepareComposition,
+  readBootRoster,
+  waitCompositionInitialized,
+} from './probe-first-run-composition.mjs';
+import { verifyPreservation } from './probe-first-run-preservation.mjs';
 
 const out = (line) => process.stdout.write(`${line}\n`);
 const fail = (message, code = 1) => {
@@ -82,7 +91,7 @@ const attachNetwork = (page, requests) => {
   });
 };
 
-const openMappedPage = async ({ origin, cookie, extraFlags }) => {
+const openMappedPage = async ({ origin, cookie, extraFlags, composition = false }) => {
   const chrome = await startChrome(
     env('CHROME_BIN'),
     env('PROBE_PROFILE'),
@@ -95,7 +104,7 @@ const openMappedPage = async ({ origin, cookie, extraFlags }) => {
   for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
   attachErrors(page, errors);
   attachNetwork(page, requests);
-  const welcome = await armWelcomeStoreObserver(page);
+  const welcome = composition ? null : await armWelcomeStoreObserver(page);
   await page.send('Network.setCookie', {
     name: cookie.split('=', 1)[0],
     value: cookie.slice(cookie.indexOf('=') + 1),
@@ -107,12 +116,13 @@ const openMappedPage = async ({ origin, cookie, extraFlags }) => {
   return { chrome, page, errors, requests, welcome };
 };
 
-const navigateReady = async (page, origin, ms) => {
+const navigateReady = async (page, origin, ms, reload = false) => {
   const until = Date.now() + ms;
   const loaded = new Promise((resolve) => {
     page.on('Page.loadEventFired', () => resolve(true));
   });
-  await page.send('Page.navigate', { url: `${origin}/` });
+  if (reload) await page.send('Page.reload', { ignoreCache: true });
+  else await page.send('Page.navigate', { url: `${origin}/` });
   await Promise.race([loaded, sleep(remainingMs(until, 'startup'))]);
   await waitAppReady(page, remainingMs(until, 'app-ready'));
 };
@@ -246,7 +256,7 @@ const awaitWelcomeInit = async (page, welcome, until, notice) => {
   const last = started.last;
   const noticeSeen = started.noticeSeen || notice.seen || Boolean(last.notice);
   assertAttribution(last);
-  return { store, started, last, noticeSeen };
+  return { store, started, last, noticeSeen, initialized: started.initialized };
 };
 
 const captureUnfinished = async (page, screenshot, origin, cookie, last, noticeSeen, errors) => {
@@ -298,6 +308,7 @@ const captureInitialized = async ({
     screenshot: shot,
     errors: errors.slice(),
     initialized: true,
+    bootRoster: await readBootRoster(page),
     workBound: binding.workBound,
     workBoundUnknown: binding.unknown,
   };
@@ -402,75 +413,148 @@ const acceptedFrom = (binding, verdict, input) =>
     input.cleared,
   );
 
-const acceptObservation = async ({ origin, cookie, extraFlags, screenshot, browserMs }) => {
-  const { chrome, page, errors, requests, welcome } = await openMappedPage({
-    origin,
-    cookie,
-    extraFlags,
-  });
-  const notice = { seen: false };
-  try {
-    const until = Date.now() + browserMs;
-    notice.seen = (await trackNotice(page, notice)).noticeSeen;
-    await navigateReady(page, origin, remainingMs(until, 'startup'));
-    notice.seen = (await trackNotice(page, notice)).noticeSeen;
-    const store = await waitWelcomeStoreReady(
-      page,
-      welcome,
-      remainingMs(until, 'first-run-initialized'),
-    );
-    const started = await waitFirstRunInitialized(
-      page,
-      remainingMs(until, 'first-run-initialized'),
-      notice.seen,
-      store,
-    );
-    let last = started.last;
-    let noticeSeen = started.noticeSeen || notice.seen || Boolean(last.notice);
-    assertAttribution(last);
-    if (!started.initialized) {
-      last = (await trackNotice(page, { seen: noticeSeen })).last;
-      const shot = await captureSettledScreenshot(page, screenshot);
-      const host = await sampleHost(origin, cookie);
-      const partial = {
+const captureAcceptance = async ({
+  page,
+  requests,
+  errors,
+  welcome,
+  origin,
+  cookie,
+  screenshot,
+  until,
+  expectedRoster,
+}) => {
+  const notice = { seen: (await observeFirstRun(page)).notice };
+  const started = expectedRoster
+    ? await waitCompositionInitialized(
+        page,
+        remainingMs(until, 'composition-initialized'),
+        notice.seen,
+        expectedRoster,
+      )
+    : await awaitWelcomeInit(page, welcome, until, notice);
+  const store = started.store;
+  let last = started.last;
+  let noticeSeen = started.noticeSeen || notice.seen || Boolean(last.notice);
+  assertAttribution(last);
+  if (!started.initialized) {
+    last = (await trackNotice(page, { seen: noticeSeen })).last;
+    const shot = await captureSettledScreenshot(page, screenshot);
+    const host = await sampleHost(origin, cookie);
+    out(
+      JSON.stringify({
+        mode: 'accept',
         ...unfinishedObservation(last, noticeSeen || Boolean(last.notice), host, shot, errors),
         accepted: false,
         input: unusedInput(),
         consoleErrors: errors.slice(),
-      };
-      out(JSON.stringify({ mode: 'accept', ...partial }));
-      fail('stage=initialization error=unknown', 2);
-    }
-    const settled = await settleFirstRun(
-      page,
-      Math.min(4_000, remainingMs(until, 'settle')),
-      noticeSeen,
+      }),
     );
-    last = settled.last;
-    noticeSeen = noticeSeen || settled.noticeSeen || Boolean(last.notice);
-    const input = await maybeProveInput(page, requests, last);
-    last = (await trackNotice(page, { seen: noticeSeen })).last;
-    noticeSeen = noticeSeen || Boolean(last.notice);
-    const added = errors.slice();
-    if (added.length) throw new Error(`stage=console error=${tally(added)}`);
-    const shot = await captureSettledScreenshot(page, screenshot);
-    const host = await sampleHost(origin, cookie);
-    const binding = workBoundFromHost(host);
-    const verdict = acceptVerdict(last, noticeSeen, store);
-    return {
-      accepted: acceptedFrom(binding, verdict, input),
-      ui: summarizeState(last, { ...verdict, initialized: true }),
-      host,
-      input,
-      screenshot: shot,
-      consoleErrors: added,
-      workBound: binding.workBound,
-      workBoundUnknown: binding.unknown,
-      initialized: true,
+    fail('stage=initialization error=unknown', 2);
+  }
+  const settled = await settleFirstRun(
+    page,
+    Math.min(4_000, remainingMs(until, 'settle')),
+    noticeSeen,
+  );
+  last = settled.last;
+  noticeSeen ||= settled.noticeSeen || Boolean(last.notice);
+  const input = await maybeProveInput(page, requests, last);
+  last = (await trackNotice(page, { seen: noticeSeen })).last;
+  noticeSeen ||= Boolean(last.notice);
+  if (errors.length) throw new Error(`stage=console error=${tally(errors)}`);
+  if (requests.some((row) => row.method === 'POST' && row.path === '/api/session/prompt')) {
+    throw new Error('stage=composer error=model-send');
+  }
+  const shot = await captureSettledScreenshot(page, screenshot);
+  const host = await sampleHost(origin, cookie);
+  const binding = workBoundFromHost(host);
+  const verdict = acceptVerdict(last, noticeSeen, store);
+  let bootRoster;
+  if (expectedRoster) {
+    bootRoster = await assertCompositionRoster(page, expectedRoster);
+    // No acknowledgement store exists in this declared composition. Readiness
+    // was established independently from its roster and rendered settings/session UI.
+    verdict.noNotice = !noticeSeen && !last.notice;
+  }
+  return {
+    accepted: acceptedFrom(binding, verdict, input),
+    ui: summarizeState(last, { ...verdict, initialized: true }),
+    host,
+    input,
+    screenshot: shot,
+    consoleErrors: errors.slice(),
+    workBound: binding.workBound,
+    workBoundUnknown: binding.unknown,
+    initialized: true,
+    ...(bootRoster ? { bootRoster, readiness: 'composition' } : {}),
+  };
+};
+
+const acceptObservation = async ({
+  origin,
+  cookie,
+  extraFlags,
+  screenshot,
+  browserMs,
+  composition = false,
+}) => {
+  const { chrome, page, errors, requests, welcome } = await openMappedPage({
+    origin,
+    cookie,
+    extraFlags,
+    composition,
+  });
+  try {
+    const expectedRoster = composition
+      ? await expectedCompositionRoster(env('PROBE_BASELINE_OBSERVATION'))
+      : null;
+    const runEntry = async (shot, reload = false) => {
+      const until = Date.now() + browserMs;
+      // Refresh creates a clean document; no browser storage is seeded and no
+      // notice/workspace/settings UI is clicked on either entry.
+      await navigateReady(page, origin, remainingMs(until, 'startup'), reload);
+      return await captureAcceptance({
+        page,
+        requests,
+        errors,
+        welcome,
+        origin,
+        cookie,
+        screenshot: shot,
+        until,
+        expectedRoster,
+      });
     };
-  } catch (error) {
-    await welcome?.cleanup?.();
-    throw error;
+    const first = await runEntry(screenshot);
+    if (!composition) return first;
+    const reload = await runEntry(screenshot.replace(/\.png$/, '-reload.png'), true);
+    const models = optionalEnv('PROBE_COMPOSITION_PRESERVE_MODELS');
+    let preservation;
+    if (models) {
+      if (!first.accepted || !reload.accepted) {
+        fail('stage=preservation error=first-entry-not-accepted', 2);
+      }
+      try {
+        preservation = await verifyPreservation(page, models, browserMs, requests);
+        if (errors.length) throw new Error(`stage=console error=${tally(errors)}`);
+        preservation.screenshot = await captureSettledScreenshot(
+          page,
+          screenshot.replace(/\.png$/, '-preservation.png'),
+        );
+      } catch (error) {
+        await reportDiagnostic(page, screenshot.replace(/\.png$/, '-preservation-failure.png'), {
+          value: 'homepage',
+        });
+        throw error;
+      }
+    }
+    return {
+      ...first,
+      accepted: first.accepted && reload.accepted,
+      reload,
+      ...(preservation ? { preservation } : {}),
+    };
   } finally {
     await closeMapped(page, chrome, welcome);
   }
@@ -558,6 +642,7 @@ const accept = async () => {
     extraFlags,
     screenshot,
     browserMs,
+    composition: command === 'accept-composition',
   });
   out(JSON.stringify({ mode: 'accept', ...result }));
 };
@@ -674,14 +759,32 @@ const run = async () => {
   if (command === 'exchange') await exchange();
   else if (command === 'observe') await observe();
   else if (command === 'discover') await discover();
-  else if (command === 'accept') await accept();
+  else if (command === 'accept' || command === 'accept-composition') await accept();
   else if (command === 'diff-home') await diffHomes();
   else if (command === 'snapshot-home') await snapshotHome();
-  else fail('usage: probe-first-run.mjs exchange|observe|discover|accept|diff-home', 2);
+  else if (command === 'prepare-composition') {
+    out(
+      JSON.stringify(
+        await prepareComposition({
+          home: env('PROBE_HOME'),
+          seed: env('PROBE_DISCOVER_OUT'),
+          pluginDir: env('PROBE_PLUGIN_DIR'),
+          overlay: env('PROBE_COMPOSITION_OVERLAY'),
+          fault: optionalEnv('PROBE_COMPOSITION_FAULT'),
+          extraPatch: optionalEnv('PROBE_COMPOSITION_EXTRA_PATCH'),
+        }),
+      ),
+    );
+  } else
+    fail(
+      'usage: probe-first-run.mjs exchange|observe|discover|accept|accept-composition|prepare-composition|diff-home|snapshot-home',
+      2,
+    );
 };
 run().catch((error) => {
   if (!error?.probeFail) {
     process.stderr.write(`probe-first-run: ${errorCode(error)}\n`);
-    process.exitCode ||= 1;
+    process.exitCode ||=
+      command === 'accept-composition' || command === 'prepare-composition' ? 2 : 1;
   }
 });

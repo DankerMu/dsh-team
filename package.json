@@ -24,7 +24,7 @@
     "lint:tests": "bash scripts/check-test-pairing.sh",
     "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
     "lint:agents": "bash scripts/check-agents-commands.sh",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p plugins/zh-locale/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "vitest run --project integration",
     "build": "tsc -p platform/tsconfig.build.json",

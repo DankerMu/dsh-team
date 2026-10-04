@@ -33,6 +33,11 @@ export default tseslint.config(
     },
   },
   {
+    // DSH serves this dependency-free artifact as a classic browser script.
+    files: ['plugins/*/client.js'],
+    languageOptions: { globals: { ...globals.browser } },
+  },
+  {
     files: ['**/*.ts', '**/*.tsx'],
     extends: [...tseslint.configs.strictTypeChecked, ...tseslint.configs.stylisticTypeChecked],
     languageOptions: {

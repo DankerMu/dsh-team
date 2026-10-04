@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/probe-first-run.sh — tasks 3.1–3.3. pnpm probe:first-run
-# Fresh mapped-host first-run matrix: baseline, overlay, preseed, CLI, combined.
+# Fresh mapped-host matrix: baseline, overlay, preseed, CLI, combined, composition.
 set -euo pipefail
 usage() {
   cat <<'EOF'
@@ -8,11 +8,18 @@ Usage: pnpm probe:first-run
 Starts uniquely named dsh-team Web instances with empty state/work volumes and
 a fresh Chrome profile per trial. Observes workspace readiness, Chinese UI, and
 Preview Notice independently on a non-loopback hostname mapped only inside
-Chrome. Tries managed overlay, preseeded files, then launch arguments. Prints
-the measured recipe or 无法做到. No model key is required.
+Chrome. Tries managed overlay, preseeded files, launch arguments, then the
+repo-owned locale/roster composition (first entry and refresh). Prints the
+measured recipe or 无法做到. No model key is required.
 Env: CHROME_BIN (required executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120).
+PROBE_COMPOSITION_FAULT (negative controls only): missing-plugin, wrong-plugin,
+reenabled-notice. The acceptance roster stays unchanged; each must fail.
+PROBE_COMPOSITION_EXTRA_PATCH (optional readable YAML, composition only):
+e.g. a non-secret two-model fixture for subsequent real-UI preservation checks.
+PROBE_COMPOSITION_PRESERVE_MODELS (optional): two comma-separated fixture display
+names. Exercises General settings and both model selections after refresh, before cleanup.
 EOF
 }
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }
@@ -40,9 +47,14 @@ ui="${repo_root}/scripts/probe-dsh-api-ui.mjs"
 cdp="${repo_root}/scripts/probe-dsh-api-cdp.mjs"
 lifecycle="${repo_root}/scripts/probe-dsh-api-lifecycle.sh"
 api_driver="${repo_root}/scripts/probe-dsh-api-browser.mjs"
-for f in "$seccomp" "$driver" "$ui" "$cdp" "$lifecycle" "$api_driver"; do
+composition_shell="${repo_root}/scripts/probe-first-run-composition.sh"
+composition_driver="${repo_root}/scripts/probe-first-run-composition.mjs"
+preservation_driver="${repo_root}/scripts/probe-first-run-preservation.mjs"
+for f in "$seccomp" "$driver" "$ui" "$cdp" "$lifecycle" "$api_driver" "$composition_shell" "$composition_driver" "$preservation_driver"; do
   [ -f "$f" ] || { echo "probe-first-run: missing $f" >&2; exit 2; }
 done
+# shellcheck source=scripts/probe-first-run-composition.sh
+. "$composition_shell"
 run_id="$(date +%s)-$$"
 prefix="dsh-team-probe-first-run-${run_id}"
 image="${prefix}-image"
@@ -196,6 +208,12 @@ drive_cmd() {
   local status=0
   local snap_status=0
   local reason="ok"
+  local drive_seconds=$((startup_seconds + browser_seconds + 30))
+  # Composition observes two independently bounded entries (initial + refresh).
+  if [ "$cmd" = "accept-composition" ]; then drive_seconds=$((drive_seconds + browser_seconds)); fi
+  if [ "$cmd" = "accept-composition" ] && [ -n "${PROBE_COMPOSITION_PRESERVE_MODELS:-}" ]; then
+    drive_seconds=$((drive_seconds + browser_seconds))
+  fi
   if [ "$cmd" != "discover" ]; then
     if ! snapshot_home "$name" "${workdir}/${name}/workspace-snapshot"; then
       printf '%s\n' "2" >"${workdir}/${name}/drive.status"
@@ -203,7 +221,7 @@ drive_cmd() {
       return 2
     fi
   fi
-  if probe_run_bound $((startup_seconds + browser_seconds + 30)) env \
+  if probe_run_bound "$drive_seconds" env \
     PROBE_PORT="$port" PROBE_COOKIE_FILE="${workdir}/${name}/cookie.hdr" \
     PROBE_HOME="${trial_homes[$name]}" PROBE_WORK="${trial_works[$name]}" \
     PROBE_WORKSPACE_EVIDENCE="${workdir}/${name}/workspace-snapshot/workspace-evidence.json" \
@@ -211,6 +229,7 @@ drive_cmd() {
     PROBE_PID_FILE="${workdir}/${name}/chrome.pid" PROBE_BROWSER_SECONDS="$browser_seconds" \
     PROBE_DISCOVER_BEFORE="${workdir}/${name}/before" PROBE_DISCOVER_AFTER="${workdir}/${name}/after" \
     PROBE_DISCOVER_OUT="${workdir}/preseed-files" \
+    PROBE_BASELINE_OBSERVATION="${workdir}/baseline/observe.json" \
     CHROME_BIN="$CHROME_BIN" node "$driver" "$cmd"; then
     status=0
   else
@@ -485,6 +504,8 @@ else
   cp "${workdir}/combined/drive.reason" "${evidence}/combined/drive.reason"
 fi
 
+run_composition_trial
+
 set +e
 python3 - "$workdir" "$evidence" "$probe_status" <<'PY'
 import json, pathlib, shutil, sys
@@ -548,6 +569,7 @@ methods = {
     "overlay": goal_from_accept("overlay", load(root / "overlay" / "accept.json")),
     "preseed": goal_from_accept("preseed", load(root / "preseed" / "accept.json")),
     "cli": {g: ("unsupported" if (evidence / "cli-help" / "status").exists() else "unknown") for g in goals} | {"accepted": False, "inputUsable": False},
+    "composition": goal_from_accept("composition", load(root / "composition" / "accept.json")),
 }
 combined_row = goal_from_accept("combined", load(root / "combined" / "accept.json")) if (root / "combined").exists() else None
 print("matrix")
@@ -601,7 +623,10 @@ if not recipes:
     print("无法做到: no fresh complete recipe accepted")
     sys.exit(1)
 for name in recipes:
-    print("accepted recipe=%s; locale.preference=zh; ui-settings-general.welcomeNoticeVersion=2026-09-28.1; ui-settings-models.credentialOnboarding=false" % name)
+    if name == "composition":
+        print("accepted recipe=composition; deployed @dsh-team/zh-locale; canonical patch disables only ui-settings-models; fresh entry and refresh accepted")
+    else:
+        print("accepted recipe=%s; locale.preference=zh; ui-settings-general.welcomeNoticeVersion=2026-09-28.1; ui-settings-models.credentialOnboarding=false" % name)
     print("workspace files: %s" % sorted(str(path.relative_to(root / "preseed-files")) for path in (root / "preseed-files").rglob("*") if path.is_file()))
 print("evidence=%s" % evidence)
 sys.exit(0)
