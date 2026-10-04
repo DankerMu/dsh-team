@@ -214,7 +214,7 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 
 依赖：第 4 组。
 
-- [ ] 5.1 `platform/src/audit/` 提供记录事件的函数：事件类型是一个封闭的列表（见 `audit-log` 规格“记录的事件范围”），每种类型有一份允许出现在细节里的字段白名单，白名单之外的字段被丢弃。验证：单元测试——未知事件类型被拒绝；细节里带 `password`、`token`、`cookie`、`apiKey` 字段时写入的记录里没有这些字段。
+- [x] 5.1 `platform/src/audit/` 提供记录事件的函数：事件类型是一个封闭的列表（见 `audit-log` 规格“记录的事件范围”），每种类型有一份允许出现在细节里的字段白名单，白名单之外的字段被丢弃。验证：单元测试——未知事件类型被拒绝；细节里带 `password`、`token`、`cookie`、`apiKey` 字段时写入的记录里没有这些字段。
 - [ ] 5.2 审计查询函数：按时间倒序，按事件类型、账号邮箱（作为操作者或对象）、时间范围筛选，分页。验证：单元测试（内存库）——三种筛选各自只返回匹配的记录；分页的两页不重叠也不遗漏。
 - [ ] 5.3 平台日志的脱敏：Fastify 日志配置里屏蔽 `Cookie`、`Set-Cookie`、`Authorization` 请求头和响应头，以及请求体里的密码字段。验证：集成测试——带这些头和字段发请求后，捕获的日志输出里找不到它们的原文。
 
@@ -229,6 +229,8 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - Config / project setup and Documentation / migration notes — selected: narrow audit in-memory unit-test permission in platform/AGENTS.md, no file-backed unit tests or gate changes; record runtime evidence here and flag rule-file review.
 - Concurrency / shared state / ordering, Resource limits / large input / discovery and Legacy compatibility / examples — not selected: synchronous one-row insert, no queries/retention/discovery, no prior audit writer or callers to migrate. Discarded detail values are not traversed.
 - Evidence floor: parent-observed staged RED/GREEN, `pnpm check`, strict OpenSpec validation, source and compiled file-backed smoke; three initial review seats (correctness, test-evidence+spec-compliance, security-perf).
+
+验证记录（#14）：写入tracer先缺模块RED后行为通过；封闭类型/凭据投影29个语义失败后GREEN。最终234 unit（42 audit）/15 integration及完整`pnpm check`通过，writer覆盖率100%。源/编译公共API实际文件写入、关闭重开后精确保留安全行，非法类型/结构化原因无新增行，settings保留且调用方事务回滚有效；临时数据库已清理。新增停止原因/DB错误/事务断言在实现后补齐，不声称这些断言单独先RED。业务调用方、查询和日志脱敏尚不在本项范围。
 
 ## 6. 账号（任务包 1.4）
 
