@@ -187,7 +187,7 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - Schema / columns / units / field names — selected: JSON per owned key, MiB/minutes/cores, platform tier IDs, optional model context and positive safe integers.
 - Error handling / rollback / partial outputs and Concurrency / shared state / ordering — selected: invalid patch leaves prior rows, corrupt stored values fail loudly, injected later-row SQL failure rolls back the complete patch; no cache or multi-process coordination.
 - File IO / path safety / overwrite and Release / packaging / dependency compatibility — selected: owned file DB reopen smoke through existing private open/compiled migrations; no new path handling or dependency.
-- Documentation / migration notes — selected: design boundary records units/ownership and deferred model API fields. 验证记录（#11）：`pnpm check` 114 unit/14 integration 通过；65个 settings 用例覆盖默认、部分更新、验证、损坏值、继承属性档位拒绝和事务回滚；源API及独立复制dist的真实文件库重开smoke均通过，陈旧/非JSON非本模块键保持不变，错误不回显值，临时资源已清理。
+- Documentation / migration notes — selected: design boundary records units/ownership and deferred model API fields. 验证记录（#11）：`pnpm check` 118 unit/14 integration 通过；69个 settings 用例覆盖默认、部分更新、验证、损坏值、非对象模型条目、继承属性档位拒绝和事务回滚，settings逐项覆盖率100%；源API及独立复制dist的真实文件库重开smoke均通过，非JSON非本模块键保持不变，错误不回显值，临时资源已清理。
 - Auth / permissions / secrets, Resource limits / large input / discovery and Legacy compatibility / examples — not selected: no model keys/auth, discovery or previous settings API; fractional CPU and finite bounds are value validation, not a new resource scheduler.
 
 ## 5. 审计写入（任务包 1.14 的写入部分）

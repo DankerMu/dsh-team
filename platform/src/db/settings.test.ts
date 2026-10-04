@@ -29,7 +29,6 @@ const AFTER_PARTIAL: Settings = {
   defaultPermissionTier: 'auto',
 };
 const PRIOR = { ...DEFAULTS, idleMinutes: 15 };
-
 describe('settings', () => {
   let db: Database.Database;
 
@@ -41,7 +40,6 @@ describe('settings', () => {
   afterEach(() => {
     db.close();
   });
-
   describe('readSettings', () => {
     it('returns defaults without persisting rows when no settings are stored', () => {
       expect(readSettings(db)).toEqual(DEFAULTS);
@@ -59,7 +57,6 @@ describe('settings', () => {
       expect(readSettings(db)).toEqual({ ...DEFAULTS, models: [{ name: 'alpha' }] });
     });
   });
-
   describe('writeSettings', () => {
     it('persists a valid patch, overwrites supplied fields, and leaves omitted fields unchanged', () => {
       writeSettings(db, FULL_PATCH);
@@ -83,7 +80,6 @@ describe('settings', () => {
       });
     });
   });
-
   describe('writeSettings validation', () => {
     it.each(
       INTEGER_FIELDS.flatMap((field) => BAD_INTEGERS.map((value) => [field, value] as const)),
@@ -108,6 +104,9 @@ describe('settings', () => {
       ['models', 'x'],
       ['models', 5],
       ['models', {}],
+      ['models', [null]],
+      ['models', [5]],
+      ['models', [[]]],
       ['models', [{ name: '' }]],
       ['models', [{ name: '   ' }]],
       ['models', [{ name: 5 }]],
@@ -153,7 +152,6 @@ describe('settings', () => {
       expect(readSettings(db)).toEqual(PRIOR);
     });
   });
-
   describe('readSettings corruption', () => {
     it.each([
       ['idleMinutes', '"abc"'],
@@ -163,6 +161,7 @@ describe('settings', () => {
       ['defaultPermissionTier', '"admin"'],
       ['models', '"x"'],
       ['models', '[{"name":""}]'],
+      ['models', '[null]'],
       ['idleMinutes', '{not-json-CORRUPT_SENTINEL'],
     ])('rejects stored %s corruption without echoing the raw sentinel', (field, stored) => {
       db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(field, stored);
@@ -190,7 +189,6 @@ describe('settings', () => {
       });
     });
   });
-
   describe('writeSettings atomicity', () => {
     it.each(['toString', 'constructor'])(
       'rejects prototype-inherited permission tier %s and leaves prior rows unchanged',
