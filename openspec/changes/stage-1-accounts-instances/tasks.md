@@ -174,13 +174,12 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - Schema / columns / units / field names — selected: five usable tables, explicit keys/nullable fields/millisecond timestamps, role/status/foreign-key/uniqueness constraints and query indexes.
 - Auth / permissions / secrets — selected: session rows store hash field, account references cannot be orphaned, deleting sessions cannot remove users; no secret-bearing test/log fixtures.
 - Concurrency / shared state / ordering — selected: retain existing one-batch migration transaction and replay ledger; no new multi-process behavior.
-- Resource limits / large input / discovery — not selected: one finite trusted SQL asset; existing runner discovery unchanged.
-- Legacy compatibility / examples — not selected: first business schema, no deployed prior business tables.
+- Resource limits / large input / discovery and Legacy compatibility / examples — not selected: one finite trusted SQL asset, unchanged discovery and no prior deployed business schema.
 - Error handling / rollback / partial outputs — selected: SQL rejection preserves valid rows; existing batch rollback regression retained.
 - Release / packaging / dependency compatibility — selected: root build and standalone compiled default-location smoke, no new dependency.
 - Documentation / migration notes — selected: schema decisions above, task4.3 completion/evidence; other group4 tasks remain separate.
 
-验证记录（#10）：真实内存 SQLite 逐步 RED/GREEN，重复邮箱、非法角色/状态、外键、单用户实例唯一、端口整数范围、删除平台会话不影响用户及其他用户会话均覆盖；五表数据重放不丢失、迁移记录仅一次。`pnpm check` 通过（48 unit、14 integration）。原仅 tsc 的编译产物实际调用默认迁移后报 `no such table: users`；加入 SQL 交付后，源 API 与复制到独立临时目录的 dist API 均在默认路径迁移真实文件库、写入五表、重开重放并逐行比对通过，不读取源 SQL。没有启动接线或仓储行为，临时文件均已清理。
+验证记录（#10）：真实内存 SQLite 逐步 RED/GREEN，重复邮箱、非法角色/状态、外键、单用户实例唯一、端口整数范围、删除平台会话不影响用户及其他用户会话均覆盖；审查后补充 NULL 主键、重复身份键和端口1/65535边界。五表数据重放不丢失、迁移记录仅一次。`pnpm check` 通过（49 unit、14 integration）。原仅 tsc 的编译产物实际调用默认迁移后报 `no such table: users`；加入 SQL 交付后，源 API 与复制到独立临时目录的 dist API 均在默认路径迁移真实文件库、写入五表、重开重放并逐行比对通过，不读取源 SQL。没有启动接线或仓储行为，临时文件均已清理。
 
 ## 5. 审计写入（任务包 1.14 的写入部分）
 

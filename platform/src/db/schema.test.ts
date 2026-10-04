@@ -68,6 +68,11 @@ const PRESTART_NULLS = {
   last_activity_at: null,
   last_error: null,
 };
+const STOPPED_INSTANCE = {
+  user_id: ORIGINAL_USER.id,
+  status: 'stopped',
+  ...PRESTART_NULLS,
+};
 
 const FIRST_USER_SESSION_A = {
   token_hash: 'token-hash-placeholder-a',
@@ -105,14 +110,7 @@ describe('initial schema', () => {
     insert.run(ORIGINAL_USER);
 
     expect(() => {
-      insert.run({
-        id: 'mnopqrstuvwx',
-        email: ORIGINAL_USER.email,
-        password_hash: 'password-hash-placeholder-other',
-        role: 'admin',
-        status: 'disabled',
-        created_at: 1_700_000_000_001,
-      });
+      insert.run({ ...ADMIN_DISABLED_USER, email: ORIGINAL_USER.email });
     }).toThrow(/UNIQUE constraint failed: users\.email/);
 
     expect(db.prepare(SELECT_USERS).all()).toEqual([ORIGINAL_USER]);
@@ -124,12 +122,10 @@ describe('initial schema', () => {
 
     expect(() => {
       insert.run({
+        ...ORIGINAL_USER,
         id: 'zzzzzzzzzzzz',
         email: 'other@example.com',
-        password_hash: ORIGINAL_USER.password_hash,
         role: 'manager',
-        status: ORIGINAL_USER.status,
-        created_at: ORIGINAL_USER.created_at,
       });
     }).toThrow(/CHECK constraint failed/);
 
@@ -160,10 +156,9 @@ describe('initial schema', () => {
 
     expect(() => {
       insertSession.run({
+        ...SECOND_USER_SESSION,
         token_hash: 'token-hash-placeholder-orphan',
         user_id: 'zzzzzzzzzzzz',
-        created_at: 1_700_000_000_016,
-        last_activity_at: 1_700_000_000_017,
       });
     }).toThrow(/FOREIGN KEY constraint failed/);
 
@@ -180,11 +175,7 @@ describe('initial schema', () => {
     db.prepare(INSERT_USER).run(ORIGINAL_USER);
     db.prepare(INSERT_INSTANCE).run(ORIGINAL_USER.id, 'stopped');
 
-    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual({
-      user_id: ORIGINAL_USER.id,
-      status: 'stopped',
-      ...PRESTART_NULLS,
-    });
+    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual(STOPPED_INSTANCE);
 
     db.prepare(
       'UPDATE instances SET status = ?, upstream_host = ?, upstream_port = ? WHERE user_id = ?',
@@ -197,6 +188,16 @@ describe('initial schema', () => {
       upstream_host: '127.0.0.1',
       upstream_port: 3080,
     });
+
+    for (const port of [1, 65_535]) {
+      db.prepare('UPDATE instances SET upstream_port = ? WHERE user_id = ?').run(
+        port,
+        ORIGINAL_USER.id,
+      );
+      expect(
+        db.prepare('SELECT upstream_port FROM instances WHERE user_id = ?').get(ORIGINAL_USER.id),
+      ).toEqual({ upstream_port: port });
+    }
 
     for (const status of ['starting', 'error', 'stopped'] as const) {
       db.prepare('UPDATE instances SET status = ? WHERE user_id = ?').run(status, ORIGINAL_USER.id);
@@ -232,11 +233,7 @@ describe('initial schema', () => {
       }).toThrow(/CHECK constraint failed/);
     }
 
-    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual({
-      user_id: ORIGINAL_USER.id,
-      status: 'stopped',
-      ...PRESTART_NULLS,
-    });
+    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual(STOPPED_INSTANCE);
   });
 
   it('stores a setting and anonymous plus unknown-email audit snapshots', () => {
@@ -259,15 +256,49 @@ describe('initial schema', () => {
 
     expect(db.prepare(SELECT_USERS).all()).toEqual([ORIGINAL_USER]);
     expect(db.prepare(SELECT_SESSIONS).all()).toEqual([FIRST_USER_SESSION_A]);
-    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual({
-      user_id: ORIGINAL_USER.id,
-      status: 'stopped',
-      ...PRESTART_NULLS,
-    });
+    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual(STOPPED_INSTANCE);
     expect(db.prepare(SELECT_SETTING).get(MODEL_ENDPOINT.key)).toEqual(MODEL_ENDPOINT);
     expect(db.prepare(SELECT_AUDIT).all()).toEqual([ANONYMOUS_AUDIT]);
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: 1 },
     ]);
+  });
+
+  it('rejects null and duplicate identity keys without overwriting valid rows', () => {
+    db.prepare(INSERT_USER).run(ORIGINAL_USER);
+    db.prepare(INSERT_SESSION).run(FIRST_USER_SESSION_A);
+    db.prepare(INSERT_INSTANCE).run(ORIGINAL_USER.id, 'stopped');
+    db.prepare(INSERT_SETTING).run(MODEL_ENDPOINT.key, MODEL_ENDPOINT.value);
+
+    expect(() => {
+      db.prepare(INSERT_USER).run({ ...ORIGINAL_USER, id: null, email: 'null-id@example.com' });
+    }).toThrow(/NOT NULL constraint failed: users\.id/);
+    expect(() => {
+      db.prepare(INSERT_SESSION).run({ ...FIRST_USER_SESSION_A, token_hash: null });
+    }).toThrow(/NOT NULL constraint failed: platform_sessions\.token_hash/);
+    expect(() => {
+      db.prepare(INSERT_INSTANCE).run(null, 'stopped');
+    }).toThrow(/NOT NULL constraint failed: instances\.user_id/);
+    expect(() => {
+      db.prepare(INSERT_SETTING).run(null, MODEL_ENDPOINT.value);
+    }).toThrow(/NOT NULL constraint failed: settings\.key/);
+
+    expect(() => {
+      db.prepare(INSERT_USER).run({ ...ORIGINAL_USER, email: 'dup-id@example.com' });
+    }).toThrow(/UNIQUE constraint failed: users\.id/);
+    expect(() => {
+      db.prepare(INSERT_SESSION).run({
+        ...FIRST_USER_SESSION_A,
+        created_at: 1_700_000_000_099,
+      });
+    }).toThrow(/UNIQUE constraint failed: platform_sessions\.token_hash/);
+    expect(() => {
+      db.prepare(INSERT_SETTING).run(MODEL_ENDPOINT.key, 'other-value');
+    }).toThrow(/UNIQUE constraint failed: settings\.key/);
+
+    expect(db.prepare(SELECT_USERS).all()).toEqual([ORIGINAL_USER]);
+    expect(db.prepare(SELECT_SESSIONS).all()).toEqual([FIRST_USER_SESSION_A]);
+    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual(STOPPED_INSTANCE);
+    expect(db.prepare(SELECT_SETTING).get(MODEL_ENDPOINT.key)).toEqual(MODEL_ENDPOINT);
   });
 });

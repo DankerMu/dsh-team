@@ -110,8 +110,4 @@
 
 ## Issue #10 fixture
 
-- Issue type: feature; fixture level: expanded, matching the upstream persistence/schema risk.
-- Scope: task4.3 only, one numbered SQL migration and real-memory constraint tests; minimal root build-command asset copy is necessary to ship the same SQL beside compiled db code.
-- Must preserve: existing migration transaction/replay/error behavior, private database files, module boundary and unchanged HTTP/startup behavior.
-- Evidence: parent-observed semantic RED/GREEN; real constraints and retained data after replay; source and compiled default-location migration smoke with file-backed reopen; full `pnpm check`.
-- Risk packs and exclusions are mapped in tasks.md. No settings defaults/repositories (#11), startup wiring (#12), or account/audit business logic.
+- Feature; expanded fixture for task4.3 persistence/schema risk. Scope, must-preserve behavior, required evidence and exclusions are specified in the Issue #10 design boundary and tasks risk map, including necessary compiled SQL asset delivery.
