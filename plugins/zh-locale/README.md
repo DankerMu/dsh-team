@@ -81,8 +81,11 @@ clicking settings/dismissal/setup UI. `accept.json` contains both entry results;
 
 Expected counterexamples:
 
-- `missing-plugin`: no package bytes are installed; launch/registration must
-  fail (`start-or-registration`, nonzero).
+- `missing-plugin`: no package bytes are installed. The pinned release still
+  launches; the probe rejects the delivered roster with
+  `stage=composition error=roster-mismatch` (nonzero, harness-inconclusive).
+  Production wiring must verify registration/roster rather than assuming that
+  a missing overlay-inserted plugin makes DSH fail at launch.
 - `wrong-plugin`: disposable client bytes register a different loader id while
   the manifest still advertises the expected package; registration/activation,
   console, or rendered-readiness checks must reject it (nonzero). A plausible
