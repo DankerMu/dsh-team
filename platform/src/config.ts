@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 
 type LogLevel = (typeof LOG_LEVELS)[number];
@@ -7,6 +9,10 @@ export interface PlatformConfig {
   readonly port: number;
   readonly logLevel: LogLevel;
   readonly dataDir: string;
+  readonly publicUrl: string;
+  readonly authority: string;
+  readonly cookieSecure: boolean;
+  readonly trustedProxies: readonly string[];
 }
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -40,15 +46,92 @@ function parseDataDir(raw: string): string {
   return raw;
 }
 
+function rejectPublicUrl(): never {
+  throw new Error('PLATFORM_PUBLIC_URL must be an absolute HTTP(S) origin');
+}
+
+function rejectRawPublicUrl(raw: string): void {
+  const framed = /^(https?):\/\/([^/]+)(\/)?$/i.exec(raw);
+  const authority = framed?.[2];
+  if (framed === null || authority === undefined || authority.endsWith(':')) {
+    rejectPublicUrl();
+  }
+  for (let index = 0; index < raw.length; index += 1) {
+    const code = raw.charCodeAt(index);
+    if (code <= 32 || code === 127) {
+      rejectPublicUrl();
+    }
+  }
+  if (/[\s\\?#@]/.test(raw)) {
+    rejectPublicUrl();
+  }
+}
+
+function parsePublicUrl(raw: string | undefined): URL {
+  if (raw === undefined) {
+    throw new Error('PLATFORM_PUBLIC_URL is required');
+  }
+  rejectRawPublicUrl(raw);
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    rejectPublicUrl();
+  }
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username !== '' ||
+    url.password !== '' ||
+    url.search !== '' ||
+    url.hash !== '' ||
+    url.pathname !== '/' ||
+    url.port === '0' ||
+    url.hostname === ''
+  ) {
+    rejectPublicUrl();
+  }
+  return url;
+}
+
+function parseCookieSecure(raw: string | undefined): boolean {
+  if (raw === undefined || raw === 'false') {
+    return false;
+  }
+  if (raw === 'true') {
+    return true;
+  }
+  throw new Error('PLATFORM_COOKIE_SECURE must be exactly true or false');
+}
+
+function parseTrustedProxies(raw: string | undefined): readonly string[] {
+  if (raw === undefined || raw.trim() === '') {
+    return [];
+  }
+  const members = raw.split(',');
+  for (let index = 0; index < members.length; index += 1) {
+    const member = members[index]?.trim() ?? '';
+    if (member === '' || isIP(member) === 0) {
+      throw new Error('PLATFORM_TRUSTED_PROXIES must be a comma-separated list of IP addresses');
+    }
+    members[index] = member;
+  }
+  return members;
+}
+
 /**
  * Resolve the platform configuration from environment variables.
  * Invalid values throw at startup; they are never replaced by a default.
  */
 export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
+  const publicOrigin = parsePublicUrl(env.PLATFORM_PUBLIC_URL);
   return {
     host: env.PLATFORM_HOST ?? DEFAULT_HOST,
     port: parsePort(env.PLATFORM_PORT ?? DEFAULT_PORT),
     logLevel: parseLogLevel(env.PLATFORM_LOG_LEVEL ?? DEFAULT_LOG_LEVEL),
     dataDir: parseDataDir(env.PLATFORM_DATA_DIR ?? DEFAULT_DATA_DIR),
+    publicUrl: publicOrigin.origin,
+    authority: publicOrigin.host,
+    cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),
+    trustedProxies: parseTrustedProxies(env.PLATFORM_TRUSTED_PROXIES),
   };
 }

@@ -313,7 +313,16 @@ describe('platform startup on a real database file', () => {
     expect(db.open).toBe(true);
 
     const app = await buildApp(
-      { host: '127.0.0.1', port: 0, logLevel: 'silent', dataDir: dir },
+      {
+        host: '127.0.0.1',
+        port: 0,
+        logLevel: 'silent',
+        dataDir: dir,
+        publicUrl: 'http://127.0.0.1',
+        authority: '127.0.0.1',
+        cookieSecure: false,
+        trustedProxies: [],
+      },
       db,
     );
     await app.close();
