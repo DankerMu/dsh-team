@@ -150,6 +150,20 @@ Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回�
 Suggested fixture level: expanded - 新建持久化表结构和迁移机制，后续每个模块都依赖它
 Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器和它们的测试，约 250 行；此时没有任何迁移文件，平台行为不变）
 
+### Issue #9 risk/evidence map (tasks 4.1–4.2 only)
+
+- Public API / CLI / script entry — selected: `db/index.ts` exports exercised by a direct real-SQLite smoke; no new route, unchanged health smoke.
+- Config / project setup — selected: data-directory default/explicit/invalid environment cases, all typed callers updated without adding startup database side effects.
+- File IO / path safety / overwrite — selected: private file creation and reopen under permissive umask, owned temporary-directory cleanup, no unrelated chmod/delete.
+- Schema / columns / units / field names — selected: numeric migration identity/order, idempotent ledger, duplicate/invalid filename rejection; business schema deferred to #10.
+- Auth / permissions / secrets — selected: database mode 0600 before writes; inspect SQLite WAL sidecar permissions while open; no credentials in fixtures/logs.
+- Concurrency / shared state / ordering — selected: one synchronous transaction for the complete pending batch and ledger; preserve earlier committed migrations on a later batch failure. Multi-process startup is not claimed.
+- Resource limits / large input / discovery — selected: trusted finite migration directory, file reads before mutation, close connections on failure and after tests; no background process.
+- Legacy compatibility / examples — not selected: no prior database module or database-format migration exists; unchanged config consumers covered by config tests/typecheck.
+- Error handling / rollback / partial outputs — selected: invalid SQL in a later pending file rolls back all pending DDL/data and records; default absence versus explicit bad directory distinguished.
+- Release / packaging / dependency compatibility — selected: pinned better-sqlite3 with Node24 native load, pnpm build allowlist and generator-only lockfile; `pnpm check` and same-head CI.
+- Documentation / migration notes — selected: memory-SQLite unit exception and env example, public ownership/transaction contract; task4.5 owns deferred-control removal and root verification-matrix update.
+
 ## 5. 审计写入（任务包 1.14 的写入部分）
 
 依赖：第 4 组。
