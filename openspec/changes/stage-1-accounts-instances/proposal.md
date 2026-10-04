@@ -107,3 +107,7 @@
 - Selected risk packs: all except Legacy compatibility / examples; precise scope and evidence are mapped under tasks 4.1–4.2.
 - Evidence floor: parent-observed RED/GREEN, real in-memory SQLite constraint and rollback cases, temporary file mode/WAL/reopen integration, direct public-API smoke and `pnpm check`.
 - Boundary: no business migration files or HTTP/startup database wiring; tasks 4.3–4.6 remain separate. The task 4.5 `integration_tests_real_db` deferral removal stays with #12.
+
+## Issue #10 fixture
+
+- Feature; expanded fixture for task4.3 persistence/schema risk. Scope, must-preserve behavior, required evidence and exclusions are specified in the Issue #10 design boundary and tasks risk map, including necessary compiled SQL asset delivery.

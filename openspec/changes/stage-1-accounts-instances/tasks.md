@@ -142,7 +142,7 @@ Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回�
 
 - [x] 4.1 加入 better-sqlite3 依赖，在 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies` 里登记；`platform/src/db/` 提供打开数据库的函数（开启外键和 WAL，数据库文件权限 0600）。配置项 `PLATFORM_DATA_DIR` 加进 `config.ts` 和 `.env.example`。在 `platform/AGENTS.md` 写明单元测试可以用内存 SQLite。验证：单元测试——内存库上外键约束生效；集成测试——在临时目录打开数据库，文件权限为 0600；`pnpm lint:deps` 通过（只有 `db` 引用驱动）。
 - [x] 4.2 迁移执行器：按编号读取 `platform/src/db/migrations/` 下的 SQL 文件，在一个事务里应用未应用的部分并记入 `schema_migrations`。验证：单元测试（内存库）——空库全量应用成功；再次执行不重复应用；一个迁移里有错误语句时整批回滚、`schema_migrations` 不变。
-- [ ] 4.3 第一份迁移：`users`、`platform_sessions`、`instances`（含上游地址和端口）、`settings`、`audit_events` 五张表及索引和约束（邮箱唯一、角色和状态的取值约束、外键）。验证：单元测试——重复邮箱插入失败、非法角色插入失败、删除用户的平台会话行不影响用户行。
+- [x] 4.3 第一份迁移：`users`、`platform_sessions`、`instances`（含上游地址和端口）、`settings`、`audit_events` 五张表及索引和约束（邮箱唯一、角色和状态的取值约束、外键）。验证：单元测试——重复邮箱插入失败、非法角色插入失败、删除用户的平台会话行不影响用户行。
 - [ ] 4.4 `settings` 的读写函数和默认值（空闲 30 分钟、2 核、4G、同时运行 60、默认权限档 Yolo；模型清单每项是模型名加可选的上下文窗口）。验证：单元测试——空库读到默认值；写入后读到新值；非法取值（负数、未知档位、上下文窗口不是正整数）被拒绝。
 - [ ] 4.5 平台启动时打开数据库并应用迁移；`buildApp` 接收数据库句柄。删除 `constraints.yaml` 里 `integration_tests_real_db` 这条延后项，在 `AGENTS.md` 验证矩阵里补上数据库一行。验证：集成测试——重新打开同一数据库文件后数据还在；`pnpm e2e` 通过且数据目录里生成了数据库文件；`pnpm check` 通过。
 - [ ] 4.6 基础配置项：平台对外地址、cookie 仅 HTTPS 发送、受信代理列表（默认为空）。加进 `config.ts` 和 `.env.example`；对外地址缺失或不合法时启动失败并指名该项；从对外地址导出 authority 供后续模块使用。验证：单元测试——三项各自的合法和非法取值；缺少对外地址时错误信息含该变量名（`deployment` 规格“配置项明确且缺失时启动失败”的“缺少对外地址”场景）。
@@ -165,6 +165,21 @@ Minimal mergeable slice: 4.1 加 4.2（驱动、打开函数、迁移执行器�
 - Documentation / migration notes — selected: memory-SQLite unit exception and env example, public ownership/transaction contract; task4.5 owns deferred-control removal and root verification-matrix update.
 
 验证记录（#9）：`openDatabase` / `applyMigrations` 经 `db/index.ts` 导出。37 个单元测试、8 个集成测试和 `pnpm check` 通过，所有有逻辑的源文件逐文件覆盖率 100%。真实独立 API smoke 在 Node 24.13.1 / SQLite 3.53.4 上验证主文件及 WAL/SHM 均为 0600、WAL/外键开启、2→10 数字顺序、重放不重复、后续失败同时回滚数据/DDL/迁移记录、关闭重开保留数据。默认目录存在但某个 SQL 文件缺失的真实反例先失败；修复 ENOENT 捕获范围后拒绝缺失文件，只有默认目录本身缺失视为空集。配置项先 RED 后 GREEN；新 API 的初始缺失属于 setup RED，另有原生驱动 0644/delete 及逐文件事务残留数据的独立负对照。实际 HTTP health smoke 通过，配置数据目录未被创建，证实 #12 的启动接线尚未提前实现。
+
+### Issue #10 risk/evidence map (task 4.3 only)
+
+- Public API / CLI / script entry — selected: existing default `applyMigrations(db)` path in source and compiled API smoke.
+- Config / project setup — selected: root build copies SQL into generated db directory; no environment/startup change.
+- File IO / path safety / overwrite — selected: replace only generated SQL output; smoke uses owned temporary DB and cleanup.
+- Schema / columns / units / field names — selected: five usable tables, explicit keys/nullable fields/millisecond timestamps, role/status/foreign-key/uniqueness constraints and query indexes.
+- Auth / permissions / secrets — selected: session rows store hash field, account references cannot be orphaned, deleting sessions cannot remove users; no secret-bearing test/log fixtures.
+- Concurrency / shared state / ordering — selected: retain existing one-batch migration transaction and replay ledger; no new multi-process behavior.
+- Resource limits / large input / discovery and Legacy compatibility / examples — not selected: one finite trusted SQL asset, unchanged discovery and no prior deployed business schema.
+- Error handling / rollback / partial outputs — selected: SQL rejection preserves valid rows; existing batch rollback regression retained.
+- Release / packaging / dependency compatibility — selected: root build and standalone compiled default-location smoke, no new dependency.
+- Documentation / migration notes — selected: schema decisions above, task4.3 completion/evidence; other group4 tasks remain separate.
+
+验证记录（#10）：真实内存 SQLite 逐步 RED/GREEN，重复邮箱、非法角色/状态、外键、单用户实例唯一、端口整数范围、删除平台会话不影响用户及其他用户会话均覆盖；审查后补充 NULL 主键、重复身份键和端口1/65535边界。五表数据重放不丢失、迁移记录仅一次。`pnpm check` 通过（49 unit、14 integration）。原仅 tsc 的编译产物实际调用默认迁移后报 `no such table: users`；加入 SQL 交付后，源 API 与复制到独立临时目录的 dist API 均在默认路径迁移真实文件库、写入五表、重开重放并逐行比对通过，不读取源 SQL。没有启动接线或仓储行为，临时文件均已清理。
 
 ## 5. 审计写入（任务包 1.14 的写入部分）
 

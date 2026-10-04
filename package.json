@@ -27,7 +27,7 @@
     "typecheck": "tsc --noEmit && tsc -p plugins/zh-locale/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "vitest run --project integration",
-    "build": "tsc -p platform/tsconfig.build.json",
+    "build": "tsc -p platform/tsconfig.build.json && rm -rf platform/dist/db/migrations && cp -R platform/src/db/migrations platform/dist/db/migrations",
     "contract:write": "node platform/scripts/openapi.ts --write",
     "contract:check": "node platform/scripts/openapi.ts --check",
     "duplicate-code": "jscpd platform --threshold \"$(node scripts/constraints.mjs anti_drift duplicate_code_threshold_percent)\"",
