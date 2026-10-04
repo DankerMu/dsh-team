@@ -113,26 +113,27 @@ Minimal mergeable slice: atomic - 2.1 的路径清单是 2.2 的输入，结论�
 
 - [x] 3.1 新建 `scripts/probe-first-run.sh`：用空状态卷起实例，记录首次打开界面时是否需要选择或创建工作区、界面语言、是否弹出公告。验证：脚本输出这三项的现状。
 - [x] 3.2 在探针里依次尝试用受管覆盖层、预置配置目录里的文件、启动参数三种办法，使新实例首次打开即可输入、界面为中文、没有公告；记录每种办法是否生效。验证：输出里三项各有一种生效的办法，或明确写“无法做到”及现象。
+- [ ] 3.2a 按项目方 2026-10-04 “扩大到插件或镜像定制”的选择，增加本仓库客户端插件与受支持的 roster 组合候选；不修改 DSH 源码，不降低原验收。验证：非 loopback hostname、English navigator、全新状态和浏览器下，工作区绑定 `/data/work`、界面中文、初始化完成后无公告、输入及清除标记成功；刷新后重复通过。模型切换及 General 设置仍可用，错误/缺失插件或恢复公告组件的反例被拒绝；不靠探针点击或改设置取得通过。
 - [ ] 3.3 把结论写回 `design.md` 决定 10、12 和 Open Questions 第三条。三项都能做到：写出具体做法（哪个配置键或哪个文件）。有一项做不到：停下来把现象交项目方确认；确认后在同一个 PR 里改写 `instance-lifecycle` 规格“新实例可以直接使用”的要求和场景。验证：这三处写出具体做法；有做不到的项时 PR 描述里有项目方的确认，且规格与设计一致。
 
-Suggested fixture level: compact - 只新增一个探测脚本和文档结论
+Suggested fixture level: expanded - 经用户批准扩展到客户端插件、组件组合和真实浏览器验收；保留最初三种方法的实测
 Minimal mergeable slice: atomic - 三步是一条探测链，只有结论写回才有可合入的产出
 
-验证记录（#8）：VPS 非 loopback hostname + English navigator 的修正矩阵中，预置文件/组合方法选中并绑定 `/data/work`，中文和 Preview Notice 抑制均未生效，明确输出“无法做到”；这是有效的受限方法结果，不是普遍不可定制的结论。loopback 校准保留相同配方字段和工作区存储结构，使用同一接受驱动得到 `accepted: true`、中文、无公告、输入及清除标记成功；该单试验控制不冒充完整平台矩阵。延迟实际 onboarding 初始化 10 秒时不会提前认定无公告；超时与 post-snapshot 故障都保留为 harness-inconclusive。3.3 保持未完成，原规格不改，等待项目方对现象和后续机制/偏离的决定。
+验证记录（#8）：VPS 非 loopback hostname + English navigator 的原三方法矩阵中，预置文件/组合方法选中并绑定 `/data/work`，中文和 Preview Notice 抑制均未生效，明确输出“无法做到”；这是有效的受限方法结果，不是普遍不可定制的结论。loopback 校准使用同一接受驱动通过全部判据；不冒充平台矩阵。延迟初始化、超时与 post-snapshot 故障的证据保留。项目方于 2026-10-04 选择“扩大到插件或镜像定制”，授权 3.2a，不批准需求偏离；3.3 仍未完成，原规格不改。
 
-### Issue #8 risk/evidence map (tasks 3.1–3.3 only)
+### Issue #8 risk/evidence map (tasks 3.1–3.3, including approved 3.2a)
 
-- Public API / CLI / script entry — selected: root probe command prints baseline and all three method outcomes for workspace/language/notice; invalid prerequisites fail.
-- Config / project setup — selected: exact pinned-release keys/files/arguments and fresh combined-recipe UI run; no inferred success.
+- Public API / CLI / script entry — selected: root probe command prints baseline, all three original method outcomes and the composition candidate for workspace/language/notice; invalid prerequisites fail.
+- Config / project setup — selected: exact pinned-release keys/files/arguments and deployed plugin/patch identity; fresh combined-recipe UI run and reload; no inferred success.
 - File IO / path safety / overwrite — selected: fresh owned state/work volumes and browser profile per trial; whole-file preseed/overlay; independent cleanup query.
 - Schema / columns / units / field names — selected: record concrete released settings namespace/key and persisted data shape from discovery, then verify by fresh launch.
-- Auth / permissions / secrets — selected: internal Host-bound token/cookie exchange, non-root instance, no credentials or content in diagnostic artifacts.
-- Concurrency / shared state / ordering — selected: await async app/settings/notice readiness; no cross-trial state or automatic UI setup masking candidate failure.
+- Auth / permissions / secrets — selected: internal Host-bound token/cookie exchange, non-root instance, no credentials or content in diagnostic artifacts; no native ownership or loopback spoofing, no model-setting privilege escalation.
+- Concurrency / shared state / ordering — selected: await real app/settings/notice readiness, including independently established composition readiness when the notice component is absent; no cross-trial state or automatic UI setup masking candidate failure.
 - Resource limits / large input / discovery — selected: bounded launch/browser/cleanup; only allowlisted first-run observations and scoped state differences.
 - Legacy compatibility / examples — not selected: no older first-run probe exists; shared #7 entrypoint is instead covered by the required regression evidence.
 - Error handling / rollback / partial outputs — selected: failure/interruption cleanup and explicit unknown/unsupported versus “无法做到”; no unapproved fallback.
-- Release / packaging / dependency compatibility — selected: actual npm `0.2.0-rc.2` and giap-vps Docker/Chrome; real release CLI help/parser establishes unsupported flags.
-- Documentation / migration notes — selected: decisions 10/12/OQ3 name the tested recipe; preserve first-entry spec unless project party explicitly approves an impossibility fallback.
+- Release / packaging / dependency compatibility — selected: actual npm `0.2.0-rc.2` and giap-vps Docker/Chrome; released CLI help/parser establishes unsupported flags; same repo-owned plugin bytes loaded through the released loader; unexpected version/roster fails, and composer model-selection plus General settings survive composition.
+- Documentation / migration notes — selected: decisions 10/12/OQ3 name the tested recipe and project approval; unchanged first-entry requirements; #27/#29 consume the canonical plugin/patch rather than reimplementing it.
 - Authority/locale attribution control: baseline and every adopted recipe use a non-loopback test hostname mapped only inside Chrome to the loopback published port; report/assert hostname and English navigator language. Loopback discoveries are not accepted as gateway-authority success.
 
 ## 4. 数据库和基础配置（任务包 1.3 的剩余部分）
