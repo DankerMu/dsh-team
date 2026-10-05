@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import {
@@ -21,6 +22,14 @@ const REGISTER_EMAIL = 'user@example.com';
 const LOGIN_EMAIL = '  User@Example.com  ';
 const PASSWORD = ' PassW0rd ';
 const UNKNOWN_TOKEN = 'b'.repeat(64);
+const BACKDATE_ACTIVITY =
+  'UPDATE platform_sessions SET last_activity_at = last_activity_at - ? WHERE token_hash = ?';
+
+interface LogoutRejectionCase {
+  label: string;
+  cookieFor: (loginToken: string) => string | undefined;
+  expirePresented: boolean;
+}
 
 async function registerAndLogin(
   app: FastifyInstance,
@@ -100,14 +109,33 @@ describe('POST /_platform/api/logout', () => {
     },
   );
 
-  it.each([
-    ['missing', undefined],
-    ['unknown', `platform_session=${UNKNOWN_TOKEN}`],
-  ] as const)(
-    'returns 401 for a %s cookie without audit, cookie, or session side effects',
-    async (_label, cookie) => {
+  it.each<LogoutRejectionCase>([
+    {
+      label: 'missing',
+      cookieFor: () => undefined,
+      expirePresented: false,
+    },
+    {
+      label: 'unknown',
+      cookieFor: () => `platform_session=${UNKNOWN_TOKEN}`,
+      expirePresented: false,
+    },
+    {
+      label: 'expired',
+      cookieFor: (loginToken) => `platform_session=${loginToken}`,
+      expirePresented: true,
+    },
+  ])(
+    'returns 401 for a $label cookie without audit, cookie, or session side effects',
+    async ({ cookieFor, expirePresented }) => {
       await withApp(async (app, database) => {
-        await registerAndLogin(app);
+        const { user, registerToken, loginToken } = await registerAndLogin(app);
+        if (expirePresented) {
+          database
+            .prepare(BACKDATE_ACTIVITY)
+            .run(8 * 86_400_000, createHash('sha256').update(loginToken).digest('hex'));
+        }
+        const cookie = cookieFor(loginToken);
         const before = snapshotAuthState(database);
         expect(tableCounts(database)).toEqual({ users: 1, sessions: 2, audits: 2 });
 
@@ -122,6 +150,7 @@ describe('POST /_platform/api/logout', () => {
         expect(cookieHeaders(logout)).toEqual([]);
         expect(snapshotAuthState(database)).toEqual(before);
         expect(tableCounts(database)).toEqual({ users: 1, sessions: 2, audits: 2 });
+        expect(validateSession(database, registerToken, Date.now())).toBe(user.id);
         expect(
           queryAuditEvents(database, { page: 1, pageSize: 10, eventType: 'logout.succeeded' }),
         ).toEqual([]);
