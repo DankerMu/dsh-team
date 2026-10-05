@@ -151,3 +151,7 @@
 ## Issue #20 fixture
 
 - Feature; expanded task6.5 (agree with upstream): source attribution across a configured proxy trust boundary and persisted auth audits. Wrong attribution enables spoofed audit identities and future rate-limit keys. Preserve HTTP/session/password contracts; risk packs and evidence are mapped below task6.5. No global proxy mode or throttling in this slice.
+
+## Issue #21 fixture
+
+- Feature; expanded task6.6 (agree with upstream): per-email/source in-memory login-failure state, asynchronous verification ordering and public429 contract. Reuse canonical source attribution and existing login audits; no global account lockout, persistence, new configuration or rate-limit dependency.

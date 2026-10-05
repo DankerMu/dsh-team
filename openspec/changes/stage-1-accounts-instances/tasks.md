@@ -318,6 +318,16 @@ Review 修复（#19）：新增未知邮箱有效长度密码的真实 scrypt �
 
 Review 修复（#20）：原生规范化丢弃 IPv6 zone，父进程确认 `%eth0` 配置错误信任 `%eth1`/无 scope 对端。新增六项语义失败后改为保留 scope 的单一规范地址集合；不拒绝已接受配置，不把 scoped mapped IPv6 造成为无效的 IPv4%zone。受信遍历中的 scoped XFF 安全回退，未受信边界左侧仍忽略。补齐受信代理下的真实密码验证竞态失败审计和冲突转发头优先级。最终 384 unit / 36 integration、完整检查及源/编译 scope 边界与真实 TCP 文件库 smoke 通过（2.54% 重复率）；scope 证据不宣称真实跨网卡利用或部署验证。
 
+### Issue #21 risk/evidence map (task 6.6 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names, Auth / permissions / secrets — selected: exact429 contract, safe failure audit and no cookie/session; normalized-email plus canonical-source isolation, unknown/wrong/disabled/recheck counting and no secret echo.
+- Concurrency / shared state / ordering — selected: per-app window state, exact900000ms expiry, no success reset or blocked extension; real-scrypt overlap proves no lost failures and no held success after threshold. Restart clears only limiter state.
+- Error handling / rollback / partial outputs — selected: validation400/internal500 do not count; failed audit/session persistence retains rollback;429 audit failure does not clear a live limit. Existing sessions remain valid.
+- Resource limits / large input / discovery — selected: pre-derivation rejection after threshold, bounded stale-entry lifetime with opportunistic cleanup and no per-key timers/live-key eviction. Global active-key quotas and #126 email compatibility are explicit non-goals.
+- Config / project setup, Legacy compatibility / examples, Documentation / migration notes — selected only for existing app/plugin/test-clock integration, unchanged configuration and documented window interpretation; no new env, dependency, state schema or compatibility shim.
+- Release / packaging / dependency compatibility, File IO / path safety / overwrite — selected for source/compiled owned file-DB realHTTP recovery/restart smoke and cleanup; no production filesystem changes.
+- Evidence floor: parent semantic tracer RED, controlled-Date realTCP scenarios and crypto overlap oracle, full checks plus contract generation, strict OpenSpec, source/compiled smoke. Three expanded seats; implementation may not weaken this fixture to clear a finding.
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。
