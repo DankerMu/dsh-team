@@ -6,6 +6,7 @@ import { ERROR_RESPONSE_SCHEMA, rejectInvalidCredentialBody } from './credential
 import { hashPassword } from './password.ts';
 import { formatSessionCookie } from './session-cookie.ts';
 import { createSession } from './session.ts';
+import type { SourceAddressResolver } from './source-address.ts';
 
 const USER_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const USER_ID_LENGTH = 12;
@@ -37,6 +38,7 @@ const REGISTER_SUCCESS_SCHEMA = {
 interface RegistrationOptions extends FastifyPluginOptions {
   database: DatabaseHandle;
   cookieSecure: boolean;
+  resolveSourceAddress: SourceAddressResolver;
 }
 
 interface RegistrationBody {
@@ -115,7 +117,13 @@ export const registrationRoutes: FastifyPluginCallback<RegistrationOptions> = (
       const id = generateUserId();
       const passwordHash = await hashPassword(request.body.password);
       const now = Date.now();
-      const token = persistRegistration(id, email, passwordHash, now, request.ip);
+      const token = persistRegistration(
+        id,
+        email,
+        passwordHash,
+        now,
+        options.resolveSourceAddress(request),
+      );
       if (token === null) {
         return reply.code(409).send({
           statusCode: 409,

@@ -114,13 +114,14 @@ export function snapshotAuthState(database: DatabaseHandle): {
 export async function withApp(
   run: (app: FastifyInstance, database: DatabaseHandle, lines: string[]) => Promise<void>,
   cookieSecure = false,
+  trustedProxies: readonly string[] = [],
 ): Promise<void> {
   const lines: string[] = [];
   const database = openDatabase(':memory:');
   let app: FastifyInstance | undefined;
   try {
     applyMigrations(database);
-    app = await buildApp({ ...CONFIG, cookieSecure }, database, {
+    app = await buildApp({ ...CONFIG, cookieSecure, trustedProxies }, database, {
       write: (line) => lines.push(line),
     });
     await run(app, database, lines);

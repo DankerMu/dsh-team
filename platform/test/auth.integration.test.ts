@@ -6,6 +6,7 @@ import {
   sessionCookieHeader,
   snapshotAuthState,
   tableCounts,
+  withApp,
 } from './auth-fixture.ts';
 import {
   expectNoSecrets,
@@ -235,5 +236,153 @@ describe('login, logout, and session recognition over a real TCP port', () => {
         queryAuditEvents(database, { page: 1, pageSize: 10, eventType: 'logout.succeeded' }),
       ).toEqual([]);
     });
+  });
+});
+
+describe('source address over a real TCP port', () => {
+  const CLIENT_A = '198.51.100.7';
+  const CLIENT_B = '203.0.113.10';
+  const EMAIL = 'client@example.com';
+  const TRUSTED_LOOPBACK = ['127.0.0.1'] as const;
+
+  it.each([
+    {
+      label:
+        'records the forwarded client as the registration audit source when the loopback peer is trusted',
+      trustedProxies: TRUSTED_LOOPBACK,
+      forwardedFor: CLIENT_A,
+      source: CLIENT_A,
+    },
+    {
+      label: 'ignores forged X-Forwarded-For when there are no trusted proxies',
+      trustedProxies: [] as const,
+      forwardedFor: CLIENT_A,
+      source: LOOPBACK_ADDRESSES,
+    },
+    {
+      label:
+        'ignores forged X-Forwarded-For when there is a trust list that does not include the loopback peer',
+      trustedProxies: ['192.0.2.10'] as const,
+      forwardedFor: CLIENT_A,
+      source: LOOPBACK_ADDRESSES,
+    },
+    {
+      label:
+        'falls back to the loopback peer when a trusted proxy sends a malformed X-Forwarded-For',
+      trustedProxies: TRUSTED_LOOPBACK,
+      forwardedFor: 'not-an-ip',
+      source: LOOPBACK_ADDRESSES,
+    },
+    {
+      label: 'records the first untrusted hop rather than a spoofed prefix',
+      trustedProxies: TRUSTED_LOOPBACK,
+      forwardedFor: `203.0.113.1, ${CLIENT_A}`,
+      source: CLIENT_A,
+    },
+  ])('$label', async ({ trustedProxies, forwardedFor, source }) => {
+    await withListeningApp(
+      async (baseUrl, _app, database) => {
+        const response = await postJson(
+          `${baseUrl}/_platform/api/register`,
+          { email: EMAIL, password: PASSWORD },
+          { 'X-Forwarded-For': forwardedFor },
+        );
+        expect(response.status).toBe(201);
+        await response.json();
+        const events = queryAuditEvents(database, {
+          page: 1,
+          pageSize: 10,
+          eventType: 'account.registered',
+        });
+        expect(events).toHaveLength(1);
+        if (typeof source === 'string') {
+          expect(events[0]?.sourceAddress).toBe(source);
+        } else {
+          expect(source).toContain(events[0]?.sourceAddress);
+        }
+      },
+      false,
+      trustedProxies,
+    );
+  });
+
+  it('attributes ten failed logins, a later success, and logout to distinct forwarded clients', async () => {
+    await withListeningApp(
+      async (baseUrl, _app, database) => {
+        const registered = await postJson(
+          `${baseUrl}/_platform/api/register`,
+          { email: EMAIL, password: PASSWORD },
+          { 'X-Forwarded-For': CLIENT_A },
+        );
+        expect(registered.status).toBe(201);
+        await registered.json();
+
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          const failed = await postJson(
+            `${baseUrl}/_platform/api/login`,
+            { email: EMAIL, password: 'wrong-password' },
+            { 'X-Forwarded-For': CLIENT_A },
+          );
+          expect(failed.status).toBe(401);
+          await failed.json();
+        }
+
+        const login = await postJson(
+          `${baseUrl}/_platform/api/login`,
+          { email: EMAIL, password: PASSWORD },
+          { 'X-Forwarded-For': CLIENT_B },
+        );
+        expect(login.status).toBe(200);
+        await login.json();
+        const logout = await fetch(`${baseUrl}/_platform/api/logout`, {
+          method: 'POST',
+          headers: {
+            cookie: sessionCookieHeader(login.headers.getSetCookie()),
+            'X-Forwarded-For': CLIENT_B,
+          },
+        });
+        expect(logout.status).toBe(204);
+        expect(await logout.text()).toBe('');
+
+        const events = queryAuditEvents(database, { page: 1, pageSize: 50 });
+        const failed = events.filter((event) => event.type === 'login.failed');
+        const succeeded = events.filter((event) => event.type === 'login.succeeded');
+        const loggedOut = events.filter((event) => event.type === 'logout.succeeded');
+        expect(failed).toHaveLength(10);
+        expect(failed.every((event) => event.sourceAddress === CLIENT_A)).toBe(true);
+        expect(succeeded).toHaveLength(1);
+        expect(succeeded[0]?.sourceAddress).toBe(CLIENT_B);
+        expect(loggedOut).toHaveLength(1);
+        expect(loggedOut[0]?.sourceAddress).toBe(CLIENT_B);
+      },
+      false,
+      TRUSTED_LOOPBACK,
+    );
+  });
+
+  it('leaves hostname and protocol unchanged when forwarded Host and Proto headers are present', async () => {
+    await withApp(
+      async (app) => {
+        app.get('/_test/request-origin', (request, reply) => {
+          return reply.send({ hostname: request.hostname, protocol: request.protocol });
+        });
+        const observed = await fetch(
+          `${await app.listen({ host: '127.0.0.1', port: 0 })}/_test/request-origin`,
+          {
+            headers: {
+              'X-Forwarded-For': CLIENT_A,
+              'X-Forwarded-Host': 'evil.example',
+              'X-Forwarded-Proto': 'https',
+              Forwarded: 'for=198.51.100.7;host=evil.example;proto=https',
+              'X-Real-IP': CLIENT_A,
+            },
+          },
+        );
+        expect(observed.status).toBe(200);
+        expect(await observed.json()).toEqual({ hostname: '127.0.0.1', protocol: 'http' });
+      },
+      false,
+      TRUSTED_LOOPBACK,
+    );
   });
 });

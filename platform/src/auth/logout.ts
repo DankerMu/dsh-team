@@ -4,6 +4,7 @@ import type { DatabaseHandle } from '../db/index.ts';
 import { ERROR_RESPONSE_SCHEMA } from './credentials.ts';
 import { formatSessionCookie, readSessionCookie } from './session-cookie.ts';
 import { deleteSession, getSessionUser } from './session.ts';
+import type { SourceAddressResolver } from './source-address.ts';
 
 const UNAUTHORIZED = {
   statusCode: 401,
@@ -14,6 +15,7 @@ const UNAUTHORIZED = {
 interface LogoutOptions extends FastifyPluginOptions {
   database: DatabaseHandle;
   cookieSecure: boolean;
+  resolveSourceAddress: SourceAddressResolver;
 }
 
 interface SessionIdentity {
@@ -65,7 +67,7 @@ export const logoutRoutes: FastifyPluginCallback<LogoutOptions> = (app, options,
         const persisted = persistLogout(
           typeof cookie === 'string' ? cookie : undefined,
           Date.now(),
-          request.ip,
+          options.resolveSourceAddress(request),
         );
         if (persisted === null) {
           return reply.code(401).send(UNAUTHORIZED);

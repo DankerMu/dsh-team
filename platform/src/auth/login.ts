@@ -5,6 +5,7 @@ import { ERROR_RESPONSE_SCHEMA, rejectInvalidCredentialBody } from './credential
 import { hashPassword, verifyPassword } from './password.ts';
 import { formatSessionCookie } from './session-cookie.ts';
 import { createSession } from './session.ts';
+import type { SourceAddressResolver } from './source-address.ts';
 
 const SELECT_USER_BY_EMAIL =
   'SELECT id, email, password_hash, role, status FROM users WHERE email = ?';
@@ -38,6 +39,7 @@ const LOGIN_SUCCESS_SCHEMA = {
 interface LoginOptions extends FastifyPluginOptions {
   database: DatabaseHandle;
   cookieSecure: boolean;
+  resolveSourceAddress: SourceAddressResolver;
 }
 
 interface LoginBody {
@@ -127,6 +129,7 @@ export const loginRoutes: FastifyPluginAsync<LoginOptions> = async (app, options
     },
     async (request, reply) => {
       const { email, password } = request.body;
+      const sourceAddress = options.resolveSourceAddress(request);
       const user = selectUserByEmail.get(email);
       const matched = await verifyPassword(password, user?.password_hash ?? dummyHash);
       if (user === undefined || !matched) {
@@ -134,7 +137,7 @@ export const loginRoutes: FastifyPluginAsync<LoginOptions> = async (app, options
           type: 'login.failed',
           createdAt: Date.now(),
           actorEmail: email,
-          sourceAddress: request.ip,
+          sourceAddress,
         });
         return reply.code(401).send({
           statusCode: 401,
@@ -142,7 +145,7 @@ export const loginRoutes: FastifyPluginAsync<LoginOptions> = async (app, options
           message: INVALID_CREDENTIALS,
         });
       }
-      const persisted = persistLogin(user.id, user.password_hash, email, Date.now(), request.ip);
+      const persisted = persistLogin(user.id, user.password_hash, email, Date.now(), sourceAddress);
       if (persisted.outcome === 'invalid') {
         return reply.code(401).send({
           statusCode: 401,

@@ -68,19 +68,28 @@ export async function withListeningApp(
     now: TestClock,
   ) => Promise<void>,
   cookieSecure = false,
+  trustedProxies: readonly string[] = [],
 ): Promise<void> {
-  await withApp(async (app, database, lines) => {
-    const now = { ms: Date.now() };
-    registerTestIdentityRoute(app, database, now);
-    const baseUrl = await app.listen({ host: LOOPBACK, port: 0 });
-    await run(baseUrl, app, database, lines, now);
-  }, cookieSecure);
+  await withApp(
+    async (app, database, lines) => {
+      const now = { ms: Date.now() };
+      registerTestIdentityRoute(app, database, now);
+      const baseUrl = await app.listen({ host: LOOPBACK, port: 0 });
+      await run(baseUrl, app, database, lines, now);
+    },
+    cookieSecure,
+    trustedProxies,
+  );
 }
 
-export async function postJson(url: string, payload: unknown): Promise<Response> {
+export async function postJson(
+  url: string,
+  payload: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
+): Promise<Response> {
   return fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extraHeaders },
     body: JSON.stringify(payload),
   });
 }
