@@ -12,12 +12,15 @@ import {
   withApp,
 } from '../../test/auth-fixture.ts';
 import { queryAuditEvents } from '../audit/index.ts';
+import type { DatabaseHandle } from '../db/index.ts';
 import { hashPassword, validateSession } from './index.ts';
 
 const EMAIL = 'user@example.com';
 const LOGIN_EMAIL = '  User@Example.com  ';
 const PASSWORD = ' PassW0rd ';
 const REPLACEMENT_PASSWORD = 'replacement-password';
+const UNKNOWN_LOGIN_EMAIL = '  Nobody@Example.com  ';
+const UNKNOWN_EMAIL = 'nobody@example.com';
 const SNAPSHOT_SESSIONS =
   'SELECT token_hash, user_id, created_at, last_activity_at FROM platform_sessions ORDER BY token_hash';
 const UNAUTHORIZED = {
@@ -93,13 +96,14 @@ function createBarrier(): CallbackBarrier {
 async function loginDuringChange(
   app: FastifyInstance,
   change: () => void,
+  credentials: { email: string; password: string } = { email: LOGIN_EMAIL, password: PASSWORD },
 ): Promise<LightMyRequestResponse> {
   const barrier = createBarrier();
   let pending: Promise<LightMyRequestResponse> | undefined;
-  // Startup's dummy hash, registration, and replacement hashing have already finished.
+  // All prior derivations — startup dummy hash, registration, replacement hashing — finished before arming.
   cryptoBarrier.next = barrier;
   try {
-    pending = injectLogin(app, { email: LOGIN_EMAIL, password: PASSWORD });
+    pending = injectLogin(app, credentials);
     await Promise.race([
       barrier.derived,
       pending.then(() => {
@@ -116,6 +120,36 @@ async function loginDuringChange(
     if (pending !== undefined) {
       await Promise.allSettled([pending]);
     }
+  }
+}
+
+function expectSafeLoginFailure(
+  database: DatabaseHandle,
+  login: LightMyRequestResponse,
+  lines: readonly string[],
+  actorEmail: string,
+  secrets: readonly string[],
+): void {
+  const events = queryAuditEvents(database, {
+    page: 1,
+    pageSize: 10,
+    eventType: 'login.failed',
+  });
+  expect(events).toHaveLength(1);
+  expect(events[0]).toMatchObject({
+    type: 'login.failed',
+    actorEmail,
+    targetEmail: null,
+    target: null,
+    sourceAddress: SOURCE,
+    details: {},
+  });
+  expect(
+    queryAuditEvents(database, { page: 1, pageSize: 10, eventType: 'login.succeeded' }),
+  ).toEqual([]);
+  const written = `${login.body}${lines.join('')}${JSON.stringify(events)}`;
+  for (const secret of secrets) {
+    expect(written).not.toContain(secret);
   }
 }
 
@@ -164,30 +198,11 @@ describe('POST /_platform/api/login account changes during verification', () => 
       expect(cookieHeaders(login)).toEqual([]);
       expect(database.prepare(SNAPSHOT_SESSIONS).all()).toEqual(sessionsBefore);
       expect(tableCounts(database)).toEqual({ users: 1, sessions: 1, audits: 2 });
-      const events = queryAuditEvents(database, {
-        page: 1,
-        pageSize: 10,
-        eventType: 'login.failed',
-      });
-      expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({
-        type: 'login.failed',
-        actorEmail: EMAIL,
-        targetEmail: null,
-        target: null,
-        sourceAddress: SOURCE,
-        details: {},
-      });
-      expect(
-        queryAuditEvents(database, { page: 1, pageSize: 10, eventType: 'login.succeeded' }),
-      ).toEqual([]);
-      const written = `${login.body}${lines.join('')}${JSON.stringify(events)}`;
-      for (const secret of [PASSWORD, REPLACEMENT_PASSWORD, user.password_hash, registerToken]) {
-        expect(written).not.toContain(secret);
-      }
+      const secrets = [PASSWORD, REPLACEMENT_PASSWORD, user.password_hash, registerToken];
       if (replacementHash !== undefined) {
-        expect(written).not.toContain(replacementHash);
+        secrets.push(replacementHash);
       }
+      expectSafeLoginFailure(database, login, lines, EMAIL, secrets);
     });
   });
 
@@ -233,6 +248,23 @@ describe('POST /_platform/api/login account changes during verification', () => 
       for (const secret of [PASSWORD, registerToken, loginToken]) {
         expect(written).not.toContain(secret);
       }
+    });
+  });
+});
+
+describe('POST /_platform/api/login unknown account derivation', () => {
+  it('derives against the dummy hash for a valid-length unknown email before 401', async () => {
+    await withApp(async (app, database, lines) => {
+      const login = await loginDuringChange(app, () => undefined, {
+        email: UNKNOWN_LOGIN_EMAIL,
+        password: PASSWORD,
+      });
+
+      expect(login.statusCode).toBe(401);
+      expect(login.json()).toEqual(UNAUTHORIZED);
+      expect(cookieHeaders(login)).toEqual([]);
+      expect(tableCounts(database)).toEqual({ users: 0, sessions: 0, audits: 1 });
+      expectSafeLoginFailure(database, login, lines, UNKNOWN_EMAIL, [PASSWORD]);
     });
   });
 });
