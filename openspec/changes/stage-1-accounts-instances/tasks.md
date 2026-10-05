@@ -355,6 +355,15 @@ Review 修复（#21）：恢复改写竞态用例遗漏的完整失败审计元�
 
 验证记录（#23）：真实TCP无Origin注册201→403先RED后GREEN，正向调用统一迁移Origin/JSON，登出显式`{}`。最终`pnpm check`449 unit/87 integration通过，重复率2.93%；契约生成/校验通过。完整状态矩阵、解析前403优先级、物理重复头、未来方法继承、安全/非平台豁免、拒绝前无crypto及九次失败后401→429判据通过。原始Node头数组缺Host导致传输层400，经独立探针确认后修测试传输，不改403要求；有效429照旧新增失败审计，修正了误要求审计不变的新判据。源/编译真实TCP文件库四路由拒绝无副作用、JSON charset正向流程、重复头和重开仍执行边界通过；e2e健康/迁移通过。补充断言首次GREEN，不宣称每条独立RED。
 
+### Issue #24 risk/evidence map (task 6.9 only)
+
+- Public API / CLI / script entry, Auth / permissions / secrets — selected: strict admin/create/email args, TTY-only hidden double input, no argument/env credential path, administrator identity/promotion/reset and safe audit; real source/compiled PTY and HTTP login proof.
+- Schema / columns / units / field names, Legacy compatibility / examples — selected: canonical email/id/password extraction preserves registration; existing rows/status/creation time/sessions preserved unless reset; NULL deployment actor/source and existing audit identifiers, no migration.
+- Concurrency / shared state / ordering, Error handling / rollback / partial outputs — selected: prompt/hash outside transaction, snapshot recheck and atomic role/password/revocation/audits, cancellation no late commit, SQL faults and terminal restoration; no retries.
+- Resource limits / large input / discovery, File IO / path safety / overwrite — selected: canonical password bounds, owned database/TTY/listener cleanup, no unexpected dump/secret echo; data path ownership/config reused. No global account quotas or untrusted network terminal service.
+- Config / project setup, Release / packaging / dependency compatibility, Documentation / migration notes — selected: source/compiled CLI entry, root cli/test:cli scripts and verification matrix/constraints, Python3 standard-library PTY prerequisite for tests, no production dependency/schema change; flag rule-file review for Epic-end human review.
+- Evidence floor: staged parent RED/GREEN with actual command failures classified separately from bootstrap/missing-entrypoint errors, real PTY hidden-input/echo restoration/cancel, real DB mutation/rollback/concurrency and source/compiled CLI-to-HTTP smoke, full checks/strictOpenSpec. Three expanded seats; admin UI is later scope, not fake acceptance.
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。

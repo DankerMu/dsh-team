@@ -163,3 +163,7 @@
 ## Issue #23 fixture
 
 - Feature; expanded task6.8 (agree with upstream): shared Origin/JSON guard across state-changing platform HTTP APIs and an atomic caller/contract cutover. Reject before authentication, parsing or persisted/in-memory effects; preserve safe requests and non-platform traffic. WebSocket upgrade enforcement remains the gateway slice.
+
+## Issue #24 fixture
+
+- Feature; expanded task6.9 (agree with upstream): interactive administrator bootstrap/promotion/reset command, terminal secrecy and direct atomic account/audit persistence. Reuse auth identity/password/session policies; no web privilege-granting endpoint or administrator UI implementation.
