@@ -4,6 +4,7 @@ import { recordAuditEvent } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { ERROR_RESPONSE_SCHEMA, rejectInvalidCredentialBody } from './credentials.ts';
 import { hashPassword } from './password.ts';
+import { ORIGIN_HEADERS_SCHEMA } from './request-guard.ts';
 import { formatSessionCookie } from './session-cookie.ts';
 import { createSession } from './session.ts';
 import type { SourceAddressResolver } from './source-address.ts';
@@ -102,11 +103,14 @@ export const registrationRoutes: FastifyPluginCallback<RegistrationOptions> = (
     {
       schema: {
         summary: 'Register an employee account',
+        headers: ORIGIN_HEADERS_SCHEMA,
         body: REGISTER_BODY_SCHEMA,
         response: {
           201: REGISTER_SUCCESS_SCHEMA,
           400: ERROR_RESPONSE_SCHEMA,
+          403: ERROR_RESPONSE_SCHEMA,
           409: ERROR_RESPONSE_SCHEMA,
+          415: ERROR_RESPONSE_SCHEMA,
           500: ERROR_RESPONSE_SCHEMA,
         },
       },

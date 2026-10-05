@@ -280,6 +280,16 @@
 
 平台 MUST 拒绝 `Origin` 不是平台对外地址的改变状态的请求。
 
+#### Scenario: 缺失 Origin 或非 JSON 不改变状态
+
+- **WHEN** 注册、登录、登出或改密码请求缺失 Origin、Origin 为其它站点，或在正确 Origin 下使用表单请求体
+- **THEN** 请求分别被403或415拒绝，不改变账号、完整会话行、审计或登录失败计数，也不设置 cookie
+
+#### Scenario: 相同 Origin 的 JSON 请求正常处理
+
+- **WHEN** 改变状态的平台接口收到与平台对外地址完全相同的单一 Origin 和 application/json 请求体（可带 charset=utf-8 参数），登出发送空 JSON 对象
+- **THEN** 请求进入原有认证与业务流程；Host、Referer 和代理转发头不能替代 Origin，重复 Origin 不能获得授权
+
 #### Scenario: 跨站提交登出
 
 - **WHEN** 另一个站点的页面带着员工的 cookie 向登出接口发起请求

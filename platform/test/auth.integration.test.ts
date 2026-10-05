@@ -134,10 +134,11 @@ describe('login, logout, and session recognition over a real TCP port', () => {
       expect(first.token).not.toBe(second.token);
       expect((await getIdentity(baseUrl, `platform_session=${first.token}`)).status).toBe(200);
       expect((await getIdentity(baseUrl, `platform_session=${second.token}`)).status).toBe(200);
-      const logout = await fetch(`${baseUrl}/_platform/api/logout`, {
-        method: 'POST',
-        headers: { cookie: `platform_session=${first.token}` },
-      });
+      const logout = await postJson(
+        `${baseUrl}/_platform/api/logout`,
+        {},
+        { cookie: `platform_session=${first.token}` },
+      );
       expect(logout.status).toBe(204);
       expect(await logout.text()).toBe('');
       expect(cookieAttributes(sessionCookieHeader(logout.headers.getSetCookie()))).toEqual([
@@ -174,10 +175,7 @@ describe('login, logout, and session recognition over a real TCP port', () => {
       ];
       for (const cookie of cookies) {
         const recognized = await getIdentity(baseUrl, cookie);
-        const logout = await fetch(`${baseUrl}/_platform/api/logout`, {
-          method: 'POST',
-          headers: { cookie },
-        });
+        const logout = await postJson(`${baseUrl}/_platform/api/logout`, {}, { cookie });
         expect(recognized.status).toBe(401);
         expect(logout.status).toBe(401);
         expect(logout.headers.getSetCookie()).toEqual([]);
@@ -224,10 +222,11 @@ describe('login, logout, and session recognition over a real TCP port', () => {
       const before = snapshotAuthState(database);
       now.ms = issued.last_activity_at;
       const recognized = await getIdentity(baseUrl, `platform_session=${login.token}`);
-      const logout = await fetch(`${baseUrl}/_platform/api/logout`, {
-        method: 'POST',
-        headers: { cookie: `platform_session=${login.token}` },
-      });
+      const logout = await postJson(
+        `${baseUrl}/_platform/api/logout`,
+        {},
+        { cookie: `platform_session=${login.token}` },
+      );
       expect(recognized.status).toBe(401);
       expect(logout.status).toBe(401);
       expect(logout.headers.getSetCookie()).toEqual([]);
@@ -334,13 +333,14 @@ describe('source address over a real TCP port', () => {
         );
         expect(login.status).toBe(200);
         await login.json();
-        const logout = await fetch(`${baseUrl}/_platform/api/logout`, {
-          method: 'POST',
-          headers: {
+        const logout = await postJson(
+          `${baseUrl}/_platform/api/logout`,
+          {},
+          {
             cookie: sessionCookieHeader(login.headers.getSetCookie()),
             'X-Forwarded-For': CLIENT_B,
           },
-        });
+        );
         expect(logout.status).toBe(204);
         expect(await logout.text()).toBe('');
 

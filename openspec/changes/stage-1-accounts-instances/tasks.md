@@ -264,7 +264,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
 - [x] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
 - [x] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
-- [ ] 6.8 `Origin` 校验：所有改变状态的平台接口只接受 JSON 请求体，且 `Origin` 必须等于平台对外地址。验证：集成测试——缺少 `Origin`、`Origin` 是别的站点、请求体是表单编码，三种情况都被拒绝且状态不变（规格“改变状态的请求必须来自平台自己的页面”）。
+- [x] 6.8 `Origin` 校验：所有改变状态的平台接口只接受 JSON 请求体，且 `Origin` 必须等于平台对外地址。验证：集成测试——缺少 `Origin`、`Origin` 是别的站点、请求体是表单编码，三种情况都被拒绝且状态不变（规格“改变状态的请求必须来自平台自己的页面”）。
 - [ ] 6.9 管理员命令 `platform/src/cli.ts`（`admin create <邮箱>`）：从终端不回显地读密码；邮箱不存在则创建管理员，已存在则提升并可选重设密码；没有终端时拒绝；写审计。验证：测试覆盖规格“首个管理员由部署命令创建”里除“注册接口不能指定角色”（由 6.3 覆盖）之外的全部场景（含非终端环境下退出码非零、参数里带密码被拒绝）。
 
 Suggested fixture level: expanded - 认证、平台会话和公开接口
@@ -343,6 +343,17 @@ Review 修复（#21）：恢复改写竞态用例遗漏的完整失败审计元�
 - Fixture revision: phase-specific crypto errors (verification and replacement hashing) preserve full state/no cookie/no secrets; one real replacement-hash callback barrier proves revocation or competing rotation wins after the final crypto await, not merely during initial verification.
 
 验证记录（#22）：真实 TCP tracer404→204先RED后GREEN；最终 `pnpm fmt && pnpm check` 419 unit / 80 integration通过，重复率2.69%，新路由契约由生成器更新。真实 scrypt 两阶段故障/回调屏障、SQL四写入阶段回滚与重试、>=60s失败不续期、Unicode身份、旧浏览器撤销/其他账号隔离、限流保持及新字段实际logger脱敏均有断言。源/编译文件库真实HTTP证明旋转、审计失败原子回滚、cookie及完整审计元数据、限定磁盘/日志扫描、重开后新cookie可用和新旧密码区分；真实prepare初始化错误正常reject且调用方DB可用；e2e健康/迁移通过。补充断言首次GREEN如实保留；共享真实crypto测试helper未改变旧断言。
+
+### Issue #23 risk/evidence map (task 6.8 only)
+
+- Public API / CLI / script entry, Auth / permissions / secrets, Schema / columns / units / field names — selected: all four platform mutations enforce exact configured Origin and JSON before effects;403/415 and logout JSON/Origin contract generated, full-state/no-cookie rejection matrix.
+- Config / project setup, Legacy compatibility / examples — selected: existing publicUrl reused, every positive mutation caller migrated without guard bypass; safe/non-platform requests preserved; future platform method inheritance and raw physical duplicate-Origin proof.
+- Error handling / rollback / partial outputs, Concurrency / shared state / ordering — selected for early-hook ordering before parsing/crypto/session renewal/audit/limiter; invalid traffic cannot alter existing nine-failure count or>=60s activity; existing async auth race/rollback tests remain unchanged in meaning.
+- Resource limits / large input / discovery — selected: reject before body parsing/crypto; existing header/body limits retained, no repeated URL normalization or CORS/token dependency. File IO / path safety / overwrite and Release / packaging / dependency compatibility — selected only for owned source/compiled file-DB HTTP smoke/reopen/cleanup, no production path/dependency changes.
+- Documentation / migration notes — selected: intentional Origin/JSON/logout caller cutover documented, WebSocket/DSH boundary explicit. Evidence floor: tracer RED, realTCP adversarial Origin/media matrix with full state, all positive flows/regressions, generated contract, strictOpenSpec and source/compiled smoke; three expanded seats.
+- Fixture revision: paired invalid-Origin+malformed-JSON/unsupported-media requests prove403 precedes400/415; after nine failures and guard-rejected traffic, valid wrong-password401 followed by correct-password429 proves the limiter was neither incremented nor reset.
+
+验证记录（#23）：真实TCP无Origin注册201→403先RED后GREEN，正向调用统一迁移Origin/JSON，登出显式`{}`。最终`pnpm check`449 unit/87 integration通过，重复率2.93%；契约生成/校验通过。完整状态矩阵、解析前403优先级、物理重复头、未来方法继承、安全/非平台豁免、拒绝前无crypto及九次失败后401→429判据通过。原始Node头数组缺Host导致传输层400，经独立探针确认后修测试传输，不改403要求；有效429照旧新增失败审计，修正了误要求审计不变的新判据。源/编译真实TCP文件库四路由拒绝无副作用、JSON charset正向流程、重复头和重开仍执行边界通过；e2e健康/迁移通过。补充断言首次GREEN，不宣称每条独立RED。
 
 ## 7. 完整用户镜像（任务包 1.5）
 

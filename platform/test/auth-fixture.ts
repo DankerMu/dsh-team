@@ -4,13 +4,14 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 
 export const SOURCE = '192.0.2.20';
+export const PUBLIC_ORIGIN = 'http://127.0.0.1:8080';
 
 const CONFIG = {
   host: '127.0.0.1',
   port: 8080,
   logLevel: 'info',
   dataDir: './data',
-  publicUrl: 'http://127.0.0.1:8080',
+  publicUrl: PUBLIC_ORIGIN,
   authority: '127.0.0.1:8080',
   cookieSecure: false,
   trustedProxies: [],
@@ -134,17 +135,37 @@ export async function withApp(
   }
 }
 
+/** Undefined overrides deliberately omit a header; names are case-insensitive. */
+export function jsonRequestHeaders(
+  extraHeaders: Readonly<Record<string, string | undefined>> = {},
+): Record<string, string> {
+  const merged: Record<string, string | undefined> = {
+    origin: PUBLIC_ORIGIN,
+    'content-type': 'application/json',
+  };
+  for (const [name, value] of Object.entries(extraHeaders)) {
+    merged[name.toLowerCase()] = value;
+  }
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(merged)) {
+    if (value !== undefined) {
+      headers[name] = value;
+    }
+  }
+  return headers;
+}
+
 function injectJson(
   app: FastifyInstance,
   url: string,
   payload: unknown,
-  extraHeaders: Readonly<Record<string, string>> = {},
+  extraHeaders: Readonly<Record<string, string | undefined>> = {},
 ): Promise<LightMyRequestResponse> {
   return app.inject({
     method: 'POST',
     url,
     remoteAddress: SOURCE,
-    headers: { 'content-type': 'application/json', ...extraHeaders },
+    headers: jsonRequestHeaders(extraHeaders),
     payload: JSON.stringify(payload),
   });
 }
@@ -152,14 +173,15 @@ function injectJson(
 export function injectRegister(
   app: FastifyInstance,
   payload: unknown,
+  extraHeaders: Readonly<Record<string, string | undefined>> = {},
 ): Promise<LightMyRequestResponse> {
-  return injectJson(app, '/_platform/api/register', payload);
+  return injectJson(app, '/_platform/api/register', payload, extraHeaders);
 }
 
 export function injectLogin(
   app: FastifyInstance,
   payload: unknown,
-  extraHeaders: Readonly<Record<string, string>> = {},
+  extraHeaders: Readonly<Record<string, string | undefined>> = {},
 ): Promise<LightMyRequestResponse> {
   return injectJson(app, '/_platform/api/login', payload, extraHeaders);
 }

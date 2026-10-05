@@ -4,6 +4,7 @@ import {
   cookieHeaders,
   injectLogin,
   injectRegister,
+  jsonRequestHeaders,
   readPublicIdentity,
   sessionCookieToken,
   snapshotAuthState,
@@ -29,7 +30,8 @@ function injectLogout(app: FastifyInstance, token: string): Promise<LightMyReque
     method: 'POST',
     url: '/_platform/api/logout',
     remoteAddress: SOURCE,
-    headers: { cookie: `platform_session=${token}` },
+    headers: jsonRequestHeaders({ cookie: `platform_session=${token}` }),
+    payload: {},
   });
 }
 
