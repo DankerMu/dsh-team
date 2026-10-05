@@ -257,8 +257,8 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 
 依赖：第 4、5 组。模块在 `platform/src/auth/`。
 
-- [ ] 6.1 密码模块：scrypt 哈希和恒定时间校验，长度规则 6 到 256 位；保留参考实现的版权声明。验证：单元测试——5 位被拒、6 位通过、256 位通过、257 位被拒；同一密码两次哈希结果不同但都能校验通过；错误密码校验失败。
-- [ ] 6.2 平台会话模块：签发（32 字节随机令牌，库里只存 SHA-256）、校验、7 天滑动续期（最后活动时间最多每分钟写一次）、按用户全部删除。验证：用可控时钟的单元测试——第 6 天活动后第 12 天仍有效；7 天无活动后失效；数据库里找不到令牌原文。
+- [x] 6.1 密码模块：scrypt 哈希和恒定时间校验，长度规则 6 到 256 位；保留参考实现的版权声明。验证：单元测试——5 位被拒、6 位通过、256 位通过、257 位被拒；同一密码两次哈希结果不同但都能校验通过；错误密码校验失败。
+- [x] 6.2 平台会话模块：签发（32 字节随机令牌，库里只存 SHA-256）、校验、7 天滑动续期（最后活动时间最多每分钟写一次）、按用户全部删除。验证：用可控时钟的单元测试——第 6 天活动后第 12 天仍有效；7 天无活动后失效；数据库里找不到令牌原文。
 - [ ] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
 - [ ] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
 - [ ] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
@@ -269,6 +269,16 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 
 Suggested fixture level: expanded - 认证、平台会话和公开接口
 Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单元测试，约 300 行，不新增任何路由）
+
+### Issue #17 risk/evidence map (tasks 6.1–6.2 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names and Auth / permissions / secrets — selected: exact hash format/Unicode boundaries, real scrypt and constant-time primitive, random tokens with exact SHA-256-only storage, digest replay rejection and identity-only validation.
+- Concurrency / shared state / ordering, Error handling / rollback / partial outputs and Resource limits / large input / discovery — selected: expiry before renewal, exact7day/+1ms and minute-throttle boundaries, backward-clock preservation, per-user revocation isolation; bounded encoded parameters prevent unbounded derivation. No background sweep or activity cache.
+- Config / project setup, File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: narrow auth memory-test permission, complete reference MIT notice, real source/compiled file reopen and no credential plaintext, owned handle cleanup, existing schema/build unchanged.
+- Legacy compatibility / examples — not selected: no prior platform auth API or persisted password format to migrate; reference code is algorithm guidance, not a compatibility target.
+- Evidence floor: staged RED/GREEN with real crypto/SQLite and explicit clocks, `pnpm check`, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
+验证记录（#17）：密码/会话缺API的tracer先RED；密码长度5项、会话到期/续期/撤销6项语义失败后GREEN。review实证发现Node默认UTF-8把不同孤立代理码元合并，交叉密码错误认证；固定为显式UTF-16LE单一路径和编码标识，新增交叉矩阵/独立派生记录先RED后GREEN，旧格式拒绝。296 unit（26密码/15会话）及16 integration、完整检查通过；session覆盖率100%，password statements95.83%/branches95.45%（未注入crypto运行时错误）。源/编译API文件重开验证哈希、摘要存储、续期/到期/撤销隔离，行与关闭后的主DB无密码/令牌明文；同一漏洞探针由异码元true变false，资源清理。不宣称时序测量证明恒定时间，比较使用timingSafeEqual。保留完整MIT许可，auth内存DB单测规则变更已标记人工审阅。
 
 ## 7. 完整用户镜像（任务包 1.5）
 
