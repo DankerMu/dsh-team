@@ -280,6 +280,15 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 
 验证记录（#17）：密码/会话缺API的tracer先RED；密码长度5项、会话到期/续期/撤销6项语义失败后GREEN。review实证发现Node默认UTF-8把不同孤立代理码元合并，交叉密码错误认证；固定为显式UTF-16LE单一路径和编码标识，新增交叉矩阵/独立派生记录先RED后GREEN，旧格式拒绝。296 unit（26密码/15会话）及16 integration、完整检查通过；session覆盖率100%，password statements95.83%/branches95.45%（未注入crypto运行时错误）。源/编译API文件重开验证哈希、摘要存储、续期/到期/撤销隔离，行与关闭后的主DB无密码/令牌明文；同一漏洞探针由异码元true变false，资源清理。不宣称时序测量证明恒定时间，比较使用timingSafeEqual。保留完整MIT许可，auth内存DB单测规则变更已标记人工审阅。
 
+### Issue #18 risk/evidence map (task 6.3 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names, Config / project setup and Legacy compatibility / examples — selected: reachable POST201/400/409/500 schemas, generated contract, strict raw types before Ajv coercion, Unicode password bounds, normalized email and existing health/logger/app lifetime preserved.
+- Auth / permissions / secrets — selected: supplied role ignored, employee/active hardcoded, HttpOnly/SameSite/conditional Secure cookie only after commit, real hash/digest-only persistence, safe audit/response/log fields; no HTTP token in JSON.
+- Concurrency / shared state / ordering and Error handling / rollback / partial outputs — selected: concurrent normalized duplicate exactly one winner; user/session/audit atomic rollback on injected DB failure, no cookie on failure; unrelated errors not409.
+- File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled owned file-backed HTTP smoke, reopen assertions, cleanup, no dependency/migration; evidence recorded here.
+- Resource limits / large input / discovery — selected: existing Fastify body limit and canonical bounded password derivation; no new registration cap/domain restriction/rate limiter (separate tasks).
+- Evidence floor: staged RED/GREEN, real-TCP named scenarios, `pnpm check`, `pnpm contract:write`/check, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。
