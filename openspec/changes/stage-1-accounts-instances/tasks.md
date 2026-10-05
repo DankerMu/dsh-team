@@ -344,6 +344,15 @@ Review 修复（#21）：恢复改写竞态用例遗漏的完整失败审计元�
 
 验证记录（#22）：真实 TCP tracer404→204先RED后GREEN；最终 `pnpm fmt && pnpm check` 419 unit / 80 integration通过，重复率2.69%，新路由契约由生成器更新。真实 scrypt 两阶段故障/回调屏障、SQL四写入阶段回滚与重试、>=60s失败不续期、Unicode身份、旧浏览器撤销/其他账号隔离、限流保持及新字段实际logger脱敏均有断言。源/编译文件库真实HTTP证明旋转、审计失败原子回滚、cookie及完整审计元数据、限定磁盘/日志扫描、重开后新cookie可用和新旧密码区分；真实prepare初始化错误正常reject且调用方DB可用；e2e健康/迁移通过。补充断言首次GREEN如实保留；共享真实crypto测试helper未改变旧断言。
 
+### Issue #23 risk/evidence map (task 6.8 only)
+
+- Public API / CLI / script entry, Auth / permissions / secrets, Schema / columns / units / field names — selected: all four platform mutations enforce exact configured Origin and JSON before effects;403/415 and logout JSON/Origin contract generated, full-state/no-cookie rejection matrix.
+- Config / project setup, Legacy compatibility / examples — selected: existing publicUrl reused, every positive mutation caller migrated without guard bypass; safe/non-platform requests preserved; future platform method inheritance and raw physical duplicate-Origin proof.
+- Error handling / rollback / partial outputs, Concurrency / shared state / ordering — selected for early-hook ordering before parsing/crypto/session renewal/audit/limiter; invalid traffic cannot alter existing nine-failure count or>=60s activity; existing async auth race/rollback tests remain unchanged in meaning.
+- Resource limits / large input / discovery — selected: reject before body parsing/crypto; existing header/body limits retained, no repeated URL normalization or CORS/token dependency. File IO / path safety / overwrite and Release / packaging / dependency compatibility — selected only for owned source/compiled file-DB HTTP smoke/reopen/cleanup, no production path/dependency changes.
+- Documentation / migration notes — selected: intentional Origin/JSON/logout caller cutover documented, WebSocket/DSH boundary explicit. Evidence floor: tracer RED, realTCP adversarial Origin/media matrix with full state, all positive flows/regressions, generated contract, strictOpenSpec and source/compiled smoke; three expanded seats.
+- Fixture revision: paired invalid-Origin+malformed-JSON/unsupported-media requests prove403 precedes400/415; after nine failures and guard-rejected traffic, valid wrong-password401 followed by correct-password429 proves the limiter was neither incremented nor reset.
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。

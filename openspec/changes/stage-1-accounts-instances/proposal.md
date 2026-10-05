@@ -159,3 +159,7 @@
 ## Issue #22 fixture
 
 - Feature; expanded task6.7 (agree with upstream): authenticated password rotation, user-wide session revocation/reissue and atomic audit persistence across asynchronous crypto. Preserve failure state and concurrent revocation; reuse session/password/cookie/source policies. Origin, administrator reset and gateway disconnection remain separate DAG slices.
+
+## Issue #23 fixture
+
+- Feature; expanded task6.8 (agree with upstream): shared Origin/JSON guard across state-changing platform HTTP APIs and an atomic caller/contract cutover. Reject before authentication, parsing or persisted/in-memory effects; preserve safe requests and non-platform traffic. WebSocket upgrade enforcement remains the gateway slice.
