@@ -259,7 +259,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 
 - [x] 6.1 密码模块：scrypt 哈希和恒定时间校验，长度规则 6 到 256 位；保留参考实现的版权声明。验证：单元测试——5 位被拒、6 位通过、256 位通过、257 位被拒；同一密码两次哈希结果不同但都能校验通过；错误密码校验失败。
 - [x] 6.2 平台会话模块：签发（32 字节随机令牌，库里只存 SHA-256）、校验、7 天滑动续期（最后活动时间最多每分钟写一次）、按用户全部删除。验证：用可控时钟的单元测试——第 6 天活动后第 12 天仍有效；7 天无活动后失效；数据库里找不到令牌原文。
-- [ ] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
+- [x] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
 - [ ] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
 - [ ] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
 - [ ] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
@@ -288,6 +288,8 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 - File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled owned file-backed HTTP smoke, reopen assertions, cleanup, no dependency/migration; evidence recorded here.
 - Resource limits / large input / discovery — selected: existing Fastify body limit and canonical bounded password derivation; no new registration cap/domain restriction/rate limiter (separate tasks).
 - Evidence floor: staged RED/GREEN, real-TCP named scenarios, `pnpm check`, `pnpm contract:write`/check, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
+验证记录（#18）：缺路由404 tracer先RED，原始类型/Ajv转换和非法邮箱10项unit、2项TCP失败后GREEN；322 unit/21 integration和完整检查通过，registration覆盖率100%。保留26项注册unit及5项TCP用例，提取共享测试fixture后重复率由3.22%降至1.98%，未放宽阈值。源/编译真实文件HTTP探针验证201员工/安全cookie、400/409、并发一个赢家、审计失败500全回滚；重开后哈希/摘要/审计精确且日志与关闭后的主DB无密码/令牌明文。e2e健康/迁移通过；生成契约仅增加注册路径。代理信任、Origin、登录登出和UI仍为后续项。
 
 ## 7. 完整用户镜像（任务包 1.5）
 
