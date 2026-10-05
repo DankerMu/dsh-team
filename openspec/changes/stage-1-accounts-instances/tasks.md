@@ -278,7 +278,7 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 - Legacy compatibility / examples — not selected: no prior platform auth API or persisted password format to migrate; reference code is algorithm guidance, not a compatibility target.
 - Evidence floor: staged RED/GREEN with real crypto/SQLite and explicit clocks, `pnpm check`, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
 
-验证记录（#17）：密码/会话缺API的tracer先RED；密码长度5项、会话到期/续期/撤销6项语义失败后GREEN。293 unit（23密码/15会话）及16 integration、完整检查通过；session覆盖率100%，password statements95.83%/branches95.45%（未注入crypto运行时错误）。真实源/编译API文件重开验证哈希、摘要存储、day6/day12续期、精确7天与+1ms、撤销隔离，行与关闭后的主DB无密码/令牌明文，资源清理。格式拒绝和等价Unicode补充断言首次即GREEN；不宣称时序测量证明恒定时间，比较使用timingSafeEqual。保留完整MIT许可，auth内存DB单测规则变更已标记人工审阅。
+验证记录（#17）：密码/会话缺API的tracer先RED；密码长度5项、会话到期/续期/撤销6项语义失败后GREEN。review实证发现Node默认UTF-8把不同孤立代理码元合并，交叉密码错误认证；固定为显式UTF-16LE单一路径和编码标识，新增交叉矩阵/独立派生记录先RED后GREEN，旧格式拒绝。296 unit（26密码/15会话）及16 integration、完整检查通过；session覆盖率100%，password statements95.83%/branches95.45%（未注入crypto运行时错误）。源/编译API文件重开验证哈希、摘要存储、续期/到期/撤销隔离，行与关闭后的主DB无密码/令牌明文；同一漏洞探针由异码元true变false，资源清理。不宣称时序测量证明恒定时间，比较使用timingSafeEqual。保留完整MIT许可，auth内存DB单测规则变更已标记人工审阅。
 
 ## 7. 完整用户镜像（任务包 1.5）
 

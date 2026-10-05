@@ -32,11 +32,11 @@ const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_OPTIONS = { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P };
-const ENCODED_PREFIX = `scrypt$${String(SCRYPT_N)}$${String(SCRYPT_R)}$${String(SCRYPT_P)}$${String(KEY_LEN)}$`;
+const ENCODED_PREFIX = `scrypt-utf16le$${String(SCRYPT_N)}$${String(SCRYPT_R)}$${String(SCRYPT_P)}$${String(KEY_LEN)}$`;
 const SALT_HEX_LENGTH = SALT_BYTES * 2;
 const HASH_HEX_LENGTH = KEY_LEN * 2;
 const ENCODED_LENGTH = ENCODED_PREFIX.length + SALT_HEX_LENGTH + 1 + HASH_HEX_LENGTH;
-const ENCODED_RECORD = /^scrypt\$16384\$8\$1\$64\$([0-9a-f]{32})\$([0-9a-f]{128})$/;
+const ENCODED_RECORD = /^scrypt-utf16le\$16384\$8\$1\$64\$([0-9a-f]{32})\$([0-9a-f]{128})$/;
 const MIN_PASSWORD_CODE_POINTS = 6;
 const MAX_PASSWORD_CODE_POINTS = 256;
 const INVALID_PASSWORD_LENGTH = 'Password must be 6 to 256 Unicode code points';
@@ -61,7 +61,8 @@ function hasBoundedUnicodeCodePoints(password: string): boolean {
 
 function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    scrypt(password, salt, KEY_LEN, SCRYPT_OPTIONS, (error, derivedKey) => {
+    // UTF-16LE is required so lone surrogates keep distinct identities; Node's default UTF-8 conversion aliases each of them to U+FFFD.
+    scrypt(Buffer.from(password, 'utf16le'), salt, KEY_LEN, SCRYPT_OPTIONS, (error, derivedKey) => {
       if (error !== null) {
         reject(error);
         return;

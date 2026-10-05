@@ -2,8 +2,8 @@ import { scrypt as scryptCallback } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { hashPassword, verifyPassword } from './index.ts';
 
-const ENCODED_HASH = /^scrypt\$16384\$8\$1\$64\$[0-9a-f]{32}\$[0-9a-f]{128}$/;
-const ENCODED_PREFIX = 'scrypt$16384$8$1$64$';
+const ENCODED_HASH = /^scrypt-utf16le\$16384\$8\$1\$64\$[0-9a-f]{32}\$[0-9a-f]{128}$/;
+const ENCODED_PREFIX = 'scrypt-utf16le$16384$8$1$64$';
 const SALT_HEX = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const SALT = Buffer.from(SALT_HEX, 'hex');
 const KEY_LEN = 64;
@@ -22,16 +22,29 @@ const INVALID_PASSWORDS = [
   ['5 Unicode code points', ASTRAL.repeat(5)],
   ['257 Unicode code points', ASTRAL.repeat(257)],
 ] as const;
+const SURROGATE_PASSWORDS = [
+  ['lone high surrogate U+D800', 'abcde\uD800'],
+  ['lone high surrogate U+D801', 'abcde\uD801'],
+  ['lone low surrogate U+DC00', 'abcde\uDC00'],
+  ['lone low surrogate U+DC01', 'abcde\uDC01'],
+  ['literal U+FFFD', 'abcde\uFFFD'],
+] as const;
 
 function deriveKey(password: string): Promise<Buffer> {
   const { promise, resolve, reject } = Promise.withResolvers<Buffer>();
-  scryptCallback(password, SALT, KEY_LEN, SCRYPT_OPTIONS, (error, derivedKey) => {
-    if (error !== null) {
-      reject(error);
-      return;
-    }
-    resolve(derivedKey);
-  });
+  scryptCallback(
+    Buffer.from(password, 'utf16le'),
+    SALT,
+    KEY_LEN,
+    SCRYPT_OPTIONS,
+    (error, derivedKey) => {
+      if (error !== null) {
+        reject(error);
+        return;
+      }
+      resolve(derivedKey);
+    },
+  );
   return promise;
 }
 
@@ -153,19 +166,43 @@ describe('hashPassword and verifyPassword', () => {
     await expect(verifyPassword(password, encoded)).resolves.toBe(true);
   });
 
+  it('does not cross-authenticate distinct lone surrogates and literal U+FFFD', async () => {
+    const encodedBySource = await Promise.all(
+      SURROGATE_PASSWORDS.map(
+        async ([, password]) => [password, await hashPassword(password)] as const,
+      ),
+    );
+
+    for (const [sourcePassword, encoded] of encodedBySource) {
+      for (const [, candidate] of SURROGATE_PASSWORDS) {
+        await expect(verifyPassword(candidate, encoded)).resolves.toBe(
+          candidate === sourcePassword,
+        );
+      }
+    }
+  });
+
+  it('verifies an independently derived UTF-16LE record and rejects a wrong password', async () => {
+    const encoded = await matchingRecord(VALID_ASCII);
+
+    await expect(verifyPassword(VALID_ASCII, encoded)).resolves.toBe(true);
+    await expect(verifyPassword('passw1', encoded)).resolves.toBe(false);
+  });
+
   it.each([
     ['empty', () => ''],
     ['truncated', (encoded: string) => encoded.slice(0, encoded.length - 1)],
     [
       'nonhex',
       (encoded: string) =>
-        `${encoded.slice(0, ENCODED_PREFIX.length)}gggggggggggggggggggggggggggggggg${encoded.slice(ENCODED_PREFIX.length + 32)}`,
+        `${encoded.slice(0, ENCODED_PREFIX.length)}gggggggggggggggggggggggggggggggg${encoded.slice(ENCODED_PREFIX.length + SALT_HEX.length)}`,
     ],
     [
       'uppercase hex',
       (encoded: string) => `${ENCODED_PREFIX}${encoded.slice(ENCODED_PREFIX.length).toUpperCase()}`,
     ],
-    ['algorithm', (encoded: string) => `pbkdf2${encoded.slice('scrypt'.length)}`],
+    ['algorithm', (encoded: string) => `pbkdf2${encoded.slice(encoded.indexOf('$'))}`],
+    ['old prefix', (encoded: string) => `scrypt${encoded.slice(encoded.indexOf('$'))}`],
     ['N', (encoded: string) => encoded.replace('$16384$', '$32768$')],
     ['r', (encoded: string) => encoded.replace('$8$', '$7$')],
     ['p', (encoded: string) => encoded.replace('$1$', '$2$')],
