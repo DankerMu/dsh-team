@@ -10,6 +10,13 @@ const CLIENT_MAPPED = '::ffff:198.51.100.7';
 const IPV6 = '2001:db8::1';
 const IPV6_EXPANDED = '2001:0db8:0000:0000:0000:0000:0000:0001';
 const IPV6_CLIENT = '2001:db8::2';
+const SCOPED_ETH0 = 'fe80::1%eth0';
+const SCOPED_ETH0_EXPANDED = 'FE80:0:0:0:0:0:0:1%eth0';
+const SCOPED_ETH1 = 'fe80::1%eth1';
+const SCOPED_ETH1_EXPANDED = 'FE80:0:0:0:0:0:0:1%eth1';
+const SCOPED_BARE = 'fe80::1';
+const MAPPED_SCOPED = '::ffff:192.0.2.10%eth0';
+const MAPPED_SCOPED_CANONICAL = '::ffff:192.0.2.10%eth0';
 
 function request(
   ip: string,
@@ -108,6 +115,52 @@ describe('createSourceAddressResolver', () => {
     // Native isIP accepts this as IPv6; it is not IPv4-mapped ::ffff:<dotted-quad>, so it stays a distinct identity.
     expect(createSourceAddressResolver([PEER])(request(compatible, CLIENT))).toBe(canonical);
     expect(createSourceAddressResolver([PEER])(request(PEER, compatible))).toBe(canonical);
+  });
+
+  it('trusts equivalent IPv6 spellings that retain the same zone identifier', () => {
+    expect(createSourceAddressResolver([SCOPED_ETH0])(request(SCOPED_ETH0_EXPANDED, CLIENT))).toBe(
+      CLIENT,
+    );
+  });
+
+  it.each([
+    ['a mismatched zone', SCOPED_ETH1_EXPANDED, SCOPED_ETH1],
+    ['a missing zone', SCOPED_BARE, SCOPED_BARE],
+  ])('returns the peer with its own scope when config %eth0 meets %s', (_label, peer, expected) => {
+    expect(createSourceAddressResolver([SCOPED_ETH0])(request(peer, CLIENT))).toBe(expected);
+  });
+
+  it('does not let an unscoped config trust a scoped peer', () => {
+    expect(createSourceAddressResolver([SCOPED_BARE])(request(SCOPED_ETH0, CLIENT))).toBe(
+      SCOPED_ETH0,
+    );
+  });
+
+  it('returns the canonical scoped peer when a matching scoped hop has no X-Forwarded-For', () => {
+    expect(createSourceAddressResolver([SCOPED_ETH0])(request(SCOPED_ETH0_EXPANDED))).toBe(
+      SCOPED_ETH0,
+    );
+  });
+
+  it('does not collapse a scoped IPv4-mapped value into unscoped IPv4 trust', () => {
+    // Scoped mapped IPv6 must remain a valid IP literal; dotted IPv4 plus %zone is not.
+    expect(createSourceAddressResolver([PROXY])(request(MAPPED_SCOPED, CLIENT))).toBe(
+      MAPPED_SCOPED_CANONICAL,
+    );
+  });
+
+  it('falls back to the socket peer when a visited X-Forwarded-For hop carries a zone identifier', () => {
+    expect(
+      createSourceAddressResolver([PEER, SCOPED_ETH0])(request(PEER, `${CLIENT}, ${SCOPED_ETH0}`)),
+    ).toBe(PEER);
+  });
+
+  it('ignores a scoped prefix left of the first untrusted client', () => {
+    expect(
+      createSourceAddressResolver([PEER, PROXY])(
+        request(PEER, `${SCOPED_ETH0}, ${CLIENT}, ${PROXY}`),
+      ),
+    ).toBe(CLIENT);
   });
 
   it('does not share trust configuration across resolver instances', () => {

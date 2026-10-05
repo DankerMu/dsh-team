@@ -20,6 +20,7 @@ const LOGIN_EMAIL = '  User@Example.com  ';
 const PASSWORD = ' PassW0rd ';
 const REPLACEMENT_PASSWORD = 'replacement-password';
 const UNKNOWN_LOGIN_EMAIL = '  Nobody@Example.com  ';
+const FORWARDED_CLIENT = '198.51.100.7';
 const UNKNOWN_EMAIL = 'nobody@example.com';
 const SNAPSHOT_SESSIONS =
   'SELECT token_hash, user_id, created_at, last_activity_at FROM platform_sessions ORDER BY token_hash';
@@ -33,6 +34,11 @@ const FORBIDDEN = {
   error: 'Forbidden',
   message: 'Account is disabled',
 } as const;
+
+const NO_FORWARD_HEADERS: Readonly<Record<string, string>> = {};
+const FORWARDED_CLIENT_HEADERS: Readonly<Record<string, string>> = {
+  'x-forwarded-for': FORWARDED_CLIENT,
+};
 
 interface CallbackBarrier {
   derived: Promise<void>;
@@ -97,13 +103,14 @@ async function loginDuringChange(
   app: FastifyInstance,
   change: () => void,
   credentials: { email: string; password: string } = { email: LOGIN_EMAIL, password: PASSWORD },
+  extraHeaders: Readonly<Record<string, string>> = {},
 ): Promise<LightMyRequestResponse> {
   const barrier = createBarrier();
   let pending: Promise<LightMyRequestResponse> | undefined;
   // All prior derivations — startup dummy hash, registration, replacement hashing — finished before arming.
   cryptoBarrier.next = barrier;
   try {
-    pending = injectLogin(app, credentials);
+    pending = injectLogin(app, credentials, extraHeaders);
     await Promise.race([
       barrier.derived,
       pending.then(() => {
@@ -129,6 +136,7 @@ function expectSafeLoginFailure(
   lines: readonly string[],
   actorEmail: string,
   secrets: readonly string[],
+  sourceAddress: string = SOURCE,
 ): void {
   const events = queryAuditEvents(database, {
     page: 1,
@@ -141,7 +149,7 @@ function expectSafeLoginFailure(
     actorEmail,
     targetEmail: null,
     target: null,
-    sourceAddress: SOURCE,
+    sourceAddress,
     details: {},
   });
   expect(
@@ -160,50 +168,65 @@ describe('POST /_platform/api/login account changes during verification', () => 
       sql: "UPDATE users SET status = 'disabled' WHERE email = ?",
       replacePassword: false,
       expected: FORBIDDEN,
+      trustedProxies: [SOURCE] as const,
+      extraHeaders: FORWARDED_CLIENT_HEADERS,
+      sourceAddress: FORWARDED_CLIENT,
     },
     {
       label: 'given a different password hash',
       sql: 'UPDATE users SET password_hash = ? WHERE email = ?',
       replacePassword: true,
       expected: UNAUTHORIZED,
+      trustedProxies: [] as const,
+      extraHeaders: NO_FORWARD_HEADERS,
+      sourceAddress: SOURCE,
     },
   ])('rejects an account $label before issuing a session', async (scenario) => {
-    await withApp(async (app, database, lines) => {
-      const registered = await injectRegister(app, { email: EMAIL, password: PASSWORD });
-      expect(registered.statusCode).toBe(201);
-      const registerToken = sessionCookieToken(cookieHeaders(registered));
-      const user = database
-        .prepare<[string], { password_hash: string }>(
-          'SELECT password_hash FROM users WHERE email = ?',
-        )
-        .get(EMAIL);
-      if (user === undefined) {
-        throw new Error('expected registered user');
-      }
-      const replacementHash = scenario.replacePassword
-        ? await hashPassword(REPLACEMENT_PASSWORD)
-        : undefined;
-      const sessionsBefore = database.prepare(SNAPSHOT_SESSIONS).all();
-
-      const login = await loginDuringChange(app, () => {
-        if (replacementHash === undefined) {
-          database.prepare(scenario.sql).run(EMAIL);
-        } else {
-          database.prepare(scenario.sql).run(replacementHash, EMAIL);
+    await withApp(
+      async (app, database, lines) => {
+        const registered = await injectRegister(app, { email: EMAIL, password: PASSWORD });
+        expect(registered.statusCode).toBe(201);
+        const registerToken = sessionCookieToken(cookieHeaders(registered));
+        const user = database
+          .prepare<[string], { password_hash: string }>(
+            'SELECT password_hash FROM users WHERE email = ?',
+          )
+          .get(EMAIL);
+        if (user === undefined) {
+          throw new Error('expected registered user');
         }
-      });
+        const replacementHash = scenario.replacePassword
+          ? await hashPassword(REPLACEMENT_PASSWORD)
+          : undefined;
+        const sessionsBefore = database.prepare(SNAPSHOT_SESSIONS).all();
 
-      expect(login.statusCode).toBe(scenario.expected.statusCode);
-      expect(login.json()).toEqual(scenario.expected);
-      expect(cookieHeaders(login)).toEqual([]);
-      expect(database.prepare(SNAPSHOT_SESSIONS).all()).toEqual(sessionsBefore);
-      expect(tableCounts(database)).toEqual({ users: 1, sessions: 1, audits: 2 });
-      const secrets = [PASSWORD, REPLACEMENT_PASSWORD, user.password_hash, registerToken];
-      if (replacementHash !== undefined) {
-        secrets.push(replacementHash);
-      }
-      expectSafeLoginFailure(database, login, lines, EMAIL, secrets);
-    });
+        const login = await loginDuringChange(
+          app,
+          () => {
+            if (replacementHash === undefined) {
+              database.prepare(scenario.sql).run(EMAIL);
+            } else {
+              database.prepare(scenario.sql).run(replacementHash, EMAIL);
+            }
+          },
+          { email: LOGIN_EMAIL, password: PASSWORD },
+          scenario.extraHeaders,
+        );
+
+        expect(login.statusCode).toBe(scenario.expected.statusCode);
+        expect(login.json()).toEqual(scenario.expected);
+        expect(cookieHeaders(login)).toEqual([]);
+        expect(database.prepare(SNAPSHOT_SESSIONS).all()).toEqual(sessionsBefore);
+        expect(tableCounts(database)).toEqual({ users: 1, sessions: 1, audits: 2 });
+        const secrets = [PASSWORD, REPLACEMENT_PASSWORD, user.password_hash, registerToken];
+        if (replacementHash !== undefined) {
+          secrets.push(replacementHash);
+        }
+        expectSafeLoginFailure(database, login, lines, EMAIL, secrets, scenario.sourceAddress);
+      },
+      false,
+      scenario.trustedProxies,
+    );
   });
 
   it('returns the current admin identity after promotion during verification', async () => {

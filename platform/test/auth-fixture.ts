@@ -138,12 +138,13 @@ function injectJson(
   app: FastifyInstance,
   url: string,
   payload: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
 ): Promise<LightMyRequestResponse> {
   return app.inject({
     method: 'POST',
     url,
     remoteAddress: SOURCE,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...extraHeaders },
     payload: JSON.stringify(payload),
   });
 }
@@ -158,6 +159,7 @@ export function injectRegister(
 export function injectLogin(
   app: FastifyInstance,
   payload: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
 ): Promise<LightMyRequestResponse> {
-  return injectJson(app, '/_platform/api/login', payload);
+  return injectJson(app, '/_platform/api/login', payload, extraHeaders);
 }

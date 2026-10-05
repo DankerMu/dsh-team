@@ -360,6 +360,42 @@ describe('source address over a real TCP port', () => {
     );
   });
 
+  it('records X-Forwarded-For over conflicting Forwarded and X-Real-IP on a successful login', async () => {
+    await withListeningApp(
+      async (baseUrl, _app, database) => {
+        const registered = await postJson(
+          `${baseUrl}/_platform/api/register`,
+          { email: EMAIL, password: PASSWORD },
+          { 'X-Forwarded-For': CLIENT_A },
+        );
+        expect(registered.status).toBe(201);
+        await registered.json();
+
+        const login = await postJson(
+          `${baseUrl}/_platform/api/login`,
+          { email: EMAIL, password: PASSWORD },
+          {
+            'X-Forwarded-For': CLIENT_A,
+            Forwarded: `for=${CLIENT_B}`,
+            'X-Real-IP': CLIENT_B,
+          },
+        );
+        expect(login.status).toBe(200);
+        await login.json();
+
+        const events = queryAuditEvents(database, {
+          page: 1,
+          pageSize: 10,
+          eventType: 'login.succeeded',
+        });
+        expect(events).toHaveLength(1);
+        expect(events[0]?.sourceAddress).toBe(CLIENT_A);
+      },
+      false,
+      TRUSTED_LOOPBACK,
+    );
+  });
+
   it('leaves hostname and protocol unchanged when forwarded Host and Proto headers are present', async () => {
     await withApp(
       async (app) => {
