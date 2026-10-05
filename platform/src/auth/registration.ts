@@ -60,6 +60,10 @@ interface RegistrationBody {
   password: string;
 }
 
+interface InsertUserStatement {
+  run(id: string, email: string, passwordHash: string, createdAt: number): { changes: number };
+}
+
 function generateUserId(): string {
   let id = '';
   for (let index = 0; index < USER_ID_LENGTH; index += 1) {
@@ -108,7 +112,15 @@ export const registrationRoutes: FastifyPluginCallback<RegistrationOptions> = (
   options,
   done,
 ) => {
-  const insertUser = options.database.prepare(INSERT_USER);
+  let insertUser: InsertUserStatement;
+  try {
+    insertUser = options.database.prepare(INSERT_USER);
+  } catch (error) {
+    // better-sqlite3 prepare throws SqliteError, an Error; catch bindings are unknown.
+    const originalError = error as Error;
+    done(originalError);
+    return;
+  }
   const persistRegistration = options.database.transaction(
     (
       id: string,

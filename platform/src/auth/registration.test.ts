@@ -7,7 +7,9 @@ import {
   tableCounts,
   withApp,
 } from '../../test/registration-fixture.ts';
+import { buildApp } from '../app.ts';
 import { queryAuditEvents } from '../audit/index.ts';
+import { openDatabase } from '../db/index.ts';
 import { validateSession, verifyPassword } from './index.ts';
 
 const EMAIL = '  User@Example.com  ';
@@ -19,6 +21,16 @@ const SELECT_USERS = 'SELECT id, email, password_hash, role, status FROM users';
 const SELECT_SESSIONS = 'SELECT token_hash, user_id FROM platform_sessions';
 const SESSION_ABORT = 'session-write-aborted';
 const AUDIT_ABORT = 'audit-write-aborted';
+const CONSTRUCTION_CONFIG = {
+  host: '127.0.0.1',
+  port: 8080,
+  logLevel: 'silent',
+  dataDir: './data',
+  publicUrl: 'http://127.0.0.1:8080',
+  authority: '127.0.0.1:8080',
+  cookieSecure: false,
+  trustedProxies: [],
+} as const;
 
 interface UserRow {
   id: string;
@@ -202,4 +214,22 @@ describe('POST /_platform/api/register', () => {
       });
     },
   );
+});
+
+describe('registration plugin construction', () => {
+  it('rejects buildApp when users is missing without closing the caller-owned database', async () => {
+    const database = openDatabase(':memory:');
+
+    try {
+      await expect(buildApp(CONSTRUCTION_CONFIG, database)).rejects.toMatchObject({
+        code: 'SQLITE_ERROR',
+        message: 'no such table: users',
+      });
+
+      expect(database.open).toBe(true);
+      expect(database.prepare('SELECT 1 AS value').get()).toEqual({ value: 1 });
+    } finally {
+      database.close();
+    }
+  });
 });

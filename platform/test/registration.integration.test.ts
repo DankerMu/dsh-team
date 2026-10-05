@@ -12,6 +12,7 @@ const PASSWORD = 'passw0rd';
 const ASTRAL = '😀';
 const TOKEN_VALUE = /^platform_session=([0-9a-f]{64})/;
 const SELECT_USERS = 'SELECT id, email, password_hash, role, status FROM users';
+const SELECT_USER_BY_ID = `${SELECT_USERS} WHERE id = ?`;
 const SELECT_SESSIONS = 'SELECT token_hash, user_id FROM platform_sessions';
 
 interface UserRow {
@@ -169,27 +170,60 @@ describe('POST /_platform/api/register over a real TCP port', () => {
     const tooLongUnicode = await postRegister(
       JSON.stringify({ email: 'u257@example.com', password: ASTRAL.repeat(257) }),
     );
-    const sixDigits = await postRegister(
-      JSON.stringify({ email: 'p6@example.com', password: '123456' }),
-    );
-    const twoFiftySix = await postRegister(
-      JSON.stringify({ email: 'p256@example.com', password: 'z'.repeat(256) }),
-    );
-    const sixUnicode = await postRegister(
-      JSON.stringify({ email: 'u6@example.com', password: ASTRAL.repeat(6) }),
-    );
-    const twoFiftySixUnicode = await postRegister(
-      JSON.stringify({ email: 'u256@example.com', password: ASTRAL.repeat(256) }),
-    );
+    const accepted = [
+      { email: 'p6@example.com', password: '123456' },
+      { email: 'p256@example.com', password: 'z'.repeat(256) },
+      { email: 'u6@example.com', password: ASTRAL.repeat(6) },
+      { email: 'u256@example.com', password: ASTRAL.repeat(256) },
+    ] as const;
+    const acceptedResponses = [];
+    for (const { email, password } of accepted) {
+      acceptedResponses.push({
+        email,
+        password,
+        response: await postRegister(JSON.stringify({ email, password })),
+      });
+    }
+    let twoFiftySixAstralPassword: string | undefined;
+    let twoFiftySixAstralHash: string | undefined;
 
     expect(tooShortAscii.status).toBe(400);
     expect(tooLongAscii.status).toBe(400);
     expect(tooShortUnicode.status).toBe(400);
     expect(tooLongUnicode.status).toBe(400);
-    expect(sixDigits.status).toBe(201);
-    expect(twoFiftySix.status).toBe(201);
-    expect(sixUnicode.status).toBe(201);
-    expect(twoFiftySixUnicode.status).toBe(201);
+    for (const { email, password, response } of acceptedResponses) {
+      expect(response.status).toBe(201);
+      const body: unknown = await response.json();
+      if (
+        typeof body !== 'object' ||
+        body === null ||
+        !('id' in body) ||
+        !('email' in body) ||
+        typeof body.id !== 'string' ||
+        typeof body.email !== 'string'
+      ) {
+        throw new Error(`expected registered employee for ${email}`);
+      }
+      expect(body.email).toBe(email);
+      const user = database.prepare<[string], UserRow>(SELECT_USER_BY_ID).get(body.id);
+      if (user === undefined) {
+        throw new Error(`expected stored user ${body.id}`);
+      }
+      expect(user.email).toBe(email);
+      expect(await verifyPassword(password, user.password_hash)).toBe(true);
+      const token = cookieToken(response.headers.getSetCookie());
+      expect(validateSession(database, token, Date.now())).toBe(body.id);
+      if (email === 'u256@example.com') {
+        twoFiftySixAstralPassword = password;
+        twoFiftySixAstralHash = user.password_hash;
+      }
+    }
+    if (twoFiftySixAstralPassword === undefined || twoFiftySixAstralHash === undefined) {
+      throw new Error('expected stored 256-astral password hash');
+    }
+    expect(
+      await verifyPassword(twoFiftySixAstralPassword.slice(0, 256), twoFiftySixAstralHash),
+    ).toBe(false);
     expect(tableCounts(database)).toEqual({
       users: before.users + 4,
       sessions: before.sessions + 4,

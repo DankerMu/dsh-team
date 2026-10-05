@@ -289,7 +289,7 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 - Resource limits / large input / discovery — selected: existing Fastify body limit and canonical bounded password derivation; no new registration cap/domain restriction/rate limiter (separate tasks).
 - Evidence floor: staged RED/GREEN, real-TCP named scenarios, `pnpm check`, `pnpm contract:write`/check, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
 
-验证记录（#18）：缺路由404 tracer先RED，原始类型/Ajv转换和非法邮箱10项unit、2项TCP失败后GREEN；322 unit/21 integration和完整检查通过，registration覆盖率100%。保留26项注册unit及5项TCP用例，提取共享测试fixture后重复率由3.22%降至1.98%，未放宽阈值。源/编译真实文件HTTP探针验证201员工/安全cookie、400/409、并发一个赢家、审计失败500全回滚；重开后哈希/摘要/审计精确且日志与关闭后的主DB无密码/令牌明文。e2e健康/迁移通过；生成契约仅增加注册路径。代理信任、Origin、登录登出和UI仍为后续项。
+验证记录（#18）：缺路由404 tracer先RED，原始类型/Ajv转换和非法邮箱10项unit、2项TCP失败后GREEN；323 unit/21 integration和完整检查通过，registration覆盖率100%。review补强HTTP边界密码原文验证及cookie精确绑定；额外探针发现callback插件同步prepare异常逃逸，改走done(error)后buildApp拒绝且保留调用方DB，源/编译均通过。共享测试fixture消除复制，未放宽重复率阈值。源/编译真实文件HTTP验证201/400/409、并发赢家、注入500全回滚、重开哈希/摘要/审计和限定明文扫描；额外验证原型/坏JSON/大请求、ID碰撞和crypto失败。e2e健康/迁移通过；契约仅增加注册路径。代理信任、Origin、登录登出和UI为后续项。
 
 ## 7. 完整用户镜像（任务包 1.5）
 
