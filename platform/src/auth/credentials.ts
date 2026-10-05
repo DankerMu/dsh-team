@@ -1,0 +1,56 @@
+import type { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+
+const INVALID_EMAIL = 'Invalid email';
+const INTERNAL_WHITESPACE = /\s/;
+
+export const ERROR_RESPONSE_SCHEMA = {
+  type: 'object',
+  required: ['statusCode', 'error', 'message'],
+  additionalProperties: false,
+  properties: {
+    statusCode: { type: 'number' },
+    error: { type: 'string' },
+    message: { type: 'string' },
+  },
+} as const;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function rejectInvalidCredentialBody(
+  invalidBodyMessage: string,
+): (request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => void {
+  return (request, reply, done) => {
+    const body: unknown = request.body;
+    if (
+      !isPlainObject(body) ||
+      typeof body.email !== 'string' ||
+      typeof body.password !== 'string'
+    ) {
+      void reply.code(400).send({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: invalidBodyMessage,
+      });
+      return;
+    }
+    const email = body.email.trim().toLowerCase();
+    const at = email.indexOf('@');
+    if (
+      at <= 0 ||
+      at !== email.lastIndexOf('@') ||
+      at >= email.length - 1 ||
+      INTERNAL_WHITESPACE.test(email)
+    ) {
+      void reply.code(400).send({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: INVALID_EMAIL,
+      });
+      return;
+    }
+    body.email = email;
+    done();
+  };
+}

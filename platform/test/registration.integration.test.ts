@@ -6,7 +6,7 @@ import { queryAuditEvents } from '../src/audit/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { validateSession, verifyPassword } from '../src/auth/index.ts';
-import { tableCounts } from './registration-fixture.ts';
+import { tableCounts } from './auth-fixture.ts';
 
 const PASSWORD = 'passw0rd';
 const ASTRAL = '😀';

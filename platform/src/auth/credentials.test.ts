@@ -2,10 +2,12 @@ import type { LightMyRequestResponse } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import {
   cookieHeaders,
+  injectLogin,
   injectRegister,
   tableCounts,
   withApp,
-} from '../../test/registration-fixture.ts';
+} from '../../test/auth-fixture.ts';
+import { queryAuditEvents } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
 const PASSWORD = 'passw0rd';
@@ -96,6 +98,33 @@ describe('POST /_platform/api/register input boundaries', () => {
       expect(response.statusCode).toBe(201);
       expect(cookieHeaders(response)).toHaveLength(1);
       expect(tableCounts(database)).toEqual({ users: 1, sessions: 1, audits: 1 });
+    });
+  });
+});
+
+describe('POST /_platform/api/login input boundaries', () => {
+  it('rejects a numeric password before coercion with 400 and no persisted rows', async () => {
+    await withApp(async (app, database, lines) => {
+      expectRejected(
+        await injectLogin(app, { email: 'numpass@example.com', password: 123456 }),
+        database,
+        lines,
+        ['123456'],
+      );
+    });
+  });
+
+  it('rejects an email with missing @ as 400 and writes no login.failed audit', async () => {
+    await withApp(async (app, database, lines) => {
+      expectRejected(
+        await injectLogin(app, { email: 'not-an-email', password: PASSWORD }),
+        database,
+        lines,
+        [PASSWORD],
+      );
+      expect(
+        queryAuditEvents(database, { page: 1, pageSize: 10, eventType: 'login.failed' }),
+      ).toEqual([]);
     });
   });
 });

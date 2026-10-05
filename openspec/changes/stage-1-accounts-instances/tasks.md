@@ -260,7 +260,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.1 密码模块：scrypt 哈希和恒定时间校验，长度规则 6 到 256 位；保留参考实现的版权声明。验证：单元测试——5 位被拒、6 位通过、256 位通过、257 位被拒；同一密码两次哈希结果不同但都能校验通过；错误密码校验失败。
 - [x] 6.2 平台会话模块：签发（32 字节随机令牌，库里只存 SHA-256）、校验、7 天滑动续期（最后活动时间最多每分钟写一次）、按用户全部删除。验证：用可控时钟的单元测试——第 6 天活动后第 12 天仍有效；7 天无活动后失效；数据库里找不到令牌原文。
 - [x] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
-- [ ] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
+- [x] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
 - [ ] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
 - [ ] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
 - [ ] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
@@ -298,6 +298,8 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 - Concurrency / shared state / ordering and Resource limits / large input / discovery — selected: recheck status/password after async verification, multiple-browser logout isolation, expiry before renewal and minute throttling; retained disabled-session logout at elapsed>=60,000ms returns401 with full row snapshot unchanged, no audit/cookie. Existing input/crypto bounds, no rate-limit or cache addition.
 - File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled real-TCP file-backed reopen/login/logout proof, owned cleanup, unchanged dependencies/schema and full checks.
 - Evidence floor: real-TCP named login/session/cookie scenarios through canonical recognition (test-only protected route), staged RED/GREEN, `pnpm check`, generated-contract check, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
+验证记录（#19）：登录404 tracer、3项真实scrypt回调屏障竞态、16项登出/识别/解析失败先RED后GREEN；352 unit/28 integration（7项真实TCP认证）及完整检查通过。共用凭据/cookie与测试fixture，重复率4.06%→2.73%，旧实现删除无别名。源/编译文件DB真实HTTP验证统一401/禁用403、day6/day12、摘要/重复cookie拒绝、禁用不续期、登出审计失败回滚和单浏览器撤销，重开身份与限定明文扫描通过；没有生产身份查询接口。契约仅新增login/logout，注册/健康不变；e2e迁移/健康通过。其它新验收断言首次GREEN如实保留，未宣称全部独立RED。
 
 ## 7. 完整用户镜像（任务包 1.5）
 

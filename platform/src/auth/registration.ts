@@ -1,13 +1,10 @@
 import { randomInt } from 'node:crypto';
-import type {
-  FastifyPluginCallback,
-  FastifyPluginOptions,
-  FastifyReply,
-  FastifyRequest,
-} from 'fastify';
+import type { FastifyPluginCallback, FastifyPluginOptions } from 'fastify';
 import { recordAuditEvent } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { ERROR_RESPONSE_SCHEMA, rejectInvalidCredentialBody } from './credentials.ts';
 import { hashPassword } from './password.ts';
+import { formatSessionCookie } from './session-cookie.ts';
 import { createSession } from './session.ts';
 
 const USER_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -15,8 +12,6 @@ const USER_ID_LENGTH = 12;
 const INSERT_USER =
   "INSERT INTO users (id, email, password_hash, role, status, created_at) VALUES (?, ?, ?, 'employee', 'active', ?) ON CONFLICT (email) DO NOTHING";
 const INVALID_BODY = 'Invalid registration body';
-const INVALID_EMAIL = 'Invalid email';
-const INTERNAL_WHITESPACE = /\s/;
 
 const REGISTER_BODY_SCHEMA = {
   type: 'object',
@@ -36,17 +31,6 @@ const REGISTER_SUCCESS_SCHEMA = {
     id: { type: 'string' },
     email: { type: 'string' },
     role: { type: 'string', enum: ['employee'] },
-  },
-} as const;
-
-const ERROR_RESPONSE_SCHEMA = {
-  type: 'object',
-  required: ['statusCode', 'error', 'message'],
-  additionalProperties: false,
-  properties: {
-    statusCode: { type: 'number' },
-    error: { type: 'string' },
-    message: { type: 'string' },
   },
 } as const;
 
@@ -70,40 +54,6 @@ function generateUserId(): string {
     id += USER_ID_ALPHABET.charAt(randomInt(USER_ID_ALPHABET.length));
   }
   return id;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-async function rejectInvalidRegistrationBody(
-  request: FastifyRequest,
-  reply: FastifyReply,
-): Promise<undefined | FastifyReply> {
-  const body: unknown = request.body;
-  if (!isPlainObject(body) || typeof body.email !== 'string' || typeof body.password !== 'string') {
-    return reply.code(400).send({
-      statusCode: 400,
-      error: 'Bad Request',
-      message: INVALID_BODY,
-    });
-  }
-  const email = body.email.trim().toLowerCase();
-  const at = email.indexOf('@');
-  if (
-    at <= 0 ||
-    at !== email.lastIndexOf('@') ||
-    at >= email.length - 1 ||
-    INTERNAL_WHITESPACE.test(email)
-  ) {
-    return reply.code(400).send({
-      statusCode: 400,
-      error: 'Bad Request',
-      message: INVALID_EMAIL,
-    });
-  }
-  body.email = email;
-  return undefined;
 }
 
 /** Registers `POST /_platform/api/register`. */
@@ -158,7 +108,7 @@ export const registrationRoutes: FastifyPluginCallback<RegistrationOptions> = (
           500: ERROR_RESPONSE_SCHEMA,
         },
       },
-      preValidation: rejectInvalidRegistrationBody,
+      preValidation: rejectInvalidCredentialBody(INVALID_BODY),
     },
     async (request, reply) => {
       const { email } = request.body;
@@ -173,11 +123,7 @@ export const registrationRoutes: FastifyPluginCallback<RegistrationOptions> = (
           message: 'Email already registered',
         });
       }
-      let cookie = `platform_session=${token}; Path=/; HttpOnly; SameSite=Lax`;
-      if (options.cookieSecure) {
-        cookie += '; Secure';
-      }
-      reply.header('set-cookie', cookie);
+      reply.header('set-cookie', formatSessionCookie(token, options.cookieSecure));
       return reply.code(201).send({ id, email, role: 'employee' as const });
     },
   );
