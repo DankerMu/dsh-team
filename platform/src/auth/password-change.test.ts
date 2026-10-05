@@ -4,6 +4,7 @@ import {
   cookieHeaders,
   injectLogin,
   injectRegister,
+  jsonRequestHeaders,
   readPublicIdentity,
   sessionCookieHeader,
   sessionCookieToken,
@@ -70,7 +71,7 @@ describe('POST /_platform/api/change-password', () => {
           method: 'POST',
           url: '/_platform/api/change-password',
           remoteAddress: SOURCE,
-          headers: { cookie: `platform_session=${loginToken}` },
+          headers: jsonRequestHeaders({ cookie: `platform_session=${loginToken}` }),
           payload: {
             currentPassword: PASSWORD,
             newPassword: NEW_PASSWORD,
@@ -142,7 +143,7 @@ describe('POST /_platform/api/change-password', () => {
       const changed = await app.inject({
         method: 'POST',
         url: '/_platform/api/change-password',
-        headers: { cookie: `platform_session=${token}` },
+        headers: jsonRequestHeaders({ cookie: `platform_session=${token}` }),
         payload: { currentPassword: failure.currentPassword, newPassword: NEW_PASSWORD },
       });
 
@@ -172,7 +173,7 @@ describe('POST /_platform/api/change-password', () => {
         const changed = await app.inject({
           method: 'POST',
           url: '/_platform/api/change-password',
-          headers: { 'content-type': 'application/json', cookie: `platform_session=${token}` },
+          headers: jsonRequestHeaders({ cookie: `platform_session=${token}` }),
           payload: JSON.stringify(payload),
         });
 
@@ -193,6 +194,7 @@ describe('POST /_platform/api/change-password', () => {
       const changed = await app.inject({
         method: 'POST',
         url: '/_platform/api/change-password',
+        headers: jsonRequestHeaders(),
         payload: { currentPassword: PASSWORD, newPassword: NEW_PASSWORD, email: EMAIL },
       });
 

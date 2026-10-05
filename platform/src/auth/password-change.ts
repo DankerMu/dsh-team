@@ -3,6 +3,7 @@ import { recordAuditEvent } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { ERROR_RESPONSE_SCHEMA, isPlainObject, rejectInvalidBody } from './credentials.ts';
 import { hashPassword, verifyPassword } from './password.ts';
+import { ORIGIN_HEADERS_SCHEMA } from './request-guard.ts';
 import { formatSessionCookie, readSessionCookie } from './session-cookie.ts';
 import { createSession, deleteUserSessions, getSessionUser } from './session.ts';
 import type { SourceAddressResolver } from './source-address.ts';
@@ -83,11 +84,14 @@ export const passwordChangeRoutes: FastifyPluginCallback<PasswordChangeOptions> 
       {
         schema: {
           summary: 'Change the password and replace all platform sessions',
+          headers: ORIGIN_HEADERS_SCHEMA,
           body: BODY_SCHEMA,
           response: {
             204: { type: 'null' },
             400: ERROR_RESPONSE_SCHEMA,
             401: ERROR_RESPONSE_SCHEMA,
+            403: ERROR_RESPONSE_SCHEMA,
+            415: ERROR_RESPONSE_SCHEMA,
             500: ERROR_RESPONSE_SCHEMA,
           },
         },

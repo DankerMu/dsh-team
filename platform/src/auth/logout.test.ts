@@ -6,6 +6,7 @@ import {
   cookieHeaders,
   injectLogin,
   injectRegister,
+  jsonRequestHeaders,
   type PublicIdentity,
   readPublicIdentity,
   sessionCookieHeader,
@@ -68,7 +69,8 @@ describe('POST /_platform/api/logout', () => {
           method: 'POST',
           url: '/_platform/api/logout',
           remoteAddress: SOURCE,
-          headers: { cookie: `theme=dark; platform_session=${loginToken}` },
+          headers: jsonRequestHeaders({ cookie: `theme=dark; platform_session=${loginToken}` }),
+          payload: {},
         });
 
         expect(logout.statusCode).toBe(204);
@@ -143,7 +145,8 @@ describe('POST /_platform/api/logout', () => {
           method: 'POST',
           url: '/_platform/api/logout',
           remoteAddress: SOURCE,
-          ...(cookie === undefined ? {} : { headers: { cookie } }),
+          headers: jsonRequestHeaders({ cookie }),
+          payload: {},
         });
 
         expect(logout.statusCode).toBe(401);

@@ -5,6 +5,7 @@ import { getSessionUser, readSessionCookie } from '../src/auth/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import {
   injectRegister,
+  jsonRequestHeaders,
   type PublicIdentity,
   readPublicIdentity,
   sessionCookieHeader,
@@ -85,11 +86,11 @@ export async function withListeningApp(
 export async function postJson(
   url: string,
   payload: unknown,
-  extraHeaders: Readonly<Record<string, string>> = {},
+  extraHeaders: Readonly<Record<string, string | undefined>> = {},
 ): Promise<Response> {
   return fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...extraHeaders },
+    headers: jsonRequestHeaders(extraHeaders),
     body: JSON.stringify(payload),
   });
 }

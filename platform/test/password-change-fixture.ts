@@ -25,7 +25,7 @@ export function changePassword(
   cookie: string | undefined,
   currentPassword = PASSWORD,
   newPassword = NEW_PASSWORD,
-  extraHeaders: Readonly<Record<string, string>> = {},
+  extraHeaders: Readonly<Record<string, string | undefined>> = {},
 ): Promise<Response> {
   return postJson(
     `${baseUrl}/_platform/api/change-password`,

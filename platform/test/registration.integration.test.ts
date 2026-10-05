@@ -76,7 +76,7 @@ describe('POST /_platform/api/register over a real TCP port', () => {
   async function postRegister(body: string): Promise<Response> {
     return fetch(`${baseUrl}/_platform/api/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', origin: CONFIG.publicUrl },
       body,
     });
   }

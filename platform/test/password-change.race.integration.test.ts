@@ -13,6 +13,7 @@ import {
   expectNoSecrets,
   getIdentity,
   PASSWORD,
+  postJson,
   registerAccount,
   successfulLogin,
   withListeningApp,
@@ -106,10 +107,11 @@ describe('password-change authorization after real crypto over TCP', () => {
           async () => {
             expect(snapshotPasswordState(database)).toEqual(before);
             if (scenario.change === 'logout') {
-              const logout = await fetch(`${baseUrl}/_platform/api/logout`, {
-                method: 'POST',
-                headers: { cookie: `platform_session=${login.token}` },
-              });
+              const logout = await postJson(
+                `${baseUrl}/_platform/api/logout`,
+                {},
+                { cookie: `platform_session=${login.token}` },
+              );
               expect(logout.status).toBe(204);
               expect(await logout.text()).toBe('');
             } else if (scenario.change === 'competing rotation') {

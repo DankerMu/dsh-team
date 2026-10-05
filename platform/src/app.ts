@@ -2,6 +2,7 @@ import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
 import {
   createSourceAddressResolver,
+  installRequestGuard,
   loginRoutes,
   logoutRoutes,
   passwordChangeRoutes,
@@ -52,6 +53,7 @@ export async function buildApp(
   });
 
   try {
+    installRequestGuard(app, config.publicUrl);
     const resolveSourceAddress = createSourceAddressResolver(config.trustedProxies);
     await app.register(swagger, {
       openapi: {
