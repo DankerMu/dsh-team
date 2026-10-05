@@ -262,7 +262,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
 - [x] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
 - [x] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
-- [ ] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
+- [x] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
 - [ ] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
 - [ ] 6.8 `Origin` 校验：所有改变状态的平台接口只接受 JSON 请求体，且 `Origin` 必须等于平台对外地址。验证：集成测试——缺少 `Origin`、`Origin` 是别的站点、请求体是表单编码，三种情况都被拒绝且状态不变（规格“改变状态的请求必须来自平台自己的页面”）。
 - [ ] 6.9 管理员命令 `platform/src/cli.ts`（`admin create <邮箱>`）：从终端不回显地读密码；邮箱不存在则创建管理员，已存在则提升并可选重设密码；没有终端时拒绝；写审计。验证：测试覆盖规格“首个管理员由部署命令创建”里除“注册接口不能指定角色”（由 6.3 覆盖）之外的全部场景（含非终端环境下退出码非零、参数里带密码被拒绝）。
@@ -327,6 +327,8 @@ Review 修复（#20）：原生规范化丢弃 IPv6 zone，父进程确认 `%eth
 - Config / project setup, Legacy compatibility / examples, Documentation / migration notes — selected only for existing app/plugin/test-clock integration, unchanged configuration and documented window interpretation; no new env, dependency, state schema or compatibility shim.
 - Release / packaging / dependency compatibility, File IO / path safety / overwrite — selected for source/compiled owned file-DB realHTTP recovery/restart smoke and cleanup; no production filesystem changes.
 - Evidence floor: parent semantic tracer RED, controlled-Date realTCP scenarios and crypto overlap oracle, full checks plus contract generation, strict OpenSpec, source/compiled smoke. Three expanded seats; implementation may not weaken this fixture to clear a finding.
+
+验证记录（#21）：真实 TCP tracer 在实现前得到200而非429（36 pass / 1 fail），实现后通过。补充 Date-only 时钟、真实 scrypt 回调屏障、错误计数/回滚断言后，`pnpm fmt && pnpm check` 402 unit / 41 integration 全部通过，重复率2.48%；429 契约由生成器更新。源/编译真实 TCP 文件库证明10次失败后的429、邮箱/映射IP别名同键、另一来源成功、精确900000ms恢复及重开应用清空限流而保留账号/会话/审计；原生 Map 构造观察证明无关过期键回收、扫除节奏与活跃限额保留，无生产观测API。e2e健康/迁移通过。补充断言首次GREEN如实保留，不宣称全部独立RED。
 
 ## 7. 完整用户镜像（任务包 1.5）
 
