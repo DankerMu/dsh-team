@@ -305,6 +305,15 @@ Review 修复（#19）：新增未知邮箱有效长度密码的真实 scrypt �
 
 第二轮修复（#19）：保留真实过期会话的登出用例返回 401、无 cookie/审计且完整状态不变，另一浏览器仍可用。独立副本跳过过期判断时，该登出用例与已有过期原语用例均失败（352 pass / 2 fail）；正常实现 354 unit / 28 integration 及完整检查通过，重复率 2.58%。两轮修复均未改生产行为。
 
+### Issue #20 risk/evidence map (task 6.5 only)
+
+- Public API / CLI / script entry, Config / project setup, Auth / permissions / secrets — selected: existing trustedProxies config drives one source resolver; adversarial XFF trust-chain matrix and real-TCP registration/login/logout audit rows prove attribution, no global Host/protocol trust.
+- Schema / columns / units / field names, Legacy compatibility / examples — selected: canonical IP text in existing source_address only; no schema or HTTP contract changes. Existing credentials/cookies/audit atomicity remain covered by full regression and contract check.
+- Resource limits / large input / discovery, Error handling / rollback / partial outputs — selected: existing HTTP header bounds, no DNS/dependencies; malformed relevant forwarding data falls back to peer without content echo, irrelevant attacker prefix cannot affect selected identity. Literal/mapped IPv6 cases exercise native parsing.
+- Release / packaging / dependency compatibility, File IO / path safety / overwrite — selected only for source/compiled owned file-DB TCP smoke and reopen/cleanup; no production file-path change or dependency. Documentation / migration notes — selected: Issue #20 design records supported header, safe fallback, deployment assumption and unchanged history.
+- Concurrency / shared state / ordering — not selected: immutable per-app trust configuration, no new asynchronous/shared state; existing auth race/transaction tests retained.
+- Evidence floor: staged trusted-registration semantic RED/GREEN, resolver boundary matrix, named real-TCP two-client sequence with actual audit sources (rate-limit enforcement remains #21), source/compiled smoke, pnpm check, strict OpenSpec. Three expanded seats; no new production endpoint.
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。

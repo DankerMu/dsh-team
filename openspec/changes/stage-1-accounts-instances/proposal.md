@@ -147,3 +147,7 @@
 ## Issue #19 fixture
 
 - Feature; expanded task6.4 login/logout and authenticated session recognition (agree with upstream). Issue #19 design/risk map reuses registration credentials, cookies and canonical session lifetime; no new production identity-query endpoint, gateway or UI.
+
+## Issue #20 fixture
+
+- Feature; expanded task6.5 (agree with upstream): source attribution across a configured proxy trust boundary and persisted auth audits. Wrong attribution enables spoofed audit identities and future rate-limit keys. Preserve HTTP/session/password contracts; risk packs and evidence are mapped below task6.5. No global proxy mode or throttling in this slice.
