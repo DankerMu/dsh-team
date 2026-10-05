@@ -143,3 +143,7 @@
 ## Issue #18 fixture
 
 - Feature; expanded task6.3 public registration, credentials and atomic persisted state (agree with upstream). Issue #18 design/risk map includes required app wiring and generated HTTP contract; login/logout, proxy trust, Origin enforcement and UI remain later slices.
+
+## Issue #19 fixture
+
+- Feature; expanded task6.4 login/logout and authenticated session recognition (agree with upstream). Issue #19 design/risk map reuses registration credentials, cookies and canonical session lifetime; no new production identity-query endpoint, gateway or UI.

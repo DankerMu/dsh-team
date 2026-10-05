@@ -291,6 +291,14 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 
 验证记录（#18）：缺路由404 tracer先RED，原始类型/Ajv转换和非法邮箱10项unit、2项TCP失败后GREEN；323 unit/21 integration和完整检查通过，registration覆盖率100%。review补强HTTP边界密码原文验证及cookie精确绑定；额外探针发现callback插件同步prepare异常逃逸，改走done(error)后buildApp拒绝且保留调用方DB，源/编译均通过。共享测试fixture消除复制，未放宽重复率阈值。源/编译真实文件HTTP验证201/400/409、并发赢家、注入500全回滚、重开哈希/摘要/审计和限定明文扫描；额外验证原型/坏JSON/大请求、ID碰撞和crypto失败。e2e健康/迁移通过；契约仅增加注册路径。代理信任、Origin、登录登出和UI为后续项。
 
+### Issue #19 risk/evidence map (task 6.4 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names, Config / project setup and Legacy compatibility / examples — selected: generated login/logout schemas, unchanged registration contract, shared normalized credentials/cookie policy, current account identity and configured Secure mode.
+- Auth / permissions / secrets and Error handling / rollback / partial outputs — selected: uniform unknown/wrong401, verified disabled403, dummy derivation, malformed/digest cookie rejection, safe login/logout audits, no plaintext/credential JSON, session/audit rollback and plugin-construction failure propagation.
+- Concurrency / shared state / ordering and Resource limits / large input / discovery — selected: recheck status/password after async verification, multiple-browser logout isolation, expiry before renewal and minute throttling; retained disabled-session logout at elapsed>=60,000ms returns401 with full row snapshot unchanged, no audit/cookie. Existing input/crypto bounds, no rate-limit or cache addition.
+- File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled real-TCP file-backed reopen/login/logout proof, owned cleanup, unchanged dependencies/schema and full checks.
+- Evidence floor: real-TCP named login/session/cookie scenarios through canonical recognition (test-only protected route), staged RED/GREEN, `pnpm check`, generated-contract check, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。
