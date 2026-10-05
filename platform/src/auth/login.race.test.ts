@@ -221,30 +221,33 @@ async function expectStillBlocked(
 
 function expectSafeLoginFailure(
   database: DatabaseHandle,
-  login: LightMyRequestResponse,
+  responses: readonly LightMyRequestResponse[],
   lines: readonly string[],
   actorEmail: string,
   secrets: readonly string[],
   sourceAddress: string = SOURCE,
+  failureCount = 1,
 ): void {
   const events = queryAuditEvents(database, {
     page: 1,
-    pageSize: 10,
+    pageSize: 20,
     eventType: 'login.failed',
   });
-  expect(events).toHaveLength(1);
-  expect(events[0]).toMatchObject({
-    type: 'login.failed',
-    actorEmail,
-    targetEmail: null,
-    target: null,
-    sourceAddress,
-    details: {},
-  });
+  expect(events).toHaveLength(failureCount);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      type: 'login.failed',
+      actorEmail,
+      targetEmail: null,
+      target: null,
+      sourceAddress,
+      details: {},
+    });
+  }
   expect(
     queryAuditEvents(database, { page: 1, pageSize: 10, eventType: 'login.succeeded' }),
   ).toEqual([]);
-  const written = `${login.body}${lines.join('')}${JSON.stringify(events)}`;
+  const written = `${responses.map((response) => response.body).join('')}${lines.join('')}${JSON.stringify(events)}`;
   for (const secret of secrets) {
     expect(written).not.toContain(secret);
   }
@@ -321,21 +324,26 @@ describe('POST /_platform/api/login account changes during verification', () => 
         expect(blocked.json()).toEqual(TOO_MANY_REQUESTS);
         expect(cookieHeaders(blocked)).toEqual([]);
         expect(database.prepare(SNAPSHOT_SESSIONS).all()).toEqual(sessionsBefore);
-        const secrets = [PASSWORD, REPLACEMENT_PASSWORD, user.password_hash, registerToken];
+        expect(tableCounts(database)).toEqual({ users: 1, sessions: 1, audits: 12 });
+        const secrets = [
+          PASSWORD,
+          WRONG_PASSWORD,
+          REPLACEMENT_PASSWORD,
+          user.password_hash,
+          registerToken,
+        ];
         if (replacementHash !== undefined) {
           secrets.push(replacementHash);
         }
-        const failed = queryAuditEvents(database, {
-          page: 1,
-          pageSize: 20,
-          eventType: 'login.failed',
-        });
-        expect(failed).toHaveLength(11);
-        expect(failed.every((event) => event.sourceAddress === scenario.sourceAddress)).toBe(true);
-        const written = `${login.body}${blocked.body}${lines.join('')}${JSON.stringify(failed)}`;
-        for (const secret of secrets) {
-          expect(written).not.toContain(secret);
-        }
+        expectSafeLoginFailure(
+          database,
+          [login, blocked],
+          lines,
+          EMAIL,
+          secrets,
+          scenario.sourceAddress,
+          11,
+        );
       },
       false,
       scenario.trustedProxies,
@@ -400,7 +408,7 @@ describe('POST /_platform/api/login unknown account derivation', () => {
       expect(login.json()).toEqual(UNAUTHORIZED);
       expect(cookieHeaders(login)).toEqual([]);
       expect(tableCounts(database)).toEqual({ users: 0, sessions: 0, audits: 1 });
-      expectSafeLoginFailure(database, login, lines, UNKNOWN_EMAIL, [PASSWORD]);
+      expectSafeLoginFailure(database, [login], lines, UNKNOWN_EMAIL, [PASSWORD]);
     });
   });
 });

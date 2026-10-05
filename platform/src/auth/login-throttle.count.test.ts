@@ -136,9 +136,13 @@ describe('POST /_platform/api/login failure counting', () => {
 
   it('does not count a 400 validation rejection toward the window', async () => {
     await withNineWrongFailures(async (app, database) => {
-      const rejected = await injectLogin(app, { email: 'not-an-email', password: PASSWORD });
+      const before = snapshotAuthState(database);
+      const countsBefore = tableCounts(database);
+      const rejected = await injectLogin(app, { email: LOGIN_EMAIL, password: 123 });
       expect(rejected.statusCode).toBe(400);
       expect(cookieHeaders(rejected)).toEqual([]);
+      expect(snapshotAuthState(database)).toEqual(before);
+      expect(tableCounts(database)).toEqual(countsBefore);
       await expectStatus(app, WRONG_CREDENTIALS, 401, UNAUTHORIZED);
       await expectStatus(app, { email: LOGIN_EMAIL, password: PASSWORD }, 429, TOO_MANY_REQUESTS);
       expect(
