@@ -4,6 +4,7 @@ import {
   createSourceAddressResolver,
   loginRoutes,
   logoutRoutes,
+  passwordChangeRoutes,
   registrationRoutes,
 } from './auth/index.ts';
 import type { PlatformConfig } from './config.ts';
@@ -22,7 +23,11 @@ const LOG_REDACT_PATHS = [
   'res.headers.cookie',
   'res.headers["set-cookie"]',
   'req.body.password',
+  'req.body.currentPassword',
+  'req.body.newPassword',
   '*.password',
+  '*.currentPassword',
+  '*.newPassword',
   '*.token',
   '*.apiKey',
 ];
@@ -66,6 +71,11 @@ export async function buildApp(
       resolveSourceAddress,
     });
     await app.register(logoutRoutes, {
+      database,
+      cookieSecure: config.cookieSecure,
+      resolveSourceAddress,
+    });
+    await app.register(passwordChangeRoutes, {
       database,
       cookieSecure: config.cookieSecure,
       resolveSourceAddress,

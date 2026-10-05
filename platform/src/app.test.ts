@@ -104,6 +104,8 @@ describe('buildApp', () => {
     app.log.info({
       user: {
         password: 'hunter2',
+        currentPassword: 'current-password-marker',
+        newPassword: 'new-password-marker',
         token: 'opaque-token',
         apiKey: 'sk-model-key',
         email: 'alice@example.com',
@@ -115,12 +117,20 @@ describe('buildApp', () => {
     expect(JSON.parse(log.lines[0] ?? '')).toMatchObject({
       user: {
         password: '[redacted]',
+        currentPassword: '[redacted]',
+        newPassword: '[redacted]',
         token: '[redacted]',
         apiKey: '[redacted]',
         email: 'alice@example.com',
       },
     });
-    for (const secret of ['hunter2', 'opaque-token', 'sk-model-key']) {
+    for (const secret of [
+      'hunter2',
+      'current-password-marker',
+      'new-password-marker',
+      'opaque-token',
+      'sk-model-key',
+    ]) {
       expect(written).not.toContain(secret);
     }
   });

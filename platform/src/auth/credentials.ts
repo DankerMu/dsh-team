@@ -14,8 +14,12 @@ export const ERROR_RESPONSE_SCHEMA = {
   },
 } as const;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
+export function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function rejectInvalidBody(reply: FastifyReply, message: string): void {
+  void reply.code(400).send({ statusCode: 400, error: 'Bad Request', message });
 }
 
 export function rejectInvalidCredentialBody(
@@ -28,11 +32,7 @@ export function rejectInvalidCredentialBody(
       typeof body.email !== 'string' ||
       typeof body.password !== 'string'
     ) {
-      void reply.code(400).send({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: invalidBodyMessage,
-      });
+      rejectInvalidBody(reply, invalidBodyMessage);
       return;
     }
     const email = body.email.trim().toLowerCase();
@@ -43,11 +43,7 @@ export function rejectInvalidCredentialBody(
       at >= email.length - 1 ||
       INTERNAL_WHITESPACE.test(email)
     ) {
-      void reply.code(400).send({
-        statusCode: 400,
-        error: 'Bad Request',
-        message: INVALID_EMAIL,
-      });
+      rejectInvalidBody(reply, INVALID_EMAIL);
       return;
     }
     body.email = email;

@@ -183,6 +183,26 @@ describe('createSession, validateSession, and deleteUserSessions', () => {
     });
   });
 
+  it('recognizes a session without renewing it while default recognition still renews', () => {
+    withDatabase((db) => {
+      const token = createSession(db, USER_ID, NOW);
+      const issued = db.prepare<[], SessionRow>(SELECT_SESSIONS).all();
+
+      expect(getSessionUser(db, token, DAY_6, false)).toEqual({
+        id: USER_ID,
+        email: 'user@example.com',
+        role: 'employee',
+      });
+      expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual(issued);
+      expect(getSessionUser(db, token, SEVEN_DAYS_PLUS_ONE_MS, false)).toBeNull();
+      expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual(issued);
+      expect(getSessionUser(db, token, AT_THROTTLE)?.id).toBe(USER_ID);
+      expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual([
+        expectedRow(token, USER_ID, NOW, AT_THROTTLE),
+      ]);
+    });
+  });
+
   it('does not rewrite last_activity_at when the clock moves backward', () => {
     withDatabase((db) => {
       const token = createSession(db, USER_ID, NOW);

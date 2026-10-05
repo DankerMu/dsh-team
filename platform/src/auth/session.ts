@@ -26,6 +26,7 @@ function lookupValidSession(
   db: DatabaseHandle,
   token: string,
   now: number,
+  renewActivity: boolean,
 ): ActiveSessionRow | null {
   if (token.length !== TOKEN_HEX_LENGTH || TOKEN_HEX.exec(token) === null) {
     return null;
@@ -39,7 +40,7 @@ function lookupValidSession(
   if (elapsed > SESSION_TTL_MS) {
     return null;
   }
-  if (elapsed >= ACTIVITY_WRITE_INTERVAL_MS) {
+  if (renewActivity && elapsed >= ACTIVITY_WRITE_INTERVAL_MS) {
     db.prepare(UPDATE_SESSION_ACTIVITY).run(now, digest);
   }
   return row;
@@ -57,15 +58,16 @@ export function createSession(db: DatabaseHandle, userId: string, now: number): 
 }
 
 export function validateSession(db: DatabaseHandle, token: string, now: number): string | null {
-  return lookupValidSession(db, token, now)?.id ?? null;
+  return lookupValidSession(db, token, now, true)?.id ?? null;
 }
 
 export function getSessionUser(
   db: DatabaseHandle,
   token: string,
   now: number,
+  renewActivity = true,
 ): { id: string; email: string; role: 'admin' | 'employee' } | null {
-  const row = lookupValidSession(db, token, now);
+  const row = lookupValidSession(db, token, now, renewActivity);
   if (row === null) {
     return null;
   }
