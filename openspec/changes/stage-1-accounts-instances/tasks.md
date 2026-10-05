@@ -261,7 +261,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.2 平台会话模块：签发（32 字节随机令牌，库里只存 SHA-256）、校验、7 天滑动续期（最后活动时间最多每分钟写一次）、按用户全部删除。验证：用可控时钟的单元测试——第 6 天活动后第 12 天仍有效；7 天无活动后失效；数据库里找不到令牌原文。
 - [x] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
 - [x] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
-- [ ] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
+- [x] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
 - [ ] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
 - [ ] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
 - [ ] 6.8 `Origin` 校验：所有改变状态的平台接口只接受 JSON 请求体，且 `Origin` 必须等于平台对外地址。验证：集成测试——缺少 `Origin`、`Origin` 是别的站点、请求体是表单编码，三种情况都被拒绝且状态不变（规格“改变状态的请求必须来自平台自己的页面”）。
@@ -304,6 +304,19 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 Review 修复（#19）：新增未知邮箱有效长度密码的真实 scrypt 回调屏障断言；跳过 dummy 派生的独立副本变体仅该用例失败（352 pass / 1 fail），正常实现 353 unit / 28 integration 及完整检查通过。复用失败审计断言后重复率 2.60%，未改阈值。超长邮箱累积存储风险独立跟踪 #126；本切片不改变既有邮箱兼容契约。
 
 第二轮修复（#19）：保留真实过期会话的登出用例返回 401、无 cookie/审计且完整状态不变，另一浏览器仍可用。独立副本跳过过期判断时，该登出用例与已有过期原语用例均失败（352 pass / 2 fail）；正常实现 354 unit / 28 integration 及完整检查通过，重复率 2.58%。两轮修复均未改生产行为。
+
+### Issue #20 risk/evidence map (task 6.5 only)
+
+- Public API / CLI / script entry, Config / project setup, Auth / permissions / secrets — selected: existing trustedProxies config drives one source resolver; adversarial XFF trust-chain matrix and real-TCP registration/login/logout audit rows prove attribution, no global Host/protocol trust.
+- Schema / columns / units / field names, Legacy compatibility / examples — selected: canonical IP text in existing source_address only; no schema or HTTP contract changes. Existing credentials/cookies/audit atomicity remain covered by full regression and contract check.
+- Resource limits / large input / discovery, Error handling / rollback / partial outputs — selected: existing HTTP header bounds, no DNS/dependencies; malformed relevant forwarding data falls back to peer without content echo, irrelevant attacker prefix cannot affect selected identity. Literal/mapped IPv6 cases exercise native parsing.
+- Release / packaging / dependency compatibility, File IO / path safety / overwrite — selected only for source/compiled owned file-DB TCP smoke and reopen/cleanup; no production file-path change or dependency. Documentation / migration notes — selected: Issue #20 design records supported header, safe fallback, deployment assumption and unchanged history.
+- Concurrency / shared state / ordering — not selected: immutable per-app trust configuration, no new asynchronous/shared state; existing auth race/transaction tests retained.
+- Evidence floor: staged trusted-registration semantic RED/GREEN, resolver boundary matrix, named real-TCP two-client sequence with actual audit sources (rate-limit enforcement remains #21), source/compiled smoke, pnpm check, strict OpenSpec. Three expanded seats; no new production endpoint.
+
+验证记录（#20）：真实 TCP 注册先得到错误的对端地址（28 pass / 1 fail），接入统一 resolver 后通过。父进程发现受信链最左空项被漏过，回归先 RED（375 pass / 1 fail）后修复。有效非映射 IPv6 `::ffff:0:127.0.0.1` 不属于非法输入，按原生解析结果修正错误测试分类并保留不混同 IPv4 的断言。最终 `pnpm fmt && pnpm check`：376 unit / 35 integration，重复率 2.45%，契约未变。源/编译真实 TCP 文件库验证注册、十次失败、另一来源登录/登出、映射规范化、伪造链/无效头回退、其它头忽略和重开持久；e2e 健康/迁移通过。未宣称已实现 #21 的限流。
+
+Review 修复（#20）：原生规范化丢弃 IPv6 zone，父进程确认 `%eth0` 配置错误信任 `%eth1`/无 scope 对端。新增六项语义失败后改为保留 scope 的单一规范地址集合；不拒绝已接受配置，不把 scoped mapped IPv6 造成为无效的 IPv4%zone。受信遍历中的 scoped XFF 安全回退，未受信边界左侧仍忽略。补齐受信代理下的真实密码验证竞态失败审计和冲突转发头优先级。最终 384 unit / 36 integration、完整检查及源/编译 scope 边界与真实 TCP 文件库 smoke 通过（2.54% 重复率）；scope 证据不宣称真实跨网卡利用或部署验证。
 
 ## 7. 完整用户镜像（任务包 1.5）
 

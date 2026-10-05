@@ -1,6 +1,11 @@
 import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { loginRoutes, logoutRoutes, registrationRoutes } from './auth/index.ts';
+import {
+  createSourceAddressResolver,
+  loginRoutes,
+  logoutRoutes,
+  registrationRoutes,
+} from './auth/index.ts';
 import type { PlatformConfig } from './config.ts';
 import type { DatabaseHandle } from './db/index.ts';
 import { healthRoutes } from './health.ts';
@@ -42,6 +47,7 @@ export async function buildApp(
   });
 
   try {
+    const resolveSourceAddress = createSourceAddressResolver(config.trustedProxies);
     await app.register(swagger, {
       openapi: {
         openapi: '3.1.0',
@@ -52,14 +58,17 @@ export async function buildApp(
     await app.register(registrationRoutes, {
       database,
       cookieSecure: config.cookieSecure,
+      resolveSourceAddress,
     });
     await app.register(loginRoutes, {
       database,
       cookieSecure: config.cookieSecure,
+      resolveSourceAddress,
     });
     await app.register(logoutRoutes, {
       database,
       cookieSecure: config.cookieSecure,
+      resolveSourceAddress,
     });
   } catch (error) {
     await app.close();

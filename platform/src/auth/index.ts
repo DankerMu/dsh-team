@@ -4,3 +4,4 @@ export { readSessionCookie } from './session-cookie.ts';
 export { registrationRoutes } from './registration.ts';
 export { loginRoutes } from './login.ts';
 export { logoutRoutes } from './logout.ts';
+export { createSourceAddressResolver } from './source-address.ts';
