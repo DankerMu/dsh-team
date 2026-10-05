@@ -11,7 +11,11 @@ import { healthRoutes } from './health.ts';
 const LOG_REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers.cookie',
+  'req.headers["set-cookie"]',
+  'res.headers.authorization',
+  'res.headers.cookie',
   'res.headers["set-cookie"]',
+  'req.body.password',
   '*.password',
   '*.token',
   '*.apiKey',

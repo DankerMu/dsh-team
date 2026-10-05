@@ -131,3 +131,7 @@
 ## Issue #15 fixture
 
 - Feature; expanded task5.2 persisted audit read/filter/pagination boundary (agree with upstream). The Issue #15 design and risk map define deterministic ordering, filter composition and public-API runtime proof; no HTTP authorization or UI is introduced.
+
+## Issue #16 fixture
+
+- Feature; expanded task5.3 shared Fastify logging and secret exclusion boundary (agree with upstream). Issue #16 design/tasks distinguish default serializer omission from exercised redaction, preserving HTTP values and existing logger/database behavior.

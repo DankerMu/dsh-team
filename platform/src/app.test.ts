@@ -102,22 +102,27 @@ describe('buildApp', () => {
     const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, database, log);
 
     app.log.info({
-      req: { headers: { authorization: 'Bearer launch-token', cookie: 'dsh=signed-cookie' } },
-      user: { password: 'hunter2', token: 'opaque-token', apiKey: 'sk-model-key' },
+      user: {
+        password: 'hunter2',
+        token: 'opaque-token',
+        apiKey: 'sk-model-key',
+        email: 'alice@example.com',
+      },
     });
     await app.close();
 
     const written = log.lines.join('');
-    for (const secret of [
-      'launch-token',
-      'signed-cookie',
-      'hunter2',
-      'opaque-token',
-      'sk-model-key',
-    ]) {
+    expect(JSON.parse(log.lines[0] ?? '')).toMatchObject({
+      user: {
+        password: '[redacted]',
+        token: '[redacted]',
+        apiKey: '[redacted]',
+        email: 'alice@example.com',
+      },
+    });
+    for (const secret of ['hunter2', 'opaque-token', 'sk-model-key']) {
       expect(written).not.toContain(secret);
     }
-    expect(written).toContain('[redacted]');
   });
 
   it('leaves the caller-owned database open after construction failure', async () => {
