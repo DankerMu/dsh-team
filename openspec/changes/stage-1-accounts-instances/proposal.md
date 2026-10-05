@@ -139,3 +139,7 @@
 ## Issue #17 fixture
 
 - Feature; expanded tasks6.1–6.2 authentication and persisted-session primitives (agree with upstream merged-tasks width exception). Issue #17 design/risk map defines bounded password derivation, token-at-rest protection and clock-controlled expiry; no HTTP surface. Flag for human review: platform/AGENTS.md now permits auth unit tests to use isolated in-memory SQLite through db/index.ts, retaining file-backed databases as integration-only.
+
+## Issue #18 fixture
+
+- Feature; expanded task6.3 public registration, credentials and atomic persisted state (agree with upstream). Issue #18 design/risk map includes required app wiring and generated HTTP contract; login/logout, proxy trust, Origin enforcement and UI remain later slices.

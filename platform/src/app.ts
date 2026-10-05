@@ -1,5 +1,6 @@
 import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { registrationRoutes } from './auth/index.ts';
 import type { PlatformConfig } from './config.ts';
 import type { DatabaseHandle } from './db/index.ts';
 import { healthRoutes } from './health.ts';
@@ -48,6 +49,10 @@ export async function buildApp(
       },
     });
     await app.register(healthRoutes);
+    await app.register(registrationRoutes, {
+      database,
+      cookieSecure: config.cookieSecure,
+    });
   } catch (error) {
     await app.close();
     throw error;
