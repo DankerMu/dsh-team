@@ -8,15 +8,41 @@ const SESSION_TTL_MS = 7 * 86_400_000;
 const ACTIVITY_WRITE_INTERVAL_MS = 60_000;
 const INSERT_SESSION =
   'INSERT INTO platform_sessions (token_hash, user_id, created_at, last_activity_at) VALUES (?, ?, ?, ?)';
-const SELECT_SESSION_USER =
-  'SELECT user_id, last_activity_at FROM platform_sessions WHERE token_hash = ?';
+const SELECT_ACTIVE_SESSION =
+  "SELECT u.id AS id, u.email AS email, u.role AS role, s.last_activity_at AS last_activity_at FROM platform_sessions AS s INNER JOIN users AS u ON u.id = s.user_id WHERE s.token_hash = ? AND u.status = 'active'";
 const UPDATE_SESSION_ACTIVITY =
   'UPDATE platform_sessions SET last_activity_at = ? WHERE token_hash = ?';
 const DELETE_USER_SESSIONS = 'DELETE FROM platform_sessions WHERE user_id = ?';
+const DELETE_SESSION = 'DELETE FROM platform_sessions WHERE token_hash = ?';
 
-interface SessionUserRow {
-  user_id: string;
+interface ActiveSessionRow {
+  id: string;
+  email: string;
+  role: 'admin' | 'employee';
   last_activity_at: number;
+}
+
+function lookupValidSession(
+  db: DatabaseHandle,
+  token: string,
+  now: number,
+): ActiveSessionRow | null {
+  if (token.length !== TOKEN_HEX_LENGTH || TOKEN_HEX.exec(token) === null) {
+    return null;
+  }
+  const digest = createHash('sha256').update(token).digest('hex');
+  const row = db.prepare<[string], ActiveSessionRow>(SELECT_ACTIVE_SESSION).get(digest);
+  if (row === undefined) {
+    return null;
+  }
+  const elapsed = now - row.last_activity_at;
+  if (elapsed > SESSION_TTL_MS) {
+    return null;
+  }
+  if (elapsed >= ACTIVITY_WRITE_INTERVAL_MS) {
+    db.prepare(UPDATE_SESSION_ACTIVITY).run(now, digest);
+  }
+  return row;
 }
 
 export function createSession(db: DatabaseHandle, userId: string, now: number): string {
@@ -31,24 +57,25 @@ export function createSession(db: DatabaseHandle, userId: string, now: number): 
 }
 
 export function validateSession(db: DatabaseHandle, token: string, now: number): string | null {
-  if (token.length !== TOKEN_HEX_LENGTH || TOKEN_HEX.exec(token) === null) {
+  return lookupValidSession(db, token, now)?.id ?? null;
+}
+
+export function getSessionUser(
+  db: DatabaseHandle,
+  token: string,
+  now: number,
+): { id: string; email: string; role: 'admin' | 'employee' } | null {
+  const row = lookupValidSession(db, token, now);
+  if (row === null) {
     return null;
   }
-  const tokenHash = createHash('sha256').update(token).digest('hex');
-  const row = db.prepare<[string], SessionUserRow>(SELECT_SESSION_USER).get(tokenHash);
-  if (row === undefined) {
-    return null;
-  }
-  const elapsed = now - row.last_activity_at;
-  if (elapsed > SESSION_TTL_MS) {
-    return null;
-  }
-  if (elapsed >= ACTIVITY_WRITE_INTERVAL_MS) {
-    db.prepare(UPDATE_SESSION_ACTIVITY).run(now, tokenHash);
-  }
-  return row.user_id;
+  return { id: row.id, email: row.email, role: row.role };
 }
 
 export function deleteUserSessions(db: DatabaseHandle, userId: string): void {
   db.prepare(DELETE_USER_SESSIONS).run(userId);
+}
+
+export function deleteSession(db: DatabaseHandle, token: string): void {
+  db.prepare(DELETE_SESSION).run(createHash('sha256').update(token).digest('hex'));
 }

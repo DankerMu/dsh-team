@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   cookieHeaders,
   injectRegister,
+  readPublicIdentity,
+  sessionCookieHeader,
+  sessionCookieToken,
   SOURCE,
   tableCounts,
   withApp,
-} from '../../test/registration-fixture.ts';
+} from '../../test/auth-fixture.ts';
 import { buildApp } from '../app.ts';
 import { queryAuditEvents } from '../audit/index.ts';
 import { openDatabase } from '../db/index.ts';
@@ -16,7 +19,6 @@ const EMAIL = '  User@Example.com  ';
 const NORMALIZED = 'user@example.com';
 const PASSWORD = 'passw0rd';
 const USER_ID = /^[a-z0-9]{12}$/;
-const TOKEN_VALUE = /^platform_session=([0-9a-f]{64})/;
 const SELECT_USERS = 'SELECT id, email, password_hash, role, status FROM users';
 const SELECT_SESSIONS = 'SELECT token_hash, user_id FROM platform_sessions';
 const SESSION_ABORT = 'session-write-aborted';
@@ -43,26 +45,6 @@ interface SessionRow {
   token_hash: string;
   user_id: string;
 }
-interface PublicUser {
-  id: string;
-  email: string;
-  role: string;
-}
-
-function isPublicUser(value: unknown): value is PublicUser {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  if (!('id' in value) || !('email' in value) || !('role' in value)) {
-    return false;
-  }
-  return (
-    Object.keys(value).length === 3 &&
-    typeof value.id === 'string' &&
-    typeof value.email === 'string' &&
-    typeof value.role === 'string'
-  );
-}
 
 describe('POST /_platform/api/register', () => {
   it('creates an active employee with a platform session from a mixed-case spaced email', async () => {
@@ -74,20 +56,11 @@ describe('POST /_platform/api/register', () => {
       });
       expect(response.statusCode).toBe(201);
       // JSON.parse is typed as any; the HTTP body is JSON text.
-      const parsed = JSON.parse(response.body) as unknown;
-      if (!isPublicUser(parsed)) {
-        throw new Error('expected public registration body');
-      }
+      const parsed = readPublicIdentity(JSON.parse(response.body) as unknown);
       const cookies = cookieHeaders(response);
       expect(cookies).toHaveLength(1);
-      const header = cookies[0];
-      if (typeof header !== 'string' || !header.startsWith('platform_session=')) {
-        throw new Error('expected platform_session cookie');
-      }
-      const token = TOKEN_VALUE.exec(header)?.[1];
-      if (token === undefined) {
-        throw new Error('expected platform_session token');
-      }
+      const header = sessionCookieHeader(cookies);
+      const token = sessionCookieToken(cookies);
       const users = database.prepare<[], UserRow>(SELECT_USERS).all();
       const sessions = database.prepare<[], SessionRow>(SELECT_SESSIONS).all();
       const events = queryAuditEvents(database, {
@@ -151,10 +124,7 @@ describe('POST /_platform/api/register', () => {
       expect(response.statusCode).toBe(201);
       const cookies = cookieHeaders(response);
       expect(cookies).toHaveLength(1);
-      const header = cookies[0];
-      if (typeof header !== 'string') {
-        throw new Error('expected platform_session cookie');
-      }
+      const header = sessionCookieHeader(cookies);
       expect(header).toContain('Secure');
       expect(header).toContain('HttpOnly');
       expect(header).toContain('SameSite=Lax');

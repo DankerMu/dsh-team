@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { createSession, deleteUserSessions, hashPassword, validateSession } from './index.ts';
+import { getSessionUser } from './session.ts';
 
 const USER_ID = 'abcdefghijkl';
 const OTHER_USER_ID = 'mnopqrstuvwx';
@@ -21,6 +22,8 @@ const SELECT_SESSIONS =
   'SELECT token_hash, user_id, created_at, last_activity_at FROM platform_sessions ORDER BY token_hash';
 const INSERT_USER =
   'INSERT INTO users (id, email, password_hash, role, status, created_at) VALUES (?, ?, ?, ?, ?, ?)';
+const UPDATE_STATUS = "UPDATE users SET status = 'disabled' WHERE email = ?";
+const SELECT_USER = 'SELECT id, email, role, status FROM users WHERE id = ?';
 const TOKEN_HEX = /^[0-9a-f]{64}$/;
 const UNKNOWN_TOKEN = 'a'.repeat(64);
 const WRITE_ABORT = 'session-write-aborted';
@@ -37,6 +40,18 @@ interface SessionRow {
   user_id: string;
   created_at: number;
   last_activity_at: number;
+}
+interface PublicIdentity {
+  id: string;
+  email: string;
+  role: string;
+}
+
+interface UserIdentityRow {
+  id: string;
+  email: string;
+  role: string;
+  status: string;
 }
 
 function expectedRow(
@@ -256,6 +271,58 @@ describe('createSession, validateSession, and deleteUserSessions', () => {
       expect(db.inTransaction).toBe(false);
       expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual(issued);
       expect(validateSession(db, token, NOW)).toBe(USER_ID);
+    });
+  });
+
+  it('returns null for a retained inactive-user session at the renewal threshold without rewriting the row', () => {
+    withDatabase((db) => {
+      const token = createSession(db, USER_ID, NOW);
+      db.prepare(UPDATE_STATUS).run('user@example.com');
+      const issued = db.prepare<[], SessionRow>(SELECT_SESSIONS).all();
+      const user = db.prepare<[string], UserIdentityRow>(SELECT_USER).get(USER_ID);
+      if (user === undefined) {
+        throw new Error('expected seeded user');
+      }
+
+      expect(user.status).toBe('disabled');
+      expect(issued).toEqual([expectedRow(token, USER_ID, NOW, NOW)]);
+      expect(validateSession(db, token, AT_THROTTLE)).toBeNull();
+      expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual(issued);
+    });
+  });
+});
+
+describe('getSessionUser', () => {
+  it('returns only public identity for an active account and never password hash or token', () => {
+    withDatabase((db) => {
+      const token = createSession(db, USER_ID, NOW);
+      const identity = getSessionUser(db, token, NOW);
+
+      expect(identity).toEqual({
+        id: USER_ID,
+        email: 'user@example.com',
+        role: 'employee',
+      } satisfies PublicIdentity);
+      expect(identity).not.toBeNull();
+      if (identity === null) {
+        throw new Error('expected active session identity');
+      }
+      expect(Object.keys(identity).sort()).toEqual(['email', 'id', 'role']);
+      expect(JSON.stringify(identity)).not.toContain(token);
+      expect(JSON.stringify(identity)).not.toContain(passwordHash);
+    });
+  });
+
+  it('returns null for a disabled account before rewriting last_activity_at', () => {
+    withDatabase((db) => {
+      const token = createSession(db, USER_ID, NOW);
+      db.prepare(UPDATE_STATUS).run('user@example.com');
+      const issued = db.prepare<[], SessionRow>(SELECT_SESSIONS).all();
+
+      expect(getSessionUser(db, token, AT_THROTTLE)).toBeNull();
+      expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual(issued);
+      expect(validateSession(db, token, AT_THROTTLE)).toBeNull();
+      expect(db.prepare<[], SessionRow>(SELECT_SESSIONS).all()).toEqual(issued);
     });
   });
 });

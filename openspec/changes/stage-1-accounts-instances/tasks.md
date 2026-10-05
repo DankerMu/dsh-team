@@ -260,7 +260,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.1 密码模块：scrypt 哈希和恒定时间校验，长度规则 6 到 256 位；保留参考实现的版权声明。验证：单元测试——5 位被拒、6 位通过、256 位通过、257 位被拒；同一密码两次哈希结果不同但都能校验通过；错误密码校验失败。
 - [x] 6.2 平台会话模块：签发（32 字节随机令牌，库里只存 SHA-256）、校验、7 天滑动续期（最后活动时间最多每分钟写一次）、按用户全部删除。验证：用可控时钟的单元测试——第 6 天活动后第 12 天仍有效；7 天无活动后失效；数据库里找不到令牌原文。
 - [x] 6.3 注册接口 `POST /_platform/api/register`：邮箱去首尾空格并转小写，重复邮箱返回 409，成功后直接登录；写审计。验证：集成测试覆盖 `account-auth` 规格“邮箱加密码自助注册”和“密码规则”的全部场景，以及“首个管理员由部署命令创建”里的“注册接口不能指定角色”场景（请求体里带管理员角色字段，注册出的账号仍是员工）；`pnpm contract:check` 通过。
-- [ ] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
+- [x] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
 - [ ] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
 - [ ] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
 - [ ] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
@@ -290,6 +290,20 @@ Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单�
 - Evidence floor: staged RED/GREEN, real-TCP named scenarios, `pnpm check`, `pnpm contract:write`/check, strict OpenSpec and source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
 
 验证记录（#18）：缺路由404 tracer先RED，原始类型/Ajv转换和非法邮箱10项unit、2项TCP失败后GREEN；323 unit/21 integration和完整检查通过，registration覆盖率100%。review补强HTTP边界密码原文验证及cookie精确绑定；额外探针发现callback插件同步prepare异常逃逸，改走done(error)后buildApp拒绝且保留调用方DB，源/编译均通过。共享测试fixture消除复制，未放宽重复率阈值。源/编译真实文件HTTP验证201/400/409、并发赢家、注入500全回滚、重开哈希/摘要/审计和限定明文扫描；额外验证原型/坏JSON/大请求、ID碰撞和crypto失败。e2e健康/迁移通过；契约仅增加注册路径。代理信任、Origin、登录登出和UI为后续项。
+
+### Issue #19 risk/evidence map (task 6.4 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names, Config / project setup and Legacy compatibility / examples — selected: generated login/logout schemas, unchanged registration contract, shared normalized credentials/cookie policy, current account identity and configured Secure mode.
+- Auth / permissions / secrets and Error handling / rollback / partial outputs — selected: uniform unknown/wrong401, verified disabled403, dummy derivation, malformed/digest cookie rejection, safe login/logout audits, no plaintext/credential JSON, session/audit rollback and plugin-construction failure propagation.
+- Concurrency / shared state / ordering and Resource limits / large input / discovery — selected: recheck status/password after async verification, multiple-browser logout isolation, expiry before renewal and minute throttling; retained disabled-session logout at elapsed>=60,000ms returns401 with full row snapshot unchanged, no audit/cookie. Existing input/crypto bounds, no rate-limit or cache addition.
+- File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: source/compiled real-TCP file-backed reopen/login/logout proof, owned cleanup, unchanged dependencies/schema and full checks.
+- Evidence floor: real-TCP named login/session/cookie scenarios through canonical recognition (test-only protected route), staged RED/GREEN, `pnpm check`, generated-contract check, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
+验证记录（#19）：登录404 tracer、3项真实scrypt回调屏障竞态、16项登出/识别/解析失败先RED后GREEN；352 unit/28 integration（7项真实TCP认证）及完整检查通过。共用凭据/cookie与测试fixture，重复率4.06%→2.73%，旧实现删除无别名。源/编译文件DB真实HTTP验证统一401/禁用403、day6/day12、摘要/重复cookie拒绝、禁用不续期、登出审计失败回滚和单浏览器撤销，重开身份与限定明文扫描通过；没有生产身份查询接口。契约仅新增login/logout，注册/健康不变；e2e迁移/健康通过。其它新验收断言首次GREEN如实保留，未宣称全部独立RED。
+
+Review 修复（#19）：新增未知邮箱有效长度密码的真实 scrypt 回调屏障断言；跳过 dummy 派生的独立副本变体仅该用例失败（352 pass / 1 fail），正常实现 353 unit / 28 integration 及完整检查通过。复用失败审计断言后重复率 2.60%，未改阈值。超长邮箱累积存储风险独立跟踪 #126；本切片不改变既有邮箱兼容契约。
+
+第二轮修复（#19）：保留真实过期会话的登出用例返回 401、无 cookie/审计且完整状态不变，另一浏览器仍可用。独立副本跳过过期判断时，该登出用例与已有过期原语用例均失败（352 pass / 2 fail）；正常实现 354 unit / 28 integration 及完整检查通过，重复率 2.58%。两轮修复均未改生产行为。
 
 ## 7. 完整用户镜像（任务包 1.5）
 
