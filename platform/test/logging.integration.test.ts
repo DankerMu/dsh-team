@@ -19,6 +19,8 @@ const RESPONSE_COOKIE = 'res-cookie-marker-a77c';
 const RESPONSE_SET_COOKIE_A = 'res-set-cookie-a-marker-55d0';
 const RESPONSE_SET_COOKIE_B = 'res-set-cookie-b-marker-61fe';
 const BODY_PASSWORD = 'body-password-marker-c0de';
+const BODY_CURRENT_PASSWORD = 'body-current-password-marker-31ae';
+const BODY_NEW_PASSWORD = 'body-new-password-marker-62fd';
 const REQUEST_PROBE = 'safe-request-probe';
 const BODY_EMAIL = 'safe-body-email@example.com';
 const RESPONSE_TRACE = 'safe-response-trace';
@@ -32,11 +34,18 @@ const SECRET_MARKERS = [
   RESPONSE_SET_COOKIE_A,
   RESPONSE_SET_COOKIE_B,
   BODY_PASSWORD,
+  BODY_CURRENT_PASSWORD,
+  BODY_NEW_PASSWORD,
 ] as const;
 
 const RESPONSE_SET_COOKIES = [RESPONSE_SET_COOKIE_A, RESPONSE_SET_COOKIE_B] as const;
 
-const PROBE_BODY = JSON.stringify({ password: BODY_PASSWORD, email: BODY_EMAIL });
+const PROBE_BODY = JSON.stringify({
+  password: BODY_PASSWORD,
+  currentPassword: BODY_CURRENT_PASSWORD,
+  newPassword: BODY_NEW_PASSWORD,
+  email: BODY_EMAIL,
+});
 
 const PROBE_RESPONSE_SCHEMA = {
   type: 'object',
@@ -119,6 +128,13 @@ function assertCensoredSnapshot(entry: Record<string, unknown>): void {
   expect(reqHeaders.cookie).toBe(CENSOR);
   expect(reqHeaders['set-cookie']).toBe(CENSOR);
   expect(reqBody.password).toBe(CENSOR);
+  expect(reqBody.currentPassword).toBe(CENSOR);
+  expect(reqBody.newPassword).toBe(CENSOR);
+  expect(logObjectAt(entry, 'credentials')).toEqual({
+    currentPassword: CENSOR,
+    newPassword: CENSOR,
+    label: 'safe-credential-label',
+  });
   expect(reqBody.email).toBe(BODY_EMAIL);
   expect(reqHeaders['x-probe']).toBe(REQUEST_PROBE);
   expect(resHeaders.authorization).toBe(CENSOR);
@@ -210,8 +226,13 @@ function registerProbeRoute(app: FastifyInstance, observed: ProbeObservation): v
       reply.header('x-trace', RESPONSE_TRACE);
 
       const child = request.log.child({}, { serializers: CREDENTIAL_SERIALIZERS });
-      child.info({ req: request, res: reply }, INFO_MESSAGE);
-      child.error({ req: request, res: reply }, ERROR_MESSAGE);
+      const credentials = {
+        currentPassword: BODY_CURRENT_PASSWORD,
+        newPassword: BODY_NEW_PASSWORD,
+        label: 'safe-credential-label',
+      };
+      child.info({ req: request, res: reply, credentials }, INFO_MESSAGE);
+      child.error({ req: request, res: reply, credentials }, ERROR_MESSAGE);
 
       observed.request = {
         authorization: request.headers.authorization,
@@ -284,7 +305,12 @@ describe('HTTP structured log redaction over a real TCP port', () => {
     expect(observed.request.cookie).toBe(REQUEST_COOKIE);
     expect(observed.request.setCookie).toEqual([REQUEST_SET_COOKIE]);
     expect(observed.request.probe).toBe(REQUEST_PROBE);
-    expect(observed.request.body).toEqual({ password: BODY_PASSWORD, email: BODY_EMAIL });
+    expect(observed.request.body).toEqual({
+      password: BODY_PASSWORD,
+      currentPassword: BODY_CURRENT_PASSWORD,
+      newPassword: BODY_NEW_PASSWORD,
+      email: BODY_EMAIL,
+    });
     expect(observed.replyHeaders.authorization).toBe(RESPONSE_AUTHORIZATION);
     expect(observed.replyHeaders.cookie).toBe(RESPONSE_COOKIE);
     expect(observed.replyHeaders['set-cookie']).toEqual([...RESPONSE_SET_COOKIES]);

@@ -263,7 +263,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.4 登录和登出接口：登录成功下发 `HttpOnly`、`SameSite=Lax` 的 cookie（`Secure` 按配置）；邮箱不存在和密码错误返回同样的回应；被禁用的账号不能登录；登出删除当前平台会话；写审计。验证：集成测试覆盖规格“登录和登出”“平台会话 7 天滑动续期”和“平台会话令牌不被脚本读取，也不以可用形式落盘”的全部场景。
 - [x] 6.5 来源地址：取直接连接的对端地址；对端在受信代理列表内时改用转发头里的客户端地址；注册和登录的审计记录这个地址。验证：集成测试覆盖规格“来源地址的确定”的两个场景，以及 `audit-log` 规格“代理之后记录真实来源”。
 - [x] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
-- [ ] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
+- [x] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
 - [ ] 6.8 `Origin` 校验：所有改变状态的平台接口只接受 JSON 请求体，且 `Origin` 必须等于平台对外地址。验证：集成测试——缺少 `Origin`、`Origin` 是别的站点、请求体是表单编码，三种情况都被拒绝且状态不变（规格“改变状态的请求必须来自平台自己的页面”）。
 - [ ] 6.9 管理员命令 `platform/src/cli.ts`（`admin create <邮箱>`）：从终端不回显地读密码；邮箱不存在则创建管理员，已存在则提升并可选重设密码；没有终端时拒绝；写审计。验证：测试覆盖规格“首个管理员由部署命令创建”里除“注册接口不能指定角色”（由 6.3 覆盖）之外的全部场景（含非终端环境下退出码非零、参数里带密码被拒绝）。
 
@@ -331,6 +331,18 @@ Review 修复（#20）：原生规范化丢弃 IPv6 zone，父进程确认 `%eth
 验证记录（#21）：真实 TCP tracer 在实现前得到200而非429（36 pass / 1 fail），实现后通过。补充 Date-only 时钟、真实 scrypt 回调屏障、错误计数/回滚断言后，`pnpm fmt && pnpm check` 402 unit / 41 integration 全部通过，重复率2.48%；429 契约由生成器更新。源/编译真实 TCP 文件库证明10次失败后的429、邮箱/映射IP别名同键、另一来源成功、精确900000ms恢复及重开应用清空限流而保留账号/会话/审计；原生 Map 构造观察证明无关过期键回收、扫除节奏与活跃限额保留，无生产观测API。e2e健康/迁移通过。补充断言首次GREEN如实保留，不宣称全部独立RED。
 
 Review 修复（#21）：恢复改写竞态用例遗漏的完整失败审计元数据、无成功事件及用户/会话/审计总量断言；400 不计数改用同一邮箱/来源的非字符串密码，避免换键导致弱判据。完整检查仍402 unit / 41 integration通过。源/编译 smoke 改为真实独立 Node 子进程重开文件库，先验证原会话/审计完全保留，再证明原被限流凭据登录200、原 cookie 经真实HTTP登出204；429 审计逐字段断言时间、规范邮箱/来源、空目标和空细节。此前“全部旧断言保留”描述不准确，已按 review 恢复，不改生产行为。
+
+### Issue #22 risk/evidence map (task 6.7 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names, Auth / permissions / secrets — selected: declared change-password204/400/401/500 contract, raw current/new fields, Unicode identity, cookie-only actor, old-token revocation/fresh-cookie recognition and exact safe audit/redaction.
+- Concurrency / shared state / ordering — selected: initial read-only recognition plus post-crypto transaction recheck; real-scrypt held revocation/competing rotation and disabled/expired/hash-change siblings; no mutex or long DB transaction.
+- Error handling / rollback / partial outputs — selected: failure snapshots include activity timestamps; real SQL faults prove hash/revocation/reissue/audit atomicity and retry, with no success cookie/event on error.
+- Legacy compatibility / examples, Config / project setup — selected: preserve renewal defaults and all existing auth/logger callers; existing cookieSecure/trustedProxies reused, no new configuration or interface alias.
+- Resource limits / large input / discovery — selected: canonical bounded password derivation and existing HTTP bounds; no crypto for missing identity, no new limiter/global quota. Release / packaging / dependency compatibility and File IO / path safety / overwrite — selected only for owned source/compiled file-DB HTTP/reopen/cleanup proof; no production filesystem or dependency change.
+- Documentation / migration notes — selected: route/error/atomicity/secrecy boundary documented here; no schema/data migration. Evidence floor: staged tracer RED, controlled real-crypto/SQLite failure oracles, actualTCP named scenarios/logger redaction, full checks/contract/strictOpenSpec and source/compiled smoke; three expanded seats.
+- Fixture revision: phase-specific crypto errors (verification and replacement hashing) preserve full state/no cookie/no secrets; one real replacement-hash callback barrier proves revocation or competing rotation wins after the final crypto await, not merely during initial verification.
+
+验证记录（#22）：真实 TCP tracer404→204先RED后GREEN；最终 `pnpm fmt && pnpm check` 419 unit / 80 integration通过，重复率2.69%，新路由契约由生成器更新。真实 scrypt 两阶段故障/回调屏障、SQL四写入阶段回滚与重试、>=60s失败不续期、Unicode身份、旧浏览器撤销/其他账号隔离、限流保持及新字段实际logger脱敏均有断言。源/编译文件库真实HTTP证明旋转、审计失败原子回滚、cookie及完整审计元数据、限定磁盘/日志扫描、重开后新cookie可用和新旧密码区分；真实prepare初始化错误正常reject且调用方DB可用；e2e健康/迁移通过。补充断言首次GREEN如实保留；共享真实crypto测试helper未改变旧断言。
 
 ## 7. 完整用户镜像（任务包 1.5）
 

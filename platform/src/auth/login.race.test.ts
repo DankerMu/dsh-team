@@ -2,6 +2,12 @@ import type * as NodeCrypto from 'node:crypto';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
+  createBarrier,
+  cryptoBarrier,
+  discardBarrier,
+  waitForDerivation,
+} from '../../test/auth-crypto-fixture.ts';
+import {
   cookieHeaders,
   injectLogin,
   injectRegister,
@@ -47,84 +53,16 @@ const FORWARDED_CLIENT_HEADERS: Readonly<Record<string, string>> = {
   'x-forwarded-for': FORWARDED_CLIENT,
 };
 
-interface CallbackBarrier {
-  derived: Promise<void>;
-  hold: (deliver: () => void) => void;
-  release: () => void;
-}
-
-const cryptoBarrier = vi.hoisted((): { queue: CallbackBarrier[] } => ({
-  queue: [],
-}));
-
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeCrypto>();
-  return {
-    ...actual,
-    scrypt: (...args: Parameters<typeof actual.scrypt>): void => {
-      const [password, salt, keyLength, options, callback] = args;
-      const barrier = cryptoBarrier.queue.shift();
-      actual.scrypt(password, salt, keyLength, options, (error, derivedKey) => {
-        const deliver = (): void => {
-          callback(error, derivedKey);
-        };
-        if (barrier === undefined || error !== null) {
-          deliver();
-        } else {
-          barrier.hold(deliver);
-        }
-      });
-    },
-  };
+  // Vitest hoists this factory before static imports initialize; load the shared controls here.
+  const { controlledScrypt } = await import('../../test/auth-crypto-fixture.ts');
+  return { ...actual, scrypt: controlledScrypt(actual.scrypt) };
 });
 
 afterAll(() => {
   vi.doUnmock('node:crypto');
 });
-
-function createBarrier(): CallbackBarrier {
-  const derived = Promise.withResolvers<undefined>();
-  let released = false;
-  let held: (() => void) | undefined;
-  return {
-    derived: derived.promise,
-    hold: (deliver) => {
-      held = deliver;
-      derived.resolve(undefined);
-      if (released) {
-        held = undefined;
-        deliver();
-      }
-    },
-    release: () => {
-      released = true;
-      const deliver = held;
-      held = undefined;
-      deliver?.();
-    },
-  };
-}
-
-function discardBarrier(barrier: CallbackBarrier): void {
-  const index = cryptoBarrier.queue.indexOf(barrier);
-  if (index !== -1) {
-    cryptoBarrier.queue.splice(index, 1);
-  }
-  barrier.release();
-}
-
-async function waitForDerivation(
-  barrier: CallbackBarrier,
-  pending: Promise<LightMyRequestResponse>,
-  label: string,
-): Promise<void> {
-  await Promise.race([
-    barrier.derived,
-    pending.then(() => {
-      throw new Error(`${label} completed before real password derivation reached the barrier`);
-    }),
-  ]);
-}
 
 async function loginWhileHeld(
   app: FastifyInstance,

@@ -155,3 +155,7 @@
 ## Issue #21 fixture
 
 - Feature; expanded task6.6 (agree with upstream): per-email/source in-memory login-failure state, asynchronous verification ordering and public429 contract. Reuse canonical source attribution and existing login audits; no global account lockout, persistence, new configuration or rate-limit dependency.
+
+## Issue #22 fixture
+
+- Feature; expanded task6.7 (agree with upstream): authenticated password rotation, user-wide session revocation/reissue and atomic audit persistence across asynchronous crypto. Preserve failure state and concurrent revocation; reuse session/password/cookie/source policies. Origin, administrator reset and gateway disconnection remain separate DAG slices.
