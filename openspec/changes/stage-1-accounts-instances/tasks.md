@@ -270,6 +270,14 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 Suggested fixture level: expanded - 认证、平台会话和公开接口
 Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单元测试，约 300 行，不新增任何路由）
 
+### Issue #17 risk/evidence map (tasks 6.1–6.2 only)
+
+- Public API / CLI / script entry, Schema / columns / units / field names and Auth / permissions / secrets — selected: exact hash format/Unicode boundaries, real scrypt and constant-time primitive, random tokens with exact SHA-256-only storage, digest replay rejection and identity-only validation.
+- Concurrency / shared state / ordering, Error handling / rollback / partial outputs and Resource limits / large input / discovery — selected: expiry before renewal, exact7day/+1ms and minute-throttle boundaries, backward-clock preservation, per-user revocation isolation; bounded encoded parameters prevent unbounded derivation. No background sweep or activity cache.
+- Config / project setup, File IO / path safety / overwrite, Release / packaging / dependency compatibility and Documentation / migration notes — selected: narrow auth memory-test permission, complete reference MIT notice, real source/compiled file reopen and no credential plaintext, owned handle cleanup, existing schema/build unchanged.
+- Legacy compatibility / examples — not selected: no prior platform auth API or persisted password format to migrate; reference code is algorithm guidance, not a compatibility target.
+- Evidence floor: staged RED/GREEN with real crypto/SQLite and explicit clocks, `pnpm check`, strict OpenSpec, source/compiled smoke; three expanded seats (correctness, test-evidence+spec-compliance, security-perf).
+
 ## 7. 完整用户镜像（任务包 1.5）
 
 依赖：第 1 组；7.3 起依赖第 3 组。

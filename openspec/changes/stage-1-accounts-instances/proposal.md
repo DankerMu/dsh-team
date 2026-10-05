@@ -135,3 +135,7 @@
 ## Issue #16 fixture
 
 - Feature; expanded task5.3 shared Fastify logging and secret exclusion boundary (agree with upstream). Issue #16 design/tasks distinguish default serializer omission from exercised redaction, preserving HTTP values and existing logger/database behavior.
+
+## Issue #17 fixture
+
+- Feature; expanded tasks6.1–6.2 authentication and persisted-session primitives (agree with upstream merged-tasks width exception). Issue #17 design/risk map defines bounded password derivation, token-at-rest protection and clock-controlled expiry; no HTTP surface.
