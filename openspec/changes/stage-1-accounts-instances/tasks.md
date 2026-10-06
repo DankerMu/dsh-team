@@ -431,7 +431,7 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 
 - [x] 8.1 生成函数：输入模型设置和默认权限档，输出覆盖层内容（监听地址、OpenAI 兼容 provider、密钥所在环境变量名、模型清单、带上下文窗口的模型写出 `contextWindow`、默认模型、去掉每个预设的联网搜索和网页抓取、界面语言和关闭公告）。纯函数，不做文件操作。验证：单元测试——输出里没有密钥原文，只有环境变量名；联网工具不在任何预设的工具清单里；配置了上下文窗口的模型有 `contextWindow`，没配置的没有。
 - [x] 8.2 覆盖层写入：整份写入临时文件后原子改名，文件权限只读；目录由配置项指定（加进 `config.ts` 和 `.env.example`）；路径由用户标识拼出，标识不合规时拒绝。验证：单元测试（临时目录）——并发写两次后文件是其中一份完整内容，不是混合；写入中途失败时旧文件不变；带 `../` 的标识被拒绝（规格“覆盖层整份生成”）。
-- [ ] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
+- [x] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
 - [ ] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
       Task8.4 additionally owns the `managed-config` complete-composition/canonical-artifact input adapter: include non-default, user-added/custom and later office presets, independently compare effective roster versus transformed coverage after edits/restart, and add a preset containing a renamed nested network component. Prove editing the user-writable locale-patch copy cannot change trusted canonical policy. Retain actual fresh non-loopback/English-navigator and reload observations for Chinese/no-notice/editable composer, model selection and General settings; do not substitute shipped-roster-only or text-shape proof. Qualify the adapter through the Docker test boundary before task9.3 production wiring.
 - [ ] 8.5 模型地址不可达时的行为：把模型地址指向一个拒绝连接的地址，另起一个记录请求的替身服务作为“别的地址”写进用户自己的配置。验证：`pnpm test:docker`——发一条消息后 Session 里出现错误，替身服务没有收到任何请求（规格“模型不可用时明确报错”）。
@@ -466,6 +466,18 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 验证记录（#30，本地候选）：parent先观察缺失文件的发布RED、cleanup错误丢失的语义RED、配置缺失/不拒绝非法值的RED，再完成实现。`pnpm check`557unit/255integration通过，writer24例、行97.56%/分支93.75%；重复率原始510/17013行低于3%（显示四舍五入3.00%），门禁未改。真实source/dist临时目录smoke分别观察4/5次并发读，均为完整旧/新版本；模式root0700/temp0600/final0444、UTF-8内容、路径及既有父目录模式正确。两种入口的受控子进程在实际临时inode写入16字节后报告checkpoint，再由parent发送SIGKILL；旧目标字节/模式保持，遗留私有temp由harness所有者观察后清理，不冒充writer崩溃清理。普通失败表覆盖partial-write/chmod/close/rename、真实exclusive EEXIST、双错误聚合、他人临时文件与符号链接目标保护。重叠测试早期按抵达顺序选择阻塞者导致一次timeout，改为按实际文档身份选择，未增加超时或重试。最终提交审查、可信Docker基线与CI证据保留于本issue PR；未声称断电持久性、敌对父目录竞态或单文件bind的即时更新。
 
 审查闭环（#30，fixpass1）：补强两类证据而非改变生产行为：每个已取得句柄的失败案例在teardown之前检查真实FileHandle.fd为-1；并发文档改为不同baseURL/模型/contextWindow/default正文，不再仅追加换行。held writer在finally释放并等待结束，checkpoint同时响应writer拒绝。补强后`pnpm check`仍557unit/255integration通过，重复率2.98%；source/dist实际并发与16字节checkpoint中断smoke重跑通过（4/5次完整版本观察），旧目标/权限及harness所有权清理结论保持。
+
+### Issue #31 risk/evidence map (task 8.3 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: atomic discriminated-result cutover, optional missing settings and explicit key-availability metadata; all existing consumers narrow configured content, root typecheck/check and source/dist branch smoke.
+- Config / project setup; Auth / permissions / secrets — selected: four independent missing-field cases, false actual-key presence despite nonempty reference name, blank/whitespace/empty list behavior, unchanged successful secret-free serialization; no environment or credential-value input.
+- Concurrency / shared state / ordering — selected: readiness before overlay composition, no mutation/global cache; preserved configured-path behavior and error propagation. No async state machine added.
+- Error handling / rollback / partial outputs — selected: exact unconfigured result with no partial/content field, no empty-document fallback or catch-all. Caller smoke leaves old file unchanged; writer remains separately tested and unmodified.
+- Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: complete migration of generator/writer-test consumers, preserved released JSON policy and source/dist behavior; existing Docker4case baseline.
+- Documentation / migration notes — selected: explicit actual-key-versus-reference distinction, future8.4/9.3/settings presence producer ownership, ordinary outcome not instance error; strict OpenSpec and runtime evidence.
+- File IO / path safety / overwrite; Resource limits / large input / discovery — not selected: this function performs no IO/discovery and adds only bounded presence checks; atomic writer and its existing guarantees stay unchanged.
+
+验证记录（#31，本地候选）：四项独立缺失的初始语义RED为557pass/4fail（旧实现返回JSON字符串而非精确unconfigured结果）；最终`pnpm check`571unit/255integration通过，generator行/分支100%，writer原24例保留。生成器返回discriminated result，`apiKeyConfigured`由可信调用者提供实际credential slot存在性，非空引用名不能代替；未配置分支在composition之前返回且无content。source/dist真实临时文件smoke各覆盖8个未配置输入：调用者不发布、旧目标字节/inode/模式及目录库存保持；配置完整时可替换为另一完整0444文档，两入口内容一致。无生产启动调用方，未声称容器阻止启动或实际密钥有效。重复代码门禁曾报3.10%、3.03%、3.04%，通过writer测试局部narrower、同表presence案例及共享实际文件arrange去重到2.92%，不删断言或放宽3%门槛；公开结果类型由typed writer-test消费者使用，dead-code通过。最终提交审查、可信Docker4case基线和CI结果保留于本issue PR。
 
 ## 9. 编排器（任务包 1.7）
 

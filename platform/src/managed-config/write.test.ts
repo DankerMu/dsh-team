@@ -1,3 +1,4 @@
+import { ok } from 'node:assert';
 import {
   chmodSync,
   existsSync,
@@ -17,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generateManagedConfig, writeManagedConfig } from './index.ts';
-import type { ManagedConfigInput } from './index.ts';
+import type { ManagedConfigInput, ManagedConfigResult } from './index.ts';
 
 const USER_ID = 'abc123def456';
 const SENTINEL_ID = 'zzzzzzzzzzzz';
@@ -30,6 +31,7 @@ const INPUT: ManagedConfigInput = {
   modelSettings: {
     baseURL: 'http://127.0.0.1:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',
+    apiKeyConfigured: true,
     models: [{ name: 'alpha' }],
     defaultModel: 'alpha',
   },
@@ -48,10 +50,17 @@ const OTHER_INPUT: ManagedConfigInput = {
   modelSettings: {
     baseURL: 'http://10.0.0.8:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',
+    apiKeyConfigured: true,
     models: [{ name: 'omega', contextWindow: 128000 }],
     defaultModel: 'omega',
   },
 };
+
+function configuredDocument(input: ManagedConfigInput): string {
+  const generated: ManagedConfigResult = generateManagedConfig(input);
+  ok(generated.outcome === 'configured');
+  return generated.content;
+}
 
 function expectAcquiredHandlesClosed(): void {
   expect(fsFault.openHandles).toEqual([]);
@@ -277,6 +286,26 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 describe('writeManagedConfig', () => {
   let dir = '';
 
+  function existingDocuments() {
+    dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
+    const managedRoot = join(dir, 'managed-config');
+    mkdirSync(managedRoot, { mode: 0o700 });
+    chmodSync(managedRoot, 0o700);
+    const destination = join(managedRoot, `${USER_ID}.patch.yml`);
+    const sentinel = join(managedRoot, `${SENTINEL_ID}.patch.yml`);
+    writeFileSync(destination, OLD_DOCUMENT);
+    chmodSync(destination, 0o444);
+    writeFileSync(sentinel, SENTINEL_DOCUMENT);
+    chmodSync(sentinel, 0o644);
+    return {
+      managedRoot,
+      destination,
+      sentinel,
+      oldMode: statSync(destination).mode,
+      sentinelMode: statSync(sentinel).mode,
+    };
+  }
+
   beforeEach(() => {
     resetFsFault();
   });
@@ -295,7 +324,7 @@ describe('writeManagedConfig', () => {
     chmodSync(dir, 0o750);
     const ancestorMode = statSync(dir).mode;
     const managedRoot = join(dir, 'managed-config');
-    const document = generateManagedConfig(INPUT);
+    const document = configuredDocument(INPUT);
 
     const published = await writeManagedConfig(managedRoot, USER_ID, document);
 
@@ -310,19 +339,8 @@ describe('writeManagedConfig', () => {
   it.each(['write', 'chmod', 'close', 'rename'] as const)(
     'rejects a %s fault, keeps the previous overlay and sentinel, and retains the error',
     async (failOn) => {
-      dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
-      const managedRoot = join(dir, 'managed-config');
-      mkdirSync(managedRoot, { mode: 0o700 });
-      chmodSync(managedRoot, 0o700);
-      const destination = join(managedRoot, `${USER_ID}.patch.yml`);
-      const sentinel = join(managedRoot, `${SENTINEL_ID}.patch.yml`);
-      writeFileSync(destination, OLD_DOCUMENT);
-      chmodSync(destination, 0o444);
-      writeFileSync(sentinel, SENTINEL_DOCUMENT);
-      chmodSync(sentinel, 0o644);
-      const oldMode = statSync(destination).mode;
-      const sentinelMode = statSync(sentinel).mode;
-      const document = generateManagedConfig(INPUT);
+      const { managedRoot, destination, sentinel, oldMode, sentinelMode } = existingDocuments();
+      const document = configuredDocument(INPUT);
       fsFault.failOn = failOn;
 
       const rejection = await writeManagedConfig(managedRoot, USER_ID, document).then(
@@ -358,19 +376,8 @@ describe('writeManagedConfig', () => {
   );
 
   it('aggregates a rename fault with a subsequent unlink cleanup failure', async () => {
-    dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
-    const managedRoot = join(dir, 'managed-config');
-    mkdirSync(managedRoot, { mode: 0o700 });
-    chmodSync(managedRoot, 0o700);
-    const destination = join(managedRoot, `${USER_ID}.patch.yml`);
-    const sentinel = join(managedRoot, `${SENTINEL_ID}.patch.yml`);
-    writeFileSync(destination, OLD_DOCUMENT);
-    chmodSync(destination, 0o444);
-    writeFileSync(sentinel, SENTINEL_DOCUMENT);
-    chmodSync(sentinel, 0o644);
-    const oldMode = statSync(destination).mode;
-    const sentinelMode = statSync(sentinel).mode;
-    const document = generateManagedConfig(INPUT);
+    const { managedRoot, destination, sentinel, oldMode, sentinelMode } = existingDocuments();
+    const document = configuredDocument(INPUT);
     fsFault.failOn = 'rename';
     fsFault.failUnlink = true;
 
@@ -393,19 +400,8 @@ describe('writeManagedConfig', () => {
   });
 
   it('aggregates a write fault with a subsequent close cleanup failure', async () => {
-    dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
-    const managedRoot = join(dir, 'managed-config');
-    mkdirSync(managedRoot, { mode: 0o700 });
-    chmodSync(managedRoot, 0o700);
-    const destination = join(managedRoot, `${USER_ID}.patch.yml`);
-    const sentinel = join(managedRoot, `${SENTINEL_ID}.patch.yml`);
-    writeFileSync(destination, OLD_DOCUMENT);
-    chmodSync(destination, 0o444);
-    writeFileSync(sentinel, SENTINEL_DOCUMENT);
-    chmodSync(sentinel, 0o644);
-    const oldMode = statSync(destination).mode;
-    const sentinelMode = statSync(sentinel).mode;
-    const document = generateManagedConfig(INPUT);
+    const { managedRoot, destination, sentinel, oldMode, sentinelMode } = existingDocuments();
+    const document = configuredDocument(INPUT);
     fsFault.failOn = 'write';
     fsFault.failCleanupClose = true;
 
@@ -448,7 +444,7 @@ describe('writeManagedConfig', () => {
     const sibling = join(dir, 'keep.txt');
     writeFileSync(sibling, 'keep');
     const managedRoot = join(dir, 'managed-config');
-    const document = generateManagedConfig(INPUT);
+    const document = configuredDocument(INPUT);
 
     await expect(writeManagedConfig(managedRoot, userId, document)).rejects.toThrow(
       'user id must be 12 lowercase ASCII letters or digits',
@@ -467,7 +463,7 @@ describe('writeManagedConfig', () => {
     writeFileSync(destination, OLD_DOCUMENT);
     chmodSync(destination, 0o444);
     fsFault.collideExclusive = true;
-    const document = generateManagedConfig(INPUT);
+    const document = configuredDocument(INPUT);
 
     const rejection = await writeManagedConfig(managedRoot, USER_ID, document).then(
       () => undefined,
@@ -501,8 +497,8 @@ describe('writeManagedConfig', () => {
     const sibling = join(managedRoot, `${SENTINEL_ID}.patch.yml`);
     writeFileSync(sibling, SENTINEL_DOCUMENT);
     chmodSync(sibling, 0o644);
-    const document = generateManagedConfig(INPUT);
-    const other = generateManagedConfig(OTHER_INPUT);
+    const document = configuredDocument(INPUT);
+    const other = configuredDocument(OTHER_INPUT);
     let heldPath = '';
     let resumeHeld: (() => void) | undefined;
     const heldReady = new Promise<void>((resolveHeld) => {
@@ -554,7 +550,7 @@ describe('writeManagedConfig', () => {
     mkdirSync(managedRoot, { mode: 0o700 });
     chmodSync(managedRoot, 0o700);
     const destination = join(managedRoot, `${USER_ID}.patch.yml`);
-    const document = generateManagedConfig(INPUT);
+    const document = configuredDocument(INPUT);
     fsFault.failOn = 'rename';
 
     const rejection = await writeManagedConfig(managedRoot, USER_ID, document).then(
@@ -579,7 +575,7 @@ describe('writeManagedConfig', () => {
     chmodSync(outside, 0o644);
     const destination = join(managedRoot, `${USER_ID}.patch.yml`);
     symlinkSync(outside, destination);
-    const document = generateManagedConfig(INPUT);
+    const document = configuredDocument(INPUT);
 
     const published = await writeManagedConfig(managedRoot, USER_ID, document);
 
@@ -595,8 +591,8 @@ describe('writeManagedConfig', () => {
   it('publishes independent users to distinct files without mixing content', async () => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
     const managedRoot = join(dir, 'managed-config');
-    const first = generateManagedConfig(INPUT);
-    const second = generateManagedConfig(OTHER_INPUT);
+    const first = configuredDocument(INPUT);
+    const second = configuredDocument(OTHER_INPUT);
 
     const [publishedFirst, publishedSecond] = await Promise.all([
       writeManagedConfig(managedRoot, USER_ID, first),
@@ -618,8 +614,8 @@ describe('writeManagedConfig', () => {
   it('lets the last successful overlapping write for one user replace a complete previous document', async () => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
     const managedRoot = join(dir, 'managed-config');
-    const first = generateManagedConfig(INPUT);
-    const second = generateManagedConfig(OTHER_INPUT);
+    const first = configuredDocument(INPUT);
+    const second = configuredDocument(OTHER_INPUT);
     let releaseSecond: (() => void) | undefined;
     const secondHeld = new Promise<void>((resolveHeld) => {
       fsFault.holdOpen = async (path) => {

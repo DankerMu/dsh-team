@@ -200,3 +200,10 @@
 - Selected risk packs and concrete evidence below task8.2. Preserve pure generation, config validation, typed consumers, previous complete files and unrelated users/files.
 - Evidence floor: staged semantic RED/GREEN; real temporary-directory concurrency, partial-write/rename failure and symlink-target preservation; source/dist public-API smoke, `pnpm check`, strict OpenSpec, reviewed exact-head Docker baseline and normal CI.
 - Trust boundary: administrator-owned directory/ancestors, no hostile parent replacement claim. Atomic rename guarantees visibility, not power-loss durability or live single-file-bind-mount propagation. No container wiring or model-policy change.
+
+## Issue #31 fixture
+
+- Feature; expanded task8.3 (agree with upstream): fail-closed model readiness changes the public generator result and credential-presence contract. No filesystem or container changes; retain pure generation and all configured overlay semantics.
+- Selected risk packs/evidence below task8.3. Actual key availability is explicit metadata, not inferred from an environment-variable name and never resolved from process.env inside the generator.
+- Clean cutover to a discriminated configured/unconfigured result; migrate every existing generator caller/test. Missing ordinary configuration returns no document, not an empty overlay, exception or fallback provider.
+- Evidence floor: four independent missing-field semantic RED cases, fully configured preservation, source/dist public-API branch smoke, `pnpm check`, strict OpenSpec, reviewed exact-head Docker baseline and normal CI.

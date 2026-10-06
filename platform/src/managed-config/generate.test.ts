@@ -1,3 +1,4 @@
+import { ok, throws } from 'node:assert';
 import { describe, expect, it } from 'vitest';
 import { generateManagedConfig } from './index.ts';
 import type { ManagedConfigInput } from './index.ts';
@@ -6,6 +7,7 @@ const INPUT: ManagedConfigInput = {
   modelSettings: {
     baseURL: 'http://127.0.0.1:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',
+    apiKeyConfigured: true,
     models: [{ name: 'alpha', contextWindow: 500000 }, { name: 'beta' }],
     defaultModel: 'beta',
   },
@@ -190,9 +192,10 @@ const EXPECTED_NETWORK_POLICY_ROWS = [
 
 describe('generateManagedConfig', () => {
   it('writes two intranet models with one contextWindow and credential reference only', () => {
-    const document = generateManagedConfig(INPUT);
+    const generated = generateManagedConfig(INPUT);
+    ok(generated.outcome === 'configured');
 
-    expect(rowsWithIds(document, ['llm-pi-ai', 'agent-default-model'])).toEqual(
+    expect(rowsWithIds(generated.content, ['llm-pi-ai', 'agent-default-model'])).toEqual(
       EXPECTED_MODEL_ROWS,
     );
   });
@@ -204,6 +207,7 @@ describe('generateManagedConfig', () => {
       modelSettings: Object.freeze({
         baseURL: 'http://127.0.0.1:9/v1?q="x"\\y',
         apiKeyEnv: 'DMXAPI_KEY',
+        apiKeyConfigured: true,
         apiKey: 'sk-not-a-credential',
         models: Object.freeze([
           Object.freeze({ name: quoted, contextWindow: 500000 }),
@@ -214,7 +218,9 @@ describe('generateManagedConfig', () => {
     };
     const snapshot = structuredClone(input);
 
-    const overlay: unknown = JSON.parse(generateManagedConfig(input));
+    const generated = generateManagedConfig(input);
+    ok(generated.outcome === 'configured');
+    const overlay: unknown = JSON.parse(generated.content);
     const text = JSON.stringify(overlay);
 
     expect(input).toEqual(snapshot);
@@ -244,10 +250,11 @@ describe('generateManagedConfig', () => {
   it('removes renamed nested network tools from every supplied preset without mutating input', () => {
     const snapshot = structuredClone(NETWORK_POLICY_INPUT);
 
-    const document = generateManagedConfig(NETWORK_POLICY_INPUT);
+    const generated = generateManagedConfig(NETWORK_POLICY_INPUT);
+    ok(generated.outcome === 'configured');
 
     expect(NETWORK_POLICY_INPUT).toEqual(snapshot);
-    expect(rowsWithIds(document, ['preset-ledger', 'preset-custom-office'])).toEqual(
+    expect(rowsWithIds(generated.content, ['preset-ledger', 'preset-custom-office'])).toEqual(
       EXPECTED_NETWORK_POLICY_ROWS,
     );
   });
@@ -275,10 +282,11 @@ describe('generateManagedConfig', () => {
     };
     const snapshot = structuredClone({ ...INPUT, presets: [preset] });
 
-    const document = generateManagedConfig({ ...INPUT, presets: [preset] });
+    const generated = generateManagedConfig({ ...INPUT, presets: [preset] });
+    ok(generated.outcome === 'configured');
 
     expect({ ...INPUT, presets: [preset] }).toEqual(snapshot);
-    expect(rowsWithIds(document, ['preset-proto'])).toEqual([
+    expect(rowsWithIds(generated.content, ['preset-proto'])).toEqual([
       {
         id: 'preset-proto',
         name: '@deepseek-ai/dsh-agent-preset',
@@ -315,8 +323,9 @@ describe('generateManagedConfig', () => {
       },
       defaultPreset: 'workspace-write',
     };
-    const document = generateManagedConfig({ ...INPUT, permission });
-    const overlay: unknown = JSON.parse(document);
+    const generated = generateManagedConfig({ ...INPUT, permission });
+    ok(generated.outcome === 'configured');
+    const overlay: unknown = JSON.parse(generated.content);
     const rows = Array.isArray(overlay) ? overlay : [];
 
     expect(rows).toEqual(
@@ -327,6 +336,121 @@ describe('generateManagedConfig', () => {
         { id: 'ui-settings-models', disabled: true },
         { insert: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }] },
       ]),
+    );
+  });
+
+  it.each([
+    ['empty address', { baseURL: '' }],
+    ['unavailable actual key', { apiKeyConfigured: false }],
+    ['empty model list', { models: [] }],
+    ['empty default model', { defaultModel: '' }],
+    ['undefined address', { baseURL: undefined }],
+    ['undefined model list', { models: undefined }],
+    ['undefined default model', { defaultModel: undefined }],
+    ['whitespace address', { baseURL: '   ' }],
+    ['whitespace default model', { defaultModel: '\t' }],
+    ['empty credential reference', { apiKeyEnv: '' }],
+    ['whitespace credential reference', { apiKeyEnv: '  ' }],
+  ] as const)(
+    'returns unconfigured without a document when %s and the other fields are valid',
+    (_label, missing) => {
+      const modelSettings = {
+        ...INPUT.modelSettings,
+        ...missing,
+      };
+
+      expect(generateManagedConfig({ ...INPUT, modelSettings })).toStrictEqual({
+        outcome: 'unconfigured',
+      });
+    },
+  );
+
+  it('returns unconfigured when address, model list, or default model is omitted', () => {
+    const withoutAddress: ManagedConfigInput['modelSettings'] = {
+      apiKeyEnv: INPUT.modelSettings.apiKeyEnv,
+      apiKeyConfigured: true,
+      models: INPUT.modelSettings.models,
+      defaultModel: INPUT.modelSettings.defaultModel,
+    };
+    const withoutModels: ManagedConfigInput['modelSettings'] = {
+      baseURL: INPUT.modelSettings.baseURL,
+      apiKeyEnv: INPUT.modelSettings.apiKeyEnv,
+      apiKeyConfigured: true,
+      defaultModel: INPUT.modelSettings.defaultModel,
+    };
+    const withoutDefault: ManagedConfigInput['modelSettings'] = {
+      baseURL: INPUT.modelSettings.baseURL,
+      apiKeyEnv: INPUT.modelSettings.apiKeyEnv,
+      apiKeyConfigured: true,
+      models: INPUT.modelSettings.models,
+    };
+
+    expect(generateManagedConfig({ ...INPUT, modelSettings: withoutAddress })).toStrictEqual({
+      outcome: 'unconfigured',
+    });
+    expect(generateManagedConfig({ ...INPUT, modelSettings: withoutModels })).toStrictEqual({
+      outcome: 'unconfigured',
+    });
+    expect(generateManagedConfig({ ...INPUT, modelSettings: withoutDefault })).toStrictEqual({
+      outcome: 'unconfigured',
+    });
+  });
+
+  it('keeps surrounding whitespace on configured address, credential reference, and default model scalars', () => {
+    const generated = generateManagedConfig({
+      ...INPUT,
+      modelSettings: {
+        ...INPUT.modelSettings,
+        baseURL: ' http://127.0.0.1:9/v1 ',
+        apiKeyEnv: ' DMXAPI_KEY ',
+        defaultModel: ' beta ',
+      },
+    });
+    ok(generated.outcome === 'configured');
+
+    expect(rowsWithIds(generated.content, ['llm-pi-ai', 'agent-default-model'])).toEqual([
+      {
+        id: 'llm-pi-ai',
+        config: {
+          providers: {
+            intranet: {
+              displayName: '内网模型',
+              apiKeyEnv: ' DMXAPI_KEY ',
+              api: 'openai-completions',
+              baseURL: ' http://127.0.0.1:9/v1 ',
+              models: [
+                { id: 'alpha', name: 'alpha', contextWindow: 500000 },
+                { id: 'beta', name: 'beta' },
+              ],
+            },
+          },
+        },
+      },
+      { id: 'agent-default-model', config: { provider: 'intranet', model: ' beta ' } },
+    ]);
+  });
+
+  it('does not compose unconfigured input and propagates configured-path composition errors', () => {
+    const compositionError = new Error('preset composition failed');
+    const presets: ManagedConfigInput['presets'] = [
+      {
+        id: 'preset-office',
+        get config(): never {
+          throw compositionError;
+        },
+      },
+    ];
+
+    expect(
+      generateManagedConfig({
+        ...INPUT,
+        modelSettings: { ...INPUT.modelSettings, baseURL: '' },
+        presets,
+      }),
+    ).toStrictEqual({ outcome: 'unconfigured' });
+    throws(
+      () => generateManagedConfig({ ...INPUT, presets }),
+      (error: unknown) => error === compositionError,
     );
   });
 });
