@@ -1,3 +1,4 @@
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.ts';
 
@@ -66,6 +67,41 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_DATA_DIR: 'data\0dir' })).toThrow(
       /PLATFORM_DATA_DIR/,
     );
+  });
+
+  it('derives an absolute managedConfigDir from a custom dataDir when PLATFORM_MANAGED_CONFIG_DIR is unset', () => {
+    const config = loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_DATA_DIR: '/srv/dsh-team' });
+
+    expect(config.dataDir).toBe('/srv/dsh-team');
+    expect(config.managedConfigDir).toBe(resolve('/srv/dsh-team', 'managed-config'));
+  });
+
+  it('resolves PLATFORM_MANAGED_CONFIG_DIR to an absolute managedConfigDir independently of dataDir', () => {
+    const config = loadConfig({
+      ...REQUIRED_PUBLIC_URL,
+      PLATFORM_DATA_DIR: '/srv/dsh-team',
+      PLATFORM_MANAGED_CONFIG_DIR: 'overlays',
+    });
+
+    expect(config.dataDir).toBe('/srv/dsh-team');
+    expect(config.managedConfigDir).toBe(resolve('overlays'));
+    expect(config.managedConfigDir).not.toBe(resolve('/srv/dsh-team', 'managed-config'));
+  });
+
+  it.each(['', '   ', '\t'])(
+    'rejects blank PLATFORM_MANAGED_CONFIG_DIR %j and names the variable',
+    (raw) => {
+      expect(() =>
+        loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_MANAGED_CONFIG_DIR: raw }),
+      ).toThrow(/PLATFORM_MANAGED_CONFIG_DIR/);
+    },
+  );
+
+  it('rejects PLATFORM_MANAGED_CONFIG_DIR containing NUL and names the variable without echoing input', () => {
+    const env = { ...REQUIRED_PUBLIC_URL, PLATFORM_MANAGED_CONFIG_DIR: 'overlay\0dir' };
+
+    expect(() => loadConfig(env)).toThrow(/PLATFORM_MANAGED_CONFIG_DIR/);
+    expect(() => loadConfig(env)).not.toThrow(/overlay/);
   });
 
   it('rejects a missing public URL and names the variable', () => {

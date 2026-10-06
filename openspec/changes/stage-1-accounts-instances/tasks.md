@@ -430,7 +430,7 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 依赖：第 3、4 组；8.4 起依赖第 7 组。模块在 `platform/src/managed-config/`。
 
 - [x] 8.1 生成函数：输入模型设置和默认权限档，输出覆盖层内容（监听地址、OpenAI 兼容 provider、密钥所在环境变量名、模型清单、带上下文窗口的模型写出 `contextWindow`、默认模型、去掉每个预设的联网搜索和网页抓取、界面语言和关闭公告）。纯函数，不做文件操作。验证：单元测试——输出里没有密钥原文，只有环境变量名；联网工具不在任何预设的工具清单里；配置了上下文窗口的模型有 `contextWindow`，没配置的没有。
-- [ ] 8.2 覆盖层写入：整份写入临时文件后原子改名，文件权限只读；目录由配置项指定（加进 `config.ts` 和 `.env.example`）；路径由用户标识拼出，标识不合规时拒绝。验证：单元测试（临时目录）——并发写两次后文件是其中一份完整内容，不是混合；写入中途失败时旧文件不变；带 `../` 的标识被拒绝（规格“覆盖层整份生成”）。
+- [x] 8.2 覆盖层写入：整份写入临时文件后原子改名，文件权限只读；目录由配置项指定（加进 `config.ts` 和 `.env.example`）；路径由用户标识拼出，标识不合规时拒绝。验证：单元测试（临时目录）——并发写两次后文件是其中一份完整内容，不是混合；写入中途失败时旧文件不变；带 `../` 的标识被拒绝（规格“覆盖层整份生成”）。
 - [ ] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
 - [ ] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
       Task8.4 additionally owns the `managed-config` complete-composition/canonical-artifact input adapter: include non-default, user-added/custom and later office presets, independently compare effective roster versus transformed coverage after edits/restart, and add a preset containing a renamed nested network component. Prove editing the user-writable locale-patch copy cannot change trusted canonical policy. Retain actual fresh non-loopback/English-navigator and reload observations for Chinese/no-notice/editable composer, model selection and General settings; do not substitute shipped-roster-only or text-shape proof. Qualify the adapter through the Docker test boundary before task9.3 production wiring.
@@ -451,6 +451,19 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - Required proof: staged behavior RED/GREEN; effective released-parser/composer smoke with real shipped preset/locale data, synthetic credential-free settings and source/dist equivalence; three expanded review seats and trusted exact-head Docker/CI baseline remain required before merge.
 
 验证记录（#29）：模型、预设策略、完整组成三条路径均由parent先观察语义RED再实现；纯生成器五例通过，`pnpm check`527unit/255integration、generator100%覆盖、重复率2.68%。初次真实发行版composer拒绝错误目标`permission-presets`；发布包dsh-base声明的实际row为`permission`，修正契约断言先RED、再修目标，未忽略warning或另插权限插件。审查修复提交`3928004`在giap-vps以真实0.2.0-rc.2 `loadOverlayPatches`/`composeEntries`执行source与dist生成结果，字节相同、零warning，provider/default/可选contextWindow/完整权限配置及canonical中文roster生效于合成结果。四个实际预设standard/ptc/minimal/cordis的联网组件分别1/1/0/1变为0/0/0/0，非联网叶插件28/29/6/29及配置元数据保持；独立清点无测试资源残留。同提交`pnpm test:docker`四例通过。此为离线合成证明，不冒充插件激活、模型请求、浏览器UI、用户修改后生产roster完整性或默认权限档映射；后续责任见task8.4/9.3/16.1–16.2。最终精确SHA复验和CI证据见PR#136。
+
+### Issue #30 risk/evidence map (task 8.2 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: public async writer/path return, configured absolute directory, invalid-env fail-loud, every typed consumer migrated; source/dist smoke and `pnpm check`.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: exact12lowercasealnum ID rejection with zero filesystem calls, stable per-user filename, same-directory exclusive temp/rename, UTF-8 exact readback and0444mode, symlink-target and unrelated-user preservation.
+- Auth / permissions / secrets — selected: real missing-root0700/held-temp0600/final0444 observations and unchanged existing ancestor modes; no document logging or actual credential; no claim against hostile parent replacement.
+- Concurrency / shared state / ordering — selected: deterministic overlapping writes/reads and failure while a sibling temp is held; complete last-successful publication, no mixed content, held file/foreign sentinel preserved. Forced exclusive-create collision preserves preexisting bytes/mode and old destination.
+- Error handling / rollback / partial outputs — selected: actual partial-write,chmod,close,rename faults preserve old bytes/mode or initial absence; combined cleanup error retains both distinct causes, closes handles and deletes only owned temp. Controlled child must reach a real prepublication checkpoint before termination; old target preserved without claiming crash-temp cleanup.
+- Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: source/dist public APIs, existing filesystem test conventions, all config literals and `.env.example`; no dependency or generated OpenAPI changes.
+- Documentation / migration notes — selected: writer/config contracts, trusted-directory and process-death limits, inode replacement caveat for9.3/15.3; strict OpenSpec, updated evidence after smoke.
+- Resource limits / large input / discovery — not selected: content is the already-generated bounded-by-configuration string, no new discovery/pagination/quota policy or input-driven recursion. Existing whole-document allocation belongs to generation; no redundant parse/copy in the writer.
+
+验证记录（#30，本地候选）：parent先观察缺失文件的发布RED、cleanup错误丢失的语义RED、配置缺失/不拒绝非法值的RED，再完成实现。`pnpm check`557unit/255integration通过，writer24例、行97.56%/分支93.75%；重复率原始510/17013行低于3%（显示四舍五入3.00%），门禁未改。真实source/dist临时目录smoke分别观察4/5次并发读，均为完整旧/新版本；模式root0700/temp0600/final0444、UTF-8内容、路径及既有父目录模式正确。两种入口的受控子进程在实际临时inode写入16字节后报告checkpoint，再由parent发送SIGKILL；旧目标字节/模式保持，遗留私有temp由harness所有者观察后清理，不冒充writer崩溃清理。普通失败表覆盖partial-write/chmod/close/rename、真实exclusive EEXIST、双错误聚合、他人临时文件与符号链接目标保护。重叠测试早期按抵达顺序选择阻塞者导致一次timeout，改为按实际文档身份选择，未增加超时或重试。最终提交审查、可信Docker基线与CI证据保留于本issue PR；未声称断电持久性、敌对父目录竞态或单文件bind的即时更新。
 
 ## 9. 编排器（任务包 1.7）
 

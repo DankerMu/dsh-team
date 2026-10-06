@@ -8,6 +8,7 @@ const SILENT_CONFIG = {
   port: 8080,
   logLevel: 'silent',
   dataDir: './data',
+  managedConfigDir: './data/managed-config',
   publicUrl: 'http://127.0.0.1:8080',
   authority: '127.0.0.1:8080',
   cookieSecure: false,
