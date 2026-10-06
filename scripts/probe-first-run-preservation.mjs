@@ -50,7 +50,7 @@ const modelOptions = (page) =>
 })()`,
   );
 
-export const verifyPreservation = async (page, modelNames, ms, requests) => {
+export const verifyPreservation = async (page, modelNames, ms, requests, expectedDefault) => {
   const until = Date.now() + ms;
   const budget = () => remainingMs(until, 'preservation');
   const names = modelNames.split(',').map((name) => name.trim());
@@ -92,13 +92,25 @@ export const verifyPreservation = async (page, modelNames, ms, requests) => {
   await waitFor(
     async () => {
       const options = await modelOptions(page);
-      return names.every((name) => options.filter((row) => row.name === name).length === 1);
+      const listedNames = options.map((row) => row.name);
+      return (
+        listedNames.length === names.length && names.every((name) => listedNames.includes(name))
+      );
     },
     budget(),
-    'preservation-two-models',
+    'preservation-exact-models',
   );
+  const initial = await modelOptions(page);
+  const listed = initial.map((row) => row.name);
+  const initiallySelected = initial.filter((row) => row.selected).map((row) => row.name);
+  if (
+    expectedDefault &&
+    (initiallySelected.length !== 1 || initiallySelected[0] !== expectedDefault)
+  ) {
+    throw new Error('stage=preservation error=initial-default');
+  }
   for (const name of names) {
-    const selected = await evalPage(
+    const chosen = await evalPage(
       page,
       `(function(){
       const el=[...document.querySelectorAll('[role="menu"][aria-label="模型"] button[role="menuitemradio"]')]
@@ -106,7 +118,7 @@ export const verifyPreservation = async (page, modelNames, ms, requests) => {
       if(!el||el.disabled)return false;el.click();return true;
     })()`,
     );
-    if (!selected) throw new Error('stage=preservation error=model-choice');
+    if (!chosen) throw new Error('stage=preservation error=model-choice');
     await waitFor(
       () =>
         evalPage(
@@ -129,5 +141,12 @@ export const verifyPreservation = async (page, modelNames, ms, requests) => {
   if (requests.some((row) => row.method === 'POST' && row.path === '/api/session/prompt')) {
     throw new Error('stage=preservation error=model-send');
   }
-  return { general: true, listed: names, selected: names, modelSend: false };
+  return {
+    general: true,
+    listed: names,
+    selected: names,
+    exactModels: listed,
+    defaultModel: initiallySelected[0],
+    modelSend: false,
+  };
 };
