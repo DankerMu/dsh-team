@@ -175,3 +175,7 @@
 ## Issue #26 fixture
 
 - Expanded task7.2 (agree with upstream): add distro Python3/python-docx to the critical user image and prove non-root DOCX creation/readback with networking disabled. Reuse the canonical Docker fixture and trusted reviewed-SHA admission; no pip manager, office bundle, profile seed, web startup, sandbox-policy or platform behavior change.
+
+## Issue #27 fixture
+
+- Expanded task7.3 (agree with upstream): release-initialized Web profile and canonical locale-plugin delivery, whole-tree seed snapshot, real Docker empty-volume copy-up and immutable seed boundary. Migrate all image builders to the same narrow named plugin context; no duplicated artifact, probe Session seed, office bundle, Web startup or managed-overlay implementation.

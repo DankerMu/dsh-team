@@ -52,6 +52,13 @@
 - **WHEN** 用户改动了自己状态卷里的配置目录
 - **THEN** 镜像里的初始副本内容不变
 
+#### Scenario: 首次卷填充与种子目录权限
+
+- **WHEN** task7.3镜像以默认uid1001使用新的Docker命名状态卷，尚未运行会改写配置的DSH服务
+- **THEN** 卷内profiles与`/opt/dsh-team/profile-seed/`的递归相对路径及文件字节一致，并包含实际Web profile和四个canonical中文插件交付文件，而不是两个空目录
+- **AND** 用户能修改卷内配置，不能写入或替换种子文件；再次使用同一卷保留用户改动，种子仍不变
+- **AND** 办公Agent预设和界面可选性由后续第17组交付，task7.3不以占位预设冒充
+
 ### Requirement: shell 沙箱可用的最小容器安全设置
 
 仓库 MUST 提供一份容器安全设置（seccomp 配置和所需的其他选项），使 DSH 自带的 `bash` 工具在“工作区内修改”模式下可用。该设置 MUST 是经探测得到的最小组合，MUST NOT 使用特权模式。

@@ -401,6 +401,14 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 
 验证记录（#26）：test-first审查提交`8a08ed7`在giap-vps真实RED（DSH版本通过、缺Python导致DOCX失败），清理后无本次资源；加入Debian包后，三席准入审查的`3184920`实际`pnpm test:docker`两条通过，网络模式none、默认用户dsh、有效uid1001，保存后重新解析的中文段落及表格内容精确匹配，独立资源清点为空。本地`pnpm check`522 unit/172 integration通过，重复率2.84%；旧版本/清理所有权断言全部保留。一次外层SSH1200秒超时丢失诊断，仅记不确定结果；未改代码或内部时限，改为远端持久日志/退出文件后取得上述15.74秒GREEN，不冒称已诊断前次超时根因。最终精确SHA实测与CI证明保留于PR，镜像关键路径人工逐行审查按用户要求后置。
 
+### Issue #27 risk/evidence map (task 7.3 only)
+
+- Release / packaging, Config / project setup, Public script entry — selected: release-owned boot-free profile initialization, exact plugin peer pin/artifact bytes, named context migrated across all four builders; existing image versions/DOCX/probes preserved.
+- File IO / path safety / overwrite, Auth / permissions, Schema / layout — selected: real named-volume first-copy byte/path equality with meaningful required entries; writable uid1001 live profiles and root-owned non-writable seed files/parents; write/replacement denial, no Session/workspace/secret seed.
+- Concurrency / shared state, Error handling / partial outputs, Resource limits — selected: unique owned volume/container/image lifecycle, volume reuse preserves edits without resetting, independent cleanup including failure, wrong-label resources never removed, bounded operations.
+- Legacy compatibility / examples, Documentation — selected: canonical helper and all build caller clean cutover, no duplicated plugin/YAML/init implementation; document named-context requirement and critical-path deferred human review.
+- Evidence sequence follows #26: reviewed test-first exact SHA actual unseeded-image RED; image/caller implementation; local gates; expanded three-seat admission; real final-SHA volume/seed GREEN and independent inventories; owner status/CI/merge. Browser/server initialization, office presets, managed overlay and workspace registration are explicit later-slice non-goals.
+
 ## 8. 受管覆盖层（任务包 1.6）
 
 依赖：第 3、4 组；8.4 起依赖第 7 组。模块在 `platform/src/managed-config/`。
