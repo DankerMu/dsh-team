@@ -229,10 +229,37 @@ it('covers one of two functions', () => {
 EOF
 expect_reject "coverage (bare.ts below the per-file threshold)" "bare.ts" pnpm test
 
+# Fixed-size clones are diluted as platform/ grows. Count a conservative source
+# corpus (including tests), then target twice the live percentage. Even counting
+# only one copy as duplicated, N / (corpus + 2N) exceeds that target; the gate's
+# own threshold, configuration and clean-tree acceptance remain unchanged.
+duplicate_lines="$(node --input-type=module <<'NODE'
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { constraintNumber } from './scripts/constraints.mjs';
+
+const threshold = constraintNumber('anti_drift', 'duplicate_code_threshold_percent');
+const target = 2 * threshold;
+if (threshold < 0 || target >= 50) {
+  throw new Error('Cannot size a two-copy duplicate canary for this percentage threshold');
+}
+const files = execFileSync('git', ['ls-files', '-z', '--', 'platform'], { encoding: 'utf8' })
+  .split('\0')
+  .filter((file) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(file));
+let corpus = 0;
+for (const file of files) {
+  const text = readFileSync(file, 'utf8');
+  if (text !== '') corpus += text.split('\n').length - Number(text.endsWith('\n'));
+}
+// Ten branch rows exceed the pinned detector's five-line/fifty-token minimum.
+const rows = Math.max(10, Math.floor(target * corpus / (100 - 2 * target)) + 1);
+process.stdout.write(`${rows}\n`);
+NODE
+)" || exit 1
 {
   echo "export function copied(input: number): number {"
   i=0
-  while [ "$i" -lt 60 ]; do
+  while [ "$i" -lt "$duplicate_lines" ]; do
     echo "  if (input === ${i}) return input + ${i} * 2;"
     i=$((i + 1))
   done
@@ -240,7 +267,7 @@ expect_reject "coverage (bare.ts below the per-file threshold)" "bare.ts" pnpm t
   echo "}"
 } >platform/src/first.ts
 cp platform/src/first.ts platform/src/second.ts
-expect_reject "duplicate code (two identical 60-line functions)" "threshold" \
+expect_reject "duplicate code (two identical ${duplicate_lines}-branch corpus-sized functions)" "threshold" \
   pnpm duplicate-code
 
 echo "export const neverImported = 1;" >>platform/src/health.ts
