@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { profileSeedScript } from './profile-seed-fixture.ts';
 
 export interface DockerCommandResult {
   readonly status: number | null;
@@ -76,11 +77,12 @@ function output(result: DockerCommandResult, args: readonly string[]): string {
 
 function removeOwned(
   command: DockerCommand,
-  kind: 'container' | 'image',
+  kind: 'container' | 'image' | 'volume',
   name: string,
   runId: string,
 ): void {
-  const args = [kind, 'inspect', '--format', `{{ index .Config.Labels "${OWNER_LABEL}" }}`, name];
+  const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
+  const args = [kind, 'inspect', '--format', `{{ index ${labels} "${OWNER_LABEL}" }}`, name];
   const result = command(args, 30_000);
   if (result.error !== undefined || result.status === null) {
     output(result, args);
@@ -91,7 +93,16 @@ function removeOwned(
         result.stderr.replace(/\r?\n$/, '') === `${prefix} No such ${missingKind}: ${name}`,
     ),
   );
-  if (result.error === undefined && result.status === 1 && result.stdout === '' && absent) {
+  const absentVolume =
+    kind === 'volume' &&
+    result.stderr.replace(/\r?\n$/, '') ===
+      `Error response from daemon: get ${name}: no such volume`;
+  if (
+    result.error === undefined &&
+    result.status === 1 &&
+    result.stdout === '' &&
+    (absent || absentVolume)
+  ) {
     return;
   }
   if (output(result, args).replace(/\r?\n$/, '') !== runId) {
@@ -112,14 +123,115 @@ function assertOfflineContainerConfiguration(command: DockerCommand, container: 
   }
 }
 
+type Probe = 'version' | 'offline-docx' | 'profile-seed';
+interface CleanupTarget {
+  readonly kind: 'container' | 'image' | 'volume';
+  readonly name: string;
+}
+
+function runContainer(
+  command: DockerCommand,
+  targets: CleanupTarget[],
+  probe: Probe,
+  container: string,
+  imageId: string,
+  runId: string,
+  volume: string | undefined,
+  phase: 'fresh' | 'reuse',
+): string {
+  const offline = probe !== 'version';
+  const script = probe === 'profile-seed' ? profileSeedScript : offlineDocxScript;
+  if (volume !== undefined) {
+    const inspectVolume = [
+      'volume',
+      'inspect',
+      '--format',
+      `{{ index .Labels "${OWNER_LABEL}" }}`,
+      volume,
+    ];
+    if (output(command(inspectVolume, 30_000), inspectVolume).replace(/\r?\n$/, '') !== runId) {
+      throw new Error('Refusing use of state volume: invocation label does not match');
+    }
+  }
+  const create = [
+    'create',
+    ...(offline ? ['--network', 'none'] : []),
+    ...(volume === undefined ? [] : ['--mount', `type=volume,source=${volume},target=/data/home`]),
+    '--name',
+    container,
+    '--label',
+    `${OWNER_LABEL}=${runId}`,
+    imageId,
+    ...(offline ? ['python3', '-c', script, phase] : ['dsh', '--version']),
+  ];
+  targets.push({ kind: 'container', name: container });
+  output(command(create, 30_000), create);
+  if (offline) assertOfflineContainerConfiguration(command, container);
+  if (volume !== undefined) {
+    const inspect = ['container', 'inspect', '--format', '{{json .Mounts}}', container];
+    const mounts: unknown = JSON.parse(output(command(inspect, 30_000), inspect));
+    if (
+      !Array.isArray(mounts) ||
+      !mounts.some(
+        (mount: unknown) =>
+          typeof mount === 'object' &&
+          mount !== null &&
+          'Type' in mount &&
+          mount.Type === 'volume' &&
+          'Name' in mount &&
+          mount.Name === volume &&
+          'Destination' in mount &&
+          mount.Destination === '/data/home' &&
+          'RW' in mount &&
+          mount.RW === true,
+      )
+    ) {
+      throw new Error('Profile probe requires the owned writable named volume at /data/home');
+    }
+  }
+  const start = ['start', '--attach', container];
+  const stdout = output(command(start, 30_000), start);
+  const wait = ['wait', container];
+  const exit = output(command(wait, 30_000), wait).replace(/\r?\n$/, '');
+  if (exit !== '0') throw new Error(`${probe} container exited ${exit}:\n${stdout}`);
+  return stdout;
+}
+
+function cleanupTargets(
+  command: DockerCommand,
+  targets: readonly CleanupTarget[],
+  runId: string,
+  failures: unknown[],
+): void {
+  // Containers first, then their state volume, then image. Each target remains exact-owned.
+  for (const kind of ['container', 'volume', 'image'] as const) {
+    for (const target of targets.filter((candidate) => candidate.kind === kind).reverse()) {
+      try {
+        removeOwned(command, kind, target.name, runId);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+}
+
 export function runUserImage(
-  probe: 'version' | 'offline-docx',
+  probe: Probe,
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
-): { runId: string; image: string; container: string; stdout: string } {
+): {
+  runId: string;
+  image: string;
+  container: string;
+  stdout: string;
+  volume?: string;
+  containers: string[];
+} {
   const runId = randomUUID();
   const image = `dsh-team-test-${runId}:${probe}`;
   const container = `dsh-team-test-${runId}-${probe}`;
+  const volume = probe === 'profile-seed' ? `dsh-team-test-${runId}-state` : undefined;
+  const containers = [container];
   const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
   const command: DockerCommand =
     injectedCommand ??
@@ -134,8 +246,7 @@ export function runUserImage(
         maxBuffer: 16 * 1024 * 1024,
       }));
   const failures: unknown[] = [];
-  let imageAttempted = false;
-  let containerAttempted = false;
+  const targets: CleanupTarget[] = [];
   let stdout = '';
   try {
     const prerequisite = ['version', '--format', '{{.Server.Version}}'];
@@ -154,50 +265,39 @@ export function runUserImage(
       join(repositoryRoot, 'images/dsh-user'),
     ];
     // Register ownership before potentially partial build/create operations.
-    imageAttempted = true;
+    targets.push({ kind: 'image', name: image });
     output(command(build, 600_000), build);
     const inspect = ['image', 'inspect', '--format', '{{.Id}}', image];
     const imageId = output(command(inspect, 30_000), inspect).replace(/\r?\n$/, '');
     if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) {
       throw new Error('Built Docker image did not return an exact image identity');
     }
-    const create = [
-      'create',
-      ...(probe === 'offline-docx' ? ['--network', 'none'] : []),
-      '--name',
-      container,
-      '--label',
-      `${OWNER_LABEL}=${runId}`,
-      imageId,
-      ...(probe === 'offline-docx' ? ['python3', '-c', offlineDocxScript] : ['dsh', '--version']),
-    ];
-    containerAttempted = true;
-    output(command(create, 30_000), create);
-    if (probe === 'offline-docx') {
-      assertOfflineContainerConfiguration(command, container);
+    if (volume !== undefined) {
+      const createVolume = ['volume', 'create', '--label', `${OWNER_LABEL}=${runId}`, volume];
+      targets.push({ kind: 'volume', name: volume });
+      output(command(createVolume, 30_000), createVolume);
     }
-    const start = ['start', '--attach', container];
-    stdout = output(command(start, 30_000), start);
-    const wait = ['wait', container];
-    const exit = output(command(wait, 30_000), wait).replace(/\r?\n$/, '');
-    if (exit !== '0') {
-      throw new Error(`${probe} container exited ${exit}:\n${stdout}`);
-    }
+    stdout = runContainer(command, targets, probe, container, imageId, runId, volume, 'fresh');
     assertOutput(stdout);
+    if (volume !== undefined) {
+      const reusedContainer = `${container}-reuse`;
+      containers.push(reusedContainer);
+      stdout = runContainer(
+        command,
+        targets,
+        probe,
+        reusedContainer,
+        imageId,
+        runId,
+        volume,
+        'reuse',
+      );
+      assertOutput(stdout);
+    }
   } catch (error) {
     failures.push(error);
   } finally {
-    for (const [kind, name, attempted] of [
-      ['container', container, containerAttempted],
-      ['image', image, imageAttempted],
-    ] as const) {
-      if (!attempted) continue;
-      try {
-        removeOwned(command, kind, name, runId);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
+    cleanupTargets(command, targets, runId, failures);
     try {
       rmSync(config, { recursive: true });
     } catch (error) {
@@ -210,5 +310,12 @@ export function runUserImage(
     );
     throw new AggregateError(failures, messages.join('\n'));
   }
-  return { runId, image, container, stdout };
+  return {
+    runId,
+    image,
+    container,
+    stdout,
+    containers,
+    ...(volume === undefined ? {} : { volume }),
+  };
 }
