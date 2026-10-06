@@ -24,3 +24,31 @@ RUN installed="$(dsh --version)" \
        echo "dsh version mismatch: installed=${installed} expected=${expected}" >&2; \
        exit 1; \
      fi
+
+# Initialize the release-owned Web profile without booting Web or copying user state.
+RUN dsh --profile web --dump-default-config >/dev/null \
+  && mkdir -p "${DSH_HOME}/profiles/web/node_modules/@dsh-team/zh-locale"
+
+# The named context contains only canonical plugin sources, not the repository root.
+# Delivery does not activate the plugin; later managed overlays own composition policy.
+COPY --from=zh-locale --chown=dsh:dsh --chmod=0644 \
+  package.json index.js client.js cordis.patch.yml \
+  /data/home/profiles/web/node_modules/@dsh-team/zh-locale/
+
+RUN installed="$(dsh --version)" \
+  && peer="$(node -p 'require(process.env.DSH_HOME + "/profiles/web/node_modules/@dsh-team/zh-locale/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
+  && if [ "$installed" != "$peer" ]; then \
+       echo "zh-locale DSH peer mismatch: installed=${installed} peer=${peer}" >&2; \
+       exit 1; \
+     fi
+
+USER root
+# Preserve the complete relative tree, including hidden entries, independently of live profiles.
+RUN mkdir -p /opt/dsh-team/profile-seed \
+  && cp -a "${DSH_HOME}/profiles/." /opt/dsh-team/profile-seed/ \
+  && chown -R root:root /opt/dsh-team \
+  && chmod -R a-w /opt/dsh-team/profile-seed \
+  && chown root:root /opt \
+  && chmod go-w /opt /opt/dsh-team
+
+USER dsh
