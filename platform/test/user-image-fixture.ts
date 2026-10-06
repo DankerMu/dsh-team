@@ -1,3 +1,4 @@
+import { deepStrictEqual } from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -16,6 +17,52 @@ export interface DockerCommandResult {
 export type DockerCommand = (args: readonly string[], timeout: number) => DockerCommandResult;
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const OWNER_LABEL = 'dsh-team.test-run';
+
+const offlineDocxScript = `
+import json
+import os
+from docx import Document
+
+path = "/data/work/offline.docx"
+document = Document()
+document.add_paragraph("离线办公验证")
+document.add_paragraph("中文段落：无需联网即可生成文档。")
+table = document.add_table(rows=2, cols=2)
+for row, values in zip(table.rows, (("项目", "状态"), ("文档生成", "成功"))):
+    for cell, value in zip(row.cells, values):
+        cell.text = value
+document.save(path)
+reopened = Document(path)
+print(json.dumps({
+    "effectiveUid": os.geteuid(),
+    "path": path,
+    "paragraphs": [paragraph.text for paragraph in reopened.paragraphs],
+    "tables": [
+        [[cell.text for cell in row.cells] for row in table.rows]
+        for table in reopened.tables
+    ],
+}, ensure_ascii=False))
+`;
+
+/** Independent exact oracle shared by real Docker and invalid-readback regressions. */
+export function assertDocxReadback(stdout: string): void {
+  const readback: unknown = JSON.parse(stdout);
+  deepStrictEqual(
+    readback,
+    {
+      effectiveUid: 1001,
+      path: '/data/work/offline.docx',
+      paragraphs: ['离线办公验证', '中文段落：无需联网即可生成文档。'],
+      tables: [
+        [
+          ['项目', '状态'],
+          ['文档生成', '成功'],
+        ],
+      ],
+    },
+    'Offline DOCX readback must match exact non-root workspace and Chinese content',
+  );
+}
 
 function output(result: DockerCommandResult, args: readonly string[]): string {
   if (result.error !== undefined || result.status !== 0) {
@@ -54,13 +101,25 @@ function removeOwned(
   output(command(remove, 30_000), remove);
 }
 
-export function runDockerVersion(
-  assertVersion: (stdout: string) => void,
+function assertOfflineContainerConfiguration(command: DockerCommand, container: string): void {
+  const network = ['container', 'inspect', '--format', '{{.HostConfig.NetworkMode}}', container];
+  const mode = output(command(network, 30_000), network).replace(/\r?\n$/, '');
+  if (mode !== 'none') throw new Error(`Expected offline Docker network none, got ${mode}`);
+  const user = ['container', 'inspect', '--format', '{{.Config.User}}', container];
+  const configuredUser = output(command(user, 30_000), user).replace(/\r?\n$/, '');
+  if (configuredUser !== 'dsh') {
+    throw new Error(`Expected default Docker user dsh, got ${configuredUser}`);
+  }
+}
+
+export function runUserImage(
+  probe: 'version' | 'offline-docx',
+  assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
 ): { runId: string; image: string; container: string; stdout: string } {
   const runId = randomUUID();
-  const image = `dsh-team-test-${runId}:version`;
-  const container = `dsh-team-test-${runId}-version`;
+  const image = `dsh-team-test-${runId}:${probe}`;
+  const container = `dsh-team-test-${runId}-${probe}`;
   const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
   const command: DockerCommand =
     injectedCommand ??
@@ -104,24 +163,27 @@ export function runDockerVersion(
     }
     const create = [
       'create',
+      ...(probe === 'offline-docx' ? ['--network', 'none'] : []),
       '--name',
       container,
       '--label',
       `${OWNER_LABEL}=${runId}`,
       imageId,
-      'dsh',
-      '--version',
+      ...(probe === 'offline-docx' ? ['python3', '-c', offlineDocxScript] : ['dsh', '--version']),
     ];
     containerAttempted = true;
     output(command(create, 30_000), create);
+    if (probe === 'offline-docx') {
+      assertOfflineContainerConfiguration(command, container);
+    }
     const start = ['start', '--attach', container];
     stdout = output(command(start, 30_000), start);
     const wait = ['wait', container];
     const exit = output(command(wait, 30_000), wait).replace(/\r?\n$/, '');
     if (exit !== '0') {
-      throw new Error(`DSH version container exited ${exit}:\n${stdout}`);
+      throw new Error(`${probe} container exited ${exit}:\n${stdout}`);
     }
-    assertVersion(stdout);
+    assertOutput(stdout);
   } catch (error) {
     failures.push(error);
   } finally {
