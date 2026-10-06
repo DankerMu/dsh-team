@@ -182,6 +182,10 @@ verification:
       command: "pnpm e2e"
       evidence: "build+http-status+body against platform/dist plus platform.db schema/ledger"
       required_at: "L3+"
+    administrator_cli:
+      command: "pnpm test:cli"
+      evidence: "actual CLI non-TTY rejection/no data and POSIX Python3 PTY hidden-input/restored-echo plus atomic account/audit/session outcomes"
+      required_at: "L3+"
   enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
 
 # Permanent, justified opt-outs. Every entry names an existing path.

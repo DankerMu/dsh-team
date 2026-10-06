@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+import { normalizeEmail } from './identity.ts';
 
 const INVALID_EMAIL = 'Invalid email';
-const INTERNAL_WHITESPACE = /\s/;
 
 export const ERROR_RESPONSE_SCHEMA = {
   type: 'object',
@@ -35,14 +35,8 @@ export function rejectInvalidCredentialBody(
       rejectInvalidBody(reply, invalidBodyMessage);
       return;
     }
-    const email = body.email.trim().toLowerCase();
-    const at = email.indexOf('@');
-    if (
-      at <= 0 ||
-      at !== email.lastIndexOf('@') ||
-      at >= email.length - 1 ||
-      INTERNAL_WHITESPACE.test(email)
-    ) {
+    const email = normalizeEmail(body.email);
+    if (email === null) {
       rejectInvalidBody(reply, INVALID_EMAIL);
       return;
     }

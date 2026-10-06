@@ -265,7 +265,7 @@ Minimal mergeable slice: 5.1（事件类型、白名单和写入函数，约 150
 - [x] 6.6 登录失败限流：同一邮箱加来源地址 15 分钟内失败 10 次后返回 429。验证：用可控时钟的集成测试覆盖规格“登录失败限流”的全部场景（含另一邮箱不受影响、窗口过后恢复）。
 - [x] 6.7 改密码接口：需要当前密码；成功后删除该用户的全部平台会话并为当前浏览器重新签发；写审计。验证：集成测试覆盖规格“改密码”的全部场景（另一浏览器的旧平台会话随即失效；当前密码错误时不改）。
 - [x] 6.8 `Origin` 校验：所有改变状态的平台接口只接受 JSON 请求体，且 `Origin` 必须等于平台对外地址。验证：集成测试——缺少 `Origin`、`Origin` 是别的站点、请求体是表单编码，三种情况都被拒绝且状态不变（规格“改变状态的请求必须来自平台自己的页面”）。
-- [ ] 6.9 管理员命令 `platform/src/cli.ts`（`admin create <邮箱>`）：从终端不回显地读密码；邮箱不存在则创建管理员，已存在则提升并可选重设密码；没有终端时拒绝；写审计。验证：测试覆盖规格“首个管理员由部署命令创建”里除“注册接口不能指定角色”（由 6.3 覆盖）之外的全部场景（含非终端环境下退出码非零、参数里带密码被拒绝）。
+- [x] 6.9 管理员命令 `platform/src/cli.ts`（`admin create <邮箱>`）：从终端不回显地读密码；邮箱不存在则创建管理员，已存在则提升并可选重设密码；没有终端时拒绝；写审计。验证：测试覆盖规格“首个管理员由部署命令创建”里除“注册接口不能指定角色”（由 6.3 覆盖）之外的全部场景（含非终端环境下退出码非零、参数里带密码被拒绝）。
 
 Suggested fixture level: expanded - 认证、平台会话和公开接口
 Minimal mergeable slice: 6.1 加 6.2（密码和平台会话两个模块及单元测试，约 300 行，不新增任何路由）
@@ -363,6 +363,8 @@ Review 修复（#21）：恢复改写竞态用例遗漏的完整失败审计元�
 - Resource limits / large input / discovery, File IO / path safety / overwrite — selected: canonical password bounds, owned database/TTY/listener cleanup, no unexpected dump/secret echo; data path ownership/config reused. No global account quotas or untrusted network terminal service.
 - Config / project setup, Release / packaging / dependency compatibility, Documentation / migration notes — selected: source/compiled CLI entry, root cli/test:cli scripts and verification matrix/constraints, Python3 standard-library PTY prerequisite for tests, no production dependency/schema change; flag rule-file review for Epic-end human review.
 - Evidence floor: staged parent RED/GREEN with actual command failures classified separately from bootstrap/missing-entrypoint errors, real PTY hidden-input/echo restoration/cancel, real DB mutation/rollback/concurrency and source/compiled CLI-to-HTTP smoke, full checks/strictOpenSpec. Three expanded seats; admin UI is later scope, not fake acceptance.
+
+验证记录（#24）：`pnpm check`通过522 unit/106 integration，含19条CLI实际进程测试，重复率2.89%；源/编译CLI真实PTY创建管理员、HTTP登录、重设后旧密码及旧cookie均401、新密码管理员登录200；真实scrypt回调挂起后SIGTERM退出1，完整users/sessions/audits不变，终端模式恢复且输入未泄露。独立复制产物的echo故障使泄漏判据变红，恢复后变绿。最初缺入口只记bootstrap RED，不冒充行为TDD；输入error经readline转发导致未处理异常的单测先RED后GREEN。PTY不获取控制终端，避免macOS会话退出撤销终端；257码点PTY边界使用混合字符，纯astral计数边界保留于单测。过程曾触发三轮复查限制，用户明确追加修复授权后才继续；未降低门禁。规则文件的CLI内存库单测许可及Python3/命令验证矩阵加入Epic末人工审查。
 
 ## 7. 完整用户镜像（任务包 1.5）
 
