@@ -479,6 +479,16 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 
 验证记录（#31，本地候选）：四项独立缺失的初始语义RED为557pass/4fail（旧实现返回JSON字符串而非精确unconfigured结果）；最终`pnpm check`571unit/255integration通过，generator行/分支100%，writer原24例保留。生成器返回discriminated result，`apiKeyConfigured`由可信调用者提供实际credential slot存在性，非空引用名不能代替；未配置分支在composition之前返回且无content。source/dist真实临时文件smoke各覆盖8个未配置输入：调用者不发布、旧目标字节/inode/模式及目录库存保持；配置完整时可替换为另一完整0444文档，两入口内容一致。无生产启动调用方，未声称容器阻止启动或实际密钥有效。重复代码门禁曾报3.10%、3.03%、3.04%，通过writer测试局部narrower、同表presence案例及共享实际文件arrange去重到2.92%，不删断言或放宽3%门槛；公开结果类型由typed writer-test消费者使用，dead-code通过。最终提交审查、可信Docker4case基线和CI结果保留于本issue PR。
 
+### Issue #32 risk/evidence map (task8.4 including the task8.1 adapter handoff)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: reusable image-execution adapter validates released JSON and complete preset/canonical inputs; public generator/writer composed through Docker, unit semantic RED/GREEN and source/build behavior.
+- Config / project setup; Auth / permissions / secrets — selected: actual user-edit precedence, trusted immutable policy versus writable copy, uid1001, exact effective model/default/contextWindow, real Host-bound browser authority; no secrets/model requests in observations.
+- File IO / path safety / overwrite; Concurrency / shared state / ordering — selected: same owned state/work volumes across controlled restart, reread changed composition before atomic publication/recreation, no stale bind-inode assumption, no user expression execution during extraction, canonical lifecycle ownership and ordinary failure cleanup.
+- Resource limits / large input / discovery — selected: complete all-preset discovery without default-only/truncated success, bounded command/readiness/browser/output paths; malformed/missing/broken inventory must fail rather than vacuously pass.
+- Error handling / rollback / partial outputs — selected: extraction/parser/skipped-bundle/malformed-result errors reject; disposable adverse observations and no-managed-overlay control qualify enforcement oracle; preserve failure and resource-ownership evidence.
+- Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: installed0.2.0-rc.2 parser/runtime APIs and real expression round-trip, retain four Docker baselines and existing browser probe callers; no ahead-source authority or duplicate parser/lifecycle.
+- Documentation / migration notes — selected: concrete adapter handoff to9.3, exact-head Linux evidence/screenshots and limitations, initial/restart model/UI observations, explicit workspace test setup boundary versus12.2, strict OpenSpec and CI.
+
 ## 9. 编排器（任务包 1.7）
 
 依赖：第 4、5、7、8 组。本组用 `published-loopback` 方式够到实例，`network` 方式在第 10 组。
