@@ -372,7 +372,7 @@ Review修复（#24）：确认普通pnpm包装器在Node校验前打印被拒绝
 
 依赖：第 1 组；7.3 起依赖第 3 组。
 
-- [ ] 7.1 加入 `pnpm test:docker` 入口（`package.json`、`AGENTS.md` 验证矩阵、CI 任务），在 giap-vps 上按 `.tool-versions` 装好 Node 和 pnpm（装在 ubuntu 用户目录下，不动系统包）；带第一个用例：构建用户镜像，容器里 `dsh --version` 输出钉定版本。验证：`pnpm test:docker` 通过且结束后没有带 `dsh-team-test` 前缀的资源；`pnpm lint:agents` 通过。
+- [x] 7.1 加入 `pnpm test:docker` 入口（`package.json`、`AGENTS.md` 验证矩阵、CI 任务），在 giap-vps 上按 `.tool-versions` 装好 Node 和 pnpm（装在 ubuntu 用户目录下，不动系统包）；带第一个用例：构建用户镜像，容器里 `dsh --version` 输出钉定版本。验证：`pnpm test:docker` 通过且结束后没有带 `dsh-team-test` 前缀的资源；`pnpm lint:agents` 通过。
 - [ ] 7.2 镜像里装 Python 3 和 `python-docx`。验证：`pnpm test:docker`——在断开网络的容器里运行一段生成 DOCX 的脚本，产物能被解析库打开。
 - [ ] 7.3 按第 3 组的结论在镜像里预置 `$DSH_HOME/profiles/`，并把整个 `profiles/` 目录原样拷贝到 `/opt/dsh-team/profile-seed/`（层级相同，只读）。验证：`pnpm test:docker`——空状态卷首次启动后卷里的 `profiles/` 与 `profile-seed/` 逐文件一致；改动卷里的 `profiles/` 后镜像里的 `profile-seed/` 不变。
 - [ ] 7.4 镜像启动验证：用一份手写的最小覆盖层和第 1 组的安全设置启动容器。验证：`pnpm test:docker`——60 秒内日志里出现令牌行、3080 可连接；不带 cookie 请求首页得到 401；DSH 进程用户不是 root；进程环境里有关闭遥测的变量；状态目录和工作目录是两个挂载点。
@@ -388,6 +388,8 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - Resource limits — selected for bounded Docker subprocess/test duration and run cleanup, not production container quotas. Legacy compatibility and Documentation — selected: root scripts/CI aggregator/command validation preserved, rule and workflow changes disclosed; no image behavior change.
 - Evidence sequence: fixture review/strict validate; local discovery/gate-negative checks and full `pnpm check`; initial three-seat full-candidate review before admitting remote code; trusted parent exact-SHA VPS run plus failure/cleanup proof; finish evidence adjudication and publish dedicated status only after reviewed candidate passes. Any source fix invalidates admission/evidence and requires appropriate re-review. CI verifies evidence and is rerun explicitly after status publication; no missing-evidence skip.
 - User decision: “仅授权审查后的提交” authorizes this controlled external evidence path, not a persistent runner or broader shared-host access. Main squash CI must establish tree-equivalent reuse explicitly. Docker/CI evidence belongs in PR runtime section; human rule/workflow review remains deferred to Epic completion.
+
+验证记录（#25）：三席对`489556aeb04b9f9d044c44e53868773e13332244`代码准入审查无阻塞后，可信会话在giap-vps检出完全相同提交；用户目录Node24.13.1/pnpm10.34.6执行`pnpm test:docker`，真实构建/容器输出精确`0.2.0-rc.2`。独立检查成功、诱导版本断言失败后均无本次资源；独立哨兵容器/镜像/卷/网络不变，最后由其所有者删除。真实`docker start --attach`200ms超时返回ETIMEDOUT，原容器仍运行时进入清理，清理后容器不存在、镜像已移除、哨兵保留；专用42退出区分预期超时与探针自身断言失败。不宣称构建器整个进程树或SIGKILL恢复已验证。本地`pnpm check`522 unit/164 integration通过，重复率2.74%；真实GitHub缺状态拒绝和CI缺证据失败已观察。最终精确头状态、CI复跑及合并树等价结果记录在PR运行证据，不用旧SHA冒充新SHA直接执行。
 
 ## 8. 受管覆盖层（任务包 1.6）
 
