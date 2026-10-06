@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertDocxReadback, runUserImage } from './user-image-fixture.ts';
-import type { DockerCommand, DockerCommandResult } from './user-image-fixture.ts';
+import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
 /** Stateful substitute for the Docker daemon boundary, including partially created resources. */
 function dockerFixture(

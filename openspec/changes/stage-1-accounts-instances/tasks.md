@@ -411,6 +411,18 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 
 验证记录（#27）：审查后test-first`58e90ba`在真实VPS为2通过/1失败（缺少profile-seed），修改镜像后审查提交`610c5d5`三条全部通过；本地`pnpm check`522 unit/216 integration通过，重复率2.67%。独立真实Docker探针保留两次容器的实际imageID、volume/mount/user/network检查及fresh/reuse完整JSON：初次树/字节相同、四插件hash与仓库一致、uid1001 live修改持久，种子四种写/删/替换均EACCES且hash不变。版本断言、seed断言、实际创建volume后报错、实际创建container后报错四类失败均保留原因并清理；独立哨兵四种资源始终保留，最后由所有者删除，独立清点为空。迁移后的`pnpm probe:sandbox`真实通过Docker默认策略工作区可写/状态目录拒写；未声称重跑需要浏览器/模型的另两探针。最终精确SHA实测/状态/CI保留于PR，关键路径人工审查后置。
 
+### Issue #28 risk/evidence map (task 7.4 only)
+
+- Public API / CLI / script entry — selected: `pnpm test:docker` adds actual released Web launch; host-side unauthenticated HTTP401 within the same60s deadline as the genuine token line.
+- Config / project setup; Release / packaging / dependency compatibility — selected: literal minimal readonly overlay, existing narrow build contexts and pinned DSH, explicit shipped seccomp; inspect actual security/port configuration.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: actual distinct owned named-volume mount identities at `/data/home` and `/data/work`, readonly overlay; parse selected process UID/environment and Docker boundary data, reject malformed/missing observations.
+- Auth / permissions / secrets — selected: actual DSH nonroot process, telemetry-disabled environment, HTTP401 without credentials, loopback-only publication; launch token/raw logs never emitted even on failure.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: one monotonic60s startup deadline, bounded observations and early-exit detection; unique exact-owned resources and Docker-assigned ephemeral port avoid cross-run collisions.
+- Error handling / rollback / partial outputs — selected: retain existing lifecycle regressions; real success and induced Web assertion failure clean only owned resources, independent inventory and foreign sentinels prove boundary; no claim of cleanup after host/process death.
+- Documentation / migration notes — selected: record runtime command/results, platform limits, trusted exact-head evidence and Epic-end human white-box deferral. `pnpm check` and strict OpenSpec must pass.
+- Legacy compatibility / examples — not selected: no legacy API migration; all three existing Docker cases, named-context builder consumers and cleanup invariants must remain unchanged.
+- Oracle qualification: known-good observations and discriminating missing token/early exit/deadline/HTTP200/root/missing telemetry/wrong or shared mount cases; real baseline may be GREEN because task7.4 verifies existing image behavior. No fabricated semantic RED from import/setup failure.
+
 ## 8. 受管覆盖层（任务包 1.6）
 
 依赖：第 3、4 组；8.4 起依赖第 7 组。模块在 `platform/src/managed-config/`。

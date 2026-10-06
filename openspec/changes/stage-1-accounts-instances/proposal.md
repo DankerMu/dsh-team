@@ -179,3 +179,10 @@
 ## Issue #27 fixture
 
 - Expanded task7.3 (agree with upstream): release-initialized Web profile and canonical locale-plugin delivery, whole-tree seed snapshot, real Docker empty-volume copy-up and immutable seed boundary. Migrate all image builders to the same narrow named plugin context; no duplicated artifact, probe Session seed, office bundle, Web startup or managed-overlay implementation.
+
+## Issue #28 fixture
+
+- Test; expanded task7.4 (agree with upstream): qualify real Web startup under the shipped seccomp policy, actual process identity/environment, separate state/work mounts and unauthenticated HTTP rejection. False success would approve an unusable or insecure instance image.
+- Selected risk packs: all except Legacy compatibility / examples; concrete evidence and exclusions below task7.4. Preserve all three existing Docker cases and ownership-checked cleanup.
+- Characterization: existing image may already pass; qualify the new verifier with wrong observations, never manufacture a production defect for RED. Parent alone executes agent-reviewed exact commits on giap-vps, publishes sanitized owner evidence and waits for normal CI.
+- No upstream DSH, seccomp policy, office bundle, model service, orchestrator or managed-config implementation changes. Critical-path human review remains required and is deferred to Epic completion by the user's explicit decision.

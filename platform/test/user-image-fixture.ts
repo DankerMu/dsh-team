@@ -1,21 +1,16 @@
 import { deepStrictEqual } from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
+import { runWebStartup } from './web-startup-fixture.ts';
+import type { WebStartupBoundary } from './web-startup-fixture.ts';
+import { isAbsentResource } from './docker-command.ts';
+import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
-export interface DockerCommandResult {
-  readonly status: number | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly error?: Error;
-}
-
-/** External Docker process boundary; timeout is milliseconds, no shell interpolation. */
-export type DockerCommand = (args: readonly string[], timeout: number) => DockerCommandResult;
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const OWNER_LABEL = 'dsh-team.test-run';
 
@@ -84,27 +79,7 @@ function removeOwned(
   const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
   const args = [kind, 'inspect', '--format', `{{ index ${labels} "${OWNER_LABEL}" }}`, name];
   const result = command(args, 30_000);
-  if (result.error !== undefined || result.status === null) {
-    output(result, args);
-  }
-  const absent = [kind, 'object'].some((missingKind) =>
-    ['Error response from daemon:', 'Error:'].some(
-      (prefix) =>
-        result.stderr.replace(/\r?\n$/, '') === `${prefix} No such ${missingKind}: ${name}`,
-    ),
-  );
-  const absentVolume =
-    kind === 'volume' &&
-    result.stderr.replace(/\r?\n$/, '') ===
-      `Error response from daemon: get ${name}: no such volume`;
-  if (
-    result.error === undefined &&
-    result.status === 1 &&
-    result.stdout === '' &&
-    (absent || absentVolume)
-  ) {
-    return;
-  }
+  if (isAbsentResource(result, kind, name)) return;
   if (output(result, args).replace(/\r?\n$/, '') !== runId) {
     throw new Error(`Refusing cleanup of ${kind} ${name}: invocation label does not match`);
   }
@@ -197,6 +172,20 @@ function runContainer(
   return stdout;
 }
 
+function createOwnedVolumes(
+  command: DockerCommand,
+  targets: CleanupTarget[],
+  runId: string,
+  names: (string | undefined)[],
+): void {
+  for (const name of names) {
+    if (name === undefined) continue;
+    const args = ['volume', 'create', '--label', `${OWNER_LABEL}=${runId}`, name];
+    targets.push({ kind: 'volume', name });
+    output(command(args, 30_000), args);
+  }
+}
+
 function cleanupTargets(
   command: DockerCommand,
   targets: readonly CleanupTarget[],
@@ -215,25 +204,58 @@ function cleanupTargets(
   }
 }
 
-export function runUserImage(
-  probe: Probe,
-  assertOutput: (stdout: string) => void,
-  injectedCommand?: DockerCommand,
-): {
+interface UserImageResult {
   runId: string;
   image: string;
   container: string;
   stdout: string;
   volume?: string;
+  workVolume?: string;
   containers: string[];
-} {
+}
+
+export function runUserImage(
+  probe: 'web-startup',
+  assertOutput: (stdout: string) => void,
+  injectedCommand?: DockerCommand,
+  webBoundary?: Partial<WebStartupBoundary>,
+): Promise<UserImageResult>;
+export function runUserImage(
+  probe: Probe,
+  assertOutput: (stdout: string) => void,
+  injectedCommand?: DockerCommand,
+): UserImageResult;
+export function runUserImage(
+  probe: Probe | 'web-startup',
+  assertOutput: (stdout: string) => void,
+  injectedCommand?: DockerCommand,
+  webBoundary?: Partial<WebStartupBoundary>,
+): UserImageResult | Promise<UserImageResult> {
+  if (probe === 'web-startup') {
+    return Promise.resolve().then(() =>
+      runImageLifecycle(probe, assertOutput, injectedCommand, webBoundary),
+    );
+  }
+  return runImageLifecycle(probe, assertOutput, injectedCommand);
+}
+
+function runImageLifecycle(
+  probe: Probe | 'web-startup',
+  assertOutput: (stdout: string) => void,
+  injectedCommand?: DockerCommand,
+  webBoundary?: Partial<WebStartupBoundary>,
+): UserImageResult | Promise<UserImageResult> {
   const runId = randomUUID();
   const image = `dsh-team-test-${runId}:${probe}`;
   const container = `dsh-team-test-${runId}-${probe}`;
-  const volume = probe === 'profile-seed' ? `dsh-team-test-${runId}-state` : undefined;
+  const volume =
+    probe === 'profile-seed' || probe === 'web-startup'
+      ? `dsh-team-test-${runId}-state`
+      : undefined;
+  const workVolume = probe === 'web-startup' ? `dsh-team-test-${runId}-work` : undefined;
   const containers = [container];
   const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
-  const command: DockerCommand =
+  const externalCommand: DockerCommand =
     injectedCommand ??
     ((args, timeout) =>
       spawnSync('docker', args, {
@@ -243,11 +265,61 @@ export function runUserImage(
         encoding: 'utf8',
         timeout,
         killSignal: 'SIGKILL',
-        maxBuffer: 16 * 1024 * 1024,
+        // Startup logs and process observations must be bounded and stay in memory.
+        maxBuffer: probe === 'web-startup' && args[0] !== 'build' ? 64 * 1024 : 16 * 1024 * 1024,
       }));
+  const command: DockerCommand =
+    probe !== 'web-startup'
+      ? externalCommand
+      : (args, timeout) => {
+          try {
+            const result = externalCommand(args, timeout);
+            const kind = args[0];
+            if (
+              args[1] === 'inspect' &&
+              (kind === 'image' || kind === 'container' || kind === 'volume') &&
+              isAbsentResource(result, kind, args.at(-1) ?? '')
+            ) {
+              return result;
+            }
+            if (result.error !== undefined || result.status !== 0) {
+              return {
+                status: result.status === 0 ? 1 : result.status,
+                stdout: '',
+                stderr: 'Web Docker operation failed',
+              };
+            }
+            return result;
+          } catch {
+            throw new Error('Web Docker operation failed');
+          }
+        };
   const failures: unknown[] = [];
   const targets: CleanupTarget[] = [];
   let stdout = '';
+  function finish(): UserImageResult {
+    cleanupTargets(command, targets, runId, failures);
+    try {
+      rmSync(config, { recursive: true });
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length !== 0) {
+      const messages = failures.map((error) =>
+        error instanceof Error ? error.message : String(error),
+      );
+      throw new AggregateError(failures, messages.join('\n'));
+    }
+    return {
+      runId,
+      image,
+      container,
+      stdout,
+      containers,
+      ...(volume === undefined ? {} : { volume }),
+      ...(workVolume === undefined ? {} : { workVolume }),
+    };
+  }
   try {
     const prerequisite = ['version', '--format', '{{.Server.Version}}'];
     if (output(command(prerequisite, 10_000), prerequisite).trim() === '') {
@@ -274,10 +346,36 @@ export function runUserImage(
     if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) {
       throw new Error('Built Docker image did not return an exact image identity');
     }
-    if (volume !== undefined) {
-      const createVolume = ['volume', 'create', '--label', `${OWNER_LABEL}=${runId}`, volume];
-      targets.push({ kind: 'volume', name: volume });
-      output(command(createVolume, 30_000), createVolume);
+    createOwnedVolumes(command, targets, runId, [volume, workVolume]);
+    if (probe === 'web-startup') {
+      if (volume === undefined || workVolume === undefined)
+        throw new Error('Web volume setup missing');
+      const overlay = join(config, 'web.patch.yml');
+      writeFileSync(overlay, '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n', {
+        mode: 0o444,
+      });
+      targets.push({ kind: 'container', name: container });
+      return runWebStartup(
+        command,
+        {
+          container,
+          imageId,
+          runId,
+          stateVolume: volume,
+          workVolume,
+          overlay,
+          seccomp: join(repositoryRoot, 'images/seccomp/dsh-user.json'),
+        },
+        webBoundary,
+      )
+        .then((summary) => {
+          stdout = summary;
+          assertOutput(summary);
+        })
+        .catch((error: unknown) => {
+          failures.push(error);
+        })
+        .then(finish);
     }
     stdout = runContainer(command, targets, probe, container, imageId, runId, volume, 'fresh');
     assertOutput(stdout);
@@ -298,26 +396,6 @@ export function runUserImage(
     }
   } catch (error) {
     failures.push(error);
-  } finally {
-    cleanupTargets(command, targets, runId, failures);
-    try {
-      rmSync(config, { recursive: true });
-    } catch (error) {
-      failures.push(error);
-    }
   }
-  if (failures.length !== 0) {
-    const messages = failures.map((error) =>
-      error instanceof Error ? error.message : String(error),
-    );
-    throw new AggregateError(failures, messages.join('\n'));
-  }
-  return {
-    runId,
-    image,
-    container,
-    stdout,
-    containers,
-    ...(volume === undefined ? {} : { volume }),
-  };
+  return finish();
 }
