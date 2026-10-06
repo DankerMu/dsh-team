@@ -104,22 +104,26 @@ Boundaries are enforced by dependency-cruiser (`.dependency-cruiser.cjs`) in `pn
 
 Run `pnpm install` after clone. It needs Node and pnpm at the versions in `.tool-versions`, plus `hurl`, `shellcheck`, and `gitleaks` on `PATH`.
 
+Python 3 with standard-library `pty`/`termios` support is required for administrator CLI terminal integration verification on POSIX hosts; missing prerequisites fail rather than skip that coverage.
+
 ### Daily commands
 
-| Task                     | Command                         |
-| ------------------------ | ------------------------------- |
-| Start dev server (watch) | `pnpm dev`                      |
-| Run all checks           | `pnpm check`                    |
-| Fast checks              | `pnpm check:fast`               |
-| Unit tests + coverage    | `pnpm test`                     |
-| Integration tests        | `pnpm test:integration`         |
-| Format code              | `pnpm fmt`                      |
-| Lint                     | `pnpm lint`                     |
-| Type-check               | `pnpm typecheck`                |
-| Build                    | `pnpm build`                    |
-| Regenerate HTTP contract | `pnpm contract:write`           |
-| Prove the gates are live | `pnpm test:guardrails`          |
-| Change inventory         | `pnpm change-scope origin/main` |
+| Task                     | Command                                  |
+| ------------------------ | ---------------------------------------- |
+| Start dev server (watch) | `pnpm dev`                               |
+| Run all checks           | `pnpm check`                             |
+| Fast checks              | `pnpm check:fast`                        |
+| Unit tests + coverage    | `pnpm test`                              |
+| Integration tests        | `pnpm test:integration`                  |
+| Administrator command    | `pnpm --silent cli admin create <email>` |
+| CLI integration tests    | `pnpm test:cli`                          |
+| Format code              | `pnpm fmt`                               |
+| Lint                     | `pnpm lint`                              |
+| Type-check               | `pnpm typecheck`                         |
+| Build                    | `pnpm build`                             |
+| Regenerate HTTP contract | `pnpm contract:write`                    |
+| Prove the gates are live | `pnpm test:guardrails`                   |
+| Change inventory         | `pnpm change-scope origin/main`          |
 
 All commands route through the root `package.json` scripts. Do not invent ad-hoc commands; if a workflow is missing, add a script.
 
@@ -128,20 +132,31 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 - `.env.example` lists the variables (`PLATFORM_HOST`, `PLATFORM_PORT`, `PLATFORM_LOG_LEVEL`, `PLATFORM_DATA_DIR`, `PLATFORM_PUBLIC_URL`, `PLATFORM_COOKIE_SECURE`, `PLATFORM_TRUSTED_PROXIES`). Copy to `.env` for local runs. Invalid values stop the process at startup.
 - No secret is needed by the current skeleton. Model and RAGFlow keys arrive later through environment variables only.
 
+### Administrator deployment command
+
+Run `pnpm --silent cli admin create <email>` from source, or `node platform/dist/cli.js admin create <email>` after building. The source wrapper requires `--silent`: plain `pnpm cli` prints its lifecycle command banner before Node validates arguments and can disclose rejected password arguments. Never supply a password in arguments; silence prevents wrapper disclosure, not shell-history or process-argument exposure. Export the existing configuration, including required `PLATFORM_PUBLIC_URL` and the intended `PLATFORM_DATA_DIR`; the CLI does not load `.env` itself. Interactive input **and** output are mandatory, and password arguments/environment input are not supported.
+
+New accounts receive an active administrator identity after two matching hidden password entries. Existing accounts offer password reset with default **no**: promotion otherwise preserves password, status (including disabled), identity, creation time, and sessions. An existing administrator without reset is a no-op. Reset revokes all target sessions and records the actual promotion/reset events atomically; it does not issue a CLI session or enable disabled accounts. A concurrent target change rejects the operation; rerun rather than overwrite the newer account.
+
+The command restores terminal mode and releases its database/listeners on completion or cancellation. Success is reported only after account/session/audit commit. Administrator web-page availability remains owned by the later administrator UI issue.
+
 ## Verification Matrix
 
-| Surface           | Verify with                                 | Command                 | Evidence required                                       |
-| ----------------- | ------------------------------------------- | ----------------------- | ------------------------------------------------------- |
-| Liveness / health | Probe of `/healthz` on the dev server       | `pnpm dev:status`       | exit 0 and `health: OK`                                 |
-| API endpoint      | hurl suite against the running dev server   | `pnpm smoke`            | HTTP status and response body per route                 |
-| Database          | Real-file SQLite migrate, settings, reopen  | `pnpm test:integration` | tempfile `platform.db`, one ledger row, closed handle   |
-| Built artifact    | Build, start `platform/dist`, run the suite | `pnpm e2e`              | build output, hurl summary, `platform.db` schema/ledger |
+| Surface           | Verify with                                                         | Command                 | Evidence required                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Liveness / health | Probe of `/healthz` on the dev server                               | `pnpm dev:status`       | exit 0 and `health: OK`                                                                                                                                  |
+| API endpoint      | hurl suite against the running dev server                           | `pnpm smoke`            | HTTP status and response body per route                                                                                                                  |
+| Database          | Real-file SQLite migrate, settings, reopen                          | `pnpm test:integration` | tempfile `platform.db`, one ledger row, closed handle                                                                                                    |
+| Built artifact    | Build, start `platform/dist`, run the suite                         | `pnpm e2e`              | build output, hurl summary, `platform.db` schema/ledger                                                                                                  |
+| Administrator CLI | Actual Node and pinned silent-pnpm processes with hidden-input PTYs | `pnpm test:cli`         | direct/silent-wrapper argument rejection without disclosure/data, hidden input/restored echo, atomic account/audit/session outcomes and HTTP admin login |
 
 - Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
 - No UI or background-job surface exists yet. The PR that creates one adds its row and command in the same change.
 - A surface with no verification command is review-only, and the PR must say so.
 
 Every row requires fresh evidence from the current session — see `## Agent Operating Rules`.
+
+Issue #24 updates the root command/verification rules and `platform/AGENTS.md` terminal-test guidance without coverage or pairing exemptions. Rule-file human review is deferred to Epic completion.
 
 ## Runtime Lifecycle
 

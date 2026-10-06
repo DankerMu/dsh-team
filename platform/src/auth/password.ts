@@ -41,6 +41,12 @@ const MIN_PASSWORD_CODE_POINTS = 6;
 const MAX_PASSWORD_CODE_POINTS = 256;
 const INVALID_PASSWORD_LENGTH = 'Password must be 6 to 256 Unicode code points';
 
+export class PasswordPolicyError extends Error {
+  constructor() {
+    super(INVALID_PASSWORD_LENGTH);
+  }
+}
+
 function hasBoundedUnicodeCodePoints(password: string): boolean {
   let count = 0;
   for (let index = 0; index < password.length;) {
@@ -74,7 +80,7 @@ function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
 
 export async function hashPassword(password: string): Promise<string> {
   if (!hasBoundedUnicodeCodePoints(password)) {
-    throw new Error(INVALID_PASSWORD_LENGTH);
+    throw new PasswordPolicyError();
   }
   const salt = randomBytes(SALT_BYTES);
   const hash = await deriveKey(password, salt);

@@ -1,16 +1,14 @@
-import { randomInt } from 'node:crypto';
 import type { FastifyPluginCallback, FastifyPluginOptions } from 'fastify';
 import { recordAuditEvent } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { ERROR_RESPONSE_SCHEMA, rejectInvalidCredentialBody } from './credentials.ts';
+import { generateUserId } from './identity.ts';
 import { hashPassword } from './password.ts';
 import { ORIGIN_HEADERS_SCHEMA } from './request-guard.ts';
 import { formatSessionCookie } from './session-cookie.ts';
 import { createSession } from './session.ts';
 import type { SourceAddressResolver } from './source-address.ts';
 
-const USER_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
-const USER_ID_LENGTH = 12;
 const INSERT_USER =
   "INSERT INTO users (id, email, password_hash, role, status, created_at) VALUES (?, ?, ?, 'employee', 'active', ?) ON CONFLICT (email) DO NOTHING";
 const INVALID_BODY = 'Invalid registration body';
@@ -49,14 +47,6 @@ interface RegistrationBody {
 
 interface InsertUserStatement {
   run(id: string, email: string, passwordHash: string, createdAt: number): { changes: number };
-}
-
-function generateUserId(): string {
-  let id = '';
-  for (let index = 0; index < USER_ID_LENGTH; index += 1) {
-    id += USER_ID_ALPHABET.charAt(randomInt(USER_ID_ALPHABET.length));
-  }
-  return id;
 }
 
 /** Registers `POST /_platform/api/register`. */

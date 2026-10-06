@@ -1,4 +1,4 @@
-export { hashPassword, verifyPassword } from './password.ts';
+export { hashPassword, verifyPassword, PasswordPolicyError } from './password.ts';
 export { createSession, deleteUserSessions, getSessionUser, validateSession } from './session.ts';
 export { readSessionCookie } from './session-cookie.ts';
 export { registrationRoutes } from './registration.ts';
@@ -7,3 +7,5 @@ export { logoutRoutes } from './logout.ts';
 export { passwordChangeRoutes } from './password-change.ts';
 export { createSourceAddressResolver } from './source-address.ts';
 export { installRequestGuard } from './request-guard.ts';
+export { normalizeEmail } from './identity.ts';
+export { administerAccount, AdministratorConflictError } from './administrator.ts';
