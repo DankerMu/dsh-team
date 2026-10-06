@@ -29,6 +29,8 @@
     "test": "vitest run --project unit --coverage",
     "test:integration": "vitest run --project integration",
     "test:cli": "vitest run --project integration platform/test/cli.integration.test.ts",
+    "test:docker": "vitest run --project docker",
+    "verify:docker-evidence": "node platform/test/verify-docker-evidence.ts",
     "build": "tsc -p platform/tsconfig.build.json && rm -rf platform/dist/db/migrations && cp -R platform/src/db/migrations platform/dist/db/migrations",
     "contract:write": "node platform/scripts/openapi.ts --write",
     "contract:check": "node platform/scripts/openapi.ts --check",

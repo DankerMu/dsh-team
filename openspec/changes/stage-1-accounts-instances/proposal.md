@@ -167,3 +167,7 @@
 ## Issue #24 fixture
 
 - Feature; expanded task6.9 (agree with upstream): interactive administrator bootstrap/promotion/reset command, terminal secrecy and direct atomic account/audit persistence. Reuse auth identity/password/session policies; no web privilege-granting endpoint or administrator UI implementation.
+
+## Issue #25 fixture
+
+- Expanded task7.1 (agree with upstream): real Docker build/version acceptance and invocation-owned cleanup on giap-vps, plus a read-only CI evidence trust gate. The user explicitly chose trusted-session execution of reviewed exact commits instead of giving public PRs shared-VPS Docker access. No image change, persistent self-hosted runner, GitHub VPS credential, remote framework or later image capability.

@@ -186,6 +186,14 @@ verification:
       command: "pnpm test:cli"
       evidence: "actual Node and pinned silent-pnpm CLI rejection/no disclosure/no data and POSIX Python3 PTY hidden-input/restored-echo plus atomic account/audit/session outcomes and HTTP admin login"
       required_at: "L3+"
+    user_image_docker:
+      command: "pnpm test:docker"
+      evidence: "trusted giap-vps reviewed SHA, pinned user-home tools, exact DSH 0.2.0-rc.2, success/failure owned cleanup and unrelated sentinel preservation"
+      required_at: "L3+"
+    docker_ci_evidence:
+      command: "pnpm verify:docker-evidence"
+      evidence: "read-only latest exact-head DankerMu success or associated merged PR exact-merge-SHA/tree-equivalent reuse; missing/invalid evidence fails"
+      required_at: "L3+"
   enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
 
 # Permanent, justified opt-outs. Every entry names an existing path.
