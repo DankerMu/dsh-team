@@ -171,3 +171,7 @@
 ## Issue #25 fixture
 
 - Expanded task7.1 (agree with upstream): real Docker build/version acceptance and invocation-owned cleanup on giap-vps, plus a read-only CI evidence trust gate. The user explicitly chose trusted-session execution of reviewed exact commits instead of giving public PRs shared-VPS Docker access. No image change, persistent self-hosted runner, GitHub VPS credential, remote framework or later image capability.
+
+## Issue #26 fixture
+
+- Expanded task7.2 (agree with upstream): add distro Python3/python-docx to the critical user image and prove non-root DOCX creation/readback with networking disabled. Reuse the canonical Docker fixture and trusted reviewed-SHA admission; no pip manager, office bundle, profile seed, web startup, sandbox-policy or platform behavior change.
