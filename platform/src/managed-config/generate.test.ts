@@ -323,7 +323,7 @@ describe('generateManagedConfig', () => {
       expect.arrayContaining([
         { id: 'webserver', config: { host: '0.0.0.0', port: 3080 } },
         { id: 'tool-web', disabled: true },
-        { id: 'permission-presets', config: permission },
+        { id: 'permission', config: permission },
         { id: 'ui-settings-models', disabled: true },
         { insert: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }] },
       ]),

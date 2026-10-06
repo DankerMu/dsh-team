@@ -122,7 +122,7 @@ export function generateManagedConfig(input: ManagedConfigInput): string {
       },
     },
     {
-      id: 'permission-presets',
+      id: 'permission',
       config: input.permission,
     },
     ...input.presets.map(transformPreset),
