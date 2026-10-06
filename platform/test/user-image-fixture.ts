@@ -261,7 +261,9 @@ export function runUserImage(
       image,
       '--file',
       join(repositoryRoot, 'images/dsh-user/Dockerfile'),
-      // Match existing probes; this Dockerfile needs no repository-root files or secrets.
+      '--build-context',
+      `zh-locale=${join(repositoryRoot, 'plugins/zh-locale')}`,
+      // Keep the primary context narrow: no repository-root files or secrets.
       join(repositoryRoot, 'images/dsh-user'),
     ];
     // Register ownership before potentially partial build/create operations.

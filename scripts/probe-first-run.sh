@@ -120,7 +120,8 @@ trap 'on_signal 143' TERM
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX")"
 evidence="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}-evidence.XXXXXX")"
 echo "probe-first-run: run_id=${run_id} image=${image} workdir=${workdir} evidence=${evidence} hostname=${authority_host}"
-probe_run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" "${repo_root}/images/dsh-user" >/dev/null
+probe_run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
+  --build-context "zh-locale=${repo_root}/plugins/zh-locale" "${repo_root}/images/dsh-user" >/dev/null
 image_owned=1
 write_overlay() {
   local dest="$1" kind="$2"

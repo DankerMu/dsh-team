@@ -15,22 +15,32 @@ remain in the roster. This is not a replacement model provider.
 ## Delivery
 
 The package declares the exact DSH peer pin using the published compatibility
-idiom. Before activating an overlay-inserted local package, also require exact
-`dsh --version` equality with `package.json.peerDependencies['@deepseek-ai/dsh']`;
-do not apply an `allow-version` exemption. The probe performs this equality check
-against its image and validates the manifest before copying. Coverage of the
-native startup peer check for an overlay-only package is not yet established;
-the probe's explicit comparison is the operative pin guard for that path.
+idiom. The user-image build and the composition probe require exact `dsh --version`
+equality with `package.json.peerDependencies['@deepseek-ai/dsh']`; do not apply an
+`allow-version` exemption. Coverage of the native startup peer check for an
+overlay-only package is not yet established, so these explicit comparisons remain
+the operative guards.
 
-For offline profile delivery, copy `package.json`, `index.js`, `client.js`, and
-`cordis.patch.yml` to
-`$DSH_HOME/profiles/web/node_modules/@dsh-team/zh-locale/`, then apply the canonical
-patch after the Web bundle (e.g. through `--patch`). The importable ESM host half
-uses the released pure-UI `apply` convention, without host-side behavior; browser
+The user-image Dockerfile keeps `images/dsh-user` as its primary build context and
+requires the BuildKit named context `zh-locale=<repo>/plugins/zh-locale`. It
+initializes the released Web profile with the boot-free
+`dsh --profile web --dump-default-config` command, then copies only `package.json`,
+`index.js`, `client.js`, and `cordis.patch.yml` from that context to
+`$DSH_HOME/profiles/web/node_modules/@dsh-team/zh-locale/`. These four files remain
+the canonical offline delivery artifacts; there is no copied second plugin source
+or runtime installer. The image snapshots the whole `profiles/` tree at
+`/opt/dsh-team/profile-seed/`, with root-owned read-only seed contents and protected
+replacement parents, while live profiles remain writable by uid1001.
+
+Artifact delivery does **not** activate this plugin or modify the profile's user
+patch. Managed-config generation remains a separate task and will apply the
+canonical patch after the Web bundle through a managed overlay (e.g. `--patch`).
+The composition probe copies the same four artifacts into its own disposable
+profile and applies that patch explicitly. Do not copy probe-created Session or
+workspace-registration state as an image seed. The importable ESM host half uses
+the released pure-UI `apply` convention, without host-side behavior; browser
 behavior is implemented exclusively by the client artifact. No package manager,
-registry, build, or third-party dependency is needed at runtime. Production image
-population and managed-config generation
-remain separate tasks; do not copy probe-created Session state as an image seed.
+registry, build, or third-party dependency is needed at runtime.
 
 ## Parent verification commands (giap-vps)
 
