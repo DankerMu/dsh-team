@@ -380,6 +380,15 @@ Review修复（#24）：确认普通pnpm包装器在Node校验前打印被拒绝
 Suggested fixture level: expanded - 用户镜像是关键路径，决定每个实例的运行环境
 Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不依赖第 3 组的结论，不改镜像）
 
+### Issue #25 risk/evidence map (task 7.1 only)
+
+- Public API / script entry, Config / project setup, Release / packaging — selected: `pnpm test:docker` discovery separate from check/coverage; pinned user-home Node/pnpm on giap-vps; actual build and exact DSH version; existing commands unaffected.
+- File IO / overwrite, Concurrency / shared state, Error handling / partial outputs — selected: invocation-unique resources, exact cleanup on success/induced failure, timeout and cleanup error nonzero, unrelated sentinel preserved; no global Docker prune.
+- Auth / permissions / secrets, Schema / field identity — selected: trusted-session reviewed-SHA admission; no VPS credential in public CI; owner-only latest exact-SHA success status; squash tree-equivalence binding; wrong/missing/failed/publisher/latest-status/mismatched-tree gate fixtures.
+- Resource limits — selected for bounded Docker subprocess/test duration and run cleanup, not production container quotas. Legacy compatibility and Documentation — selected: root scripts/CI aggregator/command validation preserved, rule and workflow changes disclosed; no image behavior change.
+- Evidence sequence: fixture review/strict validate; local discovery/gate-negative checks and full `pnpm check`; initial three-seat full-candidate review before admitting remote code; trusted parent exact-SHA VPS run plus failure/cleanup proof; finish evidence adjudication and publish dedicated status only after reviewed candidate passes. Any source fix invalidates admission/evidence and requires appropriate re-review. CI verifies evidence and is rerun explicitly after status publication; no missing-evidence skip.
+- User decision: “仅授权审查后的提交” authorizes this controlled external evidence path, not a persistent runner or broader shared-host access. Main squash CI must establish tree-equivalent reuse explicitly. Docker/CI evidence belongs in PR runtime section; human rule/workflow review remains deferred to Epic completion.
+
 ## 8. 受管覆盖层（任务包 1.6）
 
 依赖：第 3、4 组；8.4 起依赖第 7 组。模块在 `platform/src/managed-config/`。

@@ -97,3 +97,19 @@
 
 - **WHEN** 查看运行中 DSH 进程的环境
 - **THEN** 关闭遥测的变量已设置
+
+### Requirement: Docker 测试入口与可信 CI 证据
+
+仓库 MUST 提供 `pnpm test:docker`，在 giap-vps 用真实 Docker 构建用户镜像并验证精确发行版；普通本地检查 MUST NOT 启动 Docker。测试 MUST 只清理本次运行创建的 `dsh-team-test-*` 资源，成功或失败均不留下这些资源。共享 VPS MUST NOT 向任意公开 PR 提供自动执行权。
+
+#### Scenario: 精确版本与失败清理
+
+- **WHEN** 可信会话在钉定的用户目录工具链下执行 Docker 测试
+- **THEN** 镜像内版本必须精确匹配基线，退出后本次资源为空
+- **AND** 人为版本断言失败时命令非零，但仍清理本次资源且保留其他运行的资源
+
+#### Scenario: CI 绑定审查后的提交
+
+- **WHEN** CI 判断 Docker 验证是否通过
+- **THEN** 必须取得目标 PR head SHA 上仓库所有者发布的最新成功 `dsh-team/docker` 状态；缺失、失败、非可信发布者或其他 SHA 的结果均不能放行
+- **AND** 主分支 squash 结果仅在关联已合并 PR 的 head 树与当前提交树完全相同时复用该 head 证据，并明确标记为树等价复用
