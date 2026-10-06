@@ -248,6 +248,39 @@ it('accepts live observations immediately before the deadline, reports selected 
   expect(remainingResources(daemon)).toEqual(sentinels);
 });
 
+it('waits for the genuine launch announcement before judging a homepage that initially returns 404', async () => {
+  const daemon = webDaemon();
+  let time = 0;
+  const earlyHttpStatuses: number[] = [];
+  const command: DockerCommand = (args, timeout) => {
+    if (args[0] === 'logs' && time < 500) {
+      return { status: 0, stdout: '', stderr: '' };
+    }
+    return daemon.command(args, timeout);
+  };
+  const boundary: WebStartupBoundary = {
+    now: () => time,
+    pause: (milliseconds) => {
+      time += milliseconds;
+      return Promise.resolve();
+    },
+    httpStatus: () => {
+      const status = time < 500 ? 404 : 401;
+      if (time < 500) earlyHttpStatuses.push(status);
+      return Promise.resolve(status);
+    },
+  };
+
+  const result = await runUserImage('web-startup', () => undefined, command, boundary);
+
+  const summary: unknown = JSON.parse(result.stdout);
+  expect(summary).toMatchObject({ tokenSeen: true, httpStatus: 401 });
+  expect(time).toBeGreaterThanOrEqual(500);
+  expect(time).toBeLessThan(60_000);
+  expect(earlyHttpStatuses).toEqual([]);
+  expect(remainingResources(daemon)).toEqual(sentinels);
+});
+
 it.each([
   ['missing-token', 'deadline'],
   ['false-token-line', 'deadline'],

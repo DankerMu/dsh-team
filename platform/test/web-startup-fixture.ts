@@ -308,6 +308,11 @@ export async function runWebStartup(
       /(?:^|\r?\n)dsh web: http:\/\/127\.0\.0\.1:3080\/\?token=[A-Za-z0-9_-]+(?: \(LAN: http:\/\/[^\s/?]+:3080\/\?token=[A-Za-z0-9_-]+\))?(?:\r?\n|$)/.test(
         logs,
       );
+    // HTTP routes may still be assembling before the released readiness announcement.
+    if (!tokenSeen) {
+      await pause(Math.min(250, remaining()));
+      continue;
+    }
     const requestTimeout = Math.min(2_000, remaining());
     let status: number | null;
     try {
@@ -318,7 +323,7 @@ export async function runWebStartup(
     remaining();
     if (status !== null && status !== 401)
       throw new Error('Unauthenticated DSH homepage must return 401');
-    if (tokenSeen && status === 401) {
+    if (status === 401) {
       const process = selectedProcess(
         json(bounded(['exec', expected.container, 'python3', '-c', processScript])),
       );
