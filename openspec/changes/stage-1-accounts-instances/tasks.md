@@ -429,7 +429,7 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 
 依赖：第 3、4 组；8.4 起依赖第 7 组。模块在 `platform/src/managed-config/`。
 
-- [ ] 8.1 生成函数：输入模型设置和默认权限档，输出覆盖层内容（监听地址、OpenAI 兼容 provider、密钥所在环境变量名、模型清单、带上下文窗口的模型写出 `contextWindow`、默认模型、去掉每个预设的联网搜索和网页抓取、界面语言和关闭公告）。纯函数，不做文件操作。验证：单元测试——输出里没有密钥原文，只有环境变量名；联网工具不在任何预设的工具清单里；配置了上下文窗口的模型有 `contextWindow`，没配置的没有。
+- [x] 8.1 生成函数：输入模型设置和默认权限档，输出覆盖层内容（监听地址、OpenAI 兼容 provider、密钥所在环境变量名、模型清单、带上下文窗口的模型写出 `contextWindow`、默认模型、去掉每个预设的联网搜索和网页抓取、界面语言和关闭公告）。纯函数，不做文件操作。验证：单元测试——输出里没有密钥原文，只有环境变量名；联网工具不在任何预设的工具清单里；配置了上下文窗口的模型有 `contextWindow`，没配置的没有。
 - [ ] 8.2 覆盖层写入：整份写入临时文件后原子改名，文件权限只读；目录由配置项指定（加进 `config.ts` 和 `.env.example`）；路径由用户标识拼出，标识不合规时拒绝。验证：单元测试（临时目录）——并发写两次后文件是其中一份完整内容，不是混合；写入中途失败时旧文件不变；带 `../` 的标识被拒绝（规格“覆盖层整份生成”）。
 - [ ] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
 - [ ] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
@@ -449,6 +449,8 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - Legacy compatibility / examples; Documentation / migration notes — selected: preserve all non-network plugins/preset metadata, exact canonical UI composition and all existing probe/image callers; document purity, complete-composition ownership and permission-mapping deferral.
 - File IO / path safety / overwrite; Error handling / rollback / partial outputs — not selected for this pure slice: no filesystem, publication, persistence or partial output; writer/path/atomicity is task8.2, incomplete-model result task8.3.
 - Required proof: staged behavior RED/GREEN; effective released-parser/composer smoke with real shipped preset/locale data, synthetic credential-free settings and source/dist equivalence; three expanded review seats and trusted exact-head Docker/CI baseline remain required before merge.
+
+验证记录（#29）：模型、预设策略、完整组成三条路径均由parent先观察语义RED再实现；纯生成器五例通过，`pnpm check`527unit/255integration、generator100%覆盖、重复率2.68%。初次真实发行版composer拒绝错误目标`permission-presets`；发布包dsh-base声明的实际row为`permission`，修正契约断言先RED、再修目标，未忽略warning或另插权限插件。审查修复提交`3928004`在giap-vps以真实0.2.0-rc.2 `loadOverlayPatches`/`composeEntries`执行source与dist生成结果，字节相同、零warning，provider/default/可选contextWindow/完整权限配置及canonical中文roster生效于合成结果。四个实际预设standard/ptc/minimal/cordis的联网组件分别1/1/0/1变为0/0/0/0，非联网叶插件28/29/6/29及配置元数据保持；独立清点无测试资源残留。同提交`pnpm test:docker`四例通过。此为离线合成证明，不冒充插件激活、模型请求、浏览器UI、用户修改后生产roster完整性或默认权限档映射；后续责任见task8.4/9.3/16.1–16.2。最终精确SHA复验和CI证据见PR#136。
 
 ## 9. 编排器（任务包 1.7）
 
