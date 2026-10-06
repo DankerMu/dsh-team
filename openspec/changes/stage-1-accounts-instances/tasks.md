@@ -374,7 +374,7 @@ Review修复（#24）：确认普通pnpm包装器在Node校验前打印被拒绝
 
 - [x] 7.1 加入 `pnpm test:docker` 入口（`package.json`、`AGENTS.md` 验证矩阵、CI 任务），在 giap-vps 上按 `.tool-versions` 装好 Node 和 pnpm（装在 ubuntu 用户目录下，不动系统包）；带第一个用例：构建用户镜像，容器里 `dsh --version` 输出钉定版本。验证：`pnpm test:docker` 通过且结束后没有带 `dsh-team-test` 前缀的资源；`pnpm lint:agents` 通过。
 - [x] 7.2 镜像里装 Python 3 和 `python-docx`。验证：`pnpm test:docker`——在断开网络的容器里运行一段生成 DOCX 的脚本，产物能被解析库打开。
-- [ ] 7.3 按第 3 组的结论在镜像里预置 `$DSH_HOME/profiles/`，并把整个 `profiles/` 目录原样拷贝到 `/opt/dsh-team/profile-seed/`（层级相同，只读）。验证：`pnpm test:docker`——空状态卷首次启动后卷里的 `profiles/` 与 `profile-seed/` 逐文件一致；改动卷里的 `profiles/` 后镜像里的 `profile-seed/` 不变。
+- [x] 7.3 按第 3 组的结论在镜像里预置 `$DSH_HOME/profiles/`，并把整个 `profiles/` 目录原样拷贝到 `/opt/dsh-team/profile-seed/`（层级相同，只读）。验证：`pnpm test:docker`——空状态卷首次启动后卷里的 `profiles/` 与 `profile-seed/` 逐文件一致；改动卷里的 `profiles/` 后镜像里的 `profile-seed/` 不变。
 - [ ] 7.4 镜像启动验证：用一份手写的最小覆盖层和第 1 组的安全设置启动容器。验证：`pnpm test:docker`——60 秒内日志里出现令牌行、3080 可连接；不带 cookie 请求首页得到 401；DSH 进程用户不是 root；进程环境里有关闭遥测的变量；状态目录和工作目录是两个挂载点。
 
 Suggested fixture level: expanded - 用户镜像是关键路径，决定每个实例的运行环境
@@ -408,6 +408,8 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - Concurrency / shared state, Error handling / partial outputs, Resource limits — selected: unique owned volume/container/image lifecycle, volume reuse preserves edits without resetting, independent cleanup including failure, wrong-label resources never removed, bounded operations.
 - Legacy compatibility / examples, Documentation — selected: canonical helper and all build caller clean cutover, no duplicated plugin/YAML/init implementation; document named-context requirement and critical-path deferred human review.
 - Evidence sequence follows #26: reviewed test-first exact SHA actual unseeded-image RED; image/caller implementation; local gates; expanded three-seat admission; real final-SHA volume/seed GREEN and independent inventories; owner status/CI/merge. Browser/server initialization, office presets, managed overlay and workspace registration are explicit later-slice non-goals.
+
+验证记录（#27）：审查后test-first`58e90ba`在真实VPS为2通过/1失败（缺少profile-seed），修改镜像后审查提交`610c5d5`三条全部通过；本地`pnpm check`522 unit/216 integration通过，重复率2.67%。独立真实Docker探针保留两次容器的实际imageID、volume/mount/user/network检查及fresh/reuse完整JSON：初次树/字节相同、四插件hash与仓库一致、uid1001 live修改持久，种子四种写/删/替换均EACCES且hash不变。版本断言、seed断言、实际创建volume后报错、实际创建container后报错四类失败均保留原因并清理；独立哨兵四种资源始终保留，最后由所有者删除，独立清点为空。迁移后的`pnpm probe:sandbox`真实通过Docker默认策略工作区可写/状态目录拒写；未声称重跑需要浏览器/模型的另两探针。最终精确SHA实测/状态/CI保留于PR，关键路径人工审查后置。
 
 ## 8. 受管覆盖层（任务包 1.6）
 
