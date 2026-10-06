@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { resolve } from 'node:path';
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 
@@ -9,6 +10,7 @@ export interface PlatformConfig {
   readonly port: number;
   readonly logLevel: LogLevel;
   readonly dataDir: string;
+  readonly managedConfigDir: string;
   readonly publicUrl: string;
   readonly authority: string;
   readonly cookieSecure: boolean;
@@ -39,9 +41,20 @@ function parseLogLevel(raw: string): LogLevel {
   return level;
 }
 
+function isInvalidPath(raw: string): boolean {
+  return raw.trim() === '' || raw.includes('\0');
+}
+
 function parseDataDir(raw: string): string {
-  if (raw.trim() === '' || raw.includes('\0')) {
+  if (isInvalidPath(raw)) {
     throw new Error(`PLATFORM_DATA_DIR must be a nonempty path, got ${JSON.stringify(raw)}`);
+  }
+  return raw;
+}
+
+function parseManagedConfigDir(raw: string): string {
+  if (isInvalidPath(raw)) {
+    throw new Error('PLATFORM_MANAGED_CONFIG_DIR must be a nonempty path');
   }
   return raw;
 }
@@ -124,11 +137,17 @@ function parseTrustedProxies(raw: string | undefined): readonly string[] {
  */
 export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
   const publicOrigin = parsePublicUrl(env.PLATFORM_PUBLIC_URL);
+  const dataDir = parseDataDir(env.PLATFORM_DATA_DIR ?? DEFAULT_DATA_DIR);
+  const managedConfigDir =
+    env.PLATFORM_MANAGED_CONFIG_DIR === undefined
+      ? resolve(dataDir, 'managed-config')
+      : resolve(parseManagedConfigDir(env.PLATFORM_MANAGED_CONFIG_DIR));
   return {
     host: env.PLATFORM_HOST ?? DEFAULT_HOST,
     port: parsePort(env.PLATFORM_PORT ?? DEFAULT_PORT),
     logLevel: parseLogLevel(env.PLATFORM_LOG_LEVEL ?? DEFAULT_LOG_LEVEL),
-    dataDir: parseDataDir(env.PLATFORM_DATA_DIR ?? DEFAULT_DATA_DIR),
+    dataDir,
+    managedConfigDir,
     publicUrl: publicOrigin.origin,
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),

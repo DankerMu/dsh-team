@@ -193,3 +193,10 @@
 - Selected risk packs and evidence below task8.1. Preserve canonical locale-plugin composition, every non-network preset plugin and metadata, explicit model order/context-window omission, and existing module boundaries.
 - Inputs include explicit public model settings, an already-resolved DSH permission configuration, and caller-supplied trusted composition data. Platform-tier mapping remains task16.1–16.2; canonical artifact loading and runtime wiring remain consumers, not hidden module-initialization IO or duplicated plugin YAML.
 - Output is one JSON patch-list document accepted by the released YAML dialect. Pure unit RED/GREEN plus released-parser/composer smoke is required; Web/UI/managed-precedence proof remains task8.4.
+
+## Issue #30 fixture
+
+- Feature; expanded task8.2 (agree with upstream): atomic filesystem publication, user-ID path boundary, concurrent writes, read permissions and failure cleanup; add one configured overlay directory without changing existing runtime behavior.
+- Selected risk packs and concrete evidence below task8.2. Preserve pure generation, config validation, typed consumers, previous complete files and unrelated users/files.
+- Evidence floor: staged semantic RED/GREEN; real temporary-directory concurrency, partial-write/rename failure and symlink-target preservation; source/dist public-API smoke, `pnpm check`, strict OpenSpec, reviewed exact-head Docker baseline and normal CI.
+- Trust boundary: administrator-owned directory/ancestors, no hostile parent replacement claim. Atomic rename guarantees visibility, not power-loss durability or live single-file-bind-mount propagation. No container wiring or model-policy change.

@@ -11,6 +11,7 @@ const CONFIG = {
   port: 8080,
   logLevel: 'info',
   dataDir: './data',
+  managedConfigDir: './data/managed-config',
   publicUrl: PUBLIC_ORIGIN,
   authority: '127.0.0.1:8080',
   cookieSecure: false,

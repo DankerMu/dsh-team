@@ -133,7 +133,7 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 
 ### Environment
 
-- `.env.example` lists the variables (`PLATFORM_HOST`, `PLATFORM_PORT`, `PLATFORM_LOG_LEVEL`, `PLATFORM_DATA_DIR`, `PLATFORM_PUBLIC_URL`, `PLATFORM_COOKIE_SECURE`, `PLATFORM_TRUSTED_PROXIES`). Copy to `.env` for local runs. Invalid values stop the process at startup.
+- `.env.example` lists the variables (`PLATFORM_HOST`, `PLATFORM_PORT`, `PLATFORM_LOG_LEVEL`, `PLATFORM_DATA_DIR`, `PLATFORM_MANAGED_CONFIG_DIR`, `PLATFORM_PUBLIC_URL`, `PLATFORM_COOKIE_SECURE`, `PLATFORM_TRUSTED_PROXIES`). Copy to `.env` for local runs. Invalid values stop the process at startup. Unset `PLATFORM_MANAGED_CONFIG_DIR` defaults to `<dataDir>/managed-config` and is resolved to an absolute path.
 - No secret is needed by the current skeleton. Model and RAGFlow keys arrive later through environment variables only.
 
 ### Administrator deployment command
