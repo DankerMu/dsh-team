@@ -70,7 +70,7 @@ platform/            platform service: one Node process (workspace package)
   src/               app.ts, config.ts, health.ts, main.ts today
   src/<module>/      planned: auth, admin, orchestrator, gateway, managed-config,
                      ragflow-proxy, audit, db (docs/IMPLEMENTATION_PLAN.md §3)
-  test/              integration tests (*.integration.test.ts)
+  test/              integration tests (*.integration.test.ts), VPS-only Docker tests (*.docker.test.ts)
   scripts/           generators (openapi.ts)
 schemas/             generated HTTP contract (openapi.json)
 smoke/               hurl suites run by smoke and e2e
@@ -117,6 +117,8 @@ Python 3 with standard-library `pty`/`termios` support is required for administr
 | Integration tests        | `pnpm test:integration`                  |
 | Administrator command    | `pnpm --silent cli admin create <email>` |
 | CLI integration tests    | `pnpm test:cli`                          |
+| VPS Docker version test  | `pnpm test:docker`                       |
+| CI Docker evidence gate  | `pnpm verify:docker-evidence`            |
 | Format code              | `pnpm fmt`                               |
 | Lint                     | `pnpm lint`                              |
 | Type-check               | `pnpm typecheck`                         |
@@ -140,15 +142,29 @@ New accounts receive an active administrator identity after two matching hidden 
 
 The command restores terminal mode and releases its database/listeners on completion or cancellation. Success is reported only after account/session/audit commit. Administrator web-page availability remains owned by the later administrator UI issue.
 
+### Trusted Docker verification
+
+`pnpm check` and `pnpm test:integration` never start Docker. Only the trusted parent session runs `pnpm test:docker` on giap-vps (Ubuntu 24.04/Linux amd64), after full review of the exact commit. Install Node 24.13.1 and pnpm 10.34.6 from `.tool-versions` below ubuntu's home, verify executable paths and versions, and leave system binaries/packages unchanged. Missing Docker/daemon/tool prerequisites fail, not skip.
+
+The single Docker case builds the existing user-image Dockerfile with the `images/dsh-user` directory context (no root-local secrets), runs `dsh --version` from the captured image ID, and requires exactly `0.2.0-rc.2`. Each invocation labels unique `dsh-team-test-*` image/container targets. Cleanup checks ownership and removes only that container and image tag on success, assertion failure or partial creation; cleanup failures fail verification and preserve output. No prune, ports, mounts, privileged flags or model/service credentials.
+
+After real execution and successful cleanup, trusted orchestration publishes sanitized durable evidence and the `dsh-team/docker` commit status as literal owner `DankerMu` on the reviewed PR head SHA, then reruns that head's CI. CI uses `pnpm verify:docker-evidence` with read-only GitHub access; missing, pending, failed, untrusted or other-SHA evidence fails immediately, with no polling or skipped success. Main squash pushes reuse evidence only from an associated merged PR with that exact merge SHA and identical pushed/head trees, reporting tree-equivalent reuse rather than claiming a direct squash-SHA run. No self-hosted runner, VPS secret in GitHub, `pull_request_target` or arbitrary PR remote execution.
+
+The gate requires `gh` plus `GITHUB_EVENT_NAME`, `GITHUB_REPOSITORY` and `GITHUB_EVENT_PATH`; GitHub Actions supplies these and a job-scoped read-only `GH_TOKEN`. Status and associated-PR pages are fully read under bounded process/output limits; malformed data, incomplete event context or failed API reads fail closed. The token belongs only to this verifier, never to tested Docker processes.
+
+Policy and lifecycle failure fixtures run without Docker or external calls through `pnpm test:integration`. Real VPS evidence also needs an induced version-assertion failure, proof that invocation-owned resources are absent, and proof an unrelated test-owned sentinel survives. The trusted parent owns this execution and independently removes the sentinel.
+
 ## Verification Matrix
 
-| Surface           | Verify with                                                         | Command                 | Evidence required                                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Liveness / health | Probe of `/healthz` on the dev server                               | `pnpm dev:status`       | exit 0 and `health: OK`                                                                                                                                  |
-| API endpoint      | hurl suite against the running dev server                           | `pnpm smoke`            | HTTP status and response body per route                                                                                                                  |
-| Database          | Real-file SQLite migrate, settings, reopen                          | `pnpm test:integration` | tempfile `platform.db`, one ledger row, closed handle                                                                                                    |
-| Built artifact    | Build, start `platform/dist`, run the suite                         | `pnpm e2e`              | build output, hurl summary, `platform.db` schema/ledger                                                                                                  |
-| Administrator CLI | Actual Node and pinned silent-pnpm processes with hidden-input PTYs | `pnpm test:cli`         | direct/silent-wrapper argument rejection without disclosure/data, hidden input/restored echo, atomic account/audit/session outcomes and HTTP admin login |
+| Surface            | Verify with                                                              | Command                       | Evidence required                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------ | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Liveness / health  | Probe of `/healthz` on the dev server                                    | `pnpm dev:status`             | exit 0 and `health: OK`                                                                                                                                  |
+| API endpoint       | hurl suite against the running dev server                                | `pnpm smoke`                  | HTTP status and response body per route                                                                                                                  |
+| Database           | Real-file SQLite migrate, settings, reopen                               | `pnpm test:integration`       | tempfile `platform.db`, one ledger row, closed handle                                                                                                    |
+| Built artifact     | Build, start `platform/dist`, run the suite                              | `pnpm e2e`                    | build output, hurl summary, `platform.db` schema/ledger                                                                                                  |
+| Administrator CLI  | Actual Node and pinned silent-pnpm processes with hidden-input PTYs      | `pnpm test:cli`               | direct/silent-wrapper argument rejection without disclosure/data, hidden input/restored echo, atomic account/audit/session outcomes and HTTP admin login |
+| User-image Docker  | Real build, exact DSH version, owned cleanup and failure/sentinel probes | `pnpm test:docker`            | giap-vps exact reviewed SHA, pinned user-home tools, exact version and no invocation-owned resources on success/failure                                  |
+| CI Docker evidence | Read-only GitHub status/merge/tree decision                              | `pnpm verify:docker-evidence` | latest exact-head owner success or explicitly proved squash tree-equivalent reuse; invalid/missing evidence nonzero                                      |
 
 - Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
 - No UI or background-job surface exists yet. The PR that creates one adds its row and command in the same change.
@@ -157,6 +173,8 @@ The command restores terminal mode and releases its database/listeners on comple
 Every row requires fresh evidence from the current session — see `## Agent Operating Rules`.
 
 Issue #24 updates the root command/verification rules and `platform/AGENTS.md` terminal-test guidance without coverage or pairing exemptions. Rule-file human review is deferred to Epic completion.
+
+Issue #25 adds the required read-only Docker evidence workflow gate, Docker test-placement/verification rules and matching constraints without threshold or coverage exemptions. Workflow and rule-file changes require explicit PR review; rule-file human review remains deferred to Epic completion.
 
 ## Runtime Lifecycle
 
@@ -188,7 +206,7 @@ Max 10 entries, dated, pruned at milestones. Each one cost real time during phas
 ### Naming
 
 - Files: kebab-case (`managed-config.ts`). Identifiers: camelCase; types and classes PascalCase; constants UPPER_CASE.
-- Tests: `<name>.test.ts` next to the source; integration tests `platform/test/<name>.integration.test.ts`.
+- Tests: `<name>.test.ts` next to the source; integration tests `platform/test/<name>.integration.test.ts`; real Docker tests `platform/test/<name>.docker.test.ts` in the VPS-only project.
 - Domain concepts use the terms in `openspec/glossary.md`.
 
 ### Commit format

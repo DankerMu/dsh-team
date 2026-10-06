@@ -9,6 +9,14 @@ export default defineConfig({
     projects: [
       { test: { name: 'unit', include: ['platform/src/**/*.test.ts'] } },
       { test: { name: 'integration', include: ['platform/test/**/*.integration.test.ts'] } },
+      {
+        test: {
+          name: 'docker',
+          include: ['platform/test/**/*.docker.test.ts'],
+          // Bounded build/run calls plus independent finally-cleanup need their own deadline.
+          testTimeout: 900_000,
+        },
+      },
     ],
     coverage: {
       provider: 'v8',
