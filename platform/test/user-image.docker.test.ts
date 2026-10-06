@@ -45,3 +45,20 @@ it('copies meaningful immutable Web profiles into a fresh named volume and prese
       `network=none configuredUser=dsh readback=${result.stdout.replace(/\r?\n$/, '')} cleanup=complete\n`,
   );
 });
+
+it('starts real DSH Web under shipped seccomp with separate volumes and unauthenticated HTTP401', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+
+  const result = await runUserImage('web-startup', (summary) => {
+    const observed: unknown = JSON.parse(summary);
+    expect(observed).toMatchObject({ tokenSeen: true, httpStatus: 401, telemetryDisabled: true });
+  });
+
+  process.stdout.write(
+    `Docker Web startup verified: run=${result.runId} image=${result.image} ` +
+      `container=${result.container} state=${String(result.volume)} work=${String(result.workVolume)} ` +
+      `readback=${result.stdout} cleanup=complete\n`,
+  );
+});

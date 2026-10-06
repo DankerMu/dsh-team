@@ -29,6 +29,13 @@
 - **WHEN** 不带 DSH cookie 请求该容器的首页
 - **THEN** 得到 401
 
+#### Scenario: 真实进程与交付安全设置的启动验证
+
+- **WHEN** task7.4测试以交付的seccomp文件、只读最小覆盖层和两个独立命名卷启动实际DSH Web
+- **THEN** 从启动开始同一个60秒期限内观察到真实令牌行，并从宿主经仅loopback发布的3080映射请求首页得到401
+- **AND** 实际DSH进程为非root且含`DSH_TELEMETRY_DISABLED=1`，状态和工作目录分别挂载不同的可写卷
+- **AND** 测试不输出或保存令牌及原始日志，成功或失败后只清理本次拥有的资源
+
 ### Requirement: 非 root 运行，状态和工作目录分开
 
 容器内的 DSH 进程 MUST 以非 root 用户运行；DSH 状态目录和工作目录 MUST 是两个不同的挂载点。
