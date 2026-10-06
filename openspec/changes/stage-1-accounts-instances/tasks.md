@@ -375,7 +375,7 @@ Review修复（#24）：确认普通pnpm包装器在Node校验前打印被拒绝
 - [x] 7.1 加入 `pnpm test:docker` 入口（`package.json`、`AGENTS.md` 验证矩阵、CI 任务），在 giap-vps 上按 `.tool-versions` 装好 Node 和 pnpm（装在 ubuntu 用户目录下，不动系统包）；带第一个用例：构建用户镜像，容器里 `dsh --version` 输出钉定版本。验证：`pnpm test:docker` 通过且结束后没有带 `dsh-team-test` 前缀的资源；`pnpm lint:agents` 通过。
 - [x] 7.2 镜像里装 Python 3 和 `python-docx`。验证：`pnpm test:docker`——在断开网络的容器里运行一段生成 DOCX 的脚本，产物能被解析库打开。
 - [x] 7.3 按第 3 组的结论在镜像里预置 `$DSH_HOME/profiles/`，并把整个 `profiles/` 目录原样拷贝到 `/opt/dsh-team/profile-seed/`（层级相同，只读）。验证：`pnpm test:docker`——空状态卷首次启动后卷里的 `profiles/` 与 `profile-seed/` 逐文件一致；改动卷里的 `profiles/` 后镜像里的 `profile-seed/` 不变。
-- [ ] 7.4 镜像启动验证：用一份手写的最小覆盖层和第 1 组的安全设置启动容器。验证：`pnpm test:docker`——60 秒内日志里出现令牌行、3080 可连接；不带 cookie 请求首页得到 401；DSH 进程用户不是 root；进程环境里有关闭遥测的变量；状态目录和工作目录是两个挂载点。
+- [x] 7.4 镜像启动验证：用一份手写的最小覆盖层和第 1 组的安全设置启动容器。验证：`pnpm test:docker`——60 秒内日志里出现令牌行、3080 可连接；不带 cookie 请求首页得到 401；DSH 进程用户不是 root；进程环境里有关闭遥测的变量；状态目录和工作目录是两个挂载点。
 
 Suggested fixture level: expanded - 用户镜像是关键路径，决定每个实例的运行环境
 Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不依赖第 3 组的结论，不改镜像）
@@ -422,6 +422,8 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - Documentation / migration notes — selected: record runtime command/results, platform limits, trusted exact-head evidence and Epic-end human white-box deferral. `pnpm check` and strict OpenSpec must pass.
 - Legacy compatibility / examples — not selected: no legacy API migration; all three existing Docker cases, named-context builder consumers and cleanup invariants must remain unchanged.
 - Oracle qualification: known-good observations and discriminating missing token/early exit/deadline/HTTP200/root/missing telemetry/wrong or shared mount cases; real baseline may be GREEN because task7.4 verifies existing image behavior. No fabricated semantic RED from import/setup failure.
+
+验证记录（#28）：初始审查提交`05492ce`真实Docker四条通过，但补充探针捕获启动公告前HTTP404，不能用偶发GREEN掩盖此时序缺陷。新增确定性回归先以401断言失败，再将HTTP验收顺序移到真实公告之后；仍使用启动前建立的同一60秒期限，不特判404、不放宽公告后的401要求。修复审查提交`dc3ae1b`在giap-vps根`pnpm test:docker`四条通过，Web令牌/HTTP401于1985ms就绪，实际DSH为PID1、uid1001且遥测关闭；本地`pnpm check`522unit/255integration通过、重复率2.61%。独立补充探针的成功及验收后人为断言失败均清理本次资源并保留四类外部哨兵，所有者最后删除哨兵并恢复初始清点；记录的是实际Dockerinspect响应截获与fixture选定进程摘要，不冒充第二套独立进程识别器。完整脱敏证据、最终精确SHA复验和CI状态见PR#135；Ubuntu22.04、浏览器/模型和进程被强杀后的清理未验证，关键路径人工白盒审查按用户决定后置到Epic结束。
 
 ## 8. 受管覆盖层（任务包 1.6）
 
