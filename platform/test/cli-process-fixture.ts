@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
@@ -19,6 +19,41 @@ export const CLI_REPLACEMENT = ' 新密码 😀😀 ';
 export const CLI_ORIGIN = 'http://platform.example.test';
 const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 const harnessPath = fileURLToPath(new URL('./cli-pty.py', import.meta.url));
+const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+
+function pinnedPnpmCommand(): string[] {
+  const entrypoint = process.env.npm_execpath;
+  if (entrypoint === undefined || !isAbsolute(entrypoint)) {
+    throw new Error('Run CLI integration verification through the pinned root pnpm command');
+  }
+  const pnpmPath = realpathSync(entrypoint);
+  const manifest: unknown = JSON.parse(readFileSync(join(repositoryRoot, 'package.json'), 'utf8'));
+  if (
+    typeof manifest !== 'object' ||
+    manifest === null ||
+    !('packageManager' in manifest) ||
+    typeof manifest.packageManager !== 'string' ||
+    !manifest.packageManager.startsWith('pnpm@')
+  ) {
+    throw new Error('CLI integration verification requires the repository pnpm pin');
+  }
+  const version = spawnSync(process.execPath, [pnpmPath, '--version'], {
+    cwd: repositoryRoot,
+    env: { PATH: dirname(process.execPath) },
+    encoding: 'utf8',
+    // Version qualification must not hang before the bounded PTY scenario starts.
+    timeout: 3000,
+    killSignal: 'SIGKILL',
+  });
+  if (
+    version.error !== undefined ||
+    version.status !== 0 ||
+    version.stdout.trim() !== manifest.packageManager.slice('pnpm@'.length)
+  ) {
+    throw new Error('CLI integration verification must use the repository-pinned pnpm version');
+  }
+  return [process.execPath, pnpmPath, '--silent', '--dir', repositoryRoot, 'cli'];
+}
 
 export interface PromptAction {
   prompt: string;
@@ -109,6 +144,7 @@ function parsePtyResult(output: string): PtyResult {
 export function runPty(
   workspace: CliWorkspace,
   options: {
+    sourceWrapper?: boolean;
     args?: readonly string[];
     actions?: readonly PromptAction[];
     secrets?: readonly string[];
@@ -118,12 +154,16 @@ export function runPty(
     pipedInput?: string;
   } = {},
 ): PtyResult {
+  const command = options.sourceWrapper === true ? pinnedPnpmCommand() : undefined;
+  const args = options.args ?? ['admin', 'create', CLI_EMAIL];
   const request = {
     node: process.execPath,
     entrypoint: cliPath,
-    args: options.args ?? ['admin', 'create', CLI_EMAIL],
+    command: command === undefined ? undefined : [...command, ...args],
+    args,
     cwd: workspace.directory,
     env: {
+      ...(command === undefined ? {} : { PATH: `${dirname(process.execPath)}:/usr/bin:/bin` }),
       PLATFORM_DATA_DIR: workspace.dataDir,
       PLATFORM_PUBLIC_URL: CLI_ORIGIN,
       ...options.env,

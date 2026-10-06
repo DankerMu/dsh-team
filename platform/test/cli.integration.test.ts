@@ -104,15 +104,19 @@ function expectDeploymentAudits(
 const PTY_TEST_TIMEOUT = 15000;
 
 describe('administrator deployment command over actual PTYs', () => {
-  it(
-    'creates a canonical active administrator with hidden Unicode input and authenticates that identity over HTTP',
-    async () => {
+  it.each([
+    { launcher: 'direct Node', sourceWrapper: false },
+    { launcher: 'pinned silent pnpm', sourceWrapper: true },
+  ])(
+    'creates a canonical active administrator through $launcher with hidden Unicode input and real HTTP identity',
+    async ({ sourceWrapper }) => {
       const workspace = createCliWorkspace();
       const environmentPassword = 'environment-password-sentinel';
       const emailArgument = ' User@Example.com ';
       try {
         const startedAt = Date.now();
         const result = runPty(workspace, {
+          sourceWrapper,
           args: ['admin', 'create', emailArgument],
           actions: matchingPasswords(CLI_REPLACEMENT),
           secrets: [CLI_REPLACEMENT, environmentPassword, emailArgument],
@@ -149,6 +153,7 @@ describe('administrator deployment command over actual PTYs', () => {
           const audits = expectDeploymentAudits(database, ['admin.created'], account.id);
           expect(audits[0]?.createdAt).toBe(account.created_at);
           expect(await verifyPassword(CLI_REPLACEMENT, account.password_hash)).toBe(true);
+          expect(await verifyPassword(CLI_REPLACEMENT.trim(), account.password_hash)).toBe(false);
           expect(await verifyPassword(environmentPassword, account.password_hash)).toBe(false);
 
           const login = await postCliLogin(baseUrl, CLI_REPLACEMENT);
@@ -430,17 +435,40 @@ describe('administrator deployment command over actual PTYs', () => {
   );
 
   it.each([
-    { kind: 'positional password', extra: ['argument-password-sentinel'] },
-    { kind: 'password option', extra: ['--password=argument-password-sentinel'] },
-    { kind: 'extra option', extra: ['--force'] },
+    {
+      launcher: 'direct Node',
+      sourceWrapper: false,
+      kind: 'positional password',
+      extra: ['argument-password-sentinel'],
+    },
+    {
+      launcher: 'direct Node',
+      sourceWrapper: false,
+      kind: 'password option',
+      extra: ['--password=argument-password-sentinel'],
+    },
+    { launcher: 'direct Node', sourceWrapper: false, kind: 'extra option', extra: ['--force'] },
+    {
+      launcher: 'pinned silent pnpm',
+      sourceWrapper: true,
+      kind: 'positional password',
+      extra: ['wrapper-password-sentinel'],
+    },
+    {
+      launcher: 'pinned silent pnpm',
+      sourceWrapper: true,
+      kind: 'password option',
+      extra: ['--password=wrapper-password-sentinel'],
+    },
   ])(
-    'rejects $kind on a real terminal without argument disclosure or data creation',
-    ({ extra }) => {
+    'rejects $kind through $launcher without argument disclosure or data creation',
+    ({ sourceWrapper, extra }) => {
       const workspace = createCliWorkspace();
       try {
         const result = runPty(workspace, {
+          sourceWrapper,
           args: ['admin', 'create', CLI_EMAIL, ...extra],
-          secrets: [...extra, 'argument-password-sentinel'],
+          secrets: [...extra, 'argument-password-sentinel', 'wrapper-password-sentinel'],
         });
 
         expect(result.exitCode).toBeGreaterThan(0);

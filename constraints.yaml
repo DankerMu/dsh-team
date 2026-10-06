@@ -184,7 +184,7 @@ verification:
       required_at: "L3+"
     administrator_cli:
       command: "pnpm test:cli"
-      evidence: "actual CLI non-TTY rejection/no data and POSIX Python3 PTY hidden-input/restored-echo plus atomic account/audit/session outcomes"
+      evidence: "actual Node and pinned silent-pnpm CLI rejection/no disclosure/no data and POSIX Python3 PTY hidden-input/restored-echo plus atomic account/audit/session outcomes and HTTP admin login"
       required_at: "L3+"
   enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
 

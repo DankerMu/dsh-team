@@ -46,7 +46,7 @@ def drive(request):
         selector.register(master, selectors.EVENT_READ, "output")
 
         child = subprocess.Popen(
-            [request["node"], request["entrypoint"]] + request["args"],
+            request.get("command", [request["node"], request["entrypoint"]] + request["args"]),
             cwd=request["cwd"],
             env=request["env"],
             stdin=subprocess.PIPE if request.get("stdinMode") == "pipe" else slave,

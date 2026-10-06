@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # scripts/check-agents-commands.sh — AGENTS.md may only document commands that exist.
 # Agents execute documented commands verbatim, so a stale command is worse than none.
-# Checks every command written as code (`pnpm <script>` in backticks, or a quoted
-# "pnpm <script>" in constraints.yaml) in AGENTS.md, platform/AGENTS.md and
+# Checks every command written as code (`pnpm [--silent] <script>` in backticks,
+# or a quoted "pnpm [--silent] <script>" in constraints.yaml) in AGENTS.md, platform/AGENTS.md and
 # constraints.yaml against the root package.json scripts. Prose mentions of pnpm
 # are not commands and are ignored.
 set -euo pipefail
@@ -29,7 +29,7 @@ for doc in AGENTS.md platform/AGENTS.md constraints.yaml; do
     if ! printf '%s\n' "$scripts" | grep -qx -- "$name"; then
       missing+=("  $doc:$line  \"pnpm $name\" is not a script in package.json")
     fi
-  done < <(grep -n -o -E '[`"]pnpm [a-z][a-z0-9:-]*' "$doc" | sed -E 's/^([0-9]+):.pnpm /\1:/')
+  done < <(grep -n -o -E '[`"]pnpm (--silent )?[a-z][a-z0-9:-]*' "$doc" | sed -E 's/^([0-9]+):.pnpm (--silent )?/\1:/')
 done
 
 if [ "${#missing[@]}" -gt 0 ]; then
