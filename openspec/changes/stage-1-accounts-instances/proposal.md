@@ -186,3 +186,10 @@
 - Selected risk packs: all except Legacy compatibility / examples; concrete evidence and exclusions below task7.4. Preserve all three existing Docker cases and ownership-checked cleanup.
 - Characterization: existing image may already pass; qualify the new verifier with wrong observations, never manufacture a production defect for RED. Parent alone executes agent-reviewed exact commits on giap-vps, publishes sanitized owner evidence and waits for normal CI.
 - No upstream DSH, seccomp policy, office bundle, model service, orchestrator or managed-config implementation changes. Critical-path human review remains required and is deferred to Epic completion by the user's explicit decision.
+
+## Issue #29 fixture
+
+- Feature; expanded task8.1 (agree with upstream): a pure production overlay generator controls provider/model identity, preset tools and credential references. No file operations in this slice; parsing/serialization and policy completeness still warrant expanded review.
+- Selected risk packs and evidence below task8.1. Preserve canonical locale-plugin composition, every non-network preset plugin and metadata, explicit model order/context-window omission, and existing module boundaries.
+- Inputs include explicit public model settings, an already-resolved DSH permission configuration, and caller-supplied trusted composition data. Platform-tier mapping remains task16.1–16.2; canonical artifact loading and runtime wiring remain consumers, not hidden module-initialization IO or duplicated plugin YAML.
+- Output is one JSON patch-list document accepted by the released YAML dialect. Pure unit RED/GREEN plus released-parser/composer smoke is required; Web/UI/managed-precedence proof remains task8.4.

@@ -433,10 +433,22 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - [ ] 8.2 覆盖层写入：整份写入临时文件后原子改名，文件权限只读；目录由配置项指定（加进 `config.ts` 和 `.env.example`）；路径由用户标识拼出，标识不合规时拒绝。验证：单元测试（临时目录）——并发写两次后文件是其中一份完整内容，不是混合；写入中途失败时旧文件不变；带 `../` 的标识被拒绝（规格“覆盖层整份生成”）。
 - [ ] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
 - [ ] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
+      Task8.4 additionally owns the `managed-config` complete-composition/canonical-artifact input adapter: include non-default, user-added/custom and later office presets, independently compare effective roster versus transformed coverage after edits/restart, and add a preset containing a renamed nested network component. Prove editing the user-writable locale-patch copy cannot change trusted canonical policy. Retain actual fresh non-loopback/English-navigator and reload observations for Chinese/no-notice/editable composer, model selection and General settings; do not substitute shipped-roster-only or text-shape proof. Qualify the adapter through the Docker test boundary before task9.3 production wiring.
 - [ ] 8.5 模型地址不可达时的行为：把模型地址指向一个拒绝连接的地址，另起一个记录请求的替身服务作为“别的地址”写进用户自己的配置。验证：`pnpm test:docker`——发一条消息后 Session 里出现错误，替身服务没有收到任何请求（规格“模型不可用时明确报错”）。
 
 Suggested fixture level: expanded - 写文件、路径安全，且承载模型密钥相关的生产配置
 Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，没有调用方）
+
+### Issue #29 risk/evidence map (task 8.1 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: public pure generator returns one parseable complete patch document; source and compiled smoke; `pnpm check` and strict OpenSpec.
+- Schema / columns / units / field names; Release / packaging / dependency compatibility — selected: published0.2.0-rc.2 schemas/composer, whole-config replacement, exact provider/default/contextWindow behavior, canonical locale rows as trusted input rather than a copied implementation.
+- Auth / permissions / secrets — selected: credential reference only, no actual key input/output; resolved permission configuration preserved without premature tier mapping; remove released network-tool component from every supplied preset, including nested groups and renamed component IDs.
+- Concurrency / shared state / ordering — selected: deterministic order and no mutation under frozen inputs; no shared mutable cache or environment-dependent output.
+- Resource limits / large input / discovery — selected: one bounded-by-input traversal of complete preset entry trees; do not traverse arbitrary plugin config; no hard-coded preset count. Runtime roster completeness is the consumer contract exercised in task8.4, not claimed from one fixture.
+- Legacy compatibility / examples; Documentation / migration notes — selected: preserve all non-network plugins/preset metadata, exact canonical UI composition and all existing probe/image callers; document purity, complete-composition ownership and permission-mapping deferral.
+- File IO / path safety / overwrite; Error handling / rollback / partial outputs — not selected for this pure slice: no filesystem, publication, persistence or partial output; writer/path/atomicity is task8.2, incomplete-model result task8.3.
+- Required proof: staged behavior RED/GREEN; effective released-parser/composer smoke with real shipped preset/locale data, synthetic credential-free settings and source/dist equivalence; three expanded review seats and trusted exact-head Docker/CI baseline remain required before merge.
 
 ## 9. 编排器（任务包 1.7）
 
@@ -445,6 +457,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [ ] 9.1 `platform/src/orchestrator/` 的 Docker 客户端：经 Unix socket 用 `node:http` 发请求、解析 JSON 和流式日志、把 Docker 的错误转成带状态码的错误；传输函数可注入。socket 路径是配置项。验证：单元测试（假传输）——JSON、流式日志和错误三种回应的解析；`pnpm test:docker`——能读到 Docker 版本；请求不存在的容器得到 404 类型的错误；socket 路径不存在时错误信息指出路径。
 - [ ] 9.2 卷：按用户创建状态卷和工作卷（带标签），已存在时复用。验证：`pnpm test:docker`——创建两次得到同一对卷；标签含用户标识；两个用户得到四个不同的卷。
 - [ ] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
+      Task9.3 MUST consume task8.4's qualified complete-composition/trusted-canonical input adapter and the pure generator's single overlay; it MUST NOT rebuild a partial preset roster or duplicate canonical patch rows. Task8.1 alone does not claim this production wiring.
 - [ ] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
 - [ ] 9.5 读启动令牌并换 DSH cookie：从容器日志匹配令牌行，用 `node:http` 带平台对外 authority 作为 `Host` 换 cookie，存进 `instances` 表。验证：`pnpm test:docker`——换到的 cookie 带着同一 `Host` 请求首页得到 200，换一个 `Host` 得到 401；日志和审计里没有令牌和 cookie 原文。
 - [ ] 9.6 就绪判定和启动失败：就绪时写审计（实例就绪）；60 秒内未就绪则停止容器，状态记为“出错”，存最后 50 行日志（先去掉令牌行），写审计（启动失败）。验证：`pnpm test:docker`——正常启动后审计里有“实例就绪”；用一份故意错误的覆盖层启动，状态变为“出错”，最近一次错误里有日志且不含令牌，审计里有“启动失败”。
