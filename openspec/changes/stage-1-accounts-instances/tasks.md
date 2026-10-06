@@ -373,7 +373,7 @@ Review修复（#24）：确认普通pnpm包装器在Node校验前打印被拒绝
 依赖：第 1 组；7.3 起依赖第 3 组。
 
 - [x] 7.1 加入 `pnpm test:docker` 入口（`package.json`、`AGENTS.md` 验证矩阵、CI 任务），在 giap-vps 上按 `.tool-versions` 装好 Node 和 pnpm（装在 ubuntu 用户目录下，不动系统包）；带第一个用例：构建用户镜像，容器里 `dsh --version` 输出钉定版本。验证：`pnpm test:docker` 通过且结束后没有带 `dsh-team-test` 前缀的资源；`pnpm lint:agents` 通过。
-- [ ] 7.2 镜像里装 Python 3 和 `python-docx`。验证：`pnpm test:docker`——在断开网络的容器里运行一段生成 DOCX 的脚本，产物能被解析库打开。
+- [x] 7.2 镜像里装 Python 3 和 `python-docx`。验证：`pnpm test:docker`——在断开网络的容器里运行一段生成 DOCX 的脚本，产物能被解析库打开。
 - [ ] 7.3 按第 3 组的结论在镜像里预置 `$DSH_HOME/profiles/`，并把整个 `profiles/` 目录原样拷贝到 `/opt/dsh-team/profile-seed/`（层级相同，只读）。验证：`pnpm test:docker`——空状态卷首次启动后卷里的 `profiles/` 与 `profile-seed/` 逐文件一致；改动卷里的 `profiles/` 后镜像里的 `profile-seed/` 不变。
 - [ ] 7.4 镜像启动验证：用一份手写的最小覆盖层和第 1 组的安全设置启动容器。验证：`pnpm test:docker`——60 秒内日志里出现令牌行、3080 可连接；不带 cookie 请求首页得到 401；DSH 进程用户不是 root；进程环境里有关闭遥测的变量；状态目录和工作目录是两个挂载点。
 
@@ -398,6 +398,8 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - Auth / permissions / secrets, File IO / path safety, Concurrency / shared state, Error handling / partial outputs — selected: normal uid1001 writes container workspace, no host mounts/credentials, canonical invocation ownership/cleanup/error tests retained and no leftover resources.
 - Resource limits — selected only for existing bounded test/subprocess cleanup; no production resource policy. Legacy compatibility — selected for canonical helper clean cutover, all original version/ownership/failure assertions retained. Documentation — selected for image capability and critical-path deferred human review.
 - Sequence: fixture review/strict validate; test-only helper/scenario commit and read-only admission before real image-capability RED; add packages; local check; expanded three-seat full final-candidate admission; exact-head real Docker GREEN/readback/cleanup; owner status and CI; merge. No local Docker, no unreviewed remote source or model call.
+
+验证记录（#26）：test-first审查提交`8a08ed7`在giap-vps真实RED（DSH版本通过、缺Python导致DOCX失败），清理后无本次资源；加入Debian包后，三席准入审查的`3184920`实际`pnpm test:docker`两条通过，网络模式none、默认用户dsh、有效uid1001，保存后重新解析的中文段落及表格内容精确匹配，独立资源清点为空。本地`pnpm check`522 unit/172 integration通过，重复率2.84%；旧版本/清理所有权断言全部保留。一次外层SSH1200秒超时丢失诊断，仅记不确定结果；未改代码或内部时限，改为远端持久日志/退出文件后取得上述15.74秒GREEN，不冒称已诊断前次超时根因。最终精确SHA实测与CI证明保留于PR，镜像关键路径人工逐行审查按用户要求后置。
 
 ## 8. 受管覆盖层（任务包 1.6）
 
