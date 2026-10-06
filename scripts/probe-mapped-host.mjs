@@ -26,6 +26,7 @@ import {
 import {
   assertCompositionRoster,
   expectedCompositionRoster,
+  readBootRoster,
   waitCompositionInitialized,
 } from './probe-first-run-composition.mjs';
 import { verifyPreservation } from './probe-first-run-preservation.mjs';
@@ -264,6 +265,26 @@ const acceptedFrom = (binding, verdict, input) =>
     input.cleared,
   );
 
+const initializeOrdinary = async (page, welcome, until, noticeSeen) => {
+  const store = await waitWelcomeStoreReady(
+    page,
+    welcome,
+    remainingMs(until, 'first-run-initialized'),
+  );
+  const initialized = await waitFirstRunInitialized(
+    page,
+    remainingMs(until, 'first-run-initialized'),
+    noticeSeen,
+    store,
+  );
+  return {
+    store,
+    last: initialized.last,
+    noticeSeen: initialized.noticeSeen,
+    initialized: initialized.initialized,
+  };
+};
+
 const captureAcceptance = async ({
   page,
   requests,
@@ -285,22 +306,7 @@ const captureAcceptance = async ({
         notice.seen,
         expectedRoster,
       )
-    : {
-        store: await waitWelcomeStoreReady(
-          page,
-          welcome,
-          remainingMs(until, 'first-run-initialized'),
-        ),
-        last: (
-          await waitFirstRunInitialized(
-            page,
-            remainingMs(until, 'first-run-initialized'),
-            notice.seen,
-          )
-        ).last,
-        noticeSeen: notice.seen,
-        initialized: true,
-      };
+    : await initializeOrdinary(page, welcome, until, notice.seen);
   const store = started.store;
   let last = started.last;
   let noticeSeen = started.noticeSeen || notice.seen || Boolean(last.notice);
@@ -309,6 +315,7 @@ const captureAcceptance = async ({
     last = (await trackNotice(page, { seen: noticeSeen })).last;
     const shot = await captureSettledScreenshot(page, screenshot);
     const host = await sampleHost(origin, cookie, workspace);
+    const bootRoster = expectedRoster ? undefined : await readBootRoster(page);
     return {
       accepted: false,
       ui: summarizeState(last),
@@ -316,6 +323,8 @@ const captureAcceptance = async ({
       input: unusedInput(),
       screenshot: shot,
       consoleErrors: errors.slice(),
+      initialized: false,
+      ...(bootRoster ? { bootRoster, readiness: 'observe' } : {}),
     };
   }
   const settled = await settleFirstRun(
@@ -340,18 +349,21 @@ const captureAcceptance = async ({
   if (expectedRoster) {
     bootRoster = await assertCompositionRoster(page, expectedRoster);
     verdict.noNotice = !noticeSeen && !last.notice;
+  } else {
+    bootRoster = await readBootRoster(page);
   }
   return {
     accepted: acceptedFrom(binding, verdict, input),
-    ui: summarizeState(last, { ...verdict, initialized: true }),
+    ui: summarizeState(last, { ...verdict, initialized: started.initialized }),
     host,
     input,
     screenshot: shot,
     consoleErrors: errors.slice(),
     workBound: binding.workBound,
     workBoundUnknown: binding.unknown,
-    initialized: true,
-    ...(bootRoster ? { bootRoster, readiness: 'composition' } : {}),
+    initialized: started.initialized,
+    bootRoster,
+    readiness: expectedRoster ? 'composition' : 'observe',
   };
 };
 

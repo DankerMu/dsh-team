@@ -24,6 +24,7 @@ import {
   assertManagedPolicyRuntime,
   assertRuntimeRejected,
   controlExposesEmployeePolicy,
+  liveCopyReenablesPersonalModels,
   parseManagedPolicyRuntime,
   type ManagedPolicyRuntimeExpectation,
 } from './managed-policy-oracle.ts';
@@ -47,7 +48,7 @@ const OBSERVER_PATH = '/data/home/profiles/web/node_modules/@dsh-team/managed-po
 const STATE_MARKER = '/data/home/dsh-team-user-state.txt';
 const STATE_MARKER_BODY = 'keep-across-restart\n';
 const SHIPPED_PRESET_IDS = ['standard', 'ptc', 'minimal', 'cordis'] as const;
-const CUSTOM_GREETING = 'brief-zh';
+const CUSTOM_DESCRIPTION = 'brief-zh';
 const WORKSPACE_PATH = '/data/work';
 const MANAGED_BOOT_ROSTER = [
   '@deepseek-ai/dsh-api-gateway',
@@ -146,7 +147,7 @@ const CUSTOM_INSERT = {
       config: {
         id: CUSTOM_PRESET_ID,
         order: 9,
-        greeting: { __jsExpr: "'brief-' + 'zh'" },
+        description: { __jsExpr: "'brief-' + 'zh'" },
         plugins: [
           { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
           {
@@ -176,6 +177,13 @@ const PERMISSION: ManagedConfigInput['permission'] = {
   defaultPreset: 'danger-full-access',
 };
 
+const RETAINED_TOOLS = {
+  standard: ['bash', 'read_file'],
+  ptc: ['bash', 'read_file'],
+  minimal: ['bash'],
+  cordis: ['bash', 'read_file'],
+} as const;
+
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: MANAGED_ADDRESS,
   defaultModel: 'beta',
@@ -183,12 +191,17 @@ const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
   presetIds: [...SHIPPED_PRESET_IDS],
+  retainedTools: RETAINED_TOOLS,
 };
 
 const RESTART_EXPECTED: ManagedPolicyRuntimeExpectation = {
   ...MANAGED_POLICY_EXPECTED,
   presetIds: [...SHIPPED_PRESET_IDS, CUSTOM_PRESET_ID],
-  greetings: { [CUSTOM_PRESET_ID]: CUSTOM_GREETING },
+  descriptions: { [CUSTOM_PRESET_ID]: CUSTOM_DESCRIPTION },
+  retainedTools: {
+    ...RETAINED_TOOLS,
+    [CUSTOM_PRESET_ID]: ['read_file', 'present'],
+  },
 };
 
 function docker(command: DockerCommand, args: readonly string[], timeout = 30_000): string {
@@ -200,6 +213,14 @@ function docker(command: DockerCommand, args: readonly string[], timeout = 30_00
 }
 
 function execScript(lifecycle: UserImageLifecycle, name: string, script: string): string {
+  const owned = docker(lifecycle.command, [
+    'volume',
+    'inspect',
+    '--format',
+    '{{ index .Labels "dsh-team.test-run" }}',
+    lifecycle.stateVolume,
+  ]).trim();
+  if (owned !== lifecycle.runId) throw new Error('Web volume ownership mismatch');
   lifecycle.registerContainer(name);
   docker(lifecycle.command, [
     'create',
@@ -433,12 +454,12 @@ function sameSet(left: readonly string[], right: readonly string[]): boolean {
   );
 }
 
-function inertGreeting(composition: ManagedComposition, id: string): unknown {
+function inertDescription(composition: ManagedComposition, id: string): unknown {
   const preset = composition.presets.find((entry) => entry.id === id || entry.config.id === id);
-  return preset?.config.greeting;
+  return preset?.config.description;
 }
 
-function greetingExpr(value: unknown): string | undefined {
+function descriptionExpr(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null || !('__jsExpr' in value)) return undefined;
   const expr = value.__jsExpr;
   return typeof expr === 'string' ? expr : undefined;
@@ -471,6 +492,19 @@ function asRemoteRecord(value: unknown): Record<string, unknown> {
     return record.value as Record<string, unknown>;
   }
   return record;
+}
+
+function browserEvidence(result: MappedHostAcceptResult): Record<string, unknown> {
+  return {
+    accepted: result.accepted,
+    initialized: result.initialized === true,
+    screenshot: result.screenshot?.screenshot,
+    reloadAccepted: result.reload?.accepted === true,
+    defaultModel: result.preservation?.defaultModel,
+    exactModels: result.preservation?.exactModels,
+    bootRoster: result.bootRoster?.ids,
+    consoleErrors: result.consoleErrors ?? [],
+  };
 }
 
 function requireAccepted(
@@ -522,6 +556,17 @@ async function startWeb(
     token,
     cookieHost: HOSTNAME,
   });
+  const wrongHost = await mappedRpc(
+    `http://dsh-team.test:${String(hostPort)}`,
+    cookie,
+    'settings/describe',
+    {},
+  );
+  const wrongRecord =
+    typeof wrongHost === 'object' && wrongHost !== null && !Array.isArray(wrongHost)
+      ? (wrongHost as Record<string, unknown>)
+      : {};
+  if (wrongRecord.ok !== false) throw new Error(INVALID);
   const origin = `http://${HOSTNAME}:${String(hostPort)}`;
   const workspace = await bindWorkWorkspace(origin, cookie);
   const browserResult = await acceptObservation({
@@ -558,7 +603,11 @@ async function prepareState(
   }
   const composition = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-read`);
   if (!sameSet(adapterPresetIds(composition), SHIPPED_PRESET_IDS)) throw new Error(INVALID);
-  const overlay = await publishOverlay(lifecycle.overlayDirectory, composition, true);
+  const overlay = await publishOverlay(
+    lifecycle.overlayDirectory,
+    composition,
+    API_KEY_VALUE.trim() !== '',
+  );
   return { composition, overlay, seedHash };
 }
 
@@ -571,7 +620,12 @@ async function acceptManaged(
   evidence: string,
   expected: ManagedPolicyRuntimeExpectation,
   label: 'start' | 'restart',
-): Promise<{ hostPort: number; observation: unknown; screenshot: string }> {
+): Promise<{
+  hostPort: number;
+  observation: unknown;
+  screenshot: string;
+  browser: MappedHostAcceptResult;
+}> {
   const screenshot = join(evidence, `${label}.png`);
   const started = await startWeb(
     lifecycle,
@@ -588,7 +642,12 @@ async function acceptManaged(
   assertManagedPolicyRuntime(started.observation, expected);
   if (started.browser === undefined) throw new Error(INVALID);
   requireAccepted(started.browser, screenshot, expected.defaultModel);
-  return { hostPort: started.hostPort, observation: started.observation, screenshot };
+  return {
+    hostPort: started.hostPort,
+    observation: started.observation,
+    screenshot,
+    browser: started.browser,
+  };
 }
 
 async function editThenControl(
@@ -661,10 +720,14 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
     const edited = await editThenControl(lifecycle, startName, remaining, prepared.seedHash);
     const changed = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-reread`);
     if (!sameSet(adapterPresetIds(changed), RESTART_EXPECTED.presetIds)) throw new Error(INVALID);
-    if (greetingExpr(inertGreeting(changed, CUSTOM_PRESET_ID)) !== "'brief-' + 'zh'") {
+    if (descriptionExpr(inertDescription(changed, CUSTOM_PRESET_ID)) !== "'brief-' + 'zh'") {
       throw new Error(INVALID);
     }
-    const nextOverlay = await publishOverlay(lifecycle.overlayDirectory, changed, true);
+    const nextOverlay = await publishOverlay(
+      lifecycle.overlayDirectory,
+      changed,
+      API_KEY_VALUE.trim() !== '',
+    );
     const restart = await acceptManaged(
       lifecycle,
       nextOverlay,
@@ -676,12 +739,23 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       'restart',
     );
     assertRuntimeRejected(edited.controlObservation, RESTART_EXPECTED);
+    if (liveCopyReenablesPersonalModels(start.browser)) {
+      throw new Error(INVALID);
+    }
     proveRestartHashes(lifecycle, prepared.seedHash, edited.home, edited.live, edited.profile);
     return JSON.stringify({
       startPort: start.hostPort,
       restartPort: restart.hostPort,
       startScreenshot: start.screenshot,
       restartScreenshot: restart.screenshot,
+      imageId: lifecycle.imageId,
+      runId: lifecycle.runId,
+      startObservation: start.observation,
+      restartObservation: restart.observation,
+      controlObservation: edited.controlObservation,
+      controlRejected: true,
+      startBrowser: browserEvidence(start.browser),
+      restartBrowser: browserEvidence(restart.browser),
     });
   } finally {
     rmSync(work, { recursive: true, force: true });

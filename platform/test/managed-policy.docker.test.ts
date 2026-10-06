@@ -28,6 +28,11 @@ it('enforces managed policy after employee edits, restart, and live readback', a
       requirePort(record.restartPort, 'restartPort');
       expect(typeof record.startScreenshot).toBe('string');
       expect(typeof record.restartScreenshot).toBe('string');
+      expect(typeof record.imageId).toBe('string');
+      expect(record.controlRejected).toBe(true);
+      expect(record.startObservation).toBeDefined();
+      expect(record.restartObservation).toBeDefined();
+      expect(record.controlObservation).toBeDefined();
     },
     undefined,
     runManagedPolicyScenario,

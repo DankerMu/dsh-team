@@ -34,10 +34,8 @@ function toolNames(schemas) {
   return names;
 }
 
-function greetingOf(row) {
-  if (typeof row.greeting === 'string') return row.greeting;
-  if (typeof row.config?.greeting === 'string') return row.config.greeting;
-  return '';
+function descriptionOf(row) {
+  return typeof row.description === 'string' ? row.description : '';
 }
 
 async function observeModels(ctx, llm) {
@@ -63,7 +61,7 @@ async function observePresets(agentPresets, tools) {
     try {
       presets.push({
         id: row.id,
-        greeting: greetingOf(row),
+        description: descriptionOf(row),
         toolNames: toolNames(tools.schemas(lease.key)),
       });
     } finally {

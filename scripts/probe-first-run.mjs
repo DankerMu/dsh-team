@@ -35,6 +35,14 @@ const env = (name) => {
 const optionalEnv = (name) => process.env[name] ?? '';
 const readSecret = async (name) => (await readFile(env(name), 'utf8')).trim();
 
+const workspaceEvidence = async () => {
+  const raw = JSON.parse(await readFile(env('PROBE_WORKSPACE_EVIDENCE'), 'utf8'));
+  if (raw?.available !== true || typeof raw.workBound !== 'boolean') {
+    fail('workspace-evidence-invalid', 2);
+  }
+  return { available: true, workBound: raw.workBound };
+};
+
 const chromeOptions = () => ({
   chromeBin: env('CHROME_BIN'),
   profile: env('PROBE_PROFILE'),
@@ -63,6 +71,7 @@ const observe = async () => {
     extraFlags: mappedFlags(FIRST_RUN_HOST),
     screenshot: env('PROBE_SCREENSHOT'),
     browserMs: Number(env('PROBE_BROWSER_SECONDS')) * 1000,
+    workspace: await workspaceEvidence(),
     ...chromeOptions(),
   });
   if (result.initialized === false) fail('stage=initialization error=unknown', 2);
@@ -121,6 +130,7 @@ const accept = async () => {
     composition: command === 'accept-composition',
     preserveModels: optionalEnv('PROBE_COMPOSITION_PRESERVE_MODELS') || undefined,
     expectedDefault: optionalEnv('PROBE_COMPOSITION_DEFAULT_MODEL') || undefined,
+    workspace: await workspaceEvidence(),
     ...chromeOptions(),
   });
   out(JSON.stringify({ mode: 'accept', ...result }));

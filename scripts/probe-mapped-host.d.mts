@@ -34,7 +34,8 @@ export type MappedHostAcceptResult = {
     readonly exactModels?: readonly string[];
     readonly screenshot?: { readonly screenshot?: string };
   };
-  readonly [key: string]: unknown;
+  readonly bootRoster?: { readonly ids?: readonly string[] };
+  readonly consoleErrors?: readonly unknown[];
 };
 
 export declare function mappedFlags(host: string): string[];

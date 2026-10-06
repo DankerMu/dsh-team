@@ -8,7 +8,7 @@ interface ManagedPolicyModelObservation {
 
 interface ManagedPolicyPresetObservation {
   readonly id: string;
-  readonly greeting: string;
+  readonly description: string;
   readonly toolNames: readonly string[];
 }
 
@@ -24,7 +24,8 @@ export interface ManagedPolicyRuntimeExpectation {
   readonly alphaContextWindow: number;
   readonly betaContextWindow: number;
   readonly presetIds: readonly string[];
-  readonly greetings?: Readonly<Record<string, string>>;
+  readonly descriptions?: Readonly<Record<string, string>>;
+  readonly retainedTools?: Readonly<Record<string, readonly string[]>>;
 }
 
 const INVALID_RUNTIME = 'Invalid managed policy runtime observation';
@@ -77,10 +78,10 @@ function parseModels(value: unknown): ManagedPolicyModelObservation {
 
 function parsePreset(value: unknown): ManagedPolicyPresetObservation {
   const preset = asObject(value);
-  const greeting = preset.greeting;
+  const description = preset.description;
   return {
     id: requireString(preset.id),
-    greeting: typeof greeting === 'string' ? greeting : '',
+    description: typeof description === 'string' ? description : '',
     toolNames: requireStringList(preset.toolNames),
   };
 }
@@ -102,6 +103,14 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
 
 function sorted(values: readonly string[]): string[] {
   return [...values].sort();
+}
+
+function retainsExpectedTools(
+  preset: ManagedPolicyPresetObservation,
+  expected: ManagedPolicyRuntimeExpectation,
+): boolean {
+  const retained = expected.retainedTools?.[preset.id];
+  return retained === undefined || retained.every((name) => preset.toolNames.includes(name));
 }
 
 export function assertManagedPolicyRuntime(
@@ -127,8 +136,11 @@ export function assertManagedPolicyRuntime(
     if (preset.toolNames.some((name) => NETWORK_TOOLS.has(name))) {
       invalid();
     }
-    const greeting = expected.greetings?.[preset.id];
-    if (greeting !== undefined && preset.greeting !== greeting) {
+    const description = expected.descriptions?.[preset.id];
+    if (description !== undefined && preset.description !== description) {
+      invalid();
+    }
+    if (!retainsExpectedTools(preset, expected)) {
       invalid();
     }
   }
@@ -159,4 +171,15 @@ export function controlExposesEmployeePolicy(
     const names = new Set(preset.toolNames);
     return names.has('web_search') && names.has('web_fetch');
   });
+}
+
+export function liveCopyReenablesPersonalModels(observation: unknown): boolean {
+  if (typeof observation !== 'object' || observation === null || Array.isArray(observation)) {
+    return false;
+  }
+  const record = observation as Record<string, unknown>;
+  const roster = record.bootRoster;
+  if (typeof roster !== 'object' || roster === null || Array.isArray(roster)) return false;
+  const ids = (roster as Record<string, unknown>).ids;
+  return Array.isArray(ids) && ids.includes('@deepseek-ai/dsh-client-ui-settings-models');
 }

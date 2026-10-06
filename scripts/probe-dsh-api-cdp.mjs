@@ -276,8 +276,12 @@ export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
     ...extraFlags,
     'about:blank',
   ];
-  const child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });
-  await writeFile(pidFile, String(child.pid ?? ''));
+  let child;
+  try {
+    child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch {
+    throw new Error('chrome-start spawn-failed');
+  }
   let stderr = '';
   child.stderr?.on('data', (chunk) => {
     if (stderr.length < 4_000) stderr += String(chunk);
@@ -286,18 +290,24 @@ export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
   child.once('exit', (code, signal) => {
     exitHint = signal ? `signal-${signal}` : `exit-${code ?? 'none'}`;
   });
-  try {
-    await waitPort('127.0.0.1', debugPort, PORT_MS, () => Boolean(exitHint));
-  } catch (error) {
-    const reason = redactChrome(stderr).trim() || exitHint || String(error?.message ?? error);
+  const failStart = async (error) => {
+    const reason = redactChrome(stderr).trim() || exitHint || redactChrome(error?.message ?? error);
     await stopChild(child);
-    throw new Error(`chrome-start ${reason}`, { cause: error });
+    throw new Error(`chrome-start ${reason}`);
+  };
+  try {
+    await writeFile(pidFile, String(child.pid ?? ''));
+    await waitPort('127.0.0.1', debugPort, PORT_MS, () => Boolean(exitHint));
+    const info = JSON.parse(
+      (await httpRequest({ host: '127.0.0.1', port: debugPort, path: '/json/version' })).body,
+    );
+    if (typeof info?.webSocketDebuggerUrl !== 'string' || info.webSocketDebuggerUrl === '') {
+      throw new Error('no debugger websocket');
+    }
+    return { child, browserWs: info.webSocketDebuggerUrl, stop: () => stopChild(child) };
+  } catch (error) {
+    return await failStart(error);
   }
-  const info = JSON.parse(
-    (await httpRequest({ host: '127.0.0.1', port: debugPort, path: '/json/version' })).body,
-  );
-  if (!info.webSocketDebuggerUrl) throw new Error('no debugger websocket');
-  return { child, browserWs: info.webSocketDebuggerUrl, stop: () => stopChild(child) };
 };
 
 export const muxListen = async (origin, cookie, store) => {
