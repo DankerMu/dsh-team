@@ -86,8 +86,8 @@
 
 #### Scenario: 断网生成 DOCX
 
-- **WHEN** 在不能访问公网软件源的容器里运行一段用预装库生成 DOCX 的脚本
-- **THEN** 生成的文件能被 DOCX 解析库正常打开
+- **WHEN** 在实际网络模式为`none`的非root容器里运行一段用预装Python3和python-docx生成DOCX的脚本
+- **THEN** 生成的文件能被`docx.Document`重新打开，中文段落和表格单元格内容与写入值完全一致
 
 ### Requirement: 关闭遥测
 

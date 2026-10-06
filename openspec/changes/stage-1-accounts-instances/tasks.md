@@ -391,6 +391,14 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 
 验证记录（#25）：三席对`489556aeb04b9f9d044c44e53868773e13332244`代码准入审查无阻塞后，可信会话在giap-vps检出完全相同提交；用户目录Node24.13.1/pnpm10.34.6执行`pnpm test:docker`，真实构建/容器输出精确`0.2.0-rc.2`。独立检查成功、诱导版本断言失败后均无本次资源；独立哨兵容器/镜像/卷/网络不变，最后由其所有者删除。真实`docker start --attach`200ms超时返回ETIMEDOUT，原容器仍运行时进入清理，清理后容器不存在、镜像已移除、哨兵保留；专用42退出区分预期超时与探针自身断言失败。不宣称构建器整个进程树或SIGKILL恢复已验证。本地`pnpm check`522 unit/164 integration通过，重复率2.74%；真实GitHub缺状态拒绝和CI缺证据失败已观察。最终精确头状态、CI复跑及合并树等价结果记录在PR运行证据，不用旧SHA冒充新SHA直接执行。
 
+### Issue #26 risk/evidence map (task 7.2 only)
+
+- Release / packaging / dependency compatibility, Config / project setup — selected: distro Python3/python-docx in unchanged apt layer; existing DSH pin and user environment preserved; complete Docker suite on giap-vps.
+- Public API / script entry, Schema / content fields — selected: Python save/reopen yields exact Chinese paragraph/table contents; actual `--network none` configuration inspected independently. Invalid content is rejected, not merely nonempty file/ZIP.
+- Auth / permissions / secrets, File IO / path safety, Concurrency / shared state, Error handling / partial outputs — selected: normal uid1001 writes container workspace, no host mounts/credentials, canonical invocation ownership/cleanup/error tests retained and no leftover resources.
+- Resource limits — selected only for existing bounded test/subprocess cleanup; no production resource policy. Legacy compatibility — selected for canonical helper clean cutover, all original version/ownership/failure assertions retained. Documentation — selected for image capability and critical-path deferred human review.
+- Sequence: fixture review/strict validate; test-only helper/scenario commit and read-only admission before real image-capability RED; add packages; local check; expanded three-seat full final-candidate admission; exact-head real Docker GREEN/readback/cleanup; owner status and CI; merge. No local Docker, no unreviewed remote source or model call.
+
 ## 8. 受管覆盖层（任务包 1.6）
 
 依赖：第 3、4 组；8.4 起依赖第 7 组。模块在 `platform/src/managed-config/`。
