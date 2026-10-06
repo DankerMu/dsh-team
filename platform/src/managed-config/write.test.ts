@@ -43,6 +43,40 @@ const INPUT: ManagedConfigInput = {
   localePatch: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }],
 };
 
+const OTHER_INPUT: ManagedConfigInput = {
+  ...INPUT,
+  modelSettings: {
+    baseURL: 'http://10.0.0.8:9/v1',
+    apiKeyEnv: 'DMXAPI_KEY',
+    models: [{ name: 'omega', contextWindow: 128000 }],
+    defaultModel: 'omega',
+  },
+};
+
+function expectAcquiredHandlesClosed(): void {
+  expect(fsFault.openHandles).toEqual([]);
+  expect(fsFault.closedHandles.length).toBeGreaterThan(0);
+  for (const handle of fsFault.closedHandles) {
+    expect(handle.fd).toBe(-1);
+  }
+}
+
+async function waitForCheckpoint(
+  checkpoint: Promise<void>,
+  operation: Promise<unknown>,
+): Promise<void> {
+  const winner = await Promise.race([
+    checkpoint.then(() => 'ready' as const),
+    operation.then(
+      () => 'settled' as const,
+      () => 'settled' as const,
+    ),
+  ]);
+  if (winner === 'settled') {
+    throw new Error('writer settled before the held filesystem checkpoint');
+  }
+}
+
 type PrepublicationFault = 'write' | 'chmod' | 'close' | 'rename';
 
 type NodeFsPromises = typeof FsPromises;
@@ -116,6 +150,11 @@ async function closeTrackedHandles(): Promise<void> {
   }
 }
 
+function markHandleClosed(handle: FileHandle): void {
+  fsFault.openHandles = fsFault.openHandles.filter((openHandle) => openHandle !== handle);
+  fsFault.closedHandles.push(handle);
+}
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<NodeFsPromises>();
   return {
@@ -183,9 +222,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
             fsFault.error = fsFault.ioError('close');
             throw fsFault.error;
           }
-          fsFault.closedHandles.push(handle);
-          fsFault.openHandles = fsFault.openHandles.filter((openHandle) => openHandle !== handle);
           await handle.close();
+          markHandleClosed(handle);
           if (fsFault.failCleanupClose) {
             fsFault.cleanupError = fsFault.ioError('cleanup-close');
             throw fsFault.cleanupError;
@@ -308,6 +346,14 @@ describe('writeManagedConfig', () => {
         expect(fsFault.partialBytes?.length).toBe(fsFault.partialLength);
         expect(fsFault.partialBytes).not.toEqual(Buffer.from(document, 'utf8'));
       }
+      if (failOn === 'rename') {
+        expect(fsFault.openHandles).toEqual([]);
+        expect(fsFault.closedHandles).toHaveLength(1);
+        const closed = fsFault.closedHandles[0];
+        expect(closed?.fd).toBe(-1);
+      } else {
+        expectAcquiredHandlesClosed();
+      }
     },
   );
 
@@ -337,6 +383,9 @@ describe('writeManagedConfig', () => {
     expect(aggregated.errors).toEqual([fsFault.error, fsFault.cleanupError]);
     expect(fsFault.error?.syscall).toBe('rename');
     expect(fsFault.cleanupError?.syscall).toBe('unlink');
+    expect(fsFault.openHandles).toEqual([]);
+    expect(fsFault.closedHandles).toHaveLength(1);
+    expect(fsFault.closedHandles[0]?.fd).toBe(-1);
     expect(readFileSync(destination, 'utf8')).toBe(OLD_DOCUMENT);
     expect(statSync(destination).mode).toBe(oldMode);
     expect(readFileSync(sentinel, 'utf8')).toBe(SENTINEL_DOCUMENT);
@@ -370,6 +419,8 @@ describe('writeManagedConfig', () => {
     expect(fsFault.error?.syscall).toBe('write');
     expect(fsFault.cleanupError?.syscall).toBe('cleanup-close');
     expect(fsFault.closedHandles).toHaveLength(1);
+    expect(fsFault.closedHandles[0]?.fd).toBe(-1);
+    expect(fsFault.openHandles).toEqual([]);
     expect(fsFault.calls.filter((call) => call === 'close')).toEqual(['close']);
     expect(fsFault.partialBytes).toEqual(
       Buffer.from(document, 'utf8').subarray(0, fsFault.partialLength),
@@ -451,11 +502,14 @@ describe('writeManagedConfig', () => {
     writeFileSync(sibling, SENTINEL_DOCUMENT);
     chmodSync(sibling, 0o644);
     const document = generateManagedConfig(INPUT);
-    const other = `${document}\n`;
+    const other = generateManagedConfig(OTHER_INPUT);
     let heldPath = '';
     let resumeHeld: (() => void) | undefined;
     const heldReady = new Promise<void>((resolveHeld) => {
       fsFault.holdOpen = async (path) => {
+        if (readFileSync(path, 'utf8') !== document) {
+          return;
+        }
         heldPath = path;
         resolveHeld();
         await new Promise<void>((release) => {
@@ -465,25 +519,33 @@ describe('writeManagedConfig', () => {
     });
 
     const held = writeManagedConfig(managedRoot, USER_ID, document);
-    await heldReady;
-    expect(statSync(heldPath).mode & 0o777).toBe(0o600);
-    fsFault.failOn = 'rename';
-    fsFault.holdOpen = undefined;
-    const siblingRejection = await writeManagedConfig(managedRoot, SENTINEL_ID, other).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(siblingRejection).toBe(fsFault.error);
-    expect(readFileSync(heldPath)).toEqual(Buffer.from(document, 'utf8'));
-    expect(statSync(heldPath).mode & 0o777).toBe(0o600);
-    expect(readFileSync(sibling, 'utf8')).toBe(SENTINEL_DOCUMENT);
-    expect(existsSync(destination)).toBe(false);
-    fsFault.failOn = undefined;
-    resumeHeld?.();
-    expect(await held).toBe(resolve(destination));
-    expect(readFileSync(destination)).toEqual(Buffer.from(document, 'utf8'));
-    expect(statSync(destination).mode & 0o777).toBe(0o444);
-    expect(existsSync(heldPath)).toBe(false);
+    try {
+      await waitForCheckpoint(heldReady, held);
+      expect(statSync(heldPath).mode & 0o777).toBe(0o600);
+      fsFault.failOn = 'rename';
+      fsFault.holdOpen = undefined;
+      const siblingRejection = await writeManagedConfig(managedRoot, SENTINEL_ID, other).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(siblingRejection).toBe(fsFault.error);
+      expect(readFileSync(heldPath)).toEqual(Buffer.from(document, 'utf8'));
+      expect(statSync(heldPath).mode & 0o777).toBe(0o600);
+      expect(readFileSync(sibling, 'utf8')).toBe(SENTINEL_DOCUMENT);
+      expect(existsSync(destination)).toBe(false);
+      fsFault.failOn = undefined;
+      resumeHeld?.();
+      expect(await held).toBe(resolve(destination));
+      expect(readFileSync(destination)).toEqual(Buffer.from(document, 'utf8'));
+      expect(statSync(destination).mode & 0o777).toBe(0o444);
+      expect(existsSync(heldPath)).toBe(false);
+    } finally {
+      resumeHeld?.();
+      await held.then(
+        () => undefined,
+        () => undefined,
+      );
+    }
   });
 
   it('keeps an initially absent destination absent after a rename fault', async () => {
@@ -500,6 +562,9 @@ describe('writeManagedConfig', () => {
       (error: unknown) => error,
     );
     expect(rejection).toBe(fsFault.error);
+    expect(fsFault.openHandles).toEqual([]);
+    expect(fsFault.closedHandles).toHaveLength(1);
+    expect(fsFault.closedHandles[0]?.fd).toBe(-1);
     expect(existsSync(destination)).toBe(false);
     expect(readdirSync(managedRoot)).toEqual([]);
   });
@@ -531,17 +596,20 @@ describe('writeManagedConfig', () => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
     const managedRoot = join(dir, 'managed-config');
     const first = generateManagedConfig(INPUT);
-    const second = `${first}\n`;
+    const second = generateManagedConfig(OTHER_INPUT);
 
     const [publishedFirst, publishedSecond] = await Promise.all([
       writeManagedConfig(managedRoot, USER_ID, first),
       writeManagedConfig(managedRoot, OTHER_ID, second),
     ]);
 
+    expect(first).not.toBe(second);
     expect(publishedFirst).toBe(resolve(managedRoot, `${USER_ID}.patch.yml`));
     expect(publishedSecond).toBe(resolve(managedRoot, `${OTHER_ID}.patch.yml`));
     expect(readFileSync(publishedFirst)).toEqual(Buffer.from(first, 'utf8'));
     expect(readFileSync(publishedSecond)).toEqual(Buffer.from(second, 'utf8'));
+    expect(readFileSync(publishedFirst, 'utf8')).not.toContain('omega');
+    expect(readFileSync(publishedSecond, 'utf8')).not.toContain('alpha');
     expect(statSync(publishedFirst).mode & 0o777).toBe(0o444);
     expect(statSync(publishedSecond).mode & 0o777).toBe(0o444);
     expect(new Set(fsFault.exclusiveNames).size).toBe(2);
@@ -551,7 +619,7 @@ describe('writeManagedConfig', () => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-team-managed-config-'));
     const managedRoot = join(dir, 'managed-config');
     const first = generateManagedConfig(INPUT);
-    const second = `${first}\n`;
+    const second = generateManagedConfig(OTHER_INPUT);
     let releaseSecond: (() => void) | undefined;
     const secondHeld = new Promise<void>((resolveHeld) => {
       fsFault.holdOpen = async (path) => {
@@ -569,15 +637,21 @@ describe('writeManagedConfig', () => {
     const secondWrite = writeManagedConfig(managedRoot, USER_ID, second);
     const settled = Promise.allSettled([firstWrite, secondWrite]);
     try {
-      await secondHeld;
+      await waitForCheckpoint(secondHeld, secondWrite);
       expect(await firstWrite).toBe(resolve(managedRoot, `${USER_ID}.patch.yml`));
       expect(readFileSync(resolve(managedRoot, `${USER_ID}.patch.yml`))).toEqual(
         Buffer.from(first, 'utf8'),
+      );
+      expect(readFileSync(resolve(managedRoot, `${USER_ID}.patch.yml`), 'utf8')).not.toContain(
+        'omega',
       );
       releaseSecond?.();
       expect(await secondWrite).toBe(resolve(managedRoot, `${USER_ID}.patch.yml`));
       expect(readFileSync(resolve(managedRoot, `${USER_ID}.patch.yml`))).toEqual(
         Buffer.from(second, 'utf8'),
+      );
+      expect(readFileSync(resolve(managedRoot, `${USER_ID}.patch.yml`), 'utf8')).not.toContain(
+        'alpha',
       );
       expect(statSync(resolve(managedRoot, `${USER_ID}.patch.yml`)).mode & 0o777).toBe(0o444);
     } finally {

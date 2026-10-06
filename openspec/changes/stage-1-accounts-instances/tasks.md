@@ -465,6 +465,8 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 
 验证记录（#30，本地候选）：parent先观察缺失文件的发布RED、cleanup错误丢失的语义RED、配置缺失/不拒绝非法值的RED，再完成实现。`pnpm check`557unit/255integration通过，writer24例、行97.56%/分支93.75%；重复率原始510/17013行低于3%（显示四舍五入3.00%），门禁未改。真实source/dist临时目录smoke分别观察4/5次并发读，均为完整旧/新版本；模式root0700/temp0600/final0444、UTF-8内容、路径及既有父目录模式正确。两种入口的受控子进程在实际临时inode写入16字节后报告checkpoint，再由parent发送SIGKILL；旧目标字节/模式保持，遗留私有temp由harness所有者观察后清理，不冒充writer崩溃清理。普通失败表覆盖partial-write/chmod/close/rename、真实exclusive EEXIST、双错误聚合、他人临时文件与符号链接目标保护。重叠测试早期按抵达顺序选择阻塞者导致一次timeout，改为按实际文档身份选择，未增加超时或重试。最终提交审查、可信Docker基线与CI证据保留于本issue PR；未声称断电持久性、敌对父目录竞态或单文件bind的即时更新。
 
+审查闭环（#30，fixpass1）：补强两类证据而非改变生产行为：每个已取得句柄的失败案例在teardown之前检查真实FileHandle.fd为-1；并发文档改为不同baseURL/模型/contextWindow/default正文，不再仅追加换行。held writer在finally释放并等待结束，checkpoint同时响应writer拒绝。补强后`pnpm check`仍557unit/255integration通过，重复率2.98%；source/dist实际并发与16字节checkpoint中断smoke重跑通过（4/5次完整版本观察），旧目标/权限及harness所有权清理结论保持。
+
 ## 9. 编排器（任务包 1.7）
 
 依赖：第 4、5、7、8 组。本组用 `published-loopback` 方式够到实例，`network` 方式在第 10 组。
