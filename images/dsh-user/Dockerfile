@@ -1,7 +1,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends bubblewrap \
+  && apt-get install -y --no-install-recommends bubblewrap python3 python3-docx \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.0-rc.2 \
