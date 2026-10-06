@@ -70,6 +70,14 @@ function output(result: DockerCommandResult, args: readonly string[]): string {
   return result.stdout;
 }
 
+function nestedMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return error.errors.flatMap((inner) => nestedMessages(inner));
+  }
+  if (error instanceof Error) return [error.message];
+  return [String(error)];
+}
+
 function removeOwned(
   command: DockerCommand,
   kind: 'container' | 'image' | 'volume',
@@ -346,9 +354,7 @@ function runImageLifecycle(
       failures.push(error);
     }
     if (failures.length !== 0) {
-      const messages = failures.map((error) =>
-        error instanceof Error ? error.message : String(error),
-      );
+      const messages = failures.flatMap((error) => nestedMessages(error));
       throw new AggregateError(failures, messages.join('\n'));
     }
     return {

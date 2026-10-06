@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -149,6 +149,7 @@ const CUSTOM_INSERT = {
         order: 9,
         description: { __jsExpr: "'brief-' + 'zh'" },
         plugins: [
+          { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
           { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
           {
             id: 'planning',
@@ -178,10 +179,10 @@ const PERMISSION: ManagedConfigInput['permission'] = {
 };
 
 const RETAINED_TOOLS = {
-  standard: ['bash', 'read_file'],
-  ptc: ['bash', 'read_file'],
+  standard: ['bash', 'read'],
+  ptc: ['bash', 'read'],
   minimal: ['bash'],
-  cordis: ['bash', 'read_file'],
+  cordis: ['bash', 'read'],
 } as const;
 
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
@@ -200,7 +201,7 @@ const RESTART_EXPECTED: ManagedPolicyRuntimeExpectation = {
   descriptions: { [CUSTOM_PRESET_ID]: CUSTOM_DESCRIPTION },
   retainedTools: {
     ...RETAINED_TOOLS,
-    [CUSTOM_PRESET_ID]: ['read_file', 'present'],
+    [CUSTOM_PRESET_ID]: ['read', 'present'],
   },
 };
 
@@ -212,7 +213,7 @@ function docker(command: DockerCommand, args: readonly string[], timeout = 30_00
   return result.stdout;
 }
 
-function execScript(lifecycle: UserImageLifecycle, name: string, script: string): string {
+export function execScript(lifecycle: UserImageLifecycle, name: string, script: string): string {
   const owned = docker(lifecycle.command, [
     'volume',
     'inspect',
@@ -240,6 +241,31 @@ function execScript(lifecycle: UserImageLifecycle, name: string, script: string)
     '-e',
     script,
   ]);
+  const identity = parseJsonRecord(
+    docker(lifecycle.command, ['container', 'inspect', '--format', '{{json .}}', name]),
+  );
+  if (identity.Image !== lifecycle.imageId) throw new Error(INVALID);
+  const mounts: unknown = JSON.parse(
+    docker(lifecycle.command, ['container', 'inspect', '--format', '{{json .Mounts}}', name]),
+  );
+  if (
+    !Array.isArray(mounts) ||
+    !mounts.some(
+      (mount: unknown) =>
+        typeof mount === 'object' &&
+        mount !== null &&
+        'Type' in mount &&
+        mount.Type === 'volume' &&
+        'Name' in mount &&
+        mount.Name === lifecycle.stateVolume &&
+        'Destination' in mount &&
+        mount.Destination === '/data/home' &&
+        'RW' in mount &&
+        mount.RW === true,
+    )
+  ) {
+    throw new Error(INVALID);
+  }
   docker(lifecycle.command, ['start', '--attach', name], 60_000);
   const exit = docker(lifecycle.command, ['wait', name]).replace(/\r?\n$/, '');
   const stdout = docker(lifecycle.command, ['logs', name]);
@@ -499,9 +525,32 @@ function browserEvidence(result: MappedHostAcceptResult): Record<string, unknown
     accepted: result.accepted,
     initialized: result.initialized === true,
     screenshot: result.screenshot?.screenshot,
-    reloadAccepted: result.reload?.accepted === true,
-    defaultModel: result.preservation?.defaultModel,
-    exactModels: result.preservation?.exactModels,
+    reload: result.reload
+      ? {
+          accepted: result.reload.accepted,
+          screenshot: result.reload.screenshot?.screenshot,
+          initialized: result.reload.initialized === true,
+          ui: result.reload.ui,
+          host: result.reload.host,
+          input: result.reload.input,
+        }
+      : undefined,
+    preservation: result.preservation
+      ? {
+          general: result.preservation.general === true,
+          listed: result.preservation.listed,
+          selected: result.preservation.selected,
+          defaultModel: result.preservation.defaultModel,
+          exactModels: result.preservation.exactModels,
+          screenshot: result.preservation.screenshot?.screenshot,
+        }
+      : undefined,
+    ui: result.ui,
+    host: result.host,
+    input: result.input,
+    workBound: result.workBound === true,
+    workBoundUnknown: result.workBoundUnknown === true,
+    readiness: result.readiness,
     bootRoster: result.bootRoster?.ids,
     consoleErrors: result.consoleErrors ?? [],
   };
@@ -566,8 +615,14 @@ async function startWeb(
     typeof wrongHost === 'object' && wrongHost !== null && !Array.isArray(wrongHost)
       ? (wrongHost as Record<string, unknown>)
       : {};
-  if (wrongRecord.ok !== false) throw new Error(INVALID);
+  if (wrongRecord.status !== 403 || wrongRecord.error !== 'http-403') throw new Error(INVALID);
   const origin = `http://${HOSTNAME}:${String(hostPort)}`;
+  const describe = await mappedRpc(origin, cookie, 'settings/describe', {});
+  const describeRecord =
+    typeof describe === 'object' && describe !== null && !Array.isArray(describe)
+      ? (describe as Record<string, unknown>)
+      : {};
+  if (describeRecord.ok !== true || describeRecord.status !== 200) throw new Error(INVALID);
   const workspace = await bindWorkWorkspace(origin, cookie);
   const browserResult = await acceptObservation({
     origin,
@@ -743,20 +798,34 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       throw new Error(INVALID);
     }
     proveRestartHashes(lifecycle, prepared.seedHash, edited.home, edited.live, edited.profile);
-    return JSON.stringify({
+    const summary = {
       startPort: start.hostPort,
       restartPort: restart.hostPort,
       startScreenshot: start.screenshot,
       restartScreenshot: restart.screenshot,
       imageId: lifecycle.imageId,
       runId: lifecycle.runId,
+      reviewedHead: process.env.GITHUB_SHA ?? process.env.DSH_TEAM_REVIEWED_HEAD ?? '',
       startObservation: start.observation,
       restartObservation: restart.observation,
       controlObservation: edited.controlObservation,
       controlRejected: true,
       startBrowser: browserEvidence(start.browser),
       restartBrowser: browserEvidence(restart.browser),
-    });
+    };
+    writeFileSync(join(evidence, 'observations.json'), JSON.stringify(summary));
+    return JSON.stringify(summary);
+  } catch (error) {
+    writeFileSync(
+      join(evidence, 'observations.json'),
+      JSON.stringify({
+        imageId: lifecycle.imageId,
+        runId: lifecycle.runId,
+        reviewedHead: process.env.GITHUB_SHA ?? process.env.DSH_TEAM_REVIEWED_HEAD ?? '',
+        failed: true,
+      }),
+    );
+    throw error;
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

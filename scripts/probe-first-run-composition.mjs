@@ -8,7 +8,7 @@ export const COMPOSITION_PLUGIN = '@dsh-team/zh-locale';
 export const COMPOSITION_PIN = '0.2.0-rc.2';
 const GENERAL = '@deepseek-ai/dsh-client-ui-settings-general';
 const MODEL_SELECTION = '@deepseek-ai/dsh-client-ui-model-selection';
-const PERSONAL_MODELS = '@deepseek-ai/dsh-client-ui-settings-models';
+export const PERSONAL_MODELS = '@deepseek-ai/dsh-client-ui-settings-models';
 const ARTIFACT_FILES = ['package.json', 'index.js', 'client.js', 'cordis.patch.yml'];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
@@ -107,16 +107,23 @@ export const expectedCompositionRoster = async (baselineFile) => {
   return [...ids.filter((id) => id !== PERSONAL_MODELS), COMPOSITION_PLUGIN].sort();
 };
 
-export const assertCompositionRoster = async (page, expected) => {
-  const roster = await readBootRoster(page);
+export const assertRosterObservation = (roster, expected) => {
+  const ids = Array.isArray(roster?.ids) ? roster.ids : undefined;
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+    throw new Error('stage=composition error=roster-unknown');
+  }
   if (
-    ![COMPOSITION_PLUGIN, GENERAL, MODEL_SELECTION].every((id) => roster.ids.includes(id)) ||
-    roster.ids.includes(PERSONAL_MODELS) ||
-    JSON.stringify(roster.ids) !== JSON.stringify(expected)
+    ![COMPOSITION_PLUGIN, GENERAL, MODEL_SELECTION].every((id) => ids.includes(id)) ||
+    ids.includes(PERSONAL_MODELS) ||
+    JSON.stringify(ids) !== JSON.stringify(expected)
   ) {
     throw new Error('stage=composition error=roster-mismatch');
   }
   return roster;
+};
+
+export const assertCompositionRoster = async (page, expected) => {
+  return assertRosterObservation(await readBootRoster(page), expected);
 };
 
 export const waitCompositionInitialized = async (page, ms, noticeSeen, expected) => {

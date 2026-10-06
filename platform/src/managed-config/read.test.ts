@@ -116,6 +116,35 @@ describe('readManagedComposition', () => {
         ],
       }),
     ],
+    [
+      'preset missing config.id',
+      completeObservation({
+        entries: [
+          {
+            id: 'preset-no-config-id',
+            name: PRESET_NAME,
+            config: { plugins: [{ id: 'fs', name: '@deepseek-ai/dsh-tool-fs' }] },
+          },
+        ],
+      }),
+    ],
+    [
+      'child plugin missing nonempty name',
+      completeObservation({
+        entries: [
+          {
+            id: 'preset-unnamed-child',
+            name: PRESET_NAME,
+            config: {
+              id: 'unnamed',
+              plugins: [
+                { id: 'planning', name: 'cordis:group', group: true, config: [{ id: 'fs' }] },
+              ],
+            },
+          },
+        ],
+      }),
+    ],
   ])('rejects %s', async (_label, raw) => {
     await expectInvalid(raw);
   });

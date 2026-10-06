@@ -22,7 +22,7 @@ it('rejects a live runtime observation that omits the required custom grouped pr
       betaContextWindow: EXPECTED.betaContextWindow,
     },
     presets: [
-      { id: 'standard', description: '', toolNames: ['bash', 'read_file'] },
+      { id: 'standard', description: '', toolNames: ['bash', 'read'] },
       { id: 'minimal', description: '', toolNames: ['bash'] },
     ],
   };

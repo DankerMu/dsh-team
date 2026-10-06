@@ -36,6 +36,12 @@ export type MappedHostAcceptResult = {
   };
   readonly bootRoster?: { readonly ids?: readonly string[] };
   readonly consoleErrors?: readonly unknown[];
+  readonly ui?: Record<string, unknown>;
+  readonly host?: Record<string, unknown>;
+  readonly input?: Record<string, unknown>;
+  readonly workBound?: boolean;
+  readonly workBoundUnknown?: boolean;
+  readonly readiness?: string;
 };
 
 export declare function mappedFlags(host: string): string[];

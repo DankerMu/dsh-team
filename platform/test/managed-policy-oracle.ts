@@ -167,10 +167,10 @@ export function controlExposesEmployeePolicy(
 ): boolean {
   if (observation.models.intranetAddress !== address) return false;
   if (observation.models.defaultModel !== defaultModel) return false;
-  return observation.presets.some((preset) => {
-    const names = new Set(preset.toolNames);
-    return names.has('web_search') && names.has('web_fetch');
-  });
+  const custom = observation.presets.find((preset) => preset.id === 'custom-office');
+  if (custom === undefined) return false;
+  const names = new Set(custom.toolNames);
+  return names.has('web_search') && names.has('web_fetch');
 }
 
 export function liveCopyReenablesPersonalModels(observation: unknown): boolean {

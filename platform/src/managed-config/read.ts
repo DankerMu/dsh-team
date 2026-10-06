@@ -68,6 +68,9 @@ function requirePlugins(value: unknown): void {
   }
   for (const plugin of value) {
     const record = asObject(plugin);
+    if (typeof record.name !== 'string' || record.name === '') {
+      invalid();
+    }
     if (record.group === true) {
       requirePlugins(record.config);
     }
@@ -79,6 +82,9 @@ function requirePreset(entry: Record<string, unknown>): PresetEntry {
     invalid();
   }
   const config = asObject(entry.config);
+  if (typeof config.id !== 'string' || config.id === '') {
+    invalid();
+  }
   requirePlugins(config.plugins);
   // Validated against the generator's preset input contract; JSON.parse cannot name PresetEntry.
   return entry as PresetEntry;
