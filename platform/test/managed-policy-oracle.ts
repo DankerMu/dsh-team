@@ -188,26 +188,47 @@ export function assertRuntimeRejected(
   if (accepted) invalid();
 }
 
+export type EmployeeControlFailure =
+  | 'intranet-address'
+  | 'default-model'
+  | 'intranet-models'
+  | 'personal-model'
+  | 'official-provider'
+  | 'account-provider'
+  | 'custom-preset'
+  | 'custom-web-search'
+  | 'custom-web-fetch';
+
+/** Returns only the first failed condition's static identifier, never observed values. */
+export function controlEmployeePolicyFailure(
+  observation: ManagedPolicyRuntimeObservation,
+  address: string,
+  defaultModel: string,
+): EmployeeControlFailure | undefined {
+  if (observation.models.intranetAddress !== address) return 'intranet-address';
+  if (observation.models.defaultModel !== defaultModel) return 'default-model';
+  const catalog = observation.models.catalog;
+  const intranet = catalog.find((row) => row.id === 'intranet');
+  const personal = catalog.find((row) => row.id === 'personal');
+  if (!intranet?.models.includes('alpha') || !intranet.models.includes('beta')) {
+    return 'intranet-models';
+  }
+  if (!personal?.models.includes('gamma')) return 'personal-model';
+  if (!catalog.some((row) => row.id === 'deepseek-official')) return 'official-provider';
+  if (!catalog.some((row) => row.id === 'deepseek-account')) return 'account-provider';
+  const custom = observation.presets.find((preset) => preset.id === 'custom-office');
+  if (custom === undefined) return 'custom-preset';
+  if (!custom.toolNames.includes('web_search')) return 'custom-web-search';
+  if (!custom.toolNames.includes('web_fetch')) return 'custom-web-fetch';
+  return undefined;
+}
+
 export function controlExposesEmployeePolicy(
   observation: ManagedPolicyRuntimeObservation,
   address: string,
   defaultModel: string,
 ): boolean {
-  if (observation.models.intranetAddress !== address) return false;
-  if (observation.models.defaultModel !== defaultModel) return false;
-  const catalog = observation.models.catalog;
-  const intranet = catalog.find((row) => row.id === 'intranet');
-  const personal = catalog.find((row) => row.id === 'personal');
-  if (!intranet?.models.includes('alpha') || !intranet.models.includes('beta')) {
-    return false;
-  }
-  if (!personal?.models.includes('gamma')) return false;
-  if (!catalog.some((row) => row.id === 'deepseek-official')) return false;
-  if (!catalog.some((row) => row.id === 'deepseek-account')) return false;
-  const custom = observation.presets.find((preset) => preset.id === 'custom-office');
-  if (custom === undefined) return false;
-  const names = new Set(custom.toolNames);
-  return names.has('web_search') && names.has('web_fetch');
+  return controlEmployeePolicyFailure(observation, address, defaultModel) === undefined;
 }
 
 export function liveCopyReenablesPersonalModels(observation: unknown): boolean {

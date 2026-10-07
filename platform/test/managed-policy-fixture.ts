@@ -24,12 +24,13 @@ import {
   browserEvidence,
   createManagedPolicyEvidence,
   managedPolicyEvidenceRoot,
+  type ManagedPolicyEvidence,
   type ManagedPolicyStage,
 } from './managed-policy-evidence.ts';
 import {
   assertManagedPolicyRuntime,
   assertRuntimeRejected,
-  controlExposesEmployeePolicy,
+  controlEmployeePolicyFailure,
   liveCopyReenablesPersonalModels,
   parseManagedPolicyRuntime,
   type ManagedPolicyRuntimeExpectation,
@@ -494,11 +495,32 @@ function requireAccepted(
   if (result.screenshot?.screenshot !== screenshot) throw new Error(INVALID);
 }
 
+function recordBrowserObservation(
+  evidence: ManagedPolicyEvidence,
+  stage: 'start' | 'control' | 'restart',
+  result: MappedHostAcceptResult,
+): void {
+  const screenshot = result.screenshot?.screenshot;
+  evidence.record(
+    stage === 'start'
+      ? {
+          ...(screenshot === undefined ? {} : { startScreenshot: screenshot }),
+          startBrowser: browserEvidence(result),
+        }
+      : {
+          ...(screenshot === undefined ? {} : { restartScreenshot: screenshot }),
+          restartBrowser: browserEvidence(result),
+        },
+  );
+}
+
 async function startWeb(
   lifecycle: UserImageLifecycle,
   name: string,
   overlay: string,
   remaining: () => number,
+  evidence: ManagedPolicyEvidence,
+  stage: 'start' | 'control' | 'restart',
   browser?: { chromeBin: string; profile: string; screenshot: string; roster: readonly string[] },
 ): Promise<{ hostPort: number; observation: unknown; browser?: MappedHostAcceptResult }> {
   lifecycle.registerContainer(name);
@@ -518,6 +540,14 @@ async function startWeb(
   const hostPort = requirePort(summary);
   const logs = docker(lifecycle.command, ['logs', name]);
   const observation = await waitObservation(lifecycle.command, name, remaining);
+  // Retain acquired facts before schema, browser, or policy qualification can reject them.
+  evidence.record(
+    stage === 'control'
+      ? { controlObservation: observation }
+      : stage === 'start'
+        ? { startPort: hostPort, startObservation: observation }
+        : { restartPort: hostPort, restartObservation: observation },
+  );
   if (browser === undefined) {
     return { hostPort, observation };
   }
@@ -564,6 +594,7 @@ async function startWeb(
     preserveModels: 'alpha,beta',
     expectedDefault: 'beta',
   });
+  recordBrowserObservation(evidence, stage, browserResult);
   return { hostPort, observation, browser: browserResult };
 }
 
@@ -596,7 +627,7 @@ async function acceptManaged(
   remaining: () => number,
   chromeBin: string,
   work: string,
-  evidence: string,
+  evidence: ManagedPolicyEvidence,
   expected: ManagedPolicyRuntimeExpectation,
   label: 'start' | 'restart',
 ): Promise<{
@@ -605,12 +636,14 @@ async function acceptManaged(
   screenshot: string;
   browser: MappedHostAcceptResult;
 }> {
-  const screenshot = join(evidence, `${label}.png`);
+  const screenshot = join(managedPolicyEvidenceRoot(lifecycle.runId), `${label}.png`);
   const started = await startWeb(
     lifecycle,
     `dsh-team-test-${lifecycle.runId}-${label}`,
     overlay,
     remaining,
+    evidence,
+    label,
     {
       chromeBin,
       profile: join(work, `chrome-${label}`),
@@ -634,7 +667,8 @@ async function editThenControl(
   startName: string,
   remaining: () => number,
   seedHash: string,
-): Promise<{ controlObservation: unknown; home: string; live: string; profile: string }> {
+  evidence: ManagedPolicyEvidence,
+): Promise<{ home: string; live: string; profile: string }> {
   docker(lifecycle.command, ['stop', startName]);
   const edited = parseJsonRecord(
     execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-edit`, editAfterStopScript()),
@@ -648,13 +682,20 @@ async function editThenControl(
   if (!profile.includes(CUSTOM_PRESET_ID)) throw new Error(INVALID);
   const transportOverlay = await publishTransportOverlay(lifecycle.overlayDirectory);
   const controlName = `dsh-team-test-${lifecycle.runId}-control`;
-  const control = await startWeb(lifecycle, controlName, transportOverlay, remaining);
+  const control = await startWeb(
+    lifecycle,
+    controlName,
+    transportOverlay,
+    remaining,
+    evidence,
+    'control',
+  );
   const controlObserved = parseManagedPolicyRuntime(control.observation);
-  if (!controlExposesEmployeePolicy(controlObserved, ALT_ADDRESS, 'alpha')) {
-    throw new Error(INVALID);
-  }
+  const failure = controlEmployeePolicyFailure(controlObserved, ALT_ADDRESS, 'alpha');
+  if (failure !== undefined) throw new Error(`${INVALID}: control/${failure}`);
+  assertRuntimeRejected(control.observation, RESTART_EXPECTED);
   docker(lifecycle.command, ['stop', controlName]);
-  return { controlObservation: control.observation, home, live, profile };
+  return { home, live, profile };
 }
 
 function proveRestartHashes(
@@ -694,22 +735,19 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       remaining,
       chromeBin,
       work,
-      managedPolicyEvidenceRoot(lifecycle.runId),
+      evidence,
       MANAGED_POLICY_EXPECTED,
       'start',
     );
-    evidence.record({
-      startPort: start.hostPort,
-      startScreenshot: start.screenshot,
-      startObservation: start.observation,
-      startBrowser: browserEvidence(start.browser),
-    });
     failedStage = 'control';
-    const edited = await editThenControl(lifecycle, startName, remaining, prepared.seedHash);
-    evidence.record({
-      controlObservation: edited.controlObservation,
-      controlRejected: true,
-    });
+    const edited = await editThenControl(
+      lifecycle,
+      startName,
+      remaining,
+      prepared.seedHash,
+      evidence,
+    );
+    evidence.record({ controlRejected: true });
     failedStage = 'restart';
     const changed = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-reread`);
     if (!sameSet(adapterPresetIds(changed), RESTART_EXPECTED.presetIds)) throw new Error(INVALID);
@@ -721,23 +759,16 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       changed,
       API_KEY_VALUE.trim() !== '',
     );
-    const restart = await acceptManaged(
+    await acceptManaged(
       lifecycle,
       nextOverlay,
       remaining,
       chromeBin,
       work,
-      managedPolicyEvidenceRoot(lifecycle.runId),
+      evidence,
       RESTART_EXPECTED,
       'restart',
     );
-    evidence.record({
-      restartPort: restart.hostPort,
-      restartScreenshot: restart.screenshot,
-      restartObservation: restart.observation,
-      restartBrowser: browserEvidence(restart.browser),
-    });
-    assertRuntimeRejected(edited.controlObservation, RESTART_EXPECTED);
     if (liveCopyReenablesPersonalModels(start.browser)) {
       throw new Error(INVALID);
     }

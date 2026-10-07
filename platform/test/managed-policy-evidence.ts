@@ -204,15 +204,17 @@ function allowlistedFields(fields: ManagedPolicyEvidenceInput): ManagedPolicyEvi
   return acquired;
 }
 
-export function createManagedPolicyEvidence(lifecycle: {
-  readonly imageId: string;
-  readonly runId: string;
-}): {
+export interface ManagedPolicyEvidence {
   readonly path: string;
   record(fields: ManagedPolicyEvidenceInput): void;
   finish(): string;
   fail(stage?: ManagedPolicyStage): void;
-} {
+}
+
+export function createManagedPolicyEvidence(lifecycle: {
+  readonly imageId: string;
+  readonly runId: string;
+}): ManagedPolicyEvidence {
   const evidence = managedPolicyEvidenceRoot(lifecycle.runId);
   mkdirSync(evidence, { recursive: true });
   const path = join(evidence, 'observations.json');
