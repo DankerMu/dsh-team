@@ -1,3 +1,13 @@
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
+
+// This fixture runs only inside the image; resolve the same installation-owned ESM
+// module used by DSH, not a second package under the writable profile.
+const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
+const { livePresetMounts } = await import(
+  pathToFileURL(require.resolve('@deepseek-ai/dsh-agent-preset-registry')).href
+);
+
 /** Fixture-only read-only observer. Does not change model, permission, or tool policy. */
 export const name = 'dsh-team-managed-policy-observer';
 export const inject = ['loader', 'llm', 'agentPresets', 'tools'];
@@ -7,6 +17,8 @@ const MARKER = 'DSH_TEAM_MANAGED_POLICY_OBSERVATION';
 const ALPHA = 'alpha';
 const BETA = 'beta';
 const PROVIDER = 'intranet';
+const CUSTOM_PRESET_ID = 'custom-office';
+const TOOL_FS_MODULE = '@deepseek-ai/dsh-tool-fs';
 
 function fail() {
   process.stderr.write(`${FAIL}\n`);
@@ -89,7 +101,26 @@ async function observeModels(ctx, llm) {
   };
 }
 
-async function observePresets(agentPresets, tools) {
+function effectiveReadLimit(ctx, lease, presetId) {
+  const mounts = livePresetMounts(ctx.root.fiber).filter(
+    (mount) => mount.key === lease.key && mount.presetId === presetId,
+  );
+  if (mounts.length !== 1) fail();
+  // Loader entry.id is owner-qualified; options.id is the row's group-local identity.
+  const entries = [...mounts[0].tree.entries()].filter(
+    (entry) => entry.options.id === 'tool-fs' && entry.options.name === TOOL_FS_MODULE,
+  );
+  if (entries.length !== 1) fail();
+  const entry = entries[0];
+  if (entry.options.group || entry.disabled || entry.fiber === undefined) fail();
+  const config = entry.fiber.config;
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) fail();
+  const readLimit = config.readLimit;
+  if (typeof readLimit !== 'number' || !Number.isFinite(readLimit)) fail();
+  return readLimit;
+}
+
+async function observePresets(ctx, agentPresets, tools) {
   const listed = await agentPresets.list();
   const presets = [];
   for (const row of listed) {
@@ -100,6 +131,9 @@ async function observePresets(agentPresets, tools) {
         id: row.id,
         description: descriptionOf(row),
         toolNames: toolNames(tools.schemas(lease.key)),
+        ...(row.id === CUSTOM_PRESET_ID
+          ? { readLimit: effectiveReadLimit(ctx, lease, row.id) }
+          : {}),
       });
     } finally {
       await lease[Symbol.asyncDispose]();
@@ -121,6 +155,6 @@ async function observe(ctx) {
   const tools = ctx.get('tools');
   if (llm === undefined || agentPresets === undefined || tools === undefined) fail();
   const models = await observeModels(ctx, llm);
-  const presets = await observePresets(agentPresets, tools);
+  const presets = await observePresets(ctx, agentPresets, tools);
   process.stdout.write(`${MARKER}${JSON.stringify({ models, presets })}\n`);
 }

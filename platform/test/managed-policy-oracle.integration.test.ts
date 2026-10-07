@@ -96,6 +96,7 @@ const QUALIFIED_CONTROL: ManagedPolicyRuntimeObservation = {
       id: 'custom-office',
       description: 'brief-zh',
       toolNames: ['read', 'present', 'web_search', 'web_fetch'],
+      readLimit: 500,
     },
   ],
 };
@@ -136,8 +137,14 @@ it.each([
 
 it.each([
   ['custom-preset', []],
-  ['custom-web-search', [{ id: 'custom-office', description: '', toolNames: ['web_fetch'] }]],
-  ['custom-web-fetch', [{ id: 'custom-office', description: '', toolNames: ['web_search'] }]],
+  [
+    'custom-web-search',
+    [{ id: 'custom-office', description: '', toolNames: ['web_fetch'], readLimit: 500 }],
+  ],
+  [
+    'custom-web-fetch',
+    [{ id: 'custom-office', description: '', toolNames: ['web_search'], readLimit: 500 }],
+  ],
 ] as const)('identifies the failed employee control %s preset condition', (failure, presets) => {
   const observation = { ...QUALIFIED_CONTROL, presets };
   expect(controlEmployeePolicyFailure(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(failure);
@@ -168,3 +175,64 @@ it('reports only the first static control failure rather than employee-supplied 
     'intranet-address',
   );
 });
+
+it.each([undefined, 2000, 499] as const)(
+  'rejects employee control with custom readLimit %s despite the retained read tool',
+  (readLimit) => {
+    const observation = {
+      ...QUALIFIED_CONTROL,
+      presets: [
+        {
+          id: 'custom-office',
+          description: 'brief-zh',
+          toolNames: ['read', 'present', 'web_search', 'web_fetch'],
+          ...(readLimit === undefined ? {} : { readLimit }),
+        },
+      ],
+    };
+
+    expect(controlEmployeePolicyFailure(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(
+      'custom-read-limit',
+    );
+    expect(controlExposesEmployeePolicy(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(false);
+  },
+);
+
+it.each([undefined, 2000, 499, '500', { __jsExpr: '250 + 250' }] as const)(
+  'rejects managed restart with custom readLimit %s despite all other policy criteria',
+  (readLimit) => {
+    const observation = {
+      models: {
+        intranetAddress: EXPECTED.intranetAddress,
+        defaultModel: EXPECTED.defaultModel,
+        catalog: EXPECTED.catalog,
+        alphaContextWindow: EXPECTED.alphaContextWindow,
+        betaContextWindow: EXPECTED.betaContextWindow,
+      },
+      presets: [
+        { id: 'standard', description: '', toolNames: ['bash', 'read'] },
+        { id: 'minimal', description: '', toolNames: ['bash'] },
+        {
+          id: 'custom-office',
+          description: 'brief-zh',
+          toolNames: ['read', 'present'],
+          ...(readLimit === undefined ? {} : { readLimit }),
+        },
+      ],
+    };
+
+    expect(() => {
+      assertManagedPolicyRuntime(observation, {
+        ...EXPECTED,
+        presetIds: ['standard', 'minimal', 'custom-office'],
+        descriptions: { 'custom-office': 'brief-zh' },
+        retainedTools: {
+          standard: ['bash', 'read'],
+          minimal: ['bash'],
+          'custom-office': ['read', 'present'],
+        },
+        readLimits: { 'custom-office': 500 },
+      });
+    }).toThrow('Invalid managed policy runtime observation');
+  },
+);

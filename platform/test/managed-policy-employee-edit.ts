@@ -48,9 +48,13 @@ export function customOfficeInsert(presetId: string): {
         config: {
           id: presetId,
           order: 9,
-          description: { __jsExpr: "'brief-' + 'zh'" },
+          description: 'brief-zh',
           plugins: [
-            { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+            {
+              id: 'tool-fs',
+              name: '@deepseek-ai/dsh-tool-fs',
+              config: { readLimit: { __jsExpr: '250 + 250' } },
+            },
             { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
             {
               id: 'planning',

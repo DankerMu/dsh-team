@@ -162,6 +162,7 @@ const RESTART_EXPECTED: ManagedPolicyRuntimeExpectation = {
   ...MANAGED_POLICY_EXPECTED,
   presetIds: [...SHIPPED_PRESET_IDS, CUSTOM_PRESET_ID],
   descriptions: { [CUSTOM_PRESET_ID]: CUSTOM_DESCRIPTION },
+  readLimits: { [CUSTOM_PRESET_ID]: 500 },
   retainedTools: {
     ...RETAINED_TOOLS,
     [CUSTOM_PRESET_ID]: ['read', 'present'],
@@ -439,12 +440,21 @@ function sameSet(left: readonly string[], right: readonly string[]): boolean {
   );
 }
 
-function inertDescription(composition: ManagedComposition, id: string): unknown {
+function inertReadLimit(composition: ManagedComposition, id: string): unknown {
   const preset = composition.presets.find((entry) => entry.id === id || entry.config.id === id);
-  return preset?.config.description;
+  const config = preset?.config.plugins.find((entry) => entry.id === 'tool-fs')?.config;
+  if (
+    typeof config !== 'object' ||
+    config === null ||
+    Array.isArray(config) ||
+    !('readLimit' in config)
+  ) {
+    return undefined;
+  }
+  return config.readLimit;
 }
 
-function descriptionExpr(value: unknown): string | undefined {
+function loaderExpression(value: unknown): string | undefined {
   if (typeof value !== 'object' || value === null || !('__jsExpr' in value)) return undefined;
   const expr = value.__jsExpr;
   return typeof expr === 'string' ? expr : undefined;
@@ -751,7 +761,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
     failedStage = 'restart';
     const changed = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-reread`);
     if (!sameSet(adapterPresetIds(changed), RESTART_EXPECTED.presetIds)) throw new Error(INVALID);
-    if (descriptionExpr(inertDescription(changed, CUSTOM_PRESET_ID)) !== "'brief-' + 'zh'") {
+    if (loaderExpression(inertReadLimit(changed, CUSTOM_PRESET_ID)) !== '250 + 250') {
       throw new Error(INVALID);
     }
     const nextOverlay = await publishOverlay(

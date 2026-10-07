@@ -38,6 +38,7 @@ const EXPECTED: ManagedPolicyRuntimeExpectation = {
   betaContextWindow: 262_144,
   presetIds: ['standard', 'minimal', 'custom-office'],
   descriptions: { 'custom-office': 'brief-zh' },
+  readLimits: { 'custom-office': 500 },
   retainedTools: {
     standard: ['bash', 'read'],
     minimal: ['bash'],
@@ -56,7 +57,12 @@ const COMPLETE = {
   presets: [
     { id: 'standard', description: '', toolNames: ['bash', 'read'] },
     { id: 'minimal', description: '', toolNames: ['bash'] },
-    { id: 'custom-office', description: 'brief-zh', toolNames: ['read', 'present'] },
+    {
+      id: 'custom-office',
+      description: 'brief-zh',
+      toolNames: ['read', 'present'],
+      readLimit: 500,
+    },
   ],
 };
 
@@ -79,7 +85,12 @@ it('rejects network tools in a live preset inventory', () => {
         ...COMPLETE,
         presets: [
           ...COMPLETE.presets.slice(0, 2),
-          { id: 'custom-office', description: 'brief-zh', toolNames: ['bash', 'web_search'] },
+          {
+            id: 'custom-office',
+            description: 'brief-zh',
+            toolNames: ['bash', 'web_search'],
+            readLimit: 500,
+          },
         ],
       },
       EXPECTED,
@@ -95,7 +106,7 @@ it('rejects a nonempty inventory that dropped a known retained non-network tool'
         presets: [
           { id: 'standard', description: '', toolNames: ['bash', 'read'] },
           { id: 'minimal', description: '', toolNames: ['bash'] },
-          { id: 'custom-office', description: 'brief-zh', toolNames: ['read'] },
+          { id: 'custom-office', description: 'brief-zh', toolNames: ['read'], readLimit: 500 },
         ],
       },
       EXPECTED,
@@ -114,7 +125,12 @@ it('rejects a no-managed control that only exposes network tools on shipped pres
     },
     presets: [
       { id: 'standard', description: '', toolNames: ['bash', 'web_search', 'web_fetch'] },
-      { id: 'custom-office', description: 'brief-zh', toolNames: ['read', 'present'] },
+      {
+        id: 'custom-office',
+        description: 'brief-zh',
+        toolNames: ['read', 'present'],
+        readLimit: 500,
+      },
     ],
   });
   expect(controlExposesEmployeePolicy(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(false);
@@ -165,8 +181,16 @@ const CONTROL_OBSERVATION = {
     alphaContextWindow: 500_000,
     betaContextWindow: 262_144,
   },
-  presets: [{ id: 'custom-office', description: 'brief-zh', toolNames: ['read', 'present'] }],
+  presets: [
+    {
+      id: 'custom-office',
+      description: 'brief-zh',
+      toolNames: ['read', 'present'],
+      readLimit: 500,
+    },
+  ],
 };
+const RESTART_OBSERVATION = { ...START_OBSERVATION, presets: CONTROL_OBSERVATION.presets };
 const BROWSER_UI = { chinese: true, noNotice: true };
 const BROWSER_HOST = { hostname: 'dsh-team-managed.invalid' };
 const BROWSER_INPUT = { typed: true, cleared: true, modelSend: false };
@@ -503,7 +527,7 @@ it('retains a completed start and restart summary after owned Docker cleanup', a
           opened.evidence.record({
             restartPort: 43128,
             restartScreenshot,
-            restartObservation: START_OBSERVATION,
+            restartObservation: RESTART_OBSERVATION,
             restartBrowser: browserEvidence(START_BROWSER),
           });
           return Promise.resolve(opened.evidence.finish());
@@ -514,7 +538,7 @@ it('retains a completed start and restart summary after owned Docker cleanup', a
         ...startControlRetained(runId, startScreenshot),
         restartPort: 43128,
         restartScreenshot,
-        restartObservation: START_OBSERVATION,
+        restartObservation: RESTART_OBSERVATION,
         restartBrowser: START_BROWSER_EVIDENCE,
       });
       expect(existsSync(startScreenshot)).toBe(true);

@@ -103,6 +103,7 @@ const OBSERVATION_KEYS = [
   'id',
   'description',
   'toolNames',
+  'readLimit',
 ] as const;
 
 function allowlistedBrowser(value: unknown): Record<string, JsonValue> | undefined {

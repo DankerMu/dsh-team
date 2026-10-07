@@ -15,6 +15,7 @@ interface ManagedPolicyPresetObservation {
   readonly id: string;
   readonly description: string;
   readonly toolNames: readonly string[];
+  readonly readLimit?: number;
 }
 
 export interface ManagedPolicyRuntimeObservation {
@@ -31,6 +32,7 @@ export interface ManagedPolicyRuntimeExpectation {
   readonly presetIds: readonly string[];
   readonly descriptions?: Readonly<Record<string, string>>;
   readonly retainedTools?: Readonly<Record<string, readonly string[]>>;
+  readonly readLimits?: Readonly<Record<string, number>>;
 }
 
 const INVALID_RUNTIME = 'Invalid managed policy runtime observation';
@@ -104,6 +106,7 @@ function parsePreset(value: unknown): ManagedPolicyPresetObservation {
     id: requireString(preset.id),
     description: typeof description === 'string' ? description : '',
     toolNames: requireStringList(preset.toolNames),
+    ...(preset.readLimit === undefined ? {} : { readLimit: requireNumber(preset.readLimit) }),
   };
 }
 
@@ -141,6 +144,19 @@ function retainsExpectedTools(
   return retained === undefined || retained.every((name) => preset.toolNames.includes(name));
 }
 
+function matchesExpectedPreset(
+  preset: ManagedPolicyPresetObservation,
+  expected: ManagedPolicyRuntimeExpectation,
+): boolean {
+  const description = expected.descriptions?.[preset.id];
+  const readLimit = expected.readLimits?.[preset.id];
+  return (
+    (description === undefined || preset.description === description) &&
+    (readLimit === undefined || preset.readLimit === readLimit) &&
+    retainsExpectedTools(preset, expected)
+  );
+}
+
 export function assertManagedPolicyRuntime(
   observation: unknown,
   expected: ManagedPolicyRuntimeExpectation,
@@ -164,11 +180,7 @@ export function assertManagedPolicyRuntime(
     if (preset.toolNames.some((name) => NETWORK_TOOLS.has(name))) {
       invalid();
     }
-    const description = expected.descriptions?.[preset.id];
-    if (description !== undefined && preset.description !== description) {
-      invalid();
-    }
-    if (!retainsExpectedTools(preset, expected)) {
+    if (!matchesExpectedPreset(preset, expected)) {
       invalid();
     }
   }
@@ -197,7 +209,19 @@ export type EmployeeControlFailure =
   | 'account-provider'
   | 'custom-preset'
   | 'custom-web-search'
-  | 'custom-web-fetch';
+  | 'custom-web-fetch'
+  | 'custom-read-limit';
+
+function customPresetFailure(
+  presets: readonly ManagedPolicyPresetObservation[],
+): EmployeeControlFailure | undefined {
+  const custom = presets.find((preset) => preset.id === 'custom-office');
+  if (custom === undefined) return 'custom-preset';
+  if (!custom.toolNames.includes('web_search')) return 'custom-web-search';
+  if (!custom.toolNames.includes('web_fetch')) return 'custom-web-fetch';
+  if (custom.readLimit !== 500) return 'custom-read-limit';
+  return undefined;
+}
 
 /** Returns only the first failed condition's static identifier, never observed values. */
 export function controlEmployeePolicyFailure(
@@ -216,11 +240,7 @@ export function controlEmployeePolicyFailure(
   if (!personal?.models.includes('gamma')) return 'personal-model';
   if (!catalog.some((row) => row.id === 'deepseek-official')) return 'official-provider';
   if (!catalog.some((row) => row.id === 'deepseek-account')) return 'account-provider';
-  const custom = observation.presets.find((preset) => preset.id === 'custom-office');
-  if (custom === undefined) return 'custom-preset';
-  if (!custom.toolNames.includes('web_search')) return 'custom-web-search';
-  if (!custom.toolNames.includes('web_fetch')) return 'custom-web-fetch';
-  return undefined;
+  return customPresetFailure(observation.presets);
 }
 
 export function controlExposesEmployeePolicy(

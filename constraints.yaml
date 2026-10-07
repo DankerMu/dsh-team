@@ -219,7 +219,12 @@ exemptions:
       reason: "Process entry point: reads the environment and binds the port. Exercised by pnpm e2e against the built artifact instead of unit tests."
       expires: never
       exit_condition: "none"
-  enforced_by: "eslint.config.mjs ignores + .prettierignore + vitest.config.ts coverage.exclude + scripts/check-test-pairing.sh"
+    - path: "platform/test/managed-policy-observer.js"
+      rules: [dead_code]
+      reason: "Only Knip's unlisted-dependency check for @deepseek-ai/dsh-agent-preset-registry is excepted via exact ignoreDependencies. The fixture executes inside the pinned DSH image and resolves its existing registry module from /usr/local/lib/node_modules/@deepseek-ai/dsh/package.json; it is not a platform-installed dependency. Observer code and every other dependency remain checked."
+      expires: never
+      exit_condition: "remove the exact dependency exception when the image-only observer is removed or the platform owns this dependency"
+  enforced_by: "eslint.config.mjs ignores + .prettierignore + vitest.config.ts coverage.exclude + scripts/check-test-pairing.sh + knip.json exact ignoreDependencies"
 
 baseline:
   mode: "none"
