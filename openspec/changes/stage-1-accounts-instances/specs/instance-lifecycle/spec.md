@@ -173,3 +173,19 @@
 
 - **WHEN** 两个实例运行中时平台容器被删除并重新创建
 - **THEN** 平台恢复后重新连上这两个实例，对应的员工不需要重新启动实例即可继续使用；连不上的实例被停止并标记为出错
+
+### Requirement: 平台经显式 Unix socket 访问 Docker
+
+平台 Docker 客户端 MUST 通过配置的 Unix socket 使用 HTTP 请求，并区分 JSON、流式日志和带 HTTP 状态码的错误，不隐式切换到其他传输地址。
+
+#### Scenario: Docker JSON 与错误响应
+
+- **WHEN** 客户端读取 Docker 版本或查询一个不存在的容器
+- **THEN** 前者得到实际版本 JSON，后者得到携带404状态码的错误
+- **AND** 配置的 socket 不存在时，连接错误指出该 socket 路径
+
+#### Scenario: Docker 日志增量消费
+
+- **WHEN** 非TTY日志帧跨多次网络传输抵达或多帧合并抵达
+- **THEN** 按顺序增量输出正确stdout/stderr载荷字节，不把帧头当作日志，不等待无限日志流结束
+- **AND** 截断或非法帧失败，消费者取消时关闭响应资源

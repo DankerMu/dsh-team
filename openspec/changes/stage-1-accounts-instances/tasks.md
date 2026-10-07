@@ -522,6 +522,16 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 Suggested fixture level: expanded - 持有 Docker socket 的关键路径，涉及并发、持久状态和凭据
 Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Docker 用例，约 250 行，没有调用方）
 
+### Issue #34 risk/evidence map (task9.1 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: public JSON/status/log contracts, actual Docker multiplex frames and unchanged bytes; injected transport tests plus real Unix HTTP smoke.
+- Config / project setup; Legacy compatibility / examples — selected: explicit socket setting and all typed config consumers; invalid path validation and unchanged daemon-independent startup, `.env.example`, root checks.
+- Auth / permissions / secrets — selected: privileged socket stays platform-side; no automatic body/log disclosure, HTTP errors expose status not credentials; adverse body sentinel checks.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: incremental frames/backpressure, cancellation and truncated stream rejection; stream tests demonstrate output before completion and source teardown, bounded partial buffering.
+- Error handling / rollback / partial outputs; Release / packaging / dependency compatibility — selected: malformed JSON, exact HTTP404 despite malformed error body, real missing socket diagnostics; three read-only Docker cases on giap-vps with existing six-case baseline.
+- Documentation / migration notes — selected: public client scope, critical-path human review, runtime proof and deferred lifecycle ownership; strict OpenSpec and CI.
+- File IO / path safety / overwrite — no persistent writes or deletions in this slice; socket path validated and no TCP fallback. Smoke owns and removes only its temporary socket directory.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

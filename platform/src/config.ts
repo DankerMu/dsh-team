@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const;
 
@@ -11,6 +11,7 @@ export interface PlatformConfig {
   readonly logLevel: LogLevel;
   readonly dataDir: string;
   readonly managedConfigDir: string;
+  readonly dockerSocketPath: string;
   readonly publicUrl: string;
   readonly authority: string;
   readonly cookieSecure: boolean;
@@ -55,6 +56,13 @@ function parseDataDir(raw: string): string {
 function parseManagedConfigDir(raw: string): string {
   if (isInvalidPath(raw)) {
     throw new Error('PLATFORM_MANAGED_CONFIG_DIR must be a nonempty path');
+  }
+  return raw;
+}
+
+function parseDockerSocket(raw: string): string {
+  if (isInvalidPath(raw) || !isAbsolute(raw)) {
+    throw new Error('PLATFORM_DOCKER_SOCKET must be an absolute nonempty path without NUL');
   }
   return raw;
 }
@@ -148,6 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
     logLevel: parseLogLevel(env.PLATFORM_LOG_LEVEL ?? DEFAULT_LOG_LEVEL),
     dataDir,
     managedConfigDir,
+    dockerSocketPath: parseDockerSocket(env.PLATFORM_DOCKER_SOCKET ?? '/var/run/docker.sock'),
     publicUrl: publicOrigin.origin,
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),

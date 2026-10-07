@@ -29,6 +29,7 @@ const CONFIG = {
   logLevel: 'silent',
   dataDir: './data',
   managedConfigDir: './data/managed-config',
+  dockerSocketPath: '/var/run/docker.sock',
   publicUrl: 'http://127.0.0.1',
   authority: '127.0.0.1',
   cookieSecure: false,

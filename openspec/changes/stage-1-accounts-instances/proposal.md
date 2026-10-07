@@ -221,3 +221,10 @@
 - Reuse the managed generator/writer/composition adapter, owned Docker lifecycle and existing browser/RPC primitives. Preserve all five existing Docker cases and task8.4 assertions.
 - Selected risk packs/evidence appear below task8.5; no new production retry/fallback policy, model administration API, orchestration or DSH source changes.
 - Evidence floor: one real submitted message reaches a terminal model-connection failure in its actual Session; a demonstrably reachable test-owned alternate endpoint receives zero model requests during that attempt; visible error screenshot and retained sanitized Session/recorder evidence; complete exact-head Docker suite, cleanup, root checks, strict OpenSpec and CI.
+
+## Issue #34 fixture
+
+- Feature; expanded task9.1 (agree with upstream): introduce the platform's Unix-socket Docker Engine client, an exported transport/parser boundary on a critical path.
+- Preserve existing config, API, authentication and all six Docker cases. Socket configuration is explicit; no eager daemon connection at platform startup.
+- Evidence floor: injected-transport JSON/log/error tests, real local Unix HTTP smoke and three read-only giap-vps cases (version, nonexistent container404, nonexistent socket path), root checks, strict OpenSpec, reviewed exact-head Docker suite and CI.
+- No container lifecycle commands, retries, SDK dependency, remote TCP transport, audit events or orchestration wiring in this slice. Critical-path human line review remains required and deferred to Epic completion by the user's instruction.
