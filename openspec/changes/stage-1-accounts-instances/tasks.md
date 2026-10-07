@@ -489,6 +489,8 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: installed0.2.0-rc.2 parser/runtime APIs and real expression round-trip, retain four Docker baselines and existing browser probe callers; no ahead-source authority or duplicate parser/lifecycle.
 - Documentation / migration notes — selected: concrete adapter handoff to9.3, exact-head Linux evidence/screenshots and limitations, initial/restart model/UI observations, explicit workspace test setup boundary versus12.2, strict OpenSpec and CI.
 
+本地验证记录（#32，尚未完成真实运行验收）：adapter首次语义RED为571pass/1fail（skipped bundle仍被接受），缺少custom preset的oracle RED为255pass/1fail。第三轮审查后，项目方明确批准额外一轮仅关闭阶段失败证据/R3 helper guard资格验证；新增证据丢失RED为269pass/1fail，之后`pnpm check`591unit/271integration通过、重复率2.81%，门槛不变。真实临时文件smoke证明record后立即可读、后续失败及临时资源清理后start/control/browser事实和failedStage/身份仍保留，嵌套敏感字段被排除。隔离副本分别删除卷归属、镜像和挂载guard后，四个反例（foreign/missing owner、wrong image、wrong mount）均产生正确语义失败；当前实际execScript均在被禁止的create/start前拒绝。独立实际Node子进程/监听器smoke还证明旧Chrome discovery失败路径遗留进程而当前路径在harness兜底清理前已终止。以上不冒充真实Docker、浏览器或DSH生效证据；task8.4保持未完成，必须对重新审查准入的确切提交执行后续真实验收。
+
 ## 9. 编排器（任务包 1.7）
 
 依赖：第 4、5、7、8 组。本组用 `published-loopback` 方式够到实例，`network` 方式在第 10 组。

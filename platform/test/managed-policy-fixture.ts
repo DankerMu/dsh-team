@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -20,6 +20,12 @@ import type { DockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { runWebStartup } from './web-startup-fixture.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
+import {
+  browserEvidence,
+  createManagedPolicyEvidence,
+  managedPolicyEvidenceRoot,
+  type ManagedPolicyStage,
+} from './managed-policy-evidence.ts';
 import {
   assertManagedPolicyRuntime,
   assertRuntimeRejected,
@@ -305,10 +311,6 @@ function requirePort(record: Record<string, unknown>): number {
   return value;
 }
 
-function evidenceRoot(runId: string): string {
-  return join(process.cwd(), '.run', 'issue32', `managed-policy-${runId}`);
-}
-
 function chromeRequired(): string {
   const chromeBin = process.env.CHROME_BIN;
   if (chromeBin === undefined || chromeBin === '') {
@@ -520,42 +522,6 @@ function asRemoteRecord(value: unknown): Record<string, unknown> {
   return record;
 }
 
-function browserEvidence(result: MappedHostAcceptResult): Record<string, unknown> {
-  return {
-    accepted: result.accepted,
-    initialized: result.initialized === true,
-    screenshot: result.screenshot?.screenshot,
-    reload: result.reload
-      ? {
-          accepted: result.reload.accepted,
-          screenshot: result.reload.screenshot?.screenshot,
-          initialized: result.reload.initialized === true,
-          ui: result.reload.ui,
-          host: result.reload.host,
-          input: result.reload.input,
-        }
-      : undefined,
-    preservation: result.preservation
-      ? {
-          general: result.preservation.general === true,
-          listed: result.preservation.listed,
-          selected: result.preservation.selected,
-          defaultModel: result.preservation.defaultModel,
-          exactModels: result.preservation.exactModels,
-          screenshot: result.preservation.screenshot?.screenshot,
-        }
-      : undefined,
-    ui: result.ui,
-    host: result.host,
-    input: result.input,
-    workBound: result.workBound === true,
-    workBoundUnknown: result.workBoundUnknown === true,
-    readiness: result.readiness,
-    bootRoster: result.bootRoster?.ids,
-    consoleErrors: result.consoleErrors ?? [],
-  };
-}
-
 function requireAccepted(
   result: MappedHostAcceptResult,
   screenshot: string,
@@ -752,27 +718,41 @@ function proveRestartHashes(
 }
 
 export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): Promise<string> {
-  const chromeBin = chromeRequired();
-  const work = mkdtempSync(join(tmpdir(), 'dsh-team-managed-policy-'));
-  const evidence = evidenceRoot(lifecycle.runId);
-  mkdirSync(evidence, { recursive: true });
-  const startedAt = Date.now();
-  const remaining = (): number => Math.max(1, 180_000 - (Date.now() - startedAt));
-  const plugin = readFileSync(new URL('./managed-policy-observer.js', import.meta.url), 'utf8');
+  const evidence = createManagedPolicyEvidence(lifecycle);
+  let work: string | undefined;
+  let failedStage: ManagedPolicyStage | undefined;
   try {
+    const chromeBin = chromeRequired();
+    work = mkdtempSync(join(tmpdir(), 'dsh-team-managed-policy-'));
+    const startedAt = Date.now();
+    const remaining = (): number => Math.max(1, 180_000 - (Date.now() - startedAt));
+    const plugin = readFileSync(new URL('./managed-policy-observer.js', import.meta.url), 'utf8');
     const prepared = await prepareState(lifecycle, plugin);
     const startName = `dsh-team-test-${lifecycle.runId}-start`;
+    failedStage = 'start';
     const start = await acceptManaged(
       lifecycle,
       prepared.overlay,
       remaining,
       chromeBin,
       work,
-      evidence,
+      managedPolicyEvidenceRoot(lifecycle.runId),
       MANAGED_POLICY_EXPECTED,
       'start',
     );
+    evidence.record({
+      startPort: start.hostPort,
+      startScreenshot: start.screenshot,
+      startObservation: start.observation,
+      startBrowser: browserEvidence(start.browser),
+    });
+    failedStage = 'control';
     const edited = await editThenControl(lifecycle, startName, remaining, prepared.seedHash);
+    evidence.record({
+      controlObservation: edited.controlObservation,
+      controlRejected: true,
+    });
+    failedStage = 'restart';
     const changed = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-reread`);
     if (!sameSet(adapterPresetIds(changed), RESTART_EXPECTED.presetIds)) throw new Error(INVALID);
     if (descriptionExpr(inertDescription(changed, CUSTOM_PRESET_ID)) !== "'brief-' + 'zh'") {
@@ -789,44 +769,27 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       remaining,
       chromeBin,
       work,
-      evidence,
+      managedPolicyEvidenceRoot(lifecycle.runId),
       RESTART_EXPECTED,
       'restart',
     );
+    evidence.record({
+      restartPort: restart.hostPort,
+      restartScreenshot: restart.screenshot,
+      restartObservation: restart.observation,
+      restartBrowser: browserEvidence(restart.browser),
+    });
     assertRuntimeRejected(edited.controlObservation, RESTART_EXPECTED);
     if (liveCopyReenablesPersonalModels(start.browser)) {
       throw new Error(INVALID);
     }
+    failedStage = 'hash';
     proveRestartHashes(lifecycle, prepared.seedHash, edited.home, edited.live, edited.profile);
-    const summary = {
-      startPort: start.hostPort,
-      restartPort: restart.hostPort,
-      startScreenshot: start.screenshot,
-      restartScreenshot: restart.screenshot,
-      imageId: lifecycle.imageId,
-      runId: lifecycle.runId,
-      reviewedHead: process.env.GITHUB_SHA ?? process.env.DSH_TEAM_REVIEWED_HEAD ?? '',
-      startObservation: start.observation,
-      restartObservation: restart.observation,
-      controlObservation: edited.controlObservation,
-      controlRejected: true,
-      startBrowser: browserEvidence(start.browser),
-      restartBrowser: browserEvidence(restart.browser),
-    };
-    writeFileSync(join(evidence, 'observations.json'), JSON.stringify(summary));
-    return JSON.stringify(summary);
+    return evidence.finish();
   } catch (error) {
-    writeFileSync(
-      join(evidence, 'observations.json'),
-      JSON.stringify({
-        imageId: lifecycle.imageId,
-        runId: lifecycle.runId,
-        reviewedHead: process.env.GITHUB_SHA ?? process.env.DSH_TEAM_REVIEWED_HEAD ?? '',
-        failed: true,
-      }),
-    );
+    evidence.fail(failedStage);
     throw error;
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    if (work !== undefined) rmSync(work, { recursive: true, force: true });
   }
 }
