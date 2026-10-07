@@ -137,7 +137,7 @@ async function prepareRefusalInstance(
   if (generated.outcome !== 'configured') throw new Error('Managed refusal configuration missing');
   const overlay = await writeManagedConfig(
     lifecycle.overlayDirectory,
-    'modelrefusal1',
+    'modelrefusal',
     generated.content,
   );
   const container: WebContainer = {
