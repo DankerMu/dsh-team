@@ -434,7 +434,7 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - [x] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
 - [x] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
       Task8.4 additionally owns the `managed-config` complete-composition/canonical-artifact input adapter: include non-default, user-added/custom and later office presets, independently compare effective roster versus transformed coverage after edits/restart, and add a preset containing a renamed nested network component. Prove editing the user-writable locale-patch copy cannot change trusted canonical policy. Retain actual fresh non-loopback/English-navigator and reload observations for Chinese/no-notice/editable composer, model selection and General settings; do not substitute shipped-roster-only or text-shape proof. Qualify the adapter through the Docker test boundary before task9.3 production wiring.
-- [ ] 8.5 模型地址不可达时的行为：把模型地址指向一个拒绝连接的地址，另起一个记录请求的替身服务作为“别的地址”写进用户自己的配置。验证：`pnpm test:docker`——发一条消息后 Session 里出现错误，替身服务没有收到任何请求（规格“模型不可用时明确报错”）。
+- [x] 8.5 模型地址不可达时的行为：把模型地址指向一个拒绝连接的地址，另起一个记录请求的替身服务作为“别的地址”写进用户自己的配置。验证：`pnpm test:docker`——发一条消息后 Session 里出现错误，替身服务没有收到任何请求（规格“模型不可用时明确报错”）。
 
 Suggested fixture level: expanded - 写文件、路径安全，且承载模型密钥相关的生产配置
 Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，没有调用方）
@@ -499,6 +499,8 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: reuse atomic overlay and owned state lifecycle, retain failed scenario evidence before cleanup; all new recorder/browser/container resources removed on success/failure, foreign resources untouched.
 - Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: installed0.2.0-rc.2 API/error behavior; all five existing Docker cases retained, common lifecycle/browser callers unchanged. No runtime/package upgrade.
 - Documentation / migration notes — selected: explicit test fixture/reachability/terminal-state evidence and limits; root `pnpm check`, strict OpenSpec, full exact-head Docker run and CI. Rollback removes only this verification path, not employee state.
+
+验证记录（#33）：审查准入提交`66e95edcf57513d752bf53cf338ee9b5087db5e5`在giap-vps完整运行`pnpm test:docker`，6/6通过、exit0、90.13秒，原五例保留，独立清点无资源残留。真实UI提交一条消息，Session接收requestId后对应turn1从userSeq8到terminalSeq31，以TRANSPORT/Connection error终止，实际使用intranet/beta、running=false，截图显示明确错误，consoleErrorCount0。实例内预检确认受管地址ECONNREFUSED、替身地址HTTP204、dummy credential有效；recorder基线1，回合结束且截图后仍total1/inflight0/overflowfalse，仅保留预检GET，无模型请求回退。拒绝错误/旧回合/缺失终止事件及额外请求的独立oracle通过反例资格验证。浏览器异常路径曾丢失已接收prompt证据：实际driver与受控CDP/真实子进程回归先299pass/1fail，再300integration全过，截图失败也保留Session/request/admission并终止Chrome。另一次真实运行发现13位测试用户标识无效，仅改为符合既有12位约束的fixture，未放宽writer。最终本地`pnpm check`591unit/300integration通过、重复率2.84%；无真实凭据或现有服务调用，未新增生产重试/回退实现。最终PR头复验、审查和CI证据见PR#140。
 
 ## 9. 编排器（任务包 1.7）
 
