@@ -233,12 +233,16 @@ function foreignInventory(
 
 async function withReviewedHead<T>(body: () => Promise<T>): Promise<T> {
   const previousHead = process.env.DSH_TEAM_REVIEWED_HEAD;
+  const previousGithubHead = process.env.GITHUB_SHA;
   process.env.DSH_TEAM_REVIEWED_HEAD = REVIEWED_HEAD;
+  process.env.GITHUB_SHA = REVIEWED_HEAD;
   try {
     return await body();
   } finally {
     if (previousHead === undefined) delete process.env.DSH_TEAM_REVIEWED_HEAD;
     else process.env.DSH_TEAM_REVIEWED_HEAD = previousHead;
+    if (previousGithubHead === undefined) delete process.env.GITHUB_SHA;
+    else process.env.GITHUB_SHA = previousGithubHead;
   }
 }
 
