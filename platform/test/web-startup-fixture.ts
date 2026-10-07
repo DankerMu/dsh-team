@@ -291,6 +291,30 @@ function assertOwnedVolumes(
   }
 }
 
+/** Read-only fixture probes retain the startup identity, security and mount guards. */
+export function execWebScript(
+  command: DockerCommand,
+  expected: WebContainer,
+  script: string,
+): string {
+  const docker = (args: string[], timeout = 30_000): string => webDocker(command, args, timeout);
+  assertOwnedVolumes(docker, expected);
+  const inspect = (): number => {
+    const snapshot = record(
+      json(docker(['container', 'inspect', '--format', '{{json .}}', expected.container])),
+    );
+    if (record(snapshot.State).Running !== true) throw new Error('DSH Web exited during probe');
+    return portAndSettings(snapshot, expected);
+  };
+  const port = inspect();
+  const result = docker(
+    ['exec', '--user', '1001', expected.container, 'node', '--input-type=module', '-e', script],
+    15_000,
+  );
+  if (inspect() !== port) throw new Error('Web publication changed during probe');
+  return result;
+}
+
 /** Called only after the canonical owner registers container/volumes; returns sanitized facts. */
 export async function runWebStartup(
   command: DockerCommand,

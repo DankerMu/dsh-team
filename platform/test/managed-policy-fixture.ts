@@ -60,7 +60,7 @@ const STATE_MARKER_BODY = 'keep-across-restart\n';
 const SHIPPED_PRESET_IDS = ['standard', 'ptc', 'minimal', 'cordis'] as const;
 const CUSTOM_DESCRIPTION = 'brief-zh';
 const WORKSPACE_PATH = '/data/work';
-const MANAGED_BOOT_ROSTER = [
+export const MANAGED_BOOT_ROSTER = [
   '@deepseek-ai/dsh-api-gateway',
   '@deepseek-ai/dsh-api-job-controller',
   '@deepseek-ai/dsh-api-remotes',
@@ -359,7 +359,7 @@ process.stdout.write(JSON.stringify({
 `;
 }
 
-async function collectComposition(
+export async function collectComposition(
   lifecycle: UserImageLifecycle,
   name: string,
 ): Promise<ManagedComposition> {
@@ -415,7 +415,7 @@ function parseObservation(text: string): unknown {
   }
 }
 
-async function waitObservation(
+export async function waitObservation(
   command: DockerCommand,
   name: string,
   remaining: () => number,
@@ -528,7 +528,7 @@ function recordBrowserObservation(
   );
 }
 
-async function qualifyHostSession(
+export async function qualifyHostSession(
   hostPort: number,
   logs: string,
 ): Promise<{ origin: string; cookie: string; workspace: { available: true; workBound: true } }> {

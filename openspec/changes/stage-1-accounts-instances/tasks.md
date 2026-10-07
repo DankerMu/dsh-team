@@ -491,6 +491,15 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 
 验证记录（#32）：adapter、缺失custom preset、失败证据保留、helper归属/镜像/挂载guard及Chrome失败清理均取得此前记录的语义RED/GREEN。真实运行逐步揭示并修正发布版RPC参数、原生provider注册、effective fiber/ref读取、EntryGroup描述字段不插值和ConfigEditor写出格式等契约差异，未改DSH源码或删除验收断言。经项目方授权的第九轮修复后，审查准入提交`d8806c66c046436559b2c1edc1dc4fbe7e9a32b4`在giap-vps运行完整`pnpm test:docker`：5/5通过、exit0、62.03秒，原四例全部保留，独立清点无测试资源残留。初始及受管重启均仅intranet alpha/beta、默认beta、contextWindow500000/262144；员工负对照实际暴露alternate地址/default、personal模型、原生provider和custom-office联网工具；重新读取组成并生成覆盖层后custom-office保留且禁用web_search/web_fetch，正常工具及有效readLimit500保留。真实浏览器初始/重启及各自reload的中文、无公告、输入、General和模型选择均通过，consoleErrors均为空，截图及逐阶段receipt保留于PR#139证据。员工编辑至最终检查的profile字节完全相同，home/live/seed/marker保留断言通过；安装清单确认loader1.0.5、preset-registry/tool-fs0.2.0-rc.2。阶段摘要保留为失败诊断证据，不包含原始配置或凭据。工作区初始化是该测试的显式fixture操作，不冒充task12.2生产首次进入流程；未发送模型请求，task8.5/9.3/权限档映射仍由后续任务负责。最终合并提交的精确SHA复验和CI结果见PR#139。
 
+### Issue #33 risk/evidence map (task8.5 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: released Session creation/prompt/terminal error contract; actual accepted message, correlated terminal failure and user-visible screenshot, not a transport-only error. Root Docker suite and adverse-oracle qualification.
+- Config / project setup; Auth / permissions / secrets — selected: managed unavailable endpoint overrides persisted employee alternative; valid test-owned credential, actual effective provider identity; no real keys/services, body/header logging or model-admin API change.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: recorder reachability control before attempt, stable baseline until correlated turn completion, bounded request ledger and deadlines, no delayed fallback race accepted as zero.
+- File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: reuse atomic overlay and owned state lifecycle, retain failed scenario evidence before cleanup; all new recorder/browser/container resources removed on success/failure, foreign resources untouched.
+- Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: installed0.2.0-rc.2 API/error behavior; all five existing Docker cases retained, common lifecycle/browser callers unchanged. No runtime/package upgrade.
+- Documentation / migration notes — selected: explicit test fixture/reachability/terminal-state evidence and limits; root `pnpm check`, strict OpenSpec, full exact-head Docker run and CI. Rollback removes only this verification path, not employee state.
+
 ## 9. 编排器（任务包 1.7）
 
 依赖：第 4、5、7、8 组。本组用 `published-loopback` 方式够到实例，`network` 方式在第 10 组。
