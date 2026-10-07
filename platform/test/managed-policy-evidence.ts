@@ -106,6 +106,41 @@ const OBSERVATION_KEYS = [
   'readLimit',
 ] as const;
 
+const PROFILE_KEYS = [
+  'phase',
+  'byteHash',
+  'byteLength',
+  'semanticHash',
+  'loaderDumpHash',
+  'defaultDumpHash',
+  'parseStatus',
+  'structureTruncated',
+  'homeHash',
+  'liveHash',
+  'seedHash',
+  'markerHash',
+  'previousByteHash',
+  'byteChanged',
+  'semanticChanged',
+  'matchesEmployeeBytes',
+  'changedPaths',
+  'differencesTruncated',
+  'path',
+  'beforeKind',
+  'afterKind',
+  'beforeDigest',
+  'afterDigest',
+] as const;
+const PACKAGE_KEYS = [
+  'name',
+  'expectedVersion',
+  'version',
+  'manifestHash',
+  'matchesPin',
+  'status',
+  'resolution',
+] as const;
+
 function allowlistedBrowser(value: unknown): Record<string, JsonValue> | undefined {
   const allowed = jsonValue(value, BROWSER_KEYS);
   if (typeof allowed !== 'object' || allowed === null || Array.isArray(allowed)) return undefined;
@@ -160,6 +195,8 @@ interface ManagedPolicyEvidenceFields {
   controlRejected?: true;
   startBrowser?: Record<string, JsonValue>;
   restartBrowser?: Record<string, JsonValue>;
+  profileStages?: JsonValue;
+  installedPackages?: JsonValue;
 }
 
 interface ManagedPolicyEvidenceRecord extends ManagedPolicyEvidenceFields {
@@ -181,6 +218,8 @@ interface ManagedPolicyEvidenceInput {
   controlRejected?: true;
   startBrowser?: Record<string, unknown>;
   restartBrowser?: Record<string, unknown>;
+  profileStages?: unknown;
+  installedPackages?: unknown;
 }
 
 function allowlistedFields(fields: ManagedPolicyEvidenceInput): ManagedPolicyEvidenceFields {
@@ -202,6 +241,10 @@ function allowlistedFields(fields: ManagedPolicyEvidenceInput): ManagedPolicyEvi
   if (startBrowser !== undefined) acquired.startBrowser = startBrowser;
   const restartBrowser = allowlistedBrowser(fields.restartBrowser);
   if (restartBrowser !== undefined) acquired.restartBrowser = restartBrowser;
+  const profileStages = jsonValue(fields.profileStages, PROFILE_KEYS);
+  if (profileStages !== undefined) acquired.profileStages = profileStages;
+  const installedPackages = jsonValue(fields.installedPackages, PACKAGE_KEYS);
+  if (installedPackages !== undefined) acquired.installedPackages = installedPackages;
   return acquired;
 }
 

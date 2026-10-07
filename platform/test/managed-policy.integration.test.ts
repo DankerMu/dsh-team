@@ -660,3 +660,90 @@ it('retains acquired start and control observations after a later Docker stage f
     }
   });
 });
+
+it('retains bounded profile differences and installed pins when byte preservation fails without retaining raw configuration', async () => {
+  const runId = 'profile-preservation-evidence';
+  await withReviewedHead(() => {
+    const evidence = createManagedPolicyEvidence({ runId, imageId: IMAGE_ID });
+    try {
+      evidence.record({
+        profileStages: [
+          {
+            phase: 'control-stopped',
+            byteHash: 'b'.repeat(64),
+            previousByteHash: 'a'.repeat(64),
+            semanticHash: 'c'.repeat(64),
+            byteChanged: true,
+            semanticChanged: false,
+            matchesEmployeeBytes: false,
+            changedPaths: [
+              {
+                path: '/1/insert/0/config/0/config/plugins/0/config/readLimit',
+                beforeKind: 'object',
+                afterKind: 'object',
+                beforeDigest: 'd'.repeat(64),
+                afterDigest: 'e'.repeat(64),
+                config: { apiKey: 'must-not-retain-profile-secret' },
+              },
+            ],
+            structure: [{ value: 'must-not-retain-raw-profile' }],
+            rawProfile: 'must-not-retain-raw-profile',
+          },
+        ],
+        installedPackages: [
+          {
+            name: '@deepseek-ai/cordis-plugin-loader',
+            expectedVersion: '1.0.5',
+            version: '1.0.5',
+            matchesPin: true,
+            status: 'resolved',
+            resolution: 'dsh-install-anchor',
+            manifest: { credentials: 'must-not-retain-manifest-secret' },
+          },
+        ],
+      });
+      evidence.fail('hash');
+      const retained = JSON.parse(readFileSync(evidence.path, 'utf8')) as Record<string, unknown>;
+      expect(retained).toEqual({
+        imageId: IMAGE_ID,
+        runId,
+        reviewedHead: REVIEWED_HEAD,
+        failed: true,
+        failedStage: 'hash',
+        profileStages: [
+          {
+            phase: 'control-stopped',
+            byteHash: 'b'.repeat(64),
+            previousByteHash: 'a'.repeat(64),
+            semanticHash: 'c'.repeat(64),
+            byteChanged: true,
+            semanticChanged: false,
+            matchesEmployeeBytes: false,
+            changedPaths: [
+              {
+                path: '/1/insert/0/config/0/config/plugins/0/config/readLimit',
+                beforeKind: 'object',
+                afterKind: 'object',
+                beforeDigest: 'd'.repeat(64),
+                afterDigest: 'e'.repeat(64),
+              },
+            ],
+          },
+        ],
+        installedPackages: [
+          {
+            name: '@deepseek-ai/cordis-plugin-loader',
+            expectedVersion: '1.0.5',
+            version: '1.0.5',
+            matchesPin: true,
+            status: 'resolved',
+            resolution: 'dsh-install-anchor',
+          },
+        ],
+      });
+      return Promise.resolve();
+    } finally {
+      restoreEvidence(runId);
+    }
+  });
+});

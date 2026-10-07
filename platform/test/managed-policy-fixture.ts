@@ -36,6 +36,8 @@ import {
   type ManagedPolicyRuntimeExpectation,
 } from './managed-policy-oracle.ts';
 import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee-edit.ts';
+import { createProfileRecorder } from './managed-policy-profile.ts';
+import type { ProfileRecorder } from './managed-policy-profile.ts';
 
 const USER_ID = 'managedpol01';
 const MANAGED_ADDRESS = 'http://127.0.0.1:9/v1';
@@ -524,43 +526,10 @@ function recordBrowserObservation(
   );
 }
 
-async function startWeb(
-  lifecycle: UserImageLifecycle,
-  name: string,
-  overlay: string,
-  remaining: () => number,
-  evidence: ManagedPolicyEvidence,
-  stage: 'start' | 'control' | 'restart',
-  browser?: { chromeBin: string; profile: string; screenshot: string; roster: readonly string[] },
-): Promise<{ hostPort: number; observation: unknown; browser?: MappedHostAcceptResult }> {
-  lifecycle.registerContainer(name);
-  const summary = parseJsonRecord(
-    await runWebStartup(lifecycle.command, {
-      container: name,
-      imageId: lifecycle.imageId,
-      runId: lifecycle.runId,
-      stateVolume: lifecycle.stateVolume,
-      workVolume: lifecycle.workVolume,
-      overlay,
-      seccomp: lifecycle.seccomp,
-      trustedHost: HOSTNAME,
-      env: { [API_KEY_ENV]: API_KEY_VALUE },
-    }),
-  );
-  const hostPort = requirePort(summary);
-  const logs = docker(lifecycle.command, ['logs', name]);
-  const observation = await waitObservation(lifecycle.command, name, remaining);
-  // Retain acquired facts before schema, browser, or policy qualification can reject them.
-  evidence.record(
-    stage === 'control'
-      ? { controlObservation: observation }
-      : stage === 'start'
-        ? { startPort: hostPort, startObservation: observation }
-        : { restartPort: hostPort, restartObservation: observation },
-  );
-  if (browser === undefined) {
-    return { hostPort, observation };
-  }
+async function qualifyHostSession(
+  hostPort: number,
+  logs: string,
+): Promise<{ origin: string; cookie: string; workspace: { available: true; workBound: true } }> {
   const token = extractLaunchToken(logs);
   if (token === undefined) throw new Error(INVALID);
   const cookie = await exchangeLaunchToken({
@@ -588,6 +557,49 @@ async function startWeb(
       : {};
   if (describeRecord.ok !== true || describeRecord.status !== 200) throw new Error(INVALID);
   const workspace = await bindWorkWorkspace(origin, cookie);
+  return { origin, cookie, workspace };
+}
+
+async function startWeb(
+  lifecycle: UserImageLifecycle,
+  name: string,
+  overlay: string,
+  remaining: () => number,
+  evidence: ManagedPolicyEvidence,
+  stage: 'start' | 'control' | 'restart',
+  profiles: ProfileRecorder,
+  browser?: { chromeBin: string; profile: string; screenshot: string; roster: readonly string[] },
+): Promise<{ hostPort: number; observation: unknown; browser?: MappedHostAcceptResult }> {
+  lifecycle.registerContainer(name);
+  const summary = parseJsonRecord(
+    await runWebStartup(lifecycle.command, {
+      container: name,
+      imageId: lifecycle.imageId,
+      runId: lifecycle.runId,
+      stateVolume: lifecycle.stateVolume,
+      workVolume: lifecycle.workVolume,
+      overlay,
+      seccomp: lifecycle.seccomp,
+      trustedHost: HOSTNAME,
+      env: { [API_KEY_ENV]: API_KEY_VALUE },
+    }),
+  );
+  const hostPort = requirePort(summary);
+  const logs = docker(lifecycle.command, ['logs', name]);
+  const observation = await waitObservation(lifecycle.command, name, remaining);
+  // Retain acquired facts before schema, browser, or policy qualification can reject them.
+  evidence.record(
+    stage === 'control'
+      ? { controlObservation: observation }
+      : stage === 'start'
+        ? { startPort: hostPort, startObservation: observation }
+        : { restartPort: hostPort, restartObservation: observation },
+  );
+  profiles.capture(stage === 'control' ? 'control-runtime' : `${stage}-runtime`);
+  if (browser === undefined) {
+    return { hostPort, observation };
+  }
+  const { origin, cookie, workspace } = await qualifyHostSession(hostPort, logs);
   const browserResult = await acceptObservation({
     origin,
     cookie,
@@ -605,6 +617,7 @@ async function startWeb(
     expectedDefault: 'beta',
   });
   recordBrowserObservation(evidence, stage, browserResult);
+  profiles.capture(stage === 'start' ? 'start-browser' : 'restart-browser');
   return { hostPort, observation, browser: browserResult };
 }
 
@@ -638,6 +651,7 @@ async function acceptManaged(
   chromeBin: string,
   work: string,
   evidence: ManagedPolicyEvidence,
+  profiles: ProfileRecorder,
   expected: ManagedPolicyRuntimeExpectation,
   label: 'start' | 'restart',
 ): Promise<{
@@ -654,6 +668,7 @@ async function acceptManaged(
     remaining,
     evidence,
     label,
+    profiles,
     {
       chromeBin,
       profile: join(work, `chrome-${label}`),
@@ -678,11 +693,14 @@ async function editThenControl(
   remaining: () => number,
   seedHash: string,
   evidence: ManagedPolicyEvidence,
+  profiles: ProfileRecorder,
 ): Promise<{ home: string; live: string; profile: string }> {
   docker(lifecycle.command, ['stop', startName]);
+  profiles.capture('start-stopped');
   const edited = parseJsonRecord(
     execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-edit`, editAfterStopScript()),
   );
+  profiles.capture('employee-edited', requireStringField(edited, 'profile'));
   if (requireStringField(edited, 'marker') !== STATE_MARKER_BODY) throw new Error(INVALID);
   if (hashBytes(requireStringField(edited, 'seed')) !== seedHash) throw new Error(INVALID);
   const home = requireStringField(edited, 'home');
@@ -699,12 +717,14 @@ async function editThenControl(
     remaining,
     evidence,
     'control',
+    profiles,
   );
   const controlObserved = parseManagedPolicyRuntime(control.observation);
   const failure = controlEmployeePolicyFailure(controlObserved, ALT_ADDRESS, 'alpha');
   if (failure !== undefined) throw new Error(`${INVALID}: control/${failure}`);
   assertRuntimeRejected(control.observation, RESTART_EXPECTED);
   docker(lifecycle.command, ['stop', controlName]);
+  profiles.capture('control-stopped');
   return { home, live, profile };
 }
 
@@ -714,10 +734,12 @@ function proveRestartHashes(
   home: string,
   live: string,
   profile: string,
+  profiles: ProfileRecorder,
 ): void {
   const hashes = parseJsonRecord(
     execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-hash`, hashAfterEditScript()),
   );
+  profiles.capture('final-hash', requireStringField(hashes, 'profile'));
   if (requireStringField(hashes, 'seed') !== seedHash) throw new Error(INVALID);
   if (requireStringField(hashes, 'home') !== home) throw new Error(INVALID);
   if (requireStringField(hashes, 'liveBytes') !== live) throw new Error(INVALID);
@@ -728,6 +750,11 @@ function proveRestartHashes(
 
 export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const evidence = createManagedPolicyEvidence(lifecycle);
+  const profiles = createProfileRecorder(
+    (phase, script) =>
+      execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-profile-${phase}`, script),
+    evidence,
+  );
   let work: string | undefined;
   let failedStage: ManagedPolicyStage | undefined;
   try {
@@ -737,6 +764,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
     const remaining = (): number => Math.max(1, 180_000 - (Date.now() - startedAt));
     const plugin = readFileSync(new URL('./managed-policy-observer.js', import.meta.url), 'utf8');
     const prepared = await prepareState(lifecycle, plugin);
+    profiles.capture('prepared');
     const startName = `dsh-team-test-${lifecycle.runId}-start`;
     failedStage = 'start';
     const start = await acceptManaged(
@@ -746,6 +774,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       chromeBin,
       work,
       evidence,
+      profiles,
       MANAGED_POLICY_EXPECTED,
       'start',
     );
@@ -756,10 +785,12 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       remaining,
       prepared.seedHash,
       evidence,
+      profiles,
     );
     evidence.record({ controlRejected: true });
     failedStage = 'restart';
     const changed = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-reread`);
+    profiles.capture('recompose-read');
     if (!sameSet(adapterPresetIds(changed), RESTART_EXPECTED.presetIds)) throw new Error(INVALID);
     if (loaderExpression(inertReadLimit(changed, CUSTOM_PRESET_ID)) !== '250 + 250') {
       throw new Error(INVALID);
@@ -769,6 +800,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       changed,
       API_KEY_VALUE.trim() !== '',
     );
+    profiles.capture('recompose-published');
     await acceptManaged(
       lifecycle,
       nextOverlay,
@@ -776,6 +808,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       chromeBin,
       work,
       evidence,
+      profiles,
       RESTART_EXPECTED,
       'restart',
     );
@@ -783,7 +816,14 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       throw new Error(INVALID);
     }
     failedStage = 'hash';
-    proveRestartHashes(lifecycle, prepared.seedHash, edited.home, edited.live, edited.profile);
+    proveRestartHashes(
+      lifecycle,
+      prepared.seedHash,
+      edited.home,
+      edited.live,
+      edited.profile,
+      profiles,
+    );
     return evidence.finish();
   } catch (error) {
     evidence.fail(failedStage);
