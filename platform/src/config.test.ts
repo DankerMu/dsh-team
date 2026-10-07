@@ -104,6 +104,27 @@ describe('loadConfig', () => {
     expect(() => loadConfig(env)).not.toThrow(/overlay/);
   });
 
+  it('uses an explicit Docker Unix socket without requiring it to exist', () => {
+    expect(loadConfig(REQUIRED_PUBLIC_URL)).toMatchObject({
+      dockerSocketPath: '/var/run/docker.sock',
+    });
+    expect(
+      loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_DOCKER_SOCKET: '/absent/docker.sock' }),
+    ).toMatchObject({ dockerSocketPath: '/absent/docker.sock' });
+  });
+
+  it.each(['', '   ', 'docker.sock', '/secret\0socket'])(
+    'rejects invalid PLATFORM_DOCKER_SOCKET %j without echoing input',
+    (socket) => {
+      expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_DOCKER_SOCKET: socket })).toThrow(
+        /PLATFORM_DOCKER_SOCKET/,
+      );
+      expect(() =>
+        loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_DOCKER_SOCKET: socket }),
+      ).not.toThrow(/secret/);
+    },
+  );
+
   it('rejects a missing public URL and names the variable', () => {
     expect(() => loadConfig({})).toThrow(/PLATFORM_PUBLIC_URL/);
   });

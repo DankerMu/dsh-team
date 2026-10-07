@@ -506,7 +506,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 
 依赖：第 4、5、7、8 组。本组用 `published-loopback` 方式够到实例，`network` 方式在第 10 组。
 
-- [ ] 9.1 `platform/src/orchestrator/` 的 Docker 客户端：经 Unix socket 用 `node:http` 发请求、解析 JSON 和流式日志、把 Docker 的错误转成带状态码的错误；传输函数可注入。socket 路径是配置项。验证：单元测试（假传输）——JSON、流式日志和错误三种回应的解析；`pnpm test:docker`——能读到 Docker 版本；请求不存在的容器得到 404 类型的错误；socket 路径不存在时错误信息指出路径。
+- [x] 9.1 `platform/src/orchestrator/` 的 Docker 客户端：经 Unix socket 用 `node:http` 发请求、解析 JSON 和流式日志、把 Docker 的错误转成带状态码的错误；传输函数可注入。socket 路径是配置项。验证：单元测试（假传输）——JSON、流式日志和错误三种回应的解析；`pnpm test:docker`——能读到 Docker 版本；请求不存在的容器得到 404 类型的错误；socket 路径不存在时错误信息指出路径。
 - [ ] 9.2 卷：按用户创建状态卷和工作卷（带标签），已存在时复用。验证：`pnpm test:docker`——创建两次得到同一对卷；标签含用户标识；两个用户得到四个不同的卷。
 - [ ] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
       Task9.3 MUST consume task8.4's qualified complete-composition/trusted-canonical input adapter and the pure generator's single overlay; it MUST NOT rebuild a partial preset roster or duplicate canonical patch rows. Task8.1 alone does not claim this production wiring.
@@ -521,6 +521,18 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 
 Suggested fixture level: expanded - 持有 Docker socket 的关键路径，涉及并发、持久状态和凭据
 Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Docker 用例，约 250 行，没有调用方）
+
+### Issue #34 risk/evidence map (task9.1 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: public JSON/status/log contracts, actual Docker multiplex frames and unchanged bytes; injected transport tests plus real Unix HTTP smoke.
+- Config / project setup; Legacy compatibility / examples — selected: explicit socket setting and all typed config consumers; invalid path validation and unchanged daemon-independent startup, `.env.example`, root checks.
+- Auth / permissions / secrets — selected: privileged socket stays platform-side; no automatic body/log disclosure, HTTP errors expose status not credentials; adverse body sentinel checks.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: incremental frames/backpressure, cancellation and truncated stream rejection; stream tests demonstrate output before completion and source teardown, bounded partial buffering.
+- Error handling / rollback / partial outputs; Release / packaging / dependency compatibility — selected: malformed JSON, exact HTTP404 despite malformed error body, real missing socket diagnostics; three read-only Docker cases on giap-vps with existing six-case baseline.
+- Documentation / migration notes — selected: public client scope, critical-path human review, runtime proof and deferred lifecycle ownership; strict OpenSpec and CI.
+- File IO / path safety / overwrite — no persistent writes or deletions in this slice; socket path validated and no TCP fallback. Smoke owns and removes only its temporary socket directory.
+
+验证记录（#34）：配置先观察5个语义RED，再实现显式socket字段与全部typed fixture迁移；新client经public index测试JSON/空响应/HTTP状态/安全错误、split/coalesced日志帧、UTF-8字节保留、非法/截断帧、背压和Abort/early-return释放。`pnpm check`阶段622unit/301integration通过，client行97.64%/分支92.85%，最终移除未使用类型导出后dead-code及typecheck通过；重复率2.80%。独立真实Unix HTTP smoke证明默认传输JSON、错误体非JSON仍404、中文stderr分帧在EOF前输出、取消使服务端连接关闭、缺失socket路径报错。三席审查准入提交`6b531f9a1cc3f75b9b4b26d55c748e69556d6052`在giap-vps完整`pnpm test:docker`9/9通过、exit0、91.43秒：新增version/404/missing-socket三例及原六例均通过，独立资源清点为空。未添加生命周期、重试、SDK或启动时daemon依赖。关键路径仍需人工逐行审查，按用户指令在Epic完成时统一提交；最终PR头复验与CI见PR#141。
 
 ## 10. 实例网络（任务包 1.10）
 
