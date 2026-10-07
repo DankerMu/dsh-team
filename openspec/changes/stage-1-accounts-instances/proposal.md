@@ -214,3 +214,10 @@
 - Reuse installed `0.2.0-rc.2` parser/composer inside the user image, the pure generator/atomic writer, the existing label-owned Docker lifecycle, and import-safe browser/CDP oracles. No second parser, preset roster, plugin policy or container owner.
 - Evidence floor: adapter boundary RED/GREEN and malformed/partial-input rejection; exact-head real start/edit/recompose/recreate/readback; a disposable no-managed-policy negative control; effective resolver context windows, independent complete preset/tool inventory, trusted canonical patch tamper resistance, actual non-loopback English-browser UI/reload and cleanup; root checks, strict OpenSpec and CI.
 - A size exemption, if necessary for the atomic runtime path and its failure qualification, must be justified in the PR; no silent removal of the task8.4 addendum to meet a line count.
+
+## Issue #33 fixture
+
+- Test/characterization; expanded task8.5 (agree with upstream): actual released Session execution against an unavailable managed provider must fail visibly without leaking a request to employee-configured alternatives.
+- Reuse the managed generator/writer/composition adapter, owned Docker lifecycle and existing browser/RPC primitives. Preserve all five existing Docker cases and task8.4 assertions.
+- Selected risk packs/evidence appear below task8.5; no new production retry/fallback policy, model administration API, orchestration or DSH source changes.
+- Evidence floor: one real submitted message reaches a terminal model-connection failure in its actual Session; a demonstrably reachable test-owned alternate endpoint receives zero model requests during that attempt; visible error screenshot and retained sanitized Session/recorder evidence; complete exact-head Docker suite, cleanup, root checks, strict OpenSpec and CI.
