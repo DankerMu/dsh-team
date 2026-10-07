@@ -36,7 +36,7 @@ import {
   type ManagedPolicyRuntimeExpectation,
 } from './managed-policy-oracle.ts';
 import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee-edit.ts';
-import { createProfileRecorder } from './managed-policy-profile.ts';
+import { createProfileRecorder, PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
 import type { ProfileRecorder } from './managed-policy-profile.ts';
 
 const USER_ID = 'managedpol01';
@@ -329,7 +329,9 @@ writeFileSync(home, ${JSON.stringify(EMPLOYEE_HOME)});
 const parsed = existsSync(profile) ? load(readFileSync(profile, 'utf8')) ?? [] : [];
 if (!Array.isArray(parsed)) throw new Error(${JSON.stringify(INVALID)});
 parsed.push({ insert: [${JSON.stringify(CUSTOM_INSERT)}] });
-writeFileSync(profile, dump(parsed, { lineWidth: -1 }));
+const bytes = dump(parsed, { lineWidth: -1 });
+${PROFILE_EDITOR_SERIALIZATION}
+writeFileSync(profile, serializedProfile);
 writeFileSync(live, ${JSON.stringify(TAMPERED_LIVE)});
 process.stdout.write(JSON.stringify({
   home: readFileSync(home, 'utf8'),

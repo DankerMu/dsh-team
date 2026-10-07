@@ -1,5 +1,28 @@
 import type { ManagedPolicyEvidence } from './managed-policy-evidence.ts';
 
+// Fixture bytes must already use the installed config editor's document dialect:
+// rc.2 ConfigEditor.edit converts inert expression maps to !!js scalars before
+// String(document). A real browser model selection persists through that writer.
+// This read-only fragment consumes `bytes` and produces `serializedProfile`.
+export const PROFILE_EDITOR_SERIALIZATION = `
+const editorRequire = createRequire(require.resolve('@deepseek-ai/dsh-config-editor/package.json'));
+const { Scalar, isMap, isSeq, parseDocument, visit } = editorRequire('yaml');
+const editorDocument = parseDocument(bytes, { customTags: [{
+  tag: 'tag:yaml.org,2002:js',
+  resolve: (value) => value,
+}] });
+if (editorDocument.errors[0] !== undefined) throw new Error('Invalid fixture profile document');
+if (!isSeq(editorDocument.contents)) throw new Error('Fixture profile must be a YAML sequence');
+editorDocument.contents.flow = false;
+visit(editorDocument, { Map(_key, node) {
+  if (node.items.length !== 1 || typeof node.get('__jsExpr') !== 'string') return;
+  const expression = new Scalar(node.get('__jsExpr'));
+  expression.tag = 'tag:yaml.org,2002:js';
+  return expression;
+} });
+const serializedProfile = String(editorDocument);
+`;
+
 const ANCHOR = '/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json';
 const PROFILE = '/data/home/profiles/web/cordis.patch.yml';
 const SAFE_FIELDS = [
@@ -52,6 +75,7 @@ interface Snapshot {
   semanticHash: string | null;
   loaderDumpHash: string | null;
   defaultDumpHash: string | null;
+  configEditorDumpHash: string | null;
   parseStatus: 'parsed' | 'invalid';
   structure: Leaf[];
   structureTruncated: boolean;
@@ -96,19 +120,21 @@ const walk = (value, path, depth = 0) => {
     if (structureTruncated) break;
   }
 };
-let semanticHash = null, loaderDumpHash = null, defaultDumpHash = null, parseStatus = 'invalid';
+let semanticHash = null, loaderDumpHash = null, defaultDumpHash = null, configEditorDumpHash = null, parseStatus = 'invalid';
 try {
   const parsed = load(bytes, { schema: entryListSchema });
   semanticHash = digest(JSON.stringify(canonical(parsed)));
   loaderDumpHash = digest(dump(parsed, { schema: entryListSchema }));
   defaultDumpHash = digest(dump(parsed, { lineWidth: -1 }));
+  ${PROFILE_EDITOR_SERIALIZATION}
+  configEditorDumpHash = digest(serializedProfile);
   walk(parsed, '');
   parseStatus = 'parsed';
 } catch { /* Preserve byte evidence without leaking parser excerpts. */ }
 const fileHash = (path) => existsSync(path) ? digest(readFileSync(path)) : null;
 const snapshot = {
   byteHash: digest(bytes), byteLength: Buffer.byteLength(bytes), semanticHash,
-  loaderDumpHash, defaultDumpHash, parseStatus, structure, structureTruncated,
+  loaderDumpHash, defaultDumpHash, configEditorDumpHash, parseStatus, structure, structureTruncated,
   homeHash: fileHash('/data/home/cordis.patch.yml'),
   liveHash: fileHash('/data/home/profiles/web/node_modules/@dsh-team/zh-locale/cordis.patch.yml'),
   seedHash: fileHash('/opt/dsh-team/profile-seed/web/node_modules/@dsh-team/zh-locale/cordis.patch.yml'),

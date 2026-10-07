@@ -113,6 +113,7 @@ const PROFILE_KEYS = [
   'semanticHash',
   'loaderDumpHash',
   'defaultDumpHash',
+  'configEditorDumpHash',
   'parseStatus',
   'structureTruncated',
   'homeHash',
