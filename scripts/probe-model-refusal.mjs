@@ -35,6 +35,13 @@ export async function captureModelRefusal(input) {
   const prompt = { sessionId: '', requestId: '', accepted: false, promptCount: 0, created: false };
   const admission = { createdId: '', wireFailure: false };
   let visibleError = false;
+  const failures = [];
+  const evidence = () => ({
+    ...prompt,
+    accepted: prompt.accepted && prompt.created && !admission.wireFailure,
+    visibleError,
+    consoleErrorCount: errors.length,
+  });
   page.on('Network.requestWillBeSent', ({ requestId, request }) => {
     const path = new URL(request.url).pathname;
     if (!['/api/session/create', '/api/session/prompt'].includes(path)) return;
@@ -84,26 +91,32 @@ export async function captureModelRefusal(input) {
           /connection|ECONNREFUSED|fetch failed/i.test(el.textContent));
       })()`,
       );
-      const terminal = await input.observe({
-        ...prompt,
-        accepted: prompt.accepted && prompt.created && !admission.wireFailure,
-        visibleError,
-        consoleErrorCount: errors.length,
-      });
-      if (terminal) return;
+      const terminal = await input.observe(evidence());
+      if (terminal) break;
       await sleep(250);
     }
+  } catch (error) {
+    failures.push(error);
   } finally {
+    let screenshotCaptured = false;
     try {
       await captureSettledScreenshot(page, input.screenshot);
-      await input.retain({
-        ...prompt,
-        accepted: prompt.accepted && prompt.created && !admission.wireFailure,
-        visibleError,
-        consoleErrorCount: errors.length,
-      });
-    } finally {
+      screenshotCaptured = true;
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await input.retain(evidence(), screenshotCaptured);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
       await closeMapped(page, chrome);
+    } catch (error) {
+      failures.push(error);
     }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(failures, 'Model refusal capture failed', { cause: failures[0] });
 }

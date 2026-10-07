@@ -309,6 +309,7 @@ export async function runModelRefusalScenario(lifecycle: UserImageLifecycle): Pr
     );
     const sample = async (prompt: ModelPromptEvidence): Promise<boolean> => {
       acquired.prompt = prompt;
+      persist();
       if (prompt.sessionId && prompt.requestId) {
         const projection = rpcValue(
           await mappedRpc(origin, cookie, 'session/projections', {
@@ -387,8 +388,9 @@ export async function runModelRefusalScenario(lifecycle: UserImageLifecycle): Pr
         remaining();
       },
       observe: sample,
-      retain: async (prompt) => {
-        acquired.screenshotCaptured = true;
+      retain: async (prompt, screenshotCaptured) => {
+        acquired.prompt = prompt;
+        acquired.screenshotCaptured = screenshotCaptured;
         persist();
         await sample(prompt);
       },
