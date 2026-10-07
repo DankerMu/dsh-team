@@ -124,6 +124,8 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
         config: { host: '0.0.0.0', port: 3080 },
       },
       { id: 'tool-web', disabled: true },
+      { id: 'llm-deepseek', disabled: true },
+      { id: 'llm-deepseek-account', disabled: true },
       {
         id: 'llm-pi-ai',
         config: {

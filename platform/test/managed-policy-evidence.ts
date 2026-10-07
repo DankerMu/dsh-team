@@ -97,7 +97,7 @@ const OBSERVATION_KEYS = [
   'presets',
   'intranetAddress',
   'defaultModel',
-  'allowedModels',
+  'catalog',
   'alphaContextWindow',
   'betaContextWindow',
   'id',

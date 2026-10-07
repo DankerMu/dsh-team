@@ -1,7 +1,12 @@
+interface ManagedPolicyCatalogObservation {
+  readonly id: string;
+  readonly models: readonly string[];
+}
+
 interface ManagedPolicyModelObservation {
   readonly intranetAddress: string;
   readonly defaultModel: string;
-  readonly allowedModels: readonly string[];
+  readonly catalog: readonly ManagedPolicyCatalogObservation[];
   readonly alphaContextWindow: number;
   readonly betaContextWindow: number;
 }
@@ -20,7 +25,7 @@ export interface ManagedPolicyRuntimeObservation {
 export interface ManagedPolicyRuntimeExpectation {
   readonly intranetAddress: string;
   readonly defaultModel: string;
-  readonly allowedModels: readonly string[];
+  readonly catalog: readonly ManagedPolicyCatalogObservation[];
   readonly alphaContextWindow: number;
   readonly betaContextWindow: number;
   readonly presetIds: readonly string[];
@@ -65,12 +70,28 @@ function requireStringList(value: unknown): string[] {
   return value.map(requireString);
 }
 
+function parseCatalog(value: unknown): ManagedPolicyCatalogObservation[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    invalid();
+  }
+  return value.map((entry) => {
+    const row = asObject(entry);
+    if (!Array.isArray(row.models)) {
+      invalid();
+    }
+    return {
+      id: requireString(row.id),
+      models: row.models.map(requireString),
+    };
+  });
+}
+
 function parseModels(value: unknown): ManagedPolicyModelObservation {
   const models = asObject(value);
   return {
     intranetAddress: requireString(models.intranetAddress),
     defaultModel: requireString(models.defaultModel),
-    allowedModels: requireStringList(models.allowedModels),
+    catalog: parseCatalog(models.catalog),
     alphaContextWindow: requireNumber(models.alphaContextWindow),
     betaContextWindow: requireNumber(models.betaContextWindow),
   };
@@ -101,8 +122,15 @@ function sameStrings(left: readonly string[], right: readonly string[]): boolean
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
-function sorted(values: readonly string[]): string[] {
-  return [...values].sort();
+function sameCatalog(
+  left: readonly ManagedPolicyCatalogObservation[],
+  right: readonly ManagedPolicyCatalogObservation[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const expected = right[index];
+    return expected?.id === entry.id && sameStrings(entry.models, expected.models);
+  });
 }
 
 function retainsExpectedTools(
@@ -121,7 +149,7 @@ export function assertManagedPolicyRuntime(
   if (
     observed.models.intranetAddress !== expected.intranetAddress ||
     observed.models.defaultModel !== expected.defaultModel ||
-    !sameStrings(observed.models.allowedModels, expected.allowedModels) ||
+    !sameCatalog(observed.models.catalog, expected.catalog) ||
     observed.models.alphaContextWindow !== expected.alphaContextWindow ||
     observed.models.betaContextWindow !== expected.betaContextWindow ||
     observed.models.betaContextWindow !== RELEASED_BETA_CONTEXT_WINDOW
@@ -129,7 +157,7 @@ export function assertManagedPolicyRuntime(
     invalid();
   }
   const observedIds = observed.presets.map((preset) => preset.id);
-  if (!sameStrings(sorted(observedIds), sorted(expected.presetIds))) {
+  if (!sameStrings([...observedIds].sort(), [...expected.presetIds].sort())) {
     invalid();
   }
   for (const preset of observed.presets) {
@@ -167,6 +195,15 @@ export function controlExposesEmployeePolicy(
 ): boolean {
   if (observation.models.intranetAddress !== address) return false;
   if (observation.models.defaultModel !== defaultModel) return false;
+  const catalog = observation.models.catalog;
+  const intranet = catalog.find((row) => row.id === 'intranet');
+  const personal = catalog.find((row) => row.id === 'personal');
+  if (!intranet?.models.includes('alpha') || !intranet.models.includes('beta')) {
+    return false;
+  }
+  if (!personal?.models.includes('gamma')) return false;
+  if (!catalog.some((row) => row.id === 'deepseek-official')) return false;
+  if (!catalog.some((row) => row.id === 'deepseek-account')) return false;
   const custom = observation.presets.find((preset) => preset.id === 'custom-office');
   if (custom === undefined) return false;
   const names = new Set(custom.toolNames);

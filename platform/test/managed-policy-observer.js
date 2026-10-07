@@ -38,6 +38,22 @@ function descriptionOf(row) {
   return typeof row.description === 'string' ? row.description : '';
 }
 
+async function observeRegisteredCatalog(llm) {
+  const catalog = [];
+  for (const registered of llm.listProviders()) {
+    if (typeof registered?.id !== 'string' || registered.id === '') fail();
+    const listed = await llm.listModels(registered.id);
+    if (!Array.isArray(listed)) fail();
+    const models = [];
+    for (const model of listed) {
+      if (typeof model?.id !== 'string' || model.id === '') fail();
+      models.push(model.id);
+    }
+    catalog.push({ id: registered.id, models });
+  }
+  return catalog;
+}
+
 async function observeModels(ctx, llm) {
   const provider = entryConfig(ctx, 'llm-pi-ai')?.providers?.[PROVIDER];
   const defaultModel = entryConfig(ctx, 'agent-default-model');
@@ -46,7 +62,7 @@ async function observeModels(ctx, llm) {
   return {
     intranetAddress: provider?.baseURL ?? '',
     defaultModel: defaultModel?.model ?? '',
-    allowedModels: (provider?.models ?? []).map((model) => model.id ?? model.name),
+    catalog: await observeRegisteredCatalog(llm),
     alphaContextWindow: alpha?.context?.contextWindow ?? 0,
     betaContextWindow: beta?.context?.contextWindow ?? 0,
   };

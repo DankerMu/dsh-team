@@ -72,7 +72,7 @@
 | 多用户 | 不存在，单一操作者 | `packages/identity` 仅匿名 UUID【源码】 |
 | 状态目录 | 全部在 `$DSH_HOME` 下：`sessions/`、`storages/`、`attachments/`、`.credentials.yaml`、`profiles/web/` | `packages/util/home-paths/src/index.ts:17,70-75`；【实测】 |
 | 模型协议 | 原生适配器固定 Anthropic Messages；`llm-pi-ai` 支持 `openai-completions`、`openai-responses`、`anthropic-messages` | `llm-deepseek/src/config.ts:206-208`；`llm-pi-ai/src/provider.ts:42-46`【源码】 |
-| OpenAI 兼容接入 | 覆盖层配置 `llm-pi-ai` 的 `providers` 和 `agent-default-model` 即可，模型选择器只显示配置的模型 | 【实测】 |
+| OpenAI 兼容接入 | `llm-pi-ai.providers` 和 `agent-default-model` 可接入兼容服务；仅配置这两行不足以限制模型清单，还需受管禁用原生 `llm-deepseek` / `llm-deepseek-account` 注册入口 | 【#32 实测纠正】真实选择器仍显示两个内置 DeepSeek 模型；修正后的完整验收见 PR #139 |
 | 工具调用、子 Agent | 可用。子 Agent 运行在独立 Session，头部含 `parentSession`、`origin: subagent`、`delegationDepth` | 【实测】 |
 | 子 Agent 权限继承 | 不继承父级工具限制，拿到全新作用域 | `subagent-spawn-in-process/README.md:82`【文档】 |
 | shell 沙箱 | Linux 用 bubblewrap 再退 Landlock，无后端则拒绝执行。读不受限（`--ro-bind / /`） | `sandbox-local/src/profiles.ts:17`；【实测】 |
@@ -156,7 +156,7 @@
 ### 3.3 统一模型配置
 
 - 管理员在后台填 sub2api 地址、密钥、可用模型和默认模型，平台生成覆盖层，只读挂载进所有容器。`verify/phase0/managed.patch.yml` 是实测用的样例。
-- 员工在模型选择器里只看到配置的模型【实测】。
+- 员工只看到管理员配置的模型是验收要求，不可由 pi-ai 配置文本推断：#32 真实浏览器发现原生 DeepSeek 注册项仍可见，需要同一受管覆盖层禁用原生入口并在员工改配置、重启后重验【实测纠正；完整修复验收见 PR #139】。
 - **密钥落点**（项目方决定）：全员共用一把，以环境变量注入。【实测】容器内同 uid 可从 `/proc/1/environ` 读到。换密钥需要重启全部实例。
 - 覆盖层优先级高于用户设置，UI 写不进被覆盖的行（`config-editor/README.md:67`【文档】）。员工能否通过设置页另加 provider 尚未实测【未验证】。
 - 内网模型不可用时 DSH 直接报错，不存在回退公网的配置。

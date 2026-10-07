@@ -22,10 +22,18 @@ import {
   COMPOSITION_PLUGIN,
 } from '../../scripts/probe-first-run-composition.mjs';
 
+const MANAGED_CATALOG = [{ id: 'intranet', models: ['alpha', 'beta'] }] as const;
+const CONTROL_CATALOG = [
+  { id: 'intranet', models: ['alpha', 'beta'] },
+  { id: 'personal', models: ['gamma'] },
+  { id: 'deepseek-official', models: [] },
+  { id: 'deepseek-account', models: [] },
+] as const;
+
 const EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: 'http://127.0.0.1:9/v1',
   defaultModel: 'beta',
-  allowedModels: ['alpha', 'beta'],
+  catalog: MANAGED_CATALOG,
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
   presetIds: ['standard', 'minimal', 'custom-office'],
@@ -41,7 +49,7 @@ const COMPLETE = {
   models: {
     intranetAddress: EXPECTED.intranetAddress,
     defaultModel: EXPECTED.defaultModel,
-    allowedModels: EXPECTED.allowedModels,
+    catalog: EXPECTED.catalog,
     alphaContextWindow: EXPECTED.alphaContextWindow,
     betaContextWindow: EXPECTED.betaContextWindow,
   },
@@ -100,7 +108,7 @@ it('rejects a no-managed control that only exposes network tools on shipped pres
     models: {
       intranetAddress: 'http://127.0.0.1:8/v1',
       defaultModel: 'alpha',
-      allowedModels: ['alpha', 'beta'],
+      catalog: CONTROL_CATALOG,
       alphaContextWindow: 500_000,
       betaContextWindow: 262_144,
     },
@@ -143,7 +151,7 @@ const START_OBSERVATION = {
   models: {
     intranetAddress: 'http://127.0.0.1:9/v1',
     defaultModel: 'beta',
-    allowedModels: ['alpha', 'beta'],
+    catalog: MANAGED_CATALOG,
     alphaContextWindow: 500_000,
     betaContextWindow: 262_144,
   },
@@ -153,7 +161,7 @@ const CONTROL_OBSERVATION = {
   models: {
     intranetAddress: 'http://127.0.0.1:8/v1',
     defaultModel: 'alpha',
-    allowedModels: ['alpha', 'beta'],
+    catalog: CONTROL_CATALOG,
     alphaContextWindow: 500_000,
     betaContextWindow: 262_144,
   },

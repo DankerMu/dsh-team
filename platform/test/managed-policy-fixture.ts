@@ -34,6 +34,7 @@ import {
   parseManagedPolicyRuntime,
   type ManagedPolicyRuntimeExpectation,
 } from './managed-policy-oracle.ts';
+import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee-edit.ts';
 
 const USER_ID = 'managedpol01';
 const MANAGED_ADDRESS = 'http://127.0.0.1:9/v1';
@@ -124,53 +125,8 @@ const MANAGED_BOOT_ROSTER = [
   '@dsh-team/zh-locale',
 ] as const;
 const TAMPERED_LIVE = '- id: ui-settings-models\n  disabled: false\n';
-const EMPLOYEE_HOME = `- id: llm-pi-ai
-  config:
-    providers:
-      intranet:
-        displayName: employee
-        apiKeyEnv: ${API_KEY_ENV}
-        api: openai-completions
-        baseURL: ${ALT_ADDRESS}
-        models:
-          - id: alpha
-            name: alpha
-          - id: beta
-            name: beta
-- id: agent-default-model
-  config:
-    provider: intranet
-    model: alpha
-`;
-const CUSTOM_INSERT = {
-  id: 'office-group',
-  name: 'cordis:group',
-  group: true,
-  config: [
-    {
-      id: CUSTOM_PRESET_ID,
-      name: '@deepseek-ai/dsh-agent-preset',
-      config: {
-        id: CUSTOM_PRESET_ID,
-        order: 9,
-        description: { __jsExpr: "'brief-' + 'zh'" },
-        plugins: [
-          { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
-          { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
-          {
-            id: 'planning',
-            name: 'cordis:group',
-            group: true,
-            config: [
-              { id: 'renamed-web', name: '@deepseek-ai/dsh-tool-web' },
-              { id: 'present', name: '@deepseek-ai/dsh-tool-present' },
-            ],
-          },
-        ],
-      },
-    },
-  ],
-};
+const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
+const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
 const PERMISSION: ManagedConfigInput['permission'] = {
   presets: {
@@ -194,7 +150,7 @@ const RETAINED_TOOLS = {
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: MANAGED_ADDRESS,
   defaultModel: 'beta',
-  allowedModels: ['alpha', 'beta'],
+  catalog: [{ id: 'intranet', models: ['alpha', 'beta'] }],
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
   presetIds: [...SHIPPED_PRESET_IDS],
