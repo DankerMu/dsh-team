@@ -17,10 +17,33 @@ function entryConfig(ctx, id) {
   for (const entry of ctx.loader.entries()) {
     if (entry.options?.group) continue;
     if (entry.id === id || entry.options?.id === id) {
-      return entry.config;
+      const fiber = entry.fiber;
+      if (!fiber) fail();
+      const config = fiber.config;
+      if (typeof config !== 'object' || config === null || Array.isArray(config)) fail();
+      return config;
     }
   }
   fail();
+}
+
+function intranetAddress(ctx) {
+  const providersRef = entryConfig(ctx, 'llm-pi-ai').providers;
+  if (typeof providersRef?.get !== 'function') fail();
+  const providers = providersRef.get();
+  if (typeof providers !== 'object' || providers === null || Array.isArray(providers)) fail();
+  const provider = providers[PROVIDER];
+  if (typeof provider !== 'object' || provider === null || Array.isArray(provider)) fail();
+  if (typeof provider.baseURL !== 'string' || provider.baseURL === '') fail();
+  return provider.baseURL;
+}
+
+function defaultModelId(ctx) {
+  const modelRef = entryConfig(ctx, 'agent-default-model').model;
+  if (typeof modelRef?.get !== 'function') fail();
+  const model = modelRef.get();
+  if (typeof model !== 'string' || model === '') fail();
+  return model;
 }
 
 function toolNames(schemas) {
@@ -55,13 +78,11 @@ async function observeRegisteredCatalog(llm) {
 }
 
 async function observeModels(ctx, llm) {
-  const provider = entryConfig(ctx, 'llm-pi-ai')?.providers?.[PROVIDER];
-  const defaultModel = entryConfig(ctx, 'agent-default-model');
   const alpha = await llm.resolveModelInfo(PROVIDER, ALPHA);
   const beta = await llm.resolveModelInfo(PROVIDER, BETA);
   return {
-    intranetAddress: provider?.baseURL ?? '',
-    defaultModel: defaultModel?.model ?? '',
+    intranetAddress: intranetAddress(ctx),
+    defaultModel: defaultModelId(ctx),
     catalog: await observeRegisteredCatalog(llm),
     alphaContextWindow: alpha?.context?.contextWindow ?? 0,
     betaContextWindow: beta?.context?.contextWindow ?? 0,

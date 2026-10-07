@@ -13,6 +13,9 @@ export default defineConfig({
         test: {
           name: 'docker',
           include: ['platform/test/**/*.docker.test.ts'],
+          // Docker topology plus Chrome fresh connections: overlapping files
+          // share host/CDP and produce ERR_NETWORK_CHANGED.
+          fileParallelism: false,
           // Bounded build/run calls plus independent finally-cleanup need their own deadline.
           testTimeout: 900_000,
         },
