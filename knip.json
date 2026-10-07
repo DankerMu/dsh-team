@@ -10,5 +10,6 @@
       "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
     }
   },
+  "ignoreDependencies": ["@deepseek-ai/dsh-agent-preset-registry"],
   "ignoreBinaries": ["hurl", "shellcheck"]
 }

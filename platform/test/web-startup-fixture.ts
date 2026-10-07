@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { setTimeout } from 'node:timers/promises';
 import type { DockerCommand } from './docker-command.ts';
+import { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
 
 const configuredHost = 'dsh-team.test:3080';
 const patchTarget = '/managed/patch.yml';
@@ -42,10 +43,11 @@ function httpStatus(port: number, authority: string, timeout: number): Promise<n
   return promise;
 }
 
-const processScript = `
+function processScript(trustedHost: string): string {
+  return `
 import json, os, pathlib, shutil
 cli = os.path.realpath(shutil.which("dsh"))
-expected = ["--profile", "web", "--patch", "/managed/patch.yml", "--no-open", "--trusted-host", "dsh-team.test:3080"]
+expected = ["--profile", "web", "--patch", "/managed/patch.yml", "--no-open", "--trusted-host", ${JSON.stringify(trustedHost)}]
 found = []
 for entry in pathlib.Path("/proc").iterdir():
     if not entry.name.isdigit():
@@ -76,8 +78,9 @@ for entry in pathlib.Path("/proc").iterdir():
         continue
 print(json.dumps(found))
 `;
+}
 
-interface WebContainer {
+export interface WebContainer {
   container: string;
   imageId: string;
   runId: string;
@@ -85,6 +88,8 @@ interface WebContainer {
   workVolume: string;
   overlay: string;
   seccomp: string;
+  trustedHost?: string;
+  env?: Readonly<Record<string, string>>;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -216,42 +221,28 @@ function selectedProcess(value: unknown): Record<string, unknown> {
   };
 }
 
-/** Called only after the canonical owner registers container/volumes; returns sanitized facts. */
-export async function runWebStartup(
-  command: DockerCommand,
+function webDocker(command: DockerCommand, args: string[], timeout = 30_000): string {
+  let result;
+  try {
+    result = command(args, timeout);
+  } catch {
+    throw new Error(`Web Docker ${args[0] ?? 'operation'} failed`);
+  }
+  if (result.error !== undefined || result.status !== 0) {
+    throw new Error(`Web Docker ${args[0] ?? 'operation'} failed`);
+  }
+  return result.stdout;
+}
+
+function createWebContainer(
+  docker: (args: string[], timeout?: number) => string,
   expected: WebContainer,
-  boundary: Partial<WebStartupBoundary> = {},
-): Promise<string> {
-  const {
-    now = () => performance.now(),
-    pause = setTimeout,
-    httpStatus: observeHttp = httpStatus,
-  } = boundary;
-  function docker(args: string[], timeout = 30_000): string {
-    let result;
-    try {
-      result = command(args, timeout);
-    } catch {
-      throw new Error(`Web Docker ${args[0] ?? 'operation'} failed`);
-    }
-    if (result.error !== undefined || result.status !== 0) {
-      throw new Error(`Web Docker ${args[0] ?? 'operation'} failed`);
-    }
-    return result.stdout;
-  }
-  for (const volume of [expected.stateVolume, expected.workVolume]) {
-    if (
-      docker([
-        'volume',
-        'inspect',
-        '--format',
-        '{{ index .Labels "dsh-team.test-run" }}',
-        volume,
-      ]).trim() !== expected.runId
-    ) {
-      throw new Error('Web volume ownership mismatch');
-    }
-  }
+  trustedHost: string,
+): void {
+  const envFlags = Object.entries(expected.env ?? {}).flatMap(([name, value]) => [
+    '--env',
+    `${name}=${value}`,
+  ]);
   docker([
     'create',
     '--name',
@@ -268,6 +259,7 @@ export async function runWebStartup(
     `type=volume,source=${expected.workVolume},target=/data/work`,
     '--mount',
     `type=bind,source=${expected.overlay},target=${patchTarget},readonly`,
+    ...envFlags,
     expected.imageId,
     'dsh',
     '--profile',
@@ -276,8 +268,44 @@ export async function runWebStartup(
     patchTarget,
     '--no-open',
     '--trusted-host',
-    configuredHost,
+    trustedHost,
   ]);
+}
+
+function assertOwnedVolumes(
+  docker: (args: string[], timeout?: number) => string,
+  expected: WebContainer,
+): void {
+  for (const volume of [expected.stateVolume, expected.workVolume]) {
+    if (
+      docker([
+        'volume',
+        'inspect',
+        '--format',
+        '{{ index .Labels "dsh-team.test-run" }}',
+        volume,
+      ]).trim() !== expected.runId
+    ) {
+      throw new Error('Web volume ownership mismatch');
+    }
+  }
+}
+
+/** Called only after the canonical owner registers container/volumes; returns sanitized facts. */
+export async function runWebStartup(
+  command: DockerCommand,
+  expected: WebContainer,
+  boundary: Partial<WebStartupBoundary> = {},
+): Promise<string> {
+  const {
+    now = () => performance.now(),
+    pause = setTimeout,
+    httpStatus: observeHttp = httpStatus,
+  } = boundary;
+  const trustedHost = expected.trustedHost ?? configuredHost;
+  const docker = (args: string[], timeout = 30_000): string => webDocker(command, args, timeout);
+  assertOwnedVolumes(docker, expected);
+  createWebContainer(docker, expected, trustedHost);
   const started = now();
   const deadline = started + 60_000;
   function remaining(): number {
@@ -291,7 +319,7 @@ export async function runWebStartup(
     return text;
   }
   bounded(['start', expected.container]);
-  let tokenSeen = false;
+  let token: string | undefined;
   for (;;) {
     const inspect = () => {
       const snapshot = record(
@@ -304,19 +332,16 @@ export async function runWebStartup(
     const port = inspect();
     // Tail/output caps bound memory. Match the complete released launch line, never retain token.
     const logs = bounded(['logs', '--tail', '50', expected.container]);
-    tokenSeen ||=
-      /(?:^|\r?\n)dsh web: http:\/\/127\.0\.0\.1:3080\/\?token=[A-Za-z0-9_-]+(?: \(LAN: http:\/\/[^\s/?]+:3080\/\?token=[A-Za-z0-9_-]+\))?(?:\r?\n|$)/.test(
-        logs,
-      );
+    token ??= extractLaunchToken(logs);
     // HTTP routes may still be assembling before the released readiness announcement.
-    if (!tokenSeen) {
+    if (!launchTokenPresent(logs) || token === undefined) {
       await pause(Math.min(250, remaining()));
       continue;
     }
     const requestTimeout = Math.min(2_000, remaining());
     let status: number | null;
     try {
-      status = await observeHttp(port, configuredHost, requestTimeout);
+      status = await observeHttp(port, trustedHost, requestTimeout);
     } catch {
       throw new Error('Web HTTP observation failed');
     }
@@ -325,7 +350,7 @@ export async function runWebStartup(
       throw new Error('Unauthenticated DSH homepage must return 401');
     if (status === 401) {
       const process = selectedProcess(
-        json(bounded(['exec', expected.container, 'python3', '-c', processScript])),
+        json(bounded(['exec', expected.container, 'python3', '-c', processScript(trustedHost)])),
       );
       if (inspect() !== port) throw new Error('Web publication changed during acceptance');
       const elapsedMs = 60_000 - remaining();
@@ -333,7 +358,7 @@ export async function runWebStartup(
         tokenSeen: true,
         elapsedMs,
         httpStatus: status,
-        configuredHost,
+        configuredHost: trustedHost,
         hostPort: port,
         ...process,
       });

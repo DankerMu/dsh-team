@@ -198,6 +198,7 @@ const stopChild = async (child) => {
   try {
     await withDeadline(ended, CHILD_MS, 'chrome-stop');
   } catch {
+    if (child.exitCode !== null || child.signalCode) return;
     child.kill('SIGKILL');
     try {
       await withDeadline(
@@ -242,12 +243,16 @@ export const rpcCall = async (origin, cookie, method, payload, connectHost) => {
       payload: { args: payload },
     }),
   );
-  if (res.status !== 200) return { ok: false, error: `http-${res.status}` };
+  if (res.status !== 200) {
+    return { ok: false, error: `http-${res.status}`, status: res.status };
+  }
   try {
     const parsed = JSON.parse(res.body);
-    return parsed?.type === 'server-response' ? parsed.result : { ok: false, error: 'envelope' };
+    return parsed?.type === 'server-response'
+      ? { ...parsed.result, status: res.status }
+      : { ok: false, error: 'envelope', status: res.status };
   } catch {
-    return { ok: false, error: 'json' };
+    return { ok: false, error: 'json', status: res.status };
   }
 };
 
@@ -260,9 +265,6 @@ export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
       server.close(() => resolve(port));
     });
   });
-  // --no-sandbox: Ubuntu AppArmor can reject Chrome userns ("No usable sandbox").
-  // Verification-only ephemeral profile, loopback DSH origin. Does not change
-  // host sysctl/AppArmor or the DSH container seccomp/privilege boundary.
   const flags = [
     `--user-data-dir=${profile}`,
     `--remote-debugging-port=${debugPort}`,
@@ -276,28 +278,57 @@ export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
     ...extraFlags,
     'about:blank',
   ];
-  const child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });
-  await writeFile(pidFile, String(child.pid ?? ''));
+  let child;
+  try {
+    child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });
+  } catch {
+    throw new Error('chrome-start spawn-failed');
+  }
   let stderr = '';
   child.stderr?.on('data', (chunk) => {
     if (stderr.length < 4_000) stderr += String(chunk);
   });
   let exitHint = '';
+  const { promise: spawnFailed, reject: rejectSpawn } = Promise.withResolvers();
+  void spawnFailed.catch(() => {});
+  child.on('error', (error) => {
+    if (stderr.length < 4_000) stderr += String(error?.message ?? error);
+    rejectSpawn(new Error('chrome-start spawn-failed'));
+  });
   child.once('exit', (code, signal) => {
     exitHint = signal ? `signal-${signal}` : `exit-${code ?? 'none'}`;
   });
-  try {
-    await waitPort('127.0.0.1', debugPort, PORT_MS, () => Boolean(exitHint));
-  } catch (error) {
-    const reason = redactChrome(stderr).trim() || exitHint || String(error?.message ?? error);
+  const failStart = async (error) => {
+    const reason = redactChrome(stderr).trim() || exitHint || redactChrome(error?.message ?? error);
     await stopChild(child);
-    throw new Error(`chrome-start ${reason}`, { cause: error });
+    throw new Error(`chrome-start ${reason}`);
+  };
+  try {
+    if (typeof child.pid === 'number' && child.pid > 0) {
+      await writeFile(pidFile, `${String(child.pid)}\n`);
+    }
+    const info = await Promise.race([
+      (async () => {
+        await waitPort('127.0.0.1', debugPort, PORT_MS, () => Boolean(exitHint));
+        return JSON.parse(
+          (await httpRequest({ host: '127.0.0.1', port: debugPort, path: '/json/version' })).body,
+        );
+      })(),
+      spawnFailed,
+    ]);
+    if (typeof info?.webSocketDebuggerUrl !== 'string' || info.webSocketDebuggerUrl === '') {
+      throw new Error('no debugger websocket');
+    }
+    return {
+      child,
+      browserWs: info.webSocketDebuggerUrl,
+      pid: child.pid,
+      debugPort,
+      stop: () => stopChild(child),
+    };
+  } catch (error) {
+    return await failStart(error);
   }
-  const info = JSON.parse(
-    (await httpRequest({ host: '127.0.0.1', port: debugPort, path: '/json/version' })).body,
-  );
-  if (!info.webSocketDebuggerUrl) throw new Error('no debugger websocket');
-  return { child, browserWs: info.webSocketDebuggerUrl, stop: () => stopChild(child) };
 };
 
 export const muxListen = async (origin, cookie, store) => {

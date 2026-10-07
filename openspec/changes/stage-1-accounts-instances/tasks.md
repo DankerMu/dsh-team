@@ -432,7 +432,7 @@ Minimal mergeable slice: 7.1（测试入口和一个用例，约 120 行，不�
 - [x] 8.1 生成函数：输入模型设置和默认权限档，输出覆盖层内容（监听地址、OpenAI 兼容 provider、密钥所在环境变量名、模型清单、带上下文窗口的模型写出 `contextWindow`、默认模型、去掉每个预设的联网搜索和网页抓取、界面语言和关闭公告）。纯函数，不做文件操作。验证：单元测试——输出里没有密钥原文，只有环境变量名；联网工具不在任何预设的工具清单里；配置了上下文窗口的模型有 `contextWindow`，没配置的没有。
 - [x] 8.2 覆盖层写入：整份写入临时文件后原子改名，文件权限只读；目录由配置项指定（加进 `config.ts` 和 `.env.example`）；路径由用户标识拼出，标识不合规时拒绝。验证：单元测试（临时目录）——并发写两次后文件是其中一份完整内容，不是混合；写入中途失败时旧文件不变；带 `../` 的标识被拒绝（规格“覆盖层整份生成”）。
 - [x] 8.3 模型地址、密钥、清单、默认模型任一项未配置时，生成函数返回“未配置模型”，不产出覆盖层。验证：单元测试——四项各缺一项时都返回该结果。
-- [ ] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
+- [x] 8.4 在真实 DSH 上验证受管值不可覆盖：启动实例，在用户自己的配置目录里写入另一个模型地址和联网工具后重启。验证：`pnpm test:docker`——DSH 合成后的配置里模型地址仍是受管值，工具清单里仍没有联网工具，配置了上下文窗口的模型生效值等于配置值（规格“员工不能覆盖受管配置”“去掉联网工具”和“模型的上下文窗口”场景）。
       Task8.4 additionally owns the `managed-config` complete-composition/canonical-artifact input adapter: include non-default, user-added/custom and later office presets, independently compare effective roster versus transformed coverage after edits/restart, and add a preset containing a renamed nested network component. Prove editing the user-writable locale-patch copy cannot change trusted canonical policy. Retain actual fresh non-loopback/English-navigator and reload observations for Chinese/no-notice/editable composer, model selection and General settings; do not substitute shipped-roster-only or text-shape proof. Qualify the adapter through the Docker test boundary before task9.3 production wiring.
 - [ ] 8.5 模型地址不可达时的行为：把模型地址指向一个拒绝连接的地址，另起一个记录请求的替身服务作为“别的地址”写进用户自己的配置。验证：`pnpm test:docker`——发一条消息后 Session 里出现错误，替身服务没有收到任何请求（规格“模型不可用时明确报错”）。
 
@@ -478,6 +478,18 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - File IO / path safety / overwrite; Resource limits / large input / discovery — not selected: this function performs no IO/discovery and adds only bounded presence checks; atomic writer and its existing guarantees stay unchanged.
 
 验证记录（#31，本地候选）：四项独立缺失的初始语义RED为557pass/4fail（旧实现返回JSON字符串而非精确unconfigured结果）；最终`pnpm check`571unit/255integration通过，generator行/分支100%，writer原24例保留。生成器返回discriminated result，`apiKeyConfigured`由可信调用者提供实际credential slot存在性，非空引用名不能代替；未配置分支在composition之前返回且无content。source/dist真实临时文件smoke各覆盖8个未配置输入：调用者不发布、旧目标字节/inode/模式及目录库存保持；配置完整时可替换为另一完整0444文档，两入口内容一致。无生产启动调用方，未声称容器阻止启动或实际密钥有效。重复代码门禁曾报3.10%、3.03%、3.04%，通过writer测试局部narrower、同表presence案例及共享实际文件arrange去重到2.92%，不删断言或放宽3%门槛；公开结果类型由typed writer-test消费者使用，dead-code通过。最终提交审查、可信Docker4case基线和CI结果保留于本issue PR。
+
+### Issue #32 risk/evidence map (task8.4 including the task8.1 adapter handoff)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: reusable image-execution adapter validates released JSON and complete preset/canonical inputs; public generator/writer composed through Docker, unit semantic RED/GREEN and source/build behavior.
+- Config / project setup; Auth / permissions / secrets — selected: actual user-edit precedence, trusted immutable policy versus writable copy, uid1001, exact effective model/default/contextWindow, real Host-bound browser authority; no secrets/model requests in observations.
+- File IO / path safety / overwrite; Concurrency / shared state / ordering — selected: same owned state/work volumes across controlled restart, reread changed composition before atomic publication/recreation, no stale bind-inode assumption, no user expression execution during extraction, canonical lifecycle ownership and ordinary failure cleanup.
+- Resource limits / large input / discovery — selected: complete all-preset discovery without default-only/truncated success, bounded command/readiness/browser/output paths; malformed/missing/broken inventory must fail rather than vacuously pass.
+- Error handling / rollback / partial outputs — selected: extraction/parser/skipped-bundle/malformed-result errors reject; disposable adverse observations and no-managed-overlay control qualify enforcement oracle; preserve failure and resource-ownership evidence.
+- Release / packaging / dependency compatibility; Legacy compatibility / examples — selected: installed0.2.0-rc.2 parser/runtime APIs and real expression round-trip, retain four Docker baselines and existing browser probe callers; no ahead-source authority or duplicate parser/lifecycle.
+- Documentation / migration notes — selected: concrete adapter handoff to9.3, exact-head Linux evidence/screenshots and limitations, initial/restart model/UI observations, explicit workspace test setup boundary versus12.2, strict OpenSpec and CI.
+
+验证记录（#32）：adapter、缺失custom preset、失败证据保留、helper归属/镜像/挂载guard及Chrome失败清理均取得此前记录的语义RED/GREEN。真实运行逐步揭示并修正发布版RPC参数、原生provider注册、effective fiber/ref读取、EntryGroup描述字段不插值和ConfigEditor写出格式等契约差异，未改DSH源码或删除验收断言。经项目方授权的第九轮修复后，审查准入提交`d8806c66c046436559b2c1edc1dc4fbe7e9a32b4`在giap-vps运行完整`pnpm test:docker`：5/5通过、exit0、62.03秒，原四例全部保留，独立清点无测试资源残留。初始及受管重启均仅intranet alpha/beta、默认beta、contextWindow500000/262144；员工负对照实际暴露alternate地址/default、personal模型、原生provider和custom-office联网工具；重新读取组成并生成覆盖层后custom-office保留且禁用web_search/web_fetch，正常工具及有效readLimit500保留。真实浏览器初始/重启及各自reload的中文、无公告、输入、General和模型选择均通过，consoleErrors均为空，截图及逐阶段receipt保留于PR#139证据。员工编辑至最终检查的profile字节完全相同，home/live/seed/marker保留断言通过；安装清单确认loader1.0.5、preset-registry/tool-fs0.2.0-rc.2。阶段摘要保留为失败诊断证据，不包含原始配置或凭据。工作区初始化是该测试的显式fixture操作，不冒充task12.2生产首次进入流程；未发送模型请求，task8.5/9.3/权限档映射仍由后续任务负责。最终合并提交的精确SHA复验和CI结果见PR#139。
 
 ## 9. 编排器（任务包 1.7）
 

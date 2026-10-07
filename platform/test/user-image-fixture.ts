@@ -70,6 +70,14 @@ function output(result: DockerCommandResult, args: readonly string[]): string {
   return result.stdout;
 }
 
+function nestedMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) {
+    return error.errors.flatMap((inner) => nestedMessages(inner));
+  }
+  if (error instanceof Error) return [error.message];
+  return [String(error)];
+}
+
 function removeOwned(
   command: DockerCommand,
   kind: 'container' | 'image' | 'volume',
@@ -99,6 +107,18 @@ function assertOfflineContainerConfiguration(command: DockerCommand, container: 
 }
 
 type Probe = 'version' | 'offline-docx' | 'profile-seed';
+export interface UserImageLifecycle {
+  readonly command: DockerCommand;
+  readonly imageId: string;
+  readonly runId: string;
+  readonly stateVolume: string;
+  readonly workVolume: string;
+  readonly overlayDirectory: string;
+  readonly seccomp: string;
+  readonly repositoryRoot: string;
+  registerContainer: (name: string) => void;
+}
+export type UserImageScenario = (lifecycle: UserImageLifecycle) => Promise<string>;
 interface CleanupTarget {
   readonly kind: 'container' | 'image' | 'volume';
   readonly name: string;
@@ -186,6 +206,21 @@ function createOwnedVolumes(
   }
 }
 
+function lifecycleVolumes(
+  probe: Probe | 'web-startup' | 'managed-policy',
+  runId: string,
+): { volume: string | undefined; workVolume: string | undefined } {
+  const volume =
+    probe === 'profile-seed' || probe === 'web-startup' || probe === 'managed-policy'
+      ? `dsh-team-test-${runId}-state`
+      : undefined;
+  const workVolume =
+    probe === 'web-startup' || probe === 'managed-policy'
+      ? `dsh-team-test-${runId}-work`
+      : undefined;
+  return { volume, workVolume };
+}
+
 function cleanupTargets(
   command: DockerCommand,
   targets: readonly CleanupTarget[],
@@ -214,6 +249,51 @@ interface UserImageResult {
   containers: string[];
 }
 
+function lifecycleCommand(
+  probe: Probe | 'web-startup' | 'managed-policy',
+  injectedCommand: DockerCommand | undefined,
+  config: string,
+): DockerCommand {
+  const bounded = probe === 'web-startup' || probe === 'managed-policy';
+  const externalCommand: DockerCommand =
+    injectedCommand ??
+    ((args, timeout) =>
+      spawnSync('docker', args, {
+        cwd: repositoryRoot,
+        // Docker gets no GitHub/SSH/model credentials or user Docker config from the parent.
+        env: { PATH: '/usr/local/bin:/usr/bin:/bin', DOCKER_CONFIG: config },
+        encoding: 'utf8',
+        timeout,
+        killSignal: 'SIGKILL',
+        // Startup logs and process observations must be bounded and stay in memory.
+        maxBuffer: bounded && args[0] !== 'build' ? 64 * 1024 : 16 * 1024 * 1024,
+      }));
+  if (probe !== 'web-startup' && probe !== 'managed-policy') return externalCommand;
+  return (args, timeout) => {
+    try {
+      const result = externalCommand(args, timeout);
+      const kind = args[0];
+      if (
+        args[1] === 'inspect' &&
+        (kind === 'image' || kind === 'container' || kind === 'volume') &&
+        isAbsentResource(result, kind, args.at(-1) ?? '')
+      ) {
+        return result;
+      }
+      if (result.error !== undefined || result.status !== 0) {
+        return {
+          status: result.status === 0 ? 1 : result.status,
+          stdout: '',
+          stderr: 'Web Docker operation failed',
+        };
+      }
+      return result;
+    } catch {
+      throw new Error('Web Docker operation failed');
+    }
+  };
+}
+
 export function runUserImage(
   probe: 'web-startup',
   assertOutput: (stdout: string) => void,
@@ -226,74 +306,43 @@ export function runUserImage(
   injectedCommand?: DockerCommand,
 ): UserImageResult;
 export function runUserImage(
-  probe: Probe | 'web-startup',
+  probe: 'managed-policy',
+  assertOutput: (stdout: string) => void,
+  injectedCommand: DockerCommand | undefined,
+  scenario: UserImageScenario,
+): Promise<UserImageResult>;
+export function runUserImage(
+  probe: Probe | 'web-startup' | 'managed-policy',
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
-  webBoundary?: Partial<WebStartupBoundary>,
+  extra?: Partial<WebStartupBoundary> | UserImageScenario,
 ): UserImageResult | Promise<UserImageResult> {
   if (probe === 'web-startup') {
     return Promise.resolve().then(() =>
-      runImageLifecycle(probe, assertOutput, injectedCommand, webBoundary),
+      runImageLifecycle(probe, assertOutput, injectedCommand, extra as Partial<WebStartupBoundary>),
+    );
+  }
+  if (probe === 'managed-policy') {
+    return Promise.resolve().then(() =>
+      runImageLifecycle(probe, assertOutput, injectedCommand, extra as UserImageScenario),
     );
   }
   return runImageLifecycle(probe, assertOutput, injectedCommand);
 }
 
 function runImageLifecycle(
-  probe: Probe | 'web-startup',
+  probe: Probe | 'web-startup' | 'managed-policy',
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
-  webBoundary?: Partial<WebStartupBoundary>,
+  extra?: Partial<WebStartupBoundary> | UserImageScenario,
 ): UserImageResult | Promise<UserImageResult> {
   const runId = randomUUID();
   const image = `dsh-team-test-${runId}:${probe}`;
   const container = `dsh-team-test-${runId}-${probe}`;
-  const volume =
-    probe === 'profile-seed' || probe === 'web-startup'
-      ? `dsh-team-test-${runId}-state`
-      : undefined;
-  const workVolume = probe === 'web-startup' ? `dsh-team-test-${runId}-work` : undefined;
+  const { volume, workVolume } = lifecycleVolumes(probe, runId);
   const containers = [container];
   const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
-  const externalCommand: DockerCommand =
-    injectedCommand ??
-    ((args, timeout) =>
-      spawnSync('docker', args, {
-        cwd: repositoryRoot,
-        // Docker gets no GitHub/SSH/model credentials or user Docker config from the parent.
-        env: { PATH: '/usr/local/bin:/usr/bin:/bin', DOCKER_CONFIG: config },
-        encoding: 'utf8',
-        timeout,
-        killSignal: 'SIGKILL',
-        // Startup logs and process observations must be bounded and stay in memory.
-        maxBuffer: probe === 'web-startup' && args[0] !== 'build' ? 64 * 1024 : 16 * 1024 * 1024,
-      }));
-  const command: DockerCommand =
-    probe !== 'web-startup'
-      ? externalCommand
-      : (args, timeout) => {
-          try {
-            const result = externalCommand(args, timeout);
-            const kind = args[0];
-            if (
-              args[1] === 'inspect' &&
-              (kind === 'image' || kind === 'container' || kind === 'volume') &&
-              isAbsentResource(result, kind, args.at(-1) ?? '')
-            ) {
-              return result;
-            }
-            if (result.error !== undefined || result.status !== 0) {
-              return {
-                status: result.status === 0 ? 1 : result.status,
-                stdout: '',
-                stderr: 'Web Docker operation failed',
-              };
-            }
-            return result;
-          } catch {
-            throw new Error('Web Docker operation failed');
-          }
-        };
+  const command = lifecycleCommand(probe, injectedCommand, config);
   const failures: unknown[] = [];
   const targets: CleanupTarget[] = [];
   let stdout = '';
@@ -305,9 +354,7 @@ function runImageLifecycle(
       failures.push(error);
     }
     if (failures.length !== 0) {
-      const messages = failures.map((error) =>
-        error instanceof Error ? error.message : String(error),
-      );
+      const messages = failures.flatMap((error) => nestedMessages(error));
       throw new AggregateError(failures, messages.join('\n'));
     }
     return {
@@ -366,8 +413,37 @@ function runImageLifecycle(
           overlay,
           seccomp: join(repositoryRoot, 'images/seccomp/dsh-user.json'),
         },
-        webBoundary,
+        extra as Partial<WebStartupBoundary>,
       )
+        .then((summary) => {
+          stdout = summary;
+          assertOutput(summary);
+        })
+        .catch((error: unknown) => {
+          failures.push(error);
+        })
+        .then(finish);
+    }
+    if (probe === 'managed-policy') {
+      if (volume === undefined || workVolume === undefined)
+        throw new Error('Managed policy volume setup missing');
+      if (typeof extra !== 'function') throw new Error('Managed policy scenario missing');
+      const overlayDirectory = join(config, 'managed');
+      const lifecycle: UserImageLifecycle = {
+        command,
+        imageId,
+        runId,
+        stateVolume: volume,
+        workVolume,
+        overlayDirectory,
+        seccomp: join(repositoryRoot, 'images/seccomp/dsh-user.json'),
+        repositoryRoot,
+        registerContainer: (name: string): void => {
+          if (!containers.includes(name)) containers.push(name);
+          targets.push({ kind: 'container', name });
+        },
+      };
+      return extra(lifecycle)
         .then((summary) => {
           stdout = summary;
           assertOutput(summary);

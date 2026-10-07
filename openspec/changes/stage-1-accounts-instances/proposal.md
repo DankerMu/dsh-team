@@ -207,3 +207,10 @@
 - Selected risk packs/evidence below task8.3. Actual key availability is explicit metadata, not inferred from an environment-variable name and never resolved from process.env inside the generator.
 - Clean cutover to a discriminated configured/unconfigured result; migrate every existing generator caller/test. Missing ordinary configuration returns no document, not an empty overlay, exception or fallback provider.
 - Evidence floor: four independent missing-field semantic RED cases, fully configured preservation, source/dist public-API branch smoke, `pnpm check`, strict OpenSpec, reviewed exact-head Docker baseline and normal CI.
+
+## Issue #32 fixture
+
+- Feature/characterization; expanded task8.4: qualify managed configuration against the running released DSH after persisted employee overrides, and deliver the reusable complete-composition/canonical-artifact adapter assigned by task8.1. Keep production orchestration/settings APIs and permission-tier mapping out of scope.
+- Reuse installed `0.2.0-rc.2` parser/composer inside the user image, the pure generator/atomic writer, the existing label-owned Docker lifecycle, and import-safe browser/CDP oracles. No second parser, preset roster, plugin policy or container owner.
+- Evidence floor: adapter boundary RED/GREEN and malformed/partial-input rejection; exact-head real start/edit/recompose/recreate/readback; a disposable no-managed-policy negative control; effective resolver context windows, independent complete preset/tool inventory, trusted canonical patch tamper resistance, actual non-loopback English-browser UI/reload and cleanup; root checks, strict OpenSpec and CI.
+- A size exemption, if necessary for the atomic runtime path and its failure qualification, must be justified in the PR; no silent removal of the task8.4 addendum to meet a line count.
