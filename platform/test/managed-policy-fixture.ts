@@ -497,7 +497,9 @@ async function bindWorkWorkspace(
   origin: string,
   cookie: string,
 ): Promise<{ available: true; workBound: true }> {
-  const created = await mappedRpc(origin, cookie, 'workspace/create', { path: WORKSPACE_PATH });
+  const created = await mappedRpc(origin, cookie, 'workspace/create', {
+    request: { path: WORKSPACE_PATH },
+  });
   const record = asRemoteRecord(created);
   const workspace = asRemoteRecord(record.workspace ?? record.value);
   const path = workspace.path ?? asRemoteRecord(workspace.workspace).path;
