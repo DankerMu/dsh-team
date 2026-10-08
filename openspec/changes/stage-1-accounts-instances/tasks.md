@@ -591,6 +591,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#39）：waitForUserContainerReady复用单一凭据获取，使用本次实际提交的cookie认证HTTP200后才条件原子提交running/instance.ready；统一60秒就绪窗口、提前退出检测、独立有界日志与停止清理；失败记录error/清cookie/instance.start-failed，不删除容器或卷。保留最后50行安全诊断，分流重组UTF8/帧、整行超限丢弃，控制字符规范化先于凭据检测，禁止过滤后重建秘密。语义RED包括真实200后未转换状态及NUL重建秘密泄漏，均修复；本地完整pnpmcheck exit0，795unit/508integration、strictOpenSpec通过。审查头`f1968a708d2477988b59cbc58995e49eba55ef6a`固定Node24.13.1/pnpm10.34.6 giap-vps实际完整Docker15/15、exit0、92.25秒：正常路径running/认证200/ready审计，受管已绑定覆盖层原位损坏后error/真实安全日志/start-failed审计且已停止，秘密不外泄；13基线保留，独立资源清点为空。全diff修复审查clean；最终头/CI见PR#146；人工白盒依用户指令后置Epic完成。
 
+### Issue #40 risk/evidence map (task9.7 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: new retirement operation, stopped/current runtime-field clearing and exact stop reason; public realtransport/SQLite tests, no migration.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: exact owned current immutable identity, disabled-account stop, stale replacement and credential clearing; negative mutation guards and atomic audit/state.
+- File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: destructive container operation must never remove either persistent volume; actual sentinel survival, partial Docker/DB failure and absent-container retry without false success.
+- Resource limits / large input / discovery — selected: bounded stop/delete/inspect with cancellation; no discovery over arbitrary containers, no unbounded retries.
+- Config / project setup; Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: existing client/identity/image/volumes/startup contracts, no new config/dependency; preserve15Docker baseline scenarios.
+- Documentation / migration notes — selected: stopped-field and no-op/partial-failure contracts; root checks, strictOpenSpec, exact-head fullDocker/CI and human critical-path review ledger.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

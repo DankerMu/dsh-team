@@ -265,3 +265,10 @@
 - Preserve create/start and credential-acquisition APIs, immutable image identity, thirteen Docker baselines, volume data, secret-safe logs/audit and current-instance conditional persistence.
 - Evidence floor: public operation semantic RED/GREEN through real HTTP/SQLite, deadline/early-exit/stale-state/cleanup-failure and sanitized log-tail boundaries; pinned full Docker good/bad-overlay acceptance, root checks and exact-head CI.
 - No gateway, lifecycle locks/capacity, retries, container deletion or network changes. Critical-path human review remains deferred to Epic completion by explicit user instruction.
+
+## Issue #40 fixture
+
+- Feature; expanded task9.7 (agree with upstream): retire only the current owned container while preserving both persistent volumes and recording the supplied stop reason.
+- Must preserve: existing startup/readiness APIs, immutable image identity, all fifteen Docker cases, disabled-account cleanup ability, backend-only credentials, safe partial failure and exact-owned test cleanup.
+- Evidence floor: public-operation real Unix Docker transport/SQLite RED/GREEN for stop→delete→atomic state/audit, stale/ownership/error paths; actual file contents survive stop/delete/recreate with same volumes, exact audit reason; root checks, strict OpenSpec, final-head Docker/CI.
+- No lifecycle serialization/capacity, gateway, idle scheduling, instance networks, deleting volumes, configuration reset or schema change. Human critical-path review remains deferred to Epic completion per user.

@@ -6,3 +6,5 @@ export type { StartUserContainerInput } from './start.ts';
 export { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
 export { acquireDshCookie } from './credentials.ts';
 export { waitForUserContainerReady } from './readiness.ts';
+export { stopUserContainer } from './stop.ts';
+export type { StopUserContainerInput } from './stop.ts';

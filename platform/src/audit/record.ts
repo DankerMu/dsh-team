@@ -23,6 +23,13 @@ const STOP_REASONS: Record<string, true> = {
   error: true,
 };
 
+export type InstanceStopReason = 'idle' | 'admin' | 'disabled' | 'error';
+
+export function validateStopReason(value: unknown): asserts value is InstanceStopReason {
+  if (typeof value !== 'string' || !Object.hasOwn(STOP_REASONS, value))
+    throw new Error(INVALID_STOP_REASON);
+}
+
 const EVENT_DETAIL_FIELDS: Record<string, readonly string[]> = {
   'account.registered': [],
   'login.succeeded': [],
@@ -60,9 +67,7 @@ function projectDetails(type: string, details: Record<string, unknown> | undefin
       throw new Error(INVALID_STOP_REASON);
     }
     const value = details[field];
-    if (typeof value !== 'string' || !Object.hasOwn(STOP_REASONS, value)) {
-      throw new Error(INVALID_STOP_REASON);
-    }
+    validateStopReason(value);
     projected[field] = value;
   }
   return JSON.stringify(projected);
