@@ -313,6 +313,65 @@ print(json.dumps({
 }), flush=True)
 `;
 
+type DiagnosticScalar = number | boolean | null | 'unavailable';
+
+function diagnosticScalar(value: unknown): DiagnosticScalar {
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return 'unavailable';
+}
+
+function captureBoundedHost(
+  bounded: Record<string, unknown>,
+  diagnostic: Record<string, DiagnosticScalar>,
+): void {
+  const host = record(bounded.HostConfig);
+  for (const field of ['NanoCpus', 'Memory', 'MemorySwap', 'PidsLimit', 'OomKillDisable'])
+    diagnostic[`B.${field}`] = diagnosticScalar(host[field]);
+}
+
+function captureOomResult(
+  oom: Record<string, unknown>,
+  diagnostic: Record<string, DiagnosticScalar>,
+): void {
+  for (const field of [
+    'requestedBytes',
+    'touchedBytes',
+    'childSignal',
+    'oomKillBefore',
+    'oomKillAfter',
+  ])
+    diagnostic[`OOM.${field}`] = diagnosticScalar(oom[field]);
+  const cgroup = record(oom.limits);
+  for (const field of ['memory.max', 'memory.swap.max', 'pids.max']) {
+    const value = cgroup[field];
+    diagnostic[`cgroup.${field}`] =
+      typeof value === 'string' && /^\d+$/.test(value)
+        ? diagnosticScalar(Number(value))
+        : 'unavailable';
+  }
+}
+
+function reportResourceFailure(
+  lifecycle: UserImageLifecycle,
+  userB: string,
+  stage: string,
+  error: unknown,
+  diagnostic: Record<string, DiagnosticScalar>,
+): void {
+  // Temporary bounded diagnosis: whitelist scalar observations, never raw inspect/logs/errors.
+  try {
+    const state = record(inspect(lifecycle, `dsh-team-u-${userB}`).State);
+    for (const field of ['Running', 'OOMKilled', 'ExitCode'])
+      diagnostic[`B.state.${field}`] = diagnosticScalar(state[field]);
+  } catch {
+    diagnostic['B.state.available'] = false;
+  }
+  const category =
+    error instanceof Error && error.name === 'AssertionError' ? 'assertion' : 'runtime';
+  process.stdout.write(`Resource diagnostic: ${JSON.stringify({ stage, category, diagnostic })}\n`);
+}
+
 async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const userB = `${userA.startsWith('a') ? 'b' : 'a'}${userA.slice(1)}`;
@@ -348,6 +407,8 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
   let app: FastifyInstance | undefined;
   const failures: unknown[] = [];
   let summary = '';
+  let stage = 'platform setup';
+  const diagnostic: Record<string, DiagnosticScalar> = {};
   try {
     applyMigrations(db);
     app = await buildApp(config, db);
@@ -368,6 +429,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       );
     }
     writeSettings(db, { cpuCores: 0.5, memoryMiB: 512 });
+    stage = 'A exported startup';
     const a = await startUserContainer({
       client,
       database: db,
@@ -378,15 +440,19 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       permission: START_PERMISSION,
     });
     if (a.outcome !== 'starting') throw new Error('Expected configured sibling startup');
+    stage = 'A independent inspection';
     const firstA = inspect(lifecycle, a.containerId);
     expect(firstA.Id).toBe(a.containerId);
     expect(firstA.Image).toBe(lifecycle.imageId);
     expect(record(firstA.Config).Labels).toMatchObject({ 'dsh-team.user': userA });
     expect(firstA.HostConfig).toMatchObject(limitsA);
+    stage = 'A announcement and HTTP';
     await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    stage = 'platform health with A';
     await health();
 
     writeSettings(db, { cpuCores: 1.25, memoryMiB: 256 });
+    stage = 'B exported startup';
     const b = await startUserContainer({
       client,
       database: db,
@@ -397,7 +463,9 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       permission: START_PERMISSION,
     });
     if (b.outcome !== 'starting') throw new Error('Expected configured bounded startup');
+    stage = 'B independent inspection';
     const bounded = inspect(lifecycle, b.containerId);
+    captureBoundedHost(bounded, diagnostic);
     expect(bounded.Id).toBe(b.containerId);
     expect(bounded.Image).toBe(lifecycle.imageId);
     expect(record(bounded.Config).Labels).toMatchObject({ 'dsh-team.user': userB });
@@ -406,18 +474,28 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       Privileged: false,
       OomKillDisable: false,
     });
+    stage = 'A unchanged after settings update';
     expect(inspect(lifecycle, a.containerId).HostConfig).toMatchObject(limitsA);
+    stage = 'B announcement and HTTP';
     await observeWebEndpoint(lifecycle.command, b.containerId, () => b.upstreamPort, authority);
+    stage = 'A HTTP before OOM';
     await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    stage = 'platform health before OOM';
     await health();
 
+    stage = 'bounded OOM child and observer';
     const pressure = lifecycle.command(
       ['exec', '--user', '1001', b.containerId, 'python3', '-c', oomScript],
       30_000,
     );
+    diagnostic.pressureStatus = diagnosticScalar(pressure.status);
+    diagnostic.pressureError = pressure.error !== undefined;
     if (pressure.error !== undefined || pressure.status !== 0)
       throw new Error('Owned OOM observer failed or exceeded its deadline');
+    stage = 'OOM response parsing';
     const oom = record(JSON.parse(pressure.stdout));
+    captureOomResult(oom, diagnostic);
+    stage = 'OOM evidence assertions';
     expect(oom).toMatchObject({
       requestedBytes: 536_870_912,
       childSignal: 9,
@@ -433,12 +511,16 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     expect(oom.touchedBytes).toBeLessThan(536_870_912);
     expect(oom.oomKillAfter).toBeGreaterThan(oom.oomKillBefore);
 
+    stage = 'A independent inspection after OOM';
     const afterA = inspect(lifecycle, a.containerId);
     expect(afterA.Id).toBe(firstA.Id);
     expect(afterA.HostConfig).toEqual(firstA.HostConfig);
     expect(record(afterA.State).Running).toBe(true);
+    stage = 'A announcement and HTTP after OOM';
     await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    stage = 'platform health after OOM';
     await health();
+    stage = 'persisted instance identity proof';
     expect(
       db.prepare('SELECT user_id, container_id FROM instances ORDER BY user_id').all(),
     ).toEqual(
@@ -447,6 +529,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
         { user_id: userB, container_id: b.containerId },
       ].sort((left, right) => left.user_id.localeCompare(right.user_id)),
     );
+    stage = 'composition helper cleanup proof';
     expect(helperIds).toHaveLength(2);
     for (const id of helperIds)
       await expect(
@@ -461,12 +544,14 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       oom,
     });
   } catch (error) {
+    reportResourceFailure(lifecycle, userB, stage, error, diagnostic);
     failures.push(error);
   } finally {
     try {
       if (app === undefined) db.close();
       else await app.close();
     } catch (error) {
+      process.stdout.write('Resource diagnostic: platform cleanup failed\n');
       failures.push(error);
     }
   }
