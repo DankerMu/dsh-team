@@ -198,7 +198,7 @@ export function readKernelOomEvidence(
         '-n',
         '/usr/bin/journalctl',
         '--boot=0',
-        '--kernel',
+        '--dmesg',
         '--quiet',
         '--no-pager',
         '--since',
