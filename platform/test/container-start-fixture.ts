@@ -1,9 +1,17 @@
-import { readFile, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { expect } from 'vitest';
+import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import type { DockerTransport, StartUserContainerInput } from '../src/orchestrator/index.ts';
+import { createDockerClient, createOrchestrator } from '../src/orchestrator/index.ts';
+import type {
+  DockerTransport,
+  OrchestratorDependencies,
+  StartUserContainerInput,
+} from '../src/orchestrator/index.ts';
 
 export const START_USER = 'abcdefghijkl';
 export const START_IMAGE = `sha256:${'a'.repeat(64)}`;
@@ -152,7 +160,7 @@ export function startupDaemon() {
     setContainerId(value: string) {
       nextContainerId = value;
     },
-    setComposition(value: string) {
+    setComposition(value: string = COMPOSITION) {
       compositionOutput = value;
     },
     beforeRequest(callback: (request: StartupRequest) => void) {
@@ -171,6 +179,21 @@ export async function startupEvidence(database: DatabaseHandle, input: StartUser
   };
 }
 
+export async function startupCapacityEvidence(
+  database: DatabaseHandle,
+  input: StartUserContainerInput,
+  daemon: { requests: readonly StartupRequest[]; containers: ReadonlyMap<string, Container> },
+) {
+  const changes: unknown = database.prepare('SELECT total_changes() AS count').get();
+  return {
+    current: await startupEvidence(database, input),
+    rows: database.prepare('SELECT * FROM instances ORDER BY user_id').all(),
+    changes,
+    requests: structuredClone(daemon.requests),
+    containers: structuredClone([...daemon.containers]),
+  };
+}
+
 export function expectDockerReads(
   requests: readonly StartupRequest[],
   count: number,
@@ -180,3 +203,131 @@ export function expectDockerReads(
     paths.map((path) => ({ method: 'GET', path })),
   );
 }
+
+export function startupBarrier() {
+  const reached = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  return {
+    reached: reached.promise,
+    release() {
+      release.resolve(undefined);
+    },
+    async hold(): Promise<undefined> {
+      reached.resolve(undefined);
+      await release.promise;
+      return undefined;
+    },
+  };
+}
+
+/** Reusable public-owner fixture with actual SQLite; callers own closing/removing its resources. */
+export async function startupOwnerFixture() {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-owner-'));
+  const database = openDatabase(':memory:');
+  applyMigrations(database);
+  for (const user of [START_USER, 'mnopqrstuvwx']) {
+    database
+      .prepare("INSERT INTO users VALUES (?, ?, 'unused', 'employee', 'active', 1)")
+      .run(user, `${user}@example.test`);
+  }
+  const seccompProfilePath = join(root, 'seccomp.json');
+  await writeFile(seccompProfilePath, '{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}');
+  const daemon = startupDaemon();
+  const raw = createDockerClient('/fixture/docker.sock', daemon.transport);
+  let before:
+    ((method: string, path: string, signal?: AbortSignal) => Promise<undefined>) | undefined;
+  const client: OrchestratorDependencies['client'] = {
+    ...raw,
+    async json(method, path, body, signal) {
+      await before?.(method, path, signal);
+      return raw.json(method, path, body, signal);
+    },
+  };
+  const owner = createOrchestrator({ client, database });
+  const input: StartUserContainerInput = {
+    userId: START_USER,
+    config: {
+      userImage: 'dsh-team-user:local',
+      seccompProfilePath,
+      managedConfigDir: join(root, 'managed'),
+      authority: 'team.example:8443',
+    },
+    modelSettings: START_MODEL,
+    modelKey: 'fixture-private-key',
+    permission: START_PERMISSION,
+  };
+  return {
+    root,
+    database,
+    daemon,
+    client,
+    owner,
+    input,
+    beforeRequest: (callback: typeof before) => {
+      before = callback;
+    },
+    blockStartup: async () => {
+      const gate = startupBarrier();
+      before = async (method, path) => {
+        if (method === 'POST' && path === `/containers/create?name=dsh-team-u-${START_USER}`)
+          await gate.hold();
+        return undefined;
+      };
+      const first = owner.startUserContainer(input);
+      const head = Promise.allSettled([first]);
+      await gate.reached;
+      return { gate, first, head };
+    },
+  };
+}
+
+/** Real Unix HTTP fixture; barriers delay the Engine response, not the public lifecycle method. */
+export function startupUnixServer(
+  reply: (request: StartupRequest) => Reply,
+  hold: (method: string, path: string) => Promise<undefined> | undefined,
+) {
+  return createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      const method = request.method ?? '';
+      const path = request.url ?? '';
+      const send = () => {
+        try {
+          // Bodies come only from the real Docker client's JSON serializer.
+          const body =
+            chunks.length === 0
+              ? {}
+              : (JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>);
+          const result = reply({ method, path, body });
+          response
+            .writeHead(result.status)
+            .end(
+              result.bytes ??
+                (result.document === undefined ? '' : JSON.stringify(result.document)),
+            );
+        } catch {
+          response.writeHead(500).end();
+        }
+      };
+      const waiting = hold(method, path);
+      if (waiting === undefined) send();
+      else void waiting.then(send);
+    });
+  });
+}
+
+export const CREATED_AND_STARTED = [
+  {
+    event_type: 'instance.created',
+    target: START_USER,
+    target_email: 'employee@example.test',
+    details: '{}',
+  },
+  {
+    event_type: 'instance.started',
+    target: START_USER,
+    target_email: 'employee@example.test',
+    details: '{}',
+  },
+];

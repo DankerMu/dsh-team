@@ -615,6 +615,14 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#41）：createOrchestrator绑定client/database并独占每用户FIFO，四个生命周期方法所有调用者原子迁移，无隐藏全局队列/旧公共旁路；同用户十次启动仅创建一次、不同用户独立、失败/排队取消不阻塞后续、运行中取消持锁直到实际清理结束。启动在队列内重新验证账号/模型与当前实例，真实starting/running复用返回对应状态，不改行/cookie/覆盖层/审计；精确404仍可重建，异主/异常/过期均拒绝。排队前取消明确保留旧凭据且无IO，活动中取消行为保留。真实Unix/SQLite并发语义RED后GREEN；本地完整pnpmcheck exit0，879unit/568integration、coordinator100%覆盖、重复率2.67%、strictOpenSpec通过。三席全diff审查clean；审查头`5001780009ace9f88205167151da83ff4b49bee5`固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker16/16、exit0、110.89秒：共享owner十次初始启动同一实例/一个创建启动审计对，原重建和16基线全部保留，独立清点为空。最终头/CI见PR#148；人工白盒按用户要求后置Epic完成。
 
+### Issue #42 risk/evidence map (task9.9 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: typed full outcome, persisted maxRunningInstances and counted states; all result consumers migrated, no schema change.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: cross-user synchronous reservation, pending/persisted distinct-count handoff, actual cleanup settlement and separate-user independence; deterministic last-slot/race/failure proofs.
+- Config / project setup; Legacy compatibility / examples — selected: fresh persisted limits, missing-model precedence and full-capacity validated reuse; current owner/API/caller semantics retained.
+- Auth / permissions / secrets; File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: full/unconfigured no container/helper/volume/overlay/row/audit/error mutation, no eviction or cross-user changes; ownership and failure cleanup regressions plus actual preserved A endpoint.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: no new dependency/config/claim schema, documented state-based occupancy and pending lifecycle; root/strictOpenSpec, full pinned Docker/CI and deferred human-review ledger.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

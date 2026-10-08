@@ -280,3 +280,11 @@
 - Governing invariant: within one platform/database lifetime, same-user lifecycle mutations never overlap, ten concurrent starts create once, and different users progress independently.
 - Must preserve current ownership/stale-state/secret/partial-failure safeguards, startup unconfigured outcomes, actual recreation after removed containers, and sixteen Docker baselines.
 - Evidence floor: public-operation deterministic concurrency RED/GREEN, real Unix/SQLite barriers, cancellation/rejection/queue recovery and nested readiness acquisition; actual shared-context Docker smoke, full pinned Docker/CI. No distributed locks/capacity/gateway scope; human review deferred to Epic completion.
+
+## Issue #42 fixture
+
+- Feature; expanded task9.9 (agree with upstream): race-safe owner-local admission against persisted maxRunningInstances and starting/running occupancy.
+- Governing invariant: separate users cannot both claim the last free slot; full/unconfigured requests cause no creation or error-state mutation and never evict an existing instance.
+- Preserve explicit per-user coordinator ownership, different-user concurrency when slots exist, validated reuse, missing-model preflight precedence, state/credential/volume safeguards and sixteen Docker baselines.
+- Evidence floor: public realtransport/SQLite RED/GREEN for full limit, concurrent final-slot claim, reservation handoff/release/failure and fresh settings; actual limit1 A/B stop/start/unconfigured Docker proof; root checks, strictOpenSpec and final-head Docker/CI.
+- No global lifecycle lock, cross-process admission, schema/config additions, eviction, retry/reconciliation or gateway wiring. Human critical-path review remains deferred to Epic completion per user.
