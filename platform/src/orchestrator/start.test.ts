@@ -29,7 +29,7 @@ async function fixture() {
   let account: unknown = { email: 'employee@example.test', status: 'active' };
   // SQLite is an external boundary; durable state/rollback is proved with real SQLite in integration.
   const database = {
-    prepare: () => ({ get: () => account, run: () => ({ changes: 1 }) }),
+    prepare: () => ({ get: () => account, all: () => [], run: () => ({ changes: 1 }) }),
     transaction: (action: () => void) => action,
   } as unknown as DatabaseHandle;
   const input: StartUserContainerInput = {

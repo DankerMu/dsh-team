@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { createDockerClient, startUserContainer } from '../src/orchestrator/index.ts';
 import type { StartUserContainerInput } from '../src/orchestrator/index.ts';
@@ -186,9 +186,97 @@ it('commits completed creation and start separately, persists inspected endpoint
   ]);
 });
 
+it('applies default CPU, memory, no-extra-swap and PID limits to the final user container', async () => {
+  await startUserContainer(input);
+
+  expect(daemon.containers.get(START_CONTAINER)?.Config.HostConfig).toMatchObject({
+    NanoCpus: 2_000_000_000,
+    Memory: 4_294_967_296,
+    MemorySwap: 4_294_967_296,
+    PidsLimit: 512,
+  });
+});
+
+it('reads changed persisted resource settings for each new creation on the same client', async () => {
+  writeSettings(database, { cpuCores: 0.5, memoryMiB: 512 });
+  await startUserContainer(input);
+  await input.client.json('DELETE', `/containers/${START_CONTAINER}?force=true`);
+  writeSettings(database, { cpuCores: 1.25, memoryMiB: 256 });
+
+  await startUserContainer(input);
+
+  const creates = daemon.requests.filter(
+    (request) => request.path === '/containers/create?name=dsh-team-u-abcdefghijkl',
+  );
+  expect(creates.map((request) => request.body.HostConfig)).toMatchObject([
+    { NanoCpus: 500_000_000, Memory: 536_870_912, MemorySwap: 536_870_912, PidsLimit: 512 },
+    { NanoCpus: 1_250_000_000, Memory: 268_435_456, MemorySwap: 268_435_456, PidsLimit: 512 },
+  ]);
+});
+
+it.each([
+  [0.000000001, 1, 1, 1_048_576],
+  [9_007_199, 8_589_934_591, 9_007_199_000_000_000, 9_007_199_253_692_416],
+])(
+  'preserves representable CPU %s and memory %s MiB at the Docker boundary',
+  async (cpuCores, memoryMiB, nanoCpus, memory) => {
+    writeSettings(database, { cpuCores, memoryMiB });
+
+    await startUserContainer(input);
+
+    expect(daemon.containers.get(START_CONTAINER)?.Config.HostConfig).toMatchObject({
+      NanoCpus: nanoCpus,
+      Memory: memory,
+      MemorySwap: memory,
+      PidsLimit: 512,
+    });
+  },
+);
+
+it.each([
+  ['cpuCores', '0'],
+  ['cpuCores', '-1'],
+  ['cpuCores', '1e999'],
+  ['cpuCores', '"not-a-number"'],
+  ['cpuCores', '0.0000000001'],
+  ['cpuCores', '0.0000000011'],
+  ['cpuCores', '9007199254740991'],
+  ['memoryMiB', '0'],
+  ['memoryMiB', '-1'],
+  ['memoryMiB', '1.5'],
+  ['memoryMiB', '1e999'],
+  ['memoryMiB', '8589934592'],
+])(
+  'rejects nonrepresentable persisted %s=%s before Docker, overlay, index or audit mutations',
+  async (field, value) => {
+    database.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(field, value);
+    database
+      .prepare(
+        "INSERT INTO instances (user_id, status, container_id, last_error) VALUES (?, 'stopped', 'prior-container', 'prior-state')",
+      )
+      .run(START_USER);
+    await mkdir(input.config.managedConfigDir);
+    const overlay = join(input.config.managedConfigDir, `${START_USER}.patch.yml`);
+    await writeFile(overlay, 'prior managed overlay\n', { mode: 0o444 });
+    const originalInode = (await stat(overlay)).ino;
+    const originalRows = rows();
+    const changes: unknown = database.prepare('SELECT total_changes() AS count').get();
+
+    await expect(startUserContainer(input)).rejects.toThrow(/resource limits/);
+
+    expect(daemon.requests).toEqual([]);
+    expect(rows()).toEqual(originalRows);
+    expect(audits()).toEqual([]);
+    expect(database.prepare('SELECT total_changes() AS count').get()).toEqual(changes);
+    expect(await readFile(overlay, 'utf8')).toBe('prior managed overlay\n');
+    expect((await stat(overlay)).ino).toBe(originalInode);
+  },
+);
+
 it.each([undefined, ''])(
   'does not start or index an instance when its actual model credential is %j',
   async (modelKey) => {
+    database.exec('DROP TABLE settings');
     expect(await startUserContainer({ ...input, modelKey })).toEqual({ outcome: 'unconfigured' });
     expect(rows()).toEqual([]);
     expect(audits()).toEqual([]);
@@ -215,6 +303,7 @@ it.each([
         "INSERT INTO instances (user_id, status, container_id, last_error) VALUES (?, 'stopped', 'prior-container', 'prior-state')",
       )
       .run(START_USER);
+    database.exec('DROP TABLE settings');
     await mkdir(input.config.managedConfigDir);
     const overlay = join(input.config.managedConfigDir, `${START_USER}.patch.yml`);
     await writeFile(overlay, 'prior managed overlay\n', { mode: 0o444 });

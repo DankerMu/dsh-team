@@ -243,3 +243,10 @@
 - Evidence floor: behavioral RED/GREEN at public operation boundaries; actual SQLite/audit observations; trusted pinned-host real exported startup operation inspect/recreate/endpoint/audit proof; full exact-head Docker suite, root checks, strict OpenSpec and CI.
 - Do not implement model administration, permission-tier mapping, readiness/cookie exchange, resource caps, lifecycle locks, gateway or per-instance networks. Explicit typed model/permission inputs bridge later producers without placeholder policy.
 - Human critical-path line review remains required and explicitly deferred by user to Epic completion.
+
+## Issue #37 fixture
+
+- Feature; expanded task9.4, agree with upstream: persisted CPU/memory settings become enforced per-user Docker cgroup limits, with a fixed finite PID ceiling. Blast radius: host availability and sibling user isolation.
+- Extend the existing exported startup operation and canonical owned Docker harness; preserve complete composition, security, endpoint/audit ordering and all eleven baseline Docker cases.
+- Evidence floor: behavioral settings-to-create RED/GREEN, unit conversion/boundary failures, actual Docker inspect before/after settings change and a controlled 256MiB/512MiB OOM with another real instance still usable; pinned exact-head full Docker suite, root checks, strict OpenSpec and CI.
+- No live updates of existing containers, new settings schema/admin controls, locks/capacity/readiness/network changes or host-wide resource changes. Critical-path human review remains deferred by explicit user instruction to Epic completion.

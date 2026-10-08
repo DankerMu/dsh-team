@@ -16,7 +16,11 @@ export interface WebStartupBoundary {
 }
 
 /** GET only: no credentials, redirects, response body or error text enter evidence. */
-function httpStatus(port: number, authority: string, timeout: number): Promise<number | null> {
+export function httpStatus(
+  port: number,
+  authority: string,
+  timeout: number,
+): Promise<number | null> {
   const { promise, resolve } = Promise.withResolvers<number | null>();
   const req = request(
     { hostname: '127.0.0.1', port, path: '/', method: 'GET', headers: { Host: authority } },

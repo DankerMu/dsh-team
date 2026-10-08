@@ -1,12 +1,18 @@
 import { readFile, stat } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { setTimeout } from 'node:timers/promises';
+import type { FastifyInstance } from 'fastify';
 import { expect, it } from 'vitest';
-import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
+import { buildApp } from '../src/app.ts';
+import type { PlatformConfig } from '../src/config.ts';
 import { createDockerClient, startUserContainer } from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { httpStatus } from './web-startup-fixture.ts';
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -25,17 +31,9 @@ function inspect(lifecycle: UserImageLifecycle, name: string): Record<string, un
   return record(rows[0]);
 }
 
-async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
-  const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
-  const name = `dsh-team-u-${userId}`;
-  const ownership = { 'dsh-team.user': userId };
-  // Grant cleanup authority only after exact preflight absence, before any production create.
-  lifecycle.registerResource('volume', lifecycle.stateVolume, ownership);
-  lifecycle.registerResource('volume', lifecycle.workVolume, ownership);
-  lifecycle.registerResource('container', name, ownership);
-  const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'platform.db'));
+/** Shared actual-start transport: registers production helpers before their create request. */
+function startupClient(lifecycle: UserImageLifecycle) {
   const raw = createDockerClient('/var/run/docker.sock');
-  const policy: unknown = JSON.parse(await readFile(lifecycle.seccomp, 'utf8'));
   const helperIds: string[] = [];
   const client: typeof raw = {
     logs: (path, signal) => raw.logs(path, signal),
@@ -43,13 +41,17 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       const helperCreate =
         method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
       let helperName = '';
+      let userId = '';
       if (helperCreate) {
         helperName = new URL(`http://docker${path}`).searchParams.get('name') ?? '';
         const labels = record(record(body).Labels);
         const invocation = labels['dsh-team.invocation'];
-        if (typeof invocation !== 'string') throw new Error('Helper invocation missing');
+        const user = labels['dsh-team.user'];
+        if (typeof invocation !== 'string' || typeof user !== 'string')
+          throw new Error('Helper ownership missing');
+        userId = user;
         lifecycle.registerResource('container', helperName, {
-          ...ownership,
+          'dsh-team.user': userId,
           'dsh-team.role': 'managed-composition',
           'dsh-team.invocation': invocation,
         });
@@ -78,7 +80,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
         expect(helper.Mounts).toEqual([
           expect.objectContaining({
             Type: 'volume',
-            Name: lifecycle.stateVolume,
+            Name: `dsh-team-home-${userId}`,
             Destination: '/data/home',
             RW: true,
           }),
@@ -88,6 +90,20 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       return result;
     },
   };
+  return { raw, client, helperIds };
+}
+
+async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
+  const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
+  const name = `dsh-team-u-${userId}`;
+  const ownership = { 'dsh-team.user': userId };
+  // Grant cleanup authority only after exact preflight absence, before any production create.
+  lifecycle.registerResource('volume', lifecycle.stateVolume, ownership);
+  lifecycle.registerResource('volume', lifecycle.workVolume, ownership);
+  lifecycle.registerResource('container', name, ownership);
+  const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'platform.db'));
+  const { raw, client, helperIds } = startupClient(lifecycle);
+  const policy: unknown = JSON.parse(await readFile(lifecycle.seccomp, 'utf8'));
   try {
     applyMigrations(db);
     db.prepare(
@@ -258,5 +274,241 @@ it('starts through the exported operation and recreates owned DSH with stable ho
   );
   process.stdout.write(
     `Docker exported startup verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
+  );
+});
+
+async function usableEndpoint(port: number, authority: string): Promise<void> {
+  const deadline = performance.now() + 60_000;
+  while (performance.now() < deadline) {
+    const remaining = Math.max(1, Math.floor(deadline - performance.now()));
+    const status = await httpStatus(port, authority, Math.min(2_000, remaining));
+    if (status === 401) return;
+    if (status !== null) throw new Error('Actual DSH endpoint did not answer 401');
+    const left = deadline - performance.now();
+    if (left <= 0) break;
+    // Real released DSH boots in Docker; fake time cannot drive its HTTP readiness.
+    await setTimeout(Math.min(250, left));
+  }
+  throw new Error('Actual DSH endpoint unavailable within 60s');
+}
+
+// Only the forked child touches the oversized mapping. Parent observes its cgroup
+// and wait status; a timeout, allocation exception or exit137 alone is not an OOM.
+const oomScript = `
+import json, mmap, os, pathlib, signal, struct
+cgroup = pathlib.Path("/sys/fs/cgroup")
+events = cgroup / "memory.events"
+if not events.is_file():
+    raise RuntimeError("Resource acceptance requires observable cgroup v2 memory.events")
+def counters():
+    return dict((key, int(value)) for key, value in
+                (line.split() for line in events.read_text().splitlines()))
+limits = {name: (cgroup / name).read_text().strip()
+          for name in ["memory.max", "memory.swap.max", "pids.max"]}
+if limits != {"memory.max": "268435456", "memory.swap.max": "0", "pids.max": "512"}:
+    raise RuntimeError("Owned allocation cgroup limits differ from inspected settings")
+before = counters()
+progress = mmap.mmap(-1, 8)
+signal.alarm(25)
+pid = os.fork()
+if pid == 0:
+    signal.alarm(20)
+    allocation = mmap.mmap(-1, 536870912)
+    for offset in range(0, 536870912, 4096):
+        allocation[offset] = 1
+        struct.pack_into("Q", progress, 0, offset + 4096)
+    os._exit(0)
+_, status = os.waitpid(pid, 0)
+signal.alarm(0)
+after = counters()
+print(json.dumps({
+    "requestedBytes": 536870912,
+    "touchedBytes": struct.unpack_from("Q", progress, 0)[0],
+    "childSignal": os.WTERMSIG(status) if os.WIFSIGNALED(status) else 0,
+    "oomKillBefore": before["oom_kill"], "oomKillAfter": after["oom_kill"],
+    "limits": limits
+}), flush=True)
+`;
+
+async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> {
+  const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
+  const userB = `${userA.startsWith('a') ? 'b' : 'a'}${userA.slice(1)}`;
+  const authority = 'resource.example:8443';
+  const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'resource-platform.db'));
+  const { raw, client, helperIds } = startupClient(lifecycle);
+  const config: PlatformConfig = {
+    host: '127.0.0.1',
+    port: 0,
+    logLevel: 'silent',
+    dataDir: dirname(lifecycle.overlayDirectory),
+    managedConfigDir: lifecycle.overlayDirectory,
+    dockerSocketPath: '/var/run/docker.sock',
+    userImage: lifecycle.imageId,
+    seccompProfilePath: lifecycle.seccomp,
+    publicUrl: `http://${authority}`,
+    authority,
+    cookieSecure: false,
+    trustedProxies: [],
+  };
+  const limitsA = {
+    NanoCpus: 500_000_000,
+    Memory: 536_870_912,
+    MemorySwap: 536_870_912,
+    PidsLimit: 512,
+  };
+  const limitsB = {
+    NanoCpus: 1_250_000_000,
+    Memory: 268_435_456,
+    MemorySwap: 268_435_456,
+    PidsLimit: 512,
+  };
+  let app: FastifyInstance | undefined;
+  const failures: unknown[] = [];
+  let summary = '';
+  try {
+    applyMigrations(db);
+    app = await buildApp(config, db);
+    const address = await app.listen({ host: '127.0.0.1', port: 0 });
+    const health = async () => {
+      const response = await fetch(`${address}/healthz`, { signal: AbortSignal.timeout(2_000) });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ status: 'ok' });
+    };
+    for (const user of [userA, userB]) {
+      const ownership = { 'dsh-team.user': user };
+      lifecycle.registerResource('volume', `dsh-team-home-${user}`, ownership);
+      lifecycle.registerResource('volume', `dsh-team-work-${user}`, ownership);
+      lifecycle.registerResource('container', `dsh-team-u-${user}`, ownership);
+      db.prepare("INSERT INTO users VALUES (?, ?, 'unused-hash', 'employee', 'active', 1)").run(
+        user,
+        `${user}@resource.example`,
+      );
+    }
+    writeSettings(db, { cpuCores: 0.5, memoryMiB: 512 });
+    const a = await startUserContainer({
+      client,
+      database: db,
+      userId: userA,
+      config,
+      modelSettings: START_MODEL,
+      modelKey: 'docker-acceptance-only-not-a-model-credential',
+      permission: START_PERMISSION,
+    });
+    if (a.outcome !== 'starting') throw new Error('Expected configured sibling startup');
+    const firstA = inspect(lifecycle, a.containerId);
+    expect(firstA.Id).toBe(a.containerId);
+    expect(firstA.Image).toBe(lifecycle.imageId);
+    expect(record(firstA.Config).Labels).toMatchObject({ 'dsh-team.user': userA });
+    expect(firstA.HostConfig).toMatchObject(limitsA);
+    await usableEndpoint(a.upstreamPort, authority);
+    await health();
+
+    writeSettings(db, { cpuCores: 1.25, memoryMiB: 256 });
+    const b = await startUserContainer({
+      client,
+      database: db,
+      userId: userB,
+      config,
+      modelSettings: START_MODEL,
+      modelKey: 'docker-acceptance-only-not-a-model-credential',
+      permission: START_PERMISSION,
+    });
+    if (b.outcome !== 'starting') throw new Error('Expected configured bounded startup');
+    const bounded = inspect(lifecycle, b.containerId);
+    expect(bounded.Id).toBe(b.containerId);
+    expect(bounded.Image).toBe(lifecycle.imageId);
+    expect(record(bounded.Config).Labels).toMatchObject({ 'dsh-team.user': userB });
+    expect(bounded.HostConfig).toMatchObject({
+      ...limitsB,
+      Privileged: false,
+      OomKillDisable: false,
+    });
+    expect(inspect(lifecycle, a.containerId).HostConfig).toMatchObject(limitsA);
+    await usableEndpoint(b.upstreamPort, authority);
+    await usableEndpoint(a.upstreamPort, authority);
+    await health();
+
+    const pressure = lifecycle.command(
+      ['exec', '--user', '1001', b.containerId, 'python3', '-c', oomScript],
+      30_000,
+    );
+    if (pressure.error !== undefined || pressure.status !== 0)
+      throw new Error('Owned OOM observer failed or exceeded its deadline');
+    const oom = record(JSON.parse(pressure.stdout));
+    expect(oom).toMatchObject({
+      requestedBytes: 536_870_912,
+      childSignal: 9,
+      limits: { 'memory.max': '268435456', 'memory.swap.max': '0', 'pids.max': '512' },
+    });
+    if (
+      typeof oom.touchedBytes !== 'number' ||
+      typeof oom.oomKillBefore !== 'number' ||
+      typeof oom.oomKillAfter !== 'number'
+    )
+      throw new Error('Missing physical-touch or cgroup OOM evidence');
+    expect(oom.touchedBytes).toBeGreaterThan(0);
+    expect(oom.touchedBytes).toBeLessThan(536_870_912);
+    expect(oom.oomKillAfter).toBeGreaterThan(oom.oomKillBefore);
+
+    const afterA = inspect(lifecycle, a.containerId);
+    expect(afterA.Id).toBe(firstA.Id);
+    expect(afterA.HostConfig).toEqual(firstA.HostConfig);
+    expect(record(afterA.State).Running).toBe(true);
+    await usableEndpoint(a.upstreamPort, authority);
+    await health();
+    expect(
+      db.prepare('SELECT user_id, container_id FROM instances ORDER BY user_id').all(),
+    ).toEqual(
+      [
+        { user_id: userA, container_id: a.containerId },
+        { user_id: userB, container_id: b.containerId },
+      ].sort((left, right) => left.user_id.localeCompare(right.user_id)),
+    );
+    expect(helperIds).toHaveLength(2);
+    for (const id of helperIds)
+      await expect(
+        raw.json('GET', `/containers/${id}/json`, undefined, AbortSignal.timeout(15_000)),
+      ).rejects.toMatchObject({ statusCode: 404 });
+    summary = JSON.stringify({
+      independentInspection: true,
+      settingsRefreshed: true,
+      siblingUnchanged: true,
+      siblingHttpBeforeAfter: 401,
+      platformHealthBeforeAfter: 200,
+      oom,
+    });
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    try {
+      if (app === undefined) db.close();
+      else await app.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length !== 0) throw new AggregateError(failures, 'Resource acceptance failed');
+  return summary;
+}
+
+it('enforces refreshed create-time limits and confines a physical 512MiB OOM to the 256MiB instance', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64')
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  const result = await runUserImage(
+    'container-start',
+    (summary) => {
+      expect(JSON.parse(summary)).toMatchObject({
+        independentInspection: true,
+        settingsRefreshed: true,
+        siblingUnchanged: true,
+        siblingHttpBeforeAfter: 401,
+        platformHealthBeforeAfter: 200,
+      });
+    },
+    undefined,
+    resourceScenario,
+  );
+  process.stdout.write(
+    `Docker resource isolation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
   );
 });

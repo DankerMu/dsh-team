@@ -557,6 +557,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#36）：导出 `startUserContainer` 实际串联同一镜像/用户卷的完整composition适配器、唯一只读覆盖层、安全Docker创建/启动、回环端点检查和SQLite审计事务；返回starting而非就绪。配置7例语义RED、外来容器启动前归属RED后修复；三席审查发现缺模型仍依赖基础设施，提取managed-config单一完整性谓词，10例真实SQLite/不可用socket场景先RED后GREEN且旧overlay/状态不变。真实Docker随后暴露CLI空inspect stdout为`[]`或换行，与原空字符串判定不兼容；保留精确目标/状态/诊断约束修复，生命周期回归4fail/12pass到16pass。最终本地完整`pnpm check`exit0，694unit/339integration、重复率2.76%，strictOpenSpec通过；两次全diff修复复审准入。审查头`104f905af028730aaf8d6b3c0a2e0444e6cb39e0`在giap-vps固定Node24.13.1/pnpm10.34.6工具链执行完整Docker11/11、exit0、100.41秒，新增实际入口两次启动/重建同主机名、独立inspect、4条审计、两个helper清理；原10例通过，独立资源清点为空。首轮Docker10/11失败不计成功；最终PR头/CI见PR#143。关键路径人工白盒审查按用户指令后置至Epic完成。
 
+### Issue #37 risk/evidence map (task9.4 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: existing exported startup reads persisted limits, CPU/MiB conversion to Docker fields; public behavior RED/GREEN and independent inspect.
+- Config / project setup — selected: existing settings defaults and changed rows observed anew; no new environment/schema fields, invalid conversion fails before mutations.
+- Resource limits / large input / discovery; Concurrency / shared state / ordering — selected: finite CPU/memory/PID cgroups, fixed512PID and no extra swap; snapshot per creation, existing sibling unchanged,256MiB/512MiB actual OOM and sibling usability proof.
+- Auth / permissions / secrets; File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: exact-owned test targets only, OOM payload stays inside container, no globalhost controls or secret leakage, failure preserves guards/overlay/index/audit contract and cleanup evidence.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: existing startup/composition security and eleven Docker cases retained, pinned host cgroup/daemon observations; no dependency change.
+- Documentation / migration notes — selected: fixedPID/no-extra-swap/create-time semantics documented here; root checks, strict OpenSpec, exact-head source review/Docker/CI.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

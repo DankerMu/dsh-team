@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { recordAuditEvent } from '../audit/index.ts';
 import type { PlatformConfig } from '../config.ts';
+import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import {
   generateManagedConfig,
@@ -262,6 +263,14 @@ function startupFailure(stage: string, error: unknown): Error {
   );
 }
 
+function resourceLimit(value: number, unit: number): number {
+  const limit = value * unit;
+  // Docker interprets zero as unlimited; never round or overflow a persisted limit.
+  if (!Number.isSafeInteger(limit) || limit < 1)
+    throw new Error('Resource limit is not representable as a positive integral Docker value');
+  return limit;
+}
+
 /** Create/start only: no adoption, readiness, cookies, retry or destructive rollback. */
 export async function startUserContainer(input: StartUserContainerInput): Promise<StartResult> {
   let stage = 'account validation';
@@ -282,6 +291,10 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     stage = 'model environment validation';
     const envName = modelSettings.apiKeyEnv;
     validateModelEnvironment(envName, input.modelKey);
+    stage = 'resource limits';
+    const { cpuCores, memoryMiB } = readSettings(database);
+    const nanoCpus = resourceLimit(cpuCores, 1_000_000_000);
+    const memory = resourceLimit(memoryMiB, 1_048_576);
     const deadline = AbortSignal.timeout(START_TIMEOUT_MS);
     const signal =
       input.signal === undefined ? deadline : AbortSignal.any([input.signal, deadline]);
@@ -337,6 +350,10 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
         Labels: { 'dsh-team.user': userId },
         ExposedPorts: { '3080/tcp': {} },
         HostConfig: {
+          NanoCpus: nanoCpus,
+          Memory: memory,
+          MemorySwap: memory,
+          PidsLimit: 512,
           Privileged: false,
           CapAdd: [],
           SecurityOpt: [`seccomp=${seccomp}`],
