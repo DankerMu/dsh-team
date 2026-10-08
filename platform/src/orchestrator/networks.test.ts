@@ -539,3 +539,56 @@ it('reuse rejects an implicit default-bridge declaration even if an inspect docu
 
   expect(state()).toEqual(before);
 });
+
+it('loss of an accepted create response reports uncertainty and never adopts or deletes the unconfirmed bridge', async () => {
+  const client: typeof fixture.client = {
+    ...fixture.client,
+    async json(method, path, body, signal, maxBytes) {
+      const response = await fixture.client.json(method, path, body, signal, maxBytes);
+      // The external Engine mutated, but the client boundary could not deliver its identity.
+      if (method === 'POST' && path === '/networks/create')
+        throw new Error('fixture transport response lost with private diagnostic');
+      return response;
+    },
+  };
+  const uncertainOwner = createOrchestrator({ client, database });
+
+  await expect(uncertainOwner.startUserContainer(input)).rejects.toThrow(
+    'network creation outcome unconfirmed',
+  );
+
+  expect(owned().Containers).toEqual({});
+  expect(fixture.daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(database.prepare('SELECT * FROM instances').all()).toEqual([]);
+  expect(database.prepare('SELECT * FROM audit_events').all()).toEqual([]);
+  expect(
+    fixture.daemon.requests.some(
+      ({ method, path }) => method === 'DELETE' && path.startsWith('/networks'),
+    ),
+  ).toBe(false);
+  const before = state();
+  await expect(uncertainOwner.startUserContainer(input)).rejects.toThrow('network allocation');
+  expect(state()).toEqual(before);
+});
+
+it('a definite daemon create rejection remains an explicit failure without transport-uncertainty or compensation', async () => {
+  fixture.daemon.overrides.set('POST /networks/create', {
+    status: 409,
+    document: { message: 'fixture subnet collision' },
+  });
+  const before = structuredClone([...networks]);
+
+  const failed = await owner.startUserContainer(input).catch((error: unknown) => error);
+
+  if (!(failed instanceof Error)) throw new Error('Expected rejected startup');
+  expect(failed.message).toContain('network allocation');
+  expect(failed.message).not.toContain('network creation outcome unconfirmed');
+  expect([...networks]).toEqual(before);
+  expect(fixture.daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(database.prepare('SELECT * FROM instances').all()).toEqual([]);
+  expect(
+    fixture.daemon.requests.some(
+      ({ method, path }) => method === 'DELETE' && path.startsWith('/networks'),
+    ),
+  ).toBe(false);
+});

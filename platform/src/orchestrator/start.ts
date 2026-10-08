@@ -19,6 +19,7 @@ import { containerId, object, resolvedImageId } from './identity.ts';
 import {
   attachedNetwork,
   createUserNetwork,
+  NetworkCreationUnconfirmedError,
   removeUserNetwork,
   validateUserNetwork,
 } from './networks.ts';
@@ -258,12 +259,14 @@ function startupFailure(stage: string, error: unknown): Error {
       (failure: unknown) =>
         failure instanceof Error && failure.message === 'Managed composition cleanup failed',
     );
+  const networkUnconfirmed = error instanceof NetworkCreationUnconfirmedError;
   return new Error(
-    `Container startup failed during ${stage}${cleanupFailed ? '; managed composition cleanup failed' : ''}`,
+    `Container startup failed during ${stage}${cleanupFailed ? '; managed composition cleanup failed' : ''}${networkUnconfirmed ? '; network creation outcome unconfirmed' : ''}`,
     {
       cause: {
         stage,
         cleanupFailed,
+        networkUnconfirmed,
         dockerStatus: error instanceof DockerHttpError ? error.statusCode : undefined,
       },
     },
@@ -440,7 +443,7 @@ export async function startUserContainer(
     stage = 'network allocation';
     const cleanup = cleanupClient;
     network = await allocate(() =>
-      createUserNetwork(client, cleanup, userId, config.subnetPool, replacing),
+      createUserNetwork(client, cleanup, userId, config.subnetPool, signal, replacing),
     );
     stage = 'container creation';
     signal.throwIfAborted();

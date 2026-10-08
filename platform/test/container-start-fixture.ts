@@ -482,10 +482,11 @@ export async function startupOwnerFixture() {
   };
 }
 
-/** Real Unix HTTP fixture; barriers delay the Engine response, not the public lifecycle method. */
+/** Real Unix HTTP fixture: hold accepted mutation or independently hold its captured response. */
 export function startupUnixServer(
   reply: (request: StartupRequest) => Reply,
   hold: (method: string, path: string) => Promise<undefined> | undefined,
+  holdResponse?: (request: StartupRequest) => Promise<undefined> | undefined,
 ) {
   return createServer((request, response) => {
     const chunks: Buffer[] = [];
@@ -500,13 +501,20 @@ export function startupUnixServer(
             chunks.length === 0
               ? {}
               : (JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>);
-          const result = reply({ method, path, body });
-          response
-            .writeHead(result.status)
-            .end(
-              result.bytes ??
-                (result.document === undefined ? '' : JSON.stringify(result.document)),
-            );
+          const accepted = { method, path, body };
+          const result = reply(accepted);
+          const deliver = () => {
+            if (response.destroyed) return;
+            response
+              .writeHead(result.status)
+              .end(
+                result.bytes ??
+                  (result.document === undefined ? '' : JSON.stringify(result.document)),
+              );
+          };
+          const responseWaiting = holdResponse?.(accepted);
+          if (responseWaiting === undefined) deliver();
+          else void responseWaiting.then(deliver);
         } catch {
           response.writeHead(500).end();
         }

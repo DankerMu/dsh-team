@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, stat, watch, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -14,6 +14,7 @@ import {
   startupDaemon,
   startupUnixServer,
 } from './container-start-fixture.ts';
+import type { StartupRequest } from './container-start-fixture.ts';
 
 const OTHER = 'mnopqrstuvwx';
 const OTHER_CONTAINER = 'd'.repeat(64);
@@ -34,9 +35,11 @@ async function unixFixture() {
       daemon.setContainerId(START_CONTAINER);
   });
   let barrier: ((method: string, path: string) => Promise<undefined> | undefined) | undefined;
+  let responseBarrier: ((request: StartupRequest) => Promise<undefined> | undefined) | undefined;
   const server = startupUnixServer(
     (request) => daemon.reply(request),
     (method, path) => barrier?.(method, path),
+    (request) => responseBarrier?.(request),
   );
   const socket = join(root, 'engine.sock');
   server.listen(socket);
@@ -65,6 +68,9 @@ async function unixFixture() {
     input,
     hold(callback: typeof barrier) {
       barrier = callback;
+    },
+    holdResponse(callback: typeof responseBarrier) {
+      responseBarrier = callback;
     },
     async close() {
       server.closeAllConnections();
@@ -340,3 +346,239 @@ it('overlapping Unix starts select distinct fresh subnets while another user com
     await fixture.close();
   }
 });
+
+it.each(['fd00::/129', 'invalid:colon/28'])(
+  'public Unix allocation rejects malformed foreign CIDR %s before creating a bridge',
+  async (subnet) => {
+    const fixture = await unixFixture();
+    try {
+      fixture.daemon.overrides.set('GET /networks', {
+        status: 200,
+        document: [
+          ...fixture.daemon.networks.values(),
+          {
+            Id: 'f'.repeat(64),
+            Name: 'foreign-ipv6-looking',
+            Driver: 'bridge',
+            Internal: false,
+            EnableIPv6: true,
+            Labels: {},
+            IPAM: { Config: [{ Subnet: subnet }] },
+            Containers: {},
+          },
+        ],
+      });
+      const before = structuredClone([...fixture.daemon.networks]);
+
+      await expect(fixture.owner.startUserContainer(fixture.input)).rejects.toThrow(
+        'network allocation',
+      );
+
+      expect([...fixture.daemon.networks]).toEqual(before);
+      expect(fixture.daemon.containers.has(START_CONTAINER)).toBe(false);
+      expect(fixture.database.prepare('SELECT * FROM instances').all()).toEqual([]);
+      expect(fixture.database.prepare('SELECT * FROM audit_events').all()).toEqual([]);
+      expect(fixture.daemon.requests.some(({ path }) => path === '/networks/create')).toBe(false);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+it('public Unix allocation retains valid IPv6 inventory while selecting the first free IPv4 subnet', async () => {
+  const fixture = await unixFixture();
+  try {
+    fixture.daemon.overrides.set('GET /networks', {
+      status: 200,
+      document: [
+        ...fixture.daemon.networks.values(),
+        {
+          Id: 'f'.repeat(64),
+          Name: 'foreign-ipv6',
+          Driver: 'bridge',
+          Internal: false,
+          EnableIPv6: true,
+          Labels: {},
+          IPAM: { Config: [{ Subnet: 'fd00::/64' }] },
+          Containers: {},
+        },
+      ],
+    });
+
+    expect(await fixture.owner.startUserContainer(fixture.input)).toMatchObject({
+      outcome: 'starting',
+      containerId: START_CONTAINER,
+    });
+
+    expect(fixture.daemon.networks.get(START_NETWORK)?.IPAM).toEqual({
+      Driver: 'default',
+      Config: [{ Subnet: '172.30.0.0/28' }],
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+async function observeOverlay(
+  directory: string,
+  userId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  for await (const event of watch(directory, { signal })) {
+    if (event.filename === `${userId}.patch.yml`) {
+      await stat(join(directory, event.filename));
+      return;
+    }
+  }
+  throw new Error('Overlay observer closed without an owned committed file');
+}
+
+it.each(['before mutation', 'after mutation before response'] as const)(
+  'canceling an accepted create %s retains allocation ownership until response and empty compensation settle',
+  async (phase) => {
+    const fixture = await unixFixture();
+    const accepted = Promise.withResolvers<undefined>();
+    const createRelease = Promise.withResolvers<undefined>();
+    const mutationObserved = Promise.withResolvers<undefined>();
+    const compensating = Promise.withResolvers<undefined>();
+    const compensationRelease = Promise.withResolvers<undefined>();
+    const observer = new AbortController();
+    const earlyAllocations: { method: string; path: string }[] = [];
+    let createHeld = false;
+    let compensationSettled = false;
+    let bLaunched = false;
+    let aFinished = false;
+    let bFinished = false;
+    let compensatedEmpty = false;
+    fixture.hold((method, path) => {
+      if (
+        phase === 'before mutation' &&
+        method === 'POST' &&
+        path === '/networks/create' &&
+        !createHeld
+      ) {
+        createHeld = true;
+        accepted.resolve(undefined);
+        return createRelease.promise;
+      }
+      return undefined;
+    });
+    fixture.holdResponse((request) => {
+      if (
+        request.method === 'POST' &&
+        request.path === '/networks/create' &&
+        request.body.Name === `dsh-team-net-${START_USER}`
+      ) {
+        mutationObserved.resolve(undefined);
+        if (phase === 'after mutation before response' && !createHeld) {
+          createHeld = true;
+          accepted.resolve(undefined);
+          return createRelease.promise;
+        }
+      }
+      if (request.method === 'DELETE' && request.path === `/networks/${START_NETWORK}`) {
+        compensating.resolve(undefined);
+        return compensationRelease.promise;
+      }
+      return undefined;
+    });
+    fixture.daemon.beforeRequest(({ method, path, body }) => {
+      if (path === `/containers/create?name=dsh-team-u-${START_USER}`)
+        fixture.daemon.setContainerId(START_CONTAINER);
+      if (path === `/containers/create?name=dsh-team-u-${OTHER}`)
+        fixture.daemon.setContainerId(OTHER_CONTAINER);
+      if (method === 'DELETE' && path === `/networks/${START_NETWORK}`) {
+        const network = fixture.daemon.networks.get(START_NETWORK);
+        compensatedEmpty = network !== undefined && Object.keys(network.Containers).length === 0;
+      }
+      if (
+        bLaunched &&
+        !compensationSettled &&
+        (path === `/networks/dsh-team-net-${OTHER}` ||
+          (method === 'GET' && path === '/networks') ||
+          (method === 'POST' &&
+            path === '/networks/create' &&
+            body.Name === `dsh-team-net-${OTHER}`))
+      )
+        earlyAllocations.push({ method, path });
+    });
+    const cancellation = new AbortController();
+    const a = fixture.owner.startUserContainer({ ...fixture.input, signal: cancellation.signal });
+    const aSettlement = Promise.allSettled([a]).then((results) => {
+      aFinished = true;
+      return results;
+    });
+    let b: Promise<unknown> | undefined;
+    let bSettlement: Promise<unknown> | undefined;
+    let overlaySettlement: Promise<unknown> | undefined;
+    try {
+      await accepted.promise;
+      // B must reach a genuine filesystem output checkpoint before checking that allocation is held.
+      // The observation deadline only bounds a broken fixture; it is not an ordering assertion.
+      const overlay = observeOverlay(
+        fixture.input.config.managedConfigDir,
+        OTHER,
+        AbortSignal.any([observer.signal, AbortSignal.timeout(8_000)]),
+      );
+      overlaySettlement = Promise.allSettled([overlay]);
+      cancellation.abort();
+      bLaunched = true;
+      b = fixture.owner.startUserContainer({ ...fixture.input, userId: OTHER });
+      bSettlement = Promise.allSettled([b]).then((results) => {
+        bFinished = true;
+        return results;
+      });
+      await overlay;
+
+      expect(aFinished).toBe(false);
+      expect(bFinished).toBe(false);
+      expect(earlyAllocations).toEqual([]);
+      createRelease.resolve(undefined);
+      await mutationObserved.promise;
+      await compensating.promise;
+
+      expect(compensatedEmpty).toBe(true);
+      expect(fixture.daemon.networks.has(START_NETWORK)).toBe(false);
+      expect(aFinished).toBe(false);
+      expect(bFinished).toBe(false);
+      expect(earlyAllocations).toEqual([]);
+      expect(fixture.database.prepare('SELECT * FROM instances').all()).toEqual([]);
+      compensationSettled = true;
+      compensationRelease.resolve(undefined);
+      expect(await aSettlement).toMatchObject([{ status: 'rejected' }]);
+      expect(await b).toMatchObject({ outcome: 'starting', containerId: OTHER_CONTAINER });
+
+      expect(fixture.daemon.networks.has(START_NETWORK)).toBe(false);
+      expect(
+        [...fixture.daemon.networks.values()].some(
+          ({ Name }) => Name === `dsh-team-net-${START_USER}`,
+        ),
+      ).toBe(false);
+      const other = [...fixture.daemon.networks.values()].find(
+        ({ Name }) => Name === `dsh-team-net-${OTHER}`,
+      );
+      expect(other?.IPAM).toEqual({ Driver: 'default', Config: [{ Subnet: '172.30.0.0/28' }] });
+      expect(fixture.database.prepare('SELECT user_id FROM instances').all()).toEqual([
+        { user_id: OTHER },
+      ]);
+      expect(await fixture.owner.startUserContainer(fixture.input)).toMatchObject({
+        outcome: 'starting',
+        containerId: START_CONTAINER,
+      });
+      const retried = [...fixture.daemon.networks.values()].find(
+        ({ Name }) => Name === `dsh-team-net-${START_USER}`,
+      );
+      expect(retried?.Id).not.toBe(START_NETWORK);
+      expect(retried?.IPAM).toEqual({ Driver: 'default', Config: [{ Subnet: '172.30.0.16/28' }] });
+    } finally {
+      createRelease.resolve(undefined);
+      compensationRelease.resolve(undefined);
+      observer.abort();
+      await overlaySettlement;
+      await mutationObserved.promise;
+      await aSettlement;
+      await bSettlement;
+      await fixture.close();
+    }
+  },
+);

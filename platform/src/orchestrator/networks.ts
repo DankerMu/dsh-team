@@ -9,6 +9,12 @@ export interface OwnedNetwork {
   readonly created: boolean;
 }
 
+export class NetworkCreationUnconfirmedError extends Error {
+  constructor() {
+    super('Network creation outcome unconfirmed');
+  }
+}
+
 const MAX_NETWORK_BYTES = 4 * 1024 * 1024;
 const nameFor = (userId: string) => `dsh-team-net-${userId}`;
 
@@ -162,8 +168,8 @@ function occupiedSubnets(document: unknown): string[] {
       const subnet = object(config).Subnet;
       if (subnet === undefined || subnet === '') continue;
       if (typeof subnet !== 'string') throw new Error('Invalid Docker subnet inventory');
-      // IPv6 ranges cannot occupy this IPv4 pool; IPv4 CIDRs are validated by allocateSubnet.
-      if (!subnet.includes(':')) occupied.push(subnet);
+      // The allocator validates every CIDR and geometrically ignores valid IPv6 ranges.
+      occupied.push(subnet);
     }
   }
   return occupied;
@@ -175,6 +181,7 @@ export async function createUserNetwork(
   cleanup: DockerClient,
   userId: string,
   pool: string,
+  signal: AbortSignal,
   reuse = false,
 ): Promise<OwnedNetwork> {
   const existing = await inspect(client, nameFor(userId));
@@ -192,9 +199,11 @@ export async function createUserNetwork(
     occupiedSubnets(await client.json('GET', '/networks', undefined, undefined, MAX_NETWORK_BYTES)),
   );
   let id: string | undefined;
+  signal.throwIfAborted();
   try {
     id = containerId(
-      await client.json('POST', '/networks/create', {
+      // Once submitted, caller cancellation cannot discard the response identity or advance the queue.
+      await cleanup.json('POST', '/networks/create', {
         Name: nameFor(userId),
         Driver: 'bridge',
         Internal: false,
@@ -204,18 +213,22 @@ export async function createUserNetwork(
         IPAM: { Driver: 'default', Config: [{ Subnet: subnet }] },
       }),
     );
+    signal.throwIfAborted();
     const document = await inspect(client, id);
     const network = inspectedNetwork(document, userId, id);
     if (network.subnet !== subnet) throw new Error('Allocated subnet changed');
     ownedEndpoints(document, userId);
     return { ...network, created: true };
   } catch (error) {
-    if (id !== undefined) {
-      try {
-        await removeUserNetwork(cleanup, userId, () => undefined, undefined, { id, subnet });
-      } catch {
-        throw new Error('Network allocation and rollback failed');
-      }
+    if (id === undefined) {
+      // A rejected daemon response remains a known error; transport/deadline/identity loss is uncertain.
+      if (error instanceof DockerHttpError) throw error;
+      throw new NetworkCreationUnconfirmedError();
+    }
+    try {
+      await removeUserNetwork(cleanup, userId, () => undefined, undefined, { id, subnet });
+    } catch {
+      throw new Error('Network allocation and rollback failed');
     }
     throw error;
   }
