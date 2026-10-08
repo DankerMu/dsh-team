@@ -9,17 +9,24 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import {
   assertRunningReuse,
+  attemptCookieOperation,
   buildCookieFixtureApp,
   cookieState,
   frame,
   launchFrames,
   reply,
+  replyNetworkRequest,
 } from './dsh-cookie-fixture.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { createDockerClient, createOrchestrator } from '../src/orchestrator/index.ts';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
-import { START_CONTAINER, START_IMAGE, START_USER } from './container-start-fixture.ts';
+import {
+  START_CONTAINER,
+  START_IMAGE,
+  START_USER,
+  startupDaemon,
+} from './container-start-fixture.ts';
 
 let root: string;
 let database: DatabaseHandle;
@@ -38,6 +45,7 @@ let logs: string;
 let frames: Buffer[];
 let inspection: Record<string, unknown>;
 let engineRequests: string[];
+let networkDaemon = startupDaemon();
 let imageReply: { status: number; document?: unknown };
 let httpRequests: number;
 let logClosed: Promise<void> | undefined;
@@ -72,21 +80,8 @@ function input(signal?: AbortSignal) {
     ...(signal === undefined ? {} : { signal }),
   };
 }
-async function attempt(
-  signal?: AbortSignal,
-  operation = acquireDshCookie,
-): Promise<{ failed: boolean; serialized: string; result?: unknown }> {
-  try {
-    return await operation(input(signal)).then((result: unknown) => {
-      app.log.info({ result }, 'Acquisition returned');
-      return { failed: false, serialized: JSON.stringify({ result }), result };
-    });
-  } catch (error) {
-    app.log.error({ err: error }, 'Acquisition rejected');
-    const serialized =
-      error instanceof Error ? JSON.stringify(error, Object.getOwnPropertyNames(error)) : '';
-    return { failed: true, serialized };
-  }
+async function attempt(signal?: AbortSignal, operation = acquireDshCookie) {
+  return attemptCookieOperation(app, operation, input(signal));
 }
 function assertSafe(serialized: string, emptyAudit = true) {
   const audit = JSON.stringify(database.prepare('SELECT * FROM audit_events').all());
@@ -164,7 +159,7 @@ beforeEach(async () => {
     VALUES (?, 'starting', ?, '127.0.0.1', ?, 'dsh-team-user:local', ?, 1, 'previous-credential')`,
     )
     .run(START_USER, START_CONTAINER, port, START_IMAGE);
-  inspection = {
+  const container = {
     Id: START_CONTAINER,
     Name: `/dsh-team-u-${START_USER}`,
     Image: START_IMAGE,
@@ -172,8 +167,16 @@ beforeEach(async () => {
     State: { Running: true },
     NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }] } },
   };
+  inspection = container;
+  networkDaemon = startupDaemon();
+  networkDaemon.containers.set(START_CONTAINER, container);
+  networkDaemon.attachOwnedNetwork(START_USER, START_CONTAINER);
   engine = createServer((request, response) => {
     engineRequests.push(request.url ?? '');
+    if (request.url?.startsWith('/networks')) {
+      replyNetworkRequest(request, response, networkDaemon);
+      return;
+    }
     if (request.url?.startsWith('/images/')) {
       response.writeHead(imageReply.status).end(JSON.stringify(imageReply.document));
     } else if (request.url?.endsWith('/json')) {
@@ -247,7 +250,7 @@ it('commits running after authenticated readiness and reuses that genuine runnin
   };
 
   await waitForUserContainerReady(input());
-  await assertRunningReuse(root, database, startUserContainer, authority, port, engineRequests);
+  await assertRunningReuse(root, database, startUserContainer, authority, port);
 
   expect(observations).toEqual(['launch credential exchanged', 'authenticated homepage']);
   expect(readCookie() === cookie).toBe(true);

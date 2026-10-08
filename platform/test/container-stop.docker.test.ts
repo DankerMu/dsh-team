@@ -81,6 +81,7 @@ function startInput(
       seccompProfilePath: lifecycle.seccomp,
       managedConfigDir: lifecycle.overlayDirectory,
       authority: 'retirement.example:8443',
+      subnetPool: '172.30.0.0/16',
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',

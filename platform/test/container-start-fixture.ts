@@ -10,6 +10,7 @@ import { createDockerClient, createOrchestrator } from '../src/orchestrator/inde
 import type {
   DockerTransport,
   OrchestratorDependencies,
+  Orchestrator,
   StartUserContainerInput,
 } from '../src/orchestrator/index.ts';
 
@@ -17,6 +18,7 @@ export const START_USER = 'abcdefghijkl';
 export const START_IMAGE = `sha256:${'a'.repeat(64)}`;
 export const START_CONTAINER = 'b'.repeat(64);
 export const START_HELPER = 'c'.repeat(64);
+export const START_NETWORK = 'e'.repeat(64);
 export const START_MODEL = {
   baseURL: 'http://model.invalid/v1',
   apiKeyEnv: 'DMXAPI_KEY',
@@ -57,18 +59,167 @@ export interface Container {
   Name: string;
   Image: unknown;
   Config: Record<string, unknown>;
+  HostConfig?: Record<string, unknown>;
   State: { Running: boolean };
-  NetworkSettings: { Ports: unknown };
+  NetworkSettings: { Ports: unknown; Networks?: Record<string, unknown> };
+}
+
+export interface StartupNetwork {
+  Id: string;
+  Name: string;
+  Driver: string;
+  Internal: boolean;
+  EnableIPv6: boolean;
+  Labels: unknown;
+  IPAM: unknown;
+  Containers: Record<string, { Name: string; IPv4Address: string; EndpointID?: string }>;
+}
+
+export interface StartupDaemon {
+  requests: StartupRequest[];
+  containers: Map<string, Container>;
+  networks: Map<string, StartupNetwork>;
+  overrides: Map<string, Reply>;
+  reply: (request: StartupRequest) => Reply;
+  transport: DockerTransport;
+  attachOwnedNetwork: (user: string, id: string) => void;
+  removeContainer: (id: string) => void;
+  setContainerId: (value: string) => void;
+  setComposition: (value?: string) => void;
+  beforeRequest: (callback: (request: StartupRequest) => void) => void;
+}
+
+export interface StartupOwnerFixture {
+  root: string;
+  database: DatabaseHandle;
+  daemon: StartupDaemon;
+  client: OrchestratorDependencies['client'];
+  owner: Orchestrator;
+  input: StartUserContainerInput;
+  beforeRequest: (
+    callback:
+      ((method: string, path: string, signal?: AbortSignal) => Promise<undefined>) | undefined,
+  ) => void;
+}
+
+function networkObject(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Malformed fixture network request');
+  // Docker request bodies are decoded JSON; narrow fields at this external boundary.
+  return value as Record<string, unknown>;
+}
+
+function startupNetworks(containers: ReadonlyMap<string, Container>) {
+  const networks = new Map<string, StartupNetwork>();
+  let sequence = 1;
+  networks.set('0'.repeat(64), {
+    Id: '0'.repeat(64),
+    Name: 'bridge',
+    Driver: 'bridge',
+    Internal: false,
+    EnableIPv6: false,
+    Labels: {},
+    IPAM: { Driver: 'default', Config: [{ Subnet: '172.17.0.0/16' }] },
+    Containers: {},
+  });
+  function create(body: Record<string, unknown>): Reply {
+    if ([...networks.values()].some((row) => row.Name === body.Name))
+      return { status: 409, document: { message: 'network already exists' } };
+    const id = sequence === 1 ? START_NETWORK : sequence.toString(16).padStart(64, '0');
+    sequence += 1;
+    if (networks.has(id))
+      return { status: 409, document: { message: 'network identity collision' } };
+    const driver = body.Driver ?? 'bridge';
+    if (typeof body.Name !== 'string' || typeof driver !== 'string')
+      throw new Error('Malformed fixture network identity');
+    networks.set(id, {
+      Id: id,
+      Name: body.Name,
+      Driver: driver,
+      Internal: body.Internal === true,
+      EnableIPv6: body.EnableIPv6 === true,
+      Labels: body.Labels ?? {},
+      IPAM: body.IPAM ?? { Driver: 'default', Config: [] },
+      Containers: {},
+    });
+    return { status: 201, document: { Id: id, Warning: '' } };
+  }
+  function disconnect(row: StartupNetwork, body: Record<string, unknown>): Reply {
+    if (body.Force === true) throw new Error('Fixture refuses forced endpoint disconnection');
+    Reflect.deleteProperty(row.Containers, String(body.Container));
+    const container = containers.get(String(body.Container));
+    if (container?.NetworkSettings.Networks !== undefined)
+      Reflect.deleteProperty(container.NetworkSettings.Networks, row.Name);
+    return { status: 200 };
+  }
+  function reply({ method, path, body }: StartupRequest): Reply | undefined {
+    const url = new URL(`http://docker${path}`);
+    if (method === 'GET' && url.pathname === '/networks')
+      return { status: 200, document: [...networks.values()] };
+    if (method === 'POST' && url.pathname === '/networks/create') return create(body);
+    if (!url.pathname.startsWith('/networks/')) return undefined;
+    const target = decodeURIComponent(url.pathname.split('/')[2] ?? '');
+    const row = [...networks.values()].find((item) => item.Id === target || item.Name === target);
+    if (row === undefined) return { status: 404, document: { message: 'network not found' } };
+    if (method === 'GET') return { status: 200, document: row };
+    if (method === 'DELETE') {
+      if (Object.keys(row.Containers).length !== 0)
+        return { status: 409, document: { message: 'network has active endpoints' } };
+      networks.delete(row.Id);
+      return { status: 204 };
+    }
+    if (method === 'POST' && url.pathname.endsWith('/disconnect')) return disconnect(row, body);
+    throw new Error('Unexpected fixture network operation');
+  }
+  function attach(container: Container, body: Record<string, unknown>) {
+    const mode = networkObject(body.HostConfig).NetworkMode ?? 'bridge';
+    const attached: Record<string, unknown> = {};
+    if (mode === 'none') return attached;
+    const row = [...networks.values()].find((item) => item.Id === mode || item.Name === mode);
+    if (row === undefined) throw new Error('Fixture container network does not exist');
+    const requested =
+      body.NetworkingConfig === undefined
+        ? {}
+        : networkObject(networkObject(body.NetworkingConfig).EndpointsConfig);
+    const endpoint = requested[row.Id] ?? requested[row.Name] ?? {};
+    const config = networkObject(row.IPAM).Config;
+    if (!Array.isArray(config)) throw new Error('Fixture network has no IPAM config');
+    const subnet = networkObject(config[0]).Subnet;
+    if (typeof subnet !== 'string') throw new Error('Fixture network has no subnet');
+    const [base, prefix] = subnet.split('/');
+    const octets = (base ?? '').split('.');
+    octets[3] = String(Number(octets[3]) + 2);
+    const address = octets.join('.');
+    row.Containers[container.Id] = {
+      Name: container.Name.slice(1),
+      IPv4Address: `${address}/${prefix ?? ''}`,
+      EndpointID: container.Id,
+    };
+    attached[row.Name] = {
+      NetworkID: row.Id,
+      EndpointID: container.Id,
+      IPAddress: address,
+      Aliases: networkObject(endpoint).Aliases ?? null,
+    };
+    return attached;
+  }
+  return { networks, reply, attach };
 }
 
 /** External Engine boundary only; composition/generation/writing/auditing remain real. */
-export function startupDaemon() {
+export function startupDaemon(): StartupDaemon {
   const requests: StartupRequest[] = [];
   const containers = new Map<string, Container>();
   const overrides = new Map<string, Reply>();
+  const networkState = startupNetworks(containers);
   let compositionOutput = COMPOSITION;
   let nextContainerId = START_CONTAINER;
   let before: ((request: StartupRequest) => void) | undefined;
+  function removeContainer(id: string): void {
+    containers.delete(id);
+    for (const network of networkState.networks.values())
+      Reflect.deleteProperty(network.Containers, id);
+  }
   function discoveryReply(request: StartupRequest): Reply | undefined {
     const override = overrides.get(`${request.method} ${request.path}`);
     if (override !== undefined) return override;
@@ -84,35 +235,40 @@ export function startupDaemon() {
       })),
     };
   }
+  function createContainer(path: string, body: Record<string, unknown>): Reply {
+    const name = new URL(`http://docker${path}`).searchParams.get('name') ?? '';
+    const helper = name.startsWith('dsh-team-compose-');
+    const container: Container = {
+      Id: helper ? START_HELPER : nextContainerId,
+      Name: `/${name}`,
+      Image: body.Image,
+      Config: body,
+      HostConfig: networkObject(body.HostConfig),
+      State: { Running: false },
+      NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
+    };
+    container.NetworkSettings.Networks = networkState.attach(container, body);
+    containers.set(container.Id, container);
+    return { status: 201, document: { Id: container.Id } };
+  }
   function reply(request: StartupRequest): Reply {
     requests.push(request);
     before?.(request);
     const override = discoveryReply(request);
     if (override !== undefined) return override;
+    const networkReply = networkState.reply(request);
+    if (networkReply !== undefined) return networkReply;
     const { method, path, body } = request;
     if (path.startsWith('/images/')) return { status: 200, document: { Id: START_IMAGE } };
     if (path === '/volumes/create') return { status: 201, document: body };
-    if (path.startsWith('/containers/create?')) {
-      const name = new URL(`http://docker${path}`).searchParams.get('name') ?? '';
-      const helper = name.startsWith('dsh-team-compose-');
-      const container: Container = {
-        Id: helper ? START_HELPER : nextContainerId,
-        Name: `/${name}`,
-        Image: body.Image,
-        Config: body,
-        State: { Running: false },
-        NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
-      };
-      containers.set(container.Id, container);
-      return { status: 201, document: { Id: container.Id } };
-    }
+    if (path.startsWith('/containers/create?')) return createContainer(path, body);
     const target = new URL(`http://docker${path}`).pathname.split('/')[2];
     const container = [...containers.values()].find(
       (row) => row.Id === target || row.Name === `/${target ?? ''}`,
     );
     if (container === undefined) return { status: 404, document: { message: 'not found' } };
     if (method === 'DELETE') {
-      containers.delete(container.Id);
+      removeContainer(container.Id);
       return { status: 204 };
     }
     if (path.endsWith('/json')) return { status: 200, document: container };
@@ -122,6 +278,7 @@ export function startupDaemon() {
     }
     if (path.endsWith('/start')) {
       container.State.Running = true;
+      container.NetworkSettings.Networks = networkState.attach(container, container.Config);
       return { status: 204 };
     }
     if (path.includes('/wait?')) return { status: 200, document: { StatusCode: 0 } };
@@ -169,9 +326,32 @@ export function startupDaemon() {
   return {
     requests,
     containers,
+    networks: networkState.networks,
     overrides,
     reply,
     transport,
+    removeContainer,
+    attachOwnedNetwork(userId: string, id: string) {
+      const container = containers.get(id);
+      if (container === undefined) throw new Error('Fixture seed container missing');
+      const name = `dsh-team-net-${userId}`;
+      const created = networkState.reply({
+        method: 'POST',
+        path: '/networks/create',
+        body: {
+          Name: name,
+          Driver: 'bridge',
+          Labels: { 'dsh-team.user': userId },
+          IPAM: { Driver: 'default', Config: [{ Subnet: '172.30.0.0/28' }] },
+        },
+      });
+      const network = networkObject(created?.document).Id;
+      container.HostConfig = { NetworkMode: network };
+      container.NetworkSettings.Networks = networkState.attach(container, {
+        HostConfig: { NetworkMode: network },
+        NetworkingConfig: { EndpointsConfig: { [String(network)]: { Aliases: [`u-${userId}`] } } },
+      });
+    },
     setContainerId(value: string) {
       nextContainerId = value;
     },
@@ -197,7 +377,7 @@ export async function startupEvidence(database: DatabaseHandle, input: StartUser
 export async function startupCapacityEvidence(
   database: DatabaseHandle,
   input: StartUserContainerInput,
-  daemon: { requests: readonly StartupRequest[]; containers: ReadonlyMap<string, Container> },
+  daemon: Pick<StartupDaemon, 'requests' | 'containers' | 'networks'>,
 ) {
   const changes: unknown = database.prepare('SELECT total_changes() AS count').get();
   return {
@@ -206,6 +386,7 @@ export async function startupCapacityEvidence(
     changes,
     requests: structuredClone(daemon.requests),
     containers: structuredClone([...daemon.containers]),
+    networks: structuredClone([...daemon.networks]),
   };
 }
 
@@ -214,9 +395,13 @@ export function expectDockerReads(
   count: number,
   ...paths: string[]
 ): void {
-  expect(requests.slice(count).map(({ method, path }) => ({ method, path }))).toEqual(
-    paths.map((path) => ({ method: 'GET', path })),
-  );
+  const reads = requests.slice(count);
+  expect(reads.every(({ method }) => method === 'GET')).toBe(true);
+  expect(
+    reads
+      .filter(({ path }) => !path.startsWith('/networks'))
+      .map(({ method, path }) => ({ method, path })),
+  ).toEqual(paths.map((path) => ({ method: 'GET', path })));
 }
 
 export function startupBarrier() {
@@ -266,6 +451,7 @@ export async function startupOwnerFixture() {
       seccompProfilePath,
       managedConfigDir: join(root, 'managed'),
       authority: 'team.example:8443',
+      subnetPool: '172.30.0.0/16',
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',

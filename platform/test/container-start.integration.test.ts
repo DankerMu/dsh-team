@@ -81,6 +81,7 @@ beforeEach(async () => {
       seccompProfilePath: seccomp,
       managedConfigDir: join(root, 'managed'),
       authority: 'team.example:8443',
+      subnetPool: '172.30.0.0/16',
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',
@@ -630,7 +631,7 @@ it('exact-ID absence with a foreign canonical name never adopts or destroys the 
     Image: `sha256:${'f'.repeat(64)}`,
     Config: { Labels: { 'dsh-team.user': 'mnopqrstuvwx' } },
   };
-  daemon.containers.delete(START_CONTAINER);
+  daemon.removeContainer(START_CONTAINER);
   daemon.containers.set(foreign.Id, foreign);
   const count = daemon.requests.length;
 

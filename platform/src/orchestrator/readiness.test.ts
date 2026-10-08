@@ -134,6 +134,7 @@ beforeEach(() => {
     NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   };
   daemon.containers.set(START_CONTAINER, container);
+  daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
   daemon.setComposition(`harmless boot line\ndsh web: http://127.0.0.1:3080/?token=${token}\n`);
   daemon.overrides.set(`POST /containers/${START_CONTAINER}/stop?t=1`, { status: 204 });
   daemon.beforeRequest((request) => {

@@ -13,6 +13,7 @@ import {
 } from './container-start-docker-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import { isAbsentResource } from './docker-command.ts';
 
 async function corruptOwnedOverlay(
   lifecycle: UserImageLifecycle,
@@ -167,6 +168,7 @@ async function readinessScenario(
           seccompProfilePath: lifecycle.seccomp,
           managedConfigDir: lifecycle.overlayDirectory,
           authority,
+          subnetPool: '172.30.0.0/16',
         },
         modelSettings: START_MODEL,
         modelKey: 'docker-acceptance-only-not-a-model-credential',
@@ -224,6 +226,15 @@ async function readinessScenario(
     if (launchToken !== undefined) expect(diagnostic.includes(launchToken)).toBe(false);
     if (badOverlay) {
       assertFailedStartupLogs(row, observed.stdout + observed.stderr);
+      const networkName = `dsh-team-net-${userId}`;
+      expect(
+        isAbsentResource(
+          lifecycle.command(['network', 'inspect', networkName], 15_000),
+          'network',
+          networkName,
+        ),
+      ).toBe(true);
+      expect(record(container.NetworkSettings).Networks).toEqual({});
     } else {
       expect(launchToken !== undefined).toBe(true);
       await assertAuthenticatedReadiness(container, row, authority, diagnostic);

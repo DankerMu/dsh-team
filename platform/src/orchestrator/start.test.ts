@@ -46,6 +46,7 @@ async function fixture() {
       seccompProfilePath: policy,
       managedConfigDir: join(root, 'managed'),
       authority: 'team.example:8443',
+      subnetPool: '172.30.0.0/16',
     },
     userId: START_USER,
     modelSettings: START_MODEL,

@@ -3,7 +3,8 @@ import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerEndpoint, object, resolvedImageId } from './start.ts';
+import { inspectUserContainerEndpoint } from './start.ts';
+import { object, resolvedImageId } from './identity.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
 
 export interface AcquireDshCookieInput {

@@ -230,7 +230,7 @@ it('fresh raised limits admit another user and lowered limits preserve validated
 it('exact-ID404 replacement does not count its own stale active row twice', async () => {
   const { owner, input, daemon, database } = await fixture();
   await owner.startUserContainer(input);
-  daemon.containers.delete(START_CONTAINER);
+  daemon.removeContainer(START_CONTAINER);
   daemon.setContainerId(NEXT_CONTAINER);
 
   expect(await owner.startUserContainer(input)).toEqual({
@@ -250,7 +250,7 @@ it.each([0, 1, 2])(
   async (limit) => {
     const { owner, input, daemon, database, beforeRequest } = await fixture(2);
     await owner.startUserContainer(input);
-    daemon.containers.delete(START_CONTAINER);
+    daemon.removeContainer(START_CONTAINER);
     database
       .prepare("INSERT INTO instances (user_id, status) VALUES (?, 'running')")
       .run(OTHER_USER);

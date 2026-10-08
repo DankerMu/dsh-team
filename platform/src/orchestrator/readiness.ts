@@ -7,6 +7,9 @@ import type { AcquireDshCookieInput, IndexedInstance } from './credentials.ts';
 import { acquireCurrentDshCookie, CURRENT_INSTANCE, currentInstance } from './credentials.ts';
 import { startupLogTail } from './readiness-logs.ts';
 import { inspectUserContainerEndpoint, inspectUserContainerState } from './start.ts';
+import { removeUserNetwork, validateUserNetwork } from './networks.ts';
+import type { OwnedNetwork } from './networks.ts';
+import type { DockerClient } from './client.ts';
 
 const READINESS_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -19,6 +22,7 @@ interface Selection {
   identity: (string | number | null)[];
   cookie: string | null;
   acquired: boolean;
+  network?: OwnedNetwork;
 }
 
 function current(
@@ -100,6 +104,54 @@ async function authenticatedHomepage(
   }
 }
 
+async function networkCurrent(
+  selection: Selection,
+  document: unknown,
+  signal: AbortSignal,
+  stopped = false,
+): Promise<void> {
+  const client: DockerClient = {
+    ...selection.input.client,
+    json: (method, path, body, _signal, maxBytes) =>
+      selection.input.client.json(method, path, body, signal, maxBytes),
+  };
+  const network = await validateUserNetwork(
+    client,
+    selection.input.userId,
+    document,
+    selection.network?.id,
+    stopped,
+  );
+  if (selection.network !== undefined && selection.network.subnet !== network.subnet)
+    throw new Error('Current network subnet changed');
+  selection.network = network;
+  current(selection, selection.acquired);
+}
+
+async function cleanupNetwork(selection: Selection, signal: AbortSignal): Promise<string> {
+  try {
+    if (selection.network === undefined) throw new Error();
+    const client: DockerClient = {
+      ...selection.input.client,
+      json: (method, path, body, _signal, maxBytes) =>
+        selection.input.client.json(method, path, body, signal, maxBytes),
+    };
+    await removeUserNetwork(
+      client,
+      selection.input.userId,
+      () => {
+        signal.throwIfAborted();
+        if (!cleanupCurrent(selection)) throw new Error();
+      },
+      selection.instance.container_id,
+      selection.network,
+    );
+    return 'owned network removed';
+  } catch {
+    return 'network cleanup failed or unconfirmed';
+  }
+}
+
 async function observe(selection: Selection, signal: AbortSignal): Promise<void> {
   const { input, instance } = selection;
   if (instance.upstream_port === null || instance.last_started_at === null)
@@ -111,8 +163,10 @@ async function observe(selection: Selection, signal: AbortSignal): Promise<void>
   for (;;) {
     signal.throwIfAborted();
     current(selection, true);
+    const document = await inspected(selection, signal);
+    await networkCurrent(selection, document, signal);
     const port = inspectUserContainerEndpoint(
-      await inspected(selection, signal),
+      document,
       instance.container_id,
       `dsh-team-u-${input.userId}`,
       input.userId,
@@ -125,6 +179,7 @@ async function observe(selection: Selection, signal: AbortSignal): Promise<void>
   // A 200 response must not race a stopped/replaced instance or a changed backend credential.
   const document = await inspected(selection, signal);
   if (!running(selection, document)) throw new Error('Instance exited before readiness');
+  await networkCurrent(selection, document, signal);
   const port = inspectUserContainerEndpoint(
     document,
     instance.container_id,
@@ -156,8 +211,9 @@ async function monitor(selection: Selection, signal: AbortSignal): Promise<void>
   for (;;) {
     await delay(POLL_INTERVAL_MS, undefined, { signal });
     current(selection, selection.acquired);
-    if (!running(selection, await inspected(selection, signal)))
-      throw new Error('Owned instance exited during startup');
+    const document = await inspected(selection, signal);
+    if (!running(selection, document)) throw new Error('Owned instance exited during startup');
+    await networkCurrent(selection, document, signal);
   }
 }
 
@@ -210,6 +266,8 @@ async function fail(selection: Selection, reason: string): Promise<string> {
       stop = 'container stop failed or unconfirmed';
     }
     if (!cleanupCurrent(selection)) return 'newer credential preserved';
+    if (stop !== 'container stop failed or unconfirmed')
+      stop = `${stop}; ${await cleanupNetwork(selection, signal)}`;
     const lastError = `${reason}; ${stop}\n${tail.join('\n')}`;
     selection.input.database.transaction(() => {
       const { email } = current(selection);
@@ -275,6 +333,7 @@ export async function waitForUserContainerReady(input: AcquireDshCookieInput): P
     current(selection);
     owned = true;
     reason = 'DSH readiness failed during startup';
+    await networkCurrent(selection, document, signal, !live);
     if (!live) throw new Error();
     watching = monitor(selection, signal).catch(() => {
       if (!signal.aborted) {

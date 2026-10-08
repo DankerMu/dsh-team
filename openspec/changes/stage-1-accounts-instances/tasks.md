@@ -660,6 +660,14 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
 验证记录（#44）：纯allocateSubnet按当前IPAM子网快照以无符号区间首适配选/28，包含/更小范围均按重叠排除，释放快照可复用、耗尽明确报错；无数据库预留或隐藏状态，Docker快照读取/选择创建串行化归#45。PLATFORM_SUBNET_POOL默认172.30.0.0/16，仅缺省时应用；主进程迁移后读取持久maxRunningInstances，在监听前用同一解析器校验容量。实际source进程/27+limit3错误HTTP200的RED已观察；修复后父级source及compiled smoke均为limit3退出1/指名pool/无health，limit2返回HTTP200。完整pnpmcheck exit0：1020unit/605integration，subnet100%覆盖，重复率2.92%，strictOpenSpec通过。三席全diff审查clean，审查头`749a5d1e06939c3643ef2fa667da18cdd3072aad`固定Node24.13.1/pnpm10.34.6 giap-vps完整18Docker基线全部通过，exit0、116.48秒，覆盖全部dsh-team容器/卷/测试镜像的独立清点为空。最终头/CI见PR#151；人工白盒与环境规则变更审查后置Epic完成。
 
+### Issue #45 risk/evidence map (task10.2 only)
+
+- Public API / CLI / script entry; Config / project setup; Legacy compatibility / examples — selected: existing owner start/stop/readiness integration and required subnetPool propagation; loopback upstream remains until #46, all callers and eighteen baselines retained.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: owner-local short allocation queue, fresh all-network IPAM and sole allocator, bounded requests/cancellation and actual-settlement lock ownership; public deterministic race/failure tests.
+- Auth / permissions / secrets; Schema / columns / units / field names — selected: exact immutable network/container ownership, canonical bridge/subnet/sole attachment, full current row/account fences and existing atomic audits; no schema/reservation or credential exposure.
+- Error handling / rollback / partial outputs; File IO / path safety / overwrite — selected: safe empty-network rollback, missing-container retirement cleanup, stopped-container readiness compensation and truthful failures; volumes/overlays/sibling networks preserved.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: actual non-vacuous two-instance IP/hostname isolation and removal proof, exact-owned network-aware teardown/inventory; full root/strictOpenSpec/final-headDocker/CI and deferred human review.
+
 ## 11. 网关（任务包 1.8）
 
 依赖：第 6 组；测试用本地替身上游，不依赖第 9 组。模块在 `platform/src/gateway/`。

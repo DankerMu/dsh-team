@@ -32,6 +32,17 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   const { client, database } = dependencies;
   const tails = new Map<string, Promise<undefined>>();
   const pending = new Set<string>();
+  let allocationTail: Promise<unknown> = Promise.resolve();
+
+  function allocate<Result>(operation: () => Promise<Result>): Promise<Result> {
+    const result = allocationTail.then(operation);
+    // Only discovery/create/validation (and its rollback) settle before the next selector.
+    allocationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
 
   function reserve(userId: string): boolean {
     // Read after asynchronous reuse inspection: settings may have changed while it was pending.
@@ -52,7 +63,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   async function start(input: StartupInput): Promise<StartResult> {
     try {
-      return await startUserContainer(input, () => reserve(input.userId));
+      return await startUserContainer(input, () => reserve(input.userId), allocate);
     } finally {
       // Await actual work/cleanup, not caller cancellation. A durable active row remains counted.
       pending.delete(input.userId);

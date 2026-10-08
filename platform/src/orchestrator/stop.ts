@@ -3,7 +3,9 @@ import type { InstanceStopReason } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerState, resolvedImageId } from './start.ts';
+import { inspectUserContainerState } from './start.ts';
+import { resolvedImageId } from './identity.ts';
+import { captureUserNetwork, removeUserNetwork } from './networks.ts';
 
 export interface StopUserContainerInput {
   readonly client: DockerClient;
@@ -197,7 +199,32 @@ export async function stopUserContainer(
     signal.throwIfAborted();
     const selection = select(input);
     if (selection === undefined) return;
+    const networkClient: DockerClient = {
+      ...input.client,
+      json: (method, path, body, _signal, maxBytes) =>
+        input.client.json(method, path, body, signal, maxBytes),
+    };
+    const state = await running(input, selection, signal);
+    const network = await captureUserNetwork(
+      networkClient,
+      input.userId,
+      state === undefined ? undefined : selection.containerId,
+    );
+    current(fenced, selection, signal);
     await remove(fenced, selection, signal);
+    if (network === undefined) {
+      if ((await captureUserNetwork(networkClient, input.userId)) !== undefined) throw new Error();
+    } else {
+      await removeUserNetwork(
+        networkClient,
+        input.userId,
+        () => {
+          current(fenced, selection, signal);
+        },
+        undefined,
+        network,
+      );
+    }
     commit(fenced, selection, reason, signal);
   } catch {
     // Neither Docker response bodies, database errors nor backend credentials escape this boundary.

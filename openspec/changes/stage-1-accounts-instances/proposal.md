@@ -305,3 +305,11 @@
 - Add PLATFORM_SUBNET_POOL/config.subnetPool, default172.30.0.0/16, one canonical range parser and existing persisted maxRunningInstances; insufficient geometric capacity fails before listening and names the pool field.
 - Evidence floor: allocation/overlap/release/exhaustion RED/GREEN; actual source/built startup with persisted limits; root/strictOpenSpec and retained eighteen Docker baselines/final-head CI.
 - #44 is the declared pure-function slice; #45 fetches fresh all-Docker-network IPAM snapshots and serializes select/create. No network creation here. Human critical-path review deferred to Epic completion per user.
+
+## Issue #45 fixture
+
+- Feature; expanded task10.2 (agree with upstream): production per-instance bridge creation/attachment and exact-owned retirement cleanup.
+- Governing invariant: each started user instance joins only its own verified bridge; different-user allocation cannot claim the same subnet, and lifecycle cleanup cannot destroy a foreign or newer network/endpoint.
+- Preserve current loopback upstream transport pending #46, per-user queue/capacity/credentials/volume/audit safeguards, readiness error semantics, and all eighteen Docker baselines.
+- Evidence floor: public Unix/SQLite semantic RED/GREEN, deterministic cross-user allocation and cleanup failures; two real instances with positive listening controls and cross-IP/hostname isolation plus stop/network-removal/sibling preservation; full root/strictOpenSpec/final-head Docker/CI.
+- No platform-container attachment/no-port cutover (#46), startup orphan network sweep (#47), 61-network stress (#48), new schema/dependencies, data-volume deletion or DSH source changes. Human critical-path review remains deferred to Epic completion.
