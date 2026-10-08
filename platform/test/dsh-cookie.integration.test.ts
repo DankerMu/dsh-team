@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { buildApp } from '../src/app.ts';
+import { buildCookieFixtureApp, frame, reply } from './dsh-cookie-fixture.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import {
@@ -50,13 +50,6 @@ const authority = 'team.example:8443';
 // Independent openssl SHA256/base64url of this literal authority, per released protocol.
 const cookieName = 'dsh-auth-3eo-BcKCoQv18vgqA6jsyDZEVweseAZ0c-hb0sOZg64';
 
-function frame(stream: 1 | 2, text: string | Buffer): Buffer {
-  const data = typeof text === 'string' ? Buffer.from(text) : text;
-  const header = Buffer.alloc(8);
-  header[0] = stream;
-  header.writeUInt32BE(data.length, 4);
-  return Buffer.concat([header, data]);
-}
 function readCookie(): unknown {
   const row: unknown = database
     .prepare('SELECT dsh_cookie FROM instances WHERE user_id = ?')
@@ -97,14 +90,6 @@ function assertSafe(serialized: string, emptyAudit = true) {
     expect((logs + serialized + audit + errors).includes(secret)).toBe(false);
   }
   if (emptyAudit) expect(audit).toBe('[]');
-}
-function reply(response: ServerResponse) {
-  response
-    .writeHead(303, {
-      'set-cookie': ['unrelated=value; Path=/', `${cookie}; Path=/; HttpOnly; SameSite=Strict`],
-      location: './',
-    })
-    .end();
 }
 
 function replyWithDockerLogs(response: ServerResponse, tail: boolean): void {
@@ -155,7 +140,7 @@ beforeEach(async () => {
     frame(1, `${token.slice(17)}\n`),
   ];
   httpReply = (_request, response) => {
-    reply(response);
+    reply(response, cookie);
   };
   web = createServer((request, response) => {
     httpClosed = once(response, 'close').then(() => undefined);
@@ -201,28 +186,9 @@ beforeEach(async () => {
   });
   engine.listen(join(root, 'engine.sock'));
   await once(engine, 'listening');
-  app = await buildApp(
-    {
-      host: '127.0.0.1',
-      port: 0,
-      logLevel: 'info',
-      dataDir: root,
-      managedConfigDir: join(root, 'managed'),
-      dockerSocketPath: join(root, 'engine.sock'),
-      userImage: 'dsh-team-user:local',
-      seccompProfilePath: join(root, 'seccomp.json'),
-      publicUrl: `http://${authority}`,
-      authority,
-      cookieSecure: false,
-      trustedProxies: [],
-    },
-    database,
-    {
-      write: (line) => {
-        logs += line;
-      },
-    },
-  );
+  app = await buildCookieFixtureApp(root, database, authority, (line) => {
+    logs += line;
+  });
 });
 
 afterEach(async () => {
@@ -261,7 +227,7 @@ it('commits running and instance.ready only after the current cookie authenticat
   httpReply = (request, response) => {
     if (request.url === `/?token=${token}`) {
       observations.push('launch credential exchanged');
-      reply(response);
+      reply(response, cookie);
       return;
     }
     const authenticated =
@@ -454,7 +420,7 @@ it.each([
     else database.prepare(`UPDATE instances SET ${mutation[kind] ?? ''}`).run();
     if (kind !== 'account' && kind !== 'replacement-cookie')
       database.prepare("UPDATE instances SET dsh_cookie = 'replacement-credential'").run();
-    reply(response);
+    reply(response, cookie);
   };
 
   const result = await attempt();
@@ -541,7 +507,7 @@ function ready(signal?: AbortSignal) {
 
 function homepage(status = 200) {
   httpReply = (request, response) => {
-    if (request.url === `/?token=${token}`) reply(response);
+    if (request.url === `/?token=${token}`) reply(response, cookie);
     else {
       expect(request.url).toBe('/');
       expect(request.headers.cookie === cookie).toBe(true);
@@ -554,7 +520,7 @@ function homepage(status = 200) {
 it('polls transient homepage failures and never records readiness twice', async () => {
   let pages = 0;
   httpReply = (request, response) => {
-    if (request.url === `/?token=${token}`) reply(response);
+    if (request.url === `/?token=${token}`) reply(response, cookie);
     else {
       expect(request.headers.cookie === cookie).toBe(true);
       pages += 1;
@@ -651,7 +617,7 @@ it.each(['announcement', 'homepage'])(
       frames = [frame(1, 'startup is waiting\n')];
     } else {
       httpReply = (request, response) => {
-        if (request.url === `/?token=${token}`) reply(response);
+        if (request.url === `/?token=${token}`) reply(response, cookie);
         else started.resolve(undefined);
       };
     }
@@ -723,7 +689,7 @@ it.each(['container', 'image', 'start', 'endpoint', 'account', 'cookie'])(
   'does not mark ready, stop, or overwrite a %s changed while HTTP200 is pending',
   async (field) => {
     httpReply = (request, response) => {
-      if (request.url === `/?token=${token}`) reply(response);
+      if (request.url === `/?token=${token}`) reply(response, cookie);
       else {
         if (field === 'account') database.prepare("UPDATE users SET status = 'disabled'").run();
         else if (field === 'cookie')
@@ -804,7 +770,7 @@ it('rejects a credential replaced immediately by acquisition persistence instead
     BEGIN UPDATE instances SET dsh_cookie = 'replacement-credential' WHERE user_id = NEW.user_id; END`);
   let homepageRequests = 0;
   httpReply = (request, response) => {
-    if (request.url === `/?token=${token}`) reply(response);
+    if (request.url === `/?token=${token}`) reply(response, cookie);
     else {
       homepageRequests += 1;
       response.writeHead(request.headers.cookie === 'replacement-credential' ? 200 : 401).end();
@@ -864,4 +830,45 @@ it('bounds an unresponsive stop and retains an observable unconfirmed-stop failu
     dsh_cookie: null,
   });
   assertSafe(result.serialized, false);
+});
+
+it('keeps persisted startup diagnostics secret-safe when control removal reconstructs credentials', async () => {
+  inspection.State = { Running: false };
+  database.prepare('UPDATE instances SET dsh_cookie = ?').run(cookie);
+  const value = cookie.slice(cookie.indexOf('=') + 1);
+  tailFrames = [
+    frame(1, 'before failure\n'),
+    frame(1, 'boot to'),
+    frame(2, `neighbor ${value.slice(0, 12)}`),
+    frame(1, '\u0000'),
+    frame(2, '\u0000'),
+    frame(1, `ken=${token}\n`),
+    frame(2, `${value.slice(12)} remains\n`),
+    frame(1, 'after failure\n'),
+  ];
+
+  const result = await ready();
+  const row: unknown = database.prepare('SELECT last_error FROM instances').get();
+
+  expect(result.failed).toBe(true);
+  assertSafe(result.serialized, false);
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'error',
+    dsh_cookie: null,
+  });
+  expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([
+    { event_type: 'instance.start-failed' },
+  ]);
+  if (
+    typeof row !== 'object' ||
+    row === null ||
+    !('last_error' in row) ||
+    typeof row.last_error !== 'string'
+  )
+    throw new Error('Missing normalized startup diagnostic');
+  expect(row.last_error.split('\n').slice(1)).toEqual([
+    'before failure',
+    'neighbor [redacted] remains',
+    'after failure',
+  ]);
 });

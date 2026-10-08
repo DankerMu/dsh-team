@@ -5,16 +5,20 @@ const MAX_LINE_BYTES = 1024;
 const MAX_RETAINED_LINES = 50;
 
 function safeLine(text: string, cookies: readonly string[]): string | undefined {
+  // Removing controls can reconstruct a credential; classify only the final normalized text.
+  const normalized = text.replace(/\p{Cc}/gu, (character) =>
+    character > '\u007f' || '\t\n\r'.includes(character) ? character : '',
+  );
   // Also reject incomplete/malformed announcements; the canonical parser handles valid ones.
   if (
-    extractLaunchToken(text) !== undefined ||
-    /\bdsh\s+web\b/i.test(text) ||
-    /(?:token|api[-_]?key|authorization|set-cookie|cookie)\s*[:=]/i.test(text) ||
-    /dsh-auth-/i.test(text) ||
-    /^[A-Za-z0-9_.=-]{16,}$/.test(text.trim())
+    extractLaunchToken(normalized) !== undefined ||
+    /\bdsh\s+web\b/i.test(normalized) ||
+    /(?:token|api[-_]?key|authorization|set-cookie|cookie)\s*[:=]/i.test(normalized) ||
+    /dsh-auth-/i.test(normalized) ||
+    /^[A-Za-z0-9_.=-]{16,}$/.test(normalized.trim())
   )
     return undefined;
-  let sanitized = text;
+  let sanitized = normalized;
   for (const cookie of cookies) {
     const value = cookie.slice(cookie.indexOf('=') + 1);
     for (const secret of [cookie, value]) {
@@ -23,10 +27,7 @@ function safeLine(text: string, cookies: readonly string[]): string | undefined 
   }
   sanitized = sanitized
     .replace(/v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]')
-    .replace(/https?:\/\/[^\s]+/gi, '[redacted URL]')
-    .replace(/\p{Cc}/gu, (character) =>
-      character > '\u007f' || '\t\n\r'.includes(character) ? character : '',
-    );
+    .replace(/https?:\/\/[^\s]+/gi, '[redacted URL]');
   // Bounds apply to retained UTF8, including replacement characters and redaction expansion.
   return sanitized.length === 0 || Buffer.byteLength(sanitized, 'utf8') > MAX_LINE_BYTES
     ? undefined

@@ -135,3 +135,37 @@ it('does not exceed the retained byte bound when malformed UTF8 expands during d
 
   expect(output).toEqual(['harmless next line']);
 });
+
+it.each(['token', 'known-cookie', 'released-cookie'])(
+  'excludes a %s reconstructed by control removal across independent Docker streams',
+  async (kind) => {
+    const token = randomBytes(32).toString('base64url');
+    const value = randomBytes(32).toString('base64url');
+    const cookie = `session=${value}`;
+    const released = `v1.${randomBytes(12).toString('base64url')}.${randomBytes(32).toString('base64url')}`;
+    const secret = kind === 'known-cookie' ? value : released;
+    const prefix = kind === 'token' ? 'boot to' : `neighbor ${secret.slice(0, 9)}`;
+    const suffix = kind === 'token' ? `ken=${token}\n` : `${secret.slice(9)} remains\n`;
+
+    const output = await tail(
+      [
+        frame(1, 'before failure\n'),
+        frame(2, prefix),
+        frame(1, 'harmless interleaved line\n'),
+        frame(2, '\u0000'),
+        frame(2, suffix),
+        frame(1, 'after failure\n'),
+      ],
+      [cookie],
+    );
+
+    for (const credential of [token, cookie, value, released])
+      expect(output.join('\n').includes(credential)).toBe(false);
+    expect(output).toEqual([
+      'before failure',
+      'harmless interleaved line',
+      ...(kind === 'token' ? [] : ['neighbor [redacted] remains']),
+      'after failure',
+    ]);
+  },
+);
