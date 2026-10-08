@@ -8,6 +8,7 @@ import { startUserContainer } from './start.ts';
 import type { StartResult, StartUserContainerInput as StartupInput } from './start.ts';
 import { stopUserContainer } from './stop.ts';
 import type { StopUserContainerInput as RetirementInput } from './stop.ts';
+import { discoverReconciliationUsers, reconcileUser } from './reconcile.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -23,6 +24,7 @@ export interface Orchestrator {
   readonly acquireDshCookie: (input: AcquireDshCookieInput) => Promise<void>;
   readonly waitForUserContainerReady: (input: AcquireDshCookieInput) => Promise<void>;
   readonly stopUserContainer: (input: StopUserContainerInput) => Promise<void>;
+  readonly reconcile: (input?: { readonly signal?: AbortSignal }) => Promise<void>;
 }
 
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
@@ -64,6 +66,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     input: Input,
     operation: (input: Input & OrchestratorDependencies) => Promise<Result>,
     failure: string,
+    awaitSettlement = false,
   ): Promise<Result> {
     const captured = { ...input, client, database };
     const { userId, signal } = captured;
@@ -74,7 +77,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     const canceled = () => {
       result.reject(new Error(failure));
     };
-    signal?.addEventListener('abort', canceled, { once: true });
+    if (!awaitSettlement) signal?.addEventListener('abort', canceled, { once: true });
     // Waiting cancellation rejects the caller, but its FIFO slot still follows the predecessor.
     const work = (tails.get(userId) ?? Promise.resolve(undefined)).then(async () => {
       // Active cancellation belongs to the operation, including its independent cleanup.
@@ -98,7 +101,31 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     return result.promise;
   }
 
+  async function reconcile(input: { readonly signal?: AbortSignal } = {}): Promise<void> {
+    const signal = input.signal;
+    const cancellation = signal === undefined ? {} : { signal };
+    try {
+      const users = await discoverReconciliationUsers({ client, database, ...cancellation });
+      // Observe every launched operation to actual settlement, including cancellation/failure.
+      const results = await Promise.allSettled(
+        users.map((userId) =>
+          schedule(
+            { ...cancellation, userId },
+            reconcileUser,
+            'Instance reconciliation failed',
+            true,
+          ),
+        ),
+      );
+      if (signal?.aborted || results.some((result) => result.status === 'rejected'))
+        throw new Error();
+    } catch {
+      throw new Error('Instance reconciliation failed');
+    }
+  }
+
   return {
+    reconcile,
     startUserContainer: (input: StartUserContainerInput) =>
       schedule(input, start, 'Container startup failed during account validation or cancellation'),
     acquireDshCookie: (input: AcquireDshCookieInput) =>

@@ -288,3 +288,12 @@
 - Preserve explicit per-user coordinator ownership, different-user concurrency when slots exist, validated reuse, missing-model preflight precedence, state/credential/volume safeguards and sixteen Docker baselines.
 - Evidence floor: public realtransport/SQLite RED/GREEN for full limit, concurrent final-slot claim, reservation handoff/release/failure and fresh settings; actual limit1 A/B stop/start/unconfigured Docker proof; root checks, strictOpenSpec and final-head Docker/CI.
 - No global lifecycle lock, cross-process admission, schema/config additions, eviction, retry/reconciliation or gateway wiring. Human critical-path review remains deferred to Epic completion per user.
+
+## Issue #43 fixture
+
+- Feature; expanded task9.10 (agree with upstream): explicit startup reconciliation on the existing orchestrator owner, using Docker truth and persisted identity.
+- Governing invariant: correction never adopts or destroys an unverified identity, never discards healthy running instances/credentials, and never treats daemon failure as absence.
+- Preserve per-user serialization, capacity derived from corrected persisted states, exact-owned retirement/audits, persistent volumes, credential secrecy and seventeen Docker baselines.
+- Evidence floor: semantic RED/GREEN at public owner with real Unix/SQLite; actual missing-container and missing-cookie corrections plus two authenticated running instances surviving owner reconstruction/reconciliation; root checks, strictOpenSpec, final-head full Docker/CI.
+- Boundary: #43 owns the explicit awaited reconciliation operation; #47 adds network recovery; #56 composes the application owner and awaits reconciliation before lifecycle/routing traffic. No claim that main.ts is wired by this module-only slice.
+- No orphan garbage collection, credential regeneration, background retries, new schema/config/dependencies or network behavior. Human critical-path review remains deferred to Epic completion per user.

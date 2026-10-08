@@ -516,7 +516,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [x] 9.7 停止和删除：停止容器并删除容器，卷保留；调用方传入停止原因（空闲、管理员、禁用、出错），写审计（实例停止，带原因）。验证：`pnpm test:docker`——在工作目录和状态目录各写一个文件，停止、删除、重新创建后两个文件都在（规格“停止和重建后数据恢复”）；审计里的停止原因等于传入值。
 - [x] 9.8 每用户串行：同一用户的生命周期操作排队执行。验证：单元测试——对同一用户并发发起十次启动，只执行一次创建；对两个用户并发启动互不等待（规格“一个用户恰好一个实例”）。
 - [x] 9.9 同时运行上限：处于“启动中”和“运行中”的实例数达到上限时拒绝新的启动，返回“已满”，不停止已有实例；模型未配置时返回“未配置模型”，不创建容器、不记为出错。验证：`pnpm test:docker`——上限设为 1，第二个用户的启动被拒绝且第一个实例仍在运行；第一个停止后第二个能启动；清空模型设置后启动返回“未配置模型”且没有容器被创建（规格“同时运行的实例有上限”“模型未配置时不启动实例”）。
-- [ ] 9.10 平台启动时对账：按标签列出容器，与 `instances` 表比对并修正状态（库里“运行中”但容器不在 → 记为已停止；容器在跑但库里没有 cookie → 停止容器）。验证：`pnpm test:docker`——人为制造这两种不一致后执行对账，状态与 Docker 一致；两个实例运行中时重建编排器对象再对账，两个实例仍被识别为运行中且可访问（规格“平台重启后实例状态一致”的“平台重启时有实例在运行”场景）。
+- [x] 9.10 平台启动时对账：按标签列出容器，与 `instances` 表比对并修正状态（库里“运行中”但容器不在 → 记为已停止；容器在跑但库里没有 cookie → 停止容器）。验证：`pnpm test:docker`——人为制造这两种不一致后执行对账，状态与 Docker 一致；两个实例运行中时重建编排器对象再对账，两个实例仍被识别为运行中且可访问（规格“平台重启后实例状态一致”的“平台重启时有实例在运行”场景）。
 - [ ] 9.11 恢复配置目录：实例停止的状态下，用用户镜像起一个一次性容器，挂载该用户的状态卷，把 `profiles/` 整个换成镜像里 `/opt/dsh-team/profile-seed/` 的内容，其余不动；容器用完删除。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写坏，并在 `sessions/` 放一个文件；执行后 `profiles/` 与 `profile-seed/` 逐文件一致，`sessions/` 里的文件原样，没有残留的一次性容器。
 
 Suggested fixture level: expanded - 持有 Docker socket 的关键路径，涉及并发、持久状态和凭据
@@ -624,6 +624,17 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - Release / packaging / dependency compatibility; Documentation / migration notes — selected: no new dependency/config/claim schema, documented state-based occupancy and pending lifecycle; root/strictOpenSpec, full pinned Docker/CI and deferred human-review ledger.
 
 验证记录（#42）：同一owner同步准入，pending与持久starting/running按用户去重，实际清理结束后释放pending；每次准入读取最新上限，满额复用不占新名额，full/unconfigured无创建或状态/审计/覆盖层变更，模型缺失优先。真实Unix/SQLite持久上限拒绝场景观察RED后GREEN；并发最后名额、limit2独立推进、持久交接、清理阻塞/取消和新旧配置边界有确定性测试。本地完整pnpmcheck exit0，899unit/575integration，orchestrator100%覆盖、重复率2.72%、strictOpenSpec通过。三席全diff审查clean；审查头`e586eea88148c9a8206feba06a175e0bab7db164`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker17/17、exit0、115.29秒：limit1真实ready A保持HTTP200且B返回full，停止A后B启动且ready HTTP200，清空已有/新用户规范模型输入均unconfigured且无拒绝副作用；原16基线保留，独立清点为空。最终头/CI见PR#149；人工白盒按用户要求后置Epic完成。
+
+### Issue #43 risk/evidence map (task9.10 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: explicit owner.reconcile startup operation and optional signal, #56 owns application startup await; no artificial current main.ts wiring.
+- Schema / columns / units / field names; Concurrency / shared state / ordering — selected: Docker truth with exact persisted identity fences, same owner/per-user queue, idempotent stopped transitions and healthy credential preservation; real SQLite/Unix race/error proof.
+- Auth / permissions / secrets; Error handling / rollback / partial outputs — selected: validate immutable ownership and active account, no credential regeneration/logging; non404 not absence, no false success after partial retirement/persistence failure.
+- Resource limits / large input / discovery; File IO / path safety / overwrite — selected: label-filtered bounded discovery including stopped containers, cancellation/settlement, no orphan/helper/data deletion or overlay mutation; exact-owned Docker cleanup and capacity correction.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility; Documentation / migration notes — selected: no schema/config/dependency changes, seventeen baseline Docker cases retained; root/strictOpenSpec/full final-head Docker/CI plus deferred human review.
+- Integration sequence: #43 supplies and verifies explicit reconciliation after owner reconstruction; #47 adds network recovery; #56 must construct the single application owner and await reconciliation before serving lifecycle/upstream-routing requests. This task does not claim existing main.ts startup invocation.
+
+验证记录（#43）：owner.reconcile通过原有每用户队列执行标签发现、精确ID验证和安全退休；健康实例保留全部身份/cookie/地址/覆盖层/审计，缺失容器或cookie纠正为stopped并保留卷，不把非404错误当缺失。构造时依赖和入口signal一次捕获；发现响应限4MiB、有限时限，其他JSON调用默认行为不变。自然过期的结构合法cookie不阻止对账退休，新获取过期cookie仍拒绝。公共Unix/SQLite缺失身份观察RED后GREEN；审查修复过期、owner替换、signal替换三类8项回归，另以有效超限JSON和临时移除预算的失败控制证明限额测试有效。完整pnpmcheck exit0：953unit/601integration，reconcile100%行/函数、92.15%分支，重复率2.94%，strictOpenSpec通过。首轮三席提出问题、修复1/2轮后全diff复审clean。审查头`053c5cf137a13025dd550167c17729f33b043454`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker18/18、exit0、122.07秒：两个原实例重建owner前后均HTTP200，缺失容器与缺失cookie均纠正，4个卷保留、停止审计2条，原17基线保留且独立清点为空。最终头/CI见PR#150；实际应用接线仍由#56负责，人工白盒后置Epic完成。
 
 ## 10. 实例网络（任务包 1.10）
 

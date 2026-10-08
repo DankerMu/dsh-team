@@ -20,7 +20,13 @@ interface DockerLogChunk {
 }
 
 export interface DockerClient {
-  json(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown>;
+  json(
+    method: string,
+    path: string,
+    body?: unknown,
+    signal?: AbortSignal,
+    maxBytes?: number,
+  ): Promise<unknown>;
   logs(path: string, signal?: AbortSignal): AsyncGenerator<DockerLogChunk>;
 }
 
@@ -148,9 +154,15 @@ export function createDockerClient(
       path: string,
       body?: unknown,
       signal?: AbortSignal,
+      maxBytes = Infinity,
     ): Promise<unknown> {
       const chunks: Buffer[] = [];
-      for await (const chunk of exchange(method, path, body, signal)) chunks.push(chunk);
+      let length = 0;
+      for await (const chunk of exchange(method, path, body, signal)) {
+        length += chunk.length;
+        if (length > maxBytes) throw new Error('Docker JSON response exceeds byte limit');
+        chunks.push(chunk);
+      }
       const bytes = Buffer.concat(chunks);
       if (bytes.length === 0) return undefined;
       try {

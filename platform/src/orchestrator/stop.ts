@@ -33,6 +33,10 @@ interface RetirementRow {
   account_status: string;
 }
 
+interface FencedRetirementInput extends StopUserContainerInput {
+  readonly assertCurrent?: () => void;
+}
+
 // A hung daemon must not retain retirement indefinitely; grace fits inside the whole operation.
 const STOP_TIMEOUT_MS = 10_000;
 const CURRENT_RETIREMENT = `user_id = ? AND container_id = ? AND image_id = ?
@@ -76,8 +80,9 @@ function select(input: StopUserContainerInput): Selection | undefined {
   };
 }
 
-function current(input: StopUserContainerInput, selection: Selection, signal: AbortSignal): void {
+function current(input: FencedRetirementInput, selection: Selection, signal: AbortSignal): void {
   signal.throwIfAborted();
+  input.assertCurrent?.();
   if (
     input.database
       .prepare(`SELECT 1 FROM instances WHERE ${CURRENT_RETIREMENT}`)
@@ -113,7 +118,7 @@ async function running(
 }
 
 async function remove(
-  input: StopUserContainerInput,
+  input: FencedRetirementInput,
   selection: Selection,
   signal: AbortSignal,
 ): Promise<void> {
@@ -148,7 +153,7 @@ async function remove(
 }
 
 function commit(
-  input: StopUserContainerInput,
+  input: FencedRetirementInput,
   selection: Selection,
   reason: InstanceStopReason,
   signal: AbortSignal,
@@ -174,7 +179,12 @@ function commit(
 }
 
 /** Retires only the captured current container; persistent user volumes are never removed. */
-export async function stopUserContainer(input: StopUserContainerInput): Promise<void> {
+export async function stopUserContainer(
+  input: StopUserContainerInput,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const fenced: FencedRetirementInput =
+    assertCurrent === undefined ? input : { ...input, assertCurrent };
   const work = new AbortController();
   const timer = setTimeout(() => {
     work.abort();
@@ -187,8 +197,8 @@ export async function stopUserContainer(input: StopUserContainerInput): Promise<
     signal.throwIfAborted();
     const selection = select(input);
     if (selection === undefined) return;
-    await remove(input, selection, signal);
-    commit(input, selection, reason, signal);
+    await remove(fenced, selection, signal);
+    commit(fenced, selection, reason, signal);
   } catch {
     // Neither Docker response bodies, database errors nor backend credentials escape this boundary.
     throw new Error('User container retirement failed');
