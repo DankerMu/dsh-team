@@ -1,7 +1,7 @@
 import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
-import { indexedEndpoint, validateDshCookie } from './credentials.ts';
+import { dshCookieExpiresAt, indexedEndpoint } from './credentials.ts';
 import {
   assertCurrentSnapshot,
   containerId,
@@ -85,15 +85,14 @@ export function discoverReconciliationUsers(
   return bounded(input.signal, (signal) => discover(input, signal));
 }
 
-function validateIndexed(instance: Record<string, unknown>): void {
+function validateIndexed(instance: Record<string, unknown>): number | undefined {
   containerId({ Id: instance.container_id });
   resolvedImageId(instance.image_id);
   if (typeof instance.image_tag !== 'string' || instance.image_tag.length === 0) throw new Error();
   indexedEndpoint(instance, instance.status !== 'running');
-  if (instance.dsh_cookie !== null && instance.dsh_cookie !== '') {
-    if (typeof instance.dsh_cookie !== 'string') throw new Error();
-    validateDshCookie(instance.dsh_cookie);
-  }
+  if (instance.dsh_cookie === null || instance.dsh_cookie === '') return undefined;
+  if (typeof instance.dsh_cookie !== 'string') throw new Error();
+  return dshCookieExpiresAt(instance.dsh_cookie);
 }
 
 async function healthy(
@@ -101,6 +100,7 @@ async function healthy(
   account: Record<string, unknown>,
   instance: Record<string, unknown>,
   signal: AbortSignal,
+  expiresAt: number | undefined,
 ): Promise<boolean> {
   const id = containerId({ Id: instance.container_id });
   const image = resolvedImageId(instance.image_id);
@@ -117,10 +117,7 @@ async function healthy(
   // Incomplete starting state can be retired, never promoted into a ready survivor.
   if (instance.upstream_port !== null && instance.upstream_port !== port) throw new Error();
   return (
-    account.status === 'active' &&
-    instance.status === 'running' &&
-    typeof instance.dsh_cookie === 'string' &&
-    instance.dsh_cookie.length > 0
+    account.status === 'active' && instance.status === 'running' && (expiresAt ?? 0) > Date.now()
   );
 }
 
@@ -133,8 +130,8 @@ async function reconcile(input: ReconciliationInput, signal: AbortSignal): Promi
     input.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(input.userId),
   );
   if (instance.status === 'stopped' && instance.container_id === null) return;
-  validateIndexed(instance);
-  const survivor = await healthy(input, account, instance, signal);
+  const expiresAt = validateIndexed(instance);
+  const survivor = await healthy(input, account, instance, signal, expiresAt);
   const current = () => {
     assertCurrentSnapshot(input, account, instance, signal);
   };

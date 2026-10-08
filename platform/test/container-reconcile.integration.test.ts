@@ -13,6 +13,7 @@ import {
   startupBarrier,
   START_CONTAINER,
   START_USER,
+  START_IMAGE,
 } from './container-start-fixture.ts';
 import {
   RECONCILE_LIST,
@@ -20,6 +21,8 @@ import {
   reconciliationState,
   stoppedRow,
   expectReconciliationRejected,
+  expireReconciliation,
+  expectReconciliationRetired,
 } from './container-reconcile-fixture.ts';
 
 let root: string;
@@ -232,7 +235,18 @@ it.each(['discovery', 'inspection'])(
 it('rejects oversized discovery at the consumption boundary before any per-user work', async () => {
   daemon.overrides.set(`GET ${RECONCILE_LIST}`, {
     status: 200,
-    bytes: Buffer.alloc(4 * 1024 * 1024 + 1, 32),
+    document: [
+      {
+        Id: START_CONTAINER,
+        ImageID: START_IMAGE,
+        Names: [`/dsh-team-u-${START_USER}`],
+        Labels: {
+          'dsh-team.user': START_USER,
+          'dsh-team.test-padding': 'x'.repeat(4 * 1024 * 1024),
+        },
+        State: 'running',
+      },
+    ],
   });
   const before = reconciliationState(database);
 
@@ -291,5 +305,17 @@ it.each(['malformed-list', 'malformed-inspect', 'cookie', 'endpoint'])(
     if (kind === 'endpoint') database.exec('UPDATE instances SET upstream_port = 40001');
 
     await expectReconciliationRejected(database, daemon, owner);
+  },
+);
+
+it.each(['missing', 'stopped', 'disabled', 'running'])(
+  'real Unix and SQLite reconciliation safely retires expired-cookie %s instances',
+  async (state) => {
+    expireReconciliation(database, daemon, state);
+
+    await owner.reconcile();
+    await owner.reconcile();
+
+    expectReconciliationRetired(database, daemon);
   },
 );

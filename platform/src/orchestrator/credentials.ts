@@ -128,7 +128,7 @@ function canonicalBytes(value: string): Buffer {
   if (bytes.toString('base64url') !== value) throw new Error();
   return bytes;
 }
-function validateCookiePayload(payload: unknown, authority: string): void {
+function validateCookiePayload(payload: unknown, authority: string): number {
   if (
     typeof payload !== 'object' ||
     payload === null ||
@@ -142,13 +142,13 @@ function validateCookiePayload(payload: unknown, authority: string): void {
     !('expiresAt' in payload) ||
     typeof payload.expiresAt !== 'number' ||
     !Number.isSafeInteger(payload.expiresAt) ||
-    payload.expiresAt <= payload.issuedAt ||
-    payload.expiresAt <= Date.now()
+    payload.expiresAt <= payload.issuedAt
   )
     throw new Error();
+  return payload.expiresAt;
 }
 
-export function validateDshCookie(cookie: string, authority?: string): string {
+export function dshCookieExpiresAt(cookie: string, authority?: string): number {
   // Released client-connection 0.2.0-rc.2: authority SHA256 name and v1.JSON.HMAC-SHA256 value.
   if (cookie.length > MAX_COOKIE_BYTES) throw new Error();
   const separator = cookie.indexOf('=');
@@ -169,8 +169,7 @@ export function validateDshCookie(cookie: string, authority?: string): string {
   if (new URL(`http://${audience}`).host === '' || /[\s/@?#\\]/.test(audience)) throw new Error();
   const name = `dsh-auth-${createHash('sha256').update(audience).digest('base64url')}`;
   if (cookie.slice(0, separator) !== name) throw new Error();
-  validateCookiePayload(payload, audience);
-  return cookie;
+  return validateCookiePayload(payload, audience);
 }
 
 function authenticationCookie(headers: string[] | undefined, authority: string): string {
@@ -181,7 +180,8 @@ function authenticationCookie(headers: string[] | undefined, authority: string):
   if (cookies?.length !== 1) throw new Error();
   const cookie = cookies[0];
   if (cookie === undefined) throw new Error();
-  return validateDshCookie(cookie, authority);
+  if (dshCookieExpiresAt(cookie, authority) <= Date.now()) throw new Error();
+  return cookie;
 }
 
 async function exchange(

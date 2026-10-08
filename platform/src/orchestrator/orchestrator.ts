@@ -102,15 +102,22 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   async function reconcile(input: { readonly signal?: AbortSignal } = {}): Promise<void> {
+    const signal = input.signal;
+    const cancellation = signal === undefined ? {} : { signal };
     try {
-      const users = await discoverReconciliationUsers({ ...dependencies, ...input });
+      const users = await discoverReconciliationUsers({ client, database, ...cancellation });
       // Observe every launched operation to actual settlement, including cancellation/failure.
       const results = await Promise.allSettled(
         users.map((userId) =>
-          schedule({ ...input, userId }, reconcileUser, 'Instance reconciliation failed', true),
+          schedule(
+            { ...cancellation, userId },
+            reconcileUser,
+            'Instance reconciliation failed',
+            true,
+          ),
         ),
       );
-      if (input.signal?.aborted || results.some((result) => result.status === 'rejected'))
+      if (signal?.aborted || results.some((result) => result.status === 'rejected'))
         throw new Error();
     } catch {
       throw new Error('Instance reconciliation failed');

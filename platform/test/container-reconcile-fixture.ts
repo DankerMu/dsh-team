@@ -5,15 +5,19 @@ import { START_CONTAINER, START_IMAGE, START_USER } from './container-start-fixt
 import type { Container, StartupRequest } from './container-start-fixture.ts';
 
 // Released cookie protocol; name independently pinned in credential/readiness acceptance fixtures.
-const payload = Buffer.from(
-  JSON.stringify({
-    version: 1,
-    authority: 'team.example:8443',
-    issuedAt: 1,
-    expiresAt: 8_000_000_000_000,
-  }),
-).toString('base64url');
-export const RECONCILE_COOKIE = `dsh-auth-3eo-BcKCoQv18vgqA6jsyDZEVweseAZ0c-hb0sOZg64=v1.${payload}.${Buffer.alloc(32, 7).toString('base64url')}`;
+function reconciliationCookie(expiresAt: number): string {
+  const payload = Buffer.from(
+    JSON.stringify({
+      version: 1,
+      authority: 'team.example:8443',
+      issuedAt: 1,
+      expiresAt,
+    }),
+  ).toString('base64url');
+  return `dsh-auth-3eo-BcKCoQv18vgqA6jsyDZEVweseAZ0c-hb0sOZg64=v1.${payload}.${Buffer.alloc(32, 7).toString('base64url')}`;
+}
+export const RECONCILE_COOKIE = reconciliationCookie(8_000_000_000_000);
+const RECONCILE_EXPIRED_COOKIE = reconciliationCookie(2);
 export const RECONCILE_LIST = `/containers/json?all=1&filters=${encodeURIComponent(JSON.stringify({ label: ['dsh-team.user'] }))}`;
 
 export function seedReconciliation(
@@ -62,6 +66,41 @@ export async function expectReconciliationRejected(
 
   expect(reconciliationState(database)).toEqual(before);
   expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
+}
+
+export function expireReconciliation(
+  database: DatabaseHandle,
+  daemon: { containers: Map<string, Container> },
+  state: string,
+): void {
+  database.prepare('UPDATE instances SET dsh_cookie = ?').run(RECONCILE_EXPIRED_COOKIE);
+  if (state === 'missing') daemon.containers.clear();
+  if (state === 'stopped') {
+    const container = daemon.containers.get(START_CONTAINER);
+    if (container === undefined) throw new Error('Missing fixture');
+    container.State.Running = false;
+  }
+  if (state === 'disabled') database.exec("UPDATE users SET status = 'disabled'");
+}
+
+export function expectReconciliationRetired(
+  database: DatabaseHandle,
+  daemon: {
+    readonly containers: ReadonlyMap<string, Container>;
+    readonly requests: readonly StartupRequest[];
+  },
+): void {
+  const state = reconciliationState(database);
+  expect(state.rows).toEqual([stoppedRow()]);
+  expect(state.audits).toEqual([
+    expect.objectContaining({
+      event_type: 'instance.stopped',
+      target: START_USER,
+      details: '{"reason":"error"}',
+    }),
+  ]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.requests.filter(({ path }) => path.includes('/volumes'))).toEqual([]);
 }
 
 export function stoppedRow(user = START_USER) {

@@ -11,6 +11,8 @@ import {
 } from '../../test/container-start-fixture.ts';
 import {
   RECONCILE_COOKIE,
+  expireReconciliation,
+  expectReconciliationRetired,
   RECONCILE_LIST,
   seedReconciliation,
   reconciliationState,
@@ -424,3 +426,103 @@ it('a per-user deadline waits for a stalled boundary to settle before releasing 
   expect(settled).toBe(true);
   expect(reconciliationState(database)).toEqual(before);
 });
+
+it.each(['missing', 'stopped', 'disabled', 'running'])(
+  'retires structurally valid expired persisted credentials on %s instances',
+  async (kind) => {
+    const { database, daemon, owner } = await fixture();
+    expireReconciliation(database, daemon, kind);
+
+    await owner.reconcile();
+    await owner.reconcile();
+
+    expectReconciliationRetired(database, daemon);
+  },
+);
+
+it.each(['factory dependencies', 'caller options'])(
+  'reconciliation cannot substitute the captured owner through mutated %s',
+  async (kind) => {
+    const original = await fixture();
+    original.daemon.containers.clear();
+    const alternate = await startupOwnerFixture();
+    roots.push(alternate.root);
+    databases.push(alternate.database);
+    const dependencies = { client: original.client, database: original.database };
+    const owner = createOrchestrator(dependencies);
+    const options = { signal: new AbortController().signal };
+    if (kind === 'factory dependencies') {
+      dependencies.client = alternate.client;
+      dependencies.database = alternate.database;
+    }
+    const provided =
+      kind === 'caller options'
+        ? { ...options, client: alternate.client, database: alternate.database }
+        : options;
+    const alternateBefore = reconciliationState(alternate.database);
+
+    await owner.reconcile(provided);
+
+    expect(reconciliationState(original.database).rows).toEqual([stoppedRow()]);
+    expect(reconciliationState(original.database).audits).toEqual([
+      expect.objectContaining({ event_type: 'instance.stopped', details: '{"reason":"error"}' }),
+    ]);
+    expect(reconciliationState(alternate.database)).toEqual(alternateBefore);
+    expect(alternate.daemon.requests).toEqual([]);
+  },
+);
+
+it.each(['original', 'replacement'])(
+  'a signal replaced during discovery still uses the original cancellation when %s aborts',
+  async (aborting) => {
+    const { database, owner, beforeRequest } = await fixture();
+    database.exec('UPDATE instances SET dsh_cookie = NULL');
+    const before = reconciliationState(database);
+    const discovery = startupBarrier();
+    const inspection = startupBarrier();
+    let inspected = false;
+    beforeRequest(async (_method, path) => {
+      if (path === RECONCILE_LIST) await discovery.hold();
+      if (path === `/containers/${START_CONTAINER}/json` && !inspected) {
+        inspected = true;
+        await inspection.hold();
+      }
+      return undefined;
+    });
+    const original = new AbortController();
+    const replacement = new AbortController();
+    const options = { signal: original.signal };
+    let settled = false;
+    const pending = owner.reconcile(options).then(
+      () => {
+        settled = true;
+        return 'fulfilled';
+      },
+      () => {
+        settled = true;
+        return 'rejected';
+      },
+    );
+    await discovery.reached;
+    options.signal = replacement.signal;
+    discovery.release();
+    await inspection.reached;
+
+    (aborting === 'original' ? original : replacement).abort();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    inspection.release();
+    const outcome = await pending;
+
+    if (aborting === 'original') {
+      expect(outcome).toBe('rejected');
+      expect(reconciliationState(database)).toEqual(before);
+    } else {
+      expect(outcome).toBe('fulfilled');
+      expect(reconciliationState(database).rows).toEqual([stoppedRow()]);
+      expect(reconciliationState(database).audits).toEqual([
+        expect.objectContaining({ event_type: 'instance.stopped', details: '{"reason":"error"}' }),
+      ]);
+    }
+  },
+);
