@@ -234,3 +234,17 @@
 
 - **WHEN** Docker创建、启动、检查或对应数据库与审计事务失败
 - **THEN** 操作返回失败，不返回未经验证的端点或伪造就绪状态，不删除用户持久卷，不在Docker动作成功前记录其成功审计
+
+### Requirement: 平台托管当前实例的DSH认证cookie
+
+平台 MUST 从当前用户实例的真实启动日志提取令牌，经node:http显式设置平台authority为Host换取DSH cookie，并仅将cookie保存在该当前实例的数据库记录中；令牌和cookie不得出现在平台日志、审计或公共返回值中。
+
+#### Scenario: Host绑定的实例认证
+
+- **WHEN** 平台为当前实例换取cookie并使用同一Host请求首页
+- **THEN** DSH返回200，而同一cookie换另一个Host请求首页返回401
+
+#### Scenario: 过期交换结果不能覆盖新实例
+
+- **WHEN** 交换期间实例身份、端点、状态或账号可用性发生变化
+- **THEN** 旧交换结果被拒绝，不覆盖新的cookie或实例记录；交换失败不保留本次已清除的旧cookie

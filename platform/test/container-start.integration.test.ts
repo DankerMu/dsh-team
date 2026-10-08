@@ -124,6 +124,7 @@ it('commits completed creation and start separately, persists inspected endpoint
       rows: [
         {
           container_id: START_CONTAINER,
+          image_id: `sha256:${'a'.repeat(64)}`,
           status: 'starting',
           upstream_host: null,
           upstream_port: null,
@@ -142,6 +143,7 @@ it('commits completed creation and start separately, persists inspected endpoint
       upstream_port: 49173,
       dsh_cookie: null,
       image_tag: 'dsh-team-user:local',
+      image_id: `sha256:${'a'.repeat(64)}`,
       // Vitest's matcher is untyped; it is an expected-value sentinel, not database data.
       last_started_at: expect.any(Number) as unknown,
       last_activity_at: null,

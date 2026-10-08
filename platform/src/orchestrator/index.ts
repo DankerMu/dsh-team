@@ -3,3 +3,5 @@ export type { DockerTransport } from './client.ts';
 export { ensureUserVolumes } from './volumes.ts';
 export { startUserContainer } from './start.ts';
 export type { StartUserContainerInput } from './start.ts';
+export { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
+export { acquireDshCookie } from './credentials.ts';

@@ -511,7 +511,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [x] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
       Task9.3 MUST consume task8.4's qualified complete-composition/trusted-canonical input adapter and the pure generator's single overlay; it MUST NOT rebuild a partial preset roster or duplicate canonical patch rows. Task8.1 alone does not claim this production wiring.
 - [x] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
-- [ ] 9.5 读启动令牌并换 DSH cookie：从容器日志匹配令牌行，用 `node:http` 带平台对外 authority 作为 `Host` 换 cookie，存进 `instances` 表。验证：`pnpm test:docker`——换到的 cookie 带着同一 `Host` 请求首页得到 200，换一个 `Host` 得到 401；日志和审计里没有令牌和 cookie 原文。
+- [x] 9.5 读启动令牌并换 DSH cookie：从容器日志匹配令牌行，用 `node:http` 带平台对外 authority 作为 `Host` 换 cookie，存进 `instances` 表。验证：`pnpm test:docker`——换到的 cookie 带着同一 `Host` 请求首页得到 200，换一个 `Host` 得到 401；日志和审计里没有令牌和 cookie 原文。
 - [ ] 9.6 就绪判定和启动失败：就绪时写审计（实例就绪）；60 秒内未就绪则停止容器，状态记为“出错”，存最后 50 行日志（先去掉令牌行），写审计（启动失败）。验证：`pnpm test:docker`——正常启动后审计里有“实例就绪”；用一份故意错误的覆盖层启动，状态变为“出错”，最近一次错误里有日志且不含令牌，审计里有“启动失败”。
 - [ ] 9.7 停止和删除：停止容器并删除容器，卷保留；调用方传入停止原因（空闲、管理员、禁用、出错），写审计（实例停止，带原因）。验证：`pnpm test:docker`——在工作目录和状态目录各写一个文件，停止、删除、重新创建后两个文件都在（规格“停止和重建后数据恢复”）；审计里的停止原因等于传入值。
 - [ ] 9.8 每用户串行：同一用户的生命周期操作排队执行。验证：单元测试——对同一用户并发发起十次启动，只执行一次创建；对两个用户并发启动互不等待（规格“一个用户恰好一个实例”）。
@@ -567,6 +567,18 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - Documentation / migration notes — selected: fixedPID/no-extra-swap/create-time semantics documented here; root checks, strict OpenSpec, exact-head source review/Docker/CI.
 
 验证记录（#37）：每次配置完整的启动读取持久settings，安全转换NanoCpus/Memory，MemorySwap=Memory、PidsLimit512；资源16例语义RED后GREEN，模型未配置仍不依赖settings。复用公告后HTTP401观察，修复启动时序；真实Docker诊断确认内核可终止整个256MiB实例，符合规格“进程被终止或实例退出”，不能要求同cgroup观察器幸存。用户授权追加一轮后，改为工作卷持久化请求/实际触页进度与宿主精确实例OOM状态关联，只读受管helper读取；没有增加内存、修改OOM优先级或降低隔离验收。审查头`3696e81157a2d5503c20c335c4c8420107d4361f`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker12/12、exit0、116.67秒：申请536870912字节，已触页154140672字节，B OOMKilled=true且退出137；cgroup memory.max268435456/swap0/pids512，原A相同身份/上限且HTTP401前后可用，平台health200前后可用，清理清点为空。旧11例保留；本地pnpmcheck通过，694unit/386integration，strictOpenSpec通过。最终头/CI见PR#144；人工白盒审查按用户指令后置Epic完成。
+
+### Issue #38 risk/evidence map (task9.5 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: current instance lookup, public token-to-cookie operation and canonical parser cutover; split log/HTTP/SQLite behavioral tests.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: exact owned current container, explicit authority, backend-only credential, conditional clearing/update and active-account check; stale exchange/account races and real same-Host200/wrong-Host401.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: bounded stream/HTTP/header handling, deadlines/cancellation/teardown, no old credential after failure, no raw-secret errors; adverse boundary tests.
+- File IO / path safety / overwrite — not selected: no new file publication or deletion; existing test-owned lifecycle handles cleanup.
+- Config / project setup; Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: reuse existing authority/endpoint/client and released parser/protocol; migrate parser consumers, preserve twelve Docker cases, no dependency or configuration changes.
+- Documentation / migration notes — selected: starting-not-ready and backend-only cookie contract; root checks, strict OpenSpec, full exact-head Docker/CI evidence.
+- Immutable creation identity repair: persist nullable image_id alongside unchanged image_tag via forward migration; historical-null rejection is explicit, no current-tag backfill. Prove migration preservation, fresh startup persistence, retag/removal acquisition and foreign-image rejection through local and actual Docker boundaries.
+
+验证记录（#38）：导出acquireDshCookie重组stdout完整启动行，通过node:http显式Host交换并条件持久化当前实例cookie，不返回凭据、不标记就绪；单一解析器迁入orchestrator、消费者全部迁移。splitstdout语义RED1fail后GREEN；审查发现可变tag重新解析导致旧实例失效，修复前retag/removal/创建身份/迁移RED4fail88pass，改为迁移2新增nullableimage_id、启动原子保存immutableID、交换不再查询tag；历史未知身份拒绝且不清旧cookie。最终本地pnpmcheck exit0，755unit/430integration、strictOpenSpec通过。审查头`19184a9a9767ed9dd28c9cc590fbab3aab15ed73`在固定Node24.13.1/pnpm10.34.6 giap-vps实际完整Docker13/13、exit0、126.93秒：生产启动/交换后的数据库cookie同Host200、异Host401，真实日志/审计secretSafe，受管可变tag换指向和移除后均成功，外来镜像拒绝；状态仍starting，12基线保留，独立资源清点为空。完整修复审查clean；最终头/CI见PR#145。人工白盒依用户指令后置Epic完成，未豁免。
 
 ## 10. 实例网络（任务包 1.10）
 

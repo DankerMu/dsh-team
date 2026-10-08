@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import type { SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -77,6 +79,8 @@ print(json.dumps(result), flush=True)
 interface Identity {
   runId: string;
   containerId: string;
+  pressureStartedAtMs?: number;
+  pressureFinishedAtMs?: number;
 }
 type Diagnostic = Record<string, number | boolean | null>;
 type OomStage =
@@ -92,7 +96,150 @@ interface ResourceOomEvidence {
   oomKillAfter: number | null;
   childSignal: number | null;
   limits: { 'memory.max': string; 'memory.swap.max': string; 'pids.max': string };
+  kernelOom?: KernelOomEvidence;
   termination: 'child' | 'instance';
+}
+
+interface KernelOomEvidence {
+  containerId: string;
+  timestampUs: string;
+  constraint: 'CONSTRAINT_MEMCG';
+  oomMemcg: string;
+}
+
+type KernelJournalCommand = (
+  executable: string,
+  args: readonly string[],
+  options: SpawnSyncOptionsWithStringEncoding,
+) => DockerCommandResult;
+
+function pressureWindow(identity: Identity): { sinceUs: bigint; untilUs: bigint } | null {
+  const start = identity.pressureStartedAtMs;
+  const end = identity.pressureFinishedAtMs;
+  if (
+    typeof start !== 'number' ||
+    typeof end !== 'number' ||
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(end) ||
+    start <= 0 ||
+    end < start ||
+    end - start > 30_000 ||
+    !/^[a-f0-9]{64}$/.test(identity.containerId)
+  )
+    return null;
+  return { sinceUs: BigInt(start) * 1000n, untilUs: BigInt(end) * 1000n + 999n };
+}
+
+function kernelOomEvidence(value: unknown, identity: Identity): KernelOomEvidence | null {
+  const window = pressureWindow(identity);
+  if (window === null || typeof value !== 'object' || value === null || Array.isArray(value))
+    return null;
+  const proof = record(value);
+  if (
+    proof.containerId !== identity.containerId ||
+    proof.constraint !== 'CONSTRAINT_MEMCG' ||
+    proof.oomMemcg !== `/system.slice/docker-${identity.containerId}.scope` ||
+    typeof proof.timestampUs !== 'string' ||
+    !/^[1-9]\d{0,19}$/.test(proof.timestampUs)
+  )
+    return null;
+  const timestamp = BigInt(proof.timestampUs);
+  if (timestamp < window.sinceUs || timestamp > window.untilUs) return null;
+  return {
+    containerId: identity.containerId,
+    timestampUs: proof.timestampUs,
+    constraint: 'CONSTRAINT_MEMCG',
+    oomMemcg: proof.oomMemcg,
+  };
+}
+
+function projectKernelRecord(line: string, identity: Identity): KernelOomEvidence | null {
+  const row = record(JSON.parse(line));
+  if (row._TRANSPORT !== 'kernel' || typeof row.MESSAGE !== 'string') return null;
+  const fields = row.MESSAGE.replace(/^oom-kill:/, '').split(',');
+  if (!row.MESSAGE.startsWith('oom-kill:') || fields.some((field) => !field.includes('=')))
+    return null;
+  const constraints = fields.filter((field) => field.startsWith('constraint='));
+  const cgroups = fields.filter((field) => field.startsWith('oom_memcg='));
+  if (constraints.length !== 1 || cgroups.length !== 1) return null;
+  return kernelOomEvidence(
+    {
+      containerId: identity.containerId,
+      timestampUs: row.__REALTIME_TIMESTAMP,
+      constraint: constraints[0]?.slice('constraint='.length),
+      oomMemcg: cgroups[0]?.slice('oom_memcg='.length),
+    },
+    identity,
+  );
+}
+
+function kernelJournalCommand(
+  executable: string,
+  args: readonly string[],
+  options: SpawnSyncOptionsWithStringEncoding,
+): DockerCommandResult {
+  if (process.platform !== 'linux') return { status: null, stdout: '', stderr: '' };
+  return spawnSync(executable, args, options);
+}
+
+/** Trusted host read only: exact current-boot memcg and pressure window, never raw journal bytes. */
+export function readKernelOomEvidence(
+  identity: Identity,
+  command: KernelJournalCommand = kernelJournalCommand,
+): KernelOomEvidence | null {
+  const window = pressureWindow(identity);
+  if (window === null) return null;
+  const journalTime = (us: bigint) =>
+    `@${String(us / 1_000_000n)}.${String(us % 1_000_000n).padStart(6, '0')}`;
+  try {
+    const result = command(
+      '/usr/bin/sudo',
+      [
+        '-n',
+        '/usr/bin/journalctl',
+        '--boot=0',
+        '--dmesg',
+        '--quiet',
+        '--no-pager',
+        '--since',
+        journalTime(window.sinceUs),
+        '--until',
+        journalTime(window.untilUs),
+        '--grep',
+        `^oom-kill:constraint=CONSTRAINT_MEMCG,([^,]*,)*oom_memcg=/system[.]slice/docker-${identity.containerId}[.]scope(,|$)`,
+        '--output=json',
+        '--output-fields=__REALTIME_TIMESTAMP,_TRANSPORT,MESSAGE',
+      ],
+      {
+        cwd: '/',
+        env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+        encoding: 'utf8',
+        timeout: 5_000,
+        killSignal: 'SIGKILL',
+        // No unrelated journal data or unbounded error/output survives this read-only boundary.
+        maxBuffer: 64 * 1024,
+      },
+    );
+    if (
+      result.error !== undefined ||
+      result.status !== 0 ||
+      result.stderr !== '' ||
+      Buffer.byteLength(result.stdout) > 64 * 1024
+    )
+      return null;
+    const lines = result.stdout.split(/\r?\n/).filter((line) => line !== '');
+    if (lines.length === 0 || lines.length > 32) return null;
+    let evidence: KernelOomEvidence | null = null;
+    for (const line of lines) {
+      const projected = projectKernelRecord(line, identity);
+      if (projected === null) return null;
+      evidence ??= projected;
+    }
+    return evidence;
+  } catch {
+    // Permission, timeout, overflow and malformed records fail closed without exposing host logs/errors.
+    return null;
+  }
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -156,6 +303,7 @@ export function validateResourceOomEvidence(
   before: unknown,
   after: unknown,
   pressure: DockerCommandResult,
+  trustedKernelOom?: unknown,
 ): ResourceOomEvidence {
   requirePressureCompletion(pressure);
   liveState(before, identity.containerId);
@@ -184,6 +332,8 @@ export function validateResourceOomEvidence(
   const state = record(container.State);
   const childSignal = proof.childSignal === null ? null : counter(proof.childSignal);
   const oomKillAfter = proof.oomKillAfter === null ? null : counter(proof.oomKillAfter);
+  // Host evidence is separate from volume/child JSON: the pressure process cannot self-certify OOM.
+  const kernelOom = kernelOomEvidence(trustedKernelOom, identity);
   const evidence = {
     requestedBytes: 536_870_912,
     touchedBytes,
@@ -191,6 +341,7 @@ export function validateResourceOomEvidence(
     oomKillAfter,
     childSignal,
     limits: { 'memory.max': '268435456', 'memory.swap.max': '0', 'pids.max': '512' },
+    ...(kernelOom === null ? {} : { kernelOom }),
   };
   return classifyTermination(evidence, state, pressure.status);
 }
@@ -210,7 +361,7 @@ function classifyTermination(
   if (
     status === 137 &&
     state.Running === false &&
-    state.OOMKilled === true &&
+    (state.OOMKilled === true || evidence.kernelOom !== undefined) &&
     state.ExitCode === 137
   )
     return { ...evidence, termination: 'instance' };
@@ -342,16 +493,19 @@ export function observeResourceOom(
   setStage('pressure preflight');
   const before = inspect(lifecycle.command, 'container', containerId);
   liveState(before, containerId);
+  if (record(record(before.Config).Labels)['dsh-team.user'] !== userId)
+    throw new Error('OOM pressure requires the exact owned instance');
   setStage('pressure exec');
+  const pressureStartedAtMs = Date.now();
   const pressure = lifecycle.command(
     ['exec', '--user', '1001', containerId, 'python3', '-c', pressureScript],
     30_000,
   );
+  const pressureFinishedAtMs = Date.now();
   diagnostic['pressure.status'] = pressure.status;
   diagnostic['pressure.commandError'] = pressure.error !== undefined;
   requirePressureCompletion(pressure);
   setStage('victim selection');
-  // Wait for daemon termination bookkeeping before inspecting an exec137 outcome.
   if (
     pressure.status === 137 &&
     output(lifecycle.command, ['wait', containerId], 5_000).trim() !== '137'
@@ -364,15 +518,23 @@ export function observeResourceOom(
     if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))
       diagnostic[`B.postPressure.${key}`] = value;
   }
+  const identity = {
+    runId: lifecycle.runId,
+    containerId,
+    pressureStartedAtMs,
+    pressureFinishedAtMs,
+  };
+  const kernelOom =
+    pressure.status === 137 &&
+    state.Running === false &&
+    state.OOMKilled !== true &&
+    state.ExitCode === 137
+      ? readKernelOomEvidence(identity)
+      : null;
   setStage('cgroup durable readback');
   const proof = readProof(lifecycle, userId);
   resourceOomDiagnostic(diagnostic, record(proof));
+  diagnostic['oom.kernelMemcgKill'] = kernelOom !== null;
   setStage('victim selection');
-  return validateResourceOomEvidence(
-    proof,
-    { runId: lifecycle.runId, containerId },
-    before,
-    after,
-    pressure,
-  );
+  return validateResourceOomEvidence(proof, identity, before, after, pressure, kernelOom);
 }
