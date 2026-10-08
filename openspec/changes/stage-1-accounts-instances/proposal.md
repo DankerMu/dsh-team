@@ -228,3 +228,10 @@
 - Preserve existing config, API, authentication and all six Docker cases. Socket configuration is explicit; no eager daemon connection at platform startup.
 - Evidence floor: injected-transport JSON/log/error tests, real local Unix HTTP smoke and three read-only giap-vps cases (version, nonexistent container404, nonexistent socket path), root checks, strict OpenSpec, reviewed exact-head Docker suite and CI.
 - No container lifecycle commands, retries, SDK dependency, remote TCP transport, audit events or orchestration wiring in this slice. Critical-path human line review remains required and deferred to Epic completion by the user's instruction.
+
+## Issue #35 fixture
+
+- Feature; expanded task9.2, agree with upstream: create/reuse two persistent Docker volumes per user through the existing client. Blast radius: persistent user data and ownership isolation.
+- Preserve canonical volume names, `dsh-team.user` ownership, existing Unix transport and all nine Docker cases; no container, network, DB or gateway changes.
+- Selected risk packs and evidence map below task9.2. Evidence floor: public API behavioral tests of reuse/ownership/partial failure; trusted-host same-user repeat and two-user four-volume acceptance; root checks, strict OpenSpec, exact-head full Docker suite and CI.
+- Human white-box review of orchestrator remains required and deferred to Epic completion under the user's instruction.

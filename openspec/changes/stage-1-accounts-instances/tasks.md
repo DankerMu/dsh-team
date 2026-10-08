@@ -507,7 +507,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 依赖：第 4、5、7、8 组。本组用 `published-loopback` 方式够到实例，`network` 方式在第 10 组。
 
 - [x] 9.1 `platform/src/orchestrator/` 的 Docker 客户端：经 Unix socket 用 `node:http` 发请求、解析 JSON 和流式日志、把 Docker 的错误转成带状态码的错误；传输函数可注入。socket 路径是配置项。验证：单元测试（假传输）——JSON、流式日志和错误三种回应的解析；`pnpm test:docker`——能读到 Docker 版本；请求不存在的容器得到 404 类型的错误；socket 路径不存在时错误信息指出路径。
-- [ ] 9.2 卷：按用户创建状态卷和工作卷（带标签），已存在时复用。验证：`pnpm test:docker`——创建两次得到同一对卷；标签含用户标识；两个用户得到四个不同的卷。
+- [x] 9.2 卷：按用户创建状态卷和工作卷（带标签），已存在时复用。验证：`pnpm test:docker`——创建两次得到同一对卷；标签含用户标识；两个用户得到四个不同的卷。
 - [ ] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
       Task9.3 MUST consume task8.4's qualified complete-composition/trusted-canonical input adapter and the pure generator's single overlay; it MUST NOT rebuild a partial preset roster or duplicate canonical patch rows. Task8.1 alone does not claim this production wiring.
 - [ ] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
@@ -533,6 +533,17 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - File IO / path safety / overwrite — no persistent writes or deletions in this slice; socket path validated and no TCP fallback. Smoke owns and removes only its temporary socket directory.
 
 验证记录（#34）：配置先观察5个语义RED，再实现显式socket字段与全部typed fixture迁移；新client经public index测试JSON/空响应/HTTP状态/安全错误、split/coalesced日志帧、UTF-8字节保留、非法/截断帧、背压和Abort/early-return释放。`pnpm check`阶段622unit/301integration通过，client行97.64%/分支92.85%，最终移除未使用类型导出后dead-code及typecheck通过；重复率2.80%。独立真实Unix HTTP smoke证明默认传输JSON、错误体非JSON仍404、中文stderr分帧在EOF前输出、取消使服务端连接关闭、缺失socket路径报错。三席审查准入提交`6b531f9a1cc3f75b9b4b26d55c748e69556d6052`在giap-vps完整`pnpm test:docker`9/9通过、exit0、91.43秒：新增version/404/missing-socket三例及原六例均通过，独立资源清点为空。未添加生命周期、重试、SDK或启动时daemon依赖。关键路径仍需人工逐行审查，按用户指令在Epic完成时统一提交；最终PR头复验与CI见PR#141。
+
+### Issue #35 risk/evidence map (task9.2 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: public pair operation, canonical names and `dsh-team.user`; public behavioral tests and real Docker readback.
+- File IO / path safety / overwrite; Auth / permissions / secrets — selected: persistent volumes cannot be adopted/deleted on conflict; safe user identity, request/response ownership validation; no credentials or mounts introduced.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: repeat/partial-success reuse without destructive rollback; failure tests, same-user repeat and two-user real acceptance. Process locks belong to task9.8.
+- Resource limits / large input / discovery — selected only for bounded two-volume operation and scoped cleanup; no global resource enumeration in production.
+- Config / project setup; Release / packaging / dependency compatibility — not selected: reuse explicit Docker client and installed daemon, no config or dependency changes.
+- Legacy compatibility / examples; Documentation / migration notes — selected: preserve nine Docker cases and existing client behavior; document result here after root checks, strict OpenSpec, full exact-head Docker run and CI.
+
+验证记录（#35）：公开 `ensureUserVolumes` 复用现有Unix客户端，按用户创建/复用home/work，校验名字与用户标签；冲突拒绝且不接管/删除，第二卷失败保留第一卷供重试。归属分支观察语义RED；24单元场景及真实Unix HTTP smoke覆盖复用、冲突、无破坏重试。三席审查发现验收请求挂起可阻止清理，第一修复轮为实际验收helper加入独立逐请求期限；Unix server持久化后不结束响应的回归先RED（需watchdog救援），后GREEN（取消/连接关闭/仅清理本次卷/保留无关卷和原始错误）。最终本地 `pnpm check` exit0，646unit/302integration通过、volumes100%覆盖、重复率2.74%，strictOpenSpec通过；全diff复审clean/ADMIT。审查头`a1b4d02a0174a5192539e7867c1e6f58d929a507`在giap-vps完整Docker10/10通过、exit0、91.36秒，新增双用户四卷及原9例均过，独立资源清点为空。最初两次父进程运行缺少审查头/Chrome环境变量，不计成功；补齐显式环境后全量通过。最终PR头与CI见PR#142，关键路径人工白盒审查按用户指令后置至Epic完成。
 
 ## 10. 实例网络（任务包 1.10）
 

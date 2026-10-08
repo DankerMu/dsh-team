@@ -19,6 +19,11 @@ interface DockerLogChunk {
   readonly data: Buffer;
 }
 
+export interface DockerClient {
+  json(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<unknown>;
+  logs(path: string, signal?: AbortSignal): AsyncGenerator<DockerLogChunk>;
+}
+
 export class DockerHttpError extends Error {
   readonly statusCode: number;
   constructor(statusCode: number) {
@@ -65,7 +70,10 @@ function readLogStream(header: Buffer): DockerLogChunk['stream'] {
 }
 
 /** Lazy Unix-only client; endpoint consumers validate returned JSON documents. */
-export function createDockerClient(socketPath: string, transport: DockerTransport = request) {
+export function createDockerClient(
+  socketPath: string,
+  transport: DockerTransport = request,
+): DockerClient {
   if (!isAbsolute(socketPath) || socketPath.includes('\0')) {
     throw new Error('Docker socket must be an absolute nonempty path without NUL');
   }
