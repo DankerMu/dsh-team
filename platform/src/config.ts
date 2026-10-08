@@ -14,6 +14,7 @@ export interface PlatformConfig {
   readonly dockerSocketPath: string;
   readonly userImage: string;
   readonly seccompProfilePath: string;
+  readonly subnetPool: string;
   readonly publicUrl: string;
   readonly authority: string;
   readonly cookieSecure: boolean;
@@ -179,6 +180,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
     seccompProfilePath: parseSeccompProfile(
       env.PLATFORM_SECCOMP_PROFILE ?? 'images/seccomp/dsh-user.json',
     ),
+    subnetPool: env.PLATFORM_SUBNET_POOL ?? '172.30.0.0/16',
     publicUrl: publicOrigin.origin,
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),

@@ -649,6 +649,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 Suggested fixture level: expanded - 隔离边界的一部分，涉及共享的地址资源
 Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
+### Issue #44 risk/evidence map (task10.1 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names; Config / project setup — selected: pure allocator and real main startup validation, explicit subnetPool environment/field, /28 capacity against persisted settings, no second limit/schema.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: readonly Docker-IPAM snapshot and interval jumping, no hidden reservation; #45 owns fresh discovery and serialized select/create.
+- Error handling / rollback / partial outputs; Auth / permissions / secrets — selected: explicit malformed/exhausted error and before-listen config-key rejection; no selector Docker/DB writes or credentials.
+- File IO / path safety / overwrite; Legacy compatibility / examples — selected: owned startup DB lifecycle, migrated config consumers and unchanged health/API; no network/data deletion.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: source/built startup smoke, retained18Docker baselines, no dependency; root/strictOpenSpec/final-headCI and deferred human review.
+- Handoff: task10.2 supplies fresh all-network IPAM occupancy and serializes selection/create; task10.1 pure selector is not a claim of wired Docker allocation.
+
 ## 11. 网关（任务包 1.8）
 
 依赖：第 6 组；测试用本地替身上游，不依赖第 9 组。模块在 `platform/src/gateway/`。
