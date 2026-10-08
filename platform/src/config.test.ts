@@ -125,6 +125,35 @@ describe('loadConfig', () => {
     },
   );
 
+  it('configures the user image and shipped seccomp path without accessing Docker or the file', () => {
+    expect(loadConfig(REQUIRED_PUBLIC_URL)).toMatchObject({
+      userImage: 'dsh-team-user:local',
+      seccompProfilePath: resolve('images/seccomp/dsh-user.json'),
+    });
+    expect(
+      loadConfig({
+        ...REQUIRED_PUBLIC_URL,
+        PLATFORM_USER_IMAGE: 'registry.internal/dsh:user',
+        PLATFORM_SECCOMP_PROFILE: '/absent/policy.json',
+      }),
+    ).toMatchObject({
+      userImage: 'registry.internal/dsh:user',
+      seccompProfilePath: '/absent/policy.json',
+    });
+  });
+
+  it.each([
+    ['PLATFORM_USER_IMAGE', ''],
+    ['PLATFORM_USER_IMAGE', '   '],
+    ['PLATFORM_USER_IMAGE', 'secret\0image'],
+    ['PLATFORM_SECCOMP_PROFILE', ''],
+    ['PLATFORM_SECCOMP_PROFILE', '   '],
+    ['PLATFORM_SECCOMP_PROFILE', 'secret\0policy'],
+  ])('rejects invalid %s without echoing its value', (name, value) => {
+    expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, [name]: value })).toThrow(name);
+    expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, [name]: value })).not.toThrow(/secret/);
+  });
+
   it('rejects a missing public URL and names the variable', () => {
     expect(() => loadConfig({})).toThrow(/PLATFORM_PUBLIC_URL/);
   });

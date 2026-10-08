@@ -83,16 +83,26 @@ function removeOwned(
   kind: 'container' | 'image' | 'volume',
   name: string,
   runId: string,
+  ownership?: Readonly<Record<string, string>>,
 ): void {
   const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
-  const args = [kind, 'inspect', '--format', `{{ index ${labels} "${OWNER_LABEL}" }}`, name];
-  const result = command(args, 30_000);
-  if (isAbsentResource(result, kind, name)) return;
-  if (output(result, args).replace(/\r?\n$/, '') !== runId) {
-    throw new Error(`Refusing cleanup of ${kind} ${name}: invocation label does not match`);
+  const expected = ownership ?? { [OWNER_LABEL]: runId };
+  for (const [label, value] of Object.entries(expected)) {
+    const args = [kind, 'inspect', '--format', `{{ index ${labels} "${label}" }}`, name];
+    const result = command(args, 30_000);
+    if (isAbsentResource(result, kind, name)) return;
+    if (output(result, args).replace(/\r?\n$/, '') !== value) {
+      throw new Error(`Refusing cleanup of ${kind} ${name}: invocation label does not match`);
+    }
   }
   const remove = [kind, 'rm', ...(kind === 'container' ? ['--force'] : []), name];
   output(command(remove, 30_000), remove);
+  if (ownership !== undefined) {
+    const absent = command([kind, 'inspect', name], 30_000);
+    if (!isAbsentResource(absent, kind, name)) {
+      throw new Error(`Owned ${kind} remains after cleanup`);
+    }
+  }
 }
 
 function assertOfflineContainerConfiguration(command: DockerCommand, container: string): void {
@@ -117,11 +127,17 @@ export interface UserImageLifecycle {
   readonly seccomp: string;
   readonly repositoryRoot: string;
   registerContainer: (name: string) => void;
+  registerResource: (
+    kind: 'container' | 'volume',
+    name: string,
+    ownership: Readonly<Record<string, string>>,
+  ) => void;
 }
 export type UserImageScenario = (lifecycle: UserImageLifecycle) => Promise<string>;
 interface CleanupTarget {
   readonly kind: 'container' | 'image' | 'volume';
   readonly name: string;
+  readonly ownership?: Readonly<Record<string, string>>;
 }
 
 function runContainer(
@@ -207,9 +223,13 @@ function createOwnedVolumes(
 }
 
 function lifecycleVolumes(
-  probe: Probe | 'web-startup' | 'managed-policy',
+  probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   runId: string,
 ): { volume: string | undefined; workVolume: string | undefined } {
+  if (probe === 'container-start') {
+    const userId = runId.replaceAll('-', '').slice(0, 12);
+    return { volume: `dsh-team-home-${userId}`, workVolume: `dsh-team-work-${userId}` };
+  }
   const volume =
     probe === 'profile-seed' || probe === 'web-startup' || probe === 'managed-policy'
       ? `dsh-team-test-${runId}-state`
@@ -231,7 +251,7 @@ function cleanupTargets(
   for (const kind of ['container', 'volume', 'image'] as const) {
     for (const target of targets.filter((candidate) => candidate.kind === kind).reverse()) {
       try {
-        removeOwned(command, kind, target.name, runId);
+        removeOwned(command, kind, target.name, runId, target.ownership);
       } catch (error) {
         failures.push(error);
       }
@@ -250,11 +270,12 @@ interface UserImageResult {
 }
 
 function lifecycleCommand(
-  probe: Probe | 'web-startup' | 'managed-policy',
+  probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   injectedCommand: DockerCommand | undefined,
   config: string,
 ): DockerCommand {
-  const bounded = probe === 'web-startup' || probe === 'managed-policy';
+  const bounded =
+    probe === 'web-startup' || probe === 'managed-policy' || probe === 'container-start';
   const externalCommand: DockerCommand =
     injectedCommand ??
     ((args, timeout) =>
@@ -268,7 +289,7 @@ function lifecycleCommand(
         // Startup logs and process observations must be bounded and stay in memory.
         maxBuffer: bounded && args[0] !== 'build' ? 64 * 1024 : 16 * 1024 * 1024,
       }));
-  if (probe !== 'web-startup' && probe !== 'managed-policy') return externalCommand;
+  if (!bounded) return externalCommand;
   return (args, timeout) => {
     try {
       const result = externalCommand(args, timeout);
@@ -306,13 +327,13 @@ export function runUserImage(
   injectedCommand?: DockerCommand,
 ): UserImageResult;
 export function runUserImage(
-  probe: 'managed-policy',
+  probe: 'managed-policy' | 'container-start',
   assertOutput: (stdout: string) => void,
   injectedCommand: DockerCommand | undefined,
   scenario: UserImageScenario,
 ): Promise<UserImageResult>;
 export function runUserImage(
-  probe: Probe | 'web-startup' | 'managed-policy',
+  probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
   extra?: Partial<WebStartupBoundary> | UserImageScenario,
@@ -322,7 +343,7 @@ export function runUserImage(
       runImageLifecycle(probe, assertOutput, injectedCommand, extra as Partial<WebStartupBoundary>),
     );
   }
-  if (probe === 'managed-policy') {
+  if (probe === 'managed-policy' || probe === 'container-start') {
     return Promise.resolve().then(() =>
       runImageLifecycle(probe, assertOutput, injectedCommand, extra as UserImageScenario),
     );
@@ -331,7 +352,7 @@ export function runUserImage(
 }
 
 function runImageLifecycle(
-  probe: Probe | 'web-startup' | 'managed-policy',
+  probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
   extra?: Partial<WebStartupBoundary> | UserImageScenario,
@@ -393,7 +414,8 @@ function runImageLifecycle(
     if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) {
       throw new Error('Built Docker image did not return an exact image identity');
     }
-    createOwnedVolumes(command, targets, runId, [volume, workVolume]);
+    if (probe !== 'container-start')
+      createOwnedVolumes(command, targets, runId, [volume, workVolume]);
     if (probe === 'web-startup') {
       if (volume === undefined || workVolume === undefined)
         throw new Error('Web volume setup missing');
@@ -424,10 +446,10 @@ function runImageLifecycle(
         })
         .then(finish);
     }
-    if (probe === 'managed-policy') {
+    if (probe === 'managed-policy' || probe === 'container-start') {
       if (volume === undefined || workVolume === undefined)
-        throw new Error('Managed policy volume setup missing');
-      if (typeof extra !== 'function') throw new Error('Managed policy scenario missing');
+        throw new Error('Image scenario volume setup missing');
+      if (typeof extra !== 'function') throw new Error('Image scenario missing');
       const overlayDirectory = join(config, 'managed');
       const lifecycle: UserImageLifecycle = {
         command,
@@ -441,6 +463,15 @@ function runImageLifecycle(
         registerContainer: (name: string): void => {
           if (!containers.includes(name)) containers.push(name);
           targets.push({ kind: 'container', name });
+        },
+        registerResource: (kind, name, ownership): void => {
+          if (!name.startsWith('dsh-team-') || Object.keys(ownership).length === 0)
+            throw new Error('Acceptance target requires exact owned identity');
+          if (targets.some((target) => target.kind === kind && target.name === name)) return;
+          const absent = command([kind, 'inspect', name], 30_000);
+          if (!isAbsentResource(absent, kind, name))
+            throw new Error('Acceptance resource already exists; refusing cleanup authority');
+          targets.push({ kind, name, ownership });
         },
       };
       return extra(lifecycle)

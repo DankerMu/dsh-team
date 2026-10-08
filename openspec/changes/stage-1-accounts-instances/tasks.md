@@ -508,7 +508,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 
 - [x] 9.1 `platform/src/orchestrator/` 的 Docker 客户端：经 Unix socket 用 `node:http` 发请求、解析 JSON 和流式日志、把 Docker 的错误转成带状态码的错误；传输函数可注入。socket 路径是配置项。验证：单元测试（假传输）——JSON、流式日志和错误三种回应的解析；`pnpm test:docker`——能读到 Docker 版本；请求不存在的容器得到 404 类型的错误；socket 路径不存在时错误信息指出路径。
 - [x] 9.2 卷：按用户创建状态卷和工作卷（带标签），已存在时复用。验证：`pnpm test:docker`——创建两次得到同一对卷；标签含用户标识；两个用户得到四个不同的卷。
-- [ ] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
+- [x] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
       Task9.3 MUST consume task8.4's qualified complete-composition/trusted-canonical input adapter and the pure generator's single overlay; it MUST NOT rebuild a partial preset roster or duplicate canonical patch rows. Task8.1 alone does not claim this production wiring.
 - [ ] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
 - [ ] 9.5 读启动令牌并换 DSH cookie：从容器日志匹配令牌行，用 `node:http` 带平台对外 authority 作为 `Host` 换 cookie，存进 `instances` 表。验证：`pnpm test:docker`——换到的 cookie 带着同一 `Host` 请求首页得到 200，换一个 `Host` 得到 401；日志和审计里没有令牌和 cookie 原文。
@@ -544,6 +544,18 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - Legacy compatibility / examples; Documentation / migration notes — selected: preserve nine Docker cases and existing client behavior; document result here after root checks, strict OpenSpec, full exact-head Docker run and CI.
 
 验证记录（#35）：公开 `ensureUserVolumes` 复用现有Unix客户端，按用户创建/复用home/work，校验名字与用户标签；冲突拒绝且不接管/删除，第二卷失败保留第一卷供重试。归属分支观察语义RED；24单元场景及真实Unix HTTP smoke覆盖复用、冲突、无破坏重试。三席审查发现验收请求挂起可阻止清理，第一修复轮为实际验收helper加入独立逐请求期限；Unix server持久化后不结束响应的回归先RED（需watchdog救援），后GREEN（取消/连接关闭/仅清理本次卷/保留无关卷和原始错误）。最终本地 `pnpm check` exit0，646unit/302integration通过、volumes100%覆盖、重复率2.74%，strictOpenSpec通过；全diff复审clean/ADMIT。审查头`a1b4d02a0174a5192539e7867c1e6f58d929a507`在giap-vps完整Docker10/10通过、exit0、91.36秒，新增双用户四卷及原9例均过，独立资源清点为空。最初两次父进程运行缺少审查头/Chrome环境变量，不计成功；补齐显式环境后全量通过。最终PR头与CI见PR#142，关键路径人工白盒审查按用户指令后置至Epic完成。
+
+### Issue #36 risk/evidence map (task9.3 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: exported operation plus explicit image/seccomp configuration and all typed callers; config RED/GREEN, public startup tests, real exported-operation acceptance, ordinary health remains daemon-independent.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: existing atomic overlay writer, real seccomp content, owned volume mounts, instance fields/port; malformed policy/inspect failure cases and real independent filesystem/Docker/SQLite readback.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: exact user ownership, no foreign adoption, secret only in intended container environment, no key in errors/audit; create/start/inspect/DB-audit ordering and helper cleanup. Per-user locking is task9.8, not claimed here.
+- Credential evidence specifically exercises the exported operation with complete model inputs/key-variable name but missing or empty actual key: unconfigured, no final DSH container/endpoint/creation-start audits. The operation derives availability from the actual injection value.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: finite helper/acceptance operations and bounded output; owned helper cleanup on failed composition, no destructive volume rollback, malformed/failed daemon or DB/audit rejects without false success. Resource caps are task9.4.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: same captured image for released composition and DSH; preserve shipped seccomp/default sandbox and all ten baseline Docker cases; pinned-node full Docker regression.
+- Documentation / migration notes — selected: canonical defaults in environment documentation, truthful starting-not-ready contract and evidence here; strict OpenSpec, root checks, final-head source review/runtime/CI.
+
+验证记录（#36）：导出 `startUserContainer` 实际串联同一镜像/用户卷的完整composition适配器、唯一只读覆盖层、安全Docker创建/启动、回环端点检查和SQLite审计事务；返回starting而非就绪。配置7例语义RED、外来容器启动前归属RED后修复；三席审查发现缺模型仍依赖基础设施，提取managed-config单一完整性谓词，10例真实SQLite/不可用socket场景先RED后GREEN且旧overlay/状态不变。真实Docker随后暴露CLI空inspect stdout为`[]`或换行，与原空字符串判定不兼容；保留精确目标/状态/诊断约束修复，生命周期回归4fail/12pass到16pass。最终本地完整`pnpm check`exit0，694unit/339integration、重复率2.76%，strictOpenSpec通过；两次全diff修复复审准入。审查头`104f905af028730aaf8d6b3c0a2e0444e6cb39e0`在giap-vps固定Node24.13.1/pnpm10.34.6工具链执行完整Docker11/11、exit0、100.41秒，新增实际入口两次启动/重建同主机名、独立inspect、4条审计、两个helper清理；原10例通过，独立资源清点为空。首轮Docker10/11失败不计成功；最终PR头/CI见PR#143。关键路径人工白盒审查按用户指令后置至Epic完成。
 
 ## 10. 实例网络（任务包 1.10）
 

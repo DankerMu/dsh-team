@@ -235,3 +235,11 @@
 - Preserve canonical volume names, `dsh-team.user` ownership, existing Unix transport and all nine Docker cases; no container, network, DB or gateway changes.
 - Selected risk packs and evidence map below task9.2. Evidence floor: public API behavioral tests of reuse/ownership/partial failure; trusted-host same-user repeat and two-user four-volume acceptance; root checks, strict OpenSpec, exact-head full Docker suite and CI.
 - Human white-box review of orchestrator remains required and deferred to Epic completion under the user's instruction.
+
+## Issue #36 fixture
+
+- Feature; expanded task9.3, agree with upstream: real container creation/start bridges owned volumes, canonical managed composition, config, persistent instance index and audit. Blast radius: host socket privileges, employee data and injected credentials.
+- Preserve all ten Docker cases, existing auth/health/config behavior, single managed overlay and released DSH source; reuse public Docker/volume/managed-config/db/audit APIs.
+- Evidence floor: behavioral RED/GREEN at public operation boundaries; actual SQLite/audit observations; trusted pinned-host real exported startup operation inspect/recreate/endpoint/audit proof; full exact-head Docker suite, root checks, strict OpenSpec and CI.
+- Do not implement model administration, permission-tier mapping, readiness/cookie exchange, resource caps, lifecycle locks, gateway or per-instance networks. Explicit typed model/permission inputs bridge later producers without placeholder policy.
+- Human critical-path line review remains required and explicitly deferred by user to Epic completion.

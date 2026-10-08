@@ -13,6 +13,8 @@ const CONFIG = {
   dataDir: './data',
   managedConfigDir: './data/managed-config',
   dockerSocketPath: '/var/run/docker.sock',
+  userImage: 'dsh-team-user:local',
+  seccompProfilePath: '/unused/seccomp.json',
   publicUrl: PUBLIC_ORIGIN,
   authority: '127.0.0.1:8080',
   cookieSecure: false,
