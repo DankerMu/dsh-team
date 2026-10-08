@@ -1,6 +1,32 @@
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
-import type { DockerCommand } from './docker-command.ts';
+import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
+
+function inspectReply(
+  args: readonly string[],
+  labels: Record<string, string> | undefined,
+): DockerCommandResult {
+  if (labels === undefined) {
+    const kind = args[0] ?? '';
+    const name = args.at(-1) ?? '';
+    return {
+      status: 1,
+      stdout: args.includes('--format') ? '\n' : '[]\n',
+      stderr:
+        kind === 'volume'
+          ? `Error response from daemon: get ${name}: no such volume\n`
+          : `Error response from daemon: No such ${kind}: ${name}\n`,
+    };
+  }
+  const format = args[args.indexOf('--format') + 1] ?? '';
+  if (format === '{{.Id}}') return { status: 0, stdout: `sha256:${'a'.repeat(64)}\n`, stderr: '' };
+  const label = /"([^"]+)"/.exec(format)?.[1];
+  return {
+    status: 0,
+    stdout: label === undefined ? '{}' : `${labels[label] ?? ''}\n`,
+    stderr: '',
+  };
+}
 
 function lifecycleDaemon() {
   const sentinel = 'dsh-team-test-unrelated-sentinel';
@@ -22,24 +48,7 @@ function lifecycleDaemon() {
       return { status: 0, stdout: '', stderr: '' };
     }
     const key = `${kind}:${name}`;
-    if (args[1] === 'inspect') {
-      const labels = resources.get(key);
-      if (labels === undefined)
-        return {
-          status: 1,
-          stdout: '',
-          stderr: `Error response from daemon: No such ${kind}: ${name}`,
-        };
-      const format = args[args.indexOf('--format') + 1] ?? '';
-      if (format === '{{.Id}}')
-        return { status: 0, stdout: `sha256:${'a'.repeat(64)}\n`, stderr: '' };
-      const label = /"([^"]+)"/.exec(format)?.[1];
-      return {
-        status: 0,
-        stdout: label === undefined ? '{}' : `${labels[label] ?? ''}\n`,
-        stderr: '',
-      };
-    }
+    if (args[1] === 'inspect') return inspectReply(args, resources.get(key));
     if (args[1] === 'rm') {
       resources.delete(key);
       return { status: 0, stdout: '', stderr: '' };
@@ -48,6 +57,83 @@ function lifecycleDaemon() {
   };
   return { command, resources, calls, sentinel };
 }
+
+it('registers absent startup resources and verifies cleanup with observed Docker CLI output', async () => {
+  const daemon = lifecycleDaemon();
+
+  const result = await runUserImage(
+    'container-start',
+    () => undefined,
+    daemon.command,
+    (lifecycle) => {
+      const ownership = { 'dsh-team.user': 'abcdefghijkl' };
+      const container = 'dsh-team-u-abcdefghijkl';
+      lifecycle.registerResource('volume', lifecycle.stateVolume, ownership);
+      lifecycle.registerResource('container', container, ownership);
+      daemon.resources.set(`volume:${lifecycle.stateVolume}`, ownership);
+      daemon.resources.set(`container:${container}`, ownership);
+      return Promise.resolve('startup scenario completed');
+    },
+  );
+
+  expect(result.stdout).toBe('startup scenario completed');
+  expect([...daemon.resources.entries()]).toEqual([
+    [`container:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    [`volume:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+  ]);
+});
+
+it.each([
+  ['nonempty resource list', { stdout: '[{"Id":"present"}]\n' }],
+  ['resource object', { stdout: '{}\n' }],
+  ['unrelated stdout', { stdout: 'daemon failed\n' }],
+  ['successful exit', { status: 0 }],
+  ['other failure exit', { status: 2 }],
+  ['missing exit status', { status: null }],
+  ['process error', { error: new Error('process failed') }],
+  ['wrong target', { stderr: 'Error response from daemon: No such container: other-target\n' }],
+  [
+    'wrong resource kind',
+    { stderr: 'Error response from daemon: No such volume: dsh-team-target\n' },
+  ],
+  ['generic failure', { stderr: 'Cannot connect to the Docker daemon\n' }],
+  [
+    'extra diagnostic',
+    { stderr: 'Error response from daemon: No such container: dsh-team-target\nother failure\n' },
+  ],
+] as const)(
+  'refuses startup cleanup authority when absence inspection returns %s',
+  async (_name, invalid) => {
+    const daemon = lifecycleDaemon();
+    const target = 'dsh-team-target';
+    const command: DockerCommand = (args, timeout) => {
+      const result = daemon.command(args, timeout);
+      return args[0] === 'container' && args[1] === 'inspect' && args.at(-1) === target
+        ? { ...result, ...invalid }
+        : result;
+    };
+
+    await expect(
+      runUserImage(
+        'container-start',
+        () => undefined,
+        command,
+        (lifecycle) => {
+          lifecycle.registerResource('container', target, { 'dsh-team.user': 'abcdefghijkl' });
+          return Promise.resolve('unexpected cleanup authority');
+        },
+      ),
+    ).rejects.toThrow(/already exists/);
+
+    expect([...daemon.resources.entries()]).toEqual([
+      [`container:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+      [`volume:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    ]);
+    expect(daemon.calls.some((call) => call.args[1] === 'rm' && call.args.at(-1) === target)).toBe(
+      false,
+    );
+  },
+);
 
 it.each(['partial create', 'assertion failure'])(
   'cleans pre-registered exact startup resources after %s without touching unrelated sentinels',

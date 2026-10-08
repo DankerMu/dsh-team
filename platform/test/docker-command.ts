@@ -14,7 +14,9 @@ export function isAbsentResource(
   kind: 'container' | 'image' | 'volume',
   name: string,
 ): boolean {
-  if (result.error !== undefined || result.status !== 1 || result.stdout !== '') return false;
+  if (result.error !== undefined || result.status !== 1) return false;
+  const stdout = result.stdout.replace(/\r?\n$/, '');
+  if (stdout !== '' && stdout !== '[]') return false;
   const diagnostic = result.stderr.replace(/\r?\n$/, '');
   const absent = [kind, 'object'].some((missingKind) =>
     ['Error response from daemon:', 'Error:'].some(
