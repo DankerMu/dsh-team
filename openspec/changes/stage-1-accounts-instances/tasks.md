@@ -510,7 +510,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [x] 9.2 卷：按用户创建状态卷和工作卷（带标签），已存在时复用。验证：`pnpm test:docker`——创建两次得到同一对卷；标签含用户标识；两个用户得到四个不同的卷。
 - [x] 9.3 容器创建和启动：名称、主机名、标签、两个卷、只读挂载的覆盖层、启动命令（`--trusted-host` 取 4.6 的 authority）、环境变量（模型密钥、关闭遥测）、非特权；seccomp 文件路径是配置项，读入内容后传给 Docker；3080 只发布到 `127.0.0.1` 的随机端口，上游地址和端口存进 `instances` 表；写审计（实例创建、实例启动）。验证：`pnpm test:docker`——查看容器得到的名称、主机名、挂载和安全选项与设计一致；端口只绑定在回环地址；容器不是特权模式，没有挂载 Docker socket；删除后重建主机名不变（规格“每个实例有唯一且稳定的主机名”）；审计里有这两种事件。
       Task9.3 MUST consume task8.4's qualified complete-composition/trusted-canonical input adapter and the pure generator's single overlay; it MUST NOT rebuild a partial preset roster or duplicate canonical patch rows. Task8.1 alone does not claim this production wiring.
-- [ ] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
+- [x] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
 - [ ] 9.5 读启动令牌并换 DSH cookie：从容器日志匹配令牌行，用 `node:http` 带平台对外 authority 作为 `Host` 换 cookie，存进 `instances` 表。验证：`pnpm test:docker`——换到的 cookie 带着同一 `Host` 请求首页得到 200，换一个 `Host` 得到 401；日志和审计里没有令牌和 cookie 原文。
 - [ ] 9.6 就绪判定和启动失败：就绪时写审计（实例就绪）；60 秒内未就绪则停止容器，状态记为“出错”，存最后 50 行日志（先去掉令牌行），写审计（启动失败）。验证：`pnpm test:docker`——正常启动后审计里有“实例就绪”；用一份故意错误的覆盖层启动，状态变为“出错”，最近一次错误里有日志且不含令牌，审计里有“启动失败”。
 - [ ] 9.7 停止和删除：停止容器并删除容器，卷保留；调用方传入停止原因（空闲、管理员、禁用、出错），写审计（实例停止，带原因）。验证：`pnpm test:docker`——在工作目录和状态目录各写一个文件，停止、删除、重新创建后两个文件都在（规格“停止和重建后数据恢复”）；审计里的停止原因等于传入值。
@@ -556,6 +556,17 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - Documentation / migration notes — selected: canonical defaults in environment documentation, truthful starting-not-ready contract and evidence here; strict OpenSpec, root checks, final-head source review/runtime/CI.
 
 验证记录（#36）：导出 `startUserContainer` 实际串联同一镜像/用户卷的完整composition适配器、唯一只读覆盖层、安全Docker创建/启动、回环端点检查和SQLite审计事务；返回starting而非就绪。配置7例语义RED、外来容器启动前归属RED后修复；三席审查发现缺模型仍依赖基础设施，提取managed-config单一完整性谓词，10例真实SQLite/不可用socket场景先RED后GREEN且旧overlay/状态不变。真实Docker随后暴露CLI空inspect stdout为`[]`或换行，与原空字符串判定不兼容；保留精确目标/状态/诊断约束修复，生命周期回归4fail/12pass到16pass。最终本地完整`pnpm check`exit0，694unit/339integration、重复率2.76%，strictOpenSpec通过；两次全diff修复复审准入。审查头`104f905af028730aaf8d6b3c0a2e0444e6cb39e0`在giap-vps固定Node24.13.1/pnpm10.34.6工具链执行完整Docker11/11、exit0、100.41秒，新增实际入口两次启动/重建同主机名、独立inspect、4条审计、两个helper清理；原10例通过，独立资源清点为空。首轮Docker10/11失败不计成功；最终PR头/CI见PR#143。关键路径人工白盒审查按用户指令后置至Epic完成。
+
+### Issue #37 risk/evidence map (task9.4 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: existing exported startup reads persisted limits, CPU/MiB conversion to Docker fields; public behavior RED/GREEN and independent inspect.
+- Config / project setup — selected: existing settings defaults and changed rows observed anew; no new environment/schema fields, invalid conversion fails before mutations.
+- Resource limits / large input / discovery; Concurrency / shared state / ordering — selected: finite CPU/memory/PID cgroups, fixed512PID and no extra swap; snapshot per creation, existing sibling unchanged,256MiB/512MiB actual OOM and sibling usability proof.
+- Auth / permissions / secrets; File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: exact-owned test targets only, OOM payload stays inside container, no globalhost controls or secret leakage, failure preserves guards/overlay/index/audit contract and cleanup evidence.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: existing startup/composition security and eleven Docker cases retained, pinned host cgroup/daemon observations; no dependency change.
+- Documentation / migration notes — selected: fixedPID/no-extra-swap/create-time semantics documented here; root checks, strict OpenSpec, exact-head source review/Docker/CI.
+
+验证记录（#37）：每次配置完整的启动读取持久settings，安全转换NanoCpus/Memory，MemorySwap=Memory、PidsLimit512；资源16例语义RED后GREEN，模型未配置仍不依赖settings。复用公告后HTTP401观察，修复启动时序；真实Docker诊断确认内核可终止整个256MiB实例，符合规格“进程被终止或实例退出”，不能要求同cgroup观察器幸存。用户授权追加一轮后，改为工作卷持久化请求/实际触页进度与宿主精确实例OOM状态关联，只读受管helper读取；没有增加内存、修改OOM优先级或降低隔离验收。审查头`3696e81157a2d5503c20c335c4c8420107d4361f`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker12/12、exit0、116.67秒：申请536870912字节，已触页154140672字节，B OOMKilled=true且退出137；cgroup memory.max268435456/swap0/pids512，原A相同身份/上限且HTTP401前后可用，平台health200前后可用，清理清点为空。旧11例保留；本地pnpmcheck通过，694unit/386integration，strictOpenSpec通过。最终头/CI见PR#144；人工白盒审查按用户指令后置Epic完成。
 
 ## 10. 实例网络（任务包 1.10）
 

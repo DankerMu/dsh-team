@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { setTimeout } from 'node:timers/promises';
 import type { DockerCommand } from './docker-command.ts';
-import { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
+import { launchTokenPresent } from './web-launch-token.ts';
 
 const configuredHost = 'dsh-team.test:3080';
 const patchTarget = '/managed/patch.yml';
@@ -41,6 +41,51 @@ function httpStatus(port: number, authority: string, timeout: number): Promise<n
   });
   req.end();
   return promise;
+}
+
+/** Observes the endpoint of an already-created container; never creates or starts it. */
+export async function observeWebEndpoint(
+  command: DockerCommand,
+  container: string,
+  inspectPort: () => number,
+  authority: string,
+  boundary: Partial<WebStartupBoundary> = {},
+  deadline?: number,
+): Promise<number> {
+  const {
+    now = () => performance.now(),
+    pause = setTimeout,
+    httpStatus: observeHttp = httpStatus,
+  } = boundary;
+  const endsAt = deadline ?? now() + 60_000;
+  function remaining(): number {
+    const left = endsAt - now();
+    if (left <= 0) throw new Error('Web startup deadline exceeded (60s)');
+    return Math.max(1, Math.floor(left));
+  }
+  for (;;) {
+    remaining();
+    const port = inspectPort();
+    // Tail/output caps bound memory; genuine released launch lines never leave this scope.
+    const logs = webDocker(command, ['logs', '--tail', '50', container], remaining());
+    remaining();
+    // HTTP routes may still be assembling before the released readiness announcement.
+    if (!launchTokenPresent(logs)) {
+      await pause(Math.min(250, remaining()));
+      continue;
+    }
+    let status: number | null;
+    try {
+      status = await observeHttp(port, authority, Math.min(2_000, remaining()));
+    } catch {
+      throw new Error('Web HTTP observation failed');
+    }
+    remaining();
+    if (status !== null && status !== 401)
+      throw new Error('Unauthenticated DSH homepage must return 401');
+    if (status === 401) return port;
+    await pause(Math.min(250, remaining()));
+  }
 }
 
 function processScript(trustedHost: string): string {
@@ -321,11 +366,7 @@ export async function runWebStartup(
   expected: WebContainer,
   boundary: Partial<WebStartupBoundary> = {},
 ): Promise<string> {
-  const {
-    now = () => performance.now(),
-    pause = setTimeout,
-    httpStatus: observeHttp = httpStatus,
-  } = boundary;
+  const now = boundary.now ?? (() => performance.now());
   const trustedHost = expected.trustedHost ?? configuredHost;
   const docker = (args: string[], timeout = 30_000): string => webDocker(command, args, timeout);
   assertOwnedVolumes(docker, expected);
@@ -343,50 +384,33 @@ export async function runWebStartup(
     return text;
   }
   bounded(['start', expected.container]);
-  let token: string | undefined;
-  for (;;) {
-    const inspect = () => {
-      const snapshot = record(
-        json(bounded(['container', 'inspect', '--format', '{{json .}}', expected.container])),
-      );
-      if (record(snapshot.State).Running !== true)
-        throw new Error('DSH Web exited before acceptance');
-      return portAndSettings(snapshot, expected);
-    };
-    const port = inspect();
-    // Tail/output caps bound memory. Match the complete released launch line, never retain token.
-    const logs = bounded(['logs', '--tail', '50', expected.container]);
-    token ??= extractLaunchToken(logs);
-    // HTTP routes may still be assembling before the released readiness announcement.
-    if (!launchTokenPresent(logs) || token === undefined) {
-      await pause(Math.min(250, remaining()));
-      continue;
-    }
-    const requestTimeout = Math.min(2_000, remaining());
-    let status: number | null;
-    try {
-      status = await observeHttp(port, trustedHost, requestTimeout);
-    } catch {
-      throw new Error('Web HTTP observation failed');
-    }
-    remaining();
-    if (status !== null && status !== 401)
-      throw new Error('Unauthenticated DSH homepage must return 401');
-    if (status === 401) {
-      const process = selectedProcess(
-        json(bounded(['exec', expected.container, 'python3', '-c', processScript(trustedHost)])),
-      );
-      if (inspect() !== port) throw new Error('Web publication changed during acceptance');
-      const elapsedMs = 60_000 - remaining();
-      return JSON.stringify({
-        tokenSeen: true,
-        elapsedMs,
-        httpStatus: status,
-        configuredHost: trustedHost,
-        hostPort: port,
-        ...process,
-      });
-    }
-    await pause(Math.min(250, remaining()));
-  }
+  const inspect = () => {
+    const snapshot = record(
+      json(bounded(['container', 'inspect', '--format', '{{json .}}', expected.container])),
+    );
+    if (record(snapshot.State).Running !== true)
+      throw new Error('DSH Web exited before acceptance');
+    return portAndSettings(snapshot, expected);
+  };
+  const port = await observeWebEndpoint(
+    command,
+    expected.container,
+    inspect,
+    trustedHost,
+    { ...boundary, now },
+    deadline,
+  );
+  const process = selectedProcess(
+    json(bounded(['exec', expected.container, 'python3', '-c', processScript(trustedHost)])),
+  );
+  if (inspect() !== port) throw new Error('Web publication changed during acceptance');
+  const elapsedMs = 60_000 - remaining();
+  return JSON.stringify({
+    tokenSeen: true,
+    elapsedMs,
+    httpStatus: 401,
+    configuredHost: trustedHost,
+    hostPort: port,
+    ...process,
+  });
 }
