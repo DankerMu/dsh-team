@@ -313,6 +313,82 @@ print(json.dumps({
 }), flush=True)
 `;
 
+// Diagnostics never serialize Docker JSON, process output or errors.
+function resourceInspectDiagnostic(
+  diagnostic: Record<string, number | boolean | null>,
+  label: 'A' | 'B',
+  container: Record<string, unknown>,
+) {
+  for (const [section, keys] of [
+    ['HostConfig', ['NanoCpus', 'Memory', 'MemorySwap', 'PidsLimit']],
+    ['State', ['Running', 'OOMKilled', 'ExitCode']],
+  ] as const) {
+    const sectionValue = container[section];
+    if (typeof sectionValue !== 'object' || sectionValue === null || Array.isArray(sectionValue))
+      continue;
+    const values = record(sectionValue);
+    for (const key of keys) {
+      const value = values[key];
+      if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))
+        diagnostic[`${label}.${section}.${key}`] = value;
+    }
+  }
+}
+
+function resourceOomDiagnostic(
+  diagnostic: Record<string, number | boolean | null>,
+  oom: Record<string, unknown>,
+) {
+  for (const key of [
+    'requestedBytes',
+    'touchedBytes',
+    'childSignal',
+    'oomKillBefore',
+    'oomKillAfter',
+  ]) {
+    const value = oom[key];
+    if (typeof value === 'number' && Number.isFinite(value)) diagnostic[`oom.${key}`] = value;
+  }
+  const limits = oom.limits;
+  if (typeof limits !== 'object' || limits === null || Array.isArray(limits)) return;
+  const cgroupLimits = record(limits);
+  for (const key of ['memory.max', 'memory.swap.max', 'pids.max']) {
+    const value = cgroupLimits[key];
+    if (
+      typeof value === 'string' &&
+      /^\d{1,16}$/.test(value) &&
+      Number.isSafeInteger(Number(value))
+    )
+      diagnostic[`cgroup.${key}`] = Number(value);
+  }
+}
+
+function resourcePressureFailureStage(stderr: string): 'cgroup read' | 'pressure exec' {
+  // Fixed script markers identify cgroup failures without exposing stderr.
+  return /Resource acceptance requires observable cgroup v2 memory\.events|Owned allocation cgroup limits differ from inspected settings|\/sys\/fs\/cgroup\/(?:memory\.(?:events|max|swap\.max)|pids\.max)/.test(
+    stderr,
+  )
+    ? 'cgroup read'
+    : 'pressure exec';
+}
+
+function reportResourceDiagnostic(
+  stage: string,
+  diagnostic: Record<string, number | boolean | null>,
+  lifecycle: UserImageLifecycle,
+  boundedId?: string,
+) {
+  if (boundedId !== undefined) {
+    try {
+      resourceInspectDiagnostic(diagnostic, 'B', inspect(lifecycle, boundedId));
+      diagnostic['B.failureInspectAvailable'] = true;
+    } catch {
+      diagnostic['B.failureInspectAvailable'] = false;
+    }
+  }
+  process.stdout.write(`Resource diagnostic: ${JSON.stringify({ stage, diagnostic })}\n`);
+}
+
 async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const userB = `${userA.startsWith('a') ? 'b' : 'a'}${userA.slice(1)}`;
@@ -348,6 +424,9 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
   let app: FastifyInstance | undefined;
   const failures: unknown[] = [];
   let summary = '';
+  let stage = 'platform setup';
+  let boundedId: string | undefined;
+  const diagnostic: Record<string, number | boolean | null> = {};
   try {
     applyMigrations(db);
     app = await buildApp(config, db);
@@ -368,6 +447,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       );
     }
     writeSettings(db, { cpuCores: 0.5, memoryMiB: 512 });
+    stage = 'A startup';
     const a = await startUserContainer({
       client,
       database: db,
@@ -378,15 +458,21 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       permission: START_PERMISSION,
     });
     if (a.outcome !== 'starting') throw new Error('Expected configured sibling startup');
+    stage = 'A independent inspection';
     const firstA = inspect(lifecycle, a.containerId);
+    resourceInspectDiagnostic(diagnostic, 'A', firstA);
     expect(firstA.Id).toBe(a.containerId);
     expect(firstA.Image).toBe(lifecycle.imageId);
     expect(record(firstA.Config).Labels).toMatchObject({ 'dsh-team.user': userA });
     expect(firstA.HostConfig).toMatchObject(limitsA);
+    stage = 'A readiness';
     await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    stage = 'platform health before B';
     await health();
 
     writeSettings(db, { cpuCores: 1.25, memoryMiB: 256 });
+    stage = 'B startup';
+    boundedId = `dsh-team-u-${userB}`;
     const b = await startUserContainer({
       client,
       database: db,
@@ -397,7 +483,9 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       permission: START_PERMISSION,
     });
     if (b.outcome !== 'starting') throw new Error('Expected configured bounded startup');
+    stage = 'B independent inspection';
     const bounded = inspect(lifecycle, b.containerId);
+    resourceInspectDiagnostic(diagnostic, 'B', bounded);
     expect(bounded.Id).toBe(b.containerId);
     expect(bounded.Image).toBe(lifecycle.imageId);
     expect(record(bounded.Config).Labels).toMatchObject({ 'dsh-team.user': userB });
@@ -405,18 +493,30 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       ...limitsB,
       Privileged: false,
     });
+    stage = 'sibling limits after B startup';
     expect(inspect(lifecycle, a.containerId).HostConfig).toMatchObject(limitsA);
+    stage = 'B readiness';
     await observeWebEndpoint(lifecycle.command, b.containerId, () => b.upstreamPort, authority);
+    stage = 'sibling readiness before pressure';
     await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    stage = 'platform health before pressure';
     await health();
 
+    stage = 'pressure exec';
     const pressure = lifecycle.command(
       ['exec', '--user', '1001', b.containerId, 'python3', '-c', oomScript],
       30_000,
     );
-    if (pressure.error !== undefined || pressure.status !== 0)
+    diagnostic['pressure.status'] = pressure.status;
+    diagnostic['pressure.commandError'] = pressure.error !== undefined;
+    if (pressure.error !== undefined || pressure.status !== 0) {
+      stage = resourcePressureFailureStage(pressure.stderr);
       throw new Error('Owned OOM observer failed or exceeded its deadline');
+    }
+    stage = 'cgroup readback';
     const oom = record(JSON.parse(pressure.stdout));
+    resourceOomDiagnostic(diagnostic, oom);
+    stage = 'victim selection';
     expect(oom).toMatchObject({
       requestedBytes: 536_870_912,
       childSignal: 9,
@@ -432,12 +532,17 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     expect(oom.touchedBytes).toBeLessThan(536_870_912);
     expect(oom.oomKillAfter).toBeGreaterThan(oom.oomKillBefore);
 
+    stage = 'sibling post-pressure inspection';
     const afterA = inspect(lifecycle, a.containerId);
+    resourceInspectDiagnostic(diagnostic, 'A', afterA);
     expect(afterA.Id).toBe(firstA.Id);
     expect(afterA.HostConfig).toEqual(firstA.HostConfig);
     expect(record(afterA.State).Running).toBe(true);
+    stage = 'sibling post-pressure readiness';
     await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    stage = 'platform post-pressure health';
     await health();
+    stage = 'instance postchecks';
     expect(
       db.prepare('SELECT user_id, container_id FROM instances ORDER BY user_id').all(),
     ).toEqual(
@@ -446,6 +551,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
         { user_id: userB, container_id: b.containerId },
       ].sort((left, right) => left.user_id.localeCompare(right.user_id)),
     );
+    stage = 'helper postchecks';
     expect(helperIds).toHaveLength(2);
     for (const id of helperIds)
       await expect(
@@ -461,15 +567,18 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     });
   } catch (error) {
     failures.push(error);
+    reportResourceDiagnostic(stage, diagnostic, lifecycle, boundedId);
   } finally {
     try {
       if (app === undefined) db.close();
       else await app.close();
     } catch (error) {
       failures.push(error);
+      reportResourceDiagnostic('platform cleanup', diagnostic, lifecycle);
     }
   }
   if (failures.length !== 0) throw new AggregateError(failures, 'Resource acceptance failed');
+  reportResourceDiagnostic('complete', diagnostic, lifecycle);
   return summary;
 }
 
