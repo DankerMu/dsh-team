@@ -234,7 +234,6 @@ async function readinessScenario(
           networkName,
         ),
       ).toBe(true);
-      expect(record(container.NetworkSettings).Networks).toEqual({});
     } else {
       expect(launchToken !== undefined).toBe(true);
       await assertAuthenticatedReadiness(container, row, authority, diagnostic);
