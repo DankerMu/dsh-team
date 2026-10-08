@@ -513,7 +513,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [x] 9.4 资源上限：CPU、内存取自 `settings`，另设进程数上限。验证：`pnpm test:docker`——查看容器得到的三项上限等于设置值；改设置后新启动的容器用新值；内存上限设为 256M 时在实例里申请 512M，该容器里的进程被终止，同时运行的另一个实例仍然可用（规格“资源上限”的两个场景）。
 - [x] 9.5 读启动令牌并换 DSH cookie：从容器日志匹配令牌行，用 `node:http` 带平台对外 authority 作为 `Host` 换 cookie，存进 `instances` 表。验证：`pnpm test:docker`——换到的 cookie 带着同一 `Host` 请求首页得到 200，换一个 `Host` 得到 401；日志和审计里没有令牌和 cookie 原文。
 - [x] 9.6 就绪判定和启动失败：就绪时写审计（实例就绪）；60 秒内未就绪则停止容器，状态记为“出错”，存最后 50 行日志（先去掉令牌行），写审计（启动失败）。验证：`pnpm test:docker`——正常启动后审计里有“实例就绪”；用一份故意错误的覆盖层启动，状态变为“出错”，最近一次错误里有日志且不含令牌，审计里有“启动失败”。
-- [ ] 9.7 停止和删除：停止容器并删除容器，卷保留；调用方传入停止原因（空闲、管理员、禁用、出错），写审计（实例停止，带原因）。验证：`pnpm test:docker`——在工作目录和状态目录各写一个文件，停止、删除、重新创建后两个文件都在（规格“停止和重建后数据恢复”）；审计里的停止原因等于传入值。
+- [x] 9.7 停止和删除：停止容器并删除容器，卷保留；调用方传入停止原因（空闲、管理员、禁用、出错），写审计（实例停止，带原因）。验证：`pnpm test:docker`——在工作目录和状态目录各写一个文件，停止、删除、重新创建后两个文件都在（规格“停止和重建后数据恢复”）；审计里的停止原因等于传入值。
 - [ ] 9.8 每用户串行：同一用户的生命周期操作排队执行。验证：单元测试——对同一用户并发发起十次启动，只执行一次创建；对两个用户并发启动互不等待（规格“一个用户恰好一个实例”）。
 - [ ] 9.9 同时运行上限：处于“启动中”和“运行中”的实例数达到上限时拒绝新的启动，返回“已满”，不停止已有实例；模型未配置时返回“未配置模型”，不创建容器、不记为出错。验证：`pnpm test:docker`——上限设为 1，第二个用户的启动被拒绝且第一个实例仍在运行；第一个停止后第二个能启动；清空模型设置后启动返回“未配置模型”且没有容器被创建（规格“同时运行的实例有上限”“模型未配置时不启动实例”）。
 - [ ] 9.10 平台启动时对账：按标签列出容器，与 `instances` 表比对并修正状态（库里“运行中”但容器不在 → 记为已停止；容器在跑但库里没有 cookie → 停止容器）。验证：`pnpm test:docker`——人为制造这两种不一致后执行对账，状态与 Docker 一致；两个实例运行中时重建编排器对象再对账，两个实例仍被识别为运行中且可访问（规格“平台重启后实例状态一致”的“平台重启时有实例在运行”场景）。
@@ -590,6 +590,17 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - Documentation / migration notes — selected: readiness/failure transition and bounded diagnostic contract; root checks, strictOpenSpec, exact-head actual good/bad-overlay Docker and CI.
 
 验证记录（#39）：waitForUserContainerReady复用单一凭据获取，使用本次实际提交的cookie认证HTTP200后才条件原子提交running/instance.ready；统一60秒就绪窗口、提前退出检测、独立有界日志与停止清理；失败记录error/清cookie/instance.start-failed，不删除容器或卷。保留最后50行安全诊断，分流重组UTF8/帧、整行超限丢弃，控制字符规范化先于凭据检测，禁止过滤后重建秘密。语义RED包括真实200后未转换状态及NUL重建秘密泄漏，均修复；本地完整pnpmcheck exit0，795unit/508integration、strictOpenSpec通过。审查头`f1968a708d2477988b59cbc58995e49eba55ef6a`固定Node24.13.1/pnpm10.34.6 giap-vps实际完整Docker15/15、exit0、92.25秒：正常路径running/认证200/ready审计，受管已绑定覆盖层原位损坏后error/真实安全日志/start-failed审计且已停止，秘密不外泄；13基线保留，独立资源清点为空。全diff修复审查clean；最终头/CI见PR#146；人工白盒依用户指令后置Epic完成。
+
+### Issue #40 risk/evidence map (task9.7 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: new retirement operation, stopped/current runtime-field clearing and exact stop reason; public realtransport/SQLite tests, no migration.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: exact owned current immutable identity, disabled-account stop, stale replacement and credential clearing; negative mutation guards and atomic audit/state.
+- File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: destructive container operation must never remove either persistent volume; actual sentinel survival, partial Docker/DB failure and absent-container retry without false success.
+- Resource limits / large input / discovery — selected: bounded stop/delete/inspect with cancellation; no discovery over arbitrary containers, no unbounded retries.
+- Config / project setup; Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: existing client/identity/image/volumes/startup contracts, no new config/dependency; preserve15Docker baseline scenarios.
+- Documentation / migration notes — selected: stopped-field and no-op/partial-failure contracts; root checks, strictOpenSpec, exact-head fullDocker/CI and human critical-path review ledger.
+
+验证记录（#40）：stopUserContainer按捕获的当前受管容器ID停止、确认停止、无force/卷删除选项地移除并确认不存在，再原子清运行时身份/端点/cookie并记录调用方原因，保留历史时间/错误；禁用账号可停止，已完成操作不重复审计，部分Docker/DB失败不伪造成功。真实UnixHTTP/SQLite语义RED先观察停止后尚未删除，后GREEN；本地完整pnpmcheck exit0，830unit/561integration、stop.ts逐项100%覆盖率、重复率2.69%、strictOpenSpec通过。三席全diff审查clean；审查头`ddb927cc5aa0fd4a5ab0fc844b0bfb54a4f5030b`固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker16/16、exit0、96.76秒：实际uid1001写入状态/工作卷精确文件，经生产停止删除重建后字节不变、原ID不存在、新ID不同、两卷/主机名保持，审计原因idle，独立兄弟实例/文件/行/审计不变；15基线保留，独立资源清点为空。最终头/CI见PR#147；人工关键路径审查按用户要求后置Epic完成。
 
 ## 10. 实例网络（任务包 1.10）
 

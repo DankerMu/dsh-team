@@ -88,6 +88,10 @@ export function startupDaemon() {
       return { status: 204 };
     }
     if (path.endsWith('/json')) return { status: 200, document: container };
+    if (path.startsWith(`/containers/${container.Id}/stop?`)) {
+      container.State.Running = false;
+      return { status: 204 };
+    }
     if (path.endsWith('/start')) {
       container.State.Running = true;
       return { status: 204 };
