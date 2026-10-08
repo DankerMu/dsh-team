@@ -1,24 +1,18 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { applyMigrations, openDatabase } from '../db/index.ts';
+import { writeSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { createDockerClient, createOrchestrator } from './index.ts';
-import type {
-  AcquireDshCookieInput,
-  OrchestratorDependencies,
-  StartResult,
-  StartUserContainerInput,
-} from './index.ts';
+import type { AcquireDshCookieInput, StartResult } from './index.ts';
 import {
   expectDockerReads,
   startupEvidence,
-  startupDaemon,
+  startupCapacityEvidence,
+  startupBarrier as barrier,
+  startupOwnerFixture,
   START_CONTAINER,
   START_IMAGE,
   START_MODEL,
-  START_PERMISSION,
   START_USER,
 } from '../../test/container-start-fixture.ts';
 
@@ -32,84 +26,14 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-owner-'));
-  roots.push(root);
-  const database = openDatabase(':memory:');
-  databases.push(database);
-  applyMigrations(database);
-  for (const user of [START_USER, OTHER_USER]) {
-    database
-      .prepare("INSERT INTO users VALUES (?, ?, 'unused', 'employee', 'active', 1)")
-      .run(user, `${user}@example.test`);
-  }
-  const seccompProfilePath = join(root, 'seccomp.json');
-  await writeFile(seccompProfilePath, '{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}');
-  const daemon = startupDaemon();
-  const raw = createDockerClient('/fixture/docker.sock', daemon.transport);
-  let before:
-    ((method: string, path: string, signal?: AbortSignal) => Promise<undefined>) | undefined;
-  const client: OrchestratorDependencies['client'] = {
-    ...raw,
-    async json(method, path, body, signal) {
-      await before?.(method, path, signal);
-      return raw.json(method, path, body, signal);
-    },
-  };
-  const owner = createOrchestrator({ client, database });
-  const input: StartUserContainerInput = {
-    userId: START_USER,
-    config: {
-      userImage: 'dsh-team-user:local',
-      seccompProfilePath,
-      managedConfigDir: join(root, 'managed'),
-      authority: 'team.example:8443',
-    },
-    modelSettings: START_MODEL,
-    modelKey: 'fixture-private-key',
-    permission: START_PERMISSION,
-  };
-  return {
-    root,
-    database,
-    daemon,
-    client,
-    owner,
-    input,
-    beforeRequest: (callback: typeof before) => {
-      before = callback;
-    },
-    blockStartup: async () => {
-      const gate = barrier();
-      before = async (method, path) => {
-        if (method === 'POST' && path === createPath()) await gate.hold();
-        return undefined;
-      };
-      const first = owner.startUserContainer(input);
-      const head = Promise.allSettled([first]);
-      await gate.reached;
-      return { gate, first, head };
-    },
-  };
+  const context = await startupOwnerFixture();
+  roots.push(context.root);
+  databases.push(context.database);
+  return context;
 }
 
 function createPath(user = START_USER): string {
   return `/containers/create?name=dsh-team-u-${user}`;
-}
-
-function barrier() {
-  const reached = Promise.withResolvers<undefined>();
-  const release = Promise.withResolvers<undefined>();
-  return {
-    reached: reached.promise,
-    release() {
-      release.resolve(undefined);
-    },
-    async hold(): Promise<undefined> {
-      reached.resolve(undefined);
-      await release.promise;
-      return undefined;
-    },
-  };
 }
 
 const STARTED: StartResult = {
@@ -118,6 +42,22 @@ const STARTED: StartResult = {
   upstreamHost: '127.0.0.1',
   upstreamPort: 49173,
 };
+
+it('persisted limit1 denies a second actual user without changing the admitted instance', async () => {
+  const { owner, input, daemon, database } = await fixture();
+  writeSettings(database, { maxRunningInstances: 1 });
+  expect(await owner.startUserContainer(input)).toEqual(STARTED);
+  const before = await startupCapacityEvidence(database, input, daemon);
+  daemon.setContainerId(NEXT_CONTAINER);
+
+  const result = await owner.startUserContainer({ ...input, userId: OTHER_USER });
+
+  expect(result).toEqual({ outcome: 'full' });
+  expect(await startupCapacityEvidence(database, input, daemon)).toEqual(before);
+  await expect(
+    stat(join(input.config.managedConfigDir, `${OTHER_USER}.patch.yml`)),
+  ).rejects.toMatchObject({ code: 'ENOENT' });
+});
 
 it('ten same-user starts share one created identity and one creation/start audit pair', async () => {
   const { owner, input, daemon, database, blockStartup } = await fixture();
@@ -154,6 +94,7 @@ it('ten same-user starts share one created identity and one creation/start audit
 
 it('another user completes while the first user still owns a blocked startup', async () => {
   const { owner, input, blockStartup, database, daemon } = await fixture();
+  writeSettings(database, { maxRunningInstances: 2 });
   const { gate, head } = await blockStartup();
   daemon.beforeRequest((request) => {
     if (request.method === 'POST' && request.path === createPath(OTHER_USER))
@@ -352,6 +293,7 @@ it.each(['starting', 'running'] as const)(
   async (status) => {
     const { owner, input, database, daemon } = await fixture();
     await owner.startUserContainer(input);
+    writeSettings(database, { maxRunningInstances: 1 });
     database
       .prepare(
         'UPDATE instances SET status = ?, dsh_cookie = ?, last_activity_at = 123, last_error = ?',

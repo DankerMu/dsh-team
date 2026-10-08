@@ -1,3 +1,4 @@
+import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
 import { acquireDshCookie } from './credentials.ts';
@@ -28,6 +29,33 @@ export interface Orchestrator {
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
   const tails = new Map<string, Promise<undefined>>();
+  const pending = new Set<string>();
+
+  function reserve(userId: string): boolean {
+    // Read after asynchronous reuse inspection: settings may have changed while it was pending.
+    const { maxRunningInstances } = readSettings(database);
+    const occupied = new Set(pending);
+    const rows = database
+      .prepare<[], { user_id: string }>(
+        "SELECT user_id FROM instances WHERE status IN ('starting', 'running')",
+      )
+      .all();
+    for (const row of rows) occupied.add(row.user_id);
+    // Reaching admission means no live reusable identity; an exact-ID404 replacement owns its slot.
+    occupied.delete(userId);
+    if (occupied.size >= maxRunningInstances) return false;
+    pending.add(userId);
+    return true;
+  }
+
+  async function start(input: StartupInput): Promise<StartResult> {
+    try {
+      return await startUserContainer(input, () => reserve(input.userId));
+    } finally {
+      // Await actual work/cleanup, not caller cancellation. A durable active row remains counted.
+      pending.delete(input.userId);
+    }
+  }
 
   function schedule<
     Input extends { readonly userId: string; readonly signal?: AbortSignal },
@@ -72,11 +100,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   return {
     startUserContainer: (input: StartUserContainerInput) =>
-      schedule(
-        input,
-        startUserContainer,
-        'Container startup failed during account validation or cancellation',
-      ),
+      schedule(input, start, 'Container startup failed during account validation or cancellation'),
     acquireDshCookie: (input: AcquireDshCookieInput) =>
       schedule(
         input,

@@ -24,9 +24,11 @@ export function inspect(lifecycle: UserImageLifecycle, name: string): Record<str
 export function startupClient(lifecycle: UserImageLifecycle) {
   const raw = createDockerClient('/var/run/docker.sock');
   const helperIds: string[] = [];
+  const requests: { method: string; path: string }[] = [];
   const client: typeof raw = {
     logs: (path, signal) => raw.logs(path, signal),
     async json(method, path, body, signal) {
+      requests.push({ method, path });
       const helperCreate =
         method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
       let helperName = '';
@@ -79,7 +81,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
       return result;
     },
   };
-  return { raw, client, helperIds };
+  return { raw, client, helperIds, requests };
 }
 
 export async function cookieHttpStatus(

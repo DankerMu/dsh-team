@@ -515,7 +515,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [x] 9.6 就绪判定和启动失败：就绪时写审计（实例就绪）；60 秒内未就绪则停止容器，状态记为“出错”，存最后 50 行日志（先去掉令牌行），写审计（启动失败）。验证：`pnpm test:docker`——正常启动后审计里有“实例就绪”；用一份故意错误的覆盖层启动，状态变为“出错”，最近一次错误里有日志且不含令牌，审计里有“启动失败”。
 - [x] 9.7 停止和删除：停止容器并删除容器，卷保留；调用方传入停止原因（空闲、管理员、禁用、出错），写审计（实例停止，带原因）。验证：`pnpm test:docker`——在工作目录和状态目录各写一个文件，停止、删除、重新创建后两个文件都在（规格“停止和重建后数据恢复”）；审计里的停止原因等于传入值。
 - [x] 9.8 每用户串行：同一用户的生命周期操作排队执行。验证：单元测试——对同一用户并发发起十次启动，只执行一次创建；对两个用户并发启动互不等待（规格“一个用户恰好一个实例”）。
-- [ ] 9.9 同时运行上限：处于“启动中”和“运行中”的实例数达到上限时拒绝新的启动，返回“已满”，不停止已有实例；模型未配置时返回“未配置模型”，不创建容器、不记为出错。验证：`pnpm test:docker`——上限设为 1，第二个用户的启动被拒绝且第一个实例仍在运行；第一个停止后第二个能启动；清空模型设置后启动返回“未配置模型”且没有容器被创建（规格“同时运行的实例有上限”“模型未配置时不启动实例”）。
+- [x] 9.9 同时运行上限：处于“启动中”和“运行中”的实例数达到上限时拒绝新的启动，返回“已满”，不停止已有实例；模型未配置时返回“未配置模型”，不创建容器、不记为出错。验证：`pnpm test:docker`——上限设为 1，第二个用户的启动被拒绝且第一个实例仍在运行；第一个停止后第二个能启动；清空模型设置后启动返回“未配置模型”且没有容器被创建（规格“同时运行的实例有上限”“模型未配置时不启动实例”）。
 - [ ] 9.10 平台启动时对账：按标签列出容器，与 `instances` 表比对并修正状态（库里“运行中”但容器不在 → 记为已停止；容器在跑但库里没有 cookie → 停止容器）。验证：`pnpm test:docker`——人为制造这两种不一致后执行对账，状态与 Docker 一致；两个实例运行中时重建编排器对象再对账，两个实例仍被识别为运行中且可访问（规格“平台重启后实例状态一致”的“平台重启时有实例在运行”场景）。
 - [ ] 9.11 恢复配置目录：实例停止的状态下，用用户镜像起一个一次性容器，挂载该用户的状态卷，把 `profiles/` 整个换成镜像里 `/opt/dsh-team/profile-seed/` 的内容，其余不动；容器用完删除。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写坏，并在 `sessions/` 放一个文件；执行后 `profiles/` 与 `profile-seed/` 逐文件一致，`sessions/` 里的文件原样，没有残留的一次性容器。
 
@@ -614,6 +614,16 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - New reuse branch evidence is explicit: valid starting and genuinely running results preserve full row/cookie/overlay/audits; foreign/stopped/malformed/stale reuse, non404 inspect and exact404/name collision fail closed; changed account/model eligibility is re-read on each call.
 
 验证记录（#41）：createOrchestrator绑定client/database并独占每用户FIFO，四个生命周期方法所有调用者原子迁移，无隐藏全局队列/旧公共旁路；同用户十次启动仅创建一次、不同用户独立、失败/排队取消不阻塞后续、运行中取消持锁直到实际清理结束。启动在队列内重新验证账号/模型与当前实例，真实starting/running复用返回对应状态，不改行/cookie/覆盖层/审计；精确404仍可重建，异主/异常/过期均拒绝。排队前取消明确保留旧凭据且无IO，活动中取消行为保留。真实Unix/SQLite并发语义RED后GREEN；本地完整pnpmcheck exit0，879unit/568integration、coordinator100%覆盖、重复率2.67%、strictOpenSpec通过。三席全diff审查clean；审查头`5001780009ace9f88205167151da83ff4b49bee5`固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker16/16、exit0、110.89秒：共享owner十次初始启动同一实例/一个创建启动审计对，原重建和16基线全部保留，独立清点为空。最终头/CI见PR#148；人工白盒按用户要求后置Epic完成。
+
+### Issue #42 risk/evidence map (task9.9 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: typed full outcome, persisted maxRunningInstances and counted states; all result consumers migrated, no schema change.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: cross-user synchronous reservation, pending/persisted distinct-count handoff, actual cleanup settlement and separate-user independence; deterministic last-slot/race/failure proofs.
+- Config / project setup; Legacy compatibility / examples — selected: fresh persisted limits, missing-model precedence and full-capacity validated reuse; current owner/API/caller semantics retained.
+- Auth / permissions / secrets; File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: full/unconfigured no container/helper/volume/overlay/row/audit/error mutation, no eviction or cross-user changes; ownership and failure cleanup regressions plus actual preserved A endpoint.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: no new dependency/config/claim schema, documented state-based occupancy and pending lifecycle; root/strictOpenSpec, full pinned Docker/CI and deferred human-review ledger.
+
+验证记录（#42）：同一owner同步准入，pending与持久starting/running按用户去重，实际清理结束后释放pending；每次准入读取最新上限，满额复用不占新名额，full/unconfigured无创建或状态/审计/覆盖层变更，模型缺失优先。真实Unix/SQLite持久上限拒绝场景观察RED后GREEN；并发最后名额、limit2独立推进、持久交接、清理阻塞/取消和新旧配置边界有确定性测试。本地完整pnpmcheck exit0，899unit/575integration，orchestrator100%覆盖、重复率2.72%、strictOpenSpec通过。三席全diff审查clean；审查头`e586eea88148c9a8206feba06a175e0bab7db164`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker17/17、exit0、115.29秒：limit1真实ready A保持HTTP200且B返回full，停止A后B启动且ready HTTP200，清空已有/新用户规范模型输入均unconfigured且无拒绝副作用；原16基线保留，独立清点为空。最终头/CI见PR#149；人工白盒按用户要求后置Epic完成。
 
 ## 10. 实例网络（任务包 1.10）
 

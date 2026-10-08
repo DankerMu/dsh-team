@@ -1,6 +1,5 @@
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -14,8 +13,11 @@ import type {
 } from '../src/orchestrator/index.ts';
 import {
   expectDockerReads,
+  CREATED_AND_STARTED,
   startupEvidence,
+  startupCapacityEvidence,
   startupDaemon,
+  startupUnixServer,
   START_CONTAINER,
   START_HELPER,
   START_MODEL,
@@ -34,37 +36,24 @@ let createBarrier:
   | {
       reached: { promise: Promise<undefined>; resolve: (value: undefined) => void };
       release: { promise: Promise<undefined>; resolve: (value: undefined) => void };
+      path?: string;
+      method?: string;
     }
   | undefined;
-const server = createServer((request, response) => {
-  const chunks: Buffer[] = [];
-  request.on('data', (chunk: Buffer) => chunks.push(chunk));
-  request.on('end', () => {
-    const send = () => {
-      try {
-        // This local Engine fixture accepts only bodies serialized by the public Docker client.
-        const body =
-          chunks.length === 0
-            ? {}
-            : (JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>);
-        const reply = daemon.reply({ method: request.method ?? '', path: request.url ?? '', body });
-        response
-          .writeHead(reply.status)
-          .end(reply.bytes ?? (reply.document === undefined ? '' : JSON.stringify(reply.document)));
-      } catch {
-        response.writeHead(500).end();
-      }
-    };
+const server = startupUnixServer(
+  (request) => daemon.reply(request),
+  (method, path) => {
     if (
-      request.method === 'POST' &&
-      request.url === `/containers/create?name=dsh-team-u-${START_USER}` &&
-      createBarrier !== undefined
+      createBarrier !== undefined &&
+      method === (createBarrier.method ?? 'POST') &&
+      path === (createBarrier.path ?? `/containers/create?name=dsh-team-u-${START_USER}`)
     ) {
       createBarrier.reached.resolve(undefined);
-      void createBarrier.release.promise.then(send);
-    } else send();
-  });
-});
+      return createBarrier.release.promise;
+    }
+    return undefined;
+  },
+);
 
 beforeEach(async () => {
   createBarrier = undefined;
@@ -120,20 +109,104 @@ function audits() {
     .all();
 }
 
-const CREATED_AND_STARTED = [
-  {
-    event_type: 'instance.created',
-    target: START_USER,
-    target_email: 'employee@example.test',
-    details: '{}',
+it('persisted limit1 over Unix Docker transport denies a second actual user without changing the admitted instance', async () => {
+  const otherUser = 'mnopqrstuvwx';
+  const nextContainer = 'd'.repeat(64);
+  database
+    .prepare(
+      "INSERT INTO users VALUES (?, 'second@example.test', 'unused-hash', 'employee', 'active', 1)",
+    )
+    .run(otherUser);
+  writeSettings(database, { maxRunningInstances: 1 });
+  expect(await owner.startUserContainer(input)).toEqual({
+    outcome: 'starting',
+    containerId: START_CONTAINER,
+    upstreamHost: '127.0.0.1',
+    upstreamPort: 49173,
+  });
+  const before = await startupCapacityEvidence(database, input, daemon);
+  daemon.setContainerId(nextContainer);
+
+  const result = await owner.startUserContainer({ ...input, userId: otherUser });
+
+  expect(result).toEqual({ outcome: 'full' });
+  expect(await startupCapacityEvidence(database, input, daemon)).toEqual(before);
+  await expect(
+    stat(join(input.config.managedConfigDir, `${otherUser}.patch.yml`)),
+  ).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it.each([
+  [1, 'create'],
+  [2, 'create'],
+  [1, 'start'],
+  [2, 'start'],
+] as const)(
+  'limit%s over Unix transport counts A once while its %s response is held',
+  async (limit, phase) => {
+    const otherUser = 'mnopqrstuvwx';
+    const nextContainer = 'd'.repeat(64);
+    database
+      .prepare(
+        "INSERT INTO users VALUES (?, 'second@example.test', 'unused', 'employee', 'active', 1)",
+      )
+      .run(otherUser);
+    writeSettings(database, { maxRunningInstances: limit });
+    createBarrier = {
+      reached: Promise.withResolvers<undefined>(),
+      release: Promise.withResolvers<undefined>(),
+      path:
+        phase === 'create'
+          ? `/containers/create?name=dsh-team-u-${START_USER}`
+          : `/containers/${START_CONTAINER}/start`,
+    };
+    const first = owner.startUserContainer(input);
+    const head = Promise.allSettled([first]);
+    await createBarrier.reached.promise;
+    const requests = [...daemon.requests];
+    daemon.beforeRequest((request) => {
+      if (request.path === `/containers/create?name=dsh-team-u-${otherUser}`)
+        daemon.setContainerId(nextContainer);
+      if (request.path === `/containers/create?name=dsh-team-u-${START_USER}`)
+        daemon.setContainerId(START_CONTAINER);
+    });
+    try {
+      expect(rows()).toMatchObject(
+        phase === 'create' ? [] : [{ user_id: START_USER, status: 'starting' }],
+      );
+
+      expect(await owner.startUserContainer({ ...input, userId: otherUser })).toEqual(
+        limit === 1
+          ? { outcome: 'full' }
+          : {
+              outcome: 'starting',
+              containerId: nextContainer,
+              upstreamHost: '127.0.0.1',
+              upstreamPort: 49173,
+            },
+      );
+
+      if (limit === 1) {
+        expect(daemon.requests).toEqual(requests);
+        expect(
+          database.prepare('SELECT * FROM instances WHERE user_id = ?').get(otherUser),
+        ).toBeUndefined();
+        await expect(
+          stat(join(input.config.managedConfigDir, `${otherUser}.patch.yml`)),
+        ).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    } finally {
+      createBarrier.release.resolve(undefined);
+      await head;
+    }
+    expect(await first).toEqual({
+      outcome: 'starting',
+      containerId: START_CONTAINER,
+      upstreamHost: '127.0.0.1',
+      upstreamPort: 49173,
+    });
   },
-  {
-    event_type: 'instance.started',
-    target: START_USER,
-    target_email: 'employee@example.test',
-    details: '{}',
-  },
-];
+);
 
 it('ten same-user public starts over Unix Docker transport create one identity and one audit pair', async () => {
   createBarrier = {
@@ -668,3 +741,54 @@ it('public start retirement start executes FIFO over Unix transport and retains 
     ...CREATED_AND_STARTED,
   ]);
 });
+
+it.each([false, true])(
+  'Unix failure/cancellation (%s) keeps the last slot until cleanup settles',
+  async (cancel) => {
+    const otherUser = 'mnopqrstuvwx';
+    database
+      .prepare(
+        "INSERT INTO users VALUES (?, 'second@example.test', 'unused', 'employee', 'active', 1)",
+      )
+      .run(otherUser);
+    writeSettings(database, { maxRunningInstances: 1 });
+    createBarrier = {
+      reached: Promise.withResolvers<undefined>(),
+      release: Promise.withResolvers<undefined>(),
+      method: 'DELETE',
+      path: `/containers/${START_HELPER}?force=true`,
+    };
+    const controller = new AbortController();
+    if (!cancel) daemon.setComposition('not-json');
+    daemon.beforeRequest((request) => {
+      if (cancel && request.path === `/containers/${START_HELPER}/wait?condition=not-running`)
+        controller.abort();
+    });
+    const first = owner.startUserContainer({ ...input, signal: controller.signal });
+    const head = Promise.allSettled([first]);
+    await createBarrier.reached.promise;
+    try {
+      expect(await owner.startUserContainer({ ...input, userId: otherUser })).toEqual({
+        outcome: 'full',
+      });
+      expect(daemon.containers.has(START_HELPER)).toBe(true);
+      expect(rows()).toEqual([]);
+      expect(audits()).toEqual([]);
+    } finally {
+      createBarrier.release.resolve(undefined);
+      await head;
+    }
+    expect(await head).toMatchObject([
+      {
+        status: 'rejected',
+        reason: { message: 'Container startup failed during managed composition' },
+      },
+    ]);
+    expect(daemon.containers.has(START_HELPER)).toBe(false);
+    daemon.setComposition();
+    expect(await owner.startUserContainer({ ...input, userId: otherUser })).toMatchObject({
+      outcome: 'starting',
+      containerId: START_CONTAINER,
+    });
+  },
+);

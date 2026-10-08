@@ -31,7 +31,7 @@ export interface StartUserContainerInput {
 }
 
 export type StartResult =
-  | { outcome: 'unconfigured' }
+  | { outcome: 'unconfigured' | 'full' }
   | {
       outcome: 'starting' | 'running';
       containerId: string;
@@ -362,7 +362,10 @@ function resourceLimit(value: number, unit: number): number {
 }
 
 /** Create/start or validate current identity; readiness, cookies and retirement remain separate. */
-export async function startUserContainer(input: StartUserContainerInput): Promise<StartResult> {
+export async function startUserContainer(
+  input: StartUserContainerInput,
+  reserve: () => boolean,
+): Promise<StartResult> {
   let stage = 'account validation';
   try {
     const { database, config, userId } = input;
@@ -400,6 +403,9 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     signal.throwIfAborted();
     const reused = await reuseCurrentContainer(input, client, user, signal);
     if (reused !== undefined) return reused;
+    stage = 'capacity admission';
+    signal.throwIfAborted();
+    if (!reserve()) return { outcome: 'full' };
     stage = 'container conflict check';
     await requireAbsent(client, name);
     stage = 'seccomp policy';
