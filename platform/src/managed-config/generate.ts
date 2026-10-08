@@ -104,18 +104,31 @@ function isPresent(value: string | undefined): value is string {
   return value !== undefined && value.trim() !== '';
 }
 
+type CompleteModelSettings = ManagedConfigInput['modelSettings'] & {
+  readonly baseURL: string;
+  readonly models: readonly Settings['models'][number][];
+  readonly defaultModel: string;
+};
+
+export function hasCompleteModelSettings(
+  modelSettings: ManagedConfigInput['modelSettings'],
+): modelSettings is CompleteModelSettings {
+  const { baseURL, apiKeyEnv, apiKeyConfigured, models, defaultModel } = modelSettings;
+  return (
+    isPresent(baseURL) &&
+    apiKeyConfigured &&
+    isPresent(apiKeyEnv) &&
+    models !== undefined &&
+    models.length > 0 &&
+    isPresent(defaultModel)
+  );
+}
+
 export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigResult {
-  const { baseURL, apiKeyEnv, apiKeyConfigured, models, defaultModel } = input.modelSettings;
-  if (
-    !isPresent(baseURL) ||
-    !apiKeyConfigured ||
-    !isPresent(apiKeyEnv) ||
-    models === undefined ||
-    models.length === 0 ||
-    !isPresent(defaultModel)
-  ) {
+  if (!hasCompleteModelSettings(input.modelSettings)) {
     return { outcome: 'unconfigured' };
   }
+  const { baseURL, apiKeyEnv, models, defaultModel } = input.modelSettings;
   return {
     outcome: 'configured',
     content: JSON.stringify([

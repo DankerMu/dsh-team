@@ -5,6 +5,7 @@ import type { PlatformConfig } from '../config.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import {
   generateManagedConfig,
+  hasCompleteModelSettings,
   readManagedComposition,
   writeManagedConfig,
 } from '../managed-config/index.ts';
@@ -276,8 +277,10 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     // Key availability comes only from the exact credential that will enter Env.
     if (input.modelKey === undefined || input.modelKey.trim() === '')
       return { outcome: 'unconfigured' };
+    const modelSettings = { ...input.modelSettings, apiKeyConfigured: true };
+    if (!hasCompleteModelSettings(modelSettings)) return { outcome: 'unconfigured' };
     stage = 'model environment validation';
-    const envName = input.modelSettings.apiKeyEnv;
+    const envName = modelSettings.apiKeyEnv;
     validateModelEnvironment(envName, input.modelKey);
     const deadline = AbortSignal.timeout(START_TIMEOUT_MS);
     const signal =
@@ -309,7 +312,7 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     const generated = generateManagedConfig({
       ...observed,
       permission: input.permission,
-      modelSettings: { ...input.modelSettings, apiKeyConfigured: true },
+      modelSettings,
     });
     if (generated.outcome === 'unconfigured') return generated;
     const overlay = await writeManagedConfig(config.managedConfigDir, userId, generated.content);

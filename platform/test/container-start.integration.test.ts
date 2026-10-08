@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -192,6 +192,57 @@ it.each([undefined, ''])(
     expect(await startUserContainer({ ...input, modelKey })).toEqual({ outcome: 'unconfigured' });
     expect(rows()).toEqual([]);
     expect(audits()).toEqual([]);
+    expect(daemon.requests).toEqual([]);
+  },
+);
+
+it.each([
+  ['missing address', { baseURL: undefined }],
+  ['empty address', { baseURL: '' }],
+  ['blank address', { baseURL: ' \t ' }],
+  ['missing model list', { models: undefined }],
+  ['empty model list', { models: [] }],
+  ['missing default model', { defaultModel: undefined }],
+  ['empty default model', { defaultModel: '' }],
+  ['blank default model', { defaultModel: ' \t ' }],
+  ['empty credential reference', { apiKeyEnv: '' }],
+  ['blank credential reference', { apiKeyEnv: ' \t ' }],
+] as const)(
+  'returns unconfigured for %s without infrastructure or replacing prior state',
+  async (_name, incomplete) => {
+    database
+      .prepare(
+        "INSERT INTO instances (user_id, status, container_id, last_error) VALUES (?, 'stopped', 'prior-container', 'prior-state')",
+      )
+      .run(START_USER);
+    await mkdir(input.config.managedConfigDir);
+    const overlay = join(input.config.managedConfigDir, `${START_USER}.patch.yml`);
+    await writeFile(overlay, 'prior managed overlay\n', { mode: 0o444 });
+    const originalInode = (await stat(overlay)).ino;
+    const changes: unknown = database.prepare('SELECT total_changes() AS count').get();
+
+    const result = await startUserContainer({
+      ...input,
+      client: createDockerClient(join(root, 'unavailable-engine.sock')),
+      config: { ...input.config, seccompProfilePath: join(root, 'unavailable-seccomp.json') },
+      modelSettings: { ...START_MODEL, ...incomplete },
+    });
+
+    expect(result).toEqual({ outcome: 'unconfigured' });
+    expect(rows()).toMatchObject([
+      {
+        user_id: START_USER,
+        status: 'stopped',
+        container_id: 'prior-container',
+        last_error: 'prior-state',
+        upstream_host: null,
+        upstream_port: null,
+      },
+    ]);
+    expect(audits()).toEqual([]);
+    expect(database.prepare('SELECT total_changes() AS count').get()).toEqual(changes);
+    expect(await readFile(overlay, 'utf8')).toBe('prior managed overlay\n');
+    expect((await stat(overlay)).ino).toBe(originalInode);
     expect(daemon.requests).toEqual([]);
   },
 );

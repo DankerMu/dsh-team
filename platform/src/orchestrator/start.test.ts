@@ -191,12 +191,14 @@ it.each(['not-json', 'null', '{}', '{"defaultAction":"unconfined","syscalls":[]}
   },
 );
 
-it('does not replace the overlay or launch DSH when remaining model settings are incomplete', async () => {
+it('returns unconfigured before Docker, overlay or audit writes when model settings are incomplete', async () => {
   const { daemon, input } = await fixture();
+  const prepare = vi.spyOn(input.database, 'prepare');
   expect(
     await startUserContainer({ ...input, modelSettings: { ...START_MODEL, models: [] } }),
   ).toEqual({ outcome: 'unconfigured' });
-  expect(daemon.containers.size).toBe(0);
+  expect(daemon.requests).toEqual([]);
+  expect(prepare).toHaveBeenCalledTimes(1);
   await expect(stat(input.config.managedConfigDir)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
