@@ -19,7 +19,7 @@ import type { MappedHostAcceptResult } from '../../scripts/probe-mapped-host.mjs
 import type { DockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { runWebStartup } from './web-startup-fixture.ts';
-import { extractLaunchToken } from './web-launch-token.ts';
+import { extractLaunchToken } from '../src/orchestrator/index.ts';
 import {
   browserEvidence,
   createManagedPolicyEvidence,

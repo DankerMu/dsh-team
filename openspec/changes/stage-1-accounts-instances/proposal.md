@@ -250,3 +250,10 @@
 - Extend the existing exported startup operation and canonical owned Docker harness; preserve complete composition, security, endpoint/audit ordering and all eleven baseline Docker cases.
 - Evidence floor: behavioral settings-to-create RED/GREEN, unit conversion/boundary failures, actual Docker inspect before/after settings change and a controlled 256MiB/512MiB OOM with another real instance still usable; pinned exact-head full Docker suite, root checks, strict OpenSpec and CI.
 - No live updates of existing containers, new settings schema/admin controls, locks/capacity/readiness/network changes or host-wide resource changes. Critical-path human review remains deferred by explicit user instruction to Epic completion.
+
+## Issue #38 fixture
+
+- Feature; expanded task9.5 (agree with upstream): bind a current instance's launch token, platform-authority HTTP exchange and persisted DSH cookie without credential disclosure.
+- Preserve startup's starting-not-ready contract, existing canonical launch matcher, owned lifecycle and all twelve Docker cases; no gateway/browser credential forwarding or readiness-state transitions.
+- Evidence floor: public-operation token/log/HTTP/error/stale-instance tests, actual HTTP/SQLite secret-safe proof, pinned real DSH same-Host200/different-Host401 using the persisted cookie; full exact-head Docker/CI and root checks.
+- Critical-path human white-box review remains deferred to Epic completion by explicit user direction.

@@ -1,4 +1,5 @@
 import { readFile, stat } from 'node:fs/promises';
+import { request } from 'node:http';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -6,7 +7,12 @@ import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import { buildApp } from '../src/app.ts';
 import type { PlatformConfig } from '../src/config.ts';
-import { createDockerClient, startUserContainer } from '../src/orchestrator/index.ts';
+import {
+  acquireDshCookie,
+  createDockerClient,
+  extractLaunchToken,
+  startUserContainer,
+} from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
@@ -507,5 +513,143 @@ it('enforces refreshed create-time limits and confines a physical 512MiB OOM to 
   );
   process.stdout.write(
     `Docker resource isolation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
+  );
+});
+
+async function cookieHttpStatus(port: number, authority: string, cookie: string): Promise<number> {
+  const { promise, resolve, reject } = Promise.withResolvers<number>();
+  const outgoing = request(
+    {
+      hostname: '127.0.0.1',
+      port,
+      path: '/',
+      headers: { Host: authority, Cookie: cookie },
+      signal: AbortSignal.timeout(5000),
+    },
+    (response) => {
+      resolve(response.statusCode ?? 0);
+      response.destroy();
+    },
+  );
+  outgoing.on('error', () => {
+    reject(new Error('Independent authenticated HTTP failed'));
+  });
+  try {
+    outgoing.end();
+    return await promise;
+  } finally {
+    outgoing.destroy();
+  }
+}
+
+async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
+  const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
+  const ownership = { 'dsh-team.user': userId };
+  lifecycle.registerResource('volume', lifecycle.stateVolume, ownership);
+  lifecycle.registerResource('volume', lifecycle.workVolume, ownership);
+  lifecycle.registerResource('container', `dsh-team-u-${userId}`, ownership);
+  const database = openDatabase(join(dirname(lifecycle.overlayDirectory), 'cookie-platform.db'));
+  const { client } = startupClient(lifecycle);
+  const authority = 'cookie.example:8443';
+  const config: PlatformConfig = {
+    host: '127.0.0.1',
+    port: 0,
+    logLevel: 'info',
+    dataDir: dirname(lifecycle.overlayDirectory),
+    managedConfigDir: lifecycle.overlayDirectory,
+    dockerSocketPath: '/var/run/docker.sock',
+    userImage: lifecycle.imageId,
+    seccompProfilePath: lifecycle.seccomp,
+    publicUrl: `http://${authority}`,
+    authority,
+    cookieSecure: false,
+    trustedProxies: [],
+  };
+  let platformLogs = '';
+  let app: FastifyInstance | undefined;
+  try {
+    applyMigrations(database);
+    app = await buildApp(config, database, {
+      write: (line) => {
+        platformLogs += line;
+      },
+    });
+    database
+      .prepare(
+        "INSERT INTO users VALUES (?, 'cookie@example.test', 'unused', 'employee', 'active', 1)",
+      )
+      .run(userId);
+    const started = await startUserContainer({
+      client,
+      database,
+      userId,
+      config,
+      modelSettings: START_MODEL,
+      modelKey: 'docker-acceptance-only-not-a-model-credential',
+      permission: START_PERMISSION,
+    });
+    if (started.outcome !== 'starting') throw new Error('Expected configured cookie startup');
+    let result: unknown;
+    await acquireDshCookie({ client, database, userId, authority }).then((value: unknown) => {
+      result = value;
+    });
+    app.log.info({ result }, 'Acquisition completed');
+    expect(result === undefined).toBe(true);
+    const row = record(
+      database.prepare('SELECT status, dsh_cookie FROM instances WHERE user_id = ?').get(userId),
+    );
+    expect(row.status).toBe('starting');
+    const cookie = row.dsh_cookie;
+    if (typeof cookie !== 'string') throw new Error('Persisted authentication cookie missing');
+    expect(await cookieHttpStatus(started.upstreamPort, authority, cookie)).toBe(200);
+    expect(await cookieHttpStatus(started.upstreamPort, 'different.example:8443', cookie)).toBe(
+      401,
+    );
+    const observed = lifecycle.command(['logs', started.containerId], 15_000);
+    if (observed.status !== 0 || observed.error !== undefined)
+      throw new Error('Independent launch observation failed');
+    const token = extractLaunchToken(observed.stdout);
+    if (token === undefined) throw new Error('Independent genuine launch token missing');
+    const audits = JSON.stringify(database.prepare('SELECT * FROM audit_events').all());
+    for (const secret of [token, cookie, cookie.slice(cookie.indexOf('=') + 1)]) {
+      expect((platformLogs + audits).includes(secret)).toBe(false);
+    }
+    expect(database.prepare('SELECT event_type FROM audit_events ORDER BY id').all()).toEqual([
+      { event_type: 'instance.created' },
+      { event_type: 'instance.started' },
+    ]);
+    return JSON.stringify({
+      starting: true,
+      sameHostStatus: 200,
+      differentHostStatus: 401,
+      secretSafe: true,
+    });
+  } catch (error) {
+    app?.log.error({ err: error }, 'Cookie acceptance failed');
+    throw error;
+  } finally {
+    if (app !== undefined) await app.close();
+    else database.close();
+  }
+}
+
+it('acquires a real DSH cookie after exported startup and independently proves same-Host200 and different-Host401', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64')
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  const result = await runUserImage(
+    'container-start',
+    (summary) => {
+      expect(JSON.parse(summary)).toEqual({
+        starting: true,
+        sameHostStatus: 200,
+        differentHostStatus: 401,
+        secretSafe: true,
+      });
+    },
+    undefined,
+    cookieScenario,
+  );
+  process.stdout.write(
+    `Docker cookie acquisition verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
   );
 });

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { setTimeout } from 'node:timers/promises';
 import type { DockerCommand } from './docker-command.ts';
-import { launchTokenPresent } from './web-launch-token.ts';
+import { launchTokenPresent } from '../src/orchestrator/index.ts';
 
 const configuredHost = 'dsh-team.test:3080';
 const patchTarget = '/managed/patch.yml';

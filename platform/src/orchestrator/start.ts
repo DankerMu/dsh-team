@@ -191,7 +191,7 @@ async function composition(
   return result;
 }
 
-function endpoint(
+export function inspectUserContainerEndpoint(
   document: unknown,
   id: string,
   name: string,
@@ -394,7 +394,7 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     stage = 'container start';
     await client.json('POST', `/containers/${id}/start`);
     stage = 'started container inspection';
-    const port = endpoint(
+    const port = inspectUserContainerEndpoint(
       await client.json('GET', `/containers/${id}/json`),
       id,
       name,

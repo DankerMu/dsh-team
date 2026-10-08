@@ -568,6 +568,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#37）：每次配置完整的启动读取持久settings，安全转换NanoCpus/Memory，MemorySwap=Memory、PidsLimit512；资源16例语义RED后GREEN，模型未配置仍不依赖settings。复用公告后HTTP401观察，修复启动时序；真实Docker诊断确认内核可终止整个256MiB实例，符合规格“进程被终止或实例退出”，不能要求同cgroup观察器幸存。用户授权追加一轮后，改为工作卷持久化请求/实际触页进度与宿主精确实例OOM状态关联，只读受管helper读取；没有增加内存、修改OOM优先级或降低隔离验收。审查头`3696e81157a2d5503c20c335c4c8420107d4361f`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker12/12、exit0、116.67秒：申请536870912字节，已触页154140672字节，B OOMKilled=true且退出137；cgroup memory.max268435456/swap0/pids512，原A相同身份/上限且HTTP401前后可用，平台health200前后可用，清理清点为空。旧11例保留；本地pnpmcheck通过，694unit/386integration，strictOpenSpec通过。最终头/CI见PR#144；人工白盒审查按用户指令后置Epic完成。
 
+### Issue #38 risk/evidence map (task9.5 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: current instance lookup, public token-to-cookie operation and canonical parser cutover; split log/HTTP/SQLite behavioral tests.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: exact owned current container, explicit authority, backend-only credential, conditional clearing/update and active-account check; stale exchange/account races and real same-Host200/wrong-Host401.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: bounded stream/HTTP/header handling, deadlines/cancellation/teardown, no old credential after failure, no raw-secret errors; adverse boundary tests.
+- File IO / path safety / overwrite — not selected: no new file publication or deletion; existing test-owned lifecycle handles cleanup.
+- Config / project setup; Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: reuse existing authority/endpoint/client and released parser/protocol; migrate parser consumers, preserve twelve Docker cases, no dependency or configuration changes.
+- Documentation / migration notes — selected: starting-not-ready and backend-only cookie contract; root checks, strict OpenSpec, full exact-head Docker/CI evidence.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。
