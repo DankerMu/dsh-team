@@ -371,7 +371,8 @@ async function rollbackStartupNetwork(
 export async function startUserContainer(
   input: StartUserContainerInput,
   reserve: () => boolean,
-  allocate: <Result>(operation: () => Promise<Result>) => Promise<Result>,
+  allocate: <Result>(userId: string, operation: () => Promise<Result>) => Promise<Result>,
+  assertNetworkConfirmed: (userId: string) => void,
 ): Promise<StartResult> {
   let stage = 'account validation';
   let network: OwnedNetwork | undefined;
@@ -413,6 +414,9 @@ export async function startUserContainer(
     const name = `dsh-team-u-${userId}`;
     stage = 'current container validation';
     signal.throwIfAborted();
+    stage = 'network allocation';
+    assertNetworkConfirmed(userId);
+    stage = 'current container validation';
     const reused = await reuseCurrentContainer(input, client, user, signal, () => {
       replacing = true;
     });
@@ -442,7 +446,7 @@ export async function startUserContainer(
     const overlay = await writeManagedConfig(config.managedConfigDir, userId, generated.content);
     stage = 'network allocation';
     const cleanup = cleanupClient;
-    network = await allocate(() =>
+    network = await allocate(userId, () =>
       createUserNetwork(client, cleanup, userId, config.subnetPool, signal, replacing),
     );
     stage = 'container creation';

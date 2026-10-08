@@ -180,11 +180,11 @@ function commit(
   })();
 }
 
-/** Retires only the captured current container; persistent user volumes are never removed. */
+/** Verified absence plus stopped/audit commit returns true; no-op returns false; volumes remain. */
 export async function stopUserContainer(
   input: StopUserContainerInput,
   assertCurrent?: () => void,
-): Promise<void> {
+): Promise<boolean> {
   const fenced: FencedRetirementInput =
     assertCurrent === undefined ? input : { ...input, assertCurrent };
   const work = new AbortController();
@@ -198,7 +198,7 @@ export async function stopUserContainer(
       input.signal === undefined ? work.signal : AbortSignal.any([input.signal, work.signal]);
     signal.throwIfAborted();
     const selection = select(input);
-    if (selection === undefined) return;
+    if (selection === undefined) return false;
     const networkClient: DockerClient = {
       ...input.client,
       json: (method, path, body, _signal, maxBytes) =>
@@ -226,6 +226,7 @@ export async function stopUserContainer(
       );
     }
     commit(fenced, selection, reason, signal);
+    return true;
   } catch {
     // Neither Docker response bodies, database errors nor backend credentials escape this boundary.
     throw new Error('User container retirement failed');

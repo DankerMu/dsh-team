@@ -36,8 +36,23 @@ async function unixFixture() {
   });
   let barrier: ((method: string, path: string) => Promise<undefined> | undefined) | undefined;
   let responseBarrier: ((request: StartupRequest) => Promise<undefined> | undefined) | undefined;
+  let loseNetworkIdentity = false;
   const server = startupUnixServer(
-    (request) => daemon.reply(request),
+    (request) => {
+      const result = daemon.reply(request);
+      if (
+        loseNetworkIdentity &&
+        request.method === 'POST' &&
+        request.path === '/networks/create' &&
+        result.status === 201 &&
+        request.body.Name === `dsh-team-net-${START_USER}`
+      ) {
+        loseNetworkIdentity = false;
+        // Preserve the real Engine mutation but lose its identity on the Unix HTTP response.
+        return { ...result, document: { Warning: '' } };
+      }
+      return result;
+    },
     (method, path) => barrier?.(method, path),
     (request) => responseBarrier?.(request),
   );
@@ -71,6 +86,9 @@ async function unixFixture() {
     },
     holdResponse(callback: typeof responseBarrier) {
       responseBarrier = callback;
+    },
+    loseNextNetworkIdentity() {
+      loseNetworkIdentity = true;
     },
     async close() {
       server.closeAllConnections();
@@ -582,3 +600,195 @@ it.each(['before mutation', 'after mutation before response'] as const)(
     }
   },
 );
+
+async function uncertainReplacementFixture() {
+  const fixture = await unixFixture();
+  try {
+    expect(await fixture.owner.startUserContainer(fixture.input)).toMatchObject({
+      outcome: 'starting',
+      containerId: START_CONTAINER,
+    });
+    const oldRow = fixture.database
+      .prepare('SELECT * FROM instances WHERE user_id = ?')
+      .get(START_USER);
+    const oldAudit = fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all();
+    fixture.database.exec(`CREATE TRIGGER reject_stop BEFORE INSERT ON audit_events
+      WHEN NEW.event_type = 'instance.stopped' BEGIN SELECT RAISE(ABORT, 'fixture'); END`);
+    await expect(
+      fixture.owner.stopUserContainer({ userId: START_USER, reason: 'admin' }),
+    ).rejects.toThrow('retirement failed');
+    expect(fixture.daemon.containers.has(START_CONTAINER)).toBe(false);
+    expect(fixture.daemon.networks.has(START_NETWORK)).toBe(false);
+    expect(
+      fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER),
+    ).toEqual(oldRow);
+    expect(fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
+      oldAudit,
+    );
+    fixture.database.exec('DROP TRIGGER reject_stop');
+    const replacementId = 'f'.repeat(64);
+    fixture.daemon.beforeRequest(({ path }) => {
+      if (path === `/containers/create?name=dsh-team-u-${START_USER}`)
+        fixture.daemon.setContainerId(replacementId);
+      if (path === `/containers/create?name=dsh-team-u-${OTHER}`)
+        fixture.daemon.setContainerId(OTHER_CONTAINER);
+    });
+    fixture.loseNextNetworkIdentity();
+    await expect(fixture.owner.startUserContainer(fixture.input)).rejects.toThrow(
+      'network creation outcome unconfirmed',
+    );
+    const network = [...fixture.daemon.networks.values()].find(
+      ({ Name }) => Name === `dsh-team-net-${START_USER}`,
+    );
+    if (network === undefined) throw new Error('Missing mutated unconfirmed bridge');
+    expect(network.Containers).toEqual({});
+    expect(
+      fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER),
+    ).toEqual(oldRow);
+    expect(fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
+      oldAudit,
+    );
+    return { fixture, oldRow, oldAudit, replacementId, network: structuredClone(network) };
+  } catch (error) {
+    await fixture.close();
+    throw error;
+  }
+}
+
+it.each(['delete', 'audit'] as const)(
+  'same-owner stale-index retry preserves an unconfirmed bridge until explicit retirement commits (failed stop=%s)',
+  async (failure) => {
+    const { fixture, oldRow, oldAudit, replacementId, network } =
+      await uncertainReplacementFixture();
+    try {
+      await expect(fixture.owner.startUserContainer(fixture.input)).rejects.toBeInstanceOf(Error);
+
+      expect(
+        fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER),
+      ).toEqual(oldRow);
+      expect(fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
+        oldAudit,
+      );
+      expect(fixture.daemon.containers.has(replacementId)).toBe(false);
+      expect(fixture.daemon.networks.get(network.Id)).toEqual(network);
+      expect(
+        await fixture.owner.startUserContainer({ ...fixture.input, userId: OTHER }),
+      ).toMatchObject({ outcome: 'starting', containerId: OTHER_CONTAINER });
+      const bRow = fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(OTHER);
+      const bContainer = structuredClone(fixture.daemon.containers.get(OTHER_CONTAINER));
+      const bNetwork = [...fixture.daemon.networks.values()].find(
+        ({ Name }) => Name === `dsh-team-net-${OTHER}`,
+      );
+      if (bNetwork === undefined) throw new Error('Missing unrelated admitted bridge');
+      const bBefore = structuredClone(bNetwork);
+      if (failure === 'delete')
+        fixture.daemon.overrides.set(`DELETE /networks/${network.Id}`, { status: 500 });
+      else
+        fixture.database.exec(`CREATE TRIGGER reject_stop BEFORE INSERT ON audit_events
+          WHEN NEW.event_type = 'instance.stopped' BEGIN SELECT RAISE(ABORT, 'fixture'); END`);
+      await expect(
+        fixture.owner.stopUserContainer({ userId: START_USER, reason: 'admin' }),
+      ).rejects.toThrow('retirement failed');
+      const failedRetirement = {
+        rows: fixture.database.prepare('SELECT * FROM instances ORDER BY user_id').all(),
+        audit: fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all(),
+        containers: structuredClone([...fixture.daemon.containers]),
+        networks: structuredClone([...fixture.daemon.networks]),
+      };
+
+      await expect(fixture.owner.startUserContainer(fixture.input)).rejects.toBeInstanceOf(Error);
+
+      expect({
+        rows: fixture.database.prepare('SELECT * FROM instances ORDER BY user_id').all(),
+        audit: fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all(),
+        containers: [...fixture.daemon.containers],
+        networks: [...fixture.daemon.networks],
+      }).toEqual(failedRetirement);
+      expect(fixture.daemon.networks.has(network.Id)).toBe(failure === 'delete');
+      if (failure === 'delete') fixture.daemon.overrides.delete(`DELETE /networks/${network.Id}`);
+      else fixture.database.exec('DROP TRIGGER reject_stop');
+      await fixture.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+      expect(fixture.daemon.networks.has(network.Id)).toBe(false);
+      expect(
+        fixture.database
+          .prepare('SELECT status, container_id FROM instances WHERE user_id = ?')
+          .get(START_USER),
+      ).toEqual({ status: 'stopped', container_id: null });
+      expect(
+        fixture.database
+          .prepare("SELECT details FROM audit_events WHERE event_type = 'instance.stopped'")
+          .all(),
+      ).toEqual([{ details: '{"reason":"admin"}' }]);
+      expect(await fixture.owner.startUserContainer(fixture.input)).toMatchObject({
+        outcome: 'starting',
+        containerId: replacementId,
+      });
+      const fresh = [...fixture.daemon.networks.values()].find(
+        ({ Name }) => Name === `dsh-team-net-${START_USER}`,
+      );
+      expect(fresh?.Id).not.toBe(network.Id);
+      expect(fresh?.IPAM).toEqual({ Driver: 'default', Config: [{ Subnet: '172.30.0.0/28' }] });
+      expect(
+        fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(OTHER),
+      ).toEqual(bRow);
+      expect(fixture.daemon.containers.get(OTHER_CONTAINER)).toEqual(bContainer);
+      expect(fixture.daemon.networks.get(bBefore.Id)).toEqual(bBefore);
+    } finally {
+      await fixture.close();
+    }
+  },
+);
+
+it('automatic reconciliation cannot name-discover and retire an unconfirmed replacement bridge', async () => {
+  const { fixture, oldRow, oldAudit, replacementId, network } = await uncertainReplacementFixture();
+  try {
+    await expect(fixture.owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
+
+    expect(
+      fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER),
+    ).toEqual(oldRow);
+    expect(fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
+      oldAudit,
+    );
+    expect(fixture.daemon.containers.has(replacementId)).toBe(false);
+    expect(fixture.daemon.networks.get(network.Id)).toEqual(network);
+    await fixture.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+    expect(await fixture.owner.startUserContainer(fixture.input)).toMatchObject({
+      outcome: 'starting',
+      containerId: replacementId,
+    });
+  } finally {
+    await fixture.close();
+  }
+});
+
+it('a no-op stopped-index retirement cannot clear uncertainty when that index later changes', async () => {
+  const { fixture, oldRow, oldAudit, replacementId, network } = await uncertainReplacementFixture();
+  try {
+    // External SQLite index changes do not establish retirement of the unconfirmed Engine identity.
+    fixture.database
+      .prepare("UPDATE instances SET status = 'stopped', container_id = NULL WHERE user_id = ?")
+      .run(START_USER);
+    await fixture.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+    expect(fixture.daemon.networks.get(network.Id)).toEqual(network);
+    expect(fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
+      oldAudit,
+    );
+    fixture.database
+      .prepare("UPDATE instances SET status = 'starting', container_id = ? WHERE user_id = ?")
+      .run(START_CONTAINER, START_USER);
+
+    await expect(fixture.owner.startUserContainer(fixture.input)).rejects.toBeInstanceOf(Error);
+
+    expect(
+      fixture.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER),
+    ).toEqual(oldRow);
+    expect(fixture.database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
+      oldAudit,
+    );
+    expect(fixture.daemon.containers.has(replacementId)).toBe(false);
+    expect(fixture.daemon.networks.get(network.Id)).toEqual(network);
+  } finally {
+    await fixture.close();
+  }
+});

@@ -567,7 +567,15 @@ it('loss of an accepted create response reports uncertainty and never adopts or 
     ),
   ).toBe(false);
   const before = state();
+  const requests = structuredClone(fixture.daemon.requests);
+  expect(await uncertainOwner.startUserContainer({ ...input, modelKey: undefined })).toEqual({
+    outcome: 'unconfigured',
+  });
+  expect(state()).toEqual(before);
+  expect(fixture.daemon.requests).toEqual(requests);
   await expect(uncertainOwner.startUserContainer(input)).rejects.toThrow('network allocation');
+  expect(state()).toEqual(before);
+  await expect(uncertainOwner.reconcile()).rejects.toThrow('Instance reconciliation failed');
   expect(state()).toEqual(before);
 });
 

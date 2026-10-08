@@ -9,6 +9,8 @@ import type { StartResult, StartUserContainerInput as StartupInput } from './sta
 import { stopUserContainer } from './stop.ts';
 import type { StopUserContainerInput as RetirementInput } from './stop.ts';
 import { discoverReconciliationUsers, reconcileUser } from './reconcile.ts';
+import type { ReconciliationInput } from './reconcile.ts';
+import { NetworkCreationUnconfirmedError } from './networks.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -32,10 +34,25 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   const { client, database } = dependencies;
   const tails = new Map<string, Promise<undefined>>();
   const pending = new Set<string>();
+  // Creation uncertainty is owner-lifetime state, not a subnet reservation or durable recovery claim.
+  const uncertainNetworks = new Set<string>();
   let allocationTail: Promise<unknown> = Promise.resolve();
 
-  function allocate<Result>(operation: () => Promise<Result>): Promise<Result> {
-    const result = allocationTail.then(operation);
+  function assertNetworkConfirmed(userId: string): void {
+    if (uncertainNetworks.has(userId)) throw new NetworkCreationUnconfirmedError();
+  }
+
+  function allocate<Result>(userId: string, operation: () => Promise<Result>): Promise<Result> {
+    const result = allocationTail.then(async () => {
+      assertNetworkConfirmed(userId);
+      try {
+        return await operation();
+      } catch (error) {
+        // Record provenance loss at the typed allocation boundary, before startup sanitizes it.
+        if (error instanceof NetworkCreationUnconfirmedError) uncertainNetworks.add(userId);
+        throw error;
+      }
+    });
     // Only discovery/create/validation (and its rollback) settle before the next selector.
     allocationTail = result.then(
       () => undefined,
@@ -63,11 +80,27 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   async function start(input: StartupInput): Promise<StartResult> {
     try {
-      return await startUserContainer(input, () => reserve(input.userId), allocate);
+      return await startUserContainer(
+        input,
+        () => reserve(input.userId),
+        allocate,
+        assertNetworkConfirmed,
+      );
     } finally {
       // Await actual work/cleanup, not caller cancellation. A durable active row remains counted.
       pending.delete(input.userId);
     }
+  }
+
+  async function retire(input: RetirementInput): Promise<void> {
+    // A no-op or failed audit transaction cannot acknowledge the uncertain Engine identity.
+    if (await stopUserContainer(input)) uncertainNetworks.delete(input.userId);
+  }
+
+  async function reconcileConfirmed(input: ReconciliationInput): Promise<void> {
+    // Automatic correction must not turn an unresolved create into name-based orphan cleanup.
+    assertNetworkConfirmed(input.userId);
+    await reconcileUser(input);
   }
 
   function schedule<
@@ -122,13 +155,18 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         users.map((userId) =>
           schedule(
             { ...cancellation, userId },
-            reconcileUser,
+            reconcileConfirmed,
             'Instance reconciliation failed',
             true,
           ),
         ),
       );
-      if (signal?.aborted || results.some((result) => result.status === 'rejected'))
+      // Indexed corrections cannot acknowledge a quarantined creation without an indexed row.
+      if (
+        signal?.aborted ||
+        uncertainNetworks.size !== 0 ||
+        results.some((result) => result.status === 'rejected')
+      )
         throw new Error();
     } catch {
       throw new Error('Instance reconciliation failed');
@@ -152,6 +190,6 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         'DSH readiness failed before selecting an owned instance',
       ),
     stopUserContainer: (input: StopUserContainerInput) =>
-      schedule(input, stopUserContainer, 'User container retirement failed'),
+      schedule(input, retire, 'User container retirement failed'),
   };
 }

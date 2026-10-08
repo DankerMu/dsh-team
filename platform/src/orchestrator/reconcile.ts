@@ -11,7 +11,7 @@ import { containerId, object, resolvedImageId } from './identity.ts';
 import { validateUserNetwork } from './networks.ts';
 import { stopUserContainer } from './stop.ts';
 
-interface ReconciliationInput {
+export interface ReconciliationInput {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
   readonly userId: string;
