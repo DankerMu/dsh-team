@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import { startUserContainer, stopUserContainer } from '../src/orchestrator/index.ts';
+import { createOrchestrator } from '../src/orchestrator/index.ts';
 import type { StartUserContainerInput } from '../src/orchestrator/index.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import { inspect, record, startupClient } from './container-start-docker-fixture.ts';
@@ -65,7 +65,6 @@ function volumes(lifecycle: UserImageLifecycle, userId: string): unknown {
 function startInput(
   lifecycle: UserImageLifecycle,
   database: DatabaseHandle,
-  client: StartUserContainerInput['client'],
   userId: string,
 ): StartUserContainerInput {
   const ownership = { 'dsh-team.user': userId };
@@ -76,8 +75,6 @@ function startInput(
     .prepare('INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)')
     .run(userId, `${userId}@retirement.example.test`, 'unused', 'employee', 'active', 1);
   return {
-    client,
-    database,
     userId,
     config: {
       userImage: lifecycle.imageId,
@@ -133,10 +130,11 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
     join(dirname(lifecycle.overlayDirectory), 'retirement-platform.db'),
   );
   const { client } = startupClient(lifecycle);
+  const { startUserContainer, stopUserContainer } = createOrchestrator({ client, database });
   try {
     applyMigrations(database);
-    const input = startInput(lifecycle, database, client, userId);
-    const siblingInput = startInput(lifecycle, database, client, siblingId);
+    const input = startInput(lifecycle, database, userId);
+    const siblingInput = startInput(lifecycle, database, siblingId);
     const started = await startUserContainer(input);
     const siblingStarted = await startUserContainer(siblingInput);
     if (started.outcome !== 'starting' || siblingStarted.outcome !== 'starting')
@@ -155,7 +153,7 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
       .all(siblingId);
     const siblingStartedAt = record(inspect(lifecycle, siblingContainerId).State).StartedAt;
 
-    await stopUserContainer({ client, database, userId, reason: 'idle' });
+    await stopUserContainer({ userId, reason: 'idle' });
 
     expect(
       isAbsentResource(

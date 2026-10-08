@@ -5,7 +5,8 @@ import type { IncomingMessage, RequestOptions } from 'node:http';
 import type * as NodeHttp from 'node:http';
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { DatabaseHandle } from '../db/index.ts';
-import { acquireDshCookie, createDockerClient } from './index.ts';
+import { createDockerClient, createOrchestrator } from './index.ts';
+import type { Orchestrator } from './index.ts';
 import {
   startupDaemon,
   START_CONTAINER,
@@ -64,6 +65,7 @@ let clearChanges: number;
 let storeChanges: number;
 let cookie: string;
 let database: DatabaseHandle;
+let acquireDshCookie: Orchestrator['acquireDshCookie'];
 
 beforeEach(() => {
   row = {
@@ -110,11 +112,11 @@ function fixture() {
     NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   });
   daemon.setComposition(`boot\ndsh web: http://127.0.0.1:3080/?token=release-token\n`);
+  const client = createDockerClient('/fixture/docker.sock', daemon.transport);
+  ({ acquireDshCookie } = createOrchestrator({ client, database }));
   return {
     daemon,
     input: {
-      database,
-      client: createDockerClient('/fixture/docker.sock', daemon.transport),
       userId: START_USER,
       authority,
     },
@@ -288,8 +290,8 @@ it.each(['clear', 'store'])(
   },
 );
 
-it('clears selected credential on caller cancellation without exposing abort reason', async () => {
-  const { input } = fixture();
+it('preserves the selected credential when canceled before acquisition begins without exposing abort reason', async () => {
+  const { input, daemon } = fixture();
   const signal = AbortSignal.abort(new Error(cookie));
   let message = '';
   try {
@@ -298,8 +300,8 @@ it('clears selected credential on caller cancellation without exposing abort rea
     if (error instanceof Error) message = JSON.stringify(error, Object.getOwnPropertyNames(error));
   }
   expect(message.includes(cookie)).toBe(false);
-  expect(message.includes('authority')).toBe(true);
-  expect(credential).toBeNull();
+  expect(credential).toBe('previous');
+  expect(daemon.requests).toEqual([]);
 });
 
 it.each([

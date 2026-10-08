@@ -6,9 +6,15 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import { createDockerClient, startUserContainer } from '../src/orchestrator/index.ts';
-import type { StartUserContainerInput } from '../src/orchestrator/index.ts';
+import { createDockerClient, createOrchestrator } from '../src/orchestrator/index.ts';
+import type {
+  Orchestrator,
+  OrchestratorDependencies,
+  StartUserContainerInput,
+} from '../src/orchestrator/index.ts';
 import {
+  expectDockerReads,
+  startupEvidence,
   startupDaemon,
   START_CONTAINER,
   START_HELPER,
@@ -20,28 +26,48 @@ import {
 let root: string;
 let database: DatabaseHandle;
 let input: StartUserContainerInput;
+let owner: Orchestrator;
+let startUserContainer: Orchestrator['startUserContainer'];
+let client: OrchestratorDependencies['client'];
 let daemon = startupDaemon();
+let createBarrier:
+  | {
+      reached: { promise: Promise<undefined>; resolve: (value: undefined) => void };
+      release: { promise: Promise<undefined>; resolve: (value: undefined) => void };
+    }
+  | undefined;
 const server = createServer((request, response) => {
   const chunks: Buffer[] = [];
   request.on('data', (chunk: Buffer) => chunks.push(chunk));
   request.on('end', () => {
-    try {
-      // This local Engine fixture accepts only bodies serialized by the public Docker client.
-      const body =
-        chunks.length === 0
-          ? {}
-          : (JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>);
-      const reply = daemon.reply({ method: request.method ?? '', path: request.url ?? '', body });
-      response
-        .writeHead(reply.status)
-        .end(reply.bytes ?? (reply.document === undefined ? '' : JSON.stringify(reply.document)));
-    } catch {
-      response.writeHead(500).end();
-    }
+    const send = () => {
+      try {
+        // This local Engine fixture accepts only bodies serialized by the public Docker client.
+        const body =
+          chunks.length === 0
+            ? {}
+            : (JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>);
+        const reply = daemon.reply({ method: request.method ?? '', path: request.url ?? '', body });
+        response
+          .writeHead(reply.status)
+          .end(reply.bytes ?? (reply.document === undefined ? '' : JSON.stringify(reply.document)));
+      } catch {
+        response.writeHead(500).end();
+      }
+    };
+    if (
+      request.method === 'POST' &&
+      request.url === `/containers/create?name=dsh-team-u-${START_USER}` &&
+      createBarrier !== undefined
+    ) {
+      createBarrier.reached.resolve(undefined);
+      void createBarrier.release.promise.then(send);
+    } else send();
   });
 });
 
 beforeEach(async () => {
+  createBarrier = undefined;
   root = await mkdtemp(join(tmpdir(), 'dsh-start-wire-'));
   database = openDatabase(join(root, 'platform.db'));
   applyMigrations(database);
@@ -56,9 +82,10 @@ beforeEach(async () => {
   const socket = join(root, 'engine.sock');
   server.listen(socket);
   await once(server, 'listening');
+  client = createDockerClient(socket);
+  owner = createOrchestrator({ client, database });
+  ({ startUserContainer } = owner);
   input = {
-    client: createDockerClient(socket),
-    database,
     userId: START_USER,
     config: {
       userImage: 'dsh-team-user:local',
@@ -92,6 +119,65 @@ function audits() {
     .prepare('SELECT event_type, target, target_email, details FROM audit_events ORDER BY id')
     .all();
 }
+
+const CREATED_AND_STARTED = [
+  {
+    event_type: 'instance.created',
+    target: START_USER,
+    target_email: 'employee@example.test',
+    details: '{}',
+  },
+  {
+    event_type: 'instance.started',
+    target: START_USER,
+    target_email: 'employee@example.test',
+    details: '{}',
+  },
+];
+
+it('ten same-user public starts over Unix Docker transport create one identity and one audit pair', async () => {
+  createBarrier = {
+    reached: Promise.withResolvers<undefined>(),
+    release: Promise.withResolvers<undefined>(),
+  };
+  const first = startUserContainer(input);
+  const head = Promise.allSettled([first]);
+  await createBarrier.reached.promise;
+  const pending = [first];
+  for (let index = 1; index < 10; index += 1) pending.push(startUserContainer(input));
+  const completed = Promise.allSettled(pending);
+  createBarrier.release.resolve(undefined);
+  await head;
+
+  expect(await completed).toEqual(
+    Array.from({ length: 10 }, () => ({
+      status: 'fulfilled',
+      value: {
+        outcome: 'starting',
+        containerId: START_CONTAINER,
+        upstreamHost: '127.0.0.1',
+        upstreamPort: 49173,
+      },
+    })),
+  );
+  expect(
+    daemon.requests.filter(
+      (request) =>
+        request.method === 'POST' &&
+        request.path === `/containers/create?name=dsh-team-u-${START_USER}`,
+    ),
+  ).toHaveLength(1);
+  expect(rows()).toMatchObject([
+    {
+      status: 'starting',
+      container_id: START_CONTAINER,
+      upstream_host: '127.0.0.1',
+      upstream_port: 49173,
+      dsh_cookie: null,
+    },
+  ]);
+  expect(audits()).toEqual(CREATED_AND_STARTED);
+});
 
 it('commits completed creation and start separately, persists inspected endpoint, and never marks DSH ready', async () => {
   const observations: unknown[] = [];
@@ -150,20 +236,7 @@ it('commits completed creation and start separately, persists inspected endpoint
       last_error: null,
     },
   ]);
-  expect(audits()).toEqual([
-    {
-      event_type: 'instance.created',
-      target: START_USER,
-      target_email: 'employee@example.test',
-      details: '{}',
-    },
-    {
-      event_type: 'instance.started',
-      target: START_USER,
-      target_email: 'employee@example.test',
-      details: '{}',
-    },
-  ]);
+  expect(audits()).toEqual(CREATED_AND_STARTED);
   expect(
     JSON.stringify(rows()) +
       JSON.stringify(audits()) +
@@ -172,20 +245,7 @@ it('commits completed creation and start separately, persists inspected endpoint
   database.close();
   database = openDatabase(join(root, 'platform.db'));
   expect(rows()).toMatchObject([{ status: 'starting', upstream_port: 49173 }]);
-  expect(audits()).toEqual([
-    {
-      event_type: 'instance.created',
-      target: START_USER,
-      target_email: 'employee@example.test',
-      details: '{}',
-    },
-    {
-      event_type: 'instance.started',
-      target: START_USER,
-      target_email: 'employee@example.test',
-      details: '{}',
-    },
-  ]);
+  expect(audits()).toEqual(CREATED_AND_STARTED);
 });
 
 it('applies default CPU, memory, no-extra-swap and PID limits to the final user container', async () => {
@@ -202,7 +262,7 @@ it('applies default CPU, memory, no-extra-swap and PID limits to the final user 
 it('reads changed persisted resource settings for each new creation on the same client', async () => {
   writeSettings(database, { cpuCores: 0.5, memoryMiB: 512 });
   await startUserContainer(input);
-  await input.client.json('DELETE', `/containers/${START_CONTAINER}?force=true`);
+  await client.json('DELETE', `/containers/${START_CONTAINER}?force=true`);
   writeSettings(database, { cpuCores: 1.25, memoryMiB: 256 });
 
   await startUserContainer(input);
@@ -314,7 +374,6 @@ it.each([
 
     const result = await startUserContainer({
       ...input,
-      client: createDockerClient(join(root, 'unavailable-engine.sock')),
       config: { ...input.config, seccompProfilePath: join(root, 'unavailable-seccomp.json') },
       modelSettings: { ...START_MODEL, ...incomplete },
     });
@@ -444,4 +503,168 @@ it('cancels a pending composition wait and still removes only its helper with a 
   ).toEqual([`/containers/${START_HELPER}?force=true`]);
   expect(rows()).toEqual([]);
   expect(audits()).toEqual([]);
+});
+
+it('validated starting reuse over Unix transport preserves row, overlay inode, cookie and audits', async () => {
+  await startUserContainer(input);
+  database
+    .prepare("UPDATE instances SET dsh_cookie = 'retained-cookie', last_activity_at = 222")
+    .run();
+  const before = await startupEvidence(database, input);
+  const count = daemon.requests.length;
+
+  expect(await startUserContainer(input)).toEqual({
+    outcome: 'starting',
+    containerId: START_CONTAINER,
+    upstreamHost: '127.0.0.1',
+    upstreamPort: 49173,
+  });
+  expect(await startupEvidence(database, input)).toEqual(before);
+  expectDockerReads(daemon.requests, count, `/containers/${START_CONTAINER}/json`);
+});
+
+it.each(['instance', 'account'] as const)(
+  'a %s replacement during real Unix inspection is not overwritten or falsely reused',
+  async (kind) => {
+    await startUserContainer(input);
+    let replacement: unknown;
+    const before = await startupEvidence(database, input);
+    const count = daemon.requests.length;
+    daemon.beforeRequest((request) => {
+      if (request.path !== `/containers/${START_CONTAINER}/json`) return;
+      if (kind === 'instance')
+        database
+          .prepare('UPDATE instances SET container_id = ?, dsh_cookie = ?')
+          .run('d'.repeat(64), 'replacement-cookie');
+      else database.prepare('UPDATE users SET created_at = 2').run();
+      replacement = database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER);
+    });
+
+    await expect(startUserContainer(input)).rejects.toThrow('current container validation');
+    expect(await startupEvidence(database, input)).toEqual({ ...before, row: replacement });
+    expectDockerReads(daemon.requests, count, `/containers/${START_CONTAINER}/json`);
+  },
+);
+
+it('exact-ID absence with a foreign canonical name never adopts or destroys the collision over Unix', async () => {
+  await startUserContainer(input);
+  const before = await startupEvidence(database, input);
+  const old = daemon.containers.get(START_CONTAINER);
+  if (old === undefined) throw new Error('Expected original container');
+  const foreign = {
+    ...old,
+    Id: 'd'.repeat(64),
+    Image: `sha256:${'f'.repeat(64)}`,
+    Config: { Labels: { 'dsh-team.user': 'mnopqrstuvwx' } },
+  };
+  daemon.containers.delete(START_CONTAINER);
+  daemon.containers.set(foreign.Id, foreign);
+  const count = daemon.requests.length;
+
+  await expect(startUserContainer(input)).rejects.toThrow('container conflict check');
+  expect(await startupEvidence(database, input)).toEqual(before);
+  expect(daemon.containers.get(foreign.Id)).toEqual(foreign);
+  expectDockerReads(
+    daemon.requests,
+    count,
+    `/containers/${START_CONTAINER}/json`,
+    `/containers/dsh-team-u-${START_USER}/json`,
+  );
+});
+
+it('queued cancellation over Unix transport makes no mutation while later starts remain usable', async () => {
+  createBarrier = {
+    reached: Promise.withResolvers<undefined>(),
+    release: Promise.withResolvers<undefined>(),
+  };
+  const first = owner.startUserContainer(input);
+  const head = Promise.allSettled([first]);
+  await createBarrier.reached.promise;
+  const controller = new AbortController();
+  const canceled = owner
+    .stopUserContainer({
+      userId: START_USER,
+      reason: 'admin',
+      signal: controller.signal,
+    })
+    .catch((error: unknown) => error);
+  const successor = owner.startUserContainer(input);
+  const requests = [...daemon.requests];
+  const beforeRows = rows();
+  const beforeAudit = audits();
+  controller.abort('private abort reason');
+  expect(await canceled).toEqual(new Error('User container retirement failed'));
+  expect(daemon.requests).toEqual(requests);
+  expect(rows()).toEqual(beforeRows);
+  expect(audits()).toEqual(beforeAudit);
+  createBarrier.release.resolve(undefined);
+  await head;
+
+  expect(await successor).toEqual({
+    outcome: 'starting',
+    containerId: START_CONTAINER,
+    upstreamHost: '127.0.0.1',
+    upstreamPort: 49173,
+  });
+  expect(
+    daemon.requests.filter(
+      (request) =>
+        request.method === 'POST' &&
+        request.path === `/containers/create?name=dsh-team-u-${START_USER}`,
+    ),
+  ).toHaveLength(1);
+  expect(
+    audits().map((row) => {
+      if (typeof row !== 'object' || row === null || !('event_type' in row))
+        throw new Error('Missing audit type');
+      return row.event_type;
+    }),
+  ).toEqual(['instance.created', 'instance.started']);
+});
+
+it('public start retirement start executes FIFO over Unix transport and retains owned volume names', async () => {
+  createBarrier = {
+    reached: Promise.withResolvers<undefined>(),
+    release: Promise.withResolvers<undefined>(),
+  };
+  const first = owner.startUserContainer(input);
+  const head = Promise.allSettled([first]);
+  await createBarrier.reached.promise;
+  const retired = owner.stopUserContainer({ userId: START_USER, reason: 'idle' });
+  const restarted = owner.startUserContainer(input);
+  const completed = Promise.allSettled([first, retired, restarted]);
+  daemon.beforeRequest((request) => {
+    if (request.method === 'DELETE' && request.path === `/containers/${START_CONTAINER}`)
+      daemon.setContainerId('d'.repeat(64));
+  });
+  createBarrier.release.resolve(undefined);
+  await head;
+
+  expect(await completed).toMatchObject([
+    { status: 'fulfilled', value: { containerId: START_CONTAINER } },
+    { status: 'fulfilled', value: undefined },
+    { status: 'fulfilled', value: { containerId: 'd'.repeat(64) } },
+  ]);
+  expect(rows()).toMatchObject([{ status: 'starting', container_id: 'd'.repeat(64) }]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(
+    daemon.requests
+      .filter((request) => request.path === '/volumes/create')
+      .map(({ body }) => body.Name),
+  ).toEqual([
+    `dsh-team-home-${START_USER}`,
+    `dsh-team-work-${START_USER}`,
+    `dsh-team-home-${START_USER}`,
+    `dsh-team-work-${START_USER}`,
+  ]);
+  expect(audits()).toEqual([
+    ...CREATED_AND_STARTED,
+    {
+      event_type: 'instance.stopped',
+      target: START_USER,
+      target_email: 'employee@example.test',
+      details: '{"reason":"idle"}',
+    },
+    ...CREATED_AND_STARTED,
+  ]);
 });

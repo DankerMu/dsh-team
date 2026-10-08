@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { recordAuditEvent } from '../audit/index.ts';
 import type { PlatformConfig } from '../config.ts';
 import { readSettings } from '../db/index.ts';
@@ -29,10 +30,10 @@ export interface StartUserContainerInput {
   readonly signal?: AbortSignal;
 }
 
-type StartResult =
+export type StartResult =
   | { outcome: 'unconfigured' }
   | {
-      outcome: 'starting';
+      outcome: 'starting' | 'running';
       containerId: string;
       upstreamHost: '127.0.0.1';
       upstreamPort: number;
@@ -283,6 +284,75 @@ function startupFailure(stage: string, error: unknown): Error {
   );
 }
 
+function currentStartup(
+  input: StartUserContainerInput,
+  account: Record<string, unknown>,
+  instance: Record<string, unknown>,
+  signal: AbortSignal,
+): void {
+  signal.throwIfAborted();
+  if (
+    !isDeepStrictEqual(
+      input.database.prepare('SELECT * FROM users WHERE id = ?').get(input.userId),
+      account,
+    ) ||
+    !isDeepStrictEqual(
+      input.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(input.userId),
+      instance,
+    )
+  )
+    throw new Error('Current startup identity changed');
+}
+
+async function reuseCurrentContainer(
+  input: StartUserContainerInput,
+  client: DockerClient,
+  account: Record<string, unknown>,
+  signal: AbortSignal,
+): Promise<StartResult | undefined> {
+  const selected: unknown = input.database
+    .prepare('SELECT * FROM instances WHERE user_id = ?')
+    .get(input.userId);
+  if (selected === undefined) return undefined;
+  const instance = object(selected);
+  if (instance.status === 'stopped' && instance.container_id === null) return undefined;
+  const id = containerId({ Id: instance.container_id });
+  const image = resolvedImageId(instance.image_id);
+  if (typeof instance.image_tag !== 'string' || instance.image_tag.length === 0)
+    throw new Error('Invalid indexed image tag');
+  let document: unknown;
+  try {
+    document = await client.json('GET', `/containers/${id}/json`);
+  } catch (error) {
+    if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
+    currentStartup(input, account, instance, signal);
+    return undefined;
+  }
+  if (instance.status !== 'starting' && instance.status !== 'running')
+    throw new Error('Current instance is not reusable');
+  const port = inspectUserContainerEndpoint(
+    document,
+    id,
+    `dsh-team-u-${input.userId}`,
+    input.userId,
+    image,
+  );
+  if (
+    instance.upstream_host !== '127.0.0.1' ||
+    instance.upstream_port !== port ||
+    typeof instance.last_started_at !== 'number' ||
+    !Number.isSafeInteger(instance.last_started_at)
+  )
+    throw new Error('Current instance endpoint mismatch');
+  currentStartup(input, account, instance, signal);
+  return {
+    outcome: instance.status,
+    containerId: id,
+    upstreamHost: '127.0.0.1',
+    upstreamPort: port,
+  };
+}
+
 function resourceLimit(value: number, unit: number): number {
   const limit = value * unit;
   // Docker interprets zero as unlimited; never round or overflow a persisted limit.
@@ -291,15 +361,13 @@ function resourceLimit(value: number, unit: number): number {
   return limit;
 }
 
-/** Create/start only: no adoption, readiness, cookies, retry or destructive rollback. */
+/** Create/start or validate current identity; readiness, cookies and retirement remain separate. */
 export async function startUserContainer(input: StartUserContainerInput): Promise<StartResult> {
   let stage = 'account validation';
   try {
     const { database, config, userId } = input;
     if (!/^[a-z0-9]{12}$/.test(userId) || userId.length !== 12) throw new Error();
-    const account: unknown = database
-      .prepare('SELECT email, status FROM users WHERE id = ?')
-      .get(userId);
+    const account: unknown = database.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     const user = object(account);
     if (user.status !== 'active' || typeof user.email !== 'string') throw new Error();
     const email = user.email;
@@ -328,6 +396,10 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
         input.client.json(method, path, body, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)),
     };
     const name = `dsh-team-u-${userId}`;
+    stage = 'current container validation';
+    signal.throwIfAborted();
+    const reused = await reuseCurrentContainer(input, client, user, signal);
+    if (reused !== undefined) return reused;
     stage = 'container conflict check';
     await requireAbsent(client, name);
     stage = 'seccomp policy';

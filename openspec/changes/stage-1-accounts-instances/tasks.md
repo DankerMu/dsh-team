@@ -602,6 +602,17 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#40）：stopUserContainer按捕获的当前受管容器ID停止、确认停止、无force/卷删除选项地移除并确认不存在，再原子清运行时身份/端点/cookie并记录调用方原因，保留历史时间/错误；禁用账号可停止，已完成操作不重复审计，部分Docker/DB失败不伪造成功。真实UnixHTTP/SQLite语义RED先观察停止后尚未删除，后GREEN；本地完整pnpmcheck exit0，830unit/561integration、stop.ts逐项100%覆盖率、重复率2.69%、strictOpenSpec通过。三席全diff审查clean；审查头`ddb927cc5aa0fd4a5ab0fc844b0bfb54a4f5030b`固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker16/16、exit0、96.76秒：实际uid1001写入状态/工作卷精确文件，经生产停止删除重建后字节不变、原ID不存在、新ID不同、两卷/主机名保持，审计原因idle，独立兄弟实例/文件/行/审计不变；15基线保留，独立资源清点为空。最终头/CI见PR#147；人工关键路径审查按用户要求后置Epic完成。
 
+### Issue #41 risk/evidence map (task9.8 only)
+
+- Public API / CLI / script entry; Legacy compatibility / examples — selected: explicit factory lifecycle cutover, all consumers migrated, no bypass aliases; preserve old behavior except required idempotent reuse of validated starting/running instance.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: per-user FIFO, different-user independence, cancellation/head-failure cleanup, no recursive lock or poisoned queue; deterministic public lifecycle barriers with real persisted state.
+- Auth / permissions / secrets; Schema / columns / units / field names — selected: user key/instance identity/current account/cookie and existing audit/row contracts; prevent stale cached outcome, moved key or repeated audit, no schema changes.
+- Resource limits / large input / discovery — selected: idle queue-entry cleanup, existing bounded IO deadlines, no global blocking or abandoned work; cancellation/settlement tests.
+- File IO / path safety / overwrite — selected for preservation: shared startup/retirement still obey managed overlay and volume ownership rules; full baseline Docker data recovery and exact-owned cleanup retained.
+- Config / project setup; Release / packaging / dependency compatibility — selected: explicit one-context-per-database ownership, no new settings/dependency; entirecaller cutover and full pinnedDocker verification.
+- Documentation / migration notes — selected: method-input/caller migration, truthful starting/running reuse and context lifetime; root checks, strictOpenSpec, full exact-head Docker/CI.
+- New reuse branch evidence is explicit: valid starting and genuinely running results preserve full row/cookie/overlay/audits; foreign/stopped/malformed/stale reuse, non404 inspect and exact404/name collision fail closed; changed account/model eligibility is re-read on each call.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

@@ -6,11 +6,7 @@ import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import { buildApp } from '../src/app.ts';
 import type { PlatformConfig } from '../src/config.ts';
-import {
-  acquireDshCookie,
-  extractLaunchToken,
-  startUserContainer,
-} from '../src/orchestrator/index.ts';
+import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
@@ -33,6 +29,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
   lifecycle.registerResource('container', name, ownership);
   const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'platform.db'));
   const { raw, client, helperIds } = startupClient(lifecycle);
+  const { startUserContainer } = createOrchestrator({ client, database: db });
   const policy: unknown = JSON.parse(await readFile(lifecycle.seccomp, 'utf8'));
   try {
     applyMigrations(db);
@@ -41,9 +38,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
     ).run(userId);
     const ids: string[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const result = await startUserContainer({
-        client,
-        database: db,
+      const input = {
         userId,
         config: {
           userImage: lifecycle.imageId,
@@ -54,7 +49,22 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
         modelSettings: START_MODEL,
         modelKey: 'docker-acceptance-only-not-a-model-credential',
         permission: START_PERMISSION,
-      });
+      };
+      const concurrentStarts = attempt === 0 ? 10 : 1;
+      const results = await Promise.all(
+        Array.from({ length: concurrentStarts }, () => startUserContainer(input)),
+      );
+      const result = results[0];
+      if (result === undefined) throw new Error('Expected startup result');
+      expect(results).toEqual(Array.from({ length: concurrentStarts }, () => result));
+      expect(
+        db.prepare('SELECT event_type, target, details FROM audit_events ORDER BY id').all(),
+      ).toEqual(
+        Array.from({ length: attempt + 1 }, () => [
+          { event_type: 'instance.created', target: userId, details: '{}' },
+          { event_type: 'instance.started', target: userId, details: '{}' },
+        ]).flat(),
+      );
       expect(result.outcome).toBe('starting');
       if (result.outcome !== 'starting') throw new Error('Expected configured startup');
       const container = inspect(lifecycle, name);
@@ -253,6 +263,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
   const authority = 'resource.example:8443';
   const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'resource-platform.db'));
   const { raw, client, helperIds } = startupClient(lifecycle);
+  const { startUserContainer } = createOrchestrator({ client, database: db });
   const config: PlatformConfig = {
     host: '127.0.0.1',
     port: 0,
@@ -307,8 +318,6 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     writeSettings(db, { cpuCores: 0.5, memoryMiB: 512 });
     stage = 'A startup';
     const a = await startUserContainer({
-      client,
-      database: db,
       userId: userA,
       config,
       modelSettings: START_MODEL,
@@ -332,8 +341,6 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     stage = 'B startup';
     boundedId = `dsh-team-u-${userB}`;
     const b = await startUserContainer({
-      client,
-      database: db,
       userId: userB,
       config,
       modelSettings: START_MODEL,
@@ -515,9 +522,8 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
         "INSERT INTO users VALUES (?, 'cookie@example.test', 'unused', 'employee', 'active', 1)",
       )
       .run(userId);
+    const { startUserContainer, acquireDshCookie } = createOrchestrator({ client, database });
     const started = await startUserContainer({
-      client,
-      database,
       userId,
       config,
       modelSettings: START_MODEL,
@@ -536,7 +542,7 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
     for (const mutation of ['retargeted', 'removed']) {
       if (mutation === 'removed') cookieImageCommand(lifecycle, ['image', 'rm', mutableTag]);
       let result: unknown;
-      await acquireDshCookie({ client, database, userId, authority }).then((value: unknown) => {
+      await acquireDshCookie({ userId, authority }).then((value: unknown) => {
         result = value;
       });
       app.log.info({ result }, 'Acquisition completed');
@@ -559,7 +565,7 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
       .run(replacementId, userId);
     let foreignRejected = false;
     try {
-      await acquireDshCookie({ client, database, userId, authority });
+      await acquireDshCookie({ userId, authority });
     } catch (error) {
       foreignRejected = true;
       app.log.error({ err: error }, 'Foreign image rejected');

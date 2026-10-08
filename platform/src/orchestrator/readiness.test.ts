@@ -6,7 +6,8 @@ import type * as NodeHttp from 'node:http';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applyMigrations, openDatabase } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { createDockerClient, waitForUserContainerReady } from './index.ts';
+import { createDockerClient, createOrchestrator } from './index.ts';
+import type { Orchestrator } from './index.ts';
 import {
   startupDaemon,
   START_CONTAINER,
@@ -78,6 +79,7 @@ const authority = 'team.example:8443';
 const cookieName = 'dsh-auth-3eo-BcKCoQv18vgqA6jsyDZEVweseAZ0c-hb0sOZg64';
 let database: DatabaseHandle;
 let daemon = startupDaemon();
+let waitForUserContainerReady: Orchestrator['waitForUserContainerReady'];
 let token: string;
 let container: {
   Id: string;
@@ -142,6 +144,10 @@ beforeEach(() => {
     )
       container.State.Running = false;
   });
+  ({ waitForUserContainerReady } = createOrchestrator({
+    client: createDockerClient('/fixture/docker.sock', daemon.transport),
+    database,
+  }));
 });
 
 afterEach(() => {
@@ -151,8 +157,6 @@ afterEach(() => {
 
 function input(signal?: AbortSignal) {
   return {
-    client: createDockerClient('/fixture/docker.sock', daemon.transport),
-    database,
     userId: START_USER,
     authority,
     ...(signal === undefined ? {} : { signal }),
