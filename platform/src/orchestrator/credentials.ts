@@ -13,12 +13,17 @@ export interface AcquireDshCookieInput {
   readonly authority: string;
   readonly signal?: AbortSignal;
 }
-interface Instance {
+export interface IndexedInstance {
   container_id: string;
-  upstream_host: string;
-  upstream_port: number;
+  upstream_host: string | null;
+  upstream_port: number | null;
   image_tag: string;
   image_id: string;
+  last_started_at: number | null;
+}
+interface Instance extends IndexedInstance {
+  upstream_host: string;
+  upstream_port: number;
   last_started_at: number;
 }
 
@@ -27,11 +32,41 @@ const ACQUISITION_TIMEOUT_MS = 60_000;
 const MAX_LINE_BYTES = 16 * 1024;
 const MAX_HEADER_BYTES = 8 * 1024;
 const MAX_COOKIE_BYTES = 4 * 1024;
-const CURRENT_INSTANCE = `user_id = ? AND container_id = ? AND upstream_host = ?
-  AND upstream_port = ? AND image_tag = ? AND image_id = ? AND last_started_at = ? AND status = 'starting'
+export const CURRENT_INSTANCE = `user_id = ? AND container_id = ? AND upstream_host IS ?
+  AND upstream_port IS ? AND image_tag = ? AND image_id = ? AND last_started_at IS ? AND status = 'starting'
   AND EXISTS (SELECT 1 FROM users WHERE id = instances.user_id AND status = 'active')`;
 
-function currentInstance(input: AcquireDshCookieInput): Instance {
+function indexedEndpoint(
+  instance: Record<string, unknown>,
+  allowIncomplete: boolean,
+): Pick<IndexedInstance, 'upstream_host' | 'upstream_port' | 'last_started_at'> {
+  const host = instance.upstream_host;
+  const port = instance.upstream_port;
+  const started = instance.last_started_at;
+  if (host !== '127.0.0.1' && !(allowIncomplete && host === null)) throw new Error();
+  if (!(allowIncomplete && port === null)) {
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)
+      throw new Error();
+  }
+  if (!(allowIncomplete && started === null)) {
+    if (typeof started !== 'number' || !Number.isSafeInteger(started)) throw new Error();
+  }
+  return {
+    upstream_host: host,
+    upstream_port: port,
+    last_started_at: started,
+  };
+}
+
+export function currentInstance(input: AcquireDshCookieInput): Instance;
+export function currentInstance(
+  input: AcquireDshCookieInput,
+  allowIncomplete: true,
+): IndexedInstance;
+export function currentInstance(
+  input: AcquireDshCookieInput,
+  allowIncomplete = false,
+): IndexedInstance {
   if (!/^[a-z0-9]{12}$/.test(input.userId)) throw new Error();
   const row: unknown = input.database
     .prepare(
@@ -46,24 +81,15 @@ function currentInstance(input: AcquireDshCookieInput): Instance {
   if (
     typeof instance.container_id !== 'string' ||
     !/^[a-f0-9]{64}$/.test(instance.container_id) ||
-    instance.upstream_host !== '127.0.0.1' ||
-    typeof instance.upstream_port !== 'number' ||
-    !Number.isInteger(instance.upstream_port) ||
-    instance.upstream_port < 1 ||
-    instance.upstream_port > 65535 ||
     typeof instance.image_tag !== 'string' ||
-    instance.image_tag.length === 0 ||
-    typeof instance.last_started_at !== 'number' ||
-    !Number.isSafeInteger(instance.last_started_at)
+    instance.image_tag.length === 0
   )
     throw new Error();
   return {
     container_id: instance.container_id,
-    upstream_host: instance.upstream_host,
-    upstream_port: instance.upstream_port,
+    ...indexedEndpoint(instance, allowIncomplete),
     image_tag: instance.image_tag,
     image_id: resolvedImageId(instance.image_id),
-    last_started_at: instance.last_started_at,
   };
 }
 
@@ -191,14 +217,16 @@ async function exchange(
   }
 }
 
-/** Acquire only; startup and readiness remain separate operations. No secret is returned. */
-export async function acquireDshCookie(input: AcquireDshCookieInput): Promise<void> {
+/** Internal sibling contract: returns exactly the credential this acquisition committed. */
+export async function acquireCurrentDshCookie(input: AcquireDshCookieInput): Promise<string> {
+  const deadline = new AbortController();
+  const timer = setTimeout(() => {
+    deadline.abort();
+  }, ACQUISITION_TIMEOUT_MS);
+  const signal =
+    input.signal === undefined ? deadline.signal : AbortSignal.any([input.signal, deadline.signal]);
   let stage = 'current instance';
   try {
-    const signal =
-      input.signal === undefined
-        ? AbortSignal.timeout(ACQUISITION_TIMEOUT_MS)
-        : AbortSignal.any([input.signal, AbortSignal.timeout(ACQUISITION_TIMEOUT_MS)]);
     const instance = currentInstance(input);
     const identity = [
       input.userId,
@@ -251,8 +279,17 @@ export async function acquireDshCookie(input: AcquireDshCookieInput): Promise<vo
       )
       .run(cookie, ...identity);
     if (stored.changes !== 1) throw new Error();
+    return cookie;
   } catch {
     // Never retain upstream error messages, causes, URLs, response headers or log bytes.
     throw new Error(`DSH credential acquisition failed during ${stage}`);
+  } finally {
+    clearTimeout(timer);
+    deadline.abort();
   }
+}
+
+/** Acquire only; startup and readiness remain separate operations. No secret is returned. */
+export async function acquireDshCookie(input: AcquireDshCookieInput): Promise<void> {
+  await acquireCurrentDshCookie(input);
 }

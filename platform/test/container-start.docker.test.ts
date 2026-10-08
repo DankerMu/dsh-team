@@ -1,5 +1,4 @@
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { request } from 'node:http';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -9,7 +8,6 @@ import { buildApp } from '../src/app.ts';
 import type { PlatformConfig } from '../src/config.ts';
 import {
   acquireDshCookie,
-  createDockerClient,
   extractLaunchToken,
   startUserContainer,
 } from '../src/orchestrator/index.ts';
@@ -18,85 +16,12 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
 import { observeResourceOom } from './resource-oom-fixture.ts';
-
-function record(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw new Error('Invalid acceptance inspect');
-  // Docker JSON crosses an external boundary; callers assert each consumed field.
-  return value as Record<string, unknown>;
-}
-
-function inspect(lifecycle: UserImageLifecycle, name: string): Record<string, unknown> {
-  const result = lifecycle.command(['container', 'inspect', name], 15_000);
-  if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Independent container inspect failed');
-  const rows: unknown = JSON.parse(result.stdout);
-  if (!Array.isArray(rows) || rows.length !== 1)
-    throw new Error('Independent inspect missing container');
-  return record(rows[0]);
-}
-
-/** Shared actual-start transport: registers production helpers before their create request. */
-function startupClient(lifecycle: UserImageLifecycle) {
-  const raw = createDockerClient('/var/run/docker.sock');
-  const helperIds: string[] = [];
-  const client: typeof raw = {
-    logs: (path, signal) => raw.logs(path, signal),
-    async json(method, path, body, signal) {
-      const helperCreate =
-        method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
-      let helperName = '';
-      let userId = '';
-      if (helperCreate) {
-        helperName = new URL(`http://docker${path}`).searchParams.get('name') ?? '';
-        const labels = record(record(body).Labels);
-        const invocation = labels['dsh-team.invocation'];
-        const user = labels['dsh-team.user'];
-        if (typeof invocation !== 'string' || typeof user !== 'string')
-          throw new Error('Helper ownership missing');
-        userId = user;
-        lifecycle.registerResource('container', helperName, {
-          'dsh-team.user': userId,
-          'dsh-team.role': 'managed-composition',
-          'dsh-team.invocation': invocation,
-        });
-      }
-      const deadline = AbortSignal.timeout(30_000);
-      const result = await raw.json(
-        method,
-        path,
-        body,
-        signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
-      );
-      if (helperCreate) {
-        const helper = inspect(lifecycle, helperName);
-        expect(helper.Image).toBe(lifecycle.imageId);
-        const configuration = record(helper.Config);
-        expect(configuration.User).toBe('1001');
-        expect(configuration.Env).not.toEqual(
-          expect.arrayContaining([expect.stringMatching(/^DMXAPI_KEY=/)]),
-        );
-        const host = record(helper.HostConfig);
-        expect(host.NetworkMode).toBe('none');
-        expect(host.Privileged).toBe(false);
-        expect(
-          host.PortBindings === null || Object.keys(record(host.PortBindings)).length === 0,
-        ).toBe(true);
-        expect(helper.Mounts).toEqual([
-          expect.objectContaining({
-            Type: 'volume',
-            Name: `dsh-team-home-${userId}`,
-            Destination: '/data/home',
-            RW: true,
-          }),
-        ]);
-        helperIds.push(String(helper.Id));
-      }
-      return result;
-    },
-  };
-  return { raw, client, helperIds };
-}
+import {
+  cookieHttpStatus,
+  inspect,
+  record,
+  startupClient,
+} from './container-start-docker-fixture.ts';
 
 async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
@@ -516,32 +441,6 @@ it('enforces refreshed create-time limits and confines a physical 512MiB OOM to 
     `Docker resource isolation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
   );
 });
-
-async function cookieHttpStatus(port: number, authority: string, cookie: string): Promise<number> {
-  const { promise, resolve, reject } = Promise.withResolvers<number>();
-  const outgoing = request(
-    {
-      hostname: '127.0.0.1',
-      port,
-      path: '/',
-      headers: { Host: authority, Cookie: cookie },
-      signal: AbortSignal.timeout(5000),
-    },
-    (response) => {
-      resolve(response.statusCode ?? 0);
-      response.destroy();
-    },
-  );
-  outgoing.on('error', () => {
-    reject(new Error('Independent authenticated HTTP failed'));
-  });
-  try {
-    outgoing.end();
-    return await promise;
-  } finally {
-    outgoing.destroy();
-  }
-}
 
 function cookieImageCommand(lifecycle: UserImageLifecycle, args: readonly string[]): string {
   const result = lifecycle.command(args, 30_000);
