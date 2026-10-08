@@ -545,6 +545,16 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#35）：公开 `ensureUserVolumes` 复用现有Unix客户端，按用户创建/复用home/work，校验名字与用户标签；冲突拒绝且不接管/删除，第二卷失败保留第一卷供重试。归属分支观察语义RED；24单元场景及真实Unix HTTP smoke覆盖复用、冲突、无破坏重试。三席审查发现验收请求挂起可阻止清理，第一修复轮为实际验收helper加入独立逐请求期限；Unix server持久化后不结束响应的回归先RED（需watchdog救援），后GREEN（取消/连接关闭/仅清理本次卷/保留无关卷和原始错误）。最终本地 `pnpm check` exit0，646unit/302integration通过、volumes100%覆盖、重复率2.74%，strictOpenSpec通过；全diff复审clean/ADMIT。审查头`a1b4d02a0174a5192539e7867c1e6f58d929a507`在giap-vps完整Docker10/10通过、exit0、91.36秒，新增双用户四卷及原9例均过，独立资源清点为空。最初两次父进程运行缺少审查头/Chrome环境变量，不计成功；补齐显式环境后全量通过。最终PR头与CI见PR#142，关键路径人工白盒审查按用户指令后置至Epic完成。
 
+### Issue #36 risk/evidence map (task9.3 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: exported operation plus explicit image/seccomp configuration and all typed callers; config RED/GREEN, public startup tests, real exported-operation acceptance, ordinary health remains daemon-independent.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: existing atomic overlay writer, real seccomp content, owned volume mounts, instance fields/port; malformed policy/inspect failure cases and real independent filesystem/Docker/SQLite readback.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: exact user ownership, no foreign adoption, secret only in intended container environment, no key in errors/audit; create/start/inspect/DB-audit ordering and helper cleanup. Per-user locking is task9.8, not claimed here.
+- Credential evidence specifically exercises the exported operation with complete model inputs/key-variable name but missing or empty actual key: unconfigured, no final DSH container/endpoint/creation-start audits. The operation derives availability from the actual injection value.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: finite helper/acceptance operations and bounded output; owned helper cleanup on failed composition, no destructive volume rollback, malformed/failed daemon or DB/audit rejects without false success. Resource caps are task9.4.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: same captured image for released composition and DSH; preserve shipped seccomp/default sandbox and all ten baseline Docker cases; pinned-node full Docker regression.
+- Documentation / migration notes — selected: canonical defaults in environment documentation, truthful starting-not-ready contract and evidence here; strict OpenSpec, root checks, final-head source review/runtime/CI.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

@@ -12,6 +12,8 @@ export interface PlatformConfig {
   readonly dataDir: string;
   readonly managedConfigDir: string;
   readonly dockerSocketPath: string;
+  readonly userImage: string;
+  readonly seccompProfilePath: string;
   readonly publicUrl: string;
   readonly authority: string;
   readonly cookieSecure: boolean;
@@ -65,6 +67,22 @@ function parseDockerSocket(raw: string): string {
     throw new Error('PLATFORM_DOCKER_SOCKET must be an absolute nonempty path without NUL');
   }
   return raw;
+}
+
+function parseUserImage(raw: string): string {
+  if (isInvalidPath(raw) || /\s/.test(raw)) {
+    throw new Error(
+      'PLATFORM_USER_IMAGE must be a nonempty image reference without whitespace or NUL',
+    );
+  }
+  return raw;
+}
+
+function parseSeccompProfile(raw: string): string {
+  if (isInvalidPath(raw)) {
+    throw new Error('PLATFORM_SECCOMP_PROFILE must be a nonempty path without NUL');
+  }
+  return resolve(raw);
 }
 
 function rejectPublicUrl(): never {
@@ -157,6 +175,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
     dataDir,
     managedConfigDir,
     dockerSocketPath: parseDockerSocket(env.PLATFORM_DOCKER_SOCKET ?? '/var/run/docker.sock'),
+    userImage: parseUserImage(env.PLATFORM_USER_IMAGE ?? 'dsh-team-user:local'),
+    seccompProfilePath: parseSeccompProfile(
+      env.PLATFORM_SECCOMP_PROFILE ?? 'images/seccomp/dsh-user.json',
+    ),
     publicUrl: publicOrigin.origin,
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),
