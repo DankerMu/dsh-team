@@ -11,3 +11,4 @@ export type {
 } from './orchestrator.ts';
 export type { StartResult } from './start.ts';
 export { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
+export { allocateSubnet, validateSubnetPool } from './subnet.ts';

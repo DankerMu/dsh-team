@@ -12,6 +12,7 @@ const SILENT_CONFIG = {
   dockerSocketPath: '/var/run/docker.sock',
   userImage: 'dsh-team-user:local',
   seccompProfilePath: '/unused/seccomp.json',
+  subnetPool: '172.30.0.0/16',
   publicUrl: 'http://127.0.0.1:8080',
   authority: '127.0.0.1:8080',
   cookieSecure: false,

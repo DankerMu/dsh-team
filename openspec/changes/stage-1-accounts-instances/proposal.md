@@ -297,3 +297,11 @@
 - Evidence floor: semantic RED/GREEN at public owner with real Unix/SQLite; actual missing-container and missing-cookie corrections plus two authenticated running instances surviving owner reconstruction/reconciliation; root checks, strictOpenSpec, final-head full Docker/CI.
 - Boundary: #43 owns the explicit awaited reconciliation operation; #47 adds network recovery; #56 composes the application owner and awaits reconciliation before lifecycle/routing traffic. No claim that main.ts is wired by this module-only slice.
 - No orphan garbage collection, credential regeneration, background retries, new schema/config/dependencies or network behavior. Human critical-path review remains deferred to Epic completion per user.
+
+## Issue #44 fixture
+
+- Feature; expanded task10.1 (agree with upstream): pure IPv4 /28 snapshot allocation and startup pool-capacity validation.
+- Governing invariant: selected subnet is inside the pool and overlaps no occupied subnet; exhaustion is explicit, release appears in the next Docker snapshot, no DB reservation.
+- Add PLATFORM_SUBNET_POOL/config.subnetPool, default172.30.0.0/16, one canonical range parser and existing persisted maxRunningInstances; insufficient geometric capacity fails before listening and names the pool field.
+- Evidence floor: allocation/overlap/release/exhaustion RED/GREEN; actual source/built startup with persisted limits; root/strictOpenSpec and retained eighteen Docker baselines/final-head CI.
+- #44 is the declared pure-function slice; #45 fetches fresh all-Docker-network IPAM snapshots and serializes select/create. No network creation here. Human critical-path review deferred to Epic completion per user.

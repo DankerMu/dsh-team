@@ -640,7 +640,7 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 依赖：第 9 组。
 
-- [ ] 10.1 子网分配：从配置的地址段里按 `/28` 分配，已用的子网从 Docker 现有网络读出，不存进数据库；地址段用尽时返回明确错误。地址段是配置项。验证：单元测试——连续分配互不重叠；释放后可再用；地址段不足以放下同时运行上限时平台启动即报错并指名该项。
+- [x] 10.1 子网分配：从配置的地址段里按 `/28` 分配，已用的子网从 Docker 现有网络读出，不存进数据库；地址段用尽时返回明确错误。地址段是配置项。验证：单元测试——连续分配互不重叠；释放后可再用；地址段不足以放下同时运行上限时平台启动即报错并指名该项。
 - [ ] 10.2 每实例网络：启动时创建带标签的 bridge 网络并把实例接入，停止时删除。验证：`pnpm test:docker`——起两个实例，从一个实例里连接另一个实例的地址和主机名的 3080 和其他端口都失败（规格“实例之间网络不可达”的第一个场景）。
 - [ ] 10.3 `network` 方式：配置项选择够到实例的方式（`network` 为默认，`published-loopback` 仅供平台进程直接跑在宿主机上时用）；`network` 下实例不发布任何端口，平台容器（名字是配置项）在实例启动时接入该实例的网络、停止时断开，上游地址取容器在该网络里的地址。验证：`pnpm test:docker`——起一个替身容器充当平台容器，实例启动后替身被接入该网络并能从替身里连上实例的 3080；实例容器没有任何端口映射；实例停止后替身不再在该网络里且网络被删除（规格“实例不暴露宿主端口”）。
 - [ ] 10.4 对账时恢复网络：平台启动对账时把平台容器重新接入每个运行中实例的网络，接不上的实例停止并记为出错；没有对应容器的实例网络删除。验证：`pnpm test:docker`——两个实例运行中时删除并重建替身平台容器，对账后替身能连上两个实例；人为留下一个无主的实例网络，对账后它被删除（规格“平台容器被重建”场景）。
@@ -648,6 +648,17 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 Suggested fixture level: expanded - 隔离边界的一部分，涉及共享的地址资源
 Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
+
+### Issue #44 risk/evidence map (task10.1 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names; Config / project setup — selected: pure allocator and real main startup validation, explicit subnetPool environment/field, /28 capacity against persisted settings, no second limit/schema.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: readonly Docker-IPAM snapshot and interval jumping, no hidden reservation; #45 owns fresh discovery and serialized select/create.
+- Error handling / rollback / partial outputs; Auth / permissions / secrets — selected: explicit malformed/exhausted error and before-listen config-key rejection; no selector Docker/DB writes or credentials.
+- File IO / path safety / overwrite; Legacy compatibility / examples — selected: owned startup DB lifecycle, migrated config consumers and unchanged health/API; no network/data deletion.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: source/built startup smoke, retained18Docker baselines, no dependency; root/strictOpenSpec/final-headCI and deferred human review.
+- Handoff: task10.2 supplies fresh all-network IPAM occupancy and serializes selection/create; task10.1 pure selector is not a claim of wired Docker allocation.
+
+验证记录（#44）：纯allocateSubnet按当前IPAM子网快照以无符号区间首适配选/28，包含/更小范围均按重叠排除，释放快照可复用、耗尽明确报错；无数据库预留或隐藏状态，Docker快照读取/选择创建串行化归#45。PLATFORM_SUBNET_POOL默认172.30.0.0/16，仅缺省时应用；主进程迁移后读取持久maxRunningInstances，在监听前用同一解析器校验容量。实际source进程/27+limit3错误HTTP200的RED已观察；修复后父级source及compiled smoke均为limit3退出1/指名pool/无health，limit2返回HTTP200。完整pnpmcheck exit0：1020unit/605integration，subnet100%覆盖，重复率2.92%，strictOpenSpec通过。三席全diff审查clean，审查头`749a5d1e06939c3643ef2fa667da18cdd3072aad`固定Node24.13.1/pnpm10.34.6 giap-vps完整18Docker基线全部通过，exit0、116.48秒，覆盖全部dsh-team容器/卷/测试镜像的独立清点为空。最终头/CI见PR#151；人工白盒与环境规则变更审查后置Epic完成。
 
 ## 11. 网关（任务包 1.8）
 

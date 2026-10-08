@@ -31,6 +31,7 @@ export function buildCookieFixtureApp(
       dockerSocketPath: join(root, 'engine.sock'),
       userImage: 'dsh-team-user:local',
       seccompProfilePath: join(root, 'seccomp.json'),
+      subnetPool: '172.30.0.0/16',
       publicUrl: `http://${authority}`,
       authority,
       cookieSecure: false,

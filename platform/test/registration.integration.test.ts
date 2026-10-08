@@ -32,6 +32,7 @@ const CONFIG = {
   dockerSocketPath: '/var/run/docker.sock',
   userImage: 'dsh-team-user:local',
   seccompProfilePath: '/unused/seccomp.json',
+  subnetPool: '172.30.0.0/16',
   publicUrl: 'http://127.0.0.1',
   authority: '127.0.0.1',
   cookieSecure: false,
