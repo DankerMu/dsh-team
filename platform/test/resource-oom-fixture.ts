@@ -95,30 +95,95 @@ interface ResourceOomEvidence {
   termination: 'child' | 'instance';
 }
 
+type OomValidator =
+  | 'evidence-object'
+  | 'counter'
+  | 'pressure-completion'
+  | 'live-instance'
+  | 'proof-identity'
+  | 'cgroup-limits'
+  | 'physical-touch'
+  | 'post-instance-identity'
+  | 'instance-running'
+  | 'instance-oom-flag'
+  | 'instance-exit-code'
+  | 'child-signal'
+  | 'child-counter-missing'
+  | 'child-counter-not-increased'
+  | 'termination'
+  | 'instance-wait'
+  | 'external-operation';
+
+class OomValidationError extends Error {
+  readonly validator: OomValidator;
+  constructor(validator: OomValidator, message: string) {
+    super(message);
+    this.validator = validator;
+  }
+}
+
+interface OomStateSnapshot {
+  phase: 'pre-pressure' | 'post-wait' | 'post-proof' | 'failure';
+  atMs: number;
+  available: boolean;
+  running?: boolean;
+  oomKilled?: boolean;
+  exitCode?: number;
+}
+interface OomDockerEvent {
+  action: 'oom' | 'die' | 'kill';
+  timeNano: string;
+  exitCode: number | null;
+  signal: number | null;
+}
+interface OomEventCapture {
+  phase: 'post-pressure' | 'post-proof';
+  sinceMs: number;
+  untilMs: number;
+  result: 'complete' | 'command-error' | 'command-status' | 'oversized' | 'malformed';
+  events: OomDockerEvent[];
+}
+interface OomTrace {
+  runId?: string;
+  containerId?: string;
+  userId?: string;
+  snapshots: OomStateSnapshot[];
+  eventCaptures: OomEventCapture[];
+  pressureStartedAtMs?: number;
+  pressureFinishedAtMs?: number;
+  failedValidator?: OomValidator;
+}
+
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw new Error('Invalid OOM evidence object');
+    throw new OomValidationError('evidence-object', 'Invalid OOM evidence object');
   // External Docker/proof JSON is narrowed field by field below.
   return value as Record<string, unknown>;
 }
 
 function counter(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
-    throw new Error('Invalid OOM evidence counter');
+    throw new OomValidationError('counter', 'Invalid OOM evidence counter');
   return value;
 }
 
 function requirePressureCompletion(pressure: DockerCommandResult): void {
   if (pressure.error !== undefined) throw pressure.error;
   if (pressure.status !== 0 && pressure.status !== 137)
-    throw new Error('Owned OOM pressure failed or exceeded its deadline');
+    throw new OomValidationError(
+      'pressure-completion',
+      'Owned OOM pressure failed or exceeded its deadline',
+    );
 }
 
 function liveState(value: unknown, containerId: string): void {
   const container = record(value);
   const state = record(container.State);
   if (container.Id !== containerId || state.Running !== true || state.OOMKilled !== false)
-    throw new Error('OOM pressure requires the exact live instance without a prior OOM');
+    throw new OomValidationError(
+      'live-instance',
+      'OOM pressure requires the exact live instance without a prior OOM',
+    );
 }
 
 function resourceOomDiagnostic(
@@ -161,14 +226,20 @@ export function validateResourceOomEvidence(
   liveState(before, identity.containerId);
   const proof = record(value);
   if (proof.runId !== identity.runId || proof.containerId !== identity.containerId)
-    throw new Error('OOM proof belongs to a different invocation or instance');
+    throw new OomValidationError(
+      'proof-identity',
+      'OOM proof belongs to a different invocation or instance',
+    );
   const limits = record(proof.limits);
   if (
     limits['memory.max'] !== '268435456' ||
     limits['memory.swap.max'] !== '0' ||
     limits['pids.max'] !== '512'
   )
-    throw new Error('OOM proof does not show the required cgroup limits');
+    throw new OomValidationError(
+      'cgroup-limits',
+      'OOM proof does not show the required cgroup limits',
+    );
   const touchedBytes = counter(proof.touchedBytes);
   if (
     proof.requestedBytes !== 536_870_912 ||
@@ -176,11 +247,14 @@ export function validateResourceOomEvidence(
     touchedBytes >= 536_870_912 ||
     touchedBytes % 4096 !== 0
   )
-    throw new Error('Missing bounded physical-touch evidence for the 512MiB allocation');
+    throw new OomValidationError(
+      'physical-touch',
+      'Missing bounded physical-touch evidence for the 512MiB allocation',
+    );
   const oomKillBefore = counter(proof.oomKillBefore);
   const container = record(after);
   if (container.Id !== identity.containerId)
-    throw new Error('OOM state belongs to another instance');
+    throw new OomValidationError('post-instance-identity', 'OOM state belongs to another instance');
   const state = record(container.State);
   const childSignal = proof.childSignal === null ? null : counter(proof.childSignal);
   const oomKillAfter = proof.oomKillAfter === null ? null : counter(proof.oomKillAfter);
@@ -214,7 +288,28 @@ function classifyTermination(
     state.ExitCode === 137
   )
     return { ...evidence, termination: 'instance' };
-  throw new Error('Missing OOM-specific abnormal child or instance termination');
+  throw new OomValidationError(
+    terminationValidator(evidence, state, status),
+    'Missing OOM-specific abnormal child or instance termination',
+  );
+}
+
+function terminationValidator(
+  evidence: Omit<ResourceOomEvidence, 'termination'>,
+  state: Record<string, unknown>,
+  status: number | null,
+): OomValidator {
+  if (status === 137) {
+    if (state.Running !== false) return 'instance-running';
+    if (state.OOMKilled !== true) return 'instance-oom-flag';
+    if (state.ExitCode !== 137) return 'instance-exit-code';
+  }
+  if (status === 0) {
+    if (evidence.childSignal !== 9) return 'child-signal';
+    if (evidence.oomKillAfter === null) return 'child-counter-missing';
+    if (evidence.oomKillAfter <= evidence.oomKillBefore) return 'child-counter-not-increased';
+  }
+  return 'termination';
 }
 
 function output(command: DockerCommand, args: readonly string[], timeout: number): string {
@@ -315,6 +410,146 @@ function verifyReader(
     throw new Error('OOM reader work volume must be exact and read-only');
 }
 
+function stateSnapshot(
+  trace: OomTrace,
+  lifecycle: UserImageLifecycle,
+  containerId: string,
+  phase: OomStateSnapshot['phase'],
+  observed?: unknown,
+): void {
+  const snapshot: OomStateSnapshot = { phase, atMs: Date.now(), available: false };
+  try {
+    const container =
+      observed === undefined
+        ? inspect(lifecycle.command, 'container', containerId)
+        : record(observed);
+    if (container.Id !== containerId) throw new Error();
+    const state = record(container.State);
+    snapshot.available = true;
+    if (typeof state.Running === 'boolean') snapshot.running = state.Running;
+    if (typeof state.OOMKilled === 'boolean') snapshot.oomKilled = state.OOMKilled;
+    if (typeof state.ExitCode === 'number' && Number.isSafeInteger(state.ExitCode))
+      snapshot.exitCode = state.ExitCode;
+  } catch {
+    // A diagnostic inspect failure must not replace the original acceptance result.
+  }
+  trace.snapshots.push(snapshot);
+}
+
+function eventNumber(value: unknown, maximum: number): number | null {
+  if (value === 'SIGKILL') return 9;
+  if (value === 'SIGTERM') return 15;
+  if (typeof value !== 'string' || !/^\d{1,3}$/.test(value)) return null;
+  const number = Number(value);
+  return number <= maximum ? number : null;
+}
+
+function projectedEvent(line: string, containerId: string): OomDockerEvent {
+  const event = record(JSON.parse(line));
+  if (
+    event.containerId !== containerId ||
+    (event.action !== 'oom' && event.action !== 'die' && event.action !== 'kill') ||
+    typeof event.timeNano !== 'string' ||
+    !/^\d{1,20}$/.test(event.timeNano)
+  )
+    throw new Error();
+  return {
+    action: event.action,
+    timeNano: event.timeNano,
+    exitCode: eventNumber(event.exitCode, 255),
+    signal: eventNumber(event.signal, 64),
+  };
+}
+
+function captureOomEvents(
+  trace: OomTrace,
+  lifecycle: UserImageLifecycle,
+  sinceMs: number,
+  phase: OomEventCapture['phase'],
+): void {
+  const capture: OomEventCapture = {
+    phase,
+    sinceMs,
+    untilMs: Date.now(),
+    result: 'command-error',
+    events: [],
+  };
+  try {
+    const id = trace.containerId;
+    if (id === undefined) throw new Error();
+    // Project at the Docker boundary: do not even fetch labels, environment or arbitrary attributes.
+    const format =
+      '{"containerId":{{json .Actor.ID}},"action":{{json .Action}},"timeNano":"{{.TimeNano}}","exitCode":{{json (index .Actor.Attributes "exitCode")}},"signal":{{json (index .Actor.Attributes "signal")}}}';
+    const result = lifecycle.command(
+      [
+        'events',
+        '--since',
+        new Date(sinceMs).toISOString(),
+        '--until',
+        new Date(capture.untilMs).toISOString(),
+        '--filter',
+        'type=container',
+        '--filter',
+        `container=${id}`,
+        '--filter',
+        'event=oom',
+        '--filter',
+        'event=die',
+        '--filter',
+        'event=kill',
+        '--format',
+        format,
+      ],
+      5000,
+    );
+    if (result.error !== undefined) throw new Error();
+    if (result.status !== 0) {
+      capture.result = 'command-status';
+      return;
+    }
+    // Docker retains only a finite event history; collect immediately, with our own smaller byte/row cap.
+    if (Buffer.byteLength(result.stdout) > 16 * 1024) {
+      capture.result = 'oversized';
+      return;
+    }
+    const lines = result.stdout.split(/\r?\n/).filter((line) => line !== '');
+    if (lines.length > 32) {
+      capture.result = 'oversized';
+      return;
+    }
+    capture.result = 'malformed';
+    const events = lines.map((line) => projectedEvent(line, id));
+    capture.events = events;
+    capture.result = 'complete';
+  } catch {
+    // Event collection is diagnostic only; no output/error bytes survive this boundary.
+  } finally {
+    trace.eventCaptures.push(capture);
+  }
+}
+
+function recordTraceIdentity(
+  trace: OomTrace,
+  lifecycle: UserImageLifecycle,
+  userId: string,
+  containerId: string,
+  before: Record<string, unknown>,
+): void {
+  if (/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(lifecycle.runId))
+    trace.runId = lifecycle.runId;
+  if (/^[a-z0-9]{12}$/.test(userId)) trace.userId = userId;
+  try {
+    if (
+      /^[a-f0-9]{64}$/.test(containerId) &&
+      before.Id === containerId &&
+      record(record(before.Config).Labels)['dsh-team.user'] === userId
+    )
+      trace.containerId = containerId;
+  } catch {
+    // Missing ownership metadata omits diagnostic identity; it cannot alter acceptance.
+  }
+}
+
 /** Host-owned bounded observer; B is never required to survive its own OOM. */
 export function observeResourceOom(
   lifecycle: UserImageLifecycle,
@@ -323,56 +558,78 @@ export function observeResourceOom(
   diagnostic: Diagnostic,
   setStage: (stage: OomStage) => void,
 ): ResourceOomEvidence {
-  setStage('cgroup read');
-  output(
-    lifecycle.command,
-    [
-      'exec',
-      '--user',
-      '1001',
-      containerId,
-      'python3',
-      '-c',
-      preparationScript,
-      lifecycle.runId,
-      containerId,
-    ],
-    15_000,
-  );
-  setStage('pressure preflight');
-  const before = inspect(lifecycle.command, 'container', containerId);
-  liveState(before, containerId);
-  setStage('pressure exec');
-  const pressure = lifecycle.command(
-    ['exec', '--user', '1001', containerId, 'python3', '-c', pressureScript],
-    30_000,
-  );
-  diagnostic['pressure.status'] = pressure.status;
-  diagnostic['pressure.commandError'] = pressure.error !== undefined;
-  requirePressureCompletion(pressure);
-  setStage('victim selection');
-  // Wait for daemon termination bookkeeping before inspecting an exec137 outcome.
-  if (
-    pressure.status === 137 &&
-    output(lifecycle.command, ['wait', containerId], 5_000).trim() !== '137'
-  )
-    throw new Error('OOM pressure did not terminate the exact instance');
-  const after = inspect(lifecycle.command, 'container', containerId);
-  const state = record(after.State);
-  for (const key of ['Running', 'OOMKilled', 'ExitCode']) {
-    const value = state[key];
-    if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))
-      diagnostic[`B.postPressure.${key}`] = value;
+  const trace: OomTrace = { snapshots: [], eventCaptures: [] };
+  try {
+    setStage('cgroup read');
+    output(
+      lifecycle.command,
+      [
+        'exec',
+        '--user',
+        '1001',
+        containerId,
+        'python3',
+        '-c',
+        preparationScript,
+        lifecycle.runId,
+        containerId,
+      ],
+      15_000,
+    );
+    setStage('pressure preflight');
+    const before = inspect(lifecycle.command, 'container', containerId);
+    liveState(before, containerId);
+    recordTraceIdentity(trace, lifecycle, userId, containerId, before);
+    stateSnapshot(trace, lifecycle, containerId, 'pre-pressure', before);
+    setStage('pressure exec');
+    const pressureStartedAt = Date.now();
+    trace.pressureStartedAtMs = pressureStartedAt;
+    const pressure = lifecycle.command(
+      ['exec', '--user', '1001', containerId, 'python3', '-c', pressureScript],
+      30_000,
+    );
+    diagnostic['pressure.status'] = pressure.status;
+    diagnostic['pressure.commandError'] = pressure.error !== undefined;
+    trace.pressureFinishedAtMs = Date.now();
+    requirePressureCompletion(pressure);
+    setStage('victim selection');
+    // Keep the original wait and acceptance snapshot; later snapshots are evidence only, never retries.
+    if (
+      pressure.status === 137 &&
+      output(lifecycle.command, ['wait', containerId], 5_000).trim() !== '137'
+    )
+      throw new OomValidationError(
+        'instance-wait',
+        'OOM pressure did not terminate the exact instance',
+      );
+    const after = inspect(lifecycle.command, 'container', containerId);
+    stateSnapshot(trace, lifecycle, containerId, 'post-wait', after);
+    captureOomEvents(trace, lifecycle, pressureStartedAt, 'post-pressure');
+    const state = record(after.State);
+    for (const key of ['Running', 'OOMKilled', 'ExitCode']) {
+      const value = state[key];
+      if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)))
+        diagnostic[`B.postPressure.${key}`] = value;
+    }
+    setStage('cgroup durable readback');
+    const proof = readProof(lifecycle, userId);
+    resourceOomDiagnostic(diagnostic, record(proof));
+    stateSnapshot(trace, lifecycle, containerId, 'post-proof');
+    captureOomEvents(trace, lifecycle, pressureStartedAt, 'post-proof');
+    setStage('victim selection');
+    return validateResourceOomEvidence(
+      proof,
+      { runId: lifecycle.runId, containerId },
+      before,
+      after,
+      pressure,
+    );
+  } catch (error) {
+    trace.failedValidator =
+      error instanceof OomValidationError ? error.validator : 'external-operation';
+    stateSnapshot(trace, lifecycle, containerId, 'failure');
+    throw error;
+  } finally {
+    process.stdout.write(`[DEBUG-issue38-oom] ${JSON.stringify(trace)}\n`);
   }
-  setStage('cgroup durable readback');
-  const proof = readProof(lifecycle, userId);
-  resourceOomDiagnostic(diagnostic, record(proof));
-  setStage('victim selection');
-  return validateResourceOomEvidence(
-    proof,
-    { runId: lifecycle.runId, containerId },
-    before,
-    after,
-    pressure,
-  );
 }
