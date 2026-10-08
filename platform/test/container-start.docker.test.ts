@@ -11,6 +11,7 @@ import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
+import { observeResourceOom } from './resource-oom-fixture.ts';
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -275,44 +276,6 @@ it('starts through the exported operation and recreates owned DSH with stable ho
   );
 });
 
-// Only the forked child touches the oversized mapping. Parent observes its cgroup
-// and wait status; a timeout, allocation exception or exit137 alone is not an OOM.
-const oomScript = `
-import json, mmap, os, pathlib, signal, struct
-cgroup = pathlib.Path("/sys/fs/cgroup")
-events = cgroup / "memory.events"
-if not events.is_file():
-    raise RuntimeError("Resource acceptance requires observable cgroup v2 memory.events")
-def counters():
-    return dict((key, int(value)) for key, value in
-                (line.split() for line in events.read_text().splitlines()))
-limits = {name: (cgroup / name).read_text().strip()
-          for name in ["memory.max", "memory.swap.max", "pids.max"]}
-if limits != {"memory.max": "268435456", "memory.swap.max": "0", "pids.max": "512"}:
-    raise RuntimeError("Owned allocation cgroup limits differ from inspected settings")
-before = counters()
-progress = mmap.mmap(-1, 8)
-signal.alarm(25)
-pid = os.fork()
-if pid == 0:
-    signal.alarm(20)
-    allocation = mmap.mmap(-1, 536870912)
-    for offset in range(0, 536870912, 4096):
-        allocation[offset] = 1
-        struct.pack_into("Q", progress, 0, offset + 4096)
-    os._exit(0)
-_, status = os.waitpid(pid, 0)
-signal.alarm(0)
-after = counters()
-print(json.dumps({
-    "requestedBytes": 536870912,
-    "touchedBytes": struct.unpack_from("Q", progress, 0)[0],
-    "childSignal": os.WTERMSIG(status) if os.WIFSIGNALED(status) else 0,
-    "oomKillBefore": before["oom_kill"], "oomKillAfter": after["oom_kill"],
-    "limits": limits
-}), flush=True)
-`;
-
 // Diagnostics never serialize Docker JSON, process output or errors.
 function resourceInspectDiagnostic(
   diagnostic: Record<string, number | boolean | null>,
@@ -333,43 +296,6 @@ function resourceInspectDiagnostic(
         diagnostic[`${label}.${section}.${key}`] = value;
     }
   }
-}
-
-function resourceOomDiagnostic(
-  diagnostic: Record<string, number | boolean | null>,
-  oom: Record<string, unknown>,
-) {
-  for (const key of [
-    'requestedBytes',
-    'touchedBytes',
-    'childSignal',
-    'oomKillBefore',
-    'oomKillAfter',
-  ]) {
-    const value = oom[key];
-    if (typeof value === 'number' && Number.isFinite(value)) diagnostic[`oom.${key}`] = value;
-  }
-  const limits = oom.limits;
-  if (typeof limits !== 'object' || limits === null || Array.isArray(limits)) return;
-  const cgroupLimits = record(limits);
-  for (const key of ['memory.max', 'memory.swap.max', 'pids.max']) {
-    const value = cgroupLimits[key];
-    if (
-      typeof value === 'string' &&
-      /^\d{1,16}$/.test(value) &&
-      Number.isSafeInteger(Number(value))
-    )
-      diagnostic[`cgroup.${key}`] = Number(value);
-  }
-}
-
-function resourcePressureFailureStage(stderr: string): 'cgroup read' | 'pressure exec' {
-  // Fixed script markers identify cgroup failures without exposing stderr.
-  return /Resource acceptance requires observable cgroup v2 memory\.events|Owned allocation cgroup limits differ from inspected settings|\/sys\/fs\/cgroup\/(?:memory\.(?:events|max|swap\.max)|pids\.max)/.test(
-    stderr,
-  )
-    ? 'cgroup read'
-    : 'pressure exec';
 }
 
 function reportResourceDiagnostic(
@@ -502,35 +428,15 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     stage = 'platform health before pressure';
     await health();
 
-    stage = 'pressure exec';
-    const pressure = lifecycle.command(
-      ['exec', '--user', '1001', b.containerId, 'python3', '-c', oomScript],
-      30_000,
-    );
-    diagnostic['pressure.status'] = pressure.status;
-    diagnostic['pressure.commandError'] = pressure.error !== undefined;
-    if (pressure.error !== undefined || pressure.status !== 0) {
-      stage = resourcePressureFailureStage(pressure.stderr);
-      throw new Error('Owned OOM observer failed or exceeded its deadline');
-    }
-    stage = 'cgroup readback';
-    const oom = record(JSON.parse(pressure.stdout));
-    resourceOomDiagnostic(diagnostic, oom);
-    stage = 'victim selection';
+    const oom = observeResourceOom(lifecycle, b.containerId, userB, diagnostic, (nextStage) => {
+      stage = nextStage;
+    });
     expect(oom).toMatchObject({
       requestedBytes: 536_870_912,
-      childSignal: 9,
       limits: { 'memory.max': '268435456', 'memory.swap.max': '0', 'pids.max': '512' },
     });
-    if (
-      typeof oom.touchedBytes !== 'number' ||
-      typeof oom.oomKillBefore !== 'number' ||
-      typeof oom.oomKillAfter !== 'number'
-    )
-      throw new Error('Missing physical-touch or cgroup OOM evidence');
     expect(oom.touchedBytes).toBeGreaterThan(0);
     expect(oom.touchedBytes).toBeLessThan(536_870_912);
-    expect(oom.oomKillAfter).toBeGreaterThan(oom.oomKillBefore);
 
     stage = 'sibling post-pressure inspection';
     const afterA = inspect(lifecycle, a.containerId);
