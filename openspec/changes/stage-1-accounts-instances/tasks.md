@@ -534,6 +534,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#34）：配置先观察5个语义RED，再实现显式socket字段与全部typed fixture迁移；新client经public index测试JSON/空响应/HTTP状态/安全错误、split/coalesced日志帧、UTF-8字节保留、非法/截断帧、背压和Abort/early-return释放。`pnpm check`阶段622unit/301integration通过，client行97.64%/分支92.85%，最终移除未使用类型导出后dead-code及typecheck通过；重复率2.80%。独立真实Unix HTTP smoke证明默认传输JSON、错误体非JSON仍404、中文stderr分帧在EOF前输出、取消使服务端连接关闭、缺失socket路径报错。三席审查准入提交`6b531f9a1cc3f75b9b4b26d55c748e69556d6052`在giap-vps完整`pnpm test:docker`9/9通过、exit0、91.43秒：新增version/404/missing-socket三例及原六例均通过，独立资源清点为空。未添加生命周期、重试、SDK或启动时daemon依赖。关键路径仍需人工逐行审查，按用户指令在Epic完成时统一提交；最终PR头复验与CI见PR#141。
 
+### Issue #35 risk/evidence map (task9.2 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: public pair operation, canonical names and `dsh-team.user`; public behavioral tests and real Docker readback.
+- File IO / path safety / overwrite; Auth / permissions / secrets — selected: persistent volumes cannot be adopted/deleted on conflict; safe user identity, request/response ownership validation; no credentials or mounts introduced.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: repeat/partial-success reuse without destructive rollback; failure tests, same-user repeat and two-user real acceptance. Process locks belong to task9.8.
+- Resource limits / large input / discovery — selected only for bounded two-volume operation and scoped cleanup; no global resource enumeration in production.
+- Config / project setup; Release / packaging / dependency compatibility — not selected: reuse explicit Docker client and installed daemon, no config or dependency changes.
+- Legacy compatibility / examples; Documentation / migration notes — selected: preserve nine Docker cases and existing client behavior; document result here after root checks, strict OpenSpec, full exact-head Docker run and CI.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。
