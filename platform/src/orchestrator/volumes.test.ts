@@ -49,7 +49,9 @@ function daemon() {
         const document = reply === undefined ? volume : reply.document;
         const bytes = document === undefined ? [] : [Buffer.from(JSON.stringify(document))];
         queueMicrotask(() => {
-          receive(Object.assign(Readable.from(bytes), { statusCode: reply?.status ?? 201 }));
+          const response: Readable & { statusCode?: number } = Readable.from(bytes);
+          response.statusCode = reply?.status ?? 201;
+          receive(response);
         });
         done();
       },
