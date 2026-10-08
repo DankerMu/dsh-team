@@ -1,4 +1,8 @@
+import { readFile, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
+import { expect } from 'vitest';
+import type { DatabaseHandle } from '../src/db/index.ts';
 import type { DockerTransport, StartUserContainerInput } from '../src/orchestrator/index.ts';
 
 export const START_USER = 'abcdefghijkl';
@@ -55,6 +59,7 @@ export function startupDaemon() {
   const containers = new Map<string, Container>();
   const overrides = new Map<string, Reply>();
   let compositionOutput = COMPOSITION;
+  let nextContainerId = START_CONTAINER;
   let before: ((request: StartupRequest) => void) | undefined;
   function reply(request: StartupRequest): Reply {
     requests.push(request);
@@ -68,7 +73,7 @@ export function startupDaemon() {
       const name = new URL(`http://docker${path}`).searchParams.get('name') ?? '';
       const helper = name.startsWith('dsh-team-compose-');
       const container: Container = {
-        Id: helper ? START_HELPER : START_CONTAINER,
+        Id: helper ? START_HELPER : nextContainerId,
         Name: `/${name}`,
         Image: body.Image,
         Config: body,
@@ -144,6 +149,9 @@ export function startupDaemon() {
     overrides,
     reply,
     transport,
+    setContainerId(value: string) {
+      nextContainerId = value;
+    },
     setComposition(value: string) {
       compositionOutput = value;
     },
@@ -151,4 +159,24 @@ export function startupDaemon() {
       before = callback;
     },
   };
+}
+
+export async function startupEvidence(database: DatabaseHandle, input: StartUserContainerInput) {
+  const overlay = join(input.config.managedConfigDir, `${input.userId}.patch.yml`);
+  return {
+    row: database.prepare('SELECT * FROM instances WHERE user_id = ?').get(input.userId),
+    audit: database.prepare('SELECT * FROM audit_events ORDER BY id').all(),
+    bytes: await readFile(overlay),
+    inode: (await stat(overlay)).ino,
+  };
+}
+
+export function expectDockerReads(
+  requests: readonly StartupRequest[],
+  count: number,
+  ...paths: string[]
+): void {
+  expect(requests.slice(count).map(({ method, path }) => ({ method, path }))).toEqual(
+    paths.map((path) => ({ method: 'GET', path })),
+  );
 }

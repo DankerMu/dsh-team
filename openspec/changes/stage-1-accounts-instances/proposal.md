@@ -272,3 +272,11 @@
 - Must preserve: existing startup/readiness APIs, immutable image identity, all fifteen Docker cases, disabled-account cleanup ability, backend-only credentials, safe partial failure and exact-owned test cleanup.
 - Evidence floor: public-operation real Unix Docker transport/SQLite RED/GREEN for stop→delete→atomic state/audit, stale/ownership/error paths; actual file contents survive stop/delete/recreate with same volumes, exact audit reason; root checks, strict OpenSpec, final-head Docker/CI.
 - No lifecycle serialization/capacity, gateway, idle scheduling, instance networks, deleting volumes, configuration reset or schema change. Human critical-path review remains deferred to Epic completion per user.
+
+## Issue #41 fixture
+
+- Feature; expanded task9.8 (agree with upstream): explicit per-user FIFO lifecycle ownership and idempotent repeated starts.
+- Current code has no shared orchestrator lifetime: public mutations are free functions accepting client/database per call. Cleanly replace those public exports with one factory-owned context; migrate all consumers, no global map or bypass aliases.
+- Governing invariant: within one platform/database lifetime, same-user lifecycle mutations never overlap, ten concurrent starts create once, and different users progress independently.
+- Must preserve current ownership/stale-state/secret/partial-failure safeguards, startup unconfigured outcomes, actual recreation after removed containers, and sixteen Docker baselines.
+- Evidence floor: public-operation deterministic concurrency RED/GREEN, real Unix/SQLite barriers, cancellation/rejection/queue recovery and nested readiness acquisition; actual shared-context Docker smoke, full pinned Docker/CI. No distributed locks/capacity/gateway scope; human review deferred to Epic completion.

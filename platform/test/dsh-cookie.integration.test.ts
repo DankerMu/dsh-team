@@ -7,18 +7,25 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { buildCookieFixtureApp, frame, reply } from './dsh-cookie-fixture.ts';
+import {
+  assertRunningReuse,
+  buildCookieFixtureApp,
+  cookieState,
+  frame,
+  launchFrames,
+  reply,
+} from './dsh-cookie-fixture.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import {
-  acquireDshCookie,
-  createDockerClient,
-  waitForUserContainerReady,
-} from '../src/orchestrator/index.ts';
+import { createDockerClient, createOrchestrator } from '../src/orchestrator/index.ts';
+import type { Orchestrator } from '../src/orchestrator/index.ts';
 import { START_CONTAINER, START_IMAGE, START_USER } from './container-start-fixture.ts';
 
 let root: string;
 let database: DatabaseHandle;
+let startUserContainer: Orchestrator['startUserContainer'];
+let acquireDshCookie: Orchestrator['acquireDshCookie'];
+let waitForUserContainerReady: Orchestrator['waitForUserContainerReady'];
 let app: FastifyInstance;
 let engine: Server;
 let web: Server;
@@ -60,8 +67,6 @@ function readCookie(): unknown {
 }
 function input(signal?: AbortSignal) {
   return {
-    client: createDockerClient(join(root, 'engine.sock')),
-    database,
     userId: START_USER,
     authority,
     ...(signal === undefined ? {} : { signal }),
@@ -105,6 +110,10 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'dsh-cookie-'));
   database = openDatabase(join(root, 'platform.db'));
   applyMigrations(database);
+  ({ startUserContainer, acquireDshCookie, waitForUserContainerReady } = createOrchestrator({
+    client: createDockerClient(join(root, 'engine.sock')),
+    database,
+  }));
   database
     .prepare(
       "INSERT INTO users VALUES (?, 'cookie@example.test', 'unused', 'employee', 'active', 1)",
@@ -133,12 +142,7 @@ beforeEach(async () => {
   holdStop = false;
   tailStarted = Promise.withResolvers<undefined>();
   stopStarted = Promise.withResolvers<undefined>();
-  frames = [
-    frame(1, 'ordinary boot output\ndsh web: http://127.0.0.1:3080/?to'),
-    frame(2, `dsh web: http://127.0.0.1:3080/?token=${randomBytes(32).toString('base64url')}\n`),
-    frame(1, `ken=${token.slice(0, 17)}`),
-    frame(1, `${token.slice(17)}\n`),
-  ];
+  frames = launchFrames(token);
   httpReply = (_request, response) => {
     reply(response, cookie);
   };
@@ -221,7 +225,7 @@ it('acquires the split stdout launch credential with explicit Host and persists 
   assertSafe(result.serialized);
 });
 
-it('commits running and instance.ready only after the current cookie authenticates the homepage', async () => {
+it('commits running after authenticated readiness and reuses that genuine running identity without writes', async () => {
   const observations: string[] = [];
   database.prepare("UPDATE instances SET last_error = 'previous startup failure'").run();
   httpReply = (request, response) => {
@@ -243,25 +247,10 @@ it('commits running and instance.ready only after the current cookie authenticat
   };
 
   await waitForUserContainerReady(input());
+  await assertRunningReuse(root, database, startUserContainer, authority, port, engineRequests);
 
   expect(observations).toEqual(['launch credential exchanged', 'authenticated homepage']);
   expect(readCookie() === cookie).toBe(true);
-  expect(database.prepare('SELECT status, last_error FROM instances').get()).toEqual({
-    status: 'running',
-    last_error: null,
-  });
-  expect(
-    database
-      .prepare('SELECT event_type, target, target_email, details FROM audit_events ORDER BY id')
-      .all(),
-  ).toEqual([
-    {
-      event_type: 'instance.ready',
-      target: START_USER,
-      target_email: 'cookie@example.test',
-      details: '{}',
-    },
-  ]);
   const serialized = logs + JSON.stringify(database.prepare('SELECT * FROM audit_events').all());
   for (const secret of [token, cookie, cookie.slice(cookie.indexOf('=') + 1)]) {
     expect(serialized.includes(secret)).toBe(false);
@@ -443,7 +432,7 @@ it('does not clear a replacement selected while container inspection is pending'
   assertSafe(result.serialized);
 });
 
-it.each(['logs', 'HTTP', 'pre-aborted'])(
+it.each(['logs', 'HTTP'])(
   'cancels %s acquisition, closes IO and leaves the current cookie cleared',
   async (phase) => {
     const controller = new AbortController();
@@ -456,7 +445,6 @@ it.each(['logs', 'HTTP', 'pre-aborted'])(
       httpReply = () => {
         waiting.resolve(undefined);
       };
-    if (phase === 'pre-aborted') controller.abort(new Error(token + cookie));
 
     const operation = attempt(controller.signal);
     if (phase === 'HTTP') await waiting.promise;
@@ -471,6 +459,21 @@ it.each(['logs', 'HTTP', 'pre-aborted'])(
     assertSafe(result.serialized);
   },
 );
+
+it('pre-aborted acquisition preserves the prior cookie, account, instance and audit without starting IO', async () => {
+  const before = cookieState(database);
+  const controller = new AbortController();
+  controller.abort(new Error(token + cookie));
+
+  const result = await attempt(controller.signal);
+
+  expect(result.failed).toBe(true);
+  expect(readCookie()).toBe('previous-credential');
+  expect(cookieState(database)).toEqual(before);
+  expect(engineRequests).toEqual([]);
+  expect(httpRequests).toBe(0);
+  assertSafe(result.serialized);
+});
 
 it.each(['retargeted', 'removed'])(
   'acquires for the original owned image when its configured tag is %s',

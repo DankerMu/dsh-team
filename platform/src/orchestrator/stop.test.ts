@@ -2,8 +2,8 @@ import { Writable } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
 import { applyMigrations, openDatabase } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { createDockerClient, stopUserContainer } from './index.ts';
-import type { StopUserContainerInput } from './index.ts';
+import { createDockerClient, createOrchestrator } from './index.ts';
+import type { DockerTransport, Orchestrator, StopUserContainerInput } from './index.ts';
 import {
   startupDaemon,
   START_CONTAINER,
@@ -11,15 +11,19 @@ import {
   START_USER,
 } from '../../test/container-start-fixture.ts';
 
+let stopUserContainer: Orchestrator['stopUserContainer'];
+
 // SQLite is a system boundary here; real state, transactions and audit proof live in integration.
 function fixture(account: unknown) {
   const daemon = startupDaemon();
   const database = {
     prepare: () => ({ get: () => account }),
   } as unknown as DatabaseHandle;
-  const input: StopUserContainerInput = {
+  ({ stopUserContainer } = createOrchestrator({
     database,
     client: createDockerClient('/fixture/docker.sock', daemon.transport),
+  }));
+  const input: StopUserContainerInput = {
     userId: START_USER,
     reason: 'admin',
   };
@@ -33,7 +37,7 @@ afterEach(() => {
 });
 
 /** Match readiness's in-memory SQLite unit seam; file durability stays in Unix integration. */
-function indexedFixture() {
+function indexedFixture(transport?: DockerTransport) {
   const database = openDatabase(':memory:');
   databases.push(database);
   applyMigrations(database);
@@ -59,9 +63,11 @@ function indexedFixture() {
     NetworkSettings: { Ports: {} },
   };
   daemon.containers.set(START_CONTAINER, container);
-  const input: StopUserContainerInput = {
-    client: createDockerClient('/fixture/docker.sock', daemon.transport),
+  ({ stopUserContainer } = createOrchestrator({
+    client: createDockerClient('/fixture/docker.sock', transport ?? daemon.transport),
     database,
+  }));
+  const input: StopUserContainerInput = {
     userId: START_USER,
     reason: 'admin',
   };
@@ -334,11 +340,8 @@ it('cancels after actual removal without committing stopped, then reconciles tru
 });
 
 it('bounds a silent external Docker transport without discarding retryable identity', async () => {
-  const { input, database, daemon } = indexedFixture();
-  const before = database.prepare('SELECT * FROM instances').get();
   const reached = Promise.withResolvers<undefined>();
-  const client = createDockerClient(
-    '/fixture/docker.sock',
+  const { input, database, daemon } = indexedFixture(
     () =>
       new Writable({
         final(done) {
@@ -347,9 +350,10 @@ it('bounds a silent external Docker transport without discarding retryable ident
         },
       }),
   );
+  const before = database.prepare('SELECT * FROM instances').get();
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 
-  const result = stopUserContainer({ ...input, client }).then(
+  const result = stopUserContainer(input).then(
     () => undefined,
     (error: unknown) => error,
   );

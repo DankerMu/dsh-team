@@ -3,11 +3,7 @@ import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
-import {
-  extractLaunchToken,
-  startUserContainer,
-  waitForUserContainerReady,
-} from '../src/orchestrator/index.ts';
+import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import {
   cookieHttpStatus,
@@ -151,6 +147,10 @@ async function readinessScenario(
       return result;
     },
   };
+  const { startUserContainer, waitForUserContainerReady } = createOrchestrator({
+    client,
+    database,
+  });
   try {
     applyMigrations(database);
     database
@@ -161,8 +161,6 @@ async function readinessScenario(
     let startFailed = false;
     try {
       const started = await startUserContainer({
-        client,
-        database,
         userId,
         config: {
           userImage: lifecycle.imageId,
@@ -190,7 +188,7 @@ async function readinessScenario(
     let failure: Error | undefined;
     let unexpectedFailure = false;
     try {
-      await waitForUserContainerReady({ client, database, userId, authority });
+      await waitForUserContainerReady({ userId, authority });
     } catch (error) {
       if (error instanceof Error) failure = error;
       else unexpectedFailure = true;

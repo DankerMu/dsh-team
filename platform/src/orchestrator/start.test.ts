@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DatabaseHandle } from '../db/index.ts';
-import { createDockerClient, startUserContainer } from './index.ts';
-import type { StartUserContainerInput } from './index.ts';
+import { createDockerClient, createOrchestrator } from './index.ts';
+import type { Orchestrator, StartUserContainerInput } from './index.ts';
 import {
   startupDaemon,
   START_CONTAINER,
@@ -16,6 +16,8 @@ import {
 } from '../../test/container-start-fixture.ts';
 
 const roots: string[] = [];
+let startUserContainer: Orchestrator['startUserContainer'];
+let database: DatabaseHandle;
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
@@ -28,13 +30,17 @@ async function fixture() {
   const daemon = startupDaemon();
   let account: unknown = { email: 'employee@example.test', status: 'active' };
   // SQLite is an external boundary; durable state/rollback is proved with real SQLite in integration.
-  const database = {
-    prepare: () => ({ get: () => account, all: () => [], run: () => ({ changes: 1 }) }),
+  database = {
+    prepare: (sql: string) => ({
+      get: () => (sql.includes('FROM instances') ? undefined : account),
+      all: () => [],
+      run: () => ({ changes: 1 }),
+    }),
     transaction: (action: () => void) => action,
   } as unknown as DatabaseHandle;
+  const client = createDockerClient('/fixture/docker.sock', daemon.transport);
+  ({ startUserContainer } = createOrchestrator({ client, database }));
   const input: StartUserContainerInput = {
-    client: createDockerClient('/fixture/docker.sock', daemon.transport),
-    database,
     config: {
       userImage: 'dsh-team-user:local',
       seccompProfilePath: policy,
@@ -60,7 +66,7 @@ it.each([undefined, '', '   '])(
   'returns unconfigured for actual credential %j without Docker, overlays or audit writes',
   async (modelKey) => {
     const { root, daemon, input } = await fixture();
-    const prepare = vi.spyOn(input.database, 'prepare');
+    const prepare = vi.spyOn(database, 'prepare');
 
     expect(await startUserContainer({ ...input, modelKey })).toEqual({ outcome: 'unconfigured' });
 
@@ -83,7 +89,7 @@ it.each([undefined, { email: 'employee@example.test', status: 'disabled' }])(
 
 it('rejects a malformed identity before querying an account or Docker', async () => {
   const { daemon, input } = await fixture();
-  const prepare = vi.spyOn(input.database, 'prepare');
+  const prepare = vi.spyOn(database, 'prepare');
   await expect(startUserContainer({ ...input, userId: '../foreign' })).rejects.toThrow(
     /account validation/,
   );
@@ -193,7 +199,7 @@ it.each(['not-json', 'null', '{}', '{"defaultAction":"unconfined","syscalls":[]}
 
 it('returns unconfigured before Docker, overlay or audit writes when model settings are incomplete', async () => {
   const { daemon, input } = await fixture();
-  const prepare = vi.spyOn(input.database, 'prepare');
+  const prepare = vi.spyOn(database, 'prepare');
   expect(
     await startUserContainer({ ...input, modelSettings: { ...START_MODEL, models: [] } }),
   ).toEqual({ outcome: 'unconfigured' });

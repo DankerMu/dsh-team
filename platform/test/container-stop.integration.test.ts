@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import { createDockerClient, stopUserContainer } from '../src/orchestrator/index.ts';
-import type { StopUserContainerInput } from '../src/orchestrator/index.ts';
+import { createDockerClient, createOrchestrator } from '../src/orchestrator/index.ts';
+import type { Orchestrator, StopUserContainerInput } from '../src/orchestrator/index.ts';
 import {
   startupDaemon,
   START_CONTAINER,
@@ -18,6 +18,7 @@ import {
 let root: string;
 let database: DatabaseHandle;
 let input: StopUserContainerInput;
+let stopUserContainer: Orchestrator['stopUserContainer'];
 let daemon = startupDaemon();
 let stalledPath: string | undefined;
 let onStall: (() => void) | undefined;
@@ -66,7 +67,8 @@ beforeEach(async () => {
   const socket = join(root, 'engine.sock');
   server.listen(socket);
   await once(server, 'listening');
-  input = { client: createDockerClient(socket), database, userId: START_USER, reason: 'admin' };
+  ({ stopUserContainer } = createOrchestrator({ client: createDockerClient(socket), database }));
+  input = { userId: START_USER, reason: 'admin' };
 });
 
 afterEach(async () => {
