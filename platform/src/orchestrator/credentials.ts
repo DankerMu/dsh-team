@@ -3,7 +3,7 @@ import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerEndpoint, resolvedImageId } from './start.ts';
+import { inspectUserContainerEndpoint, object, resolvedImageId } from './start.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
 
 export interface AcquireDshCookieInput {
@@ -36,7 +36,7 @@ export const CURRENT_INSTANCE = `user_id = ? AND container_id = ? AND upstream_h
   AND upstream_port IS ? AND image_tag = ? AND image_id = ? AND last_started_at IS ? AND status = 'starting'
   AND EXISTS (SELECT 1 FROM users WHERE id = instances.user_id AND status = 'active')`;
 
-function indexedEndpoint(
+export function indexedEndpoint(
   instance: Record<string, unknown>,
   allowIncomplete: boolean,
 ): Pick<IndexedInstance, 'upstream_host' | 'upstream_port' | 'last_started_at'> {
@@ -148,18 +148,14 @@ function validateCookiePayload(payload: unknown, authority: string): void {
     throw new Error();
 }
 
-function authenticationCookie(headers: string[] | undefined, authority: string): string {
+export function validateDshCookie(cookie: string, authority?: string): string {
   // Released client-connection 0.2.0-rc.2: authority SHA256 name and v1.JSON.HMAC-SHA256 value.
-  const name = `dsh-auth-${createHash('sha256').update(authority).digest('base64url')}`;
-  const cookies = headers
-    ?.map((header) => header.split(';')[0] ?? '')
-    .filter((pair) => pair.startsWith(`${name}=`));
-  if (cookies?.length !== 1) throw new Error();
-  const cookie = cookies[0];
-  if (cookie === undefined || cookie.length > MAX_COOKIE_BYTES) throw new Error();
-  const parts = cookie.slice(name.length + 1).split('.');
+  if (cookie.length > MAX_COOKIE_BYTES) throw new Error();
+  const separator = cookie.indexOf('=');
+  const parts = cookie.slice(separator + 1).split('.');
   const [version, body, signature] = parts;
   if (
+    separator < 0 ||
     parts.length !== 3 ||
     version !== 'v1' ||
     body === undefined ||
@@ -167,9 +163,25 @@ function authenticationCookie(headers: string[] | undefined, authority: string):
     canonicalBytes(signature).length !== 32
   )
     throw new Error();
-  const payload: unknown = JSON.parse(canonicalBytes(body).toString('utf8'));
-  validateCookiePayload(payload, authority);
+  const payload = object(JSON.parse(canonicalBytes(body).toString('utf8')));
+  if (typeof payload.authority !== 'string') throw new Error();
+  const audience = authority ?? payload.authority;
+  if (new URL(`http://${audience}`).host === '' || /[\s/@?#\\]/.test(audience)) throw new Error();
+  const name = `dsh-auth-${createHash('sha256').update(audience).digest('base64url')}`;
+  if (cookie.slice(0, separator) !== name) throw new Error();
+  validateCookiePayload(payload, audience);
   return cookie;
+}
+
+function authenticationCookie(headers: string[] | undefined, authority: string): string {
+  const name = `dsh-auth-${createHash('sha256').update(authority).digest('base64url')}`;
+  const cookies = headers
+    ?.map((header) => header.split(';')[0] ?? '')
+    .filter((pair) => pair.startsWith(`${name}=`));
+  if (cookies?.length !== 1) throw new Error();
+  const cookie = cookies[0];
+  if (cookie === undefined) throw new Error();
+  return validateDshCookie(cookie, authority);
 }
 
 async function exchange(

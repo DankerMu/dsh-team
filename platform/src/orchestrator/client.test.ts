@@ -237,3 +237,28 @@ it('stops buffered log delivery when cancellation follows the first coalesced fr
   expect(wire.response.destroyed).toBe(true);
   expect(wire.request.destroyed).toBe(true);
 });
+
+it('bounds only opted-in JSON consumption and closes both resources on overflow', async () => {
+  const wire = boundary(200, [Buffer.from('{"x":'), Buffer.from('"oversized"}')]);
+
+  await expect(
+    wire.client.json('GET', '/containers/json', undefined, undefined, 8),
+  ).rejects.toThrow('Docker JSON response exceeds byte limit');
+
+  expect(wire.response.destroyed).toBe(true);
+  expect(wire.request.destroyed).toBe(true);
+  expect(
+    await boundary(200, [Buffer.from('{"x":"oversized"}')]).client.json('GET', '/version'),
+  ).toEqual({
+    x: 'oversized',
+  });
+  expect(
+    await boundary(200, [Buffer.from('{}')]).client.json(
+      'GET',
+      '/containers/json',
+      undefined,
+      undefined,
+      2,
+    ),
+  ).toEqual({});
+});

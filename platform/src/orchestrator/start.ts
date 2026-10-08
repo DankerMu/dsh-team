@@ -44,7 +44,7 @@ const START_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
 const MAX_COMPOSITION_BYTES = 1024 * 1024;
 
-function object(value: unknown): Record<string, unknown> {
+export function object(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('Invalid Docker startup response');
   }
@@ -52,7 +52,7 @@ function object(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function containerId(value: unknown): string {
+export function containerId(value: unknown): string {
   const id = object(value).Id;
   if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) {
     throw new Error('Invalid Docker container identity');
@@ -284,8 +284,8 @@ function startupFailure(stage: string, error: unknown): Error {
   );
 }
 
-function currentStartup(
-  input: StartUserContainerInput,
+export function assertCurrentSnapshot(
+  input: Pick<StartUserContainerInput, 'database' | 'userId'>,
   account: Record<string, unknown>,
   instance: Record<string, unknown>,
   signal: AbortSignal,
@@ -325,7 +325,7 @@ async function reuseCurrentContainer(
     document = await client.json('GET', `/containers/${id}/json`);
   } catch (error) {
     if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
-    currentStartup(input, account, instance, signal);
+    assertCurrentSnapshot(input, account, instance, signal);
     return undefined;
   }
   if (instance.status !== 'starting' && instance.status !== 'running')
@@ -344,7 +344,7 @@ async function reuseCurrentContainer(
     !Number.isSafeInteger(instance.last_started_at)
   )
     throw new Error('Current instance endpoint mismatch');
-  currentStartup(input, account, instance, signal);
+  assertCurrentSnapshot(input, account, instance, signal);
   return {
     outcome: instance.status,
     containerId: id,

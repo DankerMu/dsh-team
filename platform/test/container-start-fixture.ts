@@ -52,7 +52,7 @@ interface Reply {
   document?: unknown;
   bytes?: Buffer;
 }
-interface Container {
+export interface Container {
   Id: string;
   Name: string;
   Image: unknown;
@@ -69,10 +69,25 @@ export function startupDaemon() {
   let compositionOutput = COMPOSITION;
   let nextContainerId = START_CONTAINER;
   let before: ((request: StartupRequest) => void) | undefined;
+  function discoveryReply(request: StartupRequest): Reply | undefined {
+    const override = overrides.get(`${request.method} ${request.path}`);
+    if (override !== undefined) return override;
+    if (request.method !== 'GET' || !request.path.startsWith('/containers/json?')) return undefined;
+    return {
+      status: 200,
+      document: [...containers.values()].map((container) => ({
+        Id: container.Id,
+        Names: [container.Name],
+        ImageID: container.Image,
+        Labels: container.Config.Labels,
+        State: container.State.Running ? 'running' : 'exited',
+      })),
+    };
+  }
   function reply(request: StartupRequest): Reply {
     requests.push(request);
     before?.(request);
-    const override = overrides.get(`${request.method} ${request.path}`);
+    const override = discoveryReply(request);
     if (override !== undefined) return override;
     const { method, path, body } = request;
     if (path.startsWith('/images/')) return { status: 200, document: { Id: START_IMAGE } };
@@ -238,9 +253,9 @@ export async function startupOwnerFixture() {
     ((method: string, path: string, signal?: AbortSignal) => Promise<undefined>) | undefined;
   const client: OrchestratorDependencies['client'] = {
     ...raw,
-    async json(method, path, body, signal) {
+    async json(method, path, body, signal, maxBytes) {
       await before?.(method, path, signal);
-      return raw.json(method, path, body, signal);
+      return raw.json(method, path, body, signal, maxBytes);
     },
   };
   const owner = createOrchestrator({ client, database });

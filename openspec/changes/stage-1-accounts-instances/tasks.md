@@ -625,6 +625,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#42）：同一owner同步准入，pending与持久starting/running按用户去重，实际清理结束后释放pending；每次准入读取最新上限，满额复用不占新名额，full/unconfigured无创建或状态/审计/覆盖层变更，模型缺失优先。真实Unix/SQLite持久上限拒绝场景观察RED后GREEN；并发最后名额、limit2独立推进、持久交接、清理阻塞/取消和新旧配置边界有确定性测试。本地完整pnpmcheck exit0，899unit/575integration，orchestrator100%覆盖、重复率2.72%、strictOpenSpec通过。三席全diff审查clean；审查头`e586eea88148c9a8206feba06a175e0bab7db164`在固定Node24.13.1/pnpm10.34.6 giap-vps完整Docker17/17、exit0、115.29秒：limit1真实ready A保持HTTP200且B返回full，停止A后B启动且ready HTTP200，清空已有/新用户规范模型输入均unconfigured且无拒绝副作用；原16基线保留，独立清点为空。最终头/CI见PR#149；人工白盒按用户要求后置Epic完成。
 
+### Issue #43 risk/evidence map (task9.10 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: explicit owner.reconcile startup operation and optional signal, #56 owns application startup await; no artificial current main.ts wiring.
+- Schema / columns / units / field names; Concurrency / shared state / ordering — selected: Docker truth with exact persisted identity fences, same owner/per-user queue, idempotent stopped transitions and healthy credential preservation; real SQLite/Unix race/error proof.
+- Auth / permissions / secrets; Error handling / rollback / partial outputs — selected: validate immutable ownership and active account, no credential regeneration/logging; non404 not absence, no false success after partial retirement/persistence failure.
+- Resource limits / large input / discovery; File IO / path safety / overwrite — selected: label-filtered bounded discovery including stopped containers, cancellation/settlement, no orphan/helper/data deletion or overlay mutation; exact-owned Docker cleanup and capacity correction.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility; Documentation / migration notes — selected: no schema/config/dependency changes, seventeen baseline Docker cases retained; root/strictOpenSpec/full final-head Docker/CI plus deferred human review.
+- Integration sequence: #43 supplies and verifies explicit reconciliation after owner reconstruction; #47 adds network recovery; #56 must construct the single application owner and await reconciliation before serving lifecycle/upstream-routing requests. This task does not claim existing main.ts startup invocation.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

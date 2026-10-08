@@ -27,7 +27,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
   const requests: { method: string; path: string }[] = [];
   const client: typeof raw = {
     logs: (path, signal) => raw.logs(path, signal),
-    async json(method, path, body, signal) {
+    async json(method, path, body, signal, maxBytes) {
       requests.push({ method, path });
       const helperCreate =
         method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
@@ -53,6 +53,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
         path,
         body,
         signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
+        maxBytes,
       );
       if (helperCreate) {
         const helper = inspect(lifecycle, helperName);
