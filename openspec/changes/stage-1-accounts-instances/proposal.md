@@ -257,3 +257,11 @@
 - Preserve startup's starting-not-ready contract, existing canonical launch matcher, owned lifecycle and all twelve Docker cases; no gateway/browser credential forwarding or readiness-state transitions.
 - Evidence floor: public-operation token/log/HTTP/error/stale-instance tests, actual HTTP/SQLite secret-safe proof, pinned real DSH same-Host200/different-Host401 using the persisted cookie; full exact-head Docker/CI and root checks.
 - Critical-path human white-box review remains deferred to Epic completion by explicit user direction.
+
+## Issue #39 fixture
+
+- Feature; expanded task9.6 (agree with upstream): authenticated readiness, bounded startup failure compensation and credential-safe retained log tail.
+- Invariant: only the exact current owned starting instance may become running after genuine authenticated HTTP200; otherwise it is stopped and recorded error with a sanitized final log tail and matching audit.
+- Preserve create/start and credential-acquisition APIs, immutable image identity, thirteen Docker baselines, volume data, secret-safe logs/audit and current-instance conditional persistence.
+- Evidence floor: public operation semantic RED/GREEN through real HTTP/SQLite, deadline/early-exit/stale-state/cleanup-failure and sanitized log-tail boundaries; pinned full Docker good/bad-overlay acceptance, root checks and exact-head CI.
+- No gateway, lifecycle locks/capacity, retries, container deletion or network changes. Critical-path human review remains deferred to Epic completion by explicit user instruction.

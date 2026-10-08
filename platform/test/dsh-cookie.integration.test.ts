@@ -6,11 +6,15 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import { acquireDshCookie, createDockerClient } from '../src/orchestrator/index.ts';
+import {
+  acquireDshCookie,
+  createDockerClient,
+  waitForUserContainerReady,
+} from '../src/orchestrator/index.ts';
 import { START_CONTAINER, START_IMAGE, START_USER } from './container-start-fixture.ts';
 
 let root: string;
@@ -35,12 +39,19 @@ let logStarted: { promise: Promise<undefined>; resolve: (value: undefined) => vo
 let holdLogs: boolean;
 let beforeInspect: (() => void) | undefined;
 let httpReply: (request: IncomingMessage, response: ServerResponse) => void;
+let tailFrames: Buffer[] | undefined;
+let stopStatus: number;
+let tailStatus: number;
+let holdTail: boolean;
+let holdStop: boolean;
+let tailStarted: { promise: Promise<undefined>; resolve: (value: undefined) => void };
+let stopStarted: { promise: Promise<undefined>; resolve: (value: undefined) => void };
 const authority = 'team.example:8443';
 // Independent openssl SHA256/base64url of this literal authority, per released protocol.
 const cookieName = 'dsh-auth-3eo-BcKCoQv18vgqA6jsyDZEVweseAZ0c-hb0sOZg64';
 
-function frame(stream: 1 | 2, text: string): Buffer {
-  const data = Buffer.from(text);
+function frame(stream: 1 | 2, text: string | Buffer): Buffer {
+  const data = typeof text === 'string' ? Buffer.from(text) : text;
   const header = Buffer.alloc(8);
   header[0] = stream;
   header.writeUInt32BE(data.length, 4);
@@ -65,9 +76,10 @@ function input(signal?: AbortSignal) {
 }
 async function attempt(
   signal?: AbortSignal,
+  operation = acquireDshCookie,
 ): Promise<{ failed: boolean; serialized: string; result?: unknown }> {
   try {
-    return await acquireDshCookie(input(signal)).then((result: unknown) => {
+    return await operation(input(signal)).then((result: unknown) => {
       app.log.info({ result }, 'Acquisition returned');
       return { failed: false, serialized: JSON.stringify({ result }), result };
     });
@@ -78,12 +90,13 @@ async function attempt(
     return { failed: true, serialized };
   }
 }
-function assertSafe(serialized: string) {
+function assertSafe(serialized: string, emptyAudit = true) {
   const audit = JSON.stringify(database.prepare('SELECT * FROM audit_events').all());
+  const errors = JSON.stringify(database.prepare('SELECT last_error FROM instances').all());
   for (const secret of [token, cookie, cookie.slice(cookie.indexOf('=') + 1)]) {
-    expect((logs + serialized + audit).includes(secret)).toBe(false);
+    expect((logs + serialized + audit + errors).includes(secret)).toBe(false);
   }
-  expect(audit).toBe('[]');
+  if (emptyAudit) expect(audit).toBe('[]');
 }
 function reply(response: ServerResponse) {
   response
@@ -92,6 +105,15 @@ function reply(response: ServerResponse) {
       location: './',
     })
     .end();
+}
+
+function replyWithDockerLogs(response: ServerResponse, tail: boolean): void {
+  logClosed = once(response, 'close').then(() => undefined);
+  logStarted.resolve(undefined);
+  if (tail) tailStarted.resolve(undefined);
+  response.writeHead(tail ? tailStatus : 200);
+  for (const bytes of tail ? (tailFrames ?? frames) : frames) response.write(bytes);
+  if ((tail && !holdTail) || (!tail && !holdLogs)) response.end();
 }
 
 beforeEach(async () => {
@@ -119,6 +141,13 @@ beforeEach(async () => {
   httpClosed = undefined;
   logStarted = Promise.withResolvers<undefined>();
   beforeInspect = undefined;
+  tailFrames = undefined;
+  stopStatus = 204;
+  tailStatus = 200;
+  holdTail = false;
+  holdStop = false;
+  tailStarted = Promise.withResolvers<undefined>();
+  stopStarted = Promise.withResolvers<undefined>();
   frames = [
     frame(1, 'ordinary boot output\ndsh web: http://127.0.0.1:3080/?to'),
     frame(2, `dsh web: http://127.0.0.1:3080/?token=${randomBytes(32).toString('base64url')}\n`),
@@ -161,11 +190,13 @@ beforeEach(async () => {
     } else if (request.url?.endsWith('/json')) {
       beforeInspect?.();
       response.end(JSON.stringify(inspection));
+    } else if (request.url?.includes('/stop?')) {
+      stopStarted.resolve(undefined);
+      if (holdStop) return;
+      if (stopStatus === 204) inspection.State = { Running: false };
+      response.writeHead(stopStatus).end();
     } else {
-      logClosed = once(response, 'close').then(() => undefined);
-      logStarted.resolve(undefined);
-      for (const bytes of frames) response.write(bytes);
-      if (!holdLogs) response.end();
+      replyWithDockerLogs(response, request.url?.includes('follow=false') === true);
     }
   });
   engine.listen(join(root, 'engine.sock'));
@@ -195,6 +226,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.useRealTimers();
   for (const server of [engine, web]) {
     server.closeAllConnections();
     const closed = once(server, 'close');
@@ -221,6 +253,53 @@ it('acquires the split stdout launch credential with explicit Host and persists 
   expect(readCookie() === cookie).toBe(true);
   expect(database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'starting' });
   assertSafe(result.serialized);
+});
+
+it('commits running and instance.ready only after the current cookie authenticates the homepage', async () => {
+  const observations: string[] = [];
+  database.prepare("UPDATE instances SET last_error = 'previous startup failure'").run();
+  httpReply = (request, response) => {
+    if (request.url === `/?token=${token}`) {
+      observations.push('launch credential exchanged');
+      reply(response);
+      return;
+    }
+    const authenticated =
+      request.url === '/' &&
+      request.headers.host === authority &&
+      request.headers.cookie === cookie;
+    observations.push(authenticated ? 'authenticated homepage' : 'unauthenticated homepage');
+    expect(database.prepare('SELECT status FROM instances').get()).toEqual({
+      status: 'starting',
+    });
+    expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([]);
+    response.writeHead(authenticated ? 200 : 401).end();
+  };
+
+  await waitForUserContainerReady(input());
+
+  expect(observations).toEqual(['launch credential exchanged', 'authenticated homepage']);
+  expect(readCookie() === cookie).toBe(true);
+  expect(database.prepare('SELECT status, last_error FROM instances').get()).toEqual({
+    status: 'running',
+    last_error: null,
+  });
+  expect(
+    database
+      .prepare('SELECT event_type, target, target_email, details FROM audit_events ORDER BY id')
+      .all(),
+  ).toEqual([
+    {
+      event_type: 'instance.ready',
+      target: START_USER,
+      target_email: 'cookie@example.test',
+      details: '{}',
+    },
+  ]);
+  const serialized = logs + JSON.stringify(database.prepare('SELECT * FROM audit_events').all());
+  for (const secret of [token, cookie, cookie.slice(cookie.indexOf('=') + 1)]) {
+    expect(serialized.includes(secret)).toBe(false);
+  }
 });
 
 it.each(['stderr', 'arbitrary', 'partial', 'truncated-frame', 'large-line', 'wrong-authority'])(
@@ -454,4 +533,335 @@ it('rejects historical instances without immutable image identity before clearin
   expect(engineRequests).toEqual([]);
   expect(httpRequests).toBe(0);
   assertSafe(result.serialized);
+});
+
+function ready(signal?: AbortSignal) {
+  return attempt(signal, waitForUserContainerReady);
+}
+
+function homepage(status = 200) {
+  httpReply = (request, response) => {
+    if (request.url === `/?token=${token}`) reply(response);
+    else {
+      expect(request.url).toBe('/');
+      expect(request.headers.cookie === cookie).toBe(true);
+      expect(request.headers.host).toBe(authority);
+      response.writeHead(status).end();
+    }
+  };
+}
+
+it('polls transient homepage failures and never records readiness twice', async () => {
+  let pages = 0;
+  httpReply = (request, response) => {
+    if (request.url === `/?token=${token}`) reply(response);
+    else {
+      expect(request.headers.cookie === cookie).toBe(true);
+      pages += 1;
+      response.writeHead(pages === 1 ? 503 : 200).end();
+    }
+  };
+
+  const first = await ready();
+  const repeated = await ready();
+
+  expect(first.failed).toBe(false);
+  expect(repeated.failed).toBe(true);
+  expect(pages).toBe(2);
+  expect(database.prepare('SELECT status, last_error FROM instances').get()).toEqual({
+    status: 'running',
+    last_error: null,
+  });
+  expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([
+    { event_type: 'instance.ready' },
+  ]);
+  assertSafe(first.serialized + repeated.serialized, false);
+});
+
+it('shares one exact 60-second deadline with a pending announcement and closes it before cleanup', async () => {
+  frames = [frame(1, 'boot is waiting\n')];
+  holdLogs = true;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  let settled = false;
+  const pending = ready().then((result) => {
+    settled = true;
+    return result;
+  });
+  await logStarted.promise;
+
+  await vi.advanceTimersByTimeAsync(59_999);
+  expect(settled).toBe(false);
+  await vi.advanceTimersByTimeAsync(1);
+  const result = await pending;
+
+  expect(result.failed).toBe(true);
+  expect(result.serialized).toContain('deadline or cancellation');
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'error',
+    dsh_cookie: null,
+  });
+  expect(engineRequests.filter((path) => path.includes('/stop?'))).toHaveLength(1);
+  expect(engineRequests.some((path) => path.includes('follow=false&tail=1000'))).toBe(true);
+  assertSafe(result.serialized, false);
+});
+
+it.each(['indexed', 'no-endpoint', 'during-announcement'])(
+  'fails promptly for an owned early-dead instance: %s',
+  async (phase) => {
+    if (phase === 'during-announcement') {
+      holdLogs = true;
+      frames = [frame(1, 'waiting for startup\n')];
+    } else inspection.State = { Running: false };
+    if (phase === 'no-endpoint') {
+      database
+        .prepare(
+          'UPDATE instances SET upstream_host = NULL, upstream_port = NULL, last_started_at = NULL',
+        )
+        .run();
+      inspection.NetworkSettings = { Ports: {} };
+    }
+    const pending = ready();
+    if (phase === 'during-announcement') {
+      await logStarted.promise;
+      inspection.State = { Running: false };
+    }
+
+    const result = await pending;
+
+    expect(result.failed).toBe(true);
+    expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+      status: 'error',
+      dsh_cookie: null,
+    });
+    expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([
+      { event_type: 'instance.start-failed' },
+    ]);
+    expect(engineRequests.some((path) => path.includes('/stop?'))).toBe(false);
+    assertSafe(result.serialized, false);
+  },
+);
+
+it.each(['announcement', 'homepage'])(
+  'cancels a pending %s using independent cleanup without exposing abort reasons',
+  async (phase) => {
+    const controller = new AbortController();
+    const started = Promise.withResolvers<undefined>();
+    if (phase === 'announcement') {
+      holdLogs = true;
+      frames = [frame(1, 'startup is waiting\n')];
+    } else {
+      httpReply = (request, response) => {
+        if (request.url === `/?token=${token}`) reply(response);
+        else started.resolve(undefined);
+      };
+    }
+    const pending = ready(controller.signal);
+    await (phase === 'announcement' ? logStarted.promise : started.promise);
+
+    controller.abort(new Error(`${token} ${cookie}`));
+    const result = await pending;
+
+    expect(result.failed).toBe(true);
+    expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+      status: 'error',
+      dsh_cookie: null,
+    });
+    expect(inspection.State).toEqual({ Running: false });
+    expect(engineRequests.filter((path) => path.includes('/stop?'))).toHaveLength(1);
+    assertSafe(result.serialized, false);
+  },
+);
+
+it('surfaces daemon stop failure and never claims the still-running instance stopped', async () => {
+  frames = [frame(1, 'harmless startup failure\n')];
+  stopStatus = 500;
+
+  const result = await ready();
+
+  expect(result.failed).toBe(true);
+  expect(result.serialized).toContain('stop failed or unconfirmed');
+  expect(inspection.State).toEqual({ Running: true });
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'error',
+    dsh_cookie: null,
+  });
+  expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([
+    { event_type: 'instance.start-failed' },
+  ]);
+  assertSafe(result.serialized, false);
+});
+
+it.each(['ready-audit', 'ready-update', 'failure-audit', 'failure-update'])(
+  'rolls back atomic state and audit changes on %s failure',
+  async (kind) => {
+    const failure = kind.startsWith('failure');
+    if (failure) frames = [frame(1, 'ordinary failure\n')];
+    else homepage();
+    const table = kind.endsWith('audit') ? 'audit_events' : 'instances';
+    const operation = kind.endsWith('audit') ? 'INSERT' : 'UPDATE';
+    const predicate = kind.endsWith('audit')
+      ? `NEW.event_type = 'instance.${failure ? 'start-failed' : 'ready'}'`
+      : `NEW.status = '${failure ? 'error' : 'running'}'`;
+    database.exec(`CREATE TRIGGER reject_change BEFORE ${operation} ON ${table}
+      WHEN ${predicate} BEGIN SELECT RAISE(ABORT, 'external persistence failure'); END`);
+
+    const result = await ready();
+
+    expect(result.failed).toBe(true);
+    expect(database.prepare('SELECT status FROM instances').get()).toEqual({
+      status: failure ? 'starting' : 'error',
+    });
+    expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual(
+      failure ? [] : [{ event_type: 'instance.start-failed' }],
+    );
+    expect(inspection.State).toEqual({ Running: false });
+    assertSafe(result.serialized, false);
+  },
+);
+
+it.each(['container', 'image', 'start', 'endpoint', 'account', 'cookie'])(
+  'does not mark ready, stop, or overwrite a %s changed while HTTP200 is pending',
+  async (field) => {
+    httpReply = (request, response) => {
+      if (request.url === `/?token=${token}`) reply(response);
+      else {
+        if (field === 'account') database.prepare("UPDATE users SET status = 'disabled'").run();
+        else if (field === 'cookie')
+          database.prepare('UPDATE instances SET dsh_cookie = ?').run('newer-credential');
+        else if (field === 'container')
+          database.prepare('UPDATE instances SET container_id = ?').run('d'.repeat(64));
+        else if (field === 'image')
+          database.prepare('UPDATE instances SET image_id = ?').run(`sha256:${'e'.repeat(64)}`);
+        else if (field === 'start')
+          database.prepare('UPDATE instances SET last_started_at = 2').run();
+        else database.prepare('UPDATE instances SET upstream_port = 12345').run();
+        response.writeHead(200).end();
+      }
+    };
+
+    const result = await ready();
+
+    expect(result.failed).toBe(true);
+    expect(database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'starting' });
+    expect(readCookie() === (field === 'cookie' ? 'newer-credential' : cookie)).toBe(true);
+    expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([]);
+    expect(engineRequests.some((path) => path.includes('/stop?'))).toBe(false);
+    assertSafe(result.serialized);
+  },
+);
+
+it('retains the final fifty harmless lines without leaking fragmented credentials or truncated suffixes', async () => {
+  inspection.State = { Running: false };
+  database.prepare('UPDATE instances SET dsh_cookie = ?').run(cookie);
+  const utf8 = Buffer.from('中文 startup 邻行\r\n');
+  tailFrames = [
+    frame(1, Array.from({ length: 55 }, (_, index) => `boot ${String(index + 1)}\r\n`).join('')),
+    frame(1, `dsh web: http://127.0.0.1:3080/?to`),
+    frame(2, `Cookie: ${cookie}\n`),
+    frame(1, `ken=${token.slice(0, 13)}`),
+    frame(1, `${token.slice(13)}\r\n`),
+    frame(1, `${'x'.repeat(2048)}${token}\n`),
+    frame(1, utf8.subarray(0, 2)),
+    frame(1, utf8.subarray(2, utf8.length - 1)),
+    frame(1, utf8.subarray(utf8.length - 1)),
+    frame(2, `dsh web: http://bad.invalid/?token=${token}`),
+  ];
+
+  const result = await ready();
+  const row: unknown = database.prepare('SELECT last_error FROM instances').get();
+
+  expect(result.failed).toBe(true);
+  if (
+    typeof row !== 'object' ||
+    row === null ||
+    !('last_error' in row) ||
+    typeof row.last_error !== 'string'
+  )
+    throw new Error('Missing retained startup diagnostic');
+  expect(row.last_error.split('\n').slice(1)).toEqual([
+    ...Array.from({ length: 49 }, (_, index) => `boot ${String(index + 7)}`),
+    '中文 startup 邻行',
+  ]);
+  assertSafe(result.serialized, false);
+});
+
+it('records an explicit safe diagnostic rather than invented logs when Docker logs are unreadable', async () => {
+  inspection.State = { Running: false };
+  tailStatus = 500;
+
+  const result = await ready();
+
+  expect(result.failed).toBe(true);
+  expect(JSON.stringify(database.prepare('SELECT last_error FROM instances').get())).toContain(
+    'Startup logs unavailable',
+  );
+  assertSafe(result.serialized, false);
+});
+
+it('rejects a credential replaced immediately by acquisition persistence instead of adopting it', async () => {
+  database.exec(`CREATE TRIGGER replace_acquired_cookie AFTER UPDATE OF dsh_cookie ON instances
+    WHEN NEW.dsh_cookie IS NOT NULL AND NEW.dsh_cookie != 'replacement-credential'
+    BEGIN UPDATE instances SET dsh_cookie = 'replacement-credential' WHERE user_id = NEW.user_id; END`);
+  let homepageRequests = 0;
+  httpReply = (request, response) => {
+    if (request.url === `/?token=${token}`) reply(response);
+    else {
+      homepageRequests += 1;
+      response.writeHead(request.headers.cookie === 'replacement-credential' ? 200 : 401).end();
+    }
+  };
+
+  const result = await ready();
+
+  expect(result.failed).toBe(true);
+  expect(homepageRequests).toBe(0);
+  expect(readCookie() === 'replacement-credential').toBe(true);
+  expect(database.prepare('SELECT status, last_error FROM instances').get()).toEqual({
+    status: 'starting',
+    last_error: null,
+  });
+  expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([]);
+  expect(engineRequests.some((path) => path.includes('/stop?'))).toBe(false);
+  assertSafe(result.serialized);
+});
+
+it('bounds an unreadable pending log tail independently and records the stopped instance failure', async () => {
+  inspection.State = { Running: false };
+  holdTail = true;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const pending = ready();
+  await tailStarted.promise;
+
+  await vi.advanceTimersByTimeAsync(3_000);
+  const result = await pending;
+
+  expect(result.failed).toBe(true);
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'error',
+    dsh_cookie: null,
+  });
+  expect(JSON.stringify(database.prepare('SELECT last_error FROM instances').get())).toContain(
+    'Startup logs unavailable: incomplete or unreadable Docker tail',
+  );
+  assertSafe(result.serialized, false);
+});
+
+it('bounds an unresponsive stop and retains an observable unconfirmed-stop failure', async () => {
+  frames = [frame(1, 'ordinary failed startup\n')];
+  holdStop = true;
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+  const pending = ready();
+  await stopStarted.promise;
+
+  await vi.advanceTimersByTimeAsync(10_000);
+  const result = await pending;
+
+  expect(result.failed).toBe(true);
+  expect(result.serialized).toContain('container stop failed or unconfirmed');
+  expect(inspection.State).toEqual({ Running: true });
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'error',
+    dsh_cookie: null,
+  });
+  assertSafe(result.serialized, false);
 });

@@ -5,3 +5,4 @@ export { startUserContainer } from './start.ts';
 export type { StartUserContainerInput } from './start.ts';
 export { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
 export { acquireDshCookie } from './credentials.ts';
+export { waitForUserContainerReady } from './readiness.ts';

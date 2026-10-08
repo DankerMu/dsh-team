@@ -580,6 +580,15 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 验证记录（#38）：导出acquireDshCookie重组stdout完整启动行，通过node:http显式Host交换并条件持久化当前实例cookie，不返回凭据、不标记就绪；单一解析器迁入orchestrator、消费者全部迁移。splitstdout语义RED1fail后GREEN；审查发现可变tag重新解析导致旧实例失效，修复前retag/removal/创建身份/迁移RED4fail88pass，改为迁移2新增nullableimage_id、启动原子保存immutableID、交换不再查询tag；历史未知身份拒绝且不清旧cookie。最终本地pnpmcheck exit0，755unit/430integration、strictOpenSpec通过。审查头`19184a9a9767ed9dd28c9cc590fbab3aab15ed73`在固定Node24.13.1/pnpm10.34.6 giap-vps实际完整Docker13/13、exit0、126.93秒：生产启动/交换后的数据库cookie同Host200、异Host401，真实日志/审计secretSafe，受管可变tag换指向和移除后均成功，外来镜像拒绝；状态仍starting，12基线保留，独立资源清点为空。完整修复审查clean；最终头/CI见PR#145。人工白盒依用户指令后置Epic完成，未豁免。
 
+### Issue #39 risk/evidence map (task9.6 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: exported readiness, starting→running/error and existing last_error/cookie/audit fields; real HTTP/SQLite state/audit proof, no migration.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: authenticated200, current instance/account/immutable image, conditional transitions, safe retained logs; stale/cross-instance and credential-fragment regressions.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: one60s deadline, bounded log/request/stop lifetime and memory, early-exit/cancellation/stop/DB failure; finite cleanup preserves errors without raw secrets.
+- File IO / path safety / overwrite — not selected for production: no file write/delete; controlled bad-overlay injection and existing owned cleanup only in Docker acceptance.
+- Config / project setup; Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: existing authority/client/endpoint/parser policy, no knobs/dependencies; preserve13Docker baselines and starting-only/credential APIs.
+- Documentation / migration notes — selected: readiness/failure transition and bounded diagnostic contract; root checks, strictOpenSpec, exact-head actual good/bad-overlay Docker and CI.
+
 ## 10. 实例网络（任务包 1.10）
 
 依赖：第 9 组。

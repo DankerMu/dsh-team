@@ -198,6 +198,19 @@ async function composition(
   return result;
 }
 
+export function inspectUserContainerState(
+  document: unknown,
+  id: string,
+  name: string,
+  userId: string,
+  imageId: string,
+): boolean {
+  const row = ownedContainer(document, name, userId, imageId);
+  const running = object(row.State).Running;
+  if (row.Id !== id || typeof running !== 'boolean')
+    throw new Error('Container identity or state mismatch');
+  return running;
+}
 export function inspectUserContainerEndpoint(
   document: unknown,
   id: string,
