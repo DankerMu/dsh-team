@@ -5,6 +5,7 @@ import { inspect } from 'node:util';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
+import { observeWebEndpoint } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 
 const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN';
@@ -279,6 +280,83 @@ it('waits for the genuine launch announcement before judging a homepage that ini
   expect(time).toBeLessThan(60_000);
   expect(earlyHttpStatuses).toEqual([]);
   expect(remainingResources(daemon)).toEqual(sentinels);
+});
+
+function endpointObserver(announcementAt: number, statusAfterAnnouncement = 401) {
+  let time = 0;
+  const statuses: number[] = [];
+  const command: DockerCommand = (args) => {
+    if (args.join(' ') !== 'logs --tail 50 already-started-dsh')
+      throw new Error('Observer must not create or start another container');
+    return {
+      status: 0,
+      stdout:
+        time >= announcementAt ? `dsh web: http://127.0.0.1:3080/?token=${privateToken}\n` : '',
+      stderr: '',
+    };
+  };
+  const boundary: WebStartupBoundary = {
+    now: () => time,
+    pause: (milliseconds) => {
+      time += milliseconds;
+      return Promise.resolve();
+    },
+    httpStatus: () => {
+      const status = time < announcementAt ? 404 : statusAfterAnnouncement;
+      statuses.push(status);
+      return Promise.resolve(status);
+    },
+  };
+  return { command, boundary, statuses, elapsed: () => time };
+}
+
+it('observes an already-started DSH only after its launch announcement, ignoring the pre-announcement HTTP404 window', async () => {
+  const fixture = endpointObserver(500);
+
+  const port = await observeWebEndpoint(
+    fixture.command,
+    'already-started-dsh',
+    () => 43127,
+    'dsh-team.test:3080',
+    fixture.boundary,
+  );
+
+  expect(port).toBe(43127);
+  expect(fixture.statuses).toEqual([401]);
+  expect(fixture.elapsed()).toBe(500);
+});
+
+it('rejects HTTP200 from an already-started DSH after its genuine launch announcement', async () => {
+  const fixture = endpointObserver(0, 200);
+
+  await expect(
+    observeWebEndpoint(
+      fixture.command,
+      'already-started-dsh',
+      () => 43127,
+      'dsh-team.test:3080',
+      fixture.boundary,
+    ),
+  ).rejects.toThrow('Unauthenticated DSH homepage must return 401');
+
+  expect(fixture.statuses).toEqual([200]);
+});
+
+it('bounds observation of an already-started DSH that never announces readiness without probing its HTTP routes', async () => {
+  const fixture = endpointObserver(Number.POSITIVE_INFINITY);
+
+  const error: unknown = await observeWebEndpoint(
+    fixture.command,
+    'already-started-dsh',
+    () => 43127,
+    'dsh-team.test:3080',
+    fixture.boundary,
+  ).catch((failure: unknown) => failure);
+
+  expect(String(error)).toContain('Web startup deadline exceeded (60s)');
+  expect(String(error)).not.toContain(privateToken);
+  expect(fixture.statuses).toEqual([]);
+  expect(fixture.elapsed()).toBe(60_000);
 });
 
 it.each([

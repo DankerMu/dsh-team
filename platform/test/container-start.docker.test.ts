@@ -1,8 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
-import { performance } from 'node:perf_hooks';
-import { setTimeout } from 'node:timers/promises';
 import type { FastifyInstance } from 'fastify';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
@@ -12,7 +10,7 @@ import { createDockerClient, startUserContainer } from '../src/orchestrator/inde
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
-import { httpStatus } from './web-startup-fixture.ts';
+import { observeWebEndpoint } from './web-startup-fixture.ts';
 
 function record(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -277,21 +275,6 @@ it('starts through the exported operation and recreates owned DSH with stable ho
   );
 });
 
-async function usableEndpoint(port: number, authority: string): Promise<void> {
-  const deadline = performance.now() + 60_000;
-  while (performance.now() < deadline) {
-    const remaining = Math.max(1, Math.floor(deadline - performance.now()));
-    const status = await httpStatus(port, authority, Math.min(2_000, remaining));
-    if (status === 401) return;
-    if (status !== null) throw new Error('Actual DSH endpoint did not answer 401');
-    const left = deadline - performance.now();
-    if (left <= 0) break;
-    // Real released DSH boots in Docker; fake time cannot drive its HTTP readiness.
-    await setTimeout(Math.min(250, left));
-  }
-  throw new Error('Actual DSH endpoint unavailable within 60s');
-}
-
 // Only the forked child touches the oversized mapping. Parent observes its cgroup
 // and wait status; a timeout, allocation exception or exit137 alone is not an OOM.
 const oomScript = `
@@ -400,7 +383,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     expect(firstA.Image).toBe(lifecycle.imageId);
     expect(record(firstA.Config).Labels).toMatchObject({ 'dsh-team.user': userA });
     expect(firstA.HostConfig).toMatchObject(limitsA);
-    await usableEndpoint(a.upstreamPort, authority);
+    await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
     await health();
 
     writeSettings(db, { cpuCores: 1.25, memoryMiB: 256 });
@@ -424,8 +407,8 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       OomKillDisable: false,
     });
     expect(inspect(lifecycle, a.containerId).HostConfig).toMatchObject(limitsA);
-    await usableEndpoint(b.upstreamPort, authority);
-    await usableEndpoint(a.upstreamPort, authority);
+    await observeWebEndpoint(lifecycle.command, b.containerId, () => b.upstreamPort, authority);
+    await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
     await health();
 
     const pressure = lifecycle.command(
@@ -454,7 +437,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     expect(afterA.Id).toBe(firstA.Id);
     expect(afterA.HostConfig).toEqual(firstA.HostConfig);
     expect(record(afterA.State).Running).toBe(true);
-    await usableEndpoint(a.upstreamPort, authority);
+    await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
     await health();
     expect(
       db.prepare('SELECT user_id, container_id FROM instances ORDER BY user_id').all(),
