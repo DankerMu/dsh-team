@@ -27,6 +27,7 @@ let logs: string;
 let frames: Buffer[];
 let inspection: Record<string, unknown>;
 let engineRequests: string[];
+let imageReply: { status: number; document?: unknown };
 let httpRequests: number;
 let logClosed: Promise<void> | undefined;
 let httpClosed: Promise<void> | undefined;
@@ -111,6 +112,7 @@ beforeEach(async () => {
   tokenObserved = false;
   logs = '';
   httpRequests = 0;
+  imageReply = { status: 200, document: { Id: START_IMAGE } };
   engineRequests = [];
   holdLogs = false;
   logClosed = undefined;
@@ -140,10 +142,10 @@ beforeEach(async () => {
   port = address.port;
   database
     .prepare(
-      `INSERT INTO instances (user_id, status, container_id, upstream_host, upstream_port, image_tag, last_started_at, dsh_cookie)
-    VALUES (?, 'starting', ?, '127.0.0.1', ?, 'dsh-team-user:local', 1, 'previous-credential')`,
+      `INSERT INTO instances (user_id, status, container_id, upstream_host, upstream_port, image_tag, image_id, last_started_at, dsh_cookie)
+    VALUES (?, 'starting', ?, '127.0.0.1', ?, 'dsh-team-user:local', ?, 1, 'previous-credential')`,
     )
-    .run(START_USER, START_CONTAINER, port);
+    .run(START_USER, START_CONTAINER, port, START_IMAGE);
   inspection = {
     Id: START_CONTAINER,
     Name: `/dsh-team-u-${START_USER}`,
@@ -154,8 +156,9 @@ beforeEach(async () => {
   };
   engine = createServer((request, response) => {
     engineRequests.push(request.url ?? '');
-    if (request.url?.startsWith('/images/')) response.end(JSON.stringify({ Id: START_IMAGE }));
-    else if (request.url?.endsWith('/json')) {
+    if (request.url?.startsWith('/images/')) {
+      response.writeHead(imageReply.status).end(JSON.stringify(imageReply.document));
+    } else if (request.url?.endsWith('/json')) {
       beforeInspect?.();
       response.end(JSON.stringify(inspection));
     } else {
@@ -351,6 +354,7 @@ it.each([
   'host',
   'port',
   'image',
+  'immutable-image',
   'state',
   'restart',
   'account',
@@ -362,6 +366,7 @@ it.each([
       host: "upstream_host = 'remote.invalid'",
       port: 'upstream_port = 12345',
       image: "image_tag = 'replacement-image'",
+      'immutable-image': `image_id = 'sha256:${'d'.repeat(64)}'`,
       state: "status = 'stopped'",
       restart: 'last_started_at = 2',
       'replacement-cookie': "dsh_cookie = 'replacement-credential'",
@@ -421,3 +426,32 @@ it.each(['logs', 'HTTP', 'pre-aborted'])(
     assertSafe(result.serialized);
   },
 );
+
+it.each(['retargeted', 'removed'])(
+  'acquires for the original owned image when its configured tag is %s',
+  async (change) => {
+    imageReply =
+      change === 'retargeted'
+        ? { status: 200, document: { Id: `sha256:${'d'.repeat(64)}` } }
+        : { status: 404 };
+
+    const result = await attempt();
+
+    expect(result.failed).toBe(false);
+    expect(readCookie() === cookie).toBe(true);
+    expect(engineRequests.some((path) => path.startsWith('/images/'))).toBe(false);
+    assertSafe(result.serialized);
+  },
+);
+
+it('rejects historical instances without immutable image identity before clearing an existing credential', async () => {
+  database.prepare('UPDATE instances SET image_id = NULL').run();
+
+  const result = await attempt();
+
+  expect(result.failed).toBe(true);
+  expect(readCookie()).toBe('previous-credential');
+  expect(engineRequests).toEqual([]);
+  expect(httpRequests).toBe(0);
+  assertSafe(result.serialized);
+});

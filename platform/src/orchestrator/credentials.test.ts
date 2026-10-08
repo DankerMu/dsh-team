@@ -71,6 +71,7 @@ beforeEach(() => {
     upstream_host: '127.0.0.1',
     upstream_port: 49173,
     image_tag: 'dsh-team-user:local',
+    image_id: START_IMAGE,
     last_started_at: 1,
   };
   credential = 'previous';
@@ -181,16 +182,23 @@ it.each([
   expect(daemon.requests).toEqual([]);
 });
 
-it.each([null, { Id: 'invalid' }, { Id: 42 }])(
-  'rejects unresolved Docker image identity',
-  async (image) => {
+it.each([undefined, null, 'mutable-tag', 42])(
+  'rejects absent or malformed recorded immutable image identity before clearing credentials',
+  async (imageId) => {
     const { input, daemon } = fixture();
-    daemon.overrides.set('GET /images/dsh-team-user%3Alocal/json', {
-      status: 200,
-      document: image,
-    });
-    await expect(acquireDshCookie(input)).rejects.toThrow('owned container');
-    expect(credential).toBeNull();
+    row = {
+      container_id: START_CONTAINER,
+      upstream_host: '127.0.0.1',
+      upstream_port: 49173,
+      image_tag: 'dsh-team-user:local',
+      image_id: imageId,
+      last_started_at: 1,
+    };
+
+    await expect(acquireDshCookie(input)).rejects.toThrow('current instance');
+
+    expect(credential).toBe('previous');
+    expect(daemon.requests).toEqual([]);
     expect(http.requests).toBe(0);
   },
 );
@@ -307,6 +315,7 @@ it.each([
     upstream_host: '127.0.0.1',
     upstream_port: 49173,
     image_tag: 'dsh-team-user:local',
+    image_id: START_IMAGE,
     last_started_at: 1,
     ...fields,
   };

@@ -3,7 +3,7 @@ import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerEndpoint } from './start.ts';
+import { inspectUserContainerEndpoint, resolvedImageId } from './start.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
 
 export interface AcquireDshCookieInput {
@@ -18,6 +18,7 @@ interface Instance {
   upstream_host: string;
   upstream_port: number;
   image_tag: string;
+  image_id: string;
   last_started_at: number;
 }
 
@@ -27,7 +28,7 @@ const MAX_LINE_BYTES = 16 * 1024;
 const MAX_HEADER_BYTES = 8 * 1024;
 const MAX_COOKIE_BYTES = 4 * 1024;
 const CURRENT_INSTANCE = `user_id = ? AND container_id = ? AND upstream_host = ?
-  AND upstream_port = ? AND image_tag = ? AND last_started_at = ? AND status = 'starting'
+  AND upstream_port = ? AND image_tag = ? AND image_id = ? AND last_started_at = ? AND status = 'starting'
   AND EXISTS (SELECT 1 FROM users WHERE id = instances.user_id AND status = 'active')`;
 
 function currentInstance(input: AcquireDshCookieInput): Instance {
@@ -61,6 +62,7 @@ function currentInstance(input: AcquireDshCookieInput): Instance {
     upstream_host: instance.upstream_host,
     upstream_port: instance.upstream_port,
     image_tag: instance.image_tag,
+    image_id: resolvedImageId(instance.image_id),
     last_started_at: instance.last_started_at,
   };
 }
@@ -204,6 +206,7 @@ export async function acquireDshCookie(input: AcquireDshCookieInput): Promise<vo
       instance.upstream_host,
       instance.upstream_port,
       instance.image_tag,
+      instance.image_id,
       instance.last_started_at,
     ];
     // Clear before any asynchronous credential work, including failed inspection/reacquisition.
@@ -217,20 +220,6 @@ export async function acquireDshCookie(input: AcquireDshCookieInput): Promise<vo
       throw new Error();
     signal.throwIfAborted();
     stage = 'owned container';
-    const image: unknown = await input.client.json(
-      'GET',
-      `/images/${encodeURIComponent(instance.image_tag)}/json`,
-      undefined,
-      signal,
-    );
-    if (
-      typeof image !== 'object' ||
-      image === null ||
-      !('Id' in image) ||
-      typeof image.Id !== 'string' ||
-      !/^sha256:[a-f0-9]{64}$/.test(image.Id)
-    )
-      throw new Error();
     const port = inspectUserContainerEndpoint(
       await input.client.json(
         'GET',
@@ -241,7 +230,7 @@ export async function acquireDshCookie(input: AcquireDshCookieInput): Promise<vo
       instance.container_id,
       `dsh-team-u-${input.userId}`,
       input.userId,
-      image.Id,
+      instance.image_id,
     );
     if (port !== instance.upstream_port) throw new Error();
     if (

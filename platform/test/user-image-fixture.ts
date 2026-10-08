@@ -128,7 +128,7 @@ export interface UserImageLifecycle {
   readonly repositoryRoot: string;
   registerContainer: (name: string) => void;
   registerResource: (
-    kind: 'container' | 'volume',
+    kind: 'container' | 'volume' | 'image',
     name: string,
     ownership: Readonly<Record<string, string>>,
   ) => void;

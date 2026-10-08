@@ -339,9 +339,55 @@ describe('platform startup on a real database file', () => {
       expect(readSettings(reopened).idleMinutes).toBe(15);
       expect(
         reopened.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-      ).toEqual([{ version: 1 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }]);
     } finally {
       reopened.close();
     }
   });
+});
+
+it('forward migration preserves historical instance data and leaves unknown immutable image identity null', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-image-migration-'));
+  const original = join(root, 'initial');
+  mkdirSync(original);
+  copyFileSync(
+    new URL('../src/db/migrations/1-initial.sql', import.meta.url),
+    join(original, '1-initial.sql'),
+  );
+  const database = openDatabase(join(root, 'platform.db'));
+  try {
+    applyMigrations(database, original);
+    database
+      .prepare(
+        "INSERT INTO users VALUES ('abcdefghijkl', 'historical@example.test', 'unused', 'employee', 'active', 1)",
+      )
+      .run();
+    database
+      .prepare(
+        `INSERT INTO instances (user_id, status, container_id, image_tag, dsh_cookie, upstream_host, upstream_port, last_started_at)
+      VALUES ('abcdefghijkl', 'starting', ?, 'historical:mutable', 'historical-credential', '127.0.0.1', 12345, 7)`,
+      )
+      .run('b'.repeat(64));
+
+    applyMigrations(database);
+    applyMigrations(database);
+
+    expect(database.prepare('SELECT * FROM instances').get()).toMatchObject({
+      user_id: 'abcdefghijkl',
+      status: 'starting',
+      container_id: 'b'.repeat(64),
+      image_tag: 'historical:mutable',
+      image_id: null,
+      dsh_cookie: 'historical-credential',
+      upstream_host: '127.0.0.1',
+      upstream_port: 12345,
+      last_started_at: 7,
+    });
+    expect(
+      database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
+    ).toEqual([{ version: 1 }, { version: 2 }]);
+  } finally {
+    database.close();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

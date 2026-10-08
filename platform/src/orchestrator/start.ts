@@ -59,6 +59,13 @@ function containerId(value: unknown): string {
   return id;
 }
 
+export function resolvedImageId(value: unknown): string {
+  if (typeof value !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value)) {
+    throw new Error('Invalid Docker image identity');
+  }
+  return value;
+}
+
 function ownedContainer(
   value: unknown,
   name: string,
@@ -313,10 +320,9 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     stage = 'seccomp policy';
     const seccomp = await readSeccompPolicy(config.seccompProfilePath, signal);
     stage = 'image resolution';
-    const image = object(
-      await client.json('GET', `/images/${encodeURIComponent(config.userImage)}/json`),
-    ).Id;
-    if (typeof image !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error();
+    const image = resolvedImageId(
+      object(await client.json('GET', `/images/${encodeURIComponent(config.userImage)}/json`)).Id,
+    );
     stage = 'owned volumes';
     const volumes = await ensureUserVolumes(client, userId);
     stage = 'managed composition';
@@ -378,12 +384,12 @@ export async function startUserContainer(input: StartUserContainerInput): Promis
     database.transaction(() => {
       database
         .prepare(
-          `INSERT INTO instances (user_id, status, container_id, image_tag)
-        VALUES (?, 'starting', ?, ?) ON CONFLICT(user_id) DO UPDATE SET
-        status = 'starting', container_id = excluded.container_id, image_tag = excluded.image_tag,
+          `INSERT INTO instances (user_id, status, container_id, image_tag, image_id)
+        VALUES (?, 'starting', ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+        status = 'starting', container_id = excluded.container_id, image_tag = excluded.image_tag, image_id = excluded.image_id,
         upstream_host = NULL, upstream_port = NULL, dsh_cookie = NULL, last_started_at = NULL, last_error = NULL`,
         )
-        .run(userId, id, config.userImage);
+        .run(userId, id, config.userImage, image);
       recordAuditEvent(database, {
         type: 'instance.created',
         createdAt: Date.now(),

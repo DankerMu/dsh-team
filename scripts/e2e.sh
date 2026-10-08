@@ -99,7 +99,7 @@ try {
   ) {
     throw new Error(`e2e: unexpected schema tables ${JSON.stringify(names)}`);
   }
-  if (JSON.stringify(versions) !== JSON.stringify([{ version: 1 }])) {
+  if (JSON.stringify(versions) !== JSON.stringify([{ version: 1 }, { version: 2 }])) {
     throw new Error(`e2e: unexpected migration ledger ${JSON.stringify(versions)}`);
   }
 } finally {

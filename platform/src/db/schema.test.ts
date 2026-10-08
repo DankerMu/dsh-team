@@ -29,7 +29,7 @@ const SELECT_SESSIONS =
   'SELECT token_hash, user_id, created_at, last_activity_at FROM platform_sessions ORDER BY token_hash';
 const INSERT_INSTANCE = 'INSERT INTO instances (user_id, status) VALUES (?, ?)';
 const SELECT_INSTANCE =
-  'SELECT user_id, status, container_id, upstream_host, upstream_port, dsh_cookie, image_tag, last_started_at, last_activity_at, last_error FROM instances WHERE user_id = ?';
+  'SELECT user_id, status, container_id, upstream_host, upstream_port, dsh_cookie, image_tag, image_id, last_started_at, last_activity_at, last_error FROM instances WHERE user_id = ?';
 const INSERT_SETTING = 'INSERT INTO settings (key, value) VALUES (?, ?)';
 const SELECT_SETTING = 'SELECT key, value FROM settings WHERE key = ?';
 const INSERT_AUDIT =
@@ -64,6 +64,7 @@ const PRESTART_NULLS = {
   upstream_port: null,
   dsh_cookie: null,
   image_tag: null,
+  image_id: null,
   last_started_at: null,
   last_activity_at: null,
   last_error: null,
@@ -245,7 +246,7 @@ describe('initial schema', () => {
     expect(db.prepare(SELECT_AUDIT).all()).toEqual([ANONYMOUS_AUDIT, UNKNOWN_EMAIL_AUDIT]);
   });
 
-  it('reapplying the default migration keeps inserted rows and one version record', () => {
+  it('reapplying default migrations preserves inserted rows and each committed version', () => {
     db.prepare(INSERT_USER).run(ORIGINAL_USER);
     db.prepare(INSERT_SESSION).run(FIRST_USER_SESSION_A);
     db.prepare(INSERT_INSTANCE).run(ORIGINAL_USER.id, 'stopped');
@@ -261,6 +262,7 @@ describe('initial schema', () => {
     expect(db.prepare(SELECT_AUDIT).all()).toEqual([ANONYMOUS_AUDIT]);
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: 1 },
+      { version: 2 },
     ]);
   });
 

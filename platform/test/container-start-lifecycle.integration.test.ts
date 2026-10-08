@@ -70,6 +70,10 @@ it('registers absent startup resources and verifies cleanup with observed Docker
       const container = 'dsh-team-u-abcdefghijkl';
       lifecycle.registerResource('volume', lifecycle.stateVolume, ownership);
       lifecycle.registerResource('container', container, ownership);
+      const image = `dsh-team-test-${lifecycle.runId}:mutable`;
+      const imageOwnership = { 'dsh-team.test-run': lifecycle.runId };
+      lifecycle.registerResource('image', image, imageOwnership);
+      daemon.resources.set(`image:${image}`, imageOwnership);
       daemon.resources.set(`volume:${lifecycle.stateVolume}`, ownership);
       daemon.resources.set(`container:${container}`, ownership);
       return Promise.resolve('startup scenario completed');

@@ -576,6 +576,7 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - File IO / path safety / overwrite — not selected: no new file publication or deletion; existing test-owned lifecycle handles cleanup.
 - Config / project setup; Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: reuse existing authority/endpoint/client and released parser/protocol; migrate parser consumers, preserve twelve Docker cases, no dependency or configuration changes.
 - Documentation / migration notes — selected: starting-not-ready and backend-only cookie contract; root checks, strict OpenSpec, full exact-head Docker/CI evidence.
+- Immutable creation identity repair: persist nullable image_id alongside unchanged image_tag via forward migration; historical-null rejection is explicit, no current-tag backfill. Prove migration preservation, fresh startup persistence, retag/removal acquisition and foreign-image rejection through local and actual Docker boundaries.
 
 ## 10. 实例网络（任务包 1.10）
 
