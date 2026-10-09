@@ -710,7 +710,7 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - [x] 11.1 路由划分：`/_platform/` 和 `/healthz` 由平台处理，其余路径进网关；未登录时页面请求跳转登录页，其他请求返回 401。验证：集成测试覆盖 `gateway-routing` 规格“平台路径与实例路径分开”的全部场景和“实例由平台会话决定”的两个未登录场景。
 - [x] 11.2 HTTP 转发：上游由平台会话对应的用户决定，不读取请求里的任何实例标识；去掉客户端的全部 `Cookie`，只注入该实例的 DSH cookie；`Host` 改为平台对外 authority；去掉响应里的 `Set-Cookie`。验证：集成测试（替身上游记录收到的请求）——上游收不到平台会话 cookie；浏览器收不到 DSH cookie；上游看到的 `Host` 是平台对外 authority；请求里伪造的实例标识头和查询参数不改变上游（规格“实例由平台会话决定”“DSH 凭据只在平台服务端”和“上游使用固定的对外地址”场景）。
 - [ ] 11.3 流式转发：请求体和响应体不缓冲。验证：集成测试——上传和下载各一个 200MB 的流，平台进程的内存增长不超过 50MB，内容校验和一致（规格“大文件上传和下载”场景）。
-- [ ] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
+- [x] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
 - [ ] 11.5 连接登记和断开：按用户登记所有打开的连接；提供“销毁某用户全部连接”的函数。验证：集成测试——一个用户有两条长连接和一个进行中的下载时调用该函数，三者在 1 秒内全部断开，另一个用户的连接不受影响。
 - [ ] 11.6 平台会话失效后的长连接：平台会话被删除后，由它建立的长连接被断开。验证：集成测试覆盖规格“平台会话失效后长连接不再可用”的场景。
 - [ ] 11.7 实例未运行时的回应：页面请求被重定向到 `/_platform/wait`，其他请求得到 503 和机器可读的原因（已停止、启动中、已满、出错、未配置模型）；实例状态由注入的查询函数提供。验证：集成测试——五种状态下页面请求都得到指向等待页的重定向，接口请求都得到 503 和对应原因。
@@ -737,6 +737,16 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - Ownership/stream controls: malformedJSON POST remains byte-identical; upstream401 JSON extra fields survive gateway schemas; upload and download prefixes observed before producer completion. Lifecycle controls independently cover invalid endpoint, upstream101, unfinished-upload abort, response-client close, normal upload followed by delayed response, pre-header502 and post-header truncation; server-observed cleanup and subsequent successful request, no wall-clock sleeps.
 
 验证记录（#50）：公开buildApp可注入仅接收当前会话用户ID的同步resolver，端点和DSH Cookie成对返回；未接入resolver的main仍保持503，真实实例查询留给#56。真实双用户/双上游证明伪造另一用户路径/头/查询/正文和真实上游authority均不改变所选实例；全部客户端Cookie、逐跳头先去除，再注入固定Host/DSH Cookie，响应多个Set-Cookie和凭据trailer均不外传。畸形JSON、二进制、上游401额外字段、增量上传/下载、两端取消与错误清理已验证。首轮审查发现Node对DELETE/GET/HEAD/OPTIONS/TRACE不自动chunk，五种方法的真实前缀回归均先RED；统一重建请求framing后，chunked、保留Content-Length与被Connection提名去除的长度三种情况全过。完整pnpmcheck1187单元/686集成、逐文件覆盖、重复率2.69%、契约/strictOpenSpec通过。源码提交`58dc06ffdbea8efb996efb82b39055171ff61a65`的source/built实际TCP进一步证明DELETE前缀在客户端end之前抵达、完整正文及201回应、凭据边界正确；e2e通过。最终头Docker/CI及复审以PR#157记录为准。
+
+### Issue #52 risk/evidence map (task11.4 only)
+
+- Public API/auth/secrets/invariant: existing active-session admission, exact single configured Origin, session-selected paired resolver, trusted Host/DSH Cookie and stripped response Set-Cookie. Real two-user upgrade/frame tests and rejected missing/wrong/duplicate Origin controls prove custody and zero cross-user/upstream activity.
+- Shared state/order/errors/resources: client and upstream parser heads exactly once; abort-before-handshake fences late handoff; both disconnect directions, refusal/non101/invalid protocol and app shutdown settle owned resources. Event-based real TCP probes, no sleeps, no generic TCP tunnel.
+- Compatibility/schema/config/packaging/docs: canonical auth Origin predicate extraction with unchanged mutation behavior; existing publicUrl passed to gateway, no config/dependency/migration; ordinary HTTP framing/admission preserved. Semantic RED/GREEN, complete root checks, generated contract check, strict OpenSpec, independent source/built smoke and final21Docker/CI.
+- File IO not selected; no production filesystem operation. Per-user connection management, revocation-driven teardown and instance wiring stay #53/#54/#56. #51's unresolved50MB requirement is not bypassed or copied onto this independent DAG branch.
+- Protocol/oracle closure: after admission and Origin, unsupported client Upgrade token/list gives400 without resolution or upstream activity; invalid upstream101 gives502. Test-only literal RFC6455 frames plus crypto prove both directional prefixes before producer release, complete equality and continued open-connection messages. Pending and established app-close cases and credential-bearing sanitized-error controls close lifecycle/evidence gaps.
+
+验证记录（#52）：真实升级503→101、缺失/错误/重复Origin的502→403、非WebSocket协议503→400均有先RED后GREEN。24项实际TCP升级用例验证双向逐段帧在生产者继续前抵达、两端握手head恰一次、双用户端点/Cookie隔离、101去Set-Cookie、协议协商、待握手取消、错误/非101/错误协议以及应用关闭；既有HTTP和平台Origin行为保留。完整`pnpm check`通过：1197单元及逐文件覆盖、710集成、构建/契约/anti-drift（重复率2.74%）。独立source/built运行各证明401/403拒绝不调用resolver、有效101只选择当前用户、真实掩码文本解码hi及二进制[0,255]返回、app关闭客户端；e2e通过。初始化实现曾在流量结束后卡住关闭，改为preClose拥有升级连接且半关闭先flush后成对释放；另有关闭过程中排队升级逃出快照的RED，关闭准入栅栏后不再获取上游。原始失败/诊断与最终通过保留`.run/issue52/`。最终审查、冻结头Docker及CI以PR记录为准；#51内存门槛未被宣称通过。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 

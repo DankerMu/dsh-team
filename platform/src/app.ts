@@ -88,6 +88,7 @@ export async function buildApp(
     await app.register(gatewayRoutes, {
       database,
       authority: config.authority,
+      publicUrl: config.publicUrl,
       ...(resolveUpstream === undefined ? {} : { resolveUpstream }),
     });
   } catch (error) {

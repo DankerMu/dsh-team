@@ -1,10 +1,11 @@
-import { request } from 'node:http';
+import { request, STATUS_CODES } from 'node:http';
 import type {
   ClientRequest,
   IncomingHttpHeaders,
   IncomingMessage,
   OutgoingHttpHeaders,
 } from 'node:http';
+import type { Duplex } from 'node:stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { GatewayUpstream } from './types.ts';
 
@@ -125,6 +126,115 @@ export function forwardHttp(
     incoming.raw.pipe(outgoing);
   } catch {
     // Invalid trusted endpoint/header data must never become a credential-bearing exception response.
+    fail();
+  }
+}
+
+export function rejectUpgrade(socket: Duplex, code: 400 | 401 | 403 | 404 | 500 | 502 | 503): void {
+  socket.on('error', () => {
+    socket.destroy();
+  });
+  socket.once('finish', () => {
+    socket.destroy();
+  });
+  socket.end(
+    `HTTP/1.1 ${String(code)} ${STATUS_CODES[code] ?? 'Error'}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+  );
+}
+
+export function forwardWebSocket(
+  incoming: IncomingMessage,
+  client: Duplex,
+  head: Buffer,
+  target: GatewayUpstream,
+  authority: string,
+  logFailure: () => void,
+): void {
+  let outgoing: ClientRequest | undefined;
+  let upstream: Duplex | undefined;
+  let closed = false;
+  let upgraded = false;
+  const release = () => {
+    upstream?.destroy();
+    outgoing?.destroy();
+  };
+  const cancel = () => {
+    if (closed) return;
+    closed = true;
+    release();
+    client.destroy();
+  };
+  const fail = () => {
+    if (closed) return;
+    closed = true;
+    release();
+    logFailure();
+    if (upgraded) client.destroy();
+    else rejectUpgrade(client, 502);
+  };
+  client.pause();
+  client.on('error', cancel);
+  client.once('close', cancel);
+  client.once('end', () => {
+    if (upstream === undefined) cancel();
+    else upstream.end(cancel);
+  });
+  try {
+    const headers = forwardHeaders(incoming.headers, 'cookie');
+    delete headers['content-length'];
+    delete headers['transfer-encoding'];
+    headers.host = authority;
+    headers.cookie = target.cookie;
+    headers.connection = 'Upgrade';
+    headers.upgrade = 'websocket';
+    outgoing = request({
+      hostname: target.host,
+      port: target.port,
+      method: incoming.method,
+      path: requestTarget(incoming.url ?? '/'),
+      headers,
+      agent: false,
+    });
+    outgoing.on('error', fail);
+    outgoing.once('response', (response) => {
+      response.destroy();
+      fail();
+    });
+    outgoing.once('upgrade', (response, socket, upstreamHead) => {
+      upstream = socket;
+      socket.on('error', fail);
+      socket.once('close', cancel);
+      socket.once('end', () => {
+        client.end(cancel);
+      });
+      if (closed) {
+        socket.destroy();
+        return;
+      }
+      if (response.statusCode !== 101 || response.headers.upgrade?.toLowerCase() !== 'websocket') {
+        fail();
+        return;
+      }
+      const responseHeaders = forwardHeaders(response.headers, 'set-cookie');
+      responseHeaders.connection = 'Upgrade';
+      responseHeaders.upgrade = 'websocket';
+      const lines = ['HTTP/1.1 101 Switching Protocols'];
+      for (const [name, value] of Object.entries(responseHeaders)) {
+        if (value === undefined) continue;
+        for (const item of Array.isArray(value) ? value : [value])
+          lines.push(`${name}: ${String(item)}`);
+      }
+      upgraded = true;
+      client.write(`${lines.join('\r\n')}\r\n\r\n`);
+      if (head.length !== 0) client.unshift(head);
+      if (upstreamHead.length !== 0) socket.unshift(upstreamHead);
+      // Own half-close completion so queued frame bytes flush before paired destruction.
+      client.pipe(socket, { end: false });
+      socket.pipe(client, { end: false });
+    });
+    outgoing.end();
+  } catch {
+    // Trusted endpoint/header failures must not expose either credential.
     fail();
   }
 }

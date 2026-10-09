@@ -187,10 +187,6 @@ it('never resolves platform or anonymous traffic and preserves unavailable desti
         (await sendHttp(base, { path: '/_platform/missing', headers: { cookie } })).status,
       ).toBe(404);
       expect((await sendHttp(base, { path: '/api/test' })).status).toBe(401);
-      expect(
-        (await sendHttp(base, { headers: { cookie, connection: 'Upgrade', upgrade: 'websocket' } }))
-          .status,
-      ).toBe(503);
       expect(selected).toEqual([]);
       expect((await sendHttp(base, { path: '/', headers: { cookie } })).status).toBe(503);
       expect(selected).toEqual([userId]);

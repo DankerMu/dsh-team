@@ -1,3 +1,4 @@
+import type { IncomingMessage } from 'node:http';
 import type { FastifyInstance } from 'fastify';
 
 export const ORIGIN_HEADERS_SCHEMA = {
@@ -22,6 +23,16 @@ const SAFE_METHODS: Readonly<Record<string, true | undefined>> = {
   OPTIONS: true,
 };
 
+/** Origin is an exact configured value and must occur in exactly one physical header. */
+export function hasValidOrigin(request: IncomingMessage, publicUrl: string): boolean {
+  if (request.headers.origin !== publicUrl) return false;
+  let origins = 0;
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (request.rawHeaders[index]?.toLowerCase() === 'origin') origins += 1;
+  }
+  return origins === 1;
+}
+
 /** Installs the platform mutation boundary on the root app, before route plugins. */
 export function installRequestGuard(app: FastifyInstance, publicUrl: string): void {
   app.addHook('onRequest', (request, reply, done) => {
@@ -35,19 +46,7 @@ export function installRequestGuard(app: FastifyInstance, publicUrl: string): vo
       return;
     }
 
-    if (request.headers.origin !== publicUrl) {
-      void reply.code(403).send(INVALID_ORIGIN);
-      return;
-    }
-    // Count physical headers too: Node's duplicate-header policy must not authorize them.
-    let origins = 0;
-    const headers = request.raw.rawHeaders;
-    for (let index = 0; index < headers.length; index += 2) {
-      if (headers[index]?.toLowerCase() === 'origin') {
-        origins += 1;
-      }
-    }
-    if (origins !== 1) {
+    if (!hasValidOrigin(request.raw, publicUrl)) {
       void reply.code(403).send(INVALID_ORIGIN);
       return;
     }
