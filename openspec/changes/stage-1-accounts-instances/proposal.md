@@ -339,3 +339,12 @@
 - Public `allocateSubnet` is the subject, followed by real Docker creation with its returned CIDR; literal `dsh-team-test` network names are required. No new public production create API or canonical-name override just for tests.
 - Evidence floor: existing default-pool allocator unit baseline, actual61-live-network inspection and cleanup, deliberate overlap rejection as a known-bad Engine control, full checks/strictOpenSpec/final-head full21Docker/CI.
 - Preserve all20 existing Docker cases and canonical resource ownership/cleanup; no61 user containers, admission-limit changes, global prune, dependencies/config/schema/DSH changes. Critical-path disclosure remains in PR and human review deferred to Epic completion.
+
+## Issue #49 fixture
+
+- Feature; expanded (agree with upstream), task11.1 only: platform namespace separation and gateway session admission at the shared HTTP/upgrade entrypoint.
+- Governing invariant: reserved platform paths never enter the gateway; instance paths require a current active platform session, never a client-selected user or host.
+- Preserve health, registration/login/logout/password-change, Origin/JSON guards, session expiry/renewal, logger redaction and database ownership. No upstream requests or container operations.
+- Selected packs: public API, auth/secrets, shared state/order, errors, schema, configuration, compatibility, resource limits, packaging and documentation; file IO not selected (no new filesystem operations). Evidence maps below.
+- Evidence floor: semantic RED/GREEN through buildApp, real TCP HTTP and upgrade rejection, valid/expired/revoked/disabled sessions, root checks, contract generation, strict OpenSpec, source/built runtime smoke and CI.
+- Authenticated instance traffic deliberately returns 503 in this upstream-approved slice. HTTP/stream/WebSocket forwarding, connection tracking, wait reasons, orchestrator integration and login page rendering remain their named later issues.

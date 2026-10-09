@@ -11,6 +11,7 @@ import {
 import type { PlatformConfig } from './config.ts';
 import type { DatabaseHandle } from './db/index.ts';
 import { healthRoutes } from './health.ts';
+import { gatewayRoutes } from './gateway/index.ts';
 
 /**
  * Log fields that must never be written in clear text, whatever the log level.
@@ -82,6 +83,7 @@ export async function buildApp(
       cookieSecure: config.cookieSecure,
       resolveSourceAddress,
     });
+    await app.register(gatewayRoutes, { database });
   } catch (error) {
     await app.close();
     throw error;

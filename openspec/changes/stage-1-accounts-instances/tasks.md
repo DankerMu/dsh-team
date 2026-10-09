@@ -718,6 +718,14 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 Suggested fixture level: expanded - 平台对外的共享入口，承担鉴权和凭据隔离
 Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，此时被转发的路径统一返回 503）
 
+### Issue #49 risk/evidence map (task11.1 only)
+
+- Public API / Auth permissions secrets / Legacy compatibility: buildApp HTTP and real upgrade evidence; health200, unknown reserved404, anonymous HTML302 to fixedlogin, nonpage401, valid session503, no outbound requests/credential disclosure. Existing auth routes and guards unchanged.
+- Concurrency shared state ordering / Error handling: expired/revoked/disabled session rejection, sliding renewal, database failure generic500, upgrade close and listener teardown; no new shared mutable state or retries.
+- Schema / Config project setup / Release packaging / Documentation: explicit response schemas, hidden instance wildcard, generated contract check, full pnpmcheck and source/built runtime proof; no dependency/config/persisted format changes. Scope and temporary503 recorded here.
+- Resource limits: pre-body HTTP admission for unsupported content and malformedJSON; upgrade sockets terminate, no buffering or upstream streams. File IO not selected: no introduced IO; existing database fixture lifetime retained.
+- Both HTTP and real TCP upgrades cover the entire missing/malformed/duplicate/expired/revoked/disabled/valid-session matrix; revocation/disable occur after prior admission in the same app. Upgrade wire status plus EOF, reserved404, database500, peer-abort then health200 prove admission/error/lifecycle behavior. Forged authority/instance fields point at an observed local listener: gateway503, zero outbound connections.
+
 ## 12. 按需启动和空闲停止（任务包 1.9）
 
 依赖：第 2、9、10、11 组。

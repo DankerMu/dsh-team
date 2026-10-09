@@ -70,7 +70,6 @@ describe('login, logout, and session recognition over a real TCP port', () => {
         expect(recognized.status).toBe(200);
         expect(await recognized.json()).toEqual(login.identity);
         expect((await fetch(`${baseUrl}/_platform/api/me`)).status).toBe(404);
-        expect((await fetch(`${baseUrl}/me`)).status).toBe(404);
         const events = queryAuditEvents(database, {
           page: 1,
           pageSize: 10,
