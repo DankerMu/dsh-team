@@ -12,6 +12,7 @@ import {
   startupDaemon,
   startupUnixServer,
   startupBarrier,
+  startupUnixOwnerFixture,
   seedPlatform,
   START_CONTAINER,
   START_NETWORK,
@@ -693,4 +694,87 @@ it('a definitive rejected platform connection with independently absent membersh
   ]);
   expect(daemon.containers.has(START_CONTAINER)).toBe(false);
   expect(daemon.networks.has(START_NETWORK)).toBe(false);
+});
+
+it('network recovery preserves an authenticated survivor whose platform membership returns after confirmed connection rejection', async () => {
+  const platformId = 'f'.repeat(64);
+  const context = await startupUnixOwnerFixture({
+    rootPrefix: 'dsh-recovery-restored-membership-',
+    users: {},
+    userImage: 'image:test',
+    subnetPool: '172.30.0.0/26',
+    transport: {
+      upstreamMode: 'network',
+      platformContainerName: 'dsh-team-test-restored-membership',
+    },
+  });
+  const { database, daemon, owner } = context;
+  try {
+    seedReconciliation(database, daemon);
+    seedPlatform(daemon, 'dsh-team-test-restored-membership', platformId);
+    const container = daemon.containers.get(START_CONTAINER);
+    if (container === undefined) throw new Error('Missing survivor fixture');
+    container.NetworkSettings.Ports = { '3080/tcp': null };
+    database.exec("UPDATE instances SET upstream_host = '172.30.0.2', upstream_port = 3080");
+    const before = reconciliationState(database);
+    daemon.overrides.set(`POST /networks/${START_NETWORK}/connect`, { status: 403 });
+    let rejected = false;
+    let platformInspections = 0;
+    const observation: {
+      preserved?: { containers: typeof daemon.containers; networks: typeof daemon.networks };
+    } = {};
+    context.replyWith((request, reply) => {
+      if (request.method === 'POST' && request.path === `/networks/${START_NETWORK}/connect`)
+        rejected = true;
+      if (
+        !rejected ||
+        request.method !== 'GET' ||
+        request.path !== `/containers/${platformId}/json`
+      )
+        return reply;
+      platformInspections += 1;
+      if (platformInspections !== 2) return reply;
+      // Deliver the already captured absent view, then restore membership externally before the next guard.
+      const captured = structuredClone(reply);
+      daemon.overrides.delete(`POST /networks/${START_NETWORK}/connect`);
+      expect(
+        daemon.reply({
+          method: 'POST',
+          path: `/networks/${START_NETWORK}/connect`,
+          body: { Container: platformId },
+        }).status,
+      ).toBe(200);
+      observation.preserved = {
+        containers: structuredClone(daemon.containers),
+        networks: structuredClone(daemon.networks),
+      };
+      return captured;
+    });
+
+    const outcome = await Promise.allSettled([owner.reconcile()]);
+
+    const preserved = observation.preserved;
+    if (preserved === undefined) throw new Error('External reconnection boundary not reached');
+    expect.soft(reconciliationState(database)).toEqual(before);
+    expect.soft(daemon.containers).toEqual(preserved.containers);
+    expect.soft(daemon.networks).toEqual(preserved.networks);
+    expect
+      .soft(Object.keys(daemon.networks.get(START_NETWORK)?.Containers ?? {}).sort())
+      .toEqual([START_CONTAINER, platformId]);
+    expect
+      .soft(
+        daemon.requests.filter(
+          ({ method, path }) => method === 'DELETE' || path.endsWith('/stop?t=1'),
+        ),
+      )
+      .toEqual([]);
+    const expectedFailure: unknown = expect.objectContaining({
+      message: 'Instance reconciliation failed',
+    });
+    expect(outcome).toEqual([
+      expect.objectContaining({ status: 'rejected', reason: expectedFailure }),
+    ]);
+  } finally {
+    await context.close();
+  }
 });
