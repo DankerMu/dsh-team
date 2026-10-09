@@ -644,7 +644,7 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - [x] 10.2 每实例网络：启动时创建带标签的 bridge 网络并把实例接入，停止时删除。验证：`pnpm test:docker`——起两个实例，从一个实例里连接另一个实例的地址和主机名的 3080 和其他端口都失败（规格“实例之间网络不可达”的第一个场景）。
 - [x] 10.3 `network` 方式：配置项选择够到实例的方式（`network` 为默认，`published-loopback` 仅供平台进程直接跑在宿主机上时用）；`network` 下实例不发布任何端口，平台容器（名字是配置项）在实例启动时接入该实例的网络、停止时断开，上游地址取容器在该网络里的地址。验证：`pnpm test:docker`——起一个替身容器充当平台容器，实例启动后替身被接入该网络并能从替身里连上实例的 3080；实例容器没有任何端口映射；实例停止后替身不再在该网络里且网络被删除（规格“实例不暴露宿主端口”）。
 - [x] 10.4 对账时恢复网络：平台启动对账时把平台容器重新接入每个运行中实例的网络，接不上的实例停止并记为出错；没有对应容器的实例网络删除。验证：`pnpm test:docker`——两个实例运行中时删除并重建替身平台容器，对账后替身能连上两个实例；人为留下一个无主的实例网络，对账后它被删除（规格“平台容器被重建”场景）。
-- [ ] 10.5 起 61 个网络不耗尽地址。验证：`pnpm test:docker`——用平台的分配器连续创建 61 个带 `dsh-team-test` 前缀的网络全部成功，随后全部删除。
+- [x] 10.5 起 61 个网络不耗尽地址。验证：`pnpm test:docker`——用平台的分配器连续创建 61 个带 `dsh-team-test` 前缀的网络全部成功，随后全部删除。
 
 Suggested fixture level: expanded - 隔离边界的一部分，涉及共享的地址资源
 Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
@@ -700,6 +700,8 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - Auth / permissions / secrets; Error handling / rollback / partial outputs; File IO / path safety / overwrite — selected: invocation-labelled absent-before-create exact resources, negative overlap attempt, immutable-ID/empty-network deletion and partial-failure cleanup; no foreign/data mutation.
 - Public API / CLI / script entry; Config / project setup; Schema / columns / units / field names — existing allocateSubnet/default config and Docker/IPAM boundary, no API/schema/config change; assert /28/default-pool and literal test network prefix.
 - Legacy compatibility / examples; Release / packaging / dependency compatibility; Documentation / migration notes — selected: all20baseline tests preserved plus one real61network case, fullchecks/strictOpenSpec/finalhead21Docker/CI and empty independent inventory; no dependencies, record evidence and human critical-path disclosure.
+
+验证记录（#48）：测试直接复用公开allocateSubnet与loadConfig默认172.30.0.0/16，每次读取真实全部网络IPAM后创建dsh-team-test前缀bridge；61个同时存在，独立按名和ID检查、统计唯一/28与池内不重叠。额外注册的重叠CIDR控制由既有DockerAPI客户端观察到明确HTTP403，原61完整inspect与inventory不变；仅验证过的本次调用空网络按不可变ID清理，名称/ID及调用inventory均确认不存在。共享测试cleanup补齐身份/端点/无效删除负向控制，无生产源码改动；一轮审查修复错误依赖CLI脱敏前stderr的判据，未绕过脱敏或改门槛。完整pnpmcheck：1164unit/656integration、逐文件覆盖通过、重复率2.77%、strictOpenSpec通过；fresh全diff复审clean。审查头`3425dbf181ce2a786356dda1a79bbcfd3f2c02b6`固定Node24.13.1/pnpm10.34.6 giap-vps完整21/21Docker通过，13文件、146.58秒、exit0，新61网络用例18.926秒；原20基线保留，独立项目容器/网络/卷/测试镜像清点为空。这是现有分配器的真实边界刻画，已观察正确61网络、错误重叠拒绝及空清理恢复，不伪称生产bugRED。最终头/CI以PR#155绑定证据为准；人工审查按Epic统一后置。
 
 ## 11. 网关（任务包 1.8）
 
