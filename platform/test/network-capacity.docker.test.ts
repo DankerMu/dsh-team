@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
-import { allocateSubnet, createDockerClient } from '../src/orchestrator/index.ts';
+import { allocateSubnet, createDockerClient, DockerHttpError } from '../src/orchestrator/index.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { inspectNetwork, record, runNetworkAcceptance } from './container-start-docker-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -115,26 +115,26 @@ async function capacity(lifecycle: UserImageLifecycle): Promise<string> {
   if (first === undefined) throw new Error('Missing overlap control subnet');
   const rejectedName = `dsh-team-test-run-${lifecycle.runId}-overlap`;
   lifecycle.registerResource('network', rejectedName, labels);
-  const rejected = lifecycle.command(
-    [
-      'network',
-      'create',
-      '--driver',
-      'bridge',
-      '--subnet',
-      first.subnet,
-      '--label',
-      `dsh-team.test-run=${lifecycle.runId}`,
-      rejectedName,
-    ],
-    15_000,
-  );
-  expect(rejected.error).toBeUndefined();
-  expect(rejected.status).toBe(1);
-  expect(rejected.stdout.trim()).toBe('');
-  expect(rejected.stderr.trim()).toMatch(
-    /^Error response from daemon: .*Pool overlaps with other one on this address space$/,
-  );
+  const rejected: unknown = await client
+    .json(
+      'POST',
+      '/networks/create',
+      {
+        Name: rejectedName,
+        Driver: 'bridge',
+        Internal: false,
+        EnableIPv6: false,
+        Labels: labels,
+        IPAM: { Driver: 'default', Config: [{ Subnet: first.subnet }] },
+      },
+      AbortSignal.timeout(15_000),
+    )
+    .catch((error: unknown) => error);
+  if (!(rejected instanceof DockerHttpError))
+    throw new Error('Overlap control did not return a definitive Docker HTTP rejection', {
+      cause: rejected,
+    });
+  expect(rejected.statusCode).toBe(403);
   expect(
     isAbsentResource(
       lifecycle.command(['network', 'inspect', rejectedName], 15_000),
@@ -161,6 +161,7 @@ async function capacity(lifecycle: UserImageLifecycle): Promise<string> {
     pool: config.subnetPool,
     prefix: 28,
     overlapRejected: true,
+    overlapStatus: rejected.statusCode,
     goodBridgesPreserved: true,
     networksAbsent: true,
   });
@@ -173,6 +174,7 @@ it('the default pool supports 61 simultaneous nonoverlapping bridges and rejects
       pool: '172.30.0.0/16',
       prefix: 28,
       overlapRejected: true,
+      overlapStatus: 403,
       goodBridgesPreserved: true,
       networksAbsent: true,
     });
