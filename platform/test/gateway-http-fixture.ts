@@ -36,10 +36,12 @@ export async function withUpstream(
       server,
     );
   } finally {
-    const closed = once(server, 'close');
-    server.close();
     for (const socket of sockets) socket.destroy();
-    await closed;
+    if (server.listening) {
+      const closed = once(server, 'close');
+      server.close();
+      await closed;
+    }
   }
 }
 
@@ -78,11 +80,13 @@ export async function sendHttp(
 ): Promise<{
   status: number;
   headers: IncomingHttpHeaders;
+  trailers: IncomingHttpHeaders;
   body: Buffer;
 }> {
   const { promise, resolve, reject } = Promise.withResolvers<{
     status: number;
     headers: IncomingHttpHeaders;
+    trailers: IncomingHttpHeaders;
     body: Buffer;
   }>();
   // A failed real peer must be bounded; successful completion is response end.
@@ -96,6 +100,7 @@ export async function sendHttp(
       resolve({
         status: response.statusCode ?? 0,
         headers: response.headers,
+        trailers: response.trailers,
         body: Buffer.concat(chunks),
       });
     });

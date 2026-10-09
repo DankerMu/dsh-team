@@ -32,6 +32,7 @@ const LOG_REDACT_PATHS = [
   '*.newPassword',
   '*.token',
   '*.apiKey',
+  '*.cookie',
 ];
 
 /** Destination for log lines; defaults to stdout when omitted. */

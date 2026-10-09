@@ -1,3 +1,4 @@
+import { once } from 'node:events';
 import type { RequestListener } from 'node:http';
 import { expect, it } from 'vitest';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
@@ -7,7 +8,7 @@ import {
   readPublicIdentity,
   sessionCookieToken,
 } from './auth-fixture.ts';
-import { sendHttp, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
+import { observeHttp, sendHttp, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
 
 it('forwards malformed JSON bytes with only the selected DSH cookie and preserves upstream error bodies', async () => {
   const observed: unknown[] = [];
@@ -28,7 +29,9 @@ it('forwards malformed JSON bytes with only the selected DSH cookie and preserve
         response.writeHead(401, {
           'content-type': 'application/json',
           'set-cookie': ['dsh-auth=hidden', 'another=hidden'],
+          trailer: 'Set-Cookie',
         });
+        response.addTrailers({ 'Set-Cookie': 'dsh-auth=trailer-hidden' });
         response.end('{"upstream":"selected","extra":42}');
       });
     },
@@ -49,6 +52,7 @@ it('forwards malformed JSON bytes with only the selected DSH cookie and preserve
           expect(response.status).toBe(401);
           expect(response.body.toString()).toBe('{"upstream":"selected","extra":42}');
           expect(response.headers['set-cookie']).toBeUndefined();
+          expect(response.trailers['set-cookie']).toBeUndefined();
           expect(observed).toEqual([
             {
               method: 'POST',
@@ -176,14 +180,21 @@ it('never resolves platform or anonymous traffic and preserves unavailable desti
       selected.push(id);
       return undefined;
     },
-    async ({ base, cookie, userId }) => {
+    async ({ base, cookie, userId, database }) => {
       expect((await sendHttp(base, { path: '/healthz', headers: { cookie } })).status).toBe(200);
       expect(
         (await sendHttp(base, { path: '/_platform/missing', headers: { cookie } })).status,
       ).toBe(404);
       expect((await sendHttp(base, { path: '/api/test' })).status).toBe(401);
+      expect(
+        (await sendHttp(base, { headers: { cookie, connection: 'Upgrade', upgrade: 'websocket' } }))
+          .status,
+      ).toBe(503);
       expect(selected).toEqual([]);
       expect((await sendHttp(base, { path: '/', headers: { cookie } })).status).toBe(503);
+      expect(selected).toEqual([userId]);
+      database.exec('DELETE FROM platform_sessions');
+      expect((await sendHttp(base, { headers: { cookie } })).status).toBe(401);
       expect(selected).toEqual([userId]);
     },
   );
@@ -193,6 +204,7 @@ it.each(['resolver', 'endpoint', 'reset', 'upgrade'] as const)(
   'returns safe 502 for %s failure and remains usable',
   async (failure) => {
     let failing = true;
+    const closed = Promise.withResolvers<undefined>();
     await withUpstream(
       (request, response) => {
         if (failing && failure === 'reset') {
@@ -200,6 +212,9 @@ it.each(['resolver', 'endpoint', 'reset', 'upgrade'] as const)(
           return;
         }
         if (failing && failure === 'upgrade') {
+          request.socket.once('close', () => {
+            closed.resolve(undefined);
+          });
           response.writeHead(101, { connection: 'Upgrade', upgrade: 'websocket' }).flushHeaders();
           return;
         }
@@ -223,6 +238,7 @@ it.each(['resolver', 'endpoint', 'reset', 'upgrade'] as const)(
               'private resolver diagnostic',
             );
             expect(lines.join('')).not.toContain(target.cookie);
+            if (failure === 'upgrade') await observeHttp(closed.promise);
             failing = false;
             expect((await sendHttp(base, { headers: { cookie } })).body.toString()).toBe('healthy');
           },
@@ -231,3 +247,40 @@ it.each(['resolver', 'endpoint', 'reset', 'upgrade'] as const)(
     );
   },
 );
+
+it('reports connection refusal without trying another destination and recovers on a later resolution', async () => {
+  await withUpstream(
+    (_request, response) => {
+      response.end('unused');
+    },
+    async (retired, server) => {
+      const closed = once(server, 'close');
+      server.close();
+      await closed;
+      await withUpstream(
+        (_request, response) => {
+          response.end('healthy');
+        },
+        async (healthy) => {
+          let selected = retired;
+          await withForwardingApp(
+            () => selected,
+            async ({ base, cookie }) => {
+              const response = await sendHttp(base, { headers: { cookie } });
+
+              expect(response.status).toBe(502);
+              expect(JSON.parse(response.body.toString()) as unknown).toMatchObject({
+                statusCode: 502,
+                error: 'Bad Gateway',
+              });
+              selected = healthy;
+              expect((await sendHttp(base, { headers: { cookie } })).body.toString()).toBe(
+                'healthy',
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+});
