@@ -331,3 +331,11 @@
 - All11 risk packs map below: public lifecycle/config/compatibility, shared-state ordering, ownership/secrets, error/partial cleanup, schema/audit, file/resource discovery, packaging/docs.
 - Evidence floor: realUnix/SQLite recovery and orphan RED/GREEN plus failure/race controls; actual two-instance platform stand-in recreation/new-owner reconciliation and manually created orphan deletion; full checks/strictOpenSpec/final-head Docker/CI.
 - No platform live-owner identity reset, background retry loop, global prune, credential regeneration, new schema/config/dependency, gateway/compose/app wiring (#56), data deletion or #48stress. Human critical-path review remains deferred to Epic completion.
+
+## Issue #48 fixture
+
+- Test/characterization; expanded (agree with upstream) task10.5: real61-bridge default-pool acceptance, including exact-owned destructive cleanup; no production behavior change expected.
+- Governing invariant:61 simultaneously existing invocation-owned /28 bridges use distinct non-overlapping subnets from the production default pool and are all removed without affecting unrelated resources.
+- Public `allocateSubnet` is the subject, followed by real Docker creation with its returned CIDR; literal `dsh-team-test` network names are required. No new public production create API or canonical-name override just for tests.
+- Evidence floor: existing default-pool allocator unit baseline, actual61-live-network inspection and cleanup, deliberate overlap rejection as a known-bad Engine control, full checks/strictOpenSpec/final-head full21Docker/CI.
+- Preserve all20 existing Docker cases and canonical resource ownership/cleanup; no61 user containers, admission-limit changes, global prune, dependencies/config/schema/DSH changes. Critical-path disclosure remains in PR and human review deferred to Epic completion.
