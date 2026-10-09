@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   START_CONTAINER,
+  START_IMAGE,
   START_NETWORK,
   START_USER,
   seedPlatform,
@@ -330,3 +331,135 @@ it('a newly attached extra instance network is rejected before startup publicati
     ),
   ).toEqual([]);
 });
+
+it.each(['extra bridge', 'changed declaration', 'new publication'])(
+  'compensation preserves the latest stopped topology when %s appears during its stop settlement',
+  async (fault) => {
+    const context = await fixture();
+    const { owner, input, daemon, database } = context;
+    const cancellation = new AbortController();
+    const stopping = startupBarrier();
+    context.observeResponse(({ method, path }) => {
+      if (method === 'POST' && path === `/networks/${START_NETWORK}/connect`) cancellation.abort();
+    });
+    context.hold((method, path) =>
+      method === 'POST' && path === `/containers/${START_CONTAINER}/stop?t=1`
+        ? stopping.hold()
+        : undefined,
+    );
+    const first = owner.startUserContainer({ ...input, signal: cancellation.signal });
+    const settled = Promise.allSettled([first]);
+    await stopping.reached;
+    try {
+      const sibling = await owner.startUserContainer({ ...input, userId: OTHER });
+      if (sibling.outcome !== 'starting') throw new Error('Sibling startup unavailable');
+      const siblingNetwork = [...daemon.networks.values()].find(
+        (network) => network.Name === `dsh-team-net-${OTHER}`,
+      );
+      const original = daemon.networks.get(START_NETWORK);
+      const retained = daemon.containers.get(START_CONTAINER);
+      if (siblingNetwork === undefined || original === undefined || retained === undefined)
+        throw new Error('Pending compensation resources unavailable');
+      expect(retained.State.Running).toBe(true);
+      daemon.reply({
+        method: 'POST',
+        path: '/networks/create',
+        body: {
+          Name: 'dsh-team-test-compensation-foreign',
+          Driver: 'bridge',
+          Labels: { 'dsh-team.test-role': 'foreign-compensation-control' },
+          IPAM: { Driver: 'default', Config: [{ Subnet: '172.31.0.0/28' }] },
+        },
+      });
+      const foreign = [...daemon.networks.values()].find(
+        (network) => network.Name === 'dsh-team-test-compensation-foreign',
+      );
+      if (foreign === undefined) throw new Error('Foreign bridge unavailable');
+      if (fault === 'extra bridge') {
+        const connected = daemon.reply({
+          method: 'POST',
+          path: `/networks/${foreign.Id}/connect`,
+          body: { Container: START_CONTAINER },
+        });
+        expect(connected.status).toBe(200);
+        expect(foreign.Containers).toHaveProperty(START_CONTAINER);
+      }
+      if (fault === 'changed declaration')
+        retained.HostConfig = { ...retained.HostConfig, NetworkMode: foreign.Id };
+      if (fault === 'new publication')
+        retained.NetworkSettings.Ports = {
+          '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }],
+        };
+      const preserved = {
+        owned: structuredClone(original),
+        foreign: structuredClone(foreign),
+        platform: structuredClone(daemon.containers.get(PLATFORM)),
+        sibling: structuredClone(daemon.containers.get(SECOND)),
+        siblingNetwork: structuredClone(siblingNetwork),
+        siblingRow: database.prepare('SELECT * FROM instances WHERE user_id = ?').get(OTHER),
+      };
+      const requestCount = daemon.requests.length;
+      stopping.release();
+
+      const error: unknown = await first.catch((failure: unknown) => failure);
+
+      expect.soft(String(error)).toContain('compensation failed or unconfirmed');
+      expect.soft(daemon.containers.get(START_CONTAINER)).toMatchObject({
+        Id: START_CONTAINER,
+        Name: `/dsh-team-u-${START_USER}`,
+        Image: START_IMAGE,
+        Config: { Labels: { 'dsh-team.user': START_USER } },
+        State: { Running: false },
+      });
+      expect.soft(daemon.networks.get(START_NETWORK)).toEqual(preserved.owned);
+      expect.soft(daemon.networks.get(foreign.Id)).toEqual(preserved.foreign);
+      expect.soft(daemon.containers.get(PLATFORM)).toEqual(preserved.platform);
+      expect.soft(daemon.containers.get(SECOND)).toEqual(preserved.sibling);
+      expect.soft(daemon.networks.get(siblingNetwork.Id)).toEqual(preserved.siblingNetwork);
+      expect
+        .soft(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(OTHER))
+        .toEqual(preserved.siblingRow);
+      const expectedError: unknown = expect.stringContaining('compensation failed or unconfirmed');
+      expect
+        .soft(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER))
+        .toMatchObject({
+          status: 'error',
+          container_id: START_CONTAINER,
+          image_id: START_IMAGE,
+          upstream_host: null,
+          upstream_port: null,
+          dsh_cookie: null,
+          last_error: expectedError,
+        });
+      expect
+        .soft(daemon.requests.slice(requestCount).filter(({ method }) => method === 'DELETE'))
+        .toEqual([]);
+      expect
+        .soft(
+          daemon.requests.slice(requestCount).filter(({ path }) => path.includes('/disconnect')),
+        )
+        .toEqual([]);
+      expect
+        .soft(
+          database
+            .prepare(
+              "SELECT * FROM audit_events WHERE target = ? AND event_type IN ('instance.started', 'instance.ready', 'instance.stopped')",
+            )
+            .all(START_USER),
+        )
+        .toEqual([]);
+      expect
+        .soft(
+          database
+            .prepare(
+              "SELECT event_type FROM audit_events WHERE target = ? AND event_type = 'instance.start-failed'",
+            )
+            .all(START_USER),
+        )
+        .toEqual([{ event_type: 'instance.start-failed' }]);
+    } finally {
+      stopping.release();
+      await settled;
+    }
+  },
+);

@@ -25,6 +25,7 @@ import {
   createUserNetwork,
   NetworkCreationUnconfirmedError,
   removeUserNetwork,
+  stoppedNetwork,
   validateUserNetwork,
 } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
@@ -400,16 +401,11 @@ async function compensateStarted(
     await validateUserNetwork(client, input.userId, before, input.transport, network.id, true);
     current();
     await client.json('POST', `/containers/${id}/stop?t=1`);
-    if (
-      inspectUserContainerState(
-        await client.json('GET', `/containers/${id}/json`),
-        id,
-        name,
-        input.userId,
-        image,
-      )
-    )
-      throw new Error();
+    const stopped = await client.json('GET', `/containers/${id}/json`);
+    if (inspectUserContainerState(stopped, id, name, input.userId, image)) throw new Error();
+    requireUnpublished(stopped, input.transport.config.upstreamMode);
+    if (stoppedNetwork(stopped, input.userId) !== captured.id)
+      throw new Error('Captured instance network declaration changed during compensation');
     current();
     await client.json('DELETE', `/containers/${id}`);
     try {
