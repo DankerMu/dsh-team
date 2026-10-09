@@ -2,13 +2,15 @@ import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
-import { createOrchestrator } from '../src/orchestrator/index.ts';
+import { allocateSubnet, createOrchestrator } from '../src/orchestrator/index.ts';
 import { startupEvidence, START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import {
-  cookieHttpStatus,
   inspect,
   record,
   startupClient,
+  createStandInPlatform,
+  platformHttpStatus,
+  inspectNetwork,
 } from './container-start-docker-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -16,6 +18,9 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const userB = `${userA.slice(0, 10)}zz`;
+  const platformName = `dsh-team-test-reconcile-${lifecycle.runId}`;
+  const originalPlatform = String(createStandInPlatform(lifecycle, platformName).Id);
+  const config = { upstreamMode: 'network' as const, platformContainerName: platformName };
   const database = openDatabase(
     join(dirname(lifecycle.overlayDirectory), 'reconciliation-platform.db'),
   );
@@ -23,7 +28,7 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
   const owner = createOrchestrator({
     client,
     database,
-    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+    config,
   });
   const authority = 'reconcile.example:8443';
   const input = {
@@ -44,7 +49,7 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     const survivors: {
       user: string;
       id: string;
-      port: number;
+      host: string;
       cookie: string;
       row: Record<string, unknown>;
       physical: Record<string, unknown>;
@@ -62,11 +67,19 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
       await owner.waitForUserContainerReady({ userId: user, authority });
       const row = record(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(user));
       if (typeof row.dsh_cookie !== 'string') throw new Error('Missing ready cookie');
-      expect(await cookieHttpStatus(started.upstreamPort, authority, row.dsh_cookie)).toBe(200);
+      expect(
+        platformHttpStatus(
+          lifecycle,
+          originalPlatform,
+          started.upstreamHost,
+          authority,
+          row.dsh_cookie,
+        ),
+      ).toBe(200);
       survivors.push({
         user,
         id: started.containerId,
-        port: started.upstreamPort,
+        host: started.upstreamHost,
         cookie: row.dsh_cookie,
         row,
         physical: inspect(lifecycle, started.containerId),
@@ -75,10 +88,48 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     const before = await Promise.all(
       [userA, userB].map((userId) => startupEvidence(database, { ...input, userId })),
     );
+    expect(lifecycle.command(['container', 'rm', '--force', originalPlatform], 15_000).status).toBe(
+      0,
+    );
+    const replacement = createStandInPlatform(lifecycle, platformName);
+    const platformId = String(replacement.Id);
+    expect(platformId).not.toBe(originalPlatform);
+    const primary = structuredClone(record(record(replacement.NetworkSettings).Networks).bridge);
+    const orphanUser = `${userA.slice(0, 10)}yy`;
+    const orphanName = `dsh-team-net-${orphanUser}`;
+    lifecycle.registerResource('network', orphanName, { 'dsh-team.user': orphanUser });
+    const inventory = await raw.json('GET', '/networks', undefined, AbortSignal.timeout(15_000));
+    if (!Array.isArray(inventory)) throw new Error('Missing network inventory');
+    const occupied = inventory.flatMap((entry: unknown) => {
+      const configs = record(record(entry).IPAM).Config;
+      return Array.isArray(configs)
+        ? configs.map((value: unknown) => String(record(value).Subnet))
+        : [];
+    });
+    const created = record(
+      await raw.json(
+        'POST',
+        '/networks/create',
+        {
+          Name: orphanName,
+          Driver: 'bridge',
+          Internal: false,
+          EnableIPv6: false,
+          Labels: { 'dsh-team.user': orphanUser },
+          IPAM: {
+            Driver: 'default',
+            Config: [{ Subnet: allocateSubnet('172.30.0.0/16', occupied) }],
+          },
+        },
+        AbortSignal.timeout(15_000),
+      ),
+    );
+    const orphanId = String(created.Id);
+    expect(Object.keys(record(inspectNetwork(lifecycle, orphanId).Containers))).toEqual([]);
     const reconstructed = createOrchestrator({
       client,
       database,
-      config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+      config,
     });
 
     await reconstructed.reconcile();
@@ -89,6 +140,12 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
         [userA, userB].map((userId) => startupEvidence(database, { ...input, userId })),
       ),
     ).toEqual(before);
+    await expect(
+      raw.json('GET', `/networks/${orphanId}`, undefined, AbortSignal.timeout(15_000)),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(record(record(inspect(lifecycle, platformId).NetworkSettings).Networks).bridge).toEqual(
+      primary,
+    );
     for (const survivor of survivors) {
       expect(
         database.prepare('SELECT * FROM instances WHERE user_id = ?').get(survivor.user),
@@ -99,7 +156,19 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
       expect(physical.HostConfig).toEqual(survivor.physical.HostConfig);
       expect(physical.NetworkSettings).toEqual(survivor.physical.NetworkSettings);
       expect(record(physical.State).Running).toBe(true);
-      expect(await cookieHttpStatus(survivor.port, authority, survivor.cookie)).toBe(200);
+      expect(Object.values(record(record(physical.NetworkSettings).Ports))).toEqual([null]);
+      expect(record(physical.HostConfig).PublishAllPorts).toBe(false);
+      const owned = record(
+        record(record(physical.NetworkSettings).Networks)[`dsh-team-net-${survivor.user}`],
+      );
+      const bridge = inspectNetwork(lifecycle, String(owned.NetworkID));
+      expect(Object.keys(record(bridge.Containers)).sort()).toEqual(
+        [survivor.id, platformId].sort(),
+      );
+      expect(platformHttpStatus(lifecycle, platformId, survivor.host, authority)).toBe(401);
+      expect(
+        platformHttpStatus(lifecycle, platformId, survivor.host, authority, survivor.cookie),
+      ).toBe(200);
     }
     const first = survivors[0];
     const second = survivors[1];
@@ -112,7 +181,9 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     expect(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(second.user)).toEqual(
       second.row,
     );
-    expect(await cookieHttpStatus(second.port, authority, second.cookie)).toBe(200);
+    expect(platformHttpStatus(lifecycle, platformId, second.host, authority, second.cookie)).toBe(
+      200,
+    );
     database.prepare('UPDATE instances SET dsh_cookie = NULL WHERE user_id = ?').run(second.user);
     await reconstructed.reconcile();
     const audits = database
@@ -165,6 +236,8 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
       missingCookieCorrected: true,
       retainedVolumes: 4,
       stopAudits: 2,
+      platformRecreated: true,
+      orphanDeleted: true,
     });
   } finally {
     database.close();
@@ -185,6 +258,8 @@ it('reconstructs the owner without replacing two ready survivors then corrects m
         missingCookieCorrected: true,
         retainedVolumes: 4,
         stopAudits: 2,
+        platformRecreated: true,
+        orphanDeleted: true,
       });
     },
     undefined,

@@ -7,8 +7,9 @@ import {
   inspectUserContainerEndpoint,
   inspectUserContainerState,
 } from './start.ts';
-import { containerId, object, resolvedImageId } from './identity.ts';
-import { validateUserNetwork } from './networks.ts';
+import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
+import { attachPlatform, validateUserNetwork } from './networks.ts';
+import type { OwnedNetwork } from './networks.ts';
 import { stopUserContainer } from './stop.ts';
 import { upstreamHost } from './transport.ts';
 import type { TransportContext } from './transport.ts';
@@ -100,13 +101,68 @@ function validateIndexed(
   return dshCookieExpiresAt(instance.dsh_cookie);
 }
 
+async function restorePlatform(
+  input: ReconciliationInput,
+  account: Record<string, unknown>,
+  instance: Record<string, unknown>,
+  signal: AbortSignal,
+  network: OwnedNetwork,
+  client: DockerClient,
+): Promise<true | 'retired'> {
+  const id = containerId({ Id: instance.container_id });
+  const image = resolvedImageId(instance.image_id);
+  const name = `dsh-team-u-${input.userId}`;
+  const current = () => {
+    assertCurrentSnapshot(input, account, instance, signal);
+  };
+  async function verify(requirePlatform = false): Promise<void> {
+    const after = await client.json('GET', `/containers/${id}/json`);
+    if (!inspectUserContainerState(after, id, name, input.userId, image)) throw new Error();
+    if (
+      inspectUserContainerEndpoint(after, id, name, input.userId, image, 'network') !==
+        instance.upstream_port ||
+      upstreamHost(after, input.userId, 'network') !== instance.upstream_host
+    )
+      throw new Error('Instance endpoint changed during network recovery');
+    const confirmed = await validateUserNetwork(
+      client,
+      input.userId,
+      after,
+      input.transport,
+      network.id,
+      false,
+      requirePlatform,
+    );
+    if (confirmed.subnet !== network.subnet) throw new Error('Captured network subnet changed');
+    current();
+  }
+  current();
+  let attachmentFailed = false;
+  try {
+    await attachPlatform(input.client, input.transport, input.userId, id, network, current, verify);
+  } catch {
+    attachmentFailed = true;
+  }
+  // Neither a pre-attach document nor a failed mutation grants authority over a changed survivor.
+  await verify(!attachmentFailed);
+  if (attachmentFailed) {
+    await stopUserContainer(
+      { ...input, reason: 'error', signal },
+      current,
+      'Platform network recovery failed',
+    );
+    return 'retired';
+  }
+  return true;
+}
+
 async function healthy(
   input: ReconciliationInput,
   account: Record<string, unknown>,
   instance: Record<string, unknown>,
   signal: AbortSignal,
   expiresAt: number | undefined,
-): Promise<boolean> {
+): Promise<boolean | 'retired'> {
   const id = containerId({ Id: instance.container_id });
   const image = resolvedImageId(instance.image_id);
   let document: unknown;
@@ -131,7 +187,15 @@ async function healthy(
     json: (method, path, body, _signal, maxBytes) =>
       input.client.json(method, path, body, signal, maxBytes),
   };
-  await validateUserNetwork(client, input.userId, document, input.transport);
+  const network = await validateUserNetwork(
+    client,
+    input.userId,
+    document,
+    input.transport,
+    undefined,
+    false,
+    false,
+  );
   // Incomplete starting state can be retired, never promoted into a ready survivor.
   if (instance.upstream_port !== null && instance.upstream_port !== port) throw new Error();
   if (
@@ -140,9 +204,10 @@ async function healthy(
       upstreamHost(document, input.userId, input.transport.config.upstreamMode)
   )
     throw new Error();
-  return (
-    account.status === 'active' && instance.status === 'running' && (expiresAt ?? 0) > Date.now()
-  );
+  const survivor =
+    account.status === 'active' && instance.status === 'running' && (expiresAt ?? 0) > Date.now();
+  if (!survivor || input.transport.config.upstreamMode !== 'network') return survivor;
+  return restorePlatform(input, account, instance, signal, network, client);
 }
 
 /** Called only while the owning per-user queue is held; retirement never re-enqueues itself. */
@@ -153,9 +218,10 @@ async function reconcile(input: ReconciliationInput, signal: AbortSignal): Promi
   const instance = object(
     input.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(input.userId),
   );
-  if (instance.status === 'stopped' && instance.container_id === null) return;
+  if (isTerminalInstance(instance.status, instance.container_id)) return;
   const expiresAt = validateIndexed(instance, input.transport);
   const survivor = await healthy(input, account, instance, signal, expiresAt);
+  if (survivor === 'retired') return;
   const current = () => {
     assertCurrentSnapshot(input, account, instance, signal);
   };

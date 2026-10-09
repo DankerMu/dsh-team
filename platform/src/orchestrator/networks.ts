@@ -22,7 +22,7 @@ const MAX_NETWORK_BYTES = 4 * 1024 * 1024;
 const ATTACH_TIMEOUT_MS = 10_000;
 const nameFor = (userId: string) => `dsh-team-net-${userId}`;
 
-function inspectedNetwork(document: unknown, userId: string, id?: string): OwnedNetwork {
+export function inspectedNetwork(document: unknown, userId: string, id?: string): OwnedNetwork {
   const row = object(document);
   const actual = containerId(row);
   const configs = object(row.IPAM).Config;
@@ -44,7 +44,6 @@ function inspectedNetwork(document: unknown, userId: string, id?: string): Owned
     row.EnableIPv6 !== false
   )
     throw new Error('Docker network ownership mismatch');
-  object(row.Containers);
   return { id: actual, subnet, created: false };
 }
 
@@ -153,14 +152,16 @@ export async function validateUserNetwork(
   transport: TransportContext,
   expected?: string,
   created = false,
+  requirePlatform = !created,
 ): Promise<OwnedNetwork> {
   const id = attachedNetwork(document, userId, expected, created);
   const network = await inspect(client, id);
   const owned = inspectedNetwork(network, userId, id);
   const container = containerId(document);
-  const platform = await verifiedPlatform(client, transport, !created);
+  const platform = await verifiedPlatform(client, transport, requirePlatform);
   ownedEndpoints(network, userId, container, platform);
-  if (platform !== undefined) platformMembership(platform, network, userId, owned.subnet, !created);
+  if (platform !== undefined)
+    platformMembership(platform, network, userId, owned.subnet, requirePlatform);
   const endpoints = object(object(network).Containers);
   if (!(container in endpoints)) {
     // A stopped or not-yet-started container can retain its declaration without a live endpoint.
@@ -286,6 +287,29 @@ async function disconnectPlatform(
   }
 }
 
+/** Delete only the freshly inspected empty captured bridge, after optional orphan absence fencing. */
+async function deleteEmptyUserNetwork(
+  client: DockerClient,
+  userId: string,
+  network: OwnedNetwork,
+  current: () => void,
+  verifyAbsence?: () => Promise<void>,
+): Promise<void> {
+  current();
+  const empty = await inspect(client, network.id);
+  if (empty === undefined) return;
+  if (inspectedNetwork(empty, userId, network.id).subnet !== network.subnet)
+    throw new Error('Owned network subnet changed');
+  ownedEndpoints(empty, userId);
+  current();
+  await verifyAbsence?.();
+  try {
+    await client.json('DELETE', `/networks/${network.id}`);
+  } catch (error) {
+    if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
+  }
+}
+
 /** Verify before every destructive step; disconnect only a confirmed stopped owned endpoint. */
 export async function removeUserNetwork(
   client: DockerClient,
@@ -294,6 +318,7 @@ export async function removeUserNetwork(
   current: () => void,
   stoppedContainer: string | undefined,
   captured: Pick<OwnedNetwork, 'id' | 'subnet'>,
+  verifyAbsence?: () => Promise<void>,
 ): Promise<void> {
   current();
   const found = await inspect(client, captured.id);
@@ -318,22 +343,11 @@ export async function removeUserNetwork(
     });
   }
   if (attached && platform !== undefined) {
+    await verifyAbsence?.();
     current();
     await disconnectPlatform(client, transport, userId, network, platform);
   }
-  current();
-  const empty = await inspect(client, network.id);
-  if (empty !== undefined) {
-    if (inspectedNetwork(empty, userId, network.id).subnet !== network.subnet)
-      throw new Error('Owned network subnet changed');
-    ownedEndpoints(empty, userId);
-    current();
-    try {
-      await client.json('DELETE', `/networks/${network.id}`);
-    } catch (error) {
-      if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
-    }
-  }
+  await deleteEmptyUserNetwork(client, userId, network, current, verifyAbsence);
   current();
   if ((await inspect(client, network.id)) !== undefined) throw new Error('Owned network remains');
   await requireCanonicalAbsent(client, userId);
@@ -347,6 +361,8 @@ export async function attachPlatform(
   userId: string,
   container: string,
   captured: OwnedNetwork,
+  current: () => void = () => undefined,
+  verify?: () => Promise<void>,
 ): Promise<void> {
   const signal = AbortSignal.timeout(ATTACH_TIMEOUT_MS);
   const client: DockerClient = {
@@ -360,6 +376,8 @@ export async function attachPlatform(
   if (network.subnet !== captured.subnet) throw new Error('Captured network subnet changed');
   ownedEndpoints(before, userId, container, platform);
   if (!platformMembership(platform, before, userId, network.subnet, false)) {
+    await verify?.();
+    current();
     // Do not drop submitted mutation ownership on abort or on a lost response.
     try {
       await client.json('POST', `/networks/${network.id}/connect`, { Container: platform.id });
@@ -374,4 +392,5 @@ export async function attachPlatform(
   if (confirmed === undefined) throw new Error('Platform attachment outcome unconfirmed');
   ownedEndpoints(after, userId, container, confirmed);
   platformMembership(confirmed, after, userId, network.subnet, true);
+  current();
 }

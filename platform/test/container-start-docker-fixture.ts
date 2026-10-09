@@ -34,6 +34,55 @@ export function inspectNetwork(lifecycle: UserImageLifecycle, id: string): Recor
   return record(rows[0]);
 }
 
+export function createStandInPlatform(lifecycle: UserImageLifecycle, name: string) {
+  lifecycle.registerResource('container', name, { 'dsh-team.test-run': lifecycle.runId });
+  const result = lifecycle.command(
+    [
+      'run',
+      '--detach',
+      '--name',
+      name,
+      '--network',
+      'bridge',
+      '--label',
+      `dsh-team.test-run=${lifecycle.runId}`,
+      lifecycle.imageId,
+      'sleep',
+      'infinity',
+    ],
+    30_000,
+  );
+  if (result.status !== 0 || result.error !== undefined) throw new Error('Stand-in startup failed');
+  const container = inspect(lifecycle, name);
+  expect(container.Image).toBe(lifecycle.imageId);
+  return container;
+}
+
+export function platformHttpStatus(
+  lifecycle: UserImageLifecycle,
+  id: string,
+  host: string,
+  authority: string,
+  cookie = '',
+): number {
+  const script = `
+import urllib.request, urllib.error, sys
+request = urllib.request.Request('http://' + sys.argv[1] + ':3080/', headers={'Host': sys.argv[2], 'Cookie': sys.argv[3]})
+try:
+    response = urllib.request.urlopen(request, timeout=5)
+    print(response.status)
+except urllib.error.HTTPError as error:
+    print(error.code)
+`;
+  const result = lifecycle.command(
+    ['exec', id, 'python3', '-c', script, host, authority, cookie],
+    10_000,
+  );
+  if (result.status !== 0 || result.error !== undefined || !/^\d{3}$/.test(result.stdout.trim()))
+    throw new Error('Stand-in HTTP connection failed');
+  return Number(result.stdout.trim());
+}
+
 /** Normalize only incidental mount ordering; preserve every mount and other inspect attribute. */
 export function normalizeInspectMounts(
   container: Record<string, unknown>,

@@ -80,7 +80,6 @@ it.each([
   ['publish-all', 'publishAll'],
   ['binding', 'binding'],
   ['extra instance network', 'extraInstanceNetwork'],
-  ['missing platform', 'missingPlatform'],
   ['platform replacement', 'platformReplacement'],
   ['platform endpoint disagreement', 'platformEndpointDisagreement'],
   ['foreign endpoint', 'foreignEndpoint'],
@@ -111,13 +110,6 @@ it.each([
     },
     extraInstanceNetwork: () => {
       container.NetworkSettings.Networks = { ...container.NetworkSettings.Networks, bridge: {} };
-    },
-    missingPlatform: () => {
-      daemon.reply({
-        method: 'POST',
-        path: `/networks/${START_NETWORK}/disconnect`,
-        body: { Container: PLATFORM, Force: false },
-      });
     },
     platformReplacement: () => {
       daemon.containers.delete(PLATFORM);
@@ -157,6 +149,116 @@ it.each([
   expect(row(database)).toEqual(before);
   expect([...daemon.containers]).toEqual(physical);
   expect(daemon.requests.slice(requests).every(({ method }) => method === 'GET')).toBe(true);
+});
+
+it.each(['starting', 'running'])(
+  'reuse still rejects missing platform membership for a %s index without mutation',
+  async (status) => {
+    const { owner, input, daemon, database } = await fixture();
+    await owner.startUserContainer(input);
+    if (status === 'running')
+      database
+        .prepare("UPDATE instances SET status = 'running', dsh_cookie = ?")
+        .run(RECONCILE_COOKIE);
+    expect(
+      daemon.reply({
+        method: 'POST',
+        path: `/networks/${START_NETWORK}/disconnect`,
+        body: { Container: PLATFORM, Force: false },
+      }).status,
+    ).toBe(200);
+    const before = row(database);
+    const physical = structuredClone([...daemon.containers]);
+    const networks = structuredClone([...daemon.networks]);
+    const boundary = daemon.requests.length;
+
+    await expect(owner.startUserContainer(input)).rejects.toThrow('Container startup failed');
+
+    expect(row(database)).toEqual(before);
+    expect([...daemon.containers]).toEqual(physical);
+    expect([...daemon.networks]).toEqual(networks);
+    expect(daemon.requests.slice(boundary).filter(({ method }) => method !== 'GET')).toEqual([]);
+  },
+);
+
+it('reconciliation retires an incomplete starting index with missing platform membership without promoting it or damaging its sibling', async () => {
+  const { owner, input, daemon, database } = await fixture();
+  await owner.startUserContainer(input);
+  const other = 'mnopqrstuvwx';
+  const otherContainer = 'd'.repeat(64);
+  daemon.setContainerId(otherContainer);
+  await owner.startUserContainer({ ...input, userId: other });
+  const sibling = structuredClone(daemon.containers.get(otherContainer));
+  const siblingNetwork = structuredClone(
+    [...daemon.networks.values()].find((network) => network.Name === `dsh-team-net-${other}`),
+  );
+  if (sibling === undefined || siblingNetwork === undefined)
+    throw new Error('Started sibling fixture unavailable');
+  // Keep the sibling an authenticated survivor rather than a second incomplete start.
+  database
+    .prepare("UPDATE instances SET status = 'running', dsh_cookie = ? WHERE user_id = ?")
+    .run(RECONCILE_COOKIE, other);
+  const siblingRow = database.prepare('SELECT * FROM instances WHERE user_id = ?').get(other);
+  const primary = structuredClone(daemon.networks.get('0'.repeat(64)));
+  const history = database
+    .prepare(
+      'SELECT last_started_at, last_activity_at, last_error FROM instances WHERE user_id = ?',
+    )
+    .get(START_USER);
+  expect(row(database)).toMatchObject({ status: 'starting', dsh_cookie: null });
+  expect(
+    daemon.reply({
+      method: 'POST',
+      path: `/networks/${START_NETWORK}/disconnect`,
+      body: { Container: PLATFORM, Force: false },
+    }).status,
+  ).toBe(200);
+  const boundary = daemon.requests.length;
+
+  await owner.reconcile();
+
+  expect(row(database)).toMatchObject({
+    status: 'stopped',
+    container_id: null,
+    image_id: null,
+    image_tag: null,
+    upstream_host: null,
+    upstream_port: null,
+    dsh_cookie: null,
+  });
+  expect(
+    database
+      .prepare(
+        'SELECT last_started_at, last_activity_at, last_error FROM instances WHERE user_id = ?',
+      )
+      .get(START_USER),
+  ).toEqual(history);
+  expect(
+    database
+      .prepare(
+        "SELECT event_type, target, details FROM audit_events WHERE event_type = 'instance.stopped'",
+      )
+      .all(),
+  ).toEqual([
+    { event_type: 'instance.stopped', target: START_USER, details: '{"reason":"error"}' },
+  ]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(daemon.containers.get(otherContainer)).toEqual(sibling);
+  expect(daemon.networks.get(siblingNetwork.Id)).toEqual(siblingNetwork);
+  expect(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(other)).toEqual(
+    siblingRow,
+  );
+  expect(daemon.networks.get('0'.repeat(64))).toEqual(primary);
+  expect(daemon.containers.get(PLATFORM)?.NetworkSettings.Networks).toHaveProperty(
+    `dsh-team-net-${other}`,
+  );
+  expect(daemon.requests.slice(boundary).filter(({ path }) => path.includes('/volumes'))).toEqual(
+    [],
+  );
+  expect(daemon.requests.slice(boundary).filter(({ path }) => path.endsWith('/connect'))).toEqual(
+    [],
+  );
 });
 
 it.each(['connect rejected', 'platform stopped', 'wrong configured name', 'identity disagreement'])(

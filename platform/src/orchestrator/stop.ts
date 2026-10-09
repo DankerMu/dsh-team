@@ -4,7 +4,7 @@ import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { inspectUserContainerEndpoint, inspectUserContainerState } from './start.ts';
-import { containerId, object, resolvedImageId } from './identity.ts';
+import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
 import { indexedEndpoint } from './credentials.ts';
 import { captureUserNetwork, removeUserNetwork, stoppedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamHost } from './transport.ts';
@@ -64,7 +64,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
   if (typeof row !== 'object' || row === null) throw new Error();
   // The schema constrains nullable endpoint/history fields; validate the mutation identities here.
   const instance = row as RetirementRow;
-  if (instance.status === 'stopped' && instance.container_id === null) return undefined;
+  if (isTerminalInstance(instance.status, instance.container_id)) return undefined;
   const id = instance.container_id;
   if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error();
   const imageId = resolvedImageId(instance.image_id);
@@ -185,6 +185,15 @@ async function remove(
   }
   if (state === true) throw new Error();
   current(input, selection, signal);
+  if (input.transport.config.upstreamMode === 'network')
+    await captureUserNetwork(
+      input.client,
+      input.userId,
+      input.transport,
+      state === undefined ? undefined : selection.containerId,
+      selection.declaredNetworkId,
+    );
+  current(input, selection, signal);
   if (state === undefined) return;
   try {
     await input.client.json('DELETE', `/containers/${selection.containerId}`, undefined, signal);
@@ -200,16 +209,21 @@ function commit(
   selection: Selection,
   reason: InstanceStopReason,
   signal: AbortSignal,
+  terminalError?: string,
 ): void {
   input.database.transaction(() => {
     current(input, selection, signal);
     const changed = input.database
       .prepare(
-        `UPDATE instances SET status = 'stopped',
+        `UPDATE instances SET status = ?, last_error = COALESCE(?, last_error),
       container_id = NULL, image_id = NULL, image_tag = NULL, upstream_host = NULL,
       upstream_port = NULL, dsh_cookie = NULL WHERE ${CURRENT_RETIREMENT}`,
       )
-      .run(...selection.identity);
+      .run(
+        terminalError === undefined ? 'stopped' : 'error',
+        terminalError ?? null,
+        ...selection.identity,
+      );
     if (changed.changes !== 1) throw new Error();
     recordAuditEvent(input.database, {
       type: 'instance.stopped',
@@ -225,6 +239,7 @@ function commit(
 export async function stopUserContainer(
   input: StopUserContainerInput,
   assertCurrent?: () => void,
+  terminalError?: string,
 ): Promise<boolean> {
   const fenced: FencedRetirementInput =
     assertCurrent === undefined ? input : { ...input, assertCurrent };
@@ -255,7 +270,7 @@ export async function stopUserContainer(
       selection.declaredNetworkId,
     );
     current(fenced, selection, signal);
-    await remove(fenced, selection, signal);
+    await remove({ ...fenced, client: networkClient }, selection, signal);
     // After exact user removal, platform detach/inspect settlement retains ownership despite caller abort.
     if (input.transport.config.upstreamMode === 'network') networkSignal = work.signal;
     if (network === undefined) {
@@ -281,7 +296,7 @@ export async function stopUserContainer(
         network,
       );
     }
-    commit(fenced, selection, reason, signal);
+    commit(fenced, selection, reason, signal, terminalError);
     return true;
   } catch {
     // Neither Docker response bodies, database errors nor backend credentials escape this boundary.

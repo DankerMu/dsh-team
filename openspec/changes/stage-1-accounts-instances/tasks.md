@@ -683,6 +683,15 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
 验证记录（#46）：owner捕获network默认/published-loopback显式开发方式及平台容器名，验证并固定平台不可变ID；实例无宿主端口、独立bridge的IPv4:3080写入现有索引，启动连接平台、退休断开且验证空网络删除，数据与兄弟保留。初始公共Unix/SQLite语义RED后实现；三次用户授权的本地追加复验修复遗漏导入、规范fixture复用及清理回调绑定，门槛未放宽。审查两轮修复分别处理readiness保留的已停止脱网容器退休（2项RED）及补偿stop等待中拓扑/声明/发布变化的删除前再验证（3项RED）；完整pnpmcheck为1130unit/644integration、全部逐文件覆盖通过、重复率2.85%、strictOpenSpec通过。source与compiled实际进程均拒绝非法mode（exit1、指名变量），合法两种mode在Docker不存在时health200。fresh全diff复审clean；审查头`57eb07fea4118b6a4f6c5d4b568b2cf047cb09a7`固定Node24.13.1/pnpm10.34.6 giap-vps完整20/20Docker通过，12文件、131.86秒、exit0：真实平台替身到两个未发布实例3080均HTTP401，独立退休/脱网/数据和兄弟保持，原19基线全保留；独立项目容器/网络/卷/测试镜像清点为空。最终头/CI以PR#153绑定证据为准；不声称实现#47平台重建恢复/孤儿清理，人工白盒后置Epic完成。
 
+### Issue #47 risk/evidence map (task10.4 only)
+
+- Public API / CLI / script entry; Config / project setup; Legacy compatibility / examples — selected: same explicit owner.reconcile and captured transport config; fresh-owner replacement platform, unchanged live-owner pin and loopback behavior. No app wiring until#56.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: bounded labelled network discovery, per-user scheduling for network-only candidates, submitted mutation settlement/cancellation and unknown-create quarantine; deterministic same-user start/cleanup races with unrelated-user progress.
+- Auth / permissions / secrets; Schema / columns / units / field names — selected: exact network/container/platform identity, row/account snapshots, canonical+indexed container404 absence, preserved healthy credentials and safe error/stopped audits; no new schema or credential generation.
+- Error handling / rollback / partial outputs; File IO / path safety / overwrite — selected: attach failure stops/marks error, unconfirmed outcomes preserve resources; orphan deletion only after fresh verified absence/empty endpoints, no volumes/foreign endpoint mutation. Positive/negative publicUnixSQLite controls plus atomic persistence failures.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: real recreated stand-in/new owner reaches both original instances and removes a registered orphan, all20baseline cases retained, complete project-resource inventory; fullpnpmcheck/strictOpenSpec/finalheadDocker/CI, deferred human white-box.
+- Non-goals: mid-owner platform-ID reset, global prune/retries, new schema/config/dependencies, gateway/compose/app startup wiring, count stress.
+
 ## 11. 网关（任务包 1.8）
 
 依赖：第 6 组；测试用本地替身上游，不依赖第 9 组。模块在 `platform/src/gateway/`。

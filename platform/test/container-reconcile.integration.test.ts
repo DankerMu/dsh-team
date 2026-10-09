@@ -11,6 +11,7 @@ import {
   startupDaemon,
   startupUnixServer,
   startupBarrier,
+  seedPlatform,
   START_CONTAINER,
   START_NETWORK,
   START_USER,
@@ -351,6 +352,115 @@ it('preserves two healthy survivors after reconstruction and a database reopen',
   expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
 });
 
+it('a fresh owner restores both surviving instance memberships after the configured platform is recreated without lifecycle churn', async () => {
+  const other = 'mnopqrstuvwx';
+  const second = 'd'.repeat(64);
+  const secondNetwork = '2'.padStart(64, '0');
+  const platformName = 'dsh-team-test-platform-recovery';
+  const originalPlatform = 'f'.repeat(64);
+  const replacementPlatform = '9'.repeat(64);
+  const config = { upstreamMode: 'network' as const, platformContainerName: platformName };
+  seedReconciliation(database, daemon, other, second);
+  const survivors = [
+    { user: START_USER, id: START_CONTAINER, network: START_NETWORK, host: '172.30.0.2' },
+    { user: other, id: second, network: secondNetwork, host: '172.30.0.18' },
+  ];
+  for (const survivor of survivors) {
+    const container = daemon.containers.get(survivor.id);
+    const network = daemon.networks.get(survivor.network);
+    if (container === undefined || network === undefined)
+      throw new Error('Missing survivor fixture');
+    container.NetworkSettings.Ports = { '3080/tcp': null };
+    if (survivor.user === other) {
+      network.IPAM = { Driver: 'default', Config: [{ Subnet: '172.30.0.16/28' }] };
+      network.Containers[second] = {
+        Name: 'dsh-team-u-mnopqrstuvwx',
+        IPv4Address: '172.30.0.18/28',
+        EndpointID: second,
+      };
+      container.NetworkSettings.Networks = {
+        'dsh-team-net-mnopqrstuvwx': {
+          NetworkID: secondNetwork,
+          EndpointID: second,
+          IPAddress: '172.30.0.18',
+          Aliases: ['u-mnopqrstuvwx'],
+        },
+      };
+    }
+    database
+      .prepare('UPDATE instances SET upstream_host = ?, upstream_port = 3080 WHERE user_id = ?')
+      .run(survivor.host, survivor.user);
+  }
+  seedPlatform(daemon, platformName, originalPlatform);
+  for (const survivor of survivors)
+    expect(
+      daemon.reply({
+        method: 'POST',
+        path: `/networks/${survivor.network}/connect`,
+        body: { Container: originalPlatform },
+      }).status,
+    ).toBe(200);
+  const liveOwner = createOrchestrator({
+    client: createDockerClient(join(root, 'engine.sock')),
+    database,
+    config,
+  });
+  const before = reconciliationState(database);
+  const containersBefore = survivors.map(({ id }) => structuredClone(daemon.containers.get(id)));
+  const healthyBoundary = daemon.requests.length;
+  await liveOwner.reconcile();
+  expect(reconciliationState(database)).toEqual(before);
+  expect(daemon.requests.slice(healthyBoundary).filter(({ method }) => method !== 'GET')).toEqual(
+    [],
+  );
+
+  daemon.removeContainer(originalPlatform);
+  const primaryBefore = structuredClone(seedPlatform(daemon, platformName, replacementPlatform));
+  for (const survivor of survivors)
+    expect(Object.keys(daemon.networks.get(survivor.network)?.Containers ?? {})).toEqual([
+      survivor.id,
+    ]);
+  database.close();
+  database = openDatabase(join(root, 'platform.db'));
+  const reconstructed = createOrchestrator({
+    client: createDockerClient(join(root, 'engine.sock')),
+    database,
+    config,
+  });
+  const recoveryBoundary = daemon.requests.length;
+
+  const outcome = await Promise.allSettled([reconstructed.reconcile()]);
+
+  for (const survivor of survivors) {
+    expect
+      .soft(Object.keys(daemon.networks.get(survivor.network)?.Containers ?? {}).sort())
+      .toEqual([survivor.id, replacementPlatform].sort());
+    expect
+      .soft(daemon.containers.get(replacementPlatform)?.NetworkSettings.Networks)
+      .toMatchObject({
+        [`dsh-team-net-${survivor.user}`]: { NetworkID: survivor.network },
+      });
+  }
+  expect.soft(reconciliationState(database)).toEqual(before);
+  expect.soft(survivors.map(({ id }) => daemon.containers.get(id))).toEqual(containersBefore);
+  expect.soft(daemon.networks.get('0'.repeat(64))).toEqual(primaryBefore);
+  expect.soft(daemon.containers.has(originalPlatform)).toBe(false);
+  expect
+    .soft(
+      daemon.requests
+        .slice(recoveryBoundary)
+        .filter(({ method, path }) => method !== 'GET' && !path.endsWith('/connect')),
+    )
+    .toEqual([]);
+  expect(outcome).toEqual([{ status: 'fulfilled', value: undefined }]);
+  const settledBoundary = daemon.requests.length;
+  await reconstructed.reconcile();
+  expect(reconciliationState(database)).toEqual(before);
+  expect(daemon.requests.slice(settledBoundary).filter(({ method }) => method !== 'GET')).toEqual(
+    [],
+  );
+});
+
 it('discovers and removes a physically stopped owned container without volume deletion', async () => {
   const container = daemon.containers.get(START_CONTAINER);
   if (container === undefined) throw new Error('Missing fixture');
@@ -399,3 +509,52 @@ it.each(['missing', 'stopped', 'disabled', 'running'])(
     expectReconciliationRetired(database, daemon);
   },
 );
+
+it('submitted orphan deletion settles before same-user retirement while an unrelated user progresses despite caller cancellation', async () => {
+  const other = 'mnopqrstuvwx';
+  const otherContainer = 'd'.repeat(64);
+  const otherNetwork = '2'.padStart(64, '0');
+  seedReconciliation(database, daemon, other, otherContainer);
+  daemon.removeContainer(otherContainer);
+  database
+    .prepare(
+      `UPDATE instances SET status = 'stopped', container_id = NULL,
+    image_id = NULL, image_tag = NULL, upstream_host = NULL, upstream_port = NULL,
+    dsh_cookie = NULL WHERE user_id = ?`,
+    )
+    .run(other);
+  const gate = startupBarrier();
+  hold = (method, path) =>
+    method === 'DELETE' && path === `/networks/${otherNetwork}` ? gate.hold() : undefined;
+  const cancellation = new AbortController();
+  const pending = owner.reconcile({ signal: cancellation.signal });
+  const observed = Promise.allSettled([pending]);
+  await gate.reached;
+  let successorSettled = false;
+  const successor = owner.stopUserContainer({ userId: other, reason: 'admin' }).then(() => {
+    successorSettled = true;
+  });
+  try {
+    cancellation.abort();
+
+    await owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+
+    expect(successorSettled).toBe(false);
+    expect(daemon.networks.has(otherNetwork)).toBe(true);
+    expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+    gate.release();
+    expect(await observed).toEqual([expect.objectContaining({ status: 'rejected' })]);
+    await successor;
+    expect(daemon.networks.has(otherNetwork)).toBe(false);
+    expect(
+      database.prepare('SELECT status, container_id FROM instances WHERE user_id = ?').get(other),
+    ).toEqual({ status: 'stopped', container_id: null });
+    expect(reconciliationState(database).audits).toEqual([
+      expect.objectContaining({ target: START_USER, details: '{"reason":"admin"}' }),
+    ]);
+  } finally {
+    gate.release();
+    await observed;
+    await successor;
+  }
+});

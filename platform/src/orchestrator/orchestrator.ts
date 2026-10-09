@@ -12,6 +12,7 @@ import { discoverReconciliationUsers, reconcileUser } from './reconcile.ts';
 import type { ReconciliationInput } from './reconcile.ts';
 import { NetworkCreationUnconfirmedError } from './networks.ts';
 import type { TransportConfig, TransportContext } from './transport.ts';
+import { discoverReconciliationNetworks, reconcileOrphanNetwork } from './network-reconcile.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -180,11 +181,35 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
           ),
         ),
       );
+      const failedUsers = new Set(
+        users.filter((_user, index) => results[index]?.status === 'rejected'),
+      );
+      const networks = await discoverReconciliationNetworks({
+        client,
+        database,
+        transport,
+        ...cancellation,
+      });
+      const networkResults = await Promise.allSettled(
+        networks.map((candidate) =>
+          schedule(
+            { ...cancellation, userId: candidate.userId },
+            async (selected) => {
+              assertNetworkConfirmed(selected.userId);
+              if (failedUsers.has(selected.userId))
+                throw new Error('Indexed reconciliation unsettled');
+              await reconcileOrphanNetwork(selected, candidate);
+            },
+            'Instance reconciliation failed',
+            true,
+          ),
+        ),
+      );
       // Indexed corrections cannot acknowledge a quarantined creation without an indexed row.
       if (
         signal?.aborted ||
         uncertainNetworks.size !== 0 ||
-        results.some((result) => result.status === 'rejected')
+        [...results, ...networkResults].some((result) => result.status === 'rejected')
       )
         throw new Error();
     } catch {

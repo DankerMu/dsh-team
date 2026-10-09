@@ -12,51 +12,16 @@ import {
   registerStartupUsers,
   startDockerInstance,
   runNetworkAcceptance,
+  createStandInPlatform,
+  platformHttpStatus,
 } from './container-start-docker-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-
-function fromPlatform(lifecycle: UserImageLifecycle, id: string, host: string, authority: string) {
-  const script = `
-import urllib.request, urllib.error, sys
-request = urllib.request.Request('http://' + sys.argv[1] + ':3080/', headers={'Host': sys.argv[2]})
-try:
-    response = urllib.request.urlopen(request, timeout=5)
-    print(response.status)
-except urllib.error.HTTPError as error:
-    print(error.code)
-`;
-  const result = lifecycle.command(['exec', id, 'python3', '-c', script, host, authority], 10_000);
-  if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Stand-in HTTP connection failed');
-  expect(result.stdout.trim()).toBe('401');
-}
 
 async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
   const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const userB = `${userA.slice(0, 10)}zz`;
   const platformName = `dsh-team-test-platform-${lifecycle.runId}`;
-  const labels = { 'dsh-team.test-run': lifecycle.runId };
-  lifecycle.registerResource('container', platformName, labels);
-  const created = lifecycle.command(
-    [
-      'run',
-      '--detach',
-      '--name',
-      platformName,
-      '--network',
-      'bridge',
-      '--label',
-      `dsh-team.test-run=${lifecycle.runId}`,
-      lifecycle.imageId,
-      'sleep',
-      'infinity',
-    ],
-    30_000,
-  );
-  if (created.status !== 0 || created.error !== undefined)
-    throw new Error('Stand-in startup failed');
-  const original = inspect(lifecycle, platformName);
-  expect(original.Image).toBe(lifecycle.imageId);
+  const original = createStandInPlatform(lifecycle, platformName);
   const platformId = String(original.Id);
   const primary = structuredClone(record(record(original.NetworkSettings).Networks));
   const database = openDatabase(
@@ -107,7 +72,7 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
           ],
         ).NetworkID,
       ).toBe(networkId);
-      fromPlatform(lifecycle, platformId, started.upstreamHost, authority);
+      expect(platformHttpStatus(lifecycle, platformId, started.upstreamHost, authority)).toBe(401);
       return { started, networkId };
     };
     const a = await start(userA);
@@ -136,7 +101,7 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
     expect(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(userB)).toEqual(
       siblingRow,
     );
-    fromPlatform(lifecycle, platformId, b.started.upstreamHost, authority);
+    expect(platformHttpStatus(lifecycle, platformId, b.started.upstreamHost, authority)).toBe(401);
     for (const [kind, id] of [
       ['container', a.started.containerId],
       ['network', a.networkId],
@@ -149,7 +114,7 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
         lifecycle.command(['volume', 'inspect', `dsh-team-${volume}-${userA}`], 15_000).status,
       ).toBe(0);
     const reader = `dsh-team-test-network-data-${lifecycle.runId}`;
-    lifecycle.registerResource('container', reader, labels);
+    lifecycle.registerResource('container', reader, { 'dsh-team.test-run': lifecycle.runId });
     const data = lifecycle.command(
       [
         'run',
