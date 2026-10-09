@@ -65,12 +65,12 @@ describe('buildApp', () => {
     expect(response.statusCode).toBe(200);
   });
 
-  it('answers 404 for an unknown route', async () => {
+  it('keeps unknown platform routes outside the gateway', async () => {
     const database = openDatabase(':memory:');
     applyMigrations(database);
     const app = await buildApp(SILENT_CONFIG, database);
 
-    const response = await app.inject({ method: 'GET', url: '/no-such-route' });
+    const response = await app.inject({ method: 'GET', url: '/_platform/no-such-route' });
     await app.close();
 
     expect(response.statusCode).toBe(404);

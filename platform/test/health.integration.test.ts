@@ -60,8 +60,8 @@ describe('platform over a real TCP port', () => {
     expect(await response.json()).toEqual({ status: 'ok' });
   });
 
-  it('answers an unknown route with a JSON 404', async () => {
-    const response = await fetch(`${baseUrl}/no-such-route`);
+  it('answers an unknown platform route with a JSON 404', async () => {
+    const response = await fetch(`${baseUrl}/_platform/no-such-route`);
 
     expect(response.status).toBe(404);
     expect(await response.json()).toMatchObject({ statusCode: 404 });
