@@ -115,6 +115,7 @@ describe('buildApp', () => {
         newPassword: 'new-password-marker',
         token: 'opaque-token',
         apiKey: 'sk-model-key',
+        cookie: 'backend-cookie-marker',
         email: 'alice@example.com',
       },
     });
@@ -128,6 +129,7 @@ describe('buildApp', () => {
         newPassword: '[redacted]',
         token: '[redacted]',
         apiKey: '[redacted]',
+        cookie: '[redacted]',
         email: 'alice@example.com',
       },
     });
@@ -137,6 +139,7 @@ describe('buildApp', () => {
       'new-password-marker',
       'opaque-token',
       'sk-model-key',
+      'backend-cookie-marker',
     ]) {
       expect(written).not.toContain(secret);
     }

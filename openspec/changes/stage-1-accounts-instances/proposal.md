@@ -348,3 +348,11 @@
 - Selected packs: public API, auth/secrets, shared state/order, errors, schema, configuration, compatibility, resource limits, packaging and documentation; file IO not selected (no new filesystem operations). Evidence maps below.
 - Evidence floor: semantic RED/GREEN through buildApp, real TCP HTTP and upgrade rejection, valid/expired/revoked/disabled sessions, root checks, contract generation, strict OpenSpec, source/built runtime smoke and CI.
 - Authenticated instance traffic deliberately returns 503 in this upstream-approved slice. HTTP/stream/WebSocket forwarding, connection tracking, wait reasons, orchestrator integration and login page rendering remain their named later issues.
+
+## Issue #50 fixture
+
+- Feature; expanded (agree with upstream), task11.2: authenticated HTTP forwarding and server-side credential/authority rewriting.
+- Governing invariant: one current platform-session user selects an inseparable upstream endpoint/DSH-cookie pair; client routing fields cannot select another user or destination, and platform cookies never reach an upstream.
+- Preserve task11.1 namespace/admission/renewal/error and rejected-upgrade resource behavior, platform auth/Origin guards and existing consumers. No orchestrator/instances-table wiring (#56), WebSocket forwarding (#52), connection registry (#53), wait-state enumeration (#55), or200MB performance claim (#51).
+- Selected packs: public API, auth/secrets, shared-state/order, error/partial response, resource lifetime, schema, configuration, compatibility, packaging and docs. No new file IO, persisted schema, dependency or deployment config.
+- Evidence floor: real two-user/two-upstream HTTP RED/GREEN with distinct cookies/body markers; forged routing/header controls, byte-preserving POST/status/path/query, pre/post-header failures and client abort; full checks/strictOpenSpec, independent source/built runtime and final-head21Docker/CI.
