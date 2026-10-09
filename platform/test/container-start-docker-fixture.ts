@@ -1,6 +1,11 @@
 import { request } from 'node:http';
+import { arch, platform } from 'node:os';
 import { expect } from 'vitest';
 import { createDockerClient } from '../src/orchestrator/index.ts';
+import type { Orchestrator } from '../src/orchestrator/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
+import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 export function record(value: unknown): Record<string, unknown> {
@@ -17,6 +22,15 @@ export function inspect(lifecycle: UserImageLifecycle, name: string): Record<str
   const rows: unknown = JSON.parse(result.stdout);
   if (!Array.isArray(rows) || rows.length !== 1)
     throw new Error('Independent inspect missing container');
+  return record(rows[0]);
+}
+
+export function inspectNetwork(lifecycle: UserImageLifecycle, id: string): Record<string, unknown> {
+  const result = lifecycle.command(['network', 'inspect', id], 15_000);
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Independent network inspect failed');
+  const rows: unknown = JSON.parse(result.stdout);
+  if (!Array.isArray(rows) || rows.length !== 1) throw new Error('Network inspect unavailable');
   return record(rows[0]);
 }
 
@@ -111,6 +125,62 @@ export function startupClient(lifecycle: UserImageLifecycle) {
     },
   };
   return { raw, client, helperIds, requests };
+}
+
+/** Registration precedes every production mutation and keeps the existing exact cleanup authority. */
+export function registerStartupUsers(
+  lifecycle: UserImageLifecycle,
+  database: DatabaseHandle,
+  users: readonly string[],
+  emailDomain: string,
+): void {
+  for (const user of users) {
+    const ownership = { 'dsh-team.user': user };
+    lifecycle.registerResource('container', `dsh-team-u-${user}`, ownership);
+    lifecycle.registerResource('volume', `dsh-team-home-${user}`, ownership);
+    lifecycle.registerResource('volume', `dsh-team-work-${user}`, ownership);
+    database
+      .prepare("INSERT INTO users VALUES (?, ?, 'unused', 'employee', 'active', 1)")
+      .run(user, `${user}@${emailDomain}`);
+  }
+}
+
+/** Only common production input/launch is shared; protocol and isolation assertions remain independent. */
+export async function startDockerInstance(
+  owner: Orchestrator,
+  lifecycle: UserImageLifecycle,
+  userId: string,
+  authority: string,
+) {
+  const result = await owner.startUserContainer({
+    userId,
+    config: {
+      userImage: lifecycle.imageId,
+      seccompProfilePath: lifecycle.seccomp,
+      managedConfigDir: lifecycle.overlayDirectory,
+      authority,
+      subnetPool: '172.30.0.0/16',
+    },
+    modelSettings: START_MODEL,
+    permission: START_PERMISSION,
+    modelKey: 'docker-acceptance-only-not-a-model-credential',
+  });
+  if (result.outcome !== 'starting') throw new Error('Production instance did not start');
+  await owner.waitForUserContainerReady({ userId, authority });
+  return result;
+}
+
+export async function runNetworkAcceptance(
+  scenario: (lifecycle: UserImageLifecycle) => Promise<string>,
+  evidenceName: string,
+  assertSummary: (summary: string) => void,
+): Promise<void> {
+  if (platform() !== 'linux' || arch() !== 'x64')
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  const result = await runUserImage('container-start', assertSummary, undefined, scenario);
+  process.stdout.write(
+    `Docker ${evidenceName} verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
+  );
 }
 
 export async function cookieHttpStatus(

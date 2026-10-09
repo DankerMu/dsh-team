@@ -29,7 +29,11 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
   lifecycle.registerResource('container', name, ownership);
   const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'platform.db'));
   const { raw, client, helperIds } = startupClient(lifecycle);
-  const { startUserContainer } = createOrchestrator({ client, database: db });
+  const { startUserContainer } = createOrchestrator({
+    client,
+    database: db,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   const policy: unknown = JSON.parse(await readFile(lifecycle.seccomp, 'utf8'));
   try {
     applyMigrations(db);
@@ -264,7 +268,11 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
   const authority = 'resource.example:8443';
   const db = openDatabase(join(dirname(lifecycle.overlayDirectory), 'resource-platform.db'));
   const { raw, client, helperIds } = startupClient(lifecycle);
-  const { startUserContainer } = createOrchestrator({ client, database: db });
+  const { startUserContainer } = createOrchestrator({
+    client,
+    database: db,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   const config: PlatformConfig = {
     host: '127.0.0.1',
     port: 0,
@@ -275,6 +283,8 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     userImage: lifecycle.imageId,
     seccompProfilePath: lifecycle.seccomp,
     subnetPool: '172.30.0.0/16',
+    upstreamMode: 'published-loopback',
+    platformContainerName: 'dsh-team-platform',
     publicUrl: `http://${authority}`,
     authority,
     cookieSecure: false,
@@ -482,6 +492,8 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
     userImage: mutableTag,
     seccompProfilePath: lifecycle.seccomp,
     subnetPool: '172.30.0.0/16',
+    upstreamMode: 'published-loopback',
+    platformContainerName: 'dsh-team-platform',
     publicUrl: `http://${authority}`,
     authority,
     cookieSecure: false,
@@ -525,7 +537,11 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
         "INSERT INTO users VALUES (?, 'cookie@example.test', 'unused', 'employee', 'active', 1)",
       )
       .run(userId);
-    const { startUserContainer, acquireDshCookie } = createOrchestrator({ client, database });
+    const { startUserContainer, acquireDshCookie } = createOrchestrator({
+      client,
+      database,
+      config,
+    });
     const started = await startUserContainer({
       userId,
       config,

@@ -131,7 +131,11 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
     join(dirname(lifecycle.overlayDirectory), 'retirement-platform.db'),
   );
   const { client } = startupClient(lifecycle);
-  const { startUserContainer, stopUserContainer } = createOrchestrator({ client, database });
+  const { startUserContainer, stopUserContainer } = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   try {
     applyMigrations(database);
     const input = startInput(lifecycle, database, userId);

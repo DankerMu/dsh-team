@@ -10,6 +10,7 @@ import { inspectUserContainerEndpoint, inspectUserContainerState } from './start
 import { removeUserNetwork, validateUserNetwork } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import type { DockerClient } from './client.ts';
+import { upstreamHost } from './transport.ts';
 
 const READINESS_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
@@ -68,6 +69,7 @@ function running(selection: Selection, document: unknown): boolean {
 }
 
 async function authenticatedHomepage(
+  host: string,
   port: number,
   authority: string,
   cookie: string,
@@ -77,7 +79,7 @@ async function authenticatedHomepage(
   let incoming: IncomingMessage | undefined;
   const outgoing = request(
     {
-      hostname: '127.0.0.1',
+      hostname: host,
       port,
       method: 'GET',
       path: '/',
@@ -119,6 +121,7 @@ async function networkCurrent(
     client,
     selection.input.userId,
     document,
+    selection.input.transport,
     selection.network?.id,
     stopped,
   );
@@ -139,6 +142,7 @@ async function cleanupNetwork(selection: Selection, signal: AbortSignal): Promis
     await removeUserNetwork(
       client,
       selection.input.userId,
+      selection.input.transport,
       () => {
         signal.throwIfAborted();
         if (!cleanupCurrent(selection)) throw new Error();
@@ -171,9 +175,12 @@ async function observe(selection: Selection, signal: AbortSignal): Promise<void>
       `dsh-team-u-${input.userId}`,
       input.userId,
       instance.image_id,
+      input.transport.config.upstreamMode,
     );
-    if (port !== instance.upstream_port) throw new Error('Current endpoint changed');
-    if (await authenticatedHomepage(port, input.authority, selection.cookie, signal)) break;
+    const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
+    if (port !== instance.upstream_port || host !== instance.upstream_host)
+      throw new Error('Current endpoint changed');
+    if (await authenticatedHomepage(host, port, input.authority, selection.cookie, signal)) break;
     await delay(POLL_INTERVAL_MS, undefined, { signal });
   }
   // A 200 response must not race a stopped/replaced instance or a changed backend credential.
@@ -186,8 +193,14 @@ async function observe(selection: Selection, signal: AbortSignal): Promise<void>
     `dsh-team-u-${input.userId}`,
     input.userId,
     instance.image_id,
+    input.transport.config.upstreamMode,
   );
-  if (port !== instance.upstream_port) throw new Error('Current endpoint changed');
+  if (
+    port !== instance.upstream_port ||
+    upstreamHost(document, input.userId, input.transport.config.upstreamMode) !==
+      instance.upstream_host
+  )
+    throw new Error('Current endpoint changed');
   signal.throwIfAborted();
   input.database.transaction(() => {
     const { email } = current(selection, true);

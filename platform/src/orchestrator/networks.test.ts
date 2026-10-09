@@ -369,7 +369,11 @@ it.each([false, true])(
         return response;
       },
     };
-    const canceledOwner = createOrchestrator({ client, database });
+    const canceledOwner = createOrchestrator({
+      client,
+      database,
+      config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+    });
 
     await expect(
       canceledOwner.startUserContainer({ ...input, signal: controller.signal }),
@@ -551,7 +555,11 @@ it('loss of an accepted create response reports uncertainty and never adopts or 
       return response;
     },
   };
-  const uncertainOwner = createOrchestrator({ client, database });
+  const uncertainOwner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
 
   await expect(uncertainOwner.startUserContainer(input)).rejects.toThrow(
     'network creation outcome unconfirmed',

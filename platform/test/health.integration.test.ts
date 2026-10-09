@@ -24,6 +24,8 @@ describe('platform over a real TCP port', () => {
           userImage: 'dsh-team-user:local',
           seccompProfilePath: '/unused/seccomp.json',
           subnetPool: '172.30.0.0/16',
+          upstreamMode: 'published-loopback',
+          platformContainerName: 'dsh-team-platform',
           publicUrl: 'http://127.0.0.1',
           authority: '127.0.0.1',
           cookieSecure: false,

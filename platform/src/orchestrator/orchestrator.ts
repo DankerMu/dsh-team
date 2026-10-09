@@ -11,15 +11,17 @@ import type { StopUserContainerInput as RetirementInput } from './stop.ts';
 import { discoverReconciliationUsers, reconcileUser } from './reconcile.ts';
 import type { ReconciliationInput } from './reconcile.ts';
 import { NetworkCreationUnconfirmedError } from './networks.ts';
+import type { TransportConfig, TransportContext } from './transport.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
+  readonly config: TransportConfig;
 }
 
-export type StartUserContainerInput = Omit<StartupInput, keyof OrchestratorDependencies>;
-export type AcquireDshCookieInput = Omit<AcquisitionInput, keyof OrchestratorDependencies>;
-export type StopUserContainerInput = Omit<RetirementInput, keyof OrchestratorDependencies>;
+export type StartUserContainerInput = Omit<StartupInput, 'client' | 'database' | 'transport'>;
+export type AcquireDshCookieInput = Omit<AcquisitionInput, 'client' | 'database' | 'transport'>;
+export type StopUserContainerInput = Omit<RetirementInput, 'client' | 'database' | 'transport'>;
 
 export interface Orchestrator {
   readonly startUserContainer: (input: StartUserContainerInput) => Promise<StartResult>;
@@ -32,6 +34,13 @@ export interface Orchestrator {
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
+  const transport: TransportContext = {
+    config: Object.freeze({
+      upstreamMode: dependencies.config.upstreamMode,
+      platformContainerName: dependencies.config.platformContainerName,
+    }),
+    platformId: undefined,
+  };
   const tails = new Map<string, Promise<undefined>>();
   const pending = new Set<string>();
   // Creation uncertainty is owner-lifetime state, not a subnet reservation or durable recovery claim.
@@ -108,11 +117,16 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     Result,
   >(
     input: Input,
-    operation: (input: Input & OrchestratorDependencies) => Promise<Result>,
+    operation: (
+      input: Input &
+        Pick<OrchestratorDependencies, 'client' | 'database'> & {
+          readonly transport: TransportContext;
+        },
+    ) => Promise<Result>,
     failure: string,
     awaitSettlement = false,
   ): Promise<Result> {
-    const captured = { ...input, client, database };
+    const captured = { ...input, client, database, transport };
     const { userId, signal } = captured;
     if (typeof userId !== 'string' || userId.length !== 12 || !/^[a-z0-9]{12}$/.test(userId))
       return Promise.reject(new Error(failure));
@@ -149,7 +163,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     const signal = input.signal;
     const cancellation = signal === undefined ? {} : { signal };
     try {
-      const users = await discoverReconciliationUsers({ client, database, ...cancellation });
+      const users = await discoverReconciliationUsers({
+        client,
+        database,
+        transport,
+        ...cancellation,
+      });
       // Observe every launched operation to actual settlement, including cancellation/failure.
       const results = await Promise.allSettled(
         users.map((userId) =>

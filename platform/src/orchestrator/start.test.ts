@@ -1,64 +1,45 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DatabaseHandle } from '../db/index.ts';
-import { createDockerClient, createOrchestrator } from './index.ts';
-import type { Orchestrator, StartUserContainerInput } from './index.ts';
+import type { Orchestrator } from './index.ts';
 import {
-  startupDaemon,
+  startupOwnerFixture,
   START_CONTAINER,
   START_HELPER,
   START_IMAGE,
   START_MODEL,
-  START_PERMISSION,
   START_USER,
 } from '../../test/container-start-fixture.ts';
 
 const roots: string[] = [];
+const databases: DatabaseHandle[] = [];
 let startUserContainer: Orchestrator['startUserContainer'];
 let database: DatabaseHandle;
 afterEach(async () => {
+  for (const handle of databases.splice(0)) handle.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-team-start-'));
-  roots.push(root);
-  const policy = join(root, 'seccomp.json');
-  await writeFile(policy, '{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}');
-  const daemon = startupDaemon();
-  let account: unknown = { email: 'employee@example.test', status: 'active' };
-  // SQLite is an external boundary; durable state/rollback is proved with real SQLite in integration.
-  database = {
-    prepare: (sql: string) => ({
-      get: () => (sql.includes('FROM instances') ? undefined : account),
-      all: () => [],
-      run: () => ({ changes: 1 }),
-    }),
-    transaction: (action: () => void) => action,
-  } as unknown as DatabaseHandle;
-  const client = createDockerClient('/fixture/docker.sock', daemon.transport);
-  ({ startUserContainer } = createOrchestrator({ client, database }));
-  const input: StartUserContainerInput = {
-    config: {
-      userImage: 'dsh-team-user:local',
-      seccompProfilePath: policy,
-      managedConfigDir: join(root, 'managed'),
-      authority: 'team.example:8443',
-      subnetPool: '172.30.0.0/16',
-    },
-    userId: START_USER,
-    modelSettings: START_MODEL,
-    modelKey: 'fixture-private-key',
-    permission: START_PERMISSION,
-  };
+  const context = await startupOwnerFixture();
+  roots.push(context.root);
+  databases.push(context.database);
+  database = context.database;
+  database
+    .prepare('UPDATE users SET email = ? WHERE id = ?')
+    .run('employee@example.test', START_USER);
+  ({ startUserContainer } = context.owner);
   return {
-    root,
-    daemon,
-    input,
-    setAccount(value: unknown) {
-      account = value;
+    ...context,
+    setAccount(value: { readonly email: string; readonly status: string } | undefined) {
+      if (value === undefined) {
+        context.database.prepare('DELETE FROM users WHERE id = ?').run(START_USER);
+      } else {
+        context.database
+          .prepare('UPDATE users SET email = ?, status = ? WHERE id = ?')
+          .run(value.email, value.status, START_USER);
+      }
     },
   };
 }

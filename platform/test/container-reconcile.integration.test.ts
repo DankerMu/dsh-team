@@ -46,7 +46,11 @@ beforeEach(async () => {
   const socket = join(root, 'engine.sock');
   server.listen(socket);
   await once(server, 'listening');
-  owner = createOrchestrator({ client: createDockerClient(socket), database });
+  owner = createOrchestrator({
+    client: createDockerClient(socket),
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -337,6 +341,7 @@ it('preserves two healthy survivors after reconstruction and a database reopen',
   const reconstructed = createOrchestrator({
     client: createDockerClient(join(root, 'engine.sock')),
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
   });
 
   await reconstructed.reconcile();

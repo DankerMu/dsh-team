@@ -311,4 +311,51 @@ describe('loadConfig', () => {
     expect(() => loadConfig(env)).toThrow(/PLATFORM_TRUSTED_PROXIES/);
     expect(() => loadConfig(env)).not.toThrow(/not-an-ip-sentinel/);
   });
+
+  it('defaults to unpublished network transport with the deployment platform name', () => {
+    expect(loadConfig(REQUIRED_PUBLIC_URL)).toMatchObject({
+      upstreamMode: 'network',
+      platformContainerName: 'dsh-team-platform',
+    });
+  });
+
+  it('accepts explicit host-only transport and an invocation-specific Docker platform name', () => {
+    expect(
+      loadConfig({
+        ...REQUIRED_PUBLIC_URL,
+        PLATFORM_UPSTREAM_MODE: 'published-loopback',
+        PLATFORM_CONTAINER_NAME: 'dsh-team-test-platform_46.1',
+      }),
+    ).toMatchObject({
+      upstreamMode: 'published-loopback',
+      platformContainerName: 'dsh-team-test-platform_46.1',
+    });
+  });
+
+  it.each(['', 'Network', ' network', 'network ', 'host', 'http://private.invalid'])(
+    'rejects invalid transport mode %j without echoing it',
+    (raw) => {
+      expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_UPSTREAM_MODE: raw })).toThrow(
+        'PLATFORM_UPSTREAM_MODE must be exactly network or published-loopback',
+      );
+    },
+  );
+
+  it.each([
+    '',
+    ' ',
+    '/dsh-team-platform',
+    'dsh/team',
+    'http://platform',
+    'platform?x',
+    'platform#x',
+    '-platform',
+    'platform\\0',
+    'abcdef123456',
+    'f'.repeat(64),
+  ])('rejects a platform URL, path, blank name or ID shorthand %j', (raw) => {
+    expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_CONTAINER_NAME: raw })).toThrow(
+      'PLATFORM_CONTAINER_NAME must be a Docker container name, not an ID or path',
+    );
+  });
 });

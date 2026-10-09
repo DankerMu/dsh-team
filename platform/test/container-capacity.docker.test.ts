@@ -21,7 +21,11 @@ async function capacityScenario(lifecycle: UserImageLifecycle): Promise<string> 
   const userC = `${userA.slice(0, 10)}yy`;
   const database = openDatabase(join(dirname(lifecycle.overlayDirectory), 'capacity-platform.db'));
   const { raw, client, helperIds, requests } = startupClient(lifecycle);
-  const owner = createOrchestrator({ client, database });
+  const owner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   const authority = 'capacity.example:8443';
   const input = {
     userId: userA,

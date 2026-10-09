@@ -114,7 +114,11 @@ function fixture() {
   daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
   daemon.setComposition(`boot\ndsh web: http://127.0.0.1:3080/?token=release-token\n`);
   const client = createDockerClient('/fixture/docker.sock', daemon.transport);
-  ({ acquireDshCookie } = createOrchestrator({ client, database }));
+  ({ acquireDshCookie } = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  }));
   return {
     daemon,
     input: {
