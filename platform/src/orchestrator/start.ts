@@ -384,7 +384,13 @@ async function compensateStarted(
   let outcome = 'started container compensation failed or unconfirmed';
   try {
     current();
-    const network = await captureUserNetwork(client, input.userId, input.transport, id);
+    const network = await captureUserNetwork(
+      client,
+      input.userId,
+      input.transport,
+      id,
+      captured.id,
+    );
     if (network?.id !== captured.id || network.subnet !== captured.subnet)
       throw new Error('Captured network changed before compensation');
     const name = `dsh-team-u-${input.userId}`;

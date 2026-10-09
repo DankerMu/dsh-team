@@ -4,9 +4,9 @@ import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { inspectUserContainerEndpoint, inspectUserContainerState } from './start.ts';
-import { object, resolvedImageId } from './identity.ts';
+import { containerId, object, resolvedImageId } from './identity.ts';
 import { indexedEndpoint } from './credentials.ts';
-import { attachedNetwork, captureUserNetwork, removeUserNetwork } from './networks.ts';
+import { captureUserNetwork, removeUserNetwork, stoppedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamHost } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 
@@ -23,6 +23,7 @@ interface Selection {
   containerId: string;
   imageId: string;
   email: string;
+  declaredNetworkId: string | undefined;
   upstreamHost: string | null;
   upstreamPort: number | null;
   identity: (string | number | null)[];
@@ -76,6 +77,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
     containerId: id,
     imageId,
     email: instance.email,
+    declaredNetworkId: undefined,
     upstreamHost: endpoint.upstream_host,
     upstreamPort: endpoint.upstream_port,
     identity: [
@@ -130,6 +132,7 @@ async function running(
     selection.imageId,
   );
   if (input.transport.config.upstreamMode === 'network') {
+    let declared: string;
     if (state) {
       const port = inspectUserContainerEndpoint(
         document,
@@ -139,6 +142,7 @@ async function running(
         selection.imageId,
         input.transport.config.upstreamMode,
       );
+      declared = containerId({ Id: object(object(document).HostConfig).NetworkMode });
       const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
       if (
         (selection.upstreamPort !== null && selection.upstreamPort !== port) ||
@@ -147,8 +151,11 @@ async function running(
         throw new Error('Indexed network endpoint changed before retirement');
     } else {
       requireUnpublished(document, input.transport.config.upstreamMode);
-      attachedNetwork(document, input.userId, undefined, true);
+      declared = stoppedNetwork(document, input.userId);
     }
+    if (selection.declaredNetworkId !== undefined && selection.declaredNetworkId !== declared)
+      throw new Error('Declared instance network changed during retirement');
+    selection.declaredNetworkId = declared;
   }
   return state;
 }
@@ -245,13 +252,22 @@ export async function stopUserContainer(
       input.userId,
       input.transport,
       state === undefined ? undefined : selection.containerId,
+      selection.declaredNetworkId,
     );
     current(fenced, selection, signal);
     await remove(fenced, selection, signal);
     // After exact user removal, platform detach/inspect settlement retains ownership despite caller abort.
     if (input.transport.config.upstreamMode === 'network') networkSignal = work.signal;
     if (network === undefined) {
-      if ((await captureUserNetwork(networkClient, input.userId, input.transport)) !== undefined)
+      if (
+        (await captureUserNetwork(
+          networkClient,
+          input.userId,
+          input.transport,
+          undefined,
+          selection.declaredNetworkId,
+        )) !== undefined
+      )
         throw new Error();
     } else {
       await removeUserNetwork(

@@ -83,6 +83,17 @@ export function attachedNetwork(
   return id;
 }
 
+/** A verified stopped instance may retain only its immutable bridge declaration after detachment. */
+export function stoppedNetwork(document: unknown, userId: string): string {
+  const row = object(document);
+  if (object(row.State).Running !== false)
+    throw new Error('Detached instance must be confirmed stopped');
+  const declared = containerId({ Id: object(row.HostConfig).NetworkMode });
+  const networks = object(object(row.NetworkSettings).Networks);
+  if (Object.keys(networks).length === 0) return declared;
+  return attachedNetwork(row, userId, declared, true);
+}
+
 function ownedEndpoints(
   document: unknown,
   userId: string,
@@ -119,11 +130,16 @@ export async function captureUserNetwork(
   client: DockerClient,
   userId: string,
   transport: TransportContext,
-  container?: string,
+  container: string | undefined,
+  expected: string | undefined,
 ): Promise<OwnedNetwork | undefined> {
   const document = await inspect(client, nameFor(userId));
-  if (document === undefined) return undefined;
-  const network = inspectedNetwork(document, userId);
+  if (document === undefined) {
+    if (expected !== undefined && (await inspect(client, expected)) !== undefined)
+      throw new Error('Declared user network remains without canonical identity');
+    return undefined;
+  }
+  const network = inspectedNetwork(document, userId, expected);
   const platform = await verifiedPlatform(client, transport, false);
   ownedEndpoints(document, userId, container, platform);
   if (platform !== undefined) platformMembership(platform, document, userId, network.subnet, false);
