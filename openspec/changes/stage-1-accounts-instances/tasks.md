@@ -694,6 +694,13 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
 验证记录（#47）：新owner对重建的平台按配置名解析并固定新ID，恢复其他身份/地址/凭据均有效实例的连接；原owner不重置身份。仅明确提交且确定响应、两侧均确认缺席的接入失败授权安全退休并原子提交error/null与error原因停止审计；未知结果保留健康实例。孤儿网络在既有每用户队列内按标签/规范名/ID/子网及规范与索引容器404、完整row/account快照、空或可信平台唯一端点重新验证，未知创建隔离仍有效，不删卷或外来端点。初始真实Unix/SQLite平台重建恢复语义RED；本地三轮后用户授权一次旧missing-platform契约迁移，保留start/reuse拒绝与所有其他安全控制，未就绪实例安全退休、健康实例恢复。审查C1四项未知接入结果RED后修复；G1追加恢复后退休保护的回归，临时移除唯一第二次成员检查时真实行为RED，原样恢复后GREEN，未保留生产变更。完整pnpmcheck：1164unit/652integration、逐文件覆盖通过、重复率2.80%、strictOpenSpec通过，fresh全diff复审clean。审查头`640cf90324f2141c41a63313b91e99348bab2e24`固定Node24.13.1/pnpm10.34.6 giap-vps完整20/20Docker通过，12文件、132.87秒、exit0：真实平台替身重建后两实例保留且原cookie认证200，孤儿删除，原缺容器/缺凭据纠正等20基线保留；独立项目容器/网络/卷/测试镜像清点为空。最终头/CI以PR#154绑定证据为准；应用启动接线仍归#56，人工白盒后置Epic完成。
 
+### Issue #48 risk/evidence map (task10.5 only)
+
+- Resource limits / large input / discovery; Concurrency / shared state / ordering — selected:61 simultaneous bridges from fresh all-network IPAM via default-pool allocator, independent count/uniqueness/nonoverlap checks; sequential scenario, no new concurrency policy.
+- Auth / permissions / secrets; Error handling / rollback / partial outputs; File IO / path safety / overwrite — selected: invocation-labelled absent-before-create exact resources, negative overlap attempt, immutable-ID/empty-network deletion and partial-failure cleanup; no foreign/data mutation.
+- Public API / CLI / script entry; Config / project setup; Schema / columns / units / field names — existing allocateSubnet/default config and Docker/IPAM boundary, no API/schema/config change; assert /28/default-pool and literal test network prefix.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility; Documentation / migration notes — selected: all20baseline tests preserved plus one real61network case, fullchecks/strictOpenSpec/finalhead21Docker/CI and empty independent inventory; no dependencies, record evidence and human critical-path disclosure.
+
 ## 11. 网关（任务包 1.8）
 
 依赖：第 6 组；测试用本地替身上游，不依赖第 9 组。模块在 `platform/src/gateway/`。

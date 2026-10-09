@@ -78,14 +78,80 @@ function nestedMessages(error: unknown): string[] {
   return [String(error)];
 }
 
+function networkDocument(
+  result: DockerCommandResult,
+  args: readonly string[],
+): Record<string, unknown> {
+  const rows: unknown = JSON.parse(output(result, args));
+  if (!Array.isArray(rows) || rows.length !== 1)
+    throw new Error('Owned network inspection unavailable');
+  const value: unknown = rows[0];
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Owned network inspection malformed');
+  // Docker JSON is untyped; destructive callers validate the consumed identity fields.
+  return value as Record<string, unknown>;
+}
+
+function removeOwnedNetwork(
+  command: DockerCommand,
+  name: string,
+  ownership: Readonly<Record<string, string>>,
+  expectedId?: string,
+): void {
+  const args = ['network', 'inspect', name];
+  const result = command(args, 30_000);
+  if (isAbsentResource(result, 'network', name)) {
+    if (
+      expectedId !== undefined &&
+      !isAbsentResource(command(['network', 'inspect', expectedId], 30_000), 'network', expectedId)
+    )
+      throw new Error('Owned network ID remains after its name disappeared');
+    return;
+  }
+  const network = networkDocument(result, args);
+  const id = network.Id;
+  const identityError = 'Refusing network cleanup: immutable identity does not match';
+  deepStrictEqual(network.Name, name, identityError);
+  if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error(identityError);
+  deepStrictEqual(id, expectedId ?? id, identityError);
+  const labels = network.Labels;
+  if (typeof labels !== 'object' || labels === null || Array.isArray(labels))
+    throw new Error('Refusing network cleanup: invocation label does not match');
+  for (const [label, expected] of Object.entries(ownership)) {
+    deepStrictEqual(
+      Reflect.get(labels, label),
+      expected,
+      'Refusing network cleanup: invocation label does not match',
+    );
+  }
+  deepStrictEqual(
+    network.Containers,
+    {},
+    'Refusing network cleanup: network is not verified empty',
+  );
+  const exact = ['network', 'inspect', id];
+  deepStrictEqual(networkDocument(command(exact, 30_000), exact), network);
+  const remove = ['network', 'rm', id];
+  output(command(remove, 30_000), remove);
+  for (const target of [name, id]) {
+    if (!isAbsentResource(command(['network', 'inspect', target], 30_000), 'network', target))
+      throw new Error('Owned network remains after cleanup');
+  }
+}
+
 function removeOwned(
   command: DockerCommand,
   kind: 'container' | 'image' | 'volume' | 'network',
   name: string,
   runId: string,
   ownership?: Readonly<Record<string, string>>,
+  networkId?: string,
 ): void {
-  const labels = kind === 'volume' || kind === 'network' ? '.Labels' : '.Config.Labels';
+  if (kind === 'network') {
+    removeOwnedNetwork(command, name, ownership ?? { [OWNER_LABEL]: runId }, networkId);
+    return;
+  }
+  const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
   const expected = ownership ?? { [OWNER_LABEL]: runId };
   for (const [label, value] of Object.entries(expected)) {
     const args = [kind, 'inspect', '--format', `{{ index ${labels} "${label}" }}`, name];
@@ -132,12 +198,14 @@ export interface UserImageLifecycle {
     name: string,
     ownership: Readonly<Record<string, string>>,
   ) => void;
+  removeNetwork: (name: string, id: string) => void;
 }
 export type UserImageScenario = (lifecycle: UserImageLifecycle) => Promise<string>;
 interface CleanupTarget {
   readonly kind: 'container' | 'image' | 'volume' | 'network';
   readonly name: string;
   readonly ownership?: Readonly<Record<string, string>>;
+  networkId?: string;
 }
 
 function runContainer(
@@ -251,7 +319,7 @@ function cleanupTargets(
   for (const kind of ['container', 'network', 'volume', 'image'] as const) {
     for (const target of targets.filter((candidate) => candidate.kind === kind).reverse()) {
       try {
-        removeOwned(command, kind, target.name, runId, target.ownership);
+        removeOwned(command, kind, target.name, runId, target.ownership, target.networkId);
       } catch (error) {
         failures.push(error);
       }
@@ -369,6 +437,26 @@ function runImageLifecycle(
   let stdout = '';
   function finish(): UserImageResult {
     cleanupTargets(command, targets, runId, failures);
+    if (
+      targets.some(
+        (target) => target.kind === 'network' && target.ownership?.[OWNER_LABEL] === runId,
+      )
+    ) {
+      try {
+        const inventory = [
+          'network',
+          'ls',
+          '--filter',
+          `label=${OWNER_LABEL}=${runId}`,
+          '--quiet',
+          '--no-trunc',
+        ];
+        if (output(command(inventory, 30_000), inventory).trim() !== '')
+          throw new Error('Invocation network inventory remains after cleanup');
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     try {
       rmSync(config, { recursive: true });
     } catch (error) {
@@ -472,6 +560,12 @@ function runImageLifecycle(
           if (!isAbsentResource(absent, kind, name))
             throw new Error('Acceptance resource already exists; refusing cleanup authority');
           targets.push({ kind, name, ownership });
+        },
+        removeNetwork: (name, id): void => {
+          const target = targets.find((entry) => entry.kind === 'network' && entry.name === name);
+          if (target === undefined) throw new Error('Network cleanup target was not registered');
+          target.networkId = id;
+          removeOwned(command, 'network', name, runId, target.ownership, id);
         },
       };
       return extra(lifecycle)

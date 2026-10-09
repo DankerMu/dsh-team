@@ -2,6 +2,8 @@ import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
+const NETWORK_ID = 'b'.repeat(64);
+
 function inspectReply(
   args: readonly string[],
   labels: Record<string, string> | undefined,
@@ -28,6 +30,45 @@ function inspectReply(
   };
 }
 
+function networkCommand(
+  args: readonly string[],
+  resources: Map<string, Record<string, string>>,
+  sentinel: string,
+): DockerCommandResult | undefined {
+  if (args[1] === 'ls') {
+    const owner = (args[args.indexOf('--filter') + 1] ?? '').split('=').slice(2).join('=');
+    const present = [...resources].some(
+      ([key, labels]) => key.startsWith('network:') && labels['dsh-team.test-run'] === owner,
+    );
+    return { status: 0, stdout: present ? `${NETWORK_ID}\n` : '', stderr: '' };
+  }
+  const name = args.at(-1) ?? '';
+  const entry = [...resources].find(
+    ([key]) =>
+      key.startsWith('network:') &&
+      (key === `network:${name}` || (name === NETWORK_ID && !key.endsWith(sentinel))),
+  );
+  if (args[1] === 'inspect' && entry !== undefined && !args.includes('--format')) {
+    return {
+      status: 0,
+      stdout: JSON.stringify([
+        {
+          Id: entry[0].endsWith(sentinel) ? 'c'.repeat(64) : NETWORK_ID,
+          Name: entry[0].slice('network:'.length),
+          Labels: entry[1],
+          Containers: {},
+        },
+      ]),
+      stderr: '',
+    };
+  }
+  if (args[1] === 'rm' && entry !== undefined) {
+    resources.delete(entry[0]);
+    return { status: 0, stdout: '', stderr: '' };
+  }
+  return undefined;
+}
+
 function lifecycleDaemon() {
   const sentinel = 'dsh-team-test-unrelated-sentinel';
   const resources = new Map<string, Record<string, string>>([
@@ -46,6 +87,10 @@ function lifecycleDaemon() {
       const delimiter = label.indexOf('=');
       resources.set(`image:${tag}`, { [label.slice(0, delimiter)]: label.slice(delimiter + 1) });
       return { status: 0, stdout: '', stderr: '' };
+    }
+    if (kind === 'network') {
+      const result = networkCommand(args, resources, sentinel);
+      if (result !== undefined) return result;
     }
     const key = `${kind}:${name}`;
     if (args[1] === 'inspect') return inspectReply(args, resources.get(key));
@@ -248,12 +293,14 @@ it('network-aware cleanup independently inventories owned resources and removes 
   const daemon = lifecycleDaemon();
   const container = 'dsh-team-u-abcdefghijkl';
   const network = 'dsh-team-net-abcdefghijkl';
-  daemon.resources.set(`network:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' });
+  const sentinelOwnership = {
+    'dsh-team.user': 'other-owned-user',
+    'dsh-team.test-run': 'other-invocation',
+  };
+  daemon.resources.set(`network:${daemon.sentinel}`, sentinelOwnership);
   const command: DockerCommand = (args, timeout) => {
     if (args[0] === 'network' && args[1] === 'rm' && daemon.resources.has(`container:${container}`))
       return { status: 1, stdout: '', stderr: 'network has active endpoints' };
-    if (args[0] === 'network' && args[1] === 'inspect' && args.includes('--format'))
-      expect(args[args.indexOf('--format') + 1]).toBe('{{ index .Labels "dsh-team.user" }}');
     return daemon.command(args, timeout);
   };
 
@@ -263,7 +310,10 @@ it('network-aware cleanup independently inventories owned resources and removes 
       () => undefined,
       command,
       (lifecycle) => {
-        const ownership = { 'dsh-team.user': 'abcdefghijkl' };
+        const ownership = {
+          'dsh-team.user': 'abcdefghijkl',
+          'dsh-team.test-run': lifecycle.runId,
+        };
         // Both exact targets are registered before their external creation, even for partial failure.
         lifecycle.registerResource('network', network, ownership);
         lifecycle.registerResource('container', container, ownership);
@@ -277,7 +327,7 @@ it('network-aware cleanup independently inventories owned resources and removes 
   expect([...daemon.resources]).toEqual([
     [`container:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
     [`volume:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
-    [`network:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    [`network:${daemon.sentinel}`, sentinelOwnership],
   ]);
   const removed = daemon.calls
     .filter(({ args }) => args[1] === 'rm')
@@ -289,8 +339,14 @@ it('network-aware cleanup independently inventories owned resources and removes 
       return `${kind}:${name}`;
     });
   expect(removed.indexOf(`container:${container}`)).toBeLessThan(
-    removed.indexOf(`network:${network}`),
+    removed.indexOf(`network:${NETWORK_ID}`),
   );
+  expect(daemon.resources.has(`network:${network}`)).toBe(false);
+  expect(
+    daemon.calls
+      .filter(({ args }) => args[0] === 'network' && args[1] === 'rm')
+      .map(({ args }) => args.at(-1)),
+  ).toEqual([NETWORK_ID]);
   expect(daemon.calls.some(({ args }) => args[0] === 'network' && args.includes('--force'))).toBe(
     false,
   );
@@ -324,3 +380,63 @@ it('network cleanup refuses a changed user label while still cleaning the invoca
   ]);
   expect(daemon.calls.some(({ args }) => args[0] === 'network' && args[1] === 'rm')).toBe(false);
 });
+
+it.each(['name mismatch', 'ID mismatch', 'active endpoint', 'unconfirmed removal'])(
+  'network cleanup preserves unsafe resources and reports the original failure on %s',
+  async (fault) => {
+    const daemon = lifecycleDaemon();
+    const name = 'dsh-team-test-run-cleanup-control';
+    const command: DockerCommand = (args, timeout) => {
+      if (fault === 'unconfirmed removal' && args[0] === 'network' && args[1] === 'rm') {
+        daemon.calls.push({ args, timeout });
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      const result = daemon.command(args, timeout);
+      if (args[0] !== 'network' || args[1] !== 'inspect' || result.status !== 0) return result;
+      const document = {
+        Id: fault === 'ID mismatch' ? 'd'.repeat(64) : NETWORK_ID,
+        Name: fault === 'name mismatch' ? 'dsh-team-test-foreign' : name,
+        Labels: daemon.resources.get(`network:${name}`),
+        Containers: fault === 'active endpoint' ? { foreign: { Name: 'unrelated' } } : {},
+      };
+      return { ...result, stdout: JSON.stringify([document]) };
+    };
+    const failure: unknown = await runUserImage(
+      'container-start',
+      () => undefined,
+      command,
+      (lifecycle) => {
+        const labels = { 'dsh-team.test-run': lifecycle.runId };
+        lifecycle.registerResource('network', name, labels);
+        daemon.resources.set(`network:${name}`, labels);
+        try {
+          lifecycle.removeNetwork(name, NETWORK_ID);
+        } catch (error) {
+          throw new AggregateError(
+            [new Error('Original network scenario failure'), error],
+            'Network cleanup control failed',
+            { cause: error },
+          );
+        }
+        throw new Error('Unsafe cleanup unexpectedly succeeded');
+      },
+    ).catch((error: unknown) => error);
+
+    const diagnostic =
+      fault === 'active endpoint'
+        ? 'not verified empty'
+        : fault === 'unconfirmed removal'
+          ? 'remains after cleanup'
+          : 'immutable identity';
+    expect(String(failure)).toContain(diagnostic);
+    expect(String(failure)).toContain('Original network scenario failure');
+    expect(String(failure)).toContain('Invocation network inventory remains');
+    expect(daemon.resources.has(`network:${name}`)).toBe(true);
+    expect(daemon.resources.has(`container:${daemon.sentinel}`)).toBe(true);
+    expect([...daemon.resources.keys()].some((key) => key.startsWith('image:'))).toBe(false);
+    const removals = daemon.calls.filter(({ args }) => args[0] === 'network' && args[1] === 'rm');
+    expect(removals.map(({ args }) => args.at(-1))).toEqual(
+      fault === 'unconfirmed removal' ? [NETWORK_ID, NETWORK_ID] : [],
+    );
+  },
+);
