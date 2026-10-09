@@ -10,7 +10,8 @@ import {
   readPublicIdentity,
   sessionCookieToken,
 } from './auth-fixture.ts';
-import { observeHttp, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
+import { observeHttp, reader, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
+import type { ReadPeer } from './gateway-http-fixture.ts';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
 
 // Per-run RFC6455 nonce, not a stored credential or secret-scan exemption.
@@ -26,45 +27,6 @@ const CLIENT_HEAD = Buffer.from([0x82, 0x82, 5, 6, 7, 8, 0xfa, 6]);
 const SERVER_HEAD = Buffer.from([0x81, 5, 104, 101, 108, 108, 111]);
 const EXTENSION_OFFER = 'permessage-deflate; client_max_window_bits';
 const EXTENSION_SELECTED = 'permessage-deflate; server_no_context_takeover';
-
-type ReadPeer = (size: number | string) => Promise<Buffer>;
-function reader(socket: Duplex, head = Buffer.alloc(0)): ReadPeer {
-  let bytes: Buffer = head;
-  let failed: Error | undefined;
-  let notify: (() => void) | undefined;
-  socket.on('data', (chunk: Buffer) => {
-    bytes = Buffer.concat([bytes, chunk]);
-    if (bytes.length > 65536) failed = new Error('Unexpected test peer payload');
-    notify?.();
-  });
-  socket.on('error', () => {
-    failed = new Error('Test peer failed');
-    notify?.();
-  });
-  socket.on('close', () => {
-    failed = new Error('Test peer closed');
-    notify?.();
-  });
-  return async (size) => {
-    const pending = Promise.withResolvers<Buffer>();
-    const check = () => {
-      const length = typeof size === 'number' ? size : bytes.indexOf(size) + size.length;
-      const available = typeof size === 'number' ? bytes.length >= size : bytes.includes(size);
-      if (available) {
-        const result = bytes.subarray(0, length);
-        bytes = bytes.subarray(length);
-        pending.resolve(result);
-      } else if (failed !== undefined) pending.reject(failed);
-    };
-    notify = check;
-    check();
-    try {
-      return await observeHttp(pending.promise);
-    } finally {
-      notify = undefined;
-    }
-  };
-}
 
 async function rejectedUpgrade(
   base: string,
@@ -175,6 +137,63 @@ it('streams both WebSocket frame directions with private handshake credentials',
             expect(await peer.read(CLIENT_FRAME.length)).toEqual(CLIENT_FRAME);
             peer.socket.write(SERVER_FRAME);
             expect(await read(SERVER_FRAME.length)).toEqual(SERVER_FRAME);
+          } finally {
+            client.destroy();
+          }
+        },
+      );
+    },
+  );
+});
+
+it('flushes client frame bytes to the real upstream before releasing a client EOF', async () => {
+  await withUpstream(
+    (_request, response) => {
+      response.end();
+    },
+    async (target, server) => {
+      const accepted = Promise.withResolvers<{ read: ReadPeer; ended: Promise<undefined> }>();
+      server.on('upgrade', (_request, socket, head) => {
+        const ended = Promise.withResolvers<undefined>();
+        const read = reader(socket, head);
+        socket.once('end', () => {
+          ended.resolve(undefined);
+        });
+        socket.write(
+          Buffer.concat([
+            Buffer.from(
+              `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${ACCEPT}\r\n\r\n`,
+            ),
+            SERVER_FRAME,
+          ]),
+        );
+        accepted.resolve({ read, ended: ended.promise });
+      });
+      await withForwardingApp(
+        () => target,
+        async ({ base, cookie }) => {
+          const address = new URL(base);
+          const client = connect({
+            host: address.hostname,
+            port: Number(address.port),
+            allowHalfOpen: true,
+          });
+          const read = reader(client);
+          const closed = once(client, 'close');
+          try {
+            await once(client, 'connect');
+            client.write(
+              `GET /client-eof HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`,
+            );
+            expect((await read('\r\n\r\n')).toString()).toMatch(/^HTTP\/1\.1 101 /);
+            expect(await read(SERVER_FRAME.length)).toEqual(SERVER_FRAME);
+            const peer = await observeHttp(accepted.promise);
+            client.end(CLIENT_FRAME);
+
+            expect(await peer.read(CLIENT_FRAME.length)).toEqual(CLIENT_FRAME);
+            await observeHttp(peer.ended);
+            await observeHttp(closed);
+            expect(client.writableFinished).toBe(true);
           } finally {
             client.destroy();
           }

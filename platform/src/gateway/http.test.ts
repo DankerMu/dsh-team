@@ -298,6 +298,128 @@ it.each([
   },
 );
 
+it.each(['flush', 'destination-error', 'app'])(
+  'retains both accepted frame writes after client EOF until %s',
+  async (mode) => {
+    transport.mode = 'ws';
+    await withApp(
+      async (app) => {
+        const registered = await injectRegister(app, {
+          email: 'ws-drain@example.com',
+          password: 'test-password',
+        });
+        const request = new IncomingMessage(new Socket());
+        request.method = 'GET';
+        request.url = '/ws';
+        request.headers = {
+          cookie: `platform_session=${sessionCookieToken(cookieHeaders(registered))}`,
+          origin: PUBLIC_ORIGIN,
+          upgrade: 'websocket',
+        };
+        request.rawHeaders = ['Origin', PUBLIC_ORIGIN];
+        const clientHeld = Promise.withResolvers<undefined>();
+        const upstreamHeld = Promise.withResolvers<undefined>();
+        const clientClosed = Promise.withResolvers<undefined>();
+        const upstreamClosed = Promise.withResolvers<undefined>();
+        const clientOutput: Buffer[] = [];
+        const upstreamOutput: Buffer[] = [];
+        let releaseClient: (() => void) | undefined;
+        let releaseUpstream: (() => void) | undefined;
+        const client = new Duplex({
+          read() {
+            /* The external client supplies its frame and EOF below. */
+          },
+          write(chunk: Buffer, _encoding, done) {
+            if (chunk.toString().startsWith('HTTP/1.1 101')) {
+              done();
+              return;
+            }
+            releaseClient = () => {
+              releaseClient = undefined;
+              clientOutput.push(Buffer.from(chunk));
+              done();
+            };
+            clientHeld.resolve(undefined);
+          },
+        });
+        const upstream = new Duplex({
+          read() {
+            /* The external upstream supplies its parser head at upgrade. */
+          },
+          write(chunk: Buffer, _encoding, done) {
+            releaseUpstream = () => {
+              releaseUpstream = undefined;
+              upstreamOutput.push(Buffer.from(chunk));
+              done();
+            };
+            upstreamHeld.resolve(undefined);
+          },
+        });
+        client.once('close', () => {
+          clientClosed.resolve(undefined);
+        });
+        upstream.once('close', () => {
+          upstreamClosed.resolve(undefined);
+        });
+        try {
+          transport.socket = upstream;
+          app.server.emit('upgrade', request, client, Buffer.from([1]));
+          const pending = transport.pending;
+          if (pending === undefined) throw new Error('Missing controlled transport request');
+          await once(pending, 'socket');
+          pending.emit(
+            'upgrade',
+            { statusCode: 101, headers: { upgrade: 'websocket' } },
+            upstream,
+            Buffer.from([2]),
+          );
+          await Promise.all([clientHeld.promise, upstreamHeld.promise]);
+          const ended = once(client, 'end');
+          client.push(null);
+          await ended;
+
+          expect(client.destroyed).toBe(false);
+          expect(upstream.writableLength).toBe(1);
+          expect(client.writableLength).toBe(1);
+          if (mode === 'destination-error') upstream.destroy(new Error('External write failed'));
+          else if (mode === 'app') await app.close();
+          else {
+            const upstreamFinished = once(upstream, 'finish');
+            releaseUpstream?.();
+            await upstreamFinished;
+            // Upstream write completion cannot release the still-pending reverse write.
+            expect(client.destroyed).toBe(false);
+            expect(client.writableFinished).toBe(false);
+            expect(clientOutput).toEqual([]);
+            expect(upstreamOutput).toEqual([Buffer.from([1])]);
+            releaseClient?.();
+          }
+          await Promise.all([clientClosed.promise, upstreamClosed.promise]);
+          expect(pending.destroyed).toBe(true);
+          if (mode === 'flush') {
+            expect(clientOutput).toEqual([Buffer.from([2])]);
+            expect(upstreamOutput).toEqual([Buffer.from([1])]);
+            expect(client.writableFinished).toBe(true);
+            expect(upstream.writableFinished).toBe(true);
+          } else {
+            expect(clientOutput).toEqual([]);
+            expect(upstreamOutput).toEqual([]);
+          }
+        } finally {
+          releaseClient?.();
+          releaseUpstream?.();
+          client.destroy();
+          upstream.destroy();
+          request.socket.destroy();
+        }
+      },
+      false,
+      [],
+      () => ({ host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+    );
+  },
+);
+
 it('refuses a queued upgrade arriving after shutdown starts without acquiring another upstream', async () => {
   transport.mode = 'ws';
   let resolutions = 0;

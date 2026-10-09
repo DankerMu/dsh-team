@@ -155,6 +155,7 @@ export function forwardWebSocket(
   let closed = false;
   let upgraded = false;
   let forwardingClient = false;
+  let draining = false;
   const release = () => {
     if (upstream !== undefined) {
       client.unpipe(upstream);
@@ -177,13 +178,30 @@ export function forwardWebSocket(
     if (upgraded) client.destroy();
     else rejectUpgrade(client, 502);
   };
+  const drain = () => {
+    if (closed || draining) return;
+    if (!upgraded || upstream === undefined) {
+      cancel();
+      return;
+    }
+    draining = true;
+    // EOF ends admission in both directions, not ownership of already accepted writes.
+    client.unpipe(upstream);
+    upstream.unpipe(client);
+    client.pause();
+    upstream.pause();
+    // Keep the registered client alive until upstream writes finish, so shutdown can still cancel.
+    upstream.once('finish', () => {
+      if (closed) return;
+      client.once('finish', cancel);
+      client.end();
+    });
+    upstream.end();
+  };
   client.pause();
   client.on('error', cancel);
   client.once('close', cancel);
-  client.once('end', () => {
-    if (!upgraded) cancel();
-    else upstream?.end(cancel);
-  });
+  client.once('end', drain);
   const forwardClient = (socket: Duplex) => {
     if (closed) {
       socket.destroy();
@@ -231,10 +249,11 @@ export function forwardWebSocket(
       }
       upstream = socket;
       socket.on('error', fail);
-      socket.once('close', cancel);
-      socket.once('end', () => {
-        client.end(cancel);
+      socket.once('close', () => {
+        // Node's allowHalfOpen:false upstream can close normally while client writes still drain.
+        if (!draining || !socket.readableEnded || !socket.writableFinished) cancel();
       });
+      socket.once('end', drain);
       if (response.statusCode !== 101 || response.headers.upgrade?.toLowerCase() !== 'websocket') {
         fail();
         return;
@@ -253,7 +272,7 @@ export function forwardWebSocket(
       // A validated 101 also proves the peer received the headers if finish is not emitted yet.
       forwardClient(socket);
       if (upstreamHead.length !== 0) socket.unshift(upstreamHead);
-      // Own half-close completion so queued frame bytes flush before paired destruction.
+      // The EOF owner drains both destinations before paired destruction.
       socket.pipe(client, { end: false });
     });
     outgoing.end();
