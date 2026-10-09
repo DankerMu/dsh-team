@@ -43,6 +43,14 @@ export function forwardHeaders(
   for (const [name, value] of Object.entries(headers)) {
     if (!blocked.has(name)) result[name] = value;
   }
+  // Reframe decoded request bytes even for methods that Node will not auto-chunk.
+  if (
+    credential === 'cookie' &&
+    result['content-length'] === undefined &&
+    (headers['transfer-encoding'] !== undefined || headers['content-length'] !== undefined)
+  ) {
+    result['transfer-encoding'] = 'chunked';
+  }
   return result;
 }
 

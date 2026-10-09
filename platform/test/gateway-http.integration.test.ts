@@ -115,8 +115,9 @@ it('binds two users to their own endpoint-cookie pair despite forged routing and
           const otherCookie = `platform_session=${sessionCookieToken(cookieHeaders(registered))}`;
           destinations.set(userId, a);
           destinations.set(otherId, b);
-          const body = Buffer.from([0, 255, 123, 125]);
-          const path = `/api/%2Fraw/../upload?user=${otherId}&instance=forged`;
+          const body = Buffer.concat([Buffer.from([0, 255]), Buffer.from(otherId)]);
+          const path = `/api/${otherId}/%2Fraw/../upload?user=${otherId}&instance=forged`;
+          const forgedAuthority = `${b.host}:${String(b.port)}`;
 
           for (const [credential, label, id] of [
             [cookie, 'A', userId],
@@ -126,11 +127,11 @@ it('binds two users to their own endpoint-cookie pair despite forged routing and
               base,
               {
                 method: 'POST',
-                path: `http://untrusted.invalid${path}`,
+                path: `http://${forgedAuthority}${path}`,
                 headers: {
                   cookie: [credential, 'dsh-auth=forged', 'theme=dark'],
-                  host: 'untrusted.invalid',
-                  'x-forwarded-host': 'untrusted.invalid',
+                  host: forgedAuthority,
+                  'x-forwarded-host': forgedAuthority,
                   'x-user-id': otherId,
                   'content-type': 'application/octet-stream',
                   connection: 'Cookie, Host, X-Hop',

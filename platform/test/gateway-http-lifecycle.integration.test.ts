@@ -203,3 +203,82 @@ it.each(['upload', 'download'] as const)(
     );
   },
 );
+
+it.each(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'TRACE'])(
+  'preserves streamed %s bodies independently of Node framing defaults',
+  async (method) => {
+    let prefix = Promise.withResolvers<string>();
+    const received: { method: string | undefined; body: string }[] = [];
+    await withUpstream(
+      (incoming, response) => {
+        let body = '';
+        incoming.on('data', (chunk: Buffer) => {
+          body += chunk.toString();
+          prefix.resolve(body);
+        });
+        incoming.on('end', () => {
+          received.push({ method: incoming.method, body });
+          response.writeHead(201).end('accepted');
+        });
+      },
+      async (target) => {
+        await withForwardingApp(
+          () => target,
+          async ({ base, cookie }) => {
+            for (const framing of ['chunked', 'length', 'nominated-length']) {
+              prefix = Promise.withResolvers<string>();
+              const outcome = Promise.withResolvers<{ status: number; body: string }>();
+              const payload = '{"ids":[1]}';
+              const headers =
+                framing === 'chunked'
+                  ? { cookie, 'transfer-encoding': 'chunked' }
+                  : {
+                      cookie,
+                      'content-length': String(Buffer.byteLength(payload)),
+                      ...(framing === 'nominated-length' ? { connection: 'Content-Length' } : {}),
+                    };
+              const call = request(
+                base,
+                { method, path: '/api/test', headers, signal: AbortSignal.timeout(5_000) },
+                (response) => {
+                  let body = '';
+                  response.on('data', (chunk: Buffer) => {
+                    body += chunk.toString();
+                  });
+                  response.on('error', outcome.reject);
+                  response.once('end', () => {
+                    outcome.resolve({ status: response.statusCode ?? 0, body });
+                  });
+                },
+              );
+              call.on('error', outcome.reject);
+              try {
+                call.write('{"ids":');
+                const observed = await Promise.race([
+                  observeHttp(prefix.promise),
+                  outcome.promise.then(() => {
+                    throw new Error('Upstream completed before receiving the body prefix');
+                  }),
+                ]);
+                expect(observed).toBe('{"ids":');
+                expect(call.writableEnded).toBe(false);
+                call.end('[1]}');
+
+                expect(await observeHttp(outcome.promise)).toEqual({
+                  status: 201,
+                  body: method === 'HEAD' ? '' : 'accepted',
+                });
+                expect(received.at(-1)).toEqual({ method, body: payload });
+              } finally {
+                call.destroy();
+              }
+            }
+            expect(received).toEqual(
+              Array.from({ length: 3 }, () => ({ method, body: '{"ids":[1]}' })),
+            );
+          },
+        );
+      },
+    );
+  },
+);

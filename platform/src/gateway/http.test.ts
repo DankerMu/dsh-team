@@ -77,6 +77,17 @@ it('removes credential and nominated hop headers without mutating the input', ()
   expect(forwardHeaders(headers, 'set-cookie')).toEqual({ accept: 'text/plain' });
   expect(headers.cookie).toBe('platform=private');
 });
+
+it('reconstructs request framing after hop filtering but never invents response framing', () => {
+  expect(forwardHeaders({ 'transfer-encoding': 'chunked' }, 'cookie')).toEqual({
+    'transfer-encoding': 'chunked',
+  });
+  expect(
+    forwardHeaders({ 'content-length': '11', connection: 'Content-Length' }, 'cookie'),
+  ).toEqual({ 'transfer-encoding': 'chunked' });
+  expect(forwardHeaders({ 'content-length': '11' }, 'cookie')).toEqual({ 'content-length': '11' });
+  expect(forwardHeaders({ 'transfer-encoding': 'chunked' }, 'set-cookie')).toEqual({});
+});
 it.each([
   ['http://host/api/%2F/../x?q=1', '/api/%2F/../x?q=1'],
   ['https://host?x=1', '/?x=1'],
