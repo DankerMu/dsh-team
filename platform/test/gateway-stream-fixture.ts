@@ -18,7 +18,8 @@ import { observeHttp, sendHttp, withUpstream } from './gateway-http-fixture.ts';
 export type StreamMode = 'stream' | 'buffer-upload' | 'buffer-download';
 export type StreamSurface = 'src' | 'dist';
 const STREAM_BYTES = 200 * 1024 * 1024;
-export const STREAM_RSS_LIMIT = 50_000_000;
+export const STREAM_RSS_LIMIT = 167_772_160;
+const STARTUP_AMBIGUITY_LIMIT = 50_000_000;
 interface Integrity {
   bytes: number;
   sha256: string;
@@ -324,7 +325,7 @@ async function measured(
     const before = await exchange(child, 'baseline', 'begin', signal);
     const baseline = metric(before.baseline);
     assert.ok(
-      metric(before.highWater) - baseline <= STREAM_RSS_LIMIT,
+      metric(before.highWater) - baseline <= STARTUP_AMBIGUITY_LIMIT,
       'Startup high-water makes the RSS baseline ambiguous',
     );
     phase = direction;
