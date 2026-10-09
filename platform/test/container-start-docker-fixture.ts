@@ -20,6 +20,33 @@ export function inspect(lifecycle: UserImageLifecycle, name: string): Record<str
   return record(rows[0]);
 }
 
+/** Normalize only incidental mount ordering; preserve every mount and other inspect attribute. */
+export function normalizeInspectMounts(
+  container: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(container.Mounts)) throw new Error('Container mount inventory unavailable');
+  const mounts = container.Mounts.map((value: unknown) => {
+    const mount = record(value);
+    if (typeof mount.Destination !== 'string' || mount.Destination === '')
+      throw new Error('Container mount destination unavailable');
+    // The boundary check proves Destination; the indexed JSON record cannot express that field.
+    return mount as Record<string, unknown> & { Destination: string };
+  });
+  mounts.sort((left, right) =>
+    left.Destination < right.Destination ? -1 : left.Destination > right.Destination ? 1 : 0,
+  );
+  return { ...container, Mounts: mounts };
+}
+
+function registerCreatedNetwork(lifecycle: UserImageLifecycle, body: unknown): void {
+  const network = record(body);
+  const labels = record(network.Labels);
+  const user = labels['dsh-team.user'];
+  if (typeof user !== 'string' || network.Name !== `dsh-team-net-${user}`)
+    throw new Error('Network registration ownership mismatch');
+  lifecycle.registerResource('network', network.Name, { 'dsh-team.user': user });
+}
+
 /** Shared actual-start transport: registers production helpers before their create request. */
 export function startupClient(lifecycle: UserImageLifecycle) {
   const raw = createDockerClient('/var/run/docker.sock');
@@ -29,6 +56,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
     logs: (path, signal) => raw.logs(path, signal),
     async json(method, path, body, signal, maxBytes) {
       requests.push({ method, path });
+      if (method === 'POST' && path === '/networks/create') registerCreatedNetwork(lifecycle, body);
       const helperCreate =
         method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
       let helperName = '';

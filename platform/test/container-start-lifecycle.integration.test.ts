@@ -243,3 +243,84 @@ it('reports original failure and refuses removal when startup resource ownership
   expect(String(error)).toContain('invocation label does not match');
   expect(daemon.resources.get(`container:${target}`)).toEqual({ 'dsh-team.user': 'foreign-owner' });
 });
+
+it('network-aware cleanup independently inventories owned resources and removes containers before their bridge', async () => {
+  const daemon = lifecycleDaemon();
+  const container = 'dsh-team-u-abcdefghijkl';
+  const network = 'dsh-team-net-abcdefghijkl';
+  daemon.resources.set(`network:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' });
+  const command: DockerCommand = (args, timeout) => {
+    if (args[0] === 'network' && args[1] === 'rm' && daemon.resources.has(`container:${container}`))
+      return { status: 1, stdout: '', stderr: 'network has active endpoints' };
+    if (args[0] === 'network' && args[1] === 'inspect' && args.includes('--format'))
+      expect(args[args.indexOf('--format') + 1]).toBe('{{ index .Labels "dsh-team.user" }}');
+    return daemon.command(args, timeout);
+  };
+
+  await expect(
+    runUserImage(
+      'container-start',
+      () => undefined,
+      command,
+      (lifecycle) => {
+        const ownership = { 'dsh-team.user': 'abcdefghijkl' };
+        // Both exact targets are registered before their external creation, even for partial failure.
+        lifecycle.registerResource('network', network, ownership);
+        lifecycle.registerResource('container', container, ownership);
+        daemon.resources.set(`network:${network}`, ownership);
+        daemon.resources.set(`container:${container}`, ownership);
+        throw new Error('Induced network scenario failure');
+      },
+    ),
+  ).rejects.toThrow('Induced network scenario failure');
+
+  expect([...daemon.resources]).toEqual([
+    [`container:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    [`volume:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    [`network:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+  ]);
+  const removed = daemon.calls
+    .filter(({ args }) => args[1] === 'rm')
+    .map(({ args }) => {
+      const kind = args[0];
+      const name = args.at(-1);
+      if (kind === undefined || name === undefined)
+        throw new Error('Malformed cleanup fixture command');
+      return `${kind}:${name}`;
+    });
+  expect(removed.indexOf(`container:${container}`)).toBeLessThan(
+    removed.indexOf(`network:${network}`),
+  );
+  expect(daemon.calls.some(({ args }) => args[0] === 'network' && args.includes('--force'))).toBe(
+    false,
+  );
+});
+
+it('network cleanup refuses a changed user label while still cleaning the invocation container and image', async () => {
+  const daemon = lifecycleDaemon();
+  const network = 'dsh-team-net-abcdefghijkl';
+  const container = 'dsh-team-u-abcdefghijkl';
+
+  await expect(
+    runUserImage(
+      'container-start',
+      () => undefined,
+      daemon.command,
+      (lifecycle) => {
+        const ownership = { 'dsh-team.user': 'abcdefghijkl' };
+        lifecycle.registerResource('network', network, ownership);
+        lifecycle.registerResource('container', container, ownership);
+        daemon.resources.set(`network:${network}`, { 'dsh-team.user': 'foreign-owner' });
+        daemon.resources.set(`container:${container}`, ownership);
+        return Promise.resolve('scenario completed');
+      },
+    ),
+  ).rejects.toThrow('invocation label does not match');
+
+  expect([...daemon.resources]).toEqual([
+    [`container:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    [`volume:${daemon.sentinel}`, { 'dsh-team.user': 'other-owned-user' }],
+    [`network:${network}`, { 'dsh-team.user': 'foreign-owner' }],
+  ]);
+  expect(daemon.calls.some(({ args }) => args[0] === 'network' && args[1] === 'rm')).toBe(false);
+});

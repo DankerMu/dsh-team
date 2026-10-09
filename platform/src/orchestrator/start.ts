@@ -15,13 +15,22 @@ import type { ManagedConfigInput, ManagedComposition } from '../managed-config/i
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
+import { containerId, object, resolvedImageId } from './identity.ts';
+import {
+  attachedNetwork,
+  createUserNetwork,
+  NetworkCreationUnconfirmedError,
+  removeUserNetwork,
+  validateUserNetwork,
+} from './networks.ts';
+import type { OwnedNetwork } from './networks.ts';
 
 export interface StartUserContainerInput {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
   readonly config: Pick<
     PlatformConfig,
-    'userImage' | 'seccompProfilePath' | 'managedConfigDir' | 'authority'
+    'userImage' | 'seccompProfilePath' | 'managedConfigDir' | 'authority' | 'subnetPool'
   >;
   readonly userId: string;
   readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;
@@ -43,29 +52,6 @@ export type StartResult =
 const START_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
 const MAX_COMPOSITION_BYTES = 1024 * 1024;
-
-export function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('Invalid Docker startup response');
-  }
-  // Boundary JSON is unknown; every field is checked by its consumer below.
-  return value as Record<string, unknown>;
-}
-
-export function containerId(value: unknown): string {
-  const id = object(value).Id;
-  if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) {
-    throw new Error('Invalid Docker container identity');
-  }
-  return id;
-}
-
-export function resolvedImageId(value: unknown): string {
-  if (typeof value !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(value)) {
-    throw new Error('Invalid Docker image identity');
-  }
-  return value;
-}
 
 function ownedContainer(
   value: unknown,
@@ -222,6 +208,7 @@ export function inspectUserContainerEndpoint(
   const row = ownedContainer(document, name, userId, imageId);
   if (row.Id !== id || object(row.State).Running !== true)
     throw new Error('Started container identity or state mismatch');
+  attachedNetwork(row, userId);
   const ports = object(object(row.NetworkSettings).Ports);
   const bindings: unknown = ports['3080/tcp'];
   if (Object.keys(ports).length !== 1 || !Array.isArray(bindings) || bindings.length !== 1) {
@@ -272,12 +259,14 @@ function startupFailure(stage: string, error: unknown): Error {
       (failure: unknown) =>
         failure instanceof Error && failure.message === 'Managed composition cleanup failed',
     );
+  const networkUnconfirmed = error instanceof NetworkCreationUnconfirmedError;
   return new Error(
-    `Container startup failed during ${stage}${cleanupFailed ? '; managed composition cleanup failed' : ''}`,
+    `Container startup failed during ${stage}${cleanupFailed ? '; managed composition cleanup failed' : ''}${networkUnconfirmed ? '; network creation outcome unconfirmed' : ''}`,
     {
       cause: {
         stage,
         cleanupFailed,
+        networkUnconfirmed,
         dockerStatus: error instanceof DockerHttpError ? error.statusCode : undefined,
       },
     },
@@ -309,6 +298,7 @@ async function reuseCurrentContainer(
   client: DockerClient,
   account: Record<string, unknown>,
   signal: AbortSignal,
+  missing: () => void,
 ): Promise<StartResult | undefined> {
   const selected: unknown = input.database
     .prepare('SELECT * FROM instances WHERE user_id = ?')
@@ -326,6 +316,7 @@ async function reuseCurrentContainer(
   } catch (error) {
     if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
     assertCurrentSnapshot(input, account, instance, signal);
+    missing();
     return undefined;
   }
   if (instance.status !== 'starting' && instance.status !== 'running')
@@ -337,6 +328,7 @@ async function reuseCurrentContainer(
     input.userId,
     image,
   );
+  await validateUserNetwork(client, input.userId, document);
   if (
     instance.upstream_host !== '127.0.0.1' ||
     instance.upstream_port !== port ||
@@ -361,12 +353,32 @@ function resourceLimit(value: number, unit: number): number {
   return limit;
 }
 
+async function rollbackStartupNetwork(
+  network: OwnedNetwork | undefined,
+  client: DockerClient | undefined,
+  userId: string,
+  containerAttempted: boolean,
+): Promise<void> {
+  if (network?.created !== true || containerAttempted || client === undefined) return;
+  try {
+    await removeUserNetwork(client, userId, () => undefined, undefined, network);
+  } catch (error) {
+    throw startupFailure('network rollback failed', error);
+  }
+}
+
 /** Create/start or validate current identity; readiness, cookies and retirement remain separate. */
 export async function startUserContainer(
   input: StartUserContainerInput,
   reserve: () => boolean,
+  allocate: <Result>(userId: string, operation: () => Promise<Result>) => Promise<Result>,
+  assertNetworkConfirmed: (userId: string) => void,
 ): Promise<StartResult> {
   let stage = 'account validation';
+  let network: OwnedNetwork | undefined;
+  let cleanupClient: DockerClient | undefined;
+  let containerAttempted = false;
+  let replacing = false;
   try {
     const { database, config, userId } = input;
     if (!/^[a-z0-9]{12}$/.test(userId) || userId.length !== 12) throw new Error();
@@ -390,18 +402,24 @@ export async function startUserContainer(
     const signal =
       input.signal === undefined ? deadline : AbortSignal.any([input.signal, deadline]);
     const client: DockerClient = {
-      json: (method, path, body) => input.client.json(method, path, body, signal),
+      json: (method, path, body, _signal, maxBytes) =>
+        input.client.json(method, path, body, signal, maxBytes),
       logs: (path) => input.client.logs(path, signal),
     };
-    const cleanupClient: DockerClient = {
+    cleanupClient = {
       ...input.client,
-      json: (method, path, body) =>
-        input.client.json(method, path, body, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)),
+      json: (method, path, body, _signal, maxBytes) =>
+        input.client.json(method, path, body, AbortSignal.timeout(CLEANUP_TIMEOUT_MS), maxBytes),
     };
     const name = `dsh-team-u-${userId}`;
     stage = 'current container validation';
     signal.throwIfAborted();
-    const reused = await reuseCurrentContainer(input, client, user, signal);
+    stage = 'network allocation';
+    assertNetworkConfirmed(userId);
+    stage = 'current container validation';
+    const reused = await reuseCurrentContainer(input, client, user, signal, () => {
+      replacing = true;
+    });
     if (reused !== undefined) return reused;
     stage = 'capacity admission';
     signal.throwIfAborted();
@@ -426,7 +444,14 @@ export async function startUserContainer(
     });
     if (generated.outcome === 'unconfigured') return generated;
     const overlay = await writeManagedConfig(config.managedConfigDir, userId, generated.content);
+    stage = 'network allocation';
+    const cleanup = cleanupClient;
+    network = await allocate(userId, () =>
+      createUserNetwork(client, cleanup, userId, config.subnetPool, signal, replacing),
+    );
     stage = 'container creation';
+    signal.throwIfAborted();
+    containerAttempted = true;
     const id = containerId(
       await client.json('POST', `/containers/create?name=${name}`, {
         Image: image,
@@ -447,6 +472,7 @@ export async function startUserContainer(
         Labels: { 'dsh-team.user': userId },
         ExposedPorts: { '3080/tcp': {} },
         HostConfig: {
+          NetworkMode: network.id,
           NanoCpus: nanoCpus,
           Memory: memory,
           MemorySwap: memory,
@@ -461,6 +487,9 @@ export async function startUserContainer(
             { Type: 'bind', Source: overlay, Target: '/managed/patch.yml', ReadOnly: true },
           ],
         },
+        NetworkingConfig: {
+          EndpointsConfig: { [network.id]: { Aliases: [`u-${userId}`] } },
+        },
       }),
     );
     stage = 'created container inspection';
@@ -471,6 +500,7 @@ export async function startUserContainer(
       image,
     );
     if (created.Id !== id) throw new Error('Created container identity mismatch');
+    await validateUserNetwork(client, userId, created, network.id, true);
     stage = 'creation persistence';
     database.transaction(() => {
       database
@@ -491,13 +521,9 @@ export async function startUserContainer(
     stage = 'container start';
     await client.json('POST', `/containers/${id}/start`);
     stage = 'started container inspection';
-    const port = inspectUserContainerEndpoint(
-      await client.json('GET', `/containers/${id}/json`),
-      id,
-      name,
-      userId,
-      image,
-    );
+    const started = await client.json('GET', `/containers/${id}/json`);
+    await validateUserNetwork(client, userId, started, network.id);
+    const port = inspectUserContainerEndpoint(started, id, name, userId, image);
     stage = 'start persistence';
     database.transaction(() => {
       const changed = database
@@ -516,6 +542,7 @@ export async function startUserContainer(
     })();
     return { outcome: 'starting', containerId: id, upstreamHost: '127.0.0.1', upstreamPort: port };
   } catch (error) {
+    await rollbackStartupNetwork(network, cleanupClient, input.userId, containerAttempted);
     throw startupFailure(stage, error);
   }
 }

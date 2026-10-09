@@ -45,6 +45,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
           seccompProfilePath: lifecycle.seccomp,
           managedConfigDir: lifecycle.overlayDirectory,
           authority: 'startup.example:8443',
+          subnetPool: '172.30.0.0/16',
         },
         modelSettings: START_MODEL,
         modelKey: 'docker-acceptance-only-not-a-model-credential',

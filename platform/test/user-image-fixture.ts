@@ -80,12 +80,12 @@ function nestedMessages(error: unknown): string[] {
 
 function removeOwned(
   command: DockerCommand,
-  kind: 'container' | 'image' | 'volume',
+  kind: 'container' | 'image' | 'volume' | 'network',
   name: string,
   runId: string,
   ownership?: Readonly<Record<string, string>>,
 ): void {
-  const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
+  const labels = kind === 'volume' || kind === 'network' ? '.Labels' : '.Config.Labels';
   const expected = ownership ?? { [OWNER_LABEL]: runId };
   for (const [label, value] of Object.entries(expected)) {
     const args = [kind, 'inspect', '--format', `{{ index ${labels} "${label}" }}`, name];
@@ -128,14 +128,14 @@ export interface UserImageLifecycle {
   readonly repositoryRoot: string;
   registerContainer: (name: string) => void;
   registerResource: (
-    kind: 'container' | 'volume' | 'image',
+    kind: 'container' | 'volume' | 'image' | 'network',
     name: string,
     ownership: Readonly<Record<string, string>>,
   ) => void;
 }
 export type UserImageScenario = (lifecycle: UserImageLifecycle) => Promise<string>;
 interface CleanupTarget {
-  readonly kind: 'container' | 'image' | 'volume';
+  readonly kind: 'container' | 'image' | 'volume' | 'network';
   readonly name: string;
   readonly ownership?: Readonly<Record<string, string>>;
 }
@@ -247,8 +247,8 @@ function cleanupTargets(
   runId: string,
   failures: unknown[],
 ): void {
-  // Containers first, then their state volume, then image. Each target remains exact-owned.
-  for (const kind of ['container', 'volume', 'image'] as const) {
+  // Containers before networks, then their persistent volumes and images; each remains exact-owned.
+  for (const kind of ['container', 'network', 'volume', 'image'] as const) {
     for (const target of targets.filter((candidate) => candidate.kind === kind).reverse()) {
       try {
         removeOwned(command, kind, target.name, runId, target.ownership);
@@ -296,7 +296,7 @@ function lifecycleCommand(
       const kind = args[0];
       if (
         args[1] === 'inspect' &&
-        (kind === 'image' || kind === 'container' || kind === 'volume') &&
+        (kind === 'image' || kind === 'container' || kind === 'volume' || kind === 'network') &&
         isAbsentResource(result, kind, args.at(-1) ?? '')
       ) {
         return result;

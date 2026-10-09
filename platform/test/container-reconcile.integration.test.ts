@@ -12,6 +12,7 @@ import {
   startupUnixServer,
   startupBarrier,
   START_CONTAINER,
+  START_NETWORK,
   START_USER,
   START_IMAGE,
 } from './container-start-fixture.ts';
@@ -64,8 +65,32 @@ it('corrects an indexed missing container on exact-ID404 without touching its sa
   const replacementId = 'd'.repeat(64);
   const original = daemon.containers.get(START_CONTAINER);
   if (original === undefined) throw new Error('Missing fixture');
-  const replacement = { ...original, Id: replacementId };
-  daemon.containers.clear();
+  const bridgeId = '0'.repeat(64);
+  const replacement = {
+    ...original,
+    Id: replacementId,
+    HostConfig: { NetworkMode: 'bridge' },
+    NetworkSettings: {
+      Ports: original.NetworkSettings.Ports,
+      Networks: {
+        bridge: {
+          NetworkID: bridgeId,
+          EndpointID: replacementId,
+          IPAddress: '172.17.0.2',
+          Aliases: null,
+        },
+      },
+    },
+  };
+  daemon.removeContainer(START_CONTAINER);
+  const bridge = daemon.networks.get(bridgeId);
+  if (bridge === undefined) throw new Error('Missing default bridge fixture');
+  bridge.Containers[replacementId] = {
+    Name: `dsh-team-u-${START_USER}`,
+    IPv4Address: '172.17.0.2/16',
+    EndpointID: replacementId,
+  };
+  const bridgeBefore = structuredClone(bridge);
   daemon.containers.set(replacementId, replacement);
 
   await owner.reconcile();
@@ -86,7 +111,54 @@ it('corrects an indexed missing container on exact-ID404 without touching its sa
     }),
   ]);
   expect([...daemon.containers.values()]).toEqual([replacement]);
-  expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(daemon.networks.get(bridgeId)).toEqual(bridgeBefore);
+  expect(
+    daemon.requests
+      .filter(({ method }) => method !== 'GET')
+      .map(({ method, path }) => ({ method, path })),
+  ).toEqual([{ method: 'DELETE', path: `/networks/${START_NETWORK}` }]);
+});
+
+it('a missing indexed container cannot authorize cleanup of a bridge occupied by its same-name replacement', async () => {
+  const replacementId = 'd'.repeat(64);
+  const original = daemon.containers.get(START_CONTAINER);
+  if (original === undefined) throw new Error('Missing fixture');
+  daemon.removeContainer(START_CONTAINER);
+  const name = `dsh-team-net-${START_USER}`;
+  const replacement = {
+    ...original,
+    Id: replacementId,
+    NetworkSettings: {
+      Ports: original.NetworkSettings.Ports,
+      Networks: {
+        [name]: {
+          NetworkID: START_NETWORK,
+          EndpointID: replacementId,
+          IPAddress: '172.30.0.3',
+          Aliases: [`u-${START_USER}`],
+        },
+      },
+    },
+  };
+  daemon.containers.set(replacementId, replacement);
+  const network = daemon.networks.get(START_NETWORK);
+  if (network === undefined) throw new Error('Missing owned bridge fixture');
+  network.Containers[replacementId] = {
+    Name: `dsh-team-u-${START_USER}`,
+    IPv4Address: '172.30.0.3/28',
+    EndpointID: replacementId,
+  };
+  const before = {
+    containers: structuredClone([...daemon.containers]),
+    networks: structuredClone([...daemon.networks]),
+  };
+
+  await expectReconciliationRejected(database, daemon, owner);
+
+  expect([...daemon.containers]).toEqual(before.containers);
+  expect([...daemon.networks]).toEqual(before.networks);
+  expect(daemon.containers.get(replacementId)).toEqual(replacement);
 });
 
 it('list omission does not retire a healthy exact inspected identity and repeats without writes', async () => {
@@ -284,7 +356,10 @@ it('discovers and removes a physically stopped owned container without volume de
   expect(daemon.requests[0]).toEqual({ method: 'GET', path: RECONCILE_LIST, body: {} });
   expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([
     { method: 'DELETE', path: `/containers/${START_CONTAINER}`, body: {} },
+    { method: 'DELETE', path: `/networks/${START_NETWORK}`, body: {} },
   ]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
   expect(reconciliationState(database).rows).toEqual([stoppedRow()]);
   expect(reconciliationState(database).audits).toEqual([
     expect.objectContaining({ event_type: 'instance.stopped', details: '{"reason":"error"}' }),

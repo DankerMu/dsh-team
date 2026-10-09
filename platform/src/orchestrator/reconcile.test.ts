@@ -59,7 +59,7 @@ it.each(['missing', 'stopped', 'cookie-null', 'cookie-empty', 'starting', 'error
     const { database, daemon, owner } = await fixture();
     const container = daemon.containers.get(START_CONTAINER);
     if (container === undefined) throw new Error('Missing fixture');
-    if (kind === 'missing') daemon.containers.clear();
+    if (kind === 'missing') daemon.removeContainer(START_CONTAINER);
     if (kind === 'stopped') container.State.Running = false;
     if (kind === 'cookie-null') database.exec('UPDATE instances SET dsh_cookie = NULL');
     if (kind === 'cookie-empty') database.exec("UPDATE instances SET dsh_cookie = ''");
@@ -181,7 +181,7 @@ it('does not adopt or delete unindexed canonical objects or managed-composition 
 it('a missing indexed container frees persisted admission capacity without another counter', async () => {
   const { database, daemon, owner, input } = await fixture();
   writeSettings(database, { maxRunningInstances: 1 });
-  daemon.containers.clear();
+  daemon.removeContainer(START_CONTAINER);
   expect(await owner.startUserContainer({ ...input, userId: OTHER })).toEqual({ outcome: 'full' });
 
   await owner.reconcile();
@@ -264,7 +264,7 @@ it('active cancellation waits for underlying inspection and retains the queue un
 it('independent corrections settle even when another user fails rather than reporting partial success', async () => {
   const { owner, daemon, database } = await fixture();
   seedReconciliation(database, daemon, OTHER, OTHER_ID);
-  daemon.containers.delete(OTHER_ID);
+  daemon.removeContainer(OTHER_ID);
   daemon.overrides.set(`GET /containers/${START_CONTAINER}/json`, { status: 403 });
 
   await expect(owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
@@ -444,7 +444,7 @@ it.each(['factory dependencies', 'caller options'])(
   'reconciliation cannot substitute the captured owner through mutated %s',
   async (kind) => {
     const original = await fixture();
-    original.daemon.containers.clear();
+    original.daemon.removeContainer(START_CONTAINER);
     const alternate = await startupOwnerFixture();
     roots.push(alternate.root);
     databases.push(alternate.database);

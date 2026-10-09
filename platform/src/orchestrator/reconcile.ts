@@ -4,15 +4,14 @@ import type { DockerClient } from './client.ts';
 import { dshCookieExpiresAt, indexedEndpoint } from './credentials.ts';
 import {
   assertCurrentSnapshot,
-  containerId,
   inspectUserContainerEndpoint,
   inspectUserContainerState,
-  object,
-  resolvedImageId,
 } from './start.ts';
+import { containerId, object, resolvedImageId } from './identity.ts';
+import { validateUserNetwork } from './networks.ts';
 import { stopUserContainer } from './stop.ts';
 
-interface ReconciliationInput {
+export interface ReconciliationInput {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
   readonly userId: string;
@@ -114,6 +113,12 @@ async function healthy(
   const name = `dsh-team-u-${input.userId}`;
   if (!inspectUserContainerState(document, id, name, input.userId, image)) return false;
   const port = inspectUserContainerEndpoint(document, id, name, input.userId, image);
+  const client: DockerClient = {
+    ...input.client,
+    json: (method, path, body, _signal, maxBytes) =>
+      input.client.json(method, path, body, signal, maxBytes),
+  };
+  await validateUserNetwork(client, input.userId, document);
   // Incomplete starting state can be retired, never promoted into a ready survivor.
   if (instance.upstream_port !== null && instance.upstream_port !== port) throw new Error();
   return (

@@ -450,7 +450,7 @@ it.each(['instance', 'account', 'absent instance', 'absent account'] as const)(
     await owner.startUserContainer(input);
     let expected: unknown;
     const count = daemon.requests.length;
-    if (replacement.startsWith('absent')) daemon.containers.delete(START_CONTAINER);
+    if (replacement.startsWith('absent')) daemon.removeContainer(START_CONTAINER);
     daemon.beforeRequest((request) => {
       if (request.path !== `/containers/${START_CONTAINER}/json`) return;
       if (replacement.endsWith('instance'))
@@ -477,7 +477,7 @@ it('an exact old-ID 404 never adopts or deletes a foreign same-name collision', 
   const before = await startupEvidence(database, input);
   const old = daemon.containers.get(START_CONTAINER);
   if (old === undefined) throw new Error('Expected original fixture container');
-  daemon.containers.delete(START_CONTAINER);
+  daemon.removeContainer(START_CONTAINER);
   const foreign = {
     ...old,
     Id: NEXT_CONTAINER,
@@ -516,7 +516,7 @@ it('a queued start observes account replacement only when its predecessor has se
 it('only exact indexed-ID absence permits recreation through the canonical name-absence path', async () => {
   const { owner, input, database, daemon } = await fixture();
   await owner.startUserContainer(input);
-  daemon.containers.delete(START_CONTAINER);
+  daemon.removeContainer(START_CONTAINER);
   daemon.setContainerId(NEXT_CONTAINER);
   const count = daemon.requests.length;
 

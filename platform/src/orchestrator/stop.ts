@@ -3,7 +3,9 @@ import type { InstanceStopReason } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerState, resolvedImageId } from './start.ts';
+import { inspectUserContainerState } from './start.ts';
+import { resolvedImageId } from './identity.ts';
+import { captureUserNetwork, removeUserNetwork } from './networks.ts';
 
 export interface StopUserContainerInput {
   readonly client: DockerClient;
@@ -178,11 +180,11 @@ function commit(
   })();
 }
 
-/** Retires only the captured current container; persistent user volumes are never removed. */
+/** Verified absence plus stopped/audit commit returns true; no-op returns false; volumes remain. */
 export async function stopUserContainer(
   input: StopUserContainerInput,
   assertCurrent?: () => void,
-): Promise<void> {
+): Promise<boolean> {
   const fenced: FencedRetirementInput =
     assertCurrent === undefined ? input : { ...input, assertCurrent };
   const work = new AbortController();
@@ -196,9 +198,35 @@ export async function stopUserContainer(
       input.signal === undefined ? work.signal : AbortSignal.any([input.signal, work.signal]);
     signal.throwIfAborted();
     const selection = select(input);
-    if (selection === undefined) return;
+    if (selection === undefined) return false;
+    const networkClient: DockerClient = {
+      ...input.client,
+      json: (method, path, body, _signal, maxBytes) =>
+        input.client.json(method, path, body, signal, maxBytes),
+    };
+    const state = await running(input, selection, signal);
+    const network = await captureUserNetwork(
+      networkClient,
+      input.userId,
+      state === undefined ? undefined : selection.containerId,
+    );
+    current(fenced, selection, signal);
     await remove(fenced, selection, signal);
+    if (network === undefined) {
+      if ((await captureUserNetwork(networkClient, input.userId)) !== undefined) throw new Error();
+    } else {
+      await removeUserNetwork(
+        networkClient,
+        input.userId,
+        () => {
+          current(fenced, selection, signal);
+        },
+        undefined,
+        network,
+      );
+    }
     commit(fenced, selection, reason, signal);
+    return true;
   } catch {
     // Neither Docker response bodies, database errors nor backend credentials escape this boundary.
     throw new Error('User container retirement failed');

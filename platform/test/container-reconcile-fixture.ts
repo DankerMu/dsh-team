@@ -2,7 +2,7 @@ import { expect } from 'vitest';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { START_CONTAINER, START_IMAGE, START_USER } from './container-start-fixture.ts';
-import type { Container, StartupRequest } from './container-start-fixture.ts';
+import type { Container, StartupDaemon, StartupRequest } from './container-start-fixture.ts';
 
 // Released cookie protocol; name independently pinned in credential/readiness acceptance fixtures.
 function reconciliationCookie(expiresAt: number): string {
@@ -22,7 +22,10 @@ export const RECONCILE_LIST = `/containers/json?all=1&filters=${encodeURICompone
 
 export function seedReconciliation(
   database: DatabaseHandle,
-  daemon: { containers: Map<string, Container> },
+  daemon: {
+    containers: Map<string, Container>;
+    attachOwnedNetwork: (user: string, id: string) => void;
+  },
   user = START_USER,
   id = START_CONTAINER,
 ): void {
@@ -44,6 +47,7 @@ export function seedReconciliation(
     State: { Running: true },
     NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   });
+  daemon.attachOwnedNetwork(user, id);
 }
 
 export function reconciliationState(database: DatabaseHandle) {
@@ -70,11 +74,11 @@ export async function expectReconciliationRejected(
 
 export function expireReconciliation(
   database: DatabaseHandle,
-  daemon: { containers: Map<string, Container> },
+  daemon: Pick<StartupDaemon, 'containers' | 'removeContainer'>,
   state: string,
 ): void {
   database.prepare('UPDATE instances SET dsh_cookie = ?').run(RECONCILE_EXPIRED_COOKIE);
-  if (state === 'missing') daemon.containers.clear();
+  if (state === 'missing') daemon.removeContainer(START_CONTAINER);
   if (state === 'stopped') {
     const container = daemon.containers.get(START_CONTAINER);
     if (container === undefined) throw new Error('Missing fixture');

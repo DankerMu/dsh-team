@@ -111,6 +111,7 @@ function fixture() {
     State: { Running: true },
     NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   });
+  daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
   daemon.setComposition(`boot\ndsh web: http://127.0.0.1:3080/?token=release-token\n`);
   const client = createDockerClient('/fixture/docker.sock', daemon.transport);
   ({ acquireDshCookie } = createOrchestrator({ client, database }));
