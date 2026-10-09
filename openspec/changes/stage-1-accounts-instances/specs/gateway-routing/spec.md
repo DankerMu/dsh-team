@@ -63,6 +63,16 @@ DSH 的启动令牌和 DSH cookie MUST 只保存在平台服务端。网关 MUST
 - **WHEN** 员工的请求被转发到实例
 - **THEN** 实例收到的请求头里没有平台会话 cookie
 
+#### Scenario: 客户端逐跳头不能覆盖受管凭据
+
+- **WHEN** 已登录客户端同时发送多个 Cookie，并在 Connection 中列出 Cookie 和 Host
+- **THEN** 上游只收到当前用户实例的 DSH cookie 和平台配置的对外 Host，客户端的平台 cookie 不被转发
+
+#### Scenario: 上游设置多个 cookie
+
+- **WHEN** 实例 HTTP 响应包含多个 Set-Cookie
+- **THEN** 平台保留响应状态和内容，但浏览器不收到任何实例 Set-Cookie
+
 ### Requirement: 转发 HTTP、WebSocket、上传和下载
 
 网关 MUST 转发普通请求、WebSocket 长连接、文件上传和文件下载，且 MUST NOT 把请求体或响应体整体读入内存。

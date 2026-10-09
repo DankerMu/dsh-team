@@ -2,6 +2,7 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import type { GatewayUpstreamResolver } from '../src/gateway/index.ts';
 
 export const SOURCE = '192.0.2.20';
 export const PUBLIC_ORIGIN = 'http://127.0.0.1:8080';
@@ -123,15 +124,21 @@ export async function withApp(
   run: (app: FastifyInstance, database: DatabaseHandle, lines: string[]) => Promise<void>,
   cookieSecure = false,
   trustedProxies: readonly string[] = [],
+  resolveUpstream?: GatewayUpstreamResolver,
 ): Promise<void> {
   const lines: string[] = [];
   const database = openDatabase(':memory:');
   let app: FastifyInstance | undefined;
   try {
     applyMigrations(database);
-    app = await buildApp({ ...CONFIG, cookieSecure, trustedProxies }, database, {
-      write: (line) => lines.push(line),
-    });
+    app = await buildApp(
+      { ...CONFIG, cookieSecure, trustedProxies },
+      database,
+      {
+        write: (line) => lines.push(line),
+      },
+      resolveUpstream,
+    );
     await run(app, database, lines);
   } finally {
     if (app === undefined) {

@@ -3,11 +3,14 @@ import type { Duplex } from 'node:stream';
 import type { FastifyPluginCallback, FastifyReply, FastifyRequest } from 'fastify';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { BAD_GATEWAY, forwardHttp, requestTarget } from './http.ts';
+import type { GatewayUpstreamResolver } from './types.ts';
 
 const ERRORS = {
   401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
   404: { statusCode: 404, error: 'Not Found', message: 'Not Found' },
   500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
+  502: BAD_GATEWAY,
   503: { statusCode: 503, error: 'Service Unavailable', message: 'Instance unavailable' },
 } as const;
 const ERROR_SCHEMA = {
@@ -21,8 +24,7 @@ const ERROR_SCHEMA = {
 } as const;
 
 function platformPath(url: string): boolean {
-  // Absolute-form targets have the same namespace without URL path normalization.
-  const path = url.replace(/^https?:\/\/[^/?#]*/i, '').split('?', 1)[0];
+  const path = requestTarget(url).split('?', 1)[0];
   return path === '/healthz' || path === '/_platform' || path?.startsWith('/_platform/') === true;
 }
 
@@ -36,16 +38,16 @@ function pageRequest(request: FastifyRequest): boolean {
   });
 }
 
-export const gatewayRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> = (
-  app,
-  { database },
-  done,
-) => {
-  function status(request: IncomingMessage): keyof typeof ERRORS {
+export const gatewayRoutes: FastifyPluginCallback<{
+  database: DatabaseHandle;
+  authority: string;
+  resolveUpstream?: GatewayUpstreamResolver;
+}> = (app, { database, authority, resolveUpstream }, done) => {
+  function admission(request: IncomingMessage): string | keyof typeof ERRORS {
     if (platformPath(request.url ?? '/')) return 404;
     try {
       const token = readSessionCookie(request.headers.cookie);
-      return token !== null && getSessionUser(database, token, Date.now()) !== null ? 503 : 401;
+      return token === null ? 401 : (getSessionUser(database, token, Date.now())?.id ?? 401);
     } catch {
       // Authentication storage failures must not reveal database or credential details.
       app.log.error('Gateway authentication storage failure');
@@ -53,7 +55,21 @@ export const gatewayRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> 
     }
   }
   function admit(request: FastifyRequest, reply: FastifyReply): void {
-    const code = status(request.raw);
+    const code = admission(request.raw);
+    if (typeof code === 'string') {
+      try {
+        const upstream = resolveUpstream?.(code);
+        if (upstream !== undefined) {
+          forwardHttp(request, reply, upstream, authority);
+          return;
+        }
+        void reply.code(503).send(ERRORS[503]);
+      } catch {
+        app.log.error('Gateway upstream resolution failed');
+        void reply.code(502).send(BAD_GATEWAY);
+      }
+      return;
+    }
     if (code === 401 && pageRequest(request)) {
       void reply.redirect('/_platform/login', 302);
       return;
@@ -70,6 +86,7 @@ export const gatewayRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> 
           401: ERROR_SCHEMA,
           404: ERROR_SCHEMA,
           500: ERROR_SCHEMA,
+          502: ERROR_SCHEMA,
           503: ERROR_SCHEMA,
         },
       },
@@ -85,7 +102,8 @@ export const gatewayRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> 
     socket.once('finish', () => {
       socket.destroy();
     });
-    const code = status(request);
+    const selected = admission(request);
+    const code = typeof selected === 'string' ? 503 : selected;
     socket.end(
       `HTTP/1.1 ${String(code)} ${ERRORS[code].error}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
     );

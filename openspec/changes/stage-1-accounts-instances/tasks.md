@@ -728,6 +728,14 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 
 验证记录（#49）：页面404→302、真实升级未结束→401/EOF 的 RED/GREEN 已观察。保留平台健康/鉴权/Origin 边界；HTTP与真实升级均验证缺失、畸形、重复、过期、撤销、禁用会话及有效会话503，精确登录令牌滑动续期、解析前拒绝请求体、存储失败安全500与脱敏错误日志。首轮审查发现升级半关闭受客户端FIN控制、absolute-form平台路径误分类及静默500；三项负向回归均先失败，修复后完整 `pnpm check` 1176单元/669集成、逐文件覆盖、重复率2.74%、契约及strict OpenSpec通过。独立source/built实际TCP证明拒绝401/503/absolute平台404完整发送且服务端主动释放，即使客户端不发送FIN；`pnpm e2e`通过。没有上游连接、容器操作或登录页渲染；这些仍属后续issue。最终审查/CI与冻结提交以PR#156记录为准。
 
+### Issue #50 risk/evidence map (task11.2 only)
+
+- Public API / Auth permissions secrets / Legacy compatibility: real two-user/two-upstream requests use only the current session ID, exact paired DSH cookie and configured Host; forged routing inputs cannot cross users. Both multiple client cookies and response Set-Cookie are removed. Preserve all task11.1 platform/anonymous/upgrade controls.
+- Shared state ordering / Error partial outputs / Resource limits: synchronous uncached resolution, response ownership before parsing, pipe/backpressure, client/upstream abort teardown, before-headers502 versus after-headers termination, no retries. Actual event-based negative controls, no timing sleeps.
+- Schema / Configuration / Packaging / Documentation: resolver dependency through the public gateway/app seam, no environment or DB change; explicit error schemas and unchanged platform contract. Full root check, strictOpenSpec, source/built real forwarding smoke, final-head full21Docker and CI.
+- File IO not selected: no new filesystem operation.200MB memory qualification, WebSocket forwarding, per-user connection registry, wait reasons and real instance lookup remain their existing dependent tasks; basic byte-preserving piping and paired-resource cleanup are required now.
+- Ownership/stream controls: malformedJSON POST remains byte-identical; upstream401 JSON extra fields survive gateway schemas; upload and download prefixes observed before producer completion. Lifecycle controls independently cover invalid endpoint, upstream101, unfinished-upload abort, response-client close, normal upload followed by delayed response, pre-header502 and post-header truncation; server-observed cleanup and subsequent successful request, no wall-clock sleeps.
+
 ## 12. 按需启动和空闲停止（任务包 1.9）
 
 依赖：第 2、9、10、11 组。
