@@ -709,7 +709,7 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
 - [x] 11.1 路由划分：`/_platform/` 和 `/healthz` 由平台处理，其余路径进网关；未登录时页面请求跳转登录页，其他请求返回 401。验证：集成测试覆盖 `gateway-routing` 规格“平台路径与实例路径分开”的全部场景和“实例由平台会话决定”的两个未登录场景。
 - [x] 11.2 HTTP 转发：上游由平台会话对应的用户决定，不读取请求里的任何实例标识；去掉客户端的全部 `Cookie`，只注入该实例的 DSH cookie；`Host` 改为平台对外 authority；去掉响应里的 `Set-Cookie`。验证：集成测试（替身上游记录收到的请求）——上游收不到平台会话 cookie；浏览器收不到 DSH cookie；上游看到的 `Host` 是平台对外 authority；请求里伪造的实例标识头和查询参数不改变上游（规格“实例由平台会话决定”“DSH 凭据只在平台服务端”和“上游使用固定的对外地址”场景）。
-- [ ] 11.3 流式转发：请求体和响应体不缓冲。验证：集成测试——上传和下载各一个 200MB 的流，平台进程的内存增长不超过 50MB，内容校验和一致（规格“大文件上传和下载”场景）。
+- [x] 11.3 流式转发：请求体和响应体不缓冲。验证：集成测试——上传和下载各一个200MiB（209,715,200字节）的流，独立平台进程峰值RSS相对传输前当前RSS的增量不超过160MiB（167,772,160字节），完整字节数和SHA-256一致；实际整包缓冲负控必须因超限被拒绝（规格“大文件上传和下载”“大文件转发的独立内存验收”场景；用户明确批准的合同修订见下）。
 - [x] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
 - [ ] 11.5 连接登记和断开：按用户登记所有打开的连接；提供“销毁某用户全部连接”的函数。验证：集成测试——一个用户有两条长连接和一个进行中的下载时调用该函数，三者在 1 秒内全部断开，另一个用户的连接不受影响。
 - [ ] 11.6 平台会话失效后的长连接：平台会话被删除后，由它建立的长连接被断开。验证：集成测试覆盖规格“平台会话失效后长连接不再可用”的场景。
@@ -743,7 +743,7 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - Public API/auth/secrets/invariant: existing active-session admission, exact single configured Origin, session-selected paired resolver, trusted Host/DSH Cookie and stripped response Set-Cookie. Real two-user upgrade/frame tests and rejected missing/wrong/duplicate Origin controls prove custody and zero cross-user/upstream activity.
 - Shared state/order/errors/resources: client and upstream parser heads exactly once; abort-before-handshake fences late handoff; both disconnect directions, refusal/non101/invalid protocol and app shutdown settle owned resources. Event-based real TCP probes, no sleeps, no generic TCP tunnel.
 - Compatibility/schema/config/packaging/docs: canonical auth Origin predicate extraction with unchanged mutation behavior; existing publicUrl passed to gateway, no config/dependency/migration; ordinary HTTP framing/admission preserved. Semantic RED/GREEN, complete root checks, generated contract check, strict OpenSpec, independent source/built smoke and final21Docker/CI.
-- File IO not selected; no production filesystem operation. Per-user connection management, revocation-driven teardown and instance wiring stay #53/#54/#56. #51's unresolved50MB requirement is not bypassed or copied onto this independent DAG branch.
+- File IO not selected; no production filesystem operation. Per-user connection management, revocation-driven teardown and instance wiring stay #53/#54/#56. #51's separate RSS acceptance is not bypassed or claimed by this WebSocket slice.
 - Protocol/oracle closure: after admission and Origin, unsupported client Upgrade token/list gives400 without resolution or upstream activity; invalid upstream101 gives502. Test-only literal RFC6455 frames plus crypto prove both directional prefixes before producer release, complete equality and continued open-connection messages. Pending and established app-close cases and credential-bearing sanitized-error controls close lifecycle/evidence gaps.
 
 验证记录（#52）：真实升级503→101、缺失/错误/重复Origin的502→403、非WebSocket协议503→400均有先RED后GREEN。24项实际TCP升级用例验证双向逐段帧在生产者继续前抵达、两端握手head恰一次、双用户端点/Cookie隔离、101去Set-Cookie、协议协商、待握手取消、错误/非101/错误协议以及应用关闭；既有HTTP和平台Origin行为保留。完整`pnpm check`通过：1197单元及逐文件覆盖、710集成、构建/契约/anti-drift（重复率2.74%）。独立source/built运行各证明401/403拒绝不调用resolver、有效101只选择当前用户、真实掩码文本解码hi及二进制[0,255]返回、app关闭客户端；e2e通过。初始化实现曾在流量结束后卡住关闭，改为preClose拥有升级连接且半关闭先flush后成对释放；另有关闭过程中排队升级逃出快照的RED，关闭准入栅栏后不再获取上游。原始失败/诊断与最终通过保留`.run/issue52/`。最终审查、冻结头Docker及CI以PR记录为准；#51内存门槛未被宣称通过。
@@ -753,6 +753,21 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 审查修复（#52，第2轮）：父会话实际TCP复现上游延迟101时客户端追加8字节后FIN，网关暂停缓冲中仍有8字节、end未触发且上游不关闭。implementer原位修复：通过公开socket事件持有上游，在请求头finish或已验证101之后仅一次启动客户端方向，响应方向仍等待101；统一取消、unpipe及原始socket销毁。30项TCP覆盖追加延迟101成功/恰一次、早期字节后拒绝/reset、32MiB真实反压恢复完整及反压中应用关闭。最终完整check1198单元/716集成通过，重复率2.90%；独立源码/构建产物分别验证延迟101收到完整早期帧、8字节FIN触发两端关闭、早期字节后拒绝变安全502，六个场景均通过。保留普通TCP反压：对端完全不读时，FIN可隐藏在未消费字节之后，不能凭空宣称已观察到EOF；应用拥有资源仍能显式关闭。没有新增超时、丢字节、无界缓冲或私有Node状态。
 
 用户授权追加修复（#52）：第3轮发现有序上游EOF/自动close会提前destroy仍有4字节待完成写入的客户端，独立真实上游+受控外部写入边界先RED；用户明确授权额外一轮，fix_gate已记录。implementer增加有序drain状态：停止新字节入管，先等待已接受的上游写入finish，再等待客户端写入finish，最后释放；正常且已读完/写完的上游自动close不抢断客户端，而错误、取消和应用关闭仍立即清理。永久真实上游回归在隔离的修复前源码快照上4项RED，候选全过；补双向同时待写、两端EOF、目标错误和关闭中断。完整check1201单元/721集成、逐文件覆盖、重复率2.91%通过；独立source/dist观察真实上游已关闭时客户端待写仍保留，释放回调后4字节完成、finish后close，构建模块加载来源亦已验证。未宣称全部真实TCP32MiB探针复现截断；该探针未触发待写竞态。最终独立复审及Docker/CI仍为合并门槛。
+
+### Issue #51 risk/evidence map (task11.3 only)
+
+- Resource limits/discovery + schema/units: fresh gateway PID per direction,209,715,200byte payload, currentRSS baseline and sampled/kernel peak, ≤167,772,160byte delta. Parent independently checks counts/digests and validates raw metric/PID/phase fields; lifetime-peak ambiguity above baseline+50,000,000bytes still fails preflight.
+- Public process entry/config + auth/secrets + shared state/order: real buildApp/session/resolver in child, minimal inherited environment, readiness/baseline before transfer and completion before final report; no stdout cookies. Existing admission/custody/framing/cancellation tests preserved.
+- File IO/safety + errors/cleanup: invocation-owned upload file read back via gateway; bounded chunks/backpressure, no parent full-body accumulation; sockets/timers/child exit/temp paths cleaned after success, cancellation and failure.
+- Oracle qualification + compatibility/packaging/docs: isolated source-module buffering controls for upload and download must retain semantics but exceed memory ceiling, then unmodified restoration and dedicated stability evidence. No working-tree source mutation or invented productionbugRED. Full checks/strictOpenSpec/source+built runtime/final21Docker+CI; no new production metrics/config/dependency.
+
+验证记录（#51，未完成）：真实独立网关进程上传/下载各209,715,200字节，生产者、落盘文件、下载SHA-256一致；原始macOS源码RSS增量71,991,296/86,786,048字节，构建产物72,040,448/105,562,112字节，Linux诊断71,958,528/72,351,744字节，均超过50,000,000字节门槛。独立审查确认采样RSS本身已超限，不能用生命周期高水位口径解释为误报；有界队列与自然GC前后的ArrayBuffer数据支持运行时分配回收因素，尚无满足门槛的生产修复。未调整门槛、基线、流量或GC参数，11.3保持未勾选。真实整包缓冲负控两方向完整传输后均被内存门槛拒绝；修复探针取消/IPC失败清理，最终8种实际进程故障场景通过（捕获PID消失、stderr关闭、IPC断开、端口拒连、文件描述符和临时目录释放）；共享网关30项集成、2项负控、lint/typecheck通过。详证保留`.run/issue51/`；不以负控通过替代普通流式内存验收，不创建/合并未通过的PR。
+
+合同修订（#51，2026-10-09）：用户在[评估](https://github.com/DankerMu/dsh-team/issues/51#issuecomment-6085005121)后明确选择“批准160MiB并继续#51”，[批准记录](https://github.com/DankerMu/dsh-team/issues/51#issuecomment-6090662364)。上文50MB失败为保留的历史证据，不是当前上限；新验收为167,772,160字节RSS增量，原启动基线歧义保护不变。固定42窗口/69次完整传输的最大增量128,663,552字节，约30.4%工程余量并非统计上界或目标机容量保证。接入最新main后重新完成原完整性/负控、源码/构建产物、review、Docker与CI才可勾选11.3；不把评估exit0冒充验收。
+
+集成后本地验证（#51）：停放分支接入已合并#52的main后，独立转发上限167,772,160字节、私有启动歧义上限50,000,000字节分离。普通完整上传/下载RSS增量71,499,776/90,112,000字节通过；实际上传/下载整包缓冲控制分别415,449,088/458,342,400字节，被新上限拒绝且字节数/SHA-256仍正确。`pnpm fmt && pnpm check` exit0，1201单元、724集成（含所有#52回归）、逐文件覆盖、构建/契约/anti-drift通过，重复率2.87%。独立实际源码/编译产物各执行恢复与专用稳定性窗口，四次完整往返通过；受控IPC注入启动高水位比基线高100,000,000字节，在上传前明确拒绝，捕获子进程退出、IPC断开和临时目录删除。第一次故障smoke错误地匹配外层安全诊断而非cause，保留失败日志，修正观察断言后通过；未改采样/生产代码。最终审查、冻结头Docker和CI仍待完成，不能以本地通过替代合并门槛。
+
+合并资格验证（#51）：代码审查头`ca656f9f97466f42d9fa692b62b5cc1d9835eb68`四席高风险交叉审查clean，未消耗修复轮；固定Node24.13.1/pnpm10.34.6的giap-vps实际200MiB普通上传/下载增量64,880,640/74,055,680字节，整包缓冲反例421,265,408/449,650,688字节，三例完整性及判据通过。独立源码和编译产物恢复/稳定性均通过；完整Docker13文件/21测试、153.84秒、exit0，独立容器/网络/卷/测试镜像清单全空。[可信证明](https://github.com/DankerMu/dsh-team/pull/159#issuecomment-6091083212)，标签事件CI38003142008全绿。初始opened事件快照不含创建后添加的豁免标签，其重跑不代表新标签状态；使用已存在的labeled事件补可信状态后通过，没有改门槛。后续仅本完成记录变更，最终合并提交的精确头Docker/CI仍以PR159证据为准。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 
