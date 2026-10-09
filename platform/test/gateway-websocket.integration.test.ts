@@ -21,6 +21,11 @@ const ACCEPT = createHash('sha1')
 // Literal RFC6455 masked text "hi" and unmasked binary [0, 255]; the proxy never decodes frames.
 const CLIENT_FRAME = Buffer.from([0x81, 0x82, 1, 2, 3, 4, 0x69, 0x6b]);
 const SERVER_FRAME = Buffer.from([0x82, 2, 0, 255]);
+// Heads differ in opcode and payload from successors, so duplicate head bytes cannot stay aligned.
+const CLIENT_HEAD = Buffer.from([0x82, 0x82, 5, 6, 7, 8, 0xfa, 6]);
+const SERVER_HEAD = Buffer.from([0x81, 5, 104, 101, 108, 108, 111]);
+const EXTENSION_OFFER = 'permessage-deflate; client_max_window_bits';
+const EXTENSION_SELECTED = 'permessage-deflate; server_no_context_takeover';
 
 type ReadPeer = (size: number | string) => Promise<Buffer>;
 function reader(socket: Duplex, head = Buffer.alloc(0)): ReadPeer {
@@ -95,14 +100,22 @@ it('streams both WebSocket frame directions with private handshake credentials',
         read: ReadPeer;
         cookie: string | undefined;
         host: string | undefined;
+        key: string | undefined;
+        version: string | undefined;
+        extensions: string | undefined;
       }>();
       server.on('upgrade', (request, socket, head) => {
+        const acceptedKey = createHash('sha1')
+          .update(
+            `${request.headers['sec-websocket-key'] ?? ''}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`,
+          )
+          .digest('base64');
         socket.write(
           Buffer.concat([
             Buffer.from(
-              `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${ACCEPT}\r\nSet-Cookie: dsh-auth=private\r\n\r\n`,
+              `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${acceptedKey}\r\nSec-WebSocket-Extensions: ${EXTENSION_SELECTED}\r\nSet-Cookie: dsh-auth=private\r\n\r\n`,
             ),
-            SERVER_FRAME,
+            SERVER_HEAD,
           ]),
         );
         upstream.resolve({
@@ -110,6 +123,9 @@ it('streams both WebSocket frame directions with private handshake credentials',
           read: reader(socket, head),
           cookie: request.headers.cookie,
           host: request.headers.host,
+          key: request.headers['sec-websocket-key'],
+          version: request.headers['sec-websocket-version'],
+          extensions: request.headers['sec-websocket-extensions'],
         });
       });
       await withForwardingApp(
@@ -123,9 +139,9 @@ it('streams both WebSocket frame directions with private handshake credentials',
             client.write(
               Buffer.concat([
                 Buffer.from(
-                  `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: WebSocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: theme=dark; ${cookie}\r\n\r\n`,
+                  `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: WebSocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Extensions: ${EXTENSION_OFFER}\r\nCookie: theme=dark; ${cookie}\r\n\r\n`,
                 ),
-                CLIENT_FRAME,
+                CLIENT_HEAD,
               ]),
             );
             const headers = (await read('\r\n\r\n')).toString();
@@ -141,8 +157,12 @@ it('streams both WebSocket frame directions with private handshake credentials',
             const peer = await observeHttp(upstream.promise);
             expect(peer.cookie).toBe(target.cookie);
             expect(peer.host).toBe('127.0.0.1:8080');
-            expect(await peer.read(CLIENT_FRAME.length)).toEqual(CLIENT_FRAME);
-            expect(await read(SERVER_FRAME.length)).toEqual(SERVER_FRAME);
+            expect(peer.key).toBe(KEY);
+            expect(peer.version).toBe('13');
+            expect(peer.extensions).toBe(EXTENSION_OFFER);
+            expect(headers).toContain(`sec-websocket-extensions: ${EXTENSION_SELECTED}\r\n`);
+            expect(await peer.read(CLIENT_HEAD.length)).toEqual(CLIENT_HEAD);
+            expect(await read(SERVER_HEAD.length)).toEqual(SERVER_HEAD);
             client.write(CLIENT_FRAME.subarray(0, 3));
             expect(await peer.read(3)).toEqual(CLIENT_FRAME.subarray(0, 3));
             client.write(CLIENT_FRAME.subarray(3));
