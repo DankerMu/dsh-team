@@ -365,3 +365,10 @@
 - Selected packs: public API, auth/secrets, shared-state/invariant ordering, error/partial outputs, resource ownership, schema, compatibility, packaging and docs. No new filesystem/persisted state/dependency. Evidence maps in task11.4 below.
 - Evidence floor: real TCP WebSocket handshakes and bidirectional frames, two-user authority/cookie isolation, missing/wrong/duplicate Origin rejection before resolver/upstream, both parser head buffers and coupled shutdown/error teardown; semantic RED/GREEN, root checks, source/built smoke, strict OpenSpec and exact-head full21Docker/CI.
 - No per-user connection registry (#53), session-invalidation closure (#54), wait reasons (#55), instance lookup (#56), or memory acceptance claim (#51, parked separately). Do not import the parked #51 test harness or relax its unresolved requirement.
+## Issue #51 fixture
+
+- Characterization/test; expanded (agree with upstream), task11.3: qualify existing production streaming with large-file integrity and a process-isolated memory ceiling.
+- Governing invariant: a complete200MiB upload and download preserve byte count/SHA-256 while gateway-only peak RSS growth stays at most50,000,000bytes above its pre-transfer current RSS.
+- Preserve all task11.1/11.2 admission, credential, raw-target, method-framing and cancellation behavior. No second proxy, production sampler, endpoint, config or dependency expected; change forwarding only if the actual bounded case exposes a defect.
+- Selected packs: public test/process entrypoint, resource/memory discovery, auth/secrets, shared-state/order, error/cleanup, file safety, evidence schema/units, compatibility, packaging and docs; mapped below.
+- Evidence floor: real child-process gateway plus local streaming client/upstream, exact count/digests, raw baseline/sampled/OS-high-water metrics, actual full-body-buffering controls rejected for memory not semantics, restored/stability trials, full root checks/strictOpenSpec, source/built smoke and final-head21Docker/CI.

@@ -17,6 +17,7 @@ import {
 export async function withUpstream(
   handler: RequestListener,
   run: (target: GatewayUpstream, server: Server) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   const server = createServer(handler);
   const sockets = new Set<Socket>();
@@ -26,9 +27,37 @@ export async function withUpstream(
       sockets.delete(socket);
     });
   });
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
+  const abort = () => {
+    for (const socket of sockets) socket.destroy();
+  };
+  signal?.addEventListener('abort', abort, { once: true });
+  let primary: unknown;
+  let failed = false;
   try {
+    signal?.throwIfAborted();
+    // Acquire the actual listener before observing cancellation: racing a rejected listening
+    // promise against abort can otherwise leave listen() completing after teardown.
+    const started = Promise.withResolvers<undefined>();
+    const listening = () => {
+      started.resolve(undefined);
+    };
+    const startupFailed = (error: Error) => {
+      started.reject(error);
+    };
+    server.once('listening', listening);
+    server.once('error', startupFailed);
+    try {
+      try {
+        server.listen(0, '127.0.0.1');
+      } catch (error) {
+        started.reject(error);
+      }
+      await started.promise;
+    } finally {
+      server.removeListener('listening', listening);
+      server.removeListener('error', startupFailed);
+    }
+    signal?.throwIfAborted();
     const address = server.address();
     if (address === null || typeof address === 'string')
       throw new Error('Missing upstream address');
@@ -36,14 +65,38 @@ export async function withUpstream(
       { host: '127.0.0.1', port: address.port, cookie: `dsh-auth=test-${String(address.port)}` },
       server,
     );
-  } finally {
-    for (const socket of sockets) socket.destroy();
+  } catch (error) {
+    primary = error;
+    failed = true;
+  }
+  signal?.removeEventListener('abort', abort);
+  const cleanup: unknown[] = [];
+  try {
+    const socketClosures = [...sockets].map((socket) => {
+      const closed = Promise.withResolvers<undefined>();
+      socket.once('close', () => {
+        closed.resolve(undefined);
+      });
+      socket.destroy();
+      return closed.promise;
+    });
     if (server.listening) {
       const closed = once(server, 'close');
       server.close();
-      await closed;
+      await observeHttp(closed, 2_000);
     }
+    await observeHttp(Promise.all(socketClosures), 2_000);
+  } catch (error) {
+    cleanup.push(error);
   }
+  if (cleanup.length !== 0) {
+    if (failed)
+      throw new AggregateError([primary, ...cleanup], 'Upstream operation and cleanup failed', {
+        cause: primary,
+      });
+    throw cleanup[0];
+  }
+  if (failed) throw primary;
 }
 
 export async function withForwardingApp(
@@ -91,7 +144,17 @@ export async function sendHttp(
     body: Buffer;
   }>();
   // A failed real peer must be bounded; successful completion is response end.
-  const call = request(base, { ...options, signal: AbortSignal.timeout(5_000) }, (response) => {
+  const signal =
+    options.signal === undefined
+      ? AbortSignal.timeout(5_000)
+      : AbortSignal.any([options.signal, AbortSignal.timeout(5_000)]);
+  let responseClosed: Promise<void> | undefined;
+  const call = request(base, { ...options, signal }, (response) => {
+    const closed = Promise.withResolvers<undefined>();
+    responseClosed = closed.promise;
+    response.once('close', () => {
+      closed.resolve(undefined);
+    });
     const chunks: Buffer[] = [];
     response.on('data', (chunk: Buffer) => {
       chunks.push(chunk);
@@ -107,22 +170,29 @@ export async function sendHttp(
     });
   });
   call.once('error', reject);
+  const closed = Promise.withResolvers<undefined>();
+  call.once('close', () => {
+    closed.resolve(undefined);
+  });
   call.end(body);
-  return promise;
+  try {
+    return await promise;
+  } finally {
+    call.destroy();
+    await Promise.all([closed.promise, responseClosed]);
+  }
 }
 
-export async function observeHttp<T>(observation: Promise<T>): Promise<T> {
+export async function observeHttp<T>(observation: Promise<T>, timeoutMs = 2_000): Promise<T> {
   const { promise, reject } = Promise.withResolvers<never>();
-  // A deadline fails a stalled peer observation; it never stands in for an event.
-  const deadline = AbortSignal.timeout(2_000);
-  deadline.addEventListener(
-    'abort',
-    () => {
-      reject(new Error('HTTP peer observation did not settle'));
-    },
-    { once: true },
-  );
-  return Promise.race([observation, promise]);
+  // A deadline fails a stalled real peer; it never stands in for an event.
+  const deadline = setTimeout(() => {
+    reject(new Error('HTTP peer observation did not settle'));
+  }, timeoutMs);
+  deadline.unref();
+  return Promise.race([observation, promise]).finally(() => {
+    clearTimeout(deadline);
+  });
 }
 
 export type ReadPeer = (size: number | string) => Promise<Buffer>;

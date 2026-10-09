@@ -753,6 +753,14 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 审查修复（#52，第2轮）：父会话实际TCP复现上游延迟101时客户端追加8字节后FIN，网关暂停缓冲中仍有8字节、end未触发且上游不关闭。implementer原位修复：通过公开socket事件持有上游，在请求头finish或已验证101之后仅一次启动客户端方向，响应方向仍等待101；统一取消、unpipe及原始socket销毁。30项TCP覆盖追加延迟101成功/恰一次、早期字节后拒绝/reset、32MiB真实反压恢复完整及反压中应用关闭。最终完整check1198单元/716集成通过，重复率2.90%；独立源码/构建产物分别验证延迟101收到完整早期帧、8字节FIN触发两端关闭、早期字节后拒绝变安全502，六个场景均通过。保留普通TCP反压：对端完全不读时，FIN可隐藏在未消费字节之后，不能凭空宣称已观察到EOF；应用拥有资源仍能显式关闭。没有新增超时、丢字节、无界缓冲或私有Node状态。
 
 用户授权追加修复（#52）：第3轮发现有序上游EOF/自动close会提前destroy仍有4字节待完成写入的客户端，独立真实上游+受控外部写入边界先RED；用户明确授权额外一轮，fix_gate已记录。implementer增加有序drain状态：停止新字节入管，先等待已接受的上游写入finish，再等待客户端写入finish，最后释放；正常且已读完/写完的上游自动close不抢断客户端，而错误、取消和应用关闭仍立即清理。永久真实上游回归在隔离的修复前源码快照上4项RED，候选全过；补双向同时待写、两端EOF、目标错误和关闭中断。完整check1201单元/721集成、逐文件覆盖、重复率2.91%通过；独立source/dist观察真实上游已关闭时客户端待写仍保留，释放回调后4字节完成、finish后close，构建模块加载来源亦已验证。未宣称全部真实TCP32MiB探针复现截断；该探针未触发待写竞态。最终独立复审及Docker/CI仍为合并门槛。
+### Issue #51 risk/evidence map (task11.3 only)
+
+- Resource limits/discovery + schema/units: fresh gateway PID per direction,209,715,200byte payload, currentRSS baseline and sampled/kernel peak, ≤50,000,000byte delta. Parent independently checks counts/digests and validates raw metric/PID/phase fields; lifetime-peak ambiguity fails preflight.
+- Public process entry/config + auth/secrets + shared state/order: real buildApp/session/resolver in child, minimal inherited environment, readiness/baseline before transfer and completion before final report; no stdout cookies. Existing admission/custody/framing/cancellation tests preserved.
+- File IO/safety + errors/cleanup: invocation-owned upload file read back via gateway; bounded chunks/backpressure, no parent full-body accumulation; sockets/timers/child exit/temp paths cleaned after success, cancellation and failure.
+- Oracle qualification + compatibility/packaging/docs: isolated source-module buffering controls for upload and download must retain semantics but exceed memory ceiling, then unmodified restoration and dedicated stability evidence. No working-tree source mutation or invented productionbugRED. Full checks/strictOpenSpec/source+built runtime/final21Docker+CI; no new production metrics/config/dependency.
+
+验证记录（#51，未完成）：真实独立网关进程上传/下载各209,715,200字节，生产者、落盘文件、下载SHA-256一致；原始macOS源码RSS增量71,991,296/86,786,048字节，构建产物72,040,448/105,562,112字节，Linux诊断71,958,528/72,351,744字节，均超过50,000,000字节门槛。独立审查确认采样RSS本身已超限，不能用生命周期高水位口径解释为误报；有界队列与自然GC前后的ArrayBuffer数据支持运行时分配回收因素，尚无满足门槛的生产修复。未调整门槛、基线、流量或GC参数，11.3保持未勾选。真实整包缓冲负控两方向完整传输后均被内存门槛拒绝；修复探针取消/IPC失败清理，最终8种实际进程故障场景通过（捕获PID消失、stderr关闭、IPC断开、端口拒连、文件描述符和临时目录释放）；共享网关30项集成、2项负控、lint/typecheck通过。详证保留`.run/issue51/`；不以负控通过替代普通流式内存验收，不创建/合并未通过的PR。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 
