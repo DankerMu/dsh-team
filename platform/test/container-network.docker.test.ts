@@ -8,6 +8,7 @@ import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import {
   cookieHttpStatus,
   inspect,
+  normalizeInspectMounts,
   record,
   startupClient,
 } from './container-start-docker-fixture.ts';
@@ -52,7 +53,7 @@ function exec(
 }
 
 function network(lifecycle: UserImageLifecycle, user: string, id: string) {
-  const container = inspect(lifecycle, id);
+  const container = normalizeInspectMounts(inspect(lifecycle, id));
   const attachments = record(record(container.NetworkSettings).Networks);
   expect(Object.keys(attachments)).toEqual([`dsh-team-net-${user}`]);
   const endpoint = record(attachments[`dsh-team-net-${user}`]);
