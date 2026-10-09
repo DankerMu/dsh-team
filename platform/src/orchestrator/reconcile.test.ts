@@ -8,6 +8,8 @@ import {
   startupBarrier,
   START_CONTAINER,
   START_USER,
+  START_NETWORK,
+  seedPlatform,
 } from '../../test/container-start-fixture.ts';
 import {
   RECONCILE_COOKIE,
@@ -177,9 +179,6 @@ it('does not adopt or delete unindexed canonical objects or managed-composition 
 
   expect(reconciliationState(database)).toEqual(before);
   expect([...daemon.containers.values()]).toEqual(physical);
-  expect(daemon.requests.filter(({ path }) => path.endsWith('/json'))).toEqual([
-    { method: 'GET', path: `/containers/${START_CONTAINER}/json`, body: {} },
-  ]);
 });
 
 it('a missing indexed container frees persisted admission capacity without another counter', async () => {
@@ -539,3 +538,106 @@ it.each(['original', 'replacement'])(
     }
   },
 );
+
+async function networkFixture() {
+  const context = await fixture();
+  const platform = 'f'.repeat(64);
+  const name = 'dsh-team-test-recovery';
+  seedPlatform(context.daemon, name, platform);
+  const container = context.daemon.containers.get(START_CONTAINER);
+  if (container === undefined) throw new Error('Missing fixture');
+  container.NetworkSettings.Ports = { '3080/tcp': null };
+  context.database.exec("UPDATE instances SET upstream_host = '172.30.0.2', upstream_port = 3080");
+  const owner = createOrchestrator({
+    client: context.client,
+    database: context.database,
+    config: { upstreamMode: 'network', platformContainerName: name },
+  });
+  return { ...context, owner, platform, name };
+}
+
+it('a rejected platform attachment retires into atomic error/null state, preserves repeated stop/reconcile and permits fresh start', async () => {
+  const { database, daemon, owner, input } = await networkFixture();
+  daemon.overrides.set(`POST /networks/${START_NETWORK}/connect`, { status: 403 });
+
+  await owner.reconcile();
+
+  const terminal = reconciliationState(database);
+  expect(terminal.rows).toEqual([
+    {
+      ...stoppedRow(),
+      status: 'error',
+      last_error: 'Platform network recovery failed',
+    },
+  ]);
+  expect(terminal.audits).toEqual([
+    expect.objectContaining({
+      event_type: 'instance.stopped',
+      target: START_USER,
+      details: '{"reason":"error"}',
+    }),
+  ]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  await owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+  await owner.reconcile();
+  expect(reconciliationState(database)).toEqual(terminal);
+  daemon.overrides.clear();
+  daemon.setContainerId(OTHER_ID);
+  expect(await owner.startUserContainer(input)).toMatchObject({
+    outcome: 'starting',
+    containerId: OTHER_ID,
+    upstreamHost: '172.30.0.2',
+    upstreamPort: 3080,
+  });
+});
+
+it.each(['audit', 'stop', 'row', 'topology', 'platform'])(
+  'network recovery preserves truthful indexed state when %s changes or fails',
+  async (stage) => {
+    const { database, daemon, owner, platform, name } = await networkFixture();
+    daemon.overrides.set(`POST /networks/${START_NETWORK}/connect`, { status: 403 });
+    if (stage === 'audit')
+      database.exec(
+        "CREATE TRIGGER reject_recovery BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'private'); END",
+      );
+    if (stage === 'stop')
+      daemon.overrides.set(`POST /containers/${START_CONTAINER}/stop?t=1`, { status: 500 });
+    daemon.beforeRequest(({ method, path }) => {
+      if (method !== 'POST' || path !== `/networks/${START_NETWORK}/connect`) return;
+      if (stage === 'row') database.exec("UPDATE instances SET last_error = 'newer state'");
+      if (stage === 'topology') {
+        const network = daemon.networks.get(START_NETWORK);
+        if (network === undefined) throw new Error('Missing fixture');
+        network.Containers[OTHER_ID] = { Name: 'foreign', IPv4Address: '172.30.0.5/28' };
+      }
+      if (stage === 'platform') {
+        daemon.removeContainer(platform);
+        seedPlatform(daemon, name, OTHER_ID);
+      }
+    });
+
+    await expect(owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
+
+    expect(database.prepare('SELECT status, container_id FROM instances').get()).toEqual({
+      status: 'running',
+      container_id: START_CONTAINER,
+    });
+    expect(reconciliationState(database).audits).toEqual([]);
+    if (stage !== 'audit') expect(daemon.containers.has(START_CONTAINER)).toBe(true);
+  },
+);
+
+it('a live owner never repins to a replacement platform even when the configured name is unchanged', async () => {
+  const { database, daemon, owner, platform, name } = await networkFixture();
+  await owner.reconcile();
+  const before = reconciliationState(database);
+  daemon.removeContainer(platform);
+  seedPlatform(daemon, name, OTHER_ID);
+  const boundary = daemon.requests.length;
+
+  await expect(owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
+
+  expect(reconciliationState(database)).toEqual(before);
+  expect(daemon.requests.slice(boundary).filter(({ method }) => method !== 'GET')).toEqual([]);
+});

@@ -15,7 +15,7 @@ import type { ManagedConfigInput, ManagedComposition } from '../managed-config/i
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
-import { containerId, object, resolvedImageId } from './identity.ts';
+import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
 import { requireUnpublished, upstreamHost, upstreamPort, verifiedPlatform } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import {
@@ -298,7 +298,7 @@ async function reuseCurrentContainer(
     .get(input.userId);
   if (selected === undefined) return undefined;
   const instance = object(selected);
-  if (instance.status === 'stopped' && instance.container_id === null) return undefined;
+  if (isTerminalInstance(instance.status, instance.container_id)) return undefined;
   const id = containerId({ Id: instance.container_id });
   const image = resolvedImageId(instance.image_id);
   if (typeof instance.image_tag !== 'string' || instance.image_tag.length === 0)

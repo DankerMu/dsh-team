@@ -322,3 +322,12 @@
 - Selected risk packs: public API/config/schema fields, concurrency/state/ordering, auth/secrets, errors/rollback, file safety, resource/discovery, compatibility, packaging and documentation; mapped in task10.3 evidence below.
 - Evidence floor: public Unix/SQLite transport lifecycle semantic RED/GREEN and negative endpoint/ownership/failure controls; real configured platform stand-in reaches unpublished DSH3080 and detaches on retirement; full root checks, strictOpenSpec, final-head full Docker and CI.
 - No gateway/compose, startup network repair or orphan sweep (#47), capacity stress (#48), new DB schema/dependency or data deletion. Human critical-path review deferred to Epic completion per user.
+
+## Issue #47 fixture
+
+- Feature; expanded task10.4 (agree with upstream): startup reconciliation repairs platform attachment and safely removes genuinely orphaned owned bridges.
+- Governing invariant: a fresh owner restores access to unchanged healthy indexed instances without credential/container churn; only freshly proven container-absent, exact-owned networks may be removed.
+- Preserve owner-lifetime platform pin, user queues/actual mutation settlement, same-owner unknown-create quarantine, current row/account fences, no publications, data volumes, sibling endpoints and all20Docker baselines.
+- All11 risk packs map below: public lifecycle/config/compatibility, shared-state ordering, ownership/secrets, error/partial cleanup, schema/audit, file/resource discovery, packaging/docs.
+- Evidence floor: realUnix/SQLite recovery and orphan RED/GREEN plus failure/race controls; actual two-instance platform stand-in recreation/new-owner reconciliation and manually created orphan deletion; full checks/strictOpenSpec/final-head Docker/CI.
+- No platform live-owner identity reset, background retry loop, global prune, credential regeneration, new schema/config/dependency, gateway/compose/app wiring (#56), data deletion or #48stress. Human critical-path review remains deferred to Epic completion.

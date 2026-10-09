@@ -20,3 +20,8 @@ export function resolvedImageId(value: unknown): string {
   }
   return value;
 }
+
+/** Terminal stopped/error indexes have no runtime container to retire or reuse. */
+export function isTerminalInstance(status: unknown, container: unknown): boolean {
+  return (status === 'stopped' || status === 'error') && container === null;
+}

@@ -643,7 +643,7 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 - [x] 10.1 子网分配：从配置的地址段里按 `/28` 分配，已用的子网从 Docker 现有网络读出，不存进数据库；地址段用尽时返回明确错误。地址段是配置项。验证：单元测试——连续分配互不重叠；释放后可再用；地址段不足以放下同时运行上限时平台启动即报错并指名该项。
 - [x] 10.2 每实例网络：启动时创建带标签的 bridge 网络并把实例接入，停止时删除。验证：`pnpm test:docker`——起两个实例，从一个实例里连接另一个实例的地址和主机名的 3080 和其他端口都失败（规格“实例之间网络不可达”的第一个场景）。
 - [x] 10.3 `network` 方式：配置项选择够到实例的方式（`network` 为默认，`published-loopback` 仅供平台进程直接跑在宿主机上时用）；`network` 下实例不发布任何端口，平台容器（名字是配置项）在实例启动时接入该实例的网络、停止时断开，上游地址取容器在该网络里的地址。验证：`pnpm test:docker`——起一个替身容器充当平台容器，实例启动后替身被接入该网络并能从替身里连上实例的 3080；实例容器没有任何端口映射；实例停止后替身不再在该网络里且网络被删除（规格“实例不暴露宿主端口”）。
-- [ ] 10.4 对账时恢复网络：平台启动对账时把平台容器重新接入每个运行中实例的网络，接不上的实例停止并记为出错；没有对应容器的实例网络删除。验证：`pnpm test:docker`——两个实例运行中时删除并重建替身平台容器，对账后替身能连上两个实例；人为留下一个无主的实例网络，对账后它被删除（规格“平台容器被重建”场景）。
+- [x] 10.4 对账时恢复网络：平台启动对账时把平台容器重新接入每个运行中实例的网络，接不上的实例停止并记为出错；没有对应容器的实例网络删除。验证：`pnpm test:docker`——两个实例运行中时删除并重建替身平台容器，对账后替身能连上两个实例；人为留下一个无主的实例网络，对账后它被删除（规格“平台容器被重建”场景）。
 - [ ] 10.5 起 61 个网络不耗尽地址。验证：`pnpm test:docker`——用平台的分配器连续创建 61 个带 `dsh-team-test` 前缀的网络全部成功，随后全部删除。
 
 Suggested fixture level: expanded - 隔离边界的一部分，涉及共享的地址资源
@@ -682,6 +682,17 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - Non-goals: task10.4 platform-recreation recovery and orphan sweep, task10.5 count stress, gateway/compose; human white-box remains deferred, not waived.
 
 验证记录（#46）：owner捕获network默认/published-loopback显式开发方式及平台容器名，验证并固定平台不可变ID；实例无宿主端口、独立bridge的IPv4:3080写入现有索引，启动连接平台、退休断开且验证空网络删除，数据与兄弟保留。初始公共Unix/SQLite语义RED后实现；三次用户授权的本地追加复验修复遗漏导入、规范fixture复用及清理回调绑定，门槛未放宽。审查两轮修复分别处理readiness保留的已停止脱网容器退休（2项RED）及补偿stop等待中拓扑/声明/发布变化的删除前再验证（3项RED）；完整pnpmcheck为1130unit/644integration、全部逐文件覆盖通过、重复率2.85%、strictOpenSpec通过。source与compiled实际进程均拒绝非法mode（exit1、指名变量），合法两种mode在Docker不存在时health200。fresh全diff复审clean；审查头`57eb07fea4118b6a4f6c5d4b568b2cf047cb09a7`固定Node24.13.1/pnpm10.34.6 giap-vps完整20/20Docker通过，12文件、131.86秒、exit0：真实平台替身到两个未发布实例3080均HTTP401，独立退休/脱网/数据和兄弟保持，原19基线全保留；独立项目容器/网络/卷/测试镜像清点为空。最终头/CI以PR#153绑定证据为准；不声称实现#47平台重建恢复/孤儿清理，人工白盒后置Epic完成。
+
+### Issue #47 risk/evidence map (task10.4 only)
+
+- Public API / CLI / script entry; Config / project setup; Legacy compatibility / examples — selected: same explicit owner.reconcile and captured transport config; fresh-owner replacement platform, unchanged live-owner pin and loopback behavior. No app wiring until#56.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: bounded labelled network discovery, per-user scheduling for network-only candidates, submitted mutation settlement/cancellation and unknown-create quarantine; deterministic same-user start/cleanup races with unrelated-user progress.
+- Auth / permissions / secrets; Schema / columns / units / field names — selected: exact network/container/platform identity, row/account snapshots, canonical+indexed container404 absence, preserved healthy credentials and safe error/stopped audits; no new schema or credential generation.
+- Error handling / rollback / partial outputs; File IO / path safety / overwrite — selected: attach failure stops/marks error, unconfirmed outcomes preserve resources; orphan deletion only after fresh verified absence/empty endpoints, no volumes/foreign endpoint mutation. Positive/negative publicUnixSQLite controls plus atomic persistence failures.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: real recreated stand-in/new owner reaches both original instances and removes a registered orphan, all20baseline cases retained, complete project-resource inventory; fullpnpmcheck/strictOpenSpec/finalheadDocker/CI, deferred human white-box.
+- Non-goals: mid-owner platform-ID reset, global prune/retries, new schema/config/dependencies, gateway/compose/app startup wiring, count stress.
+
+验证记录（#47）：新owner对重建的平台按配置名解析并固定新ID，恢复其他身份/地址/凭据均有效实例的连接；原owner不重置身份。仅明确提交且确定响应、两侧均确认缺席的接入失败授权安全退休并原子提交error/null与error原因停止审计；未知结果保留健康实例。孤儿网络在既有每用户队列内按标签/规范名/ID/子网及规范与索引容器404、完整row/account快照、空或可信平台唯一端点重新验证，未知创建隔离仍有效，不删卷或外来端点。初始真实Unix/SQLite平台重建恢复语义RED；本地三轮后用户授权一次旧missing-platform契约迁移，保留start/reuse拒绝与所有其他安全控制，未就绪实例安全退休、健康实例恢复。审查C1四项未知接入结果RED后修复；G1追加恢复后退休保护的回归，临时移除唯一第二次成员检查时真实行为RED，原样恢复后GREEN，未保留生产变更。完整pnpmcheck：1164unit/652integration、逐文件覆盖通过、重复率2.80%、strictOpenSpec通过，fresh全diff复审clean。审查头`640cf90324f2141c41a63313b91e99348bab2e24`固定Node24.13.1/pnpm10.34.6 giap-vps完整20/20Docker通过，12文件、132.87秒、exit0：真实平台替身重建后两实例保留且原cookie认证200，孤儿删除，原缺容器/缺凭据纠正等20基线保留；独立项目容器/网络/卷/测试镜像清点为空。最终头/CI以PR#154绑定证据为准；应用启动接线仍归#56，人工白盒后置Epic完成。
 
 ## 11. 网关（任务包 1.8）
 
