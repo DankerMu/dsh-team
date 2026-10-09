@@ -1,7 +1,8 @@
+import { once } from 'node:events';
 import { IncomingMessage } from 'node:http';
 import type { ClientRequest, RequestOptions } from 'node:http';
 import { Socket } from 'node:net';
-import { Duplex } from 'node:stream';
+import { Duplex, PassThrough, Writable } from 'node:stream';
 import type * as NodeHttp from 'node:http';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
@@ -17,24 +18,50 @@ interface TransportState {
   mode: string;
   destroyed: boolean;
   pending: ClientRequest | undefined;
+  socket: Duplex | undefined;
 }
 const transport = vi.hoisted(() => {
-  const state: TransportState = { mode: 'response', destroyed: false, pending: undefined };
+  const state: TransportState = {
+    mode: 'response',
+    destroyed: false,
+    pending: undefined,
+    socket: undefined,
+  };
   return state;
 });
 vi.mock('node:http', async (importOriginal) => {
   const actual = await importOriginal<typeof NodeHttp>();
-  const { PassThrough } = await import('node:stream');
   return {
     ...actual,
     request: (_options: RequestOptions, receive?: (response: IncomingMessage) => void) => {
       if (transport.mode === 'construct') throw new Error('private endpoint');
-      const outgoing = new PassThrough({ autoDestroy: transport.mode !== 'ws' });
-      // The controlled external request exposes Node's writable/event contract.
+      const rawSocket = transport.mode === 'ws' ? transport.socket : undefined;
+      const outgoing: Writable =
+        rawSocket === undefined
+          ? new PassThrough()
+          : Object.assign(
+              new Writable({
+                autoDestroy: false,
+                final(done) {
+                  // Socket assignment precedes finish; the peer may answer before the write callback.
+                  queueMicrotask(() => {
+                    outgoing.emit('socket', rawSocket);
+                    queueMicrotask(done);
+                  });
+                },
+              }),
+              { socket: rawSocket },
+            );
+      let handedOff = false;
+      outgoing.once('upgrade', () => {
+        handedOff = true;
+      });
+      // The controlled external request exposes Node's writable/socket/event contract.
       transport.pending = outgoing as unknown as ClientRequest;
-      outgoing.resume();
+      if (outgoing instanceof PassThrough) outgoing.resume();
       outgoing.once('close', () => {
         transport.destroyed = true;
+        if (!handedOff) rawSocket?.destroy();
       });
       queueMicrotask(() => {
         if (transport.mode === 'request') {
@@ -74,6 +101,7 @@ afterEach(() => {
   transport.mode = 'response';
   transport.destroyed = false;
   transport.pending = undefined;
+  transport.socket = undefined;
 });
 
 it('removes credential and nominated hop headers without mutating the input', () => {
@@ -167,6 +195,7 @@ function controlledPeer(): { socket: Duplex; output: Buffer[] } {
 
 it.each([
   'late',
+  'finish-first',
   'upstream-error',
   'client-error',
   'client-end',
@@ -179,6 +208,7 @@ it.each([
   'settles upgrade ownership under the %s transport transition without a second response',
   async (mode) => {
     transport.mode = mode === 'construct' ? 'construct' : 'ws';
+    const endTransition = mode === 'finish-first' ? 'client-end' : mode;
     await withApp(
       async (app, _database, lines) => {
         const registered = await injectRegister(app, {
@@ -202,6 +232,7 @@ it.each([
           resolveClosed(undefined);
         });
         try {
+          transport.socket = upstream.socket;
           app.server.emit('upgrade', request, client.socket, Buffer.from([1]));
           const pending = transport.pending;
           if (mode === 'construct') {
@@ -212,6 +243,7 @@ it.each([
           }
           expect(pending).toBeDefined();
           if (pending === undefined) throw new Error('Missing controlled transport request');
+          await once(pending, mode === 'finish-first' ? 'finish' : 'socket');
           if (mode === 'late') {
             client.socket.destroy();
             await clientClosed;
@@ -236,7 +268,7 @@ it.each([
             upstream.socket.emit('error', new Error('late private error'));
           } else if (mode === 'client-error')
             client.socket.emit('error', new Error('private peer'));
-          else if (mode === 'client-end') client.socket.push(null);
+          else if (endTransition === 'client-end') client.socket.push(null);
           else if (mode === 'upstream-end') upstream.socket.push(null);
           else if (mode === 'app-close') await app.close();
           await clientClosed;

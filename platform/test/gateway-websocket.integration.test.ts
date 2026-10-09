@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { connect } from 'node:net';
-import type { Duplex } from 'node:stream';
+import { Duplex } from 'node:stream';
 import { expect, it } from 'vitest';
 import {
   PUBLIC_ORIGIN,
@@ -243,41 +243,53 @@ it.each(['h2c', 'websocket, h2c', 'websocket, websocket'])(
   },
 );
 
-it.each(['client', 'app'])('releases a pending upstream handshake when %s closes', async (side) => {
+it('delivers separately sent early frames exactly once before a delayed 101', async () => {
   await withUpstream(
     (_request, response) => {
       response.end();
     },
     async (target, server) => {
-      const accepted = Promise.withResolvers<Duplex>();
-      server.on('upgrade', (_request, socket) => {
-        socket.on('error', () => {
-          socket.destroy();
-        });
-        socket.on('end', () => {
-          socket.destroy();
-        });
-        socket.resume();
-        accepted.resolve(socket);
+      const accepted = Promise.withResolvers<{ socket: Duplex; read: ReadPeer }>();
+      server.on('upgrade', (_request, socket, head) => {
+        accepted.resolve({ socket, read: reader(socket, head) });
       });
       await withForwardingApp(
         () => target,
-        async ({ base, cookie, app }) => {
+        async ({ base, cookie }) => {
           const address = new URL(base);
           const client = connect(Number(address.port), address.hostname);
+          const read = reader(client);
           try {
             await once(client, 'connect');
             client.write(
-              `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`,
+              Buffer.concat([
+                Buffer.from(
+                  `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`,
+                ),
+                CLIENT_HEAD,
+              ]),
             );
-            const upstream = await observeHttp(accepted.promise);
-            const upstreamClosed = once(upstream, 'close');
-            if (side === 'client') client.destroy();
-            else await observeHttp(app.close());
+            const peer = await observeHttp(accepted.promise);
+            expect(await peer.read(CLIENT_HEAD.length)).toEqual(CLIENT_HEAD);
+            client.write(CLIENT_FRAME.subarray(0, 3));
+            expect(await peer.read(3)).toEqual(CLIENT_FRAME.subarray(0, 3));
+            client.write(CLIENT_FRAME.subarray(3));
+            expect(await peer.read(5)).toEqual(CLIENT_FRAME.subarray(3));
+            peer.socket.write(
+              Buffer.concat([
+                Buffer.from(
+                  `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${ACCEPT}\r\n\r\n`,
+                ),
+                SERVER_HEAD,
+              ]),
+            );
 
-            await observeHttp(upstreamClosed);
-            expect(upstream.destroyed).toBe(true);
-            if (side === 'client') expect((await app.inject('/healthz')).statusCode).toBe(200);
+            expect((await read('\r\n\r\n')).toString()).toMatch(/^HTTP\/1\.1 101 /);
+            expect(await read(SERVER_HEAD.length)).toEqual(SERVER_HEAD);
+            client.write(CLIENT_FRAME);
+            expect(await peer.read(CLIENT_FRAME.length)).toEqual(CLIENT_FRAME);
+            peer.socket.write(SERVER_FRAME);
+            expect(await read(SERVER_FRAME.length)).toEqual(SERVER_FRAME);
           } finally {
             client.destroy();
           }
@@ -286,6 +298,235 @@ it.each(['client', 'app'])('releases a pending upstream handshake when %s closes
     },
   );
 });
+
+it.each(['reject', 'reset'])(
+  'settles early frames when the pending upstream later %s',
+  async (mode) => {
+    await withUpstream(
+      (_request, response) => {
+        response.end();
+      },
+      async (target, server) => {
+        const accepted = Promise.withResolvers<{ socket: Duplex; read: ReadPeer }>();
+        server.on('upgrade', (_request, socket, head) => {
+          socket.once('end', () => {
+            socket.destroy();
+          });
+          accepted.resolve({ socket, read: reader(socket, head) });
+        });
+        await withForwardingApp(
+          () => target,
+          async ({ base, cookie, lines }) => {
+            const address = new URL(base);
+            const client = connect(Number(address.port), address.hostname);
+            const read = reader(client);
+            try {
+              await once(client, 'connect');
+              client.write(
+                `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`,
+              );
+              const peer = await observeHttp(accepted.promise);
+              const closed = Promise.all([once(client, 'close'), once(peer.socket, 'close')]);
+              client.write(CLIENT_FRAME);
+              expect(await peer.read(CLIENT_FRAME.length)).toEqual(CLIENT_FRAME);
+              if (mode === 'reset') peer.socket.destroy();
+              else
+                peer.socket.end(
+                  `HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nSet-Cookie: ${target.cookie}\r\n\r\n`,
+                );
+
+              const response = (await read('\r\n\r\n')).toString();
+              expect(response).toMatch(/^HTTP\/1\.1 502 /);
+              expect(response).not.toContain('101');
+              expect(response.toLowerCase()).not.toContain('set-cookie');
+              expect(response).not.toContain(target.cookie);
+              await observeHttp(closed);
+              expect(lines.join('')).not.toContain(target.cookie);
+            } finally {
+              client.destroy();
+            }
+          },
+        );
+      },
+    );
+  },
+);
+
+it.each(['resume', 'app'])(
+  'preserves pending-stream backpressure when the stalled upstream %s',
+  async (mode) => {
+    // Bounded test traffic exceeds loopback socket buffers; production has no added byte limit.
+    const payloadSize = 32 * 1024 * 1024;
+    const chunk = Buffer.alloc(65536, 0x61);
+    await withUpstream(
+      (_request, response) => {
+        response.end();
+      },
+      async (target, server) => {
+        const accepted = Promise.withResolvers<Duplex>();
+        server.on('upgrade', (_request, socket) => {
+          socket.on('error', () => {
+            socket.destroy();
+          });
+          socket.once('end', () => {
+            socket.destroy();
+          });
+          socket.pause();
+          accepted.resolve(socket);
+        });
+        await withForwardingApp(
+          () => target,
+          async ({ base, cookie, app }) => {
+            const address = new URL(base);
+            const gatewayConnection = once(app.server, 'connection');
+            const client = connect(Number(address.port), address.hostname);
+            const read = reader(client);
+            try {
+              await once(client, 'connect');
+              const gatewayPeer: unknown = (await gatewayConnection)[0];
+              if (!(gatewayPeer instanceof Duplex)) throw new Error('Missing gateway peer');
+              client.write(
+                `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`,
+              );
+              const peer = await observeHttp(accepted.promise);
+              const writerClosed = Promise.withResolvers<false>();
+              client.once('close', () => {
+                writerClosed.resolve(false);
+              });
+              const stalled = Promise.withResolvers<undefined>();
+              const checkStalled = () => {
+                if (
+                  gatewayPeer.isPaused() &&
+                  client.writableNeedDrain &&
+                  peer.readableLength >= peer.readableHighWaterMark
+                )
+                  stalled.resolve(undefined);
+              };
+              // Observe public state only; only the external upstream peer changes its read flow.
+              gatewayPeer.on('pause', checkStalled);
+              peer.on('readable', checkStalled);
+              const sending = (async () => {
+                for (let sent = 0; sent < payloadSize; sent += chunk.length) {
+                  if (!client.write(chunk)) {
+                    const drained = once(client, 'drain').then(() => true);
+                    checkStalled();
+                    if (!(await Promise.race([drained, writerClosed.promise]))) return;
+                  }
+                }
+              })();
+              // Shutdown deliberately interrupts a writer blocked on drain.
+              const sendOutcome = sending.then(
+                () => undefined,
+                (error: unknown) => error,
+              );
+              await observeHttp(stalled.promise);
+              expect(gatewayPeer.isPaused()).toBe(true);
+              expect(client.writableNeedDrain).toBe(true);
+              expect(peer.readableLength).toBeGreaterThanOrEqual(peer.readableHighWaterMark);
+              gatewayPeer.removeListener('pause', checkStalled);
+              peer.removeListener('readable', checkStalled);
+              if (mode === 'app') {
+                const peerClosed = Promise.withResolvers<undefined>();
+                peer.once('close', () => {
+                  peerClosed.resolve(undefined);
+                });
+                await observeHttp(app.close());
+                // The blocked writer may report EPIPE before close; observe actual closure separately.
+                await observeHttp(writerClosed.promise);
+                expect(gatewayPeer.destroyed).toBe(true);
+                expect(client.destroyed).toBe(true);
+                // Only the external peer resumes to observe EOF behind its unread bytes.
+                peer.resume();
+                await observeHttp(peerClosed.promise);
+                const outcome = await observeHttp(sendOutcome);
+                if (outcome !== undefined)
+                  expect(outcome).toHaveProperty(
+                    'code',
+                    expect.stringMatching(/^(EPIPE|ECONNRESET)$/),
+                  );
+                expect(peer.destroyed).toBe(true);
+                return;
+              }
+              const received = Promise.withResolvers<undefined>();
+              let count = 0;
+              const receive = (bytes: Buffer) => {
+                count += bytes.length;
+                if (count > payloadSize || bytes.some((byte) => byte !== 0x61))
+                  received.reject(new Error('Pending frame bytes changed or duplicated'));
+                else if (count === payloadSize) received.resolve(undefined);
+              };
+              peer.on('data', receive);
+              peer.resume();
+              await observeHttp(received.promise);
+              expect(await observeHttp(sendOutcome)).toBeUndefined();
+              expect(count).toBe(payloadSize);
+              peer.removeListener('data', receive);
+              const readUpstream = reader(peer);
+              peer.write(
+                `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${ACCEPT}\r\n\r\n`,
+              );
+              expect((await read('\r\n\r\n')).toString()).toMatch(/^HTTP\/1\.1 101 /);
+              client.write(CLIENT_FRAME);
+              expect(await readUpstream(CLIENT_FRAME.length)).toEqual(CLIENT_FRAME);
+              peer.write(SERVER_FRAME);
+              expect(await read(SERVER_FRAME.length)).toEqual(SERVER_FRAME);
+            } finally {
+              client.destroy();
+            }
+          },
+        );
+      },
+    );
+  },
+);
+
+it.each(['client', 'client-buffered', 'app'])(
+  'releases a pending upstream handshake when %s closes',
+  async (side) => {
+    await withUpstream(
+      (_request, response) => {
+        response.end();
+      },
+      async (target, server) => {
+        const accepted = Promise.withResolvers<Duplex>();
+        server.on('upgrade', (_request, socket) => {
+          socket.on('error', () => {
+            socket.destroy();
+          });
+          socket.on('end', () => {
+            socket.destroy();
+          });
+          socket.resume();
+          accepted.resolve(socket);
+        });
+        await withForwardingApp(
+          () => target,
+          async ({ base, cookie, app }) => {
+            const address = new URL(base);
+            const client = connect(Number(address.port), address.hostname);
+            try {
+              await once(client, 'connect');
+              client.write(
+                `GET /ws HTTP/1.1\r\nHost: ${address.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`,
+              );
+              const upstream = await observeHttp(accepted.promise);
+              const upstreamClosed = once(upstream, 'close');
+              if (side === 'client') client.destroy();
+              else if (side === 'client-buffered') client.end(CLIENT_FRAME);
+              else await observeHttp(app.close());
+
+              await observeHttp(upstreamClosed);
+              expect(upstream.destroyed).toBe(true);
+              if (side !== 'app') expect((await app.inject('/healthz')).statusCode).toBe(200);
+            } finally {
+              client.destroy();
+            }
+          },
+        );
+      },
+    );
+  },
+);
 
 it.each(['non101', 'wrong101', 'reset'])(
   'fails safely on upstream %s without leaking handshake credentials',

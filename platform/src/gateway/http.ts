@@ -154,7 +154,12 @@ export function forwardWebSocket(
   let upstream: Duplex | undefined;
   let closed = false;
   let upgraded = false;
+  let forwardingClient = false;
   const release = () => {
+    if (upstream !== undefined) {
+      client.unpipe(upstream);
+      upstream.unpipe(client);
+    }
     upstream?.destroy();
     outgoing?.destroy();
   };
@@ -176,9 +181,20 @@ export function forwardWebSocket(
   client.on('error', cancel);
   client.once('close', cancel);
   client.once('end', () => {
-    if (upstream === undefined) cancel();
-    else upstream.end(cancel);
+    if (!upgraded) cancel();
+    else upstream?.end(cancel);
   });
+  const forwardClient = (socket: Duplex) => {
+    if (closed) {
+      socket.destroy();
+      return;
+    }
+    if (forwardingClient) return;
+    forwardingClient = true;
+    if (head.length !== 0) client.unshift(head);
+    // Keep the head and early frames in one backpressured stream, including before 101.
+    client.pipe(socket, { end: false });
+  };
   try {
     const headers = forwardHeaders(incoming.headers, 'cookie');
     delete headers['content-length'];
@@ -195,22 +211,30 @@ export function forwardWebSocket(
       headers,
       agent: false,
     });
+    outgoing.once('socket', (socket) => {
+      upstream = socket;
+      if (closed) socket.destroy();
+    });
+    outgoing.once('finish', () => {
+      // Node emits finish from the final HTTP socket.write callback: frames follow headers.
+      if (upstream !== undefined) forwardClient(upstream);
+    });
     outgoing.on('error', fail);
     outgoing.once('response', (response) => {
       response.destroy();
       fail();
     });
     outgoing.once('upgrade', (response, socket, upstreamHead) => {
+      if (closed) {
+        socket.destroy();
+        return;
+      }
       upstream = socket;
       socket.on('error', fail);
       socket.once('close', cancel);
       socket.once('end', () => {
         client.end(cancel);
       });
-      if (closed) {
-        socket.destroy();
-        return;
-      }
       if (response.statusCode !== 101 || response.headers.upgrade?.toLowerCase() !== 'websocket') {
         fail();
         return;
@@ -226,10 +250,10 @@ export function forwardWebSocket(
       }
       upgraded = true;
       client.write(`${lines.join('\r\n')}\r\n\r\n`);
-      if (head.length !== 0) client.unshift(head);
+      // A validated 101 also proves the peer received the headers if finish is not emitted yet.
+      forwardClient(socket);
       if (upstreamHead.length !== 0) socket.unshift(upstreamHead);
       // Own half-close completion so queued frame bytes flush before paired destruction.
-      client.pipe(socket, { end: false });
       socket.pipe(client, { end: false });
     });
     outgoing.end();
