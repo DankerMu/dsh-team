@@ -4,6 +4,7 @@ import { connect, createServer } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { expect, it } from 'vitest';
 import { deleteUserSessions } from '../src/auth/index.ts';
+import { PUBLIC_ORIGIN } from './auth-fixture.ts';
 import {
   registerAccount,
   sessionTimes,
@@ -45,7 +46,7 @@ async function upgrade(
   });
   socket.on('connect', () => {
     socket.write(
-      `GET ${path} HTTP/1.1\r\nHost: ${authority ?? url.host}\r\nX-Forwarded-Host: ${authority ?? url.host}\r\nX-User-Id: someone-else\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nCookie: ${cookie}\r\n\r\n`,
+      `GET ${path} HTTP/1.1\r\nHost: ${authority ?? url.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nX-Forwarded-Host: ${authority ?? url.host}\r\nX-User-Id: someone-else\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nCookie: ${cookie}\r\n\r\n`,
     );
   });
   return promise;

@@ -356,3 +356,12 @@
 - Preserve task11.1 namespace/admission/renewal/error and rejected-upgrade resource behavior, platform auth/Origin guards and existing consumers. No orchestrator/instances-table wiring (#56), WebSocket forwarding (#52), connection registry (#53), wait-state enumeration (#55), or200MB performance claim (#51).
 - Selected packs: public API, auth/secrets, shared-state/order, error/partial response, resource lifetime, schema, configuration, compatibility, packaging and docs. No new file IO, persisted schema, dependency or deployment config.
 - Evidence floor: real two-user/two-upstream HTTP RED/GREEN with distinct cookies/body markers; forged routing/header controls, byte-preserving POST/status/path/query, pre/post-header failures and client abort; full checks/strictOpenSpec, independent source/built runtime and final-head21Docker/CI.
+
+## Issue #52 fixture
+
+- Feature; expanded (agree with upstream), task11.4 only: authenticated same-origin WebSocket upgrades through the existing gateway and paired-socket streaming.
+- Governing invariant: current platform-session identity alone selects the trusted endpoint/cookie; only the configured public Origin may upgrade, neither platform cookies upstream nor DSH Set-Cookie downstream.
+- Preserve existing HTTP routing/framing/backpressure/cancellation, auth session renewal and platform mutation guard. Shared exact-Origin predicate is extracted without changing auth behavior; app passes existing publicUrl, no new configuration.
+- Selected packs: public API, auth/secrets, shared-state/invariant ordering, error/partial outputs, resource ownership, schema, compatibility, packaging and docs. No new filesystem/persisted state/dependency. Evidence maps in task11.4 below.
+- Evidence floor: real TCP WebSocket handshakes and bidirectional frames, two-user authority/cookie isolation, missing/wrong/duplicate Origin rejection before resolver/upstream, both parser head buffers and coupled shutdown/error teardown; semantic RED/GREEN, root checks, source/built smoke, strict OpenSpec and exact-head full21Docker/CI.
+- No per-user connection registry (#53), session-invalidation closure (#54), wait reasons (#55), instance lookup (#56), or memory acceptance claim (#51, parked separately). Do not import the parked #51 test harness or relax its unresolved requirement.

@@ -1,9 +1,15 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { FastifyPluginCallback, FastifyReply, FastifyRequest } from 'fastify';
-import { getSessionUser, readSessionCookie } from '../auth/index.ts';
+import { getSessionUser, hasValidOrigin, readSessionCookie } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { BAD_GATEWAY, forwardHttp, requestTarget } from './http.ts';
+import {
+  BAD_GATEWAY,
+  forwardHttp,
+  forwardWebSocket,
+  rejectUpgrade,
+  requestTarget,
+} from './http.ts';
 import type { GatewayUpstreamResolver } from './types.ts';
 
 const ERRORS = {
@@ -41,8 +47,9 @@ function pageRequest(request: FastifyRequest): boolean {
 export const gatewayRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   authority: string;
+  publicUrl: string;
   resolveUpstream?: GatewayUpstreamResolver;
-}> = (app, { database, authority, resolveUpstream }, done) => {
+}> = (app, { database, authority, publicUrl, resolveUpstream }, done) => {
   function admission(request: IncomingMessage): string | keyof typeof ERRORS {
     if (platformPath(request.url ?? '/')) return 404;
     try {
@@ -94,23 +101,63 @@ export const gatewayRoutes: FastifyPluginCallback<{
     },
     admit,
   );
-  function rejectUpgrade(request: IncomingMessage, socket: Duplex): void {
-    socket.on('error', () => {
+  const upgrades = new Set<Duplex>();
+  let closing = false;
+  function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (closing) {
+      socket.on('error', () => {
+        socket.destroy();
+      });
       socket.destroy();
-    });
-    // Flush the rejection, then release both halves even if the peer withholds FIN.
-    socket.once('finish', () => {
-      socket.destroy();
+      return;
+    }
+    upgrades.add(socket);
+    socket.once('close', () => {
+      upgrades.delete(socket);
     });
     const selected = admission(request);
-    const code = typeof selected === 'string' ? 503 : selected;
-    socket.end(
-      `HTTP/1.1 ${String(code)} ${ERRORS[code].error}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
-    );
+    if (typeof selected !== 'string') {
+      rejectUpgrade(socket, selected);
+      return;
+    }
+    if (!hasValidOrigin(request, publicUrl)) {
+      rejectUpgrade(socket, 403);
+      return;
+    }
+    if (request.headers.upgrade?.toLowerCase() !== 'websocket') {
+      rejectUpgrade(socket, 400);
+      return;
+    }
+    try {
+      const target = resolveUpstream?.(selected);
+      if (target === undefined) {
+        rejectUpgrade(socket, 503);
+        return;
+      }
+      forwardWebSocket(request, socket, head, target, authority, () => {
+        app.log.error('Gateway WebSocket upstream failed');
+      });
+    } catch {
+      app.log.error('Gateway upstream resolution failed');
+      rejectUpgrade(socket, 502);
+    }
   }
-  app.server.on('upgrade', rejectUpgrade);
+  app.server.on('upgrade', upgrade);
+  app.addHook('preClose', async () => {
+    closing = true;
+    await Promise.all(
+      [...upgrades].map((socket) => {
+        const closed = Promise.withResolvers<undefined>();
+        socket.once('close', () => {
+          closed.resolve(undefined);
+        });
+        socket.destroy();
+        return closed.promise;
+      }),
+    );
+  });
   app.addHook('onClose', (_instance, closeDone) => {
-    app.server.removeListener('upgrade', rejectUpgrade);
+    app.server.removeListener('upgrade', upgrade);
     closeDone();
   });
   done();

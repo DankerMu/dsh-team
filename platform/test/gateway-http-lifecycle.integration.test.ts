@@ -1,5 +1,10 @@
-import { request } from 'node:http';
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createHash, randomBytes } from 'node:crypto';
+import { channel } from 'node:diagnostics_channel';
+import { request, ClientRequest, IncomingMessage } from 'node:http';
+import type { ServerResponse } from 'node:http';
+import { Socket } from 'node:net';
+import { Duplex } from 'node:stream';
+import { PUBLIC_ORIGIN } from './auth-fixture.ts';
 import { expect, it } from 'vitest';
 import { observeHttp, sendHttp, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
 
@@ -276,6 +281,144 @@ it.each(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'TRACE'])(
             expect(received).toEqual(
               Array.from({ length: 3 }, () => ({ method, body: '{"ids":[1]}' })),
             );
+          },
+        );
+      },
+    );
+  },
+);
+
+it.each(['flush', 'both-eof', 'destination-error', 'app'])(
+  'retains accepted client-bound frame writes across real upstream EOF until %s',
+  async (mode) => {
+    const KEY = randomBytes(16).toString('base64');
+    const ACCEPT = createHash('sha1')
+      .update(`${KEY}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest('base64');
+    const SERVER_FRAME = Buffer.from([0x82, 2, 0, 255]);
+    await withUpstream(
+      (_request, response) => {
+        response.end();
+      },
+      async (target, server) => {
+        server.on('upgrade', (_request, socket) => {
+          socket.on('error', () => socket.destroy());
+          socket.on('end', () => socket.destroy());
+          socket.resume();
+          socket.end(
+            Buffer.concat([
+              Buffer.from(
+                `HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${ACCEPT}\r\n\r\n`,
+              ),
+              SERVER_FRAME,
+            ]),
+          );
+        });
+        await withForwardingApp(
+          () => target,
+          async ({ app, cookie }) => {
+            const held = Promise.withResolvers<undefined>();
+            const upstreamClosed = Promise.withResolvers<undefined>();
+            const clientClosed = Promise.withResolvers<undefined>();
+            const completed: Buffer[] = [];
+            let releaseWrite: (() => void) | undefined;
+            let upstream: Socket | undefined;
+            let sawEnd = false;
+            let finished = false;
+            const client = new Duplex({
+              allowHalfOpen: true,
+              highWaterMark: 1,
+              read() {
+                /* The external client supplies EOF explicitly. */
+              },
+              write(chunk: Buffer, _encoding, done) {
+                if (chunk.toString().startsWith('HTTP/1.1 101')) {
+                  done();
+                  return;
+                }
+                expect(chunk).toEqual(SERVER_FRAME);
+                releaseWrite = () => {
+                  releaseWrite = undefined;
+                  completed.push(Buffer.from(chunk));
+                  done();
+                };
+                held.resolve(undefined);
+              },
+            });
+            client.on('error', () => {
+              /* The destination-error case deliberately fails its external transport. */
+            });
+            client.once('finish', () => {
+              finished = true;
+            });
+            client.once('close', () => {
+              clientClosed.resolve(undefined);
+            });
+            const diagnostic = channel('http.client.request.start');
+            const capture = (message: unknown) => {
+              if (
+                typeof message !== 'object' ||
+                message === null ||
+                !('request' in message) ||
+                !(message.request instanceof ClientRequest) ||
+                message.request.path !== '/orderly-boundary'
+              )
+                return;
+              const socket = message.request.socket;
+              if (socket === null) throw new Error('Missing real upstream socket');
+              upstream = socket;
+              socket.once('end', () => {
+                sawEnd = true;
+              });
+              socket.once('close', () => {
+                upstreamClosed.resolve(undefined);
+              });
+            };
+            diagnostic.subscribe(capture);
+            const request = new IncomingMessage(new Socket());
+            request.method = 'GET';
+            request.url = '/orderly-boundary';
+            request.headers = {
+              cookie,
+              origin: PUBLIC_ORIGIN,
+              upgrade: 'websocket',
+              connection: 'Upgrade',
+              'sec-websocket-key': KEY,
+              'sec-websocket-version': '13',
+            };
+            request.rawHeaders = ['Origin', PUBLIC_ORIGIN];
+            try {
+              app.server.emit('upgrade', request, client, Buffer.alloc(0));
+              await observeHttp(held.promise);
+              if (mode === 'both-eof') client.push(null);
+              // The HTTP upstream really ends and auto-closes; no synthetic socket events.
+              await observeHttp(upstreamClosed.promise);
+
+              expect(sawEnd).toBe(true);
+              expect(client.writableLength).toBe(SERVER_FRAME.length);
+              expect(client.destroyed).toBe(false);
+              expect(finished).toBe(false);
+              expect(completed).toEqual([]);
+              if (mode === 'destination-error') client.destroy(new Error('External write failed'));
+              else if (mode === 'app') await observeHttp(app.close());
+              else {
+                releaseWrite?.();
+              }
+              await observeHttp(clientClosed.promise);
+              expect(upstream?.destroyed).toBe(true);
+              if (mode === 'flush' || mode === 'both-eof') {
+                expect(Buffer.concat(completed)).toEqual(SERVER_FRAME);
+                expect(finished).toBe(true);
+              } else {
+                expect(completed).toEqual([]);
+                expect(finished).toBe(false);
+              }
+            } finally {
+              diagnostic.unsubscribe(capture);
+              releaseWrite?.();
+              client.destroy();
+              request.socket.destroy();
+            }
           },
         );
       },

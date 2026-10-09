@@ -2,6 +2,7 @@ import { once } from 'node:events';
 import { createServer, request } from 'node:http';
 import type { IncomingHttpHeaders, RequestListener, RequestOptions, Server } from 'node:http';
 import type { Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import type { GatewayUpstream, GatewayUpstreamResolver } from '../src/gateway/index.ts';
@@ -122,4 +123,43 @@ export async function observeHttp<T>(observation: Promise<T>): Promise<T> {
     { once: true },
   );
   return Promise.race([observation, promise]);
+}
+
+export type ReadPeer = (size: number | string) => Promise<Buffer>;
+export function reader(socket: Duplex, head = Buffer.alloc(0)): ReadPeer {
+  let bytes: Buffer = head;
+  let failed: Error | undefined;
+  let notify: (() => void) | undefined;
+  socket.on('data', (chunk: Buffer) => {
+    bytes = Buffer.concat([bytes, chunk]);
+    if (bytes.length > 65536) failed = new Error('Unexpected test peer payload');
+    notify?.();
+  });
+  socket.on('error', () => {
+    failed = new Error('Test peer failed');
+    notify?.();
+  });
+  socket.on('close', () => {
+    failed = new Error('Test peer closed');
+    notify?.();
+  });
+  return async (size) => {
+    const pending = Promise.withResolvers<Buffer>();
+    const check = () => {
+      const length = typeof size === 'number' ? size : bytes.indexOf(size) + size.length;
+      const available = typeof size === 'number' ? bytes.length >= size : bytes.includes(size);
+      if (available) {
+        const result = bytes.subarray(0, length);
+        bytes = bytes.subarray(length);
+        pending.resolve(result);
+      } else if (failed !== undefined) pending.reject(failed);
+    };
+    notify = check;
+    check();
+    try {
+      return await observeHttp(pending.promise);
+    } finally {
+      notify = undefined;
+    }
+  };
 }
