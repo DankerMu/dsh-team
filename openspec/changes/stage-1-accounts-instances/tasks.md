@@ -642,7 +642,7 @@ Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Do
 
 - [x] 10.1 子网分配：从配置的地址段里按 `/28` 分配，已用的子网从 Docker 现有网络读出，不存进数据库；地址段用尽时返回明确错误。地址段是配置项。验证：单元测试——连续分配互不重叠；释放后可再用；地址段不足以放下同时运行上限时平台启动即报错并指名该项。
 - [x] 10.2 每实例网络：启动时创建带标签的 bridge 网络并把实例接入，停止时删除。验证：`pnpm test:docker`——起两个实例，从一个实例里连接另一个实例的地址和主机名的 3080 和其他端口都失败（规格“实例之间网络不可达”的第一个场景）。
-- [ ] 10.3 `network` 方式：配置项选择够到实例的方式（`network` 为默认，`published-loopback` 仅供平台进程直接跑在宿主机上时用）；`network` 下实例不发布任何端口，平台容器（名字是配置项）在实例启动时接入该实例的网络、停止时断开，上游地址取容器在该网络里的地址。验证：`pnpm test:docker`——起一个替身容器充当平台容器，实例启动后替身被接入该网络并能从替身里连上实例的 3080；实例容器没有任何端口映射；实例停止后替身不再在该网络里且网络被删除（规格“实例不暴露宿主端口”）。
+- [x] 10.3 `network` 方式：配置项选择够到实例的方式（`network` 为默认，`published-loopback` 仅供平台进程直接跑在宿主机上时用）；`network` 下实例不发布任何端口，平台容器（名字是配置项）在实例启动时接入该实例的网络、停止时断开，上游地址取容器在该网络里的地址。验证：`pnpm test:docker`——起一个替身容器充当平台容器，实例启动后替身被接入该网络并能从替身里连上实例的 3080；实例容器没有任何端口映射；实例停止后替身不再在该网络里且网络被删除（规格“实例不暴露宿主端口”）。
 - [ ] 10.4 对账时恢复网络：平台启动对账时把平台容器重新接入每个运行中实例的网络，接不上的实例停止并记为出错；没有对应容器的实例网络删除。验证：`pnpm test:docker`——两个实例运行中时删除并重建替身平台容器，对账后替身能连上两个实例；人为留下一个无主的实例网络，对账后它被删除（规格“平台容器被重建”场景）。
 - [ ] 10.5 起 61 个网络不耗尽地址。验证：`pnpm test:docker`——用平台的分配器连续创建 61 个带 `dsh-team-test` 前缀的网络全部成功，随后全部删除。
 
@@ -680,6 +680,8 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - File IO / path safety / overwrite; Legacy compatibility / examples — selected: no data deletion; local host mode explicit in existing callers/19Docker baselines; startup/reuse/credentials/readiness/retirement/reconciliation validators share transport contract and preserve current-account/row fences.
 - Release / packaging / dependency compatibility; Documentation / migration notes — selected: `.env.example` and environment guidance explain network-default vs local-only loopback, root checks/source-built startup, strictOpenSpec and final-head CI; real platform stand-in HTTP3080/no-publication/retirement plus independently empty cleanup inventory. No dependency/schema change.
 - Non-goals: task10.4 platform-recreation recovery and orphan sweep, task10.5 count stress, gateway/compose; human white-box remains deferred, not waived.
+
+验证记录（#46）：owner捕获network默认/published-loopback显式开发方式及平台容器名，验证并固定平台不可变ID；实例无宿主端口、独立bridge的IPv4:3080写入现有索引，启动连接平台、退休断开且验证空网络删除，数据与兄弟保留。初始公共Unix/SQLite语义RED后实现；三次用户授权的本地追加复验修复遗漏导入、规范fixture复用及清理回调绑定，门槛未放宽。审查两轮修复分别处理readiness保留的已停止脱网容器退休（2项RED）及补偿stop等待中拓扑/声明/发布变化的删除前再验证（3项RED）；完整pnpmcheck为1130unit/644integration、全部逐文件覆盖通过、重复率2.85%、strictOpenSpec通过。source与compiled实际进程均拒绝非法mode（exit1、指名变量），合法两种mode在Docker不存在时health200。fresh全diff复审clean；审查头`57eb07fea4118b6a4f6c5d4b568b2cf047cb09a7`固定Node24.13.1/pnpm10.34.6 giap-vps完整20/20Docker通过，12文件、131.86秒、exit0：真实平台替身到两个未发布实例3080均HTTP401，独立退休/脱网/数据和兄弟保持，原19基线全保留；独立项目容器/网络/卷/测试镜像清点为空。最终头/CI以PR#153绑定证据为准；不声称实现#47平台重建恢复/孤儿清理，人工白盒后置Epic完成。
 
 ## 11. 网关（任务包 1.8）
 
