@@ -8,7 +8,12 @@ import {
   inspectUserContainerState,
 } from './start.ts';
 import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
-import { attachPlatform, validateUserNetwork } from './networks.ts';
+import {
+  attachPlatform,
+  inspectPlatformAttachment,
+  PlatformAttachmentFailedError,
+  validateUserNetwork,
+} from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import { stopUserContainer } from './stop.ts';
 import { upstreamHost } from './transport.ts';
@@ -140,12 +145,17 @@ async function restorePlatform(
   let attachmentFailed = false;
   try {
     await attachPlatform(input.client, input.transport, input.userId, id, network, current, verify);
-  } catch {
+  } catch (error) {
+    if (!(error instanceof PlatformAttachmentFailedError)) throw error;
     attachmentFailed = true;
   }
   // Neither a pre-attach document nor a failed mutation grants authority over a changed survivor.
   await verify(!attachmentFailed);
   if (attachmentFailed) {
+    // Retirement authority must still describe missing membership, not a subsequently recovered survivor.
+    if (await inspectPlatformAttachment(client, input.transport, input.userId, id, network))
+      throw new Error('Platform membership recovered after rejected connection');
+    current();
     await stopUserContainer(
       { ...input, reason: 'error', signal },
       current,

@@ -17,6 +17,13 @@ export class NetworkCreationUnconfirmedError extends Error {
   }
 }
 
+/** A definitive connect reply plus fresh absence in both inspect views, not transport uncertainty. */
+export class PlatformAttachmentFailedError extends Error {
+  constructor() {
+    super('Configured platform attachment confirmed absent after connect');
+  }
+}
+
 const MAX_NETWORK_BYTES = 4 * 1024 * 1024;
 // An accepted platform mutation and its inspect agreement share one independent settlement deadline.
 const ATTACH_TIMEOUT_MS = 10_000;
@@ -354,6 +361,23 @@ export async function removeUserNetwork(
   current();
 }
 
+/** Confirm the captured bridge and configured immutable platform before interpreting either membership view. */
+export async function inspectPlatformAttachment(
+  client: DockerClient,
+  transport: TransportContext,
+  userId: string,
+  container: string,
+  captured: OwnedNetwork,
+): Promise<boolean> {
+  const network = await inspect(client, captured.id);
+  if (inspectedNetwork(network, userId, captured.id).subnet !== captured.subnet)
+    throw new Error('Captured network subnet changed');
+  const platform = await verifiedPlatform(client, transport, true);
+  if (platform === undefined) throw new Error('Platform attachment outcome unconfirmed');
+  ownedEndpoints(network, userId, container, platform);
+  return platformMembership(platform, network, userId, captured.subnet, false);
+}
+
 /** The caller supplies its independent bounded settlement client, never its cancellation signal. */
 export async function attachPlatform(
   raw: DockerClient,
@@ -375,22 +399,23 @@ export async function attachPlatform(
   const network = inspectedNetwork(before, userId, captured.id);
   if (network.subnet !== captured.subnet) throw new Error('Captured network subnet changed');
   ownedEndpoints(before, userId, container, platform);
+  let definitiveReply = false;
   if (!platformMembership(platform, before, userId, network.subnet, false)) {
     await verify?.();
     current();
     // Do not drop submitted mutation ownership on abort or on a lost response.
     try {
       await client.json('POST', `/networks/${network.id}/connect`, { Container: platform.id });
-    } catch {
-      // Only independent agreement below can settle a lost/rejected connect response.
+      definitiveReply = true;
+    } catch (error) {
+      // A transport/parsing/deadline failure cannot establish a definitive mutation result.
+      // Still settle a lost response as success if independently inspected membership agrees.
+      definitiveReply = error instanceof DockerHttpError;
     }
   }
-  const after = await inspect(client, network.id);
-  if (inspectedNetwork(after, userId, network.id).subnet !== network.subnet)
-    throw new Error('Captured network subnet changed');
-  const confirmed = await verifiedPlatform(client, transport, true);
-  if (confirmed === undefined) throw new Error('Platform attachment outcome unconfirmed');
-  ownedEndpoints(after, userId, container, confirmed);
-  platformMembership(confirmed, after, userId, network.subnet, true);
+  const attached = await inspectPlatformAttachment(client, transport, userId, container, network);
   current();
+  if (attached) return;
+  if (definitiveReply) throw new PlatformAttachmentFailedError();
+  throw new Error('Platform attachment outcome unconfirmed');
 }

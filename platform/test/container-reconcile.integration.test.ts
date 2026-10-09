@@ -1,5 +1,6 @@
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -557,4 +558,139 @@ it('submitted orphan deletion settles before same-user retirement while an unrel
     await observed;
     await successor;
   }
+});
+
+function seedNetworkRecovery() {
+  const platformId = 'f'.repeat(64);
+  const platformName = 'dsh-team-test-recovery-outcomes';
+  seedPlatform(daemon, platformName, platformId);
+  const container = daemon.containers.get(START_CONTAINER);
+  const platform = daemon.containers.get(platformId);
+  if (container === undefined || platform === undefined)
+    throw new Error('Missing recovery fixture');
+  container.NetworkSettings.Ports = { '3080/tcp': null };
+  database.exec("UPDATE instances SET upstream_host = '172.30.0.2', upstream_port = 3080");
+  owner = createOrchestrator({
+    client: createDockerClient(join(root, 'engine.sock')),
+    database,
+    config: { upstreamMode: 'network', platformContainerName: platformName },
+  });
+  return { platformId, platformName, platform };
+}
+
+it.each([
+  'preflight transient',
+  'committed attachment inspect failure',
+  'attached stopped platform',
+  'unconfirmed connection transport',
+])(
+  'network recovery preserves authenticated survivors after %s instead of granting retirement authority',
+  async (stage) => {
+    const { platformId, platformName, platform } = seedNetworkRecovery();
+    if (stage === 'attached stopped platform') {
+      expect(
+        daemon.reply({
+          method: 'POST',
+          path: `/networks/${START_NETWORK}/connect`,
+          body: { Container: platformId },
+        }).status,
+      ).toBe(200);
+      platform.State.Running = false;
+    }
+    // The Engine denies this connect, but the caller must not gain its rejection status when the wire closes.
+    if (stage === 'unconfirmed connection transport')
+      daemon.overrides.set(`POST /networks/${START_NETWORK}/connect`, { status: 403 });
+    const before = reconciliationState(database);
+    const snapshot = () => ({
+      containers: structuredClone([...daemon.containers]),
+      networks: structuredClone([...daemon.networks]),
+    });
+    let preserved = snapshot();
+    let platformLookups = 0;
+    let submitted = false;
+    let settlementLookups = 0;
+    let lost = false;
+    daemon.beforeRequest(({ method, path }) => {
+      if (stage === 'preflight transient' && path === `/containers/${platformName}/json`) {
+        platformLookups += 1;
+        if (platformLookups === 2) daemon.overrides.set(`GET ${path}`, { status: 500 });
+        else daemon.overrides.delete(`GET ${path}`);
+      }
+      if (
+        stage === 'committed attachment inspect failure' &&
+        method === 'POST' &&
+        path.endsWith('/connect')
+      )
+        submitted = true;
+      if (submitted && method === 'GET' && path === `/networks/${START_NETWORK}`) {
+        settlementLookups += 1;
+        if (settlementLookups === 1) {
+          preserved = snapshot();
+          daemon.overrides.set(`GET ${path}`, { status: 500 });
+        } else daemon.overrides.delete(`GET ${path}`);
+      }
+      if (lost && method === 'GET' && path === `/networks/${START_NETWORK}`) {
+        preserved = snapshot();
+        lost = false;
+      }
+    });
+    const interrupt = (request: IncomingMessage, response: ServerResponse) => {
+      if (
+        stage !== 'unconfirmed connection transport' ||
+        request.method !== 'POST' ||
+        request.url !== `/networks/${START_NETWORK}/connect`
+      )
+        return;
+      lost = true;
+      request.once('error', () => {
+        // This fixture deliberately severs the accepted HTTP connection; its peer reset is expected.
+      });
+      response.destroy();
+    };
+    server.on('request', interrupt);
+
+    let outcome: PromiseSettledResult<void>[];
+    try {
+      outcome = await Promise.allSettled([owner.reconcile()]);
+    } finally {
+      server.off('request', interrupt);
+    }
+
+    expect.soft(reconciliationState(database)).toEqual(before);
+    expect.soft([...daemon.containers]).toEqual(preserved.containers);
+    expect.soft([...daemon.networks]).toEqual(preserved.networks);
+    const expectedFailure: unknown = expect.objectContaining({
+      message: 'Instance reconciliation failed',
+    });
+    expect(outcome).toEqual([
+      expect.objectContaining({
+        status: 'rejected',
+        reason: expectedFailure,
+      }),
+    ]);
+  },
+);
+
+it('a definitive rejected platform connection with independently absent membership retires into atomic error/null state', async () => {
+  seedNetworkRecovery();
+  daemon.overrides.set(`POST /networks/${START_NETWORK}/connect`, { status: 403 });
+
+  await owner.reconcile();
+
+  expect(reconciliationState(database).rows).toEqual([
+    {
+      ...stoppedRow(),
+      status: 'error',
+      last_error: 'Platform network recovery failed',
+    },
+  ]);
+  expect(reconciliationState(database).audits).toEqual([
+    expect.objectContaining({
+      event_type: 'instance.stopped',
+      target: START_USER,
+      details: '{"reason":"error"}',
+    }),
+  ]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
 });
