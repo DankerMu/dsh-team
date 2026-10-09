@@ -1,6 +1,7 @@
 import { once } from 'node:events';
 import { request } from 'node:http';
 import { connect, createServer } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { expect, it } from 'vitest';
 import { deleteUserSessions } from '../src/auth/index.ts';
 import {
@@ -132,7 +133,7 @@ it.each(['missing', 'malformed', 'duplicate', 'expired', 'revoked', 'disabled'] 
 );
 
 it('renews an active session through either gateway entrypoint and fails closed on storage failure', async () => {
-  await withListeningApp(async (baseUrl, app, database) => {
+  await withListeningApp(async (baseUrl, app, database, lines) => {
     await registerAccount(app, 'gateway@example.com');
     const { token } = await successfulLogin(baseUrl, 'gateway@example.com');
     const cookie = `platform_session=${token}`;
@@ -159,6 +160,14 @@ it('renews an active session through either gateway entrypoint and fails closed 
     expect(await upgrade(baseUrl, '/', cookie)).toMatch(
       /^HTTP\/1\.1 500 Internal Server Error\r\n/,
     );
+    const errors: unknown[] = lines
+      .map((line) => JSON.parse(line) as unknown)
+      .filter(
+        (line) => typeof line === 'object' && line !== null && 'level' in line && line.level === 50,
+      );
+    expect(errors).toHaveLength(2);
+    expect(JSON.stringify(errors)).not.toContain(token);
+    expect(JSON.stringify(errors)).not.toContain('platform_sessions');
   });
 });
 
@@ -203,12 +212,14 @@ it('ignores forged authorities and remains live after an aborted upgrade', async
         /^HTTP\/1\.1 503 /,
       );
       const url = new URL(baseUrl);
+      const received = once(app.server, 'upgrade');
       const socket = connect(Number(url.port), url.hostname);
       const closed = once(socket, 'close');
       await once(socket, 'connect');
       socket.end(
         `GET / HTTP/1.1\r\nHost: ${url.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
       );
+      await received;
       socket.destroy();
       await closed;
 
@@ -220,4 +231,76 @@ it('ignores forged authorities and remains live after an aborted upgrade', async
     observer.close();
     await once(observer, 'close');
   }
+});
+
+it('fully closes a rejected upgrade even when the peer withholds its FIN', async () => {
+  await withListeningApp(async (baseUrl, app) => {
+    const url = new URL(baseUrl);
+    const { promise, resolve } = Promise.withResolvers<{
+      peer: Duplex;
+      closed: Promise<unknown[]>;
+    }>();
+    app.server.once('upgrade', (_request, peer) => {
+      // Observe before finish/close next-ticks; the deadline only bounds a leak.
+      resolve({ peer, closed: once(peer, 'close', { signal: AbortSignal.timeout(1_000) }) });
+    });
+    const client = connect({ host: url.hostname, port: Number(url.port), allowHalfOpen: true });
+    let response = '';
+    client.on('data', (chunk: Buffer) => {
+      response += chunk.toString();
+    });
+    const received = once(client, 'end');
+    await once(client, 'connect');
+    client.write(
+      `GET / HTTP/1.1\r\nHost: ${url.host}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`,
+    );
+    const { peer, closed } = await promise;
+    try {
+      await Promise.all([received, closed]);
+
+      expect(response).toBe(
+        'HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n',
+      );
+      expect(peer.destroyed).toBe(true);
+      expect(client.writableEnded).toBe(false);
+    } finally {
+      client.destroy();
+      peer.destroy();
+    }
+    await app.close();
+    expect(app.server.listenerCount('upgrade')).toBe(0);
+  });
+});
+
+it('keeps absolute-form reserved targets out of the gateway on both transports', async () => {
+  await withListeningApp(async (baseUrl, app) => {
+    await registerAccount(app, 'absolute@example.com');
+    const { token } = await successfulLogin(baseUrl, 'absolute@example.com');
+    for (const cookie of ['', `platform_session=${token}`]) {
+      const { promise, resolve, reject } = Promise.withResolvers<number>();
+      const call = request(
+        baseUrl,
+        {
+          path: 'http://example.invalid/_platform/missing',
+          headers: { cookie, accept: 'text/html' },
+        },
+        (response) => {
+          response.resume();
+          response.on('end', () => {
+            resolve(response.statusCode ?? 0);
+          });
+        },
+      );
+      call.on('error', reject);
+      call.end();
+
+      expect(await promise).toBe(404);
+      expect(await upgrade(baseUrl, 'http://example.invalid/_platform/missing', cookie)).toMatch(
+        /^HTTP\/1\.1 404 /,
+      );
+      expect(await upgrade(baseUrl, 'http://example.invalid/', cookie)).toMatch(
+        cookie === '' ? /^HTTP\/1\.1 401 / : /^HTTP\/1\.1 503 /,
+      );
+    }
+  });
 });

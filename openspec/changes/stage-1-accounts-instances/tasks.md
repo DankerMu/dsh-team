@@ -707,7 +707,7 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
 依赖：第 6 组；测试用本地替身上游，不依赖第 9 组。模块在 `platform/src/gateway/`。
 
-- [ ] 11.1 路由划分：`/_platform/` 和 `/healthz` 由平台处理，其余路径进网关；未登录时页面请求跳转登录页，其他请求返回 401。验证：集成测试覆盖 `gateway-routing` 规格“平台路径与实例路径分开”的全部场景和“实例由平台会话决定”的两个未登录场景。
+- [x] 11.1 路由划分：`/_platform/` 和 `/healthz` 由平台处理，其余路径进网关；未登录时页面请求跳转登录页，其他请求返回 401。验证：集成测试覆盖 `gateway-routing` 规格“平台路径与实例路径分开”的全部场景和“实例由平台会话决定”的两个未登录场景。
 - [ ] 11.2 HTTP 转发：上游由平台会话对应的用户决定，不读取请求里的任何实例标识；去掉客户端的全部 `Cookie`，只注入该实例的 DSH cookie；`Host` 改为平台对外 authority；去掉响应里的 `Set-Cookie`。验证：集成测试（替身上游记录收到的请求）——上游收不到平台会话 cookie；浏览器收不到 DSH cookie；上游看到的 `Host` 是平台对外 authority；请求里伪造的实例标识头和查询参数不改变上游（规格“实例由平台会话决定”“DSH 凭据只在平台服务端”和“上游使用固定的对外地址”场景）。
 - [ ] 11.3 流式转发：请求体和响应体不缓冲。验证：集成测试——上传和下载各一个 200MB 的流，平台进程的内存增长不超过 50MB，内容校验和一致（规格“大文件上传和下载”场景）。
 - [ ] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
@@ -725,6 +725,8 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - Schema / Config project setup / Release packaging / Documentation: explicit response schemas, hidden instance wildcard, generated contract check, full pnpmcheck and source/built runtime proof; no dependency/config/persisted format changes. Scope and temporary503 recorded here.
 - Resource limits: pre-body HTTP admission for unsupported content and malformedJSON; upgrade sockets terminate, no buffering or upstream streams. File IO not selected: no introduced IO; existing database fixture lifetime retained.
 - Both HTTP and real TCP upgrades cover the entire missing/malformed/duplicate/expired/revoked/disabled/valid-session matrix; revocation/disable occur after prior admission in the same app. Upgrade wire status plus EOF, reserved404, database500, peer-abort then health200 prove admission/error/lifecycle behavior. Forged authority/instance fields point at an observed local listener: gateway503, zero outbound connections.
+
+验证记录（#49）：页面404→302、真实升级未结束→401/EOF 的 RED/GREEN 已观察。保留平台健康/鉴权/Origin 边界；HTTP与真实升级均验证缺失、畸形、重复、过期、撤销、禁用会话及有效会话503，精确登录令牌滑动续期、解析前拒绝请求体、存储失败安全500与脱敏错误日志。首轮审查发现升级半关闭受客户端FIN控制、absolute-form平台路径误分类及静默500；三项负向回归均先失败，修复后完整 `pnpm check` 1176单元/669集成、逐文件覆盖、重复率2.74%、契约及strict OpenSpec通过。独立source/built实际TCP证明拒绝401/503/absolute平台404完整发送且服务端主动释放，即使客户端不发送FIN；`pnpm e2e`通过。没有上游连接、容器操作或登录页渲染；这些仍属后续issue。最终审查/CI与冻结提交以PR#156记录为准。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 

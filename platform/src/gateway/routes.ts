@@ -21,7 +21,8 @@ const ERROR_SCHEMA = {
 } as const;
 
 function platformPath(url: string): boolean {
-  const path = url.split('?', 1)[0];
+  // Absolute-form targets have the same namespace without URL path normalization.
+  const path = url.replace(/^https?:\/\/[^/?#]*/i, '').split('?', 1)[0];
   return path === '/healthz' || path === '/_platform' || path?.startsWith('/_platform/') === true;
 }
 
@@ -47,6 +48,7 @@ export const gatewayRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> 
       return token !== null && getSessionUser(database, token, Date.now()) !== null ? 503 : 401;
     } catch {
       // Authentication storage failures must not reveal database or credential details.
+      app.log.error('Gateway authentication storage failure');
       return 500;
     }
   }
@@ -77,6 +79,10 @@ export const gatewayRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> 
   );
   function rejectUpgrade(request: IncomingMessage, socket: Duplex): void {
     socket.on('error', () => {
+      socket.destroy();
+    });
+    // Flush the rejection, then release both halves even if the peer withholds FIN.
+    socket.once('finish', () => {
       socket.destroy();
     });
     const code = status(request);
