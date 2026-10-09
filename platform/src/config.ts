@@ -15,6 +15,8 @@ export interface PlatformConfig {
   readonly userImage: string;
   readonly seccompProfilePath: string;
   readonly subnetPool: string;
+  readonly upstreamMode: 'network' | 'published-loopback';
+  readonly platformContainerName: string;
   readonly publicUrl: string;
   readonly authority: string;
   readonly cookieSecure: boolean;
@@ -84,6 +86,18 @@ function parseSeccompProfile(raw: string): string {
     throw new Error('PLATFORM_SECCOMP_PROFILE must be a nonempty path without NUL');
   }
   return resolve(raw);
+}
+
+function parseUpstreamMode(raw: string): PlatformConfig['upstreamMode'] {
+  if (raw !== 'network' && raw !== 'published-loopback')
+    throw new Error('PLATFORM_UPSTREAM_MODE must be exactly network or published-loopback');
+  return raw;
+}
+
+function parsePlatformContainerName(raw: string): string {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(raw) || /^[a-fA-F0-9]{12,64}$/.test(raw))
+    throw new Error('PLATFORM_CONTAINER_NAME must be a Docker container name, not an ID or path');
+  return raw;
 }
 
 function rejectPublicUrl(): never {
@@ -181,6 +195,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
       env.PLATFORM_SECCOMP_PROFILE ?? 'images/seccomp/dsh-user.json',
     ),
     subnetPool: env.PLATFORM_SUBNET_POOL ?? '172.30.0.0/16',
+    upstreamMode: parseUpstreamMode(env.PLATFORM_UPSTREAM_MODE ?? 'network'),
+    platformContainerName: parsePlatformContainerName(
+      env.PLATFORM_CONTAINER_NAME ?? 'dsh-team-platform',
+    ),
     publicUrl: publicOrigin.origin,
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),

@@ -1,105 +1,51 @@
-import { once } from 'node:events';
-import { mkdtemp, rm, stat, watch, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { stat, watch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
-import { createDockerClient, createOrchestrator } from '../src/orchestrator/index.ts';
+import { writeSettings } from '../src/db/index.ts';
 import {
   START_CONTAINER,
-  START_MODEL,
   START_NETWORK,
-  START_PERMISSION,
   START_USER,
-  startupDaemon,
-  startupUnixServer,
+  startupUnixOwnerFixture,
 } from './container-start-fixture.ts';
-import type { StartupRequest } from './container-start-fixture.ts';
 
 const OTHER = 'mnopqrstuvwx';
 const OTHER_CONTAINER = 'd'.repeat(64);
 
 async function unixFixture() {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-allocation-wire-'));
-  const database = openDatabase(join(root, 'platform.db'));
-  applyMigrations(database);
-  for (const user of [START_USER, OTHER])
-    database
-      .prepare("INSERT INTO users VALUES (?, ?, 'unused', 'employee', 'active', 1)")
-      .run(user, `${user}@example.test`);
-  const daemon = startupDaemon();
+  const context = await startupUnixOwnerFixture({
+    rootPrefix: 'dsh-allocation-wire-',
+    users: { [START_USER]: `${START_USER}@example.test`, [OTHER]: `${OTHER}@example.test` },
+    userImage: 'image:test',
+    subnetPool: '172.30.0.0/26',
+    transport: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
+  const { daemon } = context;
   daemon.beforeRequest(({ path }) => {
     if (path === `/containers/create?name=dsh-team-u-${OTHER}`)
       daemon.setContainerId(OTHER_CONTAINER);
     if (path === `/containers/create?name=dsh-team-u-${START_USER}`)
       daemon.setContainerId(START_CONTAINER);
   });
-  let barrier: ((method: string, path: string) => Promise<undefined> | undefined) | undefined;
-  let responseBarrier: ((request: StartupRequest) => Promise<undefined> | undefined) | undefined;
   let loseNetworkIdentity = false;
-  const server = startupUnixServer(
-    (request) => {
-      const result = daemon.reply(request);
-      if (
-        loseNetworkIdentity &&
-        request.method === 'POST' &&
-        request.path === '/networks/create' &&
-        result.status === 201 &&
-        request.body.Name === `dsh-team-net-${START_USER}`
-      ) {
-        loseNetworkIdentity = false;
-        // Preserve the real Engine mutation but lose its identity on the Unix HTTP response.
-        return { ...result, document: { Warning: '' } };
-      }
-      return result;
-    },
-    (method, path) => barrier?.(method, path),
-    (request) => responseBarrier?.(request),
-  );
-  const socket = join(root, 'engine.sock');
-  server.listen(socket);
-  await once(server, 'listening');
-  const seccompProfilePath = join(root, 'seccomp.json');
-  await writeFile(seccompProfilePath, '{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}');
-  const owner = createOrchestrator({ client: createDockerClient(socket), database });
-  const input = {
-    userId: START_USER,
-    config: {
-      userImage: 'image:test',
-      seccompProfilePath,
-      managedConfigDir: join(root, 'managed'),
-      authority: 'team.example:8443',
-      subnetPool: '172.30.0.0/26',
-    },
-    modelSettings: START_MODEL,
-    modelKey: 'fixture-private-key',
-    permission: START_PERMISSION,
-  };
+  context.replyWith((request, result) => {
+    if (
+      loseNetworkIdentity &&
+      request.method === 'POST' &&
+      request.path === '/networks/create' &&
+      result.status === 201 &&
+      request.body.Name === `dsh-team-net-${START_USER}`
+    ) {
+      loseNetworkIdentity = false;
+      // Preserve the real Engine mutation but lose its identity on the Unix HTTP response.
+      return { ...result, document: { Warning: '' } };
+    }
+    return result;
+  });
   return {
-    root,
-    database,
-    daemon,
-    owner,
-    input,
-    hold(callback: typeof barrier) {
-      barrier = callback;
-    },
-    holdResponse(callback: typeof responseBarrier) {
-      responseBarrier = callback;
-    },
+    ...context,
     loseNextNetworkIdentity() {
       loseNetworkIdentity = true;
-    },
-    async close() {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        }),
-      );
-      database.close();
-      await rm(root, { recursive: true, force: true });
     },
   };
 }

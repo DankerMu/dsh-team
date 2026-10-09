@@ -313,3 +313,12 @@
 - Preserve current loopback upstream transport pending #46, per-user queue/capacity/credentials/volume/audit safeguards, readiness error semantics, and all eighteen Docker baselines.
 - Evidence floor: public Unix/SQLite semantic RED/GREEN, deterministic cross-user allocation and cleanup failures; two real instances with positive listening controls and cross-IP/hostname isolation plus stop/network-removal/sibling preservation; full root/strictOpenSpec/final-head Docker/CI.
 - No platform-container attachment/no-port cutover (#46), startup orphan network sweep (#47), 61-network stress (#48), new schema/dependencies, data-volume deletion or DSH source changes. Human critical-path review remains deferred to Epic completion.
+
+## Issue #46 fixture
+
+- Feature; expanded task10.3 (agree with upstream): explicit network-default upstream transport, platform attachment and exact-endpoint lifecycle removal.
+- Governing invariant: network-mode instances publish no host port; only the configured verified platform container joins the owned instance bridge, and the indexed upstream is the verified instance IPv4:3080.
+- Preserve owner queues/capacity/uncertain-create quarantine, credentials/audits/current identity fences, volumes, sibling networks and all nineteen Docker baselines in explicit published-loopback mode.
+- Selected risk packs: public API/config/schema fields, concurrency/state/ordering, auth/secrets, errors/rollback, file safety, resource/discovery, compatibility, packaging and documentation; mapped in task10.3 evidence below.
+- Evidence floor: public Unix/SQLite transport lifecycle semantic RED/GREEN and negative endpoint/ownership/failure controls; real configured platform stand-in reaches unpublished DSH3080 and detaches on retirement; full root checks, strictOpenSpec, final-head full Docker and CI.
+- No gateway/compose, startup network repair or orphan sweep (#47), capacity stress (#48), new DB schema/dependency or data deletion. Human critical-path review deferred to Epic completion per user.

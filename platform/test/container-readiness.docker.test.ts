@@ -151,6 +151,7 @@ async function readinessScenario(
   const { startUserContainer, waitForUserContainerReady } = createOrchestrator({
     client,
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
   });
   try {
     applyMigrations(database);

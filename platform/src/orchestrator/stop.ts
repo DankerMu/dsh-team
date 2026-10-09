@@ -3,13 +3,17 @@ import type { InstanceStopReason } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerState } from './start.ts';
-import { resolvedImageId } from './identity.ts';
-import { captureUserNetwork, removeUserNetwork } from './networks.ts';
+import { inspectUserContainerEndpoint, inspectUserContainerState } from './start.ts';
+import { object, resolvedImageId } from './identity.ts';
+import { indexedEndpoint } from './credentials.ts';
+import { attachedNetwork, captureUserNetwork, removeUserNetwork } from './networks.ts';
+import { requireUnpublished, upstreamHost } from './transport.ts';
+import type { TransportContext } from './transport.ts';
 
 export interface StopUserContainerInput {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
+  readonly transport: TransportContext;
   readonly userId: string;
   readonly reason: InstanceStopReason;
   readonly signal?: AbortSignal;
@@ -19,6 +23,8 @@ interface Selection {
   containerId: string;
   imageId: string;
   email: string;
+  upstreamHost: string | null;
+  upstreamPort: number | null;
   identity: (string | number | null)[];
 }
 
@@ -62,10 +68,16 @@ function select(input: StopUserContainerInput): Selection | undefined {
   if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error();
   const imageId = resolvedImageId(instance.image_id);
   if (typeof instance.email !== 'string') throw new Error();
+  const endpoint =
+    input.transport.config.upstreamMode === 'network'
+      ? indexedEndpoint(object(row), true, 'network')
+      : instance;
   return {
     containerId: id,
     imageId,
     email: instance.email,
+    upstreamHost: endpoint.upstream_host,
+    upstreamPort: endpoint.upstream_port,
     identity: [
       input.userId,
       id,
@@ -110,13 +122,35 @@ async function running(
     if (error instanceof DockerHttpError && error.statusCode === 404) return undefined;
     throw error;
   }
-  return inspectUserContainerState(
+  const state = inspectUserContainerState(
     document,
     selection.containerId,
     `dsh-team-u-${input.userId}`,
     input.userId,
     selection.imageId,
   );
+  if (input.transport.config.upstreamMode === 'network') {
+    if (state) {
+      const port = inspectUserContainerEndpoint(
+        document,
+        selection.containerId,
+        `dsh-team-u-${input.userId}`,
+        input.userId,
+        selection.imageId,
+        input.transport.config.upstreamMode,
+      );
+      const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
+      if (
+        (selection.upstreamPort !== null && selection.upstreamPort !== port) ||
+        (selection.upstreamHost !== null && selection.upstreamHost !== host)
+      )
+        throw new Error('Indexed network endpoint changed before retirement');
+    } else {
+      requireUnpublished(document, input.transport.config.upstreamMode);
+      attachedNetwork(document, input.userId, undefined, true);
+    }
+  }
+  return state;
 }
 
 async function remove(
@@ -199,27 +233,33 @@ export async function stopUserContainer(
     signal.throwIfAborted();
     const selection = select(input);
     if (selection === undefined) return false;
+    let networkSignal = signal;
     const networkClient: DockerClient = {
       ...input.client,
       json: (method, path, body, _signal, maxBytes) =>
-        input.client.json(method, path, body, signal, maxBytes),
+        input.client.json(method, path, body, networkSignal, maxBytes),
     };
     const state = await running(input, selection, signal);
     const network = await captureUserNetwork(
       networkClient,
       input.userId,
+      input.transport,
       state === undefined ? undefined : selection.containerId,
     );
     current(fenced, selection, signal);
     await remove(fenced, selection, signal);
+    // After exact user removal, platform detach/inspect settlement retains ownership despite caller abort.
+    if (input.transport.config.upstreamMode === 'network') networkSignal = work.signal;
     if (network === undefined) {
-      if ((await captureUserNetwork(networkClient, input.userId)) !== undefined) throw new Error();
+      if ((await captureUserNetwork(networkClient, input.userId, input.transport)) !== undefined)
+        throw new Error();
     } else {
       await removeUserNetwork(
         networkClient,
         input.userId,
+        input.transport,
         () => {
-          current(fenced, selection, signal);
+          current(fenced, selection, networkSignal);
         },
         undefined,
         network,

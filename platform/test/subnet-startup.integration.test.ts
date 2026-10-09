@@ -25,7 +25,11 @@ async function unusedPort(): Promise<number> {
   return port;
 }
 
-async function observeStartup(pool: string | undefined, maxRunningInstances?: number) {
+async function observeStartup(
+  pool: string | undefined,
+  maxRunningInstances?: number,
+  environment: Readonly<Record<string, string>> = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-team-subnet-'));
   try {
     const database = openDatabase(join(directory, 'platform.db'));
@@ -45,6 +49,7 @@ async function observeStartup(pool: string | undefined, maxRunningInstances?: nu
         PLATFORM_PUBLIC_URL: `http://127.0.0.1:${String(port)}`,
         PLATFORM_DATA_DIR: directory,
         ...(pool === undefined ? {} : { PLATFORM_SUBNET_POOL: pool }),
+        ...environment,
       },
       stdio: ['ignore', 'ignore', 'pipe'],
       // A broken startup must not leave a process behind, even if observation fails.
@@ -122,4 +127,31 @@ describe('subnet pool validation in the actual source process', () => {
     expect(empty.exitCode).toBeGreaterThan(0);
     expect(empty.stderr).toContain('PLATFORM_SUBNET_POOL');
   }, 15000);
+
+  it.each([
+    ['PLATFORM_UPSTREAM_MODE', 'host'],
+    ['PLATFORM_CONTAINER_NAME', '/dsh-team-platform'],
+  ])(
+    'rejects malformed %s before serving health',
+    async (key, value) => {
+      const result = await observeStartup(undefined, undefined, { [key]: value });
+
+      expect(result.health).toBeNull();
+      expect(result.exitCode).toBeGreaterThan(0);
+      expect(result.stderr).toContain(key);
+    },
+    10000,
+  );
+
+  it('network configuration serves health without resolving an absent platform or Docker socket', async () => {
+    const result = await observeStartup(undefined, undefined, {
+      PLATFORM_UPSTREAM_MODE: 'network',
+      PLATFORM_CONTAINER_NAME: 'dsh-team-test-not-created',
+      PLATFORM_DOCKER_SOCKET: '/absent/docker.sock',
+    });
+
+    expect(result.exitCode).toBeNull();
+    expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
+    expect(result.stderr).toBe('');
+  }, 10000);
 });

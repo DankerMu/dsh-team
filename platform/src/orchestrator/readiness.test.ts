@@ -10,6 +10,7 @@ import { createDockerClient, createOrchestrator } from './index.ts';
 import type { Orchestrator } from './index.ts';
 import {
   startupDaemon,
+  seedPlatform,
   START_CONTAINER,
   START_IMAGE,
   START_USER,
@@ -26,6 +27,7 @@ const http = vi.hoisted(() => ({
   beforePage: undefined as (() => void) | undefined,
   secret: '',
   missingCookie: false,
+  addresses: [] as { hostname: unknown; port: unknown; path: unknown }[],
 }));
 vi.mock('node:http', async (importOriginal) => {
   const original = await importOriginal<typeof NodeHttp>();
@@ -33,6 +35,7 @@ vi.mock('node:http', async (importOriginal) => {
     ...original,
     request: (options: RequestOptions, receive: (response: IncomingMessage) => void) => {
       const outgoing = new EventEmitter();
+      http.addresses.push({ hostname: options.hostname, port: options.port, path: options.path });
       const exchange = options.path?.startsWith('/?token=') === true;
       const signal = options.signal;
       const aborted = () => {
@@ -116,6 +119,7 @@ beforeEach(() => {
   ).toString('base64url');
   http.cookie = `${cookieName}=v1.${body}.${randomBytes(32).toString('base64url')}`;
   http.secret = `${token} ${http.cookie}`;
+  http.addresses = [];
   http.status = 200;
   http.exchange = 303;
   http.refuse = 0;
@@ -148,6 +152,7 @@ beforeEach(() => {
   ({ waitForUserContainerReady } = createOrchestrator({
     client: createDockerClient('/fixture/docker.sock', daemon.transport),
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
   }));
 });
 
@@ -434,4 +439,118 @@ it('preserves replacement ownership appearing while failure logs are being obtai
 
   expect(database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'starting' });
   expect(daemon.requests.some((request) => request.path.includes('/stop?'))).toBe(false);
+});
+
+function networkOwner() {
+  const platform = 'f'.repeat(64);
+  seedPlatform(daemon, 'dsh-team-test-platform', platform);
+  container.NetworkSettings.Ports = { '3080/tcp': null };
+  daemon.reply({
+    method: 'POST',
+    path: `/networks/${'e'.repeat(64)}/connect`,
+    body: { Container: platform },
+  });
+  database.prepare("UPDATE instances SET upstream_host = '172.30.0.2', upstream_port = 3080").run();
+  const owner = createOrchestrator({
+    client: createDockerClient('/fixture/docker.sock', daemon.transport),
+    database,
+    config: { upstreamMode: 'network', platformContainerName: 'dsh-team-test-platform' },
+  });
+  return { owner, platform };
+}
+
+it('network readiness authenticates the verified IPv4:3080 and preserves its platform attachment', async () => {
+  const { owner, platform } = networkOwner();
+  await owner.waitForUserContainerReady({ userId: START_USER, authority });
+
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'running',
+    dsh_cookie: http.cookie,
+  });
+  expect(http.addresses).toEqual(
+    expect.arrayContaining([
+      { hostname: '172.30.0.2', port: 3080, path: `/?token=${encodeURIComponent(token)}` },
+      { hostname: '172.30.0.2', port: 3080, path: '/' },
+    ]),
+  );
+  expect(daemon.networks.get('e'.repeat(64))?.Containers).toHaveProperty(platform);
+  expect(
+    database
+      .prepare("SELECT event_type FROM audit_events WHERE event_type = 'instance.ready'")
+      .all(),
+  ).toEqual([{ event_type: 'instance.ready' }]);
+});
+
+it.each(['clean detach', 'failed detach', 'unknown endpoint'])(
+  'network readiness failure settles %s without claiming readiness or deleting data',
+  async (failure) => {
+    const { owner, platform } = networkOwner();
+    http.exchange = 401;
+    if (failure === 'failed detach')
+      daemon.overrides.set(`POST /networks/${'e'.repeat(64)}/disconnect`, { status: 500 });
+    if (failure === 'unknown endpoint') {
+      const network = daemon.networks.get('e'.repeat(64));
+      if (network === undefined) throw new Error('Network missing');
+      network.Containers['8'.repeat(64)] = { Name: 'foreign', IPv4Address: '172.30.0.4/28' };
+    }
+    const cleanup =
+      failure === 'clean detach'
+        ? 'owned network removed'
+        : 'network cleanup failed or unconfirmed';
+
+    await expect(
+      owner.waitForUserContainerReady({ userId: START_USER, authority }),
+    ).rejects.toThrow(cleanup);
+    const expectedError: unknown = expect.stringContaining(cleanup);
+
+    expect(
+      database.prepare('SELECT status, dsh_cookie, last_error FROM instances').get(),
+    ).toMatchObject({
+      status: 'error',
+      dsh_cookie: null,
+      last_error: expectedError,
+    });
+    expect(daemon.networks.has('e'.repeat(64))).toBe(failure !== 'clean detach');
+    if (failure === 'clean detach') {
+      const expectedBridge: unknown = expect.objectContaining({
+        NetworkID: '0'.repeat(64),
+        IPAddress: '172.17.0.2',
+      });
+      expect(daemon.containers.get(platform)?.NetworkSettings.Networks).toEqual({
+        bridge: expectedBridge,
+      });
+    }
+    expect(
+      daemon.requests.filter(
+        ({ method, path }) => method === 'DELETE' && path.startsWith('/volumes'),
+      ),
+    ).toEqual([]);
+    expect(
+      database
+        .prepare("SELECT event_type FROM audit_events WHERE event_type = 'instance.ready'")
+        .all(),
+    ).toEqual([]);
+  },
+);
+
+it('credential acquisition rejects a persisted network host that disagrees with the owned bridge before HTTP', async () => {
+  const { owner } = networkOwner();
+  database
+    .prepare(
+      "UPDATE instances SET upstream_host = '172.30.0.9', dsh_cookie = 'previous-private-cookie'",
+    )
+    .run();
+
+  await expect(owner.acquireDshCookie({ userId: START_USER, authority })).rejects.toThrow(
+    'owned container',
+  );
+
+  expect(http.addresses).toEqual([]);
+  expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
+    status: 'starting',
+    dsh_cookie: null,
+  });
+  expect(
+    daemon.requests.filter(({ path }) => path.includes('/stop?') || path.includes('/disconnect')),
+  ).toEqual([]);
 });

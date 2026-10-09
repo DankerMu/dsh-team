@@ -2,6 +2,8 @@ import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object } from './identity.ts';
 import { allocateSubnet } from './subnet.ts';
+import { platformMembership, validateEndpointAddress, verifiedPlatform } from './transport.ts';
+import type { PlatformEndpoint, TransportContext } from './transport.ts';
 
 export interface OwnedNetwork {
   readonly id: string;
@@ -16,6 +18,8 @@ export class NetworkCreationUnconfirmedError extends Error {
 }
 
 const MAX_NETWORK_BYTES = 4 * 1024 * 1024;
+// An accepted platform mutation and its inspect agreement share one independent settlement deadline.
+const ATTACH_TIMEOUT_MS = 10_000;
 const nameFor = (userId: string) => `dsh-team-net-${userId}`;
 
 function inspectedNetwork(document: unknown, userId: string, id?: string): OwnedNetwork {
@@ -79,15 +83,22 @@ export function attachedNetwork(
   return id;
 }
 
-function ownedEndpoints(document: unknown, userId: string, container?: string): void {
+function ownedEndpoints(
+  document: unknown,
+  userId: string,
+  container?: string,
+  platform?: PlatformEndpoint,
+): void {
+  if (container !== undefined && platform?.id === container)
+    throw new Error('Platform and instance identities must be distinct');
   const endpoints = object(object(document).Containers);
-  const ids = Object.keys(endpoints);
-  if (ids.length === 0) return;
-  if (container === undefined || ids.length !== 1 || ids[0] !== container)
-    throw new Error('Network has unknown endpoints');
-  const endpoint = object(endpoints[container]);
-  if (endpoint.Name !== `dsh-team-u-${userId}`)
-    throw new Error('Network endpoint ownership mismatch');
+  for (const id of Object.keys(endpoints)) {
+    const expected =
+      id === container ? `dsh-team-u-${userId}` : id === platform?.id ? platform.name : undefined;
+    if (expected === undefined) throw new Error('Network has unknown endpoints');
+    if (object(endpoints[id]).Name !== expected)
+      throw new Error('Network endpoint ownership mismatch');
+  }
 }
 
 async function inspect(client: DockerClient, target: string): Promise<unknown> {
@@ -107,12 +118,15 @@ async function requireCanonicalAbsent(client: DockerClient, userId: string): Pro
 export async function captureUserNetwork(
   client: DockerClient,
   userId: string,
+  transport: TransportContext,
   container?: string,
 ): Promise<OwnedNetwork | undefined> {
   const document = await inspect(client, nameFor(userId));
   if (document === undefined) return undefined;
   const network = inspectedNetwork(document, userId);
-  ownedEndpoints(document, userId, container);
+  const platform = await verifiedPlatform(client, transport, false);
+  ownedEndpoints(document, userId, container, platform);
+  if (platform !== undefined) platformMembership(platform, document, userId, network.subnet, false);
   return network;
 }
 
@@ -120,6 +134,7 @@ export async function validateUserNetwork(
   client: DockerClient,
   userId: string,
   document: unknown,
+  transport: TransportContext,
   expected?: string,
   created = false,
 ): Promise<OwnedNetwork> {
@@ -127,7 +142,9 @@ export async function validateUserNetwork(
   const network = await inspect(client, id);
   const owned = inspectedNetwork(network, userId, id);
   const container = containerId(document);
-  ownedEndpoints(network, userId, container);
+  const platform = await verifiedPlatform(client, transport, !created);
+  ownedEndpoints(network, userId, container, platform);
+  if (platform !== undefined) platformMembership(platform, network, userId, owned.subnet, !created);
   const endpoints = object(object(network).Containers);
   if (!(container in endpoints)) {
     // A stopped or not-yet-started container can retain its declaration without a live endpoint.
@@ -136,23 +153,7 @@ export async function validateUserNetwork(
   }
   const endpoint = object(object(object(document).NetworkSettings).Networks);
   const attachment = object(endpoint[nameFor(userId)]);
-  const address = attachment.IPAddress;
-  const base = owned.subnet.slice(0, -3);
-  const lastDot = base.lastIndexOf('.');
-  const prefix = base.slice(0, lastDot + 1);
-  if (typeof address !== 'string' || !address.startsWith(prefix))
-    throw new Error('Instance endpoint subnet mismatch');
-  const host = Number(address.slice(prefix.length));
-  const start = Number(base.slice(lastDot + 1));
-  if (
-    !Number.isInteger(host) ||
-    host <= start ||
-    host >= start + 15 ||
-    address !== `${prefix}${String(host)}` ||
-    object(endpoints[container]).IPv4Address !== `${address}/28` ||
-    object(endpoints[container]).EndpointID !== attachment.EndpointID
-  )
-    throw new Error('Instance endpoint address mismatch');
+  validateEndpointAddress(attachment, object(endpoints[container]), owned.subnet);
   return owned;
 }
 
@@ -181,6 +182,7 @@ export async function createUserNetwork(
   cleanup: DockerClient,
   userId: string,
   pool: string,
+  transport: TransportContext,
   signal: AbortSignal,
   reuse = false,
 ): Promise<OwnedNetwork> {
@@ -191,7 +193,10 @@ export async function createUserNetwork(
     const current = await inspect(client, network.id);
     if (inspectedNetwork(current, userId, network.id).subnet !== network.subnet)
       throw new Error('Owned network subnet changed');
-    ownedEndpoints(current, userId);
+    const platform = await verifiedPlatform(client, transport, true);
+    ownedEndpoints(current, userId, undefined, platform);
+    if (platform !== undefined)
+      platformMembership(platform, current, userId, network.subnet, false);
     return network;
   }
   const subnet = allocateSubnet(
@@ -226,7 +231,10 @@ export async function createUserNetwork(
       throw new NetworkCreationUnconfirmedError();
     }
     try {
-      await removeUserNetwork(cleanup, userId, () => undefined, undefined, { id, subnet });
+      await removeUserNetwork(cleanup, userId, transport, () => undefined, undefined, {
+        id,
+        subnet,
+      });
     } catch {
       throw new Error('Network allocation and rollback failed');
     }
@@ -234,10 +242,39 @@ export async function createUserNetwork(
   }
 }
 
+async function disconnectPlatform(
+  client: DockerClient,
+  transport: TransportContext,
+  userId: string,
+  network: OwnedNetwork,
+  platform: PlatformEndpoint,
+): Promise<void> {
+  let failure: unknown;
+  try {
+    await client.json('POST', `/networks/${network.id}/disconnect`, {
+      Container: platform.id,
+      Force: false,
+    });
+  } catch (error) {
+    failure = error;
+  }
+  const settled = await inspect(client, network.id);
+  const confirmed = await verifiedPlatform(client, transport, false);
+  if (confirmed === undefined || settled === undefined)
+    throw new Error('Platform disconnection outcome unconfirmed');
+  if (inspectedNetwork(settled, userId, network.id).subnet !== network.subnet)
+    throw new Error('Captured network subnet changed');
+  if (platformMembership(confirmed, settled, userId, network.subnet, false)) {
+    if (failure instanceof Error) throw failure;
+    throw new Error('Platform endpoint remains');
+  }
+}
+
 /** Verify before every destructive step; disconnect only a confirmed stopped owned endpoint. */
 export async function removeUserNetwork(
   client: DockerClient,
   userId: string,
+  transport: TransportContext,
   current: () => void,
   stoppedContainer: string | undefined,
   captured: Pick<OwnedNetwork, 'id' | 'subnet'>,
@@ -251,13 +288,22 @@ export async function removeUserNetwork(
   }
   const network = inspectedNetwork(found, userId, captured.id);
   if (captured.subnet !== network.subnet) throw new Error('Captured network subnet changed');
-  ownedEndpoints(found, userId, stoppedContainer);
+  const platform = await verifiedPlatform(client, transport, false);
+  ownedEndpoints(found, userId, stoppedContainer, platform);
+  const attached =
+    platform === undefined
+      ? false
+      : platformMembership(platform, found, userId, network.subnet, false);
   current();
-  if (Object.keys(object(object(found).Containers)).length !== 0) {
+  if (stoppedContainer !== undefined && stoppedContainer in object(object(found).Containers)) {
     await client.json('POST', `/networks/${network.id}/disconnect`, {
       Container: stoppedContainer,
       Force: false,
     });
+  }
+  if (attached && platform !== undefined) {
+    current();
+    await disconnectPlatform(client, transport, userId, network, platform);
   }
   current();
   const empty = await inspect(client, network.id);
@@ -276,4 +322,40 @@ export async function removeUserNetwork(
   if ((await inspect(client, network.id)) !== undefined) throw new Error('Owned network remains');
   await requireCanonicalAbsent(client, userId);
   current();
+}
+
+/** The caller supplies its independent bounded settlement client, never its cancellation signal. */
+export async function attachPlatform(
+  raw: DockerClient,
+  transport: TransportContext,
+  userId: string,
+  container: string,
+  captured: OwnedNetwork,
+): Promise<void> {
+  const signal = AbortSignal.timeout(ATTACH_TIMEOUT_MS);
+  const client: DockerClient = {
+    ...raw,
+    json: (method, path, body, _signal, maxBytes) => raw.json(method, path, body, signal, maxBytes),
+  };
+  const platform = await verifiedPlatform(client, transport, true);
+  if (platform === undefined) return;
+  const before = await inspect(client, captured.id);
+  const network = inspectedNetwork(before, userId, captured.id);
+  if (network.subnet !== captured.subnet) throw new Error('Captured network subnet changed');
+  ownedEndpoints(before, userId, container, platform);
+  if (!platformMembership(platform, before, userId, network.subnet, false)) {
+    // Do not drop submitted mutation ownership on abort or on a lost response.
+    try {
+      await client.json('POST', `/networks/${network.id}/connect`, { Container: platform.id });
+    } catch {
+      // Only independent agreement below can settle a lost/rejected connect response.
+    }
+  }
+  const after = await inspect(client, network.id);
+  if (inspectedNetwork(after, userId, network.id).subnet !== network.subnet)
+    throw new Error('Captured network subnet changed');
+  const confirmed = await verifiedPlatform(client, transport, true);
+  if (confirmed === undefined) throw new Error('Platform attachment outcome unconfirmed');
+  ownedEndpoints(after, userId, container, confirmed);
+  platformMembership(confirmed, after, userId, network.subnet, true);
 }

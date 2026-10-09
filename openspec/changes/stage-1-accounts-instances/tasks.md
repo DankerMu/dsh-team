@@ -672,6 +672,15 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 
 补充验证（#45）：上述通过后的文档头`a5771c6`最终复验为18通过/1失败，仅兄弟实例inspect中同一Mounts项顺序变化；未将早先19通过冒充最终验收，也未重跑碰顺序。用户再次明确授权一轮定向修复：仅对挂载数组副本按Destination规范顺序，保留全部成员/字段和完整兄弟实例比较、HTTP200断言；冻结输入及相同排列/不同Source/不同RW/缺失成员四项控制通过。完整pnpmcheck为1076unit/629integration、重复率2.92%、strictOpenSpec通过；fresh全diff复审clean。审查头`ba82531dd5b6372c60106dfef6c7cc842fce84f6`固定工具链完整19Docker再次通过，11文件、137.69秒、exit0；包含真实隔离、兄弟保持和bad-overlay网络删除，独立容器/网络/卷/测试镜像清点为空。最终头/CI仍以PR#152绑定证据为准；两次用户追加授权均有门禁记录，未放宽行为验收。
 
+### Issue #46 risk/evidence map (task10.3 only)
+
+- Public API / CLI / script entry; Config / project setup; Schema / columns / units / field names — selected: network default plus explicit host mode, validated platform name, captured owner configuration and verified IPv4:3080 in existing columns; public/config negative tests and full caller migration.
+- Concurrency / shared state / ordering; Resource limits / large input / discovery — selected: per-user lifecycle retains submitted attach/detach settlement and bounded requests; deterministic cancellation/failure controls, no global blocking of unrelated users, preserve allocation quarantine.
+- Auth / permissions / secrets; Error handling / rollback / partial outputs — selected: exact platform/network/instance identity, narrow endpoint allowlist, no host ports, persisted upstream mismatch rejection, connect failure and readiness/stop compensation with truthful audits; unknown/third endpoint and failed disconnect preserve resources.
+- File IO / path safety / overwrite; Legacy compatibility / examples — selected: no data deletion; local host mode explicit in existing callers/19Docker baselines; startup/reuse/credentials/readiness/retirement/reconciliation validators share transport contract and preserve current-account/row fences.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: `.env.example` and environment guidance explain network-default vs local-only loopback, root checks/source-built startup, strictOpenSpec and final-head CI; real platform stand-in HTTP3080/no-publication/retirement plus independently empty cleanup inventory. No dependency/schema change.
+- Non-goals: task10.4 platform-recreation recovery and orphan sweep, task10.5 count stress, gateway/compose; human white-box remains deferred, not waived.
+
 ## 11. 网关（任务包 1.8）
 
 依赖：第 6 组；测试用本地替身上游，不依赖第 9 组。模块在 `platform/src/gateway/`。

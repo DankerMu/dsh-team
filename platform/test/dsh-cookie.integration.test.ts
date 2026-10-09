@@ -108,6 +108,7 @@ beforeEach(async () => {
   ({ startUserContainer, acquireDshCookie, waitForUserContainerReady } = createOrchestrator({
     client: createDockerClient(join(root, 'engine.sock')),
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
   }));
   database
     .prepare(

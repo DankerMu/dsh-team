@@ -1,18 +1,19 @@
-import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { createOrchestrator } from '../src/orchestrator/index.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
 import {
   cookieHttpStatus,
   inspect,
+  inspectNetwork,
   normalizeInspectMounts,
   record,
   startupClient,
+  registerStartupUsers,
+  startDockerInstance,
+  runNetworkAcceptance,
 } from './container-start-docker-fixture.ts';
-import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 const listen = `
@@ -57,11 +58,7 @@ function network(lifecycle: UserImageLifecycle, user: string, id: string) {
   const attachments = record(record(container.NetworkSettings).Networks);
   expect(Object.keys(attachments)).toEqual([`dsh-team-net-${user}`]);
   const endpoint = record(attachments[`dsh-team-net-${user}`]);
-  const result = lifecycle.command(['network', 'inspect', String(endpoint.NetworkID)], 15_000);
-  if (result.status !== 0) throw new Error('Independent network inspect failed');
-  const rows: unknown = JSON.parse(result.stdout);
-  if (!Array.isArray(rows) || rows.length !== 1) throw new Error('Network inspect unavailable');
-  const inspected = record(rows[0]);
+  const inspected = inspectNetwork(lifecycle, String(endpoint.NetworkID));
   expect(inspected).toMatchObject({
     Id: endpoint.NetworkID,
     Name: `dsh-team-net-${user}`,
@@ -91,35 +88,17 @@ async function isolation(lifecycle: UserImageLifecycle): Promise<string> {
   const userB = `${userA.slice(0, 10)}zz`;
   const database = openDatabase(join(dirname(lifecycle.overlayDirectory), 'network-platform.db'));
   const { client } = startupClient(lifecycle);
-  const owner = createOrchestrator({ client, database });
+  const owner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   const authority = 'isolation.example:8443';
   try {
     applyMigrations(database);
-    for (const user of [userA, userB]) {
-      const ownership = { 'dsh-team.user': user };
-      lifecycle.registerResource('container', `dsh-team-u-${user}`, ownership);
-      lifecycle.registerResource('volume', `dsh-team-home-${user}`, ownership);
-      lifecycle.registerResource('volume', `dsh-team-work-${user}`, ownership);
-      database
-        .prepare("INSERT INTO users VALUES (?, ?, 'unused', 'employee', 'active', 1)")
-        .run(user, `${user}@isolation.example`);
-    }
+    registerStartupUsers(lifecycle, database, [userA, userB], 'isolation.example');
     const start = async (userId: string) => {
-      const result = await owner.startUserContainer({
-        userId,
-        config: {
-          userImage: lifecycle.imageId,
-          seccompProfilePath: lifecycle.seccomp,
-          managedConfigDir: lifecycle.overlayDirectory,
-          authority,
-          subnetPool: '172.30.0.0/16',
-        },
-        modelSettings: START_MODEL,
-        permission: START_PERMISSION,
-        modelKey: 'docker-acceptance-only-not-a-model-credential',
-      });
-      if (result.outcome !== 'starting') throw new Error('Production instance did not start');
-      await owner.waitForUserContainerReady({ userId, authority });
+      const result = await startDockerInstance(owner, lifecycle, userId, authority);
       const row = record(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(userId));
       expect(row.status).toBe('running');
       if (typeof row.dsh_cookie !== 'string') throw new Error('Ready instance missing cookie');
@@ -195,22 +174,12 @@ async function isolation(lifecycle: UserImageLifecycle): Promise<string> {
 }
 
 it('production-ready instances isolate both listening ports by address and hostname and retire independently', async () => {
-  if (platform() !== 'linux' || arch() !== 'x64')
-    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
-  const result = await runUserImage(
-    'container-start',
-    (summary) => {
-      expect(JSON.parse(summary)).toEqual({
-        instances: 2,
-        ports: [3080, 3099],
-        isolatedBothWays: true,
-        siblingPreserved: true,
-      });
-    },
-    undefined,
-    isolation,
-  );
-  process.stdout.write(
-    `Docker network isolation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
-  );
+  await runNetworkAcceptance(isolation, 'network isolation', (summary) => {
+    expect(JSON.parse(summary)).toEqual({
+      instances: 2,
+      ports: [3080, 3099],
+      isolatedBothWays: true,
+      siblingPreserved: true,
+    });
+  });
 });

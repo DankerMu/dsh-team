@@ -43,7 +43,11 @@ it('reconstructed owners preserve two healthy complete rows and audits across re
   seedReconciliation(database, daemon, OTHER, OTHER_ID);
   const before = reconciliationState(database);
   const physical = structuredClone([...daemon.containers.values()]);
-  const owner = createOrchestrator({ database, client });
+  const owner = createOrchestrator({
+    database,
+    client,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
 
   await owner.reconcile();
   await owner.reconcile();
@@ -391,6 +395,7 @@ it('permission-denied transport errors remain sanitized and cannot establish abs
   const before = reconciliationState(database);
   const owner = createOrchestrator({
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
     client: createDockerClient('/fixture/denied.sock', () => {
       throw Object.assign(new Error('private transport credential'), { code: 'EACCES' });
     }),
@@ -448,7 +453,15 @@ it.each(['factory dependencies', 'caller options'])(
     const alternate = await startupOwnerFixture();
     roots.push(alternate.root);
     databases.push(alternate.database);
-    const dependencies = { client: original.client, database: original.database };
+    const dependencies = {
+      client: original.client,
+      database: original.database,
+      config: {
+        // Literal mode remains fixed while this test mutates the external dependency references.
+        upstreamMode: 'published-loopback' as const,
+        platformContainerName: 'dsh-team-platform',
+      },
+    };
     const owner = createOrchestrator(dependencies);
     const options = { signal: new AbortController().signal };
     if (kind === 'factory dependencies') {

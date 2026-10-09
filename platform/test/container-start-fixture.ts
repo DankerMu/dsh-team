@@ -1,4 +1,5 @@
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { once } from 'node:events';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -109,6 +110,28 @@ function networkObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function fixtureAddress(row: StartupNetwork, id: string): { address: string; prefix: string } {
+  const config = networkObject(row.IPAM).Config;
+  if (!Array.isArray(config)) throw new Error('Fixture network has no IPAM config');
+  const subnet = networkObject(config[0]).Subnet;
+  if (typeof subnet !== 'string') throw new Error('Fixture network has no subnet');
+  const [base, prefix] = subnet.split('/');
+  if (base === undefined || prefix === undefined) throw new Error('Fixture subnet missing prefix');
+  const existing = row.Containers[id]?.IPv4Address.split('/')[0];
+  if (existing !== undefined) return { address: existing, prefix };
+  const lastDot = base.lastIndexOf('.');
+  const start = Number(base.slice(lastDot + 1));
+  const addressPrefix = base.slice(0, lastDot + 1);
+  const occupied = new Set(
+    Object.values(row.Containers).map((endpoint) => endpoint.IPv4Address.split('/')[0]),
+  );
+  let host = start + 2;
+  while (occupied.has(`${addressPrefix}${String(host)}`)) host += 1;
+  if (host > 254 || (prefix === '28' && host >= start + 15))
+    throw new Error('Fixture network address exhaustion');
+  return { address: `${addressPrefix}${String(host)}`, prefix };
+}
+
 function startupNetworks(containers: ReadonlyMap<string, Container>) {
   const networks = new Map<string, StartupNetwork>();
   let sequence = 1;
@@ -152,6 +175,22 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
       Reflect.deleteProperty(container.NetworkSettings.Networks, row.Name);
     return { status: 200 };
   }
+  function connect(row: StartupNetwork, body: Record<string, unknown>): Reply {
+    const target = String(body.Container);
+    const container = [...containers.values()].find(
+      (item) => item.Id === target || item.Name === `/${target}`,
+    );
+    if (container === undefined)
+      return { status: 404, document: { message: 'container not found' } };
+    if (row.Containers[container.Id] !== undefined)
+      return { status: 403, document: { message: 'endpoint already exists' } };
+    const attached = attach(container, {
+      HostConfig: { NetworkMode: row.Id },
+      NetworkingConfig: { EndpointsConfig: { [row.Id]: body.EndpointConfig ?? {} } },
+    });
+    container.NetworkSettings.Networks = { ...container.NetworkSettings.Networks, ...attached };
+    return { status: 200 };
+  }
   function reply({ method, path, body }: StartupRequest): Reply | undefined {
     const url = new URL(`http://docker${path}`);
     if (method === 'GET' && url.pathname === '/networks')
@@ -168,6 +207,7 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
       networks.delete(row.Id);
       return { status: 204 };
     }
+    if (method === 'POST' && url.pathname.endsWith('/connect')) return connect(row, body);
     if (method === 'POST' && url.pathname.endsWith('/disconnect')) return disconnect(row, body);
     throw new Error('Unexpected fixture network operation');
   }
@@ -182,17 +222,10 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
         ? {}
         : networkObject(networkObject(body.NetworkingConfig).EndpointsConfig);
     const endpoint = requested[row.Id] ?? requested[row.Name] ?? {};
-    const config = networkObject(row.IPAM).Config;
-    if (!Array.isArray(config)) throw new Error('Fixture network has no IPAM config');
-    const subnet = networkObject(config[0]).Subnet;
-    if (typeof subnet !== 'string') throw new Error('Fixture network has no subnet');
-    const [base, prefix] = subnet.split('/');
-    const octets = (base ?? '').split('.');
-    octets[3] = String(Number(octets[3]) + 2);
-    const address = octets.join('.');
+    const { address, prefix } = fixtureAddress(row, container.Id);
     row.Containers[container.Id] = {
       Name: container.Name.slice(1),
-      IPv4Address: `${address}/${prefix ?? ''}`,
+      IPv4Address: `${address}/${prefix}`,
       EndpointID: container.Id,
     };
     attached[row.Name] = {
@@ -204,6 +237,29 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
     return attached;
   }
   return { networks, reply, attach };
+}
+
+function publishedPorts(body: Record<string, unknown>): Record<string, unknown> {
+  const host = networkObject(body.HostConfig);
+  const bindings = host.PortBindings === undefined ? {} : networkObject(host.PortBindings);
+  const exposed = body.ExposedPorts === undefined ? {} : networkObject(body.ExposedPorts);
+  const ports: Record<string, unknown> = {};
+  for (const port of new Set([...Object.keys(exposed), ...Object.keys(bindings)])) {
+    const requested = bindings[port];
+    if (Array.isArray(requested) && requested.length !== 0) {
+      ports[port] = requested.map((value: unknown) => {
+        const binding = networkObject(value);
+        return {
+          HostIp: binding.HostIp === '' ? '0.0.0.0' : (binding.HostIp ?? '0.0.0.0'),
+          HostPort: binding.HostPort === '' ? '49173' : (binding.HostPort ?? '49173'),
+        };
+      });
+    } else {
+      ports[port] =
+        host.PublishAllPorts === true ? [{ HostIp: '0.0.0.0', HostPort: '49173' }] : null;
+    }
+  }
+  return ports;
 }
 
 /** External Engine boundary only; composition/generation/writing/auditing remain real. */
@@ -224,9 +280,23 @@ export function startupDaemon(): StartupDaemon {
     const override = overrides.get(`${request.method} ${request.path}`);
     if (override !== undefined) return override;
     if (request.method !== 'GET' || !request.path.startsWith('/containers/json?')) return undefined;
+    const raw = new URL(`http://docker${request.path}`).searchParams.get('filters');
+    const filters = raw === null ? {} : networkObject(JSON.parse(raw));
+    const labels = filters.label ?? [];
+    if (!Array.isArray(labels)) throw new Error('Malformed fixture label filters');
+    const selected = [...containers.values()].filter((container) => {
+      const actual = networkObject(container.Config.Labels ?? {});
+      return labels.every((label: unknown) => {
+        if (typeof label !== 'string') throw new Error('Malformed fixture label filter');
+        const equals = label.indexOf('=');
+        return equals === -1
+          ? label in actual
+          : actual[label.slice(0, equals)] === label.slice(equals + 1);
+      });
+    });
     return {
       status: 200,
-      document: [...containers.values()].map((container) => ({
+      document: selected.map((container) => ({
         Id: container.Id,
         Names: [container.Name],
         ImageID: container.Image,
@@ -245,7 +315,7 @@ export function startupDaemon(): StartupDaemon {
       Config: body,
       HostConfig: networkObject(body.HostConfig),
       State: { Running: false },
-      NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
+      NetworkSettings: { Ports: publishedPorts(body) },
     };
     container.NetworkSettings.Networks = networkState.attach(container, body);
     containers.set(container.Id, container);
@@ -364,6 +434,23 @@ export function startupDaemon(): StartupDaemon {
   };
 }
 
+/** Seed only the external Engine, preserving the platform's primary bridge for lifecycle assertions. */
+export function seedPlatform(daemon: StartupDaemon, name: string, id: string): StartupNetwork {
+  daemon.setContainerId(id);
+  const created = daemon.reply({
+    method: 'POST',
+    path: `/containers/create?name=${encodeURIComponent(name)}`,
+    body: { Image: START_IMAGE, Labels: {}, HostConfig: { NetworkMode: 'bridge' } },
+  });
+  const started = daemon.reply({ method: 'POST', path: `/containers/${id}/start`, body: {} });
+  daemon.setContainerId(START_CONTAINER);
+  if (created.status !== 201 || started.status !== 204)
+    throw new Error('Fixture platform creation/start failed');
+  const primary = daemon.networks.get('0'.repeat(64));
+  if (primary === undefined) throw new Error('Fixture primary bridge missing');
+  return primary;
+}
+
 export async function startupEvidence(database: DatabaseHandle, input: StartUserContainerInput) {
   const overlay = join(input.config.managedConfigDir, `${input.userId}.patch.yml`);
   return {
@@ -420,6 +507,27 @@ export function startupBarrier() {
   };
 }
 
+function startupInput(
+  root: string,
+  seccompProfilePath: string,
+  userImage: string,
+  subnetPool: string,
+): StartUserContainerInput {
+  return {
+    userId: START_USER,
+    config: {
+      userImage,
+      seccompProfilePath,
+      managedConfigDir: join(root, 'managed'),
+      authority: 'team.example:8443',
+      subnetPool,
+    },
+    modelSettings: START_MODEL,
+    modelKey: 'fixture-private-key',
+    permission: START_PERMISSION,
+  };
+}
+
 /** Reusable public-owner fixture with actual SQLite; callers own closing/removing its resources. */
 export async function startupOwnerFixture() {
   const root = await mkdtemp(join(tmpdir(), 'dsh-owner-'));
@@ -443,20 +551,12 @@ export async function startupOwnerFixture() {
       return raw.json(method, path, body, signal, maxBytes);
     },
   };
-  const owner = createOrchestrator({ client, database });
-  const input: StartUserContainerInput = {
-    userId: START_USER,
-    config: {
-      userImage: 'dsh-team-user:local',
-      seccompProfilePath,
-      managedConfigDir: join(root, 'managed'),
-      authority: 'team.example:8443',
-      subnetPool: '172.30.0.0/16',
-    },
-    modelSettings: START_MODEL,
-    modelKey: 'fixture-private-key',
-    permission: START_PERMISSION,
-  };
+  const owner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
+  const input = startupInput(root, seccompProfilePath, 'dsh-team-user:local', '172.30.0.0/16');
   return {
     root,
     database,
@@ -524,6 +624,86 @@ export function startupUnixServer(
       else void waiting.then(send);
     });
   });
+}
+
+interface UnixStartupOptions {
+  readonly rootPrefix: string;
+  readonly users: Readonly<Record<string, string>>;
+  readonly userImage: string;
+  readonly subnetPool: string;
+  readonly transport: OrchestratorDependencies['config'];
+}
+
+/** Shared real Unix/SQLite owner; mutation acceptance and captured response barriers stay independent. */
+export async function startupUnixOwnerFixture(options: UnixStartupOptions) {
+  const root = await mkdtemp(join(tmpdir(), options.rootPrefix));
+  const database = openDatabase(join(root, 'platform.db'));
+  applyMigrations(database);
+  for (const [user, email] of Object.entries(options.users))
+    database
+      .prepare("INSERT INTO users VALUES (?, ?, 'unused', 'employee', 'active', 1)")
+      .run(user, email);
+  const daemon = startupDaemon();
+  let accepted: ((request: StartupRequest, reply: Reply) => Reply) | undefined;
+  let barrier: ((method: string, path: string) => Promise<undefined> | undefined) | undefined;
+  let responseBarrier: ((request: StartupRequest) => Promise<undefined> | undefined) | undefined;
+  const server = startupUnixServer(
+    (request) => {
+      const result = daemon.reply(request);
+      return accepted === undefined ? result : accepted(request, result);
+    },
+    (method, path) => barrier?.(method, path),
+    (request) => responseBarrier?.(request),
+  );
+  const socket = join(root, 'engine.sock');
+  server.listen(socket);
+  await once(server, 'listening');
+  const seccompProfilePath = join(root, 'seccomp.json');
+  await writeFile(seccompProfilePath, '{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}');
+  const owner = createOrchestrator({
+    client: createDockerClient(socket),
+    database,
+    config: options.transport,
+  });
+  const input = startupInput(root, seccompProfilePath, options.userImage, options.subnetPool);
+  return {
+    root,
+    database,
+    daemon,
+    owner,
+    input,
+    replyWith(callback: typeof accepted) {
+      accepted = callback;
+    },
+    hold(callback: typeof barrier) {
+      barrier = callback;
+    },
+    holdResponse(callback: typeof responseBarrier) {
+      responseBarrier = callback;
+    },
+    async close() {
+      server.closeAllConnections();
+      if (server.listening)
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+      database.close();
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+/** A failed submitted startup must not claim success or destroy a resource it cannot safely retire. */
+export async function expectUnconfirmedStartup(
+  context: Pick<StartupOwnerFixture, 'owner' | 'input' | 'daemon'>,
+): Promise<void> {
+  await expect(context.owner.startUserContainer(context.input)).rejects.toThrow(
+    'compensation failed or unconfirmed',
+  );
+  expect(context.daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
 }
 
 export const CREATED_AND_STARTED = [

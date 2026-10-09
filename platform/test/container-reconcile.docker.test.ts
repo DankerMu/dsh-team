@@ -20,7 +20,11 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     join(dirname(lifecycle.overlayDirectory), 'reconciliation-platform.db'),
   );
   const { raw, client } = startupClient(lifecycle);
-  const owner = createOrchestrator({ client, database });
+  const owner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   const authority = 'reconcile.example:8443';
   const input = {
     userId: userA,
@@ -71,7 +75,11 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     const before = await Promise.all(
       [userA, userB].map((userId) => startupEvidence(database, { ...input, userId })),
     );
-    const reconstructed = createOrchestrator({ client, database });
+    const reconstructed = createOrchestrator({
+      client,
+      database,
+      config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+    });
 
     await reconstructed.reconcile();
     await reconstructed.reconcile();

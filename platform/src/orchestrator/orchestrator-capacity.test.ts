@@ -157,7 +157,11 @@ it('failed indexed start remains counted after owner reconstruction', async () =
   await expect(owner.startUserContainer(input)).rejects.toThrow('start persistence');
   const before = database.prepare('SELECT * FROM instances').all();
   const requests = [...daemon.requests];
-  const reconstructed = createOrchestrator({ client, database });
+  const reconstructed = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
 
   expect(await reconstructed.startUserContainer({ ...input, userId: OTHER_USER })).toEqual({
     outcome: 'full',

@@ -10,10 +10,13 @@ import {
 import { containerId, object, resolvedImageId } from './identity.ts';
 import { validateUserNetwork } from './networks.ts';
 import { stopUserContainer } from './stop.ts';
+import { upstreamHost } from './transport.ts';
+import type { TransportContext } from './transport.ts';
 
 export interface ReconciliationInput {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
+  readonly transport: TransportContext;
   readonly userId: string;
   readonly signal?: AbortSignal;
 }
@@ -84,11 +87,14 @@ export function discoverReconciliationUsers(
   return bounded(input.signal, (signal) => discover(input, signal));
 }
 
-function validateIndexed(instance: Record<string, unknown>): number | undefined {
+function validateIndexed(
+  instance: Record<string, unknown>,
+  transport: TransportContext,
+): number | undefined {
   containerId({ Id: instance.container_id });
   resolvedImageId(instance.image_id);
   if (typeof instance.image_tag !== 'string' || instance.image_tag.length === 0) throw new Error();
-  indexedEndpoint(instance, instance.status !== 'running');
+  indexedEndpoint(instance, instance.status !== 'running', transport.config.upstreamMode);
   if (instance.dsh_cookie === null || instance.dsh_cookie === '') return undefined;
   if (typeof instance.dsh_cookie !== 'string') throw new Error();
   return dshCookieExpiresAt(instance.dsh_cookie);
@@ -112,15 +118,28 @@ async function healthy(
   }
   const name = `dsh-team-u-${input.userId}`;
   if (!inspectUserContainerState(document, id, name, input.userId, image)) return false;
-  const port = inspectUserContainerEndpoint(document, id, name, input.userId, image);
+  const port = inspectUserContainerEndpoint(
+    document,
+    id,
+    name,
+    input.userId,
+    image,
+    input.transport.config.upstreamMode,
+  );
   const client: DockerClient = {
     ...input.client,
     json: (method, path, body, _signal, maxBytes) =>
       input.client.json(method, path, body, signal, maxBytes),
   };
-  await validateUserNetwork(client, input.userId, document);
+  await validateUserNetwork(client, input.userId, document, input.transport);
   // Incomplete starting state can be retired, never promoted into a ready survivor.
   if (instance.upstream_port !== null && instance.upstream_port !== port) throw new Error();
+  if (
+    instance.upstream_host !== null &&
+    instance.upstream_host !==
+      upstreamHost(document, input.userId, input.transport.config.upstreamMode)
+  )
+    throw new Error();
   return (
     account.status === 'active' && instance.status === 'running' && (expiresAt ?? 0) > Date.now()
   );
@@ -135,7 +154,7 @@ async function reconcile(input: ReconciliationInput, signal: AbortSignal): Promi
     input.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(input.userId),
   );
   if (instance.status === 'stopped' && instance.container_id === null) return;
-  const expiresAt = validateIndexed(instance);
+  const expiresAt = validateIndexed(instance, input.transport);
   const survivor = await healthy(input, account, instance, signal, expiresAt);
   const current = () => {
     assertCurrentSnapshot(input, account, instance, signal);

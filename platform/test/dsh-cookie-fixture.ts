@@ -81,6 +81,8 @@ export function buildCookieFixtureApp(
       userImage: 'dsh-team-user:local',
       seccompProfilePath: join(root, 'seccomp.json'),
       subnetPool: '172.30.0.0/16',
+      upstreamMode: 'published-loopback',
+      platformContainerName: 'dsh-team-platform',
       publicUrl: `http://${authority}`,
       authority,
       cookieSecure: false,

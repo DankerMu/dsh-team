@@ -72,7 +72,11 @@ beforeEach(async () => {
   server.listen(socket);
   await once(server, 'listening');
   client = createDockerClient(socket);
-  owner = createOrchestrator({ client, database });
+  owner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
   ({ startUserContainer } = owner);
   input = {
     userId: START_USER,

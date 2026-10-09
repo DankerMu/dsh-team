@@ -21,6 +21,7 @@ function fixture(account: unknown) {
   } as unknown as DatabaseHandle;
   ({ stopUserContainer } = createOrchestrator({
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
     client: createDockerClient('/fixture/docker.sock', daemon.transport),
   }));
   const input: StopUserContainerInput = {
@@ -66,6 +67,7 @@ function indexedFixture(transport?: DockerTransport) {
   ({ stopUserContainer } = createOrchestrator({
     client: createDockerClient('/fixture/docker.sock', transport ?? daemon.transport),
     database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
   }));
   const input: StopUserContainerInput = {
     userId: START_USER,

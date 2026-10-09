@@ -16,6 +16,8 @@ const CONFIG = {
   userImage: 'dsh-team-user:local',
   seccompProfilePath: '/unused/seccomp.json',
   subnetPool: '172.30.0.0/16',
+  upstreamMode: 'published-loopback',
+  platformContainerName: 'dsh-team-platform',
   publicUrl: PUBLIC_ORIGIN,
   authority: '127.0.0.1:8080',
   cookieSecure: false,

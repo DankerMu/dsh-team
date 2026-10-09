@@ -6,10 +6,15 @@ import type { DockerClient } from './client.ts';
 import { inspectUserContainerEndpoint } from './start.ts';
 import { object, resolvedImageId } from './identity.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
+import { isIPv4 } from 'node:net';
+import { upstreamHost } from './transport.ts';
+import type { TransportContext } from './transport.ts';
+import { validateUserNetwork } from './networks.ts';
 
 export interface AcquireDshCookieInput {
   readonly client: DockerClient;
   readonly database: DatabaseHandle;
+  readonly transport: TransportContext;
   readonly userId: string;
   readonly authority: string;
   readonly signal?: AbortSignal;
@@ -37,24 +42,40 @@ export const CURRENT_INSTANCE = `user_id = ? AND container_id = ? AND upstream_h
   AND upstream_port IS ? AND image_tag = ? AND image_id = ? AND last_started_at IS ? AND status = 'starting'
   AND EXISTS (SELECT 1 FROM users WHERE id = instances.user_id AND status = 'active')`;
 
+function indexedHost(
+  host: unknown,
+  allowIncomplete: boolean,
+  mode: TransportContext['config']['upstreamMode'],
+): string | null {
+  if (allowIncomplete && host === null) return null;
+  if (typeof host !== 'string' || (mode === 'network' ? !isIPv4(host) : host !== '127.0.0.1'))
+    throw new Error();
+  return host;
+}
+
+function indexedPort(
+  port: unknown,
+  allowIncomplete: boolean,
+  mode: TransportContext['config']['upstreamMode'],
+): number | null {
+  if (allowIncomplete && port === null) return null;
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error();
+  if (mode === 'network' && port !== 3080) throw new Error();
+  return port;
+}
 export function indexedEndpoint(
   instance: Record<string, unknown>,
   allowIncomplete: boolean,
+  mode: TransportContext['config']['upstreamMode'],
 ): Pick<IndexedInstance, 'upstream_host' | 'upstream_port' | 'last_started_at'> {
-  const host = instance.upstream_host;
-  const port = instance.upstream_port;
   const started = instance.last_started_at;
-  if (host !== '127.0.0.1' && !(allowIncomplete && host === null)) throw new Error();
-  if (!(allowIncomplete && port === null)) {
-    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)
-      throw new Error();
-  }
   if (!(allowIncomplete && started === null)) {
     if (typeof started !== 'number' || !Number.isSafeInteger(started)) throw new Error();
   }
   return {
-    upstream_host: host,
-    upstream_port: port,
+    upstream_host: indexedHost(instance.upstream_host, allowIncomplete, mode),
+    upstream_port: indexedPort(instance.upstream_port, allowIncomplete, mode),
     last_started_at: started,
   };
 }
@@ -88,7 +109,7 @@ export function currentInstance(
     throw new Error();
   return {
     container_id: instance.container_id,
-    ...indexedEndpoint(instance, allowIncomplete),
+    ...indexedEndpoint(instance, allowIncomplete, input.transport.config.upstreamMode),
     image_tag: instance.image_tag,
     image_id: resolvedImageId(instance.image_id),
   };
@@ -186,6 +207,7 @@ function authenticationCookie(headers: string[] | undefined, authority: string):
 }
 
 async function exchange(
+  host: string,
   port: number,
   authority: string,
   token: string,
@@ -195,7 +217,7 @@ async function exchange(
   let incoming: IncomingMessage | undefined;
   const outgoing = request(
     {
-      hostname: '127.0.0.1',
+      hostname: host,
       port,
       method: 'GET',
       path: `/?token=${encodeURIComponent(token)}`,
@@ -261,19 +283,28 @@ export async function acquireCurrentDshCookie(input: AcquireDshCookieInput): Pro
       throw new Error();
     signal.throwIfAborted();
     stage = 'owned container';
+    const document = await input.client.json(
+      'GET',
+      `/containers/${instance.container_id}/json`,
+      undefined,
+      signal,
+    );
     const port = inspectUserContainerEndpoint(
-      await input.client.json(
-        'GET',
-        `/containers/${instance.container_id}/json`,
-        undefined,
-        signal,
-      ),
+      document,
       instance.container_id,
       `dsh-team-u-${input.userId}`,
       input.userId,
       instance.image_id,
+      input.transport.config.upstreamMode,
     );
-    if (port !== instance.upstream_port) throw new Error();
+    const client: DockerClient = {
+      ...input.client,
+      json: (method, path, body, _signal, maxBytes) =>
+        input.client.json(method, path, body, signal, maxBytes),
+    };
+    await validateUserNetwork(client, input.userId, document, input.transport);
+    const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
+    if (port !== instance.upstream_port || host !== instance.upstream_host) throw new Error();
     if (
       input.database
         .prepare(`SELECT 1 FROM instances WHERE ${CURRENT_INSTANCE} AND dsh_cookie IS NULL`)
@@ -283,7 +314,7 @@ export async function acquireCurrentDshCookie(input: AcquireDshCookieInput): Pro
     stage = 'launch announcement';
     const token = await launchToken(input.client, instance.container_id, signal);
     stage = 'HTTP exchange';
-    const cookie = await exchange(port, authority, token, signal);
+    const cookie = await exchange(host, port, authority, token, signal);
     stage = 'current instance persistence';
     signal.throwIfAborted();
     const stored = input.database
