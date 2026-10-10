@@ -373,3 +373,12 @@
 - Preserve all task11.1/11.2 admission, credential, raw-target, method-framing and cancellation behavior. No second proxy, production sampler, endpoint, config or dependency expected; change forwarding only if the actual bounded case exposes a defect.
 - Selected packs: public test/process entrypoint, resource/memory discovery, auth/secrets, shared-state/order, error/cleanup, file safety, evidence schema/units, compatibility, packaging and docs; mapped below.
 - Evidence floor: real child-process gateway plus local streaming client/upstream, exact count/digests, raw baseline/sampled/OS-high-water metrics, actual full-body-buffering controls rejected for memory not semantics, restored/stability trials, full root checks/strictOpenSpec, source/built smoke and final-head21Docker/CI.
+
+## Issue #53 fixture
+
+- Feature; expanded (agree with upstream), task11.5 only: application-owned per-user connection registration and an explicit server-side disconnect function.
+- Governing invariant: destroying one admitted user's current gateway connections closes its pending/established WebSockets and active HTTP transfers, not another user's separate connections or another application owner's resources. No permanent user ban is implied.
+- Preserve namespace/session/Origin admission, endpoint-cookie pairing, streaming/framing, parser heads and ordered EOF behavior, approved160MiB acceptance, existing app shutdown and keep-alive reuse.
+- Selected packs: public function/API, auth/secrets, shared-state/order, resource ownership, errors, compatibility, schema/configuration, packaging and docs. No new filesystem operation, persistence, dependencies or endpoint.
+- Evidence floor: semantic RED/GREEN for twoA WebSockets plus activeA download closing within1second while B continues after destruction; actual upstream teardown; pending handshake, sequential keep-alive ownership, reentrant resolver destruction, unknown/repeated disconnect and application isolation. Full checks, strictOpenSpec, source/built smoke and exact-head21Docker/CI.
+- Session invalidation triggers (#54), admin disable orchestration, instance lookup (#56) and activity persistence (#58) remain out of scope; expose the callable primitive without implementing their policy.
