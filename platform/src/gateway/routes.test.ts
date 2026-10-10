@@ -3,6 +3,7 @@ import { Socket } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { expect, it } from 'vitest';
 import { withApp } from '../../test/auth-fixture.ts';
+import { observeHttp } from '../../test/gateway-http-fixture.ts';
 
 it.each([
   ['GET', 'text/html', 302],
@@ -63,5 +64,35 @@ it('rejects upgrade storage failures without disclosing details and consumes pee
     );
     expect(socket.destroyed).toBe(true);
     request.destroy();
+  });
+});
+
+it('aborts an HTTP request queued before the application shutdown fence', async () => {
+  await withApp(async (app) => {
+    const entered = Promise.withResolvers<undefined>();
+    const resume = Promise.withResolvers<undefined>();
+    const closing = Promise.withResolvers<undefined>();
+    app.addHook('onRequest', async () => {
+      entered.resolve(undefined);
+      await resume.promise;
+    });
+    app.addHook('preClose', (done) => {
+      closing.resolve(undefined);
+      done();
+    });
+    const response = app.inject({ url: '/queued' });
+    const rejected = expect(response).rejects.toBeInstanceOf(Error);
+    try {
+      await observeHttp(entered.promise);
+      const closed = app.close();
+      await observeHttp(closing.promise);
+
+      resume.resolve(undefined);
+
+      await observeHttp(rejected);
+      await observeHttp(closed);
+    } finally {
+      resume.resolve(undefined);
+    }
   });
 });

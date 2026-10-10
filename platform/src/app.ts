@@ -11,7 +11,11 @@ import {
 import type { PlatformConfig } from './config.ts';
 import type { DatabaseHandle } from './db/index.ts';
 import { healthRoutes } from './health.ts';
-import { gatewayRoutes, type GatewayUpstreamResolver } from './gateway/index.ts';
+import {
+  createGatewayConnections,
+  gatewayRoutes,
+  type GatewayUpstreamResolver,
+} from './gateway/index.ts';
 
 /**
  * Log fields that must never be written in clear text, whatever the log level.
@@ -40,6 +44,12 @@ export interface LogDestination {
   write(line: string): void;
 }
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    disconnectUserConnections: (userId: string) => Promise<void>;
+  }
+}
+
 /** Builds the platform HTTP application without binding a port. */
 export async function buildApp(
   config: PlatformConfig,
@@ -54,6 +64,8 @@ export async function buildApp(
       ...(logDestination === undefined ? {} : { stream: logDestination }),
     },
   });
+  const connections = createGatewayConnections();
+  app.decorate('disconnectUserConnections', connections.disconnectUser);
 
   try {
     installRequestGuard(app, config.publicUrl);
@@ -87,6 +99,7 @@ export async function buildApp(
     });
     await app.register(gatewayRoutes, {
       database,
+      connections,
       authority: config.authority,
       publicUrl: config.publicUrl,
       ...(resolveUpstream === undefined ? {} : { resolveUpstream }),

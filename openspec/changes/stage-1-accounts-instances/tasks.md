@@ -711,7 +711,7 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - [x] 11.2 HTTP 转发：上游由平台会话对应的用户决定，不读取请求里的任何实例标识；去掉客户端的全部 `Cookie`，只注入该实例的 DSH cookie；`Host` 改为平台对外 authority；去掉响应里的 `Set-Cookie`。验证：集成测试（替身上游记录收到的请求）——上游收不到平台会话 cookie；浏览器收不到 DSH cookie；上游看到的 `Host` 是平台对外 authority；请求里伪造的实例标识头和查询参数不改变上游（规格“实例由平台会话决定”“DSH 凭据只在平台服务端”和“上游使用固定的对外地址”场景）。
 - [x] 11.3 流式转发：请求体和响应体不缓冲。验证：集成测试——上传和下载各一个200MiB（209,715,200字节）的流，独立平台进程峰值RSS相对传输前当前RSS的增量不超过160MiB（167,772,160字节），完整字节数和SHA-256一致；实际整包缓冲负控必须因超限被拒绝（规格“大文件上传和下载”“大文件转发的独立内存验收”场景；用户明确批准的合同修订见下）。
 - [x] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
-- [ ] 11.5 连接登记和断开：按用户登记所有打开的连接；提供“销毁某用户全部连接”的函数。验证：集成测试——一个用户有两条长连接和一个进行中的下载时调用该函数，三者在 1 秒内全部断开，另一个用户的连接不受影响。
+- [x] 11.5 连接登记和断开：按用户登记所有打开的连接；提供“销毁某用户全部连接”的函数。验证：集成测试——一个用户有两条长连接和一个进行中的下载时调用该函数，三者在 1 秒内全部断开，另一个用户的连接不受影响。
 - [ ] 11.6 平台会话失效后的长连接：平台会话被删除后，由它建立的长连接被断开。验证：集成测试覆盖规格“平台会话失效后长连接不再可用”的场景。
 - [ ] 11.7 实例未运行时的回应：页面请求被重定向到 `/_platform/wait`，其他请求得到 503 和机器可读的原因（已停止、启动中、已满、出错、未配置模型）；实例状态由注入的查询函数提供。验证：集成测试——五种状态下页面请求都得到指向等待页的重定向，接口请求都得到 503 和对应原因。
 
@@ -768,6 +768,16 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 集成后本地验证（#51）：停放分支接入已合并#52的main后，独立转发上限167,772,160字节、私有启动歧义上限50,000,000字节分离。普通完整上传/下载RSS增量71,499,776/90,112,000字节通过；实际上传/下载整包缓冲控制分别415,449,088/458,342,400字节，被新上限拒绝且字节数/SHA-256仍正确。`pnpm fmt && pnpm check` exit0，1201单元、724集成（含所有#52回归）、逐文件覆盖、构建/契约/anti-drift通过，重复率2.87%。独立实际源码/编译产物各执行恢复与专用稳定性窗口，四次完整往返通过；受控IPC注入启动高水位比基线高100,000,000字节，在上传前明确拒绝，捕获子进程退出、IPC断开和临时目录删除。第一次故障smoke错误地匹配外层安全诊断而非cause，保留失败日志，修正观察断言后通过；未改采样/生产代码。最终审查、冻结头Docker和CI仍待完成，不能以本地通过替代合并门槛。
 
 合并资格验证（#51）：代码审查头`ca656f9f97466f42d9fa692b62b5cc1d9835eb68`四席高风险交叉审查clean，未消耗修复轮；固定Node24.13.1/pnpm10.34.6的giap-vps实际200MiB普通上传/下载增量64,880,640/74,055,680字节，整包缓冲反例421,265,408/449,650,688字节，三例完整性及判据通过。独立源码和编译产物恢复/稳定性均通过；完整Docker13文件/21测试、153.84秒、exit0，独立容器/网络/卷/测试镜像清单全空。[可信证明](https://github.com/DankerMu/dsh-team/pull/159#issuecomment-6091083212)，标签事件CI38003142008全绿。初始opened事件快照不含创建后添加的豁免标签，其重跑不代表新标签状态；使用已存在的labeled事件补可信状态后通过，没有改门槛。后续仅本完成记录变更，最终合并提交的精确头Docker/CI仍以PR159证据为准。
+
+### Issue #53 risk/evidence map (task11.5 only)
+
+- Public API/auth/secrets/invariant: root application disconnectUserConnections(userId), owned registry only, session-derived user keys; realtwo-user acceptance with2AWebSockets+activeAdownload closed within1second and B byteexchange afterward. No request-selected user ownership or public management route.
+- Shared state/order/resource/errors: activeHTTPfinish versus socketclose, pending upgrade and late101 cancellation, snapshot destruction, cleanup idempotence, empty-bucket removal, same-user future requests and reentrant resolver fences; actual client/upstream close observations. Preserve anonymous upgrade shutdown ownership and app-local isolation.
+- Compatibility/schema/config/packaging/docs: existingOrigin, credentials, streaming/framing, heads/orderedEOF and160MiB tests remain; no schema/config/dependency changes, source/built actualdisconnect smoke, fullcheck/strictOpenSpec/final21Docker/CI. FileIO not selected. Sessionrevocation, admin orchestration and activitypersistence remain laterissues.
+
+本地验证（#53）：根app公开disconnectUserConnections，单个应用拥有registry，HTTP响应finish/close解除登记，升级从匿名关闭拥有者转入已鉴权用户，删除原upgrade-only集合。已观察未登记的真实2WebSocket+下载在1秒内不关闭的RED；接线后七项实际TCP集成通过，含其他用户后续收发、同TCP先A后B复用、HTTP/升级resolver同步重入、待握手断开、跨app及HTTP关闭。初次接线后A客户端和下载上游已关闭，但测试Node升级上游处于readableEnded=true/writableFinished=false；按既有fixture的end→destroy收尾后绿，未放宽1秒或修改生产关闭来掩盖测试半关闭。独立实际source/dist smoke分别在0.955/0.459ms内观察A三个客户端及配对上游关闭，B随后精确收发并在app关闭时结束；不把单次耗时当长期性能保证。1208单元/731集成及覆盖、静态/构建/契约通过，最终dead-code指出一个未使用的类型re-export已删除并重验通过；完整最终check、review、冻结头Docker/CI仍为合并门槛。调用方不自动撤销平台会话，#54仍独立。
+
+最终本地门禁（#53）：移除未使用的类型re-export并补齐排队HTTP关闭回归的失败收尾后，`pnpm fmt && pnpm check && openspec validate stage-1-accounts-instances --strict --no-interactive`完整exit0，1208单元/731集成、逐文件覆盖和全部静态/契约/构建/anti-drift通过，重复率2.84%。source/dist独立smoke已完成，临时脚本归档后删除；PR审查及最终精确头Docker/CI尚未宣称通过。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 

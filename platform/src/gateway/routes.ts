@@ -11,6 +11,7 @@ import {
   requestTarget,
 } from './http.ts';
 import type { GatewayUpstreamResolver } from './types.ts';
+import type { GatewayConnections } from './connections.ts';
 
 const ERRORS = {
   401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
@@ -46,10 +47,12 @@ function pageRequest(request: FastifyRequest): boolean {
 
 export const gatewayRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
+  connections: GatewayConnections;
   authority: string;
   publicUrl: string;
   resolveUpstream?: GatewayUpstreamResolver;
-}> = (app, { database, authority, publicUrl, resolveUpstream }, done) => {
+}> = (app, { database, connections, authority, publicUrl, resolveUpstream }, done) => {
+  let closing = false;
   function admission(request: IncomingMessage): string | keyof typeof ERRORS {
     if (platformPath(request.url ?? '/')) return 404;
     try {
@@ -62,10 +65,17 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
   }
   function admit(request: FastifyRequest, reply: FastifyReply): void {
+    if (closing) {
+      reply.hijack();
+      reply.raw.destroy();
+      return;
+    }
     const code = admission(request.raw);
     if (typeof code === 'string') {
+      connections.track(code, reply.raw, true);
       try {
         const upstream = resolveUpstream?.(code);
+        if (reply.raw.destroyed) return;
         if (upstream !== undefined) {
           forwardHttp(request, reply, upstream, authority);
           return;
@@ -101,8 +111,6 @@ export const gatewayRoutes: FastifyPluginCallback<{
     },
     admit,
   );
-  const upgrades = new Set<Duplex>();
-  let closing = false;
   function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (closing) {
       socket.on('error', () => {
@@ -111,10 +119,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
       socket.destroy();
       return;
     }
-    upgrades.add(socket);
-    socket.once('close', () => {
-      upgrades.delete(socket);
-    });
+    connections.track(undefined, socket);
     const selected = admission(request);
     if (typeof selected !== 'string') {
       rejectUpgrade(socket, selected);
@@ -128,8 +133,10 @@ export const gatewayRoutes: FastifyPluginCallback<{
       rejectUpgrade(socket, 400);
       return;
     }
+    connections.track(selected, socket);
     try {
       const target = resolveUpstream?.(selected);
+      if (socket.destroyed) return;
       if (target === undefined) {
         rejectUpgrade(socket, 503);
         return;
@@ -145,16 +152,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
   app.server.on('upgrade', upgrade);
   app.addHook('preClose', async () => {
     closing = true;
-    await Promise.all(
-      [...upgrades].map((socket) => {
-        const closed = Promise.withResolvers<undefined>();
-        socket.once('close', () => {
-          closed.resolve(undefined);
-        });
-        socket.destroy();
-        return closed.promise;
-      }),
-    );
+    await connections.close();
   });
   app.addHook('onClose', (_instance, closeDone) => {
     app.server.removeListener('upgrade', upgrade);
