@@ -4,7 +4,7 @@ import { expect } from 'vitest';
 import { createDockerClient } from '../src/orchestrator/index.ts';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
-import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { START_MODEL } from './container-start-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -211,7 +211,6 @@ export async function startDockerInstance(
       subnetPool: '172.30.0.0/16',
     },
     modelSettings: START_MODEL,
-    permission: START_PERMISSION,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
   });
   if (result.outcome !== 'starting') throw new Error('Production instance did not start');

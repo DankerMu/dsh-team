@@ -1,0 +1,30 @@
+{
+  "name": "@dsh-team/permission-tiers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "0.2.0-rc.2"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "review.js",
+    "README.md"
+  ]
+}

@@ -894,13 +894,33 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 
 依赖：第 8、15 组。
 
-- [ ] 16.1 在钉定的 DSH 发行版上查明：三档各对应权限预设表里的哪一项、默认档怎么设、按 Session 切换的界面入口；把对应关系写进 `design.md` 决定 13。验证：决定 13 的表里每一档都有具体的预设标识。
-- [ ] 16.2 受管覆盖层按 `settings` 里的默认权限档写入。验证：`pnpm test:docker`——默认档设为 Yolo 时新 Session 是 Yolo；改为人工批准并重启后新 Session 是人工批准（规格“默认权限档由管理员设定”）。
+- [x] 16.1 在钉定发行版验证并交付三档执行插件 `plugins/permission-tiers/`，不改 DSH 源码：人工逐次询问，Auto 模型审查/不可用询问，Yolo 不询问；设计决定13登记具体标识、原生 Session 切换入口和发行版限制。插件随镜像离线、可信加载；缺失/损坏不得让 Agent 静默启动。验证：真实 DSH native/PTC/同进程委派工具及文件副作用、批准/拒绝、Auto 协议失败与取消、UI截图及零新增 console error；确定性协议服务不冒充真实开发模型。
+- [x] 16.2 受管覆盖层从 `settings.defaultPermissionTier` 生成唯一三档权限表/默认档和插件依赖，迁移全部生产与测试调用方。验证：`pnpm test:docker`——默认 Yolo 新 Session 是 Yolo；人工批准和 Auto 各自重启后新 Session 对应新默认，既有 Session 保留选择，两个 Session 切档互不影响；员工修改默认/插件副本不能覆盖受管策略。
 - [ ] 16.3 人工批准档和 Yolo 档的行为。验证：`pnpm test:model`——人工批准档下写文件前出现询问，同意后写入、拒绝后文件不存在；Yolo 档下写入且没有询问；在同一实例的两个 Session 里设不同档位互不影响（规格“人工批准档”“Yolo 档”“三档可选并按 Session 切换”）。
 - [ ] 16.4 Auto 档的行为。验证：`pnpm test:model`——在开发模型上审查可用时，普通写文件被放行且没有询问；审查不可用时退为询问。把在开发模型上观察到的结果写进 `design.md` Open Questions 第四条（规格“Auto 档”）。
 
-Suggested fixture level: compact - 改动只是覆盖层里的一个取值，其余是验证
-Minimal mergeable slice: 16.1 加 16.2（对应关系和默认档写入，约 80 行；行为验证随后补）
+Suggested fixture level: expanded - 权限执行门禁、插件失效关闭、Session 持久与委派语义、镜像可信交付；原 compact 假设已被发行版实测否定
+Minimal mergeable slice: #83 交付完整三档插件和默认配置接线（16.1–16.2）；#84/#85 保留真实开发模型上的16.3/16.4验收及必要插件修正。不能以默认 Auto 标签已出现代替实际模型门禁。
+
+用户于2026-10-10明确批准保留基线、扩大#83–#85插件/镜像/覆盖层范围；#83仍依赖#32/#78，#84依赖#83/#82，#85依赖#84。#83合并后恢复#56原DAG，不提前勾选16.3/16.4。超过400行时按仓库规则在PR中说明原子权限cutover理由并申请diff-limit-exempt，不删测试或拆出不安全中间态。
+
+### Issue #83 risk/evidence map
+
+- Public API / CLI / script entry — selected: existing generator/start callers and every image-build entry migrate; actual DSH catalog, `/permission` and browser controls prove the exposed contract.
+- Config / project setup — selected: admin setting selects all three defaults; managed overlay wins employee edits; missing/broken gate prevents required agent-loop activation.
+- File IO / path safety / overwrite — selected: immutable image plugin bytes, existing whole-file0444 overlay publication, owned volumes/files survive restart; no profile-writable policy authority.
+- Schema / columns / units / field names — selected: unchanged DB/API enum maps to exact release-valid preset IDs, strict review response and existing Session event/projection contracts; invalid/ambiguous response never grants.
+- Auth / permissions / secrets — selected: real write/edit/bash/run_code and delegated writes need required authorization; reject means no side effect; preserve guards; no raw model/provider errors or credentials in logs/UI.
+- Concurrency / shared state / ordering — selected: two Sessions independent, in-flight tier switch/cancel cannot apply stale grant, child initialization precedes execution, unload drains and does not migrate to Yolo.
+- Resource limits / large input / discovery — selected: bounded review output/deadline and cancellation; no unbounded background jobs; owned Docker/browser cleanup independently inventoried.
+- Legacy compatibility / examples — selected: all generator/start/build callers updated atomically; existing Sessions/forks retain identity; existing model/locale/tool filtering/resource controls unchanged.
+- Error handling / rollback / partial outputs — selected: Auto unavailable -> real human ask, reject/cancel -> no body; gate missing/corrupt -> startup failure; failed overlay publication retains previous complete document.
+- Release / packaging / dependency compatibility — selected: exact DSH peer pin, installation-owned public dependencies, root-owned plugin package, all build entrypoints and full same-head Docker suite.
+- Documentation / migration notes — selected: design13/table and actual limits, plugin/image usage, scope authorization and critical-path ledger; #84/#85 real-model conclusions remain unchecked.
+
+Parent-owned verification order: capture semantic RED through the existing callable boundary, then implementation; `pnpm check` and strict OpenSpec; actual browser/tool smoke plus independent missing-gate / skipped-approval / Auto-error-allow counterexamples and restoration; risk-scaled cross-review; exact reviewed-head full giap-vps Docker and CI before merge. No thresholds, tests, isolation options, or acceptance criteria are relaxed.
+
+验证记录（#83）：父级真实native write探针先RED（人工档54字节写入却0审批），插件后GREEN（原生批准前无文件、批准后精确字节）。`pnpm check`1397unit/58files、769integration/46files通过，client逐文件覆盖100%、host/review均满足原80%门槛，重复率2.93%。权限专项Docker3/3通过（含永久浏览器用例23.62s）；三默认重启、既有Session、native/PTC/委派、Auto协议错误与取消、ABA/finalguard、卸载与可信交付均走实际DSH。原完整浏览器根/子拒绝、允许、取消6场景在修复与故障恢复两次通过，零新增console errors。首次子UI失败经用户额外一轮授权，CDP确认原生-10只读组件抢在+1审批前，新增严格子范围-20面板驱动原生pending；故障对照只去掉client声明即恢复相同子UI失败。另两个独立host构建副本分别注入人工不询问、Auto技术错误放行，均由真实文件先于授权/0审批判为语义RED，canonical前后GREEN；独立四类Docker资源清单为空。该证据不冒充#84/#85真实模型结果；完整冻结head Docker、review和CI仍是合并门禁。
 
 ## 17. 两个办公 Agent（任务包 1.15）
 

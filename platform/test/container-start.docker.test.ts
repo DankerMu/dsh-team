@@ -9,7 +9,7 @@ import type { PlatformConfig } from '../src/config.ts';
 import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { START_MODEL } from './container-start-fixture.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
 import { observeResourceOom } from './resource-oom-fixture.ts';
 import {
@@ -53,7 +53,6 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
         },
         modelSettings: START_MODEL,
         modelKey: 'docker-acceptance-only-not-a-model-credential',
-        permission: START_PERMISSION,
       };
       const concurrentStarts = attempt === 0 ? 10 : 1;
       const results = await Promise.all(
@@ -334,7 +333,6 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       config,
       modelSettings: START_MODEL,
       modelKey: 'docker-acceptance-only-not-a-model-credential',
-      permission: START_PERMISSION,
     });
     if (a.outcome !== 'starting') throw new Error('Expected configured sibling startup');
     stage = 'A independent inspection';
@@ -357,7 +355,6 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
       config,
       modelSettings: START_MODEL,
       modelKey: 'docker-acceptance-only-not-a-model-credential',
-      permission: START_PERMISSION,
     });
     if (b.outcome !== 'starting') throw new Error('Expected configured bounded startup');
     stage = 'B independent inspection';
@@ -547,7 +544,6 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
       config,
       modelSettings: START_MODEL,
       modelKey: 'docker-acceptance-only-not-a-model-credential',
-      permission: START_PERMISSION,
     });
     if (started.outcome !== 'starting') throw new Error('Expected configured cookie startup');
     expect(

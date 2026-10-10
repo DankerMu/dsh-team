@@ -112,6 +112,18 @@
 - **WHEN** 管理员把默认档改为人工批准并重启实例，员工新建一个 Session
 - **THEN** 该 Session 的权限档是人工批准
 
+#### Scenario: 管理员选择 Auto 默认档
+
+- **WHEN** 管理员把默认档改为 Auto 并重启实例，员工新建一个 Session
+- **THEN** 该 Session 的权限档是 Auto，后续写文件或执行命令真实进入模型审查门禁
+- **AND** 不能以发行版拒绝的 `defaultPreset: auto` 或没有执行门禁的标签替代
+
+#### Scenario: 默认档变更保留既有 Session
+
+- **WHEN** 管理员改变默认档并重启，员工恢复已有独立权限选择的 Session
+- **THEN** 已有 Session 仍保留原选择，之后的新 Session 使用新默认
+- **AND** 员工修改实例内默认设置不能覆盖管理员的默认档
+
 ### Requirement: 覆盖层整份生成
 
 平台 MUST 以整份替换的方式写入覆盖层，写入中途失败 MUST NOT 留下不完整的文件。
@@ -173,8 +185,9 @@
 
 #### Scenario: 模型和权限配置序列化
 
-- **WHEN** 输入两个模型，其中一个指定contextWindow，并提供默认模型和已解析的DSH默认权限配置
-- **THEN** 输出只有指定provider/模型及正确默认值，未指定的contextWindow字段保持缺省，权限预设定义不丢失，且没有密钥原文
+- **WHEN** 输入两个模型，其中一个指定contextWindow，并提供默认模型和管理员的`defaultPermissionTier`
+- **THEN** 输出只有指定provider/模型及正确默认值，未指定的contextWindow字段保持缺省，且没有密钥原文；权限表来自平台唯一映射，`approval`、`auto`、`yolo`分别选择`approval`、`auto-review`、`danger-full-access`，同时生成完整三档表和权限插件必需依赖
+- **AND** 生成器仍是纯函数；废弃的任意DSH权限表输入与orchestrator启动输入、全部生产/测试调用方一起移除，不保留透传旁路
 
 #### Scenario: 每个输入预设移除联网工具
 

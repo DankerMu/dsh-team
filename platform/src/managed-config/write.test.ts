@@ -35,12 +35,7 @@ const INPUT: ManagedConfigInput = {
     models: [{ name: 'alpha' }],
     defaultModel: 'alpha',
   },
-  permission: {
-    presets: {
-      'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
-    },
-    defaultPreset: 'danger-full-access',
-  },
+  defaultPermissionTier: 'yolo',
   presets: [{ id: 'preset-office', config: { plugins: [] } }],
   localePatch: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }],
 };

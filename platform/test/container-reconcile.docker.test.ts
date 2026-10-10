@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { allocateSubnet, createOrchestrator } from '../src/orchestrator/index.ts';
-import { startupEvidence, START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { startupEvidence, START_MODEL } from './container-start-fixture.ts';
 import {
   inspect,
   record,
@@ -42,7 +42,6 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
-    permission: START_PERMISSION,
   };
   try {
     applyMigrations(database);

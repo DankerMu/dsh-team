@@ -41,7 +41,6 @@ export interface StartUserContainerInput {
   readonly userId: string;
   readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;
   readonly modelKey?: string | undefined;
-  readonly permission: ManagedConfigInput['permission'];
   readonly signal?: AbortSignal;
 }
 
@@ -653,7 +652,7 @@ export async function startUserContainer(
     const envName = modelSettings.apiKeyEnv;
     validateModelEnvironment(envName, input.modelKey);
     stage = 'resource limits';
-    const { cpuCores, memoryMiB } = readSettings(database);
+    const { cpuCores, memoryMiB, defaultPermissionTier } = readSettings(database);
     const nanoCpus = resourceLimit(cpuCores, 1_000_000_000);
     const memory = resourceLimit(memoryMiB, 1_048_576);
     const deadline = AbortSignal.timeout(START_TIMEOUT_MS);
@@ -705,7 +704,7 @@ export async function startUserContainer(
     stage = 'managed overlay';
     const generated = generateManagedConfig({
       ...observed,
-      permission: input.permission,
+      defaultPermissionTier,
       modelSettings,
     });
     if (generated.outcome === 'unconfigured') return generated;

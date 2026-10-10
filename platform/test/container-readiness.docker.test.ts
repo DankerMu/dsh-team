@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
-import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { START_MODEL } from './container-start-fixture.ts';
 import {
   cookieHttpStatus,
   inspect,
@@ -173,7 +173,6 @@ async function readinessScenario(
         },
         modelSettings: START_MODEL,
         modelKey: 'docker-acceptance-only-not-a-model-credential',
-        permission: START_PERMISSION,
       });
       expect(started.outcome).toBe('starting');
     } catch (error) {

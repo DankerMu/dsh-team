@@ -153,13 +153,35 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 ### 13. 权限三档
 
-| 档位     | 行为                                               |
-| -------- | -------------------------------------------------- |
-| 人工批准 | Agent 写文件或执行命令前询问员工                   |
-| Auto     | 由模型逐次审查，放行的不询问（DSH 的 Auto review） |
-| Yolo     | 不询问，完全权限                                   |
+| 平台档位               | DSH 预设标识         | sandbox / approval         | 执行策略                                 |
+| ---------------------- | -------------------- | -------------------------- | ---------------------------------------- |
+| `approval`（人工批准） | `approval`           | danger-full-access / ask   | 每次写文件、执行命令先询问               |
+| `auto`（Auto）         | `auto-review`        | danger-full-access / ask   | 每次先模型审查；未放行或审查不可用转询问 |
+| `yolo`（Yolo）         | `danger-full-access` | danger-full-access / never | 不增加询问或模型审查                     |
 
-三档对应 DSH 权限预设表里的哪几行、怎么设默认档，由任务包 1.13 在发行版上确认后写进受管覆盖层。默认档初始为 Yolo（D23），存在 `settings` 里，后台可改。
+默认档初始为 Yolo（D23），存在 `settings.defaultPermissionTier`，后台可改；平台唯一映射生成受管 `permission.config`，不再接受调用方随意提供权限表。改默认并重启只影响之后的新 Session，既有 Session 的持久选择保持。原生 `conversation.input.permission` 与 `/permission <id>` 切换当前 Session；General 中的默认设置仍受覆盖层保护，员工不能改管理员默认。
+
+**发行版约束与授权：** DSH0.2.0-rc.2 的 `workspace-write + ask` 不是逐操作批准；保留的 `auto` 身份不能成为默认；experimental-auto-review 的技术失败返回 deny 且没有可安全归因的结构化错误。2026-10-10 用户明确选择保留基线、扩大 #83–#85 到本仓库插件/镜像/覆盖层；不改 DSH 源码，不通过改标签或匹配错误文本假装满足基线。证据见 #83 issuecomment6095225263。新增自定义 `auto-review` 而不注册原生 `auto`，因此不会留下两套 Auto 实现。
+
+**Issue #83 expanded execution contract**
+
+- Change surface：`plugins/permission-tiers/`、用户镜像及所有构建入口、managed-config 的输入/生成器、orchestrator 启动调用和测试；settings 存储/API 三档枚举不变。
+- Governing invariant：任一受管 Session 的写文件/执行命令，只有当前档位要求的授权完成且其他门禁均通过后，真实工具体才能执行；插件缺失、取消、重载不能退成 Yolo。
+- 单一 host 插件通过公开 `tools/pre-execute` 安装门禁，提供 `managedPermissions` 服务；覆盖层给 required `agent-loop` 加此 inject 依赖。插件从 root-owned 镜像路径加载，不信任员工可写 profile 内的同名包。用户覆盖层不能移除此依赖或替换插件实现。
+- 人工批准与 Auto 使用相同原生 ask bundle，持久 `permission/preset` 保留不同身份；`write`、`edit`、`bash`、`run_code` 都进门禁，包括 PTC 内层工具。`run_code` 是执行程序，外层程序及其内层写/命令分别授权，不能跳过外层以放过直接 Node 写入/进程调用。普通只读工具不新增询问。
+- Auto 实现本仓库的最小审查策略：通过现有 `llm.stream` 使用当前 Agent 的模型路由审查冻结的工具名、schema、参数和 cwd；输入是待审数据，不是可覆盖审查规则的指令。只接受完整、严格的 allow 决策；非放行、无模型、连接/协议/解析失败、超时均转原生询问，不直接放行，不泄露原始错误。普通工作目录内文件写入是必须验证的可放行情形；不复制上游历史重建/风险算法，不新增模型地址或密钥来源。
+- 模型审查有固定有界响应和可取消期限；调用取消/插件卸载返回 cancel，等待自有异步工作收敛。任何 downstream deny/ask/cancel 保持；批准不是绕过 registry guard 的能力。按权限事件修订而非仅最终档位名识别陈旧授权，覆盖 ABA 切档，并在原生 ask 返回后、真实工具分派前做最终单调门禁校验。
+- 同进程 subagent 不能利用发行版只继承原生 auto/Yolo 且强制 never 的行为逃过门禁：在 awaited `agent/created` 初始化完成、第一段模型/工具工作释放前，首次创建的子 Agent 继承父 Session 的三档语义并保持独立持久选择；这不是声称注册表/Session 尚未发布。resume 不重新继承或重设默认；ordinary fork 保持原选择。通过公开 prompt 扩展同步子 Agent 的权限指导，不能保留「审批必定自动拒绝」作为新策略下的有效指导。真实委派后验证子 Session 自己的审批面板/审计与文件副作用；不冒充父 Session 请求或用根 Session 截图代替子范围。
+- 子任务审批 UI 的已证实发行版冲突：composer 升序首匹配，原生一次性子任务只读 seat(-10) 抢在原生审批 seat(+1) 前。2026-10-10 只读 CDP 运行22bdc8ca实测正确子范围的 pending 已注册且仍被-10选中；用户授权额外一轮诊断优先修复。扩展同一权限插件的可信 client artifact：仅当前 one-shot 子范围且 pending.kind=approval、pending.sessionId=owner.sessionId 时由-20 seat呈现本仓库审批面板，通过原生 PendingApproval.answer 提交一次决定；其余范围完全退让，未审批时的只读限制不变。根 Session 继续原生面板；子面板不冒充未导出的上游 ApprovalPanel，审批对象/取消/审计/工具体仍是原生链路。验证重复点击、已取消/已结算请求、切换子范围、无待审批时退回只读，以及原完整根/子拒绝/允许/取消浏览器场景。
+- Sibling surfaces：新建、重启恢复、fork、同进程委派、当前 Session 切档、低层 knobs 导出的 custom、无 Agent 调用、插件未装/损坏/停用、PTC 外层与内层、所有镜像构建脚本及受管配置生产/测试调用方。未知/custom 状态或无法可靠归属的受管写调用失败关闭，不凭 sandbox pair 猜作 Yolo。
+- Must preserve：原模型配置/密钥环境引用、中文与无公告、禁联网工具、非权限配置、用户文件与 Session 历史、隔离/seccomp/CPU内存、其他工具门禁；不改 DSH 包字节或放宽平台测试阈值。
+- Required evidence：先语义 RED，再实际 DSH Docker 中三档 catalog/Session 投影、管理员默认 Yolo→人工→Auto 的重启切换、旧 Session 保持与两 Session 隔离；真实工具文件副作用、批准/拒绝、PTC/委派、Auto allow/失败询问/取消；缺失/损坏插件拒绝启动；实际 UI 选档与审批截图、零新增 console error。
+- 对审查成功/失败的确定性测试可使用拥有的协议测试服务，但必须走生产插件的 `llm.stream` 与真实工具体，不把模拟响应叫作真实模型验证。#84/#85 分别保留 `pnpm test:model` 开发模型验收；#83 不合入假 Auto 或仅标签映射等待后续实现。
+- 审查协议验收必须覆盖 allow 文本后跟 finish:error/aborted/max-tokens、缺失正常 finish、finish 后仍有数据、重复/额外 JSON 字段和响应超限；仅收到可解析 allow 文本不是成功。生命周期验证覆盖 review、pending ask、已通过 pre-execute 三个卸载点；门禁保护持续到依赖 Agent 与自有工作停止，不重写 Session 为 Yolo。
+- Verification：`pnpm check`、strict OpenSpec、同一冻结 head 的 giap-vps 完整 `pnpm test:docker` 和 CI；父级独立故障对照覆盖门禁未安装、批准被绕过、Auto 失败被放行，恢复后真实工具验证重新通过。
+- Containment：权限插件/覆盖层成套交付；失败阻止 Agent 启动或工具执行，不修改历史为 Yolo。回滚必须同时回滚镜像与覆盖层，不在生产保留双实现/兼容开关。关键路径人工逐行审查按用户决定记入 Epic 末尾清单。
+
+扩展点实测（非功能验收）：giap-vps 运行 `274d06c7-b9bf-4f35-b962-1fa7ab858d1d`，自定义 `auto-review` catalog/default 与新 Session 的 `permissions.currentValue` 一致；缺少权限服务时 required agent-loop 未激活、启动 exit1、未输出 Web 就绪。尚不代表模型审查、审批 UI 或委派行为已验证。
 
 ### 14. 办公 Agent
 

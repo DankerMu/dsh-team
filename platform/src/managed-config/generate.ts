@@ -43,20 +43,7 @@ export interface ManagedConfigInput {
     readonly models?: readonly Settings['models'][number][] | undefined;
     readonly defaultModel?: string | undefined;
   };
-  readonly permission: {
-    readonly presets: Readonly<
-      Record<
-        string,
-        {
-          readonly sandbox: 'read-only' | 'workspace-write' | 'danger-full-access';
-          readonly approval: 'ask' | 'never';
-          readonly name?: string;
-          readonly description?: string;
-        }
-      >
-    >;
-    readonly defaultPreset: string;
-  };
+  readonly defaultPermissionTier: Settings['defaultPermissionTier'];
   readonly presets: readonly PresetEntry[];
   readonly localePatch: readonly Json[];
 }
@@ -65,6 +52,17 @@ export type ManagedConfigResult =
   { outcome: 'configured'; content: string } | { outcome: 'unconfigured' };
 
 const NETWORK_TOOL = '@deepseek-ai/dsh-tool-web';
+
+const PERMISSION_PRESETS = {
+  approval: { sandbox: 'danger-full-access', approval: 'ask', name: '人工批准' },
+  'auto-review': { sandbox: 'danger-full-access', approval: 'ask', name: 'Auto' },
+  'danger-full-access': { sandbox: 'danger-full-access', approval: 'never', name: 'Yolo' },
+};
+const PERMISSION_DEFAULTS = {
+  approval: 'approval',
+  auto: 'auto-review',
+  yolo: 'danger-full-access',
+};
 
 function filterPlugins(plugins: readonly PluginEntry[]): PluginEntry[] {
   const filtered: PluginEntry[] = [];
@@ -160,12 +158,28 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
           model: defaultModel,
         },
       },
-      {
-        id: 'permission',
-        config: input.permission,
-      },
       ...input.presets.map(transformPreset),
       ...input.localePatch,
+      // Security policy is last: profile/home/locale edits cannot replace it.
+      { id: 'auto-review', disabled: true },
+      {
+        id: 'permission',
+        disabled: false,
+        config: {
+          presets: PERMISSION_PRESETS,
+          defaultPreset: PERMISSION_DEFAULTS[input.defaultPermissionTier],
+        },
+      },
+      {
+        insert: [
+          {
+            id: 'managed-permissions',
+            name: '/opt/dsh-team/permission-tiers/index.js',
+            disabled: false,
+          },
+        ],
+      },
+      { id: 'agent-loop', disabled: false, inject: ['managedPermissions'] },
     ]),
   };
 }
