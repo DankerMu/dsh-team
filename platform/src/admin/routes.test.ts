@@ -1,17 +1,9 @@
 import { expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
-import type { DatabaseHandle } from '../db/index.ts';
-import { createSession, deleteUserSessions } from '../auth/index.ts';
+import { deleteUserSessions } from '../auth/index.ts';
 import { withApp } from '../../test/auth-fixture.ts';
-import { registerAccount } from '../../test/auth-tcp-fixture.ts';
+import { administrator } from '../../test/admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/users';
-async function administrator(app: FastifyInstance, database: DatabaseHandle) {
-  const user = await registerAccount(app, 'admin@example.com');
-  database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
-  const cookie = `platform_session=${createSession(database, user.id, Date.now())}`;
-  return { user, cookie };
-}
 
 it.each(['demoted', 'disabled', 'expired', 'revoked'] as const)(
   'rejects a previously authorized administrator after %s without caching authority',

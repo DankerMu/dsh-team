@@ -21,6 +21,7 @@ const UPSERT_SETTING =
   'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
 
 const TIERS: Record<string, true> = { approval: true, auto: true, yolo: true };
+export const PERMISSION_TIERS = Object.freeze(Object.keys(TIERS));
 
 const DEFAULT_SETTINGS: Settings = {
   idleMinutes: 30,

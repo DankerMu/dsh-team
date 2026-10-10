@@ -70,6 +70,7 @@ export async function withListeningApp(
   ) => Promise<void>,
   cookieSecure = false,
   trustedProxies: readonly string[] = [],
+  options: Parameters<typeof withApp>[4] = {},
 ): Promise<void> {
   await withApp(
     async (app, database, lines) => {
@@ -80,6 +81,8 @@ export async function withListeningApp(
     },
     cookieSecure,
     trustedProxies,
+    undefined,
+    options,
   );
 }
 
