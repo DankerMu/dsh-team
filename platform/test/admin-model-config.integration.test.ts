@@ -1,10 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { request as httpRequest } from 'node:http';
 import { expect, it } from 'vitest';
 import { createSession, deleteUserSessions } from '../src/auth/index.ts';
 import { readSettings } from '../src/db/index.ts';
 import { jsonRequestHeaders, withApp } from './auth-fixture.ts';
 import { registerAccount, successfulLogin, withListeningApp } from './auth-tcp-fixture.ts';
+import { administrator, delayedConfigBody } from './admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/model-config';
 const CONFIG = {
@@ -142,61 +142,21 @@ it.each(['revoked', 'demoted'] as const)(
   'rechecks the current administrator after a delayed body is admitted and %s',
   async (state) => {
     await withApp(async (app, database, lines) => {
-      const admitted = Promise.withResolvers<undefined>();
-      app.addHook('preParsing', (request, _reply, payload, done) => {
-        if (request.url === PATH && request.method === 'PUT') admitted.resolve(undefined);
-        done(null, payload);
-      });
-      const user = await registerAccount(app, 'model-admin@example.com');
-      database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
-      const cookie = `platform_session=${createSession(database, user.id, Date.now())}`;
+      const send = delayedConfigBody(app, PATH);
+      const { user, cookie } = await administrator(app, database);
       const base = await app.listen({ host: '127.0.0.1', port: 0 });
       const secret = randomBytes(32).toString('hex');
       const body = JSON.stringify({ ...CONFIG, apiKey: secret });
       const before = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-      const completed = Promise.withResolvers<{ status: number; body: string }>();
-      const request = httpRequest(
-        `${base}${PATH}`,
-        {
-          method: 'PUT',
-          headers: {
-            ...jsonRequestHeaders({ cookie }),
-            'content-length': String(Buffer.byteLength(body)),
-          },
-        },
-        (response) => {
-          const chunks: Buffer[] = [];
-          response.on('data', (chunk: Buffer) => chunks.push(chunk));
-          response.on('error', completed.reject);
-          response.on('end', () => {
-            completed.resolve({
-              status: response.statusCode ?? 0,
-              body: Buffer.concat(chunks).toString('utf8'),
-            });
-          });
-        },
-      );
-      request.on('error', completed.reject);
-      try {
-        request.write(body.slice(0, 1));
-        await Promise.race([
-          admitted.promise,
-          completed.promise.then(() => {
-            throw new Error('request completed before body admission');
-          }),
-        ]);
+      const response = await send(base, cookie, body, () => {
         if (state === 'revoked') deleteUserSessions(database, user.id);
         else database.prepare("UPDATE users SET role = 'employee' WHERE id = ?").run(user.id);
-        request.end(body.slice(1));
-        const response = await completed.promise;
+      });
 
-        expect(response.status).toBe(state === 'revoked' ? 401 : 403);
-        expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
-        expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(before);
-        expect((response.body + lines.join('')).includes(secret)).toBe(false);
-      } finally {
-        request.destroy();
-      }
+      expect(response.status).toBe(state === 'revoked' ? 401 : 403);
+      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+      expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(before);
+      expect((response.body + lines.join('')).includes(secret)).toBe(false);
     });
   },
 );

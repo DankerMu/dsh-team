@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import { modelConfigRoutes } from './model-config.ts';
+import { runtimeConfigRoutes } from './runtime-config.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
 interface AccountQuery {
@@ -128,5 +129,6 @@ export const adminRoutes: FastifyPluginCallback<{
     },
   );
   app.register(modelConfigRoutes, { database, resolveSourceAddress });
+  app.register(runtimeConfigRoutes, { database, resolveSourceAddress });
   done();
 };

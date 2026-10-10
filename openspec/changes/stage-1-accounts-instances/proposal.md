@@ -414,3 +414,10 @@
 - Extend existing settings ownership, not an environment-only source or second store. Preserve runtime settings, all existing repository callers, canonical session authorization, Origin/JSON admission and pure managed-config generation.
 - Selected packs: public API/schema, configuration, authorization/secrets, persistence/order/rollback, compatibility, packaging and docs. No model connectivity, instance restart, UI, permission mapping, new dependency or migration.
 - Evidence floor: semantic HTTP RED/GREEN; real TCP safe read/write, invalid default rejection, key preservation/replacement, secret-free logs/audit/errors, commit-time revocation and audit-failure rollback; source/dist file-database reopen smoke, full checks, strictOpenSpec, four-seat review and exact-head21Docker/CI.
+
+## Issue #78 fixture
+
+- Feature; expanded, task15.2 only: administrator runtime-configuration GET/PUT over the existing five canonical settings fields and atomic runtime-config.updated audit.
+- Preserve #77 model API, secret custody, current-administrator commit fencing and existing settings/orchestrator semantics. Extract their shared admin configuration transport/transaction mechanics rather than copy a second implementation.
+- Selected packs: API/schema/units, configuration, authorization/secrets, persistence/order/rollback, compatibility, resource admission and packaging/docs. No idle scheduler, permission mapping, startup endpoint, instance restart or new deployment limit policy.
+- Evidence: realHTTP validation/range messages and roundtrip, unchanged model credentials/settings, atomic audit rollback and delayed-body revocation; same-owner60→2 capacity admission integration; source/dist fileDB smoke, both projection-leak and ignored-limit negative controls with restoration, full checks, strictOpenSpec, four-seat review and exact-head21Docker/CI.
