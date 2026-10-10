@@ -247,7 +247,7 @@ it.each(['h2c', 'websocket, h2c', 'websocket, websocket'])(
     await withForwardingApp(
       () => {
         resolutions += 1;
-        return undefined;
+        return { outcome: 'stopped' };
       },
       async ({ base, cookie }) => {
         const headers = await rejectedUpgrade(base, cookie, [
@@ -701,7 +701,7 @@ it('keeps two simultaneous users on their own WebSocket endpoint-cookie pairs de
           await withForwardingApp(
             (id) => {
               selected.push(id);
-              return targets.get(id);
+              return targets.get(id) ?? { outcome: 'stopped' };
             },
             async ({ base, app, cookie, userId }) => {
               const registration = await injectRegister(app, {
@@ -775,7 +775,7 @@ it.each(['missing', 'resolver', 'endpoint', 'refused'])(
         }
         await withForwardingApp(
           () => {
-            if (mode === 'missing') return undefined;
+            if (mode === 'missing') return { outcome: 'stopped' };
             if (mode === 'resolver') throw new Error(target.cookie);
             return mode === 'endpoint' ? { ...target, port: -1 } : target;
           },

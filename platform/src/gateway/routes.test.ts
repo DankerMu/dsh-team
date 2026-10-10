@@ -2,7 +2,12 @@ import { IncomingMessage } from 'node:http';
 import { Socket } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { expect, it } from 'vitest';
-import { withApp } from '../../test/auth-fixture.ts';
+import {
+  cookieHeaders,
+  injectRegister,
+  sessionCookieToken,
+  withApp,
+} from '../../test/auth-fixture.ts';
 import { observeHttp } from '../../test/gateway-http-fixture.ts';
 
 it.each([
@@ -94,5 +99,26 @@ it('aborts an HTTP request queued before the application shutdown fence', async 
     } finally {
       resume.resolve(undefined);
     }
+  });
+});
+
+it('defaults an authenticated unwired instance to stopped without redirecting non-navigation requests', async () => {
+  await withApp(async (app) => {
+    const registered = await injectRegister(app, {
+      email: 'waiting@example.com',
+      password: 'test-password',
+    });
+    const cookie = `platform_session=${sessionCookieToken(cookieHeaders(registered))}`;
+
+    const page = await app.inject({ headers: { cookie, accept: 'text/html' }, url: '/' });
+    const api = await app.inject({ headers: { cookie, accept: 'text/html;q=0' }, url: '/' });
+    const head = await app.inject({ method: 'HEAD', headers: { cookie }, url: '/' });
+
+    expect(page.statusCode).toBe(302);
+    expect(page.headers.location).toBe('/_platform/wait');
+    expect(api.statusCode).toBe(503);
+    expect(api.json()).toMatchObject({ reason: 'stopped' });
+    expect(api.headers.location).toBeUndefined();
+    expect(head.statusCode).toBe(503);
   });
 });

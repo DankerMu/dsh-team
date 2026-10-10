@@ -10,7 +10,7 @@ import {
   rejectUpgrade,
   requestTarget,
 } from './http.ts';
-import type { GatewayUpstreamResolver } from './types.ts';
+import type { GatewayUnavailableReason, GatewayUpstreamResolver } from './types.ts';
 import type { GatewayConnections } from './connections.ts';
 
 const ERRORS = {
@@ -29,6 +29,10 @@ const ERROR_SCHEMA = {
     message: { type: 'string' },
   },
 } as const;
+
+function unavailable(reason: GatewayUnavailableReason) {
+  return { ...ERRORS[503], reason };
+}
 
 function platformPath(url: string): boolean {
   const path = requestTarget(url).split('?', 1)[0];
@@ -51,7 +55,11 @@ export const gatewayRoutes: FastifyPluginCallback<{
   authority: string;
   publicUrl: string;
   resolveUpstream?: GatewayUpstreamResolver;
-}> = (app, { database, connections, authority, publicUrl, resolveUpstream }, done) => {
+}> = (
+  app,
+  { database, connections, authority, publicUrl, resolveUpstream = () => ({ outcome: 'stopped' }) },
+  done,
+) => {
   let closing = false;
   function admission(
     request: IncomingMessage,
@@ -77,13 +85,14 @@ export const gatewayRoutes: FastifyPluginCallback<{
     if (typeof code === 'object') {
       connections.track(code, reply.raw, true);
       try {
-        const upstream = resolveUpstream?.(code.userId);
+        const upstream = resolveUpstream(code.userId);
         if (reply.raw.destroyed) return;
-        if (upstream !== undefined) {
+        if (upstream.outcome === 'running') {
           forwardHttp(request, reply, upstream, authority);
           return;
         }
-        void reply.code(503).send(ERRORS[503]);
+        if (pageRequest(request)) void reply.redirect('/_platform/wait', 302);
+        else void reply.code(503).send(unavailable(upstream.outcome));
       } catch {
         app.log.error('Gateway upstream resolution failed');
         void reply.code(502).send(BAD_GATEWAY);
@@ -107,7 +116,17 @@ export const gatewayRoutes: FastifyPluginCallback<{
           404: ERROR_SCHEMA,
           500: ERROR_SCHEMA,
           502: ERROR_SCHEMA,
-          503: ERROR_SCHEMA,
+          503: {
+            ...ERROR_SCHEMA,
+            required: [...ERROR_SCHEMA.required, 'reason'],
+            properties: {
+              ...ERROR_SCHEMA.properties,
+              reason: {
+                type: 'string',
+                enum: ['stopped', 'starting', 'full', 'error', 'unconfigured'],
+              },
+            },
+          },
         },
       },
       onRequest: admit,
@@ -138,10 +157,10 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
     connections.track(selected, socket);
     try {
-      const target = resolveUpstream?.(selected.userId);
+      const target = resolveUpstream(selected.userId);
       if (socket.destroyed) return;
-      if (target === undefined) {
-        rejectUpgrade(socket, 503);
+      if (target.outcome !== 'running') {
+        rejectUpgrade(socket, 503, JSON.stringify(unavailable(target.outcome)));
         return;
       }
       forwardWebSocket(request, socket, head, target, authority, () => {

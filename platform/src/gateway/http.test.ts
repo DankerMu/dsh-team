@@ -173,7 +173,7 @@ it.each(['construct', 'request', 'upgrade', 'response', 'truncated'])(
       },
       false,
       [],
-      () => ({ host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+      () => ({ outcome: 'running', host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
     );
     expect(transport.destroyed).toBe(mode !== 'construct');
   },
@@ -293,7 +293,7 @@ it.each([
       },
       false,
       [],
-      () => ({ host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+      () => ({ outcome: 'running', host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
     );
   },
 );
@@ -415,7 +415,7 @@ it.each(['flush', 'destination-error', 'app'])(
       },
       false,
       [],
-      () => ({ host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+      () => ({ outcome: 'running', host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
     );
   },
 );
@@ -460,7 +460,7 @@ it('refuses a queued upgrade arriving after shutdown starts without acquiring an
     [],
     () => {
       resolutions += 1;
-      return { host: '127.0.0.1', port: 3080, cookie: 'backend=private' };
+      return { outcome: 'running', host: '127.0.0.1', port: 3080, cookie: 'backend=private' };
     },
   );
 });
@@ -524,7 +524,7 @@ it.each(['expiry', 'storage failure'])(
         },
         false,
         [],
-        () => ({ host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+        () => ({ outcome: 'running', host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
       );
     } finally {
       vi.useRealTimers();

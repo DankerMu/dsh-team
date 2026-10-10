@@ -713,7 +713,7 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - [x] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
 - [x] 11.5 连接登记和断开：按用户登记所有打开的连接；提供“销毁某用户全部连接”的函数。验证：集成测试——一个用户有两条长连接和一个进行中的下载时调用该函数，三者在 1 秒内全部断开，另一个用户的连接不受影响。
 - [x] 11.6 平台会话失效后的长连接：平台会话被删除后，由它建立的长连接被断开。验证：集成测试覆盖规格“平台会话失效后长连接不再可用”的场景。
-- [ ] 11.7 实例未运行时的回应：页面请求被重定向到 `/_platform/wait`，其他请求得到 503 和机器可读的原因（已停止、启动中、已满、出错、未配置模型）；实例状态由注入的查询函数提供。验证：集成测试——五种状态下页面请求都得到指向等待页的重定向，接口请求都得到 503 和对应原因。
+- [x] 11.7 实例未运行时的回应：页面请求被重定向到 `/_platform/wait`，其他请求得到 503 和机器可读的原因（已停止、启动中、已满、出错、未配置模型）；实例状态由注入的查询函数提供。验证：集成测试——五种状态下页面请求都得到指向等待页的重定向，接口请求都得到 503 和对应原因。
 
 Suggested fixture level: expanded - 平台对外的共享入口，承担鉴权和凭据隔离
 Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，此时被转发的路径统一返回 503）
@@ -787,6 +787,14 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - Compatibility/config/schema/packaging/docs: gateway-only production edits, no new schema/config/dependency or auth API; semantic RED/GREEN, full pnpmcheck/strictOpenSpec, real source/dist smoke, independent review and exact-head21Docker/CI. Admin instance shutdown and activity policy remain separate issues.
 
 本地验证（#54）：真实logout成功但连接未关闭的首条RED在实现前观察；会话粒度registry及1秒无续期复验接入后，14项连接集成通过。另将新增七项行为放到隔离的c493be0旧源码，七项均因实际连接未关闭而失败，再回当前源码14/14通过；首次旧源码快照缺少platform依赖链接导致零测试，仅为准备错误、不计RED。完整`pnpm check`与strictOpenSpec通过：1211单元、738集成、逐文件覆盖、构建/契约/anti-drift，重复率2.84%。源码及dist独立真实TCP smoke分别约972ms/987ms关闭已登出会话的WebSocket和下载及配对上游，同用户第二会话和其他用户继续收包；第二数据库连接提交用户会话删除后也观察关闭。精确7天仍有效、超过边界断开、无续期及存储故障安全关闭有受控时钟单元证据。新增补充回归的旧源码负控在实现后补做，未冒充逐项先写先跑；PR审查与精确头Docker/CI证据另行发布。
+
+### Issue #55 risk/evidence map (task11.7 only)
+
+- Public contract/compatibility: explicit outcome union and all callers migrated; stopped/starting/full/error/unconfigured map to required JSON reason, fixed wait redirect only for HTML GET/HEAD; existing catch-all hiding retained, contract regenerated. Update root AGENTS.md gateway resolver/lifetime contract prose and run lint:agents; retain Epic-end human review tracking for the rule-file change.
+- Auth/secrets/errors: current session-derived identity and Origin/protocol precedence; no state lookup for rejected callers; resolver exceptions stay sanitized502; unavailable data contains no endpoint/DSH cookie.
+- Resource/shared state: same-shot resolution, ready transition without caching, unavailable response/upgrade cleanup and existing disconnect fences. Real HTTP five-state matrix and raw upgrade framed body+EOF; source/dist runtime, full checks, strictOpenSpec, independent review and exact-head21Docker/CI.
+
+本地验证（#55）：页面跳转先观察502而非302的RED；HTTP结果/类型原子迁移后GREEN。五种升级回应先观察空body缺失JSON的RED，再接入共用503对象与Content-Length后通过。真实路由24项集成覆盖五态GET/HEAD导航、POST和q=0接口、升级JSON+EOF、鉴权/Origin优先级、伪造路由字段和恢复running；默认未接线stopped有单元验证。完整`pnpm check`通过1212单元/749集成、逐文件覆盖、构建/契约/anti-drift，重复率2.85%；contract:write执行且隐藏catch-all未改变生成契约。源码/dist独立实际TCP各验证10次导航、5次API、5次升级关闭及running字节转发。新增inject-HEAD空body断言暴露测试适配器与真实Node传输差异；实际TCP五态HEAD均为空body，断言迁移到真实边界，未改生产路径或放宽协议。root AGENTS同步resolver/响应和已交付会话生命周期文案；规则文件人工审查仍按用户要求汇总至Epic结束。精确头review/Docker/CI另行发布。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 

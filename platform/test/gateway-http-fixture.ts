@@ -62,7 +62,12 @@ export async function withUpstream(
     if (address === null || typeof address === 'string')
       throw new Error('Missing upstream address');
     await run(
-      { host: '127.0.0.1', port: address.port, cookie: `dsh-auth=test-${String(address.port)}` },
+      {
+        outcome: 'running',
+        host: '127.0.0.1',
+        port: address.port,
+        cookie: `dsh-auth=test-${String(address.port)}`,
+      },
       server,
     );
   } catch (error) {

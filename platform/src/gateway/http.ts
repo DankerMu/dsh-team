@@ -130,15 +130,20 @@ export function forwardHttp(
   }
 }
 
-export function rejectUpgrade(socket: Duplex, code: 400 | 401 | 403 | 404 | 500 | 502 | 503): void {
+export function rejectUpgrade(
+  socket: Duplex,
+  code: 400 | 401 | 403 | 404 | 500 | 502 | 503,
+  body = '',
+): void {
   socket.on('error', () => {
     socket.destroy();
   });
   socket.once('finish', () => {
     socket.destroy();
   });
+  const contentType = body === '' ? '' : 'Content-Type: application/json\r\n';
   socket.end(
-    `HTTP/1.1 ${String(code)} ${STATUS_CODES[code] ?? 'Error'}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+    `HTTP/1.1 ${String(code)} ${STATUS_CODES[code] ?? 'Error'}\r\nConnection: close\r\n${contentType}Content-Length: ${String(Buffer.byteLength(body))}\r\n\r\n${body}`,
   );
 }
 

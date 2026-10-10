@@ -5,6 +5,7 @@ import type { Duplex } from 'node:stream';
 import { expect, it } from 'vitest';
 import { deleteUserSessions } from '../src/auth/index.ts';
 import { PUBLIC_ORIGIN } from './auth-fixture.ts';
+import { sendHttp, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
 import {
   registerAccount,
   sessionTimes,
@@ -30,6 +31,7 @@ async function upgrade(
   path = '/',
   cookie = '',
   authority?: string,
+  origin = PUBLIC_ORIGIN,
 ): Promise<string> {
   const url = new URL(baseUrl);
   const { promise, resolve, reject } = Promise.withResolvers<string>();
@@ -46,7 +48,7 @@ async function upgrade(
   });
   socket.on('connect', () => {
     socket.write(
-      `GET ${path} HTTP/1.1\r\nHost: ${authority ?? url.host}\r\nOrigin: ${PUBLIC_ORIGIN}\r\nX-Forwarded-Host: ${authority ?? url.host}\r\nX-User-Id: someone-else\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nCookie: ${cookie}\r\n\r\n`,
+      `GET ${path} HTTP/1.1\r\nHost: ${authority ?? url.host}\r\nOrigin: ${origin}\r\nAccept: text/html\r\nX-Forwarded-Host: ${authority ?? url.host}\r\nX-User-Id: someone-else\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nCookie: ${cookie}\r\n\r\n`,
     );
   });
   return promise;
@@ -304,4 +306,127 @@ it('keeps absolute-form reserved targets out of the gateway on both transports',
       );
     }
   });
+});
+
+const UNAVAILABLE = ['stopped', 'starting', 'full', 'error', 'unconfigured'] as const;
+
+it.each(UNAVAILABLE)(
+  'redirects %s navigation to the fixed wait page and explains API unavailability',
+  async (reason) => {
+    const selected: string[] = [];
+    await withForwardingApp(
+      (id) => {
+        selected.push(id);
+        return { outcome: reason };
+      },
+      async ({ base, cookie, userId }) => {
+        for (const method of ['GET', 'HEAD'] as const) {
+          const page = await sendHttp(base, {
+            method,
+            path: '/?returnTo=https://foreign.example&reason=forged',
+            headers: {
+              cookie,
+              accept: 'application/json, TEXT/HTML;q=0.5',
+              'x-user-id': 'someone-else',
+            },
+          });
+
+          expect(page.status).toBe(302);
+          expect(page.headers.location).toBe('/_platform/wait');
+        }
+        for (const method of ['GET', 'POST', 'HEAD'] as const) {
+          const api = await sendHttp(
+            base,
+            {
+              method,
+              path: '/api/session',
+              headers: {
+                cookie,
+                accept: method === 'POST' ? 'text/html' : 'text/html;q=0',
+                'content-type': 'application/json',
+              },
+            },
+            method === 'POST' ? '{' : undefined,
+          );
+          expect(api.status).toBe(503);
+          expect(api.headers.location).toBeUndefined();
+          if (method === 'HEAD') expect(api.body).toEqual(Buffer.alloc(0));
+          else
+            expect(JSON.parse(api.body.toString())).toEqual({
+              statusCode: 503,
+              error: 'Service Unavailable',
+              message: 'Instance unavailable',
+              reason,
+            });
+        }
+        expect(selected).toEqual([userId, userId, userId, userId, userId]);
+      },
+    );
+  },
+);
+
+it.each(UNAVAILABLE)(
+  'rejects a valid upgrade with framed %s JSON and EOF instead of an HTML redirect',
+  async (reason) => {
+    await withForwardingApp(
+      () => ({ outcome: reason }),
+      async ({ base, cookie }) => {
+        const response = await upgrade(base, '/ws', cookie);
+
+        const [headers, body] = response.split('\r\n\r\n');
+        expect(headers).toMatch(/^HTTP\/1\.1 503 Service Unavailable/);
+        expect(headers).toContain('Content-Type: application/json');
+        expect(headers).toContain('Connection: close');
+        expect(headers).not.toContain('Location:');
+        expect(headers).toContain(`Content-Length: ${String(Buffer.byteLength(body ?? ''))}`);
+        expect(JSON.parse(body ?? '')).toEqual({
+          statusCode: 503,
+          error: 'Service Unavailable',
+          message: 'Instance unavailable',
+          reason,
+        });
+        expect(response).not.toContain(cookie);
+      },
+    );
+  },
+);
+
+it('resolves only admitted users and observes an unavailable to running transition without caching', async () => {
+  let running = false;
+  const selected: string[] = [];
+  await withUpstream(
+    (_request, response) => {
+      response.end('ready bytes');
+    },
+    async (target) => {
+      await withForwardingApp(
+        (id) => {
+          selected.push(id);
+          return running ? target : { outcome: 'starting' };
+        },
+        async ({ base, cookie, userId }) => {
+          const anonymous = await sendHttp(base, { headers: { accept: 'text/html' } });
+          expect(anonymous.status).toBe(302);
+          expect(anonymous.headers.location).toBe('/_platform/login');
+          expect(
+            (await sendHttp(base, { path: '/_platform/wait', headers: { cookie } })).status,
+          ).toBe(404);
+          expect(await upgrade(base, '/ws', cookie, undefined, 'http://foreign.example')).toMatch(
+            /^HTTP\/1\.1 403 /,
+          );
+          expect(selected).toEqual([]);
+          const waiting = await sendHttp(base, { headers: { cookie } });
+          expect(JSON.parse(waiting.body.toString())).toMatchObject({ reason: 'starting' });
+
+          running = true;
+          const ready = await sendHttp(base, { headers: { cookie, accept: 'text/html' } });
+
+          expect(ready.status).toBe(200);
+          expect(ready.body.toString()).toBe('ready bytes');
+          expect(ready.headers.location).toBeUndefined();
+          expect(selected).toEqual([userId, userId]);
+        },
+      );
+    },
+  );
 });
