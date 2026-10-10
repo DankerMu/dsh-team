@@ -712,7 +712,7 @@ Minimal mergeable slice: 10.1（纯分配函数和单元测试，约 120 行）
 - [x] 11.3 流式转发：请求体和响应体不缓冲。验证：集成测试——上传和下载各一个200MiB（209,715,200字节）的流，独立平台进程峰值RSS相对传输前当前RSS的增量不超过160MiB（167,772,160字节），完整字节数和SHA-256一致；实际整包缓冲负控必须因超限被拒绝（规格“大文件上传和下载”“大文件转发的独立内存验收”场景；用户明确批准的合同修订见下）。
 - [x] 11.4 WebSocket 转发：在 `upgrade` 事件里做同样的鉴权和改写，校验 `Origin`，然后对接两端 socket。验证：集成测试——双向消息往返成功；未登录的升级被拒绝；`Origin` 不是平台对外地址的升级被拒绝（规格“WebSocket 可用”场景和“长连接只接受来自平台页面的升级”）。
 - [x] 11.5 连接登记和断开：按用户登记所有打开的连接；提供“销毁某用户全部连接”的函数。验证：集成测试——一个用户有两条长连接和一个进行中的下载时调用该函数，三者在 1 秒内全部断开，另一个用户的连接不受影响。
-- [ ] 11.6 平台会话失效后的长连接：平台会话被删除后，由它建立的长连接被断开。验证：集成测试覆盖规格“平台会话失效后长连接不再可用”的场景。
+- [x] 11.6 平台会话失效后的长连接：平台会话被删除后，由它建立的长连接被断开。验证：集成测试覆盖规格“平台会话失效后长连接不再可用”的场景。
 - [ ] 11.7 实例未运行时的回应：页面请求被重定向到 `/_platform/wait`，其他请求得到 503 和机器可读的原因（已停止、启动中、已满、出错、未配置模型）；实例状态由注入的查询函数提供。验证：集成测试——五种状态下页面请求都得到指向等待页的重定向，接口请求都得到 503 和对应原因。
 
 Suggested fixture level: expanded - 平台对外的共享入口，承担鉴权和凭据隔离
@@ -778,6 +778,15 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 本地验证（#53）：根app公开disconnectUserConnections，单个应用拥有registry，HTTP响应finish/close解除登记，升级从匿名关闭拥有者转入已鉴权用户，删除原upgrade-only集合。已观察未登记的真实2WebSocket+下载在1秒内不关闭的RED；接线后七项实际TCP集成通过，含其他用户后续收发、同TCP先A后B复用、HTTP/升级resolver同步重入、待握手断开、跨app及HTTP关闭。初次接线后A客户端和下载上游已关闭，但测试Node升级上游处于readableEnded=true/writableFinished=false；按既有fixture的end→destroy收尾后绿，未放宽1秒或修改生产关闭来掩盖测试半关闭。独立实际source/dist smoke分别在0.955/0.459ms内观察A三个客户端及配对上游关闭，B随后精确收发并在app关闭时结束；不把单次耗时当长期性能保证。1208单元/731集成及覆盖、静态/构建/契约通过，最终dead-code指出一个未使用的类型re-export已删除并重验通过；完整最终check、review、冻结头Docker/CI仍为合并门槛。调用方不自动撤销平台会话，#54仍独立。
 
 最终本地门禁（#53）：移除未使用的类型re-export并补齐排队HTTP关闭回归的失败收尾后，`pnpm fmt && pnpm check && openspec validate stage-1-accounts-instances --strict --no-interactive`完整exit0，1208单元/731集成、逐文件覆盖和全部静态/契约/构建/anti-drift通过，重复率2.84%。source/dist独立smoke已完成，临时脚本归档后删除；PR审查及最终精确头Docker/CI尚未宣称通过。
+
+### Issue #54 risk/evidence map (task11.6 only)
+
+- Auth/secrets/public API: session-scoped logout teardown, same-user other-session and other-user survival; transient token custody and fixed-error logging; unchanged user-wide disconnect and auth policies.
+- Shared-state/order: committed revocation from logout/password change/external writer; failed transaction keeps the valid channel; exact expiry boundary and no activity writes by the sweep.
+- Resource/errors: pending101 and unfinished HTTP paired-peer closure, session last-resource cleanup, reassignment, app preClose timer fence and storage-failure fail-closed behavior. Preserve existing transport and ownership regressions.
+- Compatibility/config/schema/packaging/docs: gateway-only production edits, no new schema/config/dependency or auth API; semantic RED/GREEN, full pnpmcheck/strictOpenSpec, real source/dist smoke, independent review and exact-head21Docker/CI. Admin instance shutdown and activity policy remain separate issues.
+
+本地验证（#54）：真实logout成功但连接未关闭的首条RED在实现前观察；会话粒度registry及1秒无续期复验接入后，14项连接集成通过。另将新增七项行为放到隔离的c493be0旧源码，七项均因实际连接未关闭而失败，再回当前源码14/14通过；首次旧源码快照缺少platform依赖链接导致零测试，仅为准备错误、不计RED。完整`pnpm check`与strictOpenSpec通过：1211单元、738集成、逐文件覆盖、构建/契约/anti-drift，重复率2.84%。源码及dist独立真实TCP smoke分别约972ms/987ms关闭已登出会话的WebSocket和下载及配对上游，同用户第二会话和其他用户继续收包；第二数据库连接提交用户会话删除后也观察关闭。精确7天仍有效、超过边界断开、无续期及存储故障安全关闭有受控时钟单元证据。新增补充回归的旧源码负控在实现后补做，未冒充逐项先写先跑；PR审查与精确头Docker/CI证据另行发布。
 
 ## 12. 按需启动和空闲停止（任务包 1.9）
 

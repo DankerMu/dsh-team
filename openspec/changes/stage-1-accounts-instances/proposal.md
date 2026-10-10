@@ -382,3 +382,11 @@
 - Selected packs: public function/API, auth/secrets, shared-state/order, resource ownership, errors, compatibility, schema/configuration, packaging and docs. No new filesystem operation, persistence, dependencies or endpoint.
 - Evidence floor: semantic RED/GREEN for twoA WebSockets plus activeA download closing within1second while B continues after destruction; actual upstream teardown; pending handshake, sequential keep-alive ownership, reentrant resolver destruction, unknown/repeated disconnect and application isolation. Full checks, strictOpenSpec, source/built smoke and exact-head21Docker/CI.
 - Session invalidation triggers (#54), admin disable orchestration, instance lookup (#56) and activity persistence (#58) remain out of scope; expose the callable primitive without implementing their policy.
+
+## Issue #54 fixture
+
+- Feature; expanded, task11.6 only: revoke live gateway resources by their establishing platform session, retaining the explicit user-wide disconnect API.
+- Reuse public non-renewing getSessionUser validation in a gateway-owned one-second sweep; observe committed database state, including external-process deletion and natural expiry. No auth writer callbacks, duplicated SQL/TTL policy or new configuration.
+- Preserve other valid sessions of the same user, other users, transport framing/backpressure, HTTP keep-alive ownership and application-local shutdown. Session tokens remain only in live in-memory ownership, never persisted or logged.
+- Selected packs: auth/secrets, shared-state/order, resource lifetime, errors, public API compatibility and packaging/docs. Storage lookup failures close affected resources with fixed sanitized logging rather than retain unverified authorization.
+- Evidence: real logout plus same-user second-session survival, password rotation/revocation and rollback, expiry without renewal, pending upgrade/active transfer teardown, semantic RED/GREEN, full checks, source/built smoke and exact-head21Docker/CI. No admin orchestration (#69), instance resolver (#56) or activity policy (#58).
