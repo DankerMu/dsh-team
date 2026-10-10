@@ -104,7 +104,7 @@ it('binds two users to their own endpoint-cookie pair despite forged routing and
       await withForwardingApp(
         (id) => {
           selected.push(id);
-          return destinations.get(id);
+          return destinations.get(id) ?? { outcome: 'stopped' };
         },
         async ({ base, app, cookie, userId }) => {
           const registered = await injectRegister(app, {
@@ -179,7 +179,7 @@ it('never resolves platform or anonymous traffic and preserves unavailable desti
   await withForwardingApp(
     (id) => {
       selected.push(id);
-      return undefined;
+      return { outcome: 'stopped' };
     },
     async ({ base, cookie, userId, database }) => {
       expect((await sendHttp(base, { path: '/healthz', headers: { cookie } })).status).toBe(200);

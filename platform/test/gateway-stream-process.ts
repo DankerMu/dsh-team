@@ -160,7 +160,9 @@ async function main(): Promise<void> {
     database,
     undefined,
     (id) =>
-      id === userId ? { host: '127.0.0.1', port: input.port, cookie: input.cookie } : undefined,
+      id === userId
+        ? { outcome: 'running', host: '127.0.0.1', port: input.port, cookie: input.cookie }
+        : { outcome: 'stopped' },
   );
   phase = 'listen';
   const base = await app.listen({ host: '127.0.0.1', port: 0 });

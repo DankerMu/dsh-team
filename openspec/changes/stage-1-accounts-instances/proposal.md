@@ -390,3 +390,11 @@
 - Preserve other valid sessions of the same user, other users, transport framing/backpressure, HTTP keep-alive ownership and application-local shutdown. Session tokens remain only in live in-memory ownership, never persisted or logged.
 - Selected packs: auth/secrets, shared-state/order, resource lifetime, errors, public API compatibility and packaging/docs. Storage lookup failures close affected resources with fixed sanitized logging rather than retain unverified authorization.
 - Evidence: real logout plus same-user second-session survival, password rotation/revocation and rollback, expiry without renewal, pending upgrade/active transfer teardown, semantic RED/GREEN, full checks, source/built smoke and exact-head21Docker/CI. No admin orchestration (#69), instance resolver (#56) or activity policy (#58).
+
+## Issue #55 fixture
+
+- Feature; expanded, task11.7 only: five explicit unavailable outcomes from the injected gateway resolver, fixed waiting-page redirects and machine-readable503 responses.
+- Preserve canonical outcome discriminators without an extra successful-result allocation: the existing endpoint gains `outcome: 'running'`; the alternative is `{ outcome: 'stopped' | 'starting' | 'full' | 'error' | 'unconfigured' }`. Remove the old undefined result and migrate all callers atomically.
+- Auth/session/Origin precede state resolution; only the admitted user chooses the result. Navigation GET/HEAD accepting HTML redirects302 to `/_platform/wait`; other HTTP requests and valid upgrade attempts receive503 with the exact `reason` code.
+- Selected packs: public contract, auth/secrets, errors, compatibility, resource lifetime and packaging/docs. Preserve ready forwarding, safe thrown-resolver502, body-parser bypass, credentials and #54 session teardown.
+- Evidence: five-state real HTTP navigation/API matrix, raw upgrade JSON framing/EOF, anonymous/Origin/reserved-path precedence, transitions to running, source/dist smoke, fullchecks/strictOpenSpec and exact-head21Docker/CI. No orchestrator query implementation, wait UI, lifecycle mutation, migration or configuration.
