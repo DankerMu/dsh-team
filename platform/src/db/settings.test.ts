@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import { applyMigrations, openDatabase, readSettings, writeSettings } from './index.ts';
@@ -10,6 +11,9 @@ const DEFAULTS: Settings = {
   maxRunningInstances: 60,
   defaultPermissionTier: 'yolo',
   models: [],
+  modelBaseUrl: '',
+  modelApiKey: '',
+  defaultModel: '',
 };
 
 const UNSAFE_INTEGER = 2 ** 53;
@@ -22,6 +26,9 @@ const FULL_PATCH: Settings = {
   maxRunningInstances: 2,
   defaultPermissionTier: 'approval',
   models: [{ name: 'alpha', contextWindow: 500000 }, { name: 'beta' }],
+  modelBaseUrl: 'http://models.invalid/v1',
+  modelApiKey: randomBytes(32).toString('hex'),
+  defaultModel: 'beta',
 };
 const AFTER_PARTIAL: Settings = {
   ...FULL_PATCH,
@@ -94,6 +101,9 @@ describe('settings', () => {
 
     it.each([
       ['cpuCores', 0],
+      ['modelBaseUrl', 9],
+      ['modelApiKey', null],
+      ['defaultModel', false],
       ['cpuCores', -0.5],
       ['cpuCores', Number.NaN],
       ['cpuCores', Number.POSITIVE_INFINITY],
@@ -151,6 +161,34 @@ describe('settings', () => {
       }).toThrow(label);
       expect(readSettings(db)).toEqual(PRIOR);
     });
+
+    it('checks models-only patches against the stored default before changing any rows', () => {
+      writeSettings(db, FULL_PATCH);
+      const before = db.prepare('SELECT * FROM settings ORDER BY key').all();
+
+      expect(() => {
+        writeSettings(db, { models: [{ name: 'alpha' }], idleMinutes: 60 });
+      }).toThrow(/defaultModel/);
+      expect(db.prepare('SELECT * FROM settings ORDER BY key').all()).toEqual(before);
+      writeSettings(db, { models: [{ name: 'gamma' }], defaultModel: 'gamma' });
+      expect(readSettings(db)).toEqual({
+        ...FULL_PATCH,
+        models: [{ name: 'gamma' }],
+        defaultModel: 'gamma',
+      });
+    });
+
+    it('requires exact default membership while retaining models-only unconfigured callers', () => {
+      writeSettings(db, { models: [{ name: 'alpha' }] });
+
+      expect(() => {
+        writeSettings(db, { defaultModel: 'Alpha' });
+      }).toThrow(/defaultModel/);
+      expect(() => {
+        writeSettings(db, { defaultModel: ' alpha ' });
+      }).toThrow(/defaultModel/);
+      expect(readSettings(db)).toEqual({ ...DEFAULTS, models: [{ name: 'alpha' }] });
+    });
   });
   describe('readSettings corruption', () => {
     it.each([
@@ -163,6 +201,11 @@ describe('settings', () => {
       ['models', '[{"name":""}]'],
       ['models', '[null]'],
       ['idleMinutes', '{not-json-CORRUPT_SENTINEL'],
+      ['modelBaseUrl', '5'],
+      ['modelApiKey', 'null'],
+      ['defaultModel', 'false'],
+      ['defaultModel', '"missing"'],
+      ['modelApiKey', '{not-json-CORRUPT_SENTINEL'],
     ])('rejects stored %s corruption without echoing the raw sentinel', (field, stored) => {
       db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(field, stored);
 
@@ -187,6 +230,16 @@ describe('settings', () => {
       expect(db.prepare('SELECT value FROM settings WHERE key = ?').get('legacyKey')).toEqual({
         value: '{not-json-UNOWNED_SENTINEL',
       });
+    });
+
+    it('refuses to overwrite corrupt owned settings through the canonical writer', () => {
+      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('modelApiKey', 'null');
+      const before = db.prepare('SELECT * FROM settings').all();
+
+      expect(() => {
+        writeSettings(db, { models: [{ name: 'alpha' }] });
+      }).toThrow(/modelApiKey/);
+      expect(db.prepare('SELECT * FROM settings').all()).toEqual(before);
     });
   });
   describe('writeSettings atomicity', () => {

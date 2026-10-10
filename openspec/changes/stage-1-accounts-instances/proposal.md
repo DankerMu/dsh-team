@@ -407,3 +407,10 @@
 - GET `/_platform/api/admin/users` returns only id/email/role/status/createdAt plus pagination metadata; exact literal normalized-email substring search, stable descending createdAt/id order, bounded page size. No credentials, employee files or DSH content.
 - Selected packs: authorization/secrets, persistence read boundary, validation/errors, schema/API, compatibility and docs. No new schema/dependency/config, account mutation, admin UI, model/runtime settings or read-audit event.
 - Evidence: real401/403/200, role/session transitions, literal search/pagination/empty results, exact allowlisted JSON and secret non-disclosure, schema regeneration, full checks, source/dist smoke, independent four-seat review and exact-head21Docker/CI. Rule-file test guidance is tracked for the existing Epic-end human review.
+
+## Issue #77 fixture
+
+- Feature; expanded (agree with upstream), task15.1 only: administrator model configuration persisted through the canonical settings repository, with an explicitly secret-free HTTP projection and atomic audit.
+- Extend existing settings ownership, not an environment-only source or second store. Preserve runtime settings, all existing repository callers, canonical session authorization, Origin/JSON admission and pure managed-config generation.
+- Selected packs: public API/schema, configuration, authorization/secrets, persistence/order/rollback, compatibility, packaging and docs. No model connectivity, instance restart, UI, permission mapping, new dependency or migration.
+- Evidence floor: semantic HTTP RED/GREEN; real TCP safe read/write, invalid default rejection, key preservation/replacement, secret-free logs/audit/errors, commit-time revocation and audit-failure rollback; source/dist file-database reopen smoke, full checks, strictOpenSpec, four-seat review and exact-head21Docker/CI.

@@ -6,6 +6,7 @@ export { loginRoutes } from './login.ts';
 export { logoutRoutes } from './logout.ts';
 export { passwordChangeRoutes } from './password-change.ts';
 export { createSourceAddressResolver } from './source-address.ts';
+export type { SourceAddressResolver } from './source-address.ts';
 export { hasValidOrigin, installRequestGuard } from './request-guard.ts';
 export { normalizeEmail } from './identity.ts';
 export { administerAccount, AdministratorConflictError } from './administrator.ts';

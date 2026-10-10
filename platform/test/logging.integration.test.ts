@@ -1,8 +1,10 @@
+import { randomBytes } from 'node:crypto';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase, type DatabaseHandle } from '../src/db/index.ts';
+import { withApp } from './auth-fixture.ts';
 
 const CENSOR = '[redacted]';
 const PROBE_PATH = '/log-redaction-probe';
@@ -328,5 +330,55 @@ describe('HTTP structured log redaction over a real TCP port', () => {
     expect(httpResponse.headers['set-cookie']).toEqual([...RESPONSE_SET_COOKIES]);
     expect(httpResponse.headers['x-trace']).toBe(RESPONSE_TRACE);
     expect(body).toEqual({ status: 'ok' });
+  });
+});
+
+it('redacts model keys at HTTP and internal structured depths without changing request values', async () => {
+  await withApp(async (app, _database, lines) => {
+    const apiKey = randomBytes(32).toString('hex');
+    const modelApiKey = randomBytes(32).toString('hex');
+    let observed: unknown;
+    app.post('/model-log-probe', (request) => {
+      observed = request.body;
+      const child = request.log.child({}, { serializers: CREDENTIAL_SERIALIZERS });
+      child.info(
+        {
+          req: request,
+          apiKey,
+          modelApiKey,
+          body: { apiKey, modelApiKey },
+          settings: { modelApiKey, defaultModel: 'alpha' },
+        },
+        'model credential snapshot',
+      );
+      return { status: 'ok' };
+    });
+    const base = await app.listen({ host: '127.0.0.1', port: 0 });
+
+    const response = await fetch(`${base}/model-log-probe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apiKey, modelApiKey, label: 'safe-model-label' }),
+    });
+    await response.text();
+
+    expect(response.status).toBe(200);
+    const entries = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const snapshot = logWithMessage(entries, 'model credential snapshot');
+    expect(snapshot.apiKey).toBe(CENSOR);
+    expect(snapshot.modelApiKey).toBe(CENSOR);
+    expect(logObjectAt(snapshot, 'body')).toEqual({ apiKey: CENSOR, modelApiKey: CENSOR });
+    expect(logObjectAt(snapshot, 'settings')).toEqual({
+      modelApiKey: CENSOR,
+      defaultModel: 'alpha',
+    });
+    expect(logObjectAt(logObjectAt(snapshot, 'req'), 'body')).toEqual({
+      apiKey: CENSOR,
+      modelApiKey: CENSOR,
+      label: 'safe-model-label',
+    });
+    expect(observed).toEqual({ apiKey, modelApiKey, label: 'safe-model-label' });
+    expect(lines.join('').includes(apiKey)).toBe(false);
+    expect(lines.join('').includes(modelApiKey)).toBe(false);
   });
 });
