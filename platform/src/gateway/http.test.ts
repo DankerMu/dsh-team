@@ -464,3 +464,70 @@ it('refuses a queued upgrade arriving after shutdown starts without acquiring an
     },
   );
 });
+
+it.each(['expiry', 'storage failure'])(
+  'revalidates pending sessions without renewal and fails closed on %s',
+  async (mode) => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    transport.mode = 'ws';
+    try {
+      await withApp(
+        async (app, database, lines) => {
+          const registered = await injectRegister(app, {
+            email: 'sweep@example.com',
+            password: 'test-password',
+          });
+          const token = sessionCookieToken(cookieHeaders(registered));
+          const request = new IncomingMessage(new Socket());
+          request.method = 'GET';
+          request.url = '/ws';
+          request.headers = {
+            cookie: `platform_session=${token}`,
+            origin: PUBLIC_ORIGIN,
+            upgrade: 'websocket',
+          };
+          request.rawHeaders = ['Origin', PUBLIC_ORIGIN];
+          const client = controlledPeer();
+          const upstream = controlledPeer();
+          const closed = once(client.socket, 'close');
+          try {
+            transport.socket = upstream.socket;
+            app.server.emit('upgrade', request, client.socket, Buffer.alloc(0));
+            const pending = transport.pending;
+            if (pending === undefined) throw new Error('Missing pending request');
+            await once(pending, 'socket');
+            const stale = Date.now() - 7 * 86400000 + 1000;
+            database.prepare('UPDATE platform_sessions SET last_activity_at = ?').run(stale);
+
+            await vi.advanceTimersByTimeAsync(1000);
+
+            expect(client.socket.destroyed).toBe(false);
+            expect(
+              database.prepare('SELECT last_activity_at FROM platform_sessions').all(),
+            ).toEqual([{ last_activity_at: stale }]);
+            if (mode === 'storage failure') database.exec('DROP TABLE platform_sessions');
+            await vi.advanceTimersByTimeAsync(1000);
+            await closed;
+            expect(pending.destroyed).toBe(true);
+            expect(upstream.socket.destroyed).toBe(true);
+            expect(lines.join('')).not.toContain(token);
+            expect(lines.join('')).not.toContain('no such table');
+            if (mode === 'storage failure')
+              expect(lines.join('')).toContain('Gateway session revalidation storage failure');
+            await app.close();
+            await vi.advanceTimersByTimeAsync(1000);
+          } finally {
+            client.socket.destroy();
+            upstream.socket.destroy();
+            request.destroy();
+          }
+        },
+        false,
+        [],
+        () => ({ host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);

@@ -53,11 +53,14 @@ export const gatewayRoutes: FastifyPluginCallback<{
   resolveUpstream?: GatewayUpstreamResolver;
 }> = (app, { database, connections, authority, publicUrl, resolveUpstream }, done) => {
   let closing = false;
-  function admission(request: IncomingMessage): string | keyof typeof ERRORS {
+  function admission(
+    request: IncomingMessage,
+  ): { userId: string; token: string } | keyof typeof ERRORS {
     if (platformPath(request.url ?? '/')) return 404;
     try {
       const token = readSessionCookie(request.headers.cookie);
-      return token === null ? 401 : (getSessionUser(database, token, Date.now())?.id ?? 401);
+      const user = token === null ? null : getSessionUser(database, token, Date.now());
+      return token === null || user === null ? 401 : { userId: user.id, token };
     } catch {
       // Authentication storage failures must not reveal database or credential details.
       app.log.error('Gateway authentication storage failure');
@@ -71,10 +74,10 @@ export const gatewayRoutes: FastifyPluginCallback<{
       return;
     }
     const code = admission(request.raw);
-    if (typeof code === 'string') {
+    if (typeof code === 'object') {
       connections.track(code, reply.raw, true);
       try {
-        const upstream = resolveUpstream?.(code);
+        const upstream = resolveUpstream?.(code.userId);
         if (reply.raw.destroyed) return;
         if (upstream !== undefined) {
           forwardHttp(request, reply, upstream, authority);
@@ -121,7 +124,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
     connections.track(undefined, socket);
     const selected = admission(request);
-    if (typeof selected !== 'string') {
+    if (typeof selected !== 'object') {
       rejectUpgrade(socket, selected);
       return;
     }
@@ -135,7 +138,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
     connections.track(selected, socket);
     try {
-      const target = resolveUpstream?.(selected);
+      const target = resolveUpstream?.(selected.userId);
       if (socket.destroyed) return;
       if (target === undefined) {
         rejectUpgrade(socket, 503);
@@ -150,8 +153,20 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
   }
   app.server.on('upgrade', upgrade);
+  const sessionSweep = setInterval(() => {
+    connections.revalidateSessions((userId, token) => {
+      try {
+        return getSessionUser(database, token, Date.now(), false)?.id === userId;
+      } catch {
+        app.log.error('Gateway session revalidation storage failure');
+        return false;
+      }
+    });
+  }, 1000);
+  sessionSweep.unref();
   app.addHook('preClose', async () => {
     closing = true;
+    clearInterval(sessionSweep);
     await connections.close();
   });
   app.addHook('onClose', (_instance, closeDone) => {
