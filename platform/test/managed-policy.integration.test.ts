@@ -447,7 +447,7 @@ function helperDaemon(options: {
     }
     if (args[0] === 'image' && args.includes('{{.Id}}')) return ok(`${IMAGE_ID}\n`);
     if (args.includes('{{json .Mounts}}')) return inspectMounts();
-    if (args.includes('{{json .}}')) {
+    if (args.includes('{{json .}}') || args.includes('{"Image":{{json .Image}}}')) {
       return ok(JSON.stringify({ Image: options.inspectImage ?? IMAGE_ID }));
     }
     return ok(`${resources[kind].get(name) ?? ''}\n`);

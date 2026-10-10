@@ -2,6 +2,7 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DatabaseHandle } from '../db/index.ts';
+import { writeSettings } from '../db/index.ts';
 import type { Orchestrator } from './index.ts';
 import {
   startupOwnerFixture,
@@ -155,6 +156,37 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
   expect(rows).toContainEqual({ id: 'locale', name: '@dsh-team/zh-locale' });
   expect(text).not.toContain('fixture-private-key');
 });
+
+it.each([
+  ['approval', 'approval'],
+  ['auto', 'auto-review'],
+  ['yolo', 'danger-full-access'],
+] as const)(
+  'uses canonical administrator %s rather than a caller permission object',
+  async (tier, preset) => {
+    const { input } = await fixture();
+    writeSettings(database, { defaultPermissionTier: tier });
+    const attemptedBypass = { ...input, permission: { defaultPreset: 'employee-override' } };
+
+    await startUserContainer(attemptedBypass);
+    const rows: unknown = JSON.parse(
+      await readFile(join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml'), 'utf8'),
+    );
+
+    expect(rows).toContainEqual({
+      id: 'permission',
+      disabled: false,
+      config: {
+        presets: {
+          approval: { sandbox: 'danger-full-access', approval: 'ask', name: '人工批准' },
+          'auto-review': { sandbox: 'danger-full-access', approval: 'ask', name: 'Auto' },
+          'danger-full-access': { sandbox: 'danger-full-access', approval: 'never', name: 'Yolo' },
+        },
+        defaultPreset: preset,
+      },
+    });
+  },
+);
 
 it.each(['owned', 'foreign'])(
   'refuses an existing %s canonical container without adopting it',

@@ -43,6 +43,17 @@ RUN installed="$(dsh --version)" \
      fi
 
 USER root
+# Security code is never resolved from the employee-writable profile.
+COPY --from=permission-tiers --chown=root:root --chmod=0444 \
+  package.json index.js review.js client.js \
+  /opt/dsh-team/permission-tiers/
+RUN installed="$(dsh --version)" \
+  && peer="$(node -p 'require("/opt/dsh-team/permission-tiers/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
+  && if [ "$installed" != "$peer" ]; then \
+       echo "permission-tiers DSH peer mismatch: installed=${installed} peer=${peer}" >&2; \
+       exit 1; \
+     fi \
+  && chmod 0555 /opt/dsh-team /opt/dsh-team/permission-tiers
 # Preserve the complete relative tree, including hidden entries, independently of live profiles.
 RUN mkdir -p /opt/dsh-team/profile-seed \
   && cp -a "${DSH_HOME}/profiles/." /opt/dsh-team/profile-seed/ \

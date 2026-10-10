@@ -93,7 +93,8 @@ chmod 777 "$home_dir" "$work_dir"
 cp "$overlay_src" "$overlay"
 echo "probe-dsh-api: run_id=${run_id} image=${image} port=${port} workdir=${workdir} evidence=${evidence}"
 run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
-  --build-context "zh-locale=${repo_root}/plugins/zh-locale" "${repo_root}/images/dsh-user" >/dev/null
+  --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
+  --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" "${repo_root}/images/dsh-user" >/dev/null
 image_owned=1
 container_owned=1
 run_bound "$docker_seconds" docker run -d --name "$container" --user 1001:1001 --hostname "u-probe-${run_id}" \

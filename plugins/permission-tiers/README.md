@@ -1,0 +1,53 @@
+# Managed permission tiers
+
+This dependency-free host plugin and classic-script Web client support **exactly DSH `0.2.0-rc.2`**. They use released public services and lifecycle events; they do not modify DSH packages or mount the experimental native Auto integration.
+
+| Administrator setting | Session identity            | Native bundle                  | Mutation authorization                                |
+| --------------------- | --------------------------- | ------------------------------ | ----------------------------------------------------- |
+| `approval`            | `approval` / 人工批准       | `danger-full-access` + `ask`   | Native approval for each call                         |
+| `auto`                | `auto-review` / Auto        | `danger-full-access` + `ask`   | Current Agent model review; otherwise native approval |
+| `yolo`                | `danger-full-access` / Yolo | `danger-full-access` + `never` | No additional review or approval                      |
+
+The platform generator owns the complete catalog and reads the administrator's `defaultPermissionTier` from canonical settings at instance startup. Changing the default takes effect on restart for **new** Sessions; existing durable selections are retained. Employees choose the current Session through the native composer picker or `/permission approval`, `/permission auto-review`, `/permission danger-full-access`. The native General default editor cannot override the managed command-line overlay.
+
+## Trusted delivery
+
+Build the existing image using both narrow named contexts:
+
+```sh
+docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
+  --build-context "zh-locale=$(pwd)/plugins/zh-locale" \
+  --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" images/dsh-user
+```
+
+The image copies `package.json`, `index.js`, `review.js`, and `client.js` to root-owned, mode `0444` files under `/opt/dsh-team/permission-tiers/` and checks the exact DSH peer. No security implementation is loaded from an employee-writable profile. The generated overlay inserts `/opt/dsh-team/permission-tiers/index.js` and adds `managedPermissions` to required `agent-loop` injection. Missing/corrupt delivery prevents that execution service from starting. The existing absolute host row resolves its nearest package manifest, whose `./client` export and `dsh.client` declaration deliver the Web artifact; no additional host row is needed. Its package graph depends on Conversation and Session, and its runtime service dependency is `slots`. React is supplied by DSH's seeded runtime, not an external loader or a new production dependency. Security rows follow canonical locale and preset rows, so earlier employee/default/dependency patches cannot remove the protection. Roll back the image and managed overlay together; there is no compatibility switch or native Auto fallback.
+
+## Authorization and lifecycle
+
+`write`, `edit`, `bash`, and `run_code` traverse the gate. The outer program and each nested PTC mutation are separate calls and require their own authorization; an approved program is not an inner-tool grant. Ordinary readonly tools are unchanged. Downstream deny/ask/cancel decisions and the registry's monotonic guards are retained.
+
+Authorization uses the persisted `permissions` projection's **recorded identity and matching knobs**, not `permissionPresets.current()` pair-derivation fallback. Unknown/custom/mismatched states and mutations without an exact live Agent fail closed. Permission events advance a Session-local revision; the final monotonic guard checks that revision after native approval and immediately before dispatch, including ABA selections. Approval/audit events do not invalidate calls. Call state is removed on the actual result.
+
+Fresh same-process children are normalized in awaited `agent/created`, **after registry/Session publication but before first work is released**. They inherit the parent's selected tier and record their own durable identity and bundle, replacing the native `never` pin where necessary. Resume does not re-inherit. A public scoped system-prompt assembly extension removes the native inaccurate delegation context and supplies managed guidance. Approval requests remain owned by the exact child Agent: employees must open/select that child's Session to answer. Parent-scoped questions/screenshots are not child evidence.
+
+Auto snapshots the current Agent's most recent request route (creation options before its first request), cwd, tool name/schema and arguments as JSON data under fixed conservative rules. It only accepts a single exact `{"decision":"allow"}` object in one text block, optionally preceded by reasoning, with a normal terminal `stop` and complete stream exhaustion. Duplicate/unknown fields, malformed output, terminal errors/aborts/token limits, absent terminal, trailing chunks, missing route/schema and adapter failures do not authorize. Responses are bounded to 8192 UTF-8 bytes, 1024 stream chunks (including metadata) and 1024 output tokens; a cooperative 15-second deadline falls back to a fixed Chinese/English native question without exposing raw errors. There are no new credentials, providers, addresses or retries in production. Cancellation/unload cancels instead of asking.
+
+Unload uses one grouped Cordis effect: top-level effects otherwise unwind concurrently. It closes admission, aborts owned review, cancels exact live Agents (including their pending native asks), and waits for owned asynchronous work and Agent quiescence. It then withdraws `managedPermissions` and awaits required `agent-loop` teardown **while the mutation gate and final guard remain installed**; only afterward do those pipeline contributions unwind. It never rewrites a Session to Yolo.
+
+## One-shot child approval presentation
+
+The released composer chain selects the first non-null entry in ascending priority. Its one-shot readonly seat at `-10` otherwise preempts native approval at `1`, even when that child's native pending request is registered. The repo-owned `ChildApprovalPanel` registers at `-20` only for a selected Session with `subagent.address.mode === 'one-shot'` and an answerable native pending interaction with `kind === 'approval'`, a nonempty opaque key, an `answer` function, and the exact same `sessionId`. Root, continuable, unknown-mode, absent, settled, and mismatched requests decline, leaving their shipped composer behavior unchanged. After settlement or cancellation, the one-shot readonly restriction still applies; this panel does not enable follow-up messages.
+
+This is **not** DSH's unexported shipped `ApprovalPanel`. It is an accessible Chinese repo component with the exact native `data-approval-key`, request reason, and `拒绝` / `允许一次` buttons. It calls the same `PendingApproval.answer('rejected' | 'allowed-once')` contract as the shipped panel: the native remote waterfall, child request identity, call correlation, cancellation, and audit pipeline remain in control. Existing native tool-target timeline data is not fabricated or duplicated. There are no parent-request rewrites, fake events, registry patches, or readonly bypasses.
+
+A synchronous click lock prevents duplicate decisions. Native settlement availability blocks withdrawn requests; rejected settlement promises are handled without logging raw errors and permit retry only while the same mounted request remains answerable. Unmount cleanup blocks stale callbacks, and each new native approval key remounts its decision lifetime. The plugin does not abort, delegate, or otherwise mutate the native pending request on panel unmount.
+
+The managed Web boot roster includes `@dsh-team/permission-tiers` only when its existing managed host row is mounted. Locale-only/unmanaged compositions retain their original roster.
+
+## Verification scope
+
+Root `pnpm check` discovers plugin unit tests, checks JavaScript against local release-shaped structural types, and includes production plugin files in the existing per-file coverage thresholds and source/test pairing gate. Client policy tests exercise the public slot selector and use real React rendering for duplicate-click, retry, cancellation, stale-key, and unmount decision boundaries. Exact dev-only `react` and `react-test-renderer` `18.3.1` dependencies exercise actual hooks rather than mocked hook state; they are not shipped runtime dependencies. `pnpm test:docker` includes `platform/test/permission-tiers.docker.test.ts`, reusing invocation-owned image/volume/container cleanup. Its deterministic test-only adapters call the production `llm.stream` path and real released tool bodies; this is **not real-model acceptance**.
+
+The case `enforces root and one-shot child reject, allow and cancel through the actual DSH browser UI` uses `permission-browser-fixture.mjs` and its deterministic owned provider, the existing Web/CDP fixtures, and required `CHROME_BIN`. It checks exactly the approved three composer choices, Yolo confirmation, two independent Sessions and persistence on reopening. It then drives all six root/one-shot-child reject, allow and cancel scenarios through the actual DSH UI, including native child-menu selection and exact transport scope, the pending timeline target, no pre-approval dispatch/file, exact allow bytes and single dispatch, reject/cancel absence, native approval identity/audit ordering, panel withdrawal and zero startup/new console errors. Cancellation uses the actual parent Session cancellation boundary for its foreground child.
+
+Every invocation retains a fresh `.run/issue83/permission-browser-*/` directory with `evidence.json`, `lifecycle.json`, selection/pending/settled screenshots, child-parent-waiting screenshots and, when available, `failure.png`. Browser profiles and invocation-owned containers, volumes and images are cleaned on success and failure; failure lifecycle evidence conservatively requires independent owned-inventory inspection before claiming cleanup. Transport credentials, raw headers and raw exception messages are not persisted. The provider only owns the model protocol: it does not replace tools, fabricate Session events, answer approvals or change gate rows. Auto review semantics remain in the separate released-tool Docker protocol case; this browser case selects Auto but does not claim model review, administrator-default restart, resume, PTC or unload coverage. Real-model quality/acceptance remains issues #84/#85; platform-owned employee/administrator UI #62 remains pending. Critical-path human line review remains deferred to Epic completion. No verification result is claimed by this source documentation.

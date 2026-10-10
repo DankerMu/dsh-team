@@ -26,10 +26,6 @@ export const START_MODEL = {
   models: [{ name: 'office-model' }],
   defaultModel: 'office-model',
 };
-export const START_PERMISSION: StartUserContainerInput['permission'] = {
-  presets: { ask: { sandbox: 'workspace-write', approval: 'ask' } },
-  defaultPreset: 'ask',
-};
 const COMPOSITION = JSON.stringify({
   skippedBundles: [],
   entries: [
@@ -524,7 +520,6 @@ function startupInput(
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',
-    permission: START_PERMISSION,
   };
 }
 

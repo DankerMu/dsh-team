@@ -25,7 +25,7 @@
     "lint:tests": "bash scripts/check-test-pairing.sh",
     "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
     "lint:agents": "bash scripts/check-agents-commands.sh",
-    "typecheck": "tsc --noEmit && tsc -p plugins/zh-locale/tsconfig.json",
+    "typecheck": "tsc --noEmit && tsc -p plugins/zh-locale/tsconfig.json && tsc -p plugins/permission-tiers/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "vitest run --project integration",
     "test:cli": "vitest run --project integration platform/test/cli.integration.test.ts",
@@ -70,6 +70,8 @@
     "knip": "6.38.0",
     "lint-staged": "17.5.1",
     "prettier": "3.9.9",
+    "react": "18.3.1",
+    "react-test-renderer": "18.3.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.1",
     "vitest": "5.0.2"

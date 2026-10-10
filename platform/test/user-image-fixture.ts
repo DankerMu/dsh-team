@@ -491,6 +491,8 @@ function runImageLifecycle(
       join(repositoryRoot, 'images/dsh-user/Dockerfile'),
       '--build-context',
       `zh-locale=${join(repositoryRoot, 'plugins/zh-locale')}`,
+      '--build-context',
+      `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
       // Keep the primary context narrow: no repository-root files or secrets.
       join(repositoryRoot, 'images/dsh-user'),
     ];

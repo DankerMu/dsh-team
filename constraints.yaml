@@ -13,7 +13,7 @@ strictness_profile:
     - control: ui_e2e_tests
       profile_default: required
       chosen: deferred
-      reason: "No UI exists yet. Add the Playwright baseline in the first PR that creates platform/web (plan task 1.11)."
+      reason: "Platform-owned employee/administrator UI (#62) remains pending. DSH permission plugin UI has real Docker browser coverage; add the platform Playwright baseline in the first PR that creates platform/web (plan task 1.11)."
     - control: release_pipeline
       profile_default: automated
       chosen: none

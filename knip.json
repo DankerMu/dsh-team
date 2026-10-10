@@ -2,8 +2,17 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"],
-      "project": ["*.{ts,mjs,cjs}", "scripts/*.mjs"]
+      "entry": [
+        "scripts/*.mjs",
+        "plugins/permission-tiers/index.js",
+        "plugins/permission-tiers/*.test.js"
+      ],
+      "project": [
+        "*.{ts,mjs,cjs}",
+        "scripts/*.mjs",
+        "plugins/permission-tiers/*.js",
+        "plugins/permission-tiers/*.d.ts"
+      ]
     },
     "platform": {
       "entry": ["scripts/*.ts", "test/**/*.test.ts", "src/**/*.test.ts"],

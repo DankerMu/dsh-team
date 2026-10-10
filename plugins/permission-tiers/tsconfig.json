@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "checkJs": true },
+  "include": ["index.js", "review.js", "client.js", "*.d.ts"]
+}

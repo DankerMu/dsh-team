@@ -21,7 +21,6 @@ import {
   START_CONTAINER,
   START_HELPER,
   START_MODEL,
-  START_PERMISSION,
   START_USER,
 } from './container-start-fixture.ts';
 
@@ -89,7 +88,6 @@ beforeEach(async () => {
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',
-    permission: START_PERMISSION,
   };
 });
 

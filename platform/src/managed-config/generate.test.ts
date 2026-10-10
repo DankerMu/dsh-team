@@ -11,17 +11,7 @@ const INPUT: ManagedConfigInput = {
     models: [{ name: 'alpha', contextWindow: 500000 }, { name: 'beta' }],
     defaultModel: 'beta',
   },
-  permission: {
-    presets: {
-      'danger-full-access': {
-        sandbox: 'danger-full-access',
-        approval: 'never',
-        name: 'Yolo',
-        description: 'Do not ask before writes or commands',
-      },
-    },
-    defaultPreset: 'danger-full-access',
-  },
+  defaultPermissionTier: 'yolo',
   presets: [
     {
       id: 'preset-office',
@@ -307,36 +297,44 @@ describe('generateManagedConfig', () => {
       },
     ]);
   });
-  it('emits webserver host-web disable permission and canonical locale rows in one document', () => {
-    const permission = {
-      presets: {
-        'workspace-write': {
-          sandbox: 'workspace-write' as const,
-          approval: 'ask' as const,
-          name: '人工批准',
-        },
-        'danger-full-access': {
-          sandbox: 'danger-full-access' as const,
-          approval: 'never' as const,
-          name: 'Yolo',
-        },
-      },
-      defaultPreset: 'workspace-write',
-    };
-    const generated = generateManagedConfig({ ...INPUT, permission });
+  it.each([
+    ['approval', 'approval'],
+    ['auto', 'auto-review'],
+    ['yolo', 'danger-full-access'],
+  ] as const)('projects administrator %s into the immutable three-tier catalog', (tier, preset) => {
+    const generated = generateManagedConfig({
+      ...INPUT,
+      defaultPermissionTier: tier,
+      localePatch: [
+        ...INPUT.localePatch,
+        { id: 'permission', disabled: true, config: {} },
+        { id: 'agent-loop', disabled: true, inject: [] },
+        { id: 'auto-review', disabled: false },
+      ],
+    });
     ok(generated.outcome === 'configured');
-    const overlay: unknown = JSON.parse(generated.content);
-    const rows = Array.isArray(overlay) ? overlay : [];
 
-    expect(rows).toEqual(
-      expect.arrayContaining([
-        { id: 'webserver', config: { host: '0.0.0.0', port: 3080 } },
-        { id: 'tool-web', disabled: true },
-        { id: 'permission', config: permission },
-        { id: 'ui-settings-models', disabled: true },
-        { insert: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }] },
-      ]),
-    );
+    expect(rowsWithIds(generated.content, ['permission']).at(-1)).toEqual({
+      id: 'permission',
+      disabled: false,
+      config: {
+        presets: {
+          approval: { sandbox: 'danger-full-access', approval: 'ask', name: '人工批准' },
+          'auto-review': { sandbox: 'danger-full-access', approval: 'ask', name: 'Auto' },
+          'danger-full-access': { sandbox: 'danger-full-access', approval: 'never', name: 'Yolo' },
+        },
+        defaultPreset: preset,
+      },
+    });
+    expect(rowsWithIds(generated.content, ['agent-loop']).at(-1)).toEqual({
+      id: 'agent-loop',
+      disabled: false,
+      inject: ['managedPermissions'],
+    });
+    expect(rowsWithIds(generated.content, ['auto-review']).at(-1)).toEqual({
+      id: 'auto-review',
+      disabled: true,
+    });
   });
 
   it.each([

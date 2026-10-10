@@ -421,3 +421,13 @@
 - Preserve #77 model API, secret custody, current-administrator commit fencing and existing settings/orchestrator semantics. Extract their shared admin configuration transport/transaction mechanics rather than copy a second implementation.
 - Selected packs: API/schema/units, configuration, authorization/secrets, persistence/order/rollback, compatibility, resource admission and packaging/docs. No idle scheduler, permission mapping, startup endpoint, instance restart or new deployment limit policy.
 - Evidence: realHTTP validation/range messages and roundtrip, unchanged model credentials/settings, atomic audit rollback and delayed-body revocation; same-owner60→2 capacity admission integration; source/dist fileDB smoke, both projection-leak and ignored-limit negative controls with restoration, full checks, strictOpenSpec, four-seat review and exact-head21Docker/CI.
+
+## Issue #83 fixture
+
+- Issue type: feature
+- Fixture level: expanded
+- Upstream suggested level: compact (override: published 0.2.0-rc.2 cannot meet the permission baseline through mapping alone; user explicitly approved plugin/image/overlay scope expansion on 2026-10-10).
+- Blast radius: every managed Session's write/command authorization, new-session defaults, delegation, plugin startup and unload; image and orchestrator critical paths.
+- Selected risk packs: all eleven, mapped in tasks.md; no DSH source modification or reduced acceptance.
+- Evidence floor: semantic RED; complete plugin and caller cutover; actual released DSH three-default/restart/persistence behavior, native/PTC/delegated tool side effects and approval, deterministic Auto protocol/failure/cancel paths, real browser screenshots with zero new console errors, missing-plugin startup rejection; full checks, strict OpenSpec, exact-head trusted Docker suite and CI.
+- Boundary: #83 ships real permission behavior, not selectable placeholders. #84/#85 retain separate actual development-model acceptance and any necessary in-scope plugin corrections. No original behavior is deferred out of the Epic.

@@ -8,7 +8,7 @@ import {
   readManagedComposition,
   writeManagedConfig,
 } from '../src/managed-config/index.ts';
-import type { ManagedComposition, ManagedConfigInput } from '../src/managed-config/index.ts';
+import type { ManagedComposition } from '../src/managed-config/index.ts';
 import {
   acceptObservation,
   exchangeLaunchToken,
@@ -125,23 +125,13 @@ export const MANAGED_BOOT_ROSTER = [
   '@deepseek-ai/dsh-cordis-client-runner',
   '@deepseek-ai/dsh-session-log-export',
   '@deepseek-ai/dsh-typert-registry',
+  '@dsh-team/permission-tiers',
   '@dsh-team/zh-locale',
 ] as const;
 const TAMPERED_LIVE = '- id: ui-settings-models\n  disabled: false\n';
 const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
-const PERMISSION: ManagedConfigInput['permission'] = {
-  presets: {
-    'danger-full-access': {
-      sandbox: 'danger-full-access',
-      approval: 'never',
-      name: 'Yolo',
-      description: 'Do not ask before writes or commands',
-    },
-  },
-  defaultPreset: 'danger-full-access',
-};
 
 const RETAINED_TOOLS = {
   standard: ['bash', 'read'],
@@ -208,7 +198,14 @@ export function execScript(lifecycle: UserImageLifecycle, name: string, script: 
     script,
   ]);
   const identity = parseJsonRecord(
-    docker(lifecycle.command, ['container', 'inspect', '--format', '{{json .}}', name]),
+    // The full inspection repeats the entire script argv and can exceed the bounded buffer.
+    docker(lifecycle.command, [
+      'container',
+      'inspect',
+      '--format',
+      '{"Image":{{json .Image}}}',
+      name,
+    ]),
   );
   if (identity.Image !== lifecycle.imageId) throw new Error(INVALID);
   const mounts: unknown = JSON.parse(
@@ -382,7 +379,7 @@ async function publishOverlay(
       models: [{ name: 'alpha', contextWindow: 500000 }, { name: 'beta' }],
       defaultModel: 'beta',
     },
-    permission: PERMISSION,
+    defaultPermissionTier: 'yolo',
     ...composition,
   });
   if (generated.outcome !== 'configured') {

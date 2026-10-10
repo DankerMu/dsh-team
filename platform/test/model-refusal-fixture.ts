@@ -122,17 +122,7 @@ async function prepareRefusalInstance(
       models: [{ name: 'alpha' }, { name: 'beta' }],
       defaultModel: 'beta',
     },
-    permission: {
-      presets: {
-        'danger-full-access': {
-          sandbox: 'danger-full-access',
-          approval: 'never',
-          name: 'Yolo',
-          description: 'Owned verification',
-        },
-      },
-      defaultPreset: 'danger-full-access',
-    },
+    defaultPermissionTier: 'yolo',
   });
   if (generated.outcome !== 'configured') throw new Error('Managed refusal configuration missing');
   const overlay = await writeManagedConfig(

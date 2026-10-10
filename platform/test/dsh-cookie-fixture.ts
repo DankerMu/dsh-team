@@ -7,12 +7,7 @@ import { expect } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import type { AcquireDshCookieInput, Orchestrator } from '../src/orchestrator/index.ts';
-import {
-  START_CONTAINER,
-  START_MODEL,
-  START_PERMISSION,
-  START_USER,
-} from './container-start-fixture.ts';
+import { START_CONTAINER, START_MODEL, START_USER } from './container-start-fixture.ts';
 import type { StartupRequest } from './container-start-fixture.ts';
 
 export interface CookieAttempt {
@@ -139,7 +134,6 @@ export async function assertRunningReuse(
       },
       modelSettings: START_MODEL,
       modelKey: 'fixture-key',
-      permission: START_PERMISSION,
     }),
   ).toEqual({
     outcome: 'running',

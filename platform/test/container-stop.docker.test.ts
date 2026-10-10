@@ -5,7 +5,7 @@ import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { createOrchestrator } from '../src/orchestrator/index.ts';
 import type { StartUserContainerInput } from '../src/orchestrator/index.ts';
-import { START_MODEL, START_PERMISSION } from './container-start-fixture.ts';
+import { START_MODEL } from './container-start-fixture.ts';
 import { inspect, record, startupClient } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { runUserImage } from './user-image-fixture.ts';
@@ -85,7 +85,6 @@ function startInput(
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
-    permission: START_PERMISSION,
   };
 }
 
