@@ -65,7 +65,7 @@ it.each([
     idleMinutes: Number.MAX_SAFE_INTEGER,
     cpuCores: Number.MAX_VALUE,
     memoryMiB: Number.MAX_SAFE_INTEGER,
-    maxRunningInstances: Number.MAX_SAFE_INTEGER,
+    maxRunningInstances: 4096,
     defaultPermissionTier: 'auto',
   },
   { ...CONFIG, defaultPermissionTier: 'yolo' },
@@ -88,6 +88,7 @@ const INVALID: [string, unknown][] = [
   ['missing fields', {}],
   ['array', []],
   ['null', null],
+  ['limit beyond configured subnet capacity', { ...CONFIG, maxRunningInstances: 4097 }],
   ...Object.keys(CONFIG).map<[string, unknown]>((field) => [
     'missing ' + field,
     Object.fromEntries(Object.entries(CONFIG).filter(([key]) => key !== field)),

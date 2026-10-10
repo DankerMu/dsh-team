@@ -49,7 +49,8 @@ const ACCOUNT_FILTER = ' FROM users WHERE instr(email, ?) > 0';
 export const adminRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   resolveSourceAddress: SourceAddressResolver;
-}> = (app, { database, resolveSourceAddress }, done) => {
+  subnetPool: string;
+}> = (app, { database, resolveSourceAddress, subnetPool }, done) => {
   app.addHook('onRequest', (request, reply, next) => {
     try {
       const token = readSessionCookie(request.headers.cookie);
@@ -129,6 +130,6 @@ export const adminRoutes: FastifyPluginCallback<{
     },
   );
   app.register(modelConfigRoutes, { database, resolveSourceAddress });
-  app.register(runtimeConfigRoutes, { database, resolveSourceAddress });
+  app.register(runtimeConfigRoutes, { database, resolveSourceAddress, subnetPool });
   done();
 };

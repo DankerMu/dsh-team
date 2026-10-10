@@ -103,7 +103,11 @@ export async function buildApp(
       cookieSecure: config.cookieSecure,
       resolveSourceAddress,
     });
-    await app.register(adminRoutes, { database, resolveSourceAddress });
+    await app.register(adminRoutes, {
+      database,
+      resolveSourceAddress,
+      subnetPool: config.subnetPool,
+    });
     await app.register(gatewayRoutes, {
       database,
       connections,

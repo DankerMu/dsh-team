@@ -1,10 +1,12 @@
 import { randomBytes } from 'node:crypto';
 import { rm, stat } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { createSession, deleteUserSessions } from '../src/auth/index.ts';
+import { readSettings, writeSettings } from '../src/db/index.ts';
 import { jsonRequestHeaders, PUBLIC_ORIGIN, withApp } from './auth-fixture.ts';
 import {
   startupCapacityEvidence,
@@ -14,7 +16,7 @@ import {
   START_USER,
 } from './container-start-fixture.ts';
 import { registerAccount, successfulLogin, withListeningApp } from './auth-tcp-fixture.ts';
-import { administrator, delayedConfigBody } from './admin-config-fixture.ts';
+import { administrator, delayedConfigBody, MODEL_CONFIG } from './admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/runtime-config';
 const CONFIG = {
@@ -84,6 +86,67 @@ it('roundtrips all runtime fields over TCP and rejects raw invalid bodies withou
   });
 });
 
+it.each([
+  ['172.30.0.0/16', 4096],
+  ['192.0.2.0/28', 1],
+] as const)(
+  'accepts the capacity of %s and rejects a larger runtime limit without changing settings, audits or model credentials',
+  async (subnetPool, maximum) => {
+    await withListeningApp(
+      async (base, app, database, lines) => {
+        const { cookie } = await administrator(app, database);
+        const secret = randomBytes(32).toString('hex');
+        const models = {
+          modelBaseUrl: MODEL_CONFIG.baseURL,
+          models: MODEL_CONFIG.models,
+          defaultModel: MODEL_CONFIG.defaultModel,
+          modelApiKey: secret,
+        };
+        writeSettings(database, models);
+        database.prepare('INSERT INTO settings VALUES (?, ?)').run('unowned', 'unchanged');
+        const headers = jsonRequestHeaders({ cookie });
+        const accepted = { ...CONFIG, maxRunningInstances: maximum };
+
+        const saved = await fetch(`${base}${PATH}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify(accepted),
+        });
+        expect(saved.status).toBe(200);
+        expect(await saved.json()).toEqual(accepted);
+        const before = database.prepare('SELECT * FROM settings ORDER BY key').all();
+        const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
+        const response = await fetch(`${base}${PATH}`, {
+          method: 'PUT',
+          headers,
+          body: JSON.stringify({
+            idleMinutes: 45,
+            cpuCores: 0.5,
+            memoryMiB: 1024,
+            maxRunningInstances: maximum + 1,
+            defaultPermissionTier: 'approval',
+          }),
+        });
+        const body = await response.text();
+        const read = await fetch(`${base}${PATH}`, { headers: { cookie } });
+
+        expect(response.status).toBe(400);
+        expect(JSON.parse(body)).toMatchObject({ statusCode: 400, error: 'Bad Request' });
+        expect(body).toContain(`PLATFORM_SUBNET_POOL provides ${String(maximum)} /28 subnets`);
+        expect(body).toContain(`maxRunningInstances=${String(maximum + 1)}`);
+        expect(await read.json()).toEqual(accepted);
+        expect(database.prepare('SELECT * FROM settings ORDER BY key').all()).toEqual(before);
+        expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
+        expect(readSettings(database)).toMatchObject(models);
+        expect((body + lines.join('')).includes(secret)).toBe(false);
+      },
+      false,
+      [],
+      { subnetPool, initialSettings: { maxRunningInstances: 1 } },
+    );
+  },
+);
+
 it('requires an administrator before parsing and preserves Origin, size and JSON admission', async () => {
   await withListeningApp(async (base, app, database, lines) => {
     const user = await registerAccount(app, 'employee@example.com');
@@ -103,15 +166,40 @@ it('requires an administrator before parsing and preserves Origin, size and JSON
       [jsonRequestHeaders({ cookie, origin: undefined }), '{}', 403],
       [jsonRequestHeaders({ cookie, origin: 'http://foreign.invalid' }), '{}', 403],
       [jsonRequestHeaders({ cookie, 'content-type': 'text/plain' }), secret, 415],
-      [
-        jsonRequestHeaders({ cookie }),
-        JSON.stringify({ ...CONFIG, modelApiKey: secret, padding: 'x'.repeat(1048576) }),
-        413,
-      ],
     ] as const) {
       const response = await fetch(`${base}${PATH}`, { method: 'PUT', headers, body });
       expect(response.status).toBe(status);
       expect(((await response.text()) + lines.join('')).includes(secret)).toBe(false);
+    }
+    // Observe the size rejection before uploading the rest of a declared oversized body.
+    // fetch may otherwise report a write reset while the server is already sending413.
+    const oversized = Promise.withResolvers<{ status: number; body: string }>();
+    const request = httpRequest(
+      `${base}${PATH}`,
+      {
+        method: 'PUT',
+        headers: { ...jsonRequestHeaders({ cookie }), 'content-length': '1048577' },
+      },
+      (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          body += chunk;
+        });
+        response.on('error', oversized.reject);
+        response.on('end', () => {
+          oversized.resolve({ status: response.statusCode ?? 0, body });
+        });
+      },
+    );
+    request.on('error', oversized.reject);
+    try {
+      request.end(JSON.stringify({ ...CONFIG, modelApiKey: secret }));
+      const response = await oversized.promise;
+      expect(response.status).toBe(413);
+      expect((response.body + lines.join('')).includes(secret)).toBe(false);
+    } finally {
+      request.destroy();
     }
     expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
     expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);

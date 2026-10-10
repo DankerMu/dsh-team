@@ -19,6 +19,7 @@ interface ConfigDescriptor {
   validationGuidance?: string;
   patch(body: unknown): Record<string, unknown> | null;
   project(settings: Settings): Record<string, unknown>;
+  validate?(settings: Settings): void;
 }
 const ERROR_SCHEMA = {
   type: 'object',
@@ -36,6 +37,8 @@ const ERRORS = {
   415: { statusCode: 415, error: 'Unsupported Media Type', message: 'JSON request body required' },
   500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
 } as const;
+
+class ClientConfigValidationError extends Error {}
 
 /** Internal transport/commit boundary for administrator configuration descriptors. */
 export function registerConfigRoute(
@@ -102,11 +105,17 @@ export function registerConfigRoute(
             writeSettings(database, patch);
           } catch (error) {
             if (!(error instanceof SettingsValidationError)) throw error;
-            const message =
-              descriptor.validationGuidance === undefined
-                ? error.message
-                : `${error.message}. ${descriptor.validationGuidance}`;
-            return reply.code(400).send({ ...invalid, message });
+            throw new ClientConfigValidationError(error.message);
+          }
+          if (descriptor.validate !== undefined) {
+            const settings = readSettings(database);
+            try {
+              descriptor.validate(settings);
+            } catch (error) {
+              // Descriptor validation errors are safe client guidance, not storage failures.
+              if (!(error instanceof Error)) throw error;
+              throw new ClientConfigValidationError(error.message);
+            }
           }
           recordAuditEvent(database, {
             type: descriptor.auditType,
@@ -117,7 +126,15 @@ export function registerConfigRoute(
           return descriptor.project(readSettings(database));
         });
         return commit();
-      } catch {
+      } catch (error) {
+        // Catch only after the transaction has rolled back any settings writes.
+        if (error instanceof ClientConfigValidationError) {
+          const message =
+            descriptor.validationGuidance === undefined
+              ? error.message
+              : `${error.message}. ${descriptor.validationGuidance}`;
+          return reply.code(400).send({ ...invalid, message });
+        }
         app.log.error(storageFailure);
         return reply.code(500).send(ERRORS[500]);
       }

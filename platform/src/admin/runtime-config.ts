@@ -1,5 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { PERMISSION_TIERS } from '../db/index.ts';
+import { validateSubnetPool } from '../orchestrator/index.ts';
 import { registerConfigRoute } from './config-route.ts';
 import type { AdminConfigOptions } from './config-route.ts';
 
@@ -19,7 +20,10 @@ const SCHEMA = {
     idleMinutes: INTEGER_SCHEMA,
     cpuCores: { type: 'number', exclusiveMinimum: 0, maximum: Number.MAX_VALUE },
     memoryMiB: INTEGER_SCHEMA,
-    maxRunningInstances: INTEGER_SCHEMA,
+    maxRunningInstances: {
+      ...INTEGER_SCHEMA,
+      description: 'Must not exceed the configured PLATFORM_SUBNET_POOL capacity in /28 subnets.',
+    },
     defaultPermissionTier: { type: 'string', enum: PERMISSION_TIERS },
   },
 } as const;
@@ -28,11 +32,9 @@ const DOMAINS =
   'cpuCores: finite positive number (> 0), fractional cores allowed; ' +
   `defaultPermissionTier: ${PERMISSION_TIERS.join(' | ')}`;
 
-export const runtimeConfigRoutes: FastifyPluginCallback<AdminConfigOptions> = (
-  app,
-  options,
-  done,
-) => {
+export const runtimeConfigRoutes: FastifyPluginCallback<
+  AdminConfigOptions & { subnetPool: string }
+> = (app, options, done) => {
   registerConfigRoute(app, options, {
     name: 'runtime',
     path: '/_platform/api/admin/runtime-config',
@@ -51,6 +53,9 @@ export const runtimeConfigRoutes: FastifyPluginCallback<AdminConfigOptions> = (
       )
         return null;
       return input;
+    },
+    validate(settings) {
+      validateSubnetPool(options.subnetPool, settings.maxRunningInstances);
     },
     project(settings) {
       return {

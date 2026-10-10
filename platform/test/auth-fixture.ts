@@ -1,7 +1,7 @@
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { buildApp } from '../src/app.ts';
-import type { DatabaseHandle } from '../src/db/index.ts';
-import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import type { DatabaseHandle, Settings } from '../src/db/index.ts';
+import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import type { GatewayUpstreamResolver } from '../src/gateway/index.ts';
 
 export const SOURCE = '192.0.2.20';
@@ -125,14 +125,21 @@ export async function withApp(
   cookieSecure = false,
   trustedProxies: readonly string[] = [],
   resolveUpstream?: GatewayUpstreamResolver,
+  options: { subnetPool?: string; initialSettings?: Partial<Settings> } = {},
 ): Promise<void> {
   const lines: string[] = [];
   const database = openDatabase(':memory:');
   let app: FastifyInstance | undefined;
   try {
     applyMigrations(database);
+    if (options.initialSettings !== undefined) writeSettings(database, options.initialSettings);
     app = await buildApp(
-      { ...CONFIG, cookieSecure, trustedProxies },
+      {
+        ...CONFIG,
+        cookieSecure,
+        trustedProxies,
+        subnetPool: options.subnetPool ?? CONFIG.subnetPool,
+      },
       database,
       {
         write: (line) => lines.push(line),

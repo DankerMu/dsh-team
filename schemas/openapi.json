@@ -1542,7 +1542,8 @@
                     "maxRunningInstances": {
                       "type": "integer",
                       "minimum": 1,
-                      "maximum": 9007199254740991
+                      "maximum": 9007199254740991,
+                      "description": "Must not exceed the configured PLATFORM_SUBNET_POOL capacity in /28 subnets."
                     },
                     "defaultPermissionTier": {
                       "type": "string",
@@ -1750,7 +1751,8 @@
                   "maxRunningInstances": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 9007199254740991
+                    "maximum": 9007199254740991,
+                    "description": "Must not exceed the configured PLATFORM_SUBNET_POOL capacity in /28 subnets."
                   },
                   "defaultPermissionTier": {
                     "type": "string",
@@ -1799,7 +1801,8 @@
                     "maxRunningInstances": {
                       "type": "integer",
                       "minimum": 1,
-                      "maximum": 9007199254740991
+                      "maximum": 9007199254740991,
+                      "description": "Must not exceed the configured PLATFORM_SUBNET_POOL capacity in /28 subnets."
                     },
                     "defaultPermissionTier": {
                       "type": "string",
