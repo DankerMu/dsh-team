@@ -398,3 +398,12 @@
 - Auth/session/Origin precede state resolution; only the admitted user chooses the result. Navigation GET/HEAD accepting HTML redirects302 to `/_platform/wait`; other HTTP requests and valid upgrade attempts receive503 with the exact `reason` code.
 - Selected packs: public contract, auth/secrets, errors, compatibility, resource lifetime and packaging/docs. Preserve ready forwarding, safe thrown-resolver502, body-parser bypass, credentials and #54 session teardown.
 - Evidence: five-state real HTTP navigation/API matrix, raw upgrade JSON framing/EOF, anonymous/Origin/reserved-path precedence, transitions to running, source/dist smoke, fullchecks/strictOpenSpec and exact-head21Docker/CI. No orchestrator query implementation, wait UI, lifecycle mutation, migration or configuration.
+
+## Issue #67 fixture
+
+- Feature; expanded, tasks14.1–14.2 only: one administrator API authorization boundary and a read-only, filtered/paginated account list.
+- Execute before #56 to supply its real prerequisites: #56 now depends on #77 and #83, which need #67/#78. This corrects missing DAG edges without moving model configuration or permission mapping into the gateway slice; rationale is recorded on #56.
+- Add admin module with plugin-level onRequest authorization from existing session-cookie/getSessionUser public APIs. Active administrator gets200; missing/expired/revoked/disabled session401; authenticated employee403. No client-selected role/identity.
+- GET `/_platform/api/admin/users` returns only id/email/role/status/createdAt plus pagination metadata; exact literal normalized-email substring search, stable descending createdAt/id order, bounded page size. No credentials, employee files or DSH content.
+- Selected packs: authorization/secrets, persistence read boundary, validation/errors, schema/API, compatibility and docs. No new schema/dependency/config, account mutation, admin UI, model/runtime settings or read-audit event.
+- Evidence: real401/403/200, role/session transitions, literal search/pagination/empty results, exact allowlisted JSON and secret non-disclosure, schema regeneration, full checks, source/dist smoke, independent four-seat review and exact-head21Docker/CI. Rule-file test guidance is tracked for the existing Epic-end human review.

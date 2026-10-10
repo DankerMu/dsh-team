@@ -1,5 +1,6 @@
 import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { adminRoutes } from './admin/index.ts';
 import {
   createSourceAddressResolver,
   installRequestGuard,
@@ -97,6 +98,7 @@ export async function buildApp(
       cookieSecure: config.cookieSecure,
       resolveSourceAddress,
     });
+    await app.register(adminRoutes, { database });
     await app.register(gatewayRoutes, {
       database,
       connections,

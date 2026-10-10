@@ -800,6 +800,8 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 
 依赖：第 2、9、10、11 组。
 
+执行DAG补正：12.1还依赖15.1（#77）的真实模型配置存储和16.1–16.2（#83）的发行版权限映射；原issue漏了这两条边，已补正。按#67→#77→#78→#83先完成既有前置，再恢复#56及后续原顺序，不缩减12.1真实启动验收。依据：设计决定2/13、#29边界；记录见 https://github.com/DankerMu/dsh-team/issues/56#issuecomment-6093227834 。
+
 - [ ] 12.1 把网关接到编排器：上游地址、端口和 DSH cookie 取自 `instances` 表；提供 `POST /_platform/api/instance/start`（幂等，返回当前状态）和 `GET /_platform/api/instance`（状态和原因）。启动只有这一个入口。验证：`pnpm test:docker`——注册并登录后调用启动接口，轮询状态到就绪，随后首页请求得到 DSH 的界面；实例运行中时首页请求直接得到 DSH 的界面；对已在运行的实例再调启动接口不产生第二个容器；`pnpm contract:check` 通过（规格“登录后按需启动”的“首次登录”“实例已在运行”场景）。
 - [ ] 12.2 新实例可直接使用：按第 3 组的结论。验证：`pnpm test:docker`——新用户首次进入，不经任何选择即可创建 Session；界面语言为中文；没有公告（规格“新实例可以直接使用”）。
 - [ ] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
@@ -828,8 +830,10 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 
 依赖：第 12、13 组。接口在 `platform/src/admin/`。
 
-- [ ] 14.1 管理员鉴权：`/_platform/api/admin/` 下的全部接口要求管理员角色。验证：集成测试——未登录 401、员工 403、管理员 200（规格“只有管理员能进后台”）。
-- [ ] 14.2 账号列表接口：邮箱、角色、状态、创建时间；按邮箱搜索，分页。验证：集成测试——回应里没有密码哈希、平台会话、DSH cookie；搜索和分页结果正确，无匹配时返回空列表（规格“账号列表”）。
+本组整体包含依赖实例/UI的后续操作与页面，但14.1–14.2只读API切片按#67的精确DAG仅依赖#19，可先交付以解锁模型配置和权限映射；不提前实现本组其他任务。
+
+- [x] 14.1 管理员鉴权：`/_platform/api/admin/` 下的全部接口要求管理员角色。验证：集成测试——未登录 401、员工 403、管理员 200（规格“只有管理员能进后台”）。
+- [x] 14.2 账号列表接口：邮箱、角色、状态、创建时间；按邮箱搜索，分页。验证：集成测试——回应里没有密码哈希、平台会话、DSH cookie；搜索和分页结果正确，无匹配时返回空列表（规格“账号列表”）。
 - [ ] 14.3 实例列表接口：每个用户实例的状态（未创建、已停止、启动中、运行中、出错）、最近启动时间、最近活动时间、最近一次错误。验证：集成测试——五种状态各有一行且字段正确；回应里没有 DSH cookie（规格“实例状态与操作”）。
 - [ ] 14.4 禁用和启用：禁用按“标记禁用、删除平台会话、销毁全部连接、停止实例（原因“禁用”）”的顺序在一次操作里完成；管理员不能禁用自己；写审计。验证：`pnpm test:docker`——被禁用用户的长连接在 5 秒内断开、实例停止、再登录被拒；启用后能登录且数据还在；审计里有禁用、启用和原因为“禁用”的实例停止（规格“禁用和启用账号”“禁用账号立即断开”）。
 - [ ] 14.5 重置密码：管理员设置新密码，删除该用户的全部平台会话；写审计（不含密码）。验证：集成测试——旧密码不能登录，新密码能；该用户已有的平台会话失效；5 位新密码被拒绝且原密码不变（规格“重置密码”）。
@@ -842,6 +846,14 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 
 Suggested fixture level: expanded - 管理权限、平台会话失效和对实例的破坏性操作
 Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表接口，约 200 行）
+
+### Issue #67 risk/evidence map (tasks14.1–14.2 only)
+
+- Authorization/secrets: inherited admin-plugin guard before query validation, canonical session lookup/current role,401/403/200 and demotion/disable/revocation/expiry, forged identity denied; allowlisted rows contain no password/session/DSH credential material.
+- Persistence/validation/errors: bound literal normalized-email substring, shared filtered count/page predicate, deterministic tie-break order, safe offset and bounded pageSize, empty/no-match/out-of-range, fixed storage500 with no raw error disclosure. Listing writes no audit or account data.
+- Schema/compatibility/docs: root app registration and generated response/query contract, established in-memory unit/real-TCP integration split plus explicit platformAGENTS guidance, existing auth/gateway preserved. SemanticRED/GREEN, fullcheck/strictOpenSpec, source/dist smoke, independent review and exact-head21Docker/CI; rule-file human review remains deferred to Epic end.
+
+本地验证（#67）：实际HTTP未登录列表先返回404而非401，接入插件级onRequest后GREEN；完整检查1225单元/751集成、逐文件覆盖、契约生成/检查、构建及anti-drift通过，重复率2.86%。真实TCP验证401/403/200、同一cookie提升角色后即时生效、伪造管理员字段无效、全部账号及带并列时间戳的分页、字面百分号/下划线与SQL片段搜索、空结果和过滤total、秘密字段不出现在序列化输出、读列表不增审计。13项单元覆盖降权/禁用/过期/撤销、非法页码/页大小/offset/搜索长度及安全storage500。源码/dist独立HTTP smoke均通过；只在隔离加载器内移除角色检查的负控因200≠403被拒绝，取消过滤的负控因错误账号/total被拒绝，恢复源码/dist再次GREEN；未改工作树生产文件。首条鉴权RED在实现前，其余回归和负控为补充验证，未冒充逐项test-first。规则文件人工审查仍汇总至Epic结束；精确头review/Docker/CI另行发布。
 
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 
