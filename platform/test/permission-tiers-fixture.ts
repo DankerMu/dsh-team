@@ -1,5 +1,9 @@
 /** Container payload; the existing execScript/runUserImage owner bounds and removes all resources. */
-export function permissionScenarioScript(host: string, overlayFiles: readonly string[]): string {
+export function permissionScenarioScript(
+  host: string,
+  overlayFiles: readonly string[],
+  revocationHost: string,
+): string {
   return `
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -7,10 +11,12 @@ import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { request } from 'node:http';
 import { randomUUID } from 'node:crypto';
 const host=${JSON.stringify(host)};
+const revocationHost=${JSON.stringify(revocationHost)};
 const overlays=${JSON.stringify(overlayFiles)}.map(path=>readFileSync(path,'utf8'));
 const root='/data/home/permission-fixture-'+randomUUID();
 mkdirSync(root);
 writeFileSync(root+'/host.mjs',host);
+writeFileSync(root+'/permission-tiers-revocation-host.mjs',revocationHost);
 // Employee attempts to replace the identity/default and remove the required edge.
 writeFileSync('/data/home/cordis.patch.yml',JSON.stringify([
   {id:'agent-loop',inject:[]},

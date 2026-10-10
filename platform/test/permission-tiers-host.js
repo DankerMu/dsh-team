@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { postGuardRevocation } from './permission-tiers-revocation-host.mjs';
 const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
 const load = (name) => import(pathToFileURL(require.resolve(name)).href);
 const { LlmAdapter, createUserMessage, ToolCallId } = await load('@deepseek-ai/dsh-llm');
@@ -15,6 +16,9 @@ export const inject = [
   'approval',
   'permissionPresets',
   'sessionProjections',
+  'sessions',
+  'sessionPersistence',
+  'commands',
   'agentPresets',
   'subagents',
   'loader',
@@ -546,6 +550,83 @@ async function protocols(ctx, agent, adapter, approval) {
   assert.equal(readFileSync(path, 'utf8'), 'exact-owned-bytes\n');
 }
 
+async function storedSelection(ctx, agent) {
+  await ctx.sessions.flush(agent.session);
+  const handle = await ctx.sessionPersistence.open(agent.session.id, 'read');
+  try {
+    const { events } = await handle.read();
+    return events.filter((event) => event.type === 'permission/preset').at(-1).data.preset;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Ordinary root fork uses the existing Session owner, not subagents.start('fork'). */
+async function commandAndRootFork(ctx, parent, approval) {
+  const signal = new AbortController().signal;
+  const command = await ctx.commands.execute(parent, '/permission approval', [], signal);
+  assert.equal(command.result.kind, 'success');
+  assert.equal(command.result.text, 'preset approval');
+  assert.equal(state(ctx, parent).preset, 'approval');
+  assert.equal(state(ctx, parent).approval, 'ask');
+  assert.equal(await storedSelection(ctx, parent), 'approval');
+  approval.answer = 'rejected';
+  const denied = target('command-denied');
+  assert.equal((await write(ctx, parent, denied)).isError, true);
+  assert(!existsSync(denied));
+  approval.answer = 'allowed-once';
+  const allowed = target('command-allowed');
+  assert.equal((await write(ctx, parent, allowed)).isError, false);
+  assert.equal(readFileSync(allowed, 'utf8'), 'exact-owned-bytes\n');
+  const forked = await ctx.get('sessionController').fork({ sessionId: parent.session.id });
+  const child = ctx.agents.get(forked.sessionId);
+  assert(child);
+  try {
+    assert.equal(child.session.header.origin, undefined);
+    assert.equal(child.session.header.parentSession, parent.session.id);
+    assert.equal(state(ctx, child).preset, 'approval');
+    assert.equal(state(ctx, child).approval, 'ask');
+    const own = child.session.snapshotEvents().slice(child.session.inheritedEventCount);
+    assert.deepEqual(
+      own.filter((event) =>
+        ['permission/preset', 'sandbox/mode', 'approval/policy'].includes(event.type),
+      ),
+      [],
+    );
+    const changed = await ctx.commands.execute(
+      parent,
+      '/permission danger-full-access',
+      [],
+      signal,
+    );
+    assert.equal(changed.result.kind, 'success');
+    assert.equal(state(ctx, parent).preset, 'danger-full-access');
+    assert.equal(state(ctx, child).preset, 'approval');
+    assert.equal(await storedSelection(ctx, child), 'approval');
+    for (const answer of ['rejected', 'allowed-once']) {
+      approval.answer = answer;
+      const path = target('root-fork');
+      const before = approval.requests.length;
+      const result = await write(ctx, child, path);
+      assert.equal(result.isError, answer === 'rejected');
+      assert.equal(approval.requests.length, before + 1);
+      assert.equal(approval.requests.at(-1).agent, child);
+      if (answer === 'rejected') assert(!existsSync(path));
+      else assert.equal(readFileSync(path, 'utf8'), 'exact-owned-bytes\n');
+    }
+    const independent = await ctx.commands.execute(child, '/permission auto-review', [], signal);
+    assert.equal(independent.result.kind, 'success');
+    assert.equal(state(ctx, child).preset, 'auto-review');
+    assert.equal(state(ctx, parent).preset, 'danger-full-access');
+    assert.equal(await storedSelection(ctx, child), 'auto-review');
+  } finally {
+    child.cancel({ kind: 'user' });
+    await child.whenIdle();
+    // The public fork returns only a Session id; session-controller/owned DSH
+    // process remains its disposal owner, as in the browser fixture.
+  }
+}
+
 async function staleAndCancel(ctx, agent, adapter, approval) {
   const path = target('stale');
   ctx.permissionPresets.set(agent.session, 'approval');
@@ -665,6 +746,8 @@ export function apply(ctx) {
         await ptc(ctx, approval);
         await children(ctx, handle.agent, approval);
         await staleAndCancel(ctx, handle.agent, adapter, approval);
+        await postGuardRevocation(ctx, handle.agent, approval, { target, write, state });
+        await commandAndRootFork(ctx, handle.agent, approval);
         await persistence(ctx, handle, approval);
       } else if (INDEX === 1) {
         await manual(ctx, handle.agent, approval);

@@ -30,7 +30,7 @@ export interface Agent {
       ) => Promise<PromptAssembly>,
     ): unknown;
   };
-  cancel(cause: { kind: 'disposed' }): void;
+  cancel(cause: { kind: 'disposed' | 'user' }, options?: { keepInbox?: boolean }): void;
   whenIdle(): Promise<void>;
 }
 export interface Execution {

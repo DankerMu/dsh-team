@@ -5,6 +5,8 @@ function runtime(preset = 'approval') {
   const handlers = new Map();
   const withdrawals = [];
   let guard, dispose;
+  const controller = new AbortController();
+  const cancellations = [];
   const state = {
     preset,
     sandbox: 'danger-full-access',
@@ -13,7 +15,10 @@ function runtime(preset = 'approval') {
   const agent = {
     options: {},
     session: { id: 'root', header: { cwd: '/data/work' }, requestHeader: () => undefined },
-    cancel: () => {},
+    cancel: (cause, options) => {
+      cancellations.push({ cause, options });
+      controller.abort(cause);
+    },
     whenIdle: async () => {},
   };
   const ctx = {
@@ -59,7 +64,7 @@ function runtime(preset = 'approval') {
     callId: 'call',
     arguments: {},
     agent,
-    signal: new AbortController().signal,
+    signal: controller.signal,
   };
   return {
     ctx,
@@ -67,6 +72,7 @@ function runtime(preset = 'approval') {
     agent,
     handlers,
     withdrawals,
+    cancellations,
     execution,
     gate: (next) =>
       handlers.get('tools/pre-execute')(execution, next ?? (async () => ({ kind: 'allow' }))),
@@ -156,7 +162,9 @@ describe('managed permission authorization', () => {
 
     expect((await fixture.gate()).kind).toBe('deny');
   });
+});
 
+describe('managed permission revocation', () => {
   it('invalidates native approval across ABA but not approval audit events', async () => {
     const fixture = runtime();
     await fixture.gate();
@@ -165,9 +173,130 @@ describe('managed permission authorization', () => {
 
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
-    expect(fixture.guard()).toBe('Managed permission authorization changed; retry the call.');
+    expect(fixture.execution.signal.aborted).toBe(true);
+    expect(fixture.guard()).toBeDefined();
   });
 
+  it.each(['permission/preset', 'sandbox/mode', 'approval/policy'])(
+    'revokes admitted mutations when %s changes before their result',
+    async (type) => {
+      const fixture = runtime('danger-full-access');
+      expect(await fixture.gate()).toEqual({ kind: 'allow' });
+      expect(fixture.guard()).toBeUndefined();
+
+      fixture.handlers.get('session/event')(fixture.agent.session, { type });
+
+      expect(fixture.execution.signal.aborted).toBe(true);
+      expect(fixture.cancellations).toEqual([
+        { cause: { kind: 'user' }, options: { keepInbox: true } },
+      ]);
+    },
+  );
+
+  it('does not cancel another Session or an idle Session without owned mutations', async () => {
+    const fixture = runtime('danger-full-access');
+    const event = { type: 'permission/preset' };
+    fixture.handlers.get('session/event')(fixture.agent.session, event);
+    await fixture.gate();
+
+    fixture.handlers.get('session/event')({ id: 'other' }, event);
+    fixture.handlers.get('session/event')({ ...fixture.agent.session }, event);
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'approval/decided' });
+
+    expect(fixture.execution.signal.aborted).toBe(false);
+    expect(fixture.cancellations).toEqual([]);
+    expect(fixture.guard()).toBeUndefined();
+  });
+
+  it('revokes one Session without aborting another Session’s admitted mutation', async () => {
+    const fixture = runtime('danger-full-access');
+    const otherController = new AbortController();
+    const other = {
+      ...fixture.agent,
+      session: { ...fixture.agent.session, id: 'other' },
+      cancel: (cause) => otherController.abort(cause),
+    };
+    fixture.ctx.agents.get = (id) => (id === 'other' ? other : fixture.agent);
+    await fixture.gate();
+    const otherExecution = {
+      ...fixture.execution,
+      agent: other,
+      callId: 'other-call',
+      signal: otherController.signal,
+    };
+    await fixture.handlers.get('tools/pre-execute')(otherExecution, async () => ({
+      kind: 'allow',
+    }));
+
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
+
+    expect(fixture.execution.signal.aborted).toBe(true);
+    expect(otherExecution.signal.aborted).toBe(false);
+    expect(fixture.cancellations).toHaveLength(1);
+  });
+
+  it('does not stop readonly or completed mutations on a later permission change', async () => {
+    const fixture = runtime('danger-full-access');
+    await fixture.gate();
+    fixture.handlers.get('tools/result')(fixture.execution);
+    fixture.execution.name = 'read';
+    await fixture.gate();
+
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
+
+    expect(fixture.execution.signal.aborted).toBe(false);
+    expect(fixture.cancellations).toEqual([]);
+  });
+
+  it('cancels one original Agent once for overlapping mutations and an ABA bundle', async () => {
+    const fixture = runtime('danger-full-access');
+    await fixture.gate();
+    const nested = { ...fixture.execution, callId: 'nested', name: 'bash' };
+    await fixture.handlers.get('tools/pre-execute')(nested, async () => ({ kind: 'allow' }));
+
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'sandbox/mode' });
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
+
+    expect(nested.signal.aborted).toBe(true);
+    expect(fixture.execution.signal.aborted).toBe(true);
+    expect(fixture.cancellations).toEqual([
+      { cause: { kind: 'user' }, options: { keepInbox: true } },
+    ]);
+  });
+
+  it('does not cancel a replacement Agent for an old execution', async () => {
+    const fixture = runtime('danger-full-access');
+    await fixture.gate();
+    fixture.ctx.agents.get = () => ({ ...fixture.agent });
+
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
+
+    expect(fixture.execution.signal.aborted).toBe(false);
+    expect(fixture.cancellations).toEqual([]);
+    expect(fixture.guard()).toBeDefined();
+  });
+
+  it('interrupts a pending downstream wait using the original caller signal', async () => {
+    const fixture = runtime('danger-full-access');
+    const entered = Promise.withResolvers();
+    const pending = fixture.gate(async () => {
+      const stopped = Promise.withResolvers();
+      fixture.execution.signal.addEventListener('abort', () => stopped.resolve(), { once: true });
+      entered.resolve();
+      await stopped.promise;
+      return { kind: 'allow' };
+    });
+    await entered.promise;
+
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'approval/policy' });
+
+    expect(await pending).toEqual({ kind: 'cancel' });
+    expect(fixture.execution.signal.aborted).toBe(true);
+  });
+});
+
+describe('managed permission review and teardown', () => {
   it('cancels admitted calls while closing without changing durable permissions', async () => {
     const fixture = runtime();
     await fixture.gate();
@@ -190,6 +319,26 @@ describe('managed permission authorization', () => {
     });
   });
 
+  it('cancels an in-flight Auto review on permission revocation without awaiting its deadline', async () => {
+    const fixture = runtime('auto-review');
+    fixture.agent.options = { provider: 'owned', model: 'selected' };
+    const entered = Promise.withResolvers();
+    fixture.ctx.llm.stream = async function* (options) {
+      const stopped = Promise.withResolvers();
+      options.signal.addEventListener('abort', () => stopped.resolve(), { once: true });
+      entered.resolve();
+      await stopped.promise;
+      yield { type: 'finish', reason: { kind: 'aborted' } };
+    };
+    const pending = fixture.gate();
+    await entered.promise;
+
+    fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
+
+    expect(await pending).toEqual({ kind: 'cancel' });
+    expect(fixture.execution.signal.aborted).toBe(true);
+  });
+
   it('permits Auto only after a complete review and invalidates a pending review across ABA', async () => {
     const fixture = runtime('auto-review');
     fixture.agent.options = { provider: 'owned', model: 'selected' };
@@ -208,7 +357,7 @@ describe('managed permission authorization', () => {
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
     release.resolve();
-    expect((await pending).kind).toBe('deny');
+    expect((await pending).kind).toBe('cancel');
   });
 
   it('cancels review and waits for Agent quiescence before finishing unload', async () => {

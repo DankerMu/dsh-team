@@ -79,7 +79,21 @@ export function apply(ctx) {
   ctx.effect(function* () {
     const withdraw = ctx.provide('managedPermissions', Object.freeze({}));
     yield ctx.on('session/event', (session, event) => {
-      if (PERMISSION_EVENTS.has(event.type)) revisions.set(session, revision(session) + 1);
+      if (!PERMISSION_EVENTS.has(event.type)) return;
+      revisions.set(session, revision(session) + 1);
+      // Retain admitted calls until tools/result: the registry guard precedes
+      // asynchronous checkpoint/dispatch waits. Abort the ORIGINAL turn signal
+      // so the released checkpoint and registry body boundary both see revocation.
+      for (const [exec, call] of calls) {
+        if (
+          call.agent.session === session &&
+          !exec.signal.aborted &&
+          ctx.agents.get(session.id) === call.agent
+        ) {
+          call.agent.cancel({ kind: 'user' }, { keepInbox: true });
+          break; // One live Agent owns this Session, including nested PTC calls.
+        }
+      }
     });
     yield ctx.on('agent/created', ({ agent, source }) => {
       if (!accepting) throw new Error(UNAVAILABLE);

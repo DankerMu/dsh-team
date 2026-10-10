@@ -49,6 +49,10 @@ it('authorizes real released tools through native approval, Auto protocol, child
   if (platform() !== 'linux' || arch() !== 'x64')
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   const host = readFileSync(new URL('./permission-tiers-host.js', import.meta.url), 'utf8');
+  const revocationHost = readFileSync(
+    new URL('./permission-tiers-revocation-host.mjs', import.meta.url),
+    'utf8',
+  );
 
   await runUserImage(
     'managed-policy',
@@ -98,7 +102,7 @@ it('authorizes real released tools through native approval, Auto protocol, child
       return execScript(
         lifecycle,
         `dsh-team-test-${lifecycle.runId}-permission-behavior`,
-        permissionScenarioScript(host, overlayFiles),
+        permissionScenarioScript(host, overlayFiles, revocationHost),
       );
     },
   );
