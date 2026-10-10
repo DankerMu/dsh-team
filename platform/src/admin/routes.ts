@@ -1,5 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
+import type { SourceAddressResolver } from '../auth/index.ts';
+import { modelConfigRoutes } from './model-config.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
 interface AccountQuery {
@@ -43,11 +45,10 @@ const ACCOUNT_SCHEMA = {
 } as const;
 const ACCOUNT_FILTER = ' FROM users WHERE instr(email, ?) > 0';
 
-export const adminRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> = (
-  app,
-  { database },
-  done,
-) => {
+export const adminRoutes: FastifyPluginCallback<{
+  database: DatabaseHandle;
+  resolveSourceAddress: SourceAddressResolver;
+}> = (app, { database, resolveSourceAddress }, done) => {
   app.addHook('onRequest', (request, reply, next) => {
     try {
       const token = readSessionCookie(request.headers.cookie);
@@ -126,5 +127,6 @@ export const adminRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> = 
       }
     },
   );
+  app.register(modelConfigRoutes, { database, resolveSourceAddress });
   done();
 };

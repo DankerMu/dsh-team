@@ -13,6 +13,9 @@ export interface Settings {
   readonly maxRunningInstances: number;
   readonly defaultPermissionTier: PermissionTier;
   readonly models: ModelSetting[];
+  readonly modelBaseUrl: string;
+  readonly modelApiKey: string;
+  readonly defaultModel: string;
 }
 const UPSERT_SETTING =
   'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
@@ -26,14 +29,19 @@ const DEFAULT_SETTINGS: Settings = {
   maxRunningInstances: 60,
   defaultPermissionTier: 'yolo',
   models: [],
+  modelBaseUrl: '',
+  modelApiKey: '',
+  defaultModel: '',
 };
 interface SettingRow {
   key: string;
   value: string;
 }
 
+export class SettingsValidationError extends Error {}
+
 function fieldError(field: string): Error {
-  return new Error(`Invalid settings field ${JSON.stringify(field)}`);
+  return new SettingsValidationError(`Invalid settings field ${JSON.stringify(field)}`);
 }
 function requirePositiveSafeInteger(field: string, value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
@@ -65,7 +73,13 @@ function parseModels(value: unknown): ModelSetting[] {
   return models;
 }
 
+const STRING_FIELDS = ['modelBaseUrl', 'modelApiKey', 'defaultModel'];
+
 function parseOwned(key: string, value: unknown): unknown {
+  if (STRING_FIELDS.includes(key)) {
+    if (typeof value !== 'string') throw fieldError(key);
+    return value;
+  }
   switch (key) {
     case 'idleMinutes':
     case 'memoryMiB':
@@ -88,6 +102,17 @@ function parseOwned(key: string, value: unknown): unknown {
   }
 }
 
+function validateDefault(settings: Settings): void {
+  if (
+    settings.defaultModel !== '' &&
+    !settings.models.some((model) => model.name === settings.defaultModel)
+  ) {
+    throw new SettingsValidationError(
+      'Invalid settings field "defaultModel": default model must be in the model list',
+    );
+  }
+}
+
 export function readSettings(db: Database.Database): Settings {
   const settings = { ...DEFAULT_SETTINGS, models: [] as ModelSetting[] };
   const rows = db.prepare<[], SettingRow>('SELECT key, value FROM settings').all();
@@ -99,6 +124,9 @@ export function readSettings(db: Database.Database): Settings {
       case 'maxRunningInstances':
       case 'defaultPermissionTier':
       case 'models':
+      case 'modelBaseUrl':
+      case 'modelApiKey':
+      case 'defaultModel':
         break;
       default:
         continue;
@@ -111,12 +139,13 @@ export function readSettings(db: Database.Database): Settings {
     }
     Object.assign(settings, { [row.key]: parseOwned(row.key, parsed) });
   }
+  validateDefault(settings);
   return settings;
 }
 
 export function writeSettings(db: Database.Database, patch: unknown): void {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
-    throw new Error('Invalid settings patch');
+    throw new SettingsValidationError('Invalid settings patch');
   }
   // HTTP/admin callers supply untyped objects; field validation below is the type boundary.
   const record = patch as Record<string, unknown>;
@@ -130,6 +159,9 @@ export function writeSettings(db: Database.Database, patch: unknown): void {
 
   const upsert = db.prepare(UPSERT_SETTING);
   const persist = db.transaction(() => {
+    const merged = readSettings(db);
+    for (const [key, value] of entries) Object.assign(merged, { [key]: value });
+    validateDefault(merged);
     for (const [key, value] of entries) {
       upsert.run(key, JSON.stringify(value));
     }

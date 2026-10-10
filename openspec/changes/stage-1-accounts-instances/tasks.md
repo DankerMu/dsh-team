@@ -859,7 +859,7 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 
 依赖：第 8、14 组。
 
-- [ ] 15.1 模型配置接口：读写地址、密钥、模型清单（每项是模型名加可选的上下文窗口）、默认模型；读取时密钥只返回“已设置”或“未设置”；默认模型必须在清单里；写审计（不含密钥）。验证：集成测试——读接口的回应里没有密钥的任何片段；默认模型不在清单里时被拒绝；保存后平台日志和审计里没有密钥原文（规格“模型由管理员统一配置”的“默认模型必须在清单内”场景和“密钥不出现在界面和日志里”）。
+- [x] 15.1 模型配置接口：读写地址、密钥、模型清单（每项是模型名加可选的上下文窗口）、默认模型；读取时密钥只返回“已设置”或“未设置”；默认模型必须在清单里；写审计（不含密钥）。验证：集成测试——读接口的回应里没有密钥的任何片段；默认模型不在清单里时被拒绝；保存后平台日志和审计里没有密钥原文（规格“模型由管理员统一配置”的“默认模型必须在清单内”场景和“密钥不出现在界面和日志里”）。
 - [ ] 15.2 运行参数接口：空闲分钟数、单实例 CPU 和内存、同时运行上限、默认权限档；取值范围校验；写审计。验证：集成测试——越界值（0、非数字）被拒绝并指出范围；合法值保存后读回一致；把同时运行上限从 60 改为 2 后第三个用户的启动得到“已满”（规格“运行参数页”）。
 - [ ] 15.3 配置变更的生效：变更后已在运行的实例不变，下次启动用新配置；接口返回“有 N 个运行中的实例仍在用旧配置”。验证：`pnpm test:docker`——改模型清单后，未重启的实例里模型选择器不变，重启后变化；模型选择器里只有已配置的模型且默认选中默认模型（规格“配置变更在下次启动时生效”和“模型选择器只有已配置的模型”场景）。
 - [ ] 15.4 模型配置页：表单和校验提示；密钥输入框保存后只显示“已设置”；保存后提示“下次启动实例时生效”并提供“重启全部运行中的实例”。验证：`pnpm test:ui`——填写、保存走通；保存后页面收到的数据里没有密钥（规格“模型配置页”）。
@@ -868,6 +868,15 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 
 Suggested fixture level: expanded - 处理模型密钥，并改变所有实例的生产配置
 Minimal mergeable slice: 15.1（模型配置读写接口和测试，约 200 行）
+
+### Issue #77 risk/evidence map (task15.1 only)
+
+- Public API/schema/configuration: exact safe GET/PUT DTO, raw input types, optional context, default membership and fresh unconfigured state; generated contract plus actual TCP and source/dist reopen evidence. Existing runtime settings and models-only repository clients remain compatible.
+- Authorization/secrets: inherited guard, canonical commit-time session/role recheck after delayed body, Origin/JSON policy, generated credentials absent from responses/audit/logs including failures; exercise explicit structured logger redaction. No key fragments or masked key returned.
+- Persistence/order/errors: single settings writer validates merged state; key omission preserves credential; replacement and atomic audit; invalid input and injected audit failure leave previous settings/audit unchanged. Real SQLite/file reopen, no mock persistence.
+- Packaging/docs/compatibility: fullcheck and strictOpenSpec, source/dist HTTP smoke, independent four-seat review and exact-head21Docker/CI. Rule-file corrections use the existing Epic-end human review ledger. No new dependencies, paths, limits, model calls, UI or restart policy.
+
+本地验证（#77）：首条真实HTTP tracer在实现前返回404而非200；实现后模型/日志9项TCP用例通过。完整检查1264单元/759集成、逐文件覆盖、生成契约、构建及anti-drift通过，重复率2.89%；settings覆盖100%，模型路由语句92.15%/分支82.85%。真实HTTP及路由单元覆盖安全读写、原样可选context、密钥省略保留/替换、默认模型拒绝、400/401/403/413/415/500分类、延迟请求体后的撤销/降权及审计失败回滚；显式日志序列化证明精确路径脱敏。源码和dist独立HTTP/fileDB smoke均通过并重开0600数据库；密钥字段错误投影、models-only遗漏成员验证、信任旧入口身份三项隔离加载负控分别在预期语义断言被拒绝，恢复源码/dist均GREEN。第三项负控首次因格式化后锚点不匹配而未执行，不计RED；修正仅探针锚点后取得语义拒绝。除首条tracer外测试为实现期间/后补充，未冒充逐项test-first；初次静态检查的类型/复杂度/void问题修正后全绿。精确头review/Docker/CI另行发布，规则文件仍留待Epic末人工审查。
 
 ## 16. 权限三档（任务包 1.13）
 

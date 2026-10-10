@@ -32,6 +32,11 @@ const LOG_REDACT_PATHS = [
   'req.body.password',
   'req.body.currentPassword',
   'req.body.newPassword',
+  'req.body.apiKey',
+  'req.body.modelApiKey',
+  'apiKey',
+  'modelApiKey',
+  '*.modelApiKey',
   '*.password',
   '*.currentPassword',
   '*.newPassword',
@@ -98,7 +103,7 @@ export async function buildApp(
       cookieSecure: config.cookieSecure,
       resolveSourceAddress,
     });
-    await app.register(adminRoutes, { database });
+    await app.register(adminRoutes, { database, resolveSourceAddress });
     await app.register(gatewayRoutes, {
       database,
       connections,
