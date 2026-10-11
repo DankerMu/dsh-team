@@ -497,3 +497,11 @@
 - Preserve real backend login/Origin/rate-limit/session behavior, static namespace confinement and gateway-only instance routing/start ownership.
 - Selected risk packs: all eleven assessed in tasks.md; no backend API, schema, instance startup or other page changes.
 - Evidence floor: enabled-form public browser semantic RED/GREEN, real login success and three rejection classes with Chinese feedback, loading/duplicate-submission and safe failure component tests, 80% per-file coverage, actual screenshots and no unexpected browser errors, independent browser smoke, full checks and frozen-head Docker/CI/review.
+
+## Issue #64 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task13.4 only.
+- Blast radius: registration credential UI, shared login form behavior and explicit registration-page delivery.
+- Preserve all #63 login semantics and tests, backend registration/Origin/session contracts, static confinement/unknown404 and gateway-owned instance startup.
+- Selected risk packs: all eleven mapped in tasks.md; no backend API/schema changes, new dependency, password/wait/admin page or DSH change.
+- Evidence floor: public registration-page404→real rendered form tracer, actual browser short400/duplicate409/success201 with own HttpOnly session and gateway admission, pending/one-flight and login compatibility unit/browser proof, independent source/dist smoke, full checks and final frozen-head Docker/CI/review.

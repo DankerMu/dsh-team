@@ -190,7 +190,7 @@ verification:
       required_at: "L3+"
     platform_ui:
       command: "pnpm test:ui"
-      evidence: "fresh built React login form over owned real TCP/SQLite, disabled non-submitting controls, local assets, screenshot, zero console/page errors and external requests"
+      evidence: "fresh built React login/registration over owned real TCP/SQLite, pending single-flight, real login401/403/429/200 and registration400/409/201, browser-owned HttpOnly session and fixed-root gateway landing, local assets, screenshots, zero unexpected console/page errors and external requests"
       required_at: "L3+"
     docker_ci_evidence:
       command: "pnpm verify:docker-evidence"
@@ -223,7 +223,7 @@ exemptions:
       exit_condition: "none"
     - path: "platform/web/src/main.tsx"
       rules: [coverage, test_pairing]
-      reason: "Declarative React bootstrap with only a fail-fast HTML mount prerequisite; pnpm test:ui renders the actual build over real platform HTTP and checks the accessible disabled form. Application behavior files remain paired and covered."
+      reason: "Declarative React bootstrap with only a fail-fast HTML mount prerequisite; pnpm test:ui renders the actual build over real platform HTTP and exercises accessible login/registration, pending/error feedback and authenticated gateway landing. Application behavior files remain paired and covered."
       expires: never
       exit_condition: "remove this exact exemption if the entry gains application state, event handlers or behavior beyond the mount prerequisite"
     - path: "platform/test/managed-policy-observer.js"
