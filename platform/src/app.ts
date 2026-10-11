@@ -15,8 +15,10 @@ import { healthRoutes } from './health.ts';
 import {
   createGatewayConnections,
   gatewayRoutes,
+  instanceRoutes,
   type GatewayUpstreamResolver,
 } from './gateway/index.ts';
+import type { InstanceService } from './orchestrator/index.ts';
 
 /**
  * Log fields that must never be written in clear text, whatever the log level.
@@ -62,6 +64,7 @@ export async function buildApp(
   database: DatabaseHandle,
   logDestination?: LogDestination,
   resolveUpstream?: GatewayUpstreamResolver,
+  instanceService?: InstanceService,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -71,6 +74,7 @@ export async function buildApp(
     },
   });
   const connections = createGatewayConnections();
+  const gatewayResolver = instanceService?.resolveUpstream ?? resolveUpstream;
   app.decorate('disconnectUserConnections', connections.disconnectUser);
 
   try {
@@ -108,21 +112,31 @@ export async function buildApp(
       resolveSourceAddress,
       subnetPool: config.subnetPool,
     });
+    await app.register(instanceRoutes, {
+      database,
+      ...(instanceService === undefined ? {} : { service: instanceService }),
+    });
     await app.register(gatewayRoutes, {
       database,
       connections,
       authority: config.authority,
       publicUrl: config.publicUrl,
-      ...(resolveUpstream === undefined ? {} : { resolveUpstream }),
+      ...(gatewayResolver === undefined ? {} : { resolveUpstream: gatewayResolver }),
     });
   } catch (error) {
     await app.close();
     throw error;
   }
 
-  app.addHook('onClose', (_instance, done) => {
+  app.addHook('onClose', async () => {
+    await instanceService?.close();
     database.close();
-    done();
+  });
+  // Fence both admissions and destroy owned transports before any unrelated lifecycle drain.
+  // onClose awaits the same service promise before releasing SQLite.
+  app.addHook('preClose', async () => {
+    void instanceService?.close();
+    await connections.close();
   });
   return app;
 }

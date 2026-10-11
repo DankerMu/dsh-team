@@ -78,6 +78,7 @@ export function createGatewayConnections() {
 
   return {
     track,
+    isClosing: (): boolean => closing,
     disconnectUser: (userId: string): Promise<void> => destroy(users.get(userId)),
     revalidateSessions(isValid: (userId: string, token: string) => boolean): void {
       for (const [token, session] of sessions) {

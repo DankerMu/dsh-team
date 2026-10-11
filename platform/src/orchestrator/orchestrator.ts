@@ -30,6 +30,8 @@ export interface Orchestrator {
   readonly waitForUserContainerReady: (input: AcquireDshCookieInput) => Promise<void>;
   readonly stopUserContainer: (input: StopUserContainerInput) => Promise<void>;
   readonly reconcile: (input?: { readonly signal?: AbortSignal }) => Promise<void>;
+  readonly hasCapacity: (userId: string) => boolean;
+  readonly drain: () => Promise<void>;
 }
 
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
@@ -71,8 +73,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     return result;
   }
 
-  function reserve(userId: string): boolean {
-    // Read after asynchronous reuse inspection: settings may have changed while it was pending.
+  function hasCapacity(userId: string): boolean {
     const { maxRunningInstances } = readSettings(database);
     const occupied = new Set(pending);
     const rows = database
@@ -83,7 +84,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     for (const row of rows) occupied.add(row.user_id);
     // Reaching admission means no live reusable identity; an exact-ID404 replacement owns its slot.
     occupied.delete(userId);
-    if (occupied.size >= maxRunningInstances) return false;
+    return occupied.size < maxRunningInstances;
+  }
+
+  function reserve(userId: string): boolean {
+    // Read after asynchronous reuse inspection: settings may have changed while it was pending.
+    if (!hasCapacity(userId)) return false;
     pending.add(userId);
     return true;
   }
@@ -219,6 +225,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   return {
     reconcile,
+    hasCapacity,
+    drain: async () => {
+      // Caller cancellation may precede queued work; only queue tails prove actual settlement.
+      while (tails.size !== 0) await Promise.all([...tails.values()]);
+      await allocationTail;
+    },
     startUserContainer: (input: StartUserContainerInput) =>
       schedule(input, start, 'Container startup failed during account validation or cancellation'),
     acquireDshCookie: (input: AcquireDshCookieInput) =>

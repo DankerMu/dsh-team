@@ -60,7 +60,6 @@ export const gatewayRoutes: FastifyPluginCallback<{
   { database, connections, authority, publicUrl, resolveUpstream = () => ({ outcome: 'stopped' }) },
   done,
 ) => {
-  let closing = false;
   function admission(
     request: IncomingMessage,
   ): { userId: string; token: string } | keyof typeof ERRORS {
@@ -76,7 +75,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
   }
   function admit(request: FastifyRequest, reply: FastifyReply): void {
-    if (closing) {
+    if (connections.isClosing()) {
       reply.hijack();
       reply.raw.destroy();
       return;
@@ -134,7 +133,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
     admit,
   );
   function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
-    if (closing) {
+    if (connections.isClosing()) {
       socket.on('error', () => {
         socket.destroy();
       });
@@ -184,7 +183,6 @@ export const gatewayRoutes: FastifyPluginCallback<{
   }, 1000);
   sessionSweep.unref();
   app.addHook('preClose', async () => {
-    closing = true;
     clearInterval(sessionSweep);
     await connections.close();
   });

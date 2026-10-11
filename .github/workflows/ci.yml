@@ -73,9 +73,15 @@ jobs:
           curl -fsSL --retry 3 -o /tmp/hurl.deb \
             "https://github.com/Orange-OpenSource/hurl/releases/download/${HURL_VERSION}/hurl_${HURL_VERSION}_amd64.deb"
           sudo dpkg -i /tmp/hurl.deb
+      - name: Prepare fresh job-local Docker for real entrypoint reconciliation
+        run: |
+          sudo systemctl start docker
+          docker version
+          test -S /var/run/docker.sock
       - name: Smoke against the dev server
         env:
           PLATFORM_PUBLIC_URL: http://127.0.0.1:8080
+          PLATFORM_UPSTREAM_MODE: published-loopback
         run: |
           pnpm dev:bg
           pnpm dev:status

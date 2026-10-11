@@ -8,6 +8,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
+import { startupBarrier, startupDaemon, startupUnixServer } from './container-start-fixture.ts';
 
 const mainPath = fileURLToPath(new URL('../src/main.ts', import.meta.url));
 
@@ -29,8 +30,18 @@ async function observeStartup(
   pool: string | undefined,
   maxRunningInstances?: number,
   environment: Readonly<Record<string, string>> = {},
+  beforeReconcile?: (healthUrl: string, terminate: () => void) => Promise<void>,
 ) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-team-subnet-'));
+  const daemon = startupDaemon();
+  const gate = startupBarrier();
+  const engine = startupUnixServer(daemon.reply, (method, path) =>
+    beforeReconcile !== undefined && method === 'GET' && path.startsWith('/containers/json')
+      ? gate.hold()
+      : undefined,
+  );
+  engine.listen(join(directory, 'engine.sock'));
+  await once(engine, 'listening');
   try {
     const database = openDatabase(join(directory, 'platform.db'));
     try {
@@ -48,6 +59,8 @@ async function observeStartup(
         PLATFORM_LOG_LEVEL: 'silent',
         PLATFORM_PUBLIC_URL: `http://127.0.0.1:${String(port)}`,
         PLATFORM_DATA_DIR: directory,
+        PLATFORM_DOCKER_SOCKET: join(directory, 'engine.sock'),
+        PLATFORM_UPSTREAM_MODE: 'published-loopback',
         ...(pool === undefined ? {} : { PLATFORM_SUBNET_POOL: pool }),
         ...environment,
       },
@@ -62,6 +75,25 @@ async function observeStartup(
     });
     const closed = once(child, 'close');
     try {
+      if (beforeReconcile !== undefined) {
+        await Promise.race([
+          gate.reached,
+          closed.then(() => {
+            throw new Error('Main exited before reconciliation');
+          }),
+        ]);
+        try {
+          await beforeReconcile(`http://127.0.0.1:${String(port)}/healthz`, () => {
+            child.kill('SIGTERM');
+          });
+          if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null)
+            throw new Error('Main exited before held reconciliation settled');
+          // Independently observe the process alive while the Engine response is still held.
+          process.kill(child.pid, 0);
+        } finally {
+          gate.release();
+        }
+      }
       const deadline = Date.now() + 5000;
       while (Date.now() < deadline) {
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -88,6 +120,14 @@ async function observeStartup(
       await closed;
     }
   } finally {
+    gate.release();
+    engine.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      engine.close((error) => {
+        if (error) reject(error);
+        else resolve();
+      }),
+    );
     await rm(directory, { recursive: true, force: true });
   }
 }
@@ -143,15 +183,35 @@ describe('subnet pool validation in the actual source process', () => {
     10000,
   );
 
-  it('network configuration serves health without resolving an absent platform or Docker socket', async () => {
+  it('fails before serving when real reconciliation cannot reach the configured Docker socket', async () => {
     const result = await observeStartup(undefined, undefined, {
       PLATFORM_UPSTREAM_MODE: 'network',
       PLATFORM_CONTAINER_NAME: 'dsh-team-test-not-created',
       PLATFORM_DOCKER_SOCKET: '/absent/docker.sock',
     });
 
+    expect(result.health).toBeNull();
+    expect(result.exitCode).toBeGreaterThan(0);
+    expect(result.stderr).toContain('Instance reconciliation failed');
+  }, 10000);
+
+  it('does not listen while the real owner reconciliation is held at the Engine boundary', async () => {
+    const result = await observeStartup(undefined, undefined, {}, async (url) => {
+      await expect(fetch(url, { signal: AbortSignal.timeout(500) })).rejects.toBeInstanceOf(Error);
+    });
+
     expect(result.exitCode).toBeNull();
     expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
+    expect(result.stderr).toBe('');
+  }, 10000);
+  it('settles held startup reconciliation after SIGTERM without subsequently listening', async () => {
+    const result = await observeStartup(undefined, undefined, {}, async (url, terminate) => {
+      terminate();
+      await expect(fetch(url, { signal: AbortSignal.timeout(500) })).rejects.toBeInstanceOf(Error);
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.health).toBeNull();
     expect(result.stderr).toBe('');
   }, 10000);
 });
