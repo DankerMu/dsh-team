@@ -1028,6 +1028,19 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - Required proof: actual endpoint404→401 RED/GREEN; current-auth, target invariants,5-code-point rejection, old/new login+all-session revocation, atomic rollback, captured connection closure and sibling preservation, credential exclusion, fullcheck/generatedcontract/source-dist/strictfixture/expandedreview/frozenDockerCI.
 - 验证记录（#70）：端点404RED→401GREEN；check1712unit/841integration、route覆盖100/97.05/100/100%、dup2.98%、生成契约通过。原密码401/新密码200、全部旧会话401、5码点拒绝无写入、禁用/自重置保留角色状态且无新cookie、真实hash屏障撤销/降权/目标消失/审计回滚、并发提交顺序及中间会话撤销、旧会话真实流关闭/兄弟流保留均覆盖。source/dist独立真实HTTP密码替换和回滚烟测GREEN，清理完成。目标消失测试初始违反会话外键，修正为先撤销自有会话再删除测试账号；复用授权响应断言消除重复，不改变既有401语义。冻结review/Docker/CI另附PR。
 
+### Issue #71 risk/evidence map (task14.6 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: protected single/bulk POST, raw empty body/current actor and active target, safe projected admission receipts and no credentials; realHTTP authorization/phase-recheck evidence.
+- Concurrency / shared state / ordering — selected: shared existing admin exclusion, exact once-captured running set, original service/owner FIFO and readiness ownership, disable/employee-start/idle siblings; held-work and overlap scenarios.
+- Error handling / rollback / partial outputs — selected: physical work is not transactional; truthful per-target machine states, stop-on-unexpected-failure/authority-loss, no fabricated success audit; injected failures and persisted effects.
+- File IO / path safety / overwrite — selected: consume existing exact-resource stop/start and preserve volumes/Session/files; realDocker bytes/history/identity and cleanup, no new file writer.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: canonical status/reason, milliseconds versus DockerStartedAt, existing sessions/status/readiness/auth preserved; generated API and source/dist proof.
+- Config / project setup; Release / packaging / dependency compatibility — selected: existing admin service options/shared guard, current model/capacity semantics and shipped image; no new env/dependencies/migration, canonical discovery/full gates.
+- Resource limits / large input / discovery — selected: one bounded running snapshot, sequential operations, no new queues/timers/retries or relaxed lifecycle deadlines; bulk set/partial outcome checks.
+- Documentation / migration notes — selected: distinguish physical-start admission from eventual readiness, audit and non-atomic bulk failures, same-session reconnection and no data migration.
+- Required proof: actual endpoint404→401 RED/GREEN; semantic/TCP ownership/auth/selection/error matrix; actual adminHTTP Docker restart→ready with newStartedAt, exact Session/files/volumes/sibling preservation and admin stop/restart audits, stopped/error/bulk recovery; fullcheck/generatedcontract/source-dist/strictfixture/expandedreview/frozenDockerCI.
+- Diagnosed prerequisite proof: failed image lookup leaves stopped/no container with service.status throwing a cached failure; restart retry must still enter canonical recovery. A held startup before persistence must remain409. Add only existing-flight readonly query and its real-service/admin regression; no swallowed status/storage exception, no new tracking/queue, no changed lifecycle policy. This minimal orchestrator query enters the Epic-end critical-path human-review ledger.
+
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 
 依赖：第 8、14 组。

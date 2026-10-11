@@ -40,9 +40,9 @@ function requestedStatus(body: unknown): AccountStatus | undefined {
 export const accountStatusRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   resolveSourceAddress: SourceAddressResolver;
+  pending: Set<string>;
   service?: InstanceService;
-}> = (app, { database, resolveSourceAddress, service }, done) => {
-  const pending = new Set<string>();
+}> = (app, { database, resolveSourceAddress, service, pending }, done) => {
   function authorize(request: FastifyRequest, now: number) {
     const token = readSessionCookie(request.headers.cookie);
     const actor = token === null ? null : getSessionUser(database, token, now, false);
