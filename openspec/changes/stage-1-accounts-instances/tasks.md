@@ -973,7 +973,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - [x] 14.3 实例列表接口：每个用户实例的状态（未创建、已停止、启动中、运行中、出错）、最近启动时间、最近活动时间、最近一次错误。验证：集成测试——五种状态各有一行且字段正确；回应里没有 DSH cookie（规格“实例状态与操作”）。
 - [x] 14.4 禁用和启用：禁用按“标记禁用、删除平台会话、销毁全部连接、停止实例（原因“禁用”）”的顺序在一次操作里完成；管理员不能禁用自己；写审计。验证：`pnpm test:docker`——被禁用用户的长连接在 5 秒内断开、实例停止、再登录被拒；启用后能登录且数据还在；审计里有禁用、启用和原因为“禁用”的实例停止（规格“禁用和启用账号”“禁用账号立即断开”）。
 - [x] 14.5 重置密码：管理员设置新密码，删除该用户的全部平台会话；写审计（不含密码）。验证：集成测试——旧密码不能登录，新密码能；该用户已有的平台会话失效；5 位新密码被拒绝且原密码不变（规格“重置密码”）。
-- [ ] 14.6 重启实例：指定一个（运行中、已停止或出错的都可以），或全部运行中的；停止原因为“管理员”；写审计（重启实例）。验证：`pnpm test:docker`——重启运行中的实例后容器的启动时间更新，Session 和文件还在；对出错的实例执行重启后它被启动；审计里有该事件（规格“管理员重启实例”的两个场景）。
+- [x] 14.6 重启实例：指定一个（运行中、已停止或出错的都可以），或全部运行中的；停止原因为“管理员”；写审计（重启实例）。验证：`pnpm test:docker`——重启运行中的实例后容器的启动时间更新，Session 和文件还在；对出错的实例执行重启后它被启动；审计里有该事件（规格“管理员重启实例”的两个场景）。
 - [ ] 14.7 重置实例配置接口：停止实例，调用 9.11 的恢复函数，写审计（重置实例配置）。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写成无法解析的内容使实例启动失败，并在工作目录放一个文件；经接口重置后实例能启动，工作目录里的文件和已有的 Session 都还在；审计里有该事件（规格“重置实例配置”）。
 - [ ] 14.8 审计查询接口：只读，带筛选和分页。验证：集成测试——员工请求 403；按邮箱筛选只返回该员工作为操作者或对象的记录；契约文件里审计相关的接口只有查询，管理员可调用的接口没有任何一个返回员工的文件、Session 或对话内容（规格“管理员查询审计”“审计不可经接口修改”“后台不提供员工内容”）。
 - [ ] 14.9 后台框架和账号页：后台导航，员工访问后台地址被拒绝；账号列表（搜索、禁用启用、重置密码），区分加载中、空、无匹配、请求失败四种状态，破坏性操作先确认。验证：`pnpm test:ui`——禁用、启用、重置密码各走通一次；四种状态各有用例（请求失败时显示加载失败和重试按钮）。
@@ -1027,6 +1027,20 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - Documentation / migration notes — selected: endpoint, no new session/no enable, atomic versus postcommit-failure boundary, no data migration; actual runtime evidence.
 - Required proof: actual endpoint404→401 RED/GREEN; current-auth, target invariants,5-code-point rejection, old/new login+all-session revocation, atomic rollback, captured connection closure and sibling preservation, credential exclusion, fullcheck/generatedcontract/source-dist/strictfixture/expandedreview/frozenDockerCI.
 - 验证记录（#70）：端点404RED→401GREEN；check1712unit/841integration、route覆盖100/97.05/100/100%、dup2.98%、生成契约通过。原密码401/新密码200、全部旧会话401、5码点拒绝无写入、禁用/自重置保留角色状态且无新cookie、真实hash屏障撤销/降权/目标消失/审计回滚、并发提交顺序及中间会话撤销、旧会话真实流关闭/兄弟流保留均覆盖。source/dist独立真实HTTP密码替换和回滚烟测GREEN，清理完成。目标消失测试初始违反会话外键，修正为先撤销自有会话再删除测试账号；复用授权响应断言消除重复，不改变既有401语义。冻结review/Docker/CI另附PR。
+
+### Issue #71 risk/evidence map (task14.6 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: protected single/bulk POST, raw empty body/current actor and active target, safe projected admission receipts and no credentials; realHTTP authorization/phase-recheck evidence.
+- Concurrency / shared state / ordering — selected: shared existing admin exclusion, exact once-captured running set, original service/owner FIFO and readiness ownership, disable/employee-start/idle siblings; held-work and overlap scenarios.
+- Error handling / rollback / partial outputs — selected: physical work is not transactional; truthful per-target machine states, stop-on-unexpected-failure/authority-loss, no fabricated success audit; injected failures and persisted effects.
+- File IO / path safety / overwrite — selected: consume existing exact-resource stop/start and preserve volumes/Session/files; realDocker bytes/history/identity and cleanup, no new file writer.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: canonical status/reason, milliseconds versus DockerStartedAt, existing sessions/status/readiness/auth preserved; generated API and source/dist proof.
+- Config / project setup; Release / packaging / dependency compatibility — selected: existing admin service options/shared guard, current model/capacity semantics and shipped image; no new env/dependencies/migration, canonical discovery/full gates.
+- Resource limits / large input / discovery — selected: one bounded running snapshot, sequential operations, no new queues/timers/retries or relaxed lifecycle deadlines; bulk set/partial outcome checks.
+- Documentation / migration notes — selected: distinguish physical-start admission from eventual readiness, audit and non-atomic bulk failures, same-session reconnection and no data migration.
+- Required proof: actual endpoint404→401 RED/GREEN; semantic/TCP ownership/auth/selection/error matrix; actual adminHTTP Docker restart→ready with newStartedAt, exact Session/files/volumes/sibling preservation and admin stop/restart audits, stopped/error/bulk recovery; fullcheck/generatedcontract/source-dist/strictfixture/expandedreview/frozenDockerCI.
+- Diagnosed prerequisite proof: failed image lookup leaves stopped/no container with service.status throwing a cached failure; restart retry must still enter canonical recovery. A held startup before persistence must remain409. Add only existing-flight readonly query and its real-service/admin regression; no swallowed status/storage exception, no new tracking/queue, no changed lifecycle policy. This minimal orchestrator query enters the Epic-end critical-path human-review ledger.
+- 验证记录（#71）：入口404RED→401GREEN；缓存失败恢复500RED经真实flight只读资格查询修复为精确回执，并保留真实持有启动409。`pnpm check`1736单测/868集成通过、重复率2.99%；source/dist实际HTTP烟测通过并清理。真实Docker四场景通过（新重启三项与既有禁用/启用一项），83.76s、exit0：新的容器StartedAt和DB启动时间、ready、完整真实Session/history、文件字节、卷、平台会话及兄弟连接/状态保留，stopped/error恢复、再次真实失败和精确bulk集合/审计。初次Docker3/4仅因同一兄弟Mounts数组重排，复用已有按Destination标准化后仍完整比较所有字段；生产未改。冻结头全量Docker/审查/CI随PR门禁。
 
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 

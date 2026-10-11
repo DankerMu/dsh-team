@@ -23,10 +23,14 @@ export async function administrator(app: FastifyInstance, database: DatabaseHand
 }
 
 /** Install before listen; mutate authority only after entry admission while body bytes remain held. */
-export function delayedConfigBody(app: FastifyInstance, path: string) {
+export function delayedConfigBody(
+  app: FastifyInstance,
+  path: string,
+  method: 'PUT' | 'POST' = 'PUT',
+) {
   const admitted = Promise.withResolvers<undefined>();
   app.addHook('preParsing', (request, _reply, payload, done) => {
-    if (request.url === path && request.method === 'PUT') admitted.resolve(undefined);
+    if (request.url === path && request.method === method) admitted.resolve(undefined);
     done(null, payload);
   });
   return async (base: string, cookie: string, body: string, invalidate: () => void) => {
@@ -34,7 +38,7 @@ export function delayedConfigBody(app: FastifyInstance, path: string) {
     const request = httpRequest(
       `${base}${path}`,
       {
-        method: 'PUT',
+        method,
         headers: {
           ...jsonRequestHeaders({ cookie }),
           'content-length': String(Buffer.byteLength(body)),
@@ -68,4 +72,17 @@ export function delayedConfigBody(app: FastifyInstance, path: string) {
       request.destroy();
     }
   };
+}
+
+/** Change current authority at a held public request boundary, never its cached entry identity. */
+export function loseAdministratorAuthority(
+  database: DatabaseHandle,
+  userId: string,
+  change: 'revoke' | 'demote' | 'disable',
+): void {
+  if (change === 'revoke')
+    database.prepare('DELETE FROM platform_sessions WHERE user_id=?').run(userId);
+  else if (change === 'demote')
+    database.prepare("UPDATE users SET role='employee' WHERE id=?").run(userId);
+  else database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(userId);
 }

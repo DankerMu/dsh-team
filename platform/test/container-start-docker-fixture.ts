@@ -31,6 +31,7 @@ export async function corruptOwnedOverlay(
   lifecycle: UserImageLifecycle,
   userId: string,
   containerId: string,
+  contents = '- id: webserver\n  config: [\n',
 ): Promise<void> {
   const container = inspect(lifecycle, containerId);
   expect(container.Id).toBe(containerId);
@@ -55,7 +56,7 @@ export async function corruptOwnedOverlay(
   // In-place overwrite preserves the inode Docker bound during real container creation.
   await chmod(overlay, 0o644);
   try {
-    await writeFile(overlay, '- id: webserver\n  config: [\n', 'utf8');
+    await writeFile(overlay, contents, 'utf8');
   } finally {
     await chmod(overlay, 0o444);
   }

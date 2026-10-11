@@ -104,9 +104,56 @@ async function installOwnedAdapter(
   await writeManagedConfig(config.managedConfigDir, userId, JSON.stringify(rows));
 }
 
+function verifyIdleVolumes(
+  lifecycle: UserImageLifecycle,
+  command: IdleDockerCommand,
+  userId: string,
+  volumeSnapshot: unknown,
+): void {
+  expect(
+    JSON.parse(
+      command(['volume', 'inspect', `dsh-team-home-${userId}`, `dsh-team-work-${userId}`]),
+    ),
+  ).toEqual(volumeSnapshot);
+  for (const volume of [`dsh-team-home-${userId}`, `dsh-team-work-${userId}`])
+    expect(
+      command(['volume', 'inspect', '--format', '{{ index .Labels "dsh-team.user" }}', volume]),
+    ).toBe(userId);
+  const helper = `dsh-team-test-${lifecycle.runId}-idle-preservation`;
+  lifecycle.registerContainer(helper);
+  expect(
+    command([
+      'run',
+      '--rm',
+      '--name',
+      helper,
+      '--network',
+      'none',
+      '--user',
+      '1001',
+      '--label',
+      `dsh-team.test-run=${lifecycle.runId}`,
+      '--mount',
+      `type=volume,src=dsh-team-home-${userId},dst=/data/home,readonly`,
+      '--mount',
+      `type=volume,src=dsh-team-work-${userId},dst=/data/work,readonly`,
+      lifecycle.imageId,
+      'node',
+      '--input-type=module',
+      '-e',
+      "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.stringify({home:readFileSync('/data/home/issue59-state.txt','utf8'),work:readFileSync('/data/work/issue59-work.txt','utf8')}));",
+    ]),
+  ).toBe('{"home":"idle state survives\\n","work":"idle work survives\\n"}');
+}
+
 /** Same real Web instance owns service readiness, registered adapter, Agent turn and task-list RPC. */
 export async function withDockerIdleInstance(
   run: (context: DockerIdleContext) => Promise<void>,
+  beforeStart?: (
+    lifecycle: UserImageLifecycle,
+    userId: string,
+    containerId: string,
+  ) => Promise<void>,
 ): Promise<void> {
   await runUserImage(
     'container-start',
@@ -134,6 +181,7 @@ export async function withDockerIdleInstance(
           throw new Error('Owned idle Docker operation failed');
         return result.stdout.trim();
       };
+      let createdId: string | undefined;
       const client: DockerClient = {
         ...transport.client,
         async json(method, path, body, signal, maxBytes) {
@@ -148,7 +196,19 @@ export async function withDockerIdleInstance(
             );
             adapterInstalled = true;
           }
-          return transport.client.json(method, path, body, signal, maxBytes);
+          if (
+            method === 'POST' &&
+            createdId !== undefined &&
+            path === `/containers/${createdId}/start`
+          )
+            await beforeStart?.(lifecycle, userId, createdId);
+          const result = await transport.client.json(method, path, body, signal, maxBytes);
+          if (method === 'POST' && path === `/containers/create?name=dsh-team-u-${userId}`) {
+            const id = record(result).Id;
+            if (typeof id !== 'string') throw new Error('Missing owned Docker create identity');
+            createdId = id;
+          }
+          return result;
         },
       };
       const service = createInstanceService({ database, config, client });
@@ -224,48 +284,6 @@ export async function withDockerIdleInstance(
               ),
             ),
           );
-        const verifyVolumes = () => {
-          expect(
-            JSON.parse(
-              command(['volume', 'inspect', `dsh-team-home-${userId}`, `dsh-team-work-${userId}`]),
-            ),
-          ).toEqual(volumeSnapshot);
-          for (const volume of [`dsh-team-home-${userId}`, `dsh-team-work-${userId}`])
-            expect(
-              command([
-                'volume',
-                'inspect',
-                '--format',
-                '{{ index .Labels "dsh-team.user" }}',
-                volume,
-              ]),
-            ).toBe(userId);
-          const helper = `dsh-team-test-${lifecycle.runId}-idle-preservation`;
-          lifecycle.registerContainer(helper);
-          expect(
-            command([
-              'run',
-              '--rm',
-              '--name',
-              helper,
-              '--network',
-              'none',
-              '--user',
-              '1001',
-              '--label',
-              `dsh-team.test-run=${lifecycle.runId}`,
-              '--mount',
-              `type=volume,src=dsh-team-home-${userId},dst=/data/home,readonly`,
-              '--mount',
-              `type=volume,src=dsh-team-work-${userId},dst=/data/work,readonly`,
-              lifecycle.imageId,
-              'node',
-              '--input-type=module',
-              '-e',
-              "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.stringify({home:readFileSync('/data/home/issue59-state.txt','utf8'),work:readFileSync('/data/work/issue59-work.txt','utf8')}));",
-            ]),
-          ).toBe('{"home":"idle state survives\\n","work":"idle work survives\\n"}');
-        };
         const checkIdle = async () => {
           const before = minutes.mock.results.length;
           await vi.advanceTimersByTimeAsync(60_000);
@@ -288,7 +306,9 @@ export async function withDockerIdleInstance(
           checkIdle,
           rpc,
           control,
-          verifyVolumes,
+          verifyVolumes: () => {
+            verifyIdleVolumes(lifecycle, command, userId, volumeSnapshot);
+          },
         });
         return containerId;
       } finally {

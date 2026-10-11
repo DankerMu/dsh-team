@@ -148,6 +148,12 @@ docs/  verify/  resource/（只读参考，不入库）
 
 验证：check1712单测/841集成、逐文件80%门槛和生成契约通过；新route17项单测语句/函数/行100%、分支97.05%。真实TCP证明5码点拒绝且原状态不变、旧密码401/新密码200、全部旧会话401、受控真实scrypt期间撤销/降权/目标消失/审计失败无额外写入、并发提交间新建会话也被下一次重置撤销，以及两条旧会话流关闭而兄弟用户流完整结束。source/dist独立HTTP烟测重置、拒绝、精确审计和500回滚通过并清理；无新增Docker行为，冻结头完整Docker/CI作为既有回归门禁另附PR。
 
+阶段1管理员重启（任务14.6）：`POST /_platform/api/admin/instances/:userId/restart` 与 `POST /_platform/api/admin/instances/restart-running` 只接受空JSON对象。单个已有running/stopped/error实例走既有断连、`stop(admin)`、`start`；批量只捕获请求时running集合，整体预检并占用管理员操作排他，再逐个执行。不撤销平台会话，不删除home/work卷或Session。响应为单项 `{userId,status,reason}` 或 `{items}`，仅表示当前启动接纳结果，不保证已就绪；沿用员工状态接口或管理员实例列表观察最终状态。只有starting/running接纳写 `instance.restarted`，物理停止、启动、就绪和失败仍由原生命周期审计记录。
+
+冲突与失败：禁用/starting/已有管理员操作返回409，未创建实例404，所需生命周期能力缺失503。用既有启动flight的只读查询阻止尚未写入starting的真实启动，不用可能抛缓存故障的状态展示查询阻断恢复。已接纳的idle停止先按原FIFO结束，再执行管理员停止（终态可无操作）和启动；保留真实idle停止原因，不伪造admin停止审计。每个异步阶段之后重新校验权限；批量遇到异常或权限丢失停止后续目标，但不回滚已经发生的物理动作。无配置、容量满或普通启动错误保留逐项真实结果。
+
+验证：`pnpm check`1736单测、868集成、逐文件覆盖门槛、生成契约、构建和2.99%重复率门禁通过；真实TCP覆盖权限重检、单/批量选择、共享排他、缓存故障后恢复、持有启动与idle退休重叠。独立source/dist实际HTTP烟测验证401/403/400、stopped/error无配置回执、空批量、会话身份保留和无虚假成功审计。真实Docker三项新用例与既有禁用/启用回归全部通过：新容器启动时间/ready、真实Session及完整history、home/work字节和卷身份、平台会话及兄弟实例/连接保留，stopped/error恢复、再次真实启动失败和批量选择/审计。Docker挂载按目的路径标准化后完整比较，避免无语义的数组顺序依赖；冻结头完整Docker、审查和CI另附PR。
+
 ### 阶段 2：插件目录、RAGFlow、Office
 
 **目标**：员工在知识库页面看到真实的库和文件，按 Session 选择检索范围并得到带来源的回答；DOCX、XLSX、PPTX 在线编辑保存后 Agent 读到新内容。

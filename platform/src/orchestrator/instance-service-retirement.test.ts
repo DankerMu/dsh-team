@@ -4,6 +4,7 @@ import { RECONCILE_COOKIE } from '../../test/container-reconcile-fixture.ts';
 import {
   instanceServiceFixture as fixture,
   configureInstanceModel as configure,
+  heldReadinessLogs,
 } from '../../test/instance-fixture.ts';
 
 it.each(['missing', 'stopped', 'error'] as const)(
@@ -170,38 +171,15 @@ it('disabled retirement does not adopt an account reactivated while canceled sta
 });
 
 it('disabled stop cancels owned readiness logs immediately rather than waiting the sixty-second deadline', async () => {
-  const entered = Promise.withResolvers<undefined>();
-  let canceled = false;
-  const f = await fixture((client) => ({
-    ...client,
-    async *logs(path, signal) {
-      if (!path.includes('follow=true')) {
-        yield* client.logs(path, signal);
-        return;
-      }
-      entered.resolve(undefined);
-      const aborted = Promise.withResolvers<undefined>();
-      const abort = () => {
-        canceled = true;
-        aborted.resolve(undefined);
-      };
-      signal?.addEventListener('abort', abort, { once: true });
-      try {
-        if (signal?.aborted) abort();
-        await aborted.promise;
-        throw new Error('private-canceled-readiness-cookie');
-      } finally {
-        signal?.removeEventListener('abort', abort);
-      }
-    },
-  }));
+  const logs = heldReadinessLogs('private-canceled-readiness-cookie');
+  const f = await fixture(logs.adapt);
   try {
     configure(f.database);
     expect(await f.service.start(START_USER)).toEqual({ status: 'starting', reason: 'starting' });
-    await entered.promise;
+    await logs.entered;
     f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
     await f.service.stop(START_USER, 'disabled');
-    expect(canceled).toBe(true);
+    expect(logs.aborted).toBe(true);
     expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
     expect(
       f.database.prepare('SELECT status,container_id,dsh_cookie FROM instances').get(),
@@ -218,6 +196,7 @@ it('disabled stop cancels owned readiness logs immediately rather than waiting t
       'private-canceled-readiness-cookie',
     );
   } finally {
+    logs.release();
     await f.close();
   }
 });

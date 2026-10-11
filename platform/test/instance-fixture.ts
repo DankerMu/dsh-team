@@ -83,3 +83,43 @@ export function configureInstanceModel(database: DatabaseHandle) {
     defaultModel: 'office-model',
   });
 }
+
+/** Hold only the Engine's follow stream; other readiness diagnostics remain real. */
+export function heldReadinessLogs(message: string) {
+  const entered = Promise.withResolvers<undefined>();
+  const release = Promise.withResolvers<undefined>();
+  let aborted = false;
+  return {
+    entered: entered.promise,
+    get aborted() {
+      return aborted;
+    },
+    release() {
+      release.resolve(undefined);
+    },
+    adapt: (client: DockerClient): DockerClient => {
+      return {
+        ...client,
+        async *logs(path, signal) {
+          if (!path.includes('follow=true')) {
+            yield* client.logs(path, signal);
+            return;
+          }
+          entered.resolve(undefined);
+          const cancel = () => {
+            aborted = true;
+            release.resolve(undefined);
+          };
+          signal?.addEventListener('abort', cancel, { once: true });
+          try {
+            if (signal?.aborted) cancel();
+            await release.promise;
+            throw new Error(message);
+          } finally {
+            signal?.removeEventListener('abort', cancel);
+          }
+        },
+      };
+    },
+  };
+}

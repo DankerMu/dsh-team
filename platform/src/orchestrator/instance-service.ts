@@ -26,6 +26,7 @@ export interface InstanceService {
   readonly start: (userId: string) => Promise<InstanceState>;
   readonly stop: (userId: string, reason: InstanceStopReason) => Promise<void>;
   readonly status: (userId: string) => InstanceState;
+  readonly hasStartupWork: (userId: string) => boolean;
   readonly resolveUpstream: (userId: string) => InstanceUpstream;
   readonly recordActivity: (userId: string, lastActivityAt: number) => void;
   readonly flushActivity: (phase?: 'shutdown') => Promise<void>;
@@ -310,6 +311,7 @@ export function createInstanceService({
     start,
     stop,
     status,
+    hasStartupWork: (userId) => flights.has(userId),
     checkIdle: idleChecks.checkIdle,
     // Release observations remain valid while close fences lifecycle admission.
     // App shutdown awaits its final flush before closing SQLite.

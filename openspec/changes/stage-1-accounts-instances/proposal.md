@@ -546,3 +546,12 @@
 - Preserve current actor authorization, canonical Unicode password policy/hash, target role/status and instance/data ownership; no promotion or enable side effect.
 - Selected risk packs: all eleven assessed in tasks.md; no file IO, Docker mutation, migration, UI, new dependency or hashing implementation.
 - Evidence floor: real endpoint401 tracer RED, realTCP old/new password login and every old session denial, five-code-point rejection without writes, current-actor recheck across body/hash delay, atomic audit rollback, same-user connection cleanup, source/dist smoke, full checks and frozen review/Docker/CI.
+
+## Issue #71 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task14.6 only.
+- Blast radius: administrator-triggered single/bulk instance retirement and startup, open gateway resources, data preservation and action audit.
+- Preserve existing InstanceService stop/start ownership, actual orchestrator FIFO, readiness/error publication, account disable authority, platform sessions and every persistent volume/Session.
+- Selected risk packs: all eleven mapped in tasks.md; no new Docker owner, scheduler, polling mechanism, model/settings endpoint, UI or storage migration.
+- Evidence floor: protected endpoint tracer RED, restart/disable exclusion and actor/failure/bulk-selection proofs; real adminHTTP→Docker changedStartedAt→ready with exact files/Session retained, stopped/error recovery, admin stop reason/restart audit; source/dist smoke, full checks and frozen review/Docker/CI.
+- Diagnosed minimum companion change: expose readonly existing flight membership as InstanceService.hasStartupWork; cached error-reporting status cannot serve as recovery eligibility, while persisted status alone misses pre-persistence startup. Preserve starting409 and retry recovery with discriminating tests; no lifecycle algorithm change.
