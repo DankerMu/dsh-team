@@ -48,15 +48,17 @@ The duplicate-code guardrail self-test sizes its planted copies from the current
 
 ## Stack & Versions
 
-| Layer       | Choice                    | Version | Why                                                       |
-| ----------- | ------------------------- | ------- | --------------------------------------------------------- |
-| Language    | TypeScript                | 6.0     | upper bound supported by typescript-eslint                |
-| Runtime     | Node.js                   | 24      | runs `.ts` sources directly; matches user image           |
-| Framework   | Fastify                   | 5       | route schemas feed the OpenAPI contract                   |
-| Persistence | SQLite                    | 3       | better-sqlite3; `PLATFORM_DATA_DIR/platform.db` (D8, D19) |
-| Test runner | Vitest + v8 coverage      | 5       |                                                           |
-| Linter      | ESLint, typescript-eslint | 10, 8   | strict type-checked rule set                              |
-| Formatter   | Prettier                  | 3       |                                                           |
+| Layer         | Choice                    | Version | Why                                                       |
+| ------------- | ------------------------- | ------- | --------------------------------------------------------- |
+| Language      | TypeScript                | 6.0     | upper bound supported by typescript-eslint                |
+| Runtime       | Node.js                   | 24      | runs `.ts` sources directly; matches user image           |
+| Framework     | Fastify                   | 5       | route schemas feed the OpenAPI contract                   |
+| Persistence   | SQLite                    | 3       | better-sqlite3; `PLATFORM_DATA_DIR/platform.db` (D8, D19) |
+| Test runner   | Vitest + v8 coverage      | 5       |                                                           |
+| Platform UI   | React + Vite              | 18, 8   | local static build served by the same Fastify origin      |
+| Browser tests | Playwright Chromium       | 1.63    | pinned verification-only browser, not production runtime  |
+| Linter        | ESLint, typescript-eslint | 10, 8   | strict type-checked rule set                              |
+| Formatter     | Prettier                  | 3       |                                                           |
 
 ### Dependency policy
 
@@ -74,6 +76,7 @@ platform/            platform service: one Node process (workspace package)
                      ragflow-proxy, audit, db (docs/IMPLEMENTATION_PLAN.md §3)
   test/              integration tests (*.integration.test.ts), VPS-only Docker tests (*.docker.test.ts)
   scripts/           generators (openapi.ts)
+  web/               React/Vite workspace; src/ browser-only, dist/ generated static artifacts
 schemas/             generated HTTP contract (openapi.json)
 smoke/               hurl suites run by smoke and e2e
 scripts/             gates and lifecycle scripts behind the package.json scripts
@@ -88,6 +91,7 @@ resource/, assets/fonts/     local only, gitignored: upstream reference repos, l
 - A module under `platform/src/<module>/` is imported from outside only through its `index.ts`.
 - Only the `db` module imports a SQLite driver.
 - `platform/` and `plugins/` never import each other. No circular imports anywhere.
+- `platform/web/src/` cannot import backend/test/plugin code, server libraries or Node builtins; backend source never imports browser source.
 
 Boundaries are enforced by dependency-cruiser (`.dependency-cruiser.cjs`) in `pnpm lint:deps`.
 
@@ -112,26 +116,34 @@ The actual source and built platform entrypoints require the configured real Doc
 
 ### Daily commands
 
-| Task                     | Command                                  |
-| ------------------------ | ---------------------------------------- |
-| Start dev server (watch) | `pnpm dev`                               |
-| Run all checks           | `pnpm check`                             |
-| Fast checks              | `pnpm check:fast`                        |
-| Unit tests + coverage    | `pnpm test`                              |
-| Integration tests        | `pnpm test:integration`                  |
-| Administrator command    | `pnpm --silent cli admin create <email>` |
-| CLI integration tests    | `pnpm test:cli`                          |
-| VPS user-image tests     | `pnpm test:docker`                       |
-| CI Docker evidence gate  | `pnpm verify:docker-evidence`            |
-| Format code              | `pnpm fmt`                               |
-| Lint                     | `pnpm lint`                              |
-| Type-check               | `pnpm typecheck`                         |
-| Build                    | `pnpm build`                             |
-| Regenerate HTTP contract | `pnpm contract:write`                    |
-| Prove the gates are live | `pnpm test:guardrails`                   |
-| Change inventory         | `pnpm change-scope origin/main`          |
+| Task                       | Command                                  |
+| -------------------------- | ---------------------------------------- |
+| Start dev server (watch)   | `pnpm dev`                               |
+| Rebuild web on same origin | `pnpm dev:web`                           |
+| Build static web package   | `pnpm build:web`                         |
+| Install test Chromium      | `pnpm test:ui:install`                   |
+| Built platform UI tests    | `pnpm test:ui`                           |
+| Run all checks             | `pnpm check`                             |
+| Fast checks                | `pnpm check:fast`                        |
+| Unit tests + coverage      | `pnpm test`                              |
+| Integration tests          | `pnpm test:integration`                  |
+| Administrator command      | `pnpm --silent cli admin create <email>` |
+| CLI integration tests      | `pnpm test:cli`                          |
+| VPS user-image tests       | `pnpm test:docker`                       |
+| CI Docker evidence gate    | `pnpm verify:docker-evidence`            |
+| Format code                | `pnpm fmt`                               |
+| Lint                       | `pnpm lint`                              |
+| Type-check                 | `pnpm typecheck`                         |
+| Build                      | `pnpm build`                             |
+| Regenerate HTTP contract   | `pnpm contract:write`                    |
+| Prove the gates are live   | `pnpm test:guardrails`                   |
+| Change inventory           | `pnpm change-scope origin/main`          |
 
 All commands route through the root `package.json` scripts. Do not invent ad-hoc commands; if a workflow is missing, add a script.
+
+`pnpm dev`, `pnpm dev:bg`, `pnpm build`, `pnpm test:integration` and `pnpm test:ui` establish a fresh web build. Run `pnpm dev:web` alongside the platform to watch/rebuild those same-origin artifacts; it does not start a second HTTP server. Production startup rejects a missing or unreadable web build before listening. Static delivery currently declares only `/_platform/login` and `/_platform/assets/*`; unknown pages and APIs retain404, without an SPA fallback.
+
+Install the pinned verification browser explicitly with `pnpm test:ui:install` after `pnpm install`. The UI suite owns its listener and isolated SQLite database through `buildApp`, does not reconcile Docker, and retains screenshots under `reports/platform-ui/`. Browser installation/downloads are local/CI verification prerequisites, never production runtime dependencies. The initial Chinese form is intentionally disabled and does not submit credentials; functional authentication remains task13.3.
 
 ### Environment
 
@@ -198,13 +210,14 @@ Managed permission verification uses the same invocation-owned image/volume life
 | API endpoint       | hurl suite against the running dev server                                                              | `pnpm smoke`                  | HTTP status and response body per route                                                                                                                                                                                                                       |
 | Database           | Real-file SQLite migrate, settings, reopen                                                             | `pnpm test:integration`       | tempfile `platform.db`, exact migration ledger versions 1 and 2, preserved historical rows, closed handle                                                                                                                                                     |
 | Built artifact     | Build, start `platform/dist`, run the suite                                                            | `pnpm e2e`                    | build output, hurl summary, `platform.db` schema/ledger                                                                                                                                                                                                       |
+| Platform UI        | Built React rendered by pinned Chromium over owned real platform HTTP/SQLite                           | `pnpm test:ui`                | accessible Chinese login form, disabled non-submitting controls, local assets, screenshot, zero console/page errors and external requests                                                                                                                     |
 | Administrator CLI  | Actual Node and pinned silent-pnpm processes with hidden-input PTYs                                    | `pnpm test:cli`               | direct/silent-wrapper argument rejection without disclosure/data, hidden input/restored echo, atomic account/audit/session outcomes and HTTP admin login                                                                                                      |
 | User-image Docker  | Real build, exact DSH version, offline DOCX, profile copy/reuse, Web startup and owned cleanup         | `pnpm test:docker`            | giap-vps exact reviewed SHA and pinned tools; exact version/DOCX, profile/seed equality and permissions; shipped seccomp, genuine token plus host HTTP401 within60s, actual nonroot DSH/telemetry and distinct volumes; no owned resources on success/failure |
 | DSH permission UI  | Actual browser composer and native root/one-shot-child approvals using an owned deterministic protocol | `pnpm test:docker`            | `CHROME_BIN`; exact three choices and two-Session independence; all six reject/allow/cancel paths, native child identity/audit and exact file effects; retained screenshots/evidence and owned cleanup                                                        |
 | CI Docker evidence | Read-only GitHub status/merge/tree decision                                                            | `pnpm verify:docker-evidence` | latest exact-head owner success or explicitly proved squash tree-equivalent reuse; invalid/missing evidence nonzero                                                                                                                                           |
 
 - Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
-- The DSH permission plugin UI has real Docker browser coverage above. Platform-owned employee/administrator UI (#62) remains pending; its implementation must add the corresponding verification surface. No background-job surface exists yet.
+- The DSH permission plugin UI has real Docker browser coverage above; the platform-owned login baseline has independent Playwright coverage. No background-job surface exists yet.
 - A surface with no verification command is review-only, and the PR must say so.
 
 Every row requires fresh evidence from the current session — see `## Agent Operating Rules`.

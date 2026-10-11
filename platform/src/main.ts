@@ -9,6 +9,7 @@ import {
   validateSubnetPool,
 } from './orchestrator/index.ts';
 import type { InstanceService } from './orchestrator/index.ts';
+import { assertWebBuild } from './web/index.ts';
 
 const config = loadConfig(process.env);
 const database = openDatabase(join(config.dataDir, 'platform.db'));
@@ -58,6 +59,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 try {
+  await assertWebBuild();
   applyMigrations(database);
   validateSubnetPool(config.subnetPool, readSettings(database).maxRunningInstances);
   runtime.service = createInstanceService({

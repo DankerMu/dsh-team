@@ -6,6 +6,7 @@
 ## TypeScript rules
 
 - **Node runs the sources directly.** Relative imports carry the `.ts` extension; type-only imports use `import type`. Enums, namespaces, and constructor parameter properties are rejected by `erasableSyntaxOnly` because Node cannot strip them.
+- **Browser sources live in `platform/web/src/`.** They use the workspace's strict DOM/TSX tsconfig and cannot import backend, tests, plugins, server libraries or Node builtins. Backend source serves only the built artifacts.
 - **`tsconfig.json` strictness is deliberate**: `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`. Relaxing a flag needs a justification in the PR description.
 - **No `any`** — use `unknown` and narrow. **No `@ts-ignore`**; `@ts-expect-error` only with an explanation.
 - **A cast (`as`) needs a comment** saying why the compiler cannot know what you know.
@@ -34,6 +35,8 @@ Gateway unit tests may use the same isolated in-memory database through `buildAp
 
 Admin route unit tests may use the same isolated in-memory database through `buildApp`/`withApp` to exercise current session/role authorization, pagination/settings validation and safe storage failures. They never open file-backed databases; account-list/model-configuration HTTP, delayed-body revocation, atomic audit rollback and credential-custody proofs over real TCP belong in `platform/test/*.integration.test.ts`.
 
+Web static-route unit tests may create only invocation-owned temporary filesystem roots and use Fastify injection; they never write fake artifacts into shared `platform/web/dist`. Browser cases live in `platform/test/*.ui.test.ts` behind root `pnpm test:ui`, use the real Vite build plus `buildApp` over owned TCP/SQLite, and retain screenshots and zero-console/page-error/local-network assertions. They do not use production main or Docker reconciliation, mock assets, reuse dev servers, or weaken existing auth/gateway cases. Playwright closes its owned page/context/browser; every test also closes its app/database and removes its temporary root on failure.
+
 Real Docker lifecycle cases belong only in `platform/test/*.docker.test.ts`, selected by root `pnpm test:docker` on the trusted giap-vps Linux amd64 host. Ordinary integration discovery must exclude them. Narrow read-only CI evidence helpers and Docker-command lifecycle fixtures may live under `platform/test`; their `*.integration.test.ts` tests use owned literal GitHub fixtures or the external Docker process boundary, never local Docker/network execution. Validate GitHub JSON at the adapter boundary, select the latest matching status before checking its author/state, and bind status evidence to the exact queried head SHA. Real Docker cases register unique invocation labels/targets before creation, run the captured image identity, preserve failure output, and independently attempt each owned cleanup in `finally`; cleanup errors must fail the command.
 
 ### What gets tested
@@ -46,6 +49,7 @@ Real Docker lifecycle cases belong only in `platform/test/*.docker.test.ts`, sel
 
 - Pure wiring with no branch, type-only files (`types.ts`, `*.types.ts`), and `index.ts` files that only re-export.
 - `platform/src/main.ts`, the process entry point; `pnpm e2e` exercises it.
+- `platform/web/src/main.tsx` only while it remains pure declarative bootstrap; its actual React rendering is checked by `pnpm test:ui`. This one exact exemption is registered in `constraints.yaml`; all future client behavior TS/TSX files require sibling unit tests and the unchanged per-file coverage floor.
 
 Administrator CLI behavior is not a process-entry exemption: `cli.ts`, terminal interaction, shared identity policy, and administrator service each retain sibling unit tests and per-file coverage. Actual child processes and Python 3 standard-library PTYs belong in `platform/test/cli.integration.test.ts` behind root `pnpm test:cli`. Verify both TTY gates before data-directory creation, hidden Unicode/whitespace input, default-no promotion, session revocation/atomic audits, cancellation with restored echo, and source/compiled command behavior. Child tests use owned working/data directories and explicit environment allowlists, never the developer's `.env` or inherited password/runtime variables.
 

@@ -7,7 +7,16 @@ const minCoverage = constraintNumber('testing', 'min_line_coverage');
 export default defineConfig({
   test: {
     projects: [
-      { test: { name: 'unit', include: ['platform/src/**/*.test.ts', 'plugins/**/*.test.js'] } },
+      {
+        test: {
+          name: 'unit',
+          include: [
+            'platform/src/**/*.test.ts',
+            'platform/web/src/**/*.test.{ts,tsx}',
+            'plugins/**/*.test.js',
+          ],
+        },
+      },
       { test: { name: 'integration', include: ['platform/test/**/*.integration.test.ts'] } },
       {
         test: {
@@ -23,9 +32,19 @@ export default defineConfig({
     ],
     coverage: {
       provider: 'v8',
-      include: ['platform/src/**/*.ts', 'plugins/permission-tiers/*.js'],
-      // main.ts is the process entry point; registered in constraints.yaml `exemptions`.
-      exclude: ['platform/src/**/*.test.ts', 'platform/src/main.ts', 'plugins/**/*.test.js'],
+      include: [
+        'platform/src/**/*.ts',
+        'platform/web/src/**/*.{ts,tsx}',
+        'plugins/permission-tiers/*.js',
+      ],
+      // Exact process/browser bootstrap exemptions are registered in constraints.yaml.
+      exclude: [
+        'platform/src/**/*.test.ts',
+        'platform/src/main.ts',
+        'platform/web/src/**/*.test.{ts,tsx}',
+        'platform/web/src/main.tsx',
+        'plugins/**/*.test.js',
+      ],
       reporter: ['text', 'json-summary'],
       thresholds: {
         perFile: true,

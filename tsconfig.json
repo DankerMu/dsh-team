@@ -31,6 +31,7 @@
     "platform/test",
     "platform/scripts",
     "vitest.config.ts",
+    "playwright.config.ts",
     "scripts/*.mjs"
   ],
   "exclude": ["node_modules", "**/dist", "coverage"]

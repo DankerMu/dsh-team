@@ -17,6 +17,10 @@
     "platform": {
       "entry": ["scripts/*.ts", "test/**/*.test.ts", "src/**/*.test.ts"],
       "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+    },
+    "platform/web": {
+      "entry": ["index.html", "src/**/*.test.{ts,tsx}"],
+      "project": ["src/**/*.{ts,tsx}"]
     }
   },
   "ignoreDependencies": [
