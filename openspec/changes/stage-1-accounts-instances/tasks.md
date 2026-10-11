@@ -901,7 +901,7 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - [x] 13.3 登录页：含加载中、出错（邮箱或密码错误、限流、账号被禁用）和成功三种状态，成功后进入工作台。验证：`pnpm test:ui`——登录走通；三种错误各显示对应的中文提示。
 - [x] 13.4 注册页：含加载中、出错（重复邮箱、密码太短）和成功三种状态。验证：`pnpm test:ui`——注册走通并处于已登录状态；两种错误各显示对应的中文提示。
 - [x] 13.5 改密码页和登出入口。验证：`pnpm test:ui`——改密码后用新密码能登录、旧密码不能；当前密码错误时显示提示；登出后回到登录页。
-- [ ] 13.6 等待页 `/_platform/wait`：调用启动接口并轮询状态接口，就绪后进入工作台；显示启动中、已满（“当前使用人数已满，请稍后再试”）、出错（启动失败、重试按钮、仍失败时联系管理员）、未配置模型（“管理员尚未完成模型配置”）四种状态。验证：`pnpm test:ui`（两个接口用替身）——四种状态各显示对应文案；点击重试会再次调用启动接口；就绪后页面跳转（`gateway-routing` 规格“实例未运行时的回应”的三个等待页场景，`instance-lifecycle` 规格“上限已满”“启动超时”场景的界面部分）。
+- [x] 13.6 等待页 `/_platform/wait`：调用启动接口并轮询状态接口，就绪后进入工作台；显示启动中、已满（“当前使用人数已满，请稍后再试”）、出错（启动失败、重试按钮、仍失败时联系管理员）、未配置模型（“管理员尚未完成模型配置”）四种状态。验证：`pnpm test:ui`（两个接口用替身）——四种状态各显示对应文案；点击重试会再次调用启动接口；就绪后页面跳转（`gateway-routing` 规格“实例未运行时的回应”的三个等待页场景，`instance-lifecycle` 规格“上限已满”“启动超时”场景的界面部分）。
 
 Suggested fixture level: expanded - 在平台进程的共享入口下加静态文件服务，改 CI 和门禁配置，且是认证界面
 Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和 Playwright 基线，约 250 行）
@@ -950,6 +950,17 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - Documentation / migration notes — selected: current account entry and cookie semantics, no DSH-native-menu or fake-upstream claim; exact page list and mirrored evidence updated with no gate relaxation.
 - Required proof: account page404 RED→real controls; actual wrong-current401→change204/replacement-cookie/old-cookie-refused→logout204/login page→old-password401/new-password200; semantic pending/failure DOM cases, unchanged priorUI, screenshots/zero unexpected errors, fullcheck/strictfixture/source-dist smoke and final review/Docker/CI.
 - 验证记录（#65）：account404真实RED→完整表单GREEN；check1612unit/822integration、AccountPage39/PasswordPage28语义用例各四项覆盖100%、UI3通过。真实401/204改密、轮换cookie与旧会话拒绝、204登出、旧密码401/新密码200，跨操作pending和既有登录/注册全部保留。独立source/dist实际浏览器烟测零console/page错误、零外部请求、无额外启动。空204仅验证状态与已提交效果；精确Request身份绑定的204/ERR_ABORTED观察边界通过缺失身份和同URL错误401身份两条负向控制，原始失败及证据保留于.run/issue65。冻结head review/Docker/CI另附PR。
+
+### Issue #66 risk/evidence map (task13.6 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: exact wait-page delivery and same-origin JSON{} POST/start plus GET/status; current-user backend identity unchanged, fixed login/root destinations and no raw diagnostics.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: serial request/timer, same-tick retry fence, explicit terminal recovery, abort/unmount/late-result ownership; DOM transition and real compiled-browser proof.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: validated200 {status,reason} with matching machine states, reject malformed/unknown response; preserve all account flows and backend60s readiness ownership.
+- File IO / path safety / overwrite; Config / project setup — selected: one existing exact-page allowlist addition with confinement/method negatives, covered selector and branch-free bootstrap; no env/dependency/gate changes.
+- Resource limits / large input / discovery; Release / packaging / dependency compatibility — selected: bounded single timer/request, cleanup on unmount, no automatic start/retry loop, source/dist artifact parity and existing discovery/coverage/CI.
+- Documentation / migration notes — selected: exact page list, waiting/retry semantics and mirrored UI evidence; clearly identify only start/status API substitutes and local non-DSH destination.
+- Required proof: real wait404 RED; four required Chinese states and error/manual retry→running browser scenarios, exact start/GET ordering and no extra mutation, semantic stale/unmount/cancellation/failure proof, priorUI3 preserved, screenshots/no unexpected errors, perfile80%, independent source/dist smoke, fullcheck/strictfixture/frozenreview/Docker/CI.
+- 验证记录（#66）：真实wait404RED→编译页面GREEN；check1662unit/822integration、WaitPage43语义用例100%语句/函数/行与95.91%分支、UI4全部通过。四态、手动多次重试、串行GET、卸载/迟到结果和旧UI3均覆盖。仅start/status两个API替身，页面/登录/网关真实；独立source/dist同边界浏览器烟测零错误/外部请求。网关wait404断言按新页面合同迁移为200HTML并保留静态不解析上游的断言。冻结review/Docker/CI另附PR。
 
 ## 14. 管理后台：账号和实例（任务包 1.11）
 

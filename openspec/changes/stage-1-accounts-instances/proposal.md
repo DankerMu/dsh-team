@@ -513,3 +513,11 @@
 - Preserve login/registration behavior, backend change-password/logout/Origin/session contracts, static confinement and gateway-owned instance routing/start.
 - Selected risk packs: all eleven mapped in tasks.md; no backend authentication API/schema/dependency, DSH UI/source, wait/admin page or instance lifecycle change.
 - Evidence floor: actual account-page404→rendered controls tracer; real browser wrong-current401→change204 with replacement cookie→logout204→old-password401/new-password200; cross-action pending proof, safe-error DOM coverage, screenshots/zero unexpected errors, independent source/dist smoke, full checks and final exact-head review/Docker/CI.
+
+## Issue #66 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task13.6 only.
+- Blast radius: explicit instance-start ownership, asynchronous status observation, navigation and existing account-page dispatch/static boundary.
+- Preserve all login/registration/password/logout behavior, backend instance API/auth/Origin/60s readiness contracts, exact static confinement and fixed-root gateway routing.
+- Selected risk packs: all eleven mapped in tasks.md; no backend API/schema/lifecycle, dependency, DSH or administrator page changes.
+- Evidence floor: real wait-page404→rendered page tracer; built-browser four-state and retry→running scenarios using only the two permitted API substitutes; serialized polling/cancellation/safe-failure DOM proof; screenshots and no unexpected browser errors, independent source/dist smoke, full checks and frozen-head review/Docker/CI.

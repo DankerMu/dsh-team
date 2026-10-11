@@ -408,9 +408,13 @@ it('resolves only admitted users and observes an unavailable to running transiti
           const anonymous = await sendHttp(base, { headers: { accept: 'text/html' } });
           expect(anonymous.status).toBe(302);
           expect(anonymous.headers.location).toBe('/_platform/login');
-          expect(
-            (await sendHttp(base, { path: '/_platform/wait', headers: { cookie } })).status,
-          ).toBe(404);
+          const waitShell = await sendHttp(base, {
+            path: '/_platform/wait',
+            headers: { cookie },
+          });
+          expect(waitShell.status).toBe(200);
+          expect(waitShell.headers['content-type']).toContain('text/html');
+          expect(waitShell.body.toString()).toContain('<html lang="zh-CN">');
           expect(await upgrade(base, '/ws', cookie, undefined, 'http://foreign.example')).toMatch(
             /^HTTP\/1\.1 403 /,
           );
