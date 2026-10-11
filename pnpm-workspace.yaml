@@ -1,5 +1,6 @@
 packages:
   - platform
+  - platform/web
 
 # Supply-chain settings (enforced by the Semgrep job in CI).
 # Install only versions published at least 7 days ago (minutes).

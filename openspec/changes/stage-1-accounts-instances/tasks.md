@@ -896,8 +896,8 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 
 依赖：第 6、11、12 组。
 
-- [ ] 13.1 新建工作区包 `platform/web/`（React 18 加 Vite），构建为静态文件，由平台在 `/_platform/` 下提供；开发和构建脚本接入根 `package.json`。验证：`pnpm build` 产出静态文件；`pnpm e2e` 里请求 `/_platform/login` 得到页面。
-- [ ] 13.2 Playwright 基线：加入 `pnpm test:ui`（登记到 `package.json`、`AGENTS.md` 验证矩阵、CI），删除 `constraints.yaml` 里 `ui_e2e_tests` 这条延后项。验证：一个用例打开登录页并断言表单存在；`pnpm lint:agents` 和 `pnpm check` 通过。
+- [x] 13.1 新建工作区包 `platform/web/`（React 18 加 Vite），构建为静态文件，由平台在 `/_platform/` 下提供；开发和构建脚本接入根 `package.json`。验证：`pnpm build` 产出静态文件；`pnpm e2e` 里请求 `/_platform/login` 得到页面。
+- [x] 13.2 Playwright 基线：加入 `pnpm test:ui`（登记到 `package.json`、`AGENTS.md` 验证矩阵、CI），删除 `constraints.yaml` 里 `ui_e2e_tests` 这条延后项。验证：一个用例打开登录页并断言表单存在；`pnpm lint:agents` 和 `pnpm check` 通过。
 - [ ] 13.3 登录页：含加载中、出错（邮箱或密码错误、限流、账号被禁用）和成功三种状态，成功后进入工作台。验证：`pnpm test:ui`——登录走通；三种错误各显示对应的中文提示。
 - [ ] 13.4 注册页：含加载中、出错（重复邮箱、密码太短）和成功三种状态。验证：`pnpm test:ui`——注册走通并处于已登录状态；两种错误各显示对应的中文提示。
 - [ ] 13.5 改密码页和登出入口。验证：`pnpm test:ui`——改密码后用新密码能登录、旧密码不能；当前密码错误时显示提示；登出后回到登录页。
@@ -905,6 +905,18 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 
 Suggested fixture level: expanded - 在平台进程的共享入口下加静态文件服务，改 CI 和门禁配置，且是认证界面
 Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和 Playwright 基线，约 250 行）
+
+### Issue #62 risk/evidence map (tasks13.1–13.2 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: root build/dev/test:ui, explicit page/assets routes and source/dist asset path; existing backend endpoints and unknown-platform404 unchanged, no new env setting.
+- File IO / path safety / overwrite; Auth / permissions / secrets — selected: static root confinement, encoded traversal/missing files/HEAD, no dotfile or outside-root reads, no SPA fallback over APIs; no secrets in bundle or credential submission before task13.3.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: declared/hidden static response schemas and generator-only contract checks; original app/gateway/auth/instance tests remain green; no persisted schema.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: owned UI listener/database/browser lifecycle with unique port/current origin, missing production build fails before listening, failed verification closes owned resources; no reused dev process or global test state.
+- Resource limits / large input / discovery; Release / packaging / dependency compatibility — selected: standard streamed static serving, exact dependency pins and generated lockfile, offline local assets, scoped browser install, both source/built entries and fresh CI browser. Existing Docker consumers retain discovery.
+- Documentation / migration notes — selected: root commands/AGENTS verification row/constraints UI surface/CI aggregator updated atomically, ui_e2e_tests deferral removed, future frontend source covered by type/lint/pairing/coverage/Knip with at most exact pure-entry exemption.
+- Required proof: public404 RED→built login/asset GREEN, filesystem/routing boundary regressions, actual Playwright hydrated form screenshot and zero console errors, independent real UI observation, pnpm e2e and full check/guardrails/UI CI, final exact-head fullDocker and expanded cross-review. No login-functionality or waiting-page claim.
+- 验证记录（#62）：永久真实TCP登录页404→200语义RED/GREEN；固定Chromium真实React表单通过、截图及零console/page错误/站外请求。独立source/dist浏览器烟测均通过，实际源码/构建入口缺失前端产物均以固定错误exit1拒绝，产物恢复。giap-vps真实 `pnpm e2e` 构建后健康/登录/未知API共3请求全部成功；43个guardrail验收/拒绝canary全通过，含新TSX和浏览器依赖边界。最终完整check、冻结head Docker/review/CI另附PR，不宣称13.3登录行为完成。
+- 审查修复（#62）：新增浏览器Knip未使用导出拒绝canary，guardrails变为44通过、0失败；独立隔离烟测证明正常配置拒绝并点名导出，错误屏蔽浏览器工作区则漏报并触发canary失败条件。未修改生产行为或降低任何门槛。
 
 ## 14. 管理后台：账号和实例（任务包 1.11）
 

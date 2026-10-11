@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -200,6 +200,26 @@ function command(root: string, name: 'dev:bg' | 'dev:stop', env: NodeJS.ProcessE
   return { child, result };
 }
 
+async function copyDevRuntime(repository: string, root: string): Promise<void> {
+  await mkdir(join(root, 'scripts'));
+  for (const file of ['package.json', 'pnpm-workspace.yaml', 'tsconfig.json']) {
+    await copyFile(join(repository, file), join(root, file));
+  }
+  await symlink(join(repository, 'scripts/dev-server.sh'), join(root, 'scripts/dev-server.sh'));
+  // Own sources/output so this fixture's dev:bg build cannot clear shared web/dist.
+  await cp(join(repository, 'platform/src'), join(root, 'platform/src'), { recursive: true });
+  await cp(join(repository, 'platform/web/src'), join(root, 'platform/web/src'), {
+    recursive: true,
+  });
+  await copyFile(join(repository, 'platform/package.json'), join(root, 'platform/package.json'));
+  for (const file of ['package.json', 'tsconfig.json', 'vite.config.ts', 'index.html']) {
+    await copyFile(join(repository, 'platform/web', file), join(root, 'platform/web', file));
+  }
+  for (const directory of ['node_modules', 'platform/node_modules', 'platform/web/node_modules']) {
+    await symlink(join(repository, directory), join(root, directory), 'dir');
+  }
+}
+
 it('canonical dev stop retains captured source-main ownership through held work and rejects a concurrent stale-health start', async () => {
   const repository = resolve(import.meta.dirname, '../..');
   const root = await mkdtemp(join(tmpdir(), 'dsh-instance-dev-'));
@@ -219,10 +239,7 @@ it('canonical dev stop retains captured source-main ownership through held work 
   const commands: Promise<number | null>[] = [];
   let environment: NodeJS.ProcessEnv | undefined;
   try {
-    await mkdir(join(root, 'scripts'));
-    await copyFile(join(repository, 'package.json'), join(root, 'package.json'));
-    await symlink(join(repository, 'scripts/dev-server.sh'), join(root, 'scripts/dev-server.sh'));
-    await symlink(join(repository, 'platform'), join(root, 'platform'), 'dir');
+    await copyDevRuntime(repository, root);
     await writeFile(join(root, 'seccomp.json'), '{"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}');
     const data = join(root, 'data');
     await mkdir(data);

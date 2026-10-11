@@ -2,11 +2,12 @@
 # scripts/check-test-pairing.sh — every production source file has a sibling test.
 # TDD is required in this repo (constraints.yaml testing.tdd_mode): a source file
 # without a test next to it was written implementation-first.
-# Scans platform/src and plugin host sources in the working tree. Exempt by design:
+# Scans platform/src, platform/web/src and plugin host sources. Exempt by design:
 #   *.test.ts(x)            the tests themselves
 #   *.d.ts, types.ts, *.types.ts   type-only files with no runtime behaviour
 #   index.ts                module entry files that only re-export
 #   platform/src/main.ts    process entry point (constraints.yaml exemptions)
+#   platform/web/src/main.tsx  declarative bootstrap, exercised by Playwright
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -14,11 +15,12 @@ cd "$repo_root"
 
 roots=()
 [ -d platform/src ] && roots+=("platform/src")
+[ -d platform/web/src ] && roots+=("platform/web/src")
 for dir in plugins/*; do
   [ -d "$dir" ] && roots+=("$dir")
 done
 if [ "${#roots[@]}" -eq 0 ]; then
-  echo "check-test-pairing: no source roots (platform/src, plugins/*) found — extend this gate" >&2
+  echo "check-test-pairing: no source roots (platform/src, platform/web/src, plugins/*) found — extend this gate" >&2
   exit 1
 fi
 
@@ -26,7 +28,7 @@ checked=0
 missing=()
 while IFS= read -r file; do
   case "$file" in
-    *.test.ts | *.test.tsx | *.test.js | *.d.ts | */types.ts | *.types.ts | */index.ts | platform/src/main.ts) continue ;;
+    *.test.ts | *.test.tsx | *.test.js | *.d.ts | */types.ts | *.types.ts | */index.ts | platform/src/main.ts | platform/web/src/main.tsx) continue ;;
   esac
   checked=$((checked + 1))
   stem="${file%.*}"

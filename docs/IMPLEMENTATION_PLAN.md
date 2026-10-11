@@ -114,6 +114,12 @@ docs/  verify/  resource/（只读参考，不入库）
 
 阶段1不可用状态与重试（任务12.6）：模型未配置返回 `unconfigured`，容量满返回 `full`，不分配用户资源或驱逐运行中实例；真实就绪失败保留已停止的出错容器、清除DSH cookie并保留脱敏日志。仅显式重试且配置/容量准入成功后，原每用户FIFO通过既有精确归属停止路径退役旧error身份（reason=`error`），核验账号及完整终态快照，再重新生成受管配置并启动新容器；不删除两卷。状态、身份、账号、取消或退役/审计失败不得继续创建。启动身份检查集中于 `start-identity.ts`，凭据、就绪、对账和停止复用同一实现。真实公开API及独立source/dist Docker烟测均覆盖保留error容器→同会话重试→真实DSH；外部删除running容器且降低上限的另一路状态分类问题仍由[#177](https://github.com/DankerMu/dsh-team/issues/177)处理。
 
+阶段1前端包与浏览器验证（任务13.1–13.2）：`platform/web` 使用React18/Vite构建到 `platform/web/dist`，仅声明 `/_platform/login` 和 `/_platform/assets/*`；不存在的平台/API路径保持404，不用SPA回退吞掉接口错误。静态文件经显式dotfile拒绝、realpath根边界和普通文件检查后由标准插件流式提供，支持HEAD/MIME/范围请求；源码与构建后的平台共用相同目录定位。生产入口缺少或无法读取构建时在监听前失败；`buildApp` 的离线注册不依赖产物。`pnpm build`、开发及集成/UI命令建立产物，后台开发仅在持有启动锁且确认无既有实例后构建，避免重复启动清空运行中的资源。
+
+`pnpm test:ui:install` 显式安装固定Playwright Chromium；`pnpm test:ui` 在独占端口、独立SQLite及真实平台路由上加载编译后的React表单，截图保存在 `reports/platform-ui/`，要求零控制台/页面错误且无站外请求。CI的UI job纳入必需汇总门禁；撤销UI延期项，并以拒绝canary证明新TSX配对/类型/覆盖率与浏览器模块边界门禁生效。此切片的表单凭据控件禁用、不提交、不序列化密码；实际登录由13.3交付，等待/后台页面不在本项。浏览器安装仅为验证依赖，不进入离线生产运行时。
+
+浏览器死代码门禁另有独立拒绝canary：经真实Vite入口导入一个不消费其导出的模块，要求Knip明确报告该导出；隔离烟测确认屏蔽整个浏览器工作区会导致漏报，从而被该canary识别。后台死代码拒绝用例不能替代浏览器工作区的证明。
+
 ### 阶段 2：插件目录、RAGFlow、Office
 
 **目标**：员工在知识库页面看到真实的库和文件，按 Session 选择检索范围并得到带来源的回答；DOCX、XLSX、PPTX 在线编辑保存后 Agent 读到新内容。

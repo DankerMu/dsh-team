@@ -60,6 +60,9 @@ start() {
     echo "dev port already serves another listener — refusing unrelated readiness" >&2
     return 1
   fi
+  # Build only after this invocation owns startup; an idempotent/concurrent start
+  # must not clear the live server's generated browser assets.
+  pnpm build:web
   # Production main always reconciles real Docker before listening; fail before recording a PID.
   node --env-file-if-exists=.env --input-type=module -e \
     'import {loadConfig} from "./platform/src/config.ts"; import {createDockerClient} from "./platform/src/orchestrator/index.ts"; const c=loadConfig(process.env); await createDockerClient(c.dockerSocketPath).json("GET","/version",undefined,AbortSignal.timeout(10000));'

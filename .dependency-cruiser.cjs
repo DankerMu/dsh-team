@@ -44,6 +44,29 @@ module.exports = {
       from: { path: '^(platform|plugins)/' },
       to: { path: '^(platform|plugins)/', pathNot: '^$1/' },
     },
+    {
+      name: 'browser-sources-are-isolated',
+      comment: 'Browser code cannot bundle backend, test, plugin or server-library code.',
+      severity: 'error',
+      from: { path: '^platform/web/src/' },
+      to: {
+        path: '^platform/(src|test|scripts)/|^plugins/|node_modules/(fastify|@fastify|better-sqlite3)/',
+      },
+    },
+    {
+      name: 'browser-sources-have-no-node-builtins',
+      comment: 'The browser has no Node runtime or privileged filesystem/process boundary.',
+      severity: 'error',
+      from: { path: '^platform/web/src/' },
+      to: { dependencyTypes: ['core'] },
+    },
+    {
+      name: 'backend-does-not-import-browser',
+      comment: 'The backend serves built artifacts, never imports client source.',
+      severity: 'error',
+      from: { path: '^platform/src/' },
+      to: { path: '^platform/web/src/' },
+    },
   ],
   options: {
     doNotFollow: { path: 'node_modules' },

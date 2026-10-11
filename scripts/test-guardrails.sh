@@ -39,6 +39,7 @@ git ls-files -co --exclude-standard -z |
 }
 ln -s "$repo_root/node_modules" "$wt/node_modules"
 ln -s "$repo_root/platform/node_modules" "$wt/platform/node_modules"
+ln -s "$repo_root/platform/web/node_modules" "$wt/platform/web/node_modules"
 
 cd "$wt" || exit 1
 if ! { git init --quiet . && git add -A &&
@@ -133,6 +134,10 @@ echo "export const orphan = 1;" >platform/src/orphan.ts
 expect_reject "test pairing (orphan.ts has no test)" "without a sibling test file" \
   pnpm lint:tests
 
+echo "export const orphan = 1;" >platform/web/src/orphan.tsx
+expect_reject "web test pairing (TSX behavior has no sibling test)" "without a sibling test file" \
+  pnpm lint:tests
+
 # ── 4. ESLint: size, complexity, logging, identifier naming ──────────────────
 max_lines="$(node scripts/constraints.mjs size_limits max_file_lines)"
 {
@@ -193,6 +198,19 @@ echo "export { pluginValue } from '../../plugins/sample/src/value.ts';" >platfor
 expect_reject "module boundary (platform imports plugins)" "platform-and-plugins-are-separate" \
   pnpm lint:deps
 
+echo "export { buildApp } from '../../src/app.ts';" >platform/web/src/server-import.ts
+expect_reject "module boundary (browser imports backend)" "browser-sources-are-isolated" \
+  pnpm lint:deps
+
+echo "import { readFile } from 'node:fs'; export const read = readFile;" >platform/web/src/node-import.ts
+expect_reject "module boundary (browser imports Node)" "browser-sources-have-no-node-builtins" \
+  pnpm lint:deps
+
+echo "export { unused } from '../web/src/unused.ts';" >platform/src/browser-import.ts
+echo "export const unused = 1;" >platform/web/src/unused.ts
+expect_reject "module boundary (backend imports browser source)" "backend-does-not-import-browser" \
+  pnpm lint:deps
+
 # ── 6. Shell lint, documented commands, format, types ────────────────────────
 # shellcheck disable=SC2016 # the literal, unquoted $1 is the planted violation
 printf '#!/usr/bin/env bash\necho $1\n' >scripts/unquoted.sh
@@ -208,6 +226,9 @@ expect_reject "format (unformatted file)" "platform/src/spaced.ts" pnpm fmt:chec
 
 echo "export const count: number = 'three';" >platform/src/mistyped.ts
 expect_reject "typecheck (string assigned to number)" "error TS2322" pnpm typecheck
+
+echo "export const count: number = 'three';" >platform/web/src/mistyped.tsx
+expect_reject "web typecheck (TSX string assigned to number)" "error TS2322" pnpm typecheck
 
 # ── 7. Coverage, duplicates, dead code, contract ─────────────────────────────
 cat >platform/src/bare.ts <<'EOF'
@@ -228,6 +249,21 @@ it('covers one of two functions', () => {
 });
 EOF
 expect_reject "coverage (bare.ts below the per-file threshold)" "bare.ts" pnpm test
+
+cat >platform/web/src/bare.tsx <<'EOF'
+export function sign(input: number): number {
+  return input > 0 ? 1 : -1;
+}
+EOF
+cat >platform/web/src/bare.test.tsx <<'EOF'
+import { expect, it } from 'vitest';
+import { sign } from './bare.tsx';
+
+it('covers only the positive client branch', () => {
+  expect(sign(3)).toBe(1);
+});
+EOF
+expect_reject "web coverage (TSX branch below the per-file threshold)" "bare.tsx" pnpm test
 
 # Fixed-size clones are diluted as platform/ grows. Count a conservative source
 # corpus (including tests), then target twice the live percentage. Even counting
@@ -272,6 +308,12 @@ expect_reject "duplicate code (two identical ${duplicate_lines}-branch corpus-si
 
 echo "export const neverImported = 1;" >>platform/src/health.ts
 expect_reject "dead code (unused export)" "neverImported" pnpm dead-code
+
+# Reach a browser module through the real Vite entry, but never consume its export.
+# This catches a lost workspace/entry traversal, not merely a backend-only Knip run.
+echo "export const neverImportedWeb = 1;" >platform/web/src/dead-code-canary.ts
+echo "import './dead-code-canary.ts';" >>platform/web/src/main.tsx
+expect_reject "web dead code (unused export)" "neverImportedWeb" pnpm dead-code
 
 echo "{}" >schemas/openapi.json
 expect_reject "contract (stale schemas/openapi.json)" "out of date" pnpm contract:check

@@ -20,6 +20,7 @@ import {
   type GatewayActivity,
 } from './gateway/index.ts';
 import type { InstanceService } from './orchestrator/index.ts';
+import { webRoutes } from './web/index.ts';
 
 /**
  * Log fields that must never be written in clear text, whatever the log level.
@@ -119,6 +120,7 @@ export async function buildApp(
       database,
       ...(instanceService === undefined ? {} : { service: instanceService }),
     });
+    await app.register(webRoutes);
     await app.register(gatewayRoutes, {
       database,
       connections,
