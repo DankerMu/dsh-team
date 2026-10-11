@@ -1,7 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { writeSettings } from '../src/db/index.ts';
-import { registerAccount, successfulLogin, withListeningApp } from './auth-tcp-fixture.ts';
+import {
+  expectUnauthorizedResponse,
+  registerAccount,
+  successfulLogin,
+  withListeningApp,
+} from './auth-tcp-fixture.ts';
 
 const PATH = '/_platform/api/admin/instances';
 
@@ -9,12 +14,7 @@ it('rejects unauthenticated instance listing', async () => {
   await withListeningApp(async (base) => {
     const response = await fetch(`${base}/_platform/api/admin/instances`);
 
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({
-      statusCode: 401,
-      error: 'Unauthorized',
-      message: 'Unauthorized',
-    });
+    await expectUnauthorizedResponse(response);
   });
 });
 

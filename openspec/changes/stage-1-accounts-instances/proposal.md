@@ -538,3 +538,11 @@
 - Selected risk packs: all eleven mapped in tasks.md; no new Docker owner, schema migration, UI, restart/reset operations, dependency or relaxed deadline.
 - Minimal necessary composition: expose stop through the existing InstanceService and pass that capability to the admin plugin; its absence is confirmed by source inspection. Cancel its owned startup flight before ordered retirement; do not put Docker code in admin.
 - Evidence floor: real endpoint RED; current-actor/atomic transaction/partial-failure/concurrency tests; real Docker disable closes connections AND physically stops within5s, old sessions/login denied, enable/new login/restart retains files and Session, exact audits, source/dist smoke, full checks and frozen review/Docker/CI.
+
+## Issue #70 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task14.5 only.
+- Blast radius: administrator-selected password replacement, all target sessions and safe audit metadata.
+- Preserve current actor authorization, canonical Unicode password policy/hash, target role/status and instance/data ownership; no promotion or enable side effect.
+- Selected risk packs: all eleven assessed in tasks.md; no file IO, Docker mutation, migration, UI, new dependency or hashing implementation.
+- Evidence floor: real endpoint401 tracer RED, realTCP old/new password login and every old session denial, five-code-point rejection without writes, current-actor recheck across body/hash delay, atomic audit rollback, same-user connection cleanup, source/dist smoke, full checks and frozen review/Docker/CI.

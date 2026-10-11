@@ -8,7 +8,7 @@ import { accountStatusFixture } from './account-status-fixture.ts';
 import { START_CONTAINER, START_USER } from './container-start-fixture.ts';
 import { expectNoSecrets, PASSWORD, registerAccount } from './auth-tcp-fixture.ts';
 import { jsonRequestHeaders } from './auth-fixture.ts';
-import { withListeningApp } from './auth-tcp-fixture.ts';
+import { expectUnauthorizedResponse, withListeningApp } from './auth-tcp-fixture.ts';
 
 it('rejects unauthenticated account status changes with the fixed Unauthorized response', async () => {
   await withListeningApp(async (base) => {
@@ -20,12 +20,7 @@ it('rejects unauthenticated account status changes with the fixed Unauthorized r
       body: JSON.stringify({ status: 'disabled' }),
     });
 
-    expect(response.status).toBe(401);
-    expect(await response.json()).toEqual({
-      statusCode: 401,
-      error: 'Unauthorized',
-      message: 'Unauthorized',
-    });
+    await expectUnauthorizedResponse(response);
   });
 });
 

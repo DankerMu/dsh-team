@@ -4,6 +4,7 @@ import type { SourceAddressResolver } from '../auth/index.ts';
 import { modelConfigRoutes } from './model-config.ts';
 import { runtimeConfigRoutes } from './runtime-config.ts';
 import { accountStatusRoutes } from './account-status.ts';
+import { passwordResetRoutes } from './password-reset.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
@@ -192,6 +193,7 @@ export const adminRoutes: FastifyPluginCallback<{
   );
   app.register(modelConfigRoutes, { database, resolveSourceAddress });
   app.register(runtimeConfigRoutes, { database, resolveSourceAddress, subnetPool });
+  app.register(passwordResetRoutes, { database, resolveSourceAddress });
   app.register(accountStatusRoutes, {
     database,
     resolveSourceAddress,

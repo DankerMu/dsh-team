@@ -26,6 +26,11 @@ const UNAUTHENTICATED = {
   message: 'Unauthorized',
 } as const;
 
+export async function expectUnauthorizedResponse(response: Response): Promise<void> {
+  expect(response.status).toBe(401);
+  expect(await response.json()).toEqual(UNAUTHENTICATED);
+}
+
 export interface TestClock {
   ms: number;
 }
