@@ -51,6 +51,7 @@ function* blockChunks(block) {
 export async function apply(ctx) {
   const owned = new Set(),
     issued = new Set();
+  const holds = new Map();
   const facts = {
     source: 'deterministic-owned-LlmAdapter',
     externalModelCalls: 0,
@@ -62,6 +63,7 @@ export async function apply(ctx) {
     results: [],
     children: [],
     delegations: [],
+    holds: [],
   };
   class OwnedAdapter extends LlmAdapter {
     providerInfo(provider) {
@@ -88,7 +90,17 @@ export async function apply(ctx) {
         .reverse()
         .filter((m) => m.role === 'user')
         .flatMap((m) => m.content ?? [])
-        .find((b) => b.type === 'text' && b.text.startsWith(PREFIX))?.text;
+        .find(
+          (b) =>
+            b.type === 'text' &&
+            (b.text.startsWith(PREFIX) || b.text.startsWith('issue59-idle hold ')),
+        )?.text;
+      const idleHold = text?.match(/^issue59-idle hold ([a-f0-9-]+)$/);
+      if (idleHold) {
+        const nonce = idleHold[1];
+        yield* holdIdleTurn(options, nonce, holds, facts);
+        return;
+      }
       const match = text?.match(
         /^issue83-ui (root|delegate|child) (reject|allow|cancel) ([a-f0-9-]+)$/,
       );
@@ -149,7 +161,13 @@ export async function apply(ctx) {
     'owned-ui-protocol adapter',
   );
   registerObservations(ctx, owned, facts);
-  await startControlServer(ctx, owned, facts);
+  await startControlServer(ctx, owned, facts, holds);
+  ctx.effect(
+    () => () => {
+      for (const pending of holds.values()) pending.resolve();
+    },
+    'owned-idle holds',
+  );
 }
 
 function registerObservations(ctx, owned, facts) {
@@ -254,8 +272,62 @@ function registerObservations(ctx, owned, facts) {
   });
 }
 
-async function startControlServer(ctx, owned, facts) {
+async function* holdIdleTurn(options, nonce, holds, facts) {
+  if (holds.has(nonce)) throw new Error('Duplicate owned hold');
+  const pending = Promise.withResolvers();
+  const observation = {
+    nonce,
+    sessionId: options.sessionId,
+    entered: true,
+    completed: false,
+    aborted: false,
+  };
+  facts.holds.push(observation);
+  holds.set(nonce, pending);
+  const abort = () => pending.resolve();
+  options.signal?.addEventListener('abort', abort, { once: true });
+  // A broken test cannot leave a real Agent permanently running.
+  const timer = setTimeout(abort, 120_000);
+  try {
+    if (options.signal?.aborted) abort();
+    await pending.promise;
+    observation.aborted = options.signal?.aborted === true;
+    yield* blockChunks({ type: 'text', text: 'Owned idle fixture completed.' });
+  } finally {
+    observation.completed = true;
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abort);
+    holds.delete(nonce);
+  }
+}
+
+function idleControl(ctx, owned, holds, request) {
+  if (request.op === 'hold') {
+    if (
+      !owned.has(request.sessionId) ||
+      typeof request.nonce !== 'string' ||
+      !/^[a-f0-9-]+$/.test(request.nonce)
+    )
+      throw new Error('Unowned idle hold');
+    const agent = ctx.agents.get(request.sessionId);
+    if (!agent || agent.status !== 'idle') throw new Error('Owned Agent not idle');
+    agent.followup(
+      createUserMessage({
+        source: { kind: 'user' },
+        content: [{ type: 'text', text: `issue59-idle hold ${request.nonce}` }],
+      }),
+    );
+  } else if (request.op === 'release') {
+    const pending = holds.get(request.nonce);
+    if (!pending) throw new Error('Owned hold not present');
+    pending.resolve();
+  } else return false;
+  return true;
+}
+
+async function startControlServer(ctx, owned, facts, holds) {
   const server = createServer(async (req, res) => {
+    const deadline = setTimeout(() => req.destroy(), 10_000);
     try {
       if (req.method !== 'POST' || req.url !== '/control') {
         res.writeHead(404);
@@ -279,7 +351,8 @@ async function startControlServer(ctx, owned, facts) {
             content: [{ type: 'text', text: 'issue83-ui initialize' }],
           }),
         );
-      } else if (request.op !== 'status') throw new Error('Unknown control command');
+      } else if (request.op !== 'status' && !idleControl(ctx, owned, holds, request))
+        throw new Error('Unknown control command');
       const sessions = [...owned].map((sessionId) => {
         const agent = ctx.agents.get(sessionId),
           session = ctx.sessions.get(sessionId);
@@ -316,8 +389,12 @@ async function startControlServer(ctx, owned, facts) {
     } catch {
       res.writeHead(500);
       res.end(JSON.stringify({ error: 'owned-control-failed' }));
+    } finally {
+      clearTimeout(deadline);
     }
   });
+  server.requestTimeout = 10_000;
+  server.headersTimeout = 10_000;
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(3081, '127.0.0.1', resolve);

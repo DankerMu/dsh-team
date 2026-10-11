@@ -487,7 +487,13 @@ export function expectDockerReads(
   ).toEqual(paths.map((path) => ({ method: 'GET', path })));
 }
 
-export function startupBarrier() {
+export interface StartupBarrier {
+  readonly reached: Promise<undefined>;
+  readonly release: () => void;
+  readonly hold: () => Promise<undefined>;
+}
+
+export function startupBarrier(): StartupBarrier {
   const reached = Promise.withResolvers<undefined>();
   const release = Promise.withResolvers<undefined>();
   return {

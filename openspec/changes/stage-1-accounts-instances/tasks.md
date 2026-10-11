@@ -805,7 +805,7 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - [x] 12.1 把网关接到编排器：上游地址、端口和 DSH cookie 取自 `instances` 表；提供 `POST /_platform/api/instance/start`（幂等，返回当前状态）和 `GET /_platform/api/instance`（状态和原因）。启动只有这一个入口。验证：`pnpm test:docker`——注册并登录后调用启动接口，轮询状态到就绪，随后首页请求得到 DSH 的界面；实例运行中时首页请求直接得到 DSH 的界面；对已在运行的实例再调启动接口不产生第二个容器；`pnpm contract:check` 通过（规格“登录后按需启动”的“首次登录”“实例已在运行”场景）。
 - [x] 12.2 新实例可直接使用：按第 3 组的结论。验证：`pnpm test:docker`——新用户首次进入，不经任何选择即可创建 Session；界面语言为中文；没有公告（规格“新实例可以直接使用”）。
 - [x] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
-- [ ] 12.4 空闲回收：每分钟检查一次，按第 2 组结论的信号判断是否有运行中的任务；没有连接、没有任务且持续达到配置分钟数才停止，停止原因为“空闲”；空闲分钟数每次检查时从 `settings` 读取。验证：用可控时钟的 `pnpm test:docker` 覆盖规格“空闲后停止”的四个场景（规格若已按 2.3 改写，则覆盖改写后的场景）。
+- [x] 12.4 空闲回收：每分钟检查一次，按第 2 组结论的信号判断是否有运行中的任务；没有连接、没有任务且持续达到配置分钟数才停止，停止原因为“空闲”；空闲分钟数每次检查时从 `settings` 读取。验证：用可控时钟的 `pnpm test:docker` 覆盖规格“空闲后停止”的四个场景（规格若已按 2.3 改写，则覆盖改写后的场景）。
 - [ ] 12.5 回收后恢复：验证：`pnpm test:docker`——实例被空闲回收后，平台会话仍有效的用户不重新登录，直接请求首页被重定向到等待页，调用启动接口后就绪，之前的 Session 和工作目录里的文件都在（规格“平台会话有效而实例已停止”和“停止后再启动”场景）。
 - [ ] 12.6 已满、出错和未配置时的状态：验证：`pnpm test:docker`——上限设为 1，第二个用户调用启动接口得到“已满”，第一个用户不受影响，第一个停止后第二个重试成功；实例出错后再调启动接口会重新启动；模型未配置时得到“未配置模型”（规格“有人空出位置后可以进入”“出错后重试”场景）。
 
@@ -855,6 +855,20 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 验证记录（#58）：真实TCP收到流前缀后缺少活动接口的永久RED；实现后10条活动集成通过，覆盖长连接/HTTP finish、59,999/60,000ms、失败保留、同用户held生命周期、跨用户和退出。保持原有完整行栅栏与生命周期测试；初版把队列等待放入preClose导致真实main监听器关闭测试RED，移到onClose后原测试恢复，先关监听器再排空活动/编排且最后关SQLite。第三次 `pnpm check`1439unit/791integration、逐文件覆盖（app函数80%）、类型/构建/契约/Knip通过，重复率2.86%。独立source/dist脚本以真实TCP与文件SQLite、显式可控时钟证明计数1→0、keep-alive不计数、分钟边界写回、其他字段不变及重新打开数据库后的持久值；没有把此受控上游声明为真实Docker或DSH。最终冻结head Docker、交叉审查、CI仍是合并门禁；未实现后续空闲回收策略。
 
 审查修复（#58）：同一成功写回计时问题由两席提出，父级按明确分钟合同确认为P1。真实SQLite trigger在UPDATE内把控制时钟500000推进到505000，旧实现错误地在564999再次提交（RED）；成功run返回后重新采样写入时刻，原判据在564999无第二次提交、565000提交最新值（GREEN）。原FIFO/完整行栅栏/跨用户断言保留，修复后完整check和source/dist烟测均通过。初始head整套Docker24/26，两个浏览器用例失败，其中permission记录ERR_NETWORK_CHANGED；独立安全网络捕获随后两用户通过但未确诊原失败，资料补充到#179，未改变浏览器参数、超时、重试或断言；最终head完整Docker仍是门禁。
+
+### Issue #59 risk/evidence map (task12.4 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: real pinned Session-list POST plus app-lifetime minute sweep and fresh canonical idleMinutes; no new public endpoint/env setting. Docker proves settings30→5 without restart.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: same existing instance/volume/audit contracts, no migration; exact owned stop reason idle with unchanged state/work volumes and metadata. Epoch-ms/positive safe-integer minutes and backward-clock boundaries tested.
+- Auth / permissions / secrets — selected: stored per-instance cookie and configured Host/Origin, authoritative gateway identity, no request-selected target or raw response/credential logging; rejected/unknown upstream state cannot authorize retirement.
+- Concurrency / shared state / ordering — selected: original per-user FIFO, non-overlapping bounded sweep, current identity/live activity/start/settings rechecks, transient identity-bound retiring admission fence. Held lookup/queue/stop races and distinct-user progress are permanent tests.
+- Resource limits / large input / discovery — selected: complete pinned unpaginated listing, finite HTTP header/body/deadline limits, no truncation acceptance, bounded traversal and one sweep; real HTTP malformed/oversized/aborted/slow response tests.
+- Error handling / rollback / partial outputs — selected: busy/unknown resets idle interval, conservative fresh interval after task completion, original stop/audit failure semantics, cancelled probes and admitted retirements settle before DB close; no retry loop or volume deletion.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: pinned release contract cites actual npm package, existing HTTP/WS/session/first-use/activity/lifecycle consumers retained, no DSH/dependency change; full frozen-head Docker suite.
+- Documentation / migration notes — selected: interval granularity, first-known-idle policy, unknown safety, transient admission fencing, no resume promise; strict OpenSpec, `pnpm check`, source/dist runtime evidence and critical-path human-review disclosure.
+- Required Docker evidence: four original idle scenarios with controlled platform clock and actual DSH status, live gateway connection, real held Agent turn using existing owned deterministic adapter, exact stop audit and volume inspection. No fake task-list response or external provider needed.
+- Required boundary evidence: semantic RED/GREEN plus real HTTP protocol matrix and lifecycle races; final exact-head full Docker/CI. No #60/#61/UI work or #179 browser-flake workaround.
+- 验证记录（#59）：永久集成回归先见 `checkIdle` 缺失的语义RED，后28项空闲协议/生命周期集成通过。`pnpm check` 1486unit/819integration、逐文件80%与类型/构建/契约/Knip通过，重复率2.96%。giap-vps真实DSH四个空闲场景及既有权限场景7/7通过；独立source/dist真实Docker smoke证明首次空闲不回收、59,999/60,000ms边界、精确容器缺失、idle审计及两卷中文内容保留，测试资源清理完成。最终冻结head的全量Docker、cross-review和CI另列PR证据，不以此预检冒充最终门槛。
 
 ## 13. 平台前端基线和账号页面（任务包 1.4、1.9 的界面部分）
 
