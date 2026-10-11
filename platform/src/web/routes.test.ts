@@ -55,9 +55,18 @@ describe('declared platform static routes', () => {
     expect(style.body).toBe('body { color: black; }');
   });
 
+  it('serves the same confined HTML at the exact registration page', async () => {
+    const response = await app.inject('/_platform/register');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toBe(HTML);
+  });
+
   it('serves HEAD metadata without a body and bounded byte ranges', async () => {
     const cases: [string, string][] = [
       ['/_platform/login', HTML],
+      ['/_platform/register', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -81,7 +90,7 @@ describe('declared platform static routes', () => {
     '/_platform/',
     '/_platform/login/',
     '/_platform/wait',
-    '/_platform/register',
+    '/_platform/register/',
     '/_platform/admin',
     '/_platform/api/unknown',
     '/_platform/assets/missing.js',
@@ -114,16 +123,19 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(SCRIPT);
   });
 
-  it('does not expose a symlinked login entry outside the build', async () => {
-    await rm(join(root, 'index.html'));
-    await symlink(join(directory, 'private.js'), join(root, 'index.html'));
+  it.each(['/_platform/login', '/_platform/register'])(
+    'does not expose a symlinked entry outside the build at %s',
+    async (url) => {
+      await rm(join(root, 'index.html'));
+      await symlink(join(directory, 'private.js'), join(root, 'index.html'));
 
-    const response = await app.inject('/_platform/login');
+      const response = await app.inject(url);
 
-    expect(response.statusCode).toBe(404);
-    expect(response.body).not.toContain(PRIVATE);
-    await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
-  });
+      expect(response.statusCode).toBe(404);
+      expect(response.body).not.toContain(PRIVATE);
+      await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
+    },
+  );
 
   it('does not expose a symlinked assets directory outside the build', async () => {
     await rm(join(root, 'assets'), { recursive: true });
@@ -136,25 +148,31 @@ describe('declared platform static routes', () => {
     await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
   });
 
-  it('does not accept credential submissions at the static page', async () => {
-    const response = await app.inject({ method: 'POST', url: '/_platform/login', payload: {} });
-
-    expect(response.statusCode).toBe(404);
-  });
-
-  it('registers without a build but rejects that production prerequisite', async () => {
-    const missingRoot = join(directory, 'not-built');
-    const offline = Fastify();
-    try {
-      await offline.register(webRoutes, { root: missingRoot });
-      const response = await offline.inject('/_platform/login');
+  it.each(['/_platform/login', '/_platform/register'])(
+    'does not accept credential submissions at the static page %s',
+    async (url) => {
+      const response = await app.inject({ method: 'POST', url, payload: {} });
 
       expect(response.statusCode).toBe(404);
-      await expect(assertWebBuild(missingRoot)).rejects.toThrow('run pnpm build:web');
-    } finally {
-      await offline.close();
-    }
-  });
+    },
+  );
+
+  it.each(['/_platform/login', '/_platform/register'])(
+    'registers %s without a build but rejects that production prerequisite',
+    async (url) => {
+      const missingRoot = join(directory, 'not-built');
+      const offline = Fastify();
+      try {
+        await offline.register(webRoutes, { root: missingRoot });
+        const response = await offline.inject(url);
+
+        expect(response.statusCode).toBe(404);
+        await expect(assertWebBuild(missingRoot)).rejects.toThrow('run pnpm build:web');
+      } finally {
+        await offline.close();
+      }
+    },
+  );
 
   it('rejects an incomplete or invalid build before production listening', async () => {
     await rm(join(root, 'index.html'));

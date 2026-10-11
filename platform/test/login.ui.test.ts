@@ -1,81 +1,23 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { expect, test, type APIRequestContext, type Response } from '@playwright/test';
-import type { FastifyInstance } from 'fastify';
-import { buildApp } from '../src/app.ts';
-import { loadConfig } from '../src/config.ts';
-import { applyMigrations, openDatabase, type DatabaseHandle } from '../src/db/index.ts';
-import { assertWebBuild } from '../src/web/index.ts';
+import { expect, test } from '@playwright/test';
 import { readPublicIdentity } from './auth-fixture.ts';
-import { withUpstream } from './gateway-http-fixture.ts';
+import {
+  expectNoBrowserStorage,
+  expectNoScriptVisibleCookie,
+  observeAccountUi,
+  submitPendingAccountForm,
+  withAccountUi,
+  withAccountUiRouteCleanup,
+} from './account-ui-fixture.ts';
 
 test('built React login submits real credentials, recovers from rejections and stays entirely local', async ({
   page,
   playwright,
 }, testInfo) => {
-  const directory = await mkdtemp(join(tmpdir(), 'dsh-team-web-ui-'));
-  const release = Promise.withResolvers<undefined>();
-  let database: DatabaseHandle | undefined;
-  let app: FastifyInstance | undefined;
-  let seed: APIRequestContext | undefined;
-  try {
-    await assertWebBuild();
-    // Reserve a unique port before capturing the public Origin; never reuse a dev listener.
-    const reservation = createServer();
-    let port: number;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        reservation.once('error', reject);
-        reservation.listen(0, '127.0.0.1', resolve);
-      });
-      const address = reservation.address();
-      if (address === null || typeof address === 'string')
-        throw new Error('Missing UI TCP address');
-      port = address.port;
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        reservation.close((error) => {
-          if (error === undefined) resolve();
-          else reject(error);
-        });
-      });
-    }
-    const baseUrl = `http://127.0.0.1:${String(port)}`;
-    const loginUrl = `${baseUrl}/_platform/api/login`;
-    const config = loadConfig({
-      PLATFORM_HOST: '127.0.0.1',
-      PLATFORM_PORT: String(port),
-      PLATFORM_PUBLIC_URL: baseUrl,
-      PLATFORM_DATA_DIR: directory,
-      PLATFORM_LOG_LEVEL: 'silent',
-      PLATFORM_COOKIE_SECURE: 'false',
-    });
-    database = openDatabase(join(directory, 'platform.db'));
-    applyMigrations(database);
-    const upstreamRequests: { path: string; cookie: string | undefined }[] = [];
-    const admittedUsers: string[] = [];
-    // This owned plain-text destination observes gateway admission; it is NOT DSH evidence.
-    await withUpstream(
-      (request, response) => {
-        upstreamRequests.push({ path: request.url ?? '', cookie: request.headers.cookie });
-        response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-        response.end('本地已认证入口（非 DSH）');
-      },
-      async (target) => {
-        // No lifecycle service, fake page or intercepted assets: real auth/static/gateway composition.
-        if (database === undefined) throw new Error('Missing UI database');
-        app = await buildApp(config, database, undefined, (userId) => {
-          admittedUsers.push(userId);
-          return target;
-        });
-        await app.listen({ host: '127.0.0.1', port });
-        // Separate API cookie jar: registration never gives the browser a preauthenticated cookie.
-        seed = await playwright.request.newContext({
-          baseURL: baseUrl,
-          extraHTTPHeaders: { Origin: baseUrl },
-        });
+  await withAccountUi(
+    playwright,
+    async ({ baseUrl, database, seed, target, upstreamRequests, admittedUsers }) => {
+      const loginUrl = `${baseUrl}/_platform/api/login`;
+      await withAccountUiRouteCleanup(page, async (release) => {
         const password = 'browser-owned-password';
         const identities = new Map<string, string>();
         for (const email of ['active@example.com', 'disabled@example.com', 'limited@example.com']) {
@@ -95,33 +37,12 @@ test('built React login submits real credentials, recovers from rejections and s
           expect(failed.status()).toBe(401);
         }
         expect(await page.context().cookies()).toEqual([]);
-        const consoleErrors: { text: string; url: string }[] = [];
-        const pageErrors: string[] = [];
-        const externalRequests: string[] = [];
-        const failedRequests: string[] = [];
-        const loginRequests: string[] = [];
-        const loginStatuses: number[] = [];
-        const assets: Response[] = [];
-        page.on('console', (message) => {
-          if (message.type() === 'error')
-            consoleErrors.push({ text: message.text(), url: message.location().url });
-        });
-        page.on('pageerror', (error) => pageErrors.push(error.message));
-        page.on('requestfailed', (request) => failedRequests.push(request.url()));
-        page.on('request', (request) => {
-          if (new URL(request.url()).origin !== baseUrl) externalRequests.push(request.url());
-          if (request.url() === loginUrl) loginRequests.push(request.method());
-        });
-        page.on('response', (response) => {
-          if (response.url() === loginUrl) loginStatuses.push(response.status());
-          if (new URL(response.url()).pathname.startsWith('/_platform/assets/'))
-            assets.push(response);
-        });
-        async function screenshot(name: string) {
-          const path = testInfo.outputPath(`${name}.png`);
-          await page.screenshot({ path, fullPage: true });
-          await testInfo.attach(name, { path, contentType: 'image/png' });
-        }
+        const {
+          requests: loginRequests,
+          statuses: loginStatuses,
+          screenshot,
+          expectHealthy,
+        } = observeAccountUi(page, testInfo, baseUrl, loginUrl);
         async function rejectLogin(email: string, status: number, message: string, name: string) {
           await page.getByLabel('邮箱').fill(email);
           await page
@@ -141,12 +62,27 @@ test('built React login submits real credentials, recovers from rejections and s
           await screenshot(name);
         }
 
+        const registrationPage = await page.goto(`${baseUrl}/_platform/register`, {
+          waitUntil: 'networkidle',
+        });
+
+        expect(registrationPage?.status()).toBe(200);
+        await expect(page.getByRole('heading', { name: /注册/ })).toBeVisible();
+        await expect(page.getByRole('link', { name: '已有账号？登录' })).toHaveAttribute(
+          'href',
+          '/_platform/login',
+        );
+
         const response = await page.goto(`${baseUrl}/_platform/login`, {
           waitUntil: 'networkidle',
         });
 
         expect(response?.status()).toBe(200);
         await expect(page.getByRole('heading', { name: '登录 DSH 团队平台' })).toBeVisible();
+        await expect(page.getByRole('link', { name: '没有账号？注册' })).toHaveAttribute(
+          'href',
+          '/_platform/register',
+        );
         const form = page.getByRole('form', { name: '登录' });
         await expect(form).toBeVisible();
         await expect(page.getByLabel('邮箱')).toBeEnabled();
@@ -175,15 +111,7 @@ test('built React login submits real credentials, recovers from rejections and s
         await expect(page.getByLabel('邮箱')).toBeDisabled();
         await expect(page.getByLabel('密码')).toBeDisabled();
         await expect(page.getByRole('button', { name: '正在登录…' })).toBeDisabled();
-        await form.evaluate((element: unknown) => {
-          // This callback runs in Chromium; the root Node config intentionally has no DOM lib.
-          const browser = globalThis as typeof globalThis & {
-            HTMLFormElement: new () => { requestSubmit(): void };
-          };
-          if (!(element instanceof browser.HTMLFormElement)) throw new Error('Missing login form');
-          element.requestSubmit();
-          element.requestSubmit();
-        });
+        await submitPendingAccountForm(page, '登录');
         expect(loginRequests).toEqual(['POST']);
         await screenshot('login-pending');
         release.resolve(undefined);
@@ -204,9 +132,7 @@ test('built React login submits real credentials, recovers from rejections and s
           '登录尝试过于频繁，请稍后再试。',
           'login-limited',
         );
-        expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([
-          0, 0,
-        ]);
+        await expectNoBrowserStorage(page);
         expect(upstreamRequests).toEqual([]);
         expect(admittedUsers).toEqual([]);
         await page.getByLabel('邮箱').fill('active@example.com');
@@ -226,51 +152,12 @@ test('built React login submits real credentials, recovers from rejections and s
         expect(cookies.find((cookie) => cookie.name === 'platform_session')).toMatchObject({
           httpOnly: true,
         });
-        expect(
-          await page.evaluate(() => {
-            // Chromium supplies document; keep its cookie contract local to this callback.
-            const browser = globalThis as typeof globalThis & {
-              document: { cookie: string };
-            };
-            return browser.document.cookie;
-          }),
-        ).toBe('');
+        await expectNoScriptVisibleCookie(page);
         await screenshot('login-authenticated-local-destination');
         expect(loginRequests).toEqual(['POST', 'POST', 'POST', 'POST', 'POST']);
         expect(loginStatuses).toEqual([401, 401, 403, 429, 200]);
-        for (const asset of assets) expect(asset.status()).toBe(200);
-        // Only exact browser network diagnostics for observed login rejections are expected.
-        // Each consumes one request/status allowance; unrelated console errors always fail.
-        const allowances = [401, 401, 403, 429];
-        for (const error of consoleErrors) {
-          expect(error.url).toBe(loginUrl);
-          const match =
-            /^Failed to load resource: the server responded with a status of (401|403|429) \([^\n]+\)$/.exec(
-              error.text,
-            );
-          expect(match).not.toBeNull();
-          const index = allowances.indexOf(Number(match?.[1]));
-          expect(index).toBeGreaterThanOrEqual(0);
-          allowances.splice(index, 1);
-        }
-        expect(pageErrors).toEqual([]);
-        expect(failedRequests).toEqual([]);
-        expect(externalRequests).toEqual([]);
-      },
-    );
-  } finally {
-    // Always release a paused real request before closing its owned listener.
-    release.resolve(undefined);
-    try {
-      await seed?.dispose();
-    } finally {
-      try {
-        // Playwright owns page/context/browser; app owns DB after successful buildApp.
-        if (app === undefined) database?.close();
-        else await app.close();
-      } finally {
-        await rm(directory, { recursive: true, force: true });
-      }
-    }
-  }
+        expectHealthy([401, 401, 403, 429]);
+      });
+    },
+  );
 });

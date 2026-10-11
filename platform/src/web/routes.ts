@@ -54,18 +54,20 @@ export const webRoutes: FastifyPluginAsync<WebOptions> = async (app, { root = WE
   // Use the library for streams, MIME, ranges and HEAD, but never its broad wildcard.
   // serve:false without root avoids filesystem prerequisites in offline app/contract construction.
   await app.register(fastifyStatic, { serve: false, dotfiles: 'ignore', index: false });
-  app.route({
-    method: ['GET', 'HEAD'],
-    url: '/_platform/login',
-    schema: { hide: true, response: { 200: { type: 'string' } } },
-    handler: async (_request, reply) => {
-      if (!(await confinedFile(root, 'index.html'))) {
-        reply.callNotFound();
-        return reply;
-      }
-      return reply.sendFile('index.html', root);
-    },
-  });
+  for (const url of ['/_platform/login', '/_platform/register']) {
+    app.route({
+      method: ['GET', 'HEAD'],
+      url,
+      schema: { hide: true, response: { 200: { type: 'string' } } },
+      handler: async (_request, reply) => {
+        if (!(await confinedFile(root, 'index.html'))) {
+          reply.callNotFound();
+          return reply;
+        }
+        return reply.sendFile('index.html', root);
+      },
+    });
+  }
   app.route<{ Params: { '*': string } }>({
     method: ['GET', 'HEAD'],
     url: '/_platform/assets/*',

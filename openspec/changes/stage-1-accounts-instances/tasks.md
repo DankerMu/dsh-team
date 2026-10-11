@@ -899,7 +899,7 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - [x] 13.1 新建工作区包 `platform/web/`（React 18 加 Vite），构建为静态文件，由平台在 `/_platform/` 下提供；开发和构建脚本接入根 `package.json`。验证：`pnpm build` 产出静态文件；`pnpm e2e` 里请求 `/_platform/login` 得到页面。
 - [x] 13.2 Playwright 基线：加入 `pnpm test:ui`（登记到 `package.json`、`AGENTS.md` 验证矩阵、CI），删除 `constraints.yaml` 里 `ui_e2e_tests` 这条延后项。验证：一个用例打开登录页并断言表单存在；`pnpm lint:agents` 和 `pnpm check` 通过。
 - [x] 13.3 登录页：含加载中、出错（邮箱或密码错误、限流、账号被禁用）和成功三种状态，成功后进入工作台。验证：`pnpm test:ui`——登录走通；三种错误各显示对应的中文提示。
-- [ ] 13.4 注册页：含加载中、出错（重复邮箱、密码太短）和成功三种状态。验证：`pnpm test:ui`——注册走通并处于已登录状态；两种错误各显示对应的中文提示。
+- [x] 13.4 注册页：含加载中、出错（重复邮箱、密码太短）和成功三种状态。验证：`pnpm test:ui`——注册走通并处于已登录状态；两种错误各显示对应的中文提示。
 - [ ] 13.5 改密码页和登出入口。验证：`pnpm test:ui`——改密码后用新密码能登录、旧密码不能；当前密码错误时显示提示；登出后回到登录页。
 - [ ] 13.6 等待页 `/_platform/wait`：调用启动接口并轮询状态接口，就绪后进入工作台；显示启动中、已满（“当前使用人数已满，请稍后再试”）、出错（启动失败、重试按钮、仍失败时联系管理员）、未配置模型（“管理员尚未完成模型配置”）四种状态。验证：`pnpm test:ui`（两个接口用替身）——四种状态各显示对应文案；点击重试会再次调用启动接口；就绪后页面跳转（`gateway-routing` 规格“实例未运行时的回应”的三个等待页场景，`instance-lifecycle` 规格“上限已满”“启动超时”场景的界面部分）。
 
@@ -928,6 +928,17 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - Documentation / migration notes — selected: describe transition from inert baseline to login, actual success/401/disabled403/429 UI evidence; no claim other pages or realDSH are implemented by this slice.
 - Required proof: browser enabled-form/submission RED before implementation; real auth success through actual gateway plus three real rejection classes; pending/recovery and generic failures semantic unit tests at unchanged80% floor; screenshot, expected HTTP error diagnostics narrowly attributed and zero unexpected errors, independent source/dist browser smoke, full check/strictfixture/review/finalDocker/CI.
 - 验证记录（#63）：公开浏览器表单enabled语义RED后，真实认证浏览器完整401/401/403/429/200与加载恢复通过；15项DOM组件测试，逐文件覆盖率100%，完整check1548unit/822integration通过。独立source/dist浏览器分别真实登录到既有网关的本地受控上游，HttpOnly会话/后台cookie替换/固定根导航/无存储/零console错误，截图保留；不宣称真实DSH或等待页完成。冻结head review/Docker/CI另附PR。
+
+### Issue #64 risk/evidence map (task13.4 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: exact registration page and real existingJSON201/400/409 API/cookie contract; no credential URLs/storage/logs, fixed-root success and no automatic start.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: shared synchronous single-flight/pending/recovery, no wrong-status navigation or partial browser authentication; real paused-request and DOM error cases.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: no backend schema/response changes; preserve15login unit scenarios and real401/403/429/200 browser contract while registering a new201 variant. Unicode password policy remains backend-owned.
+- File IO / path safety / overwrite; Config / project setup — selected: reuse confined index handler for one allowlisted page; all other unknown/platformAPI/asset boundaries retained; atomically rename shared covered component/bootstrap, no shim.
+- Resource limits / large input / discovery; Release / packaging / dependency compatibility — selected: no duplicate requests/framework/dependency; existing ReactDOM/jsdom/Vite gates and source/dist artifacts; owned browser fixtures close resources on failure.
+- Documentation / migration notes — selected: current registration+login proof, no falseDSH claim; update mirrored UI evidence wording on this touched surface (#186) without threshold changes.
+- Required proof: real registrationURL404 RED→rendered form; actual short400/duplicate409/201employee+session browser sequence, pending and failure recovery, all existing login behavior preserved, screenshots/zero unexpected errors, perfile80%, source/dist smoke, fullcheck/strictfixture/review/frozenDocker/CI.
+- 验证记录（#64）：真实注册入口404RED→编译表单GREEN；check1573unit/822integration、36项共享组件单测100%覆盖、UI2场景通过。真实注册400/409/201及已提交employee/浏览器独立HttpOnly会话/网关归属，原登录全部状态保留；独立source/dist浏览器6位数字注册成功、无额外登录/启动请求、零浏览器错误。旧文档响应体读取停滞已确诊，改查真实已提交身份；304仅认可同URL先前200，重复测试观察器提取后2.90%不过度放宽。#186三处镜像措辞同步，冻结head review/Docker/CI另附PR。
 
 ## 14. 管理后台：账号和实例（任务包 1.11）
 
