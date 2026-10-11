@@ -457,3 +457,11 @@
 - Preserve canonical connection/session registry and transport teardown, current identity admission, existing whole-row lifecycle fences, startup/reconciliation FIFO and secret custody.
 - Selected risk packs: all eleven mapped in tasks.md; no schema migration, dependency, public HTTP endpoint, idle reaper or second lifecycle queue.
 - Evidence floor: real-TCP activity count1→0 and last-activity transition; controlled minute-throttle boundaries and dirty/in-flight coalescing; serialized persistence during held lifecycle work; shutdown-before-DB-close, full checks, actual smoke, strict OpenSpec, exact-head Docker and CI.
+
+## Issue #59 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task12.4 only.
+- Blast radius: automatic container retirement, live browser/task safety, instance state/audit, user volume preservation and shutdown.
+- Preserve original per-user FIFO, exact-owned retirement and whole-row fences, gateway/session admission, activity minute writeback, no volume deletion and immediate shutdown listener fencing.
+- Selected risk packs: all eleven, mapped in tasks.md. No new schema, dependency, HTTP endpoint, task-discovery fallback or upstream DSH modification.
+- Evidence floor: permanent semantic RED/GREEN; bounded real HTTP protocol/error tests; controlled-clock real Docker four idle scenarios with actual DSH running work; activity/start/identity races, timer/close and partial-failure boundaries; full checks, source/built smoke, strict OpenSpec, exact-head Docker and CI.

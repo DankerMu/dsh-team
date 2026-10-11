@@ -24,11 +24,44 @@ export type StartUserContainerInput = Omit<StartupInput, 'client' | 'database' |
 export type AcquireDshCookieInput = Omit<AcquisitionInput, 'client' | 'database' | 'transport'>;
 export type StopUserContainerInput = Omit<RetirementInput, 'client' | 'database' | 'transport'>;
 
+interface IdleRetirementInput {
+  readonly userId: string;
+  readonly signal: AbortSignal;
+  readonly eligible: () => Promise<boolean>;
+  readonly onRetiring: () => (() => void) | undefined;
+}
+
+async function retireIfIdle(
+  input: IdleRetirementInput &
+    Pick<OrchestratorDependencies, 'client' | 'database'> & {
+      readonly transport: TransportContext;
+    },
+  retire: (input: RetirementInput) => Promise<void>,
+): Promise<void> {
+  if (!(await input.eligible()) || input.signal.aborted) return;
+  const release = input.onRetiring();
+  if (release === undefined) return;
+  try {
+    // Already admitted: probe/shutdown aborts must not interrupt exact bounded retirement.
+    // Never schedule the public stop from inside its own FIFO.
+    await retire({
+      userId: input.userId,
+      reason: 'idle',
+      client: input.client,
+      database: input.database,
+      transport: input.transport,
+    });
+  } finally {
+    release();
+  }
+}
+
 export interface Orchestrator {
   readonly startUserContainer: (input: StartUserContainerInput) => Promise<StartResult>;
   readonly acquireDshCookie: (input: AcquireDshCookieInput) => Promise<void>;
   readonly waitForUserContainerReady: (input: AcquireDshCookieInput) => Promise<void>;
   readonly stopUserContainer: (input: StopUserContainerInput) => Promise<void>;
+  readonly checkIdle: (input: IdleRetirementInput) => Promise<void>;
   readonly reconcile: (input?: { readonly signal?: AbortSignal }) => Promise<void>;
   readonly hasCapacity: (userId: string) => boolean;
   readonly recordActivity: (userId: string, lastActivityAt: number) => void;
@@ -113,6 +146,69 @@ async function flushActivity(
   await Promise.all(work);
 }
 
+function createLifecycleScheduler(
+  tails: Map<string, Promise<undefined>>,
+  client: DockerClient,
+  database: DatabaseHandle,
+  transport: TransportContext,
+) {
+  function schedule<
+    Input extends { readonly userId: string; readonly signal?: AbortSignal },
+    Result,
+  >(
+    input: Input,
+    operation: (
+      input: Input &
+        Pick<OrchestratorDependencies, 'client' | 'database'> & {
+          readonly transport: TransportContext;
+        },
+    ) => Promise<Result> | Result,
+    failure: string,
+    awaitSettlement = false,
+    onSettled?: () => void,
+  ): Promise<Result> {
+    const captured = { ...input, client, database, transport };
+    const { userId, signal } = captured;
+    if (
+      typeof userId !== 'string' ||
+      userId.length !== 12 ||
+      !/^[a-z0-9]{12}$/.test(userId) ||
+      signal?.aborted
+    ) {
+      onSettled?.();
+      return Promise.reject(new Error(failure));
+    }
+    const result = Promise.withResolvers<Result>();
+    const canceled = () => {
+      result.reject(new Error(failure));
+    };
+    if (!awaitSettlement) signal?.addEventListener('abort', canceled, { once: true });
+    // Waiting cancellation rejects the caller, but its FIFO slot still follows the predecessor.
+    const work = (tails.get(userId) ?? Promise.resolve(undefined)).then(async () => {
+      // Active cancellation belongs to the operation, including its independent cleanup.
+      signal?.removeEventListener('abort', canceled);
+      if (signal?.aborted) {
+        result.reject(new Error(failure));
+        return undefined;
+      }
+      try {
+        result.resolve(await operation(captured));
+      } catch (error) {
+        result.reject(error);
+      }
+      return undefined;
+    });
+    const tail: Promise<undefined> = work.then(() => {
+      if (tails.get(userId) === tail) tails.delete(userId);
+      onSettled?.();
+      return undefined;
+    });
+    tails.set(userId, tail);
+    return result.promise;
+  }
+  return schedule;
+}
+
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
@@ -124,12 +220,15 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     platformId: undefined,
   };
   const tails = new Map<string, Promise<undefined>>();
+  const schedule = createLifecycleScheduler(tails, client, database, transport);
   const pending = new Set<string>();
   // Creation uncertainty is owner-lifetime state, not a subnet reservation or durable recovery claim.
   const uncertainNetworks = new Set<string>();
   let allocationTail: Promise<unknown> = Promise.resolve();
   // Coalescing metadata belongs to this owner; enqueue always uses its original FIFO.
   const activity: ActivityWritebackState = { observations: new Map() };
+  // Canceled FIFO waiters retain ownership until their original slot is drained.
+  const idlePending = new Set<string>();
   const scheduleActivity = (userId: string, operation: () => void) =>
     schedule({ userId }, operation, 'Instance activity persistence failed');
 
@@ -202,53 +301,6 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     await reconcileUser(input);
   }
 
-  function schedule<
-    Input extends { readonly userId: string; readonly signal?: AbortSignal },
-    Result,
-  >(
-    input: Input,
-    operation: (
-      input: Input &
-        Pick<OrchestratorDependencies, 'client' | 'database'> & {
-          readonly transport: TransportContext;
-        },
-    ) => Promise<Result> | Result,
-    failure: string,
-    awaitSettlement = false,
-  ): Promise<Result> {
-    const captured = { ...input, client, database, transport };
-    const { userId, signal } = captured;
-    if (typeof userId !== 'string' || userId.length !== 12 || !/^[a-z0-9]{12}$/.test(userId))
-      return Promise.reject(new Error(failure));
-    if (signal?.aborted) return Promise.reject(new Error(failure));
-    const result = Promise.withResolvers<Result>();
-    const canceled = () => {
-      result.reject(new Error(failure));
-    };
-    if (!awaitSettlement) signal?.addEventListener('abort', canceled, { once: true });
-    // Waiting cancellation rejects the caller, but its FIFO slot still follows the predecessor.
-    const work = (tails.get(userId) ?? Promise.resolve(undefined)).then(async () => {
-      // Active cancellation belongs to the operation, including its independent cleanup.
-      signal?.removeEventListener('abort', canceled);
-      if (signal?.aborted) {
-        result.reject(new Error(failure));
-        return undefined;
-      }
-      try {
-        result.resolve(await operation(captured));
-      } catch (error) {
-        result.reject(error);
-      }
-      return undefined;
-    });
-    const tail: Promise<undefined> = work.then(() => {
-      if (tails.get(userId) === tail) tails.delete(userId);
-      return undefined;
-    });
-    tails.set(userId, tail);
-    return result.promise;
-  }
-
   async function reconcile(input: { readonly signal?: AbortSignal } = {}): Promise<void> {
     const signal = input.signal;
     const cancellation = signal === undefined ? {} : { signal };
@@ -308,6 +360,17 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
 
   return {
     reconcile,
+    checkIdle: (input) => {
+      if (idlePending.has(input.userId)) return Promise.resolve();
+      idlePending.add(input.userId);
+      return schedule(
+        input,
+        (captured) => retireIfIdle(captured, retire),
+        'Idle instance check failed',
+        false,
+        () => idlePending.delete(input.userId),
+      );
+    },
     hasCapacity,
     recordActivity: (userId, lastActivityAt) => {
       recordActivity(activity, userId, lastActivityAt);

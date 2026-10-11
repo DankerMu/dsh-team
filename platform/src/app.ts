@@ -141,6 +141,15 @@ export async function buildApp(
   const activityTimer =
     instanceService === undefined ? undefined : setInterval(() => void flushActivity(), 1_000);
   activityTimer?.unref();
+  const idleTimer =
+    instanceService === undefined
+      ? undefined
+      : setInterval(() => {
+          void instanceService.checkIdle(connections.getUserActivity).catch(() => {
+            app.log.error('Idle instance check failure');
+          });
+        }, 60_000);
+  idleTimer?.unref();
 
   app.addHook('onClose', async () => {
     // Transport release is complete and the listener is closed before draining
@@ -153,6 +162,7 @@ export async function buildApp(
   // onClose awaits activity and the same service promise before releasing SQLite.
   app.addHook('preClose', async () => {
     clearInterval(activityTimer);
+    clearInterval(idleTimer);
     void instanceService?.close();
     await connections.close();
   });

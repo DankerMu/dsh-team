@@ -2,8 +2,10 @@ import type { PlatformConfig } from '../config.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { hasCompleteModelSettings } from '../managed-config/index.ts';
+import { IdleChecks, complete } from './idle.ts';
 import type { DockerClient } from './client.ts';
 import { createOrchestrator } from './orchestrator.ts';
+import type { GetUserActivity, RuntimeRow } from './idle.ts';
 
 type InstanceStatus = 'running' | 'stopped' | 'starting' | 'full' | 'error' | 'unconfigured';
 interface InstanceState {
@@ -24,15 +26,8 @@ export interface InstanceService {
     | { readonly outcome: Exclude<InstanceStatus, 'running'> };
   readonly recordActivity: (userId: string, lastActivityAt: number) => void;
   readonly flushActivity: (phase?: 'shutdown') => Promise<void>;
+  readonly checkIdle: (getActivity: GetUserActivity) => Promise<void>;
   readonly close: () => Promise<void>;
-}
-interface RuntimeRow {
-  status: 'running' | 'starting' | 'stopped' | 'error';
-  container_id: string | null;
-  last_started_at: number | null;
-  upstream_host: string | null;
-  upstream_port: number | null;
-  dsh_cookie: string | null;
 }
 interface FailureIdentity {
   containerId: string | null | undefined;
@@ -60,21 +55,33 @@ function matchesReadiness(
   return row.container_id === identity.containerId && row.last_started_at === identity.startedAt;
 }
 
-function complete(row: RuntimeRow): row is RuntimeRow & {
-  upstream_host: string;
-  upstream_port: number;
-  dsh_cookie: string;
-} {
-  return (
-    typeof row.upstream_host === 'string' &&
-    row.upstream_host.trim() !== '' &&
-    Number.isInteger(row.upstream_port) &&
-    row.upstream_port !== null &&
-    row.upstream_port > 0 &&
-    row.upstream_port <= 65535 &&
-    typeof row.dsh_cookie === 'string' &&
-    row.dsh_cookie.trim() !== ''
-  );
+function model(database: DatabaseHandle) {
+  const settings = readSettings(database);
+  return {
+    modelSettings: {
+      baseURL: settings.modelBaseUrl,
+      apiKeyEnv: 'DSH_TEAM_MODEL_API_KEY',
+      models: settings.models,
+      defaultModel: settings.defaultModel,
+    },
+    modelKey: settings.modelApiKey,
+  };
+}
+
+function observedFailure(
+  userId: string,
+  row: RuntimeRow | undefined,
+  failures: Map<string, FailureIdentity & { pending?: boolean }>,
+  flights: ReadonlyMap<string, unknown>,
+): InstanceState | undefined {
+  const failure = failures.get(userId);
+  if (failure === undefined) return undefined;
+  if (matchesFailure(row, failure)) {
+    if (failure.pending === true && flights.has(userId)) return state('starting');
+    throw new Error('Instance operation failed');
+  }
+  failures.delete(userId);
+  return undefined;
 }
 
 /** Owns one start-through-readiness flight, never another lifecycle queue or capacity ledger. */
@@ -89,7 +96,7 @@ export function createInstanceService({
 }): InstanceService {
   const owner = createOrchestrator({ client, database, config });
   const select = database.prepare<[string], RuntimeRow>(
-    'SELECT status, container_id, last_started_at, upstream_host, upstream_port, dsh_cookie FROM instances WHERE user_id = ?',
+    'SELECT * FROM instances WHERE user_id = ?',
   );
   const flights = new Map<string, { admission: Promise<InstanceState>; work: Promise<void> }>();
   // Exceptional-work receipts only: no credentials, endpoints, capacity or lifecycle-state cache.
@@ -98,32 +105,23 @@ export function createInstanceService({
   const reconciliations = new Set<Promise<void>>();
   let closing = false;
   let shutdown: Promise<void> | undefined;
+  const idleChecks = new IdleChecks({
+    database,
+    config,
+    owner,
+    row: (userId) => select.get(userId),
+    hasFlight: (userId) => flights.has(userId),
+    isClosing: () => closing,
+  });
 
-  function model() {
-    const settings = readSettings(database);
-    return {
-      modelSettings: {
-        baseURL: settings.modelBaseUrl,
-        apiKeyEnv: 'DSH_TEAM_MODEL_API_KEY',
-        models: settings.models,
-        defaultModel: settings.defaultModel,
-      },
-      modelKey: settings.modelApiKey,
-    };
-  }
   function observed(userId: string, row: RuntimeRow | undefined): InstanceState {
-    const failure = failures.get(userId);
-    if (failure !== undefined) {
-      if (matchesFailure(row, failure)) {
-        if (failure.pending === true && flights.has(userId)) return state('starting');
-        throw new Error('Instance operation failed');
-      }
-      failures.delete(userId);
-    }
+    if (idleChecks.isRetiring(userId, row)) return state('starting');
+    const failure = observedFailure(userId, row, failures, flights);
+    if (failure !== undefined) return failure;
     if (row?.status === 'running') return state(complete(row) ? 'running' : 'error');
     if (flights.has(userId)) return state('starting');
     if (row?.status === 'starting' || row?.status === 'error') return state(row.status);
-    const snapshot = model();
+    const snapshot = model(database);
     if (
       !hasCompleteModelSettings({
         ...snapshot.modelSettings,
@@ -176,10 +174,12 @@ export function createInstanceService({
   }
   function start(userId: string): Promise<InstanceState> {
     if (closing) return Promise.reject(new Error('Instance service unavailable'));
+    // Every explicit start invalidates idle, including reuse, rejected admission and shared flights.
+    idleChecks.invalidate(userId);
     const existing = flights.get(userId);
     if (existing !== undefined) return admitted(userId, existing.admission);
     // Snapshot canonical settings for this admission; even running reuse retains model precedence.
-    const snapshot = model();
+    const snapshot = model(database);
     const initial = select.get(userId);
     const previous = failures.get(userId);
     // A retry is not evidence that a verified-absent running identity became live again.
@@ -242,12 +242,18 @@ export function createInstanceService({
     });
     return admitted(userId, flight.admission);
   }
+
   return {
     start,
     status,
+    checkIdle: idleChecks.checkIdle,
     // Release observations remain valid while close fences lifecycle admission.
     // App shutdown awaits its final flush before closing SQLite.
-    recordActivity: owner.recordActivity,
+    recordActivity: (userId, lastActivityAt) => {
+      // An event at the same timestamp still invalidates pending task/queue observations.
+      idleChecks.invalidate(userId);
+      owner.recordActivity(userId, lastActivityAt);
+    },
     flushActivity: async (phase) => {
       try {
         await owner.flushActivity(phase);
@@ -281,6 +287,7 @@ export function createInstanceService({
       closing = true;
       shutdown ??= (async () => {
         await Promise.allSettled([
+          idleChecks.close(),
           ...reconciliations,
           ...[...flights.values()].map((flight) => flight.work),
         ]);
