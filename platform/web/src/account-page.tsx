@@ -1,4 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
+import { PasswordPage } from './password-page.tsx';
 
 const LOGIN_FAILURE = '登录失败，请稍后重试。';
 const REGISTRATION_FAILURE = '注册失败，请稍后重试。';
@@ -38,6 +39,10 @@ async function rejectionMessage(response: Response, registration: boolean): Prom
 }
 
 export function AccountPage() {
+  return window.location.pathname === '/_platform/account' ? <PasswordPage /> : <CredentialForm />;
+}
+
+function CredentialForm() {
   const registration = window.location.pathname === '/_platform/register';
   const action = registration ? '注册' : '登录';
   const loading = registration ? '正在注册…' : '正在登录…';
@@ -127,6 +132,9 @@ export function AccountPage() {
         <a href={registration ? '/_platform/login' : '/_platform/register'}>
           {registration ? '已有账号？登录' : '没有账号？注册'}
         </a>
+      </p>
+      <p>
+        <a href="/_platform/account">账号设置</a>
       </p>
     </main>
   );
