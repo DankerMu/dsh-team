@@ -92,7 +92,7 @@ async function flushActivity(
       const changed = state.update.run(observation.latest, userId, observation.latest).changes;
       observation.dirty = false;
       observation.failed = false;
-      if (changed !== 0) observation.writtenAt = now;
+      if (changed !== 0) observation.writtenAt = Date.now();
       else if (observation.writtenAt === null) state.observations.delete(userId);
     }).then(
       () => {

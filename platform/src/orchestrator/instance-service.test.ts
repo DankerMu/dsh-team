@@ -427,11 +427,20 @@ it('coalesces activity behind held running reuse without breaking the complete-r
     configure(f.database);
     await f.owner.startUserContainer(f.input);
     f.database.prepare("UPDATE instances SET status='running', dsh_cookie='trusted-cookie'").run();
+    let delayPrimaryWrite = true;
+    f.database.function('activity_write_completed_at', (userId: unknown) => {
+      if (userId === START_USER && delayPrimaryWrite) {
+        // Advance only inside the first successful SQLite UPDATE, not while its FIFO is held.
+        vi.setSystemTime(Date.now() + 5_000);
+        delayPrimaryWrite = false;
+      }
+      return Date.now();
+    });
     f.database.exec(
-      'CREATE TABLE activity_writes(user_id TEXT,at INTEGER); CREATE TRIGGER observe_activity AFTER UPDATE OF last_activity_at ON instances BEGIN INSERT INTO activity_writes VALUES (NEW.user_id,NEW.last_activity_at); END',
+      'CREATE TABLE activity_writes(user_id TEXT,at INTEGER,completed_at INTEGER); CREATE TRIGGER observe_activity AFTER UPDATE OF last_activity_at ON instances BEGIN INSERT INTO activity_writes VALUES (NEW.user_id,NEW.last_activity_at,activity_write_completed_at(NEW.user_id)); END',
     );
-    const writes = f.database.prepare<[string], { at: number }>(
-      'SELECT at FROM activity_writes WHERE user_id = ?',
+    const writes = f.database.prepare<[string], { at: number; completed_at: number }>(
+      'SELECT at,completed_at FROM activity_writes WHERE user_id = ? ORDER BY rowid',
     );
     f.beforeRequest(async (method, path) => {
       if (method === 'GET' && path === `/containers/${START_CONTAINER}/json`) await gate.hold();
@@ -460,19 +469,29 @@ it('coalesces activity behind held running reuse without breaking the complete-r
         .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
         .get('mnopqrstuvwx'),
     ).toEqual({ last_activity_at: 280_000 });
+    expect(writes.all('mnopqrstuvwx')).toEqual([{ at: 280_000, completed_at: 280_000 }]);
     expect(writes.all(START_USER)).toEqual([]);
     vi.setSystemTime(500_000);
     gate.release();
     expect(await reuse).toEqual({ status: 'running', reason: null });
     await flushing;
-    expect(writes.all(START_USER)).toEqual([{ at: 280_000 }]);
-    f.service.recordActivity(START_USER, 500_001);
+    expect(Date.now()).toBe(505_000);
+    expect(writes.all(START_USER)).toEqual([{ at: 280_000, completed_at: 505_000 }]);
+    f.service.recordActivity(START_USER, 505_001);
+    f.service.recordActivity(START_USER, 505_002);
     vi.setSystemTime(559_999);
     await f.service.flushActivity();
-    expect(writes.all(START_USER)).toEqual([{ at: 280_000 }]);
-    vi.setSystemTime(560_000);
+    expect(writes.all(START_USER)).toEqual([{ at: 280_000, completed_at: 505_000 }]);
+    vi.setSystemTime(564_999);
     await f.service.flushActivity();
-    expect(writes.all(START_USER)).toEqual([{ at: 280_000 }, { at: 500_001 }]);
+    expect(writes.all(START_USER)).toEqual([{ at: 280_000, completed_at: 505_000 }]);
+    vi.setSystemTime(565_000);
+    await f.service.flushActivity();
+    expect(writes.all(START_USER)).toEqual([
+      { at: 280_000, completed_at: 505_000 },
+      { at: 505_002, completed_at: 565_000 },
+    ]);
+    expect(writes.all('mnopqrstuvwx')).toEqual([{ at: 280_000, completed_at: 280_000 }]);
   } finally {
     gate.release();
     try {
