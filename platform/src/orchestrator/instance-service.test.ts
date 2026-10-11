@@ -1,6 +1,7 @@
 import { rm } from 'node:fs/promises';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import {
+  START_CONTAINER,
   START_USER,
   startupBarrier,
   startupOwnerFixture,
@@ -272,5 +273,314 @@ it('retains admitted readiness failure identity when even the catch-time databas
   } finally {
     if (storage.renamed) f.database.exec('ALTER TABLE unavailable_instances RENAME TO instances');
     await f.close();
+  }
+});
+
+it('writes only the latest activity timestamp for an existing user and respects the successful-write minute', async () => {
+  const f = await fixture();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000);
+  try {
+    f.database
+      .prepare(
+        "INSERT INTO instances(user_id,status,last_started_at,last_error) VALUES (?, 'error', 101, 'historical diagnostic')",
+      )
+      .run(START_USER);
+    const before = f.database
+      .prepare<[string], Record<string, unknown>>('SELECT * FROM instances WHERE user_id = ?')
+      .get(START_USER);
+    f.service.recordActivity(START_USER, 99_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER)).toEqual(
+      {
+        ...before,
+        last_activity_at: 99_000,
+      },
+    );
+    f.service.recordActivity(START_USER, 100_100);
+    f.service.recordActivity(START_USER, 100_200);
+    vi.setSystemTime(159_999);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 99_000,
+    });
+    vi.setSystemTime(160_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 100_200,
+    });
+    f.database.exec(
+      "CREATE TRIGGER reject_extra_activity BEFORE UPDATE OF last_activity_at ON instances BEGIN SELECT RAISE(ABORT, 'unexpected extra write'); END",
+    );
+    vi.setSystemTime(300_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 100_200,
+    });
+  } finally {
+    try {
+      await f.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+});
+
+it('acknowledges absent and newer rows without creating instances or poisoning another user', async () => {
+  const f = await fixture();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000);
+  try {
+    f.service.recordActivity(START_USER, 90_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT * FROM instances').all()).toEqual([]);
+    f.database
+      .prepare("INSERT INTO instances(user_id,status) VALUES (?, 'stopped')")
+      .run(START_USER);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: null,
+    });
+    f.service.recordActivity(START_USER, 100_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 100_000,
+    });
+    f.database.prepare('UPDATE instances SET last_activity_at=200000').run();
+    vi.setSystemTime(160_000);
+    f.service.recordActivity(START_USER, 100_001);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 200_000,
+    });
+    f.database
+      .prepare("INSERT INTO instances(user_id,status) VALUES (?, 'stopped')")
+      .run('mnopqrstuvwx');
+    f.service.recordActivity('mnopqrstuvwx', 160_010);
+    await f.service.flushActivity();
+    expect(
+      f.database
+        .prepare('SELECT user_id,status,last_activity_at FROM instances ORDER BY user_id')
+        .all(),
+    ).toEqual([
+      { user_id: START_USER, status: 'stopped', last_activity_at: 200_000 },
+      { user_id: 'mnopqrstuvwx', status: 'stopped', last_activity_at: 160_010 },
+    ]);
+    vi.setSystemTime(160_020);
+    f.service.recordActivity(START_USER, 200_001);
+    await f.service.flushActivity();
+    expect(
+      f.database
+        .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
+        .get(START_USER),
+    ).toEqual({ last_activity_at: 200_001 });
+  } finally {
+    try {
+      await f.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+});
+
+it('retains dirty activity after a real database write failure and coalesces the next normal flush', async () => {
+  const f = await fixture();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000);
+  try {
+    f.database
+      .prepare("INSERT INTO instances(user_id,status) VALUES (?, 'stopped')")
+      .run(START_USER);
+    f.service.recordActivity(START_USER, 100_000);
+    await f.service.flushActivity();
+    f.database.exec(
+      "CREATE TRIGGER reject_activity BEFORE UPDATE OF last_activity_at ON instances BEGIN SELECT RAISE(ABORT, 'private-activity-diagnostic'); END",
+    );
+    vi.setSystemTime(160_000);
+    f.service.recordActivity(START_USER, 160_000);
+    await expect(f.service.flushActivity()).rejects.toThrow('Instance activity persistence failed');
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 100_000,
+    });
+    f.database.exec('DROP TRIGGER reject_activity');
+    vi.setSystemTime(161_000);
+    f.service.recordActivity(START_USER, 161_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 161_000,
+    });
+  } finally {
+    try {
+      await f.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+});
+
+it('coalesces activity behind held running reuse without breaking the complete-row fence or bursting overdue writes', async () => {
+  const f = await fixture();
+  const gate = startupBarrier();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000);
+  try {
+    configure(f.database);
+    await f.owner.startUserContainer(f.input);
+    f.database.prepare("UPDATE instances SET status='running', dsh_cookie='trusted-cookie'").run();
+    f.database.exec(
+      'CREATE TABLE activity_writes(user_id TEXT,at INTEGER); CREATE TRIGGER observe_activity AFTER UPDATE OF last_activity_at ON instances BEGIN INSERT INTO activity_writes VALUES (NEW.user_id,NEW.last_activity_at); END',
+    );
+    const writes = f.database.prepare<[string], { at: number }>(
+      'SELECT at FROM activity_writes WHERE user_id = ?',
+    );
+    f.beforeRequest(async (method, path) => {
+      if (method === 'GET' && path === `/containers/${START_CONTAINER}/json`) await gate.hold();
+      return undefined;
+    });
+    const reuse = f.service.start(START_USER);
+    await gate.reached;
+    f.service.recordActivity(START_USER, 100_001);
+    const flushing = f.service.flushActivity();
+    for (const now of [160_000, 220_000, 280_000]) {
+      vi.setSystemTime(now);
+      f.service.recordActivity(START_USER, now);
+      await f.service.flushActivity();
+    }
+    expect(writes.all(START_USER)).toEqual([]);
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: null,
+    });
+    f.database
+      .prepare("INSERT INTO instances(user_id,status) VALUES (?, 'stopped')")
+      .run('mnopqrstuvwx');
+    f.service.recordActivity('mnopqrstuvwx', 280_000);
+    await f.service.flushActivity();
+    expect(
+      f.database
+        .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
+        .get('mnopqrstuvwx'),
+    ).toEqual({ last_activity_at: 280_000 });
+    expect(writes.all(START_USER)).toEqual([]);
+    vi.setSystemTime(500_000);
+    gate.release();
+    expect(await reuse).toEqual({ status: 'running', reason: null });
+    await flushing;
+    expect(writes.all(START_USER)).toEqual([{ at: 280_000 }]);
+    f.service.recordActivity(START_USER, 500_001);
+    vi.setSystemTime(559_999);
+    await f.service.flushActivity();
+    expect(writes.all(START_USER)).toEqual([{ at: 280_000 }]);
+    vi.setSystemTime(560_000);
+    await f.service.flushActivity();
+    expect(writes.all(START_USER)).toEqual([{ at: 280_000 }, { at: 500_001 }]);
+  } finally {
+    gate.release();
+    try {
+      await f.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+});
+
+it('does not retry a failed activity write during shutdown and drains final submissions after close resolved', async () => {
+  const f = await fixture();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000);
+  try {
+    f.database
+      .prepare("INSERT INTO instances(user_id,status) VALUES (?, 'stopped')")
+      .run(START_USER);
+    f.database.exec(
+      "CREATE TRIGGER reject_activity BEFORE UPDATE OF last_activity_at ON instances BEGIN SELECT RAISE(ABORT, 'private-write-diagnostic'); END",
+    );
+    f.service.recordActivity(START_USER, 100_000);
+    await expect(f.service.flushActivity()).rejects.toThrow('Instance activity persistence failed');
+    f.database.exec('DROP TRIGGER reject_activity');
+    await f.service.flushActivity('shutdown');
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: null,
+    });
+    vi.setSystemTime(101_000);
+    await f.service.flushActivity();
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 100_000,
+    });
+    await f.service.close();
+    await expect(f.service.start(START_USER)).rejects.toThrow('Instance service unavailable');
+    vi.setSystemTime(161_000);
+    f.service.recordActivity(START_USER, 161_000);
+    await f.service.flushActivity('shutdown');
+    expect(f.database.open).toBe(true);
+    expect(f.database.prepare('SELECT last_activity_at FROM instances').get()).toEqual({
+      last_activity_at: 161_000,
+    });
+  } finally {
+    try {
+      await f.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+});
+
+it('reports one user database failure before another held lifecycle settles and keeps their writes independent', async () => {
+  const f = await fixture();
+  const gate = startupBarrier();
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100_000);
+  try {
+    configure(f.database);
+    await f.owner.startUserContainer(f.input);
+    f.database.prepare("UPDATE instances SET status='running',dsh_cookie='trusted-cookie'").run();
+    f.database
+      .prepare("INSERT INTO instances(user_id,status) VALUES (?, 'stopped')")
+      .run('mnopqrstuvwx');
+    f.database.exec(
+      "CREATE TRIGGER reject_sibling_activity BEFORE UPDATE OF last_activity_at ON instances WHEN NEW.user_id='mnopqrstuvwx' BEGIN SELECT RAISE(ABORT, 'private-sibling-diagnostic'); END",
+    );
+    f.beforeRequest(async (method, path) => {
+      if (method === 'GET' && path === `/containers/${START_CONTAINER}/json`) await gate.hold();
+      return undefined;
+    });
+    const reuse = f.service.start(START_USER);
+    await gate.reached;
+    f.service.recordActivity(START_USER, 100_000);
+    f.service.recordActivity('mnopqrstuvwx', 100_000);
+    await expect(f.service.flushActivity()).rejects.toThrow('Instance activity persistence failed');
+    expect(
+      f.database
+        .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
+        .get(START_USER),
+    ).toEqual({ last_activity_at: null });
+    expect(
+      f.database
+        .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
+        .get('mnopqrstuvwx'),
+    ).toEqual({ last_activity_at: null });
+    f.database.exec('DROP TRIGGER reject_sibling_activity');
+    vi.setSystemTime(101_000);
+    f.service.recordActivity('mnopqrstuvwx', 101_000);
+    await f.service.flushActivity();
+    expect(
+      f.database
+        .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
+        .get('mnopqrstuvwx'),
+    ).toEqual({ last_activity_at: 101_000 });
+    gate.release();
+    expect(await reuse).toEqual({ status: 'running', reason: null });
+    await f.service.flushActivity('shutdown');
+    expect(
+      f.database
+        .prepare('SELECT last_activity_at FROM instances WHERE user_id = ?')
+        .get(START_USER),
+    ).toEqual({ last_activity_at: 100_000 });
+  } finally {
+    gate.release();
+    try {
+      await f.close();
+    } finally {
+      vi.useRealTimers();
+    }
   }
 });

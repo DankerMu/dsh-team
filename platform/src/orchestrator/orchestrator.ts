@@ -31,7 +31,86 @@ export interface Orchestrator {
   readonly stopUserContainer: (input: StopUserContainerInput) => Promise<void>;
   readonly reconcile: (input?: { readonly signal?: AbortSignal }) => Promise<void>;
   readonly hasCapacity: (userId: string) => boolean;
+  readonly recordActivity: (userId: string, lastActivityAt: number) => void;
+  readonly flushActivity: (phase?: 'shutdown') => Promise<void>;
   readonly drain: () => Promise<void>;
+}
+
+interface ActivityObservation {
+  latest: number;
+  dirty: boolean;
+  writtenAt: number | null;
+  failed: boolean;
+  pending?: Promise<void>;
+}
+interface ActivityWritebackState {
+  observations: Map<string, ActivityObservation>;
+  update?: { run(at: number, userId: string, before: number): { changes: number } };
+}
+
+function recordActivity(
+  state: ActivityWritebackState,
+  userId: string,
+  lastActivityAt: number,
+): void {
+  const observed = state.observations.get(userId);
+  if (observed === undefined)
+    state.observations.set(userId, {
+      latest: lastActivityAt,
+      dirty: true,
+      writtenAt: null,
+      failed: false,
+    });
+  else {
+    observed.latest = Math.max(observed.latest, lastActivityAt);
+    observed.dirty = true;
+  }
+}
+
+async function flushActivity(
+  database: DatabaseHandle,
+  state: ActivityWritebackState,
+  enqueue: (userId: string, operation: () => void) => Promise<void>,
+  phase?: 'shutdown',
+): Promise<void> {
+  let work: Promise<void>[] | undefined;
+  for (const [userId, observation] of state.observations) {
+    if (
+      observation.pending !== undefined ||
+      !observation.dirty ||
+      (phase === 'shutdown' && observation.failed) ||
+      (observation.writtenAt !== null && Date.now() - observation.writtenAt < 60_000)
+    )
+      continue;
+    const pending = enqueue(userId, () => {
+      // The original FIFO may have been held across many timer ticks.
+      const now = Date.now();
+      if (observation.writtenAt !== null && now - observation.writtenAt < 60_000) return;
+      state.update ??= database.prepare(
+        'UPDATE instances SET last_activity_at = ? WHERE user_id = ? AND (last_activity_at IS NULL OR last_activity_at < ?)',
+      );
+      const changed = state.update.run(observation.latest, userId, observation.latest).changes;
+      observation.dirty = false;
+      observation.failed = false;
+      if (changed !== 0) observation.writtenAt = now;
+      else if (observation.writtenAt === null) state.observations.delete(userId);
+    }).then(
+      () => {
+        delete observation.pending;
+      },
+      () => {
+        delete observation.pending;
+        observation.failed = true;
+        throw new Error('Instance activity persistence failed');
+      },
+    );
+    observation.pending = pending;
+    (work ??= []).push(pending);
+  }
+  if (work === undefined) return;
+  // One user's failed DB write is observable even while another user's FIFO is held.
+  // Promise.all observes every input; shutdown separately drains the original tails.
+  await Promise.all(work);
 }
 
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
@@ -49,6 +128,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   // Creation uncertainty is owner-lifetime state, not a subnet reservation or durable recovery claim.
   const uncertainNetworks = new Set<string>();
   let allocationTail: Promise<unknown> = Promise.resolve();
+  // Coalescing metadata belongs to this owner; enqueue always uses its original FIFO.
+  const activity: ActivityWritebackState = { observations: new Map() };
+  const scheduleActivity = (userId: string, operation: () => void) =>
+    schedule({ userId }, operation, 'Instance activity persistence failed');
 
   function assertNetworkConfirmed(userId: string): void {
     if (uncertainNetworks.has(userId)) throw new NetworkCreationUnconfirmedError();
@@ -129,7 +212,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         Pick<OrchestratorDependencies, 'client' | 'database'> & {
           readonly transport: TransportContext;
         },
-    ) => Promise<Result>,
+    ) => Promise<Result> | Result,
     failure: string,
     awaitSettlement = false,
   ): Promise<Result> {
@@ -226,6 +309,10 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   return {
     reconcile,
     hasCapacity,
+    recordActivity: (userId, lastActivityAt) => {
+      recordActivity(activity, userId, lastActivityAt);
+    },
+    flushActivity: (phase) => flushActivity(database, activity, scheduleActivity, phase),
     drain: async () => {
       // Caller cancellation may precede queued work; only queue tails prove actual settlement.
       while (tails.size !== 0) await Promise.all([...tails.values()]);

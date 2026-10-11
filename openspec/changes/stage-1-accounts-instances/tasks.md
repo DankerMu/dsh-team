@@ -804,7 +804,7 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 
 - [x] 12.1 把网关接到编排器：上游地址、端口和 DSH cookie 取自 `instances` 表；提供 `POST /_platform/api/instance/start`（幂等，返回当前状态）和 `GET /_platform/api/instance`（状态和原因）。启动只有这一个入口。验证：`pnpm test:docker`——注册并登录后调用启动接口，轮询状态到就绪，随后首页请求得到 DSH 的界面；实例运行中时首页请求直接得到 DSH 的界面；对已在运行的实例再调启动接口不产生第二个容器；`pnpm contract:check` 通过（规格“登录后按需启动”的“首次登录”“实例已在运行”场景）。
 - [x] 12.2 新实例可直接使用：按第 3 组的结论。验证：`pnpm test:docker`——新用户首次进入，不经任何选择即可创建 Session；界面语言为中文；没有公告（规格“新实例可以直接使用”）。
-- [ ] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
+- [x] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
 - [ ] 12.4 空闲回收：每分钟检查一次，按第 2 组结论的信号判断是否有运行中的任务；没有连接、没有任务且持续达到配置分钟数才停止，停止原因为“空闲”；空闲分钟数每次检查时从 `settings` 读取。验证：用可控时钟的 `pnpm test:docker` 覆盖规格“空闲后停止”的四个场景（规格若已按 2.3 改写，则覆盖改写后的场景）。
 - [ ] 12.5 回收后恢复：验证：`pnpm test:docker`——实例被空闲回收后，平台会话仍有效的用户不重新登录，直接请求首页被重定向到等待页，调用启动接口后就绪，之前的 Session 和工作目录里的文件都在（规格“平台会话有效而实例已停止”和“停止后再启动”场景）。
 - [ ] 12.6 已满、出错和未配置时的状态：验证：`pnpm test:docker`——上限设为 1，第二个用户调用启动接口得到“已满”，第一个用户不受影响，第一个停止后第二个重试成功；实例出错后再调启动接口会重新启动；模型未配置时得到“未配置模型”（规格“有人空出位置后可以进入”“出错后重试”场景）。
@@ -839,6 +839,20 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - Non-goals: task12.3–12.6, waiting UI, provider execution, existing-volume migration/repair, new runtime initializer, changes to permission policy or DSH source.
 
 验证记录（#57）：项目方批准补齐镜像工作区种子。永久真实网关浏览器用例先因需要选择工作区RED，交付镜像种子后GREEN；两名新员工的首入/刷新均中文、无公告、可输入，无模型请求，实际浏览器创建回执与后端Session ID/cwd一致。初始Session索引为空；同卷重建保留工作区和Session标题、成员关系、原ID及员工文件字节，兄弟状态不变。`pnpm check`1430unit/781integration通过，重复率2.84%；审查提交`cf433954c286c0d15d2a72e9382c717a4cf8496d`完整Docker26/26、16files、223.38s通过，三席审查无阻塞发现。首次整套运行被父级传输的AppleDouble旁车误识别为测试文件，删除仅该归属元数据后重跑通过，未改发现规则。一次早期app-ready超时尚无确诊根因，后续导航对照和永久/整套运行通过；不以重试或延长超时处理。既有卷不迁移，真实模型及后续任务仍未声称完成。最终head CI与Docker状态仍是合并门禁；关键路径人工白盒按用户要求后置。
+
+### Issue #58 risk/evidence map (task12.3 only)
+
+- Public API / CLI / script entry; Config / project setup — selected: typed app-level read-only activity accessor, existing production service wiring and bounded timer; no HTTP endpoint/env setting. Real-TCP admission/release proves count1→0 and disconnect time.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: real SQLite existing epoch-ms last_activity_at only, no migration or new rows; exact row readback preserves lifecycle fields and monotonic time.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: canonical user/session registry, separate users/apps, ignored unauthorized/platform traffic, same original lifecycle FIFO; held start/reconcile plus flush cannot trip unchanged full-row fence.
+- Resource limits / large input / discovery — selected: one pending write per user, coalesced dirty timestamp, bounded timer, no per-frame tracking or unbounded queued ticks. Controlled59,999/60,000ms and delayed execution prove at-most-minute writes.
+- Error handling / rollback / partial outputs — selected: observed/sanitized persistence failure, later normal flush retains newest event, unknown/missing row no insertion; immediate shutdown fences, due-only final flush and queued settlement before DB close.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: preserve HTTP streaming/keep-alive, raw WS/pending upgrades, session invalidation and existing startup/reconciliation/close tests; no dependency, gate or DSH-source change.
+- Documentation / migration notes — selected: counts in memory, timestamp write granularity and shutdown policy explicitly documented; `pnpm check`, actual controlled transport/SQLite smoke, strict OpenSpec and exact-head complete Docker/CI.
+- Required evidence: permanent semantic RED/GREEN for live1→0 and persistence; counting boundaries, minute throttle/no-event no-write, held same-user lifecycle and independent-user progress, write failure/no stale overwrite, shutdown/registration failure cleanup. Final required risk-pack evidence is part of #58, not deferred to the idle scheduler.
+- Non-goals: idle task discovery/reaping (#59), resume (#60), unavailable-state repairs (#61), admin/UI, new persistence schema, connection heartbeats, second queue or changes to existing stale-row authority.
+
+验证记录（#58）：真实TCP收到流前缀后缺少活动接口的永久RED；实现后10条活动集成通过，覆盖长连接/HTTP finish、59,999/60,000ms、失败保留、同用户held生命周期、跨用户和退出。保持原有完整行栅栏与生命周期测试；初版把队列等待放入preClose导致真实main监听器关闭测试RED，移到onClose后原测试恢复，先关监听器再排空活动/编排且最后关SQLite。第三次 `pnpm check`1439unit/791integration、逐文件覆盖（app函数80%）、类型/构建/契约/Knip通过，重复率2.86%。独立source/dist脚本以真实TCP与文件SQLite、显式可控时钟证明计数1→0、keep-alive不计数、分钟边界写回、其他字段不变及重新打开数据库后的持久值；没有把此受控上游声明为真实Docker或DSH。最终冻结head Docker、交叉审查、CI仍是合并门禁；未实现后续空闲回收策略。
 
 ## 13. 平台前端基线和账号页面（任务包 1.4、1.9 的界面部分）
 
