@@ -115,6 +115,7 @@ export async function buildApp(
       database,
       resolveSourceAddress,
       subnetPool: config.subnetPool,
+      ...(instanceService === undefined ? {} : { service: instanceService }),
     });
     await app.register(instanceRoutes, {
       database,

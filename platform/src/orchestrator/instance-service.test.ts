@@ -1,40 +1,10 @@
-import { rm } from 'node:fs/promises';
 import { expect, it, vi } from 'vitest';
+import { START_CONTAINER, START_USER, startupBarrier } from '../../test/container-start-fixture.ts';
 import {
-  START_CONTAINER,
-  START_USER,
-  startupBarrier,
-  startupOwnerFixture,
-} from '../../test/container-start-fixture.ts';
-import { instanceConfig } from '../../test/instance-fixture.ts';
+  instanceServiceFixture as fixture,
+  configureInstanceModel as configure,
+} from '../../test/instance-fixture.ts';
 import { writeSettings } from '../db/index.ts';
-import type { DatabaseHandle } from '../db/index.ts';
-import { createInstanceService } from './instance-service.ts';
-
-async function fixture() {
-  const context = await startupOwnerFixture();
-  const service = createInstanceService({
-    ...context,
-    config: instanceConfig(context.root, context.input.config),
-  });
-  return {
-    ...context,
-    service,
-    async close() {
-      await service.close();
-      context.database.close();
-      await rm(context.root, { recursive: true, force: true });
-    },
-  };
-}
-function configure(database: DatabaseHandle) {
-  writeSettings(database, {
-    modelBaseUrl: 'http://model.invalid/v1',
-    modelApiKey: 'service-key',
-    models: [{ name: 'office-model' }],
-    defaultModel: 'office-model',
-  });
-}
 
 it('observes current model completeness and canonical capacity without Docker or durable invented states', async () => {
   const f = await fixture();

@@ -64,6 +64,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
   if (typeof row !== 'object' || row === null) throw new Error();
   // The schema constrains nullable endpoint/history fields; validate the mutation identities here.
   const instance = row as RetirementRow;
+  if (input.reason === 'disabled' && instance.account_status !== 'disabled') throw new Error();
   if (isTerminalInstance(instance.status, instance.container_id)) return undefined;
   const id = instance.container_id;
   if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error();

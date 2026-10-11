@@ -1,7 +1,13 @@
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import type { PlatformConfig } from '../src/config.ts';
+import { writeSettings } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
+import { createInstanceService } from '../src/orchestrator/index.ts';
+import type { DockerClient } from '../src/orchestrator/index.ts';
+import { startupOwnerFixture } from './container-start-fixture.ts';
 
 export function instanceConfig(
   root: string,
@@ -49,4 +55,31 @@ export async function registerInstanceUser(base: string, origin: string, email: 
   if (cookie?.startsWith('platform_session=') !== true) throw new Error('Missing platform session');
   await loggedIn.arrayBuffer();
   return { id: identity.id, cookie };
+}
+
+export async function instanceServiceFixture(adapt?: (client: DockerClient) => DockerClient) {
+  const context = await startupOwnerFixture();
+  const service = createInstanceService({
+    ...context,
+    client: adapt?.(context.client) ?? context.client,
+    config: instanceConfig(context.root, context.input.config),
+  });
+  return {
+    ...context,
+    service,
+    async close() {
+      await service.close();
+      context.database.close();
+      await rm(context.root, { recursive: true, force: true });
+    },
+  };
+}
+
+export function configureInstanceModel(database: DatabaseHandle) {
+  writeSettings(database, {
+    modelBaseUrl: 'http://model.invalid/v1',
+    modelApiKey: 'service-key',
+    models: [{ name: 'office-model' }],
+    defaultModel: 'office-model',
+  });
 }

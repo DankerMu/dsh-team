@@ -22,7 +22,9 @@ export interface OrchestratorDependencies {
 
 export type StartUserContainerInput = Omit<StartupInput, 'client' | 'database' | 'transport'>;
 export type AcquireDshCookieInput = Omit<AcquisitionInput, 'client' | 'database' | 'transport'>;
-export type StopUserContainerInput = Omit<RetirementInput, 'client' | 'database' | 'transport'>;
+export type StopUserContainerInput = Omit<RetirementInput, 'client' | 'database' | 'transport'> & {
+  readonly allowMissingInstance?: boolean;
+};
 
 interface IdleRetirementInput {
   readonly userId: string;
@@ -209,6 +211,24 @@ function createLifecycleScheduler(
   return schedule;
 }
 
+function hasInstanceCapacity(
+  database: DatabaseHandle,
+  pending: ReadonlySet<string>,
+  userId: string,
+): boolean {
+  const { maxRunningInstances } = readSettings(database);
+  const occupied = new Set(pending);
+  const rows = database
+    .prepare<[], { user_id: string }>(
+      "SELECT user_id FROM instances WHERE status IN ('starting', 'running')",
+    )
+    .all();
+  for (const row of rows) occupied.add(row.user_id);
+  // Reaching admission means no live reusable identity; an exact-ID404 replacement owns its slot.
+  occupied.delete(userId);
+  return occupied.size < maxRunningInstances;
+}
+
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
@@ -256,17 +276,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   function hasCapacity(userId: string): boolean {
-    const { maxRunningInstances } = readSettings(database);
-    const occupied = new Set(pending);
-    const rows = database
-      .prepare<[], { user_id: string }>(
-        "SELECT user_id FROM instances WHERE status IN ('starting', 'running')",
-      )
-      .all();
-    for (const row of rows) occupied.add(row.user_id);
-    // Reaching admission means no live reusable identity; an exact-ID404 replacement owns its slot.
-    occupied.delete(userId);
-    return occupied.size < maxRunningInstances;
+    return hasInstanceCapacity(database, pending, userId);
   }
 
   function reserve(userId: string): boolean {
@@ -413,6 +423,24 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       schedule(
         input,
         async (captured) => {
+          if (
+            captured.reason === 'disabled' &&
+            database
+              .prepare("SELECT 1 FROM users WHERE id=? AND status='disabled'")
+              .get(captured.userId) === undefined
+          )
+            throw new Error('User container retirement failed');
+          // Service cancellation may reject a queued caller before its original slot settles.
+          // Only this FIFO slot can prove that a never-started target still has no instance.
+          if (
+            captured.allowMissingInstance === true &&
+            database.prepare('SELECT 1 FROM instances WHERE user_id=?').get(captured.userId) ===
+              undefined
+          ) {
+            // No index cannot confirm cleanup of an owner-quarantined ambiguous network create.
+            assertNetworkConfirmed(captured.userId);
+            return;
+          }
           await retire(captured);
         },
         'User container retirement failed',

@@ -1,0 +1,262 @@
+import { expect, it } from 'vitest';
+import { START_CONTAINER, START_USER, startupBarrier } from '../../test/container-start-fixture.ts';
+import { RECONCILE_COOKIE } from '../../test/container-reconcile-fixture.ts';
+import {
+  instanceServiceFixture as fixture,
+  configureInstanceModel as configure,
+} from '../../test/instance-fixture.ts';
+
+it.each(['missing', 'stopped', 'error'] as const)(
+  'disabled retirement safely confirms %s without fabricated stop audits',
+  async (kind) => {
+    const f = await fixture();
+    try {
+      f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+      if (kind !== 'missing')
+        f.database
+          .prepare('INSERT INTO instances(user_id,status) VALUES (?,?)')
+          .run(START_USER, kind);
+      await f.service.stop(START_USER, 'disabled');
+      await f.service.stop(START_USER, 'disabled');
+      expect(f.daemon.requests).toEqual([]);
+      expect(f.database.prepare('SELECT * FROM audit_events').all()).toEqual([]);
+      expect(f.database.prepare('SELECT status,container_id FROM instances').all()).toEqual(
+        kind === 'missing' ? [] : [{ status: kind, container_id: null }],
+      );
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+it('retires a retained error container and rejects newly active authority before disabled retirement selection', async () => {
+  const f = await fixture();
+  try {
+    await f.owner.startUserContainer(f.input);
+    f.database.prepare("UPDATE instances SET status='error',dsh_cookie=NULL").run();
+    const before = f.database.prepare('SELECT * FROM instances').get();
+    await expect(f.service.stop(START_USER, 'disabled')).rejects.toThrow(
+      'User container retirement failed',
+    );
+    expect(f.daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
+    expect(f.database.prepare('SELECT * FROM instances').get()).toEqual(before);
+    f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+    await f.service.stop(START_USER, 'disabled');
+    expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+    expect(
+      f.database.prepare('SELECT status,container_id,dsh_cookie FROM instances').get(),
+    ).toEqual({ status: 'stopped', container_id: null, dsh_cookie: null });
+    expect(
+      f.database
+        .prepare("SELECT details FROM audit_events WHERE event_type='instance.stopped'")
+        .all(),
+    ).toEqual([{ details: '{"reason":"disabled"}' }]);
+  } finally {
+    await f.close();
+  }
+});
+
+it('cancels held startup without later readiness, and close retains real work until the Engine settles', async () => {
+  const f = await fixture();
+  const gate = startupBarrier();
+  try {
+    configure(f.database);
+    let signal: AbortSignal | undefined;
+    f.beforeRequest(async (method, path, captured) => {
+      if (method === 'GET' && path.startsWith('/images/')) {
+        signal = captured;
+        await gate.hold();
+      }
+      return undefined;
+    });
+    const start = expect(f.service.start(START_USER)).rejects.toThrow('Instance operation failed');
+    await gate.reached;
+    f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+    let stopped = false;
+    const stopping = f.service.stop(START_USER, 'disabled').then(() => {
+      stopped = true;
+    });
+    expect(signal?.aborted).toBe(true);
+    let closed = false;
+    const closing = f.service.close().then(() => {
+      closed = true;
+    });
+    await expect(f.service.stop('mnopqrstuvwx', 'admin')).rejects.toThrow(
+      'Instance service unavailable',
+    );
+    await expect(f.service.start(START_USER)).rejects.toThrow('Instance service unavailable');
+    expect(stopped).toBe(false);
+    expect(closed).toBe(false);
+    expect(f.database.open).toBe(true);
+    gate.release();
+    await start;
+    await stopping;
+    await closing;
+    expect(f.database.prepare('SELECT * FROM instances').all()).toEqual([]);
+    expect(
+      f.database.prepare("SELECT * FROM audit_events WHERE event_type='instance.stopped'").all(),
+    ).toEqual([]);
+    expect(f.daemon.requests.some(({ path }) => path.includes('follow=true'))).toBe(false);
+    expect(f.database.open).toBe(true);
+  } finally {
+    gate.release();
+    await f.close();
+  }
+});
+
+it('a canceled queued startup cannot acknowledge no-row retirement before its held predecessor settles', async () => {
+  const f = await fixture();
+  const gate = startupBarrier();
+  try {
+    configure(f.database);
+    await f.owner.startUserContainer(f.input);
+    f.database.prepare("UPDATE instances SET status='running',dsh_cookie=?").run(RECONCILE_COOKIE);
+    f.beforeRequest(async (method, path) => {
+      if (method === 'GET' && path === `/containers/${START_CONTAINER}/json`) await gate.hold();
+      return undefined;
+    });
+    const predecessor = Promise.allSettled([f.service.reconcile()]);
+    await gate.reached;
+    const start = expect(f.service.start(START_USER)).rejects.toThrow('Instance operation failed');
+    f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+    f.database.prepare('DELETE FROM instances WHERE user_id=?').run(START_USER);
+    let stopped = false;
+    const stop = f.service.stop(START_USER, 'disabled').then(() => {
+      stopped = true;
+    });
+    await start;
+    expect(stopped).toBe(false);
+    gate.release();
+    await predecessor;
+    await stop;
+    expect(f.daemon.requests.some(({ path }) => path.includes('follow=true'))).toBe(false);
+    expect(
+      f.database.prepare("SELECT * FROM audit_events WHERE event_type='instance.stopped'").all(),
+    ).toEqual([]);
+  } finally {
+    gate.release();
+    await f.close();
+  }
+});
+
+it('disabled retirement does not adopt an account reactivated while canceled startup settles', async () => {
+  const f = await fixture();
+  const gate = startupBarrier();
+  try {
+    configure(f.database);
+    f.beforeRequest(async (method, path) => {
+      if (method === 'GET' && path.startsWith('/images/')) await gate.hold();
+      return undefined;
+    });
+    const start = expect(f.service.start(START_USER)).rejects.toThrow('Instance operation failed');
+    await gate.reached;
+    f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+    const stop = expect(f.service.stop(START_USER, 'disabled')).rejects.toThrow(
+      'User container retirement failed',
+    );
+    f.database.prepare("UPDATE users SET status='active' WHERE id=?").run(START_USER);
+    gate.release();
+    await start;
+    await stop;
+    expect(f.database.prepare('SELECT status FROM users WHERE id=?').get(START_USER)).toEqual({
+      status: 'active',
+    });
+    expect(f.database.prepare('SELECT * FROM instances').all()).toEqual([]);
+    expect(f.database.prepare('SELECT * FROM audit_events').all()).toEqual([]);
+  } finally {
+    gate.release();
+    await f.close();
+  }
+});
+
+it('disabled stop cancels owned readiness logs immediately rather than waiting the sixty-second deadline', async () => {
+  const entered = Promise.withResolvers<undefined>();
+  let canceled = false;
+  const f = await fixture((client) => ({
+    ...client,
+    async *logs(path, signal) {
+      if (!path.includes('follow=true')) {
+        yield* client.logs(path, signal);
+        return;
+      }
+      entered.resolve(undefined);
+      const aborted = Promise.withResolvers<undefined>();
+      const abort = () => {
+        canceled = true;
+        aborted.resolve(undefined);
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        if (signal?.aborted) abort();
+        await aborted.promise;
+        throw new Error('private-canceled-readiness-cookie');
+      } finally {
+        signal?.removeEventListener('abort', abort);
+      }
+    },
+  }));
+  try {
+    configure(f.database);
+    expect(await f.service.start(START_USER)).toEqual({ status: 'starting', reason: 'starting' });
+    await entered.promise;
+    f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+    await f.service.stop(START_USER, 'disabled');
+    expect(canceled).toBe(true);
+    expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+    expect(
+      f.database.prepare('SELECT status,container_id,dsh_cookie FROM instances').get(),
+    ).toEqual({ status: 'stopped', container_id: null, dsh_cookie: null });
+    expect(
+      f.database.prepare("SELECT * FROM audit_events WHERE event_type='instance.ready'").all(),
+    ).toEqual([]);
+    expect(
+      f.database
+        .prepare("SELECT details FROM audit_events WHERE event_type='instance.stopped'")
+        .all(),
+    ).toEqual([{ details: '{"reason":"disabled"}' }]);
+    expect(JSON.stringify(f.database.prepare('SELECT * FROM audit_events').all())).not.toContain(
+      'private-canceled-readiness-cookie',
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+it('close waits a held physical stop with no startup flight and rejects further stop admission', async () => {
+  const f = await fixture();
+  const gate = startupBarrier();
+  try {
+    await f.owner.startUserContainer(f.input);
+    f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+    f.beforeRequest(async (method, path) => {
+      if (method === 'POST' && path === `/containers/${START_CONTAINER}/stop?t=1`)
+        await gate.hold();
+      return undefined;
+    });
+    const stop = f.service.stop(START_USER, 'disabled');
+    await gate.reached;
+    let closed = false;
+    const closing = f.service.close().then(() => {
+      closed = true;
+    });
+    await expect(f.service.stop('mnopqrstuvwx', 'admin')).rejects.toThrow(
+      'Instance service unavailable',
+    );
+    expect(closed).toBe(false);
+    expect(f.daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
+    expect(f.database.open).toBe(true);
+    gate.release();
+    await stop;
+    await closing;
+    expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+    expect(
+      f.database
+        .prepare("SELECT details FROM audit_events WHERE event_type='instance.stopped'")
+        .all(),
+    ).toEqual([{ details: '{"reason":"disabled"}' }]);
+    expect(f.database.open).toBe(true);
+  } finally {
+    gate.release();
+    await f.close();
+  }
+});

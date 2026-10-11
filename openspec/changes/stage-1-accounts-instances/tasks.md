@@ -1003,6 +1003,18 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - Required proof: real endpoint404→401 RED/GREEN; five exact ordered instance rows plus current admin authorization and credential exclusion over realTCP/SQLite; safe500 and no data/audit mutations; generated OpenAPI, source/dist smoke, fullcheck/strictfixture/expandedreview/frozenDocker/CI.
 - 验证记录（#68）：真实TCP401期望先见404RED；check1669unit/824integration、生成OpenAPI与全部既有门禁通过。五用户五态精确行、null/毫秒时间/安全错误、禁用账号保留、同cookie当前角色授权及伪造拒绝、秘密投影排除、用户/实例/审计不变均证明；unit扩展管理员鉴权和safe500矩阵。独立source/dist实际HTTP五态/401403200/提降权/撤销/safe500烟测GREEN，清理完成。冻结review/Docker/CI另附PR。
 
+### Issue #69 risk/evidence map (task14.4 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: authenticated statusPUT, raw input/current actor recheck, self/last-admin protection, sessions revoked and safe fixed responses; realHTTP/current-role/forgery/Origin tests.
+- Concurrency / shared state / ordering — selected: target-scoped asynchronous operation exclusion, canceled startup flight plus original FIFO, no stale running/enable, distinct-user progress and owned close/drain tests.
+- Error handling / rollback / partial outputs — selected: atomic status/session/audit transaction before teardown, durable disable on async failure, ordered disconnect+stop retry, activation only after confirmed cleanup; injected failure and rollback proofs.
+- File IO / path safety / overwrite — selected: existing exact-resource retirement and volume preservation are consumed, not reimplemented; realDocker old/new container identity, same home/work volumes and Session/history/sentinel proof.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: active/disabled raw enum and12-char userId, correct audit reasons, no schema migration or old-session resurrection; existing admin/account/UI/instance APIs preserved.
+- Config / project setup; Release / packaging / dependency compatibility — selected: minimum existing-service/app capability composition and absence503, all affected interface callers/test fixtures migrated, generated OpenAPI, source/dist parity and critical-path review ledger.
+- Resource limits / large input / discovery — selected: exactly one target operation, cancel old readiness rather than inherit60s wait; physically stopped/absent AND connections closed within5000ms on realDocker, no naked timeout race or abandoned work.
+- Documentation / migration notes — selected: explain endpoint, atomic versus asynchronous failure boundary, explicit enable/login/start and truthful deadline/data evidence; never describe session sweep alone as disable completion.
+- Required proof: real endpoint404→401 RED/GREEN; protected mutations/failures/concurrency tests; Docker5s both-halves teardown, disabled login/session denial, enable+newlogin+explicitstart with original files/Session, exact transition/stop audits, sibling preservation and cleanup; fullcheck/strictfixture/source-dist/expandedreview/frozenDocker/CI.
+
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 
 依赖：第 8、14 组。

@@ -3,6 +3,8 @@ import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import { modelConfigRoutes } from './model-config.ts';
 import { runtimeConfigRoutes } from './runtime-config.ts';
+import { accountStatusRoutes } from './account-status.ts';
+import type { InstanceService } from '../orchestrator/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
 interface AccountQuery {
@@ -71,7 +73,8 @@ export const adminRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   resolveSourceAddress: SourceAddressResolver;
   subnetPool: string;
-}> = (app, { database, resolveSourceAddress, subnetPool }, done) => {
+  service?: InstanceService;
+}> = (app, { database, resolveSourceAddress, subnetPool, service }, done) => {
   app.addHook('onRequest', (request, reply, next) => {
     try {
       const token = readSessionCookie(request.headers.cookie);
@@ -189,5 +192,10 @@ export const adminRoutes: FastifyPluginCallback<{
   );
   app.register(modelConfigRoutes, { database, resolveSourceAddress });
   app.register(runtimeConfigRoutes, { database, resolveSourceAddress, subnetPool });
+  app.register(accountStatusRoutes, {
+    database,
+    resolveSourceAddress,
+    ...(service === undefined ? {} : { service }),
+  });
   done();
 };
