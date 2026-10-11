@@ -20,7 +20,7 @@
     },
     "platform/web": {
       "entry": ["index.html", "src/**/*.test.{ts,tsx}"],
-      "project": ["src/**/*.{ts,tsx}"]
+      "project": ["src/**/*.{ts,tsx}", "test/**/*.{ts,tsx}"]
     }
   },
   "ignoreDependencies": [

@@ -900,7 +900,7 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - [x] 13.2 Playwright 基线：加入 `pnpm test:ui`（登记到 `package.json`、`AGENTS.md` 验证矩阵、CI），删除 `constraints.yaml` 里 `ui_e2e_tests` 这条延后项。验证：一个用例打开登录页并断言表单存在；`pnpm lint:agents` 和 `pnpm check` 通过。
 - [x] 13.3 登录页：含加载中、出错（邮箱或密码错误、限流、账号被禁用）和成功三种状态，成功后进入工作台。验证：`pnpm test:ui`——登录走通；三种错误各显示对应的中文提示。
 - [x] 13.4 注册页：含加载中、出错（重复邮箱、密码太短）和成功三种状态。验证：`pnpm test:ui`——注册走通并处于已登录状态；两种错误各显示对应的中文提示。
-- [ ] 13.5 改密码页和登出入口。验证：`pnpm test:ui`——改密码后用新密码能登录、旧密码不能；当前密码错误时显示提示；登出后回到登录页。
+- [x] 13.5 改密码页和登出入口。验证：`pnpm test:ui`——改密码后用新密码能登录、旧密码不能；当前密码错误时显示提示；登出后回到登录页。
 - [ ] 13.6 等待页 `/_platform/wait`：调用启动接口并轮询状态接口，就绪后进入工作台；显示启动中、已满（“当前使用人数已满，请稍后再试”）、出错（启动失败、重试按钮、仍失败时联系管理员）、未配置模型（“管理员尚未完成模型配置”）四种状态。验证：`pnpm test:ui`（两个接口用替身）——四种状态各显示对应文案；点击重试会再次调用启动接口；就绪后页面跳转（`gateway-routing` 规格“实例未运行时的回应”的三个等待页场景，`instance-lifecycle` 规格“上限已满”“启动超时”场景的界面部分）。
 
 Suggested fixture level: expanded - 在平台进程的共享入口下加静态文件服务，改 CI 和门禁配置，且是认证界面
@@ -939,6 +939,17 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - Documentation / migration notes — selected: current registration+login proof, no falseDSH claim; update mirrored UI evidence wording on this touched surface (#186) without threshold changes.
 - Required proof: real registrationURL404 RED→rendered form; actual short400/duplicate409/201employee+session browser sequence, pending and failure recovery, all existing login behavior preserved, screenshots/zero unexpected errors, perfile80%, source/dist smoke, fullcheck/strictfixture/review/frozenDocker/CI.
 - 验证记录（#64）：真实注册入口404RED→编译表单GREEN；check1573unit/822integration、36项共享组件单测100%覆盖、UI2场景通过。真实注册400/409/201及已提交employee/浏览器独立HttpOnly会话/网关归属，原登录全部状态保留；独立source/dist浏览器6位数字注册成功、无额外登录/启动请求、零浏览器错误。旧文档响应体读取停滞已确诊，改查真实已提交身份；304仅认可同URL先前200，重复测试观察器提取后2.90%不过度放宽。#186三处镜像措辞同步，冻结head review/Docker/CI另附PR。
+
+### Issue #65 risk/evidence map (task13.5 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: exact account page with visible platform links and real change-password/logout JSON contracts; secret custody, wrong-current vs expired401, backend replacement/revocation cookie authority.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: one synchronous pending fence across password and logout, disabled controls/recovery, only204 success transitions, no failed-navigation or false logout; DOM and paused real browser proof.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: no backend changes, preserve current-browser replacement session and all36 login/registration cases plus their browser flows; correct empty204 handling and fixed destinations.
+- File IO / path safety / overwrite; Config / project setup — selected: one additional static-page allowlist entry with existing confinement/method rules; covered selector/PasswordPage and branch-free bootstrap, no environment/dependency changes.
+- Resource limits / large input / discovery; Release / packaging / dependency compatibility — selected: no parallel account mutations/retries, existing backend Unicode policy, no response-body wait after navigation, current browser fixture/toolchain/owned cleanup/source-dist parity.
+- Documentation / migration notes — selected: current account entry and cookie semantics, no DSH-native-menu or fake-upstream claim; exact page list and mirrored evidence updated with no gate relaxation.
+- Required proof: account page404 RED→real controls; actual wrong-current401→change204/replacement-cookie/old-cookie-refused→logout204/login page→old-password401/new-password200; semantic pending/failure DOM cases, unchanged priorUI, screenshots/zero unexpected errors, fullcheck/strictfixture/source-dist smoke and final review/Docker/CI.
+- 验证记录（#65）：account404真实RED→完整表单GREEN；check1612unit/822integration、AccountPage39/PasswordPage28语义用例各四项覆盖100%、UI3通过。真实401/204改密、轮换cookie与旧会话拒绝、204登出、旧密码401/新密码200，跨操作pending和既有登录/注册全部保留。独立source/dist实际浏览器烟测零console/page错误、零外部请求、无额外启动。空204仅验证状态与已提交效果；精确Request身份绑定的204/ERR_ABORTED观察边界通过缺失身份和同URL错误401身份两条负向控制，原始失败及证据保留于.run/issue65。冻结head review/Docker/CI另附PR。
 
 ## 14. 管理后台：账号和实例（任务包 1.11）
 

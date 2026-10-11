@@ -7,6 +7,7 @@ import {
   type APIRequestContext,
   type Page,
   type PlaywrightWorkerArgs,
+  type Request,
   type TestInfo,
 } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
@@ -21,15 +22,20 @@ export function observeAccountUi(
   page: Page,
   testInfo: TestInfo,
   baseUrl: string,
-  credentialUrl: string,
+  credentialUrl: string | readonly string[],
 ) {
+  const endpoints = typeof credentialUrl === 'string' ? [credentialUrl] : credentialUrl;
   const consoleErrors: { text: string; url: string }[] = [];
   const pageErrors: string[] = [];
   const externalRequests: string[] = [];
-  const failedRequests: string[] = [];
+  const failedRequests: { request: Request; errorText: string | undefined }[] = [];
+  const observedStatuses = new Map<Request, number>();
   const requests: string[] = [];
   const statuses: number[] = [];
   const otherMutations: string[] = [];
+  const actionRequests: { url: string; method: string }[] = [];
+  const actionResponses: { url: string; status: number }[] = [];
+  const unexpectedAuthRequests: string[] = [];
   const freshAssets = new Set<string>();
   const assets: { url: string; status: number; hasFreshRepresentation: boolean }[] = [];
   page.on('console', (message) => {
@@ -37,14 +43,26 @@ export function observeAccountUi(
       consoleErrors.push({ text: message.text(), url: message.location().url });
   });
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  page.on('requestfailed', (request) => failedRequests.push(request.url()));
+  page.on('requestfailed', (request) =>
+    failedRequests.push({ request, errorText: request.failure()?.errorText }),
+  );
   page.on('request', (request) => {
     if (new URL(request.url()).origin !== baseUrl) externalRequests.push(request.url());
-    if (request.url() === credentialUrl) requests.push(request.method());
-    else if (!['GET', 'HEAD'].includes(request.method())) otherMutations.push(request.url());
+    if (endpoints.includes(request.url())) {
+      requests.push(request.method());
+      actionRequests.push({ url: request.url(), method: request.method() });
+    } else {
+      if (!['GET', 'HEAD'].includes(request.method())) otherMutations.push(request.url());
+      if (new URL(request.url()).pathname.startsWith('/_platform/api/'))
+        unexpectedAuthRequests.push(request.url());
+    }
   });
   page.on('response', (response) => {
-    if (response.url() === credentialUrl) statuses.push(response.status());
+    if (endpoints.includes(response.url())) {
+      observedStatuses.set(response.request(), response.status());
+      statuses.push(response.status());
+      actionResponses.push({ url: response.url(), status: response.status() });
+    }
     if (new URL(response.url()).pathname.startsWith('/_platform/assets/')) {
       const url = response.url();
       const status = response.status();
@@ -58,12 +76,17 @@ export function observeAccountUi(
     requests,
     statuses,
     otherMutations,
+    actionRequests,
+    actionResponses,
     screenshot: async (name: string) => {
       const path = testInfo.outputPath(`${name}.png`);
       await page.screenshot({ path, fullPage: true });
       await testInfo.attach(name, { path, contentType: 'image/png' });
     },
-    expectHealthy: (rejectionStatuses: readonly number[]) => {
+    expectHealthy: (
+      rejections: readonly number[] | readonly { url: string; status: number }[],
+      confirmedNoContentRequests: readonly Request[] = [],
+    ) => {
       for (const asset of assets) {
         expect(
           asset.status === 200 || (asset.status === 304 && asset.hasFreshRepresentation),
@@ -72,21 +95,67 @@ export function observeAccountUi(
       }
       // Each exact endpoint diagnostic consumes one observed rejection's status allowance.
       // Fewer diagnostics are fine; a different URL, status, message or excess count is not.
-      const allowances = [...rejectionStatuses];
+      const allowances = rejections.map((rejection) =>
+        typeof rejection === 'number'
+          ? { url: typeof credentialUrl === 'string' ? credentialUrl : '', status: rejection }
+          : rejection,
+      );
+      const observed = [...actionResponses];
+      for (const rejection of allowances) {
+        const index = observed.findIndex(
+          (response) => response.url === rejection.url && response.status === rejection.status,
+        );
+        expect(
+          index,
+          'Expected rejection must have occurred at its exact endpoint',
+        ).toBeGreaterThanOrEqual(0);
+        observed.splice(index, 1);
+      }
       for (const error of consoleErrors) {
-        expect(error.url).toBe(credentialUrl);
         const match =
           /^Failed to load resource: the server responded with a status of (\d{3}) \([^\n]+\)$/.exec(
             error.text,
           );
         expect(match).not.toBeNull();
-        const index = allowances.indexOf(Number(match?.[1]));
+        const index = allowances.findIndex(
+          (rejection) => rejection.url === error.url && rejection.status === Number(match?.[1]),
+        );
         expect(index).toBeGreaterThanOrEqual(0);
         allowances.splice(index, 1);
       }
       expect(pageErrors).toEqual([]);
-      expect(failedRequests).toEqual([]);
+      // Test-only: Chromium can report ERR_ABORTED after a committed 204 fetch.
+      // Callers must separately prove status and effects before confirming exact identities.
+      const confirmed = new Set(confirmedNoContentRequests);
+      expect(confirmed.size, 'Confirmed no-content request identities must be unique').toBe(
+        confirmedNoContentRequests.length,
+      );
+      for (const request of confirmed) {
+        expect(
+          observedStatuses.get(request),
+          'Confirmed no-content request must have an observed 204 at a tracked endpoint',
+        ).toBe(204);
+      }
+      for (const { request, errorText } of failedRequests) {
+        expect(
+          confirmed.has(request),
+          `Failed request ${request.url()} must be explicitly confirmed by identity`,
+        ).toBe(true);
+        expect(request.method(), 'Confirmed failed request must be POST').toBe('POST');
+        expect(
+          endpoints.includes(request.url()),
+          'Confirmed failed request must target a tracked endpoint',
+        ).toBe(true);
+        expect(
+          observedStatuses.get(request),
+          'Confirmed failed request must have its own observed 204 response',
+        ).toBe(204);
+        expect(errorText, 'Only the exact Chromium no-content abort is allowed').toBe(
+          'net::ERR_ABORTED',
+        );
+      }
       expect(externalRequests).toEqual([]);
+      expect(unexpectedAuthRequests).toEqual([]);
     },
   };
 }

@@ -1,93 +1,24 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
-import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, expect, it, vi, type Mock } from 'vitest';
+import { expect, it } from 'vitest';
+import {
+  change,
+  element,
+  renderAccountPage,
+  settleSubmit,
+  submit,
+  type RenderedAccount,
+} from '../test/account-dom-fixture.tsx';
 import { AccountPage } from './account-page.tsx';
 
-const mounted: { root: Root; container: HTMLDivElement }[] = [];
-beforeEach(() => {
-  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
-});
-afterEach(() => {
-  try {
-    for (const { root, container } of mounted.splice(0)) {
-      try {
-        act(() => {
-          root.unmount();
-        });
-      } finally {
-        container.remove();
-      }
-    }
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
-
-interface RenderedAccount {
-  view: HTMLDivElement;
-  request: Mock<typeof fetch>;
-  navigate: Mock<(path: string) => void>;
-}
-
 function renderAccount(pathname = '/_platform/login'): RenderedAccount {
-  const request = vi.fn<typeof fetch>();
-  const navigate = vi.fn<(path: string) => void>();
-  vi.stubGlobal('fetch', request);
-  // jsdom location is nonconfigurable; delegate every other property to the real DOM window.
-  vi.stubGlobal(
-    'window',
-    new Proxy(window, {
-      get(target, property): unknown {
-        if (property === 'location') return { assign: navigate, pathname };
-        const value: unknown = Reflect.get(target, property, target);
-        return value;
-      },
-    }),
-  );
-  const view = document.createElement('div');
-  document.body.append(view);
-  const root = createRoot(view);
-  mounted.push({ root, container: view });
-  act(() => {
-    root.render(<AccountPage />);
-  });
+  const { view, request, navigate } = renderAccountPage(<AccountPage />, pathname);
   act(() => {
     change(element(view, '#email', HTMLInputElement), 'person@example.com');
     change(element(view, '#password', HTMLInputElement), ' 密码 unchanged ');
   });
   return { view, request, navigate };
-}
-
-function element<T extends Element>(view: HTMLDivElement, selector: string, ctor: new () => T): T {
-  const found = view.querySelector(selector);
-  if (found === null) throw new Error(`Missing account element: ${selector}`);
-  if (!(found instanceof ctor)) throw new Error(`Unexpected account element type: ${selector}`);
-  return found;
-}
-
-function change(input: HTMLInputElement, value: string) {
-  // The native setter bypasses React's value tracker so the real input event updates state.
-  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-  if (typeof descriptor?.set !== 'function') throw new Error('Missing native input value setter');
-  descriptor.set.call(input, value);
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function submit(view: HTMLDivElement) {
-  // Dispatch through the real DOM/React event system; browser validation is covered by UI.
-  const event = new Event('submit', { bubbles: true, cancelable: true });
-  element(view, 'form', HTMLFormElement).dispatchEvent(event);
-  return event;
-}
-
-async function settleSubmit(view: HTMLDivElement): Promise<void> {
-  await act(async () => {
-    submit(view);
-    // Async act drains the fetch/JSON continuations and their resulting React state.
-    await Promise.resolve();
-  });
 }
 
 function submitRepeatedly(view: HTMLDivElement): void {
@@ -383,3 +314,28 @@ it.each([
     );
   },
 );
+
+it.each(['/_platform/login', '/_platform/register'])(
+  'offers same-origin account settings from %s without sending credentials on entry',
+  (pathname) => {
+    const { view, request, navigate } = renderAccount(pathname);
+
+    expect(element(view, 'a[href="/_platform/account"]', HTMLAnchorElement).textContent).toBe(
+      '账号设置',
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  },
+);
+
+it('dispatches the exact account page to its password and logout controls without an auth probe', () => {
+  const { view, request, navigate } = renderAccountPage(<AccountPage />, '/_platform/account');
+
+  expect(element(view, 'h1', HTMLHeadingElement).textContent).toBe('修改密码');
+  expect(element(view, '#current-password', HTMLInputElement).value).toBe('');
+  expect(element(view, '#new-password', HTMLInputElement).value).toBe('');
+  expect(element(view, 'button[type="button"]', HTMLButtonElement).textContent).toBe('退出登录');
+  expect(view.querySelector('#email')).toBeNull();
+  expect(request).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
+});

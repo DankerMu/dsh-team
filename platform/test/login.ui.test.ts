@@ -62,6 +62,15 @@ test('built React login submits real credentials, recovers from rejections and s
           await screenshot(name);
         }
 
+        const accountPage = await page.goto(`${baseUrl}/_platform/account`, {
+          waitUntil: 'networkidle',
+        });
+
+        expect(accountPage?.status()).toBe(200);
+        await expect(page.getByRole('heading', { name: '修改密码', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '修改密码', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeVisible();
+
         const registrationPage = await page.goto(`${baseUrl}/_platform/register`, {
           waitUntil: 'networkidle',
         });

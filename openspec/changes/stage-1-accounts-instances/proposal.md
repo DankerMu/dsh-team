@@ -505,3 +505,11 @@
 - Preserve all #63 login semantics and tests, backend registration/Origin/session contracts, static confinement/unknown404 and gateway-owned instance startup.
 - Selected risk packs: all eleven mapped in tasks.md; no backend API/schema changes, new dependency, password/wait/admin page or DSH change.
 - Evidence floor: public registration-page404→real rendered form tracer, actual browser short400/duplicate409/success201 with own HttpOnly session and gateway admission, pending/one-flight and login compatibility unit/browser proof, independent source/dist smoke, full checks and final frozen-head Docker/CI/review.
+
+## Issue #65 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task13.5 only.
+- Blast radius: current/new password custody, password-change replacement session, logout navigation and shared account-page dispatch.
+- Preserve login/registration behavior, backend change-password/logout/Origin/session contracts, static confinement and gateway-owned instance routing/start.
+- Selected risk packs: all eleven mapped in tasks.md; no backend authentication API/schema/dependency, DSH UI/source, wait/admin page or instance lifecycle change.
+- Evidence floor: actual account-page404→rendered controls tracer; real browser wrong-current401→change204 with replacement cookie→logout204→old-password401/new-password200; cross-action pending proof, safe-error DOM coverage, screenshots/zero unexpected errors, independent source/dist smoke, full checks and final exact-head review/Docker/CI.
