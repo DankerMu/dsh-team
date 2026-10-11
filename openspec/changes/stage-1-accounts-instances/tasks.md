@@ -807,7 +807,7 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - [x] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
 - [x] 12.4 空闲回收：每分钟检查一次，按第 2 组结论的信号判断是否有运行中的任务；没有连接、没有任务且持续达到配置分钟数才停止，停止原因为“空闲”；空闲分钟数每次检查时从 `settings` 读取。验证：用可控时钟的 `pnpm test:docker` 覆盖规格“空闲后停止”的四个场景（规格若已按 2.3 改写，则覆盖改写后的场景）。
 - [x] 12.5 回收后恢复：验证：`pnpm test:docker`——实例被空闲回收后，平台会话仍有效的用户不重新登录，直接请求首页被重定向到等待页，调用启动接口后就绪，之前的 Session 和工作目录里的文件都在（规格“平台会话有效而实例已停止”和“停止后再启动”场景）。
-- [ ] 12.6 已满、出错和未配置时的状态：验证：`pnpm test:docker`——上限设为 1，第二个用户调用启动接口得到“已满”，第一个用户不受影响，第一个停止后第二个重试成功；实例出错后再调启动接口会重新启动；模型未配置时得到“未配置模型”（规格“有人空出位置后可以进入”“出错后重试”场景）。
+- [x] 12.6 已满、出错和未配置时的状态：验证：`pnpm test:docker`——上限设为 1，第二个用户调用启动接口得到“已满”，第一个用户不受影响，第一个停止后第二个重试成功；实例出错后再调启动接口会重新启动；模型未配置时得到“未配置模型”（规格“有人空出位置后可以进入”“出错后重试”场景）。
 
 Suggested fixture level: expanded - 把网关和编排器连起来，涉及定时任务和持久状态
 Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口，约 250 行，此时没有空闲回收，实例只会被手动停止）
@@ -880,6 +880,17 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - Documentation / migration notes — selected: preserve exact scope/clock/provider limits and no interrupted-task continuation promise; strict OpenSpec, focused Docker, full check, independent runtime smoke and frozen-head fullDocker/CI, review and critical-path disclosure.
 - Required semantic proof: real completed Agent conversation and exact workspace bytes survive actual automatic retirement and physical replacement with SAME cookie, same volumes and same Session; qualifying owned corruption causes RED then fresh unmodified restoration GREEN. If an actual missing behavior appears, preserve its counterexample and fix only rightful existing gateway/orchestrator wiring.
 - 验证记录（#60）：既有生产路径无需修改；永久真实Docker场景先GREEN，受管测试工作卷在真实回收后注入损坏，重启后精确字节断言RED，恢复未改动场景5/5GREEN。完整用户/助手/运行上下文历史严格前后相等；同cookie、原两卷、新容器和真实首页均实测。独立source/dist真实Docker smoke覆盖等待/启动/HTML/文件恢复。首次夹具误把runtime-context计为人工消息、把Docker挂载数组顺序当合同，按发行版实际输出更正，未放宽完整历史或挂载字段比对。最终全量check、冻结head Docker/review/CI见PR记录。
+
+### Issue #61 risk/evidence map (task12.6 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: public register/login/start/state and gateway unavailable responses with per-user cookies and canonical Origin; no direct service-state fake or secret logging.
+- Concurrency / shared state / ordering; Config / project setup — selected: canonical capacity1 preserves running A on B refusal, fresh GET state, original owned stop releases capacity, explicit B retry reaches authenticated ready; missing model refuses without startup work.
+- File IO / path safety / overwrite; Error handling / rollback / partial outputs — selected: exact-owned overlay corruption causes real startup failure; public error remains readable; failed container retained stopped, cookie cleared, actual sanitized diagnostics/audit and both volumes preserved. Disable only corruption then same-session public retry: no fixture stop/delete/row repair or service recreation; production retry alone replaces with ready new identity using original volumes. No writes outside invocation-owned overlay/resources.
+- Schema / columns / units / field names; Resource limits / large input / discovery — selected: exact full/error/unconfigured response pairs and existing bounded readiness/HTTP behavior, no schema/format or timeout change; preserve independent original capacity/readiness tests.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: unchanged public instance, idle/resume, gateway and all Docker consumers pass on frozen head; fixed DSH release, no dependency or upstream changes.
+- Documentation / migration notes — selected: state projection and test-only fault boundaries, no claim of UI or external model proof, no #177 scope expansion; strict fixture/check/runtime/fullDocker/CI and critical-path review disclosure.
+- Required proof: real public capacity→release→retry, real startup error→explicit retry, and unconfigured refusal with no allocation; parent-owned wrong-condition semantic rejection plus restoration if behavior already exists. New source repair only after actual counterexample.
+- 验证记录（#61）：真实公开API在保留错误容器后重试返回error而非starting，永久Docker回归RED；生产修复沿原FIFO复用精确退役及终态快照核验后，原场景5/5GREEN。18项身份/重试边界回归及完整check1503unit/819integration、逐文件80%、lint/type/build/contract/Knip通过，重复率2.96%。独立source/dist真实Docker进程经公开API复现真实覆盖层失败、确认旧容器保留与cookie清除、同会话重试成功、新容器/原两卷/实际HTML及error退役审计；无夹具中途清理修补。最终冻结head全量Docker、review、CI另附PR。
 
 ## 13. 平台前端基线和账号页面（任务包 1.4、1.9 的界面部分）
 

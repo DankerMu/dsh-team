@@ -1,5 +1,7 @@
+import { chmod, stat, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { arch, platform } from 'node:os';
+import { join } from 'node:path';
 import { expect } from 'vitest';
 import { createDockerClient } from '../src/orchestrator/index.ts';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
@@ -23,6 +25,61 @@ export function inspect(lifecycle: UserImageLifecycle, name: string): Record<str
   if (!Array.isArray(rows) || rows.length !== 1)
     throw new Error('Independent inspect missing container');
   return record(rows[0]);
+}
+
+export async function corruptOwnedOverlay(
+  lifecycle: UserImageLifecycle,
+  userId: string,
+  containerId: string,
+): Promise<void> {
+  const container = inspect(lifecycle, containerId);
+  expect(container.Id).toBe(containerId);
+  expect(container.Name).toBe(`/dsh-team-u-${userId}`);
+  expect(container.Image).toBe(lifecycle.imageId);
+  expect(record(container.Config).Labels).toMatchObject({ 'dsh-team.user': userId });
+  expect(record(container.State).Running).toBe(false);
+  const overlay = join(lifecycle.overlayDirectory, `${userId}.patch.yml`);
+  expect(container.Mounts).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        Type: 'bind',
+        Source: overlay,
+        Destination: '/managed/patch.yml',
+        RW: false,
+      }),
+    ]),
+  );
+  const before = await stat(overlay);
+  expect(before.isFile()).toBe(true);
+  expect(before.mode & 0o777).toBe(0o444);
+  // In-place overwrite preserves the inode Docker bound during real container creation.
+  await chmod(overlay, 0o644);
+  try {
+    await writeFile(overlay, '- id: webserver\n  config: [\n', 'utf8');
+  } finally {
+    await chmod(overlay, 0o444);
+  }
+  const after = await stat(overlay);
+  expect(after.ino).toBe(before.ino);
+  expect(after.dev).toBe(before.dev);
+  expect(after.mode & 0o777).toBe(0o444);
+}
+
+export function assertFailedStartupLogs(row: Record<string, unknown>, actualOutput: string): void {
+  expect(row.status).toBe('error');
+  expect(row.dsh_cookie === null).toBe(true);
+  if (typeof row.last_error !== 'string') throw new Error('Missing startup failure diagnostic');
+  const actualLines = actualOutput.split(/\r?\n/).map((line) =>
+    Array.from(line)
+      .filter((character) => {
+        const code = character.charCodeAt(0);
+        return (code >= 32 && code !== 127) || [9, 10, 13].includes(code);
+      })
+      .join(''),
+  );
+  const retained = row.last_error.split('\n').slice(1);
+  expect(retained.some((line) => line.length > 0 && actualLines.includes(line))).toBe(true);
+  expect(retained.every((line) => !line.startsWith('Startup logs unavailable:'))).toBe(true);
 }
 
 export function inspectNetwork(lifecycle: UserImageLifecycle, id: string): Record<string, unknown> {

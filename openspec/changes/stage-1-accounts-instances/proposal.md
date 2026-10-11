@@ -473,3 +473,11 @@
 - Preserve existing gateway wait redirect, explicit-only start, platform session lifetime, exact instance ownership, managed policy and every idle scenario.
 - Selected risk packs: all eleven mapped in tasks.md; no new UI, schema, dependency or DSH-source change.
 - Evidence floor: real Docker same-cookie lifecycle with completed real Agent conversation, exact history/file comparison before/after actual idle removal, new container and same volumes; discriminating owned fault control if behavior already exists; full checks, independent runtime smoke, strict OpenSpec, full frozen-head Docker and CI.
+
+## Issue #61 fixture
+
+- Issue type: bugfix + acceptance; fixture level: expanded (agree with upstream); task12.6 only. Actual public Docker counterexample showed a retained error container could not be retried, so the selected production repair is required.
+- Blast radius: public instance-state projection, capacity isolation, retry after real startup error and missing-model precedence.
+- Preserve valid platform-session routing, explicit-only start, existing capacity/no-eviction policy, canonical startup cleanup, safe error classification and current settings reads.
+- Selected risk packs: all eleven mapped in tasks.md; no new UI, schema, dependencies or DSH source changes.
+- Evidence floor: real public authenticated API with actual Docker/DSH proves limit1 sibling isolation→capacity release→retry, real failed startup→error→explicit successful retry, and missing model→unconfigured without side effects; full check, independent runtime smoke, strict OpenSpec, frozen-head fullDocker/review/CI.

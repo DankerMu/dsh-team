@@ -6,7 +6,7 @@ import {
   assertCurrentSnapshot,
   inspectUserContainerEndpoint,
   inspectUserContainerState,
-} from './start.ts';
+} from './start-identity.ts';
 import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
 import {
   attachPlatform,

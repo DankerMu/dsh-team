@@ -407,7 +407,6 @@ it.each([
 
 it.each([
   ["status = 'stopped'"],
-  ["status = 'error'"],
   ["image_id = 'not-an-image'"],
   ["container_id = 'invalid-container'"],
   ["image_tag = ''"],
