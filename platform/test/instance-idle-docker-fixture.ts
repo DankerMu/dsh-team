@@ -23,6 +23,7 @@ export interface DockerIdleContext {
   app: FastifyInstance;
   user: { id: string; cookie: string };
   base: string;
+  origin: string;
   containerId: string;
   setNow: (value: number) => void;
   checkIdle: () => Promise<void>;
@@ -45,6 +46,7 @@ async function installOwnedAdapter(
   userId: string,
   source: string,
   command: IdleDockerCommand,
+  seedMarkers: boolean,
 ): Promise<void> {
   for (const volume of [`dsh-team-home-${userId}`, `dsh-team-work-${userId}`])
     expect(
@@ -52,7 +54,11 @@ async function installOwnedAdapter(
     ).toBe(userId);
   const helper = `dsh-team-test-${lifecycle.runId}-idle-install`;
   lifecycle.registerContainer(helper);
-  const script = `import {writeFileSync} from 'node:fs'; writeFileSync('/data/home/issue83-ui-owned-protocol.mjs',${JSON.stringify(source)},{mode:0o644}); writeFileSync('/data/home/issue59-state.txt','idle state survives\\n'); writeFileSync('/data/work/issue59-work.txt','idle work survives\\n');`;
+  // Seed once only: installing the adapter on replacement must never repair lost user data.
+  const markers = seedMarkers
+    ? "writeFileSync('/data/home/issue59-state.txt','idle state survives\\n'); writeFileSync('/data/work/issue59-work.txt','idle work survives\\n');"
+    : '';
+  const script = `import {writeFileSync} from 'node:fs'; writeFileSync('/data/home/issue83-ui-owned-protocol.mjs',${JSON.stringify(source)},{mode:0o644}); ${markers}`;
   command([
     'run',
     '--rm',
@@ -121,6 +127,7 @@ export async function withDockerIdleInstance(
       );
       const transport = startupClient(lifecycle);
       let userId = '';
+      let adapterInstalled = false;
       const command: IdleDockerCommand = (args, timeout = 30_000): string => {
         const result = lifecycle.command(args, timeout);
         if (result.status !== 0 || result.error !== undefined)
@@ -131,7 +138,15 @@ export async function withDockerIdleInstance(
         ...transport.client,
         async json(method, path, body, signal, maxBytes) {
           if (method === 'POST' && path === `/containers/create?name=dsh-team-u-${userId}`) {
-            await installOwnedAdapter(lifecycle, config, userId, source, command);
+            await installOwnedAdapter(
+              lifecycle,
+              config,
+              userId,
+              source,
+              command,
+              !adapterInstalled,
+            );
+            adapterInstalled = true;
           }
           return transport.client.json(method, path, body, signal, maxBytes);
         },
@@ -266,6 +281,7 @@ export async function withDockerIdleInstance(
           user,
           base,
           containerId,
+          origin: config.publicUrl,
           setNow: (value) => {
             now = value;
           },

@@ -465,3 +465,11 @@
 - Preserve original per-user FIFO, exact-owned retirement and whole-row fences, gateway/session admission, activity minute writeback, no volume deletion and immediate shutdown listener fencing.
 - Selected risk packs: all eleven, mapped in tasks.md. No new schema, dependency, HTTP endpoint, task-discovery fallback or upstream DSH modification.
 - Evidence floor: permanent semantic RED/GREEN; bounded real HTTP protocol/error tests; controlled-clock real Docker four idle scenarios with actual DSH running work; activity/start/identity races, timer/close and partial-failure boundaries; full checks, source/built smoke, strict OpenSpec, exact-head Docker and CI.
+
+## Issue #60 fixture
+
+- Issue type: test; fixture level: expanded (agree with upstream); task12.5 only.
+- Blast radius: authenticated resume after automatic retirement, durable Session history and home/work volume identity.
+- Preserve existing gateway wait redirect, explicit-only start, platform session lifetime, exact instance ownership, managed policy and every idle scenario.
+- Selected risk packs: all eleven mapped in tasks.md; no new UI, schema, dependency or DSH-source change.
+- Evidence floor: real Docker same-cookie lifecycle with completed real Agent conversation, exact history/file comparison before/after actual idle removal, new container and same volumes; discriminating owned fault control if behavior already exists; full checks, independent runtime smoke, strict OpenSpec, full frozen-head Docker and CI.

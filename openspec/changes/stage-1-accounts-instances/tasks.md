@@ -806,7 +806,7 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 - [x] 12.2 新实例可直接使用：按第 3 组的结论。验证：`pnpm test:docker`——新用户首次进入，不经任何选择即可创建 Session；界面语言为中文；没有公告（规格“新实例可以直接使用”）。
 - [x] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
 - [x] 12.4 空闲回收：每分钟检查一次，按第 2 组结论的信号判断是否有运行中的任务；没有连接、没有任务且持续达到配置分钟数才停止，停止原因为“空闲”；空闲分钟数每次检查时从 `settings` 读取。验证：用可控时钟的 `pnpm test:docker` 覆盖规格“空闲后停止”的四个场景（规格若已按 2.3 改写，则覆盖改写后的场景）。
-- [ ] 12.5 回收后恢复：验证：`pnpm test:docker`——实例被空闲回收后，平台会话仍有效的用户不重新登录，直接请求首页被重定向到等待页，调用启动接口后就绪，之前的 Session 和工作目录里的文件都在（规格“平台会话有效而实例已停止”和“停止后再启动”场景）。
+- [x] 12.5 回收后恢复：验证：`pnpm test:docker`——实例被空闲回收后，平台会话仍有效的用户不重新登录，直接请求首页被重定向到等待页，调用启动接口后就绪，之前的 Session 和工作目录里的文件都在（规格“平台会话有效而实例已停止”和“停止后再启动”场景）。
 - [ ] 12.6 已满、出错和未配置时的状态：验证：`pnpm test:docker`——上限设为 1，第二个用户调用启动接口得到“已满”，第一个用户不受影响，第一个停止后第二个重试成功；实例出错后再调启动接口会重新启动；模型未配置时得到“未配置模型”（规格“有人空出位置后可以进入”“出错后重试”场景）。
 
 Suggested fixture level: expanded - 把网关和编排器连起来，涉及定时任务和持久状态
@@ -869,6 +869,17 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - Required Docker evidence: four original idle scenarios with controlled platform clock and actual DSH status, live gateway connection, real held Agent turn using existing owned deterministic adapter, exact stop audit and volume inspection. No fake task-list response or external provider needed.
 - Required boundary evidence: semantic RED/GREEN plus real HTTP protocol matrix and lifecycle races; final exact-head full Docker/CI. No #60/#61/UI work or #179 browser-flake workaround.
 - 验证记录（#59）：永久集成回归先见 `checkIdle` 缺失的语义RED，后28项空闲协议/生命周期集成通过。`pnpm check` 1486unit/819integration、逐文件80%与类型/构建/契约/Knip通过，重复率2.96%。giap-vps真实DSH四个空闲场景及既有权限场景7/7通过；独立source/dist真实Docker smoke证明首次空闲不回收、59,999/60,000ms边界、精确容器缺失、idle审计及两卷中文内容保留，测试资源清理完成。最终冻结head的全量Docker、cross-review和CI另列PR证据，不以此预检冒充最终门槛。
+
+### Issue #60 risk/evidence map (task12.5 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: one original platform login cookie survives idle retirement; HTML GET redirects to wait without implicit start; explicit authenticated start and resumed gateway RPC use current server-owned DSH credentials. No credential output.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: actual owned home/work volume identity and exact workspace bytes, same Session ID and complete user/assistant history before/after replacement; no production format/schema/file migration. Owned disposable fault verifies semantic discrimination.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: original app idle scheduler → exact removal/audit → wait redirect → explicit start → actual readiness → complete history read; no stale old-container helper, recreated Session or second login. Existing idle/start/close race suite retained.
+- Resource limits / large input / discovery; Config / project setup — selected: bounded HTTP/history sample and readiness waits, controlled policy clock only, canonical test image/config/provider, all test-created resources registered and removed even on assertion failure.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: unchanged four idle scenarios and permission-adapter consumers via final full Docker; no DSH/dependency changes, UI or external model call. Existing behavior characterized before any production repair.
+- Documentation / migration notes — selected: preserve exact scope/clock/provider limits and no interrupted-task continuation promise; strict OpenSpec, focused Docker, full check, independent runtime smoke and frozen-head fullDocker/CI, review and critical-path disclosure.
+- Required semantic proof: real completed Agent conversation and exact workspace bytes survive actual automatic retirement and physical replacement with SAME cookie, same volumes and same Session; qualifying owned corruption causes RED then fresh unmodified restoration GREEN. If an actual missing behavior appears, preserve its counterexample and fix only rightful existing gateway/orchestrator wiring.
+- 验证记录（#60）：既有生产路径无需修改；永久真实Docker场景先GREEN，受管测试工作卷在真实回收后注入损坏，重启后精确字节断言RED，恢复未改动场景5/5GREEN。完整用户/助手/运行上下文历史严格前后相等；同cookie、原两卷、新容器和真实首页均实测。独立source/dist真实Docker smoke覆盖等待/启动/HTML/文件恢复。首次夹具误把runtime-context计为人工消息、把Docker挂载数组顺序当合同，按发行版实际输出更正，未放宽完整历史或挂载字段比对。最终全量check、冻结head Docker/review/CI见PR记录。
 
 ## 13. 平台前端基线和账号页面（任务包 1.4、1.9 的界面部分）
 

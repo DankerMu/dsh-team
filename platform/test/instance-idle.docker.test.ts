@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { arch, platform } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { writeSettings } from '../src/db/index.ts';
 import { inspect, record } from './container-start-docker-fixture.ts';
@@ -9,6 +10,7 @@ import {
   connectActivityPeer,
   observeActivity,
 } from './gateway-activity-fixture.ts';
+import { sendHttp } from './gateway-http-fixture.ts';
 import { withDockerIdleInstance, waitDockerIdle } from './instance-idle-docker-fixture.ts';
 import type { DockerIdleContext } from './instance-idle-docker-fixture.ts';
 
@@ -161,5 +163,242 @@ it('changing idle minutes from thirty to five affects the next real DSH decision
     writeSettings(f.database, { idleMinutes: 5 });
     await f.checkIdle();
     expectIdleRetirement(f);
+  });
+});
+
+it('the same platform session resumes a retired instance with its completed conversation and exact work bytes', async () => {
+  await withDockerIdleInstance(async (f) => {
+    const cookie = f.user.cookie;
+    // Never capture a DSH cookie or backend address: every RPC resolves the current instance.
+    const gatewayRpc = async (method: string, args: unknown) => {
+      const rpcId = randomUUID();
+      const response = await sendHttp(
+        f.base,
+        {
+          path: `/api/${method}`,
+          method: 'POST',
+          headers: {
+            cookie,
+            origin: f.origin,
+            'content-type': 'application/json',
+          },
+        },
+        JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
+      );
+      expect(response.status).toBe(200);
+      const envelope = record(JSON.parse(response.body.toString('utf8')));
+      expect(envelope.type).toBe('server-response');
+      expect(envelope.rpcId).toBe(rpcId);
+      const result = record(envelope.result);
+      expect(result.ok).toBe(true);
+      return record(result.value);
+    };
+    const created = await gatewayRpc('session/create', {
+      request: { cwd: '/data/work', agentPreset: 'standard' },
+    });
+    if (typeof created.sessionId !== 'string') throw new Error('Missing original real Session');
+    const sessionId = created.sessionId;
+    // Adopt submits a genuine user message to the registered Agent and owned LlmAdapter.
+    f.control({ op: 'adopt', sessionId });
+    await waitDockerIdle(() => {
+      const status = f.control({ op: 'status' });
+      if (!Array.isArray(status.audit) || !Array.isArray(status.sessions))
+        throw new Error('Missing completed owned Agent observations');
+      return (
+        status.audit.some((value: unknown) => {
+          const event = record(value);
+          return (
+            event.sessionId === sessionId &&
+            event.type === 'turn/end' &&
+            record(record(event.data).reason).kind === 'completed'
+          );
+        }) &&
+        status.sessions.some((value: unknown) => {
+          const session = record(value);
+          return session.sessionId === sessionId && session.status === 'idle';
+        })
+      );
+    });
+    const owned = f.control({ op: 'status' });
+    expect(owned.externalModelCalls).toBe(0);
+    expect(owned.streams).toEqual([
+      { sessionId, loopOwned: true, provider: 'issue83-ui-owned', model: 'owned' },
+    ]);
+    const requireSession = async () => {
+      const listed = await gatewayRpc('session/list', { _request: {} });
+      if (!Array.isArray(listed.items)) throw new Error('Missing complete Session inventory');
+      expect(
+        listed.items.map((value: unknown) => {
+          const session = record(value);
+          return { sessionId: session.sessionId, cwd: session.cwd, running: session.running };
+        }),
+      ).toEqual([{ sessionId, cwd: '/data/work', running: false }]);
+    };
+    const readHistory = async () => {
+      const projection = await gatewayRpc('session/projections', { request: { sessionId } });
+      expect(typeof projection.asOfSeq).toBe('number');
+      const page = await gatewayRpc('session/page', {
+        request: {
+          address: { kind: 'session', sessionId },
+          throughSeq: projection.asOfSeq,
+          maxMessages: 10,
+        },
+      });
+      if (!Array.isArray(page.records)) throw new Error('Missing complete original history');
+      expect(page.hasMore).toBe(false);
+      expect(record(record(page.records[0]).event).seq).toBe(0);
+      expect(record(record(page.records.at(-1)).event).seq).toBe(projection.asOfSeq);
+      return page.records.map((value: unknown) => record(value));
+    };
+    await requireSession();
+    const history = await readHistory();
+    const events = history.map((value: unknown) => record(record(value).event));
+    const userMessages = events.filter(
+      (event) => event.type === 'user/message' && record(record(event.data).source).kind === 'user',
+    );
+    expect(userMessages).toMatchObject([
+      {
+        data: {
+          role: 'user',
+          source: { kind: 'user' },
+          content: [{ type: 'text', text: 'issue83-ui initialize' }],
+        },
+      },
+    ]);
+    expect(events.filter((event) => event.type === 'assistant/message')).toMatchObject([
+      {
+        data: {
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Owned protocol fixture idle.' }],
+          },
+        },
+      },
+    ]);
+    expect(events.filter((event) => event.type === 'turn/end')).toMatchObject([
+      { data: { reason: { kind: 'completed' } } },
+    ]);
+    const filePath = '/data/work/issue60-resume.bin';
+    const bytes = Buffer.concat([
+      Buffer.from('task12.5 original work\r\n中文会话保留\t{"rows":[3,1,4]}\n', 'utf8'),
+      Buffer.from([0, 127, 128, 255, 10]),
+    ]);
+    const exec = (containerId: string, script: string) => {
+      const result = f.lifecycle.command(
+        ['exec', '--user', '1001', containerId, 'node', '--input-type=module', '-e', script],
+        15_000,
+      );
+      expect(result.status).toBe(0);
+      expect(result.error).toBeUndefined();
+      return result.stdout.trim();
+    };
+    // This write occurs once, before retirement, outside adapter installation/restart.
+    exec(
+      f.containerId,
+      `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(filePath)},Buffer.from(${JSON.stringify(bytes.toString('base64'))},'base64'),{flag:'wx'});`,
+    );
+    const readBytes = (containerId: string) =>
+      Buffer.from(
+        exec(
+          containerId,
+          `import {readFileSync} from 'node:fs'; process.stdout.write(readFileSync(${JSON.stringify(filePath)}).toString('base64'));`,
+        ),
+        'base64',
+      );
+    expect(readBytes(f.containerId)).toEqual(bytes);
+    const mountMetadata = (containerId: string) => {
+      const mounts = inspect(f.lifecycle, containerId).Mounts;
+      if (!Array.isArray(mounts)) throw new Error('Missing owned container mounts');
+      return new Map(
+        mounts.map((value: unknown) => {
+          const mount = record(value);
+          if (typeof mount.Destination !== 'string') throw new Error('Missing mount destination');
+          return [mount.Destination, mount] as const;
+        }),
+      );
+    };
+    const originalMounts = mountMetadata(f.containerId);
+    expect(f.app.getUserActivity(f.user.id).liveCount).toBe(0);
+
+    const began = Date.now();
+    await f.checkIdle();
+    f.setNow(began + 60_000);
+    await f.checkIdle();
+    expectIdleRetirement(f);
+    const waiting = await sendHttp(f.base, {
+      path: '/',
+      headers: { cookie, accept: 'text/html' },
+    });
+    expect(waiting.status).toBe(302);
+    expect(waiting.headers.location).toBe('/_platform/wait');
+    const stopped = await sendHttp(f.base, {
+      path: '/_platform/api/instance',
+      headers: { cookie },
+    });
+    expect(stopped.status).toBe(200);
+    expect(JSON.parse(stopped.body.toString('utf8'))).toEqual({
+      status: 'stopped',
+      reason: 'stopped',
+    });
+    expectIdleRetirement(f);
+    const starting = await sendHttp(
+      f.base,
+      {
+        path: '/_platform/api/instance/start',
+        method: 'POST',
+        headers: {
+          cookie,
+          origin: f.origin,
+          'content-type': 'application/json',
+        },
+      },
+      '{}',
+    );
+    expect(starting.status).toBe(200);
+    expect(JSON.parse(starting.body.toString('utf8'))).toEqual({
+      status: 'starting',
+      reason: 'starting',
+    });
+    // Retain the real fixture's independent 90-second authenticated-readiness deadline.
+    const ready = AbortSignal.timeout(90_000);
+    for (;;) {
+      const status = await sendHttp(f.base, {
+        path: '/_platform/api/instance',
+        headers: { cookie },
+        signal: ready,
+      });
+      expect(status.status).toBe(200);
+      const state: unknown = JSON.parse(status.body.toString('utf8'));
+      if (record(state).status === 'running') {
+        expect(state).toEqual({ status: 'running', reason: null });
+        break;
+      }
+      expect(state).toEqual({ status: 'starting', reason: 'starting' });
+      await delay(100, undefined, { signal: ready });
+    }
+
+    const row = record(
+      f.database.prepare('SELECT container_id FROM instances WHERE user_id=?').get(f.user.id),
+    );
+    if (typeof row.container_id !== 'string') throw new Error('Missing ready replacement');
+    expect(row.container_id).not.toBe(f.containerId);
+    const replacement = inspect(f.lifecycle, row.container_id);
+    expect(record(replacement.State).Running).toBe(true);
+    expect(replacement.Image).toBe(f.lifecycle.imageId);
+    expect(mountMetadata(row.container_id)).toEqual(originalMounts);
+    f.verifyVolumes();
+    const homepage = await sendHttp(f.base, {
+      path: '/',
+      headers: { cookie, accept: 'text/html' },
+    });
+    expect(homepage.status).toBe(200);
+    expect(homepage.headers['content-type']).toContain('text/html');
+    expect(homepage.headers['set-cookie']).toBeUndefined();
+    expect(homepage.body.toString('utf8')).toMatch(/<!doctype html/i);
+    expect(homepage.body.toString('utf8')).toMatch(/<script[^>]+src=/i);
+    await requireSession();
+    // Cold projection/page reads do not activate an Agent, so no suffix is justified here.
+    expect(await readHistory()).toEqual(history);
+    expect(readBytes(row.container_id)).toEqual(bytes);
   });
 });
