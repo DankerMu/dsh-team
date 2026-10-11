@@ -8,6 +8,8 @@ export default defineConfig({
   test: {
     projects: [
       {
+        // Web TSX uses the same automatic React runtime as its Vite build.
+        oxc: { jsx: { runtime: 'automatic' } },
         test: {
           name: 'unit',
           include: [

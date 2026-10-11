@@ -489,3 +489,11 @@
 - Preserve every existing backend API, unknown platform404, DSH gateway path, authentication/Origin boundary, source/dist startup and shutdown ownership.
 - Selected risk packs: all eleven mapped in tasks.md; no login submission behavior (#63), wait/admin UI, DSH customization or database schema change.
 - Evidence floor: semantic HTTP404→200 tracer, actual Vite artifact and asset delivery, traversal/missing/path boundary tests, real Chromium Playwright form screenshot with zero console errors, source/built smoke and pnpm e2e, all existing gates plus enforced UI CI and frozen-head complete Docker.
+
+## Issue #63 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task13.3 only.
+- Blast radius: browser credential submission, pending/error/success UI and same-origin navigation.
+- Preserve real backend login/Origin/rate-limit/session behavior, static namespace confinement and gateway-only instance routing/start ownership.
+- Selected risk packs: all eleven assessed in tasks.md; no backend API, schema, instance startup or other page changes.
+- Evidence floor: enabled-form public browser semantic RED/GREEN, real login success and three rejection classes with Chinese feedback, loading/duplicate-submission and safe failure component tests, 80% per-file coverage, actual screenshots and no unexpected browser errors, independent browser smoke, full checks and frozen-head Docker/CI/review.

@@ -898,7 +898,7 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 
 - [x] 13.1 新建工作区包 `platform/web/`（React 18 加 Vite），构建为静态文件，由平台在 `/_platform/` 下提供；开发和构建脚本接入根 `package.json`。验证：`pnpm build` 产出静态文件；`pnpm e2e` 里请求 `/_platform/login` 得到页面。
 - [x] 13.2 Playwright 基线：加入 `pnpm test:ui`（登记到 `package.json`、`AGENTS.md` 验证矩阵、CI），删除 `constraints.yaml` 里 `ui_e2e_tests` 这条延后项。验证：一个用例打开登录页并断言表单存在；`pnpm lint:agents` 和 `pnpm check` 通过。
-- [ ] 13.3 登录页：含加载中、出错（邮箱或密码错误、限流、账号被禁用）和成功三种状态，成功后进入工作台。验证：`pnpm test:ui`——登录走通；三种错误各显示对应的中文提示。
+- [x] 13.3 登录页：含加载中、出错（邮箱或密码错误、限流、账号被禁用）和成功三种状态，成功后进入工作台。验证：`pnpm test:ui`——登录走通；三种错误各显示对应的中文提示。
 - [ ] 13.4 注册页：含加载中、出错（重复邮箱、密码太短）和成功三种状态。验证：`pnpm test:ui`——注册走通并处于已登录状态；两种错误各显示对应的中文提示。
 - [ ] 13.5 改密码页和登出入口。验证：`pnpm test:ui`——改密码后用新密码能登录、旧密码不能；当前密码错误时显示提示；登出后回到登录页。
 - [ ] 13.6 等待页 `/_platform/wait`：调用启动接口并轮询状态接口，就绪后进入工作台；显示启动中、已满（“当前使用人数已满，请稍后再试”）、出错（启动失败、重试按钮、仍失败时联系管理员）、未配置模型（“管理员尚未完成模型配置”）四种状态。验证：`pnpm test:ui`（两个接口用替身）——四种状态各显示对应文案；点击重试会再次调用启动接口；就绪后页面跳转（`gateway-routing` 规格“实例未运行时的回应”的三个等待页场景，`instance-lifecycle` 规格“上限已满”“启动超时”场景的界面部分）。
@@ -917,6 +917,17 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - Required proof: public404 RED→built login/asset GREEN, filesystem/routing boundary regressions, actual Playwright hydrated form screenshot and zero console errors, independent real UI observation, pnpm e2e and full check/guardrails/UI CI, final exact-head fullDocker and expanded cross-review. No login-functionality or waiting-page claim.
 - 验证记录（#62）：永久真实TCP登录页404→200语义RED/GREEN；固定Chromium真实React表单通过、截图及零console/page错误/站外请求。独立source/dist浏览器烟测均通过，实际源码/构建入口缺失前端产物均以固定错误exit1拒绝，产物恢复。giap-vps真实 `pnpm e2e` 构建后健康/登录/未知API共3请求全部成功；43个guardrail验收/拒绝canary全通过，含新TSX和浏览器依赖边界。最终完整check、冻结head Docker/review/CI另附PR，不宣称13.3登录行为完成。
 - 审查修复（#62）：新增浏览器Knip未使用导出拒绝canary，guardrails变为44通过、0失败；独立隔离烟测证明正常配置拒绝并点名导出，错误屏蔽浏览器工作区则漏报并触发canary失败条件。未修改生产行为或降低任何门槛。
+
+### Issue #63 risk/evidence map (task13.3 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: actual same-origin JSON login with ordinary browser Origin, real backend cookie, one generic credential rejection, fixed `/` navigation; no credential URL/storage or raw server-message rendering.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: loading, one in-flight submission, disabled controls, error recovery/no failed navigation; deterministic component tests and paused real browser request.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: consume existing status/error contract without changing backend/schema; keep gateway stopped→wait behavior, auth/Origin/limiter tests and static404 boundary unchanged.
+- File IO / path safety / overwrite; Config / project setup — selected only for existing compiled asset delivery/owned test directories; no new server path or env setting, no page wildcard; new component remains covered/paired.
+- Resource limits / large input / discovery; Release / packaging / dependency compatibility — selected: no repeated submits/automatic retries, React18 DOM/act tests in exact dev-only jsdom26.1.0 (renderer reuse failed the existing no-deprecated gate), generated lockfile; no extra production dependency or runtime download.
+- Documentation / migration notes — selected: describe transition from inert baseline to login, actual success/401/disabled403/429 UI evidence; no claim other pages or realDSH are implemented by this slice.
+- Required proof: browser enabled-form/submission RED before implementation; real auth success through actual gateway plus three real rejection classes; pending/recovery and generic failures semantic unit tests at unchanged80% floor; screenshot, expected HTTP error diagnostics narrowly attributed and zero unexpected errors, independent source/dist browser smoke, full check/strictfixture/review/finalDocker/CI.
+- 验证记录（#63）：公开浏览器表单enabled语义RED后，真实认证浏览器完整401/401/403/429/200与加载恢复通过；15项DOM组件测试，逐文件覆盖率100%，完整check1548unit/822integration通过。独立source/dist浏览器分别真实登录到既有网关的本地受控上游，HttpOnly会话/后台cookie替换/固定根导航/无存储/零console错误，截图保留；不宣称真实DSH或等待页完成。冻结head review/Docker/CI另附PR。
 
 ## 14. 管理后台：账号和实例（任务包 1.11）
 
