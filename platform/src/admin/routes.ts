@@ -17,6 +17,14 @@ interface AccountRow {
   status: 'active' | 'disabled';
   createdAt: number;
 }
+interface InstanceRow {
+  userId: string;
+  email: string;
+  status: 'not-created' | 'stopped' | 'starting' | 'running' | 'error';
+  lastStartedAt: number | null;
+  lastActivityAt: number | null;
+  lastError: string | null;
+}
 const ERRORS = {
   400: { statusCode: 400, error: 'Bad Request', message: 'Invalid pagination' },
   401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
@@ -42,6 +50,19 @@ const ACCOUNT_SCHEMA = {
     role: { type: 'string', enum: ['admin', 'employee'] },
     status: { type: 'string', enum: ['active', 'disabled'] },
     createdAt: { type: 'integer' },
+  },
+} as const;
+const INSTANCE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['userId', 'email', 'status', 'lastStartedAt', 'lastActivityAt', 'lastError'],
+  properties: {
+    userId: { type: 'string' },
+    email: { type: 'string' },
+    status: { type: 'string', enum: ['not-created', 'stopped', 'starting', 'running', 'error'] },
+    lastStartedAt: { type: ['integer', 'null'] },
+    lastActivityAt: { type: ['integer', 'null'] },
+    lastError: { type: ['string', 'null'] },
   },
 } as const;
 const ACCOUNT_FILTER = ' FROM users WHERE instr(email, ?) > 0';
@@ -125,6 +146,43 @@ export const adminRoutes: FastifyPluginCallback<{
         return { ...list(search.trim().toLowerCase(), pageSize, offset), page, pageSize };
       } catch {
         app.log.error('Administrator account query storage failure');
+        return reply.code(500).send(ERRORS[500]);
+      }
+    },
+  );
+  app.get(
+    '/_platform/api/admin/instances',
+    {
+      schema: {
+        summary: 'List persisted instance states as an administrator',
+        response: {
+          200: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['items'],
+            properties: { items: { type: 'array', items: INSTANCE_SCHEMA } },
+          },
+          401: ERROR_SCHEMA,
+          403: ERROR_SCHEMA,
+          500: ERROR_SCHEMA,
+        },
+      },
+    },
+    (_request, reply) => {
+      try {
+        const items = database
+          .prepare<[], InstanceRow>(
+            `SELECT users.id AS userId, users.email AS email,
+              COALESCE(instances.status, 'not-created') AS status,
+              instances.last_started_at AS lastStartedAt,
+              instances.last_activity_at AS lastActivityAt, instances.last_error AS lastError
+            FROM users LEFT JOIN instances ON instances.user_id = users.id
+            ORDER BY users.created_at DESC, users.id DESC`,
+          )
+          .all();
+        return { items };
+      } catch {
+        app.log.error('Administrator instance query storage failure');
         return reply.code(500).send(ERRORS[500]);
       }
     },

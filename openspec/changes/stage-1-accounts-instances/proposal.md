@@ -521,3 +521,11 @@
 - Preserve all login/registration/password/logout behavior, backend instance API/auth/Origin/60s readiness contracts, exact static confinement and fixed-root gateway routing.
 - Selected risk packs: all eleven mapped in tasks.md; no backend API/schema/lifecycle, dependency, DSH or administrator page changes.
 - Evidence floor: real wait-page404→rendered page tracer; built-browser four-state and retry→running scenarios using only the two permitted API substitutes; serialized polling/cancellation/safe-failure DOM proof; screenshots and no unexpected browser errors, independent source/dist smoke, full checks and frozen-head review/Docker/CI.
+
+## Issue #68 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task14.3 only.
+- Blast radius: administrator-only cross-user instance metadata and safe error-log projection.
+- Preserve shared administrator session/current-role authorization, account/model/runtime routes, persisted instance semantics, credential custody and read-only lifecycle ownership.
+- Selected risk packs: all eleven assessed in tasks.md; no Docker access, instance mutation, schema migration, UI, account operations or new dependency.
+- Evidence floor: real HTTP administrator-instance-list401 tracer RED; five-state exact rows/nullable timestamps/latest error, current authorization and credential exclusion over real SQLite/TCP; safe storage failures, generated OpenAPI, independent source/dist smoke, full checks and frozen-head review/Docker/CI.
