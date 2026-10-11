@@ -5,6 +5,7 @@ import {
   record,
   corruptOwnedOverlay,
   assertFailedStartupLogs,
+  normalizeInspectMounts,
 } from './container-start-docker-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
@@ -150,7 +151,9 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       ).toEqual(sessions);
       expect(f.database.prepare('SELECT * FROM users ORDER BY id').all()).toEqual(accounts);
       expect(siblingConnection.socket.destroyed).toBe(false);
-      expect(inspect(f.lifecycle, siblingId)).toEqual(siblingBefore);
+      expect(normalizeInspectMounts(inspect(f.lifecycle, siblingId))).toEqual(
+        normalizeInspectMounts(siblingBefore),
+      );
       expect(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(sibling.id)).toEqual(
         siblingRow,
       );
