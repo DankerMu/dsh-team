@@ -916,6 +916,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - Documentation / migration notes — selected: root commands/AGENTS verification row/constraints UI surface/CI aggregator updated atomically, ui_e2e_tests deferral removed, future frontend source covered by type/lint/pairing/coverage/Knip with at most exact pure-entry exemption.
 - Required proof: public404 RED→built login/asset GREEN, filesystem/routing boundary regressions, actual Playwright hydrated form screenshot and zero console errors, independent real UI observation, pnpm e2e and full check/guardrails/UI CI, final exact-head fullDocker and expanded cross-review. No login-functionality or waiting-page claim.
 - 验证记录（#62）：永久真实TCP登录页404→200语义RED/GREEN；固定Chromium真实React表单通过、截图及零console/page错误/站外请求。独立source/dist浏览器烟测均通过，实际源码/构建入口缺失前端产物均以固定错误exit1拒绝，产物恢复。giap-vps真实 `pnpm e2e` 构建后健康/登录/未知API共3请求全部成功；43个guardrail验收/拒绝canary全通过，含新TSX和浏览器依赖边界。最终完整check、冻结head Docker/review/CI另附PR，不宣称13.3登录行为完成。
+- 审查修复（#62）：新增浏览器Knip未使用导出拒绝canary，guardrails变为44通过、0失败；独立隔离烟测证明正常配置拒绝并点名导出，错误屏蔽浏览器工作区则漏报并触发canary失败条件。未修改生产行为或降低任何门槛。
 
 ## 14. 管理后台：账号和实例（任务包 1.11）
 

@@ -309,6 +309,12 @@ expect_reject "duplicate code (two identical ${duplicate_lines}-branch corpus-si
 echo "export const neverImported = 1;" >>platform/src/health.ts
 expect_reject "dead code (unused export)" "neverImported" pnpm dead-code
 
+# Reach a browser module through the real Vite entry, but never consume its export.
+# This catches a lost workspace/entry traversal, not merely a backend-only Knip run.
+echo "export const neverImportedWeb = 1;" >platform/web/src/dead-code-canary.ts
+echo "import './dead-code-canary.ts';" >>platform/web/src/main.tsx
+expect_reject "web dead code (unused export)" "neverImportedWeb" pnpm dead-code
+
 echo "{}" >schemas/openapi.json
 expect_reject "contract (stale schemas/openapi.json)" "out of date" pnpm contract:check
 

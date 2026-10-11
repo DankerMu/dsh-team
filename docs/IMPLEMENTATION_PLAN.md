@@ -118,6 +118,8 @@ docs/  verify/  resource/（只读参考，不入库）
 
 `pnpm test:ui:install` 显式安装固定Playwright Chromium；`pnpm test:ui` 在独占端口、独立SQLite及真实平台路由上加载编译后的React表单，截图保存在 `reports/platform-ui/`，要求零控制台/页面错误且无站外请求。CI的UI job纳入必需汇总门禁；撤销UI延期项，并以拒绝canary证明新TSX配对/类型/覆盖率与浏览器模块边界门禁生效。此切片的表单凭据控件禁用、不提交、不序列化密码；实际登录由13.3交付，等待/后台页面不在本项。浏览器安装仅为验证依赖，不进入离线生产运行时。
 
+浏览器死代码门禁另有独立拒绝canary：经真实Vite入口导入一个不消费其导出的模块，要求Knip明确报告该导出；隔离烟测确认屏蔽整个浏览器工作区会导致漏报，从而被该canary识别。后台死代码拒绝用例不能替代浏览器工作区的证明。
+
 ### 阶段 2：插件目录、RAGFlow、Office
 
 **目标**：员工在知识库页面看到真实的库和文件，按 Session 选择检索范围并得到带来源的回答；DOCX、XLSX、PPTX 在线编辑保存后 Agent 读到新内容。
