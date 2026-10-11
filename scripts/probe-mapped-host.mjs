@@ -71,8 +71,108 @@ const requestPath = (url) => {
 
 const attachNetwork = (page, requests) => {
   page.on('Network.requestWillBeSent', (p) => {
-    requests.push({ method: p.request?.method ?? '', path: requestPath(p.request?.url ?? '') });
+    requests.push({
+      requestId: p.requestId,
+      method: p.request?.method ?? '',
+      path: requestPath(p.request?.url ?? ''),
+    });
   });
+};
+
+/** Passive creation receipts; no request/response bodies or cookie values enter evidence. */
+const observeSessionAdmissions = (page, requests, origin, cookie) => {
+  const calls = new Map();
+  const completed = [];
+  const createdSessionIds = [];
+  let failedCreations = 0;
+  page.on('Network.responseReceived', ({ requestId, response }) => {
+    const request = requests.find((row) => row.requestId === requestId);
+    if (
+      request?.method === 'POST' &&
+      request.path === '/api/session/create' &&
+      response.url === `${origin}/api/session/create`
+    ) {
+      calls.set(requestId, response.status);
+    }
+  });
+  page.on('Network.loadingFinished', ({ requestId }) => {
+    if (calls.has(requestId)) completed.push(requestId);
+  });
+  page.on('Network.loadingFailed', ({ requestId }) => {
+    const request = requests.find((row) => row.requestId === requestId);
+    if (request?.method === 'POST' && request.path === '/api/session/create') failedCreations++;
+  });
+  const collect = async () => {
+    while (completed.length) {
+      const requestId = completed.shift();
+      try {
+        const response = await page.send('Network.getResponseBody', { requestId });
+        const body = JSON.parse(
+          response.base64Encoded
+            ? Buffer.from(response.body, 'base64').toString('utf8')
+            : response.body,
+        );
+        const id = body.result?.value?.sessionId;
+        if (
+          calls.get(requestId) !== 200 ||
+          body.type !== 'server-response' ||
+          body.result?.ok !== true ||
+          typeof id !== 'string' ||
+          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
+        ) {
+          failedCreations++;
+        } else {
+          createdSessionIds.push(id);
+        }
+      } catch {
+        failedCreations++;
+      }
+    }
+  };
+  const creationCount = () =>
+    requests.filter((row) => row.method === 'POST' && row.path === '/api/session/create').length;
+  return async () => {
+    // A receipt settling during inventory read requires a new read, not a mismatched checkpoint.
+    const until = Date.now() + 5_000;
+    for (;;) {
+      await collect();
+      const before = creationCount();
+      const settledBefore = createdSessionIds.length + failedCreations;
+      const result = await mappedRpc(origin, cookie, 'session/list', { _request: {} });
+      const items = Array.isArray(result?.value?.items)
+        ? result.value.items.map(({ sessionId, cwd }) => ({ sessionId, cwd }))
+        : [];
+      const sessionsAvailable =
+        result?.ok === true &&
+        Array.isArray(result.value?.items) &&
+        items.every(
+          ({ sessionId, cwd }) => typeof sessionId === 'string' && typeof cwd === 'string',
+        );
+      const { cookies } = await page.send('Network.getAllCookies');
+      await collect();
+      const creationRequests = creationCount();
+      const pendingCreations = creationRequests - createdSessionIds.length - failedCreations;
+      if (
+        creationRequests !== before ||
+        settledBefore !== createdSessionIds.length + failedCreations ||
+        pendingCreations > 0
+      ) {
+        await sleep(Math.min(50, remainingMs(until, 'session-observation')));
+        continue;
+      }
+      return {
+        sessionsAvailable,
+        items,
+        cookieNames: cookies.map(({ name }) => name).sort(),
+        creationRequests,
+        createdSessionIds: createdSessionIds.slice(),
+        failedCreations,
+        pendingCreations,
+        workspaceRequests: requests.filter((row) => row.path.startsWith('/api/workspace/')).length,
+        promptRequests: requests.filter((row) => row.path === '/api/session/prompt').length,
+      };
+    }
+  };
 };
 
 export const openMappedPage = async ({
@@ -470,6 +570,7 @@ export const acceptObservation = async ({
   expectedRoster,
   preserveModels,
   expectedDefault,
+  observeSessions = false,
 }) => {
   expectedRoster = await resolveCompositionRoster(composition, expectedRoster);
   const { chrome, page, errors, requests, welcome } = await openMappedPage({
@@ -482,10 +583,28 @@ export const acceptObservation = async ({
     pidFile,
   });
   try {
+    const sessionSnapshot = observeSessions
+      ? observeSessionAdmissions(page, requests, origin, cookie)
+      : undefined;
+    const beforeSessionObservation = await sessionSnapshot?.();
     const runEntry = async (shot, reload = false) => {
       const until = Date.now() + browserMs;
-      await navigateReady(page, origin, remainingMs(until, 'startup'), reload);
-      return await captureAcceptance({
+      try {
+        await navigateReady(page, origin, remainingMs(until, 'startup'), reload);
+      } catch (error) {
+        try {
+          process.stdout.write(
+            `diagnostic navigation=${errorCode(error)} consoleErrors=${errors.length}\n`,
+          );
+          await reportDiagnostic(page, shot.replace(/\.png$/, '-navigation-failure.png'), {
+            value: 'homepage',
+          });
+        } catch {
+          /* Diagnostic failure must not replace the original navigation failure. */
+        }
+        throw error;
+      }
+      const observed = await captureAcceptance({
         page,
         requests,
         errors,
@@ -498,9 +617,16 @@ export const acceptObservation = async ({
         workspace,
         expectedHost,
       });
+      if (!sessionSnapshot) return observed;
+      const sessionObservation = await sessionSnapshot();
+      return { ...observed, consoleErrors: errors.slice(), sessionObservation };
     };
     const first = await runEntry(screenshot);
-    if (!composition) return first;
+    if (!composition)
+      return {
+        ...first,
+        ...(beforeSessionObservation ? { beforeSessionObservation } : {}),
+      };
     const reload = await runEntry(screenshot.replace(/\.png$/, '-reload.png'), true);
     const preservation = await capturePreservation(
       page,
@@ -515,6 +641,7 @@ export const acceptObservation = async ({
     );
     return {
       ...first,
+      ...(beforeSessionObservation ? { beforeSessionObservation } : {}),
       accepted: first.accepted && reload.accepted,
       reload,
       ...(preservation ? { preservation } : {}),

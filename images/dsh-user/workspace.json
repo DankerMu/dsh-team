@@ -1,0 +1,20 @@
+{
+  "unit": { "name": "workspace", "version": 2 },
+  "global": {
+    "initialized": true,
+    "workspaceIds": ["243934e4-64cf-4cc2-bc87-e62b6d9ab89a"],
+    "archivedSessionIds": [],
+    "pinnedSessionIds": []
+  },
+  "tables": {
+    "workspaces": {
+      "243934e4-64cf-4cc2-bc87-e62b6d9ab89a": {
+        "path": "/data/work",
+        "title": "work",
+        "sessionIds": [],
+        "createdAt": "2026-10-01T00:00:00.000Z",
+        "updatedAt": "2026-10-01T00:00:00.000Z"
+      }
+    }
+  }
+}

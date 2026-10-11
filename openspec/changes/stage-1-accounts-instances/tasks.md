@@ -825,6 +825,19 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 
 验证记录（#56）：真实TCP注册201/登录200后新接口均404的语义RED已记录；实现后本地 `pnpm check` 1430unit/777integration、逐文件覆盖/类型/契约/Knip通过，重复率2.86%。真实giap-vps source及dist main分别注册/登录两个用户，显式并发POST→实际DSH认证就绪→网关HTML→重复相同容器通过；GET不启动、伪造标识不修改兄弟、响应/日志无凭据、缺Docker时两个入口均非零退出且不提供health。根dev:bg/status/smoke/stop与e2e实际通过，DB迁移/清理断言保留。永久instance.docker单例通过；其原错误的JSON请求集合统计logs断言已删除，真实Unix held-readiness集成仍证明只建立一次就绪工作，未降低单飞验收。三次普通check修正后用户授权一轮：移除无消费者的InstanceState导出；诊断确认Node24.13.1 watch模式对可选缺失.env报ENOENT，单列#174，验证改用既有dev-server同款非watch真实main，不改生产逻辑。验证器网络标签清理使用实际Docker `.Labels`；源码/构建完整路径与清理恢复通过。冻结head完整Docker、交叉审查、CI仍为合并前门禁；不声称任务12.2–12.6或真实模型完成。
 
+### Issue #57 risk/evidence map (task12.2 only)
+
+- User-approved scope expansion: image workspace seed plus canonical browser/Docker regression and docs; keep task12.2 and every original acceptance criterion, no DSH source edits.
+- Public API / CLI / script entry; Config / project setup — selected: real register/login/start/poll then platform-cookie-only browser gateway. Exact public Origin and non-loopback hostname; preserve #56 API and existing probe callers.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: release-v2 workspace registry with one `/data/work` record and empty Session ownership; fresh Docker copy-up, reused-volume sentinel preservation and two-user isolation.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: real platform session, server-only DSH credential, workspace exists before untouched-browser Session creation, refresh reuses current Session, no browser-state/API preinitialization.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: bounded existing Docker/Chrome lifecycle, owned unique resources and independent cleanup after semantic failure/success; no unbounded discovery or production cleanup.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: actual pinned DSH, existing image/profile-seed/managed composition consumers and canonical browser oracle retained; no dependency or migration.
+- Documentation / migration notes — selected: record no migration/overwrite of existing volumes, authorized scope, real screenshots/zero console errors, exact-head runtime and critical-path human-review requirement.
+- Required evidence: permanent browser test RED before seed; GREEN for first entry and reload, browser-created Session identity plus backend cwd `/data/work`, initial empty ownership, Chinese/no notice/editor type-clear, no model prompt. Fresh second-user isolation and reused-volume preservation; `pnpm check`, strict OpenSpec and final `pnpm test:docker` on giap-vps.
+- Diagnostic already observed: canonical base `eee59c0` first/reload show choice required and empty Session list (exit1); changing only a disposable image workspace seed passes first/reload with one `/data/work` Session (exit0). `.run/issue57` holds logs/screenshots; diagnostic copy is not production delivery.
+- Non-goals: task12.3–12.6, waiting UI, provider execution, existing-volume migration/repair, new runtime initializer, changes to permission policy or DSH source.
+
 ## 13. 平台前端基线和账号页面（任务包 1.4、1.9 的界面部分）
 
 依赖：第 6、11、12 组。

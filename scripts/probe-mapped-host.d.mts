@@ -19,10 +19,25 @@ export type MappedHostAcceptInput = {
   readonly expectedRoster?: readonly string[];
   readonly preserveModels?: string;
   readonly expectedDefault?: string;
+  readonly observeSessions?: boolean;
+};
+
+export type MappedHostSessionObservation = {
+  readonly sessionsAvailable: boolean;
+  readonly items: readonly { readonly sessionId: string; readonly cwd: string }[];
+  readonly cookieNames: readonly string[];
+  readonly creationRequests: number;
+  readonly createdSessionIds: readonly string[];
+  readonly failedCreations: number;
+  readonly pendingCreations: number;
+  readonly workspaceRequests: number;
+  readonly promptRequests: number;
 };
 
 export type MappedHostAcceptResult = {
   readonly accepted: boolean;
+  readonly beforeSessionObservation?: MappedHostSessionObservation;
+  readonly sessionObservation?: MappedHostSessionObservation;
   readonly initialized?: boolean;
   readonly screenshot?: { readonly screenshot?: string };
   readonly reload?: MappedHostAcceptResult;
@@ -65,7 +80,10 @@ export declare function acceptObservation(
 ): Promise<MappedHostAcceptResult>;
 
 export declare function collectObservation(
-  input: Omit<MappedHostAcceptInput, 'composition' | 'expectedRoster' | 'preserveModels'>,
+  input: Omit<
+    MappedHostAcceptInput,
+    'composition' | 'expectedRoster' | 'preserveModels' | 'observeSessions'
+  >,
 ): Promise<MappedHostAcceptResult>;
 
 export declare function closeMapped(
