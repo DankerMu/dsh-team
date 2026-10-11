@@ -28,8 +28,11 @@ export interface RenderedAccount {
   navigate: Mock<(path: string) => void>;
 }
 
-export function renderAccountPage(page: ReactNode, pathname: string): RenderedAccount {
-  const request = vi.fn<typeof fetch>();
+export function renderAccountPage(
+  page: ReactNode,
+  pathname: string,
+  request = vi.fn<typeof fetch>(),
+): RenderedAccount & { unmount: () => void } {
   const navigate = vi.fn<(path: string) => void>();
   vi.stubGlobal('fetch', request);
   // jsdom location is nonconfigurable; delegate every other property to the real DOM window.
@@ -46,11 +49,23 @@ export function renderAccountPage(page: ReactNode, pathname: string): RenderedAc
   const view = document.createElement('div');
   document.body.append(view);
   const root = createRoot(view);
-  mounted.push({ root, container: view });
+  const entry = { root, container: view };
+  mounted.push(entry);
   act(() => {
     root.render(page);
   });
-  return { view, request, navigate };
+  return {
+    view,
+    request,
+    navigate,
+    unmount: () => {
+      act(() => {
+        root.unmount();
+      });
+      mounted.splice(mounted.indexOf(entry), 1);
+      view.remove();
+    },
+  };
 }
 
 export function element<T extends Element>(

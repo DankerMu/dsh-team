@@ -190,7 +190,7 @@ verification:
       required_at: "L3+"
     platform_ui:
       command: "pnpm test:ui"
-      evidence: "fresh built React login/registration/account over owned real TCP/SQLite, cross-action single-flight, real login401/403/429/200 and registration400/409/201, password401/204 with replacement-session revocation proof, logout204 and old/new-password login, local assets, screenshots, zero unexpected console/page errors and external requests"
+      evidence: "fresh built React over owned real TCP/SQLite; real login401/403/429/200, registration400/409/201, password401/204 and session revocation, logout204 and old/new-password login; waiting four-state/manual retry/serial polling with only start/status API substitutes; local assets, screenshots, zero unexpected console/page errors and external requests"
       required_at: "L3+"
     docker_ci_evidence:
       command: "pnpm verify:docker-evidence"

@@ -54,7 +54,12 @@ export const webRoutes: FastifyPluginAsync<WebOptions> = async (app, { root = WE
   // Use the library for streams, MIME, ranges and HEAD, but never its broad wildcard.
   // serve:false without root avoids filesystem prerequisites in offline app/contract construction.
   await app.register(fastifyStatic, { serve: false, dotfiles: 'ignore', index: false });
-  for (const url of ['/_platform/login', '/_platform/register', '/_platform/account']) {
+  for (const url of [
+    '/_platform/login',
+    '/_platform/register',
+    '/_platform/account',
+    '/_platform/wait',
+  ]) {
     app.route({
       method: ['GET', 'HEAD'],
       url,

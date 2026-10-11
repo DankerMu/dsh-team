@@ -71,11 +71,20 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(HTML);
   });
 
+  it('serves the waiting shell at its exact declared page', async () => {
+    const response = await app.inject('/_platform/wait');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toBe(HTML);
+  });
+
   it('serves HEAD metadata without a body and bounded byte ranges', async () => {
     const cases: [string, string][] = [
       ['/_platform/login', HTML],
       ['/_platform/register', HTML],
       ['/_platform/account', HTML],
+      ['/_platform/wait', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -98,7 +107,10 @@ describe('declared platform static routes', () => {
     '/_platform',
     '/_platform/',
     '/_platform/login/',
-    '/_platform/wait',
+    '/_platform/wait/',
+    '/_platform/wait/settings',
+    '/_platform/wait%00',
+    '/_platform/wait%2fsettings',
     '/_platform/register/',
     '/_platform/account/',
     '/_platform/account/settings',
@@ -136,7 +148,7 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(SCRIPT);
   });
 
-  it.each(['/_platform/login', '/_platform/register', '/_platform/account'])(
+  it.each(['/_platform/login', '/_platform/register', '/_platform/account', '/_platform/wait'])(
     'does not expose a symlinked entry outside the build at %s',
     async (url) => {
       await rm(join(root, 'index.html'));
@@ -161,7 +173,7 @@ describe('declared platform static routes', () => {
     await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
   });
 
-  it.each(['/_platform/login', '/_platform/register', '/_platform/account'])(
+  it.each(['/_platform/login', '/_platform/register', '/_platform/account', '/_platform/wait'])(
     'does not accept credential submissions at the static page %s',
     async (url) => {
       const response = await app.inject({ method: 'POST', url, payload: {} });
@@ -170,7 +182,7 @@ describe('declared platform static routes', () => {
     },
   );
 
-  it.each(['/_platform/login', '/_platform/register', '/_platform/account'])(
+  it.each(['/_platform/login', '/_platform/register', '/_platform/account', '/_platform/wait'])(
     'registers %s without a build but rejects that production prerequisite',
     async (url) => {
       const missingRoot = join(directory, 'not-built');
