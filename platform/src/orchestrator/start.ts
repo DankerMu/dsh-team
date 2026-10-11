@@ -1,33 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { isDeepStrictEqual } from 'node:util';
 import { recordAuditEvent } from '../audit/index.ts';
-import type { PlatformConfig } from '../config.ts';
 import { readSettings } from '../db/index.ts';
-import type { DatabaseHandle } from '../db/index.ts';
 import {
   generateManagedConfig,
   hasCompleteModelSettings,
   readManagedComposition,
   writeManagedConfig,
 } from '../managed-config/index.ts';
-import type { ManagedConfigInput, ManagedComposition } from '../managed-config/index.ts';
+import type { ManagedComposition } from '../managed-config/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
-import {
-  absentInstanceIdentity,
-  containerId,
-  isTerminalInstance,
-  object,
-  ownedContainer,
-  resolvedImageId,
-} from './identity.ts';
-import type { AbsentInstanceIdentity } from './identity.ts';
-import { requireUnpublished, upstreamHost, upstreamPort, verifiedPlatform } from './transport.ts';
+import { containerId, object, ownedContainer, resolvedImageId } from './identity.ts';
+import { requireUnpublished, upstreamHost, verifiedPlatform } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import {
-  attachedNetwork,
   attachPlatform,
   captureUserNetwork,
   createUserNetwork,
@@ -37,30 +25,14 @@ import {
   validateUserNetwork,
 } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
-
-export interface StartUserContainerInput {
-  readonly client: DockerClient;
-  readonly database: DatabaseHandle;
-  readonly transport: TransportContext;
-  readonly config: Pick<
-    PlatformConfig,
-    'userImage' | 'seccompProfilePath' | 'managedConfigDir' | 'authority' | 'subnetPool'
-  >;
-  readonly userId: string;
-  readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;
-  readonly modelKey?: string | undefined;
-  readonly signal?: AbortSignal;
-  readonly onVerifiedAbsent?: (identity: AbsentInstanceIdentity) => void;
-}
-
-export type StartResult =
-  | { outcome: 'unconfigured' | 'full' }
-  | {
-      outcome: 'starting' | 'running';
-      containerId: string;
-      upstreamHost: string;
-      upstreamPort: number;
-    };
+import {
+  assertCurrentSnapshot,
+  inspectUserContainerEndpoint,
+  inspectUserContainerState,
+  retireCurrentErrorContainer,
+  reuseCurrentContainer,
+} from './start-identity.ts';
+import type { StartResult, StartUserContainerInput } from './start-identity.ts';
 
 // Composition may load the installed Web profile; a hung helper must not retain home access.
 const START_TIMEOUT_MS = 60_000;
@@ -180,35 +152,6 @@ async function composition(
   return result;
 }
 
-export function inspectUserContainerState(
-  document: unknown,
-  id: string,
-  name: string,
-  userId: string,
-  imageId: string,
-): boolean {
-  const row = ownedContainer(document, name, userId, imageId);
-  const running = object(row.State).Running;
-  if (row.Id !== id || typeof running !== 'boolean')
-    throw new Error('Container identity or state mismatch');
-  return running;
-}
-export function inspectUserContainerEndpoint(
-  document: unknown,
-  id: string,
-  name: string,
-  userId: string,
-  imageId: string,
-  mode: PlatformConfig['upstreamMode'],
-): number {
-  const row = ownedContainer(document, name, userId, imageId);
-  if (row.Id !== id || object(row.State).Running !== true)
-    throw new Error('Started container identity or state mismatch');
-  attachedNetwork(row, userId);
-  upstreamHost(row, userId, mode);
-  return upstreamPort(row, mode);
-}
-
 function validateModelEnvironment(name: string, key: string): void {
   if (
     !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
@@ -253,82 +196,6 @@ function startupFailure(stage: string, error: unknown): Error {
       },
     },
   );
-}
-
-export function assertCurrentSnapshot(
-  input: Pick<StartUserContainerInput, 'database' | 'userId'>,
-  account: Record<string, unknown>,
-  instance: Record<string, unknown>,
-  signal: AbortSignal,
-): void {
-  signal.throwIfAborted();
-  if (
-    !isDeepStrictEqual(
-      input.database.prepare('SELECT * FROM users WHERE id = ?').get(input.userId),
-      account,
-    ) ||
-    !isDeepStrictEqual(
-      input.database.prepare('SELECT * FROM instances WHERE user_id = ?').get(input.userId),
-      instance,
-    )
-  )
-    throw new Error('Current startup identity changed');
-}
-
-async function reuseCurrentContainer(
-  input: StartUserContainerInput,
-  client: DockerClient,
-  account: Record<string, unknown>,
-  signal: AbortSignal,
-  missing: () => void,
-): Promise<StartResult | undefined> {
-  const selected: unknown = input.database
-    .prepare('SELECT * FROM instances WHERE user_id = ?')
-    .get(input.userId);
-  if (selected === undefined) return undefined;
-  const instance = object(selected);
-  if (isTerminalInstance(instance.status, instance.container_id)) return undefined;
-  const id = containerId({ Id: instance.container_id });
-  const image = resolvedImageId(instance.image_id);
-  if (typeof instance.image_tag !== 'string' || instance.image_tag.length === 0)
-    throw new Error('Invalid indexed image tag');
-  let document: unknown;
-  try {
-    document = await client.json('GET', `/containers/${id}/json`);
-  } catch (error) {
-    if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
-    assertCurrentSnapshot(input, account, instance, signal);
-    const identity = absentInstanceIdentity(instance, id);
-    input.onVerifiedAbsent?.(identity);
-    missing();
-    return undefined;
-  }
-  if (instance.status !== 'starting' && instance.status !== 'running')
-    throw new Error('Current instance is not reusable');
-  const port = inspectUserContainerEndpoint(
-    document,
-    id,
-    `dsh-team-u-${input.userId}`,
-    input.userId,
-    image,
-    input.transport.config.upstreamMode,
-  );
-  await validateUserNetwork(client, input.userId, document, input.transport);
-  const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
-  if (
-    instance.upstream_host !== host ||
-    instance.upstream_port !== port ||
-    typeof instance.last_started_at !== 'number' ||
-    !Number.isSafeInteger(instance.last_started_at)
-  )
-    throw new Error('Current instance endpoint mismatch');
-  assertCurrentSnapshot(input, account, instance, signal);
-  return {
-    outcome: instance.status,
-    containerId: id,
-    upstreamHost: host,
-    upstreamPort: port,
-  };
 }
 
 function resourceLimit(value: number, unit: number): number {
@@ -615,18 +482,34 @@ async function createInstance(
   return id;
 }
 
-/** Create/start or validate current identity; readiness, cookies and retirement remain separate. */
+function startupCleanupClient(input: StartUserContainerInput): DockerClient {
+  return {
+    ...input.client,
+    json: (method, path, body, settlement, maxBytes) =>
+      input.client.json(
+        method,
+        path,
+        body,
+        settlement ?? AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
+        maxBytes,
+      ),
+  };
+}
+
+/** Create, reuse, or retire an admitted error identity before retry; readiness and cookies remain separate. */
 export async function startUserContainer(
   input: StartUserContainerInput,
   reserve: () => boolean,
   allocate: <Result>(userId: string, operation: () => Promise<Result>) => Promise<Result>,
   assertNetworkConfirmed: (userId: string) => void,
+  retire: (signal: AbortSignal, assertCurrent: () => void) => Promise<boolean>,
 ): Promise<StartResult> {
   let stage = 'account validation';
   let network: OwnedNetwork | undefined;
   let cleanupClient: DockerClient | undefined;
   let containerAttempted = false;
   let replacing = false;
+  let retryInstance: Record<string, unknown> | undefined;
   let confirmedStarted: StartedIdentity | undefined;
   try {
     const { database, config, userId } = input;
@@ -655,30 +538,33 @@ export async function startUserContainer(
         input.client.json(method, path, body, signal, maxBytes),
       logs: (path) => input.client.logs(path, signal),
     };
-    cleanupClient = {
-      ...input.client,
-      json: (method, path, body, settlement, maxBytes) =>
-        input.client.json(
-          method,
-          path,
-          body,
-          settlement ?? AbortSignal.timeout(CLEANUP_TIMEOUT_MS),
-          maxBytes,
-        ),
-    };
+    cleanupClient = startupCleanupClient(input);
     const name = `dsh-team-u-${userId}`;
     stage = 'current container validation';
     signal.throwIfAborted();
     stage = 'network allocation';
     assertNetworkConfirmed(userId);
     stage = 'current container validation';
-    const reused = await reuseCurrentContainer(input, client, user, signal, () => {
-      replacing = true;
-    });
+    const reused = await reuseCurrentContainer(
+      input,
+      client,
+      user,
+      signal,
+      () => {
+        replacing = true;
+      },
+      (instance) => {
+        retryInstance = instance;
+      },
+    );
     if (reused !== undefined) return reused;
     stage = 'capacity admission';
     signal.throwIfAborted();
     if (!reserve()) return { outcome: 'full' };
+    if (retryInstance !== undefined) {
+      stage = 'error container retirement';
+      await retireCurrentErrorContainer(input, user, retryInstance, signal, retire);
+    }
     stage = 'container conflict check';
     await requireAbsent(client, name);
     stage = 'platform identity';

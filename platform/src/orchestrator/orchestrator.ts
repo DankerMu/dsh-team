@@ -5,7 +5,7 @@ import { acquireDshCookie } from './credentials.ts';
 import type { AcquireDshCookieInput as AcquisitionInput } from './credentials.ts';
 import { waitForUserContainerReady } from './readiness.ts';
 import { startUserContainer } from './start.ts';
-import type { StartResult, StartUserContainerInput as StartupInput } from './start.ts';
+import type { StartResult, StartUserContainerInput as StartupInput } from './start-identity.ts';
 import { stopUserContainer } from './stop.ts';
 import type { StopUserContainerInput as RetirementInput } from './stop.ts';
 import { discoverReconciliationUsers, reconcileUser } from './reconcile.ts';
@@ -36,7 +36,7 @@ async function retireIfIdle(
     Pick<OrchestratorDependencies, 'client' | 'database'> & {
       readonly transport: TransportContext;
     },
-  retire: (input: RetirementInput) => Promise<void>,
+  retire: (input: RetirementInput) => Promise<boolean>,
 ): Promise<void> {
   if (!(await input.eligible()) || input.signal.aborted) return;
   const release = input.onRetiring();
@@ -283,6 +283,18 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         () => reserve(input.userId),
         allocate,
         assertNetworkConfirmed,
+        (signal, assertCurrent) =>
+          retire(
+            {
+              client: input.client,
+              database: input.database,
+              transport: input.transport,
+              userId: input.userId,
+              reason: 'error',
+              signal,
+            },
+            assertCurrent,
+          ),
       );
     } finally {
       // Await actual work/cleanup, not caller cancellation. A durable active row remains counted.
@@ -290,9 +302,11 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     }
   }
 
-  async function retire(input: RetirementInput): Promise<void> {
+  async function retire(input: RetirementInput, assertCurrent?: () => void): Promise<boolean> {
     // A no-op or failed audit transaction cannot acknowledge the uncertain Engine identity.
-    if (await stopUserContainer(input)) uncertainNetworks.delete(input.userId);
+    const retired = await stopUserContainer(input, assertCurrent);
+    if (retired) uncertainNetworks.delete(input.userId);
+    return retired;
   }
 
   async function reconcileConfirmed(input: ReconciliationInput): Promise<void> {
@@ -396,6 +410,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
         'DSH readiness failed before selecting an owned instance',
       ),
     stopUserContainer: (input: StopUserContainerInput) =>
-      schedule(input, retire, 'User container retirement failed'),
+      schedule(
+        input,
+        async (captured) => {
+          await retire(captured);
+        },
+        'User container retirement failed',
+      ),
   };
 }

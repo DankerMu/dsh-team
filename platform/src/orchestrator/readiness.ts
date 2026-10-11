@@ -6,7 +6,7 @@ import { DockerHttpError } from './client.ts';
 import type { AcquireDshCookieInput, IndexedInstance } from './credentials.ts';
 import { acquireCurrentDshCookie, CURRENT_INSTANCE, currentInstance } from './credentials.ts';
 import { startupLogTail } from './readiness-logs.ts';
-import { inspectUserContainerEndpoint, inspectUserContainerState } from './start.ts';
+import { inspectUserContainerEndpoint, inspectUserContainerState } from './start-identity.ts';
 import { removeUserNetwork, validateUserNetwork } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import type { DockerClient } from './client.ts';

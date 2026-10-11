@@ -3,7 +3,7 @@ import type { InstanceStopReason } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerEndpoint, inspectUserContainerState } from './start.ts';
+import { inspectUserContainerEndpoint, inspectUserContainerState } from './start-identity.ts';
 import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
 import { indexedEndpoint } from './credentials.ts';
 import { captureUserNetwork, removeUserNetwork, stoppedNetwork } from './networks.ts';

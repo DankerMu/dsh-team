@@ -3,7 +3,7 @@ import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
-import { inspectUserContainerEndpoint } from './start.ts';
+import { inspectUserContainerEndpoint } from './start-identity.ts';
 import { object, resolvedImageId } from './identity.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
 import { isIPv4 } from 'node:net';

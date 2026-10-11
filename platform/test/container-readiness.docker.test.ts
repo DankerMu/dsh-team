@@ -1,4 +1,3 @@
-import { chmod, stat, writeFile } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -6,6 +5,8 @@ import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { START_MODEL } from './container-start-fixture.ts';
 import {
+  assertFailedStartupLogs,
+  corruptOwnedOverlay,
   cookieHttpStatus,
   inspect,
   record,
@@ -14,44 +15,6 @@ import {
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
-
-async function corruptOwnedOverlay(
-  lifecycle: UserImageLifecycle,
-  userId: string,
-  containerId: string,
-): Promise<void> {
-  const container = inspect(lifecycle, containerId);
-  expect(container.Id).toBe(containerId);
-  expect(container.Name).toBe(`/dsh-team-u-${userId}`);
-  expect(container.Image).toBe(lifecycle.imageId);
-  expect(record(container.Config).Labels).toMatchObject({ 'dsh-team.user': userId });
-  expect(record(container.State).Running).toBe(false);
-  const overlay = join(lifecycle.overlayDirectory, `${userId}.patch.yml`);
-  expect(container.Mounts).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        Type: 'bind',
-        Source: overlay,
-        Destination: '/managed/patch.yml',
-        RW: false,
-      }),
-    ]),
-  );
-  const before = await stat(overlay);
-  expect(before.isFile()).toBe(true);
-  expect(before.mode & 0o777).toBe(0o444);
-  // In-place overwrite preserves the inode Docker bound during real container creation.
-  await chmod(overlay, 0o644);
-  try {
-    await writeFile(overlay, '- id: webserver\n  config: [\n', 'utf8');
-  } finally {
-    await chmod(overlay, 0o444);
-  }
-  const after = await stat(overlay);
-  expect(after.ino).toBe(before.ino);
-  expect(after.dev).toBe(before.dev);
-  expect(after.mode & 0o777).toBe(0o444);
-}
 
 async function assertAuthenticatedReadiness(
   container: Record<string, unknown>,
@@ -71,23 +34,6 @@ async function assertAuthenticatedReadiness(
   expect(await cookieHttpStatus(Number(binding.HostPort), authority, row.dsh_cookie)).toBe(200);
   for (const secret of [row.dsh_cookie, row.dsh_cookie.slice(row.dsh_cookie.indexOf('=') + 1)])
     expect(diagnostic.includes(secret)).toBe(false);
-}
-
-function assertFailedStartupLogs(row: Record<string, unknown>, actualOutput: string): void {
-  expect(row.status).toBe('error');
-  expect(row.dsh_cookie === null).toBe(true);
-  if (typeof row.last_error !== 'string') throw new Error('Missing startup failure diagnostic');
-  const actualLines = actualOutput.split(/\r?\n/).map((line) =>
-    Array.from(line)
-      .filter((character) => {
-        const code = character.charCodeAt(0);
-        return (code >= 32 && code !== 127) || [9, 10, 13].includes(code);
-      })
-      .join(''),
-  );
-  const retained = row.last_error.split('\n').slice(1);
-  expect(retained.some((line) => line.length > 0 && actualLines.includes(line))).toBe(true);
-  expect(retained.every((line) => !line.startsWith('Startup logs unavailable:'))).toBe(true);
 }
 
 async function readinessScenario(
