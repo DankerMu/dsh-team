@@ -803,7 +803,7 @@ Minimal mergeable slice: 11.1（路由划分和未登录回应，约 120 行，�
 执行DAG补正：12.1还依赖15.1（#77）的真实模型配置存储和16.1–16.2（#83）的发行版权限映射；原issue漏了这两条边，已补正。按#67→#77→#78→#83先完成既有前置，再恢复#56及后续原顺序，不缩减12.1真实启动验收。依据：设计决定2/13、#29边界；记录见 https://github.com/DankerMu/dsh-team/issues/56#issuecomment-6093227834 。
 
 - [x] 12.1 把网关接到编排器：上游地址、端口和 DSH cookie 取自 `instances` 表；提供 `POST /_platform/api/instance/start`（幂等，返回当前状态）和 `GET /_platform/api/instance`（状态和原因）。启动只有这一个入口。验证：`pnpm test:docker`——注册并登录后调用启动接口，轮询状态到就绪，随后首页请求得到 DSH 的界面；实例运行中时首页请求直接得到 DSH 的界面；对已在运行的实例再调启动接口不产生第二个容器；`pnpm contract:check` 通过（规格“登录后按需启动”的“首次登录”“实例已在运行”场景）。
-- [ ] 12.2 新实例可直接使用：按第 3 组的结论。验证：`pnpm test:docker`——新用户首次进入，不经任何选择即可创建 Session；界面语言为中文；没有公告（规格“新实例可以直接使用”）。
+- [x] 12.2 新实例可直接使用：按第 3 组的结论。验证：`pnpm test:docker`——新用户首次进入，不经任何选择即可创建 Session；界面语言为中文；没有公告（规格“新实例可以直接使用”）。
 - [ ] 12.3 活动记录：网关按用户维护活动连接数和最后活动时间，写回 `instances` 表（最多每分钟一次）。验证：集成测试——有长连接时活动连接数为 1，断开后为 0 且最后活动时间更新。
 - [ ] 12.4 空闲回收：每分钟检查一次，按第 2 组结论的信号判断是否有运行中的任务；没有连接、没有任务且持续达到配置分钟数才停止，停止原因为“空闲”；空闲分钟数每次检查时从 `settings` 读取。验证：用可控时钟的 `pnpm test:docker` 覆盖规格“空闲后停止”的四个场景（规格若已按 2.3 改写，则覆盖改写后的场景）。
 - [ ] 12.5 回收后恢复：验证：`pnpm test:docker`——实例被空闲回收后，平台会话仍有效的用户不重新登录，直接请求首页被重定向到等待页，调用启动接口后就绪，之前的 Session 和工作目录里的文件都在（规格“平台会话有效而实例已停止”和“停止后再启动”场景）。
@@ -824,6 +824,21 @@ Minimal mergeable slice: 12.1（网关接编排器、启动接口和状态接口
 - Non-goals: tasks12.2–12.6 acceptance, waiting-page UI, idle/activity scheduling, real model requests, new dependencies/schema/retry behavior. Implement the statuses required by this API, without claiming later UI/end-to-end scenarios done.
 
 验证记录（#56）：真实TCP注册201/登录200后新接口均404的语义RED已记录；实现后本地 `pnpm check` 1430unit/777integration、逐文件覆盖/类型/契约/Knip通过，重复率2.86%。真实giap-vps source及dist main分别注册/登录两个用户，显式并发POST→实际DSH认证就绪→网关HTML→重复相同容器通过；GET不启动、伪造标识不修改兄弟、响应/日志无凭据、缺Docker时两个入口均非零退出且不提供health。根dev:bg/status/smoke/stop与e2e实际通过，DB迁移/清理断言保留。永久instance.docker单例通过；其原错误的JSON请求集合统计logs断言已删除，真实Unix held-readiness集成仍证明只建立一次就绪工作，未降低单飞验收。三次普通check修正后用户授权一轮：移除无消费者的InstanceState导出；诊断确认Node24.13.1 watch模式对可选缺失.env报ENOENT，单列#174，验证改用既有dev-server同款非watch真实main，不改生产逻辑。验证器网络标签清理使用实际Docker `.Labels`；源码/构建完整路径与清理恢复通过。冻结head完整Docker、交叉审查、CI仍为合并前门禁；不声称任务12.2–12.6或真实模型完成。
+
+### Issue #57 risk/evidence map (task12.2 only)
+
+- User-approved scope expansion: image workspace seed plus canonical browser/Docker regression and docs; keep task12.2 and every original acceptance criterion, no DSH source edits.
+- Public API / CLI / script entry; Config / project setup — selected: real register/login/start/poll then platform-cookie-only browser gateway. Exact public Origin and non-loopback hostname; preserve #56 API and existing probe callers.
+- File IO / path safety / overwrite; Schema / columns / units / field names — selected: release-v2 workspace registry with one `/data/work` record and empty Session ownership; fresh Docker copy-up, reused-volume sentinel preservation and two-user isolation.
+- Auth / permissions / secrets; Concurrency / shared state / ordering — selected: real platform session, server-only DSH credential, workspace exists before untouched-browser Session creation, refresh reuses current Session, no browser-state/API preinitialization.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: bounded existing Docker/Chrome lifecycle, owned unique resources and independent cleanup after semantic failure/success; no unbounded discovery or production cleanup.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: actual pinned DSH, existing image/profile-seed/managed composition consumers and canonical browser oracle retained; no dependency or migration.
+- Documentation / migration notes — selected: record no migration/overwrite of existing volumes, authorized scope, real screenshots/zero console errors, exact-head runtime and critical-path human-review requirement.
+- Required evidence: permanent browser test RED before seed; GREEN for first entry and reload, browser-created Session identity plus backend cwd `/data/work`, initial empty ownership, Chinese/no notice/editor type-clear, no model prompt. Fresh second-user isolation and reused-volume preservation; `pnpm check`, strict OpenSpec and final `pnpm test:docker` on giap-vps.
+- Diagnostic already observed: canonical base `eee59c0` first/reload show choice required and empty Session list (exit1); changing only a disposable image workspace seed passes first/reload with one `/data/work` Session (exit0). `.run/issue57` holds logs/screenshots; diagnostic copy is not production delivery.
+- Non-goals: task12.3–12.6, waiting UI, provider execution, existing-volume migration/repair, new runtime initializer, changes to permission policy or DSH source.
+
+验证记录（#57）：项目方批准补齐镜像工作区种子。永久真实网关浏览器用例先因需要选择工作区RED，交付镜像种子后GREEN；两名新员工的首入/刷新均中文、无公告、可输入，无模型请求，实际浏览器创建回执与后端Session ID/cwd一致。初始Session索引为空；同卷重建保留工作区和Session标题、成员关系、原ID及员工文件字节，兄弟状态不变。`pnpm check`1430unit/781integration通过，重复率2.84%；审查提交`cf433954c286c0d15d2a72e9382c717a4cf8496d`完整Docker26/26、16files、223.38s通过，三席审查无阻塞发现。首次整套运行被父级传输的AppleDouble旁车误识别为测试文件，删除仅该归属元数据后重跑通过，未改发现规则。一次早期app-ready超时尚无确诊根因，后续导航对照和永久/整套运行通过；不以重试或延长超时处理。既有卷不迁移，真实模型及后续任务仍未声称完成。最终head CI与Docker状态仍是合并门禁；关键路径人工白盒按用户要求后置。
 
 ## 13. 平台前端基线和账号页面（任务包 1.4、1.9 的界面部分）
 

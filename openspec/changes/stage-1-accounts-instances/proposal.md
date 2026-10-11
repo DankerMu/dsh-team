@@ -440,3 +440,12 @@
 - Selected risk packs: API/schema, config, auth/secrets, persistence/ordering, file IO, resource lifetime, error/rollback, compatibility, packaging and docs; mapped in tasks.md.
 - Evidence floor: route-level semantic RED; real register/login/start/poll/DSH homepage/repeat-start Docker; unauthenticated/cross-user/credential controls; reconcile-before-listen and drain-before-DB-close; source/dist smoke, full checks, strict OpenSpec, reviewed-head full Docker and CI.
 - No waiting-page implementation, idle/activity scheduler, provider request, new persistence schema, alternative model authority or fake production startup. #57–#61 retain their own acceptance.
+
+## Issue #57 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task12.2 only.
+- User-approved boundary: extend gateway/orchestrator first-use acceptance to `images/dsh-user` workspace seed, shared browser/Docker evidence and corresponding docs. No DSH-source modification or reduced acceptance.
+- Blast radius: fresh state-volume initialization and first browser Session; existing workspace/Session data must not be replaced.
+- Selected risk packs: all eleven, mapped in tasks.md; no new dependency, platform API, runtime initializer or storage migration.
+- Evidence floor: observed fresh-image semantic RED and owned-image seed-only GREEN; permanent authenticated gateway browser regression, fresh/reused volume preservation, full checks, strict OpenSpec, exact-head Docker and CI.
+- Preserve #56 lifecycle/credential boundaries, profile-seed contents, managed Chinese/no-notice composition and current permission/model settings. No real provider requests, wait UI or tasks12.3–12.6 behavior.

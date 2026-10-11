@@ -27,7 +27,11 @@ RUN installed="$(dsh --version)" \
 
 # Initialize the release-owned Web profile without booting Web or copying user state.
 RUN dsh --profile web --dump-default-config >/dev/null \
-  && mkdir -p "${DSH_HOME}/profiles/web/node_modules/@dsh-team/zh-locale"
+  && mkdir -p "${DSH_HOME}/profiles/web/node_modules/@dsh-team/zh-locale" "${DSH_HOME}/storages"
+
+# Docker copy-up initializes only empty home volumes; this registry remains employee-writable.
+# The fixed workspace identity is volume-local and carries no Session or credential state.
+COPY --chown=dsh:dsh --chmod=0644 workspace.json /data/home/storages/workspace.json
 
 # The named context contains only canonical plugin sources, not the repository root.
 # Delivery does not activate the plugin; later managed overlays own composition policy.
