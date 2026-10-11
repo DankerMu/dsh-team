@@ -971,7 +971,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - [x] 14.1 管理员鉴权：`/_platform/api/admin/` 下的全部接口要求管理员角色。验证：集成测试——未登录 401、员工 403、管理员 200（规格“只有管理员能进后台”）。
 - [x] 14.2 账号列表接口：邮箱、角色、状态、创建时间；按邮箱搜索，分页。验证：集成测试——回应里没有密码哈希、平台会话、DSH cookie；搜索和分页结果正确，无匹配时返回空列表（规格“账号列表”）。
 - [x] 14.3 实例列表接口：每个用户实例的状态（未创建、已停止、启动中、运行中、出错）、最近启动时间、最近活动时间、最近一次错误。验证：集成测试——五种状态各有一行且字段正确；回应里没有 DSH cookie（规格“实例状态与操作”）。
-- [ ] 14.4 禁用和启用：禁用按“标记禁用、删除平台会话、销毁全部连接、停止实例（原因“禁用”）”的顺序在一次操作里完成；管理员不能禁用自己；写审计。验证：`pnpm test:docker`——被禁用用户的长连接在 5 秒内断开、实例停止、再登录被拒；启用后能登录且数据还在；审计里有禁用、启用和原因为“禁用”的实例停止（规格“禁用和启用账号”“禁用账号立即断开”）。
+- [x] 14.4 禁用和启用：禁用按“标记禁用、删除平台会话、销毁全部连接、停止实例（原因“禁用”）”的顺序在一次操作里完成；管理员不能禁用自己；写审计。验证：`pnpm test:docker`——被禁用用户的长连接在 5 秒内断开、实例停止、再登录被拒；启用后能登录且数据还在；审计里有禁用、启用和原因为“禁用”的实例停止（规格“禁用和启用账号”“禁用账号立即断开”）。
 - [ ] 14.5 重置密码：管理员设置新密码，删除该用户的全部平台会话；写审计（不含密码）。验证：集成测试——旧密码不能登录，新密码能；该用户已有的平台会话失效；5 位新密码被拒绝且原密码不变（规格“重置密码”）。
 - [ ] 14.6 重启实例：指定一个（运行中、已停止或出错的都可以），或全部运行中的；停止原因为“管理员”；写审计（重启实例）。验证：`pnpm test:docker`——重启运行中的实例后容器的启动时间更新，Session 和文件还在；对出错的实例执行重启后它被启动；审计里有该事件（规格“管理员重启实例”的两个场景）。
 - [ ] 14.7 重置实例配置接口：停止实例，调用 9.11 的恢复函数，写审计（重置实例配置）。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写成无法解析的内容使实例启动失败，并在工作目录放一个文件；经接口重置后实例能启动，工作目录里的文件和已有的 Session 都还在；审计里有该事件（规格“重置实例配置”）。
@@ -1002,6 +1002,19 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - Documentation / migration notes — selected: document new read-only endpoint/fields and absence of runtime/secret metadata; no storage migration.
 - Required proof: real endpoint404→401 RED/GREEN; five exact ordered instance rows plus current admin authorization and credential exclusion over realTCP/SQLite; safe500 and no data/audit mutations; generated OpenAPI, source/dist smoke, fullcheck/strictfixture/expandedreview/frozenDocker/CI.
 - 验证记录（#68）：真实TCP401期望先见404RED；check1669unit/824integration、生成OpenAPI与全部既有门禁通过。五用户五态精确行、null/毫秒时间/安全错误、禁用账号保留、同cookie当前角色授权及伪造拒绝、秘密投影排除、用户/实例/审计不变均证明；unit扩展管理员鉴权和safe500矩阵。独立source/dist实际HTTP五态/401403200/提降权/撤销/safe500烟测GREEN，清理完成。冻结review/Docker/CI另附PR。
+
+### Issue #69 risk/evidence map (task14.4 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: authenticated statusPUT, raw input/current actor recheck, self/last-admin protection, sessions revoked and safe fixed responses; realHTTP/current-role/forgery/Origin tests.
+- Concurrency / shared state / ordering — selected: target-scoped asynchronous operation exclusion, canceled startup flight plus original FIFO, no stale running/enable, distinct-user progress and owned close/drain tests.
+- Error handling / rollback / partial outputs — selected: atomic status/session/audit transaction before teardown, durable disable on async failure, ordered disconnect+stop retry, activation only after confirmed cleanup; injected failure and rollback proofs.
+- File IO / path safety / overwrite — selected: existing exact-resource retirement and volume preservation are consumed, not reimplemented; realDocker old/new container identity, same home/work volumes and Session/history/sentinel proof.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: active/disabled raw enum and12-char userId, correct audit reasons, no schema migration or old-session resurrection; existing admin/account/UI/instance APIs preserved.
+- Config / project setup; Release / packaging / dependency compatibility — selected: minimum existing-service/app capability composition and absence503, all affected interface callers/test fixtures migrated, generated OpenAPI, source/dist parity and critical-path review ledger.
+- Resource limits / large input / discovery — selected: exactly one target operation, cancel old readiness rather than inherit60s wait; physically stopped/absent AND connections closed within5000ms on realDocker, no naked timeout race or abandoned work.
+- Documentation / migration notes — selected: explain endpoint, atomic versus asynchronous failure boundary, explicit enable/login/start and truthful deadline/data evidence; never describe session sweep alone as disable completion.
+- Required proof: real endpoint404→401 RED/GREEN; protected mutations/failures/concurrency tests; Docker5s both-halves teardown, disabled login/session denial, enable+newlogin+explicitstart with original files/Session, exact transition/stop audits, sibling preservation and cleanup; fullcheck/strictfixture/source-dist/expandedreview/frozenDocker/CI.
+- 验证记录（#69）：鉴权入口404RED→401GREEN；check1695unit/833integration与80%逐文件覆盖/生成契约通过，重复率2.98%。排队取消用例初始非法cookie在进入屏障前被对账拒绝；复用既有RECONCILE_COOKIE后，观测到取消调用者先拒绝、退休等待原FIFO前驱，且无伪造停止审计。独立source/dist实际HTTP无生命周期能力时的失败关闭与幂等授权通过；真实Docker双会话/物理停止5000ms、禁用拒绝、启用新登录/显式重启、完整对话和卷/文件/兄弟用户保留用例通过。真实DSH运行上下文不是用户输入，Docker挂载数组无序；仅修正用例识别边界，不改生产协议或放宽验收。冻结头全量Docker/expanded review/CI在PR记录。
 
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 

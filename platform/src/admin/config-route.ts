@@ -21,7 +21,7 @@ interface ConfigDescriptor {
   project(settings: Settings): Record<string, unknown>;
   validate?(settings: Settings): void;
 }
-const ERROR_SCHEMA = {
+export const ERROR_SCHEMA = {
   type: 'object',
   required: ['statusCode', 'error', 'message'],
   properties: {

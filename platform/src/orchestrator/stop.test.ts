@@ -368,3 +368,14 @@ it('bounds a silent external Docker transport without discarding retryable ident
   expectIndexPreserved(database, before);
   expect(daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
 });
+
+it('disabled retirement cannot select a newly active account even when the indexed container is unchanged', async () => {
+  const { input, database, daemon } = indexedFixture();
+  const before = database.prepare('SELECT * FROM instances').get();
+  await expect(stopUserContainer({ ...input, reason: 'disabled' })).rejects.toThrow(
+    'User container retirement failed',
+  );
+  expectIndexPreserved(database, before);
+  expect(daemon.requests).toEqual([]);
+  expect(daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
+});

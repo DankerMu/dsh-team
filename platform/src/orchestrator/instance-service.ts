@@ -1,4 +1,5 @@
 import type { PlatformConfig } from '../config.ts';
+import type { InstanceStopReason } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { hasCompleteModelSettings } from '../managed-config/index.ts';
@@ -12,18 +13,20 @@ interface InstanceState {
   readonly status: InstanceStatus;
   readonly reason: Exclude<InstanceStatus, 'running'> | null;
 }
+type InstanceUpstream =
+  | {
+      readonly outcome: 'running';
+      readonly host: string;
+      readonly port: number;
+      readonly cookie: string;
+    }
+  | { readonly outcome: Exclude<InstanceStatus, 'running'> };
 export interface InstanceService {
   readonly reconcile: () => Promise<void>;
   readonly start: (userId: string) => Promise<InstanceState>;
+  readonly stop: (userId: string, reason: InstanceStopReason) => Promise<void>;
   readonly status: (userId: string) => InstanceState;
-  readonly resolveUpstream: (userId: string) =>
-    | {
-        readonly outcome: 'running';
-        readonly host: string;
-        readonly port: number;
-        readonly cookie: string;
-      }
-    | { readonly outcome: Exclude<InstanceStatus, 'running'> };
+  readonly resolveUpstream: (userId: string) => InstanceUpstream;
   readonly recordActivity: (userId: string, lastActivityAt: number) => void;
   readonly flushActivity: (phase?: 'shutdown') => Promise<void>;
   readonly checkIdle: (getActivity: GetUserActivity) => Promise<void>;
@@ -84,6 +87,68 @@ function observedFailure(
   return undefined;
 }
 
+function admitted(
+  userId: string,
+  admission: Promise<InstanceState>,
+  status: InstanceService['status'],
+): Promise<InstanceState> {
+  return admission.then((result) =>
+    result.status === 'full' || result.status === 'unconfigured' ? result : status(userId),
+  );
+}
+
+function recordFailure(
+  select: { get(userId: string): RuntimeRow | undefined },
+  failures: Map<string, FailureIdentity & { pending?: boolean }>,
+  userId: string,
+  readinessIdentity: { containerId: string; startedAt: number | null } | undefined,
+  fallbackIdentity: FailureIdentity,
+  admission: PromiseWithResolvers<InstanceState>,
+): void {
+  try {
+    const row = select.get(userId);
+    if (row?.status === 'error') {
+      admission.resolve(state('error'));
+      return;
+    }
+    const absent = failures.get(userId);
+    if (absent !== undefined && matchesFailure(row, absent)) {
+      absent.pending = false;
+      admission.reject(new Error('Instance operation failed'));
+      return;
+    }
+    if (
+      row?.status !== 'running' &&
+      (readinessIdentity === undefined || matchesReadiness(row, readinessIdentity))
+    )
+      failures.set(userId, {
+        containerId: row?.container_id,
+        startedAt: row?.last_started_at,
+        status: row?.status,
+      });
+  } catch {
+    // Record before releasing the flight, even when catch-time storage cannot be read.
+    if (fallbackIdentity.status !== 'running') failures.set(userId, fallbackIdentity);
+  }
+  admission.reject(new Error('Instance operation failed'));
+}
+
+function resolveRunningUpstream(
+  row: RuntimeRow | undefined,
+  current: InstanceState,
+): InstanceUpstream {
+  if (current.status === 'running' && row?.status === 'running' && complete(row)) {
+    // complete() proves these nullable fields; endpoint and cookie come from one SELECT row.
+    return {
+      outcome: 'running',
+      host: row.upstream_host,
+      port: row.upstream_port,
+      cookie: row.dsh_cookie,
+    };
+  }
+  return { outcome: current.status === 'running' ? 'error' : current.status };
+}
+
 /** Owns one start-through-readiness flight, never another lifecycle queue or capacity ledger. */
 export function createInstanceService({
   client,
@@ -98,7 +163,11 @@ export function createInstanceService({
   const select = database.prepare<[string], RuntimeRow>(
     'SELECT * FROM instances WHERE user_id = ?',
   );
-  const flights = new Map<string, { admission: Promise<InstanceState>; work: Promise<void> }>();
+  const flights = new Map<
+    string,
+    { admission: Promise<InstanceState>; work: Promise<void>; controller: AbortController }
+  >();
+  const stops = new Map<string, Promise<void>>();
   // Exceptional-work receipts only: no credentials, endpoints, capacity or lifecycle-state cache.
   // A running-row receipt can originate only from the owner's verified-absence callback.
   const failures = new Map<string, FailureIdentity & { pending?: boolean }>();
@@ -110,7 +179,7 @@ export function createInstanceService({
     config,
     owner,
     row: (userId) => select.get(userId),
-    hasFlight: (userId) => flights.has(userId),
+    hasFlight: (userId) => flights.has(userId) || stops.has(userId),
     isClosing: () => closing,
   });
 
@@ -134,50 +203,13 @@ export function createInstanceService({
   function status(userId: string): InstanceState {
     return observed(userId, select.get(userId));
   }
-  function admitted(userId: string, admission: Promise<InstanceState>): Promise<InstanceState> {
-    return admission.then((result) =>
-      result.status === 'full' || result.status === 'unconfigured' ? result : status(userId),
-    );
-  }
-  function recordFailure(
-    userId: string,
-    readinessIdentity: { containerId: string; startedAt: number | null } | undefined,
-    fallbackIdentity: FailureIdentity,
-    admission: PromiseWithResolvers<InstanceState>,
-  ): void {
-    try {
-      const row = select.get(userId);
-      if (row?.status === 'error') {
-        admission.resolve(state('error'));
-        return;
-      }
-      const absent = failures.get(userId);
-      if (absent !== undefined && matchesFailure(row, absent)) {
-        absent.pending = false;
-        admission.reject(new Error('Instance operation failed'));
-        return;
-      }
-      if (
-        row?.status !== 'running' &&
-        (readinessIdentity === undefined || matchesReadiness(row, readinessIdentity))
-      )
-        failures.set(userId, {
-          containerId: row?.container_id,
-          startedAt: row?.last_started_at,
-          status: row?.status,
-        });
-    } catch {
-      // Record before releasing the flight, even when catch-time storage cannot be read.
-      if (fallbackIdentity.status !== 'running') failures.set(userId, fallbackIdentity);
-    }
-    admission.reject(new Error('Instance operation failed'));
-  }
   function start(userId: string): Promise<InstanceState> {
-    if (closing) return Promise.reject(new Error('Instance service unavailable'));
+    if (closing || stops.has(userId))
+      return Promise.reject(new Error('Instance service unavailable'));
     // Every explicit start invalidates idle, including reuse, rejected admission and shared flights.
     idleChecks.invalidate(userId);
     const existing = flights.get(userId);
-    if (existing !== undefined) return admitted(userId, existing.admission);
+    if (existing !== undefined) return admitted(userId, existing.admission, status);
     // Snapshot canonical settings for this admission; even running reuse retains model precedence.
     const snapshot = model(database);
     const initial = select.get(userId);
@@ -191,7 +223,11 @@ export function createInstanceService({
       status: initial?.status,
     };
     const admission = Promise.withResolvers<InstanceState>();
-    const flight = { admission: admission.promise, work: Promise.resolve() };
+    const flight = {
+      admission: admission.promise,
+      work: Promise.resolve(),
+      controller: new AbortController(),
+    };
     flights.set(userId, flight);
     flight.work = (async () => {
       let readinessIdentity: { containerId: string; startedAt: number | null } | undefined;
@@ -200,6 +236,7 @@ export function createInstanceService({
           userId,
           config,
           ...snapshot,
+          signal: flight.controller.signal,
           onVerifiedAbsent: (identity) => {
             if (matchesFailure(select.get(userId), identity)) {
               failureIdentity = identity;
@@ -207,6 +244,7 @@ export function createInstanceService({
             }
           },
         });
+        flight.controller.signal.throwIfAborted();
         if (result.outcome === 'running' && failures.get(userId) === previous)
           failures.delete(userId);
         admission.resolve(state(result.outcome));
@@ -225,11 +263,15 @@ export function createInstanceService({
           failureIdentity.startedAt = row?.last_started_at;
           if (row?.container_id !== result.containerId)
             throw new Error('Instance operation failed');
-          await owner.waitForUserContainerReady({ userId, authority: config.authority });
+          await owner.waitForUserContainerReady({
+            userId,
+            authority: config.authority,
+            signal: flight.controller.signal,
+          });
         }
       } catch {
         // Persisted lifecycle errors are ordinary states; unexpected failures remain safe HTTP500.
-        recordFailure(userId, readinessIdentity, failureIdentity, admission);
+        recordFailure(select, failures, userId, readinessIdentity, failureIdentity, admission);
       } finally {
         const absent = failures.get(userId);
         if (absent !== undefined) absent.pending = false;
@@ -240,11 +282,33 @@ export function createInstanceService({
     void flight.work.catch(() => {
       admission.reject(new Error('Instance operation failed'));
     });
-    return admitted(userId, flight.admission);
+    return admitted(userId, flight.admission, status);
   }
 
+  function stop(userId: string, reason: InstanceStopReason): Promise<void> {
+    if (closing) return Promise.reject(new Error('Instance service unavailable'));
+    const existing = stops.get(userId);
+    if (existing !== undefined) return existing;
+    idleChecks.invalidate(userId);
+    const flight = flights.get(userId);
+    flight?.controller.abort();
+    const work = (async () => {
+      if (flight !== undefined) await Promise.allSettled([flight.work]);
+      // Always enqueue: canceled callers can settle before their actual owner tail.
+      await owner.stopUserContainer({ userId, reason, allowMissingInstance: true });
+      failures.delete(userId);
+    })();
+    stops.set(userId, work);
+    void work
+      .finally(() => {
+        if (stops.get(userId) === work) stops.delete(userId);
+      })
+      .catch(() => undefined);
+    return work;
+  }
   return {
     start,
+    stop,
     status,
     checkIdle: idleChecks.checkIdle,
     // Release observations remain valid while close fences lifecycle admission.
@@ -264,17 +328,7 @@ export function createInstanceService({
     },
     resolveUpstream: (userId) => {
       const row = select.get(userId);
-      const current = observed(userId, row);
-      if (current.status === 'running' && row?.status === 'running' && complete(row)) {
-        // complete() proves these nullable fields; endpoint and cookie come from one SELECT row.
-        return {
-          outcome: 'running',
-          host: row.upstream_host,
-          port: row.upstream_port,
-          cookie: row.dsh_cookie,
-        };
-      }
-      return { outcome: current.status === 'running' ? 'error' : current.status };
+      return resolveRunningUpstream(row, observed(userId, row));
     },
     reconcile: () => {
       if (closing) return Promise.reject(new Error('Instance service unavailable'));
@@ -289,6 +343,7 @@ export function createInstanceService({
         await Promise.allSettled([
           idleChecks.close(),
           ...reconciliations,
+          ...stops.values(),
           ...[...flights.values()].map((flight) => flight.work),
         ]);
         await owner.drain();

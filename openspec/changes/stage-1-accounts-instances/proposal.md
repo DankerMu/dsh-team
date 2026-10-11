@@ -529,3 +529,12 @@
 - Preserve shared administrator session/current-role authorization, account/model/runtime routes, persisted instance semantics, credential custody and read-only lifecycle ownership.
 - Selected risk packs: all eleven assessed in tasks.md; no Docker access, instance mutation, schema migration, UI, account operations or new dependency.
 - Evidence floor: real HTTP administrator-instance-list401 tracer RED; five-state exact rows/nullable timestamps/latest error, current authorization and credential exclusion over real SQLite/TCP; safe storage failures, generated OpenAPI, independent source/dist smoke, full checks and frozen-head review/Docker/CI.
+
+## Issue #69 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task14.4 only.
+- Blast radius: account authority/session revocation, live gateway resources, instance lifecycle shutdown and durable audit.
+- Preserve self/last-active-administrator protection, exact current-user/resource identity, all volumes/Session data, existing account/config/UI APIs and the single process-lifetime lifecycle owner.
+- Selected risk packs: all eleven mapped in tasks.md; no new Docker owner, schema migration, UI, restart/reset operations, dependency or relaxed deadline.
+- Minimal necessary composition: expose stop through the existing InstanceService and pass that capability to the admin plugin; its absence is confirmed by source inspection. Cancel its owned startup flight before ordered retirement; do not put Docker code in admin.
+- Evidence floor: real endpoint RED; current-actor/atomic transaction/partial-failure/concurrency tests; real Docker disable closes connections AND physically stops within5s, old sessions/login denied, enable/new login/restart retains files and Session, exact audits, source/dist smoke, full checks and frozen review/Docker/CI.
