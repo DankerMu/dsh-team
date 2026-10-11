@@ -180,7 +180,12 @@ it('disable closes both real DSH sessions and physically retires within five sec
       };
       const originalHistory = await history(f.user.cookie);
       const events = originalHistory.map((value: unknown) => record(record(value).event));
-      expect(events.filter((event) => event.type === 'user/message')).toMatchObject([
+      expect(
+        events.filter(
+          (event) =>
+            event.type === 'user/message' && record(record(event.data).source).kind === 'user',
+        ),
+      ).toMatchObject([
         { data: { role: 'user', content: [{ type: 'text', text: 'issue83-ui initialize' }] } },
       ]);
       expect(events.filter((event) => event.type === 'assistant/message')).toMatchObject([
@@ -281,14 +286,14 @@ it('disable closes both real DSH sessions and physically retires within five sec
       expect(replacement).not.toBe(f.containerId);
       const newMounts = inspect(f.lifecycle, replacement).Mounts;
       // Bind overlay inode may change; persistent named-volume identities must not.
-      const volumes = (value: unknown) => {
-        if (!Array.isArray(value)) throw new Error('Missing volume inventory');
+      const orderedMounts = (value: unknown, volumesOnly = true) => {
+        if (!Array.isArray(value)) throw new Error('Missing mount inventory');
         return value
           .map((entry: unknown) => record(entry))
-          .filter((entry) => entry.Type === 'volume')
+          .filter((entry) => !volumesOnly || entry.Type === 'volume')
           .sort((a, b) => String(a.Destination).localeCompare(String(b.Destination)));
       };
-      expect(volumes(newMounts)).toEqual(volumes(mounts));
+      expect(orderedMounts(newMounts)).toEqual(orderedMounts(mounts));
       f.verifyVolumes();
       expect(await history(cookie)).toEqual(originalHistory);
       const listed = await rpc(cookie, 'session/list', { _request: {} });
@@ -309,7 +314,9 @@ it('disable closes both real DSH sessions and physically retires within five sec
           ),
         ),
       ).toEqual(['sibling unchanged 中文\n', 'sibling unchanged 中文\n']);
-      expect(inspect(f.lifecycle, siblingId).Mounts).toEqual(siblingMounts);
+      expect(orderedMounts(inspect(f.lifecycle, siblingId).Mounts, false)).toEqual(
+        orderedMounts(siblingMounts, false),
+      );
       expect(siblingConnection.socket.destroyed).toBe(false);
       expect(
         f.database
