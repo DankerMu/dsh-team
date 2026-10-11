@@ -15,7 +15,15 @@ import type { ManagedConfigInput, ManagedComposition } from '../managed-config/i
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
-import { containerId, isTerminalInstance, object, resolvedImageId } from './identity.ts';
+import {
+  absentInstanceIdentity,
+  containerId,
+  isTerminalInstance,
+  object,
+  ownedContainer,
+  resolvedImageId,
+} from './identity.ts';
+import type { AbsentInstanceIdentity } from './identity.ts';
 import { requireUnpublished, upstreamHost, upstreamPort, verifiedPlatform } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import {
@@ -42,6 +50,7 @@ export interface StartUserContainerInput {
   readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;
   readonly modelKey?: string | undefined;
   readonly signal?: AbortSignal;
+  readonly onVerifiedAbsent?: (identity: AbsentInstanceIdentity) => void;
 }
 
 export type StartResult =
@@ -57,25 +66,6 @@ export type StartResult =
 const START_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
 const MAX_COMPOSITION_BYTES = 1024 * 1024;
-
-function ownedContainer(
-  value: unknown,
-  name: string,
-  userId: string,
-  imageId: string,
-): Record<string, unknown> {
-  const row = object(value);
-  const config = object(row.Config);
-  if (
-    row.Name !== `/${name}` ||
-    row.Image !== imageId ||
-    object(config.Labels)['dsh-team.user'] !== userId
-  ) {
-    throw new Error('Docker container ownership mismatch');
-  }
-  containerId(row);
-  return row;
-}
 
 async function requireAbsent(client: DockerClient, name: string): Promise<void> {
   try {
@@ -308,6 +298,8 @@ async function reuseCurrentContainer(
   } catch (error) {
     if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
     assertCurrentSnapshot(input, account, instance, signal);
+    const identity = absentInstanceIdentity(instance, id);
+    input.onVerifiedAbsent?.(identity);
     missing();
     return undefined;
   }

@@ -132,9 +132,11 @@ export async function buildApp(
     await instanceService?.close();
     database.close();
   });
-  // Close admission before Fastify waits for existing HTTP requests to finish.
+  // Fence both admissions and destroy owned transports before any unrelated lifecycle drain.
+  // onClose awaits the same service promise before releasing SQLite.
   app.addHook('preClose', async () => {
-    await instanceService?.close();
+    void instanceService?.close();
+    await connections.close();
   });
   return app;
 }

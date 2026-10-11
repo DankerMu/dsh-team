@@ -23,11 +23,22 @@ const startup = Promise.withResolvers<undefined>();
 function closeRuntime(): Promise<void> {
   runtime.stopping = true;
   runtime.shutdown ??= (async () => {
-    // Fence immediately, including a signal during reconciliation or application construction.
-    await runtime.service?.close();
+    // Starting close fences admission synchronously; never wait for lifecycle work before
+    // Fastify's preClose can tear down the gateway's existing connections.
+    const drain = runtime.service?.close();
+    const closingApp = runtime.app?.close();
+    // Observe both promises immediately, even when startup has not yet settled.
+    const settled = Promise.allSettled([drain, closingApp]);
     await startup.promise;
+    const lateResults =
+      closingApp === undefined ? await Promise.allSettled([runtime.app?.close()]) : [];
+    const results = await settled;
+    if (
+      results.some((result) => result.status === 'rejected') ||
+      lateResults.some((result) => result.status === 'rejected')
+    )
+      throw new Error('Platform shutdown failed');
     if (runtime.app === undefined) database.close();
-    else await runtime.app.close();
   })();
   return runtime.shutdown;
 }
@@ -39,7 +50,7 @@ async function listenIfOpen(app: FastifyInstance): Promise<void> {
 }
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => {
+  process.on(signal, () => {
     void closeRuntime().catch(() => {
       runtime.app?.log.error('Platform shutdown failed');
       process.exitCode = 1;

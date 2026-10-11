@@ -12,6 +12,8 @@ import {
   startupUnixOwnerFixture,
 } from './container-start-fixture.ts';
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
+import { seedReconciliation } from './container-reconcile-fixture.ts';
+import { observeHttp, withUpstream } from './gateway-http-fixture.ts';
 
 async function fixture() {
   const f = await startupUnixOwnerFixture({
@@ -333,6 +335,144 @@ it.each([false, true])(
       });
       expect(f.lines.join('')).not.toMatch(/readiness-private-key|private-write-diagnostic/);
     } finally {
+      await f.close();
+    }
+  },
+);
+
+it.each(['missing', 'replaced'] as const)(
+  'fences the verified absent running identity during failed image work and preserves %s controls',
+  async (transition) => {
+    const f = await fixture();
+    const image = startupBarrier();
+    let oldHits = 0;
+    try {
+      await withUpstream(
+        (_request, response) => {
+          oldHits += 1;
+          response.end('old');
+        },
+        async (old) => {
+          await withUpstream(
+            (_request, response) => response.end('current'),
+            async (current) => {
+              const user = await registerInstanceUser(
+                f.base,
+                f.config.publicUrl,
+                'absence@example.test',
+              );
+              const sibling = await registerInstanceUser(
+                f.base,
+                f.config.publicUrl,
+                'unaffected@example.test',
+              );
+              writeSettings(f.database, {
+                modelBaseUrl: 'http://model.invalid/v1',
+                modelApiKey: 'fixture-model-key',
+                models: [{ name: 'office-model' }],
+                defaultModel: 'office-model',
+              });
+              function seed(userId: string, id: string, port: number, startedAt: number) {
+                seedReconciliation(f.database, f.daemon, userId, id);
+                f.database
+                  .prepare(
+                    'UPDATE instances SET upstream_port=?, last_started_at=? WHERE user_id=?',
+                  )
+                  .run(port, startedAt, userId);
+                const container = f.daemon.containers.get(id);
+                if (container === undefined) throw new Error('Missing seeded container');
+                container.NetworkSettings.Ports = {
+                  '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }],
+                };
+              }
+              seed(user.id, START_CONTAINER, old.port, 101);
+              seed(sibling.id, 'd'.repeat(64), current.port, 202);
+              const running = { status: 'running', reason: null };
+              const gateway = (cookie: string) =>
+                fetch(`${f.base}/probe`, {
+                  headers: { cookie, accept: 'application/json' },
+                });
+              expect(await f.service.start(user.id)).toEqual(running);
+              expect(await (await gateway(user.cookie)).text()).toBe('old');
+              // A generic inspect failure is not verified absence of a healthy running identity.
+              f.replyWith((request, reply) =>
+                request.path === `/containers/${START_CONTAINER}/json`
+                  ? { status: 500, document: {} }
+                  : reply,
+              );
+              await expect(f.service.start(user.id)).rejects.toThrow('Instance operation failed');
+              expect(f.service.status(user.id)).toEqual(running);
+              expect(await (await gateway(user.cookie)).text()).toBe('old');
+              f.daemon.removeContainer(START_CONTAINER);
+              const imagePath = `/images/${encodeURIComponent(f.config.userImage)}/json`;
+              f.replyWith((request, reply) =>
+                request.path === imagePath ? { status: 500, document: {} } : reply,
+              );
+              f.hold((method, path) =>
+                method === 'GET' && path === imagePath ? image.hold() : undefined,
+              );
+              const failed = f.service.start(user.id).then(
+                () => false,
+                (error: unknown) =>
+                  error instanceof Error && error.message === 'Instance operation failed',
+              );
+              await observeHttp(image.reached);
+              const hitsAtAbsence = oldHits;
+              expect(f.service.status(user.id)).toEqual({ status: 'starting', reason: 'starting' });
+              expect(f.service.resolveUpstream(user.id).outcome).toBe('starting');
+              expect((await gateway(user.cookie)).status).toBe(503);
+              expect(oldHits).toBe(hitsAtAbsence);
+              expect(f.service.status(sibling.id)).toEqual(running);
+              expect(await (await gateway(sibling.cookie)).text()).toBe('current');
+
+              if (transition === 'replaced') {
+                const network = [...f.daemon.networks.values()].find(
+                  (candidate) => candidate.Name === `dsh-team-net-${user.id}`,
+                );
+                if (network === undefined) throw new Error('Missing old bridge');
+                f.daemon.networks.delete(network.Id);
+                f.database.prepare('DELETE FROM instances WHERE user_id=?').run(user.id);
+                seed(user.id, 'f'.repeat(64), current.port, 303);
+                expect(f.service.status(user.id)).toEqual(running);
+                expect(await (await gateway(user.cookie)).text()).toBe('current');
+              }
+              image.release();
+              expect(await observeHttp(failed)).toBe(true);
+
+              if (transition === 'missing') {
+                expect(() => f.service.status(user.id)).toThrow('Instance operation failed');
+                expect(() => f.service.resolveUpstream(user.id)).toThrow(
+                  'Instance operation failed',
+                );
+                expect((await gateway(user.cookie)).status).toBe(502);
+                const status = await fetch(`${f.base}/_platform/api/instance`, {
+                  headers: { cookie: user.cookie },
+                });
+                expect(status.status).toBe(500);
+                // Retrying before any new verified absence must not resurrect the old route.
+                f.replyWith((request, reply) =>
+                  request.path === `/containers/${START_CONTAINER}/json`
+                    ? { status: 500, document: {} }
+                    : reply,
+                );
+                await expect(f.service.start(user.id)).rejects.toThrow('Instance operation failed');
+                expect(() => f.service.resolveUpstream(user.id)).toThrow(
+                  'Instance operation failed',
+                );
+                expect((await gateway(user.cookie)).status).toBe(502);
+              } else {
+                expect(f.service.status(user.id)).toEqual(running);
+                expect(await (await gateway(user.cookie)).text()).toBe('current');
+              }
+              expect(oldHits).toBe(hitsAtAbsence);
+              expect(f.service.status(sibling.id)).toEqual(running);
+              expect(await (await gateway(sibling.cookie)).text()).toBe('current');
+            },
+          );
+        },
+      );
+    } finally {
+      image.release();
       await f.close();
     }
   },
