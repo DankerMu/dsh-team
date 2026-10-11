@@ -555,3 +555,9 @@
 - Selected risk packs: all eleven mapped in tasks.md; no new Docker owner, scheduler, polling mechanism, model/settings endpoint, UI or storage migration.
 - Evidence floor: protected endpoint tracer RED, restart/disable exclusion and actor/failure/bulk-selection proofs; real adminHTTP→Docker changedStartedAt→ready with exact files/Session retained, stopped/error recovery, admin stop reason/restart audit; source/dist smoke, full checks and frozen review/Docker/CI.
 - Diagnosed minimum companion change: expose readonly existing flight membership as InstanceService.hasStartupWork; cached error-reporting status cannot serve as recovery eligibility, while persisted status alone misses pre-persistence startup. Preserve starting409 and retry recovery with discriminating tests; no lifecycle algorithm change.
+
+## Issue #73 fixture
+
+- Feature, expanded fixture (retain upstream classification); task14.8 only, dependencies #67/#15 closed. Add the administrator read-only audit HTTP boundary over existing `queryAuditEvents`; no new SQL/filter implementation or audit mutation.
+- Preserve current admin/session authorization, exact actor-or-target email filtering, inclusive millisecond bounds, stable descending time/ID order and existing audit-writer privacy. Publish only closed audit metadata/details, never employee files/Session/conversation or credentials.
+- Selected risk packs and evidence are mapped in tasks.md. Required proof: endpoint401 tracer RED, real storage/TCP authorization/filter/pagination/privacy/mutation-rejection matrix, generated contract, source/dist smoke, full checks, bounded expanded review and frozen Docker/CI regression gates. No new Docker behavior or UI.
