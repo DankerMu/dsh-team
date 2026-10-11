@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { createGatewayConnections } from './connections.ts';
 
 const ALICE = { userId: 'alice', token: 'alice-session' };
@@ -165,4 +165,103 @@ it('revalidates shared session ownership once and releases reassigned and finish
   });
   completed.destroy();
   await once(completed, 'close');
+});
+
+it('counts only admitted ownership and releases retracked resources once with monotonic activity', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100);
+  const connections = createGatewayConnections();
+  const isolated = createGatewayConnections();
+  const resource = new PassThrough();
+  const anonymous = new PassThrough();
+  const refused = new PassThrough();
+  try {
+    connections.track(undefined, anonymous);
+    expect(connections.getUserActivity('unknown')).toEqual({ liveCount: 0, lastActivityAt: null });
+    const old = connections.track(ALICE, resource);
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 1, lastActivityAt: 100 });
+    vi.setSystemTime(110);
+    const replacement = connections.track(ALICE, resource);
+    old();
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 1, lastActivityAt: 110 });
+    vi.setSystemTime(120);
+    connections.track(BOB, resource);
+    replacement();
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 0, lastActivityAt: 120 });
+    expect(connections.getUserActivity('bob')).toEqual({ liveCount: 1, lastActivityAt: 120 });
+    expect(isolated.getUserActivity('bob')).toEqual({ liveCount: 0, lastActivityAt: null });
+    vi.setSystemTime(90);
+    await connections.disconnectUser('bob');
+    expect(connections.getUserActivity('bob')).toEqual({ liveCount: 0, lastActivityAt: 120 });
+    vi.setSystemTime(130);
+    replacement();
+    old();
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 0, lastActivityAt: 120 });
+    refused.destroy();
+    await once(refused, 'close');
+    connections.track({ userId: 'refused', token: 'refused-session' }, refused);
+    expect(connections.getUserActivity('refused')).toEqual({ liveCount: 0, lastActivityAt: null });
+    await connections.close();
+    expect(connections.getUserActivity('unknown')).toEqual({ liveCount: 0, lastActivityAt: null });
+  } finally {
+    await connections.close();
+    await isolated.close();
+    vi.useRealTimers();
+  }
+});
+
+it('records HTTP finish once without counting its idle transport or inventing later activity', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(200);
+  const connections = createGatewayConnections();
+  const response = new PassThrough();
+  try {
+    const release = connections.track(ALICE, response, true);
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 1, lastActivityAt: 200 });
+    vi.setSystemTime(210);
+    const finished = once(response, 'finish');
+    response.end('complete');
+    await finished;
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 0, lastActivityAt: 210 });
+    expect(response.destroyed).toBe(false);
+    vi.setSystemTime(220);
+    release();
+    const closed = once(response, 'close');
+    response.destroy();
+    await closed;
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 0, lastActivityAt: 210 });
+  } finally {
+    response.destroy();
+    await connections.close();
+    vi.useRealTimers();
+  }
+});
+
+it('does not renew another user when a sibling connection is admitted or released', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(100);
+  const connections = createGatewayConnections();
+  const alice = new PassThrough();
+  const bob = new PassThrough();
+  try {
+    connections.track(ALICE, alice);
+    vi.setSystemTime(110);
+    connections.track(BOB, bob);
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 1, lastActivityAt: 100 });
+    expect(connections.getUserActivity('bob')).toEqual({ liveCount: 1, lastActivityAt: 110 });
+    vi.setSystemTime(120);
+    await connections.disconnectUser('bob');
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 1, lastActivityAt: 100 });
+    expect(connections.getUserActivity('bob')).toEqual({ liveCount: 0, lastActivityAt: 120 });
+    vi.setSystemTime(130);
+    await connections.disconnectUser('alice');
+    expect(connections.getUserActivity('alice')).toEqual({ liveCount: 0, lastActivityAt: 130 });
+    expect(connections.getUserActivity('bob')).toEqual({ liveCount: 0, lastActivityAt: 120 });
+  } finally {
+    try {
+      await connections.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  }
 });

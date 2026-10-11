@@ -17,6 +17,7 @@ import {
   gatewayRoutes,
   instanceRoutes,
   type GatewayUpstreamResolver,
+  type GatewayActivity,
 } from './gateway/index.ts';
 import type { InstanceService } from './orchestrator/index.ts';
 
@@ -55,6 +56,7 @@ export interface LogDestination {
 declare module 'fastify' {
   interface FastifyInstance {
     disconnectUserConnections: (userId: string) => Promise<void>;
+    getUserActivity: (userId: string) => GatewayActivity;
   }
 }
 
@@ -73,9 +75,10 @@ export async function buildApp(
       ...(logDestination === undefined ? {} : { stream: logDestination }),
     },
   });
-  const connections = createGatewayConnections();
+  const connections = createGatewayConnections(instanceService?.recordActivity);
   const gatewayResolver = instanceService?.resolveUpstream ?? resolveUpstream;
   app.decorate('disconnectUserConnections', connections.disconnectUser);
+  app.decorate('getUserActivity', connections.getUserActivity);
 
   try {
     installRequestGuard(app, config.publicUrl);
@@ -128,13 +131,28 @@ export async function buildApp(
     throw error;
   }
 
+  async function flushActivity(phase?: 'shutdown'): Promise<void> {
+    try {
+      await instanceService?.flushActivity(phase);
+    } catch {
+      app.log.error('Gateway activity persistence failure');
+    }
+  }
+  const activityTimer =
+    instanceService === undefined ? undefined : setInterval(() => void flushActivity(), 1_000);
+  activityTimer?.unref();
+
   app.addHook('onClose', async () => {
+    // Transport release is complete and the listener is closed before draining
+    // activity queued behind lifecycle work; SQLite must outlive both drains.
+    await flushActivity('shutdown');
     await instanceService?.close();
     database.close();
   });
   // Fence both admissions and destroy owned transports before any unrelated lifecycle drain.
-  // onClose awaits the same service promise before releasing SQLite.
+  // onClose awaits activity and the same service promise before releasing SQLite.
   app.addHook('preClose', async () => {
+    clearInterval(activityTimer);
     void instanceService?.close();
     await connections.close();
   });

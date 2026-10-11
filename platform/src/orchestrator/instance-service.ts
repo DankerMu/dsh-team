@@ -22,6 +22,8 @@ export interface InstanceService {
         readonly cookie: string;
       }
     | { readonly outcome: Exclude<InstanceStatus, 'running'> };
+  readonly recordActivity: (userId: string, lastActivityAt: number) => void;
+  readonly flushActivity: (phase?: 'shutdown') => Promise<void>;
   readonly close: () => Promise<void>;
 }
 interface RuntimeRow {
@@ -243,6 +245,17 @@ export function createInstanceService({
   return {
     start,
     status,
+    // Release observations remain valid while close fences lifecycle admission.
+    // App shutdown awaits its final flush before closing SQLite.
+    recordActivity: owner.recordActivity,
+    flushActivity: async (phase) => {
+      try {
+        await owner.flushActivity(phase);
+      } finally {
+        // A previously resolved close promise cannot cover later release submissions.
+        if (phase === 'shutdown') await owner.drain();
+      }
+    },
     resolveUpstream: (userId) => {
       const row = select.get(userId);
       const current = observed(userId, row);

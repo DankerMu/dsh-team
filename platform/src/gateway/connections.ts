@@ -8,11 +8,26 @@ interface Session {
 }
 const RELEASED = () => undefined;
 
-export function createGatewayConnections() {
+export interface GatewayActivity {
+  readonly liveCount: number;
+  readonly lastActivityAt: number | null;
+}
+
+export function createGatewayConnections(
+  onActivity?: (userId: string, lastActivityAt: number) => void,
+) {
   const users = new Map<string | undefined, Set<Connection>>();
   const sessions = new Map<string, { userId: string; resources: Set<Connection> }>();
   const releases = new WeakMap<Connection, () => void>();
+  const activity = new Map<string, number>();
   let closing = false;
+
+  function observeActivity(userId: string | undefined): void {
+    if (userId === undefined) return;
+    const now = Math.max(Date.now(), activity.get(userId) ?? -Infinity);
+    activity.set(userId, now);
+    onActivity?.(userId, now);
+  }
 
   function track(
     session: Session | undefined,
@@ -38,6 +53,7 @@ export function createGatewayConnections() {
     }
     const owned = group;
     owned.add(connection);
+    observeActivity(userId);
     let active = true;
     const release = () => {
       if (!active) return;
@@ -54,6 +70,7 @@ export function createGatewayConnections() {
         sessions.get(session.token) === sessionGroup
       )
         sessions.delete(session.token);
+      observeActivity(userId);
     };
     releases.set(connection, release);
     connection.once('close', release);
@@ -78,6 +95,10 @@ export function createGatewayConnections() {
 
   return {
     track,
+    getUserActivity: (userId: string): GatewayActivity => ({
+      liveCount: users.get(userId)?.size ?? 0,
+      lastActivityAt: activity.get(userId) ?? null,
+    }),
     isClosing: (): boolean => closing,
     disconnectUser: (userId: string): Promise<void> => destroy(users.get(userId)),
     revalidateSessions(isValid: (userId: string, token: string) => boolean): void {

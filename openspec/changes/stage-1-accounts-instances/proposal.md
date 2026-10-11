@@ -449,3 +449,11 @@
 - Selected risk packs: all eleven, mapped in tasks.md; no new dependency, platform API, runtime initializer or storage migration.
 - Evidence floor: observed fresh-image semantic RED and owned-image seed-only GREEN; permanent authenticated gateway browser regression, fresh/reused volume preservation, full checks, strict OpenSpec, exact-head Docker and CI.
 - Preserve #56 lifecycle/credential boundaries, profile-seed contents, managed Chinese/no-notice composition and current permission/model settings. No real provider requests, wait UI or tasks12.3–12.6 behavior.
+
+## Issue #58 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task12.3 only.
+- Blast radius: live per-user gateway ownership, instance last-activity persistence and lifecycle/SQLite shutdown ordering.
+- Preserve canonical connection/session registry and transport teardown, current identity admission, existing whole-row lifecycle fences, startup/reconciliation FIFO and secret custody.
+- Selected risk packs: all eleven mapped in tasks.md; no schema migration, dependency, public HTTP endpoint, idle reaper or second lifecycle queue.
+- Evidence floor: real-TCP activity count1→0 and last-activity transition; controlled minute-throttle boundaries and dirty/in-flight coalescing; serialized persistence during held lifecycle work; shutdown-before-DB-close, full checks, actual smoke, strict OpenSpec, exact-head Docker and CI.
