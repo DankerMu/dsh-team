@@ -597,3 +597,42 @@ it('completion of an older start cannot unlock a newer blocked same-user operati
   expect(await third).toEqual({ outcome: 'unconfigured' });
   expect(await owner.startUserContainer(input)).toEqual(STARTED);
 });
+
+it('drains actual queue tails after a waiting caller cancels without releasing pending capacity', async () => {
+  const { owner, input, daemon, database, beforeRequest } = await fixture();
+  const gate = barrier();
+  writeSettings(database, { maxRunningInstances: 1 });
+  beforeRequest(async (method, path) => {
+    if (method === 'GET' && path.startsWith('/images/')) await gate.hold();
+    return undefined;
+  });
+  daemon.overrides.set('GET /images/dsh-team-user%3Alocal/json', { status: 500 });
+  const first = owner.startUserContainer(input);
+  const rejected = expect(first).rejects.toThrow('Container startup failed');
+  try {
+    await gate.reached;
+    expect(owner.hasCapacity(OTHER_USER)).toBe(false);
+    const controller = new AbortController();
+    const queued = owner.startUserContainer({ ...input, signal: controller.signal });
+    const canceled = expect(queued).rejects.toThrow('cancellation');
+    controller.abort();
+    await canceled;
+    let drained = false;
+    const draining = owner.drain().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    expect(owner.hasCapacity(OTHER_USER)).toBe(false);
+    expect(database.open).toBe(true);
+    gate.release();
+    await rejected;
+    await draining;
+    expect(owner.hasCapacity(OTHER_USER)).toBe(true);
+    expect(database.prepare('SELECT * FROM instances').all()).toEqual([]);
+  } finally {
+    gate.release();
+    await Promise.allSettled([first]);
+    await owner.drain();
+  }
+});

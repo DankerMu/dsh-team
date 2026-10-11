@@ -431,3 +431,12 @@
 - Selected risk packs: all eleven, mapped in tasks.md; no DSH source modification or reduced acceptance.
 - Evidence floor: semantic RED; complete plugin and caller cutover; actual released DSH three-default/restart/persistence behavior, native/PTC/delegated tool side effects and approval, deterministic Auto protocol/failure/cancel paths, real browser screenshots with zero new console errors, missing-plugin startup rejection; full checks, strict OpenSpec, exact-head trusted Docker suite and CI.
 - Boundary: #83 ships real permission behavior, not selectable placeholders. #84/#85 retain separate actual development-model acceptance and any necessary in-scope plugin corrections. No original behavior is deferred out of the Epic.
+
+## Issue #56 fixture
+
+- Issue type: feature; fixture level: expanded (agree with upstream); task12.1 only.
+- Blast radius: authenticated instance admission, gateway credential/endpoint pairing, process startup and database shutdown.
+- Must preserve: canonical lifecycle owner and per-user/capacity fences, current platform-session/Origin policy, trusted managed composition and complete permission gate, all existing gateway streaming/WebSocket behavior.
+- Selected risk packs: API/schema, config, auth/secrets, persistence/ordering, file IO, resource lifetime, error/rollback, compatibility, packaging and docs; mapped in tasks.md.
+- Evidence floor: route-level semantic RED; real register/login/start/poll/DSH homepage/repeat-start Docker; unauthenticated/cross-user/credential controls; reconcile-before-listen and drain-before-DB-close; source/dist smoke, full checks, strict OpenSpec, reviewed-head full Docker and CI.
+- No waiting-page implementation, idle/activity scheduler, provider request, new persistence schema, alternative model authority or fake production startup. #57–#61 retain their own acceptance.

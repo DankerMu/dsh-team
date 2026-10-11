@@ -45,6 +45,10 @@ export PLATFORM_DATA_DIR="$data_dir"
 export PLATFORM_PUBLIC_URL="$base_url"
 export PLATFORM_COOKIE_SECURE=false
 export PLATFORM_TRUSTED_PROXIES=
+export PLATFORM_UPSTREAM_MODE=published-loopback
+# Use the configured real Unix Engine, not a Docker-less main/test resolver.
+node --input-type=module -e \
+  'import {loadConfig} from "./platform/dist/config.js"; import {createDockerClient} from "./platform/dist/orchestrator/index.js"; const c=loadConfig(process.env); await createDockerClient(c.dockerSocketPath).json("GET","/version",undefined,AbortSignal.timeout(10000));'
 node platform/dist/main.js >"$log" 2>&1 &
 server_pid=$!
 

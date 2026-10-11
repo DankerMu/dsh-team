@@ -26,6 +26,9 @@ start() {
     echo "dev server already running (pid $(cat "$pidfile"))"
     return 0
   fi
+  # Production main always reconciles real Docker before listening; fail before recording a PID.
+  node --env-file-if-exists=.env --input-type=module -e \
+    'import {loadConfig} from "./platform/src/config.ts"; import {createDockerClient} from "./platform/src/orchestrator/index.ts"; const c=loadConfig(process.env); await createDockerClient(c.dockerSocketPath).json("GET","/version",undefined,AbortSignal.timeout(10000));'
   # Job control gives the server its own process group, so stop can signal the group.
   set -m
   node --env-file-if-exists=.env platform/src/main.ts >"$logfile" 2>&1 &
