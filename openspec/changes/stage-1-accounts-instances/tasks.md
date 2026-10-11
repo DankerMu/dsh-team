@@ -970,7 +970,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 
 - [x] 14.1 管理员鉴权：`/_platform/api/admin/` 下的全部接口要求管理员角色。验证：集成测试——未登录 401、员工 403、管理员 200（规格“只有管理员能进后台”）。
 - [x] 14.2 账号列表接口：邮箱、角色、状态、创建时间；按邮箱搜索，分页。验证：集成测试——回应里没有密码哈希、平台会话、DSH cookie；搜索和分页结果正确，无匹配时返回空列表（规格“账号列表”）。
-- [ ] 14.3 实例列表接口：每个用户实例的状态（未创建、已停止、启动中、运行中、出错）、最近启动时间、最近活动时间、最近一次错误。验证：集成测试——五种状态各有一行且字段正确；回应里没有 DSH cookie（规格“实例状态与操作”）。
+- [x] 14.3 实例列表接口：每个用户实例的状态（未创建、已停止、启动中、运行中、出错）、最近启动时间、最近活动时间、最近一次错误。验证：集成测试——五种状态各有一行且字段正确；回应里没有 DSH cookie（规格“实例状态与操作”）。
 - [ ] 14.4 禁用和启用：禁用按“标记禁用、删除平台会话、销毁全部连接、停止实例（原因“禁用”）”的顺序在一次操作里完成；管理员不能禁用自己；写审计。验证：`pnpm test:docker`——被禁用用户的长连接在 5 秒内断开、实例停止、再登录被拒；启用后能登录且数据还在；审计里有禁用、启用和原因为“禁用”的实例停止（规格“禁用和启用账号”“禁用账号立即断开”）。
 - [ ] 14.5 重置密码：管理员设置新密码，删除该用户的全部平台会话；写审计（不含密码）。验证：集成测试——旧密码不能登录，新密码能；该用户已有的平台会话失效；5 位新密码被拒绝且原密码不变（规格“重置密码”）。
 - [ ] 14.6 重启实例：指定一个（运行中、已停止或出错的都可以），或全部运行中的；停止原因为“管理员”；写审计（重启实例）。验证：`pnpm test:docker`——重启运行中的实例后容器的启动时间更新，Session 和文件还在；对出错的实例执行重启后它被启动；审计里有该事件（规格“管理员重启实例”的两个场景）。
@@ -990,6 +990,18 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - Schema/compatibility/docs: root app registration and generated response/query contract, established in-memory unit/real-TCP integration split plus explicit platformAGENTS guidance, existing auth/gateway preserved. SemanticRED/GREEN, fullcheck/strictOpenSpec, source/dist smoke, independent review and exact-head21Docker/CI; rule-file human review remains deferred to Epic end.
 
 本地验证（#67）：实际HTTP未登录列表先返回404而非401，接入插件级onRequest后GREEN；完整检查1225单元/751集成、逐文件覆盖、契约生成/检查、构建及anti-drift通过，重复率2.86%。真实TCP验证401/403/200、同一cookie提升角色后即时生效、伪造管理员字段无效、全部账号及带并列时间戳的分页、字面百分号/下划线与SQL片段搜索、空结果和过滤total、秘密字段不出现在序列化输出、读列表不增审计。13项单元覆盖降权/禁用/过期/撤销、非法页码/页大小/offset/搜索长度及安全storage500。源码/dist独立HTTP smoke均通过；只在隔离加载器内移除角色检查的负控因200≠403被拒绝，取消过滤的负控因错误账号/total被拒绝，恢复源码/dist再次GREEN；未改工作树生产文件。首条鉴权RED在实现前，其余回归和负控为补充验证，未冒充逐项test-first。规则文件人工审查仍汇总至Epic结束；精确头review/Docker/CI另行发布。
+
+### Issue #68 risk/evidence map (task14.3 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: new admin instancesGET inherits canonical current-role/session guard; exact safe projection,401/403/200 and excluded credential/endpoint canaries.
+- Schema / columns / units / field names; Legacy compatibility / examples — selected: users LEFT JOIN instances, five statuses including missing "not-created", nullable epoch-ms timestamps and safe latest error; existing account/config/employee routes unchanged and generated contract.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: one coherent ordered SELECT, no stale authorization cache, no mutation/partial-success fallback, sanitized storage500 and repeated current-role reads.
+- File IO / path safety / overwrite — not selected: route reads existing DB handle only; no path input, new file writer, Docker-log fetch or migration.
+- Config / project setup; Release / packaging / dependency compatibility — selected: existing plugin registration/schema generator/source-dist contract and test discovery; no env/dependency/gate changes.
+- Resource limits / large input / discovery — selected: single joined query and deterministic ordering, no per-user Docker/SQL loop; all-user list is requested scope, pagination is a non-goal.
+- Documentation / migration notes — selected: document new read-only endpoint/fields and absence of runtime/secret metadata; no storage migration.
+- Required proof: real endpoint404→401 RED/GREEN; five exact ordered instance rows plus current admin authorization and credential exclusion over realTCP/SQLite; safe500 and no data/audit mutations; generated OpenAPI, source/dist smoke, fullcheck/strictfixture/expandedreview/frozenDocker/CI.
+- 验证记录（#68）：真实TCP401期望先见404RED；check1669unit/824integration、生成OpenAPI与全部既有门禁通过。五用户五态精确行、null/毫秒时间/安全错误、禁用账号保留、同cookie当前角色授权及伪造拒绝、秘密投影排除、用户/实例/审计不变均证明；unit扩展管理员鉴权和safe500矩阵。独立source/dist实际HTTP五态/401403200/提降权/撤销/safe500烟测GREEN，清理完成。冻结review/Docker/CI另附PR。
 
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 

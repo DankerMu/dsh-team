@@ -136,6 +136,10 @@ docs/  verify/  resource/（只读参考，不入库）
 
 验证：check1662单测/822集成通过；WaitPage43语义用例，语句/函数/行100%、分支95.91%，既有39账号/28密码用例保留。实际编译浏览器UI4场景全部通过，等待页四态及error→retry→error→retry→running、挂起GET期间不重叠、准确方法/空JSON/请求顺序均检查。仅两个实例API按任务许可使用替身，页面、资源、登录和本地已认证网关入口均真实；不把该证据声称为Docker创建。独立source/dist实际浏览器烟测四态/重试/就绪导航成功、零console/page错误和外部请求。原网关集成测试中的wait404已随页面交付迁移为200HTML，仍保证静态页面不调用上游解析器。
 
+阶段1实例列表（任务14.3）：管理员 `GET /_platform/api/admin/instances` 复用既有当前会话/角色鉴权，返回 `{items}`，每项仅含 `userId/email/status/lastStartedAt/lastActivityAt/lastError`。用户LEFT JOIN实例；无记录为 `not-created` 且元数据null，已有记录保留stopped/starting/running/error、毫秒时间及既有安全错误信息。包括管理员和禁用账号，沿用创建时间降序/用户ID降序；不提供新分页、过滤、Docker查询或生命周期操作，不返回cookie、哈希、容器标识或私有地址。
+
+验证：真实TCP首个未登录请求404RED→401GREEN；check1669单测/824集成与生成契约通过，既有账号/配置/实例入口不变。完整五用户五状态精确排序及null/时间/安全日志、同cookie提权/降权、伪造身份拒绝、秘密字段排除和用户/实例/审计不变均覆盖；storage故障固定500不泄露SQLite细节。独立source/dist实际HTTP烟测五态、401/403/200、提降权/撤销及safe500全部通过，退出清理完成；初始烟测遗漏必填PUBLIC_URL的配置错误已在隔离烟测中补齐，不改生产校验。
+
 ### 阶段 2：插件目录、RAGFlow、Office
 
 **目标**：员工在知识库页面看到真实的库和文件，按 Session 选择检索范围并得到带来源的回答；DOCX、XLSX、PPTX 在线编辑保存后 Agent 读到新内容。
