@@ -32,7 +32,7 @@
     "test:ui": "pnpm build:web && playwright test",
     "test:ui:install": "playwright install --with-deps chromium",
     "test:cli": "vitest run --project integration platform/test/cli.integration.test.ts",
-    "test:docker": "vitest run --project docker",
+    "test:docker": "node scripts/verify-browser-runtime.mjs docker",
     "verify:docker-evidence": "node platform/test/verify-docker-evidence.ts",
     "build": "pnpm build:web && tsc -p platform/tsconfig.build.json && rm -rf platform/dist/db/migrations && cp -R platform/src/db/migrations platform/dist/db/migrations",
     "build:web": "pnpm --filter @dsh-team/web build",
@@ -46,8 +46,8 @@
     "test:guardrails": "bash scripts/test-guardrails.sh",
     "change-scope": "bash scripts/change-scope.sh",
     "probe:sandbox": "bash scripts/probe-sandbox.sh",
-    "probe:dsh-api": "bash scripts/probe-dsh-api.sh",
-    "probe:first-run": "bash scripts/probe-first-run.sh"
+    "probe:dsh-api": "node scripts/verify-browser-runtime.mjs dsh-api",
+    "probe:first-run": "node scripts/verify-browser-runtime.mjs first-run"
   },
   "lint-staged": {
     "*.{ts,tsx,mjs,cjs}": [

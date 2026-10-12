@@ -9,8 +9,15 @@ import {
   muxListen,
   rpcCall,
   sleep,
+  observeNetwork,
   startChrome,
 } from './probe-dsh-api-cdp.mjs';
+import { isolatedBrowserRuntime } from './probe-browser-runtime.mjs';
+import {
+  collectRequestEvidence,
+  disposeRequestEvidence,
+  retainPageRequestFailure,
+} from './probe-browser-evidence.mjs';
 import {
   NEW_BTN,
   SEND_BTN,
@@ -416,23 +423,25 @@ const captureHomepage = async (page, screenshot, pending, buckets, errors) => {
   return { inventory, baseline };
 };
 const attachPage = (page, buckets, current, pending, errors) => {
-  page.on('Network.requestWillBeSent', (p) => {
-    pending.count += 1;
-    const bucket = buckets[current.value];
-    if (p.request?.url) {
-      bucket.seq.http += 1;
-      bucket.http.push({
-        seq: bucket.seq.http,
-        path: redactUrl(p.request.url),
-        requestId: p.requestId,
-      });
-    }
-  });
-  page.on('Network.loadingFinished', (p) => {
-    if (p.requestId) buckets[current.value].done.add(p.requestId);
-  });
-  page.on('Network.loadingFailed', (p) => {
-    if (p.requestId) buckets[current.value].failed.add(p.requestId);
+  observeNetwork(page, {
+    'Network.requestWillBeSent': (p) => {
+      pending.count += 1;
+      const bucket = buckets[current.value];
+      if (p.request?.url) {
+        bucket.seq.http += 1;
+        bucket.http.push({
+          seq: bucket.seq.http,
+          path: redactUrl(p.request.url),
+          requestId: p.requestId,
+        });
+      }
+    },
+    'Network.loadingFinished': (p) => {
+      if (p.requestId) buckets[current.value].done.add(p.requestId);
+    },
+    'Network.loadingFailed': (p) => {
+      if (p.requestId) buckets[current.value].failed.add(p.requestId);
+    },
   });
   page.on('Network.webSocketCreated', (p) => {
     pending.count += 1;
@@ -453,20 +462,53 @@ const attachPage = (page, buckets, current, pending, errors) => {
   });
 };
 const connectSession = async (origin, cookie, buckets, current, pending, errors) => {
-  const chrome = await startChrome(env('CHROME_BIN'), env('PROBE_PROFILE'), env('PROBE_PID_FILE'));
-  const page = await connectPage(chrome.browserWs);
-  for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
-  attachPage(page, buckets, current, pending, errors);
-  const mux = await muxListen(origin, cookie, { ready: false, events: [] });
-  await page.send('Network.setCookie', {
-    name: cookie.split('=', 1)[0],
-    value: cookie.slice(cookie.indexOf('=') + 1),
-    url: origin,
-    httpOnly: true,
-    sameSite: 'Strict',
-    path: '/',
+  const chrome = await startChrome({
+    runtime: isolatedBrowserRuntime(process.env.DSH_TEAM_BROWSER_INVOCATION),
+    origin,
+    profile: env('PROBE_PROFILE'),
+    receiptFile: env('PROBE_CHROME_RECEIPT'),
   });
-  return { chrome, page, mux };
+  let page, mux;
+  try {
+    page = await connectPage(chrome.browserWs);
+    for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
+    attachPage(page, buckets, current, pending, errors);
+    collectRequestEvidence(page);
+    mux = await muxListen(origin, cookie, { ready: false, events: [] });
+    await page.send('Network.setCookie', {
+      name: cookie.split('=', 1)[0],
+      value: cookie.slice(cookie.indexOf('=') + 1),
+      url: origin,
+      httpOnly: true,
+      sameSite: 'Strict',
+      path: '/',
+    });
+    return { chrome, page, mux };
+  } catch (error) {
+    await retainPageRequestFailure(page, env('PROBE_SCREENSHOT'));
+    disposeRequestEvidence(page);
+    try {
+      mux?.close();
+    } catch {
+      /* closed */
+    }
+    try {
+      page?.close();
+    } catch {
+      /* closed */
+    }
+    let cleanupFailure;
+    try {
+      await chrome.stop();
+    } catch (cleanup) {
+      cleanupFailure = { error: cleanup };
+    }
+    if (cleanupFailure)
+      throw new AggregateError([error, cleanupFailure.error], 'Browser setup and cleanup failed', {
+        cause: error,
+      });
+    throw error;
+  }
 };
 const reachComposer = async (page, origin, browserMs) => {
   const until = Date.now() + browserMs;
@@ -524,6 +566,7 @@ const drive = async () => {
   let chrome;
   let page;
   let mux;
+  let failure;
   try {
     ({ chrome, page, mux } = await connectSession(
       origin,
@@ -566,25 +609,41 @@ const drive = async () => {
     if (added.length) stageFail('console', tally(added));
     report(distinctHttp(cycles), distinctWs(cycles), inventory);
   } catch (error) {
+    failure = { error };
+    await retainPageRequestFailure(page, screenshot);
     try {
       await reportDiagnostic(page, screenshot, current);
     } catch {
       /* diagnostic must not replace the original error */
     }
-    throw error;
-  } finally {
-    try {
-      mux?.close();
-    } catch {
-      /* closed */
-    }
-    try {
-      page?.close();
-    } catch {
-      /* closed */
-    }
-    await chrome?.stop?.();
   }
+  disposeRequestEvidence(page);
+  try {
+    mux?.close();
+  } catch {
+    /* closed */
+  }
+  try {
+    page?.close();
+  } catch {
+    /* closed */
+  }
+  let cleanupFailure;
+  try {
+    await chrome?.stop?.();
+  } catch (cleanup) {
+    cleanupFailure = { error: cleanup };
+  }
+  if (cleanupFailure) {
+    if (failure)
+      throw new AggregateError(
+        [failure.error, cleanupFailure.error],
+        'Browser scenario and cleanup failed',
+        { cause: failure.error },
+      );
+    throw cleanupFailure.error;
+  }
+  if (failure) throw failure.error;
 };
 const command = process.argv[2];
 const run = async () => {

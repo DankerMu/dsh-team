@@ -7,6 +7,7 @@ import { collectComposition, execScript } from './managed-policy-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
 import { runPermissionBrowserScenario } from './permission-browser-fixture.mjs';
+import { isolatedBrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 
 it('delivers an immutable exact-peer gate outside employee profiles', async () => {
   if (platform() !== 'linux' || arch() !== 'x64')
@@ -111,9 +112,7 @@ it('authorizes real released tools through native approval, Auto protocol, child
 it('enforces root and one-shot child reject, allow and cancel through the actual DSH browser UI', async () => {
   if (platform() !== 'linux' || arch() !== 'x64')
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
-  const chromeBin = process.env.CHROME_BIN;
-  if (chromeBin === undefined || chromeBin === '')
-    throw new Error('CHROME_BIN is required for permission browser verification');
+  isolatedBrowserRuntime();
   const artifactRoot = join(process.cwd(), '.run', 'issue83');
   mkdirSync(artifactRoot, { recursive: true });
   const evidenceDirectory = mkdtempSync(join(artifactRoot, 'permission-browser-'));
@@ -129,7 +128,10 @@ it('enforces root and one-shot child reject, allow and cancel through the actual
       undefined,
       async (lifecycle) => {
         runId = lifecycle.runId;
-        return runPermissionBrowserScenario(lifecycle, { chromeBin, evidenceDirectory });
+        return runPermissionBrowserScenario(lifecycle, {
+          runtime: isolatedBrowserRuntime(lifecycle.runId),
+          evidenceDirectory,
+        });
       },
     );
     writeFileSync(

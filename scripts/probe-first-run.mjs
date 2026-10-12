@@ -20,6 +20,8 @@ import {
   navigateReady,
   openMappedPage,
 } from './probe-mapped-host.mjs';
+import { isolatedBrowserRuntime } from './probe-browser-runtime.mjs';
+import { retainPageRequestFailure } from './probe-browser-evidence.mjs';
 
 const out = (line) => process.stdout.write(`${line}\n`);
 const fail = (message, code = 1) => {
@@ -44,9 +46,9 @@ const workspaceEvidence = async () => {
 };
 
 const chromeOptions = () => ({
-  chromeBin: env('CHROME_BIN'),
+  runtime: isolatedBrowserRuntime(process.env.DSH_TEAM_BROWSER_INVOCATION),
   profile: env('PROBE_PROFILE'),
-  pidFile: env('PROBE_PID_FILE'),
+  receiptFile: env('PROBE_CHROME_RECEIPT'),
 });
 
 const exchange = async () => {
@@ -104,6 +106,9 @@ const discover = async () => {
       remainingMs(Date.now() + browserMs, 'discover-composer'),
       'discover-composer',
     );
+  } catch (error) {
+    await retainPageRequestFailure(page, env('PROBE_SCREENSHOT'));
+    throw error;
   } finally {
     await closeMapped(page, chrome);
   }

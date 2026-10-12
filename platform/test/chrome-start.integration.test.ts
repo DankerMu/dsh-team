@@ -6,21 +6,24 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startChrome } from '../../scripts/probe-dsh-api-cdp.mjs';
+import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
 const SECRET = 'sk-chrome-discovery-secret';
 
-const pidWriteFault: {
+const receiptWriteFault: {
   path: string | undefined;
   ackPidFile: string | undefined;
   ackPortFile: string | undefined;
   capturedPid: number | undefined;
   capturedPort: number | undefined;
+  capturedReceipt: string | undefined;
 } = {
   path: undefined,
   ackPidFile: undefined,
   ackPortFile: undefined,
   capturedPid: undefined,
   capturedPort: undefined,
+  capturedReceipt: undefined,
 };
 
 async function portListening(port: number): Promise<boolean> {
@@ -37,6 +40,27 @@ async function portListening(port: number): Promise<boolean> {
   return promise;
 }
 
+async function failAcknowledgedReceipt(spawnedPid: number): Promise<never> {
+  const deadline = Date.now() + 5_000;
+  const { ackPidFile, ackPortFile } = receiptWriteFault;
+  if (ackPidFile === undefined || ackPortFile === undefined)
+    throw new Error('pid write fault missing child acknowledgement paths');
+  while (Date.now() < deadline) {
+    try {
+      const childPid = Number(readFileSync(ackPidFile, 'utf8').trim());
+      const childPort = Number(readFileSync(ackPortFile, 'utf8').trim());
+      if (childPid === spawnedPid && (await portListening(childPort))) {
+        receiptWriteFault.capturedPort = childPort;
+        throw Object.assign(new Error('ENOENT: pid write fault'), { code: 'ENOENT' });
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === 'ENOENT: pid write fault') throw error;
+    }
+    await delay(10);
+  }
+  throw new Error('child pid/listener did not acknowledge before pid write');
+}
+
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>();
   return {
@@ -46,37 +70,25 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       data: Parameters<typeof actual.writeFile>[1],
       options?: Parameters<typeof actual.writeFile>[2],
     ) {
-      if (pidWriteFault.path === undefined || path !== pidWriteFault.path) {
+      if (
+        receiptWriteFault.path === undefined ||
+        typeof path !== 'string' ||
+        !path.startsWith(receiptWriteFault.path)
+      ) {
         return actual.writeFile(path, data, options);
       }
       if (typeof data !== 'string') {
-        throw new Error('expected string pid at pid write boundary');
+        throw new Error('expected serialized lifecycle receipt at write boundary');
       }
-      const spawnedPid = Number(data.trim());
+      const receipt = JSON.parse(data) as { native?: { pid: number } | null };
+      const spawnedPid = receipt.native?.pid;
+      if (spawnedPid === undefined) return actual.writeFile(path, data, options);
       if (!Number.isInteger(spawnedPid) || spawnedPid <= 0) {
         throw new Error('expected spawned child pid at pid write boundary');
       }
-      pidWriteFault.capturedPid = spawnedPid;
-      const deadline = Date.now() + 5_000;
-      const ackPidFile = pidWriteFault.ackPidFile;
-      const ackPortFile = pidWriteFault.ackPortFile;
-      if (ackPidFile === undefined || ackPortFile === undefined) {
-        throw new Error('pid write fault missing child acknowledgement paths');
-      }
-      while (Date.now() < deadline) {
-        try {
-          const childPid = Number(readFileSync(ackPidFile, 'utf8').trim());
-          const childPort = Number(readFileSync(ackPortFile, 'utf8').trim());
-          if (childPid === spawnedPid && (await portListening(childPort))) {
-            pidWriteFault.capturedPort = childPort;
-            throw Object.assign(new Error('ENOENT: pid write fault'), { code: 'ENOENT' });
-          }
-        } catch (error) {
-          if (error instanceof Error && error.message === 'ENOENT: pid write fault') throw error;
-        }
-        await delay(10);
-      }
-      throw new Error('child pid/listener did not acknowledge before pid write');
+      receiptWriteFault.capturedPid = spawnedPid;
+      receiptWriteFault.capturedReceipt = data;
+      return await failAcknowledgedReceipt(spawnedPid);
     },
   };
 });
@@ -105,14 +117,15 @@ async function assertGone(pid: number, port: number): Promise<void> {
 }
 
 afterEach(() => {
-  pidWriteFault.path = undefined;
-  pidWriteFault.ackPidFile = undefined;
-  pidWriteFault.ackPortFile = undefined;
-  pidWriteFault.capturedPid = undefined;
-  pidWriteFault.capturedPort = undefined;
+  receiptWriteFault.path = undefined;
+  receiptWriteFault.ackPidFile = undefined;
+  receiptWriteFault.ackPortFile = undefined;
+  receiptWriteFault.capturedPid = undefined;
+  receiptWriteFault.capturedPort = undefined;
+  receiptWriteFault.capturedReceipt = undefined;
 });
 
-it('stops the spawned child when PID file writing fails after start', async () => {
+it('stops the spawned child when lifecycle receipt writing fails after start', async () => {
   const { bin, work } = fakeChrome(`
 const fs = require('node:fs');
 const http = require('node:http');
@@ -125,23 +138,28 @@ process.stderr.write(${JSON.stringify(SECRET)});
 `);
   const profile = join(work, 'profile');
   mkdirSync(profile);
-  const pidFile = join(work, 'chrome.pid');
+  const receiptFile = join(work, 'chrome.receipt.json');
   const observedPidFile = join(work, 'observed.pid');
   const observedPortFile = join(work, 'observed.port');
   process.env.DSH_TEAM_PID_FILE = observedPidFile;
   process.env.DSH_TEAM_PORT_FILE = observedPortFile;
-  pidWriteFault.path = pidFile;
-  pidWriteFault.ackPidFile = observedPidFile;
-  pidWriteFault.ackPortFile = observedPortFile;
+  receiptWriteFault.path = receiptFile;
+  receiptWriteFault.ackPidFile = observedPidFile;
+  receiptWriteFault.ackPortFile = observedPortFile;
   try {
-    await startChrome(bin, profile, pidFile);
-    throw new Error('must reject PID write failure');
+    await startChrome({
+      runtime: { kind: 'native', bin },
+      origin: 'http://127.0.0.1:12345',
+      profile,
+      receiptFile,
+    });
+    throw new Error('must reject lifecycle receipt write failure');
   } catch (error) {
     expect(String(error)).toMatch(/^Error: chrome-start /);
     expect(String(error)).not.toContain(SECRET);
     expect(error).not.toHaveProperty('cause');
-    const pid = pidWriteFault.capturedPid;
-    const port = pidWriteFault.capturedPort;
+    const pid = receiptWriteFault.capturedPid;
+    const port = receiptWriteFault.capturedPort;
     if (pid === undefined) {
       throw new Error('expected captured child pid before pid write failure', { cause: error });
     }
@@ -150,13 +168,10 @@ process.stderr.write(${JSON.stringify(SECRET)});
     }
     await assertGone(pid, port);
   } finally {
-    const pid = pidWriteFault.capturedPid;
-    if (typeof pid === 'number' && pid > 0) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        /* already gone */
-      }
+    if (receiptWriteFault.capturedReceipt) {
+      const capturedFile = join(work, 'failed-receipt.json');
+      writeFileSync(capturedFile, receiptWriteFault.capturedReceipt, { mode: 0o600 });
+      await rescueChrome(capturedFile);
     }
     delete process.env.DSH_TEAM_PID_FILE;
     delete process.env.DSH_TEAM_PORT_FILE;
@@ -180,13 +195,18 @@ process.stderr.write(${JSON.stringify(SECRET)});
 `);
   const profile = join(work, 'profile');
   mkdirSync(profile);
-  const pidFile = join(work, 'chrome.pid');
+  const receiptFile = join(work, 'chrome.receipt.json');
   const observedPidFile = join(work, 'observed.pid');
   const observedPortFile = join(work, 'observed.port');
   process.env.DSH_TEAM_PID_FILE = observedPidFile;
   process.env.DSH_TEAM_PORT_FILE = observedPortFile;
   try {
-    await startChrome(bin, profile, pidFile);
+    await startChrome({
+      runtime: { kind: 'native', bin },
+      origin: 'http://127.0.0.1:12345',
+      profile,
+      receiptFile,
+    });
     throw new Error('must reject debugger JSON failure');
   } catch (error) {
     expect(String(error)).toMatch(/^Error: chrome-start /);
@@ -207,9 +227,14 @@ it('rejects a missing Chrome binary as an awaited chrome-start error', async () 
   const bin = join(work, 'missing-chrome');
   const profile = join(work, 'profile');
   mkdirSync(profile);
-  const pidFile = join(work, 'chrome.pid');
+  const receiptFile = join(work, 'chrome.receipt.json');
   try {
-    await startChrome(bin, profile, pidFile);
+    await startChrome({
+      runtime: { kind: 'native', bin },
+      origin: 'http://127.0.0.1:12345',
+      profile,
+      receiptFile,
+    });
     throw new Error('must reject missing chrome');
   } catch (error) {
     expect(String(error)).toMatch(/^Error: chrome-start /);

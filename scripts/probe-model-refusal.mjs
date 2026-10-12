@@ -1,5 +1,6 @@
 import { closeMapped, navigateReady, openMappedPage } from './probe-mapped-host.mjs';
-import { sleep } from './probe-dsh-api-cdp.mjs';
+import { observeNetwork, sleep } from './probe-dsh-api-cdp.mjs';
+import { retainPageRequestFailure } from './probe-browser-evidence.mjs';
 import {
   captureSettledScreenshot,
   clickSelector,
@@ -42,28 +43,30 @@ export async function captureModelRefusal(input) {
     visibleError,
     consoleErrorCount: errors.length,
   });
-  page.on('Network.requestWillBeSent', ({ requestId, request }) => {
-    const path = new URL(request.url).pathname;
-    if (!['/api/session/create', '/api/session/prompt'].includes(path)) return;
-    calls.set(requestId, path);
-    if (path !== '/api/session/prompt') return;
-    prompt.promptCount++;
-    try {
-      const body = JSON.parse(request.postData);
-      const accepted = body.payload.args.request;
-      if (typeof accepted.sessionId !== 'string' || typeof accepted.requestId !== 'string')
-        throw new Error();
-      prompt.sessionId = accepted.sessionId;
-      prompt.requestId = accepted.requestId;
-    } catch {
-      admission.wireFailure = true;
-    }
-  });
-  page.on('Network.loadingFinished', ({ requestId }) => {
-    if (calls.has(requestId)) completed.push(requestId);
-  });
-  page.on('Network.loadingFailed', ({ requestId }) => {
-    if (calls.has(requestId)) admission.wireFailure = true;
+  observeNetwork(page, {
+    'Network.requestWillBeSent': ({ requestId, request }) => {
+      const path = new URL(request.url).pathname;
+      if (!['/api/session/create', '/api/session/prompt'].includes(path)) return;
+      calls.set(requestId, path);
+      if (path !== '/api/session/prompt') return;
+      prompt.promptCount++;
+      try {
+        const body = JSON.parse(request.postData);
+        const accepted = body.payload.args.request;
+        if (typeof accepted.sessionId !== 'string' || typeof accepted.requestId !== 'string')
+          throw new Error();
+        prompt.sessionId = accepted.sessionId;
+        prompt.requestId = accepted.requestId;
+      } catch {
+        admission.wireFailure = true;
+      }
+    },
+    'Network.loadingFinished': ({ requestId }) => {
+      if (calls.has(requestId)) completed.push(requestId);
+    },
+    'Network.loadingFailed': ({ requestId }) => {
+      if (calls.has(requestId)) admission.wireFailure = true;
+    },
   });
   try {
     await navigateReady(page, input.origin, remainingMs(until, 'model-startup'));
@@ -97,6 +100,7 @@ export async function captureModelRefusal(input) {
     }
   } catch (error) {
     failures.push(error);
+    await retainPageRequestFailure(page, input.screenshot);
   } finally {
     let screenshotCaptured = false;
     try {
@@ -105,6 +109,7 @@ export async function captureModelRefusal(input) {
     } catch (error) {
       failures.push(error);
     }
+    if (failures.length) await retainPageRequestFailure(page, input.screenshot);
     try {
       await input.retain(evidence(), screenshotCaptured);
     } catch (error) {

@@ -20,6 +20,12 @@ import {
   waitComposer,
   waitFor,
 } from '../../scripts/probe-dsh-api-ui.mjs';
+import { observeNetwork } from '../../scripts/probe-dsh-api-cdp.mjs';
+import {
+  disposeRequestEvidence,
+  retainPageRequestFailure,
+} from '../../scripts/probe-browser-evidence.mjs';
+import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
 // Independent expected values: approved OpenSpec design13 table, NOT gate source.
 const EXPECTED = Object.freeze([
@@ -93,8 +99,10 @@ function attachScopeObserver(page, evidence) {
   };
   page.on('Network.webSocketFrameSent', (event) => consume(event.response?.payloadData ?? ''));
   // HTTP addresses are parsed in memory; headers/cookies/tokens never enter evidence.
-  page.on('Network.requestWillBeSent', (event) => {
-    if (event.request?.postData) consume(event.request.postData);
+  observeNetwork(page, {
+    'Network.requestWillBeSent': (event) => {
+      if (event.request?.postData) consume(event.request.postData);
+    },
   });
 }
 async function chosenLabel(page) {
@@ -396,8 +404,8 @@ async function persistFailure(error, browser, web, control, report, evidenceDire
 }
 
 /** Canonical lifecycle owns image, volumes, containers and mapped port. */
-export async function runPermissionBrowserScenario(lifecycle, { chromeBin, evidenceDirectory }) {
-  assert(chromeBin, 'CHROME_BIN is required');
+export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenceDirectory }) {
+  assert.equal(runtime.kind, 'docker-network-none', 'isolated browser runtime is required');
   await mkdir(evidenceDirectory, { recursive: true });
   const report = {
     status: 'RUNNING',
@@ -448,9 +456,9 @@ export async function runPermissionBrowserScenario(lifecycle, { chromeBin, evide
       cookie,
       extraFlags: mappedFlags(HOST),
       composition: true,
-      chromeBin,
-      profile,
-      pidFile: join(profile, 'chrome.pid'),
+      runtime,
+      profile: join(profile, 'profile'),
+      receiptFile: join(profile, 'chrome.receipt.json'),
     });
     attachScopeObserver(browser.page, report);
     await browser.page.send('Emulation.setDeviceMetricsOverride', {
@@ -492,11 +500,13 @@ export async function runPermissionBrowserScenario(lifecycle, { chromeBin, evide
       evidence: join(evidenceDirectory, 'evidence.json'),
     });
   } catch (error) {
+    await retainPageRequestFailure(browser?.page, join(evidenceDirectory, 'startup.png'));
     await persistFailure(error, browser, web, control, report, evidenceDirectory, persist);
     throw new Error('ui-oracle-failed-see-evidence', { cause: error });
   } finally {
     try {
       if (browser) {
+        disposeRequestEvidence(browser.page);
         try {
           browser.page.close();
         } finally {
@@ -504,7 +514,10 @@ export async function runPermissionBrowserScenario(lifecycle, { chromeBin, evide
         }
       }
     } finally {
-      if (profile) await rm(profile, { recursive: true, force: true });
+      if (profile) {
+        await rescueChrome(join(profile, 'chrome.receipt.json'));
+        await rm(profile, { recursive: true, force: true });
+      }
     }
   }
 }

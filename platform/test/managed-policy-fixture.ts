@@ -18,6 +18,8 @@ import {
 import type { MappedHostAcceptResult } from '../../scripts/probe-mapped-host.mjs';
 import type { DockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
+import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 import { runWebStartup } from './web-startup-fixture.ts';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
 import {
@@ -266,14 +268,6 @@ function requirePort(record: Record<string, unknown>): number {
     throw new Error(INVALID);
   }
   return value;
-}
-
-function chromeRequired(): string {
-  const chromeBin = process.env.CHROME_BIN;
-  if (chromeBin === undefined || chromeBin === '') {
-    throw new Error('CHROME_BIN is required for managed-policy browser verification');
-  }
-  return chromeBin;
 }
 
 function repositoryCanonicalHash(): string {
@@ -567,7 +561,12 @@ async function startWeb(
   evidence: ManagedPolicyEvidence,
   stage: 'start' | 'control' | 'restart',
   profiles: ProfileRecorder,
-  browser?: { chromeBin: string; profile: string; screenshot: string; roster: readonly string[] },
+  browser?: {
+    runtime: BrowserRuntime;
+    profile: string;
+    screenshot: string;
+    roster: readonly string[];
+  },
 ): Promise<{ hostPort: number; observation: unknown; browser?: MappedHostAcceptResult }> {
   lifecycle.registerContainer(name);
   const summary = parseJsonRecord(
@@ -606,9 +605,9 @@ async function startWeb(
     screenshot: browser.screenshot,
     browserMs: Math.min(60_000, remaining()),
     composition: true,
-    chromeBin: browser.chromeBin,
+    runtime: browser.runtime,
     profile: browser.profile,
-    pidFile: join(browser.profile, 'chrome.pid'),
+    receiptFile: `${browser.profile}.receipt.json`,
     expectedHost: HOSTNAME,
     expectedRoster: browser.roster,
     workspace,
@@ -647,7 +646,7 @@ async function acceptManaged(
   lifecycle: UserImageLifecycle,
   overlay: string,
   remaining: () => number,
-  chromeBin: string,
+  runtime: BrowserRuntime,
   work: string,
   evidence: ManagedPolicyEvidence,
   profiles: ProfileRecorder,
@@ -669,7 +668,7 @@ async function acceptManaged(
     label,
     profiles,
     {
-      chromeBin,
+      runtime,
       profile: join(work, `chrome-${label}`),
       screenshot,
       roster: MANAGED_BOOT_ROSTER,
@@ -757,7 +756,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
   let work: string | undefined;
   let failedStage: ManagedPolicyStage | undefined;
   try {
-    const chromeBin = chromeRequired();
+    const runtime = isolatedBrowserRuntime(lifecycle.runId);
     work = mkdtempSync(join(tmpdir(), 'dsh-team-managed-policy-'));
     const startedAt = Date.now();
     const remaining = (): number => Math.max(1, 180_000 - (Date.now() - startedAt));
@@ -770,7 +769,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       lifecycle,
       prepared.overlay,
       remaining,
-      chromeBin,
+      runtime,
       work,
       evidence,
       profiles,
@@ -804,7 +803,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
       lifecycle,
       nextOverlay,
       remaining,
-      chromeBin,
+      runtime,
       work,
       evidence,
       profiles,
@@ -828,6 +827,10 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
     evidence.fail(failedStage);
     throw error;
   } finally {
-    if (work !== undefined) rmSync(work, { recursive: true, force: true });
+    if (work !== undefined) {
+      await rescueChrome(join(work, 'chrome-start.receipt.json'));
+      await rescueChrome(join(work, 'chrome-restart.receipt.json'));
+      rmSync(work, { recursive: true, force: true });
+    }
   }
 }

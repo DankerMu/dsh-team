@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { captureModelRefusal } from '../../scripts/probe-model-refusal.mjs';
+import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
 it('retains admitted prompt identities when UI, screenshot and subsequent enrichment fail before Chrome cleanup', async () => {
   const work = mkdtempSync(join(tmpdir(), 'dsh-team-refusal-browser-'));
@@ -175,9 +176,9 @@ process.once('SIGTERM', () => {
         cookie: 'owned=dummy',
         extraFlags: [],
         expectedRoster: roster,
-        chromeBin: bin,
+        runtime: { kind: 'native', bin },
         profile: join(work, 'profile'),
-        pidFile: join(work, 'chrome.pid'),
+        receiptFile: join(work, 'chrome.receipt.json'),
         screenshot,
         browserMs: 5_000,
         beforeSubmit: () => {
@@ -221,7 +222,10 @@ process.once('SIGTERM', () => {
     ]);
     expect(existsSync(screenshot)).toBe(false);
     expect(readFileSync(stopped, 'utf8')).toBe('SIGTERM');
-    const pid = Number(readFileSync(join(work, 'chrome.pid'), 'utf8'));
+    const lifecycleReceipt = JSON.parse(
+      readFileSync(join(work, 'chrome.receipt.json'), 'utf8'),
+    ) as { native: { pid: number } };
+    const pid = lifecycleReceipt.native.pid;
     expect(() => process.kill(pid, 0)).toThrow();
     expect(failure).toBeInstanceOf(AggregateError);
     if (!(failure instanceof AggregateError)) throw new Error('Expected retained capture failures');
@@ -234,14 +238,7 @@ process.once('SIGTERM', () => {
   } finally {
     vi.unstubAllGlobals();
     // A broken driver must not leave the fixture child alive when assertions fail.
-    const pidFile = join(work, 'chrome.pid');
-    if (existsSync(pidFile)) {
-      try {
-        process.kill(Number(readFileSync(pidFile, 'utf8')), 'SIGKILL');
-      } catch {
-        /* The driver already stopped this owned child. */
-      }
-    }
+    await rescueChrome(join(work, 'chrome.receipt.json'));
     rmSync(work, { recursive: true, force: true });
   }
 });

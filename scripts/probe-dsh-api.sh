@@ -53,6 +53,7 @@ image_owned=0
 container_owned=0
 probe_status=0
 cleanup_failed=0
+browser_cleanup_failed=0
 cleaned=0
 workdir=""
 evidence=""
@@ -63,17 +64,17 @@ docker_seconds=30
 chrome_wait=12
 drive_seconds=$((startup_seconds + browser_seconds * 10 + task_seconds * 9 + 180))
 run_bound() { probe_run_bound "$@"; }
-stop_chrome() { probe_stop_chrome "${workdir:+${workdir}/chrome.pid}"; }
+stop_chrome() { probe_stop_chrome "${workdir:+${workdir}/chrome.receipt.json}"; }
 remove_owned() { probe_remove_owned "$@"; }
 scrub_binds() { probe_scrub_binds "$image" "$home_dir" "$work_dir" "${prefix}-scrub"; }
 cleanup() {
   [ "$cleaned" -eq 1 ] && return 0
   trap '' INT TERM
-  stop_chrome
+  stop_chrome || true
   [ "$container_owned" -eq 1 ] && remove_owned rm "$container"
   [ "$image_owned" -eq 1 ] && [ -n "$workdir" ] && scrub_binds
   [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
-  [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || probe_note_cleanup_failure "rm -rf workdir"; }
+  [ "$browser_cleanup_failed" -ne 0 ] || { [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || probe_note_cleanup_failure "rm -rf workdir"; }; }
   cleaned=1
   probe_has_cleanup_failure && [ "$probe_status" -eq 0 ] && probe_status=1
   trap - INT TERM
@@ -131,7 +132,7 @@ chmod 600 "${workdir}/cookie.hdr"
 set +e
 run_bound "$drive_seconds" env PROBE_ORIGIN="http://127.0.0.1:${port}" PROBE_COOKIE_FILE="${workdir}/cookie.hdr" \
   PROBE_HOME="$home_dir" PROBE_WORK="$work_dir" PROBE_SCREENSHOT="${evidence}/homepage.png" \
-  PROBE_PROFILE="${workdir}/chrome" PROBE_PID_FILE="${workdir}/chrome.pid" \
+  PROBE_PROFILE="${workdir}/chrome" PROBE_CHROME_RECEIPT="${workdir}/chrome.receipt.json" \
   PROBE_BROWSER_SECONDS="$browser_seconds" PROBE_TASK_SECONDS="$task_seconds" \
   CHROME_BIN="$CHROME_BIN" node "$driver" drive
 probe_status=$?

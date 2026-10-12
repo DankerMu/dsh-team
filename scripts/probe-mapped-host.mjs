@@ -5,6 +5,7 @@ import {
   exchangeLaunchToken,
   rpcCall,
   sleep,
+  observeNetwork,
   startChrome,
   waitWelcomeStoreReady,
 } from './probe-dsh-api-cdp.mjs';
@@ -30,6 +31,11 @@ import {
   waitCompositionInitialized,
 } from './probe-first-run-composition.mjs';
 import { verifyPreservation } from './probe-first-run-preservation.mjs';
+import {
+  collectRequestEvidence,
+  disposeRequestEvidence,
+  retainPageRequestFailure,
+} from './probe-browser-evidence.mjs';
 
 export const mappedFlags = (host) => [
   '--lang=en-US',
@@ -70,12 +76,14 @@ const requestPath = (url) => {
 };
 
 const attachNetwork = (page, requests) => {
-  page.on('Network.requestWillBeSent', (p) => {
-    requests.push({
-      requestId: p.requestId,
-      method: p.request?.method ?? '',
-      path: requestPath(p.request?.url ?? ''),
-    });
+  observeNetwork(page, {
+    'Network.requestWillBeSent': (p) => {
+      requests.push({
+        requestId: p.requestId,
+        method: p.request?.method ?? '',
+        path: requestPath(p.request?.url ?? ''),
+      });
+    },
   });
 };
 
@@ -85,22 +93,24 @@ const observeSessionAdmissions = (page, requests, origin, cookie) => {
   const completed = [];
   const createdSessionIds = [];
   let failedCreations = 0;
-  page.on('Network.responseReceived', ({ requestId, response }) => {
-    const request = requests.find((row) => row.requestId === requestId);
-    if (
-      request?.method === 'POST' &&
-      request.path === '/api/session/create' &&
-      response.url === `${origin}/api/session/create`
-    ) {
-      calls.set(requestId, response.status);
-    }
-  });
-  page.on('Network.loadingFinished', ({ requestId }) => {
-    if (calls.has(requestId)) completed.push(requestId);
-  });
-  page.on('Network.loadingFailed', ({ requestId }) => {
-    const request = requests.find((row) => row.requestId === requestId);
-    if (request?.method === 'POST' && request.path === '/api/session/create') failedCreations++;
+  observeNetwork(page, {
+    'Network.responseReceived': ({ requestId, response }) => {
+      const request = requests.find((row) => row.requestId === requestId);
+      if (
+        request?.method === 'POST' &&
+        request.path === '/api/session/create' &&
+        response.url === `${origin}/api/session/create`
+      ) {
+        calls.set(requestId, response.status);
+      }
+    },
+    'Network.loadingFinished': ({ requestId }) => {
+      if (calls.has(requestId)) completed.push(requestId);
+    },
+    'Network.loadingFailed': ({ requestId }) => {
+      const request = requests.find((row) => row.requestId === requestId);
+      if (request?.method === 'POST' && request.path === '/api/session/create') failedCreations++;
+    },
   });
   const collect = async () => {
     while (completed.length) {
@@ -180,18 +190,20 @@ export const openMappedPage = async ({
   cookie,
   extraFlags,
   composition = false,
-  chromeBin,
+  runtime,
   profile,
-  pidFile,
+  receiptFile,
 }) => {
-  const chrome = await startChrome(chromeBin, profile, pidFile, extraFlags);
+  const chrome = await startChrome({ runtime, origin, profile, receiptFile, extraFlags });
+  let page;
   try {
-    const page = await connectPage(chrome.browserWs);
+    page = await connectPage(chrome.browserWs);
     const errors = [];
     const requests = [];
     for (const domain of ['Network', 'Page', 'Runtime', 'Log']) await page.send(`${domain}.enable`);
     attachErrors(page, errors);
     attachNetwork(page, requests);
+    collectRequestEvidence(page);
     const welcome = composition ? null : await armWelcomeStoreObserver(page);
     await page.send('Network.setCookie', {
       name: cookie.split('=', 1)[0],
@@ -203,7 +215,7 @@ export const openMappedPage = async ({
     });
     return { chrome, page, errors, requests, welcome };
   } catch (error) {
-    await chrome.stop();
+    await closeMapped(page, chrome, undefined, { error });
     throw error;
   }
 };
@@ -339,7 +351,8 @@ const acceptVerdict = (last, noticeSeen, store) => {
   };
 };
 
-export const closeMapped = async (page, chrome, welcome) => {
+export const closeMapped = async (page, chrome, welcome, failure) => {
+  disposeRequestEvidence(page);
   try {
     await welcome?.cleanup?.();
   } catch {
@@ -350,7 +363,21 @@ export const closeMapped = async (page, chrome, welcome) => {
   } catch {
     /* closed */
   }
-  await chrome?.stop?.();
+  let cleanupFailure;
+  try {
+    await chrome?.stop?.();
+  } catch (cleanup) {
+    cleanupFailure = { error: cleanup };
+  }
+  if (cleanupFailure) {
+    if (failure)
+      throw new AggregateError(
+        [failure.error, cleanupFailure.error],
+        'Browser scenario and cleanup failed',
+        { cause: failure.error },
+      );
+    throw cleanupFailure.error;
+  }
 };
 
 const acceptedFrom = (binding, verdict, input) =>
@@ -473,9 +500,9 @@ export const collectObservation = async ({
   extraFlags,
   screenshot,
   browserMs,
-  chromeBin,
+  runtime,
   profile,
-  pidFile,
+  receiptFile,
   expectedHost = FIRST_RUN_HOST,
   workspace,
 }) => {
@@ -483,10 +510,11 @@ export const collectObservation = async ({
     origin,
     cookie,
     extraFlags,
-    chromeBin,
+    runtime,
     profile,
-    pidFile,
+    receiptFile,
   });
+  let failure;
   try {
     const until = Date.now() + browserMs;
     await navigateReady(page, origin, remainingMs(until, 'startup'));
@@ -502,8 +530,12 @@ export const collectObservation = async ({
       expectedHost,
       workspace,
     });
+  } catch (error) {
+    failure = { error };
+    await retainPageRequestFailure(page, screenshot);
+    throw error;
   } finally {
-    await closeMapped(page, chrome, welcome);
+    await closeMapped(page, chrome, welcome, failure);
   }
 };
 
@@ -562,9 +594,9 @@ export const acceptObservation = async ({
   screenshot,
   browserMs,
   composition = false,
-  chromeBin,
+  runtime,
   profile,
-  pidFile,
+  receiptFile,
   workspace,
   expectedHost = FIRST_RUN_HOST,
   expectedRoster,
@@ -578,20 +610,24 @@ export const acceptObservation = async ({
     cookie,
     extraFlags,
     composition,
-    chromeBin,
+    runtime,
     profile,
-    pidFile,
+    receiptFile,
   });
+  let failureShot = screenshot;
+  let failure;
   try {
     const sessionSnapshot = observeSessions
       ? observeSessionAdmissions(page, requests, origin, cookie)
       : undefined;
     const beforeSessionObservation = await sessionSnapshot?.();
     const runEntry = async (shot, reload = false) => {
+      failureShot = shot;
       const until = Date.now() + browserMs;
       try {
         await navigateReady(page, origin, remainingMs(until, 'startup'), reload);
       } catch (error) {
+        await retainPageRequestFailure(page, shot);
         try {
           process.stdout.write(
             `diagnostic navigation=${errorCode(error)} consoleErrors=${errors.length}\n`,
@@ -646,8 +682,12 @@ export const acceptObservation = async ({
       reload,
       ...(preservation ? { preservation } : {}),
     };
+  } catch (error) {
+    failure = { error };
+    await retainPageRequestFailure(page, failureShot);
+    throw error;
   } finally {
-    await closeMapped(page, chrome, welcome);
+    await closeMapped(page, chrome, welcome, failure);
   }
 };
 

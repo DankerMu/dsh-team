@@ -16,6 +16,7 @@ import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-policy-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
 /** Read workspace semantics and exact fixture-owned bytes, never runtime log serialization. */
 function employeeState(lifecycle: UserImageLifecycle, id: string, writeSentinels = false) {
@@ -151,8 +152,7 @@ function requireAutomaticSession(observation: MappedHostAcceptResult): string {
 it('gives untouched employees automatic work Sessions and preserves employee state on volume reuse', async () => {
   expect(platform()).toBe('linux');
   expect(arch()).toBe('x64');
-  const chromeBin = process.env.CHROME_BIN;
-  if (chromeBin === undefined || chromeBin === '') throw new Error('CHROME_BIN is required');
+  isolatedBrowserRuntime();
   await runUserImage(
     'container-start',
     () => undefined,
@@ -270,9 +270,9 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
               expectedHost: host,
               composition: true,
               expectedRoster: MANAGED_BOOT_ROSTER,
-              chromeBin,
-              profile,
-              pidFile: join(profile, 'chrome.pid'),
+              runtime: isolatedBrowserRuntime(lifecycle.runId),
+              profile: join(profile, 'profile'),
+              receiptFile: join(profile, 'chrome.receipt.json'),
               screenshot: join(evidence, `${label}.png`),
               browserMs: 30_000,
               workspace: {
@@ -287,6 +287,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
             );
             return requireAutomaticSession(observation);
           } finally {
+            await rescueChrome(join(profile, 'chrome.receipt.json'));
             await rm(profile, { recursive: true, force: true });
           }
         };
