@@ -7,7 +7,7 @@ Issue #179's missing failure attribution now blocks Epic #3: original full Docke
 ## What Changes
 
 - Preserve bounded, sanitized browser request/response/failure evidence at the existing shared browser boundary, alongside existing control snapshots and screenshots, without masking the original failure.
-- Attribute the captured network interruption with one additional user-authorized round of at most three diagnosis→necessary repair→reverification cycles. Implement the minimum repair at the demonstrated owner only after a discriminating failing scenario establishes that owner; diagnostic-only output is not completion of the authorized blocker repair.
+- Attribute the captured network interruption within explicitly authorized bounded rounds. The first three cycles are exhausted and retained unchanged. The user approved continuing the recommended separate AggregateError classification followed by a tighter browser discriminator; the second round permits at most three experiments. Implement the minimum repair at the demonstrated owner only after a discriminating failing scenario establishes that owner; diagnostic-only output is not completion of the authorized blocker repair.
 - Preserve existing browser startup, platform/DSH authorization, first-use/session/workspace and permission semantics; no added automatic retry, arbitrary delay, longer deadline, ignored browser error, changed acceptance discovery or DSH-source modification.
 - Requalify the real boundary and original full Docker suite on the final exact head, then resume paused #76/PR197 and the remaining Epic DAG. Retain failed as well as passing receipts.
 

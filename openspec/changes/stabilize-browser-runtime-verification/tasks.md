@@ -2,9 +2,9 @@
 
 ## 1. Qualified attribution before repair
 
-- [ ] 1.1 Freeze the actual RED, candidate/environment identities and user-authorized three-cycle ledger; verify the retained document200/vendor-script failure and both original36/37 exits are distinguished from diagnostic-only outcomes, with zero new cycles consumed at initialization.
-- [ ] 1.2 Prepare and execute the first controlled attribution cycle using independent host receiver timestamps/interface-object-state fields, precise Docker identity/time projection and unmodified browser error semantics; verify safe bounded output, explicit loss/error accounting and owned-resource-only effects, then produce a command/input→observed failure→discriminator report rather than a guessed fix.
-- [ ] 1.3 Adjudicate causal ownership and record the smallest repair plus regression oracle in design.md before permanent behavioral edits; verify the revised construction fixture by native sufficiency review and strict OpenSpec validation. If unresolved, choose the next discriminating hypothesis within the remaining authorized cycles; exhausting three cycles remains blocked, never done.
+- [ ] 1.1 Freeze the actual RED, candidate/environment identities and round-specific authorization ledger; preserve the exhausted first three cycles unchanged and initialize the user-approved second round at zero of at most three experiments. Distinguish original browser failures, diagnostic limitations and the later independent startup AggregateError.
+- [ ] 1.2 First recover bounded nested startup error/stage evidence through the existing diagnostic projector and execute the unchanged startup file once after projector qualification; then choose a tighter browser discriminator from observed evidence. Preserve original errors, deadlines, concurrency, safe bounded output and independently verified owned cleanup. Do not automatically repeat a passing isolated run or the full suite.
+- [ ] 1.3 Adjudicate causal ownership and record the smallest repair plus regression oracle in design.md before permanent behavioral edits; verify the revised construction fixture by native sufficiency review and strict OpenSpec validation. If unresolved, choose the next discriminating hypothesis within the current round's remaining authorization; exhaustion remains blocked, never done.
 
 ## 2. Canonical evidence and demonstrated owner repair
 
