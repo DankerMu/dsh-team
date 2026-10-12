@@ -15,7 +15,12 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { connectPage, observeNetwork, startChrome } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { navigateReady } from '../../scripts/probe-mapped-host.mjs';
 import { record } from './container-start-docker-fixture.ts';
-import { OwnedBrowserChurn, withIsolatedBrowser } from './browser-runtime-fixture.ts';
+import {
+  browserPressureClient,
+  execBrowser,
+  OwnedBrowserChurn,
+  withIsolatedBrowser,
+} from './browser-runtime-fixture.ts';
 import {
   browserDocker,
   chromeDigest,
@@ -93,53 +98,76 @@ const waitUntil = async (ready: () => boolean, until: number) => {
     await promise;
   }
 };
-function execBrowser(id: string, source: string): Promise<string> {
-  const { promise, resolve, reject } = Promise.withResolvers<string>();
-  const child = spawn('docker', ['exec', id, 'node', '-e', source], {
-    env: { PATH: process.env.PATH, DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG },
-    stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  let output = '';
-  // This is a real external-process deadline, not a sleep; fake time cannot bound Docker.
-  const timer = setTimeout(() => {
-    child.kill('SIGKILL');
-    reject(new Error('Owned browser protocol client timeout'));
-  }, 15000);
-  child.stdout.on('data', (data: Buffer) => {
-    output += data.toString();
-    if (output.length > 65536) {
-      child.kill('SIGKILL');
-      reject(new Error('Owned browser protocol client output limit'));
-    }
-  });
-  child.once('error', (error) => {
-    clearTimeout(timer);
-    reject(error);
-  });
-  child.once('exit', (code) => {
-    clearTimeout(timer);
-    if (code !== 0) reject(new Error('Owned browser protocol client failed'));
-    else resolve(output);
-  });
-  return promise;
-}
 
 it('preserves large duplex bytes and server replies after the client half-closes', async () => {
-  const received: Buffer[] = [];
+  const payloadBytes = 32 * 1024 * 1024;
+  const producerHighWaterMark = 8 * 1024 * 1024;
+  const receivedHash = createHash('sha256');
+  let receivedBytes = 0;
+  let identicalBytes = true;
+  let clientFinObserved = false;
+  let pressureReleased = false;
+  let receiver: Socket | undefined;
+  let receiverError: Error | undefined;
   const server = createTcpServer({ allowHalfOpen: true }, (socket) => {
-    socket.on('data', (chunk: Buffer) => received.push(chunk));
-    socket.once('end', () => socket.end('server-response-after-client-fin'));
+    receiver = socket;
+    socket.once('error', (error) => {
+      receiverError = error;
+    });
+    // Acknowledging the paused real destination gates production across the actual relay.
+    socket.pause();
+    socket.on('data', (chunk: Buffer) => {
+      // The wire contract is consecutive uint32 LE words, beginning at zero.
+      // Validate every byte independently of the producer's word-writing implementation.
+      for (let index = 0; index < chunk.length; index++) {
+        const offset = receivedBytes + index;
+        const expected = (Math.floor(offset / 4) >>> ((offset % 4) * 8)) & 255;
+        if (chunk[index] !== expected) identicalBytes = false;
+      }
+      receivedBytes += chunk.length;
+      receivedHash.update(chunk);
+    });
+    socket.once('end', () => {
+      clientFinObserved = true;
+      socket.end('server-response-after-client-fin');
+    });
+    socket.write('receiver-paused\n');
   });
   await withIsolatedBrowser(server, async (_browser, origin, receipt) => {
     const port = new URL(origin).port;
-    const proof: unknown = JSON.parse(
-      await execBrowser(
-        receipt.containerId,
-        `const net=require('node:net');const socket=net.connect({host:'127.0.0.1',port:${port},allowHalfOpen:true,highWaterMark:1024},()=>{const backpressure=!socket.write(Buffer.alloc(2097152,90));socket.end();socket.proof=backpressure;});let reply='';socket.on('data',d=>reply+=d);socket.on('end',()=>{process.stdout.write(JSON.stringify({backpressure:socket.proof,reply}));});socket.on('error',()=>process.exit(1));`,
+    const proof = record(
+      JSON.parse(
+        await execBrowser(
+          receipt.containerId,
+          browserPressureClient(Number(port), payloadBytes, producerHighWaterMark),
+          (line) => {
+            expect(line).toBe('pressure');
+            expect(pressureReleased).toBe(false);
+            expect(receiver?.isPaused()).toBe(true);
+            expect(receivedBytes).toBe(0);
+            pressureReleased = true;
+            // Docker stdout is the independent release barrier, never blocked payload bytes.
+            receiver?.resume();
+          },
+        ),
       ),
     );
-    expect(proof).toEqual({ backpressure: true, reply: 'server-response-after-client-fin' });
-    expect(Buffer.concat(received)).toEqual(Buffer.alloc(2097152, 90));
+
+    expect(proof.pressureSentBytes).toBeGreaterThanOrEqual(producerHighWaterMark);
+    expect(proof.pressureSentBytes).toBeLessThanOrEqual(payloadBytes);
+    expect(proof.pressurePendingBytes).toBeGreaterThanOrEqual(producerHighWaterMark);
+    expect(proof.pressurePendingBytes).toBeLessThan(producerHighWaterMark + 65536);
+    expect(proof).toMatchObject({
+      backpressure: true,
+      sentBytes: payloadBytes,
+      sha256: receivedHash.digest('hex'),
+      reply: 'server-response-after-client-fin',
+    });
+    expect(pressureReleased).toBe(true);
+    expect(clientFinObserved).toBe(true);
+    expect(receivedBytes).toBe(payloadBytes);
+    expect(receiverError).toBeUndefined();
+    expect(identicalBytes).toBe(true);
   });
 });
 
@@ -419,6 +447,10 @@ it('refuses changed or contradictory ownership without retiring the matching bro
       { nonce: '00000000-0000-0000-0000-000000000000' },
       { imageId: `sha256:${'0'.repeat(64)}` },
       { containerId: '0'.repeat(64) },
+      { networkName: 'dsh-team-browser-net-00000000-0000-0000-0000-000000000000' },
+      { networkId: '0'.repeat(64) },
+      { networkId: undefined },
+      { networkConfig: { ...receipt.networkConfig, internal: false } },
       { acquisition: { state: 'not-started' } },
     ];
     try {
@@ -460,13 +492,19 @@ it('adopts only an explicitly pending identity and settles active application an
     const original: unknown = JSON.parse(await readFile(receiptFile, 'utf8'));
     await writeFile(
       receiptFile,
-      JSON.stringify({ ...record(original), containerId: null, state: 'pending-identity' }),
+      JSON.stringify({
+        ...record(original),
+        containerId: null,
+        networkId: null,
+        state: 'pending-identity',
+      }),
     );
     await rescueChrome(receiptFile);
     await finished;
     await client.catch(() => undefined);
     const retired = record(JSON.parse(await readFile(receiptFile, 'utf8')));
     expect(retired.containerId).toBe(receipt.containerId);
+    expect(retired.networkId).toBe(receipt.networkId);
     expect(retired.state).toBe('stopped');
     await expect(lstat(receipt.socketDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     const { promise, resolve, reject } = Promise.withResolvers<undefined>();
@@ -490,6 +528,16 @@ it('adopts only an explicitly pending identity and settles active application an
         '--no-trunc',
       ]),
     ).toBe('');
+    expect(
+      browserDocker([
+        'network',
+        'ls',
+        '--filter',
+        `label=dsh-team.browser-nonce=${receipt.nonce}`,
+        '--quiet',
+        '--no-trunc',
+      ]),
+    ).toBe('');
     await expect(
       execBrowser(receipt.containerId, 'process.stdout.write("unexpected-live-browser")'),
     ).rejects.toThrow();
@@ -497,125 +545,151 @@ it('adopts only an explicitly pending identity and settles active application an
   });
 });
 
-it('settles a still-live creation producer after driver death before publishing complete cleanup', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'dsh-team-browser-partial-create-'));
-  const receiptFile = join(root, 'chrome.receipt.json');
-  const marker = join(root, 'created');
-  const released = join(root, 'release');
-  const returned = join(root, 'returned');
-  const realDocker = execFileSync('which', ['docker'], {
-    env: { PATH: process.env.PATH },
-    encoding: 'utf8',
-  }).trim();
-  const originalPath = process.env.PATH;
-  const runtimeModule = fileURLToPath(
-    new URL('../../scripts/probe-browser-runtime.mjs', import.meta.url),
-  );
-  const launcherModule = fileURLToPath(
-    new URL('../../scripts/probe-dsh-api-cdp.mjs', import.meta.url),
-  );
-  const shim = join(root, 'docker');
-  await writeFile(
-    shim,
-    `#!/usr/bin/env node
+it.each(['network-before-id', 'network-after-id-before-container', 'container-before-id'])(
+  'settles the still-live producer after driver death at %s before publishing complete cleanup',
+  async (phase) => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-team-browser-partial-create-'));
+    const receiptFile = join(root, 'chrome.receipt.json');
+    const marker = join(root, 'created');
+    const released = join(root, 'release');
+    const returned = join(root, 'returned');
+    const realDocker = execFileSync('which', ['docker'], {
+      env: { PATH: process.env.PATH },
+      encoding: 'utf8',
+    }).trim();
+    const originalPath = process.env.PATH;
+    const runtimeModule = fileURLToPath(
+      new URL('../../scripts/probe-browser-runtime.mjs', import.meta.url),
+    );
+    const launcherModule = fileURLToPath(
+      new URL('../../scripts/probe-dsh-api-cdp.mjs', import.meta.url),
+    );
+    const shim = join(root, 'docker');
+    await writeFile(
+      shim,
+      `#!/usr/bin/env node
 const fs=require('node:fs');const {spawnSync}=require('node:child_process');
 const args=process.argv.slice(2);
-const result=spawnSync(${JSON.stringify(realDocker)},args,{encoding:'utf8',env:{PATH:${JSON.stringify(originalPath)},DOCKER_CONFIG:process.env.DOCKER_CONFIG},timeout:30000});
-async function run(){
-  if(args[0]==='create'&&result.status===0){
+const phase=${JSON.stringify(phase)};
+const matches=phase==='network-before-id'?args[0]==='network'&&args[1]==='create':args[0]==='create';
+async function hold(id){
     const {promise,resolve}=Promise.withResolvers();
     const watcher=fs.watch(${JSON.stringify(root)},(_event,name)=>{if(name==='release')resolve();});
-    fs.writeFileSync(${JSON.stringify(marker + '.tmp')},result.stdout,{mode:0o600});
+    fs.writeFileSync(${JSON.stringify(marker + '.tmp')},id,{mode:0o600});
     fs.renameSync(${JSON.stringify(marker + '.tmp')},${JSON.stringify(marker)});
     if(!fs.existsSync(${JSON.stringify(released)}))await promise;
     watcher.close();
-    fs.writeFileSync(${JSON.stringify(returned + '.tmp')},'producer-returning',{mode:0o600});
+}
+async function run(){
+  if(matches&&phase==='network-after-id-before-container')await hold('');
+  const result=spawnSync(${JSON.stringify(realDocker)},args,{encoding:'utf8',env:{PATH:${JSON.stringify(originalPath)},DOCKER_CONFIG:process.env.DOCKER_CONFIG},timeout:30000});
+  if(matches&&result.status===0){
+    if(phase!=='network-after-id-before-container')await hold(result.stdout);
+    fs.writeFileSync(${JSON.stringify(returned + '.tmp')},result.stdout,{mode:0o600});
     fs.renameSync(${JSON.stringify(returned + '.tmp')},${JSON.stringify(returned)});
   }
   process.stdout.write(result.stdout||'');process.stderr.write(result.stderr||'');process.exitCode=result.status===0?0:1;
 }
 run().catch(()=>{process.exitCode=1;});
 `,
-    { mode: 0o755 },
-  );
-  const driver = spawn(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import {startChrome} from ${JSON.stringify(launcherModule)};import {isolatedBrowserRuntime} from ${JSON.stringify(runtimeModule)};const chrome=await startChrome({runtime:isolatedBrowserRuntime(),origin:'http://127.0.0.1:12345',profile:${JSON.stringify(join(root, 'profile'))},receiptFile:${JSON.stringify(receiptFile)}});await chrome.stop();`,
-    ],
-    { env: { ...process.env, PATH: `${root}:${originalPath ?? ''}` }, stdio: 'ignore' },
-  );
-  const exited = once(driver, 'exit');
-  let pending: Promise<void> | undefined;
-  const birthObserved = Promise.withResolvers<undefined>();
-  const birthReleased = Promise.withResolvers<undefined>();
-  try {
-    await awaitFile(marker);
-    const id = (await readFile(marker, 'utf8')).trim();
-    const before = record(JSON.parse(await readFile(receiptFile, 'utf8')));
-    const producer = record(record(before.acquisition).producer);
-    if (typeof producer.pid !== 'number')
-      throw new Error('Partial-creation producer identity missing');
-    expect(before.containerId).toBeNull();
-    expect(before.state).toBe('pending-identity');
-    expect(driver.kill('SIGKILL')).toBe(true);
-    await exited;
-    process.env.PATH = `${root}:${originalPath ?? ''}`;
-    acquisitionFence.path = `/proc/${String(producer.pid)}/stat`;
-    acquisitionFence.observed = () => {
-      birthObserved.resolve(undefined);
-      return undefined;
-    };
-    acquisitionFence.release = birthReleased.promise;
-    pending = rescueChrome(receiptFile);
-    void pending.catch(() => undefined);
-    const deadline = AbortSignal.timeout(15000);
-    await Promise.race([
-      birthObserved.promise,
-      once(deadline, 'abort').then(() => {
-        throw new Error('Acquisition was not fenced by live producer identity');
-      }),
-    ]);
-    const during = record(JSON.parse(await readFile(receiptFile, 'utf8')));
-    expect(during.containerId).toBeNull();
-    expect(record(during.acquisition).state).toBe('creating');
-    await writeFile(released, 'release');
-    await awaitFile(returned);
-    birthReleased.resolve(undefined);
-    await pending;
-    const after = record(JSON.parse(await readFile(receiptFile, 'utf8')));
-    expect(after).toMatchObject({ containerId: id, state: 'stopped' });
-    expect(record(after.acquisition).state).toBe('settled');
-    expect(
-      browserDocker([
-        'container',
-        'ls',
-        '--all',
-        '--filter',
-        `label=dsh-team.browser-nonce=${String(after.nonce)}`,
-        '--quiet',
-        '--no-trunc',
-      ]),
-    ).toBe('');
-  } finally {
+      { mode: 0o755 },
+    );
+    const driver = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import {startChrome} from ${JSON.stringify(launcherModule)};import {isolatedBrowserRuntime} from ${JSON.stringify(runtimeModule)};const chrome=await startChrome({runtime:isolatedBrowserRuntime(),origin:'http://127.0.0.1:12345',profile:${JSON.stringify(join(root, 'profile'))},receiptFile:${JSON.stringify(receiptFile)}});await chrome.stop();`,
+      ],
+      { env: { ...process.env, PATH: `${root}:${originalPath ?? ''}` }, stdio: 'ignore' },
+    );
+    const exited = once(driver, 'exit');
+    let pending: Promise<void> | undefined;
+    const birthObserved = Promise.withResolvers<undefined>();
+    const birthReleased = Promise.withResolvers<undefined>();
     try {
-      birthReleased.resolve(undefined);
+      await awaitFile(marker);
+      const id = (await readFile(marker, 'utf8')).trim();
+      const before = record(JSON.parse(await readFile(receiptFile, 'utf8')));
+      const producer = record(record(before.acquisition).producer);
+      if (typeof producer.pid !== 'number')
+        throw new Error('Partial-creation producer identity missing');
+      expect(before.containerId).toBeNull();
+      if (phase === 'network-before-id') expect(before.networkId).toBeNull();
+      else expect(before.networkId).toMatch(/^[a-f0-9]{64}$/);
+      expect(before.state).toBe('pending-identity');
+      expect(driver.kill('SIGKILL')).toBe(true);
+      await exited;
+      process.env.PATH = `${root}:${originalPath ?? ''}`;
+      acquisitionFence.path = `/proc/${String(producer.pid)}/stat`;
+      acquisitionFence.observed = () => {
+        birthObserved.resolve(undefined);
+        return undefined;
+      };
+      acquisitionFence.release = birthReleased.promise;
+      pending = rescueChrome(receiptFile);
+      void pending.catch(() => undefined);
+      const deadline = AbortSignal.timeout(15000);
+      await Promise.race([
+        birthObserved.promise,
+        once(deadline, 'abort').then(() => {
+          throw new Error('Acquisition was not fenced by live producer identity');
+        }),
+      ]);
+      const during = record(JSON.parse(await readFile(receiptFile, 'utf8')));
+      expect(during.containerId).toBeNull();
+      expect(record(during.acquisition).state).toBe('creating');
       await writeFile(released, 'release');
-      if (driver.exitCode === null && !driver.signalCode) {
-        driver.kill('SIGKILL');
-        await exited;
-      }
-      await pending?.catch(() => undefined);
-      await rescueChrome(receiptFile);
-      await rm(root, { recursive: true, force: true });
+      await awaitFile(returned);
+      const returnedId = (await readFile(returned, 'utf8')).trim();
+      birthReleased.resolve(undefined);
+      await pending;
+      const after = record(JSON.parse(await readFile(receiptFile, 'utf8')));
+      expect(after.state).toBe('stopped');
+      if (phase === 'network-before-id') expect(after.networkId).toBe(id);
+      else expect(after.containerId).toBe(returnedId);
+      expect(after.networkId).toMatch(/^[a-f0-9]{64}$/);
+      expect(after.containerId).toMatch(/^[a-f0-9]{64}$/);
+      expect(record(after.acquisition).state).toBe('settled');
+      expect(
+        browserDocker([
+          'container',
+          'ls',
+          '--all',
+          '--filter',
+          `label=dsh-team.browser-nonce=${String(after.nonce)}`,
+          '--quiet',
+          '--no-trunc',
+        ]),
+      ).toBe('');
+      expect(
+        browserDocker([
+          'network',
+          'ls',
+          '--filter',
+          `label=dsh-team.browser-nonce=${String(after.nonce)}`,
+          '--quiet',
+          '--no-trunc',
+        ]),
+      ).toBe('');
     } finally {
-      if (originalPath === undefined) delete process.env.PATH;
-      else process.env.PATH = originalPath;
+      try {
+        birthReleased.resolve(undefined);
+        await writeFile(released, 'release');
+        if (driver.exitCode === null && !driver.signalCode) {
+          driver.kill('SIGKILL');
+          await exited;
+        }
+        await pending?.catch(() => undefined);
+        await rescueChrome(receiptFile);
+        await rm(root, { recursive: true, force: true });
+      } finally {
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
+      }
     }
-  }
-});
+  },
+);
 
 it('retains a nonsecret failed-discovery receipt and retires its browser, relays and socket files', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-browser-discovery-'));

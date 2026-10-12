@@ -279,7 +279,7 @@ const validateLaunch = (input) => {
   if (url.protocol !== 'http:' || !url.hostname || url.username || url.password) {
     throw new Error('chrome-start requires original HTTP origin');
   }
-  if (!['native', 'docker-network-none'].includes(input.runtime?.kind)) {
+  if (!['native', 'docker-isolated-network'].includes(input.runtime?.kind)) {
     throw new Error('chrome-start requires explicit runtime');
   }
 };
@@ -346,7 +346,7 @@ const parseDebugger = (text) => {
 
 const requireDebugger = (info, runtime) => {
   if (
-    runtime.kind === 'docker-network-none' &&
+    runtime.kind === 'docker-isolated-network' &&
     !/^(?:HeadlessChrome|Chrome)\/140\.0\.7339\.82$/.test(info.Browser ?? '')
   ) {
     throw new Error('isolated browser version differs from pinned CfT');
@@ -363,7 +363,7 @@ export const startChrome = async (input) => {
   try {
     const receipt = await registerChrome(input);
     owner =
-      input.runtime.kind === 'docker-network-none'
+      input.runtime.kind === 'docker-isolated-network'
         ? await startIsolated(input, receipt)
         : await startNative(input, receipt);
     const debugPort = owner.debugPort;

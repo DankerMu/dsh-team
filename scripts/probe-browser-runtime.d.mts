@@ -1,7 +1,7 @@
 export type BrowserRuntime =
   | { readonly kind: 'native'; readonly bin: string }
   | {
-      readonly kind: 'docker-network-none';
+      readonly kind: 'docker-isolated-network';
       readonly imageId: string;
       readonly chromeDirectory: string;
       readonly chromeSha256: string;
@@ -17,12 +17,20 @@ export type ChromeLaunchInput = {
 export type IsolatedBrowserReceipt = {
   readonly version: 1;
   readonly nonce: string;
-  readonly kind: 'docker-network-none';
+  readonly kind: 'docker-isolated-network';
   readonly state: string;
   readonly profile: string;
   readonly socketDirectory: string;
   readonly containerName: string;
   readonly containerId: string;
+  readonly networkName: string;
+  readonly networkId: string;
+  readonly networkConfig: {
+    readonly driver: 'bridge';
+    readonly internal: true;
+    readonly enableIPv6: false;
+    readonly options: Readonly<Record<string, string>>;
+  };
   readonly imageId: string;
   readonly runId: string;
   readonly debugPort: number;
@@ -32,7 +40,7 @@ export type IsolatedBrowserReceipt = {
 };
 export declare function isolatedBrowserRuntime(
   runId?: string,
-): Extract<BrowserRuntime, { kind: 'docker-network-none' }>;
+): Extract<BrowserRuntime, { kind: 'docker-isolated-network' }>;
 export declare function rescueChrome(receiptFile: string, expectedNonce?: string): Promise<void>;
 export declare function processBirth(pid: number): Promise<string>;
 export declare function browserDocker(args: readonly string[], ms?: number): string;

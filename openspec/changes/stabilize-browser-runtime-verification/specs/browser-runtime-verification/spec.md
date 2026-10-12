@@ -71,9 +71,19 @@ Trusted Linux Docker browser verification MUST run Chrome in an invocation-owned
 - **WHEN** isolated runtime is requested on an unsupported platform or its image, browser or namespace transport cannot start
 - **THEN** startup fails explicitly, no native fallback occurs, and acquired owned resources are independently cleaned
 
+#### Scenario: Browser application observes network availability
+
+- **WHEN** the unchanged browser client starts on the private internal bridge
+- **THEN** the browser naturally reports online without a JavaScript/CDP override or notification-disabling flag, while the namespace has no IPv4 default route, no IPv4 bridge gateway and no non-loopback IPv6 interface; owned-host reachability probes fail and original relayed authentication, session initialization and reload remain usable
+
+#### Scenario: Browser runtime renders Chinese controls
+
+- **WHEN** the pinned browser renders the real Chinese first-use surface in the verification image
+- **THEN** runtime font coverage renders readable Chinese glyphs without host font-directory mounts or changes to product localization
+
 ### Requirement: Browser termination ownership survives partial startup and driver failure
 
-The canonical launcher MUST register and retain private ownership information before partially creating isolated resources. Normal stop, setup failure and outer timeout/signal rescue MUST clean the exact owned browser/container, relay sockets and listeners. Cleanup MUST verify resource identity and MUST NOT interpret an internal container PID or Docker client PID as a host Chrome PID, delete foreign resources, or replace the primary failure with a success.
+The canonical launcher MUST register and retain private ownership information before partially creating isolated resources. Normal stop, setup failure and outer timeout/signal rescue MUST clean the exact owned browser/container, dedicated internal network, relay sockets and listeners. Cleanup MUST settle outstanding creation before claiming absence, verify immutable resource identity and network ownership/configuration, and MUST NOT interpret an internal container PID or Docker client PID as a host Chrome PID, delete foreign resources, disconnect unexpected network peers, or replace the primary failure with a success.
 
 #### Scenario: Driver stops before returning a browser handle
 
@@ -89,6 +99,11 @@ The canonical launcher MUST register and retain private ownership information be
 
 - **WHEN** the driver dies after container creation while the private pre-create receipt still explicitly has no recorded container ID
 - **THEN** rescue may adopt an inspected ID only after exact registered name, nonce/run ownership and expected immutable image match, atomically record it and clean by ID; an already-recorded ID is never replaced
+
+#### Scenario: Network acquisition is interrupted
+
+- **WHEN** the driver dies after private network creation but before recording its ID or creating the browser
+- **THEN** rescue settles the producer and adopts only an explicitly pending network with exact name, nonce/run and isolated configuration, atomically records its ID and removes it after verifying no unexpected endpoints; an existing recorded ID is never replaced and foreign peers cause refusal
 
 ### Requirement: Runtime qualification binds to the final candidate
 

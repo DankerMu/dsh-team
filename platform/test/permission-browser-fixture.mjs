@@ -405,7 +405,7 @@ async function persistFailure(error, browser, web, control, report, evidenceDire
 
 /** Canonical lifecycle owns image, volumes, containers and mapped port. */
 export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenceDirectory }) {
-  assert.equal(runtime.kind, 'docker-network-none', 'isolated browser runtime is required');
+  assert.equal(runtime.kind, 'docker-isolated-network', 'isolated browser runtime is required');
   await mkdir(evidenceDirectory, { recursive: true });
   const report = {
     status: 'RUNNING',

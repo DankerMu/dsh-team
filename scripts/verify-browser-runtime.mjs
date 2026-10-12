@@ -6,7 +6,8 @@ import { arch, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromeDigest, readReceipt, rescueChrome } from './probe-browser-runtime.mjs';
-import { startChrome } from './probe-dsh-api-cdp.mjs';
+import { connectPage, startChrome } from './probe-dsh-api-cdp.mjs';
+import { qualifyBrowserConfinement } from './probe-browser-confinement.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
@@ -59,6 +60,54 @@ function requireLocalRuntime() {
     throw new Error('browser isolation requires the local default Docker daemon');
 }
 
+async function qualifyRuntime(chrome) {
+  let page;
+  let proof;
+  let failure;
+  const cleanupErrors = [];
+  try {
+    page = await connectPage(chrome.browserWs);
+    const result = await page.send('Runtime.evaluate', {
+      expression: 'navigator.onLine',
+      returnByValue: true,
+    });
+    if (result?.result?.value !== true)
+      throw new Error('browser runtime must naturally report online');
+    proof = {
+      ...(await qualifyBrowserConfinement(
+        await readReceipt(join(directory, 'qualification.receipt.json')),
+      )),
+      naturallyOnline: true,
+    };
+  } catch (error) {
+    failure = { error };
+  }
+  try {
+    page?.close();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    await chrome.stop();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (failure) {
+    if (cleanupErrors.length)
+      throw new AggregateError(
+        [failure.error, ...cleanupErrors],
+        'browser qualification and cleanup failed',
+        {
+          cause: failure.error,
+        },
+      );
+    throw failure.error;
+  }
+  if (cleanupErrors.length)
+    throw new AggregateError(cleanupErrors, 'browser qualification cleanup failed');
+  return proof;
+}
+
 async function prepare() {
   requireLocalRuntime();
   directory = await mkdtemp(join(tmpdir(), 'dsh-browser-command-'));
@@ -91,6 +140,10 @@ async function prepare() {
   await copyFile(
     join(root, 'scripts/probe-browser-receipt.mjs'),
     join(context, 'probe-browser-receipt.mjs'),
+  );
+  await copyFile(
+    join(root, 'scripts/probe-browser-network.mjs'),
+    join(context, 'probe-browser-network.mjs'),
   );
   await writeFile(
     join(directory, 'image.json'),
@@ -126,7 +179,7 @@ async function prepare() {
   process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY = directory;
   const qualification = await startChrome({
     runtime: {
-      kind: 'docker-network-none',
+      kind: 'docker-isolated-network',
       imageId,
       chromeDirectory: dirname(bin),
       chromeSha256: sha256,
@@ -136,7 +189,7 @@ async function prepare() {
     profile: join(directory, 'qualification-profile'),
     receiptFile: join(directory, 'qualification.receipt.json'),
   });
-  await qualification.stop();
+  const confinement = await qualifyRuntime(qualification);
   if (interrupted) throw new Error('browser runtime invocation interrupted');
   const identities = {
     invocation,
@@ -146,6 +199,7 @@ async function prepare() {
     chromeSha256: sha256,
     uid: process.getuid(),
     gid: process.getgid(),
+    confinement,
   };
   await writeFile(join(directory, 'runtime.json'), JSON.stringify(identities), { mode: 0o600 });
   process.stdout.write(
@@ -154,7 +208,7 @@ async function prepare() {
   const env = {
     ...process.env,
     CHROME_BIN: bin,
-    DSH_TEAM_BROWSER_RUNTIME: 'docker-network-none',
+    DSH_TEAM_BROWSER_RUNTIME: 'docker-isolated-network',
     DSH_TEAM_BROWSER_IMAGE_ID: imageId,
     DSH_TEAM_BROWSER_CHROME_SHA256: sha256,
     DSH_TEAM_BROWSER_DOCKER_CONFIG: environment().DOCKER_CONFIG,
@@ -176,7 +230,7 @@ for (const [signal, code] of [
 async function rescueRegistration(name) {
   const pointerPath = join(directory, name);
   const pointer = await readReceipt(pointerPath);
-  if (pointer.kind !== 'docker-network-none' || typeof pointer.receiptFile !== 'string')
+  if (pointer.kind !== 'docker-isolated-network' || typeof pointer.receiptFile !== 'string')
     throw new Error('browser registered receipt identity invalid');
   await rescueChrome(
     pointer.state === 'stopped' ? pointerPath : pointer.receiptFile,

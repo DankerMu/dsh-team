@@ -11,14 +11,28 @@ import { alive, processBirth, retireNative, stopChild } from './probe-browser-na
 export { processBirth } from './probe-browser-native.mjs';
 import { readReceipt, writeReceipt } from './probe-browser-receipt.mjs';
 export { readReceipt, writeReceipt } from './probe-browser-receipt.mjs';
+import {
+  browserDocker,
+  dockerEnvironment,
+  inspectContainer,
+  requireContainer,
+  networkRegistration,
+  networkCreateArgs,
+  requireNetworkAuthority,
+  preflightResources,
+  retireNetwork,
+  inspectNetwork,
+  requireNetwork,
+  OWNER,
+  NONCE,
+  ROLE,
+} from './probe-browser-network.mjs';
+export { browserDocker } from './probe-browser-network.mjs';
 
 const modulePath = fileURLToPath(import.meta.url);
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
 const CONTAINER_ID = /^[a-f0-9]{64}$/;
-const OWNER = 'dsh-team.test-run';
-const NONCE = 'dsh-team.browser-nonce';
-const ROLE = 'dsh-team.role';
 const isolatedOwners = new Map();
 
 export async function chromeDigest(path) {
@@ -57,23 +71,24 @@ export async function registerChrome(input) {
     nonce: randomUUID(),
     kind: input.runtime.kind,
     profile,
-    state: input.runtime.kind === 'docker-network-none' ? 'pending-identity' : 'registered',
+    state: input.runtime.kind === 'docker-isolated-network' ? 'pending-identity' : 'registered',
     native: null,
     containerId: null,
     driver: { pid: process.pid, birth: await processBirth(process.pid) },
     acquisition: { state: 'not-started' },
   };
-  if (input.runtime.kind === 'docker-network-none') {
+  if (input.runtime.kind === 'docker-isolated-network') {
     Object.assign(receipt, {
       containerName: `dsh-team-browser-${receipt.nonce}`,
       imageId: input.runtime.imageId,
       chromeSha256: input.runtime.chromeSha256,
       runId: input.runtime.runId,
+      ...networkRegistration(receipt.nonce),
     });
   }
   await writeReceipt(receiptFile, receipt);
   if (
-    input.runtime.kind === 'docker-network-none' &&
+    input.runtime.kind === 'docker-isolated-network' &&
     process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY
   ) {
     await writeReceipt(
@@ -82,64 +97,6 @@ export async function registerChrome(input) {
     );
   }
   return receipt;
-}
-
-const dockerEnvironment = () => ({
-  PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
-  DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG ?? '/nonexistent-dsh-browser-config',
-});
-export function browserDocker(args, ms = 30000) {
-  const result = spawnSync('docker', args, {
-    env: dockerEnvironment(),
-    encoding: 'utf8',
-    timeout: ms,
-    killSignal: 'SIGKILL',
-    maxBuffer: 65536,
-  });
-  if (result.error || result.status !== 0) throw new Error('browser Docker operation failed');
-  return result.stdout.trim();
-}
-function inspectContainer(target) {
-  const result = spawnSync('docker', ['container', 'inspect', target], {
-    env: dockerEnvironment(),
-    encoding: 'utf8',
-    timeout: 30000,
-    killSignal: 'SIGKILL',
-    maxBuffer: 65536,
-  });
-  const diagnostic = result.stderr?.trim();
-  if (
-    !result.error &&
-    result.status === 1 &&
-    ['', '[]'].includes(result.stdout.trim()) &&
-    [
-      `Error response from daemon: No such container: ${target}`,
-      `Error: No such container: ${target}`,
-      `Error response from daemon: No such object: ${target}`,
-      `Error: No such object: ${target}`,
-    ].includes(diagnostic)
-  )
-    return null;
-  if (result.error || result.status !== 0) throw new Error('browser Docker inspection failed');
-  const rows = JSON.parse(result.stdout);
-  if (!Array.isArray(rows) || rows.length !== 1) throw new Error('browser Docker identity invalid');
-  return rows[0];
-}
-function requireContainer(receipt, object) {
-  const labels = object.Config?.Labels ?? {};
-  const recordedMatches = receipt.containerId === null || object.Id === receipt.containerId;
-  if (
-    !CONTAINER_ID.test(object.Id ?? '') ||
-    object.Name !== `/${receipt.containerName}` ||
-    labels[OWNER] !== receipt.runId ||
-    labels[NONCE] !== receipt.nonce ||
-    labels[ROLE] !== 'verification-browser' ||
-    object.Image !== receipt.imageId ||
-    object.Config?.Image !== receipt.imageId ||
-    !recordedMatches
-  )
-    throw new Error('browser container identity mismatch; refusing cleanup');
-  return object.Id;
 }
 
 function byteListener(address, destination) {
@@ -194,7 +151,7 @@ function byteListener(address, destination) {
 
 export function isolatedBrowserRuntime(runId = randomUUID()) {
   if (
-    process.env.DSH_TEAM_BROWSER_RUNTIME !== 'docker-network-none' ||
+    process.env.DSH_TEAM_BROWSER_RUNTIME !== 'docker-isolated-network' ||
     platform() !== 'linux' ||
     arch() !== 'x64'
   )
@@ -205,7 +162,7 @@ export function isolatedBrowserRuntime(runId = randomUUID()) {
   if (!IMAGE_ID.test(imageId ?? '') || !bin || !/^[a-f0-9]{64}$/.test(chromeSha256 ?? ''))
     throw new Error('isolated browser immutable image/Chrome identity missing');
   return {
-    kind: 'docker-network-none',
+    kind: 'docker-isolated-network',
     imageId,
     chromeDirectory: dirname(resolve(bin)),
     chromeSha256,
@@ -248,8 +205,15 @@ async function creationAuthorization(path) {
 async function completedAcquisition(path, nonce) {
   const latest = await readReceipt(path);
   if (latest.nonce !== nonce) throw new Error('browser creation authority identity changed');
-  if (latest.acquisition.state === 'armed' && !(await creationAuthorization(path))) {
+  const authorization = await creationAuthorization(path);
+  if (authorization && authorization.nonce !== nonce)
+    throw new Error('browser creation authority identity changed');
+  if (latest.acquisition.state === 'armed' && !authorization) {
     latest.acquisition.state = 'settled';
+    await writeReceipt(path, latest);
+  } else if (['armed', 'creating'].includes(latest.acquisition.state)) {
+    latest.acquisition.state = 'uncertain';
+    latest.acquisition.failure ??= 'producer-exited-before-settlement';
     await writeReceipt(path, latest);
   }
   if (latest.acquisition.state !== 'settled')
@@ -261,7 +225,8 @@ async function waitForProducer(path, receipt, nonce) {
   const until = Date.now() + 40000;
   while (['armed', 'creating'].includes(receipt.acquisition.state)) {
     const producer = receipt.acquisition.producer;
-    if (!producer || !alive(producer.pid)) return await completedAcquisition(path, nonce);
+    if (!producer) throw new Error('browser creation producer identity missing');
+    if (!alive(producer.pid)) return await completedAcquisition(path, nonce);
     let birth;
     try {
       birth = await processBirth(producer.pid);
@@ -303,6 +268,7 @@ function requireCleanupAuthority(receipt) {
     !/^dsh-team-browser-[a-f0-9-]+$/.test(receipt.containerName ?? '')
   )
     throw new Error('browser cleanup authority missing');
+  requireNetworkAuthority(receipt);
   if (
     !Object.hasOwn(receipt, 'containerId') ||
     (receipt.containerId !== null && !CONTAINER_ID.test(receipt.containerId))
@@ -315,37 +281,30 @@ function requireCleanupAuthority(receipt) {
 async function requireNeverStarted(path, receipt) {
   if (
     receipt.containerId !== null ||
+    receipt.networkId !== null ||
     !['pending-identity', 'stopped'].includes(receipt.state) ||
     (await creationAuthorization(path))
   )
     throw new Error('browser never-started identity contradicts acquired resources');
 }
 
-async function retireContainer(path, original) {
+async function retireIsolated(path, original) {
   const receipt = await settleAcquisition(path, original);
   requireCleanupAuthority(receipt);
   if (receipt.acquisition.state === 'not-started') {
     await requireNeverStarted(path, receipt);
-    await isolatedOwners.get(receipt.nonce)?.();
+    if (inspectContainer(receipt.containerName) || inspectNetwork(receipt.networkName))
+      throw new Error('browser never-started identity contradicts acquired resources');
     return receipt;
   }
-  const object = inspectContainer(receipt.containerId ?? receipt.containerName);
-  if (object === null) {
-    if (receipt.containerId && inspectContainer(receipt.containerName) !== null)
-      throw new Error('browser recorded container identity mismatch');
-    return receipt;
+  const { container } = await preflightResources(path, receipt);
+  if (container) {
+    if (container.State?.Running) browserDocker(['stop', '--time', '8', container.Id]);
+    browserDocker(['rm', container.Id]);
+    if (inspectContainer(container.Id) !== null || inspectContainer(receipt.containerName) !== null)
+      throw new Error('browser owned container remains');
   }
-  if (receipt.state === 'stopped' && receipt.containerId === null)
-    throw new Error('browser finalized absent identity changed; refusing adoption');
-  const id = requireContainer(receipt, object);
-  if (receipt.containerId === null) {
-    receipt.containerId = id;
-    await writeReceipt(path, receipt);
-  }
-  if (object.State?.Running) browserDocker(['stop', '--time', '8', id]);
-  browserDocker(['rm', '--force', id]);
-  if (inspectContainer(id) !== null || inspectContainer(receipt.containerName) !== null)
-    throw new Error('browser owned container remains');
+  retireNetwork(receipt);
   return receipt;
 }
 
@@ -368,7 +327,7 @@ async function rescueMissingReceipt(path, expectedNonce) {
 
 async function requireStoppedDriver(receipt) {
   if (
-    receipt.kind !== 'docker-network-none' ||
+    receipt.kind !== 'docker-isolated-network' ||
     receipt.state === 'stopped' ||
     receipt.driver?.pid === process.pid
   )
@@ -388,7 +347,7 @@ async function recordStoppedReceipt(path, receipt) {
   receipt.state = 'stopped';
   await writeReceipt(path, receipt);
   const directory = process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY;
-  if (directory && receipt.kind === 'docker-network-none') {
+  if (directory && receipt.kind === 'docker-isolated-network') {
     const registeredPath = join(directory, `${receipt.nonce}.launch.json`);
     if (registeredPath !== resolve(path))
       await writeReceipt(registeredPath, { ...receipt, receiptFile: resolve(path) });
@@ -406,7 +365,7 @@ export async function rescueChrome(path, expectedNonce) {
   if (expectedNonce && receipt.nonce !== expectedNonce)
     throw new Error('browser launch receipt identity changed; refusing cleanup');
   await requireStoppedDriver(receipt);
-  if (receipt.kind === 'docker-network-none') receipt = await retireContainer(path, receipt);
+  if (receipt.kind === 'docker-isolated-network') receipt = await retireIsolated(path, receipt);
   else if (receipt.kind === 'native') await retireNative(receipt);
   else throw new Error('browser receipt runtime invalid');
   await isolatedOwners.get(receipt.nonce)?.();
@@ -562,7 +521,7 @@ export async function startIsolated(input, receipt) {
       '--label',
       `${ROLE}=verification-browser`,
       '--network',
-      'none',
+      receipt.networkName,
       '--user',
       `${uid}:${gid}`,
       '--cap-drop',
@@ -592,6 +551,9 @@ export async function startIsolated(input, receipt) {
     const object = inspectContainer(receipt.containerId);
     if (!object) throw new Error('browser created container absent');
     requireContainer(receipt, object);
+    const network = inspectNetwork(receipt.networkId);
+    if (!network) throw new Error('browser created network absent');
+    requireNetwork(receipt, network, object);
     browserDocker(['start', receipt.containerId]);
     const ready = await waitPrivateRuntime(socketDirectory, debugPort, uid, runtime);
     receipt.privateUid = ready.uid;
@@ -640,7 +602,50 @@ function creationResult(result) {
   return { state, id };
 }
 
-async function acquireContainer(path) {
+function submitCreation(args, until) {
+  const remaining = until - Date.now();
+  if (remaining <= 0) return { state: 'settled', id: null };
+  return creationResult(
+    spawnSync('docker', args, {
+      env: dockerEnvironment(),
+      encoding: 'utf8',
+      timeout: remaining,
+      killSignal: 'SIGKILL',
+      maxBuffer: 65536,
+    }),
+  );
+}
+
+async function acquireResources(path, receipt, args) {
+  // Network and container share the original acquisition deadline and producer fence.
+  const until = Date.now() + 30000;
+  const network = submitCreation(networkCreateArgs(receipt), until);
+  receipt.networkId = network.id;
+  receipt.acquisition.resource = 'network';
+  if (!network.id) {
+    receipt.acquisition.state = network.state;
+    receipt.acquisition.failure = 'network-create';
+    await writeReceipt(path, receipt);
+    return;
+  }
+  await writeReceipt(path, receipt);
+  const object = inspectNetwork(network.id, Math.max(1, until - Date.now()));
+  if (!object) throw new Error('browser acquired network absent');
+  requireNetwork(receipt, object);
+  const networkArgument = args.indexOf('--network') + 1;
+  if (networkArgument === 0 || args[networkArgument] !== receipt.networkName)
+    throw new Error('browser producer network argument mismatch');
+  args[networkArgument] = network.id;
+  receipt.acquisition.resource = 'container';
+  await writeReceipt(path, receipt);
+  const container = submitCreation(args, until);
+  receipt.containerId = container.id;
+  receipt.acquisition.state = container.state;
+  if (!container.id) receipt.acquisition.failure = 'container-create';
+  await writeReceipt(path, receipt);
+}
+
+async function acquireIsolated(path) {
   let launched = false;
   const receipt = await readReceipt(path);
   const producer = { pid: process.pid, birth: await processBirth(process.pid) };
@@ -676,17 +681,7 @@ async function acquireContainer(path) {
       throw new Error('browser creation authorization identity mismatch');
     receipt.acquisition = { state: 'creating', producer };
     await writeReceipt(path, receipt);
-    const result = spawnSync('docker', message.args, {
-      env: dockerEnvironment(),
-      encoding: 'utf8',
-      timeout: 30000,
-      killSignal: 'SIGKILL',
-      maxBuffer: 65536,
-    });
-    const outcome = creationResult(result);
-    receipt.acquisition.state = outcome.state;
-    receipt.containerId = outcome.id;
-    await writeReceipt(path, receipt);
+    await acquireResources(path, receipt, message.args);
     process.exitCode = receipt.containerId ? 0 : 1;
     if (process.connected) process.disconnect();
   });
@@ -770,7 +765,7 @@ if (process.argv[1] && resolve(process.argv[1]) === modulePath) {
     command === 'rescue'
       ? rescueChrome(first)
       : command === 'create'
-        ? acquireContainer(first)
+        ? acquireIsolated(first)
         : command === 'private'
           ? privateRuntime(Number(first), Number(second), JSON.parse(third))
           : Promise.reject(new Error('browser runtime command invalid'));

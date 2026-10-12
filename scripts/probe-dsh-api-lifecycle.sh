@@ -33,7 +33,7 @@ probe_require_gnu_timeout() {
 }
 
 probe_require_chrome() {
-  if [ "${DSH_TEAM_BROWSER_RUNTIME:-}" != "docker-network-none" ] ||
+  if [ "${DSH_TEAM_BROWSER_RUNTIME:-}" != "docker-isolated-network" ] ||
     ! [[ "${DSH_TEAM_BROWSER_IMAGE_ID:-}" =~ ^sha256:[a-f0-9]{64}$ ]] ||
     [ -z "${CHROME_BIN:-}" ] || [ ! -x "${CHROME_BIN}" ]; then
     echo "${probe_name}: use the root package command with pinned CHROME_BIN and isolated browser provisioning" >&2

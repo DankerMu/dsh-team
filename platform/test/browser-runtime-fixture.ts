@@ -4,7 +4,7 @@ import { lstat, mkdtemp, readFile, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server, Socket } from 'node:net';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { openMappedPage, mappedFlags, closeMapped } from '../../scripts/probe-mapped-host.mjs';
 import {
   browserDocker,
@@ -341,4 +341,118 @@ export class OwnedBrowserChurn {
     )
       throw new Error('Owned churn inventory remains');
   }
+}
+export function execBrowser(
+  id: string,
+  source: string,
+  onProgress?: (line: string) => void,
+): Promise<string> {
+  const { promise, resolve, reject } = Promise.withResolvers<string>();
+  const child = spawn('docker', ['exec', id, 'node', '-e', source], {
+    env: { PATH: process.env.PATH, DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  let output = '';
+  let outputBytes = 0;
+  // This is a real external-process deadline, not a sleep; fake time cannot bound Docker.
+  const timer = setTimeout(() => {
+    child.kill('SIGKILL');
+    reject(new Error('Owned browser protocol client timeout'));
+  }, 15000);
+  child.stdout.on('data', (data: Buffer) => {
+    outputBytes += data.length;
+    output += data.toString();
+    if (outputBytes > 65536) {
+      child.kill('SIGKILL');
+      reject(new Error('Owned browser protocol client output limit'));
+      return;
+    }
+    if (onProgress) {
+      let newline: number;
+      while ((newline = output.indexOf('\n')) !== -1) {
+        const line = output.slice(0, newline);
+        output = output.slice(newline + 1);
+        try {
+          onProgress(line);
+        } catch (error) {
+          child.kill('SIGKILL');
+          reject(error);
+          return;
+        }
+      }
+    }
+  });
+  child.once('error', (error) => {
+    clearTimeout(timer);
+    reject(error);
+  });
+  child.once('close', (code) => {
+    clearTimeout(timer);
+    if (code !== 0) reject(new Error('Owned browser protocol client failed'));
+    else resolve(output);
+  });
+  return promise;
+}
+
+export function browserPressureClient(
+  port: number,
+  payloadBytes: number,
+  producerHighWaterMark: number,
+): string {
+  return `
+const net = require('node:net');
+const { createHash } = require('node:crypto');
+const totalBytes = ${String(payloadBytes)};
+const socket = net.connect({
+  host: '127.0.0.1', port: ${String(port)}, allowHalfOpen: true,
+  highWaterMark: ${String(producerHighWaterMark)},
+});
+const hash = createHash('sha256');
+let sentBytes = 0;
+let backpressure = false;
+let pressureSentBytes = 0;
+let pressurePendingBytes = 0;
+let ready = false;
+let reply = '';
+function produce() {
+  while (sentBytes < totalBytes) {
+    const chunk = Buffer.allocUnsafe(Math.min(65536, totalBytes - sentBytes));
+    for (let offset = 0; offset < chunk.length; offset += 4)
+      chunk.writeUInt32LE((sentBytes + offset) / 4, offset);
+    sentBytes += chunk.length;
+    hash.update(chunk);
+    if (!socket.write(chunk)) {
+      // Never queue past pressure: drain resumes this same finite transfer.
+      socket.once('drain', produce);
+      if (!backpressure) {
+        backpressure = true;
+        pressureSentBytes = sentBytes;
+        pressurePendingBytes = socket.writableLength;
+        process.stdout.write('pressure\\n');
+      }
+      return;
+    }
+  }
+  socket.end();
+}
+socket.on('data', chunk => {
+  reply += chunk.toString();
+  if (!ready) {
+    const newline = reply.indexOf('\\n');
+    if (newline === -1) return;
+    if (reply.slice(0, newline) !== 'receiver-paused') process.exit(1);
+    ready = true;
+    reply = reply.slice(newline + 1);
+    produce();
+  }
+});
+socket.on('end', () => {
+  if (!ready || sentBytes !== totalBytes || !socket.writableFinished) process.exit(1);
+  process.stdout.write(JSON.stringify({
+    backpressure, pressureSentBytes, pressurePendingBytes, sentBytes,
+    sha256: hash.digest('hex'), reply,
+  }));
+});
+socket.on('error', () => process.exit(1));
+`;
 }
