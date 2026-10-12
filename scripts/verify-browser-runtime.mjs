@@ -15,6 +15,8 @@ const commands = {
   'first-run': ['bash', [join(root, 'scripts/probe-first-run.sh')]],
 };
 const command = commands[process.argv[2]];
+const forwardedArguments = process.argv.slice(3);
+if (command) command[1].push(...forwardedArguments);
 let status = 1;
 let buildStarted = false;
 let directory;
@@ -39,9 +41,18 @@ function docker(args, ms = 30000, build = false) {
   if (result.error || result.status !== 0) throw new Error('browser runtime provisioning failed');
   return result.stdout.trim();
 }
+function runVerificationChild(env) {
+  return new Promise((done, reject) => {
+    child = spawn(command[0], command[1], { cwd: root, env, stdio: 'inherit' });
+    child.once('error', reject);
+    child.once('exit', (code, signal) =>
+      done(signal ? (signal === 'SIGINT' ? 130 : 143) : (code ?? 1)),
+    );
+  });
+}
+
 function requireLocalRuntime() {
-  if (!command || process.argv.length !== 3)
-    throw new Error('usage: verify-browser-runtime.mjs docker|dsh-api|first-run');
+  if (!command) throw new Error('usage: verify-browser-runtime.mjs docker|dsh-api|first-run');
   if (platform() !== 'linux' || arch() !== 'x64' || process.getuid() === 0)
     throw new Error('browser isolation requires trusted nonroot Linux amd64');
   if (process.env.DOCKER_HOST || process.env.DOCKER_CONTEXT)
@@ -150,13 +161,7 @@ async function prepare() {
     DSH_TEAM_BROWSER_RECEIPT_DIRECTORY: directory,
     DSH_TEAM_BROWSER_INVOCATION: invocation,
   };
-  status = await new Promise((done, reject) => {
-    child = spawn(command[0], command[1], { cwd: root, env, stdio: 'inherit' });
-    child.once('error', reject);
-    child.once('exit', (code, signal) =>
-      done(signal ? (signal === 'SIGINT' ? 130 : 143) : (code ?? 1)),
-    );
-  });
+  status = await runVerificationChild(env);
 }
 for (const [signal, code] of [
   ['SIGINT', 130],
@@ -213,7 +218,9 @@ async function cleanup() {
   }
 }
 try {
-  await prepare();
+  if (command && forwardedArguments.some((value) => value === '--help' || value === '-h'))
+    status = await runVerificationChild(process.env);
+  else await prepare();
 } catch (error) {
   const known = [
     'usage: verify-browser-runtime.mjs docker|dsh-api|first-run',
