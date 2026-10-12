@@ -79,12 +79,21 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(HTML);
   });
 
+  it('serves the administrator shell at its exact declared page', async () => {
+    const response = await app.inject('/_platform/admin');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toBe(HTML);
+  });
+
   it('serves HEAD metadata without a body and bounded byte ranges', async () => {
     const cases: [string, string][] = [
       ['/_platform/login', HTML],
       ['/_platform/register', HTML],
       ['/_platform/account', HTML],
       ['/_platform/wait', HTML],
+      ['/_platform/admin', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -116,7 +125,10 @@ describe('declared platform static routes', () => {
     '/_platform/account/settings',
     '/_platform/account%00',
     '/_platform/account%2fsettings',
-    '/_platform/admin',
+    '/_platform/admin/',
+    '/_platform/admin/accounts',
+    '/_platform/admin%00',
+    '/_platform/admin%2faccounts',
     '/_platform/api/unknown',
     '/_platform/assets/missing.js',
     '/_platform/assets/',
@@ -148,19 +160,22 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(SCRIPT);
   });
 
-  it.each(['/_platform/login', '/_platform/register', '/_platform/account', '/_platform/wait'])(
-    'does not expose a symlinked entry outside the build at %s',
-    async (url) => {
-      await rm(join(root, 'index.html'));
-      await symlink(join(directory, 'private.js'), join(root, 'index.html'));
+  it.each([
+    '/_platform/login',
+    '/_platform/register',
+    '/_platform/account',
+    '/_platform/wait',
+    '/_platform/admin',
+  ])('does not expose a symlinked entry outside the build at %s', async (url) => {
+    await rm(join(root, 'index.html'));
+    await symlink(join(directory, 'private.js'), join(root, 'index.html'));
 
-      const response = await app.inject(url);
+    const response = await app.inject(url);
 
-      expect(response.statusCode).toBe(404);
-      expect(response.body).not.toContain(PRIVATE);
-      await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
-    },
-  );
+    expect(response.statusCode).toBe(404);
+    expect(response.body).not.toContain(PRIVATE);
+    await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
+  });
 
   it('does not expose a symlinked assets directory outside the build', async () => {
     await rm(join(root, 'assets'), { recursive: true });
@@ -173,31 +188,37 @@ describe('declared platform static routes', () => {
     await expect(assertWebBuild(root)).rejects.toThrow('Platform web build');
   });
 
-  it.each(['/_platform/login', '/_platform/register', '/_platform/account', '/_platform/wait'])(
-    'does not accept credential submissions at the static page %s',
-    async (url) => {
-      const response = await app.inject({ method: 'POST', url, payload: {} });
+  it.each([
+    '/_platform/login',
+    '/_platform/register',
+    '/_platform/account',
+    '/_platform/wait',
+    '/_platform/admin',
+  ])('does not accept credential submissions at the static page %s', async (url) => {
+    const response = await app.inject({ method: 'POST', url, payload: {} });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it.each([
+    '/_platform/login',
+    '/_platform/register',
+    '/_platform/account',
+    '/_platform/wait',
+    '/_platform/admin',
+  ])('registers %s without a build but rejects that production prerequisite', async (url) => {
+    const missingRoot = join(directory, 'not-built');
+    const offline = Fastify();
+    try {
+      await offline.register(webRoutes, { root: missingRoot });
+      const response = await offline.inject(url);
 
       expect(response.statusCode).toBe(404);
-    },
-  );
-
-  it.each(['/_platform/login', '/_platform/register', '/_platform/account', '/_platform/wait'])(
-    'registers %s without a build but rejects that production prerequisite',
-    async (url) => {
-      const missingRoot = join(directory, 'not-built');
-      const offline = Fastify();
-      try {
-        await offline.register(webRoutes, { root: missingRoot });
-        const response = await offline.inject(url);
-
-        expect(response.statusCode).toBe(404);
-        await expect(assertWebBuild(missingRoot)).rejects.toThrow('run pnpm build:web');
-      } finally {
-        await offline.close();
-      }
-    },
-  );
+      await expect(assertWebBuild(missingRoot)).rejects.toThrow('run pnpm build:web');
+    } finally {
+      await offline.close();
+    }
+  });
 
   it('rejects an incomplete or invalid build before production listening', async () => {
     await rm(join(root, 'index.html'));
