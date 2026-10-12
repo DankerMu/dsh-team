@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { readFile, readlink } from 'node:fs/promises';
 import net from 'node:net';
 import { networkInterfaces } from 'node:os';
+import { setTimeout as wait } from 'node:timers/promises';
 import {
   dockerEnvironment,
   inspectContainer,
@@ -13,11 +14,62 @@ import {
 } from './probe-browser-network.mjs';
 import { qualificationError } from './probe-browser-qualification.mjs';
 
-async function bridgeWitness(receipt) {
+function remainingControlMs(deadline) {
+  const remaining = deadline.until - performance.now();
+  if (deadline.signal.aborted || remaining <= 0)
+    throw qualificationError('ETIMEDOUT', 'host-ipv6-control');
+  return Math.max(1, Math.floor(remaining));
+}
+function linkLocalWitness(addresses, selected) {
+  const address = addresses.find(
+    (value) =>
+      value.family === 'inet6' &&
+      value.scope === 'link' &&
+      (selected === undefined || value.local === selected),
+  );
+  if (!address) return { linkLocal: null, tentative: false, dadfailed: false };
+  if (typeof address.local !== 'string' || !address.local)
+    throw new Error('browser owned link-local identity unavailable');
+  if (
+    ['tentative', 'dadfailed'].some(
+      (flag) => Object.hasOwn(address, flag) && typeof address[flag] !== 'boolean',
+    )
+  )
+    throw new Error('browser owned link-local state unavailable');
+  return {
+    linkLocal: address.local,
+    tentative: address.tentative === true,
+    dadfailed: address.dadfailed === true,
+  };
+}
+async function usableLinkLocal(receipt, original, deadline) {
+  if (original.dadfailed) throw qualificationError('IPV6_DAD_FAILED', 'host-ipv6-control');
+  for (;;) {
+    const current = await bridgeWitness(receipt, deadline, original.linkLocal);
+    if (current.bridge !== original.bridge || current.ifindex !== original.ifindex)
+      throw qualificationError('BRIDGE_IDENTITY_CHANGED', 'host-ipv6-control');
+    if (current.linkLocal !== original.linkLocal)
+      throw qualificationError('IPV6_ADDRESS_DISAPPEARED', 'host-ipv6-control');
+    if (current.dadfailed) throw qualificationError('IPV6_DAD_FAILED', 'host-ipv6-control');
+    remainingControlMs(deadline);
+    if (!current.tentative) return current;
+    // The existing 50ms readiness cadence is conditional on this exact address's DAD.
+    await wait(Math.min(50, remainingControlMs(deadline)), undefined, {
+      signal: deadline.signal,
+    });
+  }
+}
+async function openIpv6Control(receipt, original) {
+  const deadline = { until: performance.now() + 5000, signal: AbortSignal.timeout(5000) };
+  const ready = await usableLinkLocal(receipt, original, deadline);
+  return await openControl('::', `${ready.linkLocal}%${ready.bridge}`, deadline);
+}
+
+async function bridgeWitness(receipt, deadline, selected) {
   const bridge = receipt.networkConfig.options['com.docker.network.bridge.name'];
   const result = spawnSync('/usr/sbin/ip', ['-j', 'address', 'show', 'dev', bridge], {
     encoding: 'utf8',
-    timeout: 5000,
+    timeout: deadline ? remainingControlMs(deadline) : 5000,
     maxBuffer: 65536,
   });
   if (result.error || result.status !== 0)
@@ -31,15 +83,15 @@ async function bridgeWitness(receipt) {
     rows[0].addr_info.some((address) => address.family === 'inet')
   )
     throw new Error('browser isolated bridge has an IPv4 gateway address');
-  const ifindex = Number(await readFile(`/sys/class/net/${bridge}/ifindex`, 'utf8'));
+  const ifindex = Number(
+    await readFile(
+      `/sys/class/net/${bridge}/ifindex`,
+      deadline ? { encoding: 'utf8', signal: deadline.signal } : 'utf8',
+    ),
+  );
   if (!Number.isInteger(ifindex) || ifindex < 1 || rows[0].ifindex !== ifindex)
     throw new Error('browser owned bridge identity changed');
-  return {
-    bridge,
-    linkLocal:
-      rows[0].addr_info.find((address) => address.family === 'inet6' && address.scope === 'link')
-        ?.local ?? null,
-  };
+  return { bridge, ifindex, ...linkLocalWitness(rows[0].addr_info, selected) };
 }
 async function hostIPv4() {
   const route = (await readFile('/proc/net/route', 'utf8'))
@@ -54,7 +106,61 @@ async function hostIPv4() {
   if (!address) throw new Error('browser host IPv4 confinement control unavailable');
   return address.address;
 }
-async function openControl(host, controlHost) {
+async function listenControl(server, host, deadline) {
+  if (!deadline) {
+    server.listen(0, host);
+    await once(server, 'listening');
+    return;
+  }
+  const controller = new AbortController();
+  const abort = () => controller.abort(deadline.signal.reason);
+  const { promise: closed, resolve: closedResolve } = Promise.withResolvers();
+  let listenerFailure;
+  const listenerError = (error) => {
+    listenerFailure ??= error;
+  };
+  // once(..., { signal }) relinquishes error ownership on abort; keep it until close.
+  server.on('error', listenerError);
+  server.once('close', closedResolve);
+  deadline.signal.addEventListener('abort', abort, { once: true });
+  let submitted = false;
+  try {
+    remainingControlMs(deadline);
+    submitted = true;
+    // Cancel the listen operation itself, not just the promise awaiting its readiness.
+    server.listen({ port: 0, host, signal: controller.signal });
+    await once(server, 'listening', { signal: deadline.signal });
+  } catch (error) {
+    let cleanupFailure;
+    try {
+      controller.abort();
+      if (submitted) {
+        // Also settle failed binds; close() without a callback permits already-unbound servers.
+        server.close();
+        await closed;
+      } else {
+        server.removeListener('close', closedResolve);
+        closedResolve();
+      }
+    } catch (cleanup) {
+      cleanupFailure = { error: cleanup };
+    }
+    const secondary = [];
+    if (listenerFailure && listenerFailure !== error) secondary.push(listenerFailure);
+    if (cleanupFailure) secondary.push(cleanupFailure.error);
+    if (secondary.length)
+      throw new AggregateError([error, ...secondary], 'browser listener setup and cleanup failed', {
+        cause: error,
+      });
+    throw error;
+  } finally {
+    // A successful listener lives through the probes; the budget still bounds connect.
+    deadline.signal.removeEventListener('abort', abort);
+    server.removeListener('error', listenerError);
+  }
+}
+
+async function openControl(host, controlHost, deadline) {
   const sockets = new Set();
   let controlFailure;
   const server = net.createServer((socket) => {
@@ -65,23 +171,30 @@ async function openControl(host, controlHost) {
     });
     socket.once('close', () => sockets.delete(socket));
   });
-  server.listen(0, host);
-  await once(server, 'listening');
-  const port = server.address().port;
-  const control = net.connect({ host: controlHost, port });
-  control.on('error', (error) => {
-    controlFailure ??= error;
-  });
+  let port;
+  let control;
   try {
-    await once(control, 'connect', { signal: AbortSignal.timeout(5000) });
+    if (deadline) remainingControlMs(deadline);
+    await listenControl(server, host, deadline);
+    port = server.address().port;
+    if (deadline) remainingControlMs(deadline);
+    control = net.connect({ host: controlHost, port });
+    control.on('error', (error) => {
+      controlFailure ??= error;
+    });
+    await once(control, 'connect', {
+      signal: deadline ? deadline.signal : AbortSignal.timeout(5000),
+    });
+    if (deadline) remainingControlMs(deadline);
   } catch (error) {
-    control.destroy();
+    control?.destroy();
     for (const socket of sockets) socket.destroy();
     let cleanupFailure;
     try {
-      await new Promise((done, reject) =>
-        server.close((cleanup) => (cleanup ? reject(cleanup) : done())),
-      );
+      if (server.listening)
+        await new Promise((done, reject) =>
+          server.close((cleanup) => (cleanup ? reject(cleanup) : done())),
+        );
     } catch (cleanup) {
       cleanupFailure = { error: cleanup };
     }
@@ -265,7 +378,7 @@ export async function qualifyBrowserConfinement(
   try {
     if (host.linkLocal) {
       diagnostic.enter('host-ipv6-control');
-      ipv6 = await openControl('::', `${host.linkLocal}%${host.bridge}`);
+      ipv6 = await openIpv6Control(receipt, host);
     }
     result = await probeConfinement(receipt, host, address, ipv4, ipv6, diagnostic);
   } catch (error) {
