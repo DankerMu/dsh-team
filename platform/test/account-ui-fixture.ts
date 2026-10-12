@@ -15,6 +15,11 @@ import { buildApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { applyMigrations, openDatabase, type DatabaseHandle } from '../src/db/index.ts';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
+import {
+  createDockerClient,
+  createInstanceService,
+  type InstanceService,
+} from '../src/orchestrator/index.ts';
 import { assertWebBuild } from '../src/web/index.ts';
 import { withUpstream } from './gateway-http-fixture.ts';
 
@@ -224,10 +229,12 @@ export async function withAccountUi(
     upstreamRequests: { path: string; cookie: string | undefined }[];
     admittedUsers: string[];
   }) => Promise<void>,
+  options: { canonicalInstanceService?: boolean } = {},
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-team-web-ui-'));
   let database: DatabaseHandle | undefined;
   let app: FastifyInstance | undefined;
+  let service: InstanceService | undefined;
   let seed: APIRequestContext | undefined;
   try {
     await assertWebBuild();
@@ -259,6 +266,9 @@ export async function withAccountUi(
       PLATFORM_DATA_DIR: directory,
       PLATFORM_LOG_LEVEL: 'silent',
       PLATFORM_COOKIE_SECURE: 'false',
+      ...(options.canonicalInstanceService === true
+        ? { PLATFORM_DOCKER_SOCKET: join(directory, 'unavailable-docker.sock') }
+        : {}),
     });
     database = openDatabase(join(directory, 'platform.db'));
     applyMigrations(database);
@@ -272,12 +282,24 @@ export async function withAccountUi(
         response.end('本地已认证入口（非 DSH）');
       },
       async (target) => {
-        // No lifecycle service, fake page or intercepted assets: real auth/static/gateway composition.
+        // Default callers retain their local destination; admin actions opt into the real lifecycle.
         if (database === undefined) throw new Error('Missing UI database');
-        app = await buildApp(config, database, undefined, (userId) => {
-          admittedUsers.push(userId);
-          return target;
-        });
+        if (options.canonicalInstanceService === true)
+          service = createInstanceService({
+            client: createDockerClient(config.dockerSocketPath),
+            database,
+            config,
+          });
+        app = await buildApp(
+          config,
+          database,
+          undefined,
+          (userId) => {
+            admittedUsers.push(userId);
+            return target;
+          },
+          service,
+        );
         await app.listen({ host: '127.0.0.1', port });
         // Separate API cookie jar: account seeding never preauthenticates the browser.
         seed = await playwright.request.newContext({
@@ -293,8 +315,13 @@ export async function withAccountUi(
     } finally {
       try {
         // Playwright owns page/context/browser; app owns DB after successful buildApp.
-        if (app === undefined) database?.close();
-        else await app.close();
+        if (app === undefined) {
+          try {
+            await service?.close();
+          } finally {
+            database?.close();
+          }
+        } else await app.close();
       } finally {
         await rm(directory, { recursive: true, force: true });
       }

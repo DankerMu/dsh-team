@@ -561,3 +561,10 @@
 - Feature, expanded fixture (retain upstream classification); task14.8 only, dependencies #67/#15 closed. Add the administrator read-only audit HTTP boundary over existing `queryAuditEvents`; no new SQL/filter implementation or audit mutation.
 - Preserve current admin/session authorization, exact actor-or-target email filtering, inclusive millisecond bounds, stable descending time/ID order and existing audit-writer privacy. Publish only closed audit metadata/details, never employee files/Session/conversation or credentials.
 - Selected risk packs and evidence are mapped in tasks.md. Required proof: endpoint401 tracer RED, real storage/TCP authorization/filter/pagination/privacy/mutation-rejection matrix, generated contract, source/dist smoke, full checks, bounded expanded review and frozen Docker/CI regression gates. No new Docker behavior or UI.
+
+## Issue #74 fixture
+
+- Feature, expanded/Critical Construction; task14.9 only, #62/#69/#70 closed. Deliver real administrator account UI and navigation, not placeholders for later screens. Reuse React18 pathname composition and existing account/status/password APIs.
+- Minimal serving companion: add exactly `/_platform/admin` to the existing confined static-page owner and its regression proof; otherwise the requested browser surface cannot load. This is page delivery, not a new API/auth/lifecycle contract. Test harnesses under platform/test are required by task14.9's browser acceptance.
+- Preserve existing login/register/account/wait pages, backend current authorization, destructive-action semantics and privacy. First real account-list response is the authority probe; no new identity endpoint. All four list states, confirmation/cancellation, race cleanup and actual disable/enable/reset effects need DOM and built-browser proof with screenshots.
+- Evidence floor: public-boundary RED before implementation; actual browser→existing API→SQLite mutation/credential outcomes, explicit limited list-state controls, zero unexpected browser errors/external requests, source/dist smoke, full checks/UI and frozen review/Docker/CI. No API substitutes for successful mutation/authorization proof.

@@ -48,3 +48,63 @@ button {
     padding: 1.5rem;
   }
 }
+
+.admin {
+  box-sizing: border-box;
+  max-width: 75rem;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  background: white;
+}
+
+.admin nav,
+.admin-pages,
+.admin form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.admin nav {
+  margin-bottom: 1.5rem;
+}
+
+.admin input {
+  width: min(100%, 24rem);
+}
+
+.admin button {
+  width: auto;
+  margin: 0.25rem;
+}
+
+.admin-table {
+  overflow-x: auto;
+}
+
+.admin table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin th,
+.admin td {
+  text-align: left;
+  padding: 0.75rem;
+  border-bottom: 1px solid #c5cbd4;
+}
+
+.admin dialog {
+  position: fixed;
+  top: 15vh;
+  max-width: min(32rem, 80vw);
+  border: 2px solid #182335;
+  border-radius: 0.5rem;
+  box-shadow: 0 0 0 100vmax rgb(24 35 53 / 30%);
+  padding: 1.5rem;
+}
+
+.admin dialog form {
+  align-items: stretch;
+}

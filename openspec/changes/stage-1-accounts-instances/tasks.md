@@ -976,7 +976,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - [x] 14.6 重启实例：指定一个（运行中、已停止或出错的都可以），或全部运行中的；停止原因为“管理员”；写审计（重启实例）。验证：`pnpm test:docker`——重启运行中的实例后容器的启动时间更新，Session 和文件还在；对出错的实例执行重启后它被启动；审计里有该事件（规格“管理员重启实例”的两个场景）。
 - [ ] 14.7 重置实例配置接口：停止实例，调用 9.11 的恢复函数，写审计（重置实例配置）。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写成无法解析的内容使实例启动失败，并在工作目录放一个文件；经接口重置后实例能启动，工作目录里的文件和已有的 Session 都还在；审计里有该事件（规格“重置实例配置”）。
 - [x] 14.8 审计查询接口：只读，带筛选和分页。验证：集成测试——员工请求 403；按邮箱筛选只返回该员工作为操作者或对象的记录；契约文件里审计相关的接口只有查询，管理员可调用的接口没有任何一个返回员工的文件、Session 或对话内容（规格“管理员查询审计”“审计不可经接口修改”“后台不提供员工内容”）。
-- [ ] 14.9 后台框架和账号页：后台导航，员工访问后台地址被拒绝；账号列表（搜索、禁用启用、重置密码），区分加载中、空、无匹配、请求失败四种状态，破坏性操作先确认。验证：`pnpm test:ui`——禁用、启用、重置密码各走通一次；四种状态各有用例（请求失败时显示加载失败和重试按钮）。
+- [x] 14.9 后台框架和账号页：后台导航，员工访问后台地址被拒绝；账号列表（搜索、禁用启用、重置密码），区分加载中、空、无匹配、请求失败四种状态，破坏性操作先确认。验证：`pnpm test:ui`——禁用、启用、重置密码各走通一次；四种状态各有用例（请求失败时显示加载失败和重试按钮）。
 - [ ] 14.10 实例页：状态、最近启动时间、最近活动时间、最近一次错误（可展开看日志）、重启、重置配置；四种列表状态；重置前显示“会恢复该用户的 DSH 设置，文件和对话保留”并确认。验证：`pnpm test:ui`——出错的实例能看到日志；重启和重置各走通一次；确认框文案正确。
 - [ ] 14.11 审计页：按事件类型、邮箱、时间范围筛选，分页；四种列表状态。验证：`pnpm test:ui`——三种筛选各走通一次；翻页正确（规格“界面状态完整”由 14.9 到 14.11 共同覆盖）。
 
@@ -1051,6 +1051,16 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - Config / project setup; File IO / path safety / overwrite — not selected: no env/config/dependency/deployment or file writer added; existing explicit app/database setup only, owned smoke resources cleaned.
 - Required evidence: new endpoint401 tracer RED/GREEN; real storage/TCP filter intersection and actor-or-target without duplication, time endpoints/order/pages/empty results, current authorization and invalid query precedence, closed safe details and fixed500, no audit writes/content APIs; source/dist smoke and normal gates. No permanent test of source text or mocked query echoes.
 - 验证记录（#73）：真实TCP tracer404RED→401GREEN；`pnpm check`1768单测/876集成全部通过，新route四项覆盖100%，dup2.99%。真实写入/SQLite/TCP验证筛选交集、邮箱actor-or-target、不重复/对象标识不匹配、同刻分页/时间端点、当前权限与401/403优先、400/500无原文泄露、写方法404且审计不变。生成契约只读和无内容/凭据响应面检查；未复制已有契约快照漂移门禁。独立source/dist文件DB真实HTTP烟测通过并清理；冻结头全量Docker/审查/CI随PR。
+
+### Issue #74 risk/evidence map (task14.9 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: exact served page and first-list authority, real403 denial/401 login, confirmations and password privacy; DOM and actual built-browser API/state proof.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: latest-read ownership, global mutation singleflight, no-confirm/no-retry and truthful partial-failure refresh; held request/completion, race/double-submit and failure/retry assertions.
+- Schema / columns / units / field names; Resource limits / large input / discovery — selected: existing account-list fields/ms/time/paging20 and exact mutation payloads, safe malformed data, normal UI discovery; semantic boundary tests, no schema migration.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility; Documentation / migration notes — selected: existing pages/assets/guard behavior, compiled source/dist entry and real API availability; fullcheck, allUI screenshots/observer proof, independent smoke, frozen review/DockerCI, documented scope.
+- File IO / path safety / overwrite — selected: one exact confined page registration preserves existing asset/traversal/missingbuild behavior; existing web-route regressions plus actualbuilt entry. Config / project setup — not selected: no new environment/dependency/deploy setting; only canonical build/test machinery.
+- Required evidence: tracerRED, four distinct browser list states (synthetic empty response explicitly rendering-only), real search/paging/current-admin denial, cancel no mutation, disable/enable/password-reset actualeffects, safe failures and late completions, screenshots/zero unexpected console-page errors, complete siblings/gates. No mocked successful admin actions.
+- 验证记录（#74）：真实浏览器入口404RED→200；原始全量UI15/15、26.3s通过，真实三项账号变更/会话/密码/审计、取消/单次提交、23账号搜索分页、当前降权403及四列表态和截图均覆盖，observer未变。check1837单测/876集成，62AdminDOM98.21/96.87/100/100%、dup2.96%；独立source/dist真实浏览器严格零requestfailed烟测通过。最初11/15UI定位为已回答GET自abort、未消费PUT204和对话框遮挡背景搜索；真实未读/消费204对照分别ERR_ABORTED/完整0字节，修复响应生命周期而非放宽观察器；降权用真实对话框确认403证明无持久变化。诊断中的两个timeout对照保留为未通过，不冒充验收。字符串email负例按既有API类型改为非字符串，未加新邮箱策略。冻结头review/Docker/CI另附PR。
 
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 
