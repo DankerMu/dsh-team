@@ -2,14 +2,14 @@
 
 ## 1. Qualified attribution before repair
 
-- [ ] 1.1 Freeze the actual RED, candidate/environment identities and round-specific authorization ledger; preserve the exhausted first three cycles unchanged and initialize the user-approved second round at zero of at most three experiments. Distinguish original browser failures, diagnostic limitations and the later independent startup AggregateError.
-- [ ] 1.2 First recover bounded nested startup error/stage evidence through the existing diagnostic projector and execute the unchanged startup file once after projector qualification; then choose a tighter browser discriminator from observed evidence. Preserve original errors, deadlines, concurrency, safe bounded output and independently verified owned cleanup. Do not automatically repeat a passing isolated run or the full suite.
-- [ ] 1.3 Adjudicate causal ownership and record the smallest repair plus regression oracle in design.md before permanent behavioral edits; verify the revised construction fixture by native sufficiency review and strict OpenSpec validation. If unresolved, choose the next discriminating hypothesis within the current round's remaining authorization; exhaustion remains blocked, never done.
+- [x] 1.1 Freeze original RED, candidate/runtime identities and both authorization ledgers; retain all six characterization outcomes without relabelling diagnostic success as acceptance.
+- [x] 1.2 Qualify nested startup error/stage projection and execute original startup once (3/3 non-reproduction); tighten the browser discriminator and retain the High-priority controlled cancellation RED, successful control/real first-use, zero-loss evidence and independent cleanup.
+- [x] 1.3 Review and strictly validate the authorized construction design: verification-browser namespace owner, same-origin byte relays, explicit runtime/image/cleanup contracts and controlled RED→GREEN oracle; retain historical attribution limits and existing fix-pass bounds.
 
 ## 2. Canonical evidence and demonstrated owner repair
 
 - [ ] 2.1 Extend the existing mapped-host failure evidence owner, with matching declarations/callers only where needed; verify real CDP/protocol failure receipts distinguish document success, script failure, redirects and cancellation without losing session/model/permission observers, and reject secret-bearing/cap-overflow/evidence-write-failure counterexamples while preserving the original error.
-- [ ] 2.2 Apply the adjudicated minimum owner-level repair with a semantic failing-before/passing-after regression at the causal boundary; verify unchanged real first-use and permission behavior, original browser flags/deadlines/errors, no foreign-resource changes and no diagnostic variant presented as acceptance.
+- [ ] 2.2 Implement the canonical isolated/native Chrome lifecycle, verification-only runtime image/root command provisioning and same-port raw Unix-socket relays; migrate all browser callers/types and shell rescue atomically. Prove real HTTP/WS/CDP bytes, original auth/routing and flags/deadlines, isolated network identity, partial-start/termination cleanup and foreign-resource refusal. Demonstrate the retained occupied-connection/High-priority controlled RED becomes GREEN while the owned host transition still occurs.
 - [ ] 2.3 Update the existing operational documentation after real smoke proof, documenting the demonstrated cause, supported boundary, failure evidence location and verification command; verify documented commands exist and no transient pending/success snapshot is embedded as an operating rule.
 
 ## 3. Integrated qualification and DAG resumption
@@ -28,6 +28,6 @@
 - Error handling / rollback / partial outputs — selected: original failure precedence and partial evidence; evidence-write failure proof, retained nonzero exits, safe verifier rollback.
 - File IO / path safety / overwrite — selected: owned evidence roots and process/resource cleanup; safe path projection and failure cleanup proof, no writes to foreign resources.
 - Legacy compatibility / examples — selected: first-use, permission, model-refusal, managed-policy and shell probe consumers; unchanged acceptance/deadline semantics and relevant regression commands.
-- Release / packaging / dependency compatibility — selected: actual pinned Linux/Node/Chrome/Docker boundary; exact-head archive/CI/full-suite plus planned stability receipt, no new dependency preauthorized.
+- Release / packaging / dependency compatibility — selected: pinned Node base/image identity and existing CfT140 distribution with declared browser runtime libraries; root-command provisioning, private mounts, offline runtime, exact-head full-suite/stability and unchanged production image.
 - Documentation / migration notes — selected: factual cause/limits and paused DAG resumption; verified existing command references and no premature completion claim.
-- Config / project setup — not selected at this stage: no new env/privilege/deployment option authorized. A demonstrated need is a construction-fixture/scope decision, not an implicit fallback.
+- Config / project setup — selected: explicit native versus isolated verifier runtime, documented image/Chrome prerequisites, root command/environment contracts and unsupported-platform/missing-prerequisite rejection without fallback. No production configuration or host-policy changes.

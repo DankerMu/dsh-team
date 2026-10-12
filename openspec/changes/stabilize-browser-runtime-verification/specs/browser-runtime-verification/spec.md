@@ -57,6 +57,39 @@ The verifier's network blocker MUST be repaired at a demonstrated owner. A succe
 - **WHEN** the approved bounded round ends without causal repair and required evidence
 - **THEN** the workflow remains blocked with retained failures instead of retrying until green or declaring the blocker complete
 
+### Requirement: Verification browser networking is isolated without bypassing the real endpoint
+
+Trusted Linux Docker browser verification MUST run Chrome in an invocation-owned stable network namespace, separate from host interface churn. Application and CDP transport MUST preserve original loopback port numbers, URLs, authority, cookie scope and raw HTTP/WebSocket bytes through one-to-one owned relays. The driver and real platform endpoint MUST remain on their existing side of the boundary; first-use MUST still exercise platform authentication and gateway forwarding. Runtime selection and image/browser identities MUST be explicit, with no silent host-browser fallback.
+
+#### Scenario: Host topology changes while a required script is queued
+
+- **WHEN** the controlled occupied-connection and observed High-priority target preconditions hold and the original owned host bridge/address transition occurs
+- **THEN** the isolated browser target receives HTTP200, the original readiness/error gates pass, and independent evidence confirms the host transition and separate browser network identity
+
+#### Scenario: Isolation prerequisites are missing
+
+- **WHEN** isolated runtime is requested on an unsupported platform or its image, browser or namespace transport cannot start
+- **THEN** startup fails explicitly, no native fallback occurs, and acquired owned resources are independently cleaned
+
+### Requirement: Browser termination ownership survives partial startup and driver failure
+
+The canonical launcher MUST register and retain private ownership information before partially creating isolated resources. Normal stop, setup failure and outer timeout/signal rescue MUST clean the exact owned browser/container, relay sockets and listeners. Cleanup MUST verify resource identity and MUST NOT interpret an internal container PID or Docker client PID as a host Chrome PID, delete foreign resources, or replace the primary failure with a success.
+
+#### Scenario: Driver stops before returning a browser handle
+
+- **WHEN** the driver exits or is killed after isolated resource acquisition but before setup returns
+- **THEN** the independent outer cleanup owner can use the retained receipt to retire only matching owned resources and verify their absence
+
+#### Scenario: Cleanup identity differs
+
+- **WHEN** the name, immutable identity, ownership marker or expected image does not match the retained launch identity
+- **THEN** cleanup refuses destructive action and reports incomplete cleanup rather than claiming success
+
+#### Scenario: Creation succeeds before immutable identity is recorded
+
+- **WHEN** the driver dies after container creation while the private pre-create receipt still explicitly has no recorded container ID
+- **THEN** rescue may adopt an inspected ID only after exact registered name, nonce/run ownership and expected immutable image match, atomically record it and clean by ID; an already-recorded ID is never replaced
+
 ### Requirement: Runtime qualification binds to the final candidate
 
 Final acceptance MUST use the original full test discovery and existing error/deadline gates on the final exact candidate, with complete environment identity and owned-resource cleanup. For this intermittent failure, one planned same-candidate stability run MUST follow the first successful full qualification. Diagnostic variants and older-candidate results MUST remain separately labelled and MUST NOT be substituted for final evidence.
