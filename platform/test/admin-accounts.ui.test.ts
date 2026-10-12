@@ -4,39 +4,22 @@ import {
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
   observeAccountUi,
-  withAccountUi,
   submitPendingAccountForm,
   withAccountUiRouteCleanup,
 } from './account-ui-fixture.ts';
-import { ADMIN_UI_PASSWORD, seedAdminUi } from './admin-ui-fixture.ts';
+import {
+  ADMIN_UI_PASSWORD,
+  withAdminUi,
+  readAuditSnapshot,
+  expectAuditUnchanged,
+} from './admin-ui-fixture.ts';
 
 test('administrator opens the built account page and sees the real employee account', async ({
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    const adminEmail = 'admin-browser@example.com';
+  await withAdminUi(playwright, page, async ({ baseUrl }) => {
     const targetEmail = 'employee-browser@example.com';
-    const password = 'browser-owned-account-password';
-    for (const email of [adminEmail, targetEmail]) {
-      const registered = await seed.post('/_platform/api/register', {
-        data: { email, password },
-      });
-      expect(registered.status()).toBe(201);
-      const identity = readPublicIdentity(await registered.json());
-      if (email === adminEmail)
-        database.prepare("UPDATE users SET role='admin' WHERE id=?").run(identity.id);
-    }
-    expect(await page.context().cookies()).toEqual([]);
-    const login = await page.context().request.post(`${baseUrl}/_platform/api/login`, {
-      headers: { Origin: baseUrl },
-      data: { email: adminEmail, password },
-    });
-    expect(login.status()).toBe(200);
-    expect(readPublicIdentity(await login.json())).toMatchObject({
-      email: adminEmail,
-      role: 'admin',
-    });
     const usersUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
     const { actionResponses, otherMutations, screenshot, expectHealthy } = observeAccountUi(
       page,
@@ -64,10 +47,10 @@ test('real confirmed disable, enable and password reset change durable accounts 
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(
+  await withAdminUi(
     playwright,
-    async ({ baseUrl, database, seed }) => {
-      const { admin, target } = await seedAdminUi(seed, database, page, baseUrl);
+    page,
+    async ({ baseUrl, database, seed, admin, target }) => {
       const oldCookies: string[] = [];
       for (let index = 0; index < 2; index++) {
         const login = await seed.post('/_platform/api/login', {
@@ -92,7 +75,7 @@ test('real confirmed disable, enable and password reset change durable accounts 
       await withAccountUiRouteCleanup(page, async (release) => {
         await page.goto(`${baseUrl}/_platform/admin`, { waitUntil: 'networkidle' });
         await expect(employeeRow).toContainText('已启用');
-        const beforeCancel = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
+        const beforeCancel = readAuditSnapshot(database);
         const sessionsBeforeCancel = database
           .prepare('SELECT * FROM platform_sessions ORDER BY token_hash')
           .all();
@@ -112,9 +95,7 @@ test('real confirmed disable, enable and password reset change durable accounts 
         expect(database.prepare('SELECT status FROM users WHERE id=?').get(target.id)).toEqual({
           status: 'active',
         });
-        expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(
-          beforeCancel,
-        );
+        expectAuditUnchanged(database, beforeCancel);
         expect(
           database.prepare('SELECT * FROM platform_sessions ORDER BY token_hash').all(),
         ).toEqual(sessionsBeforeCancel);
@@ -305,10 +286,10 @@ test('real self-disable rejection is truthful and server refresh preserves the a
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(
+  await withAdminUi(
     playwright,
-    async ({ baseUrl, database, seed }) => {
-      const { admin } = await seedAdminUi(seed, database, page, baseUrl);
+    page,
+    async ({ baseUrl, database, admin }) => {
       const listUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
       const statusUrl = `${baseUrl}/_platform/api/admin/users/${admin.id}/status`;
       const { actionResponses, screenshot, expectHealthy } = observeAccountUi(
@@ -359,8 +340,7 @@ test('current administrator demotion rejects a reachable reset confirmation and 
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    const { admin, target } = await seedAdminUi(seed, database, page, baseUrl);
+  await withAdminUi(playwright, page, async ({ baseUrl, database, admin, target }) => {
     const listUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
     const passwordUrl = `${baseUrl}/_platform/api/admin/users/${target.id}/password`;
     const { actionRequests, actionResponses, screenshot, expectHealthy } = observeAccountUi(
@@ -382,7 +362,7 @@ test('current administrator demotion rejects a reachable reset confirmation and 
     const sessionsBefore = database
       .prepare('SELECT * FROM platform_sessions WHERE user_id=? ORDER BY token_hash')
       .all(target.id);
-    const auditsBefore = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
+    const auditsBefore = readAuditSnapshot(database);
     database.prepare("UPDATE users SET role='employee' WHERE id=?").run(admin.id);
 
     const [denied] = await Promise.all([
@@ -406,7 +386,7 @@ test('current administrator demotion rejects a reachable reset confirmation and 
         .prepare('SELECT * FROM platform_sessions WHERE user_id=? ORDER BY token_hash')
         .all(target.id),
     ).toEqual(sessionsBefore);
-    expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(auditsBefore);
+    expectAuditUnchanged(database, auditsBefore);
     expect(actionResponses).toEqual([
       { url: listUrl, status: 200 },
       { url: passwordUrl, status: 403 },

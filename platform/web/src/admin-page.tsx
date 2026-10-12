@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { AdminNavigation } from './admin-navigation.tsx';
 
 interface Account {
   id: string;
@@ -283,13 +284,7 @@ function AccountView({
   return (
     <main className="admin" aria-busy={state === 'loading' || pending}>
       <h1>账号管理</h1>
-      <nav aria-label="后台导航">
-        <a href="/_platform/admin" aria-current="page">
-          账号管理
-        </a>
-        <a href="/_platform/account">账号设置</a>
-        <a href="/">返回工作台</a>
-      </nav>
+      <AdminNavigation page="accounts" />
       {state === 'denied' ? (
         <p role="alert">无权限</p>
       ) : (

@@ -219,17 +219,23 @@ export async function withAccountUiRouteCleanup(
   if (primaryFailed) throw primaryError;
 }
 
+export interface AccountUiContext {
+  baseUrl: string;
+  database: DatabaseHandle;
+  seed: APIRequestContext;
+  target: GatewayUpstream;
+  upstreamRequests: { path: string; cookie: string | undefined }[];
+  admittedUsers: string[];
+}
+
+export interface AccountUiOptions {
+  canonicalInstanceService?: boolean;
+}
+
 export async function withAccountUi(
   playwright: PlaywrightWorkerArgs['playwright'],
-  run: (context: {
-    baseUrl: string;
-    database: DatabaseHandle;
-    seed: APIRequestContext;
-    target: GatewayUpstream;
-    upstreamRequests: { path: string; cookie: string | undefined }[];
-    admittedUsers: string[];
-  }) => Promise<void>,
-  options: { canonicalInstanceService?: boolean } = {},
+  run: (context: AccountUiContext) => Promise<void>,
+  options: AccountUiOptions = {},
 ): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-team-web-ui-'));
   let database: DatabaseHandle | undefined;
