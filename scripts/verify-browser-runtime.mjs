@@ -5,9 +5,10 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from
 import { arch, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromeDigest, readReceipt, rescueChrome } from './probe-browser-runtime.mjs';
+import { chromeDigest, readReceipt, rescueChrome, writeReceipt } from './probe-browser-runtime.mjs';
 import { connectPage, startChrome } from './probe-dsh-api-cdp.mjs';
 import { qualifyBrowserConfinement } from './probe-browser-confinement.mjs';
+import { qualificationDiagnostic, qualificationError } from './probe-browser-qualification.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
@@ -24,6 +25,7 @@ let directory;
 let imageId;
 let child;
 let interrupted = false;
+let qualificationEvidence;
 const invocation = randomUUID();
 const tag = `dsh-team-browser-runtime-${invocation}`;
 const environment = () => ({
@@ -66,31 +68,40 @@ async function qualifyRuntime(chrome) {
   let failure;
   const cleanupErrors = [];
   try {
+    qualificationEvidence.enter('page-attach');
     page = await connectPage(chrome.browserWs);
+    qualificationEvidence.enter('online-evaluate');
     const result = await page.send('Runtime.evaluate', {
       expression: 'navigator.onLine',
       returnByValue: true,
     });
+    qualificationEvidence.enter('online-invariant');
     if (result?.result?.value !== true)
-      throw new Error('browser runtime must naturally report online');
+      throw qualificationError('BROWSER_OFFLINE', 'online-invariant');
     proof = {
       ...(await qualifyBrowserConfinement(
         await readReceipt(join(directory, 'qualification.receipt.json')),
+        qualificationEvidence,
       )),
       naturallyOnline: true,
     };
   } catch (error) {
+    qualificationEvidence.fail(error);
     failure = { error };
   }
   try {
+    qualificationEvidence.enter('page-cleanup');
     page?.close();
   } catch (error) {
     cleanupErrors.push(error);
+    qualificationEvidence.cleanup(error, 'page-cleanup');
   }
   try {
+    qualificationEvidence.enter('chrome-cleanup');
     await chrome.stop();
   } catch (error) {
     cleanupErrors.push(error);
+    qualificationEvidence.cleanup(error, 'chrome-cleanup');
   }
   if (failure) {
     if (cleanupErrors.length)
@@ -177,6 +188,8 @@ async function prepare() {
   );
   process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG = environment().DOCKER_CONFIG;
   process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY = directory;
+  qualificationEvidence = qualificationDiagnostic(invocation);
+  qualificationEvidence.enter('browser-launch');
   const qualification = await startChrome({
     runtime: {
       kind: 'docker-isolated-network',
@@ -190,6 +203,7 @@ async function prepare() {
     receiptFile: join(directory, 'qualification.receipt.json'),
   });
   const confinement = await qualifyRuntime(qualification);
+  qualificationEvidence = undefined;
   if (interrupted) throw new Error('browser runtime invocation interrupted');
   const identities = {
     invocation,
@@ -271,11 +285,29 @@ async function cleanup() {
     process.stderr.write(`browser cleanup incomplete; private receipts retained at ${directory}\n`);
   }
 }
+async function persistQualificationFailure(error) {
+  const path = join(directory, 'qualification.failure.json');
+  try {
+    qualificationEvidence.fail(error);
+    await writeReceipt(path, qualificationEvidence.snapshot(error));
+    process.stderr.write(`browser qualification failed; receipt=${path}\n`);
+  } catch (evidenceError) {
+    const selected = qualificationDiagnostic(invocation);
+    selected.enter('evidence-write');
+    selected.fail(evidenceError);
+    const code = selected.snapshot(evidenceError).primary.root.code;
+    process.stderr.write(
+      `browser qualification evidence unavailable code=${code}; expected-receipt=${path}\n`,
+    );
+  }
+}
+
 try {
   if (command && forwardedArguments.some((value) => value === '--help' || value === '-h'))
     status = await runVerificationChild(process.env);
   else await prepare();
 } catch (error) {
+  if (qualificationEvidence) await persistQualificationFailure(error);
   const known = [
     'usage: verify-browser-runtime.mjs docker|dsh-api|first-run',
     'browser isolation requires trusted nonroot Linux amd64',

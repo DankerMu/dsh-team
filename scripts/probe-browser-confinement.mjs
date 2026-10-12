@@ -5,12 +5,13 @@ import { readFile, readlink } from 'node:fs/promises';
 import net from 'node:net';
 import { networkInterfaces } from 'node:os';
 import {
-  browserDocker,
+  dockerEnvironment,
   inspectContainer,
   inspectNetwork,
   requireContainer,
   requireNetwork,
 } from './probe-browser-network.mjs';
+import { qualificationError } from './probe-browser-qualification.mjs';
 
 async function bridgeWitness(receipt) {
   const bridge = receipt.networkConfig.options['com.docker.network.bridge.name'];
@@ -105,43 +106,100 @@ async function openControl(host, controlHost) {
     },
   };
 }
-function privateWitness(receipt, targets, hostNamespace) {
-  const source = `
-const fs = require('node:fs');
-const os = require('node:os');
-const net = require('node:net');
-const routes = fs.readFileSync('/proc/net/route','utf8').trim().split('\\n').slice(1);
-const interfaces = os.networkInterfaces();
-const proof = {
-  namespaceDistinct: fs.readlinkSync('/proc/self/ns/net') !== ${JSON.stringify(hostNamespace)},
-  noIPv4DefaultRoute: !routes.some(line => line.trim().split(/\\s+/)[1] === '00000000'),
-  privateIPv4Present: (interfaces.eth0 || []).some(address => address.family === 'IPv4'),
-  onlyLoopbackIPv6: Object.entries(interfaces).every(([name, addresses]) =>
-    name === 'lo' || addresses.every(address => address.family !== 'IPv6')),
-  eth0IPv6Disabled: fs.readFileSync('/proc/sys/net/ipv6/conf/eth0/disable_ipv6','utf8').trim() === '1',
-};
-async function blocked(target) {
-  return await new Promise((resolve, reject) => {
-    const socket = net.connect(target);
-    socket.once('connect', () => { socket.destroy(); reject(new Error('host reachable')); });
-    socket.once('error', error => {
-      socket.destroy();
-      if (['ENETUNREACH','EHOSTUNREACH','EADDRNOTAVAIL'].includes(error.code)) resolve(true);
-      else reject(error);
-    });
-    // Timeout is a failure, never a substitute for a witnessed unreachable path.
-    socket.setTimeout(3000, () => { socket.destroy(); reject(new Error('probe unsettled')); });
-  });
-}
-(async () => {
-  proof.hostIPv4Blocked = await blocked(${JSON.stringify(targets.ipv4)});
-  proof.linkScopeIPv6Blocked = await blocked(${JSON.stringify(targets.ipv6)});
-  process.stdout.write(JSON.stringify(proof));
-})().catch(() => process.exit(1));
-`;
-  const proof = JSON.parse(
-    browserDocker(['exec', receipt.containerId, 'node', '-e', source], 15000),
+function reportedProbeFailure(result, envelope) {
+  const error = qualificationError(
+    envelope?.failure?.code ?? 'PRIVATE_PROCESS_FAILED',
+    envelope?.failure?.phase ?? 'private-probe-execution',
   );
+  error.qualificationOutcome = result.status === 0 ? 'successful-exit' : 'nonzero-exit';
+  return error;
+}
+function probeEnvelope(result) {
+  if (result.error) {
+    const error = qualificationError(
+      result.error.code === 'ETIMEDOUT' ? 'PRIVATE_PROCESS_TIMEOUT' : 'PRIVATE_PROCESS_FAILED',
+      'private-probe-execution',
+    );
+    error.cause = result.error;
+    error.qualificationOutcome = 'process-error';
+    throw error;
+  }
+  if (result.signal) throw qualificationError('PRIVATE_PROCESS_SIGNAL', 'private-probe-execution');
+  let envelope;
+  try {
+    envelope = JSON.parse(result.stdout);
+  } catch {
+    throw qualificationError(
+      result.status === 0 ? 'PRIVATE_JSON_INVALID' : 'PRIVATE_PROCESS_FAILED',
+      'private-probe-execution',
+    );
+  }
+  if (result.status !== 0 || envelope?.failure) throw reportedProbeFailure(result, envelope);
+  return envelope;
+}
+function privateWitness(receipt, targets, hostNamespace, diagnostic) {
+  diagnostic.enter('private-probe-execution');
+  const source = `
+let phase = 'private-state';
+(async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const net = require('node:net');
+  const routes = fs.readFileSync('/proc/net/route','utf8').trim().split('\\n').slice(1);
+  const interfaces = os.networkInterfaces();
+  const proof = {
+    namespaceDistinct: fs.readlinkSync('/proc/self/ns/net') !== ${JSON.stringify(hostNamespace)},
+    noIPv4DefaultRoute: !routes.some(line => line.trim().split(/\\s+/)[1] === '00000000'),
+    privateIPv4Present: (interfaces.eth0 || []).some(address => address.family === 'IPv4'),
+    onlyLoopbackIPv6: Object.entries(interfaces).every(([name, addresses]) =>
+      name === 'lo' || addresses.every(address => address.family !== 'IPv6')),
+    eth0IPv6Disabled: fs.readFileSync('/proc/sys/net/ipv6/conf/eth0/disable_ipv6','utf8').trim() === '1',
+  };
+  async function blocked(target) {
+    return await new Promise((resolve, reject) => {
+      const socket = net.connect(target);
+      socket.once('connect', () => {
+        socket.destroy();
+        const error = new Error('host reachable'); error.code = 'HOST_REACHABLE';
+        reject(error);
+      });
+      socket.once('error', error => {
+        socket.destroy();
+        if (['ENETUNREACH','EHOSTUNREACH','EADDRNOTAVAIL'].includes(error.code)) resolve(true);
+        else reject(error);
+      });
+      // Timeout remains failure, never a substitute for a witnessed unreachable path.
+      socket.setTimeout(3000, () => {
+        socket.destroy();
+        const error = new Error('probe unsettled'); error.code = 'PROBE_TIMEOUT';
+        reject(error);
+      });
+    });
+  }
+  phase = 'private-ipv4-probe';
+  proof.hostIPv4Blocked = await blocked(${JSON.stringify(targets.ipv4)});
+  phase = 'private-ipv6-probe';
+  proof.linkScopeIPv6Blocked = await blocked(${JSON.stringify(targets.ipv6)});
+  process.stdout.write(JSON.stringify({ proof }));
+})().catch(error => {
+  const allowed = ['EACCES','EPERM','ENOENT','EINVAL','ENODEV','ENETUNREACH','EHOSTUNREACH',
+    'EADDRNOTAVAIL','ECONNREFUSED','ECONNRESET','EPIPE','EAFNOSUPPORT','EPROTONOSUPPORT',
+    'ENOTFOUND','EAI_AGAIN','EAI_FAIL','HOST_REACHABLE','PROBE_TIMEOUT'];
+  process.stdout.write(JSON.stringify({ failure: {
+    phase, code: allowed.includes(error?.code) ? error.code : 'UNKNOWN',
+  } }), () => process.exit(1));
+});
+`;
+  const result = spawnSync('docker', ['exec', receipt.containerId, 'node', '-e', source], {
+    env: dockerEnvironment(),
+    encoding: 'utf8',
+    timeout: 15000,
+    killSignal: 'SIGKILL',
+    maxBuffer: 65536,
+  });
+  const envelope = probeEnvelope(result);
+  diagnostic.enter('private-proof-invariants');
+  const proof = envelope?.proof;
   const fields = [
     'namespaceDistinct',
     'noIPv4DefaultRoute',
@@ -151,11 +209,12 @@ async function blocked(target) {
     'hostIPv4Blocked',
     'linkScopeIPv6Blocked',
   ];
-  if (fields.some((field) => proof[field] !== true) || Object.keys(proof).length !== fields.length)
-    throw new Error('browser private confinement qualification failed');
+  const failed = fields.filter((field) => proof?.[field] !== true);
+  if (failed.length || !proof || Object.keys(proof).length !== fields.length)
+    throw qualificationError('PRIVATE_PROOF_INVALID', 'private-proof-invariants', failed);
   return proof;
 }
-async function probeConfinement(receipt, host, address, ipv4, ipv6) {
+async function probeConfinement(receipt, host, address, ipv4, ipv6, diagnostic) {
   const proof = privateWitness(
     receipt,
     {
@@ -163,7 +222,9 @@ async function probeConfinement(receipt, host, address, ipv4, ipv6) {
       ipv6: { host: `${host.linkLocal ?? 'fe80::1'}%eth0`, port: ipv6?.port ?? ipv4.port },
     },
     await readlink('/proc/self/ns/net'),
+    diagnostic,
   );
+  diagnostic.enter('final-resource-identity');
   const finalContainer = inspectContainer(receipt.containerId);
   const finalNetwork = inspectNetwork(receipt.networkId);
   if (!finalContainer || !finalNetwork) throw new Error('browser qualification identity changed');
@@ -176,7 +237,15 @@ async function probeConfinement(receipt, host, address, ipv4, ipv6) {
     linkLocalHostControlAvailable: Boolean(ipv6),
   };
 }
-export async function qualifyBrowserConfinement(receipt) {
+export async function qualifyBrowserConfinement(
+  receipt,
+  diagnostic = {
+    enter: () => undefined,
+    fail: () => undefined,
+    cleanup: () => undefined,
+  },
+) {
+  diagnostic.enter('resource-identity');
   const container = inspectContainer(receipt.containerId);
   const network = inspectNetwork(receipt.networkId);
   if (!container || !network || !container.State?.Running)
@@ -185,24 +254,32 @@ export async function qualifyBrowserConfinement(receipt) {
   requireNetwork(receipt, network, container);
   if (Object.keys(network.Containers).length !== 1)
     throw new Error('browser isolated endpoint is not attached');
+  diagnostic.enter('bridge-witness');
   const host = await bridgeWitness(receipt);
+  diagnostic.enter('host-ipv4-control');
   const address = await hostIPv4();
   const ipv4 = await openControl('0.0.0.0', address);
   let ipv6;
   let result;
   let failure;
   try {
-    if (host.linkLocal) ipv6 = await openControl('::', `${host.linkLocal}%${host.bridge}`);
-    result = await probeConfinement(receipt, host, address, ipv4, ipv6);
+    if (host.linkLocal) {
+      diagnostic.enter('host-ipv6-control');
+      ipv6 = await openControl('::', `${host.linkLocal}%${host.bridge}`);
+    }
+    result = await probeConfinement(receipt, host, address, ipv4, ipv6, diagnostic);
   } catch (error) {
+    diagnostic.fail(error);
     failure = { error };
   }
   const cleanupErrors = [];
+  diagnostic.enter('control-cleanup');
   for (const control of [ipv4, ipv6]) {
     try {
       await control?.close();
     } catch (error) {
       cleanupErrors.push(error);
+      diagnostic.cleanup(error, 'control-cleanup');
     }
   }
   if (failure) {

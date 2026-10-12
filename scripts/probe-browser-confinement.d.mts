@@ -12,6 +12,12 @@ export interface BrowserConfinementProof {
   readonly stableAttachment: true;
   readonly linkLocalHostControlAvailable: boolean;
 }
+export interface QualificationObservation {
+  enter(phase: string): void;
+  fail(error: unknown): void;
+  cleanup(error: unknown, phase: string): void;
+}
 export declare function qualifyBrowserConfinement(
   receipt: IsolatedBrowserReceipt,
+  diagnostic?: QualificationObservation,
 ): Promise<BrowserConfinementProof>;
