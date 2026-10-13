@@ -1221,7 +1221,7 @@ Execution order: fixture review/strict validation → qualify review-provenance 
 依赖：第 7、15 组。
 
 - [x] 17.1 在钉定的 DSH 发行版上做出一个最小的自定义预设 bundle（一个预设、一句指令），装进镜像的预置配置目录（`profile-seed/` 随之包含）。验证：`pnpm test:docker`——新实例的预设选择器接口里出现该预设。
-- [ ] 17.2 `plugins/office-agents/`：`office-general`（默认）和 `office-writer` 两个预设，各有标识、中文名、职责、指令、Skills、工具清单、版本、启用状态；工具清单里没有联网搜索和网页抓取。验证：`pnpm test:docker`——选择器里两个预设都在且默认是综合办公；实例里生效的工具清单不含联网工具；一个检查脚本确认八项字段都有值（规格“预置两个办公 Agent”“办公 Agent 没有联网工具”）。
+- [x] 17.2 `plugins/office-agents/`：`office-general`（默认）和 `office-writer` 两个预设，各有标识、中文名、职责、指令、Skills、工具清单、版本、启用状态；工具清单里没有联网搜索和网页抓取。验证：`pnpm test:docker`——选择器里两个预设都在且默认是综合办公；实例里生效的工具清单不含联网工具；一个检查脚本确认八项字段都有值（规格“预置两个办公 Agent”“办公 Agent 没有联网工具”）。
 - [ ] 17.3 手动选择公文写作生成 DOCX。验证：`pnpm test:model`——选择 `office-writer` 提出通知任务，工作目录出现能被解析库打开的 DOCX，正文含标题、主送对象、事项、落款和日期（规格“手动指定专业 Agent 真实生效”）。
 - [ ] 17.4 综合办公下的自然语言委派。验证：`pnpm test:model`——在 `office-general` 下提出同一任务，出现一个由该 Session 派生、使用 `office-writer` 预设的子 Session，工作目录出现可打开的 DOCX（规格“自然语言任务由综合办公委派”）。
 - [ ] 17.5 把 17.3、17.4 登记为两个预设各自的验收任务，写进 `plugins/office-agents/` 的说明文件。验证：说明文件列出每个预设的验收命令；`DMXAPI_KEY` 缺失时两个任务失败而不是跳过（规格“每个 Agent 有可执行的验收任务”）。
@@ -1252,6 +1252,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - Documentation / migration notes selected: eight-field mapping, default cutover, explicit tool lists, Python-only Office support, critical-image human review deferred to Epic end. Concurrency / shared state not selected: no new stateful production service.
 - Required evidence: native selector has both exact Chinese names with office-general sole default; omitted preset binds general, explicit writer binds writer. Deployed metadata script checks all eight fields; both actual scopes expose required tools and associated skills with readable bodies; missing/invalid metadata or delivery and forbidden tools are rejected. Existing seed and managed-policy restart proof plus full checks, expanded review and final Docker/model/CI remain mandatory.
 - Non-goals: other eight Agents, per-preset management UI, RAGFlow, document rendering, new model/provider policy, existing-volume upgrade migration, #88/#89 actual DOCX/delegation acceptance.
+- Evidence: native default/selector RED on b0669f9 (general was not default); 2793f3a passes both names, omitted/default and explicit/writer Session binding, and scoped skill catalogs. ee5ad31 managed-policy plus model-refusal pass 2/2 (79.10s suite; 89.976s runner), including startup/restart leases, required tools, both actual loaded skill bodies and all eight fields; independent four-class resource inventory empty. Metadata-missing oracle RED→GREEN; malformed/disabled/missing-capability/network controls retained. Persistence RED exposed the evidence allowlist dropping new office metadata: extend only metadata/hash keys, retaining exclusion of instruction/skill bodies. Final frozen-head full Docker/model/CI and expanded review remain merge gates.
 
 ## 18. 部署骨架（任务包 1.16）
 

@@ -104,6 +104,13 @@ const OBSERVATION_KEYS = [
   'description',
   'toolNames',
   'readLimit',
+  'office',
+  'name',
+  'version',
+  'enabled',
+  'instructionSha256',
+  'skills',
+  'bodySha256',
 ] as const;
 
 const PROFILE_KEYS = [

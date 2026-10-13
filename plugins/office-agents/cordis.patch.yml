@@ -73,8 +73,6 @@
           - id: skill-filesystem
             name: "@deepseek-ai/dsh-skill-filesystem"
             config:
-              # Writer guidance is bundle-owned; general retains ordinary user/project discovery.
-              includeDefaultRoots: false
               customSkillDirs:
                 - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@dsh-team/office-agents/package.json')), 'skills')
           - id: tool-skill
