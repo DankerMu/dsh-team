@@ -388,8 +388,15 @@ export async function runWebStartup(
     const snapshot = record(
       json(bounded(['container', 'inspect', '--format', '{{json .}}', expected.container])),
     );
-    if (record(snapshot.State).Running !== true)
-      throw new Error('DSH Web exited before acceptance');
+    if (record(snapshot.State).Running !== true) {
+      const logs = command(['logs', expected.container], 5_000);
+      const empty = (logs.stdout + logs.stderr).includes(
+        'DEBUG-86 office-general-native-tools-empty',
+      );
+      throw new Error(
+        empty ? 'DEBUG-86 office-general-native-tools-empty' : 'DSH Web exited before acceptance',
+      );
+    }
     return portAndSettings(snapshot, expected);
   };
   const port = await observeWebEndpoint(

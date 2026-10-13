@@ -127,10 +127,13 @@ async function observePresets(ctx, agentPresets, tools) {
     if (typeof row.broken === 'string' && row.broken !== '') fail();
     const lease = await agentPresets.acquireScope(row.id);
     try {
+      const schemas = tools.schemas(lease.key);
+      if (row.id === 'office-general' && Array.isArray(schemas) && schemas.length === 0)
+        process.stderr.write('DEBUG-86 office-general-native-tools-empty\n');
       presets.push({
         id: row.id,
         description: descriptionOf(row),
-        toolNames: toolNames(tools.schemas(lease.key)),
+        toolNames: toolNames(schemas),
         ...(row.id === CUSTOM_PRESET_ID
           ? { readLimit: effectiveReadLimit(ctx, lease, row.id) }
           : {}),
