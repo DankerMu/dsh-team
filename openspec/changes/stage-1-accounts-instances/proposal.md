@@ -588,3 +588,10 @@
 - Exact `/_platform/admin/models` serving allowlist, AccountPage dispatch and shared navigation are necessary delivery companions; no backend API or lifecycle behavior changes.
 - Preserve current administrator authority, safe key projections, omitted-key preservation, settings validation, explicit restart-all admissions and partial-failure semantics.
 - Evidence floor: real browser entry404 RED; built-browser save/reload, actual safe response bodies, cleared key, omitted-key preservation, form validation and explicit confirmed restart action; DOM pending/stale/authority/malformed boundaries, screenshots/zero unexpected errors, source/dist smoke, full checks/UI, native cross-review and exact-head Docker/CI.
+
+## Issue #81 fixture
+
+- Feature, expanded (agree with upstream; administrator production settings, not key handling in this page); task15.5 only, #78/#74 complete and shared navigation #80 merged.
+- Deliver exact `/_platform/admin/runtime` through existing static owner/dispatcher/navigation, reading and saving the existing five-field runtime API. Preserve all backend domains, current authority, model/key custody, atomic audit and subnet-capacity validation.
+- Risk packs: API/config/schema/authorization/concurrency/ordering/errors/path-safety/compatibility/packaging/docs. No new endpoint, lifecycle mutation, restart action, deployment setting or dependency.
+- Evidence floor: actual page404 RED then built-browser five-field save/reload including fractional CPU; native/local invalid feedback without mutation; real over-pool400 with safe capacity guidance; current401/403 and failure recovery; pending/stale/malformed DOM boundaries; fullcheck/UI/source-dist smoke/screens/zero unexpected errors and frozen Docker/CI.

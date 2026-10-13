@@ -87,7 +87,7 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(HTML);
   });
 
-  it.each(['/_platform/admin/audit', '/_platform/admin/models'])(
+  it.each(['/_platform/admin/audit', '/_platform/admin/models', '/_platform/admin/runtime'])(
     'serves %s through the confined HTML owner',
     async (url) => {
       const response = await app.inject(url);
@@ -107,6 +107,7 @@ describe('declared platform static routes', () => {
       ['/_platform/admin', HTML],
       ['/_platform/admin/audit', HTML],
       ['/_platform/admin/models', HTML],
+      ['/_platform/admin/runtime', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -150,6 +151,10 @@ describe('declared platform static routes', () => {
     '/_platform/admin/models/settings',
     '/_platform/admin/models%00',
     '/_platform/admin/models%2fsettings',
+    '/_platform/admin/runtime/',
+    '/_platform/admin/runtime/settings',
+    '/_platform/admin/runtime%00',
+    '/_platform/admin/runtime%2fsettings',
     '/_platform/api/unknown',
     '/_platform/assets/missing.js',
     '/_platform/assets/',
@@ -189,6 +194,7 @@ describe('declared platform static routes', () => {
     '/_platform/admin',
     '/_platform/admin/audit',
     '/_platform/admin/models',
+    '/_platform/admin/runtime',
   ])('does not expose a symlinked entry outside the build at %s', async (url) => {
     await rm(join(root, 'index.html'));
     await symlink(join(directory, 'private.js'), join(root, 'index.html'));
@@ -219,6 +225,7 @@ describe('declared platform static routes', () => {
     '/_platform/admin',
     '/_platform/admin/audit',
     '/_platform/admin/models',
+    '/_platform/admin/runtime',
   ])('does not accept credential submissions at the static page %s', async (url) => {
     const response = await app.inject({ method: 'POST', url, payload: {} });
 
@@ -233,6 +240,7 @@ describe('declared platform static routes', () => {
     '/_platform/admin',
     '/_platform/admin/audit',
     '/_platform/admin/models',
+    '/_platform/admin/runtime',
   ])('registers %s without a build but rejects that production prerequisite', async (url) => {
     const missingRoot = join(directory, 'not-built');
     const offline = Fastify();

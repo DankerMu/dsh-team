@@ -1079,7 +1079,7 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - [x] 15.2 运行参数接口：空闲分钟数、单实例 CPU 和内存、同时运行上限、默认权限档；取值范围校验；写审计。验证：集成测试——越界值（0、非数字）被拒绝并指出范围；合法值保存后读回一致；把同时运行上限从 60 改为 2 后第三个用户的启动得到“已满”（规格“运行参数页”）。
 - [x] 15.3 配置变更的生效：变更后已在运行的实例不变，下次启动用新配置；接口返回“有 N 个运行中的实例仍在用旧配置”。验证：`pnpm test:docker`——改模型清单后，未重启的实例里模型选择器不变，重启后变化；模型选择器里只有已配置的模型且默认选中默认模型（规格“配置变更在下次启动时生效”和“模型选择器只有已配置的模型”场景）。
 - [x] 15.4 模型配置页：表单和校验提示；密钥输入框保存后只显示“已设置”；保存后提示“下次启动实例时生效”并提供“重启全部运行中的实例”。验证：`pnpm test:ui`——填写、保存走通；保存后页面收到的数据里没有密钥（规格“模型配置页”）。
-- [ ] 15.5 运行参数页：表单、取值范围提示、保存。验证：`pnpm test:ui`——修改并保存走通；越界值显示提示。
+- [x] 15.5 运行参数页：表单、取值范围提示、保存。验证：`pnpm test:ui`——修改并保存走通；越界值显示提示。
 - [ ] 15.6 不配置个人密钥即可完成真实工具调用。加入 `pnpm test:model` 入口（`package.json`、`AGENTS.md`、CI 里在受信任事件上运行）。验证：`pnpm test:model`——管理员配置开发模型后，新员工注册登录，不做任何模型设置，让 Agent 在工作目录写一个文件，文件真实存在（规格“员工无需配置即可对话”，验收 3 的本阶段部分）；`DMXAPI_KEY` 缺失时该命令失败并指出缺少密钥。
 
 Suggested fixture level: expanded - 处理模型密钥，并改变所有实例的生产配置
@@ -1128,6 +1128,16 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - Release / packaging / dependency compatibility; Documentation / migration notes — selected: normal build/UI discovery, fullcheck/allUI/source-dist smoke, screenshots/zero unexpected errors, strict fixture, native review and frozen Docker/CI; no dependencies. Any measured diff exception must retain all required proof and be justified before merge.
 - #80实现验证：真实缺页404 RED→编译浏览器保存/刷新通过；49 DOM语义场景、全check1963unit/890integration通过，ModelPage四项覆盖100%，dup2.85%。全UI29/29通过，真实GET/PUT无密钥回显、空输入保留数据库密钥、restart空集合200/服务缺失503、撤销401和降权403无设置/审计变化。加载/500仅为精确受控失败，重试读取真实GET；成功API不替换。401浏览器导航使旧响应体失效，保留原失败日志，改为先捕获真实服务端拒绝再原样交付，未放宽生产判据。独立源码/dist实际浏览器保存/刷新通过，零console错误，截图已检查；最终review/Docker/CI仍为合并门禁。
 - #80审查修复第1轮：确认restart403可能发生在部分实例已停止之后，拒绝页保留无权限及固定部分处理提示，但不恢复表单或重试；新增语义RED（只有无权限）→GREEN。真实浏览器补充默认未选、context0/1.5的实际保存点击、原生validity/提示/焦点、零PUT与设置/审计不变、纠正后成功保存；保存前密钥在截图中保持遮罩。真实restart403拒绝页截图已核验。修复后完整check1964unit/890integration、50DOM四项覆盖100%、dup2.85%，全UI29/29及源码/dist烟测通过。原始失败与审查/裁定保留于`.run/issue80/`；最终提交仍需精确Docker/CI。
+
+### Issue #81 risk/evidence map (task15.5 only)
+
+- API/path safety/compatibility: exact runtime page, existing confined static owner/HEAD/404/POST tests, existing navigation and dispatcher; all earlier browser pages remain working.
+- Config/schema: four numeric domains and permission enum, GET/PUT count distinction, closed safe projections; real five-field browser save/reload and fractionalCPU proof; no schema generator change.
+- Auth/secrets: current401/403/obsolete response handling; actual demotion/revocation rejection preserves settings/audit, model key unchanged and absent from runtime replies/storage/URL.
+- Concurrency/order/errors: one full-response fence and abort owner, no automatic write retry; held JSON, duplicate/stale/unmount DOM proofs and actual browser loading/error/retry.
+- Resource/capacity: bounded five-field form, positive-safe-integer inputs and finite fractionalCPU; real over-pool400 with useful safe capacity feedback and correction, no hardcoded pool capacity.
+- Packaging/docs: browser404 RED, fullcheck/allUI/source-dist smoke/screens/zero unexpected errors; strict fixture, native independent initial review, exact-head Docker/CI, existing docs updated. Source behavior outside necessary static/nav dispatch remains unchanged.
+- #81实现证据：真实page404 RED→五字段实际浏览器保存/刷新GREEN；完整check2010unit/890integration、37DOM的98.91/98.07/100/100%覆盖与dup2.93%通过，全UI34/34，39.6s。浏览器原生空值/0/1.5整数约束及CPU0的React反馈均不PUT、不改设置或审计；真实子网容量400显示4096后纠正成功，CPU0.125/0.000001可保存；模型密钥保留且不进入运行回应。实际401/403、受控500后真实GET重试、加载及截图/零未预期错误验证；独立source/dist浏览器0.375核/approval保存和刷新成功，存储为空。原始lint复杂度失败保留，按数值域拆解后全check通过；DOM回归不冒充单独RED。最终原生初审及精确headDocker/CI仍是合并门禁。
 
 ## 16. 权限三档（任务包 1.13）
 

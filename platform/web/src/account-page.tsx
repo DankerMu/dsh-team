@@ -4,6 +4,7 @@ import { WaitPage } from './wait-page.tsx';
 import { AdminPage } from './admin-page.tsx';
 import { AuditPage } from './audit-page.tsx';
 import { ModelPage } from './model-page.tsx';
+import { RuntimePage } from './runtime-page.tsx';
 
 const LOGIN_FAILURE = '登录失败，请稍后重试。';
 const REGISTRATION_FAILURE = '注册失败，请稍后重试。';
@@ -46,6 +47,7 @@ export function AccountPage() {
   if (window.location.pathname === '/_platform/admin') return <AdminPage />;
   if (window.location.pathname === '/_platform/admin/audit') return <AuditPage />;
   if (window.location.pathname === '/_platform/admin/models') return <ModelPage />;
+  if (window.location.pathname === '/_platform/admin/runtime') return <RuntimePage />;
   if (window.location.pathname === '/_platform/wait') return <WaitPage />;
   return window.location.pathname === '/_platform/account' ? <PasswordPage /> : <CredentialForm />;
 }
