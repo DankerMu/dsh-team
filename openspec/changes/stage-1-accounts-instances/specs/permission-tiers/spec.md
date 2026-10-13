@@ -15,6 +15,12 @@
 - **WHEN** 员工把 Session 甲切到人工批准，Session 乙保持 Yolo
 - **THEN** 甲里的写操作会先询问，乙里的不询问
 
+#### Scenario: 一个 Session 等待批准时另一个 Session 继续执行
+
+- **WHEN** 人工批准的 Session 甲已有待批准写操作，员工切到同一实例的 Yolo Session 乙并要求写文件
+- **THEN** 乙完成写入且整个操作没有询问，甲的文件仍不存在
+- **AND** 员工返回甲时仍看到原来的待批准操作；两者档位不变，只有批准甲的操作后甲才写入
+
 ### Requirement: 人工批准档
 
 人工批准档下，Agent 每次写文件或执行命令前 MUST 询问员工，员工拒绝则该操作 MUST NOT 执行。

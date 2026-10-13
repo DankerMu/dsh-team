@@ -604,3 +604,11 @@
 - User authorization (2026-10-13): retain D16, establish a trusted CI execution channel to giap-vps, retain the model key there, and retire invocation-scoped execution authority afterwards. This does not authorize general public-PR execution on the host.
 - CI must execute the reviewed full SHA on giap-vps, not merely validate posted evidence. Public personal-repository runners lack organization selected-workflow restrictions; use a restricted SSH capability with authenticated workflow identity rather than label-based runner routing.
 - Evidence floor: missing-key failure, actual administrator HTTP configuration and fresh public registration/login, native Agent task and independent absent-before/exact-content-after file oracle, bounded failure and cleanup, CI authorization rejection controls, real Actions execution, full checks and exact-head review/Docker/CI.
+
+## Issue #84 fixture
+
+- Verification, expanded/Critical Characterization; task16.3 only, #83/#82 merged. Extend the established real-provider acceptance, not the deterministic model adapter.
+- Governing invariant: manual approval precedes the real write; rejection reaches the Agent without file creation; Yolo completes without any approval, independently while another Session waits.
+- Selected risk packs and evidence are mapped in tasks16.3: exact native event identities/full operation interval, real UI decisions and file effects, judge sensitivity, safe credential custody and bounded invocation cleanup.
+- Preserve #82 onboarding and trusted VPS CI and #83 production gate/native deterministic coverage. Only observed defects authorize necessary plugin/image/overlay corrections; no DSH source modification, Auto acceptance or production qwen3.6 claim.
+- Evidence floor: real development-model four-scenario acceptance, screenshots/zero new browser errors, sanitized retained native facts, full checks, expanded cross-review and exact-head VPS model/Docker/CI.

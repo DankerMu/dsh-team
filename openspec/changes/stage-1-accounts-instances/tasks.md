@@ -1164,7 +1164,7 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 
 - [x] 16.1 在钉定发行版验证并交付三档执行插件 `plugins/permission-tiers/`，不改 DSH 源码：人工逐次询问，Auto 模型审查/不可用询问，Yolo 不询问；设计决定13登记具体标识、原生 Session 切换入口和发行版限制。插件随镜像离线、可信加载；缺失/损坏不得让 Agent 静默启动。验证：真实 DSH native/PTC/同进程委派工具及文件副作用、批准/拒绝、Auto 协议失败与取消、UI截图及零新增 console error；确定性协议服务不冒充真实开发模型。
 - [x] 16.2 受管覆盖层从 `settings.defaultPermissionTier` 生成唯一三档权限表/默认档和插件依赖，迁移全部生产与测试调用方。验证：`pnpm test:docker`——默认 Yolo 新 Session 是 Yolo；人工批准和 Auto 各自重启后新 Session 对应新默认，既有 Session 保留选择，两个 Session 切档互不影响；员工修改默认/插件副本不能覆盖受管策略。
-- [ ] 16.3 人工批准档和 Yolo 档的行为。验证：`pnpm test:model`——人工批准档下写文件前出现询问，同意后写入、拒绝后文件不存在；Yolo 档下写入且没有询问；在同一实例的两个 Session 里设不同档位互不影响（规格“人工批准档”“Yolo 档”“三档可选并按 Session 切换”）。
+- [x] 16.3 人工批准档和 Yolo 档的行为。验证：`pnpm test:model`——人工批准档下写文件前出现询问，同意后写入、拒绝后文件不存在；Yolo 档下写入且没有询问；在同一实例的两个 Session 里设不同档位互不影响（规格“人工批准档”“Yolo 档”“三档可选并按 Session 切换”）。
 - [ ] 16.4 Auto 档的行为。验证：`pnpm test:model`——在开发模型上审查可用时，普通写文件被放行且没有询问；审查不可用时退为询问。把在开发模型上观察到的结果写进 `design.md` Open Questions 第四条（规格“Auto 档”）。
 
 Suggested fixture level: expanded - 权限执行门禁、插件失效关闭、Session 持久与委派语义、镜像可信交付；原 compact 假设已被发行版实测否定
@@ -1189,6 +1189,19 @@ Minimal mergeable slice: #83 交付完整三档插件和默认配置接线（16.
 Parent-owned verification order: capture semantic RED through the existing callable boundary, then implementation; `pnpm check` and strict OpenSpec; actual browser/tool smoke plus independent missing-gate / skipped-approval / Auto-error-allow counterexamples and restoration; risk-scaled cross-review; exact reviewed-head full giap-vps Docker and CI before merge. No thresholds, tests, isolation options, or acceptance criteria are relaxed.
 
 验证记录（#83）：父级真实native write探针先RED（人工档54字节写入却0审批），插件后GREEN（原生批准前无文件、批准后精确字节）。`pnpm check`1397unit/58files、769integration/46files通过，client逐文件覆盖100%、host/review均满足原80%门槛，重复率2.93%。权限专项Docker3/3通过（含永久浏览器用例23.62s）；三默认重启、既有Session、native/PTC/委派、Auto协议错误与取消、ABA/finalguard、卸载与可信交付均走实际DSH。原完整浏览器根/子拒绝、允许、取消6场景在修复与故障恢复两次通过，零新增console errors。首次子UI失败经用户额外一轮授权，CDP确认原生-10只读组件抢在+1审批前，新增严格子范围-20面板驱动原生pending；故障对照只去掉client声明即恢复相同子UI失败。另两个独立host构建副本分别注入人工不询问、Auto技术错误放行，均由真实文件先于授权/0审批判为语义RED，canonical前后GREEN；独立四类Docker资源清单为空。该证据不冒充#84/#85真实模型结果；完整冻结head Docker、review和CI仍是合并门禁。
+
+### Issue #84 risk/evidence map (task 16.3)
+
+- Public API / CLI / script entry; Config / project setup — selected: extend existing `pnpm test:model`, real admin model API/fresh employee and native UI; missing `DMXAPI_KEY` still fails before provisioning. No second verification or credential path.
+- File IO / path safety / overwrite; Auth / permissions / secrets — selected: unique absent-before targets, exact bytes after allow/Yolo, denied target absent after native rejection and settled turn; real provider only, sanitized evidence, no harness writes of expected files.
+- Schema / columns / units / field names; Concurrency / shared state / ordering — selected: exact native Session/turn/call/approval correlation and complete event interval; hold A manual pending while B Yolo completes, then return to unchanged A. Zero asks throughout B, not merely after it.
+- Error handling / rollback / partial outputs; Resource limits / large input / discovery — selected: bounded waits, incomplete evidence and extra approvals fail; no automatic model retry or approval; existing owned-resource cleanup on success/failure and independent inventory. Evidence retained before trusted checkout retirement.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: retain #82 onboarding acceptance and #83 deterministic suite; exact published DSH pin and existing production plugin, no source patch; full same-head Docker suite and trusted model CI on giap-vps.
+- Documentation / migration notes — selected: record actual development-model/UI observations and limits, not production qwen3.6 or Auto results; mark 16.3 only after real proof. Necessary critical-path edits enter deferred Epic-end human review ledger.
+
+Verification order: fixture review and strict OpenSpec → evidence-judge known-good/semantic known-bad/restoration qualification → actual real-provider manual allow/deny, Yolo and pending two-Session isolation with screenshots/zero new browser errors → `pnpm check` → expanded correctness and evidence/security review → exact reviewed-head VPS model/full Docker/CI → merge. Judge controls cannot replace the real provider run; do not invent a failing production baseline when existing #83 behavior is correct.
+
+验证记录（#84）：giap-vps 上 `1fda10df74f14e7fc4414383a2c0ecdc3a8f4b40` 的真实开发模型验收通过，runner56.393s、退出0，四类独立Docker清单为空。原生人工批准待定时无文件；乙Yolo实际写入且完整回合无审批，返回甲仍为同一待定审批；批准后精确字节、另一次拒绝后原生错误工具结果/模型后续回复/完整结束且无文件，零新增浏览器错误。证据运行 `4d12ebd3-3b79-463f-be16-56a6e95c2fb0`。初始失败仅为验收浏览器800×600隐藏侧栏，恢复既有#83的1440×1050前提后通过；没有修改生产权限实现或增加重试。18个判据控制及完整本地check通过；冻结最终head的review、完整Docker和可信模型CI仍是合并门禁。
 
 ## 17. 两个办公 Agent（任务包 1.15）
 
