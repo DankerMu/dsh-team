@@ -747,3 +747,44 @@ it('retains bounded profile differences and installed pins when byte preservatio
     }
   });
 });
+
+it('retains office capability evidence without retaining instruction or skill bodies', async () => {
+  const runId = 'office-metadata-evidence';
+  await withReviewedHead(() => {
+    const evidence = createManagedPolicyEvidence({ runId, imageId: IMAGE_ID });
+    const office = {
+      name: '综合办公',
+      version: '0.2.0',
+      enabled: true,
+      instructionSha256: 'a'.repeat(64),
+      skills: [{ name: 'office-docx', bodySha256: 'b'.repeat(64) }],
+    };
+    try {
+      evidence.record({
+        startObservation: {
+          presets: [
+            {
+              id: 'office-general',
+              office: {
+                ...office,
+                instruction: 'must-not-retain-instruction',
+                skills: [{ ...office.skills[0], content: 'must-not-retain-skill-body' }],
+              },
+            },
+          ],
+        },
+      });
+      evidence.fail('restart');
+      const retained: unknown = JSON.parse(readFileSync(evidence.path, 'utf8'));
+      expect(retained).toMatchObject({
+        failed: true,
+        failedStage: 'restart',
+        startObservation: { presets: [{ id: 'office-general', office }] },
+      });
+      expect(JSON.stringify(retained)).not.toContain('must-not-retain');
+      return Promise.resolve();
+    } finally {
+      restoreEvidence(runId);
+    }
+  });
+});

@@ -11,11 +11,20 @@ interface ManagedPolicyModelObservation {
   readonly betaContextWindow: number;
 }
 
+interface OfficeMetadata {
+  readonly name: string;
+  readonly version: string;
+  readonly enabled: boolean;
+  readonly instructionSha256: string;
+  readonly skills: readonly { readonly name: string; readonly bodySha256: string }[];
+}
+
 interface ManagedPolicyPresetObservation {
   readonly id: string;
   readonly description: string;
   readonly toolNames: readonly string[];
   readonly readLimit?: number;
+  readonly office?: OfficeMetadata;
 }
 
 export interface ManagedPolicyRuntimeObservation {
@@ -33,11 +42,29 @@ export interface ManagedPolicyRuntimeExpectation {
   readonly descriptions?: Readonly<Record<string, string>>;
   readonly retainedTools?: Readonly<Record<string, readonly string[]>>;
   readonly readLimits?: Readonly<Record<string, number>>;
+  readonly officeNames?: Readonly<Record<string, string>>;
 }
 
 const INVALID_RUNTIME = 'Invalid managed policy runtime observation';
 const RELEASED_BETA_CONTEXT_WINDOW = 262_144;
 const NETWORK_TOOLS = new Set(['web_search', 'web_fetch']);
+
+export const SHIPPED_PRESET_IDS = [
+  'standard',
+  'ptc',
+  'minimal',
+  'cordis',
+  'office-general',
+  'office-writer',
+] as const;
+export const RETAINED_TOOLS = {
+  standard: ['bash', 'read'],
+  ptc: ['bash', 'read'],
+  minimal: ['bash'],
+  cordis: ['bash', 'read'],
+  'office-general': ['bash', 'read', 'write', 'edit', 'skill', 'present', 'subagent'],
+  'office-writer': ['bash', 'read', 'write', 'edit', 'skill', 'present'],
+} as const;
 
 function invalid(): never {
   throw new Error(INVALID_RUNTIME);
@@ -99,6 +126,29 @@ function parseModels(value: unknown): ManagedPolicyModelObservation {
   };
 }
 
+function requireTextHash(value: unknown): string {
+  const hash = requireString(value);
+  if (!/^[a-f0-9]{64}$/.test(hash)) invalid();
+  return hash;
+}
+
+function parseOffice(value: unknown): OfficeMetadata {
+  const office = asObject(value);
+  if (typeof office.enabled !== 'boolean' || !Array.isArray(office.skills)) invalid();
+  const version = requireString(office.version);
+  if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) invalid();
+  return {
+    name: requireString(office.name),
+    version,
+    enabled: office.enabled,
+    instructionSha256: requireTextHash(office.instructionSha256),
+    skills: office.skills.map((value: unknown) => {
+      const skill = asObject(value);
+      return { name: requireString(skill.name), bodySha256: requireTextHash(skill.bodySha256) };
+    }),
+  };
+}
+
 function parsePreset(value: unknown): ManagedPolicyPresetObservation {
   const preset = asObject(value);
   const description = preset.description;
@@ -107,6 +157,7 @@ function parsePreset(value: unknown): ManagedPolicyPresetObservation {
     description: typeof description === 'string' ? description : '',
     toolNames: requireStringList(preset.toolNames),
     ...(preset.readLimit === undefined ? {} : { readLimit: requireNumber(preset.readLimit) }),
+    ...(preset.office === undefined ? {} : { office: parseOffice(preset.office) }),
   };
 }
 
@@ -144,6 +195,19 @@ function retainsExpectedTools(
   return retained === undefined || retained.every((name) => preset.toolNames.includes(name));
 }
 
+function matchesOffice(preset: ManagedPolicyPresetObservation, name: string | undefined): boolean {
+  if (name === undefined) return true;
+  return (
+    preset.description.trim() !== '' &&
+    preset.office?.name === name &&
+    preset.office.enabled &&
+    sameStrings(preset.office.skills.map((skill) => skill.name).sort(), [
+      'office-docx',
+      'official-writing',
+    ])
+  );
+}
+
 function matchesExpectedPreset(
   preset: ManagedPolicyPresetObservation,
   expected: ManagedPolicyRuntimeExpectation,
@@ -153,7 +217,8 @@ function matchesExpectedPreset(
   return (
     (description === undefined || preset.description === description) &&
     (readLimit === undefined || preset.readLimit === readLimit) &&
-    retainsExpectedTools(preset, expected)
+    retainsExpectedTools(preset, expected) &&
+    matchesOffice(preset, expected.officeNames?.[preset.id])
   );
 }
 

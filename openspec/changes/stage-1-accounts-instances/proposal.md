@@ -628,3 +628,11 @@
 - Preserve existing preset IDs/default, model/permission policy, empty employee patch, immutable complete profile seed and existing-volume state. One `office-general` declaration with one Chinese persona instruction; the second preset, default switch, full office capabilities and model/DOCX acceptance remain #87–#90.
 - Evidence floor: native selector RED without delivery, GREEN from an ordinary fresh volume with healthy exact preset metadata; source bundle in read-only seed, existing seed copy-up/edit/reuse checks, `pnpm check`, strict fixture and exact-head full Docker/CI.
 - Critical image packaging and preset registration require expanded review and human line review, deferred to Epic end under the user's existing authorization.
+
+## Issue #87 fixture
+
+- Feature, expanded (agree); task17.2 only, #86 merged. Extend the same bundle to office-general/default and office-writer with complete metadata, real scoped skills and explicit tool sets.
+- Preserve built-in presets and intentional explicit-standard callers, user state/seed protections, managed model/permission policy, and legitimate tool-less-preset parsing. The default change is intentional for fresh Sessions; no platform production/DSH source change.
+- Eight-field carriers and evidence are specified in design14. Both presets share the bundle release version; native Loader declaration state supplies enabled. No unsupported native schema keys or parallel catalog.
+- Reuse installed rc.2 Office skills with Python-only configuration and add only missing Chinese document-format guidance. Do not duplicate office-docx or promise rendering/knowledge retrieval that this stage does not provide.
+- Evidence floor: native selector/default and omitted/explicit Session binding, metadata checking script, actual scoped tools and loaded associated skills, forbidden-network-tool rejection, seed delivery, full checks and exact-head Docker/model/CI. DOCX/delegation model acceptance remains #88/#89.

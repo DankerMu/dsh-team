@@ -5,7 +5,7 @@ import { configureInstanceModel, registerInstanceUser } from './instance-fixture
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 
-it('discovers a healthy image-seeded office preset in the native selector of a fresh instance', async () => {
+it('binds fresh Sessions to both healthy office presets with general as the native default', async () => {
   await runUserImage(
     'container-start',
     () => undefined,
@@ -34,19 +34,35 @@ it('discovers a healthy image-seeded office preset in the native selector of a f
         if (!Array.isArray(response.presets)) throw new Error('Missing native preset selector');
         const presets = response.presets.map((value: unknown) => record(value));
 
-        const office = presets.find((preset) => preset.id === 'office-general');
-        expect(office).toMatchObject({ id: 'office-general', name: '综合办公', isDefault: false });
-        expect(office?.broken).toBeUndefined();
+        for (const [id, name] of [
+          ['office-general', '综合办公'],
+          ['office-writer', '公文与材料写作'],
+        ] as const) {
+          const office = presets.find((preset) => preset.id === id);
+          expect(office).toMatchObject({ id, name, isDefault: id === 'office-general' });
+          expect(office?.broken).toBeUndefined();
+          const created = await gateway.rpc(employee.cookie, 'session/create', {
+            request: { cwd: '/data/work', ...(id === 'office-writer' ? { agentPreset: id } : {}) },
+          });
+          expect(created.agentPreset).toBe(id);
+          const catalog = await gateway.rpc(employee.cookie, 'skills/list', {
+            request: { sessionId: created.sessionId },
+          });
+          if (!Array.isArray(catalog.skills)) throw new Error('Missing native skill catalog');
+          expect(catalog.skills.map((skill: unknown) => record(skill).name)).toEqual(
+            expect.arrayContaining(['office-docx', 'official-writing']),
+          );
+        }
         expect(presets.filter((preset) => preset.isDefault).map((preset) => preset.id)).toEqual([
-          'standard',
+          'office-general',
         ]);
         expect(presets.map((preset) => preset.id)).toEqual(
           expect.arrayContaining(['standard', 'ptc', 'minimal', 'cordis']),
         );
         process.stdout.write(
-          `Office bundle selector verified: run=${lifecycle.runId} preset=office-general healthy=true default=standard\n`,
+          `Office presets verified: run=${lifecycle.runId} default=office-general writer=bound skills=available\n`,
         );
-        return JSON.stringify({ preset: office });
+        return JSON.stringify({ presets });
       } finally {
         gateway.close();
         await app.close();
