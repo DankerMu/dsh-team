@@ -32,7 +32,7 @@ print(json.dumps(result, ensure_ascii=False))
 
 export function officeDocxReadScript(path: string): string {
   return `import {spawnSync} from 'node:child_process';
-const result=spawnSync('/usr/bin/python3',['-c',${JSON.stringify(READ_DOCX)},${JSON.stringify(path)}],{encoding:'utf8',timeout:10000,maxBuffer:65536});
+const result=spawnSync('/usr/bin/python3',['-I','-c',${JSON.stringify(READ_DOCX)},${JSON.stringify(path)}],{encoding:'utf8',timeout:10000,maxBuffer:65536});
 if(result.error||result.status!==0)throw new Error('office-docx-observer');
 process.stdout.write(result.stdout);`;
 }

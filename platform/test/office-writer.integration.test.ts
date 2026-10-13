@@ -92,6 +92,22 @@ it('binds manual writer selection to its exact prompt, successful tool activity 
   });
 });
 
+it('distinguishes the human task from native skill catalog and instruction messages', () => {
+  const injected = ['skill-catalog', 'skill-invocation'].map((kind) => ({
+    type: 'user/message',
+    data: { source: { kind }, content: [{ type: 'text', text: PROMPT }] },
+  }));
+  const records = [...EVENTS.slice(0, 4), ...injected, ...EVENTS.slice(4)].map((event, seq) => ({
+    event: { seq, ...event },
+  }));
+  expect(officeTurnEvidence({ ...TURN, records, cursor: records.length - 1 })).toEqual({
+    selectedSeq: 1,
+    promptSeq: 3,
+    turn: 1,
+    terminalSeq: 8,
+  });
+});
+
 it.each([
   { preset: 'office-general' },
   { prompt: 'a different task' },
@@ -105,6 +121,10 @@ it.each([
 it.each([
   { index: 1, data: { agentPreset: 'office-general' } },
   { index: 2, data: { turn: 2 } },
+  {
+    index: 3,
+    data: { source: { kind: 'skill-invocation' }, content: [{ type: 'text', text: PROMPT }] },
+  },
   {
     index: 5,
     data: {

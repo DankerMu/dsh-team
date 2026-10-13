@@ -59,7 +59,9 @@ export function officeTurnEvidence(input: {
   assert(input.preset === 'office-writer', 'office-preset-binding');
   const selected = events.filter((event) => event.type === 'agent-preset/selected');
   const starts = events.filter((event) => event.type === 'turn/start');
-  const prompts = events.filter((event) => event.type === 'user/message');
+  const prompts = events.filter(
+    (event) => event.type === 'user/message' && record(record(event.data).source).kind === 'user',
+  );
   const ends = events.filter((event) => event.type === 'turn/end');
   assert(
     selected.length === 1 && starts.length === 1 && prompts.length === 1 && ends.length === 1,

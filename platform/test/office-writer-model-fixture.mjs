@@ -108,6 +108,16 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence }) {
       300000,
       'office-native-turn-end',
     );
+    report.native = {
+      preset: snapshot.preset,
+      cursor: snapshot.cursor,
+      hasMore: snapshot.hasMore,
+      counts: Object.fromEntries(
+        ['agent-preset/selected', 'turn/start', 'user/message', 'tool/call', 'turn/end'].map(
+          (type) => [type, snapshot.records.filter(({ event }) => event.type === type).length],
+        ),
+      ),
+    };
     report.turn = officeTurnEvidence(snapshot);
     await waitTurnIdle(page, 30000, 'office-browser-turn-idle');
     report.docx = officeDocxEvidence(observe(), notice);
