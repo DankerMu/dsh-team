@@ -21,7 +21,8 @@ const id = invocation ?? '';
 const root = join(homedir(), '.local/share/dsh-team/ci', id);
 const unit = `dsh-team-ci-${id}-run`;
 const source = join(root, 'checkout');
-const temporary = join(root, 'private');
+// The pinned VPS home plus this child keeps browser AF_UNIX paths below Linux's 108-byte bound.
+const temporary = join(root, 'tmp');
 const path = `${dirname(process.execPath)}:${homedir()}/.local/share/dsh-team/toolchain/pnpm-10.34.6/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`;
 const environment = {
   PATH: path,
@@ -260,6 +261,23 @@ function stopExecution() {
   stopOwnedUnit(unit, `dsh-team-ci:${id}`);
 }
 
+async function rescueBrowserImage(directory: string) {
+  const imageFile = join(directory, 'image.json');
+  if (!(await exists(imageFile))) return;
+  const image = await privateJson(imageFile);
+  if (
+    typeof image.tag !== 'string' ||
+    typeof image.invocation !== 'string' ||
+    image.tag !== `dsh-team-browser-runtime-${image.invocation}` ||
+    typeof image.imageId !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(image.imageId)
+  )
+    throw new Error('Invalid browser image receipt');
+  removeOwned(docker, 'image', image.imageId, image.invocation, {
+    'dsh-team.browser-invocation': image.invocation,
+  });
+}
+
 async function rescueBrowsers() {
   if (!(await exists(temporary))) return;
   for (const name of await readdir(temporary)) {
@@ -284,18 +302,7 @@ async function rescueBrowsers() {
       );
       retireAcquisition(id, pointer.nonce);
     }
-    const imageFile = join(directory, 'image.json');
-    if (!(await exists(imageFile))) continue;
-    const image = await privateJson(imageFile);
-    if (
-      typeof image.tag !== 'string' ||
-      typeof image.invocation !== 'string' ||
-      image.tag !== `dsh-team-browser-runtime-${image.invocation}`
-    )
-      throw new Error('Invalid browser image receipt');
-    removeOwned(docker, 'image', image.tag, image.invocation, {
-      'dsh-team.browser-invocation': image.invocation,
-    });
+    await rescueBrowserImage(directory);
   }
 }
 
