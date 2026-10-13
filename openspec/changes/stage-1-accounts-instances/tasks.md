@@ -1080,7 +1080,7 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - [x] 15.3 配置变更的生效：变更后已在运行的实例不变，下次启动用新配置；接口返回“有 N 个运行中的实例仍在用旧配置”。验证：`pnpm test:docker`——改模型清单后，未重启的实例里模型选择器不变，重启后变化；模型选择器里只有已配置的模型且默认选中默认模型（规格“配置变更在下次启动时生效”和“模型选择器只有已配置的模型”场景）。
 - [x] 15.4 模型配置页：表单和校验提示；密钥输入框保存后只显示“已设置”；保存后提示“下次启动实例时生效”并提供“重启全部运行中的实例”。验证：`pnpm test:ui`——填写、保存走通；保存后页面收到的数据里没有密钥（规格“模型配置页”）。
 - [x] 15.5 运行参数页：表单、取值范围提示、保存。验证：`pnpm test:ui`——修改并保存走通；越界值显示提示。
-- [ ] 15.6 不配置个人密钥即可完成真实工具调用。加入 `pnpm test:model` 入口（`package.json`、`AGENTS.md`、CI 里在受信任事件上运行）。验证：`pnpm test:model`——管理员配置开发模型后，新员工注册登录，不做任何模型设置，让 Agent 在工作目录写一个文件，文件真实存在（规格“员工无需配置即可对话”，验收 3 的本阶段部分）；`DMXAPI_KEY` 缺失时该命令失败并指出缺少密钥。
+- [x] 15.6 不配置个人密钥即可完成真实工具调用。加入 `pnpm test:model` 入口（`package.json`、`AGENTS.md`、CI 里在受信任事件上运行）。验证：`pnpm test:model`——管理员配置开发模型后，新员工注册登录，不做任何模型设置，让 Agent 在工作目录写一个文件，文件真实存在（规格“员工无需配置即可对话”，验收 3 的本阶段部分）；`DMXAPI_KEY` 缺失时该命令失败并指出缺少密钥。
 
 Suggested fixture level: expanded - 处理模型密钥，并改变所有实例的生产配置
 Minimal mergeable slice: 15.1（模型配置读写接口和测试，约 200 行）
@@ -1153,7 +1153,9 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - CI authorization was explicitly granted on2026-10-13 for giap-vps execution with model keys retained there. A public repository runner's label is not an authorization boundary; use the restricted execution channel specified in design. Posted evidence alone never completes15.6.
 - Fixture/implementation routing obeys the higher-priority prohibition on single-slice delegation; disclose inline work accurately. Independent multi-seat review remains required. Task15.6 stays unchecked until every required path, including real Actions execution, is observed.
 - Fixture初审：三个独立席位，模型oracle与执行流程pass；安全席位指出主机身份与强杀后的Docker/临时秘密回收两项缺口，已补充预信任host-key、持久登记、独立finalizer及负控要求；修订由主控inline复核，不冒充fresh独立复审。strict validate通过。
-- 当前证据：缺钥入口先因只报usage失败，接入后两个进程回归通过，实际`pnpm test:model`缺钥exit1且点名变量。未提交工作区快照在giap-vps真实模型1/1通过（24.287s），原生截图已检查，文件事前不存在/完整字节一致/错误内容拒绝，零console错误，独立四类资源清单为空。CI身份25项与清理旧路径等共132集成通过；首次CI工具lint六项失败已修正，check:fast通过。此记录不是最终head或Actions执行证据，15.6仍未完成。
+- 验证记录：缺钥入口语义RED→GREEN，实际命令exit1且点名变量。真实Actions38433530510绑定`3876e2b76c61821f647b897a1a74ca29e5c82fe6`，GitHub签名/OIDC/受限SSH/VPS检出和模型命令全链路成功；模型1/1、30.369s，原生完成截图已检查、完整随机字节及错误内容对照、零console错误。独立确认GitHub临时secret404、SSH授权/临时秘密文件/本调用锁不存在。该提交完整check2010unit/923integration、无筛选Docker24文件70测试及四类空清单通过；发布证据见PR207评论6150893716。
+- 生命周期负控：真实SSH四种部分安装/丢失回应失败均完整退休；前台进程组SIGKILL后，独立owner跨真实600秒未使用到期继续运行，退还VPS和GitHub两处能力。队列等待由依赖夹具模拟，实际GitHub secret/VPS authority和到期时间未模拟，不能称为另一次真实Actions模型运行。真实运行中Docker对象取消/deadline均观察到systemd升级SIGKILL、注册对象/合成凭据文件消失、无关sentinel保留。生成RSA/JWKS夹具另验证一次性claim/重放/命令替换；真实GitHub签名由上述Actions覆盖。
+- 创建交接oracle：历史`b303512`运行时在三个整cgroup死亡点均因unsettled拒绝退休（语义RED），修复后同一6案例GREEN且完整发现通过；不放松dead-producer不确定性门禁。外来lease指向现存目录的真实反例另揭示`ln -s`会在目录内创建嵌套链接；`20f6772`使用`ln -sT`后在exclusive-admission拒绝，外来链接/空目录不变且自身清理完成。最终发布提交仍须重新绑定完整运行证据、review gate和protected CI，不把历史资格冒充最终head。
 
 ## 16. 权限三档（任务包 1.13）
 
