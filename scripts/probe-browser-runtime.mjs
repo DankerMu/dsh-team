@@ -7,7 +7,13 @@ import net from 'node:net';
 import { arch, platform, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { alive, processBirth, retireNative, stopChild } from './probe-browser-native.mjs';
+import {
+  alive,
+  liveProcessBirth,
+  processBirth,
+  retireNative,
+  stopChild,
+} from './probe-browser-native.mjs';
 export { processBirth } from './probe-browser-native.mjs';
 import { readReceipt, writeReceipt } from './probe-browser-receipt.mjs';
 export { readReceipt, writeReceipt } from './probe-browser-receipt.mjs';
@@ -332,10 +338,7 @@ async function requireStoppedDriver(receipt) {
     receipt.driver?.pid === process.pid
   )
     return;
-  if (
-    alive(receipt.driver.pid) &&
-    (await processBirth(receipt.driver.pid)) === receipt.driver.birth
-  )
+  if ((await liveProcessBirth(receipt.driver.pid)) === receipt.driver.birth)
     throw new Error('browser driver still owns relays; stop driver before external rescue');
 }
 
@@ -395,6 +398,10 @@ async function createWorker(path, args, canceled, nonce) {
       if (receipt.nonce !== nonce) throw new Error('browser producer receipt identity changed');
       if (producer?.pid !== worker.pid || producer.birth !== (await processBirth(worker.pid)))
         throw new Error('browser producer identity mismatch');
+      if (process.env.DSH_TEAM_CI_INVOCATION) {
+        const { retainAcquisition } = await import('./ci-vps-units.mjs');
+        await retainAcquisition(producer, nonce, process.env.DSH_TEAM_CI_INVOCATION);
+      }
       receipt.acquisition = { state: 'armed', producer };
       await writeReceipt(path, receipt);
       await writeReceipt(`${path}.create-authorized`, { version: 1, nonce, producer });

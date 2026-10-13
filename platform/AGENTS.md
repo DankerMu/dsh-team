@@ -39,6 +39,8 @@ Web static-route unit tests may create only invocation-owned temporary filesyste
 
 Real Docker lifecycle cases belong only in `platform/test/*.docker.test.ts`, selected by root `pnpm test:docker` on the trusted giap-vps Linux amd64 host. Ordinary integration discovery must exclude them. Narrow read-only CI evidence helpers and Docker-command lifecycle fixtures may live under `platform/test`; their `*.integration.test.ts` tests use owned literal GitHub fixtures or the external Docker process boundary, never local Docker/network execution. Validate GitHub JSON at the adapter boundary, select the latest matching status before checking its author/state, and bind status evidence to the exact queried head SHA. Real Docker cases register unique invocation labels/targets before creation, run the captured image identity, preserve failure output, and independently attempt each owned cleanup in `finally`; cleanup errors must fail the command.
 
+Real-provider acceptance belongs in `platform/test/*.model.test.ts`, selected only by `pnpm test:model` on giap-vps. This separate serial project is outside unit coverage and ordinary integration/Docker discovery. Missing `DMXAPI_KEY` fails before provisioning; tests configure the administrator through the real HTTP API and use a fresh employee plus genuine native Agent/file effects, never the deterministic permission/idle model adapter. Credentials stay in the verification/backend environment, never assertion diffs or diagnostics.
+
 ### What gets tested
 
 - Every public function with non-trivial behaviour, every branch, and the error paths — a test that only shows "no exception thrown" is incomplete.

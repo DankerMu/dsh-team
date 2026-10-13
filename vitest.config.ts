@@ -31,6 +31,15 @@ export default defineConfig({
           testTimeout: 900_000,
         },
       },
+      {
+        test: {
+          name: 'model',
+          include: ['platform/test/**/*.model.test.ts'],
+          // Real-provider acceptance shares the trusted host; never run alongside another case.
+          fileParallelism: false,
+          testTimeout: 900_000,
+        },
+      },
     ],
     coverage: {
       provider: 'v8',
