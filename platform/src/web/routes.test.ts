@@ -87,13 +87,16 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(HTML);
   });
 
-  it('serves the audit page through the same confined HTML owner', async () => {
-    const response = await app.inject('/_platform/admin/audit');
+  it.each(['/_platform/admin/audit', '/_platform/admin/models'])(
+    'serves %s through the confined HTML owner',
+    async (url) => {
+      const response = await app.inject(url);
 
-    expect(response.statusCode).toBe(200);
-    expect(response.headers['content-type']).toContain('text/html');
-    expect(response.body).toBe(HTML);
-  });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toContain('text/html');
+      expect(response.body).toBe(HTML);
+    },
+  );
 
   it('serves HEAD metadata without a body and bounded byte ranges', async () => {
     const cases: [string, string][] = [
@@ -103,6 +106,7 @@ describe('declared platform static routes', () => {
       ['/_platform/wait', HTML],
       ['/_platform/admin', HTML],
       ['/_platform/admin/audit', HTML],
+      ['/_platform/admin/models', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -142,6 +146,10 @@ describe('declared platform static routes', () => {
     '/_platform/admin/audit/settings',
     '/_platform/admin/audit%00',
     '/_platform/admin/audit%2fsettings',
+    '/_platform/admin/models/',
+    '/_platform/admin/models/settings',
+    '/_platform/admin/models%00',
+    '/_platform/admin/models%2fsettings',
     '/_platform/api/unknown',
     '/_platform/assets/missing.js',
     '/_platform/assets/',
@@ -180,6 +188,7 @@ describe('declared platform static routes', () => {
     '/_platform/wait',
     '/_platform/admin',
     '/_platform/admin/audit',
+    '/_platform/admin/models',
   ])('does not expose a symlinked entry outside the build at %s', async (url) => {
     await rm(join(root, 'index.html'));
     await symlink(join(directory, 'private.js'), join(root, 'index.html'));
@@ -209,6 +218,7 @@ describe('declared platform static routes', () => {
     '/_platform/wait',
     '/_platform/admin',
     '/_platform/admin/audit',
+    '/_platform/admin/models',
   ])('does not accept credential submissions at the static page %s', async (url) => {
     const response = await app.inject({ method: 'POST', url, payload: {} });
 
@@ -222,6 +232,7 @@ describe('declared platform static routes', () => {
     '/_platform/wait',
     '/_platform/admin',
     '/_platform/admin/audit',
+    '/_platform/admin/models',
   ])('registers %s without a build but rejects that production prerequisite', async (url) => {
     const missingRoot = join(directory, 'not-built');
     const offline = Fastify();

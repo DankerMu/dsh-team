@@ -61,6 +61,7 @@ export const webRoutes: FastifyPluginAsync<WebOptions> = async (app, { root = WE
     '/_platform/wait',
     '/_platform/admin',
     '/_platform/admin/audit',
+    '/_platform/admin/models',
   ]) {
     app.route({
       method: ['GET', 'HEAD'],

@@ -1118,6 +1118,16 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - Round1 proof repairs: accepted real-task coverage gap and deduplicated fresh-Session provenance finding; align runtime PUT spec with its authorized count metadata while retaining GET. Initial raw-carrier failure reproduced without PUT; held real Agent proof subsequently passed, while fresh blank Session discovery failed before default assertion. Published pinned navigation/store artifacts confirm blank filtering and native whole-value selection storage; navigation-only setup is checked against actual selected row/transport, not accepted from localStorage alone. Preserve both failed receipts; final browser/full-Docker proof remains required.
 - 验证记录（#79）：HTTP缺失计数语义RED→模型/运行参数TCP18/18；完整check1905unit/890integration、覆盖率、构建/契约及anti-drift通过，重复率2.88%；源码/dist独立HTTP/fileDB保存count1且GET不变。真实giap-vps候选e993b9b专项Docker2/2通过：同一Session保存前后只有alpha/beta并保持beta，新容器/新Session只有alpha/beta/gamma且初始gamma；三个首进/刷新均accepted、consoleErrors为空，native行/传输身份匹配，截图已独立检查。另一真实Agent任务在PUT前后保持相同Session/nonce活跃，释放后completed且未abort，turn/start17→end23成功，零外部模型调用。四类资源清单为空。此前三次失败保留：原始空mux载体关闭、修复后的隐藏blankSession、导航后cwd-only未绑定工作区；最后一次修复复用已存在的/data/work工作区并按workspaceId创建/验证成员，未改任何首进判据。该专项不是最终全量Docker/CI替代；最终精确head全量、fresh复审和protected合并仍为PR门禁。
 
+### Issue #80 risk/evidence map (task15.4 only)
+
+- Public API / CLI / script entry; File IO / path safety / overwrite — selected: exact static page plus client dispatch/nav, existing confined owner and direct-load/reload/browser proof; no new file writer.
+- Config / project setup; Schema / columns / units / field names — selected: existing model DTO/input semantics, model row/order/default/context validation, closed safe reply and PUT count snapshot; DOM and actual HTTP-backed form saves.
+- Auth / permissions / secrets — selected: existing GET/PUT/restart authority, current401/403 wipes form/key, same-origin/no redirects, password mask, key omission and response/log/storage absence. Actual authorized and revoked/employee browser flows; no successful API response substitution.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: current-attempt cleanup, entire-response mutation fence, explicit confirmation/cancel and no retries/false-ready restart claims; deterministic held response/late completion tests and real empty-set/error restart endpoint behavior.
+- Resource limits / large input / discovery; Legacy compatibility / examples — selected: linear model rows and existing API body limits, optional positive safe-integer context; existing admin/account/audit pages and static confinement remain intact.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: normal build/UI discovery, fullcheck/allUI/source-dist smoke, screenshots/zero unexpected errors, strict fixture, native review and frozen Docker/CI; no dependencies. Any measured diff exception must retain all required proof and be justified before merge.
+- #80实现验证：真实缺页404 RED→编译浏览器保存/刷新通过；49 DOM语义场景、全check1963unit/890integration通过，ModelPage四项覆盖100%，dup2.85%。全UI29/29通过，真实GET/PUT无密钥回显、空输入保留数据库密钥、restart空集合200/服务缺失503、撤销401和降权403无设置/审计变化。加载/500仅为精确受控失败，重试读取真实GET；成功API不替换。401浏览器导航使旧响应体失效，保留原失败日志，改为先捕获真实服务端拒绝再原样交付，未放宽生产判据。独立源码/dist实际浏览器保存/刷新通过，零console错误，截图已检查；最终review/Docker/CI仍为合并门禁。
+
 ## 16. 权限三档（任务包 1.13）
 
 依赖：第 8、15 组。

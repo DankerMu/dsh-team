@@ -581,3 +581,10 @@
 - Preserve GET/input contracts, current administrator authorization, atomic settings/audit persistence, secret custody, existing lifecycle/restart ownership and live capacity/idle readers.
 - Selected risk packs: API/config/schema/auth/order/errors/compatibility/packaging/docs; file IO is observed through unchanged overlays/volumes, not reimplemented. No migration, config generations, UI page, model connectivity or DSH changes.
 - Evidence floor: missing save-count behavioral RED; mixed-state/zero/fresh-save counts and rollback; actual Docker/browser two→three models, unchanged running selector/default/connection, administrator restart then exact new list/default; screenshots, zero unexpected browser errors, full checks and frozen-head review/Docker/CI.
+
+## Issue #80 fixture
+
+- Feature, expanded/Critical Construction; task15.4 only, #77/#74/#71 and activation metadata #79 merged. Deliver the model configuration page through existing administrator APIs.
+- Exact `/_platform/admin/models` serving allowlist, AccountPage dispatch and shared navigation are necessary delivery companions; no backend API or lifecycle behavior changes.
+- Preserve current administrator authority, safe key projections, omitted-key preservation, settings validation, explicit restart-all admissions and partial-failure semantics.
+- Evidence floor: real browser entry404 RED; built-browser save/reload, actual safe response bodies, cleared key, omitted-key preservation, form validation and explicit confirmed restart action; DOM pending/stale/authority/malformed boundaries, screenshots/zero unexpected errors, source/dist smoke, full checks/UI, native cross-review and exact-head Docker/CI.
