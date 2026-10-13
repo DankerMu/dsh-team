@@ -173,6 +173,7 @@ prepare_trial_dirs() {
   local name="$1"
   local root="${workdir}/${name}"
   rm -rf "$root"
+  mkdir -m 700 "$root"
   mkdir -p "${root}/home" "${root}/work" "${root}/chrome"
   chmod 777 "${root}/home" "${root}/work"
   trial_homes["$name"]="${root}/home"

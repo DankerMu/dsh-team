@@ -1,11 +1,10 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { watch } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import type { ServerResponse } from 'node:http';
@@ -16,6 +15,7 @@ import { connectPage, observeNetwork, startChrome } from '../../scripts/probe-ds
 import { navigateReady } from '../../scripts/probe-mapped-host.mjs';
 import { record } from './container-start-docker-fixture.ts';
 import {
+  awaitFile,
   browserPressureClient,
   execBrowser,
   OwnedBrowserChurn,
@@ -60,33 +60,6 @@ afterEach(() => {
   acquisitionFence.observed = undefined;
   acquisitionFence.release = Promise.resolve();
 });
-
-async function awaitFile(path: string): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<undefined>();
-  // Real filesystem/process completion is bounded; this signal is not a guessed sleep.
-  const signal = AbortSignal.timeout(15000);
-  const aborted = () => {
-    reject(new Error('Owned creation fixture completion missing'));
-  };
-  signal.addEventListener('abort', aborted, { once: true });
-  const watcher = watch(dirname(path), { signal }, (_event, name) => {
-    if (name === basename(path)) resolve(undefined);
-  });
-  watcher.once('error', reject);
-  try {
-    try {
-      await lstat(path);
-      return;
-    } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error;
-    }
-    await promise;
-    await lstat(path);
-  } finally {
-    watcher.close();
-    signal.removeEventListener('abort', aborted);
-  }
-}
 
 const waitUntil = async (ready: () => boolean, until: number) => {
   while (!ready()) {

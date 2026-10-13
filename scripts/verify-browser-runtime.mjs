@@ -45,11 +45,12 @@ function docker(args, ms = 30000, build = false) {
   return result.stdout.trim();
 }
 function runVerificationChild(env) {
+  if (interrupted) throw new Error('browser runtime invocation interrupted');
   return new Promise((done, reject) => {
     child = spawn(command[0], command[1], { cwd: root, env, stdio: 'inherit' });
     child.once('error', reject);
     child.once('exit', (code, signal) =>
-      done(signal ? (signal === 'SIGINT' ? 130 : 143) : (code ?? 1)),
+      done(interrupted ? status : signal ? (signal === 'SIGINT' ? 130 : 143) : (code ?? 1)),
     );
   });
 }
@@ -236,8 +237,10 @@ for (const [signal, code] of [
   ['SIGTERM', 143],
 ]) {
   process.once(signal, () => {
-    interrupted = true;
-    status = code;
+    if (!interrupted) {
+      interrupted = true;
+      status = code;
+    }
     child?.kill(signal);
   });
 }

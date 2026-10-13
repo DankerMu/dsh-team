@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { watch } from 'node:fs';
 import { lstat, mkdtemp, readFile, readlink, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { Server, Socket } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
 import { openMappedPage, mappedFlags, closeMapped } from '../../scripts/probe-mapped-host.mjs';
@@ -455,4 +456,33 @@ socket.on('end', () => {
 });
 socket.on('error', () => process.exit(1));
 `;
+}
+export async function awaitFile(path: string, signal = AbortSignal.timeout(15000)): Promise<void> {
+  if (signal.aborted) throw signal.reason;
+  const { promise, resolve, reject } = Promise.withResolvers<undefined>();
+  // Real filesystem/process completion is bounded; this signal is not a guessed sleep.
+  const aborted = () => {
+    reject(new Error('Owned creation fixture completion missing'));
+  };
+  signal.addEventListener('abort', aborted, { once: true });
+  const watcher = watch(dirname(path), { signal }, (_event, name) => {
+    if (name === basename(path)) resolve(undefined);
+  });
+  watcher.once('error', reject);
+  try {
+    void lstat(path).then(
+      () => {
+        resolve(undefined);
+      },
+      (error: unknown) => {
+        if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT')
+          reject(error);
+      },
+    );
+    await promise;
+    await lstat(path);
+  } finally {
+    watcher.close();
+    signal.removeEventListener('abort', aborted);
+  }
 }
