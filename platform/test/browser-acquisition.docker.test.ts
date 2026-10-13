@@ -178,10 +178,12 @@ run().catch(()=>{process.exitCode=1;});
       };
       acquisitionFence.release = birthReleased.promise;
       pending = rescueChrome(receiptFile);
-      void pending.catch(() => undefined);
       const deadline = AbortSignal.timeout(15000);
       await Promise.race([
         birthObserved.promise,
+        pending.then(() => {
+          throw new Error('Acquisition rescue completed before the live-producer fence');
+        }),
         once(deadline, 'abort').then(() => {
           throw new Error('Acquisition was not fenced by live producer identity');
         }),

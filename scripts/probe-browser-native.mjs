@@ -17,14 +17,15 @@ export const alive = (pid) => {
   }
 };
 
-export async function processBirth(pid) {
+async function processObservation(pid) {
   if (!Number.isInteger(pid) || pid < 1) throw new Error('browser process identity invalid');
   if (platform() === 'linux') {
     const text = await readFile(`/proc/${pid}/stat`, 'utf8');
-    const ticks = text.slice(text.lastIndexOf(')') + 2).split(' ')[19];
+    const fields = text.slice(text.lastIndexOf(')') + 2).split(' ');
+    const ticks = fields[19];
     if (!/^[0-9]+$/.test(ticks ?? ''))
       throw new Error('browser process birth identity unavailable');
-    return `linux:${pid}:${ticks}`;
+    return { birth: `linux:${pid}:${ticks}`, state: fields[0] };
   }
   if (platform() === 'darwin') {
     const result = spawnSync(
@@ -37,10 +38,35 @@ export async function processBirth(pid) {
       },
     );
     if (result.status !== 0 || result.error || !result.stdout.trim())
-      throw new Error('browser process identity unavailable');
-    return `darwin:${pid}:${createHash('sha256').update(result.stdout.trim()).digest('hex')}`;
+      throw new Error('browser process birth identity unavailable');
+    return {
+      birth: `darwin:${pid}:${createHash('sha256').update(result.stdout.trim()).digest('hex')}`,
+      state: null,
+    };
   }
   throw new Error('browser process identity unsupported');
+}
+
+export async function processBirth(pid) {
+  return (await processObservation(pid)).birth;
+}
+
+/** A reaped or zombie driver cannot still own sockets; its birth identity remains independently usable. */
+export async function liveProcessBirth(pid) {
+  if (platform() !== 'linux' && !alive(pid)) return null;
+  try {
+    const observed = await processObservation(pid);
+    if (['Z', 'X', 'x'].includes(observed.state)) return null;
+    if (
+      observed.state !== null &&
+      !['R', 'S', 'D', 'T', 't', 'K', 'W', 'P', 'I'].includes(observed.state)
+    )
+      throw new Error('browser process state unavailable');
+    return observed.birth;
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ESRCH') return null;
+    throw error;
+  }
 }
 
 export function registerNativeChild(receipt, child, birth) {

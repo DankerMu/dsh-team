@@ -1156,6 +1156,7 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - 验证记录：缺钥入口语义RED→GREEN，实际命令exit1且点名变量。真实Actions38433530510绑定`3876e2b76c61821f647b897a1a74ca29e5c82fe6`，GitHub签名/OIDC/受限SSH/VPS检出和模型命令全链路成功；模型1/1、30.369s，原生完成截图已检查、完整随机字节及错误内容对照、零console错误。独立确认GitHub临时secret404、SSH授权/临时秘密文件/本调用锁不存在。该提交完整check2010unit/923integration、无筛选Docker24文件70测试及四类空清单通过；发布证据见PR207评论6150893716。
 - 生命周期负控：真实SSH四种部分安装/丢失回应失败均完整退休；前台进程组SIGKILL后，独立owner跨真实600秒未使用到期继续运行，退还VPS和GitHub两处能力。队列等待由依赖夹具模拟，实际GitHub secret/VPS authority和到期时间未模拟，不能称为另一次真实Actions模型运行。真实运行中Docker对象取消/deadline均观察到systemd升级SIGKILL、注册对象/合成凭据文件消失、无关sentinel保留。生成RSA/JWKS夹具另验证一次性claim/重放/命令替换；真实GitHub签名由上述Actions覆盖。
 - 创建交接oracle：历史`b303512`运行时在三个整cgroup死亡点均因unsettled拒绝退休（语义RED），修复后同一6案例GREEN且完整发现通过；不放松dead-producer不确定性门禁。外来lease指向现存目录的真实反例另揭示`ln -s`会在目录内创建嵌套链接；`20f6772`使用`ln -sT`后在exclusive-admission拒绝，外来链接/空目录不变且自身清理完成。最终发布提交仍须重新绑定完整运行证据、review gate和protected CI，不把历史资格冒充最终head。
+- 最终资格的后续反例：`ee60d31`真实模型Actions38437469618成功，但无筛选Docker69/70在整cgroup停止后的driver fence失败，四类资源仍独立为空。精确案例诊断保留了kernel `Z`和read `ESRCH`：PID存在不等于仍持有relay。第二修复轮在canonical观察中分离birth与liveness，九项公开rescue回归先4失败/5通过、后9通过；既有native ownership也通过。实际Linux三交接点×两终止方式，配置`--repeats 19`全部通过（167.34s）；这是专项稳定性证据，不能代替修复后准确head的完整Docker/Actions/CI资格。
 
 ## 16. 权限三档（任务包 1.13）
 
