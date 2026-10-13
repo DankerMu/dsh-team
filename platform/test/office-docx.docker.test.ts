@@ -23,7 +23,7 @@ it('distinguishes valid notice DOCX bytes from corrupt and missing files with th
     notice.date,
   ])}: d.add_paragraph(text)\nd.save(${JSON.stringify(notice.path)})`;
   await runUserImage(
-    'container-start',
+    'managed-policy',
     () => undefined,
     undefined,
     (lifecycle) => {
