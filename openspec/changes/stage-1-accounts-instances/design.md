@@ -192,6 +192,8 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - Characterization of existing behavior, not a claimed production repair: qualify the new evidence judge with good history and discriminating premature-write, missing/extra/wrong-owner approval, wrong decision/tool result and unfinished-turn cases. Only a real counterexample justifies plugin/image/overlay repair with its own RED/GREEN. Auto and production qwen3.6 remain outside #84.
 - Preserve #82 credential redaction, exact-head trusted VPS execution, bounded browser/model lifetimes and independent retirement proof; screenshots and sanitized evidence must survive checkout cleanup. No new logging of model credentials or general conversation content.
 
+真实开发模型观察（#84，2026-10-13）：`deepseek-v4.1-flash` 在运行 `4d12ebd3-3b79-463f-be16-56a6e95c2fb0` 满足人工批准/拒绝、Yolo无询问以及人工待定期间另一Session独立完成。只读取完整原生history，不注入观察插件或替换provider；截图与独立文件观察一致。模型曾把已手动批准的写入描述为“without an approval prompt”，因此不以模型自述判断授权。该结果不扩展到Auto或生产qwen3.6；权限插件/镜像/覆盖层未发现需要修改的缺陷。
+
 扩展点实测（非功能验收）：giap-vps 运行 `274d06c7-b9bf-4f35-b962-1fa7ab858d1d`，自定义 `auto-review` catalog/default 与新 Session 的 `permissions.currentValue` 一致；缺少权限服务时 required agent-loop 未激活、启动 exit1、未输出 Web 就绪。尚不代表模型审查、审批 UI 或委派行为已验证。
 
 ### 14. 办公 Agent
