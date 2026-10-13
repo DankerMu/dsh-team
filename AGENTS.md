@@ -35,6 +35,8 @@ Commented-out code has no machine check; it is listed as `review-only` in the En
 
 The duplicate-code guardrail self-test sizes its planted copies from the current `platform/` source corpus and the configured percentage, with margin for clone accounting. Repository growth therefore does not silently dilute the canary; the repository duplicate-code command, exclusions and threshold are unchanged.
 
+Archive guardrail probes choose a path absent from the copied repository baseline, including the no-descendant negative case. This keeps staged probes as additions even after real archives exist; the naming hook's existing added/renamed selection is unchanged. Missing-policy rejection must exercise that actual selection, not a modified tracked artifact.
+
 ## Project Identity
 
 「交付一个单机 Docker 部署的平台，满足基线全部功能需求，并通过基线第 7 节的 14 条验收。DSH 源码不改；所有定制通过平台代码、DSH 插件、受管覆盖层和镜像构建完成。」(`docs/IMPLEMENTATION_PLAN.md` §1)

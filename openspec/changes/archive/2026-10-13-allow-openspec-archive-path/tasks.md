@@ -12,8 +12,10 @@
 
 ## 3. Protected delivery
 
-- [ ] 3.1 Run shell lint, formatting, project checks, strict validation and guardrails; complete risk-scaled review and exact-head CI without bypasses.
-- [ ] 3.2 Merge the policy through its own protected PR; restore the separately parked archive work and continue the Epic DAG without treating this policy PR as archive publication.
+- [x] 3.1 Run shell lint, formatting, project checks, strict validation and guardrails; complete risk-scaled review and exact-head CI without bypasses.
+- [x] 3.2 Merge the policy through its own protected PR; restore the separately parked archive work and continue the Epic DAG without treating this policy PR as archive publication.
+
+Completion: [PR #200](https://github.com/DankerMu/dsh-team/pull/200) merged as `b6503d3fb5c97fc7239bb845ce427f4c43a9cfe5`. Reviewed head `d48fd7efce9e0b7af01d29c8a3bb54149988ddd6` passed guardrails77/77, actual Bash3.2 hook/Git-index smoke, normal checks, three independent native code-review seats, original Docker65/65 with empty independent inventories, and exact-head CI. [Evidence and deviations](https://github.com/DankerMu/dsh-team/pull/200#issuecomment-6139905879). The parked #179 archive was restored by recorded stash identity without dropping its backups. Archive publication is this separate documentation follow-up; the shared Epic change remains active. The pre-existing Bash3.2 guardrunner parser limitation remains independently tracked in [#201](https://github.com/DankerMu/dsh-team/issues/201).
 
 ## Risk / evidence map
 
