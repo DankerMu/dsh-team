@@ -1140,6 +1140,21 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - #81实现证据：真实page404 RED→五字段实际浏览器保存/刷新GREEN；完整check2010unit/890integration、37DOM的98.91/98.07/100/100%覆盖与dup2.93%通过，全UI34/34，39.6s。浏览器原生空值/0/1.5整数约束及CPU0的React反馈均不PUT、不改设置或审计；真实子网容量400显示4096后纠正成功，CPU0.125/0.000001可保存；模型密钥保留且不进入运行回应。实际401/403、受控500后真实GET重试、加载及截图/零未预期错误验证；独立source/dist浏览器0.375核/approval保存和刷新成功，存储为空。原始lint复杂度失败保留，按数值域拆解后全check通过；DOM回归不冒充单独RED。最终原生初审及精确headDocker/CI仍是合并门禁。
 - #81审查证据修复第1轮：三个原生席位未发现生产缺陷；补齐刷新后其余三字段的明确断言和`runtime-reloaded`截图，五字段均从真实重读验证；DOM增加JSON仍挂起时的后续重复提交，仍只有一次PUT。无生产源码改动，原验收不变；完整check2010unit/890integration及全UI34/34（40.3s）再次通过。旧head224344f的Docker67/67和CI38395319216成功保留，但不能替代修复后最终head资格。
 
+### Issue #82 risk/evidence map (task15.6 only)
+
+- Public API / CLI / script entry — selected: `pnpm test:model` missing-key rejection before provisioning; real root-command execution through existing browser qualification and native Session.
+- Config / project setup; Schema / columns / units / field names — selected: separate model discovery, fixed development-model configuration via actual administrator API; closed CI admission fields and exact full-SHA binding. No production schema changes.
+- File IO / path safety / overwrite — selected: invocation-owned workspace filename, absent-before/exact-content-after oracle, no harness write; restricted SSH command and approved checkout path cannot be caller-selected. Durable pre-creation ownership survives child death; no prefix-wide cleanup.
+- Auth / permissions / secrets — selected: fresh public employee identity, no personal model configuration; VPS-only model credential custody; operator-pretrusted SSH host key plus signed GitHub identity and operator-approved workflow/SHA before execution. Wrong host rejects before JWT transmission; wrong identity/signature/expiry/command controls reject without starting candidate code.
+- Concurrency / shared state / ordering — selected: serial model tests; atomic one-shot admission/replay rejection; administrator save precedes employee startup; external cancellation finalization.
+- Resource limits / large input / discovery — selected: bounded JWT/input, task/process deadlines and cleanup grace; normal checks must not discover or call real-model tests; no inference retry to manufacture a pass.
+- Legacy compatibility / examples; Error handling / rollback / partial outputs — selected: unchanged normal Docker/browser behavior, nonzero missing-key/provider/task/cleanup failures and preserved failed receipts. After actual container startup, cancellation and timeout escalation must independently retire registered Docker resources, secret-bearing temporary files and both channel credential locations; an unrelated sentinel survives. Unused capabilities expire and retire without invocation.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: root command and verification matrix, actual giap-vps execution initiated by Actions on the reviewed SHA, strict fixture, fullcheck and final Docker/review/CI. CI workflow changes and substantial host authority are disclosed in the PR.
+- CI authorization was explicitly granted on2026-10-13 for giap-vps execution with model keys retained there. A public repository runner's label is not an authorization boundary; use the restricted execution channel specified in design. Posted evidence alone never completes15.6.
+- Fixture/implementation routing obeys the higher-priority prohibition on single-slice delegation; disclose inline work accurately. Independent multi-seat review remains required. Task15.6 stays unchecked until every required path, including real Actions execution, is observed.
+- Fixture初审：三个独立席位，模型oracle与执行流程pass；安全席位指出主机身份与强杀后的Docker/临时秘密回收两项缺口，已补充预信任host-key、持久登记、独立finalizer及负控要求；修订由主控inline复核，不冒充fresh独立复审。strict validate通过。
+- 当前证据：缺钥入口先因只报usage失败，接入后两个进程回归通过，实际`pnpm test:model`缺钥exit1且点名变量。未提交工作区快照在giap-vps真实模型1/1通过（24.287s），原生截图已检查，文件事前不存在/完整字节一致/错误内容拒绝，零console错误，独立四类资源清单为空。CI身份25项与清理旧路径等共132集成通过；首次CI工具lint六项失败已修正，check:fast通过。此记录不是最终head或Actions执行证据，15.6仍未完成。
+
 ## 16. 权限三档（任务包 1.13）
 
 依赖：第 8、15 组。

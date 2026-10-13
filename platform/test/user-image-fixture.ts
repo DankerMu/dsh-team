@@ -9,10 +9,17 @@ import { profileSeedScript } from './profile-seed-fixture.ts';
 import { runWebStartup } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
-import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
+import type { DockerCommand } from './docker-command.ts';
+import {
+  cleanupTargets,
+  output,
+  OWNER_LABEL,
+  registerCleanupTarget,
+  removeOwned,
+} from './docker-cleanup.ts';
+import type { CleanupTarget } from './docker-cleanup.ts';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
-const OWNER_LABEL = 'dsh-team.test-run';
 
 const offlineDocxScript = `
 import json
@@ -60,115 +67,12 @@ export function assertDocxReadback(stdout: string): void {
   );
 }
 
-function output(result: DockerCommandResult, args: readonly string[]): string {
-  if (result.error !== undefined || result.status !== 0) {
-    throw new Error(
-      `docker ${args.join(' ')} failed (${String(result.status)}): ` +
-        `${result.error?.message ?? ''}\n${result.stdout}\n${result.stderr}`,
-    );
-  }
-  return result.stdout;
-}
-
 function nestedMessages(error: unknown): string[] {
   if (error instanceof AggregateError) {
     return error.errors.flatMap((inner) => nestedMessages(inner));
   }
   if (error instanceof Error) return [error.message];
   return [String(error)];
-}
-
-function networkDocument(
-  result: DockerCommandResult,
-  args: readonly string[],
-): Record<string, unknown> {
-  const rows: unknown = JSON.parse(output(result, args));
-  if (!Array.isArray(rows) || rows.length !== 1)
-    throw new Error('Owned network inspection unavailable');
-  const value: unknown = rows[0];
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw new Error('Owned network inspection malformed');
-  // Docker JSON is untyped; destructive callers validate the consumed identity fields.
-  return value as Record<string, unknown>;
-}
-
-function removeOwnedNetwork(
-  command: DockerCommand,
-  name: string,
-  ownership: Readonly<Record<string, string>>,
-  expectedId?: string,
-): void {
-  const args = ['network', 'inspect', name];
-  const result = command(args, 30_000);
-  if (isAbsentResource(result, 'network', name)) {
-    if (
-      expectedId !== undefined &&
-      !isAbsentResource(command(['network', 'inspect', expectedId], 30_000), 'network', expectedId)
-    )
-      throw new Error('Owned network ID remains after its name disappeared');
-    return;
-  }
-  const network = networkDocument(result, args);
-  const id = network.Id;
-  const identityError = 'Refusing network cleanup: immutable identity does not match';
-  deepStrictEqual(network.Name, name, identityError);
-  if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error(identityError);
-  deepStrictEqual(id, expectedId ?? id, identityError);
-  const labels = network.Labels;
-  if (typeof labels !== 'object' || labels === null || Array.isArray(labels))
-    throw new Error('Refusing network cleanup: invocation label does not match');
-  for (const [label, expected] of Object.entries(ownership)) {
-    deepStrictEqual(
-      Reflect.get(labels, label),
-      expected,
-      'Refusing network cleanup: invocation label does not match',
-    );
-  }
-  deepStrictEqual(
-    network.Containers,
-    {},
-    'Refusing network cleanup: network is not verified empty',
-  );
-  const exact = ['network', 'inspect', id];
-  deepStrictEqual(networkDocument(command(exact, 30_000), exact), network);
-  const remove = ['network', 'rm', id];
-  output(command(remove, 30_000), remove);
-  for (const target of [name, id]) {
-    if (!isAbsentResource(command(['network', 'inspect', target], 30_000), 'network', target))
-      throw new Error('Owned network remains after cleanup');
-  }
-}
-
-function removeOwned(
-  command: DockerCommand,
-  kind: 'container' | 'image' | 'volume' | 'network',
-  name: string,
-  runId: string,
-  ownership?: Readonly<Record<string, string>>,
-  networkId?: string,
-): void {
-  if (kind === 'network') {
-    removeOwnedNetwork(command, name, ownership ?? { [OWNER_LABEL]: runId }, networkId);
-    return;
-  }
-  const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
-  const expected = ownership ?? { [OWNER_LABEL]: runId };
-  for (const [label, value] of Object.entries(expected)) {
-    const args = [kind, 'inspect', '--format', `{{ index ${labels} "${label}" }}`, name];
-    const result = command(args, 30_000);
-    if (isAbsentResource(result, kind, name)) return;
-    if (output(result, args).replace(/\r?\n$/, '') !== value) {
-      throw new Error(`Refusing cleanup of ${kind} ${name}: invocation label does not match`);
-    }
-  }
-  const remove = [kind, 'rm', ...(kind === 'container' ? ['--force'] : []), name];
-  output(command(remove, 30_000), remove);
-  if (ownership !== undefined) {
-    const absent = command([kind, 'inspect', name], 30_000);
-    if (!isAbsentResource(absent, kind, name)) {
-      throw new Error(`Owned ${kind} remains after cleanup`);
-    }
-  }
 }
 
 function assertOfflineContainerConfiguration(command: DockerCommand, container: string): void {
@@ -201,12 +105,6 @@ export interface UserImageLifecycle {
   removeNetwork: (name: string, id: string) => void;
 }
 export type UserImageScenario = (lifecycle: UserImageLifecycle) => Promise<string>;
-interface CleanupTarget {
-  readonly kind: 'container' | 'image' | 'volume' | 'network';
-  readonly name: string;
-  readonly ownership?: Readonly<Record<string, string>>;
-  networkId?: string;
-}
 
 function runContainer(
   command: DockerCommand,
@@ -243,7 +141,7 @@ function runContainer(
     imageId,
     ...(offline ? ['python3', '-c', script, phase] : ['dsh', '--version']),
   ];
-  targets.push({ kind: 'container', name: container });
+  registerCleanupTarget(targets, runId, { kind: 'container', name: container });
   output(command(create, 30_000), create);
   if (offline) assertOfflineContainerConfiguration(command, container);
   if (volume !== undefined) {
@@ -285,7 +183,7 @@ function createOwnedVolumes(
   for (const name of names) {
     if (name === undefined) continue;
     const args = ['volume', 'create', '--label', `${OWNER_LABEL}=${runId}`, name];
-    targets.push({ kind: 'volume', name });
+    registerCleanupTarget(targets, runId, { kind: 'volume', name });
     output(command(args, 30_000), args);
   }
 }
@@ -307,24 +205,6 @@ function lifecycleVolumes(
       ? `dsh-team-test-${runId}-work`
       : undefined;
   return { volume, workVolume };
-}
-
-function cleanupTargets(
-  command: DockerCommand,
-  targets: readonly CleanupTarget[],
-  runId: string,
-  failures: unknown[],
-): void {
-  // Containers before networks, then their persistent volumes and images; each remains exact-owned.
-  for (const kind of ['container', 'network', 'volume', 'image'] as const) {
-    for (const target of targets.filter((candidate) => candidate.kind === kind).reverse()) {
-      try {
-        removeOwned(command, kind, target.name, runId, target.ownership, target.networkId);
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-  }
 }
 
 interface UserImageResult {
@@ -497,7 +377,7 @@ function runImageLifecycle(
       join(repositoryRoot, 'images/dsh-user'),
     ];
     // Register ownership before potentially partial build/create operations.
-    targets.push({ kind: 'image', name: image });
+    registerCleanupTarget(targets, runId, { kind: 'image', name: image });
     output(command(build, 600_000), build);
     const inspect = ['image', 'inspect', '--format', '{{.Id}}', image];
     const imageId = output(command(inspect, 30_000), inspect).replace(/\r?\n$/, '');
@@ -513,7 +393,7 @@ function runImageLifecycle(
       writeFileSync(overlay, '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n', {
         mode: 0o444,
       });
-      targets.push({ kind: 'container', name: container });
+      registerCleanupTarget(targets, runId, { kind: 'container', name: container });
       return runWebStartup(
         command,
         {
@@ -552,7 +432,7 @@ function runImageLifecycle(
         repositoryRoot,
         registerContainer: (name: string): void => {
           if (!containers.includes(name)) containers.push(name);
-          targets.push({ kind: 'container', name });
+          registerCleanupTarget(targets, runId, { kind: 'container', name });
         },
         registerResource: (kind, name, ownership): void => {
           if (!name.startsWith('dsh-team-') || Object.keys(ownership).length === 0)
@@ -561,7 +441,7 @@ function runImageLifecycle(
           const absent = command([kind, 'inspect', name], 30_000);
           if (!isAbsentResource(absent, kind, name))
             throw new Error('Acceptance resource already exists; refusing cleanup authority');
-          targets.push({ kind, name, ownership });
+          registerCleanupTarget(targets, runId, { kind, name, ownership });
         },
         removeNetwork: (name, id): void => {
           const target = targets.find((entry) => entry.kind === 'network' && entry.name === name);

@@ -595,3 +595,12 @@
 - Deliver exact `/_platform/admin/runtime` through existing static owner/dispatcher/navigation, reading and saving the existing five-field runtime API. Preserve all backend domains, current authority, model/key custody, atomic audit and subnet-capacity validation.
 - Risk packs: API/config/schema/authorization/concurrency/ordering/errors/path-safety/compatibility/packaging/docs. No new endpoint, lifecycle mutation, restart action, deployment setting or dependency.
 - Evidence floor: actual page404 RED then built-browser five-field save/reload including fractional CPU; native/local invalid feedback without mutation; real over-pool400 with safe capacity guidance; current401/403 and failure recovery; pending/stale/malformed DOM boundaries; fullcheck/UI/source-dist smoke/screens/zero unexpected errors and frozen Docker/CI.
+
+## Issue #82 fixture
+
+- Test/verification feature, expanded (agree with upstream); task15.6 only, #77/#56 merged. Add the real-provider `pnpm test:model` acceptance path without changing production model, permission or lifecycle behavior.
+- Governing invariant: a fresh employee, given no personal model configuration, causes the administrator-selected real model to execute a tool that creates the expected unique workspace file; harness-created files or simulated model responses cannot satisfy acceptance.
+- Selected risk packs: CLI/configuration/file IO/schema/auth-secrets/concurrency/resources/compatibility/errors/packaging/documentation. Missing `DMXAPI_KEY` fails before Docker/browser provisioning; model tests remain outside ordinary unit/integration/Docker discovery.
+- User authorization (2026-10-13): retain D16, establish a trusted CI execution channel to giap-vps, retain the model key there, and retire invocation-scoped execution authority afterwards. This does not authorize general public-PR execution on the host.
+- CI must execute the reviewed full SHA on giap-vps, not merely validate posted evidence. Public personal-repository runners lack organization selected-workflow restrictions; use a restricted SSH capability with authenticated workflow identity rather than label-based runner routing.
+- Evidence floor: missing-key failure, actual administrator HTTP configuration and fresh public registration/login, native Agent task and independent absent-before/exact-content-after file oracle, bounded failure and cleanup, CI authorization rejection controls, real Actions execution, full checks and exact-head review/Docker/CI.

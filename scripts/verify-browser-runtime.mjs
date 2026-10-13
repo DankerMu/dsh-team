@@ -13,6 +13,7 @@ import { qualificationDiagnostic, qualificationError } from './probe-browser-qua
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
   docker: ['pnpm', ['exec', 'vitest', 'run', '--project', 'docker']],
+  model: ['pnpm', ['exec', 'vitest', 'run', '--project', 'model']],
   'dsh-api': ['bash', [join(root, 'scripts/probe-dsh-api.sh')]],
   'first-run': ['bash', [join(root, 'scripts/probe-first-run.sh')]],
 };
@@ -56,7 +57,7 @@ function runVerificationChild(env) {
 }
 
 function requireLocalRuntime() {
-  if (!command) throw new Error('usage: verify-browser-runtime.mjs docker|dsh-api|first-run');
+  if (!command) throw new Error('usage: verify-browser-runtime.mjs docker|model|dsh-api|first-run');
   if (platform() !== 'linux' || arch() !== 'x64' || process.getuid() === 0)
     throw new Error('browser isolation requires trusted nonroot Linux amd64');
   if (process.env.DOCKER_HOST || process.env.DOCKER_CONTEXT)
@@ -306,13 +307,16 @@ async function persistQualificationFailure(error) {
 }
 
 try {
+  if (process.argv[2] === 'model' && !process.env.DMXAPI_KEY?.trim())
+    throw new Error('DMXAPI_KEY is required for real-model verification');
   if (command && forwardedArguments.some((value) => value === '--help' || value === '-h'))
     status = await runVerificationChild(process.env);
   else await prepare();
 } catch (error) {
   if (qualificationEvidence) await persistQualificationFailure(error);
   const known = [
-    'usage: verify-browser-runtime.mjs docker|dsh-api|first-run',
+    'usage: verify-browser-runtime.mjs docker|model|dsh-api|first-run',
+    'DMXAPI_KEY is required for real-model verification',
     'browser isolation requires trusted nonroot Linux amd64',
     'browser isolation requires the local default Docker daemon',
     'browser isolation requires qualified local Linux Docker UID mapping',
