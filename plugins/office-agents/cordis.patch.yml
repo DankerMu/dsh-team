@@ -1,12 +1,83 @@
+- id: agent-preset-registry
+  config:
+    default: office-general
 - insert:
     - id: preset-office-general
       name: "@deepseek-ai/dsh-agent-preset"
+      disabled: false
       config:
         id: office-general
         name: 综合办公
-        description: 协助处理日常办公事务
+        description: 理解办公任务、选择专业能力、核对并汇总结果
         plugins:
           - id: persona
             name: "@deepseek-ai/dsh-persona"
             config:
-              prefix: 请用中文协助处理日常办公事务。
+              prefix: >-
+                你是综合办公助手。用中文理解任务、选择能力、核对并汇总真实结果。
+                公文与材料写作任务委派给 office-writer，等待完成后核对产物；简单文件操作自行完成。
+                文档工作先加载 official-writing 和 office-docx。部署已提供 /usr/bin/python3 和 python-docx，
+                不安装依赖、不联网检索；没有实际执行或核验的事项不得声称完成。
+          - id: tool-fs
+            name: "@deepseek-ai/dsh-tool-fs"
+          - id: tool-bash
+            name: "@deepseek-ai/dsh-tool-bash"
+          - id: tool-jobs
+            name: "@deepseek-ai/dsh-tool-jobs"
+          - id: skill-office
+            name: "@deepseek-ai/dsh-skill-office"
+            config:
+              # This image provides Python authoring, not a document-rendering service.
+              cli: false
+          - id: skill-filesystem
+            name: "@deepseek-ai/dsh-skill-filesystem"
+            config:
+              customSkillDirs:
+                - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@dsh-team/office-agents/package.json')), 'skills')
+          - id: tool-skill
+            name: "@deepseek-ai/dsh-tool-skill"
+          - id: tool-present
+            name: "@deepseek-ai/dsh-tool-present"
+          - id: tool-subagent
+            name: "@deepseek-ai/dsh-tool-subagent"
+            config:
+              provider: spawn
+              toolName: subagent
+    - id: preset-office-writer
+      name: "@deepseek-ai/dsh-agent-preset"
+      disabled: false
+      config:
+        id: office-writer
+        name: 公文与材料写作
+        description: 起草和修订中文通知、请示、说明及材料，遵循用户提供的模板
+        plugins:
+          - id: persona
+            name: "@deepseek-ai/dsh-persona"
+            config:
+              prefix: >-
+                你是公文与材料写作助手，负责中文通知、请示、说明及材料的起草和修订。
+                先加载 official-writing；涉及 DOCX 时加载 office-docx，使用已提供的 /usr/bin/python3
+                和 python-docx，不安装依赖。依据用户材料和模板，不编造事实、文号或核验结果；
+                生成后重新打开并检查正文结构，通过 present 交付实际文件，明确未做的版式检查。
+          - id: tool-fs
+            name: "@deepseek-ai/dsh-tool-fs"
+          - id: tool-bash
+            name: "@deepseek-ai/dsh-tool-bash"
+          - id: tool-jobs
+            name: "@deepseek-ai/dsh-tool-jobs"
+          - id: skill-office
+            name: "@deepseek-ai/dsh-skill-office"
+            config:
+              # This image provides Python authoring, not a document-rendering service.
+              cli: false
+          - id: skill-filesystem
+            name: "@deepseek-ai/dsh-skill-filesystem"
+            config:
+              # Writer guidance is bundle-owned; general retains ordinary user/project discovery.
+              includeDefaultRoots: false
+              customSkillDirs:
+                - !!js process.getBuiltinModule('node:path').join(process.getBuiltinModule('node:path').dirname(process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('@dsh-team/office-agents/package.json')), 'skills')
+          - id: tool-skill
+            name: "@deepseek-ai/dsh-tool-skill"
+          - id: tool-present
+            name: "@deepseek-ai/dsh-tool-present"

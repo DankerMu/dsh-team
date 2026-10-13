@@ -28,7 +28,7 @@ RUN installed="$(dsh --version)" \
 # Initialize the release-owned Web profile without booting Web or copying user state.
 RUN dsh --profile web --dump-default-config >/dev/null \
   && mkdir -p "${DSH_HOME}/profiles/web/node_modules/@dsh-team/zh-locale" \
-    "${DSH_HOME}/profiles/web/node_modules/@dsh-team/office-agents" "${DSH_HOME}/storages"
+    "${DSH_HOME}/profiles/web/node_modules/@dsh-team/office-agents/skills/official-writing" "${DSH_HOME}/storages"
 
 # Docker copy-up initializes only empty home volumes; this registry remains employee-writable.
 # The fixed workspace identity is volume-local and carries no Session or credential state.
@@ -45,6 +45,9 @@ COPY --from=zh-locale --chown=dsh:dsh --chmod=0644 \
 COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
   package.json cordis.patch.yml \
   /data/home/profiles/web/node_modules/@dsh-team/office-agents/
+COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
+  skills/official-writing/SKILL.md \
+  /data/home/profiles/web/node_modules/@dsh-team/office-agents/skills/official-writing/SKILL.md
 RUN node -e 'const fs = require("node:fs"); \
   const profile = process.env.DSH_HOME + "/profiles/web"; \
   const bundle = require(profile + "/node_modules/@dsh-team/office-agents/package.json"); \
