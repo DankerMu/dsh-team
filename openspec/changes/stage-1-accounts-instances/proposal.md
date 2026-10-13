@@ -620,3 +620,11 @@
 - Reuse #82/#84 real-provider browser/history/file/custody path. A fixture-only public LLM observer forwards healthy streams unchanged; a separately armed operation-scoped fault affects only the review request, never the originating Agent request or its tool/approval implementation.
 - Required evidence: correlated real review provenance, no-ask exact-byte success, attributable injected technical failure → original native pending request/absent file → actual UI decision/effect, oracle rejection controls, screenshots/zero errors, exact-head checks/model/Docker/CI. Selected risk packs and limits are in tasks16.4.
 - No production fault switch, broad model proxy, second provider, DSH source patch or production qwen3.6 claim; production permission changes require an observed counterexample and separate semantic RED/GREEN.
+
+## Issue #86 fixture
+
+- Feature, expanded (agree with upstream); task17.1 only, #27/#85 merged. Ship one real custom preset bundle and prove native selector discovery on a fresh instance.
+- Canonical source is `plugins/office-agents/` from design14 and successor #87; #86 installs that same bundle into the image, rather than creating a second image-local definition. Required named-build-context callers and test expectations migrate atomically; no platform production behavior changes.
+- Preserve existing preset IDs/default, model/permission policy, empty employee patch, immutable complete profile seed and existing-volume state. One `office-general` declaration with one Chinese persona instruction; the second preset, default switch, full office capabilities and model/DOCX acceptance remain #87–#90.
+- Evidence floor: native selector RED without delivery, GREEN from an ordinary fresh volume with healthy exact preset metadata; source bundle in read-only seed, existing seed copy-up/edit/reuse checks, `pnpm check`, strict fixture and exact-head full Docker/CI.
+- Critical image packaging and preset registration require expanded review and human line review, deferred to Epic end under the user's existing authorization.

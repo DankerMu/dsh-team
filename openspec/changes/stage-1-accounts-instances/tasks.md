@@ -1229,6 +1229,17 @@ Execution order: fixture review/strict validation → qualify review-provenance 
 Suggested fixture level: expanded - 改动关键路径 `images/dsh-user/` 的预置内容，并决定每个实例里生效的工具清单
 Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行，证明机制可用）
 
+### Issue #86 risk/evidence map (task 17.1 only)
+
+- Fixture level: expanded; Public API / CLI / script entrypoint selected for native selector discovery and all image builders; no platform API change.
+- File IO / path safety / overwrite; Data loss / partial write / rollback selected for image-owned profile bundle install before seed snapshot, immutable seed and preservation of existing user volumes. No upgrade migration or runtime package installation.
+- Serialization / parsing / format compatibility; Release / packaging / dependency compatibility selected for pinned rc.2 bundle manifest/patch/persona contracts, exact peer pin and canonical narrow build context.
+- Auth / permissions / secrets; Security / injection / untrusted input selected to preserve managed overlay enforcement on the full expanded roster; no model secret needed, no new tools, unchanged permission defaults.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs selected for bounded existing Docker lifecycle, registered invocation ownership and cleanup on selector failure.
+- Legacy compatibility / examples; Documentation / migration notes selected for unchanged shipped presets/default, atomic caller migration and explicit boundary with #87. Concurrency / shared state not selected: no new concurrent owner, cache, timer or background work.
+- Required evidence: real fresh-instance native selector rejects missing delivery before implementation; then exact `office-general`/Chinese name, no broken diagnostic, existing roster/default preserved. Complete seed copy-up/immutability/reuse checks and existing full managed-policy test cover sibling state and overlay surfaces. `pnpm check`, strict fixture, expanded review and exact-head full `pnpm test:docker`/CI.
+- Scope reconciliation: design14/#87 name the canonical `plugins/office-agents/` bundle; adding its two declarative files and required build-context caller changes in #86 avoids a duplicate implementation. No #87 office-writer/default/Skills/tools behavior is included.
+
 ## 18. 部署骨架（任务包 1.16）
 
 依赖：第 12、14、15 组。

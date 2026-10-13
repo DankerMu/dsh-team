@@ -212,6 +212,10 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 `plugins/office-agents/` 是一个 DSH bundle：`office-general`（综合办公，默认预设）和 `office-writer`（公文与材料写作）两个预设，各带人设、Skills 和工具清单。bundle 在镜像构建时装进预置的配置目录。自定义预设 bundle 的写法在阶段 0 没有验证过，所以这一组的第一个任务是在发行版上做出一个最小可用的预设。
 
+#86 delivery boundary: keep one canonical declarative package at `plugins/office-agents/`, with exact DSH peer and `dsh.bundle.patch`; install its manifest/patch into the Web profile's `node_modules/@dsh-team/office-agents/` through a narrow named build context. Append that package to the initialized profile's ordered bundle list before the existing profile-seed snapshot. Do not replace the released base/Web bundles, empty user patch, managed overlay or current default. The one `office-general` row uses the published `dsh-persona` prefix contributor, not a second system-prompt service or custom implementation. #87 extends this same definition in place.
+
+Verification reuses real image/instance startup and native `agentPresets/list` through the authenticated gateway; no test-side preset injection, fake registry, model call or browser prerequisite. Assert exact custom ID/name and no broken diagnostic while original presets/default survive. Whole-manifest equality in the seed oracle is incidental; retain behavioral seed integrity/copy-up/protection/reuse checks and validate the intended bundle registration/artifacts instead. Update the existing complete-roster managed-policy expectation for the newly shipped preset, preserving its policy checks over every preset.
+
 ### 15. 平台前端
 
 `platform/web/` 是一个 React 18 加 Vite 的工作区包，构建为静态文件，由平台在 `/_platform/` 下提供。页面：登录、注册、改密码、等待页、管理后台（账号、实例、模型配置、运行参数、审计）。第一个界面 PR 同时补上 Playwright 基线和验证矩阵的界面行（`constraints.yaml` 里登记的延后项到此解除）。
