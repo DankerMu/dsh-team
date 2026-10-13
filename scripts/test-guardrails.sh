@@ -126,6 +126,11 @@ expect_reject "scratchpad guard (scratch/)" "scratchpad directory" \
   bash .git-hooks/check-naming.sh
 
 archive_root="openspec/changes/archive/2026-10-13-stabilize-browser-runtime-verification"
+# Real archives may already be tracked. The hook scans additions/renames, so
+# every planted archive artifact must start outside the tracked baseline.
+while [ -e "$archive_root" ] || [ -L "$archive_root" ]; do
+  archive_root="${archive_root}-guardrail"
+done
 for artifact in tasks.md .openspec.yaml specs/browser-runtime-verification/spec.md; do
   archive_path="$archive_root/$artifact"
   expect_accept "OpenSpec archive argument ($artifact)" bash .git-hooks/check-naming.sh "$archive_path"
@@ -142,7 +147,7 @@ for invalid_path in \
   openspec/changes/archive/example/tasks.md \
   openspec/changes/archive/2026-1-13-example/tasks.md \
   openspec/changes/archive/2026-10-13-bad--name/tasks.md \
-  openspec/changes/archive/2026-10-13-example \
+  "$archive_root" \
   "$archive_root/scratch/proposal.md" \
   "$archive_root/backup/proposal.md" \
   "$archive_root/archive/proposal.md" \
