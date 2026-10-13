@@ -226,7 +226,7 @@ async function prepare() {
   hostObserver = observeHost();
   phase = 'exclusive-admission';
   provision(
-    `ln -s ${quote(invocation)} /home/ubuntu/.local/share/dsh-team/ci/active`,
+    `ln -sT ${quote(invocation)} /home/ubuntu/.local/share/dsh-team/ci/active`,
     approved.expiresAt,
   );
   phase = 'execution-unit';
