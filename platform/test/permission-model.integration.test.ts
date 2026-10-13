@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
-import { permissionEvidence } from './permission-model-oracle.ts';
+import { autoReviewEvidence, permissionEvidence } from './permission-model-oracle.ts';
 
-function evidence(phase: 'pending' | 'allow' | 'deny' | 'yolo' = 'allow') {
+function evidence(phase: 'pending' | 'allow' | 'deny' | 'unprompted' = 'allow') {
   const callId = 'provider-call',
     id = 'native-approval';
   const rows = [
@@ -23,13 +23,13 @@ function evidence(phase: 'pending' | 'allow' | 'deny' | 'yolo' = 'allow') {
         arguments: JSON.stringify({ file_path: '/data/work/owned.txt', content: 'owned bytes' }),
       },
     },
-    ...(phase === 'yolo'
+    ...(phase === 'unprompted'
       ? []
       : [{ type: 'approval/asked', data: { id, callId, toolName: 'write' } }]),
     ...(phase === 'pending'
       ? []
       : [
-          ...(phase === 'yolo'
+          ...(phase === 'unprompted'
             ? []
             : [
                 {
@@ -58,15 +58,16 @@ function evidence(phase: 'pending' | 'allow' | 'deny' | 'yolo' = 'allow') {
     records: rows.map((event, seq) => ({ type: 'event', event: { ...event, seq } })),
     cursor: rows.length - 1,
     hasMore: false,
-    tier: phase === 'yolo' ? 'danger-full-access' : 'approval',
+    tier: phase === 'unprompted' ? 'danger-full-access' : 'approval',
+    expectedTier: phase === 'unprompted' ? 'danger-full-access' : 'approval',
     afterSeq: -1,
     prompt: 'Write owned file',
     path: '/data/work/owned.txt',
     content: 'owned bytes',
     phase,
     file: {
-      exists: phase === 'allow' || phase === 'yolo',
-      exact: phase === 'allow' || phase === 'yolo',
+      exists: phase === 'allow' || phase === 'unprompted',
+      exact: phase === 'allow' || phase === 'unprompted',
     },
   };
 }
@@ -77,7 +78,7 @@ function eventAt(value: ReturnType<typeof evidence>, index: number) {
   return row.event;
 }
 
-it.each(['pending', 'allow', 'deny', 'yolo'] as const)(
+it.each(['pending', 'allow', 'deny', 'unprompted'] as const)(
   'recognizes correlated native %s evidence',
   (phase) => {
     expect(permissionEvidence(evidence(phase))).toMatchObject({
@@ -97,7 +98,7 @@ it('rejects a write that already happened while native approval is pending', () 
 it.each(['missing', 'gap', 'truncated'] as const)(
   'rejects %s native history rather than treating absence as no asks',
   (failure) => {
-    const value = evidence('yolo');
+    const value = evidence('unprompted');
     if (failure === 'missing') value.records.pop();
     if (failure === 'gap') value.records.splice(1, 1);
     if (failure === 'truncated') value.hasMore = true;
@@ -133,8 +134,9 @@ it.each([
 
 it('rejects a Yolo automatic rejection even when no interactive panel was shown', () => {
   const value = evidence('deny');
-  value.phase = 'yolo';
+  value.phase = 'unprompted';
   value.tier = 'danger-full-access';
+  value.expectedTier = 'danger-full-access';
   value.file = { exists: true, exact: true };
   expect(() => permissionEvidence(value)).toThrow('permission-approval-count');
 });
@@ -161,7 +163,7 @@ it('rejects denial evidence without a model-facing error result', () => {
   expect(() => permissionEvidence(value)).toThrow('permission-tool-result');
 });
 
-it.each(['pending', 'allow', 'deny', 'yolo'] as const)(
+it.each(['pending', 'allow', 'deny', 'unprompted'] as const)(
   'rejects recovered provider failure before accepting %s evidence',
   (phase) => {
     const value = evidence(phase);
@@ -196,3 +198,87 @@ it.each(['pending', 'allow', 'deny', 'yolo'] as const)(
     );
   },
 );
+
+function reviewObservation(mode: 'observe' | 'unavailable') {
+  const fault = mode === 'unavailable';
+  const expected = {
+    nonce: 'owned-review',
+    sessionId: 'session-a',
+    callId: 'provider-call',
+    provider: 'intranet',
+    model: 'development-model',
+    mode,
+  };
+  const observed = {
+    nonce: expected.nonce,
+    overflow: false,
+    reviews: [
+      {
+        sessionId: expected.sessionId,
+        callId: expected.callId,
+        provider: expected.provider,
+        model: expected.model,
+        mode,
+        forwarded: !fault,
+        completed: !fault,
+        faultInjected: fault,
+        finish: fault ? null : 'stop',
+        decision: fault ? null : 'allow',
+        gate: fault ? 'ask' : 'allow',
+        started: 1,
+        settled: 2,
+        gated: 3,
+      },
+    ],
+  };
+  return { expected, observed };
+}
+
+it.each(['observe', 'unavailable'] as const)('accepts correlated Auto %s provenance', (mode) => {
+  const { expected, observed } = reviewObservation(mode);
+  expect(autoReviewEvidence(observed, expected)).toMatchObject({ callId: expected.callId, mode });
+});
+
+it.each([
+  'missing',
+  'duplicate',
+  'stale',
+  'wrong-session',
+  'wrong-call',
+  'wrong-route',
+  'bypassed',
+  'incomplete',
+  'denied',
+  'premature',
+  'overflow',
+] as const)(
+  'rejects %s Auto provenance rather than inferring a review from file success',
+  (failure) => {
+    const { expected, observed } = reviewObservation('observe');
+    const row = observed.reviews[0];
+    if (!row) throw new Error('Missing review control');
+    if (failure === 'missing') observed.reviews.length = 0;
+    if (failure === 'duplicate') observed.reviews.push({ ...row });
+    if (failure === 'stale') observed.nonce = 'previous-operation';
+    if (failure === 'wrong-session') row.sessionId = 'session-b';
+    if (failure === 'wrong-call') row.callId = 'foreign-call';
+    if (failure === 'wrong-route') row.provider = 'simulated-provider';
+    if (failure === 'bypassed') row.forwarded = false;
+    if (failure === 'incomplete') row.completed = false;
+    if (failure === 'denied') row.decision = 'deny';
+    if (failure === 'premature') row.gated = 1;
+    if (failure === 'overflow') observed.overflow = true;
+    expect(() => autoReviewEvidence(observed, expected)).toThrow(/permission-auto-/);
+  },
+);
+
+it('does not count ordinary policy denial as review unavailability', () => {
+  const { expected, observed } = reviewObservation('unavailable');
+  const row = observed.reviews[0];
+  if (!row) throw new Error('Missing review control');
+  row.faultInjected = false;
+  row.forwarded = true;
+  row.completed = true;
+  row.decision = 'deny';
+  expect(() => autoReviewEvidence(observed, expected)).toThrow('permission-auto-outcome');
+});

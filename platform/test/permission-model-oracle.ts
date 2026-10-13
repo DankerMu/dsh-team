@@ -5,11 +5,12 @@ interface PermissionObservation {
   cursor: number;
   hasMore: boolean;
   tier: string;
+  expectedTier: string;
   afterSeq: number;
   prompt: string;
   path: string;
   content: string;
-  phase: 'pending' | 'allow' | 'deny' | 'yolo';
+  phase: 'pending' | 'allow' | 'deny' | 'unprompted';
   file: { exists: boolean; exact: boolean };
 }
 
@@ -72,10 +73,10 @@ function promptIdentity(
 }
 
 function approvalEvidence(events: readonly Event[], input: PermissionObservation, call: Event) {
-  const yolo = input.phase === 'yolo';
+  const unprompted = input.phase === 'unprompted';
   const asked = of(events, 'approval/asked');
   const decided = of(events, 'approval/decided');
-  requireEvidence(asked.length === (yolo ? 0 : 1), 'approval-count');
+  requireEvidence(asked.length === (unprompted ? 0 : 1), 'approval-count');
   const ask = asked[0];
   if (ask)
     requireEvidence(
@@ -94,7 +95,7 @@ function approvalEvidence(events: readonly Event[], input: PermissionObservation
     );
     return { ask, decision: undefined };
   }
-  requireEvidence(decided.length === (yolo ? 0 : 1), 'decision-count');
+  requireEvidence(decided.length === (unprompted ? 0 : 1), 'decision-count');
   const decision = decided[0];
   if (ask && decision)
     requireEvidence(
@@ -156,9 +157,8 @@ export function permissionEvidence(input: PermissionObservation) {
   requireEvidence(of(events, 'assistant/attempt').length === 0, 'provider-attempt');
   const identity = writeIdentity(events, input);
   const requestId = promptIdentity(events, input, identity.start, identity.call);
-  const yolo = input.phase === 'yolo';
-  requireEvidence(input.tier === (yolo ? 'danger-full-access' : 'approval'), 'tier');
-  const written = input.phase === 'allow' || yolo;
+  requireEvidence(input.tier === input.expectedTier, 'tier');
+  const written = input.phase === 'allow' || input.phase === 'unprompted';
   requireEvidence(input.file.exists === written && input.file.exact === written, 'file-state');
   const { ask, decision } = approvalEvidence(events, input, identity.call);
   const terminalSeq =
@@ -174,5 +174,67 @@ export function permissionEvidence(input: PermissionObservation) {
     terminalSeq,
     cursor: input.cursor,
     phase: input.phase,
+  };
+}
+
+interface AutoReviewExpectation {
+  nonce: string;
+  sessionId: string;
+  callId: string;
+  provider: string;
+  model: string;
+  mode: 'observe' | 'unavailable';
+}
+
+function reviewIdentity(value: unknown, expected: AutoReviewExpectation) {
+  const observed = record(value);
+  requireEvidence(
+    observed.nonce === expected.nonce &&
+      observed.overflow === false &&
+      Array.isArray(observed.reviews),
+    'auto-observation',
+  );
+  const row = one(observed.reviews.map(record), 'auto-count');
+  requireEvidence(
+    row.sessionId === expected.sessionId &&
+      row.callId === expected.callId &&
+      row.provider === expected.provider &&
+      row.model === expected.model &&
+      row.mode === expected.mode,
+    'auto-identity',
+  );
+  requireEvidence(
+    Number.isSafeInteger(row.started) &&
+      Number.isSafeInteger(row.settled) &&
+      Number.isSafeInteger(row.gated) &&
+      Number(row.started) < Number(row.settled) &&
+      Number(row.settled) < Number(row.gated),
+    'auto-order',
+  );
+  return row;
+}
+
+export function autoReviewEvidence(value: unknown, expected: AutoReviewExpectation) {
+  const row = reviewIdentity(value, expected);
+  const fault = expected.mode === 'unavailable';
+  requireEvidence(
+    row.forwarded === !fault &&
+      row.completed === !fault &&
+      row.faultInjected === fault &&
+      row.finish === (fault ? null : 'stop') &&
+      row.decision === (fault ? null : 'allow') &&
+      row.gate === (fault ? 'ask' : 'allow'),
+    'auto-outcome',
+  );
+  return {
+    sessionId: expected.sessionId,
+    callId: expected.callId,
+    mode: expected.mode,
+    forwarded: row.forwarded,
+    completed: row.completed,
+    faultInjected: row.faultInjected,
+    finish: row.finish,
+    decision: row.decision,
+    gate: row.gate,
   };
 }

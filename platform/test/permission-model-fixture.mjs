@@ -21,9 +21,17 @@ import {
   physicalClick,
   selectTier,
 } from '../../scripts/probe-permission-ui.mjs';
-import { permissionEvidence } from './permission-model-oracle.ts';
+import { autoReviewEvidence, permissionEvidence } from './permission-model-oracle.ts';
 
-export async function runPermissionModelScenario({ page, origin, cookie, evidence, observe }) {
+export async function runPermissionModelScenario({
+  page,
+  origin,
+  cookie,
+  evidence,
+  observe,
+  model,
+  reviewObserver,
+}) {
   const report = { selections: [], addresses: [], checkpoints: [] };
   try {
     attachScopeObserver(page, report);
@@ -40,80 +48,37 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
       if (!result.ok) throw new Error('permission-native-rpc');
       return result.value;
     };
-    const history = async (sessionId) => {
-      const projection = await rpc('session/projections', { request: { sessionId } });
-      const value = await rpc('session/page', {
-        request: {
-          address: { kind: 'session', sessionId },
-          throughSeq: projection.asOfSeq,
-          maxMessages: 100,
-        },
-      });
-      if (
-        !Array.isArray(value.records) ||
-        value.hasMore !== false ||
-        value.records.length !== projection.asOfSeq + 1 ||
-        value.records.some((row, index) => row.event.seq !== index)
-      )
-        throw new Error('permission-history-incomplete');
-      return {
-        records: value.records,
-        cursor: projection.asOfSeq,
-        hasMore: value.hasMore,
-        tier: projection.values.permissions.currentValue,
-      };
-    };
-    const listed = await rpc('session/list', { _request: {} });
-    assert.equal(listed.items.length, 1, 'one onboarding Session');
-    const first = { sessionId: listed.items[0].sessionId, title: 'Real manual approval' };
-    const second = {
-      ...(await rpc('session/create', { request: { cwd: '/data/work', agentPreset: 'standard' } })),
-      title: 'Real Yolo permission',
-    };
-    // Give the new native Session a real user turn so it appears in the ordinary sidebar.
-    const initialized = await rpc('session/prompt', {
-      request: {
-        sessionId: second.sessionId,
-        requestId: randomUUID(),
-        mode: 'queue',
-        content: [{ type: 'text', text: 'Reply READY. Do not call any tools.' }],
-      },
+    const { history, first, second, select } = await prepareSessions({
+      page,
+      origin,
+      evidence,
+      report,
+      rpc,
     });
-    assert.equal(initialized.accepted, true);
-    await waitFor(
-      async () => {
-        const value = await history(second.sessionId);
-        return value.records.some(
-          ({ event }) => event.type === 'turn/end' && event.data.reason.kind === 'completed',
-        );
-      },
-      300000,
-      'permission-real-session-initialization',
-    );
-    for (const session of [first, second]) await rpc('session/rename', { request: session });
-    await navigateReady(page, origin, 30000, true);
-    await waitComposer(page, 30000);
-    const select = async (session) =>
-      clickSessionTitle(page, session.title, report, {
-        kind: 'session',
-        sessionId: session.sessionId,
-      });
-    await select(second);
-    await selectTier(page, '人工批准', join(evidence, 'yolo-before-selection.png'), report);
-    await selectTier(page, 'Yolo', join(evidence, 'yolo-selected.png'), report);
-    await select(first);
-    await selectTier(page, '人工批准', join(evidence, 'manual-selected.png'), report);
 
-    const begin = async (session, label) => {
+    const begin = async (session, label, expectedTier, reviewMode = null) => {
       const path = `/data/work/permission-${label}-${randomUUID()}.txt`;
       const content = `Real permission proof ${randomUUID()}`;
       const before = await history(session.sessionId);
       assert.deepEqual(observe(path, content), { exists: false, exact: false });
+      const nonce = randomUUID();
+      if (reviewMode !== null)
+        reviewObserver.arm({ nonce, sessionId: session.sessionId, path, mode: reviewMode });
       const prompt = `Use the write tool exactly once with file_path ${JSON.stringify(path)} and content ${JSON.stringify(content)} (no newline). Do not use bash, run_code, or other tools. If the user rejects, stop and explain the rejection; do not retry or work around it. After the tool result, reply briefly.`;
       await waitComposer(page, 30000);
       await typeComposer(page, prompt);
       await clickSelector(page, SEND_BTN);
-      return { sessionId: session.sessionId, path, content, prompt, afterSeq: before.cursor };
+      return {
+        sessionId: session.sessionId,
+        path,
+        content,
+        prompt,
+        label,
+        expectedTier,
+        reviewMode,
+        nonce,
+        afterSeq: before.cursor,
+      };
     };
     const sample = async (operation) => ({
       ...(await history(operation.sessionId)),
@@ -123,6 +88,17 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
     const retain = async (operation, phase) => {
       const value = await sample(operation);
       const proof = permissionEvidence({ ...value, phase });
+      if (operation.reviewMode !== null) {
+        const review = autoReviewEvidence(reviewObserver.observation(), {
+          nonce: operation.nonce,
+          sessionId: operation.sessionId,
+          callId: proof.callId,
+          provider: 'intranet',
+          model,
+          mode: operation.reviewMode,
+        });
+        report.checkpoints.push({ review });
+      }
       report.checkpoints.push({ sessionId: operation.sessionId, ...proof, file: value.file });
       await writeFile(join(evidence, 'permissions.json'), JSON.stringify(report));
       return proof;
@@ -172,11 +148,11 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
           const events = value.records
             .filter(({ event }) => event.seq > operation.afterSeq)
             .map(({ event }) => event);
-          if (phase === 'yolo' && events.some((event) => event.type.startsWith('approval/')))
-            throw new Error('permission-yolo-asked');
+          if (phase === 'unprompted' && events.some((event) => event.type.startsWith('approval/')))
+            throw new Error('permission-unprompted-asked');
           if (
             events.filter((event) => event.type === 'approval/asked').length >
-            (phase === 'yolo' ? 0 : 1)
+            (phase === 'unprompted' ? 0 : 1)
           )
             throw new Error('permission-extra-approval');
           return events.some((event) => event.type === 'turn/end');
@@ -186,7 +162,7 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
       );
       await waitTurnIdle(page, 30000, 'permission-browser-turn-idle');
       await retain(operation, phase);
-      await captureSettledScreenshot(page, join(evidence, `${phase}-completed.png`));
+      await captureSettledScreenshot(page, join(evidence, `${operation.label}-completed.png`));
     };
     const decide = async (action) =>
       physicalClick(
@@ -194,12 +170,12 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
         `[...document.querySelectorAll(${JSON.stringify(PANEL + ' button')})].find(el=>${JSON.stringify(action === 'allow' ? ['允许一次', 'Allow once'] : ['拒绝', 'Reject'])}.includes(el.textContent.trim())&&!el.disabled)`,
       );
 
-    const manual = await begin(first, 'allow');
+    const manual = await begin(first, 'allow', 'approval');
     const original = await pending(manual, 'allow');
     await select(second);
     assert.equal(await chosenLabel(page), 'Yolo');
-    const yolo = await begin(second, 'yolo');
-    await finish(yolo, 'yolo');
+    const yolo = await begin(second, 'yolo', 'danger-full-access');
+    await finish(yolo, 'unprompted');
     const held = await retain(manual, 'pending');
     assert.equal(held.approvalId, original.approvalId);
     assert.equal(held.callId, original.callId);
@@ -210,13 +186,29 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
     assert.equal(returned.approvalId, original.approvalId);
     await decide('allow');
     await finish(manual, 'allow');
-    const denied = await begin(first, 'deny');
+    const denied = await begin(first, 'deny', 'approval');
     await pending(denied, 'deny');
     await decide('deny');
     await finish(denied, 'deny');
     assert.equal((await history(second.sessionId)).tier, 'danger-full-access');
     assert.equal((await history(first.sessionId)).tier, 'approval');
+
+    await selectTier(page, 'Auto', join(evidence, 'auto-selected.png'), report);
+    const reviewed = await begin(first, 'auto', 'auto-review', 'observe');
+    await finish(reviewed, 'unprompted');
+    const unavailable = await begin(first, 'auto-unavailable', 'auto-review', 'unavailable');
+    await pending(unavailable, 'auto-unavailable');
+    await decide('allow');
+    await finish(unavailable, 'allow');
   } catch (error) {
+    if (reviewObserver) {
+      try {
+        report.reviewObservation = reviewObserver.observation();
+      } catch {
+        // Observer-read failure must not replace the original acceptance failure.
+        report.observerUnavailable = true;
+      }
+    }
     // Persist only fixed diagnostic vocabulary, never raw model/transport errors or history.
     report.failure = /^permission-[a-z-]+$/.test(error.message)
       ? error.message
@@ -225,4 +217,71 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
     await captureSettledScreenshot(page, join(evidence, 'permission-failure.png'));
     throw error;
   }
+}
+
+async function prepareSessions({ page, origin, evidence, report, rpc }) {
+  const history = async (sessionId) => {
+    const projection = await rpc('session/projections', { request: { sessionId } });
+    const value = await rpc('session/page', {
+      request: {
+        address: { kind: 'session', sessionId },
+        throughSeq: projection.asOfSeq,
+        maxMessages: 100,
+      },
+    });
+    if (
+      !Array.isArray(value.records) ||
+      value.hasMore !== false ||
+      value.records.length !== projection.asOfSeq + 1 ||
+      value.records.some((row, index) => row.event.seq !== index)
+    )
+      throw new Error('permission-history-incomplete');
+    return {
+      records: value.records,
+      cursor: projection.asOfSeq,
+      hasMore: value.hasMore,
+      tier: projection.values.permissions.currentValue,
+    };
+  };
+  const listed = await rpc('session/list', { _request: {} });
+  assert.equal(listed.items.length, 1, 'one onboarding Session');
+  const first = { sessionId: listed.items[0].sessionId, title: 'Real manual approval' };
+  const second = {
+    ...(await rpc('session/create', { request: { cwd: '/data/work', agentPreset: 'standard' } })),
+    title: 'Real Yolo permission',
+  };
+  // Give the new native Session a real user turn so it appears in the ordinary sidebar.
+  const initialized = await rpc('session/prompt', {
+    request: {
+      sessionId: second.sessionId,
+      requestId: randomUUID(),
+      mode: 'queue',
+      content: [{ type: 'text', text: 'Reply READY. Do not call any tools.' }],
+    },
+  });
+  assert.equal(initialized.accepted, true);
+  await waitFor(
+    async () => {
+      const value = await history(second.sessionId);
+      return value.records.some(
+        ({ event }) => event.type === 'turn/end' && event.data.reason.kind === 'completed',
+      );
+    },
+    300000,
+    'permission-real-session-initialization',
+  );
+  for (const session of [first, second]) await rpc('session/rename', { request: session });
+  await navigateReady(page, origin, 30000, true);
+  await waitComposer(page, 30000);
+  const select = async (session) =>
+    clickSessionTitle(page, session.title, report, {
+      kind: 'session',
+      sessionId: session.sessionId,
+    });
+  await select(second);
+  await selectTier(page, '人工批准', join(evidence, 'yolo-before-selection.png'), report);
+  await selectTier(page, 'Yolo', join(evidence, 'yolo-selected.png'), report);
+  await select(first);
+  await selectTier(page, '人工批准', join(evidence, 'manual-selected.png'), report);
+  return { history, first, second, select };
 }

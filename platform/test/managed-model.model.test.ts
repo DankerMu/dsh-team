@@ -25,6 +25,7 @@ import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
+import { installAutoReviewObserver } from './permission-model-observer-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 
 it('lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings', async () => {
@@ -80,10 +81,40 @@ it('lets a fresh employee use the administrator model to create exact workspace 
             reason: 'starting',
           });
           await gateway.ready(employee.cookie);
-          const containerId = record(
-            database.prepare('SELECT container_id FROM instances WHERE user_id=?').get(employee.id),
-          ).container_id;
-          if (typeof containerId !== 'string') throw new Error('Missing model acceptance instance');
+          const currentContainer = () => {
+            const id = record(
+              database
+                .prepare('SELECT container_id FROM instances WHERE user_id=?')
+                .get(employee.id),
+            ).container_id;
+            if (typeof id !== 'string') throw new Error('Missing model acceptance instance');
+            return id;
+          };
+          let containerId = currentContainer();
+          phase = 'auto-observer-setup';
+          const reviewObserver = await installAutoReviewObserver((script) =>
+            gateway.exec(containerId, script),
+          );
+          // Complete fixture-only profile installation before any browser attaches.
+          const restarted = await fetch(
+            `${base}/_platform/api/admin/instances/${employee.id}/restart`,
+            {
+              method: 'POST',
+              headers: { cookie: admin.cookie, origin, 'content-type': 'application/json' },
+              body: '{}',
+            },
+          );
+          expect(restarted.status).toBe(200);
+          expect(await restarted.json()).toEqual({
+            userId: employee.id,
+            status: 'starting',
+            reason: 'starting',
+          });
+          await gateway.ready(employee.cookie);
+          const replacement = currentContainer();
+          expect(replacement).not.toBe(containerId);
+          containerId = replacement;
+          reviewObserver.observation();
           const marker = `model-proof-${randomUUID()}`;
           const path = `/data/work/${marker}.txt`;
           const expected = `DSH real tool proof ${randomUUID()}`;
@@ -142,7 +173,30 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
             cookie: employee.cookie,
             evidence,
             observe: observeFile,
+            model,
+            reviewObserver,
           });
+          phase = 'browser-health';
+          await writeFile(
+            join(evidence, 'browser-health.json'),
+            JSON.stringify({
+              count: browser.errors.length,
+              classes: browser.errors.map((value) =>
+                typeof value === 'string' &&
+                [
+                  'error',
+                  'TypeError',
+                  'ReferenceError',
+                  'SyntaxError',
+                  'net::ERR_ABORTED',
+                  'net::ERR_CONNECTION_CLOSED',
+                  'net::ERR_CONNECTION_RESET',
+                ].includes(value)
+                  ? value
+                  : 'other',
+              ),
+            }),
+          );
           expect(browser.errors.length).toBe(0);
           phase = 'evidence';
           await writeFile(
