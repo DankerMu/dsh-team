@@ -27,6 +27,13 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
   const report = { selections: [], addresses: [], checkpoints: [] };
   try {
     attachScopeObserver(page, report);
+    // Native Session rows are hidden by the narrow-screen navigation layout.
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: 1440,
+      height: 1050,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
     const rpc = async (method, payload) => {
       report.lastRpc = method;
       const result = await mappedRpc(origin, cookie, method, payload);
