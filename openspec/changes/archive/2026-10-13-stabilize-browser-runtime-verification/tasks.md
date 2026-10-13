@@ -16,9 +16,15 @@
 
 ## 3. Integrated qualification and DAG resumption
 
-- [ ] 3.1 Run normal `pnpm check`, all affected UI/protocol consumers and final exact-head original `pnpm test:docker`; verify complete discovery, original deadlines/assertions, durable exit status and independent empty owned-resource inventory. Then execute the explicitly planned same-head full-suite stability run and retain every outcome; any failure remains inside the authorized bounded loop.
-- [ ] 3.2 Complete expanded native review, adjudication and CI on the final candidate; verify no unresolved blocking finding/evidence gap and an honest exact-head runtime status before merging #179.
-- [ ] 3.3 Archive this accepted standalone blocker fixture, then restore the paused #76 workflow and task queue; verify #76 is rebased onto the merged blocker and independently requalified before its merge, with the Epic fixture still open until all Epic acceptance completes.
+- [x] 3.1 Run normal `pnpm check`, all affected UI/protocol consumers and final exact-head original `pnpm test:docker`; verify complete discovery, original deadlines/assertions, durable exit status and independent empty owned-resource inventory. Then execute the explicitly planned same-head full-suite stability run and retain every outcome; any failure remains inside the authorized bounded loop.
+- [x] 3.2 Complete expanded native review, adjudication and CI on the final candidate; verify no unresolved blocking finding/evidence gap and an honest exact-head runtime status before merging #179.
+- [x] 3.3 Archive this accepted standalone blocker fixture, then restore the paused #76 workflow and task queue; verify #76 is rebased onto the merged blocker and independently requalified before its merge, with the Epic fixture still open until all Epic acceptance completes.
+
+Completion evidence: [PR #198](https://github.com/DankerMu/dsh-team/pull/198) merged as `a49868d3857f8bd503823bf6ee797b1ef508111c`; exact reviewed head `db1e96d1c69b6a5c2a9cc7733321031caa698c14` passed original Docker65/65 and planned same-head stability65/65, both with exit0 and empty independent inventories. [Runtime receipts](https://github.com/DankerMu/dsh-team/pull/198#issuecomment-6138135610), [final review/CI summary](https://github.com/DankerMu/dsh-team/pull/198#issuecomment-6138180607).
+
+The downstream handoff also completed: [PR #197](https://github.com/DankerMu/dsh-team/pull/197) rebased onto that merge, independently passed check/UI25/25/Docker65/65, fresh review and CI on `6fb33b0a5fab4b73670dd2af5676fb6fd28be9ee`, then merged as `8cd88c1490546a32d6443db5176fae70193714fc`. [Handoff evidence](https://github.com/DankerMu/dsh-team/pull/197#issuecomment-6138477935). Archive bookkeeping follows this proved handoff in a separate protected PR rather than mixing archive changes into #197. The shared Epic change remains active; user-deferred human review remains an Epic-end obligation.
+
+The initial archive commit was rejected by the repository's unconditional scratchpad policy; no hook was bypassed. The user then authorized the narrow standard OpenSpec archive exception, delivered independently in [PR #200](https://github.com/DankerMu/dsh-team/pull/200), merged as `b6503d3fb5c97fc7239bb845ce427f4c43a9cfe5`. This archive-only follow-up restores the preserved artifacts under that qualified policy; unrelated archive and scratchpad bans remain active.
 
 ## Risk / evidence map
 
