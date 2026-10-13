@@ -26,6 +26,7 @@ import { registerInstanceUser } from './instance-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
 import { installAutoReviewObserver } from './permission-model-observer-fixture.ts';
+import { runOfficeWriterScenario } from './office-writer-model-fixture.mjs';
 import { runUserImage } from './user-image-fixture.ts';
 
 it('lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings', async () => {
@@ -175,6 +176,13 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
             observe: observeFile,
             model,
             reviewObserver,
+          });
+          phase = 'office-writer-docx';
+          await runOfficeWriterScenario({
+            page,
+            rpc: (method, args) => gateway.rpc(employee.cookie, method, args),
+            exec: (script) => gateway.exec(containerId, script),
+            evidence,
           });
           phase = 'browser-health';
           await writeFile(

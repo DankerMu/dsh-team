@@ -1254,6 +1254,18 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - Non-goals: other eight Agents, per-preset management UI, RAGFlow, document rendering, new model/provider policy, existing-volume upgrade migration, #88/#89 actual DOCX/delegation acceptance.
 - Evidence: native default/selector RED on b0669f9 (general was not default); 2793f3a passes both names, omitted/default and explicit/writer Session binding, and scoped skill catalogs. ee5ad31 managed-policy plus model-refusal pass 2/2 (79.10s suite; 89.976s runner), including startup/restart leases, required tools, both actual loaded skill bodies and all eight fields; independent four-class resource inventory empty. Metadata-missing oracle RED→GREEN; malformed/disabled/missing-capability/network controls retained. Persistence RED exposed the evidence allowlist dropping new office metadata: extend only metadata/hash keys, retaining exclusion of instruction/skill bodies. Final frozen-head full Docker/model/CI and expanded review remain merge gates.
 
+### Issue #88 risk/evidence map (task17.3 only)
+
+- Expanded Characterization of the existing writer; fixture admission parent-inline under the higher-priority single-mapped-slice delegation prohibition, then strict OpenSpec validation before implementation. Independent expanded code review remains required.
+- Public API / CLI / script entrypoint; Legacy compatibility / examples — selected: actual native UI selection, read-only Session projection/log correlation, existing `pnpm test:model` lifecycle; preserve all prior real-model scenarios.
+- Serialization / parsing / format compatibility; File IO / path safety / overwrite — selected: read-only python-docx parse of unique requested `/data/work` file, same-byte hash, absent-before and five task-bound content fields; malformed/wrong-path/wrong-task/missing-field controls.
+- Auth / permissions / secrets; Security / injection / untrusted input — selected: unchanged trusted real-provider lane and employee session, no fixture-generated acceptance DOCX, no raw history/credentials in retained facts, fixed safe failures.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs — selected: preserve existing command/turn/worker deadlines, bounded parser output, complete native event evidence, original browser/Docker cleanup on success and failure, custody beneath `.run/issue82`.
+- Release / packaging / dependency compatibility; Config / project setup — selected: installed rc.2 native picker/API and image-owned Python/python-docx; no dependency, image, plugin or production-platform changes planned.
+- Documentation / migration notes — selected: existing model evidence contract/matrix mirrors and this fixture. Concurrency / shared state and Data loss / migration not selected: only an invocation-owned verification scenario, no production state transition or migration.
+- Required proof: physically select writer on a blank native Session; projection and committed selection event match that Session before its exact supplied notice prompt; actual tool activity and successful terminal turn precede read-only parse. Five supplied fields and unique task identity must occur in the parsed DOCX. Known-bad parser/judge inputs must be rejected, including missing file (actual pre-turn baseline), each absent field, wrong binding and unsuccessful turn. Final exact-head full Docker/model/CI, screenshots/zero errors and independent resource/authority retirement remain gates.
+- Non-goals: rendered Office layout, #89 delegation, #90 task catalog, other Agents, new provider/permission behavior. Only a diagnosed production defect could justify reopening scope; none is presumed.
+
 ## 18. 部署骨架（任务包 1.16）
 
 依赖：第 12、14、15 组。
