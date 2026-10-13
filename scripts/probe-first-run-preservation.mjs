@@ -103,6 +103,9 @@ export const verifyPreservation = async (
   );
   if (sessionId) {
     // RPC-created Sessions are in the native ungrouped bucket; select the exact new identity.
+    const openSidebar = 'button[aria-label="打开侧边栏"],button[aria-label="Open sidebar"]';
+    if (await evalPage(page, `Boolean(document.querySelector(${JSON.stringify(openSidebar)}))`))
+      await clickSelector(page, openSidebar);
     const bucket = '[data-row-key="workspace:"][aria-expanded="false"]';
     if (await evalPage(page, `Boolean(document.querySelector(${JSON.stringify(bucket)}))`))
       await clickSelector(page, bucket);

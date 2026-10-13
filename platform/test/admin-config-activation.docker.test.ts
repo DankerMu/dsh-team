@@ -67,7 +67,7 @@ it('keeps the running model selector unchanged after save and activates the new 
           return row.container_id;
         };
         const observedSessions = new Set<string>();
-        const observe = async (label: string, models: string, expectedDefault: string) => {
+        const newSession = async () => {
           const created = await gateway.rpc(employee.cookie, 'session/create', {
             request: { cwd: '/data/work', agentPreset: 'standard' },
           });
@@ -79,6 +79,14 @@ it('keeps the running model selector unchanged after save and activates the new 
           expect(
             history.some((value) => record(record(value).event).type === 'model/selection'),
           ).toBe(false);
+          return sessionId;
+        };
+        const observe = async (
+          label: string,
+          models: string,
+          expectedDefault: string,
+          sessionId: string,
+        ) => {
           const profile = await mkdtemp(join(tmpdir(), 'dsh-team-activation-browser-'));
           const receiptFile = join(profile, 'chrome.receipt.json');
           try {
@@ -103,6 +111,7 @@ it('keeps the running model selector unchanged after save and activates the new 
             expect(observation.accepted).toBe(true);
             expect(observation.reload?.accepted).toBe(true);
             expect(observation.consoleErrors).toEqual([]);
+            expect(observation.sessionAddressObserved).toBe(true);
             expect(observation.preservation).toMatchObject({
               sessionId,
               exactModels: models.split(','),
@@ -127,7 +136,8 @@ it('keeps the running model selector unchanged after save and activates the new 
         });
         await gateway.ready(employee.cookie);
         const firstId = identity();
-        await observe('before-save', 'alpha,beta', 'beta');
+        const firstSession = await newSession();
+        await observe('before-save', 'alpha,beta', 'beta', firstSession);
         const before = inspect(lifecycle, firstId);
         const overlay = join(lifecycle.overlayDirectory, `${employee.id}.patch.yml`);
         const bytes = await readFile(overlay);
@@ -148,7 +158,7 @@ it('keeps the running model selector unchanged after save and activates the new 
         );
         expect(await readFile(overlay)).toEqual(bytes);
         expect((await stat(overlay)).ino).toBe(inode);
-        await observe('saved-not-restarted', 'alpha,beta', 'beta');
+        await observe('saved-not-restarted', 'alpha,beta', 'beta', firstSession);
         const restarted = await fetch(
           `${base}/_platform/api/admin/instances/${employee.id}/restart`,
           {
@@ -169,7 +179,7 @@ it('keeps the running model selector unchanged after save and activates the new 
         const after = inspect(lifecycle, secondId);
         expect(record(after.State).Running).toBe(true);
         expect(orderedMounts(after.Mounts)).toEqual(orderedMounts(before.Mounts));
-        await observe('restarted', 'alpha,beta,gamma', 'gamma');
+        await observe('restarted', 'alpha,beta,gamma', 'gamma', await newSession());
         return secondId;
       } finally {
         gateway.close();

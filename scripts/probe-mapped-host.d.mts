@@ -46,6 +46,7 @@ export type MappedHostSessionObservation = {
 };
 
 export type MappedHostAcceptResult = {
+  readonly sessionAddressObserved?: boolean;
   readonly accepted: boolean;
   readonly beforeSessionObservation?: MappedHostSessionObservation;
   readonly sessionObservation?: MappedHostSessionObservation;
