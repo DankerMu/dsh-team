@@ -18,6 +18,7 @@ Same logic must have exactly one implementation in the repo. Version evolution b
 - Commented-out code is deleted, not kept. Git remembers.
 - Unreferenced exports and dead code paths are debt. Wire them up in the same change or delete them.
 - Do not use the repo as a scratchpad: `tmp/`, `scratch/`, `backup/`, `_old/`, `deprecated/`, `archive/`, `wip/` must not appear in commits.
+- User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed. The dated change name follows OpenSpec's lowercase alphanumeric, single-hyphen grammar. Other scratchpad components, forbidden suffixes, dot-segment aliases and unrelated staged violations remain rejected. The pattern lives in `constraints.yaml`; both hook entrypoints share one classifier, and `pnpm test:guardrails` proves acceptance and rejection.
 
 ### Enforcement
 

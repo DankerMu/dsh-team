@@ -125,6 +125,70 @@ git add scratch/note.txt
 expect_reject "scratchpad guard (scratch/)" "scratchpad directory" \
   bash .git-hooks/check-naming.sh
 
+archive_root="openspec/changes/archive/2026-10-13-stabilize-browser-runtime-verification"
+for artifact in tasks.md .openspec.yaml specs/browser-runtime-verification/spec.md; do
+  archive_path="$archive_root/$artifact"
+  expect_accept "OpenSpec archive argument ($artifact)" bash .git-hooks/check-naming.sh "$archive_path"
+  mkdir -p "$(dirname "$archive_path")"
+  printf 'fixture\n' >"$archive_path"
+  git add "$archive_path"
+  expect_accept "OpenSpec archive staged ($artifact)" bash .git-hooks/check-naming.sh
+  restore
+done
+
+for invalid_path in \
+  archive/proposal.md \
+  docs/openspec/changes/archive/2026-10-13-example/tasks.md \
+  openspec/changes/archive/example/tasks.md \
+  openspec/changes/archive/2026-1-13-example/tasks.md \
+  openspec/changes/archive/2026-10-13-bad--name/tasks.md \
+  openspec/changes/archive/2026-10-13-example \
+  "$archive_root/scratch/proposal.md" \
+  "$archive_root/backup/proposal.md" \
+  "$archive_root/archive/proposal.md" \
+  "$archive_root/specs/session_v2.md"; do
+  expect_reject "archive argument rejects $invalid_path" "naming violation" \
+    bash .git-hooks/check-naming.sh "$invalid_path"
+  mkdir -p "$(dirname "$invalid_path")"
+  printf 'fixture\n' >"$invalid_path"
+  git add "$invalid_path"
+  reason="scratchpad directory"
+  case "$invalid_path" in *_v2.md) reason="forbidden naming suffix" ;; esac
+  expect_reject "archive staged rejects $invalid_path" "$reason" bash .git-hooks/check-naming.sh
+done
+
+for alias_path in "$archive_root/./tasks.md" "$archive_root/../tasks.md"; do
+  expect_reject "archive argument rejects dot segment $alias_path" "naming violation" \
+    bash .git-hooks/check-naming.sh "$alias_path"
+done
+
+mkdir -p "$archive_root" zzz/archive
+printf 'fixture\n' >"$archive_root/tasks.md"
+printf 'fixture\n' >zzz/archive/unrelated.md
+git add "$archive_root/tasks.md" zzz/archive/unrelated.md
+expect_reject "allowed archive never accepts a mixed invalid index" \
+  "scratchpad directory:    zzz/archive/unrelated.md" bash .git-hooks/check-naming.sh
+
+for missing_policy in setting file; do
+  for mode in argument staged; do
+    if [ "$missing_policy" = file ]; then
+      rm constraints.yaml
+    else
+      node --input-type=module -e 'import fs from "node:fs"; const path="constraints.yaml"; fs.writeFileSync(path,fs.readFileSync(path,"utf8").split("\n").filter(line=>!line.trimStart().startsWith("managed_archive_pattern:")).join("\n"));'
+    fi
+    if [ "$mode" = argument ]; then
+      expect_reject "archive missing $missing_policy argument" "naming violation" \
+        bash .git-hooks/check-naming.sh "$archive_root/tasks.md"
+    else
+      mkdir -p "$archive_root"
+      printf 'fixture\n' >"$archive_root/tasks.md"
+      git add "$archive_root/tasks.md"
+      expect_reject "archive missing $missing_policy staged" "scratchpad directory" \
+        bash .git-hooks/check-naming.sh
+    fi
+  done
+done
+
 # ── 2. Commit message ────────────────────────────────────────────────────────
 expect_reject "commit message (\"bad message\")" "type may not be empty" \
   sh -c 'echo "bad message" | pnpm exec commitlint'

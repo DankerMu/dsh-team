@@ -37,6 +37,12 @@ yaml_get() {
         | grep -m 1 -E '^[[:space:]]*paths:' \
         | sed -E 's/^[[:space:]]*paths:[[:space:]]*//; s/[[:space:]]*$//'
       ;;
+    code_canonicality.scratchpad_directories.managed_archive_pattern)
+      sed -n '/^code_canonicality:/,/^size_limits:/p' "$file" \
+        | sed -n '/^  scratchpad_directories:/,/^size_limits:/p' \
+        | grep -m 1 -E '^[[:space:]]*managed_archive_pattern:' \
+        | sed -E "s/^[[:space:]]*managed_archive_pattern:[[:space:]]*//; s/[[:space:]]*$//; s/^[\\\"']//; s/[\\\"']$//"
+      ;;
     *)
       return 1
       ;;
@@ -45,6 +51,7 @@ yaml_get() {
 
 FORBIDDEN_SUFFIX_RE="$DEFAULT_FORBIDDEN_SUFFIX_RE"
 SCRATCH_DIR_RE="$DEFAULT_SCRATCH_DIR_RE"
+MANAGED_ARCHIVE_RE=""
 forbidden_source="fallback"
 scratch_source="fallback"
 
@@ -87,16 +94,37 @@ EOF
       scratch_source="constraints.yaml"
     fi
   fi
+  MANAGED_ARCHIVE_RE="$(yaml_get 'code_canonicality.scratchpad_directories.managed_archive_pattern' "$constraints_file" 2>/dev/null || true)"
 fi
 
 echo "check-naming.sh: FORBIDDEN_SUFFIX_RE source: $forbidden_source" >&2
 echo "check-naming.sh: SCRATCH_DIR_RE source:    $scratch_source" >&2
 
+path_violations() {
+  local original="$1"
+  local scratch_path="$1"
+  if [[ "$original" =~ $FORBIDDEN_SUFFIX_RE ]]; then
+    printf '  forbidden naming suffix: %s\n' "$original"
+  fi
+  case "/$original/" in
+    */./*|*/../*) ;;
+    *)
+      if [ -n "$MANAGED_ARCHIVE_RE" ] && [[ "$original" =~ $MANAGED_ARCHIVE_RE ]]; then
+        # Exempt one managed component, never the remaining path or suffix rules.
+        scratch_path="${original/\/archive\//\/}"
+      fi
+      ;;
+  esac
+  if [[ "$scratch_path" =~ $SCRATCH_DIR_RE ]]; then
+    printf '  scratchpad directory:    %s\n' "$original"
+  fi
+}
+
 # Path-argument mode (agent write-time check): validate one path directly
 # instead of reading the staged index.
 if [ "$#" -gt 0 ]; then
   f="$1"
-  if [[ "$f" =~ $FORBIDDEN_SUFFIX_RE ]] || [[ "$f" =~ $SCRATCH_DIR_RE ]]; then
+  if [ -n "$(path_violations "$f")" ]; then
     echo "naming violation (write-time): $f — see AGENTS.md § Code Canonicality" >&2
     exit 2
   fi
@@ -108,12 +136,8 @@ fi
 violations=()
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
-  if [[ "$f" =~ $FORBIDDEN_SUFFIX_RE ]]; then
-    violations+=("  forbidden naming suffix: $f")
-  fi
-  if [[ "$f" =~ $SCRATCH_DIR_RE ]]; then
-    violations+=("  scratchpad directory:    $f")
-  fi
+  found="$(path_violations "$f")"
+  [ -z "$found" ] || violations+=("$found")
 done < <(git diff --cached --name-only --diff-filter=AR 2>/dev/null || true)
 
 if [ "${#violations[@]}" -gt 0 ]; then
