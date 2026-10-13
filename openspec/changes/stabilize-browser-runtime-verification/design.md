@@ -18,7 +18,7 @@ Read-only research found material limits in that observer: Node pipe-read timest
 
 ### 1. Characterization precedes construction
 
-Both authorized characterization rounds are exhausted and retained unchanged. The user has now authorized the proposed bounded repair-and-verification phase, not more open-ended diagnosis. Use the existing two review fix passes and repository maximum three fix-and-recheck cycles per failing check; do not reset a gate. Freeze treatment/oracle/candidate/runtime identities for each verification. No automatic retries, full-suite reruns until green, or unbounded extension.
+Both authorized characterization rounds are exhausted and retained unchanged. The user authorized bounded repair and verification, not open-ended diagnosis. Use the canonical review-fix gate (initially two passes, extended only by explicit user authorization) and repository maximum three fix-and-recheck cycles per failing check; do not reset a gate. Freeze treatment/oracle/candidate/runtime identities for each verification. No automatic retries, full-suite reruns until green, or unbounded extension.
 
 The governing invariant is that acceptance describes the real browser/platform/DSH exchange on one candidate: an observer cannot change that exchange, hide its failure, steal another consumer's events or mix identities. Unknown source ownership remains unknown.
 
@@ -80,6 +80,12 @@ The pre-create receipt is an explicit pending-identity state, not permission to 
 Permanent collector/repair changes need semantic failing-before/passing-after proof through the real CDP/process/HTTP boundary where practical. Existing model-refusal browser protocol and Chrome child/TCP integration seams are reusable; source-text assertions and mocked echoes are not evidence. Cover observer coexistence, redirects/unknown IDs, late completion/teardown, cap/drop behavior, secret exclusion, and original-error precedence when evidence writing fails.
 
 Run normal checks and all affected real browser consumers: first-use, permission, managed-policy and model-refusal. Full Docker discovery remains original; the final exact-head original suite must pass, followed by one explicitly planned stability run on that same head because this incident is intermittent. Retain every outcome and independently inspect cleanup. Diagnostic variants and older-head success never satisfy the final gate. CI, native review and user-deferred Epic-end human review remain distinct obligations.
+
+#### Authorized final-qualification diagnosis extension
+
+Final candidate3587c15941a74915dcdb0c6085a038e7c859d8aa ran the original65-case Docker discovery once:64 passed, with the real delegated-child permission UI failing after the three root approval scenarios. Console errors were empty; complete network evidence contained no ERR_NETWORK_CHANGED. The generic assertion catch omitted the failing operand details. Retain this outcome without attributing it to the earlier network mechanism or calling it an existing flake.
+
+The user explicitly authorized one additional diagnosis-first repair pass after the two original review fix passes were consumed. Extend the canonical gate, never reset its history. First capture a stable assertion identifier and bounded safe operands at the existing selected-child/pending-approval boundary, using the exact values asserted and no extra DOM reads, retries, sleeps or changed ordering/deadlines. Keep the original native child identity, six root/child outcomes, audit ordering and exact file effects as the immutable oracle. One predeclared full-context diagnostic reproduction is not final qualification; a non-reproduction remains inconclusive. Choose a minimal repair only after discriminating evidence establishes its owner. Subsequent final-head full Docker, planned stability, fresh review and CI remain mandatory.
 
 ## Risks / Trade-offs
 

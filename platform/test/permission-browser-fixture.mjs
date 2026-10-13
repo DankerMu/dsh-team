@@ -675,7 +675,24 @@ async function verifySessionSelections(browser, control, rpc, origin, report, ev
 }
 
 async function observePendingApproval(context, call, label) {
-  const { browser, control, evidenceDirectory } = context;
+  const { browser, control, evidenceDirectory, report } = context;
+  const scalar = (value) =>
+    typeof value === 'boolean' || (Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000)
+      ? value
+      : value === undefined
+        ? 'undefined'
+        : 'unsupported';
+  const observeAssertion = (id, actual, expected, message) => {
+    report.pendingAssertion = {
+      id,
+      actual: scalar(actual),
+      expected: scalar(expected),
+      callId: call.callId,
+      sessionId: call.sessionId,
+    };
+    assert.equal(actual, expected, message);
+    delete report.pendingAssertion;
+  };
   const panelKey = await waitFor(
     () =>
       evaluate(
@@ -685,14 +702,16 @@ async function observePendingApproval(context, call, label) {
     MS,
     `${label}-native-approval-panel`,
   );
-  assert.equal(
+  observeAssertion(
+    'pending-panel-count',
     await evaluate(browser.page, `document.querySelectorAll(${JSON.stringify(PANEL)}).length`),
     1,
     'one native pending approval in the selected Session',
   );
   // Released ApprovalPanel's Tool-owned detail slot is optional. The write
   // target is rendered in the actual tool timeline, not inside that panel.
-  assert.equal(
+  observeAssertion(
+    'pending-write-target',
     await evaluate(
       browser.page,
       `document.body.innerText.includes(${JSON.stringify(call.path.split('/').at(-1))})`,
@@ -701,13 +720,19 @@ async function observePendingApproval(context, call, label) {
     'native tool timeline must identify this exact pending write',
   );
   const pending = control({ op: 'status' });
-  assert.equal(
+  observeAssertion(
+    'pending-file-absent',
     pending.files.find((file) => file.callId === call.callId)?.exists,
     false,
     'real body must not run before browser approval',
   );
-  assert.equal(pending.dispatch.filter((row) => row.callId === call.callId).length, 0);
-  assert.equal(
+  observeAssertion(
+    'pending-dispatch-count',
+    pending.dispatch.filter((row) => row.callId === call.callId).length,
+    0,
+  );
+  observeAssertion(
+    'pending-audit-count',
     pending.audit.filter(
       (event) =>
         event.sessionId === call.sessionId &&
