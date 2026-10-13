@@ -12,23 +12,16 @@ const EVIDENCE = '/data/home/permission-model-observation.json';
 export const name = 'dsh-team-auto-review-observer';
 export const inject = ['llm', 'tools', 'agents'];
 
-function trackedReview(options, active, diagnose) {
+function trackedReview(options, active) {
   // Main Agent requests are never intercepted, including continuation after rejection.
-  if (isAgentLoopRequest(options)) {
-    diagnose('agent-loop');
-    return undefined;
-  }
-  diagnose('non-agent');
+  if (isAgentLoopRequest(options)) return undefined;
   let action;
   try {
     action = JSON.parse(options.messages?.[0]?.content?.[0]?.text);
-    diagnose('parsed');
   } catch {
-    diagnose('unparsed');
     return undefined;
   }
   const tracked = active.get(action?.arguments?.file_path);
-  diagnose(tracked ? 'active-match' : 'inactive');
   if (!tracked) return undefined;
   if (
     action.name !== tracked.exec.name ||
@@ -55,17 +48,40 @@ function observedDecision(text, finishes) {
 export function apply(ctx) {
   const active = new Map();
   let sequence = 0;
-  let state = { nonce: null, overflow: false, reviews: [], 'DEBUG-85-review': [] };
+  let state = { nonce: null, overflow: false, reviews: [] };
   const persist = () => {
     writeFileSync(EVIDENCE + '.pending', JSON.stringify(state), { mode: 0o600 });
     renameSync(EVIDENCE + '.pending', EVIDENCE);
   };
-  const diagnose = (kind) => {
-    if (state.nonce === null || state['DEBUG-85-review'].length >= 32) return;
-    state['DEBUG-85-review'].push(kind);
+  const nativeGate = (tracked, gate) => {
+    for (const row of tracked.rows) {
+      if (row.gated !== null) continue;
+      row.gate = gate;
+      row.gated = ++sequence;
+    }
     persist();
   };
   persist();
+  ctx.on('session/event', (session, event) => {
+    if (event.type !== 'approval/asked') return;
+    for (const tracked of active.values()) {
+      if (tracked.exec.agent.session.id === session.id && tracked.exec.callId === event.data.callId)
+        nativeGate(tracked, 'ask');
+    }
+  });
+  ctx.on(
+    'tools/execute',
+    async (exec, next) => {
+      const tracked = active.get(exec.arguments.file_path);
+      if (tracked?.exec === exec) nativeGate(tracked, 'allow');
+      return next();
+    },
+    { prepend: true },
+  );
+  ctx.on('tools/result', (exec) => {
+    const path = exec.arguments.file_path;
+    if (active.get(path)?.exec === exec) active.delete(path);
+  });
   ctx.on(
     'tools/pre-execute',
     async (exec, next) => {
@@ -78,32 +94,21 @@ export function apply(ctx) {
       if (control.mode !== 'observe' && control.mode !== 'unavailable')
         throw new Error('Owned review mode invalid');
       if (state.nonce !== control.nonce)
-        state = { nonce: control.nonce, overflow: false, reviews: [], 'DEBUG-85-review': [] };
+        state = { nonce: control.nonce, overflow: false, reviews: [] };
       const tracked = { exec, control, rows: [] };
       active.set(control.path, tracked);
-      diagnose('pre-execute-entered');
-      try {
-        const decision = await next();
-        diagnose('pre-execute-returned');
-        for (const row of tracked.rows) {
-          row.gate = ['allow', 'ask', 'deny', 'cancel'].includes(decision.kind)
-            ? decision.kind
-            : 'unknown';
-          row.gated = ++sequence;
-        }
-        persist();
-        return decision;
-      } finally {
-        active.delete(control.path);
-        diagnose('active-released');
-      }
+      // A surrounding gate reviews AFTER its downstream next() returns.
+      // Keep call identity until tools/result; observe native ask/body admission,
+      // not this listener's intermediate waterfall return value.
+      persist();
+      return next();
     },
     { prepend: true },
   );
   ctx.on(
     'llm/stream',
     async function* (options, next) {
-      const tracked = trackedReview(options, active, diagnose);
+      const tracked = trackedReview(options, active);
       if (!tracked) return yield* next();
       if (state.reviews.length >= 8) {
         state.overflow = true;
