@@ -49,7 +49,7 @@ it('saves and replaces credentials without returning fragments and preserves an 
       const body = await response.text();
       responses.push(body);
       expect(response.status).toBe(200);
-      expect(JSON.parse(body)).toEqual({ ...CONFIG, apiKeyConfigured: true });
+      expect(JSON.parse(body)).toEqual({ ...CONFIG, apiKeyConfigured: true, runningInstances: 0 });
       expect(readSettings(database).modelApiKey === (apiKey ?? first)).toBe(true);
     }
     const read = await fetch(`${base}${PATH}`, { headers: { cookie: login.header } });
@@ -64,6 +64,47 @@ it('saves and replaces credentials without returning fragments and preserves an 
     for (const key of [first, second])
       for (const fragment of [key, key.slice(0, 12), key.slice(-12)])
         expect(output.includes(fragment)).toBe(false);
+  });
+});
+
+it('reports a fresh running-only save snapshot without changing instance rows or the GET contract', async () => {
+  await withListeningApp(async (base, app, database) => {
+    const { cookie } = await administrator(app, database);
+    for (const [index, status] of [
+      'running',
+      'running',
+      'starting',
+      'stopped',
+      'error',
+    ].entries()) {
+      const user = await registerAccount(app, `snapshot-${String(index)}@example.test`);
+      database
+        .prepare('INSERT INTO instances (user_id, status) VALUES (?, ?)')
+        .run(user.id, status);
+    }
+    const save = () =>
+      fetch(`${base}${PATH}`, {
+        method: 'PUT',
+        headers: jsonRequestHeaders({ cookie }),
+        body: JSON.stringify(CONFIG),
+      });
+    const before = database.prepare('SELECT * FROM instances ORDER BY user_id').all();
+
+    const first = await save();
+
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ ...CONFIG, apiKeyConfigured: false, runningInstances: 2 });
+    expect(database.prepare('SELECT * FROM instances ORDER BY user_id').all()).toEqual(before);
+    database.prepare("UPDATE instances SET status='stopped' WHERE status='running'").run();
+    const repeated = await save();
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual({
+      ...CONFIG,
+      apiKeyConfigured: false,
+      runningInstances: 0,
+    });
+    const read = await fetch(`${base}${PATH}`, { headers: { cookie } });
+    expect(await read.json()).toEqual({ ...CONFIG, apiKeyConfigured: false });
   });
 });
 

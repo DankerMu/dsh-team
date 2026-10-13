@@ -574,3 +574,10 @@
 - Feature, expanded/Critical Construction; task14.11 only, #74/#73 closed. Add the real audit page under the existing administrator shell and read-only audit API; no backend query/schema/mutation changes.
 - Exact served route `/_platform/admin/audit` and existing pathname dispatch are necessary delivery companions. Extract only the actually shared administrator navigation so accounts and audit have one implementation; preserve existing account actions and all prior pages.
 - Required evidence: real browser event/email/time filters and combinations, stable page membership, four list states/retry, current authority, no audit or credential/content side effects, screenshots and zero unexpected errors; DOM stale/date boundaries, source/dist smoke, full checks/UI, expanded review and frozen Docker/CI. No synthetic successful query/filter/pagination/auth evidence.
+
+## Issue #79 fixture
+
+- Feature, expanded (agree with upstream); task15.3 only, #77/#71 merged. Add save-time running-instance metadata to model/runtime PUT responses and prove existing next-start model activation.
+- Preserve GET/input contracts, current administrator authorization, atomic settings/audit persistence, secret custody, existing lifecycle/restart ownership and live capacity/idle readers.
+- Selected risk packs: API/config/schema/auth/order/errors/compatibility/packaging/docs; file IO is observed through unchanged overlays/volumes, not reimplemented. No migration, config generations, UI page, model connectivity or DSH changes.
+- Evidence floor: missing save-count behavioral RED; mixed-state/zero/fresh-save counts and rollback; actual Docker/browser two→three models, unchanged running selector/default/connection, administrator restart then exact new list/default; screenshots, zero unexpected browser errors, full checks and frozen-head review/Docker/CI.

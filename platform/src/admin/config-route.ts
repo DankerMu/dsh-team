@@ -14,7 +14,12 @@ interface ConfigDescriptor {
   path: string;
   auditType: 'model-config.updated' | 'runtime-config.updated';
   bodySchema: FastifySchema['body'];
-  responseSchema: FastifySchema['body'];
+  responseSchema: {
+    readonly type: 'object';
+    readonly additionalProperties: false;
+    readonly required: readonly string[];
+    readonly properties: Readonly<Record<string, unknown>>;
+  };
   invalidMessage: string;
   validationGuidance?: string;
   patch(body: unknown): Record<string, unknown> | null;
@@ -84,7 +89,22 @@ export function registerConfigRoute(
       schema: {
         summary: `Save administrator ${descriptor.name} configuration`,
         body: descriptor.bodySchema,
-        response,
+        response: {
+          ...response,
+          200: {
+            ...descriptor.responseSchema,
+            required: [...descriptor.responseSchema.required, 'runningInstances'],
+            properties: {
+              ...descriptor.responseSchema.properties,
+              runningInstances: {
+                type: 'integer',
+                minimum: 0,
+                description:
+                  'Save-time running-instance snapshot, not a live configuration-drift count.',
+              },
+            },
+          },
+        },
       },
       // The descriptor checks the envelope; canonical settings validation owns raw value domains.
       validatorCompiler: () => (value: unknown) => ({ value }),
@@ -123,7 +143,13 @@ export function registerConfigRoute(
             actorEmail: actor.email,
             sourceAddress: resolveSourceAddress(request),
           });
-          return descriptor.project(readSettings(database));
+          // COUNT without GROUP BY always returns one row, including for an empty table.
+          const running = database
+            .prepare<[], { runningInstances: number }>(
+              "SELECT COUNT(*) AS runningInstances FROM instances WHERE status = 'running'",
+            )
+            .get() as { runningInstances: number };
+          return { ...descriptor.project(readSettings(database)), ...running };
         });
         return commit();
       } catch (error) {

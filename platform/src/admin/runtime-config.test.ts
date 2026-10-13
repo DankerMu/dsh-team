@@ -36,7 +36,7 @@ it('saves only runtime fields and an actor/source audit while preserving model c
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toEqual(CONFIG);
+    expect(saved.json()).toEqual({ ...CONFIG, runningInstances: 0 });
     expect(read.json()).toEqual(CONFIG);
     expect(readSettings(database)).toMatchObject(models);
     expect(database.prepare("SELECT value FROM settings WHERE key = 'unowned'").get()).toEqual({
@@ -79,7 +79,7 @@ it.each([
       payload,
     });
     expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toEqual(payload);
+    expect(saved.json()).toEqual({ ...payload, runningInstances: 0 });
     expect((await app.inject({ url: PATH, headers: { cookie } })).json()).toEqual(payload);
   });
 });

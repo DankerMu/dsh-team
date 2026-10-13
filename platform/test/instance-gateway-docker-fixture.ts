@@ -10,7 +10,9 @@ import { waitDockerIdle } from './instance-idle-docker-fixture.ts';
 import type { DockerIdleContext } from './instance-idle-docker-fixture.ts';
 
 /** Real platform gateway, real DSH protocol and invocation-owned Docker observations. */
-export function instanceGatewayFixture(f: DockerIdleContext) {
+export function instanceGatewayFixture(
+  f: Pick<DockerIdleContext, 'base' | 'origin' | 'lifecycle'>,
+) {
   const sockets: Socket[] = [];
   const headers = (cookie: string) => ({
     cookie,
@@ -115,15 +117,15 @@ export function instanceGatewayFixture(f: DockerIdleContext) {
     const historyRecords: readonly unknown[] = records;
     return historyRecords;
   }
-  async function persistedSession() {
-    const created = await rpc(f.user.cookie, 'session/create', {
+  async function persistedSession(context: Pick<DockerIdleContext, 'user' | 'control'>) {
+    const created = await rpc(context.user.cookie, 'session/create', {
       request: { cwd: '/data/work', agentPreset: 'standard' },
     });
     if (typeof created.sessionId !== 'string') throw new Error('Missing genuine Session');
     const sessionId = created.sessionId;
-    f.control({ op: 'adopt', sessionId });
+    context.control({ op: 'adopt', sessionId });
     await waitDockerIdle(() => {
-      const status = f.control({ op: 'status' });
+      const status = context.control({ op: 'status' });
       return (
         Array.isArray(status.audit) &&
         status.audit.some((value: unknown) => {
@@ -136,8 +138,8 @@ export function instanceGatewayFixture(f: DockerIdleContext) {
         })
       );
     });
-    expect(f.control({ op: 'status' }).externalModelCalls).toBe(0);
-    const originalHistory = await history(f.user.cookie, sessionId);
+    expect(context.control({ op: 'status' }).externalModelCalls).toBe(0);
+    const originalHistory = await history(context.user.cookie, sessionId);
     const events = originalHistory.map((value: unknown) => record(record(value).event));
     expect(
       events.filter(

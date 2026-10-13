@@ -59,7 +59,7 @@ it('roundtrips all runtime fields over TCP and rejects raw invalid bodies withou
       body: JSON.stringify(CONFIG),
     });
     expect(saved.status).toBe(200);
-    expect(await saved.json()).toEqual(CONFIG);
+    expect(await saved.json()).toEqual({ ...CONFIG, runningInstances: 0 });
     const read = await fetch(`${base}${PATH}`, { headers: { cookie: login.header } });
     expect(await read.json()).toEqual(CONFIG);
     const before = database.prepare('SELECT * FROM settings ORDER BY key').all();
@@ -113,7 +113,7 @@ it.each([
           body: JSON.stringify(accepted),
         });
         expect(saved.status).toBe(200);
-        expect(await saved.json()).toEqual(accepted);
+        expect(await saved.json()).toEqual({ ...accepted, runningInstances: 0 });
         const before = database.prepare('SELECT * FROM settings ORDER BY key').all();
         const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
         const response = await fetch(`${base}${PATH}`, {
@@ -350,6 +350,7 @@ it('the same owner admits two users at 60 then denies a third after an HTTP limi
       memoryMiB: 4096,
       maxRunningInstances: 2,
       defaultPermissionTier: 'yolo',
+      runningInstances: 2,
     });
     expect(await startupEvidence(database, input)).toMatchObject({
       row: firstBefore.row,

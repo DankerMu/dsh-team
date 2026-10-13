@@ -1726,7 +1726,8 @@
                     "baseURL",
                     "apiKeyConfigured",
                     "models",
-                    "defaultModel"
+                    "defaultModel",
+                    "runningInstances"
                   ],
                   "properties": {
                     "baseURL": {
@@ -1757,6 +1758,11 @@
                     },
                     "defaultModel": {
                       "type": "string"
+                    },
+                    "runningInstances": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Save-time running-instance snapshot, not a live configuration-drift count."
                     }
                   }
                 }
@@ -2197,7 +2203,8 @@
                     "cpuCores",
                     "memoryMiB",
                     "maxRunningInstances",
-                    "defaultPermissionTier"
+                    "defaultPermissionTier",
+                    "runningInstances"
                   ],
                   "properties": {
                     "idleMinutes": {
@@ -2228,6 +2235,11 @@
                         "auto",
                         "yolo"
                       ]
+                    },
+                    "runningInstances": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Save-time running-instance snapshot, not a live configuration-drift count."
                     }
                   }
                 }

@@ -1,5 +1,12 @@
 /** Ordinary Settings/model UI exercise, only after first-entry + refresh acceptance. */
-import { clickSelector, evalPage, remainingMs, waitFor } from './probe-dsh-api-ui.mjs';
+import {
+  clickSelector,
+  evalPage,
+  NEW_BTN,
+  remainingMs,
+  waitComposer,
+  waitFor,
+} from './probe-dsh-api-ui.mjs';
 
 const DIALOG = '[role="dialog"][data-shortcut-modal="settings"]';
 const MODEL_TRIGGER = 'button[aria-label^="选择模型"],button[aria-label="请选择模型"]';
@@ -54,8 +61,8 @@ export const verifyPreservation = async (page, modelNames, ms, requests, expecte
   const until = Date.now() + ms;
   const budget = () => remainingMs(until, 'preservation');
   const names = modelNames.split(',').map((name) => name.trim());
-  if (names.length !== 2 || names.some((name) => !name) || names[0] === names[1]) {
-    throw new Error('stage=preservation error=two-distinct-models-required');
+  if (names.length < 2 || names.some((name) => !name) || new Set(names).size !== names.length) {
+    throw new Error('stage=preservation error=distinct-models-required');
   }
   await clickSelector(page, 'button[aria-label="设置"]');
   await waitFor(
@@ -88,6 +95,9 @@ export const verifyPreservation = async (page, modelNames, ms, requests, expecte
     budget(),
     'preservation-settings-closed',
   );
+  // Check the administrator default in a fresh composer, not a persisted Session selection.
+  await clickSelector(page, NEW_BTN);
+  await waitComposer(page, budget());
   await openModelList(page, budget());
   await waitFor(
     async () => {

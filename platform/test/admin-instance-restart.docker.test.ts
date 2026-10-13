@@ -85,7 +85,7 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       const siblingBefore = inspect(f.lifecycle, siblingId);
       const siblingConnection = await gateway.open(sibling.cookie);
       const targetConnection = await gateway.open(f.user.cookie);
-      const { sessionId, originalHistory } = await gateway.persistedSession();
+      const { sessionId, originalHistory } = await gateway.persistedSession(f);
       const bytes = Buffer.from([0, 13, 10, 127, 128, 255]);
       gateway.exec(
         f.containerId,
@@ -241,7 +241,7 @@ it('admin restart recovers stopped and retained-error instances; a second real s
           'restart-recovery-admin@example.test',
         );
         f.database.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.id);
-        const { sessionId, originalHistory } = await gateway.persistedSession();
+        const { sessionId, originalHistory } = await gateway.persistedSession(f);
         await f.service.stop(f.user.id, 'admin');
         expect(await gateway.state(f.user.cookie)).toEqual({
           status: 'stopped',

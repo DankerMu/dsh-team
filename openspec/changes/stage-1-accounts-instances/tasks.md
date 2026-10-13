@@ -1106,6 +1106,16 @@ Minimal mergeable slice: 15.1（模型配置读写接口和测试，约 200 行�
 
 Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被保存200后重开库启动校验失败，因此按既有启动不变量确认为P1而非推迟。复用公开validateSubnetPool，经app传入配置池，在事务内校验、异常穿过事务回滚后才转400；不复制容量数学、不放宽启动检查或DB标量域。修复后原反例返回400、保存值仍60、重开校验通过；/16的4096/4097与/28的1/2边界真实HTTP及源码/dist文件库验证全部通过。第三项隔离负控只跳过写时pool检查，被真实超限保存反例拒绝；三个控制及源码/dist恢复均GREEN。完整检查1335单元/769集成、共享helper分支82.14%、重复率2.98%通过。TCP413用完整大体积fetch时观察到写侧ECONNRESET，改为真实HTTP声明超限长度并先发送小段来观察早期413，不再与服务端拒绝竞相上传；大小门禁和413断言保留，原完整payload单元仍在。新增HTTP上界用例纠正为系统可启动容量上界，原DB标量边界覆盖保留。
 
+### Issue #79 risk/evidence map (task15.3 only)
+
+- Public API / CLI / script entry; Schema / columns / units / field names — selected: PUT-only nonnegative `runningInstances` save snapshot, unchanged GET/input, regenerated OpenAPI; behavioral RED and actual HTTP mixed-state/zero/fresh-save proof.
+- Config / project setup; Concurrency / shared state / ordering — selected: no live instance mutation, synchronous save/count/audit, old model list until next start; actual save→unchanged selector→admin restart→new selector. Starting instances are not counted or migrated.
+- Auth / permissions / secrets; Error handling / rollback / partial outputs — selected: preserve current actor/Origin/input guards and secret-free DTOs; failed count query rolls back save/audit, invalid/unauthorized requests do not report success.
+- File IO / path safety / overwrite; Legacy compatibility / examples — selected as preservation evidence: unchanged running overlay bytes/inode, identity, connection and volumes; restart rebinds newly generated overlay. No production filesystem implementation changes.
+- Resource limits / large input / discovery — selected: SQL aggregate rather than materializing rows; existing request limits, finite browser/runtime deadlines and owned cleanup remain intact.
+- Release / packaging / dependency compatibility; Documentation / migration notes — selected: canonical browser oracle accepts distinct two/three-model lists while preserving exact membership/default/all-choice checks; source/dist smoke, fullcheck, strict fixture, actual screenshots/error receipts, expanded cross-review and exact-head full Docker/CI. No dependency, schema migration or new browser runner.
+- Workflow routing deviation: higher-priority single-slice delegation restriction requires inline fixture assessment and implementation; these are not represented as native fixture/implementer verdicts. Independent multi-seat final review remains required.
+
 ## 16. 权限三档（任务包 1.13）
 
 依赖：第 8、15 组。
