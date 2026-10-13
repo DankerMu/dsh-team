@@ -46,3 +46,13 @@ it.each([
 ])('rejects unsafe operator revision/ref arguments before creating authority (%j)', (...args) => {
   withoutProvisioning(operator, args);
 });
+
+it('accepts an explicit rerun identity without bypassing reviewed-source availability', () => {
+  const diagnostic = withoutProvisioning(operator, [
+    'a'.repeat(40),
+    'refs/heads/codex/model',
+    '--rerun=1',
+  ]);
+  expect(diagnostic).toContain('Reviewed operator source unavailable');
+  expect(diagnostic).not.toContain('Usage:');
+});

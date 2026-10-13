@@ -395,6 +395,10 @@ async function createWorker(path, args, canceled, nonce) {
       if (receipt.nonce !== nonce) throw new Error('browser producer receipt identity changed');
       if (producer?.pid !== worker.pid || producer.birth !== (await processBirth(worker.pid)))
         throw new Error('browser producer identity mismatch');
+      if (process.env.DSH_TEAM_CI_INVOCATION) {
+        const { retainAcquisition } = await import('./ci-vps-units.mjs');
+        await retainAcquisition(producer, nonce, process.env.DSH_TEAM_CI_INVOCATION);
+      }
       receipt.acquisition = { state: 'armed', producer };
       await writeReceipt(path, receipt);
       await writeReceipt(`${path}.create-authorized`, { version: 1, nonce, producer });

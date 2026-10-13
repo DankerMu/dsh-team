@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readReceipt, rescueChrome, writeReceipt } from '../../scripts/probe-browser-runtime.mjs';
+import { retireAcquisition, stopOwnedUnit } from '../../scripts/ci-vps-units.mjs';
 import { admitVpsIdentity } from './ci-vps-identity.ts';
 import type { VpsApproval } from './ci-vps-identity.ts';
 import { cleanupTargets, readCleanupJournal, removeOwned } from './docker-cleanup.ts';
@@ -134,7 +135,7 @@ async function execute() {
   command('pnpm', ['install', '--frozen-lockfile']);
   command('pnpm', ['build']);
   const driver = `const {spawnSync}=require('node:child_process');
-const env={}; for(const name of ['PATH','HOME','TMPDIR','CHROME_BIN','DSH_TEAM_CI_RESOURCE_JOURNAL']) env[name]=process.env[name];
+const env={}; for(const name of ['PATH','HOME','TMPDIR','CHROME_BIN','DSH_TEAM_CI_RESOURCE_JOURNAL','DSH_TEAM_CI_INVOCATION']) env[name]=process.env[name];
 process.loadEnvFile(${JSON.stringify(join(homedir(), '.config/dsh-team/env'))});
 const key=process.env.DMXAPI_KEY; if(key) env.DMXAPI_KEY=key;
 const r=spawnSync('pnpm',['test:model'],{env,encoding:'utf8',maxBuffer:16777216});
@@ -149,6 +150,7 @@ process.exit(r.status??1);`;
         '.local/share/dsh-team/toolchain/chrome-140.0.7339.82/chrome-headless-shell-linux64/chrome-headless-shell',
       ),
       DSH_TEAM_CI_RESOURCE_JOURNAL: join(root, 'resources.jsonl'),
+      DSH_TEAM_CI_INVOCATION: id,
     },
     encoding: 'utf8',
     maxBuffer: 16_777_216,
@@ -217,25 +219,30 @@ async function serve() {
   const final = await awaitFinal();
   if (await exists(join(root, 'execution.log')))
     process.stdout.write(await readFile(join(root, 'execution.log'), 'utf8'));
-  if (final.cleanupComplete !== true || final.exitCode !== 0)
+  if (final.vpsCleanupComplete !== true || final.exitCode !== 0)
     throw new Error('Execution or cleanup failed');
   process.stdout.write(
-    `${JSON.stringify({ ...identity, sha: approved.sha, command: 'pnpm test:model', exitCode: 0, cleanupComplete: true })}\n`,
+    `${JSON.stringify({ ...identity, sha: approved.sha, command: 'pnpm test:model', exitCode: 0, vpsCleanupComplete: true })}\n`,
   );
 }
 
 async function removeAuthorization() {
+  if (!(await exists(join(root, 'authorization-line')))) return;
   const selected = (await readFile(join(root, 'authorization-line'), 'utf8')).trim();
   if (!selected.startsWith('restrict,') || !selected.endsWith(`dsh-team-ci-${id}`))
     throw new Error('Invalid authorization owner');
+  const key = / ssh-ed25519 [A-Za-z0-9+/=]+/.exec(selected)?.[0];
+  if (!key) throw new Error('Invalid authorization public-key identity');
+  const ownsLine = (line: string) =>
+    (line.endsWith(key) || line.includes(`${key} `)) && line.includes(` serve ${id}"`);
   const file = join(homedir(), '.ssh/authorized_keys');
   const before = await lstat(file);
   if (!before.isFile()) throw new Error('Invalid authorized keys identity');
   const content = await readFile(file, 'utf8');
   const lines = content.split('\n');
-  if (!lines.includes(selected)) return;
+  if (!lines.some(ownsLine)) return;
   const replacement = join(dirname(file), `dsh-team-ci-${id}`);
-  await writeFile(replacement, lines.filter((line) => line !== selected).join('\n'), {
+  await writeFile(replacement, lines.filter((line) => !ownsLine(line)).join('\n'), {
     flag: 'wx',
     mode: before.mode & 0o777,
   });
@@ -250,20 +257,7 @@ async function removeAuthorization() {
 }
 
 function stopExecution() {
-  const observed = spawnSync(
-    'systemctl',
-    ['--user', 'show', unit, '--property=LoadState,Description', '--value'],
-    { env: environment, encoding: 'utf8', timeout: 15_000 },
-  );
-  if (observed.stdout.split('\n').includes('not-found')) return;
-  if (observed.status !== 0 || !observed.stdout.split('\n').includes(`dsh-team-ci:${id}`))
-    throw new Error('Execution unit identity mismatch');
-  const stopped = spawnSync('systemctl', ['--user', 'stop', unit], {
-    env: environment,
-    encoding: 'utf8',
-    timeout: 60_000,
-  });
-  if (stopped.status !== 0) throw new Error('Execution cgroup retirement failed');
+  stopOwnedUnit(unit, `dsh-team-ci:${id}`);
 }
 
 async function rescueBrowsers() {
@@ -288,6 +282,7 @@ async function rescueBrowsers() {
         pointer.state === 'stopped' ? receipt : pointer.receiptFile,
         typeof pointer.nonce === 'string' ? pointer.nonce : undefined,
       );
+      retireAcquisition(id, pointer.nonce);
     }
     const imageFile = join(directory, 'image.json');
     if (!(await exists(imageFile))) continue;
@@ -304,7 +299,7 @@ async function rescueBrowsers() {
   }
 }
 
-async function finalize() {
+async function performFinalization() {
   const failures: string[] = [];
   const attempt = async (phase: string, action: () => void | Promise<void>) => {
     try {
@@ -344,11 +339,38 @@ async function finalize() {
     ? await privateJson(join(root, 'execution.json'))
     : { exitCode: 1 };
   await writeReceipt(join(root, 'final.json'), {
-    cleanupComplete: failures.length === 0,
+    vpsCleanupComplete: failures.length === 0,
     failures,
     exitCode: execution.exitCode,
   });
   if (failures.length) throw new Error('Independent VPS finalization failed');
+}
+
+async function finalizeLocked() {
+  if (await exists(join(root, 'final.json'))) {
+    if ((await privateJson(join(root, 'final.json'))).vpsCleanupComplete !== true)
+      throw new Error('Prior finalization failed; authority retained for explicit recovery');
+    return;
+  }
+  await writeFile(join(root, 'cancel'), '', { mode: 0o600 });
+  await performFinalization();
+}
+
+function finalize() {
+  const result = spawnSync(
+    'flock',
+    [
+      '--wait',
+      '190',
+      join(root, 'lifecycle.lock'),
+      process.execPath,
+      process.argv[1] ?? '',
+      'finalize-locked',
+      id,
+    ],
+    { env: environment, encoding: 'utf8', timeout: 200_000, maxBuffer: 16_384 },
+  );
+  if (result.error || result.status !== 0) throw new Error('Serialized VPS finalization failed');
 }
 
 async function watch() {
@@ -363,7 +385,7 @@ async function watch() {
     } else if (Date.now() >= approved.expiresAt * 1000) break;
     await delay(500);
   }
-  await finalize();
+  finalize();
 }
 
 async function executeAndRecord() {
@@ -379,8 +401,11 @@ async function executeAndRecord() {
 try {
   if (mode === 'serve') await serve();
   else if (mode === 'execute') await executeAndRecord();
+  else if (mode === 'finalize') finalize();
+  else if (mode === 'finalize-locked') await finalizeLocked();
   else if (mode === 'watch') await watch();
-  else if (mode === 'await') process.stdout.write(`${JSON.stringify(await awaitFinal(180_000))}\n`);
+  else if (mode === 'await')
+    process.stdout.write(`${JSON.stringify(await awaitFinal(1_800_000))}\n`);
   else throw new Error('Unknown VPS execution mode');
 } catch {
   process.stderr.write('Trusted VPS execution failed; inspect private sanitized receipt\n');
