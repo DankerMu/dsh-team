@@ -11,7 +11,15 @@ Preview Notice independently on a non-loopback hostname mapped only inside
 Chrome. Tries managed overlay, preseeded files, launch arguments, then the
 repo-owned locale/roster composition (first entry and refresh). Prints the
 measured recipe or 无法做到. No model key is required.
-Env: CHROME_BIN (required executable, no PATH search);
+Requires trusted Linux amd64, nonroot local Docker with isolated bridge
+gateway-mode support. The root command provisions the verification-only
+Node24/CJK-font image, naturally online stable private internal bridge and
+same-port Unix-socket relays; no host policy change or native fallback.
+Runtime/qualification-failure locations are printed; browser timeout/signal
+rescue uses ownership receipts, never PID-only files. --help only prints usage.
+Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
+Env: CHROME_BIN (complete pinned CfT140.0.7339.82
+chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120).
 PROBE_COMPOSITION_FAULT (negative controls only): missing-plugin, wrong-plugin,

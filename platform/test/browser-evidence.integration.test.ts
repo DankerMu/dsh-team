@@ -10,6 +10,10 @@ import {
 import type { RequestFailureEvidence } from '../../scripts/probe-browser-evidence.mjs';
 import { acceptObservation } from '../../scripts/probe-mapped-host.mjs';
 import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
+import {
+  qualificationDiagnostic,
+  qualificationError,
+} from '../../scripts/probe-browser-qualification.mjs';
 
 interface ProtocolListener {
   handler: (event: { data?: string }) => void;
@@ -360,4 +364,268 @@ it('keeps an evicted redirect hop unknown and does not reuse the identity of a c
     collector.dispose();
     page.close();
   }
+});
+
+it('excludes private ordinary and aggregate error data while retaining classified qualification facts', () => {
+  const poison = 'private-custody-poison';
+  const ordinary = Object.assign(new Error(`cookie=${poison}`), {
+    stack: `request-body=${poison}`,
+    code: `E_${poison}`,
+    qualificationPhase: `phase-${poison}`,
+    qualificationInvariants: ['eth0IPv6Disabled', poison],
+    qualificationOutcome: `outcome-${poison}`,
+    response: { headers: { cookie: poison }, body: poison },
+  });
+  const unsupported = qualificationError(poison, poison, ['noIPv4DefaultRoute', poison]);
+  unsupported.message = poison;
+  unsupported.stack = poison;
+  unsupported.qualificationOutcome = poison;
+  const classified = qualificationError('EADDRNOTAVAIL', 'host-ipv6-control', [
+    'onlyLoopbackIPv6',
+    poison,
+    'eth0IPv6Disabled',
+  ]);
+  classified.message = poison;
+  classified.qualificationOutcome = 'nonzero-exit';
+  const aggregate = Object.assign(
+    new AggregateError([ordinary, unsupported, classified], poison, { cause: ordinary }),
+    { code: poison, stack: poison, qualificationPhase: poison },
+  );
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  diagnostic.enter('page-attach');
+  diagnostic.fail(ordinary);
+
+  expect(() => {
+    diagnostic.enter(poison);
+  }).toThrow();
+  expect(() => {
+    diagnostic.cleanup(ordinary, poison);
+  }).toThrow();
+  const report = diagnostic.snapshot(aggregate);
+
+  expect(JSON.stringify(report)).not.toContain(poison);
+  expect(report.phases).toEqual(['page-attach']);
+  expect(report.cleanup).toEqual([]);
+  expect(report.primary?.root).toMatchObject({
+    kind: 'Error',
+    code: 'UNKNOWN',
+    phase: 'page-attach',
+    invariants: ['eth0IPv6Disabled'],
+  });
+  expect(
+    report.error.root.children?.map((node) => ({
+      code: node.code,
+      phase: node.phase,
+      invariants: node.invariants,
+      outcome: node.processOutcome,
+    })),
+  ).toEqual([
+    { code: 'UNKNOWN', phase: 'page-attach', invariants: ['eth0IPv6Disabled'], outcome: undefined },
+    {
+      code: 'UNKNOWN',
+      phase: 'page-attach',
+      invariants: ['noIPv4DefaultRoute'],
+      outcome: undefined,
+    },
+    {
+      code: 'EADDRNOTAVAIL',
+      phase: 'host-ipv6-control',
+      invariants: ['onlyLoopbackIPv6', 'eth0IPv6Disabled'],
+      outcome: 'nonzero-exit',
+    },
+  ]);
+});
+
+it('keeps the first qualification phase and ordered cleanup causes with cyclic error identity references', () => {
+  const primary = Object.assign(new Error('private primary detail'), { code: 'EADDRNOTAVAIL' });
+  primary.cause = primary;
+  const cleanup = Object.assign(new Error('private cleanup detail', { cause: primary }), {
+    code: 'EPIPE',
+  });
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  diagnostic.enter('host-ipv6-control');
+  diagnostic.fail(primary);
+  diagnostic.enter('control-cleanup');
+  diagnostic.cleanup(cleanup, 'control-cleanup');
+  diagnostic.enter('chrome-cleanup');
+  const aggregate = new AggregateError([primary, cleanup], 'private wrapper detail', {
+    cause: primary,
+  });
+
+  diagnostic.fail(aggregate);
+  const report = diagnostic.snapshot(aggregate);
+
+  const projectedPrimary = report.primary;
+  const children = report.error.root.children;
+  const first = children?.[0];
+  const second = children?.[1];
+  if (!projectedPrimary || !children || !first || !second)
+    throw new Error('Qualification cause relationships missing');
+  expect(report.failureDomain).toBe('qualification');
+  expect(projectedPrimary.root).toMatchObject({
+    code: 'EADDRNOTAVAIL',
+    phase: 'host-ipv6-control',
+  });
+  expect(projectedPrimary.root.id).toEqual(expect.any(Number));
+  expect(projectedPrimary.root.cause).toEqual({ reference: projectedPrimary.root.id });
+  expect(report.cleanup[0]?.root).toMatchObject({ code: 'EPIPE', phase: 'control-cleanup' });
+  expect(children.map((node) => ({ code: node.code, phase: node.phase }))).toEqual([
+    { code: 'EADDRNOTAVAIL', phase: 'host-ipv6-control' },
+    { code: 'EPIPE', phase: 'control-cleanup' },
+  ]);
+  expect(first.id).toEqual(expect.any(Number));
+  expect(first.cause).toEqual({ reference: first.id });
+  expect(second.cause).toEqual({ reference: first.id });
+  expect(report.error.root.cause).toEqual({ reference: first.id });
+  expect(report.error.nodes).toBe(3);
+  expect(report.error.dropped).toBe(0);
+});
+
+it('retains the first eight aggregate failures in order and reports the two discarded children', () => {
+  const errors = [
+    'EACCES',
+    'ENOENT',
+    'EINVAL',
+    'ENETUNREACH',
+    'ECONNRESET',
+    'EPIPE',
+    'ETIMEDOUT',
+    'EADDRNOTAVAIL',
+    'IPV6_DAD_FAILED',
+    'BRIDGE_IDENTITY_CHANGED',
+  ].map((code) => Object.assign(new Error('private aggregate detail'), { code }));
+  const failure = new AggregateError(errors, 'private aggregate wrapper');
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  diagnostic.enter('private-probe-execution');
+
+  diagnostic.fail(failure);
+  const report = diagnostic.snapshot(failure);
+
+  expect(report.error.root.children?.map((node) => node.code)).toEqual([
+    'EACCES',
+    'ENOENT',
+    'EINVAL',
+    'ENETUNREACH',
+    'ECONNRESET',
+    'EPIPE',
+    'ETIMEDOUT',
+    'EADDRNOTAVAIL',
+  ]);
+  expect(report.error.nodes).toBe(9);
+  expect(report.error.dropped).toBe(2);
+});
+
+it('bounds a five-error cause chain and marks its omitted terminal cause', () => {
+  let cause = Object.assign(new Error('private cause detail'), { code: 'EPIPE' });
+  for (const code of ['EINVAL', 'ENOENT', 'EPERM', 'EACCES'])
+    cause = Object.assign(new Error('private cause detail', { cause }), { code });
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  diagnostic.enter('private-probe-execution');
+
+  const projection = diagnostic.snapshot(cause).error;
+
+  expect([
+    projection.root.code,
+    projection.root.cause?.code,
+    projection.root.cause?.cause?.code,
+    projection.root.cause?.cause?.cause?.code,
+  ]).toEqual(['EACCES', 'EPERM', 'ENOENT', 'EINVAL']);
+  expect(projection.root.cause?.cause?.cause?.cause).toEqual({ truncated: true });
+  expect(projection.nodes).toBe(4);
+  expect(projection.dropped).toBe(1);
+});
+
+it('stops a branching aggregate at the node budget without inventing omitted nodes', () => {
+  const branches = [
+    'EACCES',
+    'EPERM',
+    'EINVAL',
+    'ENOENT',
+    'ENODEV',
+    'EPIPE',
+    'ETIMEDOUT',
+    'ECONNRESET',
+  ].map((code) =>
+    Object.assign(
+      new AggregateError(
+        Array.from({ length: 8 }, () =>
+          Object.assign(new Error('private leaf'), { code: 'EPIPE' }),
+        ),
+        'private branch',
+      ),
+      { code },
+    ),
+  );
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  diagnostic.enter('private-probe-execution');
+
+  const projection = diagnostic.snapshot(new AggregateError(branches, 'private graph')).error;
+
+  expect(projection.nodes).toBe(32);
+  // Three complete branches, then three leaves of branch four exhaust the node budget.
+  expect(projection.root.children?.slice(0, 4).map((node) => node.code)).toEqual([
+    'EACCES',
+    'EPERM',
+    'EINVAL',
+    'ENOENT',
+  ]);
+  expect(
+    projection.root.children?.[3]?.children?.map((node) => node.code ?? node.truncated),
+  ).toEqual(['EPIPE', 'EPIPE', 'EPIPE', true, true, true, true, true]);
+  expect(projection.root.children?.slice(4)).toEqual([
+    { truncated: true },
+    { truncated: true },
+    { truncated: true },
+    { truncated: true },
+  ]);
+  expect(projection.dropped).toBe(9);
+});
+
+it('reports bounded phase and cleanup loss while still attributing a failure after the trace fills', () => {
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  for (let index = 0; index < 35; index++)
+    diagnostic.enter(index % 2 === 0 ? 'page-attach' : 'online-evaluate');
+  const primary = Object.assign(new Error('private primary'), { code: 'EADDRNOTAVAIL' });
+  diagnostic.fail(primary);
+
+  for (let index = 0; index < 10; index++)
+    diagnostic.cleanup(
+      Object.assign(new Error('private cleanup'), { code: 'EPIPE' }),
+      'control-cleanup',
+    );
+  const report = diagnostic.snapshot(primary);
+
+  expect(report.phases).toHaveLength(32);
+  expect(report.phases.at(-1)).toBe('online-evaluate');
+  expect(report.droppedPhases).toBe(3);
+  expect(report.primary?.root.phase).toBe('page-attach');
+  expect(report.cleanup).toHaveLength(8);
+  expect(report.cleanup.every((projection) => projection.root.phase === 'control-cleanup')).toBe(
+    true,
+  );
+  expect(report.droppedCleanup).toBe(2);
+});
+
+it('classifies cleanup-only failure separately and preserves its first phase through wrapper cleanup', () => {
+  const cleanup = Object.assign(new Error('private close detail'), { code: 'EPIPE' });
+  const failure = new AggregateError([cleanup], 'private cleanup wrapper');
+  const diagnostic = qualificationDiagnostic('00000000-0000-0000-0000-000000000179');
+  diagnostic.enter('control-cleanup');
+  diagnostic.cleanup(cleanup, 'control-cleanup');
+  diagnostic.fail(failure);
+
+  diagnostic.enter('page-cleanup');
+  diagnostic.enter('chrome-cleanup');
+  diagnostic.fail(failure);
+  const report = diagnostic.snapshot(failure);
+
+  expect(report.failureDomain).toBe('cleanup');
+  expect(report.primary?.root.phase).toBe('control-cleanup');
+  expect(report.error.root.phase).toBe('control-cleanup');
+  expect(
+    report.error.root.children?.map((node) => ({
+      code: node.code,
+      phase: node.phase,
+    })),
+  ).toEqual([{ code: 'EPIPE', phase: 'control-cleanup' }]);
 });

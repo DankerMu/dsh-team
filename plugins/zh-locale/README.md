@@ -45,7 +45,17 @@ registry, build, or third-party dependency is needed at runtime.
 
 ## Parent verification commands (giap-vps)
 
-Use the existing executable Chrome path in `CHROME_BIN`:
+Use the trusted Linux amd64 nonroot giap-vps lane with the local default Docker
+daemon, ordinary UID mapping and isolated IPv4 bridge gateway-mode support.
+Leave `DOCKER_HOST` and `DOCKER_CONTEXT` unset; root provisioning rejects daemon
+overrides rather than silently selecting a different context.
+`CHROME_BIN` must point to the executable in the complete pinned
+CfT140.0.7339.82 `chrome-headless-shell-linux64` distribution; no PATH search,
+arbitrary-browser substitute, rootless/userns or silent native fallback.
+The root commands below provision/qualify the verification-only Node24 image
+with open-licensed Debian CJK fonts and a readonly browser distribution mount.
+They do not modify production images, mount host fonts/libraries or alter host
+network/security policy.
 
 ```sh
 pnpm probe:first-run
@@ -53,6 +63,24 @@ PROBE_COMPOSITION_FAULT=missing-plugin pnpm probe:first-run
 PROBE_COMPOSITION_FAULT=wrong-plugin pnpm probe:first-run
 PROBE_COMPOSITION_FAULT=reenabled-notice pnpm probe:first-run
 ```
+
+Chrome naturally reports online on its own stable internal/isolated bridge,
+with no IPv4 default route/gateway or non-loopback IPv6 interface. Raw owned
+Unix-socket relays retain the original application/CDP loopback ports and
+URL/authority/cookie behavior. The real driver/platform endpoint stays on the
+host; no browser online override, notification-disabling workaround or retry
+is used. The host link-local IPv6 positive control waits for usable DAD state
+and connects once within the same five-second budget.
+
+The command prints the private `<tmpdir>/dsh-browser-command-*` invocation
+location: `runtime.json` holds qualified identities, and
+`qualification.failure.json` holds bounded closed failure phases/codes/causes.
+Each launch also has `chrome.receipt.json` outside its writable profile and an
+outer `<nonce>.launch.json` pointer. Cleanup/rescue uses these ownership receipts,
+not PID-only files, and retires the container before its empty network. Retain
+private paths on cleanup refusal. Native process/CDP integration and
+Playwright platform UI (`pnpm test:ui`) are separate lanes, not isolation proof.
+`--help` prints usage only and does not provision/qualify this runtime.
 
 To exercise preservation in the same owned instance **before cleanup**:
 
@@ -146,15 +174,16 @@ model-selection projection changes if needed; API-only selection is not proof
 that the composer control works. Assert no `/api/session/prompt` request occurs.
 The parent owns this independent UI exercise and the API three-cycle regression.
 
-## Verification status
+## Verification contract
 
-Parent verification on giap-vps (DSH 0.2.0-rc.2, Node 24.13.1, Chrome 140):
-the root first-run probe passed on a fresh non-loopback English-language browser
-and on reload, with Chinese controls, no Notice, successful marker type/clear,
-and no console errors. The configured-model run passed General settings and
-selection of both fixture models without a prompt request. All three documented
-composition fault cases returned harness-inconclusive rather than success.
-These results do not establish production image population or target Ubuntu 22.04 behavior.
+Use the root first-run probe with DSH0.2.0-rc.2, Node24.13.1 and pinned CfT140.
+Require both fresh non-loopback entry and reload: readable Chinese controls,
+no Notice, successful marker type/clear and zero console errors. The optional
+configured-model exercise must retain General settings and select both fixture
+models without a prompt request. All three documented composition faults must
+return harness-inconclusive rather than success. Retain actual screenshots and
+bounded failure evidence; diagnostic success is not final full-suite evidence
+or production-image population/Ubuntu22.04 qualification.
 The package has no branching application logic to unit-test without mock-wiring;
 the real pinned browser/probe boundary is the verification oracle. The existing
 JS lint and dependency checks include `plugins/`, with browser globals declared

@@ -9,12 +9,18 @@ Starts one dsh-team-prefixed Web instance from images/dsh-user, exchanges the
 launch token with node:http Host, drives the real UI, prints HTTP/WS paths for
 homepage / new Session / message / running / complete, and samples HTTP, WS,
 and state-file channels across three real task cycles.
-The verification browser is launched with --no-sandbox because Ubuntu AppArmor
-can reject Chrome user namespaces ("No usable sandbox"). That flag applies only
-to this ephemeral loopback-only Chrome (isolated per-run profile, 127.0.0.1 DSH
-origin). It does not change host sysctl/AppArmor policy or the DSH container
-seccomp/privilege boundary.
-Env: DMXAPI_KEY (required); CHROME_BIN (required executable, no PATH search);
+The root command requires trusted Linux amd64, a nonroot driver and local Docker
+with isolated bridge gateway-mode support. It provisions a verification-only
+Node24/CJK-font image and stable private internal network; same-port Unix-socket
+relays retain the real host endpoint and browser authority/cookie behavior.
+--no-sandbox remains limited to this verification Chrome; no host security-policy
+or DSH seccomp/privilege change, browser retry or silent native fallback occurs.
+Private runtime/qualification-failure receipt locations are printed; timeout and
+signal rescue use per-launch ownership receipts, not PID-only files.
+--help prints usage only; it does not qualify the runtime.
+Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
+Env: DMXAPI_KEY (required); CHROME_BIN (complete pinned CfT140.0.7339.82
+chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120); PROBE_TASK_SECONDS (1-300, default 180).
 EOF
