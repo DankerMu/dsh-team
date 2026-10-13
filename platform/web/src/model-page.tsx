@@ -177,6 +177,7 @@ function useModelEditor() {
       setKey('');
       setCount(null);
       setConfirmation(false);
+      setMessage(action === 'restart' ? `无权限。${FAILURE.restart}` : '无权限');
       setPhase('denied');
       if (status === 401) window.location.assign('/_platform/login');
       return true;
@@ -286,7 +287,7 @@ export function ModelPage() {
       <AdminNavigation page="models" />
       <p id="model-status" role={error !== '' || phase === 'denied' ? 'alert' : 'status'}>
         {phase === 'denied'
-          ? '无权限'
+          ? message
           : phase === 'load'
             ? '加载中…'
             : phase === 'save'

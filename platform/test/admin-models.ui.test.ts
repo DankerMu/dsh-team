@@ -21,7 +21,7 @@ test('administrator saves models without receiving the key and explicitly confir
   page,
   playwright,
 }, testInfo) => {
-  await withAdminUi(playwright, page, async ({ baseUrl, database, target }) => {
+  await withAdminUi(playwright, page, async ({ baseUrl, database, target, admin }) => {
     const api = `${baseUrl}${API}`;
     const restart = `${baseUrl}${RESTART}`;
     const observed = observeAccountUi(page, testInfo, baseUrl, [api, restart]);
@@ -35,6 +35,42 @@ test('administrator saves models without receiving the key and explicitly confir
     await page.getByLabel('上下文窗口 1', { exact: true }).fill('500000');
     await page.getByRole('button', { name: '添加模型', exact: true }).click();
     await page.getByLabel('模型名称 2', { exact: true }).fill('beta');
+    const beforeInvalid = readSettings(database);
+    const auditBeforeInvalid = database.prepare('SELECT * FROM audit_events').all();
+    for (const [label, value, constraint] of [
+      ['默认模型', '', 'valueMissing'],
+      ['上下文窗口 1', '0', 'rangeUnderflow'],
+      ['上下文窗口 1', '1.5', 'stepMismatch'],
+    ] as const) {
+      const control = page.getByLabel(label, { exact: true });
+      if (label !== '默认模型') await control.fill(value);
+      await page.getByRole('button', { name: '保存配置', exact: true }).click();
+      await expect(control).toBeFocused();
+      const invalid = await control.evaluate((node, expected) => {
+        // Exact form labels resolve native input/select controls with constraint-validation state.
+        const field = node as {
+          validity: Record<string, boolean>;
+          validationMessage: string;
+        };
+        return {
+          valid: field.validity.valid,
+          violation: field.validity[expected],
+          message: field.validationMessage,
+        };
+      }, constraint);
+      expect(invalid).toMatchObject({ valid: false, violation: true });
+      expect(invalid.message.trim() === '').toBe(false);
+      expect(observed.actionRequests.filter((request) => request.method === 'PUT')).toEqual([]);
+      expect(readSettings(database)).toEqual(beforeInvalid);
+      expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(auditBeforeInvalid);
+      await testInfo.attach(`models-invalid-${constraint}`, {
+        body: JSON.stringify(invalid),
+        contentType: 'application/json',
+      });
+      await observed.screenshot(`models-invalid-${constraint}`);
+      await page.getByLabel('默认模型', { exact: true }).selectOption('beta');
+      await page.getByLabel('上下文窗口 1', { exact: true }).fill('500000');
+    }
     await page.getByLabel('默认模型', { exact: true }).selectOption('beta');
     const saved = page.waitForResponse(
       (response) => response.url() === api && response.request().method() === 'PUT',
@@ -99,7 +135,21 @@ test('administrator saves models without receiving the key and explicitly confir
     ).toEqual([]);
     expect(observed.actionRequests.filter((request) => request.url === restart)).toHaveLength(2);
     await observed.screenshot('models-restart-unavailable');
-    observed.expectHealthy([{ url: restart, status: 503 }]);
+    database.prepare("UPDATE users SET role='employee' WHERE id=?").run(admin.id);
+    await page.getByRole('button', { name: '重启全部运行中的实例', exact: true }).click();
+    const deniedRestart = page.waitForResponse(restart);
+    await page.getByRole('button', { name: '确认重启', exact: true }).click();
+    expect((await deniedRestart).status()).toBe(403);
+    await expect(page.getByRole('alert')).toContainText('无权限');
+    await expect(page.getByRole('alert')).toContainText('部分实例可能已处理');
+    await expect(page.getByRole('form')).toHaveCount(0);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(observed.actionRequests.filter((request) => request.url === restart)).toHaveLength(3);
+    await observed.screenshot('models-restart-denied');
+    observed.expectHealthy([
+      { url: restart, status: 503 },
+      { url: restart, status: 403 },
+    ]);
   });
 });
 

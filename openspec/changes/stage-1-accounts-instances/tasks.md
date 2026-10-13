@@ -1127,6 +1127,7 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - Resource limits / large input / discovery; Legacy compatibility / examples — selected: linear model rows and existing API body limits, optional positive safe-integer context; existing admin/account/audit pages and static confinement remain intact.
 - Release / packaging / dependency compatibility; Documentation / migration notes — selected: normal build/UI discovery, fullcheck/allUI/source-dist smoke, screenshots/zero unexpected errors, strict fixture, native review and frozen Docker/CI; no dependencies. Any measured diff exception must retain all required proof and be justified before merge.
 - #80实现验证：真实缺页404 RED→编译浏览器保存/刷新通过；49 DOM语义场景、全check1963unit/890integration通过，ModelPage四项覆盖100%，dup2.85%。全UI29/29通过，真实GET/PUT无密钥回显、空输入保留数据库密钥、restart空集合200/服务缺失503、撤销401和降权403无设置/审计变化。加载/500仅为精确受控失败，重试读取真实GET；成功API不替换。401浏览器导航使旧响应体失效，保留原失败日志，改为先捕获真实服务端拒绝再原样交付，未放宽生产判据。独立源码/dist实际浏览器保存/刷新通过，零console错误，截图已检查；最终review/Docker/CI仍为合并门禁。
+- #80审查修复第1轮：确认restart403可能发生在部分实例已停止之后，拒绝页保留无权限及固定部分处理提示，但不恢复表单或重试；新增语义RED（只有无权限）→GREEN。真实浏览器补充默认未选、context0/1.5的实际保存点击、原生validity/提示/焦点、零PUT与设置/审计不变、纠正后成功保存；保存前密钥在截图中保持遮罩。真实restart403拒绝页截图已核验。修复后完整check1964unit/890integration、50DOM四项覆盖100%、dup2.85%，全UI29/29及源码/dist烟测通过。原始失败与审查/裁定保留于`.run/issue80/`；最终提交仍需精确Docker/CI。
 
 ## 16. 权限三档（任务包 1.13）
 

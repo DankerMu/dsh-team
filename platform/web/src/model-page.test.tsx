@@ -40,12 +40,12 @@ async function selectDefault(view: HTMLDivElement, value: string) {
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }
-async function savedPage(items: unknown = []) {
+async function savedPage(items: unknown = [], status = 200) {
   const request = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(receipt())
     .mockResolvedValueOnce(receipt({ ...CONFIG, runningInstances: 3 }))
-    .mockResolvedValueOnce(receipt({ items }));
+    .mockResolvedValueOnce(receipt({ items }, status));
   const context = await render(request);
   await settleSubmit(context.view);
   await click(context.view, '重启全部运行中的实例');
@@ -333,3 +333,18 @@ it.each([
     expect(view.textContent).not.toContain('全部已就绪');
   },
 );
+
+it('retains partial restart guidance when current authority is lost without restoring controls', async () => {
+  const { view, request } = await savedPage([], 403);
+  await draft(view, '#model-key', SECRET);
+  await click(view, '确认重启');
+  const alert = element(view, '[role="alert"]', HTMLElement);
+  expect(alert.textContent).toContain('无权限');
+  expect(alert.textContent).toContain('部分实例可能已处理');
+  expect(view.querySelector('form')).toBeNull();
+  expect(view.querySelector('dialog')).toBeNull();
+  expect(view.innerHTML.includes(SECRET)).toBe(false);
+  expect(request).toHaveBeenCalledTimes(3);
+  await settle();
+  expect(request).toHaveBeenCalledTimes(3);
+});
