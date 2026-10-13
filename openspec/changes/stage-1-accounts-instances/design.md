@@ -204,6 +204,8 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - The expected review fault is distinct from a failed originating assistant request: keep #84's complete-history/failed-attempt rejection intact. Do not globally weaken that predicate, retry until a review allows, raise production review timeouts or treat a translated rejection reason as technical-failure identity.
 - Qualification covers missing/bypassed review, mismatched identity/route, unexpected approval on allow, wrong injected-failure attribution and premature effect. If the real healthy review falls back, preserve the first failure and diagnose actual protocol/timeout/decision rather than repeating it to obtain green. Update Open Questions fourth item with observed behavior only; qwen3.6 remains production integration.
 
+#85 验证器实测边界：生产门禁在await downstream后才发起审查，工具pre-execute中间返回不是最终门禁完成。原生有界追踪证实旧observer提前释放关联；现在关联保留至tools/result，以真实approval/asked或tools/execute记录第一次门禁结果。测试插件安装与真实重启在浏览器创建前完成，整段员工UI仍从首导航连续收集错误；不清空错误数组或忽略错误。初次末端浏览器错误的具体类别未保留，不能追溯声称根因已证实；更正后的完整运行零错误。
+
 扩展点实测（非功能验收）：giap-vps 运行 `274d06c7-b9bf-4f35-b962-1fa7ab858d1d`，自定义 `auto-review` catalog/default 与新 Session 的 `permissions.currentValue` 一致；缺少权限服务时 required agent-loop 未激活、启动 exit1、未输出 Web 就绪。尚不代表模型审查、审批 UI 或委派行为已验证。
 
 ### 14. 办公 Agent
@@ -257,7 +259,7 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - **目标机 Ubuntu 22.04 上 shell 沙箱的最终确认。** VPS 已验证“钉定 Moby 默认 seccomp、零额外安全放宽”，配置和调用方式见 `images/seccomp/`；删除额外放宽项的集合为空，不虚构删除试验。移除 Landlock syscall allow 的临时更严策略使真实工具报告 `SANDBOX_UNAVAILABLE`，作为独立负对照。项目方仍须在 Ubuntu 22.04 执行同一探针并验证显式交付策略；若不可用，记录各级失败原因并交项目方确认，不能自动降为无 shell 沙箱。
 - **DSH 接口和运行中任务信号已由任务包 1.1 确认。** 实际 UI 观察到 `/api/session/create`、`/api/session/prompt` 等 HTTP 路径及 WS `/api/remote.mux`；采用 `POST /api/session/list` 的 `result.value.items[].running`，三次真实任务均观察到 `true → false`。协议、未知状态处理和观测限制见决定 9；完整阶段路径清单由 `pnpm probe:dsh-api` 输出，不采用 F13 退路。
 - **首次进入已由任务包 1.2 验证。** 工作区采用上述 `storages/workspace.json`；中文及无公告采用 `plugins/zh-locale/` 和其 canonical roster patch（见决定 10、12）。项目方授权扩大机制而非降低要求；非 loopback 首次进入、刷新、General 设置和两个配置模型的 UI 切换均通过，缺失/错误插件及恢复公告组件的反例被拒绝。`instance-lifecycle` 原验收要求保留；生产镜像预置和受管配置接线仍由 #27/#29 实现。
-- **Auto review 在开发模型上是否可用。** 任务包 1.13 验证；不可用时 Auto 档暂时等同人工批准。
+- **Auto review 在开发模型上已验证可用（#85，2026-10-13）。** 钉定DSH与`deepseek-v4.1-flash`在运行`194d50a6-4a53-478f-a689-da203592a2d8`中，普通工作目录写入的真实审查流完整返回allow，原生工具成功且完整回合无询问、文件精确字节匹配。另一个真实Agent调用只在其审查边界注入技术不可用，原生退回人工询问，批准前无文件、实际UI批准后才写入；这不是自然provider故障或模拟成功审查。浏览器从首导航到结束零错误，资源独立清单为空。生产权限实现/超时/重试策略未改；qwen3.6仍留生产联调。
 - **`qwen3.6` 上的工具调用、子 Agent 委派、Auto review。** 留到生产联调，本阶段不处理。
 
 ## Issue #4 implementation boundary

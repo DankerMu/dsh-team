@@ -1165,7 +1165,7 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - [x] 16.1 在钉定发行版验证并交付三档执行插件 `plugins/permission-tiers/`，不改 DSH 源码：人工逐次询问，Auto 模型审查/不可用询问，Yolo 不询问；设计决定13登记具体标识、原生 Session 切换入口和发行版限制。插件随镜像离线、可信加载；缺失/损坏不得让 Agent 静默启动。验证：真实 DSH native/PTC/同进程委派工具及文件副作用、批准/拒绝、Auto 协议失败与取消、UI截图及零新增 console error；确定性协议服务不冒充真实开发模型。
 - [x] 16.2 受管覆盖层从 `settings.defaultPermissionTier` 生成唯一三档权限表/默认档和插件依赖，迁移全部生产与测试调用方。验证：`pnpm test:docker`——默认 Yolo 新 Session 是 Yolo；人工批准和 Auto 各自重启后新 Session 对应新默认，既有 Session 保留选择，两个 Session 切档互不影响；员工修改默认/插件副本不能覆盖受管策略。
 - [x] 16.3 人工批准档和 Yolo 档的行为。验证：`pnpm test:model`——人工批准档下写文件前出现询问，同意后写入、拒绝后文件不存在；Yolo 档下写入且没有询问；在同一实例的两个 Session 里设不同档位互不影响（规格“人工批准档”“Yolo 档”“三档可选并按 Session 切换”）。
-- [ ] 16.4 Auto 档的行为。验证：`pnpm test:model`——在开发模型上审查可用时，普通写文件被放行且没有询问；审查不可用时退为询问。把在开发模型上观察到的结果写进 `design.md` Open Questions 第四条（规格“Auto 档”）。
+- [x] 16.4 Auto 档的行为。验证：`pnpm test:model`——在开发模型上审查可用时，普通写文件被放行且没有询问；审查不可用时退为询问。把在开发模型上观察到的结果写进 `design.md` Open Questions 第四条（规格“Auto 档”）。
 
 Suggested fixture level: expanded - 权限执行门禁、插件失效关闭、Session 持久与委派语义、镜像可信交付；原 compact 假设已被发行版实测否定
 Minimal mergeable slice: #83 交付完整三档插件和默认配置接线（16.1–16.2）；#84/#85 保留真实开发模型上的16.3/16.4验收及必要插件修正。不能以默认 Auto 标签已出现代替实际模型门禁。
@@ -1213,6 +1213,8 @@ Verification order: fixture review and strict OpenSpec → evidence-judge known-
 - Documentation / migration notes — selected: observed real Auto result in design Open Questions fourth item; injected fault labeled explicitly, qwen3.6 excluded, necessary critical-path corrections enter the deferred human-review ledger.
 
 Execution order: fixture review/strict validation → qualify review-provenance judge against missing/mismatched/bypassed/recovered-failure controls → genuine healthy Auto call plus operation-scoped unavailable fallback in actual browser → checks and expanded cross-review → exact reviewed-head trusted model/full Docker/CI. Only a demonstrated production defect permits plugin/image/overlay changes; no acceptance reduction or fake successful review.
+
+验证记录（#85）：`e0a7206d1cd7d70945129e1611cd863be3aacddd`在giap-vps执行完整真实模型路径通过，1/1、suite64.25s、runner72.839s，独立四类Docker清单为空。真实Auto审查forwarded/completed/stop/allow后无询问写入精确字节；scoped unavailable为未转发的技术故障，原生pending时无文件，实际允许后同call完成写入，浏览器错误0。已有#82/#84路径全部保留；36个判据控制通过。初始missing-review已用原生trace确认并修复observer寿命，不改生产门禁；此前浏览器健康失败完整保留，预安装/重启移到浏览器创建前后通过，不将未知旧错误归因伪装成已证实。最终冻结head检查、扩展review及可信model/fullDocker/CI仍为合并门禁。
 
 ## 17. 两个办公 Agent（任务包 1.15）
 
