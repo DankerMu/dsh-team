@@ -216,6 +216,21 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 Verification reuses real image/instance startup and native `agentPresets/list` through the authenticated gateway; no test-side preset injection, fake registry, model call or browser prerequisite. Assert exact custom ID/name and no broken diagnostic while original presets/default survive. Whole-manifest equality in the seed oracle is incidental; retain behavioral seed integrity/copy-up/protection/reuse checks and validate the intended bundle registration/artifacts instead. Update the existing complete-roster managed-policy expectation for the newly shipped preset, preserving its policy checks over every preset.
 
+#87 extends those same rows and intentionally changes the fresh-profile registry default to office-general. The native preset schema has no version/enabled/skills/tools keys: use the supported carriers below, not a duplicate catalog.
+
+| Required field                       | Canonical carrier                                               | Evidence                                                       |
+| ------------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------- |
+| id / Chinese name / responsibilities | preset config.id / name / description                           | native roster and definition checker                           |
+| instructions                         | scoped dsh-persona prefix                                       | deployed definition checker and active child inventory         |
+| associated Skills                    | scoped native skill-office and skill-filesystem providers       | scoped catalog and successful skill reads                      |
+| allowed tools                        | explicit preset tool-plugin rows                                | declared set plus effective leased-scope schemas               |
+| version                              | canonical office-agents package version, shared by both presets | installed bundle metadata checked for each preset              |
+| enabled                              | explicit declaration disabled:false                             | native plugin inventory enabled state and healthy registration |
+
+Use the installed `dsh-skill-office` provider with `cli:false` for this Python/python-docx image; its office-docx workflow is reused, not copied. Its PPTX/XLSX catalog entries do not add specialist Agents or establish those formats' production acceptance. Add one actual bundled Chinese official-writing skill for notice/request/material structure, not another DOCX implementation. Skill source delivery precedes the complete seed snapshot and preserves uid1001 traversal; required skill catalog/body checks must reject missing delivery.
+
+Office-general understands, selects capabilities and summarizes; its explicit tools include workspace file operations, shell, skill loading, file delivery and subagent delegation. Office-writer drafts Chinese notices/requests/explanations and has file/shell/skill/delivery tools. Both omit network search/fetch; RAGFlow tools remain stage2. Existing managed-policy observation is extended for these real scoped capabilities instead of introducing a parallel observer. Native selector and no-preset Session creation prove the default; explicit writer creation proves binding. The metadata check runs through the existing Docker acceptance entry, using the installed release's YAML reader, without a new dependency or production registry.
+
 ### 15. 平台前端
 
 `platform/web/` 是一个 React 18 加 Vite 的工作区包，构建为静态文件，由平台在 `/_platform/` 下提供。页面：登录、注册、改密码、等待页、管理后台（账号、实例、模型配置、运行参数、审计）。第一个界面 PR 同时补上 Playwright 基线和验证矩阵的界面行（`constraints.yaml` 里登记的延后项到此解除）。

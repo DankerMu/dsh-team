@@ -1242,6 +1242,17 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - 实测：5527046 test-first 在真实原生选择器因缺少 office-general 为 RED；2a8b971 的 COPY 新目录0644导致 uid1001 EACCES，独立最小构建 stat/read 确诊。9484b45 预建可遍历目录后，新实例选择器与四项既有镜像/种子验证5/5 GREEN（suite53.12s，runner60.559s），office-general/综合办公无 broken，默认仍为 standard，四类独立资源清单为空。完整最终 SHA Docker/CI 另为合并门禁。
 - Full-suite c2fb9c7 exposed a shared verifier contract gap: managed-policy and model-refusal stopped DSH because the observer rejected the new healthy preset's empty tool inventory. Bounded native diagnostic de10c8d confirmed office-general returned a valid empty array in both paths; the parser also rejected it. Repair both consumers to accept empty arrays while preserving array/element validation, explicit required tools for capable presets, complete roster, forbidden-network-tool and custom read-limit checks. Never add dummy tools or omit office-general from observation. A semantic parser RED→GREEN and malformed/missing-required/forbidden-tool controls qualify this boundary.
 
+### Issue #87 risk/evidence map (task 17.2 only)
+
+- Expanded; Public API / CLI / script entrypoint and Legacy compatibility / examples selected: actual native roster, default Session binding and metadata checker; preserve explicit-standard callers and existing built-in IDs.
+- Auth / permissions / secrets and Security / injection / untrusted input selected: only declared office tool capabilities, no web_search/web_fetch, existing managed overlays/gates apply to all presets including writer; no model secrets in metadata evidence.
+- Serialization / parsing / format compatibility and Release / packaging / dependency compatibility selected: pinned native persona/skills/tool contracts, bundle-level version and native Loader enabled state, no fabricated schema fields. Reuse published office-docx; no runtime installer or new dependency.
+- File IO / path safety / overwrite and Data loss / partial write / rollback selected: actual bundled format skill copied before immutable seed, ordinary fresh-volume copy-up, existing volumes not overwritten.
+- Resource limits / large input / discovery and Error handling / rollback / partial outputs selected: reuse bounded scoped leases, native catalog/load, owned Docker/browser cleanup and exact-head full-suite proof.
+- Documentation / migration notes selected: eight-field mapping, default cutover, explicit tool lists, Python-only Office support, critical-image human review deferred to Epic end. Concurrency / shared state not selected: no new stateful production service.
+- Required evidence: native selector has both exact Chinese names with office-general sole default; omitted preset binds general, explicit writer binds writer. Deployed metadata script checks all eight fields; both actual scopes expose required tools and associated skills with readable bodies; missing/invalid metadata or delivery and forbidden tools are rejected. Existing seed and managed-policy restart proof plus full checks, expanded review and final Docker/model/CI remain mandatory.
+- Non-goals: other eight Agents, per-preset management UI, RAGFlow, document rendering, new model/provider policy, existing-volume upgrade migration, #88/#89 actual DOCX/delegation acceptance.
+
 ## 18. 部署骨架（任务包 1.16）
 
 依赖：第 12、14、15 组。
