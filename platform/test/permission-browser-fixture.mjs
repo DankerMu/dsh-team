@@ -378,7 +378,40 @@ async function runApprovalScenario(context, scope, action) {
   await persist();
 }
 
-async function persistFailure(error, browser, web, control, report, evidenceDirectory, persist) {
+// Only closed diagnostics leave the page; normalization never decides approval.
+function pendingWriteTargetExpression(expectedBasename) {
+  return `(() => {
+    const expectedBasename=${JSON.stringify(expectedBasename)};
+    const innerText=document.body.innerText;
+    const innerTextExact=innerText.includes(expectedBasename);
+    try {
+      const textContent=document.body.textContent ?? '';
+      const stripFormat=(text)=>text.replace(/\\p{Cf}/gu,'');
+      return {
+        innerTextExact,
+        textContentExact:textContent.includes(expectedBasename),
+        innerTextFormatStripped:stripFormat(innerText).includes(expectedBasename),
+        textContentFormatStripped:stripFormat(textContent).includes(expectedBasename),
+        approvalPanelCount:Math.min(document.querySelectorAll(${JSON.stringify(PANEL)}).length,1000000),
+        toolTargetSurfaceAvailable:false,
+        diagnosticsUnavailable:false
+      };
+    } catch {
+      return {innerTextExact,diagnosticsUnavailable:true};
+    }
+  })()`;
+}
+
+async function persistFailure(
+  error,
+  browser,
+  web,
+  control,
+  report,
+  evidenceDirectory,
+  persist,
+  targetExpression,
+) {
   // Fixed classifications only: raw exceptions may contain transport credentials.
   report.status = 'FAIL';
   report.failure =
@@ -391,6 +424,18 @@ async function persistFailure(error, browser, web, control, report, evidenceDire
       await captureSettledScreenshot(browser.page, join(evidenceDirectory, 'failure.png'));
     } catch {
       report.failureScreenshotUnavailable = true;
+    }
+    if (report.pendingAssertion?.id === 'pending-write-target' && targetExpression) {
+      // A later observation, never a replacement for the original failed operands.
+      const later = {
+        screenshotSettled: report.failureScreenshotUnavailable !== true,
+      };
+      report.pendingWriteTarget.afterFailureScreenshotAttempt = later;
+      try {
+        later.snapshot = (await evaluate(browser.page, targetExpression)) ?? { unavailable: true };
+      } catch {
+        later.snapshot = { unavailable: true };
+      }
     }
   }
   if (web) {
@@ -418,7 +463,7 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
     consoleErrors: [],
     screenshots: [],
   };
-  let browser, profile;
+  let browser, profile, context;
   const persist = () =>
     writeFile(join(evidenceDirectory, 'evidence.json'), JSON.stringify(report, null, 2), {
       mode: 0o600,
@@ -480,7 +525,7 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
       report,
       evidenceDirectory,
     );
-    const context = { browser, control, rpc, roots, report, evidenceDirectory, persist };
+    context = { browser, control, rpc, roots, report, evidenceDirectory, persist };
     for (const scope of ['root', 'delegate'])
       for (const action of ['reject', 'allow', 'cancel'])
         await runApprovalScenario(context, scope, action);
@@ -501,7 +546,16 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
     });
   } catch (error) {
     await retainPageRequestFailure(browser?.page, join(evidenceDirectory, 'startup.png'));
-    await persistFailure(error, browser, web, control, report, evidenceDirectory, persist);
+    await persistFailure(
+      error,
+      browser,
+      web,
+      control,
+      report,
+      evidenceDirectory,
+      persist,
+      context?.pendingWriteTargetExpression,
+    );
     throw new Error('ui-oracle-failed-see-evidence', { cause: error });
   } finally {
     try {
@@ -710,15 +764,18 @@ async function observePendingApproval(context, call, label) {
   );
   // Released ApprovalPanel's Tool-owned detail slot is optional. The write
   // target is rendered in the actual tool timeline, not inside that panel.
+  const targetExpression = pendingWriteTargetExpression(call.path.split('/').at(-1));
+  const targetSnapshot = await evaluate(browser.page, targetExpression);
+  report.pendingWriteTarget = { originalRead: targetSnapshot ?? { unavailable: true } };
+  context.pendingWriteTargetExpression = targetExpression;
   observeAssertion(
     'pending-write-target',
-    await evaluate(
-      browser.page,
-      `document.body.innerText.includes(${JSON.stringify(call.path.split('/').at(-1))})`,
-    ),
+    targetSnapshot?.innerTextExact,
     true,
     'native tool timeline must identify this exact pending write',
   );
+  delete report.pendingWriteTarget;
+  delete context.pendingWriteTargetExpression;
   const pending = control({ op: 'status' });
   observeAssertion(
     'pending-file-absent',
