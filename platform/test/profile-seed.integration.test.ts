@@ -51,12 +51,6 @@ function observations() {
     seed,
     seedAfter: seed,
     metadata,
-    webManifest: {
-      name: 'dsh-profile-web',
-      private: true,
-      dependencies: {},
-      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
-    },
     peerVersion: '0.2.0-rc.2',
     rootConfig: '[]\n',
     patch: '[]\n',
@@ -231,7 +225,6 @@ describe('profile seed observed-behavior oracle', () => {
   it.each([
     { effectiveUid: 0 },
     { peerVersion: '^0.2.0-rc.2' },
-    { webManifest: { dsh: { profile: { bundles: [] } } } },
     { rootConfig: '- name: preactivated-plugin\n' },
     { patch: '- name: duplicate-locale\n' },
     { workspace: '' },

@@ -1,0 +1,12 @@
+- insert:
+    - id: preset-office-general
+      name: "@deepseek-ai/dsh-agent-preset"
+      config:
+        id: office-general
+        name: 综合办公
+        description: 协助处理日常办公事务
+        plugins:
+          - id: persona
+            name: "@deepseek-ai/dsh-persona"
+            config:
+              prefix: 请用中文协助处理日常办公事务。

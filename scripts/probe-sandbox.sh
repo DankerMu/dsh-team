@@ -143,7 +143,8 @@ echo "probe-sandbox: run_id=${run_id} image=${image} workdir=${workdir}"
 image_owned=1
 docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
   --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
-  --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" "${repo_root}/images/dsh-user"
+  --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
+  --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user"
 write_custom_seccomp
 
 first_usable=""

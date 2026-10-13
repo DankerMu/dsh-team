@@ -39,6 +39,20 @@ COPY --from=zh-locale --chown=dsh:dsh --chmod=0644 \
   package.json index.js client.js cordis.patch.yml \
   /data/home/profiles/web/node_modules/@dsh-team/zh-locale/
 
+# Bundle registration is an image default, below the employee and managed patch layers.
+COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
+  package.json cordis.patch.yml \
+  /data/home/profiles/web/node_modules/@dsh-team/office-agents/
+RUN node -e 'const fs = require("node:fs"); \
+  const profile = process.env.DSH_HOME + "/profiles/web"; \
+  const bundle = require(profile + "/node_modules/@dsh-team/office-agents/package.json"); \
+  if (bundle.peerDependencies["@deepseek-ai/dsh"] !== "0.2.0-rc.2") throw new Error("office-agents DSH peer mismatch"); \
+  const path = profile + "/package.json"; \
+  const manifest = JSON.parse(fs.readFileSync(path, "utf8")); \
+  manifest.dsh.profile.bundles.push(bundle.name); \
+  fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");' \
+  && dsh --profile web --dump-default-config >/dev/null
+
 RUN installed="$(dsh --version)" \
   && peer="$(node -p 'require(process.env.DSH_HOME + "/profiles/web/node_modules/@dsh-team/zh-locale/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
   && if [ "$installed" != "$peer" ]; then \

@@ -373,6 +373,8 @@ function runImageLifecycle(
       `zh-locale=${join(repositoryRoot, 'plugins/zh-locale')}`,
       '--build-context',
       `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
+      '--build-context',
+      `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
       // Keep the primary context narrow: no repository-root files or secrets.
       join(repositoryRoot, 'images/dsh-user'),
     ];
