@@ -36,6 +36,8 @@ import {readFileSync,writeFileSync,unlinkSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 const made=spawnSync('/usr/bin/python3',['-c',${JSON.stringify(make)}],{encoding:'utf8',timeout:10000});
 if(made.status!==0)throw new Error('Parser qualification setup failed');
+// Model-writable Python modules must not replace the image-owned parser.
+writeFileSync('/data/work/docx.py', "raise RuntimeError('workspace parser shadow')\\n");
 const observe=()=>{
   const r=spawnSync(process.execPath,['--input-type=module','-e',${JSON.stringify(officeDocxReadScript(notice.path))}],{encoding:'utf8',timeout:15000,maxBuffer:65536});
   if(r.status!==0)throw new Error('Parser qualification failed');
