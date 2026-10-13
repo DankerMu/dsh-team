@@ -183,6 +183,15 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 - Verification：`pnpm check`、strict OpenSpec、同一冻结 head 的 giap-vps 完整 `pnpm test:docker` 和 CI；父级独立故障对照覆盖门禁未安装、批准被绕过、Auto 失败被放行，恢复后真实工具验证重新通过。
 - Containment：权限插件/覆盖层成套交付；失败阻止 Agent 启动或工具执行，不修改历史为 Yolo。回滚必须同时回滚镜像与覆盖层，不在生产保留双实现/兼容开关。关键路径人工逐行审查按用户决定记入 Epic 末尾清单。
 
+**Issue #84 real-provider acceptance boundary**
+
+- Extend #82's real administrator configuration → fresh employee → native DSH browser/tool path and invocation-owned cleanup; reuse #83's UI tier/session controls, not its deterministic provider or control-server facts. No model-route replacement, fabricated tool calls, harness-created expected files, or new credential/CI channel.
+- Correlate native Session history/events by Session, turn, tool call and approval identity. Observe the complete operation interval, including events while another Session is selected. A final screenshot or a timeout with no file cannot prove no-ask or denial.
+- Keep manual Session A's exact request pending while Yolo Session B completes an exact-byte write with zero native approval requests. Return to A, verify unchanged choice/request and absent target, then allow through the actual UI and verify success plus exact bytes. Separately reject a new manual write, observe the correlated native rejection/tool result reaching the Agent and settled turn, and verify target absence.
+- Unexpected extra approvals, incomplete history, wrong Session/call attribution, provider failure or unfinished turns fail visibly; do not silently answer, retry the model, or count a synthetic response as success. Unique explicit prompts request a direct file-writing tool, fixed bytes and no retry after denial.
+- Characterization of existing behavior, not a claimed production repair: qualify the new evidence judge with good history and discriminating premature-write, missing/extra/wrong-owner approval, wrong decision/tool result and unfinished-turn cases. Only a real counterexample justifies plugin/image/overlay repair with its own RED/GREEN. Auto and production qwen3.6 remain outside #84.
+- Preserve #82 credential redaction, exact-head trusted VPS execution, bounded browser/model lifetimes and independent retirement proof; screenshots and sanitized evidence must survive checkout cleanup. No new logging of model credentials or general conversation content.
+
 扩展点实测（非功能验收）：giap-vps 运行 `274d06c7-b9bf-4f35-b962-1fa7ab858d1d`，自定义 `auto-review` catalog/default 与新 Session 的 `permissions.currentValue` 一致；缺少权限服务时 required agent-loop 未激活、启动 exit1、未输出 Web 就绪。尚不代表模型审查、审批 UI 或委派行为已验证。
 
 ### 14. 办公 Agent

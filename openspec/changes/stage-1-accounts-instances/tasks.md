@@ -1190,6 +1190,17 @@ Parent-owned verification order: capture semantic RED through the existing calla
 
 验证记录（#83）：父级真实native write探针先RED（人工档54字节写入却0审批），插件后GREEN（原生批准前无文件、批准后精确字节）。`pnpm check`1397unit/58files、769integration/46files通过，client逐文件覆盖100%、host/review均满足原80%门槛，重复率2.93%。权限专项Docker3/3通过（含永久浏览器用例23.62s）；三默认重启、既有Session、native/PTC/委派、Auto协议错误与取消、ABA/finalguard、卸载与可信交付均走实际DSH。原完整浏览器根/子拒绝、允许、取消6场景在修复与故障恢复两次通过，零新增console errors。首次子UI失败经用户额外一轮授权，CDP确认原生-10只读组件抢在+1审批前，新增严格子范围-20面板驱动原生pending；故障对照只去掉client声明即恢复相同子UI失败。另两个独立host构建副本分别注入人工不询问、Auto技术错误放行，均由真实文件先于授权/0审批判为语义RED，canonical前后GREEN；独立四类Docker资源清单为空。该证据不冒充#84/#85真实模型结果；完整冻结head Docker、review和CI仍是合并门禁。
 
+### Issue #84 risk/evidence map (task 16.3)
+
+- Public API / CLI / script entry; Config / project setup — selected: extend existing `pnpm test:model`, real admin model API/fresh employee and native UI; missing `DMXAPI_KEY` still fails before provisioning. No second verification or credential path.
+- File IO / path safety / overwrite; Auth / permissions / secrets — selected: unique absent-before targets, exact bytes after allow/Yolo, denied target absent after native rejection and settled turn; real provider only, sanitized evidence, no harness writes of expected files.
+- Schema / columns / units / field names; Concurrency / shared state / ordering — selected: exact native Session/turn/call/approval correlation and complete event interval; hold A manual pending while B Yolo completes, then return to unchanged A. Zero asks throughout B, not merely after it.
+- Error handling / rollback / partial outputs; Resource limits / large input / discovery — selected: bounded waits, incomplete evidence and extra approvals fail; no automatic model retry or approval; existing owned-resource cleanup on success/failure and independent inventory. Evidence retained before trusted checkout retirement.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: retain #82 onboarding acceptance and #83 deterministic suite; exact published DSH pin and existing production plugin, no source patch; full same-head Docker suite and trusted model CI on giap-vps.
+- Documentation / migration notes — selected: record actual development-model/UI observations and limits, not production qwen3.6 or Auto results; mark 16.3 only after real proof. Necessary critical-path edits enter deferred Epic-end human review ledger.
+
+Verification order: fixture review and strict OpenSpec → evidence-judge known-good/semantic known-bad/restoration qualification → actual real-provider manual allow/deny, Yolo and pending two-Session isolation with screenshots/zero new browser errors → `pnpm check` → expanded correctness and evidence/security review → exact reviewed-head VPS model/full Docker/CI → merge. Judge controls cannot replace the real provider run; do not invent a failing production baseline when existing #83 behavior is correct.
+
 ## 17. 两个办公 Agent（任务包 1.15）
 
 依赖：第 7、15 组。

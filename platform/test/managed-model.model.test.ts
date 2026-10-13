@@ -24,6 +24,7 @@ import { record } from './container-start-docker-fixture.ts';
 import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
+import { runPermissionModelScenario } from './permission-model-fixture.mjs';
 import { runUserImage } from './user-image-fixture.ts';
 
 it('lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings', async () => {
@@ -86,19 +87,20 @@ it('lets a fresh employee use the administrator model to create exact workspace 
           const marker = `model-proof-${randomUUID()}`;
           const path = `/data/work/${marker}.txt`;
           const expected = `DSH real tool proof ${randomUUID()}`;
-          const observe = (contents: string) =>
+          const observeFile = (file: string, contents: string) =>
             record(
               JSON.parse(
                 gateway.exec(
                   containerId,
                   `import {existsSync,statSync,readFileSync} from 'node:fs';
-const path=${JSON.stringify(path)}, expected=Buffer.from(${JSON.stringify(expected)},'utf8');
+const path=${JSON.stringify(file)}, expected=Buffer.from(${JSON.stringify(contents)},'utf8');
 const exists=existsSync(path);
 const exact=exists && statSync(path).isFile() && statSync(path).size===expected.length && readFileSync(path).equals(Buffer.from(${JSON.stringify(contents)},'utf8'));
 process.stdout.write(JSON.stringify({exists,exact}));`,
                 ),
               ),
             );
+          const observe = (contents: string) => observeFile(path, contents);
           expect(observe(expected)).toEqual({ exists: false, exact: false });
           phase = 'native-browser';
           browser = await openMappedPage({
@@ -133,6 +135,15 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
           expect(observe(`${expected}\n`)).toEqual({ exists: true, exact: false });
           expect(browser.errors.length).toBe(0);
           await captureSettledScreenshot(page, join(evidence, 'completed-task.png'));
+          phase = 'real-permission-tiers';
+          await runPermissionModelScenario({
+            page,
+            origin,
+            cookie: employee.cookie,
+            evidence,
+            observe: observeFile,
+          });
+          expect(browser.errors.length).toBe(0);
           phase = 'evidence';
           await writeFile(
             join(evidence, 'result.json'),
