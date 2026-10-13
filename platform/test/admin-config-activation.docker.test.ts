@@ -68,11 +68,28 @@ it('keeps the running model selector unchanged after save and activates the new 
         };
         const observedSessions = new Set<string>();
         const newSession = async () => {
+          const workspace = await gateway.rpc(employee.cookie, 'workspace/create', {
+            request: { path: '/data/work' },
+          });
+          expect(workspace.created).toBe(false);
+          const workspaceId = record(workspace.workspace).workspaceId;
+          if (typeof workspaceId !== 'string') throw new Error('Missing seeded workspace');
           const created = await gateway.rpc(employee.cookie, 'session/create', {
-            request: { cwd: '/data/work', agentPreset: 'standard' },
+            request: { workspaceId, agentPreset: 'standard' },
           });
           if (typeof created.sessionId !== 'string') throw new Error('Missing fresh Session');
           const sessionId = created.sessionId;
+          const attached = await gateway.rpc(employee.cookie, 'workspace/create', {
+            request: { path: '/data/work' },
+          });
+          expect(attached).toMatchObject({
+            created: false,
+            workspace: {
+              workspaceId,
+              path: '/data/work',
+            },
+          });
+          expect(record(attached.workspace).sessionIds).toContain(sessionId);
           expect(observedSessions.has(sessionId)).toBe(false);
           observedSessions.add(sessionId);
           const history = await gateway.history(employee.cookie, sessionId);
