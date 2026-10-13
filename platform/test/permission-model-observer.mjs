@@ -72,6 +72,7 @@ export function apply(ctx) {
   ctx.on(
     'tools/execute',
     async (exec, next) => {
+      if (exec.name !== 'write') return next();
       const tracked = active.get(exec.arguments.file_path);
       if (tracked?.exec === exec) nativeGate(tracked, 'allow');
       return next();
@@ -79,6 +80,7 @@ export function apply(ctx) {
     { prepend: true },
   );
   ctx.on('tools/result', (exec) => {
+    if (exec.name !== 'write') return;
     const path = exec.arguments.file_path;
     if (active.get(path)?.exec === exec) active.delete(path);
   });

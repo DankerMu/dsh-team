@@ -8,5 +8,5 @@ export declare function runPermissionModelScenario(input: {
   evidence: string;
   observe: (path: string, contents: string) => Record<string, unknown>;
   model: string;
-  prepareAuto: () => Promise<AutoReviewObserver>;
+  reviewObserver: AutoReviewObserver;
 }): Promise<void>;

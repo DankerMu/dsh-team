@@ -30,10 +30,9 @@ export async function runPermissionModelScenario({
   evidence,
   observe,
   model,
-  prepareAuto,
+  reviewObserver,
 }) {
   const report = { selections: [], addresses: [], checkpoints: [] };
-  let reviewObserver;
   try {
     attachScopeObserver(page, report);
     // Native Session rows are hidden by the narrow-screen navigation layout.
@@ -194,12 +193,6 @@ export async function runPermissionModelScenario({
     assert.equal((await history(second.sessionId)).tier, 'danger-full-access');
     assert.equal((await history(first.sessionId)).tier, 'approval');
 
-    reviewObserver = await prepareAuto();
-    reviewObserver.observation(); // Requires the actual restarted plugin to have published its state.
-    report.addresses = [];
-    await navigateReady(page, origin, 30000);
-    await waitComposer(page, 30000);
-    await select(first);
     await selectTier(page, 'Auto', join(evidence, 'auto-selected.png'), report);
     const reviewed = await begin(first, 'auto', 'auto-review', 'observe');
     await finish(reviewed, 'unprompted');
