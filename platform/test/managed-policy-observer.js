@@ -65,7 +65,6 @@ function toolNames(schemas) {
     if (typeof schema?.name !== 'string' || schema.name === '') fail();
     names.push(schema.name);
   }
-  if (names.length === 0) fail();
   return names;
 }
 
@@ -127,13 +126,10 @@ async function observePresets(ctx, agentPresets, tools) {
     if (typeof row.broken === 'string' && row.broken !== '') fail();
     const lease = await agentPresets.acquireScope(row.id);
     try {
-      const schemas = tools.schemas(lease.key);
-      if (row.id === 'office-general' && Array.isArray(schemas) && schemas.length === 0)
-        process.stderr.write('DEBUG-86 office-general-native-tools-empty\n');
       presets.push({
         id: row.id,
         description: descriptionOf(row),
-        toolNames: toolNames(schemas),
+        toolNames: toolNames(tools.schemas(lease.key)),
         ...(row.id === CUSTOM_PRESET_ID
           ? { readLimit: effectiveReadLimit(ctx, lease, row.id) }
           : {}),

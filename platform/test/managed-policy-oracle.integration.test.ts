@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   assertManagedPolicyRuntime,
+  parseManagedPolicyRuntime,
   controlEmployeePolicyFailure,
   controlExposesEmployeePolicy,
   type ManagedPolicyRuntimeObservation,
@@ -14,6 +15,51 @@ const EXPECTED: Omit<ManagedPolicyRuntimeExpectation, 'presetIds'> = {
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
 };
+
+it('accepts a tool-less preset alongside independently required built-in tools', () => {
+  const observation = {
+    models: EXPECTED,
+    presets: [
+      { id: 'office-general', description: '综合办公', toolNames: [] },
+      { id: 'standard', description: '', toolNames: ['bash', 'read'] },
+    ],
+  };
+
+  assertManagedPolicyRuntime(observation, {
+    ...EXPECTED,
+    presetIds: ['office-general', 'standard'],
+    retainedTools: { standard: ['bash', 'read'] },
+  });
+
+  expect(parseManagedPolicyRuntime(observation).presets).toEqual([
+    { id: 'office-general', description: '综合办公', toolNames: [] },
+    { id: 'standard', description: '', toolNames: ['bash', 'read'] },
+  ]);
+});
+
+it.each([
+  { reason: 'non-array tools', office: null, standard: ['bash', 'read'] },
+  { reason: 'empty tool name', office: [''], standard: ['bash', 'read'] },
+  { reason: 'non-string tool name', office: [42], standard: ['bash', 'read'] },
+  { reason: 'missing required built-in tools', office: [], standard: [] },
+  { reason: 'forbidden network tool', office: ['web_search'], standard: ['bash', 'read'] },
+])('rejects $reason while permitting genuinely tool-less presets', ({ office, standard }) => {
+  const observation = {
+    models: EXPECTED,
+    presets: [
+      { id: 'office-general', description: '综合办公', toolNames: office },
+      { id: 'standard', description: '', toolNames: standard },
+    ],
+  };
+
+  expect(() => {
+    assertManagedPolicyRuntime(observation, {
+      ...EXPECTED,
+      presetIds: ['office-general', 'standard'],
+      retainedTools: { standard: ['bash', 'read'] },
+    });
+  }).toThrow('Invalid managed policy runtime observation');
+});
 
 it('rejects a live runtime observation that omits the required custom grouped preset', () => {
   const observation = {

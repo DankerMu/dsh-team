@@ -63,7 +63,8 @@ trap 'exit 143' TERM
 
 docker build -t "$image" -f images/dsh-user/Dockerfile \
   --build-context "zh-locale=$(pwd)/plugins/zh-locale" \
-  --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" images/dsh-user
+  --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
+  --build-context "office-agents=$(pwd)/plugins/office-agents" images/dsh-user
 timeout --foreground 90 docker run --name "$container" --user 1001:1001 \
   --security-opt "seccomp=${profile}" \
   --mount "type=bind,src=${driver},dst=/probe/probe-sandbox-bash-tool.mjs,ro" \
