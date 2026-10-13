@@ -77,8 +77,9 @@ code_canonicality:
       - "(V[0-9]+|New|Old|Backup|Temp|Copy|Final|Real|Improved|Refactored|Fixed|Legacy|Deprecated)$"
     enforced_by: ".git-hooks/check-naming.sh (paths) + eslint.config.mjs naming-convention (identifiers)"
   scratchpad_directories:
-    description: "Directories that must never appear in commits"
+    description: "Forbidden directory components; only the configured standard OpenSpec archive component is exempt"
     paths: ["tmp", "scratch", "backup", "_old", "deprecated", "archive", "wip"]
+    managed_archive_pattern: "^openspec/changes/archive/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9]+(-[a-z0-9]+)*/[^/]+(/[^/]+)*$"
     enforced_by: ".git-hooks/check-naming.sh"
 
 size_limits:
