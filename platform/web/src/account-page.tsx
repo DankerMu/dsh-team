@@ -3,6 +3,7 @@ import { PasswordPage } from './password-page.tsx';
 import { WaitPage } from './wait-page.tsx';
 import { AdminPage } from './admin-page.tsx';
 import { AuditPage } from './audit-page.tsx';
+import { ModelPage } from './model-page.tsx';
 
 const LOGIN_FAILURE = '登录失败，请稍后重试。';
 const REGISTRATION_FAILURE = '注册失败，请稍后重试。';
@@ -44,6 +45,7 @@ async function rejectionMessage(response: Response, registration: boolean): Prom
 export function AccountPage() {
   if (window.location.pathname === '/_platform/admin') return <AdminPage />;
   if (window.location.pathname === '/_platform/admin/audit') return <AuditPage />;
+  if (window.location.pathname === '/_platform/admin/models') return <ModelPage />;
   if (window.location.pathname === '/_platform/wait') return <WaitPage />;
   return window.location.pathname === '/_platform/account' ? <PasswordPage /> : <CredentialForm />;
 }
