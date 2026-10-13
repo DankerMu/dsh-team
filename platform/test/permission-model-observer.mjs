@@ -12,16 +12,23 @@ const EVIDENCE = '/data/home/permission-model-observation.json';
 export const name = 'dsh-team-auto-review-observer';
 export const inject = ['llm', 'tools', 'agents'];
 
-function trackedReview(options, active) {
+function trackedReview(options, active, diagnose) {
   // Main Agent requests are never intercepted, including continuation after rejection.
-  if (isAgentLoopRequest(options)) return undefined;
+  if (isAgentLoopRequest(options)) {
+    diagnose('agent-loop');
+    return undefined;
+  }
+  diagnose('non-agent');
   let action;
   try {
     action = JSON.parse(options.messages?.[0]?.content?.[0]?.text);
+    diagnose('parsed');
   } catch {
+    diagnose('unparsed');
     return undefined;
   }
   const tracked = active.get(action?.arguments?.file_path);
+  diagnose(tracked ? 'active-match' : 'inactive');
   if (!tracked) return undefined;
   if (
     action.name !== tracked.exec.name ||
@@ -48,10 +55,15 @@ function observedDecision(text, finishes) {
 export function apply(ctx) {
   const active = new Map();
   let sequence = 0;
-  let state = { nonce: null, overflow: false, reviews: [] };
+  let state = { nonce: null, overflow: false, reviews: [], 'DEBUG-85-review': [] };
   const persist = () => {
     writeFileSync(EVIDENCE + '.pending', JSON.stringify(state), { mode: 0o600 });
     renameSync(EVIDENCE + '.pending', EVIDENCE);
+  };
+  const diagnose = (kind) => {
+    if (state.nonce === null || state['DEBUG-85-review'].length >= 32) return;
+    state['DEBUG-85-review'].push(kind);
+    persist();
   };
   persist();
   ctx.on(
@@ -66,11 +78,13 @@ export function apply(ctx) {
       if (control.mode !== 'observe' && control.mode !== 'unavailable')
         throw new Error('Owned review mode invalid');
       if (state.nonce !== control.nonce)
-        state = { nonce: control.nonce, overflow: false, reviews: [] };
+        state = { nonce: control.nonce, overflow: false, reviews: [], 'DEBUG-85-review': [] };
       const tracked = { exec, control, rows: [] };
       active.set(control.path, tracked);
+      diagnose('pre-execute-entered');
       try {
         const decision = await next();
+        diagnose('pre-execute-returned');
         for (const row of tracked.rows) {
           row.gate = ['allow', 'ask', 'deny', 'cancel'].includes(decision.kind)
             ? decision.kind
@@ -81,6 +95,7 @@ export function apply(ctx) {
         return decision;
       } finally {
         active.delete(control.path);
+        diagnose('active-released');
       }
     },
     { prepend: true },
@@ -88,7 +103,7 @@ export function apply(ctx) {
   ctx.on(
     'llm/stream',
     async function* (options, next) {
-      const tracked = trackedReview(options, active);
+      const tracked = trackedReview(options, active, diagnose);
       if (!tracked) return yield* next();
       if (state.reviews.length >= 8) {
         state.overflow = true;
