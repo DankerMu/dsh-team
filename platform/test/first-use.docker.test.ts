@@ -1,18 +1,15 @@
-import { once } from 'node:events';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { arch, platform, tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { acceptObservation, mappedFlags, mappedRpc } from '../../scripts/probe-mapped-host.mjs';
 import type { MappedHostAcceptResult } from '../../scripts/probe-mapped-host.mjs';
-import { buildApp } from '../src/app.ts';
-import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
-import { createInstanceService } from '../src/orchestrator/index.ts';
-import { inspect, record, startupClient } from './container-start-docker-fixture.ts';
+import { writeSettings } from '../src/db/index.ts';
+import { inspect, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
+import { registerInstanceUser } from './instance-fixture.ts';
+import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-policy-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -158,43 +155,11 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
     () => undefined,
     undefined,
     async (lifecycle) => {
-      // Capture the public origin before constructing its service; never mutate live configuration.
-      const reservation = createServer();
-      reservation.listen(0, '127.0.0.1');
-      await once(reservation, 'listening');
-      const address = reservation.address();
-      if (address === null || typeof address === 'string') throw new Error('Missing browser port');
-      const port = address.port;
-      await new Promise<void>((resolveClose, reject) => {
-        reservation.close((error) => {
-          if (error === undefined) {
-            resolveClose();
-          } else {
-            reject(error);
-          }
-        });
-      });
       const host = 'dsh-team-first-use.invalid';
-      const origin = `http://${host}:${String(port)}`;
-      const base = `http://127.0.0.1:${String(port)}`;
-      const root = dirname(lifecycle.overlayDirectory);
-      const database = openDatabase(join(root, 'first-use-platform.db'));
-      applyMigrations(database);
-      const config = instanceConfig(root, {
-        publicUrl: origin,
-        authority: `${host}:${String(port)}`,
-        userImage: lifecycle.imageId,
-        seccompProfilePath: lifecycle.seccomp,
-        managedConfigDir: lifecycle.overlayDirectory,
-      });
-      const transport = startupClient(lifecycle);
-      const service = createInstanceService({ database, config, client: transport.client });
-      const app = await buildApp(config, database, undefined, undefined, service);
+      const { app, database, base, origin } = await startBrowserPlatform(lifecycle, host);
       const evidence = resolve('.run/issue57', `first-use-${lifecycle.runId}`);
       try {
         await mkdir(evidence, { recursive: true });
-        await service.reconcile();
-        await app.listen({ host: '127.0.0.1', port });
         writeSettings(database, {
           modelBaseUrl: 'http://model.invalid/v1',
           modelApiKey: 'first-use-fixture-not-a-provider-key',

@@ -23,6 +23,7 @@ import {
   typeComposer,
   waitAppReady,
   waitFirstRunInitialized,
+  waitFor,
 } from './probe-dsh-api-ui.mjs';
 import {
   assertCompositionRoster,
@@ -31,6 +32,7 @@ import {
   waitCompositionInitialized,
 } from './probe-first-run-composition.mjs';
 import { verifyPreservation } from './probe-first-run-preservation.mjs';
+import { attachScopeObserver } from './probe-session-address.mjs';
 import {
   collectRequestEvidence,
   disposeRequestEvidence,
@@ -556,6 +558,7 @@ const capturePreservation = async (
   browserMs,
   requests,
   expectedDefault,
+  preserveSessionId,
   errors,
   screenshot,
   first,
@@ -572,6 +575,7 @@ const capturePreservation = async (
       browserMs,
       requests,
       expectedDefault,
+      preserveSessionId,
     );
     if (errors.length) throw new Error(`stage=console error=${tally(errors)}`);
     preservation.screenshot = await captureSettledScreenshot(
@@ -602,6 +606,7 @@ export const acceptObservation = async ({
   expectedRoster,
   preserveModels,
   expectedDefault,
+  preserveSessionId,
   observeSessions = false,
 }) => {
   expectedRoster = await resolveCompositionRoster(composition, expectedRoster);
@@ -617,6 +622,14 @@ export const acceptObservation = async ({
   let failureShot = screenshot;
   let failure;
   try {
+    const scope = { addresses: [] };
+    if (preserveSessionId) {
+      attachScopeObserver(page, scope);
+      // Pinned DSH's native navigation preference only; no model state or Session history is seeded.
+      await page.send('Page.addScriptToEvaluateOnNewDocument', {
+        source: `if(location.origin===${JSON.stringify(origin)})localStorage.setItem('dsh.sessions.current',${JSON.stringify(JSON.stringify({ sessionId: preserveSessionId }))});`,
+      });
+    }
     const sessionSnapshot = observeSessions
       ? observeSessionAdmissions(page, requests, origin, cookie)
       : undefined;
@@ -670,17 +683,28 @@ export const acceptObservation = async ({
       browserMs,
       requests,
       expectedDefault,
+      preserveSessionId,
       errors,
       screenshot,
       first,
       reload,
     );
+    if (preserveSessionId)
+      await waitFor(
+        () =>
+          scope.addresses.some(
+            (address) => address.kind === 'session' && address.sessionId === preserveSessionId,
+          ),
+        browserMs,
+        'preservation-session-transport-address',
+      );
     return {
       ...first,
       ...(beforeSessionObservation ? { beforeSessionObservation } : {}),
       accepted: first.accepted && reload.accepted,
       reload,
       ...(preservation ? { preservation } : {}),
+      ...(preserveSessionId ? { sessionAddressObserved: true } : {}),
     };
   } catch (error) {
     failure = { error };

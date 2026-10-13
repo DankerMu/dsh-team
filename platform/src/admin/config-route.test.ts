@@ -11,50 +11,59 @@ const INTERNAL_ERROR = {
   message: 'Internal Server Error',
 };
 
-it.each(['audit', 'write', 'read', 'corrupt-json', 'corrupt-type', 'corrupt-default'] as const)(
-  'returns safe storage failure and rolls back for %s failure',
-  async (boundary) => {
-    await withApp(async (app, database, lines) => {
-      const { cookie } = await administrator(app, database);
-      const secret = randomBytes(32).toString('hex');
-      if (boundary === 'audit' || boundary === 'write') {
-        database.exec(
-          `CREATE TRIGGER reject_model_save BEFORE INSERT ON ${boundary === 'audit' ? 'audit_events' : 'settings'} BEGIN SELECT RAISE(ABORT, '${secret}'); END;`,
+it.each([
+  'audit',
+  'write',
+  'read',
+  'count',
+  'corrupt-json',
+  'corrupt-type',
+  'corrupt-default',
+] as const)('returns safe storage failure and rolls back for %s failure', async (boundary) => {
+  await withApp(async (app, database, lines) => {
+    const { cookie } = await administrator(app, database);
+    const secret = randomBytes(32).toString('hex');
+    if (boundary === 'audit' || boundary === 'write') {
+      database.exec(
+        `CREATE TRIGGER reject_model_save BEFORE INSERT ON ${boundary === 'audit' ? 'audit_events' : 'settings'} BEGIN SELECT RAISE(ABORT, '${secret}'); END;`,
+      );
+    } else if (boundary === 'read') database.exec('DROP TABLE settings');
+    else if (boundary === 'count') database.exec('DROP TABLE instances');
+    else
+      database
+        .prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
+        .run(
+          boundary === 'corrupt-default' ? 'defaultModel' : 'modelApiKey',
+          boundary === 'corrupt-json'
+            ? `{${secret}`
+            : boundary === 'corrupt-default'
+              ? '"missing"'
+              : 'false',
         );
-      } else if (boundary === 'read') database.exec('DROP TABLE settings');
-      else
-        database
-          .prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
-          .run(
-            boundary === 'corrupt-default' ? 'defaultModel' : 'modelApiKey',
-            boundary === 'corrupt-json'
-              ? `{${secret}`
-              : boundary === 'corrupt-default'
-                ? '"missing"'
-                : 'false',
-          );
-      const before = database.prepare('SELECT * FROM audit_events').all();
+    const before = database.prepare('SELECT * FROM audit_events').all();
 
-      const response = await app.inject({
-        method: 'PUT',
-        url: PATH,
-        headers: jsonRequestHeaders({ cookie }),
-        payload: { ...CONFIG, apiKey: secret },
-      });
-      const read = await app.inject({ url: PATH, headers: { cookie } });
-
-      expect(response.statusCode).toBe(500);
-      expect(response.json()).toEqual(INTERNAL_ERROR);
-      if (boundary !== 'audit' && boundary !== 'write') {
-        expect(read.statusCode).toBe(500);
-        expect(read.json()).toEqual(INTERNAL_ERROR);
-      } else expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
-      expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(before);
-      for (const value of [secret, 'SQLITE', 'no such table', 'reject_model_save'])
-        expect((response.body + read.body + lines.join('')).includes(value)).toBe(false);
+    const response = await app.inject({
+      method: 'PUT',
+      url: PATH,
+      headers: jsonRequestHeaders({ cookie }),
+      payload: { ...CONFIG, apiKey: secret },
     });
-  },
-);
+    const read = await app.inject({ url: PATH, headers: { cookie } });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual(INTERNAL_ERROR);
+    if (!['audit', 'write', 'count'].includes(boundary)) {
+      expect(read.statusCode).toBe(500);
+      expect(read.json()).toEqual(INTERNAL_ERROR);
+    } else {
+      expect(read.statusCode).toBe(200);
+      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+    }
+    expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(before);
+    for (const value of [secret, 'SQLITE', 'no such table', 'reject_model_save'])
+      expect((response.body + read.body + lines.join('')).includes(value)).toBe(false);
+  });
+});
 
 it('preserves body-size and JSON media classifications without echoing secret values', async () => {
   await withApp(async (app, database, lines) => {

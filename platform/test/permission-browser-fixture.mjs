@@ -20,7 +20,7 @@ import {
   waitComposer,
   waitFor,
 } from '../../scripts/probe-dsh-api-ui.mjs';
-import { observeNetwork } from '../../scripts/probe-dsh-api-cdp.mjs';
+import { attachScopeObserver } from '../../scripts/probe-session-address.mjs';
 import {
   disposeRequestEvidence,
   retainPageRequestFailure,
@@ -72,38 +72,6 @@ async function physicalClick(page, query) {
 }
 function exactTextQuery(text, selector = 'button,[role="button"],a,[role="menuitem"]') {
   return `[...document.querySelectorAll(${JSON.stringify(selector)})].find(el => (el.textContent||'').trim()===${JSON.stringify(text)} && el.getBoundingClientRect().width>0)`;
-}
-function addresses(value, found = []) {
-  if (!value || typeof value !== 'object') return found;
-  if (value.kind === 'session' && typeof value.sessionId === 'string')
-    found.push({ kind: value.kind, sessionId: value.sessionId });
-  if (value.kind === 'subagent' && typeof value.childSessionId === 'string')
-    found.push({
-      kind: value.kind,
-      childSessionId: value.childSessionId,
-      parentSessionId: value.parentSessionId,
-      mode: value.mode,
-    });
-  for (const child of Object.values(value))
-    if (child && typeof child === 'object') addresses(child, found);
-  return found;
-}
-function attachScopeObserver(page, evidence) {
-  const consume = (raw) => {
-    try {
-      const value = JSON.parse(raw);
-      evidence.addresses.push(...addresses(value));
-    } catch {
-      /* Non-JSON transport has no address proof. */
-    }
-  };
-  page.on('Network.webSocketFrameSent', (event) => consume(event.response?.payloadData ?? ''));
-  // HTTP addresses are parsed in memory; headers/cookies/tokens never enter evidence.
-  observeNetwork(page, {
-    'Network.requestWillBeSent': (event) => {
-      if (event.request?.postData) consume(event.request.postData);
-    },
-  });
 }
 async function chosenLabel(page) {
   return evaluate(

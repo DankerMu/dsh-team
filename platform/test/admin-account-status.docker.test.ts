@@ -59,7 +59,7 @@ it('disable closes both real DSH sessions and physically retires within five sec
       const first = await open(f.user.cookie);
       const second = await open(secondCookie);
       expect(f.app.getUserActivity(f.user.id).liveCount).toBe(2);
-      const { sessionId, originalHistory } = await persistedSession();
+      const { sessionId, originalHistory } = await persistedSession(f);
       const bytes = Buffer.from([0, 13, 10, 127, 128, 255]);
       exec(
         f.containerId,

@@ -25,8 +25,8 @@ it('saves a safe projection and an actor/source audit without reading audits', a
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toEqual({ ...CONFIG, apiKeyConfigured: true });
-    expect(read.json()).toEqual(saved.json());
+    expect(saved.json()).toEqual({ ...CONFIG, apiKeyConfigured: true, runningInstances: 0 });
+    expect(read.json()).toEqual({ ...CONFIG, apiKeyConfigured: true });
     expect(readSettings(database).modelApiKey === apiKey).toBe(true);
     expect(
       database

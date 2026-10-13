@@ -1,5 +1,11 @@
 /** Ordinary Settings/model UI exercise, only after first-entry + refresh acceptance. */
-import { clickSelector, evalPage, remainingMs, waitFor } from './probe-dsh-api-ui.mjs';
+import {
+  clickSelector,
+  evalPage,
+  remainingMs,
+  waitComposer,
+  waitFor,
+} from './probe-dsh-api-ui.mjs';
 
 const DIALOG = '[role="dialog"][data-shortcut-modal="settings"]';
 const MODEL_TRIGGER = 'button[aria-label^="选择模型"],button[aria-label="请选择模型"]';
@@ -50,12 +56,19 @@ const modelOptions = (page) =>
 })()`,
   );
 
-export const verifyPreservation = async (page, modelNames, ms, requests, expectedDefault) => {
+export const verifyPreservation = async (
+  page,
+  modelNames,
+  ms,
+  requests,
+  expectedDefault,
+  sessionId,
+) => {
   const until = Date.now() + ms;
   const budget = () => remainingMs(until, 'preservation');
   const names = modelNames.split(',').map((name) => name.trim());
-  if (names.length !== 2 || names.some((name) => !name) || names[0] === names[1]) {
-    throw new Error('stage=preservation error=two-distinct-models-required');
+  if (names.length < 2 || names.some((name) => !name) || new Set(names).size !== names.length) {
+    throw new Error('stage=preservation error=distinct-models-required');
   }
   await clickSelector(page, 'button[aria-label="设置"]');
   await waitFor(
@@ -88,6 +101,32 @@ export const verifyPreservation = async (page, modelNames, ms, requests, expecte
     budget(),
     'preservation-settings-closed',
   );
+  if (sessionId) {
+    // Reveal the native selected Session; ungrouped callers may also need their bucket expanded.
+    const openSidebar = 'button[aria-label="打开侧边栏"],button[aria-label="Open sidebar"]';
+    if (await evalPage(page, `Boolean(document.querySelector(${JSON.stringify(openSidebar)}))`))
+      await clickSelector(page, openSidebar);
+    const bucket = '[data-row-key="workspace:"][aria-expanded="false"]';
+    if (await evalPage(page, `Boolean(document.querySelector(${JSON.stringify(bucket)}))`))
+      await clickSelector(page, bucket);
+    const selector = `[data-row-key="session:${sessionId}"]`;
+    await waitFor(
+      () => evalPage(page, `Boolean(document.querySelector(${JSON.stringify(selector)}))`),
+      budget(),
+      'preservation-session-discovery',
+    );
+    await clickSelector(page, selector);
+    await waitFor(
+      () =>
+        evalPage(
+          page,
+          `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-selected')==='true'`,
+        ),
+      budget(),
+      'preservation-session-selected',
+    );
+    await waitComposer(page, budget());
+  }
   await openModelList(page, budget());
   await waitFor(
     async () => {
@@ -147,6 +186,7 @@ export const verifyPreservation = async (page, modelNames, ms, requests, expecte
     selected: names,
     exactModels: listed,
     defaultModel: initiallySelected[0],
+    ...(sessionId ? { sessionId } : {}),
     modelSend: false,
   };
 };
