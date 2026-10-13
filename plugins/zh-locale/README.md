@@ -22,8 +22,9 @@ overlay-only package is not yet established, so these explicit comparisons remai
 the operative guards.
 
 The user-image Dockerfile keeps `images/dsh-user` as its primary build context and
-requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale` and
-`permission-tiers=<repo>/plugins/permission-tiers`. It
+requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale`,
+`permission-tiers=<repo>/plugins/permission-tiers`, and
+`office-agents=<repo>/plugins/office-agents`. It
 initializes the released Web profile with the boot-free
 `dsh --profile web --dump-default-config` command, then copies only `package.json`,
 `index.js`, `client.js`, and `cordis.patch.yml` from that context to
