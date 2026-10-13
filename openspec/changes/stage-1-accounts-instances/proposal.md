@@ -568,3 +568,9 @@
 - Minimal serving companion: add exactly `/_platform/admin` to the existing confined static-page owner and its regression proof; otherwise the requested browser surface cannot load. This is page delivery, not a new API/auth/lifecycle contract. Test harnesses under platform/test are required by task14.9's browser acceptance.
 - Preserve existing login/register/account/wait pages, backend current authorization, destructive-action semantics and privacy. First real account-list response is the authority probe; no new identity endpoint. All four list states, confirmation/cancellation, race cleanup and actual disable/enable/reset effects need DOM and built-browser proof with screenshots.
 - Evidence floor: public-boundary RED before implementation; actual browser→existing API→SQLite mutation/credential outcomes, explicit limited list-state controls, zero unexpected browser errors/external requests, source/dist smoke, full checks/UI and frozen review/Docker/CI. No API substitutes for successful mutation/authorization proof.
+
+## Issue #76 fixture
+
+- Feature, expanded/Critical Construction; task14.11 only, #74/#73 closed. Add the real audit page under the existing administrator shell and read-only audit API; no backend query/schema/mutation changes.
+- Exact served route `/_platform/admin/audit` and existing pathname dispatch are necessary delivery companions. Extract only the actually shared administrator navigation so accounts and audit have one implementation; preserve existing account actions and all prior pages.
+- Required evidence: real browser event/email/time filters and combinations, stable page membership, four list states/retry, current authority, no audit or credential/content side effects, screenshots and zero unexpected errors; DOM stale/date boundaries, source/dist smoke, full checks/UI, expanded review and frozen Docker/CI. No synthetic successful query/filter/pagination/auth evidence.

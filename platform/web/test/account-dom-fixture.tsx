@@ -95,9 +95,64 @@ export function submit(view: HTMLDivElement): Event {
 }
 
 export async function settleSubmit(view: HTMLDivElement): Promise<void> {
-  await act(async () => {
+  await settle(() => {
     submit(view);
-    // Async act drains the fetch/JSON continuations and their resulting React state.
+  });
+}
+
+export function createJsonReceipt(defaultBody: unknown) {
+  return (body: unknown = defaultBody, status = 200): Response =>
+    new Response(JSON.stringify(body), { status });
+}
+
+export async function settle(action?: () => void): Promise<void> {
+  await act(async () => {
+    action?.();
     await Promise.resolve();
+  });
+}
+
+export async function renderSettledAccountPage(
+  page: ReactNode,
+  pathname: string,
+  request: Mock<typeof fetch>,
+) {
+  const rendered = renderAccountPage(page, pathname, request);
+  await settle();
+  return rendered;
+}
+
+export function button(view: HTMLDivElement, text: string): HTMLButtonElement {
+  const found = [...view.querySelectorAll('button')].find((entry) => entry.textContent === text);
+  if (found === undefined) throw new Error(`Missing button ${text}`);
+  return found;
+}
+
+export async function click(view: HTMLDivElement, text: string): Promise<void> {
+  await settle(() => {
+    button(view, text).click();
+  });
+}
+
+export async function draft(view: HTMLDivElement, selector: string, value: string): Promise<void> {
+  await settle(() => {
+    change(element(view, selector, HTMLInputElement), value);
+  });
+}
+
+export function holdResponseBody(response: Response): PromiseWithResolvers<ArrayBuffer> {
+  const body = Promise.withResolvers<ArrayBuffer>();
+  vi.spyOn(response, 'arrayBuffer').mockReturnValue(body.promise);
+  return body;
+}
+
+export async function finishResponseBody(
+  body: PromiseWithResolvers<ArrayBuffer>,
+  rejected: boolean,
+  message: string,
+): Promise<void> {
+  await settle(() => {
+    if (rejected) body.reject(new Error(message));
+    else body.resolve(new ArrayBuffer(0));
   });
 }

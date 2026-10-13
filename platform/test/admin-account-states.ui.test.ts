@@ -5,7 +5,14 @@ import {
   withAccountUi,
   withAccountUiRouteCleanup,
 } from './account-ui-fixture.ts';
-import { ADMIN_UI_PASSWORD, seedAdminUi } from './admin-ui-fixture.ts';
+import {
+  ADMIN_UI_PASSWORD,
+  withAdminUi,
+  holdAdminList,
+  openPendingAdminList,
+  failAdminList,
+  expectPlatformLogin,
+} from './admin-ui-fixture.ts';
 
 for (const authenticated of [false, true]) {
   test(
@@ -42,8 +49,7 @@ for (const authenticated of [false, true]) {
           await expect(page.getByRole('button')).toHaveCount(0);
           await expect(page.getByRole('dialog')).toHaveCount(0);
         } else {
-          await expect(page).toHaveURL(`${baseUrl}/_platform/login`);
-          await expect(page.getByRole('heading', { name: '登录 DSH 团队平台' })).toBeVisible();
+          await expectPlatformLogin(page, baseUrl);
         }
         const status = authenticated ? 403 : 401;
         expect(actionResponses).toEqual([{ url, status }]);
@@ -59,30 +65,12 @@ test('account loading holds a real list request and then displays actual rows', 
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    const { target } = await seedAdminUi(seed, database, page, baseUrl);
+  await withAdminUi(playwright, page, async ({ baseUrl, target }) => {
     const url = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
     const { screenshot, expectHealthy } = observeAccountUi(page, testInfo, baseUrl, url);
     await withAccountUiRouteCleanup(page, async (release) => {
-      const held = Promise.withResolvers<undefined>();
-      await page.route(
-        url,
-        async (route) => {
-          expect(route.request().method()).toBe('GET');
-          held.resolve(undefined);
-          await release.promise;
-          await route.continue();
-        },
-        { times: 1 },
-      );
-
-      const entry = await page.goto(`${baseUrl}/_platform/admin`, {
-        waitUntil: 'domcontentloaded',
-      });
-      expect(entry?.status()).toBe(200);
-      await held.promise;
-      await expect(page.getByRole('status')).toHaveText('加载中…');
-      await expect(page.getByRole('table')).toHaveCount(0);
+      const held = await holdAdminList(page, url, release.promise);
+      await openPendingAdminList(page, `${baseUrl}/_platform/admin`, held.promise);
       await screenshot('admin-loading');
       const loaded = page.waitForResponse((response) => response.url() === url);
       release.resolve(undefined);
@@ -98,8 +86,7 @@ test('synthetic empty receipt exercises only the unfiltered empty rendering bran
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    await seedAdminUi(seed, database, page, baseUrl);
+  await withAdminUi(playwright, page, async ({ baseUrl, database }) => {
     const url = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
     const { screenshot, expectHealthy } = observeAccountUi(page, testInfo, baseUrl, url);
     await withAccountUiRouteCleanup(page, async () => {
@@ -130,8 +117,7 @@ test('real unmatched search has its own state rather than empty or failed accoun
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    await seedAdminUi(seed, database, page, baseUrl);
+  await withAdminUi(playwright, page, async ({ baseUrl }) => {
     const listUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
     const searchUrl = `${listUrl}&search=unmatched%2B%E4%B8%AD%E6%96%87`;
     const { actionResponses, screenshot, expectHealthy } = observeAccountUi(
@@ -165,8 +151,7 @@ test('exact controlled list failure shows retry and recovers through the real ac
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    const { target } = await seedAdminUi(seed, database, page, baseUrl);
+  await withAdminUi(playwright, page, async ({ baseUrl, target }) => {
     const url = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
     const { actionResponses, screenshot, expectHealthy } = observeAccountUi(
       page,
@@ -175,16 +160,7 @@ test('exact controlled list failure shows retry and recovers through the real ac
       url,
     );
     await withAccountUiRouteCleanup(page, async () => {
-      await page.route(
-        url,
-        (route) =>
-          route.fulfill({
-            status: 500,
-            contentType: 'application/json',
-            body: '{"message":"private-list-error"}',
-          }),
-        { times: 1 },
-      );
+      await failAdminList(page, url, 'private-list-error');
       await page.goto(`${baseUrl}/_platform/admin`, { waitUntil: 'networkidle' });
       await expect(page.getByRole('alert')).toHaveText('加载失败');
       await expect(page.getByRole('button', { name: '重试' })).toBeVisible();
@@ -211,8 +187,7 @@ test('real account search and adjacent pages retain exact server membership and 
   page,
   playwright,
 }, testInfo) => {
-  await withAccountUi(playwright, async ({ baseUrl, database, seed }) => {
-    const { target } = await seedAdminUi(seed, database, page, baseUrl);
+  await withAdminUi(playwright, page, async ({ baseUrl, database, seed, target }) => {
     database.prepare('UPDATE users SET created_at=?').run(1_700_000_000_000);
     for (let index = 0; index < 21; index++) {
       const email = `page-${String(index).padStart(2, '0')}@example.com`;

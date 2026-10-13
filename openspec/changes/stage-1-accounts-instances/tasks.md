@@ -978,7 +978,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - [x] 14.8 审计查询接口：只读，带筛选和分页。验证：集成测试——员工请求 403；按邮箱筛选只返回该员工作为操作者或对象的记录；契约文件里审计相关的接口只有查询，管理员可调用的接口没有任何一个返回员工的文件、Session 或对话内容（规格“管理员查询审计”“审计不可经接口修改”“后台不提供员工内容”）。
 - [x] 14.9 后台框架和账号页：后台导航，员工访问后台地址被拒绝；账号列表（搜索、禁用启用、重置密码），区分加载中、空、无匹配、请求失败四种状态，破坏性操作先确认。验证：`pnpm test:ui`——禁用、启用、重置密码各走通一次；四种状态各有用例（请求失败时显示加载失败和重试按钮）。
 - [ ] 14.10 实例页：状态、最近启动时间、最近活动时间、最近一次错误（可展开看日志）、重启、重置配置；四种列表状态；重置前显示“会恢复该用户的 DSH 设置，文件和对话保留”并确认。验证：`pnpm test:ui`——出错的实例能看到日志；重启和重置各走通一次；确认框文案正确。
-- [ ] 14.11 审计页：按事件类型、邮箱、时间范围筛选，分页；四种列表状态。验证：`pnpm test:ui`——三种筛选各走通一次；翻页正确（规格“界面状态完整”由 14.9 到 14.11 共同覆盖）。
+- [x] 14.11 审计页：按事件类型、邮箱、时间范围筛选，分页；四种列表状态。验证：`pnpm test:ui`——三种筛选各走通一次；翻页正确（规格“界面状态完整”由 14.9 到 14.11 共同覆盖）。
 
 Suggested fixture level: expanded - 管理权限、平台会话失效和对实例的破坏性操作
 Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表接口，约 200 行）
@@ -1061,6 +1061,15 @@ Minimal mergeable slice: 14.1 加 14.2（管理员鉴权和只读的账号列表
 - File IO / path safety / overwrite — selected: one exact confined page registration preserves existing asset/traversal/missingbuild behavior; existing web-route regressions plus actualbuilt entry. Config / project setup — not selected: no new environment/dependency/deploy setting; only canonical build/test machinery.
 - Required evidence: tracerRED, four distinct browser list states (synthetic empty response explicitly rendering-only), real search/paging/current-admin denial, cancel no mutation, disable/enable/password-reset actualeffects, safe failures and late completions, screenshots/zero unexpected console-page errors, complete siblings/gates. No mocked successful admin actions.
 - 验证记录（#74）：真实浏览器入口404RED→200；原始全量UI15/15、26.3s通过，真实三项账号变更/会话/密码/审计、取消/单次提交、23账号搜索分页、当前降权403及四列表态和截图均覆盖，observer未变。check1837单测/876集成，62AdminDOM98.21/96.87/100/100%、dup2.96%；独立source/dist真实浏览器严格零requestfailed烟测通过。最初11/15UI定位为已回答GET自abort、未消费PUT204和对话框遮挡背景搜索；真实未读/消费204对照分别ERR_ABORTED/完整0字节，修复响应生命周期而非放宽观察器；降权用真实对话框确认403证明无持久变化。诊断中的两个timeout对照保留为未通过，不冒充验收。字符串email负例按既有API类型改为非字符串，未加新邮箱策略。冻结头review/Docker/CI另附PR。
+
+### Issue #76 risk/evidence map (task14.11 only)
+
+- Public API / CLI / script entry; Auth / permissions / secrets — selected: exact page/nav and audit-API authority, no mutation/content surface; real browser deny/navigation/filter evidence with audit snapshots.
+- Schema / columns / units / field names; Resource limits / large input / discovery — selected: no-total page20 contract, DTO/date-domain/local epoch conversion/inclusive time filters, terminal empty page; DOM boundaries and exact real browser IDs/order.
+- Concurrency / shared state / ordering; Error handling / rollback / partial outputs — selected: latest-attempt body/abort/authority ownership and four states/manualretry; stale completions, safe failures and real controlled-response/retry scenarios.
+- File IO / path safety / overwrite; Legacy compatibility / examples; Release / packaging / dependency compatibility; Documentation / migration notes — selected: existing confined delivery and shared navigation, prior account/wait/static contracts, built source/dist and normal UI discovery; fullcheck/allUI/screenshots/smoke, strictfixture/native review/frozenDockerCI and documented control limits.
+- Config / project setup — not selected: no new env/dependency/deployment/tool setting. Required floor: tracerRED; real three filters/intersection, page membership/ties/endpoints/reset, actual empty/no-match/loading/failure+retry, current authority/read-only/no secrets, screenshot/zero unexpectederrors; no synthetic query success.
+- 验证记录（#76）：真实入口404RED→200，check1904单测/876集成、审计57DOM覆盖100/98.51/100/100%、dup2.93%；全量UI25/25（含既有15项）34.7s、checkfast通过。真实三筛选/交集/邮箱OR/毫秒端点、同刻短末页及完整末页后空页返回、重置分页、四态/真实权限及审计不变有截图；只有加载hold/continue与精确500受控，成功查询/权限不替换。独立source/dist浏览器严格零错误及只读烟测通过。重复测试setup提取至canonicalfixture，原observer不变；首次UI24/25为Playwright拒绝冗余零小数输入，使用相同时间值的规范表示修复，未改时间合同。冻结头Docker/review/CI另附PR。
 
 ## 15. 模型配置和运行参数后台（任务包 1.12）
 

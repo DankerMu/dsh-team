@@ -2,7 +2,19 @@
 
 import { act } from 'react';
 import { expect, it, vi } from 'vitest';
-import { change, element, renderAccountPage } from '../test/account-dom-fixture.tsx';
+import {
+  button,
+  change,
+  click,
+  createJsonReceipt,
+  draft,
+  element,
+  finishResponseBody,
+  holdResponseBody,
+  renderAccountPage,
+  renderSettledAccountPage,
+  settle,
+} from '../test/account-dom-fixture.tsx';
 import { AccountPage } from './account-page.tsx';
 import { AdminPage } from './admin-page.tsx';
 
@@ -22,30 +34,9 @@ const DISABLED = {
 };
 const LIST = { items: [ACTIVE, DISABLED], page: 1, pageSize: 20, total: 2 };
 
-function receipt(body: unknown = LIST, status = 200): Response {
-  return new Response(JSON.stringify(body), { status });
-}
-async function settle(): Promise<void> {
-  await act(async () => {
-    await Promise.resolve();
-  });
-}
-function button(view: HTMLDivElement, text: string): HTMLButtonElement {
-  const result = [...view.querySelectorAll('button')].find((item) => item.textContent === text);
-  if (result === undefined) throw new Error(`Missing button ${text}`);
-  return result;
-}
-async function click(view: HTMLDivElement, text: string): Promise<void> {
-  await act(async () => {
-    button(view, text).click();
-    await Promise.resolve();
-  });
-}
+const receipt = createJsonReceipt(LIST);
 async function searchFor(view: HTMLDivElement, value: string): Promise<void> {
-  await act(async () => {
-    change(element(view, '#account-search', HTMLInputElement), value);
-    await Promise.resolve();
-  });
+  await draft(view, '#account-search', value);
   await click(view, '搜索');
 }
 async function confirm(view: HTMLDivElement): Promise<void> {
@@ -57,9 +48,7 @@ async function confirm(view: HTMLDivElement): Promise<void> {
   });
 }
 async function ready(request = vi.fn<typeof fetch>().mockResolvedValue(receipt())) {
-  const rendered = renderAccountPage(<AdminPage />, '/_platform/admin', request);
-  await settle();
-  return rendered;
+  return renderSettledAccountPage(<AdminPage />, '/_platform/admin', request);
 }
 
 it('opens accounts at the declared pathname with server identities, times and implemented navigation', async () => {
@@ -71,16 +60,6 @@ it('opens accounts at the declared pathname with server identities, times and im
   await settle();
 
   expect(element(view, 'h1', HTMLHeadingElement).textContent).toBe('账号管理');
-  expect(
-    [...view.querySelectorAll('nav a')].map((link) => [
-      link.textContent,
-      link.getAttribute('href'),
-    ]),
-  ).toEqual([
-    ['账号管理', '/_platform/admin'],
-    ['账号设置', '/_platform/account'],
-    ['返回工作台', '/'],
-  ]);
   expect(view.textContent).toContain(ACTIVE.email);
   expect(view.textContent).toContain('员工');
   expect(view.textContent).toContain('管理员');
@@ -100,9 +79,8 @@ it('keeps loading separate from true empty accounts and a real submitted no-matc
   const { view } = renderAccountPage(<AdminPage />, '/_platform/admin', request);
   expect(view.textContent).toContain('加载中…');
   expect(view.querySelector('table')).toBeNull();
-  await act(async () => {
+  await settle(() => {
     held.resolve(receipt(empty));
-    await Promise.resolve();
   });
   expect(view.textContent).toContain('暂无账号');
   expect(view.textContent).not.toContain('没有匹配');
@@ -227,9 +205,8 @@ it.each([200, 401, 403, 500])(
     const { view, navigate } = renderAccountPage(<AdminPage />, '/_platform/admin', request);
     const signal = request.mock.calls[0]?.[1]?.signal;
     await searchFor(view, 'disabled');
-    await act(async () => {
+    await settle(() => {
       held.resolve(receipt(LIST, status));
-      await Promise.resolve();
     });
 
     expect(signal?.aborted).toBe(true);
@@ -295,10 +272,7 @@ it.each(['取消', 'Escape', 'cancel'] as const)(
   async (cancel) => {
     const { view, request } = await ready();
     await click(view, '重置密码');
-    await act(async () => {
-      change(element(view, '#reset-password', HTMLInputElement), 'never-persist-secret');
-      await Promise.resolve();
-    });
+    await draft(view, '#reset-password', 'never-persist-secret');
     expect(element(view, '#reset-password', HTMLInputElement).type).toBe('password');
     await act(async () => {
       if (cancel === '取消') button(view, '取消').click();
@@ -491,9 +465,8 @@ it.each([401, 403, 500])(
   'settles rejected list status %i only after body completion and preserves unreadable authority',
   async (status) => {
     for (const unreadable of [false, true]) {
-      const body = Promise.withResolvers<ArrayBuffer>();
       const response = receipt({}, status);
-      vi.spyOn(response, 'arrayBuffer').mockReturnValue(body.promise);
+      const body = holdResponseBody(response);
       const { view, request, navigate, unmount } = await ready(
         vi.fn<typeof fetch>().mockResolvedValueOnce(response),
       );
@@ -501,11 +474,7 @@ it.each([401, 403, 500])(
       expect(navigate).not.toHaveBeenCalled();
       expect(request.mock.calls[0]?.[1]?.signal?.aborted).toBe(false);
 
-      await act(async () => {
-        if (unreadable) body.reject(new Error('private body failure'));
-        else body.resolve(new ArrayBuffer(0));
-        await Promise.resolve();
-      });
+      await finishResponseBody(body, unreadable, 'private body failure');
 
       expect(view.textContent).toContain(status === 500 ? '加载失败' : '无权限');
       expect(view.textContent).not.toContain('private');
@@ -519,9 +488,8 @@ it.each([401, 403, 500])(
 it.each(['resolve', 'reject'] as const)(
   'cannot apply stale authority after rejected body completion %s',
   async (outcome) => {
-    const body = Promise.withResolvers<ArrayBuffer>();
     const old = receipt({}, 401);
-    vi.spyOn(old, 'arrayBuffer').mockReturnValue(body.promise);
+    const body = holdResponseBody(old);
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(old)
@@ -529,11 +497,7 @@ it.each(['resolve', 'reject'] as const)(
     const { view, navigate } = await ready(request);
     await searchFor(view, 'current');
 
-    await act(async () => {
-      if (outcome === 'resolve') body.resolve(new ArrayBuffer(0));
-      else body.reject(new Error('stale body failure'));
-      await Promise.resolve();
-    });
+    await finishResponseBody(body, outcome === 'reject', 'stale body failure');
 
     expect(view.textContent).toContain(ACTIVE.email);
     expect(view.textContent).not.toContain('无权限');
@@ -543,9 +507,8 @@ it.each(['resolve', 'reject'] as const)(
 );
 
 it('holds the mutation fence through empty response completion before reading server state', async () => {
-  const body = Promise.withResolvers<ArrayBuffer>();
   const response = new Response(null, { status: 204 });
-  vi.spyOn(response, 'arrayBuffer').mockReturnValue(body.promise);
+  const body = holdResponseBody(response);
   const request = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(receipt())
@@ -559,10 +522,7 @@ it('holds the mutation fence through empty response completion before reading se
   await confirm(view);
   expect(request).toHaveBeenCalledTimes(2);
 
-  await act(async () => {
-    body.resolve(new ArrayBuffer(0));
-    await Promise.resolve();
-  });
+  await finishResponseBody(body, false, '');
 
   expect(request).toHaveBeenCalledTimes(3);
   expect(view.querySelector('dialog')).toBeNull();
@@ -598,9 +558,8 @@ it.each([204, 400, 401, 403])(
 it.each(['resolve', 'reject'] as const)(
   'suppresses mutation body completion %s after departure without canceling accepted work',
   async (outcome) => {
-    const body = Promise.withResolvers<ArrayBuffer>();
     const response = receipt({}, 401);
-    vi.spyOn(response, 'arrayBuffer').mockReturnValue(body.promise);
+    const body = holdResponseBody(response);
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(receipt())
@@ -610,11 +569,7 @@ it.each(['resolve', 'reject'] as const)(
     await confirm(view);
     unmount();
 
-    await act(async () => {
-      if (outcome === 'resolve') body.resolve(new ArrayBuffer(0));
-      else body.reject(new Error('late body failure'));
-      await Promise.resolve();
-    });
+    await finishResponseBody(body, outcome === 'reject', 'late body failure');
 
     expect(navigate).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledTimes(2);
