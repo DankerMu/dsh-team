@@ -152,6 +152,8 @@ export function permissionEvidence(input: PermissionObservation) {
     'history-incomplete',
   );
   const events = all.filter((event) => Number(event.seq) > input.afterSeq);
+  // Released retries retain failed/uncommitted attempts even if the turn later succeeds.
+  requireEvidence(of(events, 'assistant/attempt').length === 0, 'provider-attempt');
   const identity = writeIdentity(events, input);
   const requestId = promptIdentity(events, input, identity.start, identity.call);
   const yolo = input.phase === 'yolo';

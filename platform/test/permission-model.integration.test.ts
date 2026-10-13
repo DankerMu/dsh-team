@@ -160,3 +160,39 @@ it('rejects denial evidence without a model-facing error result', () => {
   };
   expect(() => permissionEvidence(value)).toThrow('permission-tool-result');
 });
+
+it.each(['pending', 'allow', 'deny', 'yolo'] as const)(
+  'rejects recovered provider failure before accepting %s evidence',
+  (phase) => {
+    const value = evidence(phase);
+    const events: Record<string, unknown>[] = value.records.map((row) => row.event);
+    const index =
+      phase === 'pending' ? 2 : events.findIndex((event) => event.type === 'tool/result') + 1;
+    // Published rc.2 persists failed requests as log-only assistant/attempt,
+    // including when the native retry plugin later completes the same turn.
+    events.splice(index, 0, {
+      type: 'assistant/attempt',
+      data: {
+        turn: 1,
+        step: phase === 'pending' ? 0 : 1,
+        stream: [
+          {
+            type: 'chunk',
+            time: 1,
+            chunk: {
+              type: 'finish',
+              reason: {
+                kind: 'error',
+                failure: { code: 'SERVER', message: 'Owned failure control' },
+              },
+            },
+          },
+        ],
+      },
+    });
+    const records = events.map((event, seq) => ({ type: 'event', event: { ...event, seq } }));
+    expect(() => permissionEvidence({ ...value, records, cursor: records.length - 1 })).toThrow(
+      'permission-provider-attempt',
+    );
+  },
+);

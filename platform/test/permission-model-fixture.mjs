@@ -142,7 +142,7 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
         'permission-pending-native-ask',
       );
       const proof = await retain(operation, 'pending');
-      const key = await waitFor(
+      await waitFor(
         () =>
           evaluate(
             page,
@@ -163,7 +163,7 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
         true,
       );
       await captureSettledScreenshot(page, join(evidence, `${label}-pending.png`));
-      return { proof, key };
+      return proof;
     };
     const finish = async (operation, phase) => {
       await waitFor(
@@ -201,13 +201,13 @@ export async function runPermissionModelScenario({ page, origin, cookie, evidenc
     const yolo = await begin(second, 'yolo');
     await finish(yolo, 'yolo');
     const held = await retain(manual, 'pending');
-    assert.equal(held.approvalId, original.proof.approvalId);
-    assert.equal(held.callId, original.proof.callId);
-    assert.equal(held.askedSeq, original.proof.askedSeq);
+    assert.equal(held.approvalId, original.approvalId);
+    assert.equal(held.callId, original.callId);
+    assert.equal(held.askedSeq, original.askedSeq);
     await select(first);
     assert.equal(await chosenLabel(page), '人工批准');
     const returned = await pending(manual, 'returned-manual');
-    assert.equal(returned.key, original.key);
+    assert.equal(returned.approvalId, original.approvalId);
     await decide('allow');
     await finish(manual, 'allow');
     const denied = await begin(first, 'deny');
