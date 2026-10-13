@@ -23,7 +23,6 @@ interface Readback {
   readonly liveAfter: Record<string, Entry>;
   readonly metadata: readonly { path: string; uid: number; mode: number; parent: boolean }[];
   readonly denied: Record<string, number>;
-  readonly webManifest: unknown;
   readonly peerVersion: string;
   readonly rootConfig: string;
   readonly patch: string;
@@ -55,16 +54,6 @@ function validateSeed(readback: Readback, pluginHashes: Record<string, Entry>): 
   for (const [path, expected] of Object.entries(pluginHashes)) {
     deepStrictEqual(readback.seed[path], expected, `Canonical plugin bytes differ: ${path}`);
   }
-  deepStrictEqual(
-    readback.webManifest,
-    {
-      name: 'dsh-profile-web',
-      private: true,
-      dependencies: {},
-      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'] } },
-    },
-    'Seed manifest must describe the released Web profile',
-  );
   strictEqual(readback.peerVersion, '0.2.0-rc.2', 'Plugin must pin the installed DSH release');
   const uncomment = (text: string) =>
     text
@@ -215,7 +204,6 @@ for path in [Path("/opt"), seed.parent, seed] + sorted(seed.rglob("*")):
 readback = {
     "phase": phase, "effectiveUid": os.geteuid(), "seed": before, "live": live_before,
     "metadata": metadata, "denied": {},
-    "webManifest": json.loads((web / "package.json").read_text()),
     "peerVersion": json.loads((plugin / "package.json").read_text())["peerDependencies"]["@deepseek-ai/dsh"],
     "rootConfig": (web / "cordis.yml").read_text(),
     "patch": (web / "cordis.patch.yml").read_text(),

@@ -131,7 +131,8 @@ evidence="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}-evidence.XXXXXX")"
 echo "probe-first-run: run_id=${run_id} image=${image} workdir=${workdir} evidence=${evidence} hostname=${authority_host}"
 probe_run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
   --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
-  --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" "${repo_root}/images/dsh-user" >/dev/null
+  --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
+  --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user" >/dev/null
 image_owned=1
 write_overlay() {
   local dest="$1" kind="$2"

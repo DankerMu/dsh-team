@@ -65,7 +65,6 @@ function toolNames(schemas) {
     if (typeof schema?.name !== 'string' || schema.name === '') fail();
     names.push(schema.name);
   }
-  if (names.length === 0) fail();
   return names;
 }
 

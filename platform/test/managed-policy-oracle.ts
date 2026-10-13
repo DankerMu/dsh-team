@@ -66,7 +66,7 @@ function requireNumber(value: unknown): number {
 }
 
 function requireStringList(value: unknown): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
+  if (!Array.isArray(value)) {
     invalid();
   }
   return value.map(requireString);

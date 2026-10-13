@@ -1220,7 +1220,7 @@ Execution order: fixture review/strict validation → qualify review-provenance 
 
 依赖：第 7、15 组。
 
-- [ ] 17.1 在钉定的 DSH 发行版上做出一个最小的自定义预设 bundle（一个预设、一句指令），装进镜像的预置配置目录（`profile-seed/` 随之包含）。验证：`pnpm test:docker`——新实例的预设选择器接口里出现该预设。
+- [x] 17.1 在钉定的 DSH 发行版上做出一个最小的自定义预设 bundle（一个预设、一句指令），装进镜像的预置配置目录（`profile-seed/` 随之包含）。验证：`pnpm test:docker`——新实例的预设选择器接口里出现该预设。
 - [ ] 17.2 `plugins/office-agents/`：`office-general`（默认）和 `office-writer` 两个预设，各有标识、中文名、职责、指令、Skills、工具清单、版本、启用状态；工具清单里没有联网搜索和网页抓取。验证：`pnpm test:docker`——选择器里两个预设都在且默认是综合办公；实例里生效的工具清单不含联网工具；一个检查脚本确认八项字段都有值（规格“预置两个办公 Agent”“办公 Agent 没有联网工具”）。
 - [ ] 17.3 手动选择公文写作生成 DOCX。验证：`pnpm test:model`——选择 `office-writer` 提出通知任务，工作目录出现能被解析库打开的 DOCX，正文含标题、主送对象、事项、落款和日期（规格“手动指定专业 Agent 真实生效”）。
 - [ ] 17.4 综合办公下的自然语言委派。验证：`pnpm test:model`——在 `office-general` 下提出同一任务，出现一个由该 Session 派生、使用 `office-writer` 预设的子 Session，工作目录出现可打开的 DOCX（规格“自然语言任务由综合办公委派”）。
@@ -1228,6 +1228,19 @@ Execution order: fixture review/strict validation → qualify review-provenance 
 
 Suggested fixture level: expanded - 改动关键路径 `images/dsh-user/` 的预置内容，并决定每个实例里生效的工具清单
 Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行，证明机制可用）
+
+### Issue #86 risk/evidence map (task 17.1 only)
+
+- Fixture level: expanded; Public API / CLI / script entrypoint selected for native selector discovery and all image builders; no platform API change.
+- File IO / path safety / overwrite; Data loss / partial write / rollback selected for image-owned profile bundle install before seed snapshot, immutable seed and preservation of existing user volumes. No upgrade migration or runtime package installation.
+- Serialization / parsing / format compatibility; Release / packaging / dependency compatibility selected for pinned rc.2 bundle manifest/patch/persona contracts, exact peer pin and canonical narrow build context.
+- Auth / permissions / secrets; Security / injection / untrusted input selected to preserve managed overlay enforcement on the full expanded roster; no model secret needed, no new tools, unchanged permission defaults.
+- Resource limits / large input / discovery; Error handling / rollback / partial outputs selected for bounded existing Docker lifecycle, registered invocation ownership and cleanup on selector failure.
+- Legacy compatibility / examples; Documentation / migration notes selected for unchanged shipped presets/default, atomic caller migration and explicit boundary with #87. Concurrency / shared state not selected: no new concurrent owner, cache, timer or background work.
+- Required evidence: real fresh-instance native selector rejects missing delivery before implementation; then exact `office-general`/Chinese name, no broken diagnostic, existing roster/default preserved. Complete seed copy-up/immutability/reuse checks and existing full managed-policy test cover sibling state and overlay surfaces. `pnpm check`, strict fixture, expanded review and exact-head full `pnpm test:docker`/CI.
+- Scope reconciliation: design14/#87 name the canonical `plugins/office-agents/` bundle; adding its two declarative files and required build-context caller changes in #86 avoids a duplicate implementation. No #87 office-writer/default/Skills/tools behavior is included.
+- 实测：5527046 test-first 在真实原生选择器因缺少 office-general 为 RED；2a8b971 的 COPY 新目录0644导致 uid1001 EACCES，独立最小构建 stat/read 确诊。9484b45 预建可遍历目录后，新实例选择器与四项既有镜像/种子验证5/5 GREEN（suite53.12s，runner60.559s），office-general/综合办公无 broken，默认仍为 standard，四类独立资源清单为空。完整最终 SHA Docker/CI 另为合并门禁。
+- Full-suite c2fb9c7 exposed a shared verifier contract gap: managed-policy and model-refusal stopped DSH because the observer rejected the new healthy preset's empty tool inventory. Bounded native diagnostic de10c8d confirmed office-general returned a valid empty array in both paths; the parser also rejected it. Repair both consumers to accept empty arrays while preserving array/element validation, explicit required tools for capable presets, complete roster, forbidden-network-tool and custom read-limit checks. Never add dummy tools or omit office-general from observation. A semantic parser RED→GREEN and malformed/missing-required/forbidden-tool controls qualify this boundary.
 
 ## 18. 部署骨架（任务包 1.16）
 
