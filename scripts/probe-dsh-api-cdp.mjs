@@ -1,32 +1,26 @@
 /** CDP session, chrome launch, mux $events listener. */
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import http from 'node:http';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { platform } from 'node:os';
+import { registerNativeChild, stopChild } from './probe-browser-native.mjs';
+import {
+  chromeFlags,
+  processBirth,
+  rescueChrome,
+  registerChrome,
+  startIsolated,
+  writeReceipt,
+} from './probe-browser-runtime.mjs';
 
 const HTTP_MS = 15_000;
 const WS_MS = 15_000;
 const CDP_MS = 15_000;
 const PORT_MS = 15_000;
-const CHILD_MS = 8_000;
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const withDeadline = (promise, ms, label) =>
-  new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label}-timeout`)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
 
 const waitPort = async (host, port, ms, died) => {
   const deadline = Date.now() + ms;
@@ -183,6 +177,46 @@ export const connectPage = async (browserWs) => {
   };
 };
 
+const networkOwners = new WeakMap();
+const networkEvents = [
+  'Network.requestWillBeSent',
+  'Network.responseReceived',
+  'Network.loadingFinished',
+  'Network.loadingFailed',
+  'Network.resourceChangedPriority',
+];
+
+/** One Network owner per page; global Cdp.on still replaces its single handler. */
+export const observeNetwork = (page, handlers) => {
+  if (Object.keys(handlers).some((method) => !networkEvents.includes(method))) {
+    throw new Error('unsupported browser Network observer');
+  }
+  let observers = networkOwners.get(page);
+  if (!observers) {
+    observers = new Set();
+    networkOwners.set(page, observers);
+    for (const method of networkEvents) {
+      page.on(method, (params) => {
+        let failed = false,
+          firstError;
+        for (const observer of observers) {
+          try {
+            observer[method]?.(params);
+          } catch (error) {
+            if (!failed) {
+              failed = true;
+              firstError = error;
+            }
+          }
+        }
+        if (failed) throw firstError;
+      });
+    }
+  }
+  observers.add(handlers);
+  return () => observers.delete(handlers);
+};
+
 const redactChrome = (text) =>
   String(text ?? '')
     .replace(/https?:\/\/[^\s]+/gi, '[url]')
@@ -190,27 +224,11 @@ const redactChrome = (text) =>
     .replace(/[A-Za-z0-9+/=_-]{24,}/g, '[id]')
     .slice(0, 240);
 
-const stopChild = async (child) => {
-  if (!child?.pid) return;
-  if (child.exitCode !== null || child.signalCode) return;
-  child.kill('SIGTERM');
-  const ended = new Promise((resolve) => child.once('exit', resolve));
-  try {
-    await withDeadline(ended, CHILD_MS, 'chrome-stop');
-  } catch {
-    if (child.exitCode !== null || child.signalCode) return;
-    child.kill('SIGKILL');
-    try {
-      await withDeadline(
-        new Promise((resolve) => child.once('exit', resolve)),
-        3_000,
-        'chrome-kill',
-      );
-    } catch {
-      /* already gone */
-    }
-  }
-};
+// This boundary intentionally returns no raw cause: stderr/CDP data may contain credentials.
+const launchFailure = (error, hint = '', cleanupFailed = false) =>
+  new Error(
+    `chrome-start ${hint || redactChrome(error?.message ?? error)}${cleanupFailed ? ' cleanup-incomplete' : ''}`,
+  );
 
 export const exchangeLaunchToken = async ({ host, port, token, cookieHost }) => {
   const authority = `${cookieHost ?? host}:${port}`;
@@ -256,78 +274,115 @@ export const rpcCall = async (origin, cookie, method, payload, connectHost) => {
   }
 };
 
-export const startChrome = async (bin, profile, pidFile, extraFlags = []) => {
-  await mkdir(profile, { recursive: true });
-  const debugPort = await new Promise((resolve) => {
-    const server = net.createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
-    });
-  });
-  const flags = [
-    `--user-data-dir=${profile}`,
-    `--remote-debugging-port=${debugPort}`,
-    '--remote-debugging-address=127.0.0.1',
-    '--headless=new',
-    '--disable-gpu',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-dev-shm-usage',
-    '--no-sandbox',
-    ...extraFlags,
-    'about:blank',
-  ];
-  let child;
-  try {
-    child = spawn(bin, flags, { stdio: ['ignore', 'ignore', 'pipe'] });
-  } catch {
-    throw new Error('chrome-start spawn-failed');
+const validateLaunch = (input) => {
+  const url = new URL(input.origin);
+  if (url.protocol !== 'http:' || !url.hostname || url.username || url.password) {
+    throw new Error('chrome-start requires original HTTP origin');
   }
-  let stderr = '';
-  child.stderr?.on('data', (chunk) => {
-    if (stderr.length < 4_000) stderr += String(chunk);
+  if (!['native', 'docker-isolated-network'].includes(input.runtime?.kind)) {
+    throw new Error('chrome-start requires explicit runtime');
+  }
+};
+
+const nativeDebugPort = async () => {
+  const { promise, resolve, reject } = Promise.withResolvers();
+  const server = net.createServer();
+  server.once('error', reject);
+  server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port;
+    server.close((error) => (error ? reject(error) : resolve(port)));
   });
-  let exitHint = '';
-  const { promise: spawnFailed, reject: rejectSpawn } = Promise.withResolvers();
-  void spawnFailed.catch(() => {});
-  child.on('error', (error) => {
-    if (stderr.length < 4_000) stderr += String(error?.message ?? error);
-    rejectSpawn(new Error('chrome-start spawn-failed'));
-  });
-  child.once('exit', (code, signal) => {
-    exitHint = signal ? `signal-${signal}` : `exit-${code ?? 'none'}`;
-  });
-  const failStart = async (error) => {
-    const reason = redactChrome(stderr).trim() || exitHint || redactChrome(error?.message ?? error);
-    await stopChild(child);
-    throw new Error(`chrome-start ${reason}`);
-  };
+  return await promise;
+};
+
+const startNative = async (input, receipt) => {
+  const debugPort = await nativeDebugPort();
+  let child,
+    stderr = '',
+    exitHint = '';
   try {
-    if (typeof child.pid === 'number' && child.pid > 0) {
-      await writeFile(pidFile, `${String(child.pid)}\n`);
-    }
-    const info = await Promise.race([
-      (async () => {
-        await waitPort('127.0.0.1', debugPort, PORT_MS, () => Boolean(exitHint));
-        return JSON.parse(
-          (await httpRequest({ host: '127.0.0.1', port: debugPort, path: '/json/version' })).body,
-        );
-      })(),
-      spawnFailed,
-    ]);
-    if (typeof info?.webSocketDebuggerUrl !== 'string' || info.webSocketDebuggerUrl === '') {
-      throw new Error('no debugger websocket');
-    }
+    child = spawn(input.runtime.bin, chromeFlags(input.profile, debugPort, input.extraFlags), {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    child.stderr?.on('data', (chunk) => {
+      if (stderr.length < 4_000) stderr += String(chunk).slice(0, 4_000 - stderr.length);
+    });
+    child.once('exit', (code, signal) => {
+      exitHint = signal ? `signal-${signal}` : `exit-${code ?? 'none'}`;
+    });
+    const { promise, resolve, reject } = Promise.withResolvers();
+    child.once('spawn', resolve);
+    child.once('error', () => reject(new Error('spawn-failed')));
+    await promise;
+    const birth =
+      platform() === 'linux' ? await processBirth(child.pid) : `creator:${randomUUID()}`;
+    registerNativeChild(receipt, child, birth);
+    receipt.state = 'running';
+    await writeReceipt(input.receiptFile, receipt);
     return {
-      child,
-      browserWs: info.webSocketDebuggerUrl,
-      pid: child.pid,
       debugPort,
-      stop: () => stopChild(child),
+      died: () => Boolean(exitHint),
+      hint: () => redactChrome(stderr).trim() || exitHint,
+      stop: () => rescueChrome(input.receiptFile, receipt.nonce),
     };
   } catch (error) {
-    return await failStart(error);
+    let cleanupFailed = false;
+    try {
+      await stopChild(child);
+    } catch {
+      cleanupFailed = true;
+    }
+    throw launchFailure(error, redactChrome(stderr).trim() || exitHint, cleanupFailed);
+  }
+};
+
+const parseDebugger = (text) => {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error('debugger-json-invalid');
+  }
+};
+
+const requireDebugger = (info, runtime) => {
+  if (
+    runtime.kind === 'docker-isolated-network' &&
+    !/^(?:HeadlessChrome|Chrome)\/140\.0\.7339\.82$/.test(info.Browser ?? '')
+  ) {
+    throw new Error('isolated browser version differs from pinned CfT');
+  }
+  if (typeof info?.webSocketDebuggerUrl !== 'string' || info.webSocketDebuggerUrl === '') {
+    throw new Error('no debugger websocket');
+  }
+};
+
+export const startChrome = async (input) => {
+  validateLaunch(input);
+  await mkdir(input.profile, { recursive: true, mode: 0o700 });
+  let owner;
+  try {
+    const receipt = await registerChrome(input);
+    owner =
+      input.runtime.kind === 'docker-isolated-network'
+        ? await startIsolated(input, receipt)
+        : await startNative(input, receipt);
+    const debugPort = owner.debugPort;
+    await waitPort('127.0.0.1', debugPort, PORT_MS, owner.died);
+    const info = parseDebugger(
+      (await httpRequest({ host: '127.0.0.1', port: debugPort, path: '/json/version' })).body,
+    );
+    requireDebugger(info, input.runtime);
+    let stopped;
+    return { browserWs: info.webSocketDebuggerUrl, stop: () => (stopped ??= owner.stop()) };
+  } catch (error) {
+    let cleanupFailed = false;
+    try {
+      await owner?.stop();
+    } catch {
+      cleanupFailed = true;
+    }
+    const reason = owner?.hint?.() || redactChrome(error?.message ?? error);
+    throw launchFailure(error, reason, cleanupFailed);
   }
 };
 

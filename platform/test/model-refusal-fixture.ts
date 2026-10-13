@@ -19,6 +19,7 @@ import type { WebContainer } from './web-startup-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { assertModelRefusal, modelRefusalTurn, remoteRecord } from './model-refusal-oracle.ts';
 import type { ModelRefusalObservation } from './model-refusal-oracle.ts';
+import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
 const HOST = 'dsh-team-managed.invalid';
 const KEY_ENV = 'DMXAPI_KEY';
@@ -284,8 +285,7 @@ export async function runModelRefusalScenario(lifecycle: UserImageLifecycle): Pr
     );
   };
   try {
-    const chromeBin = process.env.CHROME_BIN;
-    if (!chromeBin) throw new Error('CHROME_BIN is required for model refusal verification');
+    const runtime = isolatedBrowserRuntime(lifecycle.runId);
     acquired.phase = 'prepare';
     persist();
     const instance = await prepareRefusalInstance(lifecycle, acquired, persist);
@@ -364,9 +364,9 @@ export async function runModelRefusalScenario(lifecycle: UserImageLifecycle): Pr
       extraFlags: mappedFlags(HOST),
       expectedHost: HOST,
       expectedRoster: MANAGED_BOOT_ROSTER,
-      chromeBin,
-      profile: work,
-      pidFile: join(work, 'chrome.pid'),
+      runtime,
+      profile: join(work, 'profile'),
+      receiptFile: join(work, 'chrome.receipt.json'),
       screenshot,
       browserMs: remaining(),
       beforeSubmit: () => {
@@ -403,6 +403,7 @@ export async function runModelRefusalScenario(lifecycle: UserImageLifecycle): Pr
     persist();
     throw error;
   } finally {
+    await rescueChrome(join(work, 'chrome.receipt.json'));
     rmSync(work, { recursive: true, force: true });
   }
 }

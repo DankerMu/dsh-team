@@ -1,7 +1,17 @@
 /** Structural types for the import-safe mapped-host helper. */
+import type { BrowserRuntime } from './probe-browser-runtime.mjs';
+import type { CdpPage, ChromeHandle, WelcomeObserver } from './probe-dsh-api-cdp.mjs';
 export type MappedHostWorkspace = {
   readonly available: boolean;
   readonly workBound: boolean;
+};
+
+export type MappedPageHandle = {
+  chrome: ChromeHandle;
+  page: CdpPage;
+  errors: unknown[];
+  requests: unknown[];
+  welcome: WelcomeObserver | null;
 };
 
 export type MappedHostAcceptInput = {
@@ -11,9 +21,9 @@ export type MappedHostAcceptInput = {
   readonly screenshot: string;
   readonly browserMs: number;
   readonly composition?: boolean;
-  readonly chromeBin: string;
+  readonly runtime: BrowserRuntime;
   readonly profile: string;
-  readonly pidFile: string;
+  readonly receiptFile: string;
   readonly workspace?: MappedHostWorkspace;
   readonly expectedHost?: string;
   readonly expectedRoster?: readonly string[];
@@ -89,7 +99,8 @@ export declare function collectObservation(
 export declare function closeMapped(
   page: unknown,
   chrome: { stop?: () => Promise<void> } | undefined,
-  welcome?: { cleanup?: () => Promise<void> } | undefined,
+  welcome?: { cleanup?: () => Promise<void> } | null | undefined,
+  failure?: { readonly error: unknown },
 ): Promise<void>;
 
 export declare function navigateReady(
@@ -104,13 +115,7 @@ export declare function openMappedPage(input: {
   readonly cookie: string;
   readonly extraFlags: readonly string[];
   readonly composition?: boolean;
-  readonly chromeBin: string;
+  readonly runtime: BrowserRuntime;
   readonly profile: string;
-  readonly pidFile: string;
-}): Promise<{
-  chrome: { stop: () => Promise<void> };
-  page: unknown;
-  errors: unknown[];
-  requests: unknown[];
-  welcome: unknown;
-}>;
+  readonly receiptFile: string;
+}): Promise<MappedPageHandle>;

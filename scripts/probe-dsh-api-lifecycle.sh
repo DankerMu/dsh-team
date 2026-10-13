@@ -33,8 +33,10 @@ probe_require_gnu_timeout() {
 }
 
 probe_require_chrome() {
-  if [ -z "${CHROME_BIN:-}" ] || [ ! -x "${CHROME_BIN}" ]; then
-    echo "${probe_name}: CHROME_BIN must be an executable browser path" >&2
+  if [ "${DSH_TEAM_BROWSER_RUNTIME:-}" != "docker-isolated-network" ] ||
+    ! [[ "${DSH_TEAM_BROWSER_IMAGE_ID:-}" =~ ^sha256:[a-f0-9]{64}$ ]] ||
+    [ -z "${CHROME_BIN:-}" ] || [ ! -x "${CHROME_BIN}" ]; then
+    echo "${probe_name}: use the root package command with pinned CHROME_BIN and isolated browser provisioning" >&2
     exit 2
   fi
 }
@@ -67,23 +69,14 @@ probe_has_cleanup_failure() {
 }
 
 probe_stop_chrome() {
-  local pid_file="$1" pid="" waited=0
-  [ -n "$pid_file" ] && [ -f "$pid_file" ] || return 0
-  pid="$(cat "$pid_file" 2>/dev/null || true)"
-  [[ "${pid:-}" =~ ^[1-9][0-9]{0,9}$ ]] || return 0
-  kill "$pid" >/dev/null 2>&1 || true
-  while [ "$waited" -lt "$chrome_wait" ]; do
-    kill -0 "$pid" >/dev/null 2>&1 || return 0
-    sleep 1
-    waited=$((waited + 1))
-  done
-  kill -9 "$pid" >/dev/null 2>&1 || true
-  waited=0
-  while [ "$waited" -lt 3 ]; do
-    kill -0 "$pid" >/dev/null 2>&1 || return 0
-    sleep 1
-    waited=$((waited + 1))
-  done
+  local receipt_file="$1"
+  [ -n "$receipt_file" ] && [ -f "$receipt_file" ] || return 0
+  if ! probe_run_bound "$((chrome_wait + docker_seconds * 3 + 45))" \
+    node "${repo_root}/scripts/probe-browser-runtime.mjs" rescue "$receipt_file"; then
+    export browser_cleanup_failed=1
+    probe_note_cleanup_failure "owned browser receipt rescue; retaining private paths"
+    return 1
+  fi
 }
 
 probe_remove_owned() {

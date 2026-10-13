@@ -9,12 +9,18 @@ Starts one dsh-team-prefixed Web instance from images/dsh-user, exchanges the
 launch token with node:http Host, drives the real UI, prints HTTP/WS paths for
 homepage / new Session / message / running / complete, and samples HTTP, WS,
 and state-file channels across three real task cycles.
-The verification browser is launched with --no-sandbox because Ubuntu AppArmor
-can reject Chrome user namespaces ("No usable sandbox"). That flag applies only
-to this ephemeral loopback-only Chrome (isolated per-run profile, 127.0.0.1 DSH
-origin). It does not change host sysctl/AppArmor policy or the DSH container
-seccomp/privilege boundary.
-Env: DMXAPI_KEY (required); CHROME_BIN (required executable, no PATH search);
+The root command requires trusted Linux amd64, a nonroot driver and local Docker
+with isolated bridge gateway-mode support. It provisions a verification-only
+Node24/CJK-font image and stable private internal network; same-port Unix-socket
+relays retain the real host endpoint and browser authority/cookie behavior.
+--no-sandbox remains limited to this verification Chrome; no host security-policy
+or DSH seccomp/privilege change, browser retry or silent native fallback occurs.
+Private runtime/qualification-failure receipt locations are printed; timeout and
+signal rescue use per-launch ownership receipts, not PID-only files.
+--help prints usage only; it does not qualify the runtime.
+Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
+Env: DMXAPI_KEY (required); CHROME_BIN (complete pinned CfT140.0.7339.82
+chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120); PROBE_TASK_SECONDS (1-300, default 180).
 EOF
@@ -53,6 +59,7 @@ image_owned=0
 container_owned=0
 probe_status=0
 cleanup_failed=0
+browser_cleanup_failed=0
 cleaned=0
 workdir=""
 evidence=""
@@ -63,17 +70,17 @@ docker_seconds=30
 chrome_wait=12
 drive_seconds=$((startup_seconds + browser_seconds * 10 + task_seconds * 9 + 180))
 run_bound() { probe_run_bound "$@"; }
-stop_chrome() { probe_stop_chrome "${workdir:+${workdir}/chrome.pid}"; }
+stop_chrome() { probe_stop_chrome "${workdir:+${workdir}/chrome.receipt.json}"; }
 remove_owned() { probe_remove_owned "$@"; }
 scrub_binds() { probe_scrub_binds "$image" "$home_dir" "$work_dir" "${prefix}-scrub"; }
 cleanup() {
   [ "$cleaned" -eq 1 ] && return 0
   trap '' INT TERM
-  stop_chrome
+  stop_chrome || true
   [ "$container_owned" -eq 1 ] && remove_owned rm "$container"
   [ "$image_owned" -eq 1 ] && [ -n "$workdir" ] && scrub_binds
   [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
-  [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || probe_note_cleanup_failure "rm -rf workdir"; }
+  [ "$browser_cleanup_failed" -ne 0 ] || { [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || probe_note_cleanup_failure "rm -rf workdir"; }; }
   cleaned=1
   probe_has_cleanup_failure && [ "$probe_status" -eq 0 ] && probe_status=1
   trap - INT TERM
@@ -131,7 +138,7 @@ chmod 600 "${workdir}/cookie.hdr"
 set +e
 run_bound "$drive_seconds" env PROBE_ORIGIN="http://127.0.0.1:${port}" PROBE_COOKIE_FILE="${workdir}/cookie.hdr" \
   PROBE_HOME="$home_dir" PROBE_WORK="$work_dir" PROBE_SCREENSHOT="${evidence}/homepage.png" \
-  PROBE_PROFILE="${workdir}/chrome" PROBE_PID_FILE="${workdir}/chrome.pid" \
+  PROBE_PROFILE="${workdir}/chrome" PROBE_CHROME_RECEIPT="${workdir}/chrome.receipt.json" \
   PROBE_BROWSER_SECONDS="$browser_seconds" PROBE_TASK_SECONDS="$task_seconds" \
   CHROME_BIN="$CHROME_BIN" node "$driver" drive
 probe_status=$?

@@ -11,7 +11,15 @@ Preview Notice independently on a non-loopback hostname mapped only inside
 Chrome. Tries managed overlay, preseeded files, launch arguments, then the
 repo-owned locale/roster composition (first entry and refresh). Prints the
 measured recipe or 无法做到. No model key is required.
-Env: CHROME_BIN (required executable, no PATH search);
+Requires trusted Linux amd64, nonroot local Docker with isolated bridge
+gateway-mode support. The root command provisions the verification-only
+Node24/CJK-font image, naturally online stable private internal bridge and
+same-port Unix-socket relays; no host policy change or native fallback.
+Runtime/qualification-failure locations are printed; browser timeout/signal
+rescue uses ownership receipts, never PID-only files. --help only prints usage.
+Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
+Env: CHROME_BIN (complete pinned CfT140.0.7339.82
+chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120).
 PROBE_COMPOSITION_FAULT (negative controls only): missing-plugin, wrong-plugin,
@@ -61,6 +69,7 @@ image="${prefix}-image"
 image_owned=0
 probe_status=0
 cleanup_failed=0
+browser_cleanup_failed=0
 cleaned=0
 workdir=""
 evidence=""
@@ -75,11 +84,11 @@ declare -A trial_containers=()
 declare -A trial_ports=()
 note_cleanup_failure() { probe_note_cleanup_failure "$1"; }
 stop_all_chrome() {
-  local pid_file
+  local receipt_file
   [ -n "$workdir" ] || return 0
-  for pid_file in "$workdir"/*/chrome.pid; do
-    [ -f "$pid_file" ] || continue
-    probe_stop_chrome "$pid_file"
+  for receipt_file in "$workdir"/*/chrome.receipt.json; do
+    [ -f "$receipt_file" ] || continue
+    probe_stop_chrome "$receipt_file" || true
   done
 }
 remove_owned() { probe_remove_owned "$@"; }
@@ -107,7 +116,7 @@ cleanup() {
   stop_owned_containers
   scrub_all_binds
   [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
-  [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || note_cleanup_failure "rm -rf workdir"; }
+  [ "$browser_cleanup_failed" -ne 0 ] || { [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || note_cleanup_failure "rm -rf workdir"; }; }
   cleaned=1
   probe_has_cleanup_failure && [ "$probe_status" -eq 0 ] && probe_status=1
   trap - INT TERM
@@ -164,6 +173,7 @@ prepare_trial_dirs() {
   local name="$1"
   local root="${workdir}/${name}"
   rm -rf "$root"
+  mkdir -m 700 "$root"
   mkdir -p "${root}/home" "${root}/work" "${root}/chrome"
   chmod 777 "${root}/home" "${root}/work"
   trial_homes["$name"]="${root}/home"
@@ -198,7 +208,7 @@ stop_instance() {
   local name="$1"
   local container="${trial_containers[$name]:-}"
   [ -n "$container" ] || return 0
-  probe_stop_chrome "${workdir}/${name}/chrome.pid"
+  probe_stop_chrome "${workdir}/${name}/chrome.receipt.json" || return 1
   remove_owned rm "$container"
   trial_containers["$name"]=""
 }
@@ -228,7 +238,7 @@ drive_cmd() {
     PROBE_HOME="${trial_homes[$name]}" PROBE_WORK="${trial_works[$name]}" \
     PROBE_WORKSPACE_EVIDENCE="${workdir}/${name}/workspace-snapshot/workspace-evidence.json" \
     PROBE_SCREENSHOT="${evidence}/${shot}" PROBE_PROFILE="${workdir}/${name}/chrome" \
-    PROBE_PID_FILE="${workdir}/${name}/chrome.pid" PROBE_BROWSER_SECONDS="$browser_seconds" \
+    PROBE_CHROME_RECEIPT="${workdir}/${name}/chrome.receipt.json" PROBE_BROWSER_SECONDS="$browser_seconds" \
     PROBE_DISCOVER_BEFORE="${workdir}/${name}/before" PROBE_DISCOVER_AFTER="${workdir}/${name}/after" \
     PROBE_DISCOVER_OUT="${workdir}/preseed-files" \
     PROBE_BASELINE_OBSERVATION="${workdir}/baseline/observe.json" \
