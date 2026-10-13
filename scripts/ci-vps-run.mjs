@@ -50,8 +50,20 @@ for (const name of [
   'GH_CONFIG_DIR',
   'XDG_CONFIG_HOME',
   'TMPDIR',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'ALL_PROXY',
+  'NO_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'all_proxy',
+  'no_proxy',
+  'SSL_CERT_FILE',
+  'NODE_EXTRA_CA_CERTS',
 ])
   if (process.env[name] !== undefined) env[name] = process.env[name];
+env.GIT_TERMINAL_PROMPT = '0';
+env.GH_PROMPT_DISABLED = '1';
 // The owner is a separate session from the foreground client, before any remote mutation.
 // All credential publication and retirement happen in that owner, not in this process.
 const owner = spawn(process.execPath, [ownerFile, requestFile], {
