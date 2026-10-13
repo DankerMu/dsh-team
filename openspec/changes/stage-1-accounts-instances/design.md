@@ -194,6 +194,16 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 真实开发模型观察（#84，2026-10-13）：`deepseek-v4.1-flash` 在运行 `4d12ebd3-3b79-463f-be16-56a6e95c2fb0` 满足人工批准/拒绝、Yolo无询问以及人工待定期间另一Session独立完成。只读取完整原生history，不注入观察插件或替换provider；截图与独立文件观察一致。模型曾把已手动批准的写入描述为“without an approval prompt”，因此不以模型自述判断授权。该结果不扩展到Auto或生产qwen3.6；权限插件/镜像/覆盖层未发现需要修改的缺陷。
 
+**Issue #85 real Auto evidence boundary**
+
+- Extend the same real-provider acceptance, preserving #82 onboarding and every #84 manual/Yolo scenario. Select native `auto-review` through the actual UI; native history/file effects remain the execution oracle, but are insufficient alone to prove a review happened.
+- A fixture-only plugin uses the released public `tools/pre-execute` and `llm/stream` hooks to correlate the exact registered Agent/Session/call with its frozen review data and real provider/model route. Healthy observation delegates the original options and each chunk unchanged through exhaustion; it never manufactures an allow, changes permission, answers an approval or replaces a tool. Retain bounded safe identities, completion/decision classification and forwarding facts, not raw prompts, credentials or model error text.
+- Install the fixture only in the invocation-owned employee profile using the supported whole-document profile format and real restart path; leave installation-owned DSH and permission-plugin bytes and managed overlay unchanged. Do not ship the fixture in production images. Existing cleanup owns the instance/profile and all artifacts remain inside the current trusted evidence collector root.
+- Positive path: one ordinary unique workspace write, one corresponding real review with normal complete allow, no approval events throughout the originating turn, successful native tool result and exact bytes. A bypassed reviewer, wrong call/route, incomplete stream or incidental write success must not satisfy the proof.
+- Unavailable path: arm a unique target for a technical failure at only the non-Agent review invocation; all other requests forward normally. Prove this exact review hit the fault boundary, then native fallback asks for the original call before any file effect. A real UI decision governs the outcome. Describe this honestly as real-model execution with injected review-service failure, not spontaneous provider outage or a policy deny.
+- The expected review fault is distinct from a failed originating assistant request: keep #84's complete-history/failed-attempt rejection intact. Do not globally weaken that predicate, retry until a review allows, raise production review timeouts or treat a translated rejection reason as technical-failure identity.
+- Qualification covers missing/bypassed review, mismatched identity/route, unexpected approval on allow, wrong injected-failure attribution and premature effect. If the real healthy review falls back, preserve the first failure and diagnose actual protocol/timeout/decision rather than repeating it to obtain green. Update Open Questions fourth item with observed behavior only; qwen3.6 remains production integration.
+
 扩展点实测（非功能验收）：giap-vps 运行 `274d06c7-b9bf-4f35-b962-1fa7ab858d1d`，自定义 `auto-review` catalog/default 与新 Session 的 `permissions.currentValue` 一致；缺少权限服务时 required agent-loop 未激活、启动 exit1、未输出 Web 就绪。尚不代表模型审查、审批 UI 或委派行为已验证。
 
 ### 14. 办公 Agent

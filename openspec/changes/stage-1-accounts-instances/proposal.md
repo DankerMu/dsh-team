@@ -612,3 +612,11 @@
 - Selected risk packs and evidence are mapped in tasks16.3: exact native event identities/full operation interval, real UI decisions and file effects, judge sensitivity, safe credential custody and bounded invocation cleanup.
 - Preserve #82 onboarding and trusted VPS CI and #83 production gate/native deterministic coverage. Only observed defects authorize necessary plugin/image/overlay corrections; no DSH source modification, Auto acceptance or production qwen3.6 claim.
 - Evidence floor: real development-model four-scenario acceptance, screenshots/zero new browser errors, sanitized retained native facts, full checks, expanded cross-review and exact-head VPS model/Docker/CI.
+
+## Issue #85 fixture
+
+- Verification, expanded/Critical Characterization; task16.4 only, #84 merged. Prove actual development-model Auto authorization and human fallback when that review alone is unavailable.
+- Governing invariant: an ordinary write under Auto executes without asking only after the real review permits that exact operation; an unavailable review never silently grants and the original call waits for native human approval.
+- Reuse #82/#84 real-provider browser/history/file/custody path. A fixture-only public LLM observer forwards healthy streams unchanged; a separately armed operation-scoped fault affects only the review request, never the originating Agent request or its tool/approval implementation.
+- Required evidence: correlated real review provenance, no-ask exact-byte success, attributable injected technical failure → original native pending request/absent file → actual UI decision/effect, oracle rejection controls, screenshots/zero errors, exact-head checks/model/Docker/CI. Selected risk packs and limits are in tasks16.4.
+- No production fault switch, broad model proxy, second provider, DSH source patch or production qwen3.6 claim; production permission changes require an observed counterexample and separate semantic RED/GREEN.

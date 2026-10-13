@@ -1203,6 +1203,17 @@ Verification order: fixture review and strict OpenSpec → evidence-judge known-
 
 验证记录（#84）：giap-vps 上 `1fda10df74f14e7fc4414383a2c0ecdc3a8f4b40` 的真实开发模型验收通过，runner56.393s、退出0，四类独立Docker清单为空。原生人工批准待定时无文件；乙Yolo实际写入且完整回合无审批，返回甲仍为同一待定审批；批准后精确字节、另一次拒绝后原生错误工具结果/模型后续回复/完整结束且无文件，零新增浏览器错误。证据运行 `4d12ebd3-3b79-463f-be16-56a6e95c2fb0`。初始失败仅为验收浏览器800×600隐藏侧栏，恢复既有#83的1440×1050前提后通过；没有修改生产权限实现或增加重试。18个判据控制及完整本地check通过；冻结最终head的review、完整Docker和可信模型CI仍是合并门禁。
 
+### Issue #85 risk/evidence map (task 16.4)
+
+- Public API / CLI / script entry; Config / project setup — selected: existing `pnpm test:model`, native Auto selection, public release hooks, supported invocation-owned profile and real restart; original administrator/provider/credential path unchanged.
+- Auth / permissions / secrets; File IO / path safety / overwrite — selected: real review for the exact intended write, no ask/precise bytes on allow; scoped technical review fault cannot execute before native human decision. No credentials/raw prompts/error bodies in evidence; no harness-created target files.
+- Schema / columns / units / field names; Concurrency / shared state / ordering — selected: match Session/call/review arguments/provider/model, pass healthy options/chunks unchanged, preserve original pending identity and complete native turn interval; only the armed review may fail.
+- Error handling / rollback / partial outputs; Resource limits / large input / discovery — selected: bounded observer records and output, distinguish expected review fault from main-Agent failure, no automatic retry/timeout increase; original owned-resource/browser cleanup on either result and independent inventory.
+- Legacy compatibility / examples; Release / packaging / dependency compatibility — selected: retain #82/#84 model assertions and #83 deterministic/root-child coverage, unchanged pinned DSH/production gate/overlay; fixture not shipped in the user image; same-head full giap-vps Docker/model/CI.
+- Documentation / migration notes — selected: observed real Auto result in design Open Questions fourth item; injected fault labeled explicitly, qwen3.6 excluded, necessary critical-path corrections enter the deferred human-review ledger.
+
+Execution order: fixture review/strict validation → qualify review-provenance judge against missing/mismatched/bypassed/recovered-failure controls → genuine healthy Auto call plus operation-scoped unavailable fallback in actual browser → checks and expanded cross-review → exact reviewed-head trusted model/full Docker/CI. Only a demonstrated production defect permits plugin/image/overlay changes; no acceptance reduction or fake successful review.
+
 ## 17. 两个办公 Agent（任务包 1.15）
 
 依赖：第 7、15 组。
