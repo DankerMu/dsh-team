@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -8,6 +9,7 @@ import { inspect, record } from './container-start-docker-fixture.ts';
 import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
+import { waitDockerIdle, withDockerIdleInstance } from './instance-idle-docker-fixture.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-policy-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 
@@ -64,7 +66,19 @@ it('keeps the running model selector unchanged after save and activates the new 
             throw new Error('Missing ready activation identity');
           return row.container_id;
         };
+        const observedSessions = new Set<string>();
         const observe = async (label: string, models: string, expectedDefault: string) => {
+          const created = await gateway.rpc(employee.cookie, 'session/create', {
+            request: { cwd: '/data/work', agentPreset: 'standard' },
+          });
+          if (typeof created.sessionId !== 'string') throw new Error('Missing fresh Session');
+          const sessionId = created.sessionId;
+          expect(observedSessions.has(sessionId)).toBe(false);
+          observedSessions.add(sessionId);
+          const history = await gateway.history(employee.cookie, sessionId);
+          expect(
+            history.some((value) => record(record(value).event).type === 'model/selection'),
+          ).toBe(false);
           const profile = await mkdtemp(join(tmpdir(), 'dsh-team-activation-browser-'));
           const receiptFile = join(profile, 'chrome.receipt.json');
           try {
@@ -83,12 +97,14 @@ it('keeps the running model selector unchanged after save and activates the new 
               workspace: { available: true, workBound: true },
               preserveModels: models,
               expectedDefault,
+              preserveSessionId: sessionId,
             });
             await writeFile(join(evidence, `${label}.json`), JSON.stringify(observation, null, 2));
             expect(observation.accepted).toBe(true);
             expect(observation.reload?.accepted).toBe(true);
             expect(observation.consoleErrors).toEqual([]);
             expect(observation.preservation).toMatchObject({
+              sessionId,
               exactModels: models.split(','),
               defaultModel: expectedDefault,
               selected: models.split(','),
@@ -112,7 +128,6 @@ it('keeps the running model selector unchanged after save and activates the new 
         await gateway.ready(employee.cookie);
         const firstId = identity();
         await observe('before-save', 'alpha,beta', 'beta');
-        const peer = await gateway.open(employee.cookie);
         const before = inspect(lifecycle, firstId);
         const overlay = join(lifecycle.overlayDirectory, `${employee.id}.patch.yml`);
         const bytes = await readFile(overlay);
@@ -134,7 +149,6 @@ it('keeps the running model selector unchanged after save and activates the new 
         expect(await readFile(overlay)).toEqual(bytes);
         expect((await stat(overlay)).ino).toBe(inode);
         await observe('saved-not-restarted', 'alpha,beta', 'beta');
-        expect(peer.socket.destroyed).toBe(false);
         const restarted = await fetch(
           `${base}/_platform/api/admin/instances/${employee.id}/restart`,
           {
@@ -163,4 +177,97 @@ it('keeps the running model selector unchanged after save and activates the new 
       }
     },
   );
+});
+
+it('lets the same real held Agent turn finish after model configuration is saved', async () => {
+  await withDockerIdleInstance(async (f) => {
+    const admin = await registerInstanceUser(
+      f.base,
+      f.origin,
+      'activation-task-admin@example.test',
+    );
+    f.database.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.id);
+    const created = f.rpc('session/create', {
+      request: { cwd: '/data/work', agentPreset: 'standard' },
+    });
+    if (typeof created.sessionId !== 'string') throw new Error('Missing real held Session');
+    const sessionId = created.sessionId;
+    const nonce = randomUUID();
+    f.control({ op: 'adopt', sessionId });
+    const idle = () => {
+      const items = f.rpc('session/list', { _request: {} }).items;
+      if (!Array.isArray(items)) throw new Error('Missing real Session inventory');
+      return items.some((value: unknown) => {
+        const row = record(value);
+        return row.sessionId === sessionId && row.running === false;
+      });
+    };
+    await waitDockerIdle(idle);
+    const held = () => {
+      const holds = f.control({ op: 'status' }).holds;
+      if (!Array.isArray(holds)) throw new Error('Missing owned turn receipts');
+      const entries: readonly unknown[] = holds;
+      return entries.find((value) => record(value).nonce === nonce);
+    };
+    let released = false;
+    try {
+      f.control({ op: 'hold', sessionId, nonce });
+      await waitDockerIdle(() => held() !== undefined && record(held()).entered === true);
+      expect(idle()).toBe(false);
+      const active = { nonce, sessionId, entered: true, completed: false, aborted: false };
+      expect(held()).toEqual(active);
+      const before = inspect(f.lifecycle, f.containerId);
+      const response = await fetch(`${f.base}/_platform/api/admin/model-config`, {
+        method: 'PUT',
+        headers: { cookie: admin.cookie, origin: f.origin, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          baseURL: 'http://model.invalid/v1',
+          models: [{ name: 'owned' }, { name: 'added' }],
+          defaultModel: 'added',
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(record(await response.json()).runningInstances).toBe(1);
+      expect(held()).toEqual(active);
+      expect(idle()).toBe(false);
+      expect(record(inspect(f.lifecycle, f.containerId).State).StartedAt).toBe(
+        record(before.State).StartedAt,
+      );
+
+      f.control({ op: 'release', nonce });
+      released = true;
+      await waitDockerIdle(idle);
+
+      const completed = { ...active, completed: true };
+      expect(held()).toEqual(completed);
+      const status = f.control({ op: 'status' });
+      expect(status.externalModelCalls).toBe(0);
+      if (!Array.isArray(status.audit)) throw new Error('Missing genuine Agent turn audit');
+      const events = status.audit
+        .map((value: unknown) => record(value))
+        .filter((event) => event.sessionId === sessionId);
+      const start = events.findLast((event) => event.type === 'turn/start');
+      const end = events.findLast((event) => event.type === 'turn/end');
+      expect(end).toMatchObject({ data: { reason: { kind: 'completed' } } });
+      expect(end?.seq).toBeGreaterThan(Number(start?.seq));
+      const evidence = resolve('.run/issue79', `held-task-${f.lifecycle.runId}.json`);
+      await mkdir(resolve('.run/issue79'), { recursive: true });
+      await writeFile(
+        evidence,
+        JSON.stringify(
+          {
+            active,
+            completed,
+            startSequence: start?.seq,
+            endSequence: end?.seq,
+            externalModelCalls: status.externalModelCalls,
+          },
+          null,
+          2,
+        ),
+      );
+    } finally {
+      if (!released) f.control({ op: 'release', nonce });
+    }
+  });
 });

@@ -29,6 +29,7 @@ export type MappedHostAcceptInput = {
   readonly expectedRoster?: readonly string[];
   readonly preserveModels?: string;
   readonly expectedDefault?: string;
+  readonly preserveSessionId?: string;
   readonly observeSessions?: boolean;
 };
 
@@ -52,6 +53,7 @@ export type MappedHostAcceptResult = {
   readonly screenshot?: { readonly screenshot?: string };
   readonly reload?: MappedHostAcceptResult;
   readonly preservation?: {
+    readonly sessionId?: string;
     readonly general?: boolean;
     readonly listed?: readonly string[];
     readonly selected?: readonly string[];

@@ -2,7 +2,6 @@
 import {
   clickSelector,
   evalPage,
-  NEW_BTN,
   remainingMs,
   waitComposer,
   waitFor,
@@ -57,7 +56,14 @@ const modelOptions = (page) =>
 })()`,
   );
 
-export const verifyPreservation = async (page, modelNames, ms, requests, expectedDefault) => {
+export const verifyPreservation = async (
+  page,
+  modelNames,
+  ms,
+  requests,
+  expectedDefault,
+  sessionId,
+) => {
   const until = Date.now() + ms;
   const budget = () => remainingMs(until, 'preservation');
   const names = modelNames.split(',').map((name) => name.trim());
@@ -95,9 +101,29 @@ export const verifyPreservation = async (page, modelNames, ms, requests, expecte
     budget(),
     'preservation-settings-closed',
   );
-  // Check the administrator default in a fresh composer, not a persisted Session selection.
-  await clickSelector(page, NEW_BTN);
-  await waitComposer(page, budget());
+  if (sessionId) {
+    // RPC-created Sessions are in the native ungrouped bucket; select the exact new identity.
+    const bucket = '[data-row-key="workspace:"][aria-expanded="false"]';
+    if (await evalPage(page, `Boolean(document.querySelector(${JSON.stringify(bucket)}))`))
+      await clickSelector(page, bucket);
+    const selector = `[data-row-key="session:${sessionId}"]`;
+    await waitFor(
+      () => evalPage(page, `Boolean(document.querySelector(${JSON.stringify(selector)}))`),
+      budget(),
+      'preservation-session-discovery',
+    );
+    await clickSelector(page, selector);
+    await waitFor(
+      () =>
+        evalPage(
+          page,
+          `document.querySelector(${JSON.stringify(selector)})?.getAttribute('aria-selected')==='true'`,
+        ),
+      budget(),
+      'preservation-session-selected',
+    );
+    await waitComposer(page, budget());
+  }
   await openModelList(page, budget());
   await waitFor(
     async () => {
@@ -157,6 +183,7 @@ export const verifyPreservation = async (page, modelNames, ms, requests, expecte
     selected: names,
     exactModels: listed,
     defaultModel: initiallySelected[0],
+    ...(sessionId ? { sessionId } : {}),
     modelSend: false,
   };
 };

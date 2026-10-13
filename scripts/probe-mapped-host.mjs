@@ -556,6 +556,7 @@ const capturePreservation = async (
   browserMs,
   requests,
   expectedDefault,
+  preserveSessionId,
   errors,
   screenshot,
   first,
@@ -572,6 +573,7 @@ const capturePreservation = async (
       browserMs,
       requests,
       expectedDefault,
+      preserveSessionId,
     );
     if (errors.length) throw new Error(`stage=console error=${tally(errors)}`);
     preservation.screenshot = await captureSettledScreenshot(
@@ -602,6 +604,7 @@ export const acceptObservation = async ({
   expectedRoster,
   preserveModels,
   expectedDefault,
+  preserveSessionId,
   observeSessions = false,
 }) => {
   expectedRoster = await resolveCompositionRoster(composition, expectedRoster);
@@ -670,6 +673,7 @@ export const acceptObservation = async ({
       browserMs,
       requests,
       expectedDefault,
+      preserveSessionId,
       errors,
       screenshot,
       first,
