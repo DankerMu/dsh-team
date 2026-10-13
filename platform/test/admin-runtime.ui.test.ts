@@ -67,6 +67,10 @@ test('administrator saves all runtime fields with fractional CPU without receivi
     await page.reload();
     await expect(page.getByLabel('CPU 核数', { exact: true })).toHaveValue('0.125');
     await expect(page.getByLabel('默认权限档', { exact: true })).toHaveValue('auto');
+    await expect(page.getByLabel('空闲分钟数', { exact: true })).toHaveValue('15');
+    await expect(page.getByLabel('内存 MiB', { exact: true })).toHaveValue('1024');
+    await expect(page.getByLabel('同时运行上限', { exact: true })).toHaveValue('2');
+    await observed.screenshot('runtime-reloaded');
     await expectNoBrowserStorage(page);
     expect(observed.otherMutations).toEqual([]);
     observed.expectHealthy([]);

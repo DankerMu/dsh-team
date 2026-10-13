@@ -47,6 +47,8 @@ it('loads the routed runtime editor and preserves fractional CPU through a fence
   const payload = request.mock.calls[1]?.[1]?.body;
   if (typeof payload !== 'string') throw new Error('Missing runtime JSON payload');
   expect(JSON.parse(payload)).toEqual({ ...CONFIG, cpuCores: 0.125, idleMinutes: 15 });
+  await settleSubmit(view);
+  expect(request).toHaveBeenCalledTimes(2);
   await settle(() => {
     body.resolve({ ...CONFIG, cpuCores: 0.125, idleMinutes: 15, runningInstances: 3 });
   });

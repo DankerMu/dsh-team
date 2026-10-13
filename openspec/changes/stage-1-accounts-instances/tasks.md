@@ -1138,6 +1138,7 @@ Review修复（#78 round1/pass1）：fresh实际HTTP/fileDB反例证明4097被�
 - Resource/capacity: bounded five-field form, positive-safe-integer inputs and finite fractionalCPU; real over-pool400 with useful safe capacity feedback and correction, no hardcoded pool capacity.
 - Packaging/docs: browser404 RED, fullcheck/allUI/source-dist smoke/screens/zero unexpected errors; strict fixture, native independent initial review, exact-head Docker/CI, existing docs updated. Source behavior outside necessary static/nav dispatch remains unchanged.
 - #81实现证据：真实page404 RED→五字段实际浏览器保存/刷新GREEN；完整check2010unit/890integration、37DOM的98.91/98.07/100/100%覆盖与dup2.93%通过，全UI34/34，39.6s。浏览器原生空值/0/1.5整数约束及CPU0的React反馈均不PUT、不改设置或审计；真实子网容量400显示4096后纠正成功，CPU0.125/0.000001可保存；模型密钥保留且不进入运行回应。实际401/403、受控500后真实GET重试、加载及截图/零未预期错误验证；独立source/dist浏览器0.375核/approval保存和刷新成功，存储为空。原始lint复杂度失败保留，按数值域拆解后全check通过；DOM回归不冒充单独RED。最终原生初审及精确headDocker/CI仍是合并门禁。
+- #81审查证据修复第1轮：三个原生席位未发现生产缺陷；补齐刷新后其余三字段的明确断言和`runtime-reloaded`截图，五字段均从真实重读验证；DOM增加JSON仍挂起时的后续重复提交，仍只有一次PUT。无生产源码改动，原验收不变；完整check2010unit/890integration及全UI34/34（40.3s）再次通过。旧head224344f的Docker67/67和CI38395319216成功保留，但不能替代修复后最终head资格。
 
 ## 16. 权限三档（任务包 1.13）
 
