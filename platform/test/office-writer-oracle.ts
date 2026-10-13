@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { record } from './container-start-docker-fixture.ts';
 
-export interface OfficeNotice {
+interface OfficeNotice {
   path: string;
   title: string;
   addressee: string;

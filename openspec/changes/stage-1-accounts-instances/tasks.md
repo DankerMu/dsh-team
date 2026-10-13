@@ -1222,7 +1222,7 @@ Execution order: fixture review/strict validation → qualify review-provenance 
 
 - [x] 17.1 在钉定的 DSH 发行版上做出一个最小的自定义预设 bundle（一个预设、一句指令），装进镜像的预置配置目录（`profile-seed/` 随之包含）。验证：`pnpm test:docker`——新实例的预设选择器接口里出现该预设。
 - [x] 17.2 `plugins/office-agents/`：`office-general`（默认）和 `office-writer` 两个预设，各有标识、中文名、职责、指令、Skills、工具清单、版本、启用状态；工具清单里没有联网搜索和网页抓取。验证：`pnpm test:docker`——选择器里两个预设都在且默认是综合办公；实例里生效的工具清单不含联网工具；一个检查脚本确认八项字段都有值（规格“预置两个办公 Agent”“办公 Agent 没有联网工具”）。
-- [ ] 17.3 手动选择公文写作生成 DOCX。验证：`pnpm test:model`——选择 `office-writer` 提出通知任务，工作目录出现能被解析库打开的 DOCX，正文含标题、主送对象、事项、落款和日期（规格“手动指定专业 Agent 真实生效”）。
+- [x] 17.3 手动选择公文写作生成 DOCX。验证：`pnpm test:model`——选择 `office-writer` 提出通知任务，工作目录出现能被解析库打开的 DOCX，正文含标题、主送对象、事项、落款和日期（规格“手动指定专业 Agent 真实生效”）。
 - [ ] 17.4 综合办公下的自然语言委派。验证：`pnpm test:model`——在 `office-general` 下提出同一任务，出现一个由该 Session 派生、使用 `office-writer` 预设的子 Session，工作目录出现可打开的 DOCX（规格“自然语言任务由综合办公委派”）。
 - [ ] 17.5 把 17.3、17.4 登记为两个预设各自的验收任务，写进 `plugins/office-agents/` 的说明文件。验证：说明文件列出每个预设的验收命令；`DMXAPI_KEY` 缺失时两个任务失败而不是跳过（规格“每个 Agent 有可执行的验收任务”）。
 
@@ -1265,6 +1265,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - Documentation / migration notes — selected: existing model evidence contract/matrix mirrors and this fixture. Concurrency / shared state and Data loss / migration not selected: only an invocation-owned verification scenario, no production state transition or migration.
 - Required proof: physically select writer on a blank native Session; projection and committed selection event match that Session before its exact supplied notice prompt; actual tool activity and successful terminal turn precede read-only parse. Five supplied fields and unique task identity must occur in the parsed DOCX. Known-bad parser/judge inputs must be rejected, including missing file (actual pre-turn baseline), each absent field, wrong binding and unsuccessful turn. Final exact-head full Docker/model/CI, screenshots/zero errors and independent resource/authority retirement remain gates.
 - Non-goals: rendered Office layout, #89 delegation, #90 task catalog, other Agents, new provider/permission behavior. Only a diagnosed production defect could justify reopening scope; none is presumed.
+- Runtime qualification: 7639317 trusted Actions38486403269 passed the complete preserved model path 1/1 (105.69s). Actual writer selection seq3 precedes human prompt seq9 and completed turn seq60; native history contains three user/message records, correctly distinguishing skill messages. The unique DOCX was absent before, then parsed as 37,845 bytes with all five supplied fields and same-byte SHA-256; screenshots inspected, browser errors0, invocation afe6c8fb independently fully retired. Initial f8e2d26 office-turn-count failure is retained; released skill-catalog/invocation message shapes reproduce the fault RED before the human-source correction. Separate parser qualification rejects corruption/missing files and survives model-writable docx.py only after isolated Python `-I` (actual RED→GREEN); original missing-owned-volume setup failure was diagnosed, not counted as semantic RED. 27 judge controls and full `pnpm check` (2010 unit/1013 integration) pass. Final frozen-head expanded review/full Docker/model/CI remain merge gates.
 
 ## 18. 部署骨架（任务包 1.16）
 
