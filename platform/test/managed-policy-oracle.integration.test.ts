@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   assertManagedPolicyRuntime,
+  assertRuntimeRejected,
   parseManagedPolicyRuntime,
   controlEmployeePolicyFailure,
   controlExposesEmployeePolicy,
@@ -58,6 +59,77 @@ it.each([
       presetIds: ['office-general', 'standard'],
       retainedTools: { standard: ['bash', 'read'] },
     });
+  }).toThrow('Invalid managed policy runtime observation');
+});
+
+it('rejects office capability evidence that omits its required definition metadata', () => {
+  const observation = {
+    models: EXPECTED,
+    presets: [{ id: 'office-general', description: '办公职责', toolNames: ['read', 'write'] }],
+  };
+  const expected = {
+    ...EXPECTED,
+    presetIds: ['office-general'],
+    officeNames: { 'office-general': '综合办公' },
+  };
+
+  expect(() => {
+    assertManagedPolicyRuntime(observation, expected);
+  }).toThrow('Invalid managed policy runtime observation');
+});
+
+const OFFICE_METADATA = {
+  name: '公文与材料写作',
+  version: '0.2.0',
+  enabled: true,
+  instructionSha256: 'a'.repeat(64),
+  skills: [
+    { name: 'office-docx', bodySha256: 'b'.repeat(64) },
+    { name: 'official-writing', bodySha256: 'c'.repeat(64) },
+  ],
+};
+const OFFICE_RUNTIME = {
+  models: EXPECTED,
+  presets: [
+    {
+      id: 'office-writer',
+      description: '公文职责',
+      toolNames: ['read', 'write'],
+      office: OFFICE_METADATA,
+    },
+  ],
+};
+const OFFICE_EXPECTED = {
+  ...EXPECTED,
+  presetIds: ['office-writer'],
+  retainedTools: { 'office-writer': ['read', 'write'] },
+  officeNames: { 'office-writer': '公文与材料写作' },
+};
+
+it('refuses to count a complete enabled office preset as rejected policy', () => {
+  expect(() => {
+    assertRuntimeRejected(OFFICE_RUNTIME, OFFICE_EXPECTED);
+  }).toThrow('Invalid managed policy runtime observation');
+});
+
+it.each([
+  { id: 'unexpected-office' },
+  { description: '' },
+  { toolNames: [] },
+  { toolNames: ['read', 'write', 'web_fetch'] },
+  { office: { ...OFFICE_METADATA, name: '' } },
+  { office: { ...OFFICE_METADATA, version: '' } },
+  { office: { ...OFFICE_METADATA, enabled: false } },
+  { office: { ...OFFICE_METADATA, instructionSha256: '' } },
+  { office: { ...OFFICE_METADATA, skills: [] } },
+  { office: { ...OFFICE_METADATA, skills: [{ name: 'office-docx', bodySha256: '' }] } },
+])('rejects incomplete or disabled office definition evidence %#', (changed) => {
+  const observation = {
+    ...OFFICE_RUNTIME,
+    presets: [{ ...OFFICE_RUNTIME.presets[0], ...changed }],
+  };
+  expect(() => {
+    assertManagedPolicyRuntime(observation, OFFICE_EXPECTED);
   }).toThrow('Invalid managed policy runtime observation');
 });
 

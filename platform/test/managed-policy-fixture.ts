@@ -35,6 +35,8 @@ import {
   controlEmployeePolicyFailure,
   liveCopyReenablesPersonalModels,
   parseManagedPolicyRuntime,
+  SHIPPED_PRESET_IDS,
+  RETAINED_TOOLS,
   type ManagedPolicyRuntimeExpectation,
 } from './managed-policy-oracle.ts';
 import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee-edit.ts';
@@ -59,7 +61,6 @@ const HOME_PATCH = '/data/home/cordis.patch.yml';
 const OBSERVER_PATH = '/data/home/profiles/web/node_modules/@dsh-team/managed-policy-observer.js';
 const STATE_MARKER = '/data/home/dsh-team-user-state.txt';
 const STATE_MARKER_BODY = 'keep-across-restart\n';
-const SHIPPED_PRESET_IDS = ['standard', 'ptc', 'minimal', 'cordis', 'office-general'] as const;
 const CUSTOM_DESCRIPTION = 'brief-zh';
 const WORKSPACE_PATH = '/data/work';
 export const MANAGED_BOOT_ROSTER = [
@@ -135,13 +136,6 @@ const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
 
-const RETAINED_TOOLS = {
-  standard: ['bash', 'read'],
-  ptc: ['bash', 'read'],
-  minimal: ['bash'],
-  cordis: ['bash', 'read'],
-} as const;
-
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: MANAGED_ADDRESS,
   defaultModel: 'beta',
@@ -150,6 +144,7 @@ const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   betaContextWindow: 262_144,
   presetIds: [...SHIPPED_PRESET_IDS],
   retainedTools: RETAINED_TOOLS,
+  officeNames: { 'office-general': '综合办公', 'office-writer': '公文与材料写作' },
 };
 
 const RESTART_EXPECTED: ManagedPolicyRuntimeExpectation = {

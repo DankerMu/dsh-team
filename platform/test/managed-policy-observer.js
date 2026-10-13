@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
@@ -10,7 +12,7 @@ const { livePresetMounts } = await import(
 
 /** Fixture-only read-only observer. Does not change model, permission, or tool policy. */
 export const name = 'dsh-team-managed-policy-observer';
-export const inject = ['loader', 'llm', 'agentPresets', 'tools'];
+export const inject = ['loader', 'llm', 'agentPresets', 'tools', 'skills'];
 
 const FAIL = 'Invalid managed policy runtime observation';
 const MARKER = 'DSH_TEAM_MANAGED_POLICY_OBSERVATION';
@@ -100,23 +102,61 @@ async function observeModels(ctx, llm) {
   };
 }
 
-function effectiveReadLimit(ctx, lease, presetId) {
+function presetConfig(ctx, lease, presetId, entryId, moduleName) {
   const mounts = livePresetMounts(ctx.root.fiber).filter(
     (mount) => mount.key === lease.key && mount.presetId === presetId,
   );
   if (mounts.length !== 1) fail();
   // Loader entry.id is owner-qualified; options.id is the row's group-local identity.
   const entries = [...mounts[0].tree.entries()].filter(
-    (entry) => entry.options.id === 'tool-fs' && entry.options.name === TOOL_FS_MODULE,
+    (entry) => entry.options.id === entryId && entry.options.name === moduleName,
   );
   if (entries.length !== 1) fail();
   const entry = entries[0];
   if (entry.options.group || entry.disabled || entry.fiber === undefined) fail();
   const config = entry.fiber.config;
   if (typeof config !== 'object' || config === null || Array.isArray(config)) fail();
+  return config;
+}
+
+function effectiveReadLimit(ctx, lease, presetId) {
+  const config = presetConfig(ctx, lease, presetId, 'tool-fs', TOOL_FS_MODULE);
   const readLimit = config.readLimit;
   if (typeof readLimit !== 'number' || !Number.isFinite(readLimit)) fail();
   return readLimit;
+}
+
+function textHash(value) {
+  if (typeof value !== 'string' || value.trim() === '') fail();
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/** Eight-field check uses actual registered scopes; retain hashes, not instruction bodies. */
+async function officeMetadata(ctx, lease, row) {
+  const declaration = [...ctx.loader.entries()].find(
+    (entry) => entry.options.id === `preset-${row.id}`,
+  );
+  if (!declaration || declaration.disabled || declaration.fiber === undefined) fail();
+  const manifest = JSON.parse(
+    readFileSync(
+      '/data/home/profiles/web/node_modules/@dsh-team/office-agents/package.json',
+      'utf8',
+    ),
+  );
+  const persona = presetConfig(ctx, lease, row.id, 'persona', '@deepseek-ai/dsh-persona');
+  const skills = [];
+  for (const name of ['office-docx', 'official-writing']) {
+    const skill = await ctx.skills.get(name, { cwd: '/data/work', scope: lease.key });
+    if (!skill || skill.name !== name || !skill.invocation.modelInvocable) fail();
+    skills.push({ name, bodySha256: textHash(skill.content) });
+  }
+  return {
+    name: row.name,
+    version: manifest.version,
+    enabled: !declaration.disabled,
+    instructionSha256: textHash(persona.prefix),
+    skills,
+  };
 }
 
 async function observePresets(ctx, agentPresets, tools) {
@@ -132,6 +172,9 @@ async function observePresets(ctx, agentPresets, tools) {
         toolNames: toolNames(tools.schemas(lease.key)),
         ...(row.id === CUSTOM_PRESET_ID
           ? { readLimit: effectiveReadLimit(ctx, lease, row.id) }
+          : {}),
+        ...(['office-general', 'office-writer'].includes(row.id)
+          ? { office: await officeMetadata(ctx, lease, row) }
           : {}),
       });
     } finally {
