@@ -407,6 +407,12 @@ NODE
 expect_reject "undocumented platform read" "undocumented PLATFORM_UNDOCUMENTED" pnpm lint:config
 echo "    x-inventory: \${DEPLOY_UNDOCUMENTED:?}" >>deploy/compose.yml
 expect_reject "undocumented deployment interpolation" "undocumented DEPLOY_UNDOCUMENTED" pnpm lint:config
+echo "    labels: { inventory: \"\${DEPLOY_UNDOCUMENTED}\", other: \"fixed\" }" >>deploy/compose.yml
+expect_reject "flow mapping inventory" "does not support flow collections" pnpm lint:config
+echo "    group_add: [\"\${DEPLOY_UNDOCUMENTED}\", \"1000\"]" >>deploy/compose.yml
+expect_reject "flow sequence inventory" "does not support flow collections" pnpm lint:config
+printf '    environment:\n      INVENTORY: |2 # comment\n        value: \044{DEPLOY_UNDOCUMENTED}\n' >>deploy/compose.yml
+expect_reject "commented block scalar inventory" "does not support block scalars" pnpm lint:config
 echo '// env.PLATFORM_COMMENT;' >>platform/src/config.ts
 echo 'const message = "env.PLATFORM_ERROR";' >>platform/src/config.ts
 echo '# PLATFORM_COMMENT=unused' >>.env.example

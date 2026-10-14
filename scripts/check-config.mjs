@@ -47,15 +47,18 @@ function scalar(line) {
     }
     if (['"', "'"].includes(character)) {
       quote = character;
-    } else if (character === '#' && /\s/.test(line[index - 1] ?? ' ')) {
-      return line.slice(start, index);
-    } else if (character === ':' && /\s/.test(line[index + 1] ?? ' ')) {
+    } else if (character === '#' && /^\s?$/.test(line.charAt(index - 1))) {
+      line = line.slice(0, index);
+      break;
+    } else if ('[{'.includes(character) && line[index - 1] !== '$') {
+      throw new Error('Compose inventory does not support flow collections');
+    } else if (character === ':' && /^\s?$/.test(line.charAt(index + 1))) {
       start = index + 1;
     }
   }
   if (quote !== '') throw new Error('Compose inventory requires single-line scalar quoting');
   const value = line.slice(start);
-  if (/[|>][-+]?\s*$/.test(value))
+  if (/^\s*[|>][\d+-]*\s*$/.test(value))
     throw new Error('Compose inventory does not support block scalars');
   return value;
 }
