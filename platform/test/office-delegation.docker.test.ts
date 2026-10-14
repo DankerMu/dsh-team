@@ -15,6 +15,10 @@ import { record } from './container-start-docker-fixture.ts';
 
 it('selects genuine native writer children while preserving tiers, cold identity, siblings and lifecycle', async () => {
   const host = readFileSync(new URL('./office-delegation-host.mjs', import.meta.url), 'utf8');
+  const construction = readFileSync(
+    new URL('./office-construction-native.mjs', import.meta.url),
+    'utf8',
+  );
   const evidence = join(process.cwd(), '.run', 'issue213');
   mkdirSync(evidence, { recursive: true });
   await runUserImage(
@@ -31,6 +35,11 @@ it('selects genuine native writer children while preserving tiers, cold identity
       const composition = await collectComposition(
         lifecycle,
         `dsh-team-test-${lifecycle.runId}-office-compose`,
+      );
+      execScript(
+        lifecycle,
+        `dsh-team-test-${lifecycle.runId}-construction-controls`,
+        `import { writeFileSync } from 'node:fs'; writeFileSync('/data/home/office-construction-native.mjs', ${JSON.stringify(construction)});`,
       );
       const overlayFiles = (['yolo', 'approval', 'auto'] as const).map(
         (defaultPermissionTier, index) => {
@@ -95,6 +104,14 @@ process.stdout.write(JSON.stringify([0,1,2].map(index => ({
             })),
           );
           if (!Array.isArray(rows)) throw new Error('Missing native readiness observations');
+          expect(record(rows[0]).result).toMatchObject({
+            constructionFailures: {
+              rejectedPaths: 7,
+              sentinelUnchanged: true,
+              outsideAbsent: true,
+              cancelledBeforeBody: true,
+            },
+          });
           for (const row of rows) {
             const readiness = record(record(record(row).result).readiness);
             const pending = record(readiness.pending);
