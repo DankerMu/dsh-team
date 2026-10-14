@@ -92,7 +92,7 @@ it('lets a fresh employee use the administrator model to create exact workspace 
             return id;
           };
           let containerId = currentContainer();
-          phase = 'auto-observer-setup';
+          phase = 'permission-observer-install';
           const observerExec = (script: string) => gateway.exec(containerId, script);
           const reviewObserver = await installModelObserver(observerExec, 'permission-model', {
             nonce: null,
@@ -100,10 +100,12 @@ it('lets a fresh employee use the administrator model to create exact workspace 
             sessionId: null,
             mode: 'observe',
           });
+          phase = 'office-observer-install';
           const officeObserver = await installModelObserver(observerExec, 'office-model', {
             nonce: null,
           });
           // Complete fixture-only profile installation before any browser attaches.
+          phase = 'observer-restart-request';
           const restarted = await fetch(
             `${base}/_platform/api/admin/instances/${employee.id}/restart`,
             {
@@ -112,16 +114,20 @@ it('lets a fresh employee use the administrator model to create exact workspace 
               body: '{}',
             },
           );
+          phase = `observer-restart-response-${String(restarted.status)}`;
           expect(restarted.status).toBe(200);
           expect(await restarted.json()).toEqual({
             userId: employee.id,
             status: 'starting',
             reason: 'starting',
           });
+          phase = 'observer-restart-readiness';
           await gateway.ready(employee.cookie);
+          phase = 'observer-replacement-identity';
           const replacement = currentContainer();
           expect(replacement).not.toBe(containerId);
           containerId = replacement;
+          phase = 'permission-observer-initial-observation';
           reviewObserver.observation();
           const marker = `model-proof-${randomUUID()}`;
           const path = `/data/work/${marker}.txt`;
