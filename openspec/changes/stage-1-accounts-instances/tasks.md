@@ -1297,8 +1297,8 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 依赖：第 12、14、15 组。
 
 - [x] 18.1 平台镜像 `platform/Dockerfile`：多阶段构建，产物含 `platform/dist`、前端静态文件、迁移文件、`images/seccomp/dsh-user.json` 和生产依赖（含在 amd64 上编译的 better-sqlite3），以非 root 用户运行。验证：构建成功；`docker run --rm <镜像> node platform/dist/cli.js --help` 列出 `admin create`；镜像里 seccomp 文件在配置项默认指向的路径上。
-- [ ] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
-- [ ] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本比对 `config.ts` 读取的变量名和根目录 `.env.example` 里的变量名，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在两边不一致时失败（在 `scripts/test-guardrails.sh` 里加这条拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
+- [x] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
+- [ ] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本分别比对 `config.ts` 读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与根目录 `.env.example` 中对应的变量名，拒绝未列出或未被消费的配置项，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在任一对应清单不一致时失败（在 `scripts/test-guardrails.sh` 里加拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
 - [ ] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
 - [ ] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。
 - [ ] 18.6 前置代理下的 HTTPS。验证：`pnpm test:deploy`——在 compose 里临时加一个终结 TLS 的代理容器（自签证书），对外地址配为 `https://`、开启仅 HTTPS 发送、代理地址填入受信代理后，登录、工作台和长连接都正常，平台会话 cookie 带 `Secure`，登录的审计记录里来源地址是客户端的而不是代理的（规格“可在前置代理后使用 HTTPS”）。
@@ -1348,3 +1348,13 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Preserve #91's original failed gate and separate slow-DELETE investigation; #224 completion alone is not a green #91. Shared Epic fixture stays open.
 - Controlled baseline proof: the initial destroyed-flag-only check falsely passed and is retained as an incomplete oracle. Requiring an actual post-delay Ping/Pong roundtrip on the same real carrier yields exit1 `Test peer closed` on the old synchronous fixture (suite56.48s), with all owned inventories empty; the new regression must retain that protocol-level oracle.
 - Integrated qualification: `pnpm check` passes (2137 unit / 1130 integration); observer error-propagation tests retrospectively fail against baseline (three behavioral failures) and pass after cutover. Actual giap-vps slow-helper regression passes with same-carrier Pong and original volume markers (65.15s); native observer install/restart/arm/readback smoke passes without provider calls (47.47s); original restart acceptance passes 3/3 (87.89s). Each invocation's four owned-resource inventories are empty. These candidate checks do not replace the final reviewed-head full Docker/CI gate or resolve the separate DELETE-latency investigation.
+
+## Issue #92 risk/evidence map (task18.2 only)
+
+- Public entry/config/packaging: actual `pnpm test:deploy` against delivered Compose/images, health and full external account→instance entry; explicit root env-file/project resolution and no hidden runtime installer.
+- Auth/secrets/file safety: non-root uid1000 with exact socket group; same absolute bind paths, pre-created owned writable directories, no unrelated env forwarding, no plaintext credential diagnostics.
+- Concurrency/identity/cleanup: fixed-name admission serialized and pre-existing target refused; journal-first invocation authority for Compose platform/network and employee container/volumes/network; exact ownership cleanup, primary-error preservation and empty final inventories.
+- CLI/compatibility: actual container TTY for administrator creation, original six/eight-second PTY bounds and privacy retained; no direct DB seed. No provider inference or new browser rendering claim.
+- Oracle qualification: semantic wrong-deployment RED plus restored external GREEN; foreign fixed-name sentinel preserved; no missing-file-only proof or skipped cases.
+- Required gates: focused applicable contracts, `pnpm check`, strict fixture, actual standalone `pnpm test:deploy`, final exact-head original full `pnpm test:docker` including deployment, four-seat high-risk review and protected CI. Workflow/rule changes disclosed; human review remains Epic-end.
+- Task18.3 inventory clarification accounts for both actual consumers with the same strict missing/unused rejection; its checker/guardrails remain #93, not implemented here. No dummy platform configuration.

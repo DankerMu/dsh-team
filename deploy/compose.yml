@@ -1,0 +1,43 @@
+services:
+  platform:
+    image: dsh-team-platform:local
+    container_name: dsh-team-platform
+    group_add:
+      - "${DEPLOY_DOCKER_GID:?Set DEPLOY_DOCKER_GID to the Docker socket numeric group}"
+    environment:
+      PLATFORM_HOST: ${PLATFORM_HOST:?}
+      PLATFORM_PORT: ${PLATFORM_PORT:?}
+      PLATFORM_LOG_LEVEL: ${PLATFORM_LOG_LEVEL-info}
+      PLATFORM_DATA_DIR: ${PLATFORM_DATA_DIR:?}
+      PLATFORM_MANAGED_CONFIG_DIR: ${PLATFORM_MANAGED_CONFIG_DIR:?}
+      PLATFORM_DOCKER_SOCKET: ${PLATFORM_DOCKER_SOCKET:?}
+      PLATFORM_USER_IMAGE: ${PLATFORM_USER_IMAGE:?}
+      PLATFORM_SECCOMP_PROFILE: ${PLATFORM_SECCOMP_PROFILE:?}
+      PLATFORM_SUBNET_POOL: ${PLATFORM_SUBNET_POOL-172.30.0.0/16}
+      PLATFORM_UPSTREAM_MODE: network
+      PLATFORM_CONTAINER_NAME: dsh-team-platform
+      PLATFORM_PUBLIC_URL: ${PLATFORM_PUBLIC_URL:?}
+      PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE-false}
+      PLATFORM_TRUSTED_PROXIES: ${PLATFORM_TRUSTED_PROXIES:-}
+    ports:
+      - "${PLATFORM_PORT:?}:${PLATFORM_PORT:?}"
+    networks:
+      default:
+        # Keep ingress connections on the primary gateway when employee networks attach.
+        gw_priority: 1
+    volumes:
+      - type: bind
+        source: ${PLATFORM_DOCKER_SOCKET:?}
+        target: ${PLATFORM_DOCKER_SOCKET:?}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PLATFORM_DATA_DIR:?}
+        target: ${PLATFORM_DATA_DIR:?}
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PLATFORM_MANAGED_CONFIG_DIR:?}
+        target: ${PLATFORM_MANAGED_CONFIG_DIR:?}
+        bind:
+          create_host_path: false

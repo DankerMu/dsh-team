@@ -668,3 +668,12 @@
 - Evidence floor: real Linux amd64 multistage build, source-compiled SQLite exercised through packaged migrations, non-root CLI/help and default data write, packaged static resolver and default seccomp read; owned cleanup, `pnpm check`, exact-head Docker and CI.
 - Task18.1 only: no Compose, Docker-socket deployment policy, model calls or full deployment. Shared fixture stays open.
 - Parent owns this single mapped implementation slice under the higher-priority delegation restriction; independent packaging/security review remains required. Human review deferral is unchanged.
+
+## Issue #92 fixture
+
+- Feature; expanded because Compose owns deployed configuration, host paths/socket authority and externally observed instance startup.
+- Deliver task18.2 only: fixed non-root platform service, same-absolute-path binds, one published port, network-mode instances, root environment example, real deployment entry and CI evidence wiring.
+- Verification is disposable and invocation-owned on giap-vps (design decision16), not a persistent production rollout. No inference/model invocation; task15.6 retains conversation acceptance.
+- Reuse the existing serial Docker project and trusted exact-head owner evidence. `test:deploy` selects its deployment file directly; full `test:docker` must also execute it. No duplicate verifier or unexercised deployment attestation.
+- Required socket group is a deployment-only `DEPLOY_DOCKER_GID`, not a dummy platform config field. Task18.3 will account for platform and Compose consumers separately against the single example, with no unlisted or unused entries.
+- Parent-inline fixture/implementation follows the single-known-slice delegation restriction; four independent high-risk final review seats and unchanged human-review deferral remain.

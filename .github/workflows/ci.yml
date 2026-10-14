@@ -177,7 +177,7 @@ jobs:
       - run: pnpm test:guardrails
 
   docker-evidence:
-    name: Trusted Docker evidence (read-only)
+    name: Trusted Docker and Compose evidence (read-only)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -192,6 +192,9 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .tool-versions
+      # Full test:docker discovery includes deployment.docker.test.ts. Trusted
+      # orchestration also runs test:deploy on that head before publishing proof;
+      # hosted CI receives no VPS credentials and cannot substitute an older run.
       - name: Verify exact-head owner evidence or proved squash tree equivalence
         env:
           GH_TOKEN: ${{ github.token }}

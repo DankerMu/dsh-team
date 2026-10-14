@@ -193,6 +193,10 @@ verification:
       command: "pnpm test:docker"
       evidence: "trusted giap-vps multistage platform artifact; compiled CLI help exit0; effective nonroot UID, writable default data and read-only application; explicit native compile and actual Release binding selection with migrations/write/reopen; default web resolver and exact seccomp bytes; ownership-checked image/container cleanup"
       required_at: "L3+"
+    compose_deployment:
+      command: "pnpm test:deploy"
+      evidence: "trusted giap-vps frozen head; delivered Compose and real images; fixed-name refusal/sentinel preservation, non-root socket access, identical absolute binds, actual health/admin CLI/login/model configuration/employee native HTTP+WS entry, unpublished instance ports; failed-caller actual helper retirement before graceful owner exit, original-error preservation, ownership-checked cleanup and no owned resources; also included in final full Docker discovery"
+      required_at: "L3+"
     platform_ui:
       command: "pnpm test:ui"
       evidence: "pinned Playwright Chromium (separate from CfT Docker/CHROME_BIN); fresh built React over owned real TCP/SQLite; real login/registration/password/logout and session effects; waiting four-state/manual retry/serial polling with only start/status API substitutes; administrator denial/search/pagination/four list states and confirmed disable/enable/reset with real API/SQLite effects (synthetic empty list is rendering-only); audit shared navigation, real event/email/inclusive local-time intersection, tied page20/no-total terminal paging/reset, four states/retry and current authority with unchanged audits/no mutations (only one held real GET or exact500 failure control); local assets, screenshots, zero unexpected console/page/request failures and external requests"
