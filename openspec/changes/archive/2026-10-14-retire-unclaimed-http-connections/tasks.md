@@ -8,7 +8,7 @@
 ## 2. Integration and independent acceptance
 
 - [x] 2.1 Replay the unchanged #92 permanent caller-abort/helper-drain regression in an explicitly identified combined archive on giap-vps; require original error preservation, SIGTERM, helper destruction before graceful owner exit, and empty owned inventories without extending its 15s/30s windows.
-- [ ] 2.2 Run scoped checks, full local checks and strict fixture validation, then freeze the separate prerequisite head for original full Docker discovery, four-seat independent high-risk review, protected CI and merge. Preserve #92's existing review counters and require its rebased final-head standalone deployment/full-Docker gates afterward.
+- [x] 2.2 Run scoped checks, full local checks and strict fixture validation, then freeze the separate prerequisite head for original full Docker discovery, four-seat independent high-risk review, protected CI and merge. Preserve #92's existing review counters and require its rebased final-head standalone deployment/full-Docker gates afterward.
 
 ## Risk and evidence map
 
