@@ -1374,3 +1374,9 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Error/cleanup/concurrency: same fixed-name lock across removal/recreation/final drain, exact owner labels/ID and absent-resource checks, unchanged original caller-failure regression; no forced-stop proof or global cleanup.
 - Evidence: known-good deployment, real lost-data negative control, restored positive; local check/strict fixture, independent review and frozen-head standalone/full Docker with empty independent inventories. No runtime/schema/DSH/permission changes intended.
 - 实测：真实候选部署4/4通过（58.26s），新用例保留两实例物理生命周期与各自native Session、账号、model投影/settings摘要、原审计。仅在旧owner退役后将测试自有数据目录替换为空目录的负对照，复建后原管理员会话返回401而非200，4项中仅持久化用例失败（56.79s）；两次owned容器/卷/网络/镜像及活动unit独立清单均为空。候选localcheck2152unit/1135integration、重复率2.84%、strict5/5通过；恢复原候选的冻结SHA standalone/fullDocker与CI仍是合并门禁。
+
+## Issue #95 risk/evidence map (task18.5 only)
+
+- Expanded: auth/resource/evidence boundary with two running employee containers; actual configured/effective publication and socket-source/destination inventories, no reliance on EXPOSE or only known-container filtering.
+- Error/ownership: read-only discovery scoped to invocation/project/exact employee labels; new discoveries never grant cleanup authority. Existing lock, immutable-ID owner drainage, failure preservation and canonical registered-target cleanup unchanged.
+- Characterization evidence: known-good, separately rejected loopback publication and alternate-destination socket control, restored clean candidate; localcheck/strict, independentreview, exact-head standalone/fullDocker/CI and independent empty owned inventories. No provider/UI or broader isolation claim.
