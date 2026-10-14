@@ -183,6 +183,15 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
             rpc: (method, args) => gateway.rpc(employee.cookie, method, args),
             exec: (script) => gateway.exec(containerId, script),
             evidence,
+            mode: 'manual',
+          });
+          phase = 'office-general-delegation';
+          await runOfficeWriterScenario({
+            page,
+            rpc: (method, args) => gateway.rpc(employee.cookie, method, args),
+            exec: (script) => gateway.exec(containerId, script),
+            evidence,
+            mode: 'delegated',
           });
           phase = 'browser-health';
           await writeFile(

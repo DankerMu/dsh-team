@@ -5,4 +5,5 @@ export declare function runOfficeWriterScenario(input: {
   rpc: (method: string, args: unknown) => Promise<Record<string, unknown>>;
   exec: (script: string) => string;
   evidence: string;
+  mode: 'manual' | 'delegated';
 }): Promise<void>;

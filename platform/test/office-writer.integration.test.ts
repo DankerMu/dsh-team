@@ -152,3 +152,144 @@ it.each([
   );
   expect(() => officeTurnEvidence({ ...TURN, records })).toThrow();
 });
+
+const DELEGATED_PROMPT = '请按主任务给出的五项内容制作通知文件。';
+const PARENT_EVENTS = [
+  { type: 'session/create', data: {} },
+  { type: 'turn/start', data: { turn: 1 } },
+  {
+    type: 'user/message',
+    data: { source: { kind: 'user', rpcId: 'human' }, content: [{ type: 'text', text: PROMPT }] },
+  },
+  {
+    type: 'tool/call',
+    data: {
+      turn: 1,
+      callId: 'delegate',
+      name: 'subagent',
+      arguments: JSON.stringify({ description: '通知', prompt: DELEGATED_PROMPT }),
+    },
+  },
+  { type: 'subagent/catalog', data: { childId: 'child', mode: 'one-shot', label: '通知' } },
+  {
+    type: 'tool/result',
+    data: {
+      turn: 1,
+      message: {
+        role: 'tool',
+        toolCallId: 'delegate',
+        source: { kind: 'tool', callId: 'delegate' },
+      },
+    },
+  },
+  { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+];
+const DELEGATION = {
+  parent: {
+    sessionId: 'parent',
+    cwd: '/data/work',
+    preset: 'office-general',
+    prompt: PROMPT,
+    hasMore: false,
+    cursor: PARENT_EVENTS.length - 1,
+    records: PARENT_EVENTS.map((event, seq) => ({ event: { seq, ...event } })),
+    catalog: [{ id: 'child', mode: 'one-shot', label: '通知' }],
+  },
+  child: { sessionId: 'child', origin: 'subagent', parentSessionId: 'parent', cwd: '/data/work' },
+  identity: { mode: 'one-shot', label: '通知', seq: 1 },
+};
+const DELEGATED_TURN = {
+  ...TURN,
+  prompt: DELEGATED_PROMPT,
+  delegation: DELEGATION,
+  cursor: EVENTS.length,
+  records: [
+    ...EVENTS.slice(0, 1),
+    {
+      type: 'subagent/descriptor',
+      data: { version: 1, mode: 'one-shot', provider: 'spawn', label: '通知' },
+    },
+    ...EVENTS.slice(1).map((event) =>
+      event.type === 'user/message'
+        ? {
+            ...event,
+            data: { source: { kind: 'user' }, content: [{ type: 'text', text: DELEGATED_PROMPT }] },
+          }
+        : event,
+    ),
+  ].map((event, seq) => ({ event: { seq, ...event } })),
+};
+
+it('binds the model-authored child prompt to the actual human parent and native delegation', () => {
+  expect(officeTurnEvidence(DELEGATED_TURN)).toMatchObject({ turn: 1, selectedSeq: 2 });
+});
+
+it.each([
+  { child: { ...DELEGATION.child, parentSessionId: 'unrelated' } },
+  { child: { ...DELEGATION.child, origin: undefined } },
+  { child: { ...DELEGATION.child, cwd: '/other' } },
+  { child: { ...DELEGATION.child, sessionId: 'stale-child' } },
+  { identity: { ...DELEGATION.identity, mode: 'continuable' } },
+  { identity: { ...DELEGATION.identity, seq: 0 } },
+  { parent: { ...DELEGATION.parent, preset: 'office-writer' } },
+  { parent: { ...DELEGATION.parent, prompt: 'another human task' } },
+  { parent: { ...DELEGATION.parent, hasMore: true } },
+  { parent: { ...DELEGATION.parent, catalog: [] } },
+])('rejects a successful writer child with false or incomplete delegation lineage %#', (change) => {
+  expect(() =>
+    officeTurnEvidence({ ...DELEGATED_TURN, delegation: { ...DELEGATION, ...change } }),
+  ).toThrow();
+});
+
+it.each([
+  { index: 3, data: { ...PARENT_EVENTS[3]?.data, name: 'write' } },
+  {
+    index: 3,
+    data: {
+      ...PARENT_EVENTS[3]?.data,
+      arguments: JSON.stringify({ prompt: PROMPT, description: '通知' }),
+    },
+  },
+  { index: 4, data: { childId: 'another-child', mode: 'one-shot', label: '通知' } },
+  {
+    index: 5,
+    data: {
+      turn: 1,
+      message: { role: 'tool', toolCallId: 'other', source: { kind: 'tool', callId: 'other' } },
+    },
+  },
+  {
+    index: 5,
+    data: {
+      turn: 1,
+      message: {
+        role: 'tool',
+        toolCallId: 'delegate',
+        source: { kind: 'tool', callId: 'delegate' },
+        isError: true,
+      },
+    },
+  },
+  { index: 6, data: { turn: 1, reason: { kind: 'error' } } },
+])('rejects manufactured parent call, child membership or completion %#', ({ index, data }) => {
+  const parent = {
+    ...DELEGATION.parent,
+    records: DELEGATION.parent.records.map((row, position) =>
+      position === index ? { event: { ...row.event, data } } : row,
+    ),
+  };
+  expect(() =>
+    officeTurnEvidence({ ...DELEGATED_TURN, delegation: { ...DELEGATION, parent } }),
+  ).toThrow();
+});
+
+it('rejects a delegated writer that only reads while another Agent could produce the file', () => {
+  const records = DELEGATED_TURN.records.map((row) =>
+    row.event.type === 'tool/call'
+      ? { event: { ...row.event, data: { ...row.event.data, name: 'read' } } }
+      : row,
+  );
+  expect(() => officeTurnEvidence({ ...DELEGATED_TURN, records })).toThrow(
+    'office-turn-completion',
+  );
+});

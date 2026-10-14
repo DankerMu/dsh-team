@@ -42,13 +42,21 @@ export function officeDocxEvidence(value: unknown, expected: OfficeNotice) {
   return { path: expected.path, bytes: parsed.bytes, sha256: parsed.sha256, fields };
 }
 
-export function officeTurnEvidence(input: {
+interface OfficeHistory {
   records: readonly unknown[];
   cursor: number;
   hasMore: boolean;
   preset: string;
   prompt: string;
-}) {
+}
+
+interface OfficeDelegation {
+  parent: OfficeHistory & { sessionId: string; cwd: string; catalog: unknown };
+  child: unknown;
+  identity: unknown;
+}
+
+function historyEvents(input: OfficeHistory) {
   const events = input.records.map((row) => record(record(row).event));
   assert(
     !input.hasMore &&
@@ -56,6 +64,138 @@ export function officeTurnEvidence(input: {
       events.every((event, index) => event.seq === index),
     'office-history-incomplete',
   );
+  return events;
+}
+
+function childLineage(delegation: OfficeDelegation, events: Record<string, unknown>[]) {
+  const { parent } = delegation;
+  const child = record(delegation.child);
+  const identity = record(delegation.identity);
+  assert(
+    parent.preset === 'office-general' &&
+      child.origin === 'subagent' &&
+      child.parentSessionId === parent.sessionId &&
+      child.sessionId !== parent.sessionId &&
+      parent.cwd === '/data/work' &&
+      child.cwd === parent.cwd,
+    'office-child-lineage',
+  );
+  assert(
+    identity.mode === 'one-shot' &&
+      typeof identity.seq === 'number' &&
+      Number.isSafeInteger(identity.seq),
+    'office-child-descriptor',
+  );
+  const descriptor = record(events[identity.seq]);
+  assert(
+    descriptor.type === 'subagent/descriptor' &&
+      record(descriptor.data).mode === identity.mode &&
+      record(descriptor.data).provider === 'spawn',
+    'office-child-descriptor',
+  );
+  assert(Array.isArray(parent.catalog) && parent.catalog.length === 1, 'office-child-catalog');
+  const entry = record(parent.catalog[0]);
+  assert(
+    entry.id === child.sessionId &&
+      entry.mode === identity.mode &&
+      entry.label === identity.label &&
+      record(descriptor.data).label === identity.label,
+    'office-child-catalog',
+  );
+  return { child, identity };
+}
+
+function delegationEvidence(
+  input: OfficeHistory,
+  delegation: OfficeDelegation,
+  childEvents: Record<string, unknown>[],
+) {
+  const { child, identity } = childLineage(delegation, childEvents);
+  const { parent } = delegation;
+  const events = historyEvents(parent);
+  const starts = events.filter((event) => event.type === 'turn/start');
+  const prompts = events.filter(
+    (event) => event.type === 'user/message' && record(record(event.data).source).kind === 'user',
+  );
+  assert(prompts.length === 1 && starts.length > 0, 'office-parent-prompt');
+  const prompt = record(prompts[0]);
+  const source = record(record(prompt.data).source);
+  const content = record(prompt.data).content;
+  assert(
+    typeof source.rpcId === 'string' &&
+      source.rpcId.length > 0 &&
+      Array.isArray(content) &&
+      content.some(
+        (part: unknown) => record(part).type === 'text' && record(part).text === parent.prompt,
+      ),
+    'office-parent-prompt',
+  );
+  const start = record(starts[0]);
+  const turn = record(start.data).turn;
+  assert(Number(start.seq) < Number(prompt.seq), 'office-parent-prompt');
+  const calls = events.filter(
+    (event) =>
+      event.type === 'tool/call' &&
+      record(event.data).name === 'subagent' &&
+      record(event.data).turn === turn,
+  );
+  assert.equal(calls.length, 1, 'office-delegation-call');
+  const call = record(calls[0]);
+  const callData = record(call.data);
+  const args = record(JSON.parse(String(callData.arguments)));
+  assert(
+    typeof callData.callId === 'string' &&
+      Number(call.seq) > Number(prompt.seq) &&
+      args.prompt === input.prompt &&
+      args.description === identity.label,
+    'office-delegation-call',
+  );
+  const catalog = events.filter(
+    (event) => event.type === 'subagent/catalog' && record(event.data).childId === child.sessionId,
+  );
+  assert.equal(catalog.length, 1, 'office-delegation-membership');
+  assert(Number(record(catalog[0]).seq) > Number(call.seq), 'office-delegation-membership');
+  const terminal = delegationResult(events, call);
+  assert(Number(record(catalog[0]).seq) < Number(terminal.seq), 'office-delegation-membership');
+  return {
+    parentId: parent.sessionId,
+    childId: child.sessionId,
+    callId: callData.callId,
+    callSeq: call.seq,
+    catalogSeq: record(catalog[0]).seq,
+    parentTerminalSeq: terminal.seq,
+  };
+}
+
+function delegationResult(events: Record<string, unknown>[], call: Record<string, unknown>) {
+  const data = record(call.data);
+  const ends = events.filter(
+    (event) => event.type === 'turn/end' && record(event.data).turn === data.turn,
+  );
+  assert.equal(ends.length, 1, 'office-parent-completion');
+  const end = record(ends[0]);
+  assert(record(record(end.data).reason).kind === 'completed', 'office-parent-completion');
+  assert(
+    events.some((event) => {
+      if (event.type !== 'tool/result' || record(event.data).turn !== data.turn) return false;
+      const message = record(record(event.data).message);
+      return (
+        message.role === 'tool' &&
+        message.isError !== true &&
+        message.toolCallId === data.callId &&
+        record(message.source).kind === 'tool' &&
+        record(message.source).callId === data.callId &&
+        Number(event.seq) > Number(call.seq) &&
+        Number(event.seq) < Number(end.seq)
+      );
+    }),
+    'office-delegation-result',
+  );
+  return end;
+}
+
+export function officeTurnEvidence(input: OfficeHistory & { delegation?: OfficeDelegation }) {
+  const events = historyEvents(input);
   assert(input.preset === 'office-writer', 'office-preset-binding');
   const selected = events.filter((event) => event.type === 'agent-preset/selected');
   const starts = events.filter((event) => event.type === 'turn/start');
@@ -101,13 +241,22 @@ export function officeTurnEvidence(input: {
       result.role === 'tool' &&
       result.isError !== true &&
       record(result.source).kind === 'tool' &&
-      calls.some(
-        (call) =>
-          typeof record(call.data).callId === 'string' &&
-          record(call.data).callId === result.toolCallId &&
+      calls.some((call) => {
+        const data = record(call.data);
+        if (
+          input.delegation &&
+          data.name !== 'bash' &&
+          data.name !== 'write' &&
+          data.name !== 'edit'
+        )
+          return false;
+        return (
+          typeof data.callId === 'string' &&
+          data.callId === result.toolCallId &&
           result.toolCallId === record(result.source).callId &&
-          Number(call.seq) < Number(event.seq),
-      ) &&
+          Number(call.seq) < Number(event.seq)
+        );
+      }) &&
       Number(event.seq) < Number(end.seq)
     );
   });
@@ -117,5 +266,13 @@ export function officeTurnEvidence(input: {
       record(record(end.data).reason).kind === 'completed',
     'office-turn-completion',
   );
-  return { selectedSeq: selection.seq, promptSeq: prompt.seq, turn, terminalSeq: end.seq };
+  return {
+    selectedSeq: selection.seq,
+    promptSeq: prompt.seq,
+    turn,
+    terminalSeq: end.seq,
+    ...(input.delegation
+      ? { delegation: delegationEvidence(input, input.delegation, events) }
+      : {}),
+  };
 }
