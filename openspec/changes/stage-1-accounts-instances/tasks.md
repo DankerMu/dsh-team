@@ -1358,3 +1358,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Oracle qualification: semantic wrong-deployment RED plus restored external GREEN; foreign fixed-name sentinel preserved; no missing-file-only proof or skipped cases.
 - Required gates: focused applicable contracts, `pnpm check`, strict fixture, actual standalone `pnpm test:deploy`, final exact-head original full `pnpm test:docker` including deployment, four-seat high-risk review and protected CI. Workflow/rule changes disclosed; human review remains Epic-end.
 - Task18.3 inventory clarification accounts for both actual consumers with the same strict missing/unused rejection; its checker/guardrails remain #93, not implemented here. No dummy platform configuration.
+
+## Issue #93 risk/evidence map (task18.3 only)
+
+- Expanded, Construction/Standard. Config/API/error paths: preserve defaults and missing-public-origin diagnostic; reject invalid supplied host with its variable name before side effects. Existing subnet syntax/capacity startup tests stay authoritative.
+- Discovery/schema/docs: compare two consumer inventories with the one example; missing and unused entries in either namespace fail by name. TypeScript AST distinguishes reads from comments/error strings; Compose escaped dollars and comments do not manufacture consumers.
+- Files/auth/secrets: gate reads only config/Compose/example, prints names not values; guardrail mutations live in existing disposable copy, never a real `.env`. No network/provider or production resource side effects.
+- Evidence floor: focused RED→GREEN, actual root checker command and four mismatch controls, original full guardrails/check, source/built rejection smoke, gitleaks, strict fixture, independent review and final-head Docker/CI. Concurrency, persisted schema and packaging/dependency changes excluded.
