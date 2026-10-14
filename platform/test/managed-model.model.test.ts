@@ -25,7 +25,7 @@ import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
-import { installAutoReviewObserver } from './permission-model-observer-fixture.ts';
+import { installModelObserver } from './model-observer-fixture.ts';
 import { runOfficeWriterScenario } from './office-writer-model-fixture.mjs';
 import { runUserImage } from './user-image-fixture.ts';
 
@@ -92,11 +92,20 @@ it('lets a fresh employee use the administrator model to create exact workspace 
             return id;
           };
           let containerId = currentContainer();
-          phase = 'auto-observer-setup';
-          const reviewObserver = await installAutoReviewObserver((script) =>
-            gateway.exec(containerId, script),
-          );
+          phase = 'permission-observer-install';
+          const observerExec = (script: string) => gateway.exec(containerId, script);
+          const reviewObserver = await installModelObserver(observerExec, 'permission-model', {
+            nonce: null,
+            path: null,
+            sessionId: null,
+            mode: 'observe',
+          });
+          phase = 'office-observer-install';
+          const officeObserver = await installModelObserver(observerExec, 'office-model', {
+            nonce: null,
+          });
           // Complete fixture-only profile installation before any browser attaches.
+          phase = 'observer-restart-request';
           const restarted = await fetch(
             `${base}/_platform/api/admin/instances/${employee.id}/restart`,
             {
@@ -105,16 +114,20 @@ it('lets a fresh employee use the administrator model to create exact workspace 
               body: '{}',
             },
           );
+          phase = `observer-restart-response-${String(restarted.status)}`;
           expect(restarted.status).toBe(200);
           expect(await restarted.json()).toEqual({
             userId: employee.id,
             status: 'starting',
             reason: 'starting',
           });
+          phase = 'observer-restart-readiness';
           await gateway.ready(employee.cookie);
+          phase = 'observer-replacement-identity';
           const replacement = currentContainer();
           expect(replacement).not.toBe(containerId);
           containerId = replacement;
+          phase = 'permission-observer-initial-observation';
           reviewObserver.observation();
           const marker = `model-proof-${randomUUID()}`;
           const path = `/data/work/${marker}.txt`;
@@ -183,6 +196,16 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
             rpc: (method, args) => gateway.rpc(employee.cookie, method, args),
             exec: (script) => gateway.exec(containerId, script),
             evidence,
+            mode: 'manual',
+          });
+          phase = 'office-general-delegation';
+          await runOfficeWriterScenario({
+            page,
+            rpc: (method, args) => gateway.rpc(employee.cookie, method, args),
+            exec: (script) => gateway.exec(containerId, script),
+            evidence,
+            mode: 'delegated',
+            observer: officeObserver,
           });
           phase = 'browser-health';
           await writeFile(

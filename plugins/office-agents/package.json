@@ -6,6 +6,7 @@
   "main": "index.js",
   "exports": {
     ".": "./index.js",
+    "./docx-construction": "./docx-construction.js",
     "./package.json": "./package.json"
   },
   "description": "Image-seeded office Agent presets for DSH",

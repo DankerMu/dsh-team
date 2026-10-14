@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { apply } from './index.js';
 
-function runtime(preset = 'approval') {
+function permissionRuntime(preset = 'approval', mutation = 'write') {
   const handlers = new Map();
   const withdrawals = [];
   let guard, dispose;
@@ -41,7 +41,7 @@ function runtime(preset = 'approval') {
         guard = fn;
         return () => {};
       },
-      schemas: () => [{ name: 'write', parameters: {} }],
+      schemas: () => [{ name: mutation, parameters: {} }],
     },
     sessionProjections: { stateOf: () => state },
     permissionPresets: {
@@ -60,7 +60,7 @@ function runtime(preset = 'approval') {
   };
   apply(ctx);
   const execution = {
-    name: 'write',
+    name: mutation,
     callId: 'call',
     arguments: {},
     agent,
@@ -81,8 +81,9 @@ function runtime(preset = 'approval') {
   };
 }
 
-describe('managed permission authorization', () => {
-  it.each(['write', 'edit', 'bash', 'run_code'])(
+describe.each(['write', 'build_docx'])('%s managed permission authorization', (mutation) => {
+  const runtime = (preset) => permissionRuntime(preset, mutation);
+  it.each(mutation === 'write' ? ['write', 'edit', 'bash', 'run_code'] : ['build_docx'])(
     'requires native approval for %s including program transport',
     async (name) => {
       const fixture = runtime();
@@ -162,9 +163,18 @@ describe('managed permission authorization', () => {
 
     expect((await fixture.gate()).kind).toBe('deny');
   });
+
+  it('does not admit a mutation after its caller cancels', async () => {
+    const fixture = runtime('danger-full-access');
+    fixture.agent.cancel({ kind: 'user' });
+
+    expect(await fixture.gate()).toEqual({ kind: 'cancel' });
+    expect(fixture.guard()).toBeDefined();
+  });
 });
 
-describe('managed permission revocation', () => {
+describe.each(['write', 'build_docx'])('%s managed permission revocation', (mutation) => {
+  const runtime = (preset) => permissionRuntime(preset, mutation);
   it('invalidates native approval across ABA but not approval audit events', async () => {
     const fixture = runtime();
     await fixture.gate();
@@ -291,12 +301,18 @@ describe('managed permission revocation', () => {
 
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'approval/policy' });
 
-    expect(await pending).toEqual({ kind: 'cancel' });
-    expect(fixture.execution.signal.aborted).toBe(true);
+    try {
+      expect(fixture.execution.signal.aborted).toBe(true);
+      expect(await pending).toEqual({ kind: 'cancel' });
+    } finally {
+      fixture.agent.cancel({ kind: 'user' });
+      await pending;
+    }
   });
 });
 
-describe('managed permission review and teardown', () => {
+describe.each(['write', 'build_docx'])('%s managed permission review and teardown', (mutation) => {
+  const runtime = (preset) => permissionRuntime(preset, mutation);
   it('cancels admitted calls while closing without changing durable permissions', async () => {
     const fixture = runtime();
     await fixture.gate();
@@ -319,6 +335,24 @@ describe('managed permission review and teardown', () => {
     });
   });
 
+  it.each([
+    { label: 'denied', text: '{"decision":"deny"}', finish: 'stop' },
+    { label: 'malformed', text: 'not JSON', finish: 'stop' },
+    { label: 'incomplete', text: '{"decision":"allow"}', finish: 'max-tokens' },
+    { label: 'failed', failure: true },
+  ])('asks the human when an Auto review is $label', async (review) => {
+    const fixture = runtime('auto-review');
+    fixture.agent.options = { provider: 'owned', model: 'selected' };
+    fixture.ctx.llm.stream = async function* () {
+      if (review.failure) throw new Error('Review adapter unavailable');
+      yield { type: 'text-delta', index: 0, text: review.text };
+      yield { type: 'finish', reason: { kind: review.finish } };
+    };
+
+    expect((await fixture.gate()).kind).toBe('ask');
+    expect(fixture.guard()).toBeUndefined();
+  });
+
   it('cancels an in-flight Auto review on permission revocation without awaiting its deadline', async () => {
     const fixture = runtime('auto-review');
     fixture.agent.options = { provider: 'owned', model: 'selected' };
@@ -331,7 +365,9 @@ describe('managed permission review and teardown', () => {
       yield { type: 'finish', reason: { kind: 'aborted' } };
     };
     const pending = fixture.gate();
-    await entered.promise;
+    expect(
+      await Promise.race([entered.promise.then(() => 'reviewing'), pending.then(() => 'settled')]),
+    ).toBe('reviewing');
 
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
 
@@ -353,7 +389,9 @@ describe('managed permission review and teardown', () => {
       yield { type: 'finish', reason: { kind: 'stop' } };
     };
     const pending = fixture.gate();
-    await entered.promise;
+    expect(
+      await Promise.race([entered.promise.then(() => 'reviewing'), pending.then(() => 'settled')]),
+    ).toBe('reviewing');
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
     release.resolve();
@@ -374,7 +412,9 @@ describe('managed permission review and teardown', () => {
       yield { type: 'finish', reason: { kind: 'aborted' } };
     };
     const pending = fixture.gate();
-    await entered.promise;
+    expect(
+      await Promise.race([entered.promise.then(() => 'reviewing'), pending.then(() => 'settled')]),
+    ).toBe('reviewing');
     let disposed = false;
     const closing = fixture.dispose().then(() => {
       disposed = true;
@@ -428,7 +468,7 @@ describe('managed permission review and teardown', () => {
 });
 
 it('initializes a fresh delegated child before work and preserves a resumed selection', () => {
-  const fixture = runtime('auto-review');
+  const fixture = permissionRuntime('auto-review');
   const events = [];
   const contexts = [];
   let assemble;

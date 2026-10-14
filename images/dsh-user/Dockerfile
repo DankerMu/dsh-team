@@ -43,7 +43,7 @@ COPY --from=zh-locale --chown=dsh:dsh --chmod=0644 \
 # Bundle registration is an image default, below the employee and managed patch layers.
 # Pre-created directories retain traversal bits; COPY's 0644 applies only to the files.
 COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
-  package.json index.js cordis.patch.yml \
+  package.json index.js docx-construction.js cordis.patch.yml \
   /data/home/profiles/web/node_modules/@dsh-team/office-agents/
 COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
   skills/official-writing/SKILL.md \

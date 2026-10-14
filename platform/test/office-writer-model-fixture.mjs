@@ -15,12 +15,126 @@ import {
 } from '../../scripts/probe-dsh-api-ui.mjs';
 import { evaluate, physicalClick } from '../../scripts/probe-permission-ui.mjs';
 import { officeDocxReadScript } from './office-docx-fixture.ts';
-import { officeDocxEvidence, officeTurnEvidence } from './office-writer-oracle.ts';
+import {
+  officeChildReady,
+  officeDocxEvidence,
+  officeTurnEvidence,
+} from './office-writer-oracle.ts';
 
 const SEAT = 'button[aria-haspopup="menu"]:not([aria-label])';
 const WRITER = '公文与材料写作';
 
-export async function runOfficeWriterScenario({ page, rpc, exec, evidence }) {
+async function officeSnapshot(rpc, sessionId, address = { kind: 'session', sessionId }, child) {
+  const projection = await rpc('session/projections', { request: { sessionId } });
+  if (child && !officeChildReady(projection.values.subagent, child.agentAvailable)) return false;
+  const history = await rpc('session/page', {
+    request: { address, throughSeq: projection.asOfSeq, maxMessages: 500 },
+  });
+  return {
+    records: history.records,
+    hasMore: history.hasMore,
+    cursor: projection.asOfSeq,
+    preset: projection.values.agentPreset,
+    catalog: projection.values.subagentCatalog,
+    identity: projection.values.subagent,
+  };
+}
+
+async function delegatedSnapshot(rpc, parent, priorIds, prompt, report) {
+  const parentHistory = await officeSnapshot(rpc, parent.sessionId);
+  const listed = await rpc('session/list', { _request: {} });
+  const children = listed.items.filter((row) => row.parentSessionId === parent.sessionId);
+  const tools = {
+    subagent: 0,
+    bash: 0,
+    write: 0,
+    edit: 0,
+    skill: 0,
+    read: 0,
+    jobs: 0,
+    present: 0,
+    other: 0,
+  };
+  for (const { event } of parentHistory.records) {
+    if (event.type !== 'tool/call') continue;
+    const key = Object.hasOwn(tools, event.data.name) ? event.data.name : 'other';
+    tools[key]++;
+  }
+  report.delegationState = {
+    parentGeneral: parentHistory.preset === 'office-general',
+    parentCursor: parentHistory.cursor,
+    parentHasMore: parentHistory.hasMore,
+    parentCompleted: parentHistory.records.some(
+      ({ event }) => event.type === 'turn/end' && event.data.reason.kind === 'completed',
+    ),
+    catalogCount: Array.isArray(parentHistory.catalog) ? parentHistory.catalog.length : -1,
+    derivedCount: children.length,
+    tools,
+  };
+  assert(children.length <= 1, 'office-child-ambiguous');
+  const child = children[0];
+  if (!child) return false;
+  assert(!priorIds.has(child.sessionId), 'office-child-not-fresh');
+  const call = parentHistory.records.find(
+    ({ event }) => event.type === 'tool/call' && event.data.name === 'subagent',
+  );
+  if (!call) return false;
+  const args = JSON.parse(call.event.data.arguments);
+  assert(typeof args.prompt === 'string', 'office-delegation-prompt');
+  const snapshot = await officeSnapshot(
+    rpc,
+    child.sessionId,
+    {
+      kind: 'subagent',
+      parentSessionId: parent.sessionId,
+      childSessionId: child.sessionId,
+      mode: 'one-shot',
+    },
+    child,
+  );
+  if (!snapshot) return false;
+  return {
+    ...snapshot,
+    prompt: args.prompt,
+    delegation: {
+      parent: { ...parentHistory, sessionId: parent.sessionId, cwd: parent.cwd, prompt },
+      child,
+      identity: snapshot.identity,
+    },
+  };
+}
+
+function failureDocx(observe, notice) {
+  try {
+    return officeDocxEvidence(observe(), notice);
+  } catch {
+    return { valid: false };
+  }
+}
+
+function contributionSummary(contribution, nonce, parentId, childId) {
+  const proof = contribution ?? {};
+  const receipt = proof.receipt ?? {};
+  const artifact = proof.artifact ?? {};
+  return {
+    nonceMatches: proof.nonce === nonce,
+    parentMatches: proof.parentId === parentId,
+    childMatches: proof.childId === childId,
+    callId: proof.callId,
+    callSeq: proof.callSeq,
+    resultSeq: proof.resultSeq,
+    turn: proof.turn,
+    step: proof.step,
+    receiptPath: receipt.path,
+    receiptSha256: receipt.sha256,
+    artifactSha256: artifact.sha256,
+    parsedAtConstruction: artifact.status === 'parsed',
+  };
+}
+
+export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode, observer }) {
+  const delegated = mode === 'delegated';
+  const prefix = delegated ? 'office-delegation' : 'office-docx';
   const marker = `office-notice-${randomUUID()}`;
   const notice = {
     path: `/data/work/${marker}.docx`,
@@ -48,35 +162,48 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence }) {
       30000,
       'office-default-seat',
     );
-    await physicalClick(page, `document.querySelector(${JSON.stringify(SEAT)})`);
-    const option = `[...document.querySelectorAll('[role="menu"] button[role="menuitem"]')].find(el=>!el.disabled&&(el.textContent||'').trim().startsWith(${JSON.stringify(WRITER)}))`;
-    await waitFor(() => evaluate(page, `Boolean(${option})`), 30000, 'office-writer-option');
-    await captureSettledScreenshot(page, join(evidence, 'office-preset-menu.png'));
-    await physicalClick(page, option);
-    await waitFor(
-      () =>
-        evaluate(
-          page,
-          `document.querySelector(${JSON.stringify(SEAT)})?.textContent.trim()===${JSON.stringify(WRITER)}`,
-        ),
-      30000,
-      'office-writer-seat',
-    );
-    await captureSettledScreenshot(page, join(evidence, 'office-writer-selected.png'));
+    if (!delegated) {
+      await physicalClick(page, `document.querySelector(${JSON.stringify(SEAT)})`);
+      const option = `[...document.querySelectorAll('[role="menu"] button[role="menuitem"]')].find(el=>!el.disabled&&(el.textContent||'').trim().startsWith(${JSON.stringify(WRITER)}))`;
+      await waitFor(() => evaluate(page, `Boolean(${option})`), 30000, 'office-writer-option');
+      await captureSettledScreenshot(page, join(evidence, 'office-preset-menu.png'));
+      await physicalClick(page, option);
+      await waitFor(
+        () =>
+          evaluate(
+            page,
+            `document.querySelector(${JSON.stringify(SEAT)})?.textContent.trim()===${JSON.stringify(WRITER)}`,
+          ),
+        30000,
+        'office-writer-seat',
+      );
+      await captureSettledScreenshot(page, join(evidence, 'office-writer-selected.png'));
+    } else {
+      await captureSettledScreenshot(page, join(evidence, 'office-general-selected.png'));
+    }
     const before = observe();
     assert.equal(before.status, 'missing', 'office-docx-not-fresh');
     assert.throws(() => officeDocxEvidence(before, notice), /office-docx-identity/);
     report.absentBefore = true;
-    await writeFile(join(evidence, 'office-docx.json'), JSON.stringify(report));
+    if (delegated) {
+      assert(observer, 'office-observer-required');
+      observer.arm({ nonce: marker, reader: officeDocxReadScript(notice.path) });
+    }
+    await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
     await typeComposer(page, prompt);
     await clickSelector(page, SEND_BTN);
     // rc.2 stages the hero choice before a Session exists; observe its committed binding after send.
     const session = await waitFor(
       async () => {
         const listed = await rpc('session/list', { _request: {} });
-        const added = listed.items.filter((row) => !priorIds.has(row.sessionId));
+        const added = listed.items.filter(
+          (row) => !priorIds.has(row.sessionId) && row.origin !== 'subagent',
+        );
         assert(added.length <= 1, 'office-session-ambiguous');
-        return added[0]?.projections?.values?.agentPreset === 'office-writer' ? added[0] : false;
+        return added[0]?.projections?.values?.agentPreset ===
+          (delegated ? 'office-general' : 'office-writer')
+          ? added[0]
+          : false;
       },
       30000,
       'office-writer-binding',
@@ -86,24 +213,16 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence }) {
     await waitFor(
       async () => {
         await clickAllowOnce(page, marker);
-        const projection = await rpc('session/projections', {
-          request: { sessionId: session.sessionId },
-        });
-        const history = await rpc('session/page', {
-          request: {
-            address: { kind: 'session', sessionId: session.sessionId },
-            throughSeq: projection.asOfSeq,
-            maxMessages: 500,
-          },
-        });
-        snapshot = {
-          records: history.records,
-          hasMore: history.hasMore,
-          cursor: projection.asOfSeq,
-          preset: projection.values.agentPreset,
-          prompt,
-        };
-        return history.records.some(({ event }) => event.type === 'turn/end');
+        snapshot = delegated
+          ? await delegatedSnapshot(rpc, session, priorIds, prompt, report)
+          : { ...(await officeSnapshot(rpc, session.sessionId)), prompt };
+        if (!snapshot) return false;
+        const completed = snapshot.records.some(({ event }) => event.type === 'turn/end');
+        return (
+          completed &&
+          (!delegated ||
+            snapshot.delegation.parent.records.some(({ event }) => event.type === 'turn/end'))
+        );
       },
       300000,
       'office-native-turn-end',
@@ -118,17 +237,33 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence }) {
         ),
       ),
     };
+    if (delegated) {
+      const contribution = observer.observation();
+      report.contribution = contributionSummary(
+        contribution,
+        marker,
+        session.sessionId,
+        snapshot.delegation.child.sessionId,
+      );
+      snapshot.delegation = {
+        ...snapshot.delegation,
+        nonce: marker,
+        notice,
+        contribution,
+      };
+    }
     report.turn = officeTurnEvidence(snapshot);
     await waitTurnIdle(page, 30000, 'office-browser-turn-idle');
     report.docx = officeDocxEvidence(observe(), notice);
-    await captureSettledScreenshot(page, join(evidence, 'office-docx-completed.png'));
-    await writeFile(join(evidence, 'office-docx.json'), JSON.stringify(report));
+    await captureSettledScreenshot(page, join(evidence, `${prefix}-completed.png`));
+    await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
   } catch (error) {
     report.failure = /^office-[a-z-]+$/.test(error.message)
       ? error.message
       : 'office-scenario-failed';
-    await writeFile(join(evidence, 'office-docx.json'), JSON.stringify(report));
-    await captureSettledScreenshot(page, join(evidence, 'office-failure.png'));
+    report.failureDocx = failureDocx(observe, notice);
+    await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
+    await captureSettledScreenshot(page, join(evidence, `${prefix}-failure.png`));
     throw error;
   }
 }

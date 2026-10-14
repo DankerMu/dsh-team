@@ -199,11 +199,11 @@ verification:
       required_at: "L3+"
     office_delegation_native:
       command: "pnpm test:docker"
-      evidence: "pinned real DSH and deterministic owned model protocol; genuine general-to-writer child selection before work, actual instructions/tools, parent/sibling isolation, cold identity/resume, root/other/fork/continuable exclusions, three-tier child-owned effects, cancellation and failed-target cleanup; not task17.4 real-model acceptance"
+      evidence: "pinned real DSH and deterministic owned model protocol; genuine general-to-writer child selection before work, actual instructions/tools, parent/sibling isolation, cold identity/resume, root/other/fork/continuable exclusions, three-tier child-owned write/build_docx effects, cancellation and failed-target cleanup; native structured construction accepted and parent-completed DOCX copy-only child rejected; path/error controls and native receipt matching actual boundary bytes; not task17.4 real-model acceptance"
       required_at: "L3+"
     real_model_tool:
       command: "pnpm test:model"
-      evidence: "trusted giap-vps actual Actions execution on approved SHA; missing-key rejection before provisioning; real administrator model configuration before fresh public employee identity; native task, absent-before/exact workspace bytes, no personal model setup; manual native office-writer selection with correlated prompt/completed turn and newly created python-docx-readable DOCX containing title/addressee/matter/issuer/date; screenshots/zero errors and owned cleanup"
+      evidence: "trusted giap-vps actual Actions execution on approved SHA; missing-key rejection before provisioning; real administrator model configuration before fresh public employee identity; native task, absent-before/exact workspace bytes, no personal model setup; manual writer selection and natural-language general-to-native-writer-child delegation with parent/call/catalog/prompt/turn correlation; successful structured build_docx construction bound to child Session/turn/step/call, requested path and synchronous committed-result DOCX snapshot before parent resumes; metadata and actual path/uid/bytes/hash/five fields agree, separate valid final DOCX permits later edits; parent facts/drafts allowed, no independent authorship claim; screenshots/zero errors and owned cleanup"
       required_at: "L3+"
     docker_ci_evidence:
       command: "pnpm verify:docker-evidence"

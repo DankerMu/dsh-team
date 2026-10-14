@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
 const load = (name) => import(pathToFileURL(require.resolve(name)).href);
@@ -117,6 +117,16 @@ function protocol(ctx) {
       });
       directive.entered.resolve();
       if (directive.mode === 'hold') await waitReleased(directive, options.signal);
+      const call = directive.calls?.[directive.position++];
+      if (call) {
+        yield* chunks({
+          type: 'tool-call',
+          id: ToolCallId(randomUUID()),
+          name: call.name,
+          arguments: JSON.stringify(call.arguments),
+        });
+        return;
+      }
       if (directive.mode === 'write' && !issued.has(options.sessionId)) {
         issued.add(options.sessionId);
         yield* chunks({
@@ -142,10 +152,12 @@ function protocol(ctx) {
     },
     { prepend: true },
   );
-  function task(mode = 'complete') {
+  function task(mode = 'complete', calls) {
     const token = PREFIX + randomUUID();
     const directive = {
       mode,
+      calls,
+      position: 0,
       path: '/data/work/office-effect-' + randomUUID(),
       content: 'Owned office effect\n',
       entered: Promise.withResolvers(),
@@ -216,8 +228,10 @@ function assertChild(ctx, agent, parent, expected, observations, selected = true
   assert.equal(native.writerInstruction, expected === 'office-writer');
   if (expected === 'office-writer') {
     assert(native.tools.includes('write'));
+    assert(native.tools.includes('build_docx'));
     assert(!native.tools.includes('subagent'));
   }
+  if (expected === 'office-general') assert(!native.tools.includes('build_docx'));
   const own = eventsOf(agent).slice(agent.session.inheritedEventCount);
   const selections = own.filter((event) => event.type === 'agent-preset/selected');
   assert.equal(selections.length, selected ? 1 : 0);
@@ -306,6 +320,80 @@ async function successfulChild(ctx, parent, fixture, report) {
     }
   } finally {
     if (run) await run.dispose();
+  }
+}
+
+async function pendingChildIdentity(ctx, parent, fixture, report) {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const stop = ctx.on('agent/created', async ({ agent }) => {
+    if (agent.session.header.parentSession !== parent.id) return;
+    entered.resolve(agent.id);
+    await release.promise;
+  });
+  try {
+    await inTurn(parent, async (signal) => {
+      const starting = ctx.subagents.start('spawn', {
+        parent,
+        prompt: fixture.task().prompt,
+        signal,
+      });
+      try {
+        const childId = await entered.promise;
+        const listed = await ctx.sessionController.list({}, signal);
+        const row = listed.items.find((item) => item.sessionId === childId);
+        assert(row);
+        const pending = await ctx.sessionController.projections({ sessionId: childId }, signal);
+        assert.equal(row.agentAvailable, true);
+        assert.equal(pending.values.subagent, null);
+        const address = {
+          kind: 'subagent',
+          parentSessionId: parent.id,
+          childSessionId: childId,
+          mode: 'one-shot',
+        };
+        await assert.rejects(
+          ctx.sessionController.page(
+            { address, throughSeq: pending.asOfSeq, maxMessages: 500 },
+            signal,
+          ),
+        );
+        release.resolve();
+        const run = await starting;
+        assert.equal((await run.result).stopReason, 'completed');
+        const ready = await ctx.sessionController.projections({ sessionId: childId }, signal);
+        const history = await ctx.sessionController.page(
+          { address, throughSeq: ready.asOfSeq, maxMessages: 500 },
+          signal,
+        );
+        assert(history.records.some(({ event }) => event.type === 'turn/end'));
+        await assert.rejects(
+          ctx.sessionController.page(
+            { address: { ...address, parentSessionId: 'wrong-parent' }, throughSeq: ready.asOfSeq },
+            signal,
+          ),
+        );
+        await assert.rejects(
+          ctx.sessionController.page(
+            { address: { ...address, mode: 'continuable' }, throughSeq: ready.asOfSeq },
+            signal,
+          ),
+        );
+        report.readiness = {
+          pending: { identity: pending.values.subagent, agentAvailable: row.agentAvailable },
+          ready: { identity: ready.values.subagent, agentAvailable: true },
+          pendingPageRejected: true,
+          wrongParentRejected: true,
+          wrongModeRejected: true,
+        };
+      } finally {
+        release.resolve();
+        await (await starting).dispose();
+      }
+    });
+  } finally {
+    release.resolve();
+    stop();
   }
 }
 
@@ -405,8 +493,18 @@ async function exclusions(ctx, parent, fixture, report) {
   }
 }
 
-async function mutation(ctx, parent, fixture, answer, review, expected, report) {
-  const task = fixture.task('write');
+async function mutation(ctx, parent, fixture, answer, review, expected, report, tool) {
+  const path = '/data/work/office-effect-' + randomUUID() + (tool === 'build_docx' ? '.docx' : '');
+  const content = 'Owned office effect\n';
+  const task = fixture.task('complete', [
+    {
+      name: tool,
+      arguments:
+        tool === 'build_docx'
+          ? { path, paragraphs: [{ text: content }] }
+          : { file_path: path, content },
+    },
+  ]);
   fixture.control.answer = answer;
   fixture.control.review = review;
   const before = fixture.control.requests.length;
@@ -418,15 +516,26 @@ async function mutation(ctx, parent, fixture, answer, review, expected, report) 
       assert.equal((await run.result).stopReason, 'completed');
     });
     assertChild(ctx, run.localAgent, parent, 'office-writer', fixture.observations);
-    assert.equal(existsSync(task.path), expected);
-    if (expected) assert.equal(readFileSync(task.path, 'utf8'), task.content);
+    assert.equal(existsSync(path), expected);
+    if (expected && tool === 'write') assert.equal(readFileSync(path, 'utf8'), content);
     const events = eventsOf(run.localAgent);
-    const call = events.find((event) => event.type === 'tool/call' && event.data.name === 'write');
-    assert(call, 'actual model-issued native write must execute');
+    const call = events.find((event) => event.type === 'tool/call' && event.data.name === tool);
+    assert(call, 'actual model-issued native mutation must execute');
     const result = events.find(
       (event) => event.type === 'tool/result' && event.data.message.toolCallId === call.data.callId,
     );
     assert.equal(result.data.message.isError === true, !expected);
+    if (tool === 'build_docx') {
+      if (expected) {
+        const bytes = readFileSync(path);
+        assert.deepEqual(result.data.meta, {
+          path,
+          bytes: bytes.length,
+          sha256: createHash('sha256').update(bytes).digest('hex'),
+          uid: 1001,
+        });
+      } else assert.equal(result.data.meta, undefined);
+    }
     const ask =
       TIERS[INDEX] === 'approval' || (TIERS[INDEX] === 'auto-review' && review !== 'allow');
     assert.equal(fixture.control.requests.length - before, ask ? 1 : 0);
@@ -444,7 +553,8 @@ async function mutation(ctx, parent, fixture, answer, review, expected, report) 
       childId: run.id,
       answer,
       review,
-      fileExists: existsSync(task.path),
+      tool,
+      fileExists: existsSync(path),
       asked: ask,
       toolError: result.data.message.isError === true,
     });
@@ -555,23 +665,33 @@ async function scenario(ctx, fixture) {
     await successfulChild(ctx, parent.agent, fixture, report);
     await siblingIsolation(ctx, parent.agent, fixture, report);
     await exclusions(ctx, parent.agent, fixture, report);
-    if (report.tier === 'danger-full-access')
-      await mutation(ctx, parent.agent, fixture, 'rejected', 'deny', true, report);
-    else {
-      for (const answer of ['rejected', 'allowed-once', 'cancelled'])
-        await mutation(
-          ctx,
-          parent.agent,
-          fixture,
-          answer,
-          'deny',
-          answer === 'allowed-once',
-          report,
-        );
-      if (report.tier === 'auto-review')
-        await mutation(ctx, parent.agent, fixture, 'rejected', 'allow', true, report);
+    for (const tool of ['write', 'build_docx']) {
+      if (report.tier === 'danger-full-access')
+        await mutation(ctx, parent.agent, fixture, 'rejected', 'deny', true, report, tool);
+      else {
+        for (const answer of ['rejected', 'allowed-once', 'cancelled'])
+          await mutation(
+            ctx,
+            parent.agent,
+            fixture,
+            answer,
+            'deny',
+            answer === 'allowed-once',
+            report,
+            tool,
+          );
+        if (report.tier === 'auto-review')
+          await mutation(ctx, parent.agent, fixture, 'rejected', 'allow', true, report, tool);
+      }
+    }
+    if (report.tier === 'danger-full-access') {
+      const { constructionFailures } = await import(
+        pathToFileURL('/data/home/office-construction-native.mjs').href
+      );
+      report.constructionFailures = await constructionFailures(ctx, parent.agent, fixture, inTurn);
     }
     await cancellation(ctx, parent.agent, fixture, report);
+    await pendingChildIdentity(ctx, parent.agent, fixture, report);
     await unavailableWriter(ctx, parent.agent, fixture, report);
     assert.equal(presetOf(ctx, parent.agent), 'office-general');
   } finally {
@@ -594,6 +714,29 @@ export function apply(ctx) {
     ) {
       res.writeHead(404);
       res.end();
+      return;
+    }
+    if (process.env.DSH_TEAM_OFFICE_COPY_COUNTER === '1') {
+      res.writeHead(202);
+      res.end();
+      try {
+        const { copyCounterexample } = await import(
+          pathToFileURL('/data/home/office-copy-scenario.mjs').href
+        );
+        const input = await copyCounterexample(ctx, fixture, {
+          create,
+          createUserMessage,
+          eventsOf,
+        });
+        writeFileSync('/data/home/office-copy-report.json', JSON.stringify(input));
+        process.exit(0);
+      } catch (error) {
+        writeFileSync(
+          '/data/home/office-copy-failure.json',
+          JSON.stringify({ name: error.name, message: error.message }),
+        );
+        process.exit(1);
+      }
       return;
     }
     try {

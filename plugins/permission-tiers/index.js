@@ -12,7 +12,7 @@ export const inject = [
   'agents',
   'systemPrompt',
 ];
-const MUTATIONS = new Set(['write', 'edit', 'bash', 'run_code']);
+const MUTATIONS = new Set(['write', 'edit', 'bash', 'run_code', 'build_docx']);
 const IDENTITIES = new Set(['approval', 'auto-review', 'danger-full-access']);
 const PERMISSION_EVENTS = new Set(['permission/preset', 'sandbox/mode', 'approval/policy']);
 const UNAVAILABLE = 'Managed permissions are unavailable.';

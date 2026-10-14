@@ -8,7 +8,7 @@ available; explicitly selected presets and existing user volumes are preserved.
 
 Both presets declare file operations, shell, native job controls, skill loading
 and file delivery. General also declares `subagent` with the native spawn
-provider. Neither declares web search/fetch. Runtime schemas—not a second
+provider; only writer declares `build_docx`. Neither declares web search/fetch. Runtime schemas—not a second
 hand-maintained tool catalog—are the effective tool inventory; managed overlays
 and permission gates continue to govern execution.
 
@@ -16,6 +16,21 @@ Both mount the released `office-docx` skill with Office CLI rendering disabled,
 using the image's Python/python-docx, plus the bundle's `official-writing`
 guidance. Ordinary user/project skill discovery remains available. No document
 renderer, RAGFlow integration or additional specialist Agent is introduced.
+
+General's production persona distinguishes substantive writing from ordinary
+file operations: notices and materials, including short ones, go through the
+native `subagent` tool. The tool takes a short `description` and self-contained
+`prompt`, not a preset identifier; the host plugin below selects writer.
+Include the user's facts and output path because the spawn child does not
+inherit the parent conversation. General may supply facts or drafts, then
+verifies and may edit the real artifact after child construction. Copying an
+already completed DOCX is not a substitute for the child's `build_docx` operation.
+Unavailable delegation is reported, not replaced with parent-only writing.
+The shared `official-writing` skill preserves that boundary.
+All existing tools and skill discovery remain available, including ordinary
+file work and post-child checks. These instructions do not constitute proof of
+model compliance: native child contribution in the unchanged real-model task is
+the acceptance gate.
 
 The host plugin selects `office-writer` on genuine fresh, unseeded, direct
 one-shot children of `office-general`, through the released awaited creation
@@ -31,8 +46,8 @@ The committed `agent-preset/selected` event, effective `agentPreset` projection
 and actual child capabilities identify the later writer selection. Cold reads
 replay that selection; do not rewrite or treat the creation header as current.
 
-The image copies `package.json`, `index.js`, `cordis.patch.yml` and
-`skills/official-writing/SKILL.md` into
+The image copies `package.json`, `index.js`, `docx-construction.js`, `cordis.patch.yml`
+and `skills/official-writing/SKILL.md` into
 `$DSH_HOME/profiles/web/node_modules/@dsh-team/office-agents/`, registers the
 bundle after the released base/Web bundles, and then snapshots the complete
 profile tree into `/opt/dsh-team/profile-seed/`. Package directories are created
@@ -84,3 +99,55 @@ Evidence is retained under `.run/issue213/`; no external model is called by Dock
 Manual writer DOCX is covered by `pnpm test:model`. Real-model natural-language
 delegation remains issue #89 / task17.4, followed by task17.5 registration;
 these native protocol checks do not substitute for those acceptance tasks.
+
+## Structured DOCX construction
+
+`@dsh-team/office-agents/docx-construction` mounts in the writer preset only,
+including manually selected writer Sessions. `build_docx` accepts only
+`{path, paragraphs: [{text, style?}]}`; styles are `title`, `heading1`,
+`heading2` and `normal` (omitted style means normal). Unknown root/paragraph
+properties, completed-document bytes, source-document passthrough and model
+code are rejected. There are no notice-specific fields or acceptance shortcuts.
+
+Inputs are bounded to 1–64 paragraphs and 4096 Unicode code points per text.
+The UTF-8 encoding of `JSON.stringify(paragraphs.map(p => p.text))` is at most
+32768 bytes, including JSON escapes and delimiters. The absolute destination
+is at most 4096 UTF-8 bytes; the constructed DOCX is at most 1 MiB.
+Relative paths resolve against the calling Session's cwd. Parent directories
+must exist. Traversal, outside destinations, symlinks, directories and all
+existing destinations fail explicitly; this operation is create-only.
+Existing-document editing remains available through ordinary tools and the
+released `office-docx` skill. Do not delete user materials to bypass a
+create-only rejection.
+
+The dependency-free plugin validates input and performs read-only path
+preflight, then calls `ctx.shell.resolve` and `execute` with the actual Session's
+resolved sandbox policy, original cancellation signal and a 15-second kill
+deadline. Only a fixed `/usr/bin/python3 -I` program executes; user data is JSON
+on stdin, never shell interpolation. Python repeats validation, opens each
+directory component with no-follow directory descriptors, constructs bytes in
+memory, writes a private exclusive file, and atomically links the complete
+file into the held destination directory without clobbering an existing target.
+Cleanup only addresses the operation's owned temporary file. Abrupt process
+termination can leave that private temporary file; a complete published file
+can also remain if cancellation occurs after publication. Cancellation is not
+rollback, and neither case yields a successful construction receipt.
+
+Success returns exactly `{path, bytes, sha256, uid}` and projects that same
+canonical value into native `tool/result` presentation metadata. The hash and
+byte count are derived from the constructed buffer inside Python, not from
+model claims or a later lookup of an arbitrary destination. Nonzero exits,
+timeouts, cancellation, sandbox denial/runner failure, truncated or malformed
+receipts and inconsistent receipt fields reject without successful metadata.
+`build_docx` uses the unchanged managed mutation authorization/revocation gate.
+
+This proves an observable construction operation, not independent authorship.
+Parent facts/drafts and later parent edits are permitted; boundary bytes are
+checked against the construction receipt, while final delivery is inspected
+separately without requiring final-hash equality. The employee-writable plugin
+is not a tamper-proof attestation, and directory descriptors are not a claim
+against arbitrary concurrent relocation of workspace directories.
+
+Unit contract tests live in `docx-construction.test.js`; real native scope,
+DOCX/style/receipt, create-only/path, permission, sandbox and cancellation
+checks remain required alongside the unchanged real-model acceptance gate.
