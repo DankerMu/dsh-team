@@ -28,10 +28,15 @@ export function instanceConfig(
 }
 
 /** Exercise both real public identity endpoints; no seeded employee/session bypass. */
-export async function registerInstanceUser(base: string, origin: string, email: string) {
+export async function registerInstanceUser(
+  base: string,
+  origin: string,
+  email: string,
+  request: (url: string, init?: RequestInit) => Promise<Response> = fetch,
+) {
   const headers = { origin, 'content-type': 'application/json' };
   const payload = JSON.stringify({ email, password: 'instance-acceptance-password' });
-  const registered = await fetch(`${base}/_platform/api/register`, {
+  const registered = await request(`${base}/_platform/api/register`, {
     method: 'POST',
     headers,
     body: payload,
@@ -45,7 +50,7 @@ export async function registerInstanceUser(base: string, origin: string, email: 
     typeof identity.id !== 'string'
   )
     throw new Error('Missing registered identity');
-  const loggedIn = await fetch(`${base}/_platform/api/login`, {
+  const loggedIn = await request(`${base}/_platform/api/login`, {
     method: 'POST',
     headers,
     body: payload,

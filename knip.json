@@ -20,7 +20,13 @@
       ]
     },
     "platform": {
-      "entry": ["scripts/*.ts", "test/**/*.test.ts", "test/ci-vps-worker.ts", "src/**/*.test.ts"],
+      "entry": [
+        "scripts/*.ts",
+        "test/**/*.test.ts",
+        "test/ci-vps-worker.ts",
+        "test/deployment-tls-proxy.ts",
+        "src/**/*.test.ts"
+      ],
       "project": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
     },
     "platform/web": {
@@ -33,5 +39,5 @@
     "@deepseek-ai/dsh-llm",
     "@deepseek-ai/dsh-session-checkpoint-policy"
   ],
-  "ignoreBinaries": ["hurl", "shellcheck", "systemd-run", "flock", "busctl"]
+  "ignoreBinaries": ["hurl", "shellcheck", "systemd-run", "flock", "busctl", "openssl"]
 }
