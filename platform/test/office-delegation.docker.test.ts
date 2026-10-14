@@ -117,3 +117,80 @@ process.stdout.write(JSON.stringify([0,1,2].map(index => ({
     },
   );
 });
+
+it('distinguishes settled preparation from a returned shell with a surviving writer', async () => {
+  const observer = readFileSync(new URL('./office-model-observer.mjs', import.meta.url), 'utf8');
+  const script = `
+import { spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
+const { apply } = await import('data:text/javascript;base64,' + Buffer.from(${JSON.stringify(observer)}).toString('base64'));
+const control = '/data/home/process-proof-control.json';
+const evidence = '/data/home/process-proof-evidence.json';
+const document = '/data/home/process-proof-document';
+const gate = '/data/home/process-proof-gate';
+const ready = '/data/home/process-proof-ready';
+const reader = "import {existsSync,readFileSync} from 'node:fs'; const path=" + JSON.stringify(document) +
+  "; process.stdout.write(JSON.stringify(existsSync(path)?{status:'present',content:readFileSync(path,'utf8')}:{status:'missing'}));";
+const parent = {header:{id:'general'}};
+const child = {header:{id:'writer',origin:'subagent',parentSession:'general'}};
+async function until(predicate) {
+  const deadline = Date.now() + 5000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('Owned process fixture did not settle');
+    await delay(10);
+  }
+}
+async function scenario(background) {
+  writeFileSync(control, JSON.stringify({nonce:background?'background':'settled',reader}));
+  let emit;
+  apply({on(_name, listener) {emit=listener;}}, {control,evidence});
+  emit(parent,{type:'user/message',seq:0,data:{source:{kind:'user'}}});
+  emit(parent,{type:'tool/call',seq:1,data:{name:'bash',callId:'prepare'}});
+  const descendant = "const fs=require('node:fs');fs.writeFileSync(" + JSON.stringify(ready) +
+    ",'ready');const timer=setInterval(()=>{if(fs.existsSync(" + JSON.stringify(gate) +
+    ")){fs.writeFileSync(" + JSON.stringify(document) + ",'parent descendant bytes');clearInterval(timer);setInterval(()=>{},1000);}},10);";
+  const command = background ? process.execPath + ' -e ' + JSON.stringify(descendant) + ' &' : 'true';
+  const result = spawnSync('/bin/sh', ['-c', command], {stdio:'ignore',timeout:5000});
+  if (result.status !== 0) throw new Error('Owned parent shell failed');
+  if (background) await until(()=>existsSync(ready));
+  emit(parent,{type:'tool/result',seq:2,data:{message:{toolCallId:'prepare'}}});
+  emit(child,{type:'turn/start',seq:3,data:{}});
+  if (background) {
+    writeFileSync(gate,'release');
+    await until(()=>existsSync(document));
+  } else writeFileSync(document,'child bytes');
+  emit(child,{type:'turn/end',seq:4,data:{}});
+  const proof = JSON.parse(readFileSync(evidence,'utf8'));
+  unlinkSync(document);
+  return proof;
+}
+// These controlled event inputs qualify the observer's real process boundary,
+// not native Agent behavior; the separate native/model cases prove that layer.
+process.stdout.write(JSON.stringify({pid:process.pid,settled:await scenario(false),background:await scenario(true)}));
+`;
+  await runUserImage(
+    'managed-policy',
+    () => undefined,
+    undefined,
+    (lifecycle) => {
+      const result: unknown = JSON.parse(
+        execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-process-proof`, script),
+      );
+      expect(result).toMatchObject({
+        pid: 1,
+        settled: {
+          confounded: false,
+          before: { status: 'missing' },
+          after: { status: 'present', content: 'child bytes' },
+        },
+        background: {
+          confounded: true,
+          before: { status: 'missing' },
+          after: { status: 'present', content: 'parent descendant bytes' },
+        },
+      });
+      return Promise.resolve(JSON.stringify(result));
+    },
+  );
+});

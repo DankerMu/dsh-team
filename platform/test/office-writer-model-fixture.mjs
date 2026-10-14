@@ -112,6 +112,19 @@ function failureDocx(observe, notice) {
   }
 }
 
+function contributionSummary(contribution, nonce, parentId, childId) {
+  return {
+    nonceMatches: contribution?.nonce === nonce,
+    parentMatches: contribution?.parentId === parentId,
+    childMatches: contribution?.childId === childId,
+    startedEmpty: contribution?.before?.status === 'missing',
+    parsedAtChildEnd: contribution?.after?.status === 'parsed',
+    confounded: contribution?.confounded !== false,
+    earlierParentWork: contribution?.earlierParentWork === true,
+    processesQuiet: contribution?.processesQuiet === true,
+  };
+}
+
 export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode, observer }) {
   const delegated = mode === 'delegated';
   const prefix = delegated ? 'office-delegation' : 'office-docx';
@@ -219,14 +232,12 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
     };
     if (delegated) {
       const contribution = observer.observation();
-      report.contribution = {
-        nonceMatches: contribution?.nonce === marker,
-        parentMatches: contribution?.parentId === session.sessionId,
-        childMatches: contribution?.childId === snapshot.delegation.child.sessionId,
-        startedEmpty: contribution?.before?.status === 'missing',
-        parsedAtChildEnd: contribution?.after?.status === 'parsed',
-        confounded: contribution?.confounded !== false,
-      };
+      report.contribution = contributionSummary(
+        contribution,
+        marker,
+        session.sessionId,
+        snapshot.delegation.child.sessionId,
+      );
       snapshot.delegation = {
         ...snapshot.delegation,
         nonce: marker,
