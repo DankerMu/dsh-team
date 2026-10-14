@@ -1366,3 +1366,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Files/auth/secrets: gate reads only config/Compose/example, prints names not values; guardrail mutations live in existing disposable copy, never a real `.env`. No network/provider or production resource side effects.
 - Evidence floor: focused RED→GREEN, actual root checker command and four mismatch controls, original full guardrails/check, source/built rejection smoke, gitleaks, strict fixture, independent review and final-head Docker/CI. Concurrency, persisted schema and packaging/dependency changes excluded.
 - 实测：host 非法输入9项先RED后GREEN；既有必填URL缺失断言保留，2152单元/1135集成及完整check通过。原始guardrails85/85证明两组清单双向拒绝、注释/字符串/转义不制造消费方及动态读取拒绝；首次复杂度/shell字面量警告已按原门槛修正。源/编译入口各验证非法host与缺少URL退出1、指名、不回显输入且不创建数据目录；示例gitleaks无泄漏，strict5/5。最终SHA Docker/CI仍是合并门禁。
+
+## Issue #94 risk/evidence map (task18.4 only)
+
+- Expanded: real Compose lifecycle/resource ownership, durable data, native route identity and evidence integrity. Two live instance identities must survive a physically replaced platform; HTTP200 alone is insufficient.
+- Public account/model/audit/native Session boundaries: genuine initial state, fresh post-recreation login for both employees, exact model/audit preservation and distinct Session readback. No model inference or UI-rendering claim; fresh logins may append audit rows only after preservation snapshot.
+- Error/cleanup/concurrency: same fixed-name lock across removal/recreation/final drain, exact owner labels/ID and absent-resource checks, unchanged original caller-failure regression; no forced-stop proof or global cleanup.
+- Evidence: known-good deployment, real lost-data negative control, restored positive; local check/strict fixture, independent review and frozen-head standalone/full Docker with empty independent inventories. No runtime/schema/DSH/permission changes intended.
