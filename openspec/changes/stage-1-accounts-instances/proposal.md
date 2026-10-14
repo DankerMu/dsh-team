@@ -651,3 +651,11 @@
 - Exact standalone `--help` returns0/stdout usage before config, TTY, terminal, signals or database lifecycle. Every other argument shape preserves existing rejection and privacy.
 - Evidence: actual process RED→GREEN under invalid config/non-TTY/no data, unit argument boundaries, full existing CLI lifecycle suite, built-entry smoke, `pnpm check`, independent review and protected CI/Docker.
 - Parent-inline fixture/implementation follows the single-mapped-slice delegation rule; no new parser, aliases, dependencies, model calls or authentication behavior.
+
+## Issue #224 fixture
+
+- Bugfix/test infrastructure; expanded because shared live Docker fixtures own subprocess lifetime, resource authority and real connection evidence.
+- Actual #91 timeline shows a 9.464s synchronous volume observer blocking the platform proxy and Ping/Pong peer. Repair that fixture boundary, not DSH, heartbeat policy or sibling assertions.
+- Add genuine asynchronous execution/registration within the existing lifecycle ownership boundary; migrate all live callers serially. Keep unrelated synchronous build/setup/final cleanup modes.
+- Evidence floor: controlled external slow-helper old synchronous RED/new asynchronous GREEN with real platform/DSH carrier, original live acceptance, error/timeout/redaction/ownership contracts, full checks, independent review and exact-head Docker/CI.
+- Separate from #204's action-relative close oracle and the independently captured DELETE/10s retirement deadline failure. This fix alone does not unblock #91.
