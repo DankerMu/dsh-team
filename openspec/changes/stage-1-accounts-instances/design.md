@@ -1442,3 +1442,16 @@ Idle-overlap boundary: hasStartupWork is flights-only, not a mirror of the statu
 - Original sibling, Session/history, platform-session, volume/file, account and audit assertions remain. No production/DSH/permission/deadline changes, peer-only worker workaround, fake heartbeat or retry-based acceptance.
 - Parent owns RED/GREEN/checks and integration. Disjoint producer, live-fixture consumer and shared model-evidence consumer slices share fixed APIs; higher delegation/check-execution rules govern agents, overriding skill defaults only.
 - Root-cause evidence for DELETE cancellation is tracked separately; do not change retirement budgets here. Rollback reverts the fixture cutover, with no persisted-state migration.
+
+## Issue #91 platform image boundary
+
+- Build from repository root with `platform/Dockerfile`; reuse `pnpm build` for compiler/frontend/migrations. A Dockerfile-specific allowlist excludes local secrets, evidence, dependencies and reference repositories from context.
+- Builder/runtime share Node24 Debian bookworm. Pinned pnpm10.34.6, frozen lockfile, approved native dependency builds and compiler tools only in build stages. Force better-sqlite3 source compilation on actual amd64 and retain compile evidence.
+- Use pnpm deploy's supported legacy mode for a self-contained production dependency closure, not dangling workspace symlinks. Final image includes only platform manifest/production dependencies, compiled platform, frontend dist and delivered seccomp.
+- better-sqlite3 13.0.3's implicit rebuild can be a no-op and its loader prefers prebuilds. Use build-only node-gyp11.5.0 (same version bundled by pinned pnpm) for explicit `--force_build=1` after deploy; remove prebuilds from that production closure. The runtime test checks the actually loaded native module, not merely a compiled file's presence.
+- Runtime layout: `/app/platform/dist`, `/app/platform/web/dist`, `/app/images/seccomp/dsh-user.json`; `WORKDIR /app` preserves CLI and default profile paths. Non-root owns writable `/app/data`; application/dependencies remain root-owned.
+- Default command starts existing compiled main. No config change, credential, runtime installer or fallback. Public URL/socket configuration remains caller-owned; Compose and socket group access belong to #92.
+- Artifact contract: actual CLI help, then a network-none container exercises default config/seccomp, web-build resolver, SQLite migrations and persisted row reopen, effective non-root UID and data write. No source mounts.
+- Register owned image/container targets before creation, run immutable image identity, use existing label-checked cleanup on success/failure and preserve primary errors. No unrelated cleanup or new lifecycle framework.
+- RED exercises an invalid built artifact, not merely absent Dockerfile; unchanged contract then passes on the shipped artifact. Parent-inline fixture admission; independent final packaging/security review.
+- No full deployment, API/schema/provider/DSH/permission change or browser-layout/model claim. Rollback selects prior image; no migration outside owned tests.

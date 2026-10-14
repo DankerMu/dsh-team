@@ -659,3 +659,12 @@
 - Add genuine asynchronous execution/registration within the existing lifecycle ownership boundary; migrate all live callers serially. Keep unrelated synchronous build/setup/final cleanup modes.
 - Evidence floor: controlled external slow-helper old synchronous RED/new asynchronous GREEN with real platform/DSH carrier, original live acceptance, error/timeout/redaction/ownership contracts, full checks, independent review and exact-head Docker/CI.
 - Separate from #204's action-relative close oracle and the independently captured DELETE/10s retirement deadline failure. This fix alone does not unblock #91.
+
+## Issue #91 fixture
+
+- Feature; expanded (agree with upstream production packaging classification).
+- Blast radius: deployed startup, administrator CLI, native SQLite, static assets and shipped sandbox profile.
+- Selected risk packs: CLI/script entry; config/setup; file/path safety; auth/secrets; packaging/dependency compatibility; failure cleanup; documentation. No schema/business/concurrency change.
+- Evidence floor: real Linux amd64 multistage build, source-compiled SQLite exercised through packaged migrations, non-root CLI/help and default data write, packaged static resolver and default seccomp read; owned cleanup, `pnpm check`, exact-head Docker and CI.
+- Task18.1 only: no Compose, Docker-socket deployment policy, model calls or full deployment. Shared fixture stays open.
+- Parent owns this single mapped implementation slice under the higher-priority delegation restriction; independent packaging/security review remains required. Human review deferral is unchanged.
