@@ -26,7 +26,7 @@
     "lint:tests": "bash scripts/check-test-pairing.sh",
     "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
     "lint:agents": "bash scripts/check-agents-commands.sh",
-    "typecheck": "tsc --noEmit && pnpm --filter @dsh-team/web typecheck && tsc -p plugins/zh-locale/tsconfig.json && tsc -p plugins/permission-tiers/tsconfig.json",
+    "typecheck": "tsc --noEmit && pnpm --filter @dsh-team/web typecheck && tsc -p plugins/zh-locale/tsconfig.json && tsc -p plugins/permission-tiers/tsconfig.json && tsc -p plugins/office-agents/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "pnpm build:web && vitest run --project integration",
     "test:ui": "pnpm build:web && playwright test",

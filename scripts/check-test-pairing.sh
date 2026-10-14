@@ -36,7 +36,7 @@ while IFS= read -r file; do
   if [ ! -f "$stem.test.$ext" ] && [ ! -f "$stem.test.ts" ]; then
     missing+=("  $file  expected \"$stem.test.$ext\", found none")
   fi
-done < <(find "${roots[@]}" -type f \( -name '*.ts' -o -name '*.tsx' -o -path '*/permission-tiers/*.js' \) | sort)
+done < <(find "${roots[@]}" -type f \( -name '*.ts' -o -name '*.tsx' -o -path '*/permission-tiers/*.js' -o -path '*/office-agents/*.js' \) | sort)
 
 if [ "${#missing[@]}" -gt 0 ]; then
   {

@@ -1,7 +1,13 @@
 {
   "name": "@dsh-team/office-agents",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
   "description": "Image-seeded office Agent presets for DSH",
   "dsh": {
     "bundle": {

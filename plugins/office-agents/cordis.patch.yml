@@ -2,6 +2,8 @@
   config:
     default: office-general
 - insert:
+    - id: office-delegation
+      name: "@dsh-team/office-agents"
     - id: preset-office-general
       name: "@deepseek-ai/dsh-agent-preset"
       disabled: false
