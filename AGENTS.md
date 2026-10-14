@@ -162,6 +162,8 @@ The administrator audit page shares implemented navigation with accounts and use
 ### Environment
 
 - `.env.example` is the single inventory for platform inputs and explicitly namespaced Compose-only inputs. Copy it to `.env`; invalid platform values stop startup. Host-run lifecycle development must explicitly select `published-loopback`. Unset `PLATFORM_MANAGED_CONFIG_DIR` defaults to `<dataDir>/managed-config` and resolves to an absolute path. Compose-only `DEPLOY_DOCKER_GID` is not a platform runtime field; configuration inventory checks must account for both real consumers without unused fields or blanket exclusions.
+- `pnpm lint:config` (included in `pnpm lint` / `pnpm check`) matches literal platform environment reads and Compose-only interpolation to active assignments in `.env.example`, rejecting both undocumented and unconsumed names. Comments, error strings and escaped dollars are not consumers; unsupported dynamic environment reads fail rather than disappearing. Compose flow collections, block scalars and multiline quotes fail explicitly: use the delivered block-mapping/single-line scalar form rather than obtaining an incomplete inventory. Guardrails mutate only their disposable copy.
+- `PLATFORM_HOST` accepts bare IPv4/IPv6 or an ASCII DNS hostname (optional trailing dot), not a URL, host:port or blank value. Validation names the variable without echoing input before database/listener side effects. DNS resolution and actual bind availability are still runtime concerns; subnet validation remains at startup against persisted capacity.
 - `PLATFORM_SUBNET_POOL` defaults to `172.30.0.0/16` only when absent. Supply a canonical dotted IPv4 network CIDR with zero host bits and prefix `/0` through `/28`, without whitespace. Operators must choose an address pool that does not conflict with host, LAN or existing Docker networks. After migration and before serving, startup compares its geometric `/28` capacity against persisted `maxRunningInstances` (default 60); equality passes, insufficient or malformed pools fail naming `PLATFORM_SUBNET_POOL`. The pool validation is geometric; the subsequent awaited owner reconciliation performs real Docker discovery.
 - Task10.1 exposes pure `allocateSubnet(pool, occupiedSubnets)` through the orchestrator API: first-fit aligned `/28`, range-overlap exclusion, explicit exhaustion, no hidden reservation. Task10.2 (#45) must fetch fresh IPAM CIDRs from all relevant Docker networks, not only project-labeled networks, and serialize selection with creation. Repeating the same snapshot deliberately returns the same subnet; release/reuse is represented by the next snapshot. No network creation is supplied by task10.1.
 - `PLATFORM_UPSTREAM_MODE` defaults to exact `network`; instances publish no host ports and the captured owner attaches the configured `PLATFORM_CONTAINER_NAME` (default `dsh-team-platform`) to each owned instance bridge. The inspected instance IPv4:3080 is the upstream. Platform identity and both endpoint inspect views are verified before use; name/ID changes, foreign endpoints, additional instance networks and publication fail closed. Retirement disconnects only that exact platform endpoint before deleting the confirmed empty bridge, preserving data and sibling/primary networks.
@@ -443,32 +445,33 @@ Classify the failing job (`layer1-fast-checks`, `layer2-unit-tests`, `layer3-int
 
 Strictness profile: **L3** (see `constraints.yaml`). Levels: `advice` < `review-only` < `warn` < `block` < `gate`. Anything below `warn` is a human promise, not a machine check.
 
-| Rule / Convention            | Where it lives                                     | Where it's checked                  | Level       |
-| ---------------------------- | -------------------------------------------------- | ----------------------------------- | ----------- |
-| Lint rules                   | `eslint.config.mjs`                                | `pnpm lint` + pre-commit + CI       | block       |
-| Formatter                    | `.prettierrc.json`                                 | `pnpm fmt:check` + pre-commit + CI  | block       |
-| Type strictness              | `tsconfig.json`                                    | `pnpm typecheck` + CI               | block       |
-| Coverage, 80% per file       | `vitest.config.ts`                                 | `pnpm test` + CI                    | block       |
-| File size and complexity     | `constraints.yaml` (size_limits)                   | `pnpm lint` + CI                    | block       |
-| Duplicate code, 3%           | `jscpd.json`                                       | `pnpm duplicate-code` + CI          | block       |
-| Dead code                    | `knip.json`                                        | `pnpm dead-code` + pre-commit + CI  | block       |
-| Module boundaries and cycles | `.dependency-cruiser.cjs`                          | `pnpm lint:deps` + CI               | block       |
-| Test pairing (TDD)           | `scripts/check-test-pairing.sh`                    | `pnpm lint:tests` + pre-commit + CI | block       |
-| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh`                       | pre-commit hook                     | block       |
-| Conventional commits         | `commitlint.config.cjs`                            | commit-msg hook                     | block       |
-| Secrets in commits           | gitleaks                                           | pre-commit + CI                     | block       |
-| Static security analysis     | Semgrep in `.github/workflows/ci.yml`              | CI                                  | block       |
-| API contract drift           | `schemas/openapi.json`                             | `pnpm contract:check` + CI          | block       |
-| Shell scripts                | shellcheck                                         | `pnpm lint:shell` + CI              | block       |
-| Documented commands exist    | `scripts/check-agents-commands.sh`                 | `pnpm lint:agents` + CI             | block       |
-| PR diff size, 400 lines      | `constraints.yaml` (size_limits.max_pr_diff_lines) | CI                                  | block       |
-| Lockfile matches manifest    | `.github/workflows/ci.yml`                         | CI                                  | block       |
-| Gates reject violations      | `scripts/test-guardrails.sh`                       | `pnpm test:guardrails` + CI         | block       |
-| Branch protection on `main`  | GitHub branch protection                           | server-side                         | gate        |
-| Critical-path human review   | `## Critical Paths`                                | PR description, reviewer            | review-only |
-| Commented-out code           | `## Code Canonicality`                             | reviewer                            | review-only |
-| Agent co-author trailer      | `## Agent Operating Rules`                         | reviewer                            | review-only |
-| Iteration and evidence rules | `## Agent Operating Rules`                         | reviewer                            | review-only |
+| Rule / Convention            | Where it lives                                     | Where it's checked                     | Level       |
+| ---------------------------- | -------------------------------------------------- | -------------------------------------- | ----------- |
+| Lint rules                   | `eslint.config.mjs`                                | `pnpm lint` + pre-commit + CI          | block       |
+| Formatter                    | `.prettierrc.json`                                 | `pnpm fmt:check` + pre-commit + CI     | block       |
+| Type strictness              | `tsconfig.json`                                    | `pnpm typecheck` + CI                  | block       |
+| Coverage, 80% per file       | `vitest.config.ts`                                 | `pnpm test` + CI                       | block       |
+| File size and complexity     | `constraints.yaml` (size_limits)                   | `pnpm lint` + CI                       | block       |
+| Duplicate code, 3%           | `jscpd.json`                                       | `pnpm duplicate-code` + CI             | block       |
+| Dead code                    | `knip.json`                                        | `pnpm dead-code` + pre-commit + CI     | block       |
+| Module boundaries and cycles | `.dependency-cruiser.cjs`                          | `pnpm lint:deps` + CI                  | block       |
+| Test pairing (TDD)           | `scripts/check-test-pairing.sh`                    | `pnpm lint:tests` + pre-commit + CI    | block       |
+| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh`                       | pre-commit hook                        | block       |
+| Conventional commits         | `commitlint.config.cjs`                            | commit-msg hook                        | block       |
+| Secrets in commits           | gitleaks                                           | pre-commit + CI                        | block       |
+| Static security analysis     | Semgrep in `.github/workflows/ci.yml`              | CI                                     | block       |
+| API contract drift           | `schemas/openapi.json`                             | `pnpm contract:check` + CI             | block       |
+| Shell scripts                | shellcheck                                         | `pnpm lint:shell` + CI                 | block       |
+| Documented commands exist    | `scripts/check-agents-commands.sh`                 | `pnpm lint:agents` + CI                | block       |
+| Configuration inventory      | `scripts/check-config.mjs`                         | `pnpm lint:config` via lint/check + CI | block       |
+| PR diff size, 400 lines      | `constraints.yaml` (size_limits.max_pr_diff_lines) | CI                                     | block       |
+| Lockfile matches manifest    | `.github/workflows/ci.yml`                         | CI                                     | block       |
+| Gates reject violations      | `scripts/test-guardrails.sh`                       | `pnpm test:guardrails` + CI            | block       |
+| Branch protection on `main`  | GitHub branch protection                           | server-side                            | gate        |
+| Critical-path human review   | `## Critical Paths`                                | PR description, reviewer               | review-only |
+| Commented-out code           | `## Code Canonicality`                             | reviewer                               | review-only |
+| Agent co-author trailer      | `## Agent Operating Rules`                         | reviewer                               | review-only |
+| Iteration and evidence rules | `## Agent Operating Rules`                         | reviewer                               | review-only |
 
 `constraints.yaml` is the machine-readable source for every threshold and pattern above; lint, coverage, and hook scripts read it at run time. Change a threshold there, never in a tool config.
 

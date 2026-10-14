@@ -29,6 +29,18 @@ const DEFAULT_LOG_LEVEL = 'info';
 const DEFAULT_DATA_DIR = './data';
 const MAX_PORT = 65535;
 
+function parseHost(raw: string): string {
+  if (isIP(raw) !== 0) return raw;
+  const hostname = raw.endsWith('.') ? raw.slice(0, -1) : raw;
+  if (
+    hostname.length > 253 ||
+    /^[\d.]+$/.test(hostname) ||
+    !hostname.split('.').every((label) => /^[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?$/i.test(label))
+  )
+    throw new Error('PLATFORM_HOST must be an IP address or DNS hostname');
+  return raw;
+}
+
 function parsePort(raw: string): number {
   const port = Number(raw);
   if (!/^\d+$/.test(raw) || port < 1 || port > MAX_PORT) {
@@ -184,7 +196,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
       ? resolve(dataDir, 'managed-config')
       : resolve(parseManagedConfigDir(env.PLATFORM_MANAGED_CONFIG_DIR));
   return {
-    host: env.PLATFORM_HOST ?? DEFAULT_HOST,
+    host: parseHost(env.PLATFORM_HOST ?? DEFAULT_HOST),
     port: parsePort(env.PLATFORM_PORT ?? DEFAULT_PORT),
     logLevel: parseLogLevel(env.PLATFORM_LOG_LEVEL ?? DEFAULT_LOG_LEVEL),
     dataDir,

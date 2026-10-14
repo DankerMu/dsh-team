@@ -34,6 +34,25 @@ describe('loadConfig', () => {
     });
   });
 
+  it.each(['', ' ', ' secret ', 'host/path', 'http://host', 'host:8080', '[::1]', 'a..b', 'a\0b'])(
+    'rejects invalid listen host %j and names its configuration without echoing it',
+    (host) => {
+      const load = () => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_HOST: host });
+
+      expect(load).toThrow(/PLATFORM_HOST/);
+      expect(load).not.toThrow(/secret/);
+    },
+  );
+
+  it.each(['localhost', 'platform.internal', 'platform.internal.', '::', '::1', '127.0.0.1'])(
+    'preserves valid listen address %s',
+    (host) => {
+      const config = loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_HOST: host });
+
+      expect(config.host).toBe(host);
+    },
+  );
+
   it.each(['0', '65536', '-1', '80.5', 'abc', ''])('rejects port "%s"', (port) => {
     expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_PORT: port })).toThrow(
       /PLATFORM_PORT/,
