@@ -12,6 +12,8 @@ import type { DatabaseHandle } from './db/index.ts';
 import { createTerminal, TerminalInputError } from './terminal.ts';
 import type { TerminalInput, TerminalOutput, TerminalSession } from './terminal.ts';
 
+const USAGE = 'Usage: admin create <email>';
+
 const SUCCESS_MESSAGES = {
   created: 'Administrator created',
   promoted: 'Account promoted to administrator',
@@ -33,7 +35,7 @@ function commandEmail(
   output: TerminalOutput,
 ): string {
   if (args.length !== 3 || args[0] !== 'admin' || args[1] !== 'create') {
-    throw new CommandInputError('Usage: admin create <email>');
+    throw new CommandInputError(USAGE);
   }
   const email = normalizeEmail(args[2] ?? '');
   if (email === null) {
@@ -72,6 +74,10 @@ export async function runCli(
   signals: SignalSource = process,
   open: (filename: string) => DatabaseHandle = openDatabase,
 ): Promise<number> {
+  if (args.length === 1 && args[0] === '--help') {
+    output.write(`${USAGE}\n`);
+    return 0;
+  }
   let database: DatabaseHandle | undefined;
   let terminal: TerminalSession | undefined;
   const cancellation = new AbortController();

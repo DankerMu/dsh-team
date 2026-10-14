@@ -1322,3 +1322,9 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 
 Suggested fixture level: compact - 只新增测试和一份对照文档，不改运行时行为
 Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 行，独立于其余用例）
+
+## Prerequisite #221: successful standalone CLI help
+
+- Expanded risk map: public CLI/config precedence and auth/privacy selected; direct process and unit checks require exact standalone help, exit0/stdout, empty stderr, no data or lifecycle side effects. Extra/misplaced/password-bearing arguments still reject without disclosure.
+- File/cleanup evidence uses isolated temporary directories and original CLI integration/PTY cases. Production schema, concurrency, packaging and provider changes are excluded; #91 keeps its unchanged image assertion.
+- Required gates: failing-before/passing-after `pnpm test:cli`, built `--help` smoke, `pnpm check`, strict shared fixture, independent review, exact-head Docker/CI. Parent-inline single-slice implementation; no model invocation. Shared Epic fixture stays open.

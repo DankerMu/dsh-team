@@ -28,6 +28,15 @@ async function invoke(args: readonly string[], inputTTY = false, outputTTY = fal
 }
 
 describe('administrator command validation', () => {
+  it('serves standalone help before configuration or interactive lifecycle setup', async () => {
+    const result = await invoke(['--help']);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('admin create');
+    expect(result.stderr).toBe('');
+    expect(result.signals.eventNames()).toEqual([]);
+  });
+
   it.each(
     [
       [],
@@ -37,6 +46,9 @@ describe('administrator command validation', () => {
       ['admin', 'delete', 'user@example.com'],
       ['admin', 'create', 'user@example.com', 'secret-password-sentinel'],
       ['admin', 'create', 'user@example.com', '--password=secret-password-sentinel'],
+      ['--help', 'secret-password-sentinel'],
+      ['--help', '--password=secret-password-sentinel'],
+      ['admin', '--help'],
     ].map((args) => ({ args })),
   )('rejects unsupported arguments without disclosing supplied values: %j', async ({ args }) => {
     const result = await invoke(args);
