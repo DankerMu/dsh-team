@@ -1,5 +1,7 @@
 import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { IncomingMessage } from 'node:http';
+import type { Socket } from 'node:net';
 import { adminRoutes } from './admin/index.ts';
 import {
   createSourceAddressResolver,
@@ -134,6 +136,29 @@ export async function buildApp(
     throw error;
   }
 
+  // Node's HTTP close does not retire accepted sockets with no parsed request.
+  const unclaimed = new Set<Socket>();
+  let closing = false;
+  function released(this: Socket): void {
+    unclaimed.delete(this);
+  }
+  function accepted(socket: Socket): void {
+    if (closing) {
+      socket.destroy();
+      return;
+    }
+    unclaimed.add(socket);
+    socket.once('close', released);
+  }
+  function claimed(request: IncomingMessage): void {
+    unclaimed.delete(request.socket);
+    request.socket.off('close', released);
+  }
+  app.server.on('connection', accepted);
+  // A handler may initiate shutdown synchronously; claim its transport first.
+  app.server.prependListener('request', claimed);
+  app.server.prependListener('upgrade', claimed);
+
   async function flushActivity(phase?: 'shutdown'): Promise<void> {
     try {
       await instanceService?.flushActivity(phase);
@@ -155,6 +180,9 @@ export async function buildApp(
   idleTimer?.unref();
 
   app.addHook('onClose', async () => {
+    app.server.off('connection', accepted);
+    app.server.off('request', claimed);
+    app.server.off('upgrade', claimed);
     // Transport release is complete and the listener is closed before draining
     // activity queued behind lifecycle work; SQLite must outlive both drains.
     await flushActivity('shutdown');
@@ -164,6 +192,8 @@ export async function buildApp(
   // Fence both admissions and destroy owned transports before any unrelated lifecycle drain.
   // onClose awaits activity and the same service promise before releasing SQLite.
   app.addHook('preClose', async () => {
+    closing = true;
+    for (const socket of unclaimed) socket.destroy();
     clearInterval(activityTimer);
     clearInterval(idleTimer);
     void instanceService?.close();
