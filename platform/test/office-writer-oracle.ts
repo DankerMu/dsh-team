@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { resolve } from 'node:path';
 import { record } from './container-start-docker-fixture.ts';
 
 interface OfficeNotice {
@@ -210,27 +211,105 @@ function delegationResult(events: Record<string, unknown>[], call: Record<string
   return end;
 }
 
-function childContribution(
+function constructionCheckpoint(
   delegation: OfficeDelegation,
-  start: Record<string, unknown>,
+  prompt: Record<string, unknown>,
   end: Record<string, unknown>,
+  turn: unknown,
 ) {
   const proof = record(delegation.contribution);
   assert(
     proof.nonce === delegation.nonce &&
       proof.parentId === delegation.parent.sessionId &&
       proof.childId === record(delegation.child).sessionId &&
-      proof.startSeq === start.seq &&
-      proof.endSeq === end.seq &&
-      proof.confounded === false,
-    'office-child-contribution',
+      proof.turn === turn &&
+      Number.isSafeInteger(proof.step) &&
+      Number(proof.step) >= 0 &&
+      typeof proof.callId === 'string' &&
+      proof.callId.length > 0 &&
+      Number.isSafeInteger(proof.callSeq) &&
+      Number.isSafeInteger(proof.resultSeq) &&
+      Number(proof.callSeq) > Number(prompt.seq) &&
+      Number(proof.resultSeq) > Number(proof.callSeq) &&
+      Number(proof.resultSeq) < Number(end.seq),
   );
-  const before = record(proof.before);
+  return proof;
+}
+
+function constructionCall(
+  call: Record<string, unknown>,
+  proof: Record<string, unknown>,
+  delegation: OfficeDelegation,
+) {
+  const data = record(call.data);
   assert(
-    before.status === 'missing' && before.uid === 1001 && before.path === delegation.notice.path,
-    'office-child-artifact-not-fresh',
+    call.type === 'tool/call' &&
+      data.name === 'build_docx' &&
+      data.turn === proof.turn &&
+      data.step === proof.step &&
+      data.callId === proof.callId,
   );
-  return officeDocxEvidence(proof.after, delegation.notice);
+  const args = record(JSON.parse(String(data.arguments)));
+  assert(
+    typeof args.path === 'string' &&
+      resolve(delegation.parent.cwd, args.path) === delegation.notice.path,
+  );
+}
+
+function constructionResult(result: Record<string, unknown>, proof: Record<string, unknown>) {
+  const data = record(result.data);
+  const message = record(data.message);
+  const source = record(message.source);
+  assert(
+    result.type === 'tool/result' &&
+      data.turn === proof.turn &&
+      data.step === proof.step &&
+      data.error === undefined &&
+      message.role === 'tool' &&
+      message.isError !== true &&
+      message.toolCallId === proof.callId &&
+      source.kind === 'tool' &&
+      source.callId === proof.callId,
+  );
+  return data;
+}
+
+function constructionReceipt(value: unknown, notice: OfficeNotice) {
+  const receipt = record(value);
+  assert.deepEqual(Object.keys(receipt).sort(), ['bytes', 'path', 'sha256', 'uid']);
+  assert(
+    receipt.path === notice.path &&
+      receipt.uid === 1001 &&
+      Number.isSafeInteger(receipt.bytes) &&
+      Number(receipt.bytes) > 0 &&
+      Number(receipt.bytes) <= 1_048_576 &&
+      typeof receipt.sha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(receipt.sha256),
+  );
+  return receipt;
+}
+
+function childContribution(
+  delegation: OfficeDelegation,
+  events: Record<string, unknown>[],
+  prompt: Record<string, unknown>,
+  end: Record<string, unknown>,
+  turn: unknown,
+) {
+  try {
+    const proof = constructionCheckpoint(delegation, prompt, end, turn);
+    constructionCall(record(events[Number(proof.callSeq)]), proof, delegation);
+    const result = constructionResult(record(events[Number(proof.resultSeq)]), proof);
+    const receipt = constructionReceipt(result.meta, delegation.notice);
+    assert.deepEqual(proof.receipt, receipt);
+    const artifact = officeDocxEvidence(proof.artifact, delegation.notice);
+    assert(artifact.bytes === receipt.bytes && artifact.sha256 === receipt.sha256);
+    return artifact;
+  } catch {
+    // The native copy counterexample must fail specifically for missing/invalid
+    // construction, not accidentally pass by triggering an unrelated error.
+    assert.fail('office-child-contribution');
+  }
 }
 
 export function officeTurnEvidence(input: OfficeHistory & { delegation?: OfficeDelegation }) {
@@ -273,32 +352,27 @@ export function officeTurnEvidence(input: OfficeHistory & { delegation?: OfficeD
       record(event.data).turn === turn &&
       Number(event.seq) > Number(prompt.seq),
   );
-  const successfulTool = events.some((event) => {
-    if (event.type !== 'tool/result' || record(event.data).turn !== turn) return false;
-    const result = record(record(event.data).message);
-    return (
-      result.role === 'tool' &&
-      result.isError !== true &&
-      record(result.source).kind === 'tool' &&
-      calls.some((call) => {
-        const data = record(call.data);
-        if (
-          input.delegation &&
-          data.name !== 'bash' &&
-          data.name !== 'write' &&
-          data.name !== 'edit'
-        )
-          return false;
-        return (
-          typeof data.callId === 'string' &&
-          data.callId === result.toolCallId &&
-          result.toolCallId === record(result.source).callId &&
-          Number(call.seq) < Number(event.seq)
-        );
-      }) &&
-      Number(event.seq) < Number(end.seq)
-    );
-  });
+  const successfulTool =
+    input.delegation !== undefined ||
+    events.some((event) => {
+      if (event.type !== 'tool/result' || record(event.data).turn !== turn) return false;
+      const result = record(record(event.data).message);
+      return (
+        result.role === 'tool' &&
+        result.isError !== true &&
+        record(result.source).kind === 'tool' &&
+        calls.some((call) => {
+          const data = record(call.data);
+          return (
+            typeof data.callId === 'string' &&
+            data.callId === result.toolCallId &&
+            result.toolCallId === record(result.source).callId &&
+            Number(call.seq) < Number(event.seq)
+          );
+        }) &&
+        Number(event.seq) < Number(end.seq)
+      );
+    });
   assert(
     successfulTool &&
       record(end.data).turn === turn &&
@@ -314,7 +388,7 @@ export function officeTurnEvidence(input: OfficeHistory & { delegation?: OfficeD
       ? {
           delegation: {
             ...delegationEvidence(input, input.delegation, events),
-            childDocx: childContribution(input.delegation, start, end),
+            childDocx: childContribution(input.delegation, events, prompt, end, turn),
           },
         }
       : {}),

@@ -1,19 +1,15 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export async function copyCounterexample(
-  ctx,
-  fixture,
-  { create, createUserMessage, eventsOf, quietProcess },
-) {
+export async function copyCounterexample(ctx, fixture, { create, createUserMessage, eventsOf }) {
   const control = '/data/home/office-copy-control.json';
   const evidence = '/data/home/office-copy-evidence.json';
   const config = JSON.parse(readFileSync(control, 'utf8'));
   const observer = await import(pathToFileURL('/data/home/office-copy-observer.mjs').href);
   observer.apply(ctx, { control, evidence });
-  await quietProcess();
   const { notice, copied, nonce } = config;
   const staged = notice.path + '.prepared';
   const fields = [notice.title, notice.addressee, notice.matter, notice.issuer, notice.date];
@@ -27,16 +23,22 @@ export async function copyCounterexample(
         ')',
     );
   const childTask = fixture.task('complete', [
-    {
-      name: 'bash',
-      arguments: {
-        description: 'Owned child notice operation',
-        command: copied
-          ? 'cp -- ' + JSON.stringify(staged) + ' ' + JSON.stringify(notice.path)
-          : make(notice.path),
-        timeoutMs: 10000,
-      },
-    },
+    copied
+      ? {
+          name: 'bash',
+          arguments: {
+            description: 'Owned child copy operation',
+            command: 'cp -- ' + JSON.stringify(staged) + ' ' + JSON.stringify(notice.path),
+            timeoutMs: 10000,
+          },
+        }
+      : {
+          name: 'build_docx',
+          arguments: {
+            path: notice.path,
+            paragraphs: fields.map((text) => ({ text })),
+          },
+        },
   ]);
   const parentTask = fixture.task('complete', [
     {
@@ -49,16 +51,43 @@ export async function copyCounterexample(
     },
     {
       name: 'subagent',
-      quiet: true,
       arguments: {
         description: 'Owned notice control',
         prompt: childTask.prompt[0].text,
         run_in_background: false,
       },
     },
+    ...(!copied
+      ? [
+          {
+            name: 'bash',
+            arguments: {
+              description: 'Owned parent review after writer construction',
+              command:
+                '/usr/bin/python3 -I -c ' +
+                JSON.stringify(
+                  'from docx import Document; p=' +
+                    JSON.stringify(notice.path) +
+                    '; d=Document(p); d.add_paragraph("已复核"); d.save(p)',
+                ),
+              timeoutMs: 10000,
+            },
+          },
+        ]
+      : []),
   ]);
   const parent = await create(ctx);
+  const observe = () => {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', config.reader], {
+      encoding: 'utf8',
+      timeout: 15000,
+      maxBuffer: 65536,
+    });
+    assert.equal(result.status, 0, 'office-copy-final-reader');
+    return JSON.parse(result.stdout);
+  };
   try {
+    assert.equal(observe().status, 'missing', 'office-docx-not-fresh');
     parent.agent.followup(
       createUserMessage({
         source: { kind: 'user', rpcId: randomUUID() },
@@ -95,7 +124,7 @@ export async function copyCounterexample(
     );
     const parentEvents = eventsOf(parent.agent);
     return {
-      hostPid: process.pid,
+      artifact: observe(),
       preparedSha256: copied
         ? createHash('sha256').update(readFileSync(staged)).digest('hex')
         : null,

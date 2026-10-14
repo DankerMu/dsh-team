@@ -113,15 +113,22 @@ function failureDocx(observe, notice) {
 }
 
 function contributionSummary(contribution, nonce, parentId, childId) {
+  const proof = contribution ?? {};
+  const receipt = proof.receipt ?? {};
+  const artifact = proof.artifact ?? {};
   return {
-    nonceMatches: contribution?.nonce === nonce,
-    parentMatches: contribution?.parentId === parentId,
-    childMatches: contribution?.childId === childId,
-    startedEmpty: contribution?.before?.status === 'missing',
-    parsedAtChildEnd: contribution?.after?.status === 'parsed',
-    confounded: contribution?.confounded !== false,
-    earlierParentWork: contribution?.earlierParentWork === true,
-    processesQuiet: contribution?.processesQuiet === true,
+    nonceMatches: proof.nonce === nonce,
+    parentMatches: proof.parentId === parentId,
+    childMatches: proof.childId === childId,
+    callId: proof.callId,
+    callSeq: proof.callSeq,
+    resultSeq: proof.resultSeq,
+    turn: proof.turn,
+    step: proof.step,
+    receiptPath: receipt.path,
+    receiptSha256: receipt.sha256,
+    artifactSha256: artifact.sha256,
+    parsedAtConstruction: artifact.status === 'parsed',
   };
 }
 

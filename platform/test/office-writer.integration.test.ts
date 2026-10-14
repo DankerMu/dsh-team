@@ -158,6 +158,32 @@ it.each([
 });
 
 const DELEGATED_PROMPT = '请按主任务给出的五项内容制作通知文件。';
+const RECEIPT = {
+  path: NOTICE.path,
+  bytes: 2048,
+  sha256: 'a'.repeat(64),
+  uid: 1001,
+};
+const CONSTRUCTION_CALL = {
+  turn: 1,
+  step: 1,
+  callId: 'construct',
+  name: 'build_docx',
+  arguments: JSON.stringify({
+    path: NOTICE.path,
+    paragraphs: PARSED.paragraphs.map((text) => ({ text })),
+  }),
+};
+const CONSTRUCTION_RESULT = {
+  turn: 1,
+  step: 1,
+  message: {
+    role: 'tool',
+    toolCallId: 'construct',
+    source: { kind: 'tool', callId: 'construct' },
+  },
+  meta: RECEIPT,
+};
 const PARENT_EVENTS = [
   { type: 'session/create', data: {} },
   { type: 'turn/start', data: { turn: 1 } },
@@ -207,25 +233,27 @@ const DELEGATION = {
     nonce: 'office-observation',
     parentId: 'parent',
     childId: 'child',
-    startSeq: 3,
-    endSeq: 7,
-    confounded: false,
-    before: { path: NOTICE.path, uid: 1001, status: 'missing' },
-    after: PARSED,
+    callSeq: 5,
+    resultSeq: 6,
+    callId: 'construct',
+    turn: 1,
+    step: 1,
+    receipt: RECEIPT,
+    artifact: PARSED,
   },
 };
 const DELEGATED_TURN = {
   ...TURN,
   prompt: DELEGATED_PROMPT,
   delegation: DELEGATION,
-  cursor: EVENTS.length,
+  cursor: EVENTS.length + 2,
   records: [
     ...EVENTS.slice(0, 1),
     {
       type: 'subagent/descriptor',
       data: { version: 1, mode: 'one-shot', provider: 'spawn', label: '通知' },
     },
-    ...EVENTS.slice(1).map((event) =>
+    ...EVENTS.slice(1, 4).map((event) =>
       event.type === 'user/message'
         ? {
             ...event,
@@ -233,6 +261,9 @@ const DELEGATED_TURN = {
           }
         : event,
     ),
+    { type: 'tool/call', data: CONSTRUCTION_CALL },
+    { type: 'tool/result', data: CONSTRUCTION_RESULT },
+    ...EVENTS.slice(4),
   ].map((event, seq) => ({ event: { seq, ...event } })),
 };
 
@@ -299,58 +330,286 @@ it.each([
   ).toThrow();
 });
 
-it('rejects a delegated writer that only reads while another Agent could produce the file', () => {
+it('binds structured construction to its receipt and boundary artifact without retaining text', () => {
+  const records = DELEGATED_TURN.records
+    .filter((row) => row.event.seq !== 7 && row.event.seq !== 8)
+    .map((row, seq) => ({ event: { ...row.event, seq } }));
+
+  const proof = officeTurnEvidence({ ...DELEGATED_TURN, records, cursor: records.length - 1 });
+
+  expect(proof.delegation).toMatchObject({
+    childId: 'child',
+    childDocx: {
+      path: NOTICE.path,
+      bytes: 2048,
+      sha256: 'a'.repeat(64),
+      fields: { title: true, addressee: true, matter: true, issuer: true, date: true },
+    },
+  });
+  expect(JSON.stringify(proof)).not.toContain(NOTICE.matter);
+});
+
+it.each(['bash', 'write', 'edit', 'read'])(
+  'rejects %s-only child activity even with the previously accepted absence/completion proof',
+  (name) => {
+    // Retain the old oracle's full accepted checkpoint here so RED demonstrates
+    // missing construction, not merely rejection of the new proof envelope.
+    const records = DELEGATED_TURN.records
+      .filter((row) => row.event.seq !== 5 && row.event.seq !== 6)
+      .map((row, seq) => ({
+        event: {
+          ...row.event,
+          seq,
+          ...(row.event.type === 'tool/call'
+            ? {
+                data: {
+                  turn: 1,
+                  callId: 'call',
+                  name,
+                  arguments: JSON.stringify({
+                    command: `cp /data/work/prepared.docx ${NOTICE.path}`,
+                  }),
+                },
+              }
+            : {}),
+        },
+      }));
+    const contribution = {
+      nonce: DELEGATION.nonce,
+      parentId: 'parent',
+      childId: 'child',
+      startSeq: 3,
+      endSeq: 7,
+      confounded: false,
+      before: { path: NOTICE.path, uid: 1001, status: 'missing' },
+      after: PARSED,
+    };
+
+    expect(() =>
+      officeTurnEvidence({
+        ...DELEGATED_TURN,
+        records,
+        cursor: records.length - 1,
+        delegation: { ...DELEGATION, contribution },
+      }),
+    ).toThrow(/^office-child-contribution$/);
+  },
+);
+
+it.each([
+  { label: 'missing checkpoint', contribution: undefined },
+  { label: 'empty checkpoint', contribution: {} },
+  { label: 'missing receipt', contribution: { ...DELEGATION.contribution, receipt: undefined } },
+  { label: 'stale invocation', contribution: { ...DELEGATION.contribution, nonce: 'stale' } },
+  { label: 'sibling child', contribution: { ...DELEGATION.contribution, childId: 'sibling' } },
+  { label: 'parent receipt', contribution: { ...DELEGATION.contribution, childId: 'parent' } },
+  { label: 'wrong parent', contribution: { ...DELEGATION.contribution, parentId: 'other' } },
+  { label: 'stale call sequence', contribution: { ...DELEGATION.contribution, callSeq: 4 } },
+  { label: 'stale result sequence', contribution: { ...DELEGATION.contribution, resultSeq: 8 } },
+  { label: 'wrong call', contribution: { ...DELEGATION.contribution, callId: 'call' } },
+  { label: 'stale turn', contribution: { ...DELEGATION.contribution, turn: 0 } },
+  { label: 'stale step', contribution: { ...DELEGATION.contribution, step: 0 } },
+])('rejects $label despite successful generic child tool activity', ({ contribution }) => {
+  expect(() =>
+    officeTurnEvidence({ ...DELEGATED_TURN, delegation: { ...DELEGATION, contribution } }),
+  ).toThrow(/^office-child-contribution$/);
+});
+
+it.each([
+  { label: 'missing metadata', meta: undefined },
+  { label: 'wrong target', meta: { ...RECEIPT, path: '/data/work/other.docx' } },
+  { label: 'wrong owner', meta: { ...RECEIPT, uid: 0 } },
+  { label: 'zero size', meta: { ...RECEIPT, bytes: 0 } },
+  { label: 'oversized artifact', meta: { ...RECEIPT, bytes: 1_048_577 } },
+  { label: 'fractional size', meta: { ...RECEIPT, bytes: 2048.5 } },
+  { label: 'invalid digest', meta: { ...RECEIPT, sha256: 'A'.repeat(64) } },
+  { label: 'unknown receipt field', meta: { ...RECEIPT, copied: true } },
+])('rejects construction with $label in its durable receipt', ({ meta }) => {
   const records = DELEGATED_TURN.records.map((row) =>
-    row.event.type === 'tool/call'
-      ? { event: { ...row.event, data: { ...row.event.data, name: 'read' } } }
+    row.event.seq === 6 ? { event: { ...row.event, data: { ...CONSTRUCTION_RESULT, meta } } } : row,
+  );
+
+  expect(() =>
+    officeTurnEvidence({
+      ...DELEGATED_TURN,
+      records,
+      delegation: {
+        ...DELEGATION,
+        contribution: { ...DELEGATION.contribution, receipt: meta },
+      },
+    }),
+  ).toThrow(/^office-child-contribution$/);
+});
+
+it.each([
+  { label: 'stale call turn', seq: 5, data: { ...CONSTRUCTION_CALL, turn: 0 } },
+  { label: 'stale call step', seq: 5, data: { ...CONSTRUCTION_CALL, step: 0 } },
+  { label: 'wrong call identity', seq: 5, data: { ...CONSTRUCTION_CALL, callId: 'other' } },
+  {
+    label: 'wrong requested target',
+    seq: 5,
+    data: {
+      ...CONSTRUCTION_CALL,
+      arguments: JSON.stringify({ path: '/data/work/other.docx', paragraphs: [{ text: 'other' }] }),
+    },
+  },
+  { label: 'stale result turn', seq: 6, data: { ...CONSTRUCTION_RESULT, turn: 0 } },
+  { label: 'stale result step', seq: 6, data: { ...CONSTRUCTION_RESULT, step: 0 } },
+  {
+    label: 'failed result',
+    seq: 6,
+    data: {
+      ...CONSTRUCTION_RESULT,
+      message: { ...CONSTRUCTION_RESULT.message, isError: true },
+    },
+  },
+  {
+    label: 'native error despite success-shaped message',
+    seq: 6,
+    data: { ...CONSTRUCTION_RESULT, error: { name: 'ToolError', code: 'cancelled' } },
+  },
+  {
+    label: 'wrong result call',
+    seq: 6,
+    data: {
+      ...CONSTRUCTION_RESULT,
+      message: { ...CONSTRUCTION_RESULT.message, toolCallId: 'other' },
+    },
+  },
+  {
+    label: 'wrong source call',
+    seq: 6,
+    data: {
+      ...CONSTRUCTION_RESULT,
+      message: { ...CONSTRUCTION_RESULT.message, source: { kind: 'tool', callId: 'other' } },
+    },
+  },
+  {
+    label: 'non-tool result source',
+    seq: 6,
+    data: {
+      ...CONSTRUCTION_RESULT,
+      message: { ...CONSTRUCTION_RESULT.message, source: { kind: 'user', callId: 'construct' } },
+    },
+  },
+])('rejects $label even when another child tool succeeds', ({ seq, data }) => {
+  const records = DELEGATED_TURN.records.map((row) =>
+    row.event.seq === seq ? { event: { ...row.event, data } } : row,
+  );
+
+  expect(() => officeTurnEvidence({ ...DELEGATED_TURN, records })).toThrow(
+    /^office-child-contribution$/,
+  );
+});
+
+it.each(['failed', 'cancelled'])('rejects a %s writer turn after construction', (kind) => {
+  const records = DELEGATED_TURN.records.map((row) =>
+    row.event.type === 'turn/end'
+      ? { event: { ...row.event, data: { turn: 1, reason: { kind } } } }
       : row,
   );
+
   expect(() => officeTurnEvidence({ ...DELEGATED_TURN, records })).toThrow(
     'office-turn-completion',
   );
 });
 
 it.each([
-  { label: 'read-only bash', after: { status: 'missing', path: NOTICE.path } },
-  { label: 'unrelated child write', after: { ...PARSED, path: '/data/work/unrelated.docx' } },
-  { label: 'failed shell generation', after: { status: 'unreadable', path: NOTICE.path } },
-])('rejects $label followed by a valid parent-only DOCX', ({ after }) => {
+  { label: 'missing boundary file', artifact: { ...PARSED, status: 'missing' } },
+  { label: 'unreadable boundary file', artifact: { ...PARSED, status: 'unreadable' } },
+  { label: 'wrong boundary path', artifact: { ...PARSED, path: '/data/work/other.docx' } },
+  { label: 'wrong boundary owner', artifact: { ...PARSED, uid: 0 } },
+  { label: 'boundary digest mismatch', artifact: { ...PARSED, sha256: 'b'.repeat(64) } },
+  { label: 'boundary size mismatch', artifact: { ...PARSED, bytes: 4096 } },
+  ...(['title', 'addressee', 'matter', 'issuer', 'date'] as const).map((field) => ({
+    label: `missing boundary ${field}`,
+    artifact: { ...PARSED, paragraphs: PARSED.paragraphs.filter((text) => text !== NOTICE[field]) },
+  })),
+])('rejects $label even when the final delivered DOCX is valid', ({ artifact }) => {
   expect(officeDocxEvidence(PARSED, NOTICE).fields.matter).toBe(true);
+
   expect(() =>
     officeTurnEvidence({
       ...DELEGATED_TURN,
       delegation: {
         ...DELEGATION,
-        contribution: { ...DELEGATION.contribution, after },
+        contribution: { ...DELEGATION.contribution, artifact },
       },
     }),
-  ).toThrow();
+  ).toThrow(/^office-child-contribution$/);
 });
 
-it.each([
-  { nonce: 'stale-invocation' },
-  { childId: 'another-writer' },
-  { parentId: 'another-parent' },
-  { startSeq: 0 },
-  { endSeq: 99 },
-  { before: PARSED },
-  { confounded: true },
-])('rejects stale, preexisting or ambiguously attributed child document effects %#', (change) => {
+it('rejects checkpoint metadata that differs from the committed construction receipt', () => {
   expect(() =>
     officeTurnEvidence({
       ...DELEGATED_TURN,
       delegation: {
         ...DELEGATION,
-        contribution: { ...DELEGATION.contribution, ...change },
+        contribution: {
+          ...DELEGATION.contribution,
+          receipt: { ...RECEIPT, sha256: 'b'.repeat(64) },
+          artifact: { ...PARSED, sha256: 'b'.repeat(64) },
+        },
       },
     }),
-  ).toThrow();
+  ).toThrow(/^office-child-contribution$/);
 });
 
-it('preserves genuine child authorship when the parent subsequently changes document bytes', () => {
+it('allows parent-supplied complete prose before genuine structured writer construction', () => {
+  const suppliedPrompt = PARSED.paragraphs.join('\n');
+  const records = DELEGATED_TURN.records.map((row) =>
+    row.event.type === 'user/message'
+      ? {
+          event: {
+            ...row.event,
+            data: { source: { kind: 'user' }, content: [{ type: 'text', text: suppliedPrompt }] },
+          },
+        }
+      : row,
+  );
+  const parentEvents = [
+    ...PARENT_EVENTS.slice(0, 3),
+    { type: 'tool/call', data: { turn: 1, callId: 'draft', name: 'write' } },
+    {
+      type: 'tool/result',
+      data: {
+        turn: 1,
+        message: { role: 'tool', toolCallId: 'draft', source: { kind: 'tool', callId: 'draft' } },
+      },
+    },
+    ...PARENT_EVENTS.slice(3).map((event) =>
+      event.type === 'tool/call'
+        ? {
+            ...event,
+            data: {
+              ...event.data,
+              arguments: JSON.stringify({ description: '通知', prompt: suppliedPrompt }),
+            },
+          }
+        : event,
+    ),
+  ];
+  const parent = {
+    ...DELEGATION.parent,
+    records: parentEvents.map((event, seq) => ({ event: { seq, ...event } })),
+    cursor: parentEvents.length - 1,
+  };
+
+  expect(
+    officeTurnEvidence({
+      ...DELEGATED_TURN,
+      prompt: suppliedPrompt,
+      records,
+      delegation: { ...DELEGATION, parent },
+    }).delegation,
+  ).toMatchObject({ childId: 'child', childDocx: { sha256: 'a'.repeat(64) } });
+});
+
+it('allows parent edits after construction while independently checking the final DOCX', () => {
   expect(officeTurnEvidence(DELEGATED_TURN).delegation).toMatchObject({ childId: 'child' });
   const edited = officeDocxEvidence({ ...PARSED, sha256: 'b'.repeat(64), bytes: 4096 }, NOTICE);
-  expect(edited.sha256).not.toBe(PARSED.sha256);
+
+  expect(edited.sha256).toBe('b'.repeat(64));
   expect(edited.fields).toEqual({
     title: true,
     addressee: true,
@@ -358,6 +617,12 @@ it('preserves genuine child authorship when the parent subsequently changes docu
     issuer: true,
     date: true,
   });
+  expect(() =>
+    officeDocxEvidence(
+      { ...PARSED, sha256: 'b'.repeat(64), paragraphs: ['parent removed facts'] },
+      NOTICE,
+    ),
+  ).toThrow('office-docx-content');
 });
 
 it('keeps a live blank child pending until its one-shot descriptor is published', () => {
