@@ -1,0 +1,30 @@
+# Allow only immutable build inputs; never send local credentials or dependencies.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.json
+!platform/
+!platform/package.json
+!platform/tsconfig.build.json
+!platform/src/
+!platform/src/**
+platform/src/**/*.test.ts
+!platform/web/
+!platform/web/package.json
+!platform/web/tsconfig.json
+!platform/web/vite.config.ts
+!platform/web/index.html
+!platform/web/src/
+!platform/web/src/**
+platform/web/src/**/*.test.ts
+platform/web/src/**/*.test.tsx
+!images/
+!images/seccomp/
+!images/seccomp/dsh-user.json
+# Keep nested local-only files out even beneath an allowed source directory.
+**/.env
+**/.env.*
+**/.git
+**/node_modules
+**/.run

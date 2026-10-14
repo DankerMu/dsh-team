@@ -1296,7 +1296,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 
 依赖：第 12、14、15 组。
 
-- [ ] 18.1 平台镜像 `platform/Dockerfile`：多阶段构建，产物含 `platform/dist`、前端静态文件、迁移文件、`images/seccomp/dsh-user.json` 和生产依赖（含在 amd64 上编译的 better-sqlite3），以非 root 用户运行。验证：构建成功；`docker run --rm <镜像> node platform/dist/cli.js --help` 列出 `admin create`；镜像里 seccomp 文件在配置项默认指向的路径上。
+- [x] 18.1 平台镜像 `platform/Dockerfile`：多阶段构建，产物含 `platform/dist`、前端静态文件、迁移文件、`images/seccomp/dsh-user.json` 和生产依赖（含在 amd64 上编译的 better-sqlite3），以非 root 用户运行。验证：构建成功；`docker run --rm <镜像> node platform/dist/cli.js --help` 列出 `admin create`；镜像里 seccomp 文件在配置项默认指向的路径上。
 - [ ] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
 - [ ] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本比对 `config.ts` 读取的变量名和根目录 `.env.example` 里的变量名，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在两边不一致时失败（在 `scripts/test-guardrails.sh` 里加这条拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
 - [ ] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
@@ -1306,6 +1306,15 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 
 Suggested fixture level: expanded - 生产配置和交付形态
 Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现有命令）
+
+### Issue #91 risk/evidence map (task18.1 only)
+
+- Expanded. CLI/config/packaging: actual image CLI help, compiled imports and original relative asset/migration/seccomp paths; matching Node/libc, source-built amd64 SQLite and production closure.
+- File/path/auth/secrets: context allowlist, no local dependencies/credentials/evidence, root-owned app and non-root writable data; effective UID and database reopen. No socket/provider needed for artifact tests.
+- Error/partial-output: bounded build/run, precreation ownership and exact cleanup even on contract rejection; no global prune or swallowed failure.
+- Documentation: existing AGENTS build-context/verification guidance and mirrored constraints describe runtime/deployment boundaries. Schema/concurrency/legacy API changes excluded; full deployment/socket-group policy remain #92.
+- Evidence: invalid-artifact RED, real-image GREEN, native compile log, `pnpm check`, strict fixture, independent review, exact-head Docker/CI. Parent-inline single-slice implementation; no model invocation.
+- 实测：初始已构建镜像的CLI帮助exit1由独立#221/PR222修复，原镜像断言未放宽。随后实际运行拒绝预编译binding为RED；部署生产依赖后显式强制编译并移除prebuilds，实际CC/CXX/SOLINK和默认加载Release binding通过，1/1真实Docker测试suite193.77s，uid1000、迁移/写入/重开、静态resolver、seccomp字节及应用拒写均通过。`pnpm check`2137unit/1117integration通过，重复率2.90%，strict fixture有效。仅镜像artifact，不冒充完整部署或模型验收。
 
 ## 19. 隔离测试和阶段验收（任务包 1.17）
 
