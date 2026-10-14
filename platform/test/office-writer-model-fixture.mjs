@@ -183,11 +183,20 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
       ),
     };
     if (delegated) {
+      const contribution = observer.observation();
+      report.contribution = {
+        nonceMatches: contribution?.nonce === marker,
+        parentMatches: contribution?.parentId === session.sessionId,
+        childMatches: contribution?.childId === snapshot.delegation.child.sessionId,
+        startedEmpty: contribution?.before?.status === 'missing',
+        parsedAtChildEnd: contribution?.after?.status === 'parsed',
+        confounded: contribution?.confounded !== false,
+      };
       snapshot.delegation = {
         ...snapshot.delegation,
         nonce: marker,
         notice,
-        contribution: observer.observation(),
+        contribution,
       };
     }
     report.turn = officeTurnEvidence(snapshot);

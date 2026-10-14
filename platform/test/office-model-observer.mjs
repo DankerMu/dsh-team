@@ -2,10 +2,22 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 export const name = 'dsh-team-office-model-proof';
+const READ_ONLY_PARENT_TOOLS = new Set([
+  'read',
+  'glob',
+  'grep',
+  'skill',
+  'present',
+  'jobs',
+  'subagent',
+]);
 
 export function apply(ctx, { control, evidence }) {
   const active = new Map();
   let checkpoint;
+  let armedNonce;
+  let taskParent;
+  let parentMayWrite = false;
   const save = (value) => writeFileSync(evidence, JSON.stringify(value), { mode: 0o600 });
   const observe = (script) => {
     const result = spawnSync(process.execPath, ['-e', script], {
@@ -20,6 +32,34 @@ export function apply(ctx, { control, evidence }) {
   // bash (even named read-only by the model) is not proof of a read-only operation.
   const mayWrite = (call, childId) =>
     call.sessionId !== childId && call.name !== 'subagent' && call.name !== 'jobs';
+  const observeParent = (session, event) => {
+    if (
+      event.type !== 'user/message' ||
+      session.header.origin === 'subagent' ||
+      event.data.source?.kind !== 'user'
+    )
+      return;
+    const config = JSON.parse(readFileSync(control, 'utf8'));
+    if (config.nonce && config.nonce !== armedNonce) {
+      armedNonce = config.nonce;
+      taskParent = session.header.id;
+      parentMayWrite = false;
+    }
+  };
+  const trackTools = (sessionId, event) => {
+    if (event.type === 'tool/call') {
+      const call = { sessionId, name: event.data.name };
+      active.set(`${sessionId}:${event.data.callId}`, call);
+      // A returned shell result can represent a still-running job. Earlier
+      // parent mutation-capable work makes attribution ambiguous even when idle.
+      if (sessionId === taskParent && !READ_ONLY_PARENT_TOOLS.has(call.name)) parentMayWrite = true;
+      if (checkpoint && checkpoint.endSeq === undefined && mayWrite(call, checkpoint.childId)) {
+        checkpoint.confounded = true;
+      }
+    } else if (event.type === 'tool/result') {
+      active.delete(`${sessionId}:${event.data.message.toolCallId}`);
+    }
+  };
   const startCheckpoint = (session, event) => {
     const config = JSON.parse(readFileSync(control, 'utf8'));
     if (!config.nonce) return;
@@ -33,7 +73,9 @@ export function apply(ctx, { control, evidence }) {
       childId: session.header.id,
       startSeq: event.seq,
       reader: config.reader,
-      confounded: [...active.values()].some((call) => mayWrite(call, session.header.id)),
+      confounded:
+        (session.header.parentSession === taskParent && parentMayWrite) ||
+        [...active.values()].some((call) => mayWrite(call, session.header.id)),
       before: observe(config.reader),
     };
   };
@@ -41,15 +83,8 @@ export function apply(ctx, { control, evidence }) {
   ctx.on('session/event', (session, event) => {
     try {
       const sessionId = session.header.id;
-      if (event.type === 'tool/call') {
-        const call = { sessionId, name: event.data.name };
-        active.set(`${sessionId}:${event.data.callId}`, call);
-        if (checkpoint && checkpoint.endSeq === undefined && mayWrite(call, checkpoint.childId)) {
-          checkpoint.confounded = true;
-        }
-      } else if (event.type === 'tool/result') {
-        active.delete(`${sessionId}:${event.data.message.toolCallId}`);
-      }
+      observeParent(session, event);
+      trackTools(sessionId, event);
       if (event.type === 'turn/start' && session.header.origin === 'subagent') {
         startCheckpoint(session, event);
       }

@@ -48,12 +48,13 @@ process.stdout.write(JSON.stringify(existsSync(path)?{status:'present',content:r
 
 it('captures child bytes synchronously before a parent can replace them after completion', () => {
   withObserver(({ path, emit, result }) => {
-    emit(PARENT, { type: 'tool/call', seq: 0, data: { callId: 'delegate', name: 'subagent' } });
+    emit(PARENT, { type: 'user/message', seq: 0, data: { source: { kind: 'user' } } });
+    emit(PARENT, { type: 'tool/call', seq: 1, data: { callId: 'delegate', name: 'subagent' } });
     emit(CHILD, { type: 'turn/start', seq: 3, data: {} });
     writeFileSync(path, 'child-authored document');
 
     emit(CHILD, { type: 'turn/end', seq: 7, data: {} });
-    emit(PARENT, { type: 'tool/call', seq: 1, data: { callId: 'verify', name: 'bash' } });
+    emit(PARENT, { type: 'tool/call', seq: 2, data: { callId: 'verify', name: 'bash' } });
     writeFileSync(path, 'parent-edited document');
 
     expect(result()).toMatchObject({
@@ -101,3 +102,17 @@ it.each(['before', 'during'])(
     });
   },
 );
+
+it('does not treat a returned parent shell job as settled file effects', () => {
+  withObserver(({ path, emit, result }) => {
+    emit(PARENT, { type: 'user/message', seq: 0, data: { source: { kind: 'user' } } });
+    emit(PARENT, { type: 'tool/call', seq: 1, data: { callId: 'background', name: 'bash' } });
+    emit(PARENT, { type: 'tool/result', seq: 2, data: { message: { toolCallId: 'background' } } });
+    emit(CHILD, { type: 'turn/start', seq: 3, data: {} });
+    writeFileSync(path, 'bytes from possible parent background work');
+
+    emit(CHILD, { type: 'turn/end', seq: 7, data: {} });
+
+    expect(result().confounded).toBe(true);
+  });
+});
