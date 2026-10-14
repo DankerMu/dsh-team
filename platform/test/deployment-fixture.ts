@@ -115,7 +115,7 @@ async function startDeployment(
   return { base, port, directory, dataDir, compose };
 }
 
-async function drainDeployment(lifecycle: UserImageLifecycle): Promise<void> {
+async function drainDeployment(lifecycle: UserImageLifecycle): Promise<string | undefined> {
   const args = ['container', 'inspect', 'dsh-team-platform'];
   const inspected = await lifecycle.commandAsync(args, 30_000);
   // Compose may reject before creating its service; no owner exists to drain in that case.
@@ -130,7 +130,7 @@ async function drainDeployment(lifecycle: UserImageLifecycle): Promise<void> {
   )
     throw new Error('Refusing shutdown of an unowned deployment');
   const state = record(platform.State);
-  if (state.Status === 'created') return;
+  if (state.Status === 'created') return platform.Id;
   if (state.Running === true) {
     const signal = ['kill', '--signal', 'SIGTERM', platform.Id];
     output(await lifecycle.commandAsync(signal, 30_000), signal);
@@ -142,6 +142,25 @@ async function drainDeployment(lifecycle: UserImageLifecycle): Promise<void> {
   const settled = record((await inspectAsync(lifecycle, platform.Id)).State);
   if (settled.Running !== false || settled.ExitCode !== 0 || settled.OOMKilled !== false)
     throw new Error('Deployment owner drainage unconfirmed');
+  return platform.Id;
+}
+
+/** Replace only this invocation's settled platform; instances and persistent binds stay untouched. */
+export async function recreateDeployment(
+  lifecycle: UserImageLifecycle,
+  deployment: Deployment,
+): Promise<void> {
+  const id = await drainDeployment(lifecycle);
+  if (id === undefined) throw new Error('Missing platform to recreate');
+  const remove = ['container', 'rm', id];
+  output(await lifecycle.commandAsync(remove, 30_000), remove);
+  for (const identity of [id, 'dsh-team-platform']) {
+    const absent = await lifecycle.commandAsync(['container', 'inspect', identity], 30_000);
+    if (!isAbsentResource(absent, 'container', identity))
+      throw new Error('Platform absence unconfirmed before recreation');
+  }
+  const create = [...deployment.compose, 'up', '-d', '--no-build', '--pull', 'never'];
+  output(await lifecycle.commandAsync(create, 30_000), create);
 }
 
 /** The kernel lock spans build, fixed-name admission, the scenario and canonical resource cleanup. */

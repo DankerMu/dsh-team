@@ -200,7 +200,7 @@ verification:
       required_at: "L3+"
     compose_deployment:
       command: "pnpm test:deploy"
-      evidence: "trusted giap-vps frozen head; delivered Compose and real images; fixed-name refusal/sentinel preservation, non-root socket access, identical absolute binds, actual health/admin CLI/login/model configuration/employee native HTTP+WS entry, unpublished instance ports; failed-caller actual helper retirement before graceful owner exit, original-error preservation, ownership-checked cleanup and no owned resources; also included in final full Docker discovery"
+      evidence: "trusted giap-vps frozen head; delivered Compose and real images; fixed-name refusal/sentinel preservation, non-root socket access, identical absolute binds, actual health/admin CLI/login/model configuration/employee native HTTP+WS entry, unpublished instance ports; platform-only recreation preserves accounts/model/settings digest/existing audit and two unchanged physical instance lifetimes/mounts/networks/native Sessions; failed-caller actual helper retirement before graceful owner exit, original-error preservation, ownership-checked cleanup and no owned resources; also included in final full Docker discovery"
       required_at: "L3+"
     platform_ui:
       command: "pnpm test:ui"

@@ -10,10 +10,11 @@ import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { cleanupTargets, output, OWNER_LABEL, removeOwned } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { withDeployment } from './deployment-fixture.ts';
+import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
+import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -42,12 +43,8 @@ it('refuses a pre-existing fixed platform identity without adopting or removing 
   });
 });
 
-async function configureDeployment(
-  lifecycle: UserImageLifecycle,
-  start: () => Promise<Deployment>,
-) {
-  const deployment = await start();
-  // Only readiness polling; failed deployment is never retried or recreated.
+async function waitForDeployment(deployment: Deployment) {
+  // Only readiness polling; never recreate a failed deployment to obtain success.
   await expect
     .poll(
       async () => {
@@ -59,6 +56,31 @@ async function configureDeployment(
       { timeout: 30_000 },
     )
     .toEqual({ status: 200, body: { status: 'ok' } });
+}
+
+async function registerDeploymentEmployee(
+  lifecycle: UserImageLifecycle,
+  deployment: Deployment,
+  email: string,
+) {
+  const employee = await registerInstanceUser(deployment.base, deployment.base, email);
+  const ownership = { 'dsh-team.user': employee.id };
+  for (const [kind, name] of [
+    ['container', `dsh-team-u-${employee.id}`],
+    ['volume', `dsh-team-home-${employee.id}`],
+    ['volume', `dsh-team-work-${employee.id}`],
+    ['network', `dsh-team-net-${employee.id}`],
+  ] as const)
+    await lifecycle.registerResourceAsync(kind, name, ownership);
+  return { ...employee, email };
+}
+
+async function configureDeployment(
+  lifecycle: UserImageLifecycle,
+  start: () => Promise<Deployment>,
+) {
+  const deployment = await start();
+  await waitForDeployment(deployment);
   const email = 'administrator@deployment.example.test';
   const password = randomUUID();
   const terminal = runPty(
@@ -106,20 +128,12 @@ async function configureDeployment(
     apiKeyConfigured: true,
     runningInstances: 0,
   });
-  const employee = await registerInstanceUser(
-    deployment.base,
-    deployment.base,
+  const employee = await registerDeploymentEmployee(
+    lifecycle,
+    deployment,
     'employee@deployment.example.test',
   );
-  const ownership = { 'dsh-team.user': employee.id };
-  for (const [kind, name] of [
-    ['container', `dsh-team-u-${employee.id}`],
-    ['volume', `dsh-team-home-${employee.id}`],
-    ['volume', `dsh-team-work-${employee.id}`],
-    ['network', `dsh-team-net-${employee.id}`],
-  ] as const)
-    await lifecycle.registerResourceAsync(kind, name, ownership);
-  return { deployment, employee };
+  return { deployment, employee, admin: { email, password, cookie } };
 }
 
 it('boots delivered Compose and admits an employee through real administrator configuration to native DSH', async () => {
@@ -370,4 +384,133 @@ it('drains an active composition helper after its caller disconnects before remo
   }
   if (failures.length > 0)
     throw new AggregateError(failures, 'Deployment failure-path regression failed');
+});
+
+it('preserves accounts, settings, audit and two unrestarted native instances across platform recreation', async () => {
+  await withDeployment(async (lifecycle, start) => {
+    const { deployment, employee, admin } = await configureDeployment(lifecycle, start);
+    const second = await registerDeploymentEmployee(
+      lifecycle,
+      deployment,
+      'second@deployment.example.test',
+    );
+    const gateway = instanceGatewayFixture({
+      base: deployment.base,
+      origin: deployment.base,
+      lifecycle,
+    });
+    const adminRead = async (path: string) => {
+      const response = await fetch(`${deployment.base}/_platform/api/admin/${path}`, {
+        headers: { cookie: admin.cookie },
+      });
+      expect(response.status).toBe(200);
+      return record(await response.json());
+    };
+    const settingsDigest = async () => {
+      const args = [
+        'exec',
+        'dsh-team-platform',
+        'node',
+        '--input-type=module',
+        '-e',
+        `import {createHash} from 'node:crypto';
+import {join} from 'node:path';
+import {loadConfig} from './platform/dist/config.js';
+import {openDatabase,readSettings} from './platform/dist/db/index.js';
+const db=openDatabase(join(loadConfig(process.env).dataDir,'platform.db'));
+try { process.stdout.write(createHash('sha256').update(JSON.stringify(readSettings(db))).digest('hex')); }
+finally { db.close(); }`,
+      ];
+      const digest = output(await lifecycle.commandAsync(args, 15_000), args);
+      expect(digest).toMatch(/^[a-f0-9]{64}$/);
+      return digest;
+    };
+    try {
+      const instances = [];
+      for (const user of [employee, second]) {
+        expect(await gateway.state(user.cookie, true)).toEqual({
+          status: 'starting',
+          reason: 'starting',
+        });
+        await gateway.ready(user.cookie);
+        const before = await inspectAsync(lifecycle, `dsh-team-u-${user.id}`);
+        expect(record(before.State).Running).toBe(true);
+        const created = await gateway.rpc(user.cookie, 'session/create', {
+          request: { cwd: '/data/work', agentPreset: 'office-general' },
+        });
+        if (typeof created.sessionId !== 'string')
+          throw new Error('Native Session identity missing');
+        const title = `Persistence ${user.email}`;
+        expect(
+          await gateway.rpc(user.cookie, 'session/rename', {
+            request: { sessionId: created.sessionId, title },
+          }),
+        ).toMatchObject({ title });
+        instances.push({ user, before, sessionId: created.sessionId, title });
+      }
+      expect(instances.map((value) => value.sessionId)[0]).not.toBe(instances[1]?.sessionId);
+      const originalPlatform = await inspectAsync(lifecycle, 'dsh-team-platform');
+      const model = await adminRead('model-config');
+      expect(model).toMatchObject({ ...MODEL_CONFIG, apiKeyConfigured: true });
+      const settings = await settingsDigest();
+      const audit = await adminRead('audit-events?pageSize=100');
+      expect(audit.items).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ targetEmail: employee.email }),
+          expect.objectContaining({ targetEmail: second.email }),
+        ]),
+      );
+      expect((await adminRead('audit-events?pageSize=100&page=2')).items).toEqual([]);
+
+      await recreateDeployment(lifecycle, deployment);
+      await waitForDeployment(deployment);
+
+      const replacement = await inspectAsync(lifecycle, 'dsh-team-platform');
+      expect(replacement.Id).not.toBe(originalPlatform.Id);
+      expect(record(replacement.Config).Labels).toMatchObject({ [OWNER_LABEL]: lifecycle.runId });
+      // Inspect before fresh logins append their legitimate audit events.
+      expect(await adminRead('model-config')).toEqual(model);
+      expect(await settingsDigest()).toBe(settings);
+      expect(await adminRead('audit-events?pageSize=100')).toEqual(audit);
+      for (const { user, before, sessionId, title } of instances) {
+        const after = await inspectAsync(lifecycle, `dsh-team-u-${user.id}`);
+        expect(after.Id).toBe(before.Id);
+        expect(record(after.State)).toMatchObject({
+          Running: true,
+          StartedAt: record(before.State).StartedAt,
+        });
+        expect(after.RestartCount).toBe(before.RestartCount);
+        expect(orderedMounts(after.Mounts)).toEqual(orderedMounts(before.Mounts));
+        expect(record(after.NetworkSettings).Networks).toEqual(
+          record(before.NetworkSettings).Networks,
+        );
+        const login = await postJson(
+          `${deployment.base}/_platform/api/login`,
+          { email: user.email, password: 'instance-acceptance-password' },
+          { origin: deployment.base },
+        );
+        expect(login.status).toBe(200);
+        expect(await login.json()).toMatchObject({ id: user.id, email: user.email });
+        const cookie = login.headers.get('set-cookie')?.split(';')[0];
+        if (cookie === undefined) throw new Error('Restored account session missing');
+        expect(await gateway.state(cookie)).toEqual({ status: 'running', reason: null });
+        const projection = await gateway.rpc(cookie, 'session/projections', {
+          request: { sessionId },
+        });
+        expect(record(projection.values).title).toBe(title);
+        const peer = await gateway.open(cookie);
+        peer.socket.destroy();
+        await peer.closed;
+      }
+      const adminLogin = await postJson(
+        `${deployment.base}/_platform/api/login`,
+        { email: admin.email, password: admin.password },
+        { origin: deployment.base },
+      );
+      expect(adminLogin.status).toBe(200);
+      expect(await adminLogin.json()).toMatchObject({ email: admin.email, role: 'admin' });
+    } finally {
+      gateway.close();
+    }
+  });
 });
