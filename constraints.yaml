@@ -136,6 +136,11 @@ anti_drift:
     severity: "block"
     enforced_by: "knip (knip.json)"
 
+configuration_inventory:
+  description: "Actual PLATFORM_* runtime reads and DEPLOY_* Compose interpolations exactly match active root .env.example assignments; missing and unused names reject"
+  severity: "block"
+  enforced_by: "scripts/check-config.mjs via pnpm lint:config, lint/check and CI; isolated rejection cases in scripts/test-guardrails.sh"
+
 module_boundaries:
   layers: ["platform/src/<module>", "plugins/<plugin>"]
   allowed_dependency_directions:

@@ -104,6 +104,7 @@ expect_accept "eslint" pnpm exec eslint . --max-warnings 0
 expect_accept "module boundaries" pnpm lint:deps
 expect_accept "shellcheck" pnpm lint:shell
 expect_accept "documented commands" pnpm lint:agents
+expect_accept "configuration inventory" pnpm lint:config
 expect_accept "format" pnpm fmt:check
 expect_accept "typecheck" pnpm typecheck
 expect_accept "coverage" pnpm test
@@ -390,6 +391,37 @@ expect_reject "web dead code (unused export)" "neverImportedWeb" pnpm dead-code
 
 echo "{}" >schemas/openapi.json
 expect_reject "contract (stale schemas/openapi.json)" "out of date" pnpm contract:check
+
+# Configuration consumer inventories must match the single example in both directions.
+echo 'PLATFORM_UNUSED=sentinel' >>.env.example
+expect_reject "unused platform setting" "unconsumed PLATFORM_UNUSED" pnpm lint:config
+echo 'DEPLOY_UNUSED=sentinel' >>.env.example
+expect_reject "unused deployment setting" "unconsumed DEPLOY_UNUSED" pnpm lint:config
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+const path = 'platform/src/config.ts';
+writeFileSync(path, readFileSync(path, 'utf8').replace(
+  'const publicOrigin =', 'void env["PLATFORM_UNDOCUMENTED"]; const publicOrigin =',
+));
+NODE
+expect_reject "undocumented platform read" "undocumented PLATFORM_UNDOCUMENTED" pnpm lint:config
+echo "    x-inventory: \${DEPLOY_UNDOCUMENTED:?}" >>deploy/compose.yml
+expect_reject "undocumented deployment interpolation" "undocumented DEPLOY_UNDOCUMENTED" pnpm lint:config
+echo '// env.PLATFORM_COMMENT;' >>platform/src/config.ts
+echo 'const message = "env.PLATFORM_ERROR";' >>platform/src/config.ts
+echo '# PLATFORM_COMMENT=unused' >>.env.example
+echo "# \${DEPLOY_COMMENT}" >>deploy/compose.yml
+echo "    x-inventory: \"\$\${DEPLOY_ESCAPED}\" # \${DEPLOY_COMMENT}" >>deploy/compose.yml
+expect_accept "inventory ignores comments and escaped interpolation" pnpm lint:config
+restore
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+const path = 'platform/src/config.ts';
+writeFileSync(path, readFileSync(path, 'utf8').replace(
+  'const publicOrigin =', 'void env[configurationKey]; const publicOrigin =',
+));
+NODE
+expect_reject "dynamic environment read" "requires literal PLATFORM_*" pnpm lint:config
 
 # ── 8. Secret scan ───────────────────────────────────────────────────────────
 # Assembled at run time so this script never contains a matchable secret.

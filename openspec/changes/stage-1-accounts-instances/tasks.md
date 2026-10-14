@@ -1298,7 +1298,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 
 - [x] 18.1 平台镜像 `platform/Dockerfile`：多阶段构建，产物含 `platform/dist`、前端静态文件、迁移文件、`images/seccomp/dsh-user.json` 和生产依赖（含在 amd64 上编译的 better-sqlite3），以非 root 用户运行。验证：构建成功；`docker run --rm <镜像> node platform/dist/cli.js --help` 列出 `admin create`；镜像里 seccomp 文件在配置项默认指向的路径上。
 - [x] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
-- [ ] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本分别比对 `config.ts` 读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与根目录 `.env.example` 中对应的变量名，拒绝未列出或未被消费的配置项，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在任一对应清单不一致时失败（在 `scripts/test-guardrails.sh` 里加拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
+- [x] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本分别比对 `config.ts` 读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与根目录 `.env.example` 中对应的变量名，拒绝未列出或未被消费的配置项，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在任一对应清单不一致时失败（在 `scripts/test-guardrails.sh` 里加拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
 - [ ] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
 - [ ] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。
 - [ ] 18.6 前置代理下的 HTTPS。验证：`pnpm test:deploy`——在 compose 里临时加一个终结 TLS 的代理容器（自签证书），对外地址配为 `https://`、开启仅 HTTPS 发送、代理地址填入受信代理后，登录、工作台和长连接都正常，平台会话 cookie 带 `Secure`，登录的审计记录里来源地址是客户端的而不是代理的（规格“可在前置代理后使用 HTTPS”）。
@@ -1365,3 +1365,4 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Discovery/schema/docs: compare two consumer inventories with the one example; missing and unused entries in either namespace fail by name. TypeScript AST distinguishes reads from comments/error strings; Compose escaped dollars and comments do not manufacture consumers.
 - Files/auth/secrets: gate reads only config/Compose/example, prints names not values; guardrail mutations live in existing disposable copy, never a real `.env`. No network/provider or production resource side effects.
 - Evidence floor: focused RED→GREEN, actual root checker command and four mismatch controls, original full guardrails/check, source/built rejection smoke, gitleaks, strict fixture, independent review and final-head Docker/CI. Concurrency, persisted schema and packaging/dependency changes excluded.
+- 实测：host 非法输入9项先RED后GREEN；既有必填URL缺失断言保留，2152单元/1135集成及完整check通过。原始guardrails85/85证明两组清单双向拒绝、注释/字符串/转义不制造消费方及动态读取拒绝；首次复杂度/shell字面量警告已按原门槛修正。源/编译入口各验证非法host与缺少URL退出1、指名、不回显输入且不创建数据目录；示例gitleaks无泄漏，strict5/5。最终SHA Docker/CI仍是合并门禁。
