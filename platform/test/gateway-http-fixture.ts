@@ -1,6 +1,7 @@
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
 import type { IncomingHttpHeaders, RequestListener, RequestOptions, Server } from 'node:http';
+import { createServer as createTcpServer } from 'node:net';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
@@ -13,6 +14,20 @@ import {
   sessionCookieToken,
   withApp,
 } from './auth-fixture.ts';
+
+export async function unusedPort(): Promise<number> {
+  const server = createTcpServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('Expected an owned TCP port');
+  }
+  const port = address.port;
+  server.close();
+  await once(server, 'close');
+  return port;
+}
 
 export async function withUpstream(
   handler: RequestListener,

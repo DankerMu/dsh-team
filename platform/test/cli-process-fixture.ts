@@ -145,6 +145,7 @@ export function runPty(
   workspace: CliWorkspace,
   options: {
     sourceWrapper?: boolean;
+    command?: readonly string[];
     args?: readonly string[];
     actions?: readonly PromptAction[];
     secrets?: readonly string[];
@@ -154,7 +155,8 @@ export function runPty(
     pipedInput?: string;
   } = {},
 ): PtyResult {
-  const command = options.sourceWrapper === true ? pinnedPnpmCommand() : undefined;
+  const command =
+    options.command ?? (options.sourceWrapper === true ? pinnedPnpmCommand() : undefined);
   const args = options.args ?? ['admin', 'create', CLI_EMAIL];
   const request = {
     node: process.execPath,

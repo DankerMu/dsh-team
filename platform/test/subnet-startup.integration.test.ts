@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -9,22 +8,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import { startupBarrier, startupDaemon, startupUnixServer } from './container-start-fixture.ts';
+import { unusedPort } from './gateway-http-fixture.ts';
 
 const mainPath = fileURLToPath(new URL('../src/main.ts', import.meta.url));
-
-async function unusedPort(): Promise<number> {
-  const server = createServer();
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  if (address === null || typeof address === 'string') {
-    throw new Error('Expected an owned TCP port');
-  }
-  const port = address.port;
-  server.close();
-  await once(server, 'close');
-  return port;
-}
 
 async function observeStartup(
   pool: string | undefined,

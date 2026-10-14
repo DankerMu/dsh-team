@@ -1297,7 +1297,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 依赖：第 12、14、15 组。
 
 - [x] 18.1 平台镜像 `platform/Dockerfile`：多阶段构建，产物含 `platform/dist`、前端静态文件、迁移文件、`images/seccomp/dsh-user.json` 和生产依赖（含在 amd64 上编译的 better-sqlite3），以非 root 用户运行。验证：构建成功；`docker run --rm <镜像> node platform/dist/cli.js --help` 列出 `admin create`；镜像里 seccomp 文件在配置项默认指向的路径上。
-- [ ] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
+- [x] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
 - [ ] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本分别比对 `config.ts` 读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与根目录 `.env.example` 中对应的变量名，拒绝未列出或未被消费的配置项，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在任一对应清单不一致时失败（在 `scripts/test-guardrails.sh` 里加拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
 - [ ] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
 - [ ] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。

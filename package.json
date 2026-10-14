@@ -33,6 +33,7 @@
     "test:ui:install": "playwright install --with-deps chromium",
     "test:cli": "vitest run --project integration platform/test/cli.integration.test.ts",
     "test:docker": "node scripts/verify-browser-runtime.mjs docker",
+    "test:deploy": "vitest run --project docker platform/test/deployment.docker.test.ts",
     "test:model": "node scripts/verify-browser-runtime.mjs model",
     "ci:model:invoke": "node scripts/ci-vps-invoke.mjs",
     "ci:model": "node scripts/ci-vps-run.mjs",
