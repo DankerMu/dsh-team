@@ -60,10 +60,10 @@ export async function runPermissionModelScenario({
       const path = `/data/work/permission-${label}-${randomUUID()}.txt`;
       const content = `Real permission proof ${randomUUID()}`;
       const before = await history(session.sessionId);
-      assert.deepEqual(observe(path, content), { exists: false, exact: false });
+      assert.deepEqual(await observe(path, content), { exists: false, exact: false });
       const nonce = randomUUID();
       if (reviewMode !== null)
-        reviewObserver.arm({ nonce, sessionId: session.sessionId, path, mode: reviewMode });
+        await reviewObserver.arm({ nonce, sessionId: session.sessionId, path, mode: reviewMode });
       const prompt = `Use the write tool exactly once with file_path ${JSON.stringify(path)} and content ${JSON.stringify(content)} (no newline). Do not use bash, run_code, or other tools. If the user rejects, stop and explain the rejection; do not retry or work around it. After the tool result, reply briefly.`;
       await waitComposer(page, 30000);
       await typeComposer(page, prompt);
@@ -83,13 +83,13 @@ export async function runPermissionModelScenario({
     const sample = async (operation) => ({
       ...(await history(operation.sessionId)),
       ...operation,
-      file: observe(operation.path, operation.content),
+      file: await observe(operation.path, operation.content),
     });
     const retain = async (operation, phase) => {
       const value = await sample(operation);
       const proof = permissionEvidence({ ...value, phase });
       if (operation.reviewMode !== null) {
-        const review = autoReviewEvidence(reviewObserver.observation(), {
+        const review = autoReviewEvidence(await reviewObserver.observation(), {
           nonce: operation.nonce,
           sessionId: operation.sessionId,
           callId: proof.callId,
@@ -203,7 +203,7 @@ export async function runPermissionModelScenario({
   } catch (error) {
     if (reviewObserver) {
       try {
-        report.reviewObservation = reviewObserver.observation();
+        report.reviewObservation = await reviewObserver.observation();
       } catch {
         // Observer-read failure must not replace the original acceptance failure.
         report.observerUnavailable = true;

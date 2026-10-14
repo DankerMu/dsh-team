@@ -31,8 +31,8 @@ export function instanceGatewayFixture(
     expect(envelope).toMatchObject({ type: 'server-response', rpcId, result: { ok: true } });
     return record(record(envelope.result).value);
   };
-  const exec = (id: string, script: string) => {
-    const result = f.lifecycle.command(
+  const exec = async (id: string, script: string): Promise<string> => {
+    const result = await f.lifecycle.commandAsync(
       ['exec', '--user', '1001', id, 'node', '--input-type=module', '-e', script],
       15_000,
     );
@@ -123,9 +123,9 @@ export function instanceGatewayFixture(
     });
     if (typeof created.sessionId !== 'string') throw new Error('Missing genuine Session');
     const sessionId = created.sessionId;
-    context.control({ op: 'adopt', sessionId });
-    await waitDockerIdle(() => {
-      const status = context.control({ op: 'status' });
+    await context.control({ op: 'adopt', sessionId });
+    await waitDockerIdle(async () => {
+      const status = await context.control({ op: 'status' });
       return (
         Array.isArray(status.audit) &&
         status.audit.some((value: unknown) => {
@@ -138,7 +138,7 @@ export function instanceGatewayFixture(
         })
       );
     });
-    expect(context.control({ op: 'status' }).externalModelCalls).toBe(0);
+    expect((await context.control({ op: 'status' })).externalModelCalls).toBe(0);
     const originalHistory = await history(context.user.cookie, sessionId);
     const events = originalHistory.map((value: unknown) => record(record(value).event));
     expect(

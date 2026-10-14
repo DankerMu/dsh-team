@@ -1,5 +1,4 @@
 import { deepStrictEqual } from 'node:assert';
-import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -8,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
 import { runWebStartup } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
-import { isAbsentResource } from './docker-command.ts';
-import type { DockerCommand } from './docker-command.ts';
+import { createDockerCommands, isAbsentResource } from './docker-command.ts';
+import type { AsyncDockerCommand, DockerCommand, DockerCommandResult } from './docker-command.ts';
 import {
   cleanupTargets,
   output,
@@ -89,6 +88,7 @@ function assertOfflineContainerConfiguration(command: DockerCommand, container: 
 type Probe = 'version' | 'offline-docx' | 'profile-seed';
 export interface UserImageLifecycle {
   readonly command: DockerCommand;
+  readonly commandAsync: AsyncDockerCommand;
   readonly imageId: string;
   readonly runId: string;
   readonly stateVolume: string;
@@ -102,6 +102,11 @@ export interface UserImageLifecycle {
     name: string,
     ownership: Readonly<Record<string, string>>,
   ) => void;
+  registerResourceAsync: (
+    kind: 'container' | 'volume' | 'image' | 'network',
+    name: string,
+    ownership: Readonly<Record<string, string>>,
+  ) => Promise<void>;
   removeNetwork: (name: string, id: string) => void;
 }
 export type UserImageScenario = (lifecycle: UserImageLifecycle) => Promise<string>;
@@ -217,52 +222,6 @@ interface UserImageResult {
   containers: string[];
 }
 
-function lifecycleCommand(
-  probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
-  injectedCommand: DockerCommand | undefined,
-  config: string,
-): DockerCommand {
-  const bounded =
-    probe === 'web-startup' || probe === 'managed-policy' || probe === 'container-start';
-  const externalCommand: DockerCommand =
-    injectedCommand ??
-    ((args, timeout) =>
-      spawnSync('docker', args, {
-        cwd: repositoryRoot,
-        // Docker gets no GitHub/SSH/model credentials or user Docker config from the parent.
-        env: { PATH: '/usr/local/bin:/usr/bin:/bin', DOCKER_CONFIG: config },
-        encoding: 'utf8',
-        timeout,
-        killSignal: 'SIGKILL',
-        // Startup logs and process observations must be bounded and stay in memory.
-        maxBuffer: bounded && args[0] !== 'build' ? 64 * 1024 : 16 * 1024 * 1024,
-      }));
-  if (!bounded) return externalCommand;
-  return (args, timeout) => {
-    try {
-      const result = externalCommand(args, timeout);
-      const kind = args[0];
-      if (
-        args[1] === 'inspect' &&
-        (kind === 'image' || kind === 'container' || kind === 'volume' || kind === 'network') &&
-        isAbsentResource(result, kind, args.at(-1) ?? '')
-      ) {
-        return result;
-      }
-      if (result.error !== undefined || result.status !== 0) {
-        return {
-          status: result.status === 0 ? 1 : result.status,
-          stdout: '',
-          stderr: 'Web Docker operation failed',
-        };
-      }
-      return result;
-    } catch {
-      throw new Error('Web Docker operation failed');
-    }
-  };
-}
-
 export function runUserImage(
   probe: 'web-startup',
   assertOutput: (stdout: string) => void,
@@ -299,6 +258,67 @@ export function runUserImage(
   return runImageLifecycle(probe, assertOutput, injectedCommand);
 }
 
+function createResourceRegistration(
+  targets: CleanupTarget[],
+  runId: string,
+  command: DockerCommand,
+  commandAsync: AsyncDockerCommand,
+): Pick<UserImageLifecycle, 'registerResource' | 'registerResourceAsync'> {
+  const registrations = new Map<string, { target: CleanupTarget; settlement: Promise<void> }>();
+  function prepareRegistration(
+    kind: CleanupTarget['kind'],
+    name: string,
+    ownership: Readonly<Record<string, string>>,
+  ) {
+    if (!name.startsWith('dsh-team-') || Object.keys(ownership).length === 0)
+      throw new Error('Acceptance target requires exact owned identity');
+    const registered = targets.find((target) => target.kind === kind && target.name === name);
+    const existing = registered ?? registrations.get(`${kind}:${name}`)?.target;
+    if (existing !== undefined) {
+      const expected = existing.ownership ?? { [OWNER_LABEL]: runId };
+      if (
+        Object.keys(expected).length !== Object.keys(ownership).length ||
+        Object.entries(expected).some(([label, value]) => ownership[label] !== value)
+      )
+        throw new Error('Acceptance resource ownership does not match registered authority');
+    }
+    if (registered !== undefined) return undefined;
+    // Authority must not change while the asynchronous absence inspection is pending.
+    return { kind, name, ownership: Object.freeze({ ...ownership }) };
+  }
+  function registerAbsent(target: CleanupTarget, result: DockerCommandResult): void {
+    if (!isAbsentResource(result, target.kind, target.name))
+      throw new Error('Acceptance resource already exists; refusing cleanup authority');
+    registerCleanupTarget(targets, runId, target);
+  }
+  return {
+    registerResource: (kind, name, ownership): void => {
+      const target = prepareRegistration(kind, name, ownership);
+      if (target === undefined) return;
+      if (registrations.has(`${kind}:${name}`))
+        throw new Error('Acceptance resource registration in progress');
+      registerAbsent(target, command([kind, 'inspect', name], 30_000));
+    },
+    registerResourceAsync: async (kind, name, ownership): Promise<void> => {
+      const target = prepareRegistration(kind, name, ownership);
+      if (target === undefined) return;
+      const key = `${kind}:${name}`;
+      const pending = registrations.get(key);
+      if (pending !== undefined) return pending.settlement;
+      // Reserve before invoking even an injected boundary, which may synchronously re-enter.
+      const settlement = Promise.resolve().then(async () => {
+        try {
+          registerAbsent(target, await commandAsync([kind, 'inspect', name], 30_000));
+        } finally {
+          registrations.delete(key);
+        }
+      });
+      registrations.set(key, { target, settlement });
+      await settlement;
+    },
+  };
+}
+
 function runImageLifecycle(
   probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   assertOutput: (stdout: string) => void,
@@ -311,7 +331,13 @@ function runImageLifecycle(
   const { volume, workVolume } = lifecycleVolumes(probe, runId);
   const containers = [container];
   const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
-  const command = lifecycleCommand(probe, injectedCommand, config);
+  const hasScenario = probe === 'managed-policy' || probe === 'container-start';
+  const { command, commandAsync } = createDockerCommands(
+    repositoryRoot,
+    config,
+    probe === 'web-startup' || hasScenario,
+    injectedCommand,
+  );
   const failures: unknown[] = [];
   const targets: CleanupTarget[] = [];
   let stdout = '';
@@ -418,13 +444,14 @@ function runImageLifecycle(
         })
         .then(finish);
     }
-    if (probe === 'managed-policy' || probe === 'container-start') {
+    if (hasScenario) {
       if (volume === undefined || workVolume === undefined)
         throw new Error('Image scenario volume setup missing');
       if (typeof extra !== 'function') throw new Error('Image scenario missing');
       const overlayDirectory = join(config, 'managed');
       const lifecycle: UserImageLifecycle = {
         command,
+        commandAsync,
         imageId,
         runId,
         stateVolume: volume,
@@ -436,15 +463,7 @@ function runImageLifecycle(
           if (!containers.includes(name)) containers.push(name);
           registerCleanupTarget(targets, runId, { kind: 'container', name });
         },
-        registerResource: (kind, name, ownership): void => {
-          if (!name.startsWith('dsh-team-') || Object.keys(ownership).length === 0)
-            throw new Error('Acceptance target requires exact owned identity');
-          if (targets.some((target) => target.kind === kind && target.name === name)) return;
-          const absent = command([kind, 'inspect', name], 30_000);
-          if (!isAbsentResource(absent, kind, name))
-            throw new Error('Acceptance resource already exists; refusing cleanup authority');
-          registerCleanupTarget(targets, runId, { kind, name, ownership });
-        },
+        ...createResourceRegistration(targets, runId, command, commandAsync),
         removeNetwork: (name, id): void => {
           const target = targets.find((entry) => entry.kind === 'network' && entry.name === name);
           if (target === undefined) throw new Error('Network cleanup target was not registered');

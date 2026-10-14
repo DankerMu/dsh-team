@@ -1,7 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
-import { inspect, record } from './container-start-docker-fixture.ts';
+import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
 import { withDockerIdleInstance } from './instance-idle-docker-fixture.ts';
@@ -34,9 +34,9 @@ it('disable closes both real DSH sessions and physically retires within five sec
       f.database.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.id);
       const sibling = await registerInstanceUser(f.base, f.origin, 'status-sibling@example.test');
       const ownership = { 'dsh-team.user': sibling.id };
-      f.lifecycle.registerResource('container', `dsh-team-u-${sibling.id}`, ownership);
+      await f.lifecycle.registerResourceAsync('container', `dsh-team-u-${sibling.id}`, ownership);
       for (const name of [`dsh-team-home-${sibling.id}`, `dsh-team-work-${sibling.id}`])
-        f.lifecycle.registerResource('volume', name, ownership);
+        await f.lifecycle.registerResourceAsync('volume', name, ownership);
       await state(sibling.cookie, true);
       await ready(sibling.cookie);
       const siblingRow = record(
@@ -44,8 +44,8 @@ it('disable closes both real DSH sessions and physically retires within five sec
       );
       if (typeof siblingRow.container_id !== 'string') throw new Error('Missing sibling identity');
       const siblingId = siblingRow.container_id;
-      const siblingMounts = inspect(f.lifecycle, siblingId).Mounts;
-      exec(
+      const siblingMounts = (await inspectAsync(f.lifecycle, siblingId)).Mounts;
+      await exec(
         siblingId,
         "import {writeFileSync} from 'node:fs'; for(const path of ['/data/home/issue69-sibling','/data/work/issue69-sibling'])writeFileSync(path,'sibling unchanged 中文\\n');",
       );
@@ -61,7 +61,7 @@ it('disable closes both real DSH sessions and physically retires within five sec
       expect(f.app.getUserActivity(f.user.id).liveCount).toBe(2);
       const { sessionId, originalHistory } = await persistedSession(f);
       const bytes = Buffer.from([0, 13, 10, 127, 128, 255]);
-      exec(
+      await exec(
         f.containerId,
         `import {writeFileSync} from 'node:fs'; for(const path of ['/data/home/issue69-home','/data/work/issue69-work'])writeFileSync(path,Buffer.from('${bytes.toString('base64')}','base64'));`,
       );
@@ -70,11 +70,11 @@ it('disable closes both real DSH sessions and physically retires within five sec
           id,
           "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.stringify(['/data/home/issue69-home','/data/work/issue69-work'].map(path=>readFileSync(path).toString('base64'))));",
         );
-      expect(JSON.parse(readBytes(f.containerId))).toEqual([
+      expect(JSON.parse(await readBytes(f.containerId))).toEqual([
         bytes.toString('base64'),
         bytes.toString('base64'),
       ]);
-      const mounts = record(inspect(f.lifecycle, f.containerId)).Mounts;
+      const mounts = record(await inspectAsync(f.lifecycle, f.containerId)).Mounts;
       const statusPut = (status: string) =>
         fetch(`${f.base}/_platform/api/admin/users/${f.user.id}/status`, {
           method: 'PUT',
@@ -86,7 +86,10 @@ it('disable closes both real DSH sessions and physically retires within five sec
       const physical = (async () => {
         for (;;) {
           await delay(10);
-          const result = f.lifecycle.command(['container', 'inspect', f.containerId], 5_000);
+          const result = await f.lifecycle.commandAsync(
+            ['container', 'inspect', f.containerId],
+            5_000,
+          );
           if (isAbsentResource(result, 'container', f.containerId)) return performance.now();
           if (result.status !== 0 || result.error !== undefined)
             throw new Error('Physical stop observation failed');
@@ -113,7 +116,7 @@ it('disable closes both real DSH sessions and physically retires within five sec
         f.database.prepare('SELECT * FROM platform_sessions WHERE user_id=?').all(f.user.id),
       ).toEqual([]);
       expect(siblingConnection.socket.destroyed).toBe(false);
-      expect(record(inspect(f.lifecycle, siblingId).State).Running).toBe(true);
+      expect(record((await inspectAsync(f.lifecycle, siblingId)).State).Running).toBe(true);
       expect(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(sibling.id)).toEqual(
         siblingRow,
       );
@@ -146,10 +149,10 @@ it('disable closes both real DSH sessions and physically retires within five sec
       ).container_id;
       if (typeof replacement !== 'string') throw new Error('Missing restored container');
       expect(replacement).not.toBe(f.containerId);
-      const newMounts = inspect(f.lifecycle, replacement).Mounts;
+      const newMounts = (await inspectAsync(f.lifecycle, replacement)).Mounts;
       // Bind overlay inode may change; persistent named-volume identities must not.
       expect(orderedMounts(newMounts)).toEqual(orderedMounts(mounts));
-      f.verifyVolumes();
+      await f.verifyVolumes();
       expect(await history(cookie, sessionId)).toEqual(originalHistory);
       const listed = await rpc(cookie, 'session/list', { _request: {} });
       expect(listed.items).toEqual(
@@ -157,19 +160,19 @@ it('disable closes both real DSH sessions and physically retires within five sec
           expect.objectContaining({ sessionId, cwd: '/data/work', running: false }),
         ]),
       );
-      expect(JSON.parse(readBytes(replacement))).toEqual([
+      expect(JSON.parse(await readBytes(replacement))).toEqual([
         bytes.toString('base64'),
         bytes.toString('base64'),
       ]);
       expect(
         JSON.parse(
-          exec(
+          await exec(
             siblingId,
             "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.stringify(['/data/home/issue69-sibling','/data/work/issue69-sibling'].map(path=>readFileSync(path,'utf8'))));",
           ),
         ),
       ).toEqual(['sibling unchanged 中文\n', 'sibling unchanged 中文\n']);
-      expect(orderedMounts(inspect(f.lifecycle, siblingId).Mounts, false)).toEqual(
+      expect(orderedMounts((await inspectAsync(f.lifecycle, siblingId)).Mounts, false)).toEqual(
         orderedMounts(siblingMounts, false),
       );
       expect(siblingConnection.socket.destroyed).toBe(false);

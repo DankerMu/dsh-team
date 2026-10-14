@@ -6,7 +6,7 @@ import { expect, it } from 'vitest';
 import { acceptObservation, mappedFlags, mappedRpc } from '../../scripts/probe-mapped-host.mjs';
 import type { MappedHostAcceptResult } from '../../scripts/probe-mapped-host.mjs';
 import { writeSettings } from '../src/db/index.ts';
-import { inspect, record } from './container-start-docker-fixture.ts';
+import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
@@ -16,7 +16,7 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
 /** Read workspace semantics and exact fixture-owned bytes, never runtime log serialization. */
-function employeeState(lifecycle: UserImageLifecycle, id: string, writeSentinels = false) {
+async function employeeState(lifecycle: UserImageLifecycle, id: string, writeSentinels = false) {
   const script = `import json, os, re
 from pathlib import Path
 home = Path('/data/home')
@@ -39,7 +39,7 @@ print(json.dumps({'uid': os.geteuid(), 'workspace': workspace,
   'writable': os.access(registry, os.W_OK), 'credentialFields': bool(credentials(workspace)),
   'homeSentinel': (home / 'first-use-sentinel').read_bytes().decode('utf-8') if (home / 'first-use-sentinel').exists() else None,
   'workSentinel': (work / 'first-use-sentinel').read_bytes().decode('utf-8') if (work / 'first-use-sentinel').exists() else None}, ensure_ascii=False))`;
-  const result = lifecycle.command(['exec', id, 'python3', '-c', script], 15_000);
+  const result = await lifecycle.commandAsync(['exec', id, 'python3', '-c', script], 15_000);
   if (result.status !== 0 || result.error !== undefined)
     throw new Error('Employee storage observation failed');
   return record(JSON.parse(result.stdout));
@@ -169,8 +169,8 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
         const start = async (user: { id: string; cookie: string }): Promise<string> => {
           const ownership = { 'dsh-team.user': user.id };
           for (const name of [`dsh-team-home-${user.id}`, `dsh-team-work-${user.id}`])
-            lifecycle.registerResource('volume', name, ownership);
-          lifecycle.registerResource('container', `dsh-team-u-${user.id}`, ownership);
+            await lifecycle.registerResourceAsync('volume', name, ownership);
+          await lifecycle.registerResourceAsync('container', `dsh-team-u-${user.id}`, ownership);
           const response = await fetch(`${base}/_platform/api/instance/start`, {
             method: 'POST',
             headers: { cookie: user.cookie, origin, 'content-type': 'application/json' },
@@ -197,7 +197,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
             database.prepare('SELECT container_id FROM instances WHERE user_id=?').get(user.id),
           );
           if (typeof row.container_id !== 'string') throw new Error('Missing ready container ID');
-          const container = inspect(lifecycle, row.container_id);
+          const container = await inspectAsync(lifecycle, row.container_id);
           expect(container.Id).toBe(row.container_id);
           expect(container.Image).toBe(lifecycle.imageId);
           expect(container.Name).toBe(`/dsh-team-u-${user.id}`);
@@ -278,7 +278,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
 
         const employee = await registerInstanceUser(base, origin, 'first-use@example.test');
         const firstId = await start(employee);
-        const initial = employeeState(lifecycle, firstId);
+        const initial = await employeeState(lifecycle, firstId);
         // Capture browser evidence before the image-shape assertion so baseline RED remains observable.
         const sessionId = await enter(employee.cookie, 'employee', initial);
         const workspaceId = requireFreshRegistry(initial);
@@ -295,7 +295,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
         );
         expect(renamedSession.ok).toBe(true);
         expect(record(renamedSession.value).title).toBe('employee Session 中文');
-        const preserved = employeeState(lifecycle, firstId, true);
+        const preserved = await employeeState(lifecycle, firstId, true);
         const employeeStorage = {
           workspaceId,
           sessionId,
@@ -308,7 +308,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
 
         const sibling = await registerInstanceUser(base, origin, 'first-use-sibling@example.test');
         const siblingId = await start(sibling);
-        const siblingInitial = employeeState(lifecycle, siblingId);
+        const siblingInitial = await employeeState(lifecycle, siblingId);
         const siblingWorkspaceId = requireFreshRegistry(siblingInitial);
         const siblingSession = await enter(sibling.cookie, 'sibling', siblingInitial);
         expect(siblingSession).not.toBe(sessionId);
@@ -326,10 +326,10 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
           homeSentinel: null,
           workSentinel: null,
         };
-        const siblingState = employeeState(lifecycle, siblingId);
+        const siblingState = await employeeState(lifecycle, siblingId);
         requireEmployeeStorage(siblingState, siblingStorage);
         await requireSession(sibling.cookie, siblingSession, 'sibling Session 中文');
-        requireEmployeeStorage(employeeState(lifecycle, firstId), employeeStorage);
+        requireEmployeeStorage(await employeeState(lifecycle, firstId), employeeStorage);
         await requireSession(employee.cookie, sessionId, 'employee Session 中文');
 
         // Exact-ID fixture retirement exercises normal production recreation over the same volumes.
@@ -337,27 +337,27 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
           ['stop', '--time', '10', firstId],
           ['rm', firstId],
         ]) {
-          const result = lifecycle.command(args, 30_000);
+          const result = await lifecycle.commandAsync(args, 30_000);
           if (result.status !== 0 || result.error !== undefined)
             throw new Error('Owned first-use container retirement failed');
         }
         expect(
           isAbsentResource(
-            lifecycle.command(['container', 'inspect', firstId], 15_000),
+            await lifecycle.commandAsync(['container', 'inspect', firstId], 15_000),
             'container',
             firstId,
           ),
         ).toBe(true);
         const recreatedId = await start(employee);
         expect(recreatedId).not.toBe(firstId);
-        requireEmployeeStorage(employeeState(lifecycle, recreatedId), employeeStorage);
+        requireEmployeeStorage(await employeeState(lifecycle, recreatedId), employeeStorage);
         await requireSession(employee.cookie, sessionId, 'employee Session 中文');
-        requireEmployeeStorage(employeeState(lifecycle, siblingId), siblingStorage);
+        requireEmployeeStorage(await employeeState(lifecycle, siblingId), siblingStorage);
         await requireSession(sibling.cookie, siblingSession, 'sibling Session 中文');
         await writeFile(
           join(evidence, 'reuse.json'),
           JSON.stringify(
-            { preserved, recreated: employeeState(lifecycle, recreatedId), siblingState },
+            { preserved, recreated: await employeeState(lifecycle, recreatedId), siblingState },
             null,
             2,
           ),

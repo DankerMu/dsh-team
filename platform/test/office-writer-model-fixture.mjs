@@ -104,9 +104,9 @@ async function delegatedSnapshot(rpc, parent, priorIds, prompt, report) {
   };
 }
 
-function failureDocx(observe, notice) {
+async function failureDocx(observe, notice) {
   try {
-    return officeDocxEvidence(observe(), notice);
+    return officeDocxEvidence(await observe(), notice);
   } catch {
     return { valid: false };
   }
@@ -146,7 +146,7 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
   };
   const prompt = `请制作一份正式的消防演练通知，保存为当前工作目录中的 ${notice.path}，并交付文件。正文须包含标题“${notice.title}”、主送对象“${notice.addressee}”、事项“${notice.matter}”（2026年10月16日下午三点在一楼大厅集合）、落款“${notice.issuer}”和日期“${notice.date}”。保留上述指定文字，其他行文自行组织。需要可打开的 DOCX，不要仅在聊天中给正文。`;
   const report = { path: notice.path, absentBefore: false };
-  const observe = () => JSON.parse(exec(officeDocxReadScript(notice.path)));
+  const observe = async () => JSON.parse(await exec(officeDocxReadScript(notice.path)));
   try {
     const prior = await rpc('session/list', { _request: {} });
     assert(Array.isArray(prior.items), 'office-session-list');
@@ -181,13 +181,13 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
     } else {
       await captureSettledScreenshot(page, join(evidence, 'office-general-selected.png'));
     }
-    const before = observe();
+    const before = await observe();
     assert.equal(before.status, 'missing', 'office-docx-not-fresh');
     assert.throws(() => officeDocxEvidence(before, notice), /office-docx-identity/);
     report.absentBefore = true;
     if (delegated) {
       assert(observer, 'office-observer-required');
-      observer.arm({ nonce: marker, reader: officeDocxReadScript(notice.path) });
+      await observer.arm({ nonce: marker, reader: officeDocxReadScript(notice.path) });
     }
     await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
     await typeComposer(page, prompt);
@@ -238,7 +238,7 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
       ),
     };
     if (delegated) {
-      const contribution = observer.observation();
+      const contribution = await observer.observation();
       report.contribution = contributionSummary(
         contribution,
         marker,
@@ -254,14 +254,14 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
     }
     report.turn = officeTurnEvidence(snapshot);
     await waitTurnIdle(page, 30000, 'office-browser-turn-idle');
-    report.docx = officeDocxEvidence(observe(), notice);
+    report.docx = officeDocxEvidence(await observe(), notice);
     await captureSettledScreenshot(page, join(evidence, `${prefix}-completed.png`));
     await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
   } catch (error) {
     report.failure = /^office-[a-z-]+$/.test(error.message)
       ? error.message
       : 'office-scenario-failed';
-    report.failureDocx = failureDocx(observe, notice);
+    report.failureDocx = await failureDocx(observe, notice);
     await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
     await captureSettledScreenshot(page, join(evidence, `${prefix}-failure.png`));
     throw error;

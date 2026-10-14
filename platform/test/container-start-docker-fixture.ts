@@ -9,6 +9,7 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { START_MODEL } from './container-start-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import type { DockerCommandResult } from './docker-command.ts';
 
 export function record(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -18,7 +19,17 @@ export function record(value: unknown): Record<string, unknown> {
 }
 
 export function inspect(lifecycle: UserImageLifecycle, name: string): Record<string, unknown> {
-  const result = lifecycle.command(['container', 'inspect', name], 15_000);
+  return containerInspect(lifecycle.command(['container', 'inspect', name], 15_000));
+}
+
+export async function inspectAsync(
+  lifecycle: UserImageLifecycle,
+  name: string,
+): Promise<Record<string, unknown>> {
+  return containerInspect(await lifecycle.commandAsync(['container', 'inspect', name], 15_000));
+}
+
+function containerInspect(result: DockerCommandResult): Record<string, unknown> {
   if (result.status !== 0 || result.error !== undefined)
     throw new Error('Independent container inspect failed');
   const rows: unknown = JSON.parse(result.stdout);
@@ -33,7 +44,7 @@ export async function corruptOwnedOverlay(
   containerId: string,
   contents = '- id: webserver\n  config: [\n',
 ): Promise<void> {
-  const container = inspect(lifecycle, containerId);
+  const container = await inspectAsync(lifecycle, containerId);
   expect(container.Id).toBe(containerId);
   expect(container.Name).toBe(`/dsh-team-u-${userId}`);
   expect(container.Image).toBe(lifecycle.imageId);
@@ -159,13 +170,13 @@ export function normalizeInspectMounts(
   return { ...container, Mounts: mounts };
 }
 
-function registerCreatedNetwork(lifecycle: UserImageLifecycle, body: unknown): void {
+async function registerCreatedNetwork(lifecycle: UserImageLifecycle, body: unknown): Promise<void> {
   const network = record(body);
   const labels = record(network.Labels);
   const user = labels['dsh-team.user'];
   if (typeof user !== 'string' || network.Name !== `dsh-team-net-${user}`)
     throw new Error('Network registration ownership mismatch');
-  lifecycle.registerResource('network', network.Name, { 'dsh-team.user': user });
+  await lifecycle.registerResourceAsync('network', network.Name, { 'dsh-team.user': user });
 }
 
 /** Shared actual-start transport: registers production helpers before their create request. */
@@ -177,7 +188,8 @@ export function startupClient(lifecycle: UserImageLifecycle) {
     logs: (path, signal) => raw.logs(path, signal),
     async json(method, path, body, signal, maxBytes) {
       requests.push({ method, path });
-      if (method === 'POST' && path === '/networks/create') registerCreatedNetwork(lifecycle, body);
+      if (method === 'POST' && path === '/networks/create')
+        await registerCreatedNetwork(lifecycle, body);
       const helperCreate =
         method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
       let helperName = '';
@@ -190,7 +202,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
         if (typeof invocation !== 'string' || typeof user !== 'string')
           throw new Error('Helper ownership missing');
         userId = user;
-        lifecycle.registerResource('container', helperName, {
+        await lifecycle.registerResourceAsync('container', helperName, {
           'dsh-team.user': userId,
           'dsh-team.role': 'managed-composition',
           'dsh-team.invocation': invocation,
@@ -205,7 +217,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
         maxBytes,
       );
       if (helperCreate) {
-        const helper = inspect(lifecycle, helperName);
+        const helper = await inspectAsync(lifecycle, helperName);
         expect(helper.Image).toBe(lifecycle.imageId);
         const configuration = record(helper.Config);
         expect(configuration.User).toBe('1001');
