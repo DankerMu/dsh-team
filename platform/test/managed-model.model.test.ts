@@ -25,7 +25,7 @@ import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
-import { installAutoReviewObserver } from './permission-model-observer-fixture.ts';
+import { installModelObserver } from './model-observer-fixture.ts';
 import { runOfficeWriterScenario } from './office-writer-model-fixture.mjs';
 import { runUserImage } from './user-image-fixture.ts';
 
@@ -93,9 +93,16 @@ it('lets a fresh employee use the administrator model to create exact workspace 
           };
           let containerId = currentContainer();
           phase = 'auto-observer-setup';
-          const reviewObserver = await installAutoReviewObserver((script) =>
-            gateway.exec(containerId, script),
-          );
+          const observerExec = (script: string) => gateway.exec(containerId, script);
+          const reviewObserver = await installModelObserver(observerExec, 'permission-model', {
+            nonce: null,
+            path: null,
+            sessionId: null,
+            mode: 'observe',
+          });
+          const officeObserver = await installModelObserver(observerExec, 'office-model', {
+            nonce: null,
+          });
           // Complete fixture-only profile installation before any browser attaches.
           const restarted = await fetch(
             `${base}/_platform/api/admin/instances/${employee.id}/restart`,
@@ -192,6 +199,7 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
             exec: (script) => gateway.exec(containerId, script),
             evidence,
             mode: 'delegated',
+            observer: officeObserver,
           });
           phase = 'browser-health';
           await writeFile(

@@ -42,6 +42,19 @@ export function officeDocxEvidence(value: unknown, expected: OfficeNotice) {
   return { path: expected.path, bytes: parsed.bytes, sha256: parsed.sha256, fields };
 }
 
+export function officeChildReady(identity: unknown, agentAvailable: unknown): boolean {
+  if (identity == null && agentAvailable === true) return false;
+  const descriptor = record(identity);
+  assert(
+    descriptor.mode === 'one-shot' &&
+      typeof descriptor.seq === 'number' &&
+      Number.isSafeInteger(descriptor.seq) &&
+      descriptor.seq >= 0,
+    'office-child-descriptor',
+  );
+  return true;
+}
+
 interface OfficeHistory {
   records: readonly unknown[];
   cursor: number;
@@ -54,6 +67,9 @@ interface OfficeDelegation {
   parent: OfficeHistory & { sessionId: string; cwd: string; catalog: unknown };
   child: unknown;
   identity: unknown;
+  nonce: string;
+  notice: OfficeNotice;
+  contribution: unknown;
 }
 
 function historyEvents(input: OfficeHistory) {
@@ -194,6 +210,29 @@ function delegationResult(events: Record<string, unknown>[], call: Record<string
   return end;
 }
 
+function childContribution(
+  delegation: OfficeDelegation,
+  start: Record<string, unknown>,
+  end: Record<string, unknown>,
+) {
+  const proof = record(delegation.contribution);
+  assert(
+    proof.nonce === delegation.nonce &&
+      proof.parentId === delegation.parent.sessionId &&
+      proof.childId === record(delegation.child).sessionId &&
+      proof.startSeq === start.seq &&
+      proof.endSeq === end.seq &&
+      proof.confounded === false,
+    'office-child-contribution',
+  );
+  const before = record(proof.before);
+  assert(
+    before.status === 'missing' && before.uid === 1001 && before.path === delegation.notice.path,
+    'office-child-artifact-not-fresh',
+  );
+  return officeDocxEvidence(proof.after, delegation.notice);
+}
+
 export function officeTurnEvidence(input: OfficeHistory & { delegation?: OfficeDelegation }) {
   const events = historyEvents(input);
   assert(input.preset === 'office-writer', 'office-preset-binding');
@@ -272,7 +311,12 @@ export function officeTurnEvidence(input: OfficeHistory & { delegation?: OfficeD
     turn,
     terminalSeq: end.seq,
     ...(input.delegation
-      ? { delegation: delegationEvidence(input, input.delegation, events) }
+      ? {
+          delegation: {
+            ...delegationEvidence(input, input.delegation, events),
+            childDocx: childContribution(input.delegation, start, end),
+          },
+        }
       : {}),
   };
 }

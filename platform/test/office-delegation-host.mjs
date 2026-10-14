@@ -309,6 +309,80 @@ async function successfulChild(ctx, parent, fixture, report) {
   }
 }
 
+async function pendingChildIdentity(ctx, parent, fixture, report) {
+  const entered = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const stop = ctx.on('agent/created', async ({ agent }) => {
+    if (agent.session.header.parentSession !== parent.id) return;
+    entered.resolve(agent.id);
+    await release.promise;
+  });
+  try {
+    await inTurn(parent, async (signal) => {
+      const starting = ctx.subagents.start('spawn', {
+        parent,
+        prompt: fixture.task().prompt,
+        signal,
+      });
+      try {
+        const childId = await entered.promise;
+        const listed = await ctx.sessionController.list({}, signal);
+        const row = listed.items.find((item) => item.sessionId === childId);
+        assert(row);
+        const pending = await ctx.sessionController.projections({ sessionId: childId }, signal);
+        assert.equal(row.agentAvailable, true);
+        assert.equal(pending.values.subagent, null);
+        const address = {
+          kind: 'subagent',
+          parentSessionId: parent.id,
+          childSessionId: childId,
+          mode: 'one-shot',
+        };
+        await assert.rejects(
+          ctx.sessionController.page(
+            { address, throughSeq: pending.asOfSeq, maxMessages: 500 },
+            signal,
+          ),
+        );
+        release.resolve();
+        const run = await starting;
+        assert.equal((await run.result).stopReason, 'completed');
+        const ready = await ctx.sessionController.projections({ sessionId: childId }, signal);
+        const history = await ctx.sessionController.page(
+          { address, throughSeq: ready.asOfSeq, maxMessages: 500 },
+          signal,
+        );
+        assert(history.records.some(({ event }) => event.type === 'turn/end'));
+        await assert.rejects(
+          ctx.sessionController.page(
+            { address: { ...address, parentSessionId: 'wrong-parent' }, throughSeq: ready.asOfSeq },
+            signal,
+          ),
+        );
+        await assert.rejects(
+          ctx.sessionController.page(
+            { address: { ...address, mode: 'continuable' }, throughSeq: ready.asOfSeq },
+            signal,
+          ),
+        );
+        report.readiness = {
+          pending: { identity: pending.values.subagent, agentAvailable: row.agentAvailable },
+          ready: { identity: ready.values.subagent, agentAvailable: true },
+          pendingPageRejected: true,
+          wrongParentRejected: true,
+          wrongModeRejected: true,
+        };
+      } finally {
+        release.resolve();
+        await (await starting).dispose();
+      }
+    });
+  } finally {
+    release.resolve();
+    stop();
+  }
+}
+
 async function siblingIsolation(ctx, parent, fixture, report) {
   const manual = await create(ctx, 'office-writer');
   const held = fixture.task('hold');
@@ -572,6 +646,7 @@ async function scenario(ctx, fixture) {
         await mutation(ctx, parent.agent, fixture, 'rejected', 'allow', true, report);
     }
     await cancellation(ctx, parent.agent, fixture, report);
+    await pendingChildIdentity(ctx, parent.agent, fixture, report);
     await unavailableWriter(ctx, parent.agent, fixture, report);
     assert.equal(presetOf(ctx, parent.agent), 'office-general');
   } finally {

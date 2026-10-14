@@ -15,13 +15,18 @@ import {
 } from '../../scripts/probe-dsh-api-ui.mjs';
 import { evaluate, physicalClick } from '../../scripts/probe-permission-ui.mjs';
 import { officeDocxReadScript } from './office-docx-fixture.ts';
-import { officeDocxEvidence, officeTurnEvidence } from './office-writer-oracle.ts';
+import {
+  officeChildReady,
+  officeDocxEvidence,
+  officeTurnEvidence,
+} from './office-writer-oracle.ts';
 
 const SEAT = 'button[aria-haspopup="menu"]:not([aria-label])';
 const WRITER = '公文与材料写作';
 
-async function officeSnapshot(rpc, sessionId, address = { kind: 'session', sessionId }) {
+async function officeSnapshot(rpc, sessionId, address = { kind: 'session', sessionId }, child) {
   const projection = await rpc('session/projections', { request: { sessionId } });
+  if (child && !officeChildReady(projection.values.subagent, child.agentAvailable)) return false;
   const history = await rpc('session/page', {
     request: { address, throughSeq: projection.asOfSeq, maxMessages: 500 },
   });
@@ -49,12 +54,18 @@ async function delegatedSnapshot(rpc, parent, priorIds, prompt) {
   if (!call) return false;
   const args = JSON.parse(call.event.data.arguments);
   assert(typeof args.prompt === 'string', 'office-delegation-prompt');
-  const snapshot = await officeSnapshot(rpc, child.sessionId, {
-    kind: 'subagent',
-    parentSessionId: parent.sessionId,
-    childSessionId: child.sessionId,
-    mode: 'one-shot',
-  });
+  const snapshot = await officeSnapshot(
+    rpc,
+    child.sessionId,
+    {
+      kind: 'subagent',
+      parentSessionId: parent.sessionId,
+      childSessionId: child.sessionId,
+      mode: 'one-shot',
+    },
+    child,
+  );
+  if (!snapshot) return false;
   return {
     ...snapshot,
     prompt: args.prompt,
@@ -66,7 +77,7 @@ async function delegatedSnapshot(rpc, parent, priorIds, prompt) {
   };
 }
 
-export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode }) {
+export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode, observer }) {
   const delegated = mode === 'delegated';
   const prefix = delegated ? 'office-delegation' : 'office-docx';
   const marker = `office-notice-${randomUUID()}`;
@@ -119,6 +130,10 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode 
     assert.equal(before.status, 'missing', 'office-docx-not-fresh');
     assert.throws(() => officeDocxEvidence(before, notice), /office-docx-identity/);
     report.absentBefore = true;
+    if (delegated) {
+      assert(observer, 'office-observer-required');
+      observer.arm({ nonce: marker, reader: officeDocxReadScript(notice.path) });
+    }
     await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
     await typeComposer(page, prompt);
     await clickSelector(page, SEND_BTN);
@@ -167,6 +182,14 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode 
         ),
       ),
     };
+    if (delegated) {
+      snapshot.delegation = {
+        ...snapshot.delegation,
+        nonce: marker,
+        notice,
+        contribution: observer.observation(),
+      };
+    }
     report.turn = officeTurnEvidence(snapshot);
     await waitTurnIdle(page, 30000, 'office-browser-turn-idle');
     report.docx = officeDocxEvidence(observe(), notice);

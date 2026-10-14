@@ -5,6 +5,8 @@ import { runUserImage } from './user-image-fixture.ts';
 import { collectComposition, execScript } from './managed-policy-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
+import { officeChildReady } from './office-writer-oracle.ts';
+import { record } from './container-start-docker-fixture.ts';
 
 it('selects genuine native writer children while preserving tiers, cold identity, siblings and lifecycle', async () => {
   const host = readFileSync(new URL('./office-delegation-host.mjs', import.meta.url), 'utf8');
@@ -87,6 +89,19 @@ process.stdout.write(JSON.stringify([0,1,2].map(index => ({
               },
             })),
           );
+          if (!Array.isArray(rows)) throw new Error('Missing native readiness observations');
+          for (const row of rows) {
+            const readiness = record(record(record(row).result).readiness);
+            const pending = record(readiness.pending);
+            const ready = record(readiness.ready);
+            expect(officeChildReady(pending.identity, pending.agentAvailable)).toBe(false);
+            expect(officeChildReady(ready.identity, ready.agentAvailable)).toBe(true);
+            expect(readiness).toMatchObject({
+              pendingPageRejected: true,
+              wrongParentRejected: true,
+              wrongModeRejected: true,
+            });
+          }
           process.stdout.write(
             `Native office delegation verified: run=${lifecycle.runId} evidence=${evidence}\n`,
           );

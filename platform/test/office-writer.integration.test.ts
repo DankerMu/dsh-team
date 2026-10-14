@@ -1,5 +1,9 @@
 import { expect, it } from 'vitest';
-import { officeDocxEvidence, officeTurnEvidence } from './office-writer-oracle.ts';
+import {
+  officeChildReady,
+  officeDocxEvidence,
+  officeTurnEvidence,
+} from './office-writer-oracle.ts';
 
 const NOTICE = {
   path: '/data/work/notice-test.docx',
@@ -197,6 +201,18 @@ const DELEGATION = {
   },
   child: { sessionId: 'child', origin: 'subagent', parentSessionId: 'parent', cwd: '/data/work' },
   identity: { mode: 'one-shot', label: '通知', seq: 1 },
+  notice: NOTICE,
+  nonce: 'office-observation',
+  contribution: {
+    nonce: 'office-observation',
+    parentId: 'parent',
+    childId: 'child',
+    startSeq: 3,
+    endSeq: 7,
+    confounded: false,
+    before: { path: NOTICE.path, uid: 1001, status: 'missing' },
+    after: PARSED,
+  },
 };
 const DELEGATED_TURN = {
   ...TURN,
@@ -292,4 +308,71 @@ it('rejects a delegated writer that only reads while another Agent could produce
   expect(() => officeTurnEvidence({ ...DELEGATED_TURN, records })).toThrow(
     'office-turn-completion',
   );
+});
+
+it.each([
+  { label: 'read-only bash', after: { status: 'missing', path: NOTICE.path } },
+  { label: 'unrelated child write', after: { ...PARSED, path: '/data/work/unrelated.docx' } },
+  { label: 'failed shell generation', after: { status: 'unreadable', path: NOTICE.path } },
+])('rejects $label followed by a valid parent-only DOCX', ({ after }) => {
+  expect(officeDocxEvidence(PARSED, NOTICE).fields.matter).toBe(true);
+  expect(() =>
+    officeTurnEvidence({
+      ...DELEGATED_TURN,
+      delegation: {
+        ...DELEGATION,
+        contribution: { ...DELEGATION.contribution, after },
+      },
+    }),
+  ).toThrow();
+});
+
+it.each([
+  { nonce: 'stale-invocation' },
+  { childId: 'another-writer' },
+  { parentId: 'another-parent' },
+  { startSeq: 0 },
+  { endSeq: 99 },
+  { before: PARSED },
+  { confounded: true },
+])('rejects stale, preexisting or ambiguously attributed child document effects %#', (change) => {
+  expect(() =>
+    officeTurnEvidence({
+      ...DELEGATED_TURN,
+      delegation: {
+        ...DELEGATION,
+        contribution: { ...DELEGATION.contribution, ...change },
+      },
+    }),
+  ).toThrow();
+});
+
+it('preserves genuine child authorship when the parent subsequently changes document bytes', () => {
+  expect(officeTurnEvidence(DELEGATED_TURN).delegation).toMatchObject({ childId: 'child' });
+  const edited = officeDocxEvidence({ ...PARSED, sha256: 'b'.repeat(64), bytes: 4096 }, NOTICE);
+  expect(edited.sha256).not.toBe(PARSED.sha256);
+  expect(edited.fields).toEqual({
+    title: true,
+    addressee: true,
+    matter: true,
+    issuer: true,
+    date: true,
+  });
+});
+
+it('keeps a live blank child pending until its one-shot descriptor is published', () => {
+  expect(officeChildReady(null, true)).toBe(false);
+  expect(officeChildReady({ mode: 'one-shot', seq: 2 }, true)).toBe(true);
+  expect(officeChildReady({ mode: 'one-shot', seq: 2 }, false)).toBe(true);
+});
+
+it.each([
+  { identity: null, available: false },
+  { identity: undefined, available: false },
+  { identity: { mode: 'continuable', seq: 0 }, available: true },
+  { identity: { mode: 'unknown', seq: 0 }, available: true },
+  { identity: { mode: 'one-shot', seq: -1 }, available: true },
+  { identity: { mode: 'one-shot', seq: 0.5 }, available: true },
+])('rejects terminal missing or invalid child identity %#', ({ identity, available }) => {
+  expect(() => officeChildReady(identity, available)).toThrow();
 });

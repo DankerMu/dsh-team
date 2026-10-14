@@ -1,4 +1,5 @@
 import type { CdpPage } from '../../scripts/probe-dsh-api-cdp.mjs';
+import type { ModelObserver } from './model-observer-fixture.ts';
 
 export declare function runOfficeWriterScenario(input: {
   page: CdpPage;
@@ -6,4 +7,5 @@ export declare function runOfficeWriterScenario(input: {
   exec: (script: string) => string;
   evidence: string;
   mode: 'manual' | 'delegated';
+  observer?: ModelObserver;
 }): Promise<void>;
