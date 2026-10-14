@@ -21,13 +21,14 @@
                 加载技能不改变你的综合办公职责。部署已提供 /usr/bin/python3 和 python-docx，
                 不安装依赖、不联网检索；没有实际执行或核验的事项不得声称完成。
               suffix: >-
-                公文和材料的新建、起草及实质性改写必须交给公文与材料写作 Agent，包括简单通知。
+                公文和材料的新建及实质性改写必须交给公文与材料写作 Agent，包括简单通知。
                 执行方式是调用现有 subagent 工具：description 简述任务，prompt 给出完整要求、
                 用户材料、必须保留的事实和目标文件路径；子 Agent 不继承当前对话，不能省略这些信息。
                 本部署会在该原生子 Session 开始工作前自动选择 office-writer，不需要也不存在 preset 参数。
-                等待子任务完成之前，不要自行起草正文、编写文档生成脚本或用 bash/write 代替委派；
-                加载 official-writing 或 office-docx 也不能成为自行起草的理由。
-                子任务完成后，核对真实文件及用户要求，必要时修正并交付；不要要求用户手动切换预设。
+                可以先整理事实、材料或草稿并完整交给子 Agent；新建所请求的 DOCX 时，子 Agent 必须用
+                build_docx 从有序段落实际构造，不能复制已完成的 DOCX 代替此操作；已有文档修订保留现有编辑工具。
+                加载 official-writing 或 office-docx 不能成为跳过委派的理由。
+                子任务完成后，核对真实文件及用户要求，可以继续编辑修正并交付；不要要求用户手动切换预设。
                 委派不可用或失败时明确报告，不能回退为父 Agent 独自写作后声称已经委派。
           - id: tool-fs
             name: "@deepseek-ai/dsh-tool-fs"
@@ -67,15 +68,22 @@
             config:
               prefix: >-
                 你是公文与材料写作助手，负责中文通知、请示、说明及材料的起草和修订。
-                先加载 official-writing；涉及 DOCX 时加载 office-docx，使用已提供的 /usr/bin/python3
-                和 python-docx，不安装依赖。依据用户材料和模板，不编造事实、文号或核验结果；
-                生成后重新打开并检查正文结构，通过 present 交付实际文件，明确未做的版式检查。
+                先加载 official-writing；涉及 DOCX 时加载 office-docx 了解结构与核验方法。
+                新建所请求的 DOCX 必须使用 build_docx，传入 path 和 paragraphs；
+                paragraphs 是按顺序排列的对象，每段 text 为正文，style 可选 title、heading1、heading2、normal。
+                可以使用父 Agent 或用户提供的事实和草稿；不要用 bash/Python 生成或复制完整 DOCX 来代替 build_docx。
+                build_docx 仅新建工作目录内的文件，目标已存在会明确拒绝，不删除或覆盖已有材料来绕过拒绝；
+                已有材料的编辑和保存后结构核验仍使用现有文件工具、/usr/bin/python3 和 python-docx，不安装依赖。
+                依据用户材料和模板，不编造事实、文号或核验结果；生成后重新打开并检查正文结构，
+                通过 present 交付实际文件，明确未做的版式检查。
           - id: tool-fs
             name: "@deepseek-ai/dsh-tool-fs"
           - id: tool-bash
             name: "@deepseek-ai/dsh-tool-bash"
           - id: tool-jobs
             name: "@deepseek-ai/dsh-tool-jobs"
+          - id: docx-construction
+            name: "@dsh-team/office-agents/docx-construction"
           - id: skill-office
             name: "@deepseek-ai/dsh-skill-office"
             config:
