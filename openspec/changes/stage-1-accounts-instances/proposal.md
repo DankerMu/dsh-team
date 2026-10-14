@@ -636,3 +636,11 @@
 - Eight-field carriers and evidence are specified in design14. Both presets share the bundle release version; native Loader declaration state supplies enabled. No unsupported native schema keys or parallel catalog.
 - Reuse installed rc.2 Office skills with Python-only configuration and add only missing Chinese document-format guidance. Do not duplicate office-docx or promise rendering/knowledge retrieval that this stage does not provide.
 - Evidence floor: native selector/default and omitted/explicit Session binding, metadata checking script, actual scoped tools and loaded associated skills, forbidden-network-tool rejection, seed delivery, full checks and exact-head Docker/model/CI. DOCX/delegation model acceptance remains #88/#89.
+
+## Issue #88 fixture
+
+- Test/Characterization, expanded (agree); task17.3 only, #87/#82/#26 merged. Prove the delivered writer with a real model and actual native manual preset selection, not a new production implementation.
+- Governing invariant: the UI-selected office-writer Session executes the submitted notice task and creates a previously absent DOCX whose parsed body contains the supplied title, addressee, matter, issuer and date; a chat claim, wrong Session or malformed/stale artifact cannot pass.
+- Reuse the existing managed-model lifecycle, browser, real administrator model and `.run/issue82` evidence custody. Preserve all #82/#84/#85 cases, provider/key gates, deadlines, ownership and cleanup.
+- Evidence floor: real native picker/projection/selection-event binding; correlated prompt and completed turn; read-only python-docx parse of the actual unique requested workspace file; valid/invalid/missing-field judge controls and actual parser qualification; screenshots/zero errors; full checks, expanded review and exact-head Docker/model/CI.
+- Non-goals: #89 natural-language delegation, #90 per-preset task catalog, Office rendering, other Agents, production platform/plugin/image behavior, or test-side document creation in the acceptance workspace. Human review remains deferred to Epic end.
