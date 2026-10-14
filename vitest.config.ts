@@ -47,6 +47,7 @@ export default defineConfig({
         'platform/src/**/*.ts',
         'platform/web/src/**/*.{ts,tsx}',
         'plugins/permission-tiers/*.js',
+        'plugins/office-agents/*.js',
       ],
       // Exact process/browser bootstrap exemptions are registered in constraints.yaml.
       exclude: [

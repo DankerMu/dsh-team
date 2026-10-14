@@ -197,6 +197,10 @@ verification:
       command: "pnpm test:docker"
       evidence: "root-provisioned isolated CfT140 image and complete CHROME_BIN distribution; exact three choices and two-Session independence; six root/one-shot-child reject/allow/cancel paths, native child identity/audit and exact file effects; readable Chinese screenshots, bounded request-failure evidence and receipt-owned browser/container/network cleanup"
       required_at: "L3+"
+    office_delegation_native:
+      command: "pnpm test:docker"
+      evidence: "pinned real DSH and deterministic owned model protocol; genuine general-to-writer child selection before work, actual instructions/tools, parent/sibling isolation, cold identity/resume, root/other/fork/continuable exclusions, three-tier child-owned effects, cancellation and failed-target cleanup; not task17.4 real-model acceptance"
+      required_at: "L3+"
     real_model_tool:
       command: "pnpm test:model"
       evidence: "trusted giap-vps actual Actions execution on approved SHA; missing-key rejection before provisioning; real administrator model configuration before fresh public employee identity; native task, absent-before/exact workspace bytes, no personal model setup; manual native office-writer selection with correlated prompt/completed turn and newly created python-docx-readable DOCX containing title/addressee/matter/issuer/date; screenshots/zero errors and owned cleanup"

@@ -1,6 +1,6 @@
 # Office Agent bundle
 
-This declarative DSH `0.2.0-rc.2` bundle provides `office-general` (综合办公),
+This DSH `0.2.0-rc.2` bundle provides `office-general` (综合办公),
 the fresh-profile default, and `office-writer` (公文与材料写作). General selects
 capabilities, delegates writing and checks results; writer drafts Chinese
 notices, requests, explanations and materials. Existing built-in presets remain
@@ -17,7 +17,21 @@ using the image's Python/python-docx, plus the bundle's `official-writing`
 guidance. Ordinary user/project skill discovery remains available. No document
 renderer, RAGFlow integration or additional specialist Agent is introduced.
 
-The image copies `package.json`, `cordis.patch.yml` and
+The host plugin selects `office-writer` on genuine fresh, unseeded, direct
+one-shot children of `office-general`, through the released awaited creation
+hook and native blank-Agent preset selection. It does not replace the spawn
+provider or manufacture a child. Root Sessions, other presets, seeded forks,
+continuable children, resumed Agents and already-writer children are unchanged.
+The child uses writer instructions/tools before its first turn; its parent,
+siblings, model route, workspace and managed permission tier remain independent.
+An unavailable writer fails creation instead of running the task under general.
+
+The immutable child header can still name its creation preset, `office-general`.
+The committed `agent-preset/selected` event, effective `agentPreset` projection
+and actual child capabilities identify the later writer selection. Cold reads
+replay that selection; do not rewrite or treat the creation header as current.
+
+The image copies `package.json`, `index.js`, `cordis.patch.yml` and
 `skills/official-writing/SKILL.md` into
 `$DSH_HOME/profiles/web/node_modules/@dsh-team/office-agents/`, registers the
 bundle after the released base/Web bundles, and then snapshots the complete
@@ -44,6 +58,7 @@ Verification on giap-vps:
 
 ```sh
 pnpm test:docker platform/test/office-agents.docker.test.ts platform/test/managed-policy.docker.test.ts platform/test/user-image.docker.test.ts
+pnpm test:docker platform/test/office-delegation.docker.test.ts
 ```
 
 The native selector must expose both healthy Chinese-named presets and only
@@ -61,5 +76,11 @@ before and after employee edits/restart. Unrelated tool-less presets remain vali
 
 Existing image tests cover complete seed copy-up, immutability, employee edits
 across reuse, offline DOCX and real Web startup. Full Docker/model checks retain
-the existing platform/model/permission behavior. Actual office-model DOCX and
-delegation acceptance belong to tasks17.3–17.5, not this metadata/capability proof.
+the existing platform/model/permission behavior. Native delegation checks use
+an explicitly deterministic, test-only adapter: actual writer composition,
+pre-turn selection, cold reads/resume, concurrent siblings, exclusions, real
+three-tier tool effects, cancellation and missing/broken-target cleanup.
+Evidence is retained under `.run/issue213/`; no external model is called by Docker tests.
+Manual writer DOCX is covered by `pnpm test:model`. Real-model natural-language
+delegation remains issue #89 / task17.4, followed by task17.5 registration;
+these native protocol checks do not substitute for those acceptance tasks.
