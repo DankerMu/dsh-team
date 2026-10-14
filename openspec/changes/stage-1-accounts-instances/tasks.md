@@ -1381,3 +1381,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Error/ownership: read-only discovery scoped to invocation/project/exact employee labels; new discoveries never grant cleanup authority. Existing lock, immutable-ID owner drainage, failure preservation and canonical registered-target cleanup unchanged.
 - Characterization evidence: known-good, separately rejected loopback publication and alternate-destination socket control, restored clean candidate; localcheck/strict, independentreview, exact-head standalone/fullDocker/CI and independent empty owned inventories. No provider/UI or broader isolation claim.
 - 实测：真实候选5/5通过（75.06s）；独立loopback随机发布和只读socket挂到`/engine.sock`的负对照均仅使新用例在对应断言失败（77.20s、75.42s），四项原测试仍通过，两次最终容器/卷/网络/镜像及活动unit清单均为空。初始新断言误计EXPOSE的null条目已按既定规格修正；初版port控制误用未创建的生命周期卷名，自动生成两个无标签卷，用户明确授权后按精确名称无force删除，此次手动恢复不冒充自动清理。修正控制移除无用卷依赖；最终源码不含控制注入。localcheck2152unit/1135integration、重复率2.84%、strict5/5通过；独立审查及冻结SHA standalone/fullDocker/CI仍为合并门禁。
+
+## Issue #96 risk/evidence map (task18.6 only)
+
+- Auth/config/identity: actual HTTPS administrator/employee login, Secure session attribute, distinct public URL/cookie/trusted-IP configuration, exact proxy address rather than trusted subnet; original public authority survives native authentication.
+- Protocol/compatibility: real TLS termination to unchanged HTTP platform; authenticated native workspace and same-carrier WSS Ping/Pong, original five deployment cases retained. Browser rendering/enforcement and provider inference excluded.
+- Audit/evidence: independently observed proxy peer compared to specific employee login audit; forged forwarding input replaced; distinct untrusted-proxy and insecure-cookie negative controls followed by restored positive.
+- Files/resources/error paths: ephemeral SAN certificate with explicit client trust, no private material in logs/commits, registered owned proxy/network/container lifecycle, exact cleanup and primary error preserved. Final-head standalone/fullDocker/CI plus four empty inventories and active units required.
