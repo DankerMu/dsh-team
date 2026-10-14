@@ -16,8 +16,10 @@ Native production matrix and late-selection rejection pass all three tiers on gi
 
 ## 3. Integrated acceptance and delivery
 
-- [ ] 3.1 Run `pnpm check`, strict OpenSpec validation, final-head complete `pnpm test:docker` and existing trusted `pnpm test:model`; retain exact-head results, screenshots/zero browser errors where applicable and independent resource/authority retirement.
-- [ ] 3.2 Obtain three independent expanded code-review seats, adjudicate and mechanically record bounded fix rounds, publish inspected PR/work-summary files, require exact-head CI and merge. Record deferred human critical-path review and hand off the standalone archive and #89 resumption to the orchestrator.
+- [x] 3.1 Run `pnpm check`, strict OpenSpec validation, final-head complete `pnpm test:docker` and existing trusted `pnpm test:model`; retain exact-head results, screenshots/zero browser errors where applicable and independent resource/authority retirement.
+- [x] 3.2 Obtain three independent expanded code-review seats, adjudicate and mechanically record bounded fix rounds, publish inspected PR/work-summary files, require exact-head CI and merge. Record deferred human critical-path review and hand off the standalone archive and #89 resumption to the orchestrator.
+
+Delivery evidence: PR #214 merged as `a150b67164cf612da47b0574c1524a2f3f4d017a`; reviewed head `7107c48c436d185ff2a0f1d2f9f46f1ceaabcf57`. Complete Docker 27 files / 73 tests passed (561.98s suite), trusted model Actions 38502564945 passed (114.32s suite), browser errors zero and manual writer DOCX readable with five required fields. Four Docker inventories and invocation authority/private paths were independently retired. CI 38502575447 passed; three independent seats reported no actionable findings, round 1 clean, zero fix passes. Native selection-in-flight cancellation is not claimed: hook-unit and inspected native ordering cover that boundary; native pre-abort, running cancellation and failed activation are observed. Human image/rule review remains explicitly deferred to Epic end. Durable proof and inspected work summary: `.run/issue213/`, PR #214 comment 6160128701. Original #89 acceptance remains open.
 
 ## Risk/evidence mapping
 
