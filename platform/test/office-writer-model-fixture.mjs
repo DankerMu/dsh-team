@@ -40,10 +40,37 @@ async function officeSnapshot(rpc, sessionId, address = { kind: 'session', sessi
   };
 }
 
-async function delegatedSnapshot(rpc, parent, priorIds, prompt) {
+async function delegatedSnapshot(rpc, parent, priorIds, prompt, report) {
   const parentHistory = await officeSnapshot(rpc, parent.sessionId);
   const listed = await rpc('session/list', { _request: {} });
   const children = listed.items.filter((row) => row.parentSessionId === parent.sessionId);
+  const tools = {
+    subagent: 0,
+    bash: 0,
+    write: 0,
+    edit: 0,
+    skill: 0,
+    read: 0,
+    jobs: 0,
+    present: 0,
+    other: 0,
+  };
+  for (const { event } of parentHistory.records) {
+    if (event.type !== 'tool/call') continue;
+    const key = Object.hasOwn(tools, event.data.name) ? event.data.name : 'other';
+    tools[key]++;
+  }
+  report.delegationState = {
+    parentGeneral: parentHistory.preset === 'office-general',
+    parentCursor: parentHistory.cursor,
+    parentHasMore: parentHistory.hasMore,
+    parentCompleted: parentHistory.records.some(
+      ({ event }) => event.type === 'turn/end' && event.data.reason.kind === 'completed',
+    ),
+    catalogCount: Array.isArray(parentHistory.catalog) ? parentHistory.catalog.length : -1,
+    derivedCount: children.length,
+    tools,
+  };
   assert(children.length <= 1, 'office-child-ambiguous');
   const child = children[0];
   if (!child) return false;
@@ -75,6 +102,14 @@ async function delegatedSnapshot(rpc, parent, priorIds, prompt) {
       identity: snapshot.identity,
     },
   };
+}
+
+function failureDocx(observe, notice) {
+  try {
+    return officeDocxEvidence(observe(), notice);
+  } catch {
+    return { valid: false };
+  }
 }
 
 export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode, observer }) {
@@ -159,7 +194,7 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
       async () => {
         await clickAllowOnce(page, marker);
         snapshot = delegated
-          ? await delegatedSnapshot(rpc, session, priorIds, prompt)
+          ? await delegatedSnapshot(rpc, session, priorIds, prompt, report)
           : { ...(await officeSnapshot(rpc, session.sessionId)), prompt };
         if (!snapshot) return false;
         const completed = snapshot.records.some(({ event }) => event.type === 'turn/end');
@@ -208,6 +243,7 @@ export async function runOfficeWriterScenario({ page, rpc, exec, evidence, mode,
     report.failure = /^office-[a-z-]+$/.test(error.message)
       ? error.message
       : 'office-scenario-failed';
+    report.failureDocx = failureDocx(observe, notice);
     await writeFile(join(evidence, `${prefix}.json`), JSON.stringify(report));
     await captureSettledScreenshot(page, join(evidence, `${prefix}-failure.png`));
     throw error;
