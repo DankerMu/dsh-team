@@ -4,13 +4,14 @@ import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { arch, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseEnv } from 'node:util';
+import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
-interface Deployment {
+export interface Deployment {
   base: string;
   port: number;
   directory: string;
@@ -18,7 +19,10 @@ interface Deployment {
   compose: string[];
 }
 
-async function startDeployment(lifecycle: UserImageLifecycle): Promise<Deployment> {
+async function startDeployment(
+  lifecycle: UserImageLifecycle,
+  submitted: () => void,
+): Promise<Deployment> {
   const existing = await lifecycle.commandAsync(
     ['container', 'inspect', 'dsh-team-platform'],
     30_000,
@@ -106,8 +110,38 @@ async function startDeployment(lifecycle: UserImageLifecycle): Promise<Deploymen
     '--project-name',
     project,
   ];
+  submitted();
   await command([...compose, 'up', '-d', '--no-build', '--pull', 'never']);
   return { base, port, directory, dataDir, compose };
+}
+
+async function drainDeployment(lifecycle: UserImageLifecycle): Promise<void> {
+  const args = ['container', 'inspect', 'dsh-team-platform'];
+  const inspected = await lifecycle.commandAsync(args, 30_000);
+  // Compose may reject before creating its service; no owner exists to drain in that case.
+  if (isAbsentResource(inspected, 'container', 'dsh-team-platform')) return;
+  output(inspected, args);
+  const platform = await inspectAsync(lifecycle, 'dsh-team-platform');
+  const labels = record(record(platform.Config).Labels);
+  if (
+    platform.Name !== '/dsh-team-platform' ||
+    labels[OWNER_LABEL] !== lifecycle.runId ||
+    typeof platform.Id !== 'string'
+  )
+    throw new Error('Refusing shutdown of an unowned deployment');
+  const state = record(platform.State);
+  if (state.Status === 'created') return;
+  if (state.Running === true) {
+    const signal = ['kill', '--signal', 'SIGTERM', platform.Id];
+    output(await lifecycle.commandAsync(signal, 30_000), signal);
+    // No Docker stop fallback: forced termination is not proof that helper retirement drained.
+    const wait = ['wait', platform.Id];
+    if (output(await lifecycle.commandAsync(wait, 30_000), wait).trim() !== '0')
+      throw new Error('Deployment owner did not exit gracefully');
+  }
+  const settled = record((await inspectAsync(lifecycle, platform.Id)).State);
+  if (settled.Running !== false || settled.ExitCode !== 0 || settled.OOMKilled !== false)
+    throw new Error('Deployment owner drainage unconfirmed');
 }
 
 /** The kernel lock spans build, fixed-name admission, the scenario and canonical resource cleanup. */
@@ -146,7 +180,28 @@ export async function withDeployment(
       () => undefined,
       undefined,
       async (lifecycle) => {
-        await run(lifecycle, () => startDeployment(lifecycle));
+        const state = { submitted: false };
+        const failures: unknown[] = [];
+        try {
+          await run(lifecycle, () =>
+            startDeployment(lifecycle, () => {
+              state.submitted = true;
+            }),
+          );
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          if (state.submitted) {
+            try {
+              await drainDeployment(lifecycle);
+            } catch (error) {
+              failures.push(error);
+            }
+          }
+        }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1)
+          throw new AggregateError(failures, 'Deployment scenario and owner drainage failed');
         return 'verified';
       },
     );
