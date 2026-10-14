@@ -6,7 +6,7 @@ export declare function runPermissionModelScenario(input: {
   origin: string;
   cookie: string;
   evidence: string;
-  observe: (path: string, contents: string) => Record<string, unknown>;
+  observe: (path: string, contents: string) => Promise<Record<string, unknown>>;
   model: string;
   reviewObserver: ModelObserver;
 }): Promise<void>;

@@ -11,7 +11,7 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
 import { createInstanceService } from '../src/orchestrator/index.ts';
 import type { InstanceService, DockerClient } from '../src/orchestrator/index.ts';
-import { inspect, record, startupClient } from './container-start-docker-fixture.ts';
+import { inspectAsync, record, startupClient } from './container-start-docker-fixture.ts';
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -27,17 +27,17 @@ export interface DockerIdleContext {
   containerId: string;
   setNow: (value: number) => void;
   checkIdle: () => Promise<void>;
-  rpc: (method: string, args: unknown) => Record<string, unknown>;
-  control: (args: unknown) => Record<string, unknown>;
-  verifyVolumes: () => void;
+  rpc: (method: string, args: unknown) => Promise<Record<string, unknown>>;
+  control: (args: unknown) => Promise<Record<string, unknown>>;
+  verifyVolumes: () => Promise<void>;
 }
 
-type IdleDockerCommand = (args: readonly string[], timeout?: number) => string;
+type IdleDockerCommand = (args: readonly string[], timeout?: number) => Promise<string>;
 
-export async function waitDockerIdle(predicate: () => boolean): Promise<void> {
+export async function waitDockerIdle(predicate: () => boolean | Promise<boolean>): Promise<void> {
   // Real deadline remains independent of the controlled platform Date.now policy clock.
   const signal = AbortSignal.timeout(30_000);
-  while (!predicate()) await delay(50, undefined, { signal });
+  while (!(await predicate())) await delay(50, undefined, { signal });
 }
 
 async function installOwnedAdapter(
@@ -50,16 +50,24 @@ async function installOwnedAdapter(
 ): Promise<void> {
   for (const volume of [`dsh-team-home-${userId}`, `dsh-team-work-${userId}`])
     expect(
-      command(['volume', 'inspect', '--format', '{{ index .Labels "dsh-team.user" }}', volume]),
+      await command([
+        'volume',
+        'inspect',
+        '--format',
+        '{{ index .Labels "dsh-team.user" }}',
+        volume,
+      ]),
     ).toBe(userId);
   const helper = `dsh-team-test-${lifecycle.runId}-idle-install`;
-  lifecycle.registerContainer(helper);
+  await lifecycle.registerResourceAsync('container', helper, {
+    'dsh-team.test-run': lifecycle.runId,
+  });
   // Seed once only: installing the adapter on replacement must never repair lost user data.
   const markers = seedMarkers
     ? "writeFileSync('/data/home/issue59-state.txt','idle state survives\\n'); writeFileSync('/data/work/issue59-work.txt','idle work survives\\n');"
     : '';
   const script = `import {writeFileSync} from 'node:fs'; writeFileSync('/data/home/issue83-ui-owned-protocol.mjs',${JSON.stringify(source)},{mode:0o644}); ${markers}`;
-  command([
+  await command([
     'run',
     '--rm',
     '--name',
@@ -104,25 +112,33 @@ async function installOwnedAdapter(
   await writeManagedConfig(config.managedConfigDir, userId, JSON.stringify(rows));
 }
 
-function verifyIdleVolumes(
+async function verifyIdleVolumes(
   lifecycle: UserImageLifecycle,
   command: IdleDockerCommand,
   userId: string,
   volumeSnapshot: unknown,
-): void {
+): Promise<void> {
   expect(
     JSON.parse(
-      command(['volume', 'inspect', `dsh-team-home-${userId}`, `dsh-team-work-${userId}`]),
+      await command(['volume', 'inspect', `dsh-team-home-${userId}`, `dsh-team-work-${userId}`]),
     ),
   ).toEqual(volumeSnapshot);
   for (const volume of [`dsh-team-home-${userId}`, `dsh-team-work-${userId}`])
     expect(
-      command(['volume', 'inspect', '--format', '{{ index .Labels "dsh-team.user" }}', volume]),
+      await command([
+        'volume',
+        'inspect',
+        '--format',
+        '{{ index .Labels "dsh-team.user" }}',
+        volume,
+      ]),
     ).toBe(userId);
   const helper = `dsh-team-test-${lifecycle.runId}-idle-preservation`;
-  lifecycle.registerContainer(helper);
+  await lifecycle.registerResourceAsync('container', helper, {
+    'dsh-team.test-run': lifecycle.runId,
+  });
   expect(
-    command([
+    await command([
       'run',
       '--rm',
       '--name',
@@ -175,8 +191,8 @@ export async function withDockerIdleInstance(
       const transport = startupClient(lifecycle);
       let userId = '';
       let adapterInstalled = false;
-      const command: IdleDockerCommand = (args, timeout = 30_000): string => {
-        const result = lifecycle.command(args, timeout);
+      const command: IdleDockerCommand = async (args, timeout = 30_000): Promise<string> => {
+        const result = await lifecycle.commandAsync(args, timeout);
         if (result.status !== 0 || result.error !== undefined)
           throw new Error('Owned idle Docker operation failed');
         return result.stdout.trim();
@@ -227,8 +243,8 @@ export async function withDockerIdleInstance(
         const user = await registerInstanceUser(base, config.publicUrl, 'idle-docker@example.test');
         userId = user.id;
         for (const name of [`dsh-team-home-${userId}`, `dsh-team-work-${userId}`])
-          lifecycle.registerResource('volume', name, { 'dsh-team.user': userId });
-        lifecycle.registerResource('container', `dsh-team-u-${userId}`, {
+          await lifecycle.registerResourceAsync('volume', name, { 'dsh-team.user': userId });
+        await lifecycle.registerResourceAsync('container', `dsh-team-u-${userId}`, {
           'dsh-team.user': userId,
         });
         writeSettings(database, {
@@ -258,9 +274,14 @@ export async function withDockerIdleInstance(
         if (typeof row.container_id !== 'string' || typeof row.dsh_cookie !== 'string')
           throw new Error('Missing real ready identity');
         containerId = row.container_id;
-        expect(inspect(lifecycle, containerId).Image).toBe(lifecycle.imageId);
+        expect((await inspectAsync(lifecycle, containerId)).Image).toBe(lifecycle.imageId);
         const volumeSnapshot: unknown = JSON.parse(
-          command(['volume', 'inspect', `dsh-team-home-${userId}`, `dsh-team-work-${userId}`]),
+          await command([
+            'volume',
+            'inspect',
+            `dsh-team-home-${userId}`,
+            `dsh-team-work-${userId}`,
+          ]),
         );
         // Keep session-expiry units valid while moving only the platform policy clock.
         let now = Date.now();
@@ -270,16 +291,16 @@ export async function withDockerIdleInstance(
             ['exec', '--user', '1001', containerId, 'node', '--input-type=module', '-e', script],
             15_000,
           );
-        const rpc = (method: string, args: unknown): Record<string, unknown> => {
+        const rpc = async (method: string, args: unknown): Promise<Record<string, unknown>> => {
           const rpcId = randomUUID();
           const body = JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } });
           const script = `import {request} from 'node:http'; const {promise,resolve,reject}=Promise.withResolvers(); const req=request({host:'127.0.0.1',port:3080,path:${JSON.stringify(`/api/${method}`)},method:'POST',headers:{Host:${JSON.stringify(config.authority)},Origin:${JSON.stringify(config.publicUrl)},Cookie:${JSON.stringify(row.dsh_cookie)},'content-type':'application/json'},signal:AbortSignal.timeout(10000),maxHeaderSize:8192},res=>{let text='';res.on('data',chunk=>{text+=chunk;if(text.length>1048576)req.destroy(new Error('limit'));});res.on('error',reject);res.on('end',()=>res.statusCode===200&&res.complete?resolve(text):reject(new Error('http')));});req.on('error',reject);req.end(${JSON.stringify(body)}); const parsed=JSON.parse(await promise);if(parsed.type!=='server-response'||parsed.rpcId!==${JSON.stringify(rpcId)}||parsed.result?.ok!==true)throw new Error('rpc');process.stdout.write(JSON.stringify(parsed.result.value));`;
-          return record(JSON.parse(exec(script)));
+          return record(JSON.parse(await exec(script)));
         };
-        const control = (args: unknown): Record<string, unknown> =>
+        const control = async (args: unknown): Promise<Record<string, unknown>> =>
           record(
             JSON.parse(
-              exec(
+              await exec(
                 `const response=await fetch('http://127.0.0.1:3081/control',{method:'POST',headers:{'content-type':'application/json'},body:${JSON.stringify(JSON.stringify(args))},signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error('owned control');process.stdout.write(await response.text());`,
               ),
             ),
@@ -306,9 +327,7 @@ export async function withDockerIdleInstance(
           checkIdle,
           rpc,
           control,
-          verifyVolumes: () => {
-            verifyIdleVolumes(lifecycle, command, userId, volumeSnapshot);
-          },
+          verifyVolumes: () => verifyIdleVolumes(lifecycle, command, userId, volumeSnapshot),
         });
         return containerId;
       } finally {

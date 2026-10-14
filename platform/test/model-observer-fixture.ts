@@ -4,13 +4,13 @@ import { record } from './container-start-docker-fixture.ts';
 import { PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
 
 export interface ModelObserver {
-  arm(input: Record<string, unknown>): void;
-  observation(): unknown;
+  arm(input: Record<string, unknown>): Promise<void>;
+  observation(): Promise<unknown>;
 }
 
 /** Only an invocation-owned employee profile changes; caller uses the real restart API. */
 export async function installModelObserver(
-  exec: (script: string) => string,
+  exec: (script: string) => Promise<string>,
   name: 'permission-model' | 'office-model',
   initialControl: Record<string, unknown>,
 ): Promise<ModelObserver> {
@@ -24,7 +24,7 @@ export async function installModelObserver(
   const control = `/data/home/${name}-control.json`;
   const evidence = `/data/home/${name}-observation.json`;
   const maximum = name === 'office-model' ? 65536 : 16384;
-  exec(`
+  await exec(`
 import {createRequire} from 'node:module';
 import {existsSync,readFileSync,writeFileSync} from 'node:fs';
 const require=createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
@@ -38,15 +38,15 @@ writeFileSync(${JSON.stringify(control)},${JSON.stringify(JSON.stringify(initial
 writeFileSync(profile,String(editorDocument));
 `);
   return {
-    arm(input) {
-      exec(
+    async arm(input) {
+      await exec(
         `import {writeFileSync} from 'node:fs';writeFileSync(${JSON.stringify(control)},${JSON.stringify(JSON.stringify(input))},{mode:0o600});`,
       );
     },
-    observation() {
+    async observation() {
       const value = record(
         JSON.parse(
-          exec(`
+          await exec(`
 import {readFileSync} from 'node:fs';import {createHash} from 'node:crypto';
 const evidence=readFileSync(${JSON.stringify(evidence)},'utf8');
 if(evidence.length>${String(maximum)})throw new Error('Observer evidence exceeds bound');

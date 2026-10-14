@@ -21,9 +21,9 @@ it('binds fresh Sessions to both healthy office presets with general as the nati
         configureInstanceModel(database);
         const employee = await registerInstanceUser(base, origin, 'office-bundle@example.test');
         const ownership = { 'dsh-team.user': employee.id };
-        lifecycle.registerResource('container', `dsh-team-u-${employee.id}`, ownership);
+        await lifecycle.registerResourceAsync('container', `dsh-team-u-${employee.id}`, ownership);
         for (const name of [`dsh-team-home-${employee.id}`, `dsh-team-work-${employee.id}`])
-          lifecycle.registerResource('volume', name, ownership);
+          await lifecycle.registerResourceAsync('volume', name, ownership);
 
         expect(await gateway.state(employee.cookie, true)).toEqual({
           status: 'starting',

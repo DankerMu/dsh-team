@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import {
-  inspect,
+  inspectAsync,
   record,
   corruptOwnedOverlay,
   assertFailedStartupLogs,
@@ -41,9 +41,9 @@ async function restartReady(
 async function ownedUser(f: DockerIdleContext, email: string) {
   const user = await registerInstanceUser(f.base, f.origin, email);
   const ownership = { 'dsh-team.user': user.id };
-  f.lifecycle.registerResource('container', `dsh-team-u-${user.id}`, ownership);
+  await f.lifecycle.registerResourceAsync('container', `dsh-team-u-${user.id}`, ownership);
   for (const name of [`dsh-team-home-${user.id}`, `dsh-team-work-${user.id}`])
-    f.lifecycle.registerResource('volume', name, ownership);
+    await f.lifecycle.registerResourceAsync('volume', name, ownership);
   return user;
 }
 async function errorState(f: DockerIdleContext) {
@@ -78,20 +78,20 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       if (typeof siblingRow.container_id !== 'string')
         throw new Error('Missing real sibling identity');
       const siblingId = siblingRow.container_id;
-      gateway.exec(
+      await gateway.exec(
         siblingId,
         "import {writeFileSync} from 'node:fs'; for(const path of ['/data/home/issue71-sibling','/data/work/issue71-sibling'])writeFileSync(path,'sibling unchanged 中文\\n');",
       );
-      const siblingBefore = inspect(f.lifecycle, siblingId);
+      const siblingBefore = await inspectAsync(f.lifecycle, siblingId);
       const siblingConnection = await gateway.open(sibling.cookie);
       const targetConnection = await gateway.open(f.user.cookie);
       const { sessionId, originalHistory } = await gateway.persistedSession(f);
       const bytes = Buffer.from([0, 13, 10, 127, 128, 255]);
-      gateway.exec(
+      await gateway.exec(
         f.containerId,
         `import {writeFileSync} from 'node:fs'; for(const path of ['/data/home/issue71-home','/data/work/issue71-work'])writeFileSync(path,Buffer.from('${bytes.toString('base64')}','base64'));`,
       );
-      const before = inspect(f.lifecycle, f.containerId);
+      const before = await inspectAsync(f.lifecycle, f.containerId);
       const startedAt = record(before.State).StartedAt;
       if (typeof startedAt !== 'string') throw new Error('Missing independent StartedAt');
       const row = record(
@@ -121,17 +121,17 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       expect(ready.last_started_at).toBeGreaterThan(row.last_started_at);
       expect(ready.status).toBe('running');
       expect(ready.last_error).toBeNull();
-      const after = inspect(f.lifecycle, ready.container_id);
+      const after = await inspectAsync(f.lifecycle, ready.container_id);
       expect(after.Id).toBe(ready.container_id);
       expect(record(after.State).Running).toBe(true);
       const newStartedAt = record(after.State).StartedAt;
       if (typeof newStartedAt !== 'string') throw new Error('Missing replacement StartedAt');
       expect(Date.parse(newStartedAt)).toBeGreaterThan(Date.parse(startedAt));
       expect(orderedMounts(after.Mounts)).toEqual(orderedMounts(before.Mounts));
-      f.verifyVolumes();
+      await f.verifyVolumes();
       expect(
         JSON.parse(
-          gateway.exec(
+          await gateway.exec(
             ready.container_id,
             "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.stringify(['/data/home/issue71-home','/data/work/issue71-work'].map(path=>readFileSync(path).toString('base64'))));",
           ),
@@ -151,7 +151,7 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       ).toEqual(sessions);
       expect(f.database.prepare('SELECT * FROM users ORDER BY id').all()).toEqual(accounts);
       expect(siblingConnection.socket.destroyed).toBe(false);
-      expect(normalizeInspectMounts(inspect(f.lifecycle, siblingId))).toEqual(
+      expect(normalizeInspectMounts(await inspectAsync(f.lifecycle, siblingId))).toEqual(
         normalizeInspectMounts(siblingBefore),
       );
       expect(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(sibling.id)).toEqual(
@@ -159,7 +159,7 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       );
       expect(
         JSON.parse(
-          gateway.exec(
+          await gateway.exec(
             siblingId,
             "import {readFileSync} from 'node:fs'; process.stdout.write(JSON.stringify(['/data/home/issue71-sibling','/data/work/issue71-sibling'].map(path=>readFileSync(path,'utf8'))));",
           ),
@@ -265,9 +265,9 @@ it('admin restart recovers stopped and retained-error instances; a second real s
         );
         if (typeof firstError.container_id !== 'string')
           throw new Error('Missing retained error container');
-        const firstFailed = inspect(f.lifecycle, firstError.container_id);
+        const firstFailed = await inspectAsync(f.lifecycle, firstError.container_id);
         expect(record(firstFailed.State).Running).toBe(false);
-        const logs = f.lifecycle.command(
+        const logs = await f.lifecycle.commandAsync(
           ['logs', '--tail', '1000', firstError.container_id],
           15000,
         );
@@ -293,7 +293,7 @@ it('admin restart recovers stopped and retained-error instances; a second real s
           throw new Error('Missing new retained error identity');
         expect(secondError.container_id).not.toBe(firstError.container_id);
         expect(secondError.last_error).not.toBe(firstError.last_error);
-        const newLogs = f.lifecycle.command(
+        const newLogs = await f.lifecycle.commandAsync(
           ['logs', '--tail', '1000', secondError.container_id],
           15000,
         );
@@ -325,7 +325,7 @@ it('admin restart recovers stopped and retained-error instances; a second real s
         expect(recovered.container_id).not.toBe(secondError.container_id);
         expect(recovered.last_error).toBeNull();
         expect(await gateway.history(f.user.cookie, sessionId)).toEqual(originalHistory);
-        f.verifyVolumes();
+        await f.verifyVolumes();
         const stopped = f.database
           .prepare(
             "SELECT details FROM audit_events WHERE event_type='instance.stopped' AND target=?",
@@ -389,7 +389,7 @@ it('bulk real admin HTTP restart selects only captured running instances and pre
         );
         if (typeof runningBefore.container_id !== 'string')
           throw new Error('Missing selected running container');
-        const before = inspect(f.lifecycle, runningBefore.container_id);
+        const before = await inspectAsync(f.lifecycle, runningBefore.container_id);
         const oldStartedAt = record(before.State).StartedAt;
         f.setNow(Date.now() + 1000);
 
@@ -404,9 +404,9 @@ it('bulk real admin HTTP restart selects only captured running instances and pre
         if (typeof runningAfter.container_id !== 'string')
           throw new Error('Missing restarted selected container');
         expect(runningAfter.container_id).not.toBe(runningBefore.container_id);
-        expect(record(inspect(f.lifecycle, runningAfter.container_id).State).StartedAt).not.toBe(
-          oldStartedAt,
-        );
+        expect(
+          record((await inspectAsync(f.lifecycle, runningAfter.container_id)).State).StartedAt,
+        ).not.toBe(oldStartedAt);
         expect(
           f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(f.user.id),
         ).toEqual(errorBefore);
@@ -432,7 +432,7 @@ it('bulk real admin HTTP restart selects only captured running instances and pre
         ).toEqual([
           { actor_email: 'bulk-restart-admin@example.test', target: sibling.id, details: '{}' },
         ]);
-        f.verifyVolumes();
+        await f.verifyVolumes();
       } finally {
         gateway.close();
       }

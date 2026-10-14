@@ -1,5 +1,65 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { CdpPage } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { expect, it } from 'vitest';
 import { autoReviewEvidence, permissionEvidence } from './permission-model-oracle.ts';
+import { runPermissionModelScenario } from './permission-model-fixture.mjs';
+
+it('retains the acceptance failure when asynchronous observer diagnostics are unavailable', async () => {
+  const evidenceDirectory = await mkdtemp(join(tmpdir(), 'dsh-team-permission-failure-'));
+  const acceptanceFailure = new Error('permission-owned-acceptance-failure');
+  const observerFailure = Promise.reject(new Error('Owned observer read failed'));
+  // Observe the injected transport rejection even with the pre-cutover fixture,
+  // so its missing await fails the report assertion rather than leaking a rejection.
+  void observerFailure.catch(() => undefined);
+  const page: CdpPage = {
+    on() {
+      // No browser events are emitted before the injected first-command failure.
+    },
+    close() {
+      throw new Error('Scenario does not own browser closure');
+    },
+    send(method) {
+      if (method === 'Page.captureScreenshot') return Promise.resolve({ data: 'aGVsbG8=' });
+      return Promise.reject(acceptanceFailure);
+    },
+  };
+  try {
+    await expect(
+      runPermissionModelScenario({
+        page,
+        origin: 'http://permission-failure.invalid',
+        cookie: 'owned-cookie',
+        evidence: evidenceDirectory,
+        observe: () => {
+          return Promise.reject(
+            new Error('File observation must not start before browser initialization'),
+          );
+        },
+        model: 'owned-model',
+        reviewObserver: {
+          arm() {
+            return Promise.reject(new Error('Observer must not arm before browser initialization'));
+          },
+          observation: () => observerFailure,
+        },
+      }),
+    ).rejects.toBe(acceptanceFailure);
+
+    expect(JSON.parse(await readFile(join(evidenceDirectory, 'permissions.json'), 'utf8'))).toEqual(
+      {
+        selections: [],
+        addresses: [],
+        checkpoints: [],
+        observerUnavailable: true,
+        failure: 'permission-owned-acceptance-failure',
+      },
+    );
+  } finally {
+    await rm(evidenceDirectory, { recursive: true, force: true });
+  }
+});
 
 function evidence(phase: 'pending' | 'allow' | 'deny' | 'unprompted' = 'allow') {
   const callId = 'provider-call',

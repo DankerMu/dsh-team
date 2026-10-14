@@ -16,7 +16,7 @@ import type { DockerClient } from '../src/orchestrator/index.ts';
 import {
   assertFailedStartupLogs,
   corruptOwnedOverlay,
-  inspect,
+  inspectAsync,
   record,
   startupClient,
 } from './container-start-docker-fixture.ts';
@@ -84,8 +84,8 @@ it('registers and logs in over HTTP, explicitly starts, reaches real DSH HTML an
           'gateway-sibling@example.test',
         );
         for (const name of [`dsh-team-home-${user.id}`, `dsh-team-work-${user.id}`])
-          lifecycle.registerResource('volume', name, { 'dsh-team.user': user.id });
-        lifecycle.registerResource('container', `dsh-team-u-${user.id}`, {
+          await lifecycle.registerResourceAsync('volume', name, { 'dsh-team.user': user.id });
+        await lifecycle.registerResourceAsync('container', `dsh-team-u-${user.id}`, {
           'dsh-team.user': user.id,
         });
         // Canonical stored settings feed the production composition; no provider request is needed.
@@ -150,7 +150,7 @@ it('registers and logs in over HTTP, explicitly starts, reaches real DSH HTML an
         );
         if (typeof row.container_id !== 'string' || typeof row.dsh_cookie !== 'string')
           throw new Error('Missing ready identity');
-        const container = inspect(lifecycle, row.container_id);
+        const container = await inspectAsync(lifecycle, row.container_id);
         expect(container.Name).toBe(`/dsh-team-u-${user.id}`);
         expect(container.Image).toBe(lifecycle.imageId);
         expect(record(container.Config).Labels).toEqual({
@@ -249,9 +249,9 @@ async function withUnavailableApp(lifecycle: UserImageLifecycle, failOnce: boole
     const user = await registerInstanceUser(base, config.publicUrl, email);
     if (userId === '') userId = user.id;
     const ownership = { 'dsh-team.user': user.id };
-    lifecycle.registerResource('container', `dsh-team-u-${user.id}`, ownership);
+    await lifecycle.registerResourceAsync('container', `dsh-team-u-${user.id}`, ownership);
     for (const name of [`dsh-team-home-${user.id}`, `dsh-team-work-${user.id}`])
-      lifecycle.registerResource('volume', name, ownership);
+      await lifecycle.registerResourceAsync('volume', name, ownership);
     return user;
   };
   const state = async (cookie: string, post = false) => {
@@ -349,7 +349,11 @@ it('public unconfigured allocates nothing, full preserves ready A and same-sessi
             ['volume', `dsh-team-work-${id}`],
           ] as const) {
             expect(
-              isAbsentResource(lifecycle.command([kind, 'inspect', name], 15_000), kind, name),
+              isAbsentResource(
+                await lifecycle.commandAsync([kind, 'inspect', name], 15_000),
+                kind,
+                name,
+              ),
             ).toBe(true);
           }
         };
@@ -374,7 +378,7 @@ it('public unconfigured allocates nothing, full preserves ready A and same-sessi
           f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(a.id),
         );
         if (typeof rowA.container_id !== 'string') throw new Error('Missing ready A identity');
-        const beforeA = inspect(lifecycle, rowA.container_id);
+        const beforeA = await inspectAsync(lifecycle, rowA.container_id);
         const requests = [...f.transport.requests];
         const audits = f.database.prepare('SELECT * FROM audit_events ORDER BY id').all();
         expect(await f.state(b.cookie, true)).toEqual({ status: 'full', reason: 'full' });
@@ -387,7 +391,7 @@ it('public unconfigured allocates nothing, full preserves ready A and same-sessi
         expect(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(a.id)).toEqual(
           rowA,
         );
-        const afterA = inspect(lifecycle, rowA.container_id);
+        const afterA = await inspectAsync(lifecycle, rowA.container_id);
         expect(afterA.Id).toBe(beforeA.Id);
         expect(afterA.Config).toEqual(beforeA.Config);
         expect(afterA.HostConfig).toEqual(beforeA.HostConfig);
@@ -399,7 +403,7 @@ it('public unconfigured allocates nothing, full preserves ready A and same-sessi
         expect(await f.state(a.cookie)).toEqual({ status: 'stopped', reason: 'stopped' });
         expect(
           isAbsentResource(
-            lifecycle.command(['container', 'inspect', rowA.container_id], 15_000),
+            await lifecycle.commandAsync(['container', 'inspect', rowA.container_id], 15_000),
             'container',
             rowA.container_id,
           ),
@@ -442,14 +446,17 @@ it('public real startup error retains stopped container and volumes, then same-s
         expect(row.container_id).toBe(fault.failedId);
         if (typeof row.container_id !== 'string')
           throw new Error('Missing failed physical identity');
-        const failed = inspect(lifecycle, row.container_id);
+        const failed = await inspectAsync(lifecycle, row.container_id);
         expect(failed.Id).toBe(row.container_id);
         expect(failed.Name).toBe(`/dsh-team-u-${user.id}`);
         expect(failed.Image).toBe(lifecycle.imageId);
         expect(record(failed.Config).Labels).toMatchObject({ 'dsh-team.user': user.id });
         expect(record(failed.State).Running).toBe(false);
         expect(row.dsh_cookie).toBeNull();
-        const actual = lifecycle.command(['logs', '--tail', '1000', row.container_id], 15_000);
+        const actual = await lifecycle.commandAsync(
+          ['logs', '--tail', '1000', row.container_id],
+          15_000,
+        );
         expect(actual.status).toBe(0);
         expect(actual.error).toBeUndefined();
         assertFailedStartupLogs(row, actual.stdout + actual.stderr);
@@ -479,7 +486,7 @@ it('public real startup error retains stopped container and volumes, then same-s
         ]).toContainEqual(audits);
         expect(
           isAbsentResource(
-            lifecycle.command(['network', 'inspect', `dsh-team-net-${user.id}`], 15_000),
+            await lifecycle.commandAsync(['network', 'inspect', `dsh-team-net-${user.id}`], 15_000),
             'network',
             `dsh-team-net-${user.id}`,
           ),
@@ -534,7 +541,7 @@ it('public real startup error retains stopped container and volumes, then same-s
         expect(ready.last_error).toBeNull();
         if (typeof ready.container_id !== 'string' || typeof ready.dsh_cookie !== 'string')
           throw new Error('Missing retried ready identity');
-        const replacement = inspect(lifecycle, ready.container_id);
+        const replacement = await inspectAsync(lifecycle, ready.container_id);
         expect(replacement.Id).toBe(ready.container_id);
         expect(replacement.Image).toBe(lifecycle.imageId);
         expect(record(replacement.State).Running).toBe(true);
@@ -563,7 +570,7 @@ it('public real startup error retains stopped container and volumes, then same-s
         ).toEqual([]);
         expect(
           isAbsentResource(
-            lifecycle.command(['container', 'inspect', row.container_id], 15_000),
+            await lifecycle.commandAsync(['container', 'inspect', row.container_id], 15_000),
             'container',
             row.container_id,
           ),

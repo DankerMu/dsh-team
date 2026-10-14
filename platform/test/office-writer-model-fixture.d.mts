@@ -4,7 +4,7 @@ import type { ModelObserver } from './model-observer-fixture.ts';
 export declare function runOfficeWriterScenario(input: {
   page: CdpPage;
   rpc: (method: string, args: unknown) => Promise<Record<string, unknown>>;
-  exec: (script: string) => string;
+  exec: (script: string) => Promise<string>;
   evidence: string;
   mode: 'manual' | 'delegated';
   observer?: ModelObserver;

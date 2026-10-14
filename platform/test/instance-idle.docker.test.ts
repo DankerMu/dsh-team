@@ -3,22 +3,69 @@ import { arch, platform } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { writeSettings } from '../src/db/index.ts';
-import { inspect, record } from './container-start-docker-fixture.ts';
+import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import {
   activityUpgradeRequest,
   connectActivityPeer,
   observeActivity,
 } from './gateway-activity-fixture.ts';
-import { sendHttp } from './gateway-http-fixture.ts';
+import { observeHttp, reader, sendHttp } from './gateway-http-fixture.ts';
 import { withDockerIdleInstance, waitDockerIdle } from './instance-idle-docker-fixture.ts';
 import type { DockerIdleContext } from './instance-idle-docker-fixture.ts';
+import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 
-function expectIdleRetirement(f: DockerIdleContext): void {
+it('preserves the real gateway carrier while an owned volume observer is slow', async () => {
+  await withDockerIdleInstance(async (f) => {
+    const gateway = instanceGatewayFixture(f);
+    const original = f.lifecycle.commandAsync;
+    let delayed = 0;
+    Object.assign(f.lifecycle, {
+      commandAsync: (args: readonly string[], timeout: number) => {
+        if (
+          args[0] === 'run' &&
+          args.includes(`dsh-team-test-${f.lifecycle.runId}-idle-preservation`)
+        ) {
+          delayed++;
+          const script = args.at(-1);
+          if (script === undefined) throw new Error('Missing owned volume observer script');
+          // Real external helper delay must outlast DSH's independent heartbeat; fake time cannot drive it.
+          args = [
+            ...args.slice(0, -1),
+            `import {setTimeout as slowObserver} from 'node:timers/promises'; ${script}; await slowObserver(8000);`,
+          ];
+        }
+        return original(args, timeout);
+      },
+    });
+    try {
+      const peer = await gateway.open(f.user.cookie);
+      const read = reader(peer.socket);
+      await f.verifyVolumes();
+      // A local destroyed flag can lag queued EOF; prove the same native carrier still responds.
+      peer.socket.write(Buffer.from([0x89, 0x81, 1, 2, 3, 4, 0x79]));
+      const pong = (async () => {
+        for (;;) {
+          const header = await read(2);
+          const payload = await read((header[1] ?? 0) & 127);
+          if (((header[0] ?? 0) & 15) === 10) return payload;
+        }
+      })();
+      expect(await observeHttp(pong)).toEqual(Buffer.from('x'));
+      expect(await gateway.state(f.user.cookie)).toEqual({ status: 'running', reason: null });
+      expect(delayed).toBe(1);
+      expect(peer.socket.destroyed).toBe(false);
+    } finally {
+      gateway.close();
+    }
+  });
+});
+
+async function expectIdleRetirement(f: DockerIdleContext): Promise<void> {
   expect(f.service.status(f.user.id)).toEqual({ status: 'stopped', reason: 'stopped' });
   expect(
     isAbsentResource(
-      f.lifecycle.command(['container', 'inspect', f.containerId], 15_000),
+      await f.lifecycle.commandAsync(['container', 'inspect', f.containerId], 15_000),
       'container',
       f.containerId,
     ),
@@ -37,14 +84,14 @@ function expectIdleRetirement(f: DockerIdleContext): void {
       details: '{"reason":"idle"}',
     },
   ]);
-  f.verifyVolumes();
+  await f.verifyVolumes();
 }
 
 it('real DSH without connections or tasks is retired only after a full idle interval with retained home and work volumes', async () => {
   expect(platform()).toBe('linux');
   expect(arch()).toBe('x64');
   await withDockerIdleInstance(async (f) => {
-    const items = f.rpc('session/list', { _request: {} }).items;
+    const items = (await f.rpc('session/list', { _request: {} })).items;
     if (!Array.isArray(items)) throw new Error('Missing released complete Session list');
     for (const item of items) expect(record(item).running).toBe(false);
     expect(f.app.getUserActivity(f.user.id).liveCount).toBe(0);
@@ -52,10 +99,10 @@ it('real DSH without connections or tasks is retired only after a full idle inte
     await f.checkIdle();
     f.setNow(began + 59_999);
     await f.checkIdle();
-    expect(record(inspect(f.lifecycle, f.containerId).State).Running).toBe(true);
+    expect(record((await inspectAsync(f.lifecycle, f.containerId)).State).Running).toBe(true);
     f.setNow(began + 60_000);
     await f.checkIdle();
-    expectIdleRetirement(f);
+    await expectIdleRetirement(f);
   });
 });
 
@@ -77,7 +124,7 @@ it('an open authenticated page connection to real DSH prevents retirement beyond
       await f.checkIdle();
       f.setNow(began + 5 * 60_000);
       await f.checkIdle();
-      expect(record(inspect(f.lifecycle, f.containerId).State).Running).toBe(true);
+      expect(record((await inspectAsync(f.lifecycle, f.containerId)).State).Running).toBe(true);
       expect(
         f.database
           .prepare("SELECT details FROM audit_events WHERE event_type='instance.stopped'")
@@ -90,7 +137,7 @@ it('an open authenticated page connection to real DSH prevents retirement beyond
       expect(f.service.status(f.user.id)).toEqual({ status: 'running', reason: null });
       f.setNow(began + 6 * 60_000);
       await f.checkIdle();
-      expectIdleRetirement(f);
+      await expectIdleRetirement(f);
     } finally {
       peer.socket.destroy();
       await peer.closed;
@@ -100,29 +147,29 @@ it('an open authenticated page connection to real DSH prevents retirement beyond
 
 it('a real held Agent turn in the same Web instance survives without connections and completion starts a fresh idle interval', async () => {
   await withDockerIdleInstance(async (f) => {
-    const created = f.rpc('session/create', {
+    const created = await f.rpc('session/create', {
       request: { cwd: '/data/work', agentPreset: 'standard' },
     });
     if (typeof created.sessionId !== 'string') throw new Error('Missing real Session');
     const sessionId = created.sessionId;
     const nonce = randomUUID();
-    f.control({ op: 'adopt', sessionId });
-    const running = () => {
-      const items = f.rpc('session/list', { _request: {} }).items;
+    await f.control({ op: 'adopt', sessionId });
+    const running = async () => {
+      const items = (await f.rpc('session/list', { _request: {} })).items;
       if (!Array.isArray(items)) throw new Error('Missing released task list');
       const item: unknown = items.find((value: unknown) => record(value).sessionId === sessionId);
       const status = record(item).running;
       if (typeof status !== 'boolean') throw new Error('Missing strict real running state');
       return status;
     };
-    await waitDockerIdle(() => !running());
+    await waitDockerIdle(async () => !(await running()));
     const began = Date.now();
     await f.checkIdle();
     let released = false;
     try {
-      f.control({ op: 'hold', sessionId, nonce });
+      await f.control({ op: 'hold', sessionId, nonce });
       await waitDockerIdle(() => running());
-      const holds = f.control({ op: 'status' }).holds;
+      const holds = (await f.control({ op: 'status' })).holds;
       if (!Array.isArray(holds)) throw new Error('Missing real adapter observations');
       expect(holds.map((value: unknown) => record(value))).toContainEqual({
         nonce,
@@ -134,20 +181,20 @@ it('a real held Agent turn in the same Web instance survives without connections
       expect(f.app.getUserActivity(f.user.id).liveCount).toBe(0);
       f.setNow(began + 5 * 60_000);
       await f.checkIdle();
-      expect(running()).toBe(true);
-      expect(record(inspect(f.lifecycle, f.containerId).State).Running).toBe(true);
-      f.control({ op: 'release', nonce });
+      expect(await running()).toBe(true);
+      expect(record((await inspectAsync(f.lifecycle, f.containerId)).State).Running).toBe(true);
+      await f.control({ op: 'release', nonce });
       released = true;
-      await waitDockerIdle(() => !running());
+      await waitDockerIdle(async () => !(await running()));
       await f.checkIdle();
       f.setNow(began + 6 * 60_000 - 1);
       await f.checkIdle();
       expect(f.service.status(f.user.id)).toEqual({ status: 'running', reason: null });
       f.setNow(began + 6 * 60_000);
       await f.checkIdle();
-      expectIdleRetirement(f);
+      await expectIdleRetirement(f);
     } finally {
-      if (!released) f.control({ op: 'release', nonce });
+      if (!released) await f.control({ op: 'release', nonce });
     }
   });
 });
@@ -159,10 +206,10 @@ it('changing idle minutes from thirty to five affects the next real DSH decision
     await f.checkIdle();
     f.setNow(began + 5 * 60_000);
     await f.checkIdle();
-    expect(record(inspect(f.lifecycle, f.containerId).State).Running).toBe(true);
+    expect(record((await inspectAsync(f.lifecycle, f.containerId)).State).Running).toBe(true);
     writeSettings(f.database, { idleMinutes: 5 });
     await f.checkIdle();
-    expectIdleRetirement(f);
+    await expectIdleRetirement(f);
   });
 });
 
@@ -199,9 +246,9 @@ it('the same platform session resumes a retired instance with its completed conv
     if (typeof created.sessionId !== 'string') throw new Error('Missing original real Session');
     const sessionId = created.sessionId;
     // Adopt submits a genuine user message to the registered Agent and owned LlmAdapter.
-    f.control({ op: 'adopt', sessionId });
-    await waitDockerIdle(() => {
-      const status = f.control({ op: 'status' });
+    await f.control({ op: 'adopt', sessionId });
+    await waitDockerIdle(async () => {
+      const status = await f.control({ op: 'status' });
       if (!Array.isArray(status.audit) || !Array.isArray(status.sessions))
         throw new Error('Missing completed owned Agent observations');
       return (
@@ -219,7 +266,7 @@ it('the same platform session resumes a retired instance with its completed conv
         })
       );
     });
-    const owned = f.control({ op: 'status' });
+    const owned = await f.control({ op: 'status' });
     expect(owned.externalModelCalls).toBe(0);
     expect(owned.streams).toEqual([
       { sessionId, loopOwned: true, provider: 'issue83-ui-owned', model: 'owned' },
@@ -283,8 +330,8 @@ it('the same platform session resumes a retired instance with its completed conv
       Buffer.from('task12.5 original work\r\n中文会话保留\t{"rows":[3,1,4]}\n', 'utf8'),
       Buffer.from([0, 127, 128, 255, 10]),
     ]);
-    const exec = (containerId: string, script: string) => {
-      const result = f.lifecycle.command(
+    const exec = async (containerId: string, script: string) => {
+      const result = await f.lifecycle.commandAsync(
         ['exec', '--user', '1001', containerId, 'node', '--input-type=module', '-e', script],
         15_000,
       );
@@ -293,21 +340,21 @@ it('the same platform session resumes a retired instance with its completed conv
       return result.stdout.trim();
     };
     // This write occurs once, before retirement, outside adapter installation/restart.
-    exec(
+    await exec(
       f.containerId,
       `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(filePath)},Buffer.from(${JSON.stringify(bytes.toString('base64'))},'base64'),{flag:'wx'});`,
     );
-    const readBytes = (containerId: string) =>
+    const readBytes = async (containerId: string) =>
       Buffer.from(
-        exec(
+        await exec(
           containerId,
           `import {readFileSync} from 'node:fs'; process.stdout.write(readFileSync(${JSON.stringify(filePath)}).toString('base64'));`,
         ),
         'base64',
       );
-    expect(readBytes(f.containerId)).toEqual(bytes);
-    const mountMetadata = (containerId: string) => {
-      const mounts = inspect(f.lifecycle, containerId).Mounts;
+    expect(await readBytes(f.containerId)).toEqual(bytes);
+    const mountMetadata = async (containerId: string) => {
+      const mounts = (await inspectAsync(f.lifecycle, containerId)).Mounts;
       if (!Array.isArray(mounts)) throw new Error('Missing owned container mounts');
       return new Map(
         mounts.map((value: unknown) => {
@@ -317,14 +364,14 @@ it('the same platform session resumes a retired instance with its completed conv
         }),
       );
     };
-    const originalMounts = mountMetadata(f.containerId);
+    const originalMounts = await mountMetadata(f.containerId);
     expect(f.app.getUserActivity(f.user.id).liveCount).toBe(0);
 
     const began = Date.now();
     await f.checkIdle();
     f.setNow(began + 60_000);
     await f.checkIdle();
-    expectIdleRetirement(f);
+    await expectIdleRetirement(f);
     const waiting = await sendHttp(f.base, {
       path: '/',
       headers: { cookie, accept: 'text/html' },
@@ -340,7 +387,7 @@ it('the same platform session resumes a retired instance with its completed conv
       status: 'stopped',
       reason: 'stopped',
     });
-    expectIdleRetirement(f);
+    await expectIdleRetirement(f);
     const starting = await sendHttp(
       f.base,
       {
@@ -382,11 +429,11 @@ it('the same platform session resumes a retired instance with its completed conv
     );
     if (typeof row.container_id !== 'string') throw new Error('Missing ready replacement');
     expect(row.container_id).not.toBe(f.containerId);
-    const replacement = inspect(f.lifecycle, row.container_id);
+    const replacement = await inspectAsync(f.lifecycle, row.container_id);
     expect(record(replacement.State).Running).toBe(true);
     expect(replacement.Image).toBe(f.lifecycle.imageId);
-    expect(mountMetadata(row.container_id)).toEqual(originalMounts);
-    f.verifyVolumes();
+    expect(await mountMetadata(row.container_id)).toEqual(originalMounts);
+    await f.verifyVolumes();
     const homepage = await sendHttp(f.base, {
       path: '/',
       headers: { cookie, accept: 'text/html' },
@@ -399,6 +446,6 @@ it('the same platform session resumes a retired instance with its completed conv
     await requireSession();
     // Cold projection/page reads do not activate an Agent, so no suffix is justified here.
     expect(await readHistory()).toEqual(history);
-    expect(readBytes(row.container_id)).toEqual(bytes);
+    expect(await readBytes(row.container_id)).toEqual(bytes);
   });
 });

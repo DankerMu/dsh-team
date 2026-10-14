@@ -1430,3 +1430,15 @@ Idle-overlap boundary: hasStartupWork is flights-only, not a mirror of the statu
 - Extra arguments, misplaced help, password arguments and all existing admin create flows remain unchanged and do not echo supplied values.
 - Test the real source process with invalid config and empty owned directory; run built CLI with the same constraints. Keep existing creation/promotion/reset/cancellation/privacy tests. No wrapper or image-only fix.
 - Independent review covers exact parser precedence/privacy and executable evidence/lifecycle preservation. Rollback is this narrow guard; no persisted state changes.
+
+## Issue #224 asynchronous live-fixture boundary
+
+- Existing lifecycle owns Docker environment, invocation configuration, result redaction and cleanup authority. Add `commandAsync` returning the same result shape and `registerResourceAsync` awaiting exact absence before registration/creation. Share policy logic with intentionally retained non-live synchronous execution; no promise-wrapped synchronous process.
+- Preserve cwd/minimal PATH/private DOCKER_CONFIG, per-call timeout, SIGKILL, output bounds, error normalization and exact absent-resource recognition. Await child closure after timeout/overflow before settling; injected test commands must not escape into real local Docker.
+- Convert volume observer, adapter installation, live exec/inspect/RPC/control and registration paths, including startupClient helper registration/inspection. Await each original operation in order; do not parallelize observations.
+- Async predicates in waitDockerIdle and all status/hold/Session polling must be awaited. Propagate return types through all direct/transitive consumers; no obsolete synchronous live aliases.
+- Shared gateway exec also feeds managed-model acceptance. Migrate that API in place to Promise<string> and await every model-fixture consumer; observer installation/arm/readback become awaitable while native in-container observation/snapshot code stays unchanged. Preserve install-before-restart, arm-before-turn and read-before-judge ordering, hashes, bounds and original failure handling.
+- Controlled proof delays the actual external owned volume helper beyond the released heartbeat tolerance while real DSH independently emits Pings. Old fixture must lose the carrier; new async fixture preserves it through the same platform proxy and retains volume-marker assertions.
+- Original sibling, Session/history, platform-session, volume/file, account and audit assertions remain. No production/DSH/permission/deadline changes, peer-only worker workaround, fake heartbeat or retry-based acceptance.
+- Parent owns RED/GREEN/checks and integration. Disjoint producer, live-fixture consumer and shared model-evidence consumer slices share fixed APIs; higher delegation/check-execution rules govern agents, overriding skill defaults only.
+- Root-cause evidence for DELETE cancellation is tracked separately; do not change retirement budgets here. Rollback reverts the fixture cutover, with no persisted-state migration.

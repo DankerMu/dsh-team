@@ -74,9 +74,13 @@ it('lets a fresh employee use the administrator model to create exact workspace 
           phase = 'employee-startup';
           const employee = await registerInstanceUser(base, origin, 'model-employee@example.test');
           const ownership = { 'dsh-team.user': employee.id };
-          lifecycle.registerResource('container', `dsh-team-u-${employee.id}`, ownership);
+          await lifecycle.registerResourceAsync(
+            'container',
+            `dsh-team-u-${employee.id}`,
+            ownership,
+          );
           for (const name of [`dsh-team-home-${employee.id}`, `dsh-team-work-${employee.id}`])
-            lifecycle.registerResource('volume', name, ownership);
+            await lifecycle.registerResourceAsync('volume', name, ownership);
           expect(await gateway.state(employee.cookie, true)).toEqual({
             status: 'starting',
             reason: 'starting',
@@ -128,14 +132,14 @@ it('lets a fresh employee use the administrator model to create exact workspace 
           expect(replacement).not.toBe(containerId);
           containerId = replacement;
           phase = 'permission-observer-initial-observation';
-          reviewObserver.observation();
+          await reviewObserver.observation();
           const marker = `model-proof-${randomUUID()}`;
           const path = `/data/work/${marker}.txt`;
           const expected = `DSH real tool proof ${randomUUID()}`;
-          const observeFile = (file: string, contents: string) =>
+          const observeFile = async (file: string, contents: string) =>
             record(
               JSON.parse(
-                gateway.exec(
+                await gateway.exec(
                   containerId,
                   `import {existsSync,statSync,readFileSync} from 'node:fs';
 const path=${JSON.stringify(file)}, expected=Buffer.from(${JSON.stringify(contents)},'utf8');
@@ -146,7 +150,7 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
               ),
             );
           const observe = (contents: string) => observeFile(path, contents);
-          expect(observe(expected)).toEqual({ exists: false, exact: false });
+          expect(await observe(expected)).toEqual({ exists: false, exact: false });
           phase = 'native-browser';
           browser = await openMappedPage({
             origin,
@@ -169,15 +173,15 @@ process.stdout.write(JSON.stringify({exists,exact}));`,
           await waitFor(
             async () => {
               await clickAllowOnce(page, marker);
-              return observe(expected).exact === true;
+              return (await observe(expected)).exact === true;
             },
             300_000,
             'real-model-workspace-file',
           );
           await waitTurnIdle(page, 60_000, 'real-model-turn-idle');
-          expect(observe(expected)).toEqual({ exists: true, exact: true });
+          expect(await observe(expected)).toEqual({ exists: true, exact: true });
           // Qualify the exact-byte oracle without creating a file on behalf of the Agent.
-          expect(observe(`${expected}\n`)).toEqual({ exists: true, exact: false });
+          expect(await observe(`${expected}\n`)).toEqual({ exists: true, exact: false });
           expect(browser.errors.length).toBe(0);
           await captureSettledScreenshot(page, join(evidence, 'completed-task.png'));
           phase = 'real-permission-tiers';

@@ -1,7 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import type * as ChildProcessModule from 'node:child_process';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
+import { createDockerCommands } from './docker-command.ts';
 import { assertDocxReadback, runUserImage } from './user-image-fixture.ts';
-import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
+import type { DockerCommands, DockerCommand, DockerCommandResult } from './docker-command.ts';
 
+const subprocesses = vi.hoisted((): ChildProcess[] => []);
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof ChildProcessModule>();
+  return {
+    ...original,
+    spawnSync(): never {
+      throw new Error('Unexpected real synchronous Docker execution');
+    },
+    // Replace only the external executable: real child streams, signals and closure remain.
+    spawn(_binary: string, args: readonly string[], options: SpawnOptions) {
+      const child = original.spawn(
+        args[0] === 'missing-executable' ? '/dsh-team-absent-executable' : process.execPath,
+        args[0] === 'missing-executable' ? [] : ['-e', args[0] ?? ''],
+        // IPC controls the test child without changing process timeout or output behavior.
+        { ...options, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] },
+      );
+      subprocesses.push(child);
+      return child;
+    },
+  };
+});
 /** Stateful substitute for the Docker daemon boundary, including partially created resources. */
 function dockerFixture(
   failAt?:
@@ -568,5 +596,224 @@ describe('invocation-owned profile volume lifecycle', () => {
 
     assertProfileInventory(daemon, [], [[changedVolume, 'another-owner']]);
     expect(daemon.calls.some(({ args }) => args[0] === 'volume' && args[1] === 'rm')).toBe(false);
+  });
+});
+
+describe('asynchronous Docker process lifetime', () => {
+  async function withCommands(run: (commands: DockerCommands) => Promise<void>): Promise<void> {
+    const config = mkdtempSync(join(tmpdir(), 'dsh-team-command-'));
+    try {
+      await run(createDockerCommands(process.cwd(), config, false));
+    } finally {
+      rmSync(config, { recursive: true });
+    }
+  }
+
+  it('keeps the event loop responsive and preserves nonzero exit output through child closure', async () => {
+    await withCommands(async ({ commandAsync }) => {
+      let closed = false;
+      const pending = commandAsync(
+        [
+          "process.stdout.write('ready\\n'); process.once('message', () => { process.stdout.write('observed\\n'); process.stderr.write('diagnostic\\n'); process.exitCode = 7; process.disconnect(); });",
+        ],
+        5_000,
+      );
+      const child = subprocesses.at(-1);
+      child?.once('close', () => {
+        closed = true;
+      });
+      if (child?.stdout === null || child?.stdout === undefined)
+        throw new Error('Child stdout missing');
+      await once(child.stdout, 'data');
+      expect(closed).toBe(false);
+      child.send('finish');
+
+      const result = await pending;
+
+      expect(closed).toBe(true);
+      expect(result).toEqual({ status: 7, stdout: 'ready\nobserved\n', stderr: 'diagnostic\n' });
+    });
+  });
+
+  it.each([
+    // Timeout is an actual process kill contract; fake parent time would not verify OS settlement.
+    ['timeout', 'setInterval(() => {}, 1000)', 100, 'ETIMEDOUT'],
+    [
+      'overflow',
+      "process.stdout.write('x'.repeat(17 * 1024 * 1024)); setInterval(() => {}, 1000)",
+      5_000,
+      'ENOBUFS',
+    ],
+    ['spawn failure', 'missing-executable', 5_000, 'ENOENT'],
+  ] as const)('settles %s only after the child closes', async (_stage, script, timeout, code) => {
+    await withCommands(async ({ commandAsync }) => {
+      let closed = false;
+      const pending = commandAsync([script], timeout);
+      const child = subprocesses.at(-1);
+      child?.once('close', () => {
+        closed = true;
+      });
+
+      const result = await pending;
+
+      expect(closed).toBe(true);
+      expect(result.status).toBeNull();
+      expect(result.error).toMatchObject({ code });
+      if (code !== 'ENOENT') expect(child?.signalCode).toBe('SIGKILL');
+    });
+  });
+
+  it('preserves successful output and supplies EOF when no subprocess input is provided', async () => {
+    await withCommands(async ({ commandAsync }) => {
+      const result = await commandAsync(
+        [
+          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('stdin-ended\\n', () => process.disconnect()))",
+        ],
+        5_000,
+      );
+
+      expect(result).toEqual({ status: 0, stdout: 'stdin-ended\n', stderr: '' });
+    });
+  });
+
+  it('bounds combined live stdout and stderr and redacts overflow only after child closure', async () => {
+    const config = mkdtempSync(join(tmpdir(), 'dsh-team-command-'));
+    try {
+      const { commandAsync } = createDockerCommands(process.cwd(), config, true);
+      let closed = false;
+      const pending = commandAsync(
+        [
+          // Natural success would expose both streams if the aggregate limit were not enforced.
+          "process.stdout.write('x'.repeat(40 * 1024), () => process.stderr.write('y'.repeat(40 * 1024), () => process.disconnect()))",
+        ],
+        5_000,
+      );
+      const child = subprocesses.at(-1);
+      child?.once('close', () => {
+        closed = true;
+      });
+
+      const result = await pending;
+
+      expect(closed).toBe(true);
+      expect(result).toEqual({ status: null, stdout: '', stderr: 'Web Docker operation failed' });
+    } finally {
+      rmSync(config, { recursive: true });
+    }
+  });
+});
+
+describe('asynchronous lifecycle cleanup authority', () => {
+  it('retains injected failure redaction and never grants authority on a wrong-target absence', async () => {
+    const daemon = dockerFixture();
+    const command: DockerCommand = (args, timeout) => {
+      if (args[0] === 'exec') throw new Error('private-command-secret');
+      if (args.at(-1) === 'dsh-team-denied') {
+        return { status: 1, stdout: '', stderr: 'Error: No such container: dsh-team-other' };
+      }
+      return daemon.command(args, timeout);
+    };
+
+    await runUserImage(
+      'managed-policy',
+      () => undefined,
+      command,
+      async (lifecycle) => {
+        await expect(lifecycle.commandAsync(['exec', 'dsh-team-denied'], 30_000)).rejects.toThrow(
+          /^Web Docker operation failed$/,
+        );
+        expect(
+          await lifecycle.commandAsync(['container', 'inspect', 'dsh-team-denied'], 30_000),
+        ).toEqual({ status: 1, stdout: '', stderr: 'Web Docker operation failed' });
+        await expect(
+          lifecycle.registerResourceAsync('container', 'dsh-team-denied', {
+            'dsh-team.test-run': lifecycle.runId,
+          }),
+        ).rejects.toThrow('refusing cleanup authority');
+        return 'verified';
+      },
+    );
+
+    expect(daemon.calls.some(({ args }) => args.includes('dsh-team-denied'))).toBe(false);
+    assertProfileInventory(daemon);
+  });
+
+  it('deduplicates overlapping registration without permitting conflicting ownership', async () => {
+    const daemon = dockerFixture();
+    await runUserImage(
+      'managed-policy',
+      () => undefined,
+      daemon.command,
+      async (lifecycle) => {
+        const name = `dsh-team-test-${lifecycle.runId}-async`;
+        const ownership = { 'dsh-team.test-run': lifecycle.runId };
+        const first = lifecycle.registerResourceAsync('container', name, ownership);
+        ownership['dsh-team.test-run'] = 'foreign-owner';
+        const unchanged = { 'dsh-team.test-run': lifecycle.runId };
+        const second = lifecycle.registerResourceAsync('container', name, unchanged);
+        expect(() => {
+          lifecycle.registerResource('container', name, unchanged);
+        }).toThrow('registration in progress');
+        await expect(lifecycle.registerResourceAsync('container', name, ownership)).rejects.toThrow(
+          'ownership',
+        );
+        await first;
+        await second;
+        daemon.containers.set(name, lifecycle.runId);
+        await lifecycle.registerResourceAsync('container', name, unchanged);
+        return 'verified';
+      },
+    );
+
+    const removals = daemon.calls.filter(({ args }) => args[0] === 'container' && args[1] === 'rm');
+    expect(removals.map(({ args }) => args.at(-1))).toEqual([expect.stringMatching(/-async$/)]);
+    assertProfileInventory(daemon);
+  });
+
+  it('releases rejected registration so a later exact absence can register and clean the resource', async () => {
+    const daemon = dockerFixture();
+    let denied = true;
+    const command: DockerCommand = (args, timeout) => {
+      if (args.at(-1)?.endsWith('-retry') && denied) {
+        return { status: 1, stdout: '', stderr: 'permission denied' };
+      }
+      return daemon.command(args, timeout);
+    };
+    await runUserImage(
+      'managed-policy',
+      () => undefined,
+      command,
+      async (lifecycle) => {
+        const name = `dsh-team-test-${lifecycle.runId}-retry`;
+        const ownership = { 'dsh-team.test-run': lifecycle.runId };
+        await expect(lifecycle.registerResourceAsync('container', name, ownership)).rejects.toThrow(
+          'refusing cleanup authority',
+        );
+        denied = false;
+        await lifecycle.registerResourceAsync('container', name, ownership);
+        daemon.containers.set(name, lifecycle.runId);
+        return 'verified';
+      },
+    );
+
+    assertProfileInventory(daemon);
+  });
+});
+
+it('normalizes error-bearing success without exposing injected stdout, stderr or error messages', async () => {
+  const { command, commandAsync } = createDockerCommands('unused', 'unused', true, () => ({
+    status: 0,
+    stdout: 'private-stdout',
+    stderr: 'private-stderr',
+    error: new Error('private-process-error'),
+  }));
+
+  const result = await commandAsync(['exec', 'dsh-team-helper'], 30_000);
+
+  expect(result).toEqual({ status: 1, stdout: '', stderr: 'Web Docker operation failed' });
+  expect(command(['exec', 'dsh-team-helper'], 30_000)).toEqual({
+    status: 1,
+    stdout: '',
+    stderr: 'Web Docker operation failed',
   });
 });
