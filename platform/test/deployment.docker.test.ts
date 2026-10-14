@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { MODEL_CONFIG } from './admin-config-fixture.ts';
@@ -509,6 +510,125 @@ finally { db.close(); }`,
       );
       expect(adminLogin.status).toBe(200);
       expect(await adminLogin.json()).toMatchObject({ email: admin.email, role: 'admin' });
+    } finally {
+      gateway.close();
+    }
+  });
+});
+
+async function expectSocketIsolation(
+  container: Record<string, unknown>,
+  isPlatform: boolean,
+  socketSource: string,
+) {
+  if (!Array.isArray(container.Mounts)) throw new Error('Missing deployment mount inventory');
+  const mounts = container.Mounts.map((value: unknown) => record(value));
+  if (isPlatform) {
+    expect(mounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          Type: 'bind',
+          Source: '/var/run/docker.sock',
+          Destination: '/var/run/docker.sock',
+        }),
+      ]),
+    );
+    return;
+  }
+  for (const mount of mounts) {
+    expect(mount.Destination).not.toBe('/var/run/docker.sock');
+    if (mount.Type !== 'bind') continue;
+    if (typeof mount.Source !== 'string') throw new Error('Missing bind source');
+    const source = await realpath(mount.Source);
+    const prefix = source.endsWith('/') ? source : `${source}/`;
+    expect(
+      source === socketSource || socketSource.startsWith(prefix),
+      'Non-platform Docker socket source exposure',
+    ).toBe(false);
+  }
+}
+
+it('publishes only the platform port and mounts the Docker socket only there with two native instances', async () => {
+  await withDeployment(async (lifecycle, start) => {
+    const { deployment, employee } = await configureDeployment(lifecycle, start);
+    const second = await registerDeploymentEmployee(
+      lifecycle,
+      deployment,
+      'second@exposure.example.test',
+    );
+    const gateway = instanceGatewayFixture({
+      base: deployment.base,
+      origin: deployment.base,
+      lifecycle,
+    });
+    const expectedIds = [];
+    try {
+      for (const user of [employee, second]) {
+        expect(await gateway.state(user.cookie, true)).toEqual({
+          status: 'starting',
+          reason: 'starting',
+        });
+        await gateway.ready(user.cookie);
+        const instance = await inspectAsync(lifecycle, `dsh-team-u-${user.id}`);
+        expect(record(instance.State).Running).toBe(true);
+        expectedIds.push(instance.Id);
+      }
+      const platform = await inspectAsync(lifecycle, 'dsh-team-platform');
+      expectedIds.push(platform.Id);
+      const project = record(record(platform.Config).Labels)['com.docker.compose.project'];
+      if (typeof project !== 'string') throw new Error('Missing deployment project identity');
+      const ids = new Set<string>();
+      for (const label of [
+        `${OWNER_LABEL}=${lifecycle.runId}`,
+        `com.docker.compose.project=${project}`,
+        `dsh-team.user=${employee.id}`,
+        `dsh-team.user=${second.id}`,
+      ]) {
+        const args = [
+          'ps',
+          '-a',
+          '--filter',
+          `label=${label}`,
+          '--format',
+          '{{.ID}}',
+          '--no-trunc',
+        ];
+        const listed = output(await lifecycle.commandAsync(args, 30_000), args);
+        for (const id of listed.trim().split('\n').filter(Boolean)) ids.add(id);
+      }
+      expect([...ids]).toEqual(expect.arrayContaining(expectedIds));
+      const socketSource = await realpath('/var/run/docker.sock');
+      const publications = new Set<string>();
+      for (const id of ids) {
+        const container = await inspectAsync(lifecycle, id);
+        const host = record(container.HostConfig);
+        const ports = record(record(container.NetworkSettings).Ports);
+        const isPlatform = id === platform.Id;
+        expect(host.PublishAllPorts).toBe(false);
+        expect(host.NetworkMode).not.toMatch(/^(?:host$|container:)/);
+        const configured = record(host.PortBindings ?? {});
+        if (isPlatform) {
+          const portKey = `${String(deployment.port)}/tcp`;
+          expect(Object.keys(configured)).toEqual([portKey]);
+          expect(configured[portKey]).toEqual([
+            expect.objectContaining({ HostPort: String(deployment.port) }),
+          ]);
+          // Image EXPOSE entries with null bindings are not published host ports.
+          expect(Object.keys(ports).filter((key) => ports[key] !== null)).toEqual([portKey]);
+          const effective: unknown = ports[portKey];
+          if (!Array.isArray(effective)) throw new Error('Missing effective platform publication');
+          for (const binding of effective) {
+            expect(record(binding).HostPort).toBe(String(deployment.port));
+            publications.add(`${String(record(binding).HostPort)}/tcp`);
+          }
+        } else {
+          expect(configured, 'Non-platform configured publication').toEqual({});
+          for (const binding of Object.values(ports))
+            expect(binding, 'Non-platform effective publication').toBeNull();
+        }
+        await expectSocketIsolation(container, isPlatform, socketSource);
+      }
+      expect([...publications]).toEqual([`${String(deployment.port)}/tcp`]);
     } finally {
       gateway.close();
     }

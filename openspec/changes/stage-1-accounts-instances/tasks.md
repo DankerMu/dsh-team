@@ -1300,7 +1300,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - [x] 18.2 `deploy/compose.yml`：平台服务（容器名固定为 `dsh-team-platform`），挂载 Docker socket、数据目录、覆盖层目录（宿主和容器内同一路径），只发布平台一个端口；变量来自仓库根目录 `.env.example` 的拷贝，不另建示例文件。加入 `pnpm test:deploy` 入口（`package.json`、`AGENTS.md`、CI）。验证：`pnpm test:deploy`——`docker compose up -d` 后 `/healthz` 正常；创建管理员后能登录后台；配置模型后新员工注册并进入实例（规格“一条命令起全套”，对话部分由 15.6 覆盖）。
 - [x] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本分别比对 `config.ts` 读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与根目录 `.env.example` 中对应的变量名，拒绝未列出或未被消费的配置项，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在任一对应清单不一致时失败（在 `scripts/test-guardrails.sh` 里加拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
 - [x] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
-- [ ] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。
+- [x] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。
 - [ ] 18.6 前置代理下的 HTTPS。验证：`pnpm test:deploy`——在 compose 里临时加一个终结 TLS 的代理容器（自签证书），对外地址配为 `https://`、开启仅 HTTPS 发送、代理地址填入受信代理后，登录、工作台和长连接都正常，平台会话 cookie 带 `Secure`，登录的审计记录里来源地址是客户端的而不是代理的（规格“可在前置代理后使用 HTTPS”）。
 - [ ] 18.7 部署文档 `docs/DEPLOY.md`：前置条件、构建两个镜像、填写配置、启动、创建管理员、配置模型、在目标机执行沙箱探针，以及本阶段不提供的功能和隔离的已知边界（实例能访问宿主机所在内网的其他地址；模型密钥在实例内可读）。验证：在 giap-vps 上从一份干净的检出只按文档操作，完成 18.2 的全部步骤，结束后删除所有带 `dsh-team` 前缀的容器、镜像、卷和网络；文档里列出了 `instance-isolation` 规格“已知边界写明”要求的每一条（规格“部署文档”“已知边界写明”）。
 
@@ -1374,3 +1374,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Error/cleanup/concurrency: same fixed-name lock across removal/recreation/final drain, exact owner labels/ID and absent-resource checks, unchanged original caller-failure regression; no forced-stop proof or global cleanup.
 - Evidence: known-good deployment, real lost-data negative control, restored positive; local check/strict fixture, independent review and frozen-head standalone/full Docker with empty independent inventories. No runtime/schema/DSH/permission changes intended.
 - 实测：真实候选部署4/4通过（58.26s），新用例保留两实例物理生命周期与各自native Session、账号、model投影/settings摘要、原审计。仅在旧owner退役后将测试自有数据目录替换为空目录的负对照，复建后原管理员会话返回401而非200，4项中仅持久化用例失败（56.79s）；两次owned容器/卷/网络/镜像及活动unit独立清单均为空。候选localcheck2152unit/1135integration、重复率2.84%、strict5/5通过；恢复原候选的冻结SHA standalone/fullDocker与CI仍是合并门禁。
+
+## Issue #95 risk/evidence map (task18.5 only)
+
+- Expanded: auth/resource/evidence boundary with two running employee containers; actual configured/effective publication and socket-source/destination inventories, no reliance on EXPOSE or only known-container filtering.
+- Error/ownership: read-only discovery scoped to invocation/project/exact employee labels; new discoveries never grant cleanup authority. Existing lock, immutable-ID owner drainage, failure preservation and canonical registered-target cleanup unchanged.
+- Characterization evidence: known-good, separately rejected loopback publication and alternate-destination socket control, restored clean candidate; localcheck/strict, independentreview, exact-head standalone/fullDocker/CI and independent empty owned inventories. No provider/UI or broader isolation claim.
+- 实测：真实候选5/5通过（75.06s）；独立loopback随机发布和只读socket挂到`/engine.sock`的负对照均仅使新用例在对应断言失败（77.20s、75.42s），四项原测试仍通过，两次最终容器/卷/网络/镜像及活动unit清单均为空。初始新断言误计EXPOSE的null条目已按既定规格修正；初版port控制误用未创建的生命周期卷名，自动生成两个无标签卷，用户明确授权后按精确名称无force删除，此次手动恢复不冒充自动清理。修正控制移除无用卷依赖；最终源码不含控制注入。localcheck2152unit/1135integration、重复率2.84%、strict5/5通过；独立审查及冻结SHA standalone/fullDocker/CI仍为合并门禁。
