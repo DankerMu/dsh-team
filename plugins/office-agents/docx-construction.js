@@ -197,17 +197,19 @@ export function apply(ctx) {
       required: ['path', 'paragraphs'],
       additionalProperties: false,
       properties: {
-        path: { type: 'string', minLength: 1, maxLength: 4096 },
+        path: {
+          type: 'string',
+          description: 'New workspace destination; at most 4096 UTF-8 bytes.',
+        },
         paragraphs: {
           type: 'array',
-          minItems: 1,
-          maxItems: 64,
+          description: '1–64 paragraphs; serialized text array at most 32768 UTF-8 bytes.',
           items: {
             type: 'object',
             required: ['text'],
             additionalProperties: false,
             properties: {
-              text: { type: 'string', maxLength: 4096 },
+              text: { type: 'string', description: 'At most 4096 Unicode code points.' },
               style: { type: 'string', enum: [...STYLES] },
             },
           },
@@ -221,9 +223,10 @@ export function apply(ctx) {
         additionalProperties: false,
         properties: {
           path: { type: 'string' },
-          bytes: { type: 'integer', minimum: 1, maximum: MAX_DOCX_BYTES },
-          sha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
-          uid: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+          // rc.2 accepts structural JSON Schema only; receipt() enforces bounds.
+          bytes: { type: 'integer' },
+          sha256: { type: 'string' },
+          uid: { type: 'integer' },
         },
       },
       render: (_args, value) => [

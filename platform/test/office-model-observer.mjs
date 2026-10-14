@@ -18,7 +18,7 @@ function trackChildLifecycle(state, event) {
       break;
     case 'turn/start':
       state.calls.clear();
-      state.turn = state.eligible && state.writer ? data.turn : undefined;
+      state.turn = data.turn;
       state.promptSeq = undefined;
       break;
     case 'turn/end':
@@ -34,6 +34,8 @@ function trackChildLifecycle(state, event) {
 function trackConstructionCall(state, event) {
   const data = event.data;
   if (
+    !state.eligible ||
+    !state.writer ||
     data.name !== 'build_docx' ||
     data.turn !== state.turn ||
     !Number.isSafeInteger(data.turn) ||
@@ -63,6 +65,8 @@ function consumeConstructionResult(state, event) {
   const data = event.data;
   const message = data.message;
   if (
+    !state.eligible ||
+    !state.writer ||
     data.turn !== state.turn ||
     message?.role !== 'tool' ||
     message.source?.kind !== 'tool' ||

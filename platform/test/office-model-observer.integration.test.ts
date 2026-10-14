@@ -69,16 +69,18 @@ process.stdout.write(JSON.stringify(bytes?{status:'parsed',path,uid:1001,bytes:b
 
 function startWriter(emit: Listener, session: Session = CHILD) {
   emit(session, {
-    type: 'subagent/descriptor',
-    seq: 1,
-    data: { version: 1, mode: 'one-shot', provider: 'spawn', label: 'notice' },
-  });
-  emit(session, {
     type: 'agent-preset/selected',
-    seq: 2,
+    seq: 1,
     data: { agentPreset: 'office-writer' },
   });
-  emit(session, { type: 'turn/start', seq: 3, data: { turn: 1 } });
+  // rc.2's one-shot driver appends its descriptor from the first pre-step,
+  // after the loop has opened the turn but before committing the user prompt.
+  emit(session, { type: 'turn/start', seq: 2, data: { turn: 1 } });
+  emit(session, {
+    type: 'subagent/descriptor',
+    seq: 3,
+    data: { version: 1, mode: 'one-shot', provider: 'spawn', label: 'notice' },
+  });
   emit(session, {
     type: 'user/message',
     seq: 4,
