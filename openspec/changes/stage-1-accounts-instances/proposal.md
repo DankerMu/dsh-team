@@ -644,3 +644,10 @@
 - Reuse the existing managed-model lifecycle, browser, real administrator model and `.run/issue82` evidence custody. Preserve all #82/#84/#85 cases, provider/key gates, deadlines, ownership and cleanup.
 - Evidence floor: real native picker/projection/selection-event binding; correlated prompt and completed turn; read-only python-docx parse of the actual unique requested workspace file; valid/invalid/missing-field judge controls and actual parser qualification; screenshots/zero errors; full checks, expanded review and exact-head Docker/model/CI.
 - Non-goals: #89 natural-language delegation, #90 per-preset task catalog, Office rendering, other Agents, production platform/plugin/image behavior, or test-side document creation in the acceptance workspace. Human review remains deferred to Epic end.
+
+## Issue #221 fixture
+
+- Bugfix; expanded because the shared administrator CLI is a public entrypoint with credential/privacy boundaries. Prerequisite to #91's unchanged image smoke, not an image implementation change.
+- Exact standalone `--help` returns0/stdout usage before config, TTY, terminal, signals or database lifecycle. Every other argument shape preserves existing rejection and privacy.
+- Evidence: actual process RED→GREEN under invalid config/non-TTY/no data, unit argument boundaries, full existing CLI lifecycle suite, built-entry smoke, `pnpm check`, independent review and protected CI/Docker.
+- Parent-inline fixture/implementation follows the single-mapped-slice delegation rule; no new parser, aliases, dependencies, model calls or authentication behavior.

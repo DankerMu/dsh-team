@@ -31,6 +31,29 @@ import { sessionCookieToken } from './auth-fixture.ts';
 const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
 
 describe('administrator deployment command', () => {
+  it('prints standalone help with invalid configuration and no terminal or data side effects', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dsh-team-cli-help-'));
+    try {
+      const result = spawnSync(process.execPath, [cliPath, '--help'], {
+        cwd: directory,
+        env: { PLATFORM_PUBLIC_URL: 'invalid', PLATFORM_DATA_DIR: join(directory, 'data') },
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 3000,
+        killSignal: 'SIGKILL',
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('admin create');
+      expect(result.stderr).toBe('');
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects piped administrator creation without exposing arguments or creating data', () => {
     const directory = mkdtempSync(join(tmpdir(), 'dsh-team-cli-'));
     const email = 'user@example.com';
