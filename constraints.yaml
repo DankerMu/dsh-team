@@ -203,7 +203,7 @@ verification:
       required_at: "L3+"
     real_model_tool:
       command: "pnpm test:model"
-      evidence: "trusted giap-vps actual Actions execution on approved SHA; missing-key rejection before provisioning; real administrator model configuration before fresh public employee identity; native task, absent-before/exact workspace bytes, no personal model setup; manual native office-writer selection with correlated prompt/completed turn and newly created python-docx-readable DOCX containing title/addressee/matter/issuer/date; screenshots/zero errors and owned cleanup"
+      evidence: "trusted giap-vps actual Actions execution on approved SHA; missing-key rejection before provisioning; real administrator model configuration before fresh public employee identity; native task, absent-before/exact workspace bytes, no personal model setup; manual writer selection and natural-language general-to-native-writer-child delegation with parent/call/catalog/prompt/turn correlation, each producing a new python-docx-readable DOCX containing title/addressee/matter/issuer/date; screenshots/zero errors and owned cleanup"
       required_at: "L3+"
     docker_ci_evidence:
       command: "pnpm verify:docker-evidence"
