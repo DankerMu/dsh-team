@@ -4,7 +4,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
 const load = (name) => import(pathToFileURL(require.resolve(name)).href);
 const { LlmAdapter, createUserMessage, ToolCallId } = await load('@deepseek-ai/dsh-llm');
@@ -54,6 +55,15 @@ async function waitReleased(directive, signal) {
     signal.throwIfAborted();
   } finally {
     signal.removeEventListener('abort', abort);
+  }
+}
+
+async function quietProcess() {
+  assert.equal(process.pid, 1, 'copy control requires the actual DSH process as PID1');
+  const deadline = Date.now() + 5000;
+  while (readdirSync('/proc').some((entry) => /^\d+$/.test(entry) && entry !== '1')) {
+    assert(Date.now() < deadline, 'owned foreground processes did not settle');
+    await delay(10);
   }
 }
 
@@ -117,6 +127,17 @@ function protocol(ctx) {
       });
       directive.entered.resolve();
       if (directive.mode === 'hold') await waitReleased(directive, options.signal);
+      const call = directive.calls?.[directive.position++];
+      if (call) {
+        if (call.quiet) await quietProcess();
+        yield* chunks({
+          type: 'tool-call',
+          id: ToolCallId(randomUUID()),
+          name: call.name,
+          arguments: JSON.stringify(call.arguments),
+        });
+        return;
+      }
       if (directive.mode === 'write' && !issued.has(options.sessionId)) {
         issued.add(options.sessionId);
         yield* chunks({
@@ -142,10 +163,12 @@ function protocol(ctx) {
     },
     { prepend: true },
   );
-  function task(mode = 'complete') {
+  function task(mode = 'complete', calls) {
     const token = PREFIX + randomUUID();
     const directive = {
       mode,
+      calls,
+      position: 0,
       path: '/data/work/office-effect-' + randomUUID(),
       content: 'Owned office effect\n',
       entered: Promise.withResolvers(),
@@ -669,6 +692,30 @@ export function apply(ctx) {
     ) {
       res.writeHead(404);
       res.end();
+      return;
+    }
+    if (process.env.DSH_TEAM_OFFICE_COPY_COUNTER === '1') {
+      res.writeHead(202);
+      res.end();
+      try {
+        const { copyCounterexample } = await import(
+          pathToFileURL('/data/home/office-copy-scenario.mjs').href
+        );
+        const input = await copyCounterexample(ctx, fixture, {
+          create,
+          createUserMessage,
+          eventsOf,
+          quietProcess,
+        });
+        writeFileSync('/data/home/office-copy-report.json', JSON.stringify(input));
+        process.exit(0);
+      } catch (error) {
+        writeFileSync(
+          '/data/home/office-copy-failure.json',
+          JSON.stringify({ name: error.name, message: error.message }),
+        );
+        process.exit(1);
+      }
       return;
     }
     try {
