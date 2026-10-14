@@ -17,6 +17,20 @@ using the image's Python/python-docx, plus the bundle's `official-writing`
 guidance. Ordinary user/project skill discovery remains available. No document
 renderer, RAGFlow integration or additional specialist Agent is introduced.
 
+General's production persona distinguishes substantive writing from ordinary
+file operations: notices and materials, including short ones, go through the
+native `subagent` tool before parent authoring. The tool takes a short
+`description` and self-contained `prompt`, not a preset identifier; the host
+plugin below selects writer. Include the user's facts and output path because
+the spawn child does not inherit the parent conversation. General waits, then
+verifies and may correct the real artifact; unavailable delegation is reported,
+not replaced with parent-only writing. The shared `official-writing` skill
+preserves that role boundary instead of turning its general caller into a writer.
+All existing tools and skill discovery remain available, including ordinary
+file work and post-child checks. These instructions do not constitute proof of
+model compliance: native child contribution in the unchanged real-model task is
+the acceptance gate.
+
 The host plugin selects `office-writer` on genuine fresh, unseeded, direct
 one-shot children of `office-general`, through the released awaited creation
 hook and native blank-Agent preset selection. It does not replace the spawn
