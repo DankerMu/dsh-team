@@ -12,7 +12,7 @@
 
 ## 3. Integrate and close the blocker
 
-- [ ] 3.1 Review the full combined diff with three independent expanded seats, adjudicate all findings including PR216's attribution/readiness findings, and record a clean gate on the final candidate; publish the replacement PR and explicitly supersede PR216 rather than stack it.
+- [ ] 3.1 Review the full combined diff with four independent high-risk seats, adjudicate all findings including PR216's attribution/readiness findings, and record a clean gate on the final candidate; publish the replacement PR and explicitly supersede PR216 rather than stack it.
 - [ ] 3.2 Pass final exact-head full `pnpm test:docker`, trusted model acceptance and required CI; inspect screenshots and independent cleanup evidence, publish the Chinese work summary, then perform the protected merge and reconcile #217/#89 without reducing either acceptance criterion.
 - [ ] 3.3 Archive only this standalone change through the standard protected follow-up, verify the modified canonical office requirement retains all old scenarios, and leave the shared Epic fixture open while resuming the remaining DAG.
 
