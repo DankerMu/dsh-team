@@ -96,9 +96,45 @@ an explicitly deterministic, test-only adapter: actual writer composition,
 pre-turn selection, cold reads/resume, concurrent siblings, exclusions, real
 three-tier tool effects, cancellation and missing/broken-target cleanup.
 Evidence is retained under `.run/issue213/`; no external model is called by Docker tests.
-Manual writer DOCX is covered by `pnpm test:model`. Real-model natural-language
-delegation remains issue #89 / task17.4, followed by task17.5 registration;
-these native protocol checks do not substitute for those acceptance tasks.
+The real-model acceptance tasks below exercise both presets; deterministic
+native protocol checks do not substitute for either acceptance task.
+
+## Preset acceptance tasks
+
+Run from the repository root on trusted giap-vps, with the pinned Node/pnpm,
+Linux amd64 Docker and `CHROME_BIN` browser runtime. The real-provider credential
+is supplied through `DMXAPI_KEY` in the trusted verification environment, never
+through a browser, command argument or committed file.
+
+| Preset                           | Acceptance task                                        | Command           | Required result                                                                                                                                                                                                                                                                                   |
+| -------------------------------- | ------------------------------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `office-writer` / 公文与材料写作 | 17.3: manually select writer and request a notice      | `pnpm test:model` | The actual requested DOCX opens with python-docx and contains the task's title, recipient, matter, sign-off and date; native evidence binds the selected writer to the completed turn.                                                                                                            |
+| `office-general` / 综合办公      | 17.4: submit the same natural-language task to general | `pnpm test:model` | A genuine native writer child performs successful structured `build_docx` construction for the requested target, correlated with its Session/turn/call and pre-parent-resumption artifact; the final DOCX opens and contains all five task fields. Copying an already completed DOCX alone fails. |
+
+Both rows intentionally use the existing combined acceptance command:
+`platform/test/managed-model.model.test.ts` runs manual writer and delegated
+general scenarios sequentially in the same real-provider lifecycle, alongside
+the existing model and permission checks. One successful run covers both rows;
+there is no separate per-preset test-name filter or second implementation.
+Parent facts/drafts and later parent edits remain allowed; the delegated task
+does not certify independent content authorship or rendered page layout.
+
+Missing or empty `DMXAPI_KEY` makes this shared entry exit nonzero with
+`DMXAPI_KEY is required for real-model verification` before provisioning.
+Neither acceptance task is skipped or reported as passed. To check only this
+failure path without invoking a provider:
+
+```sh
+env -u DMXAPI_KEY pnpm test:model
+```
+
+Real runs retain sanitized native facts, artifact checks and screenshots under
+`.run/issue82/model-<runId>/`, including `office-docx.json`,
+`office-delegation.json` and `browser-health.json`. Successful acceptance needs
+both scenario results, zero browser errors and owned-resource cleanup—not
+merely the existence of an evidence directory. Trusted CI additionally requires
+the approved source-SHA invocation channel and independent retirement; do not
+rerun model acceptance without that authorization.
 
 ## Structured DOCX construction
 

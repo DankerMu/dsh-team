@@ -1224,7 +1224,7 @@ Execution order: fixture review/strict validation → qualify review-provenance 
 - [x] 17.2 `plugins/office-agents/`：`office-general`（默认）和 `office-writer` 两个预设，各有标识、中文名、职责、指令、Skills、工具清单、版本、启用状态；工具清单里没有联网搜索和网页抓取。验证：`pnpm test:docker`——选择器里两个预设都在且默认是综合办公；实例里生效的工具清单不含联网工具；一个检查脚本确认八项字段都有值（规格“预置两个办公 Agent”“办公 Agent 没有联网工具”）。
 - [x] 17.3 手动选择公文写作生成 DOCX。验证：`pnpm test:model`——选择 `office-writer` 提出通知任务，工作目录出现能被解析库打开的 DOCX，正文含标题、主送对象、事项、落款和日期（规格“手动指定专业 Agent 真实生效”）。
 - [x] 17.4 综合办公下的自然语言委派。验证：`pnpm test:model`——在 `office-general` 下提出同一任务，出现由该 Session 派生、使用 `office-writer` 的子 Session；子通过生产操作对请求目标执行结构化 DOCX 构造，并以原生 Session/turn/call 成功结果和父恢复前产物关联，最终文件可打开。按用户明确批准的契约允许父提供事实/草稿，不认证独立内容作者身份；仅复制成品不通过，原提示、权限和父后续编辑保留（规格“自然语言任务由综合办公委派”）。
-- [ ] 17.5 把 17.3、17.4 登记为两个预设各自的验收任务，写进 `plugins/office-agents/` 的说明文件。验证：说明文件列出每个预设的验收命令；`DMXAPI_KEY` 缺失时两个任务失败而不是跳过（规格“每个 Agent 有可执行的验收任务”）。
+- [x] 17.5 把 17.3、17.4 登记为两个预设各自的验收任务，写进 `plugins/office-agents/` 的说明文件。验证：说明文件列出每个预设的验收命令；`DMXAPI_KEY` 缺失时两个任务失败而不是跳过（规格“每个 Agent 有可执行的验收任务”）。
 
 Suggested fixture level: expanded - 改动关键路径 `images/dsh-user/` 的预置内容，并决定每个实例里生效的工具清单
 Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行，证明机制可用）
@@ -1282,6 +1282,15 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - 最终门禁阻塞：9c958ec 的可信模型Actions38520587332失败（1/1，suite510.43s）。完整父历史已结束、cursor77/hasMore=false；subagent调用0、catalog0、derived子Session0，父直接调用bash7/write1并生成37,893字节五字段DOCX。这次失败发生在无子Session处，不是新的进程归因检查误拒；早期通过只证明有时委派，不能覆盖当前反例。原始日志、原生计数、实际截图及invocation fdfb9f55的独立七资源/密钥通道/SSH/租约/私有目录退役证据均已留存。连续三次模型门禁失败后停止自动迭代；17.4恢复未完成，PR216不得合并。保留原验收需先明确生产委派行为修复范围；不改测试请求强迫调用、不接受父独自产物替代、不再碰运气重试。
 - #217 后续：用户已批准改为可验证的 writer 结构化 DOCX 构造契约，而非独立内容作者归属；授权公开扩展点资格验证后新增必要的生产构造操作与原生执行回执。真实原生 EVID-1 已证明父完整生成、子仅复制仍被旧验收器误接受；ac0d989 保留 RED。02914cc 模型成功只属旧验收器下证据，不是最终验收。PR218 取代未合并的 PR216，生产修复见独立 fixture。2/3 模型调用已用、review fixpass1/2 不重置；未过构造正反例、权限和最终 SHA 门禁前本任务不勾选。
 - 最终交付：PR218 已受保护合并为 `0c3100eb3d3f4e81f2cab9569ad5bbd104687633`，审查/验证 head `c2f84e552892056aed5cbeb5f630cb34e23a0c98`。第三次授权模型 Actions38549936918 通过1/1（suite161.33s），真实 general 父→writer 子→build_docx call34/result35 与37,508字节五字段产物关联，最终文件同样有效；截图已检查、浏览器错误0。同 head 全量 Docker27文件74测试通过（suite612.32s），check2133unit/1116integration、四席review round2clean及CI38549941659通过；权限/资源独立退役。用户批准的构造契约下，真实复制反例已拒绝、父后改正例通过。原失败保留为历史，当前阻塞解除；独立 fixture 单独归档，共享阶段保持开放。
+
+### Issue #90 risk/evidence map (task17.5 only)
+
+- Documentation-only compact slice: register the existing manual writer and delegated general acceptance paths in the canonical bundle README. The group's expanded/image classification belongs to earlier production changes; this task changes no image, tool inventory, permission, provider, test discovery or runtime behavior.
+- Preserve the single existing `pnpm test:model` lifecycle and both distinct scenario oracles. Each preset gets an explicit command/result row; the same command executes both, not two invented selectors or duplicate implementations.
+- Parent-inline documentation/fixture review follows the docs-only workflow exclusion and single-mapped-slice delegation restriction. No source-text tests or new wrappers. Shared fixture stays open.
+- Evidence required: execute the documented command with `DMXAPI_KEY` explicitly absent, observe nonzero exit and the missing-key diagnostic before provisioning; one shared preflight covers both rows, not two independent provider results. Run required `pnpm check`, strict fixture validation and protected CI/Docker gates. No new successful model invocation is authorized for documentation registration.
+- Prior critical-path human review remains in the Epic-end deferred ledger; this PR itself changes only README/fixture documentation.
+- 实测：README 两行登记同一既有命令及不同验收结果；giap-vps 上显式移除 `DMXAPI_KEY` 后运行 `pnpm test:model`，exit1 且明确报告缺失密钥，在资源配置前退出；不是两个独立模型结果。`pnpm check` 通过2133单元/1116集成、重复率2.89%，共享 OpenSpec strict valid。文档登记未再次调用真实模型；17.3/17.4 的生产成功证据仍绑定上文 c2f84e5。
 
 ## 18. 部署骨架（任务包 1.16）
 
