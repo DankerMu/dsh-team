@@ -1415,3 +1415,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Qualification: old assertions accept genuinely preclosed carriers, repaired assertions reject the same controlled inputs; stale timestamp control independently qualifies the lower bound. Normal targeted Docker acceptance then passes. No production, provider, protocol or permission change.
 - Required gates: root targeted `pnpm test:docker` on giap-vps, local check/strict fixture, four independent high-risk seats, frozen-head original full Docker/CI and empty independent inventories; inline fixture admission disclosed, advisor unavailable. Complete before final Epic disconnect acceptance.
 - 实测：在真实giap-vps原测试中于管理动作前销毁并await目标carrier，旧断言仍4/4通过（91.73s），直接暴露false acceptance；加入存活前置与单调时钟下界后，同一提前关闭控制使禁用/重启两用例在动作前断言失败，另两项通过（81.02s）。独立将实际close回执时间减60000ms的控制，两用例均在时间下界失败（155.78s），没有以存活检查替代时间约束。无控制的真实禁用/重启4/4通过（90.35s）；每次独立四类资源和活动unit清单均为空。check2152unit/1135integration、dup2.84%、strict5/5通过。原始物理停止、兄弟实例、账号/平台会话、Session历史与文件卷断言及5秒门槛全部保留；冻结SHA审查/fullDocker/CI仍为合并门禁，历史no-save关闭来源仍未知。
+
+## Issue #99 risk/evidence map (task19.2 only)
+
+- Auth/protocol/tenant identity: real A/B platform sessions and native logical follow streams, exact own snapshot identity/title, B requests live A address and receives correlated session/not-found with no content item.
+- Async/evidence/compatibility: own live rename events and B's same-carrier continuation after rejection; bounded waits and unexpected close/error fail. Preserve seven existing deployment scenarios and canonical RPC behavior; raw101/Pong is not this oracle.
+- Resource/path safety: invocation-owned clients/resources, listeners before send and finally closure; original Compose lock/drainage/cleanup unchanged. No provider/browser-render or internal-network claim.
+- Required evidence: wrong-upstream WS negative control then restored positive, root deployment/check/strict fixture, four independent high-risk seats, frozen-head standalone/fullDocker/CI and independent empty inventories. Parent-inline fixture admission disclosed; no production or DSH changes.

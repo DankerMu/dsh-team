@@ -690,3 +690,10 @@
 - Test-oracle bugfix, expanded: destructive administrator lifecycle evidence must distinguish a live target closed after dispatch from an already-settled carrier. No production disconnect cause is established.
 - Scope only existing disable/restart Docker acceptance; preserve original five-second bounds, sibling/physical/account/platform-session/native-history/file/volume assertions. Raw WebSocket carriers are not logical Session streams.
 - Parent-inline mapped repair/admission disclosed; qualify both old false acceptance and corrected rejection with real preclosed owned carriers, then normal runtime/check/strict fixture, four-seat review, exact-head full Docker and protected CI. No provider, retry, deadline or DSH changes.
+
+## Issue #99 fixture
+
+- Characterization/Standard, expanded instead of compact because genuine multiplexed Session transport and cross-tenant confidentiality require protocol-aware evidence and four independent lenses.
+- Task19.2 only: B's authenticated long connection sends A's native Session address and receives no A content. Reuse delivered Compose/two real employees/native RPC setup; no model calls or production/DSH changes. #98 and prerequisite #204 are merged.
+- Require real logical session/follow streams with owned positive snapshots/live events, foreign-address typed rejection, and continued B delivery on the same carrier. A101/Pong or a timeout alone cannot pass.
+- Parent-inline mapped implementation/fixture admission disclosed; advisor unavailable. Wrong-upstream semantic control, restored normal deployment, check/strict, independent review and frozen-head standalone/fullDocker/CI with empty owned inventories remain gates.
