@@ -191,7 +191,9 @@ export function startupClient(lifecycle: UserImageLifecycle) {
       if (method === 'POST' && path === '/networks/create')
         await registerCreatedNetwork(lifecycle, body);
       const helperCreate =
-        method === 'POST' && path.startsWith('/containers/create?name=dsh-team-compose-');
+        method === 'POST' &&
+        (path.startsWith('/containers/create?name=dsh-team-compose-') ||
+          path.startsWith('/containers/create?name=dsh-team-restore-'));
       let helperName = '';
       let userId = '';
       if (helperCreate) {
@@ -204,7 +206,7 @@ export function startupClient(lifecycle: UserImageLifecycle) {
         userId = user;
         await lifecycle.registerResourceAsync('container', helperName, {
           'dsh-team.user': userId,
-          'dsh-team.role': 'managed-composition',
+          'dsh-team.role': String(labels['dsh-team.role']),
           'dsh-team.invocation': invocation,
         });
       }

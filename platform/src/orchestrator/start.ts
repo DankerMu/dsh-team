@@ -1,5 +1,3 @@
-import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import { recordAuditEvent } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import {
@@ -13,6 +11,7 @@ import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
 import { containerId, object, ownedContainer, resolvedImageId } from './identity.ts';
+import { readSeccompPolicy, requireAbsent, runHomeHelper } from './home-helper.ts';
 import { requireUnpublished, upstreamHost, verifiedPlatform } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import {
@@ -37,19 +36,8 @@ import type { StartResult, StartUserContainerInput } from './start-identity.ts';
 // Composition may load the installed Web profile; a hung helper must not retain home access.
 const START_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
-const MAX_COMPOSITION_BYTES = 1024 * 1024;
 
-async function requireAbsent(client: DockerClient, name: string): Promise<void> {
-  try {
-    await client.json('GET', `/containers/${name}/json`);
-  } catch (error) {
-    if (error instanceof DockerHttpError && error.statusCode === 404) return;
-    throw error;
-  }
-  throw new Error('Canonical user container already exists');
-}
-
-async function composition(
+function composition(
   client: DockerClient,
   cleanupClient: DockerClient,
   userId: string,
@@ -57,99 +45,10 @@ async function composition(
   imageId: string,
   seccomp: string,
 ): Promise<ManagedComposition> {
-  const invocation = randomUUID();
-  const name = `dsh-team-compose-${userId}-${invocation}`;
-  const labels = {
-    'dsh-team.user': userId,
-    'dsh-team.role': 'managed-composition',
-    'dsh-team.invocation': invocation,
-  };
-  let attempted = false;
-  let id: string | undefined;
-  let result: ManagedComposition | undefined;
-  const failures: Error[] = [];
-  try {
-    await requireAbsent(client, name);
-    attempted = true;
-    result = await readManagedComposition(async (script) => {
-      id = containerId(
-        await client.json('POST', `/containers/create?name=${name}`, {
-          Image: imageId,
-          User: '1001',
-          Env: ['DSH_HOME=/data/home', 'DSH_TELEMETRY_DISABLED=1'],
-          Cmd: ['node', '--input-type=module', '-e', script],
-          Labels: labels,
-          HostConfig: {
-            NetworkMode: 'none',
-            Privileged: false,
-            CapAdd: [],
-            SecurityOpt: [`seccomp=${seccomp}`],
-            Mounts: [{ Type: 'volume', Source: home, Target: '/data/home' }],
-          },
-        }),
-      );
-      const helper = ownedContainer(
-        await client.json('GET', `/containers/${id}/json`),
-        name,
-        userId,
-        imageId,
-      );
-      const helperLabels = object(object(helper.Config).Labels);
-      if (
-        helper.Id !== id ||
-        helperLabels['dsh-team.role'] !== 'managed-composition' ||
-        helperLabels['dsh-team.invocation'] !== invocation
-      ) {
-        throw new Error('Composition helper ownership mismatch');
-      }
-      await client.json('POST', `/containers/${id}/start`);
-      const exit = object(
-        await client.json('POST', `/containers/${id}/wait?condition=not-running`),
-      );
-      if (exit.StatusCode !== 0 || (exit.Error !== undefined && exit.Error !== null)) {
-        throw new Error('Composition helper failed');
-      }
-      const chunks: Buffer[] = [];
-      let size = 0;
-      for await (const chunk of client.logs(`/containers/${id}/logs?stdout=1&stderr=1`)) {
-        size += chunk.data.length;
-        if (size > MAX_COMPOSITION_BYTES) throw new Error('Composition output limit exceeded');
-        if (chunk.stream === 'stdout') chunks.push(chunk.data);
-      }
-      return Buffer.concat(chunks).toString('utf8');
-    });
-  } catch {
-    failures.push(new Error('Managed composition failed'));
-  }
-  if (attempted) {
-    try {
-      let found: unknown;
-      try {
-        found = await cleanupClient.json('GET', `/containers/${name}/json`);
-      } catch (error) {
-        if (!(error instanceof DockerHttpError && error.statusCode === 404)) throw error;
-      }
-      if (found !== undefined) {
-        const row = ownedContainer(found, name, userId, imageId);
-        const actualLabels = object(object(row.Config).Labels);
-        const actualId = containerId(row);
-        if (
-          actualLabels['dsh-team.invocation'] !== invocation ||
-          actualLabels['dsh-team.role'] !== 'managed-composition' ||
-          (id !== undefined && actualId !== id)
-        ) {
-          throw new Error('Composition cleanup ownership mismatch');
-        }
-        await cleanupClient.json('DELETE', `/containers/${actualId}?force=true`);
-      }
-    } catch {
-      failures.push(new Error('Managed composition cleanup failed'));
-    }
-  }
-  if (failures.length > 0)
-    throw new AggregateError(failures, failures.map((error) => error.message).join('; '));
-  if (result === undefined) throw new Error('Managed composition missing');
-  return result;
+  return runHomeHelper(
+    { client, cleanupClient, userId, home, imageId, seccomp, role: 'managed-composition' },
+    readManagedComposition,
+  );
 }
 
 function validateModelEnvironment(name: string, key: string): void {
@@ -162,18 +61,6 @@ function validateModelEnvironment(name: string, key: string): void {
   ) {
     throw new Error('Invalid model credential environment');
   }
-}
-
-async function readSeccompPolicy(path: string, signal: AbortSignal): Promise<string> {
-  const policy = object(JSON.parse(await readFile(path, { encoding: 'utf8', signal })));
-  if (
-    typeof policy.defaultAction !== 'string' ||
-    !/^SCMP_ACT_[A-Z_]+$/.test(policy.defaultAction) ||
-    !Array.isArray(policy.syscalls)
-  ) {
-    throw new Error('Invalid seccomp policy');
-  }
-  return JSON.stringify(policy);
 }
 
 function startupFailure(stage: string, error: unknown): Error {

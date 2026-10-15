@@ -13,6 +13,9 @@ import type { ReconciliationInput } from './reconcile.ts';
 import { NetworkCreationUnconfirmedError } from './networks.ts';
 import type { TransportConfig, TransportContext } from './transport.ts';
 import { discoverReconciliationNetworks, reconcileOrphanNetwork } from './network-reconcile.ts';
+import { restoreUserProfiles } from './profile-restore.ts';
+import type { RestoreUserProfilesInput } from './profile-restore.ts';
+import { HomeHelperUnconfirmedError } from './home-helper.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -63,6 +66,7 @@ export interface Orchestrator {
   readonly acquireDshCookie: (input: AcquireDshCookieInput) => Promise<void>;
   readonly waitForUserContainerReady: (input: AcquireDshCookieInput) => Promise<void>;
   readonly stopUserContainer: (input: StopUserContainerInput) => Promise<void>;
+  readonly restoreUserProfiles: (input: RestoreUserProfilesInput) => Promise<void>;
   readonly checkIdle: (input: IdleRetirementInput) => Promise<void>;
   readonly reconcile: (input?: { readonly signal?: AbortSignal }) => Promise<void>;
   readonly hasCapacity: (userId: string) => boolean;
@@ -229,6 +233,30 @@ function hasInstanceCapacity(
   return occupied.size < maxRunningInstances;
 }
 
+async function restoreProfiles(
+  input: RestoreUserProfilesInput & Pick<OrchestratorDependencies, 'client' | 'database'>,
+  unsettled: Set<string>,
+): Promise<void> {
+  if (unsettled.has(input.userId)) throw new Error('Profile restoration cleanup unconfirmed');
+  try {
+    await restoreUserProfiles(input);
+  } catch (error) {
+    if (error instanceof HomeHelperUnconfirmedError) unsettled.add(input.userId);
+    throw error;
+  }
+}
+
+function reserveInstanceCapacity(
+  database: DatabaseHandle,
+  pending: Set<string>,
+  userId: string,
+): boolean {
+  // Read after asynchronous reuse inspection: settings may have changed while it was pending.
+  if (!hasInstanceCapacity(database, pending, userId)) return false;
+  pending.add(userId);
+  return true;
+}
+
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
@@ -244,6 +272,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   const pending = new Set<string>();
   // Creation uncertainty is owner-lifetime state, not a subnet reservation or durable recovery claim.
   const uncertainNetworks = new Set<string>();
+  const unsettledRestorations = new Set<string>();
   let allocationTail: Promise<unknown> = Promise.resolve();
   // Coalescing metadata belongs to this owner; enqueue always uses its original FIFO.
   const activity: ActivityWritebackState = { observations: new Map() };
@@ -279,18 +308,13 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     return hasInstanceCapacity(database, pending, userId);
   }
 
-  function reserve(userId: string): boolean {
-    // Read after asynchronous reuse inspection: settings may have changed while it was pending.
-    if (!hasCapacity(userId)) return false;
-    pending.add(userId);
-    return true;
-  }
-
   async function start(input: StartupInput): Promise<StartResult> {
+    if (unsettledRestorations.has(input.userId))
+      throw new Error('Profile restoration cleanup unconfirmed');
     try {
       return await startUserContainer(
         input,
-        () => reserve(input.userId),
+        () => reserveInstanceCapacity(database, pending, input.userId),
         allocate,
         assertNetworkConfirmed,
         (signal, assertCurrent) =>
@@ -383,6 +407,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   return {
+    restoreUserProfiles: (input) =>
+      schedule(
+        input,
+        (captured) => restoreProfiles(captured, unsettledRestorations),
+        'Profile restoration failed',
+      ),
     reconcile,
     checkIdle: (input) => {
       if (idlePending.has(input.userId)) return Promise.resolve();
