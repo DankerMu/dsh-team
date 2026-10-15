@@ -1322,7 +1322,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 
 - [x] 19.1 经平台接口越界。验证：`pnpm test:deploy`——用户 B 的平台会话请求任何路径，带上 A 的用户标识、A 的 Session 标识、伪造的转发头，都只到达 B 的实例或被拒绝；B 列不出也打不开 A 的 Session 和文件；员工的平台会话请求管理接口得到 403（规格“用户看不到他人的文件和 Session”“实例不能借平台接口越权”）。
 - [x] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
-- [ ] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
+- [x] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
 - [ ] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
 - [ ] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
 - [ ] 19.6 凭据全量扫描。验证：`pnpm test:deploy`——完成注册、登录、对话、改密码、修改模型配置、禁用账号后，在审计表和平台日志里搜索用到的每一个密码、平台会话令牌、DSH 启动令牌、DSH cookie、模型密钥和一条带特定标记的消息原文，一处都找不到（规格“不记录内容和凭据”）。
@@ -1431,3 +1431,4 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - File/path/secrets: unique A home/work positives, actual source and container path denials, socket absent/read/connect failure, overlay mutation refusal and unchanged digest; no content/key diagnostics.
 - Network/resources/errors: known-live A3080/3099 at loopback/IP/alias before and after B's bounded IP/alias denials; uid1001 and same owned identities, original registration/drainage/cleanup retained.
 - Evidence/compatibility/docs: extract and reuse unchanged network scripts; qualify each major boundary with disposable controls, restore and run deployment/check/strict, four independent seats, exact-head standalone/full Docker/CI and independently empty inventories. No production/schema/packaging/provider changes; #101/#102 remain explicit non-goals.
+- 实测：giap-vps候选9/9通过150.92s；首次8pass/1fail为跨卷rename实际EXDEV的分类缺口，补充明确拒绝码并保留overwrite EROFS和摘要不变，不把EXDEV当只读证据。五类独立控制均拒绝：实际A读回结果喂给B拒绝判据（149.21s）、实际A本机IP/alias连接结果（151.26s）、只读socket曝光（255.48s，原端口/socket用例和新用例均失败）、RW覆盖层（233.74s，底层mode仍EACCES）、匿名admin guard绕过（239.55s，实得200）。额外在仅测试自有RW覆盖层上准备可写mode，真实uid1001写入后摘要变化，8pass/1预期失败147.13s；所有调用四类资源及活动unit清单均为空。wrong-subject控制不是生产跨挂载/bridge漏洞；socket调用仍EACCES，没有成功daemon操作声明。check2152unit/1135integration、dup2.82%、strict5/5通过；恢复、独立审查和最终冻结SHA standalone/fullDocker/CI仍是门禁。
