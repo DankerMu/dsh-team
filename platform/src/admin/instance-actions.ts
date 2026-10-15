@@ -18,11 +18,11 @@ interface Target {
   instanceStatus: 'running' | 'stopped' | 'starting' | 'error' | null;
 }
 const ERRORS = {
-  400: { statusCode: 400, error: 'Bad Request', message: 'Empty instance restart body required' },
+  400: { statusCode: 400, error: 'Bad Request', message: 'Empty instance action body required' },
   401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
   403: { statusCode: 403, error: 'Forbidden', message: 'Forbidden' },
   404: { statusCode: 404, error: 'Not Found', message: 'Instance not found' },
-  409: { statusCode: 409, error: 'Conflict', message: 'Instance restart conflict' },
+  409: { statusCode: 409, error: 'Conflict', message: 'Instance action conflict' },
   413: { statusCode: 413, error: 'Payload Too Large', message: 'Request body too large' },
   415: { statusCode: 415, error: 'Unsupported Media Type', message: 'JSON request body required' },
   500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
@@ -57,7 +57,7 @@ const FAILURE_RESPONSES = {
   500: ERROR_SCHEMA,
   503: ERROR_SCHEMA,
 };
-class RestartRejection extends Error {
+class InstanceActionRejection extends Error {
   readonly status: 401 | 403 | 404 | 409 | 503;
   constructor(status: 401 | 403 | 404 | 409 | 503) {
     super(ERRORS[status].message);
@@ -82,7 +82,7 @@ function validateBody(
   next();
 }
 
-export const instanceRestartRoutes: FastifyPluginCallback<{
+export const instanceActionRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   resolveSourceAddress: SourceAddressResolver;
   pending: Set<string>;
@@ -96,14 +96,14 @@ export const instanceRestartRoutes: FastifyPluginCallback<{
   function actor(request: FastifyRequest) {
     const token = readSessionCookie(request.headers.cookie);
     const current = token === null ? null : getSessionUser(database, token, Date.now(), false);
-    if (current === null) throw new RestartRejection(401);
-    if (current.role !== 'admin') throw new RestartRejection(403);
+    if (current === null) throw new InstanceActionRejection(401);
+    if (current.role !== 'admin') throw new InstanceActionRejection(403);
     return current;
   }
   function target(userId: string): Target {
     const current = select.get(userId);
-    if (current?.instanceStatus == null) throw new RestartRejection(404);
-    if (current.accountStatus !== 'active') throw new RestartRejection(409);
+    if (current?.instanceStatus == null) throw new InstanceActionRejection(404);
+    if (current.accountStatus !== 'active') throw new InstanceActionRejection(409);
     return current;
   }
   function check(request: FastifyRequest, userId: string) {
@@ -129,7 +129,31 @@ export const instanceRestartRoutes: FastifyPluginCallback<{
     }
     return { userId, status: result.status, reason: result.reason };
   }
-  async function execute(request: FastifyRequest, userIds: string[]) {
+  async function resetConfig(request: FastifyRequest, userId: string, lifecycle: InstanceService) {
+    check(request, userId);
+    await app.disconnectUserConnections(userId);
+    let admission = check(request, userId);
+    await lifecycle.resetConfig(userId, () => {
+      admission = check(request, userId);
+    });
+    recordAuditEvent(database, {
+      type: 'instance.config-reset',
+      createdAt: Date.now(),
+      actorEmail: admission.actor.email,
+      targetEmail: admission.target.email,
+      target: userId,
+      sourceAddress: resolveSourceAddress(request),
+    });
+  }
+  async function execute<Result>(
+    request: FastifyRequest,
+    userIds: string[],
+    operation: (
+      request: FastifyRequest,
+      userId: string,
+      lifecycle: InstanceService,
+    ) => Promise<Result>,
+  ): Promise<Result[]> {
     actor(request);
     if (userIds.length === 0) return [];
     // Validate and claim the whole captured set before any asynchronous or destructive operation.
@@ -140,13 +164,13 @@ export const instanceRestartRoutes: FastifyPluginCallback<{
         current.instanceStatus === 'starting' ||
         service?.hasStartupWork(userId) === true
       )
-        throw new RestartRejection(409);
+        throw new InstanceActionRejection(409);
     }
-    if (service === undefined) throw new RestartRejection(503);
+    if (service === undefined) throw new InstanceActionRejection(503);
     for (const userId of userIds) pending.add(userId);
     try {
-      const items = [];
-      for (const userId of userIds) items.push(await restart(request, userId, service));
+      const items: Result[] = [];
+      for (const userId of userIds) items.push(await operation(request, userId, service));
       return items;
     } finally {
       // These claims outlive a disconnected HTTP client, but never own service lifecycle ordering.
@@ -154,8 +178,8 @@ export const instanceRestartRoutes: FastifyPluginCallback<{
     }
   }
   function failure(error: unknown) {
-    if (error instanceof RestartRejection) return ERRORS[error.status];
-    app.log.error('Administrator instance restart failure');
+    if (error instanceof InstanceActionRejection) return ERRORS[error.status];
+    app.log.error('Administrator instance action failure');
     return ERRORS[500];
   }
   app.setErrorHandler((error, _request, reply) => {
@@ -166,35 +190,47 @@ export const instanceRestartRoutes: FastifyPluginCallback<{
     return reply.code(response.statusCode).send(response);
   });
   const body = { type: 'object', additionalProperties: false, properties: {} };
-  app.post<{ Params: { userId: string }; Body: unknown }>(
-    '/_platform/api/admin/instances/:userId/restart',
-    {
-      validatorCompiler: () => (value: unknown) => ({ value }),
-      preValidation: validateBody,
-      schema: {
-        summary: 'Restart an existing active account instance and return startup admission',
-        params: {
-          type: 'object',
-          additionalProperties: false,
-          required: ['userId'],
-          properties: { userId: { type: 'string', pattern: '^[a-z0-9]{12}$' } },
+  for (const action of ['restart', 'reset-config'] as const) {
+    app.post<{ Params: { userId: string }; Body: unknown }>(
+      `/_platform/api/admin/instances/:userId/${action}`,
+      {
+        validatorCompiler: () => (value: unknown) => ({ value }),
+        preValidation: validateBody,
+        schema: {
+          summary:
+            action === 'restart'
+              ? 'Restart an existing active account instance and return startup admission'
+              : 'Restore an existing active account instance configuration without restarting',
+          params: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['userId'],
+            properties: { userId: { type: 'string', pattern: '^[a-z0-9]{12}$' } },
+          },
+          body,
+          response: {
+            ...(action === 'restart' ? { 200: RECEIPT } : { 204: { type: 'null' } }),
+            ...FAILURE_RESPONSES,
+          },
         },
-        body,
-        response: { 200: RECEIPT, ...FAILURE_RESPONSES },
       },
-    },
-    async (request, reply) => {
-      const { userId } = request.params;
-      if (!/^[a-z0-9]{12}$/.test(userId)) return reply.code(400).send(ERRORS[400]);
-      try {
-        const items = await execute(request, [userId]);
-        return items[0];
-      } catch (error) {
-        const response = failure(error);
-        return reply.code(response.statusCode).send(response);
-      }
-    },
-  );
+      async (request, reply) => {
+        const { userId } = request.params;
+        if (!/^[a-z0-9]{12}$/.test(userId)) return reply.code(400).send(ERRORS[400]);
+        try {
+          if (action === 'reset-config') {
+            await execute(request, [userId], resetConfig);
+            return await reply.code(204).send();
+          }
+          const items = await execute(request, [userId], restart);
+          return items[0];
+        } catch (error) {
+          const response = failure(error);
+          return reply.code(response.statusCode).send(response);
+        }
+      },
+    );
+  }
   app.post<{ Body: unknown }>(
     '/_platform/api/admin/instances/restart-running',
     {
@@ -226,6 +262,7 @@ export const instanceRestartRoutes: FastifyPluginCallback<{
           items: await execute(
             request,
             selected.map(({ userId }) => userId),
+            restart,
           ),
         };
       } catch (error) {

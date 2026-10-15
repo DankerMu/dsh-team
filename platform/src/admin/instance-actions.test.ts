@@ -25,14 +25,18 @@ it.each([
   },
   { payload: '{}', status: 415, contentType: 'text/plain' },
 ])(
-  'rejects raw invalid restart input %# with $status and no effects',
+  'rejects raw invalid instance action input %# with $status and no effects',
   async ({ payload, status, contentType }) => {
     const f = await accountStatusFixture();
     try {
       f.seedRunning();
       const before = f.database.prepare('SELECT * FROM instances').all();
       const audits = f.database.prepare('SELECT * FROM audit_events').all();
-      for (const path of [`${START_USER}/restart`, 'restart-running']) {
+      for (const path of [
+        `${START_USER}/restart`,
+        'restart-running',
+        `${START_USER}/reset-config`,
+      ]) {
         const response = await f.app.inject({
           method: 'POST',
           url: `/_platform/api/admin/instances/${path}`,

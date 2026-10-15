@@ -167,6 +167,7 @@ ${user.id === a.id ? `writeFileSync(${JSON.stringify(`/data/work/${onlyA}`)},${J
       ['PUT', `users/${a.id}/status`, { status: 'disabled' }],
       ['PUT', `users/${a.id}/password`, { newPassword: 'isolated-reset-password' }],
       ['POST', `instances/${a.id}/restart`, {}],
+      ['POST', `instances/${a.id}/reset-config`, {}],
       ['POST', 'instances/restart-running', {}],
     ];
     for (const [method, path, body] of routes) {

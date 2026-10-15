@@ -517,7 +517,7 @@ Minimal mergeable slice: 8.1（纯生成函数和单元测试，约 150 行，�
 - [x] 9.8 每用户串行：同一用户的生命周期操作排队执行。验证：单元测试——对同一用户并发发起十次启动，只执行一次创建；对两个用户并发启动互不等待（规格“一个用户恰好一个实例”）。
 - [x] 9.9 同时运行上限：处于“启动中”和“运行中”的实例数达到上限时拒绝新的启动，返回“已满”，不停止已有实例；模型未配置时返回“未配置模型”，不创建容器、不记为出错。验证：`pnpm test:docker`——上限设为 1，第二个用户的启动被拒绝且第一个实例仍在运行；第一个停止后第二个能启动；清空模型设置后启动返回“未配置模型”且没有容器被创建（规格“同时运行的实例有上限”“模型未配置时不启动实例”）。
 - [x] 9.10 平台启动时对账：按标签列出容器，与 `instances` 表比对并修正状态（库里“运行中”但容器不在 → 记为已停止；容器在跑但库里没有 cookie → 停止容器）。验证：`pnpm test:docker`——人为制造这两种不一致后执行对账，状态与 Docker 一致；两个实例运行中时重建编排器对象再对账，两个实例仍被识别为运行中且可访问（规格“平台重启后实例状态一致”的“平台重启时有实例在运行”场景）。
-- [ ] 9.11 恢复配置目录：实例停止的状态下，用用户镜像起一个一次性容器，挂载该用户的状态卷，把 `profiles/` 整个换成镜像里 `/opt/dsh-team/profile-seed/` 的内容，其余不动；容器用完删除。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写坏，并在 `sessions/` 放一个文件；执行后 `profiles/` 与 `profile-seed/` 逐文件一致，`sessions/` 里的文件原样，没有残留的一次性容器。
+- [x] 9.11 恢复配置目录：实例停止的状态下，用用户镜像起一个一次性容器，挂载该用户的状态卷，把 `profiles/` 整个换成镜像里 `/opt/dsh-team/profile-seed/` 的内容，其余不动；容器用完删除。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写坏，并在 `sessions/` 放一个文件；执行后 `profiles/` 与 `profile-seed/` 逐文件一致，`sessions/` 里的文件原样，没有残留的一次性容器。
 
 Suggested fixture level: expanded - 持有 Docker socket 的关键路径，涉及并发、持久状态和凭据
 Minimal mergeable slice: 9.1（Docker 客户端、单元测试和三个真实 Docker 用例，约 250 行，没有调用方）
@@ -1476,3 +1476,13 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - 本地完整`pnpm check`2176unit/1177integration、dup2.81%通过；既有composition/启动/退休回归保留。门禁要求将共享helper标签身份断言和owner边界拆为命名函数，未放宽复杂度/长度/覆盖率；missing-account单测最初因FK阻止测试侧删除而setup失败，改用真正不存在的账号身份，非生产修复。未确认创建/清理以类型化失败保留当前owner用户隔离，后续start/reset不发Docker操作；不是持久化恢复状态或全局prune。独立审查及最终精确头全套Docker/CI尚未完成。
 - Review Round1四独立席位：确认跨consumer组合helper不确定性被startup错误脱敏抹去（P1），以及恢复空home时Dockercopy-up创建额外storages（P2，三席同源）；另补齐已接受create响应取消的测量覆盖。fixpass1保留类型化helper不确定性到共同owner fence，仅恢复挂载NoCopy=true。跨consumer回归原21pass/1fail，失败是多发12个Docker操作；修复后通过。实际空home回归先多出storages（22.95s，父级32.8477s）再GREEN1/1、23.31s（父级31.6603s），库存均空。取消oracle在一次性错误POST-cancellation副本拒绝“过早结清”，恢复后原全套通过。
 - fixpass1最终原`pnpm check`2178unit/1177integration、dup2.81%、exit0。期间一个未修改的真实Unix网络取消案例曾在5000ms超时；原窄16/16与隔离仅阶段插桩的完整1177/1177均不复现，根因未知，独立跟踪[#245](https://github.com/DankerMu/dsh-team/issues/245)，不放宽期限/隐藏重试/追认修复；原失败及全部诊断结果保留。一次性变异/插桩checkout已删除。父级单一耦合修复复审明确不是新独立席位，最终精确头完整Docker/CI仍必须通过。
+- #106最终审查头c0157f2：父级精确archive的原部署11/11、290.65s与原完整Docker30files88/88、802.27s均exit0，每次独立库存/活动unit为空，恢复案例23.357s通过。CI38776011442全绿，PR244已合并fa76cab；四独立初审加父级明确非独立耦合复审Round2clean/fixpass1，关键路径人工白盒仍在Epic末。#226/#242/#245未归因风险保留。
+
+## Issue #72 risk/evidence map (task14.7 only)
+
+- Administrator authority/API — selected: current admin after raw body, disconnect and stop; exact empty JSON, canonical user ID,401/403/404/409/413/415/503, Origin and generated response contract. Existing restart/bulk/disable behavior must survive common action reuse.
+- Concurrency/lifecycle — selected: shared admin pending set excludes reset/restart/disable; service stop admission spans restore, rejects competing stop/reset confusion and fences employee starts/idle/shutdown. Accepted work survives HTTP disconnect; current target/account fences remain task9.11's authority.
+- Persistence/audit/secrets — selected: actual reset audit actor/target/source with empty details only after restoration; failures do not emit success, raw storage/helper messages never leak. No platform-session revocation, model-setting update, volume deletion or content query.
+- Required real boundary: native Session/history and work sentinel, actual broken profile causes startup failure, HTTP reset204, explicit subsequent start becomes ready and same native Session/history/work bytes survive. Preserve unrelated sibling and owned helper/resource cleanup. Use existing Docker/gateway lifecycle; no provider.
+- Verification: HTTP semantic RED→GREEN, unit current-authority and error/conflict matrix, actual source/dist HTTP+file-SQLite evidence, held service/HTTP settlement cases, generated OpenAPI, `pnpm check`, strict fixture, four independent high-risk seats, final exact-head full Docker/deploy and protected CI. No UI acceptance claimed (#75).
+- Admission: parent-inline scoped implementation/fixture review under higher single-slice delegation rule, explicitly not independent approval; advisor unavailable. Required critical-path human review remains deferred to Epic end. Reset is204 without auto-start, following task14.7's stop/restore/audit sequence; readiness is proved through the existing explicit start.

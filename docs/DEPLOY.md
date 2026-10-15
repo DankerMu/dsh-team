@@ -165,7 +165,9 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 正常停止平台**不删除数据卷，也不等于停止全部员工实例**。先停止新的用户工作，按管理员操作退役需要停止的员工；等待平台完成在途helper清理。对于已确认归本部署所有的平台ID，可发送SIGTERM并等待正常退出；超时/非零退出需要保留故障证据，不把强杀当作正常退役。
 
-编排器的 `restoreUserProfiles` 只恢复已退役实例的 `profiles/`：使用捕获的用户镜像、无网络uid1001一次性容器，只挂载已有且归属正确的home卷；`sessions/`、`storages/`、`attachments/`、`.credentials.yaml`、其他home数据与整个work卷保持不变。原目录中的符号链接不会把删除导向外部。该原语不自动停止/启动实例、不记管理员审计；管理员重置入口由任务14.7交付，不能把此函数当作现成HTTP接口。
+管理员可携带当前平台会话与匹配的Origin，向 `POST /_platform/api/admin/instances/:userId/reset-config` 提交JSON `{}`。平台先断开该员工网关连接并停止实例，再调用编排器 `restoreUserProfiles`，恢复和 `instance.config-reset` 审计都成功后返回空204。重置不会自动启动实例或撤销平台会话；随后由员工显式启动或管理员重启，按正常模型配置、容量和就绪流程进入工作台。已有且活跃的目标账号才可重置；未创建实例404，禁用/启动中/冲突操作409，未接入生命周期服务503。实例页确认交互仍由任务14.10交付。
+
+`restoreUserProfiles` 只恢复已退役实例的 `profiles/`：使用捕获的用户镜像、无网络uid1001一次性容器，只挂载已有且归属正确的home卷；`sessions/`、`storages/`、`attachments/`、`.credentials.yaml`、其他home数据与整个work卷保持不变。原目录中的符号链接不会把删除导向外部。HTTP调用方断开不取消已接纳的恢复；同用户启动/冲突管理操作不能穿插，平台关闭会等待实际恢复与清理。停止后、恢复前重查管理员权限；审计失败返回安全500，不声称已完成的文件恢复已回滚。
 
 恢复时禁用Docker空卷copy-up，避免凭空重建`storages/`等非profile路径；首次普通启动仍保留镜像种子填充。恢复或清理失败必须报告失败结果；部分复制不承诺原配置回滚。无论是配置组合还是恢复helper，未确认的创建/清理都会在当前owner内阻止该用户后续启动和恢复，避免新的工作与潜在写入重叠。需要运营者按精确实例与invocation身份确认资源已结清；仅重启平台、找不到某个名字或按前缀删除都不是恢复完成证明。
 

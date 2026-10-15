@@ -25,6 +25,7 @@ export interface InstanceService {
   readonly reconcile: () => Promise<void>;
   readonly start: (userId: string) => Promise<InstanceState>;
   readonly stop: (userId: string, reason: InstanceStopReason) => Promise<void>;
+  readonly resetConfig: (userId: string, assertCurrent: () => void) => Promise<void>;
   readonly status: (userId: string) => InstanceState;
   readonly hasStartupWork: (userId: string) => boolean;
   readonly resolveUpstream: (userId: string) => InstanceUpstream;
@@ -286,10 +287,15 @@ export function createInstanceService({
     return admitted(userId, flight.admission, status);
   }
 
-  function stop(userId: string, reason: InstanceStopReason): Promise<void> {
+  function stop(
+    userId: string,
+    reason: InstanceStopReason,
+    afterStop?: () => Promise<void>,
+  ): Promise<void> {
     if (closing) return Promise.reject(new Error('Instance service unavailable'));
     const existing = stops.get(userId);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined && afterStop === undefined) return existing;
+    if (existing !== undefined) return Promise.reject(new Error('Instance service unavailable'));
     idleChecks.invalidate(userId);
     const flight = flights.get(userId);
     flight?.controller.abort();
@@ -298,6 +304,7 @@ export function createInstanceService({
       // Always enqueue: canceled callers can settle before their actual owner tail.
       await owner.stopUserContainer({ userId, reason, allowMissingInstance: true });
       failures.delete(userId);
+      if (afterStop !== undefined) await afterStop();
     })();
     stops.set(userId, work);
     void work
@@ -310,6 +317,11 @@ export function createInstanceService({
   return {
     start,
     stop,
+    resetConfig: (userId, assertCurrent) =>
+      stop(userId, 'admin', async () => {
+        assertCurrent();
+        await owner.restoreUserProfiles({ userId, config });
+      }),
     status,
     hasStartupWork: (userId) => flights.has(userId),
     checkIdle: idleChecks.checkIdle,
