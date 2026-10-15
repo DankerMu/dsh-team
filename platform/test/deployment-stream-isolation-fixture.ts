@@ -56,6 +56,10 @@ function sessionCarrier(base: string, cookie: string, query: string) {
     socket,
     frames,
     wait,
+    assertHealthy() {
+      if (failure !== undefined) throw failure;
+      expect(socket.readyState).toBe(WebSocket.OPEN);
+    },
     follow(sessionId: string) {
       const streamId = randomUUID();
       socket.send(
@@ -155,6 +159,7 @@ export async function verifyStreamIsolation(
     expect(content).not.toContain(first.title);
     expect(content).not.toContain(`Live ${first.id}`);
     expect(carrierB.socket.readyState).toBe(WebSocket.OPEN);
+    for (const carrier of carriers) carrier.assertHealthy();
   } catch (error) {
     failures.push(error);
   } finally {
