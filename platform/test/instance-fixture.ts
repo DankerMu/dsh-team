@@ -8,6 +8,7 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { createInstanceService } from '../src/orchestrator/index.ts';
 import type { DockerClient } from '../src/orchestrator/index.ts';
 import { startupOwnerFixture } from './container-start-fixture.ts';
+import { sessionCookieToken } from './auth-fixture.ts';
 
 export function instanceConfig(
   root: string,
@@ -56,10 +57,10 @@ export async function registerInstanceUser(
     body: payload,
   });
   expect(loggedIn.status).toBe(200);
-  const cookie = loggedIn.headers.get('set-cookie')?.split(';')[0];
-  if (cookie?.startsWith('platform_session=') !== true) throw new Error('Missing platform session');
+  const cookie = `platform_session=${sessionCookieToken(loggedIn.headers.getSetCookie())}`;
+  const registrationCookie = `platform_session=${sessionCookieToken(registered.headers.getSetCookie())}`;
   await loggedIn.arrayBuffer();
-  return { id: identity.id, cookie };
+  return { id: identity.id, cookie, registrationCookie };
 }
 
 export async function instanceServiceFixture(adapt?: (client: DockerClient) => DockerClient) {

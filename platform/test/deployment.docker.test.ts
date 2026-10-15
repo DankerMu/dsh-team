@@ -12,6 +12,7 @@ import { cleanupTargets, output, OWNER_LABEL, removeOwned } from './docker-clean
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
+import { verifyCredentialIsolation } from './deployment-credential-isolation-fixture.ts';
 import { verifyHttpIsolation } from './deployment-http-isolation-fixture.ts';
 import { verifyInternalIsolation } from './deployment-internal-isolation-fixture.ts';
 import { verifyStreamIsolation } from './deployment-stream-isolation-fixture.ts';
@@ -764,5 +765,17 @@ it('denies internal employee access to sibling volumes, listening ports, Docker 
       'internal@deployment.example.test',
     );
     await verifyInternalIsolation(lifecycle, deployment, employee, second, admin);
+  });
+});
+
+it('rejects sibling native credentials and keeps platform data outside employee files and environments', async () => {
+  await withDeployment(async (lifecycle, start) => {
+    const { deployment, employee, admin } = await configureDeployment(lifecycle, start);
+    const second = await registerDeploymentEmployee(
+      lifecycle,
+      deployment,
+      'credential@deployment.example.test',
+    );
+    await verifyCredentialIsolation(lifecycle, deployment, employee, second, admin);
   });
 });
