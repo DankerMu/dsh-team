@@ -114,18 +114,34 @@ export function instanceGatewayFixture(
 
   async function history(cookie: string, sessionId: string): Promise<readonly unknown[]> {
     const projection = await rpc(cookie, 'session/projections', { request: { sessionId } });
-    const page = await rpc(cookie, 'session/page', {
-      request: {
-        address: { kind: 'session', sessionId },
-        throughSeq: projection.asOfSeq,
-        maxMessages: 10,
-      },
-    });
-    expect(page.hasMore).toBe(false);
-    const records: unknown = page.records;
-    if (!Array.isArray(records)) throw new Error('Missing genuine history');
-    const historyRecords: readonly unknown[] = records;
-    return historyRecords;
+    const cursor = projection.asOfSeq;
+    if (typeof cursor !== 'number' || !Number.isSafeInteger(cursor) || cursor < -1)
+      throw new Error('Invalid genuine history cursor');
+    const historyRecords: unknown[] = [];
+    let lastSeq = cursor;
+    for (;;) {
+      const page = await rpc(cookie, 'session/page', {
+        request: {
+          address: { kind: 'session', sessionId },
+          throughSeq: cursor,
+          maxMessages: 10,
+          ...(lastSeq === cursor ? {} : { beforeSeq: lastSeq + 1 }),
+        },
+      });
+      const records: unknown = page.records;
+      if (!Array.isArray(records)) throw new Error('Missing genuine history');
+      const firstSeq = lastSeq - records.length + 1;
+      if (firstSeq < 0 || (records.length === 0 && lastSeq !== -1) || page.hasMore !== firstSeq > 0)
+        throw new Error('Incomplete genuine history page');
+      for (let index = records.length - 1; index >= 0; index--) {
+        const row: unknown = records[index];
+        if (record(record(row).event).seq !== firstSeq + index)
+          throw new Error('Discontinuous genuine history page');
+        historyRecords.push(row);
+      }
+      if (!page.hasMore) return historyRecords.reverse();
+      lastSeq = firstSeq - 1;
+    }
   }
   async function persistedSession(context: Pick<DockerIdleContext, 'user' | 'control'>) {
     const created = await rpc(context.user.cookie, 'session/create', {
