@@ -1432,3 +1432,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Network/resources/errors: known-live A3080/3099 at loopback/IP/alias before and after B's bounded IP/alias denials; uid1001 and same owned identities, original registration/drainage/cleanup retained.
 - Evidence/compatibility/docs: extract and reuse unchanged network scripts; qualify each major boundary with disposable controls, restore and run deployment/check/strict, four independent seats, exact-head standalone/full Docker/CI and independently empty inventories. No production/schema/packaging/provider changes; #101/#102 remain explicit non-goals.
 - 实测：giap-vps候选9/9通过150.92s；首次8pass/1fail为跨卷rename实际EXDEV的分类缺口，补充明确拒绝码并保留overwrite EROFS和摘要不变，不把EXDEV当只读证据。五类独立控制均拒绝：实际A读回结果喂给B拒绝判据（149.21s）、实际A本机IP/alias连接结果（151.26s）、只读socket曝光（255.48s，原端口/socket用例和新用例均失败）、RW覆盖层（233.74s，底层mode仍EACCES）、匿名admin guard绕过（239.55s，实得200）。额外在仅测试自有RW覆盖层上准备可写mode，真实uid1001写入后摘要变化，8pass/1预期失败147.13s；所有调用四类资源及活动unit清单均为空。wrong-subject控制不是生产跨挂载/bridge漏洞；socket调用仍EACCES，没有成功daemon操作声明。check2152unit/1135integration、dup2.82%、strict5/5通过；恢复、独立审查和最终冻结SHA standalone/fullDocker/CI仍是门禁。
+
+## Issue #101 risk/evidence map (task19.4 only)
+
+- Auth/protocol/secrets: actual own-token/cookie positives, A credentials rejected at B with no cookie, B remains valid; trusted Host and native target identity explicit, secret-safe outcomes.
+- File/discovery/evidence: uid1001 readable-files and process-environment traversal, actual platform credential/hash needles, database filename/schema/path/mount checks, positive sentinels, bounds and classified inaccessible/vanished entries. Kernel memory/devices are non-goals, not silent coverage.
+- Resource/compatibility/errors: original nine deployment cases and teardown preserved; independent controls for leaks, native identity and privilege, no inherited real secrets or provider calls.
+- Gates: restored real deployment, check/strict fixture, four independent high-risk seats, frozen-head standalone/full Docker and protected CI with independent empty inventories. Docs state finite scan scope and shared-model-key exclusion; #102 Yolo and #103 audit/log scan remain separate.
