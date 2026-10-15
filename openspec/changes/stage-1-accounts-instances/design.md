@@ -144,6 +144,14 @@ DSH 的界面和接口用根路径下的绝对地址（`/`、`/api/...`、WebSoc
 
 停止实例；用用户镜像起一个一次性容器，挂载该用户的状态卷，把 `$DSH_HOME/profiles/` 整个目录换成镜像里 `/opt/dsh-team/profile-seed/` 的内容（后者是 `profiles/` 的完整拷贝，层级相同）；`sessions/`、`storages/`、`attachments/`、`.credentials.yaml` 和整个工作目录卷不动（F7）。之后实例照常启动。
 
+Task9.11 (#106) supplies the stopped-only owner operation, not the administrator HTTP workflow. Admission runs inside the existing user FIFO and requires a current account plus stopped/error index with null container ID, canonical container404 and an existing home volume with the exact user label. It does not create missing volumes, stop retained containers, rewrite the index or emit administrator audit. Task14.7 must first use the existing retirement operation and owns its authorization/audit/start behavior.
+
+Extract the existing composition one-shot lifecycle once for both composition and restoration, preserving composition behavior and its failure/cleanup contract. Restoration resolves the configured image to an immutable ID, reads the shipped seccomp policy, and uses uid1001, network none, no privileges/additional capabilities/publication/socket/work mount. Recheck account/index, volume and absence before starting the helper. Submitted mutations settle under a bounded independent deadline despite caller cancellation; owner drainage waits for actual helper cleanup, not just rejected callers. Unknown/foreign helper identity is never deletion authority.
+
+Inside the helper, remove the fixed `profiles` entry without following live symlinks, copy the immutable seed recursively and make the copied tree owner-writable. No path or shell fragment comes from employee input. Only the fixed profiles subtree may change; sessions, storages, attachments, credentials, other home entries and the entire work volume are untouched. A failed copy/reset is an explicit failure, not an atomic rollback claim; the instance remains stopped and a later explicit retry can restore it. No saved user-profile backup or automatic retry is introduced.
+
+Restoration disables Docker home-volume copy-up (`VolumeOptions.NoCopy=true`); otherwise an existing empty home would gain image-seeded non-profile storage during helper creation. Composition retains ordinary first-use seeding. Unknown helper creation/cleanup from either consumer reaches the same owner-local fence before startup error sanitization; subsequent same-user start/reset cannot acquire the home until operational recovery. This is not a persistent cross-owner recovery protocol. The accepted-create cancellation regression holds a daemon-accepted response, not a pre-send hook, and proves cleanup/queued work cannot overtake settlement.
+
 ### 12. 用户镜像和容器安全设置
 
 - 基础 `node:24-bookworm-slim`；装 bubblewrap、Python 3 和 `python-docx`（公文写作 Agent 生成 DOCX 用）、pnpm、`@deepseek-ai/dsh@0.2.0-rc.2`；非 root 用户 uid 1001；`DSH_HOME=/data/home`，工作目录 `/data/work`。

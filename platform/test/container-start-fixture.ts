@@ -57,6 +57,7 @@ export interface Container {
   Image: unknown;
   Config: Record<string, unknown>;
   HostConfig?: Record<string, unknown>;
+  Mounts?: unknown;
   State: { Running: boolean };
   NetworkSettings: { Ports: unknown; Networks?: Record<string, unknown> };
 }
@@ -303,7 +304,7 @@ export function startupDaemon(): StartupDaemon {
   }
   function createContainer(path: string, body: Record<string, unknown>): Reply {
     const name = new URL(`http://docker${path}`).searchParams.get('name') ?? '';
-    const helper = name.startsWith('dsh-team-compose-');
+    const helper = name.startsWith('dsh-team-compose-') || name.startsWith('dsh-team-restore-');
     const container: Container = {
       Id: helper ? START_HELPER : nextContainerId,
       Name: `/${name}`,
@@ -313,6 +314,14 @@ export function startupDaemon(): StartupDaemon {
       State: { Running: false },
       NetworkSettings: { Ports: publishedPorts(body) },
     };
+    if (name.startsWith('dsh-team-restore-')) {
+      const mounts = networkObject(body.HostConfig).Mounts;
+      if (!Array.isArray(mounts)) throw new Error('Fixture home mounts missing');
+      container.Mounts = mounts.map((value: unknown) => {
+        const mount = networkObject(value);
+        return { Type: mount.Type, Name: mount.Source, Destination: mount.Target, RW: true };
+      });
+    }
     container.NetworkSettings.Networks = networkState.attach(container, body);
     containers.set(container.Id, container);
     return { status: 201, document: { Id: container.Id } };
