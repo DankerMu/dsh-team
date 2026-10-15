@@ -16,6 +16,7 @@ export async function verifyInternalIsolation(
   a: Employee,
   b: Employee,
   admin: { cookie: string },
+  execute?: (args: readonly string[]) => Promise<string>,
 ) {
   const gateway = instanceGatewayFixture({
     lifecycle,
@@ -28,6 +29,9 @@ export async function verifyInternalIsolation(
   }
   const first = `dsh-team-u-${a.id}`;
   const second = `dsh-team-u-${b.id}`;
+  // Test seam: identical B probe bytes run through Docker or the real Agent's native bash tool.
+  const executeNodeProbe = (script: string) =>
+    execute ? execute(['node', '--input-type=module', '-e', script]) : gateway.exec(second, script);
   const container = await inspectAsync(lifecycle, first);
   const endpoint = record(
     record(record(container.NetworkSettings).Networks)[`dsh-team-net-${a.id}`],
@@ -69,7 +73,9 @@ console.log(JSON.stringify(paths.map(path=>readFileSync(path,'utf8')===marker)))
   expect(await python(first, listen)).toEqual({ uid: 1001, port: 3099 });
   const positive = () => python(first, probe, ['127.0.0.1', ...hosts]);
   expect(await positive()).toEqual([true, true, true, true, true, true]);
-  const network = await python(second, probe, hosts);
+  const network: unknown = execute
+    ? JSON.parse(await execute(['python3', '-c', probe, ...hosts]))
+    : await python(second, probe, hosts);
   expect(await positive()).toEqual([true, true, true, true, true, true]);
   const adminResponse = await deployment.request(`${deployment.base}/_platform/api/admin/users`, {
     headers: { cookie: admin.cookie },
@@ -80,9 +86,7 @@ console.log(JSON.stringify(paths.map(path=>readFileSync(path,'utf8')===marker)))
   // Emit only fixed outcome codes and digests; overlay bytes contain shared model credentials.
   const observed = record(
     JSON.parse(
-      await gateway.exec(
-        second,
-        `
+      await executeNodeProbe(`
 import {readFileSync,writeFileSync,statSync,unlinkSync,renameSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {request} from 'node:http';
@@ -117,8 +121,7 @@ const replace=outcome(()=>renameSync(own,overlay));
 console.log(JSON.stringify({uid:process.getuid(),files,writable,socketStat,socketRead,socketCall,
  health:health.status,healthy:healthBody.status==='ok',admin:admin.status,
  overwrite,remove,replace,unchanged:digest()===before}));
-`,
-      ),
+`),
     ),
   );
   expect(network, 'B cannot connect to A by IP or alias at either live port').toEqual([

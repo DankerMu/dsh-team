@@ -5,6 +5,7 @@ import type { CdpPage } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { expect, it } from 'vitest';
 import { autoReviewEvidence, permissionEvidence } from './permission-model-oracle.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
+import { record } from './container-start-docker-fixture.ts';
 
 it('retains the acceptance failure when asynchronous observer diagnostics are unavailable', async () => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), 'dsh-team-permission-failure-'));
@@ -137,6 +138,93 @@ function eventAt(value: ReturnType<typeof evidence>, index: number) {
   if (!row) throw new Error('Missing oracle control event');
   return row.event;
 }
+
+function bashEvidence() {
+  const value = evidence('unprompted');
+  const command = 'printf \'{"owned":true}\\n\'';
+  const records = value.records.map((row, index) => {
+    if (index === 2)
+      return {
+        ...row,
+        event: {
+          ...row.event,
+          data: {
+            turn: 1,
+            step: 0,
+            callId: 'provider-call',
+            name: 'bash',
+            arguments: JSON.stringify({ command }),
+          },
+        },
+      };
+    if (index === 3)
+      return {
+        ...row,
+        event: {
+          ...row.event,
+          data: {
+            ...row.event.data,
+            message: {
+              ...record(record(row.event.data).message),
+              content: [{ type: 'text', text: '{"owned":true}\n' }],
+            },
+          },
+        },
+      };
+    return row;
+  });
+  return { ...value, command, records };
+}
+
+it('binds a Yolo bash receipt to the exact requested command and returns actual stdout', () => {
+  expect(permissionEvidence(bashEvidence())).toMatchObject({
+    callId: 'provider-call',
+    stdout: '{"owned":true}\n',
+  });
+});
+
+it('rejects a different bash command even when it reports the expected output', () => {
+  const value = bashEvidence();
+  value.command = 'echo forged-output';
+  expect(() => permissionEvidence(value)).toThrow('permission-intended-bash');
+});
+
+it.each([
+  ['exit', '{"owned":true}\n[exit code: 7]'],
+  ['signal', '{"owned":true}\n[killed by signal: SIGTERM]'],
+  ['timeout', '{"owned":true}\n[timed out after 1000ms]'],
+  ['stopped', '{"owned":true}\n[stopped: cancelled]'],
+  ['truncated', '{"owned":true}\n[output truncated; full output: /data/work/spill]'],
+  ['stderr', '{"owned":true}\n[stderr]\nprobe failed'],
+  ['background', 'started background job owned-job'],
+  ['promoted', '{"owned":true}\n[still running after 1000ms; moved to background job owned-job]'],
+])('rejects %s shell results instead of accepting a JSON prefix', (_failure, text) => {
+  const value = bashEvidence();
+  const message = record(record(value.records[3]?.event.data).message);
+  message.content = [{ type: 'text', text }];
+  expect(() => permissionEvidence(value)).toThrow('permission-bash-process');
+});
+
+it.each(['foreign-call', 'abort', 'extra-part', 'missing-content'] as const)(
+  'rejects %s native bash evidence',
+  (failure) => {
+    const value = bashEvidence();
+    const message = record(record(value.records[3]?.event.data).message);
+    if (failure === 'foreign-call') message.toolCallId = 'another-call';
+    if (failure === 'abort') message.isError = true;
+    if (failure === 'extra-part')
+      message.content = [
+        { type: 'text', text: '{"owned":true}' },
+        { type: 'text', text: 'untrusted trailing result' },
+      ];
+    if (failure === 'missing-content') message.content = [];
+    expect(() => permissionEvidence(value)).toThrow(
+      failure === 'foreign-call' || failure === 'abort'
+        ? 'permission-tool-result'
+        : 'permission-bash-process',
+    );
+  },
+);
 
 it.each(['pending', 'allow', 'deny', 'unprompted'] as const)(
   'recognizes correlated native %s evidence',

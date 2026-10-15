@@ -1,6 +1,6 @@
 import { record } from './container-start-docker-fixture.ts';
 
-interface PermissionObservation {
+interface PermissionBase {
   records: readonly unknown[];
   cursor: number;
   hasMore: boolean;
@@ -8,11 +8,21 @@ interface PermissionObservation {
   expectedTier: string;
   afterSeq: number;
   prompt: string;
+  phase: 'pending' | 'allow' | 'deny' | 'unprompted';
+}
+
+interface PermissionObservation extends PermissionBase {
   path: string;
   content: string;
-  phase: 'pending' | 'allow' | 'deny' | 'unprompted';
   file: { exists: boolean; exact: boolean };
 }
+
+interface BashObservation extends PermissionBase {
+  command: string;
+  phase: 'unprompted';
+}
+
+type NativeObservation = PermissionObservation | BashObservation;
 
 function requireEvidence(condition: boolean, reason: string): asserts condition {
   if (!condition) throw new Error(`permission-${reason}`);
@@ -28,7 +38,14 @@ function one(events: readonly Event[], reason: string): Event {
   return event;
 }
 
-function writeIdentity(events: readonly Event[], input: PermissionObservation) {
+interface ToolIdentity {
+  start: Event;
+  call: Event;
+  turn: unknown;
+  callId: string;
+}
+
+function toolIdentity(events: readonly Event[], input: NativeObservation): ToolIdentity {
   const start = one(of(events, 'turn/start'), 'turn-call-count');
   const call = one(of(events, 'tool/call'), 'turn-call-count');
   const data = record(call.data);
@@ -36,19 +53,21 @@ function writeIdentity(events: readonly Event[], input: PermissionObservation) {
   const args = record(JSON.parse(String(data.arguments)));
   requireEvidence(
     data.turn === turn &&
-      data.name === 'write' &&
+      ('command' in input
+        ? data.name === 'bash' && args.command === input.command
+        : data.name === 'write' &&
+          args.file_path === input.path &&
+          args.content === input.content) &&
       typeof data.callId === 'string' &&
-      args.file_path === input.path &&
-      args.content === input.content &&
       Number(call.seq) > Number(start.seq),
-    'intended-write',
+    'command' in input ? 'intended-bash' : 'intended-write',
   );
   return { start, call, turn, callId: data.callId };
 }
 
 function promptIdentity(
   events: readonly Event[],
-  input: PermissionObservation,
+  input: NativeObservation,
   start: Event,
   call: Event,
 ) {
@@ -72,7 +91,7 @@ function promptIdentity(
   return source.rpcId;
 }
 
-function approvalEvidence(events: readonly Event[], input: PermissionObservation, call: Event) {
+function approvalEvidence(events: readonly Event[], input: NativeObservation, call: Event) {
   const unprompted = input.phase === 'unprompted';
   const asked = of(events, 'approval/asked');
   const decided = of(events, 'approval/decided');
@@ -81,7 +100,7 @@ function approvalEvidence(events: readonly Event[], input: PermissionObservation
   if (ask)
     requireEvidence(
       record(ask.data).callId === record(call.data).callId &&
-        record(ask.data).toolName === 'write' &&
+        record(ask.data).toolName === record(call.data).name &&
         typeof record(ask.data).id === 'string' &&
         Number(ask.seq) > Number(call.seq),
       'approval-identity',
@@ -109,8 +128,8 @@ function approvalEvidence(events: readonly Event[], input: PermissionObservation
 
 function resultEvidence(
   events: readonly Event[],
-  input: PermissionObservation,
-  identity: ReturnType<typeof writeIdentity>,
+  input: NativeObservation,
+  identity: ToolIdentity,
   predecessor: Event,
 ) {
   const result = one(of(events, 'tool/result'), 'tool-result');
@@ -144,7 +163,28 @@ function resultEvidence(
   return end.seq;
 }
 
-export function permissionEvidence(input: PermissionObservation) {
+function bashStdout(events: readonly Event[], input: BashObservation): string {
+  requireEvidence(
+    input.expectedTier === 'danger-full-access' &&
+      !events.some((event) => String(event.type).startsWith('approval/')),
+    'bash-yolo',
+  );
+  const message = record(record(one(of(events, 'tool/result'), 'tool-result').data).message);
+  const content: unknown = message.content;
+  requireEvidence(Array.isArray(content) && content.length === 1, 'bash-process');
+  const part = record(content[0]);
+  requireEvidence(part.type === 'text' && typeof part.text === 'string', 'bash-process');
+  // Released bash persists rendered text, not structured process metadata. Complete JSON
+  // rejects stderr, truncation, background and unsuccessful-exit markers appended by its renderer.
+  try {
+    JSON.parse(part.text);
+  } catch {
+    throw new Error('permission-bash-process');
+  }
+  return part.text;
+}
+
+export function permissionEvidence(input: NativeObservation) {
   const all = input.records.map((row) => record(record(row).event));
   requireEvidence(
     !input.hasMore &&
@@ -155,11 +195,12 @@ export function permissionEvidence(input: PermissionObservation) {
   const events = all.filter((event) => Number(event.seq) > input.afterSeq);
   // Released retries retain failed/uncommitted attempts even if the turn later succeeds.
   requireEvidence(of(events, 'assistant/attempt').length === 0, 'provider-attempt');
-  const identity = writeIdentity(events, input);
+  const identity = toolIdentity(events, input);
   const requestId = promptIdentity(events, input, identity.start, identity.call);
   requireEvidence(input.tier === input.expectedTier, 'tier');
   const written = input.phase === 'allow' || input.phase === 'unprompted';
-  requireEvidence(input.file.exists === written && input.file.exact === written, 'file-state');
+  if ('file' in input && !('command' in input))
+    requireEvidence(input.file.exists === written && input.file.exact === written, 'file-state');
   const { ask, decision } = approvalEvidence(events, input, identity.call);
   const terminalSeq =
     input.phase === 'pending'
@@ -174,6 +215,7 @@ export function permissionEvidence(input: PermissionObservation) {
     terminalSeq,
     cursor: input.cursor,
     phase: input.phase,
+    ...('command' in input ? { stdout: bashStdout(events, input) } : {}),
   };
 }
 
