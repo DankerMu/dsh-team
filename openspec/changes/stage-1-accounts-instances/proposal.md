@@ -677,3 +677,10 @@
 - Reuse the existing serial Docker project and trusted exact-head owner evidence. `test:deploy` selects its deployment file directly; full `test:docker` must also execute it. No duplicate verifier or unexercised deployment attestation.
 - Required socket group is a deployment-only `DEPLOY_DOCKER_GID`, not a dummy platform config field. Task18.3 will account for platform and Compose consumers separately against the single example, with no unlisted or unused entries.
 - Parent-inline fixture/implementation follows the single-known-slice delegation restriction; four independent high-risk final review seats and unchanged human-review deferral remain.
+
+## Issue #98 fixture
+
+- Characterization/Standard, expanded instead of upstream compact: tenant routing, native Session/file confidentiality and administrator authorization require adversarial oracle qualification and four independent review lenses.
+- Task19.1 only on delivered Compose with two real employees; current platform session alone selects the instance despite other-user identifiers and forged forwarding input. No production/DSH changes, provider calls, long-connection or internal-network acceptance.
+- Preserve existing six deployment cases and resource ownership/drainage. Inline fixture admission and mapped implementation follow the higher single-slice delegation restriction; not independent fixture review. Advisor unavailable after its invocation limit.
+- Required evidence: live own-resource positives, cross-tenant negatives, wrong-routing and missing-admin-guard controls, restored candidate, check/strict fixture, independent review, frozen-head standalone/full Docker and protected CI. Shared Epic fixture remains open.
