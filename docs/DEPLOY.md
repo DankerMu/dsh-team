@@ -87,7 +87,7 @@ stat -c %g /var/run/docker.sock
 pnpm probe:sandbox
 ```
 
-它实际调用固定发行版 DSH 的 bash 工具，依次尝试 Docker 默认限制、自定义 seccomp、再加 `systempaths=unconfined`；输出首个可用组合和每级原因，并清理自己的唯一测试资源。当前已验证组合为自定义 seccomp 加 `systempaths=unconfined`。期望工作区写入成功、DSH 状态目录写入被拒绝。
+它实际调用固定发行版 DSH 的 bash 工具，依次尝试 Docker 默认限制、自定义 seccomp、再加 `systempaths=unconfined`；输出首个可用组合和每级原因，并清理自己的唯一测试资源。交付实例仍使用自定义 seccomp 加 `systempaths=unconfined`；探针报告目标机当次首个可用组合（本次 giap-vps 演练为 `docker-default`），不据此自动改动交付安全配置。期望工作区写入成功、DSH 状态目录写入被拒绝。
 
 这不是“手写 bubblewrap 能跑”的替代检查。无可用组合或清理失败时不要继续部署，也不要改成特权容器或放宽现有测试。探针会自行构建临时镜像、联网获取并校验固定 seccomp 摘要；不会调用模型。
 
@@ -126,7 +126,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 | 启动实例 | 员工 `POST /_platform/api/instance/start`，JSON `{}`；200、`starting` |
 | 等待就绪 | 员工 `GET /_platform/api/instance`；直到 `running`；终止错误不能当作继续重试的理由 |
 | 原生入口 | 员工 `GET /` 返回原生HTML；`/api/remote.mux` WebSocket携带同一cookie、实际Host/Origin完成101和Ping/Pong |
-| 停止一次性验收员工 | 管理员 `PUT /_platform/api/admin/users/<本次员工id>/status`，JSON `{"status":"disabled"}`；撤销平台会话并退役实例，卷保留 |
+| 停止一次性验收员工 | 管理员 `PUT /_platform/api/admin/users/<本次员工id>/status`，JSON `{"status":"disabled"}`；成功为204无响应体，撤销平台会话并退役实例，卷保留 |
 
 一次性无推理部署验收允许配置明确标为测试的不可用模型地址/假值，仅验证保存和原生入口；不得把它用作生产默认或宣称模型调用通过。完整契约见 [`schemas/openapi.json`](../schemas/openapi.json)。
 
