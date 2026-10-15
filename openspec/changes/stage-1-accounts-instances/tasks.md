@@ -1302,7 +1302,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - [x] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
 - [x] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。
 - [x] 18.6 前置代理下的 HTTPS。验证：`pnpm test:deploy`——在 compose 里临时加一个终结 TLS 的代理容器（自签证书），对外地址配为 `https://`、开启仅 HTTPS 发送、代理地址填入受信代理后，登录、工作台和长连接都正常，平台会话 cookie 带 `Secure`，登录的审计记录里来源地址是客户端的而不是代理的（规格“可在前置代理后使用 HTTPS”）。
-- [ ] 18.7 部署文档 `docs/DEPLOY.md`：前置条件、构建两个镜像、填写配置、启动、创建管理员、配置模型、在目标机执行沙箱探针，以及本阶段不提供的功能和隔离的已知边界（实例能访问宿主机所在内网的其他地址；模型密钥在实例内可读）。验证：在 giap-vps 上从一份干净的检出只按文档操作，完成 18.2 的全部步骤，结束后删除所有带 `dsh-team` 前缀的容器、镜像、卷和网络；文档里列出了 `instance-isolation` 规格“已知边界写明”要求的每一条（规格“部署文档”“已知边界写明”）。
+- [x] 18.7 部署文档 `docs/DEPLOY.md`：前置条件、构建两个镜像、填写配置、启动、创建管理员、配置模型、在目标机执行沙箱探针，以及本阶段不提供的功能和隔离的已知边界（实例能访问宿主机所在内网的其他地址；模型密钥在实例内可读）。验证：在 giap-vps 上从一份干净的检出只按文档操作，完成 18.2 的全部步骤，结束后删除所有带 `dsh-team` 前缀的容器、镜像、卷和网络；文档里列出了 `instance-isolation` 规格“已知边界写明”要求的每一条（规格“部署文档”“已知边界写明”）。
 
 Suggested fixture level: expanded - 生产配置和交付形态
 Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现有命令）
@@ -1390,3 +1390,12 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Files/resources/error paths: ephemeral SAN certificate with explicit client trust, no private material in logs/commits, registered owned proxy/network/container lifecycle, exact cleanup and primary error preserved. Final-head standalone/fullDocker/CI plus four empty inventories and active units required.
 - 实测候选6/6通过91.94s；secure=false负对照只在布尔Secure断言失败（88.69s，无cookie值诊断），trusted-proxy置空只在审计来源断言失败（94.23s：代理172.18.0.2不等于实际peer172.18.0.1），其他五项全部通过；每次独立四类资源及活动unit清单为空。完整check2152unit/1135integration、dup2.84%、strict5/5通过；首次Knip缺entry/hostbinary声明已精确补齐，未使用宽泛豁免。原cookie数组诊断改为布尔以防潜在值泄漏（首次原始失败未观察到cookie值），证书子进程改为明确PATH环境；恢复及冻结SHA验证仍是门禁。
 - 恢复同一布尔cookie断言/明确证书环境候选后6/6通过91.04s，独立四类资源及活动unit清单为空；候选archive不冒充Git冻结SHA证据，独立审查后的standalone/fullDocker/CI仍须通过。
+
+## Issue #97 risk/evidence map (task18.7 only)
+
+- Docs/runtime: exact clean checkout, supported Docker/Compose and Node/pnpm prerequisites, both image build contexts, absolute same-path binds and socket GID, administrator TTY and public model/employee native entry; actual sandbox probe rather than a hand-written replacement.
+- Secrets/ownership: no real env/key reads or credential output; disposable fixture credentials only. Capture exact resource identities, refuse pre-existing targets, no prefix-wide removal or prune, preserve persistent data outside explicit disposable cleanup.
+- Spec claims: enumerate all delivered isolation boundaries and both required exclusions; distinguish currently exercised boundaries from remaining stage19 adversarial acceptance. TLS external; offline bundle/upgrade/backup and later integrations excluded.
+- Required evidence: literal documented command walkthrough on giap-vps, health/admin/model/employee native HTTP+WS, sandbox result and independently empty test-resource inventories; check/strict fixture, independent review and exact-head Docker/CI. No provider inference or new UI-rendering claim.
+- 实测：giap-vps全新clone/固定7149e498提交，按文档构建两镜像、准备示例副本及同路径目录、真实probe:sandbox、Compose启动/health200、容器CLI真实PTY管理员创建无输入泄漏；文档公共API等价操作完成管理员login200、model保存200、员工register201/login200、nativeHTTP200/WS101/Pong、disable204。退出0，四类dsh-team前缀资源与活动unit清单为空，私有配置/数据清理完成；没有执行自动deployment fixture来替代演练，也没有provider调用。
+- 探针当次first usable为docker-default（工作区写成功、状态目录写拒绝），只是引擎默认级观测，不证明显式提交策略；交付保持钉定未放宽Moby seccomp及Docker系统路径保护。首次临时driver含disable200误断言及大小写敏感volume不存在解析，整体记录为失败；原operator stderr未保留，不追认其精确失败位置或前序成功。协议修正后的干净演练通过，原失败和私有文件收尾证据保留。localcheck2152unit/1135integration、dup2.84%、strict5/5通过；审查指出显式交付策略资格缺口，文档已要求额外运行既有seccomp说明的真实driver流程，不修改生产限制；冻结SHA演练/有效容器策略观察/Docker/CI仍为合并门禁。
