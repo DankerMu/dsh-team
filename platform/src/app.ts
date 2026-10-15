@@ -1,6 +1,6 @@
 import swagger from '@fastify/swagger';
 import Fastify, { type FastifyInstance } from 'fastify';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { adminRoutes } from './admin/index.ts';
 import {
@@ -138,6 +138,8 @@ export async function buildApp(
 
   // Node's HTTP close does not retire accepted sockets with no parsed request.
   const unclaimed = new Set<Socket>();
+  const responses = new Map<Socket, number>();
+  const drained = Promise.withResolvers<undefined>();
   let closing = false;
   function released(this: Socket): void {
     unclaimed.delete(this);
@@ -154,9 +156,34 @@ export async function buildApp(
     unclaimed.delete(request.socket);
     request.socket.off('close', released);
   }
+  function responseReleased(this: Socket): void {
+    responses.delete(this);
+    if (closing && responses.size === 0) drained.resolve(undefined);
+  }
+  function requested(request: IncomingMessage, response: ServerResponse): void {
+    claimed(request);
+    const socket = request.socket;
+    if (!responses.has(socket)) socket.once('close', responseReleased);
+    responses.set(socket, (responses.get(socket) ?? 0) + 1);
+    function settled(): void {
+      response.off('finish', settled);
+      response.off('close', settled);
+      const remaining = (responses.get(socket) ?? 1) - 1;
+      if (remaining > 0) {
+        responses.set(socket, remaining);
+      } else {
+        socket.off('close', responseReleased);
+        responseReleased.call(socket);
+        // Orderly EOF preserves accepted writes; other parsed responses must finish first.
+        if (closing && !socket.destroyed) socket.end();
+      }
+    }
+    response.once('finish', settled);
+    response.once('close', settled);
+  }
   app.server.on('connection', accepted);
   // A handler may initiate shutdown synchronously; claim its transport first.
-  app.server.prependListener('request', claimed);
+  app.server.prependListener('request', requested);
   app.server.prependListener('upgrade', claimed);
 
   async function flushActivity(phase?: 'shutdown'): Promise<void> {
@@ -181,7 +208,7 @@ export async function buildApp(
 
   app.addHook('onClose', async () => {
     app.server.off('connection', accepted);
-    app.server.off('request', claimed);
+    app.server.off('request', requested);
     app.server.off('upgrade', claimed);
     // Transport release is complete and the listener is closed before draining
     // activity queued behind lifecycle work; SQLite must outlive both drains.
@@ -198,6 +225,8 @@ export async function buildApp(
     clearInterval(idleTimer);
     void instanceService?.close();
     await connections.close();
+    // Node closeIdleConnections treats end() as idle before buffered writes finish.
+    if (responses.size !== 0) await drained.promise;
   });
   return app;
 }
