@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CdpPage } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { expect, it } from 'vitest';
-import { autoReviewEvidence, permissionEvidence } from './permission-model-oracle.ts';
+import {
+  autoReviewEvidence,
+  permissionEvidence,
+  permissionFailure,
+} from './permission-model-oracle.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
+import { record } from './container-start-docker-fixture.ts';
 
 it('retains the acceptance failure when asynchronous observer diagnostics are unavailable', async () => {
   const evidenceDirectory = await mkdtemp(join(tmpdir(), 'dsh-team-permission-failure-'));
@@ -137,6 +142,153 @@ function eventAt(value: ReturnType<typeof evidence>, index: number) {
   if (!row) throw new Error('Missing oracle control event');
   return row.event;
 }
+
+function bashEvidence() {
+  const value = evidence('unprompted');
+  const command = 'printf \'{"owned":true}\\n\'';
+  const records = value.records.map((row, index) => {
+    if (index === 2)
+      return {
+        ...row,
+        event: {
+          ...row.event,
+          data: {
+            turn: 1,
+            step: 0,
+            callId: 'provider-call',
+            name: 'bash',
+            arguments: JSON.stringify({ command }),
+          },
+        },
+      };
+    if (index === 3)
+      return {
+        ...row,
+        event: {
+          ...row.event,
+          data: {
+            ...row.event.data,
+            message: {
+              ...record(record(row.event.data).message),
+              content: [{ type: 'text', text: '{"owned":true}\n' }],
+            },
+          },
+        },
+      };
+    return row;
+  });
+  return { ...value, command, records };
+}
+
+it('binds a Yolo bash receipt to the exact requested command and returns actual stdout', () => {
+  expect(permissionEvidence(bashEvidence())).toMatchObject({
+    callId: 'provider-call',
+    stdout: '{"owned":true}\n',
+  });
+});
+
+it.each([
+  { index: 2, type: 'step/start', starts: 1, calls: 0 },
+  { index: 3, type: 'tool/call', starts: 1, calls: 2 },
+  { index: 0, type: 'step/start', starts: 0, calls: 1 },
+  { index: 3, type: 'turn/start', starts: 2, calls: 1 },
+])('diagnoses $starts starts and $calls calls without exposing event data', (control) => {
+  const value = bashEvidence();
+  const row = value.records[control.index];
+  if (!row) throw new Error('Missing test event');
+  row.event.type = control.type;
+  Object.assign(row.event.data, { secret: 'private-event-sentinel' });
+  let failure: unknown;
+  try {
+    permissionEvidence(value);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(permissionFailure(failure)).toEqual({
+    code: 'permission-turn-call-count',
+    detail: `turn-start:${String(control.starts)},tool-call:${String(control.calls)}`,
+  });
+});
+
+it('rejects a different bash command even when it reports the expected output', () => {
+  const value = bashEvidence();
+  value.command = 'echo forged-output';
+  expect(() => permissionEvidence(value)).toThrow('permission-intended-bash');
+});
+
+it('classifies an exact-command rejection without retaining the rejected command', () => {
+  const value = bashEvidence();
+  value.command = 'private command sentinel';
+  let failure: unknown;
+  try {
+    permissionEvidence(value);
+  } catch (error) {
+    failure = error;
+  }
+  expect(permissionFailure(failure)).toEqual({ code: 'permission-intended-bash', detail: null });
+});
+
+it.each([
+  ['nonzero-exit', '{"owned":true}\n[exit code: 7]'],
+  ['signal', '{"owned":true}\n[killed by signal: SIGTERM]'],
+  ['timeout', '{"owned":true}\n[timed out after 1000ms]'],
+  ['stopped', '{"owned":true}\n[stopped: cancelled]'],
+  ['truncated', '{"owned":true}\n[output truncated; full output: /data/work/spill]'],
+  ['stderr', '{"owned":true}\n[stderr]\nprobe failed'],
+  ['background', 'started background job owned-job'],
+  ['promoted', '{"owned":true}\n[still running after 1000ms; moved to background job owned-job]'],
+  ['malformed-json', '{"owned":'],
+])(
+  'rejects and safely classifies %s shell output without accepting a JSON prefix',
+  (detail, text) => {
+    const value = bashEvidence();
+    const message = record(record(value.records[3]?.event.data).message);
+    message.content = [{ type: 'text', text }];
+    let failure: unknown;
+    try {
+      permissionEvidence(value);
+    } catch (error) {
+      failure = error;
+    }
+    expect(permissionFailure(failure)).toEqual({ code: 'permission-bash-process', detail });
+  },
+);
+
+it.each([
+  new Error('permission-intended-bash private-key-sentinel'),
+  Object.assign(new Error('private-cookie-sentinel'), {
+    code: 'permission-bash-process',
+    detail: 'private-output-sentinel',
+    actual: 'private-body-sentinel',
+    expected: 'private-prompt-sentinel',
+  }),
+  new AggregateError([new Error('private-cause-sentinel')], 'permission-provider-attempt'),
+  { code: 'permission-intended-bash', message: 'private-command-sentinel' },
+])('withholds untrusted diagnostic messages and payloads', (error) => {
+  expect(permissionFailure(error)).toEqual({ code: 'unclassified', detail: null });
+});
+
+it.each(['foreign-call', 'abort', 'extra-part', 'missing-content'] as const)(
+  'rejects %s native bash evidence',
+  (failure) => {
+    const value = bashEvidence();
+    const message = record(record(value.records[3]?.event.data).message);
+    if (failure === 'foreign-call') message.toolCallId = 'another-call';
+    if (failure === 'abort') message.isError = true;
+    if (failure === 'extra-part')
+      message.content = [
+        { type: 'text', text: '{"owned":true}' },
+        { type: 'text', text: 'untrusted trailing result' },
+      ];
+    if (failure === 'missing-content') message.content = [];
+    expect(() => permissionEvidence(value)).toThrow(
+      failure === 'foreign-call' || failure === 'abort'
+        ? 'permission-tool-result'
+        : 'permission-bash-process',
+    );
+  },
+);
 
 it.each(['pending', 'allow', 'deny', 'unprompted'] as const)(
   'recognizes correlated native %s evidence',
