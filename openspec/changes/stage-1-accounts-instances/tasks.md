@@ -1323,7 +1323,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 - [x] 19.1 经平台接口越界。验证：`pnpm test:deploy`——用户 B 的平台会话请求任何路径，带上 A 的用户标识、A 的 Session 标识、伪造的转发头，都只到达 B 的实例或被拒绝；B 列不出也打不开 A 的 Session 和文件；员工的平台会话请求管理接口得到 403（规格“用户看不到他人的文件和 Session”“实例不能借平台接口越权”）。
 - [x] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
 - [x] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
-- [ ] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
+- [x] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
 - [ ] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
 - [ ] 19.6 凭据全量扫描。验证：`pnpm test:deploy`——完成注册、登录、对话、改密码、修改模型配置、禁用账号后，在审计表和平台日志里搜索用到的每一个密码、平台会话令牌、DSH 启动令牌、DSH cookie、模型密钥和一条带特定标记的消息原文，一处都找不到（规格“不记录内容和凭据”）。
 - [ ] 19.7 审计事件覆盖。验证：`pnpm test:deploy`——19.6 的操作序列加上一次管理员重启、一次重置实例配置和一次空闲回收之后，`audit-log` 规格“记录的事件范围”列出的每一种事件类型在审计里至少各有一条，操作者和对象正确。
@@ -1432,3 +1432,11 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Network/resources/errors: known-live A3080/3099 at loopback/IP/alias before and after B's bounded IP/alias denials; uid1001 and same owned identities, original registration/drainage/cleanup retained.
 - Evidence/compatibility/docs: extract and reuse unchanged network scripts; qualify each major boundary with disposable controls, restore and run deployment/check/strict, four independent seats, exact-head standalone/full Docker/CI and independently empty inventories. No production/schema/packaging/provider changes; #101/#102 remain explicit non-goals.
 - 实测：giap-vps候选9/9通过150.92s；首次8pass/1fail为跨卷rename实际EXDEV的分类缺口，补充明确拒绝码并保留overwrite EROFS和摘要不变，不把EXDEV当只读证据。五类独立控制均拒绝：实际A读回结果喂给B拒绝判据（149.21s）、实际A本机IP/alias连接结果（151.26s）、只读socket曝光（255.48s，原端口/socket用例和新用例均失败）、RW覆盖层（233.74s，底层mode仍EACCES）、匿名admin guard绕过（239.55s，实得200）。额外在仅测试自有RW覆盖层上准备可写mode，真实uid1001写入后摘要变化，8pass/1预期失败147.13s；所有调用四类资源及活动unit清单均为空。wrong-subject控制不是生产跨挂载/bridge漏洞；socket调用仍EACCES，没有成功daemon操作声明。check2152unit/1135integration、dup2.82%、strict5/5通过；恢复、独立审查和最终冻结SHA standalone/fullDocker/CI仍是门禁。
+
+## Issue #101 risk/evidence map (task19.4 only)
+
+- Auth/protocol/secrets: actual own-token/cookie positives, A credentials rejected at B with no cookie, B remains valid; trusted Host and native target identity explicit, secret-safe outcomes.
+- File/discovery/evidence: uid1001 readable-files and process-environment traversal, actual platform credential/hash needles, database filename/schema/path/mount checks, positive sentinels, bounds and classified inaccessible/vanished entries. Kernel memory/devices are non-goals, not silent coverage.
+- Resource/compatibility/errors: original nine deployment cases and teardown preserved; independent controls for leaks, native identity and privilege, no inherited real secrets or provider calls.
+- Gates: restored real deployment, check/strict fixture, four independent high-risk seats, frozen-head standalone/full Docker and protected CI with independent empty inventories. Docs state finite scan scope and shared-model-key exclusion; #102 Yolo and #103 audit/log scan remain separate.
+- 实测：初次9pass/1fail明确捕获注册也签发会话导致5条而非3条；保留两个注册cookie后完整库存与DB摘要绑定，候选10/10通过176.76s。B扫描34404文件/781864952字节，558权限拒绝、16消失条目明确计数；正向标记命中、禁止项不命中。独立文件泄漏171.74s、环境泄漏172.24s、cookie错误目标200拒绝171.04s、token错误目标303拒绝172.30s、真实privileged=true拒绝266.97s、重复cookie遗漏一个会话拒绝176.99s，均原9项通过且新用例预期失败；重命名真实平台DB复制到B后database/fileHits同时命中并拒绝189.34s。首次DB控制因73728字节序列化后base6498304字节超过既有65536输出边界而在setup失败166.32s，独立仅字节数诊断175.29s确认；改用测试自有私有目录文件传输，不提高上限，不将setup失败计为资格通过。所有调用四类资源/活动unit清单为空；check2152unit/1135integration、dup2.83%、strict5/5通过。恢复、独立审查和最终冻结SHA standalone/fullDocker/CI仍为门禁；无模型执行。

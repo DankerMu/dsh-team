@@ -704,3 +704,10 @@
 - Task19.3 only: uid1001 commands inside B cannot read A's home/work sentinels or Docker socket, reach A by address/name, use unauthenticated administrator APIs, or alter the managed overlay. Runtime defects require a separate issue; no production/DSH/provider changes.
 - Reuse genuine Compose account setup and existing network listener/probe scripts; preserve all eight deployment cases, ownership registration, graceful drainage and cleanup. Parent-inline mapped implementation/fixture admission is disclosed, not independent fixture review; advisor unavailable.
 - Evidence floor: live positives, discriminating owned controls, restored candidate, check/strict fixture, independent review, frozen-head standalone/full Docker and protected CI with empty resource inventories. #101 credentials and #102 real Yolo execution remain separate.
+
+## Issue #101 fixture
+
+- Test-only Characterization/Standard, expanded instead of compact: native credential validity, filesystem discovery and secret-safe evidence require four independent review lenses.
+- Task19.4 only on delivered Compose: actual A launch token/cookie cannot authenticate B, B cannot discover platform database/session/password-hash/A-cookie material, and its container is nonprivileged/nonroot. Preserve nine deployment cases and all resource ownership/drainage.
+- Required evidence: each native credential succeeds at its owner, wrong-owner denial without replacement cookie, uid1001 readable-files/process-environment scan with positive sentinels and explicit discovery limits, leak/identity/privilege controls, restoration, check/strict, independent review and exact-head standalone/full Docker/CI.
+- Parent-inline mapped implementation/fixture admission disclosed; advisor unavailable. No production/DSH/provider changes; runtime defects become separate issues. Shared model-key confidentiality is explicitly not provided; Yolo and audit/log scanning remain separate.
