@@ -1321,7 +1321,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 依赖：第 18 组。只放跨组的整套检查；各组自己的测试已在各组内。
 
 - [x] 19.1 经平台接口越界。验证：`pnpm test:deploy`——用户 B 的平台会话请求任何路径，带上 A 的用户标识、A 的 Session 标识、伪造的转发头，都只到达 B 的实例或被拒绝；B 列不出也打不开 A 的 Session 和文件；员工的平台会话请求管理接口得到 403（规格“用户看不到他人的文件和 Session”“实例不能借平台接口越权”）。
-- [ ] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
+- [x] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
 - [ ] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
 - [ ] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
 - [ ] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
@@ -1415,3 +1415,12 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Qualification: old assertions accept genuinely preclosed carriers, repaired assertions reject the same controlled inputs; stale timestamp control independently qualifies the lower bound. Normal targeted Docker acceptance then passes. No production, provider, protocol or permission change.
 - Required gates: root targeted `pnpm test:docker` on giap-vps, local check/strict fixture, four independent high-risk seats, frozen-head original full Docker/CI and empty independent inventories; inline fixture admission disclosed, advisor unavailable. Complete before final Epic disconnect acceptance.
 - 实测：在真实giap-vps原测试中于管理动作前销毁并await目标carrier，旧断言仍4/4通过（91.73s），直接暴露false acceptance；加入存活前置与单调时钟下界后，同一提前关闭控制使禁用/重启两用例在动作前断言失败，另两项通过（81.02s）。独立将实际close回执时间减60000ms的控制，两用例均在时间下界失败（155.78s），没有以存活检查替代时间约束。无控制的真实禁用/重启4/4通过（90.35s）；每次独立四类资源和活动unit清单均为空。check2152unit/1135integration、dup2.84%、strict5/5通过。原始物理停止、兄弟实例、账号/平台会话、Session历史与文件卷断言及5秒门槛全部保留；冻结SHA审查/fullDocker/CI仍为合并门禁，历史no-save关闭来源仍未知。
+
+## Issue #99 risk/evidence map (task19.2 only)
+
+- Auth/protocol/tenant identity: real A/B platform sessions and native logical follow streams, exact own snapshot identity/title, B requests live A address and receives correlated session/not-found with no content item.
+- Async/evidence/compatibility: own live rename events and B's same-carrier continuation after rejection; bounded waits and unexpected close/error fail. Preserve seven existing deployment scenarios and canonical RPC behavior; raw101/Pong is not this oracle.
+- Resource/path safety: invocation-owned clients/resources, listeners before send and finally closure; original Compose lock/drainage/cleanup unchanged. No provider/browser-render or internal-network claim.
+- Required evidence: wrong-upstream WS negative control then restored positive, root deployment/check/strict fixture, four independent high-risk seats, frozen-head standalone/fullDocker/CI and independent empty inventories. Parent-inline fixture admission disclosed; no production or DSH changes.
+- 实测：真实Compose候选8/8通过140.69s，A/B原生follow快照、foreign typed rejection及同carrier实时事件均执行。临时WS上游按攻击query选A的控制，7项原用例通过，新用例在B自身snapshot断言收到error而明确失败（133.80s）；每次四类资源及活动unit清单为空。第一次控制仅输出AggregateError外壳（239.25s），未追认内层失败位置；保留多失败聚合并对单一Error原样重抛后才取得明确断言证据。localcheck2152unit/1135integration、dup2.83%、strict5/5通过，恢复候选及最终审查后同SHA standalone/fullDocker/CI仍为合并门禁。无provider、生产或DSH改动。
+- Review闭环：四独立席位中correctness发现A最后一次live-event wait之后、B继续期间发生的A close/error不会再检查，违反既定unexpected-carrier失败合同；按覆盖缺口确认并使用fixpass1。真实控制在A live事件后关闭并await A，旧候选仍8/8通过132.89s；增加最终遍历两carrier的failure latch及OPEN检查后，同控制7pass/1明确Native carrier closed失败134.89s，独立资源清单为空。既有B OPEN断言和所有内容/同stream序列判据保留；父级内联全diff+耦合修复复审须明确不是独立二轮审查，原四席位报告与计数保留。
