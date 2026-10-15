@@ -33,7 +33,7 @@ it('rejects unauthenticated instance restart with the fixed Unauthorized respons
   });
 });
 
-it('protects both restart endpoints with current administrator, exact Origin and JSON authority', async () => {
+it('protects instance actions with current administrator, exact Origin and JSON authority', async () => {
   const f = await accountStatusFixture();
   try {
     f.seedRunning();
@@ -41,7 +41,11 @@ it('protects both restart endpoints with current administrator, exact Origin and
     const base = await f.app.listen({ host: '127.0.0.1', port: 0 });
     const before = f.database.prepare('SELECT * FROM instances').all();
     const audits = f.database.prepare('SELECT * FROM audit_events').all();
-    for (const suffix of [`${START_USER}/restart`, 'restart-running']) {
+    for (const suffix of [
+      `${START_USER}/restart`,
+      'restart-running',
+      `${START_USER}/reset-config`,
+    ]) {
       for (const [headers, status] of [
         [jsonRequestHeaders(), 401],
         [jsonRequestHeaders({ cookie: employee, 'x-role': 'admin' }), 403],
@@ -66,8 +70,8 @@ it('protects both restart endpoints with current administrator, exact Origin and
   }
 });
 
-it.each(['single', 'bulk'] as const)(
-  'rechecks the %s restart administrator after a held body loses authority',
+it.each(['single', 'bulk', 'reset-config'] as const)(
+  'rechecks the %s instance action administrator after a held body loses authority',
   async (kind) => {
     for (const change of ['revoke', 'demote', 'disable'] as const) {
       let held:
@@ -78,7 +82,7 @@ it.each(['single', 'bulk'] as const)(
             invalidate: () => void,
           ) => Promise<{ status: number; body: string }>)
         | undefined;
-      const path = `/_platform/api/admin/instances/${kind === 'single' ? `${START_USER}/restart` : 'restart-running'}`;
+      const path = `/_platform/api/admin/instances/${kind === 'bulk' ? 'restart-running' : `${START_USER}/${kind === 'single' ? 'restart' : 'reset-config'}`}`;
       const f = await accountStatusFixture((app) => {
         held = delayedConfigBody(app, path, 'POST');
       });

@@ -446,3 +446,106 @@ it('bulk real admin HTTP restart selects only captured running instances and pre
     },
   );
 });
+
+it('administrator reset repairs a genuinely broken profile then explicit startup preserves native Session history, files and sibling', async () => {
+  await withDockerIdleInstance(async (f) => {
+    const gateway = instanceGatewayFixture(f);
+    try {
+      const admin = await registerInstanceUser(f.base, f.origin, 'reset-admin@example.test');
+      f.database.prepare("UPDATE users SET role='admin' WHERE id=?").run(admin.id);
+      const sibling = await ownedUser(f, 'reset-sibling@example.test');
+      await gateway.state(sibling.cookie, true);
+      await gateway.ready(sibling.cookie);
+      const siblingRow = record(
+        f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(sibling.id),
+      );
+      if (typeof siblingRow.container_id !== 'string') throw new Error('Missing sibling identity');
+      const siblingBefore = normalizeInspectMounts(
+        await inspectAsync(f.lifecycle, siblingRow.container_id),
+      );
+      const siblingConnection = await gateway.open(sibling.cookie);
+      const { sessionId, originalHistory } = await gateway.persistedSession(f);
+      const sessions = f.database
+        .prepare('SELECT * FROM platform_sessions ORDER BY token_hash')
+        .all();
+      const accounts = f.database.prepare('SELECT * FROM users ORDER BY id').all();
+      const bytes = Buffer.from('reset retained 中文\\n').toString('base64');
+      await gateway.exec(
+        f.containerId,
+        `import {writeFileSync} from 'node:fs'; writeFileSync('/data/work/issue72-retained',Buffer.from('${bytes}','base64')); writeFileSync('/data/home/profiles/web/cordis.patch.yml','broken: [');`,
+      );
+      const headers = {
+        cookie: admin.cookie,
+        origin: f.origin,
+        'content-type': 'application/json',
+      };
+      const failed = await fetch(`${f.base}/_platform/api/admin/instances/${f.user.id}/restart`, {
+        method: 'POST',
+        headers,
+        body: '{}',
+      });
+      await failed.arrayBuffer();
+      expect(failed.status).toBe(500);
+      expect(
+        record(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(f.user.id))
+          .container_id,
+      ).toBeNull();
+
+      const reset = await fetch(
+        `${f.base}/_platform/api/admin/instances/${f.user.id}/reset-config`,
+        {
+          method: 'POST',
+          headers,
+          body: '{}',
+        },
+      );
+      expect(reset.status).toBe(204);
+      expect((await reset.arrayBuffer()).byteLength).toBe(0);
+      expect(
+        record(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(f.user.id))
+          .container_id,
+      ).toBeNull();
+      await gateway.state(f.user.cookie, true);
+      await gateway.ready(f.user.cookie);
+
+      const ready = record(
+        f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(f.user.id),
+      );
+      if (typeof ready.container_id !== 'string') throw new Error('Missing reset replacement');
+      expect(ready.container_id).not.toBe(f.containerId);
+      expect(ready.status).toBe('running');
+      expect(await gateway.history(f.user.cookie, sessionId)).toEqual(originalHistory);
+      expect(
+        await gateway.exec(
+          ready.container_id,
+          "import {readFileSync} from 'node:fs'; process.stdout.write(readFileSync('/data/work/issue72-retained').toString('base64'));",
+        ),
+      ).toBe(bytes);
+      await f.verifyVolumes();
+      expect(
+        f.database.prepare('SELECT * FROM platform_sessions ORDER BY token_hash').all(),
+      ).toEqual(sessions);
+      expect(f.database.prepare('SELECT * FROM users ORDER BY id').all()).toEqual(accounts);
+      expect(
+        f.database
+          .prepare(
+            "SELECT actor_email,target_email,target,details FROM audit_events WHERE event_type='instance.config-reset'",
+          )
+          .all(),
+      ).toEqual([
+        {
+          actor_email: 'reset-admin@example.test',
+          target_email: 'idle-docker@example.test',
+          target: f.user.id,
+          details: '{}',
+        },
+      ]);
+      expect(siblingConnection.socket.destroyed).toBe(false);
+      expect(
+        normalizeInspectMounts(await inspectAsync(f.lifecycle, siblingRow.container_id)),
+      ).toEqual(siblingBefore);
+    } finally {
+      gateway.close();
+    }
+  });
+});

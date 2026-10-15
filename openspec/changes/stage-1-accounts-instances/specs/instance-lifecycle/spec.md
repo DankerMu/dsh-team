@@ -242,6 +242,14 @@
 - **WHEN** 实例仍运行、仍保留容器、卷缺失或归属错误、当前身份变化，或者恢复与清理失败
 - **THEN** 操作 MUST 明确拒绝或失败，不把未知资源当作可删除对象，不自动启动实例或声称恢复成功
 
+#### Scenario: 管理员经接口恢复配置
+
+- **WHEN** 当前有效管理员对已有且无冲突的活跃账号实例提交空JSON到`POST /_platform/api/admin/instances/:userId/reset-config`
+- **THEN** 平台 MUST 先断开该实例网关连接并停止实例，再调用编排器恢复profiles；停止后恢复前 MUST 重查当前管理员和目标权限
+- **AND** 恢复成功后 MUST 写入`instance.config-reset`审计并返回空204，保留平台会话；恢复或审计失败 MUST 返回安全失败而不是假成功
+- **AND** 恢复期间员工启动和其他冲突管理操作 MUST NOT 穿插执行，关闭平台 MUST 等待实际恢复与清理完成
+- **AND** 接口 MUST NOT 自动启动实例；之后经原显式启动接口可正常就绪，已有Session和文件保留
+
 ### Requirement: 平台重启后实例状态一致
 
 平台进程重启后 MUST 以容器的实际状态为准恢复对各实例的认识。
