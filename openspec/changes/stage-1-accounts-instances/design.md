@@ -255,6 +255,12 @@ Retain only task-owned paths, hashes, field-presence results and native identity
 
 `platform/web/` 是一个 React 18 加 Vite 的工作区包，构建为静态文件，由平台在 `/_platform/` 下提供。页面：登录、注册、改密码、等待页、管理后台（账号、实例、模型配置、运行参数、审计）。第一个界面 PR 同时补上 Playwright 基线和验证矩阵的界面行（`constraints.yaml` 里登记的延后项到此解除）。
 
+Task14.10 (#75) adds the explicit static path and routed instance page to existing administration navigation. GET `/_platform/api/admin/instances` is the only authority/data source, returning all rows; filter that snapshot by email locally. Display the saved five-state projection and times, and expand `lastError` as plain text only. This is the existing sanitized saved log/error field, not a new Docker log reader or employee-content surface.
+
+Use the existing current-attempt read ownership and synchronous mutation fence conventions. Clear rows on current401/403, invalidate reads before mutation, consume response bodies including204, and ignore obsolete/unmounted completions. Explicit refresh retries GET only. Mutation confirmation captures one canonical user ID; restart and reset send JSON{} to existing endpoints. Restart receipts describe admission rather than readiness; reset success explains that subsequent explicit startup is separate. Unknown/malformed receipts and transport failures never become success.
+
+Browser verification reuses the real platform HTTP/SQLite/application service and the existing Engine-protocol fixture through an owned Unix socket. It independently checks reset audit/retired identity and restart admission/audit, while declaring the Docker dependency substitute; real damaged-profile/files/Session preservation remains #72's physical Docker oracle. Synthetic browser responses are limited to a single list500 and explicitly rendering-only empty-list case; pending/load controls hold then continue real requests. No request-failure allowlist is added.
+
 ### 16. 部署骨架
 
 `deploy/compose.yml` 定义平台服务：挂载 Docker socket、数据目录（SQLite 文件）和覆盖层目录（宿主和容器内同一路径）。变量只列在仓库根目录的 `.env.example` 一份文件里，compose 用它的拷贝。启动步骤：构建用户镜像和平台镜像，`docker compose up -d`，再执行一次创建管理员的命令。

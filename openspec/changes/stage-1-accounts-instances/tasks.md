@@ -977,7 +977,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - [x] 14.7 重置实例配置接口：停止实例，调用 9.11 的恢复函数，写审计（重置实例配置）。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写成无法解析的内容使实例启动失败，并在工作目录放一个文件；经接口重置后实例能启动，工作目录里的文件和已有的 Session 都还在；审计里有该事件（规格“重置实例配置”）。
 - [x] 14.8 审计查询接口：只读，带筛选和分页。验证：集成测试——员工请求 403；按邮箱筛选只返回该员工作为操作者或对象的记录；契约文件里审计相关的接口只有查询，管理员可调用的接口没有任何一个返回员工的文件、Session 或对话内容（规格“管理员查询审计”“审计不可经接口修改”“后台不提供员工内容”）。
 - [x] 14.9 后台框架和账号页：后台导航，员工访问后台地址被拒绝；账号列表（搜索、禁用启用、重置密码），区分加载中、空、无匹配、请求失败四种状态，破坏性操作先确认。验证：`pnpm test:ui`——禁用、启用、重置密码各走通一次；四种状态各有用例（请求失败时显示加载失败和重试按钮）。
-- [ ] 14.10 实例页：状态、最近启动时间、最近活动时间、最近一次错误（可展开看日志）、重启、重置配置；四种列表状态；重置前显示“会恢复该用户的 DSH 设置，文件和对话保留”并确认。验证：`pnpm test:ui`——出错的实例能看到日志；重启和重置各走通一次；确认框文案正确。
+- [x] 14.10 实例页：状态、最近启动时间、最近活动时间、最近一次错误（可展开看日志）、重启、重置配置；四种列表状态；重置前显示“会恢复该用户的 DSH 设置，文件和对话保留”并确认。验证：`pnpm test:ui`——出错的实例能看到日志；重启和重置各走通一次；确认框文案正确。
 - [x] 14.11 审计页：按事件类型、邮箱、时间范围筛选，分页；四种列表状态。验证：`pnpm test:ui`——三种筛选各走通一次；翻页正确（规格“界面状态完整”由 14.9 到 14.11 共同覆盖）。
 
 Suggested fixture level: expanded - 管理权限、平台会话失效和对实例的破坏性操作
@@ -1488,3 +1488,17 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Admission: parent-inline scoped implementation/fixture review under higher single-slice delegation rule, explicitly not independent approval; advisor unavailable. Required critical-path human review remains deferred to Epic end. Reset is204 without auto-start, following task14.7's stop/restore/audit sequence; readiness is proved through the existing explicit start.
 - 初始HTTP注入以404对204语义RED，随后权限/冲突/恢复及审计失败/服务排空通过。实际HTTP关闭案例发现既有keep-alive阻塞，独立#246/PR247修复并合并b033655后恢复原消费者，25/25通过，未放宽头部或deadline；独立修复规范在本PR同步归档。编译产物通过相同真实HTTP+文件SQLite重开场景2/2；本地完整check2187unit/1185integration、dup2.79%、schema/strict通过。
 - 父级候选审查头e319d17在giap-vps执行原定向Docker4/4、87.03s（父级96.0151s），新增实际损坏profile→restart500→reset204→显式启动ready案例19.816s，原生Session/history、work字节、平台会话、账号、卷和兄弟实例均保留；独立四类库存与活动unit为空。此为候选运行证据，不替代随后四席独立review、最终精确头完整Docker/deploy和CI。
+- #72最终审查头36f313f：四独立席位Round1clean0fixpasses；LinuxHTTP25/25、原部署11/11 280.10s、原完整Docker30files89/89 766.23s（reset13.018s）及独立空库存通过，CI38795306612全绿，PR248合并4f78a8a。#246独立修复已同步归档发布；每行instance-service变更的人工白盒审查仍留Epic末。
+
+## Issue #75 risk/evidence map (task14.10 only)
+
+- Authority/privacy — selected: existing list as authority probe, current401/403 removal/navigation and safe plain-text saved error projection; no content/log API, raw diagnostics or secret storage. DOM stale/malformed/current-authority cases and real browser denial prove this.
+- UI concurrency — selected: owned reads, response-body completion, synchronous pending fence, explicit target confirmation/cancel, no mutation retry, no stale/unmounted success. DOM controlled promises plus held real browser requests prove boundaries.
+- Behavior/runtime — selected: five statuses/times/error expansion and four distinct list states, local email filtering and explicit refresh, real restart/reset endpoint and audit effects. Built Playwright screenshots and unchanged strict observer are required; true API/service/SQLite with existing Unix Engine dependency is disclosed, never physical Docker evidence.
+- Integration — selected: explicit static route, AccountPage dispatcher, shared navigation and existing account/audit/model/runtime consumers. No backend API/lifecycle behavior changes; full check/UI, generated contract check, four independent review seats and final exact-head original deploy/full Docker/CI.
+- Scope/admission — no bulk restart duplication, automatic polling/start, new pagination, dependency, external provider, test gate relaxation or raw container-log endpoint. Parent coupled fixture admission is not independent; human review obligations from prior critical changes remain.
+- 实测：路由DOM先“登录”对“实例管理”语义RED，重置交互先缺少按钮RED，实际浏览器静态页404对200RED；对应实现后29项DOM用例通过。完整`pnpm check`2216unit/1185integration、dup2.80%通过；原始`pnpm test:ui`41/41、45.4s通过，含新增7个实例页浏览器场景及全部既有UI回归，未新增requestfailure豁免。
+- 浏览器真实权限/列表/确认/pending/变更/审计闭环使用原服务和自有Unix Engine依赖；重启准入后由实际readiness观察到该依赖令牌流结束并持久安全错误，页面展开值与DB完全相同；重置204后实例已停止、审计一次、平台会话不变，helper库存为空。仅一个list500与明确标注的empty rendering替身；这些不是物理Docker或模型推理证明。
+- 独立Node+Playwright启动source及dist，均实际HTTP200、可展开保存错误、确认说明/取消不变更、截图和零浏览器/页面/请求/外部错误；Chromium153.0.8010.12，截图已检查。四席独立review和最终精确头完整Docker/deploy/CI仍为后续门禁。
+- Round1四席审查确认一组P2测试覆盖缺口，按workflow阻止clean并启用fixpass1：五状态按钮资格与Escape取消。浏览器从实际行按钮打开后按Escape，原实现仍保留dialog（1pass/1fail）；改用既有原生dialog/focus/cancel模式后普通取消不发POST、不写审计，pending期间Escape不取消已提交操作。一次测试辅助函数类型参数遗漏在typecheck被拒绝，修正后完整check2216unit/1185integration、dup2.81%和原UI41/41通过。临时副本反转状态禁用条件被新增断言拒绝（2215pass/1fail），恢复2216pass；source/dist重新证明GET200、HEAD200空body、键盘取消与零浏览器错误，截图已检查。
+- 审查独立性限界：四个只读席位分别执行，但correctness席引用了已完成security报告，不宣称四席盲审；其“fixture文件为空”观察被实际非空JSON反证。父级依更高单slice委派规则完成耦合修复与复核，不冒称新独立复审；最终精确头完整Docker/deploy/CI仍待门禁。

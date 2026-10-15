@@ -117,6 +117,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 2. 填写真实模型服务 Base URL、密钥、模型名和默认模型，保存。密钥不回显；更新配置不热切换已运行实例，下次启动/管理员重启生效。
 3. 用独立员工账号访问 `/_platform/register` 注册，再登录。进入等待页后应启动自己的实例并进入原生工作台。
 4. 检查原生页面及 WebSocket 连接；模型连通性另行用批准的真实任务验收。仅保存模型配置和打开工作台不代表推理成功。
+5. 在后台导航进入 `/_platform/admin/instances`，查看实例状态、最近启动/活动时间，展开出错实例的已保存安全日志。支持按邮箱本地筛选和显式刷新。重启与重置配置均需确认；重启提交不等于已就绪，重置不会自动启动。
 
 自动化操作可使用下表中的同一公共接口，不得直接写数据库。JSON 写请求带 `Content-Type: application/json`、实际对外 `Origin`，登录后的请求携带该账号平台 cookie；凭据只保存在进程内或0600临时文件中，不打印请求头/响应cookie或完整模型配置。
 
@@ -165,7 +166,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 正常停止平台**不删除数据卷，也不等于停止全部员工实例**。先停止新的用户工作，按管理员操作退役需要停止的员工；等待平台完成在途helper清理。对于已确认归本部署所有的平台ID，可发送SIGTERM并等待正常退出；超时/非零退出需要保留故障证据，不把强杀当作正常退役。
 
-管理员可携带当前平台会话与匹配的Origin，向 `POST /_platform/api/admin/instances/:userId/reset-config` 提交JSON `{}`。平台先断开该员工网关连接并停止实例，再调用编排器 `restoreUserProfiles`，恢复和 `instance.config-reset` 审计都成功后返回空204。重置不会自动启动实例或撤销平台会话；随后由员工显式启动或管理员重启，按正常模型配置、容量和就绪流程进入工作台。已有且活跃的目标账号才可重置；未创建实例404，禁用/启动中/冲突操作409，未接入生命周期服务503。实例页确认交互仍由任务14.10交付。
+管理员可携带当前平台会话与匹配的Origin，向 `POST /_platform/api/admin/instances/:userId/reset-config` 提交JSON `{}`。平台先断开该员工网关连接并停止实例，再调用编排器 `restoreUserProfiles`，恢复和 `instance.config-reset` 审计都成功后返回空204。重置不会自动启动实例或撤销平台会话；随后由员工显式启动或管理员重启，按正常模型配置、容量和就绪流程进入工作台。已有且活跃的目标账号才可重置；未创建实例404，禁用/启动中/冲突操作409，未接入生命周期服务503。实例页提供同一操作，并在提交前说明“会恢复该用户的 DSH 设置，文件和对话保留”。
 
 `restoreUserProfiles` 只恢复已退役实例的 `profiles/`：使用捕获的用户镜像、无网络uid1001一次性容器，只挂载已有且归属正确的home卷；`sessions/`、`storages/`、`attachments/`、`.credentials.yaml`、其他home数据与整个work卷保持不变。原目录中的符号链接不会把删除导向外部。HTTP调用方断开不取消已接纳的恢复；同用户启动/冲突管理操作不能穿插，平台关闭会等待实际恢复与清理。停止后、恢复前重查管理员权限；审计失败返回安全500，不声称已完成的文件恢复已回滚。
 
