@@ -1407,3 +1407,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - File/resource/evidence: only owned uid1001 sentinels and recorded resources; original six deployment cases, drainage and cleanup unchanged. Wrong-routing and admin-role controls must fail at intended assertions, restored candidate must pass.
 - Required gates: giap-vps standalone deployment and final exact-head full Docker, local check/strict fixture, four independent review seats and protected CI; no provider invocation, UI or remaining19.x claim. Parent-inline fixture admission disclosed; advisor unavailable.
 - 实测：两名真实员工各自Session/文件正向控制及全部HTTP越界/11项管理路由方法断言通过，候选7/7（111.77s）；原6项保留。临时HTTP选择器按查询userId路由的负对照只使新用例在B Session身份断言失败（194.74s）；移除管理role guard的独立负对照只使新用例在GET users的403断言失败（194.35s）。每次四类资源及活动unit独立清单为空。最初额外RPC参数被原生gateway/arguments-invalid拒绝，经baseline/body/query/header单变量诊断确认；保留该拒绝断言，另用合法描述符参数证明B身份，不将测试构造失败称为生产漏洞。localcheck2152unit/1135integration、dup2.84%、strict5/5通过；恢复候选、独立审查及最终冻结SHA standalone/fullDocker/CI仍为合并门禁。
+
+## Issue #204 risk/evidence map
+
+- Evidence/async/identity: two disable targets and the restart target must be live at dispatch; physical close timestamps cannot precede the action. Existing disable five-second upper bound and restart five-second observation deadline remain distinct and unchanged.
+- Compatibility/resources/auth/data: preserve all physical lifecycle, sibling connection, platform session, native Session/history, account and durable bytes/mount checks; canonical owned cleanup and original failures remain authoritative.
+- Qualification: old assertions accept genuinely preclosed carriers, repaired assertions reject the same controlled inputs; stale timestamp control independently qualifies the lower bound. Normal targeted Docker acceptance then passes. No production, provider, protocol or permission change.
+- Required gates: root targeted `pnpm test:docker` on giap-vps, local check/strict fixture, four independent high-risk seats, frozen-head original full Docker/CI and empty independent inventories; inline fixture admission disclosed, advisor unavailable. Complete before final Epic disconnect acceptance.
