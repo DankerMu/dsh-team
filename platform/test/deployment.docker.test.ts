@@ -20,6 +20,7 @@ import { verifyCredentialIsolation } from './deployment-credential-isolation-fix
 import { verifyHttpIsolation } from './deployment-http-isolation-fixture.ts';
 import { verifyInternalIsolation } from './deployment-internal-isolation-fixture.ts';
 import { verifyStreamIsolation } from './deployment-stream-isolation-fixture.ts';
+import { verifyDeployedCredentialPrivacy } from './deployment-privacy-fixture.ts';
 import { prepareTlsDeployment, verifyTlsCarrier } from './deployment-tls-fixture.ts';
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
@@ -680,3 +681,8 @@ it('rejects sibling native credentials and keeps platform data outside employee 
     await verifyCredentialIsolation(lifecycle, deployment, employee, second, admin);
   });
 });
+
+it(
+  'keeps every used credential and marked conversation out of deployed audit rows and platform logs',
+  verifyDeployedCredentialPrivacy,
+);

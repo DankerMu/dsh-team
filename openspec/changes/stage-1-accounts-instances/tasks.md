@@ -1324,7 +1324,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 - [x] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
 - [x] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
 - [x] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
-- [ ] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
+- [x] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
 - [ ] 19.6 凭据全量扫描。验证：`pnpm test:deploy`——完成注册、登录、对话、改密码、修改模型配置、禁用账号后，在审计表和平台日志里搜索用到的每一个密码、平台会话令牌、DSH 启动令牌、DSH cookie、模型密钥和一条带特定标记的消息原文，一处都找不到（规格“不记录内容和凭据”）。
 - [ ] 19.7 审计事件覆盖。验证：`pnpm test:deploy`——19.6 的操作序列加上一次管理员重启、一次重置实例配置和一次空闲回收之后，`audit-log` 规格“记录的事件范围”列出的每一种事件类型在审计里至少各有一条，操作者和对象正确。
 - [ ] 19.8 阶段完成条件对照：把验收 1、2、13，以及验收 3、12 的本阶段部分，逐条对应到通过的测试名，写进 `docs/STAGE_1_ACCEPTANCE.md`。验证：文档里每一条验收都有测试名和最近一次运行结果；`pnpm check`、`pnpm test:docker`、`pnpm test:deploy`、`pnpm test:model` 全部通过。
@@ -1450,3 +1450,14 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - 非模型资格验证：原生bash初次读取meta失败、第二次确认data仅有turn/step/message；改用完整原生工具文本后，真实正常JSON与exit7附加标记均符合判据，定向Docker2/2通过38.91s。对应oracle先40pass/11fail，修正后51/51通过；完整check2152unit/1149integration、dup2.85%、strict通过。真实Compose浏览器资格路径初次失败60.603s，带阶段/截图观察后明确卡在Yolo确认：部署默认已是Yolo，再选同档不会弹确认框。沿用已有人工批准→Yolo切换后1/1通过32.61s，截图与原生投影一致、console0，两组规范命令经测试用Docker shell执行全部原矩阵断言通过；这只证明浏览器/命令引用与执行seam，不是B Agent或真实模型验收。每次四类资源/活动unit均为空。真实模型仍未授权、未执行；原完整模型套件、最终冻结SHA Docker和独立审查/CI仍为合并门禁。
 - 后续真实模型授权1/1已执行：审查SHA02c0af1b的原模型案例通过173.498s，新增案例139.112s失败于native-probe-2，完整1pass/1fail、313.87s；只有首组网络探针真实原生证明，第二组原因未知。独立运行后review确认新夹具丢失安全分类，进入fixpass1/2，不放松任何验收。类型化oracle错误的RED51pass/1fail→52/52；过程分类RED44pass/9fail后，完整check2152unit/1155integration、dup2.84%、strict通过。无provider真实Compose故障控制明确同时保留primary与browser-close分类；另用自有目录阻止failure.json写入，公开错误仍保留原分类并标记evidenceCurrent=false，两个预期失败55.84s、四类资源及活动unit为空，注入的私密内容未进入输出。诊断修复不追认原第二组失败原因，新SHA真实模型仍须另行授权。
 - 本次operator曾在1853.56s报告VPS退休失败，但远端final已清理成功；独立验证GitHub secret404、SSH授权/工作目录/资源/活动unit均不存在后，父级只移除本次残留admission锁，保留原失败记录。根因未知且直接await未复现，独立跟踪[#242](https://github.com/DankerMu/dsh-team/issues/242)，不与#226混同、不在本任务修改operator，也不把人工恢复写成自动退休成功。
+- 最终#102已合并PR241（0edd7c92c40e0ebaa58db19342920c0f7b7887dc）：审查头f808629完整真实模型Actions38741643901通过2/2、234.50s，两轮原生terminal36/49无审批/console0，五类边界通过；operator/host及父级独立凭据/资源退休成功。check2152unit1177integration、deploy10/10 171.67s、原始完整Docker86/86 735.72s、CI38741653475通过。分页与安全计数资格通过，不追认此前三次模型失败原因；用户批准追加修复后Round7clean，父级耦合复审不是独立review。#226/#242仍开放。
+
+## Issue #103 risk/evidence map (task19.6 only)
+
+- Auth/API/secrets — selected: six real public operations, every issued cookie and used old/new credential, actual DSH credential capture and native prompt history; no value-bearing diagnostics.
+- Persistence/schema/file/log IO — selected: all raw audit columns/rows, exact platform process stdout/stderr from startup through completion barrier, info logging and real-effect positives; no projected/empty/truncated substitute.
+- Concurrency/resources/error handling — selected: settle native turn before mutations, capture credentials before disable, bounded complete observations, fail-closed scan errors and canonical graceful cleanup.
+- Config/compatibility/release — selected: invocation-only logging/local model dependency, all ten original deployment cases, no production/DSH/dependency/CI changes; final standalone/fullDocker and protected CI.
+- Documentation — selected: scope, finite raw-value limitation, truthful no-provider classification and current evidence; shared fixture stays open.
+- Required qualification: baseline, intended audit/log leak rejection, inventory omission and empty/incomplete collection rejection, restoration; check/strict, four independent security/correctness/invariant/evidence seats and final owner attestation. Full audit event enumeration is #104, not an implicit new acceptance criterion.
+- 候选实测：初始原十项通过，新项先后暴露夹具使用内部followup名而非公开queue枚举、禁用登录误期望401而非403、对无req/res普通日志误作必需对象；按发行版声明和现有服务契约修正，未改产品。实际原生对话与六操作基线通过，12凭据/2标记、14审计行及80日志条目均未命中。七个独立控制（真实审计泄漏、PID1日志泄漏、遗漏/重复needle、空审计、空日志、截断早期日志）各在预期安全阶段拒绝；恢复完整部署11/11通过193.30s。函数长度门禁要求分离原生对话、观测判据和Compose准备后，七控制重新全部合格，恢复完整11/11通过191.91s，14审计行/78日志条目；所有调用四类资源/活动unit为空。check2152unit/1177integration、dup2.82%、strict通过。精确注册Node直接执行的wire夹具为Knip entry，不作dead-code豁免；无外部模型调用。独立审查和最终冻结头完整Docker/CI仍为门禁。

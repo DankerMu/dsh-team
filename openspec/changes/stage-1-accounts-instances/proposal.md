@@ -718,3 +718,11 @@
 - Task19.5 only: a real B Agent in Yolo executes the same five-boundary matrix as19.3 on delivered Compose. Existing ten deployment cases and all original model acceptance remain; no production, DSH, provider-policy, permission or deadline changes.
 - Reuse the canonical internal matrix with an injected B command executor; default Docker execution remains19.3. Extract existing Compose account setup unchanged, and extend the existing native permission oracle for exact foreground bash execution rather than duplicate its prompt/turn/call/result checks.
 - Parent-inline mapped implementation/admission is disclosed. Real provider work requires a newly approved reviewed SHA through the existing one-shot independent-retirement lane; prior3/3 authorization is exhausted. No model attempt or acceptance claim before that approval.
+
+## Issue #103 fixture
+
+- Test-only Characterization/Critical, expanded instead of compact: complete secret inventory, unprojected persistence and process-log custody require four independent review lenses.
+- Task19.6 only: actual delivered Compose registration/login/native conversation/password change/model update/disable, followed by all-audit-column and complete platform stdout/stderr scans for every used credential and marked message.
+- Reuse existing deployment/account/gateway/launch-token boundaries; use only an invocation-owned local OpenAI-compatible response dependency, never an external model or fabricated Session history. Preserve all ten deployment cases and lifecycle/cleanup.
+- Qualify log/audit leaks, omitted needles and empty/incomplete collection; emit only safe counts/booleans, never leaked bytes or failed assertion payloads. Final check/strict, independent reviews, exact-head standalone/full Docker and protected CI remain gates.
+- Parent-inline mapped implementation/fixture admission is disclosed, not independent fixture review; advisor unavailable. Runtime defects are separate issues; no production redaction, permission, DSH or threshold changes.
