@@ -90,7 +90,14 @@ export async function runHomeHelper<Result>(
               Privileged: false,
               CapAdd: [],
               SecurityOpt: [`seccomp=${seccomp}`],
-              Mounts: [{ Type: 'volume', Source: home, Target: '/data/home' }],
+              Mounts: [
+                {
+                  Type: 'volume',
+                  Source: home,
+                  Target: '/data/home',
+                  VolumeOptions: { NoCopy: role === 'profile-reset' },
+                },
+              ],
             },
           }),
         );

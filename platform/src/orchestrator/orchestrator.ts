@@ -237,7 +237,7 @@ async function restoreProfiles(
   input: RestoreUserProfilesInput & Pick<OrchestratorDependencies, 'client' | 'database'>,
   unsettled: Set<string>,
 ): Promise<void> {
-  if (unsettled.has(input.userId)) throw new Error('Profile restoration cleanup unconfirmed');
+  if (unsettled.has(input.userId)) throw new Error('Home helper cleanup unconfirmed');
   try {
     await restoreUserProfiles(input);
   } catch (error) {
@@ -272,7 +272,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   const pending = new Set<string>();
   // Creation uncertainty is owner-lifetime state, not a subnet reservation or durable recovery claim.
   const uncertainNetworks = new Set<string>();
-  const unsettledRestorations = new Set<string>();
+  const unsettledHomeHelpers = new Set<string>();
   let allocationTail: Promise<unknown> = Promise.resolve();
   // Coalescing metadata belongs to this owner; enqueue always uses its original FIFO.
   const activity: ActivityWritebackState = { observations: new Map() };
@@ -309,8 +309,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   }
 
   async function start(input: StartupInput): Promise<StartResult> {
-    if (unsettledRestorations.has(input.userId))
-      throw new Error('Profile restoration cleanup unconfirmed');
+    if (unsettledHomeHelpers.has(input.userId)) throw new Error('Home helper cleanup unconfirmed');
     try {
       return await startUserContainer(
         input,
@@ -330,6 +329,9 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
             assertCurrent,
           ),
       );
+    } catch (error) {
+      if (error instanceof HomeHelperUnconfirmedError) unsettledHomeHelpers.add(input.userId);
+      throw error;
     } finally {
       // Await actual work/cleanup, not caller cancellation. A durable active row remains counted.
       pending.delete(input.userId);
@@ -410,7 +412,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     restoreUserProfiles: (input) =>
       schedule(
         input,
-        (captured) => restoreProfiles(captured, unsettledRestorations),
+        (captured) => restoreProfiles(captured, unsettledHomeHelpers),
         'Profile restoration failed',
       ),
     reconcile,

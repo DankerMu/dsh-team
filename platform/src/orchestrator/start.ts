@@ -11,7 +11,12 @@ import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
 import { containerId, object, ownedContainer, resolvedImageId } from './identity.ts';
-import { readSeccompPolicy, requireAbsent, runHomeHelper } from './home-helper.ts';
+import {
+  HomeHelperUnconfirmedError,
+  readSeccompPolicy,
+  requireAbsent,
+  runHomeHelper,
+} from './home-helper.ts';
 import { requireUnpublished, upstreamHost, verifiedPlatform } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import {
@@ -72,17 +77,18 @@ function startupFailure(stage: string, error: unknown): Error {
         failure instanceof Error && failure.message === 'Managed composition cleanup failed',
     );
   const networkUnconfirmed = error instanceof NetworkCreationUnconfirmedError;
-  return new Error(
-    `Container startup failed during ${stage}${cleanupFailed ? '; managed composition cleanup failed' : ''}${networkUnconfirmed ? '; network creation outcome unconfirmed' : ''}`,
-    {
-      cause: {
-        stage,
-        cleanupFailed,
-        networkUnconfirmed,
-        dockerStatus: error instanceof DockerHttpError ? error.statusCode : undefined,
-      },
+  const message = `Container startup failed during ${stage}${cleanupFailed ? '; managed composition cleanup failed' : ''}${networkUnconfirmed ? '; network creation outcome unconfirmed' : ''}`;
+  const options = {
+    cause: {
+      stage,
+      cleanupFailed,
+      networkUnconfirmed,
+      dockerStatus: error instanceof DockerHttpError ? error.statusCode : undefined,
     },
-  );
+  };
+  return error instanceof HomeHelperUnconfirmedError
+    ? new HomeHelperUnconfirmedError([], message, options)
+    : new Error(message, options);
 }
 
 function resourceLimit(value: number, unit: number): number {

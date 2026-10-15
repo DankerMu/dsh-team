@@ -1,4 +1,7 @@
 import { rm } from 'node:fs/promises';
+import { setImmediate } from 'node:timers/promises';
+import { createDockerClient, createOrchestrator } from './index.ts';
+import type { DockerTransport } from './index.ts';
 import { afterEach, expect, it } from 'vitest';
 import {
   START_HELPER,
@@ -191,4 +194,77 @@ it('fences later starts when submitted helper creation has no trustworthy result
   const count = daemon.requests.length;
   await expect(owner.startUserContainer(input)).rejects.toThrow('cleanup unconfirmed');
   expect(daemon.requests.length).toBe(count);
+});
+
+it('fences restoration and startup after a composition helper keeps unresolved writable home access', async () => {
+  const { owner, input, daemon } = await fixture();
+  daemon.overrides.set(`POST /containers/${START_HELPER}/wait?condition=not-running`, {
+    status: 500,
+  });
+  daemon.overrides.set(`DELETE /containers/${START_HELPER}?force=true`, { status: 500 });
+  await expect(owner.startUserContainer(input)).rejects.toThrow(
+    'managed composition cleanup failed',
+  );
+  expect(daemon.containers.get(START_HELPER)?.State.Running).toBe(true);
+  const count = daemon.requests.length;
+
+  await expect(owner.restoreUserProfiles(input)).rejects.toThrow('cleanup unconfirmed');
+  await expect(owner.startUserContainer(input)).rejects.toThrow('cleanup unconfirmed');
+
+  expect(daemon.requests.length).toBe(count);
+});
+
+it('settles a daemon-accepted create response before cancellation cleanup and queued start', async () => {
+  const { input, daemon, database } = await fixture();
+  const accepted = Promise.withResolvers<() => void>();
+  const transport: DockerTransport = (options, receive) =>
+    daemon.transport(options, (response) => {
+      if (
+        options.method === 'POST' &&
+        options.path?.startsWith('/containers/create?name=dsh-team-restore-') === true
+      )
+        accepted.resolve(() => {
+          receive(response);
+        });
+      else receive(response);
+    });
+  const owner = createOrchestrator({
+    client: createDockerClient('/fixture/docker.sock', transport),
+    database,
+    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+  });
+  const controller = new AbortController();
+  let settled = false;
+  const restoration = owner
+    .restoreUserProfiles({ ...input, signal: controller.signal })
+    .finally(() => {
+      settled = true;
+    });
+  const release = await accepted.promise;
+  const started = owner.startUserContainer(input);
+  let drained = false;
+  const drain = owner.drain().then(() => {
+    drained = true;
+  });
+  const completed = Promise.allSettled([restoration, started, drain]);
+  let outcomes: Awaited<typeof completed>;
+  try {
+    expect(daemon.containers.has(START_HELPER)).toBe(true);
+    const count = daemon.requests.length;
+    controller.abort();
+    await setImmediate();
+    expect(settled).toBe(false);
+    expect(drained).toBe(false);
+    expect(daemon.requests.length).toBe(count);
+  } finally {
+    release();
+    outcomes = await completed;
+  }
+  expect(outcomes.map((result) => result.status)).toEqual(['rejected', 'fulfilled', 'fulfilled']);
+  const [restored, next] = outcomes;
+  if (restored.status !== 'rejected' || next.status !== 'fulfilled')
+    throw new Error('Unexpected restoration settlement');
+  expect(restored.reason).toBeInstanceOf(Error);
+  expect(next.value).toMatchObject({ outcome: 'starting' });
+  expect(daemon.containers.has(START_HELPER)).toBe(false);
 });

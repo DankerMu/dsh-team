@@ -150,6 +150,8 @@ Extract the existing composition one-shot lifecycle once for both composition an
 
 Inside the helper, remove the fixed `profiles` entry without following live symlinks, copy the immutable seed recursively and make the copied tree owner-writable. No path or shell fragment comes from employee input. Only the fixed profiles subtree may change; sessions, storages, attachments, credentials, other home entries and the entire work volume are untouched. A failed copy/reset is an explicit failure, not an atomic rollback claim; the instance remains stopped and a later explicit retry can restore it. No saved user-profile backup or automatic retry is introduced.
 
+Restoration disables Docker home-volume copy-up (`VolumeOptions.NoCopy=true`); otherwise an existing empty home would gain image-seeded non-profile storage during helper creation. Composition retains ordinary first-use seeding. Unknown helper creation/cleanup from either consumer reaches the same owner-local fence before startup error sanitization; subsequent same-user start/reset cannot acquire the home until operational recovery. This is not a persistent cross-owner recovery protocol. The accepted-create cancellation regression holds a daemon-accepted response, not a pre-send hook, and proves cleanup/queued work cannot overtake settlement.
+
 ### 12. 用户镜像和容器安全设置
 
 - 基础 `node:24-bookworm-slim`；装 bubblewrap、Python 3 和 `python-docx`（公文写作 Agent 生成 DOCX 用）、pnpm、`@deepseek-ai/dsh@0.2.0-rc.2`；非 root 用户 uid 1001；`DSH_HOME=/data/home`，工作目录 `/data/work`。

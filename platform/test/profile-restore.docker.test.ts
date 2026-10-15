@@ -35,6 +35,17 @@ if sys.argv[1] == 'write':
 print(json.dumps({'uid': os.geteuid(), 'home': {name: (Path('/data/home') / name).read_text() for name in paths}, 'work': Path('/data/work/retained').read_text()}))
 `;
 
+const EMPTY_HOME = `
+from pathlib import Path
+import json, shutil, sys
+home = Path('/data/home')
+if sys.argv[1] == 'clear':
+    for path in home.iterdir():
+        if path.is_dir() and not path.is_symlink(): shutil.rmtree(path)
+        else: path.unlink()
+print(json.dumps({'home': sorted(path.name for path in home.iterdir()), 'work': Path('/data/work/retained').read_text()}))
+`;
+
 async function probe(
   lifecycle: UserImageLifecycle,
   userId: string,
@@ -54,9 +65,9 @@ async function probe(
       '--network',
       'none',
       '--mount',
-      `type=volume,source=dsh-team-home-${userId},target=/data/home`,
+      `type=volume,source=dsh-team-home-${userId},target=/data/home,volume-nocopy`,
       '--mount',
-      `type=volume,source=dsh-team-work-${userId},target=/data/work`,
+      `type=volume,source=dsh-team-work-${userId},target=/data/work,volume-nocopy`,
       lifecycle.imageId,
       'python3',
       '-c',
@@ -140,6 +151,19 @@ else:
     }
 
     expect(JSON.parse(await probe(lifecycle, userId, PRESERVE, 'read'))).toEqual(before);
+    expect(JSON.parse(await probe(lifecycle, userId, EMPTY_HOME, 'clear'))).toEqual({
+      home: [],
+      work: 'work retained',
+    });
+    await owner.restoreUserProfiles({
+      userId,
+      config: { userImage: lifecycle.imageId, seccompProfilePath: lifecycle.seccomp },
+    });
+    expect(JSON.parse(await probe(lifecycle, userId, EMPTY_HOME, 'read'))).toEqual({
+      home: ['profiles'],
+      work: 'work retained',
+    });
+    profileSeedOracle()(await probe(lifecycle, userId, profileSeedScript, 'fresh'));
     expect(database.prepare('SELECT * FROM instances ORDER BY user_id').all()).toEqual(rows);
     expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     expect(normalizeInspectMounts(await inspectAsync(lifecycle, sibling.containerId))).toEqual(
