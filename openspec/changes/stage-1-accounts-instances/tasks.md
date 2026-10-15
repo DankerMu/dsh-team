@@ -1390,3 +1390,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Files/resources/error paths: ephemeral SAN certificate with explicit client trust, no private material in logs/commits, registered owned proxy/network/container lifecycle, exact cleanup and primary error preserved. Final-head standalone/fullDocker/CI plus four empty inventories and active units required.
 - 实测候选6/6通过91.94s；secure=false负对照只在布尔Secure断言失败（88.69s，无cookie值诊断），trusted-proxy置空只在审计来源断言失败（94.23s：代理172.18.0.2不等于实际peer172.18.0.1），其他五项全部通过；每次独立四类资源及活动unit清单为空。完整check2152unit/1135integration、dup2.84%、strict5/5通过；首次Knip缺entry/hostbinary声明已精确补齐，未使用宽泛豁免。原cookie数组诊断改为布尔以防潜在值泄漏（首次原始失败未观察到cookie值），证书子进程改为明确PATH环境；恢复及冻结SHA验证仍是门禁。
 - 恢复同一布尔cookie断言/明确证书环境候选后6/6通过91.04s，独立四类资源及活动unit清单为空；候选archive不冒充Git冻结SHA证据，独立审查后的standalone/fullDocker/CI仍须通过。
+
+## Issue #97 risk/evidence map (task18.7 only)
+
+- Docs/runtime: exact clean checkout, supported Docker/Compose and Node/pnpm prerequisites, both image build contexts, absolute same-path binds and socket GID, administrator TTY and public model/employee native entry; actual sandbox probe rather than a hand-written replacement.
+- Secrets/ownership: no real env/key reads or credential output; disposable fixture credentials only. Capture exact resource identities, refuse pre-existing targets, no prefix-wide removal or prune, preserve persistent data outside explicit disposable cleanup.
+- Spec claims: enumerate all delivered isolation boundaries and both required exclusions; distinguish currently exercised boundaries from remaining stage19 adversarial acceptance. TLS external; offline bundle/upgrade/backup and later integrations excluded.
+- Required evidence: literal documented command walkthrough on giap-vps, health/admin/model/employee native HTTP+WS, sandbox result and independently empty test-resource inventories; check/strict fixture, independent review and exact-head Docker/CI. No provider inference or new UI-rendering claim.
