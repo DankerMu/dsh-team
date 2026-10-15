@@ -87,9 +87,11 @@ stat -c %g /var/run/docker.sock
 pnpm probe:sandbox
 ```
 
-它实际调用固定发行版 DSH 的 bash 工具，依次尝试 Docker 默认限制、自定义 seccomp、再加 `systempaths=unconfined`；输出首个可用组合和每级原因，并清理自己的唯一测试资源。交付实例仍使用自定义 seccomp 加 `systempaths=unconfined`；探针报告目标机当次首个可用组合（本次 giap-vps 演练为 `docker-default`），不据此自动改动交付安全配置。期望工作区写入成功、DSH 状态目录写入被拒绝。
+这是诊断梯子：实际调用固定发行版 DSH 的 bash 工具，依次尝试 Docker 默认限制、额外放宽 syscall 的探针策略、再加 `systempaths=unconfined`，输出首个可用组合并清理自己的测试资源。本次 giap-vps 演练首个可用组合是 `docker-default`；这不证明引擎内嵌策略与提交文件相同。
 
-这不是“手写 bubblewrap 能跑”的替代检查。无可用组合或清理失败时不要继续部署，也不要改成特权容器或放宽现有测试。探针会自行构建临时镜像、联网获取并校验固定 seccomp 摘要；不会调用模型。
+**交付策略不是梯子的放宽候选。** 员工实例显式使用仓库提交的、未增补 syscall 的钉定 Moby 默认策略，保留 Docker 的 MaskedPaths/ReadonlyPaths；禁止 `systempaths=unconfined`、额外capability、特权模式和unconfined seccomp。继续安装前，还必须按 [seccomp说明“用现有 driver 跑这份文件”](../images/seccomp/README.md#用现有-driver-跑这份文件) 的完整命令对 `images/seccomp/dsh-user.json` 单独验证，不能只凭梯子退出0批准目标机。
+
+显式策略验证必须容器退出0，且唯一 `PROBE_RESULT` 中 `usable`、`wsOk`、`stateDenied` 为true，`statePresent` 为false（工作区写入/读回成功、状态目录写入拒绝）。若只有探针放宽级成功而显式交付策略不通过，停止部署并保留证据；不得把生产限制改成探针候选来“通过”。两种检查都不是手写bubblewrap的替代测试；清理失败也禁止继续。梯子会联网获取并校验固定seccomp来源，两种检查均不调用模型。
 
 ## 5. 启动、创建管理员、配置模型
 
@@ -146,7 +148,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - 每个实例只加入自己的bridge网络；实例间地址/主机名不可达，平台分别接入各实例网络。停止一个实例不应影响兄弟实例；网络身份不可信时失败，不强制删除不明端点。
 - 部署实例不发布宿主端口、不挂Docker socket、不使用特权模式；uid1001运行。只有平台持有Docker控制权限。`published-loopback`只是显式宿主开发方式，不满足部署无端口映射边界。
 - 实例不持有平台数据库、密码哈希、平台session或管理员凭据；A的DSH凭据不能在B使用。平台API在来自实例的请求上仍鉴权：无平台session为401，员工调用管理接口为403。
-- 受管覆盖层在实例内只读；权限档位包括Yolo不能把它变为可写。DSH工具沙箱工作区限制由目标机真实探针验证，而不是仅凭Docker启动成功。
+- 受管覆盖层在实例内只读；权限档位包括Yolo不能把它变为可写。DSH工具沙箱工作区限制由第4节的**显式交付策略**真实driver验证，而不是仅凭Docker启动成功或放宽级探针成功。
 - **不提供模型密钥对员工的保密隔离：共用模型密钥在实例内可读。** 需采用最小权限、配额和可撤销的模型凭据。
 - **不提供实例对其余内网的默认出站阻断：实例可访问宿主机所在内网的其他地址。** 需要更强限制时由网络管理员设计边界，不能宣称现有用户间隔离等于内网全面隔离。
 - 共享单机内核不是独立虚拟机；管理员与Docker操作者是可信边界。没有多机HA或已认证的60并发容量保证。
