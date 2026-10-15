@@ -1500,3 +1500,5 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - 实测：路由DOM先“登录”对“实例管理”语义RED，重置交互先缺少按钮RED，实际浏览器静态页404对200RED；对应实现后29项DOM用例通过。完整`pnpm check`2216unit/1185integration、dup2.80%通过；原始`pnpm test:ui`41/41、45.4s通过，含新增7个实例页浏览器场景及全部既有UI回归，未新增requestfailure豁免。
 - 浏览器真实权限/列表/确认/pending/变更/审计闭环使用原服务和自有Unix Engine依赖；重启准入后由实际readiness观察到该依赖令牌流结束并持久安全错误，页面展开值与DB完全相同；重置204后实例已停止、审计一次、平台会话不变，helper库存为空。仅一个list500与明确标注的empty rendering替身；这些不是物理Docker或模型推理证明。
 - 独立Node+Playwright启动source及dist，均实际HTTP200、可展开保存错误、确认说明/取消不变更、截图和零浏览器/页面/请求/外部错误；Chromium153.0.8010.12，截图已检查。四席独立review和最终精确头完整Docker/deploy/CI仍为后续门禁。
+- Round1四席审查确认一组P2测试覆盖缺口，按workflow阻止clean并启用fixpass1：五状态按钮资格与Escape取消。浏览器从实际行按钮打开后按Escape，原实现仍保留dialog（1pass/1fail）；改用既有原生dialog/focus/cancel模式后普通取消不发POST、不写审计，pending期间Escape不取消已提交操作。一次测试辅助函数类型参数遗漏在typecheck被拒绝，修正后完整check2216unit/1185integration、dup2.81%和原UI41/41通过。临时副本反转状态禁用条件被新增断言拒绝（2215pass/1fail），恢复2216pass；source/dist重新证明GET200、HEAD200空body、键盘取消与零浏览器错误，截图已检查。
+- 审查独立性限界：四个只读席位分别执行，但correctness席引用了已完成security报告，不宣称四席盲审；其“fixture文件为空”观察被实际非空JSON反证。父级依更高单slice委派规则完成耦合修复与复核，不冒称新独立复审；最终精确头完整Docker/deploy/CI仍待门禁。

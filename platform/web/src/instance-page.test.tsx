@@ -46,6 +46,13 @@ it('routes the administrator instance list with five states, nullable times and 
     expect(view.textContent).toContain(label);
   }
   expect(view.querySelectorAll('tbody tr')).toHaveLength(5);
+  for (const [index, row] of [...view.querySelectorAll('tbody tr')].entries()) {
+    const disabled = index === 0 || index === 2;
+    expect([...row.querySelectorAll('button')].map((action) => action.disabled)).toEqual([
+      disabled,
+      disabled,
+    ]);
+  }
   expect(view.querySelector('tbody tr')?.textContent).toContain('暂无');
   expect(view.querySelector('details')?.textContent).toContain('安全日志：启动失败 <img src=x>');
   expect(view.querySelector('details')?.hasAttribute('open')).toBe(false);
@@ -70,6 +77,14 @@ it('confirms reset, cancels without mutation and retains one pending fence throu
   await click(view, '取消');
   expect(request).toHaveBeenCalledTimes(1);
   await click(view, '重置配置');
+  await settle(() => {
+    element(view, 'dialog', HTMLDialogElement).dispatchEvent(
+      new Event('cancel', { cancelable: true }),
+    );
+  });
+  expect(view.querySelector('dialog')).toBeNull();
+  expect(request).toHaveBeenCalledTimes(1);
+  await click(view, '重置配置');
 
   await settle(() => {
     submit(view);
@@ -79,6 +94,15 @@ it('confirms reset, cancels without mutation and retains one pending fence throu
   expect(button(view, '正在提交…').disabled).toBe(true);
   expect(button(view, '取消').disabled).toBe(true);
   expect(button(view, '重启').disabled).toBe(true);
+  await settle(() => {
+    element(view, 'dialog', HTMLDialogElement).dispatchEvent(
+      new Event('cancel', { cancelable: true }),
+    );
+    element(view, 'dialog', HTMLDialogElement).dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+  });
+  expect(view.querySelector('dialog')).not.toBeNull();
   await settleSubmit(view);
   expect(request).toHaveBeenCalledTimes(2);
   await settle(() => {

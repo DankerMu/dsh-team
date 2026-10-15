@@ -118,6 +118,9 @@ test('confirmed browser restart and reset execute real service admission and aud
         await expect(page.getByRole('dialog')).toContainText(target.email);
         await observed.screenshot('instances-reset-confirmation');
         await page.getByRole('button', { name: '取消', exact: true }).click();
+        await row.getByRole('button', { name: '重置配置', exact: true }).click();
+        await page.keyboard.press('Escape');
+        await expect(page.getByRole('dialog')).toHaveCount(0);
         expect(observed.actionRequests.filter((request) => request.method === 'POST')).toEqual([]);
         expectAuditUnchanged(database, beforeCancel);
 
@@ -143,6 +146,8 @@ test('confirmed browser restart and reset execute real service admission and aud
             await held.promise;
             await expect(page.getByRole('button', { name: '正在提交…' })).toBeDisabled();
             await expect(page.getByRole('button', { name: '取消', exact: true })).toBeDisabled();
+            await page.keyboard.press('Escape');
+            await expect(page.getByRole('dialog')).toBeVisible();
             await expect(page.getByLabel('搜索邮箱')).toBeDisabled();
             await expect(
               row.getByRole('button', {

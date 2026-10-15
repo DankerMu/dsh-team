@@ -380,12 +380,19 @@ function InstanceView({
               </table>
             ))}
           {selection !== null && (
-            <section
+            <dialog
+              open
               role="dialog"
-              aria-modal="true"
               aria-labelledby="instance-confirmation"
+              onCancel={(event) => {
+                event.preventDefault();
+                cancel();
+              }}
               onKeyDown={(event) => {
-                if (event.key === 'Escape') cancel();
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  cancel();
+                }
               }}
             >
               <h2 id="instance-confirmation">确认实例操作</h2>
@@ -396,14 +403,14 @@ function InstanceView({
                   : '将断开该用户连接并重启实例，文件和对话保留。'}
               </p>
               <form aria-label="确认实例操作" onSubmit={confirm}>
-                <button type="submit" disabled={pending}>
+                <button type="submit" autoFocus disabled={pending}>
                   {pending ? '正在提交…' : '确认'}
                 </button>
                 <button type="button" disabled={pending} onClick={cancel}>
                   取消
                 </button>
               </form>
-            </section>
+            </dialog>
           )}
         </>
       )}
