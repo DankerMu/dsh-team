@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { once } from 'node:events';
+import { IncomingMessage, ServerResponse } from 'node:http';
+import { Socket } from 'node:net';
 import type { FastifyPluginCallback } from 'fastify';
 import { buildApp } from './app.ts';
 import { applyMigrations, openDatabase, readSettings } from './db/index.ts';
@@ -161,3 +164,82 @@ describe('buildApp', () => {
     }
   });
 });
+
+it.each(['finish', 'cancel'])(
+  'retains database ownership until admitted response streams %s during shutdown',
+  async (outcome) => {
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp(SILENT_CONFIG, database);
+    const first = Promise.withResolvers<undefined>();
+    const second = Promise.withResolvers<undefined>();
+    const admitted = Promise.withResolvers<undefined>();
+    let count = 0;
+    app.addHook('preHandler', async (request) => {
+      count += 1;
+      if (count === 2) admitted.resolve(undefined);
+      await (request.url.endsWith('first') ? first.promise : second.promise);
+    });
+    await app.ready();
+    // Only the OS transport is substituted. Node response streams and Fastify handlers are real.
+    const socket = new Socket();
+    vi.spyOn(socket, '_write').mockImplementation((_chunk, _encoding, done) => {
+      done();
+    });
+    vi.spyOn(socket, '_writev').mockImplementation((_chunks, done) => {
+      done();
+    });
+    const cold = new Socket();
+    const coldClosed = once(cold, 'close');
+    app.server.emit('connection', cold);
+    const responses = ['first', 'second'].map((sequence) => {
+      const request = new IncomingMessage(socket);
+      request.method = 'GET';
+      request.url = `/healthz?${sequence}`;
+      request.headers = { host: '127.0.0.1' };
+      request.httpVersionMajor = 1;
+      request.httpVersionMinor = 1;
+      request.complete = true;
+      const response = new ServerResponse(request);
+      if (sequence === 'first') response.assignSocket(socket);
+      app.server.emit('request', request, response);
+      request.push(null);
+      return response;
+    });
+    const [firstResponse, secondResponse] = responses;
+    if (firstResponse === undefined || secondResponse === undefined)
+      throw new Error('Missing response');
+    let closing: Promise<void> | undefined;
+    try {
+      await admitted.promise;
+      closing = app.close();
+      await coldClosed;
+      const firstFinished = once(firstResponse, 'finish');
+      first.resolve(undefined);
+      await firstFinished;
+
+      expect(database.open).toBe(true);
+      expect(socket.writableEnded).toBe(false);
+      expect(firstResponse.statusCode).toBe(200);
+      firstResponse.detachSocket(socket);
+      secondResponse.assignSocket(socket);
+      if (outcome === 'cancel') socket.destroy();
+      second.resolve(undefined);
+      await closing;
+
+      expect(database.open).toBe(false);
+      if (outcome === 'finish') {
+        expect(secondResponse.writableFinished).toBe(true);
+        expect(socket.writableEnded).toBe(true);
+      } else {
+        expect(socket.destroyed).toBe(true);
+      }
+    } finally {
+      first.resolve(undefined);
+      second.resolve(undefined);
+      socket.destroy();
+      cold.destroy();
+      await app.close();
+    }
+  },
+);
