@@ -13,6 +13,7 @@ import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
 import { verifyHttpIsolation } from './deployment-http-isolation-fixture.ts';
+import { verifyStreamIsolation } from './deployment-stream-isolation-fixture.ts';
 import { prepareTlsDeployment, verifyTlsCarrier } from './deployment-tls-fixture.ts';
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
@@ -738,5 +739,17 @@ it('keeps hostile employee HTTP requests inside their own native instance and re
       'isolated@deployment.example.test',
     );
     await verifyHttpIsolation(lifecycle, deployment, a, b, admin);
+  });
+});
+
+it('rejects another employee Session over native logical streams while preserving own live delivery', async () => {
+  await withDeployment(async (lifecycle, start) => {
+    const { deployment, employee } = await configureDeployment(lifecycle, start);
+    const second = await registerDeploymentEmployee(
+      lifecycle,
+      deployment,
+      'stream@deployment.example.test',
+    );
+    await verifyStreamIsolation(lifecycle, deployment, employee, second);
   });
 });

@@ -1321,7 +1321,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 依赖：第 18 组。只放跨组的整套检查；各组自己的测试已在各组内。
 
 - [x] 19.1 经平台接口越界。验证：`pnpm test:deploy`——用户 B 的平台会话请求任何路径，带上 A 的用户标识、A 的 Session 标识、伪造的转发头，都只到达 B 的实例或被拒绝；B 列不出也打不开 A 的 Session 和文件；员工的平台会话请求管理接口得到 403（规格“用户看不到他人的文件和 Session”“实例不能借平台接口越权”）。
-- [ ] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
+- [x] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
 - [ ] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
 - [ ] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
 - [ ] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
@@ -1422,3 +1422,4 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Async/evidence/compatibility: own live rename events and B's same-carrier continuation after rejection; bounded waits and unexpected close/error fail. Preserve seven existing deployment scenarios and canonical RPC behavior; raw101/Pong is not this oracle.
 - Resource/path safety: invocation-owned clients/resources, listeners before send and finally closure; original Compose lock/drainage/cleanup unchanged. No provider/browser-render or internal-network claim.
 - Required evidence: wrong-upstream WS negative control then restored positive, root deployment/check/strict fixture, four independent high-risk seats, frozen-head standalone/fullDocker/CI and independent empty inventories. Parent-inline fixture admission disclosed; no production or DSH changes.
+- 实测：真实Compose候选8/8通过140.69s，A/B原生follow快照、foreign typed rejection及同carrier实时事件均执行。临时WS上游按攻击query选A的控制，7项原用例通过，新用例在B自身snapshot断言收到error而明确失败（133.80s）；每次四类资源及活动unit清单为空。第一次控制仅输出AggregateError外壳（239.25s），未追认内层失败位置；保留多失败聚合并对单一Error原样重抛后才取得明确断言证据。localcheck2152unit/1135integration、dup2.83%、strict5/5通过，恢复候选及最终审查后同SHA standalone/fullDocker/CI仍为合并门禁。无provider、生产或DSH改动。
