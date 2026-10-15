@@ -17,11 +17,13 @@ export interface Deployment {
   directory: string;
   dataDir: string;
   compose: string[];
+  request: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
 async function startDeployment(
   lifecycle: UserImageLifecycle,
   submitted: () => void,
+  prepare?: (lifecycle: UserImageLifecycle, deployment: Deployment) => Promise<void>,
 ): Promise<Deployment> {
   const existing = await lifecycle.commandAsync(
     ['container', 'inspect', 'dsh-team-platform'],
@@ -110,9 +112,11 @@ async function startDeployment(
     '--project-name',
     project,
   ];
+  const deployment = { base, port, directory, dataDir, compose, request: fetch };
   submitted();
+  await prepare?.(lifecycle, deployment);
   await command([...compose, 'up', '-d', '--no-build', '--pull', 'never']);
-  return { base, port, directory, dataDir, compose };
+  return deployment;
 }
 
 async function drainDeployment(lifecycle: UserImageLifecycle): Promise<string | undefined> {
@@ -166,6 +170,7 @@ export async function recreateDeployment(
 /** The kernel lock spans build, fixed-name admission, the scenario and canonical resource cleanup. */
 export async function withDeployment(
   run: (lifecycle: UserImageLifecycle, start: () => Promise<Deployment>) => Promise<void>,
+  prepare?: (lifecycle: UserImageLifecycle, deployment: Deployment) => Promise<void>,
 ): Promise<void> {
   if (platform() !== 'linux' || arch() !== 'x64' || process.getuid?.() === 0)
     throw new Error('Deployment verification requires the trusted non-root Linux amd64 host');
@@ -203,9 +208,13 @@ export async function withDeployment(
         const failures: unknown[] = [];
         try {
           await run(lifecycle, () =>
-            startDeployment(lifecycle, () => {
-              state.submitted = true;
-            }),
+            startDeployment(
+              lifecycle,
+              () => {
+                state.submitted = true;
+              },
+              prepare,
+            ),
           );
         } catch (error) {
           failures.push(error);

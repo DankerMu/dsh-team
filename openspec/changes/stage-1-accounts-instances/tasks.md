@@ -1301,7 +1301,7 @@ Minimal mergeable slice: 17.1（最小预设 bundle 和它的测试，约 60 行
 - [x] 18.3 配置校验：平台读取的全部环境变量在启动时校验，必填项缺失或不合法时退出并指名该项；一个检查脚本分别比对 `config.ts` 读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与根目录 `.env.example` 中对应的变量名，拒绝未列出或未被消费的配置项，接入 `pnpm check`。验证：单元测试——每个必填项缺失时错误信息含该项名；检查脚本在任一对应清单不一致时失败（在 `scripts/test-guardrails.sh` 里加拒绝用例）；示例文件里没有真实密钥（`gitleaks` 通过）。
 - [x] 18.4 平台数据持久。验证：`pnpm test:deploy`——两个实例运行中时删除并重建平台容器，已有账号能登录，模型配置和审计不变，两个实例不需重启即可继续使用（规格“平台数据持久”和“平台容器被重建”场景）。
 - [x] 18.5 只有平台对外。验证：`pnpm test:deploy`——两个实例运行时，实例容器没有任何端口映射，本部署发布的宿主端口只有平台一个；只有平台容器挂载了 Docker socket（规格“只有平台对外”“实例不暴露宿主端口”）。
-- [ ] 18.6 前置代理下的 HTTPS。验证：`pnpm test:deploy`——在 compose 里临时加一个终结 TLS 的代理容器（自签证书），对外地址配为 `https://`、开启仅 HTTPS 发送、代理地址填入受信代理后，登录、工作台和长连接都正常，平台会话 cookie 带 `Secure`，登录的审计记录里来源地址是客户端的而不是代理的（规格“可在前置代理后使用 HTTPS”）。
+- [x] 18.6 前置代理下的 HTTPS。验证：`pnpm test:deploy`——在 compose 里临时加一个终结 TLS 的代理容器（自签证书），对外地址配为 `https://`、开启仅 HTTPS 发送、代理地址填入受信代理后，登录、工作台和长连接都正常，平台会话 cookie 带 `Secure`，登录的审计记录里来源地址是客户端的而不是代理的（规格“可在前置代理后使用 HTTPS”）。
 - [ ] 18.7 部署文档 `docs/DEPLOY.md`：前置条件、构建两个镜像、填写配置、启动、创建管理员、配置模型、在目标机执行沙箱探针，以及本阶段不提供的功能和隔离的已知边界（实例能访问宿主机所在内网的其他地址；模型密钥在实例内可读）。验证：在 giap-vps 上从一份干净的检出只按文档操作，完成 18.2 的全部步骤，结束后删除所有带 `dsh-team` 前缀的容器、镜像、卷和网络；文档里列出了 `instance-isolation` 规格“已知边界写明”要求的每一条（规格“部署文档”“已知边界写明”）。
 
 Suggested fixture level: expanded - 生产配置和交付形态
@@ -1381,3 +1381,12 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Error/ownership: read-only discovery scoped to invocation/project/exact employee labels; new discoveries never grant cleanup authority. Existing lock, immutable-ID owner drainage, failure preservation and canonical registered-target cleanup unchanged.
 - Characterization evidence: known-good, separately rejected loopback publication and alternate-destination socket control, restored clean candidate; localcheck/strict, independentreview, exact-head standalone/fullDocker/CI and independent empty owned inventories. No provider/UI or broader isolation claim.
 - 实测：真实候选5/5通过（75.06s）；独立loopback随机发布和只读socket挂到`/engine.sock`的负对照均仅使新用例在对应断言失败（77.20s、75.42s），四项原测试仍通过，两次最终容器/卷/网络/镜像及活动unit清单均为空。初始新断言误计EXPOSE的null条目已按既定规格修正；初版port控制误用未创建的生命周期卷名，自动生成两个无标签卷，用户明确授权后按精确名称无force删除，此次手动恢复不冒充自动清理。修正控制移除无用卷依赖；最终源码不含控制注入。localcheck2152unit/1135integration、重复率2.84%、strict5/5通过；独立审查及冻结SHA standalone/fullDocker/CI仍为合并门禁。
+
+## Issue #96 risk/evidence map (task18.6 only)
+
+- Auth/config/identity: actual HTTPS administrator/employee login, Secure session attribute, distinct public URL/cookie/trusted-IP configuration, exact proxy address rather than trusted subnet; original public authority survives native authentication.
+- Protocol/compatibility: real TLS termination to unchanged HTTP platform; authenticated native workspace and same-carrier WSS Ping/Pong, original five deployment cases retained. Browser rendering/enforcement and provider inference excluded.
+- Audit/evidence: independently observed proxy peer compared to specific employee login audit; forged forwarding input replaced; distinct untrusted-proxy and insecure-cookie negative controls followed by restored positive.
+- Files/resources/error paths: ephemeral SAN certificate with explicit client trust, no private material in logs/commits, registered owned proxy/network/container lifecycle, exact cleanup and primary error preserved. Final-head standalone/fullDocker/CI plus four empty inventories and active units required.
+- 实测候选6/6通过91.94s；secure=false负对照只在布尔Secure断言失败（88.69s，无cookie值诊断），trusted-proxy置空只在审计来源断言失败（94.23s：代理172.18.0.2不等于实际peer172.18.0.1），其他五项全部通过；每次独立四类资源及活动unit清单为空。完整check2152unit/1135integration、dup2.84%、strict5/5通过；首次Knip缺entry/hostbinary声明已精确补齐，未使用宽泛豁免。原cookie数组诊断改为布尔以防潜在值泄漏（首次原始失败未观察到cookie值），证书子进程改为明确PATH环境；恢复及冻结SHA验证仍是门禁。
+- 恢复同一布尔cookie断言/明确证书环境候选后6/6通过91.04s，独立四类资源及活动unit清单为空；候选archive不冒充Git冻结SHA证据，独立审查后的standalone/fullDocker/CI仍须通过。
