@@ -974,7 +974,7 @@ Minimal mergeable slice: 13.1 加 13.2（空的前端包、静态文件服务和
 - [x] 14.4 禁用和启用：禁用按“标记禁用、删除平台会话、销毁全部连接、停止实例（原因“禁用”）”的顺序在一次操作里完成；管理员不能禁用自己；写审计。验证：`pnpm test:docker`——被禁用用户的长连接在 5 秒内断开、实例停止、再登录被拒；启用后能登录且数据还在；审计里有禁用、启用和原因为“禁用”的实例停止（规格“禁用和启用账号”“禁用账号立即断开”）。
 - [x] 14.5 重置密码：管理员设置新密码，删除该用户的全部平台会话；写审计（不含密码）。验证：集成测试——旧密码不能登录，新密码能；该用户已有的平台会话失效；5 位新密码被拒绝且原密码不变（规格“重置密码”）。
 - [x] 14.6 重启实例：指定一个（运行中、已停止或出错的都可以），或全部运行中的；停止原因为“管理员”；写审计（重启实例）。验证：`pnpm test:docker`——重启运行中的实例后容器的启动时间更新，Session 和文件还在；对出错的实例执行重启后它被启动；审计里有该事件（规格“管理员重启实例”的两个场景）。
-- [ ] 14.7 重置实例配置接口：停止实例，调用 9.11 的恢复函数，写审计（重置实例配置）。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写成无法解析的内容使实例启动失败，并在工作目录放一个文件；经接口重置后实例能启动，工作目录里的文件和已有的 Session 都还在；审计里有该事件（规格“重置实例配置”）。
+- [x] 14.7 重置实例配置接口：停止实例，调用 9.11 的恢复函数，写审计（重置实例配置）。验证：`pnpm test:docker`——事先把 `profiles/` 里的配置文件写成无法解析的内容使实例启动失败，并在工作目录放一个文件；经接口重置后实例能启动，工作目录里的文件和已有的 Session 都还在；审计里有该事件（规格“重置实例配置”）。
 - [x] 14.8 审计查询接口：只读，带筛选和分页。验证：集成测试——员工请求 403；按邮箱筛选只返回该员工作为操作者或对象的记录；契约文件里审计相关的接口只有查询，管理员可调用的接口没有任何一个返回员工的文件、Session 或对话内容（规格“管理员查询审计”“审计不可经接口修改”“后台不提供员工内容”）。
 - [x] 14.9 后台框架和账号页：后台导航，员工访问后台地址被拒绝；账号列表（搜索、禁用启用、重置密码），区分加载中、空、无匹配、请求失败四种状态，破坏性操作先确认。验证：`pnpm test:ui`——禁用、启用、重置密码各走通一次；四种状态各有用例（请求失败时显示加载失败和重试按钮）。
 - [ ] 14.10 实例页：状态、最近启动时间、最近活动时间、最近一次错误（可展开看日志）、重启、重置配置；四种列表状态；重置前显示“会恢复该用户的 DSH 设置，文件和对话保留”并确认。验证：`pnpm test:ui`——出错的实例能看到日志；重启和重置各走通一次；确认框文案正确。
@@ -1486,3 +1486,5 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Required real boundary: native Session/history and work sentinel, actual broken profile causes startup failure, HTTP reset204, explicit subsequent start becomes ready and same native Session/history/work bytes survive. Preserve unrelated sibling and owned helper/resource cleanup. Use existing Docker/gateway lifecycle; no provider.
 - Verification: HTTP semantic RED→GREEN, unit current-authority and error/conflict matrix, actual source/dist HTTP+file-SQLite evidence, held service/HTTP settlement cases, generated OpenAPI, `pnpm check`, strict fixture, four independent high-risk seats, final exact-head full Docker/deploy and protected CI. No UI acceptance claimed (#75).
 - Admission: parent-inline scoped implementation/fixture review under higher single-slice delegation rule, explicitly not independent approval; advisor unavailable. Required critical-path human review remains deferred to Epic end. Reset is204 without auto-start, following task14.7's stop/restore/audit sequence; readiness is proved through the existing explicit start.
+- 初始HTTP注入以404对204语义RED，随后权限/冲突/恢复及审计失败/服务排空通过。实际HTTP关闭案例发现既有keep-alive阻塞，独立#246/PR247修复并合并b033655后恢复原消费者，25/25通过，未放宽头部或deadline；独立修复规范在本PR同步归档。编译产物通过相同真实HTTP+文件SQLite重开场景2/2；本地完整check2187unit/1185integration、dup2.79%、schema/strict通过。
+- 父级候选审查头e319d17在giap-vps执行原定向Docker4/4、87.03s（父级96.0151s），新增实际损坏profile→restart500→reset204→显式启动ready案例19.816s，原生Session/history、work字节、平台会话、账号、卷和兄弟实例均保留；独立四类库存与活动unit为空。此为候选运行证据，不替代随后四席独立review、最终精确头完整Docker/deploy和CI。
