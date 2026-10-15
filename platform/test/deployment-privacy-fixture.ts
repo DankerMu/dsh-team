@@ -22,7 +22,6 @@ interface PrivacySnapshot {
   logs: string;
   needles: readonly string[];
   userId: string;
-  sessionId: string;
   barrier: string;
 }
 
@@ -32,7 +31,7 @@ async function conversation(
   marker: string,
   reply: string,
   progress: Progress,
-): Promise<string> {
+): Promise<void> {
   progress.phase = 'session-create';
   const created = await gateway.rpc(cookie, 'session/create', {
     request: { cwd: '/data/work', agentPreset: 'office-general' },
@@ -76,11 +75,10 @@ async function conversation(
     ),
   ).toBe(true);
   expect(events.some((event) => event.type === 'assistant/attempt')).toBe(false);
-  return sessionId;
 }
 
 function scanEvidence(snapshot: PrivacySnapshot, progress: Progress): void {
-  const { stored, logs, needles, userId, sessionId, barrier } = snapshot;
+  const { stored, logs, needles, userId, barrier } = snapshot;
   progress.phase = 'complete-audit-log-scan';
   if (!Array.isArray(stored.rows)) throw new Error('Missing complete audit rows');
   expect(record(stored.user).status).toBe('disabled');
@@ -143,7 +141,6 @@ function scanEvidence(snapshot: PrivacySnapshot, progress: Progress): void {
         contentMarkers: 2,
         auditRows: rows.length,
         logEntries: entries.length,
-        sessionId,
         complete: true,
       },
     }) + '\n',
@@ -283,7 +280,7 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
         if (!token || typeof native.dsh_cookie !== 'string')
           throw new Error('Missing native credential');
         const nativeCookie = native.dsh_cookie;
-        const sessionId = await conversation(gateway, employee.cookie, marker, reply, progress);
+        await conversation(gateway, employee.cookie, marker, reply, progress);
         const observed = await platformRead(
           "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());",
         );
@@ -355,7 +352,6 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
             logs: logs.stdout + logs.stderr,
             needles,
             userId: employee.id,
-            sessionId,
             barrier,
           },
           progress,
