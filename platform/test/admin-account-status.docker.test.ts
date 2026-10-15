@@ -81,6 +81,8 @@ it('disable closes both real DSH sessions and physically retires within five sec
           headers: headers(admin.cookie),
           body: JSON.stringify({ status }),
         });
+      expect(first.socket.destroyed).toBe(false);
+      expect(second.socket.destroyed).toBe(false);
       const began = performance.now();
       const disabling = statusPut('disabled');
       const physical = (async () => {
@@ -107,8 +109,10 @@ it('disable closes both real DSH sessions and physically retires within five sec
         Promise.all([first.closed, second.closed, physical]),
         5_000,
       );
-      for (const at of [closedFirst, closedSecond, physicallyStopped])
+      for (const at of [closedFirst, closedSecond, physicallyStopped]) {
+        expect(at).toBeGreaterThanOrEqual(began);
         expect(at - began).toBeLessThanOrEqual(5_000);
+      }
       const disabled = await disabling;
       expect(disabled.status).toBe(204);
       expect(await disabled.text()).toBe('');
