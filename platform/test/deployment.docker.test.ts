@@ -13,6 +13,7 @@ import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
 import { verifyHttpIsolation } from './deployment-http-isolation-fixture.ts';
+import { verifyInternalIsolation } from './deployment-internal-isolation-fixture.ts';
 import { verifyStreamIsolation } from './deployment-stream-isolation-fixture.ts';
 import { prepareTlsDeployment, verifyTlsCarrier } from './deployment-tls-fixture.ts';
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
@@ -751,5 +752,17 @@ it('rejects another employee Session over native logical streams while preservin
       'stream@deployment.example.test',
     );
     await verifyStreamIsolation(lifecycle, deployment, employee, second);
+  });
+});
+
+it('denies internal employee access to sibling volumes, listening ports, Docker and platform authority', async () => {
+  await withDeployment(async (lifecycle, start) => {
+    const { deployment, employee, admin } = await configureDeployment(lifecycle, start);
+    const second = await registerDeploymentEmployee(
+      lifecycle,
+      deployment,
+      'internal@deployment.example.test',
+    );
+    await verifyInternalIsolation(lifecycle, deployment, employee, second, admin);
   });
 });
