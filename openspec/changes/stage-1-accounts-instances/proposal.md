@@ -711,3 +711,10 @@
 - Task19.4 only on delivered Compose: actual A launch token/cookie cannot authenticate B, B cannot discover platform database/session/password-hash/A-cookie material, and its container is nonprivileged/nonroot. Preserve nine deployment cases and all resource ownership/drainage.
 - Required evidence: each native credential succeeds at its owner, wrong-owner denial without replacement cookie, uid1001 readable-files/process-environment scan with positive sentinels and explicit discovery limits, leak/identity/privilege controls, restoration, check/strict, independent review and exact-head standalone/full Docker/CI.
 - Parent-inline mapped implementation/fixture admission disclosed; advisor unavailable. No production/DSH/provider changes; runtime defects become separate issues. Shared model-key confidentiality is explicitly not provided; Yolo and audit/log scanning remain separate.
+
+## Issue #102 fixture
+
+- Expanded instead of compact: real-model execution, native tool lineage, permission state, Compose ownership and protected evidence require four independent review lenses.
+- Task19.5 only: a real B Agent in Yolo executes the same five-boundary matrix as19.3 on delivered Compose. Existing ten deployment cases and all original model acceptance remain; no production, DSH, provider-policy, permission or deadline changes.
+- Reuse the canonical internal matrix with an injected B command executor; default Docker execution remains19.3. Extract existing Compose account setup unchanged, and extend the existing native permission oracle for exact foreground bash execution rather than duplicate its prompt/turn/call/result checks.
+- Parent-inline mapped implementation/admission is disclosed. Real provider work requires a newly approved reviewed SHA through the existing one-shot independent-retirement lane; prior3/3 authorization is exhausted. No model attempt or acceptance claim before that approval.

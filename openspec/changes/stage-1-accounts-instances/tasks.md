@@ -1440,3 +1440,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Resource/compatibility/errors: original nine deployment cases and teardown preserved; independent controls for leaks, native identity and privilege, no inherited real secrets or provider calls.
 - Gates: restored real deployment, check/strict fixture, four independent high-risk seats, frozen-head standalone/full Docker and protected CI with independent empty inventories. Docs state finite scan scope and shared-model-key exclusion; #102 Yolo and #103 audit/log scan remain separate.
 - 实测：初次9pass/1fail明确捕获注册也签发会话导致5条而非3条；保留两个注册cookie后完整库存与DB摘要绑定，候选10/10通过176.76s。B扫描34404文件/781864952字节，558权限拒绝、16消失条目明确计数；正向标记命中、禁止项不命中。独立文件泄漏171.74s、环境泄漏172.24s、cookie错误目标200拒绝171.04s、token错误目标303拒绝172.30s、真实privileged=true拒绝266.97s、重复cookie遗漏一个会话拒绝176.99s，均原9项通过且新用例预期失败；重命名真实平台DB复制到B后database/fileHits同时命中并拒绝189.34s。首次DB控制因73728字节序列化后base6498304字节超过既有65536输出边界而在setup失败166.32s，独立仅字节数诊断175.29s确认；改用测试自有私有目录文件传输，不提高上限，不将setup失败计为资格通过。所有调用四类资源/活动unit清单为空；check2152unit/1135integration、dup2.83%、strict5/5通过。恢复、独立审查和最终冻结SHA standalone/fullDocker/CI仍为门禁；无模型执行。
+
+## Issue #102 risk/evidence map (task19.5 only)
+
+- Auth/permissions/native protocol: actual B Session Yolo selection, complete prompt/turn/bash-call/result correlation, no approvals/failed attempts, original command and successful foreground process receipt; no model self-report or Docker-exec substitute for B's real Agent.
+- File/network/evidence: reuse all19.3 paths, live ports, socket/admin/overlay and poststate assertions unchanged; wrong command/result/tier/process controls discriminate the new execution seam.
+- Resource/concurrency/compatibility: existing Compose lock/registered cleanup and browser receipt retirement, all ten deployment cases and original model suite preserved; one real model case at a time with sanitized durable evidence.
+- Verification/release: non-provider qualification/check/strict/full Docker, four independent seats, newly approved exact-SHA one-shot model Actions and independent cleanup, final protected CI. No runtime/schema/dependency or gate relaxation; missing authorization blocks model execution.
