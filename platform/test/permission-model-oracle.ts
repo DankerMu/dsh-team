@@ -24,8 +24,37 @@ interface BashObservation extends PermissionBase {
 
 type NativeObservation = PermissionObservation | BashObservation;
 
+class PermissionEvidenceError extends Error {
+  readonly code: string;
+  readonly detail: string | null;
+
+  constructor(reason: string, detail: string | null = null) {
+    super(`permission-${reason}`);
+    this.code = this.message;
+    this.detail = detail;
+  }
+}
+
+/** Only locally constructed oracle errors can supply public diagnostics; never echo unknown errors. */
+export function permissionFailure(error: unknown): { code: string; detail: string | null } {
+  return error instanceof PermissionEvidenceError
+    ? { code: error.code, detail: error.detail }
+    : { code: 'unclassified', detail: null };
+}
+
+const BASH_FAILURE_MARKERS = [
+  ['[exit code:', 'nonzero-exit'],
+  ['[killed by signal:', 'signal'],
+  ['[timed out after ', 'timeout'],
+  ['[stopped:', 'stopped'],
+  ['[output truncated;', 'truncated'],
+  ['[stderr]', 'stderr'],
+  ['started background job ', 'background'],
+  ['[still running after ', 'promoted'],
+] as const;
+
 function requireEvidence(condition: boolean, reason: string): asserts condition {
-  if (!condition) throw new Error(`permission-${reason}`);
+  if (!condition) throw new PermissionEvidenceError(reason);
 }
 
 type Event = Record<string, unknown>;
@@ -179,7 +208,9 @@ function bashStdout(events: readonly Event[], input: BashObservation): string {
   try {
     JSON.parse(part.text);
   } catch {
-    throw new Error('permission-bash-process');
+    for (const [marker, detail] of BASH_FAILURE_MARKERS)
+      if (part.text.includes(marker)) throw new PermissionEvidenceError('bash-process', detail);
+    throw new PermissionEvidenceError('bash-process', 'malformed-json');
   }
   return part.text;
 }

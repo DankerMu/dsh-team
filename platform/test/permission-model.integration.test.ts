@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CdpPage } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { expect, it } from 'vitest';
-import { autoReviewEvidence, permissionEvidence } from './permission-model-oracle.ts';
+import {
+  autoReviewEvidence,
+  permissionEvidence,
+  permissionFailure,
+} from './permission-model-oracle.ts';
 import { runPermissionModelScenario } from './permission-model-fixture.mjs';
 import { record } from './container-start-docker-fixture.ts';
 
@@ -189,8 +193,20 @@ it('rejects a different bash command even when it reports the expected output', 
   expect(() => permissionEvidence(value)).toThrow('permission-intended-bash');
 });
 
+it('classifies an exact-command rejection without retaining the rejected command', () => {
+  const value = bashEvidence();
+  value.command = 'private command sentinel';
+  let failure: unknown;
+  try {
+    permissionEvidence(value);
+  } catch (error) {
+    failure = error;
+  }
+  expect(permissionFailure(failure)).toEqual({ code: 'permission-intended-bash', detail: null });
+});
+
 it.each([
-  ['exit', '{"owned":true}\n[exit code: 7]'],
+  ['nonzero-exit', '{"owned":true}\n[exit code: 7]'],
   ['signal', '{"owned":true}\n[killed by signal: SIGTERM]'],
   ['timeout', '{"owned":true}\n[timed out after 1000ms]'],
   ['stopped', '{"owned":true}\n[stopped: cancelled]'],
@@ -198,11 +214,35 @@ it.each([
   ['stderr', '{"owned":true}\n[stderr]\nprobe failed'],
   ['background', 'started background job owned-job'],
   ['promoted', '{"owned":true}\n[still running after 1000ms; moved to background job owned-job]'],
-])('rejects %s shell results instead of accepting a JSON prefix', (_failure, text) => {
-  const value = bashEvidence();
-  const message = record(record(value.records[3]?.event.data).message);
-  message.content = [{ type: 'text', text }];
-  expect(() => permissionEvidence(value)).toThrow('permission-bash-process');
+  ['malformed-json', '{"owned":'],
+])(
+  'rejects and safely classifies %s shell output without accepting a JSON prefix',
+  (detail, text) => {
+    const value = bashEvidence();
+    const message = record(record(value.records[3]?.event.data).message);
+    message.content = [{ type: 'text', text }];
+    let failure: unknown;
+    try {
+      permissionEvidence(value);
+    } catch (error) {
+      failure = error;
+    }
+    expect(permissionFailure(failure)).toEqual({ code: 'permission-bash-process', detail });
+  },
+);
+
+it.each([
+  new Error('permission-intended-bash private-key-sentinel'),
+  Object.assign(new Error('private-cookie-sentinel'), {
+    code: 'permission-bash-process',
+    detail: 'private-output-sentinel',
+    actual: 'private-body-sentinel',
+    expected: 'private-prompt-sentinel',
+  }),
+  new AggregateError([new Error('private-cause-sentinel')], 'permission-provider-attempt'),
+  { code: 'permission-intended-bash', message: 'private-command-sentinel' },
+])('withholds untrusted diagnostic messages and payloads', (error) => {
+  expect(permissionFailure(error)).toEqual({ code: 'unclassified', detail: null });
 });
 
 it.each(['foreign-call', 'abort', 'extra-part', 'missing-content'] as const)(

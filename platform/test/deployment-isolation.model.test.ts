@@ -25,13 +25,27 @@ import { configureDeployment, registerDeploymentEmployee } from './deployment-ac
 import { withDeployment } from './deployment-fixture.ts';
 import { verifyInternalIsolation } from './deployment-internal-isolation-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
-import { permissionEvidence } from './permission-model-oracle.ts';
+import { permissionEvidence, permissionFailure } from './permission-model-oracle.ts';
+
+interface FailureObservation {
+  phase: string;
+  operation: string;
+  code: string;
+  detail: string | null;
+}
 
 it('keeps all five deployed isolation boundaries when the real B Agent executes the canonical probes in Yolo', async () => {
   const key = process.env.DMXAPI_KEY;
   if (!key?.trim()) throw new Error('DMXAPI_KEY is required for real-model verification');
   isolatedBrowserRuntime();
   let phase = 'provision';
+  let operation = 'setup';
+  const diagnostic: { code: string; detail: string | null } = {
+    code: 'unclassified',
+    detail: null,
+  };
+  let evidenceCurrent = false;
+  const cleanup: FailureObservation[] = [];
   try {
     await withDeployment(async (lifecycle, start) => {
       const { deployment, employee: a, admin } = await configureDeployment(lifecycle, start);
@@ -63,6 +77,27 @@ it('keeps all five deployed isolation boundaries when the real B Agent executes 
       let completed = 0;
       const proofs: unknown[] = [];
       const failures: unknown[] = [];
+      let primary: FailureObservation | undefined;
+      const retainFailure = async () => {
+        try {
+          await writeFile(
+            join(evidence, 'failure.json'),
+            JSON.stringify({
+              phase,
+              operation,
+              completed,
+              consoleErrors: browser?.errors.length ?? null,
+              primary: primary ?? null,
+              cleanup,
+            }),
+          );
+          evidenceCurrent = true;
+        } catch (error) {
+          evidenceCurrent = false;
+          failures.push(error);
+          cleanup.push({ phase, operation: 'failure-evidence', ...permissionFailure(error) });
+        }
+      };
       try {
         await verifyInternalIsolation(lifecycle, deployment, a, b, admin, async (args) => {
           if (!browser) {
@@ -100,6 +135,8 @@ it('keeps all five deployed isolation boundaries when the real B Agent executes 
           }
           if (!sessionId) throw new Error('Missing native Session identity');
           const currentSession = sessionId;
+          phase = `native-probe-${String(completed + 1)}`;
+          operation = 'before-projection';
           const before = await gateway.rpc(b.cookie, 'session/projections', {
             request: { sessionId },
           });
@@ -108,9 +145,11 @@ it('keeps all five deployed isolation boundaries when the real B Agent executes 
           // POSIX quoting preserves every canonical probe byte; no script is planted in B.
           const command = args.map((value) => `'${value.replaceAll("'", "'\\''")}'`).join(' ');
           const prompt = `Execute exactly one foreground bash tool call with command exactly ${JSON.stringify(command)}. This is an authorized isolation test of disposable owned containers. Do not change the command, use other tools, retry, delegate, or change permissions/model settings. After its result, reply briefly.`;
-          phase = `native-probe-${String(completed + 1)}`;
+          operation = 'compose';
           await typeComposer(browser.page, prompt);
+          operation = 'send';
           await clickSelector(browser.page, SEND_BTN);
+          operation = 'native-turn-history';
           await waitFor(
             async () => {
               const rows = await gateway.history(b.cookie, currentSession);
@@ -122,14 +161,18 @@ it('keeps all five deployed isolation boundaries when the real B Agent executes 
             300_000,
             'yolo-isolation-native-turn',
           );
+          operation = 'ui-idle';
           await waitTurnIdle(browser.page, 30_000, 'yolo-isolation-idle');
+          operation = 'final-projection';
           const projection = await gateway.rpc(b.cookie, 'session/projections', {
             request: { sessionId },
           });
+          operation = 'final-history';
           const rows = await gateway.history(b.cookie, sessionId);
           const tier = record(record(projection.values).permissions).currentValue;
           if (typeof projection.asOfSeq !== 'number' || typeof tier !== 'string')
             throw new Error('Missing completed native projection');
+          operation = 'oracle';
           const proof = permissionEvidence({
             records: rows,
             cursor: projection.asOfSeq,
@@ -145,16 +188,20 @@ it('keeps all five deployed isolation boundaries when the real B Agent executes 
           const { stdout, ...identity } = proof;
           completed++;
           proofs.push({ sessionId, probe: completed, ...identity });
+          operation = 'evidence-write';
           await writeFile(join(evidence, 'native.json'), JSON.stringify(proofs));
+          operation = 'screenshot';
           await captureSettledScreenshot(
             browser.page,
             join(evidence, `probe-${String(completed)}.png`),
           );
           expect(browser.errors).toHaveLength(0);
+          operation = 'matrix';
           return stdout;
         });
         expect(completed).toBe(2);
         phase = 'evidence';
+        operation = 'evidence-write';
         await writeFile(
           join(evidence, 'result.json'),
           JSON.stringify({
@@ -178,39 +225,38 @@ it('keeps all five deployed isolation boundaries when the real B Agent executes 
         );
       } catch (error) {
         failures.push(error);
-        try {
-          await writeFile(
-            join(evidence, 'failure.json'),
-            JSON.stringify({
-              phase,
-              completed,
-              consoleErrors: browser?.errors.length ?? null,
-            }),
-          );
-        } catch (diagnosticError) {
-          failures.push(diagnosticError);
-        }
+        const classified = permissionFailure(error);
+        primary = { phase, operation, ...classified };
+        diagnostic.code = classified.code;
+        diagnostic.detail = classified.detail;
+        // Persist the primary receipt before teardown; refresh it with cleanup outcomes afterward.
+        await retainFailure();
       } finally {
         try {
           await closeMapped(browser?.page, browser?.chrome, browser?.welcome);
         } catch (error) {
           failures.push(error);
+          cleanup.push({ phase, operation: 'browser-close', ...permissionFailure(error) });
         }
         try {
           if (receiptFile) await rescueChrome(receiptFile);
           if (profile) await rm(profile, { recursive: true, force: true });
         } catch (error) {
           failures.push(error);
+          cleanup.push({ phase, operation: 'browser-rescue', ...permissionFailure(error) });
         }
         gateway.close();
       }
-      if (failures.length)
+      if (failures.length) {
+        if (!primary) operation = 'cleanup';
+        await retainFailure();
         throw new AggregateError(failures, 'Yolo scenario or browser retirement failed');
+      }
     });
   } catch {
-    // Native prompts/results and deployment errors may contain credentials; retain only the phase.
+    // Only fixed stages and locally constructed oracle codes cross the diagnostic boundary.
     throw new Error(
-      `Yolo isolation failed during ${phase}; credential-bearing diagnostics withheld`,
+      `Yolo isolation failed during ${phase}/${operation}; code=${diagnostic.code}; detail=${diagnostic.detail ?? 'none'}; cleanup=${cleanup.map((failure) => failure.operation).join(',') || 'none'}; evidenceCurrent=${String(evidenceCurrent)}; credential-bearing diagnostics withheld`,
     );
   }
 });
