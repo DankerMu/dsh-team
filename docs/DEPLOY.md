@@ -1,0 +1,171 @@
+# 阶段 1：单机 Docker 部署
+
+本指南用于一台 Linux 主机上的**全新安装**。平台服务提供 HTTP，员工各有独立 DSH 实例。不是离线包、升级、备份恢复或生产证书管理手册；不要把测试验收等同于生产容量认证。
+
+配置清单唯一来源是 [`.env.example`](../.env.example)，实际部署定义是 [`deploy/compose.yml`](../deploy/compose.yml)。不要另建示例配置，也不要修改 DSH 源码或版本。
+
+## 1. 前置条件
+
+- Linux amd64；已验证环境为 Ubuntu 24.04、Docker Engine 29.1.3。使用本机默认 Docker daemon、普通 UID 映射；不支持本手册之外的 rootless/userns、远程 Docker context 或 Docker Desktop。
+- Docker Compose **2.33.1 或更新版本**，Engine 支持 endpoint gateway priority。构建器支持 `--build-context`。保留 Compose 主网络 `gw_priority: 1`，不能用连接顺序或重试替代。
+- 操作用户有 Docker 权限；平台镜像用户是 uid1000，员工镜像用户是 uid1001。Docker 权限近似宿主 root 权限，不能授予员工。以下数据目录命令按操作用户 uid1000 编写；其他 UID 应先由主机管理员建立归 uid1000 所有的目录，不能改为 root 运行平台或放宽 socket 到全员可写。
+- 构建和沙箱探针需要访问镜像仓库、npm、Debian 软件源及固定 seccomp 来源。本阶段不提供断网安装材料。
+- 主机准备 Git、Node **24.13.1**、pnpm **10.34.6**、Bash、curl、GNU `timeout`。完整仓库检查另需 hurl、shellcheck、gitleaks；Compose 自动验收另需 Python3、util-linux `flock` 和 openssl。工具版本以 [`.tool-versions`](../.tool-versions) 为准。
+- 选定实际对外地址、可用平台端口及不与宿主/LAN/Docker 网络重叠的 IPv4 池。默认 `172.30.0.0/16` 按 `/28` 分配；几何容量必须容纳持久化的同时运行上限，不能仅因示例有默认值就认为不冲突。
+- 模型网关由管理员另行准备。密钥只通过平台管理接口输入，不写入源码、命令行参数、聊天记录或 shell 历史。
+
+从固定、经过审查的提交开始，所有下述命令均在仓库根目录执行：
+
+```sh
+git clone https://github.com/DankerMu/dsh-team.git dsh-team
+cd dsh-team
+git checkout --detach <已审查的完整提交SHA>
+pnpm install --frozen-lockfile
+docker version
+docker compose version
+```
+
+不要读取或输出已有 `.env`。若目标主机已有 `dsh-team-platform`、本指南的镜像标签或同名数据目录，停止全新安装流程；本指南没有接管或覆盖既有部署的权限。
+
+## 2. 构建两个镜像
+
+先记录本次安装标识；保留到验收结束，用于核对自有资源，而不是按前缀删除：
+
+```sh
+DEPLOY_RUN="$(node -p 'crypto.randomUUID()')"
+DEPLOY_PROJECT="dsh-team-${DEPLOY_RUN}"
+DEPLOY_ROOT="$HOME/.local/share/dsh-team/${DEPLOY_RUN}"
+export DEPLOY_RUN DEPLOY_PROJECT DEPLOY_ROOT
+
+docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
+  -t dsh-team-user:local -f images/dsh-user/Dockerfile \
+  --build-context zh-locale=plugins/zh-locale \
+  --build-context permission-tiers=plugins/permission-tiers \
+  --build-context office-agents=plugins/office-agents images/dsh-user
+
+docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
+  -t dsh-team-platform:local -f platform/Dockerfile .
+
+docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:local
+```
+
+记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略三个 named context。
+
+## 3. 准备数据和唯一配置副本
+
+```sh
+install -d -m 700 "$DEPLOY_ROOT" "$DEPLOY_ROOT/data" "$DEPLOY_ROOT/managed"
+cp .env.example .env
+chmod 600 .env
+stat -c %g /var/run/docker.sock
+```
+
+用编辑器填写新副本，不要 `cat .env` 或运行会打印完整展开配置的命令。Compose 显式映射变量，不会把整个宿主环境交给容器。
+
+| 变量 | 本部署填写规则 |
+|---|---|
+| `PLATFORM_HOST` | `0.0.0.0`；示例的回环值不适用于容器对外入口 |
+| `PLATFORM_PORT` | 可用端口，如 `8080`；Compose 的宿主/容器端口相同 |
+| `PLATFORM_PUBLIC_URL` | 浏览器实际使用的完整 HTTP(S) origin，含非默认端口；不能使用容器内部地址冒充公网/内网入口 |
+| `PLATFORM_DATA_DIR` | 上面创建的 `$DEPLOY_ROOT/data` 的**展开后绝对路径** |
+| `PLATFORM_MANAGED_CONFIG_DIR` | `$DEPLOY_ROOT/managed` 的**展开后绝对路径** |
+| `PLATFORM_DOCKER_SOCKET` | `/var/run/docker.sock` |
+| `DEPLOY_DOCKER_GID` | 上一步 `stat` 返回的实际数字；只加补充组，不改变镜像用户 |
+| `PLATFORM_USER_IMAGE` | `dsh-team-user:local` |
+| `PLATFORM_SECCOMP_PROFILE` | 平台镜像内 `/app/images/seccomp/dsh-user.json` |
+| `PLATFORM_SUBNET_POOL` | 经主机管理员检查无冲突的 canonical IPv4 网络 CIDR |
+| `PLATFORM_UPSTREAM_MODE` / `PLATFORM_CONTAINER_NAME` | `network` / `dsh-team-platform`；Compose 固定这两个值 |
+| `PLATFORM_COOKIE_SECURE` | HTTP 测试为 `false`；HTTPS 入口为 `true`，与对外 URL 独立配置 |
+| `PLATFORM_TRUSTED_PROXIES` | 直连留空；前置代理时填写精确代理 IP，逗号分隔，不接受 CIDR/通配符 |
+| `PLATFORM_LOG_LEVEL` | 正常运行 `info`；禁止为排障输出凭据或会话内容 |
+
+两个目录在宿主与平台容器中必须是**同一绝对路径**，并且预先可由 uid1000 写入；Compose 不自动创建缺失的 bind 目录。不要把宿主路径 `/srv/...` 映射到不同的容器路径 `/data/...`。不要设置 `DMXAPI_KEY`、`CHROME_BIN` 或 CI channel/journal 作为平台部署输入。
+
+## 4. 在目标主机运行真实沙箱探针
+
+```sh
+pnpm probe:sandbox
+```
+
+它实际调用固定发行版 DSH 的 bash 工具，依次尝试 Docker 默认限制、自定义 seccomp、再加 `systempaths=unconfined`；输出首个可用组合和每级原因，并清理自己的唯一测试资源。当前已验证组合为自定义 seccomp 加 `systempaths=unconfined`。期望工作区写入成功、DSH 状态目录写入被拒绝。
+
+这不是“手写 bubblewrap 能跑”的替代检查。无可用组合或清理失败时不要继续部署，也不要改成特权容器或放宽现有测试。探针会自行构建临时镜像、联网获取并校验固定 seccomp 摘要；不会调用模型。
+
+## 5. 启动、创建管理员、配置模型
+
+```sh
+docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
+  --env-file .env -f deploy/compose.yml up -d
+curl --fail --silent --show-error http://127.0.0.1:8080/healthz
+```
+
+将健康探测端口替换为实际 `PLATFORM_PORT`；期望 `{"status":"ok"}`。健康正常只证明平台存活，不证明模型和员工实例已经可用。记录固定平台容器的不可变 ID 以及 Compose project 标签。
+
+在**真实交互终端**创建管理员（将邮箱换成自己的）：
+
+```sh
+docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
+  --env-file .env -f deploy/compose.yml exec platform \
+  node platform/dist/cli.js admin create admin@example.test
+```
+
+不要加 `-T`，不要把密码放在参数或环境变量里；按两次隐藏提示输入密码。创建成功后：
+
+1. 用对外地址访问 `/_platform/login`，管理员登录后进入 `/_platform/admin/models`。
+2. 填写真实模型服务 Base URL、密钥、模型名和默认模型，保存。密钥不回显；更新配置不热切换已运行实例，下次启动/管理员重启生效。
+3. 用独立员工账号访问 `/_platform/register` 注册，再登录。进入等待页后应启动自己的实例并进入原生工作台。
+4. 检查原生页面及 WebSocket 连接；模型连通性另行用批准的真实任务验收。仅保存模型配置和打开工作台不代表推理成功。
+
+自动化操作可使用下表中的同一公共接口，不得直接写数据库。JSON 写请求带 `Content-Type: application/json`、实际对外 `Origin`，登录后的请求携带该账号平台 cookie；凭据只保存在进程内或0600临时文件中，不打印请求头/响应cookie或完整模型配置。
+
+| 操作 | 公共接口与关键结果 |
+|---|---|
+| 管理员/员工登录 | `POST /_platform/api/login`，JSON `{email,password}`；200及账号身份、平台session cookie |
+| 保存模型 | 管理员 `PUT /_platform/api/admin/model-config`，JSON `{baseURL,apiKey,models:[{name}],defaultModel}`；200，回包只有 `apiKeyConfigured` 而非密钥 |
+| 注册员工 | `POST /_platform/api/register`，JSON `{email,password}`；201，记录返回的员工 `id`，再登录 |
+| 启动实例 | 员工 `POST /_platform/api/instance/start`，JSON `{}`；200、`starting` |
+| 等待就绪 | 员工 `GET /_platform/api/instance`；直到 `running`；终止错误不能当作继续重试的理由 |
+| 原生入口 | 员工 `GET /` 返回原生HTML；`/api/remote.mux` WebSocket携带同一cookie、实际Host/Origin完成101和Ping/Pong |
+| 停止一次性验收员工 | 管理员 `PUT /_platform/api/admin/users/<本次员工id>/status`，JSON `{"status":"disabled"}`；撤销平台会话并退役实例，卷保留 |
+
+一次性无推理部署验收允许配置明确标为测试的不可用模型地址/假值，仅验证保存和原生入口；不得把它用作生产默认或宣称模型调用通过。完整契约见 [`schemas/openapi.json`](../schemas/openapi.json)。
+
+## 6. HTTPS、运行检查和故障边界
+
+平台本身仍只提供 HTTP。已有反向代理负责终结 TLS，转发 WebSocket，并保留外部 Host（含端口）和 Origin；替换客户端伪造的转发头，设置真实客户端来源。把实际代理 IP 填入受信清单，对外地址改为 `https://...`，并独立开启 `PLATFORM_COOKIE_SECURE=true`。证书签发、更新和代理安装不在本阶段交付范围；仓库测试代理不是生产代理软件。
+
+`pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界和HTTPS/WSS；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [AGENTS.md](../AGENTS.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
+
+失败时先保留不含凭据的退出码、阶段和资源身份。配置缺失/非法会指名变量并停止启动；子网池不足、镜像缺失、实例错误必须处理根因。不要通过增加重试、延长门槛、放宽seccomp或手工删除不明网络端点获得绿色。
+
+## 7. 隔离提供什么、不提供什么
+
+以下是交付的边界及验收位置，不代表阶段19全部对抗性验收已经结束：
+
+- 每个员工单独的 home/work 卷、DSH进程与Session；平台按当前账号路由。其他员工的标识不应改变目标实例；账号/长连接越界场景仍在阶段19继续覆盖。
+- 每个实例只加入自己的bridge网络；实例间地址/主机名不可达，平台分别接入各实例网络。停止一个实例不应影响兄弟实例；网络身份不可信时失败，不强制删除不明端点。
+- 部署实例不发布宿主端口、不挂Docker socket、不使用特权模式；uid1001运行。只有平台持有Docker控制权限。`published-loopback`只是显式宿主开发方式，不满足部署无端口映射边界。
+- 实例不持有平台数据库、密码哈希、平台session或管理员凭据；A的DSH凭据不能在B使用。平台API在来自实例的请求上仍鉴权：无平台session为401，员工调用管理接口为403。
+- 受管覆盖层在实例内只读；权限档位包括Yolo不能把它变为可写。DSH工具沙箱工作区限制由目标机真实探针验证，而不是仅凭Docker启动成功。
+- **不提供模型密钥对员工的保密隔离：共用模型密钥在实例内可读。** 需采用最小权限、配额和可撤销的模型凭据。
+- **不提供实例对其余内网的默认出站阻断：实例可访问宿主机所在内网的其他地址。** 需要更强限制时由网络管理员设计边界，不能宣称现有用户间隔离等于内网全面隔离。
+- 共享单机内核不是独立虚拟机；管理员与Docker操作者是可信边界。没有多机HA或已认证的60并发容量保证。
+
+本阶段不交付 RAGFlow/ONLYOFFICE集成、离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/changes/stage-1-accounts-instances/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
+
+## 8. 停止与一次性验收清理
+
+正常停止平台**不删除数据卷，也不等于停止全部员工实例**。先停止新的用户工作，按管理员操作退役需要停止的员工；等待平台完成在途helper清理。对于已确认归本部署所有的平台ID，可发送SIGTERM并等待正常退出；超时/非零退出需要保留故障证据，不把强杀当作正常退役。
+
+一次性干净主机验收结束时，按以下顺序清理；这不是生产卸载脚本：
+
+1. 保留本次创建的员工ID、平台ID、两个image ID、Compose project及数据根目录记录。开始前即存在的资源一律不删。
+2. 通过上面的管理员状态接口禁用本次员工，关闭测试HTTP/WebSocket连接；确认该员工容器和网络已退役。若操作失败，保留错误并按精确ID及`dsh-team.user=<id>`标签核对后处理，不按名字前缀强制接管。
+3. 校验固定平台名称的ID与记录一致、`com.docker.compose.project`等于本次project。`docker kill --signal SIGTERM <平台ID>`，然后 `timeout 30 docker wait <平台ID>`；要求输出0，并inspect确认已停止、ExitCode0且未OOM。
+4. 用同一project/env-file/compose文件执行 `docker compose ... down`，移除已停止的平台和本次Compose网络；不要加 `--remove-orphans` 或 `--volumes`。
+5. 对本次每个员工的 `dsh-team-home-<id>`、`dsh-team-work-<id>`，确认标签`dsh-team.user`精确匹配、无任何容器引用后，逐个 `docker volume rm <精确卷名>`。卷含员工数据；只有明确的一次性验收才执行。
+6. 检查两个本次构建标签仍指向记录的image ID且`dsh-team.deploy-run`等于本次标识，再 `docker image rm dsh-team-user:local dsh-team-platform:local`；不使用force，不删除别人的标签/镜像。
+7. 检查容器、镜像、卷、网络中所有`dsh-team`前缀项；它们只是残留告警，不是删除授权。只处理已证明本次创建的资源；任何不明项都使“干净结束”验收阻塞。禁止`docker system prune`、全局volume prune或按前缀批量删除。
+8. 最后删除本次私有配置副本和已记录的测试数据目录。生产数据/既有配置不在此清理范围，不能复用本节进行升级或恢复。
+
+本指南的干净检出演练、完整命令结果和最终资源清单随对应PR发布；不能用`pnpm test:deploy`自报替代本指南逐步演练。
