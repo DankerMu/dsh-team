@@ -697,3 +697,10 @@
 - Task19.2 only: B's authenticated long connection sends A's native Session address and receives no A content. Reuse delivered Compose/two real employees/native RPC setup; no model calls or production/DSH changes. #98 and prerequisite #204 are merged.
 - Require real logical session/follow streams with owned positive snapshots/live events, foreign-address typed rejection, and continued B delivery on the same carrier. A101/Pong or a timeout alone cannot pass.
 - Parent-inline mapped implementation/fixture admission disclosed; advisor unavailable. Wrong-upstream semantic control, restored normal deployment, check/strict, independent review and frozen-head standalone/fullDocker/CI with empty owned inventories remain gates.
+
+## Issue #100 fixture
+
+- Test-only Characterization/Standard, expanded instead of compact: real process/file/network/authorization boundaries need qualified negative oracles and four independent review lenses.
+- Task19.3 only: uid1001 commands inside B cannot read A's home/work sentinels or Docker socket, reach A by address/name, use unauthenticated administrator APIs, or alter the managed overlay. Runtime defects require a separate issue; no production/DSH/provider changes.
+- Reuse genuine Compose account setup and existing network listener/probe scripts; preserve all eight deployment cases, ownership registration, graceful drainage and cleanup. Parent-inline mapped implementation/fixture admission is disclosed, not independent fixture review; advisor unavailable.
+- Evidence floor: live positives, discriminating owned controls, restored candidate, check/strict fixture, independent review, frozen-head standalone/full Docker and protected CI with empty resource inventories. #101 credentials and #102 real Yolo execution remain separate.

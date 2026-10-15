@@ -1424,3 +1424,10 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Required evidence: wrong-upstream WS negative control then restored positive, root deployment/check/strict fixture, four independent high-risk seats, frozen-head standalone/fullDocker/CI and independent empty inventories. Parent-inline fixture admission disclosed; no production or DSH changes.
 - 实测：真实Compose候选8/8通过140.69s，A/B原生follow快照、foreign typed rejection及同carrier实时事件均执行。临时WS上游按攻击query选A的控制，7项原用例通过，新用例在B自身snapshot断言收到error而明确失败（133.80s）；每次四类资源及活动unit清单为空。第一次控制仅输出AggregateError外壳（239.25s），未追认内层失败位置；保留多失败聚合并对单一Error原样重抛后才取得明确断言证据。localcheck2152unit/1135integration、dup2.83%、strict5/5通过，恢复候选及最终审查后同SHA standalone/fullDocker/CI仍为合并门禁。无provider、生产或DSH改动。
 - Review闭环：四独立席位中correctness发现A最后一次live-event wait之后、B继续期间发生的A close/error不会再检查，违反既定unexpected-carrier失败合同；按覆盖缺口确认并使用fixpass1。真实控制在A live事件后关闭并await A，旧候选仍8/8通过132.89s；增加最终遍历两carrier的failure latch及OPEN检查后，同控制7pass/1明确Native carrier closed失败134.89s，独立资源清单为空。既有B OPEN断言和所有内容/同stream序列判据保留；父级内联全diff+耦合修复复审须明确不是独立二轮审查，原四席位报告与计数保留。
+
+## Issue #100 risk/evidence map (task19.3 only)
+
+- Auth/API: reachable platform health200, administrator positive200 outside employee, B no-session admin401; no employee receives a platform admin cookie.
+- File/path/secrets: unique A home/work positives, actual source and container path denials, socket absent/read/connect failure, overlay mutation refusal and unchanged digest; no content/key diagnostics.
+- Network/resources/errors: known-live A3080/3099 at loopback/IP/alias before and after B's bounded IP/alias denials; uid1001 and same owned identities, original registration/drainage/cleanup retained.
+- Evidence/compatibility/docs: extract and reuse unchanged network scripts; qualify each major boundary with disposable controls, restore and run deployment/check/strict, four independent seats, exact-head standalone/full Docker/CI and independently empty inventories. No production/schema/packaging/provider changes; #101/#102 remain explicit non-goals.
