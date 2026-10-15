@@ -684,3 +684,9 @@
 - Task19.1 only on delivered Compose with two real employees; current platform session alone selects the instance despite other-user identifiers and forged forwarding input. No production/DSH changes, provider calls, long-connection or internal-network acceptance.
 - Preserve existing six deployment cases and resource ownership/drainage. Inline fixture admission and mapped implementation follow the higher single-slice delegation restriction; not independent fixture review. Advisor unavailable after its invocation limit.
 - Required evidence: live own-resource positives, cross-tenant negatives, wrong-routing and missing-admin-guard controls, restored candidate, check/strict fixture, independent review, frozen-head standalone/full Docker and protected CI. Shared Epic fixture remains open.
+
+## Issue #204 fixture
+
+- Test-oracle bugfix, expanded: destructive administrator lifecycle evidence must distinguish a live target closed after dispatch from an already-settled carrier. No production disconnect cause is established.
+- Scope only existing disable/restart Docker acceptance; preserve original five-second bounds, sibling/physical/account/platform-session/native-history/file/volume assertions. Raw WebSocket carriers are not logical Session streams.
+- Parent-inline mapped repair/admission disclosed; qualify both old false acceptance and corrected rejection with real preclosed owned carriers, then normal runtime/check/strict fixture, four-seat review, exact-head full Docker and protected CI. No provider, retry, deadline or DSH changes.

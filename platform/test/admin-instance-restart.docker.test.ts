@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import {
@@ -103,9 +104,12 @@ it('admin HTTP restart updates physical StartedAt, reaches ready and preserves g
       const accounts = f.database.prepare('SELECT * FROM users ORDER BY id').all();
       f.setNow(Date.now() + 1000);
 
+      expect(targetConnection.socket.destroyed).toBe(false);
+      const began = performance.now();
       const receipt = await restart(f, admin.cookie, f.user.id);
       expect(receipt).toEqual({ userId: f.user.id, status: 'starting', reason: 'starting' });
-      await observeHttp(targetConnection.closed, 5000);
+      const closedAt = await observeHttp(targetConnection.closed, 5000);
+      expect(closedAt).toBeGreaterThanOrEqual(began);
       await gateway.ready(f.user.cookie);
 
       const ready = record(
