@@ -12,6 +12,7 @@ import { cleanupTargets, output, OWNER_LABEL, removeOwned } from './docker-clean
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
+import { verifyHttpIsolation } from './deployment-http-isolation-fixture.ts';
 import { prepareTlsDeployment, verifyTlsCarrier } from './deployment-tls-fixture.ts';
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
@@ -726,4 +727,16 @@ it('serves native HTTPS and WSS behind an exact trusted TLS proxy with Secure co
       tls = await prepareTlsDeployment(lifecycle, deployment);
     },
   );
+});
+
+it('keeps hostile employee HTTP requests inside their own native instance and rejects administrator access', async () => {
+  await withDeployment(async (lifecycle, start) => {
+    const { deployment, employee: a, admin } = await configureDeployment(lifecycle, start);
+    const b = await registerDeploymentEmployee(
+      lifecycle,
+      deployment,
+      'isolated@deployment.example.test',
+    );
+    await verifyHttpIsolation(lifecycle, deployment, a, b, admin);
+  });
 });

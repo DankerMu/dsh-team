@@ -1320,7 +1320,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 
 依赖：第 18 组。只放跨组的整套检查；各组自己的测试已在各组内。
 
-- [ ] 19.1 经平台接口越界。验证：`pnpm test:deploy`——用户 B 的平台会话请求任何路径，带上 A 的用户标识、A 的 Session 标识、伪造的转发头，都只到达 B 的实例或被拒绝；B 列不出也打不开 A 的 Session 和文件；员工的平台会话请求管理接口得到 403（规格“用户看不到他人的文件和 Session”“实例不能借平台接口越权”）。
+- [x] 19.1 经平台接口越界。验证：`pnpm test:deploy`——用户 B 的平台会话请求任何路径，带上 A 的用户标识、A 的 Session 标识、伪造的转发头，都只到达 B 的实例或被拒绝；B 列不出也打不开 A 的 Session 和文件；员工的平台会话请求管理接口得到 403（规格“用户看不到他人的文件和 Session”“实例不能借平台接口越权”）。
 - [ ] 19.2 经长连接越界。验证：`pnpm test:deploy`——B 的长连接里发送指向 A 的 Session 标识的消息，得不到 A 的任何内容。
 - [ ] 19.3 从实例内部越界。验证：`pnpm test:deploy`——在 B 的实例里执行命令：读 A 的卷路径、读 Docker socket、连接 A 实例地址的任意端口、不带平台会话请求平台的管理接口、写受管覆盖层文件，全部失败（规格“实例之间网络不可达”“实例没有平台的权限”“受管覆盖层在实例内不可写”）。
 - [ ] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
@@ -1406,3 +1406,4 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - Authorization/errors: all current administrator route/method pairs return403 for B; known live positives distinguish isolation from broken endpoints, native absence/error shapes distinguish rejection from server failure.
 - File/resource/evidence: only owned uid1001 sentinels and recorded resources; original six deployment cases, drainage and cleanup unchanged. Wrong-routing and admin-role controls must fail at intended assertions, restored candidate must pass.
 - Required gates: giap-vps standalone deployment and final exact-head full Docker, local check/strict fixture, four independent review seats and protected CI; no provider invocation, UI or remaining19.x claim. Parent-inline fixture admission disclosed; advisor unavailable.
+- 实测：两名真实员工各自Session/文件正向控制及全部HTTP越界/11项管理路由方法断言通过，候选7/7（111.77s）；原6项保留。临时HTTP选择器按查询userId路由的负对照只使新用例在B Session身份断言失败（194.74s）；移除管理role guard的独立负对照只使新用例在GET users的403断言失败（194.35s）。每次四类资源及活动unit独立清单为空。最初额外RPC参数被原生gateway/arguments-invalid拒绝，经baseline/body/query/header单变量诊断确认；保留该拒绝断言，另用合法描述符参数证明B身份，不将测试构造失败称为生产漏洞。localcheck2152unit/1135integration、dup2.84%、strict5/5通过；恢复候选、独立审查及最终冻结SHA standalone/fullDocker/CI仍为合并门禁。

@@ -19,17 +19,27 @@ export function instanceGatewayFixture(
     origin: f.origin,
     'content-type': 'application/json',
   });
-  const rpc = async (cookie: string, method: string, args: unknown) => {
+  const rpcResult = async (
+    cookie: string,
+    method: string,
+    args: unknown,
+    attack: { query?: string; headers?: Record<string, string> } = {},
+  ) => {
     const rpcId = randomUUID();
-    const response = await fetch(`${f.base}/api/${method}`, {
+    const response = await fetch(`${f.base}/api/${method}${attack.query ?? ''}`, {
       method: 'POST',
-      headers: headers(cookie),
+      headers: { ...headers(cookie), ...attack.headers },
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
     });
     expect(response.status).toBe(200);
     const envelope = record(await response.json());
-    expect(envelope).toMatchObject({ type: 'server-response', rpcId, result: { ok: true } });
-    return record(record(envelope.result).value);
+    expect(envelope).toMatchObject({ type: 'server-response', rpcId });
+    return record(envelope.result);
+  };
+  const rpc = async (cookie: string, method: string, args: unknown) => {
+    const result = await rpcResult(cookie, method, args);
+    expect(result.ok).toBe(true);
+    return record(result.value);
   };
   const exec = async (id: string, script: string): Promise<string> => {
     const result = await f.lifecycle.commandAsync(
@@ -164,6 +174,7 @@ export function instanceGatewayFixture(
 
   return {
     rpc,
+    rpcResult,
     exec,
     state,
     ready,
