@@ -230,6 +230,8 @@ export interface AccountUiContext {
 
 export interface AccountUiOptions {
   canonicalInstanceService?: boolean;
+  /** An owned Engine-protocol dependency; omitted means the existing unavailable socket. */
+  dockerSocketPath?: string;
 }
 
 export async function withAccountUi(
@@ -273,7 +275,13 @@ export async function withAccountUi(
       PLATFORM_LOG_LEVEL: 'silent',
       PLATFORM_COOKIE_SECURE: 'false',
       ...(options.canonicalInstanceService === true
-        ? { PLATFORM_DOCKER_SOCKET: join(directory, 'unavailable-docker.sock') }
+        ? {
+            PLATFORM_DOCKER_SOCKET:
+              options.dockerSocketPath ?? join(directory, 'unavailable-docker.sock'),
+            ...(options.dockerSocketPath === undefined
+              ? {}
+              : { PLATFORM_UPSTREAM_MODE: 'published-loopback' }),
+          }
         : {}),
     });
     database = openDatabase(join(directory, 'platform.db'));
