@@ -75,8 +75,15 @@ interface ToolIdentity {
 }
 
 function toolIdentity(events: readonly Event[], input: NativeObservation): ToolIdentity {
-  const start = one(of(events, 'turn/start'), 'turn-call-count');
-  const call = one(of(events, 'tool/call'), 'turn-call-count');
+  const starts = of(events, 'turn/start');
+  const calls = of(events, 'tool/call');
+  const start = starts[0];
+  const call = calls[0];
+  if (starts.length !== 1 || calls.length !== 1 || !start || !call)
+    throw new PermissionEvidenceError(
+      'turn-call-count',
+      `turn-start:${String(starts.length)},tool-call:${String(calls.length)}`,
+    );
   const data = record(call.data);
   const turn = record(start.data).turn;
   const args = record(JSON.parse(String(data.arguments)));

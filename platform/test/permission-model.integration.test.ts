@@ -187,6 +187,30 @@ it('binds a Yolo bash receipt to the exact requested command and returns actual 
   });
 });
 
+it.each([
+  { index: 2, type: 'step/start', starts: 1, calls: 0 },
+  { index: 3, type: 'tool/call', starts: 1, calls: 2 },
+  { index: 0, type: 'step/start', starts: 0, calls: 1 },
+  { index: 3, type: 'turn/start', starts: 2, calls: 1 },
+])('diagnoses $starts starts and $calls calls without exposing event data', (control) => {
+  const value = bashEvidence();
+  const row = value.records[control.index];
+  if (!row) throw new Error('Missing test event');
+  row.event.type = control.type;
+  Object.assign(row.event.data, { secret: 'private-event-sentinel' });
+  let failure: unknown;
+  try {
+    permissionEvidence(value);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(permissionFailure(failure)).toEqual({
+    code: 'permission-turn-call-count',
+    detail: `turn-start:${String(control.starts)},tool-call:${String(control.calls)}`,
+  });
+});
+
 it('rejects a different bash command even when it reports the expected output', () => {
   const value = bashEvidence();
   value.command = 'echo forged-output';
