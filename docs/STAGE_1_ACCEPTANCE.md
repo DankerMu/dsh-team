@@ -17,8 +17,14 @@
 | K | 原始完整 `pnpm test:docker`，giap-vps Linux amd64 | 30文件89/89，976.16s，exit0；包含部署11项 | 同一 `a80f1b5`；原始日志 `.run/issue104/reviewed-docker.log`，归档SHA256 `377ef8b9f0a9b55e397084e12f0c13a53770235ef95e5debf0ad72fc8881e6a8` |
 | U | 原始 `pnpm test:ui`，真实构建React / Playwright Chromium153.0.8010.12 | 41/41，截图已检查，无未预期console/page/request/external错误 | #75审查头 `78932eb9a29fe0a775fe7a17f202cd36b99c4741`；[证据](https://github.com/DankerMu/dsh-team/pull/249#issuecomment-6202712145)；C对应CI也重新执行UI成功 |
 | M | 受信Actions实际 `pnpm test:model`，giap-vps、真实开发模型 | 2/2，234.50s；原模型案例183.971s，Yolo隔离49.276s | #102审查头 `f8086299f00b634755f0011271c3f320c28df139`；[Actions38741643901](https://github.com/DankerMu/dsh-team/actions/runs/38741643901)、[说明](https://github.com/DankerMu/dsh-team/pull/241#issuecomment-6194325462)；**历史成功，不是当前头模型复验** |
+| M2 | 用户新授权的一次完整 `pnpm test:model`，受限Actions→giap-vps | **1/2通过，369.62s，exit1**；managed-model239.575s通过，Yolo第二探针被`permission-intended-bash`拒绝 | #105候选 `8b6eb167a15b0f2f778d079a95441781857ca05b`；[Actions38843236093](https://github.com/DankerMu/dsh-team/actions/runs/38843236093)、[失败及独立清理记录](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6207212224)；单次授权已耗尽，禁止自动重试 |
+| D2/K2 | #105候选原始deploy及完整Docker，giap-vps | deploy11/11，380.36s；Docker30文件89/89，965.44s；LinuxHTTP25/25；全部exit0且独立库存/unit为空 | 与M2相同 `8b6eb167`；[精确头非模型证据](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6207477827)；不清除独立模型失败 |
 
 D/K均由父级在四席审查后从精确Git归档执行，Node24.13.1、pnpm10.34.6、Docker29.1.3；前后独立自有容器、卷、网络、测试镜像库存及活动unit为空。M的一次性临时GitHub凭据、SSH能力、工作目录、锁、Docker资源与unit也独立确认退休。测试替身不会计入M。
+
+M2是最近一次模型复验，整体失败，不能被M的旧成功覆盖。复合oracle失败码没有各子条件的单独事实，暂不能归因为命令改写、工具名、调用身份或时序；[#254](https://github.com/DankerMu/dsh-team/issues/254)跟踪诊断。原用例通过、截图已检查且浏览器health错误0；operator和host退休成功，父级独立确认临时secret/SSH能力/私有工作目录/锁/四类资源及活动unit均不存在。#105与阶段签结仍阻塞，不降低判据。
+
+D2/K2是最近的部署/Docker批次，下列所有D/K测试在这次原始完整发现中也通过；表内单项耗时保留为K批次的可追溯历史值，不混用为K2测量。没有将部署绿色替代模型失败。
 
 ## 逐条验收映射
 
@@ -40,7 +46,7 @@ D/K均由父级在四席审查后从精确Git归档执行，Node24.13.1、pnpm10
 | 同文件 — `rejects another employee Session over native logical streams while preserving own live delivery` | 原生逻辑流拒绝他人Session，同时自己的载体/事件继续；不是只检查WebSocket握手。D/K通过；K单项20.927s。 |
 | 同文件 — `denies internal employee access to sibling volumes, listening ports, Docker and platform authority` | 真实uid1001内部探针覆盖兄弟home/work、3080/3099地址与别名、Docker socket、管理权限、只读受管覆盖层，含活的正向对照和不变哨兵。D/K通过；K单项23.682s。 |
 | 同文件 — `rejects sibling native credentials and keeps platform data outside employee files and environments` | 各自原生cookie/token正向有效，跨实例401；平台数据库与凭据扫描限于该员工可读视图，不声称任意编码/内存保密。D/K通过；K单项31.493s。 |
-| `platform/test/deployment-isolation.model.test.ts` — `keeps all five deployed isolation boundaries when the real B Agent executes the canonical probes in Yolo` | 真正B Agent以Yolo执行同一五边界矩阵，原生调用/结果及A后状态关联，不靠模型口头总结。M通过，49.276s；当前头未重跑模型。 |
+| `platform/test/deployment-isolation.model.test.ts` — `keeps all five deployed isolation boundaries when the real B Agent executes the canonical probes in Yolo` | 真正B Agent以Yolo执行同一五边界矩阵，原生调用/结果及A后状态关联，不靠模型口头总结。M历史通过49.276s；最近M2失败128.856s，第二探针被oracle拒绝，本项最终复验未通过。 |
 
 此隔离不等于默认阻断实例访问整个内网，也不提供共用模型密钥对员工的保密隔离；这两项是已记录的产品边界，不是遗漏的通过项。DSH源码未修改；插件受管策略及真实执行入口的证明另见K中的权限/办公委派测试。
 
@@ -48,9 +54,9 @@ D/K均由父级在四席审查后从精确Git归档执行，Node24.13.1、pnpm10
 
 | 测试文件 / 测试名 | 证明与最近结果 |
 | --- | --- |
-| `platform/test/managed-model.model.test.ts` — `lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings` | 管理员HTTP保存模型配置、新员工真实登录与原生任务；文件事前不存在、模型工具实际生成精确字节。还包含手动writer与自然语言委派DOCX、原生子Session构造结果与最终五字段解析。M通过，183.971s；不是测试预写文件、模拟provider或完成文本证明。 |
+| `platform/test/managed-model.model.test.ts` — `lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings` | 管理员HTTP保存模型配置、新员工真实登录与原生任务；文件事前不存在、模型工具实际生成精确字节。还包含手动writer与自然语言委派DOCX、原生子Session构造结果与最终五字段解析。最近M2单项通过239.575s；不是测试预写文件、模拟provider或完成文本证明；不代表整体模型套件通过。 |
 
-开发模型与生产`qwen3.6`的复验、无公网任务交付按基线留阶段3。本页没有新模型调用授权；M绑定的历史SHA不可改写为当前头。阶段最终候选如要求精确头模型复验，必须先获得一次性授权并通过受限Actions通道执行。
+开发模型与生产`qwen3.6`的复验、无公网任务交付按基线留阶段3。M2使用新明确授权的一次完整执行，授权已耗尽；后续模型调用必须再次明确授权并通过受限Actions通道执行，不能自动重试或将历史M绑定为新头。
 
 ### 验收12（本阶段）：停止或重建后恢复文件与Session
 
@@ -87,6 +93,6 @@ Office活动保活与共同编辑不在阶段1；运行中任务断点续跑亦�
 | [#245 网络集成超时](https://github.com/DankerMu/dsh-team/issues/245)、[#250 上传负控提前关闭](https://github.com/DankerMu/dsh-team/issues/250) | 未修改相关源码/判据；后续通过只是不复现，不标记修复或删除失败证据。 |
 | [#252 审计夹具停止期限包络](https://github.com/DankerMu/dsh-team/issues/252) | P2：30秒Docker停止grace被15秒调用期限包住，假设慢排空可误报失败；当前运行通过，不能误接受。审查明确后续，不缩短grace或放宽exit0。 |
 | 人工白盒审查 | `platform/src/orchestrator/`、`images/seccomp/`、`images/dsh-user/`及规则变更仍需项目方逐行审查。AI审查、CI及运行成功不能代签；Epic末提交集中清单与证据。 |
-| 最终版本证据 | 本页记录已实测批次。#105最终候选的check/deploy/Docker与所需模型复验、保护CI尚未在本页记录完成；不得据历史M宣布当前头四命令全部通过。 |
+| 最终版本证据 | #105候选8b6eb167的check、D2/K2通过，但M2整体失败；结果文档提交不是新运行。当前四命令未全绿，#254诊断与后续单次模型授权未完成，禁止合并签结或借历史M覆盖。 |
 
 阶段2/3及目标机Ubuntu22.04/生产模型/完全离线/容量的未执行项保留在原计划，不计为阶段1绿色结果。共享OpenSpec仅在所有阶段1签结条件满足后归档。
