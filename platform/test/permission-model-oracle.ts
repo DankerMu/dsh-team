@@ -74,6 +74,20 @@ interface ToolIdentity {
   callId: string;
 }
 
+function requireBashIdentity(
+  matchingTurn: boolean,
+  bash: boolean,
+  exactCommand: boolean,
+  stringCallId: boolean,
+  ordered: boolean,
+): asserts stringCallId {
+  if (!(matchingTurn && bash && exactCommand && stringCallId && ordered))
+    throw new PermissionEvidenceError(
+      'intended-bash',
+      `turn:${String(matchingTurn)},tool:${String(bash)},command:${String(exactCommand)},call-id:${String(stringCallId)},order:${String(ordered)}`,
+    );
+}
+
 function toolIdentity(events: readonly Event[], input: NativeObservation): ToolIdentity {
   const starts = of(events, 'turn/start');
   const calls = of(events, 'tool/call');
@@ -87,18 +101,30 @@ function toolIdentity(events: readonly Event[], input: NativeObservation): ToolI
   const data = record(call.data);
   const turn = record(start.data).turn;
   const args = record(JSON.parse(String(data.arguments)));
-  requireEvidence(
-    data.turn === turn &&
-      ('command' in input
-        ? data.name === 'bash' && args.command === input.command
-        : data.name === 'write' &&
-          args.file_path === input.path &&
-          args.content === input.content) &&
-      typeof data.callId === 'string' &&
-      Number(call.seq) > Number(start.seq),
-    'command' in input ? 'intended-bash' : 'intended-write',
-  );
-  return { start, call, turn, callId: data.callId };
+  const matchingTurn = data.turn === turn;
+  const stringCallId = typeof data.callId === 'string';
+  const ordered = Number(call.seq) > Number(start.seq);
+  if ('command' in input) {
+    requireBashIdentity(
+      matchingTurn,
+      data.name === 'bash',
+      args.command === input.command,
+      stringCallId,
+      ordered,
+    );
+  } else {
+    requireEvidence(
+      matchingTurn &&
+        data.name === 'write' &&
+        args.file_path === input.path &&
+        args.content === input.content &&
+        stringCallId &&
+        ordered,
+      'intended-write',
+    );
+  }
+  // Both branches enforce stringCallId; TypeScript cannot retain that property narrowing through the helper.
+  return { start, call, turn, callId: data.callId as string };
 }
 
 function promptIdentity(

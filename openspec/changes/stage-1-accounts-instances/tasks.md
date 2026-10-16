@@ -1512,3 +1512,11 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - #75 final head78932eb9: local2216unit/1185integration/41UI and source/dist GET/HEAD/Escape passed; giap-vps25HTTP,11deploy276.20s,30files89Docker788.73s, independent empty inventories/units; CI38808064531 green. PR249 merged de47209. One fixpass closed test-evidence/keyboard findings; reviewer independence limits remain recorded.
 - 初始真实19.6序列被独立oracle以缺少logout.succeeded拒绝（18.00s）。扩展中三轮修复处理了错误的stopped-running复用假设和观察器高频GET导致64KiB完整日志溢出；原失败、固定元数据诊断和空库存均保留，未修改生产、日志上限、期限或审计断言。
 - 用户明确续批一轮后，发行版公开patch/module扩展点资格证明：有效profile中的自有module只在真实DSH启动时exit71，HTTP准入200→error→一条instance.start-failed，独立inspect stopped/exit71且没有启动令牌；两个诊断刻意在证明后结束，非完整验收。改用该故障层后，原完整操作链定向1/1、203.56s通过：十九事件/四停止原因、45行审计、22凭据/2内容标记在214条完整日志及全部审计中均不存在，独立库存与活动unit为空。临时非秘密oracle资格27/27通过；无外部模型调用。最终精确头全量与独立审查仍待门禁。
+
+## Issue #254 authorized diagnostic repair
+
+- [x] Qualify fixed boolean diagnosis for every intended-bash subcondition and combined failures, preserving exact rejection and untrusted-error privacy.
+- [x] Prove unchanged valid bash/write behavior and actual provider-free native command-mismatch output; no external model invocation.
+- [ ] Complete full check, four-seat review, exact-head original deployment/Docker and protected CI; preserve historical failure and resume #105 only through fresh explicitly authorized model acceptance.
+- Public oracle RED6failed/60passed (all five individual flags plus combined detail wasnull), then completecheck2216unit/1190integration anddup2.82% passed. Complexity16 split into named boolean validator; typed test event swaps and documented post-validation callId narrowing corrected without gate changes.
+- Actual owned Compose/isolated browser/native two-turn qualification1/1,40.61s (parent51.1013s): original canonical commands execute and pass; the same real histories with a different expected command reject with onlycommand=false. Original five-boundary matrix and zero-browser-error checks remain; screenshot inspected, independent resources/units empty. Deterministic llm.stream dependency is not an external model or historical root-cause proof. Final exact-head review/runtime/CI pending.

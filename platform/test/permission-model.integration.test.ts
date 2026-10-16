@@ -217,17 +217,40 @@ it('rejects a different bash command even when it reports the expected output', 
   expect(() => permissionEvidence(value)).toThrow('permission-intended-bash');
 });
 
-it('classifies an exact-command rejection without retaining the rejected command', () => {
-  const value = bashEvidence();
-  value.command = 'private command sentinel';
-  let failure: unknown;
-  try {
-    permissionEvidence(value);
-  } catch (error) {
-    failure = error;
-  }
-  expect(permissionFailure(failure)).toEqual({ code: 'permission-intended-bash', detail: null });
-});
+it.each([
+  ['turn', 'turn:false,tool:true,command:true,call-id:true,order:true'],
+  ['tool', 'turn:true,tool:false,command:true,call-id:true,order:true'],
+  ['command', 'turn:true,tool:true,command:false,call-id:true,order:true'],
+  ['call-id', 'turn:true,tool:true,command:true,call-id:false,order:true'],
+  ['order', 'turn:true,tool:true,command:true,call-id:true,order:false'],
+  ['combined', 'turn:false,tool:false,command:false,call-id:false,order:false'],
+] as const)(
+  'classifies intended bash %s rejection without retaining native values',
+  (kind, detail) => {
+    const value = bashEvidence();
+    const call = value.records[2];
+    const start = value.records[0];
+    if (!call || !start) throw new Error('Missing test identity');
+    const data = record(call.event.data);
+    if (kind === 'turn' || kind === 'combined') data.turn = 'private-turn-sentinel';
+    if (kind === 'tool' || kind === 'combined') data.name = 'private-tool-sentinel';
+    if (kind === 'command' || kind === 'combined') value.command = 'private-command-sentinel';
+    if (kind === 'call-id' || kind === 'combined') data.callId = { private: 'call-id-sentinel' };
+    if (kind === 'order' || kind === 'combined') {
+      call.event.seq = 0;
+      start.event.seq = 2;
+      value.records[0] = call;
+      value.records[2] = start;
+    }
+    let failure: unknown;
+    try {
+      permissionEvidence(value);
+    } catch (error) {
+      failure = error;
+    }
+    expect(permissionFailure(failure)).toEqual({ code: 'permission-intended-bash', detail });
+  },
+);
 
 it.each([
   ['nonzero-exit', '{"owned":true}\n[exit code: 7]'],

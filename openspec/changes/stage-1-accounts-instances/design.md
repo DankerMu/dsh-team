@@ -1614,3 +1614,10 @@ Idle-overlap boundary: hasStartupWork is flights-only, not a mirror of the statu
 - Keep original credential inventory assertions and append every additional issued platform/native credential to the final raw-row/full-log absence scan. Retain only event counts and safe provenance outcomes; no credentials or raw audit/log payloads in reports.
 - Qualification rejects omitted event, wrong actor, wrong target and wrong stop reason in disposable nonsecret snapshots. All original deployment cases remain discovered; rollback removes only the test extension.
 - The complete-log boundary stays64KiB and rejects overflow. Readiness status observes at1s within60s; idle observes at5s within185s while the real60s scheduler runs. Default50ms readiness and initial1s idle sampling were measured to amplify request logs beyond the bound; reducing observer traffic does not truncate evidence, alter production timing or raise a gate.
+
+## Issue #254 native intended-command diagnosis
+
+- Keep `permissionFailure` and its private error-class trust boundary unchanged. On a failed bash identity predicate, attach one fixed-order string of locally computed booleans: matching turn, bash tool, exact command, string callId, and call-after-start. Expected and observed strings/IDs/sequences never enter the detail.
+- Compute the same predicate values once and use them both for rejection and diagnostic bits; do not normalize commands, accept another tool, weaken comparison or alter write-tool behavior. Invalid JSON/history and turn/call cardinality retain their prior failure paths.
+- Qualify each bit and combined failure through the public oracle, plus unchanged write and valid bash receipts. A provider-free actual native bash operation then evaluated against a different expected command proves command mismatch diagnosis without another external model request. Keep failure artifacts safe and clean owned resources.
+- Parent coupled implementation/fixture admission is not independent; final four-seat review is independent. #105 stays draft until actual model acceptance, and #226/other residuals remain unresolved.
