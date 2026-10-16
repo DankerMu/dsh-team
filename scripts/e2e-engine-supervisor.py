@@ -24,7 +24,7 @@ class UnixHttp(http.client.HTTPConnection):
 def engine_info(path):
     connection = UnixHttp(str(path))
     try:
-        connection.request('GET', '/info')
+        connection.request('GET', '/info', headers={'Host': 'localhost'})
         response = connection.getresponse()
         body = response.read(1024 * 1024 + 1)
         if response.status != 200 or len(body) > 1024 * 1024:
