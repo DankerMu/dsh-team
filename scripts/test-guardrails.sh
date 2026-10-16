@@ -375,7 +375,9 @@ expect_reject "web coverage (TSX branch below the per-file threshold)" "bare.tsx
 # corpus (including tests), then target twice the live percentage. Even counting
 # only one copy as duplicated, N / (corpus + 2N) exceeds that target; the gate's
 # own threshold, configuration and clean-tree acceptance remain unchanged.
-duplicate_lines="$(node --input-type=module <<'NODE'
+# Bash 3.2 misparses literal quotes in heredocs nested inside command substitution.
+# Keep the program intact and let the existing temporary-root trap own its output.
+node --input-type=module >"$tmp/duplicate-lines" <<'NODE' || exit 1
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { constraintNumber } from './scripts/constraints.mjs';
@@ -397,7 +399,7 @@ for (const file of files) {
 const rows = Math.max(10, Math.floor(target * corpus / (100 - 2 * target)) + 1);
 process.stdout.write(`${rows}\n`);
 NODE
-)" || exit 1
+IFS= read -r duplicate_lines <"$tmp/duplicate-lines" || exit 1
 {
   echo "export function copied(input: number): number {"
   i=0
