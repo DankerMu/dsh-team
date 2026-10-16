@@ -1,6 +1,6 @@
 # Why
 
-Issue201 records Bash3.2 parsing failure in the duplicate canary's Node heredoc nested inside command substitution. The historical RED is accepted without rerunning it just to confirm. A minimal five-line literal heredoc isolates the same unmatched-apostrophe EOF under3.2; Bash5 accepts it. Balancing the apostrophe or moving the heredoc outside substitution passes; removing outer assignment quotes does not.
+Issue201 records Bash3.2 parsing failure in the duplicate canary's Node heredoc nested inside command substitution. The historical RED is accepted without rerunning it just to confirm. A minimal literal heredoc isolates the same unmatched-apostrophe EOF under3.2; Bash5 accepts it. Balancing the apostrophe or moving the heredoc outside substitution passes; removing outer assignment quotes does not.
 
 # What Changes
 
