@@ -132,30 +132,64 @@ it('keeps another real startup bridge intact while built e2e reconciles its own 
   });
 });
 
-it.each(['prerequisite', 'partial', 'identity', 'eof', 'parent-kill', 'supervisor-kill'])(
-  'retires only owned runtime processes after %s',
-  async (mode) => {
-    const { stdout } = await promisify(execFile)(
-      '/usr/bin/sudo',
-      [
-        '-n',
-        '/usr/bin/python3',
-        fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
-        mode,
-      ],
-      {
-        env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
-        timeout: 120_000,
-        maxBuffer: 65_536,
-      },
-    );
-    const observed: unknown = JSON.parse(stdout);
-    expect(observed).toEqual({
+it.each([
+  'prerequisite',
+  'executable',
+  'setup',
+  'partial',
+  'identity',
+  'eof',
+  'parent-kill',
+  'supervisor-kill',
+])('retires only owned runtime processes after %s', async (mode) => {
+  const { stdout } = await promisify(execFile)(
+    '/usr/bin/sudo',
+    [
+      '-n',
+      '/usr/bin/python3',
+      fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
       mode,
-      faultRejected: true,
-      ownedTreeGone: true,
-      unrelatedSentinelAlive: true,
-      gracefulRootsRemoved: mode !== 'supervisor-kill',
-    });
-  },
-);
+    ],
+    {
+      env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
+      timeout: 120_000,
+      maxBuffer: 65_536,
+    },
+  );
+  const observed: unknown = JSON.parse(stdout);
+  expect(observed).toEqual({
+    mode,
+    faultRejected: true,
+    ownedTreeGone: true,
+    unrelatedSentinelAlive: true,
+    gracefulRootsRemoved: mode !== 'supervisor-kill',
+  });
+});
+
+it('gracefully retires its private runtime after a public-command process-group signal', async () => {
+  const path = process.env.PATH;
+  if (path === undefined) throw new Error('Missing trusted toolchain path');
+  const { stdout } = await promisify(execFile)(
+    '/usr/bin/sudo',
+    [
+      '-n',
+      '/usr/bin/python3',
+      fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
+      'public-group',
+      path,
+    ],
+    {
+      env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
+      timeout: 150_000,
+      maxBuffer: 65_536,
+    },
+  );
+  const observed: unknown = JSON.parse(stdout);
+  expect(observed).toEqual({
+    mode: 'public-group',
+    actualHttpCompleted: true,
+    ownedTreeGone: true,
+    rootRemoved: true,
+    sentinelAlive: true,
+  });
+});
