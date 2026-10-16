@@ -1520,3 +1520,9 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - [ ] Complete full check, four-seat review, exact-head original deployment/Docker and protected CI; preserve historical failure and resume #105 only through fresh explicitly authorized model acceptance.
 - Public oracle RED6failed/60passed (all five individual flags plus combined detail wasnull), then completecheck2216unit/1190integration anddup2.82% passed. Complexity16 split into named boolean validator; typed test event swaps and documented post-validation callId narrowing corrected without gate changes.
 - Actual owned Compose/isolated browser/native two-turn qualification1/1,40.61s (parent51.1013s): original canonical commands execute and pass; the same real histories with a different expected command reject with onlycommand=false. Original five-boundary matrix and zero-browser-error checks remain; screenshot inspected, independent resources/units empty. Deterministic llm.stream dependency is not an external model or historical root-cause proof. Final exact-head review/runtime/CI pending.
+
+## Issue #105 evidence map (task19.8 only)
+
+- Derivative documentation only: canonical baseline/plan define scope; exact existing test names, command results, SHA and durable links define evidence. No new tests or runtime edits.
+- #104 is merged as a425eb9449d49a20b1493b8ea12fdad807633bf5: reviewed a80f1b5, four independent seats Round1clean0fixpasses, P2 contract followup#252; exactdeploy11/11 384.41s and fullDocker30files89/89 976.16s with19events/4reasons/45audits/22credentials/214logs, independent empty resources/units, CI38837044495green.
+- Validate document paths/test names/commands and current check; protected PR runtime gates remain required. Latest model success f8086299/Actions38741643901 is historical evidence until a newly authorized final-SHA invocation. Human review and #226 disposition are not inferred from green tests. Task19.8 remains unchecked pending final evidence.
