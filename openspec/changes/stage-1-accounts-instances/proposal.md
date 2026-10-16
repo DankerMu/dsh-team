@@ -758,3 +758,9 @@
 - Reuse HTTP mutations, real container administrator TTY, explicit native startup and actual one-minute idle scheduling. Fault setup touches only the invocation-owned employee container/profile and gracefully restarts its exact owned platform for boot reconciliation; no audit insertion, account/settings database seed, fake clock or external provider.
 - Required evidence: missing-event deployment RED, complete real-operation GREEN, wrong/missing actor/target/reason oracle negative controls, full credential scan, owned cleanup, check, four independent review seats and final exact-head original deploy/full Docker/CI.
 - Parent coupled fixture admission/implementation is disclosed under the higher single-slice rule; runtime defects require a separate issue. Human review remains Epic-end.
+
+## Issue #254 fixture
+
+- Expanded test-evidence/secret-custody repair, independently authorized after #105 model run38843236093 rejected `permission-intended-bash`. Add only locally computed boolean diagnostics for turn/tool/command/callId/order to the existing private typed oracle error.
+- Preserve the exact original acceptance predicate, error code, unique turn/call, command equality, history/order and all five isolation boundaries. No command/tool/payload bytes, normalization, retry, provider call or production change.
+- Required proof: each fixed subcondition semantic RED→GREEN, simultaneous failures, untouched valid bash/write paths, untrusted-error sanitization, real provider-free native command mismatch smoke, full check, four independent review seats and exact-head original deploy/fullDocker/CI. This repairs observability, not the unretained historical cause; real-model rerun needs separate reviewed-SHA authorization.
