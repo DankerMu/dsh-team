@@ -764,3 +764,9 @@
 - Expanded test-evidence/secret-custody repair, independently authorized after #105 model run38843236093 rejected `permission-intended-bash`. Add only locally computed boolean diagnostics for turn/tool/command/callId/order to the existing private typed oracle error.
 - Preserve the exact original acceptance predicate, error code, unique turn/call, command equality, history/order and all five isolation boundaries. No command/tool/payload bytes, normalization, retry, provider call or production change.
 - Required proof: each fixed subcondition semantic RED→GREEN, simultaneous failures, untouched valid bash/write paths, untrusted-error sanitization, real provider-free native command mismatch smoke, full check, four independent review seats and exact-head original deploy/fullDocker/CI. This repairs observability, not the unretained historical cause; real-model rerun needs separate reviewed-SHA authorization.
+
+## Issue #105 fixture
+
+- Compact documentation-only task19.8: `docs/STAGE_1_ACCEPTANCE.md` maps acceptance1/2/13 and stage1 portions3/12 to existing exact test names and the latest observed results. No new tests, production behavior or weaker acceptance.
+- Keep per-command SHA/environment/provenance explicit: historical model success is not current-head proof. Final stage signoff requires the named command gates and explicitly authorized real-model execution where freshness is required; no implicit provider authorization.
+- Retain pending Epic-end human review and explicit #226 risk disposition, plus other open unknowns. Shared fixture remains open until actual completion. Parent inline docs review follows the docs-only workflow exclusion.

@@ -139,6 +139,8 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 `pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界、HTTPS/WSS、双员工HTTP/原生Session长连接及实例内部隔离；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [AGENTS.md](../AGENTS.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
 
+阶段1各验收条款、实际测试名、按SHA绑定的最近运行结果及尚未签结事项见[阶段1验收对照](STAGE_1_ACCEPTANCE.md)。测试通过不替代生产目标机资格或后置人工白盒审查。
+
 失败时先保留不含凭据的退出码、阶段和资源身份。配置缺失/非法会指名变量并停止启动；子网池不足、镜像缺失、实例错误必须处理根因。不要通过增加重试、延长门槛、放宽seccomp或手工删除不明网络端点获得绿色。
 
 ## 7. 隔离提供什么、不提供什么
