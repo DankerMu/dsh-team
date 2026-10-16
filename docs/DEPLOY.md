@@ -164,7 +164,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - **不提供实例对其余内网的默认出站阻断：实例可访问宿主机所在内网的其他地址。** 需要更强限制时由网络管理员设计边界，不能宣称现有用户间隔离等于内网全面隔离。
 - 共享单机内核不是独立虚拟机；管理员与Docker操作者是可信边界。没有多机HA或已认证的60并发容量保证。
 
-本阶段不交付 RAGFlow/ONLYOFFICE集成、离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/changes/stage-1-accounts-instances/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
+本阶段不交付 RAGFlow/ONLYOFFICE集成、离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
 
 ## 8. 停止与一次性验收清理
 
