@@ -751,3 +751,10 @@
 - Complete response bodies before settlement; restart200 is startup admission, not readiness, and reset204 leaves the instance stopped. Refresh after outcomes without automatic mutation retry; safe failures acknowledge potentially committed effects.
 - Required evidence: routed DOM semantic RED/GREEN, real built Playwright five-state/error expansion/filter/four-list-state/current-authority/confirmation/pending controls and real API/audit effects, screenshot inspection and no unexpected console/page/request/external traffic. Reuse the actual service with the existing owned Unix Engine substitute for UI mutation tests; do not fake successful API receipts or claim physical Docker recovery from that lane. Physical behavior retains #72 and final exact-head Docker coverage.
 - Parent-inline admission/implementation is disclosed under the single-slice delegation rule, not independent review. Full check/UI, four independent review seats, final exact-head deploy/full Docker/CI remain gates; no external model calls or lifecycle behavior changes.
+
+## Issue #104 fixture
+
+- Test-only expanded evidence assurance: task19.7 extends the delivered Compose19.6 sequence to all nineteen audit event identifiers, exact actor/target bindings and the four stop reasons. Production/DSH behavior and existing assertions remain unchanged.
+- Reuse HTTP mutations, real container administrator TTY, explicit native startup and actual one-minute idle scheduling. Fault setup touches only the invocation-owned employee container/profile and gracefully restarts its exact owned platform for boot reconciliation; no audit insertion, account/settings database seed, fake clock or external provider.
+- Required evidence: missing-event deployment RED, complete real-operation GREEN, wrong/missing actor/target/reason oracle negative controls, full credential scan, owned cleanup, check, four independent review seats and final exact-head original deploy/full Docker/CI.
+- Parent coupled fixture admission/implementation is disclosed under the higher single-slice rule; runtime defects require a separate issue. Human review remains Epic-end.

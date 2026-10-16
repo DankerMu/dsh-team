@@ -5,6 +5,10 @@ import { expect } from 'vitest';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
 import { record } from './container-start-docker-fixture.ts';
 import { configureDeployment } from './deployment-account-fixture.ts';
+import {
+  completeDeployedAuditSequence,
+  verifyDeployedAuditEvents,
+} from './deployment-audit-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
@@ -21,6 +25,7 @@ interface PrivacySnapshot {
   stored: Record<string, unknown>;
   logs: string;
   needles: readonly string[];
+  additionalCredentials: readonly string[];
   userId: string;
   barrier: string;
 }
@@ -78,7 +83,7 @@ async function conversation(
 }
 
 function scanEvidence(snapshot: PrivacySnapshot, progress: Progress): void {
-  const { stored, logs, needles, userId, barrier } = snapshot;
+  const { stored, logs, needles, additionalCredentials, userId, barrier } = snapshot;
   progress.phase = 'complete-audit-log-scan';
   if (!Array.isArray(stored.rows)) throw new Error('Missing complete audit rows');
   expect(record(stored.user).status).toBe('disabled');
@@ -97,6 +102,9 @@ function scanEvidence(snapshot: PrivacySnapshot, progress: Progress): void {
   progress.phase = 'complete-needle-inventory';
   expect(needles.every((value) => value.length >= 16)).toBe(true);
   expect(new Set(needles).size).toBe(14);
+  expect(additionalCredentials).toHaveLength(10);
+  expect(new Set([...needles, ...additionalCredentials]).size).toBe(24);
+  expect(additionalCredentials.every((value) => value.length >= 16)).toBe(true);
   const audit = JSON.stringify(stored.rows);
   progress.phase = 'platform-log-decoding';
   const entries = logs
@@ -130,14 +138,14 @@ function scanEvidence(snapshot: PrivacySnapshot, progress: Progress): void {
       true,
     );
   progress.phase = 'credential-content-absence';
-  for (const needle of needles) {
+  for (const needle of [...needles, ...additionalCredentials]) {
     expect(audit.includes(needle), 'audit credential/content leak').toBe(false);
     expect(logs.includes(needle), 'platform log credential/content leak').toBe(false);
   }
   process.stdout.write(
     JSON.stringify({
       privacyScan: {
-        credentials: needles.length - 2,
+        credentials: needles.length + additionalCredentials.length - 2,
         contentMarkers: 2,
         auditRows: rows.length,
         logEntries: entries.length,
@@ -185,6 +193,21 @@ async function preparePrivacyModel(
   deployment.compose.push('--file', override);
 }
 
+async function privatePlatformRead(
+  run: (args: string[]) => Promise<{ stdout: string }>,
+  script: string,
+): Promise<Record<string, unknown>> {
+  const result = await run([
+    'exec',
+    'dsh-team-platform',
+    'node',
+    '--input-type=module',
+    '-e',
+    script,
+  ]);
+  return record(JSON.parse(result.stdout));
+}
+
 export async function verifyDeployedCredentialPrivacy(): Promise<void> {
   const marker = `private-conversation-${randomUUID()}`;
   const reply = `private-reply-${randomUUID()}`;
@@ -205,21 +228,7 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
             throw new Error('Private observation failed');
           return result;
         };
-        const platformRead = async (script: string) =>
-          record(
-            JSON.parse(
-              (
-                await run([
-                  'exec',
-                  'dsh-team-platform',
-                  'node',
-                  '--input-type=module',
-                  '-e',
-                  script,
-                ])
-              ).stdout,
-            ),
-          );
+        const platformRead = (script: string) => privatePlatformRead(run, script);
         const mutate = async (
           path: string,
           method: string,
@@ -323,6 +332,19 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
           '',
           403,
         );
+        gateway.close();
+        const additionalCredentials = await completeDeployedAuditSequence({
+          lifecycle,
+          deployment,
+          employee,
+          adminCookie: admin.cookie,
+          password: newPassword,
+          progress,
+          databaseScript: db,
+          read: platformRead,
+          run,
+          mutate,
+        });
         const barrier = `privacy-barrier-${lifecycle.runId}`;
         const health = await deployment.request(`${origin}/healthz?${barrier}`);
         expect(health.status).toBe(200);
@@ -351,12 +373,22 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
             stored,
             logs: logs.stdout + logs.stderr,
             needles,
+            additionalCredentials,
             userId: employee.id,
             barrier,
           },
           progress,
         );
-        gateway.close();
+        progress.phase = 'audit-event-coverage';
+        const administrator = await platformRead(
+          `${db}try{process.stdout.write(JSON.stringify(db.prepare('SELECT id,email FROM users WHERE email=?').get(${JSON.stringify(admin.email)})));}finally{db.close();}`,
+        );
+        if (typeof administrator.id !== 'string') throw new Error('Missing administrator identity');
+        verifyDeployedAuditEvents(
+          stored.rows,
+          { id: administrator.id, email: admin.email },
+          employee,
+        );
       },
       (lifecycle, deployment) =>
         preparePrivacyModel(lifecycle, deployment, { key, model, marker, reply }),

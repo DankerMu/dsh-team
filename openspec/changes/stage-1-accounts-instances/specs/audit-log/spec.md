@@ -30,6 +30,13 @@
 - **WHEN** 管理员禁用一个员工
 - **THEN** 审计记录里操作者是该管理员，对象是被禁用的员工
 
+#### Scenario: 部署操作链完整覆盖事件
+
+- **WHEN** 在自有真实Compose上执行19.6操作链，并通过HTTP、部署TTY和真实实例生命周期补齐重启、重置、空闲回收及其他声明事件
+- **THEN** 完整原始审计中十九种事件均存在，操作者、对象标识和邮箱准确，自动生命周期与终端管理的无平台操作者明确为NULL
+- **AND** 停止原因覆盖空闲、管理员、禁用、出错；不直接插入审计、不伪造时钟或修改生产期限
+- **AND** 所有原有及新增凭据和标记内容均不出现在完整审计与平台日志中，自有资源清理完成
+
 ### Requirement: 封闭事件写入边界
 
 写入函数 MUST 仅接受以下事件标识：`account.registered`、`login.succeeded`、`login.failed`、`logout.succeeded`、`password.changed`、`account.disabled`、`account.enabled`、`password.reset`、`admin.created`、`admin.promoted`、`model-config.updated`、`runtime-config.updated`、`instance.restarted`、`instance.config-reset`、`instance.created`、`instance.started`、`instance.ready`、`instance.stopped`、`instance.start-failed`。函数 MUST 保留调用方提供的毫秒时间戳和身份/对象/来源元数据，省略的可选元数据存为 NULL。元数据由业务调用方选择，不是原始请求载荷；写入函数不承担任意元数据的秘密识别。

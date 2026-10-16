@@ -683,6 +683,6 @@ it('rejects sibling native credentials and keeps platform data outside employee 
 });
 
 it(
-  'keeps every used credential and marked conversation out of deployed audit rows and platform logs',
+  'keeps every used credential and marked conversation out of deployed audit rows and platform logs while covering all declared audit events',
   verifyDeployedCredentialPrivacy,
 );

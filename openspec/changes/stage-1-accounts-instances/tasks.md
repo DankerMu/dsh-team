@@ -1326,7 +1326,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 - [x] 19.4 凭据互换和平台数据。验证：`pnpm test:deploy`——把 A 实例的 DSH cookie 和启动令牌拿到 B 的实例上使用被拒绝；在 B 的实例里遍历文件系统和环境变量，找不到平台的数据库文件、任何平台会话令牌和 A 的 DSH cookie；实例容器不是特权模式（规格“A 的 DSH 凭据在 B 处无用”“实例内读不到平台数据”场景）。
 - [x] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
 - [x] 19.6 凭据全量扫描。验证：`pnpm test:deploy`——完成注册、登录、对话、改密码、修改模型配置、禁用账号后，在审计表和平台日志里搜索用到的每一个密码、平台会话令牌、DSH 启动令牌、DSH cookie、模型密钥和一条带特定标记的消息原文，一处都找不到（规格“不记录内容和凭据”）。
-- [ ] 19.7 审计事件覆盖。验证：`pnpm test:deploy`——19.6 的操作序列加上一次管理员重启、一次重置实例配置和一次空闲回收之后，`audit-log` 规格“记录的事件范围”列出的每一种事件类型在审计里至少各有一条，操作者和对象正确。
+- [x] 19.7 审计事件覆盖。验证：`pnpm test:deploy`——19.6 的操作序列加上一次管理员重启、一次重置实例配置和一次空闲回收之后，`audit-log` 规格“记录的事件范围”列出的每一种事件类型在审计里至少各有一条，操作者和对象正确。
 - [ ] 19.8 阶段完成条件对照：把验收 1、2、13，以及验收 3、12 的本阶段部分，逐条对应到通过的测试名，写进 `docs/STAGE_1_ACCEPTANCE.md`。验证：文档里每一条验收都有测试名和最近一次运行结果；`pnpm check`、`pnpm test:docker`、`pnpm test:deploy`、`pnpm test:model` 全部通过。
 
 Suggested fixture level: compact - 只新增测试和一份对照文档，不改运行时行为
@@ -1502,3 +1502,13 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 - 独立Node+Playwright启动source及dist，均实际HTTP200、可展开保存错误、确认说明/取消不变更、截图和零浏览器/页面/请求/外部错误；Chromium153.0.8010.12，截图已检查。四席独立review和最终精确头完整Docker/deploy/CI仍为后续门禁。
 - Round1四席审查确认一组P2测试覆盖缺口，按workflow阻止clean并启用fixpass1：五状态按钮资格与Escape取消。浏览器从实际行按钮打开后按Escape，原实现仍保留dialog（1pass/1fail）；改用既有原生dialog/focus/cancel模式后普通取消不发POST、不写审计，pending期间Escape不取消已提交操作。一次测试辅助函数类型参数遗漏在typecheck被拒绝，修正后完整check2216unit/1185integration、dup2.81%和原UI41/41通过。临时副本反转状态禁用条件被新增断言拒绝（2215pass/1fail），恢复2216pass；source/dist重新证明GET200、HEAD200空body、键盘取消与零浏览器错误，截图已检查。
 - 审查独立性限界：四个只读席位分别执行，但correctness席引用了已完成security报告，不宣称四席盲审；其“fixture文件为空”观察被实际非空JSON反证。父级依更高单slice委派规则完成耦合修复与复核，不冒称新独立复审；最终精确头完整Docker/deploy/CI仍待门禁。
+
+## Issue #104 risk/evidence map (task19.7 only)
+
+- Event completeness/identity — selected: literal nineteen events and four stop reasons, exact actual actor/target/email/nullability, real HTTP/TTY/lifecycle effects; no audit seeding or production-derived expected event set.
+- Lifecycle/ownership — selected: real restart/reset, actual minute idle sweep and captured invocation-only fault setup; original per-user safety deadlines, resource registration and independent cleanup remain unchanged.
+- Privacy — selected: retain19.6's original fourteen needles and extend the final scan with newly issued credentials; only bounded counts/phase codes retained. No external model call.
+- Verification — semantic missing-event RED, real deployment GREEN, disposable missing/wrong-identity/reason negative controls, full check, four independent review seats, exact-head original deploy/full Docker and protected CI. Parent fixture admission is not independent. Task19.7 has observed candidate runtime proof; final review/full-runtime/CI remain merge gates.
+- #75 final head78932eb9: local2216unit/1185integration/41UI and source/dist GET/HEAD/Escape passed; giap-vps25HTTP,11deploy276.20s,30files89Docker788.73s, independent empty inventories/units; CI38808064531 green. PR249 merged de47209. One fixpass closed test-evidence/keyboard findings; reviewer independence limits remain recorded.
+- 初始真实19.6序列被独立oracle以缺少logout.succeeded拒绝（18.00s）。扩展中三轮修复处理了错误的stopped-running复用假设和观察器高频GET导致64KiB完整日志溢出；原失败、固定元数据诊断和空库存均保留，未修改生产、日志上限、期限或审计断言。
+- 用户明确续批一轮后，发行版公开patch/module扩展点资格证明：有效profile中的自有module只在真实DSH启动时exit71，HTTP准入200→error→一条instance.start-failed，独立inspect stopped/exit71且没有启动令牌；两个诊断刻意在证明后结束，非完整验收。改用该故障层后，原完整操作链定向1/1、203.56s通过：十九事件/四停止原因、45行审计、22凭据/2内容标记在214条完整日志及全部审计中均不存在，独立库存与活动unit为空。临时非秘密oracle资格27/27通过；无外部模型调用。最终精确头全量与独立审查仍待门禁。
