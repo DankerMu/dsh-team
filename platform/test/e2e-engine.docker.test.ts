@@ -1,5 +1,7 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { createOrchestrator } from '../src/orchestrator/index.ts';
@@ -129,3 +131,31 @@ it('keeps another real startup bridge intact while built e2e reconciles its own 
     expect(summary).toBe('held bridge preserved; original startup ready; built e2e passed');
   });
 });
+
+it.each(['partial', 'identity', 'eof', 'supervisor-kill'])(
+  'retires only owned runtime processes after %s',
+  async (mode) => {
+    const { stdout } = await promisify(execFile)(
+      '/usr/bin/sudo',
+      [
+        '-n',
+        '/usr/bin/python3',
+        fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
+        mode,
+      ],
+      {
+        env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
+        timeout: 120_000,
+        maxBuffer: 65_536,
+      },
+    );
+    const observed: unknown = JSON.parse(stdout);
+    expect(observed).toEqual({
+      mode,
+      faultRejected: true,
+      ownedTreeGone: true,
+      unrelatedSentinelAlive: true,
+      gracefulRootsRemoved: mode !== 'supervisor-kill',
+    });
+  },
+);
