@@ -1,6 +1,6 @@
 # Tasks
 
-- [ ] Prove controlled20s real platform stop fails with the old15s callback, with owned continuation and cleanup settled.
+- [x] Prove controlled20s real platform stop fails with the old15s callback, with owned continuation and cleanup settled.
 - [ ] Honor an optional audit command deadline, retain15s default and use45s only around platform stop30s; prove controlled graceful completion and exit0/restart.
 - [ ] Prove an overdue real subprocess is killed/closed, audit failure propagates without restart, and actual deployment cleanup removes owned resources.
 - [ ] Run local check, original deploy and complete Docker suites with independent empty resource/unit inventories; complete independent review and protected CI.
@@ -16,3 +16,5 @@ No auth/schema/data migration/config inputs. Existing Docker suite owns unchange
 ## Workflow boundary
 
 Parent inline fixture admission and mapped implementation follow the higher single-slice delegation restriction; not represented as independent fixture review. Expanded independent code/evidence/ownership review before trusted final acceptance. Tests are VPS-only and assert effects/closure, not forwarded constants.
+
+RED: parent-owned giap-vps head `c02e554d5e4b39d4c06b3c1ff77d7facd3ddfde8`, original callback, actual slow-stop regression. Docker CLI settled at15015ms with null status before controlled20s continuation; audit-error-retirement failed, no restart. Real cleanup and independent container/volume/network/image/unit inventories empty. This is the previously hypothetical controlled counterexample, not a claim of an observed production flake. Narrow baseline selection excluded the second case intentionally; final acceptance requires both and full original discovery.
