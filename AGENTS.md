@@ -120,6 +120,8 @@ Python 3 with standard-library `pty`/`termios` support is required for administr
 
 The actual source and built platform entrypoints require a real Docker Unix socket and await reconciliation. `pnpm dev:bg` preflights the configured Engine. `pnpm e2e` instead provisions its own Docker and containerd runtime before main: nonroot Linux, installed `/usr/bin/dockerd`, `/usr/bin/containerd`, Python3, util-linux `unshare` with PID/mount namespace support, and noninteractive sudo are required. Unsupported hosts (including macOS) fail closed; no shared-Engine fallback or image pull is performed. Run only reviewed trusted checkout code with that privilege. The scenario remains nonroot and retains health, exact schema/migration ledger and all hurl checks. CI's job-local default daemon still serves dev-server smoke; e2e owns a separate runtime.
 
+The private runtime uses containerd2.x configuration version3 and requires Docker's `/info` to identify its containerd address and container/plugin namespaces. Docker28.0.4 on hosted CI and29.1.3 on giap-vps have exercised this entrypoint; unknown or incompatible runtime identity fails closed. No daemon upgrade is performed. Root paths are UID0-owned with caller-group search only (0710); the caller's socket/temp directory remains0700. util-linux `unshare --fork` ignores group SIGINT/SIGTERM while waiting, so ordinary command cancellation reaches the owner through stdin EOF rather than bypassing its cleanup.
+
 ### Daily commands
 
 | Task                       | Command                                  |

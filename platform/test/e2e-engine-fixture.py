@@ -110,6 +110,13 @@ def parent(mode):
                     raise RuntimeError('Real private scenario did not reach hold')
             finally:
                 selector.close()
+            private_roots = list(owned.iterdir())
+            if len(private_roots) != 1:
+                raise RuntimeError('Private root identity unavailable')
+            permissions = private_roots[0].stat()
+            if (permissions.st_uid != 0 or permissions.st_gid != int(os.environ['SUDO_GID'])
+                    or permissions.st_mode & 0o777 != 0o710):
+                raise RuntimeError('Private root permissions exceed caller traversal')
             roots = children(child.pid)
             if len(roots) != 1:
                 raise RuntimeError('Owned namespace identity unavailable')
