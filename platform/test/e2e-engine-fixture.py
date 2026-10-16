@@ -79,11 +79,18 @@ def parent(mode):
     captured = []
     success = False
     try:
-        child = subprocess.Popen(['/usr/bin/unshare', '--fork', '--pid', '--mount-proc',
-            '--propagation', 'private', '--kill-child=SIGKILL', '/usr/bin/python3',
-            str(Path(__file__).resolve()), 'worker', mode, str(owned)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if mode in ('eof', 'supervisor-kill'):
+        worker_args = ['/usr/bin/python3', str(Path(__file__).resolve()), 'worker', mode, str(owned)]
+        args = ['/usr/bin/unshare', '--fork', '--pid', '--mount-proc',
+                '--propagation', 'private', '--kill-child=SIGKILL', *worker_args]
+        if mode == 'prerequisite':
+            args = worker_args
+        elif mode == 'parent-kill':
+            # A separate producer owns the sole write end, just like the public Node entry.
+            producer = 'import subprocess,sys,json; child=subprocess.Popen(json.loads(sys.argv[1]),stdin=subprocess.PIPE); child.wait()'
+            args = ['/usr/bin/python3', '-c', producer, json.dumps(args)]
+        child = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, text=True)
+        if mode in ('eof', 'supervisor-kill', 'parent-kill'):
             selector = selectors.DefaultSelector()
             selector.register(child.stdout, selectors.EVENT_READ)
             try:
@@ -94,7 +101,7 @@ def parent(mode):
             roots = children(child.pid)
             if len(roots) != 1:
                 raise RuntimeError('Owned namespace identity unavailable')
-            supervisor = roots[0]
+            supervisor = children(roots[0])[0] if mode == 'parent-kill' else roots[0]
             descendants = children(supervisor)
             if len(descendants) != 3:
                 raise RuntimeError('Expected both real daemons and held scenario')
@@ -103,6 +110,8 @@ def parent(mode):
                 raise RuntimeError('Supervisor shares host PID namespace')
             if mode == 'eof':
                 child.stdin.close()
+            elif mode == 'parent-kill':
+                child.kill()
             else:
                 if birth(supervisor)[0] != captured[0][1]:
                     raise RuntimeError('Supervisor identity changed')
@@ -110,6 +119,11 @@ def parent(mode):
         code = child.wait(timeout=45)
         if code == 0:
             raise RuntimeError('Fault incorrectly reported success')
+        deadline = time.monotonic() + 45
+        while not all(absent(pid, identity) for pid, identity in captured) and time.monotonic() < deadline:
+            time.sleep(.05)
+        if mode in ('partial', 'identity', 'prerequisite') and 'scenario-ready' in child.stdout.read():
+            raise RuntimeError('Scenario admitted despite failed isolation')
         if not all(absent(pid, identity) for pid, identity in captured):
             raise RuntimeError('Private process retained')
         if mode != 'supervisor-kill' and list(owned.iterdir()):
