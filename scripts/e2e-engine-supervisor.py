@@ -72,6 +72,7 @@ def main():
     signal.signal(signal.SIGTERM, cancel)
     signal.signal(signal.SIGINT, cancel)
     root = None
+    client = None
     daemons = []
     scenario = None
     cleaned = True
@@ -79,10 +80,9 @@ def main():
     log = None
     try:
         root = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-engine-'))
-        os.chown(root, -1, gid)
-        os.chmod(root, 0o710)
-        client = root / 'client'
-        client.mkdir(mode=0o700)
+        # Both roots are captured here; caller death cannot strand a caller-owned trap.
+        # mkdtemp keeps privileged state root-only and the client directory private.
+        client = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-client-'))
         os.chown(client, uid, gid)
         nonce = str(uuid.uuid4())
         runtime_socket = root / 'containerd.sock'
@@ -175,10 +175,11 @@ def main():
             except ChildProcessError:
                 break
         if cleaned:
-            if root is not None:
-                shutil.rmtree(root)
+            for path in (client, root):
+                if path is not None:
+                    shutil.rmtree(path)
         else:
-            print('e2e: incomplete cleanup; retained private root ' + str(root), file=sys.stderr)
+            print('e2e: incomplete cleanup; retained private paths ' + str((root, client)), file=sys.stderr)
         if not cleaned:
             raise RuntimeError('Private Engine cleanup incomplete')
     if completed:
