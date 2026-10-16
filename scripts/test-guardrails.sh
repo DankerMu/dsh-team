@@ -105,6 +105,7 @@ expect_accept "module boundaries" pnpm lint:deps
 expect_accept "shellcheck" pnpm lint:shell
 expect_accept "documented commands" pnpm lint:agents
 expect_accept "configuration inventory" pnpm lint:config
+expect_accept "CI concurrency" pnpm lint:ci
 expect_accept "format" pnpm fmt:check
 expect_accept "typecheck" pnpm typecheck
 expect_accept "coverage" pnpm test
@@ -194,6 +195,37 @@ for missing_policy in setting file; do
     fi
   done
 done
+# Distinct PR deliveries must retain their own checks, even in the pending queue.
+for policy in shared cancel-disabled action-only malformed main-cancel; do
+  restore
+  node --input-type=module - "$policy" <<'JS'
+import { readFileSync, writeFileSync } from 'node:fs';
+import { parse, stringify } from 'yaml';
+const path = '.github/workflows/ci.yml';
+const workflow = parse(readFileSync(path, 'utf8'));
+const mode = process.argv[2];
+const shared = '${{ github.workflow }}-${{ github.ref }}';
+if (mode === 'shared' || mode === 'cancel-disabled') {
+  workflow.concurrency = { group: shared, 'cancel-in-progress': mode === 'shared' };
+} else if (mode === 'action-only') {
+  workflow.concurrency = { group: `${shared}-${'${{ github.event.action }}'}`, 'cancel-in-progress': false };
+} else if (mode === 'malformed') {
+  workflow.concurrency.group = '${{ github.workflow broken }}';
+} else {
+  workflow.concurrency['cancel-in-progress'] = true;
+}
+writeFileSync(path, stringify(workflow));
+JS
+  case "$policy" in
+    malformed) reason="CI concurrency invalid policy" ;;
+    main-cancel) reason="CI main concurrency changed" ;;
+    *) reason="CI PR concurrency collision" ;;
+  esac
+  expect_reject "CI concurrency ($policy)" "$reason" pnpm lint:ci
+done
+restore
+expect_accept "CI concurrency (restored)" pnpm lint:ci
+
 
 # ── 2. Commit message ────────────────────────────────────────────────────────
 expect_reject "commit message (\"bad message\")" "type may not be empty" \
