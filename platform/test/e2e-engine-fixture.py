@@ -111,12 +111,13 @@ def parent(mode):
             finally:
                 selector.close()
             private_roots = list(owned.iterdir())
-            if len(private_roots) != 1:
-                raise RuntimeError('Private root identity unavailable')
-            permissions = private_roots[0].stat()
-            if (permissions.st_uid != 0 or permissions.st_gid != int(os.environ['SUDO_GID'])
-                    or permissions.st_mode & 0o777 != 0o710):
-                raise RuntimeError('Private root permissions exceed caller traversal')
+            if len(private_roots) != 2:
+                raise RuntimeError('Private root identities unavailable')
+            for path in private_roots:
+                permissions = path.stat()
+                expected_uid = 0 if path.name.startswith('dsh-team-e2e-engine-') else int(os.environ['SUDO_UID'])
+                if permissions.st_uid != expected_uid or permissions.st_mode & 0o777 != 0o700:
+                    raise RuntimeError('Private root permissions exceed its owner')
             roots = children(child.pid)
             if len(roots) != 1:
                 raise RuntimeError('Owned namespace identity unavailable')
@@ -188,6 +189,7 @@ def public_group(caller_path):
     child = None
     captured = []
     engine_root = None
+    client_root = None
     sentinel = subprocess.Popen(['/usr/bin/sleep', '300'])
     try:
         child = subprocess.Popen([pnpm, 'run', 'e2e'], cwd=repository, user=uid, group=gid,
@@ -214,7 +216,10 @@ def public_group(caller_path):
                 if path.parent != Path('/tmp') or not path.name.startswith('dsh-team-e2e-engine-'):
                     raise RuntimeError('Owned daemon root mismatch')
                 engine_roots.append(path)
-        if len(engine_roots) != 1:
+                client_root = Path(os.fsdecode(args[args.index(b'--host') + 1]).removeprefix('unix://')).parent
+                if client_root.parent != Path('/tmp') or not client_root.name.startswith('dsh-team-e2e-client-'):
+                    raise RuntimeError('Owned client root mismatch')
+        if len(engine_roots) != 1 or client_root is None:
             raise RuntimeError('Actual private daemon not observed')
         engine_root = engine_roots[0]
         os.killpg(child.pid, signal.SIGTERM)
@@ -226,7 +231,7 @@ def public_group(caller_path):
             raise RuntimeError('Public cancellation retained an owned process')
         if sentinel.poll() is not None:
             raise RuntimeError('Public cancellation retired unrelated sentinel')
-        if child.returncode == 0 or engine_root.exists():
+        if child.returncode == 0 or engine_root.exists() or client_root.exists():
             raise RuntimeError('Public group cancellation did not finish graceful cleanup')
         print(json.dumps({'mode': 'public-group', 'actualHttpCompleted': True,
                           'ownedTreeGone': True, 'rootRemoved': True, 'sentinelAlive': True}))
@@ -237,8 +242,9 @@ def public_group(caller_path):
         sentinel.terminate()
         sentinel.wait(timeout=5)
         shutil.rmtree(owned)
-        if engine_root is not None and engine_root.exists():
-            print('Public cancellation retained ' + str(engine_root), file=sys.stderr)
+        for path in (engine_root, client_root):
+            if path is not None and path.exists():
+                print('Public cancellation retained ' + str(path), file=sys.stderr)
 
 
 if sys.argv[1] == 'worker':
