@@ -50,7 +50,7 @@ def main():
     if os.getuid() != 0 or os.getpid() != 1:
         raise RuntimeError('Private Engine requires an owned PID namespace')
     uid, gid = int(sys.argv[1]), int(sys.argv[2])
-    if uid <= 0 or uid != int(os.environ['SUDO_UID']) or gid != int(os.environ['SUDO_GID']):
+    if uid <= 0 or gid <= 0 or uid != int(os.environ['SUDO_UID']) or gid != int(os.environ['SUDO_GID']):
         raise RuntimeError('Private Engine caller identity mismatch')
     for executable in ('/usr/bin/dockerd', '/usr/bin/containerd', '/usr/bin/bash'):
         if not os.access(executable, os.X_OK):
@@ -71,23 +71,26 @@ def main():
 
     signal.signal(signal.SIGTERM, cancel)
     signal.signal(signal.SIGINT, cancel)
-    root = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-engine-'))
-    os.chmod(root, 0o711)
-    client = root / 'client'
-    client.mkdir(mode=0o700)
-    os.chown(client, uid, gid)
-    nonce = str(uuid.uuid4())
-    runtime_socket = root / 'containerd.sock'
-    docker_socket = client / 'docker.sock'
-    namespace = 'dsh-team-e2e-' + nonce
+    root = None
     daemons = []
     scenario = None
     cleaned = True
     completed = False
-    log = (root / 'daemon.log').open('wb')
-    os.chmod(root / 'daemon.log', 0o600)
-    environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': str(root), 'LANG': 'C.UTF-8'}
+    log = None
     try:
+        root = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-engine-'))
+        os.chown(root, -1, gid)
+        os.chmod(root, 0o710)
+        client = root / 'client'
+        client.mkdir(mode=0o700)
+        os.chown(client, uid, gid)
+        nonce = str(uuid.uuid4())
+        runtime_socket = root / 'containerd.sock'
+        docker_socket = client / 'docker.sock'
+        namespace = 'dsh-team-e2e-' + nonce
+        log = (root / 'daemon.log').open('wb')
+        os.chmod(root / 'daemon.log', 0o600)
+        environment = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': str(root), 'LANG': 'C.UTF-8'}
         (root / 'containerd.toml').write_text('version = 3\ndisabled_plugins = ["io.containerd.cri.v1.images", "io.containerd.cri.v1.runtime", "io.containerd.grpc.v1.cri"]\n')
         (root / 'docker.json').write_text('{}\n')
         runtime = subprocess.Popen([
@@ -160,7 +163,8 @@ def main():
                 scenario.wait(timeout=5)
         for child in reversed(daemons):
             cleaned = stop(child) and cleaned
-        log.close()
+        if log is not None:
+            log.close()
         watch.close()
         # Reap adopted descendants only after the direct child handles have settled.
         while True:
@@ -171,7 +175,8 @@ def main():
             except ChildProcessError:
                 break
         if cleaned:
-            shutil.rmtree(root)
+            if root is not None:
+                shutil.rmtree(root)
         else:
             print('e2e: incomplete cleanup; retained private root ' + str(root), file=sys.stderr)
         if not cleaned:
