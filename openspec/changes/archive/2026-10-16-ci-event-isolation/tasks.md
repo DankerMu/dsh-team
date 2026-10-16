@@ -3,8 +3,8 @@
 - [x] Freeze the original real same-head cancellation evidence and qualify the new policy gate against the unchanged workflow (semantic RED, not missing dependencies).
 - [x] Give each PR invocation its own group with no automatic cancellation, preserve main grouping and every trigger/label/required-status boundary, and prove focused GREEN.
 - [x] Add guardrail rejection cases for ref-only, cancel=false-only, action-only repeated-label collisions and malformed expressions; prove clean restoration and full guardrails.
-- [ ] Update command/enforcement inventories and contributor diagnosis guidance; run local check and real same-head PR opened/labeled/unlabeled observation without bypass.
-- [ ] Complete independent multi-seat review, exact-head original Docker evidence, protected CI and merge; archive only after all claims are satisfied.
+- [x] Update command/enforcement inventories and contributor diagnosis guidance; run local check and real same-head PR opened/labeled/unlabeled observation without bypass.
+- [x] Complete independent multi-seat review, exact-head original Docker evidence, protected CI and merge; archive only after all claims are satisfied.
 
 ## Risk Packs
 
@@ -25,3 +25,5 @@
 Parent-owned admission/implementation is not independent fixture approval where the higher single-slice delegation prohibition applies. Actual final Actions plus separate read-only review seats provide independent observations; checker evaluation alone is not real scheduler proof. No code-behavior claim may rely only on YAML text matching, a simulated echo or a later green sibling run. No external model call is authorized.
 
 Local qualification: original workflow rejected with `CI PR concurrency collision`; changed policy accepted. Full check2216unit/1190integration and guardrails95/95 passed, including old-group, cancel-disabled-only, repeated-action, malformed-expression and main-cancel controls plus clean restoration. Historical real RED is run38871703832 attempt1; sibling38871704167 missing-attestation failure is separate. Workflow run-name now exposes only the event action/type so real scheduler observations can bind action to run ID without changing required job names or exposing event payloads.
+
+Final delivery: [PR258](https://github.com/DankerMu/dsh-team/pull/258) merged as `b9fd9c8e9a4cef87936e4442c7202f4a2507fa96`, closing issue112. Reviewed head `0acc32594c50d161bcd863e740623755228e6ff9`; three independent seats clean, zero findings/fix passes. [Five overlapping opened/labeled/labeled/unlabeled/unlabeled deliveries](https://github.com/DankerMu/dsh-team/pull/258#issuecomment-6213540893) retained all runs with event-specific label gates and no cancellations. Their initial missing-attestation failures correctly failed aggregation; all five passed after exact-head owner evidence and failed-only reruns. [Original full Docker30files/89tests](https://github.com/DankerMu/dsh-team/pull/258#issuecomment-6213841941) passed in1080.67s with independent empty owned inventories/units. Full required status rollup green; no bypass or provider invocation. Local check preceded only final run-name metadata/evidence prose; final static checks and actual CI covered the frozen head. [Merge work summary](https://github.com/DankerMu/dsh-team/pull/258#issuecomment-6213965654).
