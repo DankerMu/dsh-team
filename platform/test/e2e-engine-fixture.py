@@ -38,6 +38,16 @@ def worker(mode, owned):
     original_spawn = module.subprocess.Popen
     original_info = module.engine_info
     original_mkdtemp = module.tempfile.mkdtemp
+    original_open = module.Path.open
+    original_access = module.os.access
+
+    def open_path(path, *args, **kwargs):
+        if mode == 'setup' and path.name == 'daemon.log':
+            raise PermissionError('injected owned log creation failure')
+        return original_open(path, *args, **kwargs)
+
+    def executable(path, permission):
+        return False if mode == 'executable' and path == '/usr/bin/containerd' else original_access(path, permission)
 
     def create_root(*args, **kwargs):
         return original_mkdtemp(*args, **kwargs, dir=owned)
@@ -62,6 +72,8 @@ def worker(mode, owned):
     module.tempfile.mkdtemp = create_root
     module.engine_info = observed_info
     module.subprocess.Popen = external_process
+    module.Path.open = open_path
+    module.os.access = executable
     sys.argv = [str(repository / 'scripts/e2e-engine-supervisor.py'), os.environ['SUDO_UID'],
                 os.environ['SUDO_GID'], '/usr/bin:/bin', '/home/ubuntu']
     try:
@@ -122,7 +134,7 @@ def parent(mode):
         deadline = time.monotonic() + 45
         while not all(absent(pid, identity) for pid, identity in captured) and time.monotonic() < deadline:
             time.sleep(.05)
-        if mode in ('partial', 'identity', 'prerequisite') and 'scenario-ready' in child.stdout.read():
+        if mode in ('partial', 'identity', 'prerequisite', 'executable', 'setup') and 'scenario-ready' in child.stdout.read():
             raise RuntimeError('Scenario admitted despite failed isolation')
         if not all(absent(pid, identity) for pid, identity in captured):
             raise RuntimeError('Private process retained')
@@ -147,7 +159,84 @@ def parent(mode):
             print('e2e fault fixture retained ' + str(owned), file=sys.stderr)
 
 
+def public_group(caller_path):
+    import pwd
+    import shlex
+    uid, gid = int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID'])
+    if os.getuid() != 0 or uid <= 0:
+        raise RuntimeError('Trusted nonroot sudo invocation required')
+    repository = Path(__file__).resolve().parents[2]
+    owned = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-fixture-'))
+    os.chown(owned, uid, gid)
+    real_hurl = shutil.which('hurl', path=caller_path)
+    pnpm = shutil.which('pnpm', path=caller_path)
+    if real_hurl is None or pnpm is None:
+        raise RuntimeError('Public cancellation prerequisites unavailable')
+    marker = owned / 'http-complete'
+    shim = owned / 'hurl'
+    shim.write_text('#!/bin/sh\n' + shlex.quote(real_hurl) + ' "$@" || exit $?\n' +
+                    'touch ' + shlex.quote(str(marker)) + '\nexec /usr/bin/sleep 300\n')
+    shim.chmod(0o700)
+    os.chown(shim, uid, gid)
+    child = None
+    captured = []
+    engine_root = None
+    sentinel = subprocess.Popen(['/usr/bin/sleep', '300'])
+    try:
+        child = subprocess.Popen([pnpm, 'run', 'e2e'], cwd=repository, user=uid, group=gid,
+            extra_groups=[], start_new_session=True, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={'PATH': str(owned) + ':' + caller_path, 'HOME': pwd.getpwuid(uid).pw_dir, 'LANG': 'C.UTF-8'})
+        deadline = time.monotonic() + 40
+        while not marker.exists():
+            if child.poll() is not None or time.monotonic() >= deadline:
+                raise RuntimeError('Actual public e2e did not complete HTTP before hold')
+            time.sleep(.05)
+        pending = [child.pid]
+        engine_roots = []
+        while pending:
+            pid = pending.pop()
+            identity = birth(pid)
+            if identity is None:
+                continue
+            captured.append((pid, identity[0]))
+            pending.extend(children(pid))
+            args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')
+            if args[0] == b'/usr/bin/dockerd':
+                path = Path(os.fsdecode(args[args.index(b'--data-root') + 1])).parent
+                if path.parent != Path('/tmp') or not path.name.startswith('dsh-team-e2e-engine-'):
+                    raise RuntimeError('Owned daemon root mismatch')
+                engine_roots.append(path)
+        if len(engine_roots) != 1:
+            raise RuntimeError('Actual private daemon not observed')
+        engine_root = engine_roots[0]
+        os.killpg(child.pid, signal.SIGTERM)
+        child.wait(timeout=45)
+        deadline = time.monotonic() + 45
+        while not all(absent(pid, identity) for pid, identity in captured) and time.monotonic() < deadline:
+            time.sleep(.05)
+        if not all(absent(pid, identity) for pid, identity in captured):
+            raise RuntimeError('Public cancellation retained an owned process')
+        if sentinel.poll() is not None:
+            raise RuntimeError('Public cancellation retired unrelated sentinel')
+        if child.returncode == 0 or engine_root.exists():
+            raise RuntimeError('Public group cancellation did not finish graceful cleanup')
+        print(json.dumps({'mode': 'public-group', 'actualHttpCompleted': True,
+                          'ownedTreeGone': True, 'rootRemoved': True, 'sentinelAlive': True}))
+    finally:
+        if child is not None and child.poll() is None:
+            os.killpg(child.pid, signal.SIGTERM)
+            child.wait(timeout=45)
+        sentinel.terminate()
+        sentinel.wait(timeout=5)
+        shutil.rmtree(owned)
+        if engine_root is not None and engine_root.exists():
+            print('Public cancellation retained ' + str(engine_root), file=sys.stderr)
+
+
 if sys.argv[1] == 'worker':
     worker(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == 'public-group':
+    public_group(sys.argv[2])
 else:
     parent(sys.argv[1])
