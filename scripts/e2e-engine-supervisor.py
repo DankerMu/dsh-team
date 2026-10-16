@@ -36,7 +36,7 @@ def engine_info(path):
 
 def stop(child):
     if child.poll() is not None:
-        return False
+        return True
     child.terminate()
     try:
         return child.wait(timeout=15) == 0

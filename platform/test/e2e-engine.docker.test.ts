@@ -132,7 +132,7 @@ it('keeps another real startup bridge intact while built e2e reconciles its own 
   });
 });
 
-it.each(['partial', 'identity', 'eof', 'supervisor-kill'])(
+it.each(['prerequisite', 'partial', 'identity', 'eof', 'parent-kill', 'supervisor-kill'])(
   'retires only owned runtime processes after %s',
   async (mode) => {
     const { stdout } = await promisify(execFile)(
