@@ -19,12 +19,13 @@
 | M | 受信Actions实际 `pnpm test:model`，giap-vps、真实开发模型 | 2/2，234.50s；原模型案例183.971s，Yolo隔离49.276s | #102审查头 `f8086299f00b634755f0011271c3f320c28df139`；[Actions38741643901](https://github.com/DankerMu/dsh-team/actions/runs/38741643901)、[说明](https://github.com/DankerMu/dsh-team/pull/241#issuecomment-6194325462)；**历史成功，不是当前头模型复验** |
 | M2 | 用户新授权的一次完整 `pnpm test:model`，受限Actions→giap-vps | **1/2通过，369.62s，exit1**；managed-model239.575s通过，Yolo第二探针被`permission-intended-bash`拒绝 | #105候选 `8b6eb167a15b0f2f778d079a95441781857ca05b`；[Actions38843236093](https://github.com/DankerMu/dsh-team/actions/runs/38843236093)、[失败及独立清理记录](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6207212224)；单次授权已耗尽，禁止自动重试 |
 | D2/K2 | #105候选原始deploy及完整Docker，giap-vps | deploy11/11，380.36s；Docker30文件89/89，965.44s；LinuxHTTP25/25；全部exit0且独立库存/unit为空 | 与M2相同 `8b6eb167`；[精确头非模型证据](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6207477827)；不清除独立模型失败 |
+| D3/K3 | #254诊断修复，原始deploy及完整Docker，giap-vps | deploy11/11，377.12s；Docker30文件89/89，958.67s；Linux oracle66/66；全部exit0且独立库存/unit为空 | 审查头 `cb7f05ec46616eed46057f9777b96c264447bfd6`；[精确头证据](https://github.com/DankerMu/dsh-team/pull/255#issuecomment-6208964123)、[CI38853620017](https://github.com/DankerMu/dsh-team/actions/runs/38853620017)；PR255已合并为409b6b2，无外部模型调用 |
 
 D/K均由父级在四席审查后从精确Git归档执行，Node24.13.1、pnpm10.34.6、Docker29.1.3；前后独立自有容器、卷、网络、测试镜像库存及活动unit为空。M的一次性临时GitHub凭据、SSH能力、工作目录、锁、Docker资源与unit也独立确认退休。测试替身不会计入M。
 
 M2是最近一次模型复验，整体失败，不能被M的旧成功覆盖。复合oracle失败码没有各子条件的单独事实，暂不能归因为命令改写、工具名、调用身份或时序；[#254](https://github.com/DankerMu/dsh-team/issues/254)跟踪诊断。原用例通过、截图已检查且浏览器health错误0；operator和host退休成功，父级独立确认临时secret/SSH能力/私有工作目录/锁/四类资源及活动unit均不存在。#105与阶段签结仍阻塞，不降低判据。
 
-D2/K2是最近的部署/Docker批次，下列所有D/K测试在这次原始完整发现中也通过；表内单项耗时保留为K批次的可追溯历史值，不混用为K2测量。没有将部署绿色替代模型失败。
+D3/K3是最近的部署/Docker批次，下列所有D/K测试在这次原始完整发现中也通过；表内单项耗时保留为K批次的可追溯历史值，不混用为K3测量。没有将部署绿色替代模型失败。PR255仅补充五个固定布尔诊断，保留原完全相等/身份/时序判据；非模型真实原生命令资格验证通过，但不能恢复M2未保留的历史子条件，也不是新模型验收。
 
 ## 逐条验收映射
 
@@ -93,6 +94,6 @@ Office活动保活与共同编辑不在阶段1；运行中任务断点续跑亦�
 | [#245 网络集成超时](https://github.com/DankerMu/dsh-team/issues/245)、[#250 上传负控提前关闭](https://github.com/DankerMu/dsh-team/issues/250) | 未修改相关源码/判据；后续通过只是不复现，不标记修复或删除失败证据。 |
 | [#252 审计夹具停止期限包络](https://github.com/DankerMu/dsh-team/issues/252) | P2：30秒Docker停止grace被15秒调用期限包住，假设慢排空可误报失败；当前运行通过，不能误接受。审查明确后续，不缩短grace或放宽exit0。 |
 | 人工白盒审查 | `platform/src/orchestrator/`、`images/seccomp/`、`images/dsh-user/`及规则变更仍需项目方逐行审查。AI审查、CI及运行成功不能代签；Epic末提交集中清单与证据。 |
-| 最终版本证据 | #105候选8b6eb167的check、D2/K2通过，但M2整体失败；结果文档提交不是新运行。当前四命令未全绿，#254诊断与后续单次模型授权未完成，禁止合并签结或借历史M覆盖。 |
+| 最终版本证据 | #105旧候选8b6eb167的check、D2/K2通过，但M2整体失败。诊断修复PR255的审查、D3/K3及CI已通过并合并；本分支接入该修复，仍待新的精确SHA单次模型授权与最终门禁。结果文档提交不是新运行，禁止借历史M覆盖M2或提前合并签结。 |
 
 阶段2/3及目标机Ubuntu22.04/生产模型/完全离线/容量的未执行项保留在原计划，不计为阶段1绿色结果。共享OpenSpec仅在所有阶段1签结条件满足后归档。
