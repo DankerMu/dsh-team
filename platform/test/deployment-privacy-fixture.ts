@@ -222,8 +222,8 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
         const { deployment, employee, admin } = await configureDeployment(lifecycle, start);
         const origin = deployment.base;
         const gateway = instanceGatewayFixture({ lifecycle, base: origin, origin });
-        const run = async (args: string[]) => {
-          const result = await lifecycle.commandAsync(args, 15_000);
+        const run = async (args: string[], timeout = 15_000) => {
+          const result = await lifecycle.commandAsync(args, timeout);
           if (result.status !== 0 || result.error !== undefined)
             throw new Error('Private observation failed');
           return result;

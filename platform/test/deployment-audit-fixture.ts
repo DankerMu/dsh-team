@@ -89,7 +89,7 @@ interface AuditSequence {
   progress: { phase: string };
   databaseScript: string;
   read: (script: string) => Promise<Record<string, unknown>>;
-  run: (args: string[]) => Promise<{ stdout: string }>;
+  run: (args: string[], timeout?: number) => Promise<{ stdout: string }>;
   mutate: (
     path: string,
     method: string,
@@ -178,7 +178,8 @@ export async function completeDeployedAuditSequence(input: AuditSequence): Promi
   expect(record(record(platform.Config).Labels)[OWNER_LABEL]).toBe(lifecycle.runId);
   expect(platform.Name).toBe('/dsh-team-platform');
   if (typeof platform.Id !== 'string') throw new Error('Missing owned platform identity');
-  await input.run(['stop', '--time', '30', platform.Id]);
+  // Preserve the full 30s Engine grace plus command completion/transport margin.
+  await input.run(['stop', '--time', '30', platform.Id], 45_000);
   expect(record((await inspectAsync(lifecycle, platform.Id)).State).ExitCode).toBe(0);
   await input.run(['start', platform.Id]);
   await waitForDeployment(deployment);
