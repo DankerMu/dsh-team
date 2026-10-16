@@ -164,12 +164,21 @@ ci:
   risk_layers: 5
   fast_checks_timeout_minutes: 5
   matrix: ["ubuntu-latest / Node from .tool-versions"]
+  pr_event_isolation:
+    description: "Distinct pull-request invocations cannot share pending/running concurrency ownership; main preserves shared-ref grouping with cancellation disabled"
+    command: "pnpm lint:ci"
+    severity: "block"
+    enforced_by: "scripts/check-ci-concurrency.mjs via lint/check and CI; semantic bad-policy probes in scripts/test-guardrails.sh"
 
 # Machine-readable mirror of the AGENTS.md Verification Matrix.
 verification:
   health_url: "http://127.0.0.1:8080/healthz"
   dev_port: 8080
   surfaces:
+    ci_scheduling:
+      command: "pnpm lint:ci"
+      evidence: "actual-workflow-expression evaluation; independent same-head PR groups; main preservation; malformed/unsafe policies rejected; real Actions event runs for workflow changes"
+      required_at: "L3+"
     liveness:
       command: "pnpm dev:status"
       evidence: "process-live+health-ok"

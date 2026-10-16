@@ -21,12 +21,13 @@
     "check:fast": "pnpm fmt:check && pnpm lint && pnpm typecheck",
     "fmt": "prettier --write .",
     "fmt:check": "prettier --check .",
-    "lint": "eslint . --max-warnings 0 && pnpm lint:deps && pnpm lint:tests && pnpm lint:shell && pnpm lint:agents && pnpm lint:config",
+    "lint": "eslint . --max-warnings 0 && pnpm lint:deps && pnpm lint:tests && pnpm lint:shell && pnpm lint:agents && pnpm lint:config && pnpm lint:ci",
     "lint:deps": "depcruise platform $([ -d plugins ] && echo plugins) --config .dependency-cruiser.cjs",
     "lint:tests": "bash scripts/check-test-pairing.sh",
     "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
     "lint:agents": "bash scripts/check-agents-commands.sh",
     "lint:config": "node scripts/check-config.mjs",
+    "lint:ci": "node scripts/check-ci-concurrency.mjs",
     "typecheck": "tsc --noEmit && pnpm --filter @dsh-team/web typecheck && tsc -p plugins/zh-locale/tsconfig.json && tsc -p plugins/permission-tiers/tsconfig.json && tsc -p plugins/office-agents/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "pnpm build:web && vitest run --project integration",
@@ -64,6 +65,7 @@
     ]
   },
   "devDependencies": {
+    "@actions/expressions": "0.3.61",
     "@commitlint/cli": "21.2.3",
     "@commitlint/config-conventional": "21.2.3",
     "@eslint/compat": "2.1.1",
@@ -85,6 +87,7 @@
     "react-test-renderer": "18.3.1",
     "typescript": "6.0.3",
     "typescript-eslint": "8.70.1",
-    "vitest": "5.0.2"
+    "vitest": "5.0.2",
+    "yaml": "2.9.1"
   }
 }
