@@ -6,7 +6,7 @@
 
 阶段1范围：验收1、2、13；验收3仅“不配置个人模型密钥即可完成真实工具调用”；验收12仅“停止或重建后恢复文件与Session”及已验证的故障边界。Office、离线交付、生产模型复验和目标机容量不在本阶段完成声明内。
 
-**当前状态：功能证据已形成，阶段最终验收尚未签结。** 下表区分每次实测SHA，不把旧模型运行冒充当前头运行。关键路径人工白盒审查仍按项目方决定后置，尚未通过；#226等残余风险未被后续绿色运行解释或修复。
+**当前状态：阶段1自动验收及全部子任务已完成，按项目方接受的残余风险归档。** 最终行为验收绑定`1d9899c01f0e578e23d9e921d6248f60c135e5e1`，不把结果文档提交冒充新的模型运行。关键路径人工白盒审查按项目方决定统一后置，[集中清单已交付](https://github.com/DankerMu/dsh-team/issues/3#issuecomment-6209883508)，未代签；#226等历史未知原因仍保留。
 
 ## 证据批次
 
@@ -20,12 +20,14 @@
 | M2 | 用户新授权的一次完整 `pnpm test:model`，受限Actions→giap-vps | **1/2通过，369.62s，exit1**；managed-model239.575s通过，Yolo第二探针被`permission-intended-bash`拒绝 | #105候选 `8b6eb167a15b0f2f778d079a95441781857ca05b`；[Actions38843236093](https://github.com/DankerMu/dsh-team/actions/runs/38843236093)、[失败及独立清理记录](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6207212224)；单次授权已耗尽，禁止自动重试 |
 | D2/K2 | #105候选原始deploy及完整Docker，giap-vps | deploy11/11，380.36s；Docker30文件89/89，965.44s；LinuxHTTP25/25；全部exit0且独立库存/unit为空 | 与M2相同 `8b6eb167`；[精确头非模型证据](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6207477827)；不清除独立模型失败 |
 | D3/K3 | #254诊断修复，原始deploy及完整Docker，giap-vps | deploy11/11，377.12s；Docker30文件89/89，958.67s；Linux oracle66/66；全部exit0且独立库存/unit为空 | 审查头 `cb7f05ec46616eed46057f9777b96c264447bfd6`；[精确头证据](https://github.com/DankerMu/dsh-team/pull/255#issuecomment-6208964123)、[CI38853620017](https://github.com/DankerMu/dsh-team/actions/runs/38853620017)；PR255已合并为409b6b2，无外部模型调用 |
+| C4/D4/K4 | 最终候选check及原始deploy/完整Docker | check2216单元/1190集成；deploy11/11，377.88s；Docker30文件89/89，963.69s；Linux oracle66/66；全部exit0 | `1d9899c01f0e578e23d9e921d6248f60c135e5e1`；[运行及独立清理](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6209339467)、[CI38857893998](https://github.com/DankerMu/dsh-team/actions/runs/38857893998) |
+| M3 | 用户再次明确授权的一次完整真实模型验收，受限Actions→giap-vps | **2/2通过，278.46s，exit0**；managed-model232.523s，Yolo44.660s；截图已检查、浏览器错误0、全部能力与资源独立退休 | 同一`1d9899c`；[Actions38857887963](https://github.com/DankerMu/dsh-team/actions/runs/38857887963)、[原生结果与退休证据](https://github.com/DankerMu/dsh-team/pull/253#issuecomment-6209739380)；授权已耗尽，无自动重试 |
 
 D/K均由父级在四席审查后从精确Git归档执行，Node24.13.1、pnpm10.34.6、Docker29.1.3；前后独立自有容器、卷、网络、测试镜像库存及活动unit为空。M的一次性临时GitHub凭据、SSH能力、工作目录、锁、Docker资源与unit也独立确认退休。测试替身不会计入M。
 
-M2是最近一次模型复验，整体失败，不能被M的旧成功覆盖。复合oracle失败码没有各子条件的单独事实，暂不能归因为命令改写、工具名、调用身份或时序；[#254](https://github.com/DankerMu/dsh-team/issues/254)跟踪诊断。原用例通过、截图已检查且浏览器health错误0；operator和host退休成功，父级独立确认临时secret/SSH能力/私有工作目录/锁/四类资源及活动unit均不存在。#105与阶段签结仍阻塞，不降低判据。
+M2整体失败及其证据继续保留，不能被M的旧成功或M3的新成功改写为通过。其复合oracle没有各子条件的单独事实，不能追溯归因为命令改写、工具名、调用身份或时序；[#254](https://github.com/DankerMu/dsh-team/issues/254)保留该历史不确定性。PR255只补充五个固定布尔诊断，保留原完全相等/身份/时序判据；M3在该诊断版本上真实通过，但不是历史失败根因修复。
 
-D3/K3是最近的部署/Docker批次，下列所有D/K测试在这次原始完整发现中也通过；表内单项耗时保留为K批次的可追溯历史值，不混用为K3测量。没有将部署绿色替代模型失败。PR255仅补充五个固定布尔诊断，保留原完全相等/身份/时序判据；非模型真实原生命令资格验证通过，但不能恢复M2未保留的历史子条件，也不是新模型验收。
+D4/K4与M3是最终行为验收批次，下列所有D/K测试在D4/K4原始完整发现中也通过；表内旧单项耗时保留为K批次的可追溯值，不混用为K4测量。PR253已合并为`1e6ee9abf79d4ef0fdb29ff66f14c754cedcb706`，[main CI38863518826](https://github.com/DankerMu/dsh-team/actions/runs/38863518826)通过并验证Docker证据的squash树等价复用；不声称在合并SHA又运行模型。
 
 ## 逐条验收映射
 
@@ -47,7 +49,7 @@ D3/K3是最近的部署/Docker批次，下列所有D/K测试在这次原始完�
 | 同文件 — `rejects another employee Session over native logical streams while preserving own live delivery` | 原生逻辑流拒绝他人Session，同时自己的载体/事件继续；不是只检查WebSocket握手。D/K通过；K单项20.927s。 |
 | 同文件 — `denies internal employee access to sibling volumes, listening ports, Docker and platform authority` | 真实uid1001内部探针覆盖兄弟home/work、3080/3099地址与别名、Docker socket、管理权限、只读受管覆盖层，含活的正向对照和不变哨兵。D/K通过；K单项23.682s。 |
 | 同文件 — `rejects sibling native credentials and keeps platform data outside employee files and environments` | 各自原生cookie/token正向有效，跨实例401；平台数据库与凭据扫描限于该员工可读视图，不声称任意编码/内存保密。D/K通过；K单项31.493s。 |
-| `platform/test/deployment-isolation.model.test.ts` — `keeps all five deployed isolation boundaries when the real B Agent executes the canonical probes in Yolo` | 真正B Agent以Yolo执行同一五边界矩阵，原生调用/结果及A后状态关联，不靠模型口头总结。M历史通过49.276s；最近M2失败128.856s，第二探针被oracle拒绝，本项最终复验未通过。 |
+| `platform/test/deployment-isolation.model.test.ts` — `keeps all five deployed isolation boundaries when the real B Agent executes the canonical probes in Yolo` | 真正B Agent以Yolo执行同一五边界矩阵，原生调用/结果及A后状态关联，不靠模型口头总结。最终M3通过44.660s，两次规范探针、零审批与浏览器错误；历史M2失败128.856s保留，不归因。 |
 
 此隔离不等于默认阻断实例访问整个内网，也不提供共用模型密钥对员工的保密隔离；这两项是已记录的产品边界，不是遗漏的通过项。DSH源码未修改；插件受管策略及真实执行入口的证明另见K中的权限/办公委派测试。
 
@@ -55,9 +57,9 @@ D3/K3是最近的部署/Docker批次，下列所有D/K测试在这次原始完�
 
 | 测试文件 / 测试名 | 证明与最近结果 |
 | --- | --- |
-| `platform/test/managed-model.model.test.ts` — `lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings` | 管理员HTTP保存模型配置、新员工真实登录与原生任务；文件事前不存在、模型工具实际生成精确字节。还包含手动writer与自然语言委派DOCX、原生子Session构造结果与最终五字段解析。最近M2单项通过239.575s；不是测试预写文件、模拟provider或完成文本证明；不代表整体模型套件通过。 |
+| `platform/test/managed-model.model.test.ts` — `lets a fresh employee use the administrator model to create exact workspace bytes without personal model settings` | 管理员HTTP保存模型配置、新员工真实登录与原生任务；文件事前不存在、模型工具实际生成精确字节。还包含手动writer与自然语言委派DOCX、原生子Session构造结果与最终五字段解析。最终M3单项通过232.523s；不是测试预写文件、模拟provider或完成文本证明。 |
 
-开发模型与生产`qwen3.6`的复验、无公网任务交付按基线留阶段3。M2使用新明确授权的一次完整执行，授权已耗尽；后续模型调用必须再次明确授权并通过受限Actions通道执行，不能自动重试或将历史M绑定为新头。
+开发模型与生产`qwen3.6`的复验、无公网任务交付按基线留阶段3。M2与M3各使用独立明确授权的一次完整执行，两次授权均已耗尽；后续模型调用必须再次明确授权并通过受限Actions通道执行，不能自动重试或将历史运行绑定为新头。
 
 ### 验收12（本阶段）：停止或重建后恢复文件与Session
 
@@ -89,11 +91,11 @@ Office活动保活与共同编辑不在阶段1；运行中任务断点续跑亦�
 
 | 项目 | 已知事实 / 当前处置 |
 | --- | --- |
-| [#226 Docker DELETE长尾](https://github.com/DankerMu/dsh-team/issues/226) | 历史DELETE约9751.876ms后被总退休约10003.708ms期限取消；daemon之后是否完成、内部阶段及根因未知。后续成功不能否定该历史失败。保持10秒整体期限、身份fence、失败不假报成功、保卷，不添加retry或force-remove；保留needs-triage，阶段发布须显式风险处置。 |
+| [#226 Docker DELETE长尾](https://github.com/DankerMu/dsh-team/issues/226) | 历史DELETE约9751.876ms后被总退休约10003.708ms期限取消；daemon之后是否完成、内部阶段及根因未知。项目方于2026-10-16明确选择“保留已知风险，完成归档”，接受其为独立开放后续，不宣称修复。保持10秒整体期限、身份fence、失败不假报成功、保卷，不添加retry或force-remove；后续成功不能否定该历史失败。 |
 | [#242 模型退休观察差异](https://github.com/DankerMu/dsh-team/issues/242) | 历史观察差异未归因；后来独立退休成功不构成根因修复。 |
 | [#245 网络集成超时](https://github.com/DankerMu/dsh-team/issues/245)、[#250 上传负控提前关闭](https://github.com/DankerMu/dsh-team/issues/250) | 未修改相关源码/判据；后续通过只是不复现，不标记修复或删除失败证据。 |
 | [#252 审计夹具停止期限包络](https://github.com/DankerMu/dsh-team/issues/252) | P2：30秒Docker停止grace被15秒调用期限包住，假设慢排空可误报失败；当前运行通过，不能误接受。审查明确后续，不缩短grace或放宽exit0。 |
-| 人工白盒审查 | `platform/src/orchestrator/`、`images/seccomp/`、`images/dsh-user/`及规则变更仍需项目方逐行审查。AI审查、CI及运行成功不能代签；Epic末提交集中清单与证据。 |
-| 最终版本证据 | #105旧候选8b6eb167的check、D2/K2通过，但M2整体失败。诊断修复PR255的审查、D3/K3及CI已通过并合并；本分支接入该修复，仍待新的精确SHA单次模型授权与最终门禁。结果文档提交不是新运行，禁止借历史M覆盖M2或提前合并签结。 |
+| 人工白盒审查 | `platform/src/orchestrator/`、`images/seccomp/`、`images/dsh-user/`及规则变更仍需项目方逐行审查。按“先完成issue与PR、统一后置审查”的决定，[75项关键路径/规则PR及另列安全探针清单](https://github.com/DankerMu/dsh-team/issues/3#issuecomment-6209883508)已交付；#108用户已确认审查，其余未代签。 |
+| 最终版本证据 | 同一冻结候选1d9899c的check、D4/K4、M3和CI全部通过，106个标记Part of #3的issue均关闭。该结果文档与OpenSpec归档不改变运行时、测试或判据，不冒充另一SHA的模型执行；保留M2失败、#254历史未知及其他开放后续。 |
 
 阶段2/3及目标机Ubuntu22.04/生产模型/完全离线/容量的未执行项保留在原计划，不计为阶段1绿色结果。共享OpenSpec仅在所有阶段1签结条件满足后归档。

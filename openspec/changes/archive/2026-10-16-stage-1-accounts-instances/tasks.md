@@ -1327,7 +1327,7 @@ Minimal mergeable slice: 18.1（平台镜像定义，约 60 行，不影响现�
 - [x] 19.5 Yolo 档下重复 19.3。验证：`pnpm test:model`——让 B 的 Agent 在 Yolo 档下尝试 19.3 的同一组操作，全部失败（规格“任何档位都不能越过实例边界”）。
 - [x] 19.6 凭据全量扫描。验证：`pnpm test:deploy`——完成注册、登录、对话、改密码、修改模型配置、禁用账号后，在审计表和平台日志里搜索用到的每一个密码、平台会话令牌、DSH 启动令牌、DSH cookie、模型密钥和一条带特定标记的消息原文，一处都找不到（规格“不记录内容和凭据”）。
 - [x] 19.7 审计事件覆盖。验证：`pnpm test:deploy`——19.6 的操作序列加上一次管理员重启、一次重置实例配置和一次空闲回收之后，`audit-log` 规格“记录的事件范围”列出的每一种事件类型在审计里至少各有一条，操作者和对象正确。
-- [ ] 19.8 阶段完成条件对照：把验收 1、2、13，以及验收 3、12 的本阶段部分，逐条对应到通过的测试名，写进 `docs/STAGE_1_ACCEPTANCE.md`。验证：文档里每一条验收都有测试名和最近一次运行结果；`pnpm check`、`pnpm test:docker`、`pnpm test:deploy`、`pnpm test:model` 全部通过。
+- [x] 19.8 阶段完成条件对照：把验收 1、2、13，以及验收 3、12 的本阶段部分，逐条对应到通过的测试名，写进 `docs/STAGE_1_ACCEPTANCE.md`。验证：文档里每一条验收都有测试名和最近一次运行结果；`pnpm check`、`pnpm test:docker`、`pnpm test:deploy`、`pnpm test:model` 全部通过。
 
 Suggested fixture level: compact - 只新增测试和一份对照文档，不改运行时行为
 Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 行，独立于其余用例）
@@ -1526,5 +1526,6 @@ Minimal mergeable slice: 19.1（经平台接口越界的一组用例，约 150 �
 
 - Derivative documentation only: canonical baseline/plan define scope; exact existing test names, command results, SHA and durable links define evidence. No new tests or runtime edits.
 - #104 is merged as a425eb9449d49a20b1493b8ea12fdad807633bf5: reviewed a80f1b5, four independent seats Round1clean0fixpasses, P2 contract followup#252; exactdeploy11/11 384.41s and fullDocker30files89/89 976.16s with19events/4reasons/45audits/22credentials/214logs, independent empty resources/units, CI38837044495green.
-- Validate document paths/test names/commands and current check; protected PR runtime gates remain required. Latest model success f8086299/Actions38741643901 is historical evidence until a newly authorized final-SHA invocation. Human review and #226 disposition are not inferred from green tests. Task19.8 remains unchecked pending final evidence.
-- 本分支在PR255合并后接入main，保留两侧fixture与M2失败记录；D3/K3作为诊断修复的独立精确头批次记录，不冒充新的#105模型复验。等待新冻结SHA单次授权，19.8仍未签结。
+- 最终行为验收头1d9899c01f0e578e23d9e921d6248f60c135e5e1：check2216unit/1190integration及strictOpenSpec通过，21个测试名和文档链接核对；原deploy11/11 377.88s、原fullDocker30files89/89 963.69s，CI38857893998通过。新单次明确授权实际Actions38857887963模型2/2 278.46s通过，managed232.523s/Yolo44.660s；零浏览器错误、完成截图检查、原生五边界及文档构造证明保留。operator/host清理成功，父级独立确认secret404、SSH能力/私有路径/锁/资源/unit全部不存在。授权耗尽，无自动重试。
+- PR253已合并1e6ee9abf79d4ef0fdb29ff66f14c754cedcb706，mainCI38863518826通过。归档结果文档只引用实际验收SHA，不冒充新模型执行。M2历史失败及#254未知原因保留，PR255只修复诊断；106个标记Part of #3的issue已关闭。
+- 用户于2026-10-16明确选择“保留已知风险，完成归档”：#226保留开放、daemon取消后完成状态/子阶段/根因未知，现有期限、身份校验、失败真实性及保卷策略不变；不是根因修复。#242/#245/#250/#252同样保留。按用户此前统一后置决定，人工白盒清单已交付https://github.com/DankerMu/dsh-team/issues/3#issuecomment-6209883508，不代签审查。实施及自动验收完成，允许共享change归档。
