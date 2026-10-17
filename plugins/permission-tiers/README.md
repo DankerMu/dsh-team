@@ -12,12 +12,13 @@ The platform generator owns the complete catalog and reads the administrator's `
 
 ## Trusted delivery
 
-Build the existing image using all three narrow named contexts:
+Build the existing image using all four narrow named contexts:
 
 ```sh
 docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "zh-locale=$(pwd)/plugins/zh-locale" \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
+  --build-context "build-tools=$(pwd)/images/build-tools" \
   --build-context "office-agents=$(pwd)/plugins/office-agents" images/dsh-user
 ```
 

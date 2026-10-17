@@ -79,6 +79,12 @@ it('preserves large duplex bytes and server replies after the client half-closes
     socket.write('receiver-paused\n');
   });
   await withIsolatedBrowser(server, async (_browser, origin, receipt) => {
+    expect(
+      await execBrowser(
+        receipt.containerId,
+        "process.stdout.write(String(['HTTP_PROXY','HTTPS_PROXY','NO_PROXY'].some(key => process.env[key] !== undefined)))",
+      ),
+    ).toBe('false');
     const port = new URL(origin).port;
     const proof = record(
       JSON.parse(

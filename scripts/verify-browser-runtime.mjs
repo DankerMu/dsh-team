@@ -9,6 +9,7 @@ import { chromeDigest, readReceipt, rescueChrome, writeReceipt } from './probe-b
 import { connectPage, startChrome } from './probe-dsh-api-cdp.mjs';
 import { qualifyBrowserConfinement } from './probe-browser-confinement.mjs';
 import { qualificationDiagnostic, qualificationError } from './probe-browser-qualification.mjs';
+import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
@@ -32,6 +33,7 @@ const tag = `dsh-team-browser-runtime-${invocation}`;
 const environment = () => ({
   PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
   DOCKER_CONFIG: join(directory, 'docker'),
+  ...dockerProxyEnvironment(),
 });
 function docker(args, ms = 30000, build = false) {
   const result = spawnSync('docker', args, {
@@ -158,6 +160,10 @@ async function prepare() {
     join(root, 'scripts/probe-browser-network.mjs'),
     join(context, 'probe-browser-network.mjs'),
   );
+  await copyFile(
+    join(root, 'scripts/docker-proxy-environment.mjs'),
+    join(context, 'docker-proxy-environment.mjs'),
+  );
   await writeFile(
     join(directory, 'image.json'),
     JSON.stringify({ invocation, tag, imageId: null, state: 'build-submitting' }),
@@ -171,6 +177,8 @@ async function prepare() {
       `dsh-team.browser-invocation=${invocation}`,
       '--build-context',
       `browser-runtime=${context}`,
+      '--build-context',
+      `build-tools=${join(root, 'images/build-tools')}`,
       '-t',
       tag,
       '-f',
