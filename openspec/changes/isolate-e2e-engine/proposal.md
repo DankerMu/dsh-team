@@ -6,11 +6,11 @@
 
 ## What Changes
 
-- Provision an invocation-owned real Docker Engine and separate containerd before starting the built platform; never fall back to a configured/shared socket.
+- Provision an invocation-owned real Docker Engine and separate containerd, including their kernel network namespace, before starting the built platform; never fall back to a configured/shared socket or caller network.
 - Retain real main reconciliation, health, exact migration ledger and the complete existing HTTP smoke suite.
 - Own daemon, scenario and data lifetimes, including cancellation and parent loss; fail rather than claim successful incomplete cleanup.
-- **BREAKING**: this verification command requires Linux, installed Docker/containerd, Python3, util-linux namespace support and noninteractive sudo. Unsupported hosts fail before main; ordinary local checks and dev-server behavior remain unchanged.
-- Prove separation while another real startup is held after bridge creation and before container creation.
+- **BREAKING**: this verification command requires Linux, installed Docker/containerd2.x, Python3, iproute2, util-linux PID/mount/network namespace support and noninteractive sudo. Unsupported hosts fail before main; ordinary local checks and dev-server behavior remain unchanged.
+- Prove separation while another real startup is held after bridge creation and before container creation; independently preserve the caller's default bridge through the private daemon lifecycle.
 
 ## Capabilities
 
