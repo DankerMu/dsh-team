@@ -24,6 +24,7 @@ const offlineDocxScript = `
 import json
 import os
 from docx import Document
+assert not any(name in os.environ for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")), "Docker client proxy leaked into employee runtime"
 
 path = "/data/work/offline.docx"
 document = Document()

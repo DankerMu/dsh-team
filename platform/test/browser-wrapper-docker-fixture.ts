@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { awaitFile } from './browser-runtime-fixture.ts';
 import { record } from './container-start-docker-fixture.ts';
+import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 import {
   browserDocker,
   isolatedBrowserRuntime,
@@ -263,6 +264,7 @@ async function repairOwnedCleanup(root: string): Promise<void> {
           DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
           DSH_TEAM_BROWSER_DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
           DSH_TEAM_BROWSER_RECEIPT_DIRECTORY: directory,
+          ...dockerProxyEnvironment(),
         },
         // Same scoped rescue budget as the existing probe shell: 12 + 3*30 + 45 seconds.
         timeout: fixtureRescueMs,

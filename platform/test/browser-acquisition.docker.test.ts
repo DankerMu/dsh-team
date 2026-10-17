@@ -13,6 +13,7 @@ import { awaitFile } from './browser-runtime-fixture.ts';
 import { browserDocker, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import { retireAcquisition, stopOwnedUnit } from '../../scripts/ci-vps-units.mjs';
 import { removeOwned } from './docker-cleanup.ts';
+import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 const acquisitionFence = vi.hoisted(() => ({
   path: '',
   observed: undefined as (() => undefined) | undefined,
@@ -89,9 +90,10 @@ async function hold(id){
     if(!fs.existsSync(${JSON.stringify(released)}))await promise;
     watcher.close();
 }
+const {dockerProxyEnvironment}=require(${JSON.stringify(fileURLToPath(new URL('../../scripts/docker-proxy-environment.mjs', import.meta.url)))});
 async function run(){
   if(matches&&phase==='network-after-id-before-container')await hold('');
-  const result=spawnSync(${JSON.stringify(realDocker)},args,{encoding:'utf8',env:{PATH:${JSON.stringify(originalPath)},DOCKER_CONFIG:process.env.DOCKER_CONFIG},timeout:30000});
+  const result=spawnSync(${JSON.stringify(realDocker)},args,{encoding:'utf8',env:{PATH:${JSON.stringify(originalPath)},DOCKER_CONFIG:process.env.DOCKER_CONFIG,...dockerProxyEnvironment()},timeout:30000});
   if(matches&&result.status===0){
     if(phase!=='network-after-id-before-container')await hold(result.stdout);
     fs.writeFileSync(${JSON.stringify(returned + '.tmp')},result.stdout,{mode:0o600});
@@ -254,6 +256,7 @@ run().catch(()=>{process.exitCode=1;});
                   env: {
                     PATH: originalPath,
                     DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
+                    ...dockerProxyEnvironment(),
                   },
                   encoding: 'utf8',
                   timeout,

@@ -13,5 +13,6 @@ COPY --from=browser-runtime /probe-browser-runtime.mjs /opt/dsh-team/probe-brows
 COPY --from=browser-runtime /probe-browser-native.mjs /opt/dsh-team/probe-browser-native.mjs
 COPY --from=browser-runtime /probe-browser-receipt.mjs /opt/dsh-team/probe-browser-receipt.mjs
 COPY --from=browser-runtime /probe-browser-network.mjs /opt/dsh-team/probe-browser-network.mjs
+COPY --from=browser-runtime /docker-proxy-environment.mjs /opt/dsh-team/docker-proxy-environment.mjs
 USER 1000:1000
 ENTRYPOINT ["node", "/opt/dsh-team/probe-browser-runtime.mjs"]

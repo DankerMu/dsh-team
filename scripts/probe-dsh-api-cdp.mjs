@@ -303,6 +303,8 @@ const startNative = async (input, receipt) => {
   try {
     child = spawn(input.runtime.bin, chromeFlags(input.profile, debugPort, input.extraFlags), {
       stdio: ['ignore', 'ignore', 'pipe'],
+      // Registry transport configuration belongs to Docker clients, never Chrome.
+      env: { ...process.env, HTTP_PROXY: undefined, HTTPS_PROXY: undefined, NO_PROXY: undefined },
     });
     child.stderr?.on('data', (chunk) => {
       if (stderr.length < 4_000) stderr += String(chunk).slice(0, 4_000 - stderr.length);

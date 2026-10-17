@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import type { Server, Socket } from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
+import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 import { openMappedPage, mappedFlags, closeMapped } from '../../scripts/probe-mapped-host.mjs';
 import {
   browserDocker,
@@ -350,7 +351,11 @@ export function execBrowser(
 ): Promise<string> {
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   const child = spawn('docker', ['exec', id, 'node', '-e', source], {
-    env: { PATH: process.env.PATH, DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG },
+    env: {
+      PATH: process.env.PATH,
+      DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
+      ...dockerProxyEnvironment(),
+    },
     stdio: ['ignore', 'pipe', 'ignore'],
   });
   let output = '';
