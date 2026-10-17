@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import re
 import selectors
 import shutil
 import signal
@@ -52,9 +53,17 @@ def main():
     uid, gid = int(sys.argv[1]), int(sys.argv[2])
     if uid <= 0 or gid <= 0 or uid != int(os.environ['SUDO_UID']) or gid != int(os.environ['SUDO_GID']):
         raise RuntimeError('Private Engine caller identity mismatch')
-    for executable in ('/usr/bin/dockerd', '/usr/bin/containerd', '/usr/bin/bash'):
+    caller_network = sys.argv[5]
+    private_network = os.readlink('/proc/self/ns/net')
+    if not re.fullmatch(r'net:\[\d+\]', caller_network) or private_network == caller_network:
+        raise RuntimeError('Private Engine requires an owned network namespace')
+    for executable in ('/usr/bin/dockerd', '/usr/bin/containerd', '/usr/bin/bash', '/usr/sbin/ip'):
         if not os.access(executable, os.X_OK):
             raise RuntimeError('Private Engine prerequisite unavailable')
+    # Even --bridge=none deletes docker0 in the daemon's network namespace.
+    # Only the already-proved private namespace may receive kernel network changes.
+    subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     repository = Path(__file__).resolve().parent.parent
     caller_path, caller_home = sys.argv[3:5]
     watch = selectors.DefaultSelector()
@@ -131,6 +140,8 @@ def main():
                 info.get('Containerd') != {'Address': str(runtime_socket), 'Namespaces': {
                     'Containers': namespace, 'Plugins': namespace + '-plugins'}}):
             raise RuntimeError('Private Engine identity mismatch')
+        if any(os.readlink('/proc/%d/ns/net' % child.pid) != private_network for child in daemons):
+            raise RuntimeError('Private daemon network namespace mismatch')
 
         def as_caller():
             os.setgroups([])

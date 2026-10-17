@@ -135,6 +135,7 @@ it('keeps another real startup bridge intact while built e2e reconciles its own 
 
 it.each([
   'prerequisite',
+  'network',
   'executable',
   'setup',
   'partial',

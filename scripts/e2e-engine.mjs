@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -12,6 +13,7 @@ if (process.platform !== 'linux' || process.getuid?.() === 0) {
   const path = process.env.PATH;
   const home = process.env.HOME;
   if (!path || !home) throw new Error('e2e: caller toolchain environment unavailable');
+  const callerNetwork = await readlink('/proc/self/ns/net');
   const owner = spawn(
     '/usr/bin/sudo',
     [
@@ -19,6 +21,7 @@ if (process.platform !== 'linux' || process.getuid?.() === 0) {
       '/usr/bin/unshare',
       '--fork',
       '--pid',
+      '--net',
       '--mount-proc',
       '--propagation',
       'private',
@@ -29,6 +32,7 @@ if (process.platform !== 'linux' || process.getuid?.() === 0) {
       String(gid),
       path,
       home,
+      callerNetwork,
     ],
     {
       cwd: root,
