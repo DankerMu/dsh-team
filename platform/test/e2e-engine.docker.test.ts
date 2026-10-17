@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { readlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -166,17 +167,26 @@ it.each([
   });
 });
 
-it('gracefully retires its private runtime after a public-command process-group signal', async () => {
+it.each([
+  [
+    'gracefully retires its private runtime after a public-command process-group signal',
+    'public-group',
+  ],
+  ['preserves the calling network namespace default bridge during actual e2e', 'network-sentinel'],
+])('%s', async (_description, mode) => {
   const path = process.env.PATH;
   if (path === undefined) throw new Error('Missing trusted toolchain path');
+  const network = mode === 'network-sentinel';
   const { stdout } = await promisify(execFile)(
     '/usr/bin/sudo',
     [
       '-n',
+      ...(network ? ['/usr/bin/unshare', '--net'] : []),
       '/usr/bin/python3',
       fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
-      'public-group',
+      mode,
       path,
+      ...(network ? [await readlink('/proc/self/ns/net')] : []),
     ],
     {
       env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
@@ -186,7 +196,7 @@ it('gracefully retires its private runtime after a public-command process-group 
   );
   const observed: unknown = JSON.parse(stdout);
   expect(observed).toEqual({
-    mode: 'public-group',
+    mode,
     actualHttpCompleted: true,
     ownedTreeGone: true,
     rootRemoved: true,

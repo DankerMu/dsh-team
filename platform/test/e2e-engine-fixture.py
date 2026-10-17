@@ -167,12 +167,16 @@ def parent(mode):
             print('e2e fault fixture retained ' + str(owned), file=sys.stderr)
 
 
-def public_group(caller_path):
+def public_group(caller_path, preserve_network=False):
     import pwd
     import shlex
     uid, gid = int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID'])
     if os.getuid() != 0 or uid <= 0:
         raise RuntimeError('Trusted nonroot sudo invocation required')
+    network_before = None
+    if preserve_network:
+        network_before = json.loads(subprocess.run(['/usr/sbin/ip', '-j', 'link', 'show', 'docker0'],
+            text=True, capture_output=True, check=True).stdout)[0]
     repository = Path(__file__).resolve().parents[2]
     owned = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-fixture-'))
     os.chown(owned, uid, gid)
@@ -222,6 +226,21 @@ def public_group(caller_path):
         if len(engine_roots) != 1 or client_root is None:
             raise RuntimeError('Actual private daemon not observed')
         engine_root = engine_roots[0]
+        if preserve_network:
+            observed = subprocess.run(['/usr/sbin/ip', '-j', 'link', 'show', 'docker0'],
+                                      text=True, capture_output=True)
+            if observed.returncode != 0:
+                raise RuntimeError('Private daemon deleted caller default bridge')
+            network_after = json.loads(observed.stdout)[0]
+            if any(network_after[key] != network_before[key] for key in ('ifindex', 'ifname', 'address', 'mtu')):
+                raise RuntimeError('Private daemon replaced caller default bridge')
+            for pid, identity in captured:
+                if absent(pid, identity):
+                    continue
+                executable = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')[0]
+                if executable in (b'/usr/bin/dockerd', b'/usr/bin/containerd'):
+                    if os.readlink('/proc/%d/ns/net' % pid) == os.readlink('/proc/self/ns/net'):
+                        raise RuntimeError('Private daemon shares caller network namespace')
         os.killpg(child.pid, signal.SIGTERM)
         child.wait(timeout=45)
         deadline = time.monotonic() + 45
@@ -233,7 +252,7 @@ def public_group(caller_path):
             raise RuntimeError('Public cancellation retired unrelated sentinel')
         if child.returncode == 0 or engine_root.exists() or client_root.exists():
             raise RuntimeError('Public group cancellation did not finish graceful cleanup')
-        print(json.dumps({'mode': 'public-group', 'actualHttpCompleted': True,
+        print(json.dumps({'mode': 'network-sentinel' if preserve_network else 'public-group', 'actualHttpCompleted': True,
                           'ownedTreeGone': True, 'rootRemoved': True, 'sentinelAlive': True}))
     finally:
         if child is not None and child.poll() is None:
@@ -251,5 +270,11 @@ if sys.argv[1] == 'worker':
     worker(sys.argv[2], sys.argv[3])
 elif sys.argv[1] == 'public-group':
     public_group(sys.argv[2])
+elif sys.argv[1] == 'network-sentinel':
+    if os.readlink('/proc/self/ns/net') == sys.argv[3]:
+        raise RuntimeError('Sentinel requires an invocation-owned network namespace')
+    subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True)
+    subprocess.run(['/usr/sbin/ip', 'link', 'add', 'docker0', 'type', 'bridge'], check=True)
+    public_group(sys.argv[2], preserve_network=True)
 else:
     parent(sys.argv[1])
