@@ -1,6 +1,8 @@
 FROM node:24-bookworm-slim
 
-RUN apt-get update \
+RUN --mount=type=bind,from=build-tools,target=/build-tools,ro \
+  node /build-tools/debian-sources.mjs /etc/apt/sources.list.d/debian.sources \
+  && apt-get update \
   && apt-get install -y --no-install-recommends bubblewrap python3 python3-docx \
   && rm -rf /var/lib/apt/lists/*
 

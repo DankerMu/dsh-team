@@ -402,6 +402,8 @@ function runImageLifecycle(
       `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
       '--build-context',
       `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
+      '--build-context',
+      `build-tools=${join(repositoryRoot, 'images/build-tools')}`,
       // Keep the primary context narrow: no repository-root files or secrets.
       join(repositoryRoot, 'images/dsh-user'),
     ];

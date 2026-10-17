@@ -7,6 +7,7 @@
 - [x] 1.3 Implement one canonical three-input projection across Docker clients and the acquisition producer; prove proxy routing, bypass, absent/empty inputs and excluded credentials using targeted integration checks.
 - [ ] 1.4 Keep actual browsers and employee containers free of injected proxies; prove native process exclusion and real isolated-container inspection. Update existing verification guidance with the client/daemon distinction and verification-only input scope.
 - [ ] 1.5 Apply the user-approved ordinary Debian mirror change only in `images/browser-verification`; retain the official security stanza, signed metadata/keyring, suites, package list, base digest and600s deadline. The real pre-change apt timeout is RED; delivered-image build and original full Docker are GREEN. Update existing verification guidance.
+- [ ] 1.6 Apply the later user-approved user-image extension through one build-only helper shared with the browser image; migrate all named-context builders/examples atomically. Prove real-file preservation and missing/duplicate/comment-only rejection, unchanged user-image version/DOCX/profile/runtime consumers and critical-path review before original full acceptance.
 
 ## 2. Packaging and acceptance
 
@@ -16,9 +17,11 @@
 
 ## Risk pack mapping
 
-Selected: CLI/script entry and config → 1.2–1.3; secrets → 1.3–1.4; compatibility and error/cleanup → 2.1–2.2; packaging and build-time source rewrite → 1.5/2.1; documentation → 1.4–1.5.
-Not selected: schema/units (no persistent format change); file overwrite (no new runtime writer); concurrency/shared state (no policy change); resource limits/discovery (existing bounds unchanged).
+Selected: CLI/script entry and config → 1.2–1.3/1.6; secrets → 1.3–1.4; compatibility and error/cleanup → 2.1–2.2; packaging and build-time source rewrite → 1.5–1.6/2.1; file IO/preservation → 1.6; documentation → 1.4–1.6.
+Not selected: schema/units (no persisted platform format change); concurrency/shared state (no policy change); resource limits/discovery (existing bounds unchanged).
 
 Workflow deviation: parent performs mapped single-slice implementation and fixture review inline because developer delegation rules prohibit outsourcing one already-mapped slice. Independent cross-review remains multi-seat; agents do not run tests or modify the checkout.
 
 Scope extension: user explicitly chose verification-image Debian source adjustment after the existing proxy-exit experiment failed and was restored. No new permanent source-text/default-copy test is added for the mirror URL; the unchanged real build/consumer gate is the behavioral oracle. Re-review the source/trust boundary before trusted execution.
+
+Later explicit scope extension: user approved the same ordinary source change for the production user-image build after its unchanged apt step failed independently. Preserve official security source/signatures/current base reference/DSH version/packages/deadlines and no runtime proxy injection. Base-digest follow-up#273 and remote-runner follow-up#274 are not implemented here.

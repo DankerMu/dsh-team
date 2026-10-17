@@ -177,6 +177,8 @@ async function prepare() {
       `dsh-team.browser-invocation=${invocation}`,
       '--build-context',
       `browser-runtime=${context}`,
+      '--build-context',
+      `build-tools=${join(root, 'images/build-tools')}`,
       '-t',
       tag,
       '-f',

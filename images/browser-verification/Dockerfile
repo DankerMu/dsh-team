@@ -2,12 +2,8 @@ FROM node:24.13.1-bookworm-slim@sha256:a81a03dd965b4052269a57fac857004022b522a4b
 
 # Mirror only ordinary Debian packages; retain the official security source and archive signatures.
 # CfT 140.0.7339.82 chrome-headless-shell's deb.deps; alternatives selected for bookworm.
-RUN node --input-type=module -e 'import { readFileSync, writeFileSync } from "node:fs"; \
-    const path = "/etc/apt/sources.list.d/debian.sources"; \
-    const source = readFileSync(path, "utf8"); \
-    const original = "URIs: http://deb.debian.org/debian\n"; \
-    if (source.split(original).length !== 2) throw new Error("Unexpected Debian source layout"); \
-    writeFileSync(path, source.replace(original, "URIs: http://mirrors.tuna.tsinghua.edu.cn/debian\n"));' \
+RUN --mount=type=bind,from=build-tools,target=/build-tools,ro \
+    node /build-tools/debian-sources.mjs /etc/apt/sources.list.d/debian.sources \
     && apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates fonts-liberation fonts-noto-cjk libasound2 libatk-bridge2.0-0 libatk1.0-0 \
     libatspi2.0-0 libc6 libcairo2 libcups2 libcurl4 libdbus-1-3 libexpat1 \

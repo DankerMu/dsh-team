@@ -26,7 +26,7 @@ Verification Docker CLI processes MUST receive caller-supplied uppercase `HTTP_P
 
 ### Requirement: Verification image mirror selection preserves Debian trust and acceptance
 
-The verification browser image SHALL obtain ordinary Debian bookworm and bookworm-updates packages through the user-approved Tsinghua Debian mirror while retaining the original official Debian security source. The source change MUST preserve Debian archive signature and validity checks, the shipped keyring, suites, components, package list, pinned base-image digest and existing600-second provisioning deadline. It MUST NOT alter production user images or inject runtime proxy configuration. Unexpected source layout or unavailable/invalid repository metadata MUST fail rather than silently weakening trust or falling back.
+The verification browser image SHALL obtain ordinary Debian bookworm and bookworm-updates packages through the user-approved Tsinghua Debian mirror while retaining the original official Debian security source. The source change MUST preserve Debian archive signature and validity checks, the shipped keyring, suites, components, package list, pinned base-image digest and existing600-second provisioning deadline. It MUST NOT inject runtime proxy configuration. The separately approved user-image build policy MUST share the same canonical build-only rewrite. Unexpected source layout or unavailable/invalid repository metadata MUST fail rather than silently weakening trust or falling back.
 
 #### Scenario: Ordinary verification dependencies use the approved mirror
 
