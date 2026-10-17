@@ -23,3 +23,17 @@ Verification Docker CLI processes MUST receive caller-supplied uppercase `HTTP_P
 
 - **WHEN** the browser image or SHA-pinned trusted rescue bundle runs without repository source mounts
 - **THEN** its complete runtime dependency closure loads and existing owned-resource cleanup remains available
+
+### Requirement: Verification image mirror selection preserves Debian trust and acceptance
+
+The verification browser image SHALL obtain ordinary Debian bookworm and bookworm-updates packages through the user-approved Tsinghua Debian mirror while retaining the original official Debian security source. The source change MUST preserve Debian archive signature and validity checks, the shipped keyring, suites, components, package list, pinned base-image digest and existing600-second provisioning deadline. It MUST NOT alter production user images or inject runtime proxy configuration. Unexpected source layout or unavailable/invalid repository metadata MUST fail rather than silently weakening trust or falling back.
+
+#### Scenario: Ordinary verification dependencies use the approved mirror
+
+- **WHEN** the delivered verification image builds from its pinned base
+- **THEN** only the ordinary Debian source changes, the official security source and trust configuration remain intact, and the existing full Docker command must complete provisioning within its unchanged deadline before consumer acceptance
+
+#### Scenario: The expected source or signed metadata is invalid
+
+- **WHEN** the expected ordinary source is missing or duplicated, or repository authentication fails
+- **THEN** the build fails without disabling authentication, changing the base digest, increasing the deadline or reporting successful acceptance
