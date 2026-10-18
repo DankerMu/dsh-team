@@ -173,7 +173,7 @@ test('confirmed browser restart and reset execute real service admission and aud
               .all(event),
           ).toEqual([{ actor_email: admin.email, target: target.id, details: '{}' }]);
           if (action === 'restart') {
-            await expect(page.getByRole('status')).toContainText('不代表已就绪');
+            await expect(page.getByRole('status')).toContainText(['不代表已就绪']);
             // The real service observes this dependency's exhausted token stream, not a fake UI success.
             await expect
               .poll(() =>
@@ -191,7 +191,7 @@ test('confirmed browser restart and reset execute real service admission and aud
             expect(saved?.lastError).toMatch(/^DSH readiness failed/);
             await expect(row.locator('pre')).toHaveText(saved?.lastError ?? '');
           } else {
-            await expect(page.getByRole('status')).toContainText('配置已重置');
+            await expect(page.getByRole('status')).toContainText(['配置已重置']);
             await expect(row).toContainText('已停止');
             expect(
               database
