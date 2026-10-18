@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
@@ -465,8 +466,9 @@ it('keeps an absent running identity unavailable after full refusal and readies 
         expect(await f.state(a.cookie, true)).toEqual({ status: 'full', reason: 'full' });
         expect(await f.state(a.cookie)).toEqual({ status: 'full', reason: 'full' });
         await unavailableGateway(f.base, a.cookie, 'full');
-        expect(row(a.id)).toEqual(oldA);
-        expect(row(b.id)).toEqual(oldB);
+        // Compare secret-bearing rows without allowing an assertion diff to print credentials.
+        expect(isDeepStrictEqual(row(a.id), oldA)).toBe(true);
+        expect(isDeepStrictEqual(row(b.id), oldB)).toBe(true);
         const afterB = await inspectAsync(lifecycle, oldB.container_id);
         expect(afterB.Id).toBe(beforeB.Id);
         expect(afterB.State).toEqual(beforeB.State);
