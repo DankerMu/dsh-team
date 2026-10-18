@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 
 export interface DockerCommandResult {
   readonly status: number | null;
@@ -31,7 +32,11 @@ function processOptions(
   return {
     cwd: repositoryRoot,
     // No GitHub/SSH/model credentials or user Docker configuration reach either execution mode.
-    env: { PATH: '/usr/local/bin:/usr/bin:/bin', DOCKER_CONFIG: config },
+    env: {
+      PATH: '/usr/local/bin:/usr/bin:/bin',
+      DOCKER_CONFIG: config,
+      ...dockerProxyEnvironment(),
+    },
     encoding: 'utf8' as const,
     timeout,
     killSignal: 'SIGKILL' as const,

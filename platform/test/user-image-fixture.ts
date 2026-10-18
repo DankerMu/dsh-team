@@ -24,6 +24,7 @@ const offlineDocxScript = `
 import json
 import os
 from docx import Document
+assert not any(name in os.environ for name in ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")), "Docker client proxy leaked into employee runtime"
 
 path = "/data/work/offline.docx"
 document = Document()
@@ -401,6 +402,8 @@ function runImageLifecycle(
       `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
       '--build-context',
       `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
+      '--build-context',
+      `build-tools=${join(repositoryRoot, 'images/build-tools')}`,
       // Keep the primary context narrow: no repository-root files or secrets.
       join(repositoryRoot, 'images/dsh-user'),
     ];

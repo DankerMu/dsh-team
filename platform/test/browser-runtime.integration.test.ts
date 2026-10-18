@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { startChrome } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 
@@ -14,6 +14,7 @@ it('refuses a stale native process receipt and retires only the matching browser
     bin,
     `#!/usr/bin/env node
 const http = require('node:http');
+if (['HTTP_PROXY','HTTPS_PROXY','NO_PROXY'].some(key=>process.env[key]!==undefined))process.exit(23);
 const port = Number(process.argv.find(x => x.startsWith('--remote-debugging-port=')).split('=')[1]);
 http.createServer((req, res) => res.end(JSON.stringify({webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/owned'}))).listen(port,'127.0.0.1',()=>{process.title='owned-native-process-after-listen';});
 `,
@@ -21,6 +22,9 @@ http.createServer((req, res) => res.end(JSON.stringify({webSocketDebuggerUrl:'ws
   );
   let chrome;
   try {
+    vi.stubEnv('HTTP_PROXY', 'http://browser-must-not-inherit.invalid:80');
+    vi.stubEnv('HTTPS_PROXY', 'http://browser-must-not-inherit.invalid:443');
+    vi.stubEnv('NO_PROXY', '*');
     chrome = await startChrome({
       runtime: { kind: 'native', bin },
       origin: 'http://127.0.0.1:12345',
@@ -56,5 +60,6 @@ http.createServer((req, res) => res.end(JSON.stringify({webSocketDebuggerUrl:'ws
   } finally {
     await chrome?.stop();
     await rm(root, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   }
 });

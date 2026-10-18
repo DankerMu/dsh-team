@@ -41,6 +41,7 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
   -t dsh-team-user:local -f images/dsh-user/Dockerfile \
   --build-context zh-locale=plugins/zh-locale \
   --build-context permission-tiers=plugins/permission-tiers \
+  --build-context build-tools=images/build-tools \
   --build-context office-agents=plugins/office-agents images/dsh-user
 
 docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
@@ -49,7 +50,7 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
 docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:local
 ```
 
-记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略三个 named context。
+记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略四个 named context：`build-tools` 仅在构建时只读挂载普通 Debian 源切换程序，保留官方安全源、archive keyring 和签名/有效期校验，不复制到运行时镜像；其余三个交付插件。
 
 ## 3. 准备数据和唯一配置副本
 

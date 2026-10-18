@@ -1,6 +1,7 @@
 /** Exact Docker ownership for a dedicated verification-browser isolated bridge. */
 import { spawnSync } from 'node:child_process';
 import { writeReceipt } from './probe-browser-receipt.mjs';
+import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 
 const RESOURCE_ID = /^[a-f0-9]{64}$/;
 export const OWNER = 'dsh-team.test-run';
@@ -9,6 +10,7 @@ export const ROLE = 'dsh-team.role';
 export const dockerEnvironment = () => ({
   PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
   DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG ?? '/nonexistent-dsh-browser-config',
+  ...dockerProxyEnvironment(),
 });
 export function browserDocker(args, ms = 30000) {
   const result = spawnSync('docker', args, {
