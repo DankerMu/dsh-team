@@ -54,6 +54,21 @@ it.each([
   ['null key', { ...CONFIG, apiKey: null }],
   ['unknown field', { ...CONFIG, modelApiKey: 'not-accepted' }],
   ['invalid models', { ...CONFIG, models: {} }],
+  ['null model entry', { ...CONFIG, models: [null] }],
+  ['array model entry', { ...CONFIG, models: [[]] }],
+  ['numeric model entry', { ...CONFIG, models: [9] }],
+  ['unknown model field', { ...CONFIG, models: [{ name: 'beta', contextwindow: 500000 }] }],
+  [
+    'unknown later field alongside valid context',
+    {
+      ...CONFIG,
+      models: [{ name: 'alpha' }, { name: 'beta', contextWindow: 500000, constructor: 'unknown' }],
+    },
+  ],
+  [
+    'prototype-like own model field',
+    { ...CONFIG, models: [{ name: 'beta', ['__proto__']: { contextWindow: 500000 } }] },
+  ],
   ['blank name', { ...CONFIG, models: [{ name: ' ' }] }],
   ['numeric name', { ...CONFIG, models: [{ name: 9 }] }],
   ['string context', { ...CONFIG, models: [{ name: 'beta', contextWindow: '500000' }] }],

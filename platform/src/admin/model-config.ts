@@ -28,6 +28,20 @@ const SAFE_SCHEMA = {
 } as const;
 const INPUT_FIELDS = ['baseURL', 'apiKey', 'models', 'defaultModel'];
 
+function hasUnknownModelFields(models: unknown): boolean {
+  if (!Array.isArray(models)) return false;
+  const entries: readonly unknown[] = models;
+  for (const entry of entries) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    for (const key in entry) {
+      if (Object.hasOwn(entry, key) && !Object.hasOwn(MODEL_SCHEMA.items.properties, key)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function project(settings: Settings) {
   return {
     baseURL: settings.modelBaseUrl,
@@ -66,6 +80,7 @@ export const modelConfigRoutes: FastifyPluginCallback<AdminConfigOptions> = (
       const input = body as Record<string, unknown>;
       if (
         Object.keys(input).some((key) => !INPUT_FIELDS.includes(key)) ||
+        hasUnknownModelFields(input.models) ||
         typeof input.baseURL !== 'string' ||
         input.baseURL.trim() === '' ||
         typeof input.defaultModel !== 'string' ||
