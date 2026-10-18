@@ -31,6 +31,36 @@ it('reads fresh model configuration without exposing a credential', async () => 
   });
 });
 
+it('projects legacy extra model fields on read without rewriting stored settings or audits', async () => {
+  await withListeningApp(async (base, app, database, lines) => {
+    const { cookie } = await administrator(app, database);
+    const extra = randomBytes(32).toString('hex');
+    database
+      .prepare("INSERT INTO settings (key, value) VALUES ('models', ?)")
+      .run(JSON.stringify([{ name: 'alpha', contextWindow: 500000, contextwindow: 1, extra }]));
+    const settings = database.prepare('SELECT * FROM settings ORDER BY key').all();
+    const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
+
+    const response = await fetch(`${base}${PATH}`, { headers: { cookie } });
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(body)).toEqual({
+      baseURL: '',
+      apiKeyConfigured: false,
+      models: [{ name: 'alpha', contextWindow: 500000 }],
+      defaultModel: '',
+    });
+    expect(readSettings(database).models).toEqual([{ name: 'alpha', contextWindow: 500000 }]);
+    expect(
+      JSON.stringify(database.prepare('SELECT * FROM settings ORDER BY key').all()) ===
+        JSON.stringify(settings),
+    ).toBe(true);
+    expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
+    expect((body + lines.join('')).includes(extra)).toBe(false);
+  });
+});
+
 it('saves and replaces credentials without returning fragments and preserves an omitted key', async () => {
   await withListeningApp(async (base, app, database, lines) => {
     const user = await registerAccount(app, 'model-admin@example.com');
@@ -128,6 +158,12 @@ it('rejects invalid default and malformed or wrong-typed secret-bearing payloads
     for (const body of [
       JSON.stringify({ ...CONFIG, apiKey: secret, defaultModel: 'missing' }),
       JSON.stringify({ ...CONFIG, apiKey: secret, baseURL: 9 }),
+      JSON.stringify({
+        ...CONFIG,
+        apiKey: secret,
+        defaultModel: 'alpha',
+        models: [{ name: 'alpha', contextwindow: 500000 }],
+      }),
       `{"apiKey":"${secret}",broken`,
     ]) {
       const response = await fetch(`${base}${PATH}`, {
@@ -137,11 +173,14 @@ it('rejects invalid default and malformed or wrong-typed secret-bearing payloads
       });
       expect(response.status).toBe(400);
       errors.push(await response.text());
+      expect(
+        JSON.stringify(database.prepare('SELECT * FROM settings ORDER BY key').all()) ===
+          JSON.stringify(before),
+      ).toBe(true);
+      expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     }
 
     expect(errors[0]).toContain('default model must be in the model list');
-    expect(database.prepare('SELECT * FROM settings ORDER BY key').all()).toEqual(before);
-    expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     expect((errors.join('') + lines.join('')).includes(secret)).toBe(false);
   });
 });

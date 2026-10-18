@@ -138,6 +138,8 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 | 原生入口 | 员工 `GET /` 返回原生HTML；`/api/remote.mux` WebSocket携带同一cookie、实际Host/Origin完成101和Ping/Pong |
 | 停止一次性验收员工 | 管理员 `PUT /_platform/api/admin/users/<本次员工id>/status`，JSON `{"status":"disabled"}`；成功为204无响应体，撤销平台会话并退役实例，卷保留 |
 
+模型配置PUT的 `models` 每项只允许 `name` 和可选 `contextWindow`；如 `contextwindow` 拼写错误或任意额外键，整个请求返回400，原设置、密钥及审计不变。顶层未知键也被拒绝。此规则落实既有OpenAPI声明，不收紧共享存储解析器：历史模型条目含额外字段时仍按既有规则读取并只返回已知字段，GET不改写历史设置。
+
 一次性无推理部署验收允许配置明确标为测试的不可用模型地址/假值，仅验证保存和原生入口；不得把它用作生产默认或宣称模型调用通过。完整契约见 [`schemas/openapi.json`](../schemas/openapi.json)。
 
 ## 6. HTTPS、运行检查和故障边界
