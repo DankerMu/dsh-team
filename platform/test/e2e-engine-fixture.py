@@ -317,6 +317,7 @@ def public_group(caller_path, preserve_network=False):
             time.sleep(.05)
         pending = [child.pid]
         engine_roots = []
+        daemon_candidates = []
         while pending:
             pid = pending.pop()
             identity = birth(pid)
@@ -333,6 +334,8 @@ def public_group(caller_path, preserve_network=False):
                 continue
             captured.append((pid, identity[0]))
             pending.extend(descendants)
+            if args[0] in (b'/usr/bin/dockerd', b'/usr/bin/containerd'):
+                daemon_candidates.append((pid, identity[0]))
             if args[0] == b'/usr/bin/dockerd':
                 path = Path(os.fsdecode(args[args.index(b'--data-root') + 1])).parent
                 if path.parent != Path('/tmp') or not path.name.startswith('dsh-team-e2e-engine-'):
@@ -352,14 +355,13 @@ def public_group(caller_path, preserve_network=False):
         if any(network_after[key] != network_before[key] for key in ('ifindex', 'ifname', 'address', 'mtu')):
             raise RuntimeError('Private daemon replaced caller default bridge')
         observed_daemons = 0
-        for pid, identity in captured:
+        for pid, identity in daemon_candidates:
             if absent(pid, identity):
-                continue
-            executable = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')[0]
-            if executable in (b'/usr/bin/dockerd', b'/usr/bin/containerd'):
-                observed_daemons += 1
-                if os.readlink('/proc/%d/ns/net' % pid) == os.readlink('/proc/self/ns/net'):
-                    raise RuntimeError('Private daemon shares caller network namespace')
+                raise RuntimeError('Observed private daemon exited before cancellation')
+            network = os.readlink('/proc/%d/ns/net' % pid)
+            if absent(pid, identity) or network == os.readlink('/proc/self/ns/net'):
+                raise RuntimeError('Private daemon network identity changed')
+            observed_daemons += 1
         if observed_daemons != 2:
             raise RuntimeError('Both private daemon namespaces were not observed')
         os.killpg(child.pid, signal.SIGTERM)
