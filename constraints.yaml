@@ -193,7 +193,7 @@ verification:
       required_at: "L3+"
     built_artifact:
       command: "pnpm e2e"
-      evidence: "build+http-status+body against platform/dist plus platform.db schema/ledger"
+      evidence: "nonroot Linux build+http-status+body against platform/dist; exact schema/ledger; private Docker/containerd and kernel network identities; caller default-bridge preservation and owned cleanup; absent network isolation fails before daemon mutation"
       required_at: "L3+"
     administrator_cli:
       command: "pnpm test:cli"

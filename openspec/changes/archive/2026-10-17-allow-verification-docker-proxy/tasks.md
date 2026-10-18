@@ -13,7 +13,7 @@
 
 - [x] 2.1 Update every standalone image/rescue dependency bundle and prove module loading without repository imports; preserve cleanup/error semantics through existing focused regressions.
 - [x] 2.2 Run `pnpm check:fast`, relevant `pnpm test:integration` cases and original full `pnpm test:docker` on the frozen reviewed head; retain independent resource and host/workload preservation evidence, cross-review and required CI before merge.
-- [ ] 2.3 Merge and archive #267 through protected PRs; restore PR264's saved review history and resume #176 without resetting its two used fix passes.
+- [x] 2.3 Merge and archive #267 through protected PRs; restore PR264's saved review history and resume #176 without resetting its two used fix passes.
 
 ## Risk pack mapping
 
@@ -28,4 +28,4 @@ Later explicit scope extension: user approved the same ordinary source change fo
 
 Completion evidence: PR268 merged reviewed/human-approved `a17fbf68dff90e96bcd8b97ba7b58eb7ec366638` as `f954aa5cbec26045c6ae64a66937e8e5ff1d6258`. Focused integration69/69, user-image4/4, standalone Compose11/11 and original full Docker91/91 passed; independent cleanup/host preservation passed. Both CI39047050024 and CI39047347366 are green. Durable evidence: https://github.com/DankerMu/dsh-team/pull/268#issuecomment-6244306553 .
 
-Task2.3 is a post-implementation workflow handoff, not missing product behavior: protected implementation merge is complete; this archive PR and subsequent PR264 restoration remain owned by the serial queue. Its saved four-round ledger and two used fix passes MUST be preserved. This pending lifecycle action is not claimed complete by archiving the implemented change.
+Task2.3 handoff completed after archive PR275 merged as `ff9b2bdd3ced438fa565dec7c414780492d1ee7f`: its exact head passed standalone Compose11/11, original full Docker91/91 and required CI39087525965. PR264's saved four-round ledger was restored verbatim with both used fix passes retained, and its branch rebased onto that merged main without conflicts. #176 runtime acceptance remains a separate task; it is not claimed by this handoff.
