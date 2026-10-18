@@ -133,6 +133,39 @@ it('keeps another real startup bridge intact while built e2e reconciles its own 
   });
 });
 
+async function runFaultFixture(mode: string): Promise<{ stdout: string; stderr: string }> {
+  return promisify(execFile)(
+    '/usr/bin/sudo',
+    [
+      '-n',
+      '/usr/bin/unshare',
+      '--net',
+      '/usr/bin/python3',
+      fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
+      mode,
+      await readlink('/proc/self/ns/net'),
+    ],
+    {
+      env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
+      timeout: 120_000,
+      maxBuffer: 65_536,
+    },
+  );
+}
+
+it('rejects an unrelated early failure instead of qualifying identity refusal', async () => {
+  const failure: unknown = await runFaultFixture('unrelated-identity').catch(
+    (error: unknown) => error,
+  );
+  expect(failure).toMatchObject({ code: 1 });
+  const stdout = record(failure).stdout;
+  if (typeof stdout !== 'string') throw new Error('Missing fault qualification result');
+  expect(JSON.parse(stdout)).toEqual({
+    outcome: 'unqualified',
+    reason: 'fault-phase-unobserved',
+  });
+});
+
 it.each([
   'prerequisite',
   'network',
@@ -144,20 +177,7 @@ it.each([
   'parent-kill',
   'supervisor-kill',
 ])('retires only owned runtime processes after %s', async (mode) => {
-  const { stdout } = await promisify(execFile)(
-    '/usr/bin/sudo',
-    [
-      '-n',
-      '/usr/bin/python3',
-      fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
-      mode,
-    ],
-    {
-      env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
-      timeout: 120_000,
-      maxBuffer: 65_536,
-    },
-  );
+  const { stdout } = await runFaultFixture(mode);
   const observed: unknown = JSON.parse(stdout);
   expect(observed).toEqual({
     mode,

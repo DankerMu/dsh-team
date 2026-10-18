@@ -12,6 +12,10 @@ import tempfile
 import time
 
 
+class FaultPhaseUnavailable(RuntimeError):
+    pass
+
+
 def birth(pid):
     try:
         text = Path('/proc/%d/stat' % pid).read_text()
@@ -31,23 +35,59 @@ def children(pid):
 
 
 def worker(mode, owned, caller_network):
+    unrelated = mode == 'unrelated-identity'
+    if unrelated:
+        mode = 'identity'
     repository = Path(__file__).resolve().parents[2]
     spec = importlib.util.spec_from_file_location('e2e_owner', repository / 'scripts/e2e-engine-supervisor.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     original_spawn = module.subprocess.Popen
+    original_run = module.subprocess.run
     original_info = module.engine_info
     original_mkdtemp = module.tempfile.mkdtemp
     original_open = module.Path.open
     original_access = module.os.access
+    original_pid = module.os.getpid
+    original_readlink = module.os.readlink
+    phase = None
+    mutations = {'network': 0, 'daemons': []}
+
+    def checkpoint():
+        nonlocal phase
+        if phase is not None:
+            raise RuntimeError('Duplicate fault boundary')
+        phase = mode
+        print(json.dumps({'phase': phase}), flush=True)
+        # Parent observes actual host-visible child identities while this boundary is held.
+        if sys.stdin.readline() != 'continue\n':
+            raise FaultPhaseUnavailable('Fault observer departed')
+
+    def observed_pid():
+        pid = original_pid()
+        if mode == 'prerequisite':
+            checkpoint()
+        return pid
+
+    def observed_readlink(path, *args, **kwargs):
+        value = original_readlink(path, *args, **kwargs)
+        if mode == 'network' and path == '/proc/self/ns/net':
+            checkpoint()
+        return value
 
     def open_path(path, *args, **kwargs):
         if mode == 'setup' and path.name == 'daemon.log':
+            checkpoint()
             raise PermissionError('injected owned log creation failure')
         return original_open(path, *args, **kwargs)
 
     def executable(path, permission):
-        return False if mode == 'executable' and path == '/usr/bin/containerd' else original_access(path, permission)
+        if unrelated:
+            raise RuntimeError('Injected failure before identity observation')
+        if mode == 'executable' and path == '/usr/bin/containerd':
+            checkpoint()
+            return False
+        return original_access(path, permission)
 
     def create_root(*args, **kwargs):
         return original_mkdtemp(*args, **kwargs, dir=owned)
@@ -55,11 +95,24 @@ def worker(mode, owned, caller_network):
     def observed_info(path):
         info = original_info(path)
         if mode == 'identity':
+            checkpoint()
             info['DockerRootDir'] = '/not-the-owned-root'
         return info
 
+    def external_run(args, **kwargs):
+        if args[0] == '/usr/sbin/ip':
+            mutations['network'] += 1
+            if mode in ('prerequisite', 'network', 'executable'):
+                raise RuntimeError('Forbidden network admission during early refusal')
+        return original_run(args, **kwargs)
+
     def external_process(args, **kwargs):
+        if args[0] in ('/usr/bin/containerd', '/usr/bin/dockerd'):
+            mutations['daemons'].append(args[0])
+            if mode in ('prerequisite', 'network', 'executable', 'setup'):
+                raise RuntimeError('Forbidden daemon admission during early refusal')
         if args[0] == '/usr/bin/dockerd' and mode == 'partial':
+            checkpoint()
             args = ['/usr/bin/python3', '-c', 'raise SystemExit(17)']
         elif args[0] == '/usr/bin/bash':
             # Only the external scenario is held; both daemons and identity reads stay real.
@@ -72,19 +125,36 @@ def worker(mode, owned, caller_network):
     module.tempfile.mkdtemp = create_root
     module.engine_info = observed_info
     module.subprocess.Popen = external_process
+    module.subprocess.run = external_run
     module.Path.open = open_path
     module.os.access = executable
+    module.os.getpid = observed_pid
+    module.os.readlink = observed_readlink
     sys.argv = [str(repository / 'scripts/e2e-engine-supervisor.py'), os.environ['SUDO_UID'],
                 os.environ['SUDO_GID'], '/usr/bin:/bin', '/home/ubuntu', caller_network]
     try:
         module.main()
-    except Exception:
+    except Exception as error:
+        expected_type = PermissionError if mode == 'setup' else RuntimeError
+        if phase == mode and type(error) is expected_type:
+            print(json.dumps({'rejected': mode, 'mutations': mutations}), flush=True)
+        else:
+            print(json.dumps({'unqualified': True}), flush=True)
         raise SystemExit(1)
 
 
-def parent(mode):
+def parent(mode, host_network):
     if os.getuid() != 0 or int(os.environ['SUDO_UID']) <= 0:
         raise RuntimeError('Trusted nonroot sudo invocation required')
+    if os.readlink('/proc/self/ns/net') == host_network:
+        raise RuntimeError('Fault qualification requires an independent outer network namespace')
+    target = 'identity' if mode == 'unrelated-identity' else mode
+    early = target in ('prerequisite', 'network', 'executable', 'setup', 'partial', 'identity')
+    network_before = None
+    if target == 'network':
+        subprocess.run(['/usr/sbin/ip', 'link', 'add', 'docker0', 'type', 'bridge'], check=True)
+        network_before = json.loads(subprocess.run(['/usr/sbin/ip', '-j', 'link', 'show', 'docker0'],
+            text=True, capture_output=True, check=True).stdout)[0]
     owned = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-fixture-'))
     sentinel = subprocess.Popen(['/usr/bin/sleep', '300'])
     child = None
@@ -104,6 +174,36 @@ def parent(mode):
             args = ['/usr/bin/python3', '-c', producer, json.dumps(args)]
         child = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                  stderr=subprocess.DEVNULL, text=True)
+        if early:
+            selector = selectors.DefaultSelector()
+            selector.register(child.stdout, selectors.EVENT_READ)
+            try:
+                if not selector.select(30):
+                    raise FaultPhaseUnavailable('Fault boundary not reached')
+                line = child.stdout.readline()
+                if not line or json.loads(line) != {'phase': target}:
+                    raise FaultPhaseUnavailable('Fault boundary not reached')
+            finally:
+                selector.close()
+            if target == 'prerequisite':
+                supervisor = child.pid
+            else:
+                roots = children(child.pid)
+                if len(roots) != 1:
+                    raise RuntimeError('Fault supervisor identity unavailable')
+                supervisor = roots[0]
+            descendants = children(supervisor)
+            expected = {
+                'partial': ['/usr/bin/containerd'],
+                'identity': ['/usr/bin/containerd', '/usr/bin/dockerd'],
+            }.get(target, [])
+            actual = sorted((Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')[0].decode()
+                            for pid in descendants)
+            if actual != expected:
+                raise RuntimeError('Fault phase did not observe its real runtime processes')
+            captured = [(pid, birth(pid)[0]) for pid in [supervisor, *descendants]]
+            child.stdin.write('continue\n')
+            child.stdin.flush()
         if mode in ('eof', 'supervisor-kill', 'parent-kill'):
             selector = selectors.DefaultSelector()
             selector.register(child.stdout, selectors.EVENT_READ)
@@ -144,8 +244,17 @@ def parent(mode):
         deadline = time.monotonic() + 45
         while not all(absent(pid, identity) for pid, identity in captured) and time.monotonic() < deadline:
             time.sleep(.05)
-        if mode in ('partial', 'identity', 'prerequisite', 'network', 'executable', 'setup') and 'scenario-ready' in child.stdout.read():
-            raise RuntimeError('Scenario admitted despite failed isolation')
+        if early:
+            expected_daemons = ['/usr/bin/containerd', '/usr/bin/dockerd'] if target in ('partial', 'identity') else []
+            expected_network = 0 if target in ('prerequisite', 'network', 'executable') else 1
+            if json.loads(child.stdout.read()) != {
+                    'rejected': target, 'mutations': {'network': expected_network, 'daemons': expected_daemons}}:
+                raise RuntimeError('Selected fault was not the observed rejection')
+        if network_before is not None:
+            network_after = json.loads(subprocess.run(['/usr/sbin/ip', '-j', 'link', 'show', 'docker0'],
+                text=True, capture_output=True, check=True).stdout)[0]
+            if any(network_after[key] != network_before[key] for key in ('ifindex', 'ifname', 'address', 'mtu')):
+                raise RuntimeError('Fault qualification mutated its caller network')
         if not all(absent(pid, identity) for pid, identity in captured):
             raise RuntimeError('Private process retained')
         if mode != 'supervisor-kill' and list(owned.iterdir()):
@@ -161,12 +270,13 @@ def parent(mode):
             child.wait(timeout=45)
         sentinel.terminate()
         sentinel.wait(timeout=5)
-        if success:
+        if success or (child is not None and child.poll() is not None and not list(owned.iterdir())):
             # The parent created this exact root before worker admission. A killed PID1
             # has settled its mount namespace and children before this rescue removes it.
             shutil.rmtree(owned)
         else:
             print('e2e fault fixture retained ' + str(owned), file=sys.stderr)
+            raise RuntimeError('Fault fixture cleanup unconfirmed')
 
 
 def public_group(caller_path, preserve_network=False):
@@ -212,9 +322,17 @@ def public_group(caller_path, preserve_network=False):
             identity = birth(pid)
             if identity is None:
                 continue
+            try:
+                descendants = children(pid)
+                args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')
+            except FileNotFoundError:
+                if absent(pid, identity[0]):
+                    continue
+                raise
+            if absent(pid, identity[0]):
+                continue
             captured.append((pid, identity[0]))
-            pending.extend(children(pid))
-            args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')
+            pending.extend(descendants)
             if args[0] == b'/usr/bin/dockerd':
                 path = Path(os.fsdecode(args[args.index(b'--data-root') + 1])).parent
                 if path.parent != Path('/tmp') or not path.name.startswith('dsh-team-e2e-engine-'):
@@ -287,4 +405,8 @@ elif sys.argv[1] == 'network-sentinel':
     subprocess.run(['/usr/sbin/ip', 'link', 'add', 'docker0', 'type', 'bridge'], check=True)
     public_group(sys.argv[2], preserve_network=True)
 else:
-    parent(sys.argv[1])
+    try:
+        parent(sys.argv[1], sys.argv[2])
+    except FaultPhaseUnavailable:
+        print(json.dumps({'outcome': 'unqualified', 'reason': 'fault-phase-unobserved'}))
+        sys.exit(1)
