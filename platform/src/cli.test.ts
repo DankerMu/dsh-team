@@ -61,7 +61,7 @@ describe('administrator command validation', () => {
     expect(result.signals.eventNames()).toEqual([]);
   });
 
-  it.each(['', 'invalid-email-sentinel', 'a@@b', 'a @b'])(
+  it.each(['', 'invalid-email-sentinel', 'a@@b', 'a @b', `${'a'.repeat(253)}@b`])(
     'rejects invalid email without echo before terminal/configuration access: %j',
     async (email) => {
       const result = await invoke(['admin', 'create', email]);

@@ -1,4 +1,5 @@
 import type { DatabaseHandle } from '../db/index.ts';
+import { hasBoundedEmailLength } from '../db/index.ts';
 
 interface AuditEvent {
   readonly type: string;
@@ -74,6 +75,12 @@ function projectDetails(type: string, details: Record<string, unknown> | undefin
 }
 
 export function recordAuditEvent(db: DatabaseHandle, event: AuditEvent): void {
+  if (
+    (event.actorEmail !== undefined && !hasBoundedEmailLength(event.actorEmail)) ||
+    (event.targetEmail !== undefined && !hasBoundedEmailLength(event.targetEmail))
+  ) {
+    throw new Error('Audit email exceeds 254 Unicode code points');
+  }
   const details = projectDetails(event.type, event.details);
   db.prepare(INSERT_AUDIT).run(
     event.createdAt,

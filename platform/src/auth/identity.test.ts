@@ -17,6 +17,19 @@ describe('account identity policy', () => {
     },
   );
 
+  it.each(['a', '\u{10000}', '\ud800'])('bounds normalized code points for %j', (unit) => {
+    for (const length of [253, 254]) {
+      const email = `${unit.repeat(length - 2)}@b`;
+      expect(normalizeEmail(`  ${email}  `)).toBe(email);
+    }
+    expect(normalizeEmail(`${unit.repeat(253)}@b`)).toBeNull();
+  });
+
+  it('counts lowercase expansion after normalization', () => {
+    expect(normalizeEmail(`${'\u0130'.repeat(126)}@b`)).toBe(`${'i\u0307'.repeat(126)}@b`);
+    expect(normalizeEmail(`${'\u0130'.repeat(126)}a@b`)).toBeNull();
+  });
+
   it('creates a twelve-character lowercase alphanumeric account identity', () => {
     expect(generateUserId()).toMatch(/^[a-z0-9]{12}$/);
   });

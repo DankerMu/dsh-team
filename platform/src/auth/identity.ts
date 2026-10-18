@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { hasBoundedEmailLength } from '../db/index.ts';
 
 const USER_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const USER_ID_LENGTH = 12;
@@ -8,6 +9,7 @@ export function normalizeEmail(value: string): string | null {
   const email = value.trim().toLowerCase();
   const at = email.indexOf('@');
   if (
+    !hasBoundedEmailLength(email) ||
     at <= 0 ||
     at !== email.lastIndexOf('@') ||
     at >= email.length - 1 ||
