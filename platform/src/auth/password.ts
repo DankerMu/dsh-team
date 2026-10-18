@@ -25,6 +25,7 @@
  */
 
 import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { hasCodePointLength } from '../unicode.ts';
 
 const SALT_BYTES = 16;
 const KEY_LEN = 64;
@@ -47,24 +48,6 @@ export class PasswordPolicyError extends Error {
   }
 }
 
-function hasBoundedUnicodeCodePoints(password: string): boolean {
-  let count = 0;
-  for (let index = 0; index < password.length;) {
-    count += 1;
-    if (count > MAX_PASSWORD_CODE_POINTS) {
-      return false;
-    }
-    const unit = password.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = password.charCodeAt(index + 1);
-      index += next >= 0xdc00 && next <= 0xdfff ? 2 : 1;
-    } else {
-      index += 1;
-    }
-  }
-  return count >= MIN_PASSWORD_CODE_POINTS;
-}
-
 function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     // UTF-16LE is required so lone surrogates keep distinct identities; Node's default UTF-8 conversion aliases each of them to U+FFFD.
@@ -79,7 +62,7 @@ function deriveKey(password: string, salt: Buffer): Promise<Buffer> {
 }
 
 export async function hashPassword(password: string): Promise<string> {
-  if (!hasBoundedUnicodeCodePoints(password)) {
+  if (!hasCodePointLength(password, MIN_PASSWORD_CODE_POINTS, MAX_PASSWORD_CODE_POINTS)) {
     throw new PasswordPolicyError();
   }
   const salt = randomBytes(SALT_BYTES);
@@ -88,7 +71,10 @@ export async function hashPassword(password: string): Promise<string> {
 }
 
 export async function verifyPassword(password: string, encoded: string): Promise<boolean> {
-  if (!hasBoundedUnicodeCodePoints(password) || encoded.length !== ENCODED_LENGTH) {
+  if (
+    !hasCodePointLength(password, MIN_PASSWORD_CODE_POINTS, MAX_PASSWORD_CODE_POINTS) ||
+    encoded.length !== ENCODED_LENGTH
+  ) {
     return false;
   }
   const match = ENCODED_RECORD.exec(encoded);

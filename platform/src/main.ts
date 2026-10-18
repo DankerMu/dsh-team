@@ -2,7 +2,12 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildApp } from './app.ts';
 import { loadConfig } from './config.ts';
-import { applyMigrations, openDatabase, readSettings } from './db/index.ts';
+import {
+  applyMigrations,
+  assertCompatibleAccountEmails,
+  openDatabase,
+  readSettings,
+} from './db/index.ts';
 import {
   createDockerClient,
   createInstanceService,
@@ -61,6 +66,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 try {
   await assertWebBuild();
   applyMigrations(database);
+  assertCompatibleAccountEmails(database);
   validateSubnetPool(config.subnetPool, readSettings(database).maxRunningInstances);
   runtime.service = createInstanceService({
     client: createDockerClient(config.dockerSocketPath),

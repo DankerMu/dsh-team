@@ -118,6 +118,41 @@ describe('recordAuditEvent', () => {
     db.close();
   });
 
+  it.each(['actorEmail', 'targetEmail'] as const)(
+    'rejects over-limit %s and rolls back the enclosing transaction without echoing it',
+    (field) => {
+      const email = `a\0${'x'.repeat(251)}@b`;
+      const write = db.transaction(() => {
+        recordAuditEvent(db, { type: 'login.failed', createdAt: 1, actorEmail: 'kept@b' });
+        recordAuditEvent(db, { type: 'login.failed', createdAt: 2, [field]: email });
+      });
+
+      expect(write).toThrow('Audit email exceeds 254 Unicode code points');
+      expect(db.prepare(SELECT_AUDIT).all()).toEqual([]);
+    },
+  );
+
+  it('preserves boundary astral emails and empty metadata without normalization', () => {
+    const email = `${'\u{10000}'.repeat(252)}@B`;
+    recordAuditEvent(db, {
+      type: 'login.failed',
+      createdAt: 1,
+      actorEmail: email,
+      targetEmail: '',
+    });
+    recordAuditEvent(db, {
+      type: 'login.failed',
+      createdAt: 2,
+      actorEmail: '',
+      targetEmail: email,
+    });
+
+    expect(db.prepare(SELECT_AUDIT).all()).toEqual([
+      expectedRow('login.failed', 1, '{}', { actorEmail: email, targetEmail: '' }),
+      expectedRow('login.failed', 2, '{}', { actorEmail: '', targetEmail: email }),
+    ]);
+  });
+
   it('persists login.succeeded with caller metadata and empty details', () => {
     recordAuditEvent(db, {
       type: 'login.succeeded',
