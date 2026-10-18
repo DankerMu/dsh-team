@@ -14,7 +14,7 @@
 ## 3. Integration and release
 
 - [x] 3.1 Run focused integration/CLI, unit coverage, fast checks, build and contract checks; retain a real HTTP/file-database smoke receipt and source/dist evidence.
-- [ ] 3.2 Complete independent risk-scaled cross-review, exact-head trusted Docker/Compose evidence and required CI; merge and archive only after all issue acceptance criteria pass.
+- [x] 3.2 Complete independent risk-scaled cross-review, exact-head trusted Docker/Compose evidence and required CI; merge and archive only after all issue acceptance criteria pass.
 
 ## Risk packs
 
