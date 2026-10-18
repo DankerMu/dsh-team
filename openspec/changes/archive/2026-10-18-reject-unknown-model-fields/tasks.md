@@ -8,7 +8,7 @@
 ## 2. Integration and release
 
 - [x] 2.1 Run focused integration, ordinary unit coverage, fast/build/contract checks; exercise source/dist real HTTP/file-database reopen, and retain proof that shared parser and generated contract remain unchanged.
-- [ ] 2.2 Complete independent cross-review, exact-head trusted Compose/full Docker and required CI; merge and archive after acceptance.
+- [x] 2.2 Complete independent cross-review, exact-head trusted Compose/full Docker and required CI; merge and archive after acceptance.
 
 ## Risk packs
 
