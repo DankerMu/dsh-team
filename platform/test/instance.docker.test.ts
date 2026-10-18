@@ -466,7 +466,6 @@ it('keeps an absent running identity unavailable after full refusal and readies 
 
         expect(await f.state(a.cookie, true)).toEqual({ status: 'full', reason: 'full' });
         expect(await f.state(a.cookie)).toEqual({ status: 'full', reason: 'full' });
-        await unavailableGateway(f.base, a.cookie, 'full');
         // Compare secret-bearing rows without allowing an assertion diff to print credentials.
         expect(isDeepStrictEqual(row(a.id), oldA)).toBe(true);
         expect(isDeepStrictEqual(row(b.id), oldB)).toBe(true);
@@ -474,6 +473,7 @@ it('keeps an absent running identity unavailable after full refusal and readies 
         expect(afterB.Id).toBe(beforeB.Id);
         expect(afterB.State).toEqual(beforeB.State);
         expect(afterB.NetworkSettings).toEqual(beforeB.NetworkSettings);
+        await unavailableGateway(f.base, a.cookie, 'full');
         await readyGateway(f.base, b.cookie);
 
         await f.stopOwner.stopUserContainer({ userId: b.id, reason: 'admin' });

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { deleteUserSessions } from '../src/auth/index.ts';
@@ -523,10 +524,11 @@ it('keeps verified absence non-routable while observing live admission settings 
             const row = (id: string) =>
               f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(id);
             const beforeB = row(sibling.id);
+            const siblingUpstream = f.service.resolveUpstream(sibling.id);
+            expect(siblingUpstream.outcome).toBe('running');
             const gateway = (cookie: string) =>
               fetch(`${f.base}/probe`, { headers: { cookie, accept: 'application/json' } });
             expect(await (await gateway(user.cookie)).text()).toBe('obsolete');
-            expect(await (await gateway(sibling.cookie)).text()).toBe('sibling');
             writeSettings(f.database, { maxRunningInstances: 1 });
             f.daemon.removeContainer(START_CONTAINER);
 
@@ -595,8 +597,12 @@ it('keeps verified absence non-routable while observing live admission settings 
               expect(upgrade.status).toBe(503);
               expect(JSON.parse(upgrade.body)).toMatchObject({ reason });
               expect(oldHits).toBe(1);
-              expect(row(sibling.id)).toEqual(beforeB);
-              expect(await (await gateway(sibling.cookie)).text()).toBe('sibling');
+              // Exercise the real timer's writeback boundary without scheduler-dependent sleeps.
+              await f.service.flushActivity();
+              expect(isDeepStrictEqual(row(sibling.id), beforeB)).toBe(true);
+              expect(
+                isDeepStrictEqual(f.service.resolveUpstream(sibling.id), siblingUpstream),
+              ).toBe(true);
               expect(f.daemon.requests).toEqual(requests);
             }
             await unavailable('full');
@@ -606,6 +612,8 @@ it('keeps verified absence non-routable while observing live admission settings 
             await unavailable('full');
             writeSettings(f.database, { maxRunningInstances: 2 });
             await unavailable('stopped');
+            // Defer B's intentional activity until every complete-row comparison has finished.
+            expect(await (await gateway(sibling.cookie)).text()).toBe('sibling');
           },
         );
       },
