@@ -24,6 +24,7 @@ import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
+import { orderedMounts } from './instance-gateway-docker-fixture.ts';
 
 function dockerAppContext(lifecycle: UserImageLifecycle, databaseName: string) {
   const database = openDatabase(join(dirname(lifecycle.overlayDirectory), databaseName));
@@ -412,6 +413,93 @@ it('public unconfigured allocates nothing, full preserves ready A and same-sessi
         await f.wait(b.cookie, 'running');
         await readyGateway(f.base, b.cookie);
         return 'public-capacity-unconfigured';
+      } finally {
+        await f.app.close();
+      }
+    },
+  );
+});
+
+it('keeps an absent running identity unavailable after full refusal and readies a new identity after release', async () => {
+  expect(platform()).toBe('linux');
+  expect(arch()).toBe('x64');
+  await runUserImage(
+    'container-start',
+    () => undefined,
+    undefined,
+    async (lifecycle) => {
+      const f = await withUnavailableApp(lifecycle, false);
+      try {
+        const a = await f.register('absent-capacity-a@example.test');
+        const b = await f.register('absent-capacity-b@example.test');
+        writeSettings(f.database, { ...UNAVAILABLE_SETTINGS, maxRunningInstances: 2 });
+        for (const user of [a, b]) {
+          expect(await f.state(user.cookie, true)).toEqual({
+            status: 'starting',
+            reason: 'starting',
+          });
+          await f.wait(user.cookie, 'running');
+          await readyGateway(f.base, user.cookie);
+        }
+        const row = (id: string) =>
+          record(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(id));
+        const oldA = row(a.id);
+        const oldB = row(b.id);
+        if (typeof oldA.container_id !== 'string' || typeof oldB.container_id !== 'string')
+          throw new Error('Missing owned running identities');
+        const beforeB = await inspectAsync(lifecycle, oldB.container_id);
+        writeSettings(f.database, { maxRunningInstances: 1 });
+        // External deletion is confined to this registered employee's immutable, freshly verified ID.
+        const ownedA = await inspectAsync(lifecycle, oldA.container_id);
+        expect(ownedA.Id).toBe(oldA.container_id);
+        expect(ownedA.Name).toBe(`/dsh-team-u-${a.id}`);
+        expect(ownedA.Image).toBe(lifecycle.imageId);
+        expect(record(record(ownedA.Config).Labels)['dsh-team.user']).toBe(a.id);
+        const removed = await lifecycle.commandAsync(
+          ['container', 'rm', '--force', oldA.container_id],
+          15_000,
+        );
+        expect(removed.status).toBe(0);
+        expect(removed.error).toBeUndefined();
+
+        expect(await f.state(a.cookie, true)).toEqual({ status: 'full', reason: 'full' });
+        expect(await f.state(a.cookie)).toEqual({ status: 'full', reason: 'full' });
+        await unavailableGateway(f.base, a.cookie, 'full');
+        expect(row(a.id)).toEqual(oldA);
+        expect(row(b.id)).toEqual(oldB);
+        const afterB = await inspectAsync(lifecycle, oldB.container_id);
+        expect(afterB.Id).toBe(beforeB.Id);
+        expect(afterB.State).toEqual(beforeB.State);
+        expect(afterB.NetworkSettings).toEqual(beforeB.NetworkSettings);
+        await readyGateway(f.base, b.cookie);
+
+        await f.stopOwner.stopUserContainer({ userId: b.id, reason: 'admin' });
+        expect(await f.state(a.cookie)).toEqual({ status: 'stopped', reason: 'stopped' });
+        await unavailableGateway(f.base, a.cookie, 'stopped');
+        expect(await f.state(a.cookie, true)).toEqual({ status: 'starting', reason: 'starting' });
+        await f.wait(a.cookie, 'running');
+        const replacement = row(a.id);
+        expect(replacement.container_id).not.toBe(oldA.container_id);
+        expect(replacement.dsh_cookie === oldA.dsh_cookie).toBe(false);
+        if (typeof replacement.container_id !== 'string')
+          throw new Error('Missing replacement identity');
+        const ready = await inspectAsync(lifecycle, replacement.container_id);
+        expect(ready.Id).toBe(replacement.container_id);
+        expect(record(ready.State).Running).toBe(true);
+        expect(orderedMounts(ready.Mounts)).toEqual(orderedMounts(ownedA.Mounts));
+        // A host port may be reallocated; routing must use the replacement's inspected binding.
+        expect(record(record(ready.NetworkSettings).Ports)['3080/tcp']).toEqual([
+          { HostIp: replacement.upstream_host, HostPort: String(replacement.upstream_port) },
+        ]);
+        expect(
+          isAbsentResource(
+            await lifecycle.commandAsync(['container', 'inspect', oldA.container_id], 15_000),
+            'container',
+            oldA.container_id,
+          ),
+        ).toBe(true);
+        await readyGateway(f.base, a.cookie);
+        return 'public-verified-absence-capacity-recovery';
       } finally {
         await f.app.close();
       }

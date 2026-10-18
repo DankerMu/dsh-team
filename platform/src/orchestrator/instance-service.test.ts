@@ -246,6 +246,33 @@ it('retains admitted readiness failure identity when even the catch-time databas
   }
 });
 
+it('retains a real replacement failure when storage becomes unreadable after verified absence', async () => {
+  const f = await fixture();
+  const storage = { renamed: false };
+  try {
+    configure(f.database);
+    await f.owner.startUserContainer(f.input);
+    f.database.prepare("UPDATE instances SET status='running',dsh_cookie='trusted-cookie'").run();
+    f.daemon.removeContainer(START_CONTAINER);
+    f.daemon.beforeRequest(({ path }) => {
+      if (!storage.renamed && path === '/images/dsh-team-user%3Alocal/json') {
+        f.database.exec('ALTER TABLE instances RENAME TO unavailable_instances');
+        storage.renamed = true;
+      }
+    });
+
+    await expect(f.service.start(START_USER)).rejects.toThrow('Instance operation failed');
+    expect(storage.renamed).toBe(true);
+    f.database.exec('ALTER TABLE unavailable_instances RENAME TO instances');
+    storage.renamed = false;
+    expect(() => f.service.status(START_USER)).toThrow('Instance operation failed');
+    expect(() => f.service.resolveUpstream(START_USER)).toThrow('Instance operation failed');
+  } finally {
+    if (storage.renamed) f.database.exec('ALTER TABLE unavailable_instances RENAME TO instances');
+    await f.close();
+  }
+});
+
 it('writes only the latest activity timestamp for an existing user and respects the successful-write minute', async () => {
   const f = await fixture();
   vi.useFakeTimers({ toFake: ['Date'] });
