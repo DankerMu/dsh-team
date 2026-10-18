@@ -1,6 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { request } from 'node:http';
 import type { ClientRequest, IncomingMessage } from 'node:http';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { deleteUserSessions } from '../src/auth/index.ts';
@@ -54,6 +56,24 @@ async function fixture() {
       await app.close();
       await f.close();
     },
+  };
+}
+
+function seedRunning(
+  f: Awaited<ReturnType<typeof fixture>>,
+  userId: string,
+  id: string,
+  port: number,
+  startedAt: number,
+) {
+  seedReconciliation(f.database, f.daemon, userId, id);
+  f.database
+    .prepare('UPDATE instances SET upstream_port=?, last_started_at=? WHERE user_id=?')
+    .run(port, startedAt, userId);
+  const container = f.daemon.containers.get(id);
+  if (container === undefined) throw new Error('Missing seeded container');
+  container.NetworkSettings.Ports = {
+    '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }],
   };
 }
 
@@ -372,21 +392,8 @@ it.each(['missing', 'replaced'] as const)(
                 models: [{ name: 'office-model' }],
                 defaultModel: 'office-model',
               });
-              function seed(userId: string, id: string, port: number, startedAt: number) {
-                seedReconciliation(f.database, f.daemon, userId, id);
-                f.database
-                  .prepare(
-                    'UPDATE instances SET upstream_port=?, last_started_at=? WHERE user_id=?',
-                  )
-                  .run(port, startedAt, userId);
-                const container = f.daemon.containers.get(id);
-                if (container === undefined) throw new Error('Missing seeded container');
-                container.NetworkSettings.Ports = {
-                  '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(port) }],
-                };
-              }
-              seed(user.id, START_CONTAINER, old.port, 101);
-              seed(sibling.id, 'd'.repeat(64), current.port, 202);
+              seedRunning(f, user.id, START_CONTAINER, old.port, 101);
+              seedRunning(f, sibling.id, 'd'.repeat(64), current.port, 202);
               const running = { status: 'running', reason: null };
               const gateway = (cookie: string) =>
                 fetch(`${f.base}/probe`, {
@@ -432,7 +439,7 @@ it.each(['missing', 'replaced'] as const)(
                 if (network === undefined) throw new Error('Missing old bridge');
                 f.daemon.networks.delete(network.Id);
                 f.database.prepare('DELETE FROM instances WHERE user_id=?').run(user.id);
-                seed(user.id, 'f'.repeat(64), current.port, 303);
+                seedRunning(f, user.id, 'f'.repeat(64), current.port, 303);
                 expect(f.service.status(user.id)).toEqual(running);
                 expect(await (await gateway(user.cookie)).text()).toBe('current');
               }
@@ -477,3 +484,141 @@ it.each(['missing', 'replaced'] as const)(
     }
   },
 );
+
+it('keeps verified absence non-routable while observing live admission settings after full refusal', async () => {
+  const f = await fixture();
+  let oldHits = 0;
+  try {
+    await withUpstream(
+      (_request, response) => {
+        oldHits += 1;
+        response.end('obsolete');
+      },
+      async (old, oldServer) => {
+        oldServer.on('upgrade', (_request, socket) => {
+          oldHits += 1;
+          socket.destroy();
+        });
+        await withUpstream(
+          (_request, response) => response.end('sibling'),
+          async (current) => {
+            const user = await registerInstanceUser(
+              f.base,
+              f.config.publicUrl,
+              'capacity-a@example.test',
+            );
+            const sibling = await registerInstanceUser(
+              f.base,
+              f.config.publicUrl,
+              'capacity-b@example.test',
+            );
+            writeSettings(f.database, {
+              modelBaseUrl: 'http://model.invalid/v1',
+              modelApiKey: 'fixture-model-key',
+              models: [{ name: 'office-model' }],
+              defaultModel: 'office-model',
+              maxRunningInstances: 2,
+            });
+            seedRunning(f, user.id, START_CONTAINER, old.port, 101);
+            seedRunning(f, sibling.id, 'd'.repeat(64), current.port, 202);
+            const row = (id: string) =>
+              f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(id);
+            const beforeB = row(sibling.id);
+            const siblingUpstream = f.service.resolveUpstream(sibling.id);
+            expect(siblingUpstream.outcome).toBe('running');
+            const gateway = (cookie: string) =>
+              fetch(`${f.base}/probe`, { headers: { cookie, accept: 'application/json' } });
+            expect(await (await gateway(user.cookie)).text()).toBe('obsolete');
+            writeSettings(f.database, { maxRunningInstances: 1 });
+            f.daemon.removeContainer(START_CONTAINER);
+
+            const started = await fetch(`${f.base}/_platform/api/instance/start`, {
+              method: 'POST',
+              headers: {
+                cookie: user.cookie,
+                origin: f.config.publicUrl,
+                'content-type': 'application/json',
+              },
+              body: '{}',
+            });
+            expect(started.status).toBe(200);
+            expect(await started.json()).toEqual({ status: 'full', reason: 'full' });
+            const requests = [...f.daemon.requests];
+            async function unavailable(reason: 'full' | 'unconfigured' | 'stopped') {
+              const status = await fetch(`${f.base}/_platform/api/instance`, {
+                headers: { cookie: user.cookie },
+              });
+              expect(status.status).toBe(200);
+              expect(await status.json()).toEqual({ status: reason, reason });
+              const http = await gateway(user.cookie);
+              expect(http.status).toBe(503);
+              expect(await http.json()).toMatchObject({ reason });
+              const html = await fetch(`${f.base}/`, {
+                headers: { cookie: user.cookie, accept: 'text/html' },
+                redirect: 'manual',
+              });
+              expect(html.status).toBe(302);
+              expect(html.headers.get('location')).toBe('/_platform/wait');
+              await html.arrayBuffer();
+              const upgrade = await observeHttp(
+                new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+                  const outgoing = request(
+                    `${f.base}/ws`,
+                    {
+                      headers: {
+                        cookie: user.cookie,
+                        origin: f.config.publicUrl,
+                        connection: 'Upgrade',
+                        upgrade: 'websocket',
+                        'sec-websocket-version': '13',
+                        'sec-websocket-key': randomBytes(16).toString('base64'),
+                      },
+                    },
+                    (response) => {
+                      let body = '';
+                      response.setEncoding('utf8');
+                      response.on('data', (chunk: string) => {
+                        body += chunk;
+                      });
+                      response.on('error', reject);
+                      response.on('end', () => {
+                        resolve({ status: response.statusCode, body });
+                      });
+                    },
+                  );
+                  outgoing.on('upgrade', (_response, socket) => {
+                    socket.destroy();
+                    reject(new Error('Obsolete upstream accepted upgrade'));
+                  });
+                  outgoing.on('error', reject);
+                  outgoing.end();
+                }),
+              );
+              expect(upgrade.status).toBe(503);
+              expect(JSON.parse(upgrade.body)).toMatchObject({ reason });
+              expect(oldHits).toBe(1);
+              // Exercise the real timer's writeback boundary without scheduler-dependent sleeps.
+              await f.service.flushActivity();
+              expect(isDeepStrictEqual(row(sibling.id), beforeB)).toBe(true);
+              expect(
+                isDeepStrictEqual(f.service.resolveUpstream(sibling.id), siblingUpstream),
+              ).toBe(true);
+              expect(f.daemon.requests).toEqual(requests);
+            }
+            await unavailable('full');
+            writeSettings(f.database, { modelApiKey: '' });
+            await unavailable('unconfigured');
+            writeSettings(f.database, { modelApiKey: 'fixture-model-key' });
+            await unavailable('full');
+            writeSettings(f.database, { maxRunningInstances: 2 });
+            await unavailable('stopped');
+            // Defer B's intentional activity until every complete-row comparison has finished.
+            expect(await (await gateway(sibling.cookie)).text()).toBe('sibling');
+          },
+        );
+      },
+    );
+  } finally {
+    await f.close();
+  }
+});

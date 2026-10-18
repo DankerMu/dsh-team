@@ -73,20 +73,48 @@ function model(database: DatabaseHandle) {
   };
 }
 
-function observedFailure(
+function matchingReceipt(
   userId: string,
   row: RuntimeRow | undefined,
-  failures: Map<string, FailureIdentity & { pending?: boolean }>,
+  receipts: Map<string, FailureIdentity>,
+): boolean {
+  const identity = receipts.get(userId);
+  if (identity === undefined) return false;
+  if (matchesFailure(row, identity)) return true;
+  receipts.delete(userId);
+  return false;
+}
+
+function observedWork(
+  userId: string,
+  row: RuntimeRow | undefined,
+  failures: Map<string, FailureIdentity>,
+  absences: Map<string, FailureIdentity>,
   flights: ReadonlyMap<string, unknown>,
 ): InstanceState | undefined {
-  const failure = failures.get(userId);
-  if (failure === undefined) return undefined;
-  if (matchesFailure(row, failure)) {
-    if (failure.pending === true && flights.has(userId)) return state('starting');
-    throw new Error('Instance operation failed');
-  }
-  failures.delete(userId);
+  if (matchingReceipt(userId, row, failures)) throw new Error('Instance operation failed');
+  const excluded = matchingReceipt(userId, row, absences);
+  if (!excluded && row?.status === 'running') return state(complete(row) ? 'running' : 'error');
+  if (flights.has(userId)) return state('starting');
+  if (!excluded && (row?.status === 'starting' || row?.status === 'error'))
+    return state(row.status);
   return undefined;
+}
+
+function admissionState(
+  database: DatabaseHandle,
+  owner: ReturnType<typeof createOrchestrator>,
+  userId: string,
+): InstanceState {
+  const snapshot = model(database);
+  if (
+    !hasCompleteModelSettings({
+      ...snapshot.modelSettings,
+      apiKeyConfigured: snapshot.modelKey.trim() !== '',
+    })
+  )
+    return state('unconfigured');
+  return state(owner.hasCapacity(userId) ? 'stopped' : 'full');
 }
 
 function admitted(
@@ -101,7 +129,8 @@ function admitted(
 
 function recordFailure(
   select: { get(userId: string): RuntimeRow | undefined },
-  failures: Map<string, FailureIdentity & { pending?: boolean }>,
+  failures: Map<string, FailureIdentity>,
+  absences: ReadonlyMap<string, FailureIdentity>,
   userId: string,
   readinessIdentity: { containerId: string; startedAt: number | null } | undefined,
   fallbackIdentity: FailureIdentity,
@@ -113,9 +142,9 @@ function recordFailure(
       admission.resolve(state('error'));
       return;
     }
-    const absent = failures.get(userId);
+    const absent = absences.get(userId);
     if (absent !== undefined && matchesFailure(row, absent)) {
-      absent.pending = false;
+      failures.set(userId, absent);
       admission.reject(new Error('Instance operation failed'));
       return;
     }
@@ -130,7 +159,8 @@ function recordFailure(
       });
   } catch {
     // Record before releasing the flight, even when catch-time storage cannot be read.
-    if (fallbackIdentity.status !== 'running') failures.set(userId, fallbackIdentity);
+    if (fallbackIdentity.status !== 'running' || absences.get(userId) === fallbackIdentity)
+      failures.set(userId, fallbackIdentity);
   }
   admission.reject(new Error('Instance operation failed'));
 }
@@ -170,9 +200,9 @@ export function createInstanceService({
     { admission: Promise<InstanceState>; work: Promise<void>; controller: AbortController }
   >();
   const stops = new Map<string, Promise<void>>();
-  // Exceptional-work receipts only: no credentials, endpoints, capacity or lifecycle-state cache.
-  // A running-row receipt can originate only from the owner's verified-absence callback.
-  const failures = new Map<string, FailureIdentity & { pending?: boolean }>();
+  // Identity receipts only: no credentials, endpoints, capacity or lifecycle-state cache.
+  const failures = new Map<string, FailureIdentity>();
+  const absences = new Map<string, FailureIdentity>();
   const reconciliations = new Set<Promise<void>>();
   let closing = false;
   let shutdown: Promise<void> | undefined;
@@ -187,20 +217,10 @@ export function createInstanceService({
 
   function observed(userId: string, row: RuntimeRow | undefined): InstanceState {
     if (idleChecks.isRetiring(userId, row)) return state('starting');
-    const failure = observedFailure(userId, row, failures, flights);
-    if (failure !== undefined) return failure;
-    if (row?.status === 'running') return state(complete(row) ? 'running' : 'error');
-    if (flights.has(userId)) return state('starting');
-    if (row?.status === 'starting' || row?.status === 'error') return state(row.status);
-    const snapshot = model(database);
-    if (
-      !hasCompleteModelSettings({
-        ...snapshot.modelSettings,
-        apiKeyConfigured: snapshot.modelKey.trim() !== '',
-      })
-    )
-      return state('unconfigured');
-    return state(owner.hasCapacity(userId) ? 'stopped' : 'full');
+    return (
+      observedWork(userId, row, failures, absences, flights) ??
+      admissionState(database, owner, userId)
+    );
   }
   function status(userId: string): InstanceState {
     return observed(userId, select.get(userId));
@@ -215,15 +235,17 @@ export function createInstanceService({
     // Snapshot canonical settings for this admission; even running reuse retains model precedence.
     const snapshot = model(database);
     const initial = select.get(userId);
-    const previous = failures.get(userId);
-    // A retry is not evidence that a verified-absent running identity became live again.
-    if (previous?.status !== 'running' || !matchesFailure(initial, previous))
-      failures.delete(userId);
-    let failureIdentity: FailureIdentity = {
-      containerId: initial?.container_id,
-      startedAt: initial?.last_started_at,
-      status: initial?.status,
-    };
+    const previous = absences.get(userId);
+    // Explicit admission clears an error, never the independently retained absence fence.
+    failures.delete(userId);
+    let failureIdentity: FailureIdentity =
+      previous !== undefined && matchesFailure(initial, previous)
+        ? previous
+        : {
+            containerId: initial?.container_id,
+            startedAt: initial?.last_started_at,
+            status: initial?.status,
+          };
     const admission = Promise.withResolvers<InstanceState>();
     const flight = {
       admission: admission.promise,
@@ -242,13 +264,13 @@ export function createInstanceService({
           onVerifiedAbsent: (identity) => {
             if (matchesFailure(select.get(userId), identity)) {
               failureIdentity = identity;
-              failures.set(userId, { ...identity, pending: true });
+              absences.set(userId, identity);
             }
           },
         });
         flight.controller.signal.throwIfAborted();
-        if (result.outcome === 'running' && failures.get(userId) === previous)
-          failures.delete(userId);
+        if (result.outcome === 'running' && absences.get(userId) === previous)
+          absences.delete(userId);
         admission.resolve(state(result.outcome));
         if (result.outcome === 'starting') {
           failureIdentity = {
@@ -273,10 +295,16 @@ export function createInstanceService({
         }
       } catch {
         // Persisted lifecycle errors are ordinary states; unexpected failures remain safe HTTP500.
-        recordFailure(select, failures, userId, readinessIdentity, failureIdentity, admission);
+        recordFailure(
+          select,
+          failures,
+          absences,
+          userId,
+          readinessIdentity,
+          failureIdentity,
+          admission,
+        );
       } finally {
-        const absent = failures.get(userId);
-        if (absent !== undefined) absent.pending = false;
         if (flights.get(userId) === flight) flights.delete(userId);
       }
     })();
@@ -304,6 +332,7 @@ export function createInstanceService({
       // Always enqueue: canceled callers can settle before their actual owner tail.
       await owner.stopUserContainer({ userId, reason, allowMissingInstance: true });
       failures.delete(userId);
+      absences.delete(userId);
       if (afterStop !== undefined) await afterStop();
     })();
     stops.set(userId, work);
