@@ -12,9 +12,9 @@
 ## 3. Verification and release
 
 - [x] 3.1 Run focused unit/integration regression, type/lint/contract checks and build; update existing lifecycle documentation after runtime proof. Preserve exact commands, exits and evidence limitations.
-- [ ] 3.2 Complete four-seat independent high-risk review with the bounded fix gate; record critical orchestrator paths and exact SHA for the user-authorized Epic-end human line review, not a passed review.
-- [ ] 3.3 Run exact-head trusted target, standalone Compose and original full Docker discovery with independent owned-resource cleanup and unchanged host fences; publish owner evidence and require green CI.
-- [ ] 3.4 Merge through protected PR and archive the change with validated synchronized specs and required fresh archive acceptance.
+- [x] 3.2 Complete four-seat independent high-risk review with the bounded fix gate; record critical orchestrator paths and exact SHA for the user-authorized Epic-end human line review, not a passed review.
+- [x] 3.3 Run exact-head trusted target, standalone Compose and original full Docker discovery with independent owned-resource cleanup and unchanged host fences; publish owner evidence and require green CI.
+- [x] 3.4 Merge through protected PR and archive the change with validated synchronized specs and required fresh archive acceptance.
 
 ## Risk packs
 
@@ -40,3 +40,10 @@
 - That focused diagnostic pass selected1/4 cases and is not final-head acceptance. Final target4, full Docker, standalone Compose and required CI remain pending after repair review. The final local unit run passed2217/2217.
 - Fresh four-seat review found the same activity class still reachable through Docker A's unavailable requests and integration B's intermediate probes. A deterministic normal `service.flushActivity()` before the integration row assertion reproduced the remaining RED. Fix pass2 preserves every row field: Docker comparisons precede all gateway probes; integration proves B's complete row and exact running resolver tuple at every admission state, then exercises B's real HTTP route after the final comparison. It does not claim intermediate B HTTP requests were performed.
 - With that explicit flush retained, the combined instance/lifecycle integration run passed11/11 and `pnpm check:fast` passed. No production change was needed for either fixture repair. Final frozen-head Docker/Compose and protected CI remain mandatory.
+
+## Final implementation acceptance
+
+- PR277 merged as `90420a6a60d4576bbc549ba9daddb8d09e387614`; reviewed source head `614a534c9a741c7f9e4a74e7cdf61d11940bfad4` has four-seat round4 clean, target4/4, standalone Compose11/11 and original full Docker105/105 in32 files. Required CI39105956785 and all protected contexts passed. [Exact-head evidence and cleanup](https://github.com/DankerMu/dsh-team/pull/277#issuecomment-6249292841).
+- The earlier same-head600s image-build failure remains cause unknown. The user explicitly authorized one complete rerun; no test deadline changed or automatic repeat occurred. Its SSH channel exited255, while independently recovered exact-head process receipts prove every remote command closed0. Fresh owned-resource/process inventories were empty; original four workloads, daemon and bridge remained unchanged. Diagnostic source was restored by hash.
+- Critical source `platform/src/orchestrator/instance-service.ts`, blob `256d3e3135cb604234e68146277d9687ae81cc25`, remains queued for the user-authorized Epic-end human review; not performed or passed.
+- Task3.4 is completed by the archive promotion itself. Its checked record and synchronized spec ship atomically only after the archive PR's own exact-head Docker/Compose evidence and protected CI pass; implementation-head evidence is not reused for that different SHA.
