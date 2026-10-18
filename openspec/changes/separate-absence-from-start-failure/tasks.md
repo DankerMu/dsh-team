@@ -6,12 +6,12 @@
 ## 2. Separate absence from failure
 
 - [x] 2.1 Separate identity-fenced verified absence from exceptional receipts in the existing service; preserve current settings/capacity, flight ownership, readiness, error precedence and stop/shutdown behavior. Parent implements this single mapped slice inline under the governing delegation policy.
-- [ ] 2.2 Prove ordinary full HTTP/WS responses, HTML waiting redirect, zero old-upstream hits, unchanged B, live model/capacity observations and successful new-identity retry. Preserve failed-image, generic-inspect and changed-identity controls.
-- [ ] 2.3 Add the real Docker two-instance capacity-refusal/recovery scenario using exact invocation ownership and existing public lifecycle helpers; no provider requests or unrelated resource mutation.
+- [x] 2.2 Prove ordinary full HTTP/WS responses, HTML waiting redirect, zero old-upstream hits, unchanged B, live model/capacity observations and successful new-identity retry. Preserve failed-image, generic-inspect and changed-identity controls.
+- [x] 2.3 Add the real Docker two-instance capacity-refusal/recovery scenario using exact invocation ownership and existing public lifecycle helpers; no provider requests or unrelated resource mutation.
 
 ## 3. Verification and release
 
-- [ ] 3.1 Run focused unit/integration regression, type/lint/contract checks and build; update existing lifecycle documentation after runtime proof. Preserve exact commands, exits and evidence limitations.
+- [x] 3.1 Run focused unit/integration regression, type/lint/contract checks and build; update existing lifecycle documentation after runtime proof. Preserve exact commands, exits and evidence limitations.
 - [ ] 3.2 Complete four-seat independent high-risk review with the bounded fix gate; record critical orchestrator paths and exact SHA for the user-authorized Epic-end human line review, not a passed review.
 - [ ] 3.3 Run exact-head trusted target, standalone Compose and original full Docker discovery with independent owned-resource cleanup and unchanged host fences; publish owner evidence and require green CI.
 - [ ] 3.4 Merge through protected PR and archive the change with validated synchronized specs and required fresh archive acceptance.
@@ -35,3 +35,6 @@
 - Semantic RED on base `5ed9374a5b679d00c480a054cce247a17c75ea44`: authenticated POST200/full passed; subsequent GET returned500 instead of200. The focused diagnostic selected one case, not a full acceptance run.
 - After separation: `pnpm test:integration platform/test/instance.integration.test.ts platform/test/instance-lifecycle.integration.test.ts` passed11/11, including real HTTP/WS responses and zero additional hits at the obsolete upstream across full/unconfigured/stopped observations.
 - `pnpm check:fast`, `pnpm build`, `pnpm contract:check` and the initial full unit run2216/2216 passed. Added catch-time absence preservation and final Docker evidence are tracked separately; no final acceptance claimed here.
+- Four independent technical seats reviewed `50c12d4eaa51223bfa6b4a4dceaed8527ac6f86a` without actionable findings. Trusted target execution then exposed a fixture baseline race, not a service failure: all row fields were preserved except B's legitimate `last_activity_at` after the fixture's own pre-baseline gateway request.
+- The names-only diagnostic isolated that field without printing row values. Gateway usability checks now follow exact unchanged-row assertions; no field is omitted and no timer, sleep, database rewrite or production behavior was changed. The same real Docker scenario then passed with new ready identity, new credential, preserved volumes and fresh endpoint binding. Both failing and passing runs left all owned inventories empty and the daemon, bridge and original four workloads unchanged.
+- That focused diagnostic pass selected1/4 cases and is not final-head acceptance. Final target4, full Docker, standalone Compose and required CI remain pending after repair review. The final local unit run passed2217/2217.

@@ -440,8 +440,9 @@ it('keeps an absent running identity unavailable after full refusal and readies 
             reason: 'starting',
           });
           await f.wait(user.cookie, 'running');
-          await readyGateway(f.base, user.cookie);
         }
+        // Readiness already proves authenticated upstream200. Probe gateway usability only after
+        // the row comparison below: intentional gateway activity otherwise races its 1s flush.
         const row = (id: string) =>
           record(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(id));
         const oldA = row(a.id);
