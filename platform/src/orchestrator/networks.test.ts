@@ -306,7 +306,7 @@ it('readiness failure retains the confirmed stopped container but disconnects it
     owner.waitForUserContainerReady({ userId: START_USER, authority: input.config.authority }),
   ).rejects.toThrow('owned network removed');
 
-  expect(fixture.daemon.containers.get(START_CONTAINER)?.State).toEqual({ Running: false });
+  expect(fixture.daemon.containers.get(START_CONTAINER)?.State.Running).toBe(false);
   expect(fixture.daemon.containers.get(START_CONTAINER)?.NetworkSettings.Networks).toEqual({});
   expect(networks.has(START_NETWORK)).toBe(false);
   expect(database.prepare('SELECT status, container_id, dsh_cookie FROM instances').get()).toEqual({
@@ -342,9 +342,7 @@ it.each(['stop', 'disconnect', 'delete'] as const)(
     );
 
     expect(networks.has(START_NETWORK)).toBe(true);
-    expect(fixture.daemon.containers.get(START_CONTAINER)?.State).toEqual({
-      Running: kind === 'stop',
-    });
+    expect(fixture.daemon.containers.get(START_CONTAINER)?.State.Running).toBe(kind === 'stop');
     expect(database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'error' });
     expect(
       database.prepare("SELECT * FROM audit_events WHERE event_type = 'instance.stopped'").all(),

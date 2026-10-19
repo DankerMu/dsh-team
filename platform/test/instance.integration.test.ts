@@ -289,6 +289,66 @@ it('reports unexpected startup failure safely and exposes persisted errors witho
   }
 });
 
+it('projects a durable create quarantine through HTTP and refuses false cleanup until identity is verified', async () => {
+  const f = await fixture();
+  try {
+    const user = await registerInstanceUser(f.base, f.config.publicUrl, 'creation@example.test');
+    writeSettings(f.database, {
+      modelBaseUrl: 'http://model.invalid/v1',
+      modelApiKey: 'creation-private-key',
+      models: [{ name: 'office-model' }],
+      defaultModel: 'office-model',
+    });
+    f.replyWith((accepted, reply) =>
+      accepted.path === `/containers/create?name=dsh-team-u-${user.id}`
+        ? { status: 500, document: { message: 'private-create-diagnostic' } }
+        : reply,
+    );
+    const response = await fetch(`${f.base}/_platform/api/instance/start`, {
+      method: 'POST',
+      headers: {
+        cookie: user.cookie,
+        origin: f.config.publicUrl,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    expect(response.status).toBe(500);
+    const failure = await response.json();
+    const candidate = f.daemon.containers.get(START_CONTAINER);
+    if (candidate === undefined) throw new Error('Expected retained creation');
+    const labels = candidate.Config.Labels;
+    candidate.Config.Labels = { 'dsh-team.user': user.id, 'dsh-team.creation-attempt': 'foreign' };
+    f.replyWith(undefined);
+
+    await expect(f.service.stop(user.id, 'admin')).rejects.toThrow();
+    const status = await fetch(`${f.base}/_platform/api/instance`, {
+      headers: { cookie: user.cookie },
+    });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({ status: 'error', reason: 'error' });
+    const gateway = await fetch(`${f.base}/`, {
+      headers: { cookie: user.cookie, accept: 'application/json' },
+    });
+    expect(gateway.status).toBe(503);
+    expect(await gateway.json()).toMatchObject({ reason: 'error' });
+    expect(f.daemon.containers.has(START_CONTAINER)).toBe(true);
+    expect(
+      f.database.prepare('SELECT container_id FROM creation_attempts WHERE user_id=?').get(user.id),
+    ).toEqual({ container_id: null });
+    candidate.Config.Labels = labels;
+    await f.owner.reconcile();
+    expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+    expect(f.database.prepare('SELECT * FROM creation_attempts').all()).toEqual([]);
+    expect(f.service.status(user.id)).toEqual({ status: 'error', reason: 'error' });
+    expect(JSON.stringify(failure) + f.lines.join('')).not.toMatch(
+      /creation-private-key|private-create-diagnostic/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
 it.each([false, true])(
   'projects completed readiness failure truthfully with error persistence blocked=%s',
   async (blocked) => {

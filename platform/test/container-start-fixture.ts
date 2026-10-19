@@ -58,7 +58,7 @@ export interface Container {
   Config: Record<string, unknown>;
   HostConfig?: Record<string, unknown>;
   Mounts?: unknown;
-  State: { Running: boolean };
+  State: { Running: boolean; Status?: string; StartedAt?: string };
   NetworkSettings: { Ports: unknown; Networks?: Record<string, unknown> };
 }
 
@@ -311,7 +311,7 @@ export function startupDaemon(): StartupDaemon {
       Image: body.Image,
       Config: body,
       HostConfig: networkObject(body.HostConfig),
-      State: { Running: false },
+      State: { Running: false, Status: 'created', StartedAt: '0001-01-01T00:00:00Z' },
       NetworkSettings: { Ports: publishedPorts(body) },
     };
     if (name.startsWith('dsh-team-restore-')) {
@@ -349,10 +349,13 @@ export function startupDaemon(): StartupDaemon {
     if (path.endsWith('/json')) return { status: 200, document: container };
     if (path.startsWith(`/containers/${container.Id}/stop?`)) {
       container.State.Running = false;
+      container.State.Status = 'exited';
       return { status: 204 };
     }
     if (path.endsWith('/start')) {
       container.State.Running = true;
+      container.State.Status = 'running';
+      container.State.StartedAt = '2026-10-01T00:00:00Z';
       container.NetworkSettings.Networks = networkState.attach(container, container.Config);
       return { status: 204 };
     }
@@ -682,6 +685,9 @@ export async function startupUnixOwnerFixture(options: UnixStartupOptions) {
     daemon,
     owner,
     input,
+    dropConnections: () => {
+      server.closeAllConnections();
+    },
     replyWith(callback: typeof accepted) {
       accepted = callback;
     },

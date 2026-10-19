@@ -342,7 +342,7 @@ describe('platform startup on a real database file', () => {
       expect(readSettings(reopened).idleMinutes).toBe(15);
       expect(
         reopened.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-      ).toEqual([{ version: 1 }, { version: 2 }]);
+      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     } finally {
       reopened.close();
     }
@@ -357,7 +357,7 @@ it('forward migration preserves historical instance data and leaves unknown immu
     new URL('../src/db/migrations/1-initial.sql', import.meta.url),
     join(original, '1-initial.sql'),
   );
-  const database = openDatabase(join(root, 'platform.db'));
+  let database = openDatabase(join(root, 'platform.db'));
   try {
     applyMigrations(database, original);
     database
@@ -371,9 +371,51 @@ it('forward migration preserves historical instance data and leaves unknown immu
       VALUES ('abcdefghijkl', 'starting', ?, 'historical:mutable', 'historical-credential', '127.0.0.1', 12345, 7)`,
       )
       .run('b'.repeat(64));
+    database
+      .prepare(
+        "INSERT INTO platform_sessions VALUES ('historical-token-hash', 'abcdefghijkl', 2, 3)",
+      )
+      .run();
+    database.prepare("INSERT INTO settings VALUES ('historical-setting', 'preserved')").run();
+    database
+      .prepare(
+        "INSERT INTO audit_events(created_at,event_type,details,target) VALUES (4,'instance.created','{}','abcdefghijkl')",
+      )
+      .run();
+    const historical = {
+      users: database.prepare('SELECT * FROM users').all(),
+      sessions: database.prepare('SELECT * FROM platform_sessions').all(),
+      settings: database.prepare('SELECT * FROM settings').all(),
+      audits: database.prepare('SELECT * FROM audit_events').all(),
+    };
 
     applyMigrations(database);
     applyMigrations(database);
+    database
+      .prepare(
+        `INSERT INTO creation_attempts
+      (user_id,attempt_id,account_created_at,image_id,image_tag,network_id,network_subnet,
+       overlay_path,upstream_mode,prior_instance_hash,created_at)
+      VALUES ('abcdefghijkl','pending-attempt',1,?,'captured:image',?,'172.30.0.0/28',
+              '/managed/captured.yml','network',?,5)`,
+      )
+      .run(`sha256:${'a'.repeat(64)}`, 'b'.repeat(64), 'c'.repeat(64));
+    database.close();
+    database = openDatabase(join(root, 'platform.db'));
+    applyMigrations(database);
+
+    expect({
+      users: database.prepare('SELECT * FROM users').all(),
+      sessions: database.prepare('SELECT * FROM platform_sessions').all(),
+      settings: database.prepare('SELECT * FROM settings').all(),
+      audits: database.prepare('SELECT * FROM audit_events').all(),
+    }).toEqual(historical);
+    expect(database.prepare('SELECT attempt_id,container_id FROM creation_attempts').get()).toEqual(
+      {
+        attempt_id: 'pending-attempt',
+        container_id: null,
+      },
+    );
 
     expect(database.prepare('SELECT * FROM instances').get()).toMatchObject({
       user_id: 'abcdefghijkl',
@@ -388,7 +430,7 @@ it('forward migration preserves historical instance data and leaves unknown immu
     });
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
   } finally {
     database.close();
     rmSync(root, { recursive: true, force: true });

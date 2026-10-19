@@ -16,6 +16,7 @@ import type { AbsentInstanceIdentity } from './identity.ts';
 import { attachedNetwork, validateUserNetwork } from './networks.ts';
 import { upstreamHost, upstreamPort } from './transport.ts';
 import type { TransportContext } from './transport.ts';
+import { readCreationAttempt } from './creation-attempt.ts';
 
 export interface StartUserContainerInput {
   readonly client: DockerClient;
@@ -112,6 +113,7 @@ export async function reuseCurrentContainer(
   missing: () => void,
   retry: (instance: Record<string, unknown>) => void,
 ): Promise<StartResult | undefined> {
+  if (readCreationAttempt(input) !== undefined) return undefined;
   const selected: unknown = input.database
     .prepare('SELECT * FROM instances WHERE user_id = ?')
     .get(input.userId);

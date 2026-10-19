@@ -7,6 +7,7 @@ import { IdleChecks, complete } from './idle.ts';
 import type { DockerClient } from './client.ts';
 import { createOrchestrator } from './orchestrator.ts';
 import type { GetUserActivity, RuntimeRow } from './idle.ts';
+import { readCreationAttempt } from './creation-attempt.ts';
 
 type InstanceStatus = 'running' | 'stopped' | 'starting' | 'full' | 'error' | 'unconfigured';
 interface InstanceState {
@@ -85,13 +86,29 @@ function matchingReceipt(
   return false;
 }
 
+function hasPendingWork(
+  userId: string,
+  flights: ReadonlyMap<string, unknown>,
+  stops: ReadonlyMap<string, unknown>,
+  database: DatabaseHandle,
+): boolean {
+  return (
+    flights.has(userId) ||
+    stops.has(userId) ||
+    readCreationAttempt({ database, userId }) !== undefined
+  );
+}
+
 function observedWork(
   userId: string,
   row: RuntimeRow | undefined,
   failures: Map<string, FailureIdentity>,
   absences: Map<string, FailureIdentity>,
   flights: ReadonlyMap<string, unknown>,
+  database: DatabaseHandle,
 ): InstanceState | undefined {
+  if (readCreationAttempt({ database, userId }) !== undefined)
+    return state(flights.has(userId) ? 'starting' : 'error');
   if (matchingReceipt(userId, row, failures)) throw new Error('Instance operation failed');
   const excluded = matchingReceipt(userId, row, absences);
   if (!excluded && row?.status === 'running') return state(complete(row) ? 'running' : 'error');
@@ -211,14 +228,14 @@ export function createInstanceService({
     config,
     owner,
     row: (userId) => select.get(userId),
-    hasFlight: (userId) => flights.has(userId) || stops.has(userId),
+    hasFlight: (userId) => hasPendingWork(userId, flights, stops, database),
     isClosing: () => closing,
   });
 
   function observed(userId: string, row: RuntimeRow | undefined): InstanceState {
     if (idleChecks.isRetiring(userId, row)) return state('starting');
     return (
-      observedWork(userId, row, failures, absences, flights) ??
+      observedWork(userId, row, failures, absences, flights, database) ??
       admissionState(database, owner, userId)
     );
   }

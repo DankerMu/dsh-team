@@ -263,6 +263,7 @@ describe('initial schema', () => {
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([
       { version: 1 },
       { version: 2 },
+      { version: 3 },
     ]);
   });
 

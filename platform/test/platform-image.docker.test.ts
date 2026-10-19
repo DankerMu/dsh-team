@@ -37,7 +37,7 @@ database = openDatabase(path);
 try {
   assert.equal(readSettings(database).maxRunningInstances, 7);
   assert.deepEqual(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row => row.name),
-    ['audit_events', 'instances', 'platform_sessions', 'schema_migrations', 'settings', 'users']);
+    ['audit_events', 'creation_attempts', 'instances', 'platform_sessions', 'schema_migrations', 'settings', 'users']);
 } finally { database.close(); }
 const require = createRequire('/app/platform/package.json');
 const nativeRoot = dirname(require.resolve('better-sqlite3/package.json'));

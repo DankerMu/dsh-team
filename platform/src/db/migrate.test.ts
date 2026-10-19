@@ -100,6 +100,49 @@ describe('applyMigrations', () => {
     }
   });
 
+  it('retains one durable creation attempt per account across repeated migration', () => {
+    applyMigrations(db);
+    db.prepare(
+      "INSERT INTO users VALUES ('abcdefghijkl', 'owner@example.test', 'unused', 'employee', 'active', 1)",
+    ).run();
+    const insert = db.prepare(`INSERT INTO creation_attempts
+      (user_id, attempt_id, account_created_at, image_id, image_tag, network_id,
+       network_subnet, overlay_path, upstream_mode, prior_instance_hash, created_at)
+      VALUES (?, ?, 1, ?, 'user:local', ?, '172.30.0.0/28', '/managed/a.yml',
+              'network', ?, 2)`);
+    insert.run(
+      'abcdefghijkl',
+      'attempt-a',
+      `sha256:${'a'.repeat(64)}`,
+      'b'.repeat(64),
+      'c'.repeat(64),
+    );
+
+    applyMigrations(db);
+
+    expect(
+      db.prepare('SELECT user_id,attempt_id,container_id FROM creation_attempts').all(),
+    ).toEqual([{ user_id: 'abcdefghijkl', attempt_id: 'attempt-a', container_id: null }]);
+    expect(() =>
+      insert.run(
+        'abcdefghijkl',
+        'attempt-b',
+        `sha256:${'a'.repeat(64)}`,
+        'b'.repeat(64),
+        'c'.repeat(64),
+      ),
+    ).toThrow();
+    expect(() =>
+      insert.run(
+        'mnopqrstuvwx',
+        'attempt-b',
+        `sha256:${'a'.repeat(64)}`,
+        'b'.repeat(64),
+        'c'.repeat(64),
+      ),
+    ).toThrow();
+  });
+
   it('applies numbered SQL in numeric order and records the ledger', () => {
     dir = writeSqlDir({
       '10-second.sql': 'INSERT INTO ordered (n) VALUES (10);',

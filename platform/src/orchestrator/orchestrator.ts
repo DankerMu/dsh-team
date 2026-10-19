@@ -1,3 +1,4 @@
+import { validateStopReason } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
@@ -16,6 +17,7 @@ import { discoverReconciliationNetworks, reconcileOrphanNetwork } from './networ
 import { restoreUserProfiles } from './profile-restore.ts';
 import type { RestoreUserProfilesInput } from './profile-restore.ts';
 import { HomeHelperUnconfirmedError } from './home-helper.ts';
+import { recoverCreationAttempt } from './creation-attempt.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -257,6 +259,35 @@ function reserveInstanceCapacity(
   return true;
 }
 
+async function retireScheduled(
+  input: RetirementInput & Pick<StopUserContainerInput, 'allowMissingInstance'>,
+  retire: (input: RetirementInput) => Promise<boolean>,
+  assertNetworkConfirmed: (userId: string) => void,
+): Promise<void> {
+  const { database, userId } = input;
+  try {
+    validateStopReason(input.reason);
+    if (
+      input.reason === 'disabled' &&
+      database.prepare("SELECT 1 FROM users WHERE id=? AND status='disabled'").get(userId) ===
+        undefined
+    )
+      throw new Error();
+    await recoverCreationAttempt(input);
+  } catch {
+    throw new Error('User container retirement failed');
+  }
+  // Only the original FIFO slot can confirm a no-row target after canceled creation settles.
+  if (
+    input.allowMissingInstance === true &&
+    database.prepare('SELECT 1 FROM instances WHERE user_id=?').get(userId) === undefined
+  ) {
+    assertNetworkConfirmed(userId);
+    return;
+  }
+  await retire(input);
+}
+
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
@@ -348,6 +379,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   async function reconcileConfirmed(input: ReconciliationInput): Promise<void> {
     // Automatic correction must not turn an unresolved create into name-based orphan cleanup.
     assertNetworkConfirmed(input.userId);
+    await recoverCreationAttempt(input);
     await reconcileUser(input);
   }
 
@@ -454,27 +486,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     stopUserContainer: (input: StopUserContainerInput) =>
       schedule(
         input,
-        async (captured) => {
-          if (
-            captured.reason === 'disabled' &&
-            database
-              .prepare("SELECT 1 FROM users WHERE id=? AND status='disabled'")
-              .get(captured.userId) === undefined
-          )
-            throw new Error('User container retirement failed');
-          // Service cancellation may reject a queued caller before its original slot settles.
-          // Only this FIFO slot can prove that a never-started target still has no instance.
-          if (
-            captured.allowMissingInstance === true &&
-            database.prepare('SELECT 1 FROM instances WHERE user_id=?').get(captured.userId) ===
-              undefined
-          ) {
-            // No index cannot confirm cleanup of an owner-quarantined ambiguous network create.
-            assertNetworkConfirmed(captured.userId);
-            return;
-          }
-          await retire(captured);
-        },
+        (captured) => retireScheduled(captured, retire, assertNetworkConfirmed),
         'User container retirement failed',
       ),
   };
