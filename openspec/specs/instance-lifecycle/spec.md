@@ -484,3 +484,83 @@ The instance service SHALL retain an identity-fenced routing exclusion after the
 - **WHEN** the matching identity is observed after the failed flight
 - **THEN** status returns the existing sanitized500 and the gateway returns the existing sanitized502 instead of an ordinary admission state
 - **AND** a generic inspection failure alone does not invalidate an otherwise healthy running identity, and a different trusted current identity is not poisoned by the old failure receipt
+
+### Requirement: Durable recovery of ambiguous container creation
+
+Before submitting final user-container creation, the platform SHALL durably bind that attempt to nonsecret provenance. If its response or subsequent inspection is interrupted, the platform SHALL retain an explicit non-routable failure until the attempt is safely resolved. A fresh owner after platform restart SHALL automatically recover a matching never-started attempt through awaited reconciliation, preserving the user's volumes and unrelated resources. Recovery SHALL NOT adopt or start the abandoned container; employee startup remains explicit.
+
+#### Scenario: Lost create response survives platform restart
+
+- **WHEN** the Engine creates the requested container but the platform loses its response before committing an instance row, then the platform restarts
+- **THEN** the fresh owner uses persisted attempt provenance to verify and remove only that exact never-started container and its verified captured bridge, retaining both data volumes
+- **AND** the resulting safe error state permits an explicit retry using those same volumes, without manual fixture deletion or database repair
+
+#### Scenario: Inspection or persistence fails after a learned identity
+
+- **WHEN** creation returns an immutable identity but post-create inspection or the instance/audit transaction fails
+- **THEN** the durable attempt retains the learned identity and only an unchanged matching attempt can be recovered
+- **AND** a lost deletion reply, later network failure or failed final transaction remains recoverable after another owner restart without deleting unrelated resources or duplicating successful audits
+
+#### Scenario: Cancellation and deadline preserve ownership
+
+- **WHEN** a startup deadline, service cancellation or transport failure interrupts submitted creation while another same-user operation is queued
+- **THEN** the original queue retains actual work ownership through settlement, no abandoned container is started, and stop/disable cannot falsely acknowledge complete cleanup
+- **AND** other users remain independent and shutdown waits for actual owned work before closing SQLite
+
+#### Scenario: Identity mismatch remains quarantined
+
+- **WHEN** a candidate lacks the matching attempt nonce, changes immutable ID/image/account or expected mounts/network, is running or previously started, or the current account/instance snapshot changes
+- **THEN** recovery fails explicitly without deleting or renaming the candidate, its volumes, unrelated endpoints or the durable attempt
+- **AND** canonical-name and user-label matches alone never grant recovery authority; historical unindexed resources without durable provenance are not adopted
+
+#### Scenario: Unknown absence is not cleanup proof
+
+- **WHEN** a submitted attempt has no learned container ID and no candidate is currently observable
+- **THEN** the platform retains explicit uncertainty rather than treating a404 or elapsed time as proof that the Engine cannot finish the submission later
+- **AND** subsequent observation of the matching never-started resource enables the same identity-bound recovery path
+
+#### Scenario: Durable state never exposes secrets or stale routing
+
+- **WHEN** a failed attempt is observed through status, gateway, stop or a new owner
+- **THEN** it is not reported as an ordinary stopped instance or routed to an obsolete endpoint, and no credential, raw inspect document or environment content is exposed or stored in the attempt
+- **AND** normal successful instance creation consumes its attempt atomically with the existing creation audit, while verified failure recovery records only the existing safe startup-failure audit and no fabricated stopped audit
+
+#### Scenario: Classified absence quarantine preserves sibling availability
+
+- **WHEN** startup reconciliation verifies an unchanged valid attempt with no learned container identity, a definite absent canonical container and the captured network state
+- **THEN** it retains that user's durable error/quarantine and bridge without acknowledging cleanup, completes validation of other users and allows the platform to serve verified healthy siblings
+- **AND** identity/topology conflicts, malformed provenance, database failures and failed Docker discovery or queries still prevent startup rather than being swallowed as quarantine
+
+#### Scenario: Missing captured bridge is not classified absence quarantine
+
+- **WHEN** an unresolved attempt has no learned container ID and both the canonical container and captured bridge are definitively absent
+- **THEN** reconciliation fails before listening, retains the durable attempt and issues no destructive mutation
+- **AND** nonfatal classification requires a still-present matching captured bridge; known-ID partial-cleanup recovery retains its existing rules
+
+#### Scenario: Later attempts cannot bypass the orphan-network fence
+
+- **WHEN** another user's startup introduces an unresolved attempt after reconciliation captures its initial user inventory but before the queued orphan-network operation
+- **THEN** that operation rechecks current durable ownership inside the user's FIFO and cannot delete or disconnect the attempt's bridge using absence-only authority
+- **AND** a subsequently observed matching never-started candidate remains recoverable by the canonical recovery path
+
+#### Scenario: Activity does not invalidate retained creation authority
+
+- **WHEN** authenticated gateway traffic records activity while an interrupted attempt retains a prior instance snapshot
+- **THEN** ordinary and shutdown activity flushing defer persistence without marking the coalesced observation clean or changing the authoritative row
+- **AND** recovery remains possible after database reopen, genuinely changed identities still fail closed, and normal throttled activity persistence resumes after receipt resolution
+
+### Requirement: Bounded build-failure evidence during lifecycle verification
+
+The verification Docker boundary SHALL retain nonsecret process termination facts for failed image builds without exposing raw output or weakening process settlement and resource ownership. Progress observations SHALL be explicitly distinguished from causal conclusions. This user-authorized prerequisite SHALL NOT change deadlines, introduce retries or modify host configuration.
+
+#### Scenario: Failed build evidence survives redaction
+
+- **WHEN** an image-build child terminates by observed deadline, output limit, spawn failure, signal or nonzero exit
+- **THEN** the emitted failure retains the corresponding bounded classification, measured elapsed time, configured deadline and safe status fields only after child closure
+- **AND** secret-bearing stdout, stderr, errors and unrecognized progress descriptions do not escape; unknown termination remains unknown
+
+#### Scenario: Build progress is not root-cause evidence
+
+- **WHEN** structural build progress is observed, interleaved, incomplete or absent
+- **THEN** only allowlisted fixed phases/instructions and bounded numeric identities may survive as last-observed progress, never arbitrary vertex descriptions or a claim that the last vertex caused failure
+- **AND** the historical failure without such metadata remains unclassified even after a later passing acceptance run

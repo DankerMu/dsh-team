@@ -8,7 +8,7 @@
 ## 2. Identity-bound recovery
 
 - [x] 2.1 Persist attempt before final create, retain learned identity and consume atomically with instance/audit commit; prove failure rollback, no credentials in durable provenance, and both existing wire RED cases through the chosen recovery behavior.
-- [ ] 2.2 Implement one never-started exact-attempt recovery path for explicit start/stop and fresh-owner reconciliation; prove nonce/ID/image/account/row/mount/network fences, no name-only adoption, known-ID partial-cleanup resumption, unknown absence quarantine and retained volume bytes.
+- [x] 2.2 Implement one never-started exact-attempt recovery path for explicit start/stop and fresh-owner reconciliation; prove nonce/ID/image/account/row/mount/network fences, no name-only adoption, known-ID partial-cleanup resumption, unknown absence quarantine and retained volume bytes.
 - [x] 2.3 Integrate durable status/routing exclusion and current-authority stop/disable/enable semantics; prove deadline, transport, service cancellation, FIFO/shutdown and sibling preservation through the existing real-wire service/HTTP seams.
 - [x] 2.4 Update existing deployment recovery guidance and migration documentation after source/dist file-database smoke proves restart recovery, no stale routing and no secret output.
 - [x] 2.5 Close round1 durable-state sibling findings: retain/coalesce activity without changing the receipt's prior row, recheck attempts inside orphan-network FIFO, and implement the explicitly user-approved classified-absence quarantine result. Prove normal/shutdown activity RED→GREEN and resume, deterministic later-attempt interleaving, actual production-main healthy-sibling availability and fatal unrelated-discovery control.
@@ -16,10 +16,12 @@
 
 ## 3. Real consumer proof and delivery
 
-- [ ] 3.1 Add real Engine fault injection around applied create and inspection; independent exact-ID observation, reconstructed owner/file database, production recovery/retry, original home/work sentinels and sibling snapshots pass in both upstream modes under root `pnpm test:docker`.
-- [ ] 3.2 Run canonical local checks, four-seat review and exact-reviewed-head trusted standalone Compose plus original full Docker; retain independent cleanup/host-fence evidence, green protected CI, merge, sync/archive and observe main CI.
-- [ ] 3.3 Deliver the user-authorized bounded build-diagnostic prerequisite after real Compose build failure: semantic redaction RED/GREEN, actual child settlement/failure taxonomy and malformed/interleaved/secret-bearing progress controls, final emitted-output smoke, unchanged recipe/deadlines/cleanup and one authorized additional review pass. Historical cause remains UNKNOWN.
-- [ ] 3.4 Close the user-authorized narrow sanitizer finding SEC-R5-1: safe optional code observation and a trusted fallback without retaining caller error objects; four sync/async thrown-error/result-getter regressions RED→GREEN, original taxonomy/closure/final-output smoke preserved, and fresh review before runtime.
+- [x] 3.1 Add real Engine fault injection around applied create and inspection; independent exact-ID observation, reconstructed owner/file database, production recovery/retry, original home/work sentinels and sibling snapshots pass in both upstream modes under root `pnpm test:docker`.
+- [x] 3.2 Run canonical local checks, four-seat review and exact-reviewed-head trusted standalone Compose plus original full Docker; retain independent cleanup/host-fence evidence, green protected CI, merge, sync/archive and observe implementation main CI. PR285 merged as77221f46c87e929981c65d0357ea48b29dbde37d; main CI39224307777 passed with explicit tree-equivalent Docker evidence. This follow-up performs sync/archive; its own runtime, protected merge and main CI remain delivery gates, not preclaimed results.
+- [x] 3.3 Deliver the user-authorized bounded build-diagnostic prerequisite after real Compose build failure: semantic redaction RED/GREEN, actual child settlement/failure taxonomy and malformed/interleaved/secret-bearing progress controls, final emitted-output smoke, unchanged recipe/deadlines/cleanup and one authorized additional review pass. Historical cause remains UNKNOWN.
+- [x] 3.4 Close the user-authorized narrow sanitizer finding SEC-R5-1: safe optional code observation and a trusted fallback without retaining caller error objects; four sync/async thrown-error/result-getter regressions RED→GREEN, original taxonomy/closure/final-output smoke preserved, and fresh review before runtime.
+
+Delivery evidence: final reviewed implementation head6fa7e8c1ecf9114b518487129f3af0dfddb11174 passed standalone Compose11/11 and original full Docker108/108 across33files, with independent empty owned-resource inventories and unchanged retained host fence. Four-seat round10 was clean after explicitly authorized extensions; exact-head CI39218083693 passed. Durable sanitized runtime evidence: https://github.com/DankerMu/dsh-team/pull/285#issuecomment-6263082040. Critical-path human line review remains explicitly deferred and unpassed.
 
 ## Risk pack mapping
 
