@@ -35,3 +35,13 @@ First migrate/reopen and establish write-before-create/atomic-consumption eviden
 ## Migration and containment
 
 Apply migration3 through the existing ledger; prove versions1/2 historical rows/settings/audits unchanged and source/dist reopen. Deploy only after prior owner drainage. Rollback must not run an older lifecycle owner while unresolved attempts exist; retain database/receipts and use the reviewed version to settle them first. No destructive downgrade migration or compatibility shim.
+
+## Authorized build-diagnostic prerequisite
+
+The real Compose run at `83ee34e3ae71fdc7da2c30607dc3a1910d351888` failed at platform image build with null status and only the generic redacted failure. Its607757ms case duration against a600000ms command deadline does not establish a root cause. The user authorized bounded diagnostics and one additional fix/review pass, not an unchanged blind rerun.
+
+- Extend the existing Docker command redaction owner for build failures only. Preserve child closure, byte limits, no-input behavior, credential filtering, exact absence recognition and every original deadline.
+- Emit fixed-schema scalar facts: measured elapsed time, configured deadline, numeric exit status, allowlisted signal, and termination classification derived from actual process observations (`deadline`, `output-limit`, `spawn-failure`, `signal`, `exit`, `unknown`). Never infer deadline from elapsed time or null status.
+- Build progress is an optional last-observed structural stderr marker, not a stalled vertex or cause: retain only bounded numeric vertex/step identities and fixed phase/instruction/status enums. BuildKit concurrency and unrecognized/truncated output remain explicit limits. Never retain descriptions, RUN bodies, paths, URLs, arguments, environment or raw error/output excerpts. No BuildKit history access.
+- The final emitted failure must carry those safe facts; the diagnostic is not resource cleanup authority. Both synchronous and asynchronous build paths retain the same redaction. Other command failures keep their existing contract.
+- Qualify using secret-bearing synthetic results and actual child-process timeout, output-limit, spawn/signal/nonzero-exit and successful closure. Preserve existing lifecycle/cleanup tests. Run a throwaway final-output smoke, canonical checks, full-diff review and fresh exact-head Compose/full Docker. No retrospective cause claim even if the new run passes.

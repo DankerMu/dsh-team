@@ -63,3 +63,19 @@ Before submitting final user-container creation, the platform SHALL durably bind
 - **WHEN** authenticated gateway traffic records activity while an interrupted attempt retains a prior instance snapshot
 - **THEN** ordinary and shutdown activity flushing defer persistence without marking the coalesced observation clean or changing the authoritative row
 - **AND** recovery remains possible after database reopen, genuinely changed identities still fail closed, and normal throttled activity persistence resumes after receipt resolution
+
+### Requirement: Bounded build-failure evidence during lifecycle verification
+
+The verification Docker boundary SHALL retain nonsecret process termination facts for failed image builds without exposing raw output or weakening process settlement and resource ownership. Progress observations SHALL be explicitly distinguished from causal conclusions. This user-authorized prerequisite SHALL NOT change deadlines, introduce retries or modify host configuration.
+
+#### Scenario: Failed build evidence survives redaction
+
+- **WHEN** an image-build child terminates by observed deadline, output limit, spawn failure, signal or nonzero exit
+- **THEN** the emitted failure retains the corresponding bounded classification, measured elapsed time, configured deadline and safe status fields only after child closure
+- **AND** secret-bearing stdout, stderr, errors and unrecognized progress descriptions do not escape; unknown termination remains unknown
+
+#### Scenario: Build progress is not root-cause evidence
+
+- **WHEN** structural build progress is observed, interleaved, incomplete or absent
+- **THEN** only allowlisted fixed phases/instructions and bounded numeric identities may survive as last-observed progress, never arbitrary vertex descriptions or a claim that the last vertex caused failure
+- **AND** the historical failure without such metadata remains unclassified even after a later passing acceptance run

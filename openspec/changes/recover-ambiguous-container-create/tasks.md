@@ -18,6 +18,7 @@
 
 - [ ] 3.1 Add real Engine fault injection around applied create and inspection; independent exact-ID observation, reconstructed owner/file database, production recovery/retry, original home/work sentinels and sibling snapshots pass in both upstream modes under root `pnpm test:docker`.
 - [ ] 3.2 Run canonical local checks, four-seat review and exact-reviewed-head trusted standalone Compose plus original full Docker; retain independent cleanup/host-fence evidence, green protected CI, merge, sync/archive and observe main CI.
+- [ ] 3.3 Deliver the user-authorized bounded build-diagnostic prerequisite after real Compose build failure: semantic redaction RED/GREEN, actual child settlement/failure taxonomy and malformed/interleaved/secret-bearing progress controls, final emitted-output smoke, unchanged recipe/deadlines/cleanup and one authorized additional review pass. Historical cause remains UNKNOWN.
 
 ## Risk pack mapping
 

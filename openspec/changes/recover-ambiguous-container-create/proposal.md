@@ -10,6 +10,7 @@
 - Recover only the exact never-started attempt through the existing per-user queue, including a fresh owner after restart. Preserve both data volumes and unrelated resources.
 - Keep uncertain, foreign, running or changed-identity resources quarantined; status/retirement must not report a clean stopped state. No name-only adoption or deletion.
 - Migrate the private SQLite database additively and update the migration ledger consumers and deployment recovery guidance.
+- User-authorized runtime prerequisite after the frozen candidate's failed platform build: retain bounded, nonsecret build termination/progress metadata through the existing verification redaction boundary. Do not change build recipes, deadlines, retry policy or host configuration; historical cause remains unknown.
 
 ## Capabilities
 
