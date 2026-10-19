@@ -182,6 +182,49 @@ it.each(['command', 'commandAsync'] as const)(
   },
 );
 
+it.each([
+  { method: 'command', boundary: 'throw' },
+  { method: 'command', boundary: 'getter' },
+  { method: 'commandAsync', boundary: 'throw' },
+  { method: 'commandAsync', boundary: 'getter' },
+] as const)(
+  'sanitizes $method $boundary failures even when error-code inspection throws',
+  async ({ method, boundary }) => {
+    const original = new Error('private-original-error');
+    Object.defineProperty(original, 'code', {
+      get() {
+        throw new Error('private-accessor-error');
+      },
+    });
+    const commands = createDockerCommands('unused', 'unused', true, () => {
+      if (boundary === 'throw') throw original;
+      return {
+        get status(): number {
+          throw original;
+        },
+        stdout: 'private-stdout',
+        stderr: 'private-stderr',
+      };
+    });
+
+    const failure: unknown = await Promise.resolve()
+      .then(() => commands[method](['build'], 600_000))
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) throw new Error('Expected sanitized build failure');
+    expect(failure.message).not.toContain('private-');
+    expect(failure.cause).toBeUndefined();
+    expect(diagnostic({ status: null, stdout: '', stderr: failure.message })).toMatchObject({
+      termination: 'unknown',
+      timeoutMs: 600_000,
+      exitStatus: null,
+      signal: null,
+      lastObservedBuildHeader: null,
+    });
+  },
+);
+
 it.each(['command', 'commandAsync'] as const)(
   '%s preserves successful build output and stdin EOF',
   async (method) => {

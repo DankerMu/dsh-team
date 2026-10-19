@@ -89,8 +89,19 @@ function lastBuildHeader(stderr: string) {
   return last;
 }
 
+function errorCode(error: unknown): string | undefined {
+  try {
+    if (typeof error !== 'object' || error === null) return undefined;
+    const value: unknown = Object.getOwnPropertyDescriptor(error, 'code')?.value;
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    // Optional metadata is unknown when a caller-owned proxy cannot be inspected safely.
+    return undefined;
+  }
+}
+
 function buildTermination(result: DockerCommandResult, signal: string | null): string {
-  const code: unknown = result.error === undefined ? undefined : Reflect.get(result.error, 'code');
+  const code = errorCode(result.error);
   if (code === 'ETIMEDOUT') return 'deadline';
   if (code === 'ENOBUFS') return 'output-limit';
   if (code === 'ENOENT' || code === 'EACCES' || code === 'ENOEXEC') return 'spawn-failure';
@@ -120,7 +131,7 @@ function commandFailure(error: unknown, timeout: number, started: number | undef
     status: null,
     stdout: '',
     stderr: '',
-    error: error instanceof Error ? error : new Error('Unknown build failure'),
+    error: Object.assign(new Error('Unknown build failure'), { code: errorCode(error) }),
   };
   return new Error(
     `Web Docker operation failed\n${buildFailureDiagnostic(result, timeout, started)}`,
