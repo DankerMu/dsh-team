@@ -19,7 +19,7 @@ const SIBLING = 'mnopqrstuvwx';
 const PUBLIC_URL = 'https://team.example:8443';
 const ROUTED_BODY = 'healthy sibling survived quarantined startup';
 
-async function quarantineBootstrap(discoveryFailure: boolean) {
+async function quarantineBootstrap(discoveryFailure: boolean, missingBridge = false) {
   let result: StartupObservation | undefined;
   let exercised = false;
   let authenticatedUpstreamRequests = 0;
@@ -127,6 +127,10 @@ async function quarantineBootstrap(discoveryFailure: boolean) {
               Name: `dsh-team-net-${START_USER}`,
               Containers: {},
             });
+            if (missingBridge) {
+              daemon.networks.delete(networkId);
+              initialBridge = undefined;
+            }
             daemon.overrides.set(`GET /containers/dsh-team-u-${START_USER}/json`, {
               status: 404,
               document: { message: 'No canonical candidate exists' },
@@ -282,12 +286,27 @@ it('listens and routes a healthy sibling while retaining an unknown-ID absent cr
   expect(result.authenticatedUpstreamRequests).toBe(2);
 }, 10000);
 
-it('still exits without listening when unrelated Docker discovery returns 500', async () => {
-  const result = await quarantineBootstrap(true);
+it.each([
+  {
+    reason: 'unrelated Docker discovery returns 500',
+    discoveryFailure: true,
+    missingBridge: false,
+  },
+  {
+    reason: 'an unknown creation attempt has lost its captured bridge',
+    discoveryFailure: false,
+    missingBridge: true,
+  },
+])(
+  'still exits without listening when $reason',
+  async ({ discoveryFailure, missingBridge }) => {
+    const result = await quarantineBootstrap(discoveryFailure, missingBridge);
 
-  expect(result.health).toBeNull();
-  expect(result.exitCode).toBeGreaterThan(0);
-  expect(result.stderr).toContain('Instance reconciliation failed');
-  expect(result.exercised).toBe(false);
-  expect(result.authenticatedUpstreamRequests).toBe(0);
-}, 10000);
+    expect(result.health).toBeNull();
+    expect(result.exitCode).toBeGreaterThan(0);
+    expect(result.stderr).toContain('Instance reconciliation failed');
+    expect(result.exercised).toBe(false);
+    expect(result.authenticatedUpstreamRequests).toBe(0);
+  },
+  10000,
+);

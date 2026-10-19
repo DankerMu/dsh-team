@@ -267,6 +267,20 @@ it('classifies verified unknown-ID absence without blocking unrelated reconcilia
   expect(f.attempt()).toEqual(retained);
 });
 
+it('fails reconciliation when an unknown creation attempt has lost its captured bridge', async () => {
+  const f = await interrupted('response');
+  f.daemon.removeContainer(START_CONTAINER);
+  f.daemon.networks.delete(START_NETWORK);
+  const retained = f.attempt();
+  const count = f.daemon.requests.length;
+
+  await expect(f.fresh().reconcile()).rejects.toThrow('Instance reconciliation failed');
+
+  expect(f.attempt()).toEqual(retained);
+  expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(f.daemon.requests.slice(count).some(({ method }) => method !== 'GET')).toBe(false);
+});
+
 it.each([
   'nonce',
   'subnet',

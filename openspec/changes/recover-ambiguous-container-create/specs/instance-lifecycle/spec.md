@@ -46,6 +46,12 @@ Before submitting final user-container creation, the platform SHALL durably bind
 - **THEN** it retains that user's durable error/quarantine and bridge without acknowledging cleanup, completes validation of other users and allows the platform to serve verified healthy siblings
 - **AND** identity/topology conflicts, malformed provenance, database failures and failed Docker discovery or queries still prevent startup rather than being swallowed as quarantine
 
+#### Scenario: Missing captured bridge is not classified absence quarantine
+
+- **WHEN** an unresolved attempt has no learned container ID and both the canonical container and captured bridge are definitively absent
+- **THEN** reconciliation fails before listening, retains the durable attempt and issues no destructive mutation
+- **AND** nonfatal classification requires a still-present matching captured bridge; known-ID partial-cleanup recovery retains its existing rules
+
 #### Scenario: Later attempts cannot bypass the orphan-network fence
 
 - **WHEN** another user's startup introduces an unresolved attempt after reconciliation captures its initial user inventory but before the queued orphan-network operation

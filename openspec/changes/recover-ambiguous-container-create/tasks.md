@@ -12,6 +12,7 @@
 - [x] 2.3 Integrate durable status/routing exclusion and current-authority stop/disable/enable semantics; prove deadline, transport, service cancellation, FIFO/shutdown and sibling preservation through the existing real-wire service/HTTP seams.
 - [x] 2.4 Update existing deployment recovery guidance and migration documentation after source/dist file-database smoke proves restart recovery, no stale routing and no secret output.
 - [x] 2.5 Close round1 durable-state sibling findings: retain/coalesce activity without changing the receipt's prior row, recheck attempts inside orphan-network FIFO, and implement the explicitly user-approved classified-absence quarantine result. Prove normal/shutdown activity RED→GREEN and resume, deterministic later-attempt interleaving, actual production-main healthy-sibling availability and fatal unrelated-discovery control.
+- [x] 2.6 Close round2 missing-network classification gap without extending availability policy: unknown-ID attempts require a present matching bridge for nonfatal reconciliation. Unit RED→GREEN proves fatal rejection with retained receipt and read-only traffic; actual source-main proof preserves no-listener failure, approved sibling availability and unrelated-discovery rejection.
 
 ## 3. Real consumer proof and delivery
 

@@ -312,7 +312,7 @@ export async function recoverCreationAttempt(
       undefined,
       attempt.network_id,
     );
-    if (network !== undefined && network.subnet !== attempt.network_subnet)
+    if (network?.subnet !== attempt.network_subnet)
       throw new Error('Captured creation network changed');
     current();
     throw new CreationQuarantinedError('Container creation outcome unconfirmed');
