@@ -44,33 +44,6 @@ function events(database: DatabaseHandle, userId: string) {
     .all(userId);
 }
 
-function preservationObservation(before: Record<string, unknown>, after: Record<string, unknown>) {
-  const fields = [
-    'Id',
-    'Name',
-    'Image',
-    'State',
-    'Config',
-    'HostConfig',
-    'Mounts',
-    'NetworkSettings',
-    'GraphDriver',
-    'ExecIDs',
-    'RestartCount',
-    'Created',
-  ] as const;
-  return {
-    equal: isDeepStrictEqual(before, after),
-    equalWithMountOrderNormalized: isDeepStrictEqual(
-      normalizeInspectMounts(before),
-      normalizeInspectMounts(after),
-    ),
-    changed: Object.fromEntries(
-      fields.map((field) => [field, !isDeepStrictEqual(before[field], after[field])]),
-    ),
-  };
-}
-
 function volumes(lifecycle: UserImageLifecycle, userId: string): unknown {
   const result = lifecycle.command(
     ['volume', 'inspect', `dsh-team-home-${userId}`, `dsh-team-work-${userId}`],
@@ -301,9 +274,6 @@ async function recoveryScenario(
     const oldId = text(inspect(lifecycle, name).Id);
     expect(oldId).toBe(text(capturedId));
     const phantom = inspect(lifecycle, oldId);
-    const preservation = wrongNonce
-      ? { immediate: preservationObservation(phantom, inspect(lifecycle, oldId)) }
-      : undefined;
     expect(phantom.Id).toBe(oldId);
     expect(phantom.Name).toBe(`/${name}`);
     expect(phantom.Image).toBe(lifecycle.imageId);
@@ -370,13 +340,10 @@ async function recoveryScenario(
     const recoveredTransport = startupClient(lifecycle);
     owner = createOrchestrator({ client: recoveredTransport.client, database, config });
     if (wrongNonce) {
-      const beforeRecovery = preservationObservation(phantom, inspect(lifecycle, oldId));
       await expect(owner.reconcile()).rejects.toThrow();
-      const afterReconcile = preservationObservation(phantom, inspect(lifecycle, oldId));
       await expect(
         owner.stopUserContainer({ userId, reason: 'admin', allowMissingInstance: true }),
       ).rejects.toThrow();
-      const afterStop = preservationObservation(phantom, inspect(lifecycle, oldId));
       await expect(owner.startUserContainer(input)).rejects.toThrow();
       expect(attempt(database, userId)).toEqual(receipt);
       expect(
@@ -384,18 +351,9 @@ async function recoveryScenario(
       ).toBeUndefined();
       expect(events(database, userId)).toEqual([]);
       const preserved = inspect(lifecycle, oldId);
-      const preservationFacts = {
-        ...preservation,
-        beforeRecovery,
-        afterReconcile,
-        afterStop,
-        afterStart: preservationObservation(phantom, preserved),
-        mutationObserved: recoveredTransport.requests.some(({ method }) => method !== 'GET'),
-      };
-      process.stdout.write(
-        `Creation preservation diagnostic: ${JSON.stringify(preservationFacts)}\n`,
-      );
-      expect(isDeepStrictEqual(preserved, phantom), JSON.stringify(preservationFacts)).toBe(true);
+      expect(
+        isDeepStrictEqual(normalizeInspectMounts(preserved), normalizeInspectMounts(phantom)),
+      ).toBe(true);
       expect(inspect(lifecycle, name).Id).toBe(oldId);
       expect(inspectNetwork(lifecycle, oldNetworkId)).toEqual(oldNetwork);
       expect(recoveredTransport.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
