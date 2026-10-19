@@ -93,7 +93,7 @@ if (name === 'git') {
         if (mode==='observer-invalid') {output('{'+canary);process.exit(0);}
         if (mode==='observer-oversized') {output(canary.repeat(2048));process.exitCode=0;}
         else if(mode==='observer-signal') process.kill(process.pid,'SIGTERM');
-        else if(['valid-execution-failure','cleanup-failed','observer-extra-fields'].includes(mode)) {
+        else if(['valid-execution-failure','cleanup-failed','observer-extra-fields','observer-owner-changed'].includes(mode)) {
           writeFileSync(join(own,'final.json'),JSON.stringify(final),{mode:0o600});
           output(mode==='observer-extra-fields'?{...final,private:canary}:final);
         } else {event('observer-transport-failed');process.exit(255);}
@@ -108,7 +108,10 @@ if (name === 'git') {
         }
       }
     } else if (command.includes('ln -sT')) {symlinkSync(invocation,join(host,'active'));event('lock-created');}
-    else if (command.includes('systemd-run')) event('owned-unit-requested');
+    else if (command.includes('systemd-run')) {
+      event('owned-unit-requested');
+      if(mode==='watcher-install-failed')process.exit(255);
+    }
     else if (command.includes('authorized_keys')) event('authorization-published');
     else if (command.includes("printf absent; elif")) {
       if (mode==='foreign-owner') writeFileSync(join(own,'owner'),'another-invocation');
@@ -117,6 +120,7 @@ if (name === 'git') {
     else if (command.includes(' finalize ')) {
       if(mode!=='canonical-missing')writeFileSync(join(own,'final.json'),JSON.stringify(final),{mode:0o600});
       event('canonical-final-written');
+      if(mode==='observer-owner-changed')writeFileSync(join(own,'owner'),'another-invocation');
       if(mode==='foreign-lock'){rmSync(join(host,'active'));symlinkSync('foreign-invocation',join(host,'active'));}
     }
     else if (command.includes('touch ') && command.includes('/cancel')) event('cancel-requested');
@@ -156,6 +160,8 @@ type OwnerScenario =
   | 'valid-execution-failure'
   | 'observer-error'
   | 'foreign-owner'
+  | 'observer-owner-changed'
+  | 'watcher-install-failed'
   | 'late-stdout'
   | 'changed-owner'
   | 'foreign-lock'

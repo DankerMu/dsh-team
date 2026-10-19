@@ -96,6 +96,49 @@ it(
 );
 
 it(
+  'rejects an earlier valid observer receipt after the installation owner changes',
+  async () => {
+    const result = await runOwnerScenario('observer-owner-changed');
+
+    expect(result.observation).toMatchObject({ kind: 'receipt', processExitCode: 0 });
+    expect(result.hostFinal).toEqual({ vpsCleanupComplete: true, failures: [], exitCode: 1 });
+    expect(result.result).toMatchObject({ cleanupComplete: false, exitCode: 1 });
+    expect(result.localFinal).toEqual({ vpsCleanupComplete: false, exitCode: 1 });
+    expect(result.lockTarget).toBe(result.invocation);
+    expect(result.recovery).toEqual({
+      receiptSource: 'observer',
+      canonicalRead: 'not-attempted',
+      ownership: 'foreign',
+      cleanupConfirmed: false,
+    });
+  },
+  OWNER_CASE_TIMEOUT,
+);
+
+it(
+  'confirms canonical cleanup when watcher installation fails before observation starts',
+  async () => {
+    const result = await runOwnerScenario('watcher-install-failed');
+
+    expect(result.exit).toBe(1);
+    expect(result.result).toMatchObject({ cleanupComplete: true, exitCode: 1 });
+    expect(result.observation).toBeUndefined();
+    expect(result.localFinal).toEqual({ vpsCleanupComplete: true, failures: [], exitCode: 1 });
+    expect(result.recovery).toEqual({
+      receiptSource: 'canonical',
+      canonicalRead: 'valid',
+      ownership: 'owned',
+      cleanupConfirmed: true,
+    });
+    expect(result.events.filter((event) => event.startsWith('await-'))).toEqual(['await-1']);
+    expect(result.lockTarget).toBeUndefined();
+    expect(result.githubSecretAbsent).toBe(true);
+    expect(result.privateKeyAbsent).toBe(true);
+  },
+  OWNER_CASE_TIMEOUT,
+);
+
+it(
   'preserves another invocation admission symlink after its own cleanup is confirmed',
   async () => {
     const result = await runOwnerScenario('foreign-lock');
