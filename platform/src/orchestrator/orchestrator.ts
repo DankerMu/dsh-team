@@ -17,7 +17,11 @@ import { discoverReconciliationNetworks, reconcileOrphanNetwork } from './networ
 import { restoreUserProfiles } from './profile-restore.ts';
 import type { RestoreUserProfilesInput } from './profile-restore.ts';
 import { HomeHelperUnconfirmedError } from './home-helper.ts';
-import { recoverCreationAttempt } from './creation-attempt.ts';
+import {
+  CreationQuarantinedError,
+  readCreationAttempt,
+  recoverCreationAttempt,
+} from './creation-attempt.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -127,6 +131,8 @@ async function flushActivity(
       // The original FIFO may have been held across many timer ticks.
       const now = Date.now();
       if (observation.writtenAt !== null && now - observation.writtenAt < 60_000) return;
+      // Deferred activity must not invalidate the durable complete-row recovery fence.
+      if (readCreationAttempt({ database, userId }) !== undefined) return;
       state.update ??= database.prepare(
         'UPDATE instances SET last_activity_at = ? WHERE user_id = ? AND (last_activity_at IS NULL OR last_activity_at < ?)',
       );
@@ -288,6 +294,17 @@ async function retireScheduled(
   await retire(input);
 }
 
+async function reconcileCreationAttempt(
+  input: ReconciliationInput,
+): Promise<'none' | 'recovered' | 'quarantined'> {
+  try {
+    return (await recoverCreationAttempt(input)) ? 'recovered' : 'none';
+  } catch (error) {
+    if (error instanceof CreationQuarantinedError) return 'quarantined';
+    throw error;
+  }
+}
+
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
@@ -379,7 +396,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   async function reconcileConfirmed(input: ReconciliationInput): Promise<void> {
     // Automatic correction must not turn an unresolved create into name-based orphan cleanup.
     assertNetworkConfirmed(input.userId);
-    await recoverCreationAttempt(input);
+    if ((await reconcileCreationAttempt(input)) === 'quarantined') return;
     await reconcileUser(input);
   }
 
@@ -421,6 +438,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
               assertNetworkConfirmed(selected.userId);
               if (failedUsers.has(selected.userId))
                 throw new Error('Indexed reconciliation unsettled');
+              if ((await reconcileCreationAttempt(selected)) !== 'none') return;
               await reconcileOrphanNetwork(selected, candidate);
             },
             'Instance reconciliation failed',
@@ -428,7 +446,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
           ),
         ),
       );
-      // Indexed corrections cannot acknowledge a quarantined creation without an indexed row.
+      // Unknown network creation and genuine reconciliation failures remain fatal.
       if (
         signal?.aborted ||
         uncertainNetworks.size !== 0 ||

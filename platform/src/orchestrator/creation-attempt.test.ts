@@ -18,9 +18,13 @@ afterEach(async () => {
   }
 });
 
-async function interrupted(kind: 'response' | 'inspection' = 'inspection') {
+async function interrupted(kind: 'response' | 'inspection' = 'inspection', priorRow = false) {
   const f = await startupOwnerFixture();
   fixtures.push(f);
+  if (priorRow)
+    f.database
+      .prepare("INSERT INTO instances(user_id,status,last_activity_at) VALUES (?,'stopped',1)")
+      .run(START_USER);
   let failing = true;
   const client: DockerClient = {
     ...f.client,
@@ -218,3 +222,85 @@ it('rejects an invalid retirement reason before recovering a pending creation', 
   expect(f.daemon.containers.has(START_CONTAINER)).toBe(true);
   expect(f.daemon.requests.slice(count)).toEqual([]);
 });
+
+it('coalesces deferred activity without blocking a sibling and persists it after recovery', async () => {
+  const f = await interrupted('inspection', true);
+  const other = 'mnopqrstuvwx';
+  f.database
+    .prepare("INSERT INTO instances(user_id,status,last_activity_at) VALUES (?,'stopped',1)")
+    .run(other);
+  const activity = (user: string) =>
+    f.database.prepare('SELECT last_activity_at FROM instances WHERE user_id=?').get(user);
+  f.owner.recordActivity(START_USER, 300);
+  await f.owner.flushActivity();
+  f.owner.recordActivity(START_USER, 500);
+  f.owner.recordActivity(other, 400);
+
+  await f.owner.flushActivity('shutdown');
+
+  expect(activity(START_USER)).toEqual({ last_activity_at: 1 });
+  expect(activity(other)).toEqual({ last_activity_at: 400 });
+  await f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+  await f.owner.flushActivity();
+  expect(activity(START_USER)).toEqual({ last_activity_at: 500 });
+  f.owner.recordActivity(START_USER, 700);
+  await f.owner.flushActivity();
+  expect(activity(START_USER)).toEqual({ last_activity_at: 500 });
+  expect(activity(other)).toEqual({ last_activity_at: 400 });
+});
+
+it('classifies verified unknown-ID absence without blocking unrelated reconciliation or granting cleanup', async () => {
+  const f = await interrupted('response');
+  f.daemon.removeContainer(START_CONTAINER);
+  const retained = f.attempt();
+  const count = f.daemon.requests.length;
+
+  await f.fresh().reconcile();
+
+  expect(f.attempt()).toEqual(retained);
+  expect(f.daemon.networks.has(START_NETWORK)).toBe(true);
+  expect(f.daemon.requests.slice(count).some(({ method }) => method !== 'GET')).toBe(false);
+  await expect(
+    f.owner.stopUserContainer({ userId: START_USER, reason: 'admin', allowMissingInstance: true }),
+  ).rejects.toThrow();
+  await expect(f.owner.startUserContainer(f.input)).rejects.toThrow();
+  expect(f.attempt()).toEqual(retained);
+});
+
+it.each([
+  'nonce',
+  'subnet',
+  'container-id',
+  'foreign-network',
+  'container-query',
+  'network-query',
+] as const)(
+  'does not classify invalid %s observations as a nonfatal absence quarantine',
+  async (kind) => {
+    const f = await interrupted('response');
+    f.daemon.removeContainer(START_CONTAINER);
+    if (kind === 'nonce')
+      f.database.prepare("UPDATE creation_attempts SET attempt_id='malformed'").run();
+    if (kind === 'subnet')
+      f.database.prepare("UPDATE creation_attempts SET network_subnet='172.30.1.0/28'").run();
+    if (kind === 'container-id')
+      f.database.prepare("UPDATE creation_attempts SET container_id='invalid'").run();
+    if (kind === 'foreign-network') {
+      const network = f.daemon.networks.get(START_NETWORK);
+      if (network === undefined) throw new Error('Expected captured bridge');
+      network.Labels = { 'dsh-team.user': 'mnopqrstuvwx' };
+    }
+    if (kind === 'container-query')
+      f.daemon.overrides.set(`GET /containers/dsh-team-u-${START_USER}/json`, { status: 500 });
+    if (kind === 'network-query')
+      f.daemon.overrides.set(`GET /networks/dsh-team-net-${START_USER}`, { status: 500 });
+    const retained = f.attempt();
+    const count = f.daemon.requests.length;
+
+    await expect(f.fresh().reconcile()).rejects.toThrow();
+
+    expect(f.attempt()).toEqual(retained);
+    expect(f.daemon.networks.has(START_NETWORK)).toBe(true);
+    expect(f.daemon.requests.slice(count).some(({ method }) => method !== 'GET')).toBe(false);
+  },
+);

@@ -1,14 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { isAbsolute } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { recordAuditEvent } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object, ownedContainer, resolvedImageId } from './identity.ts';
-import { removeUserNetwork, validateUserNetwork } from './networks.ts';
+import { captureUserNetwork, removeUserNetwork, validateUserNetwork } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamPort } from './transport.ts';
 import type { TransportContext } from './transport.ts';
+import { allocateSubnet } from './subnet.ts';
+
+/** Only verified unknown-ID absence is nonfatal during reconciliation; callers still fail closed. */
+export class CreationQuarantinedError extends Error {}
 
 interface AttemptInput {
   readonly database: DatabaseHandle;
@@ -28,6 +33,25 @@ export interface CreationAttempt {
   readonly prior_instance_hash: string;
   readonly container_id: string | null;
   readonly created_at: number;
+}
+
+function validateRecoveryAttempt(attempt: CreationAttempt): void {
+  containerId({ Id: attempt.network_id });
+  resolvedImageId(attempt.image_id);
+  if (attempt.container_id !== null) containerId({ Id: attempt.container_id });
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      attempt.attempt_id,
+    ) ||
+    !Number.isSafeInteger(attempt.account_created_at) ||
+    !Number.isSafeInteger(attempt.created_at) ||
+    attempt.created_at < 0 ||
+    typeof attempt.image_tag !== 'string' ||
+    attempt.image_tag.length === 0 ||
+    !isAbsolute(attempt.overlay_path) ||
+    allocateSubnet(attempt.network_subnet, []) !== attempt.network_subnet
+  )
+    throw new Error('Invalid durable creation provenance');
 }
 
 function instanceHash(input: AttemptInput): string {
@@ -217,6 +241,7 @@ export async function recoverCreationAttempt(
 ): Promise<boolean> {
   const selected = readCreationAttempt(input);
   if (selected === undefined) return false;
+  validateRecoveryAttempt(selected);
   let attempt: CreationAttempt = selected;
   const account = object(
     input.database.prepare('SELECT * FROM users WHERE id=?').get(input.userId),
@@ -280,7 +305,17 @@ export async function recoverCreationAttempt(
     await client.json('DELETE', `/containers/${id}`);
   } else if (attempt.container_id === null) {
     // A missing response can precede late server-side creation; absence is not settlement proof.
-    throw new Error('Container creation outcome unconfirmed');
+    const network = await captureUserNetwork(
+      client,
+      input.userId,
+      input.transport,
+      undefined,
+      attempt.network_id,
+    );
+    if (network !== undefined && network.subnet !== attempt.network_subnet)
+      throw new Error('Captured creation network changed');
+    current();
+    throw new CreationQuarantinedError('Container creation outcome unconfirmed');
   }
   current();
   if (

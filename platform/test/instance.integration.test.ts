@@ -6,8 +6,13 @@ import { isDeepStrictEqual } from 'node:util';
 import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { deleteUserSessions } from '../src/auth/index.ts';
-import { writeSettings } from '../src/db/index.ts';
-import { createDockerClient, createInstanceService } from '../src/orchestrator/index.ts';
+import { openDatabase, writeSettings } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
+import {
+  createDockerClient,
+  createInstanceService,
+  createOrchestrator,
+} from '../src/orchestrator/index.ts';
 import {
   START_CONTAINER,
   startupBarrier,
@@ -682,3 +687,71 @@ it('keeps verified absence non-routable while observing live admission settings 
     await f.close();
   }
 });
+
+it.each([undefined, 'shutdown'] as const)(
+  'retains prior-row creation authority across authenticated activity and %s flushing',
+  async (phase) => {
+    const f = await fixture();
+    let reopened: DatabaseHandle | undefined;
+    try {
+      const user = await registerInstanceUser(
+        f.base,
+        f.config.publicUrl,
+        'activity-recovery@example.test',
+      );
+      writeSettings(f.database, {
+        modelBaseUrl: 'http://model.invalid/v1',
+        modelApiKey: 'activity-fixture-key',
+        models: [{ name: 'office-model' }],
+        defaultModel: 'office-model',
+      });
+      f.database
+        .prepare("INSERT INTO instances(user_id,status,last_activity_at) VALUES (?,'stopped',1)")
+        .run(user.id);
+      const before = f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(user.id);
+      f.replyWith((request, reply) =>
+        request.path === `/containers/create?name=dsh-team-u-${user.id}` ? { status: 500 } : reply,
+      );
+      await expect(f.service.start(user.id)).rejects.toThrow();
+      f.replyWith(undefined);
+      const response = await fetch(`${f.base}/`, {
+        headers: { cookie: user.cookie, accept: 'application/json' },
+      });
+      expect(response.status).toBe(503);
+      await response.arrayBuffer();
+
+      await f.service.flushActivity(phase);
+
+      expect(f.database.prepare('SELECT * FROM instances WHERE user_id=?').get(user.id)).toEqual(
+        before,
+      );
+      await f.app.close();
+      reopened = openDatabase(join(f.root, 'platform.db'));
+      const owner = createOrchestrator({
+        client: createDockerClient(join(f.root, 'engine.sock')),
+        database: reopened,
+        config: f.config,
+      });
+      await owner.reconcile();
+      expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+      expect(reopened.prepare('SELECT * FROM creation_attempts').all()).toEqual([]);
+      expect(
+        reopened
+          .prepare("SELECT event_type FROM audit_events WHERE event_type='instance.start-failed'")
+          .all(),
+      ).toEqual([{ event_type: 'instance.start-failed' }]);
+      const replacement = 'd'.repeat(64);
+      f.daemon.setContainerId(replacement);
+      await expect(
+        owner.startUserContainer({ ...f.input, userId: user.id }),
+      ).resolves.toMatchObject({
+        outcome: 'starting',
+        containerId: replacement,
+      });
+      await owner.drain();
+    } finally {
+      reopened?.close();
+      await f.close();
+    }
+  },
+);

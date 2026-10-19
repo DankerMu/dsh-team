@@ -11,6 +11,7 @@
 - [ ] 2.2 Implement one never-started exact-attempt recovery path for explicit start/stop and fresh-owner reconciliation; prove nonce/ID/image/account/row/mount/network fences, no name-only adoption, known-ID partial-cleanup resumption, unknown absence quarantine and retained volume bytes.
 - [x] 2.3 Integrate durable status/routing exclusion and current-authority stop/disable/enable semantics; prove deadline, transport, service cancellation, FIFO/shutdown and sibling preservation through the existing real-wire service/HTTP seams.
 - [x] 2.4 Update existing deployment recovery guidance and migration documentation after source/dist file-database smoke proves restart recovery, no stale routing and no secret output.
+- [x] 2.5 Close round1 durable-state sibling findings: retain/coalesce activity without changing the receipt's prior row, recheck attempts inside orphan-network FIFO, and implement the explicitly user-approved classified-absence quarantine result. Prove normal/shutdown activity RED→GREEN and resume, deterministic later-attempt interleaving, actual production-main healthy-sibling availability and fatal unrelated-discovery control.
 
 ## 3. Real consumer proof and delivery
 

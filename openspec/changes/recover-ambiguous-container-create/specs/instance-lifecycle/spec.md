@@ -39,3 +39,21 @@ Before submitting final user-container creation, the platform SHALL durably bind
 - **WHEN** a failed attempt is observed through status, gateway, stop or a new owner
 - **THEN** it is not reported as an ordinary stopped instance or routed to an obsolete endpoint, and no credential, raw inspect document or environment content is exposed or stored in the attempt
 - **AND** normal successful instance creation consumes its attempt atomically with the existing creation audit, while verified failure recovery records only the existing safe startup-failure audit and no fabricated stopped audit
+
+#### Scenario: Classified absence quarantine preserves sibling availability
+
+- **WHEN** startup reconciliation verifies an unchanged valid attempt with no learned container identity, a definite absent canonical container and the captured network state
+- **THEN** it retains that user's durable error/quarantine and bridge without acknowledging cleanup, completes validation of other users and allows the platform to serve verified healthy siblings
+- **AND** identity/topology conflicts, malformed provenance, database failures and failed Docker discovery or queries still prevent startup rather than being swallowed as quarantine
+
+#### Scenario: Later attempts cannot bypass the orphan-network fence
+
+- **WHEN** another user's startup introduces an unresolved attempt after reconciliation captures its initial user inventory but before the queued orphan-network operation
+- **THEN** that operation rechecks current durable ownership inside the user's FIFO and cannot delete or disconnect the attempt's bridge using absence-only authority
+- **AND** a subsequently observed matching never-started candidate remains recoverable by the canonical recovery path
+
+#### Scenario: Activity does not invalidate retained creation authority
+
+- **WHEN** authenticated gateway traffic records activity while an interrupted attempt retains a prior instance snapshot
+- **THEN** ordinary and shutdown activity flushing defer persistence without marking the coalesced observation clean or changing the authoritative row
+- **AND** recovery remains possible after database reopen, genuinely changed identities still fail closed, and normal throttled activity persistence resumes after receipt resolution

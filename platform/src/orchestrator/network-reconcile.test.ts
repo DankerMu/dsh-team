@@ -1,19 +1,28 @@
+import { rm } from 'node:fs/promises';
+import { Writable } from 'node:stream';
 import { afterEach, expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { createDockerClient, createOrchestrator } from './index.ts';
+import { createDockerClient, createInstanceService, createOrchestrator } from './index.ts';
+import type { DockerTransport } from './index.ts';
 import {
   START_CONTAINER,
   START_NETWORK,
   START_USER,
   seedPlatform,
   startupDaemon,
+  startupBarrier,
+  startupOwnerFixture,
 } from '../../test/container-start-fixture.ts';
+import type { StartupRequest } from '../../test/container-start-fixture.ts';
+import { instanceConfig } from '../../test/instance-fixture.ts';
 import { reconciliationState, seedReconciliation } from '../../test/container-reconcile-fixture.ts';
 
 const databases: DatabaseHandle[] = [];
-afterEach(() => {
+const roots: string[] = [];
+afterEach(async () => {
   for (const database of databases.splice(0)) database.close();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 const NETWORK_LIST = `/networks?filters=${encodeURIComponent(JSON.stringify({ label: ['dsh-team.user'] }))}`;
 function fixture(networkMode = false) {
@@ -237,3 +246,195 @@ it.each(['live-index', 'invalid-index', 'starting'])(
     expect(reconciliationState(database).audits).toEqual([]);
   },
 );
+it('retains a late pending bridge in the current owner and recovers its delayed exact create under fresh ownership', async () => {
+  const { database, daemon, input, root } = await startupOwnerFixture();
+  databases.push(database);
+  roots.push(root);
+  seedReconciliation(database, daemon);
+  const other = 'mnopqrstuvwx';
+  const otherId = 'd'.repeat(64);
+  const createPath = `/containers/create?name=dsh-team-u-${other}`;
+  const correction = startupBarrier();
+  const creation = startupBarrier();
+  let held = false;
+  const submission: { request?: StartupRequest } = {};
+  const transport: DockerTransport = (options, receive) => {
+    if (
+      options.method === 'GET' &&
+      options.path === `/containers/${START_CONTAINER}/json` &&
+      !held
+    ) {
+      held = true;
+      return daemon.transport(options, (response) => {
+        // Initial user discovery has completed; hold A's indexed correction response.
+        void correction.hold().then(() => {
+          receive(response);
+        });
+      });
+    }
+    if (options.method !== 'POST' || options.path !== createPath)
+      return daemon.transport(options, receive);
+    const chunks: Buffer[] = [];
+    return new Writable({
+      write(chunk: Buffer, _encoding, done) {
+        chunks.push(chunk);
+        done();
+      },
+      final(done) {
+        submission.request = {
+          method: 'POST',
+          path: createPath,
+          // The real Docker client serialized this external Engine request.
+          body: JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>,
+        };
+        // Accept the request, lose its response, and defer its Engine-side effect.
+        void creation.hold().then(() => {
+          done(
+            Object.assign(new Error('Fixture loses submitted create response'), {
+              code: 'ECONNRESET',
+            }),
+          );
+        });
+      },
+    });
+  };
+  const client = createDockerClient('/fixture/docker.sock', transport);
+  const ownerOptions = {
+    database,
+    client,
+    config: {
+      upstreamMode: 'published-loopback' as const,
+      platformContainerName: 'dsh-team-platform',
+    },
+  };
+  const owner = createOrchestrator(ownerOptions);
+  // This second owner supplies read-only public projections, never lifecycle mutations.
+  const service = createInstanceService({
+    database,
+    client,
+    config: instanceConfig(root, input.config),
+  });
+  const account = database.prepare('SELECT * FROM users WHERE id = ?').get(START_USER);
+  const healthy = database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER);
+  const healthyContainer = structuredClone(daemon.containers.get(START_CONTAINER));
+  const healthyNetwork = structuredClone(daemon.networks.get(START_NETWORK));
+  const primary = structuredClone(daemon.networks.get('0'.repeat(64)));
+  const attempt = () =>
+    database
+      .prepare<[string], { network_id: string; attempt_id: string; container_id: string | null }>(
+        'SELECT * FROM creation_attempts WHERE user_id = ?',
+      )
+      .get(other);
+  const row = () => database.prepare('SELECT * FROM instances WHERE user_id = ?').get(other);
+  const audits = () =>
+    database.prepare('SELECT event_type FROM audit_events WHERE target = ? ORDER BY id').all(other);
+  let starting: Promise<unknown> | undefined;
+  const reconciling = Promise.allSettled([owner.reconcile()]);
+  try {
+    await correction.reached;
+    expect(row()).toBeUndefined();
+    expect(attempt()).toBeUndefined();
+    daemon.setContainerId(otherId);
+    // The same owner's B queue can submit after its reconciliation inventory captured only A.
+    starting = Promise.allSettled([owner.startUserContainer({ ...input, userId: other })]);
+    await creation.reached;
+    const receipt = attempt();
+    const submitted = submission.request;
+    if (receipt === undefined || submitted === undefined)
+      throw new Error('Expected committed creation receipt and captured Engine request');
+    const bridge = structuredClone(daemon.networks.get(receipt.network_id));
+    expect(bridge).toMatchObject({
+      Name: `dsh-team-net-${other}`,
+      Labels: { 'dsh-team.user': other },
+      Containers: {},
+    });
+    expect(receipt.container_id).toBeNull();
+    expect(submitted.body).toMatchObject({
+      Labels: { 'dsh-team.user': other, 'dsh-team.creation-attempt': receipt.attempt_id },
+      HostConfig: { NetworkMode: receipt.network_id },
+    });
+    expect(daemon.containers.has(otherId)).toBe(false);
+    creation.release();
+    expect(await starting).toMatchObject([{ status: 'rejected' }]);
+    expect(attempt()).toEqual(receipt);
+    expect(daemon.networks.get(receipt.network_id)).toEqual(bridge);
+    expect(row()).toBeUndefined();
+    expect(audits()).toEqual([]);
+
+    correction.release();
+    const result = await reconciling;
+    expect(result).toEqual([{ status: 'fulfilled', value: undefined }]);
+
+    // Baseline RED: its orphan phase deletes this exact bridge despite the new durable receipt.
+    expect(daemon.networks.get(receipt.network_id)).toEqual(bridge);
+    expect(attempt()).toEqual(receipt);
+    expect(row()).toBeUndefined();
+    expect(service.status(other)).toEqual({ status: 'error', reason: 'error' });
+    expect(service.resolveUpstream(other)).toEqual({ outcome: 'error' });
+    expect(audits()).toEqual([]);
+    await expect(owner.startUserContainer({ ...input, userId: other })).rejects.toThrow();
+    await expect(
+      owner.stopUserContainer({ userId: other, reason: 'admin', allowMissingInstance: true }),
+    ).rejects.toThrow();
+    expect(attempt()).toEqual(receipt);
+    expect(daemon.networks.get(receipt.network_id)).toEqual(bridge);
+    expect(audits()).toEqual([]);
+    expect(
+      daemon.requests.filter(
+        ({ method, path }) =>
+          (method === 'DELETE' || path.endsWith('/disconnect')) &&
+          (path.includes(receipt.network_id) || path.includes(`dsh-team-net-${other}`)),
+      ),
+    ).toEqual([]);
+
+    // Apply the one accepted external request, preserving its actual nonce, mounts and bridge.
+    expect(daemon.reply(submitted)).toMatchObject({ status: 201, document: { Id: otherId } });
+    expect(daemon.containers.get(otherId)?.State).toEqual({
+      Running: false,
+      Status: 'created',
+      StartedAt: '0001-01-01T00:00:00Z',
+    });
+    const recovered = createOrchestrator(ownerOptions);
+    await recovered.reconcile();
+    const recoveryEnd = daemon.requests.length;
+    await recovered.reconcile();
+    await recovered.drain();
+    expect(daemon.requests.slice(recoveryEnd).filter(({ method }) => method !== 'GET')).toEqual([]);
+
+    expect(daemon.containers.has(otherId)).toBe(false);
+    expect(daemon.networks.has(receipt.network_id)).toBe(false);
+    expect(attempt()).toBeUndefined();
+    expect(row()).toMatchObject({
+      status: 'error',
+      container_id: null,
+      upstream_host: null,
+      upstream_port: null,
+      dsh_cookie: null,
+    });
+    expect(audits()).toEqual([{ event_type: 'instance.start-failed' }]);
+    expect(
+      daemon.requests.filter(
+        ({ method, path }) => method === 'DELETE' && path.includes('/volumes'),
+      ),
+    ).toEqual([]);
+    expect(
+      daemon.requests.filter(
+        ({ method, path }) => method === 'DELETE' && path === `/containers/${otherId}`,
+      ),
+    ).toHaveLength(1);
+    expect(database.prepare('SELECT * FROM users WHERE id = ?').get(START_USER)).toEqual(account);
+    expect(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER)).toEqual(
+      healthy,
+    );
+    expect(daemon.containers.get(START_CONTAINER)).toEqual(healthyContainer);
+    expect(daemon.networks.get(START_NETWORK)).toEqual(healthyNetwork);
+    expect(daemon.networks.get('0'.repeat(64))).toEqual(primary);
+  } finally {
+    creation.release();
+    correction.release();
+    await reconciling;
+    await starting;
+    await owner.drain();
+    await service.close();
+  }
+});
