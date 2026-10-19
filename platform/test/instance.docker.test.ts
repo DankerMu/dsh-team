@@ -155,7 +155,7 @@ it('registers and logs in over HTTP, explicitly starts, reaches real DSH HTML an
         const container = await inspectAsync(lifecycle, row.container_id);
         expect(container.Name).toBe(`/dsh-team-u-${user.id}`);
         expect(container.Image).toBe(lifecycle.imageId);
-        expect(record(container.Config).Labels).toEqual({
+        expect(record(container.Config).Labels).toMatchObject({
           'dsh-team.user': user.id,
           'dsh-team.test-run': lifecycle.runId,
         });

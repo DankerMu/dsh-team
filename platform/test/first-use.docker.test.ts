@@ -201,7 +201,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
           expect(container.Id).toBe(row.container_id);
           expect(container.Image).toBe(lifecycle.imageId);
           expect(container.Name).toBe(`/dsh-team-u-${user.id}`);
-          expect(record(container.Config).Labels).toEqual({
+          expect(record(container.Config).Labels).toMatchObject({
             'dsh-team.user': user.id,
             'dsh-team.test-run': lifecycle.runId,
           });

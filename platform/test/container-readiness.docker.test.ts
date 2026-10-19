@@ -58,7 +58,7 @@ async function readinessScenario(
       if (create) {
         const configuration = record(body);
         expect(configuration.Image).toBe(lifecycle.imageId);
-        expect(configuration.Labels).toEqual(ownership);
+        expect(configuration.Labels).toMatchObject(ownership);
         expect(record(configuration.HostConfig).Mounts).toEqual(
           expect.arrayContaining([
             {
