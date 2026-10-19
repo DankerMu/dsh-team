@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { lstat, readFile, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { writeReceipt } from './probe-browser-receipt.mjs';
@@ -76,63 +77,127 @@ function secretPresent() {
   throw new Error('GitHub channel retirement could not be observed');
 }
 
+const hostFailureCodes = new Set([
+  'authorization',
+  'execution-cgroup',
+  'browser-rescue',
+  'docker-rescue',
+  'evidence',
+  'temporary-files',
+]);
+
+function hostReceipt(value) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const { vpsCleanupComplete, failures, exitCode } = value;
+  if (
+    typeof vpsCleanupComplete !== 'boolean' ||
+    !Array.isArray(failures) ||
+    !failures.every((failure) => hostFailureCodes.has(failure)) ||
+    !Number.isSafeInteger(exitCode) ||
+    exitCode < 0 ||
+    exitCode > 255 ||
+    (vpsCleanupComplete && failures.length !== 0)
+  )
+    return undefined;
+  return { vpsCleanupComplete, failures, exitCode };
+}
+
+function parseHostReceipt(text) {
+  try {
+    return hostReceipt(JSON.parse(text));
+  } catch {
+    // Raw receipt text and parser diagnostics are never retained.
+    return undefined;
+  }
+}
+
 function observeHost() {
-  return new Promise((resolveHost) => {
-    const observer = spawn(
-      'ssh',
-      [
-        '-o',
-        'StrictHostKeyChecking=yes',
-        'giap-vps',
-        `${quote(node)} ${quote(worker)} await ${quote(invocation)}`,
-      ],
-      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 1_850_000 },
-    );
-    let text = '';
-    observer.stdout.on('data', (chunk) => {
-      text += String(chunk);
-      if (text.length > 16_384) observer.kill('SIGTERM');
-    });
-    const failed = () => {
-      interrupted = true;
-      watch?.kill('SIGTERM');
-      resolveHost({ vpsCleanupComplete: false, exitCode: 1 });
-    };
-    observer.once('error', failed);
-    observer.once('exit', (code) => {
-      if (code !== 0) {
-        failed();
-        return;
-      }
-      try {
-        const result = JSON.parse(text);
-        if (result.vpsCleanupComplete !== true || result.exitCode !== 0) {
-          interrupted = true;
-          watch?.kill('SIGTERM');
-        }
-        resolveHost(result);
-      } catch {
-        failed();
-      }
+  const completion = Promise.withResolvers();
+  const timeoutMs = 1_850_000;
+  const outputLimitBytes = 16_384;
+  const started = performance.now();
+  const observer = spawn(
+    'ssh',
+    [
+      '-o',
+      'StrictHostKeyChecking=yes',
+      'giap-vps',
+      `${quote(node)} ${quote(worker)} await ${quote(invocation)}`,
+    ],
+    { stdio: ['ignore', 'pipe', 'ignore'] },
+  );
+  const chunks = [];
+  let stdoutBytes = 0;
+  let failure;
+  // Node24's spawn timeout is cleared on exit, which does not occur after ENOENT.
+  // Own the unchanged observation deadline through close, including failed spawn.
+  const deadline = setTimeout(() => {
+    failure ??= 'deadline';
+    observer.kill('SIGTERM');
+    observer.stdout.destroy();
+  }, timeoutMs);
+  const interrupt = () => {
+    interrupted = true;
+    watch?.kill('SIGTERM');
+  };
+  observer.stdout.on('data', (chunk) => {
+    // The count saturates at limit+1; no overflowing chunk enters retained memory.
+    stdoutBytes = Math.min(outputLimitBytes + 1, stdoutBytes + chunk.length);
+    if (stdoutBytes > outputLimitBytes) {
+      failure ??= 'output-limit';
+      observer.kill('SIGTERM');
+      observer.stdout.destroy();
+    } else chunks.push(chunk);
+  });
+  observer.once('error', () => {
+    failure ??= 'spawn-error';
+    interrupt();
+  });
+  observer.stdout.once('error', () => {
+    failure ??= 'stream-error';
+    observer.kill('SIGTERM');
+  });
+  observer.once('close', (code, signal) => {
+    clearTimeout(deadline);
+    let kind = failure;
+    if (!kind && code !== 0) kind = signal ? 'terminated' : 'nonzero-exit';
+    const receipt = kind ? undefined : parseHostReceipt(Buffer.concat(chunks).toString('utf8'));
+    kind ??= receipt ? 'receipt' : 'invalid-receipt';
+    if (!receipt || !receipt.vpsCleanupComplete || receipt.exitCode !== 0) interrupt();
+    completion.resolve({
+      receipt,
+      diagnostic: {
+        kind,
+        processExitCode: Number.isSafeInteger(code) && code >= 0 && code <= 255 ? code : null,
+        signal:
+          typeof signal === 'string' && Object.hasOwn(constants.signals, signal) ? signal : null,
+        terminationRequested: observer.killed,
+        elapsedMs: Math.round(performance.now() - started),
+        timeoutMs,
+        stdoutBytes,
+        outputLimitBytes,
+      },
     });
   });
+  return completion.promise;
 }
-function run(binary, args, input, timeout = 60_000) {
+function run(binary, args, input, timeout = 60_000, maxBuffer = 33_554_432) {
   const result = spawnSync(binary, args, {
     input,
     encoding: input instanceof Buffer ? null : 'utf8',
     timeout,
-    maxBuffer: 33_554_432,
+    maxBuffer,
   });
   if (result.status !== 0 || result.error) throw new Error(`CI operator ${binary} failed`);
   return typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
 }
-function ssh(command, input, timeout = 60_000) {
+function ssh(command, input, timeout = 60_000, maxBuffer = 33_554_432) {
   return run(
     'ssh',
     ['-o', 'StrictHostKeyChecking=yes', 'giap-vps', `umask 077; ${command}`],
     input,
     timeout,
+    maxBuffer,
   );
 }
 function provision(command, expiresAt) {
@@ -325,11 +390,60 @@ async function runActions() {
   });
   if (code !== 0 || interrupted) throw new Error('Trusted Actions run failed or was cancelled');
 }
+function installationOwnership() {
+  try {
+    const ownership = ssh(
+      `if [ ! -e ${quote(remote)} ]; then printf absent; elif [ -f ${quote(`${remote}/owner`)} ] && [ "$(cat ${quote(`${remote}/owner`)})" = ${quote(invocation)} ]; then printf owned; else printf foreign; fi`,
+    ).trim();
+    return ['owned', 'absent', 'foreign'].includes(ownership) ? ownership : 'unconfirmed';
+  } catch {
+    return 'unconfirmed';
+  }
+}
+
+function canonicalHostReceipt() {
+  try {
+    const receipt = parseHostReceipt(
+      ssh(
+        `${quote(node)} ${quote(worker)} await-retirement ${quote(invocation)}`,
+        undefined,
+        190_000,
+        16_384,
+      ),
+    );
+    return { receipt, state: receipt ? 'valid' : 'invalid' };
+  } catch {
+    return { receipt: undefined, state: 'failed' };
+  }
+}
+
+function selectHostReceipt(observed) {
+  let final = observed?.receipt;
+  let receiptSource = final ? 'observer' : 'unconfirmed';
+  let canonicalRead = 'not-attempted';
+  let ownership = installationOwnership();
+  if (!final && ownership === 'owned') {
+    const canonical = canonicalHostReceipt();
+    final = canonical.receipt;
+    canonicalRead = canonical.state;
+    if (final) receiptSource = 'canonical';
+    ownership = installationOwnership();
+  }
+  const authoritative = ownership === 'owned' ? final : undefined;
+  return {
+    final: authoritative,
+    diagnostic: {
+      receiptSource,
+      canonicalRead,
+      ownership,
+      cleanupConfirmed: authoritative?.vpsCleanupComplete === true,
+    },
+  };
+}
+
 async function recoverVps() {
   if (!rootAttempted) return;
-  const ownership = ssh(
-    `if [ ! -e ${quote(remote)} ]; then printf absent; elif [ -f ${quote(`${remote}/owner`)} ] && [ "$(cat ${quote(`${remote}/owner`)})" = ${quote(invocation)} ]; then printf owned; else printf foreign; fi`,
-  ).trim();
+  const ownership = installationOwnership();
   if (ownership === 'absent') return;
   if (ownership !== 'owned') throw new Error('Private installation ownership is unconfirmed');
   if (!workerReady) {
@@ -345,13 +459,15 @@ async function recoverVps() {
   ).trim();
   if (!['active', 'activating'].includes(active))
     ssh(`${quote(node)} ${quote(worker)} finalize ${quote(invocation)}`, undefined, 190_000);
-  const final = hostObserver
-    ? await hostObserver
-    : JSON.parse(
-        ssh(`${quote(node)} ${quote(worker)} await ${quote(invocation)}`, undefined, 190_000),
-      );
-  await writeReceipt(join(local, 'vps-final.json'), final);
-  if (final.vpsCleanupComplete !== true) throw new Error('Host cleanup incomplete');
+  const observed = await hostObserver;
+  if (observed) await writeReceipt(join(local, 'host-observation.json'), observed.diagnostic);
+  const recovery = selectHostReceipt(observed);
+  await writeReceipt(join(local, 'host-recovery.json'), recovery.diagnostic);
+  await writeReceipt(
+    join(local, 'vps-final.json'),
+    recovery.final ?? { vpsCleanupComplete: false, exitCode: 1 },
+  );
+  if (!recovery.diagnostic.cleanupConfirmed) throw new Error('Host cleanup incomplete');
 }
 
 function cancelActions() {
@@ -399,9 +515,9 @@ async function retire() {
   }
   if (!failures.length && rootAttempted) {
     try {
-      // The symlink is an atomic lock identity. A foreign generation is never removed.
+      // Recheck installation authority at mutation; never remove a foreign lock generation.
       ssh(
-        `if [ -L /home/ubuntu/.local/share/dsh-team/ci/active ] && [ "$(readlink /home/ubuntu/.local/share/dsh-team/ci/active)" = ${quote(invocation)} ]; then rm /home/ubuntu/.local/share/dsh-team/ci/active; fi`,
+        `if [ -L /home/ubuntu/.local/share/dsh-team/ci/active ] && [ "$(readlink /home/ubuntu/.local/share/dsh-team/ci/active)" = ${quote(invocation)} ]; then { [ ! -e ${quote(remote)} ] || { [ -f ${quote(`${remote}/owner`)} ] && [ "$(cat ${quote(`${remote}/owner`)})" = ${quote(invocation)} ]; }; } && rm /home/ubuntu/.local/share/dsh-team/ci/active; fi`,
       );
     } catch {
       failures.push('owned-lock-retirement');

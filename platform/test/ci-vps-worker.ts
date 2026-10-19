@@ -412,8 +412,10 @@ try {
   else if (mode === 'finalize') finalize();
   else if (mode === 'finalize-locked') await finalizeLocked();
   else if (mode === 'watch') await watch();
-  else if (mode === 'await')
-    process.stdout.write(`${JSON.stringify(await awaitFinal(1_800_000))}\n`);
+  else if (mode === 'await' || mode === 'await-retirement')
+    process.stdout.write(
+      `${JSON.stringify(await awaitFinal(mode === 'await' ? 1_800_000 : 180_000))}\n`,
+    );
   else throw new Error('Unknown VPS execution mode');
 } catch {
   process.stderr.write('Trusted VPS execution failed; inspect private sanitized receipt\n');
