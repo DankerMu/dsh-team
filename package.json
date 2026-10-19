@@ -9,7 +9,7 @@
   },
   "scripts": {
     "prepare": "husky",
-    "dev": "pnpm build:web && node --watch --env-file-if-exists=.env platform/src/main.ts",
+    "dev": "pnpm build:web && bash scripts/dev-watch.sh",
     "dev:web": "pnpm --filter @dsh-team/web dev",
     "dev:bg": "bash scripts/dev-server.sh start",
     "dev:stop": "bash scripts/dev-server.sh stop",
