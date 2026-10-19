@@ -37,6 +37,13 @@ import {
   reuseCurrentContainer,
 } from './start-identity.ts';
 import type { StartResult, StartUserContainerInput } from './start-identity.ts';
+import {
+  beginCreationAttempt,
+  bindCreatedContainer,
+  consumeCreationAttempt,
+  recoverCreationAttempt,
+} from './creation-attempt.ts';
+import type { CreationAttempt } from './creation-attempt.ts';
 
 // Composition may load the installed Web profile; a hung helper must not retain home access.
 const START_TIMEOUT_MS = 60_000;
@@ -317,8 +324,9 @@ async function createInstance(
   memory: number,
   envName: string,
   modelKey: string,
+  attempt: CreationAttempt,
   inspecting: () => void,
-): Promise<string> {
+): Promise<{ id: string; attempt: CreationAttempt }> {
   const { config, userId } = input;
   const id = containerId(
     await client.json('POST', `/containers/create?name=${name}`, {
@@ -337,7 +345,7 @@ async function createInstance(
         '--trusted-host',
         config.authority,
       ],
-      Labels: { 'dsh-team.user': userId },
+      Labels: { 'dsh-team.user': userId, 'dsh-team.creation-attempt': attempt.attempt_id },
       ExposedPorts: { '3080/tcp': {} },
       HostConfig: {
         NetworkMode: network.id,
@@ -362,6 +370,7 @@ async function createInstance(
       },
     }),
   );
+  const bound = bindCreatedContainer(input, attempt, id);
   inspecting();
   const created = ownedContainer(
     await client.json('GET', `/containers/${id}/json`),
@@ -372,7 +381,7 @@ async function createInstance(
   if (created.Id !== id) throw new Error('Created container identity mismatch');
   requireUnpublished(created, input.transport.config.upstreamMode);
   await validateUserNetwork(client, userId, created, input.transport, network.id, true);
-  return id;
+  return { id, attempt: bound };
 }
 
 function startupCleanupClient(input: StartUserContainerInput): DockerClient {
@@ -387,6 +396,34 @@ function startupCleanupClient(input: StartUserContainerInput): DockerClient {
         maxBytes,
       ),
   };
+}
+
+function persistCreatedInstance(
+  input: StartUserContainerInput,
+  account: Record<string, unknown>,
+  attempt: CreationAttempt,
+  id: string,
+): Record<string, unknown> {
+  const { database, userId } = input;
+  database.transaction(() => {
+    consumeCreationAttempt(input, attempt, account);
+    database
+      .prepare(
+        `INSERT INTO instances (user_id,status,container_id,image_tag,image_id)
+      VALUES (?, 'starting', ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+      status='starting',container_id=excluded.container_id,image_tag=excluded.image_tag,
+      image_id=excluded.image_id,upstream_host=NULL,upstream_port=NULL,dsh_cookie=NULL,
+      last_started_at=NULL,last_error=NULL`,
+      )
+      .run(userId, id, attempt.image_tag, attempt.image_id);
+    recordAuditEvent(database, {
+      type: 'instance.created',
+      createdAt: Date.now(),
+      targetEmail: String(account.email),
+      target: userId,
+    });
+  })();
+  return object(database.prepare('SELECT * FROM instances WHERE user_id=?').get(userId));
 }
 
 /** Create, reuse, or retire an admitted error identity before retry; readiness and cookies remain separate. */
@@ -454,6 +491,8 @@ export async function startUserContainer(
     stage = 'capacity admission';
     signal.throwIfAborted();
     if (!reserve()) return { outcome: 'full' };
+    stage = 'creation recovery';
+    await recoverCreationAttempt({ ...input, signal });
     if (retryInstance !== undefined) {
       stage = 'error container retirement';
       await retireCurrentErrorContainer(input, user, retryInstance, signal, retire);
@@ -495,8 +534,16 @@ export async function startUserContainer(
     );
     stage = 'container creation';
     signal.throwIfAborted();
+    const pendingCreation = beginCreationAttempt(
+      input,
+      user,
+      network,
+      image,
+      config.userImage,
+      overlay,
+    );
     containerAttempted = true;
-    const id = await createInstance(
+    const { id, attempt } = await createInstance(
       input,
       client,
       name,
@@ -509,30 +556,13 @@ export async function startUserContainer(
       memory,
       envName,
       input.modelKey,
+      pendingCreation,
       () => {
         stage = 'created container inspection';
       },
     );
     stage = 'creation persistence';
-    database.transaction(() => {
-      database
-        .prepare(
-          `INSERT INTO instances (user_id, status, container_id, image_tag, image_id)
-        VALUES (?, 'starting', ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
-        status = 'starting', container_id = excluded.container_id, image_tag = excluded.image_tag, image_id = excluded.image_id,
-        upstream_host = NULL, upstream_port = NULL, dsh_cookie = NULL, last_started_at = NULL, last_error = NULL`,
-        )
-        .run(userId, id, config.userImage, image);
-      recordAuditEvent(database, {
-        type: 'instance.created',
-        createdAt: Date.now(),
-        targetEmail: email,
-        target: userId,
-      });
-    })();
-    const createdInstance = object(
-      database.prepare('SELECT * FROM instances WHERE user_id = ?').get(userId),
-    );
+    const createdInstance = persistCreatedInstance(input, user, attempt, id);
     stage = 'container start';
     const launched = await launchInstance(
       input,

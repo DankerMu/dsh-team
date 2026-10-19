@@ -96,6 +96,7 @@ try {
     JSON.stringify(names) !==
     JSON.stringify([
       'audit_events',
+      'creation_attempts',
       'instances',
       'platform_sessions',
       'schema_migrations',
@@ -105,7 +106,7 @@ try {
   ) {
     throw new Error(`e2e: unexpected schema tables ${JSON.stringify(names)}`);
   }
-  if (JSON.stringify(versions) !== JSON.stringify([{ version: 1 }, { version: 2 }])) {
+  if (JSON.stringify(versions) !== JSON.stringify([{ version: 1 }, { version: 2 }, { version: 3 }])) {
     throw new Error(`e2e: unexpected migration ledger ${JSON.stringify(versions)}`);
   }
 } finally {

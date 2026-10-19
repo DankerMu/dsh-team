@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { START_CONTAINER, START_USER, startupBarrier } from '../../test/container-start-fixture.ts';
 import { RECONCILE_COOKIE } from '../../test/container-reconcile-fixture.ts';
 import {
@@ -6,6 +6,70 @@ import {
   configureInstanceModel as configure,
   heldReadinessLogs,
 } from '../../test/instance-fixture.ts';
+
+it.each(['deadline', 'disabled'] as const)(
+  'settles an applied create before durable recovery after %s cancellation',
+  async (kind) => {
+    const gate = startupBarrier();
+    const deadline = new AbortController();
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const clock =
+      kind === 'deadline'
+        ? vi
+            .spyOn(AbortSignal, 'timeout')
+            .mockImplementation((duration) =>
+              duration === 60_000 ? deadline.signal : originalTimeout(duration),
+            )
+        : undefined;
+    const f = await fixture((client) => ({
+      ...client,
+      async json(method, path, body, signal, maxBytes) {
+        const result = await client.json(method, path, body, signal, maxBytes);
+        if (path === `/containers/create?name=dsh-team-u-${START_USER}`) {
+          await gate.hold();
+          signal?.throwIfAborted();
+        }
+        return result;
+      },
+    }));
+    try {
+      configure(f.database);
+      const starting = expect(f.service.start(START_USER)).rejects.toThrow(
+        'Instance operation failed',
+      );
+      await gate.reached;
+      expect(f.daemon.containers.get(START_CONTAINER)?.State.Running).toBe(false);
+      let stopped = false;
+      let stopping: Promise<void> | undefined;
+      if (kind === 'disabled') {
+        f.database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+        stopping = f.service.stop(START_USER, 'disabled').then(() => {
+          stopped = true;
+        });
+        expect(stopped).toBe(false);
+      } else deadline.abort();
+      expect(f.service.status('mnopqrstuvwx')).toEqual({ status: 'stopped', reason: 'stopped' });
+      gate.release();
+      await starting;
+      stopping ??= f.service.stop(START_USER, 'admin');
+      await stopping;
+
+      expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+      expect(f.database.prepare('SELECT * FROM creation_attempts').all()).toEqual([]);
+      expect(f.service.status(START_USER)).toEqual({ status: 'error', reason: 'error' });
+      expect(
+        f.daemon.requests.some(({ path }) => path === `/containers/${START_CONTAINER}/start`),
+      ).toBe(false);
+      expect(
+        f.database.prepare("SELECT * FROM audit_events WHERE event_type='instance.stopped'").all(),
+      ).toEqual([]);
+    } finally {
+      gate.release();
+      clock?.mockRestore();
+      await f.close();
+    }
+  },
+);
 
 it.each(['missing', 'stopped', 'error'] as const)(
   'disabled retirement safely confirms %s without fabricated stop audits',

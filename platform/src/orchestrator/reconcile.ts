@@ -81,7 +81,9 @@ async function discover(
     }
   }
   for (const row of input.database
-    .prepare<[], { user_id: string }>('SELECT user_id FROM instances ORDER BY user_id')
+    .prepare<[], { user_id: string }>(
+      'SELECT user_id FROM instances UNION SELECT user_id FROM creation_attempts ORDER BY user_id',
+    )
     .all())
     users.add(row.user_id);
   return [...users];

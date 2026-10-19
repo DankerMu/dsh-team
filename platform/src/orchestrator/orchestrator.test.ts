@@ -119,7 +119,7 @@ it('another user completes while the first user still owns a blocked startup', a
   ).toEqual({
     container_id: NEXT_CONTAINER,
   });
-  expect(daemon.containers.get(NEXT_CONTAINER)?.Config.Labels).toEqual({
+  expect(daemon.containers.get(NEXT_CONTAINER)?.Config.Labels).toMatchObject({
     'dsh-team.user': OTHER_USER,
   });
 });

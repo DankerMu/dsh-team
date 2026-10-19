@@ -1,3 +1,4 @@
+import { validateStopReason } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { DockerClient } from './client.ts';
@@ -16,6 +17,11 @@ import { discoverReconciliationNetworks, reconcileOrphanNetwork } from './networ
 import { restoreUserProfiles } from './profile-restore.ts';
 import type { RestoreUserProfilesInput } from './profile-restore.ts';
 import { HomeHelperUnconfirmedError } from './home-helper.ts';
+import {
+  CreationQuarantinedError,
+  readCreationAttempt,
+  recoverCreationAttempt,
+} from './creation-attempt.ts';
 
 export interface OrchestratorDependencies {
   readonly client: DockerClient;
@@ -125,6 +131,8 @@ async function flushActivity(
       // The original FIFO may have been held across many timer ticks.
       const now = Date.now();
       if (observation.writtenAt !== null && now - observation.writtenAt < 60_000) return;
+      // Deferred activity must not invalidate the durable complete-row recovery fence.
+      if (readCreationAttempt({ database, userId }) !== undefined) return;
       state.update ??= database.prepare(
         'UPDATE instances SET last_activity_at = ? WHERE user_id = ? AND (last_activity_at IS NULL OR last_activity_at < ?)',
       );
@@ -257,6 +265,46 @@ function reserveInstanceCapacity(
   return true;
 }
 
+async function retireScheduled(
+  input: RetirementInput & Pick<StopUserContainerInput, 'allowMissingInstance'>,
+  retire: (input: RetirementInput) => Promise<boolean>,
+  assertNetworkConfirmed: (userId: string) => void,
+): Promise<void> {
+  const { database, userId } = input;
+  try {
+    validateStopReason(input.reason);
+    if (
+      input.reason === 'disabled' &&
+      database.prepare("SELECT 1 FROM users WHERE id=? AND status='disabled'").get(userId) ===
+        undefined
+    )
+      throw new Error();
+    await recoverCreationAttempt(input);
+  } catch {
+    throw new Error('User container retirement failed');
+  }
+  // Only the original FIFO slot can confirm a no-row target after canceled creation settles.
+  if (
+    input.allowMissingInstance === true &&
+    database.prepare('SELECT 1 FROM instances WHERE user_id=?').get(userId) === undefined
+  ) {
+    assertNetworkConfirmed(userId);
+    return;
+  }
+  await retire(input);
+}
+
+async function reconcileCreationAttempt(
+  input: ReconciliationInput,
+): Promise<'none' | 'recovered' | 'quarantined'> {
+  try {
+    return (await recoverCreationAttempt(input)) ? 'recovered' : 'none';
+  } catch (error) {
+    if (error instanceof CreationQuarantinedError) return 'quarantined';
+    throw error;
+  }
+}
+
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
@@ -348,6 +396,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   async function reconcileConfirmed(input: ReconciliationInput): Promise<void> {
     // Automatic correction must not turn an unresolved create into name-based orphan cleanup.
     assertNetworkConfirmed(input.userId);
+    if ((await reconcileCreationAttempt(input)) === 'quarantined') return;
     await reconcileUser(input);
   }
 
@@ -389,6 +438,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
               assertNetworkConfirmed(selected.userId);
               if (failedUsers.has(selected.userId))
                 throw new Error('Indexed reconciliation unsettled');
+              if ((await reconcileCreationAttempt(selected)) !== 'none') return;
               await reconcileOrphanNetwork(selected, candidate);
             },
             'Instance reconciliation failed',
@@ -396,7 +446,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
           ),
         ),
       );
-      // Indexed corrections cannot acknowledge a quarantined creation without an indexed row.
+      // Unknown network creation and genuine reconciliation failures remain fatal.
       if (
         signal?.aborted ||
         uncertainNetworks.size !== 0 ||
@@ -454,27 +504,7 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
     stopUserContainer: (input: StopUserContainerInput) =>
       schedule(
         input,
-        async (captured) => {
-          if (
-            captured.reason === 'disabled' &&
-            database
-              .prepare("SELECT 1 FROM users WHERE id=? AND status='disabled'")
-              .get(captured.userId) === undefined
-          )
-            throw new Error('User container retirement failed');
-          // Service cancellation may reject a queued caller before its original slot settles.
-          // Only this FIFO slot can prove that a never-started target still has no instance.
-          if (
-            captured.allowMissingInstance === true &&
-            database.prepare('SELECT 1 FROM instances WHERE user_id=?').get(captured.userId) ===
-              undefined
-          ) {
-            // No index cannot confirm cleanup of an owner-quarantined ambiguous network create.
-            assertNetworkConfirmed(captured.userId);
-            return;
-          }
-          await retire(captured);
-        },
+        (captured) => retireScheduled(captured, retire, assertNetworkConfirmed),
         'User container retirement failed',
       ),
   };
