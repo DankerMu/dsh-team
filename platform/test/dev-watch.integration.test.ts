@@ -70,12 +70,13 @@ async function developmentManifest() {
 }
 
 it.each([
-  { name: 'absent', present: false, unreadable: false },
-  { name: 'present', present: true, unreadable: false },
-  { name: 'unreadable', present: true, unreadable: true },
+  { name: 'absent', present: false, unreadable: false, invalid: false },
+  { name: 'present', present: true, unreadable: false, invalid: false },
+  { name: 'unreadable', present: true, unreadable: true, invalid: true },
+  { name: 'dangling symlink', present: false, unreadable: false, invalid: true },
 ])(
   'dev preserves native startup and reload with $name environment input',
-  async ({ present, unreadable }) => {
+  async ({ present, unreadable, invalid }) => {
     const manifest = await developmentManifest();
     const root = await mkdtemp(join(tmpdir(), 'dsh-dev-watch-'));
     let child: ReturnType<typeof spawn> | undefined;
@@ -111,6 +112,8 @@ setInterval(() => {}, 1000);
           'WATCH_CONFIGURED="file value # literal"\nWATCH_PRECEDENCE=file\n',
         );
         if (unreadable) await chmod(join(root, '.env'), 0);
+      } else if (invalid) {
+        await symlink(join(root, 'missing-env-target'), join(root, '.env'));
       }
       child = spawn('pnpm', ['--silent', 'run', 'dev'], {
         cwd: root,
@@ -129,8 +132,8 @@ setInterval(() => {}, 1000);
         });
       });
       void closed.catch(() => undefined);
-      if (unreadable) {
-        await until(() => exited, 'unreadable environment rejection');
+      if (invalid) {
+        await until(() => exited, 'invalid environment rejection');
         expect(await closed).toBeGreaterThan(0);
         expect(await receipt(root)).toBeUndefined();
         return;
