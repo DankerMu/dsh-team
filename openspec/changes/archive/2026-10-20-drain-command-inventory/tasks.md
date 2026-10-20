@@ -8,7 +8,7 @@
 ## 2. Independent delivery
 
 - [x] 2.1 Complete four-seat review, exact-head required CI and existing trusted full Docker/Compose evidence with independent cleanup/host fence; preserve any separate runtime failures without skipping cases.
-- [ ] 2.2 Merge this prerequisite through protection, synchronize/archive its fixture, then update PR300 onto the repaired main before new-head qualification. Human review remains deferred/UNPASSED.
+- [x] 2.2 Merge this prerequisite through protection, synchronize/archive its fixture, then update PR300 onto the repaired main before new-head qualification. Human review remains deferred/UNPASSED.
 
 ## Risk-pack mapping
 
