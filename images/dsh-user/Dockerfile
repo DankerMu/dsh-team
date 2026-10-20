@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim
+FROM node:24.22.0-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 
 RUN --mount=type=bind,from=build-tools,target=/build-tools,ro \
   node /build-tools/debian-sources.mjs /etc/apt/sources.list.d/debian.sources \
