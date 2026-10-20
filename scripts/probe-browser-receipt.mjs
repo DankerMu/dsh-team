@@ -28,6 +28,16 @@ export async function writeReceipt(path, receipt) {
   }
 }
 
+/** Old display hashes cannot establish owner death; other schemes retain their existing validators. */
+function requireCurrentDarwinBirth(birth) {
+  if (
+    typeof birth === 'string' &&
+    birth.startsWith('darwin:') &&
+    !/^darwin:[1-9][0-9]*:[1-9][0-9]*:(?:0|[1-9][0-9]{0,5})$/.test(birth)
+  )
+    throw new Error('browser process identity format unsupported; retaining authority');
+}
+
 export async function readReceipt(path) {
   const info = await lstat(path);
   if (
@@ -44,5 +54,8 @@ export async function readReceipt(path) {
     !/^[a-f0-9-]{36}$/.test(receipt.nonce)
   )
     throw new Error('browser receipt identity invalid');
+  requireCurrentDarwinBirth(receipt.driver?.birth);
+  requireCurrentDarwinBirth(receipt.acquisition?.producer?.birth);
+  requireCurrentDarwinBirth(receipt.native?.birth);
   return receipt;
 }

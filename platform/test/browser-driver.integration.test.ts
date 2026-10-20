@@ -56,6 +56,13 @@ vi.mock('node:child_process', async (importOriginal) => ({
   },
 }));
 
+function observationProcess() {
+  return spawn(process.execPath, ['-e', 'process.stdout.write("ready");setInterval(()=>{},1000)'], {
+    env: { PATH: process.env.PATH },
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+}
+
 it.each([
   { observation: 'zombie', retired: true },
   { observation: 'dead', retired: true },
@@ -66,22 +73,21 @@ it.each([
   { observation: 'EACCES', retired: false },
   { observation: 'malformed', retired: false },
   { observation: 'unknown', retired: false },
+  { observation: 'live', retired: false, obsolete: 'driver' },
+  { observation: 'ENOENT', retired: false, obsolete: 'driver' },
+  { observation: 'live', retired: false, obsolete: 'producer' },
+  { observation: 'live', retired: false, obsolete: 'native' },
 ])(
-  'preserves external rescue ownership under a $observation driver observation',
-  async ({ observation, retired }) => {
+  'preserves external rescue ownership under a $observation driver observation (obsolete=$obsolete)',
+  async ({ observation, retired, obsolete }) => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-team-driver-observation-'));
-    const child = spawn(
-      process.execPath,
-      ['-e', 'process.stdout.write("ready");setInterval(()=>{},1000)'],
-      {
-        env: { PATH: process.env.PATH },
-        stdio: ['ignore', 'pipe', 'ignore'],
-      },
-    );
+    const child = observationProcess();
+    const sentinel = observationProcess();
     const exited = once(child, 'exit');
+    const sentinelExited = once(sentinel, 'exit');
     try {
-      await once(child.stdout, 'data');
-      if (!child.pid) throw new Error('Owned observation process missing');
+      await Promise.all([once(child.stdout, 'data'), once(sentinel.stdout, 'data')]);
+      if (!child.pid || !sentinel.pid) throw new Error('Owned observation process missing');
       kernel.pid = child.pid;
       kernel.observation = observation;
       const profile = join(root, 'profile');
@@ -99,12 +105,21 @@ it.each([
         profile,
         receiptFile,
       });
-      await writeReceipt(receiptFile, {
+      const identity = {
+        pid: child.pid,
+        birth: `darwin:${String(child.pid)}:${'a'.repeat(64)}`,
+      };
+      const observed: Record<string, unknown> = {
         ...receipt,
         driver: { pid: child.pid, birth: `linux:${String(child.pid)}:123` },
-      });
+      };
+      if (obsolete === 'driver') observed.driver = identity;
+      if (obsolete === 'producer') observed.acquisition = { state: 'settled', producer: identity };
+      if (obsolete === 'native') observed.native = identity;
+      await writeReceipt(receiptFile, observed);
       const before = await readFile(receiptFile, 'utf8');
 
+      if (obsolete) await expect(readReceipt(receiptFile)).rejects.toThrow();
       if (retired) {
         await rescueChrome(receiptFile);
         expect((await readReceipt(receiptFile)).state).toBe('stopped');
@@ -113,9 +128,11 @@ it.each([
         expect(await readFile(receiptFile, 'utf8')).toBe(before);
       }
       expect(process.kill(child.pid, 0)).toBe(true);
+      expect(process.kill(sentinel.pid, 0)).toBe(true);
     } finally {
       child.kill('SIGKILL');
-      await exited;
+      sentinel.kill('SIGKILL');
+      await Promise.all([exited, sentinelExited]);
       kernel.pid = 0;
       kernel.observation = 'live';
       await rm(root, { recursive: true, force: true });

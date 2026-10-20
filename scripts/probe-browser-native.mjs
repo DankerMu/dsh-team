@@ -1,6 +1,5 @@
 /** Native ownership is the issued ChildProcess capability, not a mutable ps command. */
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { platform } from 'node:os';
 
@@ -17,6 +16,51 @@ export const alive = (pid) => {
   }
 };
 
+function darwinObservation(pid) {
+  // SDK proc_bsdinfo: preserve the complete declared layout, not ps display or command text.
+  const program = `
+import ctypes, errno, sys
+class BsdInfo(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_uint32) for name in (
+        "flags", "status", "xstatus", "pid", "ppid", "uid", "gid",
+        "ruid", "rgid", "svuid", "svgid", "reserved"
+    )] + [("comm", ctypes.c_char * 16), ("name", ctypes.c_char * 32)] + [
+        (name, ctypes.c_uint32) for name in ("nfiles", "pgid", "pjobc", "tdev", "tpgid")
+    ] + [("nice", ctypes.c_int32), ("seconds", ctypes.c_uint64), ("microseconds", ctypes.c_uint64)]
+assert ctypes.sizeof(BsdInfo) == 136
+library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+library.proc_pidinfo.restype = ctypes.c_int
+pid = int(sys.argv[1])
+info = BsdInfo()
+count = library.proc_pidinfo(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
+if count == 0 and ctypes.get_errno() == errno.ESRCH:
+    print("gone")
+elif count == ctypes.sizeof(info) and info.pid == pid:
+    print("ok", info.status, info.seconds, info.microseconds)
+else:
+    sys.exit(1)
+`;
+  const result = spawnSync('/usr/bin/python3', ['-I', '-c', program, String(pid)], {
+    env: { PATH: '/usr/bin:/bin', LC_ALL: 'C' },
+    encoding: 'utf8',
+    timeout: 2000,
+    killSignal: 'SIGKILL',
+    maxBuffer: 4096,
+  });
+  if (result.error || result.status !== 0)
+    throw new Error('browser process birth identity unavailable');
+  if (result.stdout === 'gone\n')
+    throw Object.assign(new Error('browser process absent'), { code: 'ESRCH' });
+  const match = /^ok ([1-5]) ([1-9][0-9]*) (0|[1-9][0-9]*)\n$/.exec(result.stdout);
+  if (!match || !Number.isSafeInteger(Number(match[2])) || Number(match[3]) > 999999)
+    throw new Error('browser process birth identity unavailable');
+  return {
+    birth: `darwin:${pid}:${match[2]}:${match[3]}`,
+    state: ['I', 'R', 'S', 'T', 'Z'][Number(match[1]) - 1],
+  };
+}
+
 async function processObservation(pid) {
   if (!Number.isInteger(pid) || pid < 1) throw new Error('browser process identity invalid');
   if (platform() === 'linux') {
@@ -27,23 +71,7 @@ async function processObservation(pid) {
       throw new Error('browser process birth identity unavailable');
     return { birth: `linux:${pid}:${ticks}`, state: fields[0] };
   }
-  if (platform() === 'darwin') {
-    const result = spawnSync(
-      '/bin/ps',
-      ['-ww', '-p', String(pid), '-o', 'lstart=', '-o', 'command='],
-      {
-        encoding: 'utf8',
-        timeout: 2000,
-        maxBuffer: 65536,
-      },
-    );
-    if (result.status !== 0 || result.error || !result.stdout.trim())
-      throw new Error('browser process birth identity unavailable');
-    return {
-      birth: `darwin:${pid}:${createHash('sha256').update(result.stdout.trim()).digest('hex')}`,
-      state: null,
-    };
-  }
+  if (platform() === 'darwin') return darwinObservation(pid);
   throw new Error('browser process identity unsupported');
 }
 
@@ -53,7 +81,6 @@ export async function processBirth(pid) {
 
 /** A reaped or zombie driver cannot still own sockets; its birth identity remains independently usable. */
 export async function liveProcessBirth(pid) {
-  if (platform() !== 'linux' && !alive(pid)) return null;
   try {
     const observed = await processObservation(pid);
     if (['Z', 'X', 'x'].includes(observed.state)) return null;
