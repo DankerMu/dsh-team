@@ -4,7 +4,7 @@
 - [x] 2. Reuse one canonical Docker build diagnostic projection; migrate the existing caller without changing its output contract, limits or error privacy.
 - [x] 3. Persist failed admission and distinct cleanup outcomes; prove unknown/foreign/changed identities cannot delete, verified owned cleanup remains exact and failed/blocked cleanup stays explicit.
 - [x] 4. Prove build-success qualification failure and evidence-publication failure remain distinct, private and nonzero; audit current image-receipt consumers.
-- [ ] 5. Exercise actual entrypoint smoke and canonical checks; update existing operator guidance, complete four-seat review, exact-head trusted Compose/full Docker, independent cleanup/fence and protected CI/merge/archive.
+- [x] 5. Exercise actual entrypoint smoke and canonical checks; update existing operator guidance, complete four-seat review, exact-head trusted Compose/full Docker, independent cleanup/fence and protected CI/merge/archive.
 
 ## Risk mapping
 
