@@ -245,3 +245,63 @@ it('reports lost owner authority as unknown while its child is live and refuses 
     expect(fixture.observeProcess(ready.pid)).toBe(ready.birth);
   });
 }, 20_000);
+
+it('cancels the actual pnpm child tree and preserves the terminal result on late cancellation', async () => {
+  await withTrustedDockerFixture('hold', async (fixture) => {
+    const sentinel = await fixture.startSentinel();
+    const started = await fixture.start();
+    expect(started.status, started.stderr).toBe(0);
+    const invocation = record(JSON.parse(started.stdout) as unknown).invocation;
+    if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
+    const manifest = record(
+      JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as unknown,
+    );
+    if (typeof manifest.temporary !== 'string') throw new Error('Missing owned temporary root');
+    const temporary = manifest.temporary;
+    await vi.waitFor(() => {
+      expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
+    });
+    const leaf = record(
+      JSON.parse(readFileSync(join(temporary, 'child-ready.json'), 'utf8')) as unknown,
+    );
+    if (typeof leaf.pid !== 'number') throw new Error('Missing owned leaf identity');
+    expect(fixture.observeProcess(leaf.pid)).toBe(leaf.birth);
+
+    const cancelled = fixture.command(['cancel', invocation], true);
+    expect(cancelled.status, cancelled.stderr).toBe(0);
+    expect(JSON.parse(cancelled.stdout) as unknown).toMatchObject({
+      invocation,
+      state: 'cancellation-requested',
+    });
+    const duplicate = fixture.command(['cancel', invocation]);
+    expect(duplicate.status, duplicate.stderr).toBe(0);
+    let terminal: unknown;
+    await vi.waitFor(
+      () => {
+        const result = fixture.command(['status', invocation]);
+        expect(result.status, result.stderr).toBe(0);
+        terminal = JSON.parse(result.stdout) as unknown;
+        expect(terminal).toMatchObject({
+          invocation,
+          state: 'failed',
+          command: { settled: true },
+          interruption: 'cancelled',
+          output: { complete: true },
+          cleanup: { state: 'confirmed' },
+        });
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+
+    expect(readFileSync(join(temporary, 'child-interrupted'), 'utf8')).toBe('SIGINT');
+    expect(fixture.observeProcess(leaf.pid)).toBeNull();
+    const outcome = record(record(terminal).command);
+    expect(outcome.exitCode === 0 && outcome.signal === null).toBe(false);
+    const late = fixture.command(['cancel', invocation], true);
+    expect(late.status, late.stderr).toBe(0);
+    expect(JSON.parse(late.stdout) as unknown).toEqual(terminal);
+    expect(fixture.observeProcess(sentinel.identity.pid)).toBe(sentinel.identity.birth);
+    expect(existsSync(sentinel.interrupted)).toBe(false);
+  });
+}, 20_000);

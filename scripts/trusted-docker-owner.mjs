@@ -5,7 +5,7 @@ import { watch } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, open, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { processBirth } from './probe-browser-native.mjs';
+import { liveProcessBirth, processBirth } from './probe-browser-native.mjs';
 import { writeReceipt } from './probe-browser-receipt.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 import { capturePrivateOutput } from './trusted-docker-output.mjs';
@@ -325,8 +325,8 @@ export async function runTrustedDockerOwner(invocation) {
   return result.state === 'passed' ? 0 : 1;
 }
 
-export async function trustedDockerStatus(invocation) {
-  const context = await readInvocation(invocation);
+async function terminalStatus(context) {
+  const invocation = context.request.invocation;
   try {
     const value = (await readCustodyRecord(join(context.directory, 'result.json'))).value;
     const result = validateTerminal(value, invocation, context.digest);
@@ -343,21 +343,41 @@ export async function trustedDockerStatus(invocation) {
     };
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
-    return {
-      invocation,
-      head: context.request.head,
-      root: context.request.root,
-      state: (await ownerIsLive(context.owner)) ? 'running' : 'unknown',
-    };
+    return undefined;
   }
+}
+
+export async function trustedDockerStatus(invocation) {
+  const context = await readInvocation(invocation);
+  const terminal = await terminalStatus(context);
+  if (terminal !== undefined) return terminal;
+  const current = await liveProcessBirth(context.owner.pid);
+  if (current === null) {
+    // The owner publishes before exiting; observe that boundary after confirmed absence.
+    const completed = await terminalStatus(context);
+    if (completed !== undefined) return completed;
+  }
+  return {
+    invocation,
+    head: context.request.head,
+    root: context.request.root,
+    state: current === context.owner.birth ? 'running' : 'unknown',
+  };
 }
 
 export async function cancelTrustedDocker(invocation) {
   const context = await readInvocation(invocation);
   const status = await trustedDockerStatus(invocation);
   if (status.state === 'passed' || status.state === 'failed') return status;
-  if (status.state !== 'running' || !(await ownerIsLive(context.owner)))
+  if (status.state !== 'running') throw new Error('Trusted Docker cancellation owner unavailable');
+  const current = await liveProcessBirth(context.owner.pid);
+  if (current !== context.owner.birth) {
+    if (current === null) {
+      const completed = await terminalStatus(context);
+      if (completed?.state === 'passed' || completed?.state === 'failed') return completed;
+    }
     throw new Error('Trusted Docker cancellation owner unavailable');
+  }
   await writeReceipt(join(context.directory, 'cancel.json'), {
     version: 1,
     invocation,

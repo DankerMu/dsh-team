@@ -80,7 +80,8 @@ assert.equal(process.env.DMXAPI_KEY,undefined);
 assert.equal(process.env.SSH_AUTH_SOCK,undefined);
 const temporary=process.env.TMPDIR;
 const release=join(temporary,'release');
-process.once('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');process.exitCode=27;process.exit(27);});
+// One group signal plus pnpm's native forwarding may deliver SIGINT twice.
+process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');process.exitCode=27;process.exit(27);});
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
 const watcher=${JSON.stringify(mode)}==='hold'?watch(temporary,()=>{if(existsSync(release))ready();}):undefined;
