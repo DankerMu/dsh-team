@@ -9,6 +9,7 @@ import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.m
 import { admitVpsIdentity } from './ci-vps-identity.ts';
 import type { VpsApproval } from './ci-vps-identity.ts';
 import { cleanupTargets, readCleanupJournal, removeOwned } from './docker-cleanup.ts';
+import { isAbsentResource } from './docker-command.ts';
 import type { DockerCommand } from './docker-command.ts';
 
 const [mode, invocation] = process.argv.slice(2);
@@ -274,6 +275,17 @@ async function rescueBrowserImage(directory: string) {
     !/^sha256:[a-f0-9]{64}$/.test(image.imageId)
   )
     throw new Error('Invalid browser image receipt');
+  const exact = docker(['image', 'inspect', image.imageId], 30_000);
+  if (isAbsentResource(exact, 'image', image.imageId)) return;
+  const tagged = docker(['image', 'inspect', '--format', '{{.Id}}', image.tag], 30_000);
+  if (
+    exact.error ||
+    exact.status !== 0 ||
+    tagged.error ||
+    tagged.status !== 0 ||
+    tagged.stdout.trim() !== image.imageId
+  )
+    throw new Error('Browser image rescue identity unconfirmed');
   removeOwned(docker, 'image', image.imageId, image.invocation, {
     'dsh-team.browser-invocation': image.invocation,
   });
