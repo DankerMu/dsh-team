@@ -7,6 +7,7 @@ import net from 'node:net';
 import { arch, platform, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { byteListener } from './byte-listener.mjs';
 import {
   alive,
   liveProcessBirth,
@@ -103,56 +104,6 @@ export async function registerChrome(input) {
     );
   }
   return receipt;
-}
-
-function byteListener(address, destination) {
-  const sockets = new Set();
-  const track = (socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
-    return socket;
-  };
-  const server = net.createServer({ allowHalfOpen: true }, (incoming) => {
-    const left = track(incoming);
-    const right = track(net.connect({ ...destination, allowHalfOpen: true }));
-    const abort = () => {
-      left.destroy();
-      right.destroy();
-    };
-    left.on('error', abort);
-    right.on('error', abort);
-    for (const [socket, peer] of [
-      [left, right],
-      [right, left],
-    ]) {
-      socket.once('close', (hadError) => {
-        if (hadError || !socket.readableEnded || !socket.writableFinished) peer.destroy();
-      });
-    }
-    left.pipe(right);
-    right.pipe(left);
-  });
-  const ready = new Promise((done, reject) => {
-    server.once('error', reject);
-    server.listen(address, () => {
-      server.off('error', reject);
-      done();
-    });
-  });
-  return {
-    server,
-    ready,
-    close: async () => {
-      const closed = new Promise((done, reject) =>
-        server.close((error) => {
-          if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
-          else done();
-        }),
-      );
-      for (const socket of sockets) socket.destroy();
-      await closed;
-    },
-  };
 }
 
 export function isolatedBrowserRuntime(runId = randomUUID()) {
@@ -498,7 +449,8 @@ export async function startIsolated(input, receipt) {
   const appSocket = join(socketDirectory, 'app.sock');
   const cdpSocket = join(socketDirectory, 'cdp.sock');
   const appPort = Number(new URL(input.origin).port || '80');
-  const app = byteListener(appSocket, { host: '127.0.0.1', port: appPort });
+  const app = byteListener(appSocket);
+  app.forwardTo({ host: '127.0.0.1', port: appPort });
   let cdp;
   let debugPort;
   let canceled = false;
@@ -511,7 +463,8 @@ export async function startIsolated(input, receipt) {
   try {
     await app.ready;
     await chmod(appSocket, 0o600);
-    cdp = byteListener({ host: '127.0.0.1', port: 0 }, { path: cdpSocket });
+    cdp = byteListener({ host: '127.0.0.1', port: 0 });
+    cdp.forwardTo({ path: cdpSocket });
     await cdp.ready;
     debugPort = cdp.server.address().port;
     if (appPort === debugPort) throw new Error('browser application/CDP port collision');
@@ -697,8 +650,10 @@ async function acquireIsolated(path) {
 }
 
 async function privateRuntime(appPort, debugPort, extraFlags) {
-  const app = byteListener({ host: '127.0.0.1', port: appPort }, { path: '/sockets/app.sock' });
-  const cdp = byteListener('/sockets/cdp.sock', { host: '127.0.0.1', port: debugPort });
+  const app = byteListener({ host: '127.0.0.1', port: appPort });
+  app.forwardTo({ path: '/sockets/app.sock' });
+  const cdp = byteListener('/sockets/cdp.sock');
+  cdp.forwardTo({ host: '127.0.0.1', port: debugPort });
   let child;
   let stopping;
   const stop = () =>

@@ -1,5 +1,4 @@
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,6 +10,7 @@ import {
   type TestInfo,
 } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
+import { byteListener } from '../../scripts/byte-listener.mjs';
 import { buildApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { applyMigrations, openDatabase, type DatabaseHandle } from '../src/db/index.ts';
@@ -232,6 +232,36 @@ export interface AccountUiOptions {
   canonicalInstanceService?: boolean;
   /** An owned Engine-protocol dependency; omitted means the existing unavailable socket. */
   dockerSocketPath?: string;
+  observeInitialization?: (
+    context:
+      | { phase: 'origin-selected'; baseUrl: string }
+      | {
+          phase: 'application-built';
+          baseUrl: string;
+          app: FastifyInstance;
+          database: DatabaseHandle;
+        },
+  ) => void | Promise<void>;
+}
+
+function accountUiConfig(directory: string, port: number, options: AccountUiOptions) {
+  return loadConfig({
+    PLATFORM_HOST: '127.0.0.1',
+    PLATFORM_PORT: String(port),
+    PLATFORM_PUBLIC_URL: `http://127.0.0.1:${String(port)}`,
+    PLATFORM_DATA_DIR: directory,
+    PLATFORM_LOG_LEVEL: 'silent',
+    PLATFORM_COOKIE_SECURE: 'false',
+    ...(options.canonicalInstanceService === true
+      ? {
+          PLATFORM_DOCKER_SOCKET:
+            options.dockerSocketPath ?? join(directory, 'unavailable-docker.sock'),
+          ...(options.dockerSocketPath === undefined
+            ? {}
+            : { PLATFORM_UPSTREAM_MODE: 'published-loopback' }),
+        }
+      : {}),
+  });
 }
 
 export async function withAccountUi(
@@ -244,46 +274,36 @@ export async function withAccountUi(
   let app: FastifyInstance | undefined;
   let service: InstanceService | undefined;
   let seed: APIRequestContext | undefined;
+  let listener: ReturnType<typeof byteListener> | undefined;
+  let primary: unknown;
+  let failed = false;
+  const initialization = { upstreamEntered: false };
+  let listenerRetired = false;
+  const cleanup: unknown[] = [];
+  const settle = async (operation: () => void | Promise<void>) => {
+    try {
+      await operation();
+      return true;
+    } catch (error) {
+      cleanup.push(error);
+      return false;
+    }
+  };
+  const retireListener = async () => {
+    if (listenerRetired) return;
+    listenerRetired = true;
+    await settle(() => listener?.close());
+  };
   try {
     await assertWebBuild();
-    // Reserve a unique port before capturing the public Origin; never reuse a dev listener.
-    const reservation = createServer();
-    let port: number;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        reservation.once('error', reject);
-        reservation.listen(0, '127.0.0.1', resolve);
-      });
-      const address = reservation.address();
-      if (address === null || typeof address === 'string')
-        throw new Error('Missing UI TCP address');
-      port = address.port;
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        reservation.close((error) => {
-          if (error === undefined) resolve();
-          else reject(error);
-        });
-      });
-    }
-    const baseUrl = `http://127.0.0.1:${String(port)}`;
-    const config = loadConfig({
-      PLATFORM_HOST: '127.0.0.1',
-      PLATFORM_PORT: String(port),
-      PLATFORM_PUBLIC_URL: baseUrl,
-      PLATFORM_DATA_DIR: directory,
-      PLATFORM_LOG_LEVEL: 'silent',
-      PLATFORM_COOKIE_SECURE: 'false',
-      ...(options.canonicalInstanceService === true
-        ? {
-            PLATFORM_DOCKER_SOCKET:
-              options.dockerSocketPath ?? join(directory, 'unavailable-docker.sock'),
-            ...(options.dockerSocketPath === undefined
-              ? {}
-              : { PLATFORM_UPSTREAM_MODE: 'published-loopback' }),
-          }
-        : {}),
-    });
+    const publicListener = byteListener({ host: '127.0.0.1', port: 0 });
+    listener = publicListener;
+    await publicListener.ready;
+    const address = publicListener.server.address();
+    if (address === null || typeof address === 'string') throw new Error('Missing UI TCP address');
+    const config = accountUiConfig(directory, address.port, options);
+    const baseUrl = config.publicUrl;
+    await options.observeInitialization?.({ phase: 'origin-selected', baseUrl });
     database = openDatabase(join(directory, 'platform.db'));
     applyMigrations(database);
     const upstreamRequests: { path: string; cookie: string | undefined }[] = [];
@@ -296,49 +316,81 @@ export async function withAccountUi(
         response.end('本地已认证入口（非 DSH）');
       },
       async (target) => {
-        // Default callers retain their local destination; admin actions opt into the real lifecycle.
-        if (database === undefined) throw new Error('Missing UI database');
-        if (options.canonicalInstanceService === true)
-          service = createInstanceService({
-            client: createDockerClient(config.dockerSocketPath),
-            database,
+        initialization.upstreamEntered = true;
+        try {
+          // Default callers retain their local destination; admin actions opt into the real lifecycle.
+          if (database === undefined) throw new Error('Missing UI database');
+          if (options.canonicalInstanceService === true)
+            service = createInstanceService({
+              client: createDockerClient(config.dockerSocketPath),
+              database,
+              config,
+            });
+          app = await buildApp(
             config,
+            database,
+            undefined,
+            (userId) => {
+              admittedUsers.push(userId);
+              return target;
+            },
+            service,
+          );
+          await options.observeInitialization?.({
+            phase: 'application-built',
+            baseUrl,
+            app,
+            database,
           });
-        app = await buildApp(
-          config,
-          database,
-          undefined,
-          (userId) => {
-            admittedUsers.push(userId);
-            return target;
-          },
-          service,
-        );
-        await app.listen({ host: '127.0.0.1', port });
-        // Separate API cookie jar: account seeding never preauthenticates the browser.
-        seed = await playwright.request.newContext({
-          baseURL: baseUrl,
-          extraHTTPHeaders: { Origin: baseUrl },
-        });
-        await run({ baseUrl, database, seed, target, upstreamRequests, admittedUsers });
+          await app.listen({ host: '127.0.0.1', port: 0 });
+          const backend = app.server.address();
+          if (backend === null || typeof backend === 'string')
+            throw new Error('Missing UI backend address');
+          publicListener.forwardTo({ host: '127.0.0.1', port: backend.port });
+          // Separate API cookie jar: account seeding never preauthenticates the browser.
+          seed = await playwright.request.newContext({
+            baseURL: baseUrl,
+            extraHTTPHeaders: { Origin: baseUrl },
+          });
+          await run({ baseUrl, database, seed, target, upstreamRequests, admittedUsers });
+        } catch (error) {
+          primary = error;
+          failed = true;
+        } finally {
+          // Fence public admission before the independently owned upstream begins teardown.
+          await retireListener();
+        }
       },
     );
-  } finally {
-    try {
-      await seed?.dispose();
-    } finally {
-      try {
-        // Playwright owns page/context/browser; app owns DB after successful buildApp.
-        if (app === undefined) {
-          try {
-            await service?.close();
-          } finally {
-            database?.close();
-          }
-        } else await app.close();
-      } finally {
-        await rm(directory, { recursive: true, force: true });
-      }
+  } catch (error) {
+    if (initialization.upstreamEntered) cleanup.push(error);
+    else {
+      primary = error;
+      failed = true;
     }
   }
+  await retireListener();
+  await settle(() => seed?.dispose());
+  // An initialized app owns service drainage and SQLite. Do not close SQLite beneath
+  // unconfirmed lifecycle work merely to make fixture cleanup appear complete.
+  if (app === undefined) {
+    const serviceSettled = await settle(() => service?.close());
+    if (serviceSettled)
+      await settle(() => {
+        database?.close();
+      });
+  } else {
+    const ownedApp = app;
+    await settle(() => ownedApp.close());
+  }
+  // withUpstream reports combined setup/retirement uncertainty as an AggregateError.
+  if (
+    cleanup.length === 0 &&
+    !(!initialization.upstreamEntered && primary instanceof AggregateError)
+  )
+    await settle(() => rm(directory, { recursive: true, force: true }));
+  if (failed) cleanup.unshift(primary);
+  if (cleanup.length > 1)
+    throw new AggregateError(cleanup, 'UI operation or cleanup failed', { cause: cleanup[0] });
+  if (cleanup.length === 1) throw cleanup[0];
 }

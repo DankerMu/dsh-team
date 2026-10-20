@@ -259,6 +259,7 @@ async function prepare() {
     'platform/test/docker-cleanup.ts',
     'platform/test/docker-command.ts',
     'scripts/probe-browser-runtime.mjs',
+    'scripts/byte-listener.mjs',
     'scripts/probe-browser-native.mjs',
     'scripts/probe-browser-network.mjs',
     'scripts/probe-browser-receipt.mjs',

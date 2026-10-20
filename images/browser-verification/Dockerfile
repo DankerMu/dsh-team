@@ -13,6 +13,7 @@ RUN --mount=type=bind,from=build-tools,target=/build-tools,ro \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=browser-runtime /probe-browser-runtime.mjs /opt/dsh-team/probe-browser-runtime.mjs
+COPY --from=browser-runtime /byte-listener.mjs /opt/dsh-team/byte-listener.mjs
 COPY --from=browser-runtime /probe-browser-native.mjs /opt/dsh-team/probe-browser-native.mjs
 COPY --from=browser-runtime /probe-browser-receipt.mjs /opt/dsh-team/probe-browser-receipt.mjs
 COPY --from=browser-runtime /probe-browser-network.mjs /opt/dsh-team/probe-browser-network.mjs
