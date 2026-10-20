@@ -32,7 +32,7 @@ The built-artifact verification command SHALL establish invocation-exclusive rea
 
 ### Requirement: Isolation preserves built-artifact acceptance
 
-Verification SHALL run the actual built main and its awaited reconciliation, observe healthy HTTP, validate the exact database schema and migration ledger versions1 and2, and run every existing HTTP smoke case as a nonroot application. It SHALL retain invocation-owned process and data cleanup without importing shared images or widening smoke into employee startup.
+Verification SHALL run the actual built main and its awaited reconciliation, observe healthy HTTP, validate the exact database schema and migration ledger versions1,2 and3, and run every existing HTTP smoke case as a nonroot application. It SHALL retain invocation-owned process and data cleanup without importing shared images or widening smoke into employee startup.
 
 #### Scenario: Successful isolated verification
 
