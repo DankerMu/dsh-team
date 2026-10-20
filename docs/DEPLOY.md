@@ -52,6 +52,14 @@ docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:lo
 
 记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略四个 named context：`build-tools` 仅在构建时只读挂载普通 Debian 源切换程序，保留官方安全源、archive keyring 和签名/有效期校验，不复制到运行时镜像；其余三个交付插件。
 
+### 用户镜像基础层更新
+
+生产用户镜像的基础身份以 [`images/dsh-user/Dockerfile`](../images/dsh-user/Dockerfile) 的 `FROM` 为唯一来源：精确 Node24补丁版本、Bookworm-slim标签和不可变多架构 index 摘要同时保留。部署验收仍只覆盖现有 Linux amd64；index 内包含其他架构不代表已验证这些架构。不要退回 major-only 标签，也不要把浏览器或平台镜像的基础引用自动套到用户镜像。
+
+更新必须提交显式审查 PR：从 [Docker Official Image Node](https://hub.docker.com/_/node) 对应精确标签取得 index，核对官方 registry 的 index/platform manifest/config 内容摘要、Linux amd64成员和 `NODE_VERSION`；实际构建后观察 Node版本、Debian Bookworm、默认uid1001及精确DSH版本，并在受信 giap-vps 对最终审查提交运行原始完整 `pnpm test:docker`，保留独立资源清理和其他宿主工作负载未变的证据。不能用只读标签检查或较窄 smoke 替代完整验收。`images/dsh-user/` 每一行变更仍须人工白盒审查；回滚同样通过审查恢复先前引用。
+
+此摘要只冻结基础层身份，不冻结后续动态 apt/npm 依赖解析，不能据此声称整个镜像逐字节可复现。保留现有 DSH/pnpm pin、Debian源及签名校验、其他构建指令和门禁；其他镜像及历史 `verify/phase0/` 不随本次固定自动修改。
+
 ## 3. 准备数据和唯一配置副本
 
 ```sh
