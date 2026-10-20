@@ -7,5 +7,5 @@
 
 ## 2. Integrated ownership qualification
 
-- [ ] 2.1 Run current local process/receipt consumer integration and fast checks, actual independent native smoke and Linux kernel identity/cleanup checks; retain command/exit/cleanup evidence and resolve independent cross-review findings without weakening ownership or deadlines.
-- [ ] 2.2 Qualify the final reviewed head through the original full trusted Docker suite and standalone Compose with independent resource absence and unchanged host fences, inspect complete same-head CI, merge through the protected PR and archive this change with strict specification validation. Human acceptance remains deferred and unpassed.
+- [x] 2.1 Run current local process/receipt consumer integration and fast checks, actual independent native smoke and Linux kernel identity/cleanup checks; retain command/exit/cleanup evidence and resolve independent cross-review findings without weakening ownership or deadlines.
+- [x] 2.2 Qualify the final reviewed head through the original full trusted Docker suite and standalone Compose with independent resource absence and unchanged host fences, inspect complete same-head CI, merge through the protected PR and archive this change with strict specification validation. Human acceptance remains deferred and unpassed.
