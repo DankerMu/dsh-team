@@ -63,9 +63,9 @@ export function processIdentity(value) {
   )
     throw new Error('Invalid trusted Docker process identity');
   if (
-    !new RegExp(`^(?:linux:${value.pid}:[0-9]+|darwin:${value.pid}:[a-f0-9]{64})$`).test(
-      value.birth,
-    )
+    !new RegExp(
+      `^(?:linux:${value.pid}:[0-9]+|darwin:${value.pid}:[1-9][0-9]*:(?:0|[1-9][0-9]{0,5}))$`,
+    ).test(value.birth)
   )
     throw new Error('Invalid trusted Docker process birth');
   return { pid: value.pid, birth: value.birth };
@@ -169,6 +169,17 @@ export async function readInvocation(invocation) {
 
 export async function ownerIsLive(identity) {
   return (await liveProcessBirth(identity.pid)) === identity.birth;
+}
+
+export function groupIsAbsent(pid) {
+  if (pid === undefined) return true;
+  try {
+    process.kill(-pid, 0);
+    return false;
+  } catch (error) {
+    if (error.code === 'ESRCH') return true;
+    throw error;
+  }
 }
 
 function requireTerminalFields(value) {

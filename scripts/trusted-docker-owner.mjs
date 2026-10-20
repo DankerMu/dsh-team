@@ -15,6 +15,7 @@ import {
   FULL_DOCKER_COMMAND,
   ownerIsLive,
   privateDirectory,
+  groupIsAbsent,
   processIdentity,
   hasPassingOutcome,
   readCustodyRecord,
@@ -129,17 +130,6 @@ export async function startTrustedDocker(root, head) {
     return { invocation, head, root, directory: paths.directory, owner: context.owner };
   } finally {
     await log.close();
-  }
-}
-
-function groupIsAbsent(pid) {
-  if (pid === undefined) return true;
-  try {
-    process.kill(-pid, 0);
-    return false;
-  } catch (error) {
-    if (error.code === 'ESRCH') return true;
-    throw error;
   }
 }
 

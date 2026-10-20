@@ -1,4 +1,7 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
+import { createInterface } from 'node:readline';
 import {
   cpSync,
   existsSync,
@@ -16,6 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { record } from './container-start-docker-fixture.ts';
+import { groupIsAbsent } from '../../scripts/trusted-docker-record.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
 const birthModule = new URL('../../scripts/probe-browser-native.mjs', import.meta.url).href;
@@ -119,16 +123,9 @@ process.exitCode=17;
   return head;
 }
 
-export function createTrustedDockerFixture(mode: 'fail' | 'hold' = 'fail') {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-team-docker-custody-')));
-  const repository = join(directory, 'repository');
-  const home = join(directory, 'home');
-  mkdirSync(repository);
-  mkdirSync(home);
-  const environment = { PATH: process.env.PATH, HOME: home };
+function fixtureProcessCustody(environment: NodeJS.ProcessEnv, directory: string) {
+  const closures = new Map<number, { closed: boolean }>();
   const observeProcess = (pid: number): string | null => {
-    // Darwin's existing ps-based identity is locale-sensitive; observe in the actual owner's
-    // controlled environment, not the surrounding Vitest worker's unrelated locale.
     const source = `import {liveProcessBirth} from ${JSON.stringify(birthModule)};process.stdout.write(JSON.stringify(await liveProcessBirth(Number(process.argv[1]))));`;
     const result = spawnSync(process.execPath, ['--input-type=module', '-e', source, String(pid)], {
       env: { ...environment, LANG: 'C.UTF-8' },
@@ -143,6 +140,128 @@ export function createTrustedDockerFixture(mode: 'fail' | 'hold' = 'fail') {
       throw new Error('Invalid fixture process observation');
     return value;
   };
+  const settle = async (
+    identity: Record<string, unknown>,
+    group: boolean,
+    signal: NodeJS.Signals = 'SIGKILL',
+  ) => {
+    const pid = identity.pid;
+    if (typeof pid !== 'number' || typeof identity.birth !== 'string')
+      throw new Error('Invalid owned fixture identity');
+    const live = () => {
+      const current = observeProcess(pid);
+      if (current !== null && current !== identity.birth)
+        throw new Error('Fixture identity changed; retaining authority');
+      return current !== null;
+    };
+    const waitForAbsence = async () => {
+      const until = Date.now() + 5000;
+      for (;;) {
+        // A synchronous observer can see Darwin ESRCH while this parent's child is
+        // still unreaped. Its group may return EPERM until the actual close event.
+        if (!live() && closures.get(pid)?.closed !== false && (!group || groupIsAbsent(pid)))
+          return;
+        if (Date.now() >= until) throw new Error('Owned custody fixture process did not retire');
+        await delay(20);
+      }
+    };
+    if (!live()) return waitForAbsence();
+    if (group) {
+      const observed = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'pgid='], {
+        encoding: 'utf8',
+        timeout: 2000,
+        maxBuffer: 65_536,
+      });
+      if (!live()) return waitForAbsence();
+      if (observed.status !== 0 || observed.stdout.trim() !== String(pid))
+        throw new Error('Owned fixture process group identity changed');
+    }
+    try {
+      process.kill(group ? -pid : pid, signal);
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ESRCH') throw error;
+    }
+    await waitForAbsence();
+  };
+  const groups: Record<string, unknown>[] = [];
+  const track = async (child: ChildProcess) => {
+    const closure = { closed: false };
+    child.once('close', () => {
+      closure.closed = true;
+    });
+    await once(child, 'spawn');
+    try {
+      if (child.pid === undefined) throw new Error('Missing owned fixture process');
+      closures.set(child.pid, closure);
+      const birth = observeProcess(child.pid);
+      if (birth === null) throw new Error('Owned fixture process exited before registration');
+      const identity = Object.freeze({ pid: child.pid, birth });
+      groups.push(identity);
+      writeFileSync(join(directory, 'fixture-processes.json'), JSON.stringify(groups), {
+        mode: 0o600,
+      });
+      return identity;
+    } catch (error) {
+      if (child.exitCode === null && child.signalCode === null) {
+        const closed = once(child, 'close');
+        child.kill('SIGKILL');
+        await closed;
+      }
+      throw error;
+    }
+  };
+  const cleanup = async () => {
+    const failures: unknown[] = [];
+    for (const identity of groups) {
+      try {
+        await settle(identity, true);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(failures, 'Owned fixture observers did not retire');
+  };
+  return { observeProcess, settle, track, cleanup };
+}
+
+function launchCustodyObserver(repository: string, environment: NodeJS.ProcessEnv, head: string) {
+  const source = `const {spawnSync}=require('node:child_process');
+const result=spawnSync('pnpm',['--silent','verify:docker','start',${JSON.stringify(head)}],{cwd:${JSON.stringify(repository)},encoding:'utf8',timeout:15000});
+process.stdout.write(JSON.stringify({status:result.status,stdout:result.stdout,stderr:result.stderr})+String.fromCharCode(10));
+setInterval(()=>{},1000);`;
+  return spawn(process.execPath, ['-e', source], {
+    cwd: repository,
+    env: { ...environment, LANG: 'C.UTF-8' },
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function launchCustodySentinel(directory: string, environment: NodeJS.ProcessEnv) {
+  const ready = join(directory, 'sentinel-ready');
+  const interrupted = join(directory, 'sentinel-interrupted');
+  const source = `const fs=require('node:fs');
+process.once('SIGINT',()=>{fs.writeFileSync(${JSON.stringify(interrupted)},'SIGINT');process.exit(31);});
+fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`;
+  const child = spawn(process.execPath, ['-e', source], {
+    cwd: directory,
+    env: { ...environment, LANG: 'C.UTF-8' },
+    detached: true,
+    stdio: 'ignore',
+  });
+  return { child, ready, interrupted };
+}
+
+function createTrustedDockerFixture(mode: 'fail' | 'hold') {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-team-docker-custody-')));
+  const repository = join(directory, 'repository');
+  const home = join(directory, 'home');
+  mkdirSync(repository);
+  mkdirSync(home);
+  const environment = { PATH: process.env.PATH, HOME: home };
+  const processes = fixtureProcessCustody(environment, directory);
+  const { observeProcess, settle } = processes;
   const head = prepareCustodyRepository(repository, environment, mode);
   const entry = join(repository, 'scripts/trusted-docker-run.mjs');
   const command = (args: string[], wrapper = false) =>
@@ -174,8 +293,9 @@ export function createTrustedDockerFixture(mode: 'fail' | 'hold' = 'fail') {
       inode: number;
     }
   >();
-  const start = async () => {
-    const result = command(['start', head], true);
+  const captureStart = async (
+    result: Pick<ReturnType<typeof command>, 'status' | 'stdout' | 'stderr'>,
+  ) => {
     if (result.status !== 0) return result;
     const value: unknown = JSON.parse(result.stdout);
     const invocation = record(value).invocation;
@@ -221,52 +341,122 @@ export function createTrustedDockerFixture(mode: 'fail' | 'hold' = 'fail') {
     }
     return result;
   };
-  const settle = async (identity: Record<string, unknown>, group: boolean) => {
-    const pid = identity.pid;
-    if (typeof pid !== 'number' || typeof identity.birth !== 'string')
-      throw new Error('Invalid owned fixture identity');
-    const current = observeProcess(pid);
-    if (current === null) return;
-    if (current !== identity.birth)
-      throw new Error('Fixture identity changed; retaining authority');
-    if (group) {
-      const observed = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'pgid='], {
-        encoding: 'utf8',
-        timeout: 2000,
-        maxBuffer: 65_536,
-      });
-      const current = observeProcess(pid);
-      if (current === null) return;
-      if (current !== identity.birth)
-        throw new Error('Fixture identity changed; retaining authority');
-      if (observed.status !== 0 || observed.stdout.trim() !== String(pid))
-        throw new Error('Owned fixture process group identity changed');
+  const start = () => captureStart(command(['start', head], true));
+  const startObserved = async () => {
+    const observer = launchCustodyObserver(repository, environment, head);
+    const identity = await processes.track(observer);
+    const lines = createInterface({ input: observer.stdout });
+    const ready = Promise.withResolvers<string>();
+    lines.once('line', ready.resolve);
+    observer.once('close', () => {
+      ready.reject(new Error('Owned observer closed before publication'));
+    });
+    observer.stderr.resume();
+    const deadline = setTimeout(() => {
+      ready.reject(new Error('Owned observer publication deadline'));
+    }, 15_000);
+    let row: string;
+    try {
+      row = await ready.promise;
+    } finally {
+      clearTimeout(deadline);
+      lines.close();
     }
-    process.kill(group ? -pid : pid, 'SIGKILL');
-    const until = Date.now() + 5000;
-    while (observeProcess(pid) === identity.birth) {
-      if (Date.now() >= until) throw new Error('Owned custody fixture process did not retire');
-      await delay(20);
-    }
+    const parsed: unknown = JSON.parse(row);
+    const value = record(parsed);
+    if (
+      (value.status !== null && typeof value.status !== 'number') ||
+      typeof value.stdout !== 'string' ||
+      typeof value.stderr !== 'string'
+    )
+      throw new Error('Invalid owned observer publication');
+    const started = await captureStart({
+      status: value.status,
+      stdout: value.stdout,
+      stderr: value.stderr,
+    });
+    return { started, identity, disconnect: () => settle(identity, true, 'SIGTERM') };
+  };
+  const startSentinel = async () => {
+    const sentinel = launchCustodySentinel(directory, environment);
+    const identity = await processes.track(sentinel.child);
+    return { identity, ready: sentinel.ready, interrupted: sentinel.interrupted };
+  };
+  const killOwner = async (invocation: string) => {
+    const authority = issued.get(invocation);
+    if (!authority) throw new Error('Missing issued fixture owner');
+    await settle(authority.owner, false);
   };
   const cleanup = async () => {
-    if (existsSync(custodyBase) && readdirSync(custodyBase).some((name) => !issued.has(name)))
-      throw new Error('Uncaptured custody fixture authority retained');
-    for (const authority of issued.values()) {
-      if (authority.child) await settle(authority.child, true);
-      await settle(authority.owner, false);
-      if (existsSync(authority.temporary)) {
-        const current = lstatSync(authority.temporary);
-        if (
-          !current.isDirectory() ||
-          current.dev !== authority.device ||
-          current.ino !== authority.inode
-        )
-          throw new Error('Fixture temporary root identity changed');
-        rmSync(authority.temporary, { recursive: true, force: true });
+    const failures: unknown[] = [];
+    const attempt = async (operation: () => void | Promise<void>) => {
+      try {
+        await operation();
+        return true;
+      } catch (error) {
+        failures.push(error);
+        return false;
       }
+    };
+    if (existsSync(custodyBase) && readdirSync(custodyBase).some((name) => !issued.has(name)))
+      failures.push(new Error('Uncaptured custody fixture authority retained'));
+    for (const authority of issued.values()) {
+      const childSettled = await attempt(async () => {
+        if (authority.child) await settle(authority.child, true);
+      });
+      const ownerSettled = await attempt(() => settle(authority.owner, false));
+      if (childSettled && ownerSettled)
+        await attempt(() => {
+          if (!existsSync(authority.temporary)) return;
+          const current = lstatSync(authority.temporary);
+          if (
+            !current.isDirectory() ||
+            current.dev !== authority.device ||
+            current.ino !== authority.inode
+          )
+            throw new Error('Fixture temporary root identity changed');
+          rmSync(authority.temporary, { recursive: true, force: true });
+        });
     }
+    await attempt(processes.cleanup);
+    if (failures.length !== 0)
+      throw new AggregateError(failures, 'Owned custody fixture cleanup unconfirmed');
     rmSync(directory, { recursive: true, force: true });
   };
-  return { directory, repository, home, head, command, start, observeProcess, cleanup };
+  return {
+    directory,
+    repository,
+    home,
+    head,
+    command,
+    start,
+    startObserved,
+    startSentinel,
+    killOwner,
+    observeProcess,
+    cleanup,
+  };
+}
+
+export async function withTrustedDockerFixture(
+  mode: 'fail' | 'hold',
+  run: (fixture: ReturnType<typeof createTrustedDockerFixture>) => void | Promise<void>,
+) {
+  const fixture = createTrustedDockerFixture(mode);
+  const failures: unknown[] = [];
+  try {
+    await run(fixture);
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
+    await fixture.cleanup();
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length > 1)
+    throw new AggregateError(failures, 'Custody scenario and cleanup failed', {
+      cause: failures[0],
+    });
+  if (failures.length === 1) throw failures[0];
 }

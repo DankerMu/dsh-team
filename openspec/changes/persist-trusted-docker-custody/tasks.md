@@ -7,7 +7,7 @@
 
 ## 2. Disconnection, cancellation and settlement
 
-- [ ] 2.1 Prove observer loss leaves the actual owner and child live, then retrieves their same-invocation terminal result, including preservation of a real nonzero command exit; preserve unknown owner death without takeover. Keep an unrelated sentinel and verify the full output/result after reconnect.
+- [x] 2.1 Prove observer loss leaves the actual owner and child live, then retrieves their same-invocation terminal result, including preservation of a real nonzero command exit; preserve unknown owner death without takeover. Keep an unrelated sentinel and verify the full output/result after reconnect.
 - [ ] 2.2 Implement explicit identity-fenced cancellation that reaches the real pnpm child tree rather than only its launcher; prove actual signal/file effects, command settlement, duplicate/late cancellation behavior and missing/changed identity refusal without affecting the sentinel.
 - [ ] 2.3 Integrate the existing journal, exact absence and browser receipt boundaries for separate cleanup assessment after process settlement; prove resource/producer uncertainty, malformed receipts and output/cleanup failure remain non-success. Preserve ordinary proxy custody and exclude model/CI authorization and secret canaries.
 
