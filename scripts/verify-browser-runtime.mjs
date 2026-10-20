@@ -10,6 +10,7 @@ import { connectPage, startChrome } from './probe-dsh-api-cdp.mjs';
 import { qualifyBrowserConfinement } from './probe-browser-confinement.mjs';
 import { qualificationDiagnostic, qualificationError } from './probe-browser-qualification.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
+import { buildFailureDiagnostic } from './docker-build-diagnostics.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
@@ -25,6 +26,8 @@ let status = 1;
 let buildStarted = false;
 let directory;
 let imageId;
+let imageFailure;
+let imageCleanup;
 let child;
 let interrupted = false;
 let qualificationEvidence;
@@ -36,6 +39,7 @@ const environment = () => ({
   ...dockerProxyEnvironment(),
 });
 function docker(args, ms = 30000, build = false) {
+  const started = build ? performance.now() : undefined;
   const result = spawnSync('docker', args, {
     cwd: root,
     env: environment(),
@@ -44,9 +48,32 @@ function docker(args, ms = 30000, build = false) {
     killSignal: 'SIGKILL',
     maxBuffer: build ? 16 * 1024 * 1024 : 65536,
   });
-  if (result.error || result.status !== 0) throw new Error('browser runtime provisioning failed');
+  if (result.error || result.status !== 0) {
+    if (build)
+      imageFailure = { phase: 'image-build', ...buildFailureDiagnostic(result, ms, started) };
+    throw new Error('browser runtime provisioning failed');
+  }
   return result.stdout.trim();
 }
+async function publishImageReceipt() {
+  const path = join(directory, 'image.json');
+  try {
+    await writeReceipt(path, {
+      invocation,
+      tag,
+      imageId: imageId ?? null,
+      state: imageFailure ? 'build-failed' : imageId ? 'built' : 'build-submitting',
+      ...(imageFailure ? { failure: imageFailure } : {}),
+      ...(imageCleanup ? { cleanup: imageCleanup } : {}),
+    });
+    return true;
+  } catch {
+    if (status === 0) status = 1;
+    process.stderr.write(`browser image evidence unavailable; expected-receipt=${path}\n`);
+    return false;
+  }
+}
+
 function runVerificationChild(env) {
   if (interrupted) throw new Error('browser runtime invocation interrupted');
   return new Promise((done, reject) => {
@@ -164,11 +191,7 @@ async function prepare() {
     join(root, 'scripts/docker-proxy-environment.mjs'),
     join(context, 'docker-proxy-environment.mjs'),
   );
-  await writeFile(
-    join(directory, 'image.json'),
-    JSON.stringify({ invocation, tag, imageId: null, state: 'build-submitting' }),
-    { mode: 0o600 },
-  );
+  if (!(await publishImageReceipt())) throw new Error('browser image evidence unavailable');
   buildStarted = true;
   docker(
     [
@@ -191,11 +214,7 @@ async function prepare() {
   imageId = docker(['image', 'inspect', '--format', '{{.Id}}', tag]);
   if (!/^sha256:[a-f0-9]{64}$/.test(imageId))
     throw new Error('browser runtime immutable image ID missing');
-  await writeFile(
-    join(directory, 'image.json'),
-    JSON.stringify({ invocation, tag, imageId, state: 'built' }),
-    { mode: 0o600 },
-  );
+  if (!(await publishImageReceipt())) throw new Error('browser image evidence unavailable');
   process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG = environment().DOCKER_CONFIG;
   process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY = directory;
   qualificationEvidence = qualificationDiagnostic(invocation);
@@ -264,6 +283,23 @@ async function rescueRegistration(name) {
   );
 }
 
+function verifiedImageIdentity() {
+  const selected = imageId ?? docker(['image', 'inspect', '--format', '{{.Id}}', tag]);
+  if (!/^sha256:[a-f0-9]{64}$/.test(selected))
+    throw new Error('browser image cleanup immutable identity missing');
+  const owner = docker([
+    'image',
+    'inspect',
+    '--format',
+    '{{index .Config.Labels "dsh-team.browser-invocation"}}',
+    selected,
+  ]);
+  if (owner !== invocation) throw new Error('browser image cleanup identity mismatch');
+  if (docker(['image', 'inspect', '--format', '{{.Id}}', tag]) !== selected)
+    throw new Error('browser image tag identity changed');
+  return selected;
+}
+
 async function cleanup() {
   if (!directory) return;
   let complete = true;
@@ -276,25 +312,31 @@ async function cleanup() {
     }
   }
   if (!buildStarted) return;
+  imageCleanup = {
+    browserResources: complete ? 'confirmed' : 'unconfirmed',
+    image: 'ownership-unconfirmed',
+  };
   try {
-    const selected = imageId ?? docker(['image', 'inspect', '--format', '{{.Id}}', tag]);
-    const owner = docker([
-      'image',
-      'inspect',
-      '--format',
-      '{{index .Config.Labels "dsh-team.browser-invocation"}}',
-      selected,
-    ]);
-    if (owner !== invocation) throw new Error('browser image cleanup identity mismatch');
-    if (docker(['image', 'inspect', '--format', '{{.Id}}', tag]) !== selected)
-      throw new Error('browser image tag identity changed');
-    if (complete) docker(['image', 'rm', selected]);
+    const selected = verifiedImageIdentity();
+    imageId = selected;
+    imageCleanup.image = 'blocked';
+    if (complete && (await publishImageReceipt())) {
+      // Receipt publication yields; ownership must still hold at the removal boundary.
+      imageCleanup.image = 'ownership-unconfirmed';
+      verifiedImageIdentity();
+      imageCleanup.image = 'removal-failed';
+      docker(['image', 'rm', selected]);
+      imageCleanup.image = 'confirmed';
+    }
   } catch {
-    complete = false;
+    // The reached boundary distinguishes unconfirmed ownership from a failed authorized removal.
   }
-  if (!complete) {
+  await publishImageReceipt();
+  if (!complete || imageCleanup.image !== 'confirmed') {
     if (status === 0) status = 1;
-    process.stderr.write(`browser cleanup incomplete; private receipts retained at ${directory}\n`);
+    const outcome =
+      imageCleanup.image === 'ownership-unconfirmed' ? 'ownership unconfirmed' : 'incomplete';
+    process.stderr.write(`browser cleanup ${outcome}; private receipts retained at ${directory}\n`);
   }
 }
 async function persistQualificationFailure(error) {
@@ -322,6 +364,8 @@ try {
   else await prepare();
 } catch (error) {
   if (qualificationEvidence) await persistQualificationFailure(error);
+  if (imageFailure && (await publishImageReceipt()))
+    process.stderr.write(`browser image build failed; receipt=${join(directory, 'image.json')}\n`);
   const known = [
     'usage: verify-browser-runtime.mjs docker|model|dsh-api|first-run',
     'DMXAPI_KEY is required for real-model verification',
@@ -332,6 +376,7 @@ try {
     'browser isolation requires the complete pinned CfT headless-shell distribution',
     'browser runtime provisioning failed',
     'browser runtime immutable image ID missing',
+    'browser image evidence unavailable',
     'browser runtime invocation interrupted',
   ];
   process.stderr.write(
