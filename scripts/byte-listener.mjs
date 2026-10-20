@@ -4,6 +4,7 @@ import net from 'node:net';
 export function byteListener(address) {
   const sockets = new Set();
   let destination;
+  /** @type {Promise<void> | undefined} */
   let closing;
   let stopped = false;
   const track = (socket) => {
