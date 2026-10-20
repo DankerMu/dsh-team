@@ -215,6 +215,8 @@ The image works from `/app`: compiled CLI/server at `platform/dist`, browser ass
 
 Run `pnpm test:docker platform/test/platform-image.docker.test.ts` on giap-vps for the narrow artifact check. It builds an owned image, runs actual CLI help without source mounts, verifies the default native binding through migrations/write/reopen, checks the existing static resolver and default seccomp bytes, and cleans its owned containers/image.
 
+Platform-image Docker calls use the canonical verification client environment: fixed PATH, launcher-owned `DSH_TEAM_BROWSER_DOCKER_CONFIG` as Docker's private configuration, and only the optional uppercase proxy fields. Missing or empty launcher configuration fails before Docker; caller credentials, remote Engine selectors and ambient Docker configuration are not inherited. The original30s operation/600s build deadlines,16MiB raw-output contract and exact-owned cleanup remain. Issue#270 explicitly adopts the canonical helper's SIGKILL timeout termination instead of the former implicit SIGTERM.
+
 ### Compose deployment verification
 
 `deploy/compose.yml` consumes the separately built `dsh-team-platform:local` and configured user image. It retains image uid1000, fixes the platform container name to `dsh-team-platform` and upstream mode to `network`, and publishes only the platform port. From the repository root use `docker compose --project-directory . --env-file .env -f deploy/compose.yml up -d`; interpolation and the explicit container environment mapping use the same root configuration copy.

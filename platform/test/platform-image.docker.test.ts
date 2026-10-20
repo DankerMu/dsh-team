@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
@@ -6,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { cleanupTargets, output, OWNER_LABEL, registerCleanupTarget } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
-import type { DockerCommand } from './docker-command.ts';
+import { createDockerCommands } from './docker-command.ts';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const artifactProbe = `
@@ -53,13 +52,10 @@ it('ships a non-root standalone platform with working native persistence, web as
   const image = `dsh-team-test-${runId}:platform`;
   const targets: CleanupTarget[] = [];
   const failures: unknown[] = [];
-  const command: DockerCommand = (args, timeout) =>
-    spawnSync('docker', [...args], {
-      cwd: root,
-      timeout,
-      encoding: 'utf8',
-      maxBuffer: 16 * 1024 * 1024,
-    });
+  const config = process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG;
+  if (config === undefined || config === '')
+    throw new Error('Platform image verification requires invocation-owned Docker configuration');
+  const { command } = createDockerCommands(root, config, false);
   const execute = (args: string[], timeout = 30_000) => output(command(args, timeout), args);
   const run = (suffix: string, args: string[]) => {
     const name = `dsh-team-test-${runId}-${suffix}`;
