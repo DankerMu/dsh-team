@@ -168,6 +168,16 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 错误码只读取自有数据属性，不执行异常对象的getter；无法安全读取的可选元数据归为`unknown`。最终兜底用新的固定错误记录承载允许的基本值，不保留原异常对象、消息或cause，防止诊断本身抛错绕过脱敏。
 
+### 共享验证 daemon 的 history 诊断禁令
+
+**禁止在共享验证 daemon 上执行 BuildKit/Buildx history 查询，尤其是已触发事故的 `docker buildx history ls --filter status=error --format json`。只读命令不等于对 daemon 无副作用。** 不把它作为构建失败后的取证步骤，也不为本禁令在共享主机复现或静默升级 daemon；优先读取本次已经保存的脱敏退出、阶段和清理凭据。
+
+[事故记录与后续更正（#266）](https://github.com/DankerMu/dsh-team/issues/266)确认：2026-10-17，父级助手主会话为找回构建失败信息直接发起该查询，并非仓库验证脚本自动调用。受影响组合为 Docker Engine29.1.3、Buildx v0.30.1（Ubuntu包`0.30.1-0ubuntu1~24.04.1`；版本由独立version查询取得，未重跑history）。客户端退出1并收到gRPC `Unavailable`/EOF；daemon在vendored BuildKit的`ListenBuildHistory`、`HistoryQueue`/`Listen`、`filterHistoryEvents`、`parseFilters.func1`、`parseFilter.func1`路径发生nil-pointer panic，栈指向`history.go:1195`，随后以`status=2/INVALIDARGUMENT`退出并由systemd重启。
+
+四个无关的原运行容器因此停止；之后按用户独立授权、核对原身份后恢复，未重建，原ID、配置、挂载和网络身份保持不变。三个已配置健康检查为healthy，另一个未配置健康检查；这不是更广的应用内容验收。日志采集窗口08:58:09–08:58:12不是恢复耗时，现有证据没有精确中断时长。仅确认history-filter路径的nil dereference，具体nil事件、更深原因及修复版本均未知；不得与此前独立的`docker0`删除缺陷建立未经证明的因果关系，也不改变PR264的隔离修复范围。任何后续宿主/共享工作负载恢复仍须单独授权。
+
+**当前没有获准解除禁令的版本组合。** 只有识别到明确候选修复pin后，才可在一次性、可销毁且与共享宿主网络隔离的daemon中资格验证；不得指向共享socket、数据目录或网络命名空间。记录Engine和Buildx的精确版本/包或镜像摘要、查询、daemon进程身份及前后状态、退出/栈证据和自有资源清理，证明查询未使daemon panic或退出后，才能为该已验证组合及查询明确更新文档许可；一次客户端exit0不能替代daemon存活证据。未验证的版本/查询仍禁用，共享daemon升级仍是另行授权的运维变更。本次仅交付操作边界，不包含候选修复资格验证或Docker/BuildKit代码修改。
+
 ## 7. 隔离提供什么、不提供什么
 
 以下是交付的边界及验收位置，不代表阶段19全部对抗性验收已经结束：
