@@ -175,6 +175,7 @@ async function prepare() {
     join(root, 'scripts/probe-browser-runtime.mjs'),
     join(context, 'probe-browser-runtime.mjs'),
   );
+  await copyFile(join(root, 'scripts/byte-listener.mjs'), join(context, 'byte-listener.mjs'));
   await copyFile(
     join(root, 'scripts/probe-browser-native.mjs'),
     join(context, 'probe-browser-native.mjs'),

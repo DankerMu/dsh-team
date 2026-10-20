@@ -1,5 +1,4 @@
 import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -11,6 +10,7 @@ import {
   type TestInfo,
 } from '@playwright/test';
 import type { FastifyInstance } from 'fastify';
+import { byteListener } from '../../scripts/byte-listener.mjs';
 import { buildApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { applyMigrations, openDatabase, type DatabaseHandle } from '../src/db/index.ts';
@@ -232,6 +232,16 @@ export interface AccountUiOptions {
   canonicalInstanceService?: boolean;
   /** An owned Engine-protocol dependency; omitted means the existing unavailable socket. */
   dockerSocketPath?: string;
+  observeInitialization?: (
+    context:
+      | { phase: 'origin-selected'; baseUrl: string }
+      | {
+          phase: 'application-built';
+          baseUrl: string;
+          app: FastifyInstance;
+          database: DatabaseHandle;
+        },
+  ) => Promise<void>;
 }
 
 export async function withAccountUi(
@@ -244,29 +254,17 @@ export async function withAccountUi(
   let app: FastifyInstance | undefined;
   let service: InstanceService | undefined;
   let seed: APIRequestContext | undefined;
+  let listener: ReturnType<typeof byteListener> | undefined;
   try {
     await assertWebBuild();
-    // Reserve a unique port before capturing the public Origin; never reuse a dev listener.
-    const reservation = createServer();
-    let port: number;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        reservation.once('error', reject);
-        reservation.listen(0, '127.0.0.1', resolve);
-      });
-      const address = reservation.address();
-      if (address === null || typeof address === 'string')
-        throw new Error('Missing UI TCP address');
-      port = address.port;
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        reservation.close((error) => {
-          if (error === undefined) resolve();
-          else reject(error);
-        });
-      });
-    }
+    const publicListener = byteListener({ host: '127.0.0.1', port: 0 });
+    listener = publicListener;
+    await publicListener.ready;
+    const address = publicListener.server.address();
+    if (address === null || typeof address === 'string') throw new Error('Missing UI TCP address');
+    const port = address.port;
     const baseUrl = `http://127.0.0.1:${String(port)}`;
+    await options.observeInitialization?.({ phase: 'origin-selected', baseUrl });
     const config = loadConfig({
       PLATFORM_HOST: '127.0.0.1',
       PLATFORM_PORT: String(port),
@@ -314,7 +312,17 @@ export async function withAccountUi(
           },
           service,
         );
-        await app.listen({ host: '127.0.0.1', port });
+        await options.observeInitialization?.({
+          phase: 'application-built',
+          baseUrl,
+          app,
+          database,
+        });
+        await app.listen({ host: '127.0.0.1', port: 0 });
+        const backend = app.server.address();
+        if (backend === null || typeof backend === 'string')
+          throw new Error('Missing UI backend address');
+        publicListener.forwardTo({ host: '127.0.0.1', port: backend.port });
         // Separate API cookie jar: account seeding never preauthenticates the browser.
         seed = await playwright.request.newContext({
           baseURL: baseUrl,
@@ -325,19 +333,23 @@ export async function withAccountUi(
     );
   } finally {
     try {
-      await seed?.dispose();
+      await listener?.close();
     } finally {
       try {
-        // Playwright owns page/context/browser; app owns DB after successful buildApp.
-        if (app === undefined) {
-          try {
-            await service?.close();
-          } finally {
-            database?.close();
-          }
-        } else await app.close();
+        await seed?.dispose();
       } finally {
-        await rm(directory, { recursive: true, force: true });
+        try {
+          // Playwright owns page/context/browser; app owns DB after successful buildApp.
+          if (app === undefined) {
+            try {
+              await service?.close();
+            } finally {
+              database?.close();
+            }
+          } else await app.close();
+        } finally {
+          await rm(directory, { recursive: true, force: true });
+        }
       }
     }
   }
