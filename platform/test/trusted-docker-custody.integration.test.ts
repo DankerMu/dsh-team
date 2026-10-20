@@ -6,7 +6,7 @@ import { CUSTODY_PROXY, withTrustedDockerFixture } from './trusted-docker-fixtur
 
 it('publishes reviewed launch authority before work and preserves a real nonzero command result', async () => {
   await withTrustedDockerFixture('fail', async (fixture) => {
-    const started = await fixture.start();
+    const started = await fixture.start({ DOCKER_HOST: '', DOCKER_CONTEXT: '' });
 
     expect(started.status, started.stderr).toBe(0);
     const startValue: unknown = JSON.parse(started.stdout);
@@ -75,6 +75,22 @@ it('rejects a different reviewed revision before creating custody or starting wo
     expect(existsSync(join(fixture.home, '.local/share/dsh-team/docker-verification'))).toBe(false);
   });
 });
+
+it.each(['DOCKER_HOST', 'DOCKER_CONTEXT'])(
+  'rejects nonempty %s before creating custody or launching verification',
+  async (name) => {
+    await withTrustedDockerFixture('fail', async (fixture) => {
+      const rejected = await fixture.start({ [name]: 'fixture-forbidden-daemon-selection' });
+
+      expect(rejected.status).toBe(1);
+      expect(rejected.stdout).toBe('');
+      expect(rejected.stderr).not.toContain('fixture-forbidden-daemon-selection');
+      expect(existsSync(join(fixture.home, '.local/share/dsh-team/docker-verification'))).toBe(
+        false,
+      );
+    });
+  },
+);
 
 it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-record'] as const)(
   'refuses changed %s without interrupting owned live work',

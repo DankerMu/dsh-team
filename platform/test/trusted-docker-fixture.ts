@@ -310,7 +310,7 @@ function createTrustedDockerFixture(mode: CustodyMode) {
   const { observeProcess, settle } = processes;
   const head = prepareCustodyRepository(repository, environment, mode);
   const entry = join(repository, 'scripts/trusted-docker-run.mjs');
-  const command = (args: string[], wrapper = false) => {
+  const command = (args: string[], wrapper = false, extraEnvironment: NodeJS.ProcessEnv = {}) => {
     const executable = wrapper ? 'pnpm' : process.execPath;
     const commandArguments = wrapper ? ['--silent', 'verify:docker', ...args] : [entry, ...args];
     return spawnSync(
@@ -325,6 +325,7 @@ function createTrustedDockerFixture(mode: CustodyMode) {
           GH_TOKEN: 'fixture-gh-custody-canary',
           DMXAPI_KEY: 'fixture-model-custody-canary',
           SSH_AUTH_SOCK: '/fixture-ssh-custody-canary',
+          ...extraEnvironment,
         },
         encoding: 'utf8',
         timeout: 15_000,
@@ -392,7 +393,8 @@ function createTrustedDockerFixture(mode: CustodyMode) {
     }
     return result;
   };
-  const start = () => captureStart(command(['start', head], true));
+  const start = (extraEnvironment: NodeJS.ProcessEnv = {}) =>
+    captureStart(command(['start', head], true, extraEnvironment));
   const startObserved = async () => {
     const observer = launchCustodyObserver(repository, environment, head);
     const identity = await processes.track(observer);

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { arch, platform, tmpdir } from 'node:os';
+import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { inspectAsync, record } from './container-start-docker-fixture.ts';
@@ -188,7 +188,8 @@ export async function withDeployment(
     'flock',
     [
       '--nonblock',
-      join(tmpdir(), 'dsh-team-deployment.lock'),
+      // The fixed platform name is host-wide even when each invocation has a private TMPDIR.
+      '/tmp/dsh-team-deployment.lock',
       process.execPath,
       '-e',
       "process.stdout.write('locked\\n');process.stdin.resume();",

@@ -1,8 +1,10 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { randomUUID } from 'node:crypto';
-import { realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 import { MODEL_CONFIG } from './admin-config-fixture.ts';
 import { postJson } from './auth-tcp-fixture.ts';
@@ -50,6 +52,56 @@ it('refuses a pre-existing fixed platform identity without adopting or removing 
     expect(record(preserved.Config).Labels).toMatchObject(ownership);
     expect(record(preserved.State).Status).toBe('created');
   });
+});
+
+it('keeps deployment admission exclusive across distinct invocation temporary directories', async () => {
+  const temporary = await mkdtemp(join(tmpdir(), 'dsh-team-deployment-lock-'));
+  const contenderTemporary = join(temporary, 'contender');
+  await mkdir(contenderTemporary);
+  const fixtureUrl = new URL('./deployment-fixture.ts', import.meta.url).href;
+  // Keep real lifecycle/flock; replace only Docker work and unused Vitest-dependent helpers.
+  const source = `
+import { registerHooks } from 'node:module';
+import { tmpdir } from 'node:os';
+const fixtureUrl = ${JSON.stringify(fixtureUrl)};
+const dependencies = {
+  './user-image-fixture.ts': 'export async function runUserImage() { process.stdout.write("admitted\\\\n"); }',
+  './container-start-docker-fixture.ts': 'export const inspectAsync = () => { throw new Error("Unexpected inspect"); }; export const record = inspectAsync;',
+  './gateway-http-fixture.ts': 'export const unusedPort = () => { throw new Error("Unexpected listener"); };',
+};
+registerHooks({
+  resolve(specifier, context, next) {
+    if (context.parentURL === fixtureUrl && Object.hasOwn(dependencies, specifier))
+      return { url: 'data:text/javascript,' + encodeURIComponent(dependencies[specifier]), shortCircuit: true };
+    return next(specifier, context);
+  },
+});
+if (tmpdir() !== ${JSON.stringify(contenderTemporary)}) throw new Error('Private temporary directory lost');
+const { withDeployment } = await import(fixtureUrl);
+try { await withDeployment(async () => {}); }
+catch (error) {
+  if (error.message !== 'Deployment verification lock unavailable') throw error;
+  process.stdout.write('excluded\\n');
+}
+`;
+  const contender = () =>
+    promisify(execFile)(process.execPath, ['--input-type=module', '-e', source], {
+      env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: contenderTemporary },
+      encoding: 'utf8',
+      timeout: 15_000,
+    });
+  try {
+    await withDeployment(async () => {
+      const held = await contender();
+
+      expect(held.stdout).toBe('excluded\n');
+    });
+    const released = await contender();
+
+    expect(released.stdout).toBe('admitted\n');
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 it('boots delivered Compose and admits an employee through real administrator configuration to native DSH', async () => {

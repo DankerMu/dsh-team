@@ -72,6 +72,8 @@ async function waitForPublication(read, ended = () => false) {
 export async function startTrustedDocker(root, head) {
   if (!/^[a-f0-9]{40}$/.test(head ?? '') || process.getuid() === 0)
     throw new Error('Invalid trusted Docker admission');
+  if (process.env.DOCKER_HOST || process.env.DOCKER_CONTEXT)
+    throw new Error('Trusted Docker requires the local default Docker daemon');
   root = await realpath(root);
   requireReviewedCheckout(root, head);
   const rootInfo = await lstat(root);
