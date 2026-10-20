@@ -170,3 +170,67 @@ it('reconfirms current tag ownership after publishing the immutable cleanup rece
     foreignImagePresent: true,
   });
 });
+
+it('preserves a failed ownership fence through independent worker finalization', async () => {
+  const result = await runBrowserBuildFailure('changed-after-publication', 'changed');
+
+  expect(result.rescued).toMatchObject({
+    exit: 1,
+    final: { vpsCleanupComplete: false, failures: ['browser-rescue'] },
+  });
+  expect(result.daemon).toMatchObject({
+    removed: [],
+    imagePresent: true,
+    foreignImagePresent: true,
+  });
+  expect(result.rescued?.output.includes(result.canary)).toBe(false);
+});
+
+it.each(['missing', 'unreadable', 'foreign'] as const)(
+  'retains images when independent rescue observes %s current authority',
+  async (mode) => {
+    const result = await runBrowserBuildFailure('changed-after-publication', mode);
+
+    expect(result.rescued).toMatchObject({
+      exit: 1,
+      final: { vpsCleanupComplete: false, failures: ['browser-rescue'] },
+    });
+    expect(result.daemon).toMatchObject({
+      removed: [],
+      imagePresent: true,
+      foreignImagePresent: true,
+    });
+    expect(result.rescued?.output.includes(result.canary)).toBe(false);
+  },
+);
+
+it.each(['matching', 'old-built'] as const)(
+  'retires an independently revalidated image from a %s receipt',
+  async (mode) => {
+    const result = await runBrowserBuildFailure('changed-after-publication', mode);
+
+    expect(result.rescued).toMatchObject({
+      exit: 0,
+      final: { vpsCleanupComplete: true, failures: [] },
+    });
+    expect(result.daemon).toMatchObject({
+      removed: [`sha256:${'a'.repeat(64)}`],
+      imagePresent: false,
+      foreignImagePresent: true,
+    });
+  },
+);
+
+it('accepts independently confirmed exact image absence without another removal', async () => {
+  const result = await runBrowserBuildFailure('owned', 'matching');
+
+  expect(result.rescued).toMatchObject({
+    exit: 0,
+    final: { vpsCleanupComplete: true, failures: [] },
+  });
+  expect(result.daemon).toMatchObject({
+    removed: [`sha256:${'a'.repeat(64)}`],
+    imagePresent: false,
+    foreignImagePresent: true,
+  });
+});

@@ -1,6 +1,16 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  cp,
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -13,13 +23,14 @@ const file=join(root,'daemon.json');
 const state=JSON.parse(readFileSync(file,'utf8'));
 const args=process.argv.slice(2);
 const id='sha256:'+'a'.repeat(64);
-if(state.mode==='changed-after-publication'&&args[0]==='image') {
+if(state.mode==='changed-after-publication'&&!state.rescuing&&args[0]==='image') {
  const receipt=JSON.parse(readFileSync(join(dirname(process.env.DOCKER_CONFIG),'image.json'),'utf8'));
  if(receipt.cleanup?.image==='blocked')state.tagChanged=true;
 }
 state.calls.push(args);
 const save=()=>{writeFileSync(file+'.pending',JSON.stringify(state));renameSync(file+'.pending',file);};
 if(basename(process.argv[1])==='pnpm'){state.verificationStarted=true;process.exitCode=8;}
+else if(args[0]==='--user')process.stdout.write('LoadState=not-found\n');
 else if(args[0]==='info')process.stdout.write(JSON.stringify({OSType:'linux',Architecture:'amd64',SecurityOptions:[]}));
 else if(args[0]==='build') {
  state.buildCount+=1;
@@ -43,10 +54,13 @@ else if(args[0]==='build') {
   process.stderr.write('Error: No such image: '+args.at(-1)+'\n');process.exitCode=1;
  } else if(args.includes('{{.Id}}')) {
   state.tagReads+=1;
-  process.stdout.write(state.mode==='malformed-id'?state.canary:state.tagChanged||(state.mode==='changed-tag'&&state.tagReads>1)?'sha256:'+'b'.repeat(64):id);
+  if(['missing','unreadable'].includes(state.rescueMode)) {
+   process.stderr.write(state.rescueMode==='missing'?'Error: No such image: '+args.at(-1)+'\n':state.canary);
+   process.exitCode=1;
+  } else process.stdout.write(state.mode==='malformed-id'?state.canary:state.tagChanged||(state.mode==='changed-tag'&&state.tagReads>1)?'sha256:'+'b'.repeat(64):id);
  } else if(args.some((value)=>value.includes('.Config.Labels'))) {
-  process.stdout.write(state.mode==='foreign'?'foreign-invocation':state.invocation);
- } else {process.stderr.write(state.canary);process.exitCode=1;}
+  process.stdout.write(state.mode==='foreign'||state.rescueMode==='foreign'?'foreign-invocation':state.invocation);
+ } else process.stdout.write('{}');
 } else if(args[0]==='image'&&args[1]==='rm') {
  state.removed.push(args.at(-1));
  if(state.mode==='removal-failed')process.exitCode=1;
@@ -63,6 +77,57 @@ async function optionalJson(path: string): Promise<unknown> {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+type RescueMode = 'changed' | 'matching' | 'missing' | 'unreadable' | 'foreign' | 'old-built';
+
+async function finalizeFailedBuild(
+  root: string,
+  directory: string,
+  tool: string,
+  mode: RescueMode,
+) {
+  const invocation = randomUUID();
+  const workerRoot = join(root, '.local/share/dsh-team/ci', invocation);
+  const workerTemporary = join(workerRoot, 'tmp');
+  await mkdir(workerTemporary, { recursive: true, mode: 0o700 });
+  const received = join(workerTemporary, 'dsh-browser-command-received');
+  await cp(directory, received, { recursive: true });
+  if (mode === 'old-built') {
+    const receipt = await optionalJson(join(received, 'image.json'));
+    if (typeof receipt !== 'object' || receipt === null) throw new Error('Owned receipt missing');
+    Reflect.deleteProperty(receipt, 'failure');
+    Reflect.deleteProperty(receipt, 'cleanup');
+    await writeFile(join(received, 'image.json'), JSON.stringify({ ...receipt, state: 'built' }));
+  }
+  const daemonPath = join(root, 'daemon.json');
+  const daemon = await optionalJson(daemonPath);
+  if (typeof daemon !== 'object' || daemon === null) throw new Error('Owned daemon state missing');
+  await writeFile(
+    daemonPath,
+    JSON.stringify({ ...daemon, rescuing: true, rescueMode: mode, tagChanged: mode === 'changed' }),
+  );
+  const preload = join(root, 'worker-host.mjs');
+  await writeFile(
+    preload,
+    `import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';
+Object.defineProperty(process,'platform',{value:'linux'});
+const original=cp.spawnSync;
+cp.spawnSync=(binary,args,options)=>original(['docker','systemctl'].includes(binary)?${JSON.stringify(tool)}:binary,args,options);
+syncBuiltinESMExports();`,
+  );
+  const worker = resolve(import.meta.dirname, 'ci-vps-worker.ts');
+  const result = spawnSync(
+    process.execPath,
+    ['--import', preload, worker, 'finalize-locked', invocation],
+    { env: { HOME: root, PATH: join(root, 'bin') }, encoding: 'utf8', timeout: 10_000 },
+  );
+  if (result.error || result.signal !== null) throw new Error('Owned finalizer did not settle');
+  return {
+    exit: result.status,
+    output: result.stdout + result.stderr,
+    final: await optionalJson(join(workerRoot, 'final.json')),
+  };
 }
 
 export async function runBrowserBuildFailure(
@@ -82,6 +147,7 @@ export async function runBrowserBuildFailure(
     | 'output-limit'
     | 'spawn-failed'
     | 'signal' = 'absent',
+  rescue?: RescueMode,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-browser-build-'));
   const canary = `private-${randomUUID()}`;
@@ -142,8 +208,10 @@ cp.spawnSync=(binary,args,options)=>{
       throw new Error('Owned verifier invocation missing');
     const directory = join(temporary, names[0]);
     const imageInfo = await stat(join(directory, 'image.json'));
+    const rescued = rescue ? await finalizeFailedBuild(root, directory, tool, rescue) : undefined;
     return {
       exit: result.status,
+      rescued,
       output: result.stdout + result.stderr,
       canary,
       image: imageInfo.isFile() ? await optionalJson(join(directory, 'image.json')) : undefined,

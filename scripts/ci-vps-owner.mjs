@@ -263,6 +263,7 @@ async function prepare() {
     'scripts/probe-browser-network.mjs',
     'scripts/probe-browser-receipt.mjs',
     'scripts/docker-proxy-environment.mjs',
+    'scripts/docker-build-diagnostics.mjs',
     'scripts/ci-vps-units.mjs',
   ];
   const archive = spawnSync('git', ['archive', '--format=tar', sha, ...files], {
