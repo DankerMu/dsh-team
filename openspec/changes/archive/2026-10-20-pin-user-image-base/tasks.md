@@ -7,8 +7,8 @@
 
 ## 2. Frozen-head acceptance and delivery
 
-- [ ] 2.1 Complete four-seat review and actual owned image Node/Bookworm/uid1001/DSH observation plus original full Docker and standalone Compose on the reviewed SHA; require independent cleanup and unchanged daemon/workload/network fence.
-- [ ] 2.2 Publish sanitized exact-head evidence, resolve all required same-head CI contexts, merge through protection and synchronize/archive the fixture. Keep critical-path human white-box review explicitly deferred and UNPASSED.
+- [x] 2.1 Complete four-seat review and actual owned image Node/Bookworm/uid1001/DSH observation plus original full Docker and standalone Compose on the reviewed SHA; require independent cleanup and unchanged daemon/workload/network fence.
+- [x] 2.2 Publish sanitized exact-head evidence, resolve all required same-head CI contexts, merge through protection and synchronize/archive the fixture. Keep critical-path human white-box review explicitly deferred and UNPASSED.
 
 ## Risk-pack mapping
 
