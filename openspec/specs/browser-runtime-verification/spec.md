@@ -116,7 +116,7 @@ Final acceptance MUST use the original full test discovery and existing error/de
 
 ### Requirement: Verification Docker proxy inputs remain confined to client transport
 
-Verification Docker CLI processes MUST receive caller-supplied uppercase `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` when present, preserving their exact strings including empty values and omitting absent inputs. The host acquisition producer MUST preserve these inputs only to configure its Docker descendants. Existing PATH and invocation-owned Docker configuration policies, local Engine restrictions, deadlines, output bounds, closure and cleanup authority MUST remain unchanged. Unrelated environment credentials and remote Engine selectors MUST NOT be admitted by this support. Proxy values MUST NOT be logged or injected into actual browser processes or employee containers.
+Verification Docker CLI processes MUST receive caller-supplied uppercase `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` when present, preserving their exact strings including empty values and omitting absent inputs. The host acquisition producer MUST preserve these inputs only to configure its Docker descendants. Existing PATH and invocation-owned Docker configuration policies, local Engine restrictions, deadlines, output bounds, closure and cleanup authority MUST remain unchanged. Unrelated environment credentials and remote Engine selectors MUST NOT be admitted by this support. Proxy values MUST NOT be logged or injected into actual browser processes or employee containers. Platform-image artifact verification SHALL use this same custody boundary for every Docker operation and fail before Docker work if its invocation-owned configuration is unavailable; its existing deadline values,16MiB raw-output contract and exact-owned cleanup SHALL remain intact, with the explicitly approved canonical SIGKILL timeout termination.
 
 #### Scenario: Client authentication requires an explicitly configured proxy
 
@@ -137,6 +137,16 @@ Verification Docker CLI processes MUST receive caller-supplied uppercase `HTTP_P
 
 - **WHEN** the browser image or SHA-pinned trusted rescue bundle runs without repository source mounts
 - **THEN** its complete runtime dependency closure loads and existing owned-resource cleanup remains available
+
+#### Scenario: Platform image verification starts from a credential-bearing shell
+
+- **WHEN** the trusted platform-image test runs with nonsecret credential canaries and a different ambient Docker configuration
+- **THEN** its actual Docker children receive only approved client fields and the invocation-owned configuration, all existing standalone artifact checks pass, and cleanup retires only invocation-owned resources without changing unrelated host workloads
+
+#### Scenario: Platform image verification has no invocation configuration
+
+- **WHEN** the platform-image test lacks its launcher's private Docker configuration
+- **THEN** it fails before starting Docker rather than using caller or default user configuration
 
 ### Requirement: Verification image mirror selection preserves Debian trust and acceptance
 

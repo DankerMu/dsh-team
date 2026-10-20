@@ -7,8 +7,8 @@
 
 ## 2. Independent acceptance and delivery
 
-- [ ] 2.1 Complete four-seat high-risk review and frozen-head trusted platform-image canary, Compose and original full Docker runs; retain independent empty owned inventories and unchanged daemon/workload/network fence.
-- [ ] 2.2 Publish sanitized exact-head evidence, resolve every same-head required CI run, merge through protection and synchronize/archive the fixture after acceptance. Human acceptance remains deferred.
+- [x] 2.1 Complete four-seat high-risk review and frozen-head trusted platform-image canary, Compose and original full Docker runs; retain independent empty owned inventories and unchanged daemon/workload/network fence.
+- [x] 2.2 Publish sanitized exact-head evidence, resolve every same-head required CI run, merge through protection and synchronize/archive the fixture after acceptance. Human acceptance remains deferred.
 
 ## Risk-pack mapping
 
