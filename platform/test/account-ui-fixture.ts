@@ -389,12 +389,8 @@ export async function withAccountUi(
     !(!initialization.upstreamEntered && primary instanceof AggregateError)
   )
     await settle(() => rm(directory, { recursive: true, force: true }));
-  if (cleanup.length !== 0) {
-    if (failed)
-      throw new AggregateError([primary, ...cleanup], 'UI operation and cleanup failed', {
-        cause: primary,
-      });
-    throw cleanup[0];
-  }
-  if (failed) throw primary;
+  if (failed) cleanup.unshift(primary);
+  if (cleanup.length > 1)
+    throw new AggregateError(cleanup, 'UI operation or cleanup failed', { cause: cleanup[0] });
+  if (cleanup.length === 1) throw cleanup[0];
 }

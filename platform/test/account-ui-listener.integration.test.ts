@@ -112,71 +112,88 @@ it('keeps public listener custody through initialization and real same-origin au
   }
 });
 
-it('preserves scenario and cleanup failures while settling independent resources and retaining uncertain paths', async () => {
-  const primary = new Error('Owned UI scenario failure');
-  const cleanup = new Error('Owned API context cleanup failure');
-  let database: DatabaseHandle | undefined;
-  let app: FastifyInstance | undefined;
-  let directory: string | undefined;
-  const disposal = { completed: false };
-  const ports: number[] = [];
-  try {
-    await withUpstream(
-      (_request, response) => response.end('unrelated-listener'),
-      async (sentinel) => {
-        const failure: unknown = await withAccountUi(
-          playwright,
-          async ({ baseUrl, seed, database: ownedDatabase }) => {
-            database = ownedDatabase;
-            directory = dirname(ownedDatabase.name);
-            ports.push(Number(new URL(baseUrl).port));
-            const address = app?.server.address();
-            if (address === null || address === undefined || typeof address === 'string')
-              throw new Error('Missing owned backend listener');
-            ports.push(address.port);
-            const response = await seed.get('/healthz');
-            await response.body();
-            expect(response.status()).toBe(200);
-            const dispose = seed.dispose.bind(seed);
-            seed.dispose = async () => {
-              await dispose();
-              disposal.completed = true;
-              throw cleanup;
-            };
-            throw primary;
-          },
-          {
-            observeInitialization: (context) => {
-              if (context.phase === 'application-built') app = context.app;
+it.each(['scenario-failed', 'completed'])(
+  'preserves independent cleanup failures after %s and retains uncertain paths',
+  async (outcome) => {
+    const primary = new Error('Owned UI scenario failure');
+    const cleanup = new Error('Owned API context cleanup failure');
+    const applicationCleanup = new Error('Owned application cleanup failure');
+    let database: DatabaseHandle | undefined;
+    let app: FastifyInstance | undefined;
+    let directory: string | undefined;
+    const disposal = { completed: false };
+    const ports: number[] = [];
+    try {
+      await withUpstream(
+        (_request, response) => response.end('unrelated-listener'),
+        async (sentinel) => {
+          const failure: unknown = await withAccountUi(
+            playwright,
+            async ({ baseUrl, seed, database: ownedDatabase }) => {
+              database = ownedDatabase;
+              directory = dirname(ownedDatabase.name);
+              ports.push(Number(new URL(baseUrl).port));
+              const address = app?.server.address();
+              if (address === null || address === undefined || typeof address === 'string')
+                throw new Error('Missing owned backend listener');
+              ports.push(address.port);
+              const response = await seed.get('/healthz');
+              await response.body();
+              expect(response.status()).toBe(200);
+              const dispose = seed.dispose.bind(seed);
+              seed.dispose = async () => {
+                await dispose();
+                disposal.completed = true;
+                throw cleanup;
+              };
+              if (outcome === 'scenario-failed') throw primary;
             },
-          },
-        ).catch((error: unknown) => error);
+            {
+              observeInitialization: (context) => {
+                if (context.phase !== 'application-built') return;
+                app = context.app;
+                if (outcome === 'completed') {
+                  const close = context.app.close.bind(context.app);
+                  // Inject only after the fixture's promise-form close has actually settled.
+                  Object.defineProperty(context.app, 'close', {
+                    value: async () => {
+                      await close();
+                      throw applicationCleanup;
+                    },
+                  });
+                }
+              },
+            },
+          ).catch((error: unknown) => error);
 
-        if (!(failure instanceof AggregateError))
-          throw new Error('Expected both UI failures to be retained', { cause: failure });
-        expect(failure.errors).toEqual([primary, cleanup]);
-        expect(failure.cause).toBe(primary);
-        expect(database?.open).toBe(false);
-        expect(app?.server.listening).toBe(false);
-        if (directory === undefined) throw new Error('Missing owned UI directory');
-        expect(existsSync(directory)).toBe(true);
-        for (const port of ports) await expectReusablePort(port);
-        const response = await fetch(`http://${sentinel.host}:${String(sentinel.port)}/`);
-        expect(await response.text()).toBe('unrelated-listener');
-      },
-    );
-  } finally {
-    // The controlled dependency threw only after real disposal; independent closure permits
-    // this test owner to remove its captured directory, not an unknown fixture resource.
-    if (
-      directory !== undefined &&
-      database?.open === false &&
-      app?.server.listening === false &&
-      disposal.completed
-    )
-      await rm(directory, { recursive: true, force: true });
-  }
-});
+          if (!(failure instanceof AggregateError))
+            throw new Error('Expected both UI failures to be retained', { cause: failure });
+          expect(failure.errors).toEqual(
+            outcome === 'scenario-failed' ? [primary, cleanup] : [cleanup, applicationCleanup],
+          );
+          expect(failure.cause).toBe(outcome === 'scenario-failed' ? primary : cleanup);
+          expect(database?.open).toBe(false);
+          expect(app?.server.listening).toBe(false);
+          if (directory === undefined) throw new Error('Missing owned UI directory');
+          expect(existsSync(directory)).toBe(true);
+          for (const port of ports) await expectReusablePort(port);
+          const response = await fetch(`http://${sentinel.host}:${String(sentinel.port)}/`);
+          expect(await response.text()).toBe('unrelated-listener');
+        },
+      );
+    } finally {
+      // The controlled dependency threw only after real disposal; independent closure permits
+      // this test owner to remove its captured directory, not an unknown fixture resource.
+      if (
+        directory !== undefined &&
+        database?.open === false &&
+        app?.server.listening === false &&
+        disposal.completed
+      )
+        await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 it.each(['completed', 'initialization-failed', 'scenario-failed'])(
   'settles owned UI resources after %s without closing an unrelated listener',
