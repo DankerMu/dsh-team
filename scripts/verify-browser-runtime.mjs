@@ -390,6 +390,7 @@ try {
   const known = [
     'usage: verify-browser-runtime.mjs docker|model|dsh-api|first-run',
     'DMXAPI_KEY is required for real-model verification',
+    'Trusted host Docker proxy configuration invalid',
     'browser isolation requires trusted nonroot Linux amd64',
     'browser isolation requires the local default Docker daemon',
     'browser isolation requires qualified local Linux Docker UID mapping',

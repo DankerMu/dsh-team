@@ -22,6 +22,8 @@ if (
 )
   throw new Error('Trusted nonroot VPS invocation required');
 const id = invocation ?? '';
+// Imported browser-rescue clients share this validated host-local transport context.
+process.env.DSH_TEAM_CI_INVOCATION = id;
 const root = join(homedir(), '.local/share/dsh-team/ci', id);
 const unit = `dsh-team-ci-${id}-run`;
 const source = join(root, 'checkout');
