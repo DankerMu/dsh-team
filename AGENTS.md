@@ -37,6 +37,8 @@ The duplicate-code guardrail self-test sizes its planted copies from the current
 
 `pnpm test:guardrails` retains macOS Bash3.2 and Bash5 support through the existing `bash` entrypoint. Literal Node heredocs stay outside command substitution: Bash3.2 can misparse an unmatched apostrophe in their otherwise quoted body. The canary count uses the existing owned temporary root and EXIT cleanup; changing shell grammar must preserve the complete case inventory, corpus-sized rejection and archive-policy probes on both interpreters.
 
+The documented-command gate consumes the complete package-script inventory with literal whole-line matching under `pipefail`; an early successful match must not turn producer SIGPIPE into a missing-command error. Its disposable guardrail regression accepts a large valid inventory, explicitly restores that fixture, and still rejects an absent complete name when a longer script shares its prefix. The reproduced producer/consumer141/0 counterexample does not establish an uncaptured historical CI signal.
+
 Archive guardrail probes choose a path absent from the copied repository baseline, including the no-descendant negative case. This keeps staged probes as additions even after real archives exist; the naming hook's existing added/renamed selection is unchanged. Missing-policy rejection must exercise that actual selection, not a modified tracked artifact.
 
 ## Project Identity

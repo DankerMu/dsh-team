@@ -322,6 +322,25 @@ expect_reject "module boundary (backend imports browser source)" "backend-does-n
 printf '#!/usr/bin/env bash\necho $1\n' >scripts/unquoted.sh
 expect_reject "shellcheck (unquoted expansion)" "SC2086" pnpm lint:shell
 
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+const path = 'package.json';
+const manifest = JSON.parse(readFileSync(path, 'utf8'));
+for (let index = 0; index < 16000; index += 1) {
+  manifest.scripts[`inventory-probe-${index}`] = 'node --version';
+}
+writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
+NODE
+expect_accept "documented commands (large valid inventory)" pnpm lint:agents
+restore
+
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+const path = 'package.json';
+const manifest = JSON.parse(readFileSync(path, 'utf8'));
+manifest.scripts['no-such-script-extra'] = 'node --version';
+writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
+NODE
 # shellcheck disable=SC2016 # literal Markdown backticks, not a command substitution
 printf '\nRun `pnpm no-such-script` first.\n' >>AGENTS.md
 expect_reject "documented commands (pnpm no-such-script)" "is not a script in package.json" \

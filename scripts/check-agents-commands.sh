@@ -26,7 +26,7 @@ for doc in AGENTS.md platform/AGENTS.md constraints.yaml; do
     [ -z "$name" ] && continue
     case "$builtins" in *" $name "*) continue ;; esac
     checked=$((checked + 1))
-    if ! printf '%s\n' "$scripts" | grep -qx -- "$name"; then
+    if ! printf '%s\n' "$scripts" | grep -Fx -- "$name" >/dev/null; then
       missing+=("  $doc:$line  \"pnpm $name\" is not a script in package.json")
     fi
   done < <(grep -n -o -E '[`"]pnpm (--silent )?[a-z][a-z0-9:-]*' "$doc" | sed -E 's/^([0-9]+):.pnpm (--silent )?/\1:/')
