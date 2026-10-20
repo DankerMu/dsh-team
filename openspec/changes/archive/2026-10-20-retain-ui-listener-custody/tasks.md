@@ -8,5 +8,5 @@
 
 ## 2. Shared consumer qualification and delivery
 
-- [ ] 2.1 Run current complete `pnpm test:ui` with unchanged screenshots/error observers, scoped/full integration and static checks; qualify canonical relay half-close/backpressure and standalone module consumers. Resolve four-seat independent high-risk review on the exact candidate and retain observed results.
-- [ ] 2.2 Run fresh final-head original full trusted Docker and standalone Compose with independent owned-resource/host fences; inspect complete same-head CI, merge through the protected PR and archive the change with strict specification validation. Human acceptance remains deferred and unpassed.
+- [x] 2.1 Run current complete `pnpm test:ui` with unchanged screenshots/error observers, scoped/full integration and static checks; qualify canonical relay half-close/backpressure and standalone module consumers. Resolve four-seat independent high-risk review on the exact candidate and retain observed results.
+- [x] 2.2 Run fresh final-head original full trusted Docker and standalone Compose with independent owned-resource/host fences; inspect complete same-head CI, merge through the protected PR and archive the change with strict specification validation. Human acceptance remains deferred and unpassed.
