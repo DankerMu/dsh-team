@@ -224,10 +224,16 @@ async function executeOwnedCommand(context) {
       });
       child.once('close', (exitCode, signal) => {
         closed = true;
+        let settled = false;
+        try {
+          settled = groupIsAbsent(child.pid);
+        } catch {
+          failure = 'identity';
+        }
         finished.resolve({
           exitCode: spawnFailed ? null : exitCode,
           signal,
-          settled: groupIsAbsent(child.pid),
+          settled,
         });
       });
       const secrets = outputSecrets();

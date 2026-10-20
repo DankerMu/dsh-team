@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
-import { withTrustedDockerFixture } from './trusted-docker-fixture.ts';
+import { CUSTODY_PROXY, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
 
 it('publishes reviewed launch authority before work and preserves a real nonzero command result', async () => {
   await withTrustedDockerFixture('fail', async (fixture) => {
@@ -49,6 +49,8 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
     expect(stderr.status).toBe(0);
     expect(stdout.stdout).toContain('fixture-begin\nfixture-end\n');
     expect(stderr.stdout).toContain('fixture-error\n');
+    expect(stdout.stdout).toContain(`fixture-end\n${'[REDACTED]\n'.repeat(6)}`);
+    expect(stderr.stdout).toContain('fixture-error\n[REDACTED]\n');
     for (const output of [
       stdout.stdout,
       stderr.stdout,
@@ -57,6 +59,9 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
       expect(output).not.toContain('fixture-gh-custody-canary');
       expect(output).not.toContain('fixture-model-custody-canary');
       expect(output).not.toContain('fixture-ssh-custody-canary');
+      expect(output).not.toContain(CUSTODY_PROXY);
+      expect(output).not.toContain('fixture-proxy-');
+      expect(output).not.toContain('fixture%2Dproxy');
     }
   });
 }, 20_000);
@@ -303,5 +308,64 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
     expect(JSON.parse(late.stdout) as unknown).toEqual(terminal);
     expect(fixture.observeProcess(sentinel.identity.pid)).toBe(sentinel.identity.birth);
     expect(existsSync(sentinel.interrupted)).toBe(false);
+  });
+}, 20_000);
+
+it('retains a nonpassing result and refuses partial logs after actual output storage failure', async () => {
+  await withTrustedDockerFixture('output-failed', async (fixture) => {
+    const started = await fixture.start();
+    expect(started.status, started.stderr).toBe(0);
+    const value: unknown = JSON.parse(started.stdout);
+    const invocation = record(value).invocation;
+    if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
+
+    await vi.waitFor(
+      () => {
+        const status = fixture.command(['status', invocation]);
+        expect(status.status, status.stderr).toBe(0);
+        const result: unknown = JSON.parse(status.stdout);
+        expect(result).toMatchObject({
+          state: 'failed',
+          command: { settled: true },
+          interruption: 'capture-failed',
+          output: { complete: false, stdout: null },
+          cleanup: { state: 'confirmed' },
+        });
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+
+    expect(statSync(join(directory, 'stdout.log')).size).toBeLessThanOrEqual(4096);
+    const logs = fixture.command(['logs', invocation, 'stdout']);
+    expect(logs.status).toBe(1);
+    expect(logs.stdout).toBe('');
+  });
+}, 20_000);
+
+it('persists the original command outcome when process-group observation is denied', async () => {
+  await withTrustedDockerFixture('group-observation-failed', async (fixture) => {
+    const started = await fixture.start();
+    expect(started.status, started.stderr).toBe(0);
+    const value: unknown = JSON.parse(started.stdout);
+    const invocation = record(value).invocation;
+    if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+
+    await vi.waitFor(
+      () => {
+        const status = fixture.command(['status', invocation]);
+        expect(status.status, status.stderr).toBe(0);
+        const result: unknown = JSON.parse(status.stdout);
+        expect(result).toMatchObject({
+          state: 'unknown',
+          command: { exitCode: 17, signal: null, settled: false },
+          failure: 'identity',
+          output: { complete: true },
+          cleanup: { state: 'unconfirmed' },
+        });
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+    expect(fixture.command(['cancel', invocation]).status).toBe(1);
   });
 }, 20_000);

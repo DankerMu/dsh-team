@@ -24,10 +24,19 @@ import { groupIsAbsent } from '../../scripts/trusted-docker-record.mjs';
 const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
 const birthModule = new URL('../../scripts/probe-browser-native.mjs', import.meta.url).href;
 
+export const CUSTODY_PROXY = 'http://fixture%2Dproxy%2Duser:fixture%2Dproxy%2Dpassword@127.0.0.1:9';
+
+export const FILE_SIZE_LIMIT_PROGRAM = `import os,resource,signal,sys
+resource.setrlimit(resource.RLIMIT_FSIZE,(4096,4096))
+signal.signal(signal.SIGXFSZ,signal.SIG_IGN)
+os.execvp(sys.argv[1],sys.argv[1:])`;
+
+type CustodyMode = 'fail' | 'hold' | 'output-failed' | 'group-observation-failed';
+
 function prepareCustodyRepository(
   repository: string,
   environment: NodeJS.ProcessEnv,
-  mode: 'fail' | 'hold',
+  mode: CustodyMode,
 ) {
   const files = [
     'scripts/probe-browser-native.mjs',
@@ -55,7 +64,29 @@ function prepareCustodyRepository(
     cpSync(join(sourceRoot, relative), destination);
   }
   const packageValue: unknown = JSON.parse(readFileSync(join(sourceRoot, 'package.json'), 'utf8'));
-  const verificationScript = record(record(packageValue).scripts)['verify:docker'];
+  const verificationScript =
+    mode === 'group-observation-failed'
+      ? 'node --import ./fixture-preload.mjs scripts/trusted-docker-run.mjs'
+      : record(record(packageValue).scripts)['verify:docker'];
+  if (mode === 'group-observation-failed')
+    writeFileSync(
+      join(repository, 'fixture-preload.mjs'),
+      `import childProcess from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
+const spawn=childProcess.spawn;
+childProcess.spawn=(command,args,options)=>{
+  if(command===process.execPath&&args[1]==='own')
+    return spawn(command,['--import',import.meta.url,...args],options);
+  return spawn(command,args,options);
+};
+syncBuiltinESMExports();
+const kill=process.kill.bind(process);
+process.kill=(pid,signal)=>{
+  if(pid<0&&signal===0)throw Object.assign(new Error('owned-group-observation-denied'),{code:'EPERM'});
+  return kill(pid,signal);
+};
+`,
+    );
   writeFileSync(
     join(repository, 'package.json'),
     JSON.stringify({
@@ -78,6 +109,7 @@ assert.equal(await processBirth(manifest.owner.pid),manifest.owner.birth);
 assert.equal(process.env.GH_TOKEN,undefined);
 assert.equal(process.env.DMXAPI_KEY,undefined);
 assert.equal(process.env.SSH_AUTH_SOCK,undefined);
+assert.equal(process.env.HTTP_PROXY,${mode === 'fail' ? JSON.stringify(CUSTODY_PROXY) : 'undefined'});
 const temporary=process.env.TMPDIR;
 const release=join(temporary,'release');
 // One group signal plus pnpm's native forwarding may deliver SIGINT twice.
@@ -88,9 +120,17 @@ const watcher=${JSON.stringify(mode)}==='hold'?watch(temporary,()=>{if(existsSyn
 writeFileSync(join(temporary,'child-ready.json'),JSON.stringify({pid:process.pid,birth:await processBirth(process.pid)}));
 process.stdout.write('fixture-begin\\n');
 if(watcher){await released;watcher.close();}
+if(${JSON.stringify(mode)}==='output-failed')process.stdout.write(Buffer.alloc(8192,120));
 process.stdout.write('fixture-end\\n');
+if(process.env.HTTP_PROXY!==undefined){
+  const proxy=new URL(process.env.HTTP_PROXY);
+  for(const value of [process.env.HTTP_PROXY,proxy.username,decodeURIComponent(proxy.username),proxy.password,decodeURIComponent(proxy.password),Buffer.from(decodeURIComponent(proxy.username)+':'+decodeURIComponent(proxy.password)).toString('base64')]){
+    process.stdout.write(value.slice(0,7));await new Promise(setImmediate);process.stdout.write(value.slice(7)+'\\n');
+  }
+}
 process.stderr.write('fixture-error\\n');
-process.exitCode=17;
+if(process.env.HTTP_PROXY!==undefined)process.stderr.write(process.env.HTTP_PROXY+'\\n');
+process.exitCode=${mode === 'output-failed' ? '0' : '17'};
 `,
   );
   for (const args of [
@@ -254,21 +294,30 @@ fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`;
   return { child, ready, interrupted };
 }
 
-function createTrustedDockerFixture(mode: 'fail' | 'hold') {
+function createTrustedDockerFixture(mode: CustodyMode) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-team-docker-custody-')));
   const repository = join(directory, 'repository');
   const home = join(directory, 'home');
   mkdirSync(repository);
   mkdirSync(home);
-  const environment = { PATH: process.env.PATH, HOME: home };
+  const environment = {
+    PATH: process.env.PATH,
+    HOME: home,
+    // Only the complete-output case supplies a proxy; held-output fences have no secret tail.
+    HTTP_PROXY: mode === 'fail' ? CUSTODY_PROXY : undefined,
+  };
   const processes = fixtureProcessCustody(environment, directory);
   const { observeProcess, settle } = processes;
   const head = prepareCustodyRepository(repository, environment, mode);
   const entry = join(repository, 'scripts/trusted-docker-run.mjs');
-  const command = (args: string[], wrapper = false) =>
-    spawnSync(
-      wrapper ? 'pnpm' : process.execPath,
-      wrapper ? ['--silent', 'verify:docker', ...args] : [entry, ...args],
+  const command = (args: string[], wrapper = false) => {
+    const executable = wrapper ? 'pnpm' : process.execPath;
+    const commandArguments = wrapper ? ['--silent', 'verify:docker', ...args] : [entry, ...args];
+    return spawnSync(
+      mode === 'output-failed' ? 'python3' : executable,
+      mode === 'output-failed'
+        ? ['-c', FILE_SIZE_LIMIT_PROGRAM, executable, ...commandArguments]
+        : commandArguments,
       {
         cwd: repository,
         env: {
@@ -283,6 +332,7 @@ function createTrustedDockerFixture(mode: 'fail' | 'hold') {
         maxBuffer: 65_536,
       },
     );
+  };
   const custodyBase = join(home, '.local/share/dsh-team/docker-verification');
   const issued = new Map<
     string,
@@ -440,7 +490,7 @@ function createTrustedDockerFixture(mode: 'fail' | 'hold') {
 }
 
 export async function withTrustedDockerFixture(
-  mode: 'fail' | 'hold',
+  mode: CustodyMode,
   run: (fixture: ReturnType<typeof createTrustedDockerFixture>) => void | Promise<void>,
 ) {
   const fixture = createTrustedDockerFixture(mode);

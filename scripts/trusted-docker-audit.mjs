@@ -8,6 +8,7 @@ import { liveProcessBirth } from './probe-browser-native.mjs';
 import {
   INVOCATION_PATTERN,
   privateDirectory,
+  processIdentity,
   readCustodyRecord,
   requirePathIdentity,
 } from './trusted-docker-record.mjs';
@@ -29,7 +30,12 @@ function requireEmptyOwnership(command, kind, ownership) {
 
 function requireContainedReceiptPath(temporary, path) {
   const location = relative(temporary, resolve(path));
-  if (location === '..' || location.startsWith('../') || location.startsWith('/'))
+  if (
+    location === '' ||
+    location === '..' ||
+    location.startsWith('../') ||
+    location.startsWith('/')
+  )
     throw new Error('Trusted Docker browser authority escaped invocation');
 }
 
@@ -57,6 +63,7 @@ function requireStoppedBrowserPointer(receipt, temporary) {
 }
 
 async function observeSocketAbsence(path, temporary) {
+  if (typeof path !== 'string') throw new Error('Trusted Docker browser socket authority missing');
   requireContainedReceiptPath(temporary, path);
   try {
     await lstat(path);
@@ -70,10 +77,15 @@ async function observeSocketAbsence(path, temporary) {
 async function observeBrowserPointer(command, path, temporary) {
   const receipt = await readReceipt(path);
   requireStoppedBrowserPointer(receipt, temporary);
-  for (const identity of [receipt.driver, receipt.acquisition.producer]) {
-    if (identity && (await liveProcessBirth(identity.pid)) === identity.birth)
+  const identities = [processIdentity(receipt.driver)];
+  if (receipt.acquisition.state === 'settled' || receipt.acquisition.producer !== undefined)
+    identities.push(processIdentity(receipt.acquisition.producer));
+  for (const identity of identities) {
+    if ((await liveProcessBirth(identity.pid)) === identity.birth)
       throw new Error('Trusted Docker browser producer remains live');
   }
+  if (receipt.acquisition.state === 'settled' || receipt.socketDirectory !== undefined)
+    await observeSocketAbsence(receipt.socketDirectory, temporary);
   for (const [kind, name, id] of [
     ['container', receipt.containerName, receipt.containerId],
     ['network', receipt.networkName, receipt.networkId],
@@ -81,8 +93,6 @@ async function observeBrowserPointer(command, path, temporary) {
     requireAbsent(command, kind, name);
     if (id) requireAbsent(command, kind, id);
   }
-  if (typeof receipt.socketDirectory === 'string')
-    await observeSocketAbsence(receipt.socketDirectory, temporary);
 }
 
 async function observeBrowserDirectory(command, directory, temporary) {

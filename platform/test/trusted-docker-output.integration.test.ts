@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
+import { FILE_SIZE_LIMIT_PROGRAM } from './trusted-docker-fixture.ts';
 
 const moduleUrl = new URL('../../scripts/trusted-docker-output.mjs', import.meta.url).href;
 const canary = 'fixture-proxy-custody-canary';
@@ -91,16 +92,20 @@ it('refuses to overwrite a prior output artifact instead of corrupting its evide
 it('does not return a complete receipt when the actual output file reaches its write limit', () => {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-team-output-custody-'));
   const path = join(directory, 'stdout.log');
-  const python = `import os,resource,signal,sys
-resource.setrlimit(resource.RLIMIT_FSIZE,(4096,4096))
-signal.signal(signal.SIGXFSZ,signal.SIG_IGN)
-os.execv(sys.argv[1],sys.argv[1:])`;
   const input = Buffer.concat([Buffer.from(canary), Buffer.alloc(8192, 120)]);
   const expected = Buffer.concat([replacement, Buffer.alloc(8192, 120)]);
   try {
     const result = spawnSync(
       'python3',
-      ['-c', python, process.execPath, '--input-type=module', '-e', consumer(false), path],
+      [
+        '-c',
+        FILE_SIZE_LIMIT_PROGRAM,
+        process.execPath,
+        '--input-type=module',
+        '-e',
+        consumer(false),
+        path,
+      ],
       {
         input,
         env: { PATH: process.env.PATH },
