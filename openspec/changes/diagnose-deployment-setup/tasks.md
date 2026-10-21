@@ -2,8 +2,8 @@
 
 ## 1. Safe setup boundary evidence
 
-- [ ] 1.1 Qualify a behavioral RED at a genuine setup boundary with secret-bearing failure data; implement one closed-set entered/completed/first-failure projection at existing lifecycle owners and migrate affected forwarding callers.
-- [ ] 1.2 Add adverse early-admission and late account/configuration failures, nested-progress and primary-plus-cleanup regressions proving exact safe boundary facts, original rejection, independent cleanup classification, explicit evidence loss and no secret/cause/output leakage; retain existing audit/privacy and fixed-name/ownership semantics.
+- [x] 1.1 Qualify a behavioral RED at a genuine setup boundary with secret-bearing failure data; implement one closed-set entered/completed/first-failure projection at existing lifecycle owners and migrate affected forwarding callers.
+- [x] 1.2 Add adverse early-admission and late account/configuration failures, nested-progress and primary-plus-cleanup regressions proving exact safe boundary facts, original rejection, independent cleanup classification, explicit evidence loss and no secret/cause/output leakage; retain existing audit/privacy and fixed-name/ownership semantics.
 
 ## 2. Investigation and verification
 

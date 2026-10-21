@@ -7,21 +7,25 @@ import { registerInstanceUser } from './instance-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { requireDeploymentObservationReady } from './deployment-observer-fixture.ts';
+import type { DeploymentSetupEvidence } from './deployment-setup-evidence.ts';
 
-export async function waitForDeployment(deployment: Deployment) {
-  // Only readiness polling; never recreate a failed deployment to obtain success.
-  await expect
-    .poll(
-      async () => {
-        const response = await deployment.request(`${deployment.base}/healthz`, {
-          signal: AbortSignal.timeout(2_000),
-        });
-        return { status: response.status, body: await response.json() };
-      },
-      { timeout: 30_000 },
-    )
-    .toEqual({ status: 200, body: { status: 'ok' } });
-  requireDeploymentObservationReady(deployment.observation);
+export async function waitForDeployment(deployment: Deployment, setup?: DeploymentSetupEvidence) {
+  const wait = async () => {
+    // Only readiness polling; never recreate a failed deployment to obtain success.
+    await expect
+      .poll(
+        async () => {
+          const response = await deployment.request(`${deployment.base}/healthz`, {
+            signal: AbortSignal.timeout(2_000),
+          });
+          return { status: response.status, body: await response.json() };
+        },
+        { timeout: 30_000 },
+      )
+      .toEqual({ status: 200, body: { status: 'ok' } });
+    requireDeploymentObservationReady(deployment.observation);
+  };
+  return setup ? setup.run('health', wait) : wait();
 }
 
 export async function registerDeploymentEmployee(
@@ -49,63 +53,81 @@ export async function registerDeploymentEmployee(
 export async function configureDeployment(
   lifecycle: UserImageLifecycle,
   start: () => Promise<Deployment>,
+  setup?: DeploymentSetupEvidence,
 ) {
-  const deployment = await start();
-  await waitForDeployment(deployment);
-  const email = 'administrator@deployment.example.test';
-  const password = randomUUID();
-  const terminal = runPty(
-    {
-      directory: deployment.directory,
-      dataDir: deployment.dataDir,
-      databasePath: join(deployment.dataDir, 'platform.db'),
-    },
-    {
-      command: [
-        'docker',
-        '--config',
-        dirname(lifecycle.overlayDirectory),
-        ...deployment.compose,
-        'exec',
-        'platform',
-        'node',
-        'platform/dist/cli.js',
-      ],
-      args: ['admin', 'create', email],
-      actions: matchingPasswords(password),
-      secrets: [password],
-    },
-  );
-  expect(terminal.exitCode).toBe(0);
-  expect(terminal.leakedInput).toBe(false);
-  expect(terminal.modeRestored).toBe(true);
-  const login = await deployment.request(`${deployment.base}/_platform/api/login`, {
-    method: 'POST',
-    headers: { origin: deployment.base, 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password }),
-  });
-  expect(login.status).toBe(200);
-  expect(await login.json()).toMatchObject({ role: 'admin', email });
-  const cookie = login.headers.get('set-cookie')?.split(';')[0];
-  if (cookie === undefined) throw new Error('Deployed administrator session missing');
-  const configured = await deployment.request(
-    `${deployment.base}/_platform/api/admin/model-config`,
-    {
-      method: 'PUT',
-      headers: { origin: deployment.base, cookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ ...MODEL_CONFIG, apiKey: 'deployment-acceptance-key' }),
-    },
-  );
-  expect(configured.status).toBe(200);
-  expect(await configured.json()).toEqual({
-    ...MODEL_CONFIG,
-    apiKeyConfigured: true,
-    runningInstances: 0,
-  });
-  const employee = await registerDeploymentEmployee(
-    lifecycle,
-    deployment,
-    'employee@deployment.example.test',
-  );
-  return { deployment, employee, admin: { email, password, cookie } };
+  const configure = async () => {
+    const deployment = await start();
+    await waitForDeployment(deployment, setup);
+    const email = 'administrator@deployment.example.test';
+    const password = randomUUID();
+    const initialize = () => {
+      const terminal = runPty(
+        {
+          directory: deployment.directory,
+          dataDir: deployment.dataDir,
+          databasePath: join(deployment.dataDir, 'platform.db'),
+        },
+        {
+          command: [
+            'docker',
+            '--config',
+            dirname(lifecycle.overlayDirectory),
+            ...deployment.compose,
+            'exec',
+            'platform',
+            'node',
+            'platform/dist/cli.js',
+          ],
+          args: ['admin', 'create', email],
+          actions: matchingPasswords(password),
+          secrets: [password],
+        },
+      );
+      expect(terminal.exitCode).toBe(0);
+      expect(terminal.leakedInput).toBe(false);
+      expect(terminal.modeRestored).toBe(true);
+    };
+    if (setup) setup.runSync('administrator-terminal', initialize);
+    else initialize();
+    const authenticate = async () => {
+      const login = await deployment.request(`${deployment.base}/_platform/api/login`, {
+        method: 'POST',
+        headers: { origin: deployment.base, 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      expect(login.status).toBe(200);
+      expect(await login.json()).toMatchObject({ role: 'admin', email });
+      const cookie = login.headers.get('set-cookie')?.split(';')[0];
+      if (cookie === undefined) throw new Error('Deployed administrator session missing');
+      return cookie;
+    };
+    const cookie = setup
+      ? await setup.run('administrator-login', authenticate)
+      : await authenticate();
+    const configureModel = async () => {
+      const configured = await deployment.request(
+        `${deployment.base}/_platform/api/admin/model-config`,
+        {
+          method: 'PUT',
+          headers: { origin: deployment.base, cookie, 'content-type': 'application/json' },
+          body: JSON.stringify({ ...MODEL_CONFIG, apiKey: 'deployment-acceptance-key' }),
+        },
+      );
+      expect(configured.status).toBe(200);
+      expect(await configured.json()).toEqual({
+        ...MODEL_CONFIG,
+        apiKeyConfigured: true,
+        runningInstances: 0,
+      });
+    };
+    if (setup) await setup.run('model-configuration', configureModel);
+    else await configureModel();
+    const employee = setup
+      ? await setup.run('employee-registration', () =>
+          registerDeploymentEmployee(lifecycle, deployment, 'employee@deployment.example.test'),
+        )
+      : await registerDeploymentEmployee(lifecycle, deployment, 'employee@deployment.example.test');
+    return { deployment, employee, admin: { email, password, cookie } };
+  };
+  return setup ? setup.run('account-configuration', configure) : configure();
 }
