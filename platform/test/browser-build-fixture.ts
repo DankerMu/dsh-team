@@ -17,7 +17,7 @@ import { join, resolve } from 'node:path';
 const verifier = resolve(import.meta.dirname, '../../scripts/verify-browser-runtime.mjs');
 const executable = String.raw`import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 const root=dirname(fileURLToPath(import.meta.url));
 const file=join(root,'daemon.json');
 const state=JSON.parse(readFileSync(file,'utf8'));
@@ -33,6 +33,12 @@ if(basename(process.argv[1])==='pnpm'){state.verificationStarted=true;process.ex
 else if(args[0]==='--user')process.stdout.write('LoadState=not-found\n');
 else if(args[0]==='info')process.stdout.write(JSON.stringify({OSType:'linux',Architecture:'amd64',SecurityOptions:[]}));
 else if(args[0]==='build') {
+ if(state.mode==='absent'){
+  // The invocation-private build context is runtime-selected; load its delivered import closure.
+  const context=args.find(value=>value.startsWith('browser-runtime=')).slice('browser-runtime='.length);
+  await import(pathToFileURL(join(context,'probe-browser-runtime.mjs')).href);
+  state.runtimeClosureImported=true;
+ }
  state.buildCount+=1;
  state.tag=args[args.indexOf('-t')+1];
  state.invocation=args[args.indexOf('--label')+1].split('=')[1];

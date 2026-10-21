@@ -15,7 +15,10 @@ import {
 } from '../../scripts/probe-browser-runtime.mjs';
 import type { MappedPageHandle } from '../../scripts/probe-mapped-host.mjs';
 import type { IsolatedBrowserReceipt } from '../../scripts/probe-browser-runtime.mjs';
+import { captureBrowserExecAuthority } from '../../scripts/probe-browser-exec.mjs';
+import type { BrowserExecTarget } from '../../scripts/probe-browser-exec.mjs';
 import { record } from './container-start-docker-fixture.ts';
+import { beginVerificationBrowserExec } from '../../scripts/verification-submissions.mjs';
 
 function document(text: string): Record<string, unknown> {
   const rows: unknown = JSON.parse(text);
@@ -344,13 +347,15 @@ export class OwnedBrowserChurn {
       throw new Error('Owned churn inventory remains');
   }
 }
-export function execBrowser(
-  id: string,
+export async function execBrowser(
+  target: BrowserExecTarget,
   source: string,
   onProgress?: (line: string) => void,
 ): Promise<string> {
+  const authority = await captureBrowserExecAuthority(target);
+  const publish = beginVerificationBrowserExec(authority);
   const { promise, resolve, reject } = Promise.withResolvers<string>();
-  const child = spawn('docker', ['exec', id, 'node', '-e', source], {
+  const child = spawn('docker', ['exec', authority.browser.containerId, 'node', '-e', source], {
     env: {
       PATH: process.env.PATH,
       DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
@@ -360,17 +365,27 @@ export function execBrowser(
   });
   let output = '';
   let outputBytes = 0;
+  let failed = false;
+  let failure: unknown;
+  type FailureReason = 'callback' | 'timeout' | 'output-limit' | 'spawn' | 'exit';
+  let failureReason: FailureReason | null = null;
+  const fail = (error: unknown, reason: FailureReason) => {
+    if (failed) return;
+    failed = true;
+    failure = error;
+    failureReason = reason;
+    child.kill('SIGKILL');
+  };
   // This is a real external-process deadline, not a sleep; fake time cannot bound Docker.
   const timer = setTimeout(() => {
-    child.kill('SIGKILL');
-    reject(new Error('Owned browser protocol client timeout'));
+    fail(new Error('Owned browser protocol client timeout'), 'timeout');
   }, 15000);
   child.stdout.on('data', (data: Buffer) => {
+    if (failed) return;
     outputBytes += data.length;
     output += data.toString();
     if (outputBytes > 65536) {
-      child.kill('SIGKILL');
-      reject(new Error('Owned browser protocol client output limit'));
+      fail(new Error('Owned browser protocol client output limit'), 'output-limit');
       return;
     }
     if (onProgress) {
@@ -381,20 +396,34 @@ export function execBrowser(
         try {
           onProgress(line);
         } catch (error) {
-          child.kill('SIGKILL');
-          reject(error);
+          fail(error, 'callback');
           return;
         }
       }
     }
   });
   child.once('error', (error) => {
-    clearTimeout(timer);
-    reject(error);
+    if (!failed) {
+      failed = true;
+      failure = error;
+      failureReason = 'spawn';
+    }
   });
-  child.once('close', (code) => {
+  child.once('close', (code, signal) => {
     clearTimeout(timer);
-    if (code !== 0) reject(new Error('Owned browser protocol client failed'));
+    if (!failed && code !== 0) {
+      failed = true;
+      failure = new Error('Owned browser protocol client failed');
+      failureReason = 'exit';
+    }
+    try {
+      publish({ exitCode: code, signal, failure: failureReason });
+    } catch (error) {
+      // Preserve the original operation error; its retained publication fence is independent.
+      reject(failed ? failure : error);
+      return;
+    }
+    if (failed) reject(failure);
     else resolve(output);
   });
   return promise;

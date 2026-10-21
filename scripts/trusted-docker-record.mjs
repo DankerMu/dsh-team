@@ -5,7 +5,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { constants as operatingSystemConstants } from 'node:os';
-import { liveProcessBirth } from './probe-browser-native.mjs';
+import { liveProcessBirth, processIdentity } from './probe-browser-native.mjs';
 
 export const FULL_DOCKER_COMMAND = ['pnpm', 'test:docker'];
 export const INVOCATION_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -52,23 +52,6 @@ export async function readCustodyRecord(path) {
   } finally {
     await file.close();
   }
-}
-
-export function processIdentity(value) {
-  if (
-    !value ||
-    !Number.isSafeInteger(value.pid) ||
-    value.pid < 1 ||
-    typeof value.birth !== 'string'
-  )
-    throw new Error('Invalid trusted Docker process identity');
-  if (
-    !new RegExp(
-      `^(?:linux:${value.pid}:[0-9]+|darwin:${value.pid}:[1-9][0-9]*:(?:0|[1-9][0-9]{0,5}))$`,
-    ).test(value.birth)
-  )
-    throw new Error('Invalid trusted Docker process birth');
-  return { pid: value.pid, birth: value.birth };
 }
 
 export function validateRequest(value, invocation) {
@@ -200,7 +183,7 @@ function requireTerminalFields(value) {
     ],
     [value.command, ['exitCode', 'signal', 'settled']],
     [value.output, ['complete', 'stdout', 'stderr']],
-    [value.cleanup, ['state']],
+    [value.cleanup, ['state', 'browserExec']],
   ]) {
     if (
       !object ||
@@ -241,6 +224,26 @@ function validateOutputOutcome(output) {
   }
 }
 
+function validateCleanupOutcome(cleanup) {
+  if (!Object.hasOwn(cleanup, 'browserExec'))
+    throw new Error('Trusted Docker browser exec projection missing');
+  const summary = cleanup.browserExec;
+  if (summary === null) return;
+  if (
+    cleanup.state !== 'confirmed' ||
+    !summary ||
+    Array.isArray(summary) ||
+    Object.keys(summary).sort().join(',') !==
+      'executionCapability,operationOutcome,sha256,submissions' ||
+    summary.operationOutcome !== 'unknown' ||
+    summary.executionCapability !== 'retired' ||
+    !Number.isSafeInteger(summary.submissions) ||
+    summary.submissions <= 0 ||
+    !/^[a-f0-9]{64}$/.test(summary.sha256 ?? '')
+  )
+    throw new Error('Invalid trusted Docker browser exec projection');
+}
+
 export function hasPassingOutcome(value) {
   return (
     value.command.exitCode === 0 &&
@@ -253,6 +256,17 @@ export function hasPassingOutcome(value) {
   );
 }
 
+/**
+ * @typedef {{
+ * version: number, invocation: string, manifestDigest: string, state: 'passed' | 'failed',
+ * command: {exitCode: number | null, signal: string | null, settled: boolean},
+ * interruption: 'none' | 'cancelled' | 'capture-failed' | 'owner-signal',
+ * failure: null | 'identity' | 'control' | 'launch',
+ * output: {complete: boolean, stdout: {bytes: number, sha256: string} | null, stderr: {bytes: number, sha256: string} | null},
+ * cleanup: import('./verification-submission-assessment.mjs').CleanupAssessment
+ * }} TrustedDockerTerminal
+ */
+/** @returns {TrustedDockerTerminal} */
 export function validateTerminal(value, invocation, digest) {
   requireTerminalFields(value);
   if (
@@ -264,6 +278,7 @@ export function validateTerminal(value, invocation, digest) {
     throw new Error('Trusted Docker terminal identity changed');
   validateCommandOutcome(value.command);
   validateOutputOutcome(value.output);
+  validateCleanupOutcome(value.cleanup);
   if (
     !['confirmed', 'unconfirmed', 'not-started'].includes(value.cleanup.state) ||
     !['none', 'cancelled', 'capture-failed', 'owner-signal'].includes(value.interruption) ||

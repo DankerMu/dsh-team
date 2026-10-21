@@ -4,11 +4,15 @@ import { createDockerCommands, isAbsentResource } from '../platform/test/docker-
 import { readCleanupJournal } from '../platform/test/docker-cleanup.ts';
 import { readReceipt } from './probe-browser-receipt.mjs';
 import { requireNetworkAuthority } from './probe-browser-network.mjs';
-import { liveProcessBirth } from './probe-browser-native.mjs';
+import { liveProcessBirth, processIdentity } from './probe-browser-native.mjs';
+import {
+  browserExecRetirementSummary,
+  readVerificationSubmissionsForCleanup,
+} from './verification-submission-assessment.mjs';
+import { readBrowserExecRetirementReceipt } from './probe-browser-exec.mjs';
 import {
   INVOCATION_PATTERN,
   privateDirectory,
-  processIdentity,
   readCustodyRecord,
   requirePathIdentity,
 } from './trusted-docker-record.mjs';
@@ -74,8 +78,7 @@ async function observeSocketAbsence(path, temporary) {
   throw new Error('Trusted Docker browser socket retirement unconfirmed');
 }
 
-async function observeBrowserPointer(command, path, temporary) {
-  const receipt = await readReceipt(path);
+async function requireRetiredBrowserProducers(receipt, temporary) {
   requireStoppedBrowserPointer(receipt, temporary);
   const identities = [processIdentity(receipt.driver)];
   if (receipt.acquisition.state === 'settled' || receipt.acquisition.producer !== undefined)
@@ -84,6 +87,10 @@ async function observeBrowserPointer(command, path, temporary) {
     if ((await liveProcessBirth(identity.pid)) === identity.birth)
       throw new Error('Trusted Docker browser producer remains live');
   }
+}
+
+async function observeBrowserReceipt(command, receipt, temporary) {
+  await requireRetiredBrowserProducers(receipt, temporary);
   if (receipt.acquisition.state === 'settled' || receipt.socketDirectory !== undefined)
     await observeSocketAbsence(receipt.socketDirectory, temporary);
   for (const [kind, name, id] of [
@@ -93,6 +100,10 @@ async function observeBrowserPointer(command, path, temporary) {
     requireAbsent(command, kind, name);
     if (id) requireAbsent(command, kind, id);
   }
+}
+
+async function observeBrowserPointer(command, path, temporary) {
+  await observeBrowserReceipt(command, await readReceipt(path), temporary);
 }
 
 async function observeBrowserDirectory(command, directory, temporary) {
@@ -115,9 +126,78 @@ async function observeBrowserDirectory(command, directory, temporary) {
   requireEmptyOwnership(command, 'image', { 'dsh-team.browser-invocation': image.invocation });
 }
 
-/** Read-only observation; the original root command remains the sole mutation/cleanup owner. */
+/** Canonical browser producer checks, independent of daemon resource-absence observations. */
+export async function trustedDockerBrowserProducersSettled(request) {
+  try {
+    await requirePathIdentity(
+      request.temporary,
+      request.temporaryDevice,
+      request.temporaryInode,
+      true,
+    );
+    for (const name of await readdir(request.temporary)) {
+      if (!name.startsWith('dsh-browser-command-')) continue;
+      const directory = join(request.temporary, name);
+      await privateDirectory(directory);
+      for (const pointer of await readdir(directory)) {
+        if (pointer.endsWith('.launch.json'))
+          await requireRetiredBrowserProducers(
+            await readReceipt(join(directory, pointer)),
+            request.temporary,
+          );
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @typedef {{root: string, temporary: string, temporaryDevice: string, temporaryInode: string}} CleanupAssessmentRequest */
+
+async function observeSubmissionWriters(writers, command, observed) {
+  for (const writer of writers) {
+    if (writer.kind === 'process') {
+      const identity = processIdentity(writer);
+      if ((await liveProcessBirth(identity.pid)) === identity.birth)
+        throw new Error('Trusted Docker observer writer remains live');
+    } else {
+      const identity = `container:${writer.id}`;
+      if (!observed.has(identity)) {
+        requireAbsent(command, 'container', writer.id);
+        observed.add(identity);
+      }
+    }
+  }
+}
+
+function observeRecordedResources(entries, command, observed) {
+  const inventories = new Set();
+  for (const { target } of entries) {
+    const identity = `${target.kind}:${target.name}`;
+    if (!observed.has(identity)) {
+      requireAbsent(command, target.kind, target.name);
+      observed.add(identity);
+    }
+    const ownership = Object.fromEntries(Object.entries(target.ownership).sort());
+    const query = `${target.kind}:${JSON.stringify(ownership)}`;
+    if (!inventories.has(query)) {
+      requireEmptyOwnership(command, target.kind, ownership);
+      inventories.add(query);
+    }
+  }
+}
+
+/**
+ * Read-only observation; the original root remains the sole mutation/cleanup owner.
+ * @param {CleanupAssessmentRequest} request
+ * @param {string} directory
+ * @param {boolean} settled
+ * @param {import('../platform/test/docker-command.ts').DockerCommand} [injectedCommand]
+ * @returns {Promise<import('./verification-submission-assessment.mjs').CleanupAssessment>}
+ */
 export async function assessTrustedDockerCleanup(request, directory, settled, injectedCommand) {
-  if (!settled) return { state: 'unconfirmed' };
+  if (!settled) return { state: 'unconfirmed', browserExec: null };
   try {
     await requirePathIdentity(
       request.temporary,
@@ -133,27 +213,27 @@ export async function assessTrustedDockerCleanup(request, directory, settled, in
       injectedCommand ??
       createDockerCommands(request.root, join(directory, 'docker'), true).command;
     const entries = readCleanupJournal(journalPath);
+    const { writers, browserExec } = readVerificationSubmissionsForCleanup(directory);
     const observed = new Set();
-    const inventories = new Set();
-    for (const { target } of entries) {
-      const identity = `${target.kind}:${target.name}`;
-      if (!observed.has(identity)) {
-        requireAbsent(command, target.kind, target.name);
-        observed.add(identity);
-      }
-      const ownership = Object.fromEntries(Object.entries(target.ownership).sort());
-      const query = `${target.kind}:${JSON.stringify(ownership)}`;
-      if (!inventories.has(query)) {
-        requireEmptyOwnership(command, target.kind, ownership);
-        inventories.add(query);
-      }
+    await observeSubmissionWriters(writers, command, observed);
+    for (const submission of browserExec) {
+      requireContainedReceiptPath(request.temporary, submission.authority.pointer);
+      const receipt = await readBrowserExecRetirementReceipt(submission.authority);
+      await observeBrowserReceipt(command, receipt, request.temporary);
     }
+    observeRecordedResources(entries, command, observed);
     for (const name of await readdir(request.temporary)) {
       if (name.startsWith('dsh-browser-command-'))
         await observeBrowserDirectory(command, join(request.temporary, name), request.temporary);
     }
-    return { state: 'confirmed' };
+    return {
+      state: 'confirmed',
+      browserExec:
+        browserExec.length === 0
+          ? null
+          : browserExecRetirementSummary(browserExec.map(({ id }) => id)),
+    };
   } catch {
-    return { state: 'unconfirmed' };
+    return { state: 'unconfirmed', browserExec: null };
   }
 }

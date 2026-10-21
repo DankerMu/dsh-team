@@ -13,6 +13,7 @@ import {
   requireNetwork,
 } from './probe-browser-network.mjs';
 import { qualificationError } from './probe-browser-qualification.mjs';
+import { runDockerCommand, selectDockerExecution } from './docker-command.mjs';
 
 function remainingControlMs(deadline) {
   const remaining = deadline.until - performance.now();
@@ -303,13 +304,17 @@ let phase = 'private-state';
   } }), () => process.exit(1));
 });
 `;
-  const result = spawnSync('docker', ['exec', receipt.containerId, 'node', '-e', source], {
-    env: dockerEnvironment(),
-    encoding: 'utf8',
-    timeout: 15000,
-    killSignal: 'SIGKILL',
-    maxBuffer: 65536,
-  });
+  const result = runDockerCommand(
+    selectDockerExecution(['exec', receipt.containerId, 'node', '-e', source]),
+    (execution) =>
+      spawnSync(execution.file, execution.args, {
+        env: dockerEnvironment(),
+        encoding: 'utf8',
+        timeout: 15000,
+        killSignal: 'SIGKILL',
+        maxBuffer: 65536,
+      }),
+  );
   const envelope = probeEnvelope(result);
   diagnostic.enter('private-proof-invariants');
   const proof = envelope?.proof;

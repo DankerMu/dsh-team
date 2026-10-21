@@ -14,6 +14,7 @@ import { browserDocker, rescueChrome } from '../../scripts/probe-browser-runtime
 import { retireAcquisition, stopOwnedUnit } from '../../scripts/ci-vps-units.mjs';
 import { removeOwned } from './docker-cleanup.ts';
 import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
+import { runDockerCommand, selectDockerExecution } from '../../scripts/docker-command.mjs';
 const acquisitionFence = vi.hoisted(() => ({
   path: '',
   observed: undefined as (() => undefined) | undefined,
@@ -252,15 +253,17 @@ run().catch(()=>{process.exitCode=1;});
           if (termination === 'cgroup')
             removeOwned(
               (args, timeout) =>
-                spawnSync('docker', args, {
-                  env: {
-                    PATH: originalPath,
-                    DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
-                    ...dockerProxyEnvironment(),
-                  },
-                  encoding: 'utf8',
-                  timeout,
-                }),
+                runDockerCommand(selectDockerExecution(args), (execution) =>
+                  spawnSync(execution.file, execution.args, {
+                    env: {
+                      PATH: originalPath,
+                      DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
+                      ...dockerProxyEnvironment(),
+                    },
+                    encoding: 'utf8',
+                    timeout,
+                  }),
+                ),
               'volume',
               sentinel,
               invocation,

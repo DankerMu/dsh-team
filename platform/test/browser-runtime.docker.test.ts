@@ -79,9 +79,13 @@ it('preserves large duplex bytes and server replies after the client half-closes
     socket.write('receiver-paused\n');
   });
   await withIsolatedBrowser(server, async (_browser, origin, receipt) => {
+    const execution = {
+      receiptFile: join(dirname(receipt.profile), 'chrome.receipt.json'),
+      containerId: receipt.containerId,
+    };
     expect(
       await execBrowser(
-        receipt.containerId,
+        execution,
         "process.stdout.write(String(['HTTP_PROXY','HTTPS_PROXY','NO_PROXY'].some(key => process.env[key] !== undefined)))",
       ),
     ).toBe('false');
@@ -89,7 +93,7 @@ it('preserves large duplex bytes and server replies after the client half-closes
     const proof = record(
       JSON.parse(
         await execBrowser(
-          receipt.containerId,
+          execution,
           browserPressureClient(Number(port), payloadBytes, producerHighWaterMark),
           (line) => {
             expect(line).toBe('pressure');
@@ -432,14 +436,15 @@ it('adopts only an explicitly pending identity and settles active application an
   const server = createTcpServer({ allowHalfOpen: true });
   const accepted = once(server, 'connection');
   await withIsolatedBrowser(server, async (browser, origin, receipt) => {
+    const receiptFile = join(dirname(receipt.profile), 'chrome.receipt.json');
+    const execution = { receiptFile, containerId: receipt.containerId };
     const client = execBrowser(
-      receipt.containerId,
+      execution,
       `const s=require('node:net').connect({host:'127.0.0.1',port:${new URL(origin).port}});s.on('error',()=>{});`,
     );
     void client.catch(() => undefined);
     const [socket] = (await accepted) as [Socket];
     const finished = once(socket, 'end');
-    const receiptFile = join(dirname(receipt.profile), 'chrome.receipt.json');
     const original: unknown = JSON.parse(await readFile(receiptFile, 'utf8'));
     await writeFile(
       receiptFile,
@@ -490,7 +495,7 @@ it('adopts only an explicitly pending identity and settles active application an
       ]),
     ).toBe('');
     await expect(
-      execBrowser(receipt.containerId, 'process.stdout.write("unexpected-live-browser")'),
+      execBrowser(execution, 'process.stdout.write("unexpected-live-browser")'),
     ).rejects.toThrow();
     await browser.chrome.stop();
   });

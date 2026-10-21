@@ -5,11 +5,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import type * as DockerCommandModule from '../../scripts/docker-command.mjs';
 import { createDockerCommands } from './docker-command.ts';
 import { assertDocxReadback, runUserImage } from './user-image-fixture.ts';
 import type { DockerCommands, DockerCommand, DockerCommandResult } from './docker-command.ts';
 
 const subprocesses = vi.hoisted((): ChildProcess[] => []);
+vi.mock('../../scripts/docker-command.mjs', async (importOriginal) => {
+  const original = await importOriginal<typeof DockerCommandModule>();
+  return {
+    ...original,
+    selectDockerExecution(args: readonly string[]) {
+      return args[0] === 'missing-executable'
+        ? { file: '/dsh-team-absent-executable', args: [] }
+        : { file: process.execPath, args: ['-e', args[0] ?? ''] };
+    },
+  };
+});
 vi.mock('node:child_process', async (importOriginal) => {
   const original = await importOriginal<typeof ChildProcessModule>();
   return {
@@ -17,11 +29,11 @@ vi.mock('node:child_process', async (importOriginal) => {
     spawnSync(): never {
       throw new Error('Unexpected real synchronous Docker execution');
     },
-    // Replace only the external executable: real child streams, signals and closure remain.
-    spawn(_binary: string, args: readonly string[], options: SpawnOptions) {
+    // Observe the selected executable; real child streams, signals and closure remain.
+    spawn(binary: string, args: readonly string[], options: SpawnOptions) {
       const child = original.spawn(
-        args[0] === 'missing-executable' ? '/dsh-team-absent-executable' : process.execPath,
-        args[0] === 'missing-executable' ? [] : ['-e', args[0] ?? ''],
+        binary,
+        args,
         // IPC controls the test child without changing process timeout or output behavior.
         { ...options, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] },
       );

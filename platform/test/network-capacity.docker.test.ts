@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { trackVerificationDockerClient } from '../../scripts/verification-submissions.mjs';
 import { loadConfig } from '../src/config.ts';
 import { allocateSubnet, createDockerClient, DockerHttpError } from '../src/orchestrator/index.ts';
 import { isAbsentResource } from './docker-command.ts';
@@ -55,7 +56,10 @@ function observe(lifecycle: UserImageLifecycle, bridge: Bridge): number {
 async function capacity(lifecycle: UserImageLifecycle): Promise<string> {
   const config = loadConfig({ PLATFORM_PUBLIC_URL: 'https://capacity.example' });
   expect(config.subnetPool).toBe('172.30.0.0/16');
-  const client = createDockerClient(config.dockerSocketPath);
+  const client = trackVerificationDockerClient(
+    createDockerClient(config.dockerSocketPath),
+    DockerHttpError,
+  );
   const bridges: Bridge[] = [];
   const labels = { 'dsh-team.test-run': lifecycle.runId };
   for (let index = 0; index < 61; index += 1) {

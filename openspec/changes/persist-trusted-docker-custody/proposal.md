@@ -10,6 +10,8 @@ Issue #274 observed a local SSH timeout while the real full-Docker verifier and 
 - Persist private launch authority before test work, stream safe complete output, and atomically retain command exit/signal, interruption and cleanup as separate outcomes.
 - Keep the remote owner independent of SSH; refuse missing or changed identity and preserve unknown settlement rather than adopting processes or resources by discovery.
 - Reuse canonical process identity, atomic receipt storage, Docker journal/absence and browser receipt boundaries. Existing restricted-model authorization and owner remain untouched.
+- Cover every shared-Engine mutation producer, including the deployed platform, using one verification-only submission protocol. The user explicitly authorized test startup injection and private observation mounts; production source, production images and formal Compose configuration remain unchanged. Necessary inert helper COPY/build-context additions to the existing verification-browser image are allowed only as dependency-closure maintenance.
+- The user additionally accepts a distinct execution-capability retirement proof only for canonically bound isolated-browser exec work. Track the original failed/unknown operation outcome separately; do not infer daemon acknowledgement or extend this rule to resource creation, builds, networks or arbitrary CLI failures.
 
 ## Capabilities
 
@@ -23,7 +25,7 @@ None. Browser lifecycle, proxy custody and built-artifact isolation retain their
 
 ## Impact
 
-Root package command, narrow verification scripts and process integration fixtures, existing operator guidance and verification inventory. No production/platform API, user image, provider, dependency or workflow changes. Full original Docker/Compose acceptance and independent protected-host observation remain mandatory.
+Root package command, narrow verification scripts and process integration fixtures, invocation-generated deployment overrides, existing operator guidance and verification inventory. No production/platform API, production image, formal deployment configuration, provider, dependency-version or workflow changes. Necessary inert verification-browser COPY/build-context and selective rescue-closure additions preserve all base/runtime/library versions, browser configuration and credential isolation. Full original Docker/Compose acceptance and independent protected-host observation remain mandatory. The observation-scope authorization does not renew remote diagnostic grants or reset PR309's final fix pass2/2.
 
 ## Risk Triage
 

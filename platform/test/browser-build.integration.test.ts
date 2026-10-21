@@ -19,7 +19,12 @@ it('retains a safe failed build receipt without retrying or claiming an absent t
   });
   expect(result.imageMode).toBe(0o600);
   expect(result.qualification).toBeUndefined();
-  expect(result.daemon).toMatchObject({ removed: [], buildCount: 1, verificationStarted: false });
+  expect(result.daemon).toMatchObject({
+    removed: [],
+    buildCount: 1,
+    verificationStarted: false,
+    runtimeClosureImported: true,
+  });
   expect(JSON.stringify(result.image).includes(result.canary)).toBe(false);
   expect(result.output.includes(result.canary)).toBe(false);
 });

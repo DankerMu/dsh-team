@@ -72,6 +72,115 @@ Only an explicit matching invocation cancellation request SHALL authorize the ow
 - **THEN** the operation refuses unsafe mutation or records unconfirmed cleanup and retains private authority
 - **AND** an empty discovery snapshot does not convert uncertainty into successful retirement
 
+### Requirement: Every shared-Engine producer has attributable submission evidence
+
+Custody SHALL distinguish actual shared-Engine mutations from observations and non-Docker test executables. Each covered producer SHALL publish its submission before dispatch through one canonical verification protocol. Unknown transport or completion publication SHALL remain unresolved after process exit or resource absence. Precisely qualified terminal rejection responses SHALL retain their original rejection semantics without being confused with uncertain submission. Existing browser acquisition and private-Engine retirement authority SHALL NOT be used as proof of shared-daemon completion.
+
+#### Scenario: A created resource is cleaned after its response is lost
+
+- **WHEN** an actual mutation is submitted, its response is incomplete or lost, and exact-owned cleanup later observes absence
+- **THEN** the original submission remains unresolved and cleanup is not confirmed solely from that absence
+- **AND** unrelated resource identity and the original failure are preserved
+
+#### Scenario: Settled bytes are visible after completion publication fails
+
+- **WHEN** a writer appends a settled row but its required fsync or descriptor close fails
+- **THEN** the pre-dispatch pending marker remains and both current and fresh-process custody assessment reject confirmation despite readable settled bytes
+- **AND** a qualified Docker rejection retains its original error identity while successful-operation publication failure is reported separately
+
+#### Scenario: A writer dies at the completion boundary
+
+- **WHEN** a writer dies before removing its exact pending marker, or marker creation/removal fails
+- **THEN** no live or later successful writer can turn that attempt into confirmed settlement through inventory absence or another request's completion
+- **AND** removal is permitted only after the permitted operation-specific outcome's write, fsync and close succeed: a settled row for ordinary operations, or the explicitly authorized client-closed/operation-unknown record for contained browser exec; independent writer retirement remains required for final assessment
+
+#### Scenario: A qualified rejection is observed at canonical response headers
+
+- **WHEN** the original client rejects `POST /networks/create` with403, `POST /containers/<target>/stop` with304, or exact `DELETE /containers/<target>`, `/networks/<target>` or `/volumes/<target>` with404
+- **THEN** only that request's submission may settle at the canonical header-error boundary while the same error object is rethrown
+- **AND** independent resource-state checks remain mandatory and no earlier unresolved request is completed by that rejection
+
+#### Scenario: A status matches but its request or error provenance does not
+
+- **WHEN** a matching status appears on another method/endpoint, a noncanonical error imitates that status, or a successful response is malformed/truncated
+- **THEN** the submission remains unresolved and cannot borrow the qualified rejection matrix
+- **AND** observing or cancelling exact `POST /containers/<target>/wait` does not invent a mutation
+
+#### Scenario: A controlled executable never dispatches to Docker
+
+- **WHEN** a verification fault substitutes an owned non-Docker process at the external executable boundary
+- **THEN** the original caller timer, kill and child-closure oracle remain active without inventing a daemon submission
+- **AND** the same mechanism still rejects genuinely submitted operations whose responses are lost
+
+### Requirement: Isolated-browser execution retirement does not invent a daemon outcome
+
+An isolated-browser exec submission SHALL bind its invocation, canonical browser authority and full immutable container ID before spawning. Its actual CLI outcome and any unknown daemon-operation outcome SHALL remain recorded. Only this narrowly typed operation MAY use independently verified loss of execution capability for cleanup assessment, without claiming daemon acknowledgement or rewriting an unknown request as settled. Generic submission assessment SHALL continue rejecting unknown outcomes.
+
+#### Scenario: Canonical rescue interrupts an active browser exec
+
+- **WHEN** the captured browser is canonically retired while its protocol exec is active
+- **THEN** the original exec rejection and application/CDP stream assertions remain, and the actual CLI child closes before its outcome evidence is published
+- **AND** only after unchanged authority, acquisition-producer and driver retirement, canonical container removal and fresh exact-ID absence may final evidence report operation outcome unknown separately from execution capability retired
+
+#### Scenario: Unknown exec outcome is fully published
+
+- **WHEN** an eligible contained exec's client-closed/operation-unknown record is successfully written, fsynced and closed
+- **THEN** only its publication marker may be removed, while generic submission assessment continues to reject its unknown operation outcome
+- **AND** only the independent final assessor may project execution capability retired after all required exact-retirement proof; failed publication keeps the marker and blocks both assessment paths
+
+#### Scenario: Exec targets the already-retired captured browser
+
+- **WHEN** a bound exec is attempted against that independently retired immutable ID
+- **THEN** its rejection is preserved and no successful command or daemon acknowledgement is invented
+- **AND** the same complete ownership, client-closure and exact-retirement evidence is still required for capability-retirement assessment
+
+#### Scenario: Retirement evidence is incomplete or belongs to another scope
+
+- **WHEN** the target is live or name-only, authority is missing/foreign/changed, exact inspection/removal fails, the producer/client remains uncertain, or outcome publication fails
+- **THEN** cleanup remains unconfirmed without mutating the evidence or expanding cleanup authority
+- **AND** this proof cannot settle create/build/network operations, arbitrary CLI failures or an ordinary lost-response mutation
+
+### Requirement: Deployed application observation is private and generation-bound
+
+Only invocation-generated test startup injection and private observation mounts MAY wrap the deployed platform's exact compiled DockerClient factory. Production source, production images, formal deployment configuration, HTTP bytes and socket routing SHALL remain unchanged. Necessary inert helper COPY/build-context and selective rescue-closure additions for the existing verification-browser image MAY preserve module completeness, but SHALL NOT change its base/runtime/library versions, browser configuration or credential/custody propagation. Initialization, request settlement and writer retirement SHALL be separate evidence. A registered participant SHALL bind the invocation and a unique platform generation; parent observation SHALL bind that generation to the immutable container identity. Per-request records SHALL contain only opaque correlation identities and fixed states.
+
+#### Scenario: The platform performs a settled Docker mutation
+
+- **WHEN** the registered preload actually wraps the exact original factory, the canonical client receives a complete valid terminal result, and the captured platform generation exits normally
+- **THEN** its initialization, request settlement and participant completion are retained without altering client values, error types, cancellation or streams
+- **AND** independent writer/container retirement is still required before final cleanup assessment
+
+#### Scenario: Initialization or evidence publication is missing
+
+- **WHEN** preload/factory interception is absent, a capability or journal identity differs, or submission publication fails
+- **THEN** missing observation cannot become an empty successful journal and failed submission publication prevents dispatch
+- **AND** malformed/incomplete evidence or abrupt producer death prevents confirmed cleanup
+
+#### Scenario: The platform is recreated
+
+- **WHEN** the exact drained platform is replaced while employee instances remain running
+- **THEN** the replacement receives a newly registered generation and capability while old evidence is retained
+- **AND** an old, duplicate or foreign initialization/completion cannot satisfy the new generation
+
+#### Scenario: The same platform container is stopped and started
+
+- **WHEN** the existing audit stops the exact platform container and then starts that same ID after verified normal exit
+- **THEN** a fresh process-generation capability is published before start through the stable readonly bootstrap directory, and parent observation binds it to the new StartedAt/process incarnation
+- **AND** the original stop/start commands, container identity, deadlines, restarted witness and timeout/no-start assertions remain unchanged
+- **AND** neither the successor manifest nor normal restart clears predecessor uncertainty or lets an old process adopt the new generation
+
+#### Scenario: Application work precedes parent incarnation binding
+
+- **WHEN** the initialized platform begins Docker work before the parent has captured its running incarnation
+- **THEN** every request is already durably registered under the reserved generation before dispatch, while participant confirmation remains blocked on verified binding
+- **AND** missing binding or failed startup stays unconfirmed without adding bootstrap retries, waits or deadline extensions
+
+#### Scenario: Normal process exit follows an unresolved Docker request
+
+- **WHEN** the platform exits normally but a submitted Docker request lacks qualified settlement evidence
+- **THEN** participant exit does not complete that request or establish daemon settlement
+- **AND** its resources and evidence remain governed by existing exact ownership rules without expanded deletion authority
+
 ### Requirement: Custody preserves the existing trusted acceptance boundary
 
 The custody entrypoint SHALL run the unchanged original full Docker discovery and preserve existing build, test and SSH deadlines, ordinary proxy/image policy and trusted reviewed-head admission. It SHALL NOT invoke a real model, modify the restricted-model owner, retry failed tests or publish success automatically. Trusted acceptance SHALL still require actual exact-head full execution plus independent owned-resource retirement and unchanged protected host evidence.

@@ -1,8 +1,11 @@
+import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
 import { CUSTODY_PROXY, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
+import { validateTerminal } from '../../scripts/trusted-docker-record.mjs';
+import { browserExecRetirementSummary } from '../../scripts/verification-submission-assessment.mjs';
 
 it('publishes reviewed launch authority before work and preserves a real nonzero command result', async () => {
   await withTrustedDockerFixture('fail', async (fixture) => {
@@ -38,7 +41,7 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
           state: 'failed',
           command: { exitCode: 17, signal: null, settled: true },
           output: { complete: true },
-          cleanup: { state: 'confirmed' },
+          cleanup: { state: 'confirmed', browserExec: null },
         });
       },
       { timeout: 10_000, interval: 50 },
@@ -62,6 +65,49 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
       expect(output).not.toContain(CUSTODY_PROXY);
       expect(output).not.toContain('fixture-proxy-');
       expect(output).not.toContain('fixture%2Dproxy');
+    }
+    const resultPath = join(directory, 'result.json');
+    const original = readFileSync(resultPath, 'utf8');
+    const terminal = record(JSON.parse(original));
+    const firstId = '11111111-1111-4111-8111-111111111111';
+    const secondId = '22222222-2222-4222-8222-222222222222';
+    const summary = {
+      operationOutcome: 'unknown',
+      executionCapability: 'retired',
+      submissions: 2,
+      sha256: createHash('sha256')
+        .update(JSON.stringify([firstId, secondId]))
+        .digest('hex'),
+    };
+    expect(browserExecRetirementSummary([secondId, firstId, secondId])).toEqual(summary);
+    const qualified = { ...terminal, cleanup: { state: 'confirmed', browserExec: summary } };
+    expect(validateTerminal(qualified, invocation, terminal.manifestDigest)).toBe(qualified);
+    try {
+      writeFileSync(resultPath, JSON.stringify(qualified), { mode: 0o600 });
+      const queried = fixture.command(['status', invocation]);
+      expect(queried.status, queried.stderr).toBe(0);
+      expect(JSON.parse(queried.stdout)).toMatchObject({
+        state: 'failed',
+        command: { exitCode: 17, signal: null, settled: true },
+        cleanup: { state: 'confirmed', browserExec: summary },
+      });
+    } finally {
+      writeFileSync(resultPath, original, { mode: 0o600 });
+    }
+    for (const cleanup of [
+      { state: 'confirmed' },
+      { state: 'unconfirmed', browserExec: summary },
+      { state: 'not-started', browserExec: summary },
+      { state: 'confirmed', browserExec: { ...summary, submissions: 0 } },
+      { state: 'confirmed', browserExec: { ...summary, submissions: Number.MAX_SAFE_INTEGER + 1 } },
+      { state: 'confirmed', browserExec: { ...summary, sha256: 'malformed' } },
+      { state: 'confirmed', browserExec: { ...summary, operationOutcome: 'settled' } },
+      { state: 'confirmed', browserExec: { ...summary, executionCapability: 'active' } },
+      { state: 'confirmed', browserExec: { ...summary, submissionIds: [firstId, secondId] } },
+    ]) {
+      expect(() => {
+        validateTerminal({ ...terminal, cleanup }, invocation, terminal.manifestDigest);
+      }).toThrow();
     }
   });
 }, 20_000);
@@ -216,7 +262,7 @@ it('survives loss of the launching observer group and reconnects to the same rea
           command: { exitCode: 17, settled: true },
           interruption: 'none',
           output: { complete: true },
-          cleanup: { state: 'confirmed' },
+          cleanup: { state: 'confirmed', browserExec: null },
         });
       },
       { timeout: 10_000, interval: 50 },
@@ -309,7 +355,7 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
           command: { settled: true },
           interruption: 'cancelled',
           output: { complete: true },
-          cleanup: { state: 'confirmed' },
+          cleanup: { state: 'confirmed', browserExec: null },
         });
       },
       { timeout: 10_000, interval: 50 },
@@ -346,7 +392,7 @@ it('retains a nonpassing result and refuses partial logs after actual output sto
           command: { settled: true },
           interruption: 'capture-failed',
           output: { complete: false, stdout: null },
-          cleanup: { state: 'confirmed' },
+          cleanup: { state: 'confirmed', browserExec: null },
         });
       },
       { timeout: 10_000, interval: 50 },
@@ -377,7 +423,7 @@ it('persists the original command outcome when process-group observation is deni
           command: { exitCode: 17, signal: null, settled: false },
           failure: 'identity',
           output: { complete: true },
-          cleanup: { state: 'unconfirmed' },
+          cleanup: { state: 'unconfirmed', browserExec: null },
         });
       },
       { timeout: 10_000, interval: 50 },

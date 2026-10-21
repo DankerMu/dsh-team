@@ -5,18 +5,25 @@ import { watch } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, open, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { liveProcessBirth, processBirth } from './probe-browser-native.mjs';
+import { liveProcessBirth, processBirth, processIdentity } from './probe-browser-native.mjs';
 import { writeReceipt } from './probe-browser-receipt.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 import { capturePrivateOutput } from './trusted-docker-output.mjs';
-import { assessTrustedDockerCleanup } from './trusted-docker-audit.mjs';
+import {
+  assessTrustedDockerCleanup,
+  trustedDockerBrowserProducersSettled,
+} from './trusted-docker-audit.mjs';
+import {
+  initializeVerificationSubmissions,
+  SUBMISSION_JOURNAL,
+} from './verification-submission-storage.mjs';
+import { ownVerificationProducers } from './verification-producer.mjs';
 import {
   custodyPaths,
   FULL_DOCKER_COMMAND,
   ownerIsLive,
   privateDirectory,
   groupIsAbsent,
-  processIdentity,
   hasPassingOutcome,
   readCustodyRecord,
   readInvocation,
@@ -102,6 +109,7 @@ export async function startTrustedDocker(root, head) {
   await writeReceipt(join(paths.directory, 'request.json'), request);
   await mkdir(join(paths.directory, 'docker'), { mode: 0o700 });
   await writeFile(join(paths.directory, 'resources.jsonl'), '', { mode: 0o600, flag: 'wx' });
+  initializeVerificationSubmissions(paths.directory);
   const log = await open(join(paths.directory, 'owner.log'), 'wx', 0o600);
   let ownerClosed = false;
   try {
@@ -158,6 +166,8 @@ async function executeOwnedCommand(context) {
   const { request, directory, owner, digest } = context;
   let child;
   let childIdentity;
+  let producers;
+  let producerCleanupConfirmed = true;
   let closed = false;
   let signalled = false;
   let interruption = 'none';
@@ -209,12 +219,15 @@ async function executeOwnedCommand(context) {
       const finished = Promise.withResolvers();
       const spawned = Promise.withResolvers();
       let spawnFailed = false;
+      producers = await ownVerificationProducers(request.temporary, request.invocation);
       child = spawn(FULL_DOCKER_COMMAND[0], FULL_DOCKER_COMMAND.slice(1), {
         cwd: request.root,
         env: runtimeEnvironment({
           TMPDIR: request.temporary,
           DSH_TEAM_CI_RESOURCE_JOURNAL: join(directory, 'resources.jsonl'),
+          DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
           DSH_TEAM_REVIEWED_HEAD: request.head,
+          ...producers.environment,
         }),
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -263,6 +276,10 @@ async function executeOwnedCommand(context) {
         }
       } else failure = 'launch';
       command = await finished.promise;
+      const producerOutcome = await producers.finish();
+      command.settled &&= producerOutcome.settled;
+      producerCleanupConfirmed = producerOutcome.cleanupConfirmed;
+      command.settled &&= await trustedDockerBrowserProducersSettled(request);
       [stdout, stderr] = await outputs;
       await cancellation;
     } else {
@@ -274,8 +291,12 @@ async function executeOwnedCommand(context) {
     }
     const output = { complete: stdout !== null && stderr !== null, stdout, stderr };
     const cleanup = child
-      ? await assessTrustedDockerCleanup(request, directory, command.settled)
-      : { state: 'not-started' };
+      ? await assessTrustedDockerCleanup(
+          request,
+          directory,
+          command.settled && producerCleanupConfirmed,
+        )
+      : { state: 'not-started', browserExec: null };
     try {
       const current = await readInvocation(request.invocation);
       if (current.digest !== digest) failure = 'identity';
@@ -299,6 +320,7 @@ async function executeOwnedCommand(context) {
     watcher.close();
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
+    await producers?.finish();
   }
 }
 

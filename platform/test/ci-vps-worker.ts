@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { readReceipt, rescueChrome, writeReceipt } from '../../scripts/probe-browser-runtime.mjs';
 import { retireAcquisition, stopOwnedUnit } from '../../scripts/ci-vps-units.mjs';
 import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
+import { runDockerCommand, selectDockerExecution } from '../../scripts/docker-command.mjs';
 import { admitVpsIdentity } from './ci-vps-identity.ts';
 import type { VpsApproval } from './ci-vps-identity.ts';
 import { cleanupTargets, readCleanupJournal, removeOwned } from './docker-cleanup.ts';
@@ -33,12 +34,14 @@ const environment = {
   XDG_RUNTIME_DIR: `/run/user/${String(process.getuid?.())}`,
 };
 const docker: DockerCommand = (args, timeout) =>
-  spawnSync('docker', [...args], {
-    env: { PATH: path, DOCKER_CONFIG: join(root, 'docker-config'), ...dockerProxyEnvironment() },
-    encoding: 'utf8',
-    timeout,
-    maxBuffer: 1_048_576,
-  });
+  runDockerCommand(selectDockerExecution(args), (execution) =>
+    spawnSync(execution.file, execution.args, {
+      env: { PATH: path, DOCKER_CONFIG: join(root, 'docker-config'), ...dockerProxyEnvironment() },
+      encoding: 'utf8',
+      timeout,
+      maxBuffer: 1_048_576,
+    }),
+  );
 
 async function exists(file: string) {
   try {

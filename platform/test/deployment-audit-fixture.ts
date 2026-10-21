@@ -8,6 +8,10 @@ import type { Deployment } from './deployment-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { expect } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
+import {
+  bindDeploymentObservation,
+  prepareDeploymentRestart,
+} from './deployment-observer-fixture.ts';
 
 interface Identity {
   id: string;
@@ -181,7 +185,9 @@ export async function completeDeployedAuditSequence(input: AuditSequence): Promi
   // Preserve the full 30s Engine grace plus command completion/transport margin.
   await input.run(['stop', '--time', '30', platform.Id], 45_000);
   expect(record((await inspectAsync(lifecycle, platform.Id)).State).ExitCode).toBe(0);
+  await prepareDeploymentRestart(deployment.observation, lifecycle, platform.Id);
   await input.run(['start', platform.Id]);
+  await bindDeploymentObservation(deployment.observation, lifecycle, platform.Id);
   await waitForDeployment(deployment);
   expect(await status()).toBe('stopped');
   const replacementId = await start();
