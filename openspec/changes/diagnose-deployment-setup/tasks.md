@@ -7,7 +7,7 @@
 
 ## 2. Investigation and verification
 
-- [ ] 2.1 Run an outside-test-runner smoke of the delivered evidence path, local narrow regressions and required fast/full integration checks; record historical UNKNOWN separately and update operator guidance.
+- [x] 2.1 Run an outside-test-runner smoke of the delivered evidence path, local narrow regressions and required fast/full integration checks; record historical UNKNOWN separately and update operator guidance.
 - [ ] 2.2 Complete expanded four-seat review against this immutable fixture, then execute bounded trusted exact-head diagnosis, standalone Compose and original full Docker discovery including both audit-stop cases, with independent owned-retirement and protected-host evidence. Fix only a causally demonstrated boundary, preserving failures and unchanged deadlines.
 
 ## 3. Delivery

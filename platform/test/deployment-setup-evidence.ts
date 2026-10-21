@@ -50,10 +50,36 @@ export interface DeploymentSetupEvidence {
 
 function stdoutEvidence(snapshot: DeploymentSetupSnapshot): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<undefined>();
-  process.stdout.write(JSON.stringify({ deploymentSetup: snapshot }) + '\n', (error) => {
-    if (error) reject(error);
-    else resolve(undefined);
-  });
+  let settled = false;
+  let retirement: NodeJS.Immediate | undefined;
+  function finish(error: unknown): void {
+    if (settled) return;
+    settled = true;
+    clearImmediate(retirement);
+    process.stdout.off('error', onError);
+    if (error === undefined) resolve(undefined);
+    else reject(error);
+  }
+  function onError(error: Error): void {
+    finish(error);
+  }
+  process.stdout.on('error', onError);
+  try {
+    process.stdout.write(JSON.stringify({ deploymentSetup: snapshot }) + '\n', (error) => {
+      if (settled) return;
+      if (error) {
+        // Writable reports callback errors before its error event. Keep ownership
+        // through that turn; already-closed streams may emit no second event.
+        retirement = setImmediate(() => {
+          finish(error);
+        });
+      } else {
+        finish(undefined);
+      }
+    });
+  } catch (error) {
+    finish(error);
+  }
   return promise;
 }
 
