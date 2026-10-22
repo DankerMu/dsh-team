@@ -102,7 +102,6 @@ echo "probe-dsh-api: run_id=${run_id} image=${image} port=${port} workdir=${work
 run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
   --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
   --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
-  --build-context "build-tools=${repo_root}/images/build-tools" \
   --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user" >/dev/null
 image_owned=1
 container_owned=1

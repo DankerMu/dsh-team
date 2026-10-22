@@ -144,7 +144,6 @@ image_owned=1
 docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
   --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
   --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
-  --build-context "build-tools=${repo_root}/images/build-tools" \
   --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user"
 write_custom_seccomp
 
