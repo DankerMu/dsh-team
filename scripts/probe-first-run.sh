@@ -129,11 +129,14 @@ trap 'on_signal 143' TERM
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX")"
 evidence="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}-evidence.XXXXXX")"
 echo "probe-first-run: run_id=${run_id} image=${image} workdir=${workdir} evidence=${evidence} hostname=${authority_host}"
-probe_run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
-  --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
-  --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
-  --build-context "build-tools=${repo_root}/images/build-tools" \
-  --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user" >/dev/null
+if [ "${DSH_TEAM_VERIFICATION_IMAGES+x}" = x ]; then
+  probe_run_group_bound "$build_seconds" node scripts/verification-image.mjs user "$image" "$run_id" "$workdir" "$((build_seconds * 1000))"
+else
+  probe_run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
+    --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
+    --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
+    --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user" >/dev/null
+fi
 image_owned=1
 write_overlay() {
   local dest="$1" kind="$2"

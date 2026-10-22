@@ -41,7 +41,6 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
   -t dsh-team-user:local -f images/dsh-user/Dockerfile \
   --build-context zh-locale=plugins/zh-locale \
   --build-context permission-tiers=plugins/permission-tiers \
-  --build-context build-tools=images/build-tools \
   --build-context office-agents=plugins/office-agents images/dsh-user
 
 docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
@@ -50,7 +49,7 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
 docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:local
 ```
 
-记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略四个 named context：`build-tools` 仅在构建时只读挂载普通 Debian 源切换程序，保留官方安全源、archive keyring 和签名/有效期校验，不复制到运行时镜像；其余三个交付插件。
+记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略三个插件 named context。用户镜像和验证浏览器镜像均保留已固定基础镜像的 Debian 官方普通源及安全更新源，不再使用额外的源切换上下文；archive keyring、签名/有效期校验、包列表和构建期限保持不变，获取失败不得自动换源或关闭校验。
 
 ### 用户镜像基础层更新
 
@@ -155,6 +154,12 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 平台本身仍只提供 HTTP。已有反向代理负责终结 TLS，转发 WebSocket，并保留外部 Host（含端口）和 Origin；替换客户端伪造的转发头，设置真实客户端来源。把实际代理 IP 填入受信清单，对外地址改为 `https://...`，并独立开启 `PLATFORM_COOKIE_SECURE=true`。证书签发、更新和代理安装不在本阶段交付范围；仓库测试代理不是生产代理软件。
 
 `pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界、HTTPS/WSS、双员工HTTP/原生Session长连接及实例内部隔离；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [AGENTS.md](../AGENTS.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
+
+受信验收可由本机完成最终审查提交的 Linux/amd64 镜像构建，再通过可信 SSH 传输。运维方核对源提交、导出文件大小/SHA256和 OCI 内容摘要，将三个角色的布局保存在私有目录，并准备0600映射文件：顶层 `roles` 下的 `user`、`platform`、`browser` 各含绝对路径 `layout`、运行平台 manifest 的 `manifestDigest` 和 `configId`（两者都是完整 `sha256:` 摘要）。设置 `DSH_TEAM_VERIFICATION_IMAGES=/绝对路径/images.json` 后仍运行原始 `pnpm test:docker`、`pnpm test:deploy`；浏览器、主机和工具链先决条件不变。
+
+布局须由验收用户本人解包并持有：目录0700，manifest/config blob为0600普通文件且只有一个硬链接，不接受软链接或硬链接。解包后对本次自有布局执行 `chmod -R go-rwx <布局目录>`；只把上层目录设为0700不足以满足文件检查。
+
+此入口只消费运维方已核验的本地 OCI 文件，不提供通用归档导入/构建管理接口。每个用例仍产生自己的带归属标签镜像，只有标签可变，完整文件层和运行配置必须匹配；没有共享基础镜像删除权。选定输入损坏时拒绝，不偷偷回到 VPS 源码构建。输入布局须保留至实际工作及清理结束；旧提交的试跑、成功上传或元数据派生均不能代替最终提交的完整运行验收。未设置变量时保留原有源码构建路径。
 
 部署审计夹具的平台停止仍请求30秒优雅期，仅该调用使用45秒命令期限以容纳完成/传输余量；普通观察仍为15秒，生产生命周期期限不变。受信主机上的 `pnpm test:docker platform/test/deployment-audit-stop.docker.test.ts` 用精确归属的平台验证真实20秒停止后exit0和重启，并用真实受限子进程验证超期失败、关闭后再传播及部署清理；不会以强杀平台代替优雅退出，也不调用外部模型。
 

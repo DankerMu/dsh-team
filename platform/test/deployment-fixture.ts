@@ -10,6 +10,7 @@ import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
 
 export interface Deployment {
   base: string;
@@ -40,6 +41,13 @@ async function startDeployment(
   const image = `dsh-team-test-${lifecycle.runId}:platform`;
   const project = `dsh-team-test-${lifecycle.runId}`;
   const network = `${project}_default`;
+  const artifact = prepareVerificationImage(
+    'platform',
+    image,
+    ownership,
+    dirname(lifecycle.overlayDirectory),
+    lifecycle.command,
+  );
   for (const [kind, name] of [
     ['image', image],
     ['container', 'dsh-team-platform'],
@@ -47,7 +55,7 @@ async function startDeployment(
   ] as const)
     await lifecycle.registerResourceAsync(kind, name, ownership);
   await command(
-    [
+    artifact?.args ?? [
       'build',
       '--label',
       `${OWNER_LABEL}=${lifecycle.runId}`,
@@ -61,6 +69,7 @@ async function startDeployment(
   );
   const imageId = (await command(['image', 'inspect', '--format', '{{.Id}}', image])).trim();
   if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new Error('Platform image identity missing');
+  artifact?.verify(imageId);
   const directory = dirname(lifecycle.overlayDirectory);
   const dataDir = join(directory, 'platform-data');
   await mkdir(dataDir, { mode: 0o700 });

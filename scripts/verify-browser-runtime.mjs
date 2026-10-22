@@ -11,6 +11,7 @@ import { qualifyBrowserConfinement } from './probe-browser-confinement.mjs';
 import { qualificationDiagnostic, qualificationError } from './probe-browser-qualification.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 import { buildFailureDiagnostic } from './docker-build-diagnostics.mjs';
+import { prepareVerificationImage } from './verification-image.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
@@ -40,7 +41,16 @@ const environment = () => ({
 });
 function docker(args, ms = 30000, build = false) {
   const started = build ? performance.now() : undefined;
-  const result = spawnSync('docker', args, {
+  const result = dockerResult(args, ms, build);
+  if (result.error || result.status !== 0) {
+    if (build)
+      imageFailure = { phase: 'image-build', ...buildFailureDiagnostic(result, ms, started) };
+    throw new Error('browser runtime provisioning failed');
+  }
+  return result.stdout.trim();
+}
+function dockerResult(args, ms, build = false) {
+  return spawnSync('docker', args, {
     cwd: root,
     env: environment(),
     encoding: 'utf8',
@@ -48,12 +58,6 @@ function docker(args, ms = 30000, build = false) {
     killSignal: 'SIGKILL',
     maxBuffer: build ? 16 * 1024 * 1024 : 65536,
   });
-  if (result.error || result.status !== 0) {
-    if (build)
-      imageFailure = { phase: 'image-build', ...buildFailureDiagnostic(result, ms, started) };
-    throw new Error('browser runtime provisioning failed');
-  }
-  return result.stdout.trim();
 }
 async function publishImageReceipt() {
   const path = join(directory, 'image.json');
@@ -192,17 +196,22 @@ async function prepare() {
     join(root, 'scripts/docker-proxy-environment.mjs'),
     join(context, 'docker-proxy-environment.mjs'),
   );
+  const artifact = prepareVerificationImage(
+    'browser',
+    tag,
+    { 'dsh-team.browser-invocation': invocation },
+    directory,
+    dockerResult,
+  );
   if (!(await publishImageReceipt())) throw new Error('browser image evidence unavailable');
   buildStarted = true;
   docker(
-    [
+    artifact?.args ?? [
       'build',
       '--label',
       `dsh-team.browser-invocation=${invocation}`,
       '--build-context',
       `browser-runtime=${context}`,
-      '--build-context',
-      `build-tools=${join(root, 'images/build-tools')}`,
       '-t',
       tag,
       '-f',
@@ -215,6 +224,7 @@ async function prepare() {
   imageId = docker(['image', 'inspect', '--format', '{{.Id}}', tag]);
   if (!/^sha256:[a-f0-9]{64}$/.test(imageId))
     throw new Error('browser runtime immutable image ID missing');
+  artifact?.verify(imageId);
   if (!(await publishImageReceipt())) throw new Error('browser image evidence unavailable');
   process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG = environment().DOCKER_CONFIG;
   process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY = directory;
@@ -379,6 +389,8 @@ try {
     'browser runtime immutable image ID missing',
     'browser image evidence unavailable',
     'browser runtime invocation interrupted',
+    'Verification image artifact input rejected',
+    'Verification image artifact identity mismatch',
   ];
   process.stderr.write(
     `${known.includes(error.message) ? error.message : 'browser runtime invocation failed; inspect private lifecycle receipts'}\n`,

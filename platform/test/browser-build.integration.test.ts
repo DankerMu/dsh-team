@@ -24,6 +24,25 @@ it('retains a safe failed build receipt without retrying or claiming an absent t
   expect(result.output.includes(result.canary)).toBe(false);
 });
 
+it.each(['', '/missing-verification-runtime/runtime.json'])(
+  'refuses an explicitly selected broken artifact descriptor %j before building or starting verification',
+  async (artifactRuntime) => {
+    const result = await runBrowserBuildFailure('absent', undefined, artifactRuntime);
+
+    expect(result.exit).toBe(1);
+    expect(result.daemon).toMatchObject({
+      buildAttempts: 0,
+      buildCount: 0,
+      verificationStarted: false,
+      removed: [],
+      foreignImagePresent: true,
+    });
+    expect(result.image).toBeUndefined();
+    expect(result.qualification).toBeUndefined();
+    expect(result.output.includes(result.canary)).toBe(false);
+  },
+);
+
 it.each([
   ['owned', 'confirmed', false],
   ['removal-failed', 'removal-failed', true],

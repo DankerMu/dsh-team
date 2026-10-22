@@ -66,7 +66,6 @@ Build from the repository root on the trusted Linux amd64 verification host:
 docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "zh-locale=$(pwd)/plugins/zh-locale" \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
-  --build-context "build-tools=$(pwd)/images/build-tools" \
   --build-context "office-agents=$(pwd)/plugins/office-agents" images/dsh-user
 ```
 
