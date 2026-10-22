@@ -130,7 +130,7 @@ workdir="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}.XXXXXX")"
 evidence="$(mktemp -d "${TMPDIR:-/tmp}/${prefix}-evidence.XXXXXX")"
 echo "probe-first-run: run_id=${run_id} image=${image} workdir=${workdir} evidence=${evidence} hostname=${authority_host}"
 if [ "${DSH_TEAM_VERIFICATION_IMAGES+x}" = x ]; then
-  probe_run_bound "$build_seconds" node scripts/verification-image.mjs user "$image" "$run_id" "$workdir" "$((build_seconds * 1000))"
+  probe_run_group_bound "$build_seconds" node scripts/verification-image.mjs user "$image" "$run_id" "$workdir" "$((build_seconds * 1000))"
 else
   probe_run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
     --build-context "zh-locale=${repo_root}/plugins/zh-locale" \

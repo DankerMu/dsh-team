@@ -100,7 +100,7 @@ chmod 777 "$home_dir" "$work_dir"
 cp "$overlay_src" "$overlay"
 echo "probe-dsh-api: run_id=${run_id} image=${image} port=${port} workdir=${workdir} evidence=${evidence}"
 if [ "${DSH_TEAM_VERIFICATION_IMAGES+x}" = x ]; then
-  run_bound "$build_seconds" node scripts/verification-image.mjs user "$image" "$run_id" "$workdir" "$((build_seconds * 1000))"
+  probe_run_group_bound "$build_seconds" node scripts/verification-image.mjs user "$image" "$run_id" "$workdir" "$((build_seconds * 1000))"
 else
   run_bound "$build_seconds" docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
     --build-context "zh-locale=${repo_root}/plugins/zh-locale" \

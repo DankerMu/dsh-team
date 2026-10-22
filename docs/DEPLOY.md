@@ -157,6 +157,8 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 受信验收可由本机完成最终审查提交的 Linux/amd64 镜像构建，再通过可信 SSH 传输。运维方核对源提交、导出文件大小/SHA256和 OCI 内容摘要，将三个角色的布局保存在私有目录，并准备0600映射文件：顶层 `roles` 下的 `user`、`platform`、`browser` 各含绝对路径 `layout`、运行平台 manifest 的 `manifestDigest` 和 `configId`（两者都是完整 `sha256:` 摘要）。设置 `DSH_TEAM_VERIFICATION_IMAGES=/绝对路径/images.json` 后仍运行原始 `pnpm test:docker`、`pnpm test:deploy`；浏览器、主机和工具链先决条件不变。
 
+布局须由验收用户本人解包并持有：目录0700，manifest/config blob为0600普通文件且只有一个硬链接，不接受软链接或硬链接。解包后对本次自有布局执行 `chmod -R go-rwx <布局目录>`；只把上层目录设为0700不足以满足文件检查。
+
 此入口只消费运维方已核验的本地 OCI 文件，不提供通用归档导入/构建管理接口。每个用例仍产生自己的带归属标签镜像，只有标签可变，完整文件层和运行配置必须匹配；没有共享基础镜像删除权。选定输入损坏时拒绝，不偷偷回到 VPS 源码构建。输入布局须保留至实际工作及清理结束；旧提交的试跑、成功上传或元数据派生均不能代替最终提交的完整运行验收。未设置变量时保留原有源码构建路径。
 
 部署审计夹具的平台停止仍请求30秒优雅期，仅该调用使用45秒命令期限以容纳完成/传输余量；普通观察仍为15秒，生产生命周期期限不变。受信主机上的 `pnpm test:docker platform/test/deployment-audit-stop.docker.test.ts` 用精确归属的平台验证真实20秒停止后exit0和重启，并用真实受限子进程验证超期失败、关闭后再传播及部署清理；不会以强杀平台代替优雅退出，也不调用外部模型。

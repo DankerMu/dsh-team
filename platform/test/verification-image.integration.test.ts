@@ -7,7 +7,7 @@ import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
 import type { DockerCommand } from './docker-command.ts';
 
 const imageId = `sha256:${'a'.repeat(64)}`;
-const tag = 'dsh-team-test-artifact:case';
+const tag = 'dsh-team-test-artifact';
 const labels = { 'dsh-team.test-run': 'case' };
 const config = {
   os: 'linux',
@@ -22,7 +22,7 @@ afterEach(async () => {
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
-async function inputs() {
+async function inputs(fault?: 'manifest-digest' | 'config-digest' | 'platform' | 'role') {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-image-input-'));
   directories.push(root);
   const blobs = join(root, 'blobs', 'sha256');
@@ -33,12 +33,20 @@ async function inputs() {
     await writeFile(join(blobs, hash), bytes, { mode: 0o600 });
     return `sha256:${hash}`;
   }
-  const configId = await blob(config);
+  const configId = await blob(fault === 'platform' ? { ...config, architecture: 'arm64' } : config);
   const manifestDigest = await blob({ config: { digest: configId } });
+  if (fault === 'manifest-digest' || fault === 'config-digest') {
+    const id = fault === 'manifest-digest' ? manifestDigest : configId;
+    await writeFile(join(blobs, id.slice(7)), '{}', { mode: 0o600 });
+  }
   const path = join(root, 'selection.json');
   await writeFile(
     path,
-    JSON.stringify({ roles: { user: { layout: root, configId, manifestDigest } } }),
+    JSON.stringify({
+      roles: {
+        [fault === 'role' ? 'platform' : 'user']: { layout: root, configId, manifestDigest },
+      },
+    }),
     { mode: 0o600 },
   );
   vi.stubEnv('DSH_TEAM_VERIFICATION_IMAGES', path);
@@ -46,8 +54,12 @@ async function inputs() {
 }
 function inspection(changed: 'none' | 'user' | 'layers'): DockerCommand {
   return (args) => {
-    if (args.at(-1) === tag)
-      return { status: 1, stdout: '', stderr: `Error: No such image: ${tag}` };
+    if (args.at(-1) !== imageId)
+      return {
+        status: 1,
+        stdout: '[]\n',
+        stderr: `Error response from daemon: No such image: ${tag}:latest\n`,
+      };
     return {
       status: 0,
       stderr: '',
@@ -89,3 +101,20 @@ it('refuses an occupied case tag before granting cleanup ownership or preparing 
     'Verification image artifact input rejected',
   );
 });
+
+it.each(['manifest-digest', 'config-digest', 'platform', 'role'] as const)(
+  'refuses invalid %s input before any Docker operation',
+  async (fault) => {
+    const root = await inputs(fault);
+    let reachedDocker = false;
+    const command: DockerCommand = () => {
+      reachedDocker = true;
+      throw new Error('Docker must not be reached');
+    };
+
+    expect(() => prepareVerificationImage('user', tag, labels, root, command)).toThrow(
+      'Verification image artifact input rejected',
+    );
+    expect(reachedDocker).toBe(false);
+  },
+);

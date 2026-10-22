@@ -74,7 +74,8 @@ export function prepareVerificationImage(role, tag, labels, directory, command) 
   if (selected === undefined) return undefined;
   try {
     const { entry, config } = readArtifactInput(role, selected);
-    if (!isAbsentResource(command(['image', 'inspect', tag], 30000), 'image', tag))
+    const reference = tag.includes(':') ? tag : `${tag}:latest`;
+    if (!isAbsentResource(command(['image', 'inspect', reference], 30000), 'image', reference))
       throw new Error('Image target already exists');
     const context = mkdtempSync(join(directory, 'image-artifact-'));
     writeFileSync(join(context, 'Dockerfile'), 'FROM base\n', { mode: 0o600 });
@@ -160,9 +161,19 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const inspect = ['image', 'inspect', '--format', '{{.Id}}', tag];
     const id = output(command(inspect, 30000), inspect).trim();
     prepared.verify(id);
-  } catch {
+  } catch (error) {
     if (command) cleanupTargets(command, targets, owner, failures);
-    process.stderr.write('Verification image artifact acquisition failed\n');
+    const known = [
+      'Verification image artifact input rejected',
+      'Verification image artifact identity mismatch',
+    ];
+    process.stderr.write(
+      `${known.includes(error?.message) ? error.message : 'Verification image artifact acquisition failed'}\n`,
+    );
+    if (failures.length)
+      process.stderr.write(
+        `Verification image artifact cleanup unconfirmed (${failures.length})\n`,
+      );
     process.exitCode = 1;
   }
 }

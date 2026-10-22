@@ -59,6 +59,13 @@ probe_run_bound() {
   timeout --foreground --kill-after=5 "$seconds" "$@"
 }
 
+# Artifact acquisition wraps Docker in Node; its deadline must reach both processes.
+probe_run_group_bound() {
+  local seconds="$1"
+  shift
+  timeout --kill-after=5 "$seconds" "$@"
+}
+
 probe_note_cleanup_failure() {
   echo "${probe_name}: cleanup failed: $1" >&2
   cleanup_failed=1

@@ -389,6 +389,8 @@ try {
     'browser runtime immutable image ID missing',
     'browser image evidence unavailable',
     'browser runtime invocation interrupted',
+    'Verification image artifact input rejected',
+    'Verification image artifact identity mismatch',
   ];
   process.stderr.write(
     `${known.includes(error.message) ? error.message : 'browser runtime invocation failed; inspect private lifecycle receipts'}\n`,
