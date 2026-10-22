@@ -6,7 +6,8 @@ import type { ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import type * as Orchestrator from '../src/orchestrator/index.ts';
 import {
   initializeVerificationSubmissions,
   SUBMISSION_JOURNAL,
@@ -14,6 +15,32 @@ import {
 import { requireVerificationSubmissionsSettled } from '../../scripts/verification-submission-assessment.mjs';
 import { readCleanupJournal } from './docker-cleanup.ts';
 import { runUserVolumes } from './volumes-fixture.ts';
+
+const cancellations = vi.hoisted(
+  () => new Map<string, { error: unknown; signal: AbortSignal | undefined }>(),
+);
+vi.mock('../src/orchestrator/index.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof Orchestrator>();
+  return {
+    ...actual,
+    createDockerClient(...args: Parameters<typeof actual.createDockerClient>) {
+      const client = actual.createDockerClient(...args);
+      return {
+        ...client,
+        async json(...request: Parameters<typeof client.json>) {
+          try {
+            return await client.json(...request);
+          } catch (error) {
+            if (request[0] === 'POST' && request[1] === '/volumes/create')
+              cancellations.set(args[0], { error, signal: request[3] });
+            // Observe the real transport rejection before custody; never supply an expected error.
+            throw error;
+          }
+        },
+      };
+    },
+  };
+});
 
 it.each([
   {
@@ -113,6 +140,11 @@ it.each([
         throw new Error('Expected aggregated acceptance failure');
       expect(error.errors).toHaveLength(1);
       expect(error.errors[0]).toBeInstanceOf(Error);
+      const cancellation = cancellations.get(socket);
+      if (cancellation === undefined)
+        throw new Error('Canonical mutation cancellation was not observed');
+      expect(cancellation.signal?.aborted).toBe(true);
+      expect(error.errors[0]).toBe(cancellation.error);
       // Transport errors are sanitized rather than retaining a raw abort cause.
       expect(error.errors[0]).not.toHaveProperty('cause');
       expect(persistedName).toMatch(/^dsh-team-home-[a-f0-9]{10}00$/);
@@ -157,6 +189,7 @@ it.each([
       }).not.toThrow();
     }
   } finally {
+    cancellations.delete(socket);
     if (previousSubmissions === undefined) delete process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
     else process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = previousSubmissions;
     if (previousResources === undefined) delete process.env.DSH_TEAM_CI_RESOURCE_JOURNAL;
