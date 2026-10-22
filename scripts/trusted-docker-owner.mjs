@@ -40,6 +40,7 @@ function runtimeEnvironment(extra = {}) {
     LANG: 'C.UTF-8',
     XDG_RUNTIME_DIR: `/run/user/${process.getuid()}`,
     ...(process.env.CHROME_BIN === undefined ? {} : { CHROME_BIN: process.env.CHROME_BIN }),
+    DSH_TEAM_VERIFICATION_IMAGES: process.env.DSH_TEAM_VERIFICATION_IMAGES,
     ...dockerProxyEnvironment(),
     ...extra,
   };
