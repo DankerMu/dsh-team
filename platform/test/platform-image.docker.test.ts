@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { cleanupTargets, output, OWNER_LABEL, registerCleanupTarget } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { createDockerCommands } from './docker-command.ts';
+import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const artifactProbe = `
@@ -75,8 +77,15 @@ it('ships a non-root standalone platform with working native persistence, web as
   };
   let imageId = '';
   try {
+    const artifact = prepareVerificationImage(
+      'platform',
+      image,
+      { [OWNER_LABEL]: runId },
+      dirname(config),
+      command,
+    );
     registerCleanupTarget(targets, runId, { kind: 'image', name: image });
-    const buildArgs = [
+    const buildArgs = artifact?.args ?? [
       'build',
       '--label',
       `${OWNER_LABEL}=${runId}`,
@@ -92,6 +101,7 @@ it('ships a non-root standalone platform with working native persistence, web as
     process.stdout.write(built.stdout + built.stderr);
     imageId = execute(['image', 'inspect', '--format', '{{.Id}}', image]).trim();
     expect(imageId).toMatch(/^sha256:[a-f0-9]{64}$/);
+    artifact?.verify(imageId);
     expect(run('help', ['node', 'platform/dist/cli.js', '--help'])).toContain('admin create');
     const profileHash = createHash('sha256')
       .update(readFileSync(new URL('../../images/seccomp/dsh-user.json', import.meta.url)))

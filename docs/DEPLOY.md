@@ -155,6 +155,10 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 `pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界、HTTPS/WSS、双员工HTTP/原生Session长连接及实例内部隔离；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [AGENTS.md](../AGENTS.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
 
+受信验收可由本机完成最终审查提交的 Linux/amd64 镜像构建，再通过可信 SSH 传输。运维方核对源提交、导出文件大小/SHA256和 OCI 内容摘要，将三个角色的布局保存在私有目录，并准备0600映射文件：顶层 `roles` 下的 `user`、`platform`、`browser` 各含绝对路径 `layout`、运行平台 manifest 的 `manifestDigest` 和 `configId`（两者都是完整 `sha256:` 摘要）。设置 `DSH_TEAM_VERIFICATION_IMAGES=/绝对路径/images.json` 后仍运行原始 `pnpm test:docker`、`pnpm test:deploy`；浏览器、主机和工具链先决条件不变。
+
+此入口只消费运维方已核验的本地 OCI 文件，不提供通用归档导入/构建管理接口。每个用例仍产生自己的带归属标签镜像，只有标签可变，完整文件层和运行配置必须匹配；没有共享基础镜像删除权。选定输入损坏时拒绝，不偷偷回到 VPS 源码构建。输入布局须保留至实际工作及清理结束；旧提交的试跑、成功上传或元数据派生均不能代替最终提交的完整运行验收。未设置变量时保留原有源码构建路径。
+
 部署审计夹具的平台停止仍请求30秒优雅期，仅该调用使用45秒命令期限以容纳完成/传输余量；普通观察仍为15秒，生产生命周期期限不变。受信主机上的 `pnpm test:docker platform/test/deployment-audit-stop.docker.test.ts` 用精确归属的平台验证真实20秒停止后exit0和重启，并用真实受限子进程验证超期失败、关闭后再传播及部署清理；不会以强杀平台代替优雅退出，也不调用外部模型。
 
 阶段1各验收条款、实际测试名、按SHA绑定的最近运行结果及尚未签结事项见[阶段1验收对照](STAGE_1_ACCEPTANCE.md)。测试通过不替代生产目标机资格或后置人工白盒审查。

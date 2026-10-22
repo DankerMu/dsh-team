@@ -148,6 +148,7 @@ export async function runBrowserBuildFailure(
     | 'spawn-failed'
     | 'signal' = 'absent',
   rescue?: RescueMode,
+  artifactRuntime?: string,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-browser-build-'));
   const canary = `private-${randomUUID()}`;
@@ -197,6 +198,7 @@ cp.spawnSync=(binary,args,options)=>{
         HOME: root,
         TMPDIR: temporary,
         CHROME_BIN: join(chrome, 'chrome-headless-shell'),
+        ...(artifactRuntime === undefined ? {} : { DSH_TEAM_VERIFICATION_IMAGES: artifactRuntime }),
       },
       encoding: 'utf8',
       timeout: 10_000,
@@ -207,16 +209,25 @@ cp.spawnSync=(binary,args,options)=>{
     if (names.length !== 1 || !names[0]?.startsWith('dsh-browser-command-'))
       throw new Error('Owned verifier invocation missing');
     const directory = join(temporary, names[0]);
-    const imageInfo = await stat(join(directory, 'image.json'));
+    const imageInfo = await stat(join(directory, 'image.json')).catch((error: unknown) => {
+      if (
+        artifactRuntime !== undefined &&
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      )
+        return undefined;
+      throw error;
+    });
     const rescued = rescue ? await finalizeFailedBuild(root, directory, tool, rescue) : undefined;
     return {
       exit: result.status,
       rescued,
       output: result.stdout + result.stderr,
       canary,
-      image: imageInfo.isFile() ? await optionalJson(join(directory, 'image.json')) : undefined,
-      imageKind: imageInfo.isFile() ? 'file' : 'other',
-      imageMode: imageInfo.mode & 0o777,
+      image: imageInfo?.isFile() ? await optionalJson(join(directory, 'image.json')) : undefined,
+      imageKind: imageInfo ? (imageInfo.isFile() ? 'file' : 'other') : 'absent',
+      imageMode: imageInfo ? imageInfo.mode & 0o777 : undefined,
       qualification: await optionalJson(join(directory, 'qualification.failure.json')),
       daemon: await optionalJson(join(root, 'daemon.json')),
     };

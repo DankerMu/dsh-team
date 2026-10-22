@@ -123,6 +123,9 @@ if (${JSON.stringify(options.boundary === 'publication')}) process.exit(0);
       HOME: process.env.HOME,
       CHROME_BIN: process.env.CHROME_BIN,
       TMPDIR: temporary,
+      ...(process.env.DSH_TEAM_VERIFICATION_IMAGES === undefined
+        ? {}
+        : { DSH_TEAM_VERIFICATION_IMAGES: process.env.DSH_TEAM_VERIFICATION_IMAGES }),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

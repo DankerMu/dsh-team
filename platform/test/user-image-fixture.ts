@@ -17,6 +17,7 @@ import {
   removeOwned,
 } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
+import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -320,6 +321,49 @@ function createResourceRegistration(
   };
 }
 
+function buildUserImage(
+  command: DockerCommand,
+  targets: CleanupTarget[],
+  runId: string,
+  image: string,
+  config: string,
+): string {
+  const build = [
+    'build',
+    '--label',
+    `${OWNER_LABEL}=${runId}`,
+    '--tag',
+    image,
+    '--file',
+    join(repositoryRoot, 'images/dsh-user/Dockerfile'),
+    '--build-context',
+    `zh-locale=${join(repositoryRoot, 'plugins/zh-locale')}`,
+    '--build-context',
+    `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
+    '--build-context',
+    `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
+    // Keep the primary context narrow: no repository-root files or secrets.
+    join(repositoryRoot, 'images/dsh-user'),
+  ];
+  const artifact = prepareVerificationImage(
+    'user',
+    image,
+    { [OWNER_LABEL]: runId },
+    config,
+    command,
+  );
+  const buildArgs = artifact?.args ?? build;
+  // Admission precedes registration; partial builds remain owned by this case.
+  registerCleanupTarget(targets, runId, { kind: 'image', name: image });
+  output(command(buildArgs, 600_000), buildArgs);
+  const inspect = ['image', 'inspect', '--format', '{{.Id}}', image];
+  const imageId = output(command(inspect, 30_000), inspect).replace(/\r?\n$/, '');
+  if (!/^sha256:[a-f0-9]{64}$/.test(imageId))
+    throw new Error('Built Docker image did not return an exact image identity');
+  artifact?.verify(imageId);
+  return imageId;
+}
+
 function runImageLifecycle(
   probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   assertOutput: (stdout: string) => void,
@@ -388,31 +432,7 @@ function runImageLifecycle(
     if (output(command(prerequisite, 10_000), prerequisite).trim() === '') {
       throw new Error('Docker daemon version prerequisite returned no version');
     }
-    const build = [
-      'build',
-      '--label',
-      `${OWNER_LABEL}=${runId}`,
-      '--tag',
-      image,
-      '--file',
-      join(repositoryRoot, 'images/dsh-user/Dockerfile'),
-      '--build-context',
-      `zh-locale=${join(repositoryRoot, 'plugins/zh-locale')}`,
-      '--build-context',
-      `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
-      '--build-context',
-      `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
-      // Keep the primary context narrow: no repository-root files or secrets.
-      join(repositoryRoot, 'images/dsh-user'),
-    ];
-    // Register ownership before potentially partial build/create operations.
-    registerCleanupTarget(targets, runId, { kind: 'image', name: image });
-    output(command(build, 600_000), build);
-    const inspect = ['image', 'inspect', '--format', '{{.Id}}', image];
-    const imageId = output(command(inspect, 30_000), inspect).replace(/\r?\n$/, '');
-    if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) {
-      throw new Error('Built Docker image did not return an exact image identity');
-    }
+    const imageId = buildUserImage(command, targets, runId, image, config);
     if (probe !== 'container-start')
       createOwnedVolumes(command, targets, runId, [volume, workVolume]);
     if (probe === 'web-startup') {
