@@ -53,7 +53,7 @@ it.each([
 
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr.toString()).toBe(0);
-    expect(readFileSync(path)).toEqual(expected);
+    expect(readFileSync(path).equals(expected)).toBe(true);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     const receipt: unknown = JSON.parse(result.stdout.toString());
     expect(receipt).toEqual({
