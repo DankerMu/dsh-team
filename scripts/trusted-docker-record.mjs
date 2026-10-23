@@ -5,6 +5,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { constants as operatingSystemConstants } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { liveProcessBirth, processIdentity } from './probe-browser-native.mjs';
 
 export const FULL_DOCKER_COMMAND = ['pnpm', 'test:docker'];
@@ -162,6 +163,33 @@ export function groupIsAbsent(pid) {
   } catch (error) {
     if (error.code === 'ESRCH') return true;
     throw error;
+  }
+}
+
+const GROUP_SETTLEMENT_WINDOW_MS = 2000;
+const GROUP_SETTLEMENT_INTERVAL_MS = 20;
+
+/**
+ * Observe a closed command's group within one bounded monotonic window; this never retries,
+ * re-runs or signals the command. Only ESRCH is absence: a present group and EPERM (Darwin's
+ * not-yet-reaped orphan zombie) are observed again. At expiry a present group is unsettled and
+ * a final EPERM is rethrown; any other error is rethrown immediately.
+ */
+export async function groupSettlesAfterClose(pid) {
+  const until = performance.now() + GROUP_SETTLEMENT_WINDOW_MS;
+  for (;;) {
+    let denied;
+    try {
+      if (groupIsAbsent(pid)) return true;
+    } catch (error) {
+      if (error.code !== 'EPERM') throw error;
+      denied = error;
+    }
+    if (performance.now() >= until) {
+      if (denied) throw denied;
+      return false;
+    }
+    await delay(GROUP_SETTLEMENT_INTERVAL_MS);
   }
 }
 

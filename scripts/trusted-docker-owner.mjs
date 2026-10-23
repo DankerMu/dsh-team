@@ -23,7 +23,7 @@ import {
   FULL_DOCKER_COMMAND,
   ownerIsLive,
   privateDirectory,
-  groupIsAbsent,
+  groupSettlesAfterClose,
   hasPassingOutcome,
   readCustodyRecord,
   readInvocation,
@@ -240,17 +240,18 @@ async function executeOwnedCommand(context) {
       });
       child.once('close', (exitCode, signal) => {
         closed = true;
-        let settled = false;
-        try {
-          settled = groupIsAbsent(child.pid);
-        } catch {
-          failure = 'identity';
-        }
-        finished.resolve({
-          exitCode: spawnFailed ? null : exitCode,
-          signal,
-          settled,
-        });
+        void groupSettlesAfterClose(child.pid)
+          .catch(() => {
+            failure = 'identity';
+            return false;
+          })
+          .then((settled) => {
+            finished.resolve({
+              exitCode: spawnFailed ? null : exitCode,
+              signal,
+              settled,
+            });
+          });
       });
       const secrets = outputSecrets();
       const capture = (stream, name) =>

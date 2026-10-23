@@ -31,7 +31,16 @@ resource.setrlimit(resource.RLIMIT_FSIZE,(4096,4096))
 signal.signal(signal.SIGXFSZ,signal.SIG_IGN)
 os.execvp(sys.argv[1],sys.argv[1:])`;
 
-type CustodyMode = 'fail' | 'hold' | 'output-failed' | 'group-observation-failed';
+type CustodyMode =
+  | 'fail'
+  | 'hold'
+  | 'output-failed'
+  | 'group-observation-failed'
+  | 'post-close-member'
+  | 'past-expiry-member';
+
+// The leaf of a member mode publishes the past-expiry member identity here before readiness.
+export const GROUP_MEMBER_RECORD = 'group-member.json';
 
 function prepareCustodyRepository(
   repository: string,
@@ -109,9 +118,14 @@ process.kill=(pid,signal)=>{
   writeFileSync(
     join(repository, 'fixture-child.mjs'),
     `import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import {readFileSync,writeFileSync,watch,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {processBirth} from './scripts/probe-browser-native.mjs';
+const mode=${JSON.stringify(mode)};
+// A same-group member ignores stdio (the captured pipes still close) and both termination signals.
+const member=milliseconds=>spawn(process.execPath,['-e','process.on("SIGINT",()=>{});process.on("SIGTERM",()=>{});setTimeout(()=>{},'+milliseconds+');'],{stdio:'ignore'});
 const custody=dirname(process.env.DSH_TEAM_CI_RESOURCE_JOURNAL);
 const manifest=JSON.parse(readFileSync(join(custody,'manifest.json'),'utf8'));
 assert.equal(manifest.head,process.env.DSH_TEAM_REVIEWED_HEAD);
@@ -123,14 +137,20 @@ assert.equal(process.env.HTTP_PROXY,${mode === 'fail' ? JSON.stringify(CUSTODY_P
 const temporary=process.env.TMPDIR;
 const release=join(temporary,'release');
 // One group signal plus pnpm's native forwarding may deliver SIGINT twice.
-process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');process.exitCode=27;process.exit(27);});
+// The post-close member outlives this leaf's exit, without being awaited, for a few hundred ms.
+process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')member(500);process.exitCode=27;process.exit(27);});
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
-const watcher=${JSON.stringify(mode)}==='hold'?watch(temporary,()=>{if(existsSync(release))ready();}):undefined;
+const watcher=['hold','post-close-member','past-expiry-member'].includes(mode)?watch(temporary,()=>{if(existsSync(release))ready();}):undefined;
+if(mode==='past-expiry-member'){
+  const retained=member(30000);
+  await once(retained,'spawn');
+  writeFileSync(join(temporary,${JSON.stringify(GROUP_MEMBER_RECORD)}),JSON.stringify({pid:retained.pid,birth:await processBirth(retained.pid)}));
+}
 writeFileSync(join(temporary,'child-ready.json'),JSON.stringify({pid:process.pid,birth:await processBirth(process.pid)}));
 process.stdout.write('fixture-begin\\n');
 if(watcher){await released;watcher.close();}
-if(${JSON.stringify(mode)}==='output-failed')process.stdout.write(Buffer.alloc(8192,120));
+if(mode==='output-failed')process.stdout.write(Buffer.alloc(8192,120));
 process.stdout.write('fixture-end\\n');
 if(process.env.HTTP_PROXY!==undefined){
   const proxy=new URL(process.env.HTTP_PROXY);
@@ -172,6 +192,13 @@ process.exitCode=${mode === 'output-failed' ? '0' : '17'};
     timeout: 10_000,
   }).stdout.trim();
   return head;
+}
+
+function recordedGroupMember(temporary: string) {
+  const path = join(temporary, GROUP_MEMBER_RECORD);
+  if (!existsSync(path)) return undefined;
+  const member: unknown = JSON.parse(readFileSync(path, 'utf8'));
+  return record(member);
 }
 
 function fixtureProcessCustody(environment: NodeJS.ProcessEnv, directory: string) {
@@ -464,11 +491,16 @@ function createTrustedDockerFixture(mode: CustodyMode) {
     if (existsSync(custodyBase) && readdirSync(custodyBase).some((name) => !issued.has(name)))
       failures.push(new Error('Uncaptured custody fixture authority retained'));
     for (const authority of issued.values()) {
+      // Retire the single recorded member before its group can be observed absent.
+      const memberSettled = await attempt(async () => {
+        const member = recordedGroupMember(authority.temporary);
+        if (member) await settle(member, false);
+      });
       const childSettled = await attempt(async () => {
         if (authority.child) await settle(authority.child, true);
       });
       const ownerSettled = await attempt(() => settle(authority.owner, false));
-      if (childSettled && ownerSettled)
+      if (memberSettled && childSettled && ownerSettled)
         await attempt(() => {
           if (!existsSync(authority.temporary)) return;
           const current = lstatSync(authority.temporary);

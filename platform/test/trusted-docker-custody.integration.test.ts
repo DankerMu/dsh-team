@@ -3,9 +3,75 @@ import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
-import { CUSTODY_PROXY, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
+import {
+  CUSTODY_PROXY,
+  GROUP_MEMBER_RECORD,
+  withTrustedDockerFixture,
+} from './trusted-docker-fixture.ts';
 import { validateTerminal } from '../../scripts/trusted-docker-record.mjs';
 import { browserExecRetirementSummary } from '../../scripts/verification-submission-assessment.mjs';
+
+type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
+
+// Assertion messages carry only sanitized terminal facts, never output, paths or credentials.
+function terminalEvidence(fixture: CustodyFixture, invocation: string, stderr: string): string {
+  const queried = fixture.command(['status', invocation]);
+  if (queried.status !== 0) return `${stderr}status exit ${String(queried.status)}`;
+  const value = record(JSON.parse(queried.stdout) as unknown);
+  const command = value.command === undefined ? undefined : record(value.command);
+  const cleanup = value.cleanup === undefined ? undefined : record(value.cleanup);
+  return `${stderr}${JSON.stringify({
+    state: value.state,
+    command: command && {
+      exitCode: command.exitCode,
+      signal: command.signal,
+      settled: command.settled,
+    },
+    interruption: value.interruption,
+    failure: value.failure,
+    cleanup: cleanup?.state,
+  })}`;
+}
+
+async function cancelHeldCommand(fixture: CustodyFixture, expected: Record<string, unknown>) {
+  const started = await fixture.start();
+  expect(started.status, started.stderr).toBe(0);
+  const invocation = record(JSON.parse(started.stdout) as unknown).invocation;
+  if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+  const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
+  const manifest = record(
+    JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as unknown,
+  );
+  if (typeof manifest.temporary !== 'string') throw new Error('Missing owned temporary root');
+  const temporary = manifest.temporary;
+  await vi.waitFor(() => {
+    expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
+  });
+  const cancelled = fixture.command(['cancel', invocation], true);
+  expect(cancelled.status, cancelled.stderr).toBe(0);
+  expect(JSON.parse(cancelled.stdout) as unknown).toMatchObject({
+    invocation,
+    state: 'cancellation-requested',
+  });
+  let terminal: unknown;
+  await vi.waitFor(
+    () => {
+      const result = fixture.command(['status', invocation]);
+      expect(result.status, result.stderr).toBe(0);
+      terminal = JSON.parse(result.stdout) as unknown;
+      expect(terminal).toMatchObject({
+        invocation,
+        interruption: 'cancelled',
+        failure: null,
+        output: { complete: true },
+        ...expected,
+      });
+    },
+    { timeout: 10_000, interval: 50 },
+  );
+  expect(readFileSync(join(temporary, 'child-interrupted'), 'utf8')).toBe('SIGINT');
+  return { invocation, temporary, terminal };
+}
 
 it('publishes reviewed launch authority before work and preserves a real nonzero command result', async () => {
   await withTrustedDockerFixture('fail', async (fixture) => {
@@ -342,7 +408,7 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
       state: 'cancellation-requested',
     });
     const duplicate = fixture.command(['cancel', invocation]);
-    expect(duplicate.status, duplicate.stderr).toBe(0);
+    expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
     let terminal: unknown;
     await vi.waitFor(
       () => {
@@ -366,10 +432,43 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
     const outcome = record(record(terminal).command);
     expect(outcome.exitCode === 0 && outcome.signal === null).toBe(false);
     const late = fixture.command(['cancel', invocation], true);
-    expect(late.status, late.stderr).toBe(0);
+    expect(late.status, terminalEvidence(fixture, invocation, late.stderr)).toBe(0);
     expect(JSON.parse(late.stdout) as unknown).toEqual(terminal);
     expect(fixture.observeProcess(sentinel.identity.pid)).toBe(sentinel.identity.birth);
     expect(existsSync(sentinel.interrupted)).toBe(false);
+  });
+}, 20_000);
+
+it('settles a cancelled command whose same-group member exits shortly after close', async () => {
+  await withTrustedDockerFixture('post-close-member', async (fixture) => {
+    const { invocation, terminal } = await cancelHeldCommand(fixture, {
+      state: 'failed',
+      command: { settled: true },
+      cleanup: { state: 'confirmed', browserExec: null },
+    });
+
+    const duplicate = fixture.command(['cancel', invocation], true);
+    expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
+    expect(JSON.parse(duplicate.stdout) as unknown).toEqual(terminal);
+  });
+}, 20_000);
+
+it('keeps a cancelled command unsettled while a same-group member outlives the observation window', async () => {
+  await withTrustedDockerFixture('past-expiry-member', async (fixture) => {
+    const { invocation, temporary } = await cancelHeldCommand(fixture, {
+      state: 'unknown',
+      command: { settled: false },
+      cleanup: { state: 'unconfirmed', browserExec: null },
+    });
+
+    const member = record(
+      JSON.parse(readFileSync(join(temporary, GROUP_MEMBER_RECORD), 'utf8')) as unknown,
+    );
+    if (typeof member.pid !== 'number') throw new Error('Missing owned group member identity');
+    expect(fixture.observeProcess(member.pid)).toBe(member.birth);
+    const late = fixture.command(['cancel', invocation]);
+    expect(late.status, terminalEvidence(fixture, invocation, late.stderr)).toBe(1);
+    expect(late.stdout).toBe('');
   });
 }, 20_000);
 
