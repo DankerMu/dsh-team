@@ -83,61 +83,68 @@ vi.mock('./deployment-fixture.ts', async (importOriginal) => {
     withDeployment(
       run: Parameters<typeof original.withDeployment>[0],
       prepare: Parameters<typeof original.withDeployment>[1],
+      setup: Parameters<typeof original.withDeployment>[2],
     ) {
-      return original.withDeployment(async (lifecycle, start) => {
-        control.lifecycle = lifecycle;
-        await run(
-          {
-            ...lifecycle,
-            commandAsync: async (args, timeout) => {
-              if (args[0] === 'start' && args[1] === control.platformId) control.restarted = true;
-              if (args[0] !== 'stop' || args[1] !== '--time' || args[2] !== '30')
-                return lifecycle.commandAsync(args, timeout);
-              const identity = args[3];
-              if (identity === undefined) throw new Error('Missing audit stop identity');
-              const platform = await inspectAsync(lifecycle, identity);
-              expect(platform.Id).toBe(identity);
-              expect(platform.Name).toBe('/dsh-team-platform');
-              expect(record(record(platform.Config).Labels)[OWNER_LABEL]).toBe(lifecycle.runId);
-              control.platformId = identity;
-              if (control.mode === 'slow') {
-                const pause = ['kill', '--signal', 'STOP', identity];
-                output(await lifecycle.commandAsync(pause, 15_000), pause);
-              }
-              const started = performance.now();
-              const resume = async () => {
-                if (control.mode !== 'slow') return;
-                // The Engine owns the real 30s grace; fake driver time cannot
-                // exercise a genuine 15–30s stop. This delay is the fault input.
-                await delay(20_000);
-                const args = ['kill', '--signal', 'CONT', identity];
-                output(await lifecycle.commandAsync(args, 15_000), args);
-              };
-              // Settle continuation even when the old 15s caller already failed.
-              const results = await Promise.allSettled([
-                lifecycle.commandAsync(args, timeout).then((result) => {
-                  control.elapsed = performance.now() - started;
-                  control.stopStatus = result.status;
-                  return result;
-                }),
-                resume(),
-              ]);
-              const failures = results.filter((result) => result.status === 'rejected');
-              if (failures.length > 0)
-                throw new AggregateError(
-                  failures.map((failure): unknown => failure.reason),
-                  'Controlled stop or continuation failed',
-                );
-              const stopped = results[0];
-              if (stopped.status !== 'fulfilled') throw new Error('Missing stop settlement');
-              if (stopped.value.status === 0)
-                control.exitCode = record((await inspectAsync(lifecycle, identity)).State).ExitCode;
-              return stopped.value;
+      return original.withDeployment(
+        async (lifecycle, start) => {
+          control.lifecycle = lifecycle;
+          await run(
+            {
+              ...lifecycle,
+              commandAsync: async (args, timeout) => {
+                if (args[0] === 'start' && args[1] === control.platformId) control.restarted = true;
+                if (args[0] !== 'stop' || args[1] !== '--time' || args[2] !== '30')
+                  return lifecycle.commandAsync(args, timeout);
+                const identity = args[3];
+                if (identity === undefined) throw new Error('Missing audit stop identity');
+                const platform = await inspectAsync(lifecycle, identity);
+                expect(platform.Id).toBe(identity);
+                expect(platform.Name).toBe('/dsh-team-platform');
+                expect(record(record(platform.Config).Labels)[OWNER_LABEL]).toBe(lifecycle.runId);
+                control.platformId = identity;
+                if (control.mode === 'slow') {
+                  const pause = ['kill', '--signal', 'STOP', identity];
+                  output(await lifecycle.commandAsync(pause, 15_000), pause);
+                }
+                const started = performance.now();
+                const resume = async () => {
+                  if (control.mode !== 'slow') return;
+                  // The Engine owns the real 30s grace; fake driver time cannot
+                  // exercise a genuine 15–30s stop. This delay is the fault input.
+                  await delay(20_000);
+                  const args = ['kill', '--signal', 'CONT', identity];
+                  output(await lifecycle.commandAsync(args, 15_000), args);
+                };
+                // Settle continuation even when the old 15s caller already failed.
+                const results = await Promise.allSettled([
+                  lifecycle.commandAsync(args, timeout).then((result) => {
+                    control.elapsed = performance.now() - started;
+                    control.stopStatus = result.status;
+                    return result;
+                  }),
+                  resume(),
+                ]);
+                const failures = results.filter((result) => result.status === 'rejected');
+                if (failures.length > 0)
+                  throw new AggregateError(
+                    failures.map((failure): unknown => failure.reason),
+                    'Controlled stop or continuation failed',
+                  );
+                const stopped = results[0];
+                if (stopped.status !== 'fulfilled') throw new Error('Missing stop settlement');
+                if (stopped.value.status === 0)
+                  control.exitCode = record(
+                    (await inspectAsync(lifecycle, identity)).State,
+                  ).ExitCode;
+                return stopped.value;
+              },
             },
-          },
-          start,
-        );
-      }, prepare);
+            start,
+          );
+        },
+        prepare,
+        setup,
+      );
     },
   };
 });

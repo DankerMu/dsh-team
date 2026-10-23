@@ -17,6 +17,10 @@ import {
   removeOwned,
 } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
+import type {
+  DeploymentSetupEvidence,
+  DeploymentSetupOperation,
+} from './deployment-setup-evidence.ts';
 import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -240,12 +244,14 @@ export function runUserImage(
   assertOutput: (stdout: string) => void,
   injectedCommand: DockerCommand | undefined,
   scenario: UserImageScenario,
+  setup?: DeploymentSetupEvidence,
 ): Promise<UserImageResult>;
 export function runUserImage(
   probe: Probe | 'web-startup' | 'managed-policy' | 'container-start',
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
   extra?: Partial<WebStartupBoundary> | UserImageScenario,
+  setup?: DeploymentSetupEvidence,
 ): UserImageResult | Promise<UserImageResult> {
   if (probe === 'web-startup') {
     return Promise.resolve().then(() =>
@@ -253,9 +259,16 @@ export function runUserImage(
     );
   }
   if (probe === 'managed-policy' || probe === 'container-start') {
-    return Promise.resolve().then(() =>
-      runImageLifecycle(probe, assertOutput, injectedCommand, extra as UserImageScenario),
-    );
+    return Promise.resolve().then(() => {
+      const preparation = setup?.begin('user-image-preparation');
+      setup?.cleanup('resources', 'unconfirmed');
+      try {
+        return runImageLifecycle(probe, assertOutput, injectedCommand, extra, setup, preparation);
+      } catch (error) {
+        preparation?.fail();
+        throw error;
+      }
+    });
   }
   return runImageLifecycle(probe, assertOutput, injectedCommand);
 }
@@ -321,13 +334,17 @@ function createResourceRegistration(
   };
 }
 
-function buildUserImage(
+function prepareUserImage(
   command: DockerCommand,
   targets: CleanupTarget[],
   runId: string,
   image: string,
   config: string,
 ): string {
+  const prerequisite = ['version', '--format', '{{.Server.Version}}'];
+  if (output(command(prerequisite, 10_000), prerequisite).trim() === '') {
+    throw new Error('Docker daemon version prerequisite returned no version');
+  }
   const build = [
     'build',
     '--label',
@@ -369,6 +386,8 @@ function runImageLifecycle(
   assertOutput: (stdout: string) => void,
   injectedCommand?: DockerCommand,
   extra?: Partial<WebStartupBoundary> | UserImageScenario,
+  setup?: DeploymentSetupEvidence,
+  preparation?: DeploymentSetupOperation,
 ): UserImageResult | Promise<UserImageResult> {
   const runId = randomUUID();
   const image = `dsh-team-test-${runId}:${probe}`;
@@ -387,6 +406,7 @@ function runImageLifecycle(
   const targets: CleanupTarget[] = [];
   let stdout = '';
   function finish(): UserImageResult {
+    const beforeCleanup = failures.length;
     cleanupTargets(command, targets, runId, failures);
     if (
       targets.some(
@@ -413,6 +433,7 @@ function runImageLifecycle(
     } catch (error) {
       failures.push(error);
     }
+    setup?.cleanup('resources', failures.length === beforeCleanup ? 'confirmed' : 'unconfirmed');
     if (failures.length !== 0) {
       const messages = failures.flatMap((error) => nestedMessages(error));
       throw new AggregateError(failures, messages.join('\n'));
@@ -428,11 +449,7 @@ function runImageLifecycle(
     };
   }
   try {
-    const prerequisite = ['version', '--format', '{{.Server.Version}}'];
-    if (output(command(prerequisite, 10_000), prerequisite).trim() === '') {
-      throw new Error('Docker daemon version prerequisite returned no version');
-    }
-    const imageId = buildUserImage(command, targets, runId, image, config);
+    const imageId = prepareUserImage(command, targets, runId, image, config);
     if (probe !== 'container-start')
       createOwnedVolumes(command, targets, runId, [volume, workVolume]);
     if (probe === 'web-startup') {
@@ -492,6 +509,7 @@ function runImageLifecycle(
           removeOwned(command, 'network', name, runId, target.ownership, id);
         },
       };
+      preparation?.complete();
       return extra(lifecycle)
         .then((summary) => {
           stdout = summary;
@@ -520,6 +538,7 @@ function runImageLifecycle(
       assertOutput(stdout);
     }
   } catch (error) {
+    preparation?.fail();
     failures.push(error);
   }
   return finish();

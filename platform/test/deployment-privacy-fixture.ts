@@ -11,6 +11,8 @@ import {
 } from './deployment-audit-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
+import { createDeploymentSetupEvidence } from './deployment-setup-evidence.ts';
+import type { DeploymentSetupEvidence, DeploymentSetupSink } from './deployment-setup-evidence.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -208,7 +210,24 @@ async function privatePlatformRead(
   return record(JSON.parse(result.stdout));
 }
 
-export async function verifyDeployedCredentialPrivacy(): Promise<void> {
+async function publishPrivacySetup(
+  setup: DeploymentSetupEvidence,
+  phase: string,
+  failed: boolean,
+): Promise<void> {
+  const retained = await setup.publish();
+  if (failed || !retained) {
+    throw Object.assign(
+      new Error(
+        `Deployed privacy acceptance failed during ${phase}; private diagnostics withheld` +
+          (retained ? '' : '; setup-evidence-unavailable'),
+      ),
+      { setup: setup.snapshot() },
+    );
+  }
+}
+
+export async function verifyDeployedCredentialPrivacy(sink?: DeploymentSetupSink): Promise<void> {
   const marker = `private-conversation-${randomUUID()}`;
   const reply = `private-reply-${randomUUID()}`;
   const model = 'owned-privacy-model';
@@ -216,10 +235,12 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
   const replacementKey = randomUUID();
   const newPassword = randomUUID();
   const progress = { phase: 'setup' };
+  const setup = createDeploymentSetupEvidence(sink);
+  let failed = false;
   try {
     await withDeployment(
       async (lifecycle, start) => {
-        const { deployment, employee, admin } = await configureDeployment(lifecycle, start);
+        const { deployment, employee, admin } = await configureDeployment(lifecycle, start, setup);
         const origin = deployment.base;
         const gateway = instanceGatewayFixture({ lifecycle, base: origin, origin });
         const run = async (args: string[], timeout = 15_000) => {
@@ -392,10 +413,11 @@ export async function verifyDeployedCredentialPrivacy(): Promise<void> {
       },
       (lifecycle, deployment) =>
         preparePrivacyModel(lifecycle, deployment, { key, model, marker, reply }),
+      setup,
     );
   } catch {
-    throw new Error(
-      `Deployed privacy acceptance failed during ${progress.phase}; private diagnostics withheld`,
-    );
+    // Preserve the existing private-error boundary; only closed setup facts survive.
+    failed = true;
   }
+  await publishPrivacySetup(setup, progress.phase, failed);
 }
