@@ -6,7 +6,8 @@ Issue #269 identifies a missing trusted-host configuration source: the restricte
 
 - Define optional private host-local JSON configuration at `~/.config/dsh-team/docker-proxy.json`, with a closed uppercase proxy field set and literal-loopback transport restriction.
 - Restricted invocation Docker clients read that source; ambient caller proxies are not their authority. Ordinary non-restricted verification preserves its current uppercase projection, including explicit empty values.
-- Preserve general command/model-driver, browser and employee environment custody, private Docker configuration, local Engine constraints, one-shot admission and retirement.
+- The restricted worker's exact-SHA source checkout also uses the validated host-local proxy fields for its `git` processes only. The authorized model run e4af6752 (2026-10-23) failed in phase `checkout` with git exit128; an equivalent read-only probe of the worker's direct `git fetch https://github.com/...` ended after90s with a TLS termination, while package registry access worked directly.
+- Preserve install/build/model-driver, browser and employee environment custody, private Docker configuration, local Engine constraints, one-shot admission and retirement.
 - Add real-file/process transport and rejection evidence plus existing operator guidance. Actual Buildx/provider acceptance remains a separately authorized one-shot gate, not simulated success.
 
 # Capabilities
@@ -21,7 +22,7 @@ None.
 
 # Impact
 
-Canonical `scripts/docker-proxy-environment.mjs`, the trusted worker's Docker adapter, their existing verification consumers and targeted integration fixtures; operator guidance in AGENTS.md. No new dependency, host service, platform runtime setting, SSH field or systemd credential lifecycle.
+Canonical `scripts/docker-proxy-environment.mjs`, the trusted worker's Docker adapter and exact-SHA checkout, their existing verification consumers and targeted integration fixtures; operator guidance in AGENTS.md. No new dependency, host service, platform runtime setting, SSH field or systemd credential lifecycle.
 
 # Triage
 
