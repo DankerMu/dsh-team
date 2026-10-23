@@ -181,3 +181,106 @@ it.each([
   },
   WORKER_CASE_TIMEOUT,
 );
+
+function gitCalls(result: Scenario) {
+  return result.calls.filter((call) => call.name === 'git');
+}
+
+it(
+  'tunnels the exact-SHA checkout fetch only through the host-local loopback proxy',
+  async () => {
+    const result = await runWorkerScenario('driver-success', { hostProxy: 'tunnel' });
+
+    // Real git keeps the fixed remote; the owned recorder refuses its tunnel.
+    expect(result.tunnels).toEqual(['github.com:443']);
+    expect(result.phase?.value).toEqual({
+      version: 1,
+      phase: 'checkout',
+      state: 'failed',
+      category: 'nonzero',
+      exitCode: 128,
+    });
+    expect(result.execution?.value).toEqual({
+      exitCode: 1,
+      phase: 'checkout',
+      category: 'nonzero',
+    });
+    expect(result.gitConfig).toContain('url = https://github.com/DankerMu/dsh-team.git');
+    expect(result.gitConfig).not.toMatch(/proxy/i);
+    expect(result.gitConfig).not.toContain(result.canaries.hostProxy);
+    expect(result.calls).toEqual([]);
+    expectPrivateReceipts(result);
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);
+
+it(
+  'gives exactly the host-local fields to checkout git children and none to install, build or driver',
+  async () => {
+    const result = await runWorkerScenario('driver-success', { hostProxy: 'fields' });
+
+    expect(result.phase?.value).toEqual({
+      version: 1,
+      phase: 'driver',
+      state: 'completed',
+      exitCode: 0,
+    });
+    expect(gitCalls(result).map((call) => call.args[0])).toEqual([
+      'init',
+      'remote',
+      'fetch',
+      'checkout',
+      'rev-parse',
+    ]);
+    for (const call of gitCalls(result)) expect(call.proxy).toEqual(result.hostProxy);
+    expect(result.calls.filter((call) => call.name === 'pnpm').map((call) => call.proxy)).toEqual([
+      {},
+      {},
+      {},
+    ]);
+    const argv = JSON.stringify(result.calls.map((call) => call.args));
+    expect(argv).not.toMatch(/proxy/i);
+    expect(argv).not.toContain(result.canaries.hostProxy);
+    expect(result.log).not.toContain(result.canaries.hostProxy);
+    expectPrivateReceipts(result);
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);
+
+it(
+  'keeps checkout git direct when the host-local source is absent',
+  async () => {
+    const result = await runWorkerScenario('driver-success');
+
+    expect(result.execution?.value).toEqual({ exitCode: 0, phase: 'driver' });
+    expect(gitCalls(result)).toHaveLength(5);
+    for (const call of result.calls) expect(call.proxy).toEqual({});
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);
+
+it.each(['invalid-url', 'public-mode'] as const)(
+  'fails checkout closed before any git process on %s host-local configuration',
+  async (hostProxy) => {
+    const result = await runWorkerScenario('driver-success', { hostProxy });
+
+    expect(result.phase?.value).toEqual({
+      version: 1,
+      phase: 'checkout',
+      state: 'failed',
+      category: 'unknown',
+    });
+    expect(result.execution?.value).toEqual({
+      exitCode: 1,
+      phase: 'checkout',
+      category: 'unknown',
+    });
+    expect(result.calls).toEqual([]);
+    expectPrivateReceipts(result);
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);

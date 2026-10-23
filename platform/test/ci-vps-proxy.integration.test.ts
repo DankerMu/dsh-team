@@ -13,12 +13,19 @@ it('uses private host-local proxy transport for independent exact-owned image re
   expect(result.output.includes(result.canary)).toBe(false);
 });
 
-it('keeps host proxy values out of the actual worker driver while its Docker client uses them', async () => {
+it('keeps host proxy values out of the actual worker driver while checkout git and its Docker client use them', async () => {
   const result = await runWorkerProxyScenario('execute');
 
   expect(result).toMatchObject({ exit: 0, receipt: { exitCode: 0 }, driverPassed: true });
   expect(result.events).toEqual(
     expect.arrayContaining([
+      expect.objectContaining({
+        role: 'git',
+        // Vitest's matcher is an untyped expected-value sentinel, not observed data.
+        args: expect.arrayContaining(['fetch']) as unknown,
+        proxyInherited: true,
+        keyPresent: false,
+      }),
       expect.objectContaining({
         role: 'pnpm',
         args: ['install', '--frozen-lockfile'],

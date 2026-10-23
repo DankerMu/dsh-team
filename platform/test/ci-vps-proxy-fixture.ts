@@ -27,7 +27,8 @@ const save=value=>fs.writeFileSync(file,JSON.stringify(value),{mode:0o600});
 save(state);
 if(role==='git'){
  if(args[0]==='rev-parse')process.stdout.write(state.sha+'\n');
- if(proxyInherited||process.env.DMXAPI_KEY!==undefined)process.exitCode=19;
+ // Checkout git children carry the host-local transport; the model key never reaches them.
+ if(!proxyInherited||process.env.DMXAPI_KEY!==undefined)process.exitCode=19;
 } else if(role==='systemctl')process.stdout.write('LoadState=not-found\n');
 else if(role==='pnpm'){
  if(proxyInherited)process.exitCode=19;
