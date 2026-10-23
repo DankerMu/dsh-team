@@ -673,6 +673,8 @@ it.each(
       await writeFile(
         join(binaries, 'docker'),
         `#!${process.execPath}
+// The untimed warm-up exits before the witness or submission journal is touched.
+if(process.argv[2]==='warm-up')process.exit(0);
 const {writeFileSync}=require('node:fs');
 // This owned executable is the external Docker boundary, not a mocked ledger.
 // This extensionless CommonJS process fixture must load the canonical ESM module dynamically.
@@ -687,6 +689,14 @@ void import(${JSON.stringify(submissionsModule)}).then(({requireVerificationSubm
 }).catch(error=>{console.error(error);process.exitCode=99;});`,
         { mode: 0o700, flag: 'wx' },
       );
+      // Darwin admits a freshly written executable's first exec slowly and system-wide; that cost
+      // is paid once here, outside the timed dispatch, whose bound is unchanged.
+      const warmUp = spawn(join(binaries, 'docker'), ['warm-up'], { stdio: 'ignore' });
+      const [warmUpStatus, warmUpSignal] = (await once(warmUp, 'close')) as [
+        number | null,
+        NodeJS.Signals | null,
+      ];
+      expect({ status: warmUpStatus, signal: warmUpSignal }).toEqual({ status: 0, signal: null });
       if (outcome === 'missing-authority')
         await rename(
           join(directory, SUBMISSION_AUTHORITY),
@@ -702,10 +712,16 @@ import {runDockerCommand,runDockerCommandAsync,selectDockerExecution} from ${JSO
 const mode=${JSON.stringify(mode)};
 const args=[${JSON.stringify(outcome === 'observation' ? 'version' : 'opaque-mutation')},${JSON.stringify(outcome === 'nonzero' ? '17' : '0')}];
 let dispatched=false;
+let inner;
+const observe=(started,result)=>{
+  inner={status:result.status,signal:result.signal,code:result.error?.code??null,elapsedMs:Math.round(performance.now()-started)};
+  return result;
+};
 const dispatch=execution=>{
   dispatched=true;
+  const started=performance.now();
   const options={env:{PATH:${JSON.stringify(binaries)}},timeout:2000,killSignal:'SIGKILL'};
-  if(mode==='sync')return spawnSync(execution.file,execution.args,{...options,encoding:'utf8'});
+  if(mode==='sync')return observe(started,spawnSync(execution.file,execution.args,{...options,encoding:'utf8'}));
   const settled=Promise.withResolvers();
   const child=spawn(execution.file,execution.args,options);
   child.stdin.end();
@@ -713,16 +729,17 @@ const dispatch=execution=>{
   child.stdout.on('data',chunk=>{stdout+=chunk;});
   child.stderr.on('data',chunk=>{stderr+=chunk;});
   child.once('error',failure=>{error=failure;});
-  child.once('close',(status,signal)=>settled.resolve({status,signal,stdout,stderr,...(error?{error}:{})}));
+  child.once('close',(status,signal)=>settled.resolve(observe(started,{status,signal,stdout,stderr,...(error?{error}:{})})));
   return settled.promise;
 };
 try{
   const execution=selectDockerExecution(args);
   const result=mode==='sync'?runDockerCommand(execution,dispatch):await runDockerCommandAsync(execution,dispatch);
-  if(result.error||result.stderr)throw new Error('Owned executable failed unexpectedly');
+  if(result.error||result.signal||result.stderr)throw new Error('Owned executable failed unexpectedly');
   process.stdout.write(JSON.stringify({dispatched,status:result.status,stdout:result.stdout})+'\\n');
 }catch(error){
-  if(dispatched)throw error;
+  // Only the inner dispatch's status/signal/error code/elapsed time distinguish the failure.
+  if(dispatched){process.stderr.write(JSON.stringify({dispatch:inner??null})+'\\n');throw error;}
   process.stdout.write(JSON.stringify({dispatched:false})+'\\n');
 }`,
         ],
