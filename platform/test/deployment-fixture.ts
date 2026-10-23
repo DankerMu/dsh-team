@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { arch, platform, tmpdir } from 'node:os';
+import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { inspectAsync, record } from './container-start-docker-fixture.ts';
@@ -11,6 +11,13 @@ import { unusedPort } from './gateway-http-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
+import {
+  bindDeploymentObservation,
+  createDeploymentObservation,
+  finishDeploymentObservation,
+  prepareDeploymentReplacement,
+} from './deployment-observer-fixture.ts';
+import type { DeploymentObservation } from './deployment-observer-fixture.ts';
 
 export interface Deployment {
   base: string;
@@ -19,11 +26,12 @@ export interface Deployment {
   dataDir: string;
   compose: string[];
   request: (url: string, init?: RequestInit) => Promise<Response>;
+  observation: DeploymentObservation;
 }
 
 async function startDeployment(
   lifecycle: UserImageLifecycle,
-  submitted: () => void,
+  submitted: (observation: DeploymentObservation) => void,
   prepare?: (lifecycle: UserImageLifecycle, deployment: Deployment) => Promise<void>,
 ): Promise<Deployment> {
   const existing = await lifecycle.commandAsync(
@@ -70,6 +78,8 @@ async function startDeployment(
   const imageId = (await command(['image', 'inspect', '--format', '{{.Id}}', image])).trim();
   if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new Error('Platform image identity missing');
   artifact?.verify(imageId);
+  const observation = await createDeploymentObservation(lifecycle, imageId);
+  submitted(observation);
   const directory = dirname(lifecycle.overlayDirectory);
   const dataDir = join(directory, 'platform-data');
   await mkdir(dataDir, { mode: 0o700 });
@@ -118,13 +128,23 @@ async function startDeployment(
     join(lifecycle.repositoryRoot, 'deploy/compose.yml'),
     '--file',
     override,
+    '--file',
+    observation.override,
     '--project-name',
     project,
   ];
-  const deployment = { base, port, directory, dataDir, compose, request: fetch };
-  submitted();
+  const deployment: Deployment = {
+    base,
+    port,
+    directory,
+    dataDir,
+    compose,
+    request: fetch,
+    observation,
+  };
   await prepare?.(lifecycle, deployment);
   await command([...compose, 'up', '-d', '--no-build', '--pull', 'never']);
+  await bindDeploymentObservation(observation, lifecycle);
   return deployment;
 }
 
@@ -172,8 +192,10 @@ export async function recreateDeployment(
     if (!isAbsentResource(absent, 'container', identity))
       throw new Error('Platform absence unconfirmed before recreation');
   }
+  await prepareDeploymentReplacement(deployment.observation);
   const create = [...deployment.compose, 'up', '-d', '--no-build', '--pull', 'never'];
   output(await lifecycle.commandAsync(create, 30_000), create);
+  await bindDeploymentObservation(deployment.observation, lifecycle);
 }
 
 /** The kernel lock spans build, fixed-name admission, the scenario and canonical resource cleanup. */
@@ -188,7 +210,8 @@ export async function withDeployment(
     'flock',
     [
       '--nonblock',
-      join(tmpdir(), 'dsh-team-deployment.lock'),
+      // The fixed platform name is host-wide even when each invocation has a private TMPDIR.
+      '/tmp/dsh-team-deployment.lock',
       process.execPath,
       '-e',
       "process.stdout.write('locked\\n');process.stdin.resume();",
@@ -208,40 +231,60 @@ export async function withDeployment(
     ]);
     if (!Array.isArray(ready) || !Buffer.isBuffer(ready[0]) || ready[0].toString() !== 'locked\n')
       throw new Error('Deployment lock admission failed');
-    await runUserImage(
-      'container-start',
-      () => undefined,
-      undefined,
-      async (lifecycle) => {
-        const state = { submitted: false };
-        const failures: unknown[] = [];
-        try {
-          await run(lifecycle, () =>
-            startDeployment(
-              lifecycle,
-              () => {
-                state.submitted = true;
-              },
-              prepare,
-            ),
-          );
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          if (state.submitted) {
-            try {
-              await drainDeployment(lifecycle);
-            } catch (error) {
-              failures.push(error);
+    let observation: DeploymentObservation | undefined;
+    const finalFailures: unknown[] = [];
+    try {
+      await runUserImage(
+        'container-start',
+        () => undefined,
+        undefined,
+        async (lifecycle) => {
+          const state = { submitted: false };
+          const failures: unknown[] = [];
+          try {
+            await run(lifecycle, () =>
+              startDeployment(
+                lifecycle,
+                (createdObservation) => {
+                  state.submitted = true;
+                  observation = createdObservation;
+                },
+                prepare,
+              ),
+            );
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            if (state.submitted) {
+              try {
+                await drainDeployment(lifecycle);
+              } catch (error) {
+                failures.push(error);
+              }
             }
           }
-        }
-        if (failures.length === 1) throw failures[0];
-        if (failures.length > 1)
-          throw new AggregateError(failures, 'Deployment scenario and owner drainage failed');
-        return 'verified';
-      },
-    );
+          if (failures.length === 1) throw failures[0];
+          if (failures.length > 1)
+            throw new AggregateError(failures, 'Deployment scenario and owner drainage failed');
+          return 'verified';
+        },
+      );
+    } catch (error) {
+      finalFailures.push(error);
+    }
+    if (observation !== undefined) {
+      try {
+        await finishDeploymentObservation(observation, finalFailures.length === 0);
+      } catch (error) {
+        finalFailures.push(error);
+      }
+    }
+    if (finalFailures.length === 1) throw finalFailures[0];
+    if (finalFailures.length > 1)
+      throw new AggregateError(
+        finalFailures,
+        'Deployment scenario and observation retirement failed',
+      );
   } finally {
     lock.stdin.end();
     await closed;

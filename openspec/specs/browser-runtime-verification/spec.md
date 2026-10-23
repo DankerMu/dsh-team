@@ -148,19 +148,19 @@ Verification Docker CLI processes MUST receive caller-supplied uppercase `HTTP_P
 - **WHEN** the platform-image test lacks its launcher's private Docker configuration
 - **THEN** it fails before starting Docker rather than using caller or default user configuration
 
-### Requirement: Verification image mirror selection preserves Debian trust and acceptance
+### Requirement: Verification image official sources preserve Debian trust and acceptance
 
-The verification browser image SHALL obtain ordinary Debian bookworm and bookworm-updates packages through the user-approved Tsinghua Debian mirror while retaining the original official Debian security source. The source change MUST preserve Debian archive signature and validity checks, the shipped keyring, suites, components, package list, pinned base-image digest and existing600-second provisioning deadline. It MUST NOT inject runtime proxy configuration. The separately approved user-image build policy MUST share the same canonical build-only rewrite. Unexpected source layout or unavailable/invalid repository metadata MUST fail rather than silently weakening trust or falling back.
+The verification browser image SHALL retain its pinned base's original official Debian bookworm, bookworm-updates and security sources rather than forcibly selecting a third-party mirror. Construction MUST preserve Debian archive signature and validity checks, the shipped keyring, suites, components, package list, pinned base-image digest and existing600-second provisioning deadline. It MUST NOT inject runtime proxy configuration. The separately approved user-image build policy MUST use the same official-source policy without a shared source-rewrite mechanism. Failed repository authentication or inability to complete dependency installation MUST fail rather than weakening trust, silently falling back or reporting successful acceptance.
 
-#### Scenario: Ordinary verification dependencies use the approved mirror
+#### Scenario: Ordinary verification dependencies use official repositories
 
 - **WHEN** the delivered verification image builds from its pinned base
-- **THEN** only the ordinary Debian source changes, the official security source and trust configuration remain intact, and the existing full Docker command must complete provisioning within its unchanged deadline before consumer acceptance
+- **THEN** ordinary sources, the official security source and trust configuration remain intact without an auxiliary source-rewrite context, and the existing full Docker command must complete provisioning within its unchanged deadline before consumer acceptance
 
-#### Scenario: The expected source or signed metadata is invalid
+#### Scenario: Official dependency acquisition fails
 
-- **WHEN** the expected ordinary source is missing or duplicated, or repository authentication fails
-- **THEN** the build fails without disabling authentication, changing the base digest, increasing the deadline or reporting successful acceptance
+- **WHEN** official repository acquisition or authentication prevents dependency installation from completing
+- **THEN** the build fails without disabling authentication, selecting a different mirror, changing the base digest, increasing the deadline or reporting successful acceptance
 
 ### Requirement: Browser image admission failures retain safe attempt evidence and cleanup uncertainty
 

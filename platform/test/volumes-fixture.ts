@@ -1,28 +1,33 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { expect } from 'vitest';
+import { trackVerificationDockerClient } from '../../scripts/verification-submissions.mjs';
 import {
   createDockerClient,
   DockerHttpError,
   ensureUserVolumes,
 } from '../src/orchestrator/index.ts';
+import { registerCleanupTarget } from './docker-cleanup.ts';
+import type { CleanupTarget } from './docker-cleanup.ts';
 
 export async function runUserVolumes(socketPath: string, requestTimeoutMs = 10_000): Promise<void> {
-  const rawClient = createDockerClient(socketPath);
+  const rawClient = trackVerificationDockerClient(createDockerClient(socketPath), DockerHttpError);
   // Every acceptance request gets a fresh deadline, including requests made
   // inside ensureUserVolumes. Forward documents/errors and retain caller cancellation.
   const client: typeof rawClient = {
     ...rawClient,
-    json(method, path, body, signal) {
+    json(method, path, body, signal, maxBytes) {
       const deadline = AbortSignal.timeout(requestTimeoutMs);
       return rawClient.json(
         method,
         path,
         body,
         signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
+        maxBytes,
       );
     },
   };
   const invocation = randomBytes(5).toString('hex');
+  const runId = randomUUID();
   const users = [`${invocation}00`, `${invocation}01`];
   // Register all exact targets before any potentially partial create. Unique account
   // labels are this invocation's ownership; no production test-label option is needed.
@@ -56,6 +61,14 @@ export async function runUserVolumes(socketPath: string, requestTimeoutMs = 10_0
     for (const { name } of targets) {
       await expect(client.json('GET', `/volumes/${name}`)).rejects.toMatchObject({
         statusCode: 404,
+      });
+    }
+    const registered: CleanupTarget[] = [];
+    for (const { name, userId } of targets) {
+      registerCleanupTarget(registered, runId, {
+        kind: 'volume',
+        name,
+        ownership: { 'dsh-team.user': userId },
       });
     }
     const results = [];

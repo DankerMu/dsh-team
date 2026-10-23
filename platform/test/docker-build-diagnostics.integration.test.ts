@@ -1,37 +1,41 @@
 import type * as ChildProcessModule from 'node:child_process';
-import type {
-  ChildProcess,
-  SpawnOptions,
-  SpawnSyncOptionsWithStringEncoding,
-} from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
+import type * as DockerCommandModule from '../../scripts/docker-command.mjs';
+import {
+  initializeVerificationSubmissions,
+  SUBMISSION_JOURNAL,
+} from '../../scripts/verification-submission-storage.mjs';
+import { requireVerificationSubmissionsSettled } from '../../scripts/verification-submission-assessment.mjs';
 import { createDockerCommands } from './docker-command.ts';
 import { output } from './docker-cleanup.ts';
 import type { DockerCommandResult } from './docker-command.ts';
 
 const children = vi.hoisted((): ChildProcess[] => []);
-vi.mock('node:child_process', async (importOriginal) => {
-  const original = await importOriginal<typeof ChildProcessModule>();
-  const target = (args: readonly string[]) =>
-    args[1] === 'missing-executable' ? '/dsh-team-missing-build-executable' : process.execPath;
-  const script = (args: readonly string[]) =>
-    args[1] === 'missing-executable' ? [] : ['-e', args[1] ?? ''];
+vi.mock('../../scripts/docker-command.mjs', async (importOriginal) => {
+  const original = await importOriginal<typeof DockerCommandModule>();
   return {
     ...original,
-    spawn(_binary: string, args: readonly string[], options: SpawnOptions) {
-      const child = original.spawn(target(args), script(args), options);
+    // Select the actual fixture executable before publication, never acknowledge a fake Docker call.
+    selectDockerExecution(args: readonly string[]) {
+      return args[1] === 'missing-executable'
+        ? { file: '/dsh-team-missing-build-executable', args: [] }
+        : { file: process.execPath, args: ['-e', args[1] ?? ''] };
+    },
+  };
+});
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof ChildProcessModule>();
+  return {
+    ...original,
+    // Observe actual closure without replacing the already-selected process.
+    spawn(binary: string, args: readonly string[], options: SpawnOptions) {
+      const child = original.spawn(binary, args, options);
       children.push(child);
       return child;
-    },
-    spawnSync(
-      _binary: string,
-      args: readonly string[],
-      options: SpawnSyncOptionsWithStringEncoding,
-    ) {
-      return original.spawnSync(target(args), script(args), options);
     },
   };
 });
@@ -117,6 +121,46 @@ it.each(['command', 'commandAsync'] as const)(
     }
   },
 );
+
+it('keeps a timed-out non-Docker child outside Docker submission custody', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-team-build-diagnostic-'));
+  const previousSubmissions = process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
+  const submissions = join(directory, SUBMISSION_JOURNAL);
+  try {
+    initializeVerificationSubmissions(directory);
+    process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = submissions;
+    const commands = createDockerCommands(process.cwd(), directory, false);
+    // Real time exercises the command's SIGKILL/child-close boundary; fake timers cannot retire it.
+    const script = 'setInterval(() => {}, 1000)';
+    let closed = false;
+    const pending = commands.commandAsync(['stop', script], 200);
+    const child = children.at(-1);
+    child?.once('close', () => {
+      closed = true;
+    });
+
+    const result = await pending;
+
+    expect(child).toBeDefined();
+    expect(child?.spawnfile).toBe(process.execPath);
+    expect(child?.spawnargs).toEqual([process.execPath, '-e', script]);
+    expect(closed).toBe(true);
+    expect(child?.signalCode).toBe('SIGKILL');
+    expect(result.status).not.toBe(0);
+    expect(result.signal).toBe('SIGKILL');
+    expect(result.error).toMatchObject({ code: 'ETIMEDOUT' });
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+    expect(() => {
+      requireVerificationSubmissionsSettled(directory);
+    }).not.toThrow();
+    expect(readFileSync(submissions, 'utf8')).toBe('');
+  } finally {
+    if (previousSubmissions === undefined) delete process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
+    else process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = previousSubmissions;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 it('retains only the last recognized build header across interleaved secret-bearing progress', async () => {
   const commands = createDockerCommands('unused', 'unused', true, () => ({

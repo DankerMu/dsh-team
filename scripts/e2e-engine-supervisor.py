@@ -54,6 +54,10 @@ def main():
     if uid <= 0 or gid <= 0 or uid != int(os.environ['SUDO_UID']) or gid != int(os.environ['SUDO_GID']):
         raise RuntimeError('Private Engine caller identity mismatch')
     caller_network = sys.argv[5]
+    retirement_nonce = sys.argv[6] if len(sys.argv) == 7 else None
+    if retirement_nonce is not None and not re.fullmatch(
+            r'[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}', retirement_nonce):
+        raise RuntimeError('Private Engine retirement binding unavailable')
     private_network = os.readlink('/proc/self/ns/net')
     if not re.fullmatch(r'net:\[\d+\]', caller_network) or private_network == caller_network:
         raise RuntimeError('Private Engine requires an owned network namespace')
@@ -164,6 +168,8 @@ def main():
         completed = True
     finally:
         # Direct unreaped child handles are authority; never adopt a PID from disk.
+        # Adopted descendants share the scenario's existing shutdown budget; never restart it.
+        retirement_deadline = time.monotonic() + 30
         if scenario is not None and scenario.poll() is None:
             os.killpg(scenario.pid, signal.SIGTERM)
             try:
@@ -177,18 +183,28 @@ def main():
         if log is not None:
             log.close()
         watch.close()
-        # Reap adopted descendants only after the direct child handles have settled.
-        while True:
-            try:
-                if os.waitpid(-1, os.WNOHANG)[0] == 0:
+        # Block SIGCHLD before the first nonblocking reap so no exit notification can be lost.
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
+        try:
+            while True:
+                try:
+                    child, _ = os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if child:
+                    continue
+                remaining = retirement_deadline - time.monotonic()
+                if remaining <= 0 or signal.sigtimedwait({signal.SIGCHLD}, remaining) is None:
                     cleaned = False
                     break
-            except ChildProcessError:
-                break
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         if cleaned:
             for path in (client, root):
                 if path is not None:
                     shutil.rmtree(path)
+            if retirement_nonce is not None:
+                print('\ne2e: runtime-retired ' + retirement_nonce, flush=True)
         else:
             print('e2e: incomplete cleanup; retained private paths ' + str((root, client)), file=sys.stderr)
         if not cleaned:

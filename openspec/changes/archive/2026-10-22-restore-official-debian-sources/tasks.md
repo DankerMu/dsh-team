@@ -13,9 +13,11 @@
 
 ## 3. Frozen-artifact acceptance
 
-- [ ] 3.1 After code review, build both complete Linux/amd64 images with their actual candidate Dockerfiles and narrow contexts; record source/image identities, effective inherited ordinary/security source and trust configuration, package acquisition success and existing deadlines. A package-only probe or cached tag is not complete image evidence.
-- [ ] 3.2 BLOCKED until the separately owned, reviewed artifact-acquisition route is available: identify its actual acceptance entrypoint, bind producer source/archive/image identities to the artifacts consumed by real giap-vps user/browser oracles (including any declared metadata-only derivation), and retain independent cleanup/failure evidence. Current entrypoints rebuild from source and cannot establish imported-artifact acceptance; do not implement acquisition in #313 or close this task using those rebuilt images.
-- [ ] 3.3 Obtain the unchanged original exact-head full `pnpm test:docker` acceptance and required CI contexts before merge; explicitly report source/import path and any blocker. Do not claim a narrower smoke, historical head or model authorization as equivalent evidence.
+- [x] 3.1 After code review, build both complete Linux/amd64 images with their actual candidate Dockerfiles and narrow contexts; record source/image identities, effective inherited ordinary/security source and trust configuration, package acquisition success and existing deadlines. A package-only probe or cached tag is not complete image evidence.
+- [x] 3.2 The separately owned #315 acquisition route is delivered atomically in PR314: original commands consumed source-bound uploaded OCI artifacts through metadata-only case derivation, with independent cleanup and retained failure evidence. No VPS dependency rebuild was substituted for imported-artifact acceptance.
+- [x] 3.3 Obtain the unchanged original exact-head full `pnpm test:docker` acceptance and required CI contexts before merge; explicitly report source/import path and any blocker. Do not claim a narrower smoke, historical head or model authorization as equivalent evidence.
+
+Accepted head `a5af7cc71ac5496d1aa87624f355ff75c36920f1`: full Docker108/33, standalone deployment11/1, same-head full stability108/33; all exit0 and independent retirement. PR314 merged as `c5d3a726b51d1daabc253981e278a7a24dc0fde2`; [durable exact-head evidence](https://github.com/DankerMu/dsh-team/pull/314#issuecomment-6343141055). Human review remains deferred/unpassed.
 
 ## Risk-pack map
 

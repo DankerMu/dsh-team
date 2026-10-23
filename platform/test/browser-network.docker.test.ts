@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import {
   startIsolated,
 } from '../../scripts/probe-browser-runtime.mjs';
 import { OwnedBrowserChurn, withIsolatedBrowser } from './browser-runtime-fixture.ts';
+import { createNetworkWithProducer } from './browser-network-fixture.ts';
 import { record } from './container-start-docker-fixture.ts';
 
 type NetworkFault =
@@ -71,6 +72,8 @@ async function pendingNetwork(fault: NetworkFault) {
   args.push(receipt.networkName);
   let id: string | undefined;
   let recordedId: string | null = null;
+  let producer: { pid: number; birth: string } | undefined;
+  const socketDirectory = join(root, 'sockets');
   const cleanup = async () => {
     if (id) {
       const remaining = browserDocker([
@@ -97,13 +100,18 @@ async function pendingNetwork(fault: NetworkFault) {
     await rm(root, { recursive: true, force: true });
   };
   try {
-    id = browserDocker(args);
-    expect(id).toMatch(/^[a-f0-9]{64}$/);
+    await mkdir(socketDirectory, { mode: 0o700 });
+    const sockets = await stat(socketDirectory);
+    Object.assign(receipt, {
+      socketDirectory,
+      socketIdentity: { device: String(sockets.dev), inode: String(sockets.ino) },
+    });
+    await writeFile(receiptFile, JSON.stringify(receipt), { mode: 0o600 });
+    ({ id, producer } = createNetworkWithProducer(args));
     if (fault === 'recorded-id-replacement') {
       recordedId = id;
       browserDocker(['network', 'rm', id]);
-      id = browserDocker(args);
-      expect(id).toMatch(/^[a-f0-9]{64}$/);
+      ({ id, producer } = createNetworkWithProducer(args));
       expect(id).not.toBe(recordedId);
     }
     await writeFile(
@@ -112,7 +120,7 @@ async function pendingNetwork(fault: NetworkFault) {
         ...receipt,
         networkId: recordedId,
         state: fault === 'finalized-null-identity' ? 'stopped' : 'pending-identity',
-        acquisition: { state: 'settled', failure: 'network-create-output-interrupted' },
+        acquisition: { state: 'settled', resource: 'network', producer },
       }),
       { mode: 0o600 },
     );
@@ -120,7 +128,17 @@ async function pendingNetwork(fault: NetworkFault) {
     await cleanup();
     throw error;
   }
-  return { id, recordedId, receipt, receiptFile, runtime, profile, cleanup };
+  return {
+    id,
+    recordedId,
+    receipt,
+    receiptFile,
+    runtime,
+    profile,
+    producer,
+    socketDirectory,
+    cleanup,
+  };
 }
 
 it('naturally reports online while the actual image remains confined to its stable isolated bridge', async () => {
@@ -161,8 +179,10 @@ it('adopts a settled pending network without a container and proves repeated ret
     expect(receipt).toMatchObject({ networkId: fixture.id, containerId: null, state: 'stopped' });
     expect(record(receipt.acquisition)).toMatchObject({
       state: 'settled',
-      failure: 'network-create-output-interrupted',
+      resource: 'network',
+      producer: fixture.producer,
     });
+    await expect(stat(fixture.socketDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(
       browserDocker([
         'network',

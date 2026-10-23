@@ -12,6 +12,7 @@ import { qualificationDiagnostic, qualificationError } from './probe-browser-qua
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 import { buildFailureDiagnostic } from './docker-build-diagnostics.mjs';
 import { prepareVerificationImage } from './verification-image.mjs';
+import { runDockerCommand, selectDockerExecution } from './docker-command.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const commands = {
@@ -50,14 +51,16 @@ function docker(args, ms = 30000, build = false) {
   return result.stdout.trim();
 }
 function dockerResult(args, ms, build = false) {
-  return spawnSync('docker', args, {
-    cwd: root,
-    env: environment(),
-    encoding: 'utf8',
-    timeout: ms,
-    killSignal: 'SIGKILL',
-    maxBuffer: build ? 16 * 1024 * 1024 : 65536,
-  });
+  return runDockerCommand(selectDockerExecution(args), (execution) =>
+    spawnSync(execution.file, execution.args, {
+      cwd: root,
+      env: environment(),
+      encoding: 'utf8',
+      timeout: ms,
+      killSignal: 'SIGKILL',
+      maxBuffer: build ? 16 * 1024 * 1024 : 65536,
+    }),
+  );
 }
 async function publishImageReceipt() {
   const path = join(directory, 'image.json');
@@ -203,6 +206,13 @@ async function prepare() {
     directory,
     dockerResult,
   );
+  for (const file of [
+    'docker-command.mjs',
+    'verification-submissions.mjs',
+    'verification-submission-storage.mjs',
+  ]) {
+    await copyFile(join(root, 'scripts', file), join(context, file));
+  }
   if (!(await publishImageReceipt())) throw new Error('browser image evidence unavailable');
   buildStarted = true;
   docker(

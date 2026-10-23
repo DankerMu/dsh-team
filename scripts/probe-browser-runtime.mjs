@@ -39,7 +39,7 @@ export { browserDocker } from './probe-browser-network.mjs';
 const modulePath = fileURLToPath(import.meta.url);
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 const IMAGE_ID = /^sha256:[a-f0-9]{64}$/;
-const CONTAINER_ID = /^[a-f0-9]{64}$/;
+export const CONTAINER_ID = /^[a-f0-9]{64}$/;
 const isolatedOwners = new Map();
 
 export async function chromeDigest(path) {
@@ -48,7 +48,7 @@ export async function chromeDigest(path) {
   return hash.digest('hex');
 }
 
-async function requireProfileOwnership(profile, receiptFile) {
+export async function requireProfileOwnership(profile, receiptFile) {
   if (receiptFile === profile || receiptFile.startsWith(`${profile}/`))
     throw new Error('browser receipt must be outside writable profile');
   const parent = await lstat(dirname(receiptFile));
@@ -218,7 +218,7 @@ async function settleAcquisition(path, receipt) {
     throw new Error('browser acquisition authority invalid');
   return await waitForProducer(path, receipt, nonce);
 }
-function requireCleanupAuthority(receipt) {
+export function requireCleanupAuthority(receipt) {
   if (
     !IMAGE_ID.test(receipt.imageId ?? '') ||
     typeof receipt.runId !== 'string' ||

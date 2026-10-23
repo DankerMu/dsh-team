@@ -3,6 +3,24 @@ import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { platform } from 'node:os';
 
+export function processIdentity(value) {
+  if (
+    !value ||
+    !Number.isSafeInteger(value.pid) ||
+    value.pid < 1 ||
+    typeof value.birth !== 'string'
+  )
+    throw new Error('Invalid trusted Docker process identity');
+  if (
+    !/^(?:linux:[1-9][0-9]*:[0-9]+|darwin:[1-9][0-9]*:[1-9][0-9]*:(?:0|[1-9][0-9]{0,5}))$/.test(
+      value.birth,
+    ) ||
+    value.birth.split(':', 2)[1] !== String(value.pid)
+  )
+    throw new Error('Invalid trusted Docker process birth');
+  return { pid: value.pid, birth: value.birth };
+}
+
 const owners = new Map();
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 

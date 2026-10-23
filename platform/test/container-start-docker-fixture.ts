@@ -3,7 +3,8 @@ import { request } from 'node:http';
 import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import { expect } from 'vitest';
-import { createDockerClient } from '../src/orchestrator/index.ts';
+import { trackVerificationDockerClient } from '../../scripts/verification-submissions.mjs';
+import { createDockerClient, DockerHttpError } from '../src/orchestrator/index.ts';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { START_MODEL } from './container-start-fixture.ts';
@@ -181,7 +182,10 @@ async function registerCreatedNetwork(lifecycle: UserImageLifecycle, body: unkno
 
 /** Shared actual-start transport: registers production helpers before their create request. */
 export function startupClient(lifecycle: UserImageLifecycle) {
-  const raw = createDockerClient('/var/run/docker.sock');
+  const raw = trackVerificationDockerClient(
+    createDockerClient('/var/run/docker.sock'),
+    DockerHttpError,
+  );
   const helperIds: string[] = [];
   const requests: { method: string; path: string }[] = [];
   const client: typeof raw = {

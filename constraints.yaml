@@ -203,6 +203,10 @@ verification:
       command: "pnpm test:docker"
       evidence: "trusted giap-vps final reviewed SHA and original discovery; pinned tools and DSH 0.2.0-rc.2; immutable CfT140 verification image/Chrome, stable internal isolated namespace, natural online/confinement, original auth/gateway first-use/reload and raw HTTP/WS/CDP pressure/FIN behavior; readable Chinese glyphs, bounded failure receipts; success/failure owned browser/container/network cleanup and unrelated sentinel preservation"
       required_at: "L3+"
+    trusted_docker_custody:
+      command: "pnpm --silent verify:docker start <reviewed-sha>"
+      evidence: "private pre-work reviewed-SHA/command/root/birth authority; real SSH disconnect with live owner/child and same-invocation reconnect; complete credential-free output; independent command/interruption/cleanup outcomes; exact cancellation and unknown identity refusal; original full Docker acceptance plus independent resource retirement and unchanged protected host"
+      required_at: "L3+"
     platform_image_docker:
       command: "pnpm test:docker"
       evidence: "trusted giap-vps multistage platform artifact; compiled CLI help exit0; effective nonroot UID, writable default data and read-only application; explicit native compile and actual Release binding selection with migrations/write/reopen; default web resolver and exact seccomp bytes; ownership-checked image/container cleanup"

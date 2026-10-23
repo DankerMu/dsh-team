@@ -497,9 +497,11 @@ export function observeResourceOom(
     throw new Error('OOM pressure requires the exact owned instance');
   setStage('pressure exec');
   const pressureStartedAtMs = Date.now();
+  // Exit137 is answered only by this declaration; OOM attribution is proved independently below.
   const pressure = lifecycle.command(
     ['exec', '--user', '1001', containerId, 'python3', '-c', pressureScript],
     30_000,
+    137,
   );
   const pressureFinishedAtMs = Date.now();
   diagnostic['pressure.status'] = pressure.status;

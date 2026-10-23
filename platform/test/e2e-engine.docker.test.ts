@@ -1,4 +1,4 @@
-import { execFile, spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { readlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,50 +16,7 @@ import {
   startupClient,
 } from './container-start-docker-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-
-async function runE2e(lifecycle: UserImageLifecycle): Promise<void> {
-  const child = spawn('pnpm', ['run', 'e2e'], {
-    cwd: lifecycle.repositoryRoot,
-    detached: true,
-    env: {
-      PATH: process.env.PATH,
-      HOME: process.env.HOME,
-      // The public command must override this shared socket, not trust an opt-in flag.
-      PLATFORM_DOCKER_SOCKET: '/var/run/docker.sock',
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const closed = new Promise<number | null>((resolve) => {
-    child.once('close', resolve);
-  });
-  let output = '';
-  const outcome = { expired: false, spawnFailed: false };
-  child.on('error', () => {
-    outcome.spawnFailed = true;
-  });
-  const collect = (chunk: Buffer) => {
-    if (output.length < 2 * 1024 * 1024) output += chunk.toString();
-  };
-  child.stdout.on('data', collect);
-  child.stderr.on('data', collect);
-  // Keep the real owner's unchanged 60s startup deadline meaningful.
-  const timer = setTimeout(() => {
-    outcome.expired = true;
-    if (child.pid !== undefined) process.kill(-child.pid, 'SIGTERM');
-  }, 45_000);
-  try {
-    const code = await closed;
-    if (outcome.expired || outcome.spawnFailed || code !== 0) {
-      // Build and hurl output are from this credential-free invocation only.
-      process.stderr.write(output);
-      throw new Error('Concurrent built-artifact verification failed');
-    }
-    expect(output).toContain('e2e: database schema/migration OK');
-    expect(output).toContain('e2e: built artifact served smoke/*.hurl');
-  } finally {
-    clearTimeout(timer);
-  }
-}
+import { runE2e } from './e2e-command-fixture.ts';
 
 async function heldStartup(lifecycle: UserImageLifecycle): Promise<string> {
   const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
@@ -110,7 +67,7 @@ async function heldStartup(lifecycle: UserImageLifecycle): Promise<string> {
       });
     expect(absent).toBeNull();
 
-    await runE2e(lifecycle);
+    await runE2e(lifecycle.repositoryRoot);
 
     expect(inspectNetwork(lifecycle, `dsh-team-net-${userId}`).Id).toBe(network.Id);
     release.resolve(undefined);
@@ -222,5 +179,33 @@ it.each([
     ownedTreeGone: true,
     rootRemoved: true,
     sentinelAlive: true,
+  });
+});
+
+it('joins actual detached e2e and private Engine retirement before custody cancellation completes', async () => {
+  const path = process.env.PATH;
+  if (path === undefined) throw new Error('Missing trusted toolchain path');
+  const { stdout } = await promisify(execFile)(
+    '/usr/bin/sudo',
+    [
+      '-n',
+      '/usr/bin/python3',
+      fileURLToPath(new URL('./e2e-engine-fixture.py', import.meta.url)),
+      'custody',
+      path,
+    ],
+    {
+      env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', LANG: 'C.UTF-8' },
+      timeout: 150_000,
+      maxBuffer: 65_536,
+    },
+  );
+
+  expect(JSON.parse(stdout) as unknown).toEqual({
+    actualHttpCompleted: true,
+    ownedTreeGoneAtTerminal: true,
+    canonicalRootsRemoved: true,
+    sentinelAlive: true,
+    originalCancellationPreserved: true,
   });
 });

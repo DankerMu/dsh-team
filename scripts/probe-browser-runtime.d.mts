@@ -60,3 +60,9 @@ export declare function chromeFlags(
   debugPort: number,
   extraFlags?: readonly string[],
 ): string[];
+export declare function requireCleanupAuthority(receipt: Record<string, unknown>): void;
+export declare function requireProfileOwnership(
+  profile: string,
+  receiptFile: string,
+): Promise<void>;
+export declare const CONTAINER_ID: RegExp;

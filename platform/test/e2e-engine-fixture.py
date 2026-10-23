@@ -396,10 +396,223 @@ def public_group(caller_path, preserve_network=False):
                 print('Public cancellation retained ' + str(path), file=sys.stderr)
 
 
+def custody(caller_path):
+    import shlex
+    uid, gid = int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID'])
+    if os.getuid() != 0 or uid <= 0:
+        raise RuntimeError('Trusted nonroot sudo invocation required')
+    source = Path(__file__).resolve().parents[2]
+    owned = Path(tempfile.mkdtemp(prefix='dsh-team-e2e-fixture-'))
+    repository, home, tools = (owned / name for name in ('repository', 'home', 'bin'))
+    for path in (repository, home, tools):
+        path.mkdir(mode=0o700)
+    environment = {'PATH': str(tools) + ':' + caller_path, 'HOME': str(home), 'LANG': 'C.UTF-8'}
+    listed = subprocess.run(['git', 'ls-files', '-z'], cwd=source, user=uid, group=gid,
+                            extra_groups=[], env={'PATH': caller_path}, capture_output=True,
+                            check=True, timeout=30).stdout.decode().split('\0')
+    # Copy only reviewed source paths, never ignored credentials or private evidence.
+    for relative in set(filter(None, listed)) | {
+            'platform/test/e2e-command-fixture.ts',
+            'scripts/verification-submissions.mjs', 'scripts/verification-producer.mjs',
+            'scripts/docker-command.mjs',
+            'scripts/verification-docker-observer.mjs',
+            'scripts/verification-submission-storage.mjs',
+            'scripts/verification-submission-assessment.mjs',
+            'scripts/verification-docker-generations.mjs',
+            'scripts/probe-browser-exec.mjs', 'scripts/probe-browser-exec.d.mts',
+            'platform/test/deployed-docker-observer-fixture.ts',
+            'platform/test/deployed-docker-engine-fixture.ts',
+            'platform/test/trusted-docker-audit-fixture.ts',
+            'platform/test/deployment-observer-fixture.ts',
+            'scripts/verification-producer-exit.py'}:
+        if Path(relative).name == '.env':
+            raise RuntimeError('Secret file is not a verification fixture input')
+        destination = repository / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, destination, follow_symlinks=False)
+    for relative in ('node_modules', 'platform/node_modules', 'platform/web/node_modules'):
+        dependency = source / relative
+        if dependency.is_dir():
+            (repository / relative).symlink_to(dependency, target_is_directory=True)
+    marker = owned / 'http-complete'
+    real_hurl = shutil.which('hurl', path=caller_path)
+    if real_hurl is None:
+        raise RuntimeError('Actual HTTP verification prerequisite unavailable')
+    shim = tools / 'hurl'
+    shim.write_text('#!/bin/sh\n' + shlex.quote(real_hurl) + ' "$@" || exit $?\n' +
+                    'touch ' + shlex.quote(str(marker)) + '\nexec /usr/bin/sleep 300\n')
+    shim.chmod(0o700)
+    package = json.loads((repository / 'package.json').read_text())
+    package['scripts']['test:docker'] = 'node custody-probe.mjs'
+    (repository / 'package.json').write_text(json.dumps(package) + '\n')
+    (repository / 'custody-probe.mjs').write_text(
+        "import {runE2e} from './platform/test/e2e-command-fixture.ts';\n" +
+        'await runE2e(' + json.dumps(str(repository)) + ');\n')
+    for current, directories, files in os.walk(owned, followlinks=False):
+        for path in [Path(current), *(Path(current) / name for name in directories + files)]:
+            os.chown(path, uid, gid, follow_symlinks=False)
+
+    def command(*args):
+        return subprocess.run(['pnpm', '--silent', 'verify:docker', *args], cwd=repository,
+                              user=uid, group=gid, extra_groups=[], env=environment,
+                              text=True, capture_output=True, timeout=30)
+
+    for arguments in (['init', '--quiet'], ['add', '.'],
+                      ['-c', 'user.name=fixture', '-c', 'user.email=fixture@localhost',
+                       'commit', '--quiet', '-m', 'test: private e2e custody']):
+        subprocess.run(['git', *arguments], cwd=repository, user=uid, group=gid,
+                       extra_groups=[], env=environment, check=True, capture_output=True, timeout=30)
+    head = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=repository, user=uid, group=gid,
+                          extra_groups=[], env=environment, check=True, capture_output=True,
+                          text=True, timeout=30).stdout.strip()
+    sentinel = subprocess.Popen(['/usr/bin/sleep', '300'])
+    captured, launchers, roots = [], [], []
+    start = None
+    temporary = None
+    temporary_identity = None
+    failure = None
+    cleanup_failures = []
+    success = False
+    def capture(child):
+        root = birth(child['pid'])
+        if root is None:
+            return
+        if 'linux:' + str(child['pid']) + ':' + root[0] != child['birth']:
+            raise RuntimeError('Captured custody child generation changed')
+        pending = [child['pid']]
+        while pending:
+            pid = pending.pop()
+            identity = birth(pid)
+            if identity is None:
+                continue
+            try:
+                descendants = children(pid)
+                args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')
+            except FileNotFoundError:
+                if absent(pid, identity[0]):
+                    continue
+                raise
+            if absent(pid, identity[0]):
+                continue
+            if (pid, identity[0]) not in captured:
+                captured.append((pid, identity[0]))
+            pending.extend(descendants)
+            if str(repository / 'scripts/e2e-engine.mjs').encode() in args:
+                if (pid, identity[0]) not in launchers:
+                    launchers.append((pid, identity[0]))
+            if args[0] == b'/usr/bin/dockerd':
+                engine = Path(os.fsdecode(args[args.index(b'--data-root') + 1])).parent
+                client = Path(os.fsdecode(args[args.index(b'--host') + 1]).removeprefix('unix://')).parent
+                for path, prefix, owner in ((engine, 'dsh-team-e2e-engine-', 0),
+                                            (client, 'dsh-team-e2e-client-', uid)):
+                    info = path.stat()
+                    if path.parent != Path('/tmp') or not path.name.startswith(prefix) or info.st_uid != owner:
+                        raise RuntimeError('Private runtime authority mismatch')
+                    if path not in roots:
+                        roots.append(path)
+                if os.readlink('/proc/%d/ns/net' % pid) == os.readlink('/proc/self/ns/net'):
+                    raise RuntimeError('Private Engine shares caller network namespace')
+    try:
+        started = command('start', head)
+        if started.returncode != 0:
+            raise RuntimeError('Custody admission failed')
+        start = json.loads(started.stdout)
+        directory = Path(start['directory'])
+        requested = json.loads((directory / 'request.json').read_text())
+        temporary = Path(requested['temporary'])
+        temporary_identity = temporary.stat()
+        if temporary.parent != Path('/tmp') or not temporary.name.startswith('dsh-team-docker-') or temporary_identity.st_uid != uid:
+            raise RuntimeError('Custody temporary authority mismatch')
+        deadline = time.monotonic() + 40
+        while not marker.exists():
+            child_path = directory / 'child.json'
+            if child_path.exists():
+                capture(json.loads(child_path.read_text())['owner'])
+            if (directory / 'result.json').exists() or time.monotonic() >= deadline:
+                raise RuntimeError('Actual custody e2e did not complete HTTP before hold')
+            time.sleep(.05)
+        child = json.loads((directory / 'child.json').read_text())['owner']
+        capture(child)
+        if len(launchers) != 1 or len(roots) != 2:
+            raise RuntimeError('Exact detached launcher and private Engine were not observed')
+        (owned / 'authority.json').write_text(json.dumps({
+            'invocation': start['invocation'], 'owner': start['owner'],
+            'captured': captured, 'launchers': launchers,
+            'roots': [{'path': str(path), 'device': path.stat().st_dev,
+                       'inode': path.stat().st_ino, 'uid': path.stat().st_uid} for path in roots],
+        }))
+        if command('cancel', start['invocation']).returncode != 0:
+            raise RuntimeError('Matching custody cancellation failed')
+        deadline = time.monotonic() + 45
+        while not (directory / 'result.json').exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Custody did not publish terminal evidence')
+            time.sleep(.05)
+        result = command('status', start['invocation'])
+        if result.returncode != 0:
+            raise RuntimeError('Custody terminal evidence unavailable')
+        terminal = json.loads(result.stdout)
+        if any(not absent(pid, identity) for pid, identity in captured):
+            raise RuntimeError('Custody published terminal evidence before owned retirement')
+        if terminal['command']['settled'] is not True or terminal['cleanup']['state'] != 'confirmed':
+            raise RuntimeError('Joined custody cancellation did not confirm retirement')
+        if terminal['interruption'] != 'cancelled' or terminal['state'] != 'failed' or not terminal['output']['complete']:
+            raise RuntimeError('Custody lost the original cancellation outcome')
+        if sentinel.poll() is not None or any(path.exists() for path in roots):
+            raise RuntimeError('Custody did not preserve sentinel and canonical cleanup')
+        success = True
+        print(json.dumps({'actualHttpCompleted': True, 'ownedTreeGoneAtTerminal': True,
+                          'canonicalRootsRemoved': True, 'sentinelAlive': True,
+                          'originalCancellationPreserved': True}), flush=True)
+    except Exception as error:
+        failure = error
+    finally:
+        if start is not None:
+            try:
+                command('cancel', start['invocation'])
+            except Exception as error:
+                cleanup_failures.append(error)
+        # Emergency fixture retirement uses only the launcher captured before cancellation.
+        for pid, identity in launchers:
+            try:
+                if not absent(pid, identity):
+                    args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')
+                    if str(repository / 'scripts/e2e-engine.mjs').encode() not in args or absent(pid, identity):
+                        raise RuntimeError('Captured fixture launcher authority changed')
+                    os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception as error:
+                cleanup_failures.append(error)
+        deadline = time.monotonic() + 45
+        while (any(not absent(pid, identity) for pid, identity in captured) or
+               (start is not None and not absent(start['owner']['pid'], start['owner']['birth'].split(':')[-1]))) and time.monotonic() < deadline:
+            time.sleep(.05)
+        if sentinel.poll() is None:
+            sentinel.terminate()
+        sentinel.wait(timeout=5)
+        owner_gone = start is None or absent(start['owner']['pid'], start['owner']['birth'].split(':')[-1])
+        if success and owner_gone and not cleanup_failures and all(absent(pid, identity) for pid, identity in captured) and not any(path.exists() for path in roots):
+            if temporary is not None:
+                current = temporary.stat()
+                if current.st_dev != temporary_identity.st_dev or current.st_ino != temporary_identity.st_ino:
+                    raise RuntimeError('Custody temporary authority changed')
+                shutil.rmtree(temporary)
+            shutil.rmtree(owned)
+        else:
+            print('Custody fixture retained ' + str(owned), file=sys.stderr)
+            cleanup_failures.append(RuntimeError('Custody fixture cleanup unconfirmed'))
+    if failure is not None or cleanup_failures:
+        raise ExceptionGroup('Custody scenario and cleanup failed',
+                             ([failure] if failure is not None else []) + cleanup_failures)
+
+
 if sys.argv[1] == 'worker':
     worker(sys.argv[2], sys.argv[3], sys.argv[4])
 elif sys.argv[1] == 'public-group':
     public_group(sys.argv[2])
+elif sys.argv[1] == 'custody':
+    custody(sys.argv[2])
 elif sys.argv[1] == 'network-sentinel':
     if os.readlink('/proc/self/ns/net') == sys.argv[3]:
         raise RuntimeError('Sentinel requires an invocation-owned network namespace')

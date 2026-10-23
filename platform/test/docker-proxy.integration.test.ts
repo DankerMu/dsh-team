@@ -1,24 +1,16 @@
-import type * as ChildProcessModule from 'node:child_process';
-import type { SpawnOptions, SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { once } from 'node:events';
 import { Worker } from 'node:worker_threads';
 import { afterEach, expect, it, vi } from 'vitest';
+import type * as DockerCommandModule from '../../scripts/docker-command.mjs';
 import { createDockerCommands } from './docker-command.ts';
 
-vi.mock('node:child_process', async (importOriginal) => {
-  const original = await importOriginal<typeof ChildProcessModule>();
+vi.mock('../../scripts/docker-command.mjs', async (importOriginal) => {
+  const original = await importOriginal<typeof DockerCommandModule>();
   return {
     ...original,
-    // Only the external binary is substituted; environment, HTTP, streams and closure are real.
-    spawn(_binary: string, args: readonly string[], options: SpawnOptions) {
-      return original.spawn(process.execPath, ['-e', ...args], options);
-    },
-    spawnSync(
-      _binary: string,
-      args: readonly string[],
-      options: SpawnSyncOptionsWithStringEncoding,
-    ) {
-      return original.spawnSync(process.execPath, ['-e', ...args], options);
+    // Selection precedes publication; environment, HTTP, streams and closure remain real.
+    selectDockerExecution(args: readonly string[]) {
+      return { file: process.execPath, args: ['-e', ...args] };
     },
   };
 });

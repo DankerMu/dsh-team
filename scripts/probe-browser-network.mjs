@@ -2,6 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { writeReceipt } from './probe-browser-receipt.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
+import { runDockerCommand, selectDockerExecution } from './docker-command.mjs';
 
 const RESOURCE_ID = /^[a-f0-9]{64}$/;
 export const OWNER = 'dsh-team.test-run';
@@ -13,24 +14,28 @@ export const dockerEnvironment = () => ({
   ...dockerProxyEnvironment(),
 });
 export function browserDocker(args, ms = 30000) {
-  const result = spawnSync('docker', args, {
-    env: dockerEnvironment(),
-    encoding: 'utf8',
-    timeout: ms,
-    killSignal: 'SIGKILL',
-    maxBuffer: 65536,
-  });
+  const result = runDockerCommand(selectDockerExecution(args), (execution) =>
+    spawnSync(execution.file, execution.args, {
+      env: dockerEnvironment(),
+      encoding: 'utf8',
+      timeout: ms,
+      killSignal: 'SIGKILL',
+      maxBuffer: 65536,
+    }),
+  );
   if (result.error || result.status !== 0) throw new Error('browser Docker operation failed');
   return result.stdout.trim();
 }
 function inspectResource(kind, target, ms = 30000) {
-  const result = spawnSync('docker', [kind, 'inspect', target], {
-    env: dockerEnvironment(),
-    encoding: 'utf8',
-    timeout: ms,
-    killSignal: 'SIGKILL',
-    maxBuffer: 65536,
-  });
+  const result = runDockerCommand(selectDockerExecution([kind, 'inspect', target]), (execution) =>
+    spawnSync(execution.file, execution.args, {
+      env: dockerEnvironment(),
+      encoding: 'utf8',
+      timeout: ms,
+      killSignal: 'SIGKILL',
+      maxBuffer: 65536,
+    }),
+  );
   const diagnostic = result.stderr?.trim();
   const missing =
     kind === 'container'

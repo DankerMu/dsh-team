@@ -2,6 +2,7 @@ import type * as ChildProcessModule from 'node:child_process';
 import type { SpawnOptions } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import type * as DockerCommandModule from '../../scripts/docker-command.mjs';
 import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
@@ -33,33 +34,44 @@ const control = vi.hoisted(
   }),
 );
 
-vi.mock('node:child_process', async (importOriginal) => {
-  const original = await importOriginal<typeof ChildProcessModule>();
+vi.mock('../../scripts/docker-command.mjs', async (importOriginal) => {
+  const original = await importOriginal<typeof DockerCommandModule>();
   return {
     ...original,
-    // Only the captured audit stop gets an unresponsive external executable.
-    // The actual command timer, kill, streams and close settlement remain intact.
-    spawn(binary: string, args: readonly string[], options: SpawnOptions) {
+    // Substitute only the actual executable selection before submission publication.
+    selectDockerExecution(args: readonly string[]) {
       if (
         control.mode === 'timeout' &&
-        binary === 'docker' &&
         args[0] === 'stop' &&
         args[1] === '--time' &&
         args[2] === '30' &&
         args[3] === control.platformId
+      )
+        return { file: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'] };
+      return original.selectDockerExecution(args);
+    },
+  };
+});
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof ChildProcessModule>();
+  return {
+    ...original,
+    // Observe the controlled process; the command timer, kill, streams and close stay intact.
+    spawn(binary: string, args: readonly string[], options: SpawnOptions) {
+      const child = original.spawn(binary, args, options);
+      if (
+        control.mode === 'timeout' &&
+        binary === process.execPath &&
+        args[0] === '-e' &&
+        args[1] === 'setInterval(() => {}, 1000)'
       ) {
-        const child = original.spawn(
-          process.execPath,
-          ['-e', 'setInterval(() => {}, 1000)'],
-          options,
-        );
         child.once('close', (_code, signal) => {
           control.childClosed = true;
           control.childSignal = signal;
         });
-        return child;
       }
-      return original.spawn(binary, args, options);
+      return child;
     },
   };
 });

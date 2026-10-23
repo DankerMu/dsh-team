@@ -2,10 +2,10 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
@@ -14,6 +14,7 @@ import { browserDocker, rescueChrome } from '../../scripts/probe-browser-runtime
 import { retireAcquisition, stopOwnedUnit } from '../../scripts/ci-vps-units.mjs';
 import { removeOwned } from './docker-cleanup.ts';
 import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
+import { runDockerCommand, selectDockerExecution } from '../../scripts/docker-command.mjs';
 const acquisitionFence = vi.hoisted(() => ({
   path: '',
   observed: undefined as (() => undefined) | undefined,
@@ -44,6 +45,12 @@ async function stopDriver(driver: ChildProcess, exited: Promise<unknown>) {
     driver.kill('SIGKILL');
     await exited;
   }
+}
+
+// Setuid sg runs glibc secure-exec, which strips TMPDIR; restore it after sg for the driver.
+function restoreTemporaryDirectory(environment: NodeJS.ProcessEnv) {
+  const value = environment.TMPDIR;
+  return value === undefined ? [] : ['/usr/bin/env', `TMPDIR=${value}`];
 }
 
 it.each(
@@ -116,6 +123,7 @@ run().catch(()=>{process.exitCode=1;});
     };
     const forwarded = [
       'PATH',
+      'TMPDIR',
       'CHROME_BIN',
       'DSH_TEAM_BROWSER_RUNTIME',
       'DSH_TEAM_BROWSER_IMAGE_ID',
@@ -147,7 +155,7 @@ run().catch(()=>{process.exitCode=1;});
               '/usr/bin/sg',
               'docker',
               '-c',
-              [process.execPath, ...argumentsForDriver]
+              [...restoreTemporaryDirectory(environment), process.execPath, ...argumentsForDriver]
                 .map((value) => `'${value.replaceAll("'", "'\\''")}'`)
                 .join(' '),
             ],
@@ -205,6 +213,12 @@ run().catch(()=>{process.exitCode=1;});
       expect(after.networkId).toMatch(/^[a-f0-9]{64}$/);
       expect(after.containerId).toMatch(/^[a-f0-9]{64}$/);
       expect(record(after.acquisition).state).toBe('settled');
+      if (typeof after.socketDirectory !== 'string')
+        throw new Error('Acquisition socket directory authority missing');
+      const socketLocation = relative(tmpdir(), after.socketDirectory);
+      expect(socketLocation).not.toBe('');
+      expect(socketLocation).not.toMatch(/^(?:\.\.(?:\/|$)|\/)/);
+      await expect(stat(after.socketDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(
         browserDocker([
           'container',
@@ -252,15 +266,17 @@ run().catch(()=>{process.exitCode=1;});
           if (termination === 'cgroup')
             removeOwned(
               (args, timeout) =>
-                spawnSync('docker', args, {
-                  env: {
-                    PATH: originalPath,
-                    DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
-                    ...dockerProxyEnvironment(),
-                  },
-                  encoding: 'utf8',
-                  timeout,
-                }),
+                runDockerCommand(selectDockerExecution(args), (execution) =>
+                  spawnSync(execution.file, execution.args, {
+                    env: {
+                      PATH: originalPath,
+                      DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
+                      ...dockerProxyEnvironment(),
+                    },
+                    encoding: 'utf8',
+                    timeout,
+                  }),
+                ),
               'volume',
               sentinel,
               invocation,

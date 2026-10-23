@@ -6,6 +6,7 @@ import { matchingPasswords, runPty } from './cli-process-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import { requireDeploymentObservationReady } from './deployment-observer-fixture.ts';
 
 export async function waitForDeployment(deployment: Deployment) {
   // Only readiness polling; never recreate a failed deployment to obtain success.
@@ -20,6 +21,7 @@ export async function waitForDeployment(deployment: Deployment) {
       { timeout: 30_000 },
     )
     .toEqual({ status: 200, body: { status: 'ok' } });
+  requireDeploymentObservationReady(deployment.observation);
 }
 
 export async function registerDeploymentEmployee(

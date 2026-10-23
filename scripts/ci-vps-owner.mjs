@@ -265,6 +265,9 @@ async function prepare() {
     'scripts/probe-browser-receipt.mjs',
     'scripts/docker-proxy-environment.mjs',
     'scripts/docker-build-diagnostics.mjs',
+    'scripts/verification-submissions.mjs',
+    'scripts/verification-submission-storage.mjs',
+    'scripts/docker-command.mjs',
     'scripts/ci-vps-units.mjs',
   ];
   const archive = spawnSync('git', ['archive', '--format=tar', sha, ...files], {
