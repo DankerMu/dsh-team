@@ -162,6 +162,9 @@ it.each([
   { exit: '125', declared: 137, status: 125, state: 'unconfirmed' },
   { exit: 'signal', declared: 137, status: null, state: 'unconfirmed' },
   { exit: 'spawn-error', declared: 137, status: null, state: 'unconfirmed' },
+  // Synthetic collector results: the declared status alone cannot mask a failed or signalled CLI.
+  { exit: '137-with-error', declared: 137, status: 137, state: 'unconfirmed' },
+  { exit: '137-with-signal', declared: 137, status: 137, state: 'unconfirmed' },
 ])(
   'settles a mutation exit $exit only when it is the caller-declared status $declared',
   async ({ exit, declared, status, state }) => {
@@ -169,7 +172,14 @@ it.each([
       const commandModule = new URL('./docker-command.ts', import.meta.url).href;
       const behavior =
         exit === 'signal' ? "process.kill(process.pid,'SIGKILL')" : `process.exit(${exit})`;
-      // The bounded Web command seam used by the OOM pressure exec, with a real child outcome.
+      const synthetic =
+        exit === '137-with-error'
+          ? "({status:137,stdout:'',stderr:'',error:Object.assign(new Error('x'),{code:'ETIMEDOUT'})})"
+          : exit === '137-with-signal'
+            ? "({status:137,stdout:'',stderr:'',signal:'SIGKILL'})"
+            : undefined;
+      // The bounded Web command seam used by the OOM pressure exec, with a real child outcome
+      // (or a synthetic collector result for the 137-with-* rows).
       const writer = spawnSync(
         process.execPath,
         [
@@ -179,7 +189,7 @@ it.each([
 import {createDockerCommands} from ${JSON.stringify(commandModule)};
 const file=${JSON.stringify(exit === 'spawn-error' ? '/dsh-team-absent-executable' : process.execPath)};
 const {command}=createDockerCommands(process.cwd(),process.cwd(),true,(args,timeout)=>
-  spawnSync(file,['-e',${JSON.stringify(behavior)}],{encoding:'utf8',timeout,killSignal:'SIGKILL'}));
+  ${synthetic ?? `spawnSync(file,['-e',${JSON.stringify(behavior)}],{encoding:'utf8',timeout,killSignal:'SIGKILL'})`});
 const result=command(['exec','owned-container','python3'],2000,${String(declared)});
 process.stdout.write(JSON.stringify({status:result.status})+'\\n');`,
         ],
