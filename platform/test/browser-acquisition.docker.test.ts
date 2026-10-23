@@ -47,6 +47,12 @@ async function stopDriver(driver: ChildProcess, exited: Promise<unknown>) {
   }
 }
 
+// Setuid sg runs glibc secure-exec, which strips TMPDIR; restore it after sg for the driver.
+function restoreTemporaryDirectory(environment: NodeJS.ProcessEnv) {
+  const value = environment.TMPDIR;
+  return value === undefined ? [] : ['/usr/bin/env', `TMPDIR=${value}`];
+}
+
 it.each(
   ['network-before-id', 'network-after-id-before-container', 'container-before-id'].flatMap(
     (phase) => ['driver', 'cgroup'].map((termination) => ({ phase, termination })),
@@ -149,7 +155,7 @@ run().catch(()=>{process.exitCode=1;});
               '/usr/bin/sg',
               'docker',
               '-c',
-              [process.execPath, ...argumentsForDriver]
+              [...restoreTemporaryDirectory(environment), process.execPath, ...argumentsForDriver]
                 .map((value) => `'${value.replaceAll("'", "'\\''")}'`)
                 .join(' '),
             ],
