@@ -8,7 +8,7 @@
 
 ## 2. Verification
 
-- [ ] 2.1 Run the inputs and expected outputs in design "Verification": Darwin sequential and 4-concurrent runs; Linux container 4 concurrent and 6 concurrent + 8 burners, full file, at least 10 rounds per tier, zero readiness-stage failures, every other failure listed, per-test durations against 20s. Canonical checks; review; exact-head trusted custody `pnpm test:docker` and standalone `pnpm test:deploy`; protected merge.
+- [x] 2.1 Run the inputs and expected outputs in design "Verification": Darwin sequential and 4-concurrent runs; Linux container 4 concurrent and 6 concurrent + 8 burners, full file, at least 10 rounds per tier, zero readiness-stage failures, every other failure listed, per-test durations against 20s. Canonical checks; review; exact-head trusted custody `pnpm test:docker` and standalone `pnpm test:deploy`; protected merge.
 
 ## Risk packs
 
