@@ -2,9 +2,9 @@
 
 ## 1. Bounded readiness
 
-- [ ] 1.1 Add a local atomic `publish` to the generated leaf script (`.pending` at mode 0600, then rename) and use it for `child-ready.json` and `group-member.json` (design decision 1).
-- [ ] 1.2 Add one readiness helper with leaf-record, sentinel-file and `fixture-begin` predicates, readiness-first polling at 50ms, deadlines of 5000ms from `start()` (shared with `fixture-begin`) and 2000ms for the sentinel, fail-fast on `result.json`, owner `ESRCH` or sentinel exit, and fixed cause tokens ahead of `terminalEvidence` (decisions 2–4). Replace every listed readiness `vi.waitFor` (`:47`, `:223`, `:279`, `:296`, `:304`, `:356`, `:364`, `:395`).
-- [ ] 1.3 Add the `early-exit` mode and its fail-fast regression with the exact expectations in decision 5. Observe RED with the old wait first, then GREEN.
+- [x] 1.1 Add a local atomic `publish` to the generated leaf script (`.pending` at mode 0600, then rename) and use it for `child-ready.json` and `group-member.json` (design decision 1).
+- [x] 1.2 Add one readiness helper with leaf-record, sentinel-file and `fixture-begin` predicates, readiness-first polling at 50ms, deadlines of 5000ms from `start()` (shared with `fixture-begin`) and 2000ms for the sentinel, fail-fast on `result.json`, owner `ESRCH` or sentinel exit, and fixed cause tokens ahead of `terminalEvidence` (decisions 2–4). Replace every listed readiness `vi.waitFor` (`:47`, `:223`, `:279`, `:296`, `:304`, `:356`, `:364`, `:395`).
+- [x] 1.3 Add the `early-exit` mode and its fail-fast regression with the exact expectations in decision 5. Observe RED with the old wait first, then GREEN.
 
 ## 2. Verification
 

@@ -39,7 +39,8 @@ type CustodyMode =
   | 'group-observation-transient'
   | 'group-observation-invalid'
   | 'post-close-member'
-  | 'past-expiry-member';
+  | 'past-expiry-member'
+  | 'early-exit';
 
 // The leaf of a member mode publishes the past-expiry member identity here before readiness.
 export const GROUP_MEMBER_RECORD = 'group-member.json';
@@ -131,7 +132,7 @@ process.kill=(pid,signal)=>{
     `import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {readFileSync,writeFileSync,watch,existsSync} from 'node:fs';
+import {readFileSync,renameSync,writeFileSync,watch,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {processBirth} from './scripts/probe-browser-native.mjs';
 const mode=${JSON.stringify(mode)};
@@ -147,6 +148,8 @@ assert.equal(process.env.SSH_AUTH_SOCK,undefined);
 assert.equal(process.env.HTTP_PROXY,${mode === 'fail' ? JSON.stringify(CUSTODY_PROXY) : 'undefined'});
 const temporary=process.env.TMPDIR;
 const release=join(temporary,'release');
+// Readers poll these records, so each appears complete or not at all.
+const publish=(name,value)=>{const path=join(temporary,name);writeFileSync(path+'.pending',JSON.stringify(value),{mode:0o600});renameSync(path+'.pending',path);};
 // One group signal plus pnpm's native forwarding may deliver SIGINT twice.
 // The post-close member outlives this leaf's exit, without being awaited, for a few hundred ms.
 process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')member(500);process.exitCode=27;process.exit(27);});
@@ -156,9 +159,11 @@ const watcher=['hold','post-close-member','past-expiry-member'].includes(mode)?w
 if(mode==='past-expiry-member'){
   const retained=member(30000);
   await once(retained,'spawn');
-  writeFileSync(join(temporary,${JSON.stringify(GROUP_MEMBER_RECORD)}),JSON.stringify({pid:retained.pid,birth:await processBirth(retained.pid)}));
+  publish(${JSON.stringify(GROUP_MEMBER_RECORD)},{pid:retained.pid,birth:await processBirth(retained.pid)});
 }
-writeFileSync(join(temporary,'child-ready.json'),JSON.stringify({pid:process.pid,birth:await processBirth(process.pid)}));
+// The early-exit leaf ends before readiness, so readiness waits must fail fast.
+if(mode==='early-exit')process.exit(23);
+publish('child-ready.json',{pid:process.pid,birth:await processBirth(process.pid)});
 process.stdout.write('fixture-begin\\n');
 if(watcher){await released;watcher.close();}
 if(mode==='output-failed')process.stdout.write(Buffer.alloc(8192,120));

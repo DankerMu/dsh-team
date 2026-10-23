@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
 import {
@@ -33,20 +34,98 @@ function terminalEvidence(fixture: CustodyFixture, invocation: string, stderr: s
   })}`;
 }
 
-async function cancelHeldCommand(fixture: CustodyFixture, expected: Record<string, unknown>) {
-  const started = await fixture.start();
+// Loaded #324 maxima: leaf readiness 1799ms after start() returns and sentinel readiness 183ms;
+// fixture-begin follows the leaf within 82ms and shares its deadline. Both fit the 20s test bound.
+const LEAF_READINESS_MS = 5000;
+const SENTINEL_READINESS_MS = 2000;
+
+type ReadinessCause = 'terminal-published' | 'owner-absent' | 'sentinel-exited';
+
+// Readiness is checked before each fail-fast condition; failures start with a fixed cause token.
+async function awaitReadiness<T>(
+  deadline: number,
+  ready: () => T | undefined,
+  ended: () => ReadinessCause | undefined,
+  evidence: (cause: string) => string = (cause) => cause,
+): Promise<T> {
+  for (;;) {
+    const value = ready();
+    if (value !== undefined) return value;
+    const cause = ended() ?? (Date.now() >= deadline ? 'readiness-deadline' : undefined);
+    if (cause !== undefined) throw new Error(evidence(cause));
+    await delay(50);
+  }
+}
+
+// The leaf publishes atomically; only a complete birth identity counts as ready.
+function leafRecord(temporary: string) {
+  const path = join(temporary, 'child-ready.json');
+  if (!existsSync(path)) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { pid, birth } = value as Record<string, unknown>;
+  return typeof pid === 'number' && typeof birth === 'string' ? { pid, birth } : undefined;
+}
+
+// Call immediately after the start returns: its leaf deadline is measured from there.
+function issuedInvocation(
+  fixture: CustodyFixture,
+  started: { status: number | null; stdout: string; stderr: string },
+) {
+  const deadline = Date.now() + LEAF_READINESS_MS;
   expect(started.status, started.stderr).toBe(0);
   const invocation = record(JSON.parse(started.stdout) as unknown).invocation;
   if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
   const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
-  const manifest = record(
-    JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as unknown,
-  );
-  if (typeof manifest.temporary !== 'string') throw new Error('Missing owned temporary root');
+  const manifestPath = join(directory, 'manifest.json');
+  const original = readFileSync(manifestPath, 'utf8');
+  const manifest = record(JSON.parse(original) as unknown);
   const temporary = manifest.temporary;
-  await vi.waitFor(() => {
-    expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
-  });
+  const ownerPid = record(manifest.owner).pid;
+  if (typeof temporary !== 'string') throw new Error('Missing owned temporary root');
+  if (typeof ownerPid !== 'number') throw new Error('Missing owner identity');
+  const ended = (): ReadinessCause | undefined => {
+    if (existsSync(join(directory, 'result.json'))) return 'terminal-published';
+    try {
+      process.kill(ownerPid, 0);
+    } catch (error) {
+      // Only ESRCH is absence; any other observation error leaves the wait running.
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
+        return 'owner-absent';
+    }
+    return undefined;
+  };
+  const awaitIssued = <T>(ready: () => T | undefined) =>
+    awaitReadiness(deadline, ready, ended, (cause) =>
+      terminalEvidence(fixture, invocation, `${cause} `),
+    );
+  const stdout = join(directory, 'stdout.log');
+  return {
+    invocation,
+    directory,
+    manifestPath,
+    original,
+    manifest,
+    temporary,
+    leafReady: () => awaitIssued(() => leafRecord(temporary)),
+    outputBegun: () =>
+      awaitIssued(() =>
+        existsSync(stdout) && readFileSync(stdout, 'utf8').includes('fixture-begin\n')
+          ? true
+          : undefined,
+      ),
+  };
+}
+
+async function cancelHeldCommand(fixture: CustodyFixture, expected: Record<string, unknown>) {
+  const { invocation, temporary, leafReady } = issuedInvocation(fixture, await fixture.start());
+  await leafReady();
   const cancelled = fixture.command(['cancel', invocation], true);
   expect(cancelled.status, cancelled.stderr).toBe(0);
   expect(JSON.parse(cancelled.stdout) as unknown).toMatchObject({
@@ -208,27 +287,9 @@ it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-recor
   'refuses changed %s without interrupting owned live work',
   async (fault) => {
     await withTrustedDockerFixture('hold', async (fixture) => {
-      const started = await fixture.start();
-      expect(started.status, started.stderr).toBe(0);
-      const startValue: unknown = JSON.parse(started.stdout);
-      const invocation = record(startValue).invocation;
-      if (typeof invocation !== 'string') throw new Error('Missing invocation identity');
-      const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
-      const manifestPath = join(directory, 'manifest.json');
-      const original = readFileSync(manifestPath, 'utf8');
-      const manifestValue: unknown = JSON.parse(original);
-      const manifest = record(manifestValue);
-      const temporary = manifest.temporary;
-      if (typeof temporary !== 'string') throw new Error('Missing owned temporary root');
-      await vi.waitFor(() => {
-        expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
-      });
-      const readyValue: unknown = JSON.parse(
-        readFileSync(join(temporary, 'child-ready.json'), 'utf8'),
-      );
-      const ready = record(readyValue);
-      if (typeof ready.pid !== 'number' || typeof ready.birth !== 'string')
-        throw new Error('Missing child birth identity');
+      const issued = issuedInvocation(fixture, await fixture.start());
+      const { invocation, directory, manifestPath, original, manifest, temporary } = issued;
+      const ready = await issued.leafReady();
       try {
         if (fault === 'record-permissions') chmodSync(manifestPath, 0o644);
         else if (fault === 'malformed-record') writeFileSync(manifestPath, '{not-valid-json');
@@ -276,34 +337,21 @@ it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-recor
 it('survives loss of the launching observer group and reconnects to the same real failed invocation', async () => {
   await withTrustedDockerFixture('hold', async (fixture) => {
     const sentinel = await fixture.startSentinel();
-    await vi.waitFor(() => {
-      expect(existsSync(sentinel.ready)).toBe(true);
-    });
+    await awaitReadiness(
+      Date.now() + SENTINEL_READINESS_MS,
+      () => (existsSync(sentinel.ready) ? true : undefined),
+      () =>
+        fixture.observeProcess(sentinel.identity.pid) === sentinel.identity.birth
+          ? undefined
+          : 'sentinel-exited',
+    );
     const observation = await fixture.startObserved();
-    expect(observation.started.status, observation.started.stderr).toBe(0);
-    const startedValue: unknown = JSON.parse(observation.started.stdout);
-    const started = record(startedValue);
-    const invocation = started.invocation;
-    const owner = record(started.owner);
-    if (typeof invocation !== 'string' || typeof owner.pid !== 'number')
-      throw new Error('Missing owner identity');
-    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
-    const manifestValue: unknown = JSON.parse(
-      readFileSync(join(directory, 'manifest.json'), 'utf8'),
-    );
-    const temporary = record(manifestValue).temporary;
-    if (typeof temporary !== 'string') throw new Error('Missing owned temporary root');
-    await vi.waitFor(() => {
-      expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
-    });
-    const readyValue: unknown = JSON.parse(
-      readFileSync(join(temporary, 'child-ready.json'), 'utf8'),
-    );
-    const ready = record(readyValue);
-    if (typeof ready.pid !== 'number') throw new Error('Missing live child identity');
-    await vi.waitFor(() => {
-      expect(readFileSync(join(directory, 'stdout.log'), 'utf8')).toContain('fixture-begin\n');
-    });
+    const issued = issuedInvocation(fixture, observation.started);
+    const { invocation, temporary } = issued;
+    const owner = record(record(JSON.parse(observation.started.stdout) as unknown).owner);
+    if (typeof owner.pid !== 'number') throw new Error('Missing owner identity');
+    const ready = await issued.leafReady();
+    await issued.outputBegun();
 
     await observation.disconnect();
 
@@ -342,28 +390,10 @@ it('survives loss of the launching observer group and reconnects to the same rea
 
 it('reports lost owner authority as unknown while its child is live and refuses cancellation or takeover', async () => {
   await withTrustedDockerFixture('hold', async (fixture) => {
-    const started = await fixture.start();
-    expect(started.status, started.stderr).toBe(0);
-    const value: unknown = JSON.parse(started.stdout);
-    const invocation = record(value).invocation;
-    if (typeof invocation !== 'string') throw new Error('Missing invocation identity');
-    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
-    const manifestValue: unknown = JSON.parse(
-      readFileSync(join(directory, 'manifest.json'), 'utf8'),
-    );
-    const temporary = record(manifestValue).temporary;
-    if (typeof temporary !== 'string') throw new Error('Missing owned temporary root');
-    await vi.waitFor(() => {
-      expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
-    });
-    const readyValue: unknown = JSON.parse(
-      readFileSync(join(temporary, 'child-ready.json'), 'utf8'),
-    );
-    const ready = record(readyValue);
-    if (typeof ready.pid !== 'number') throw new Error('Missing child identity');
-    await vi.waitFor(() => {
-      expect(readFileSync(join(directory, 'stdout.log'), 'utf8')).toContain('fixture-begin\n');
-    });
+    const issued = issuedInvocation(fixture, await fixture.start());
+    const { invocation, directory } = issued;
+    const ready = await issued.leafReady();
+    await issued.outputBegun();
 
     await fixture.killOwner(invocation);
 
@@ -379,26 +409,38 @@ it('reports lost owner authority as unknown while its child is live and refuses 
   });
 }, 20_000);
 
+it('fails a readiness wait at once with its cause when the leaf exits before readiness', async () => {
+  await withTrustedDockerFixture('early-exit', async (fixture) => {
+    const started = await fixture.start();
+    const since = Date.now();
+    const { invocation, leafReady } = issuedInvocation(fixture, started);
+
+    const waited = leafReady();
+
+    await expect(waited).rejects.toThrow(/^(terminal-published|owner-absent) /);
+    expect(Date.now() - since).toBeLessThan(LEAF_READINESS_MS);
+    await vi.waitFor(
+      () => {
+        const result = fixture.command(['status', invocation]);
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout) as unknown).toMatchObject({
+          invocation,
+          state: 'failed',
+          command: { exitCode: 23, signal: null, settled: true },
+          interruption: 'none',
+          cleanup: { state: 'confirmed' },
+        });
+      },
+      { timeout: 10_000, interval: 50 },
+    );
+  });
+}, 20_000);
+
 it('cancels the actual pnpm child tree and preserves the terminal result on late cancellation', async () => {
   await withTrustedDockerFixture('hold', async (fixture) => {
     const sentinel = await fixture.startSentinel();
-    const started = await fixture.start();
-    expect(started.status, started.stderr).toBe(0);
-    const invocation = record(JSON.parse(started.stdout) as unknown).invocation;
-    if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
-    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
-    const manifest = record(
-      JSON.parse(readFileSync(join(directory, 'manifest.json'), 'utf8')) as unknown,
-    );
-    if (typeof manifest.temporary !== 'string') throw new Error('Missing owned temporary root');
-    const temporary = manifest.temporary;
-    await vi.waitFor(() => {
-      expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
-    });
-    const leaf = record(
-      JSON.parse(readFileSync(join(temporary, 'child-ready.json'), 'utf8')) as unknown,
-    );
-    if (typeof leaf.pid !== 'number') throw new Error('Missing owned leaf identity');
+    const { invocation, temporary, leafReady } = issuedInvocation(fixture, await fixture.start());
+    const leaf = await leafReady();
     expect(fixture.observeProcess(leaf.pid)).toBe(leaf.birth);
 
     const cancelled = fixture.command(['cancel', invocation], true);
