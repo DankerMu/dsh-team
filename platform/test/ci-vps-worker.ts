@@ -22,6 +22,8 @@ if (
 )
   throw new Error('Trusted nonroot VPS invocation required');
 const id = invocation ?? '';
+// Imported browser-rescue clients share this validated host-local transport context.
+process.env.DSH_TEAM_CI_INVOCATION = id;
 const root = join(homedir(), '.local/share/dsh-team/ci', id);
 const unit = `dsh-team-ci-${id}-run`;
 const source = join(root, 'checkout');
@@ -166,11 +168,17 @@ async function settle(facts: PhaseFacts) {
   });
 }
 
-function command(binary: string, args: string[], cwd = source, timeout = 600_000) {
+function command(
+  binary: string,
+  args: string[],
+  env: NodeJS.ProcessEnv = environment,
+  cwd = source,
+  timeout = 600_000,
+) {
   // Preparation output stays bounded in memory and is discarded, never logged.
   const result = spawnSync(binary, args, {
     cwd,
-    env: environment,
+    env,
     encoding: 'utf8',
     timeout,
     maxBuffer: 16_777_216,
@@ -195,15 +203,22 @@ async function admit(approved: VpsApproval) {
 
 async function checkout(approved: VpsApproval) {
   await enter('checkout');
+  // Read once: only these git child environments carry the validated host-local transport, never
+  // git arguments/configuration; install, build and driver keep the proxy-free environment.
+  const transport = { ...environment, ...dockerProxyEnvironment() };
   await mkdir(source, { mode: 0o700 });
   await mkdir(temporary, { mode: 0o700 });
-  command('git', ['init', '--quiet']);
-  command('git', ['remote', 'add', 'origin', 'https://github.com/DankerMu/dsh-team.git']);
-  command('git', ['fetch', '--quiet', '--depth=1', 'origin', approved.sha]);
-  command('git', ['checkout', '--quiet', '--detach', 'FETCH_HEAD']);
+  command('git', ['init', '--quiet'], transport);
+  command(
+    'git',
+    ['remote', 'add', 'origin', 'https://github.com/DankerMu/dsh-team.git'],
+    transport,
+  );
+  command('git', ['fetch', '--quiet', '--depth=1', 'origin', approved.sha], transport);
+  command('git', ['checkout', '--quiet', '--detach', 'FETCH_HEAD'], transport);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], {
     cwd: source,
-    env: environment,
+    env: transport,
     encoding: 'utf8',
   });
   const facts = spawnFacts(head);

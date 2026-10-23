@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -56,10 +59,20 @@ export type WorkerMode =
 
 type ExecutionReplacement = { text: string; mode: number } | 'absent' | 'symlink';
 
+/**
+ * Trusted host-local proxy source. `tunnel` routes the checkout to real git through an owned
+ * loopback CONNECT recorder; the other kinds keep the owned executable fakes.
+ */
+type HostProxy = 'fields' | 'invalid-url' | 'public-mode' | 'tunnel';
+
 interface WorkerRun {
   finalize?: boolean;
   execution?: ExecutionReplacement;
+  hostProxy?: HostProxy;
 }
+
+// Real git is only admitted behind the recorder; it is never routed through PATH lookup.
+const realGit = '/usr/bin/git';
 
 interface Receipt {
   text: string;
@@ -132,6 +145,128 @@ async function survives(pidFile: string) {
   return true;
 }
 
+/** Records each CONNECT target, then refuses the tunnel so nothing leaves loopback. */
+async function connectRecorder() {
+  const tunnels: string[] = [];
+  const server = createServer();
+  server.on('connect', (request, socket) => {
+    tunnels.push(request.url ?? '');
+    // A client reset after refusal is still a recorded refusal, not a fixture crash.
+    socket.on('error', () => {
+      socket.destroy();
+    });
+    socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  // A TCP listener on an IP literal always reports an AddressInfo.
+  const { port } = server.address() as AddressInfo;
+  return {
+    tunnels,
+    port,
+    close: () =>
+      new Promise<void>((settle) => {
+        server.close(() => {
+          settle();
+        });
+      }),
+  };
+}
+
+/** Writes the private host-local source exactly as an operator would install it. */
+async function installHostProxy(
+  root: string,
+  kind: HostProxy | undefined,
+  canary: string,
+  port: number | undefined,
+) {
+  if (kind === undefined) return undefined;
+  if (kind === 'tunnel' && !(await exists(realGit)))
+    throw new Error('Real git is required at /usr/bin/git');
+  const credential = `verifier:${canary}`;
+  const fields =
+    kind === 'invalid-url'
+      ? { HTTPS_PROXY: `http://${credential}@${canary}.invalid:3128` }
+      : {
+          HTTPS_PROXY: `http://${credential}@127.0.0.1:${String(port ?? 9)}`,
+          NO_PROXY: kind === 'tunnel' ? '' : 'localhost',
+        };
+  await writeFile(join(root, '.config/dsh-team/docker-proxy.json'), JSON.stringify(fields), {
+    mode: kind === 'public-mode' ? 0o644 : 0o600,
+  });
+  return fields;
+}
+
+/** Installs the host-local source; `tunnel` also starts the recorder and admits real git. */
+async function hostTransport(root: string, kind: HostProxy | undefined, canary: string) {
+  const recorder = kind === 'tunnel' ? await connectRecorder() : undefined;
+  try {
+    const fields = await installHostProxy(root, kind, canary, recorder?.port);
+    return {
+      fields,
+      git: recorder ? realGit : undefined,
+      // Network fence: real git may fetch only through the owned recorder, never directly.
+      fence: recorder ? (fields?.HTTPS_PROXY ?? null) : null,
+      tunnels: recorder?.tunnels ?? [],
+      close: async () => {
+        await recorder?.close();
+      },
+    };
+  } catch (error) {
+    await recorder?.close();
+    throw error;
+  }
+}
+
+interface Routes {
+  git: string | undefined;
+  absent: string;
+  bin: string;
+  fence: string | null;
+}
+
+/** Only the host platform and the external executable boundary are adapted. */
+async function writePreload(root: string, mode: WorkerMode, selected: Routes) {
+  const routes = {
+    git:
+      selected.git ??
+      (mode === 'checkout-spawn-error' ? selected.absent : join(selected.bin, 'git')),
+    pnpm: join(selected.bin, 'pnpm'),
+    systemctl: join(selected.bin, 'systemctl'),
+  };
+  const preload = join(root, 'host.mjs');
+  await writeFile(
+    preload,
+    `import cp from 'node:child_process';import os from 'node:os';import {syncBuiltinESMExports} from 'node:module';
+Object.defineProperty(process,'platform',{value:'linux'});os.platform=()=>'linux';
+const routes=${JSON.stringify(routes)};const original=cp.spawnSync;
+// Fixture-only deadline compression for the build step; the worker still declares its own value.
+const shorten=${JSON.stringify(mode === 'build-timeout')};
+const fence=${JSON.stringify(selected.fence)};
+cp.spawnSync=(binary,args,options)=>fence!==null&&binary==='git'&&args[0]==='fetch'&&options?.env?.HTTPS_PROXY!==fence
+ ?original(process.execPath,['-e','process.exit(97)'],options)
+ :original(Object.hasOwn(routes,binary)?routes[binary]:binary,args,shorten&&binary==='pnpm'&&args[0]==='build'?{...options,timeout:200}:options);
+syncBuiltinESMExports();`,
+  );
+  return preload;
+}
+
+/** Projects each fixture-owned call record to its name, arguments and proxy-named environment. */
+function parseCalls(text: string) {
+  return text
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      const value = JSON.parse(line) as {
+        name: string;
+        args: string[];
+        env: Record<string, string>;
+      };
+      const proxy = Object.entries(value.env).filter(([name]) => /proxy/i.test(name));
+      return { name: value.name, args: value.args, proxy: Object.fromEntries(proxy) };
+    });
+}
+
 /** Runs one real worker entry in its own process group; interrupt kills that whole group. */
 async function runEntry(
   args: string[],
@@ -198,7 +333,9 @@ export async function runWorkerScenario(mode: WorkerMode, options: WorkerRun = {
     path: `absent-${randomUUID()}`,
     proxy: `http://proxy-${randomUUID()}.invalid:3128`,
     key: `key-${randomUUID()}`,
+    hostProxy: `host-${randomUUID()}`,
   };
+  let transport: Awaited<ReturnType<typeof hostTransport>> | undefined;
   try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await mkdir(bin, { recursive: true });
@@ -210,6 +347,7 @@ export async function runWorkerScenario(mode: WorkerMode, options: WorkerRun = {
     for (const name of ['git', 'pnpm', 'systemctl'])
       await symlink(join(root, 'tool.cjs'), join(bin, name));
     await writeFile(join(root, 'fixture.json'), JSON.stringify({ mode, ...canaries }));
+    transport = await hostTransport(root, options.hostProxy, canaries.hostProxy);
     const expired = mode === 'admission-expired';
     await writeFile(
       join(directory, 'approval.json'),
@@ -234,23 +372,12 @@ export async function runWorkerScenario(mode: WorkerMode, options: WorkerRun = {
     if (mode === 'checkout-unknown') await mkdir(join(directory, 'checkout'));
     if (mode === 'admission-cancelled')
       await writeFile(join(directory, 'cancel'), '', { mode: 0o600 });
-    const routes = {
-      git: mode === 'checkout-spawn-error' ? join(root, canaries.path) : join(bin, 'git'),
-      pnpm: join(bin, 'pnpm'),
-      systemctl: join(bin, 'systemctl'),
-    };
-    const preload = join(root, 'host.mjs');
-    // Only the host platform and the external executable boundary are adapted.
-    await writeFile(
-      preload,
-      `import cp from 'node:child_process';import {syncBuiltinESMExports} from 'node:module';
-Object.defineProperty(process,'platform',{value:'linux'});
-const routes=${JSON.stringify(routes)};const original=cp.spawnSync;
-// Fixture-only deadline compression for the build step; the worker still declares its own value.
-const shorten=${JSON.stringify(mode === 'build-timeout')};
-cp.spawnSync=(binary,args,options)=>original(Object.hasOwn(routes,binary)?routes[binary]:binary,args,shorten&&binary==='pnpm'&&args[0]==='build'?{...options,timeout:200}:options);
-syncBuiltinESMExports();`,
-    );
+    const preload = await writePreload(root, mode, {
+      git: transport.git,
+      absent: join(root, canaries.path),
+      bin,
+      fence: transport.fence,
+    });
     const env = {
       HOME: root,
       PATH: '/usr/bin:/bin',
@@ -275,6 +402,9 @@ syncBuiltinESMExports();`,
     const calls = (await optionalText(join(root, 'calls.jsonl'))) ?? '';
     return {
       canaries,
+      hostProxy: transport.fields,
+      tunnels: transport.tunnels,
+      gitConfig: await optionalText(join(directory, 'checkout/.git/config')),
       executed,
       finalized,
       survivor,
@@ -282,16 +412,11 @@ syncBuiltinESMExports();`,
       execution,
       final: await receipt(join(directory, 'final.json')),
       log: await optionalText(join(directory, 'execution.log')),
-      calls: calls
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => {
-          const value = JSON.parse(line) as { name: string; args: string[] }; // Fixture-owned call record.
-          return { name: value.name, args: value.args };
-        }),
+      calls: parseCalls(calls),
       callText: calls,
     };
   } finally {
+    await transport?.close();
     await rm(root, { recursive: true, force: true });
   }
 }

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { chmod, lstat, mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import net from 'node:net';
-import { arch, platform, tmpdir } from 'node:os';
+import { arch, homedir, platform, tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { byteListener } from './byte-listener.mjs';
@@ -328,9 +328,21 @@ export async function rescueChrome(path, expectedNonce) {
 }
 
 async function createWorker(path, args, canceled, nonce) {
+  const transport = dockerEnvironment();
+  const invocation = process.env.DSH_TEAM_CI_INVOCATION;
+  // Restricted producers resolve their own host-local source, not a stale credential handoff.
+  const environment =
+    invocation === undefined
+      ? transport
+      : {
+          PATH: transport.PATH,
+          DOCKER_CONFIG: transport.DOCKER_CONFIG,
+          HOME: homedir(),
+          DSH_TEAM_CI_INVOCATION: invocation,
+        };
   const worker = spawn(process.execPath, [modulePath, 'create', path], {
     env: {
-      ...dockerEnvironment(),
+      ...environment,
       DSH_TEAM_BROWSER_DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
     },
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
