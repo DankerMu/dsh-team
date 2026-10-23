@@ -13,7 +13,7 @@
 
 ## 3. Verification and delivery
 
-- [ ] 3.1 Canonical checks; repeated loaded concurrent runs of the custody and audit suites on Darwin and in a Linux container; review; exact-head trusted custody `pnpm test:docker` and standalone `pnpm test:deploy` with independent observation; protected merge.
+- [x] 3.1 Canonical checks; repeated loaded concurrent runs of the custody and audit suites on Darwin and in a Linux container; review; exact-head trusted custody `pnpm test:docker` and standalone `pnpm test:deploy` with independent observation; protected merge.
 
 ## Risk packs
 
