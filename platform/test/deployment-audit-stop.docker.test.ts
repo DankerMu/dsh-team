@@ -206,7 +206,18 @@ it('completes the real audit after an owned graceful platform stop takes twenty 
 it('fails an overdue audit stop after real child closure and still retires its deployment', async () => {
   control.mode = 'timeout';
 
-  await expect(verifyDeployedCredentialPrivacy()).rejects.toThrow('audit-error-retirement');
+  // Success resolves undefined and fails the Error assertion below.
+  const failure: unknown = await verifyDeployedCredentialPrivacy().catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
+  if (!(failure instanceof Error)) throw new Error('Missing overdue audit stop rejection');
+  expect(failure.message).toContain('audit-error-retirement');
+  // The sanitized rejection hides drain/cleanup failures; only setup facts prove them settled.
+  expect(failure).toHaveProperty('setup.cleanup', {
+    deploymentDrain: 'confirmed',
+    resources: 'confirmed',
+    observation: 'confirmed',
+  });
 
   expect(control.elapsed).toBeGreaterThan(30_000);
   expect(control.elapsed).toBeLessThan(60_000);
