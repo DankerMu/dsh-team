@@ -25,7 +25,11 @@ it('retains the genuine early host-admission failure without entering account or
       cause: 'unknown',
     },
     operations: { 'deployment-host-admission': 'failed' },
-    cleanup: { deploymentDrain: 'not-required', resources: 'not-required' },
+    cleanup: {
+      deploymentDrain: 'not-required',
+      resources: 'not-required',
+      observation: 'not-required',
+    },
     evidence: 'retained',
   };
 
@@ -89,7 +93,11 @@ it('keeps the primary admission facts and reports evidence loss when the output 
       cause: 'unknown',
     },
     operations: { 'deployment-host-admission': 'failed' },
-    cleanup: { deploymentDrain: 'not-required', resources: 'not-required' },
+    cleanup: {
+      deploymentDrain: 'not-required',
+      resources: 'not-required',
+      observation: 'not-required',
+    },
     evidence: 'unavailable',
   });
   const exposed = Object.fromEntries(

@@ -41,6 +41,7 @@ A reproduced cause outside these verification-only boundaries requires explicit 
 - More phase boundaries add verification-only maintenance. Keep one typed vocabulary and label stable operations, not incidental internal statements.
 - Sanitization intentionally loses raw causal data. Fixed reason codes cannot claim more than the observed boundary; retained UNKNOWN is preferable to leaking secrets or inventing cause.
 - Cleanup has multiple owners. Preserve their actual outcomes rather than reducing an aggregate to whichever error occurred last.
+- The owners are deployment drainage, invocation resource cleanup and, since #274, deployment observation retirement (`finishDeploymentObservation`). Observation retirement is classified from its own actual result like the others: `not-required` when no observation was created, `confirmed` only after it returns, otherwise `unconfirmed`; it is never inferred from drainage or resource cleanup.
 - Instrumentation can affect timing. A later success qualifies the new candidate only, not historical attribution.
 
 ## Verification and Delivery

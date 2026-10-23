@@ -126,10 +126,11 @@ function deploymentDaemon(cleanupFails: boolean, drainFails = false) {
       const result = inspectPlatform(args, name);
       if (result !== undefined) return result;
     }
-    if (kind === 'image' && images.has(name))
-      return ok(
-        args.includes('{{.Id}}') ? `sha256:${'a'.repeat(64)}\n` : `${images.get(name) ?? ''}\n`,
-      );
+    if (kind === 'image' && images.has(name)) {
+      if (!args.includes('{{.Id}}')) return ok(`${images.get(name) ?? ''}\n`);
+      // Distinct identities prove which built image the observation receives.
+      return ok(`sha256:${(name.endsWith(':platform') ? 'b' : 'a').repeat(64)}\n`);
+    }
     return { status: 1, stdout: '[]\n', stderr: `Error: No such ${kind}: ${name}\n` };
   }
   function removeImage(name: string): DockerCommandResult {
@@ -220,14 +221,20 @@ it.each([
 
     expect(observed).toBeInstanceOf(AggregateError);
     if (!(observed instanceof AggregateError)) throw new Error('Missing lifecycle failure');
-    const failures: unknown[] = observed.errors.flatMap((error: unknown): unknown[] => {
-      if (error instanceof AggregateError && error !== primary) {
-        const members: unknown[] = error.errors;
-        return members;
-      }
-      return [error];
-    });
+    const flatten = (error: unknown): unknown[] => {
+      if (!(error instanceof AggregateError) || error === primary) return [error];
+      const members: unknown[] = error.errors;
+      return members.flatMap(flatten);
+    };
+    const failures = flatten(observed);
     expect(failures).toContain(primary);
+    // Unbound observation retirement is a distinct failure appended after the primary.
+    expect(
+      failures.filter(
+        (error) =>
+          error instanceof Error && error.message === 'Deployment generation was never bound',
+      ),
+    ).toHaveLength(1);
     expect(afterChild).toMatchObject({
       current: 'scenario-preparation',
       lastCompleted: 'health',
@@ -241,7 +248,7 @@ it.each([
     expect(daemon.calls.some((args) => args.includes('up'))).toBe(false);
     const observerCalls = daemon.calls.filter((args) => args[0] === 'observer');
     expect(observerCalls).toEqual([
-      ['observer', `create:sha256:${'a'.repeat(64)}`],
+      ['observer', `create:sha256:${'b'.repeat(64)}`],
       ['observer', 'ready'],
       ['observer', 'finish:false'],
     ]);
@@ -271,6 +278,8 @@ it.each([
         cleanup: {
           deploymentDrain: drainFails ? 'unconfirmed' : 'not-required',
           resources: cleanupFails ? 'unconfirmed' : 'confirmed',
+          // The created observation was never bound, so its own retirement cannot be confirmed.
+          observation: 'unconfirmed',
         },
         evidence: 'retained',
       },
@@ -311,7 +320,11 @@ it('records completed deployment setup separately from actual owned drainage and
     current: null,
     lastCompleted: 'deployment-creation',
     firstFailure: null,
-    cleanup: { deploymentDrain: 'not-required', resources: 'unconfirmed' },
+    cleanup: {
+      deploymentDrain: 'not-required',
+      resources: 'unconfirmed',
+      observation: 'unconfirmed',
+    },
   });
   expect(reports).toEqual([
     {
@@ -331,7 +344,7 @@ it('records completed deployment setup separately from actual owned drainage and
         'local-configuration': 'completed',
         'compose-creation': 'completed',
       },
-      cleanup: { deploymentDrain: 'confirmed', resources: 'confirmed' },
+      cleanup: { deploymentDrain: 'confirmed', resources: 'confirmed', observation: 'confirmed' },
       evidence: 'retained',
     },
   ]);
@@ -340,13 +353,13 @@ it('records completed deployment setup separately from actual owned drainage and
   expect(
     upArgs.flatMap((value, index) => (upArgs[index - 1] === '--file' ? [value] : [])).at(-1),
   ).toBe(SUBSTITUTE_OBSERVER_OVERRIDE);
-  const create = daemon.calls.findIndex((args) => args[1] === `create:sha256:${'a'.repeat(64)}`);
+  const create = daemon.calls.findIndex((args) => args[1] === `create:sha256:${'b'.repeat(64)}`);
   const bind = daemon.calls.findIndex((args) => args[0] === 'observer' && args[1] === 'bind');
   expect(create).toBeGreaterThan(-1);
   expect(create).toBeLessThan(up);
   expect(bind).toBe(up + 1);
   expect(daemon.calls.filter((args) => args[0] === 'observer')).toEqual([
-    ['observer', `create:sha256:${'a'.repeat(64)}`],
+    ['observer', `create:sha256:${'b'.repeat(64)}`],
     ['observer', 'bind'],
     ['observer', 'finish:true'],
   ]);

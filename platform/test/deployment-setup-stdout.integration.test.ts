@@ -87,7 +87,11 @@ it('keeps the primary setup failure available when the default stdout pipe loses
       lastCompleted: null,
       firstFailure: { phase: 'health', code: 'operation-failed', cause: 'unknown' },
       operations: { health: 'failed' },
-      cleanup: { deploymentDrain: 'not-required', resources: 'not-required' },
+      cleanup: {
+        deploymentDrain: 'not-required',
+        resources: 'not-required',
+        observation: 'not-required',
+      },
       evidence: 'unavailable',
     },
     listenersRestored: true,

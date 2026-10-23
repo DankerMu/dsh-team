@@ -20,7 +20,7 @@ export type DeploymentSetupPhase =
 
 type OperationStatus = 'entered' | 'completed' | 'failed';
 type CleanupOutcome = 'not-required' | 'unconfirmed' | 'confirmed';
-type CleanupOwner = 'deploymentDrain' | 'resources';
+type CleanupOwner = 'deploymentDrain' | 'resources' | 'observation';
 interface SetupFailure {
   readonly phase: DeploymentSetupPhase;
   readonly code: 'operation-failed';
@@ -92,6 +92,7 @@ export function createDeploymentSetupEvidence(
   const cleanup: Record<CleanupOwner, CleanupOutcome> = {
     deploymentDrain: 'not-required',
     resources: 'not-required',
+    observation: 'not-required',
   };
   let lastCompleted: DeploymentSetupPhase | null = null;
   let firstFailure: SetupFailure | null = null;

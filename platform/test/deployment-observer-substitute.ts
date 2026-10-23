@@ -38,8 +38,11 @@ export function observerSubstitute(
         throw new Error('Deployment observer parent binding missing');
       record('ready');
     },
-    finishDeploymentObservation(_observation, scenarioSucceeded) {
+    finishDeploymentObservation(observation, scenarioSucceeded) {
       record(`finish:${String(scenarioSucceeded)}`);
+      // Mirror the real retirement precondition: an unbound generation is never confirmed.
+      if (observation.current.bound === undefined)
+        return Promise.reject(new Error('Deployment generation was never bound'));
       return Promise.resolve();
     },
   };

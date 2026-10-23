@@ -156,7 +156,11 @@ it('distinguishes late model configuration rejection from completed administrato
         'administrator-login': 'completed',
         'model-configuration': 'failed',
       },
-      cleanup: { deploymentDrain: 'not-required', resources: 'not-required' },
+      cleanup: {
+        deploymentDrain: 'not-required',
+        resources: 'not-required',
+        observation: 'not-required',
+      },
       evidence: 'retained',
     },
   ]);
@@ -249,7 +253,11 @@ it('completes account setup only after employee registration and keeps cleanup u
     current: null,
     lastCompleted: 'account-configuration',
     firstFailure: null,
-    cleanup: { deploymentDrain: 'not-required', resources: 'unconfirmed' },
+    cleanup: {
+      deploymentDrain: 'not-required',
+      resources: 'unconfirmed',
+      observation: 'not-required',
+    },
   });
   expect(reports).toEqual([
     {
@@ -265,7 +273,11 @@ it('completes account setup only after employee registration and keeps cleanup u
         'model-configuration': 'completed',
         'employee-registration': 'completed',
       },
-      cleanup: { deploymentDrain: 'not-required', resources: 'confirmed' },
+      cleanup: {
+        deploymentDrain: 'not-required',
+        resources: 'confirmed',
+        observation: 'not-required',
+      },
       evidence: 'retained',
     },
   ]);

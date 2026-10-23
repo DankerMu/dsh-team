@@ -271,6 +271,8 @@ export async function withDeployment(
                   (createdObservation) => {
                     state.submitted = true;
                     observation = createdObservation;
+                    // Retirement remains unproved until finishDeploymentObservation itself returns.
+                    setup?.cleanup('observation', 'unconfirmed');
                   },
                   prepare,
                   setup,
@@ -305,6 +307,7 @@ export async function withDeployment(
       if (observation !== undefined) {
         try {
           await finishDeploymentObservation(observation, finalFailures.length === 0);
+          setup?.cleanup('observation', 'confirmed');
         } catch (error) {
           finalFailures.push(error);
         }
