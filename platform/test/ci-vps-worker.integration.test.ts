@@ -49,6 +49,8 @@ it.each<[WorkerMode, Record<string, unknown>]>([
       category: facts.category,
     });
     expect(result.log).toBeUndefined();
+    // Survival is observed only where the fake publishes build.pid (build-timeout); other rows
+    // never start a blocking fake, so this is trivially false for them.
     expect(result.survivor).toBe(false);
     expectPrivateReceipts(result);
     expectNoCanary(result);
@@ -147,8 +149,11 @@ it.each<[WorkerMode, number]>([
     expectPrivateReceipts(result);
     expectNoCanary(result);
     const owner = await runOwnerScenario('valid-execution-failure', result.final?.text);
+    // The owner's accepted host receipt (vps-final.json) carries the worker exitCode exactly.
+    // owner.result.exitCode is the owner's own Actions outcome, which this fixture always fails.
     expect(owner.localFinal).toEqual(final);
-    expect(owner.result).toMatchObject({ cleanupComplete: true });
+    expect(owner.recovery).toMatchObject({ receiptSource: 'observer', cleanupConfirmed: true });
+    expect(owner.result).toMatchObject({ cleanupComplete: true, exitCode: 1 });
     expect(owner.lockTarget).toBeUndefined();
   },
   WORKER_CASE_TIMEOUT,

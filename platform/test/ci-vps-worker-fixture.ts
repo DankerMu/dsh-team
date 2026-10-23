@@ -9,7 +9,7 @@ const worker = resolve(import.meta.dirname, 'ci-vps-worker.ts');
 
 // One owned executable plays git, pnpm and systemctl. It sees only the worker's restricted
 // environment, so its scenario comes from $HOME/fixture.json and its calls go to calls.jsonl.
-const tool = String.raw`const {appendFileSync,readFileSync,writeFileSync}=require('node:fs');
+const tool = String.raw`const {appendFileSync,readFileSync,renameSync,writeFileSync}=require('node:fs');
 const {basename,join}=require('node:path');
 const name=basename(process.argv[1]);const args=process.argv.slice(2);
 if(name==='systemctl')process.stdout.write('LoadState=not-found\n');
@@ -29,7 +29,9 @@ else {
    if(state.mode==='build-signal')process.kill(process.pid,'SIGKILL');
    else if(state.mode==='build-output-limit')process.stdout.write('x'.repeat(17*1024*1024));
    else if(['build-timeout','build-interrupted'].includes(state.mode)){
-    writeFileSync(join(home,'build.pid'),String(process.pid));setInterval(()=>{},1000);
+    // Publish atomically: build.pid existence is the interrupt signal, so it must never be partial.
+    writeFileSync(join(home,'build.pid.tmp'),String(process.pid));renameSync(join(home,'build.pid.tmp'),join(home,'build.pid'));
+    setInterval(()=>{},1000);
    }
   }
  }
@@ -112,11 +114,17 @@ function alive(pid: number) {
   }
 }
 
-/** Bounded absence observation for the blocking fake after its owner settled. */
+/**
+ * Bounded absence observation for the blocking fake after its owner settled. Without a pid file
+ * there is no fake to observe, so the result is trivially false. A pid that is not a decimal
+ * integer above 1 is a fixture error: 0, -1 or 1 would signal a process group or init.
+ */
 async function survives(pidFile: string) {
   const text = await optionalText(pidFile);
   if (text === undefined) return false;
-  const pid = Number(text);
+  const pid = /^[1-9][0-9]*$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(pid) || pid <= 1)
+    throw new Error('Owned build fake published an invalid pid file');
   const until = Date.now() + 5_000;
   while (alive(pid) && Date.now() < until) await delay(50);
   if (!alive(pid)) return false;
