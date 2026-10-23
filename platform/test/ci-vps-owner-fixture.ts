@@ -32,9 +32,11 @@ const host = join(root, 'host');
 const remoteBase = '/home/ubuntu/.local/share/dsh-team/ci';
 const remote = remoteBase + '/' + invocation;
 const own = join(host, invocation);
-const final = mode === 'cleanup-failed'
+// FIXTURE_FINAL carries exact worker-produced final.json bytes when a case supplies them.
+const finalText = process.env.FIXTURE_FINAL ?? JSON.stringify(mode === 'cleanup-failed'
   ? {vpsCleanupComplete: false, failures: ['docker-rescue'], exitCode: 0}
-  : {vpsCleanupComplete: true, failures: [], exitCode: 1};
+  : {vpsCleanupComplete: true, failures: [], exitCode: 1});
+const final = JSON.parse(finalText);
 const event = (kind) => appendFileSync(join(root, 'events.jsonl'), JSON.stringify({kind}) + '\n');
 function output(value) { process.stdout.write(typeof value === 'string' ? value : JSON.stringify(value)); }
 function mappedShell(command) {
@@ -94,8 +96,8 @@ if (name === 'git') {
         if (mode==='observer-oversized') {output(canary.repeat(2048));process.exitCode=0;}
         else if(mode==='observer-signal') process.kill(process.pid,'SIGTERM');
         else if(['valid-execution-failure','cleanup-failed','observer-extra-fields','observer-owner-changed'].includes(mode)) {
-          writeFileSync(join(own,'final.json'),JSON.stringify(final),{mode:0o600});
-          output(mode==='observer-extra-fields'?{...final,private:canary}:final);
+          writeFileSync(join(own,'final.json'),finalText,{mode:0o600});
+          output(mode==='observer-extra-fields'?{...final,private:canary}:finalText);
         } else {event('observer-transport-failed');process.exit(255);}
       } else {
         if(mode==='canonical-unreachable')process.exit(255);
@@ -118,7 +120,7 @@ if (name === 'git') {
       event('owner-checked');mappedShell(command);
     } else if (command.includes('systemctl --user is-active')) output(mode==='cleanup-failed'?'active\n':'inactive\n');
     else if (command.includes(' finalize ')) {
-      if(mode!=='canonical-missing')writeFileSync(join(own,'final.json'),JSON.stringify(final),{mode:0o600});
+      if(mode!=='canonical-missing')writeFileSync(join(own,'final.json'),finalText,{mode:0o600});
       event('canonical-final-written');
       if(mode==='observer-owner-changed')writeFileSync(join(own,'owner'),'another-invocation');
       if(mode==='foreign-lock'){rmSync(join(host,'active'));symlinkSync('foreign-invocation',join(host,'active'));}
@@ -200,7 +202,7 @@ async function absent(path: string): Promise<boolean> {
   }
 }
 
-export async function runOwnerScenario(mode: OwnerScenario) {
+export async function runOwnerScenario(mode: OwnerScenario, hostFinal?: string) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-owner-receipt-')));
   const invocation = randomUUID();
   const canary = randomUUID();
@@ -239,6 +241,7 @@ export async function runOwnerScenario(mode: OwnerScenario) {
           FIXTURE_MODE: mode,
           FIXTURE_INVOCATION: invocation,
           FIXTURE_CANARY: canary,
+          ...(hostFinal === undefined ? {} : { FIXTURE_FINAL: hostFinal }),
         },
         detached: true,
         stdio: ['ignore', 'pipe', 'pipe'],
