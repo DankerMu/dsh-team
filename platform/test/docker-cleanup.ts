@@ -1,6 +1,6 @@
 import { deepStrictEqual } from 'node:assert';
 import { appendFileSync, readFileSync, statSync } from 'node:fs';
-import { isAbsentResource } from './docker-command.ts';
+import { canonicalImageReference, isAbsentResource } from './docker-command.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
 export const OWNER_LABEL = 'dsh-team.test-run';
@@ -94,19 +94,21 @@ export function removeOwned(
   }
   const labels = kind === 'volume' ? '.Labels' : '.Config.Labels';
   const expected = ownership ?? { [OWNER_LABEL]: runId };
+  // One retirement names one object; diagnostics keep the caller's name.
+  const reference = kind === 'image' ? canonicalImageReference(name) : name;
   for (const [label, value] of Object.entries(expected)) {
-    const args = [kind, 'inspect', '--format', `{{ index ${labels} "${label}" }}`, name];
+    const args = [kind, 'inspect', '--format', `{{ index ${labels} "${label}" }}`, reference];
     const result = command(args, 30_000);
-    if (isAbsentResource(result, kind, name)) return;
+    if (isAbsentResource(result, kind, reference)) return;
     if (output(result, args).replace(/\r?\n$/, '') !== value) {
       throw new Error(`Refusing cleanup of ${kind} ${name}: invocation label does not match`);
     }
   }
-  const remove = [kind, 'rm', ...(kind === 'container' ? ['--force'] : []), name];
+  const remove = [kind, 'rm', ...(kind === 'container' ? ['--force'] : []), reference];
   output(command(remove, 30_000), remove);
   if (ownership !== undefined) {
-    const absent = command([kind, 'inspect', name], 30_000);
-    if (!isAbsentResource(absent, kind, name)) {
+    const absent = command([kind, 'inspect', reference], 30_000);
+    if (!isAbsentResource(absent, kind, reference)) {
       throw new Error(`Owned ${kind} remains after cleanup`);
     }
   }

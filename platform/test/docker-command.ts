@@ -206,6 +206,11 @@ export function createDockerCommands(
   };
 }
 
+/** Docker resolves an untagged image name to `<name>:latest` and names its absence that way. */
+export function canonicalImageReference(name: string): string {
+  return name.includes(':') ? name : `${name}:latest`;
+}
+
 /** Only exact-target daemon absence is safe to preserve through Web diagnostic redaction. */
 export function isAbsentResource(
   result: DockerCommandResult,
