@@ -7,6 +7,8 @@ import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import type * as DeploymentModule from './deployment-fixture.ts';
+import { removeRetiredObservationRoot } from './deployment-observer-fixture.ts';
+import type { DeploymentObservation } from './deployment-observer-fixture.ts';
 import { verifyDeployedCredentialPrivacy } from './deployment-privacy-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -21,6 +23,7 @@ const control = vi.hoisted(
     restarted: boolean;
     childClosed: boolean;
     childSignal: string | null;
+    observation: DeploymentObservation | undefined;
   } => ({
     mode: 'slow',
     lifecycle: undefined,
@@ -31,6 +34,7 @@ const control = vi.hoisted(
     restarted: false,
     childClosed: false,
     childSignal: null,
+    observation: undefined,
   }),
 );
 
@@ -139,7 +143,11 @@ vi.mock('./deployment-fixture.ts', async (importOriginal) => {
                 return stopped.value;
               },
             },
-            start,
+            async () => {
+              const deployment = await start();
+              control.observation = deployment.observation;
+              return deployment;
+            },
           );
         },
         prepare,
@@ -159,6 +167,7 @@ beforeEach(() => {
   control.restarted = false;
   control.childClosed = false;
   control.childSignal = null;
+  control.observation = undefined;
 });
 
 afterEach(async () => {
@@ -205,4 +214,8 @@ it('fails an overdue audit stop after real child closure and still retires its d
   expect(control.childClosed).toBe(true);
   expect(control.childSignal).toBe('SIGKILL');
   expect(control.restarted).toBe(false);
+  // Only this asserted controlled failure retires the root it retained as evidence.
+  const observation = control.observation;
+  if (observation === undefined) throw new Error('Deployment observation missing');
+  await removeRetiredObservationRoot(observation);
 });
