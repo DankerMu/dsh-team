@@ -457,7 +457,7 @@ it('keeps a cancelled command unsettled while a same-group member outlives the o
   await withTrustedDockerFixture('past-expiry-member', async (fixture) => {
     const { invocation, temporary } = await cancelHeldCommand(fixture, {
       state: 'unknown',
-      command: { settled: false },
+      command: { exitCode: 27, signal: null, settled: false },
       cleanup: { state: 'unconfirmed', browserExec: null },
     });
 
@@ -504,29 +504,63 @@ it('retains a nonpassing result and refuses partial logs after actual output sto
   });
 }, 20_000);
 
-it('persists the original command outcome when process-group observation is denied', async () => {
-  await withTrustedDockerFixture('group-observation-failed', async (fixture) => {
-    const started = await fixture.start();
-    expect(started.status, started.stderr).toBe(0);
-    const value: unknown = JSON.parse(started.stdout);
-    const invocation = record(value).invocation;
-    if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+// An unsettled group observation preserves the original exit with an identity failure.
+const groupIdentityFailure = {
+  expected: {
+    state: 'unknown',
+    command: { exitCode: 17, signal: null, settled: false },
+    failure: 'identity',
+    cleanup: { state: 'unconfirmed', browserExec: null },
+  },
+  cancelStatus: 1,
+} as const;
 
-    await vi.waitFor(
-      () => {
-        const status = fixture.command(['status', invocation]);
-        expect(status.status, status.stderr).toBe(0);
-        const result: unknown = JSON.parse(status.stdout);
-        expect(result).toMatchObject({
-          state: 'unknown',
-          command: { exitCode: 17, signal: null, settled: false },
-          failure: 'identity',
-          output: { complete: true },
-          cleanup: { state: 'unconfirmed', browserExec: null },
-        });
-      },
-      { timeout: 10_000, interval: 50 },
-    );
-    expect(fixture.command(['cancel', invocation]).status).toBe(1);
-  });
-}, 20_000);
+it.each([
+  {
+    title: 'persists the original command outcome when process-group observation is denied',
+    mode: 'group-observation-failed',
+    ...groupIdentityFailure,
+  },
+  {
+    title: 'records an identity failure at once for a non-EPERM group observation error',
+    mode: 'group-observation-invalid',
+    ...groupIdentityFailure,
+  },
+  {
+    title: 'settles the original command outcome after transiently denied group observations',
+    mode: 'group-observation-transient',
+    expected: {
+      state: 'failed',
+      command: { exitCode: 17, signal: null, settled: true },
+      failure: null,
+      cleanup: { state: 'confirmed', browserExec: null },
+    },
+    cancelStatus: 0,
+  },
+] as const)(
+  '$title',
+  async ({ mode, expected, cancelStatus }) => {
+    await withTrustedDockerFixture(mode, async (fixture) => {
+      const started = await fixture.start();
+      expect(started.status, started.stderr).toBe(0);
+      const value: unknown = JSON.parse(started.stdout);
+      const invocation = record(value).invocation;
+      if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+
+      await vi.waitFor(
+        () => {
+          const status = fixture.command(['status', invocation]);
+          expect(status.status, status.stderr).toBe(0);
+          const result: unknown = JSON.parse(status.stdout);
+          expect(result).toMatchObject({ ...expected, output: { complete: true } });
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+      const cancelled = fixture.command(['cancel', invocation]);
+      expect(cancelled.status, terminalEvidence(fixture, invocation, cancelled.stderr)).toBe(
+        cancelStatus,
+      );
+    });
+  },
+  20_000,
+);

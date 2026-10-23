@@ -36,6 +36,8 @@ type CustodyMode =
   | 'hold'
   | 'output-failed'
   | 'group-observation-failed'
+  | 'group-observation-transient'
+  | 'group-observation-invalid'
   | 'post-close-member'
   | 'past-expiry-member';
 
@@ -83,11 +85,19 @@ function prepareCustodyRepository(
     cpSync(join(sourceRoot, relative), destination);
   }
   const packageValue: unknown = JSON.parse(readFileSync(join(sourceRoot, 'package.json'), 'utf8'));
+  // Count and code of owner kill(-pid, 0) observations failed before deferring to the real call.
+  const deniedGroupObservations = (
+    {
+      'group-observation-failed': ['Infinity', 'EPERM'],
+      'group-observation-transient': ['3', 'EPERM'],
+      'group-observation-invalid': ['1', 'EINVAL'],
+    } as Partial<Record<CustodyMode, [string, string]>>
+  )[mode];
   const verificationScript =
-    mode === 'group-observation-failed'
-      ? 'node --import ./fixture-preload.mjs scripts/trusted-docker-run.mjs'
-      : record(record(packageValue).scripts)['verify:docker'];
-  if (mode === 'group-observation-failed')
+    deniedGroupObservations === undefined
+      ? record(record(packageValue).scripts)['verify:docker']
+      : 'node --import ./fixture-preload.mjs scripts/trusted-docker-run.mjs';
+  if (deniedGroupObservations !== undefined)
     writeFileSync(
       join(repository, 'fixture-preload.mjs'),
       `import childProcess from 'node:child_process';
@@ -100,8 +110,9 @@ childProcess.spawn=(command,args,options)=>{
 };
 syncBuiltinESMExports();
 const kill=process.kill.bind(process);
+let denied=${deniedGroupObservations[0]};
 process.kill=(pid,signal)=>{
-  if(pid<0&&signal===0)throw Object.assign(new Error('owned-group-observation-denied'),{code:'EPERM'});
+  if(pid<0&&signal===0&&denied>0){denied-=1;throw Object.assign(new Error('owned-group-observation-denied'),{code:${JSON.stringify(deniedGroupObservations[1])}});}
   return kill(pid,signal);
 };
 `,
