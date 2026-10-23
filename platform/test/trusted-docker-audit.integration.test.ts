@@ -2,7 +2,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { writeReceipt } from '../../scripts/probe-browser-receipt.mjs';
 import { liveProcessBirth, processBirth } from '../../scripts/probe-browser-native.mjs';
@@ -602,6 +602,41 @@ it.each(['inspect-failed', 'inventory-nonempty'])(
       };
 
       expect(await assess(true, observed)).toEqual({ state: 'unconfirmed', browserExec: null });
+    });
+  },
+);
+
+it.each(['retired', 'foreign-diagnostic', 'present'])(
+  'observes the untagged browser image through its canonical latest reference when %s',
+  async (fault) => {
+    await withAuditReceipt(async ({ pointer, assess, command }) => {
+      const raw: unknown = JSON.parse(await readFile(join(dirname(pointer), 'image.json'), 'utf8'));
+      const image = record(raw);
+      const reference = `${String(image.tag)}:latest`;
+      const inspected: string[] = [];
+      // Docker 29.1.3 names a missing untagged image by its normalised `:latest` reference.
+      const observed: DockerCommand = (args, timeout) => {
+        if (args[0] !== 'image' || args[1] !== 'inspect') return command(args, timeout);
+        const target = String(args.at(-1));
+        inspected.push(target);
+        if (fault === 'present' && target === reference)
+          return { status: 0, stdout: '[{}]\n', stderr: '' };
+        const missing =
+          fault === 'foreign-diagnostic' && target === reference
+            ? `${String(image.tag)}-foreign:latest`
+            : target.includes(':')
+              ? target
+              : `${target}:latest`;
+        return {
+          status: 1,
+          stdout: '',
+          stderr: `Error response from daemon: No such image: ${missing}\n`,
+        };
+      };
+
+      const state = fault === 'retired' ? 'confirmed' : 'unconfirmed';
+      expect(await assess(true, observed)).toEqual({ state, browserExec: null });
+      expect(inspected).toEqual([image.imageId, reference]);
     });
   },
 );

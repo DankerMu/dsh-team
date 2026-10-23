@@ -18,7 +18,9 @@ import {
 } from './trusted-docker-record.mjs';
 
 function requireAbsent(command, kind, target) {
-  if (!isAbsentResource(command([kind, 'inspect', target], 30_000), kind, target))
+  // Docker names a missing untagged image by its normalised `:latest` reference.
+  const reference = kind === 'image' && !target.includes(':') ? `${target}:latest` : target;
+  if (!isAbsentResource(command([kind, 'inspect', reference], 30_000), kind, reference))
     throw new Error('Trusted Docker resource retirement unconfirmed');
 }
 

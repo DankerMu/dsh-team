@@ -40,6 +40,8 @@ Group interruption can leave daemon-side creation uncertain. Settle the actual c
 
 The recorded command result is the original root command's actual exit/signal, not an invented independent Vitest verdict. Record interruption and output completeness separately. Assess registered Docker targets and browser/image receipts through existing exact-absence/identity contracts after process settlement; discovery never grants deletion authority. Existing root-command cleanup remains the mutation owner. Missing/malformed authority, surviving work or resources is unconfirmed cleanup. Command failure plus observed cleanup remains failure; command success with incomplete output or cleanup is not acceptance.
 
+An untagged image name is inspected through its canonical `<name>:latest` reference, matching the existing verification-image retirement check: Docker29 reports an absent untagged name as `No such image: <name>:latest`. Image IDs and already-tagged references are unchanged, and the exact-match absence predicate is not broadened; any other diagnostic remains unconfirmed.
+
 Retain private evidence needed for reconnect and diagnosis, including failures. The parent independently confirms owned retirement and unchanged daemon/bridge/unrelated workloads before any GitHub success status.
 
 ### Complete mutation observation without production instrumentation
