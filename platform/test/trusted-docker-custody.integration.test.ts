@@ -455,11 +455,18 @@ it('settles a cancelled command whose same-group member exits shortly after clos
 
 it('keeps a cancelled command unsettled while a same-group member outlives the observation window', async () => {
   await withTrustedDockerFixture('past-expiry-member', async (fixture) => {
-    const { invocation, temporary } = await cancelHeldCommand(fixture, {
+    const { invocation, temporary, terminal } = await cancelHeldCommand(fixture, {
       state: 'unknown',
-      command: { exitCode: 27, signal: null, settled: false },
+      command: { settled: false },
       cleanup: { state: 'unconfirmed', browserExec: null },
     });
+    // The cancelled pnpm genuinely either relays the leaf handler's exit27 (Darwin) or
+    // re-raises its own group SIGINT and dies by that signal (Linux); nothing else is accepted.
+    const outcome = record(record(terminal).command);
+    expect([
+      { exitCode: 27, signal: null },
+      { exitCode: null, signal: 'SIGINT' },
+    ]).toContainEqual({ exitCode: outcome.exitCode, signal: outcome.signal });
 
     const member = record(
       JSON.parse(readFileSync(join(temporary, GROUP_MEMBER_RECORD), 'utf8')) as unknown,
