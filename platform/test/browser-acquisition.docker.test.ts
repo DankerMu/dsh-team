@@ -2,10 +2,10 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import type * as FsPromises from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
@@ -117,6 +117,7 @@ run().catch(()=>{process.exitCode=1;});
     };
     const forwarded = [
       'PATH',
+      'TMPDIR',
       'CHROME_BIN',
       'DSH_TEAM_BROWSER_RUNTIME',
       'DSH_TEAM_BROWSER_IMAGE_ID',
@@ -206,6 +207,12 @@ run().catch(()=>{process.exitCode=1;});
       expect(after.networkId).toMatch(/^[a-f0-9]{64}$/);
       expect(after.containerId).toMatch(/^[a-f0-9]{64}$/);
       expect(record(after.acquisition).state).toBe('settled');
+      if (typeof after.socketDirectory !== 'string')
+        throw new Error('Acquisition socket directory authority missing');
+      const socketLocation = relative(tmpdir(), after.socketDirectory);
+      expect(socketLocation).not.toBe('');
+      expect(socketLocation).not.toMatch(/^(?:\.\.(?:\/|$)|\/)/);
+      await expect(stat(after.socketDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(
         browserDocker([
           'container',
