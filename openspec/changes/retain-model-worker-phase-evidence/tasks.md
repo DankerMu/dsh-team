@@ -1,25 +1,25 @@
 ## 1. Implementation
 
-- [ ] 1.1 Add phase receipt publication (entered/completed/failed) around admission, checkout, install, build and driver in `platform/test/ci-vps-worker.ts`, using the existing atomic `writeReceipt`.
-- [ ] 1.2 Derive closed-set failure category, exit status and signal from spawn results; carry last phase/category into `execution.json` without changing `exitCode` semantics.
-- [ ] 1.3 Remove raw preparation stdout pass-through from `command()`.
-- [ ] 1.4 Validate `execution.json` in `performFinalization()`; fail closed to exitCode 1; keep `final.json` shape exact.
-- [ ] 1.5 Update AGENTS.md model-lane paragraph to name `phase.json` and its closed fields.
+- [x] 1.1 Add phase receipt publication (entered/completed/failed) around admission, checkout, install, build and driver in `platform/test/ci-vps-worker.ts`, using the existing atomic `writeReceipt`.
+- [x] 1.2 Derive closed-set failure category, exit status and signal from spawn results; carry last phase/category into `execution.json` without changing `exitCode` semantics.
+- [x] 1.3 Remove raw preparation stdout pass-through from `command()`.
+- [x] 1.4 Validate `execution.json` in `performFinalization()`; fail closed to exitCode 1; keep `final.json` shape exact.
+- [x] 1.5 Update AGENTS.md model-lane paragraph to name `phase.json` and its closed fields.
 
 ## 2. Tests
 
-- [ ] 2.1 Real worker-entry integration regression for every Required-evidence failure row in design.md (nonzero, signal, timeout, output-limit, spawn-error, identity-mismatch, admission-expired by expiry and by cancel), exact deep-equal receipts, each RED before and GREEN after.
-- [ ] 2.2 Interrupted build phase (worker spawned detached, process group SIGKILLed, no fake survives) leaves `{version:1, phase:'build', state:'entered'}` and no `execution.json`.
-- [ ] 2.3 Driver success/nonzero recorded as driver phase; existing exitCode semantics unchanged; `execution.log` absent after prep failure.
-- [ ] 2.4 Canary exclusion (args, stdout/stderr, thrown error, proxy env, DMXAPI_KEY) across receipts and worker stdout/stderr; `[REDACTED]` in execution.log; 0600 regular-file checks.
-- [ ] 2.5 `finalize-locked` after real execute success/failure (systemctl fake answering not-found): exact `final.json`, accepted by the owner via the `ci-vps-owner-fixture.ts` fake-ssh receipt path (extending that fixture with a mode that returns the real `final.json` bytes is in scope); malformed/oversized/out-of-range `execution.json` → exitCode 1.
-- [ ] 2.6 Existing `browser-build` / `ci-vps-owner` integration suites still pass.
+- [x] 2.1 Real worker-entry integration regression for every Required-evidence failure row in design.md (nonzero, signal, timeout, output-limit, spawn-error, identity-mismatch, admission-expired by expiry and by cancel), exact deep-equal receipts, each RED before and GREEN after.
+- [x] 2.2 Interrupted build phase (worker spawned detached, process group SIGKILLed, no fake survives) leaves `{version:1, phase:'build', state:'entered'}` and no `execution.json`.
+- [x] 2.3 Driver success/nonzero recorded as driver phase; existing exitCode semantics unchanged; `execution.log` absent after prep failure.
+- [x] 2.4 Canary exclusion (args, stdout/stderr, thrown error, proxy env, DMXAPI_KEY) across receipts and worker stdout/stderr; `[REDACTED]` in execution.log; 0600 regular-file checks.
+- [x] 2.5 `finalize-locked` after real execute success/failure (systemctl fake answering not-found): exact `final.json`, accepted by the owner via the `ci-vps-owner-fixture.ts` fake-ssh receipt path (extending that fixture with a mode that returns the real `final.json` bytes is in scope); malformed/oversized/out-of-range `execution.json` → exitCode 1.
+- [x] 2.6 Existing `browser-build` / `ci-vps-owner` integration suites still pass.
 
 ## 3. Verification
 
-- [ ] 3.1 `pnpm check:fast`
-- [ ] 3.2 `pnpm test:integration` for the new regression plus existing ci-vps / browser-build integration files (Linux semantics via preload as existing fixtures do).
-- [ ] 3.3 `openspec validate retain-model-worker-phase-evidence --strict --no-interactive`
+- [x] 3.1 `pnpm check:fast`
+- [x] 3.2 `pnpm test:integration` for the new regression plus existing ci-vps / browser-build integration files (Linux semantics via preload as existing fixtures do).
+- [x] 3.3 `openspec validate retain-model-worker-phase-evidence --strict --no-interactive`
 
 ## Risk packs
 

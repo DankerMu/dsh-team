@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import type { SpawnSyncReturns } from 'node:child_process';
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile, cp } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -103,7 +104,70 @@ async function approval(): Promise<VpsApproval> {
   return value as unknown as VpsApproval;
 }
 
+type Phase = 'admission' | 'checkout' | 'install' | 'build' | 'driver';
+type Category =
+  | 'nonzero'
+  | 'signal'
+  | 'timeout'
+  | 'output-limit'
+  | 'spawn-error'
+  | 'identity-mismatch'
+  | 'admission-expired'
+  | 'unknown';
+/** Only closed-set facts; raw output, arguments, environment and error text never enter. */
+interface PhaseFacts {
+  category?: Category;
+  exitCode?: number;
+  signal?: NodeJS.Signals;
+}
+let current: { phase: Phase; settled: boolean; category?: Category } | undefined;
+
+class PhaseFailure extends Error {
+  readonly facts: PhaseFacts;
+  constructor(facts: PhaseFacts) {
+    super('Approved verification phase failed');
+    this.facts = facts;
+  }
+}
+
+function spawnFacts(result: SpawnSyncReturns<string>): PhaseFacts {
+  const code = result.error && 'code' in result.error ? result.error.code : undefined;
+  let category: Category | undefined;
+  if (code === 'ETIMEDOUT') category = 'timeout';
+  else if (code === 'ENOBUFS') category = 'output-limit';
+  else if (result.error) category = 'spawn-error';
+  else if (result.signal !== null) category = 'signal';
+  else if (result.status !== 0) category = 'nonzero';
+  return {
+    ...(category === undefined ? {} : { category }),
+    ...(result.status === null ? {} : { exitCode: result.status }),
+    ...(result.signal === null ? {} : { signal: result.signal }),
+  };
+}
+
+/** Published before the phase's work starts, so an interrupted phase still names itself. */
+async function enter(phase: Phase) {
+  current = { phase, settled: false };
+  await writeReceipt(join(root, 'phase.json'), { version: 1, phase, state: 'entered' });
+}
+
+async function settle(facts: PhaseFacts) {
+  if (!current) return;
+  current = {
+    phase: current.phase,
+    settled: true,
+    ...(facts.category === undefined ? {} : { category: facts.category }),
+  };
+  await writeReceipt(join(root, 'phase.json'), {
+    version: 1,
+    phase: current.phase,
+    state: facts.category === undefined ? 'completed' : 'failed',
+    ...facts,
+  });
+}
+
 function command(binary: string, args: string[], cwd = source, timeout = 600_000) {
+  // Preparation output stays bounded in memory and is discarded, never logged.
   const result = spawnSync(binary, args, {
     cwd,
     env: environment,
@@ -111,20 +175,26 @@ function command(binary: string, args: string[], cwd = source, timeout = 600_000
     timeout,
     maxBuffer: 16_777_216,
   });
-  if (result.status !== 0 || result.error) throw new Error('Approved verification command failed');
-  process.stdout.write(result.stdout);
+  const facts = spawnFacts(result);
+  if (facts.category !== undefined) throw new PhaseFailure(facts);
+  return facts;
 }
 
-async function execute() {
-  const approved = await approval();
+async function admit(approved: VpsApproval) {
+  await enter('admission');
   // This cgroup is installed before admission. Serve can release it, never recreate it after retirement.
   while (!(await exists(join(root, 'admitted.json')))) {
     if (Date.now() >= approved.expiresAt * 1000 || (await exists(join(root, 'cancel'))))
-      throw new Error('Unadmitted execution expired');
+      throw new PhaseFailure({ category: 'admission-expired' });
     await delay(250);
   }
   if ((await exists(join(root, 'cancel'))) || (await exists(join(root, 'final.json'))))
-    throw new Error('Execution already retiring');
+    throw new PhaseFailure({ category: 'admission-expired' });
+  await settle({});
+}
+
+async function checkout(approved: VpsApproval) {
+  await enter('checkout');
   await mkdir(source, { mode: 0o700 });
   await mkdir(temporary, { mode: 0o700 });
   command('git', ['init', '--quiet']);
@@ -136,10 +206,25 @@ async function execute() {
     env: environment,
     encoding: 'utf8',
   });
-  if (head.status !== 0 || head.stdout.trim() !== approved.sha)
-    throw new Error('Checkout identity mismatch');
-  command('pnpm', ['install', '--frozen-lockfile']);
-  command('pnpm', ['build']);
+  const facts = spawnFacts(head);
+  if (facts.category !== undefined) throw new PhaseFailure(facts);
+  if (head.stdout.trim() !== approved.sha)
+    throw new PhaseFailure({ ...facts, category: 'identity-mismatch' });
+  await settle(facts);
+}
+
+async function prepare(phase: Phase, args: string[]) {
+  await enter(phase);
+  await settle(command('pnpm', args));
+}
+
+async function execute() {
+  const approved = await approval();
+  await admit(approved);
+  await checkout(approved);
+  await prepare('install', ['install', '--frozen-lockfile']);
+  await prepare('build', ['build']);
+  await enter('driver');
   const driver = `const {spawnSync}=require('node:child_process');
 const env={}; for(const name of ['PATH','HOME','TMPDIR','CHROME_BIN','DSH_TEAM_CI_RESOURCE_JOURNAL','DSH_TEAM_CI_INVOCATION']) env[name]=process.env[name];
 process.loadEnvFile(${JSON.stringify(join(homedir(), '.config/dsh-team/env'))});
@@ -162,9 +247,11 @@ process.exit(r.status??1);`;
     maxBuffer: 16_777_216,
   });
   process.exitCode = result.status ?? 1;
+  const facts = spawnFacts(result);
   await writeFile(join(root, 'execution.log'), `${result.stdout}\n${result.stderr}`, {
     mode: 0o600,
   });
+  await settle(facts);
 }
 
 async function bearer() {
@@ -322,6 +409,23 @@ async function rescueBrowsers() {
   }
 }
 
+/** A missing, unprivate, oversized, malformed or out-of-range result fails closed to 1. */
+async function executionExitCode() {
+  let exitCode: unknown;
+  try {
+    exitCode = (await privateJson(join(root, 'execution.json'))).exitCode;
+  } catch {
+    // Absence, identity and parse failures are all an unproven execution outcome.
+    return 1;
+  }
+  return typeof exitCode === 'number' &&
+    Number.isSafeInteger(exitCode) &&
+    exitCode >= 0 &&
+    exitCode <= 255
+    ? exitCode
+    : 1;
+}
+
 async function performFinalization() {
   const failures: string[] = [];
   const attempt = async (phase: string, action: () => void | Promise<void>) => {
@@ -358,13 +462,10 @@ async function performFinalization() {
       await rm(source, { recursive: true, force: true });
     });
   }
-  const execution = (await exists(join(root, 'execution.json')))
-    ? await privateJson(join(root, 'execution.json'))
-    : { exitCode: 1 };
   await writeReceipt(join(root, 'final.json'), {
     vpsCleanupComplete: failures.length === 0,
     failures,
-    exitCode: execution.exitCode,
+    exitCode: await executionExitCode(),
   });
   if (failures.length) throw new Error('Independent VPS finalization failed');
 }
@@ -414,10 +515,17 @@ async function watch() {
 async function executeAndRecord() {
   try {
     await execute();
-  } catch {
+  } catch (error) {
     process.exitCode = 1;
+    if (current && !current.settled)
+      await settle(error instanceof PhaseFailure ? error.facts : { category: 'unknown' });
   } finally {
-    await writeReceipt(join(root, 'execution.json'), { exitCode: Number(process.exitCode ?? 0) });
+    // The last write of execute: watch() starts finalization as soon as this exists.
+    await writeReceipt(join(root, 'execution.json'), {
+      exitCode: Number(process.exitCode ?? 0),
+      ...(current ? { phase: current.phase } : {}),
+      ...(current?.category === undefined ? {} : { category: current.category }),
+    });
   }
 }
 
