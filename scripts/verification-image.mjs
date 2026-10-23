@@ -11,7 +11,7 @@ import {
 import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { isAbsentResource } from '../platform/test/docker-command.ts';
+import { canonicalImageReference, isAbsentResource } from '../platform/test/docker-command.ts';
 
 const digest = /^sha256:[a-f0-9]{64}$/;
 function jsonFile(path, maximum, expectedDigest) {
@@ -74,7 +74,7 @@ export function prepareVerificationImage(role, tag, labels, directory, command) 
   if (selected === undefined) return undefined;
   try {
     const { entry, config } = readArtifactInput(role, selected);
-    const reference = tag.includes(':') ? tag : `${tag}:latest`;
+    const reference = canonicalImageReference(tag);
     if (!isAbsentResource(command(['image', 'inspect', reference], 30000), 'image', reference))
       throw new Error('Image target already exists');
     const context = mkdtempSync(join(directory, 'image-artifact-'));

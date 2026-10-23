@@ -1,6 +1,10 @@
 import { lstat, readdir } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
-import { createDockerCommands, isAbsentResource } from '../platform/test/docker-command.ts';
+import {
+  canonicalImageReference,
+  createDockerCommands,
+  isAbsentResource,
+} from '../platform/test/docker-command.ts';
 import { readCleanupJournal } from '../platform/test/docker-cleanup.ts';
 import { readReceipt } from './probe-browser-receipt.mjs';
 import { requireNetworkAuthority } from './probe-browser-network.mjs';
@@ -18,8 +22,7 @@ import {
 } from './trusted-docker-record.mjs';
 
 function requireAbsent(command, kind, target) {
-  // Docker names a missing untagged image by its normalised `:latest` reference.
-  const reference = kind === 'image' && !target.includes(':') ? `${target}:latest` : target;
+  const reference = kind === 'image' ? canonicalImageReference(target) : target;
   if (!isAbsentResource(command([kind, 'inspect', reference], 30_000), kind, reference))
     throw new Error('Trusted Docker resource retirement unconfirmed');
 }
