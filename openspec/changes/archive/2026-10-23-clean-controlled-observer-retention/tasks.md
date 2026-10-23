@@ -6,7 +6,7 @@
 
 ## 2. Integration
 
-- [ ] 2.1 Canonical checks, review, exact-head trusted custody `pnpm test:docker` (custody no-op path) and standalone `pnpm test:deploy`, plus a direct non-custody `pnpm test:docker platform/test/deployment-audit-stop.docker.test.ts`, each standalone/direct run with `/tmp/dsh-team-observer-*` inventory unchanged; independent resource observation; protected merge.
+- [x] 2.1 Canonical checks, review, exact-head trusted custody `pnpm test:docker` (custody no-op path) and standalone `pnpm test:deploy`, plus a direct non-custody `pnpm test:docker platform/test/deployment-audit-stop.docker.test.ts`, each standalone/direct run with `/tmp/dsh-team-observer-*` inventory unchanged; independent resource observation; protected merge.
 
 ## Risk packs
 

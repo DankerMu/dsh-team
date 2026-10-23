@@ -8,12 +8,12 @@
 ## 2. Investigation and verification
 
 - [x] 2.1 Run an outside-test-runner smoke of the delivered evidence path, local narrow regressions and required fast/full integration checks; record historical UNKNOWN separately and update operator guidance.
-- [ ] 2.2 Complete expanded four-seat review against this immutable fixture, then execute bounded trusted exact-head diagnosis, standalone Compose and original full Docker discovery including both audit-stop cases, with independent owned-retirement and protected-host evidence. Fix only a causally demonstrated boundary, preserving failures and unchanged deadlines.
+- [x] 2.2 Complete expanded four-seat review against this immutable fixture, then execute bounded trusted exact-head diagnosis, standalone Compose and original full Docker discovery including both audit-stop cases, with independent owned-retirement and protected-host evidence. Fix only a causally demonstrated boundary, preserving failures and unchanged deadlines.
 
 ## 3. Delivery
 
-- [ ] 3.1 Publish separate candidate outcomes and sanitized evidence, satisfy exact-head CI/protected merge requirements without provider calls or gate weakening, and deliver the change.
-- [ ] 3.2 Synchronize and archive the completed OpenSpec change after delivery; keep human acceptance explicitly deferred/unpassed.
+- [x] 3.1 Publish separate candidate outcomes and sanitized evidence, satisfy exact-head CI/protected merge requirements without provider calls or gate weakening, and deliver the change.
+- [x] 3.2 Synchronize and archive the completed OpenSpec change after delivery; keep human acceptance explicitly deferred/unpassed.
 
 ## Risk Pack Evidence Map
 
