@@ -6,7 +6,7 @@
 
 ## 2. Integration
 
-- [ ] 2.1 Canonical checks (`pnpm check:fast`, targeted integration, dead-code, duplicate-code), review, exact-head trusted Docker/Compose (tagged/ID no-regression only) with independent resource observation, protected merge. Real-Engine untagged evidence: issue reproduction plus fd27236 trusted custody.
+- [x] 2.1 Canonical checks (`pnpm check:fast`, targeted integration, dead-code, duplicate-code), review, exact-head trusted Docker/Compose (tagged/ID no-regression only) with independent resource observation, protected merge. Real-Engine untagged evidence: issue reproduction plus fd27236 trusted custody.
 
 ## Risk packs
 
