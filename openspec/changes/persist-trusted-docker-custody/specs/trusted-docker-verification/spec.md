@@ -106,6 +106,12 @@ Custody SHALL distinguish actual shared-Engine mutations from observations and n
 - **THEN** the submission remains unresolved and cannot borrow the qualified rejection matrix
 - **AND** observing or cancelling exact `POST /containers/<target>/wait` does not invent a mutation
 
+#### Scenario: A caller declares one independently proven CLI exit status
+
+- **WHEN** the resource-OOM pressure exec declares exit status137 and the Docker CLI exits normally with exactly137
+- **THEN** only that submission may publish its ordinary settled row while the fixture's independent OOM proof remains mandatory
+- **AND** an undeclared137, another status, a signal, a spawn error or a lost response remains unresolved
+
 #### Scenario: A controlled executable never dispatches to Docker
 
 - **WHEN** a verification fault substitutes an owned non-Docker process at the external executable boundary

@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -15,8 +15,8 @@ import {
   startIsolated,
 } from '../../scripts/probe-browser-runtime.mjs';
 import { OwnedBrowserChurn, withIsolatedBrowser } from './browser-runtime-fixture.ts';
+import { createNetworkWithProducer } from './browser-network-fixture.ts';
 import { record } from './container-start-docker-fixture.ts';
-import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 
 type NetworkFault =
   | 'valid'
@@ -32,48 +32,6 @@ const networkFaults: NetworkFault[] = [
   'recorded-id-replacement',
   'finalized-null-identity',
 ];
-
-// Settled fixture custody names the real creating process, joined before receipt publication.
-function createNetworkWithProducer(args: string[]) {
-  const module = new URL('../../scripts/probe-browser-runtime.mjs', import.meta.url).href;
-  const result = spawnSync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import {browserDocker,processBirth} from ${JSON.stringify(module)};
-const producer={pid:process.pid,birth:await processBirth(process.pid)};
-const id=browserDocker(JSON.parse(process.argv[1]));
-process.stdout.write(JSON.stringify({id,producer}));`,
-      JSON.stringify(args),
-    ],
-    {
-      env: {
-        PATH: process.env.PATH,
-        DSH_TEAM_BROWSER_DOCKER_CONFIG: process.env.DSH_TEAM_BROWSER_DOCKER_CONFIG,
-        DSH_TEAM_VERIFICATION_SUBMISSIONS: process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS,
-        ...dockerProxyEnvironment(),
-      },
-      encoding: 'utf8',
-      timeout: 30_000,
-      killSignal: 'SIGKILL',
-      maxBuffer: 65_536,
-    },
-  );
-  if (result.error || result.status !== 0)
-    throw new Error('Fixture network producer did not complete');
-  const value = record(JSON.parse(result.stdout));
-  const producer = record(value.producer);
-  if (
-    typeof value.id !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(value.id) ||
-    typeof producer.pid !== 'number' ||
-    producer.pid !== result.pid ||
-    typeof producer.birth !== 'string'
-  )
-    throw new Error('Fixture network producer identity unavailable');
-  return { id: value.id, producer: { pid: producer.pid, birth: producer.birth } };
-}
 
 async function pendingNetwork(fault: NetworkFault) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-browser-network-identity-'));

@@ -16,8 +16,15 @@ export interface DockerCommandResult {
   readonly signal?: NodeJS.Signals | null;
 }
 
-/** External Docker process boundary; timeout is milliseconds, no shell interpolation. */
-export type DockerCommand = (args: readonly string[], timeout: number) => DockerCommandResult;
+/**
+ * External Docker process boundary; timeout is milliseconds, no shell interpolation.
+ * `acceptedStatus` declares one nonzero CLI exit the caller independently proves.
+ */
+export type DockerCommand = (
+  args: readonly string[],
+  timeout: number,
+  acceptedStatus?: number,
+) => DockerCommandResult;
 
 /** Live Docker process boundary; settlement includes child closure after cancellation. */
 export type AsyncDockerCommand = (
@@ -99,15 +106,18 @@ export function createDockerCommands(
   bounded: boolean,
   injectedCommand?: DockerCommand,
 ): DockerCommands {
-  const externalCommand: DockerCommand = (args, timeout) =>
-    runDockerCommand(selectDockerExecution(args), (execution) =>
-      injectedCommand === undefined
-        ? spawnSync(
-            execution.file,
-            execution.args,
-            processOptions(repositoryRoot, config, bounded, args, timeout),
-          )
-        : injectedCommand(args, timeout),
+  const externalCommand: DockerCommand = (args, timeout, acceptedStatus) =>
+    runDockerCommand(
+      selectDockerExecution(args),
+      (execution) =>
+        injectedCommand === undefined
+          ? spawnSync(
+              execution.file,
+              execution.args,
+              processOptions(repositoryRoot, config, bounded, args, timeout),
+            )
+          : injectedCommand(args, timeout),
+      acceptedStatus,
     );
   const rawAsync = (
     args: readonly string[],
@@ -177,10 +187,10 @@ export function createDockerCommands(
     );
   if (!bounded) return { command: externalCommand, commandAsync: externalAsync };
   return {
-    command: (args, timeout) => {
+    command: (args, timeout, acceptedStatus) => {
       const started = args[0] === 'build' ? performance.now() : undefined;
       try {
-        return redactResult(args, externalCommand(args, timeout), timeout, started);
+        return redactResult(args, externalCommand(args, timeout, acceptedStatus), timeout, started);
       } catch (error) {
         throw commandFailure(error, timeout, started);
       }

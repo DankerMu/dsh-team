@@ -155,6 +155,54 @@ it('preserves confirmed retirement after a completed ordinary submission and non
   });
 });
 
+it.each([
+  { exit: '137', declared: 137, status: 137, state: 'confirmed' },
+  { exit: '0', declared: 137, status: 0, state: 'confirmed' },
+  { exit: '137', declared: undefined, status: 137, state: 'unconfirmed' },
+  { exit: '125', declared: 137, status: 125, state: 'unconfirmed' },
+  { exit: 'signal', declared: 137, status: null, state: 'unconfirmed' },
+  { exit: 'spawn-error', declared: 137, status: null, state: 'unconfirmed' },
+])(
+  'settles a mutation exit $exit only when it is the caller-declared status $declared',
+  async ({ exit, declared, status, state }) => {
+    await withAuditReceipt(async ({ journal, assess }) => {
+      const commandModule = new URL('./docker-command.ts', import.meta.url).href;
+      const behavior =
+        exit === 'signal' ? "process.kill(process.pid,'SIGKILL')" : `process.exit(${exit})`;
+      // The bounded Web command seam used by the OOM pressure exec, with a real child outcome.
+      const writer = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import {spawnSync} from 'node:child_process';
+import {createDockerCommands} from ${JSON.stringify(commandModule)};
+const file=${JSON.stringify(exit === 'spawn-error' ? '/dsh-team-absent-executable' : process.execPath)};
+const {command}=createDockerCommands(process.cwd(),process.cwd(),true,(args,timeout)=>
+  spawnSync(file,['-e',${JSON.stringify(behavior)}],{encoding:'utf8',timeout,killSignal:'SIGKILL'}));
+const result=command(['exec','owned-container','python3'],2000,${String(declared)});
+process.stdout.write(JSON.stringify({status:result.status})+'\\n');`,
+        ],
+        {
+          env: {
+            PATH: process.env.PATH,
+            HOME: tmpdir(),
+            DSH_TEAM_VERIFICATION_SUBMISSIONS: join(journal, '..', SUBMISSION_JOURNAL),
+          },
+          encoding: 'utf8',
+          timeout: 5000,
+        },
+      );
+
+      expect(writer.error).toBeUndefined();
+      expect(writer.status, writer.stderr).toBe(0);
+      expect(JSON.parse(writer.stdout)).toEqual({ status });
+      expect(await assess()).toEqual({ state, browserExec: null });
+      expect(freshSubmissionAssessment(join(journal, '..'))).toBe(`${JSON.stringify({ state })}\n`);
+    });
+  },
+);
+
 it.each(['fsync', 'close', 'write', 'unlink', 'death'])(
   'rejects visible settlement after completion %s fails and its writer exits',
   async (fault) => {

@@ -27,21 +27,31 @@ function submission(execution) {
   return beginVerificationSubmission();
 }
 
-function completeResult(result, complete) {
+function completeResult(result, complete, acceptedStatus) {
   if (result.error === undefined && result.status === 0) complete?.();
+  // Only an explicitly declared, normally exited CLI status is an answered outcome.
+  else if (
+    acceptedStatus !== undefined &&
+    result.error === undefined &&
+    !result.signal &&
+    result.status === acceptedStatus
+  )
+    complete?.();
   return result;
 }
 
 /**
  * Publish before the selected external process boundary, retaining its original result.
- * @template {{ status: number | null, error?: unknown }} T
+ * A caller may declare one expected nonzero exit status that it independently verifies.
+ * @template {{ status: number | null, error?: unknown, signal?: string | null }} T
  * @param {DockerExecution} execution
  * @param {(execution: DockerExecution) => T} dispatch
+ * @param {number} [acceptedStatus]
  * @returns {T}
  */
-export function runDockerCommand(execution, dispatch) {
+export function runDockerCommand(execution, dispatch, acceptedStatus) {
   const complete = submission(execution);
-  return completeResult(dispatch(execution), complete);
+  return completeResult(dispatch(execution), complete, acceptedStatus);
 }
 
 /**
