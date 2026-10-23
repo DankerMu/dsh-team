@@ -13,6 +13,8 @@ import { cleanupTargets, output, OWNER_LABEL, removeOwned } from './docker-clean
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
+import { removeRetiredObservationRoot } from './deployment-observer-fixture.ts';
+import type { DeploymentObservation } from './deployment-observer-fixture.ts';
 import {
   configureDeployment,
   registerDeploymentEmployee,
@@ -179,6 +181,7 @@ it('drains an active composition helper after its caller disconnects before remo
   const fault = new Error('Controlled caller disconnect during composition');
   let owner: UserImageLifecycle | undefined;
   let helper: { id: string; labels: Record<string, string> } | undefined;
+  let observation: DeploymentObservation | undefined;
   let controller: ReturnType<typeof spawn> | undefined;
   let controllerClosed: Promise<number | null> | undefined;
   const controllerOutput: Buffer[] = [];
@@ -199,6 +202,7 @@ it('drains an active composition helper after its caller disconnects before remo
         { kind: 'image', name: `dsh-team-test-${lifecycle.runId}:container-start` },
       );
       const { deployment, employee } = await configureDeployment(lifecycle, start);
+      observation = deployment.observation;
       const command = async (args: string[]) =>
         output(await lifecycle.commandAsync(args, 30_000), args);
       const home = `dsh-team-home-${employee.id}`;
@@ -349,6 +353,14 @@ it('drains an active composition helper after its caller disconnects before remo
       }
       cleanupTargets(owner.command, targets, owner.runId, failures);
     }
+  }
+  // Only a fully asserted controlled failure retires its own retained evidence root.
+  if (failures.length === 0) {
+    if (observation === undefined) failures.push(new Error('Deployment observation missing'));
+    else
+      await removeRetiredObservationRoot(observation).catch((error: unknown) =>
+        failures.push(error),
+      );
   }
   if (failures.length > 0)
     throw new AggregateError(failures, 'Deployment failure-path regression failed');

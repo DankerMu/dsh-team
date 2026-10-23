@@ -283,6 +283,27 @@ export async function prepareDeploymentReplacement(
   await publishContainerOverride(observation);
 }
 
+/**
+ * Removes only this invocation's own retired root, after the captured identity fence. Callers
+ * may run after the deployment lock was released; a custody-owned root is never removed here.
+ */
+export async function removeRetiredObservationRoot(
+  observation: Pick<DeploymentObservation, 'directory' | 'ownedRoot' | 'rootIdentity' | 'retired'>,
+): Promise<void> {
+  if (!observation.ownedRoot) return;
+  if (!observation.retired) throw new Error('Deployment observation has not retired');
+  const current = await lstat(observation.directory);
+  if (
+    !current.isDirectory() ||
+    current.dev !== observation.rootIdentity.device ||
+    current.ino !== observation.rootIdentity.inode ||
+    current.uid !== observation.rootIdentity.owner ||
+    (current.mode & 0o777) !== 0o700
+  )
+    throw new Error('Deployment observer root changed before cleanup');
+  await rm(observation.directory, { recursive: true });
+}
+
 /** Called after canonical resource cleanup, with the host-wide deployment lock still held. */
 export async function finishDeploymentObservation(
   observation: DeploymentObservation,
@@ -305,18 +326,7 @@ export async function finishDeploymentObservation(
     }
     if (observation.ownedRoot) requireVerificationSubmissionsSettled(observation.directory);
     observation.retired = true;
-    if (observation.ownedRoot && scenarioSucceeded) {
-      const current = await lstat(observation.directory);
-      if (
-        !current.isDirectory() ||
-        current.dev !== observation.rootIdentity.device ||
-        current.ino !== observation.rootIdentity.inode ||
-        current.uid !== observation.rootIdentity.owner ||
-        (current.mode & 0o777) !== 0o700
-      )
-        throw new Error('Deployment observer root changed before cleanup');
-      await rm(observation.directory, { recursive: true });
-    }
+    if (scenarioSucceeded) await removeRetiredObservationRoot(observation);
   } catch (error) {
     throw new Error(`Deployment observation unconfirmed; retained ${observation.directory}`, {
       cause: error,
