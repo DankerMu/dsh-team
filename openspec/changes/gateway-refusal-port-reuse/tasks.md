@@ -1,8 +1,8 @@
 ## 1. Refusal ordering
 
-- [ ] 1.1 In `platform/test/gateway-http.integration.test.ts` refusal case, bind `healthy` and the forwarding app first, then close the `retired` server (await `close`) inside the forwarding callback immediately before the refused request. Keep every existing assertion and the recovery step; add none. `withUpstream` cleanup already checks `server.listening` (`gateway-http-fixture.ts:103`), so an early close is safe.
-- [ ] 1.2 Apply the same order to the `refused` mode of the WebSocket upgrade-destination case in `platform/test/gateway-websocket.integration.test.ts`: close inside the `withForwardingApp` callback before `rejectedUpgrade`. The `missing`, `resolver` and `endpoint` modes are unchanged.
-- [ ] 1.3 Run `pnpm test:integration platform/test/gateway-http.integration.test.ts platform/test/gateway-websocket.integration.test.ts` three times. Expected: each exit 0, with the HTTP refusal case and all four WebSocket upgrade-destination modes (including `refused`) passing. Run `pnpm check:fast`, expected exit 0.
+- [x] 1.1 In `platform/test/gateway-http.integration.test.ts` refusal case, bind `healthy` and the forwarding app first, then close the `retired` server (await `close`) inside the forwarding callback immediately before the refused request. Keep every existing assertion and the recovery step; add none. `withUpstream` cleanup already checks `server.listening` (`gateway-http-fixture.ts:103`), so an early close is safe.
+- [x] 1.2 Apply the same order to the `refused` mode of the WebSocket upgrade-destination case in `platform/test/gateway-websocket.integration.test.ts`: close inside the `withForwardingApp` callback before `rejectedUpgrade`. The `missing`, `resolver` and `endpoint` modes are unchanged.
+- [x] 1.3 Run `pnpm test:integration platform/test/gateway-http.integration.test.ts platform/test/gateway-websocket.integration.test.ts` three times. Expected: each exit 0, with the HTTP refusal case and all four WebSocket upgrade-destination modes (including `refused`) passing. Run `pnpm check:fast`, expected exit 0.
 
 ## 2. Delivery
 

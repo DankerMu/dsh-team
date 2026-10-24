@@ -251,9 +251,6 @@ it('reports connection refusal without trying another destination and recovers o
       response.end('unused');
     },
     async (retired, server) => {
-      const closed = once(server, 'close');
-      server.close();
-      await closed;
       await withUpstream(
         (_request, response) => {
           response.end('healthy');
@@ -263,6 +260,9 @@ it('reports connection refusal without trying another destination and recovers o
           await withForwardingApp(
             () => selected,
             async ({ base, cookie }) => {
+              const closed = once(server, 'close');
+              server.close();
+              await closed;
               const response = await sendHttp(base, { headers: { cookie } });
 
               expect(response.status).toBe(502);

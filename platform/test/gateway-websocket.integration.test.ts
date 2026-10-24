@@ -768,11 +768,6 @@ it.each(['missing', 'resolver', 'endpoint', 'refused'])(
         response.end();
       },
       async (target, server) => {
-        if (mode === 'refused') {
-          const closed = once(server, 'close');
-          server.close();
-          await closed;
-        }
         await withForwardingApp(
           () => {
             if (mode === 'missing') return { outcome: 'stopped' };
@@ -780,6 +775,11 @@ it.each(['missing', 'resolver', 'endpoint', 'refused'])(
             return mode === 'endpoint' ? { ...target, port: -1 } : target;
           },
           async ({ base, cookie, lines }) => {
+            if (mode === 'refused') {
+              const closed = once(server, 'close');
+              server.close();
+              await closed;
+            }
             const response = await rejectedUpgrade(base, cookie, [
               `Origin: ${PUBLIC_ORIGIN}`,
               'Upgrade: websocket',
