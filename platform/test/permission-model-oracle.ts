@@ -88,6 +88,19 @@ function requireBashIdentity(
     );
 }
 
+const TURN_END_KINDS = new Set(['completed', 'error', 'aborted', 'blocked', 'max-tokens']);
+
+const field = (value: unknown, key: string): unknown =>
+  typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined;
+
+/** Closed-set turn-end classification; never echoes the raw kind or any reason payload. */
+function turnEndKind(ends: readonly Event[]): string {
+  if (ends.length === 0) return 'absent';
+  if (ends.length > 1) return 'multiple';
+  const kind = field(field(ends[0]?.data, 'reason'), 'kind');
+  return typeof kind === 'string' && TURN_END_KINDS.has(kind) ? kind : 'other';
+}
+
 function toolIdentity(events: readonly Event[], input: NativeObservation): ToolIdentity {
   const starts = of(events, 'turn/start');
   const calls = of(events, 'tool/call');
@@ -96,7 +109,7 @@ function toolIdentity(events: readonly Event[], input: NativeObservation): ToolI
   if (starts.length !== 1 || calls.length !== 1 || !start || !call)
     throw new PermissionEvidenceError(
       'turn-call-count',
-      `turn-start:${String(starts.length)},tool-call:${String(calls.length)}`,
+      `turn-start:${String(starts.length)},tool-call:${String(calls.length)},turn-end:${turnEndKind(of(events, 'turn/end'))},assistant-message:${String(of(events, 'assistant/message').length)}`,
     );
   const data = record(call.data);
   const turn = record(start.data).turn;
