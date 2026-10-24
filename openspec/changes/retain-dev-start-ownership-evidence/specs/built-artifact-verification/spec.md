@@ -15,6 +15,11 @@ The background development lifecycle integration SHALL keep its initial source-m
 - **WHEN** the Engine preflight fails
 - **THEN** the evidence reports the command closed with its exit code and no PID observed
 
+#### Scenario: Unconfirmed retirement retains the private root
+
+- **WHEN** command settlement or main retirement is not confirmed during cleanup
+- **THEN** the private root with its pidfile, lock and log is retained and the root step is reported failed, while the first scenario failure stays primary
+
 #### Scenario: Evidence stays secret-free
 
 - **WHEN** evidence is produced

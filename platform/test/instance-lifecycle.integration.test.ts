@@ -234,6 +234,8 @@ async function runDevLifecycle(
   engine: ReturnType<typeof startupUnixServer>,
   release: () => void,
   scenario: (lifecycle: DevLifecycle) => Promise<void>,
+  // Commands-settlement bound; only tests of an unconfirmed settlement shorten it.
+  settleMs = 35_000,
 ): Promise<void> {
   const repository = resolve(import.meta.dirname, '../..');
   const root = await mkdtemp(join(tmpdir(), 'dsh-instance-dev-'));
@@ -321,7 +323,7 @@ async function runDevLifecycle(
     // Do not interrupt a command that owns the lifecycle lock. Let it observe
     // released work, then stop any captured application before removing its files.
     mainPid ??= await pidAt(pidfile);
-    await observeHttp(Promise.allSettled(commands), 35_000);
+    await observeHttp(Promise.allSettled(commands), settleMs);
   });
   await step('main', async () => {
     const recordedPid = await pidAt(pidfile);
@@ -342,7 +344,12 @@ async function runDevLifecycle(
         });
       });
   });
-  await step('root', () => rm(root, { recursive: true, force: true }));
+  await step('root', () => {
+    // Unconfirmed retirement keeps pidfile/lock/log for a lock-owning dev-server.sh.
+    if (cleanup.commands !== 'confirmed' || cleanup.main !== 'confirmed')
+      throw new Error('Private root retained: lifecycle retirement unconfirmed');
+    return rm(root, { recursive: true, force: true });
+  });
   // Step names and outcomes only: raw cleanup errors can name private root/socket paths.
   const facts = JSON.stringify({ cleanup });
   if (failure !== undefined) {
@@ -500,15 +507,32 @@ it('canonical dev stop retains captured source-main ownership through held work 
   // Two genuine process startups plus graceful-stop cleanup exceed the runner's default deadline.
 }, 60_000);
 
+const RETIRED = {
+  readiness: 'confirmed',
+  commands: 'confirmed',
+  main: 'confirmed',
+  engine: 'confirmed',
+  root: 'confirmed',
+} as const;
+
 /** Runs only the initial start and its ownership wait against a controlled Engine preflight. */
-async function inducedOwnershipTimeout(engine: ReturnType<typeof startupUnixServer>) {
+async function inducedOwnershipTimeout(
+  engine: ReturnType<typeof startupUnixServer>,
+  settleMs?: number,
+) {
   let observed: { root: string; environment: NodeJS.ProcessEnv } | undefined;
   let started: ReturnType<typeof command> | undefined;
   let waitedMs = 0;
-  // The controlled preflight has no readiness work to release.
+  let released: { lock: boolean; running: boolean } | undefined;
+  const lockOf = (root: string) => existsSync(join(root, '.run/dev.lock'));
   const failure = await runDevLifecycle(
     engine,
-    () => undefined,
+    // The controlled preflight has no readiness work to release. This first cleanup step runs
+    // before Engine closure; it only records facts, since a throw would become a cleanup failure.
+    () => {
+      if (observed !== undefined && started !== undefined)
+        released = { lock: lockOf(observed.root), running: started.child.exitCode === null };
+    },
     async (lifecycle) => {
       observed = { root: lifecycle.root, environment: lifecycle.environment };
       const begun = Date.now();
@@ -519,24 +543,27 @@ async function inducedOwnershipTimeout(engine: ReturnType<typeof startupUnixServ
         waitedMs = Date.now() - begun;
       }
     },
+    settleMs,
   ).then(
     () => undefined,
     (error: unknown) => error,
   );
   if (observed === undefined || started === undefined) throw new Error('Missing induced start');
+  // The harness alone decides root removal; the lock is the start command's to release.
+  const surfaced = { root: existsSync(observed.root) };
+  return { failure, observed, started, waitedMs, released, surfaced };
+}
+
+/** The ownership-timeout message: original first line, closed-set evidence and cleanup facts. */
+function ownershipTimeout({
+  failure,
+  observed,
+  waitedMs,
+}: Awaited<ReturnType<typeof inducedOwnershipTimeout>>) {
   if (!(failure instanceof Error)) throw new Error('Missing ownership timeout');
   const lines = failure.message.split('\n');
   expect(lines).toHaveLength(3);
   expect(lines[0]).toBe(OWNERSHIP_TIMEOUT);
-  expect(JSON.parse(lines[2] ?? '')).toEqual({
-    cleanup: {
-      readiness: 'confirmed',
-      commands: 'confirmed',
-      main: 'confirmed',
-      engine: 'confirmed',
-      root: 'confirmed',
-    },
-  });
   // Evidence is closed-set: no credential, private path, environment value or output text.
   for (const secret of [
     'fixture-model-key',
@@ -550,20 +577,30 @@ async function inducedOwnershipTimeout(engine: ReturnType<typeof startupUnixServ
     expect(failure.message.includes(secret)).toBe(false);
   // Neither an early command exit nor a held preflight shortens the original bound.
   expect(waitedMs).toBeGreaterThanOrEqual(5_000);
-  expect(existsSync(observed.root)).toBe(false);
   // The second line is this file's own JSON.stringify of OwnershipEvidence.
   const evidence = JSON.parse(lines[1] ?? '') as OwnershipEvidence;
-  return { evidence, code: await started.result };
+  return { evidence, cleanup: JSON.parse(lines[2] ?? '') as unknown };
+}
+
+/** An ownership timeout under the original settlement bound retires everything it owns. */
+async function retiredOwnershipTimeout(engine: ReturnType<typeof startupUnixServer>) {
+  const induced = await inducedOwnershipTimeout(engine);
+  const { evidence, cleanup } = ownershipTimeout(induced);
+  expect(cleanup).toEqual({ cleanup: RETIRED });
+  expect(induced.surfaced.root).toBe(false);
+  return { evidence, code: await induced.started.result };
+}
+
+function heldPreflightEngine() {
+  return startupUnixServer(
+    () => ({ status: 200, document: { ApiVersion: '1.44' } }),
+    // Never released: the start command ends only through its own preflight failure.
+    (_method, path) => (path === '/version' ? new Promise<undefined>(() => undefined) : undefined),
+  );
 }
 
 it('initial ownership timeout retains closed-set evidence while the Engine preflight is held', async () => {
-  const engine = startupUnixServer(
-    () => ({ status: 200, document: { ApiVersion: '1.44' } }),
-    // Never released: the start command ends only through its own preflight abort.
-    (_method, path) => (path === '/version' ? new Promise<undefined>(() => undefined) : undefined),
-  );
-
-  const { evidence, code } = await inducedOwnershipTimeout(engine);
+  const { evidence, code } = await retiredOwnershipTimeout(heldPreflightEngine());
 
   const { lock, webBuild, ...unobserved } = evidence;
   expect([typeof lock, typeof webBuild]).toEqual(['number', 'number']);
@@ -582,7 +619,7 @@ it('initial ownership timeout retains the early command exit when the Engine pre
     () => undefined,
   );
 
-  const { evidence, code } = await inducedOwnershipTimeout(engine);
+  const { evidence, code } = await retiredOwnershipTimeout(engine);
 
   const {
     lock,
@@ -597,3 +634,74 @@ it('initial ownership timeout retains the early command exit when the Engine pre
   expect(closedMs !== null && closedMs < 5_000).toBe(true);
   expect(code).toBe(1);
 }, 30_000);
+
+it('unconfirmed command settlement retains the private root and lock for the owning start', async () => {
+  const induced = await inducedOwnershipTimeout(heldPreflightEngine(), 1_000);
+  const { root } = induced.observed;
+  try {
+    expect(ownershipTimeout(induced).cleanup).toEqual({
+      cleanup: { ...RETIRED, commands: 'failed', root: 'failed' },
+    });
+    // Recorded before Engine closure, while the held start still owned its lock.
+    expect(induced.released).toEqual({ lock: true, running: true });
+    expect(induced.surfaced.root).toBe(true);
+    // Engine closure fails the held preflight; the start then settles and releases its lock.
+    expect(await observeHttp(induced.started.result, 15_000)).toBe(1);
+    expect([
+      existsSync(join(root, '.run/dev.lock')),
+      existsSync(join(root, '.run/dev.pid')),
+    ]).toEqual([false, false]);
+  } finally {
+    // Never remove files a still-running lifecycle command owns.
+    await Promise.allSettled([induced.started.result]);
+    await rm(root, { recursive: true, force: true });
+  }
+}, 45_000);
+
+/** A spawn-free lifecycle whose readiness release fails with a message naming the private root. */
+async function failedRelease(primary?: Error) {
+  let root = '';
+  let released: Error | undefined;
+  const failure = await runDevLifecycle(
+    startupUnixServer(
+      () => ({ status: 200 }),
+      () => undefined,
+    ),
+    () => {
+      released = new Error(`Release failed under ${root}`);
+      throw released;
+    },
+    (lifecycle) => {
+      root = lifecycle.root;
+      return primary === undefined ? Promise.resolve() : Promise.reject(primary);
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  if (root === '' || released === undefined) throw new Error('Missing lifecycle release');
+  expect(existsSync(root)).toBe(false);
+  return { failure, root, released };
+}
+
+const RELEASE_FAILED = JSON.stringify({ cleanup: { ...RETIRED, readiness: 'failed' } });
+
+it('a failed cleanup step keeps the first scenario failure primary', async () => {
+  const primary = new Error('Scenario failed first');
+
+  const { failure } = await failedRelease(primary);
+
+  expect(failure).toBe(primary);
+  expect(primary.message).toBe(`Scenario failed first\n${RELEASE_FAILED}`);
+});
+
+it('a cleanup-only failure reports step outcomes and keeps raw errors only as cause', async () => {
+  const { failure, root, released } = await failedRelease();
+
+  if (!(failure instanceof Error)) throw new Error('Missing cleanup failure');
+  expect(failure.message).toBe(`Lifecycle cleanup failed\n${RELEASE_FAILED}`);
+  expect(released.message.includes(root)).toBe(true);
+  expect(failure.cause).toBeInstanceOf(AggregateError);
+  expect((failure.cause as AggregateError).errors).toStrictEqual([released]);
+  expect((failure.cause as AggregateError).errors[0]).toBe(released);
+});

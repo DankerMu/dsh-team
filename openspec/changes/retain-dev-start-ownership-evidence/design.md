@@ -29,6 +29,7 @@ Must add/change:
 - On timeout it throws `Error('Timed out waiting for source-main ownership\n' + JSON.stringify(evidence))`. Evidence values are numbers, closed-set strings or null only.
 - Cleanup composition:
   - each cleanup step runs in its own try and records `confirmed|failed` under a fixed step name (`readiness`, `commands`, `main`, `engine`, `root`);
+  - `root` removal runs only when `commands` and `main` are both `confirmed`; otherwise the private root (pidfile, lock, log) is retained and `root` records `failed` with the fixed error `Private root retained: lifecycle retirement unconfirmed`, so a lock-owning `dev-server.sh` can still retire its captured main (the original `finally` kept the root on these failures). `engine` stays unconditional;
   - a scenario failure stays the same thrown error object, rewritten in place: when it is an `Error`, its `message` gets a newline plus `JSON.stringify({cleanup: {<step>: 'confirmed'|'failed'}})` appended, keeping its type, first line (e.g. `Timed out waiting for source-main ownership`) and assertion expected/actual details; a non-`Error` throwable is wrapped once in `Error(String(value) + '\n' + json, {cause: value})`. Cleanup facts therefore reach retained text (vitest prints the message);
   - cleanup failures after scenario success throw `Error('Lifecycle cleanup failed\n' + JSON.stringify({cleanup}))`, step names and outcomes only, never the raw cleanup error text (which can contain root/socket paths); the raw errors are attached only as `cause` (an AggregateError) for local debugging, never in the message.
 - New induced cases use the same runtime fixture with the Engine `/version` response controlled, each with an explicit `it` timeout of 30_000ms (the integration project has no `testTimeout`, so vitest's 5000ms default would otherwise apply):
@@ -48,6 +49,9 @@ Sibling surfaces:
 Seams under test: the real `pnpm dev:bg` process plus the canonical script against the test-owned Unix Engine. The thrown error's message (first line unchanged, then the evidence/cleanup JSON) is the public seam.
 
 Required evidence:
+
+- Root retention: with an injected short commands-settlement bound, a held-preflight timeout reports `commands:'failed'`, `root:'failed'`, and the root and lock still exist; the test retires them itself after the command settles.
+- Failure composition: a failing `readiness` step keeps the first scenario error object and its first line; a cleanup-only failure throws `Lifecycle cleanup failed` with step outcomes only and an AggregateError `cause`.
 
 - Held preflight: the error message starts with the exact original text, and the JSON has `lock`/`webBuild` as numbers, `mainLog`/`pid` as null, `command.state='running'`, and `pidfile='missing'`. The message JSON also carries cleanup facts all `confirmed`, and no main process remains.
 - Failed preflight: message starts with the exact original text; JSON has `command.state='closed'`, `code=1`, `mainLog`/`pid` null, `pidfile='missing'`; cleanup facts all `confirmed`.

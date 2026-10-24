@@ -1,12 +1,12 @@
 ## 1. Evidence on the failure path
 
-- [ ] 1.1 Add the held-preflight (never released; settles by the preflight's 10s abort) and failed-preflight (500) induced cases, each `it` timeout 30_000ms; assert the exact leading timeout text, the closed-set evidence, cleanup facts in the message JSON and secret-free strings; observe RED on the current file.
-- [ ] 1.2 Implement the local evidence wait helper (same predicate, 5000ms/20ms bound, same order) at the initial ownership call site only; observe GREEN.
-- [ ] 1.3 Compose scenario cleanup per step with independent `confirmed|failed` facts carried in the message JSON, first failure primary (same error object, message rewritten in place with the first line kept), cleanup-only failures as `Lifecycle cleanup failed` with step outcomes only (raw errors only in `cause`); verify the held-preflight case confirms main/Engine/root retirement. Document in the test that the published-then-cleared boundary is covered by evidence shape only.
+- [x] 1.1 Add the held-preflight (never released; settles by the preflight's 10s abort) and failed-preflight (500) induced cases, each `it` timeout 30_000ms; assert the exact leading timeout text, the closed-set evidence, cleanup facts in the message JSON and secret-free strings; observe RED on the current file.
+- [x] 1.2 Implement the local evidence wait helper (same predicate, 5000ms/20ms bound, same order) at the initial ownership call site only; observe GREEN.
+- [x] 1.3 Compose scenario cleanup per step with independent `confirmed|failed` facts carried in the message JSON, first failure primary (same error object, message rewritten in place with the first line kept), cleanup-only failures as `Lifecycle cleanup failed` with step outcomes only (raw errors only in `cause`); verify the held-preflight case confirms main/Engine/root retirement. Document in the test that the published-then-cleared boundary is covered by evidence shape only.
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm check:fast`; `pnpm test:integration platform/test/instance-lifecycle.integration.test.ts` three times; full `pnpm test:integration` once; record `scripts/dev-server.sh` SHA256 unchanged.
+- [x] 2.1 `pnpm check:fast`; `pnpm test:integration platform/test/instance-lifecycle.integration.test.ts` three times; full `pnpm test:integration` once; record `scripts/dev-server.sh` SHA256 unchanged.
 - [ ] 2.2 Review, CI, trusted exact-head Docker/deploy custody evidence, merge; post the diagnosis summary on #312 and keep the historical cause UNKNOWN.
 
 ## Risk mapping
