@@ -240,8 +240,12 @@ async function execute() {
   await prepare('install', ['install', '--frozen-lockfile']);
   await prepare('build', ['build']);
   await enter('driver');
+  // Operator-staged layouts are selected only by the approved SHA. Any present entry goes to the
+  // adapter, which alone validates it and fails closed; absence keeps native image builds.
+  const images = join(homedir(), '.config/dsh-team/verification-images', `${approved.sha}.json`);
+  const selected = await exists(images);
   const driver = `const {spawnSync}=require('node:child_process');
-const env={}; for(const name of ['PATH','HOME','TMPDIR','CHROME_BIN','DSH_TEAM_CI_RESOURCE_JOURNAL','DSH_TEAM_CI_INVOCATION']) env[name]=process.env[name];
+const env={}; for(const name of ['PATH','HOME','TMPDIR','CHROME_BIN','DSH_TEAM_CI_RESOURCE_JOURNAL','DSH_TEAM_CI_INVOCATION','DSH_TEAM_VERIFICATION_IMAGES']) env[name]=process.env[name];
 process.loadEnvFile(${JSON.stringify(join(homedir(), '.config/dsh-team/env'))});
 const key=process.env.DMXAPI_KEY; if(key) env.DMXAPI_KEY=key;
 const r=spawnSync('pnpm',['test:model'],{env,encoding:'utf8',maxBuffer:16777216});
@@ -257,6 +261,7 @@ process.exit(r.status??1);`;
       ),
       DSH_TEAM_CI_RESOURCE_JOURNAL: join(root, 'resources.jsonl'),
       DSH_TEAM_CI_INVOCATION: id,
+      ...(selected ? { DSH_TEAM_VERIFICATION_IMAGES: images } : {}),
     },
     encoding: 'utf8',
     maxBuffer: 16_777_216,

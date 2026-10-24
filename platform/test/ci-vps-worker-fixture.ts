@@ -65,10 +65,18 @@ type ExecutionReplacement = { text: string; mode: number } | 'absent' | 'symlink
  */
 type HostProxy = 'fields' | 'invalid-url' | 'public-mode' | 'tunnel';
 
+/**
+ * Operator-staged image mapping for the restricted driver. Any staging also places a canary
+ * `DSH_TEAM_VERIFICATION_IMAGES` in the worker's inherited environment and in its env file.
+ * `not-directory` makes `verification-images` a regular file, so the SHA path lstat is ENOTDIR.
+ */
+type StagedImages = 'approved' | 'other-sha' | 'absent' | 'symlink' | 'not-directory';
+
 interface WorkerRun {
   finalize?: boolean;
   execution?: ExecutionReplacement;
   hostProxy?: HostProxy;
+  images?: StagedImages;
 }
 
 // Real git is only admitted behind the recorder; it is never routed through PATH lookup.
@@ -225,6 +233,36 @@ interface Routes {
   fence: string | null;
 }
 
+/** Stages the host-local mapping exactly as an operator would; the worker must only lstat it. */
+async function stageImages(root: string, kind: StagedImages | undefined, sha: string) {
+  const directory = join(root, '.config/dsh-team/verification-images');
+  const selected = join(directory, `${sha}.json`);
+  if (kind === undefined || kind === 'absent') return selected;
+  if (kind === 'not-directory') {
+    await writeFile(directory, '{}', { mode: 0o600 });
+    return selected;
+  }
+  await mkdir(directory, { mode: 0o700 });
+  if (kind === 'other-sha')
+    await writeFile(join(directory, `${'c'.repeat(40)}.json`), '{}', { mode: 0o600 });
+  else if (kind === 'approved') await writeFile(selected, '{}', { mode: 0o600 });
+  else {
+    await writeFile(join(root, 'elsewhere-images.json'), '{}', { mode: 0o600 });
+    await symlink(join(root, 'elsewhere-images.json'), selected);
+  }
+  return selected;
+}
+
+/** Any staging also plants a canary selection in the inherited environment and the env file. */
+function imageCanary(kind: StagedImages | undefined, value: string) {
+  return kind === undefined
+    ? { line: '', inherited: {} }
+    : {
+        line: `DSH_TEAM_VERIFICATION_IMAGES=${value}\n`,
+        inherited: { DSH_TEAM_VERIFICATION_IMAGES: value },
+      };
+}
+
 /** Only the host platform and the external executable boundary are adapted. */
 async function writePreload(root: string, mode: WorkerMode, selected: Routes) {
   const routes = {
@@ -251,7 +289,10 @@ syncBuiltinESMExports();`,
   return preload;
 }
 
-/** Projects each fixture-owned call record to its name, arguments and proxy-named environment. */
+/**
+ * Projects each fixture-owned call record to its name, arguments, proxy-named environment and
+ * image selection.
+ */
 function parseCalls(text: string) {
   return text
     .split('\n')
@@ -260,10 +301,15 @@ function parseCalls(text: string) {
       const value = JSON.parse(line) as {
         name: string;
         args: string[];
-        env: Record<string, string>;
+        env: Record<string, string | undefined>;
       };
       const proxy = Object.entries(value.env).filter(([name]) => /proxy/i.test(name));
-      return { name: value.name, args: value.args, proxy: Object.fromEntries(proxy) };
+      return {
+        name: value.name,
+        args: value.args,
+        proxy: Object.fromEntries(proxy),
+        images: value.env.DSH_TEAM_VERIFICATION_IMAGES,
+      };
     });
 }
 
@@ -334,15 +380,22 @@ export async function runWorkerScenario(mode: WorkerMode, options: WorkerRun = {
     proxy: `http://proxy-${randomUUID()}.invalid:3128`,
     key: `key-${randomUUID()}`,
     hostProxy: `host-${randomUUID()}`,
+    images: `/images-${randomUUID()}.json`,
   };
   let transport: Awaited<ReturnType<typeof hostTransport>> | undefined;
   try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await mkdir(bin, { recursive: true });
     await mkdir(join(root, '.config/dsh-team'), { recursive: true });
-    await writeFile(join(root, '.config/dsh-team/env'), `DMXAPI_KEY=${canaries.key}\n`, {
-      mode: 0o600,
-    });
+    const canary = imageCanary(options.images, canaries.images);
+    await writeFile(
+      join(root, '.config/dsh-team/env'),
+      `DMXAPI_KEY=${canaries.key}\n${canary.line}`,
+      {
+        mode: 0o600,
+      },
+    );
+    const images = await stageImages(root, options.images, canaries.sha);
     await writeFile(join(root, 'tool.cjs'), `#!${process.execPath}\n${tool}`, { mode: 0o700 });
     for (const name of ['git', 'pnpm', 'systemctl'])
       await symlink(join(root, 'tool.cjs'), join(bin, name));
@@ -383,6 +436,7 @@ export async function runWorkerScenario(mode: WorkerMode, options: WorkerRun = {
       PATH: '/usr/bin:/bin',
       HTTP_PROXY: canaries.proxy,
       HTTPS_PROXY: canaries.proxy,
+      ...canary.inherited,
     };
     const pidFile = join(root, 'build.pid');
     const executed = await runEntry(
@@ -402,6 +456,7 @@ export async function runWorkerScenario(mode: WorkerMode, options: WorkerRun = {
     const calls = (await optionalText(join(root, 'calls.jsonl'))) ?? '';
     return {
       canaries,
+      images,
       hostProxy: transport.fields,
       tunnels: transport.tunnels,
       gitConfig: await optionalText(join(directory, 'checkout/.git/config')),

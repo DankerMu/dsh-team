@@ -188,12 +188,38 @@ it('retains only the last recognized build header across interleaved secret-bear
 });
 
 it.each([
+  {
+    header: '#15 [stage-0  2/11] RUN private-single-stage\n',
+    projection: { vertex: 15, phase: 'stage-0', step: 2, total: 11, instruction: 'RUN' },
+  },
+  {
+    header: '#6 [build  2/10] RUN private-padded-stage\n',
+    projection: { vertex: 6, phase: 'build', step: 2, total: 10, instruction: 'RUN' },
+  },
+])('projects the single-stage or space-padded header $header', async ({ header, projection }) => {
+  const commands = createDockerCommands('unused', 'unused', true, () => ({
+    status: 7,
+    stdout: '',
+    stderr: `#1 [internal] load metadata for private-registry/private-image\n${header}#9 [private-stage  1/1] RUN private-stage-command\n`,
+  }));
+
+  const result = await commands.commandAsync(['build'], 600_000);
+
+  expect(diagnostic(result)).toMatchObject({
+    termination: 'exit',
+    lastObservedBuildHeader: projection,
+  });
+  expect(result.stderr).not.toContain('private-');
+});
+
+it.each([
   '#1 [internal] load metadataPRIVATE\n',
   '#0 [build 1/1] RUN private-zero\n',
   '#1000000 [build 1/1] RUN private-oversized\n',
   '#1 [build 2/1] RUN private-order\n',
   '#1 [build 1/1] UNKNOWN private-command\n',
   '#1 [private-stage 1/1] RUN private-stage\n',
+  '#1 [private-stage  1/1] RUN private-padded-stage\n',
   '#1 [build 1/1] RUN private-incomplete',
 ])('keeps unrecognized or incomplete progress unknown: %s', async (stderr) => {
   const commands = createDockerCommands('unused', 'unused', true, () => ({
