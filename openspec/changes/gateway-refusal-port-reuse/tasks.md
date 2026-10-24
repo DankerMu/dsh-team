@@ -24,6 +24,6 @@ The race cannot be reproduced deterministically, so there is no local pre-fix RE
 
 ## Sibling surfaces checked
 
-- `platform/test/gateway-*.ts` and `platform/src/gateway/*.test.ts` contain exactly two "close then reuse the released URL" sites: `gateway-http.integration.test.ts:254-256` and `gateway-websocket.integration.test.ts:772-774`.
+- `platform/test/gateway-*.ts` and `platform/src/gateway/*.test.ts` contain exactly two "close then reuse the released URL" sites, at pre-change positions `gateway-http.integration.test.ts:254-256` and `gateway-websocket.integration.test.ts:772-774` on `main` `9a6a5ef`.
 - Every other `close()`/`destroy()` is end-of-case cleanup or socket cancellation. This includes the `gateway-routing.integration.test.ts:178-235` observer, which closes only at the end.
 - `unusedPort()` callers (`deployment-fixture.ts:103`, `deployment-tls-fixture.ts:81`, `main-startup-fixture.ts:115`) pick a port to bind later. Reuse there would surface as a bind collision, not a misrouted assertion. That is a different failure class, reported but not changed.
