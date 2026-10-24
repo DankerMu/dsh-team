@@ -33,7 +33,7 @@ Required evidence:
 - Staged `<sha>.json` ⇒ recorded `pnpm test:model` environment has exactly that path; install/build/git environments and phase/execution/final receipts do not contain it.
 - Mapping for another SHA only, or absent directory, with a canary `DSH_TEAM_VERIFICATION_IMAGES` in both the worker's inherited environment and `~/.config/dsh-team/env` ⇒ no variable in the driver `pnpm test:model` environment.
 - `~/.config/dsh-team/verification-images` is a regular file (ENOTDIR) ⇒ `phase.json` `{phase:'driver', state:'failed', category:'unknown'}`, `execution.json` `{exitCode:1, phase:'driver', category:'unknown'}`, no `pnpm test:model` call recorded.
-- Symlink at `<sha>.json` ⇒ path exported (adapter rejection is its existing tested behavior), never resolved by the worker.
+- Symlink at `<sha>.json` ⇒ path exported (adapter rejection follows from its O_NOFOLLOW/regular-file/uid/nlink/mode checks in `scripts/verification-image.mjs`; no existing adapter test feeds a symlinked, directory or 0644 mapping, a pre-existing gap reported in PR #328), never resolved by the worker.
 - `#15 [stage-0  2/11] RUN …` ⇒ `{phase:'stage-0', step:2, total:11, instruction:'RUN'}`; `#6 [build  2/10] RUN …` ⇒ `{phase:'build', step:2, total:10}`; `[private-stage  1/1]` stays unknown. RED on current main first.
 
 Non-goals: host-local layout transfer automation inside `pnpm ci:model`; proxy build arguments, mirrors, host/daemon/network changes; deadlines; adapter changes; #319 item 4 never-created image ownership proof; the real-model run itself (separately authorized after merge).
