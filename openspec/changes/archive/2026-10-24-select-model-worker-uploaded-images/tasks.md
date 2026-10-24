@@ -13,8 +13,8 @@
 
 ## 4. Integration and acceptance
 
-- [ ] 4.1 Canonical checks, expanded review, CI, trusted exact-head `test:docker`/`test:deploy` custody evidence and merge.
-- [ ] 4.2 After merge, obtain separate SHA-bound authorization for exactly one `pnpm ci:model` run with staged final-SHA layouts; record original model acceptance and independent cleanup. Not part of this change's completion; no retry.
+- [x] 4.1 Canonical checks, expanded review, CI, trusted exact-head `test:docker`/`test:deploy` custody evidence and merge.
+- [ ] 4.2 After merge, obtain separate SHA-bound authorization for exactly one `pnpm ci:model` run with staged final-SHA layouts; record original model acceptance and independent cleanup. Not part of this change's completion; no retry. Tracked by #319.
 
 ## Risk mapping
 

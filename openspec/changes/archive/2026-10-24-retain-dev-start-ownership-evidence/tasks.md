@@ -7,7 +7,7 @@
 ## 2. Verification
 
 - [x] 2.1 `pnpm check:fast`; `pnpm test:integration platform/test/instance-lifecycle.integration.test.ts` three times; full `pnpm test:integration` once; record `scripts/dev-server.sh` SHA256 unchanged.
-- [ ] 2.2 Review, CI, trusted exact-head Docker/deploy custody evidence, merge; post the diagnosis summary on #312 and keep the historical cause UNKNOWN.
+- [x] 2.2 Review, CI, trusted exact-head Docker/deploy custody evidence, merge; post the diagnosis summary on #312 and keep the historical cause UNKNOWN.
 
 ## Risk mapping
 
