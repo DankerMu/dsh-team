@@ -284,3 +284,88 @@ it.each(['invalid-url', 'public-mode'] as const)(
   },
   WORKER_CASE_TIMEOUT,
 );
+
+function driverCalls(result: Scenario) {
+  return result.calls.filter((call) => call.name === 'pnpm' && call.args[0] === 'test:model');
+}
+
+it(
+  'gives the approved-SHA image mapping only to the driver and never to receipts',
+  async () => {
+    const result = await runWorkerScenario('driver-success', {
+      finalize: true,
+      images: 'approved',
+    });
+
+    expect(result.final?.value).toEqual({ vpsCleanupComplete: true, failures: [], exitCode: 0 });
+    expect(result.calls.map((call) => [`${call.name} ${call.args[0] ?? ''}`, call.images])).toEqual(
+      [
+        ['git init', undefined],
+        ['git remote', undefined],
+        ['git fetch', undefined],
+        ['git checkout', undefined],
+        ['git rev-parse', undefined],
+        ['pnpm install', undefined],
+        ['pnpm build', undefined],
+        ['pnpm test:model', result.images],
+      ],
+    );
+    const receipts = [result.phase?.text, result.execution?.text, result.final?.text].join('\n');
+    expect(receipts).not.toContain(result.images);
+    expect(receipts).not.toContain('verification-images');
+    expect(JSON.stringify(result.calls.map((call) => call.args))).not.toContain(result.images);
+    expect(result.callText).not.toContain(result.canaries.images);
+    expectPrivateReceipts(result);
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);
+
+it.each(['other-sha', 'absent'] as const)(
+  'keeps native image acquisition for %s mappings despite inherited and env-file canaries',
+  async (images) => {
+    const result = await runWorkerScenario('driver-success', { images });
+
+    expect(result.execution?.value).toEqual({ exitCode: 0, phase: 'driver' });
+    expect(driverCalls(result)).toHaveLength(1);
+    for (const call of result.calls) expect(call.images).toBeUndefined();
+    expect(result.callText).not.toContain(result.canaries.images);
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);
+
+it(
+  'passes a symlinked approved-SHA mapping path unresolved for the adapter to reject',
+  async () => {
+    const result = await runWorkerScenario('driver-success', { images: 'symlink' });
+
+    expect(driverCalls(result).map((call) => call.images)).toEqual([result.images]);
+    expect(result.callText).not.toContain('elsewhere-images.json');
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);
+
+it(
+  'fails the driver phase before spawning when the mapping presence check fails',
+  async () => {
+    const result = await runWorkerScenario('driver-success', { images: 'not-directory' });
+
+    expect(result.phase?.value).toEqual({
+      version: 1,
+      phase: 'driver',
+      state: 'failed',
+      category: 'unknown',
+    });
+    expect(result.execution?.value).toEqual({ exitCode: 1, phase: 'driver', category: 'unknown' });
+    expect(driverCalls(result)).toEqual([]);
+    expect(result.calls.map((call) => `${call.name} ${call.args[0] ?? ''}`).at(-1)).toBe(
+      'pnpm build',
+    );
+    expect(result.log).toBeUndefined();
+    expectPrivateReceipts(result);
+    expectNoCanary(result);
+  },
+  WORKER_CASE_TIMEOUT,
+);

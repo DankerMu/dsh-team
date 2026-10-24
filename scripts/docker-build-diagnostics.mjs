@@ -19,7 +19,7 @@ const BUILD_SIGNALS = [
 
 function lastBuildHeader(stderr) {
   const header =
-    /^#([1-9]\d{0,5}) (?:\[(build|runtime) ([1-9]\d{0,3})\/([1-9]\d{0,3})\] (FROM|RUN|COPY|WORKDIR|USER|EXPOSE|CMD|ENV|ARG|LABEL|ENTRYPOINT|ADD) |(\[internal\] load build definition|\[internal\] load metadata|\[internal\] load build context|\[internal\] load \.dockerignore|\[auth\]|exporting to image)(?= |\r?\n))[^\r\n]*\r?\n/gm;
+    /^#([1-9]\d{0,5}) (?:\[(build|runtime|stage-0) +([1-9]\d{0,3})\/([1-9]\d{0,3})\] (FROM|RUN|COPY|WORKDIR|USER|EXPOSE|CMD|ENV|ARG|LABEL|ENTRYPOINT|ADD) |(\[internal\] load build definition|\[internal\] load metadata|\[internal\] load build context|\[internal\] load \.dockerignore|\[auth\]|exporting to image)(?= |\r?\n))[^\r\n]*\r?\n/gm;
   let last = null;
   for (let match = header.exec(stderr); match !== null; match = header.exec(stderr)) {
     const step = match[3] === undefined ? null : Number(match[3]);
