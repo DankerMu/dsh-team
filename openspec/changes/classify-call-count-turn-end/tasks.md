@@ -1,6 +1,6 @@
 ## 1. Turn-end classification on call-count failure
 
-- [ ] 1.1 RED: in `platform/test/permission-model.integration.test.ts`, update the existing "diagnoses $starts starts and $calls calls" cases to expect the four-field detail. Their fixture keeps its single `turn/end` `{kind:'completed'}`; count its assistant messages from the fixture.
+- [x] 1.1 RED: in `platform/test/permission-model.integration.test.ts`, update the existing "diagnoses $starts starts and $calls calls" cases to expect the four-field detail. Their fixture keeps its single `turn/end` `{kind:'completed'}`; count its assistant messages from the fixture.
 
   Add cases built from `bashEvidence()` with no `assistant/attempt` events, so `permission-provider-attempt` cannot pre-empt the branch:
   - zero calls, `turn/end` `{kind:'completed'}`, one assistant message → `turn-start:1,tool-call:0,turn-end:completed,assistant-message:1`;
@@ -18,11 +18,11 @@
 
   Each case asserts that the whole `permissionFailure(...)` output `toEqual`s the expected object, so no sentinel (error message or code, hook reason, raw kind) can appear. Observe RED on the current oracle.
 
-- [ ] 1.2 GREEN: in `platform/test/permission-model-oracle.ts`, compute the two facts only inside the `starts.length !== 1 || calls.length !== 1` branch of `toolIdentity`, from the same filtered `events`.
+- [x] 1.2 GREEN: in `platform/test/permission-model-oracle.ts`, compute the two facts only inside the `starts.length !== 1 || calls.length !== 1` branch of `toolIdentity`, from the same filtered `events`.
   - Map the kind through a fixed allowlist.
   - Read `data.reason.kind` with non-throwing type checks, not `record()`, which throws on non-objects (`container-start-docker-fixture.ts:15-17`). Any failed check maps to `other`.
   - Do not change the success path, the `provider-attempt` check and its position before `toolIdentity`, any other code, or `permissionFailure`.
-- [ ] 1.3 Run `pnpm test:integration platform/test/permission-model.integration.test.ts`; expect exit 0 with all cases passing. Run `pnpm check:fast`; expect exit 0.
+- [x] 1.3 Run `pnpm test:integration platform/test/permission-model.integration.test.ts`; expect exit 0 with all cases passing. Run `pnpm check:fast`; expect exit 0.
 
 ## 2. Delivery
 

@@ -205,11 +205,137 @@ it.each([
     failure = error;
   }
 
+  // The fixture keeps its single completed turn/end and one assistant message.
   expect(permissionFailure(failure)).toEqual({
     code: 'permission-turn-call-count',
-    detail: `turn-start:${String(control.starts)},tool-call:${String(control.calls)}`,
+    detail: `turn-start:${String(control.starts)},tool-call:${String(control.calls)},turn-end:completed,assistant-message:1`,
   });
 });
+
+const TURN_END_SENTINELS = {
+  message: 'private-error-message-sentinel',
+  code: 'private-error-code-sentinel',
+  hook: 'private-hook-reason-sentinel',
+  kind: 'private-kind-sentinel',
+  reason: 'private-reason-sentinel',
+};
+
+function turnEnd(data: Record<string, unknown>) {
+  return { type: 'turn/end', data: { turn: 1, ...data } };
+}
+
+const completedEnd = turnEnd({ reason: { kind: 'completed' } });
+
+// No assistant/attempt rows: permission-provider-attempt must not pre-empt the count branch.
+function countFailure(ends: readonly Record<string, unknown>[], calls: number, messages: number) {
+  const value = bashEvidence();
+  const [start, prompt, call] = value.records.map((row) => row.event);
+  if (!start || !prompt || !call) throw new Error('Missing oracle control event');
+  const events = [
+    start,
+    prompt,
+    ...Array.from({ length: calls }, (_, index) => ({
+      ...call,
+      data: { ...record(call.data), callId: `provider-call-${String(index)}` },
+    })),
+    ...Array.from({ length: messages }, (_, step) => ({
+      type: 'assistant/message',
+      data: { turn: 1, step, message: { role: 'assistant' } },
+    })),
+    ...ends,
+  ];
+  const records = events.map((event, seq) => ({ type: 'event', event: { ...event, seq } }));
+  let failure: unknown;
+  try {
+    permissionEvidence({ ...value, records, cursor: records.length - 1 });
+  } catch (error) {
+    failure = error;
+  }
+  return permissionFailure(failure);
+}
+
+it.each([
+  { name: 'completed', ends: [completedEnd], calls: 0, messages: 1, end: 'completed' },
+  {
+    name: 'error',
+    ends: [
+      turnEnd({
+        reason: {
+          kind: 'error',
+          error: { message: TURN_END_SENTINELS.message, code: TURN_END_SENTINELS.code },
+        },
+      }),
+    ],
+    calls: 0,
+    messages: 0,
+    end: 'error',
+  },
+  {
+    name: 'aborted',
+    ends: [
+      turnEnd({
+        reason: { kind: 'aborted', reason: { kind: 'hook', reason: TURN_END_SENTINELS.hook } },
+      }),
+    ],
+    calls: 0,
+    messages: 0,
+    end: 'aborted',
+  },
+  {
+    name: 'max-tokens',
+    ends: [turnEnd({ reason: { kind: 'max-tokens' } })],
+    calls: 0,
+    messages: 1,
+    end: 'max-tokens',
+  },
+  {
+    name: 'blocked',
+    ends: [turnEnd({ reason: { kind: 'blocked' } })],
+    calls: 0,
+    messages: 0,
+    end: 'blocked',
+  },
+  {
+    name: 'interrupted',
+    ends: [turnEnd({ reason: { kind: 'interrupted' } })],
+    calls: 0,
+    messages: 0,
+    end: 'other',
+  },
+  {
+    name: 'unknown kind',
+    ends: [turnEnd({ reason: { kind: TURN_END_SENTINELS.kind } })],
+    calls: 0,
+    messages: 0,
+    end: 'other',
+  },
+  { name: 'absent', ends: [], calls: 0, messages: 1, end: 'absent' },
+  { name: 'multiple', ends: [completedEnd, completedEnd], calls: 0, messages: 1, end: 'multiple' },
+  {
+    name: 'mismatched turn',
+    ends: [{ type: 'turn/end', data: { turn: 2, reason: { kind: 'aborted' } } }],
+    calls: 0,
+    messages: 0,
+    end: 'aborted',
+  },
+  { name: 'two calls', ends: [completedEnd], calls: 2, messages: 1, end: 'completed' },
+  { name: 'missing reason', ends: [turnEnd({})], calls: 0, messages: 0, end: 'other' },
+  {
+    name: 'non-object reason',
+    ends: [turnEnd({ reason: TURN_END_SENTINELS.reason })],
+    calls: 0,
+    messages: 0,
+    end: 'other',
+  },
+])(
+  'classifies the $name turn end of a call-count failure without exposing its reason',
+  ({ ends, calls, messages, end }) => {
+    expect(countFailure(ends, calls, messages)).toEqual({
+      code: 'permission-turn-call-count',
+      detail: `turn-start:1,tool-call:${String(calls)},turn-end:${end},assistant-message:${String(messages)}`,
+    });
+  },
+);
 
 it('rejects a different bash command even when it reports the expected output', () => {
   const value = bashEvidence();
