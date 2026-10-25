@@ -6,7 +6,7 @@
 
 ## 2. Delivery
 
-- [ ] 2.1 Review, CI, trusted exact-head Docker/deploy evidence, merge.
+- [x] 2.1 Review, CI, trusted exact-head Docker/deploy evidence, merge.
 
 ## RED evidence
 

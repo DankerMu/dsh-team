@@ -26,7 +26,7 @@
 
 ## 2. Delivery
 
-- [ ] 2.1 Review, CI, trusted exact-head Docker/deploy evidence, merge. The real-model run requires separate SHA-bound authorization and is not part of this change.
+- [x] 2.1 Review, CI, trusted exact-head Docker/deploy evidence, merge. The real-model run requires separate SHA-bound authorization and is not part of this change.
 
 ## Risk packs
 
