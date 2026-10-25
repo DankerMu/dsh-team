@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
@@ -40,12 +41,73 @@ interface StartupExit {
   readonly signal: NodeJS.Signals | null;
 }
 
-async function stopMainProcess(child: ChildProcess, closed: Promise<StartupExit>): Promise<void> {
+/** Capture the child's complete stderr and close outcome from spawn onward. */
+export function watchMainProcess(child: ChildProcess & { readonly stderr: Readable }): {
+  readonly closed: Promise<StartupExit>;
+  readonly stderr: () => string;
+} {
+  let stderr = '';
+  child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
+    stderr += chunk;
+  });
+  const closed = new Promise<StartupExit>((resolveClosed, rejectClosed) => {
+    child.once('error', rejectClosed);
+    child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      resolveClosed({ code, signal });
+    });
+  });
+  return { closed, stderr: () => stderr };
+}
+
+type StartupOutcome = { readonly observation: StartupObservation } | { readonly error: unknown };
+
+const STDERR_TAIL = 8192;
+
+function stderrTail(stderr: string): string {
+  const omitted = stderr.length - STDERR_TAIL;
+  if (omitted <= 0) return stderr;
+  return `[stderr truncated: ${String(omitted)} earlier characters omitted]${stderr.slice(omitted)}`;
+}
+
+async function stopMainProcess(
+  child: ChildProcess,
+  closed: Promise<StartupExit>,
+  stderr: () => string,
+  outcome: StartupOutcome,
+): Promise<void> {
   const requested = child.exitCode === null && child.signalCode === null;
   if (requested) child.kill('SIGTERM');
   const exit = await closed;
-  if (requested && (exit.code !== 0 || exit.signal !== null))
-    throw new Error('Main did not settle through graceful shutdown');
+  if (requested && (exit.code !== 0 || exit.signal !== null)) {
+    // Exit class evidence only: code, signal and stderr together; the cause stays unattributed.
+    const observed =
+      'observation' in outcome
+        ? `health=${String(outcome.observation.health?.status ?? null)} exitCode=${String(outcome.observation.exitCode)}`
+        : 'rejected (see cause)';
+    throw new Error(
+      `Main did not settle through graceful shutdown: code=${String(exit.code)} signal=${String(exit.signal)}; observation: ${observed}; stderr:\n${stderrTail(stderr())}`,
+      'error' in outcome ? { cause: outcome.error } : undefined,
+    );
+  }
+}
+
+/** Observe, then stop the main process gracefully; afterStop runs only after a successful stop. */
+export async function settleMainProcess(
+  child: ChildProcess,
+  closed: Promise<StartupExit>,
+  stderr: () => string,
+  observe: () => Promise<StartupObservation>,
+  afterStop?: () => Promise<void>,
+): Promise<StartupObservation> {
+  // A stop failure must carry, never replace, the observation outcome it follows.
+  const outcome: StartupOutcome = await observe().then(
+    (observation) => ({ observation }),
+    (error: unknown) => ({ error }),
+  );
+  await stopMainProcess(child, closed, stderr, outcome);
+  await afterStop?.();
+  if ('error' in outcome) throw outcome.error;
+  return outcome.observation;
 }
 
 async function observeMainListener(
@@ -132,17 +194,8 @@ export async function observeStartup(
       timeout: 6000,
       killSignal: 'SIGKILL',
     });
-    let stderr = '';
-    child.stderr.setEncoding('utf8').on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    const closed = new Promise<StartupExit>((resolveClosed, rejectClosed) => {
-      child.once('error', rejectClosed);
-      child.once('close', (code: number | null, signal: NodeJS.Signals | null) => {
-        resolveClosed({ code, signal });
-      });
-    });
-    try {
+    const { closed, stderr } = watchMainProcess(child);
+    const observe = async () => {
       if (beforeReconcile !== undefined) {
         await Promise.race([
           gate.reached,
@@ -162,11 +215,11 @@ export async function observeStartup(
           gate.release();
         }
       }
-      return await observeMainListener(child, closed, base, () => stderr, options.exercise);
-    } finally {
-      await stopMainProcess(child, closed);
+      return await observeMainListener(child, closed, base, stderr, options.exercise);
+    };
+    return await settleMainProcess(child, closed, stderr, observe, async () => {
       await options.afterExit?.({ ...context, signal: AbortSignal.timeout(2000) });
-    }
+    });
   } finally {
     gate.release();
     engine.closeAllConnections();
