@@ -7,6 +7,10 @@ updates:
     # Releases younger than 7 days are skipped (constraints.yaml dependencies.min_release_age_days).
     cooldown:
       default-days: 7
+    # @types/node tracks the pinned Node 24 runtime (.tool-versions); majors move with the runtime.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
