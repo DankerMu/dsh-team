@@ -16,17 +16,17 @@
 
 ## 1. Diagnostics
 
-- [ ] 1.1 Extract the observation-plus-stop combination (today `observeStartup`'s `finally` at `main-startup-fixture.ts:165-170` plus `stopMainProcess`) into **one exported function that `observeStartup` itself calls**; add `platform/test/main-startup-fixture.integration.test.ts` driving that function with real short-lived `node -e` child processes (no mocks of `ChildProcess`). RED on current source must be an assertion failure on message content (e.g. message lacks `code=1`), not an import/type error — land the export first if needed.
-- [ ] 1.2 Stderr in the message is the last 8192 characters of captured stderr; when longer, prefixed by exactly `[stderr truncated: <n> earlier characters omitted]`. Tests: a child printing 10000 characters then exiting 1 after SIGTERM → message contains the marker with n=1808 and the final characters; a short stderr appears whole with no marker.
-- [ ] 1.3 Stop failure after a fulfilled observation: `error.message` contains `code=1`, `signal=null`, the stderr text, and the observation's health status and exitCode. Stop failure after a rejected observation: `error.message` names code/signal and `error.cause` is the identical original error object. Child ended by signal (child SIGKILLs itself on SIGTERM): message contains `signal=SIGKILL`.
-- [ ] 1.4 Success paths unchanged: code 0/no signal returns the observation; a child already exited before stop is not signalled and does not throw; an observation error with a successful stop is rethrown as the same error object.
-- [ ] 1.5 Implement in `platform/test/main-startup-fixture.ts` only; keep the criterion and spawn options byte-identical.
+- [x] 1.1 Extract the observation-plus-stop combination (today `observeStartup`'s `finally` at `main-startup-fixture.ts:165-170` plus `stopMainProcess`) into **one exported function that `observeStartup` itself calls**; add `platform/test/main-startup-fixture.integration.test.ts` driving that function with real short-lived `node -e` child processes (no mocks of `ChildProcess`). RED on current source must be an assertion failure on message content (e.g. message lacks `code=1`), not an import/type error — land the export first if needed.
+- [x] 1.2 Stderr in the message is the last 8192 characters of captured stderr; when longer, prefixed by exactly `[stderr truncated: <n> earlier characters omitted]`. Tests: a child printing 10000 characters then exiting 1 after SIGTERM → message contains the marker with n=1808 and the final characters; a short stderr appears whole with no marker.
+- [x] 1.3 Stop failure after a fulfilled observation: `error.message` contains `code=1`, `signal=null`, the stderr text, and the observation's health status and exitCode. Stop failure after a rejected observation: `error.message` names code/signal and `error.cause` is the identical original error object. Child ended by signal (child SIGKILLs itself on SIGTERM): message contains `signal=SIGKILL`.
+- [x] 1.4 Success paths unchanged: code 0/no signal returns the observation; a child already exited before stop is not signalled and does not throw; an observation error with a successful stop is rethrown as the same error object.
+- [x] 1.5 Implement in `platform/test/main-startup-fixture.ts` only; keep the criterion and spawn options byte-identical.
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm test:integration platform/test/main-startup-fixture.integration.test.ts` RED (assertion failure on message content) before the diagnostic change, GREEN after (record both).
-- [ ] 2.2 `pnpm test:integration platform/test/subnet-startup.integration.test.ts platform/test/quarantine-bootstrap.integration.test.ts` pass.
-- [ ] 2.3 `pnpm check:fast` (fmt, lint, typecheck) and `pnpm lint:tests`/`pnpm dead-code` pass (test-only exports must be consumed).
+- [x] 2.1 `pnpm test:integration platform/test/main-startup-fixture.integration.test.ts` RED (assertion failure on message content) before the diagnostic change, GREEN after (record both).
+- [x] 2.2 `pnpm test:integration platform/test/subnet-startup.integration.test.ts platform/test/quarantine-bootstrap.integration.test.ts` pass.
+- [x] 2.3 `pnpm check:fast` (fmt, lint, typecheck) and `pnpm lint:tests`/`pnpm dead-code` pass (test-only exports must be consumed).
 - [ ] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required gate), CI green.
 
 ## Non-goals
