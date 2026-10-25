@@ -14,9 +14,13 @@
 
 ## 3. Integration and separately authorized acceptance
 
-- [ ] 3.1 Run canonical checks, high-risk four-seat review and exact reviewed-head trusted Compose/full Docker with independent resource/host-fence evidence; no changed deadline, discovery, retry or daemon/service policy.
-- [ ] 3.2 Obtain separate explicit authorization for any host-local config installation and exactly one final-SHA real-model invocation; prove actual Buildx token transport through the existing loopback proxy plus original model acceptance and complete independent credential/resource cleanup. Keep this task incomplete without that authorization/evidence; no simulated substitute or retry.
-- [ ] 3.3 After every acceptance gate is satisfied, complete protected CI/full check-rollup review, merge, main CI and managed spec synchronization/archive; human acceptance remains deferred and UNPASSED.
+- [x] 3.1 Run canonical checks, high-risk four-seat review and exact reviewed-head trusted Compose/full Docker with independent resource/host-fence evidence; no changed deadline, discovery, retry or daemon/service policy. Delivered by PR #295: the four-seat round 1 was clean, and exact-head trusted Docker/Compose evidence was recorded on `f17fc305`.
+- [x] 3.2 Obtain separate explicit authorization for any host-local config installation and exactly one final-SHA real-model invocation, then prove original model acceptance and complete independent credential/resource cleanup. No simulated substitute or retry. Reworded by user decision (2026-10-24): the accepted route uses operator-uploaded SHA-bound images (#328), so actual Buildx/registry token transport through the loopback proxy is **not** proven. It is recorded as an accepted residual risk. Evidence:
+  - The host config was installed under authorization (`docker-proxy.json`, uid1000/0600).
+  - Earlier separately authorized runs on the PR #295 branch (`cce7783b`, `5314a327`) failed before acceptance; their causes remain UNKNOWN, and neither was retried.
+  - The authorized run on `9a6a5ef` (`377e875f`) failed in the probe-2 oracle (#332), and that authorization was not retried.
+  - The separately authorized run on `39f5af4` (`783d7e36`, Actions 40156135665) passed 2/2, with cleanup confirmed and host fences unchanged.
+- [x] 3.3 After every acceptance gate is satisfied, complete protected CI/full check-rollup review, merge, main CI and managed spec synchronization/archive; human acceptance remains deferred and UNPASSED. Merged via PR #295. This archive completes the spec synchronization. Human acceptance remains deferred and UNPASSED.
 
 ## Risk mapping
 
