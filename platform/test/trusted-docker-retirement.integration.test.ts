@@ -1,6 +1,10 @@
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
+import { processBirth, processIdentity } from '../../scripts/probe-browser-native.mjs';
+import { signalOwnedGroup } from '../../scripts/trusted-docker-owner.mjs';
 import { record } from './container-start-docker-fixture.ts';
 import { withTrustedDockerFixture } from './trusted-docker-fixture.ts';
 import type { RetirementScenario } from './trusted-docker-fixture.ts';
@@ -18,18 +22,35 @@ function daemonEvidence(repository: string) {
   const state = record(JSON.parse(readFileSync(join(root, 'state.json'), 'utf8')) as unknown);
   if (!Array.isArray(state.resources)) throw new Error('Fixture daemon state malformed');
   const names = state.resources.map((resource: unknown) => String(record(resource).name)).sort();
-  const path = join(root, 'calls.jsonl');
-  const calls = existsSync(path)
-    ? readFileSync(path, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as string[])
-    : [];
+  const lines = (name: string) => {
+    const path = join(root, name);
+    return existsSync(path)
+      ? readFileSync(path, 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as string[])
+      : [];
+  };
+  const calls = lines('calls.jsonl');
+  // The owner preload's own account of every docker/flock launch it routed or refused.
+  const launches = lines('preload.jsonl');
   const docker = calls.filter((call) => call[0] === 'docker').map((call) => call.slice(1));
   const verb = (call: string[]) =>
     ['container', 'image', 'network', 'volume'].includes(call[0] ?? '') ? call[1] : call[0];
   const mutations = docker.filter((call) => !READ_ONLY.has(verb(call) ?? ''));
-  return { names, calls, docker, mutations };
+  const routed = launches.filter(([outcome]) => outcome === 'routed').length;
+  const refused = launches.filter(([outcome]) => outcome !== 'routed').length;
+  // The daemon also appends flock-released and the lock guard unlink; neither is a launch.
+  const daemonLaunches = calls.filter(([binary]) => binary === 'docker' || binary === 'flock');
+  return {
+    names,
+    calls,
+    docker,
+    mutations,
+    routed,
+    refused,
+    daemonLaunches: daemonLaunches.length,
+  };
 }
 
 /** Start a held retirement child, cancel it once ready, and return its settled terminal. */
@@ -70,13 +91,17 @@ async function cancelRetirement(fixture: CustodyFixture) {
     'utf8',
   );
   const retirementPath = join(directory, 'retirement.json');
+  const daemon = daemonEvidence(fixture.repository);
+  // Interception is the proof: every docker/flock launch reached the fake daemon, none refused.
+  expect(daemon.refused).toBe(0);
+  expect(daemon.routed).toBe(daemon.daemonLaunches);
   return {
     directory,
     retirement: existsSync(retirementPath)
       ? record(JSON.parse(readFileSync(retirementPath, 'utf8')) as unknown)
       : undefined,
     terminal: record(JSON.parse(status.stdout) as unknown),
-    daemon: daemonEvidence(fixture.repository),
+    daemon,
     submissions: submissions.split('\n').filter(Boolean).length,
   };
 }
@@ -130,7 +155,6 @@ it(
       // Approval and participant reservations only: the owner published no submissions.
       expect(submissions).toBe(4);
       expect(retirement).toMatchObject({ version: 1, failures: 0 });
-      expect(existsSync(fixture.realDocker)).toBe(false);
     });
   },
   CASE_TIMEOUT_MS,
@@ -155,7 +179,6 @@ it(
       expect(daemon.mutations.some((call) => call.at(-1)?.startsWith('dsh-team-mismatch-'))).toBe(
         false,
       );
-      expect(existsSync(fixture.realDocker)).toBe(false);
     });
   },
   CASE_TIMEOUT_MS,
@@ -164,6 +187,7 @@ it(
 it.each([
   ['a live process writer', 'process-writer', null],
   ['a live container writer that is not the registered platform', 'foreign-writer', null],
+  ['an uncompleted absent container writer that is not the platform', 'absent-writer', null],
   ['a reserved generation that was never bound', 'unbound', null],
   ['a changed manifest digest', 'digest', 'identity'],
 ] as const)(
@@ -182,7 +206,6 @@ it.each([
       expect(retirement).toMatchObject({ failures: 1 });
       expect(daemon.mutations).toEqual([]);
       expect(daemon.calls.some((call) => call[0] === 'flock')).toBe(false);
-      expect(existsSync(fixture.realDocker)).toBe(false);
     });
   },
   CASE_TIMEOUT_MS,
@@ -257,3 +280,36 @@ it(
   },
   CASE_TIMEOUT_MS,
 );
+
+// Retirement requires the owner's own group signal; a child that already ended received none.
+it.each([
+  ['exited', { exitCode: 23, signalCode: null }],
+  ['died by a signal', { exitCode: null, signalCode: 'SIGINT' }],
+] as const)('reports no group signal for a child that already %s', async (_case, child) => {
+  const kill = vi.spyOn(process, 'kill');
+  try {
+    await expect(signalOwnedGroup(child, { pid: 1, birth: 'unobserved' })).resolves.toBe(false);
+    expect(kill).not.toHaveBeenCalled();
+  } finally {
+    kill.mockRestore();
+  }
+});
+
+it('reports the group signal it actually sent to a live owned child', async () => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const closed = once(child, 'close');
+  try {
+    await once(child, 'spawn');
+    if (child.pid === undefined) throw new Error('Missing owned signal fixture');
+    const identity = processIdentity({ pid: child.pid, birth: await processBirth(child.pid) });
+
+    await expect(signalOwnedGroup(child, identity)).resolves.toBe(true);
+    expect(await closed).toEqual([null, 'SIGINT']);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await closed;
+  }
+});

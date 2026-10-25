@@ -94,7 +94,13 @@ if (scenario !== 'unbound') {
           kind: 'container',
           generation: reserved.generation,
           authority: authority.authority,
-          id: scenario === 'foreign-writer' ? employeeId : platformId,
+          // The absent writer was never a daemon object; only its uncompleted generation remains.
+          id:
+            scenario === 'foreign-writer'
+              ? employeeId
+              : scenario === 'absent-writer'
+                ? 'c'.repeat(64)
+                : platformId,
           imageId,
           startedAt,
         },

@@ -47,8 +47,8 @@ export async function retireCancelledJournal(request, directory, digest) {
       join(directory, 'docker'),
       true,
     );
-    const writers = readVerificationWritersBeforeRetirement(directory);
     const exempt = await ownedPlatformIds(commandAsync, entries);
+    const writers = readVerificationWritersBeforeRetirement(directory, exempt);
     await observeSubmissionWriters(writers, command, new Set(), exempt);
     if ((await readInvocation(request.invocation)).digest !== digest)
       throw new Error('Trusted Docker identity changed before retirement');

@@ -49,6 +49,7 @@ export type RetirementScenario =
   | 'mismatch'
   | 'process-writer'
   | 'foreign-writer'
+  | 'absent-writer'
   | 'member'
   | 'digest'
   | 'unsettled'
@@ -375,20 +376,14 @@ function fixtureDirectories() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-team-docker-custody-')));
   const repository = join(directory, 'repository');
   const home = join(directory, 'home');
-  // Any PATH lookup of docker reaches this owned refusal, never an Engine client.
-  const shim = join(directory, 'bin');
-  const realDocker = join(directory, 'real-docker-invoked');
-  for (const path of [repository, home, shim]) mkdirSync(path);
-  writeFileSync(join(shim, 'docker'), `#!/bin/sh\necho "$@" >> '${realDocker}'\nexit 127\n`, {
-    mode: 0o700,
-  });
-  return { directory, repository, home, shim, realDocker };
+  for (const path of [repository, home]) mkdirSync(path);
+  return { directory, repository, home };
 }
 
 function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScenario) {
-  const { directory, repository, home, shim, realDocker } = fixtureDirectories();
+  const { directory, repository, home } = fixtureDirectories();
   const environment = {
-    PATH: `${shim}:${process.env.PATH ?? ''}`,
+    PATH: process.env.PATH,
     HOME: home,
     // Only the complete-output case supplies a proxy; held-output fences have no secret tail.
     HTTP_PROXY: mode === 'fail' ? CUSTODY_PROXY : undefined,
@@ -573,7 +568,6 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
     repository,
     home,
     head,
-    realDocker,
     command,
     start,
     startObserved,

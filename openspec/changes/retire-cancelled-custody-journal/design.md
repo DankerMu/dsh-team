@@ -21,7 +21,7 @@ Must preserve:
 Must add:
 
 1. **Preconditions, phase A (before any mutation).** Retirement starts iff all of the following hold. Otherwise nothing is mutated and the assessment yields `unconfirmed`.
-   - `signalled === true`;
+   - `signalled === true`, set only when the owner actually sent SIGINT to its captured group (a cancel that finds the child already exited does not count);
    - `command.settled && producerCleanupConfirmed`;
    - browser producers have settled;
    - every recorded process-kind submission writer is dead, and every container-kind writer is absent **except** a run's own registered `dsh-team-platform` whose exact bound container ID matches that writer. A running deployment platform is itself a container-kind observer writer (`deployment-observer-fixture.ts:223-237`) and can only settle after its drain. The writer list comes from `readVerificationSubmissionsForCleanup` → `readVerificationDockerObserverWriters` → `readContainerWriters`, which demands completion for every generation and therefore throws while the platform lives. Phase A thus needs one pending-tolerant reader (extending that chain, not a copy). It requires the exempted current platform generation to pass `requireObserverInitialization` plus its binding witness, and every other generation to pass completion-level checks. A bound-but-uncompleted process writer, and a reserved generation without `.binding.json`, are non-exempt live writers;
@@ -41,7 +41,7 @@ Must add:
    - If the drain fails, nothing of that run is removed and a failure is recorded.
    - On drain success, run phase B. If phase B passes, call the existing `cleanupTargets` for that run while still holding the lock, then release the lock.
 5. **Other runs.** Runs without a registered platform call the existing `cleanupTargets` (`rm --force` for containers). This matches the existing fixture `finally` behavior; their containers are not SIGTERM-drainable (`container-start-docker-fixture.ts:120-121` runs `sleep infinity`; the employee PID1 `dsh` has no init).
-6. **Failures** are collected and never thrown out of the owner.
+6. **Failures** are collected and never thrown out of the owner. Their count is recorded in a private atomic `retirement.json` (0600, beside the terminal record: `version`, `invocation`, `manifestDigest`, `failures`), because the terminal schema admits no new fields; a write failure loses only that count, and the read-only assessment remains the outcome authority.
 7. **Submission evidence (sibling requirement "Every shared-Engine producer has attributable submission evidence").** The owner's retirement creates nothing. It only signals or removes exact registered identities after every producer and writer has settled, and every removal is followed by the independent read-only exact-absence assessment. So it introduces no unattributed creation. It therefore does not write submission records and does not become a writer the assessment must wait on.
 
 Governing invariant: the owner mutates only resources whose exact name and labels this invocation's private journal registered. It does so only after everything that could still create or use them has provably settled, and only under the deployment lock for a deployment run. Otherwise the result stays `unconfirmed`, and a cancelled run is never `passed`.
@@ -59,13 +59,13 @@ Seams under test:
 - **Integration.** The real custody owner runs through `withTrustedDockerFixture`'s real pnpm/fixture-child boundary, with an **owner-only preload** that follows the existing pattern at `trusted-docker-fixture.ts:101-119` (wrap the `own` spawn with `--import`, `syncBuiltinESMExports`).
   - The preload intercepts every `child_process` spawn or spawnSync whose file is `docker`, and answers from a fixture-owned fake daemon state file that the fixture child also writes.
   - It also intercepts `flock` for the lock-unavailable case.
-  - The test asserts that no real `docker` process is started. `pnpm test:integration` never touches an Engine.
+  - The preload refuses and counts any `docker` or `flock` launch it does not route; the test asserts that count is zero and that every routed call appears in the fake daemon's call ledger. `pnpm test:integration` never touches an Engine.
 - **Unit.** `docker-cleanup.ts` drain, lock decision and run-order logic, with an injected `DockerCommand`.
 
 Required evidence (input → expected output):
 
 - **RED, current code.** The fixture child registers a running `dsh-team-platform` (own run label), one employee container, a network and a volume. It binds the fake platform as a container-kind observer writer through the real `bindVerificationDockerObserver` path, leaving a pending reservation that settles only when the fake daemon processes the SIGTERM. It then blocks before its cleanup, and the operator cancels. Result: all remain, and `cleanup.state: unconfirmed`.
-- **GREEN, same input.** The platform receives SIGTERM, exits 0 and is removed before any employee `rm`; everything registered is absent; `cleanup.state: confirmed`, `state: failed`, `signal: SIGINT`, `interruption: cancelled`.
+- **GREEN, same input.** The platform receives SIGTERM and exits 0 before any `rm`; the stopped platform container is then removed in the existing reverse `cleanupTargets` order; everything registered is absent; `cleanup.state: confirmed`, `state: failed`, `interruption: cancelled`, with the real command outcome retained (`signal: SIGINT`, or pnpm's own exit status where it converts the signal, as the existing custody suite already accepts).
 - An unregistered `dsh-team-` sentinel with the same prefix, and a registered name whose live labels mismatch, both survive.
 - A live process writer, a live non-exempt container writer, an unsettled same-group member, or a changed digest → zero mutating Docker calls, `unconfirmed`.
 - The platform exits 0 after SIGTERM, but its observer reservation stays unsettled (pending marker) → no `rm` for that run, `unconfirmed`.

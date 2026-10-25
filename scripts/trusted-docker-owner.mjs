@@ -145,15 +145,21 @@ export async function startTrustedDocker(root, head) {
   }
 }
 
-async function signalOwnedGroup(child, identity) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+/**
+ * Signal the captured child group; true only when this call actually sent the signal.
+ * @param {{ exitCode: number | null, signalCode: string | null }} child
+ * @param {{ pid: number, birth: string }} identity
+ * @returns {Promise<boolean>}
+ */
+export async function signalOwnedGroup(child, identity) {
+  if (child.exitCode !== null || child.signalCode !== null) return false;
   if (!(await ownerIsLive(identity))) throw new Error('Trusted Docker child identity changed');
   const group = spawnSync('/bin/ps', ['-p', String(identity.pid), '-o', 'pgid='], {
     encoding: 'utf8',
     timeout: 2000,
     maxBuffer: 65_536,
   });
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return false;
   if (
     group.error ||
     group.status !== 0 ||
@@ -162,6 +168,7 @@ async function signalOwnedGroup(child, identity) {
   )
     throw new Error('Trusted Docker child group identity changed');
   process.kill(-identity.pid, 'SIGINT');
+  return true;
 }
 
 /**
@@ -201,8 +208,7 @@ async function executeOwnedCommand(context) {
     cancellation = cancellation
       .then(async () => {
         if (!child || !childIdentity || signalled || closed) return;
-        await signalOwnedGroup(child, childIdentity);
-        signalled = true;
+        signalled = await signalOwnedGroup(child, childIdentity);
       })
       .catch(() => {
         failure = 'identity';

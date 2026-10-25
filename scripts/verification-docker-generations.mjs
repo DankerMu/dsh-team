@@ -715,11 +715,12 @@ function observerGenerationName(name, names) {
 }
 
 /**
- * Only a current, bound and initialized container generation may still be live; a process
- * generation or an unbound reservation remains an unsettled writer.
+ * Only a current, bound and initialized generation of an exempt container may still be live;
+ * any other uncompleted generation, process or unbound reservation remains an unsettled writer.
+ * @param {ReadonlySet<string>} exempt
  * @returns {DockerObserverWitness}
  */
-function requireCurrentObserverWriter(path, states, generation) {
+function requireCurrentObserverWriter(path, states, generation, exempt) {
   try {
     return requireObserverCompletion(path, states, generation);
   } catch {
@@ -730,14 +731,17 @@ function requireCurrentObserverWriter(path, states, generation) {
       undefined,
       states,
     );
-    if (binding.witness.kind !== 'container')
-      throw new Error('Docker observer process writer settlement unconfirmed');
+    if (binding.witness.kind !== 'container' || !exempt.has(binding.witness.id))
+      throw new Error('Docker observer writer settlement unconfirmed');
     return binding.witness;
   }
 }
 
-/** @returns {DockerObserverWitness[]} */
-function readContainerWriters(directory, authority, states, live) {
+/**
+ * @param {ReadonlySet<string> | undefined} exempt
+ * @returns {DockerObserverWitness[]}
+ */
+function readContainerWriters(directory, authority, states, exempt) {
   if (!UUID.test(authority)) throw new Error('Docker observer container authority malformed');
   const bootstrap = join(directory, SUBMISSION_OBSERVERS, authority);
   const descriptor = readObserverAuthority(bootstrap).value;
@@ -754,8 +758,8 @@ function readContainerWriters(directory, authority, states, live) {
     if (generation === null) continue;
     if (generation === current.nonce) currentFound = true;
     writers.push(
-      live && generation === current.nonce
-        ? requireCurrentObserverWriter(join(bootstrap, name), states, generation)
+      exempt !== undefined && generation === current.nonce
+        ? requireCurrentObserverWriter(join(bootstrap, name), states, generation, exempt)
         : requireObserverCompletion(join(bootstrap, name), states, generation),
     );
   }
@@ -765,14 +769,15 @@ function readContainerWriters(directory, authority, states, live) {
 
 /**
  * Host-only final enumeration after all writers retire; no live append-active journal scan.
- * `live` admits each authority's current initialized container generation before its drain.
+ * `exempt` admits each authority's current initialized generation bound to one of those exact
+ * container IDs before its drain; without it every generation must be complete.
  * @param {string} directory
  * @param {Map<string, import('./verification-submission-storage.mjs').SubmissionState>} states
  * @param {import('./verification-submission-storage.mjs').CapturedAuthority} captured
- * @param {boolean} [live]
+ * @param {ReadonlySet<string>} [exempt]
  * @returns {DockerObserverWitness[]}
  */
-export function readVerificationDockerObserverWriters(directory, states, captured, live = false) {
+export function readVerificationDockerObserverWriters(directory, states, captured, exempt) {
   sameIdentity(
     pathIdentity(join(directory, SUBMISSION_OBSERVERS), true),
     captured.authority.observers,
@@ -780,6 +785,6 @@ export function readVerificationDockerObserverWriters(directory, states, capture
   /** @type {DockerObserverWitness[]} */
   const writers = [];
   for (const authority of readdirSync(join(directory, SUBMISSION_OBSERVERS)))
-    writers.push(...readContainerWriters(directory, authority, states, live));
+    writers.push(...readContainerWriters(directory, authority, states, exempt));
   return writers;
 }
