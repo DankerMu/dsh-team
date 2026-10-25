@@ -58,13 +58,24 @@ The owner SHALL incrementally retain complete stdout and stderr with ordered per
 
 ### Requirement: Explicit cancellation preserves exact ownership and uncertainty
 
-Only an explicit matching invocation cancellation request SHALL authorize the owner to signal its captured work after fresh identity checks. The owner SHALL settle submitted work before claiming cleanup and SHALL preserve canonical browser acquisition and Docker ownership rules. PID-only signalling, prefix/global rescue, foreign-resource deletion and uncertain-creation cleanup claims SHALL remain forbidden.
+Only an explicit matching invocation cancellation request SHALL authorize the owner to signal its captured work after fresh identity checks. The owner SHALL settle submitted work before claiming cleanup and SHALL preserve canonical browser acquisition and Docker ownership rules. After the owner itself signalled its captured group, and only once that group, its producers and browser producers have settled, no submission writer remains live other than a registration's own exactly bound deployment platform, and the invocation identity is unchanged, the owner SHALL retire the resources registered in that invocation's private journal: exact registered names and labels only, the most recently first-registered run first. A registration that includes the fixed deployment platform SHALL be retired only while holding the host-wide deployment lock and only after that platform has been drained by SIGTERM to a confirmed clean exit and every submission reservation has then settled; if the lock is unavailable, the drain is unconfirmed or settlement remains pending, nothing of that registration SHALL be removed. The read-only cleanup assessment SHALL still alone decide confirmed or unconfirmed cleanup, and a cancelled run SHALL never be reported as passed. PID-only signalling, prefix/global rescue, foreign-resource deletion and uncertain-creation cleanup claims SHALL remain forbidden.
 
 #### Scenario: A matching live invocation is cancelled
 
 - **WHEN** the operator explicitly cancels an invocation whose owner and child identities still match
 - **THEN** only its owned work receives cancellation and the real exit/signal is retained
 - **AND** an unrelated live sentinel survives, with cleanup reported separately
+
+#### Scenario: Cancellation interrupts work that registered resources
+
+- **WHEN** a cancelled child had registered running containers and other resources in the invocation journal before its own cleanup could run
+- **THEN** after settlement, with only the registration's own bound platform still live, the owner drains that platform under the deployment lock, confirms that every submission reservation has settled, retires exactly those registered resources, and the cleanup assessment reports confirmed
+- **AND** the result stays failed with the cancellation signal and interruption, and an unregistered or label-mismatched resource with the same prefix survives
+
+#### Scenario: The deployment platform does not drain cleanly
+
+- **WHEN** the registered deployment platform exits nonzero or out of memory after SIGTERM, its submission reservation remains pending after exit, or the deployment lock is held elsewhere
+- **THEN** no resource of that registration is removed, the lock file is not unlinked, and cleanup is reported unconfirmed
 
 #### Scenario: Cancellation authority or producer settlement is unknown
 
@@ -234,3 +245,22 @@ Trusted custody integration regressions SHALL wait for owned process readiness o
 
 - **WHEN** the owner publishes a terminal result or exits before readiness is observed
 - **THEN** the wait fails immediately with sanitized terminal evidence rather than a generic timeout
+
+### Requirement: Observer create-deadline failures retain attributable timing evidence
+
+When the compiled observer child's non-stalling create request fails within its deadline, the verification failure SHALL report, alongside the unchanged assertion, a diagnostic containing: the child's call, request-issued and failure times; the engine fixture's create receipt, body-end, response-finish and response-close times; the engine's persisted and dispatched state and recorded request methods and paths; the worker's maximum event-loop delay over the scenario; and bounded child stdout and stderr. All times SHALL come from the host's system-wide monotonic clock so that child and engine values are comparable, and the child timing SHALL be reported as its own field rather than only inside truncated output. Successful runs SHALL add no child output. The create deadline, the stalling case's real cancellation, request ordering and every assertion SHALL remain unchanged, and the evidence SHALL NOT claim a cause.
+
+#### Scenario: Create aborted after the engine received it
+
+- **WHEN** the non-stalling child source runs against an engine that receives the create but never completes its response, so the real 200ms abort fires
+- **THEN** the failure diagnostic contains a parsed child timing with `called <= issued <= settled`, an engine `received` time, `persisted: true`, a dispatched state, `responseClosed` recorded and `responseFinished` null
+
+#### Scenario: Engine never received the create
+
+- **WHEN** the diagnostic is formatted for an outcome with no engine create receipt
+- **THEN** the engine `received` field is null and `persisted` is false, with the child timing and requests still reported
+
+#### Scenario: Successful and stalling runs are unaffected
+
+- **WHEN** the create succeeds, or the stalling case is cancelled as designed
+- **THEN** child stderr stays empty and stdout, requests and cleanup assertions are unchanged
