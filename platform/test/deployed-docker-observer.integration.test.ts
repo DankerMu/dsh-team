@@ -279,7 +279,9 @@ it('retains real create-deadline evidence when a non-stalling child create is ab
     const { reserved, source } = await startObserverScenario(directory, scenario, false, false);
     // The child exits soon after its real abort; a late parent bind would target a gone process.
     const outcome = await runObserverChild(reserved, source, { bind: false });
-    // Child exit and the engine's socket close are unordered.
+    // Child exit is unordered with the engine's dispatch and socket close; dispatch proves
+    // the engine handled the create and armed its close observation before it is awaited.
+    await scenario.dispatched.promise;
     await scenario.observation.stalledConnectionClosed;
     const formatted = formatObserverCreateDiagnostic(outcome, scenario.evidence());
     const diagnostic = JSON.parse(formatted) as {
