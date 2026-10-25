@@ -5,10 +5,11 @@ import { settleMainProcess, watchMainProcess } from './main-startup-fixture.ts';
 import type { StartupObservation } from './main-startup-fixture.ts';
 
 // Each child announces readiness on stdout only after its SIGTERM handler is installed.
-const KEEP_ALIVE = "const keep = setInterval(() => {}, 1000); process.stdout.write('ready');";
-const FAIL_ON_STOP = `${KEEP_ALIVE} process.on('SIGTERM', () => { clearInterval(keep); process.stderr.write(process.env.STOP_STDERR ?? ''); process.exitCode = 1; });`;
-const KILL_ON_STOP = `${KEEP_ALIVE} process.on('SIGTERM', () => { process.kill(process.pid, 'SIGKILL'); });`;
-const STOP_CLEANLY = `${KEEP_ALIVE} process.on('SIGTERM', () => { clearInterval(keep); });`;
+const KEEP_ALIVE = 'const keep = setInterval(() => {}, 1000);';
+const READY = "process.stdout.write('ready');";
+const FAIL_ON_STOP = `${KEEP_ALIVE} process.on('SIGTERM', () => { clearInterval(keep); process.stderr.write(process.env.STOP_STDERR ?? ''); process.exitCode = 1; }); ${READY}`;
+const KILL_ON_STOP = `${KEEP_ALIVE} process.on('SIGTERM', () => { process.kill(process.pid, 'SIGKILL'); }); ${READY}`;
+const STOP_CLEANLY = `${KEEP_ALIVE} process.on('SIGTERM', () => { clearInterval(keep); }); ${READY}`;
 const EXIT_EARLY = "process.stdout.write('ready'); process.exitCode = 1;";
 
 const observation: StartupObservation = {
