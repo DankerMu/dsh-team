@@ -9,6 +9,7 @@ import { liveProcessBirth, processBirth, processIdentity } from './probe-browser
 import { writeReceipt } from './probe-browser-receipt.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 import { capturePrivateOutput } from './trusted-docker-output.mjs';
+import { retireCancelledJournal } from './trusted-docker-retirement.mjs';
 import {
   assessTrustedDockerCleanup,
   trustedDockerBrowserProducersSettled,
@@ -163,6 +164,26 @@ async function signalOwnedGroup(child, identity) {
   process.kill(-identity.pid, 'SIGINT');
 }
 
+/**
+ * Only the owner's own settled cancellation retires registrations its child never could.
+ * Failures stay with this step: only their count is recorded beside the unchanged terminal.
+ */
+async function retireAfterCancellation(context, signalled, settled, producerCleanupConfirmed) {
+  if (!signalled || !settled || !producerCleanupConfirmed) return;
+  const { request, directory, digest } = context;
+  const failures = await retireCancelledJournal(request, directory, digest);
+  try {
+    await writeReceipt(join(directory, 'retirement.json'), {
+      version: 1,
+      invocation: request.invocation,
+      manifestDigest: digest,
+      failures: failures.length,
+    });
+  } catch {
+    // The read-only assessment stays the outcome authority; only the private count is lost.
+  }
+}
+
 async function executeOwnedCommand(context) {
   const { request, directory, owner, digest } = context;
   let child;
@@ -284,6 +305,7 @@ async function executeOwnedCommand(context) {
       command.settled &&= await trustedDockerBrowserProducersSettled(request);
       [stdout, stderr] = await outputs;
       await cancellation;
+      await retireAfterCancellation(context, signalled, command.settled, producerCleanupConfirmed);
     } else {
       [stdout, stderr] = await Promise.all(
         ['stdout', 'stderr'].map((name) =>

@@ -160,8 +160,17 @@ export async function trustedDockerBrowserProducersSettled(request) {
 
 /** @typedef {{root: string, temporary: string, temporaryDevice: string, temporaryInode: string}} CleanupAssessmentRequest */
 
-async function observeSubmissionWriters(writers, command, observed) {
+/**
+ * Process writers must be dead and container writers absent, except an exempt exact container
+ * ID that the retirement caller proved is its own registered deployment platform.
+ * @param {import('./verification-docker-generations.mjs').DockerObserverWitness[]} writers
+ * @param {import('../platform/test/docker-command.ts').DockerCommand} command
+ * @param {Set<string>} observed
+ * @param {Set<string>} [exempt]
+ */
+export async function observeSubmissionWriters(writers, command, observed, exempt = new Set()) {
   for (const writer of writers) {
+    if (writer.kind === 'container' && exempt.has(writer.id)) continue;
     if (writer.kind === 'process') {
       const identity = processIdentity(writer);
       if ((await liveProcessBirth(identity.pid)) === identity.birth)
@@ -194,7 +203,21 @@ function observeRecordedResources(entries, command, observed) {
 }
 
 /**
- * Read-only observation; the original root remains the sole mutation/cleanup owner.
+ * The private journal grants authority only as a current-user regular file without group/other
+ * access; its bounded grammar is the canonical cleanup journal reader.
+ * @param {string} directory
+ */
+export async function readTrustedDockerJournal(directory) {
+  const journalPath = join(directory, 'resources.jsonl');
+  const info = await lstat(journalPath);
+  if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0)
+    throw new Error('Trusted Docker journal authority unavailable');
+  return readCleanupJournal(journalPath);
+}
+
+/**
+ * Read-only observation; mutation stays with the original root and the owner's post-cancellation
+ * journal retirement, which completes before this assessment.
  * @param {CleanupAssessmentRequest} request
  * @param {string} directory
  * @param {boolean} settled
@@ -210,14 +233,10 @@ export async function assessTrustedDockerCleanup(request, directory, settled, in
       request.temporaryInode,
       true,
     );
-    const journalPath = join(directory, 'resources.jsonl');
-    const info = await lstat(journalPath);
-    if (!info.isFile() || info.uid !== process.getuid() || (info.mode & 0o077) !== 0)
-      throw new Error('Trusted Docker journal authority unavailable');
+    const entries = await readTrustedDockerJournal(directory);
     const command =
       injectedCommand ??
       createDockerCommands(request.root, join(directory, 'docker'), true).command;
-    const entries = readCleanupJournal(journalPath);
     const { writers, browserExec } = readVerificationSubmissionsForCleanup(directory);
     const observed = new Set();
     await observeSubmissionWriters(writers, command, observed);

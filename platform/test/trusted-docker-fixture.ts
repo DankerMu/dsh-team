@@ -40,15 +40,31 @@ type CustodyMode =
   | 'group-observation-invalid'
   | 'post-close-member'
   | 'past-expiry-member'
-  | 'early-exit';
+  | 'early-exit'
+  | 'retire';
+
+/** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
+export type RetirementScenario =
+  | 'green'
+  | 'mismatch'
+  | 'process-writer'
+  | 'foreign-writer'
+  | 'member'
+  | 'digest'
+  | 'unsettled'
+  | 'unbound'
+  | 'lock-unavailable';
 
 // The leaf of a member mode publishes the past-expiry member identity here before readiness.
 export const GROUP_MEMBER_RECORD = 'group-member.json';
+// The retirement setup publishes its detached fixture platform identity here.
+const FAKE_PLATFORM_RECORD = 'fake-platform.json';
 
 function prepareCustodyRepository(
   repository: string,
   environment: NodeJS.ProcessEnv,
   mode: CustodyMode,
+  scenario?: RetirementScenario,
 ) {
   const files = [
     'scripts/probe-browser-native.mjs',
@@ -95,9 +111,13 @@ function prepareCustodyRepository(
     } as Partial<Record<CustodyMode, [string, string]>>
   )[mode];
   const verificationScript =
-    deniedGroupObservations === undefined
-      ? record(record(packageValue).scripts)['verify:docker']
-      : 'node --import ./fixture-preload.mjs scripts/trusted-docker-run.mjs';
+    mode === 'retire'
+      ? 'node --import ./platform/test/trusted-docker-fake-preload.mjs scripts/trusted-docker-run.mjs'
+      : deniedGroupObservations === undefined
+        ? record(record(packageValue).scripts)['verify:docker']
+        : 'node --import ./fixture-preload.mjs scripts/trusted-docker-run.mjs';
+  if (scenario !== undefined)
+    writeFileSync(join(repository, 'fixture-scenario.json'), JSON.stringify({ scenario }));
   if (deniedGroupObservations !== undefined)
     writeFileSync(
       join(repository, 'fixture-preload.mjs'),
@@ -136,6 +156,7 @@ import {readFileSync,renameSync,writeFileSync,watch,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {processBirth} from './scripts/probe-browser-native.mjs';
 const mode=${JSON.stringify(mode)};
+const scenario=${JSON.stringify(scenario ?? null)};
 // A same-group member ignores stdio (the captured pipes still close) and both termination signals.
 const member=milliseconds=>spawn(process.execPath,['-e','process.on("SIGINT",()=>{});process.on("SIGTERM",()=>{});setTimeout(()=>{},'+milliseconds+');'],{stdio:'ignore'});
 const custody=dirname(process.env.DSH_TEAM_CI_RESOURCE_JOURNAL);
@@ -155,14 +176,15 @@ const publish=(name,value)=>{const path=join(temporary,name);writeFileSync(path+
 process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')member(500);process.exitCode=27;process.exit(27);});
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
-const watcher=['hold','post-close-member','past-expiry-member'].includes(mode)?watch(temporary,()=>{if(existsSync(release))ready();}):undefined;
-if(mode==='past-expiry-member'){
+const watcher=['hold','post-close-member','past-expiry-member','retire'].includes(mode)?watch(temporary,()=>{if(existsSync(release))ready();}):undefined;
+if(mode==='past-expiry-member'||scenario==='member'){
   const retained=member(30000);
   await once(retained,'spawn');
   publish(${JSON.stringify(GROUP_MEMBER_RECORD)},{pid:retained.pid,birth:await processBirth(retained.pid)});
 }
 // The early-exit leaf ends before readiness, so readiness waits must fail fast.
 if(mode==='early-exit')process.exit(23);
+if(mode==='retire')await import('./platform/test/trusted-docker-fake-setup.mjs');
 publish('child-ready.json',{pid:process.pid,birth:await processBirth(process.pid)});
 process.stdout.write('fixture-begin\\n');
 if(watcher){await released;watcher.close();}
@@ -210,11 +232,13 @@ process.exitCode=${mode === 'output-failed' ? '0' : '17'};
   return head;
 }
 
-function recordedGroupMember(temporary: string) {
-  const path = join(temporary, GROUP_MEMBER_RECORD);
-  if (!existsSync(path)) return undefined;
-  const member: unknown = JSON.parse(readFileSync(path, 'utf8'));
-  return record(member);
+function recordedProcesses(temporary: string) {
+  return [GROUP_MEMBER_RECORD, FAKE_PLATFORM_RECORD].flatMap((name) => {
+    const path = join(temporary, name);
+    if (!existsSync(path)) return [];
+    const identity: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return [record(identity)];
+  });
 }
 
 function fixtureProcessCustody(environment: NodeJS.ProcessEnv, directory: string) {
@@ -347,21 +371,31 @@ fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`;
   return { child, ready, interrupted };
 }
 
-function createTrustedDockerFixture(mode: CustodyMode) {
+function fixtureDirectories() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-team-docker-custody-')));
   const repository = join(directory, 'repository');
   const home = join(directory, 'home');
-  mkdirSync(repository);
-  mkdirSync(home);
+  // Any PATH lookup of docker reaches this owned refusal, never an Engine client.
+  const shim = join(directory, 'bin');
+  const realDocker = join(directory, 'real-docker-invoked');
+  for (const path of [repository, home, shim]) mkdirSync(path);
+  writeFileSync(join(shim, 'docker'), `#!/bin/sh\necho "$@" >> '${realDocker}'\nexit 127\n`, {
+    mode: 0o700,
+  });
+  return { directory, repository, home, shim, realDocker };
+}
+
+function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScenario) {
+  const { directory, repository, home, shim, realDocker } = fixtureDirectories();
   const environment = {
-    PATH: process.env.PATH,
+    PATH: `${shim}:${process.env.PATH ?? ''}`,
     HOME: home,
     // Only the complete-output case supplies a proxy; held-output fences have no secret tail.
     HTTP_PROXY: mode === 'fail' ? CUSTODY_PROXY : undefined,
   };
   const processes = fixtureProcessCustody(environment, directory);
   const { observeProcess, settle } = processes;
-  const head = prepareCustodyRepository(repository, environment, mode);
+  const head = prepareCustodyRepository(repository, environment, mode, scenario);
   const entry = join(repository, 'scripts/trusted-docker-run.mjs');
   const command = (args: string[], wrapper = false, extraEnvironment: NodeJS.ProcessEnv = {}) => {
     const executable = wrapper ? 'pnpm' : process.execPath;
@@ -507,10 +541,10 @@ function createTrustedDockerFixture(mode: CustodyMode) {
     if (existsSync(custodyBase) && readdirSync(custodyBase).some((name) => !issued.has(name)))
       failures.push(new Error('Uncaptured custody fixture authority retained'));
     for (const authority of issued.values()) {
-      // Retire the single recorded member before its group can be observed absent.
+      // Retire recorded members and the detached platform before the group is observed absent.
       const memberSettled = await attempt(async () => {
-        const member = recordedGroupMember(authority.temporary);
-        if (member) await settle(member, false);
+        for (const identity of recordedProcesses(authority.temporary))
+          await settle(identity, false);
       });
       const childSettled = await attempt(async () => {
         if (authority.child) await settle(authority.child, true);
@@ -539,6 +573,7 @@ function createTrustedDockerFixture(mode: CustodyMode) {
     repository,
     home,
     head,
+    realDocker,
     command,
     start,
     startObserved,
@@ -552,8 +587,9 @@ function createTrustedDockerFixture(mode: CustodyMode) {
 export async function withTrustedDockerFixture(
   mode: CustodyMode,
   run: (fixture: ReturnType<typeof createTrustedDockerFixture>) => void | Promise<void>,
+  scenario?: RetirementScenario,
 ) {
-  const fixture = createTrustedDockerFixture(mode);
+  const fixture = createTrustedDockerFixture(mode, scenario);
   const failures: unknown[] = [];
   try {
     await run(fixture);

@@ -714,8 +714,30 @@ function observerGenerationName(name, names) {
   return generation;
 }
 
+/**
+ * Only a current, bound and initialized container generation may still be live; a process
+ * generation or an unbound reservation remains an unsettled writer.
+ * @returns {DockerObserverWitness}
+ */
+function requireCurrentObserverWriter(path, states, generation) {
+  try {
+    return requireObserverCompletion(path, states, generation);
+  } catch {
+    const { binding } = requireObserverInitialization(
+      path,
+      generation,
+      undefined,
+      undefined,
+      states,
+    );
+    if (binding.witness.kind !== 'container')
+      throw new Error('Docker observer process writer settlement unconfirmed');
+    return binding.witness;
+  }
+}
+
 /** @returns {DockerObserverWitness[]} */
-function readContainerWriters(directory, authority, states) {
+function readContainerWriters(directory, authority, states, live) {
   if (!UUID.test(authority)) throw new Error('Docker observer container authority malformed');
   const bootstrap = join(directory, SUBMISSION_OBSERVERS, authority);
   const descriptor = readObserverAuthority(bootstrap).value;
@@ -731,7 +753,11 @@ function readContainerWriters(directory, authority, states) {
     const generation = observerGenerationName(name, names);
     if (generation === null) continue;
     if (generation === current.nonce) currentFound = true;
-    writers.push(requireObserverCompletion(join(bootstrap, name), states, generation));
+    writers.push(
+      live && generation === current.nonce
+        ? requireCurrentObserverWriter(join(bootstrap, name), states, generation)
+        : requireObserverCompletion(join(bootstrap, name), states, generation),
+    );
   }
   if (!currentFound) throw new Error('Docker observer current generation unavailable');
   return writers;
@@ -739,12 +765,14 @@ function readContainerWriters(directory, authority, states) {
 
 /**
  * Host-only final enumeration after all writers retire; no live append-active journal scan.
+ * `live` admits each authority's current initialized container generation before its drain.
  * @param {string} directory
  * @param {Map<string, import('./verification-submission-storage.mjs').SubmissionState>} states
  * @param {import('./verification-submission-storage.mjs').CapturedAuthority} captured
+ * @param {boolean} [live]
  * @returns {DockerObserverWitness[]}
  */
-export function readVerificationDockerObserverWriters(directory, states, captured) {
+export function readVerificationDockerObserverWriters(directory, states, captured, live = false) {
   sameIdentity(
     pathIdentity(join(directory, SUBMISSION_OBSERVERS), true),
     captured.authority.observers,
@@ -752,6 +780,6 @@ export function readVerificationDockerObserverWriters(directory, states, capture
   /** @type {DockerObserverWitness[]} */
   const writers = [];
   for (const authority of readdirSync(join(directory, SUBMISSION_OBSERVERS)))
-    writers.push(...readContainerWriters(directory, authority, states));
+    writers.push(...readContainerWriters(directory, authority, states, live));
   return writers;
 }
