@@ -26,7 +26,7 @@
 - [x] 2.1 `pnpm test:integration platform/test/deployed-docker-observer.integration.test.ts` — the three existing it.each cases pass unchanged; new cases RED then GREEN (record both).
 - [x] 2.2 Run the observer file 5× locally to show no new instability from the timing capture.
 - [x] 2.3 `pnpm check:fast`, `pnpm lint:tests`, `pnpm dead-code`, `pnpm duplicate-code`.
-- [ ] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, CI green.
+- [x] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, CI green.
 
 ## Non-goals
 

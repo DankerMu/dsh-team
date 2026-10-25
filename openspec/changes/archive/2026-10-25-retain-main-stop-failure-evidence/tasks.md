@@ -27,7 +27,7 @@
 - [x] 2.1 `pnpm test:integration platform/test/main-startup-fixture.integration.test.ts` RED (assertion failure on message content) before the diagnostic change, GREEN after (record both).
 - [x] 2.2 `pnpm test:integration platform/test/subnet-startup.integration.test.ts platform/test/quarantine-bootstrap.integration.test.ts` pass.
 - [x] 2.3 `pnpm check:fast` (fmt, lint, typecheck) and `pnpm lint:tests`/`pnpm dead-code` pass (test-only exports must be consumed).
-- [ ] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required gate), CI green.
+- [x] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required gate), CI green.
 
 ## Non-goals
 

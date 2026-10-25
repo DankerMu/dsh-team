@@ -34,8 +34,8 @@
 - [x] 2.1 Integration through `withTrustedDockerFixture`, using an owner-only preload (pattern at `trusted-docker-fixture.ts:101-119`). The preload intercepts every `docker` spawn or spawnSync, and `flock` where needed, against a fixture-owned fake daemon state file that the fixture child writes when it registers its targets through the real `registerCleanupTarget`.
   - The child registers a running `dsh-team-platform` (own run label), one employee container, one network and one volume. It binds the fake platform as a container-kind observer writer through the real path: the parent calls `bindVerificationDockerObserver`, and a fixture process calls `claimVerificationDockerObserver(bootstrap, authority)` and then `initialize()`, and calls `finish()` only when the fake daemon processes the SIGTERM. Hand-written `completed` records are not acceptable. It then blocks before its cleanup. The operator cancels.
   - RED: all remain, and `unconfirmed`.
-  - GREEN: platform `kill --signal SIGTERM` happens before any employee `rm`; all are absent; `confirmed`, `state: failed`, `signal: SIGINT`, `interruption: cancelled`.
-  - Assert that no real docker process was started. Record the RED output.
+  - GREEN: platform `kill --signal SIGTERM` happens before any `rm`; all are absent; `confirmed`, `state: failed`, `interruption: cancelled`, real command outcome retained.
+  - Assert that the preload refused no `docker`/`flock` launch and that every routed call appears in the fake daemon's ledger (no real Docker). Record the RED output.
 - [x] 2.2 In the same fixture: an unregistered `dsh-team-` sentinel with the same prefix, and a registered name whose fake labels mismatch, both survive.
 - [x] 2.3 Zero mutating calls and `unconfirmed` for each of: a live process writer; a live non-exempt container writer; an unsettled same-group member (reuse the existing unsettled-group pattern); a changed manifest digest.
 - [x] 2.3a The platform exits 0 after SIGTERM, but its reservation stays unsettled → `kill` issued, no `rm` for that run, `unconfirmed`.
@@ -58,7 +58,7 @@
 
 - [x] 3.1 Update `AGENTS.md` in two places: the Trusted Docker verification paragraph (the "The original root command retains cleanup mutation ownership…" sentence) and the Compose deployment verification lock and drain paragraph. They must describe the post-cancellation journal retirement, the platform drain under the lock, and every prohibition, which all stay unchanged.
 - [x] 3.2 `pnpm check:fast`, `pnpm lint:tests`, `pnpm dead-code`, `pnpm duplicate-code`, `pnpm lint:agents`, plus the suites in 2.8.
-- [ ] 3.3 Parent (giap-vps):
+- [x] 3.3 Parent (giap-vps):
   - Run the exact-head full `pnpm test:docker` and `pnpm test:deploy`.
   - Cancellation qualification:
     1. Capture `host-before`.
