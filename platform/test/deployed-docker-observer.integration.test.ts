@@ -45,12 +45,13 @@ import {
   observerFaultOptions,
   observerFaultSource,
   observerScenarioSource,
+  formatObserverCreateDiagnostic,
 } from './deployed-docker-observer-fixture.ts';
 import type { ObserverFaultBehavior } from './deployed-docker-observer-fixture.ts';
 import { assessTrustedDockerCleanup } from '../../scripts/trusted-docker-audit.mjs';
 import type { CleanupAssessmentRequest } from '../../scripts/trusted-docker-audit.mjs';
 import { createDockerClient as createFixtureDockerClient } from '../src/orchestrator/index.ts';
-import { createObserverEngineFixture } from './deployed-docker-engine-fixture.ts';
+import { observerScenarioInputs } from './deployed-docker-engine-fixture.ts';
 import type { FixturePlatform } from './deployed-docker-engine-fixture.ts';
 
 let emittedClient: Readonly<{ javascript: string; sourceMap: string }>;
@@ -76,73 +77,18 @@ it.each([
   },
 ])('$name', async ({ stalls, containerMode }) => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-obs-'));
-  const socket = join(directory, 'e.sock');
-  const invocation = randomUUID();
-  const ownedId = 'a'.repeat(64);
-  const sentinelId = 'b'.repeat(64);
-  const platformId = 'c'.repeat(64);
-  const platformImage = `sha256:${'d'.repeat(64)}`;
-  const platformInspect = {
-    Id: platformId,
-    Image: platformImage,
-    State: { Running: true, StartedAt: '2026-01-02T03:04:05.123456789Z' },
-  };
-  const name = 'dsh-team-observer-owned';
-  const body = { Image: 'owned-fixture-image', Labels: { 'dsh-team.test-run': invocation } };
-  const sentinel = { Id: sentinelId, Name: '/unrelated-sentinel', Config: { Labels: {} } };
-  const resources = new Map<string, unknown>([[sentinelId, sentinel]]);
-  const createPath = `/containers/create?name=${name}`;
-  const inspectPath = `/containers/${ownedId}/json`;
-  const deletePath = `/containers/${ownedId}?force=true`;
-  const { server, dispatched, bound, observation, requests, parentInspections } =
-    createObserverEngineFixture({
-      directory,
-      stalls,
-      platformInspect,
-      ownedId,
-      name,
-      resources,
-      createPath,
-      inspectPath,
-      deletePath,
-    });
+  const scenario = observerScenarioInputs(directory, stalls);
+  const { socket, sentinelId, platformInspect, sentinel, resources, createPath } = scenario;
+  const { inspectPath, deletePath, body, dispatched, bound, observation } = scenario;
+  const { requests, parentInspections } = scenario;
+  const platformId = platformInspect.Id;
   try {
-    initializeVerificationSubmissions(directory);
-    await mkdir(join(directory, 'retirement-temporary'), { mode: 0o700 });
-    const temporary = await realpath(join(directory, 'retirement-temporary'));
-    const temporaryInfo = await stat(temporary);
-    const assessmentRequest = {
-      root: directory,
-      temporary,
-      temporaryDevice: String(temporaryInfo.dev),
-      temporaryInode: String(temporaryInfo.ino),
-    };
-    await writeFile(join(directory, 'resources.jsonl'), '', { mode: 0o600, flag: 'wx' });
-    const clientPath = await writeCompiledClient(directory, emittedClient);
-    const authority = createVerificationDockerObserverAuthority(directory, {
-      moduleUrl: pathToFileURL(clientPath).href,
-      socketPath: socket,
-      ...(containerMode ? { imageId: platformImage } : {}),
-    });
-    const reserved = await reserveVerificationDockerObserver(authority);
-    const digest = createHash('sha256').update(emittedClient.javascript).digest('hex');
-    server.listen(socket);
-    await once(server, 'listening');
-    const source = observerScenarioSource({
+    const { assessmentRequest, clientPath, reserved, digest, source } = await startObserverScenario(
       directory,
-      socket,
-      clientPath,
-      reserved,
+      scenario,
       stalls,
       containerMode,
-      assessmentRequest,
-      createPath,
-      body,
-      ownedId,
-      name,
-      inspectPath,
-      deletePath,
-    });
+    );
     const outcome = await runObserverChild(reserved, source, {
       bindingGate: dispatched.promise,
       releaseResponse: () => {
@@ -167,7 +113,10 @@ it.each([
         : undefined,
     });
 
-    expect(outcome, outcome.stderr).toMatchObject({ code: 0, signal: null });
+    expect(outcome, formatObserverCreateDiagnostic(outcome, scenario.evidence())).toMatchObject({
+      code: 0,
+      signal: null,
+    });
     expect(outcome.stdout).toBe(
       stalls
         ? 'create-aborted-owned-cleanup-observed\n'
@@ -244,20 +193,120 @@ it.each([
     }
     expect(freshObserverAssessment(directory)).toBe(stalls ? 'unconfirmed' : 'confirmed');
   } finally {
-    server.closeAllConnections();
-    bound.resolve(undefined);
-    try {
-      if (server.listening) {
-        const stopped = Promise.withResolvers<undefined>();
-        server.close((error) => {
-          if (error) stopped.reject(error);
-          else stopped.resolve(undefined);
-        });
-        await stopped.promise;
-      }
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    await closeObserverScenario(directory, scenario);
+  }
+});
+
+const receivedCreate = {
+  received: 1000.5,
+  bodyEnded: 1001.25,
+  responseFinished: null,
+  responseClosed: 1201.75,
+  dispatchedSettled: true,
+  persisted: true,
+  markersBeforeBinding: ['participant', 'approval', 'request'],
+  requests: [{ method: 'POST', path: '/containers/create?name=owned', body: '{}' }],
+  maxEventLoopDelayMs: 12.5,
+};
+const timingLine = 'create-timing:{"called":990.5,"issued":991,"settled":1192.25}';
+const parsedTiming = { called: 990.5, issued: 991, settled: 1192.25 };
+const receivedEngine = {
+  received: 1000.5,
+  bodyEnded: 1001.25,
+  responseFinished: null,
+  responseClosed: 1201.75,
+  dispatchedSettled: true,
+  persisted: true,
+  markersBeforeBinding: 3,
+  requests: ['POST /containers/create?name=owned'],
+  maxEventLoopDelayMs: 12.5,
+};
+
+it('formats create-deadline evidence when the engine never received the create', () => {
+  const stderr = `${timingLine}\nAssertionError: aborted\n`;
+  const engine = {
+    ...receivedCreate,
+    received: null,
+    bodyEnded: null,
+    responseClosed: null,
+    dispatchedSettled: false,
+    persisted: false,
+    markersBeforeBinding: [],
+    requests: [{ method: 'GET', path: '/large', body: '' }],
+  };
+  expect(JSON.parse(formatObserverCreateDiagnostic({ stdout: 'out\n', stderr }, engine))).toEqual({
+    childTiming: parsedTiming,
+    engine: {
+      ...receivedEngine,
+      received: null,
+      bodyEnded: null,
+      responseClosed: null,
+      dispatchedSettled: false,
+      persisted: false,
+      markersBeforeBinding: 0,
+      requests: ['GET /large'],
+    },
+    stdout: 'out\n',
+    stderr,
+  });
+});
+
+it('parses child create timing from full stderr before bounding the stderr tail', () => {
+  const stderr = `${timingLine}\n`.padEnd(10000, 'x');
+  expect(stderr).toHaveLength(10000);
+  expect(
+    JSON.parse(formatObserverCreateDiagnostic({ stdout: '', stderr }, receivedCreate)),
+  ).toEqual({
+    childTiming: parsedTiming,
+    engine: receivedEngine,
+    stdout: '',
+    stderr: `[truncated: 1808 earlier characters omitted]\n${'x'.repeat(8192)}`,
+  });
+});
+
+it('reports null child create timing when the child wrote no timing line', () => {
+  const stderr = 'AssertionError: unrelated failure\n';
+  expect(
+    JSON.parse(formatObserverCreateDiagnostic({ stdout: 'partial\n', stderr }, receivedCreate)),
+  ).toEqual({ childTiming: null, engine: receivedEngine, stdout: 'partial\n', stderr });
+});
+
+it('retains real create-deadline evidence when a non-stalling child create is aborted', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-obs-'));
+  // The engine stalls the create response while the child source expects completion.
+  const scenario = observerScenarioInputs(directory, true);
+  try {
+    const { reserved, source } = await startObserverScenario(directory, scenario, false, false);
+    // The child exits soon after its real abort; a late parent bind would target a gone process.
+    const outcome = await runObserverChild(reserved, source, { bind: false });
+    // Child exit is unordered with the engine's dispatch and socket close; dispatch proves
+    // the engine handled the create and armed its close observation before it is awaited.
+    await scenario.dispatched.promise;
+    await scenario.observation.stalledConnectionClosed;
+    const formatted = formatObserverCreateDiagnostic(outcome, scenario.evidence());
+    const diagnostic = JSON.parse(formatted) as {
+      childTiming: { called: number; issued: number; settled: number } | null;
+      engine: Record<string, unknown>;
+    };
+    expect(outcome, formatted).toMatchObject({ code: 1, signal: null });
+    expect(diagnostic.childTiming).toEqual({
+      called: expect.any(Number) as number,
+      issued: expect.any(Number) as number,
+      settled: expect.any(Number) as number,
+    });
+    const timing = diagnostic.childTiming;
+    if (timing === null) throw new Error('Child create timing missing');
+    expect(timing.called).toBeLessThanOrEqual(timing.issued);
+    expect(timing.issued).toBeLessThanOrEqual(timing.settled);
+    expect(diagnostic.engine).toMatchObject({
+      received: expect.any(Number) as number,
+      persisted: true,
+      dispatchedSettled: true,
+      responseClosed: expect.any(Number) as number,
+      responseFinished: null,
+    });
+  } finally {
+    await closeObserverScenario(directory, scenario);
   }
 });
 
@@ -529,6 +578,76 @@ await client.json('DELETE','/networks/owned-effect',undefined,AbortSignal.timeou
     }
   },
 );
+
+type ObserverScenarioInputs = ReturnType<typeof observerScenarioInputs>;
+
+async function startObserverScenario(
+  directory: string,
+  scenario: ObserverScenarioInputs,
+  stalls: boolean,
+  containerMode: boolean,
+) {
+  const { socket, platformInspect, server } = scenario;
+  initializeVerificationSubmissions(directory);
+  await mkdir(join(directory, 'retirement-temporary'), { mode: 0o700 });
+  const temporary = await realpath(join(directory, 'retirement-temporary'));
+  const temporaryInfo = await stat(temporary);
+  const assessmentRequest = {
+    root: directory,
+    temporary,
+    temporaryDevice: String(temporaryInfo.dev),
+    temporaryInode: String(temporaryInfo.ino),
+  };
+  await writeFile(join(directory, 'resources.jsonl'), '', { mode: 0o600, flag: 'wx' });
+  const clientPath = await writeCompiledClient(directory, emittedClient);
+  const authority = createVerificationDockerObserverAuthority(directory, {
+    moduleUrl: pathToFileURL(clientPath).href,
+    socketPath: socket,
+    ...(containerMode ? { imageId: platformInspect.Image } : {}),
+  });
+  const reserved = await reserveVerificationDockerObserver(authority);
+  const digest = createHash('sha256').update(emittedClient.javascript).digest('hex');
+  server.listen(socket);
+  await once(server, 'listening');
+  const source = observerScenarioSource({
+    directory,
+    socket,
+    clientPath,
+    reserved,
+    stalls,
+    containerMode,
+    assessmentRequest,
+    createPath: scenario.createPath,
+    body: scenario.body,
+    ownedId: scenario.ownedId,
+    name: scenario.name,
+    inspectPath: scenario.inspectPath,
+    deletePath: scenario.deletePath,
+  });
+  return { assessmentRequest, clientPath, reserved, digest, source };
+}
+
+async function closeObserverScenario(
+  directory: string,
+  scenario: ObserverScenarioInputs,
+): Promise<void> {
+  const { server, bound } = scenario;
+  scenario.stopMonitoring();
+  server.closeAllConnections();
+  bound.resolve(undefined);
+  try {
+    if (server.listening) {
+      const stopped = Promise.withResolvers<undefined>();
+      server.close((error) => {
+        if (error) stopped.reject(error);
+        else stopped.resolve(undefined);
+      });
+      await stopped.promise;
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 
 async function assertObserverFaultEvidence(
   fault: string,

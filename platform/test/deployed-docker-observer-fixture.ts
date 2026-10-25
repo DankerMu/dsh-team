@@ -550,6 +550,15 @@ export function observerScenarioSource(input: ObserverScenario): string {
     inspectPath,
     deletePath,
   } = input;
+  const create = `client.json('POST',${JSON.stringify(createPath)},${JSON.stringify(body)},AbortSignal.timeout(200))`;
+  const stalledCreate = `try{created=await ${create};}
+catch(error){failure=error;}`;
+  // Same monotonic clock as the engine; issued follows the synchronous submit and request write.
+  const timedCreate = `const now=()=>Number(process.hrtime.bigint())/1e6;
+const called=now();
+let issued,settled;
+try{const pending=${create};issued=now();created=await pending;}
+catch(error){settled=now();failure=error;}`;
   const source = `import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import fs from 'node:fs';
@@ -583,13 +592,13 @@ process.stdout.write(result.state);`)}
 }
 let failure,created;
 // Real cancellation must close the actual incomplete HTTP response, not a simulated timer.
-try{created=await client.json('POST',${JSON.stringify(createPath)},${JSON.stringify(body)},AbortSignal.timeout(200));}
-catch(error){failure=error;}
+${stalls ? stalledCreate : timedCreate}
 if(${JSON.stringify(stalls)}){
   assert(failure instanceof Error);
   assert(!(failure instanceof DockerHttpError));
   assert(!Object.hasOwn(failure,'cause'));
 }else{
+  if(failure!==undefined)process.stderr.write('create-timing:'+JSON.stringify({called,issued,settled})+'\\n');
   assert.equal(failure,undefined);
   assert.deepEqual(created,{Id:${JSON.stringify(ownedId)}});
 }
@@ -613,4 +622,59 @@ assert.deepEqual(await logs.next(),{done:false,value:{stream:'stdout',data:Buffe
 await logs.return(undefined);
 process.stdout.write(${JSON.stringify(stalls ? 'create-aborted-owned-cleanup-observed\n' : 'create-completed-owned-cleanup-observed\n')});`;
   return source;
+}
+
+const CREATE_TIMING = 'create-timing:';
+const OUTPUT_TAIL = 8192;
+interface ObserverCreateEngineEvidence {
+  received: number | null;
+  bodyEnded: number | null;
+  responseFinished: number | null;
+  responseClosed: number | null;
+  dispatchedSettled: boolean;
+  persisted: boolean;
+  markersBeforeBinding: readonly string[];
+  requests: readonly { method: string | undefined; path: string | undefined }[];
+  maxEventLoopDelayMs: number;
+}
+
+/** Failure-only evidence; it never throws, so the original assertion stays authoritative. */
+export function formatObserverCreateDiagnostic(
+  outcome: { stdout: string; stderr: string },
+  engine: ObserverCreateEngineEvidence,
+): string {
+  return JSON.stringify({
+    childTiming: childCreateTiming(outcome.stderr),
+    engine: {
+      received: engine.received,
+      bodyEnded: engine.bodyEnded,
+      responseFinished: engine.responseFinished,
+      responseClosed: engine.responseClosed,
+      dispatchedSettled: engine.dispatchedSettled,
+      persisted: engine.persisted,
+      markersBeforeBinding: engine.markersBeforeBinding.length,
+      requests: engine.requests.map(({ method, path }) => `${method ?? ''} ${path ?? ''}`),
+      maxEventLoopDelayMs: engine.maxEventLoopDelayMs,
+    },
+    stdout: boundedTail(outcome.stdout),
+    stderr: boundedTail(outcome.stderr),
+  });
+}
+
+/** Parsed from the full stream so tail truncation cannot lose the child's own timing. */
+function childCreateTiming(stderr: string): unknown {
+  const line = stderr.split('\n').find((candidate) => candidate.startsWith(CREATE_TIMING));
+  if (line === undefined) return null;
+  try {
+    return JSON.parse(line.slice(CREATE_TIMING.length)) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function boundedTail(text: string): string {
+  const omitted = text.length - OUTPUT_TAIL;
+  return omitted > 0
+    ? `[truncated: ${String(omitted)} earlier characters omitted]\n${text.slice(omitted)}`
+    : text;
 }
