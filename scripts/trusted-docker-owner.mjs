@@ -9,6 +9,7 @@ import { liveProcessBirth, processBirth, processIdentity } from './probe-browser
 import { writeReceipt } from './probe-browser-receipt.mjs';
 import { dockerProxyEnvironment } from './docker-proxy-environment.mjs';
 import { capturePrivateOutput } from './trusted-docker-output.mjs';
+import { retireCancelledJournal } from './trusted-docker-retirement.mjs';
 import {
   assessTrustedDockerCleanup,
   trustedDockerBrowserProducersSettled,
@@ -144,15 +145,21 @@ export async function startTrustedDocker(root, head) {
   }
 }
 
-async function signalOwnedGroup(child, identity) {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+/**
+ * Signal the captured child group; true only when this call actually sent the signal.
+ * @param {{ exitCode: number | null, signalCode: string | null }} child
+ * @param {{ pid: number, birth: string }} identity
+ * @returns {Promise<boolean>}
+ */
+export async function signalOwnedGroup(child, identity) {
+  if (child.exitCode !== null || child.signalCode !== null) return false;
   if (!(await ownerIsLive(identity))) throw new Error('Trusted Docker child identity changed');
   const group = spawnSync('/bin/ps', ['-p', String(identity.pid), '-o', 'pgid='], {
     encoding: 'utf8',
     timeout: 2000,
     maxBuffer: 65_536,
   });
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null) return false;
   if (
     group.error ||
     group.status !== 0 ||
@@ -161,6 +168,27 @@ async function signalOwnedGroup(child, identity) {
   )
     throw new Error('Trusted Docker child group identity changed');
   process.kill(-identity.pid, 'SIGINT');
+  return true;
+}
+
+/**
+ * Only the owner's own settled cancellation retires registrations its child never could.
+ * Failures stay with this step: only their count is recorded beside the unchanged terminal.
+ */
+async function retireAfterCancellation(context, signalled, settled, producerCleanupConfirmed) {
+  if (!signalled || !settled || !producerCleanupConfirmed) return;
+  const { request, directory, digest } = context;
+  const failures = await retireCancelledJournal(request, directory, digest);
+  try {
+    await writeReceipt(join(directory, 'retirement.json'), {
+      version: 1,
+      invocation: request.invocation,
+      manifestDigest: digest,
+      failures: failures.length,
+    });
+  } catch {
+    // The read-only assessment stays the outcome authority; only the private count is lost.
+  }
 }
 
 async function executeOwnedCommand(context) {
@@ -180,8 +208,7 @@ async function executeOwnedCommand(context) {
     cancellation = cancellation
       .then(async () => {
         if (!child || !childIdentity || signalled || closed) return;
-        await signalOwnedGroup(child, childIdentity);
-        signalled = true;
+        signalled = await signalOwnedGroup(child, childIdentity);
       })
       .catch(() => {
         failure = 'identity';
@@ -284,6 +311,7 @@ async function executeOwnedCommand(context) {
       command.settled &&= await trustedDockerBrowserProducersSettled(request);
       [stdout, stderr] = await outputs;
       await cancellation;
+      await retireAfterCancellation(context, signalled, command.settled, producerCleanupConfirmed);
     } else {
       [stdout, stderr] = await Promise.all(
         ['stdout', 'stderr'].map((name) =>

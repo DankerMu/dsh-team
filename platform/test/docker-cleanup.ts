@@ -1,9 +1,14 @@
 import { deepStrictEqual } from 'node:assert';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { appendFileSync, readFileSync, statSync } from 'node:fs';
 import { canonicalImageReference, isAbsentResource } from './docker-command.ts';
-import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
+import type { AsyncDockerCommand, DockerCommand, DockerCommandResult } from './docker-command.ts';
 
 export const OWNER_LABEL = 'dsh-team.test-run';
+// The fixed deployment name is host-wide even when each invocation has a private TMPDIR.
+const DEPLOYMENT_PLATFORM = 'dsh-team-platform';
+const DEPLOYMENT_LOCK = '/tmp/dsh-team-deployment.lock';
 export interface CleanupTarget {
   readonly kind: 'container' | 'image' | 'volume' | 'network';
   readonly name: string;
@@ -113,6 +118,107 @@ export function removeOwned(
     }
   }
 }
+export function record(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new Error('Invalid acceptance inspect');
+  // Docker JSON crosses an external boundary; callers assert each consumed field.
+  return value as Record<string, unknown>;
+}
+
+export function containerDocument(result: DockerCommandResult): Record<string, unknown> {
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Independent container inspect failed');
+  const rows: unknown = JSON.parse(result.stdout);
+  if (!Array.isArray(rows) || rows.length !== 1)
+    throw new Error('Independent inspect missing container');
+  return record(rows[0]);
+}
+
+/** Read-only: this run's exact fixed platform, or undefined on exact daemon absence. */
+export async function ownedDeploymentPlatform(
+  commandAsync: AsyncDockerCommand,
+  runId: string,
+): Promise<{ id: string; state: Record<string, unknown> } | undefined> {
+  const args = ['container', 'inspect', DEPLOYMENT_PLATFORM];
+  const inspected = await commandAsync(args, 30_000);
+  // Compose may reject before creating its service; no owner exists to drain in that case.
+  if (isAbsentResource(inspected, 'container', DEPLOYMENT_PLATFORM)) return undefined;
+  output(inspected, args);
+  const platform = containerDocument(await commandAsync(args, 15_000));
+  const labels = record(record(platform.Config).Labels);
+  if (
+    platform.Name !== `/${DEPLOYMENT_PLATFORM}` ||
+    labels[OWNER_LABEL] !== runId ||
+    typeof platform.Id !== 'string'
+  )
+    throw new Error('Refusing shutdown of an unowned deployment');
+  return { id: platform.Id, state: record(platform.State) };
+}
+
+/** Graceful exact-ID drain of this run's platform; returns its ID, or undefined when absent. */
+export async function drainDeploymentPlatform(
+  commandAsync: AsyncDockerCommand,
+  runId: string,
+): Promise<string | undefined> {
+  const platform = await ownedDeploymentPlatform(commandAsync, runId);
+  if (platform === undefined) return undefined;
+  if (platform.state.Status === 'created') return platform.id;
+  if (platform.state.Running === true) {
+    const signal = ['kill', '--signal', 'SIGTERM', platform.id];
+    output(await commandAsync(signal, 30_000), signal);
+    // No Docker stop fallback: forced termination is not proof that helper retirement drained.
+    const wait = ['wait', platform.id];
+    if (output(await commandAsync(wait, 30_000), wait).trim() !== '0')
+      throw new Error('Deployment owner did not exit gracefully');
+  }
+  const settled = record(
+    containerDocument(await commandAsync(['container', 'inspect', platform.id], 15_000)).State,
+  );
+  if (settled.Running !== false || settled.ExitCode !== 0 || settled.OOMKilled !== false)
+    throw new Error('Deployment owner drainage unconfirmed');
+  return platform.id;
+}
+
+/**
+ * Non-blocking host-wide deployment lock. The lock file is never unlinked; stdin EOF releases
+ * the holder even if its parent dies, so there is no stale-file takeover.
+ */
+export async function acquireDeploymentLock(): Promise<() => Promise<void>> {
+  const lock = spawn(
+    'flock',
+    [
+      '--nonblock',
+      DEPLOYMENT_LOCK,
+      process.execPath,
+      '-e',
+      "process.stdout.write('locked\\n');process.stdin.resume();",
+    ],
+    {
+      env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
+  const closed = once(lock, 'close');
+  const release = async () => {
+    lock.stdin.end();
+    await closed;
+  };
+  try {
+    const ready: unknown = await Promise.race([
+      once(lock.stdout, 'data'),
+      closed.then(() => {
+        throw new Error('Deployment verification lock unavailable');
+      }),
+    ]);
+    if (!Array.isArray(ready) || !Buffer.isBuffer(ready[0]) || ready[0].toString() !== 'locked\n')
+      throw new Error('Deployment lock admission failed');
+  } catch (error) {
+    await release();
+    throw error;
+  }
+  return release;
+}
+
 export function cleanupTargets(
   command: DockerCommand,
   targets: readonly CleanupTarget[],
@@ -178,8 +284,13 @@ function cleanupTarget(value: unknown): CleanupTarget {
   return { kind, name, ownership: cleanupOwnership(ownership) };
 }
 
+export interface CleanupJournalEntry {
+  readonly runId: string;
+  readonly target: CleanupTarget;
+}
+
 /** A journal grants only exact registered label/name authority, never prefix-wide deletion. */
-export function readCleanupJournal(path: string): { runId: string; target: CleanupTarget }[] {
+export function readCleanupJournal(path: string): CleanupJournalEntry[] {
   if (statSync(path).size > 1_048_576) throw new Error('Cleanup journal exceeds bound');
   return readFileSync(path, 'utf8')
     .split('\n')
@@ -197,4 +308,71 @@ export function readCleanupJournal(path: string): { runId: string; target: Clean
         throw new Error('Invalid cleanup invocation');
       return { runId: entry.runId, target: cleanupTarget(entry.target) };
     });
+}
+
+/** Runs whose own registration includes the fixed deployment platform. */
+export function deploymentPlatformRuns(entries: readonly CleanupJournalEntry[]): string[] {
+  const runs = entries.flatMap(({ runId, target }) =>
+    target.kind === 'container' &&
+    target.name === DEPLOYMENT_PLATFORM &&
+    JSON.stringify(target.ownership) === JSON.stringify({ [OWNER_LABEL]: runId })
+      ? [runId]
+      : [],
+  );
+  return [...new Set(runs)];
+}
+
+export interface JournalRetirement {
+  readonly command: DockerCommand;
+  readonly commandAsync: AsyncDockerCommand;
+  readonly acquireLock: () => Promise<() => Promise<void>>;
+  /** Throws unless every submission reservation, including the drained platform's, settled. */
+  readonly requireSettled: () => void;
+}
+
+async function retireDeploymentRun(
+  runId: string,
+  targets: readonly CleanupTarget[],
+  retirement: JournalRetirement,
+  failures: unknown[],
+): Promise<void> {
+  let release: () => Promise<void>;
+  try {
+    release = await retirement.acquireLock();
+  } catch (error) {
+    failures.push(error);
+    return;
+  }
+  try {
+    await drainDeploymentPlatform(retirement.commandAsync, runId);
+    retirement.requireSettled();
+    cleanupTargets(retirement.command, targets, runId, failures);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    try {
+      await release();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+}
+
+/**
+ * Retire exact journal registrations, latest run first: a later owner of a fixed name retires
+ * it before an earlier foreign sentinel entry observes its absence. A deployment run is drained
+ * and settled under the host lock before any removal; otherwise nothing of that run is touched.
+ */
+export async function retireCleanupJournal(
+  entries: readonly CleanupJournalEntry[],
+  retirement: JournalRetirement,
+  failures: unknown[],
+): Promise<void> {
+  const runs = new Map<string, CleanupTarget[]>();
+  for (const { runId, target } of entries) runs.set(runId, [...(runs.get(runId) ?? []), target]);
+  const deployments = new Set(deploymentPlatformRuns(entries));
+  for (const [runId, targets] of [...runs].reverse()) {
+    if (deployments.has(runId)) await retireDeploymentRun(runId, targets, retirement, failures);
+    else cleanupTargets(retirement.command, targets, runId, failures);
+  }
 }

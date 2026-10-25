@@ -1,12 +1,14 @@
-import { spawn } from 'node:child_process';
-import { once } from 'node:events';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseEnv } from 'node:util';
-import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { output, OWNER_LABEL } from './docker-cleanup.ts';
+import {
+  acquireDeploymentLock,
+  drainDeploymentPlatform,
+  output,
+  OWNER_LABEL,
+} from './docker-cleanup.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import { deploymentSetupStep } from './deployment-setup-evidence.ts';
@@ -163,42 +165,12 @@ async function startDeployment(
   });
 }
 
-async function drainDeployment(lifecycle: UserImageLifecycle): Promise<string | undefined> {
-  const args = ['container', 'inspect', 'dsh-team-platform'];
-  const inspected = await lifecycle.commandAsync(args, 30_000);
-  // Compose may reject before creating its service; no owner exists to drain in that case.
-  if (isAbsentResource(inspected, 'container', 'dsh-team-platform')) return;
-  output(inspected, args);
-  const platform = await inspectAsync(lifecycle, 'dsh-team-platform');
-  const labels = record(record(platform.Config).Labels);
-  if (
-    platform.Name !== '/dsh-team-platform' ||
-    labels[OWNER_LABEL] !== lifecycle.runId ||
-    typeof platform.Id !== 'string'
-  )
-    throw new Error('Refusing shutdown of an unowned deployment');
-  const state = record(platform.State);
-  if (state.Status === 'created') return platform.Id;
-  if (state.Running === true) {
-    const signal = ['kill', '--signal', 'SIGTERM', platform.Id];
-    output(await lifecycle.commandAsync(signal, 30_000), signal);
-    // No Docker stop fallback: forced termination is not proof that helper retirement drained.
-    const wait = ['wait', platform.Id];
-    if (output(await lifecycle.commandAsync(wait, 30_000), wait).trim() !== '0')
-      throw new Error('Deployment owner did not exit gracefully');
-  }
-  const settled = record((await inspectAsync(lifecycle, platform.Id)).State);
-  if (settled.Running !== false || settled.ExitCode !== 0 || settled.OOMKilled !== false)
-    throw new Error('Deployment owner drainage unconfirmed');
-  return platform.Id;
-}
-
 /** Replace only this invocation's settled platform; instances and persistent binds stay untouched. */
 export async function recreateDeployment(
   lifecycle: UserImageLifecycle,
   deployment: Deployment,
 ): Promise<void> {
-  const id = await drainDeployment(lifecycle);
+  const id = await drainDeploymentPlatform(lifecycle.commandAsync, lifecycle.runId);
   if (id === undefined) throw new Error('Missing platform to recreate');
   const remove = ['container', 'rm', id];
   output(await lifecycle.commandAsync(remove, 30_000), remove);
@@ -227,32 +199,8 @@ export async function withDeployment(
   else admit();
   const lockAdmission = setup?.begin('deployment-lock-admission');
   try {
-    // stdin EOF releases the holder even if the verification parent dies; no stale-file takeover.
-    const lock = spawn(
-      'flock',
-      [
-        '--nonblock',
-        // The fixed platform name is host-wide even when each invocation has a private TMPDIR.
-        '/tmp/dsh-team-deployment.lock',
-        process.execPath,
-        '-e',
-        "process.stdout.write('locked\\n');process.stdin.resume();",
-      ],
-      {
-        env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
-    );
-    const closed = once(lock, 'close');
+    const release = await acquireDeploymentLock();
     try {
-      const ready: unknown = await Promise.race([
-        once(lock.stdout, 'data'),
-        closed.then(() => {
-          throw new Error('Deployment verification lock unavailable');
-        }),
-      ]);
-      if (!Array.isArray(ready) || !Buffer.isBuffer(ready[0]) || ready[0].toString() !== 'locked\n')
-        throw new Error('Deployment lock admission failed');
       lockAdmission?.complete();
       let observation: DeploymentObservation | undefined;
       const finalFailures: unknown[] = [];
@@ -284,7 +232,10 @@ export async function withDeployment(
               if (state.submitted) {
                 setup?.cleanup('deploymentDrain', 'unconfirmed');
                 try {
-                  const owner = await drainDeployment(lifecycle);
+                  const owner = await drainDeploymentPlatform(
+                    lifecycle.commandAsync,
+                    lifecycle.runId,
+                  );
                   setup?.cleanup(
                     'deploymentDrain',
                     owner === undefined ? 'not-required' : 'confirmed',
@@ -319,8 +270,7 @@ export async function withDeployment(
           'Deployment scenario and observation retirement failed',
         );
     } finally {
-      lock.stdin.end();
-      await closed;
+      await release();
     }
   } catch (error) {
     lockAdmission?.fail();

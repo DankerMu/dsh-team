@@ -10,33 +10,20 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { START_MODEL } from './container-start-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-import type { DockerCommandResult } from './docker-command.ts';
+import { containerDocument, record } from './docker-cleanup.ts';
 
-export function record(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw new Error('Invalid acceptance inspect');
-  // Docker JSON crosses an external boundary; callers assert each consumed field.
-  return value as Record<string, unknown>;
-}
+// Existing acceptance fixtures import the canonical inspect boundary through this module.
+export { record };
 
 export function inspect(lifecycle: UserImageLifecycle, name: string): Record<string, unknown> {
-  return containerInspect(lifecycle.command(['container', 'inspect', name], 15_000));
+  return containerDocument(lifecycle.command(['container', 'inspect', name], 15_000));
 }
 
 export async function inspectAsync(
   lifecycle: UserImageLifecycle,
   name: string,
 ): Promise<Record<string, unknown>> {
-  return containerInspect(await lifecycle.commandAsync(['container', 'inspect', name], 15_000));
-}
-
-function containerInspect(result: DockerCommandResult): Record<string, unknown> {
-  if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Independent container inspect failed');
-  const rows: unknown = JSON.parse(result.stdout);
-  if (!Array.isArray(rows) || rows.length !== 1)
-    throw new Error('Independent inspect missing container');
-  return record(rows[0]);
+  return containerDocument(await lifecycle.commandAsync(['container', 'inspect', name], 15_000));
 }
 
 export async function corruptOwnedOverlay(

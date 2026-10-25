@@ -139,14 +139,32 @@ function readUnknownExecs(directory, captured, records) {
   return browserExec;
 }
 
+function readCapturedSubmissions(directory) {
+  const captured = captureAuthority(directory);
+  return { captured, records: readSubmissionStates(directory, captured) };
+}
+
+/**
+ * Writer inventory before post-cancellation retirement. Reservations may remain open; every
+ * generation must be complete except a current initialized generation bound to an exempt
+ * container, the caller's own exactly bound platform that it drains before any removal.
+ * @param {string} directory
+ * @param {ReadonlySet<string>} exempt
+ * @returns {import('./verification-docker-generations.mjs').DockerObserverWitness[]}
+ */
+export function readVerificationWritersBeforeRetirement(directory, exempt) {
+  const { captured, records } = readCapturedSubmissions(directory);
+  captureAuthority(directory, captured);
+  return readVerificationDockerObserverWriters(directory, records.states, captured, exempt);
+}
+
 /**
  * Validate every durable outcome without granting operation or capability settlement.
  * @param {string} directory
  * @returns {VerificationSubmissionAssessment}
  */
 export function readVerificationSubmissionsForCleanup(directory) {
-  const captured = captureAuthority(directory);
-  const records = readSubmissionStates(directory, captured);
+  const { captured, records } = readCapturedSubmissions(directory);
   if (
     [...records.states.values()].some(
       (state) => !['settled', 'client-closed-unknown'].includes(state),

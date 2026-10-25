@@ -68,7 +68,6 @@ import { tmpdir } from 'node:os';
 const fixtureUrl = ${JSON.stringify(fixtureUrl)};
 const dependencies = {
   './user-image-fixture.ts': 'export async function runUserImage() { process.stdout.write("admitted\\\\n"); }',
-  './container-start-docker-fixture.ts': 'export const inspectAsync = () => { throw new Error("Unexpected inspect"); }; export const record = inspectAsync;',
   './gateway-http-fixture.ts': 'export const unusedPort = () => { throw new Error("Unexpected listener"); };',
 };
 registerHooks({
