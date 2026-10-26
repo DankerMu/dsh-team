@@ -2,7 +2,7 @@ import type { PlatformConfig } from '../config.ts';
 import type { InstanceStopReason } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { hasCompleteModelSettings } from '../managed-config/index.ts';
+import { hasCompleteModelSnapshot, modelSnapshot } from '../managed-config/index.ts';
 import { IdleChecks, complete } from './idle.ts';
 import type { DockerClient } from './client.ts';
 import { createOrchestrator } from './orchestrator.ts';
@@ -62,16 +62,7 @@ function matchesReadiness(
 }
 
 function model(database: DatabaseHandle) {
-  const settings = readSettings(database);
-  return {
-    modelSettings: {
-      baseURL: settings.modelBaseUrl,
-      apiKeyEnv: 'DSH_TEAM_MODEL_API_KEY',
-      models: settings.models,
-      defaultModel: settings.defaultModel,
-    },
-    modelKey: settings.modelApiKey,
-  };
+  return modelSnapshot(readSettings(database));
 }
 
 function matchingReceipt(
@@ -123,14 +114,7 @@ function admissionState(
   owner: ReturnType<typeof createOrchestrator>,
   userId: string,
 ): InstanceState {
-  const snapshot = model(database);
-  if (
-    !hasCompleteModelSettings({
-      ...snapshot.modelSettings,
-      apiKeyConfigured: snapshot.modelKey.trim() !== '',
-    })
-  )
-    return state('unconfigured');
+  if (!hasCompleteModelSnapshot(model(database))) return state('unconfigured');
   return state(owner.hasCapacity(userId) ? 'stopped' : 'full');
 }
 

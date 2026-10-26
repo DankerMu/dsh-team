@@ -82,6 +82,8 @@ export async function buildApp(
   const gatewayResolver = instanceService?.resolveUpstream ?? resolveUpstream;
   app.decorate('disconnectUserConnections', connections.disconnectUser);
   app.decorate('getUserActivity', connections.getUserActivity);
+  // Route plugins' own preClose hooks run after this root drain; cancel outbound work first.
+  const shutdown = new AbortController();
 
   try {
     installRequestGuard(app, config.publicUrl);
@@ -117,6 +119,7 @@ export async function buildApp(
       database,
       resolveSourceAddress,
       subnetPool: config.subnetPool,
+      shutdown: shutdown.signal,
       ...(instanceService === undefined ? {} : { service: instanceService }),
     });
     await app.register(instanceRoutes, {
@@ -220,6 +223,7 @@ export async function buildApp(
   // onClose awaits activity and the same service promise before releasing SQLite.
   app.addHook('preClose', async () => {
     closing = true;
+    shutdown.abort();
     for (const socket of unclaimed) socket.destroy();
     clearInterval(activityTimer);
     clearInterval(idleTimer);

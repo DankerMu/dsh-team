@@ -4,6 +4,7 @@ import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import { readSettings, writeSettings, SettingsValidationError } from '../db/index.ts';
 import type { DatabaseHandle, Settings } from '../db/index.ts';
+import { ADMIN_ERRORS as ERRORS } from './empty-body.ts';
 
 export interface AdminConfigOptions {
   database: DatabaseHandle;
@@ -34,13 +35,6 @@ export const ERROR_SCHEMA = {
     error: { type: 'string' },
     message: { type: 'string' },
   },
-} as const;
-const ERRORS = {
-  401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
-  403: { statusCode: 403, error: 'Forbidden', message: 'Forbidden' },
-  413: { statusCode: 413, error: 'Payload Too Large', message: 'Request body too large' },
-  415: { statusCode: 415, error: 'Unsupported Media Type', message: 'JSON request body required' },
-  500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
 } as const;
 
 class ClientConfigValidationError extends Error {}
