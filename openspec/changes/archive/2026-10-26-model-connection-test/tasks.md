@@ -49,7 +49,7 @@ See `design.md`, "Must preserve".
 
 - [x] 3.1 `pnpm check`
 - [x] 3.2 `pnpm test:ui`, plus `pnpm contract:check`.
-- [ ] 3.3 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy`; CI green.
+- [x] 3.3 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy`; CI green.
 
 ## Non-goals
 
