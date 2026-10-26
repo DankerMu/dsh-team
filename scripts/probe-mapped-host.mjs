@@ -33,6 +33,7 @@ import {
 } from './probe-first-run-composition.mjs';
 import { verifyPreservation } from './probe-first-run-preservation.mjs';
 import { attachScopeObserver } from './probe-session-address.mjs';
+import { verifyPlatformNav } from './probe-platform-nav.mjs';
 import {
   collectRequestEvidence,
   disposeRequestEvidence,
@@ -591,6 +592,24 @@ const capturePreservation = async (
   }
 };
 
+const assertPlatformNavMode = (platformNav, composition) => {
+  if (platformNav !== undefined && !composition)
+    throw new Error('stage=platform-nav error=composition-required');
+};
+
+const platformNavEvidence = async (platformNav, page, errors, screenshot, ms) =>
+  platformNav
+    ? {
+        platformNav: await verifyPlatformNav({
+          page,
+          admin: platformNav === 'admin',
+          errors,
+          screenshot,
+          ms,
+        }),
+      }
+    : {};
+
 export const acceptObservation = async ({
   origin,
   cookie,
@@ -608,8 +627,10 @@ export const acceptObservation = async ({
   expectedDefault,
   preserveSessionId,
   observeSessions = false,
+  platformNav,
 }) => {
   expectedRoster = await resolveCompositionRoster(composition, expectedRoster);
+  assertPlatformNavMode(platformNav, composition);
   const { chrome, page, errors, requests, welcome } = await openMappedPage({
     origin,
     cookie,
@@ -698,6 +719,8 @@ export const acceptObservation = async ({
         browserMs,
         'preservation-session-transport-address',
       );
+    // Last: following the platform link leaves the DSH page.
+    const navigation = await platformNavEvidence(platformNav, page, errors, screenshot, browserMs);
     return {
       ...first,
       ...(beforeSessionObservation ? { beforeSessionObservation } : {}),
@@ -705,6 +728,7 @@ export const acceptObservation = async ({
       reload,
       ...(preservation ? { preservation } : {}),
       ...(preserveSessionId ? { sessionAddressObserved: true } : {}),
+      ...navigation,
     };
   } catch (error) {
     failure = { error };

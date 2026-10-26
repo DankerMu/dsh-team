@@ -359,6 +359,8 @@ function prepareUserImage(
     `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
     '--build-context',
     `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
+    '--build-context',
+    `platform-nav=${join(repositoryRoot, 'plugins/platform-nav')}`,
     // Keep the primary context narrow: no repository-root files or secrets.
     join(repositoryRoot, 'images/dsh-user'),
   ];

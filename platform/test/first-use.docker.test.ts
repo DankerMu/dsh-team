@@ -101,6 +101,25 @@ function requireEmployeeStorage(
   });
 }
 
+/** Employee sidebar: only 账号设置, wide and compact, and its click leaves DSH for the account page. */
+function expectEmployeeNavigation(observation: MappedHostAcceptResult): void {
+  const account = {
+    href: '/_platform/account',
+    target: null,
+    visible: true,
+    contained: true,
+    labelFits: true,
+  };
+  expect(observation.platformNav?.wide).toEqual([{ ...account, text: '账号设置', label: null }]);
+  expect(observation.platformNav?.rail).toEqual([{ ...account, text: '', label: '账号设置' }]);
+  expect(observation.platformNav?.cordis).toBe('absent');
+  expect(observation.platformNav?.destination).toEqual({
+    path: '/_platform/account',
+    search: '',
+    heading: '修改密码',
+  });
+}
+
 function requireAutomaticSession(observation: MappedHostAcceptResult): string {
   expect(observation.beforeSessionObservation).toMatchObject({
     sessionsAvailable: true,
@@ -245,11 +264,13 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
                 workBound: paths.length === 1 && paths[0] === '/data/work',
               },
               observeSessions: true,
+              platformNav: 'employee',
             });
             await writeFile(
               join(evidence, `${label}.json`),
               JSON.stringify({ initial, observation }, null, 2),
             );
+            expectEmployeeNavigation(observation);
             return requireAutomaticSession(observation);
           } finally {
             await rescueChrome(join(profile, 'chrome.receipt.json'));

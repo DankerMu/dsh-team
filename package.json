@@ -28,7 +28,7 @@
     "lint:agents": "bash scripts/check-agents-commands.sh",
     "lint:config": "node scripts/check-config.mjs",
     "lint:ci": "node scripts/check-ci-concurrency.mjs",
-    "typecheck": "tsc --noEmit && pnpm --filter @dsh-team/web typecheck && tsc -p plugins/zh-locale/tsconfig.json && tsc -p plugins/permission-tiers/tsconfig.json && tsc -p plugins/office-agents/tsconfig.json",
+    "typecheck": "tsc --noEmit && pnpm --filter @dsh-team/web typecheck && tsc -p plugins/zh-locale/tsconfig.json && tsc -p plugins/permission-tiers/tsconfig.json && tsc -p plugins/office-agents/tsconfig.json && tsc -p plugins/platform-nav/tsconfig.json",
     "test": "vitest run --project unit --coverage",
     "test:integration": "pnpm build:web && vitest run --project integration",
     "test:ui": "pnpm build:web && playwright test",

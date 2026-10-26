@@ -172,23 +172,23 @@ test('built React login submits real credentials, recovers from rejections and s
   );
 });
 
-test('built React login lands an administrator on model configuration until real settings are saved, then on the console', async ({
+test('built React login sends an administrator to the fixed root through the gateway whether or not model settings are complete', async ({
   page,
   playwright,
 }, testInfo) => {
   await withAccountUi(
     playwright,
-    async ({ baseUrl, database, seed, upstreamRequests, admittedUsers }) => {
+    async ({ baseUrl, database, seed, target, upstreamRequests, admittedUsers }) => {
       const email = 'admin-landing@example.com';
       const password = 'browser-owned-admin-password';
       const loginUrl = `${baseUrl}/_platform/api/login`;
-      const configUrl = `${baseUrl}/_platform/api/admin/model-config`;
-      const usersUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
       // The seed jar keeps its own registration session; the browser starts without one.
       const registered = await seed.post('/_platform/api/register', { data: { email, password } });
       expect(registered.status()).toBe(201);
+      const identity = readPublicIdentity(await registered.json());
       database.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(email);
-      const observed = observeAccountUi(page, testInfo, baseUrl, [loginUrl, configUrl, usersUrl]);
+      // Any other platform API request, including a model-config read, fails expectHealthy.
+      const observed = observeAccountUi(page, testInfo, baseUrl, loginUrl);
       const trail: string[] = [];
       page.on('request', (request) => {
         if (request.isNavigationRequest() && request.frame() === page.mainFrame())
@@ -196,7 +196,7 @@ test('built React login lands an administrator on model configuration until real
         else if (new URL(request.url()).pathname.startsWith('/_platform/api/'))
           trail.push(`${request.method()} ${request.url()}`);
       });
-      async function login(destination: string, heading: string): Promise<void> {
+      async function login(): Promise<void> {
         const entry = await page.goto(`${baseUrl}/_platform/login`, { waitUntil: 'networkidle' });
         expect(entry?.status()).toBe(200);
         trail.length = 0;
@@ -205,25 +205,16 @@ test('built React login lands an administrator on model configuration until real
 
         await page.getByRole('button', { name: '登录', exact: true }).click();
 
-        await expect(page).toHaveURL(`${baseUrl}${destination}`);
-        await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
-        expect(trail.slice(0, 3)).toEqual([
-          `POST ${loginUrl}`,
-          `GET ${configUrl}`,
-          `navigate ${baseUrl}${destination}`,
-        ]);
+        await expect(page).toHaveURL(`${baseUrl}/`);
+        await expect(page.locator('body')).toContainText('本地已认证入口（非 DSH）');
+        expect(trail).toEqual([`POST ${loginUrl}`, `navigate ${baseUrl}/`]);
         for (const step of trail.filter((entry) => entry.startsWith('navigate '))) {
-          const url = new URL(step.slice('navigate '.length));
-          expect([url.search, url.hash]).toEqual(['', '']);
           expect(step.includes(password) || step.includes(encodeURIComponent(email))).toBe(false);
         }
-        expect(upstreamRequests).toEqual([]);
-        expect(admittedUsers).toEqual([]);
       }
 
-      await login('/_platform/admin/models', '模型配置');
-      await expect(page.getByText('未设置', { exact: true })).toBeVisible();
-      await observed.screenshot('login-admin-incomplete-models');
+      await login();
+      await observed.screenshot('login-admin-incomplete-root');
       const saved = await seed.put('/_platform/api/admin/model-config', {
         data: {
           baseURL: 'http://models.invalid/v1',
@@ -235,11 +226,18 @@ test('built React login lands an administrator on model configuration until real
       expect(saved.status()).toBe(200);
       expect(await saved.json()).toMatchObject({ apiKeyConfigured: true, defaultModel: 'alpha' });
       await page.context().clearCookies();
-      await login('/_platform/admin', '账号管理');
-      await expect(page.getByRole('cell', { name: email, exact: true })).toBeVisible();
-      await observed.screenshot('login-admin-complete-console');
+      await login();
+      await observed.screenshot('login-admin-complete-root');
 
-      expect(observed.actionRequests.filter((request) => request.url === loginUrl)).toHaveLength(2);
+      expect(observed.actionRequests).toEqual([
+        { url: loginUrl, method: 'POST' },
+        { url: loginUrl, method: 'POST' },
+      ]);
+      expect(admittedUsers).toEqual([identity.id, identity.id]);
+      expect(upstreamRequests.filter(({ path }) => path === '/')).toEqual([
+        { path: '/', cookie: target.cookie },
+        { path: '/', cookie: target.cookie },
+      ]);
       await expectNoBrowserStorage(page);
       observed.expectHealthy([]);
     },

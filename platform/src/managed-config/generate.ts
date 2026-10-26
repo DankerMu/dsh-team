@@ -32,6 +32,8 @@ interface PresetEntry {
 }
 
 export interface ManagedConfigInput {
+  /** Whether the account was an administrator when this overlay was generated. */
+  readonly admin: boolean;
   readonly modelSettings: {
     readonly baseURL?: string | undefined;
     readonly apiKeyEnv: string;
@@ -123,6 +125,10 @@ export function hasCompleteModelSettings(
 }
 
 export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigResult {
+  // Untyped fixture callers can omit the flag; never default it to either role.
+  if (typeof input.admin !== 'boolean') {
+    throw new TypeError('Managed overlay administrator flag must be boolean');
+  }
   if (!hasCompleteModelSettings(input.modelSettings)) {
     return { outcome: 'unconfigured' };
   }
@@ -176,6 +182,12 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
             id: 'managed-permissions',
             name: '/opt/dsh-team/permission-tiers/index.js',
             disabled: false,
+          },
+          {
+            id: 'platform-nav',
+            name: '/opt/dsh-team/platform-nav/index.js',
+            disabled: false,
+            config: { admin: input.admin },
           },
         ],
       },

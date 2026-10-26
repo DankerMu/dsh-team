@@ -1,0 +1,29 @@
+{
+  "name": "@dsh-team/platform-nav",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sidebar links from the managed DSH Web composition back to the platform pages",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh": "0.2.0-rc.2"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "README.md"
+  ]
+}

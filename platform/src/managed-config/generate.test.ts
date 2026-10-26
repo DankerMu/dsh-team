@@ -4,6 +4,7 @@ import { generateManagedConfig } from './index.ts';
 import type { ManagedConfigInput } from './index.ts';
 
 const INPUT: ManagedConfigInput = {
+  admin: false,
   modelSettings: {
     baseURL: 'http://127.0.0.1:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',
@@ -427,6 +428,65 @@ describe('generateManagedConfig', () => {
       { id: 'agent-default-model', config: { provider: 'intranet', model: ' beta ' } },
     ]);
   });
+
+  it.each([true, false])(
+    'inserts the read-only platform entry after the permission plugin for admin=%s',
+    (admin) => {
+      const generated = generateManagedConfig({ ...INPUT, admin });
+      ok(generated.outcome === 'configured');
+      const rows: unknown = JSON.parse(generated.content);
+      ok(Array.isArray(rows));
+
+      expect(rows.slice(-2)).toEqual([
+        {
+          insert: [
+            {
+              id: 'managed-permissions',
+              name: '/opt/dsh-team/permission-tiers/index.js',
+              disabled: false,
+            },
+            {
+              id: 'platform-nav',
+              name: '/opt/dsh-team/platform-nav/index.js',
+              disabled: false,
+              config: { admin },
+            },
+          ],
+        },
+        { id: 'agent-loop', disabled: false, inject: ['managedPermissions'] },
+      ]);
+    },
+  );
+
+  it('differs between roles only in the platform entry flag', () => {
+    const employee = generateManagedConfig({ ...INPUT, admin: false });
+    const administrator = generateManagedConfig({ ...INPUT, admin: true });
+    ok(employee.outcome === 'configured' && administrator.outcome === 'configured');
+
+    expect(
+      administrator.content.replace('"config":{"admin":true}', '"config":{"admin":false}'),
+    ).toBe(employee.content);
+    expect(administrator.content.split('"admin":').length).toBe(2);
+  });
+
+  it.each([undefined, null, 'true', 1, 0, {}])(
+    'rejects a non-boolean administrator flag %j before any composition',
+    (admin) => {
+      const malformed = { ...INPUT, admin };
+      const unconfigured = {
+        ...malformed,
+        modelSettings: { ...INPUT.modelSettings, baseURL: '' },
+      };
+
+      // The untyped fixture callers can omit the field; the runtime check is the guard.
+      expect(() => generateManagedConfig(malformed as unknown as ManagedConfigInput)).toThrow(
+        'Managed overlay administrator flag must be boolean',
+      );
+      expect(() => generateManagedConfig(unconfigured as unknown as ManagedConfigInput)).toThrow(
+        'Managed overlay administrator flag must be boolean',
+      );
+    },
+  );
 
   it('does not compose unconfigured input and propagates configured-path composition errors', () => {
     const compositionError = new Error('preset composition failed');

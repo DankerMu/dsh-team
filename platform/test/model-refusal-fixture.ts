@@ -116,6 +116,7 @@ async function prepareRefusalInstance(
   );
   const generated = generateManagedConfig({
     ...composition,
+    admin: false,
     modelSettings: {
       baseURL: managedURL,
       apiKeyEnv: KEY_ENV,

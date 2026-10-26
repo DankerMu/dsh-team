@@ -31,6 +31,20 @@ export type MappedHostAcceptInput = {
   readonly expectedDefault?: string;
   readonly preserveSessionId?: string;
   readonly observeSessions?: boolean;
+  /** Composition only: prove the sidebar platform links for this role, then follow one. */
+  readonly platformNav?: 'employee' | 'admin';
+};
+
+export type MappedHostPlatformLink = {
+  readonly href: string;
+  readonly text: string;
+  readonly label: string | null;
+  readonly target: string | null;
+  readonly visible: boolean;
+  /** Horizontally inside the footer cell, allowing the released 2px Cordis bleed. */
+  readonly contained: boolean;
+  /** The wide label span is not truncated (always true for compact rail links). */
+  readonly labelFits: boolean;
 };
 
 export type MappedHostSessionObservation = {
@@ -46,6 +60,24 @@ export type MappedHostSessionObservation = {
 };
 
 export type MappedHostAcceptResult = {
+  readonly platformNav?: {
+    readonly wide: readonly MappedHostPlatformLink[];
+    readonly rail: readonly MappedHostPlatformLink[];
+    /** Cordis badge state shared by both modes: absent without Cordis plugin activity. */
+    readonly cordis: 'absent' | 'stacked';
+    readonly destination: {
+      readonly path: string;
+      readonly search: string;
+      readonly heading: string;
+      /** Administrator console only: its link back to the DSH workbench. */
+      readonly workbench?: {
+        readonly href: string;
+        readonly text: string;
+        readonly visible: boolean;
+      };
+    };
+    readonly screenshots: readonly { readonly screenshot: string; readonly bytes: number }[];
+  };
   readonly sessionAddressObserved?: boolean;
   readonly accepted: boolean;
   readonly beforeSessionObservation?: MappedHostSessionObservation;
@@ -95,7 +127,7 @@ export declare function acceptObservation(
 export declare function collectObservation(
   input: Omit<
     MappedHostAcceptInput,
-    'composition' | 'expectedRoster' | 'preserveModels' | 'observeSessions'
+    'composition' | 'expectedRoster' | 'preserveModels' | 'observeSessions' | 'platformNav'
   >,
 ): Promise<MappedHostAcceptResult>;
 

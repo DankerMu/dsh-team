@@ -8,7 +8,9 @@
         "plugins/office-agents/docx-construction.js",
         "plugins/office-agents/*.test.js",
         "plugins/permission-tiers/index.js",
-        "plugins/permission-tiers/*.test.js"
+        "plugins/permission-tiers/*.test.js",
+        "plugins/platform-nav/index.js",
+        "plugins/platform-nav/*.test.js"
       ],
       "project": [
         "*.{ts,mjs,cjs}",
@@ -16,7 +18,9 @@
         "plugins/office-agents/*.js",
         "plugins/office-agents/*.d.ts",
         "plugins/permission-tiers/*.js",
-        "plugins/permission-tiers/*.d.ts"
+        "plugins/permission-tiers/*.d.ts",
+        "plugins/platform-nav/*.js",
+        "plugins/platform-nav/*.d.ts"
       ]
     },
     "platform": {

@@ -13,8 +13,21 @@ function response(status: string): Response {
   return new Response(JSON.stringify({ status, reason: status === 'running' ? null : status }));
 }
 
-function renderWait(request = vi.fn<typeof fetch>().mockResolvedValue(response('starting'))) {
-  return renderAccountPage(<WaitPage />, '/_platform/wait', request);
+const SESSION_API = '/_platform/api/session';
+
+function identity(role: string): Response {
+  return new Response(JSON.stringify({ email: 'person@example.com', role }));
+}
+
+/** Instance calls reach `request`; the separate identity read reaches `session`. */
+function renderWait(
+  request = vi.fn<typeof fetch>().mockResolvedValue(response('starting')),
+  session = vi.fn<typeof fetch>().mockResolvedValue(identity('employee')),
+) {
+  const routed = vi.fn<typeof fetch>((url, init) =>
+    url === SESSION_API ? session(url, init) : request(url, init),
+  );
+  return { ...renderAccountPage(<WaitPage />, '/_platform/wait', routed), session };
 }
 
 async function settle(): Promise<void> {
@@ -404,4 +417,126 @@ it('aborts a pending observation on departure and rejects late running navigatio
 
   expect(navigate).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledTimes(2);
+});
+
+function configureLink(view: HTMLDivElement): HTMLAnchorElement | undefined {
+  return [...view.querySelectorAll('a')].find((link) => link.textContent === '去配置模型');
+}
+
+it('shows an administrator the model configuration link only while unconfigured after one identity read', async () => {
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(response('unconfigured'))
+    .mockResolvedValueOnce(response('full'))
+    .mockResolvedValueOnce(response('unconfigured'));
+  const { view, session, navigate } = renderWait(
+    request,
+    vi.fn<typeof fetch>().mockResolvedValue(identity('admin')),
+  );
+  await settle();
+  await settle();
+
+  const link = configureLink(view);
+  expect(link?.getAttribute('href')).toBe('/_platform/admin/models');
+  expect(link?.closest('[role="alert"], [role="status"], [aria-live], button')).toBeNull();
+  expect(link?.closest('.card-links')).not.toBeNull();
+  expect(element(view, '[role="alert"]', HTMLElement).textContent).toBe('管理员尚未完成模型配置');
+  const signal = session.mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(session).toHaveBeenCalledExactlyOnceWith(SESSION_API, {
+    method: 'GET',
+    credentials: 'same-origin',
+    redirect: 'error',
+    signal,
+  });
+  await act(async () => {
+    retry(view);
+    await Promise.resolve();
+  });
+  expect(element(view, '[role="alert"]', HTMLElement).textContent).toBe(
+    '当前使用人数已满，请稍后再试',
+  );
+  expect(configureLink(view)).toBeUndefined();
+  await act(async () => {
+    retry(view);
+    await Promise.resolve();
+  });
+
+  expect(configureLink(view)?.getAttribute('href')).toBe('/_platform/admin/models');
+  expect(session).toHaveBeenCalledTimes(1);
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it('shows an employee the unchanged unconfigured page without the administrator link', async () => {
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(response('unconfigured'));
+  const { view, session } = renderWait(request);
+  await settle();
+  await settle();
+
+  expect(session).toHaveBeenCalledTimes(1);
+  expect(configureLink(view)).toBeUndefined();
+  expect([...view.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
+    '/_platform/account',
+  ]);
+});
+
+it.each(['full', 'error', 'stopped', 'starting', 'running'])(
+  'does not read the current identity in the %s state',
+  async (status) => {
+    const { session } = renderWait(vi.fn<typeof fetch>().mockResolvedValue(response(status)));
+    await settle();
+    await advance(1000);
+
+    expect(session).not.toHaveBeenCalled();
+  },
+);
+
+it.each<[string, () => Promise<Response>]>([
+  ['401', () => Promise.resolve(new Response('{"statusCode":401}', { status: 401 }))],
+  ['500', () => Promise.resolve(new Response('private detail', { status: 500 }))],
+  ['a network failure', () => Promise.reject(new Error('private transport detail'))],
+  ['an unparseable body', () => Promise.resolve(new Response('not JSON: private detail'))],
+  ['a non-object body', () => Promise.resolve(new Response('["admin"]'))],
+  ['an unknown role', () => Promise.resolve(identity('Admin'))],
+  [
+    'an extra field',
+    () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ email: 'person@example.com', role: 'admin', id: 'x' })),
+      ),
+  ],
+  ['a missing email', () => Promise.resolve(new Response('{"role":"admin"}'))],
+])('adds nothing when the identity read returns %s', async (_name, answer) => {
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(response('unconfigured'));
+  const { view, navigate } = renderWait(request, vi.fn<typeof fetch>(answer));
+  await settle();
+  await settle();
+  await settle();
+
+  expect(configureLink(view)).toBeUndefined();
+  expect(element(view, '[role="alert"]', HTMLElement).textContent).toBe('管理员尚未完成模型配置');
+  expect(element(view, 'button', HTMLButtonElement).disabled).toBe(false);
+  expect(view.textContent).not.toContain('private');
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+it('aborts a pending identity read on departure and ignores its late administrator answer', async () => {
+  const pending = Promise.withResolvers<Response>();
+  const request = vi.fn<typeof fetch>().mockResolvedValueOnce(response('unconfigured'));
+  const { session, unmount, view } = renderWait(
+    request,
+    vi.fn<typeof fetch>().mockReturnValue(pending.promise),
+  );
+  await settle();
+  const signal = session.mock.calls[0]?.[1]?.signal;
+
+  unmount();
+  await act(async () => {
+    pending.resolve(identity('admin'));
+    await Promise.resolve();
+  });
+
+  expect(signal?.aborted).toBe(true);
+  expect(configureLink(view)).toBeUndefined();
 });

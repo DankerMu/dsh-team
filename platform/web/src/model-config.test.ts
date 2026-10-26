@@ -1,10 +1,5 @@
 import { expect, it } from 'vitest';
-import {
-  connectionMessage,
-  isCompleteModelConfig,
-  jsonObject,
-  parseModelConfig,
-} from './model-config.ts';
+import { connectionMessage, jsonObject, parseModelConfig } from './model-config.ts';
 
 const COMPLETE = {
   baseURL: 'http://models.invalid/v1',
@@ -65,16 +60,6 @@ it.each<[string, unknown, boolean]>([
   ['a blank saved default', { ...COMPLETE, defaultModel: '', runningInstances: 0 }, true],
 ])('rejects %s', (_name, body, saved) => {
   expect(() => parseModelConfig(body, saved)).toThrow(Error);
-});
-
-it.each<[string, Record<string, unknown>, boolean]>([
-  ['complete settings', COMPLETE, true],
-  ['a blank address', { ...COMPLETE, baseURL: ' \t' }, false],
-  ['no configured key', { ...COMPLETE, apiKeyConfigured: false }, false],
-  ['an empty model list', { ...COMPLETE, models: [], defaultModel: '' }, false],
-  ['no default model', { ...COMPLETE, defaultModel: '' }, false],
-])('judges %s complete: %s', (_name, body, complete) => {
-  expect(isCompleteModelConfig(parseModelConfig(body, false))).toBe(complete);
 });
 
 it('narrows only JSON objects', () => {

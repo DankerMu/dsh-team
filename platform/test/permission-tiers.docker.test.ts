@@ -77,6 +77,7 @@ it('authorizes real released tools through native approval, Auto protocol, child
       const overlays = (['yolo', 'approval', 'auto'] as const).map((defaultPermissionTier) => {
         const generated = generateManagedConfig({
           ...composition,
+          admin: false,
           defaultPermissionTier,
           modelSettings: {
             baseURL: 'http://127.0.0.1:9/v1',

@@ -23,8 +23,9 @@ the operative guards.
 
 The user-image Dockerfile keeps `images/dsh-user` as its primary build context and
 requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale`,
-`permission-tiers=<repo>/plugins/permission-tiers`, and
-`office-agents=<repo>/plugins/office-agents`. The image retains its pinned base's
+`permission-tiers=<repo>/plugins/permission-tiers`,
+`office-agents=<repo>/plugins/office-agents`, and
+`platform-nav=<repo>/plugins/platform-nav`. The image retains its pinned base's
 official Debian ordinary and security sources without an auxiliary source-rewrite
 context. The image
 initializes the released Web profile with the boot-free

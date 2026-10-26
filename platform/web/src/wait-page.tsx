@@ -32,6 +32,19 @@ function readStatus(body: unknown): InstanceStatus {
   throw new Error('Invalid instance state');
 }
 
+/** Exactly the session API's `{email, role}` body naming an administrator. */
+function isAdministrator(body: unknown): boolean {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    Object.keys(body).length === 2 &&
+    'email' in body &&
+    typeof body.email === 'string' &&
+    'role' in body &&
+    body.role === 'admin'
+  );
+}
+
 interface Attempt {
   controller: AbortController;
   timer?: number;
@@ -40,6 +53,32 @@ interface Attempt {
 export function WaitPage() {
   const [status, setStatus] = useState<Exclude<InstanceStatus, 'running'>>('starting');
   const owner = useRef<Attempt | null>(null);
+  const [admin, setAdmin] = useState(false);
+  // One identity read per page, independent of start attempts; departure aborts it.
+  const identity = useRef<AbortController | null>(null);
+  const probeIdentity = useCallback(() => {
+    if (identity.current !== null) return;
+    const controller = new AbortController();
+    identity.current = controller;
+    void (async () => {
+      try {
+        const response = await fetch('/_platform/api/session', {
+          method: 'GET',
+          credentials: 'same-origin',
+          redirect: 'error',
+          signal: controller.signal,
+        });
+        if (response.status !== 200) {
+          await response.arrayBuffer();
+          return;
+        }
+        const body: unknown = await response.json();
+        if (!controller.signal.aborted && isAdministrator(body)) setAdmin(true);
+      } catch {
+        // A failed identity read only withholds the optional administrator link.
+      }
+    })();
+  }, []);
   // Fence repeated clicks before React has committed disabled controls.
   const pending = useRef(false);
   const begin = useCallback(() => {
@@ -76,6 +115,7 @@ export function WaitPage() {
           return;
         }
         setStatus(next);
+        if (next === 'unconfigured') probeIdentity();
         if (next === 'starting') {
           // Measure from the completed response, never overlap observations.
           attempt.timer = window.setTimeout(() => {
@@ -93,7 +133,7 @@ export function WaitPage() {
     }
 
     void request(true);
-  }, []);
+  }, [probeIdentity]);
 
   useEffect(() => {
     begin();
@@ -101,6 +141,8 @@ export function WaitPage() {
       const attempt = owner.current;
       owner.current = null;
       pending.current = false;
+      identity.current?.abort();
+      identity.current = null;
       if (attempt !== null) {
         clearTimeout(attempt.timer);
         attempt.controller.abort();
@@ -122,6 +164,7 @@ export function WaitPage() {
         重试
       </button>
       <p className="card-links">
+        {status === 'unconfigured' && admin && <a href="/_platform/admin/models">去配置模型</a>}
         <a href="/_platform/account">账号设置</a>
       </p>
     </main>
