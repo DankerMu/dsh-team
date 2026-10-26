@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import { modelConfigRoutes } from './model-config.ts';
+import { modelConnectionRoutes } from './model-connection.ts';
 import { runtimeConfigRoutes } from './runtime-config.ts';
 import { accountStatusRoutes } from './account-status.ts';
 import { passwordResetRoutes } from './password-reset.ts';
@@ -76,8 +77,9 @@ export const adminRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   resolveSourceAddress: SourceAddressResolver;
   subnetPool: string;
+  shutdown: AbortSignal;
   service?: InstanceService;
-}> = (app, { database, resolveSourceAddress, subnetPool, service }, done) => {
+}> = (app, { database, resolveSourceAddress, subnetPool, shutdown, service }, done) => {
   app.addHook('onRequest', (request, reply, next) => {
     try {
       const token = readSessionCookie(request.headers.cookie);
@@ -195,6 +197,8 @@ export const adminRoutes: FastifyPluginCallback<{
   );
   app.register(auditEventRoutes, { database });
   app.register(modelConfigRoutes, { database, resolveSourceAddress });
+  // Separate plugin: modelConfigRoutes rewrites every 400 as invalid configuration.
+  app.register(modelConnectionRoutes, { database, shutdown });
   app.register(runtimeConfigRoutes, { database, resolveSourceAddress, subnetPool });
   app.register(passwordResetRoutes, { database, resolveSourceAddress });
   const pending = new Set<string>();

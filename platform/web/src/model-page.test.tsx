@@ -348,3 +348,116 @@ it('retains partial restart guidance when current authority is lost without rest
   await settle();
   expect(request).toHaveBeenCalledTimes(3);
 });
+
+const TEST_LABEL = '测试默认模型连接';
+function testButton(view: HTMLDivElement): HTMLButtonElement {
+  return button(view, TEST_LABEL);
+}
+async function clickTest(view: HTMLDivElement): Promise<void> {
+  await settle(() => {
+    testButton(view).click();
+  });
+}
+const TEST_API = '/_platform/api/admin/model-config/test';
+
+it('labels the test button with plain text and notes that only saved values are tested', async () => {
+  const { view } = await render();
+
+  const test = testButton(view);
+  expect(test.getAttribute('aria-label')).toBeNull();
+  const note = test.nextElementSibling;
+  expect(note?.textContent).toBe('测试使用上次保存的配置，未保存的修改不参与');
+  expect(note?.getAttribute('role')).toBeNull();
+  expect(note?.getAttribute('aria-live')).toBeNull();
+});
+
+it('describes the address field with the /v1 guidance', async () => {
+  const { view } = await render();
+
+  const input = element(view, '#model-base-url', HTMLInputElement);
+  const help = input.getAttribute('aria-describedby');
+  expect(help).not.toBeNull();
+  expect(element(view, `#${help ?? ''}`, HTMLElement).textContent).toBe(
+    'OpenAI 兼容地址，通常以 /v1 结尾',
+  );
+});
+
+it('tests the saved configuration once behind the shared fence without touching unsaved inputs', async () => {
+  const held = Promise.withResolvers<Response>();
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(receipt())
+    .mockReturnValueOnce(held.promise);
+  const { view } = await render(request);
+  await draft(view, '#model-key', SECRET);
+  await draft(view, '#model-base-url', 'http://unsaved.invalid/v1');
+
+  await settle(() => {
+    testButton(view).click();
+    testButton(view).click();
+    submit(view);
+  });
+
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]?.[0]).toBe(TEST_API);
+  expect(request.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', body: '{}' });
+  expect(element(view, '#model-status', HTMLElement).textContent).toBe('正在测试连接…');
+  expect(element(view, 'fieldset', HTMLFieldSetElement).disabled).toBe(true);
+  expect(element(view, '#model-key', HTMLInputElement).value).toBe(SECRET);
+  await settle(() => {
+    held.resolve(receipt({ result: 'ok', httpStatus: 200, elapsedMs: 42 }));
+  });
+  await settle();
+  const status = element(view, '#model-status', HTMLElement);
+  expect(status.getAttribute('role')).toBe('status');
+  expect(status.textContent).toBe('连接成功（用时 42 毫秒）');
+  expect(element(view, '#model-key', HTMLInputElement).value).toBe(SECRET);
+  expect(element(view, '#model-base-url', HTMLInputElement).value).toBe(
+    'http://unsaved.invalid/v1',
+  );
+  expect(element(view, 'fieldset', HTMLFieldSetElement).disabled).toBe(false);
+  expect(view.querySelectorAll('[role="status"], [role="alert"]')).toHaveLength(1);
+});
+
+it.each([
+  [
+    { result: 'not-found', httpStatus: 404, elapsedMs: 3 },
+    200,
+    '地址或模型不存在。OpenAI 兼容地址通常以 /v1 结尾。',
+  ],
+  [{ result: 'unauthorized', httpStatus: 401, elapsedMs: 3 }, 200, '密钥无效或无权访问该模型'],
+  [{ result: 'rejected', httpStatus: 400, elapsedMs: 3 }, 200, '模型服务拒绝了请求（HTTP 400）'],
+  [{ result: 'mystery', httpStatus: null, elapsedMs: 3 }, 200, '连接测试请求失败，请重试。'],
+  [{}, 500, '连接测试请求失败，请重试。'],
+] as const)('shows a failed test result %j as one alert', async (body, status, text) => {
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(receipt())
+    .mockResolvedValueOnce(receipt(body, status));
+  const { view } = await render(request);
+
+  await clickTest(view);
+  await settle();
+
+  const alert = element(view, '#model-status', HTMLElement);
+  expect(alert.getAttribute('role')).toBe('alert');
+  expect(alert.textContent).toBe(text);
+  expect(view.querySelector('form')).not.toBeNull();
+  expect(element(view, 'fieldset', HTMLFieldSetElement).disabled).toBe(false);
+});
+
+it.each([401, 403])('handles test denial %i like the other model mutations', async (status) => {
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(receipt())
+    .mockResolvedValueOnce(receipt({}, status));
+  const { view, navigate } = await render(request);
+
+  await clickTest(view);
+  await settle();
+
+  expect(element(view, '[role="alert"]', HTMLElement).textContent).toBe('无权限');
+  expect(view.querySelector('form')).toBeNull();
+  if (status === 401) expect(navigate).toHaveBeenCalledWith('/_platform/login');
+  else expect(navigate).not.toHaveBeenCalled();
+});

@@ -130,7 +130,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 1. 用对外地址访问 `/_platform/login`，管理员登录后进入 `/_platform/admin/models`。
 2. 填写真实模型服务 Base URL、密钥、模型名和默认模型，保存。密钥不回显；更新配置不热切换已运行实例，下次启动/管理员重启生效。
 3. 用独立员工账号访问 `/_platform/register` 注册，再登录。进入等待页后应启动自己的实例并进入原生工作台。
-4. 检查原生页面及 WebSocket 连接；模型连通性另行用批准的真实任务验收。仅保存模型配置和打开工作台不代表推理成功。
+4. 检查原生页面及 WebSocket 连接；模型连通性另行用批准的真实任务验收。仅保存模型配置和打开工作台不代表推理成功。模型页的「测试默认模型连接」只用上次保存的地址、密钥和默认模型，按 DSH 相同规则（地址后接 `/chat/completions`，平台不补 `/v1`）发一次 `max_tokens: 1` 的非流式请求，20 秒超时。「连接成功」只证明从平台容器（Compose `default` 网络、不读 `HTTP(S)_PROXY`；TLS 信任 Node 内置 CA 库，不读镜像系统证书，与员工实例里的 DSH 相同）能用这组地址、密钥和模型完成请求，不证明员工实例的出网路径；`rejected`（「模型服务拒绝了请求」）也可能只是服务商拒绝该最小请求参数（例如要求 `max_completion_tokens` 的推理模型），不一定是配置错误。
 5. 在后台导航进入 `/_platform/admin/instances`，查看实例状态、最近启动/活动时间，展开出错实例的已保存安全日志。支持按邮箱本地筛选和显式刷新。重启与重置配置均需确认；重启提交不等于已就绪，重置不会自动启动。
 
 自动化操作可使用下表中的同一公共接口，不得直接写数据库。JSON 写请求带 `Content-Type: application/json`、实际对外 `Origin`，登录后的请求携带该账号平台 cookie；凭据只保存在进程内或0600临时文件中，不打印请求头/响应cookie或完整模型配置。
@@ -139,6 +139,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 |---|---|
 | 管理员/员工登录 | `POST /_platform/api/login`，JSON `{email,password}`；200及账号身份、平台session cookie |
 | 保存模型 | 管理员 `PUT /_platform/api/admin/model-config`，JSON `{baseURL,apiKey,models:[{name}],defaultModel}`；200，回包只有 `apiKeyConfigured` 而非密钥 |
+| 测试模型连接 | 管理员 `POST /_platform/api/admin/model-config/test`，JSON `{}`；200 `{result,httpStatus,elapsedMs}`，`result` 为封闭集代码（`ok`、`unconfigured`、`unauthorized`、`not-found`、`rejected`、`server-error`、`bad-response`、`timeout`、`unreachable`、`invalid-address`、`invalid-key`），不回显密钥、上游回应体或URL；只证明平台容器到模型的连通，不证明员工实例出网 |
 | 注册员工 | `POST /_platform/api/register`，JSON `{email,password}`；201，记录返回的员工 `id`，再登录 |
 | 启动实例 | 员工 `POST /_platform/api/instance/start`，JSON `{}`；200、`starting` |
 | 等待就绪 | 员工 `GET /_platform/api/instance`；直到 `running`；终止错误不能当作继续重试的理由 |

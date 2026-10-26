@@ -1,15 +1,11 @@
-import type {
-  FastifyPluginCallback,
-  FastifyRequest,
-  FastifyReply,
-  HookHandlerDoneFunction,
-} from 'fastify';
+import type { FastifyPluginCallback, FastifyRequest } from 'fastify';
 import { recordAuditEvent } from '../audit/index.ts';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
 import { ERROR_SCHEMA } from './config-route.ts';
+import { ADMIN_ERRORS, EMPTY_BODY_SCHEMA, emptyBodyPolicy } from './empty-body.ts';
 
 interface Target {
   userId: string;
@@ -17,15 +13,12 @@ interface Target {
   accountStatus: 'active' | 'disabled';
   instanceStatus: 'running' | 'stopped' | 'starting' | 'error' | null;
 }
+const EMPTY_BODY = emptyBodyPolicy('Empty instance action body required');
 const ERRORS = {
-  400: { statusCode: 400, error: 'Bad Request', message: 'Empty instance action body required' },
-  401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
-  403: { statusCode: 403, error: 'Forbidden', message: 'Forbidden' },
+  ...ADMIN_ERRORS,
+  400: EMPTY_BODY.invalid,
   404: { statusCode: 404, error: 'Not Found', message: 'Instance not found' },
   409: { statusCode: 409, error: 'Conflict', message: 'Instance action conflict' },
-  413: { statusCode: 413, error: 'Payload Too Large', message: 'Request body too large' },
-  415: { statusCode: 415, error: 'Unsupported Media Type', message: 'JSON request body required' },
-  500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
   503: { statusCode: 503, error: 'Service Unavailable', message: 'Instance service unavailable' },
 } as const;
 const RECEIPT = {
@@ -63,23 +56,6 @@ class InstanceActionRejection extends Error {
     super(ERRORS[status].message);
     this.status = status;
   }
-}
-function validateBody(
-  request: FastifyRequest,
-  reply: FastifyReply,
-  next: HookHandlerDoneFunction,
-): void {
-  const body: unknown = request.body;
-  if (
-    typeof body !== 'object' ||
-    body === null ||
-    Array.isArray(body) ||
-    Object.keys(body).length !== 0
-  ) {
-    void reply.code(400).send(ERRORS[400]);
-    return;
-  }
-  next();
 }
 
 export const instanceActionRoutes: FastifyPluginCallback<{
@@ -182,20 +158,13 @@ export const instanceActionRoutes: FastifyPluginCallback<{
     app.log.error('Administrator instance action failure');
     return ERRORS[500];
   }
-  app.setErrorHandler((error, _request, reply) => {
-    const status = error instanceof Error && 'statusCode' in error ? error.statusCode : undefined;
-    if (status === 400 || status === 413 || status === 415)
-      return reply.code(status).send(ERRORS[status]);
-    const response = failure(error);
-    return reply.code(response.statusCode).send(response);
-  });
-  const body = { type: 'object', additionalProperties: false, properties: {} };
+  app.setErrorHandler(EMPTY_BODY.errorHandler(failure));
   for (const action of ['restart', 'reset-config'] as const) {
     app.post<{ Params: { userId: string }; Body: unknown }>(
       `/_platform/api/admin/instances/:userId/${action}`,
       {
-        validatorCompiler: () => (value: unknown) => ({ value }),
-        preValidation: validateBody,
+        validatorCompiler: EMPTY_BODY.validatorCompiler,
+        preValidation: EMPTY_BODY.preValidation,
         schema: {
           summary:
             action === 'restart'
@@ -207,7 +176,7 @@ export const instanceActionRoutes: FastifyPluginCallback<{
             required: ['userId'],
             properties: { userId: { type: 'string', pattern: '^[a-z0-9]{12}$' } },
           },
-          body,
+          body: EMPTY_BODY_SCHEMA,
           response: {
             ...(action === 'restart' ? { 200: RECEIPT } : { 204: { type: 'null' } }),
             ...FAILURE_RESPONSES,
@@ -234,11 +203,11 @@ export const instanceActionRoutes: FastifyPluginCallback<{
   app.post<{ Body: unknown }>(
     '/_platform/api/admin/instances/restart-running',
     {
-      validatorCompiler: () => (value: unknown) => ({ value }),
-      preValidation: validateBody,
+      validatorCompiler: EMPTY_BODY.validatorCompiler,
+      preValidation: EMPTY_BODY.preValidation,
       schema: {
         summary: 'Restart the once-captured running instance set and return startup admissions',
-        body,
+        body: EMPTY_BODY_SCHEMA,
         response: {
           200: {
             type: 'object',

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
-import { MODEL_CONFIG_API, jsonObject, parseModelConfig } from './model-config.ts';
+import {
+  MODEL_CONFIG_API,
+  connectionMessage,
+  jsonObject,
+  parseModelConfig,
+} from './model-config.ts';
 
 interface ModelRow {
   name: string;
@@ -12,13 +17,26 @@ interface ModelDraft {
   models: ModelRow[];
   defaultModel: string;
 }
-type Action = 'load' | 'save' | 'restart';
+type Action = 'load' | 'save' | 'restart' | 'test';
 type Phase = Action | 'ready' | 'failure' | 'denied';
 const EMPTY: ModelDraft = { baseURL: '', apiKeyConfigured: false, models: [], defaultModel: '' };
 const FAILURE = {
   load: '模型配置加载失败，请重试。',
   save: '保存失败，配置可能已变更；请重新打开页面核对后再试。',
   restart: '重启请求失败，部分实例可能已处理；请检查实例状态后再试。',
+  test: '连接测试请求失败，请重试。',
+};
+const ENDPOINT = {
+  load: MODEL_CONFIG_API,
+  save: MODEL_CONFIG_API,
+  restart: '/_platform/api/admin/instances/restart-running',
+  test: `${MODEL_CONFIG_API}/test`,
+};
+const PENDING = {
+  load: '加载中…',
+  save: '正在保存…',
+  restart: '正在请求重启…',
+  test: '正在测试连接…',
 };
 
 function readConfiguration(value: unknown, saved: boolean) {
@@ -80,18 +98,15 @@ async function requestConfiguration(
   signal: AbortSignal,
   payload?: Record<string, unknown>,
 ) {
-  const response = await fetch(
-    action === 'restart' ? '/_platform/api/admin/instances/restart-running' : MODEL_CONFIG_API,
-    {
-      method: action === 'load' ? 'GET' : action === 'save' ? 'PUT' : 'POST',
-      credentials: 'same-origin',
-      redirect: 'error',
-      signal,
-      ...(payload === undefined
-        ? {}
-        : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
-    },
-  );
+  const response = await fetch(ENDPOINT[action], {
+    method: action === 'load' ? 'GET' : action === 'save' ? 'PUT' : 'POST',
+    credentials: 'same-origin',
+    redirect: 'error',
+    signal,
+    ...(payload === undefined
+      ? {}
+      : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
+  });
   try {
     const body: unknown =
       response.status === 200 ? await response.json() : await response.arrayBuffer();
@@ -121,7 +136,8 @@ function useModelEditor() {
     setPhase(action);
     setError('');
     setMessage('');
-    setKey('');
+    // A connection test uses saved values only and leaves every form input untouched.
+    if (action !== 'test') setKey('');
     if (action === 'load') setCount(null);
     const deny = (status: number) => {
       if (status !== 401 && status !== 403) return false;
@@ -138,6 +154,20 @@ function useModelEditor() {
       setError(message);
       setPhase(action === 'load' ? 'failure' : 'ready');
     };
+    const succeed = (body: unknown) => {
+      if (action === 'restart') setMessage(restartMessage(body));
+      else if (action === 'test') {
+        const result = connectionMessage(body);
+        if (result.ok) setMessage(result.text);
+        else setError(result.text);
+      } else {
+        const result = readConfiguration(body, action === 'save');
+        setDraft(result.draft);
+        setCount(result.count);
+        if (action === 'save') setMessage('已保存，下次启动实例时生效。');
+      }
+      setPhase('ready');
+    };
     try {
       const response = await requestConfiguration(action, controller.signal, payload);
       if (!current() || deny(response.status)) return;
@@ -150,14 +180,7 @@ function useModelEditor() {
         );
         return;
       }
-      if (action === 'restart') setMessage(restartMessage(response.body));
-      else {
-        const result = readConfiguration(response.body, action === 'save');
-        setDraft(result.draft);
-        setCount(result.count);
-        if (action === 'save') setMessage('已保存，下次启动实例时生效。');
-      }
-      setPhase('ready');
+      succeed(response.body);
     } catch {
       if (current()) {
         fail(FAILURE[action]);
@@ -208,8 +231,8 @@ function useModelEditor() {
       };
     });
   }
-  const busy = phase === 'load' || phase === 'save' || phase === 'restart';
-  const visible = phase === 'ready' || phase === 'save' || phase === 'restart';
+  const busy = phase === 'load' || phase === 'save' || phase === 'restart' || phase === 'test';
+  const visible = phase === 'ready' || phase === 'save' || phase === 'restart' || phase === 'test';
   return {
     draft,
     setDraft,
@@ -241,13 +264,9 @@ export function ModelPage() {
         <p id="model-status" role={error !== '' || phase === 'denied' ? 'alert' : 'status'}>
           {phase === 'denied'
             ? message
-            : phase === 'load'
-              ? '加载中…'
-              : phase === 'save'
-                ? '正在保存…'
-                : phase === 'restart'
-                  ? '正在请求重启…'
-                  : error || message}
+            : phase === 'ready' || phase === 'failure'
+              ? error || message
+              : PENDING[phase]}
         </p>
         {phase === 'failure' && (
           <button
@@ -306,7 +325,7 @@ export function ModelPage() {
 }
 
 function ModelForm({ editor }: { editor: ReturnType<typeof useModelEditor> }) {
-  const { draft, setDraft, key, setKey, submit, changeModels, busy } = editor;
+  const { draft, setDraft, key, setKey, submit, changeModels, busy, perform } = editor;
   return (
     <form
       className="model-form"
@@ -323,11 +342,13 @@ function ModelForm({ editor }: { editor: ReturnType<typeof useModelEditor> }) {
             id="model-base-url"
             value={draft.baseURL}
             required
+            aria-describedby="model-base-url-help"
             onChange={(event) => {
               const value = event.currentTarget.value;
               setDraft((current) => ({ ...current, baseURL: value }));
             }}
           />
+          <small id="model-base-url-help">OpenAI 兼容地址，通常以 /v1 结尾</small>
         </div>
         <div className="field">
           <label htmlFor="model-key">密钥</label>
@@ -423,7 +444,18 @@ function ModelForm({ editor }: { editor: ReturnType<typeof useModelEditor> }) {
               ))}
           </select>
         </div>
-        <button type="submit">保存配置</button>
+        <div className="model-actions">
+          <button type="submit">保存配置</button>
+          <button
+            type="button"
+            onClick={() => {
+              void perform('test', {});
+            }}
+          >
+            测试默认模型连接
+          </button>
+          <small>测试使用上次保存的配置，未保存的修改不参与</small>
+        </div>
       </fieldset>
     </form>
   );

@@ -1,5 +1,10 @@
 import { expect, it } from 'vitest';
-import { isCompleteModelConfig, jsonObject, parseModelConfig } from './model-config.ts';
+import {
+  connectionMessage,
+  isCompleteModelConfig,
+  jsonObject,
+  parseModelConfig,
+} from './model-config.ts';
 
 const COMPLETE = {
   baseURL: 'http://models.invalid/v1',
@@ -76,4 +81,47 @@ it('narrows only JSON objects', () => {
   expect(jsonObject({ a: 1 })).toEqual({ a: 1 });
   expect(() => jsonObject([])).toThrow('Invalid configuration response');
   expect(() => jsonObject(null)).toThrow('Invalid configuration response');
+});
+
+const HINT = 'OpenAI 兼容地址通常以 /v1 结尾';
+it.each([
+  [{ result: 'ok', httpStatus: 200, elapsedMs: 123 }, true, '连接成功（用时 123 毫秒）'],
+  [{ result: 'unconfigured', httpStatus: null, elapsedMs: 0 }, false, '请先保存完整的模型配置'],
+  [{ result: 'unauthorized', httpStatus: 401, elapsedMs: 5 }, false, '密钥无效或无权访问该模型'],
+  [{ result: 'not-found', httpStatus: 404, elapsedMs: 5 }, false, `地址或模型不存在。${HINT}。`],
+  [{ result: 'rejected', httpStatus: 422, elapsedMs: 5 }, false, '模型服务拒绝了请求（HTTP 422）'],
+  [{ result: 'server-error', httpStatus: 502, elapsedMs: 5 }, false, '模型服务出错（HTTP 502）'],
+  [
+    { result: 'bad-response', httpStatus: 200, elapsedMs: 5 },
+    false,
+    `地址返回的不是模型接口。${HINT}。`,
+  ],
+  [{ result: 'timeout', httpStatus: null, elapsedMs: 20000 }, false, '连接超时'],
+  [{ result: 'unreachable', httpStatus: null, elapsedMs: 3 }, false, '无法连接到模型地址'],
+  [
+    { result: 'invalid-address', httpStatus: null, elapsedMs: 0 },
+    false,
+    '模型地址格式无效，需以 http:// 或 https:// 开头',
+  ],
+  [{ result: 'invalid-key', httpStatus: null, elapsedMs: 0 }, false, '已保存的密钥包含无效字符'],
+])('explains connection test result %j', (body, ok, text) => {
+  expect(connectionMessage(body)).toEqual({ ok, text });
+});
+
+it.each([
+  null,
+  [],
+  { result: 'ok', httpStatus: 200 },
+  { result: 'unknown', httpStatus: null, elapsedMs: 0 },
+  { result: 'ok', httpStatus: 200, elapsedMs: -1 },
+  { result: 'ok', httpStatus: 200, elapsedMs: 1.5 },
+  { result: 'ok', httpStatus: '200', elapsedMs: 1 },
+  { result: 'ok', httpStatus: 99, elapsedMs: 1 },
+  { result: 'rejected', httpStatus: null, elapsedMs: 1 },
+  { result: 'server-error', httpStatus: null, elapsedMs: 1 },
+  { result: 'ok', httpStatus: 200, elapsedMs: 1, url: 'http://models.invalid' },
+  { result: 'constructor', httpStatus: 500, elapsedMs: 1 },
+  { result: 'toString', httpStatus: null, elapsedMs: 1 },
+])('rejects malformed connection test body %j', (body) => {
+  expect(() => connectionMessage(body)).toThrow();
 });
