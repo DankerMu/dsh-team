@@ -67,7 +67,7 @@
   The route response schema lists 200, 400, 401, 403, 413, 415 and 500. `readSettings` can throw on corrupted stored settings, which gives a sanitized 500.
 
 - **UI.** A 「测试连接」 button sits in the model form's action area and shares the page's pending fence.
-  - Its label reads 「测试连接（已保存的默认模型）」.
+  - Its label reads 「测试默认模型连接」, with a plain-text note 「测试使用上次保存的配置，未保存的修改不参与」 beside it. The note avoids the substring 已保存, which existing assertions forbid in page text.
   - Fixed Chinese texts:
     - ok → 「连接成功」 plus the elapsed time;
     - unconfigured → 「请先保存完整的模型配置」;

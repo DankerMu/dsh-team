@@ -34,7 +34,7 @@ See `design.md`, "Must preserve".
 ## 2. UI and docs
 
 - [ ] 2.1 Model page:
-  - the 「测试连接（已保存的默认模型）」 button, sharing the pending fence;
+  - the 「测试默认模型连接」 button with its saved-config note, sharing the pending fence;
   - the fixed result texts and the `/v1` hint, in the existing single live region;
   - the address help text through `aria-describedby`;
   - 401 goes to login and 403 to the no-permission state;
