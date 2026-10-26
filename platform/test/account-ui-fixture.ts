@@ -181,6 +181,64 @@ export async function expectNoScriptVisibleCookie(page: Page): Promise<void> {
   ).toBe('');
 }
 
+/** Login/registration layout at desktop and narrow widths, with retained screenshots. */
+export async function expectCredentialLayout(
+  playwright: PlaywrightWorkerArgs['playwright'],
+  page: Page,
+  testInfo: TestInfo,
+  variant: { form: 'login' | 'registration'; name: string; alternative: string },
+): Promise<void> {
+  await withAccountUi(playwright, async ({ baseUrl }) => {
+    const api = variant.form === 'login' ? 'login' : 'register';
+    const observed = observeAccountUi(page, testInfo, baseUrl, `${baseUrl}/_platform/api/${api}`);
+    const entry = await page.goto(`${baseUrl}/_platform/${api}`, { waitUntil: 'networkidle' });
+    expect(entry?.status()).toBe(200);
+
+    await expectLayoutViewports(page, observed.screenshot, variant.form, variant.name);
+
+    await expect(page.getByRole('link', { name: variant.alternative })).toBeVisible();
+    await expect(page.getByRole('link', { name: '账号设置' })).toBeVisible();
+    expect(observed.requests).toEqual([]);
+    observed.expectHealthy([]);
+  });
+}
+
+async function expectLayoutViewports(
+  page: Page,
+  screenshot: (name: string) => Promise<void>,
+  form: string,
+  name: string,
+): Promise<void> {
+  for (const [suffix, width, height] of [
+    ['desktop', 1280, 800],
+    ['narrow', 390, 844],
+  ] as const) {
+    await page.setViewportSize({ width, height });
+    const brand = await page.locator('.auth-brand').boundingBox();
+    const panel = await page.getByRole('form', { name }).boundingBox();
+    if (brand === null || panel === null) throw new Error('Missing credential layout panels');
+    if (suffix === 'desktop') expect(brand.x + brand.width).toBeLessThanOrEqual(panel.x);
+    else expect(brand.y + brand.height).toBeLessThanOrEqual(panel.y);
+    expect(
+      await page.evaluate(() => {
+        // Chromium supplies document; the root Node config intentionally has no DOM lib.
+        const root = (
+          globalThis as typeof globalThis & {
+            document: { documentElement: { scrollWidth: number; clientWidth: number } };
+          }
+        ).document.documentElement;
+        return root.scrollWidth <= root.clientWidth;
+      }),
+    ).toBe(true);
+    await expect(page.getByRole('heading', { name: `${name} DSH 团队平台` })).toBeVisible();
+    await expect(page.getByRole('heading')).toHaveCount(1);
+    await expect(page.locator('[role="status"], [role="alert"], [aria-live]')).toHaveCount(1);
+    await expect(page.getByRole('form', { name })).toBeVisible();
+    await screenshot(`${form}-${suffix}`);
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+}
+
 export async function submitPendingAccountForm(page: Page, name: string): Promise<void> {
   await page.getByRole('form', { name }).evaluate((element: unknown) => {
     // Chromium supplies the DOM constructor; the root Node config has no DOM lib.

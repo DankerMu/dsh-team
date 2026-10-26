@@ -1,46 +1,251 @@
 :root {
-  font-family: system-ui, sans-serif;
-  color: #182335;
-  background: #f4f6f9;
+  --color-text: #1b2433;
+  --color-muted: #5b6678;
+  --color-page: #f3f5f9;
+  --color-surface: #ffffff;
+  --color-border: #d5dae3;
+  --color-primary: #2554c7;
+  --color-primary-hover: #1d45a8;
+  --color-primary-text: #ffffff;
+  --color-brand: #17305f;
+  --color-brand-text: #e6ecf8;
+  --color-error: #b42318;
+  --color-error-surface: #fef3f2;
+  --focus-ring: 0 0 0 3px rgb(37 84 199 / 30%);
+  --radius: 0.5rem;
+  --radius-card: 0.875rem;
+  --shadow-card: 0 1px 2px rgb(16 24 40 / 6%), 0 8px 24px rgb(16 24 40 / 6%);
+
+  font-family:
+    system-ui,
+    -apple-system,
+    'PingFang SC',
+    'Microsoft YaHei',
+    sans-serif;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-page);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
 }
 
-.login {
-  box-sizing: border-box;
-  max-width: 28rem;
-  margin: 10vh auto;
-  padding: 2rem;
-  background: white;
-  border-radius: 0.75rem;
+h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  line-height: 1.3;
 }
 
-h1 {
-  font-size: 1.5rem;
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+a:focus-visible {
+  border-radius: 0.25rem;
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+label {
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 fieldset {
   display: grid;
   gap: 0.75rem;
-  border: 1px solid #c5cbd4;
-  border-radius: 0.5rem;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
   padding: 1rem;
+}
+
+legend {
+  padding: 0 0.25rem;
+  color: var(--color-muted);
 }
 
 input,
 select,
 button {
-  box-sizing: border-box;
   width: 100%;
   min-height: 2.75rem;
-  padding: 0.5rem;
+  padding: 0.5rem 0.75rem;
   font: inherit;
+  color: inherit;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: var(--focus-ring);
+}
+
+input:disabled,
+select:disabled {
+  background: var(--color-page);
+  color: var(--color-muted);
 }
 
 button {
   margin-top: 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+button[type='submit'] {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-primary-text);
+}
+
+button[type='submit']:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+[role='status'] {
+  color: var(--color-muted);
+}
+
+[role='alert']:not(:empty) {
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  color: var(--color-error);
+  background: var(--color-error-surface);
+}
+
+/* Login and registration: brand panel beside the form panel. */
+.auth {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.auth-brand {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 3rem clamp(2rem, 6vw, 5rem);
+  color: var(--color-brand-text);
+  background: linear-gradient(160deg, var(--color-brand), #224a8f);
+}
+
+.auth-brand p {
+  max-width: 30rem;
+  margin: 0;
+  font-size: 1.05rem;
+  text-wrap: pretty;
+}
+
+.auth-brand .auth-brand-name {
+  margin-bottom: 0.75rem;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.auth-panel {
+  align-self: center;
+  justify-self: center;
+  width: 100%;
+  max-width: 26rem;
+  min-width: 0;
+  margin: 2rem;
+  padding: 2.5rem 2rem;
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+}
+
+.auth form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.auth form input {
+  margin-bottom: 0.5rem;
+}
+
+.auth-status {
+  min-height: 1.5rem;
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.auth-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 1.25rem 0 0;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 48rem) {
+  .auth {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    background: var(--color-surface);
+  }
+
+  .auth-brand {
+    padding: 1.75rem 1.5rem;
+  }
+
+  .auth-brand .auth-brand-name {
+    margin-bottom: 0.25rem;
+    font-size: 1.5rem;
+  }
+
+  .auth-brand p {
+    font-size: 0.95rem;
+  }
+
+  .auth-panel {
+    align-self: start;
+    max-width: none;
+    margin: 0;
+    padding: 1.75rem 1.5rem;
+    border-radius: 0;
+    box-shadow: none;
+  }
+}
+
+/* Account settings and waiting pages: one centered card. */
+.login {
+  max-width: 28rem;
+  margin: 10vh auto;
+  padding: 2rem;
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
 }
 
 @media (max-width: 30rem) {
@@ -51,11 +256,12 @@ button {
 }
 
 .admin {
-  box-sizing: border-box;
   max-width: 75rem;
   margin: 2rem auto;
-  padding: 1.5rem;
-  background: white;
+  padding: 1.5rem 2rem;
+  border-radius: var(--radius-card);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
 }
 
 .admin nav,
@@ -69,6 +275,13 @@ button {
 
 .admin nav {
   margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.admin nav a[aria-current='page'] {
+  font-weight: 700;
+  color: var(--color-text);
 }
 
 .admin select,
@@ -94,15 +307,26 @@ button {
 .admin td {
   text-align: left;
   padding: 0.75rem;
-  border-bottom: 1px solid #c5cbd4;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.admin caption {
+  padding: 0.5rem 0;
+  text-align: left;
+  font-weight: 600;
+}
+
+.admin th {
+  color: var(--color-muted);
+  font-size: 0.9rem;
 }
 
 .admin dialog {
   position: fixed;
   top: 15vh;
   max-width: min(32rem, 80vw);
-  border: 2px solid #182335;
-  border-radius: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
   box-shadow: 0 0 0 100vmax rgb(24 35 53 / 30%);
   padding: 1.5rem;
 }

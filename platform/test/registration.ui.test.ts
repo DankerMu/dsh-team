@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readPublicIdentity, type PublicIdentity } from './auth-fixture.ts';
 import {
+  expectCredentialLayout,
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
   observeAccountUi,
@@ -162,4 +163,15 @@ test('built React registration recovers from real short-password and duplicate-e
       });
     },
   );
+});
+
+test('built React registration places its brand panel beside the form on desktop and above it on narrow screens', async ({
+  page,
+  playwright,
+}, testInfo) => {
+  await expectCredentialLayout(playwright, page, testInfo, {
+    form: 'registration',
+    name: '注册',
+    alternative: '已有账号？登录',
+  });
 });
