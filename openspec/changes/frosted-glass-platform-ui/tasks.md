@@ -52,6 +52,17 @@ See `design.md`, "Must preserve".
 - [x] 3.4 The owner approves the screenshots.
 - [ ] 3.5 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy`; CI green.
 
+## Implementation deviations (owner-approved)
+
+- Dialogs are inline `<dialog open role="dialog">`, not `showModal()`, so `::backdrop` never applies. The dim layer is `.admin:has(dialog[open])::after`, with `pointer-events: none`.
+- Tables do not wrap long text. Email cells stay on one line, and the table scrolls inside `.admin-table`. Error `pre` text wraps (`overflow-wrap: anywhere`).
+- The waiting page shows a slowly rotating ring while `aria-busy`. It stays still under reduced motion.
+- The content-panel glass is painted on `.admin-content::before`. Account and instance status are pills with unchanged text.
+- The sidebar shows a non-heading wordmark `<p class="admin-wordmark">` and is not sticky.
+- On admin pages the `<h1>` now follows `AdminNavigation` inside `.admin-content`, so the nav links come first in reading and Tab order.
+- `account-page.tsx` needed no change.
+- Text contrast (task 1.2) was checked by review only, against the approved screenshots. No automated contrast check exists.
+
 ## Non-goals
 
 See `design.md`, "Non-goals".
