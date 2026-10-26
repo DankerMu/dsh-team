@@ -285,135 +285,147 @@ function InstanceView({
   const visible = rows?.filter((row) => row.email.includes(search.trim())) ?? [];
   return (
     <main className="admin">
-      <h1>实例管理</h1>
       <AdminNavigation page="instances" />
-      {phase === 'denied' ? (
-        <p role="alert">无权限</p>
-      ) : (
-        <>
-          {feedback.text !== '' && (
-            <p role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>
-          )}
-          <label htmlFor="instance-search">搜索邮箱</label>
-          <input
-            id="instance-search"
-            value={search}
-            disabled={pending}
-            onChange={(event) => {
-              setSearch(event.currentTarget.value);
-            }}
-          />
-          <button type="button" disabled={pending} onClick={refresh}>
-            刷新
-          </button>
-          {phase === 'loading' && <p role="status">加载中…</p>}
-          {phase === 'failure' && (
-            <>
-              <p role="alert">加载失败，请重试。</p>
+      <div className="admin-content">
+        <h1>实例管理</h1>
+        {phase === 'denied' ? (
+          <p role="alert">无权限</p>
+        ) : (
+          <>
+            {feedback.text !== '' && (
+              <p role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>
+            )}
+            <div className="admin-toolbar">
+              <label htmlFor="instance-search">搜索邮箱</label>
+              <input
+                id="instance-search"
+                value={search}
+                disabled={pending}
+                onChange={(event) => {
+                  setSearch(event.currentTarget.value);
+                }}
+              />
               <button type="button" disabled={pending} onClick={refresh}>
-                重试
+                刷新
               </button>
-            </>
-          )}
-          {phase === 'ready' &&
-            (rows?.length === 0 ? (
-              <p role="status">暂无实例</p>
-            ) : visible.length === 0 ? (
-              <p role="status">没有匹配的实例</p>
-            ) : (
-              <table>
-                <caption>实例状态</caption>
-                <thead>
-                  <tr>
-                    <th>邮箱</th>
-                    <th>状态</th>
-                    <th>最近启动时间</th>
-                    <th>最近活动时间</th>
-                    <th>最近一次错误</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((row) => (
-                    <tr key={row.userId}>
-                      <td>{row.email}</td>
-                      <td>{STATUS_NAMES[row.status]}</td>
-                      <td>
-                        {row.lastStartedAt === null
-                          ? '暂无'
-                          : new Date(row.lastStartedAt).toLocaleString('zh-CN')}
-                      </td>
-                      <td>
-                        {row.lastActivityAt === null
-                          ? '暂无'
-                          : new Date(row.lastActivityAt).toLocaleString('zh-CN')}
-                      </td>
-                      <td>
-                        {row.lastError === null ? (
-                          '暂无'
-                        ) : (
-                          <details>
-                            <summary>查看错误日志</summary>
-                            <pre>{row.lastError}</pre>
-                          </details>
-                        )}
-                      </td>
-                      <td>
-                        {(['restart', 'reset-config'] as const).map((action) => (
-                          <button
-                            key={action}
-                            type="button"
-                            disabled={
-                              pending || row.status === 'not-created' || row.status === 'starting'
-                            }
-                            onClick={() => {
-                              choose(row, action);
-                            }}
-                          >
-                            {action === 'restart' ? '重启' : '重置配置'}
-                          </button>
-                        ))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ))}
-          {selection !== null && (
-            <dialog
-              open
-              role="dialog"
-              aria-labelledby="instance-confirmation"
-              onCancel={(event) => {
-                event.preventDefault();
-                cancel();
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
+            </div>
+            {phase === 'loading' && <p role="status">加载中…</p>}
+            {phase === 'failure' && (
+              <>
+                <p role="alert">加载失败，请重试。</p>
+                <button type="button" disabled={pending} onClick={refresh}>
+                  重试
+                </button>
+              </>
+            )}
+            {phase === 'ready' &&
+              (rows?.length === 0 ? (
+                <p role="status">暂无实例</p>
+              ) : visible.length === 0 ? (
+                <p role="status">没有匹配的实例</p>
+              ) : (
+                <div className="admin-table">
+                  <table>
+                    <caption>实例状态</caption>
+                    <thead>
+                      <tr>
+                        <th>邮箱</th>
+                        <th>状态</th>
+                        <th>最近启动时间</th>
+                        <th>最近活动时间</th>
+                        <th>最近一次错误</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visible.map((row) => (
+                        <tr key={row.userId}>
+                          <td>{row.email}</td>
+                          <td>
+                            <span className={`status-pill pill-${row.status}`}>
+                              {STATUS_NAMES[row.status]}
+                            </span>
+                          </td>
+                          <td>
+                            {row.lastStartedAt === null
+                              ? '暂无'
+                              : new Date(row.lastStartedAt).toLocaleString('zh-CN')}
+                          </td>
+                          <td>
+                            {row.lastActivityAt === null
+                              ? '暂无'
+                              : new Date(row.lastActivityAt).toLocaleString('zh-CN')}
+                          </td>
+                          <td>
+                            {row.lastError === null ? (
+                              '暂无'
+                            ) : (
+                              <details>
+                                <summary>查看错误日志</summary>
+                                <pre>{row.lastError}</pre>
+                              </details>
+                            )}
+                          </td>
+                          <td>
+                            {(['restart', 'reset-config'] as const).map((action) => (
+                              <button
+                                key={action}
+                                type="button"
+                                disabled={
+                                  pending ||
+                                  row.status === 'not-created' ||
+                                  row.status === 'starting'
+                                }
+                                onClick={() => {
+                                  choose(row, action);
+                                }}
+                              >
+                                {action === 'restart' ? '重启' : '重置配置'}
+                              </button>
+                            ))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            {selection !== null && (
+              <dialog
+                open
+                role="dialog"
+                aria-labelledby="instance-confirmation"
+                onCancel={(event) => {
                   event.preventDefault();
                   cancel();
-                }
-              }}
-            >
-              <h2 id="instance-confirmation">确认实例操作</h2>
-              <p>{selection.row.email}</p>
-              <p>
-                {selection.action === 'reset-config'
-                  ? '会恢复该用户的 DSH 设置，文件和对话保留'
-                  : '将断开该用户连接并重启实例，文件和对话保留。'}
-              </p>
-              <form aria-label="确认实例操作" onSubmit={confirm}>
-                <button type="submit" autoFocus disabled={pending}>
-                  {pending ? '正在提交…' : '确认'}
-                </button>
-                <button type="button" disabled={pending} onClick={cancel}>
-                  取消
-                </button>
-              </form>
-            </dialog>
-          )}
-        </>
-      )}
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancel();
+                  }
+                }}
+              >
+                <h2 id="instance-confirmation">确认实例操作</h2>
+                <p>{selection.row.email}</p>
+                <p>
+                  {selection.action === 'reset-config'
+                    ? '会恢复该用户的 DSH 设置，文件和对话保留'
+                    : '将断开该用户连接并重启实例，文件和对话保留。'}
+                </p>
+                <form aria-label="确认实例操作" onSubmit={confirm}>
+                  <button type="submit" autoFocus disabled={pending}>
+                    {pending ? '正在提交…' : '确认'}
+                  </button>
+                  <button type="button" disabled={pending} onClick={cancel}>
+                    取消
+                  </button>
+                </form>
+              </dialog>
+            )}
+          </>
+        )}
+      </div>
     </main>
   );
 }

@@ -4,6 +4,7 @@ import { readSettings } from '../src/db/index.ts';
 import {
   observeAccountUi,
   expectNoBrowserStorage,
+  expectViewportLayout,
   withAccountUiRouteCleanup,
 } from './account-ui-fixture.ts';
 import {
@@ -93,6 +94,9 @@ test('administrator saves models without receiving the key and explicitly confir
     await expect(page.getByRole('status')).toContainText('下次启动实例时生效');
     expect(readSettings(database).modelApiKey === secret).toBe(true);
     await observed.screenshot('models-saved');
+    await expectViewportLayout(page, observed.screenshot, 'glass-admin-models', async () => {
+      await expect(page.getByRole('form', { name: '模型配置' })).toBeVisible();
+    });
 
     const reloaded = page.waitForResponse(
       (response) => response.url() === api && response.request().method() === 'GET',

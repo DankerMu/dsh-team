@@ -1,30 +1,87 @@
+/*
+ * Platform visual system: light frosted glass over a slowly drifting colour field.
+ * Every page reads these tokens; components never hard-code their own palette.
+ */
 :root {
-  --color-text: #1b2433;
-  --color-muted: #5b6678;
-  --color-page: #f3f5f9;
-  --color-surface: #ffffff;
-  --color-border: #d5dae3;
-  --color-primary: #2554c7;
-  --color-primary-hover: #1d45a8;
-  --color-primary-text: #ffffff;
-  --color-brand: #17305f;
-  --color-brand-text: #e6ecf8;
-  --color-error: #b42318;
-  --color-error-surface: #fef3f2;
-  --focus-ring: 0 0 0 3px rgb(37 84 199 / 30%);
-  --radius: 0.5rem;
-  --radius-card: 0.875rem;
-  --shadow-card: 0 1px 2px rgb(16 24 40 / 6%), 0 8px 24px rgb(16 24 40 / 6%);
+  color-scheme: light;
 
-  font-family:
-    system-ui,
-    -apple-system,
-    'PingFang SC',
-    'Microsoft YaHei',
-    sans-serif;
-  line-height: 1.5;
-  color: var(--color-text);
-  background: var(--color-page);
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Text: every value keeps at least 4.5:1 against the lightest effective glass. */
+  --text: #0b1220;
+  --text-body: #1e293b;
+  --text-secondary: #475569;
+  --text-label: #334155;
+  --link: #0060c7;
+  --accent: #0071e3;
+  --accent-indigo: #5856d6;
+  --focus: #0a84ff;
+  --focus-ring: 0 0 0 4px rgb(10 132 255 / 20%);
+  --danger: #b42318;
+  --danger-surface: rgb(254 228 226 / 72%);
+  --success: #036a4b;
+  --info: #1d4ed8;
+
+  --gradient-primary: linear-gradient(135deg, #0071e3 0%, #5856d6 100%);
+  --gradient-wordmark: linear-gradient(
+    105deg,
+    #0b1220 0%,
+    #17306f 30%,
+    #0060c7 55%,
+    #5856d6 80%,
+    #8e44c9 100%
+  );
+  --mark:
+    radial-gradient(
+      circle at 50% 50%,
+      transparent 0 27%,
+      rgb(255 255 255 / 95%) 28% 37%,
+      transparent 38%
+    ),
+    radial-gradient(120% 120% at 18% 8%, rgb(255 255 255 / 55%), transparent 46%),
+    conic-gradient(from 210deg at 50% 50%, #0071e3, #5856d6, #af52de, #32ade6, #0071e3);
+
+  /* Glass: translucent fill, white rim, inner top highlight, hairline and depth. */
+  --glass: rgb(255 255 255 / 60%);
+  --glass-strong: rgb(255 255 255 / 74%);
+  --glass-subtle: rgb(255 255 255 / 46%);
+  --glass-rim: rgb(255 255 255 / 72%);
+  --glass-blur: blur(28px) saturate(180%);
+  --hairline: rgb(15 23 42 / 7%);
+  --shadow-glass:
+    0 0 0 1px rgb(15 23 42 / 6%), inset 0 1px 0 rgb(255 255 255 / 90%),
+    0 1px 2px rgb(15 23 42 / 4%), 0 12px 40px -8px rgb(30 41 90 / 18%);
+  --shadow-float:
+    0 0 0 1px rgb(15 23 42 / 6%), inset 0 1px 0 rgb(255 255 255 / 95%),
+    0 2px 4px rgb(15 23 42 / 4%), 0 24px 64px -16px rgb(30 41 90 / 28%);
+  --shadow-control:
+    0 0 0 1px rgb(15 23 42 / 8%), inset 0 1px 0 rgb(255 255 255 / 90%),
+    0 1px 2px rgb(15 23 42 / 6%), 0 4px 12px -6px rgb(30 41 90 / 16%);
+
+  --radius-panel: 1.75rem;
+  --radius-card: 1.25rem;
+  --radius-control: 0.75rem;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  font-family: var(--font-sans);
+  font-size: 100%;
+  line-height: 1.55;
+  color: var(--text-body);
+  background: linear-gradient(180deg, #eef2f8 0%, #f4f6fb 55%, #f7f8fc 100%);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Without backdrop blur, glass becomes near-opaque so text never sits on a busy field. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass: rgb(255 255 255 / 92%);
+    --glass-strong: rgb(255 255 255 / 95%);
+    --glass-subtle: rgb(255 255 255 / 88%);
+  }
 }
 
 *,
@@ -34,154 +91,443 @@
 }
 
 body {
+  position: relative;
+  min-height: 100vh;
   margin: 0;
 }
 
+/* The app root is a column so short cards can centre while consoles fill the width. */
+#root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/*
+ * Colour field. The static layer is anchored to the document, so long pages stay lit
+ * top to bottom; the fixed layer carries the slow drift and a faint engineering grid,
+ * and fades out before the viewport edge. Neither layer ever widens the page.
+ */
+body::before,
+body::after {
+  content: '';
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+}
+
+body::before {
+  position: absolute;
+  background:
+    radial-gradient(56rem 40rem at 8% 6rem, rgb(64 148 255 / 30%), transparent 65%),
+    radial-gradient(48rem 36rem at 96% 2rem, rgb(167 139 250 / 28%), transparent 65%),
+    radial-gradient(56rem 40rem at 92% calc(100% - 4rem), rgb(45 212 191 / 22%), transparent 65%),
+    radial-gradient(48rem 34rem at 6% calc(100% - 2rem), rgb(253 186 140 / 28%), transparent 65%);
+}
+
+body::after {
+  position: fixed;
+  background:
+    linear-gradient(rgb(15 23 42 / 3.5%) 1px, transparent 1px) 0 0 / 2rem 2rem,
+    linear-gradient(90deg, rgb(15 23 42 / 3.5%) 1px, transparent 1px) 0 0 / 2rem 2rem,
+    radial-gradient(30vmax 26vmax at 30% 30%, rgb(56 189 248 / 16%), transparent 70%),
+    radial-gradient(28vmax 24vmax at 70% 42%, rgb(139 92 246 / 13%), transparent 70%);
+  mask-image: radial-gradient(ellipse 80% 70% at 50% 34%, #000 22%, transparent 78%);
+  animation: glow-drift 48s ease-in-out infinite alternate;
+}
+
+@keyframes glow-drift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+
+  50% {
+    transform: translate3d(2vmax, -1.5vmax, 0) scale(1.04);
+  }
+
+  100% {
+    transform: translate3d(-1.5vmax, 1vmax, 0) scale(1.02);
+  }
+}
+
+::selection {
+  background: rgb(0 113 227 / 18%);
+}
+
+h1,
+h2 {
+  margin: 0;
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.2;
+}
+
 h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
-  line-height: 1.3;
+  font-size: 1.875rem;
+}
+
+h2 {
+  font-size: 1.1875rem;
+  font-weight: 650;
+}
+
+p {
+  margin: 0;
 }
 
 a {
-  color: var(--color-primary);
+  color: var(--link);
+  font-weight: 500;
   text-decoration: none;
+  text-underline-offset: 0.2em;
+  transition: color 0.15s var(--ease);
 }
 
 a:hover {
+  color: var(--accent-indigo);
   text-decoration: underline;
 }
 
-a:focus-visible {
-  border-radius: 0.25rem;
-  outline: none;
-  box-shadow: var(--focus-ring);
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+  border-radius: 0.5rem;
 }
 
 label {
-  font-size: 0.9rem;
+  color: var(--text-label);
+  font-size: 0.8438rem;
   font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+small {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
 }
 
 fieldset {
   display: grid;
   gap: 0.75rem;
+  min-width: 0;
   margin: 0;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  padding: 1rem;
+  padding: 0;
+  border: 0;
 }
 
+/* A floated legend is ordinary grid content, so it never cuts into the card edge. */
 legend {
-  padding: 0 0.25rem;
-  color: var(--color-muted);
-}
-
-input,
-select,
-button {
+  float: left;
   width: 100%;
-  min-height: 2.75rem;
-  padding: 0.5rem 0.75rem;
-  font: inherit;
-  color: inherit;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: var(--color-surface);
+  margin: 0 0 0.25rem;
+  padding: 0;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
-input:focus-visible,
-select:focus-visible,
-button:focus-visible {
+/* Controls */
+input,
+select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 0.875rem;
+  font: inherit;
+  font-size: 0.9375rem;
+  color: var(--text);
+  border: 1px solid rgb(15 23 42 / 12%);
+  border-radius: var(--radius-control);
+  background-color: rgb(255 255 255 / 62%);
+  box-shadow:
+    inset 0 1px 2px rgb(15 23 42 / 6%),
+    0 1px 0 rgb(255 255 255 / 80%);
+  transition:
+    border-color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
+}
+
+select {
+  appearance: none;
+  padding-right: 2.5rem;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+    linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 1.25rem) 52%,
+    calc(100% - 0.9375rem) 52%;
+  background-size: 0.3125rem 0.3125rem;
+  background-repeat: no-repeat;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled) {
+  border-color: rgb(15 23 42 / 22%);
+  background-color: rgb(255 255 255 / 78%);
+}
+
+input:focus,
+select:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: var(--focus-ring);
+  border-color: var(--focus);
+  background-color: rgb(255 255 255 / 92%);
+  box-shadow:
+    var(--focus-ring),
+    inset 0 1px 2px rgb(15 23 42 / 4%);
 }
 
 input:disabled,
 select:disabled {
-  background: var(--color-page);
-  color: var(--color-muted);
+  color: var(--text-secondary);
+  background-color: rgb(241 245 249 / 60%);
+  cursor: not-allowed;
 }
 
 button {
-  margin-top: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0 1.125rem;
+  font: inherit;
+  font-size: 0.9375rem;
   font-weight: 600;
+  letter-spacing: -0.005em;
+  color: var(--text);
+  white-space: nowrap;
+  border: 1px solid var(--glass-rim);
+  border-radius: var(--radius-control);
+  background: rgb(255 255 255 / 64%);
+  box-shadow: var(--shadow-control);
   cursor: pointer;
+  transition:
+    transform 0.18s var(--ease),
+    box-shadow 0.18s var(--ease),
+    background-color 0.18s var(--ease);
 }
 
 button:hover:not(:disabled) {
-  border-color: var(--color-primary);
+  transform: translateY(-1px);
+  background-color: rgb(255 255 255 / 88%);
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 9%),
+    inset 0 1px 0 #fff,
+    0 2px 4px rgb(15 23 42 / 6%),
+    0 10px 24px -8px rgb(30 41 90 / 24%);
 }
 
-button[type='submit'] {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: var(--color-primary-text);
+button:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
+  transition-duration: 0.08s;
 }
 
-button[type='submit']:hover:not(:disabled) {
-  background: var(--color-primary-hover);
+button[type='submit'],
+.button-primary {
+  color: #fff;
+  border-color: transparent;
+  background: var(--gradient-primary);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 28%),
+    inset 0 -1px 0 rgb(0 0 0 / 8%),
+    0 2px 6px -2px rgb(88 86 214 / 45%),
+    0 10px 24px -10px rgb(0 113 227 / 65%);
+}
+
+button[type='submit']:hover:not(:disabled),
+.button-primary:hover:not(:disabled) {
+  background: var(--gradient-primary);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 32%),
+    inset 0 -1px 0 rgb(0 0 0 / 8%),
+    0 4px 10px -2px rgb(88 86 214 / 50%),
+    0 16px 32px -10px rgb(0 113 227 / 75%);
+}
+
+.button-danger {
+  color: var(--danger);
+  background: rgb(255 241 240 / 72%);
+  box-shadow:
+    0 0 0 1px rgb(180 35 24 / 16%),
+    inset 0 1px 0 rgb(255 255 255 / 85%),
+    0 1px 2px rgb(180 35 24 / 6%);
+}
+
+.button-danger:hover:not(:disabled) {
+  background-color: rgb(255 235 233 / 92%);
+  box-shadow:
+    0 0 0 1px rgb(180 35 24 / 24%),
+    inset 0 1px 0 #fff,
+    0 10px 22px -10px rgb(180 35 24 / 35%);
 }
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.65;
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+/* Feedback: errors are tinted panels; informative status is a quiet chip. */
+[role='alert']:not(:empty) {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  padding: 0.625rem 0.875rem;
+  color: var(--danger);
+  font-size: 0.875rem;
+  font-weight: 500;
+  border-radius: var(--radius-control);
+  background: var(--danger-surface);
+  box-shadow: inset 0 0 0 1px rgb(180 35 24 / 14%);
+}
+
+[role='alert']:not(:empty)::before {
+  content: '';
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentcolor;
+  box-shadow: 0 0 0 3px rgb(180 35 24 / 14%);
+  transform: translateY(-0.1em);
 }
 
 [role='status'] {
-  color: var(--color-muted);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
 }
 
-[role='alert']:not(:empty) {
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius);
-  color: var(--color-error);
-  background: var(--color-error-surface);
+/* Shared glass surfaces. The admin panel carries its glass on a pseudo-element so that
+   its fixed confirmation dialogs keep the viewport as their containing block. */
+.auth-panel,
+.login,
+.admin-sidebar,
+.admin-content::before,
+.admin dialog {
+  border: 1px solid var(--glass-rim);
+  background-color: var(--glass);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow-glass);
 }
 
-/* Login and registration: brand panel beside the form panel. */
+/* Product mark: a CSS-only gradient tile with a bright ring. */
+.auth-brand::before,
+.admin-wordmark::before {
+  content: '';
+  display: block;
+  flex: none;
+  background: var(--mark);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 55%),
+    0 0 0 1px rgb(255 255 255 / 45%),
+    0 10px 24px -8px rgb(0 113 227 / 55%);
+}
+
+/* Login and registration: typographic brand beside a floating glass form. */
 .auth {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(2rem, 6vw, 6rem);
+  width: 100%;
+  max-width: 76rem;
   min-height: 100vh;
+  margin: 0 auto;
+  padding: 3rem clamp(1.5rem, 5vw, 4.5rem);
 }
 
 .auth-brand {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  position: relative;
   min-width: 0;
-  padding: 3rem clamp(2rem, 6vw, 5rem);
-  color: var(--color-brand-text);
-  background: linear-gradient(160deg, var(--color-brand), #224a8f);
 }
 
-.auth-brand p {
-  max-width: 30rem;
-  margin: 0;
-  font-size: 1.05rem;
-  text-wrap: pretty;
+.auth-brand::before {
+  width: 4rem;
+  height: 4rem;
+  margin-bottom: 2rem;
+  border-radius: 1.125rem;
+}
+
+/* Thin orbit lines behind the wordmark; decorative only. */
+.auth-brand::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -4rem;
+  z-index: -1;
+  width: 32rem;
+  height: 32rem;
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle,
+      transparent 0 69.6%,
+      rgb(255 255 255 / 75%) 70% 70.4%,
+      transparent 70.8%
+    ),
+    radial-gradient(
+      circle,
+      transparent 0 49.4%,
+      rgb(88 86 214 / 11%) 49.8% 50.2%,
+      transparent 50.6%
+    ),
+    radial-gradient(circle at 50% 50%, rgb(255 255 255 / 45%), transparent 60%);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .auth-brand .auth-brand-name {
-  margin-bottom: 0.75rem;
-  font-size: 2rem;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 1.25rem;
+  color: var(--text);
+  font-size: clamp(2.75rem, 5.4vw, 4.5rem);
   font-weight: 700;
-  color: #ffffff;
+  letter-spacing: -0.04em;
+  line-height: 1.04;
+}
+
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .auth-brand .auth-brand-name {
+    background: var(--gradient-wordmark);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+}
+
+.auth-brand p {
+  max-width: 26rem;
+  color: var(--text-secondary);
+  font-size: 1.1875rem;
+  line-height: 1.6;
+  text-wrap: pretty;
 }
 
 .auth-panel {
-  align-self: center;
   justify-self: center;
   width: 100%;
-  max-width: 26rem;
+  max-width: 27.5rem;
   min-width: 0;
-  margin: 2rem;
-  padding: 2.5rem 2rem;
-  border-radius: var(--radius-card);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-card);
+  padding: 2.75rem 2.5rem 2.25rem;
+  border-radius: var(--radius-panel);
+  background-color: var(--glass-strong);
+  box-shadow: var(--shadow-float);
+}
+
+.auth-panel h1 {
+  font-size: 1.625rem;
+}
+
+.auth-status {
+  min-height: 1.5rem;
+  margin: 0.75rem 0 1rem;
 }
 
 .auth form {
@@ -190,13 +536,15 @@ button:disabled {
 }
 
 .auth form input {
-  margin-bottom: 0.5rem;
+  min-height: 3rem;
+  margin-bottom: 0.625rem;
 }
 
-.auth-status {
-  min-height: 1.5rem;
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
+.auth form button {
+  width: 100%;
+  min-height: 3rem;
+  margin-top: 0.5rem;
+  font-size: 1rem;
 }
 
 .auth-links {
@@ -204,133 +552,884 @@ button:disabled {
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.5rem 1rem;
-  margin: 1.25rem 0 0;
-  font-size: 0.9rem;
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  font-size: 0.875rem;
+  border-top: 1px solid var(--hairline);
 }
 
-@media (max-width: 48rem) {
-  .auth {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto 1fr;
-    background: var(--color-surface);
-  }
-
-  .auth-brand {
-    padding: 1.75rem 1.5rem;
-  }
-
-  .auth-brand .auth-brand-name {
-    margin-bottom: 0.25rem;
-    font-size: 1.5rem;
-  }
-
-  .auth-brand p {
-    font-size: 0.95rem;
-  }
-
-  .auth-panel {
-    align-self: start;
-    max-width: none;
-    margin: 0;
-    padding: 1.75rem 1.5rem;
-    border-radius: 0;
-    box-shadow: none;
-  }
+/* Account settings and waiting pages: one centred floating card. */
+#root:has(> .login) {
+  padding: 1rem 0;
 }
 
-/* Account settings and waiting pages: one centered card. */
 .login {
-  max-width: 28rem;
-  margin: 10vh auto;
-  padding: 2rem;
-  border-radius: var(--radius-card);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-card);
+  width: min(28rem, calc(100% - 2rem));
+  margin: auto;
+  padding: 2.5rem 2.25rem 2rem;
+  border-radius: var(--radius-panel);
+  background-color: var(--glass-strong);
+  box-shadow: var(--shadow-float);
 }
 
-@media (max-width: 30rem) {
-  .login {
-    margin: 1rem;
-    padding: 1.5rem;
-  }
+.login > * + * {
+  margin-top: 1rem;
 }
 
-.admin {
-  max-width: 75rem;
-  margin: 2rem auto;
-  padding: 1.5rem 2rem;
-  border-radius: var(--radius-card);
-  background: var(--color-surface);
-  box-shadow: var(--shadow-card);
+.login > :empty {
+  margin-top: 0;
 }
 
-.admin nav,
-.admin-pages,
-.admin form {
+.login fieldset {
+  gap: 0.5rem;
+}
+
+.login legend {
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+
+.login fieldset input {
+  margin-bottom: 0.625rem;
+}
+
+.login button {
+  width: 100%;
+  min-height: 3rem;
+}
+
+.card-links {
   display: flex;
   flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding-top: 1.25rem;
+  font-size: 0.875rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.wait {
+  text-align: center;
+}
+
+.wait .card-links {
+  justify-content: center;
+}
+
+/* Waiting indicator: a gradient ring that turns only while startup is in progress. */
+.wait::before {
+  content: '';
+  display: block;
+  width: 4.5rem;
+  height: 4.5rem;
+  margin: 0 auto 1.75rem;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgb(148 163 184 / 35%), rgb(148 163 184 / 35%));
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 0.375rem),
+    #000 calc(100% - 0.3125rem)
+  );
+}
+
+.wait[aria-busy='true']::before {
+  background: conic-gradient(
+    from 0deg,
+    rgb(0 113 227 / 0%) 0deg,
+    #0071e3 150deg,
+    #5856d6 270deg,
+    rgb(88 86 214 / 0%) 360deg
+  );
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+.wait h1 {
+  font-size: 1.625rem;
+}
+
+.wait [role='status'] {
+  color: var(--text-body);
+  font-size: 1.0625rem;
+  font-weight: 500;
+}
+
+.wait [role='alert']:not(:empty) {
+  justify-content: center;
+  text-align: left;
+}
+
+.wait [role='alert'] + p {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+/* Administrator console: glass sidebar beside one glass content panel. */
+.admin {
+  display: grid;
+  grid-template-columns: 14.5rem minmax(0, 1fr);
+  align-content: start;
+  align-items: start;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: 90rem;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+/* The glass rail spans the page; its links fill the first screen, account links at its foot. */
+.admin-sidebar {
+  align-self: stretch;
+  min-width: 0;
+  border-radius: 1.625rem;
+}
+
+.admin-sidebar-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  min-height: calc(100vh - 3rem);
+  padding: 1.5rem 0.875rem 1rem;
+}
+
+.admin-wordmark {
+  display: flex;
   align-items: center;
   gap: 0.75rem;
+  padding: 0 0.625rem;
+  color: var(--text);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.admin-wordmark::before {
+  width: 2.125rem;
+  height: 2.125rem;
+  border-radius: 0.625rem;
 }
 
 .admin nav {
-  margin-bottom: 1.5rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.admin nav a {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 2.625rem;
+  padding: 0 0.875rem;
+  color: var(--text-label);
+  font-size: 0.9063rem;
+  font-weight: 550;
+  border-radius: var(--radius-control);
+  text-decoration: none;
+  transition:
+    background-color 0.18s var(--ease),
+    color 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+
+.admin nav a::before {
+  content: '';
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: rgb(71 85 105 / 30%);
+  transition:
+    background 0.18s var(--ease),
+    box-shadow 0.18s var(--ease);
+}
+
+.admin nav a:hover {
+  color: var(--text);
+  background-color: rgb(255 255 255 / 55%);
 }
 
 .admin nav a[aria-current='page'] {
-  font-weight: 700;
-  color: var(--color-text);
+  color: var(--link);
+  font-weight: 650;
+  background-color: rgb(255 255 255 / 90%);
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 5%),
+    inset 0 1px 0 #fff,
+    0 8px 20px -10px rgb(0 113 227 / 45%);
 }
 
-.admin select,
-.admin input {
-  width: min(100%, 24rem);
+.admin nav a[aria-current='page']::before {
+  background: var(--gradient-primary);
+  box-shadow:
+    0 0 0 3px rgb(0 113 227 / 14%),
+    0 0 10px rgb(0 113 227 / 55%);
 }
 
-.admin button {
+/* Account and workbench links sit apart, at the foot of the sidebar. */
+.admin nav a[href='/_platform/account'] {
+  margin-top: auto;
+}
+
+.admin nav a:not([href^='/_platform/admin'])::before {
+  border-radius: 0.125rem;
+  transform: rotate(45deg) scale(0.85);
+}
+
+.admin-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+  min-height: calc(100vh - 3rem);
+  padding: 2.25rem 2.25rem 2.5rem;
+  border-radius: var(--radius-panel);
+}
+
+.admin-content::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+/* Empty live regions keep their place in the tree but take no visual space. */
+.admin-content > :empty {
+  margin-bottom: -1.25rem;
+}
+
+.admin-content h1 {
+  margin-bottom: 0.25rem;
+}
+
+.admin-content > p:not([role]) {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.admin-content > [role='status']:not(:empty) {
+  display: flex;
+  align-items: baseline;
+  gap: 0.625rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.5rem 0.875rem;
+  color: var(--info);
+  font-weight: 500;
+  border-radius: var(--radius-control);
+  background: rgb(224 235 255 / 60%);
+  box-shadow: inset 0 0 0 1px rgb(29 78 216 / 12%);
+}
+
+.admin-content > [role='status']:not(:empty)::before {
+  content: '';
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: 50%;
+  background: currentcolor;
+  box-shadow: 0 0 0 3px rgb(29 78 216 / 14%);
+  transform: translateY(-0.1em);
+}
+
+.admin-content > button,
+.admin-content > div > button {
+  align-self: flex-start;
+}
+
+.admin-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem 0.75rem;
+}
+
+.admin-toolbar label {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.admin-toolbar input {
+  flex: 1 1 14rem;
   width: auto;
-  margin: 0.25rem;
+  max-width: 24rem;
 }
 
+/* Audit filters: what and who, then the inclusive time range, then the note and action. */
+.admin-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  gap: 0.875rem 1rem;
+  padding: 1.25rem;
+  border-radius: var(--radius-card);
+  background: var(--glass-subtle);
+  box-shadow:
+    0 0 0 1px var(--hairline),
+    inset 0 1px 0 rgb(255 255 255 / 80%);
+}
+
+.field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.admin-filters .field-hint {
+  grid-row: 3;
+  grid-column: 1;
+  align-self: center;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+}
+
+.admin-filters button {
+  grid-row: 3;
+  grid-column: 2;
+  justify-self: end;
+  min-width: 7rem;
+}
+
+/* Tables: rounded glass container that scrolls on its own when columns do not fit. */
 .admin-table {
+  max-width: 100%;
   overflow-x: auto;
+  border-radius: var(--radius-card);
+  background: var(--glass-subtle);
+  box-shadow:
+    0 0 0 1px var(--hairline),
+    inset 0 1px 0 rgb(255 255 255 / 80%);
+  scrollbar-width: thin;
 }
 
 .admin table {
   width: 100%;
-  border-collapse: collapse;
-}
-
-.admin th,
-.admin td {
-  text-align: left;
-  padding: 0.75rem;
-  border-bottom: 1px solid var(--color-border);
+  min-width: 38rem;
+  font-size: 0.8438rem;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .admin caption {
-  padding: 0.5rem 0;
+  padding: 1rem 1.125rem 0.75rem;
+  color: var(--text);
+  font-size: 0.9375rem;
+  font-weight: 650;
   text-align: left;
-  font-weight: 600;
 }
 
 .admin th {
-  color: var(--color-muted);
-  font-size: 0.9rem;
+  padding: 0.75rem 0.875rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: left;
+  white-space: nowrap;
+  background: rgb(248 250 252 / 70%);
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.admin thead tr:first-child th:first-child {
+  border-top-left-radius: var(--radius-card);
+}
+
+.admin caption + thead tr:first-child th {
+  border-radius: 0;
+}
+
+/* Cells keep Chinese words and addresses whole; the container scrolls instead. */
+.admin td {
+  padding: 0.875rem;
+  color: var(--text-body);
+  vertical-align: middle;
+  word-break: keep-all;
+  border-bottom: 1px solid var(--hairline);
+  transition: background-color 0.15s var(--ease);
+}
+
+.admin tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.admin tbody tr:hover td {
+  background: rgb(255 255 255 / 55%);
+}
+
+.admin td:first-child {
+  color: var(--text);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.admin td:last-child:has(button) {
+  min-width: 7.5rem;
+}
+
+.admin td button {
+  min-height: 2.125rem;
+  padding: 0 0.75rem;
+  margin: 0.125rem 0.375rem 0.125rem 0;
+  font-size: 0.8125rem;
+  border-radius: 0.625rem;
+}
+
+.admin time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+summary {
+  color: var(--link);
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+pre {
+  min-width: 10rem;
+  max-width: 20rem;
+  margin: 0.5rem 0 0;
+  padding: 0.625rem 0.75rem;
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-radius: 0.625rem;
+  background: rgb(15 23 42 / 4.5%);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+/* State pills: colour per state, the text itself stays the only name. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  padding: 0.1875rem 0.6875rem 0.1875rem 0.5625rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  border-radius: 999px;
+  color: var(--text-secondary);
+  background: rgb(100 116 139 / 12%);
+  box-shadow: inset 0 0 0 1px rgb(100 116 139 / 16%);
+}
+
+.status-pill::before {
+  content: '';
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.pill-running,
+.pill-active {
+  color: var(--success);
+  background: rgb(16 185 129 / 13%);
+  box-shadow: inset 0 0 0 1px rgb(4 120 87 / 18%);
+}
+
+.pill-running::before,
+.pill-active::before {
+  box-shadow: 0 0 0 3px rgb(16 185 129 / 20%);
+}
+
+.pill-starting {
+  color: var(--info);
+  background: rgb(59 130 246 / 12%);
+  box-shadow: inset 0 0 0 1px rgb(29 78 216 / 18%);
+}
+
+.pill-starting::before {
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 20%);
+}
+
+.pill-error {
+  color: var(--danger);
+  background: rgb(240 68 56 / 11%);
+  box-shadow: inset 0 0 0 1px rgb(180 35 24 / 18%);
+}
+
+.pill-not-created {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px rgb(100 116 139 / 30%);
+}
+
+.pill-not-created::before {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px currentcolor;
+}
+
+.admin-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.admin-pages p {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Confirmation dialogs float above a blurred, still-clickthrough veil. */
+.admin:has(dialog[open])::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  background: rgb(15 23 42 / 16%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+  backdrop-filter: blur(6px) saturate(120%);
 }
 
 .admin dialog {
   position: fixed;
-  top: 15vh;
-  max-width: min(32rem, 80vw);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-card);
-  box-shadow: 0 0 0 100vmax rgb(24 35 53 / 30%);
-  padding: 1.5rem;
+  inset: 0;
+  z-index: 60;
+  width: min(30rem, calc(100vw - 2rem));
+  height: fit-content;
+  max-height: calc(100vh - 2rem);
+  margin: auto;
+  padding: 1.75rem;
+  overflow: auto;
+  color: var(--text-body);
+  border-radius: 1.5rem;
+  background-color: var(--glass-strong);
+  box-shadow:
+    0 0 0 1px rgb(15 23 42 / 7%),
+    inset 0 1px 0 #fff,
+    0 30px 80px -20px rgb(15 23 42 / 40%);
+}
+
+.admin dialog > * + * {
+  margin-top: 0.75rem;
+}
+
+.admin dialog > p {
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.admin dialog > h2 + p {
+  color: var(--text);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .admin dialog form {
-  align-items: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.625rem;
+  margin-top: 1.5rem;
+}
+
+.admin dialog form label,
+.admin dialog form input {
+  flex: 1 1 100%;
+}
+
+.admin dialog > button {
+  margin-right: 0.625rem;
+}
+
+.admin dialog > h2 ~ button:first-of-type {
+  margin-top: 1.5rem;
+}
+
+/* Model and runtime editors: responsive field grids, one card per model. */
+.admin form > fieldset {
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1.25rem;
+}
+
+.admin .model-form > fieldset {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin form > fieldset > legend,
+.admin form > fieldset > .model-cards,
+.admin form > fieldset > p,
+.admin form > fieldset > button[type='submit'] {
+  grid-column: 1 / -1;
+}
+
+.admin form > fieldset > legend {
+  margin-bottom: 0;
+  font-size: 1.0625rem;
+}
+
+.admin form > fieldset > p {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.admin form > fieldset > button[type='submit'] {
+  justify-self: start;
+  min-width: 9rem;
+  margin-top: 0.25rem;
+}
+
+.field .key-state {
+  justify-self: start;
+  padding: 0.0625rem 0.5625rem;
+  color: var(--text-label);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 999px;
+  background: rgb(100 116 139 / 12%);
+}
+
+.model-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.model-card {
+  align-content: start;
+  padding: 1.125rem 1.125rem 1rem;
+  border-radius: var(--radius-card);
+  background: rgb(255 255 255 / 58%);
+  box-shadow:
+    0 0 0 1px var(--hairline),
+    inset 0 1px 0 #fff,
+    0 8px 24px -14px rgb(30 41 90 / 30%);
+}
+
+.model-card legend {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.125rem;
+}
+
+.model-card legend::before {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 0.1875rem;
+  background: var(--gradient-primary);
+  box-shadow: 0 0 8px rgb(0 113 227 / 45%);
+}
+
+.model-card button {
+  justify-self: start;
+  min-height: 2.25rem;
+  padding: 0 0.875rem;
+  font-size: 0.8125rem;
+}
+
+.model-add {
+  gap: 0.5rem;
+  min-height: 9rem;
+  color: var(--link);
+  border: 1.5px dashed rgb(71 85 105 / 30%);
+  border-radius: var(--radius-card);
+  background: rgb(255 255 255 / 28%);
+  box-shadow: none;
+}
+
+/* A drawn plus sign; generated content stays empty so the button name is unchanged. */
+.model-add::before {
+  content: '';
+  width: 0.875rem;
+  height: 0.875rem;
+  background:
+    linear-gradient(currentcolor, currentcolor) center / 100% 2px no-repeat,
+    linear-gradient(currentcolor, currentcolor) center / 2px 100% no-repeat;
+}
+
+.admin-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.25rem;
+  padding: 1rem 1.25rem;
+  border-radius: var(--radius-card);
+  background: rgb(255 247 237 / 62%);
+  box-shadow:
+    0 0 0 1px rgb(180 83 9 / 14%),
+    inset 0 1px 0 rgb(255 255 255 / 80%);
+}
+
+.admin-notice p {
+  flex: 1 1 18rem;
+  color: var(--text-body);
+  font-size: 0.875rem;
+}
+
+/* Narrow screens: stacked brand, a top navigation bar that scrolls within itself. */
+@media (max-width: 47.5rem) {
+  .auth {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    align-items: start;
+    gap: 1.75rem;
+    padding: 2.25rem 1.25rem 2rem;
+  }
+
+  .auth-brand::before {
+    width: 3rem;
+    height: 3rem;
+    margin-bottom: 1.25rem;
+    border-radius: 0.875rem;
+  }
+
+  .auth-brand::after {
+    display: none;
+  }
+
+  .auth-brand .auth-brand-name {
+    margin-bottom: 0.625rem;
+    font-size: 2.5rem;
+  }
+
+  .auth-brand p {
+    font-size: 1rem;
+  }
+
+  .auth-panel {
+    padding: 2rem 1.5rem 1.75rem;
+    border-radius: 1.5rem;
+  }
+
+  .auth-panel h1 {
+    font-size: 1.4375rem;
+  }
+
+  .login {
+    margin: auto;
+    padding: 2rem 1.5rem 1.75rem;
+    border-radius: 1.5rem;
+  }
+
+  .admin {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.75rem;
+  }
+
+  .admin-sidebar {
+    border-radius: 1.25rem;
+  }
+
+  .admin-sidebar-inner {
+    gap: 0.625rem;
+    min-height: 0;
+    padding: 0.875rem 0.5rem 0.5rem;
+  }
+
+  .admin-wordmark {
+    padding: 0 0.5rem;
+    font-size: 1rem;
+  }
+
+  .admin-wordmark::before {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.5rem;
+  }
+
+  .admin nav {
+    flex-direction: row;
+    overflow-x: auto;
+    scrollbar-width: none;
+    mask-image: linear-gradient(90deg, #000 88%, transparent);
+  }
+
+  .admin nav a {
+    flex: none;
+    min-height: 2.375rem;
+    padding: 0 0.75rem;
+    white-space: nowrap;
+  }
+
+  .admin nav a[href='/_platform/account'] {
+    margin-top: 0;
+  }
+
+  .admin-content {
+    min-height: 0;
+    padding: 1.5rem 1rem 1.25rem;
+    border-radius: 1.375rem;
+  }
+
+  .admin-content h1 {
+    font-size: 1.5rem;
+  }
+
+  .admin-filters {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 1rem;
+  }
+
+  .admin-filters .field-hint,
+  .admin-filters button {
+    grid-row: auto;
+    grid-column: 1;
+  }
+
+  .admin-filters button {
+    justify-self: stretch;
+  }
+
+  .admin-toolbar label {
+    flex-basis: 100%;
+  }
+
+  .admin-toolbar input {
+    max-width: none;
+  }
+
+  .admin .model-form > fieldset {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .model-add {
+    min-height: 3.5rem;
+  }
+
+  .admin-pages p {
+    order: -1;
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  button:hover:not(:disabled) {
+    transform: none;
+  }
 }

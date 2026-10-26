@@ -109,14 +109,19 @@ export function WaitPage() {
   }, [begin]);
 
   return (
-    <main className="login" aria-busy={status === 'starting'}>
+    <main className="login wait" aria-busy={status === 'starting'}>
       <h1>等待工作台</h1>
       <p role={status === 'starting' ? 'status' : 'alert'}>{MESSAGES[status]}</p>
       {status === 'error' && <p>仍失败时请联系管理员</p>}
-      <button type="button" disabled={status === 'starting'} onClick={begin}>
+      <button
+        type="button"
+        className="button-primary"
+        disabled={status === 'starting'}
+        onClick={begin}
+      >
         重试
       </button>
-      <p>
+      <p className="card-links">
         <a href="/_platform/account">账号设置</a>
       </p>
     </main>

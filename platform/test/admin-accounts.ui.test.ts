@@ -3,6 +3,7 @@ import { readPublicIdentity } from './auth-fixture.ts';
 import {
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
+  expectViewportLayout,
   observeAccountUi,
   submitPendingAccountForm,
   withAccountUiRouteCleanup,
@@ -39,6 +40,9 @@ test('administrator opens the built account page and sees the real employee acco
     await expectNoBrowserStorage(page);
     await expectNoScriptVisibleCookie(page);
     await screenshot('admin-accounts');
+    await expectViewportLayout(page, screenshot, 'glass-admin-accounts', async () => {
+      await expect(page.getByRole('row').filter({ hasText: targetEmail })).toBeVisible();
+    });
     expectHealthy([]);
   });
 });

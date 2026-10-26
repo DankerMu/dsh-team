@@ -73,7 +73,7 @@ export function PasswordPage() {
   }
 
   return (
-    <main className="login">
+    <main className="login account">
       <h1>修改密码</h1>
       <p id="password-status" role={error === '' ? 'status' : 'alert'}>
         {pending
@@ -121,6 +121,7 @@ export function PasswordPage() {
       </form>
       <button
         type="button"
+        className="logout"
         disabled={pending}
         onClick={() => {
           void mutate('logout');
@@ -128,12 +129,14 @@ export function PasswordPage() {
       >
         {pendingAction === 'logout' ? '正在退出登录…' : '退出登录'}
       </button>
-      <p>
-        <a href="/">返回工作台</a>
-      </p>
-      <p>
-        <a href="/_platform/login">登录</a>
-      </p>
+      <div className="card-links">
+        <p>
+          <a href="/">返回工作台</a>
+        </p>
+        <p>
+          <a href="/_platform/login">登录</a>
+        </p>
+      </div>
     </main>
   );
 }

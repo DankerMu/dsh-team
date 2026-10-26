@@ -4,6 +4,7 @@ import { readSettings, writeSettings } from '../src/db/index.ts';
 import {
   observeAccountUi,
   expectNoBrowserStorage,
+  expectViewportLayout,
   withAccountUiRouteCleanup,
 } from './account-ui-fixture.ts';
 import {
@@ -64,6 +65,9 @@ test('administrator saves all runtime fields with fractional CPU without receivi
     expect(stored).toMatchObject({ cpuCores: 0.125, maxRunningInstances: 2 });
     await expect(page.getByRole('status')).toContainText('已保存');
     await observed.screenshot('runtime-saved');
+    await expectViewportLayout(page, observed.screenshot, 'glass-admin-runtime', async () => {
+      await expect(page.getByRole('form', { name: '运行参数' })).toBeVisible();
+    });
     await page.reload();
     await expect(page.getByLabel('CPU 核数', { exact: true })).toHaveValue('0.125');
     await expect(page.getByLabel('默认权限档', { exact: true })).toHaveValue('auto');
