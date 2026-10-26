@@ -73,7 +73,7 @@ export function PasswordPage() {
   }
 
   return (
-    <main className="login account">
+    <main className="login">
       <h1>修改密码</h1>
       <p id="password-status" role={error === '' ? 'status' : 'alert'}>
         {pending
@@ -121,7 +121,6 @@ export function PasswordPage() {
       </form>
       <button
         type="button"
-        className="logout"
         disabled={pending}
         onClick={() => {
           void mutate('logout');

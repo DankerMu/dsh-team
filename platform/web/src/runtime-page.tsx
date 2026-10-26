@@ -279,8 +279,8 @@ function RuntimeForm({
             ))}
           </select>
         </div>
-        <p className="form-note">同时运行上限还受已配置子网池容量限制。</p>
-        <p className="form-note">
+        <p>同时运行上限还受已配置子网池容量限制。</p>
+        <p>
           CPU、内存和默认权限档在下次启动实例时应用；同时运行上限用于后续启动准入，空闲分钟数用于后续空闲检查。保存不会重启实例。
         </p>
         <button type="submit">保存运行参数</button>
