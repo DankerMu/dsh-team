@@ -356,16 +356,38 @@ function json(body: unknown, status = 200): Response {
   return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
 }
 
-async function loginAdmin(configuration: Response | Error): Promise<RenderedAccount> {
+function consumption(response: Response): () => boolean {
+  if (response.body !== null) return () => response.bodyUsed;
+  // A null-body status such as 204 never reports bodyUsed (Fetch spec); observe the settled read.
+  let read = false;
+  const original = response.arrayBuffer.bind(response);
+  response.arrayBuffer = async () => {
+    const bytes = await original();
+    read = true;
+    return bytes;
+  };
+  return () => read;
+}
+
+async function loginAdmin(
+  configuration: Response | Error,
+): Promise<RenderedAccount & { consumed: boolean[] }> {
   const rendered = renderAccount();
-  rendered.request.mockResolvedValueOnce(json(ADMIN_LOGIN));
+  const consumed: boolean[] = [];
+  const login = json(ADMIN_LOGIN);
+  rendered.request.mockResolvedValueOnce(login);
   if (configuration instanceof Error) rendered.request.mockRejectedValueOnce(configuration);
   else rendered.request.mockResolvedValueOnce(configuration);
+  const settingsConsumed = configuration instanceof Response ? consumption(configuration) : null;
+  rendered.navigate.mockImplementation(() => {
+    consumed.push(login.bodyUsed);
+    if (settingsConsumed) consumed.push(settingsConsumed());
+  });
   await act(async () => {
     submit(rendered.view);
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
-  return rendered;
+  return { ...rendered, consumed };
 }
 
 it.each<[string, Record<string, unknown>]>([
@@ -409,10 +431,11 @@ it.each<[string, Response | Error]>([
 ])(
   'lands an administrator on the console without error text when the settings read returns %s',
   async (_name, configuration) => {
-    const { view, request, navigate } = await loginAdmin(configuration);
+    const { view, request, navigate, consumed } = await loginAdmin(configuration);
 
     expect(request).toHaveBeenCalledTimes(2);
     expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/admin');
+    if (configuration instanceof Response) expect(consumed).toEqual([true, true]);
     expect(view.querySelector('[role="alert"]')).toBeNull();
     expect(element(view, '[role="status"]', HTMLElement).textContent).not.toContain('失败');
   },
