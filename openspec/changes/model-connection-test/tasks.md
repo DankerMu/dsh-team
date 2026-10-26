@@ -5,7 +5,7 @@
 - **Error handling / rollback / partial outputs — selected.** The closed-set classification covers every network and HTTP failure. Task 1.1.
 - **Resource limits / large input / discovery — selected.** A 20 s deadline, a 64 KiB body cap and no redirects. Task 1.1.
 - **Documentation / migration notes — selected.** AGENTS.md, DEPLOY.md and the spec change the "platform never connects to the model" statement. Task 2.3.
-- **Config / project setup — selected.** No new environment input. The probe's network path is the platform container on the Compose `default` network, with no proxy and the image CA bundle. That differs from employee egress and is documented in DEPLOY.md. Task 2.3.
+- **Config / project setup — selected.** No new environment input. The probe's network path is the platform container on the Compose `default` network, with no proxy and Node's built-in CA store (not the image system certificates), as in the DSH instance. That differs from employee egress and is documented in DEPLOY.md. Task 2.3.
 - **Concurrency / shared state / ordering — selected.** An in-flight outbound request must be aborted on client disconnect and on app close; concurrent probes are not serialized (non-goal). Tasks 1.2 and 1.3.
 - **Not selected:**
   - File IO, Schema/DB: no persisted state.

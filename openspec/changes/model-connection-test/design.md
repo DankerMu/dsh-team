@@ -96,7 +96,7 @@ The probe hits exactly the URL, credential and model that a newly started instan
 - `instance-actions.ts` owns the empty-body and error mapping, which becomes the shared module. `request-guard.ts` and `admin/routes.ts` own the transport and the first authority check.
 - The browser copy of the completeness predicate (`platform/web/src/model-config.ts:81`), used for admin landing. It is unchanged; the probe does not depend on it.
 - The `docs/DEPLOY.md` public-API table: add a row for the test endpoint.
-- **Network path.** The probe leaves from the platform container on the Compose `default` network (`deploy/compose.yml:23-26`), not from an employee `/28` bridge. Node's built-in fetch ignores `HTTP(S)_PROXY`, and TLS trust comes from the platform image's CA bundle. So 「连接成功」 proves the address, key and model from the platform container. It does not prove employee-instance egress, and DEPLOY.md must say so.
+- **Network path.** The probe leaves from the platform container on the Compose `default` network (`deploy/compose.yml:23-26`), not from an employee `/28` bridge. Node's built-in fetch ignores `HTTP(S)_PROXY`, and TLS trust comes from Node's built-in CA store, not the image system certificates. DSH in the user image uses the same default, so the trust store matches the instance. So 「连接成功」 proves the address, key and model from the platform container. It does not prove employee-instance egress, and DEPLOY.md must say so.
 - **Existing OpenAI-shaped test fixtures.** `platform/test/deployment-model-wire.ts` and `model-refusal-fixture.ts` should be reused, or extended, before a new loopback server is written.
 - The logger redaction list in `app.ts`.
 - The UI pending fence in `model-page.tsx`.
