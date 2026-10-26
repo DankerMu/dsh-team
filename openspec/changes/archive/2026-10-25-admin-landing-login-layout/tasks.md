@@ -43,10 +43,10 @@ The exact test-visible strings, screenshot names and dependent tests are listed 
 
 ## 3. Verification
 
-- [ ] 3.1 `pnpm check`
-- [ ] 3.2 `pnpm test:ui`
-- [ ] 3.3 `pnpm test:integration`
-- [ ] 3.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`; CI green.
+- [x] 3.1 `pnpm check`
+- [x] 3.2 `pnpm test:ui`
+- [x] 3.3 `pnpm test:integration`
+- [x] 3.4 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`; CI green.
 
 ## Non-goals
 

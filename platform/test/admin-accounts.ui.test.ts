@@ -1,8 +1,9 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { readPublicIdentity } from './auth-fixture.ts';
 import {
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
+  expectViewportLayout,
   observeAccountUi,
   submitPendingAccountForm,
   withAccountUiRouteCleanup,
@@ -39,6 +40,11 @@ test('administrator opens the built account page and sees the real employee acco
     await expectNoBrowserStorage(page);
     await expectNoScriptVisibleCookie(page);
     await screenshot('admin-accounts');
+    await expectViewportLayout(page, screenshot, 'glass-admin-accounts', async (viewport) => {
+      await expect(page.getByRole('row').filter({ hasText: targetEmail })).toBeVisible();
+      if (viewport === 'desktop') await expectNoVerticalScroll(page);
+      else await expectNavigationEndReachable(page);
+    });
     expectHealthy([]);
   });
 });
@@ -395,3 +401,81 @@ test('current administrator demotion rejects a reachable reset confirmation and 
     expectHealthy([{ url: passwordUrl, status: 403 }]);
   });
 });
+
+// Chromium supplies these DOM shapes; the root Node config intentionally has no DOM lib.
+interface Box {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+interface BrowserElement {
+  scrollLeft: number;
+  scrollWidth: number;
+  getBoundingClientRect(): Box;
+  matches(selector: string): boolean;
+  focus(): void;
+  blur(): void;
+}
+interface BrowserDocument {
+  documentElement: { scrollHeight: number; clientHeight: number };
+  querySelector(selector: string): BrowserElement | null;
+}
+type BrowserGlobals = typeof globalThis & {
+  document: BrowserDocument;
+  getComputedStyle(element: BrowserElement): {
+    maskImage: string;
+    outlineWidth: string;
+    outlineOffset: string;
+  };
+};
+
+/** A short administrator page fits the desktop viewport without a stray vertical scrollbar. */
+async function expectNoVerticalScroll(page: Page): Promise<void> {
+  const root = await page.evaluate(() => {
+    const { scrollHeight, clientHeight } = (globalThis as BrowserGlobals).document.documentElement;
+    return { scrollHeight, clientHeight };
+  });
+  expect(
+    root.scrollHeight,
+    'short desktop admin page must not scroll vertically',
+  ).toBeLessThanOrEqual(root.clientHeight);
+}
+
+/**
+ * Scrolled fully right, the narrow top bar shows its last link unfaded, with the whole
+ * keyboard focus ring (outline width plus offset) inside the scrolling box that clips it.
+ */
+async function expectNavigationEndReachable(page: Page): Promise<void> {
+  const observed = await page.evaluate(() => {
+    const browser = globalThis as BrowserGlobals;
+    const nav = browser.document.querySelector('.admin nav');
+    const last = browser.document.querySelector('.admin nav a:last-of-type');
+    if (nav === null || last === null) throw new Error('Missing administrator navigation');
+    last.focus();
+    nav.scrollLeft = nav.scrollWidth;
+    const focusVisible = last.matches(':focus-visible');
+    const style = browser.getComputedStyle(last);
+    const ring = parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+    const box = nav.getBoundingClientRect();
+    const link = last.getBoundingClientRect();
+    const result = {
+      mask: browser.getComputedStyle(nav).maskImage,
+      focusVisible,
+      ringClearance: {
+        left: link.left - ring - box.left,
+        right: box.right - (link.right + ring),
+        top: link.top - ring - box.top,
+        bottom: box.bottom - (link.bottom + ring),
+      },
+    };
+    last.blur();
+    nav.scrollLeft = 0;
+    return result;
+  });
+  expect(observed.mask, 'narrow navigation must not fade its last link').toBe('none');
+  expect(observed.focusVisible).toBe(true);
+  for (const [side, clearance] of Object.entries(observed.ringClearance)) {
+    expect(clearance, `focus ring clipped on the ${side} side`).toBeGreaterThanOrEqual(0);
+  }
+}

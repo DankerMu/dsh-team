@@ -3,6 +3,7 @@ import { readPublicIdentity, type PublicIdentity } from './auth-fixture.ts';
 import {
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
+  expectViewportLayout,
   observeAccountUi,
   submitPendingAccountForm,
   withAccountUi,
@@ -85,6 +86,9 @@ test('built account page changes the password with session rotation, logs out an
         await expect(page.getByRole('button', { name: '退出登录', exact: true })).toBeEnabled();
         expect(actionRequests).toEqual([{ url: loginUrl, method: 'POST' }]);
         await screenshot('account');
+        await expectViewportLayout(page, screenshot, 'glass-account', async () => {
+          await expect(form).toBeVisible();
+        });
         await expectNoScriptVisibleCookie(page);
         await expectNoBrowserStorage(page);
 

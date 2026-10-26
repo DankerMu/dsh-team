@@ -3,6 +3,7 @@ import { readPublicIdentity } from './auth-fixture.ts';
 import {
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
+  expectViewportLayout,
   observeAccountUi,
   withAccountUi,
   withAccountUiRouteCleanup,
@@ -113,6 +114,9 @@ test('built waiting page serially observes startup and offers only explicit term
         await expect(page.getByRole('button', { name: '重试' })).toBeDisabled();
         await screenshot('wait-starting');
         await statusPending.promise;
+        await expectViewportLayout(page, screenshot, 'glass-wait', async () => {
+          await expect(page.getByRole('status')).toHaveText('启动中');
+        });
         // Keep an observation pending for longer than two poll periods: no overlap or restart.
         await page.waitForTimeout(2200);
         expect(calls.map(({ method }) => method)).toEqual(['POST', 'GET']);

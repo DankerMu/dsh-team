@@ -128,12 +128,14 @@ export function PasswordPage() {
       >
         {pendingAction === 'logout' ? '正在退出登录…' : '退出登录'}
       </button>
-      <p>
-        <a href="/">返回工作台</a>
-      </p>
-      <p>
-        <a href="/_platform/login">登录</a>
-      </p>
+      <div className="card-links">
+        <p>
+          <a href="/">返回工作台</a>
+        </p>
+        <p>
+          <a href="/_platform/login">登录</a>
+        </p>
+      </div>
     </main>
   );
 }

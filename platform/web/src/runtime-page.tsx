@@ -189,33 +189,35 @@ export function RuntimePage() {
   }
   return (
     <main className="admin">
-      <h1>运行参数</h1>
       <AdminNavigation page="runtime" />
-      <p id="runtime-status" role={view.error ? 'alert' : 'status'}>
-        {view.phase === 'loading'
-          ? '加载中…'
-          : view.phase === 'saving'
-            ? '正在保存…'
-            : view.error || view.message}
-      </p>
-      {view.phase === 'failure' && (
-        <button
-          onClick={() => {
-            void perform();
-          }}
-        >
-          重试
-        </button>
-      )}
-      {view.draft !== null && (
-        <RuntimeForm
-          draft={view.draft}
-          busy={view.phase === 'saving'}
-          submit={submit}
-          change={change}
-        />
-      )}
-      {view.count !== null && <p>保存时运行中的实例数：{view.count}（非实时统计）。</p>}
+      <div className="admin-content">
+        <h1>运行参数</h1>
+        <p id="runtime-status" role={view.error ? 'alert' : 'status'}>
+          {view.phase === 'loading'
+            ? '加载中…'
+            : view.phase === 'saving'
+              ? '正在保存…'
+              : view.error || view.message}
+        </p>
+        {view.phase === 'failure' && (
+          <button
+            onClick={() => {
+              void perform();
+            }}
+          >
+            重试
+          </button>
+        )}
+        {view.draft !== null && (
+          <RuntimeForm
+            draft={view.draft}
+            busy={view.phase === 'saving'}
+            submit={submit}
+            change={change}
+          />
+        )}
+        {view.count !== null && <p>保存时运行中的实例数：{view.count}（非实时统计）。</p>}
+      </div>
     </main>
   );
 }
@@ -241,7 +243,7 @@ function RuntimeForm({
       <fieldset disabled={busy}>
         <legend>实例运行参数</legend>
         {NUMBERS.map((field) => (
-          <div key={field.name}>
+          <div key={field.name} className="field">
             <label htmlFor={`runtime-${field.name}`}>{field.label}</label>
             <input
               id={`runtime-${field.name}`}
@@ -261,20 +263,22 @@ function RuntimeForm({
             </small>
           </div>
         ))}
-        <label htmlFor="runtime-tier">默认权限档</label>
-        <select
-          id="runtime-tier"
-          value={draft.defaultPermissionTier}
-          onChange={(event) => {
-            change('defaultPermissionTier', event.currentTarget.value);
-          }}
-        >
-          {TIERS.map(([value, label]) => (
-            <option key={value} value={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+        <div className="field">
+          <label htmlFor="runtime-tier">默认权限档</label>
+          <select
+            id="runtime-tier"
+            value={draft.defaultPermissionTier}
+            onChange={(event) => {
+              change('defaultPermissionTier', event.currentTarget.value);
+            }}
+          >
+            {TIERS.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
         <p>同时运行上限还受已配置子网池容量限制。</p>
         <p>
           CPU、内存和默认权限档在下次启动实例时应用；同时运行上限用于后续启动准入，空闲分钟数用于后续空闲检查。保存不会重启实例。

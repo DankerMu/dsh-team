@@ -237,56 +237,58 @@ export function AuditPage() {
     query.page > 1 ? '本页没有审计记录' : filtered ? '没有匹配的审计记录' : '暂无审计记录';
   return (
     <main className="admin" aria-busy={state === 'loading'}>
-      <h1>审计日志</h1>
       <AdminNavigation page="audit" />
-      {state === 'denied' ? (
-        <p role="alert">无权限</p>
-      ) : (
-        <>
-          <AuditFilters draft={draft} setDraft={setDraft} submit={submit} />
-          {validation !== '' && <p role="alert">{validation}</p>}
-          {state === 'loading' && <p role="status">加载中…</p>}
-          {state === 'failure' && (
-            <>
-              <p role="alert">加载失败</p>
-              <button
-                type="button"
-                onClick={() => {
-                  setQuery((previous) => ({ ...previous, revision: previous.revision + 1 }));
-                }}
-              >
-                重试
-              </button>
-            </>
-          )}
-          {items !== null && (
-            <>
-              {items.length === 0 ? <p role="status">{empty}</p> : <AuditRows items={items} />}
-              <div className="admin-pages" aria-label="审计分页">
+      <div className="admin-content">
+        <h1>审计日志</h1>
+        {state === 'denied' ? (
+          <p role="alert">无权限</p>
+        ) : (
+          <>
+            <AuditFilters draft={draft} setDraft={setDraft} submit={submit} />
+            {validation !== '' && <p role="alert">{validation}</p>}
+            {state === 'loading' && <p role="status">加载中…</p>}
+            {state === 'failure' && (
+              <>
+                <p role="alert">加载失败</p>
                 <button
                   type="button"
-                  disabled={query.page === 1}
                   onClick={() => {
-                    setQuery((previous) => ({ ...previous, page: previous.page - 1 }));
+                    setQuery((previous) => ({ ...previous, revision: previous.revision + 1 }));
                   }}
                 >
-                  上一页
+                  重试
                 </button>
-                <p>第 {query.page} 页</p>
-                <button
-                  type="button"
-                  disabled={items.length < 20}
-                  onClick={() => {
-                    setQuery((previous) => ({ ...previous, page: previous.page + 1 }));
-                  }}
-                >
-                  下一页
-                </button>
-              </div>
-            </>
-          )}
-        </>
-      )}
+              </>
+            )}
+            {items !== null && (
+              <>
+                {items.length === 0 ? <p role="status">{empty}</p> : <AuditRows items={items} />}
+                <div className="admin-pages" aria-label="审计分页">
+                  <button
+                    type="button"
+                    disabled={query.page === 1}
+                    onClick={() => {
+                      setQuery((previous) => ({ ...previous, page: previous.page - 1 }));
+                    }}
+                  >
+                    上一页
+                  </button>
+                  <p>第 {query.page} 页</p>
+                  <button
+                    type="button"
+                    disabled={items.length < 20}
+                    onClick={() => {
+                      setQuery((previous) => ({ ...previous, page: previous.page + 1 }));
+                    }}
+                  >
+                    下一页
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
     </main>
   );
 }
@@ -301,34 +303,38 @@ function AuditFilters({
   submit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form aria-label="筛选审计" onSubmit={submit}>
-      <label htmlFor="audit-type">事件类型</label>
-      <select
-        id="audit-type"
-        value={draft.eventType}
-        onChange={(event) => {
-          setDraft({ ...draft, eventType: event.currentTarget.value });
-        }}
-      >
-        <option value="">全部</option>
-        {Object.entries(EVENT_NAMES).map(([value, name]) => (
-          <option key={value} value={value}>
-            {name}
-          </option>
-        ))}
-      </select>
-      <label htmlFor="audit-email">邮箱</label>
-      <input
-        id="audit-email"
-        maxLength={254}
-        value={draft.email}
-        onChange={(event) => {
-          setDraft({ ...draft, email: event.currentTarget.value });
-        }}
-      />
-      <span>本地时间（包含起止时间）</span>
+    <form className="admin-filters" aria-label="筛选审计" onSubmit={submit}>
+      <div className="field">
+        <label htmlFor="audit-type">事件类型</label>
+        <select
+          id="audit-type"
+          value={draft.eventType}
+          onChange={(event) => {
+            setDraft({ ...draft, eventType: event.currentTarget.value });
+          }}
+        >
+          <option value="">全部</option>
+          {Object.entries(EVENT_NAMES).map(([value, name]) => (
+            <option key={value} value={value}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <label htmlFor="audit-email">邮箱</label>
+        <input
+          id="audit-email"
+          maxLength={254}
+          value={draft.email}
+          onChange={(event) => {
+            setDraft({ ...draft, email: event.currentTarget.value });
+          }}
+        />
+      </div>
+      <span className="field-hint">本地时间（包含起止时间）</span>
       {(['from', 'to'] as const).map((key) => (
-        <label key={key}>
+        <label key={key} className="field">
           {key === 'from' ? '开始时间' : '结束时间'}
           <input
             type="datetime-local"

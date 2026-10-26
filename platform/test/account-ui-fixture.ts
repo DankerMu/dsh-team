@@ -194,7 +194,18 @@ export async function expectCredentialLayout(
     const entry = await page.goto(`${baseUrl}/_platform/${api}`, { waitUntil: 'networkidle' });
     expect(entry?.status()).toBe(200);
 
-    await expectLayoutViewports(page, observed.screenshot, variant.form, variant.name);
+    await expectViewportLayout(page, observed.screenshot, variant.form, async (viewport) => {
+      const name = variant.name;
+      const brand = await page.locator('.auth-brand').boundingBox();
+      const panel = await page.getByRole('form', { name }).boundingBox();
+      if (brand === null || panel === null) throw new Error('Missing credential layout panels');
+      if (viewport === 'desktop') expect(brand.x + brand.width).toBeLessThanOrEqual(panel.x);
+      else expect(brand.y + brand.height).toBeLessThanOrEqual(panel.y);
+      await expect(page.getByRole('heading', { name: `${name} DSH 团队平台` })).toBeVisible();
+      await expect(page.getByRole('heading')).toHaveCount(1);
+      await expect(page.locator('[role="status"], [role="alert"], [aria-live]')).toHaveCount(1);
+      await expect(page.getByRole('form', { name })).toBeVisible();
+    });
 
     await expect(page.getByRole('link', { name: variant.alternative })).toBeVisible();
     await expect(page.getByRole('link', { name: '账号设置' })).toBeVisible();
@@ -203,22 +214,22 @@ export async function expectCredentialLayout(
   });
 }
 
-async function expectLayoutViewports(
+/**
+ * Captures `<prefix>-desktop` (1280×800) and `<prefix>-narrow` (390×844) full-page screenshots.
+ * Each viewport first runs the page's own checks, then must not scroll horizontally.
+ */
+export async function expectViewportLayout(
   page: Page,
   screenshot: (name: string) => Promise<void>,
-  form: string,
-  name: string,
+  prefix: string,
+  check?: (viewport: 'desktop' | 'narrow') => Promise<void>,
 ): Promise<void> {
-  for (const [suffix, width, height] of [
+  for (const [viewport, width, height] of [
     ['desktop', 1280, 800],
     ['narrow', 390, 844],
   ] as const) {
     await page.setViewportSize({ width, height });
-    const brand = await page.locator('.auth-brand').boundingBox();
-    const panel = await page.getByRole('form', { name }).boundingBox();
-    if (brand === null || panel === null) throw new Error('Missing credential layout panels');
-    if (suffix === 'desktop') expect(brand.x + brand.width).toBeLessThanOrEqual(panel.x);
-    else expect(brand.y + brand.height).toBeLessThanOrEqual(panel.y);
+    await check?.(viewport);
     expect(
       await page.evaluate(() => {
         // Chromium supplies document; the root Node config intentionally has no DOM lib.
@@ -229,12 +240,9 @@ async function expectLayoutViewports(
         ).document.documentElement;
         return root.scrollWidth <= root.clientWidth;
       }),
+      `${prefix}-${viewport} must not scroll horizontally`,
     ).toBe(true);
-    await expect(page.getByRole('heading', { name: `${name} DSH 团队平台` })).toBeVisible();
-    await expect(page.getByRole('heading')).toHaveCount(1);
-    await expect(page.locator('[role="status"], [role="alert"], [aria-live]')).toHaveCount(1);
-    await expect(page.getByRole('form', { name })).toBeVisible();
-    await screenshot(`${form}-${suffix}`);
+    await screenshot(`${prefix}-${viewport}`);
   }
   await page.setViewportSize({ width: 1280, height: 800 });
 }

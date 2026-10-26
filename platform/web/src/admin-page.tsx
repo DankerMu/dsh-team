@@ -283,73 +283,75 @@ function AccountView({
 }) {
   return (
     <main className="admin" aria-busy={state === 'loading' || pending}>
-      <h1>账号管理</h1>
       <AdminNavigation page="accounts" />
-      {state === 'denied' ? (
-        <p role="alert">无权限</p>
-      ) : (
-        <>
-          <form aria-label="搜索账号" onSubmit={submitSearch}>
-            <label htmlFor="account-search">搜索邮箱</label>
-            <input
-              id="account-search"
-              value={search}
-              maxLength={254}
-              disabled={pending}
-              onChange={(event) => {
-                setSearch(event.currentTarget.value);
-              }}
+      <div className="admin-content">
+        <h1>账号管理</h1>
+        {state === 'denied' ? (
+          <p role="alert">无权限</p>
+        ) : (
+          <>
+            <form className="admin-toolbar" aria-label="搜索账号" onSubmit={submitSearch}>
+              <label htmlFor="account-search">搜索邮箱</label>
+              <input
+                id="account-search"
+                value={search}
+                maxLength={254}
+                disabled={pending}
+                onChange={(event) => {
+                  setSearch(event.currentTarget.value);
+                }}
+              />
+              <button disabled={pending} type="submit">
+                搜索
+              </button>
+            </form>
+            {error !== '' && <p role="alert">{error}</p>}
+            <AccountRows
+              list={list}
+              state={state}
+              search={query.search}
+              pending={pending}
+              choose={choose}
+              retry={retry}
             />
-            <button disabled={pending} type="submit">
-              搜索
-            </button>
-          </form>
-          {error !== '' && <p role="alert">{error}</p>}
-          <AccountRows
-            list={list}
-            state={state}
-            search={query.search}
+            {list !== null && (
+              <div className="admin-pages" aria-label="账号分页">
+                <button
+                  type="button"
+                  disabled={pending || query.page === 1}
+                  onClick={() => {
+                    changePage(query.page - 1);
+                  }}
+                >
+                  上一页
+                </button>
+                <p>
+                  第 {list.page} 页，共 {list.total} 个账号
+                </p>
+                <button
+                  type="button"
+                  disabled={pending || query.page >= Math.ceil(list.total / 20)}
+                  onClick={() => {
+                    changePage(query.page + 1);
+                  }}
+                >
+                  下一页
+                </button>
+              </div>
+            )}
+          </>
+        )}
+        {selection !== null && (
+          <AccountConfirmation
+            selection={selection}
+            password={password}
+            setPassword={setPassword}
             pending={pending}
-            choose={choose}
-            retry={retry}
+            cancel={closeSelection}
+            confirm={confirm}
           />
-          {list !== null && (
-            <div className="admin-pages" aria-label="账号分页">
-              <button
-                type="button"
-                disabled={pending || query.page === 1}
-                onClick={() => {
-                  changePage(query.page - 1);
-                }}
-              >
-                上一页
-              </button>
-              <p>
-                第 {list.page} 页，共 {list.total} 个账号
-              </p>
-              <button
-                type="button"
-                disabled={pending || query.page >= Math.ceil(list.total / 20)}
-                onClick={() => {
-                  changePage(query.page + 1);
-                }}
-              >
-                下一页
-              </button>
-            </div>
-          )}
-        </>
-      )}
-      {selection !== null && (
-        <AccountConfirmation
-          selection={selection}
-          password={password}
-          setPassword={setPassword}
-          pending={pending}
-          cancel={closeSelection}
-          confirm={confirm}
-        />
-      )}
+        )}
+      </div>
     </main>
   );
 }
@@ -401,7 +403,11 @@ function AccountRows({
               <tr key={account.id}>
                 <td>{account.email}</td>
                 <td>{account.role === 'admin' ? '管理员' : '员工'}</td>
-                <td>{account.status === 'active' ? '已启用' : '已禁用'}</td>
+                <td>
+                  <span className={`status-pill pill-${account.status}`}>
+                    {account.status === 'active' ? '已启用' : '已禁用'}
+                  </span>
+                </td>
                 <td>
                   <time dateTime={registeredAt.toISOString()}>
                     {registeredAt.toLocaleString('zh-CN')}
@@ -410,6 +416,7 @@ function AccountRows({
                 <td>
                   <button
                     type="button"
+                    className={account.status === 'active' ? 'button-danger' : undefined}
                     disabled={pending}
                     onClick={() => {
                       choose(account, account.status === 'active' ? 'disabled' : 'active');

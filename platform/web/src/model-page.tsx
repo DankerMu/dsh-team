@@ -235,68 +235,72 @@ export function ModelPage() {
     editor;
   return (
     <main className="admin">
-      <h1>模型配置</h1>
       <AdminNavigation page="models" />
-      <p id="model-status" role={error !== '' || phase === 'denied' ? 'alert' : 'status'}>
-        {phase === 'denied'
-          ? message
-          : phase === 'load'
-            ? '加载中…'
-            : phase === 'save'
-              ? '正在保存…'
-              : phase === 'restart'
-                ? '正在请求重启…'
-                : error || message}
-      </p>
-      {phase === 'failure' && (
-        <button
-          onClick={() => {
-            void perform('load');
-          }}
-        >
-          重试
-        </button>
-      )}
-      {visible && (
-        <>
-          <ModelForm editor={editor} />
-          {count !== null && (
-            <section>
-              <p>保存时有 {count} 个运行中的实例保持原启动配置；此数量不是实时统计。</p>
-              <button
-                disabled={busy}
-                onClick={() => {
-                  setConfirmation(true);
-                }}
-              >
-                重启全部运行中的实例
-              </button>
-            </section>
-          )}
-          {confirmation && (
-            <dialog open aria-labelledby="model-restart-title">
-              <h2 id="model-restart-title">确认重启运行中的实例</h2>
-              <p>将重启操作开始时正在运行的实例，正在执行的任务可能中断。</p>
-              <button
-                disabled={busy}
-                onClick={() => {
-                  void perform('restart', {});
-                }}
-              >
-                确认重启
-              </button>
-              <button
-                disabled={busy}
-                onClick={() => {
-                  setConfirmation(false);
-                }}
-              >
-                取消
-              </button>
-            </dialog>
-          )}
-        </>
-      )}
+      <div className="admin-content">
+        <h1>模型配置</h1>
+        <p id="model-status" role={error !== '' || phase === 'denied' ? 'alert' : 'status'}>
+          {phase === 'denied'
+            ? message
+            : phase === 'load'
+              ? '加载中…'
+              : phase === 'save'
+                ? '正在保存…'
+                : phase === 'restart'
+                  ? '正在请求重启…'
+                  : error || message}
+        </p>
+        {phase === 'failure' && (
+          <button
+            onClick={() => {
+              void perform('load');
+            }}
+          >
+            重试
+          </button>
+        )}
+        {visible && (
+          <>
+            <ModelForm editor={editor} />
+            {count !== null && (
+              <section className="admin-notice">
+                <p>保存时有 {count} 个运行中的实例保持原启动配置；此数量不是实时统计。</p>
+                <button
+                  className="button-danger"
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmation(true);
+                  }}
+                >
+                  重启全部运行中的实例
+                </button>
+              </section>
+            )}
+            {confirmation && (
+              <dialog open aria-labelledby="model-restart-title">
+                <h2 id="model-restart-title">确认重启运行中的实例</h2>
+                <p>将重启操作开始时正在运行的实例，正在执行的任务可能中断。</p>
+                <button
+                  className="button-primary"
+                  disabled={busy}
+                  onClick={() => {
+                    void perform('restart', {});
+                  }}
+                >
+                  确认重启
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => {
+                    setConfirmation(false);
+                  }}
+                >
+                  取消
+                </button>
+              </dialog>
+            )}
+          </>
+        )}
+      </div>
     </main>
   );
 }
@@ -304,99 +308,121 @@ export function ModelPage() {
 function ModelForm({ editor }: { editor: ReturnType<typeof useModelEditor> }) {
   const { draft, setDraft, key, setKey, submit, changeModels, busy } = editor;
   return (
-    <form aria-label="模型配置" aria-describedby="model-status" aria-busy={busy} onSubmit={submit}>
+    <form
+      className="model-form"
+      aria-label="模型配置"
+      aria-describedby="model-status"
+      aria-busy={busy}
+      onSubmit={submit}
+    >
       <fieldset disabled={busy}>
         <legend>模型服务</legend>
-        <label htmlFor="model-base-url">模型地址</label>
-        <input
-          id="model-base-url"
-          value={draft.baseURL}
-          required
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setDraft((current) => ({ ...current, baseURL: value }));
-          }}
-        />
-        <label htmlFor="model-key">密钥</label>
-        <input
-          id="model-key"
-          type="password"
-          autoComplete="new-password"
-          value={key}
-          onChange={(event) => {
-            setKey(event.currentTarget.value);
-          }}
-          aria-describedby="model-key-state"
-        />
-        <span id="model-key-state">{draft.apiKeyConfigured ? '已设置' : '未设置'}</span>
-        <small>留空保留原密钥。</small>
-        {draft.models.map((model, index) => (
-          <fieldset key={index}>
-            <legend>模型 {index + 1}</legend>
-            <label htmlFor={`model-name-${String(index)}`}>模型名称 {index + 1}</label>
-            <input
-              id={`model-name-${String(index)}`}
-              value={model.name}
-              required
-              onChange={(event) => {
-                const name = event.currentTarget.value;
-                changeModels((models) =>
-                  models.map((row, at) => (at === index ? { ...row, name } : row)),
-                );
-              }}
-            />
-            <label htmlFor={`model-context-${String(index)}`}>上下文窗口 {index + 1}</label>
-            <input
-              id={`model-context-${String(index)}`}
-              type="number"
-              min="1"
-              max="9007199254740991"
-              step="1"
-              value={model.contextWindow}
-              onChange={(event) => {
-                const contextWindow = event.currentTarget.value;
-                changeModels((models) =>
-                  models.map((row, at) => (at === index ? { ...row, contextWindow } : row)),
-                );
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => {
-                changeModels((models) => models.filter((_row, at) => at !== index));
-              }}
-            >
-              删除模型 {index + 1}
-            </button>
-          </fieldset>
-        ))}
-        <button
-          type="button"
-          onClick={() => {
-            changeModels((models) => [...models, { name: '', contextWindow: '' }]);
-          }}
-        >
-          添加模型
-        </button>
-        <label htmlFor="model-default">默认模型</label>
-        <select
-          id="model-default"
-          value={draft.defaultModel}
-          required
-          onChange={(event) => {
-            const defaultModel = event.currentTarget.value;
-            setDraft((current) => ({ ...current, defaultModel }));
-          }}
-        >
-          <option value="">选择默认模型</option>
-          {draft.models
-            .filter((model) => model.name.trim() !== '')
-            .map((model, index) => (
-              <option key={index} value={model.name}>
-                {model.name}
-              </option>
-            ))}
-        </select>
+        <div className="field">
+          <label htmlFor="model-base-url">模型地址</label>
+          <input
+            id="model-base-url"
+            value={draft.baseURL}
+            required
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setDraft((current) => ({ ...current, baseURL: value }));
+            }}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="model-key">密钥</label>
+          <input
+            id="model-key"
+            type="password"
+            autoComplete="new-password"
+            value={key}
+            onChange={(event) => {
+              setKey(event.currentTarget.value);
+            }}
+            aria-describedby="model-key-state"
+          />
+          <span id="model-key-state" className="key-state">
+            {draft.apiKeyConfigured ? '已设置' : '未设置'}
+          </span>
+          <small>留空保留原密钥。</small>
+        </div>
+        <div className="model-cards">
+          {draft.models.map((model, index) => (
+            <fieldset key={index} className="model-card">
+              <legend>模型 {index + 1}</legend>
+              <div className="field">
+                <label htmlFor={`model-name-${String(index)}`}>模型名称 {index + 1}</label>
+                <input
+                  id={`model-name-${String(index)}`}
+                  value={model.name}
+                  required
+                  onChange={(event) => {
+                    const name = event.currentTarget.value;
+                    changeModels((models) =>
+                      models.map((row, at) => (at === index ? { ...row, name } : row)),
+                    );
+                  }}
+                />
+              </div>
+              <div className="field">
+                <label htmlFor={`model-context-${String(index)}`}>上下文窗口 {index + 1}</label>
+                <input
+                  id={`model-context-${String(index)}`}
+                  type="number"
+                  min="1"
+                  max="9007199254740991"
+                  step="1"
+                  value={model.contextWindow}
+                  onChange={(event) => {
+                    const contextWindow = event.currentTarget.value;
+                    changeModels((models) =>
+                      models.map((row, at) => (at === index ? { ...row, contextWindow } : row)),
+                    );
+                  }}
+                />
+              </div>
+              <button
+                type="button"
+                className="button-danger"
+                onClick={() => {
+                  changeModels((models) => models.filter((_row, at) => at !== index));
+                }}
+              >
+                删除模型 {index + 1}
+              </button>
+            </fieldset>
+          ))}
+          <button
+            type="button"
+            className="model-add"
+            onClick={() => {
+              changeModels((models) => [...models, { name: '', contextWindow: '' }]);
+            }}
+          >
+            添加模型
+          </button>
+        </div>
+        <div className="field">
+          <label htmlFor="model-default">默认模型</label>
+          <select
+            id="model-default"
+            value={draft.defaultModel}
+            required
+            onChange={(event) => {
+              const defaultModel = event.currentTarget.value;
+              setDraft((current) => ({ ...current, defaultModel }));
+            }}
+          >
+            <option value="">选择默认模型</option>
+            {draft.models
+              .filter((model) => model.name.trim() !== '')
+              .map((model, index) => (
+                <option key={index} value={model.name}>
+                  {model.name}
+                </option>
+              ))}
+          </select>
+        </div>
         <button type="submit">保存配置</button>
       </fieldset>
     </form>

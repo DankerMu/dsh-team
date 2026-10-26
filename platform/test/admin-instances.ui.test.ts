@@ -4,6 +4,7 @@ import { readPublicIdentity } from './auth-fixture.ts';
 import {
   observeAccountUi,
   expectNoBrowserStorage,
+  expectViewportLayout,
   submitPendingAccountForm,
   withAccountUiRouteCleanup,
 } from './account-ui-fixture.ts';
@@ -61,6 +62,9 @@ test('built instance page renders five real persisted states, saved safe logs an
     await expect(failed.locator('pre')).toBeVisible();
     await expect(page.locator('untrusted-markup')).toHaveCount(0);
     await observed.screenshot('instances-states-and-error');
+    await expectViewportLayout(page, observed.screenshot, 'glass-admin-instances', async () => {
+      await expect(failed.locator('pre')).toBeVisible();
+    });
     await page.getByLabel('搜索邮箱').fill('running-instance');
     await expect(page.locator('tbody tr')).toHaveCount(1);
     await expect(page.locator('tbody tr')).toContainText('running-instance@example.test');

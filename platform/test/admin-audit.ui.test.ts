@@ -1,6 +1,10 @@
 import { expect, test, type Page, type Response } from '@playwright/test';
 import { recordAuditEvent } from '../src/audit/index.ts';
-import { expectNoBrowserStorage, expectNoScriptVisibleCookie } from './account-ui-fixture.ts';
+import {
+  expectNoBrowserStorage,
+  expectNoScriptVisibleCookie,
+  expectViewportLayout,
+} from './account-ui-fixture.ts';
 import {
   withAdminUi,
   observeAuditUi,
@@ -148,6 +152,9 @@ test('real event, actor-or-target email and local inclusive time filters interse
       'page',
     );
     await expectIds(page, [8, 7, 6, 5, 4, 3, 2, 1]);
+    await expectViewportLayout(page, screenshot, 'glass-admin-audit', async () => {
+      await expect(page.locator('tbody tr')).toHaveCount(8);
+    });
     await page.getByLabel('事件类型').selectOption('login.succeeded');
     expect(actionRequests.filter((request) => request.url === eventUrl)).toEqual([]);
     const eventResponse = page.waitForResponse(eventUrl);
