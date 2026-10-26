@@ -168,7 +168,7 @@ it('keeps the running model selector unchanged after save and activates the new 
             expect(observation.accepted).toBe(true);
             expect(observation.reload?.accepted).toBe(true);
             expect(observation.consoleErrors).toEqual([]);
-            const link = { target: null, visible: true };
+            const link = { target: null, visible: true, contained: true, labelFits: true };
             expect(observation.platformNav?.wide).toEqual([
               { ...link, href: '/_platform/account', text: '账号设置', label: null },
               { ...link, href: '/_platform/admin', text: '管理后台', label: null },
@@ -182,6 +182,7 @@ it('keeps the running model selector unchanged after save and activates the new 
               path: '/_platform/admin',
               search: '',
               heading: '账号管理',
+              workbench: { href: '/', text: '返回工作台', visible: true },
             });
           } finally {
             await rescueChrome(receiptFile);

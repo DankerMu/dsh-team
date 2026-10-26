@@ -147,7 +147,10 @@ it('renders wide text rows with the sidebar row metrics and one scoped style ele
     textDecoration: 'none',
   });
   expect(link.findByType('svg').props.width).toBe(16);
-  expect(style.props.children).toContain(':has(> [data-dsh-team-platform-nav])');
+  expect(style.props.children).toContain(
+    ':has(> [data-slot="sidebar.footer.action"] > [data-dsh-team-platform-nav])' +
+      '{flex-direction:column;align-items:center}',
+  );
   expect(style.props.children).toContain('var(--dsw-alias-interactive-bg-hover)');
   expect(style.props.children).not.toMatch(/url\(|@import|https?:/);
 });

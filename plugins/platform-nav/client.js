@@ -6,9 +6,12 @@ window.__ModuleLoader__.load({
     const React = requireClient('react');
     const h = React.createElement;
     const MARK = 'data-dsh-team-platform-nav';
-    // The shipped footer cell is a flex row sized for one action; stack this entry below it.
+    // The shipped footer cell is a flex row sized for one action, and the released renderer
+    // wraps the slot's entries in a `display:contents` anchor: select the real cell through
+    // that stable anchor and stack this entry below Cordis, centred in the collapsed rail.
     const CSS =
-      `:has(> [${MARK}]){flex-direction:column}` +
+      `:has(> [data-slot="sidebar.footer.action"] > [${MARK}])` +
+      `{flex-direction:column;align-items:center}` +
       `[${MARK}] a:hover{background:var(--dsw-alias-interactive-bg-hover)}` +
       `[${MARK}] a:focus-visible{outline:var(--dsw-focus-ring-width) solid ` +
       `var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:-2px}`;

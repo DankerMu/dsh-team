@@ -17,7 +17,7 @@ The flag is fixed for the lifetime of the DSH process. A promotion or demotion i
 
 ## Layout
 
-The shipped footer cell is a single flex row sized for the Cordis plugin action. The entry registers with `order: 1` (after Cordis) and renders one scoped `<style>` element that stacks that cell (`:has(> [data-dsh-team-platform-nav]) { flex-direction: column }`) and supplies hover/focus styles; it does not target DSH's hashed class names. The Cordis action stays visible in both modes.
+The shipped footer cell is a single flex row sized for the Cordis plugin action. The released renderer places every `sidebar.footer.action` entry inside a `display: contents` anchor `<div data-slot="sidebar.footer.action">`, so the entry is not a direct child of that cell. The entry registers with `order: 1` (after Cordis) and renders one scoped `<style>` element that selects the real cell through that stable anchor and stacks it (`:has(> [data-slot="sidebar.footer.action"] > [data-dsh-team-platform-nav]) { flex-direction: column; align-items: center }`), plus hover/focus styles; it does not target DSH's hashed class names. The wide entry and Cordis both fill the cell's width; in the collapsed rail both 36px items are centred one above the other. The Cordis action stays visible in both modes.
 
 ## Trusted delivery
 
@@ -36,4 +36,4 @@ The image copies `package.json`, `index.js` and `client.js` to root-owned mode `
 ## Verification
 
 - `pnpm test`: `index.test.js` (exactly one normalised global row for admin true/false/missing/non-boolean) and `client.test.js` (one footer registration, role-gated links in wide and rail modes, malformed globals, no fetch/console use).
-- `pnpm test:docker` on giap-vps: the exact boot roster includes `@dsh-team/platform-nav`; an employee's real sidebar shows only 「账号设置」 and its click reaches `/_platform/account`; an administrator's shows both links and 「管理后台」 reaches `/_platform/admin`; the collapsed rail keeps both compact links; the image files are root-owned, read-only and peer-pinned.
+- `pnpm test:docker` on giap-vps: the exact boot roster includes `@dsh-team/platform-nav`; an employee's real sidebar shows only 「账号设置」 and its click reaches `/_platform/account`; an administrator's shows both links and 「管理后台」 reaches `/_platform/admin`, which shows a 「返回工作台」 link to `/`; in both wide and rail modes the entry sits in the Cordis footer cell, below the Cordis badge and horizontally inside the cell, and wide labels are not truncated; the image files are root-owned, read-only and peer-pinned.

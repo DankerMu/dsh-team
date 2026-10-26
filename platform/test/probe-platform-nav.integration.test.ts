@@ -15,6 +15,8 @@ interface Link {
   label: string | null;
   target: string | null;
   visible: boolean;
+  contained: boolean;
+  labelFits: boolean;
 }
 
 interface FakeOptions {
@@ -23,6 +25,18 @@ interface FakeOptions {
   railKeepsText?: boolean;
   cordisVisible?: boolean;
   consoleError?: boolean;
+  /** The entry is not the slot anchor's child, so its cell does not hold Cordis. */
+  outsideSlot?: boolean;
+  /** The entry renders beside, not below, the Cordis badge in this mode. */
+  besideCordis?: 'wide' | 'rail';
+  /** The last link leaves the footer cell horizontally in this mode. */
+  overflowing?: 'wide' | 'rail';
+  /** The last wide label is truncated. */
+  truncatedLabel?: boolean;
+  /** The shared footer cell is outside the viewport. */
+  cellOffscreen?: boolean;
+  /** The administrator console page lacks its 返回工作台 link. */
+  noWorkbench?: boolean;
 }
 
 const LABELS: Record<string, string> = {
@@ -41,47 +55,57 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     [
       '/_platform/account',
       ...(options.admin || options.showAdminLink ? ['/_platform/admin'] : []),
-    ].map((href) => {
+    ].map((href, index, all) => {
       const label = LABELS[href] ?? '';
       const compact = state.mode === 'rail' && options.railKeepsText !== true;
+      const last = index === all.length - 1;
       return {
         href,
         text: compact ? '' : label,
         label: compact ? label : null,
         target: null,
         visible: true,
+        contained: !(last && options.overflowing === state.mode),
+        labelFits: !(last && state.mode === 'wide' && options.truncatedLabel === true),
       };
     });
+  const click = (expression: string): boolean => {
+    const selector = /querySelector\(("(?:[^"\\]|\\.)*")\)/.exec(expression)?.[1];
+    const parsed: unknown = JSON.parse(selector ?? '""');
+    const text = String(parsed);
+    state.clicks.push(text);
+    if (text.includes('收起侧边栏')) state.mode = 'rail';
+    else if (text.includes('打开侧边栏')) state.mode = 'wide';
+    else {
+      state.path = /href="([^"]+)"/.exec(text)?.[1] ?? state.path;
+      if (options.consoleError === true) errors.push('platform-page');
+    }
+    return true;
+  };
+  const destination = (expression: string) => {
+    // The first read after navigation sees the replaced execution context.
+    if (state.path !== '/' && !state.replaced) {
+      state.replaced = true;
+      throw new Error('context replaced');
+    }
+    const page = { path: state.path, search: '', heading: HEADINGS[state.path] ?? null };
+    if (!expression.includes('返回工作台')) return page;
+    const workbench =
+      options.noWorkbench === true ? null : { href: '/', text: '返回工作台', visible: true };
+    return { ...page, workbench };
+  };
+  const sidebar = () => ({
+    mode: state.mode,
+    sharedFooter: options.outsideSlot !== true,
+    cordisVisible: options.cordisVisible ?? true,
+    stacked: options.besideCordis !== state.mode,
+    cellInViewport: options.cellOffscreen !== true,
+    links: links(),
+  });
   const evaluate = (expression: string): unknown => {
-    if (expression.includes('el.click()')) {
-      const selector = /querySelector\(("(?:[^"\\]|\\.)*")\)/.exec(expression)?.[1];
-      const parsed: unknown = JSON.parse(selector ?? '""');
-      const text = String(parsed);
-      state.clicks.push(text);
-      if (text.includes('收起侧边栏')) state.mode = 'rail';
-      else if (text.includes('打开侧边栏')) state.mode = 'wide';
-      else {
-        state.path = /href="([^"]+)"/.exec(text)?.[1] ?? state.path;
-        if (options.consoleError === true) errors.push('platform-page');
-      }
-      return true;
-    }
-    if (expression.includes('location.pathname')) {
-      // The first read after navigation sees the replaced execution context.
-      if (state.path !== '/' && !state.replaced) {
-        state.replaced = true;
-        throw new Error('context replaced');
-      }
-      return { path: state.path, search: '', heading: HEADINGS[state.path] ?? null };
-    }
-    if (expression.includes('data-cordis-badge')) {
-      return {
-        mode: state.mode,
-        sharedFooter: true,
-        cordisVisible: options.cordisVisible ?? true,
-        links: links(),
-      };
-    }
+    if (expression.includes('el.click()')) return click(expression);
+    if (expression.includes('location.pathname')) return destination(expression);
+    if (expression.includes('data-cordis-badge')) return sidebar();
     throw new Error(`unexpected expression ${expression.slice(0, 40)}`);
   };
   return {
@@ -130,7 +154,13 @@ it.each([
     expect(evidence.rail.map(({ label, text }) => [label, text])).toEqual(
       labels.map((label) => [label, '']),
     );
-    expect(evidence.destination).toEqual({ path, search: '', heading });
+    expect(evidence.wide.every((link) => link.contained && link.labelFits)).toBe(true);
+    expect(evidence.rail.every((link) => link.contained && link.labelFits)).toBe(true);
+    expect(evidence.destination).toEqual(
+      admin
+        ? { path, search: '', heading, workbench: { href: '/', text: '返回工作台', visible: true } }
+        : { path, search: '', heading },
+    );
     expect(state.clicks).toEqual([
       'button[aria-label="收起侧边栏"]',
       'button[aria-label="打开侧边栏"]',
@@ -150,6 +180,19 @@ it.each<[string, FakeOptions, boolean, RegExp]>([
   ['a rail that keeps text labels', { admin: false, railKeepsText: true }, false, /nav-rail/],
   ['a hidden Cordis action', { admin: true, cordisVisible: false }, true, /nav-wide/],
   ['a console error after navigation', { admin: false, consoleError: true }, false, /console/],
+  [
+    'an entry outside the footer slot anchor',
+    { admin: false, outsideSlot: true },
+    false,
+    /nav-wide/,
+  ],
+  ['a wide entry beside Cordis', { admin: true, besideCordis: 'wide' }, true, /nav-wide/],
+  ['a rail entry beside Cordis', { admin: true, besideCordis: 'rail' }, true, /nav-rail/],
+  ['a wide link outside the footer cell', { admin: true, overflowing: 'wide' }, true, /nav-wide/],
+  ['a rail link outside the footer cell', { admin: true, overflowing: 'rail' }, true, /nav-rail/],
+  ['a truncated wide label', { admin: true, truncatedLabel: true }, true, /nav-wide/],
+  ['a footer cell outside the viewport', { admin: false, cellOffscreen: true }, false, /nav-wide/],
+  ['a console page without 返回工作台', { admin: true, noWorkbench: true }, true, /destination/],
 ])('rejects %s', async (_name, options, admin, failure) => {
   const { result } = await run(options, 600, admin);
 
