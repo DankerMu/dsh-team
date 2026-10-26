@@ -339,3 +339,151 @@ it('dispatches the exact account page to its password and logout controls withou
   expect(request).not.toHaveBeenCalled();
   expect(navigate).not.toHaveBeenCalled();
 });
+
+const MODEL_CONFIG_REQUEST = [
+  '/_platform/api/admin/model-config',
+  { method: 'GET', credentials: 'same-origin', redirect: 'error' },
+] as const;
+const COMPLETE_MODEL_CONFIG = {
+  baseURL: 'http://models.invalid/v1',
+  apiKeyConfigured: true,
+  models: [{ name: 'alpha', contextWindow: 500000 }, { name: 'beta' }],
+  defaultModel: 'beta',
+};
+const ADMIN_LOGIN = '{"id":"admin0000001","email":"person@example.com","role":"admin"}';
+
+function json(body: unknown, status = 200): Response {
+  return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+}
+
+async function loginAdmin(configuration: Response | Error): Promise<RenderedAccount> {
+  const rendered = renderAccount();
+  rendered.request.mockResolvedValueOnce(json(ADMIN_LOGIN));
+  if (configuration instanceof Error) rendered.request.mockRejectedValueOnce(configuration);
+  else rendered.request.mockResolvedValueOnce(configuration);
+  await act(async () => {
+    submit(rendered.view);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return rendered;
+}
+
+it.each<[string, Record<string, unknown>]>([
+  ['absent settings', { baseURL: '', apiKeyConfigured: false, models: [], defaultModel: '' }],
+  ['a blank address', { ...COMPLETE_MODEL_CONFIG, baseURL: '  ' }],
+  ['no configured key', { ...COMPLETE_MODEL_CONFIG, apiKeyConfigured: false }],
+  ['an empty model list', { ...COMPLETE_MODEL_CONFIG, models: [], defaultModel: '' }],
+  ['no default model', { ...COMPLETE_MODEL_CONFIG, defaultModel: '' }],
+])(
+  'lands an administrator with %s on the model configuration page after one settings read',
+  async (_name, configuration) => {
+    const { view, request, navigate } = await loginAdmin(json(configuration));
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls[1]).toEqual(MODEL_CONFIG_REQUEST);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/admin/models');
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+  },
+);
+
+it('lands an administrator with complete settings on the console', async () => {
+  const { view, request, navigate } = await loginAdmin(json(COMPLETE_MODEL_CONFIG));
+
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]).toEqual(MODEL_CONFIG_REQUEST);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/admin');
+  expect(view.querySelector('[role="alert"]')).toBeNull();
+});
+
+it.each<[string, Response | Error]>([
+  ['500', json({ message: 'private storage detail' }, 500)],
+  ['401', json({ message: 'Unauthorized' }, 401)],
+  ['403', json({ message: 'Forbidden' }, 403)],
+  ['204', new Response(null, { status: 204 })],
+  ['a network failure', new Error('private transport detail')],
+  ['an unparseable body', json('not JSON: private detail')],
+  ['a non-object body', json('[]')],
+  ['a mistyped field', json({ ...COMPLETE_MODEL_CONFIG, apiKeyConfigured: 'no' })],
+  ['an unknown field', json({ ...COMPLETE_MODEL_CONFIG, apiKey: 'leaked' })],
+  ['an unlisted default model', json({ ...COMPLETE_MODEL_CONFIG, defaultModel: 'gamma' })],
+])(
+  'lands an administrator on the console without error text when the settings read returns %s',
+  async (_name, configuration) => {
+    const { view, request, navigate } = await loginAdmin(configuration);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/admin');
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(element(view, '[role="status"]', HTMLElement).textContent).not.toContain('失败');
+  },
+);
+
+it('keeps the login pending until the settings read is consumed, then navigates once', async () => {
+  const { view, request, navigate } = renderAccount();
+  const configuration = Promise.withResolvers<Response>();
+  const consumed: boolean[] = [];
+  const settings = json(COMPLETE_MODEL_CONFIG);
+  const login = json(ADMIN_LOGIN);
+  request.mockResolvedValueOnce(login).mockReturnValueOnce(configuration.promise);
+  navigate.mockImplementation(() => consumed.push(login.bodyUsed, settings.bodyUsed));
+
+  submitRepeatedly(view);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(request).toHaveBeenCalledTimes(2);
+  expectPending(view, '正在登录…');
+  expect(navigate).not.toHaveBeenCalled();
+
+  await act(async () => {
+    configuration.resolve(settings);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/admin');
+  expect(consumed).toEqual([true, true]);
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+async function submitSingle(pathname: string, response: Response) {
+  const rendered = renderAccount(pathname);
+  const consumed: boolean[] = [];
+  rendered.request.mockResolvedValueOnce(response);
+  rendered.navigate.mockImplementation(() => consumed.push(response.bodyUsed));
+
+  await act(async () => {
+    submit(rendered.view);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(rendered.request).toHaveBeenCalledTimes(1);
+  expect(rendered.navigate).toHaveBeenCalledExactlyOnceWith('/');
+  expect(consumed).toEqual([true]);
+  expect(rendered.view.querySelector('[role="alert"]')).toBeNull();
+}
+
+it.each<[string, string]>([
+  ['an employee role', '{"id":"person000001","email":"person@example.com","role":"employee"}'],
+  ['an unknown role', '{"role":"Admin"}'],
+  ['a non-string role', '{"role":["admin"]}'],
+  ['a missing role', '{"id":"person000001"}'],
+  ['a null body', 'null'],
+  ['an unparseable body', 'not JSON: private detail'],
+])('navigates a login with %s to the fixed root without a settings read', async (_name, body) => {
+  await submitSingle('/_platform/login', json(body));
+});
+
+it('navigates a registration to the fixed root even when its body names an administrator', async () => {
+  await submitSingle('/_platform/register', json(ADMIN_LOGIN, 201));
+});
+
+it('renders the brand panel without another heading, link, button or live region', () => {
+  const { view } = renderAccount();
+
+  expect(view.querySelectorAll('h1, h2, h3, [role="heading"]')).toHaveLength(1);
+  expect(view.querySelectorAll('[role="status"], [role="alert"], [aria-live]')).toHaveLength(1);
+  expect(view.querySelector('fieldset, legend')).toBeNull();
+  expect(element(view, '.auth-brand', HTMLElement).textContent).not.toMatch(/登录|注册/);
+  expect(element(view, '.auth-brand', HTMLElement).querySelector('a, button')).toBeNull();
+});

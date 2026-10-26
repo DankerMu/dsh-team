@@ -6,6 +6,7 @@ import { AuditPage } from './audit-page.tsx';
 import { ModelPage } from './model-page.tsx';
 import { RuntimePage } from './runtime-page.tsx';
 import { InstancePage } from './instance-page.tsx';
+import { MODEL_CONFIG_API, isCompleteModelConfig, parseModelConfig } from './model-config.ts';
 
 const LOGIN_FAILURE = '登录失败，请稍后重试。';
 const REGISTRATION_FAILURE = '注册失败，请稍后重试。';
@@ -42,6 +43,47 @@ async function rejectionMessage(response: Response, registration: boolean): Prom
     }
   }
   return LOGIN_FAILURE;
+}
+
+async function readJson(response: Response): Promise<unknown> {
+  try {
+    const body: unknown = await response.json();
+    return body;
+  } catch {
+    // An unparseable success body is consumed; its content never selects a privileged path.
+    return undefined;
+  }
+}
+
+async function administratorLanding(): Promise<string> {
+  try {
+    const response = await fetch(MODEL_CONFIG_API, {
+      method: 'GET',
+      credentials: 'same-origin',
+      redirect: 'error',
+    });
+    if (response.status !== 200) {
+      await response.arrayBuffer();
+      return '/_platform/admin';
+    }
+    const config = parseModelConfig(await response.json(), false);
+    return isCompleteModelConfig(config) ? '/_platform/admin' : '/_platform/admin/models';
+  } catch {
+    // The login already succeeded; a failed auxiliary read only selects the console.
+    return '/_platform/admin';
+  }
+}
+
+/** The single fixed same-origin destination for a successful credential response. */
+async function landing(response: Response, registration: boolean): Promise<string> {
+  const body = await readJson(response);
+  const admin =
+    !registration &&
+    typeof body === 'object' &&
+    body !== null &&
+    'role' in body &&
+    body.role === 'admin';
+  return admin ? administratorLanding() : '/';
 }
 
 export function AccountPage() {
@@ -84,7 +126,8 @@ function CredentialForm() {
           body: JSON.stringify({ email, password }),
         },
       );
-      if (response.status === (registration ? 201 : 200)) window.location.assign('/');
+      if (response.status === (registration ? 201 : 200))
+        window.location.assign(await landing(response, registration));
       else setError(await rejectionMessage(response, registration));
     } catch {
       // Network failures and malformed error bodies never expose raw diagnostics.
@@ -96,21 +139,24 @@ function CredentialForm() {
   }
 
   return (
-    <main className="login">
-      <h1>{action} DSH 团队平台</h1>
-      <p id={statusId} role={error === '' ? 'status' : 'alert'}>
-        {pending ? loading : error}
-      </p>
-      <form
-        aria-label={action}
-        aria-describedby={statusId}
-        aria-busy={pending}
-        onSubmit={(event) => {
-          void submit(event);
-        }}
-      >
-        <fieldset>
-          <legend>账号{action}</legend>
+    <main className="auth">
+      <div className="auth-brand">
+        <p className="auth-brand-name">DSH 团队平台</p>
+        <p>每位成员使用独立的 DSH 工作台，模型由管理员统一配置。</p>
+      </div>
+      <div className="auth-panel">
+        <h1>{action} DSH 团队平台</h1>
+        <p id={statusId} className="auth-status" role={error === '' ? 'status' : 'alert'}>
+          {pending ? loading : error}
+        </p>
+        <form
+          aria-label={action}
+          aria-describedby={statusId}
+          aria-busy={pending}
+          onSubmit={(event) => {
+            void submit(event);
+          }}
+        >
           <label htmlFor="email">邮箱</label>
           <input
             id="email"
@@ -138,16 +184,14 @@ function CredentialForm() {
           <button type="submit" disabled={pending}>
             {pending ? loading : action}
           </button>
-        </fieldset>
-      </form>
-      <p>
-        <a href={registration ? '/_platform/login' : '/_platform/register'}>
-          {registration ? '已有账号？登录' : '没有账号？注册'}
-        </a>
-      </p>
-      <p>
-        <a href="/_platform/account">账号设置</a>
-      </p>
+        </form>
+        <p className="auth-links">
+          <a href={registration ? '/_platform/login' : '/_platform/register'}>
+            {registration ? '已有账号？登录' : '没有账号？注册'}
+          </a>
+          <a href="/_platform/account">账号设置</a>
+        </p>
+      </div>
     </main>
   );
 }

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readPublicIdentity } from './auth-fixture.ts';
 import {
+  expectCredentialLayout,
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
   observeAccountUi,
@@ -169,4 +170,89 @@ test('built React login submits real credentials, recovers from rejections and s
       });
     },
   );
+});
+
+test('built React login lands an administrator on model configuration until real settings are saved, then on the console', async ({
+  page,
+  playwright,
+}, testInfo) => {
+  await withAccountUi(
+    playwright,
+    async ({ baseUrl, database, seed, upstreamRequests, admittedUsers }) => {
+      const email = 'admin-landing@example.com';
+      const password = 'browser-owned-admin-password';
+      const loginUrl = `${baseUrl}/_platform/api/login`;
+      const configUrl = `${baseUrl}/_platform/api/admin/model-config`;
+      const usersUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
+      // The seed jar keeps its own registration session; the browser starts without one.
+      const registered = await seed.post('/_platform/api/register', { data: { email, password } });
+      expect(registered.status()).toBe(201);
+      database.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(email);
+      const observed = observeAccountUi(page, testInfo, baseUrl, [loginUrl, configUrl, usersUrl]);
+      const trail: string[] = [];
+      page.on('request', (request) => {
+        if (request.isNavigationRequest() && request.frame() === page.mainFrame())
+          trail.push(`navigate ${request.url()}`);
+        else if (new URL(request.url()).pathname.startsWith('/_platform/api/'))
+          trail.push(`${request.method()} ${request.url()}`);
+      });
+      async function login(destination: string, heading: string): Promise<void> {
+        const entry = await page.goto(`${baseUrl}/_platform/login`, { waitUntil: 'networkidle' });
+        expect(entry?.status()).toBe(200);
+        trail.length = 0;
+        await page.getByLabel('邮箱').fill(email);
+        await page.getByLabel('密码').fill(password);
+
+        await page.getByRole('button', { name: '登录', exact: true }).click();
+
+        await expect(page).toHaveURL(`${baseUrl}${destination}`);
+        await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+        expect(trail.slice(0, 3)).toEqual([
+          `POST ${loginUrl}`,
+          `GET ${configUrl}`,
+          `navigate ${baseUrl}${destination}`,
+        ]);
+        for (const step of trail.filter((entry) => entry.startsWith('navigate '))) {
+          const url = new URL(step.slice('navigate '.length));
+          expect([url.search, url.hash]).toEqual(['', '']);
+          expect(step.includes(password) || step.includes(encodeURIComponent(email))).toBe(false);
+        }
+        expect(upstreamRequests).toEqual([]);
+        expect(admittedUsers).toEqual([]);
+      }
+
+      await login('/_platform/admin/models', '模型配置');
+      await expect(page.getByText('未设置', { exact: true })).toBeVisible();
+      await observed.screenshot('login-admin-incomplete-models');
+      const saved = await seed.put('/_platform/api/admin/model-config', {
+        data: {
+          baseURL: 'http://models.invalid/v1',
+          apiKey: 'browser-owned-not-a-provider-key',
+          models: [{ name: 'alpha' }],
+          defaultModel: 'alpha',
+        },
+      });
+      expect(saved.status()).toBe(200);
+      expect(await saved.json()).toMatchObject({ apiKeyConfigured: true, defaultModel: 'alpha' });
+      await page.context().clearCookies();
+      await login('/_platform/admin', '账号管理');
+      await expect(page.getByRole('cell', { name: email, exact: true })).toBeVisible();
+      await observed.screenshot('login-admin-complete-console');
+
+      expect(observed.actionRequests.filter((request) => request.url === loginUrl)).toHaveLength(2);
+      await expectNoBrowserStorage(page);
+      observed.expectHealthy([]);
+    },
+  );
+});
+
+test('built React login places its brand panel beside the form on desktop and above it on narrow screens', async ({
+  page,
+  playwright,
+}, testInfo) => {
+  await expectCredentialLayout(playwright, page, testInfo, {
+    form: 'login',
+    name: '登录',
+    alternative: '没有账号？注册',
+  });
 });

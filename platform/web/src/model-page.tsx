@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
+import { MODEL_CONFIG_API, jsonObject, parseModelConfig } from './model-config.ts';
 
 interface ModelRow {
   name: string;
@@ -13,7 +14,6 @@ interface ModelDraft {
 }
 type Action = 'load' | 'save' | 'restart';
 type Phase = Action | 'ready' | 'failure' | 'denied';
-const API = '/_platform/api/admin/model-config';
 const EMPTY: ModelDraft = { baseURL: '', apiKeyConfigured: false, models: [], defaultModel: '' };
 const FAILURE = {
   load: '模型配置加载失败，请重试。',
@@ -21,68 +21,20 @@ const FAILURE = {
   restart: '重启请求失败，部分实例可能已处理；请检查实例状态后再试。',
 };
 
-function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value))
-    throw new Error('Invalid configuration response');
-  // The runtime object/array check establishes a JSON object, but not its field domains.
-  return value as Record<string, unknown>;
-}
-function saveCount(value: unknown, baseURL: string, defaultModel: string): number {
-  if (
-    typeof value !== 'number' ||
-    !Number.isSafeInteger(value) ||
-    value < 0 ||
-    baseURL.trim() === '' ||
-    defaultModel.trim() === ''
-  )
-    throw new Error('Invalid save response');
-  return value;
-}
 function readConfiguration(value: unknown, saved: boolean) {
-  const body = object(value);
-  const allowed = [
-    'baseURL',
-    'apiKeyConfigured',
-    'models',
-    'defaultModel',
-    ...(saved ? ['runningInstances'] : []),
-  ];
-  if (
-    Object.keys(body).some((key) => !allowed.includes(key)) ||
-    typeof body.baseURL !== 'string' ||
-    typeof body.apiKeyConfigured !== 'boolean' ||
-    typeof body.defaultModel !== 'string' ||
-    !Array.isArray(body.models)
-  )
-    throw new Error('Invalid configuration response');
-  const models = body.models.map((value: unknown): ModelRow => {
-    const model = object(value);
-    if (
-      typeof model.name !== 'string' ||
-      model.name.trim() === '' ||
-      Object.keys(model).some((key) => key !== 'name' && key !== 'contextWindow') ||
-      (model.contextWindow !== undefined &&
-        (typeof model.contextWindow !== 'number' ||
-          !Number.isSafeInteger(model.contextWindow) ||
-          model.contextWindow < 1))
-    )
-      throw new Error('Invalid model response');
-    return {
-      name: model.name,
-      contextWindow: model.contextWindow === undefined ? '' : String(model.contextWindow),
-    };
-  });
-  const count = saved ? saveCount(body.runningInstances, body.baseURL, body.defaultModel) : null;
-  if (body.defaultModel !== '' && !models.some((model) => model.name === body.defaultModel))
-    throw new Error('Invalid save response');
+  const config = parseModelConfig(value, saved);
+  const models = config.models.map((model): ModelRow => ({
+    name: model.name,
+    contextWindow: model.contextWindow === undefined ? '' : String(model.contextWindow),
+  }));
   return {
     draft: {
-      baseURL: body.baseURL,
-      apiKeyConfigured: body.apiKeyConfigured,
+      baseURL: config.baseURL,
+      apiKeyConfigured: config.apiKeyConfigured,
       models: models.length ? models : [{ name: '', contextWindow: '' }],
-      defaultModel: body.defaultModel,
+      defaultModel: config.defaultModel,
     },
-    count,
+    count: config.runningInstances,
   };
 }
 function validation(draft: ModelDraft, key: string): string {
@@ -103,11 +55,11 @@ function validation(draft: ModelDraft, key: string): string {
   return '';
 }
 function restartMessage(value: unknown): string {
-  const body = object(value);
+  const body = jsonObject(value);
   if (!Array.isArray(body.items)) throw new Error('Invalid restart response');
   let notStarted = 0;
   for (const value of body.items) {
-    const item = object(value);
+    const item = jsonObject(value);
     if (
       typeof item.userId !== 'string' ||
       typeof item.status !== 'string' ||
@@ -129,7 +81,7 @@ async function requestConfiguration(
   payload?: Record<string, unknown>,
 ) {
   const response = await fetch(
-    action === 'restart' ? '/_platform/api/admin/instances/restart-running' : API,
+    action === 'restart' ? '/_platform/api/admin/instances/restart-running' : MODEL_CONFIG_API,
     {
       method: action === 'load' ? 'GET' : action === 'save' ? 'PUT' : 'POST',
       credentials: 'same-origin',
