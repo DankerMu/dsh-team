@@ -177,7 +177,7 @@ it('keeps the running model selector unchanged after save and activates the new 
               { ...link, href: '/_platform/account', text: '', label: '账号设置' },
               { ...link, href: '/_platform/admin', text: '', label: '管理后台' },
             ]);
-            expect(observation.platformNav?.cordisVisible).toBe(true);
+            expect(observation.platformNav?.cordis).toBe('absent');
             expect(observation.platformNav?.destination).toEqual({
               path: '/_platform/admin',
               search: '',

@@ -22,8 +22,10 @@ const RENDERED = `const rendered=(el)=>{
 
 /**
  * Visible, in-viewport links of the entry. The renderer's `display:contents` slot anchor must be
- * the entry's parent and the real flex cell (the anchor's parent) must also hold the Cordis
- * badge; the entry stacks below that badge and every link stays horizontally inside the cell.
+ * the entry's parent; the real flex cell (the anchor's parent) must be stacked by the entry's
+ * `:has()` rule, and every link stays horizontally inside that cell. The Cordis badge renders
+ * only with Cordis plugin activity: absent is accepted, and when present it must share the cell
+ * with the entry stacked below it.
  */
 const OBSERVE = `(function(){
   const nav=document.querySelector(${JSON.stringify(NAV)});
@@ -31,16 +33,19 @@ const OBSERVE = `(function(){
   ${RENDERED}
   const inView=(r)=>r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
   const visible=(el)=>rendered(el)&&inView(el.getBoundingClientRect());
-  const cordis=document.querySelector('[data-cordis-badge]');
   const anchor=nav.parentElement;
   const cell=anchor&&anchor.matches(${JSON.stringify(SLOT)})?anchor.parentElement:null;
   const box=cell?cell.getBoundingClientRect():null;
+  const layout=cell?getComputedStyle(cell):null;
+  const badge=document.querySelector('[data-cordis-badge]');
+  const cordis=!badge?'absent':cell&&cell.contains(badge)&&visible(badge)&&
+    nav.getBoundingClientRect().top>=badge.getBoundingClientRect().bottom-1?'stacked':'misplaced';
   return {
     mode:nav.getAttribute('data-dsh-team-platform-nav'),
-    sharedFooter:Boolean(cell&&cordis&&cell.contains(cordis)),
-    cordisVisible:Boolean(cordis&&visible(cordis)),
-    stacked:Boolean(cordis&&nav.getBoundingClientRect().top>=cordis.getBoundingClientRect().bottom-1),
+    inFooterSlot:Boolean(cell),
+    cellStacked:Boolean(layout&&layout.flexDirection==='column'&&layout.alignItems==='center'),
     cellInViewport:Boolean(box&&inView(box)),
+    cordis,
     links:[...nav.querySelectorAll('a')].map((a)=>{
       const r=a.getBoundingClientRect(),span=a.querySelector('span');
       return {
@@ -83,21 +88,33 @@ const linkMatches = (link, expected, wide) =>
     ? link.text === expected.label && link.label === null
     : link.text === '' && link.label === expected.label);
 
-/** Exact link set for the mode: an employee seeing the console link is a failure, not extra. */
+const MODES = ['wide', 'rail'];
+const CORDIS = ['absent', 'stacked'];
+// The released toggle carries the label of the transition it performs from the current mode.
+const TOGGLE = { wide: COLLAPSE, rail: EXPAND };
+
+/**
+ * Exact link set for the mode: an employee seeing the console link is a failure, not extra.
+ * `mode` null accepts either known mode (the initial observation).
+ */
 const platformNavMatches = (observed, mode, expected) =>
   Boolean(
     observed &&
-    observed.mode === mode &&
-    observed.sharedFooter === true &&
-    observed.cordisVisible === true &&
-    observed.stacked === true &&
+    MODES.includes(observed.mode) &&
+    (mode === null || observed.mode === mode) &&
+    observed.inFooterSlot === true &&
+    observed.cellStacked === true &&
     observed.cellInViewport === true &&
+    CORDIS.includes(observed.cordis) &&
     Array.isArray(observed.links) &&
     observed.links.length === expected.length &&
-    observed.links.every((link, index) => linkMatches(link, expected[index], mode === 'wide')),
+    observed.links.every((link, index) =>
+      linkMatches(link, expected[index], observed.mode === 'wide'),
+    ),
   );
 
 const settled = async (page, mode, expected, ms) => {
+  const stage = `platform-nav-${mode ?? 'initial'}`;
   let last;
   try {
     return await waitFor(
@@ -106,13 +123,11 @@ const settled = async (page, mode, expected, ms) => {
         return platformNavMatches(last, mode, expected) ? last : false;
       },
       ms,
-      `platform-nav-${mode}`,
+      stage,
     );
   } catch (error) {
     // Bounded, credential-free shape for diagnosis; no page text beyond the fixed labels.
-    throw new Error(`stage=platform-nav-${mode} observed=${JSON.stringify(last ?? null)}`, {
-      cause: error,
-    });
+    throw new Error(`stage=${stage} observed=${JSON.stringify(last ?? null)}`, { cause: error });
   }
 };
 
@@ -126,20 +141,28 @@ const destinationOf = async (page, admin) => {
 };
 
 /**
- * Prove the wide and collapsed sidebar entries, then follow the role's link out of DSH.
+ * Prove the entry in DSH's initial sidebar mode, toggle to the other mode and back (both wide
+ * and rail are observed whichever comes first), then follow the role's link out of DSH.
  * Run last: the click leaves the DSH page.
  */
 export const verifyPlatformNav = async ({ page, admin, errors, screenshot, ms }) => {
   const expected = expectedPlatformLinks(admin);
   const shot = (suffix) =>
     captureSettledScreenshot(page, screenshot.replace(/\.png$/, `-platform-nav-${suffix}.png`));
-  const wide = await settled(page, 'wide', expected, ms);
-  const screenshots = [await shot('wide')];
-  await clickSelector(page, COLLAPSE);
-  const rail = await settled(page, 'rail', expected, ms);
-  screenshots.push(await shot('rail'));
-  await clickSelector(page, EXPAND);
-  await settled(page, 'wide', expected, ms);
+  const initial = await settled(page, null, expected, ms);
+  const screenshots = [await shot(initial.mode)];
+  const other = initial.mode === 'wide' ? 'rail' : 'wide';
+  await clickSelector(page, TOGGLE[initial.mode]);
+  const toggled = await settled(page, other, expected, ms);
+  screenshots.push(await shot(other));
+  await clickSelector(page, TOGGLE[other]);
+  await settled(page, initial.mode, expected, ms);
+  const observed = { [initial.mode]: initial, [other]: toggled };
+  // One Cordis fact for the evidence: both modes must report the same badge state.
+  if (observed.wide.cordis !== observed.rail.cordis)
+    throw new Error(
+      `stage=platform-nav error=cordis-divergent wide=${observed.wide.cordis} rail=${observed.rail.cordis}`,
+    );
   const target = admin ? ADMIN : ACCOUNT;
   await clickSelector(page, `${NAV} a[href="${target.href}"]`);
   let last;
@@ -165,5 +188,11 @@ export const verifyPlatformNav = async ({ page, admin, errors, screenshot, ms })
   });
   screenshots.push(await shot('destination'));
   if (errors.length) throw new Error(`stage=platform-nav error=console count=${errors.length}`);
-  return { wide: wide.links, rail: rail.links, cordisVisible: true, destination, screenshots };
+  return {
+    wide: observed.wide.links,
+    rail: observed.rail.links,
+    cordis: observed.wide.cordis,
+    destination,
+    screenshots,
+  };
 };

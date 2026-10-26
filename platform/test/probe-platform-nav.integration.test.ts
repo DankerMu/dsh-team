@@ -21,19 +21,24 @@ interface Link {
 
 interface FakeOptions {
   admin: boolean;
+  /** DSH's sidebar mode when the probe starts (default wide); any other value is unknown. */
+  initial?: string;
   showAdminLink?: boolean;
   railKeepsText?: boolean;
-  cordisVisible?: boolean;
+  /** Cordis badge state reported by the page (default absent: no Cordis plugin activity). */
+  cordis?: 'absent' | 'stacked' | 'misplaced';
+  /** Cordis badge state reported only while in rail mode, overriding `cordis` there. */
+  railCordis?: 'absent' | 'stacked';
+  /** The footer cell is not stacked: the entry's `:has()` rule did not select it. */
+  unstackedCell?: boolean;
   consoleError?: boolean;
-  /** The entry is not the slot anchor's child, so its cell does not hold Cordis. */
+  /** The entry is not the slot anchor's child, so no footer cell is found. */
   outsideSlot?: boolean;
-  /** The entry renders beside, not below, the Cordis badge in this mode. */
-  besideCordis?: 'wide' | 'rail';
   /** The last link leaves the footer cell horizontally in this mode. */
   overflowing?: 'wide' | 'rail';
   /** The last wide label is truncated. */
   truncatedLabel?: boolean;
-  /** The shared footer cell is outside the viewport. */
+  /** The footer cell is outside the viewport. */
   cellOffscreen?: boolean;
   /** The administrator console page lacks its 返回工作台 link. */
   noWorkbench?: boolean;
@@ -43,6 +48,13 @@ const LABELS: Record<string, string> = {
   '/_platform/account': '账号设置',
   '/_platform/admin': '管理后台',
 };
+const COLLAPSE = 'button[aria-label="收起侧边栏"]';
+const EXPAND = 'button[aria-label="打开侧边栏"]';
+/** Released toggle label, the mode it is rendered in, and the mode it switches to. */
+const TOGGLES = [
+  ['收起侧边栏', 'wide', 'rail'],
+  ['打开侧边栏', 'rail', 'wide'],
+] as const;
 const HEADINGS: Record<string, string> = {
   '/_platform/account': '修改密码',
   '/_platform/admin': '账号管理',
@@ -50,14 +62,22 @@ const HEADINGS: Record<string, string> = {
 
 /** Scripted CDP page: answers the evidence module's own DOM expressions by page state. */
 function fakePage(options: FakeOptions, errors: unknown[]) {
-  const state = { mode: 'wide', path: '/', clicks: [] as string[], replaced: false };
+  // `mode` is the rendered sidebar; `target` is the toggle state, which (like DSH's collapse
+  // fade) the rendered mode reaches only after one more observation.
+  const state = {
+    mode: options.initial ?? 'wide',
+    target: options.initial ?? 'wide',
+    path: '/',
+    clicks: [] as string[],
+    replaced: false,
+  };
   const links = (): Link[] =>
     [
       '/_platform/account',
       ...(options.admin || options.showAdminLink ? ['/_platform/admin'] : []),
     ].map((href, index, all) => {
       const label = LABELS[href] ?? '';
-      const compact = state.mode === 'rail' && options.railKeepsText !== true;
+      const compact = state.mode !== 'wide' && options.railKeepsText !== true;
       const last = index === all.length - 1;
       return {
         href,
@@ -74,12 +94,15 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     const parsed: unknown = JSON.parse(selector ?? '""');
     const text = String(parsed);
     state.clicks.push(text);
-    if (text.includes('收起侧边栏')) state.mode = 'rail';
-    else if (text.includes('打开侧边栏')) state.mode = 'wide';
-    else {
-      state.path = /href="([^"]+)"/.exec(text)?.[1] ?? state.path;
-      if (options.consoleError === true) errors.push('platform-page');
+    // Like the released toggle, each label exists only in the mode it leaves.
+    const toggle = TOGGLES.find(([label]) => text.includes(label));
+    if (toggle) {
+      if (state.target !== toggle[1]) return false;
+      state.target = toggle[2];
+      return true;
     }
+    state.path = /href="([^"]+)"/.exec(text)?.[1] ?? state.path;
+    if (options.consoleError === true) errors.push('platform-page');
     return true;
   };
   const destination = (expression: string) => {
@@ -94,14 +117,19 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
       options.noWorkbench === true ? null : { href: '/', text: '返回工作台', visible: true };
     return { ...page, workbench };
   };
-  const sidebar = () => ({
+  const observe = () => ({
     mode: state.mode,
-    sharedFooter: options.outsideSlot !== true,
-    cordisVisible: options.cordisVisible ?? true,
-    stacked: options.besideCordis !== state.mode,
+    inFooterSlot: options.outsideSlot !== true,
+    cellStacked: options.unstackedCell !== true,
     cellInViewport: options.cellOffscreen !== true,
+    cordis: (state.mode === 'rail' ? options.railCordis : undefined) ?? options.cordis ?? 'absent',
     links: links(),
   });
+  const sidebar = () => {
+    const observed = observe();
+    state.mode = state.target;
+    return observed;
+  };
   const evaluate = (expression: string): unknown => {
     if (expression.includes('el.click()')) return click(expression);
     if (expression.includes('location.pathname')) return destination(expression);
@@ -141,12 +169,14 @@ async function run(options: FakeOptions, ms = 3_000, admin = options.admin) {
 }
 
 it.each([
-  [false, '/_platform/account', '修改密码', ['账号设置']],
-  [true, '/_platform/admin', '账号管理', ['账号设置', '管理后台']],
+  [false, 'wide', [COLLAPSE, EXPAND], '/_platform/account', '修改密码', ['账号设置']],
+  [false, 'rail', [EXPAND, COLLAPSE], '/_platform/account', '修改密码', ['账号设置']],
+  [true, 'wide', [COLLAPSE, EXPAND], '/_platform/admin', '账号管理', ['账号设置', '管理后台']],
+  [true, 'rail', [EXPAND, COLLAPSE], '/_platform/admin', '账号管理', ['账号设置', '管理后台']],
 ])(
-  'accepts admin=%s wide and compact links, then follows the role link to %s',
-  async (admin, path, heading, labels) => {
-    const { result, state, root } = await run({ admin });
+  'accepts admin=%s starting %s: both modes and back, then follows the role link',
+  async (admin, initial, toggles, path, heading, labels) => {
+    const { result, state, root } = await run({ admin, initial });
 
     const evidence = await result;
 
@@ -156,16 +186,13 @@ it.each([
     );
     expect(evidence.wide.every((link) => link.contained && link.labelFits)).toBe(true);
     expect(evidence.rail.every((link) => link.contained && link.labelFits)).toBe(true);
+    expect(evidence.cordis).toBe('absent');
     expect(evidence.destination).toEqual(
       admin
         ? { path, search: '', heading, workbench: { href: '/', text: '返回工作台', visible: true } }
         : { path, search: '', heading },
     );
-    expect(state.clicks).toEqual([
-      'button[aria-label="收起侧边栏"]',
-      'button[aria-label="打开侧边栏"]',
-      `[data-dsh-team-platform-nav] a[href="${path}"]`,
-    ]);
+    expect(state.clicks).toEqual([...toggles, `[data-dsh-team-platform-nav] a[href="${path}"]`]);
     expect((await readdir(root)).sort()).toEqual([
       'entry-platform-nav-destination.png',
       'entry-platform-nav-rail.png',
@@ -174,24 +201,40 @@ it.each([
   },
 );
 
+it.each(['wide', 'rail'])(
+  'accepts a Cordis badge stacked above the entry (start %s)',
+  async (initial) => {
+    const { result } = await run({ admin: true, initial, cordis: 'stacked' });
+
+    await expect(result).resolves.toMatchObject({ cordis: 'stacked' });
+  },
+);
+
 it.each<[string, FakeOptions, boolean, RegExp]>([
-  ['an employee shown the console link', { admin: false, showAdminLink: true }, false, /nav-wide/],
-  ['an administrator page without the console link', { admin: false }, true, /nav-wide/],
+  ['an unknown initial sidebar mode', { admin: false, initial: 'drawer' }, false, /nav-initial/],
+  ['an employee shown the console link', { admin: false, showAdminLink: true }, false, /initial/],
+  ['an administrator page without the console link', { admin: false }, true, /nav-initial/],
   ['a rail that keeps text labels', { admin: false, railKeepsText: true }, false, /nav-rail/],
-  ['a hidden Cordis action', { admin: true, cordisVisible: false }, true, /nav-wide/],
-  ['a console error after navigation', { admin: false, consoleError: true }, false, /console/],
+  ['a misplaced Cordis badge', { admin: true, cordis: 'misplaced' }, true, /nav-initial/],
+  ['a footer cell the entry did not stack', { admin: true, unstackedCell: true }, true, /initial/],
   [
-    'an entry outside the footer slot anchor',
-    { admin: false, outsideSlot: true },
-    false,
+    'Cordis states that differ between modes',
+    { admin: true, railCordis: 'stacked' },
+    true,
+    /cordis-divergent/,
+  ],
+  ['a console error after navigation', { admin: false, consoleError: true }, false, /console/],
+  ['an entry outside the slot anchor', { admin: false, outsideSlot: true }, false, /nav-initial/],
+  ['a wide link outside the footer cell', { admin: true, overflowing: 'wide' }, true, /initial/],
+  ['a rail link outside the footer cell', { admin: true, overflowing: 'rail' }, true, /nav-rail/],
+  [
+    'a wide link outside the cell after starting in rail',
+    { admin: true, initial: 'rail', overflowing: 'wide' },
+    true,
     /nav-wide/,
   ],
-  ['a wide entry beside Cordis', { admin: true, besideCordis: 'wide' }, true, /nav-wide/],
-  ['a rail entry beside Cordis', { admin: true, besideCordis: 'rail' }, true, /nav-rail/],
-  ['a wide link outside the footer cell', { admin: true, overflowing: 'wide' }, true, /nav-wide/],
-  ['a rail link outside the footer cell', { admin: true, overflowing: 'rail' }, true, /nav-rail/],
-  ['a truncated wide label', { admin: true, truncatedLabel: true }, true, /nav-wide/],
-  ['a footer cell outside the viewport', { admin: false, cellOffscreen: true }, false, /nav-wide/],
+  ['a truncated wide label', { admin: true, truncatedLabel: true }, true, /nav-initial/],
+  ['a footer cell outside the viewport', { admin: false, cellOffscreen: true }, false, /initial/],
   ['a console page without 返回工作台', { admin: true, noWorkbench: true }, true, /destination/],
 ])('rejects %s', async (_name, options, admin, failure) => {
   const { result } = await run(options, 600, admin);

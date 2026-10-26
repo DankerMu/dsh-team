@@ -112,7 +112,7 @@ function expectEmployeeNavigation(observation: MappedHostAcceptResult): void {
   };
   expect(observation.platformNav?.wide).toEqual([{ ...account, text: '账号设置', label: null }]);
   expect(observation.platformNav?.rail).toEqual([{ ...account, text: '', label: '账号设置' }]);
-  expect(observation.platformNav?.cordisVisible).toBe(true);
+  expect(observation.platformNav?.cordis).toBe('absent');
   expect(observation.platformNav?.destination).toEqual({
     path: '/_platform/account',
     search: '',
