@@ -78,16 +78,6 @@ export function parseModelConfig(value: unknown, saved: boolean): ModelConfig {
   };
 }
 
-/** Mirrors the server's hasCompleteModelSettings over the fields this API exposes. */
-export function isCompleteModelConfig(config: ModelConfig): boolean {
-  return (
-    config.baseURL.trim() !== '' &&
-    config.apiKeyConfigured &&
-    config.models.length > 0 &&
-    config.defaultModel.trim() !== ''
-  );
-}
-
 const V1_HINT = 'OpenAI 兼容地址通常以 /v1 结尾';
 const CONNECTION_TEXT: Readonly<Record<string, string>> = {
   unconfigured: '请先保存完整的模型配置',

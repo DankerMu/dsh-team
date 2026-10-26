@@ -158,6 +158,38 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
 });
 
 it.each([
+  ['admin', true],
+  ['employee', false],
+] as const)(
+  'passes the current %s account role into the platform entry row',
+  async (role, admin) => {
+    const { input } = await fixture();
+    database.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, input.userId);
+
+    await startUserContainer(input);
+    const rows: unknown = JSON.parse(
+      await readFile(join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml'), 'utf8'),
+    );
+
+    expect(rows).toContainEqual({
+      insert: [
+        {
+          id: 'managed-permissions',
+          name: '/opt/dsh-team/permission-tiers/index.js',
+          disabled: false,
+        },
+        {
+          id: 'platform-nav',
+          name: '/opt/dsh-team/platform-nav/index.js',
+          disabled: false,
+          config: { admin },
+        },
+      ],
+    });
+  },
+);
+
+it.each([
   ['approval', 'approval'],
   ['auto', 'auto-review'],
   ['yolo', 'danger-full-access'],

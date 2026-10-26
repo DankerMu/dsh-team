@@ -1,5 +1,5 @@
-import type { FastifyPluginCallback, FastifyRequest } from 'fastify';
-import { getSessionUser, readSessionCookie } from '../auth/index.ts';
+import type { FastifyPluginCallback } from 'fastify';
+import { admitCurrentSession } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
 
@@ -51,27 +51,12 @@ export const instanceRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   service?: InstanceService;
 }> = (app, { database, service }, done) => {
-  function identity(request: FastifyRequest, renew: boolean) {
-    const token = readSessionCookie(request.headers.cookie);
-    return token === null ? null : getSessionUser(database, token, Date.now(), renew);
-  }
+  const identity = admitCurrentSession(app, database, 'Instance authentication storage failure');
   app.setErrorHandler((error, _request, reply) => {
     const code = error instanceof Error && 'statusCode' in error ? error.statusCode : undefined;
     if (code === 400 || code === 413 || code === 415) return reply.code(code).send(ERRORS[code]);
     app.log.error('Instance operation failed');
     return reply.code(500).send(ERRORS[500]);
-  });
-  app.addHook('onRequest', (request, reply, next) => {
-    try {
-      if (identity(request, true) === null) {
-        void reply.code(401).send(ERRORS[401]);
-        return;
-      }
-      next();
-    } catch {
-      app.log.error('Instance authentication storage failure');
-      void reply.code(500).send(ERRORS[500]);
-    }
   });
   app.get(
     '/_platform/api/instance',
@@ -79,7 +64,7 @@ export const instanceRoutes: FastifyPluginCallback<{
       schema: { summary: 'Read the current user instance state', response: RESPONSE },
     },
     (request, reply) => {
-      const user = identity(request, false);
+      const user = identity(request);
       if (user === null) return reply.code(401).send(ERRORS[401]);
       if (service === undefined) return reply.code(503).send(ERRORS[503]);
       return service.status(user.id);
@@ -115,7 +100,7 @@ export const instanceRoutes: FastifyPluginCallback<{
     },
     async (request, reply) => {
       // A held body cannot retain an identity revoked/disabled since onRequest admission.
-      const user = identity(request, false);
+      const user = identity(request);
       if (user === null) return reply.code(401).send(ERRORS[401]);
       if (service === undefined) return reply.code(503).send(ERRORS[503]);
       return service.start(user.id);

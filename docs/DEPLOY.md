@@ -41,7 +41,8 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
   -t dsh-team-user:local -f images/dsh-user/Dockerfile \
   --build-context zh-locale=plugins/zh-locale \
   --build-context permission-tiers=plugins/permission-tiers \
-  --build-context office-agents=plugins/office-agents images/dsh-user
+  --build-context office-agents=plugins/office-agents \
+  --build-context platform-nav=plugins/platform-nav images/dsh-user
 
 docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
   -t dsh-team-platform:local -f platform/Dockerfile .
@@ -49,7 +50,7 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
 docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:local
 ```
 
-记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略三个插件 named context。用户镜像和验证浏览器镜像均保留已固定基础镜像的 Debian 官方普通源及安全更新源，不再使用额外的源切换上下文；archive keyring、签名/有效期校验、包列表和构建期限保持不变，获取失败不得自动换源或关闭校验。
+记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设、侧栏平台入口插件和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略四个插件 named context。用户镜像和验证浏览器镜像均保留已固定基础镜像的 Debian 官方普通源及安全更新源，不再使用额外的源切换上下文；archive keyring、签名/有效期校验、包列表和构建期限保持不变，获取失败不得自动换源或关闭校验。
 
 ### 用户镜像基础层更新
 
@@ -127,9 +128,9 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 不要加 `-T`，不要把密码放在参数或环境变量里；按两次隐藏提示输入密码。创建成功后：
 
-1. 用对外地址访问 `/_platform/login`，管理员登录后进入 `/_platform/admin/models`。
+1. 用对外地址访问 `/_platform/login`。所有账号（含管理员）登录后都进入 `/`；模型未配置时停在等待页，管理员可点「去配置模型」进入 `/_platform/admin/models`。管理员进入工作台会启动自己的实例，占用一个同时运行名额。
 2. 填写真实模型服务 Base URL、密钥、模型名和默认模型，保存。密钥不回显；更新配置不热切换已运行实例，下次启动/管理员重启生效。
-3. 用独立员工账号访问 `/_platform/register` 注册，再登录。进入等待页后应启动自己的实例并进入原生工作台。
+3. 用独立员工账号访问 `/_platform/register` 注册，再登录。进入等待页后应启动自己的实例并进入原生工作台。工作台左侧栏底部有平台入口：所有人可见「账号设置」（`/_platform/account`，改密码/退出登录），实例启动时账号为管理员才显示「管理后台」（`/_platform/admin`）；两者都是同页链接，侧栏收起时为带名称的图标。角色变化在该用户下次启动实例后生效，后台权限仍由服务端校验。
 4. 检查原生页面及 WebSocket 连接；模型连通性另行用批准的真实任务验收。仅保存模型配置和打开工作台不代表推理成功。模型页的「测试默认模型连接」只用上次保存的地址、密钥和默认模型，按 DSH 相同规则（地址后接 `/chat/completions`，平台不补 `/v1`）发一次 `max_tokens: 1` 的非流式请求，20 秒超时。「连接成功」只证明从平台容器（Compose `default` 网络、不读 `HTTP(S)_PROXY`；TLS 信任 Node 内置 CA 库，不读镜像系统证书，与员工实例里的 DSH 相同）能用这组地址、密钥和模型完成请求，不证明员工实例的出网路径；`rejected`（「模型服务拒绝了请求」）也可能只是服务商拒绝该最小请求参数（例如要求 `max_completion_tokens` 的推理模型），不一定是配置错误。
 5. 在后台导航进入 `/_platform/admin/instances`，查看实例状态、最近启动/活动时间，展开出错实例的已保存安全日志。支持按邮箱本地筛选和显式刷新。重启与重置配置均需确认；重启提交不等于已就绪，重置不会自动启动。
 

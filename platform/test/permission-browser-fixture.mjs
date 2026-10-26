@@ -393,6 +393,7 @@ async function prepareWeb(lifecycle, name, report) {
   const composition = await collectComposition(lifecycle, `${name}-composition`);
   const generated = generateManagedConfig({
     ...composition,
+    admin: false,
     defaultPermissionTier: 'approval',
     modelSettings: {
       baseURL: 'http://127.0.0.1:9/v1',

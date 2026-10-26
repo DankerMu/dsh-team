@@ -12,13 +12,14 @@ The platform generator owns the complete catalog and reads the administrator's `
 
 ## Trusted delivery
 
-Build the existing image using all three narrow plugin named contexts:
+Build the existing image using all four narrow plugin named contexts:
 
 ```sh
 docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "zh-locale=$(pwd)/plugins/zh-locale" \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
-  --build-context "office-agents=$(pwd)/plugins/office-agents" images/dsh-user
+  --build-context "office-agents=$(pwd)/plugins/office-agents" \
+  --build-context "platform-nav=$(pwd)/plugins/platform-nav" images/dsh-user
 ```
 
 The image copies `package.json`, `index.js`, `review.js`, and `client.js` to root-owned, mode `0444` files under `/opt/dsh-team/permission-tiers/` and checks the exact DSH peer. No security implementation is loaded from an employee-writable profile. The generated overlay inserts `/opt/dsh-team/permission-tiers/index.js` and adds `managedPermissions` to required `agent-loop` injection. Missing/corrupt delivery prevents that execution service from starting. The existing absolute host row resolves its nearest package manifest, whose `./client` export and `dsh.client` declaration deliver the Web artifact; no additional host row is needed. Its package graph depends on Conversation and Session, and its runtime service dependency is `slots`. React is supplied by DSH's seeded runtime, not an external loader or a new production dependency. Security rows follow canonical locale and preset rows, so earlier employee/default/dependency patches cannot remove the protection. Roll back the image and managed overlay together; there is no compatibility switch or native Auto fallback.

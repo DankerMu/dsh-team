@@ -45,6 +45,7 @@ it('selects genuine native writer children while preserving tiers, cold identity
         (defaultPermissionTier, index) => {
           const generated = generateManagedConfig({
             ...composition,
+            admin: false,
             defaultPermissionTier,
             modelSettings: {
               baseURL: 'http://127.0.0.1:9/v1',
@@ -160,6 +161,7 @@ it('rejects a native writer that only copies a complete parent-authored notice',
       );
       const generated = generateManagedConfig({
         ...composition,
+        admin: false,
         defaultPermissionTier: 'yolo',
         modelSettings: {
           baseURL: 'http://127.0.0.1:9/v1',

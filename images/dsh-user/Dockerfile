@@ -77,6 +77,17 @@ RUN installed="$(dsh --version)" \
        exit 1; \
      fi \
   && chmod 0555 /opt/dsh-team /opt/dsh-team/permission-tiers
+# Platform navigation is delivered read-only beside the security plugin; the overlay enables it.
+COPY --from=platform-nav --chown=root:root --chmod=0444 \
+  package.json index.js client.js \
+  /opt/dsh-team/platform-nav/
+RUN installed="$(dsh --version)" \
+  && peer="$(node -p 'require("/opt/dsh-team/platform-nav/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
+  && if [ "$installed" != "$peer" ]; then \
+       echo "platform-nav DSH peer mismatch: installed=${installed} peer=${peer}" >&2; \
+       exit 1; \
+     fi \
+  && chmod 0555 /opt/dsh-team/platform-nav
 # Preserve the complete relative tree, including hidden entries, independently of live profiles.
 RUN mkdir -p /opt/dsh-team/profile-seed \
   && cp -a "${DSH_HOME}/profiles/." /opt/dsh-team/profile-seed/ \

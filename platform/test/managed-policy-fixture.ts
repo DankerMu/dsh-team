@@ -129,6 +129,7 @@ export const MANAGED_BOOT_ROSTER = [
   '@deepseek-ai/dsh-session-log-export',
   '@deepseek-ai/dsh-typert-registry',
   '@dsh-team/permission-tiers',
+  '@dsh-team/platform-nav',
   '@dsh-team/zh-locale',
 ] as const;
 const TAMPERED_LIVE = '- id: ui-settings-models\n  disabled: false\n';
@@ -361,6 +362,7 @@ async function publishOverlay(
   apiKeyConfigured: boolean,
 ): Promise<string> {
   const generated = generateManagedConfig({
+    admin: false,
     modelSettings: {
       baseURL: MANAGED_ADDRESS,
       apiKeyEnv: API_KEY_ENV,

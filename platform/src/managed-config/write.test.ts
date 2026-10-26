@@ -28,6 +28,7 @@ const SENTINEL_DOCUMENT = 'other-user-sentinel\n';
 const COLLISION_BYTES = 'preexisting-temp-sentinel\n';
 
 const INPUT: ManagedConfigInput = {
+  admin: false,
   modelSettings: {
     baseURL: 'http://127.0.0.1:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',

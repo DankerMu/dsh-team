@@ -514,6 +514,7 @@ export async function startUserContainer(
     stage = 'managed overlay';
     const generated = generateManagedConfig({
       ...observed,
+      admin: user.role === 'admin',
       defaultPermissionTier,
       modelSettings,
     });

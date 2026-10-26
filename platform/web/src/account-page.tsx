@@ -6,7 +6,6 @@ import { AuditPage } from './audit-page.tsx';
 import { ModelPage } from './model-page.tsx';
 import { RuntimePage } from './runtime-page.tsx';
 import { InstancePage } from './instance-page.tsx';
-import { MODEL_CONFIG_API, isCompleteModelConfig, parseModelConfig } from './model-config.ts';
 
 const LOGIN_FAILURE = '登录失败，请稍后重试。';
 const REGISTRATION_FAILURE = '注册失败，请稍后重试。';
@@ -45,45 +44,12 @@ async function rejectionMessage(response: Response, registration: boolean): Prom
   return LOGIN_FAILURE;
 }
 
-async function readJson(response: Response): Promise<unknown> {
+async function settleBody(response: Response): Promise<void> {
   try {
-    const body: unknown = await response.json();
-    return body;
+    await response.arrayBuffer();
   } catch {
-    // An unparseable success body is consumed; its content never selects a privileged path.
-    return undefined;
+    // The credential response already committed its session; a failed body read is not a login failure.
   }
-}
-
-async function administratorLanding(): Promise<string> {
-  try {
-    const response = await fetch(MODEL_CONFIG_API, {
-      method: 'GET',
-      credentials: 'same-origin',
-      redirect: 'error',
-    });
-    if (response.status !== 200) {
-      await response.arrayBuffer();
-      return '/_platform/admin';
-    }
-    const config = parseModelConfig(await response.json(), false);
-    return isCompleteModelConfig(config) ? '/_platform/admin' : '/_platform/admin/models';
-  } catch {
-    // The login already succeeded; a failed auxiliary read only selects the console.
-    return '/_platform/admin';
-  }
-}
-
-/** The single fixed same-origin destination for a successful credential response. */
-async function landing(response: Response, registration: boolean): Promise<string> {
-  const body = await readJson(response);
-  const admin =
-    !registration &&
-    typeof body === 'object' &&
-    body !== null &&
-    'role' in body &&
-    body.role === 'admin';
-  return admin ? administratorLanding() : '/';
 }
 
 export function AccountPage() {
@@ -126,9 +92,11 @@ function CredentialForm() {
           body: JSON.stringify({ email, password }),
         },
       );
-      if (response.status === (registration ? 201 : 200))
-        window.location.assign(await landing(response, registration));
-      else setError(await rejectionMessage(response, registration));
+      if (response.status === (registration ? 201 : 200)) {
+        // Consume the body first; every role enters the gateway through the fixed root.
+        await settleBody(response);
+        window.location.assign('/');
+      } else setError(await rejectionMessage(response, registration));
     } catch {
       // Network failures and malformed error bodies never expose raw diagnostics.
       setError(registration ? REGISTRATION_FAILURE : LOGIN_FAILURE);

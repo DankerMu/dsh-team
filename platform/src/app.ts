@@ -5,6 +5,7 @@ import type { Socket } from 'node:net';
 import { adminRoutes } from './admin/index.ts';
 import {
   createSourceAddressResolver,
+  currentSessionRoutes,
   installRequestGuard,
   loginRoutes,
   logoutRoutes,
@@ -110,6 +111,7 @@ export async function buildApp(
       cookieSecure: config.cookieSecure,
       resolveSourceAddress,
     });
+    await app.register(currentSessionRoutes, { database });
     await app.register(passwordChangeRoutes, {
       database,
       cookieSecure: config.cookieSecure,

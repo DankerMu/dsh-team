@@ -142,6 +142,53 @@ it('keeps the running model selector unchanged after save and activates the new 
           }
         };
 
+        const observeAdministrator = async () => {
+          const profile = await mkdtemp(join(tmpdir(), 'dsh-team-activation-admin-browser-'));
+          const receiptFile = join(profile, 'chrome.receipt.json');
+          try {
+            const observation = await acceptObservation({
+              origin,
+              cookie: admin.cookie,
+              expectedHost: host,
+              extraFlags: mappedFlags(host),
+              composition: true,
+              expectedRoster: MANAGED_BOOT_ROSTER,
+              runtime: isolatedBrowserRuntime(lifecycle.runId),
+              profile: join(profile, 'profile'),
+              receiptFile,
+              screenshot: join(evidence, 'administrator.png'),
+              browserMs: 30_000,
+              workspace: { available: true, workBound: true },
+              platformNav: 'admin',
+            });
+            await writeFile(
+              join(evidence, 'administrator.json'),
+              JSON.stringify(observation, null, 2),
+            );
+            expect(observation.accepted).toBe(true);
+            expect(observation.reload?.accepted).toBe(true);
+            expect(observation.consoleErrors).toEqual([]);
+            const link = { target: null, visible: true };
+            expect(observation.platformNav?.wide).toEqual([
+              { ...link, href: '/_platform/account', text: '账号设置', label: null },
+              { ...link, href: '/_platform/admin', text: '管理后台', label: null },
+            ]);
+            expect(observation.platformNav?.rail).toEqual([
+              { ...link, href: '/_platform/account', text: '', label: '账号设置' },
+              { ...link, href: '/_platform/admin', text: '', label: '管理后台' },
+            ]);
+            expect(observation.platformNav?.cordisVisible).toBe(true);
+            expect(observation.platformNav?.destination).toEqual({
+              path: '/_platform/admin',
+              search: '',
+              heading: '账号管理',
+            });
+          } finally {
+            await rescueChrome(receiptFile);
+            await rm(profile, { recursive: true, force: true });
+          }
+        };
+
         expect(await save(config.models, config.defaultModel, true)).toEqual({
           ...config,
           apiKeyConfigured: true,
@@ -197,6 +244,52 @@ it('keeps the running model selector unchanged after save and activates the new 
         expect(record(after.State).Running).toBe(true);
         expect(orderedMounts(after.Mounts)).toEqual(orderedMounts(before.Mounts));
         await observe('restarted', 'alpha,beta,gamma', 'gamma', await newSession());
+        const navigationRow = async (userId: string) => {
+          const text = await readFile(
+            join(lifecycle.overlayDirectory, `${userId}.patch.yml`),
+            'utf8',
+          );
+          const rows: unknown = JSON.parse(text);
+          if (!Array.isArray(rows)) throw new Error('Managed overlay is not a row list');
+          const inserts: unknown[] = rows.flatMap((row: unknown) => {
+            const inserted = record(row).insert;
+            if (!Array.isArray(inserted)) return [];
+            const entries: readonly unknown[] = inserted;
+            return entries;
+          });
+          return inserts.filter((row) => record(row).id === 'platform-nav');
+        };
+        expect(await navigationRow(employee.id)).toEqual([
+          {
+            id: 'platform-nav',
+            name: '/opt/dsh-team/platform-nav/index.js',
+            disabled: false,
+            config: { admin: false },
+          },
+        ]);
+        // The administrator's own instance carries the console flag from its launch-time role.
+        const adminOwnership = { 'dsh-team.user': admin.id };
+        await lifecycle.registerResourceAsync(
+          'container',
+          `dsh-team-u-${admin.id}`,
+          adminOwnership,
+        );
+        for (const name of [`dsh-team-home-${admin.id}`, `dsh-team-work-${admin.id}`])
+          await lifecycle.registerResourceAsync('volume', name, adminOwnership);
+        expect(await gateway.state(admin.cookie, true)).toEqual({
+          status: 'starting',
+          reason: 'starting',
+        });
+        await gateway.ready(admin.cookie);
+        expect(await navigationRow(admin.id)).toEqual([
+          {
+            id: 'platform-nav',
+            name: '/opt/dsh-team/platform-nav/index.js',
+            disabled: false,
+            config: { admin: true },
+          },
+        ]);
+        await observeAdministrator();
         return secondId;
       } finally {
         gateway.close();

@@ -148,7 +148,8 @@ else
   docker build -t "$image" -f "${repo_root}/images/dsh-user/Dockerfile" \
     --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
     --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
-    --build-context "office-agents=${repo_root}/plugins/office-agents" "${repo_root}/images/dsh-user"
+    --build-context "office-agents=${repo_root}/plugins/office-agents" \
+    --build-context "platform-nav=${repo_root}/plugins/platform-nav" "${repo_root}/images/dsh-user"
 fi
 write_custom_seccomp
 
