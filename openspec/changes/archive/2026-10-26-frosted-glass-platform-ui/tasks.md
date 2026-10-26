@@ -50,7 +50,7 @@ See `design.md`, "Must preserve".
 - [x] 3.2 `pnpm test:ui`, with existing assertions unmodified.
 - [x] 3.3 `pnpm test:integration`
 - [x] 3.4 The owner approves the screenshots.
-- [ ] 3.5 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy`; CI green.
+- [x] 3.5 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy`; CI green.
 
 ## Implementation deviations (owner-approved)
 
