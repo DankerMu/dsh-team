@@ -29,8 +29,8 @@ See `design.md`, "Must preserve".
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm check`
-- [ ] 2.2 Exact-head VPS `pnpm test:docker` with confirmed cleanup; report the share of labelled `submitted` rows with a known caller and the journal size; `pnpm test:deploy`; CI green.
+- [x] 2.1 `pnpm check`
+- [x] 2.2 Exact-head VPS `pnpm test:docker` with confirmed cleanup; report the share of labelled `submitted` rows with a known caller and the journal size; `pnpm test:deploy`; CI green.
 
 ## Non-goals
 
