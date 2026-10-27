@@ -15,3 +15,8 @@ export function trackedFromTimer(raw: DockerClient): Promise<DockerClient> {
   });
   return tracked.promise;
 }
+
+/** Forwards json like a fixture's deadline wrapper, so the wrapper is the only call-time frame. */
+export function forwardingJson(client: DockerClient): DockerClient {
+  return { ...client, json: (...args) => client.json(...args) };
+}

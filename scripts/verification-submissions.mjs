@@ -78,7 +78,7 @@ export function beginVerificationBrowserExec(authority) {
  * @returns {() => void}
  */
 export function beginVerificationSubmission(call) {
-  if (call !== undefined) requireSubmissionCall(call);
+  const label = call === undefined ? undefined : requireSubmissionCall(call);
   const path = process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
   if (!path) return () => undefined;
   const directory = dirname(dirname(path));
@@ -86,7 +86,7 @@ export function beginVerificationSubmission(call) {
     throw new Error('Verification submission journal path is not canonical');
   return submissionCompletion(
     directory,
-    reserveSubmission(directory, {}, undefined, call === undefined ? {} : { call }),
+    reserveSubmission(directory, {}, undefined, label === undefined ? {} : { call: label }),
   );
 }
 
@@ -119,7 +119,7 @@ function isDefinitiveRejection(method, endpoint, statusCode) {
  * @param {() => (() => void)} [submit]
  */
 export function trackVerificationDockerClient(client, DockerHttpError, submit) {
-  // Promise queues drop async stacks: the construction point is the fallback caller.
+  // Promise queues drop async stacks: the construction point can still name the test file.
   const constructionCaller = submit === undefined ? submissionCaller() : 'unknown';
   return {
     ...client,

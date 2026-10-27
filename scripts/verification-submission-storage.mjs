@@ -335,8 +335,9 @@ const HTTP_TEMPLATES = [...HTTP_OPERATIONS]
   });
 const CALLER = /^[a-z0-9][a-z0-9.-]*\.(?:ts|mts|mjs)$/;
 const CALLER_WRAPPERS = new Set(['docker-command.ts', 'docker-cleanup.ts']);
-// The anchored location is either `at name (<location>:line:column)` or `at <location>:line:column`.
-const FRAME = /^\s*at (?:[^(]*\()?(.+?):\d+:\d+\)?$/;
+// The anchored location is `at name (<location>:line:column)` or `at <location>:line:column`;
+// V8 prefixes a suspended async frame, including an anonymous one, with `async `.
+const FRAME = /^\s*at (?:async )?(?:[^(]*\()?(.+?):\d+:\d+\)?$/;
 
 function guarded(derive, fallback) {
   try {
@@ -419,35 +420,53 @@ export function cliSubmissionCall(args) {
   };
 }
 
+// An issuing test file wins, from the call-time stack first; fixture json wrappers dispatched
+// through promise queues otherwise hide the test file captured at construction.
+function preferredCaller(caller, constructionCaller) {
+  if (caller.endsWith('.test.ts') || !constructionCaller.endsWith('.test.ts'))
+    return caller === 'unknown' ? constructionCaller : caller;
+  return constructionCaller;
+}
+
 /**
  * @param {string} method
  * @param {string} path
- * @param {string} [constructionCaller] used when the call-time stack names no caller
+ * @param {string} [constructionCaller] the tracked client's construction-point caller
  * @returns {SubmissionCall}
  */
 export function httpSubmissionCall(method, path, constructionCaller = 'unknown') {
-  const caller = submissionCaller();
   return {
     transport: 'http',
     operation: guarded(() => httpOperation(method, path), 'other'),
-    caller: caller === 'unknown' ? constructionCaller : caller,
+    caller: preferredCaller(submissionCaller(), constructionCaller),
   };
 }
 
-/** @param {unknown} call */
+/**
+ * Validates exactly three own keys, then their values read once into a fresh plain label, so
+ * an accessor or inherited `toJSON` cannot change what is serialized after validation.
+ * @param {unknown} call
+ * @returns {SubmissionCall}
+ */
 export function requireSubmissionCall(call) {
+  const label =
+    typeof call === 'object' &&
+    call !== null &&
+    Object.keys(call).sort().join(',') === 'caller,operation,transport'
+      ? { transport: call.transport, operation: call.operation, caller: call.caller }
+      : null;
   const operations =
-    call?.transport === 'cli'
+    label?.transport === 'cli'
       ? CLI_OPERATIONS
-      : call?.transport === 'http'
+      : label?.transport === 'http'
         ? HTTP_OPERATIONS
         : null;
   if (
     operations === null ||
-    Object.keys(call).sort().join(',') !== 'caller,operation,transport' ||
-    !operations.has(call.operation) ||
-    typeof call.caller !== 'string' ||
-    (call.caller !== 'unknown' && !CALLER.test(call.caller))
+    !operations.has(label.operation) ||
+    typeof label.caller !== 'string' ||
+    (label.caller !== 'unknown' && !CALLER.test(label.caller))
   )
     throw new Error('Verification submission call label malformed');
+  return label;
 }

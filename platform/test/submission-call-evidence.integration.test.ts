@@ -3,7 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, onTestFinished } from 'vitest';
 import { runDockerCommand } from '../../scripts/docker-command.mjs';
 import {
   readVerificationSubmissionsForCleanup,
@@ -18,7 +18,7 @@ import {
   trackVerificationDockerClient,
 } from '../../scripts/verification-submissions.mjs';
 import { DockerHttpError, type DockerClient } from '../src/orchestrator/index.ts';
-import { awaitedMutation, trackedFromTimer } from './submission-call-fixture.ts';
+import { awaitedMutation, forwardingJson, trackedFromTimer } from './submission-call-fixture.ts';
 import { freshSubmissionAssessment, ordinarySubmission } from './trusted-docker-audit-fixture.ts';
 
 const SELF = 'submission-call-evidence.integration.test.ts';
@@ -26,18 +26,23 @@ const FIXTURE = 'submission-call-fixture.ts';
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const KILL = { transport: 'http', operation: 'POST /containers/{id}/kill', caller: SELF };
 
-async function withJournal(run: (directory: string, journal: string) => Promise<void> | void) {
+/** Restored when the test finishes, so no named helper of this file stays on a later stack. */
+async function openJournal(): Promise<{ directory: string; journal: string }> {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'dsh-team-call-')));
   const previous = process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
-  try {
-    initializeVerificationSubmissions(directory);
-    process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = join(directory, SUBMISSION_JOURNAL);
-    await run(directory, join(directory, SUBMISSION_JOURNAL));
-  } finally {
+  onTestFinished(async () => {
     if (previous === undefined) delete process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
     else process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = previous;
     await rm(directory, { recursive: true, force: true });
-  }
+  });
+  initializeVerificationSubmissions(directory);
+  process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = join(directory, SUBMISSION_JOURNAL);
+  return { directory, journal: join(directory, SUBMISSION_JOURNAL) };
+}
+
+async function withJournal(run: (directory: string, journal: string) => Promise<void> | void) {
+  const { directory, journal } = await openJournal();
+  await run(directory, journal);
 }
 
 function rows(journal: string): Record<string, unknown>[] {
@@ -123,6 +128,21 @@ it('labels a wrapper-only CLI process caller as unknown', async () => {
   });
 });
 
+it('writes only the validated own label values, not an inherited serialization', async () => {
+  await withJournal((_directory, journal) => {
+    const forged = { ...KILL, caller: 'forged.test.ts', args: ['dsh-team-secret'] };
+    const call = Object.assign(Object.create({ toJSON: () => forged }) as object, {
+      ...KILL,
+      transport: 'http' as const,
+    });
+
+    beginVerificationSubmission(call);
+    expect(rows(journal)).toEqual([
+      { version: 1, id: expect.stringMatching(ID) as unknown, state: 'submitted', call: KILL },
+    ]);
+  });
+});
+
 it('omits the label from a direct no-argument submission', async () => {
   await withJournal((_directory, journal) => {
     beginVerificationSubmission()();
@@ -156,10 +176,41 @@ it('names the awaiting test through an awaited fixture chain, not the constructi
   });
 });
 
+it('names an anonymous awaiting test callback with no named helper of this file between', async () => {
+  const { directory, journal } = await openJournal();
+  const client = await trackedFromTimer(engine(() => Promise.reject(new DockerHttpError(409))));
+
+  // Vitest's source-map formatter drops V8's `async` frame prefix; observe V8's own format.
+  const prepare = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace');
+  Reflect.deleteProperty(Error, 'prepareStackTrace');
+  let failure: unknown;
+  try {
+    await awaitedMutation(client, '/containers/abc123/kill');
+  } catch (error) {
+    failure = error;
+  } finally {
+    if (prepare !== undefined) Object.defineProperty(Error, 'prepareStackTrace', prepare);
+  }
+  expect(failure).toMatchObject({ statusCode: 409 });
+
+  expect(rows(journal)).toEqual([
+    { version: 1, id: expect.stringMatching(ID) as unknown, state: 'submitted', call: KILL },
+  ]);
+  expect(freshSubmissionAssessment(directory)).toBe('{"state":"unconfirmed"}\n');
+});
+
+const tracked = (raw: DockerClient) => trackVerificationDockerClient(raw, DockerHttpError);
+
 it.each([
-  ['a timer-constructed client', FIXTURE, true],
-  ['a test-constructed client', SELF, false],
-])('falls back to the construction point of %s inside a queue', async (_name, caller, timer) => {
+  ['a timer-constructed client', FIXTURE, trackedFromTimer],
+  ['a test-constructed client', SELF, tracked],
+  // A fixture json wrapper is the only call-time frame; the test file constructed the client.
+  [
+    'a test-constructed client behind a fixture wrapper',
+    SELF,
+    (raw: DockerClient) => forwardingJson(tracked(raw)),
+  ],
+])('falls back to the construction point of %s inside a queue', async (_name, caller, build) => {
   await withJournal(async (_directory, journal) => {
     const dispatched = Promise.withResolvers<undefined>();
     const raw = engine(() => {
@@ -167,9 +218,7 @@ it.each([
       // The transport never answers: the submission stays unresolved by construction.
       return new Promise<never>(() => undefined);
     });
-    const client = timer
-      ? await trackedFromTimer(raw)
-      : trackVerificationDockerClient(raw, DockerHttpError);
+    const client = await build(raw);
 
     // The event loop applies the bound method directly: no test frame is on its stack.
     setImmediate(Reflect.apply, client.json.bind(client), undefined, [

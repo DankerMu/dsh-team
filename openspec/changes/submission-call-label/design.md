@@ -22,7 +22,7 @@
 
 ## Governing invariant
 
-Every unresolved shared-Engine submission from the test process's CLI wrapper or tracked client names its operation from a fixed vocabulary and, when the stack or construction point allows, the issuing test file; deployed-observer submissions stay attributable through their observer generation only; the evidence never contains anything outside fixed vocabularies and test file basenames.
+Every unresolved shared-Engine submission from the test process's CLI wrapper or tracked client names its operation from a fixed vocabulary and, when the stack or construction point allows, the issuing test file; deployed-observer submissions stay attributable through their observer generation only; the evidence never contains anything outside fixed vocabularies and `platform/test/` basenames.
 
 ## Sibling surfaces
 
@@ -51,4 +51,4 @@ Every unresolved shared-Engine submission from the test process's CLI wrapper or
 1. No path from arguments, endpoints or stacks to anything outside the closed vocabularies (resource names that look like verbs, IDs in endpoints, absolute paths in stacks).
 2. Parser strictness: old rows valid, new rows exact, anything else rejected; `browserExec` rows untouched.
 3. Producers publish the label before dispatch and never let label derivation throw past the existing publication order (a derivation failure must fall back to `other`/`unknown`, not skip the submission).
-4. Caller derivation: stack limit raised locally and restored (vitest lowers `Error.stackTraceLimit`; pattern in `platform/test/permission-tiers-revocation-host.mjs:66-72`), `file://` and plain path frames both handled, the repository root anchored from the module's own location, construction-point fallback for the tracked client.
+4. Caller derivation: stack limit raised locally and restored (vitest lowers `Error.stackTraceLimit`; pattern in `platform/test/permission-tiers-revocation-host.mjs:66-72`), `file://`, plain path and anonymous `async` frames all handled, the repository root anchored from the module's own location; for the tracked client a construction-point `*.test.ts` caller is preferred over a call-time non-test module, and the construction point is the fallback when the call-time stack names none.

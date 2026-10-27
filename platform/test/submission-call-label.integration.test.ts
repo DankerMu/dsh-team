@@ -176,6 +176,14 @@ it('prefers the first test file over earlier fixtures and accepts plain and file
   ).toBe('volumes-fixture.ts');
 });
 
+it('accepts anonymous suspended async frames in plain and file URL forms', () => {
+  const fixture = frame(join(TESTS, 'submission-call-fixture.ts'), 'awaitedMutation');
+  const path = join(TESTS, SELF);
+  expect(submissionCallerFromStack(stack(fixture, `    at async ${path}:5:6`))).toBe(SELF);
+  const url = pathToFileURL(path).href;
+  expect(submissionCallerFromStack(stack(fixture, `    at async ${url}:5:6`))).toBe(SELF);
+});
+
 it('raises the stack limit locally and restores it', () => {
   Error.stackTraceLimit = 1;
   expect(submissionCaller()).toBe(SELF);
@@ -206,6 +214,23 @@ it('falls back to unknown when the stack cannot be formatted and restores the li
 
 it('prefers a call-time caller over the construction-point fallback', () => {
   expect(httpSubmissionCall('POST', '/volumes/create', 'volumes-fixture.ts').caller).toBe(SELF);
+});
+
+it('prefers a construction-point test file over a call-time fixture, never a fixture over one', () => {
+  const callTime = (name: string) => {
+    Error.prepareStackTrace = () => stack(frame(join(TESTS, name)));
+  };
+  callTime('volumes-fixture.ts');
+  expect(httpSubmissionCall('POST', '/volumes/create', 'x.test.ts').caller).toBe('x.test.ts');
+  expect(httpSubmissionCall('POST', '/volumes/create', 'unknown').caller).toBe(
+    'volumes-fixture.ts',
+  );
+  callTime('ci-vps-worker.ts');
+  expect(httpSubmissionCall('POST', '/volumes/create', 'volumes-fixture.ts').caller).toBe(
+    'ci-vps-worker.ts',
+  );
+  callTime('y.test.ts');
+  expect(httpSubmissionCall('POST', '/volumes/create', 'x.test.ts').caller).toBe('y.test.ts');
 });
 
 it.each([

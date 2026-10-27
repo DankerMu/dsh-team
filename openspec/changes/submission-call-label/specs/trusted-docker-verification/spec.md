@@ -2,7 +2,7 @@
 
 ### Requirement: Unresolved submissions identify their operation and test without sensitive detail
 
-Every shared-Engine submission published by the test process's Docker CLI wrapper or the tracked Engine HTTP client's default submission SHALL record, in its journal `submitted` row, a `call` label made only of a transport (`cli` or `http`), an operation from a fixed vocabulary (a CLI verb and known group subcommand, or an HTTP method with an endpoint template whose resource segments are `{id}`; otherwise `other`), and the basename of the issuing test file under `platform/test/` when the call-time stack or, for the tracked client, its construction point identifies one (otherwise `unknown`). Deployed-observer per-request records SHALL remain limited to opaque correlation identities and fixed states. The label SHALL NOT contain arguments, resource names or identifiers, query strings, paths, environment values or credentials. The journal parser SHALL accept rows with a valid label and rows written before the label existed, and SHALL reject any other label shape. Settlement and cleanup verdicts SHALL be unchanged.
+Every shared-Engine submission published by the test process's Docker CLI wrapper or the tracked Engine HTTP client's default submission SHALL record, in its journal `submitted` row, a `call` label made only of a transport (`cli` or `http`), an operation from a fixed vocabulary (a CLI verb and known group subcommand, or an HTTP method with an endpoint template whose resource segments are `{id}`; otherwise `other`), and a caller basename taken, in order, from the issuing `*.test.ts` file under `platform/test/` on the call-time stack, else (for the tracked client) at its construction point; else the first non-wrapper `platform/test/` module on the call-time stack, else (for the tracked client) at its construction point; otherwise `unknown`. Deployed-observer per-request records SHALL remain limited to opaque correlation identities and fixed states. The label SHALL NOT contain arguments, resource names or identifiers, query strings, paths, environment values or credentials. The journal parser SHALL accept rows with a valid label and rows written before the label existed, and SHALL reject any other label shape. Settlement and cleanup verdicts SHALL be unchanged.
 
 #### Scenario: An unresolved HTTP mutation is attributable
 
@@ -12,7 +12,7 @@ Every shared-Engine submission published by the test process's Docker CLI wrappe
 #### Scenario: Labels never carry sensitive detail
 
 - **WHEN** a CLI or HTTP mutation includes resource names, IDs, query parameters or arbitrary arguments
-- **THEN** the recorded label contains only the fixed-vocabulary operation and the test file basename
+- **THEN** the recorded label contains only the fixed-vocabulary operation and the caller basename (or `unknown`)
 
 #### Scenario: Older journals remain readable
 
