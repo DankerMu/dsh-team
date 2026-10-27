@@ -43,7 +43,7 @@ See `design.md`, "Must preserve".
 
 - [x] 3.1 `pnpm check`
 - [x] 3.2 `pnpm test:ui` and `pnpm contract:check`
-- [ ] 3.3 Exact-head VPS `pnpm test:docker` with the real DSH sidebar case, the exact roster and the image artifact metadata, plus `pnpm test:deploy`; CI green.
+- [x] 3.3 Exact-head VPS `pnpm test:docker` with the real DSH sidebar case, the exact roster and the image artifact metadata, plus `pnpm test:deploy`; CI green.
 
 ## Non-goals
 

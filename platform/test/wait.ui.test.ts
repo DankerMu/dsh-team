@@ -108,9 +108,13 @@ test('built waiting page serially observes startup and offers only explicit term
           active--;
         });
 
-        const waiting = await page.goto(`${baseUrl}/_platform/wait`);
+        const [waiting] = await Promise.all([
+          page.goto(`${baseUrl}/_platform/wait`),
+          page.waitForResponse(sessionUrl),
+        ]);
         expect(waiting?.status()).toBe(200);
         await expect(page.getByRole('heading', { name: '等待工作台' })).toBeVisible();
+        await expect(page.getByRole('link', { name: '管理后台' })).toHaveCount(0);
         await expect(page.getByRole('status')).toHaveText('启动中');
         await expect(page.getByRole('button', { name: '重试' })).toBeDisabled();
         await screenshot('wait-starting');
@@ -135,13 +139,17 @@ test('built waiting page serially observes startup and offers only explicit term
           ['管理员尚未完成模型配置', 'wait-unconfigured'],
           ['启动失败，请重试。', 'wait-error'],
         ] as const) {
-          const entry = await page.goto(`${baseUrl}/_platform/wait`);
+          const [entry] = await Promise.all([
+            page.goto(`${baseUrl}/_platform/wait`),
+            page.waitForResponse(sessionUrl),
+          ]);
           expect(entry?.status()).toBe(200);
           await expect(page.getByRole('alert')).toHaveText(message);
           await expect(page.getByRole('button', { name: '重试' })).toBeEnabled();
           await screenshot(name);
-          // The real identity read answers employee: the administrator link never appears.
+          // The real identity read answers employee: no administrator link ever appears.
           await expect(page.getByRole('link', { name: '去配置模型' })).toHaveCount(0);
+          await expect(page.getByRole('link', { name: '管理后台' })).toHaveCount(0);
           const count = calls.length;
           await page.waitForTimeout(1200);
           expect(calls).toHaveLength(count);
@@ -173,20 +181,24 @@ test('built waiting page serially observes startup and offers only explicit term
         ]);
         expect(maxActive).toBe(1);
         expect(active).toBe(0);
+        // Each of the four page entries issues its start POST, then its one identity GET.
         expect(actionRequests).toEqual([
           { url: loginUrl, method: 'POST' },
           { url: startUrl, method: 'POST' },
+          { url: sessionUrl, method: 'GET' },
           { url: statusUrl, method: 'GET' },
           { url: statusUrl, method: 'GET' },
           { url: startUrl, method: 'POST' },
+          { url: sessionUrl, method: 'GET' },
+          { url: startUrl, method: 'POST' },
+          { url: sessionUrl, method: 'GET' },
           { url: startUrl, method: 'POST' },
           { url: sessionUrl, method: 'GET' },
           { url: startUrl, method: 'POST' },
           { url: startUrl, method: 'POST' },
-          { url: startUrl, method: 'POST' },
         ]);
         expect(actionResponses.map(({ status }) => status)).toEqual([
-          200, 200, 200, 200, 200, 200, 200, 200, 200, 200,
+          200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200,
         ]);
         expect(otherMutations).toEqual([]);
         expect(assets.some(({ path, status }) => path.endsWith('.js') && status === 200)).toBe(
@@ -248,7 +260,9 @@ test('built waiting page offers an administrator the model configuration link on
     expect(waiting?.status()).toBe(200);
     await expect(page.getByRole('alert')).toHaveText('管理员尚未完成模型配置');
     const link = page.getByRole('link', { name: '去配置模型' });
+    const adminLink = page.getByRole('link', { name: '管理后台' });
     await expect(link).toHaveAttribute('href', '/_platform/admin/models');
+    await expect(adminLink).toHaveAttribute('href', '/_platform/admin');
     await expect(page.getByRole('link', { name: '账号设置' })).toBeVisible();
     await expectViewportLayout(page, observed.screenshot, 'wait-admin-unconfigured', async () => {
       await expect(link).toBeVisible();
@@ -256,14 +270,76 @@ test('built waiting page offers an administrator the model configuration link on
     await page.getByRole('button', { name: '重试' }).click();
     await expect(page.getByRole('alert')).toHaveText('当前使用人数已满，请稍后再试');
     await expect(link).toHaveCount(0);
+    await expect(adminLink).toBeVisible();
     await page.getByRole('button', { name: '重试' }).click();
     await expect(link).toBeVisible();
+    await expect(adminLink).toBeVisible();
 
     await link.click();
 
     await expect(page).toHaveURL(`${baseUrl}/_platform/admin/models`);
     await expect(page.getByRole('heading', { name: '模型配置', exact: true })).toBeVisible();
     await observed.screenshot('wait-admin-configure-models');
+    expect(
+      observed.actionRequests.filter(({ url }) => url === sessionUrl).map(({ method }) => method),
+    ).toEqual(['GET']);
+    expect(
+      observed.actionResponses.filter(({ url }) => url === sessionUrl).map(({ status }) => status),
+    ).toEqual([200]);
+    expect(admittedUsers).toHaveLength(1);
+    await expectNoBrowserStorage(page);
+    observed.expectHealthy([]);
+  });
+});
+
+test('built waiting page lets an administrator in the full state open the console', async ({
+  page,
+  playwright,
+}, testInfo) => {
+  await withAccountUi(playwright, async ({ baseUrl, database, seed, admittedUsers }) => {
+    const loginUrl = `${baseUrl}/_platform/api/login`;
+    const startUrl = `${baseUrl}/_platform/api/instance/start`;
+    const sessionUrl = `${baseUrl}/_platform/api/session`;
+    const usersUrl = `${baseUrl}/_platform/api/admin/users?page=1&pageSize=20`;
+    const email = 'wait-full-admin@example.com';
+    const password = 'wait-full-admin-browser-password';
+    const registered = await seed.post('/_platform/api/register', { data: { email, password } });
+    expect(registered.status()).toBe(201);
+    database.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(email);
+    const observed = observeAccountUi(page, testInfo, baseUrl, [
+      loginUrl,
+      startUrl,
+      sessionUrl,
+      usersUrl,
+    ]);
+    // Only the start API is substituted; identity and console reads are real platform routes.
+    await page.route(startUrl, async (route) => {
+      await route.fulfill({ status: 200, json: { status: 'full', reason: 'full' } });
+    });
+    const login = await page.goto(`${baseUrl}/_platform/login`);
+    expect(login?.status()).toBe(200);
+    await page.getByLabel('邮箱').fill(email);
+    await page.getByLabel('密码').fill(password);
+    await page.getByRole('button', { name: '登录', exact: true }).click();
+    await expect(page).toHaveURL(`${baseUrl}/`);
+
+    const waiting = await page.goto(`${baseUrl}/_platform/wait`);
+    expect(waiting?.status()).toBe(200);
+    await expect(page.getByRole('alert')).toHaveText('当前使用人数已满，请稍后再试');
+    const adminLink = page.getByRole('link', { name: '管理后台' });
+    await expect(adminLink).toHaveAttribute('href', '/_platform/admin');
+    await expect(page.getByRole('link', { name: '去配置模型' })).toHaveCount(0);
+    await expectViewportLayout(page, observed.screenshot, 'wait-admin-full', async () => {
+      await expect(adminLink).toBeVisible();
+    });
+
+    const [users] = await Promise.all([page.waitForResponse(usersUrl), adminLink.click()]);
+
+    expect(users.status()).toBe(200);
+    await expect(page).toHaveURL(`${baseUrl}/_platform/admin`);
+    await expect(page.getByRole('heading', { name: '账号管理', exact: true })).toBeVisible();
+    await expect(page.getByText(email, { exact: true })).toBeVisible();
+    await observed.screenshot('wait-admin-full-console');
     expect(
       observed.actionRequests.filter(({ url }) => url === sessionUrl).map(({ method }) => method),
     ).toEqual(['GET']);
