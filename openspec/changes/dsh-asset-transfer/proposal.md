@@ -7,7 +7,7 @@ The same investigation found that DSH sends no `Cache-Control`, `ETag` or `Last-
 ## What Changes
 
 - The managed overlay's `webserver` row gains `compression: 'gzip'`; level and threshold stay at DSH's defaults (1 and 1024 bytes). No DSH source change (D1).
-- No gateway change: it already forwards `Accept-Encoding` and returns `Content-Encoding`, stripping only hop-by-hop headers (`platform/src/gateway/http.ts:12-22`). DSH's own filter leaves `text/event-stream` and `Content-Range` responses uncompressed.
+- No gateway change for gzip: the gateway already forwards `Accept-Encoding` and returns `Content-Encoding`, stripping only hop-by-hop headers (`platform/src/gateway/http.ts:12-22`). DSH's own filter leaves `text/event-stream` and `Content-Range` responses uncompressed.
 - Docker evidence through the real platform gateway: compressed large script with byte-identical decoded body, an uncompressed SSE stream that still delivers its first frame.
 - **Gateway (#370).** `forwardHttp` adds `Cache-Control: private, max-age=31536000, immutable` to a forwarded response only when the method is GET or HEAD, the request has no query string, the path is a Vite-hashed DSH asset (`/assets/[<lowercase dir>/]<name>-<8 base64url chars>.(js|css|woff2|woff|ttf)`), the upstream status is 200 and the upstream sent no `Cache-Control`. Everything else is forwarded exactly as before. `private` because these responses sit behind the platform session.
 - Docker evidence through the real platform gateway for both behaviours.
