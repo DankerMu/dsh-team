@@ -1,6 +1,7 @@
 export { hashPassword, verifyPassword, PasswordPolicyError } from './password.ts';
 export { createSession, deleteUserSessions, getSessionUser, validateSession } from './session.ts';
 export { readSessionCookie } from './session-cookie.ts';
+export { installSessionHeal, sessionHealCookies } from './session-heal.ts';
 export { registrationRoutes } from './registration.ts';
 export { loginRoutes } from './login.ts';
 export { logoutRoutes } from './logout.ts';

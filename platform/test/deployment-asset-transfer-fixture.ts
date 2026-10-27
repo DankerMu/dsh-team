@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { request } from 'node:http';
-import type { IncomingMessage } from 'node:http';
+import type { IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { buffer } from 'node:stream/consumers';
 import { gunzipSync } from 'node:zlib';
 import { expect } from 'vitest';
@@ -8,6 +8,15 @@ import type { Deployment } from './deployment-fixture.ts';
 
 const DSH_IMMUTABLE = 'public, max-age=31536000, immutable';
 const GATEWAY_IMMUTABLE = 'private, max-age=31536000, immutable';
+
+// The gateway keys every workbench response by session; DSH's own Vary tokens are not asserted here.
+function expectSessionVary(headers: IncomingHttpHeaders, label: string): void {
+  const tokens = (headers.vary ?? '').split(',').map((token) => token.trim().toLowerCase());
+  expect(
+    tokens.filter((token) => token === 'cookie'),
+    `${label} Vary`,
+  ).toHaveLength(1);
+}
 
 // fetch adds Accept-Encoding itself and decodes silently; node:http keeps the actual wire bytes.
 function open(
@@ -43,6 +52,7 @@ async function firstEventFrame(deployment: Deployment, cookie: string): Promise<
     expect(events.headers['content-type']).toBe('text/event-stream');
     expect(events.headers['content-encoding']).toBeUndefined();
     expect(events.headers['cache-control']).toBe('no-cache');
+    expectSessionVary(events.headers, '/plugins/events');
     const frame = Promise.withResolvers<string>();
     let text = '';
     events.on('data', (chunk: Buffer) => {
@@ -65,6 +75,7 @@ export async function verifyAssetTransfer(deployment: Deployment, cookie: string
   const page = await receive(deployment, cookie, '/');
   expect(page.headers['content-encoding']).toBeUndefined();
   expect(page.headers['cache-control']).toBeUndefined();
+  expectSessionVary(page.headers, '/');
   const html = page.body.toString();
   const combos = [...html.matchAll(/(?:src|href)="(plugins\/\?\?[^"]+)"/g)].map(
     (match) => `/${String(match[1]).replaceAll('&amp;', '&')}`,
@@ -75,11 +86,13 @@ export async function verifyAssetTransfer(deployment: Deployment, cookie: string
     const identity = await receive(deployment, cookie, path, 'identity');
     expect(identity.headers['content-encoding']).toBeUndefined();
     expect(identity.headers['cache-control']).toBe(DSH_IMMUTABLE);
+    expectSessionVary(identity.headers, path);
     if (identity.body.length > largest.body.length) largest = { path, body: identity.body };
   }
   const gzip = await receive(deployment, cookie, largest.path, 'gzip');
   expect(gzip.headers['content-encoding']).toBe('gzip');
   expect(gzip.headers['cache-control']).toBe(DSH_IMMUTABLE);
+  expectSessionVary(gzip.headers, `${largest.path} gzip`);
   expect(gzip.body.length).toBeLessThan(largest.body.length);
   expect(gunzipSync(gzip.body).equals(largest.body), 'Decoded combined script bytes').toBe(true);
   const absent = await receive(deployment, cookie, largest.path);
@@ -90,6 +103,7 @@ export async function verifyAssetTransfer(deployment: Deployment, cookie: string
   if (entry === undefined) throw new Error('Missing hashed DSH entry script');
   const script = await receive(deployment, cookie, `/${entry}`, 'gzip');
   expect(script.headers['cache-control']).toBe(GATEWAY_IMMUTABLE);
+  expectSessionVary(script.headers, entry);
   expect(script.body.length).toBeGreaterThan(0);
   expect(await firstEventFrame(deployment, cookie)).toMatchObject({ type: 'graph' });
 }

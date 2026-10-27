@@ -1,4 +1,5 @@
 import { useRef, useState, type FormEvent } from 'react';
+import { clearOriginState } from './origin-state.ts';
 
 const PASSWORD_FAILURE = '修改密码失败，请稍后重试。';
 const LOGOUT_FAILURE = '退出登录失败，请稍后重试。';
@@ -20,6 +21,20 @@ async function rejectionMessage(response: Response, action: Action): Promise<str
     return '当前密码错误，请重试。';
   }
   return SESSION_EXPIRED;
+}
+
+// The logout is committed: neither a body read nor clearing failure may keep this page.
+async function leaveSession(response: Response): Promise<void> {
+  try {
+    await response.arrayBuffer();
+  } catch {
+    // An unreadable empty 204 body does not undo the committed logout.
+  }
+  try {
+    await clearOriginState();
+  } catch {
+    // Clearing is best effort; navigation must still happen exactly once.
+  }
 }
 
 export function PasswordPage() {
@@ -52,6 +67,7 @@ export function PasswordPage() {
       if (response.status !== 204) {
         setError(await rejectionMessage(response, action));
       } else if (action === 'logout') {
+        await leaveSession(response);
         window.location.assign('/_platform/login');
       } else {
         // The backend rotates the HttpOnly session; this browser remains authenticated.

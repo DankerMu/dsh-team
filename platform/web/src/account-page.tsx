@@ -6,6 +6,7 @@ import { AuditPage } from './audit-page.tsx';
 import { ModelPage } from './model-page.tsx';
 import { RuntimePage } from './runtime-page.tsx';
 import { InstancePage } from './instance-page.tsx';
+import { clearOriginState } from './origin-state.ts';
 
 const LOGIN_FAILURE = '登录失败，请稍后重试。';
 const REGISTRATION_FAILURE = '注册失败，请稍后重试。';
@@ -52,6 +53,14 @@ async function settleBody(response: Response): Promise<void> {
   }
 }
 
+async function clearBeforeEntry(): Promise<void> {
+  try {
+    await clearOriginState();
+  } catch {
+    // Clearing is best effort; the committed session change must still navigate exactly once.
+  }
+}
+
 export function AccountPage() {
   if (window.location.pathname === '/_platform/admin') return <AdminPage />;
   if (window.location.pathname === '/_platform/admin/instances') return <InstancePage />;
@@ -93,8 +102,9 @@ function CredentialForm() {
         },
       );
       if (response.status === (registration ? 201 : 200)) {
-        // Consume the body first; every role enters the gateway through the fixed root.
+        // Consume the body, clear the previous session's origin state, then enter the fixed root.
         await settleBody(response);
+        await clearBeforeEntry();
         window.location.assign('/');
       } else setError(await rejectionMessage(response, registration));
     } catch {

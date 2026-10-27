@@ -23,28 +23,30 @@
 
 ### Requirement: 工作台缓存按平台会话区分
 
-员工能完全控制自己实例返回的路径、内容和缓存头，所有实例又共用平台这一个浏览器 origin。因此平台网关 MUST 在每个转发的工作台 HTTP 响应上把 `Cookie` 和 `Service-Worker` 合并进 `Vary`，不论状态码、内容类型和上游缓存头：
+员工能完全控制自己实例返回的路径、内容和缓存头，所有实例又共用平台这一个浏览器 origin。因此平台网关 MUST 在每个转发的工作台 HTTP 响应上把 `Cookie` 合并进 `Vary`，不论状态码、内容类型和上游缓存头：
 
-- 上游没有 `Vary` 时，设为 `Cookie, Service-Worker`；
-- 已有 `Vary` 时，保留原值，并按这个顺序追加其中缺少的 token（大小写不敏感）；
-- 含 `*` 时，原样保留。
+- 上游没有 `Vary` 时，设为 `Cookie`；
+- 已有 `Vary` 且不含 `cookie`（大小写不敏感）时，保留原值并追加 `, Cookie`；
+- 已含 `cookie` 或含 `*` 时，原样保留。
 
 WebSocket 升级、`/_platform` 下的平台响应，以及网关自己生成的跳转和 503，MUST NOT 因此改变。
 
+浏览器渲染进程内的内存缓存不按 `Cookie` 区分。只要加载过上一位用户页面的渲染进程还活着并被复用，这项保证就不覆盖。这是记录在部署文档中的剩余风险，与「上一位用户的页面仍在运行」属于同一条操作规则。
+
 #### Scenario: 上一位用户的长期缓存不会给下一位用户
 
-- **WHEN** 员工 A 的实例为某个工作台地址返回带 `immutable` 长期缓存的脚本，之后员工 B 在同一浏览器中登录并请求同一地址
+- **WHEN** 员工 A 的实例为某个工作台地址返回带 `immutable` 长期缓存的脚本，浏览器重启后员工 B 在同一浏览器配置文件中登录并请求同一地址
 - **THEN** B 的请求到达 B 自己的实例，B 拿到的是 B 实例的内容，而不是 A 留在缓存里的内容
 
 #### Scenario: 合并而不覆盖上游的 Vary
 
 - **WHEN** 上游响应没有 `Vary`，或分别带 `Vary: Accept-Encoding`、`Vary: cookie`、`Vary: *`
-- **THEN** 浏览器收到的 `Vary` 依次是 `Cookie, Service-Worker`、`Accept-Encoding, Cookie, Service-Worker`、`cookie, Service-Worker`、`*`；状态、其他响应头和内容不变
+- **THEN** 浏览器收到的 `Vary` 依次是 `Cookie`、`Accept-Encoding, Cookie`、`cookie`、`*`；状态、其他响应头和内容不变
 
 #### Scenario: 真实 DSH 响应带会话区分
 
 - **WHEN** 在真实部署中经网关请求原生工作台 HTML、首页引用的哈希入口脚本、插件合并脚本和事件流
-- **THEN** 每个响应的 `Vary` 都恰好含一个 `Cookie` 和一个 `Service-Worker`
+- **THEN** 每个响应的 `Vary` 都恰好含一个 `Cookie`
 
 ### Requirement: 实例不能经网关注册 Service Worker
 
@@ -58,4 +60,4 @@ WebSocket 升级、`/_platform` 下的平台响应，以及网关自己生成的
 #### Scenario: 预热缓存不能绕过
 
 - **WHEN** 页面先用普通 `fetch` 取过该脚本，再以 `updateViaCache: 'all'` 注册
-- **THEN** 注册仍然失败，因为不带 `Service-Worker` 头缓存的条目不能用于注册请求
+- **THEN** 注册仍然失败：浏览器取注册脚本时带 `Service-Worker` 头，请求得到 403，没有到达实例

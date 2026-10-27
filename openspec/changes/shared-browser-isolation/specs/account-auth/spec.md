@@ -41,7 +41,7 @@ cookie 形式指以下全部组合：
 - 主机名为 DNS 名称（不是 IP 字面量）时，再加上主机名及其每一级父域（不含最后一级）的 `Domain=` 形式；
 - HTTPS 下，以上每种形式还要各写一个带 `Secure`、一个带 `Partitioned; Secure` 的版本。
 
-当一个请求的 `Cookie` 头含有多个 `platform_session` 时，平台的回应 MUST 追加过期的 `platform_session` Set-Cookie：
+当一个请求的 `Cookie` 头含有多个 `platform_session` 时，或者登录、注册请求带有任意 `platform_session` 时，平台的回应 MUST 追加过期的 `platform_session` Set-Cookie：
 
 - 路径取请求路径（去掉查询串）的每一级非根上级路径，含请求路径本身，每个路径都带与不带结尾 `/` 两种形式，每种都用全部 cookie 形式发出；
 - 主机名为 DNS 名称时，另外对 `Path=/` 发出全部 `Domain=` 形式。

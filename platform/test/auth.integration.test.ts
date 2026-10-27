@@ -177,7 +177,19 @@ describe('login, logout, and session recognition over a real TCP port', () => {
         const logout = await postJson(`${baseUrl}/_platform/api/logout`, {}, { cookie });
         expect(recognized.status).toBe(401);
         expect(logout.status).toBe(401);
-        expect(logout.headers.getSetCookie()).toEqual([]);
+        // Only a duplicate is healed, and never at the legitimate session's host-only Path=/.
+        expect(logout.headers.getSetCookie()).toEqual(
+          cookie.includes('; platform_session=')
+            ? [
+                '/_platform',
+                '/_platform/',
+                '/_platform/api',
+                '/_platform/api/',
+                '/_platform/api/logout',
+                '/_platform/api/logout/',
+              ].map((path) => `platform_session=; Path=${path}; Max-Age=0`)
+            : [],
+        );
         expect(snapshotAuthState(database)).toEqual(before);
       }
     });

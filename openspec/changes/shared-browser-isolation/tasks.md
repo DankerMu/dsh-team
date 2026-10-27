@@ -20,14 +20,14 @@ See `design.md`, "Must preserve".
 
 ## 1. Implementation (tests first)
 
-- [ ] 1.1 Gateway `Vary`:
+- [x] 1.1 Gateway `Vary`:
   - Unit tests of the merge function:
-    - absent → `Cookie, Service-Worker`;
-    - `Accept-Encoding` → `Accept-Encoding, Cookie, Service-Worker`;
-    - `cookie` → `cookie, Service-Worker`;
-    - `Accept-Encoding,COOKIE,service-worker` → unchanged;
+    - absent → `Cookie`;
+    - `Accept-Encoding` → `Accept-Encoding, Cookie`;
+    - `cookie` → `cookie`;
+    - `Accept-Encoding,COOKIE` → unchanged;
     - `*` and `Accept-Encoding, *` → unchanged;
-    - `X-Cookie-Foo` → `X-Cookie-Foo, Cookie, Service-Worker`.
+    - `X-Cookie-Foo` → `X-Cookie-Foo, Cookie`.
   - Gateway integration over real HTTP: these responses reach the client with the merged `Vary`, and status, other headers and body are unchanged:
     - a forwarded 200 HTML;
     - a hashed asset that still gains the #370 header;
@@ -35,11 +35,11 @@ See `design.md`, "Must preserve".
     - a 404;
     - an upstream `Vary: Accept-Encoding` response.
   - Unchanged: `/_platform/*` responses, the gateway's anonymous redirect, the wait redirect, 503 and WebSocket 101.
-- [ ] 1.2 Gateway `Service-Worker` refusal, integration:
+- [x] 1.2 Gateway `Service-Worker` refusal, integration:
   - an admitted GET with `Service-Worker: script` → 403 JSON, and the upstream records no request;
   - the same request without the header → forwarded;
   - an anonymous request keeps today's admission behaviour.
-- [ ] 1.3 Heal hook:
+- [x] 1.3 Heal hook:
   - Unit tests of the shared cookie-form function:
     - an IPv4 or IPv6 host gives host-only only;
     - `dsh.corp.example` gives host-only plus `Domain=dsh.corp.example` and `Domain=corp.example`;
@@ -55,27 +55,28 @@ See `design.md`, "Must preserve".
     - a duplicate-cookie request to `/_platform/api/session` gives 401 plus the expiry headers and no `Path=/`;
     - a duplicate-cookie login gives 200 with the new session cookie plus the expiry headers;
     - a single-cookie request gets no extra headers;
-    - a duplicate-cookie gateway path gets today's anonymous answer plus the expiry headers.
-- [ ] 1.4 Web clearing module, with a sibling unit test (jsdom plus stubs):
+    - a duplicate-cookie gateway path gets today's anonymous answer plus the expiry headers;
+    - a login or registration request that carries a single `platform_session` gets the expiry headers alongside its new session cookie.
+- [x] 1.4 Web clearing module, with a sibling unit test (jsdom plus stubs):
   - every store in the spec is cleared;
   - cookie expiries are written for every ancestor path including `/`, in every cookie form (IP vs DNS host, HTTP vs HTTPS);
   - missing `indexedDB.databases`, `navigator.serviceWorker` and `caches` are skipped;
   - a throwing step does not stop later steps or reject;
   - a `deleteDatabase` that settles via `blocked` resolves.
-- [ ] 1.5 Call sites:
+- [x] 1.5 Call sites:
   - `account-page.tsx`: login 200 and registration 201 call the module after the body is consumed and before the single `location.assign('/')`.
   - `password-page.tsx`: logout 204 calls it before `location.assign('/_platform/login')`; password change does not.
   - Failure responses never call it.
   - Page unit tests assert the order "body consumed → cleared → navigated once", and that a rejected clearing still navigates once.
-- [ ] 1.6 Two-user Playwright test `platform/test/shared-browser.ui.test.ts`, and the `AccountUiOptions` upstream-handler option (default unchanged). Covers scenarios 1 and 2 exactly as in `design.md` §6, with no request interception.
+- [x] 1.6 Two-user Playwright test `platform/test/shared-browser.ui.test.ts`, and the `AccountUiOptions` upstream-handler option (default unchanged). Covers scenarios 1 (persistent-context restart) and 2 exactly as in `design.md` §6, with no request interception, and runs the closing-A's-tabs diagnostic: gating scenario 3 if it is green, otherwise a recorded result.
   - Run first against the unchanged gateway, auth and pages, and record the RED failures:
     - Service Worker registration (after the plain pre-warm fetch, with `updateViaCache: 'all'`) succeeds;
     - marker `A`, with no phase-B script request;
     - storage, database, cache and cookie present;
-    - session read 401.
-  - Then GREEN.
-- [ ] 1.7 `verifyAssetTransfer` asserts that `Vary` contains exactly one `cookie` token and one `service-worker` token (case-insensitive) on the native HTML, the hashed entry script, the combined plugin script (identity and gzip requests) and `/plugins/events`. It makes no claim about DSH's other tokens; tasks 1.1 prove those are preserved.
-- [ ] 1.8 Docs:
+    - session read 401 (no heal).
+  - Then GREEN. The Service Worker 403 console error is asserted as an exact expected message.
+- [x] 1.7 `verifyAssetTransfer` asserts that `Vary` contains exactly one `cookie` token (case-insensitive) on the native HTML, the hashed entry script, the combined plugin script (identity and gzip requests) and `/plugins/events`. It makes no claim about DSH's other tokens; tasks 1.1 prove those are preserved.
+- [x] 1.8 Docs:
   - `docs/DEPLOY.md` §4: the cold load after each login.
   - `docs/DEPLOY.md` upgrade note: clear browsing data once in shared profiles after deploying, since pre-upgrade cache entries and workers are unprotected.
   - `docs/DEPLOY.md` §6 residual risks:

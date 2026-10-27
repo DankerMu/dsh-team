@@ -7,6 +7,7 @@ import {
   createSourceAddressResolver,
   currentSessionRoutes,
   installRequestGuard,
+  installSessionHeal,
   loginRoutes,
   logoutRoutes,
   passwordChangeRoutes,
@@ -88,6 +89,7 @@ export async function buildApp(
 
   try {
     installRequestGuard(app, config.publicUrl);
+    installSessionHeal(app, config.publicUrl, config.cookieSecure);
     const resolveSourceAddress = createSourceAddressResolver(config.trustedProxies);
     await app.register(swagger, {
       openapi: {
@@ -134,6 +136,7 @@ export async function buildApp(
       connections,
       authority: config.authority,
       publicUrl: config.publicUrl,
+      cookieSecure: config.cookieSecure,
       ...(gatewayResolver === undefined ? {} : { resolveUpstream: gatewayResolver }),
     });
   } catch (error) {

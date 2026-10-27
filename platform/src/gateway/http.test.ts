@@ -12,7 +12,7 @@ import {
   sessionCookieToken,
   withApp,
 } from '../../test/auth-fixture.ts';
-import { forwardHeaders, isImmutableAsset, requestTarget } from './http.ts';
+import { forwardHeaders, isImmutableAsset, requestTarget, withSessionVary } from './http.ts';
 
 interface TransportState {
   mode: string;
@@ -138,6 +138,20 @@ it.each([
   ['/raw//path', '/raw//path'],
 ])('preserves raw target semantics for %s', (input, expected) => {
   expect(requestTarget(input)).toBe(expected);
+});
+
+it.each([
+  [undefined, 'Cookie'],
+  ['', 'Cookie'],
+  ['Accept-Encoding', 'Accept-Encoding, Cookie'],
+  ['cookie', 'cookie'],
+  ['Accept-Encoding,COOKIE', 'Accept-Encoding,COOKIE'],
+  ['Accept-Encoding ,  cookie', 'Accept-Encoding ,  cookie'],
+  ['*', '*'],
+  ['Accept-Encoding, *', 'Accept-Encoding, *'],
+  ['X-Cookie-Foo', 'X-Cookie-Foo, Cookie'],
+] as const)('merges Cookie into Vary %j as %j', (value, expected) => {
+  expect(withSessionVary(value)).toBe(expected);
 });
 
 it.each([

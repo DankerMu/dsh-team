@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatSessionCookie, readSessionCookie } from './session-cookie.ts';
+import { formatSessionCookie, countSessionCookies, readSessionCookie } from './session-cookie.ts';
 
 const TOKEN = 'a'.repeat(64);
 
@@ -78,5 +78,19 @@ describe('readSessionCookie', () => {
 
   it('returns null for a percent-encoded token value', () => {
     expect(readSessionCookie(`platform_session=%61${TOKEN.slice(1)}`)).toBeNull();
+  });
+});
+
+describe('countSessionCookies', () => {
+  it.each([
+    [undefined, 0],
+    ['', 0],
+    ['theme=dark; platform_sessions=x', 0],
+    [`platform_session=${TOKEN}`, 1],
+    ['platform_session', 1],
+    [`platform_session=${TOKEN}; platform_session=${TOKEN}`, 2],
+    [`platform_session=${TOKEN}; theme=dark; platform_session=x; platform_session`, 3],
+  ] as const)('counts the session pairs in %j as %i', (header, count) => {
+    expect(countSessionCookies(header)).toBe(count);
   });
 });

@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import type { RequestListener } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -91,6 +92,8 @@ export function observeAccountUi(
     expectHealthy: (
       rejections: readonly number[] | readonly { url: string; status: number }[],
       confirmedNoContentRequests: readonly Request[] = [],
+      // Exact browser messages a scenario provokes on purpose; each must occur and is consumed once.
+      expectedConsoleErrors: readonly { text: string; url: string }[] = [],
     ) => {
       for (const asset of assets) {
         expect(
@@ -116,7 +119,18 @@ export function observeAccountUi(
         ).toBeGreaterThanOrEqual(0);
         observed.splice(index, 1);
       }
-      for (const error of consoleErrors) {
+      const unexpectedConsoleErrors = [...consoleErrors];
+      for (const expected of expectedConsoleErrors) {
+        const index = unexpectedConsoleErrors.findIndex(
+          (error) => error.text === expected.text && error.url === expected.url,
+        );
+        expect(
+          index,
+          `Expected console error must have occurred: ${expected.text}`,
+        ).toBeGreaterThanOrEqual(0);
+        unexpectedConsoleErrors.splice(index, 1);
+      }
+      for (const error of unexpectedConsoleErrors) {
         const match =
           /^Failed to load resource: the server responded with a status of (\d{3}) \([^\n]+\)$/.exec(
             error.text,
@@ -298,6 +312,8 @@ export interface AccountUiOptions {
   canonicalInstanceService?: boolean;
   /** An owned Engine-protocol dependency; omitted means the existing unavailable socket. */
   dockerSocketPath?: string;
+  /** Replaces the plain-text destination; every request is still recorded first. */
+  upstream?: RequestListener;
   observeInitialization?: (
     context:
       | { phase: 'origin-selected'; baseUrl: string }
@@ -378,6 +394,10 @@ export async function withAccountUi(
     await withUpstream(
       (request, response) => {
         upstreamRequests.push({ path: request.url ?? '', cookie: request.headers.cookie });
+        if (options.upstream !== undefined) {
+          options.upstream(request, response);
+          return;
+        }
         response.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         response.end('本地已认证入口（非 DSH）');
       },

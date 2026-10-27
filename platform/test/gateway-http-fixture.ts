@@ -1,7 +1,8 @@
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
 import type { IncomingHttpHeaders, RequestListener, RequestOptions, Server } from 'node:http';
-import { createServer as createTcpServer } from 'node:net';
+import { connect, createServer as createTcpServer } from 'node:net';
 import type { Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
@@ -252,4 +253,30 @@ export function reader(socket: Duplex, head = Buffer.alloc(0)): ReadPeer {
       notify = undefined;
     }
   };
+}
+
+/** Sends a raw upgrade the gateway must refuse and returns its response head. */
+export async function rejectedUpgrade(
+  base: string,
+  cookie: string,
+  fields: readonly string[],
+  path = '/ws',
+): Promise<string> {
+  const address = new URL(base);
+  const socket = connect(Number(address.port), address.hostname);
+  const read = reader(socket);
+  const closed = once(socket, 'close');
+  // A refused handshake never validates its per-run RFC6455 nonce.
+  const key = randomBytes(16).toString('base64');
+  try {
+    await once(socket, 'connect');
+    socket.write(
+      `GET ${path} HTTP/1.1\r\nHost: ${address.host}\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n${fields.join('\r\n')}\r\n\r\n`,
+    );
+    const headers = (await read('\r\n\r\n')).toString();
+    await observeHttp(closed);
+    return headers;
+  } finally {
+    socket.destroy();
+  }
 }

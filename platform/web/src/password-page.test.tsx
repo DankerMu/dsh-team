@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
-import { expect, it } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import {
   change,
   element,
@@ -10,7 +10,14 @@ import {
   submit,
   type RenderedAccount,
 } from '../test/account-dom-fixture.tsx';
+import { clearOriginState } from './origin-state.ts';
 import { PasswordPage } from './password-page.tsx';
+
+vi.mock('./origin-state.ts', () => ({ clearOriginState: vi.fn() }));
+const clear = vi.mocked(clearOriginState);
+beforeEach(() => {
+  clear.mockReset();
+});
 
 function renderPassword(): RenderedAccount {
   const rendered = renderAccountPage(<PasswordPage />, '/_platform/account');
@@ -296,5 +303,74 @@ it('retains backend Unicode password policy and password semantics without an au
   }
   expect(element(view, 'a[href="/"]', HTMLAnchorElement).textContent).toBe('返回工作台');
   expect(request).not.toHaveBeenCalled();
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+async function traceMutation(
+  run: (view: HTMLDivElement) => void,
+  status: number,
+  clearing: () => Promise<void>,
+  bodyFails = false,
+): Promise<{ trail: string[]; navigate: RenderedAccount['navigate'] }> {
+  const { view, request, navigate } = renderPassword();
+  const trail: string[] = [];
+  const response = new Response(null, { status });
+  vi.spyOn(response, 'arrayBuffer').mockImplementation(() => {
+    trail.push('body');
+    return bodyFails
+      ? Promise.reject(new Error('body interrupted'))
+      : Promise.resolve(new ArrayBuffer(0));
+  });
+  clear.mockImplementation(() => {
+    trail.push('clear');
+    return clearing();
+  });
+  navigate.mockImplementation(() => {
+    trail.push('navigate');
+  });
+  request.mockResolvedValue(response);
+
+  await act(async () => {
+    run(view);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  return { trail, navigate };
+}
+
+function clickLogout(view: HTMLDivElement): void {
+  element(view, 'button[type="button"]', HTMLButtonElement).click();
+}
+
+it('consumes the logout body, clears origin state, then navigates to login once', async () => {
+  const { trail, navigate } = await traceMutation(clickLogout, 204, () => Promise.resolve());
+
+  expect(trail).toEqual(['body', 'clear', 'navigate']);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/login');
+});
+
+it('still navigates to login once when clearing origin state rejects', async () => {
+  const { trail, navigate } = await traceMutation(clickLogout, 204, () =>
+    Promise.reject(new Error('clearing failed')),
+  );
+
+  expect(trail).toEqual(['body', 'clear', 'navigate']);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/login');
+});
+
+it('still clears and navigates to login once when the logout body read fails', async () => {
+  const { trail, navigate } = await traceMutation(clickLogout, 204, () => Promise.resolve(), true);
+
+  expect(trail).toEqual(['body', 'clear', 'navigate']);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/_platform/login');
+});
+
+it.each<[string, (view: HTMLDivElement) => void, number]>([
+  ['a password change', submit, 204],
+  ['a rejected logout', clickLogout, 401],
+])('never clears origin state after %s', async (_name, run, status) => {
+  const { trail, navigate } = await traceMutation(run, status, () => Promise.resolve());
+
+  expect(trail).not.toContain('clear');
   expect(navigate).not.toHaveBeenCalled();
 });
