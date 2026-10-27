@@ -13,34 +13,11 @@ import {
 } from '../../scripts/verification-submission-storage.mjs';
 import { record } from './container-start-docker-fixture.ts';
 import type { DockerCommand } from './docker-command.ts';
-import { ordinarySubmission, withAuditReceipt } from './trusted-docker-audit-fixture.ts';
-
-function freshSubmissionAssessment(directory: string): string {
-  const module = new URL('../../scripts/verification-submission-assessment.mjs', import.meta.url)
-    .href;
-  const assessor = spawnSync(
-    process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `import {requireVerificationSubmissionsSettled} from ${JSON.stringify(module)};
-let state='confirmed';
-try {requireVerificationSubmissionsSettled(${JSON.stringify(directory)});}
-catch {state='unconfirmed';}
-process.stdout.write(JSON.stringify({state})+'\\n');`,
-    ],
-    {
-      env: { PATH: process.env.PATH, HOME: tmpdir() },
-      encoding: 'utf8',
-      timeout: 5000,
-    },
-  );
-  expect(assessor.error).toBeUndefined();
-  expect(assessor.signal).toBeNull();
-  expect(assessor.status, assessor.stderr).toBe(0);
-  expect(assessor.stderr).toBe('');
-  return assessor.stdout;
-}
+import {
+  freshSubmissionAssessment,
+  ordinarySubmission,
+  withAuditReceipt,
+} from './trusted-docker-audit-fixture.ts';
 
 it.each(['driver', 'producer'])(
   'refuses missing browser %s authority despite empty resource observations',

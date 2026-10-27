@@ -1,3 +1,4 @@
+import { cliSubmissionCall } from './verification-submission-storage.mjs';
 import { beginVerificationSubmission } from './verification-submissions.mjs';
 
 /** @typedef {{ file: string, args: readonly string[] }} DockerExecution */
@@ -24,7 +25,7 @@ function submission(execution) {
     ['inspect', 'ls', 'list', 'logs', 'version', 'info', 'wait', 'events'].includes(verb ?? '')
   )
     return undefined;
-  return beginVerificationSubmission();
+  return beginVerificationSubmission(cliSubmissionCall(args));
 }
 
 function completeResult(result, complete, acceptedStatus) {

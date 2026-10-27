@@ -45,8 +45,8 @@
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm check` (includes `pnpm test:integration`)
-- [ ] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`; CI green.
+- [x] 2.1 `pnpm check` (includes `pnpm test:integration`)
+- [x] 2.2 Exact-head VPS `pnpm test:docker` and `pnpm test:deploy`; CI green.
 
 ## Non-goals
 

@@ -93,9 +93,12 @@ const submissionScenarios: {
   inventory: string;
   settles: boolean;
   canonical?: boolean;
+  /** The closed-vocabulary operation recorded in the submitted row. */
+  operation: string;
 }[] = [
   {
     name: 'settles canonical network-create 403 without replacing its rejection',
+    operation: 'POST /networks/create',
     path: '/networks/create',
     status: 403,
     inventory: '/networks',
@@ -103,6 +106,7 @@ const submissionScenarios: {
   },
   {
     name: 'keeps sibling volume-create 403 unresolved',
+    operation: 'POST /volumes/create',
     path: '/volumes/create',
     status: 403,
     inventory: '/volumes',
@@ -110,6 +114,7 @@ const submissionScenarios: {
   },
   {
     name: 'keeps truncated network-create success unresolved',
+    operation: 'POST /networks/create',
     path: '/networks/create',
     status: 201,
     inventory: '/networks',
@@ -117,6 +122,7 @@ const submissionScenarios: {
   },
   {
     name: 'settles network-create 403 with its original query',
+    operation: 'POST /networks/create',
     path: '/networks/create?checkDuplicate=true',
     status: 403,
     inventory: '/networks',
@@ -124,6 +130,7 @@ const submissionScenarios: {
   },
   {
     name: 'settles an already-stopped container 304',
+    operation: 'POST /containers/{id}/stop',
     path: '/containers/owned-container/stop?t=2',
     status: 304,
     inventory: '/containers/owned-container/json',
@@ -132,6 +139,7 @@ const submissionScenarios: {
   ...['containers', 'networks', 'volumes'].map((kind) => ({
     name: `settles an exact absent ${kind} delete 404`,
     method: 'DELETE',
+    operation: `DELETE /${kind}/{id}`,
     path: `/${kind}/owned-resource?force=true`,
     status: 404,
     inventory: '/networks',
@@ -139,6 +147,7 @@ const submissionScenarios: {
   })),
   {
     name: 'keeps network-create 500 unresolved',
+    operation: 'POST /networks/create',
     path: '/networks/create',
     status: 500,
     inventory: '/networks',
@@ -146,6 +155,7 @@ const submissionScenarios: {
   },
   {
     name: 'keeps a stop sibling endpoint 304 unresolved',
+    operation: 'POST /containers/{id}/restart',
     path: '/containers/owned-container/restart',
     status: 304,
     inventory: '/containers/owned-container/json',
@@ -153,6 +163,7 @@ const submissionScenarios: {
   },
   {
     name: 'keeps a noncanonical error constructor unresolved',
+    operation: 'POST /networks/create',
     path: '/networks/create',
     status: 403,
     inventory: '/networks',
@@ -169,6 +180,7 @@ const submissionScenarios: {
   ].map((path) => ({
     name: `keeps nonmatching delete ${path} unresolved`,
     method: 'DELETE',
+    operation: path === '/images/owned-resource' ? 'DELETE /images/{id}' : 'other',
     path,
     status: 404,
     inventory: '/networks',
@@ -176,6 +188,7 @@ const submissionScenarios: {
   })),
   {
     name: 'keeps a wait sibling endpoint failure unresolved',
+    operation: 'other',
     path: '/containers/owned-container/wait/extra',
     status: 500,
     inventory: '/networks',
@@ -183,6 +196,7 @@ const submissionScenarios: {
   },
   {
     name: 'keeps a nonmatching network-create method unresolved',
+    operation: 'other',
     method: 'PUT',
     path: '/networks/create',
     status: 403,
@@ -191,6 +205,7 @@ const submissionScenarios: {
   },
   {
     name: 'keeps a dot-segment stop target unresolved',
+    operation: 'other',
     path: '/containers/../stop',
     status: 304,
     inventory: '/networks',
@@ -198,16 +213,25 @@ const submissionScenarios: {
   },
   {
     name: 'keeps an encoded-separator wait target unresolved',
+    operation: 'other',
     path: '/containers/owned%2fcontainer/wait',
     status: 500,
     inventory: '/networks',
     settles: false,
   },
+  ...[409, 500].map((status) => ({
+    name: `keeps a tolerated container kill ${String(status)} unresolved and attributable`,
+    operation: 'POST /containers/{id}/kill',
+    path: '/containers/0123456789ab/kill?signal=KILL',
+    status,
+    inventory: '/containers/owned-container/json',
+    settles: false,
+  })),
 ];
 
 it.each(submissionScenarios)(
   'verification submission settlement: $name',
-  async ({ method = 'POST', path, status, inventory, settles, canonical = true }) => {
+  async ({ method = 'POST', path, status, inventory, settles, canonical = true, operation }) => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-http-'));
     const socket = join(directory, 'engine.sock');
     const submissions = join(directory, SUBMISSION_JOURNAL);
@@ -309,7 +333,13 @@ it.each(submissionScenarios)(
             ? { Volumes: expectedResources }
             : expectedResources,
       );
-      expect(await readFile(submissions, 'utf8')).not.toBe('');
+      const [submitted] = (await readFile(submissions, 'utf8')).split('\n');
+      expect(JSON.parse(submitted ?? '')).toEqual({
+        version: 1,
+        id: expect.stringMatching(/^[a-f0-9-]{36}$/) as unknown,
+        state: 'submitted',
+        call: { transport: 'http', operation, caller: 'docker-client.integration.test.ts' },
+      });
       if (status === 201) {
         // A later exact-delete rejection settles only itself, never this lost create.
         await expect(
