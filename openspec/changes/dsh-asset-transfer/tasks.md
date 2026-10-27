@@ -20,8 +20,8 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 `platform/src/managed-config/generate.ts`: `webserver` row config `{ host: '0.0.0.0', port: 3080, compression: 'gzip' }`.
-- [ ] 1.2 Tests (write first, see them fail):
+- [x] 1.1 `platform/src/managed-config/generate.ts`: `webserver` row config `{ host: '0.0.0.0', port: 3080, compression: 'gzip' }`.
+- [x] 1.2 Tests (write first, see them fail):
   - `generate.test.ts`: exact `webserver` row including `compression: 'gzip'`;
   - `container-start.docker.test.ts:144-147`: the exact `webserver` row gains `compression: 'gzip'`;
   - one existing Docker lane that already reaches native DSH through the real platform gateway (prefer `platform/test/deployment.docker.test.ts`, which `test:deploy` and full `test:docker` both run): use `node:http.request` or the lane's existing raw-socket helpers, never `fetch` (it adds `Accept-Encoding` itself and decodes silently). With the employee session cookie, request the combined plugin script named in the native HTML three times, setting the header explicitly each time:
@@ -29,9 +29,9 @@
     - `Accept-Encoding: identity` → no `Content-Encoding`;
     - no `Accept-Encoding` header → no `Content-Encoding`, same bytes as identity;
     - `GET /plugins/events` with `Accept-Encoding: gzip` → `content-type: text/event-stream`, no `Content-Encoding`; the first `data:` frame (after the `: connected` comment) parses as `{"type":"graph",...}`; close the stream afterwards.
-- [ ] 1.3 Docs (gzip and the #370 asset cache header): one sentence in AGENTS.md `### Compose deployment verification`, paragraph starting "Required evidence is actual health200" (gzip transfer through the gateway is part of the native-entry evidence), and in `docs/DEPLOY.md` step 4 of the post-install list (~line 134): DSH pages are served gzip-compressed, applying at each instance's next start.
+- [x] 1.3 Docs (gzip and the #370 asset cache header): one sentence in AGENTS.md `### Compose deployment verification`, paragraph starting "Required evidence is actual health200" (gzip transfer through the gateway is part of the native-entry evidence), and in `docs/DEPLOY.md` step 4 of the post-install list (~line 134): DSH pages are served gzip-compressed, applying at each instance's next start.
 
-- [ ] 1.4 Gateway cache header (#370), tests first.
+- [x] 1.4 Gateway cache header (#370), tests first.
   - **Predicate input.** One exported pure function in `http.ts` beside `forwardHeaders`, taking the method, the raw request target (`incoming.raw.url`, undecoded, query included), the upstream status and the forwarded header map. It matches the raw target against `^/assets/(?:[a-z]+/)?[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2|woff|ttf)$`. The name class allows `-` and `_` and excludes `%`, `.` and `/`, and any `?` fails the match. No new module.
   - **Unit test (`platform/src/gateway/http.test.ts`, pure predicate):**
     - true for GET and HEAD 200 of `/assets/index-5SrrfWpU.js`, `/assets/vendor-BNsW4eBh.css`, `/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2` and `/assets/langs/bibtex-CHM0blh-.js` (a hash containing `-`);
@@ -41,7 +41,7 @@
     - HEAD gains the header and has no body;
     - an upstream `cache-control` is kept as sent;
     - a non-matching path and a 404 on a matching path are forwarded exactly as before.
-- [ ] 1.5 Docker (same lane and transport as 1.2): the `/assets/index-*.js` named in the native HTML carries the header; the native HTML and `/plugins/events` do not; the combined plugin script keeps DSH's own `public, max-age=31536000, immutable`.
+- [x] 1.5 Docker (same lane and transport as 1.2): the `/assets/index-*.js` named in the native HTML carries the header; the native HTML and `/plugins/events` do not; the combined plugin script keeps DSH's own `public, max-age=31536000, immutable`.
 
 ## 2. Verification
 

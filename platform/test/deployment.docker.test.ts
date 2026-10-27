@@ -12,6 +12,7 @@ import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { cleanupTargets, output, OWNER_LABEL, removeOwned } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
+import { verifyAssetTransfer } from './deployment-asset-transfer-fixture.ts';
 import { recreateDeployment, withDeployment } from './deployment-fixture.ts';
 import { removeRetiredObservationRoot } from './deployment-observer-fixture.ts';
 import type { DeploymentObservation } from './deployment-observer-fixture.ts';
@@ -134,6 +135,7 @@ it('boots delivered Compose and admits an employee through real administrator co
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toContain('text/html');
     await page.arrayBuffer();
+    await verifyAssetTransfer(deployment, employee.cookie);
     const peer = await connectActivityPeer(deployment.port);
     try {
       peer.socket.write(

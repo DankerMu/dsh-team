@@ -191,6 +191,15 @@ describe('generateManagedConfig', () => {
     );
   });
 
+  it('serves the instance web carrier on all interfaces with DSH gzip compression', () => {
+    const generated = generateManagedConfig(INPUT);
+    ok(generated.outcome === 'configured');
+
+    expect(rowsWithIds(generated.content, ['webserver'])).toEqual([
+      { id: 'webserver', config: { host: '0.0.0.0', port: 3080, compression: 'gzip' } },
+    ]);
+  });
+
   it('keeps quote newline YAML-looking model scalars as JSON data without extra secret fields', () => {
     const quoted = 'alpha "quoted"\n- id: leaked';
     const input = {

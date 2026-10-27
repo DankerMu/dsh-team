@@ -138,7 +138,7 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
     content: JSON.stringify([
       {
         id: 'webserver',
-        config: { host: '0.0.0.0', port: 3080 },
+        config: { host: '0.0.0.0', port: 3080, compression: 'gzip' },
       },
       { id: 'tool-web', disabled: true },
       { id: 'llm-deepseek', disabled: true },

@@ -55,6 +55,25 @@ export function forwardHeaders(
   return result;
 }
 
+// Vite names DSH static files by content hash; only those URLs are safe to cache forever.
+const HASHED_ASSET =
+  /^\/assets\/(?:[a-z]+\/)?[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2|woff|ttf)$/;
+const IMMUTABLE_ASSET_CACHE = 'private, max-age=31536000, immutable';
+
+export function isImmutableAsset(
+  method: string,
+  rawTarget: string,
+  status: number,
+  headers: OutgoingHttpHeaders,
+): boolean {
+  return (
+    (method === 'GET' || method === 'HEAD') &&
+    status === 200 &&
+    headers['cache-control'] === undefined &&
+    HASHED_ASSET.test(rawTarget)
+  );
+}
+
 export function forwardHttp(
   incoming: FastifyRequest,
   reply: FastifyReply,
@@ -93,6 +112,7 @@ export function forwardHttp(
   reply.raw.once('close', () => {
     if (!reply.raw.writableFinished) cancel();
   });
+  const rawTarget = incoming.raw.url ?? '/';
   try {
     const headers = forwardHeaders(incoming.headers, 'cookie');
     headers.host = authority;
@@ -102,7 +122,7 @@ export function forwardHttp(
         hostname: target.host,
         port: target.port,
         method: incoming.method,
-        path: requestTarget(incoming.raw.url ?? '/'),
+        path: requestTarget(rawTarget),
         headers,
         agent: false,
       },
@@ -114,7 +134,10 @@ export function forwardHttp(
           fail();
           return;
         }
-        reply.raw.writeHead(response.statusCode, forwardHeaders(response.headers, 'set-cookie'));
+        const responseHeaders = forwardHeaders(response.headers, 'set-cookie');
+        if (isImmutableAsset(incoming.method, rawTarget, response.statusCode, responseHeaders))
+          responseHeaders['cache-control'] = IMMUTABLE_ASSET_CACHE;
+        reply.raw.writeHead(response.statusCode, responseHeaders);
         response.pipe(reply.raw);
       },
     );
