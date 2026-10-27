@@ -21,5 +21,5 @@ Fixture level: expanded
 Upstream suggested level: absent (the gateway is a shared entrypoint for every employee request; production overlay config also changes)
 Blast radius: every employee page load; a wrong overlay value fails DSH boot (schema-validated) and every Docker lane; a compression bug would corrupt or stall responses; an over-broad cache predicate would pin a non-immutable response in browsers for a year
 Selected risk packs: Config / project setup; Legacy compatibility / examples; Resource limits / large input / discovery; Error handling / rollback / partial outputs; Documentation / migration notes
-Evidence floor: generate.test.ts exact row; http.test.ts cache predicate matrix; pnpm check; exact-head VPS pnpm test:docker + pnpm test:deploy with the gzip/SSE assertions
+Evidence floor: generate.test.ts exact row; http.test.ts predicate matrix; gateway-http.integration.test.ts forwarding; pnpm check (incl. test:integration); exact-head VPS pnpm test:docker + pnpm test:deploy with the gzip/SSE assertions
 ```

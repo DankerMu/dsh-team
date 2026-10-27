@@ -26,7 +26,8 @@ The platform never changes what a DSH response contains, and it marks a response
 
 ## Seams under test
 
-- `forwardHttp` through the existing `http.test.ts` harness (real `node:http` upstream and client), asserting exact response headers.
+- The pure cache predicate in `http.test.ts` (that harness mocks `node:http.request` with a fixed 401, so it cannot vary status or upstream headers).
+- `forwardHttp` header-map behaviour in `platform/test/gateway-http.integration.test.ts` with a real upstream and the real Fastify forwarding.
 - `generateManagedConfig` exact rows.
 - Real DSH through the real platform gateway in `deployment.docker.test.ts`, over `node:http`/raw sockets.
 
