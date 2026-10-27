@@ -52,6 +52,8 @@ docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:lo
 
 记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.0-rc.2`，包含中文界面、权限插件、办公预设、侧栏平台入口插件和 python-docx；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略四个插件 named context。用户镜像和验证浏览器镜像均保留已固定基础镜像的 Debian 官方普通源及安全更新源，不再使用额外的源切换上下文；archive keyring、签名/有效期校验、包列表和构建期限保持不变，获取失败不得自动换源或关闭校验。
 
+用户镜像构建时给插件页打补丁：插件页没有「添加插件」和卸载入口，开关和配置卡片照常；受管覆盖层去掉 Agent 的插件管理工具，并关闭插件页的公共仓库探测。升级前员工自己安装的 bundle 仍然保留，只能关闭；管理员重置该员工的 DSH 设置可恢复镜像的 profile 初始副本。员工仍可在终端用 `dsh plugin add` 安装插件，这是已接受的残留（D12）。
+
 ### 用户镜像基础层更新
 
 生产用户镜像的基础身份以 [`images/dsh-user/Dockerfile`](../images/dsh-user/Dockerfile) 的 `FROM` 为唯一来源：精确 Node24补丁版本、Bookworm-slim标签和不可变多架构 index 摘要同时保留。部署验收仍只覆盖现有 Linux amd64；index 内包含其他架构不代表已验证这些架构。不要退回 major-only 标签，也不要把浏览器或平台镜像的基础引用自动套到用户镜像。

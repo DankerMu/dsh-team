@@ -21,6 +21,7 @@ const BETA = 'beta';
 const PROVIDER = 'intranet';
 const CUSTOM_PRESET_ID = 'custom-office';
 const TOOL_FS_MODULE = '@deepseek-ai/dsh-tool-fs';
+const PLUGIN_PAGE_ID = 'ui-plugin-manager';
 
 function fail() {
   process.stderr.write(`${FAIL}\n`);
@@ -58,6 +59,14 @@ function defaultModelId(ctx) {
   const model = modelRef.get();
   if (typeof model !== 'string' || model === '') fail();
   return model;
+}
+
+/** Live validated plugin page config; only the registry probe switch is reported. */
+function pluginPage(ctx) {
+  const value = entryConfig(ctx, PLUGIN_PAGE_ID).registryProbeEnabled;
+  const enabled = typeof value?.get === 'function' ? value.get() : value;
+  if (typeof enabled !== 'boolean') fail();
+  return { registryProbeEnabled: enabled };
 }
 
 function toolNames(schemas) {
@@ -198,5 +207,7 @@ async function observe(ctx) {
   if (llm === undefined || agentPresets === undefined || tools === undefined) fail();
   const models = await observeModels(ctx, llm);
   const presets = await observePresets(ctx, agentPresets, tools);
-  process.stdout.write(`${MARKER}${JSON.stringify({ models, presets })}\n`);
+  process.stdout.write(
+    `${MARKER}${JSON.stringify({ models, presets, pluginPage: pluginPage(ctx) })}\n`,
+  );
 }

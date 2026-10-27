@@ -33,6 +33,14 @@ export type MappedHostAcceptInput = {
   readonly observeSessions?: boolean;
   /** Composition only: prove the sidebar platform links for this role, then follow one. */
   readonly platformNav?: 'employee' | 'admin';
+  /** Composition only: prove the plugin page has no install entries; switch office-agents off and on. */
+  readonly pluginPage?: boolean;
+};
+
+/** The office-agents bundle switch as read back from the card list after a reload. */
+export type MappedHostPluginSwitch = {
+  readonly checked: boolean;
+  readonly status: string;
 };
 
 export type MappedHostPlatformLink = {
@@ -60,6 +68,24 @@ export type MappedHostSessionObservation = {
 };
 
 export type MappedHostAcceptResult = {
+  readonly pluginPage?: {
+    readonly list: {
+      readonly refresh: boolean;
+      readonly addButtons: number;
+      readonly group: string;
+      readonly status: string;
+      readonly checked: boolean;
+    };
+    readonly detail: {
+      readonly uninstallButtons: number;
+      readonly checked: boolean;
+      readonly disabled: boolean;
+      readonly title: string | null;
+    };
+    readonly off: MappedHostPluginSwitch;
+    readonly on: MappedHostPluginSwitch;
+    readonly screenshots: readonly { readonly screenshot: string; readonly bytes: number }[];
+  };
   readonly platformNav?: {
     readonly wide: readonly MappedHostPlatformLink[];
     readonly rail: readonly MappedHostPlatformLink[];
@@ -127,7 +153,12 @@ export declare function acceptObservation(
 export declare function collectObservation(
   input: Omit<
     MappedHostAcceptInput,
-    'composition' | 'expectedRoster' | 'preserveModels' | 'observeSessions' | 'platformNav'
+    | 'composition'
+    | 'expectedRoster'
+    | 'preserveModels'
+    | 'observeSessions'
+    | 'platformNav'
+    | 'pluginPage'
   >,
 ): Promise<MappedHostAcceptResult>;
 

@@ -34,6 +34,7 @@ import {
 import { verifyPreservation } from './probe-first-run-preservation.mjs';
 import { attachScopeObserver } from './probe-session-address.mjs';
 import { verifyPlatformNav } from './probe-platform-nav.mjs';
+import { verifyPluginPage } from './probe-plugin-page.mjs';
 import {
   collectRequestEvidence,
   disposeRequestEvidence,
@@ -592,10 +593,24 @@ const capturePreservation = async (
   }
 };
 
-const assertPlatformNavMode = (platformNav, composition) => {
+const assertPlatformNavMode = (platformNav, pluginPage, composition) => {
   if (platformNav !== undefined && !composition)
     throw new Error('stage=platform-nav error=composition-required');
+  if (pluginPage && !composition) throw new Error('stage=plugin-page error=composition-required');
 };
+
+const pluginPageEvidence = async (pluginPage, page, origin, errors, screenshot, ms) =>
+  pluginPage
+    ? {
+        pluginPage: await verifyPluginPage({
+          page,
+          errors,
+          screenshot,
+          ms,
+          reload: () => navigateReady(page, origin, ms, true),
+        }),
+      }
+    : {};
 
 const platformNavEvidence = async (platformNav, page, errors, screenshot, ms) =>
   platformNav
@@ -628,9 +643,10 @@ export const acceptObservation = async ({
   preserveSessionId,
   observeSessions = false,
   platformNav,
+  pluginPage,
 }) => {
   expectedRoster = await resolveCompositionRoster(composition, expectedRoster);
-  assertPlatformNavMode(platformNav, composition);
+  assertPlatformNavMode(platformNav, pluginPage, composition);
   const { chrome, page, errors, requests, welcome } = await openMappedPage({
     origin,
     cookie,
@@ -719,6 +735,15 @@ export const acceptObservation = async ({
         browserMs,
         'preservation-session-transport-address',
       );
+    // Before navigation: the plugin page reloads this same DSH page.
+    const plugins = await pluginPageEvidence(
+      pluginPage,
+      page,
+      origin,
+      errors,
+      screenshot,
+      browserMs,
+    );
     // Last: following the platform link leaves the DSH page.
     const navigation = await platformNavEvidence(platformNav, page, errors, screenshot, browserMs);
     return {
@@ -728,6 +753,7 @@ export const acceptObservation = async ({
       reload,
       ...(preservation ? { preservation } : {}),
       ...(preserveSessionId ? { sessionAddressObserved: true } : {}),
+      ...plugins,
       ...navigation,
     };
   } catch (error) {

@@ -53,7 +53,11 @@ export interface ManagedConfigInput {
 export type ManagedConfigResult =
   { outcome: 'configured'; content: string } | { outcome: 'unconfigured' };
 
-const NETWORK_TOOL = '@deepseek-ai/dsh-tool-web';
+// Matched by package name: row ids are employee-renamable, names are what load.
+const REMOVED_TOOLS: ReadonlySet<string> = new Set([
+  '@deepseek-ai/dsh-tool-web',
+  '@deepseek-ai/dsh-plugin-manager/tools',
+]);
 
 const PERMISSION_PRESETS = {
   approval: { sandbox: 'danger-full-access', approval: 'ask', name: '人工批准' },
@@ -69,7 +73,7 @@ const PERMISSION_DEFAULTS = {
 function filterPlugins(plugins: readonly PluginEntry[]): PluginEntry[] {
   const filtered: PluginEntry[] = [];
   for (const plugin of plugins) {
-    if (plugin.name === NETWORK_TOOL) {
+    if (plugin.name !== undefined && REMOVED_TOOLS.has(plugin.name)) {
       continue;
     }
     if (isGroupPlugin(plugin)) {
@@ -167,6 +171,8 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
       ...input.presets.map(transformPreset),
       ...input.localePatch,
       // Security policy is last: profile/home/locale edits cannot replace it.
+      // The plugin page has no upstream config; a row's config is whole, so this is all of it.
+      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
       { id: 'auto-review', disabled: true },
       {
         id: 'permission',

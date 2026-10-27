@@ -89,8 +89,8 @@ See `design.md`, "Must preserve".
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm check`; `pnpm test:ui` with the new suite.
-- [ ] 2.2 Exact-head VPS `pnpm test:docker` with confirmed cleanup, and `pnpm test:deploy` with the `Vary` assertion on real DSH; CI green. After merge, redeploy the acceptance environment and measure a repeat load within one session (gain kept) and the first load after a new login.
+- [x] 2.1 `pnpm check`; `pnpm test:ui` with the new suite.
+- [x] 2.2 Exact-head VPS `pnpm test:docker` with confirmed cleanup, and `pnpm test:deploy` with the `Vary` assertion on real DSH; CI green. After merge, redeploy the acceptance environment and measure a repeat load within one session (gain kept) and the first load after a new login.
 
 ## Non-goals
 

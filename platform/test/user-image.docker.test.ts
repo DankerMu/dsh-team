@@ -109,3 +109,59 @@ process.stdout.write(JSON.stringify({immutable:true,peer:installed,uid:1001}));
       ),
   );
 });
+
+// The reviewed OUTPUT_SHA256 pinned in images/dsh-user/patch-plugin-manager.mjs; the published
+// input is bf25686c…, so an unpatched image fails this case.
+const PATCHED_PLUGIN_PAGE_SHA256 =
+  'ca954298bb89b27f93f49457500a7ef3758e64746a04bded0c83b24ccedf2bdc';
+
+it('installs the plugin page patched, root-owned and unwritable by uid1001, without the patch script', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  const script = `
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
+const root='/usr/local/lib/node_modules';
+const copies=[];
+const walk=(dir)=>{for(const entry of readdirSync(dir,{withFileTypes:true})){
+  if(!entry.isDirectory())continue;
+  const path=join(dir,entry.name);
+  if(entry.name==='dsh-client-ui-plugin-manager'&&basename(dir)==='@deepseek-ai'&&existsSync(path+'/package.json'))copies.push(path);
+  walk(path);
+}};
+walk(root);
+assert.equal(copies.length,1);
+const lib=copies[0]+'/lib';
+const target=lib+'/client.js';
+const stat=statSync(target);
+assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o022,0);
+assert.equal(statSync(lib).uid,0); assert.equal(statSync(lib).mode & 0o022,0);
+assert.throws(()=>writeFileSync(target,'employee code',{flag:'a'}),{code:'EACCES'});
+assert.throws(()=>renameSync(target,lib+'/employee.js'),{code:'EACCES'});
+assert.equal(process.getuid(),1001);
+process.stdout.write(JSON.stringify({
+  sha256:createHash('sha256').update(readFileSync(target)).digest('hex'),
+  script:existsSync('/tmp/patch-plugin-manager.mjs'),
+  uid:1001,
+}));
+`;
+
+  await runUserImage(
+    'managed-policy',
+    (stdout) => {
+      expect(JSON.parse(stdout)).toEqual({
+        sha256: PATCHED_PLUGIN_PAGE_SHA256,
+        script: false,
+        uid: 1001,
+      });
+    },
+    undefined,
+    (lifecycle) =>
+      Promise.resolve(
+        execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-plugin-page-patch`, script),
+      ),
+  );
+});

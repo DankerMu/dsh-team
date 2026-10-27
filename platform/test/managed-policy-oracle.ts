@@ -27,9 +27,15 @@ interface ManagedPolicyPresetObservation {
   readonly office?: OfficeMetadata;
 }
 
+/** The live `ui-plugin-manager` entry config: the only runtime evidence of the probe row. */
+interface PluginPageObservation {
+  readonly registryProbeEnabled: boolean;
+}
+
 export interface ManagedPolicyRuntimeObservation {
   readonly models: ManagedPolicyModelObservation;
   readonly presets: readonly ManagedPolicyPresetObservation[];
+  readonly pluginPage: PluginPageObservation;
 }
 
 export interface ManagedPolicyRuntimeExpectation {
@@ -48,6 +54,7 @@ export interface ManagedPolicyRuntimeExpectation {
 const INVALID_RUNTIME = 'Invalid managed policy runtime observation';
 const RELEASED_BETA_CONTEXT_WINDOW = 262_144;
 const NETWORK_TOOLS = new Set(['web_search', 'web_fetch']);
+const PLUGIN_MANAGER_TOOL = 'plugin_manager';
 
 export const SHIPPED_PRESET_IDS = [
   'standard',
@@ -161,6 +168,12 @@ function parsePreset(value: unknown): ManagedPolicyPresetObservation {
   };
 }
 
+function parsePluginPage(value: unknown): PluginPageObservation {
+  const page = asObject(value);
+  if (typeof page.registryProbeEnabled !== 'boolean') invalid();
+  return { registryProbeEnabled: page.registryProbeEnabled };
+}
+
 export function parseManagedPolicyRuntime(value: unknown): ManagedPolicyRuntimeObservation {
   const record = asObject(value);
   if (!Array.isArray(record.presets)) {
@@ -169,6 +182,7 @@ export function parseManagedPolicyRuntime(value: unknown): ManagedPolicyRuntimeO
   return {
     models: parseModels(record.models),
     presets: record.presets.map(parsePreset),
+    pluginPage: parsePluginPage(record.pluginPage),
   };
 }
 
@@ -233,7 +247,8 @@ export function assertManagedPolicyRuntime(
     !sameCatalog(observed.models.catalog, expected.catalog) ||
     observed.models.alphaContextWindow !== expected.alphaContextWindow ||
     observed.models.betaContextWindow !== expected.betaContextWindow ||
-    observed.models.betaContextWindow !== RELEASED_BETA_CONTEXT_WINDOW
+    observed.models.betaContextWindow !== RELEASED_BETA_CONTEXT_WINDOW ||
+    observed.pluginPage.registryProbeEnabled
   ) {
     invalid();
   }
@@ -242,7 +257,7 @@ export function assertManagedPolicyRuntime(
     invalid();
   }
   for (const preset of observed.presets) {
-    if (preset.toolNames.some((name) => NETWORK_TOOLS.has(name))) {
+    if (preset.toolNames.some((name) => NETWORK_TOOLS.has(name) || name === PLUGIN_MANAGER_TOOL)) {
       invalid();
     }
     if (!matchesExpectedPreset(preset, expected)) {
@@ -275,6 +290,7 @@ export type EmployeeControlFailure =
   | 'custom-preset'
   | 'custom-web-search'
   | 'custom-web-fetch'
+  | 'custom-plugin-manager'
   | 'custom-read-limit';
 
 function customPresetFailure(
@@ -284,6 +300,7 @@ function customPresetFailure(
   if (custom === undefined) return 'custom-preset';
   if (!custom.toolNames.includes('web_search')) return 'custom-web-search';
   if (!custom.toolNames.includes('web_fetch')) return 'custom-web-fetch';
+  if (!custom.toolNames.includes(PLUGIN_MANAGER_TOOL)) return 'custom-plugin-manager';
   if (custom.readLimit !== 500) return 'custom-read-limit';
   return undefined;
 }
