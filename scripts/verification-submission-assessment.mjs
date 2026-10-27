@@ -11,6 +11,7 @@ import {
   pathIdentity,
   readPrivate,
   requireBrowserExecClient,
+  requireSubmissionCall,
   sameIdentity,
 } from './verification-submission-storage.mjs';
 import { readVerificationDockerObserverWriters } from './verification-docker-generations.mjs';
@@ -42,6 +43,8 @@ function readJournalText(descriptor) {
 function submissionFields(value) {
   if (value.state === 'submitted' && Object.hasOwn(value, 'browserExec'))
     return 'browserExec,id,state,version';
+  // Rows written before call labels existed omit `call` and remain valid.
+  if (value.state === 'submitted' && Object.hasOwn(value, 'call')) return 'call,id,state,version';
   if (value.state === 'client-closed-unknown') return 'client,id,state,version';
   return 'id,state,version';
 }
@@ -75,6 +78,7 @@ function parseSubmissionRecords(text) {
   for (const line of text.split('\n').filter(Boolean)) {
     const value = JSON.parse(line);
     requireSubmissionTransition(value, records.states);
+    if (Object.hasOwn(value, 'call')) requireSubmissionCall(value.call);
     if (value.state === 'submitted' && Object.hasOwn(value, 'browserExec')) {
       if (!/^[a-f0-9]{64}$/.test(value.browserExec ?? ''))
         throw new Error('Browser exec submission authority malformed');

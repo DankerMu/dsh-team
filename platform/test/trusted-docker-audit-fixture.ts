@@ -25,6 +25,34 @@ export interface AuditContext {
   ) => Promise<{ state: string; browserExec: unknown }>;
 }
 
+/** A separate process sees only durable evidence, never this process's memory. */
+export function freshSubmissionAssessment(directory: string): string {
+  const module = new URL('../../scripts/verification-submission-assessment.mjs', import.meta.url)
+    .href;
+  const assessor = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import {requireVerificationSubmissionsSettled} from ${JSON.stringify(module)};
+let state='confirmed';
+try {requireVerificationSubmissionsSettled(${JSON.stringify(directory)});}
+catch {state='unconfirmed';}
+process.stdout.write(JSON.stringify({state})+'\\n');`,
+    ],
+    {
+      env: { PATH: process.env.PATH, HOME: tmpdir() },
+      encoding: 'utf8',
+      timeout: 5000,
+    },
+  );
+  expect(assessor.error).toBeUndefined();
+  expect(assessor.signal).toBeNull();
+  expect(assessor.status, assessor.stderr).toBe(0);
+  expect(assessor.stderr).toBe('');
+  return assessor.stdout;
+}
+
 export function ordinarySubmission(journal: string, interrupted: boolean, exitCode = 0) {
   const cleanupModule = new URL('./docker-cleanup.ts', import.meta.url).href;
   const commandModule = new URL('./docker-command.ts', import.meta.url).href;

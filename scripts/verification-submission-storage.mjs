@@ -12,6 +12,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { constants as operatingSystemConstants } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 /** @typedef {{device: string, inode: string, owner: string, mode: number}} PrivateIdentity */
 /** @typedef {{version: number, invocation: string, directory: PrivateIdentity, journal: PrivateIdentity, pending: PrivateIdentity, observers: PrivateIdentity, browserExec: PrivateIdentity}} SubmissionAuthority */
@@ -19,6 +20,7 @@ import { constants as operatingSystemConstants } from 'node:os';
 /** @typedef {{id: string, captured: CapturedAuthority, markerIdentity: PrivateIdentity, markerText: string}} SubmissionReservation */
 /** @typedef {'submitted' | 'settled' | 'client-closed-unknown'} SubmissionState */
 /** @typedef {{exitCode: number | null, signal: string | null, failure: 'callback' | 'timeout' | 'output-limit' | 'spawn' | 'exit' | null}} BrowserExecClientOutcome */
+/** @typedef {{transport: 'cli' | 'http', operation: string, caller: string}} SubmissionCall */
 
 export const SUBMISSION_JOURNAL = 'submission-evidence/submissions.jsonl';
 export const SUBMISSION_PENDING = 'submission-evidence/pending';
@@ -258,4 +260,194 @@ export function requireBrowserExecClient(client) {
     ![null, 'callback', 'timeout', 'output-limit', 'spawn', 'exit'].includes(client.failure)
   )
     throw new Error('Browser exec client closure outcome malformed');
+}
+
+// Closed call vocabulary: one table each for CLI and HTTP, shared by derivation and validation.
+const CLI_VERBS = new Set(
+  (
+    'attach bake build builder buildx commit compose config container context cp create diff ' +
+    'events exec export history image images import info inspect kill load login logout logs ' +
+    'manifest network node pause plugin port ps pull push rename restart rm rmi run save search ' +
+    'secret service stack start stats stop swarm system tag top trust unpause update version ' +
+    'volume wait'
+  ).split(' '),
+);
+const CLI_SUBCOMMANDS = new Map(
+  Object.entries({
+    container:
+      'attach commit cp create diff exec export inspect kill list logs ls pause port prune ' +
+      'remove rename restart rm run start stats stop top unpause update wait',
+    image: 'build history import inspect list load ls prune pull push remove rm save tag',
+    network: 'connect create disconnect inspect list ls prune remove rm',
+    volume: 'create inspect list ls prune remove rm update',
+    compose:
+      'attach build commit config cp create down events exec export images kill logs ls pause ' +
+      'port ps pull push restart rm run scale start stats stop top unpause up version volumes ' +
+      'wait watch',
+    buildx: 'bake build create du history imagetools inspect ls prune rm stop use version',
+  }).map(([group, names]) => [group, new Set(names.split(' '))]),
+);
+const CLI_OPERATIONS = new Set([
+  'other',
+  ...CLI_VERBS,
+  ...[...CLI_SUBCOMMANDS].flatMap(([group, names]) => [...names].map((name) => `${group} ${name}`)),
+]);
+// `{id}` is the single resource-segment class of the qualified rejection matrix.
+const RESOURCE_SEGMENT = '[a-zA-Z0-9][a-zA-Z0-9_.-]*';
+const HTTP_OPERATIONS = new Set([
+  'other',
+  ...[
+    'POST /containers/create',
+    'POST /containers/prune',
+    'DELETE /containers/{id}',
+    ...'start stop restart kill pause unpause update rename resize attach exec'
+      .split(' ')
+      .map((action) => `POST /containers/{id}/${action}`),
+    'PUT /containers/{id}/archive',
+    'POST /exec/{id}/start',
+    'POST /exec/{id}/resize',
+    'POST /networks/create',
+    'POST /networks/prune',
+    'POST /networks/{id}/connect',
+    'POST /networks/{id}/disconnect',
+    'DELETE /networks/{id}',
+    'POST /volumes/create',
+    'POST /volumes/prune',
+    'PUT /volumes/{id}',
+    'DELETE /volumes/{id}',
+    'POST /images/create',
+    'POST /images/load',
+    'POST /images/prune',
+    'POST /images/{id}/tag',
+    'POST /images/{id}/push',
+    'DELETE /images/{id}',
+    'POST /build',
+    'POST /build/prune',
+    'POST /commit',
+  ],
+]);
+const HTTP_TEMPLATES = [...HTTP_OPERATIONS]
+  .filter((operation) => operation !== 'other')
+  .map((operation) => {
+    const [method, template] = operation.split(' ');
+    const pattern = new RegExp(`^${String(template).replaceAll('{id}', RESOURCE_SEGMENT)}$`);
+    return { operation, method, pattern };
+  });
+const CALLER = /^[a-z0-9][a-z0-9.-]*\.(?:ts|mts|mjs)$/;
+const CALLER_WRAPPERS = new Set(['docker-command.ts', 'docker-cleanup.ts']);
+// The anchored location is either `at name (<location>:line:column)` or `at <location>:line:column`.
+const FRAME = /^\s*at (?:[^(]*\()?(.+?):\d+:\d+\)?$/;
+
+function guarded(derive, fallback) {
+  try {
+    return derive();
+  } catch {
+    return fallback;
+  }
+}
+
+function cliOperation(args) {
+  const verb = args[0];
+  if (typeof verb !== 'string' || !CLI_VERBS.has(verb)) return 'other';
+  const subcommand = args[1];
+  return typeof subcommand === 'string' && CLI_SUBCOMMANDS.get(verb)?.has(subcommand)
+    ? `${verb} ${subcommand}`
+    : verb;
+}
+
+function httpOperation(method, path) {
+  const query = path.indexOf('?');
+  const endpoint = query === -1 ? path : path.slice(0, query);
+  return (
+    HTTP_TEMPLATES.find((entry) => entry.method === method && entry.pattern.test(endpoint))
+      ?.operation ?? 'other'
+  );
+}
+
+function frameName(line, prefixes) {
+  const location = FRAME.exec(line)?.[1];
+  const prefix = prefixes.find((candidate) => location?.startsWith(candidate));
+  const name = prefix === undefined ? undefined : location?.slice(prefix.length);
+  return name !== undefined && CALLER.test(name) ? name : undefined;
+}
+
+/**
+ * The first issuing test file under this repository's `platform/test/`, else its first
+ * non-wrapper module there; only a validated basename can leave this function.
+ * @param {string} stack
+ * @returns {string}
+ */
+export function submissionCallerFromStack(stack) {
+  // Anchored from this module, never from the process or a filesystem lookup.
+  const directory = new URL('../platform/test/', import.meta.url);
+  const prefixes = [directory.href, fileURLToPath(directory)];
+  const names = stack
+    .split('\n')
+    .map((line) => frameName(line, prefixes))
+    .filter((name) => name !== undefined);
+  return (
+    names.find((name) => name.endsWith('.test.ts')) ??
+    names.find((name) => !CALLER_WRAPPERS.has(name)) ??
+    'unknown'
+  );
+}
+
+/** @returns {string} */
+export function submissionCaller() {
+  // Test runners lower the stack limit; raise it only for this capture.
+  const limit = Error.stackTraceLimit;
+  try {
+    Error.stackTraceLimit = 64;
+    const stack = new Error().stack;
+    return typeof stack === 'string' ? submissionCallerFromStack(stack) : 'unknown';
+  } catch {
+    return 'unknown';
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
+
+/**
+ * @param {readonly string[]} args
+ * @returns {SubmissionCall}
+ */
+export function cliSubmissionCall(args) {
+  return {
+    transport: 'cli',
+    operation: guarded(() => cliOperation(args), 'other'),
+    caller: submissionCaller(),
+  };
+}
+
+/**
+ * @param {string} method
+ * @param {string} path
+ * @param {string} [constructionCaller] used when the call-time stack names no caller
+ * @returns {SubmissionCall}
+ */
+export function httpSubmissionCall(method, path, constructionCaller = 'unknown') {
+  const caller = submissionCaller();
+  return {
+    transport: 'http',
+    operation: guarded(() => httpOperation(method, path), 'other'),
+    caller: caller === 'unknown' ? constructionCaller : caller,
+  };
+}
+
+/** @param {unknown} call */
+export function requireSubmissionCall(call) {
+  const operations =
+    call?.transport === 'cli'
+      ? CLI_OPERATIONS
+      : call?.transport === 'http'
+        ? HTTP_OPERATIONS
+        : null;
+  if (
+    operations === null ||
+    Object.keys(call).sort().join(',') !== 'caller,operation,transport' ||
+    !operations.has(call.operation) ||
+    typeof call.caller !== 'string' ||
+    (call.caller !== 'unknown' && !CALLER.test(call.caller))
+  )
+    throw new Error('Verification submission call label malformed');
 }
