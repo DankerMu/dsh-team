@@ -10,13 +10,14 @@ import {
 import { rejectedUpgrade, sendHttp } from './gateway-http-fixture.ts';
 
 const SHADOW = `platform_session=${'b'.repeat(64)}`;
+// Deepest ancestor first: the heal's fixed priority order.
 const SESSION_PATHS = [
-  '/_platform',
-  '/_platform/',
-  '/_platform/api',
-  '/_platform/api/',
-  '/_platform/api/session',
   '/_platform/api/session/',
+  '/_platform/api/session',
+  '/_platform/api/',
+  '/_platform/api',
+  '/_platform/',
+  '/_platform',
 ];
 
 function setCookies(headers: IncomingHttpHeaders): string[] {
@@ -52,7 +53,7 @@ it('answers a duplicate-cookie session read 401 with host-only expiries and neve
   });
 });
 
-it('expires every Domain, Secure and Partitioned form and only Domain forms at Path=/ on an HTTPS DNS host', async () => {
+it('emits host-only, Domain and then Partitioned forms then stops at 3 KiB on an HTTPS four-label host', async () => {
   await withApp(
     async (app) => {
       const base = await app.listen({ host: '127.0.0.1', port: 0 });
@@ -62,22 +63,37 @@ it('expires every Domain, Secure and Partitioned form and only Domain forms at P
         headers: { cookie: `${SHADOW}; platform_session=${'c'.repeat(64)}` },
       });
 
-      const forms = ['', '; Domain=dsh.corp.example', '; Domain=corp.example'].flatMap((form) => [
-        form,
-        `${form}; Secure`,
-        `${form}; Partitioned; Secure`,
-      ]);
+      const domains = [
+        '; Domain=dsh.a.corp.example',
+        '; Domain=a.corp.example',
+        '; Domain=corp.example',
+      ];
+      const unpartitioned = [
+        ...expiries(SESSION_PATHS, ['']),
+        ...expiries([...SESSION_PATHS, '/'], domains),
+      ];
+      const priority = [
+        ...unpartitioned,
+        ...unpartitioned.map((line) =>
+          line.replace('; Max-Age=0', '; Partitioned; Secure; Max-Age=0'),
+        ),
+      ];
+      const budgeted: string[] = [];
+      let total = 0;
+      for (const line of priority) {
+        if (total + line.length > 3072) break;
+        budgeted.push(line);
+        total += line.length;
+      }
       expect(healed.status).toBe(401);
-      expect(setCookies(healed.headers)).toEqual([
-        ...expiries(SESSION_PATHS, forms),
-        ...expiries(['/'], forms.slice(3)),
-        'platform_session=; Path=/; Partitioned; Secure; Max-Age=0',
-      ]);
+      expect(budgeted.length).toBeLessThan(priority.length);
+      expect(budgeted.length).toBeGreaterThan(unpartitioned.length);
+      expect(setCookies(healed.headers)).toEqual(budgeted);
     },
     true,
     [],
     undefined,
-    { publicUrl: 'https://dsh.corp.example' },
+    { publicUrl: 'https://dsh.a.corp.example' },
   );
 });
 
@@ -107,12 +123,12 @@ it('heals a duplicate-cookie login while issuing the new root session', async ()
     expect(lines.filter((line) => line.startsWith('platform_session=;'))).toEqual(
       expiries(
         [
-          '/_platform',
-          '/_platform/',
-          '/_platform/api',
-          '/_platform/api/',
-          '/_platform/api/login',
           '/_platform/api/login/',
+          '/_platform/api/login',
+          '/_platform/api/',
+          '/_platform/api',
+          '/_platform/',
+          '/_platform',
         ],
         [''],
       ),
@@ -144,10 +160,10 @@ it.each([
       const segments = path.split('/').slice(1);
       expect(lines.filter((line) => line.startsWith('platform_session=;'))).toEqual(
         expiries(
-          segments.flatMap((_segment, index) => {
-            const ancestor = `/${segments.slice(0, index + 1).join('/')}`;
-            return [ancestor, `${ancestor}/`];
-          }),
+          segments
+            .map((_segment, index) => `/${segments.slice(0, index + 1).join('/')}`)
+            .reverse()
+            .flatMap((ancestor) => [`${ancestor}/`, ancestor]),
           [''],
         ),
       );
@@ -172,7 +188,7 @@ it.each([
       expect(response.status).toBe(status);
       expect(response.headers).toMatchObject(extra);
       expect(setCookies(response.headers)).toEqual(
-        expiries(['/workbench', '/workbench/', '/workbench/app', '/workbench/app/'], ['']),
+        expiries(['/workbench/app/', '/workbench/app', '/workbench/', '/workbench'], ['']),
       );
     });
   },

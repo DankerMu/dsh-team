@@ -181,12 +181,12 @@ describe('login, logout, and session recognition over a real TCP port', () => {
         expect(logout.headers.getSetCookie()).toEqual(
           cookie.includes('; platform_session=')
             ? [
-                '/_platform',
-                '/_platform/',
-                '/_platform/api',
-                '/_platform/api/',
-                '/_platform/api/logout',
                 '/_platform/api/logout/',
+                '/_platform/api/logout',
+                '/_platform/api/',
+                '/_platform/api',
+                '/_platform/',
+                '/_platform',
               ].map((path) => `platform_session=; Path=${path}; Max-Age=0`)
             : [],
         );

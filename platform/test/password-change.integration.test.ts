@@ -299,12 +299,12 @@ describe('password-change rejection preserves all persisted state', () => {
       expect(rejected.headers.getSetCookie()).toEqual(
         kind === 'duplicate'
           ? [
-              '/_platform',
-              '/_platform/',
-              '/_platform/api',
-              '/_platform/api/',
-              '/_platform/api/change-password',
               '/_platform/api/change-password/',
+              '/_platform/api/change-password',
+              '/_platform/api/',
+              '/_platform/api',
+              '/_platform/',
+              '/_platform',
             ].map((path) => `platform_session=; Path=${path}; Max-Age=0`)
           : [],
       );

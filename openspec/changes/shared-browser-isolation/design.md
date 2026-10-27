@@ -84,7 +84,7 @@ When the public hostname is a DNS name, the response also expires `Path=/` in ev
 
 - host-only;
 - when the hostname is a DNS name (not an IPv4 or IPv6 literal): `Domain=<d>` for the hostname and for each of its parent domains up to, but excluding, the last label. A browser rejects a public-suffix domain anyway, so an extra form is harmless.
-- when the origin is HTTPS (`PLATFORM_COOKIE_SECURE` on the server, `location.protocol` in the page): every form above, also with `Secure`, and with `Partitioned; Secure`. Chromium keeps partitioned cookies separately, so an unpartitioned expiry does not remove them.
+- when the origin is HTTPS (`PLATFORM_COOKIE_SECURE` on the server, `location.protocol` in the page): every form above, also with `Partitioned; Secure`. Chromium keeps partitioned cookies separately, so an unpartitioned expiry does not remove them. No separate plain `Secure` variant is sent: from a secure origin, an expiry without `Secure` replaces a `Secure` cookie with the same name, domain and path (review round 2).
 
 Ancestors are computed from the request path with the query removed. A trailing slash on the request path does not add an empty segment.
 
@@ -104,14 +104,25 @@ A shadowing cookie on a path the login request does not carry, such as `/_platfo
 
 **Bounds and validation** (review round 1, P0/P2). The heal runs before authentication, so its output must be bounded and its input must be validated:
 
-- It runs only when the query-stripped request path is at most 512 characters and has at most 16 segments.
+- It runs only when the query-stripped request path is at most 256 characters and has at most 8 segments.
 - The path must consist of RFC 6265 cookie-path characters without `;`, so no attribute injection is possible.
 - Otherwise it emits nothing. Real planted paths are shallow.
 - The raw upgrade handler catches any exception and destroys that socket, so the process does not die.
 
 **Nameless cookies** (review round 1, P1). `document.cookie = 'platform_session; Path=…'` stores a cookie with an empty name and the value `platform_session`, which the browser sends as a bare `platform_session` fragment. `readSessionCookie` counts that fragment as a session pair. A named expiry cannot delete it. When the header carries such a fragment, the heal also emits the nameless form `platform_session; Path=P; Max-Age=0` for every path and cookie form, and for host-only `Path=/`. A nameless expiry can never touch the named HttpOnly session. The client clearing does the same for bare fragments.
 
-**Partitioned at `/`** (review round 1, P3). On HTTPS the heal also emits a host-only `Path=/; Secure; Partitioned` expiry. It deletes only a partitioned cookie; the legitimate session is not partitioned. This is unverified on a real TLS origin.
+**Header budget** (review round 2, P1). An HTTPS deployment sits behind an existing reverse proxy, and nginx's default upstream response-header buffer is one memory page (4 KiB or 8 KiB). Above that, nginx answers 502 "upstream sent too big header".
+
+The heal therefore emits its expiries in a fixed priority order and stops before the total of its `Set-Cookie` values would exceed 3 KiB:
+
+1. named host-only, deepest request ancestor first;
+2. nameless host-only, when a bare fragment is present, including `Path=/`;
+3. `Domain` forms at the request ancestors and at `/`;
+4. `Partitioned; Secure` variants.
+
+The common planted forms (host-only, at the API path) are always within budget. Anything beyond the budget is not healed, and `docs/DEPLOY.md` names the remedy (clear site data). `docs/DEPLOY.md` also asks proxies to allow at least 16 KiB of upstream response headers (for nginx, `proxy_buffer_size 16k`).
+
+The host-only partitioned `Path=/` expiry from round 1 is removed. Its benefit was minor, it was unverified on TLS, and it was the only write whose name, host and path coincide with the real session.
 
 This rule is generic: the server never needs to know which paths A used.
 

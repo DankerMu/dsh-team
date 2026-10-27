@@ -3,7 +3,7 @@
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
 
 /**
- * Host-only, every Domain form of a DNS host and, for HTTPS, Secure/Partitioned variants.
+ * Host-only, every Domain form of a DNS host and, for HTTPS, Partitioned; Secure variants.
  * Without `parents` only the exact hostname's Domain form is kept.
  */
 export function cookieForms(hostname: string, https: boolean, parents = true): string[] {
@@ -14,9 +14,8 @@ export function cookieForms(hostname: string, https: boolean, parents = true): s
     for (let index = 0; index < domains; index++)
       forms.push(`; Domain=${labels.slice(index).join('.')}`);
   }
-  return https
-    ? forms.flatMap((form) => [form, `${form}; Secure`, `${form}; Partitioned; Secure`])
-    : forms;
+  // Without Secure, an expiry from a secure origin already replaces a Secure cookie.
+  return https ? forms.flatMap((form) => [form, `${form}; Partitioned; Secure`]) : forms;
 }
 
 /** Every cookie path visible at this page: the root, each ancestor and the page itself. */

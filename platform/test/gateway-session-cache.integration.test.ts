@@ -193,7 +193,7 @@ it('adds the shadowing-cookie expiries only to a duplicate-cookie upgrade refusa
 
       expect(shadowed).toMatch(/^HTTP\/1\.1 401 Unauthorized\r\n/);
       expect(shadowed.split('\r\n').filter((line) => line.startsWith('Set-Cookie: '))).toEqual(
-        ['/ws', '/ws/', '/ws/events', '/ws/events/'].map(
+        ['/ws/events/', '/ws/events', '/ws/', '/ws'].map(
           (path) => `Set-Cookie: platform_session=; Path=${path}; Max-Age=0`,
         ),
       );

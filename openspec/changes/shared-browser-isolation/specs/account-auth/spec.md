@@ -39,7 +39,7 @@ cookie 形式指以下全部组合：
 
 - 主机限定；
 - 主机名为 DNS 名称（不是 IP 字面量）时，再加上主机名及其每一级父域（不含最后一级）的 `Domain=` 形式；
-- HTTPS 下，以上每种形式还要各写一个带 `Secure`、一个带 `Partitioned; Secure` 的版本。
+- HTTPS 下，以上每种形式还要各写一个带 `Partitioned; Secure` 的版本。
 
 当一个请求的 `Cookie` 头含有多个 `platform_session` 时，或者登录、注册请求带有任意 `platform_session` 时，平台的回应 MUST 追加过期的 `platform_session` Set-Cookie：
 
@@ -52,12 +52,11 @@ cookie 形式指以下全部组合：
 
 自愈逻辑在鉴权之前执行，因此：
 
-- 请求路径（去掉查询串）超过 512 个字符、超过 16 段，或含有 RFC 6265 cookie 路径字符以外的字符（包括 `;`）时，MUST NOT 发出任何过期头；
+- 请求路径（去掉查询串）超过 256 个字符、超过 8 段，或含有 RFC 6265 cookie 路径字符以外的字符（包括 `;`）时，MUST NOT 发出任何过期头；
+- 过期头 MUST 按固定优先级发出，且全部 `Set-Cookie` 值的总长度 MUST NOT 超过 3 KiB。优先级依次为：有名主机限定（请求路径的祖先，从最深的开始）、无名主机限定、`Domain` 形式、`Partitioned` 变体。超出预算的部分不发；
 - 升级处理中的任何异常 MUST 只销毁该连接，不得使进程退出；
 - `Cookie` 头含有不带 `=` 的 `platform_session` 片段（浏览器保存为名称为空的 cookie）时，还 MUST 以同样的路径和形式发出无名过期头 `platform_session; Path=P; Max-Age=0`，并额外包括主机限定的 `Path=/`；
-- HTTPS 下还 MUST 发出主机限定的 `Path=/; Secure; Partitioned` 过期头。
-
-这两种额外的过期头都碰不到合法的、有名称且不分区的 HttpOnly 会话。
+  无名过期头碰不到合法的、有名称的 HttpOnly 会话。
 
 #### Scenario: 换人登录时清除遮蔽 cookie
 

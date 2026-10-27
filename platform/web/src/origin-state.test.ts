@@ -121,15 +121,22 @@ it('keeps parent-domain forms for platform_session and bare fragments only on a 
   const preference = browser.writes.filter((write) => write.startsWith('a_pref='));
   const named = browser.writes.filter((write) => write.startsWith('platform_session='));
   const bare = browser.writes.filter((write) => write.startsWith('platform_session;'));
-  expect(preference).toHaveLength(4 * 6);
+  expect(preference).toHaveLength(4 * 4);
   expect(preference.some((write) => write.includes('Domain=corp.example'))).toBe(false);
-  expect(preference).toContain('a_pref=; Path=/; Domain=dsh.corp.example; Secure; Max-Age=0');
+  expect(preference).toContain(
+    'a_pref=; Path=/; Domain=dsh.corp.example; Partitioned; Secure; Max-Age=0',
+  );
   expect(preference).toContain('a_pref=; Path=/_platform/; Partitioned; Secure; Max-Age=0');
-  expect(named).toHaveLength(4 * 9);
+  expect(named).toHaveLength(4 * 6);
   expect(named).toContain(
     'platform_session=; Path=/_platform/; Domain=corp.example; Partitioned; Secure; Max-Age=0',
   );
-  expect(bare).toHaveLength(4 * 9);
+  expect(bare).toHaveLength(4 * 6);
+  expect(
+    browser.writes.filter(
+      (write) => write.includes('Secure') && !write.includes('; Partitioned; Secure'),
+    ),
+  ).toEqual([]);
   expect(bare).toContain('platform_session; Path=/; Domain=corp.example; Max-Age=0');
 });
 
@@ -149,13 +156,11 @@ it('forms cookies exactly as the server heal does', () => {
   expect(cookieForms('localhost', false)).toEqual(['']);
   expect(cookieForms('corp.example', true)).toEqual([
     '',
-    '; Secure',
     '; Partitioned; Secure',
     '; Domain=corp.example',
-    '; Domain=corp.example; Secure',
     '; Domain=corp.example; Partitioned; Secure',
   ]);
-  expect(cookieForms('127.0.0.1', true)).toEqual(['', '; Secure', '; Partitioned; Secure']);
+  expect(cookieForms('127.0.0.1', true)).toEqual(['', '; Partitioned; Secure']);
 });
 
 it.each([
