@@ -15,7 +15,7 @@
 ```text
 Issue type: feature
 Fixture level: compact
-Upstream suggested level: absent (override: production config is touched, but it is one DSH-owned option whose behaviour, filter and defaults are DSH's; no platform entrypoint, schema, auth or state changes)
+Upstream suggested level: absent (override: the production-config and legacy-compatibility triggers apply, but it is one DSH-owned option whose behaviour, filter and defaults are DSH's; no platform entrypoint, schema, auth or state changes)
 Blast radius: every employee page load; a wrong option name or value fails DSH boot (schema-validated) and is caught by every Docker lane; a compression bug would corrupt or stall responses through the gateway
 Selected risk packs: Config / project setup; Legacy compatibility / examples; Resource limits / large input / discovery; Documentation / migration notes
 Evidence floor: generate.test.ts exact row; pnpm check; exact-head VPS pnpm test:docker + pnpm test:deploy with the gzip/SSE assertions
