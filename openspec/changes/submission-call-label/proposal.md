@@ -4,14 +4,15 @@
 
 ## What Changes
 
-- Every shared-Engine submission's journal `submitted` row gains a `call` object with three closed-set, non-sensitive fields:
+- Shared-Engine submissions published through `beginVerificationSubmission(call)` — the Docker CLI wrapper (`scripts/docker-command.mjs`) and the tracked Engine HTTP client's default submit (`scripts/verification-submissions.mjs`) — record a `call` object in their journal `submitted` row:
   - `transport`: `cli` or `http`;
-  - `operation`: for CLI, a verb from a fixed enum (with the subcommand for `container`/`image`/`network`/`volume`/`compose`/`buildx` groups when it is itself in the enum), else `other`; for HTTP, the method plus an endpoint template whose resource segments are replaced by `{id}` (for example `POST /containers/{id}/kill`), else `other`;
-  - `caller`: the basename of the first stack frame under the repository's `platform/test/` (for example `container-start-docker-fixture.ts`), else `unknown`.
-- Producers covered: the CLI wrapper (`scripts/docker-command.mjs`), the tracked HTTP client with the default submit (`scripts/verification-submissions.mjs`), and the observer submit (`scripts/verification-docker-generations.mjs`). Contained browser exec keeps its existing `browserExec` row shape unchanged.
-- The journal parser (`scripts/verification-submission-assessment.mjs`) accepts the row with or without `call` (older journals stay readable), and rejects any other shape, value outside the closed sets, or extra key.
+  - `operation`: CLI — a verb from a fixed enum, plus the subcommand for the `container`/`image`/`network`/`volume`/`compose`/`buildx` groups when that subcommand is itself in a fixed enum; otherwise `other`. HTTP — the method plus an endpoint template from a finite whitelist (resource segments shown as `{id}`, query dropped); otherwise `other`;
+  - `caller`: the basename of the issuing test file, found from the stack (first `*.test.ts` frame under the repository's `platform/test/`; else the first frame there that is not a wrapper — `docker-command.ts`, `docker-cleanup.ts`); for the tracked HTTP client, a caller captured when the client is constructed is the fallback when the call-time stack has none (orchestrator promise queues drop async stacks); otherwise `unknown`. The parser accepts `^[a-z0-9][a-z0-9.-]*\.(ts|mts|mjs)$` or `unknown`.
+- **Not labelled:** deployed-observer submissions (the main spec requires those per-request records to hold only opaque correlation identities, `trusted-docker-verification` "Deployed application observation is private and generation-bound"; they stay attributable through the observer generation in their marker), observer binding-approval/participant reservations (not Engine operations), browser exec rows (unchanged), and direct no-argument `beginVerificationSubmission()` calls (rows omit `call`; only verification fixtures call it that way).
+- The label code and its validator live in `scripts/verification-submission-storage.mjs`, which every standalone bundle already ships, so no bundle list changes.
+- The journal parser (`scripts/verification-submission-assessment.mjs`) accepts `submitted` rows with a valid `call` or without one (older journals stay readable) and rejects any other shape or value.
 - No change to what settles a submission, to the qualified rejection matrix, or to the `unconfirmed` verdict.
-- Audit (report only): list tests that tolerate a mutating CLI non-zero exit or a non-qualified HTTP error without rethrowing; the PR body reports them. Behaviour changes there are out of scope unless a call site is unambiguously wrong, and then only with its own test.
+- Step 2 of #373 (finding and making explicit the tests that tolerate failed mutations) moves to #374: it needs labelled recurrences to be more than guesswork.
 
 ## Triage
 
