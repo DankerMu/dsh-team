@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act } from 'react';
-import { expect, it } from 'vitest';
+import { beforeEach, expect, it, vi } from 'vitest';
 import {
   change,
   element,
@@ -11,6 +11,13 @@ import {
   type RenderedAccount,
 } from '../test/account-dom-fixture.tsx';
 import { AccountPage } from './account-page.tsx';
+import { clearOriginState } from './origin-state.ts';
+
+vi.mock('./origin-state.ts', () => ({ clearOriginState: vi.fn() }));
+const clear = vi.mocked(clearOriginState);
+beforeEach(() => {
+  clear.mockReset();
+});
 
 function renderAccount(pathname = '/_platform/login'): RenderedAccount {
   const { view, request, navigate } = renderAccountPage(<AccountPage />, pathname);
@@ -438,4 +445,65 @@ it('renders the brand panel without another heading, link, button or live region
   expect(view.querySelector('fieldset, legend')).toBeNull();
   expect(element(view, '.auth-brand', HTMLElement).textContent).not.toMatch(/登录|注册/);
   expect(element(view, '.auth-brand', HTMLElement).querySelector('a, button')).toBeNull();
+});
+
+async function submitTraced(
+  pathname: string,
+  status: number,
+  clearing: () => Promise<void>,
+): Promise<{ trail: string[]; navigate: RenderedAccount['navigate'] }> {
+  const { view, request, navigate } = renderAccount(pathname);
+  const trail: string[] = [];
+  const response = new Response('{}', { status });
+  vi.spyOn(response, 'arrayBuffer').mockImplementation(() => {
+    trail.push('body');
+    return Promise.resolve(new ArrayBuffer(0));
+  });
+  clear.mockImplementation(() => {
+    trail.push('clear');
+    return clearing();
+  });
+  navigate.mockImplementation(() => {
+    trail.push('navigate');
+  });
+  request.mockResolvedValue(response);
+
+  await act(async () => {
+    submit(view);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  return { trail, navigate };
+}
+
+it.each([
+  ['/_platform/login', 200],
+  ['/_platform/register', 201],
+])(
+  'consumes the %s success body, clears origin state, then navigates once',
+  async (path, status) => {
+    const { trail, navigate } = await submitTraced(path, status, () => Promise.resolve());
+
+    expect(trail).toEqual(['body', 'clear', 'navigate']);
+    expect(navigate).toHaveBeenCalledExactlyOnceWith('/');
+  },
+);
+
+it('still navigates once when clearing origin state rejects', async () => {
+  const { trail, navigate } = await submitTraced('/_platform/login', 200, () =>
+    Promise.reject(new Error('clearing failed')),
+  );
+
+  expect(trail).toEqual(['body', 'clear', 'navigate']);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith('/');
+});
+
+it.each([
+  ['/_platform/login', 401],
+  ['/_platform/register', 409],
+])('never clears origin state after a rejected %s', async (path, status) => {
+  const { trail, navigate } = await submitTraced(path, status, () => Promise.resolve());
+
+  expect(trail).not.toContain('clear');
+  expect(navigate).not.toHaveBeenCalled();
 });

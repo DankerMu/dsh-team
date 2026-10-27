@@ -15,25 +15,29 @@ export function formatSessionCookie(token: string | null, cookieSecure: boolean)
   return cookie;
 }
 
-export function readSessionCookie(header: string | undefined): string | null {
-  if (header === undefined) {
-    return null;
-  }
-  let token: string | undefined;
+/** Every platform_session pair's value, or null for a valueless name, in header order. */
+function sessionCookieValues(header: string): (string | null)[] {
+  const values: (string | null)[] = [];
   for (const pair of header.split(';')) {
-    const trimmed = pair.trim();
     const separator = pair.indexOf('=');
-    const name = separator === -1 ? trimmed : pair.slice(0, separator).trim();
-    if (name !== SESSION_COOKIE_NAME) {
-      continue;
-    }
-    if (token !== undefined || separator === -1) {
-      return null;
-    }
-    token = pair.slice(separator + 1);
+    const name = separator === -1 ? pair.trim() : pair.slice(0, separator).trim();
+    if (name === SESSION_COOKIE_NAME)
+      values.push(separator === -1 ? null : pair.slice(separator + 1));
   }
+  return values;
+}
+
+export function readSessionCookie(header: string | undefined): string | null {
+  const values = header === undefined ? [] : sessionCookieValues(header);
+  const token = values.length === 1 ? values[0] : null;
   if (token?.length !== TOKEN_HEX_LENGTH || TOKEN_HEX.exec(token) === null) {
     return null;
   }
   return token;
+}
+
+/** Session pairs in the header; `bare` marks a fragment the browser stores as a nameless cookie. */
+export function sessionCookieShape(header: string | undefined): { count: number; bare: boolean } {
+  const values = header === undefined ? [] : sessionCookieValues(header);
+  return { count: values.length, bare: values.includes(null) };
 }

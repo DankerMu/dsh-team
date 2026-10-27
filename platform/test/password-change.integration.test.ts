@@ -295,7 +295,19 @@ describe('password-change rejection preserves all persisted state', () => {
         error: 'Unauthorized',
         message: 'Unauthorized',
       });
-      expect(rejected.headers.getSetCookie()).toEqual([]);
+      // Only a duplicate is healed, and never at the legitimate session's host-only Path=/.
+      expect(rejected.headers.getSetCookie()).toEqual(
+        kind === 'duplicate'
+          ? [
+              '/_platform/api/change-password/',
+              '/_platform/api/change-password',
+              '/_platform/api/',
+              '/_platform/api',
+              '/_platform/',
+              '/_platform',
+            ].map((path) => `platform_session=; Path=${path}; Max-Age=0`)
+          : [],
+      );
       expect(snapshotPasswordState(database)).toEqual(before);
     });
   });

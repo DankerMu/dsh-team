@@ -1,7 +1,12 @@
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { FastifyPluginCallback, FastifyReply, FastifyRequest } from 'fastify';
-import { getSessionUser, hasValidOrigin, readSessionCookie } from '../auth/index.ts';
+import {
+  getSessionUser,
+  hasValidOrigin,
+  readSessionCookie,
+  sessionHealCookies,
+} from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import {
   BAD_GATEWAY,
@@ -15,6 +20,7 @@ import type { GatewayConnections } from './connections.ts';
 
 const ERRORS = {
   401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
+  403: { statusCode: 403, error: 'Forbidden', message: 'Forbidden' },
   404: { statusCode: 404, error: 'Not Found', message: 'Not Found' },
   500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
   502: BAD_GATEWAY,
@@ -54,12 +60,21 @@ export const gatewayRoutes: FastifyPluginCallback<{
   connections: GatewayConnections;
   authority: string;
   publicUrl: string;
+  cookieSecure: boolean;
   resolveUpstream?: GatewayUpstreamResolver;
 }> = (
   app,
-  { database, connections, authority, publicUrl, resolveUpstream = () => ({ outcome: 'stopped' }) },
+  {
+    database,
+    connections,
+    authority,
+    publicUrl,
+    cookieSecure,
+    resolveUpstream = () => ({ outcome: 'stopped' }),
+  },
   done,
 ) => {
+  const hostname = new URL(publicUrl).hostname;
   function admission(
     request: IncomingMessage,
   ): { userId: string; token: string } | keyof typeof ERRORS {
@@ -82,6 +97,11 @@ export const gatewayRoutes: FastifyPluginCallback<{
     }
     const code = admission(request.raw);
     if (typeof code === 'object') {
+      // Browsers mark every worker script fetch; no instance may install a worker on this origin.
+      if (request.headers['service-worker'] !== undefined) {
+        void reply.code(403).send(ERRORS[403]);
+        return;
+      }
       connections.track(code, reply.raw, true);
       try {
         const upstream = resolveUpstream(code.userId);
@@ -112,6 +132,7 @@ export const gatewayRoutes: FastifyPluginCallback<{
         response: {
           302: { type: 'string' },
           401: ERROR_SCHEMA,
+          403: ERROR_SCHEMA,
           404: ERROR_SCHEMA,
           500: ERROR_SCHEMA,
           502: ERROR_SCHEMA,
@@ -133,6 +154,15 @@ export const gatewayRoutes: FastifyPluginCallback<{
     admit,
   );
   function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    try {
+      admitUpgrade(request, socket, head);
+    } catch {
+      // A raw upgrade listener has no framework error boundary; one bad request must not end the process.
+      app.log.error('Gateway upgrade handling failed');
+      socket.destroy();
+    }
+  }
+  function admitUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (connections.isClosing()) {
       socket.on('error', () => {
         socket.destroy();
@@ -143,7 +173,10 @@ export const gatewayRoutes: FastifyPluginCallback<{
     connections.track(undefined, socket);
     const selected = admission(request);
     if (typeof selected !== 'object') {
-      rejectUpgrade(socket, selected);
+      // Upgrades bypass Fastify hooks; a WebSocket-only shadowing cookie is healed here.
+      const url = request.url ?? '/';
+      const cookies = sessionHealCookies(request.headers.cookie, url, hostname, cookieSecure);
+      rejectUpgrade(socket, selected, '', cookies);
       return;
     }
     if (!hasValidOrigin(request, publicUrl)) {

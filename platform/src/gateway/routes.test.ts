@@ -72,6 +72,27 @@ it('rejects upgrade storage failures without disclosing details and consumes pee
   });
 });
 
+it('destroys only the upgrade socket whose handling throws and keeps serving', async () => {
+  await withApp(async (app, _database, lines) => {
+    await app.ready();
+    const request = new IncomingMessage(new Socket());
+    Object.defineProperty(request, 'url', {
+      get(): string {
+        throw new Error('private upgrade diagnostic');
+      },
+    });
+    const socket = new PassThrough();
+
+    app.server.emit('upgrade', request, socket, Buffer.alloc(0));
+
+    expect(socket.destroyed).toBe(true);
+    expect(lines.join('')).toContain('Gateway upgrade handling failed');
+    expect(lines.join('')).not.toContain('private upgrade diagnostic');
+    expect((await app.inject({ url: '/healthz' })).statusCode).toBe(200);
+    request.destroy();
+  });
+});
+
 it('aborts an HTTP request queued before the application shutdown fence', async () => {
   await withApp(async (app) => {
     const entered = Promise.withResolvers<undefined>();

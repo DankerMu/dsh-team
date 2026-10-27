@@ -10,7 +10,13 @@ import {
   readPublicIdentity,
   sessionCookieToken,
 } from './auth-fixture.ts';
-import { observeHttp, reader, withForwardingApp, withUpstream } from './gateway-http-fixture.ts';
+import {
+  observeHttp,
+  reader,
+  rejectedUpgrade,
+  withForwardingApp,
+  withUpstream,
+} from './gateway-http-fixture.ts';
 import type { ReadPeer } from './gateway-http-fixture.ts';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
 
@@ -27,29 +33,6 @@ const CLIENT_HEAD = Buffer.from([0x82, 0x82, 5, 6, 7, 8, 0xfa, 6]);
 const SERVER_HEAD = Buffer.from([0x81, 5, 104, 101, 108, 108, 111]);
 const EXTENSION_OFFER = 'permessage-deflate; client_max_window_bits';
 const EXTENSION_SELECTED = 'permessage-deflate; server_no_context_takeover';
-
-async function rejectedUpgrade(
-  base: string,
-  cookie: string,
-  fields: readonly string[],
-  path = '/ws',
-): Promise<string> {
-  const address = new URL(base);
-  const socket = connect(Number(address.port), address.hostname);
-  const read = reader(socket);
-  const closed = once(socket, 'close');
-  try {
-    await once(socket, 'connect');
-    socket.write(
-      `GET ${path} HTTP/1.1\r\nHost: ${address.host}\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${KEY}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n${fields.join('\r\n')}\r\n\r\n`,
-    );
-    const headers = (await read('\r\n\r\n')).toString();
-    await observeHttp(closed);
-    return headers;
-  } finally {
-    socket.destroy();
-  }
-}
 
 it('streams both WebSocket frame directions with private handshake credentials', async () => {
   await withUpstream(

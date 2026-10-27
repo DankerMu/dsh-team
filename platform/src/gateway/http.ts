@@ -74,6 +74,14 @@ export function isImmutableAsset(
   );
 }
 
+// Each login's HttpOnly session is in the browser's Cookie header, so one session's HTTP cache
+// entries never answer another session's requests.
+export function withSessionVary(value: string | undefined): string {
+  if (value === undefined || value.trim() === '') return 'Cookie';
+  const tokens = value.split(',').map((token) => token.trim().toLowerCase());
+  return tokens.includes('*') || tokens.includes('cookie') ? value : `${value}, Cookie`;
+}
+
 export function forwardHttp(
   incoming: FastifyRequest,
   reply: FastifyReply,
@@ -137,6 +145,9 @@ export function forwardHttp(
         const responseHeaders = forwardHeaders(response.headers, 'set-cookie');
         if (isImmutableAsset(incoming.method, rawTarget, response.statusCode, responseHeaders))
           responseHeaders['cache-control'] = IMMUTABLE_ASSET_CACHE;
+        const vary = responseHeaders.vary;
+        // Node joins repeated incoming Vary fields into one string.
+        responseHeaders.vary = withSessionVary(typeof vary === 'string' ? vary : undefined);
         reply.raw.writeHead(response.statusCode, responseHeaders);
         response.pipe(reply.raw);
       },
@@ -157,6 +168,7 @@ export function rejectUpgrade(
   socket: Duplex,
   code: 400 | 401 | 403 | 404 | 500 | 502 | 503,
   body = '',
+  setCookies: readonly string[] = [],
 ): void {
   socket.on('error', () => {
     socket.destroy();
@@ -165,8 +177,9 @@ export function rejectUpgrade(
     socket.destroy();
   });
   const contentType = body === '' ? '' : 'Content-Type: application/json\r\n';
+  const cookies = setCookies.map((cookie) => `Set-Cookie: ${cookie}\r\n`).join('');
   socket.end(
-    `HTTP/1.1 ${String(code)} ${STATUS_CODES[code] ?? 'Error'}\r\nConnection: close\r\n${contentType}Content-Length: ${String(Buffer.byteLength(body))}\r\n\r\n${body}`,
+    `HTTP/1.1 ${String(code)} ${STATUS_CODES[code] ?? 'Error'}\r\nConnection: close\r\n${cookies}${contentType}Content-Length: ${String(Buffer.byteLength(body))}\r\n\r\n${body}`,
   );
 }
 

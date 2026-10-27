@@ -125,7 +125,7 @@ export async function withApp(
   cookieSecure = false,
   trustedProxies: readonly string[] = [],
   resolveUpstream?: GatewayUpstreamResolver,
-  options: { subnetPool?: string; initialSettings?: Partial<Settings> } = {},
+  options: { subnetPool?: string; initialSettings?: Partial<Settings>; publicUrl?: string } = {},
 ): Promise<void> {
   const lines: string[] = [];
   const database = openDatabase(':memory:');
@@ -139,6 +139,9 @@ export async function withApp(
         cookieSecure,
         trustedProxies,
         subnetPool: options.subnetPool ?? CONFIG.subnetPool,
+        ...(options.publicUrl === undefined
+          ? {}
+          : { publicUrl: options.publicUrl, authority: new URL(options.publicUrl).host }),
       },
       database,
       {

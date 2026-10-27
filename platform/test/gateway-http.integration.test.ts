@@ -324,7 +324,7 @@ it('marks only a hashed DSH asset 200 immutable and forwards every other respons
           expect(withoutDate(forwarded)).toEqual(withoutDate(plain.headers));
           expect(plain.headers['cache-control']).toBeUndefined();
           expect(plain.headers['content-encoding']).toBe('gzip');
-          expect(plain.headers.vary).toBe('Accept-Encoding');
+          expect(plain.headers.vary).toBe('Accept-Encoding, Cookie');
           expect(hashed.body).toEqual(encoded);
           expect(plain.body).toEqual(encoded);
           const head = await get('/assets/index-5SrrfWpU.js', 'HEAD');
