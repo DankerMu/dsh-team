@@ -2,12 +2,16 @@
 // cannot import backend source, so both sides assert the same cases in their unit tests.
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
 
-/** Host-only, every Domain form of a DNS host and, for HTTPS, Secure/Partitioned variants. */
-export function cookieForms(hostname: string, https: boolean): string[] {
+/**
+ * Host-only, every Domain form of a DNS host and, for HTTPS, Secure/Partitioned variants.
+ * Without `parents` only the exact hostname's Domain form is kept.
+ */
+export function cookieForms(hostname: string, https: boolean, parents = true): string[] {
   const forms = [''];
   if (!hostname.startsWith('[') && !IPV4.test(hostname)) {
     const labels = hostname.split('.');
-    for (let index = 0; index < labels.length - 1; index++)
+    const domains = parents ? labels.length - 1 : Math.min(1, labels.length - 1);
+    for (let index = 0; index < domains; index++)
       forms.push(`; Domain=${labels.slice(index).join('.')}`);
   }
   return https
@@ -29,14 +33,22 @@ export function cookiePaths(pathname: string): string[] {
 
 function expireCookies(): void {
   const { pathname, hostname, protocol } = window.location;
-  const forms = cookieForms(hostname, protocol === 'https:');
-  const names = window.document.cookie
+  const https = protocol === 'https:';
+  const fragments = window.document.cookie
     .split(';')
-    .filter((pair) => pair.includes('='))
-    .map((pair) => pair.slice(0, pair.indexOf('=')).trim());
-  for (const name of names)
+    .map((fragment) => fragment.trim())
+    .filter((fragment) => fragment !== '');
+  for (const fragment of fragments) {
+    const separator = fragment.indexOf('=');
+    // A fragment without '=' is a nameless cookie; it is expired by writing it bare.
+    const prefix = separator === -1 ? fragment : `${fragment.slice(0, separator).trim()}=`;
+    // Other names keep their shared-parent-domain cookies, which other intranet systems may own.
+    const session = separator === -1 || prefix === 'platform_session=';
+    const forms = cookieForms(hostname, https, session);
     for (const path of cookiePaths(pathname))
-      for (const form of forms) window.document.cookie = `${name}=; Path=${path}${form}; Max-Age=0`;
+      for (const form of forms)
+        window.document.cookie = `${prefix}; Path=${path}${form}; Max-Age=0`;
+  }
 }
 
 function deleteDatabase(name: string): Promise<void> {

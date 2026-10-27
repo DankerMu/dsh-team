@@ -7,7 +7,7 @@
 - `localStorage` 和 `sessionStorage`；
 - `indexedDB.databases()` 列出的全部数据库；
 - 接口存在时，Service Worker 注册和 CacheStorage；
-- 脚本可见的 cookie：按当前页面路径及其每一级上级路径（含 `/`）过期，每个路径都要用全部 cookie 形式写一遍（定义见「自动清除遮蔽平台会话的 cookie」）。
+- 脚本可见的 cookie：按当前页面路径及其每一级上级路径（含 `/`）过期。`platform_session` 和无名片段要用全部 cookie 形式写一遍（定义见「自动清除遮蔽平台会话的 cookie」）；其他名称只用主机限定和 `Domain=<当前主机名>` 两种形式，不删除其他内网系统设在共同父域上的 cookie。
 
 清理中任何一步失败，或被另一个标签页阻塞，MUST NOT 阻止或推迟导航，也 MUST NOT 显示错误。HttpOnly 的平台会话 cookie 不受影响。改密码成功后仍保留会话，MUST NOT 清理。
 
@@ -50,6 +50,15 @@ cookie 形式指以下全部组合：
 
 被拒绝的 WebSocket 升级若带重名会话 cookie，其原始回应 MUST 带同样的过期 Set-Cookie。
 
+自愈逻辑在鉴权之前执行，因此：
+
+- 请求路径（去掉查询串）超过 512 个字符、超过 16 段，或含有 RFC 6265 cookie 路径字符以外的字符（包括 `;`）时，MUST NOT 发出任何过期头；
+- 升级处理中的任何异常 MUST 只销毁该连接，不得使进程退出；
+- `Cookie` 头含有不带 `=` 的 `platform_session` 片段（浏览器保存为名称为空的 cookie）时，还 MUST 以同样的路径和形式发出无名过期头 `platform_session; Path=P; Max-Age=0`，并额外包括主机限定的 `Path=/`；
+- HTTPS 下还 MUST 发出主机限定的 `Path=/; Secure; Partitioned` 过期头。
+
+这两种额外的过期头都碰不到合法的、有名称且不分区的 HttpOnly 会话。
+
 #### Scenario: 换人登录时清除遮蔽 cookie
 
 - **WHEN** 员工 A 未登出，A 的脚本在 `Path=/_platform/api` 放了一个非 HttpOnly 的 `platform_session`；员工 B 在同一浏览器上下文中登录
@@ -63,4 +72,14 @@ cookie 形式指以下全部组合：
 #### Scenario: 重名仍按无会话处理
 
 - **WHEN** 一个请求带两个 `platform_session`
-- **THEN** 该请求按未登录处理（需要会话的接口返回 401），回应带上述过期 Set-Cookie，不含主机限定的 `Path=/`；下一次请求不再带遮蔽 cookie
+- **THEN** 该请求按未登录处理（需要会话的接口返回 401），回应带上述过期 Set-Cookie，不含有名称、不分区的主机限定 `Path=/`；下一次请求不再带遮蔽 cookie
+
+#### Scenario: 超长或带分号的路径不触发自愈
+
+- **WHEN** 一个未认证请求或升级请求带两个 `platform_session`，请求路径为上万个 `/`，或为 `/z/;Path=/`
+- **THEN** 回应不带任何过期头，进程继续正常服务
+
+#### Scenario: 无名遮蔽 cookie 被清除
+
+- **WHEN** A 的脚本执行 `document.cookie = 'platform_session; Path=/_platform/api; Max-Age=86400'`，之后 B 登录
+- **THEN** B 登录后第一次请求 `/_platform/api/session` 即返回 200

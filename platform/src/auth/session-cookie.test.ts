@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatSessionCookie, countSessionCookies, readSessionCookie } from './session-cookie.ts';
+import { formatSessionCookie, readSessionCookie, sessionCookieShape } from './session-cookie.ts';
 
 const TOKEN = 'a'.repeat(64);
 
@@ -81,16 +81,16 @@ describe('readSessionCookie', () => {
   });
 });
 
-describe('countSessionCookies', () => {
+describe('sessionCookieShape', () => {
   it.each([
-    [undefined, 0],
-    ['', 0],
-    ['theme=dark; platform_sessions=x', 0],
-    [`platform_session=${TOKEN}`, 1],
-    ['platform_session', 1],
-    [`platform_session=${TOKEN}; platform_session=${TOKEN}`, 2],
-    [`platform_session=${TOKEN}; theme=dark; platform_session=x; platform_session`, 3],
-  ] as const)('counts the session pairs in %j as %i', (header, count) => {
-    expect(countSessionCookies(header)).toBe(count);
+    [undefined, 0, false],
+    ['', 0, false],
+    ['theme=dark; platform_sessions=x', 0, false],
+    [`platform_session=${TOKEN}`, 1, false],
+    ['platform_session', 1, true],
+    [`platform_session=${TOKEN}; platform_session=${TOKEN}`, 2, false],
+    [`platform_session=${TOKEN}; theme=dark; platform_session=x; platform_session`, 3, true],
+  ] as const)('counts the session pairs in %j as %i, bare %s', (header, count, bare) => {
+    expect(sessionCookieShape(header)).toEqual({ count, bare });
   });
 });

@@ -98,7 +98,20 @@ Example: for `/_platform/api/login` the paths are `/_platform`, `/_platform/`, `
 - A non-HttpOnly cookie cannot shadow the HttpOnly one at `/` on the same host anyway.
 - A `Domain`-form planted cookie at `/` on a hostname deployment is visible to script and is expired by the client clearing.
 
-The current request is still answered as anonymous, and the next request is clean. Login normally carries A's leftover session and the planted cookie together, so the login response itself heals. If no root session cookie is present at login, the first platform API call after login returns 401 and heals, and the page returns to login once. That case is documented.
+The current request is still answered as anonymous, and the next request is clean. The login and registration responses heal every path on the credential route's ancestry (`/_platform`, `/_platform/api`, …).
+
+A shadowing cookie on a path the login request does not carry, such as `/_platform/api/session`, is healed by the first request that carries it. That request answers 401 and the page returns to login once. This is documented.
+
+**Bounds and validation** (review round 1, P0/P2). The heal runs before authentication, so its output must be bounded and its input must be validated:
+
+- It runs only when the query-stripped request path is at most 512 characters and has at most 16 segments.
+- The path must consist of RFC 6265 cookie-path characters without `;`, so no attribute injection is possible.
+- Otherwise it emits nothing. Real planted paths are shallow.
+- The raw upgrade handler catches any exception and destroys that socket, so the process does not die.
+
+**Nameless cookies** (review round 1, P1). `document.cookie = 'platform_session; Path=…'` stores a cookie with an empty name and the value `platform_session`, which the browser sends as a bare `platform_session` fragment. `readSessionCookie` counts that fragment as a session pair. A named expiry cannot delete it. When the header carries such a fragment, the heal also emits the nameless form `platform_session; Path=P; Max-Age=0` for every path and cookie form, and for host-only `Path=/`. A nameless expiry can never touch the named HttpOnly session. The client clearing does the same for bare fragments.
+
+**Partitioned at `/`** (review round 1, P3). On HTTPS the heal also emits a host-only `Path=/; Secure; Partitioned` expiry. It deletes only a partitioned cookie; the legitimate session is not partitioned. This is unverified on a real TLS origin.
 
 This rule is generic: the server never needs to know which paths A used.
 
@@ -124,7 +137,7 @@ What is cleared:
   - `blocked` means another tab holds a connection, for example A's open workbench. The browser finishes the deletion when that connection closes; navigation does not wait.
 - Service Workers, when `navigator.serviceWorker` exists: `getRegistrations()`, then `unregister()` each.
 - CacheStorage, when `caches` exists: `keys()`, then `delete()` each.
-- Script-visible cookies: for each name in `document.cookie`, write an expired cookie at every ancestor of `location.pathname`, including the path itself and `/`, in every cookie form of decision 3.
+- Script-visible cookies: for each name in `document.cookie`, write an expired cookie at every ancestor of `location.pathname`, including the path itself and `/`. `platform_session` and bare (nameless) fragments are written in every cookie form of decision 3. Other names are written only host-only and with `Domain=<exact hostname>`, so script cookies that other intranet systems set on a shared parent domain are not deleted (review round 1, P2).
   - Script cannot overwrite or expire the HttpOnly `platform_session`, so the new session survives.
   - Non-root shadowing session cookies are the server heal's job (decision 3).
 

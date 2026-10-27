@@ -154,6 +154,15 @@ export const gatewayRoutes: FastifyPluginCallback<{
     admit,
   );
   function upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+    try {
+      admitUpgrade(request, socket, head);
+    } catch {
+      // A raw upgrade listener has no framework error boundary; one bad request must not end the process.
+      app.log.error('Gateway upgrade handling failed');
+      socket.destroy();
+    }
+  }
+  function admitUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (connections.isClosing()) {
       socket.on('error', () => {
         socket.destroy();

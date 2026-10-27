@@ -96,24 +96,44 @@ describe('sessionHealCookies', () => {
     ];
 
     expect(sessionHealCookies(SHADOW, '/x', '127.0.0.1', false, true)).toEqual(expected);
-    expect(sessionHealCookies('platform_session', '/x', '127.0.0.1', false, true)).toEqual(
-      expected,
-    );
+    expect(sessionHealCookies('platform_session', '/x', '127.0.0.1', false, true)).toEqual([
+      ...expected,
+      'platform_session; Path=/x; Max-Age=0',
+      'platform_session; Path=/x/; Max-Age=0',
+      'platform_session; Path=/; Max-Age=0',
+    ]);
     expect(sessionHealCookies('theme=dark', '/x', '127.0.0.1', false, true)).toEqual([]);
     expect(sessionHealCookies(undefined, '/x', '127.0.0.1', false, true)).toEqual([]);
   });
 
-  it('treats a valueless duplicate name as a duplicate', () => {
+  it('expires a bare fragment in nameless form at every heal path and the root', () => {
     expect(sessionHealCookies(`${SESSION}; platform_session`, '/x', '127.0.0.1', false)).toEqual([
       'platform_session=; Path=/x; Max-Age=0',
       'platform_session=; Path=/x/; Max-Age=0',
+      'platform_session; Path=/x; Max-Age=0',
+      'platform_session; Path=/x/; Max-Age=0',
+      'platform_session; Path=/; Max-Age=0',
     ]);
   });
 
-  it('adds Path=/ only in Domain forms for a DNS host', () => {
+  it('expires a bare fragment in every form, including the Domain forms at the root', () => {
+    const cookies = sessionHealCookies('platform_session', '/x', 'corp.example', true, true);
+
+    expect(cookies.filter((cookie) => cookie.startsWith('platform_session;'))).toEqual(
+      ['/x', '/x/', '/'].flatMap((path) =>
+        ['', '; Domain=corp.example'].flatMap((form) =>
+          [form, `${form}; Secure`, `${form}; Partitioned; Secure`].map(
+            (variant) => `platform_session; Path=${path}${variant}; Max-Age=0`,
+          ),
+        ),
+      ),
+    );
+  });
+
+  it('adds Path=/ only in Domain forms and the host-only partitioned form for an HTTPS DNS host', () => {
     const cookies = sessionHealCookies(`${SESSION}; ${SHADOW}`, '/x', 'dsh.corp.example', true);
 
-    expect(cookies).toHaveLength(2 * 9 + 6);
+    expect(cookies).toHaveLength(2 * 9 + 7);
     const roots = cookies.filter((cookie) => cookie.includes('Path=/;'));
     expect(roots).toEqual([
       'platform_session=; Path=/; Domain=dsh.corp.example; Max-Age=0',
@@ -122,8 +142,39 @@ describe('sessionHealCookies', () => {
       'platform_session=; Path=/; Domain=corp.example; Max-Age=0',
       'platform_session=; Path=/; Domain=corp.example; Secure; Max-Age=0',
       'platform_session=; Path=/; Domain=corp.example; Partitioned; Secure; Max-Age=0',
+      'platform_session=; Path=/; Partitioned; Secure; Max-Age=0',
     ]);
     expect(cookies).toContain('platform_session=; Path=/x/; Partitioned; Secure; Max-Age=0');
+  });
+
+  it('adds only the host-only partitioned root expiry for an HTTPS IP host', () => {
+    expect(
+      sessionHealCookies(`${SESSION}; ${SHADOW}`, '/x', '127.0.0.1', true).filter((cookie) =>
+        cookie.includes('Path=/;'),
+      ),
+    ).toEqual(['platform_session=; Path=/; Partitioned; Secure; Max-Age=0']);
+  });
+
+  it.each([
+    ['512 characters', `/${'a'.repeat(511)}`, 2],
+    ['16 segments', '/a'.repeat(16), 32],
+    ['a long query', `/x?${'q'.repeat(4096)}`, 2],
+  ])('heals a path within the bounds: %s', (_name, target, count) => {
+    expect(sessionHealCookies(`${SESSION}; ${SHADOW}`, target, '127.0.0.1', false)).toHaveLength(
+      count,
+    );
+  });
+
+  it.each([
+    ['513 characters', `/${'a'.repeat(512)}`],
+    ['17 segments', '/a'.repeat(17)],
+    ['thousands of slashes', '/'.repeat(16200)],
+    ['a semicolon attribute injection', '/z/;Path=/'],
+    ['a control character', '/a\u0001b'],
+    ['a non-ASCII character', '/caf\u00e9'],
+  ])('emits nothing outside the bounds: %s', (_name, target) => {
+    for (const header of [`${SESSION}; ${SHADOW}`, `${SESSION}; platform_session`])
+      expect(sessionHealCookies(header, target, 'dsh.corp.example', true, true)).toEqual([]);
   });
 });
 

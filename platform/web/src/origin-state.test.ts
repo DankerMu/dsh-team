@@ -94,23 +94,23 @@ it('clears storage, every listed database, every worker registration and every c
   expect(browser.caches.delete.mock.calls).toEqual([['a-cache'], ['b-cache']]);
 });
 
-it('expires every script-visible cookie at every ancestor path including the root', async () => {
-  const browser = stubBrowser({ cookie: 'a_pref=1; theme=dark=x; nameless' });
+it('expires every script-visible cookie, bare fragments in nameless form, at every ancestor path', async () => {
+  const browser = stubBrowser({ cookie: 'a_pref=1; theme=dark=x; platform_session' });
 
   await clearOriginState();
 
-  expect(browser.writes).toEqual(
-    ['a_pref', 'theme'].flatMap((name) =>
-      ['/', '/_platform', '/_platform/', '/_platform/login'].map(
-        (path) => `${name}=; Path=${path}; Max-Age=0`,
-      ),
+  const paths = ['/', '/_platform', '/_platform/', '/_platform/login'];
+  expect(browser.writes).toEqual([
+    ...['a_pref', 'theme'].flatMap((name) =>
+      paths.map((path) => `${name}=; Path=${path}; Max-Age=0`),
     ),
-  );
+    ...paths.map((path) => `platform_session; Path=${path}; Max-Age=0`),
+  ]);
 });
 
-it('expires cookies in every Domain and HTTPS form for a DNS host', async () => {
+it('keeps parent-domain forms for platform_session and bare fragments only on a DNS host', async () => {
   const browser = stubBrowser({
-    cookie: 'a_pref=1',
+    cookie: 'a_pref=1; platform_session=x; platform_session',
     pathname: '/_platform/account',
     hostname: 'dsh.corp.example',
     protocol: 'https:',
@@ -118,11 +118,19 @@ it('expires cookies in every Domain and HTTPS form for a DNS host', async () => 
 
   await clearOriginState();
 
-  expect(browser.writes).toHaveLength(4 * 9);
-  expect(browser.writes).toContain(
-    'a_pref=; Path=/_platform/; Domain=corp.example; Partitioned; Secure; Max-Age=0',
+  const preference = browser.writes.filter((write) => write.startsWith('a_pref='));
+  const named = browser.writes.filter((write) => write.startsWith('platform_session='));
+  const bare = browser.writes.filter((write) => write.startsWith('platform_session;'));
+  expect(preference).toHaveLength(4 * 6);
+  expect(preference.some((write) => write.includes('Domain=corp.example'))).toBe(false);
+  expect(preference).toContain('a_pref=; Path=/; Domain=dsh.corp.example; Secure; Max-Age=0');
+  expect(preference).toContain('a_pref=; Path=/_platform/; Partitioned; Secure; Max-Age=0');
+  expect(named).toHaveLength(4 * 9);
+  expect(named).toContain(
+    'platform_session=; Path=/_platform/; Domain=corp.example; Partitioned; Secure; Max-Age=0',
   );
-  expect(browser.writes).toContain('a_pref=; Path=/; Secure; Max-Age=0');
+  expect(bare).toHaveLength(4 * 9);
+  expect(bare).toContain('platform_session; Path=/; Domain=corp.example; Max-Age=0');
 });
 
 it.each(['127.0.0.1', '10.1.2.3', '[::1]', '[2001:db8::1]'])(

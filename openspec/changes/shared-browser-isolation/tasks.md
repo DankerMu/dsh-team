@@ -82,7 +82,7 @@ See `design.md`, "Must preserve".
   - `docs/DEPLOY.md` §6 residual risks:
     - one's own session;
     - a page of A's still open, or restored by Back from bfcache;
-    - a shadowing cookie present at login without a root session costs one return to the login page;
+    - a shadowing cookie on a path the login request does not carry costs one 401 and one return to the login page;
     - cookie bombs (431) need a site-data clear, as do shadowing cookies on a WebSocket-only path if the browser ignores cookies on a rejected handshake;
     - one profile per person, and log out and close the browser on handover.
   - AGENTS.md: the gateway forwarding sentence (`Vary` merge, `Service-Worker` 403), a session-cookie sentence (duplicate heal, no `Path=/`) and the platform-UI form sentence (clearing before navigation).

@@ -36,7 +36,8 @@ export function readSessionCookie(header: string | undefined): string | null {
   return token;
 }
 
-/** The number of platform_session pairs; more than one means a shadowing cookie. */
-export function countSessionCookies(header: string | undefined): number {
-  return header === undefined ? 0 : sessionCookieValues(header).length;
+/** Session pairs in the header; `bare` marks a fragment the browser stores as a nameless cookie. */
+export function sessionCookieShape(header: string | undefined): { count: number; bare: boolean } {
+  const values = header === undefined ? [] : sessionCookieValues(header);
+  return { count: values.length, bare: values.includes(null) };
 }

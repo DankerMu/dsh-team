@@ -7,7 +7,7 @@ import {
   sessionCookieToken,
   withApp,
 } from './auth-fixture.ts';
-import { sendHttp } from './gateway-http-fixture.ts';
+import { rejectedUpgrade, sendHttp } from './gateway-http-fixture.ts';
 
 const SHADOW = `platform_session=${'b'.repeat(64)}`;
 const SESSION_PATHS = [
@@ -71,6 +71,7 @@ it('expires every Domain, Secure and Partitioned form and only Domain forms at P
       expect(setCookies(healed.headers)).toEqual([
         ...expiries(SESSION_PATHS, forms),
         ...expiries(['/'], forms.slice(3)),
+        'platform_session=; Path=/; Partitioned; Secure; Max-Age=0',
       ]);
     },
     true,
@@ -176,3 +177,53 @@ it.each([
     });
   },
 );
+
+it('expires a bare platform_session fragment in nameless form, including at the root', async () => {
+  await withApp(async (app) => {
+    const base = await app.listen({ host: '127.0.0.1', port: 0 });
+
+    const healed = await sendHttp(base, {
+      path: '/_platform/api/session',
+      headers: { cookie: `platform_session=${'a'.repeat(64)}; platform_session` },
+    });
+
+    expect(healed.status).toBe(401);
+    expect(setCookies(healed.headers)).toEqual([
+      ...expiries(SESSION_PATHS, ['']),
+      ...[...SESSION_PATHS, '/'].map((path) => `platform_session; Path=${path}; Max-Age=0`),
+    ]);
+  });
+});
+
+it('ignores an unbounded path on an HTTPS DNS host and keeps serving', async () => {
+  await withApp(
+    async (app) => {
+      const base = await app.listen({ host: '127.0.0.1', port: 0 });
+      const cookie = `platform_session=${'a'.repeat(64)}; ${SHADOW}; platform_session`;
+      // Large enough to amplify quadratically, small enough to stay under Node's 16 KiB header limit.
+      const path = '/'.repeat(15000);
+
+      const upgrade = await rejectedUpgrade(
+        base,
+        cookie,
+        ['Origin: https://dsh.corp.example', 'Upgrade: websocket'],
+        path,
+      );
+      const http = await sendHttp(base, { path, headers: { cookie } });
+      const injected = await sendHttp(base, { path: '/z/;Path=/', headers: { cookie } });
+      const health = await sendHttp(base, { path: '/healthz' });
+
+      expect(upgrade).toMatch(/^HTTP\/1\.1 401 Unauthorized\r\n/);
+      expect(upgrade.toLowerCase()).not.toContain('set-cookie');
+      expect(http.status).toBe(401);
+      expect(http.headers['set-cookie']).toBeUndefined();
+      expect(injected.status).toBe(401);
+      expect(injected.headers['set-cookie']).toBeUndefined();
+      expect(health.status).toBe(200);
+    },
+    true,
+    [],
+    undefined,
+    { publicUrl: 'https://dsh.corp.example' },
+  );
+});
