@@ -55,7 +55,8 @@ export function shadowPaths(target: string): string[] {
 
 const CREDENTIAL_ROUTES = new Set(['/_platform/api/login', '/_platform/api/register']);
 
-// Behind a reverse proxy, nginx's default upstream header buffer is 4-8 KiB; stay well inside it.
+// Bounds the heal's Set-Cookie values (not the whole header block, about 4 KiB at worst); fitting a
+// reverse proxy relies on the documented 16 KiB response-header requirement.
 const HEADER_BUDGET = 3072;
 
 /**

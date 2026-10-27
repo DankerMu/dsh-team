@@ -43,7 +43,7 @@ See `design.md`, "Must preserve".
   - Unit tests of the shared cookie-form function:
     - an IPv4 or IPv6 host gives host-only only;
     - `dsh.corp.example` gives host-only plus `Domain=dsh.corp.example` and `Domain=corp.example`;
-    - HTTPS adds `Secure` and `Partitioned; Secure` variants.
+    - HTTPS adds only the `Partitioned; Secure` variant.
   - Unit tests of the path set:
     - `/_platform/api/login` gives exactly `/_platform`, `/_platform/`, `/_platform/api`, `/_platform/api/`, `/_platform/api/login` and `/_platform/api/login/`;
     - `/_platform/api/login/?x=1` gives the same set;

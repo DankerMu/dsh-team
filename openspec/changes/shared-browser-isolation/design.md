@@ -92,7 +92,7 @@ Ancestors are computed from the request path with the query removed. A trailing 
 
 Example: for `/_platform/api/login` the paths are `/_platform`, `/_platform/`, `/_platform/api`, `/_platform/api/`, `/_platform/api/login`, `/_platform/api/login/`.
 
-`Path=/` is never emitted:
+A named, unpartitioned host-only `Path=/` expiry is never emitted:
 
 - With an IP host, a browser may store a matching `Domain` cookie as host-only, so a `Path=/` expiry could delete the legitimate session.
 - A non-HttpOnly cookie cannot shadow the HttpOnly one at `/` on the same host anyway.
@@ -113,7 +113,7 @@ A shadowing cookie on a path the login request does not carry, such as `/_platfo
 
 **Header budget** (review round 2, P1). An HTTPS deployment sits behind an existing reverse proxy, and nginx's default upstream response-header buffer is one memory page (4 KiB or 8 KiB). Above that, nginx answers 502 "upstream sent too big header".
 
-The heal therefore emits its expiries in a fixed priority order and stops before the total of its `Set-Cookie` values would exceed 3 KiB:
+The heal therefore emits its expiries in a fixed priority order and stops before the total of its `Set-Cookie` values would exceed 3 KiB. This bounds the heal's size. It does not fit a default 4 KiB buffer by itself: with the `Set-Cookie: ` prefixes, CRLFs and the other headers, the worst case is about 4.1 KB, according to the round-3 review's estimate. The guarantee against a 502 is the documented requirement that the proxy allow at least 16 KiB of response headers. The priority order:
 
 1. named host-only, deepest request ancestor first;
 2. nameless host-only, when a bare fragment is present, including `Path=/`;
