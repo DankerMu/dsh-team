@@ -96,6 +96,7 @@ const NETWORK_POLICY_INPUT: ManagedConfigInput = {
             name: '@deepseek-ai/dsh-tool-web',
             config: { fetch: true, searchTimeoutMs: 60000 },
           },
+          { id: 'renamed-plugins', name: '@deepseek-ai/dsh-plugin-manager/tools' },
           { id: 'tool-web', name: '@deepseek-ai/dsh-tool-present' },
           {
             id: 'planning',
@@ -105,6 +106,11 @@ const NETWORK_POLICY_INPUT: ManagedConfigInput = {
             config: [
               { id: 'plan-mode', name: '@deepseek-ai/dsh-plan-mode' },
               { id: 'nested-web', name: '@deepseek-ai/dsh-tool-web' },
+              {
+                id: 'nested-plugins',
+                name: '@deepseek-ai/dsh-plugin-manager/tools',
+                disabled: false,
+              },
               { id: 'tool-todo', name: '@deepseek-ai/dsh-tool-todo' },
             ],
           },
@@ -126,6 +132,7 @@ const NETWORK_POLICY_INPUT: ManagedConfigInput = {
         id: 'custom-office',
         order: 9,
         plugins: [
+          { id: 'tool-plugin-manager', name: '@deepseek-ai/dsh-plugin-manager/tools' },
           { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
           { id: 'web-fetch', name: '@deepseek-ai/dsh-tool-web' },
           { id: 'present', name: '@deepseek-ai/dsh-tool-present' },
@@ -247,7 +254,7 @@ describe('generateManagedConfig', () => {
     ]);
   });
 
-  it('removes renamed nested network tools from every supplied preset without mutating input', () => {
+  it('removes renamed nested network and plugin-manager tools from every supplied preset without mutating input', () => {
     const snapshot = structuredClone(NETWORK_POLICY_INPUT);
 
     const generated = generateManagedConfig(NETWORK_POLICY_INPUT);
@@ -257,6 +264,36 @@ describe('generateManagedConfig', () => {
     expect(rowsWithIds(generated.content, ['preset-ledger', 'preset-custom-office'])).toEqual(
       EXPECTED_NETWORK_POLICY_ROWS,
     );
+  });
+
+  it('turns the plugin page registry probe off in exactly one whole-config row', () => {
+    const generated = generateManagedConfig(INPUT);
+    ok(generated.outcome === 'configured');
+
+    expect(rowsWithIds(generated.content, ['ui-plugin-manager'])).toEqual([
+      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
+    ]);
+  });
+
+  it('places the registry probe row after profile and locale rows that try to re-enable it', () => {
+    const reenable = { id: 'ui-plugin-manager', config: { registryProbeEnabled: true } };
+    const generated = generateManagedConfig({
+      ...INPUT,
+      localePatch: [...INPUT.localePatch, reenable],
+    });
+    ok(generated.outcome === 'configured');
+    const rows: unknown = JSON.parse(generated.content);
+    ok(Array.isArray(rows));
+    const probe = rows.findLastIndex(
+      (row: unknown) =>
+        typeof row === 'object' && row !== null && 'id' in row && row.id === 'ui-plugin-manager',
+    );
+
+    expect(rows.slice(probe - 1, probe + 2)).toEqual([
+      reenable,
+      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
+      { id: 'auto-review', disabled: true },
+    ]);
   });
 
   it('preserves own __proto__ metadata on a transformed group preset', () => {

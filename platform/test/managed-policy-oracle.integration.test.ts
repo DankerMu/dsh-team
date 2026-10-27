@@ -16,6 +16,8 @@ const EXPECTED: Omit<ManagedPolicyRuntimeExpectation, 'presetIds'> = {
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
 };
+// Live `ui-plugin-manager` config as the observer reads it; managed policy requires false.
+const PLUGIN_PAGE = { registryProbeEnabled: false };
 
 it('accepts a tool-less preset alongside independently required built-in tools', () => {
   const observation = {
@@ -24,6 +26,7 @@ it('accepts a tool-less preset alongside independently required built-in tools',
       { id: 'office-general', description: '综合办公', toolNames: [] },
       { id: 'standard', description: '', toolNames: ['bash', 'read'] },
     ],
+    pluginPage: PLUGIN_PAGE,
   };
 
   assertManagedPolicyRuntime(observation, {
@@ -44,6 +47,16 @@ it.each([
   { reason: 'non-string tool name', office: [42], standard: ['bash', 'read'] },
   { reason: 'missing required built-in tools', office: [], standard: [] },
   { reason: 'forbidden network tool', office: ['web_search'], standard: ['bash', 'read'] },
+  {
+    reason: 'forbidden plugin manager tool',
+    office: ['plugin_manager'],
+    standard: ['bash', 'read'],
+  },
+  {
+    reason: 'plugin manager beside required tools',
+    office: [],
+    standard: ['bash', 'read', 'plugin_manager'],
+  },
 ])('rejects $reason while permitting genuinely tool-less presets', ({ office, standard }) => {
   const observation = {
     models: EXPECTED,
@@ -51,6 +64,7 @@ it.each([
       { id: 'office-general', description: '综合办公', toolNames: office },
       { id: 'standard', description: '', toolNames: standard },
     ],
+    pluginPage: PLUGIN_PAGE,
   };
 
   expect(() => {
@@ -66,6 +80,7 @@ it('rejects office capability evidence that omits its required definition metada
   const observation = {
     models: EXPECTED,
     presets: [{ id: 'office-general', description: '办公职责', toolNames: ['read', 'write'] }],
+    pluginPage: PLUGIN_PAGE,
   };
   const expected = {
     ...EXPECTED,
@@ -98,6 +113,7 @@ const OFFICE_RUNTIME = {
       office: OFFICE_METADATA,
     },
   ],
+  pluginPage: PLUGIN_PAGE,
 };
 const OFFICE_EXPECTED = {
   ...EXPECTED,
@@ -146,6 +162,7 @@ it('rejects a live runtime observation that omits the required custom grouped pr
       { id: 'standard', description: '', toolNames: ['bash', 'read'] },
       { id: 'minimal', description: '', toolNames: ['bash'] },
     ],
+    pluginPage: PLUGIN_PAGE,
   };
 
   expect(() => {
@@ -186,6 +203,7 @@ it.each([
       { id: 'minimal', description: '', toolNames: ['bash'] },
       { id: 'custom-office', description: 'brief-zh', toolNames: ['read', 'present'] },
     ],
+    pluginPage: PLUGIN_PAGE,
   };
 
   expect(() => {
@@ -213,10 +231,11 @@ const QUALIFIED_CONTROL: ManagedPolicyRuntimeObservation = {
     {
       id: 'custom-office',
       description: 'brief-zh',
-      toolNames: ['read', 'present', 'web_search', 'web_fetch'],
+      toolNames: ['read', 'present', 'web_search', 'web_fetch', 'plugin_manager'],
       readLimit: 500,
     },
   ],
+  pluginPage: { registryProbeEnabled: true },
 };
 
 it.each([
@@ -263,13 +282,24 @@ it.each([
     'custom-web-fetch',
     [{ id: 'custom-office', description: '', toolNames: ['web_search'], readLimit: 500 }],
   ],
+  [
+    'custom-plugin-manager',
+    [
+      {
+        id: 'custom-office',
+        description: '',
+        toolNames: ['web_search', 'web_fetch'],
+        readLimit: 500,
+      },
+    ],
+  ],
 ] as const)('identifies the failed employee control %s preset condition', (failure, presets) => {
   const observation = { ...QUALIFIED_CONTROL, presets };
   expect(controlEmployeePolicyFailure(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(failure);
   expect(controlExposesEmployeePolicy(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(false);
 });
 
-it('qualifies employee control only when every provider and custom web tool is exposed', () => {
+it('qualifies employee control only when every provider, custom web tool and plugin manager is exposed', () => {
   expect(
     controlEmployeePolicyFailure(QUALIFIED_CONTROL, 'http://127.0.0.1:8/v1', 'alpha'),
   ).toBeUndefined();
@@ -303,7 +333,7 @@ it.each([undefined, 2000, 499] as const)(
         {
           id: 'custom-office',
           description: 'brief-zh',
-          toolNames: ['read', 'present', 'web_search', 'web_fetch'],
+          toolNames: ['read', 'present', 'web_search', 'web_fetch', 'plugin_manager'],
           ...(readLimit === undefined ? {} : { readLimit }),
         },
       ],
@@ -337,6 +367,7 @@ it.each([undefined, 2000, 499, '500', { __jsExpr: '250 + 250' }] as const)(
           ...(readLimit === undefined ? {} : { readLimit }),
         },
       ],
+      pluginPage: PLUGIN_PAGE,
     };
 
     expect(() => {
@@ -354,3 +385,28 @@ it.each([undefined, 2000, 499, '500', { __jsExpr: '250 + 250' }] as const)(
     }).toThrow('Invalid managed policy runtime observation');
   },
 );
+
+it.each([
+  ['probe left on', { registryProbeEnabled: true }],
+  ['probe missing', {}],
+  ['probe not boolean', { registryProbeEnabled: 'false' }],
+  ['no plugin page read', undefined],
+] as const)('rejects managed policy with the plugin page %s', (_label, pluginPage) => {
+  const observation = {
+    models: EXPECTED,
+    presets: [{ id: 'standard', description: '', toolNames: ['bash', 'read'] }],
+    ...(pluginPage === undefined ? {} : { pluginPage }),
+  };
+  const expected = { ...EXPECTED, presetIds: ['standard'] };
+
+  expect(() => {
+    assertManagedPolicyRuntime(observation, expected);
+  }).toThrow('Invalid managed policy runtime observation');
+  assertManagedPolicyRuntime({ ...observation, pluginPage: PLUGIN_PAGE }, expected);
+});
+
+it('keeps the live plugin page probe value in parsed control evidence', () => {
+  expect(parseManagedPolicyRuntime(QUALIFIED_CONTROL).pluginPage).toEqual({
+    registryProbeEnabled: true,
+  });
+});

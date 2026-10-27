@@ -62,6 +62,7 @@ export function customOfficeInsert(presetId: string): {
               group: true,
               config: [
                 { id: 'renamed-web', name: '@deepseek-ai/dsh-tool-web' },
+                { id: 'renamed-plugins', name: '@deepseek-ai/dsh-plugin-manager/tools' },
                 { id: 'present', name: '@deepseek-ai/dsh-tool-present' },
               ],
             },

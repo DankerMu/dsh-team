@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { arch, platform, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -118,6 +119,79 @@ function expectEmployeeNavigation(observation: MappedHostAcceptResult): void {
     search: '',
     heading: '修改密码',
   });
+}
+
+const OFFICE_AGENTS = '@dsh-team/office-agents';
+const PROFILE_MANIFEST = '/data/home/profiles/web/package.json';
+
+/**
+ * Hand-add the image-delivered office-agents bundle to the profile `dependencies`, as an
+ * installed bundle would be listed; the bundle files and its `dsh.profile.bundles` entry are
+ * already in the image. Writes the manifest the way DSH saves it and returns the prior bytes.
+ */
+const ADD_DEPENDENCY = `import { readFileSync, writeFileSync } from 'node:fs';
+const path = ${JSON.stringify(PROFILE_MANIFEST)};
+const before = readFileSync(path);
+const manifest = JSON.parse(before.toString('utf8'));
+const bundle = JSON.parse(readFileSync('/data/home/profiles/web/node_modules/${OFFICE_AGENTS}/package.json', 'utf8'));
+const hadDependencies = Object.hasOwn(manifest, 'dependencies');
+manifest.dependencies = { ...manifest.dependencies, [bundle.name]: bundle.version };
+writeFileSync(path, JSON.stringify(manifest, null, 2) + '\\n');
+process.stdout.write(JSON.stringify({ uid: process.getuid(), before: before.toString('base64'),
+  hadDependencies, dependencies: manifest.dependencies, bundles: manifest.dsh.profile.bundles }));`;
+
+/** Remove only the hand-added entry; every other byte DSH wrote is kept for the comparison. */
+function removeDependency(hadDependencies: boolean): string {
+  return `import { readFileSync, writeFileSync } from 'node:fs';
+const path = ${JSON.stringify(PROFILE_MANIFEST)};
+const manifest = JSON.parse(readFileSync(path, 'utf8'));
+delete manifest.dependencies[${JSON.stringify(OFFICE_AGENTS)}];
+if (!${String(hadDependencies)} && Object.keys(manifest.dependencies).length === 0) delete manifest.dependencies;
+writeFileSync(path, JSON.stringify(manifest, null, 2) + '\\n');
+process.stdout.write(JSON.stringify({ uid: process.getuid(), after: readFileSync(path).toString('base64') }));`;
+}
+
+/** One offline uid1001 helper over a stopped employee's home volume. */
+async function editProfile(lifecycle: UserImageLifecycle, userId: string, script: string) {
+  const name = `dsh-team-test-${lifecycle.runId}-${randomUUID()}`;
+  lifecycle.registerContainer(name);
+  const result = await lifecycle.commandAsync(
+    [
+      'run',
+      '--rm',
+      '--name',
+      name,
+      '--label',
+      `dsh-team.test-run=${lifecycle.runId}`,
+      '--network',
+      'none',
+      '--mount',
+      `type=volume,source=dsh-team-home-${userId},target=/data/home,volume-nocopy`,
+      lifecycle.imageId,
+      'node',
+      '--input-type=module',
+      '-e',
+      script,
+    ],
+    30_000,
+  );
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Employee profile edit failed');
+  const edited = record(JSON.parse(result.stdout));
+  expect(edited.uid).toBe(1001);
+  return edited;
+}
+
+/** No install or uninstall entry; the bundle switch is usable and round-trips across reloads. */
+function expectPluginPage(observation: MappedHostAcceptResult): void {
+  expect(observation.accepted).toBe(true);
+  expect(observation.pluginPage).toMatchObject({
+    list: { refresh: true, addButtons: 0, group: 'bundles', status: 'running', checked: true },
+    detail: { uninstallButtons: 0, checked: true, disabled: false, title: null },
+    off: { checked: false, status: 'disabled' },
+    on: { checked: true, status: 'running' },
+  });
+  expect(observation.pluginPage?.screenshots).toHaveLength(4);
 }
 
 function requireAutomaticSession(observation: MappedHostAcceptResult): string {
@@ -297,6 +371,25 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
           expect(record(record(projected.value).values).title).toBe(title);
         };
 
+        // Exact-ID fixture retirement; a later start recreates the instance over the same volumes.
+        const retire = async (id: string): Promise<void> => {
+          for (const args of [
+            ['stop', '--time', '10', id],
+            ['rm', id],
+          ]) {
+            const result = await lifecycle.commandAsync(args, 30_000);
+            if (result.status !== 0 || result.error !== undefined)
+              throw new Error('Owned first-use container retirement failed');
+          }
+          expect(
+            isAbsentResource(
+              await lifecycle.commandAsync(['container', 'inspect', id], 15_000),
+              'container',
+              id,
+            ),
+          ).toBe(true);
+        };
+
         const employee = await registerInstanceUser(base, origin, 'first-use@example.test');
         const firstId = await start(employee);
         const initial = await employeeState(lifecycle, firstId);
@@ -354,21 +447,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
         await requireSession(employee.cookie, sessionId, 'employee Session 中文');
 
         // Exact-ID fixture retirement exercises normal production recreation over the same volumes.
-        for (const args of [
-          ['stop', '--time', '10', firstId],
-          ['rm', firstId],
-        ]) {
-          const result = await lifecycle.commandAsync(args, 30_000);
-          if (result.status !== 0 || result.error !== undefined)
-            throw new Error('Owned first-use container retirement failed');
-        }
-        expect(
-          isAbsentResource(
-            await lifecycle.commandAsync(['container', 'inspect', firstId], 15_000),
-            'container',
-            firstId,
-          ),
-        ).toBe(true);
+        await retire(firstId);
         const recreatedId = await start(employee);
         expect(recreatedId).not.toBe(firstId);
         requireEmployeeStorage(await employeeState(lifecycle, recreatedId), employeeStorage);
@@ -383,10 +462,56 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
             2,
           ),
         );
+
+        // Dedicated employee: the home volume fills from the image only on its first start, so
+        // the hand-added dependency (an installed bundle with an uninstall entry) needs a restart.
+        const plugins = await registerInstanceUser(base, origin, 'first-use-plugins@example.test');
+        await retire(await start(plugins));
+        const added = await editProfile(lifecycle, plugins.id, ADD_DEPENDENCY);
+        // Vitest's matcher is untyped; it is an expected-value sentinel, not manifest data.
+        expect(added.dependencies).toEqual({ [OFFICE_AGENTS]: expect.any(String) as unknown });
+        expect(added.bundles).toContain(OFFICE_AGENTS);
+        const pluginsId = await start(plugins);
+        const profile = await mkdtemp(join(tmpdir(), 'dsh-team-first-use-plugins-'));
+        let pluginObservation: MappedHostAcceptResult;
+        try {
+          pluginObservation = await acceptObservation({
+            origin,
+            cookie: plugins.cookie,
+            extraFlags: mappedFlags(host),
+            expectedHost: host,
+            composition: true,
+            expectedRoster: MANAGED_BOOT_ROSTER,
+            runtime: isolatedBrowserRuntime(lifecycle.runId),
+            profile: join(profile, 'profile'),
+            receiptFile: join(profile, 'chrome.receipt.json'),
+            screenshot: join(evidence, 'plugins.png'),
+            browserMs: 30_000,
+            workspace: { available: true, workBound: true },
+            pluginPage: true,
+          });
+        } finally {
+          await rescueChrome(join(profile, 'chrome.receipt.json'));
+          await rm(profile, { recursive: true, force: true });
+        }
+        await writeFile(
+          join(evidence, 'plugins.json'),
+          JSON.stringify({ added, observation: pluginObservation }, null, 2),
+        );
+        expectPluginPage(pluginObservation);
+        // Restore: the switch ends on; remove the hand-added entry and compare the exact bytes.
+        await retire(pluginsId);
+        const restored = await editProfile(
+          lifecycle,
+          plugins.id,
+          removeDependency(added.hadDependencies === true),
+        );
+        expect(restored.after).toBe(added.before);
         return JSON.stringify({
           automaticWorkSessions: true,
           isolatedEmployees: true,
           preservedEmployeeState: true,
+          pluginPageWithoutInstallEntries: true,
         });
       } finally {
         await app.close();

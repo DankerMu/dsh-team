@@ -64,7 +64,12 @@ const COMPLETE = {
       readLimit: 500,
     },
   ],
+  pluginPage: { registryProbeEnabled: false },
 };
+
+it('accepts the complete managed observation the rejection cases mutate', () => {
+  assertManagedPolicyRuntime(COMPLETE, EXPECTED);
+});
 
 it('rejects an incorrect context window even when the custom preset is present', () => {
   expect(() => {
@@ -132,6 +137,7 @@ it('rejects a no-managed control that only exposes network tools on shipped pres
         readLimit: 500,
       },
     ],
+    pluginPage: { registryProbeEnabled: true },
   });
   expect(controlExposesEmployeePolicy(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(false);
 });
