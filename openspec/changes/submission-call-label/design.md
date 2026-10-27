@@ -12,7 +12,7 @@
 - Pending marker contents (unchanged; the label lives only in the journal row).
 - `browserExec` submitted rows: exact key set unchanged.
 - Journals written before this change (rows without `call`) still parse and assess identically.
-- The 8 MiB journal bound (`readJournalText`); 2365 submissions × ~90 bytes stays far below it.
+- The 8 MiB journal bound (`readJournalText`); about 2365 labelled rows × ≤ 120 bytes (≈ 0.3 MB) stays far below it.
 - No arguments, output, container/network/volume/image names or IDs, paths, environment, credentials or proxy values in the label.
 
 ## Must add / change
