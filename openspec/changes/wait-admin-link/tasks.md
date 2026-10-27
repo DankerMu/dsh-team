@@ -27,13 +27,13 @@
 
 ## 1. Waiting page
 
-- [ ] 1.1 `platform/web/src/wait-page.tsx`: start the identity read once on mount (not on reaching `unconfigured`); render 「管理后台」 → `/_platform/admin` for an administrator in every state; keep 「去配置模型」 only in `unconfigured`.
-- [ ] 1.2 `platform/web/src/wait-page.test.tsx` (write first, see it fail): an administrator has 「管理后台」 in starting, full, error, stopped and unconfigured, and 「去配置模型」 only in unconfigured; employee, read rejection, non-200 and a malformed body add no console link; one session GET per page across retries; unmount aborts the read and a late admin body adds nothing.
-- [ ] 1.3 `platform/test/wait.ui.test.ts`, real Chromium:
+- [x] 1.1 `platform/web/src/wait-page.tsx`: start the identity read once on mount (not on reaching `unconfigured`); render 「管理后台」 → `/_platform/admin` for an administrator in every state; keep 「去配置模型」 only in `unconfigured`.
+- [x] 1.2 `platform/web/src/wait-page.test.tsx` (write first, see it fail): an administrator has 「管理后台」 in starting, full, error, stopped and unconfigured, and 「去配置模型」 only in unconfigured; employee, read rejection, non-200 and a malformed body add no console link; one session GET per page across retries; unmount aborts the read and a late admin body adds nothing.
+- [x] 1.3 `platform/test/wait.ui.test.ts`, real Chromium:
   - administrator in `full`: click 「管理后台」 → URL `/_platform/admin` with the real admin page loaded (users GET 200);
   - employee in the same `full` state: no 「管理后台」 and no 「去配置模型」;
   - exactly one session GET per page, per the ordering note above.
-- [ ] 1.4 Docs: AGENTS.md waiting-page sentence and `docs/DEPLOY.md:131`.
+- [x] 1.4 Docs: AGENTS.md waiting-page sentence and `docs/DEPLOY.md:131`.
 
 ## 2. Verification
 

@@ -57,7 +57,6 @@ export function WaitPage() {
   // One identity read per page, independent of start attempts; departure aborts it.
   const identity = useRef<AbortController | null>(null);
   const probeIdentity = useCallback(() => {
-    if (identity.current !== null) return;
     const controller = new AbortController();
     identity.current = controller;
     void (async () => {
@@ -115,7 +114,6 @@ export function WaitPage() {
           return;
         }
         setStatus(next);
-        if (next === 'unconfigured') probeIdentity();
         if (next === 'starting') {
           // Measure from the completed response, never overlap observations.
           attempt.timer = window.setTimeout(() => {
@@ -133,10 +131,11 @@ export function WaitPage() {
     }
 
     void request(true);
-  }, [probeIdentity]);
+  }, []);
 
   useEffect(() => {
     begin();
+    probeIdentity();
     return () => {
       const attempt = owner.current;
       owner.current = null;
@@ -148,7 +147,7 @@ export function WaitPage() {
         attempt.controller.abort();
       }
     };
-  }, [begin]);
+  }, [begin, probeIdentity]);
 
   return (
     <main className="login wait" aria-busy={status === 'starting'}>
@@ -165,6 +164,7 @@ export function WaitPage() {
       </button>
       <p className="card-links">
         {status === 'unconfigured' && admin && <a href="/_platform/admin/models">去配置模型</a>}
+        {admin && <a href="/_platform/admin">管理后台</a>}
         <a href="/_platform/account">账号设置</a>
       </p>
     </main>
