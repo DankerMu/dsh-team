@@ -1,5 +1,6 @@
 import { once } from 'node:events';
-import type { RequestListener } from 'node:http';
+import type { IncomingHttpHeaders, RequestListener } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { expect, it } from 'vitest';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
 import {
@@ -276,6 +277,71 @@ it('reports connection refusal without trying another destination and recovers o
               );
             },
           );
+        },
+      );
+    },
+  );
+});
+
+const IMMUTABLE = 'private, max-age=31536000, immutable';
+
+function withoutDate(headers: IncomingHttpHeaders): IncomingHttpHeaders {
+  const rest = { ...headers };
+  delete rest.date;
+  return rest;
+}
+
+it('marks only a hashed DSH asset 200 immutable and forwards every other response unchanged', async () => {
+  const encoded = gzipSync(Buffer.from('export const hashed = true;\n'.repeat(64)));
+  await withUpstream(
+    (request, response) => {
+      const path = request.url ?? '';
+      if (path === '/assets/missing-12345678.js') {
+        response.writeHead(404, { 'content-type': 'text/plain', 'x-upstream': 'missing' });
+        response.end('missing');
+        return;
+      }
+      response.writeHead(200, {
+        'content-type': 'text/javascript',
+        'content-encoding': 'gzip',
+        vary: 'Accept-Encoding',
+        'x-upstream': 'asset',
+        ...(path === '/assets/kept-12345678.css' ? { 'cache-control': 'no-cache' } : {}),
+      });
+      response.end(request.method === 'HEAD' ? undefined : encoded);
+    },
+    async (target) => {
+      await withForwardingApp(
+        () => target,
+        async ({ base, cookie }) => {
+          const get = (path: string, method = 'GET') =>
+            sendHttp(base, { method, path, headers: { cookie, 'accept-encoding': 'gzip' } });
+          const plain = await get('/assets/index.js');
+          const hashed = await get('/assets/index-5SrrfWpU.js');
+          const { 'cache-control': added, ...forwarded } = hashed.headers;
+
+          expect(added).toBe(IMMUTABLE);
+          expect(withoutDate(forwarded)).toEqual(withoutDate(plain.headers));
+          expect(plain.headers['cache-control']).toBeUndefined();
+          expect(plain.headers['content-encoding']).toBe('gzip');
+          expect(plain.headers.vary).toBe('Accept-Encoding');
+          expect(hashed.body).toEqual(encoded);
+          expect(plain.body).toEqual(encoded);
+          const head = await get('/assets/index-5SrrfWpU.js', 'HEAD');
+          expect(head.status).toBe(200);
+          expect(head.headers['cache-control']).toBe(IMMUTABLE);
+          expect(head.body).toHaveLength(0);
+          const queried = await get('/assets/index-5SrrfWpU.js?x=1');
+          expect(queried.headers['cache-control']).toBeUndefined();
+          expect(queried.body).toEqual(encoded);
+          const kept = await get('/assets/kept-12345678.css');
+          expect(kept.headers['cache-control']).toBe('no-cache');
+          expect(kept.body).toEqual(encoded);
+          const missing = await get('/assets/missing-12345678.js');
+          expect(missing.status).toBe(404);
+          expect(missing.headers['cache-control']).toBeUndefined();
+          expect(missing.headers['x-upstream']).toBe('missing');
+          expect(missing.body.toString()).toBe('missing');
         },
       );
     },

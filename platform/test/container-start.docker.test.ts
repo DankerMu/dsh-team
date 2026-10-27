@@ -143,7 +143,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       expect(overlayText).not.toContain('docker-acceptance-only-not-a-model-credential');
       expect(JSON.parse(overlayText)).toContainEqual({
         id: 'webserver',
-        config: { host: '0.0.0.0', port: 3080 },
+        config: { host: '0.0.0.0', port: 3080, compression: 'gzip' },
       });
       expect(record(container.NetworkSettings).Ports).toEqual({
         '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(result.upstreamPort) }],

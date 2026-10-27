@@ -12,7 +12,7 @@ import {
   sessionCookieToken,
   withApp,
 } from '../../test/auth-fixture.ts';
-import { forwardHeaders, requestTarget } from './http.ts';
+import { forwardHeaders, isImmutableAsset, requestTarget } from './http.ts';
 
 interface TransportState {
   mode: string;
@@ -139,6 +139,46 @@ it.each([
 ])('preserves raw target semantics for %s', (input, expected) => {
   expect(requestTarget(input)).toBe(expected);
 });
+
+it.each([
+  ['GET', '/assets/index-5SrrfWpU.js'],
+  ['HEAD', '/assets/index-5SrrfWpU.js'],
+  ['GET', '/assets/vendor-BNsW4eBh.css'],
+  ['HEAD', '/assets/vendor-BNsW4eBh.css'],
+  ['GET', '/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2'],
+  ['HEAD', '/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2'],
+  ['GET', '/assets/langs/bibtex-CHM0blh-.js'],
+  ['HEAD', '/assets/langs/bibtex-CHM0blh-.js'],
+])('marks a %s 200 of hashed DSH asset %s immutable', (method, target) => {
+  expect(isImmutableAsset(method, target, 200, { 'content-type': 'text/javascript' })).toBe(true);
+});
+
+it.each([
+  ['POST', '/assets/index-5SrrfWpU.js', 200, {}],
+  ['GET', '/assets/index-5SrrfWpU.js?x=1', 200, {}],
+  ['GET', '/assets/index-5SrrfWpU.js?', 200, {}],
+  ['GET', '/assets/index-5SrrfWpU.js', 404, {}],
+  ['GET', '/assets/index-5SrrfWpU.js', 304, {}],
+  ['GET', '/assets/index-5SrrfWpU.js', 200, { 'cache-control': 'no-store' }],
+  ['GET', '/', 200, {}],
+  ['GET', '/index.html', 200, {}],
+  ['GET', '/manifest.webmanifest', 200, {}],
+  ['GET', '/favicon.svg', 200, {}],
+  ['GET', '/assets/index.js', 200, {}],
+  ['GET', '/assets/index-5SrrfW.js', 200, {}],
+  ['GET', '/assets/a/b/x-12345678.js', 200, {}],
+  ['GET', '/assets/Fonts/x-12345678.woff2', 200, {}],
+  ['GET', '/assets/%2e%2e/x-12345678.js', 200, {}],
+  ['GET', '/assets/x-12345678.map', 200, {}],
+  ['GET', '/plugins/??@deepseek-ai/dsh-client-modules/client.js&rev=0123456789ab', 200, {}],
+  ['GET', '/plugins/events', 200, {}],
+  ['GET', '/api/session/list', 200, {}],
+] as const)(
+  'leaves %s %s with status %i and headers %j uncached',
+  (method, target, status, headers) => {
+    expect(isImmutableAsset(method, target, status, headers)).toBe(false);
+  },
+);
 
 it.each(['construct', 'request', 'upgrade', 'response', 'truncated'])(
   'owns %s transport outcomes without exposing backend credentials',
