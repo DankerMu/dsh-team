@@ -293,7 +293,7 @@ const CLI_OPERATIONS = new Set([
   ...[...CLI_SUBCOMMANDS].flatMap(([group, names]) => [...names].map((name) => `${group} ${name}`)),
 ]);
 // `{id}` is the single resource-segment class of the qualified rejection matrix.
-const RESOURCE_SEGMENT = '[a-zA-Z0-9][a-zA-Z0-9_.-]*';
+const RESOURCE_SEGMENT = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 const HTTP_OPERATIONS = new Set([
   'other',
   ...[
@@ -330,8 +330,7 @@ const HTTP_TEMPLATES = [...HTTP_OPERATIONS]
   .filter((operation) => operation !== 'other')
   .map((operation) => {
     const [method, template] = operation.split(' ');
-    const pattern = new RegExp(`^${String(template).replaceAll('{id}', RESOURCE_SEGMENT)}$`);
-    return { operation, method, pattern };
+    return { operation, method, segments: String(template).split('/') };
   });
 const CALLER = /^[a-z0-9][a-z0-9.-]*\.(?:ts|mts|mjs)$/;
 const CALLER_WRAPPERS = new Set(['docker-command.ts', 'docker-cleanup.ts']);
@@ -356,12 +355,24 @@ function cliOperation(args) {
     : verb;
 }
 
+function templateMatches(segments, endpoint) {
+  return (
+    segments.length === endpoint.length &&
+    segments.every((segment, index) =>
+      segment === '{id}'
+        ? RESOURCE_SEGMENT.test(endpoint[index] ?? '')
+        : segment === endpoint[index],
+    )
+  );
+}
+
 function httpOperation(method, path) {
   const query = path.indexOf('?');
-  const endpoint = query === -1 ? path : path.slice(0, query);
+  const endpoint = (query === -1 ? path : path.slice(0, query)).split('/');
   return (
-    HTTP_TEMPLATES.find((entry) => entry.method === method && entry.pattern.test(endpoint))
-      ?.operation ?? 'other'
+    HTTP_TEMPLATES.find(
+      (entry) => entry.method === method && templateMatches(entry.segments, endpoint),
+    )?.operation ?? 'other'
   );
 }
 
