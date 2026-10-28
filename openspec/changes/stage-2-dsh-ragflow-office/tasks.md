@@ -179,7 +179,8 @@ Minimal mergeable slice: 10.1 只有前提检查和所有权清理的骨架单�
   - 必启项锁定且开启；`forced-off` 的项锁定且关闭，`forced-on` 的项锁定且开启，`employee` 的项可以切换且不影响他人；
   - 打开联网工具并重启实例后，Agent 的工具中出现这两类工具；
   - 出口观测：用测试自有的 npm registry 替身作为安装源、关闭仓库探测并重启实例，观察到实例只向替身发请求，没有发往公共仓库的探测；
-  - 用这个替身 registry 在插件页安装一个测试插件，安装成功并出现在插件页。
+  - 用这个替身 registry 在插件页安装一个测试插件，安装成功并出现在插件页；
+  - 员工在自己的 profile 中打开一个 `forced-off` 的预装插件、关闭一个受管必启项、把插件安装源改写成别的地址，然后重启实例：插件页中该 `forced-off` 项仍锁定且关闭、必启项仍锁定且开启，容器内实际生效的插件启用状态和安装源与覆盖层一致（ONLYOFFICE 配置的改写在 18.5，HTML 预览沙箱的改写在 17.3）。
 
   验证：`pnpm test:docker` 中的新用例通过，并有截图；替身 registry 和其他自有资源都已清理。
 
@@ -201,8 +202,8 @@ Minimal mergeable slice: 12.1 文件令牌密钥的生成和注入单独合入�
 依赖：10（RAGFlow 相关 PR 的本机证据）。
 
 - [ ] 13.1 新增设置迁移，保存 RAGFlow 地址、密钥和检索参数：top_k、相似度阈值、关键词权重、rerank。新增后台接口 `GET/PUT /_platform/api/admin/ragflow-config`（审计 `ragflow-config.updated`）和 `GET/PUT /_platform/api/admin/retrieval-config`（审计 `retrieval-config.updated`）：密钥只返回「已配置」，省略时保留原值，空值拒绝；保存与审计同在一个事务内。密钥加入日志脱敏。验证：集成测试覆盖校验、权限、回滚、审计和迁移账本；`pnpm contract:check` 通过。
-- [ ] 13.2 「测试连接」接口 `POST /_platform/api/admin/ragflow-config/test` 只调用版本接口，按响应体 `code` 判断成败，不写审计。请求固定超时、不跟随重定向、限制响应体大小；结果为 `ok` 或 `not-configured`、`unavailable`、`timeout`、`upstream-error` 之一，不含上游内容和密钥。验证：集成测试用自有的假 RAGFlow HTTP 服务覆盖成功、HTTP 200 加非零 code、密钥被拒、超时、拒绝连接、重定向，并断言审计行数不变。
-- [ ] 13.3 后台「知识库」页：连接配置、检索参数、测试连接（每个结果取值一条不同的中文说明），提示「保存即生效」。验证：`pnpm test:ui` 通过，有截图。
+- [ ] 13.2 「测试连接」接口 `POST /_platform/api/admin/ragflow-config/test` 只调用版本接口，按响应体 `code` 判断成败，不写审计。请求固定超时、不跟随重定向、限制响应体大小；结果为 `ok` 或 `not-configured`、`unavailable`、`timeout`、`upstream-error` 之一，不含上游内容和密钥。`ok` 时回应带版本字符串（不超过 64 个字符的可打印 ASCII），版本缺失、类型不对或超长时结果为 `upstream-error`，失败结果不带版本。验证：集成测试用自有的假 RAGFlow HTTP 服务覆盖成功（回应含版本）、版本缺失、版本非字符串、版本超长、HTTP 200 加非零 code、密钥被拒、超时、拒绝连接、重定向，并断言审计行数不变，回应中没有地址和密钥。
+- [ ] 13.3 后台「知识库」页：连接配置、检索参数、测试连接（每个结果取值一条不同的中文说明，成功时显示 RAGFlow 版本），提示「保存即生效」。验证：`pnpm test:ui` 通过，断言成功结果显示版本，有截图。
 
 Suggested fixture level: expanded - 新增外部凭据的保管和后台写入口
 Minimal mergeable slice: 13.1 设置和接口单独合入（还没有消费者，不改变运行行为）
@@ -280,7 +281,7 @@ Minimal mergeable slice: 16.1 compose 服务和 JWT 变量单独合入（平台�
 
 - [ ] 17.1 用户镜像安装 `dsh-better-sidebar@0.28.0`，不打补丁，并作为可管理项加入 `catalog.json`。版本不符时构建失败。验证：用户镜像 Docker 用例断言版本和目录一致；Docker 浏览器用例打开一个 docx，由 better-sidebar 的原生预览显示。
 - [ ] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
-- [ ] 17.3 覆盖层把 `htmlViewerNoSandbox` 钉为关闭。验证：生成器单元测试；浏览器用例证明员工设置中该项显示为受管锁定，HTML 预览中的脚本无法访问父页面。
+- [ ] 17.3 覆盖层把 `htmlViewerNoSandbox` 钉为关闭。验证：生成器单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明员工设置中该项显示为受管锁定，HTML 预览中的脚本无法访问父页面；员工在自己的 profile 中把 `htmlViewerNoSandbox` 写为开启并重启实例后，结果不变。
 - [ ] 17.4 用户镜像安装 LibreOffice，DOC、XLS、PPT 只读预览，在实例内转换。验证：Docker 用例在 `--network none` 下转换三种旧格式成功；记录镜像大小的变化；本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
 
 Suggested fixture level: expanded - 关键路径镜像变更
@@ -299,7 +300,8 @@ Minimal mergeable slice: 17.1 better-sidebar 单独合入（不打补丁，Offic
   - 两个用户的同名文件互不串写；
   - 跨用户攻击被拒：伪造的文件令牌、跨实例回调、已知 A 的 host 和路径时用猜测的 key 回调或打开编辑器、对 config 路由的访问；
   - 员工在 profile 中改写 ONLYOFFICE 的 `documentServerUrl` 和 `jwtSecret` 后重启，实际值仍为覆盖层的值；做不到时停止并报告；
-  - 运营方字体出现在编辑器中。
+  - 运营方字体出现在编辑器中；
+  - 把空闲分钟数调到 1，员工只保持 ONLYOFFICE 编辑器打开、不发消息、没有任务，超过空闲时间后实例仍为运行、没有空闲停止审计，编辑会话仍能保存并写回原文件。
 
   验证：`pnpm test:stack` 通过，并贴出证据评论。
 
