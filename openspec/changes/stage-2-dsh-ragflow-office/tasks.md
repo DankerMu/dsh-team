@@ -24,7 +24,7 @@
 
 依赖：无。关键路径 `platform/src/orchestrator/`，每行都要人工白盒评审。
 
-- [ ] 1.1 扩展 `platform/src/orchestrator/subnet.ts`：新增一个纯函数，由一个对齐的 /28 子网得出 +1 网关、+2 员工容器、+3 平台、+4 Document Server 四个地址；输入不是规范的 /28 时明确拒绝。验证：单元测试覆盖池首、池尾、非 /28 和非规范输入。
+- [x] 1.1 扩展 `platform/src/orchestrator/subnet.ts`：新增一个纯函数，由一个对齐的 /28 子网得出 +1 网关、+2 员工容器、+3 平台、+4 Document Server 四个地址；输入不是规范的 /28 时明确拒绝。验证：单元测试覆盖池首、池尾、非 /28 和非规范输入。
 - [ ] 1.2a network 模式下，创建容器时用 `IPAMConfig` 把员工容器固定在 +2。创建后检查实际地址，与布局不符时按现有失配路径退役，数据卷保留。DSH 监听地址仍为 `0.0.0.0`。验证：单元测试覆盖创建请求体和地址不符的处理；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言新建容器在 +2。
 - [ ] 1.2b 平台接入实例 bridge 时请求 +3，接入后检查实际地址，不符时按现有失配路径处理。平台重建后的对账修复：容器在 +2 的实例以 +3 补接平台；容器不在 +2 的阶段 1 存量实例按阶段 1 方式补接，不指定地址、接入后不按布局核对，也不因此失败或停止。验证：单元测试覆盖两类补接的请求体；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言平台在 +3；`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 覆盖平台重建后两类实例的补接。
 - [ ] 1.2c 阶段 1 存量实例的对账用例：用测试自有的方式造一个容器地址不在 +2 的运行中实例，运行新版对账。断言它保持运行、可经网关访问、没有新增审计；随后以空闲或管理员方式停止它，再次启动时容器在 +2，数据卷中的标记仍在。验证：`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 中的新用例通过，自有资源已清理。
@@ -33,6 +33,8 @@
 
 Suggested fixture level: expanded - 关键路径，改变每个实例的网络创建和对账，失配处理涉及数据卷保留，还要兼容阶段 1 存量实例
 Minimal mergeable slice: 1.1 地址布局纯函数和单元测试单独合入（没有调用方之前不改变任何运行行为）
+Risk packs (1.1): selected - Public API（编排器新增导出的纯函数，经 `index.ts` 暴露）、Error handling（非 /28 与非规范输入显式抛错，不给部分结果）；not selected - Config、File IO、Schema、Auth、Concurrency、Resource limits、Legacy compatibility（无调用方；阶段 1 存量实例由 1.2b/1.2c 覆盖）、Release、Documentation（1.4 负责 AGENTS.md）。
+Evidence (1.1): 返回形状 `{ gateway, container, platform, documentServer }`，四个点分 IPv4 字符串。`0.0.0.0/28` → `0.0.0.1`/`0.0.0.2`/`0.0.0.3`/`0.0.0.4`；`255.255.255.240/28` → `.241`/`.242`/`.243`/`.244`。拒绝输入至少含 `/27`、`/29`、`/32`、主机位非零的 `x.x.x.1/28`、前导零八位组、首尾空白、`::/28`（可复用 `subnet.test.ts` 的 `INVALID_POOLS`）；错误信息命名的是实例子网，不得出现 `PLATFORM_SUBNET_POOL`。等价规则：新函数接受字符串 s 当且仅当 `allocateSubnet(s, []) === s`，用测试固定；`networks.ts:42` 与 `creation-attempt.ts:52` 现用这一技巧判定规范 /28，迁到新函数属于 1.2a（这两个文件在 1.2a 本就要改），1.1 不动它们。Must preserve：`validateSubnetPool` 仍接受 `/0`–`/28` 并拒绝现有 `INVALID_POOLS`；`allocateSubnet` 结果不变；`subnet.test.ts` 现有用例不修改（禁止把共享的 `parseCidr` 收紧到只认 /28）。
 
 ## 2. 撤回 #375 的插件页补丁（DSH 0.2.0 上的预备组）
 
