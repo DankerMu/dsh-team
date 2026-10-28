@@ -39,9 +39,9 @@ it('pairs the endpoint and credential from the current running row even after mo
   try {
     f.database
       .prepare(
-        "INSERT INTO instances(user_id,status,upstream_host,upstream_port,dsh_cookie,last_error) VALUES (?, 'running','127.0.0.1',49173,'backend-cookie','private-diagnostic')",
+        "INSERT INTO instances(user_id,status,upstream_host,upstream_port,dsh_cookie,last_error,instance_token_hash) VALUES (?, 'running','127.0.0.1',49173,'backend-cookie','private-diagnostic',?)",
       )
-      .run(START_USER);
+      .run(START_USER, 'f'.repeat(64));
     expect(f.service.status(START_USER)).toEqual({ status: 'running', reason: null });
     expect(f.service.resolveUpstream(START_USER)).toEqual({
       outcome: 'running',

@@ -1,11 +1,18 @@
-import { rm } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { copyFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createOrchestrator } from './index.ts';
+import { applyMigrations, openDatabase } from '../db/index.ts';
+import { createDockerClient, createOrchestrator } from './index.ts';
 import type { DockerClient, StopUserContainerInput } from './index.ts';
+import { recoverCreationAttempt } from './creation-attempt.ts';
 import {
   START_CONTAINER,
+  START_IMAGE,
   START_NETWORK,
   START_USER,
+  startupDaemon,
   startupOwnerFixture,
 } from '../../test/container-start-fixture.ts';
 
@@ -18,13 +25,24 @@ afterEach(async () => {
   }
 });
 
-async function interrupted(kind: 'response' | 'inspection' = 'inspection', priorRow = false) {
+async function interrupted(
+  kind: 'response' | 'inspection' = 'inspection',
+  priorRow?: 'stopped' | 'absent-running',
+) {
   const f = await startupOwnerFixture();
   fixtures.push(f);
-  if (priorRow)
+  if (priorRow === 'stopped')
     f.database
       .prepare("INSERT INTO instances(user_id,status,last_activity_at) VALUES (?,'stopped',1)")
       .run(START_USER);
+  if (priorRow === 'absent-running')
+    f.database
+      .prepare(
+        `INSERT INTO instances(user_id,status,container_id,image_id,image_tag,upstream_host,
+        upstream_port,dsh_cookie,last_started_at,instance_token_hash)
+        VALUES (?,'running',?,?,'dsh-team-user:local','127.0.0.1',49173,'old-cookie',1,?)`,
+      )
+      .run(START_USER, 'd'.repeat(64), START_IMAGE, 'f'.repeat(64));
   let failing = true;
   const client: DockerClient = {
     ...f.client,
@@ -224,7 +242,7 @@ it('rejects an invalid retirement reason before recovering a pending creation', 
 });
 
 it('coalesces deferred activity without blocking a sibling and persists it after recovery', async () => {
-  const f = await interrupted('inspection', true);
+  const f = await interrupted('inspection', 'stopped');
   const other = 'mnopqrstuvwx';
   f.database
     .prepare("INSERT INTO instances(user_id,status,last_activity_at) VALUES (?,'stopped',1)")
@@ -318,3 +336,63 @@ it.each([
     expect(f.daemon.requests.slice(count).some(({ method }) => method !== 'GET')).toBe(false);
   },
 );
+
+it('recovery clears the token hash of the verified-absent running row it was replacing', async () => {
+  const f = await interrupted('inspection', 'absent-running');
+  const row = () => f.database.prepare('SELECT status, instance_token_hash FROM instances').get();
+  expect(row()).toEqual({ status: 'running', instance_token_hash: 'f'.repeat(64) });
+
+  await f.fresh().reconcile();
+
+  expect(f.attempt()).toBeUndefined();
+  expect(row()).toEqual({ status: 'error', instance_token_hash: null });
+});
+
+it('recovers a pending attempt whose prior-row digest was written before migration 4', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-attempt-migration-'));
+  const database = openDatabase(':memory:');
+  try {
+    for (const file of ['1-initial.sql', '2-instance-image-id.sql', '3-creation-attempts.sql'])
+      await copyFile(new URL(`../db/migrations/${file}`, import.meta.url), join(root, file));
+    applyMigrations(database, root);
+    database
+      .prepare(
+        "INSERT INTO users VALUES (?, 'legacy@example.test', 'unused', 'employee', 'active', 7)",
+      )
+      .run(START_USER);
+    database
+      .prepare(
+        "INSERT INTO instances(user_id,status,image_id,image_tag) VALUES (?,'starting',?,'dsh-team-user:local')",
+      )
+      .run(START_USER, START_IMAGE);
+    const prior = database.prepare('SELECT * FROM instances WHERE user_id=?').get(START_USER);
+    const digest = createHash('sha256').update(JSON.stringify(prior)).digest('hex');
+    database
+      .prepare(
+        `INSERT INTO creation_attempts VALUES (?,?,7,?,'dsh-team-user:local',?,'172.30.0.16/28',
+        '/managed/abcdefghijkl.patch.yml','published-loopback',?,?,8)`,
+      )
+      .run(START_USER, randomUUID(), START_IMAGE, START_NETWORK, digest, 'd'.repeat(64));
+    applyMigrations(database);
+
+    const recovered = await recoverCreationAttempt({
+      database,
+      userId: START_USER,
+      client: createDockerClient('/fixture/docker.sock', startupDaemon().transport),
+      transport: {
+        config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
+        platformId: undefined,
+      },
+    });
+
+    expect(recovered).toBe(true);
+    expect(database.prepare('SELECT status, last_error FROM instances').get()).toEqual({
+      status: 'error',
+      last_error: 'Interrupted container creation recovered',
+    });
+    expect(database.prepare('SELECT * FROM creation_attempts').all()).toEqual([]);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

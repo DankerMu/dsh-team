@@ -113,8 +113,14 @@ describe('buildApp', () => {
 
     app.log.info({
       fileTokenSecret: 'file-secret-top-marker',
+      instanceToken: 'instance-token-top-marker',
+      instanceTokenHash: 'instance-hash-top-marker',
+      instance_token_hash: 'instance-row-hash-top-marker',
       user: {
         fileTokenSecret: 'file-secret-nested-marker',
+        instanceToken: 'instance-token-nested-marker',
+        instanceTokenHash: 'instance-hash-nested-marker',
+        instance_token_hash: 'instance-row-hash-nested-marker',
         password: 'hunter2',
         currentPassword: 'current-password-marker',
         newPassword: 'new-password-marker',
@@ -129,8 +135,14 @@ describe('buildApp', () => {
     const written = log.lines.join('');
     expect(JSON.parse(log.lines[0] ?? '')).toMatchObject({
       fileTokenSecret: '[redacted]',
+      instanceToken: '[redacted]',
+      instanceTokenHash: '[redacted]',
+      instance_token_hash: '[redacted]',
       user: {
         fileTokenSecret: '[redacted]',
+        instanceToken: '[redacted]',
+        instanceTokenHash: '[redacted]',
+        instance_token_hash: '[redacted]',
         password: '[redacted]',
         currentPassword: '[redacted]',
         newPassword: '[redacted]',
@@ -149,6 +161,12 @@ describe('buildApp', () => {
       'backend-cookie-marker',
       'file-secret-top-marker',
       'file-secret-nested-marker',
+      'instance-token-top-marker',
+      'instance-token-nested-marker',
+      'instance-hash-top-marker',
+      'instance-hash-nested-marker',
+      'instance-row-hash-top-marker',
+      'instance-row-hash-nested-marker',
     ]) {
       expect(written).not.toContain(secret);
     }

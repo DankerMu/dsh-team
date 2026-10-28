@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -10,7 +11,7 @@ import type { PlatformConfig } from '../src/config.ts';
 import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-import { injectedFileTokenSecret, START_MODEL } from './container-start-fixture.ts';
+import { injectedEnvSecret, START_MODEL } from './container-start-fixture.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
 import { observeResourceOom } from './resource-oom-fixture.ts';
 import {
@@ -20,7 +21,7 @@ import {
   startupClient,
 } from './container-start-docker-fixture.ts';
 
-/** Serialize every platform table: no column of any row may carry an injected value. */
+/** Serialize every platform table: no column but the token hash may carry an injected value. */
 function expectNotPersisted(db: DatabaseHandle, values: readonly string[]): void {
   const tables = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -30,7 +31,14 @@ function expectNotPersisted(db: DatabaseHandle, values: readonly string[]): void
     expect.arrayContaining(['instances', 'creation_attempts', 'audit_events']),
   );
   const persisted = JSON.stringify(
-    tables.map((table) => db.prepare(`SELECT * FROM "${table}"`).all()),
+    tables.map((table) =>
+      db
+        .prepare(`SELECT * FROM "${table}"`)
+        .all()
+        .map((row) =>
+          Object.entries(record(row)).filter(([column]) => column !== 'instance_token_hash'),
+        ),
+    ),
   );
   for (const value of values) expect(persisted).not.toContain(value);
 }
@@ -58,6 +66,8 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
     ).run(userId);
     const ids: string[] = [];
     const fileTokenSecrets: string[] = [];
+    const instanceTokens: string[] = [];
+    const tokenHashes: string[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const input = {
         userId,
@@ -116,7 +126,16 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
         ]),
       );
       // Ten concurrent attempt-0 starts share one container, so exactly one value is injected.
-      fileTokenSecrets.push(injectedFileTokenSecret(config.Env));
+      fileTokenSecrets.push(injectedEnvSecret(config.Env, 'DSH_TEAM_ONLYOFFICE_FILE_SECRET'));
+      const token = injectedEnvSecret(config.Env, 'DSH_TEAM_INSTANCE_TOKEN');
+      const hash = createHash('sha256').update(token).digest('hex');
+      expect(
+        db.prepare('SELECT instance_token_hash FROM instances WHERE user_id = ?').get(userId),
+      ).toEqual({ instance_token_hash: hash });
+      // Captured before the fixture's exact force-DELETE; the hash may live only in its column.
+      expectNotPersisted(db, [token, hash]);
+      instanceTokens.push(token);
+      tokenHashes.push(hash);
       const host = record(container.HostConfig);
       expect(host.Privileged).toBe(false);
       expect(host.CapAdd === null || (Array.isArray(host.CapAdd) && host.CapAdd.length === 0)).toBe(
@@ -195,7 +214,9 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
     expect(ids[0]).not.toBe(ids[1]);
     expect(fileTokenSecrets).toHaveLength(2);
     expect(fileTokenSecrets[0]).not.toBe(fileTokenSecrets[1]);
-    expectNotPersisted(db, fileTokenSecrets);
+    expect(instanceTokens[0]).not.toBe(instanceTokens[1]);
+    expect(tokenHashes[0]).not.toBe(tokenHashes[1]);
+    expectNotPersisted(db, [...fileTokenSecrets, ...instanceTokens]);
     expect(
       db.prepare('SELECT event_type, target, details FROM audit_events ORDER BY id').all(),
     ).toEqual([

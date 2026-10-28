@@ -287,8 +287,8 @@ async function fail(selection: Selection, reason: string): Promise<string> {
       if (!cleanupCurrent(selection)) throw new Error();
       const changed = selection.input.database
         .prepare(
-          `UPDATE instances SET status = 'error', dsh_cookie = NULL, last_error = ?
-          WHERE ${CURRENT_INSTANCE} AND (dsh_cookie IS ? OR (? = 0 AND dsh_cookie IS NULL))`,
+          `UPDATE instances SET status = 'error', dsh_cookie = NULL, instance_token_hash = NULL,
+          last_error = ? WHERE ${CURRENT_INSTANCE} AND (dsh_cookie IS ? OR (? = 0 AND dsh_cookie IS NULL))`,
         )
         .run(lastError, ...selection.identity, selection.cookie, Number(selection.acquired));
       if (changed.changes !== 1) throw new Error();

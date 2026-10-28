@@ -210,6 +210,7 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
         upstream_host: null,
         upstream_port: null,
         dsh_cookie: null,
+        instance_token_hash: null,
       });
       await expect(
         raw.json('GET', `/containers/${survivor.id}/json`, undefined, AbortSignal.timeout(15_000)),

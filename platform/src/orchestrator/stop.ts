@@ -218,7 +218,7 @@ function commit(
       .prepare(
         `UPDATE instances SET status = ?, last_error = COALESCE(?, last_error),
       container_id = NULL, image_id = NULL, image_tag = NULL, upstream_host = NULL,
-      upstream_port = NULL, dsh_cookie = NULL WHERE ${CURRENT_RETIREMENT}`,
+      upstream_port = NULL, dsh_cookie = NULL, instance_token_hash = NULL WHERE ${CURRENT_RETIREMENT}`,
       )
       .run(
         terminalError === undefined ? 'stopped' : 'error',

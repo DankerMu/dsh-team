@@ -55,8 +55,13 @@ function validateRecoveryAttempt(attempt: CreationAttempt): void {
 }
 
 function instanceHash(input: AttemptInput): string {
+  // Frozen to the pre-migration-4 `SELECT *` column order so earlier durable digests still match;
+  // never append new columns here.
   const row: unknown = input.database
-    .prepare('SELECT * FROM instances WHERE user_id=?')
+    .prepare(
+      `SELECT user_id,status,container_id,upstream_host,upstream_port,dsh_cookie,image_tag,
+      last_started_at,last_activity_at,last_error,image_id FROM instances WHERE user_id=?`,
+    )
     .get(input.userId);
   // Only the digest is durable; the instance's credential never enters the attempt row.
   return createHash('sha256')
@@ -337,7 +342,7 @@ export async function recoverCreationAttempt(
         `INSERT INTO instances(user_id,status,last_error)
       VALUES (?, 'error', 'Interrupted container creation recovered') ON CONFLICT(user_id) DO UPDATE SET
       status='error',container_id=NULL,image_id=NULL,image_tag=NULL,upstream_host=NULL,
-      upstream_port=NULL,dsh_cookie=NULL,last_error=excluded.last_error`,
+      upstream_port=NULL,dsh_cookie=NULL,instance_token_hash=NULL,last_error=excluded.last_error`,
       )
       .run(input.userId);
     recordAuditEvent(input.database, {

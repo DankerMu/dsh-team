@@ -157,6 +157,7 @@ it('retires a disabled instance exactly once with captured caller reason and int
     last_started_at: 101,
     last_activity_at: 202,
     last_error: 'old error',
+    instance_token_hash: null,
   });
   expect(
     database.prepare('SELECT event_type, target, target_email, details FROM audit_events').all(),
@@ -169,6 +170,24 @@ it('retires a disabled instance exactly once with captured caller reason and int
     },
   ]);
 });
+
+it.each(['idle', 'admin', 'disabled', 'error'] as const)(
+  'clears the persisted instance token hash on %s retirement',
+  async (reason) => {
+    const { input, database } = indexedFixture();
+    const hash = () => database.prepare('SELECT status, instance_token_hash FROM instances').get();
+    database.prepare('UPDATE instances SET instance_token_hash = ?').run('f'.repeat(64));
+    if (reason === 'disabled') database.prepare("UPDATE users SET status = 'disabled'").run();
+    expect(hash()).toEqual({ status: 'running', instance_token_hash: 'f'.repeat(64) });
+
+    await stopUserContainer({ ...input, reason });
+
+    expect(hash()).toEqual({ status: 'stopped', instance_token_hash: null });
+    expect(database.prepare('SELECT details FROM audit_events').all()).toEqual([
+      { details: JSON.stringify({ reason }) },
+    ]);
+  },
+);
 
 it('reconciles an absent immutable ID without stopping the foreign same-name container', async () => {
   const { input, database, daemon, container } = indexedFixture();

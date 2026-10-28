@@ -41,19 +41,26 @@ const COMPOSITION = JSON.stringify({
   localePatch: [{ id: 'locale', name: '@dsh-team/zh-locale' }],
 });
 
-const FILE_TOKEN_SECRET_PREFIX = 'DSH_TEAM_ONLYOFFICE_FILE_SECRET=';
-
-/** The single file-token secret in an employee container Env, as 64 lowercase hex. */
-export function injectedFileTokenSecret(env: unknown): string {
+/** The single `name` secret in an employee container Env, as 64 lowercase hex. */
+export function injectedEnvSecret(env: unknown, name: string): string {
   if (!Array.isArray(env)) throw new Error('Container Env unavailable');
+  const prefix = `${name}=`;
   const secrets = env.filter(
-    (entry: unknown): entry is string =>
-      typeof entry === 'string' && entry.startsWith(FILE_TOKEN_SECRET_PREFIX),
+    (entry: unknown): entry is string => typeof entry === 'string' && entry.startsWith(prefix),
   );
   expect(secrets).toHaveLength(1);
-  const value = (secrets[0] ?? '').slice(FILE_TOKEN_SECRET_PREFIX.length);
+  const value = (secrets[0] ?? '').slice(prefix.length);
   expect(value).toMatch(/^[0-9a-f]{64}$/);
   return value;
+}
+
+/** The `name` secret the platform submitted in the latest employee create body. */
+export function createdEnvSecret(requests: readonly StartupRequest[], name: string): string {
+  const creates = requests.filter(
+    (request) =>
+      request.method === 'POST' && request.path.startsWith('/containers/create?name=dsh-team-u-'),
+  );
+  return injectedEnvSecret(creates.at(-1)?.body.Env, name);
 }
 
 export interface StartupRequest {

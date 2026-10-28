@@ -189,6 +189,7 @@ export async function retireCurrentErrorContainer(
       upstream_host: null,
       upstream_port: null,
       dsh_cookie: null,
+      instance_token_hash: null,
     },
     signal,
   );

@@ -559,6 +559,7 @@ async function networkFixture() {
 it('a rejected platform attachment retires into atomic error/null state, preserves repeated stop/reconcile and permits fresh start', async () => {
   const { database, daemon, owner, input } = await networkFixture();
   daemon.overrides.set(`POST /networks/${START_NETWORK}/connect`, { status: 403 });
+  database.prepare('UPDATE instances SET instance_token_hash = ?').run('f'.repeat(64));
 
   await owner.reconcile();
 
@@ -590,6 +591,21 @@ it('a rejected platform attachment retires into atomic error/null state, preserv
     upstreamHost: '172.30.0.2',
     upstreamPort: 3080,
   });
+});
+
+it('keeps a stage-1 running survivor without a token hash running, unchanged and unaudited', async () => {
+  const { database, daemon, owner } = await fixture();
+  const before = reconciliationState(database);
+
+  await owner.reconcile();
+
+  expect(database.prepare('SELECT status, instance_token_hash FROM instances').get()).toEqual({
+    status: 'running',
+    instance_token_hash: null,
+  });
+  expect(reconciliationState(database)).toEqual(before);
+  expect(before.audits).toEqual([]);
+  expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
 });
 
 it.each(['audit', 'stop', 'row', 'topology', 'platform'])(
