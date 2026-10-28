@@ -50,7 +50,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
     - 来源展示。
 - **Office**
   - Document Server 9.4.0 并入交付的 compose，开启 JWT，挂载运营方字体，平台在每次启动实例时把它接入该员工网络。
-    - 容器名和 JWT 以部署 `.env` 为准，地址由每个实例的布局决定；两项都不填时 Office 不可用，平台照常启动。
+    - 容器名由 compose 固定，JWT 以部署 `.env` 为准且 compose 部署必须填写，地址由每个实例的布局决定；不经 compose 的开发、测试入口两项都不给时 Office 不可用，平台照常启动。
     - Document Server 不可用不阻断实例启动，只是该实例的 Office 不可用。
     - 后台可以切换到外部 Document Server。
   - 用户镜像预装 `dsh-better-sidebar@0.28.0` 和 `dsh-sidebar-onlyoffice@0.2.0`，并带两个构建期补丁：
@@ -108,7 +108,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
 - `permission-tiers`：三档覆盖 continuable 子会话。
 - `admin-console`：新增 RAGFlow 配置、检索参数、插件目录、安装源、联网工具开关、外部 Document Server 等页面。
 - `audit-log`：新增对应配置修改的事件标识。
-- `deployment`：compose 新增 Document Server；`.env` 新增 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`（平台侧可选，两项都给或都不给）；更新部署文档。
+- `deployment`：compose 新增 Document Server；`.env.example` 新增 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`（compose 固定容器名、必填 JWT；示例中 JWT 为空值；平台侧两项都不存在为未配置，显式为空或只有一项时启动失败，因此原样复制示例的本地运行会失败，须删去两行或两项都填）；配置清单核对新增平台与 compose 共用的 `DOCUMENT_SERVER_*` 一类；更新部署文档和 AGENTS.md。
 - `trusted-docker-verification`：#374 和 #352 的显式化与归因。
 - `built-artifact-verification`：#348 和 fixture 竞态。
 
@@ -123,7 +123,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
   - 新增 `plugins/knowledge-base/`、`plugins/office-hints/`；
   - `plugins/office-agents/`、`plugins/permission-tiers/`、`plugins/zh-locale/`、`plugins/platform-nav/` 的兼容性和委派改动。
 - **镜像**：`images/dsh-user/`（关键路径：DSH 版本、两个第三方侧栏插件和两个补丁、知识库和 Office 提示插件、插件目录文件、LibreOffice，删除插件页补丁）。
-- **部署**：`deploy/compose.yml`、`.env.example`、`docs/DEPLOY.md`；员工文档 `docs/EMPLOYEE_GUIDE.md`（新建）。
+- **部署**：`deploy/compose.yml`、`.env.example`、`scripts/check-config.mjs`、`docs/DEPLOY.md`、AGENTS.md 的配置清单和本地运行说明；员工文档 `docs/EMPLOYEE_GUIDE.md`（新建）。
 - **验证**：
   - 新增 `pnpm test:stack`；
   - VPS 上的 `test:docker`、`test:deploy`、`test:model` 全量重跑；

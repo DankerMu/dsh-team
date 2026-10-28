@@ -29,7 +29,7 @@
 - 文档 key 由文件的 host、路径等输入算出，知道这些输入就能推算。
 - Document Server 的 JWT 密钥经覆盖层下发，员工可以读到（`/managed/patch.yml` 的权限是 0444）。
 
-**RAGFlow v1.0.0-rc1 接口的实测行为**（分析 3.4）
+**RAGFlow 接口的实测行为**（分析 3.4，实测于 v1.0.0-rc1；阶段 2 钉定 v1.0.0-rc2，下列行为由本机通道在 rc2 上复核，不符时停下来报告）
 
 - 业务错误多数是 HTTP 200 加非零 `code`。
 - 检索列表里只要有一个无效库 ID，整次检索就失败（`code:102`）。
@@ -111,7 +111,7 @@ DSH 迁移是阶段 2 的第一批，其余功能组都依赖它。第一批由�
 **阶段 1 存量实例**：第 1 组上线时可能有按阶段 1 方式创建、地址不在布局上的运行中实例。
 
 - 对账不主动停止它们，也不额外写审计。它们保持运行，直到空闲、管理员停止或账号禁用这些自然停止发生；下次启动按布局创建。
-- 平台重建后为这类实例补接平台端点时，按阶段 1 方式不指定地址。容器在 +2 的实例才请求 +3。
+- 平台重建后为这类实例补接平台端点时，按阶段 1 方式不指定地址，接入后也不按布局核对平台地址。容器在 +2 的实例才请求 +3 并核对。固定布局的「请求并核实」规则只约束按布局创建的实例，这类实例是它唯一的例外。
 
 **备选**：先创建容器、拿到 IP 再生成覆盖层。不采用：要把创建和启动拆开，生命周期 fence 全都要改。
 
@@ -204,13 +204,19 @@ DSH 迁移是阶段 2 的第一批，其余功能组都依赖它。第一批由�
   - `deploy/compose.yml` 新增 `documentserver` 服务：`onlyoffice/documentserver:9.4.0`，固定容器名，开启 JWT。
   - 运营方字体目录只读挂载；不发布宿主端口；带 `ALLOW_PRIVATE_IP_ADDRESS=true`。
 - **部署输入**（compose 与平台共用，列在 `.env.example`）
-  - `DOCUMENT_SERVER_CONTAINER_NAME`：自带 Document Server 的容器名，默认 `dsh-team-documentserver`，与 compose 中的固定容器名一致。
-  - `DOCUMENT_SERVER_JWT_SECRET`：JWT 密钥。
-  - 自带模式没有「地址」变量：地址恒为每个实例子网的 +4。B13「地址和 JWT 以 `.env` 为准」落点为：容器名（决定接入谁）和 JWT 以 `.env` 为准，地址由布局推导。
-- **可选与校验**
-  - 两项都缺省：自带 Document Server 视为未配置，Office 不可用（ONLYOFFICE 不启用），平台照常启动。
-  - 只给了一项、另一项缺失或为空：启动失败并指出配置项，不回显取值。
-  - 交付的 compose 总是给出两项。现有 dev、test、e2e、UI 入口不需要新增变量。
+  - `DOCUMENT_SERVER_CONTAINER_NAME`：自带 Document Server 的容器名。平台不提供默认值。交付的 compose 与 `PLATFORM_CONTAINER_NAME`（`deploy/compose.yml` 中的字面量 `dsh-team-platform`）同样处理：Document Server 服务的 `container_name` 和传给平台的该变量都是字面量 `dsh-team-documentserver`，不从 `.env` 插值。
+  - `DOCUMENT_SERVER_JWT_SECRET`：JWT 密钥。compose 以 `${DOCUMENT_SERVER_JWT_SECRET:?…}` 必填插值，同一个 `.env` 值同时传给 Document Server 和平台。
+  - 自带模式没有「地址」变量：地址恒为每个实例子网的 +4。B13「地址和 JWT 以 `.env` 为准」落点为：JWT 以 `.env` 为准，容器名（决定接入谁）由 compose 固定，地址由布局推导。
+  - 示例文件取值：`DOCUMENT_SERVER_CONTAINER_NAME=dsh-team-documentserver`（与 compose 字面量相同），`DOCUMENT_SERVER_JWT_SECRET=`（空值，示例不放任何密钥，也不放占位密钥）。两行都必须是有效赋值，`pnpm lint:config` 才把它们算作已列出。
+  - 配置清单因此多出第三类：`DOCUMENT_SERVER_*` 是平台读取和 compose 插值共用的变量，不再只有「平台读取的 `PLATFORM_*`」和「只给 compose 用的插值」两类。AGENTS.md 中 `lint:config` 的说明同步改写。
+- **compose 部署**：必须设置 JWT。未设置或为空时 compose 在创建任何容器前失败并指出该变量，不会出现「compose 部署但 Office 未配置」的状态。
+- **平台侧三态校验**（适用于所有入口）
+  - 两项都不存在：自带 Document Server 视为未配置，Office 不可用（ONLYOFFICE 不启用），平台照常启动。只有不经 compose 的入口会走到这一态。
+  - 任一项显式为空，或只存在其中一项：监听前失败并指出配置项，不回显取值；空值不当作未配置。
+- **不经 compose 的入口**
+  - 测试、e2e、UI 入口自己构造环境，不读 `.env`，不需要新增变量，落在「两项都不存在」。
+  - 读取 `.env` 的本地入口（`pnpm dev`、`pnpm dev:bg`、`pnpm start`）：照原样复制的示例文件含非空容器名和空 JWT，平台按设计在监听前失败并指出 `DOCUMENT_SERVER_JWT_SECRET`，不会静默进入「Office 不可用」。本地运行二选一：删去这两行（Office 不可用），或两项都填非空值。阶段 1 留下的旧 `.env` 没有这两行，行为不变。
+  - 示例文件开头的复制说明、AGENTS.md 的本地运行说明和 DEPLOY 写明这一点。
 - **外部 Document Server**
   - 后台可以改用外部 Document Server 的地址和 JWT，存在 settings 中。外部配置优先。
   - 接口 `GET/PUT /_platform/api/admin/document-server`，审计事件 `document-server-config.updated`。
@@ -400,7 +406,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 
 - 第 1 组上线时，地址不在布局上的阶段 1 运行中实例保持运行，不被对账停止，也不额外写审计；它们自然停止后，下次启动按布局创建（决定 2）。
 - DSH 迁移合入后，部署按普通的镜像和平台升级进行。已有员工卷依靠「重置配置」更新 profile（B19），第 4 组用 Docker 用例证明；Session 格式不变。
-- Document Server 随 compose 首次启动；`.env` 需要新增 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。两项都不填时平台照常启动，只是 Office 不可用。`.env.example` 和 DEPLOY 同步更新。
+- Document Server 随 compose 首次启动。阶段 1 的 compose 部署升级时，运营方必须在 `.env` 新增 `DOCUMENT_SERVER_JWT_SECRET`，否则 compose 在启动前失败；容器名由 compose 固定，不需要填写。「两项都不填时平台照常启动、Office 不可用」只适用于不经 compose 的开发、测试入口；从新示例原样复制 `.env` 的本地运行会因空 JWT 在监听前失败，需删去两行或两项都填。`.env.example`、AGENTS.md 和 DEPLOY 同步更新。
 - 回滚到阶段 1 镜像时，profile 需要再次「重置配置」。DSH 0.2.1 写入的 Session 能否被 0.2.0 读取没有验证，所以回滚前要备份卷。
 
 ## Grill ledger

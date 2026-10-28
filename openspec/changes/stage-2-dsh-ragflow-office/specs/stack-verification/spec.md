@@ -6,7 +6,7 @@
 
 ### Requirement: 本机全栈验证命令
 
-仓库 MUST 提供根脚本 `pnpm test:stack`。它在本机 Docker 上构建当前提交的平台镜像和用户镜像，用交付的 compose 拉起平台和 Document Server，连接已运行的本机 RAGFlow 测试栈，并运行知识库和 Office 的端到端接口与浏览器用例。前提缺失时 MUST 在创建任何资源前失败，不能跳过用例或降级为部分验证：包括非 macOS arm64 主机、本机 Docker 不可用、`docker info` 报告的 MemTotal 低于 14 GiB、私有配置文件缺失或权限不安全、RAGFlow 不可达。
+仓库 MUST 提供根脚本 `pnpm test:stack`。它在本机 Docker 上构建当前提交的平台镜像和用户镜像，用交付的 compose 拉起平台和 Document Server，连接已运行的本机 RAGFlow 测试栈，并运行知识库和 Office 的端到端接口与浏览器用例。前提缺失时 MUST 在创建任何资源前失败，不能跳过用例或降级为部分验证：包括非 macOS arm64 主机、本机 Docker 不可用、`docker info` 报告的 MemTotal 低于 14 GiB、私有配置文件缺失或权限不安全、RAGFlow 不可达或版本接口报告的版本不是 `v1.0.0-rc2`。
 
 #### Scenario: 前提缺失时直接失败
 

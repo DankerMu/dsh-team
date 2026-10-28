@@ -26,7 +26,7 @@
 
 - [ ] 1.1 扩展 `platform/src/orchestrator/subnet.ts`：新增一个纯函数，由一个对齐的 /28 子网得出 +1 网关、+2 员工容器、+3 平台、+4 Document Server 四个地址；输入不是规范的 /28 时明确拒绝。验证：单元测试覆盖池首、池尾、非 /28 和非规范输入。
 - [ ] 1.2a network 模式下，创建容器时用 `IPAMConfig` 把员工容器固定在 +2。创建后检查实际地址，与布局不符时按现有失配路径退役，数据卷保留。DSH 监听地址仍为 `0.0.0.0`。验证：单元测试覆盖创建请求体和地址不符的处理；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言新建容器在 +2。
-- [ ] 1.2b 平台接入实例 bridge 时请求 +3，接入后检查实际地址，不符时按现有失配路径处理。平台重建后的对账修复：容器在 +2 的实例以 +3 补接平台；容器不在 +2 的阶段 1 存量实例按阶段 1 方式补接，不指定地址。验证：单元测试覆盖两类补接的请求体；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言平台在 +3；`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 覆盖平台重建后两类实例的补接。
+- [ ] 1.2b 平台接入实例 bridge 时请求 +3，接入后检查实际地址，不符时按现有失配路径处理。平台重建后的对账修复：容器在 +2 的实例以 +3 补接平台；容器不在 +2 的阶段 1 存量实例按阶段 1 方式补接，不指定地址、接入后不按布局核对，也不因此失败或停止。验证：单元测试覆盖两类补接的请求体；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言平台在 +3；`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 覆盖平台重建后两类实例的补接。
 - [ ] 1.2c 阶段 1 存量实例的对账用例：用测试自有的方式造一个容器地址不在 +2 的运行中实例，运行新版对账。断言它保持运行、可经网关访问、没有新增审计；随后以空闲或管理员方式停止它，再次启动时容器在 +2，数据卷中的标记仍在。验证：`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 中的新用例通过，自有资源已清理。
 - [ ] 1.3 published-loopback 模式改为：建本实例自有的带标签 bridge，容器固定在 +2，再把 3080 发布到 127.0.0.1 的随机端口；不接入平台。退役时删除这个 bridge 的条件与 network 模式相同。验证：`pnpm test:docker platform/test/container-network-mode.docker.test.ts` 断言自有 bridge、+2 地址、仅回环发布，以及退役后网络不存在。
 - [ ] 1.4 更新 AGENTS.md 的环境说明：`PLATFORM_UPSTREAM_MODE` 两种模式的地址布局，published-loopback 下 RAGFlow 和 Office 不可用，阶段 1 存量实例保持运行到自然停止。验证：`pnpm lint:agents` 通过；exact-head 全量 `test:docker` 和 `test:deploy` 通过，清理已确认。
@@ -121,14 +121,14 @@ Minimal mergeable slice: atomic: 只改一个函数，加它的回归测试
   - 主机是 macOS arm64，本机 Docker 可用；
   - `docker info` 报告的 MemTotal ≥ 14 GiB；
   - 私有配置文件存在，归当前用户所有且权限为 0600；
-  - 本机 RAGFlow 测试栈的版本接口可达。
+  - 本机 RAGFlow 测试栈的版本接口可达，且报告的版本为 `v1.0.0-rc2`。
 
   资源统一使用 `dsh-team` 前缀和本次运行的标签，成功、失败、中断时都只按精确所有权清理。
 
   验证：Docker-free 的集成测试覆盖每一种前提缺失时的拒绝（包括 MemTotal 为 13.9 GiB 时拒绝），且错误信息里没有配置内容；`pnpm lint:shell` 通过。
 
 - [ ] 10.2 新增种子脚本，只对私有配置中的本机 RAGFlow 写入。它建立固定的 3 个库和少量小文件并解析；已经存在的不重复上传或解析；地址与配置不一致时拒绝执行。验证：对本机测试栈连续运行两次，第二次没有上传或解析请求；用一个与配置不一致的地址运行时被拒绝。
-- [ ] 10.3 首个端到端用例：在本机构建平台和员工镜像，用交付的 compose 拉起平台，检查 health，并确认种子数据可读。验证：`pnpm test:stack` 在干净检出上通过，事后没有自有资源残留，RAGFlow 测试栈不变。
+- [ ] 10.3 首个端到端用例：在本机构建平台和员工镜像，用交付的 compose 拉起平台（16.1 合入后，本机通道为 compose 注入本次运行自有、每次新生成的非机密 `DOCUMENT_SERVER_JWT_SECRET`，不进入日志和报告），检查 health，并确认种子数据可读。验证：`pnpm test:stack` 在干净检出上通过，事后没有自有资源残留，RAGFlow 测试栈不变。
 - [ ] 10.4 建立本机浏览器和模型运行时：
   - 浏览器用仓库已钉定的 Playwright Chromium 1.63（arm64），经平台网关登录员工、打开真实 DSH 工作台，保留截图并收集控制台错误；
   - 对话模型用测试自有的确定性 provider，复用第 3 组和 `office-delegation` 已有的确定性协议适配器，由它驱动工具调用、子 Agent 委派和写文件；
@@ -137,7 +137,7 @@ Minimal mergeable slice: atomic: 只改一个函数，加它的回归测试
   验证：`pnpm test:stack` 中的用例让员工发一条消息，确定性 provider 收到请求、工作台显示回复、Agent 按脚本写出一个文件；截图留存，零意外控制台错误，没有发往外部模型的请求。
 
 - [ ] 10.5 补充文档：
-  - 本机 RAGFlow 测试栈的部署步骤和私有配置文件格式；
+  - 本机 RAGFlow 测试栈（`infiniflow/ragflow:v1.0.0-rc2`）的部署步骤和私有配置文件格式；
   - AGENTS.md 验证矩阵新增 `test:stack` 一行，写明它用 Playwright Chromium 经网关驱动真实 DSH、模型是确定性 provider，是本机功能证据通道，不是隔离 CfT 通道，不提供隔离证据；`constraints.yaml` 的 `verification` 同步；
   - 证据评论的格式。
 
@@ -253,8 +253,8 @@ Minimal mergeable slice: 15.1 插件骨架和镜像交付单独合入（没有�
 
 依赖：1、10（Office 相关 PR 的本机证据）。关键路径 `platform/src/orchestrator/`（16.3）。
 
-- [ ] 16.1 `deploy/compose.yml` 新增 `documentserver` 服务：9.4.0、固定容器名 `dsh-team-documentserver`、开启 JWT、运营方字体只读挂载、不发布宿主端口、设置 `ALLOW_PRIVATE_IP_ADDRESS=true`。`.env.example` 新增 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`，compose 总是给出两项并传给平台。`pnpm test:deploy` 在 VPS 上用自有的小替身镜像代替 Document Server：VPS 磁盘放不下 8.7 GB 的镜像，真实镜像只在本机通道上运行。验证：`pnpm lint:config` 通过；`pnpm test:deploy` 断言这个服务没有发布端口，自有资源都已清理。
-- [ ] 16.2a 平台启动时读取并校验两项 Document Server 输入：两项都缺省为「自带未配置」，平台照常启动；只有一项、另一项缺失或为空时在监听前失败并指出配置项，不回显取值。现有 dev、test、e2e、UI 入口不新增变量。JWT 加入日志脱敏。验证：配置单元测试和集成测试覆盖都缺省、都给出、只给一项、空值；`pnpm lint:config` 通过。
+- [ ] 16.1 `deploy/compose.yml` 新增 `documentserver` 服务：9.4.0、固定容器名 `dsh-team-documentserver`、开启 JWT、运营方字体只读挂载、不发布宿主端口、设置 `ALLOW_PRIVATE_IP_ADDRESS=true`。`.env.example` 新增有效赋值 `DOCUMENT_SERVER_JWT_SECRET=`（空值，不放任何密钥或占位密钥），注释写明 compose 部署必须填写、留空时 compose 启动前失败。compose 照 `PLATFORM_CONTAINER_NAME` 的先例把容器名写成字面量：`documentserver` 的 `container_name` 和传给平台的 `DOCUMENT_SERVER_CONTAINER_NAME` 都是 `dsh-team-documentserver`；JWT 以 `${DOCUMENT_SERVER_JWT_SECRET:?…}` 必填插值，同时传给 Document Server 和平台。`pnpm test:deploy` 在 VPS 上用自有的小替身镜像代替 Document Server：VPS 磁盘放不下 8.7 GB 的镜像，真实镜像只在本机通道上运行。`platform/test/deployment-fixture.ts` 把 `.env.example` 解析后写入 `--env-file`，示例中的空 JWT 会让 `:?` 插值失败，所以夹具在正常用例中注入本次调用自有、每次新生成的非机密 JWT（不来自任何真实密钥，不进入日志和报告）；只有下面的未设置或为空用例不注入。`scripts/check-config.mjs` 目前只核对 `PLATFORM_*` 读取和 `DEPLOY_*` 插值，本任务把 compose 中的 `DOCUMENT_SERVER_*` 插值纳入核对，`pnpm test:guardrails` 增加未列出和未消费两个拒绝用例。验证：`pnpm lint:config` 通过（`DOCUMENT_SERVER_JWT_SECRET` 计为 compose 插值；compose 中的容器名是字面量，不计入插值）；`pnpm test:guardrails` 通过；`pnpm test:deploy` 断言这个服务没有发布端口、平台收到的容器名是该字面量、Document Server 和平台收到的 JWT 都是夹具注入的值，并新增用例：`.env` 中 `DOCUMENT_SERVER_JWT_SECRET` 未设置或为空时，启动命令在创建任何容器前失败、错误指出该变量、不留下自有资源；自有资源都已清理。 「JWT 未设置」用例要从夹具的环境中删除该键，而不只是不注入（示例文件本身带有空值行）。
+- [ ] 16.2a 平台启动时读取并校验两项 Document Server 输入，平台不为容器名提供默认值：两项都不存在为「自带未配置」，平台照常启动；只存在一项，或任一项显式为空时，在监听前失败并指出配置项，不回显取值，空值不当作未配置。现有 test、e2e、UI 入口自己构造环境、不读 `.env`，不新增变量。读取 `.env` 的本地入口（`pnpm dev`、`pnpm dev:bg`、`pnpm start`）照原样复制示例时，带非空容器名和空 JWT，按设计在监听前失败并指出 `DOCUMENT_SERVER_JWT_SECRET`；本地运行须删去两行（Office 不可用）或两项都填非空值。`.env.example` 在同一变更中新增有效赋值 `DOCUMENT_SERVER_CONTAINER_NAME=dsh-team-documentserver`（取值与 compose 字面量相同），注释写明容器名由 compose 固定；文件开头的复制说明写明：不经 compose 的本地运行要么删去两行 Document Server 配置，要么两项都填非空值，原样复制会因空 JWT 启动失败。JWT 加入日志脱敏。`scripts/check-config.mjs` 同时接受并核对配置模块中字面量的 `DOCUMENT_SERVER_*` 读取。同一变更更新 AGENTS.md：Environment 中 `lint:config` 的说明从「平台读取」和「只给 Compose 的插值」两类改为三类，新增平台读取与 compose 插值共用的 `DOCUMENT_SERVER_*`（`DOCUMENT_SERVER_CONTAINER_NAME` 只计平台读取，compose 中是字面量；`DOCUMENT_SERVER_JWT_SECRET` 两边都计）；「Copy it to `.env`」和本地运行说明写明不经 compose 时删去两行或两项都填，原样复制会在监听前失败。验证：配置单元测试和集成测试覆盖都不存在（照常启动、Office 不可用）、都给出非空值、只存在容器名、只存在 JWT、容器名为空、JWT 为空、两项都为空，失败用例断言错误指出对应变量且不含取值、监听前退出；配置测试读取仓库中真实的 `.env.example`：原样载入时平台在监听前失败、错误指出 `DOCUMENT_SERVER_JWT_SECRET` 且不含取值，删去两行后照常启动且 Office 不可用；`pnpm lint:config` 通过（`DOCUMENT_SERVER_CONTAINER_NAME` 计为平台读取，`DOCUMENT_SERVER_JWT_SECRET` 同时计为平台读取和 compose 插值）；`pnpm test:guardrails` 通过；`pnpm lint:agents` 通过。 同一变更同步 `constraints.yaml` 中 `lint:config` 的 description，写入第三类 `DOCUMENT_SERVER_*`。
 - [ ] 16.2b 外部 Document Server 设置：新增迁移保存外部地址和 JWT；后台 `GET/PUT /_platform/api/admin/document-server`，返回当前模式和自带配置是否齐全，JWT 只显示「已配置」；切回自带时清除外部值；保存和审计 `document-server-config.updated` 同在一个事务内。验证：集成测试覆盖权限、校验、保存、切回、回滚、审计和迁移账本；`pnpm contract:write` 后 `pnpm contract:check` 通过。
 - [ ] 16.2c 后台「Office」页：显示当前模式、自带配置是否齐全（未配置时显示 Office 不可用），可填写外部地址和 JWT 或切回自带，提示「实例下次启动生效」。验证：`pnpm test:ui` 通过，有截图。
 - [ ] 16.3 编排器接入 Document Server：
@@ -266,13 +266,13 @@ Minimal mergeable slice: 15.1 插件骨架和镜像交付单独合入（没有�
   - 孤儿网络回收、就绪失败清理、补偿删除和停止规则把已记录的 Document Server 端点与已验证的平台端点同等处理；
   - 外部模式、自带未配置和 published-loopback 都不接入。
 
-  验证：单元测试覆盖每个分支；`pnpm test:docker` 用自有的替身容器断言：+4 接入和停止时断开；替身不存在或身份不符时实例照常就绪且没有 Office 配置；接入失败时启动失败；以自带启动、切到外部后停止，按记录断开；替身重建后已运行实例不被补接、新启动接入新容器；带 Document Server 端点的孤儿网络被回收。现有 Docker 用例不需要 Document Server 前提：未配置时 Office 不可用，其余断言不变。
+  验证：单元测试覆盖每个分支；`pnpm test:docker` 用自有的替身容器断言：+4 接入和停止时断开；替身不存在或身份不符时实例照常就绪且没有 Office 配置；接入失败时启动失败；以自带启动、切到外部后停止，按记录断开；替身重建后已运行实例不被补接、新启动接入新容器；带 Document Server 端点的孤儿网络被回收。`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 新增平台重启和平台容器重建两个用例：各有两个以自带模式启动的运行中实例，一个记录的替身端点仍在，另一个的替身端点已消失（替身已删除）；断言对账后两者都仍为运行且可经网关访问、没有额外启动或停止审计、没有补接或新增任何 Document Server 端点、平台端点在 +3（重建用例中由对账以 +3 补接），仍在的替身端点保留不变。现有 Docker 用例不需要 Document Server 前提：未配置时 Office 不可用，其余断言不变。
 
-- [ ] 16.4 `docs/DEPLOY.md` 补充：字体目录、两个变量及「都不填则 Office 不可用」、Document Server 重建后已运行实例要重启才恢复 Office、外部 Document Server 的网络可达由运营方负责、阶段 1 部署升级时要新增这两个变量。验证：文档中的命令照写可以运行。
+- [ ] 16.4 `docs/DEPLOY.md` 补充：字体目录；compose 固定容器名、`.env` 必须填写 `DOCUMENT_SERVER_JWT_SECRET`（未填时 compose 启动前失败）；「两项都不填则 Office 不可用」只适用于不经 compose 的开发、测试入口，显式空值或只给一项会使平台启动失败，照原样复制示例的本地运行因此须删去两行或两项都填；Document Server 重建后已运行实例要重启才恢复 Office；外部 Document Server 的网络可达由运营方负责；阶段 1 的 compose 部署升级时要在 `.env` 新增 `DOCUMENT_SERVER_JWT_SECRET`。验证：文档中的命令照写可以运行。
 - [ ] 16.5 隔离验证和文档：更新隔离 Docker 用例，接入 Document Server 替身后每个实例网络恰好有员工容器、平台和替身三个端点，从 B 的实例访问 A 的 +2 地址 3080 和其他常见端口全部失败；部署文档的隔离一节写明 Document Server 的 JWT 在实例内可读、Document Server 是共享对端、插件安装和联网工具不改变隔离边界。验证：`pnpm test:docker platform/test/container-network.docker.test.ts` 通过；隔离一节与测试断言逐条对应。
 
 Suggested fixture level: expanded - 新的部署组件、启动配置契约和编排器接入路径
-Minimal mergeable slice: 16.1 compose 服务和变量单独合入（平台还不读取这两项，行为不变）
+Minimal mergeable slice: 16.1 compose 服务和 JWT 变量单独合入（平台还不读取这两项，平台行为不变，原样复制示例的本地运行也照常启动；compose 部署从此必须在 `.env` 填写 `DOCUMENT_SERVER_JWT_SECRET`）
 
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 

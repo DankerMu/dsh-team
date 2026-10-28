@@ -59,7 +59,7 @@ RAGFlow 密钥不适用 D7：任务书 9.4 是固定要求，密钥留在平台�
 | 项 | 开发环境 | 生产环境 |
 |---|---|---|
 | 模型 | dmxapi，`deepseek-v4.1-flash`，OpenAI 兼容，密钥取环境变量 `DMXAPI_KEY` | sub2api，`qwen3.6`，OpenAI 兼容，500k 上下文（覆盖层里显式写 `contextWindow`） |
-| RAGFlow | 本机测试栈 `infiniflow/ragflow:v1.0.0-rc1`，嵌入模型 `text-embedding-3-small` | `192.168.2.98:80`，v1.0.0-rc1 |
+| RAGFlow | 本机测试栈 `infiniflow/ragflow:v1.0.0-rc2`，嵌入模型 `text-embedding-3-small`（2026-10-28 修订） | `192.168.2.98:80`，内网部署时重新部署为 v1.0.0-rc2 |
 | 宿主 | macOS + Docker Desktop，arm64 | Ubuntu 22.04，amd64 |
 
 | 组件 | 钉定版本 |
@@ -68,7 +68,7 @@ RAGFlow 密钥不适用 D7：任务书 9.4 是固定要求，密钥留在平台�
 | 侧栏插件 | `dsh-better-sidebar@0.28.0`，带一个构建期补丁（见分析 3.5；0.28.0 的 `HOST_OWNED_EXTS` 仍包含 docx/xlsx/pptx） |
 | Office 插件 | `dsh-sidebar-onlyoffice@0.2.0`，带一个构建期补丁：文件令牌密钥改为每实例随机值，替换源码中的公开常量（防止借 Document Server 跨用户取文件） |
 | Document Server | `onlyoffice/documentserver:9.4.0` |
-| RAGFlow 接口 | v1.0.0-rc1 的 `/api/v1` |
+| RAGFlow 接口 | v1.0.0-rc2 的 `/api/v1`（2026-10-28 修订；分析 3.4 的实测基于 v1.0.0-rc1，阶段 2 在本机通道上按 rc2 复核） |
 
 升级任何一项都要重跑对应的验证。
 
