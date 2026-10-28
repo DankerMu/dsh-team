@@ -39,7 +39,7 @@ Canonical terms and their prohibited aliases live in `openspec/glossary.md`. Rea
 | ---------------------------- | --------------------------------------------------- | ------------------------------------ | ------------------------------------------- |
 | 平台 HTTP 接口               | `schemas/openapi.json`（由路由生成）                | 改路由必须同时提交重新生成的契约文件 | `pnpm contract:check`、`smoke/*.hurl`       |
 | 实例启动方式                 | `docs/IMPLEMENTATION_PLAN.md` T3、T4                | 钉定 DSH 版本，升级前重新验证        | `verify/phase0/`（阶段 1 起由集成测试接替） |
-| RAGFlow HTTP API（只读使用） | `docs/DSH_Enterprise_Architecture_Analysis.md` §3.4 | 钉定 v1.0.0-rc1                      | 阶段 2 的联调测试                           |
+| RAGFlow HTTP API（只读使用） | `docs/DSH_Enterprise_Architecture_Analysis.md` §3.4 | 钉定 v1.0.0-rc2                      | 阶段 2 的联调测试                           |
 
 ## Forbidden Logic & Irreversible Operations
 

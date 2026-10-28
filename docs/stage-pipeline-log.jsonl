@@ -1,1 +1,2 @@
 {"date":"2026-10-03","change":"stage-1-accounts-instances","grill_gate":"passed:branches=14,open=5","rounds":2,"gate_net_catch":1,"p0":{"in":0,"resolved":0,"residual":0},"p1":{"resolved":36},"regressions":1,"approx_subagent_calls":7,"verdict":"clean"}
+{"date":"2026-10-28","change":"stage-2-dsh-ragflow-office","grill_gate":"passed:branches=27,open=3","rounds":3,"gate_net_catch":5,"p0":{"in":0,"resolved":0,"residual":0},"p1":{"resolved":38,"carried":2},"regressions":4,"approx_subagent_calls":14,"verdict":"residual"}
