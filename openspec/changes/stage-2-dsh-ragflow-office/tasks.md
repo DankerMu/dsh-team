@@ -40,12 +40,14 @@ Evidence (1.1): 返回形状 `{ gateway, container, platform, documentServer }`�
 
 依赖：无。关键路径 `images/dsh-user/`。
 
-- [ ] 2.1 删除 `images/dsh-user/patch-plugin-manager.mjs`、Dockerfile 里对应的步骤，以及 `platform/test/plugin-manager-patch.integration.test.ts`。用户镜像的 Docker 用例改为断言：插件管理器的 `client.js` 是发行原样的哈希，插件页可以看到添加和卸载入口。验证：`pnpm test:docker` 中用户镜像用例和首次使用插件页的浏览器用例通过，并有截图。
+- [x] 2.1 删除 `images/dsh-user/patch-plugin-manager.mjs`、Dockerfile 里对应的步骤，以及 `platform/test/plugin-manager-patch.integration.test.ts`。用户镜像的 Docker 用例改为断言：插件管理器的 `client.js` 是发行原样的哈希，插件页可以看到添加和卸载入口。验证：`pnpm test:docker` 中用户镜像用例和首次使用插件页的浏览器用例通过，并有截图。
 - [ ] 2.2 覆盖层不再移除 `@deepseek-ai/dsh-plugin-manager/tools`。`registryProbeEnabled: false` 和联网工具的去除保持不变，等第 11 组接上后台开关时再改。验证：生成器单元测试断言输出中没有 `plugin_manager` 的移除项、仓库探测仍为 false；`platform/test/managed-policy.docker.test.ts` 中 Agent 可用的工具包含插件管理工具。
 - [ ] 2.3 更新 AGENTS.md 中用户镜像补丁的段落和相关部署文档，删掉已撤回的说明。验证：`pnpm lint:agents` 通过；文档中搜不到 `patch-plugin-manager`。
 
 Suggested fixture level: compact - 删除一个补丁、放开一项受管移除，不新增运行时组件
 Minimal mergeable slice: 2.1 镜像侧删除补丁单独合入（覆盖层仍移除插件管理工具，插件页入口恢复，测试保持绿）
+Risk packs (2.1): selected - Release / packaging（删除一个 BuildKit 绑定挂载的构建步骤与脚本，镜像层不变、`client.js` 回到发行原样）、Documentation（只改测试内注释与 probe 的说明，AGENTS.md/部署文档由 2.3 负责，列为非目标）；not selected - Public API、Config、File IO、Schema、Auth（受管覆盖层仍移除 `plugin_manager` 工具、仍钉 `registryProbeEnabled:false`，属 2.2）、Concurrency、Resource limits、Legacy compatibility（旧镜像不再构建）、Error handling（被删的是补丁自身的拒绝路径，随脚本与其集成测试一并删除，不保留等价物）。
+Evidence (2.1): 删除 `images/dsh-user/patch-plugin-manager.mjs`、Dockerfile 中 `RUN --mount=type=bind,source=patch-plugin-manager.mjs …` 一步及其注释、`platform/test/plugin-manager-patch.integration.test.ts`。`platform/test/user-image.docker.test.ts` 的插件页用例改为断言 `@deepseek-ai/dsh-client-ui-plugin-manager/lib/client.js` 的 SHA-256 等于发行原样 `bf25686c575d598b91a5dec43cc725d9c1066c801555ce06e6f12f0f72e94f77`（即被删脚本的 `INPUT_SHA256`）、仍为 root 所有且 uid1001 不可写、`/tmp/patch-plugin-manager.mjs` 不存在、全局恰有一份该包。浏览器证据 `scripts/probe-plugin-page.mjs` 的 `verifyPluginPage` 改为要求列表页有「添加插件」按钮（计数 ≥1）、详情页有「卸载」按钮（计数 ≥1），开关来回切换与截图数量不变；`platform/test/probe-plugin-page.integration.test.ts` 先红后绿：无按钮的页面现在失败（`error=add-plugin`/`error=uninstall` 的反向），有按钮的页面通过；`platform/test/first-use.docker.test.ts` 的 `expectPluginPage` 与结果字段（`pluginPageWithoutInstallEntries` 改名为表达“入口存在”的字段）同步。`pnpm test:docker` 中用户镜像用例与首次使用插件页用例通过且保留截图。Must preserve：镜像其余步骤与 profile 种子不变；覆盖层仍移除 `plugin_manager` 工具并钉 `registryProbeEnabled:false`（2.2 再改）；`managed-policy-oracle` 对 `plugin_manager` 的期望不变。
 
 ## 3. 权限档覆盖 continuable 子会话（DSH 0.2.0 上的预备组）
 

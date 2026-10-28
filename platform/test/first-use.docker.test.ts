@@ -182,12 +182,12 @@ async function editProfile(lifecycle: UserImageLifecycle, userId: string, script
   return edited;
 }
 
-/** No install or uninstall entry; the bundle switch is usable and round-trips across reloads. */
+/** The released install and uninstall entries; the bundle switch round-trips across reloads. */
 function expectPluginPage(observation: MappedHostAcceptResult): void {
   expect(observation.accepted).toBe(true);
   expect(observation.pluginPage).toMatchObject({
-    list: { refresh: true, addButtons: 0, group: 'bundles', status: 'running', checked: true },
-    detail: { uninstallButtons: 0, checked: true, disabled: false, title: null },
+    list: { refresh: true, addButtons: 1, group: 'bundles', status: 'running', checked: true },
+    detail: { uninstallButtons: 1, checked: true, disabled: false, title: null },
     off: { checked: false, status: 'disabled' },
     on: { checked: true, status: 'running' },
   });
@@ -511,7 +511,7 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
           automaticWorkSessions: true,
           isolatedEmployees: true,
           preservedEmployeeState: true,
-          pluginPageWithoutInstallEntries: true,
+          pluginPageWithInstallEntries: true,
         });
       } finally {
         await app.close();

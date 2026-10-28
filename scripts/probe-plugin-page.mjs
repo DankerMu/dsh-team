@@ -1,6 +1,6 @@
 /**
- * Real DSH sidebar plugin page evidence (#375): no install or uninstall entry, while the
- * office-agents bundle switch stays usable and round-trips across reloads. DOM facts only.
+ * Real DSH sidebar plugin page evidence: the released install and uninstall entries are present,
+ * and the office-agents bundle switch stays usable and round-trips across reloads. DOM facts only.
  */
 import { captureSettledScreenshot, clickSelector, evalPage, waitFor } from './probe-dsh-api-ui.mjs';
 
@@ -93,7 +93,7 @@ const openList = async (page, stage, ms) => {
     (state) =>
       state.panel && state.busy === 'false' && state.refresh && switchSettled(state, 'inCard'),
   );
-  if (observed.add !== 0) fail(stage, 'add-plugin', observed);
+  if (observed.add < 1) fail(stage, 'add-plugin', observed);
   if (observed.card?.group !== 'bundles') fail(stage, 'group', observed);
   if (observed.card.status === 'problem') fail(stage, 'status', observed);
   return observed;
@@ -119,7 +119,7 @@ const readBack = async (page, stage, ms, reload, enabled) => {
 };
 
 /**
- * Prove the plugin page offers no install or uninstall entry, then switch the bundle off and on
+ * Prove the plugin page offers its install and uninstall entries, then switch the bundle off and on
  * with a reload after each. Leaves the bundle on. `reload` re-navigates the same page.
  */
 export const verifyPluginPage = async ({ page, errors, screenshot, ms, reload }) => {
@@ -132,7 +132,7 @@ export const verifyPluginPage = async ({ page, errors, screenshot, ms, reload })
   const detail = await settle(page, 'plugin-page-detail', ms, (state) =>
     Boolean(state.detail && switchSettled(state, 'inDetail')),
   );
-  if (detail.uninstall !== 0) fail('plugin-page-detail', 'uninstall', detail);
+  if (detail.uninstall < 1) fail('plugin-page-detail', 'uninstall', detail);
   screenshots.push(await shot('detail'));
   await setEnabled(page, 'plugin-page-switch-off', ms, 'inDetail', false);
   const off = await readBack(page, 'plugin-page-off', ms, reload, false);

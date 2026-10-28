@@ -15,10 +15,10 @@ const OPEN = `[data-plugin-package="${PACKAGE}"] button[aria-label="查看 ${PAC
 const SWITCH = `button[role="switch"][aria-label="启用 ${PACKAGE}"]`;
 
 interface FakeOptions {
-  /** The unpatched header still renders 「添加插件」. */
-  addButton?: boolean;
-  /** The unpatched detail still renders 「卸载」. */
-  uninstallButton?: boolean;
+  /** The header lacks the released 「添加插件」 button. */
+  noAddButton?: boolean;
+  /** The detail lacks the released 「卸载」 button. */
+  noUninstallButton?: boolean;
   /** The card is not in the 已安装 group (for example the dependency entry is missing). */
   group?: string;
   status?: 'running' | 'disabled' | 'problem';
@@ -103,8 +103,8 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
       panel: state.panel,
       busy: state.panel ? String(!loaded) : null,
       refresh: listed && options.noRefresh !== true,
-      add: listed && options.addButton === true ? 1 : 0,
-      uninstall: state.detail && options.uninstallButton === true ? 1 : 0,
+      add: listed && options.noAddButton !== true ? 1 : 0,
+      uninstall: state.detail && options.noUninstallButton !== true ? 1 : 0,
       card: cardState(loaded),
       detail: loaded && state.detail,
       toggle: toggleState(loaded, busy),
@@ -149,14 +149,14 @@ async function run(options: FakeOptions, ms = 3_000) {
   return { result, state, root };
 }
 
-it('accepts a page without install entries whose switch round-trips across reloads', async () => {
+it('accepts a page with install entries whose switch round-trips across reloads', async () => {
   const { result, state, root } = await run({});
 
   const evidence = await result;
 
   expect(evidence).toEqual({
-    list: { refresh: true, addButtons: 0, group: 'bundles', status: 'running', checked: true },
-    detail: { uninstallButtons: 0, checked: true, disabled: false, title: null },
+    list: { refresh: true, addButtons: 1, group: 'bundles', status: 'running', checked: true },
+    detail: { uninstallButtons: 1, checked: true, disabled: false, title: null },
     off: { checked: false, status: 'disabled' },
     on: { checked: true, status: 'running' },
     screenshots: [
@@ -184,8 +184,12 @@ it('waits for a sidebar panel row that renders after the app is ready', async ()
 });
 
 it.each<[string, FakeOptions, RegExp]>([
-  ['the 添加插件 button', { addButton: true }, /stage=plugin-page-list error=add-plugin/],
-  ['the 卸载 button', { uninstallButton: true }, /stage=plugin-page-detail error=uninstall/],
+  ['a list without 添加插件', { noAddButton: true }, /stage=plugin-page-list error=add-plugin/],
+  [
+    'a detail without 卸载',
+    { noUninstallButton: true },
+    /stage=plugin-page-detail error=uninstall/,
+  ],
   ['a card outside the 已安装 group', { group: 'official' }, /plugin-page-list error=group/],
   ['a card with a problem', { status: 'problem' }, /stage=plugin-page-list error=status/],
   ['a locked switch', { locked: true }, /stage=plugin-page-list/],
