@@ -33,7 +33,7 @@ export type MappedHostAcceptInput = {
   readonly observeSessions?: boolean;
   /** Composition only: prove the sidebar platform links for this role, then follow one. */
   readonly platformNav?: 'employee' | 'admin';
-  /** Composition only: prove the plugin page has no install entries; switch office-agents off and on. */
+  /** Composition only: prove the plugin page has its install entries; switch office-agents off and on. */
   readonly pluginPage?: boolean;
 };
 

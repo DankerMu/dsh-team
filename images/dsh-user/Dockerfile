@@ -95,9 +95,5 @@ RUN mkdir -p /opt/dsh-team/profile-seed \
   && chmod -R a-w /opt/dsh-team/profile-seed \
   && chown root:root /opt \
   && chmod go-w /opt /opt/dsh-team
-# Remove only the plugin page's install and uninstall entries; any version or hash drift fails the build.
-# The bind mount keeps the patch script out of every image layer.
-RUN --mount=type=bind,source=patch-plugin-manager.mjs,target=/tmp/patch-plugin-manager.mjs \
-  node /tmp/patch-plugin-manager.mjs "$(npm root -g)"
 
 USER dsh

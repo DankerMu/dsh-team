@@ -110,12 +110,11 @@ process.stdout.write(JSON.stringify({immutable:true,peer:installed,uid:1001}));
   );
 });
 
-// The reviewed OUTPUT_SHA256 pinned in images/dsh-user/patch-plugin-manager.mjs; the published
-// input is bf25686c…, so an unpatched image fails this case.
-const PATCHED_PLUGIN_PAGE_SHA256 =
-  'ca954298bb89b27f93f49457500a7ef3758e64746a04bded0c83b24ccedf2bdc';
+// SHA-256 of the published 0.2.0-rc.2 lib/client.js (npm tarball); any build-time change fails here.
+const RELEASED_PLUGIN_PAGE_SHA256 =
+  'bf25686c575d598b91a5dec43cc725d9c1066c801555ce06e6f12f0f72e94f77';
 
-it('installs the plugin page patched, root-owned and unwritable by uid1001, without the patch script', async () => {
+it('installs the released plugin page unpatched, root-owned and unwritable by uid1001, without the removed patch script', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
@@ -153,7 +152,7 @@ process.stdout.write(JSON.stringify({
     'managed-policy',
     (stdout) => {
       expect(JSON.parse(stdout)).toEqual({
-        sha256: PATCHED_PLUGIN_PAGE_SHA256,
+        sha256: RELEASED_PLUGIN_PAGE_SHA256,
         script: false,
         uid: 1001,
       });
@@ -161,7 +160,7 @@ process.stdout.write(JSON.stringify({
     undefined,
     (lifecycle) =>
       Promise.resolve(
-        execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-plugin-page-patch`, script),
+        execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-plugin-page`, script),
       ),
   );
 });
