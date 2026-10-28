@@ -9,6 +9,7 @@ interface Ipv4Range {
 
 const SUBNET_SIZE = 16;
 const POOL_KEY = 'PLATFORM_SUBNET_POOL';
+const INSTANCE_SUBNET = 'Instance subnet';
 
 function invalidCidr(field: string): never {
   throw new Error(`${field} must be a valid CIDR`);
@@ -27,6 +28,10 @@ function parseCidr(raw: string, field: string): Ipv4Range | null {
   const size = 2 ** (32 - prefix);
   const start = Math.floor(address / size) * size;
   return { address, prefix, start, end: start + size };
+}
+
+function formatIpv4(value: number): string {
+  return [24, 16, 8, 0].map((bits) => Math.floor(value / 2 ** bits) % 256).join('.');
 }
 
 function parsePool(pool: string): Ipv4Range {
@@ -69,6 +74,26 @@ export function allocateSubnet(pool: string, occupiedSubnets: readonly string[])
   if (candidate >= range.end) {
     throw new Error('Subnet pool exhausted: no free /28 subnet');
   }
-  const address = [24, 16, 8, 0].map((bits) => Math.floor(candidate / 2 ** bits) % 256).join('.');
-  return `${address}/28`;
+  return `${formatIpv4(candidate)}/28`;
+}
+
+export interface InstanceAddressLayout {
+  readonly gateway: string;
+  readonly container: string;
+  readonly platform: string;
+  readonly documentServer: string;
+}
+
+/** Fixed addresses inside one instance /28; accepts exactly what allocateSubnet can return. */
+export function instanceAddressLayout(subnet: string): InstanceAddressLayout {
+  const range = parseCidr(subnet, INSTANCE_SUBNET);
+  if (range?.prefix !== 28 || range.address !== range.start) {
+    throw new Error(`${INSTANCE_SUBNET} must be a canonical IPv4 /28`);
+  }
+  return {
+    gateway: formatIpv4(range.start + 1),
+    container: formatIpv4(range.start + 2),
+    platform: formatIpv4(range.start + 3),
+    documentServer: formatIpv4(range.start + 4),
+  };
 }

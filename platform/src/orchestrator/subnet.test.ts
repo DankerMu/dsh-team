@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allocateSubnet, validateSubnetPool } from './index.ts';
+import { allocateSubnet, instanceAddressLayout, validateSubnetPool } from './index.ts';
 
 const POOL = '172.30.0.0/26';
 
@@ -132,4 +132,91 @@ describe('validateSubnetPool', () => {
       validateSubnetPool(pool, 1);
     }).toThrow(/PLATFORM_SUBNET_POOL/);
   });
+});
+
+const ACCEPTED_INSTANCE_SUBNETS = [
+  ['0.0.0.0/28', '0.0.0.1', '0.0.0.2', '0.0.0.3', '0.0.0.4'],
+  ['172.30.0.16/28', '172.30.0.17', '172.30.0.18', '172.30.0.19', '172.30.0.20'],
+  ['10.1.255.240/28', '10.1.255.241', '10.1.255.242', '10.1.255.243', '10.1.255.244'],
+  [
+    '255.255.255.240/28',
+    '255.255.255.241',
+    '255.255.255.242',
+    '255.255.255.243',
+    '255.255.255.244',
+  ],
+] as const;
+
+const REJECTED_INSTANCE_SUBNETS = [
+  '',
+  '172.30.0.0',
+  '172.30.0.0/',
+  '172.30.0.0/27',
+  '172.30.0.0/29',
+  '172.30.0.0/32',
+  '172.30.0.0/0',
+  '172.30.0.1/28',
+  '172.30.0.15/28',
+  '172.030.0.0/28',
+  '172.30.0.0/028',
+  ' 172.30.0.0/28',
+  '172.30.0.0/28 ',
+  '\t172.30.0.0/28',
+  '172.30.0.0/28\n',
+  '::/28',
+  '::ffff:172.30.0.0/28',
+  '256.0.0.0/28',
+  '172.30.0/28',
+];
+
+function allocateReproduces(subnet: string): boolean {
+  try {
+    return allocateSubnet(subnet, []) === subnet;
+  } catch {
+    return false;
+  }
+}
+
+describe('instanceAddressLayout', () => {
+  it.each(ACCEPTED_INSTANCE_SUBNETS)(
+    'derives gateway +1, container +2, platform +3 and Document Server +4 from %s',
+    (subnet, gateway, container, platform, documentServer) => {
+      expect(instanceAddressLayout(subnet)).toEqual({
+        gateway,
+        container,
+        platform,
+        documentServer,
+      });
+    },
+  );
+
+  it.each(REJECTED_INSTANCE_SUBNETS)(
+    'rejects %j naming the instance subnet, never the pool key',
+    (subnet) => {
+      let thrown: unknown;
+      try {
+        instanceAddressLayout(subnet);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      const message = thrown instanceof Error ? thrown.message : '';
+      expect(message).toMatch(/^Instance subnet must be/);
+      expect(message).not.toContain('PLATFORM_SUBNET_POOL');
+    },
+  );
+
+  it.each(ACCEPTED_INSTANCE_SUBNETS.map(([subnet]) => subnet))(
+    'accepts %s exactly as allocateSubnet reproduces it from its own pool',
+    (subnet) => {
+      expect(allocateSubnet(subnet, [])).toBe(subnet);
+    },
+  );
+
+  it.each(REJECTED_INSTANCE_SUBNETS)(
+    'rejects %j exactly as allocateSubnet fails to reproduce it',
+    (subnet) => {
+      expect(allocateReproduces(subnet)).toBe(false);
+    },
+  );
 });
