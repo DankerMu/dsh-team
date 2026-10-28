@@ -23,15 +23,15 @@ See `design.md`, "Must preserve".
 
 ## 1. Implementation (tests first)
 
-- [ ] 1.1 `generate.test.ts`, written first:
+- [x] 1.1 `generate.test.ts`, written first:
   - Input presets carry `@deepseek-ai/dsh-plugin-manager/tools` at the top level and inside a nested group, under arbitrary ids, next to the network tool. Both are removed; other entries, order and metadata are kept; the input is not mutated.
   - The output contains exactly one `{ id: 'ui-plugin-manager', config: { registryProbeEnabled: false } }` row.
   - Existing exact-row assertions are updated, not weakened.
-- [ ] 1.2 `generate.ts`:
+- [x] 1.2 `generate.ts`:
   - `filterPlugins` matches a set of removed package names.
   - Add the probe row with the trailing policy rows after the locale patch (design §3).
   - Update any other exact overlay-row assertion the new row breaks (search `platform/test` for full-overlay equality, e.g. the `admin-config-activation` and `container-start` lanes).
-- [ ] 1.3 Patch script `images/dsh-user/patch-plugin-manager.mjs` (design §1–2), with an integration test `platform/test/plugin-manager-patch.integration.test.ts` written first. The test spawns `node` on the script against owned temporary synthetic module roots. It never fetches from the network and never vendors the published file (design, Test split).
+- [x] 1.3 Patch script `images/dsh-user/patch-plugin-manager.mjs` (design §1–2), with an integration test `platform/test/plugin-manager-patch.integration.test.ts` written first. The test spawns `node` on the script against owned temporary synthetic module roots. It never fetches from the network and never vendors the published file (design, Test split).
   - Refusals, each with a non-zero exit and every file in the tree byte-identical:
     - the DSH package version differs;
     - zero copies;
@@ -47,19 +47,19 @@ See `design.md`, "Must preserve".
     - a `node --check` of the patched file;
     - a grep showing both removed expressions gone and `EnableSwitch` intact.
   - The success path is proven by tasks 1.5 and 1.7.
-- [ ] 1.4 `images/dsh-user/Dockerfile`: in the existing `USER root` section, after the profile-seed copy and before the final `USER dsh` (the early version gate runs as `dsh` and cannot write `/usr/local`), run `RUN --mount=type=bind,source=patch-plugin-manager.mjs,target=/tmp/patch-plugin-manager.mjs node /tmp/patch-plugin-manager.mjs "$(npm root -g)"`. Placement keeps the image's existing user switching. The script is absent from the final image.
-- [ ] 1.5 `platform/test/user-image.docker.test.ts` (existing lifecycle and cleanup), one case:
+- [x] 1.4 `images/dsh-user/Dockerfile`: in the existing `USER root` section, after the profile-seed copy and before the final `USER dsh` (the early version gate runs as `dsh` and cannot write `/usr/local`), run `RUN --mount=type=bind,source=patch-plugin-manager.mjs,target=/tmp/patch-plugin-manager.mjs node /tmp/patch-plugin-manager.mjs "$(npm root -g)"`. Placement keeps the image's existing user switching. The script is absent from the final image.
+- [x] 1.5 `platform/test/user-image.docker.test.ts` (existing lifecycle and cleanup), one case:
   - the installed `client.js` SHA-256 equals the pinned patched value;
   - it is owned by root and not writable by uid1001 (an actual write attempt as `dsh` fails);
   - `/tmp/patch-plugin-manager.mjs` is absent;
   - existing profile-seed cases stay green unchanged.
-- [ ] 1.6 Managed-policy Docker lane and oracle:
+- [x] 1.6 Managed-policy Docker lane and oracle:
   - The oracle rejects `plugin_manager` in any live preset's tool names, alongside `NETWORK_TOOLS`.
   - The employee-edit fixture adds a renamed nested `@deepseek-ai/dsh-plugin-manager/tools` in its custom preset.
   - Before/after control, following `customPresetFailure` (`managed-policy-oracle.ts:280-289`): a new `custom-plugin-manager` control failure requires that the employee's custom preset shows `plugin_manager` live in the unmanaged control phase. With the overlay it must be absent.
   - `managed-policy-oracle.integration.test.ts`: a `plugin_manager` rejection case beside the forbidden network-tool case (`:46`), plus the new control failure.
   - Mandatory live read: the observer reads the `ui-plugin-manager` entry's config from `ctx.loader.entries()` (as at `managed-policy-observer.js:31-38`, `:111-119`). The oracle requires `registryProbeEnabled: false` in the managed phase. This is the only runtime evidence for that row (design §3).
-- [ ] 1.7 Real-DSH browser observation, in the first-use lane (`platform/test/first-use.docker.test.ts`, which already observes the sidebar) or in a new case that reuses its helpers and lifecycle:
+- [x] 1.7 Real-DSH browser observation, in the first-use lane (`platform/test/first-use.docker.test.ts`, which already observes the sidebar) or in a new case that reuses its helpers and lifecycle:
   - **Installed-bundle setup (one owned control for both uninstall and switch).** The delivered profile lists `@dsh-team/office-agents` only in `dsh.profile.bundles`, with empty `dependencies`. `listBundles` therefore reports it `installed:false`, and the page builds no card for it (`dsh-plugin-manager/lib/index.js:1469-1510`, `dsh-client-ui-plugin-manager/lib/client.js:3342`). So no package shows an uninstall button or a switch, patched or not.
     - Use a dedicated employee, not the lane's untouched first-use employee. Follow the managed-policy `employee-edited` pattern. The home volume fills from the image only on its first mount, so the edit cannot happen before the first start:
       1. start the instance and stop it;
@@ -75,7 +75,7 @@ See `design.md`, "Must preserve".
     - Any console error raised in that state is a real finding and must not be allowlisted. A `restart-required` toast is not a console error.
   - **Restore.** Before any later step or volume-reuse sentinel of the lane, restore both the switch state (on) and the profile `dependencies` (the entry removed). Assert the profile `package.json` content equals its pre-test bytes; DSH's own save may change the file mode to `0600`, which is not asserted. A byte difference is a real failure to report.
   - Zero unexpected console errors. Reuse the lane's existing observation and screenshot conventions.
-- [ ] 1.8 Docs:
+- [x] 1.8 Docs:
   - `CONTEXT.md:24`: the build-time-patch exception covers `dsh-better-sidebar` (stage 2, not yet in the production image) and the install and uninstall entries of `@deepseek-ai/dsh-client-ui-plugin-manager`. A version mismatch fails the build.
   - AGENTS.md: one sentence in the user-image Docker paragraph (patch, hash pin, refusal, evidence). Important Development Note 6 stays as it is.
   - `docs/REQUIREMENTS_BASELINE.md` F46: append the accepted residuals:
@@ -90,8 +90,8 @@ See `design.md`, "Must preserve".
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm check`; `pnpm test:integration platform/test/plugin-manager-patch.integration.test.ts`.
-- [ ] 2.2 Exact-head VPS: `pnpm test:docker` with confirmed cleanup (user-image, managed-policy and first-use cases included), and `pnpm test:deploy`; CI green. After merge, redeploy the acceptance environment, and in the real UI check that the plugin page has no install entry.
+- [x] 2.1 `pnpm check`; `pnpm test:integration platform/test/plugin-manager-patch.integration.test.ts`.
+- [x] 2.2 Exact-head VPS: `pnpm test:docker` with confirmed cleanup (user-image, managed-policy and first-use cases included), and `pnpm test:deploy`; CI green. After merge, redeploy the acceptance environment, and in the real UI check that the plugin page has no install entry.
 
 ## Non-goals
 
