@@ -99,14 +99,15 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
   - 每次启动生成实例令牌和文件令牌密钥并注入；
   - Document Server 的网络接入，不可用时不阻断启动，退役按启动时的记录断开；
   - 阶段 1 存量实例在对账中保持运行；
-  - 重置配置在 0.2.1 下继续可用。
+  - 重置配置在 0.2.1 下继续可用；
+  - 空闲回收补上只打开 Office 编辑器时不回收的场景（F13，阶段 1 留给阶段 2）。
 - `instance-isolation`：
   - Document Server 成为除平台外唯一能访问实例的对端；
   - 跨用户经 Document Server 取文件、推算文档 key 被阻止；
   - 更新已记录的隔离边界。
 - `office-agents`：委派改用原生 `agentPreset`。
 - `permission-tiers`：三档覆盖 continuable 子会话。
-- `admin-console`：新增 RAGFlow 配置、检索参数、插件目录、安装源、联网工具开关、外部 Document Server 等页面。
+- `admin-console`：新增 RAGFlow 配置（测试连接成功时显示 RAGFlow 版本）、检索参数、插件目录、安装源、联网工具开关、外部 Document Server 等页面。
 - `audit-log`：新增对应配置修改的事件标识。
 - `deployment`：compose 新增 Document Server；`.env.example` 新增 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`（compose 固定容器名、必填 JWT；示例中 JWT 为空值；平台侧两项都不存在为未配置，显式为空或只有一项时启动失败，因此原样复制示例的本地运行会失败，须删去两行或两项都填）；配置清单核对新增平台与 compose 共用的 `DOCUMENT_SERVER_*` 一类；更新部署文档和 AGENTS.md。
 - `trusted-docker-verification`：#374 和 #352 的显式化与归因。
