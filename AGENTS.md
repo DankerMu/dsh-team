@@ -478,7 +478,7 @@ Agents may commit to feature branches, open PRs targeting `main`, run every loca
 
 - Push to `main`, force-push a shared branch, or use `--no-verify`.
 - Modify DSH source, or reset, clean, or check out anything under `resource/`.
-- Write to RAGFlow, or to any existing intranet service (RAGFlow, Document Server, model gateway).
+- Write to RAGFlow, or to any existing intranet service (RAGFlow, Document Server, model gateway). Exception (D16, 2026-10-28): the local RAGFlow test stack this project deploys on the development machine for the stage-2 `pnpm test:stack` lane may be seeded (datasets, uploads, parsing) by its seed script; keep parsing small, and use the embedding key only through private configuration, never printed.
 - Run destructive container, volume, or database operations against anything but test resources this project created (`dsh-team` prefix), locally or on the verification host (decision D16).
 - Upgrade a major dependency version, or change `.github/workflows/`, without flagging it in the PR description.
 - Weaken, skip, or delete a test or a gate to get green.
