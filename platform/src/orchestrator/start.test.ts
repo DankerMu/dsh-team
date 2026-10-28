@@ -4,7 +4,9 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { DatabaseHandle } from '../db/index.ts';
 import { writeSettings } from '../db/index.ts';
 import type { Orchestrator } from './index.ts';
+import type { StartupRequest } from '../../test/container-start-fixture.ts';
 import {
+  injectedFileTokenSecret,
   startupOwnerFixture,
   START_CONTAINER,
   START_HELPER,
@@ -21,6 +23,23 @@ afterEach(async () => {
   for (const handle of databases.splice(0)) handle.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
+
+/** The value the platform submitted in the latest employee create body, read at the Engine boundary. */
+function fileTokenSecret(requests: readonly StartupRequest[]): string {
+  const creates = requests.filter(
+    (request) =>
+      request.method === 'POST' && request.path.startsWith('/containers/create?name=dsh-team-u-'),
+  );
+  return injectedFileTokenSecret(creates.at(-1)?.body.Env);
+}
+
+function persistedTables(): string {
+  return JSON.stringify(
+    ['instances', 'creation_attempts', 'audit_events'].map((table) =>
+      database.prepare(`SELECT * FROM ${table}`).all(),
+    ),
+  );
+}
 
 async function fixture() {
   const context = await startupOwnerFixture();
@@ -96,7 +115,12 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
     Hostname: 'u-abcdefghijkl',
     User: '1001',
     WorkingDir: '/data/work',
-    Env: ['DSH_HOME=/data/home', 'DSH_TELEMETRY_DISABLED=1', 'DMXAPI_KEY=fixture-private-key'],
+    Env: [
+      'DSH_HOME=/data/home',
+      'DSH_TELEMETRY_DISABLED=1',
+      'DMXAPI_KEY=fixture-private-key',
+      `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${fileTokenSecret(daemon.requests)}`,
+    ],
     Cmd: [
       'dsh',
       '--profile',
@@ -139,6 +163,7 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
     },
   });
   expect(JSON.stringify(helpers)).not.toContain('fixture-private-key');
+  expect(JSON.stringify(helpers)).not.toContain('DSH_TEAM_ONLYOFFICE_FILE_SECRET');
   expect(daemon.containers.has(START_HELPER)).toBe(false);
   const overlay = join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml');
   expect((await stat(overlay)).mode & 0o777).toBe(0o444);
@@ -431,15 +456,65 @@ it('rejects an unreadable seccomp profile before image resolution or volume crea
   expect(daemon.requests.map((request) => request.method)).toEqual(['GET']);
 });
 
-it.each(['DSH_HOME', 'DSH_TELEMETRY_DISABLED', 'NODE_OPTIONS', 'KEY=wrong'])(
-  'rejects model-key environment name %s before Docker side effects',
-  async (apiKeyEnv) => {
+it.each([
+  'DSH_HOME',
+  'DSH_TELEMETRY_DISABLED',
+  'DSH_TEAM_ONLYOFFICE_FILE_SECRET',
+  'NODE_OPTIONS',
+  'KEY=wrong',
+])('rejects model-key environment name %s before Docker side effects', async (apiKeyEnv) => {
+  const { daemon, input } = await fixture();
+
+  await expect(
+    startUserContainer({ ...input, modelSettings: { ...START_MODEL, apiKeyEnv } }),
+  ).rejects.toThrow(/model environment validation/);
+
+  expect(daemon.requests).toEqual([]);
+});
+
+it('injects a fresh file-token secret per created container and persists it nowhere', async () => {
+  const { daemon, input, owner } = await fixture();
+
+  await startUserContainer(input);
+  const first = fileTokenSecret(daemon.requests);
+  expect(persistedTables()).not.toContain(first);
+  await owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+  await startUserContainer(input);
+  const second = fileTokenSecret(daemon.requests);
+
+  expect(second).not.toBe(first);
+  const tables = persistedTables();
+  for (const value of [first, second]) {
+    expect(tables).not.toContain(value);
+    expect(
+      await readFile(join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml'), 'utf8'),
+    ).not.toContain(value);
+  }
+  expect(JSON.stringify(daemon.containers.get(START_CONTAINER)?.Config.Env)).toContain(second);
+});
+
+it.each([
+  ['container creation', 'POST', '/containers/create?name=dsh-team-u-abcdefghijkl'],
+  ['container start', 'POST', `/containers/${START_CONTAINER}/start`],
+])(
+  'keeps the file-token secret out of %s failure messages, causes and saved errors',
+  async (stage, method, path) => {
     const { daemon, input } = await fixture();
+    daemon.beforeRequest((request) => {
+      if (request.method === method && request.path === path) {
+        // A hostile daemon echoes the submitted credential back in its error body.
+        const value = fileTokenSecret(daemon.requests);
+        daemon.overrides.set(`${method} ${path}`, { status: 500, document: { message: value } });
+      }
+    });
 
-    await expect(
-      startUserContainer({ ...input, modelSettings: { ...START_MODEL, apiKeyEnv } }),
-    ).rejects.toThrow(/model environment validation/);
+    const error: unknown = await startUserContainer(input).catch((failure: unknown) => failure);
 
-    expect(daemon.requests).toEqual([]);
+    const value = fileTokenSecret(daemon.requests);
+    if (!(error instanceof Error)) throw new Error('Expected a startup failure');
+    expect(error.message).toContain(stage);
+    expect(error.message).not.toContain(value);
+    expect(JSON.stringify(error.cause) + JSON.stringify(error)).not.toContain(value);
+    expect(persistedTables()).not.toContain(value);
   },
 );

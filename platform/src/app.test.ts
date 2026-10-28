@@ -112,7 +112,9 @@ describe('buildApp', () => {
     const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, database, log);
 
     app.log.info({
+      fileTokenSecret: 'file-secret-top-marker',
       user: {
+        fileTokenSecret: 'file-secret-nested-marker',
         password: 'hunter2',
         currentPassword: 'current-password-marker',
         newPassword: 'new-password-marker',
@@ -126,7 +128,9 @@ describe('buildApp', () => {
 
     const written = log.lines.join('');
     expect(JSON.parse(log.lines[0] ?? '')).toMatchObject({
+      fileTokenSecret: '[redacted]',
       user: {
+        fileTokenSecret: '[redacted]',
         password: '[redacted]',
         currentPassword: '[redacted]',
         newPassword: '[redacted]',
@@ -143,6 +147,8 @@ describe('buildApp', () => {
       'opaque-token',
       'sk-model-key',
       'backend-cookie-marker',
+      'file-secret-top-marker',
+      'file-secret-nested-marker',
     ]) {
       expect(written).not.toContain(secret);
     }

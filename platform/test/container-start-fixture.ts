@@ -41,6 +41,21 @@ const COMPOSITION = JSON.stringify({
   localePatch: [{ id: 'locale', name: '@dsh-team/zh-locale' }],
 });
 
+const FILE_TOKEN_SECRET_PREFIX = 'DSH_TEAM_ONLYOFFICE_FILE_SECRET=';
+
+/** The single file-token secret in an employee container Env, as 64 lowercase hex. */
+export function injectedFileTokenSecret(env: unknown): string {
+  if (!Array.isArray(env)) throw new Error('Container Env unavailable');
+  const secrets = env.filter(
+    (entry: unknown): entry is string =>
+      typeof entry === 'string' && entry.startsWith(FILE_TOKEN_SECRET_PREFIX),
+  );
+  expect(secrets).toHaveLength(1);
+  const value = (secrets[0] ?? '').slice(FILE_TOKEN_SECRET_PREFIX.length);
+  expect(value).toMatch(/^[0-9a-f]{64}$/);
+  return value;
+}
+
 export interface StartupRequest {
   method: string;
   path: string;
