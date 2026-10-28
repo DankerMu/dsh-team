@@ -21,6 +21,9 @@ function permissionRuntime(preset = 'approval', mutation = 'write') {
     },
     whenIdle: async () => {},
   };
+  // Each Session has its own permissions projection and live Agent, keyed by Session ID.
+  const projections = new Map([['root', state]]);
+  const registry = new Map([['root', agent]]);
   const ctx = {
     on: (event, fn) => {
       handlers.set(event, fn);
@@ -43,14 +46,14 @@ function permissionRuntime(preset = 'approval', mutation = 'write') {
       },
       schemas: () => [{ name: mutation, parameters: {} }],
     },
-    sessionProjections: { stateOf: () => state },
+    sessionProjections: { stateOf: (session) => projections.get(session.id) },
     permissionPresets: {
       resolve: (name) => ({
         sandbox: 'danger-full-access',
         approval: name === 'danger-full-access' ? 'never' : 'ask',
       }),
     },
-    agents: { get: () => agent, list: () => [agent] },
+    agents: { get: (id) => registry.get(id), list: () => [agent] },
     llm: {
       stream: async function* () {
         yield { type: 'text-delta', index: 0, text: '{"decision":"allow"}' };
@@ -70,6 +73,8 @@ function permissionRuntime(preset = 'approval', mutation = 'write') {
     ctx,
     state,
     agent,
+    projections,
+    registry,
     handlers,
     withdrawals,
     cancellations,
@@ -227,6 +232,7 @@ describe.each(['write', 'build_docx'])('%s managed permission revocation', (muta
       cancel: (cause) => otherController.abort(cause),
     };
     fixture.ctx.agents.get = (id) => (id === 'other' ? other : fixture.agent);
+    fixture.projections.set('other', fixture.state);
     await fixture.gate();
     const otherExecution = {
       ...fixture.execution,
@@ -234,9 +240,11 @@ describe.each(['write', 'build_docx'])('%s managed permission revocation', (muta
       callId: 'other-call',
       signal: otherController.signal,
     };
-    await fixture.handlers.get('tools/pre-execute')(otherExecution, async () => ({
-      kind: 'allow',
-    }));
+    expect(
+      await fixture.handlers.get('tools/pre-execute')(otherExecution, async () => ({
+        kind: 'allow',
+      })),
+    ).toEqual({ kind: 'allow' });
 
     fixture.handlers.get('session/event')(fixture.agent.session, { type: 'permission/preset' });
 
@@ -467,38 +475,166 @@ describe.each(['write', 'build_docx'])('%s managed permission review and teardow
   });
 });
 
-it('initializes a fresh delegated child before work and preserves a resumed selection', () => {
-  const fixture = permissionRuntime('auto-review');
+// Native Session projection: each permission event replaces exactly its own field.
+const PROJECTED = {
+  'permission/preset': ['preset', 'preset'],
+  'sandbox/mode': ['sandbox', 'mode'],
+  'approval/policy': ['approval', 'policy'],
+};
+
+/** A delegated child whose projection is built only from the events it appended itself.
+ * `mode` is the native descriptor label; the host never reads it. */
+function delegatedChild(fixture, mode, parentSession = 'root') {
   const events = [];
   const contexts = [];
-  let assemble;
+  const projection = { preset: null, sandbox: null, approval: null };
+  const controller = new AbortController();
   const child = {
+    options: { provider: 'owned', model: 'selected' },
     session: {
       id: 'child',
-      header: { origin: 'subagent', parentSession: 'root' },
-      append: (type, data) => events.push({ type, data }),
+      header: { cwd: '/data/work', origin: 'subagent', parentSession },
+      subagent: { address: { mode } },
+      requestHeader: () => undefined,
+      append: (type, data) => {
+        events.push({ type, data });
+        const [field, key] = PROJECTED[type];
+        projection[field] = data[key];
+      },
     },
     ctx: {
       systemPrompt: { context: (value) => contexts.push(value), getContextOrder: () => 120 },
-      on: (event, callback) => {
-        assemble = callback;
+      on: (_event, callback) => {
+        child.assemble = callback;
       },
     },
+    cancel: (cause) => controller.abort(cause),
+    whenIdle: async () => {},
   };
+  fixture.registry.set('child', child);
+  fixture.projections.set('child', projection);
+  const created = (source) => fixture.handlers.get('agent/created')({ agent: child, source });
+  return {
+    child,
+    events,
+    contexts,
+    start: () => created('startup'),
+    resume: () => created('resume'),
+    gate: () =>
+      fixture.handlers.get('tools/pre-execute')(
+        { ...fixture.execution, callId: 'child-call', agent: child, signal: controller.signal },
+        async () => ({ kind: 'allow' }),
+      ),
+  };
+}
 
-  fixture.handlers.get('agent/created')({ agent: child, source: 'startup' });
-  expect(events).toEqual([
-    { type: 'permission/preset', data: { preset: 'auto-review' } },
-    { type: 'sandbox/mode', data: { mode: 'danger-full-access' } },
-    { type: 'approval/policy', data: { policy: 'ask' } },
+const NEXT_TIER = {
+  approval: 'auto-review',
+  'auto-review': 'danger-full-access',
+  'danger-full-access': 'approval',
+};
+const CHILD_DECISION = {
+  approval: {
+    kind: 'ask',
+    reason: 'This call requires human approval before writing files or executing code.',
+    displayReason: {
+      en: 'This call requires human approval before writing files or executing code.',
+      zh: '写文件或执行代码前，需要人工批准此调用。',
+    },
+  },
+  'auto-review': { kind: 'allow' },
+  'danger-full-access': { kind: 'allow' },
+};
+
+/** Switch the parent's durable selection to another consistent tier. */
+function switchParent(fixture, tier) {
+  fixture.state.preset = tier;
+  fixture.state.approval = tier === 'danger-full-access' ? 'never' : 'ask';
+}
+
+describe.each(['one-shot', 'continuable'])('a %s delegated child', (mode) => {
+  const tiers = ['approval', 'auto-review', 'danger-full-access'];
+
+  it.each(tiers)('inherits the parent %s tier once at startup', (tier) => {
+    const fixture = permissionRuntime(tier);
+    const delegated = delegatedChild(fixture, mode);
+
+    delegated.start();
+
+    expect(delegated.events).toEqual([
+      { type: 'permission/preset', data: { preset: tier } },
+      { type: 'sandbox/mode', data: { mode: 'danger-full-access' } },
+      {
+        type: 'approval/policy',
+        data: { policy: tier === 'danger-full-access' ? 'never' : 'ask' },
+      },
+    ]);
+  });
+
+  it.each(tiers)('keeps its own %s tier on resume after the parent switches tier', async (tier) => {
+    const fixture = permissionRuntime(tier);
+    const delegated = delegatedChild(fixture, mode);
+    delegated.start();
+    let reviewed = false;
+    fixture.ctx.llm.stream = async function* () {
+      reviewed = true;
+      yield { type: 'text-delta', index: 0, text: '{"decision":"allow"}' };
+      yield { type: 'finish', reason: { kind: 'stop' } };
+    };
+    switchParent(fixture, NEXT_TIER[tier]);
+
+    delegated.resume();
+
+    expect(delegated.events).toHaveLength(3);
+    expect(await delegated.gate()).toEqual(CHILD_DECISION[tier]);
+    expect(reviewed).toBe(tier === 'auto-review');
+    const parentDecision = NEXT_TIER[tier] === 'danger-full-access' ? 'allow' : 'ask';
+    expect((await fixture.gate()).kind).toBe(parentDecision);
+  });
+
+  it('fails closed at startup when the parent has no tier', () => {
+    const fixture = permissionRuntime();
+    fixture.state.preset = null;
+    const delegated = delegatedChild(fixture, mode);
+
+    expect(() => delegated.start()).toThrow('Managed permissions are unavailable.');
+    expect(delegated.events).toEqual([]);
+  });
+
+  it('fails closed at startup when the parent Session has no live Agent', () => {
+    const fixture = permissionRuntime();
+    const delegated = delegatedChild(fixture, mode, 'missing');
+
+    expect(() => delegated.start()).toThrow('Managed permissions are unavailable.');
+    expect(delegated.events).toEqual([]);
+  });
+
+  it('fails closed on resume when the child has no recorded tier', async () => {
+    const fixture = permissionRuntime();
+    const delegated = delegatedChild(fixture, mode);
+
+    expect(() => delegated.resume()).toThrow('Managed permissions are unavailable.');
+    expect(delegated.events).toEqual([]);
+    expect((await delegated.gate()).kind).toBe('deny');
+  });
+});
+
+it('replaces the native delegation guidance for a fresh or resumed delegated child', async () => {
+  const fixture = permissionRuntime('auto-review');
+  const delegated = delegatedChild(fixture, 'one-shot');
+
+  delegated.start();
+  delegated.resume();
+
+  expect(delegated.contexts.map((context) => context.name)).toEqual([
+    'managed-permissions:delegation',
+    'managed-permissions:delegation',
   ]);
-  fixture.handlers.get('agent/created')({ agent: child, source: 'resume' });
-  expect(events).toHaveLength(3);
-  expect(contexts[0].name).toBe('managed-permissions:delegation');
-  return assemble({}, {}, async () => ({
+  const result = await delegated.child.assemble({}, {}, async () => ({
     contexts: [
       { name: 'subagent:delegation', text: 'approval rejected automatically' },
       { name: 'other', text: 'retained' },
     ],
-  })).then((result) => expect(result.contexts).toEqual([{ name: 'other', text: 'retained' }]));
+  }));
+  expect(result.contexts).toEqual([{ name: 'other', text: 'retained' }]);
 });

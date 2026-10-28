@@ -72,6 +72,8 @@ it('takes only an answerable approval owned by the selected one-shot child', () 
     { sessionId: 'child', pendingInteraction: pending },
     { ...owner(pending), session: {} },
     { ...owner(pending), session: { subagent: null } },
+    // Deliberate: an available-parent continuable child keeps the native ApprovalPanel
+    // (priority 1) in its own Session; this panel exists only behind the one-shot readonly seat.
     owner(pending, 'continuable'),
     owner(pending, 'unknown'),
     { ...owner(pending), session: { subagent: { address: {} } } },
