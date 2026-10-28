@@ -188,13 +188,13 @@ async function failure(signal?: AbortSignal): Promise<string> {
 }
 
 it('atomically records readiness once, retains only the backend credential and clears prior failure', async () => {
+  database.prepare('UPDATE instances SET instance_token_hash = ?').run('f'.repeat(64));
   await waitForUserContainerReady(input());
   const repeated = await failure();
 
-  expect(database.prepare('SELECT status, last_error FROM instances').get()).toEqual({
-    status: 'running',
-    last_error: null,
-  });
+  expect(
+    database.prepare('SELECT status, last_error, instance_token_hash FROM instances').get(),
+  ).toEqual({ status: 'running', last_error: null, instance_token_hash: 'f'.repeat(64) });
   const row: unknown = database.prepare('SELECT dsh_cookie FROM instances').get();
   expect(
     typeof row === 'object' &&
@@ -238,6 +238,7 @@ it.each([false, true])(
   'records an early-dead owned instance with nullable endpoint: %s',
   async (incomplete) => {
     container.State.Running = false;
+    database.prepare('UPDATE instances SET instance_token_hash = ?').run('f'.repeat(64));
     if (incomplete)
       database
         .prepare(
@@ -248,10 +249,9 @@ it.each([false, true])(
     const error = await failure();
 
     expect(error).toContain('container already stopped');
-    expect(database.prepare('SELECT status, dsh_cookie FROM instances').get()).toEqual({
-      status: 'error',
-      dsh_cookie: null,
-    });
+    expect(
+      database.prepare('SELECT status, dsh_cookie, instance_token_hash FROM instances').get(),
+    ).toEqual({ status: 'error', dsh_cookie: null, instance_token_hash: null });
     expect(database.prepare('SELECT event_type FROM audit_events').all()).toEqual([
       { event_type: 'instance.start-failed' },
     ]);

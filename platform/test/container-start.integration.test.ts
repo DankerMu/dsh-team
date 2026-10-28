@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,7 @@ import type {
   StartUserContainerInput,
 } from '../src/orchestrator/index.ts';
 import {
+  createdEnvSecret,
   expectDockerReads,
   CREATED_AND_STARTED,
   startupEvidence,
@@ -310,6 +312,9 @@ it('commits completed creation and start separately, persists inspected endpoint
       last_started_at: expect.any(Number) as unknown,
       last_activity_at: null,
       last_error: null,
+      instance_token_hash: createHash('sha256')
+        .update(createdEnvSecret(daemon.requests, 'DSH_TEAM_INSTANCE_TOKEN'))
+        .digest('hex'),
     },
   ]);
   expect(audits()).toEqual(CREATED_AND_STARTED);

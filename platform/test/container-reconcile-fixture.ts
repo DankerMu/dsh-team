@@ -120,5 +120,6 @@ export function stoppedRow(user = START_USER) {
     last_started_at: 101,
     last_activity_at: 202,
     last_error: 'historical diagnostic',
+    instance_token_hash: null,
   };
 }

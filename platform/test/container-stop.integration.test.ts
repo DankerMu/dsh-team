@@ -155,6 +155,7 @@ it('retires the captured container after stopping it, retaining history and reco
     last_started_at: 101,
     last_activity_at: 202,
     last_error: 'historical diagnostic',
+    instance_token_hash: null,
   });
   expect(audits()).toEqual([
     {

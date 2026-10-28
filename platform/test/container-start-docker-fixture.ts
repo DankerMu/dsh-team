@@ -218,7 +218,9 @@ export function startupClient(lifecycle: UserImageLifecycle) {
           expect.arrayContaining([expect.stringMatching(/^DMXAPI_KEY=/)]),
         );
         expect(configuration.Env).not.toEqual(
-          expect.arrayContaining([expect.stringMatching(/^DSH_TEAM_ONLYOFFICE_FILE_SECRET=/)]),
+          expect.arrayContaining([
+            expect.stringMatching(/^(DSH_TEAM_ONLYOFFICE_FILE_SECRET|DSH_TEAM_INSTANCE_TOKEN)=/),
+          ]),
         );
         const host = record(helper.HostConfig);
         expect(host.NetworkMode).toBe('none');

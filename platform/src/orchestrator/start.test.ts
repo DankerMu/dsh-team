@@ -1,17 +1,21 @@
+import { createHash } from 'node:crypto';
 import { readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DatabaseHandle } from '../db/index.ts';
 import { writeSettings } from '../db/index.ts';
+import { createOrchestrator } from './index.ts';
 import type { Orchestrator } from './index.ts';
 import type { StartupRequest } from '../../test/container-start-fixture.ts';
 import {
-  injectedFileTokenSecret,
+  createdEnvSecret,
+  seedPlatform,
   startupOwnerFixture,
   START_CONTAINER,
   START_HELPER,
   START_IMAGE,
   START_MODEL,
+  START_NETWORK,
   START_USER,
 } from '../../test/container-start-fixture.ts';
 
@@ -24,21 +28,20 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-/** The value the platform submitted in the latest employee create body, read at the Engine boundary. */
-function fileTokenSecret(requests: readonly StartupRequest[]): string {
-  const creates = requests.filter(
-    (request) =>
-      request.method === 'POST' && request.path.startsWith('/containers/create?name=dsh-team-u-'),
-  );
-  return injectedFileTokenSecret(creates.at(-1)?.body.Env);
+const fileTokenSecret = (requests: readonly StartupRequest[]) =>
+  createdEnvSecret(requests, 'DSH_TEAM_ONLYOFFICE_FILE_SECRET');
+const instanceToken = (requests: readonly StartupRequest[]) =>
+  createdEnvSecret(requests, 'DSH_TEAM_INSTANCE_TOKEN');
+const sha256 = (value: string) => createHash('sha256').update(value).digest('hex');
+
+function persistedTables(tables = ['instances', 'creation_attempts', 'audit_events']): string {
+  return JSON.stringify(tables.map((table) => database.prepare(`SELECT * FROM ${table}`).all()));
 }
 
-function persistedTables(): string {
-  return JSON.stringify(
-    ['instances', 'creation_attempts', 'audit_events'].map((table) =>
-      database.prepare(`SELECT * FROM ${table}`).all(),
-    ),
-  );
+function tokenRow(): unknown {
+  return database
+    .prepare('SELECT status, instance_token_hash FROM instances WHERE user_id = ?')
+    .get(START_USER);
 }
 
 async function fixture() {
@@ -120,6 +123,7 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
       'DSH_TELEMETRY_DISABLED=1',
       'DMXAPI_KEY=fixture-private-key',
       `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${fileTokenSecret(daemon.requests)}`,
+      `DSH_TEAM_INSTANCE_TOKEN=${instanceToken(daemon.requests)}`,
     ],
     Cmd: [
       'dsh',
@@ -164,6 +168,7 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
   });
   expect(JSON.stringify(helpers)).not.toContain('fixture-private-key');
   expect(JSON.stringify(helpers)).not.toContain('DSH_TEAM_ONLYOFFICE_FILE_SECRET');
+  expect(JSON.stringify(helpers)).not.toContain('DSH_TEAM_INSTANCE_TOKEN');
   expect(daemon.containers.has(START_HELPER)).toBe(false);
   const overlay = join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml');
   expect((await stat(overlay)).mode & 0o777).toBe(0o444);
@@ -460,6 +465,7 @@ it.each([
   'DSH_HOME',
   'DSH_TELEMETRY_DISABLED',
   'DSH_TEAM_ONLYOFFICE_FILE_SECRET',
+  'DSH_TEAM_INSTANCE_TOKEN',
   'NODE_OPTIONS',
   'KEY=wrong',
 ])('rejects model-key environment name %s before Docker side effects', async (apiKeyEnv) => {
@@ -497,24 +503,81 @@ it.each([
   ['container creation', 'POST', '/containers/create?name=dsh-team-u-abcdefghijkl'],
   ['container start', 'POST', `/containers/${START_CONTAINER}/start`],
 ])(
-  'keeps the file-token secret out of %s failure messages, causes and saved errors',
+  'keeps injected secrets and the token hash out of %s failure messages, causes and saved errors',
   async (stage, method, path) => {
     const { daemon, input } = await fixture();
+    const echoed = () => {
+      const token = instanceToken(daemon.requests);
+      return [fileTokenSecret(daemon.requests), token, sha256(token)];
+    };
     daemon.beforeRequest((request) => {
       if (request.method === method && request.path === path) {
-        // A hostile daemon echoes the submitted credential back in its error body.
-        const value = fileTokenSecret(daemon.requests);
-        daemon.overrides.set(`${method} ${path}`, { status: 500, document: { message: value } });
+        // A hostile daemon echoes the submitted credentials back in its error body.
+        const message = echoed().join(' ');
+        daemon.overrides.set(`${method} ${path}`, { status: 500, document: { message } });
       }
     });
 
     const error: unknown = await startUserContainer(input).catch((failure: unknown) => failure);
 
-    const value = fileTokenSecret(daemon.requests);
+    const [secret = '', token = '', hash = ''] = echoed();
     if (!(error instanceof Error)) throw new Error('Expected a startup failure');
     expect(error.message).toContain(stage);
-    expect(error.message).not.toContain(value);
-    expect(JSON.stringify(error.cause) + JSON.stringify(error)).not.toContain(value);
-    expect(persistedTables()).not.toContain(value);
+    const lastError = JSON.stringify(database.prepare('SELECT last_error FROM instances').all());
+    for (const value of [secret, token, hash]) {
+      expect(error.message + lastError).not.toContain(value);
+      expect(JSON.stringify(error.cause) + JSON.stringify(error)).not.toContain(value);
+    }
+    expect(persistedTables()).not.toContain(secret);
+    expect(persistedTables()).not.toContain(token);
   },
 );
+
+it('persists only the hash of a fresh instance token, keeps it on reuse and rotates it on restart', async () => {
+  const { daemon, input, owner } = await fixture();
+
+  const result = await startUserContainer(input);
+  const first = instanceToken(daemon.requests);
+  expect(tokenRow()).toEqual({ status: 'starting', instance_token_hash: sha256(first) });
+  expect(JSON.stringify(result)).not.toMatch(new RegExp(`${first}|${sha256(first)}`));
+  expect(persistedTables()).not.toContain(first);
+  expect(persistedTables(['creation_attempts', 'audit_events'])).not.toContain(sha256(first));
+  database.prepare("UPDATE instances SET status = 'running'").run();
+  const requests = daemon.requests.length;
+  expect(await startUserContainer(input)).toEqual({ ...result, outcome: 'running' });
+  expect(daemon.requests.slice(requests).some(({ method }) => method === 'POST')).toBe(false);
+  expect(tokenRow()).toEqual({ status: 'running', instance_token_hash: sha256(first) });
+
+  await owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+  await startUserContainer(input);
+  const second = instanceToken(daemon.requests);
+
+  expect(second).not.toBe(first);
+  expect(tokenRow()).toEqual({ status: 'starting', instance_token_hash: sha256(second) });
+  for (const value of [first, sha256(first), second])
+    expect(persistedTables()).not.toContain(value);
+});
+
+it('clears the persisted token hash when a confirmed-started instance is compensated', async () => {
+  const { daemon, client, input } = await fixture();
+  seedPlatform(daemon, 'dsh-team-test-platform', 'f'.repeat(64));
+  const owner = createOrchestrator({
+    client,
+    database,
+    config: { upstreamMode: 'network', platformContainerName: 'dsh-team-test-platform' },
+  });
+  const connect = `/networks/${START_NETWORK}/connect`;
+  daemon.overrides.set(`POST ${connect}`, { status: 403 });
+  const persisted: unknown[] = [];
+  daemon.beforeRequest(({ method, path }) => {
+    if (method === 'POST' && path === connect) persisted.push(tokenRow());
+  });
+
+  await expect(owner.startUserContainer(input)).rejects.toThrow(
+    'started container and owned network removed',
+  );
+
+  const hash = sha256(instanceToken(daemon.requests));
+  expect(persisted).toEqual([{ status: 'starting', instance_token_hash: hash }]);
+  expect(tokenRow()).toEqual({ status: 'error', instance_token_hash: null });
+});

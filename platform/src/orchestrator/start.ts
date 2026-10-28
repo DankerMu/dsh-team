@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { recordAuditEvent } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import {
@@ -71,6 +71,7 @@ function validateModelEnvironment(name: string, key: string): void {
       'DSH_HOME',
       'DSH_TELEMETRY_DISABLED',
       'DSH_TEAM_ONLYOFFICE_FILE_SECRET',
+      'DSH_TEAM_INSTANCE_TOKEN',
       'NODE_OPTIONS',
       'PATH',
       'HOME',
@@ -188,7 +189,7 @@ async function compensateStarted(
     assertCurrentSnapshot(input, account, instance, persistenceSignal);
     input.database
       .prepare(
-        "UPDATE instances SET status = 'error', dsh_cookie = NULL, last_error = ? WHERE user_id = ? AND container_id = ?",
+        "UPDATE instances SET status = 'error', dsh_cookie = NULL, instance_token_hash = NULL, last_error = ? WHERE user_id = ? AND container_id = ?",
       )
       .run(`Platform attachment/startup failed; ${outcome}`, input.userId, id);
     recordAuditEvent(input.database, {
@@ -333,10 +334,13 @@ async function createInstance(
   modelKey: string,
   attempt: CreationAttempt,
   inspecting: () => void,
-): Promise<{ id: string; attempt: CreationAttempt }> {
+): Promise<{ id: string; attempt: CreationAttempt; instanceTokenHash: string }> {
   const { config, userId } = input;
   // Fresh per created container and never persisted; only this create body carries it.
   const fileTokenSecret = randomBytes(32).toString('hex');
+  // Fresh per created container; only its SHA-256 leaves this function, never the token itself.
+  const instanceToken = randomBytes(32).toString('hex');
+  const instanceTokenHash = createHash('sha256').update(instanceToken).digest('hex');
   const id = containerId(
     await client.json('POST', `/containers/create?name=${name}`, {
       Image: image,
@@ -348,6 +352,7 @@ async function createInstance(
         'DSH_TELEMETRY_DISABLED=1',
         `${envName}=${modelKey}`,
         `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${fileTokenSecret}`,
+        `DSH_TEAM_INSTANCE_TOKEN=${instanceToken}`,
       ],
       Cmd: [
         'dsh',
@@ -395,7 +400,7 @@ async function createInstance(
   if (created.Id !== id) throw new Error('Created container identity mismatch');
   requireUnpublished(created, input.transport.config.upstreamMode);
   await validateUserNetwork(client, userId, created, input.transport, network.id, true);
-  return { id, attempt: bound };
+  return { id, attempt: bound, instanceTokenHash };
 }
 
 function startupCleanupClient(input: StartUserContainerInput): DockerClient {
@@ -417,19 +422,20 @@ function persistCreatedInstance(
   account: Record<string, unknown>,
   attempt: CreationAttempt,
   id: string,
+  instanceTokenHash: string,
 ): Record<string, unknown> {
   const { database, userId } = input;
   database.transaction(() => {
     consumeCreationAttempt(input, attempt, account);
     database
       .prepare(
-        `INSERT INTO instances (user_id,status,container_id,image_tag,image_id)
-      VALUES (?, 'starting', ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+        `INSERT INTO instances (user_id,status,container_id,image_tag,image_id,instance_token_hash)
+      VALUES (?, 'starting', ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
       status='starting',container_id=excluded.container_id,image_tag=excluded.image_tag,
-      image_id=excluded.image_id,upstream_host=NULL,upstream_port=NULL,dsh_cookie=NULL,
-      last_started_at=NULL,last_error=NULL`,
+      image_id=excluded.image_id,instance_token_hash=excluded.instance_token_hash,
+      upstream_host=NULL,upstream_port=NULL,dsh_cookie=NULL,last_started_at=NULL,last_error=NULL`,
       )
-      .run(userId, id, attempt.image_tag, attempt.image_id);
+      .run(userId, id, attempt.image_tag, attempt.image_id, instanceTokenHash);
     recordAuditEvent(database, {
       type: 'instance.created',
       createdAt: Date.now(),
@@ -558,7 +564,7 @@ export async function startUserContainer(
       overlay,
     );
     containerAttempted = true;
-    const { id, attempt } = await createInstance(
+    const { id, attempt, instanceTokenHash } = await createInstance(
       input,
       client,
       name,
@@ -577,7 +583,7 @@ export async function startUserContainer(
       },
     );
     stage = 'creation persistence';
-    const createdInstance = persistCreatedInstance(input, user, attempt, id);
+    const createdInstance = persistCreatedInstance(input, user, attempt, id, instanceTokenHash);
     stage = 'container start';
     const launched = await launchInstance(
       input,

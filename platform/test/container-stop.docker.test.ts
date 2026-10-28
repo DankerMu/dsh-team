@@ -156,6 +156,12 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
       .prepare('SELECT * FROM audit_events WHERE target = ? ORDER BY id')
       .all(siblingId);
     const siblingStartedAt = record(inspect(lifecycle, siblingContainerId).State).StartedAt;
+    const tokenHash = () =>
+      record(
+        database.prepare('SELECT instance_token_hash FROM instances WHERE user_id = ?').get(userId),
+      ).instance_token_hash;
+    const stoppedHash = tokenHash();
+    expect(stoppedHash).toMatch(/^[0-9a-f]{64}$/);
 
     await stopUserContainer({ userId, reason: 'idle' });
 
@@ -170,7 +176,7 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
     expect(
       database
         .prepare(
-          'SELECT status, container_id, image_id, image_tag, upstream_host, upstream_port, dsh_cookie FROM instances WHERE user_id = ?',
+          'SELECT status, container_id, image_id, image_tag, upstream_host, upstream_port, dsh_cookie, instance_token_hash FROM instances WHERE user_id = ?',
         )
         .get(userId),
     ).toEqual({
@@ -181,6 +187,7 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
       upstream_host: null,
       upstream_port: null,
       dsh_cookie: null,
+      instance_token_hash: null,
     });
     expect(
       database
@@ -201,6 +208,8 @@ async function retirementScenario(lifecycle: UserImageLifecycle): Promise<string
     const newId = recreated.containerId;
     assertStarted(lifecycle, input, newId);
     expect(newId).not.toBe(oldId);
+    expect(tokenHash()).toMatch(/^[0-9a-f]{64}$/);
+    expect(tokenHash()).not.toBe(stoppedHash);
     sentinelFiles(lifecycle, newId, CONTENTS, false);
     expect(volumes(lifecycle, userId)).toEqual(originalVolumes);
     assertStarted(lifecycle, siblingInput, siblingContainerId);

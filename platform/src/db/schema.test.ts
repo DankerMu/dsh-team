@@ -29,7 +29,7 @@ const SELECT_SESSIONS =
   'SELECT token_hash, user_id, created_at, last_activity_at FROM platform_sessions ORDER BY token_hash';
 const INSERT_INSTANCE = 'INSERT INTO instances (user_id, status) VALUES (?, ?)';
 const SELECT_INSTANCE =
-  'SELECT user_id, status, container_id, upstream_host, upstream_port, dsh_cookie, image_tag, image_id, last_started_at, last_activity_at, last_error FROM instances WHERE user_id = ?';
+  'SELECT user_id, status, container_id, upstream_host, upstream_port, dsh_cookie, image_tag, image_id, last_started_at, last_activity_at, last_error, instance_token_hash FROM instances WHERE user_id = ?';
 const INSERT_SETTING = 'INSERT INTO settings (key, value) VALUES (?, ?)';
 const SELECT_SETTING = 'SELECT key, value FROM settings WHERE key = ?';
 const INSERT_AUDIT =
@@ -68,6 +68,7 @@ const PRESTART_NULLS = {
   last_started_at: null,
   last_activity_at: null,
   last_error: null,
+  instance_token_hash: null,
 };
 const STOPPED_INSTANCE = {
   user_id: ORIGINAL_USER.id,
@@ -264,6 +265,7 @@ describe('initial schema', () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
     ]);
   });
 
