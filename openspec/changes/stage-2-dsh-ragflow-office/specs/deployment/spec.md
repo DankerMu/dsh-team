@@ -22,7 +22,9 @@
 
 ### Requirement: 配置项明确且缺失时启动失败
 
-部署所需的配置项 MUST 全部列在示例文件里。必填项缺失或取值不合法时，平台 MUST 在启动时报错退出，并指出是哪一项。自带 Document Server 的地址和 JWT 密钥 MUST 来自同一份部署配置，compose 与平台共用，不得在两处分别填写。
+部署所需的配置项 MUST 全部列在示例文件里。必填项缺失或取值不合法时，平台 MUST 在启动时报错退出，并指出是哪一项。
+
+自带 Document Server 的两项输入 `DOCUMENT_SERVER_CONTAINER_NAME`（容器名，默认 `dsh-team-documentserver`，与 compose 中的固定容器名一致）和 `DOCUMENT_SERVER_JWT_SECRET` MUST 来自同一份部署配置，compose 与平台共用，不得在两处分别填写。自带 Document Server 没有地址输入，地址由每个实例的固定布局决定。这两项对平台是可选输入：两项都缺省时平台照常启动，自带 Document Server 视为未配置、Office 不可用；只给了一项、另一项缺失或为空时，平台 MUST 在启动时失败并指出该配置项，不回显取值。交付的 compose MUST 总是给出两项。
 
 #### Scenario: 缺少对外地址
 
@@ -31,13 +33,23 @@
 
 #### Scenario: 示例文件与实际一致
 
-- **WHEN** 对照平台读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*` 与单一示例文件中各自对应的变量名
+- **WHEN** 对照平台读取的 `PLATFORM_*`、Compose 消费的 `DEPLOY_*`、平台和 Compose 共用的 `DOCUMENT_SERVER_*` 与单一示例文件中各自对应的变量名
 - **THEN** 每组变量名完全对应，示例没有未被消费的配置项、读取方没有未列出的配置项，且示例文件没有任何真实密钥
 
 #### Scenario: Document Server 配置单一来源
 
-- **WHEN** 部署配置里填写了 Document Server 的 JWT 密钥并启动全套
-- **THEN** Document Server 使用的 JWT 密钥与平台下发给实例的相同；缺失或为空时平台启动失败并指出该配置项，不回显取值
+- **WHEN** 部署配置里填写了 Document Server 的容器名和 JWT 密钥并启动全套
+- **THEN** Document Server 使用的 JWT 密钥与平台下发给实例的相同，平台接入的正是该容器名对应的容器
+
+#### Scenario: Document Server 配置只给一项
+
+- **WHEN** 部署配置只填了 Document Server 的容器名或只填了 JWT 密钥，另一项缺失或为空，然后启动平台
+- **THEN** 平台在监听前退出，错误信息指出缺失的配置项，不回显取值
+
+#### Scenario: 不配置 Document Server
+
+- **WHEN** 两项都不填就启动平台，例如开发或测试入口
+- **THEN** 平台照常启动和服务，实例照常就绪，Office 不可用
 
 ### Requirement: 只有平台对外
 
@@ -50,7 +62,7 @@
 
 ### Requirement: 部署文档
 
-仓库 MUST 提供部署文档，包含前置条件、构建和启动步骤、创建管理员、配置模型，以及本阶段不提供的隔离和功能。文档 MUST 另外说明 Document Server 的字体目录准备、地址与 JWT 配置、切换到外部 Document Server 时由运营方负责网络可达，以及 RAGFlow 连接在后台配置。
+仓库 MUST 提供部署文档，包含前置条件、构建和启动步骤、创建管理员、配置模型，以及本阶段不提供的隔离和功能。文档 MUST 另外说明 Document Server 的字体目录准备、容器名与 JWT 配置、两项都不填时 Office 不可用、Document Server 重建后已运行实例要重启才恢复 Office、切换到外部 Document Server 时由运营方负责网络可达，以及 RAGFlow 连接在后台配置。
 
 #### Scenario: 按文档完成部署
 

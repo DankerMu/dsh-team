@@ -20,7 +20,7 @@
 
 ### Requirement: 文档标识和回调绑定到正确的用户和文件
 
-每个编辑会话的文档标识、取文件地址和保存回调 MUST 绑定到发起编辑的实例和文件。两个用户的同名文件 MUST 互不串写。取文件令牌 MUST 由每个实例单独的密钥签发，缺少该密钥时 MUST 拒绝签发和校验。
+每个编辑会话的文档标识、取文件地址和保存回调 MUST 绑定到发起编辑的实例和文件。两个用户的同名文件 MUST 互不串写。取文件令牌 MUST 由每个实例单独的密钥签发，缺少该密钥时 MUST 拒绝签发和校验。文档标识 MUST 由同一个每实例密钥对原标识输入做 HMAC 得到，知道实例地址和文件路径的人 MUST NOT 能推算；回调和编辑器打开 MUST 只接受本实例密钥派生的标识。
 
 #### Scenario: 同名文件互不串写
 
@@ -37,10 +37,24 @@
 - **WHEN** 员工 B 向 A 实例的保存回调地址提交一个 B 的文档标识
 - **THEN** A 实例拒绝该回调，A 的任何文件都没有被改写
 
+#### Scenario: 猜测的文档标识被拒
+
+- **WHEN** 员工 B 已知 A 实例的地址和某文件路径，以推算或猜测的文档标识向 A 的保存回调提交内容，或让编辑器以该标识打开 A 的文件
+- **THEN** A 实例拒绝两种请求，A 的文件没有被改写或读出
+
 #### Scenario: 密钥缺失时拒绝
 
-- **WHEN** 实例启动时没有注入文件令牌密钥
-- **THEN** 打开 Office 文件失败并给出明确提示，不使用任何默认密钥
+- **WHEN** 实例启动时没有注入文件令牌密钥，随后直接请求该实例的取文件接口，或在界面打开 Office 文件
+- **THEN** 取文件接口拒绝任何令牌，打开失败并给出明确提示，不使用任何默认密钥
+
+### Requirement: Office 不可用时的退路
+
+本次启动 Office 不可用时（自带 Document Server 未配置、容器缺失或身份不符、published-loopback 方式），ONLYOFFICE 插件 MUST NOT 在该实例中启用。员工打开 DOCX、XLSX、PPTX MUST 得到同一文件的只读预览，而不是空白页或无提示的失败；实例的其他功能 MUST 照常可用。
+
+#### Scenario: 未配置 Document Server 时打开 DOCX
+
+- **WHEN** 部署没有配置 Document Server，员工从文件区打开一个 DOCX
+- **THEN** 员工看到该文件的只读预览，没有编辑器和保存入口，原文件不变，聊天和文件操作照常可用
 
 ### Requirement: 人机同时写入的提示
 
@@ -75,8 +89,8 @@ DOC、XLS、PPT MUST 只能只读预览，不能编辑。Document Server 达到�
 
 #### Scenario: 旧格式只读
 
-- **WHEN** 员工打开 `旧报表.xls`
-- **THEN** 看到只读预览，没有编辑和保存入口，原文件不变
+- **WHEN** 员工在真实浏览器中分别打开 `旧报表.xls`、一个 DOC 和一个 PPT
+- **THEN** 每个都显示只读预览，没有编辑和保存入口，原文件不变
 
 #### Scenario: 满员时有提示和退路
 
@@ -100,6 +114,15 @@ HTML 文件预览 MUST 在受限沙箱中渲染。「关闭 HTML 预览沙箱」
 
 - **WHEN** 员工在设置中查找 HTML 预览沙箱相关的开关
 - **THEN** 该设置显示为受管锁定，状态为沙箱开启
+
+### Requirement: Office 配置由受管配置决定
+
+ONLYOFFICE 插件实际使用的 Document Server 地址、JWT 和实例地址 MUST 来自受管覆盖层，员工在自己 profile 中的改写 MUST NOT 生效。
+
+#### Scenario: 员工改写 Office 配置不生效
+
+- **WHEN** 员工在自己的 profile 中改写 ONLYOFFICE 插件的 Document Server 地址和 JWT 后重启实例
+- **THEN** 实例实际使用的仍是覆盖层下发的地址和 JWT，编辑和保存照常
 
 ### Requirement: Document Server 字体与可达性
 

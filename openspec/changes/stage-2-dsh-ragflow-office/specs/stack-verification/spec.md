@@ -6,17 +6,36 @@
 
 ### Requirement: 本机全栈验证命令
 
-仓库 MUST 提供根脚本 `pnpm test:stack`。它在本机 Docker 上构建当前提交的平台镜像和用户镜像，用交付的 compose 拉起平台和 Document Server，连接已运行的本机 RAGFlow 测试栈，并运行知识库和 Office 的端到端接口与浏览器用例。前提缺失时 MUST 在创建任何资源前失败，不能跳过用例或降级为部分验证：包括非 macOS arm64 主机、本机 Docker 不可用、可用内存不足、私有配置文件缺失或权限不安全、RAGFlow 不可达。
+仓库 MUST 提供根脚本 `pnpm test:stack`。它在本机 Docker 上构建当前提交的平台镜像和用户镜像，用交付的 compose 拉起平台和 Document Server，连接已运行的本机 RAGFlow 测试栈，并运行知识库和 Office 的端到端接口与浏览器用例。前提缺失时 MUST 在创建任何资源前失败，不能跳过用例或降级为部分验证：包括非 macOS arm64 主机、本机 Docker 不可用、`docker info` 报告的 MemTotal 低于 14 GiB、私有配置文件缺失或权限不安全、RAGFlow 不可达。
 
 #### Scenario: 前提缺失时直接失败
 
-- **WHEN** 私有配置文件不存在，或本机 RAGFlow 测试栈未运行
+- **WHEN** 私有配置文件不存在、本机 RAGFlow 测试栈未运行，或 `docker info` 报告的 MemTotal 低于 14 GiB
 - **THEN** 命令以非零状态退出并说明缺失的前提，没有创建任何 Docker 资源
 
 #### Scenario: 全栈用例通过
 
 - **WHEN** 前提齐全，在一个已提交的干净检出上运行 `pnpm test:stack`
 - **THEN** 知识库浏览、范围快照、检索来源、错误映射，以及 Office 编辑写回、跨用户攻击拒绝、旧格式预览的用例都在真实服务上执行并通过
+
+### Requirement: 本机浏览器与确定性模型
+
+本机通道的浏览器用例 MUST 使用仓库已钉定版本的 Playwright Chromium，经平台网关驱动真实 DSH。它是本机功能证据通道，MUST NOT 被当作 VPS 上隔离 CfT 浏览器通道的替代，也 MUST NOT 被引用为隔离证据。对话模型 MUST 是测试自有的确定性 provider，由它驱动工具调用、子 Agent 委派和写文件；本机通道 MUST NOT 调用外部模型。
+
+#### Scenario: 浏览器经网关进入真实 DSH
+
+- **WHEN** 本机通道的浏览器用例登录一个员工并打开工作台
+- **THEN** 浏览器只访问平台对外地址，经网关加载真实 DSH 页面，截图留存且没有意外的控制台错误
+
+#### Scenario: 不调用外部模型
+
+- **WHEN** 一次 `pnpm test:stack` 运行结束，检查模型请求的去向
+- **THEN** 所有模型请求都到达测试自有的确定性 provider，没有发往外部模型服务的请求
+
+#### Scenario: 不作为隔离证据
+
+- **WHEN** 一个 PR 需要隔离证据
+- **THEN** 本机通道的结果不能替代 VPS 上 `pnpm test:docker` 的隔离用例
 
 ### Requirement: 私有配置与凭据不外泄
 
