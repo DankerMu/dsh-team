@@ -77,6 +77,20 @@ it('removes malformed, partial, interleaved and oversized token announcements wi
   expect(output.join('\n').includes(cookieValue)).toBe(false);
 });
 
+it('drops an injected file-token secret line and a bare secret value line', async () => {
+  const secret = randomBytes(32).toString('hex');
+
+  const output = await tail([
+    frame(1, 'before secret\n'),
+    frame(1, `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${secret}\n`),
+    frame(2, `${secret}\n`),
+    frame(1, 'after secret\n'),
+  ]);
+
+  expect(output).toEqual(['before secret', 'after secret']);
+  expect(output.join('\n').includes(secret)).toBe(false);
+});
+
 it('redacts known cookie values, secret URL forms and unknown released cookie payloads while preserving harmless context', async () => {
   const value = randomBytes(32).toString('base64url');
   const cookie = `session=${value}`;

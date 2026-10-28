@@ -45,6 +45,8 @@ const LOG_REDACT_PATHS = [
   'apiKey',
   'modelApiKey',
   '*.modelApiKey',
+  'fileTokenSecret',
+  '*.fileTokenSecret',
   '*.password',
   '*.currentPassword',
   '*.newPassword',

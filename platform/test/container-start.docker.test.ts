@@ -4,12 +4,13 @@ import { dirname, join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
 import { buildApp } from '../src/app.ts';
 import type { PlatformConfig } from '../src/config.ts';
 import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-import { START_MODEL } from './container-start-fixture.ts';
+import { injectedFileTokenSecret, START_MODEL } from './container-start-fixture.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
 import { observeResourceOom } from './resource-oom-fixture.ts';
 import {
@@ -18,6 +19,21 @@ import {
   record,
   startupClient,
 } from './container-start-docker-fixture.ts';
+
+/** Serialize every platform table: no column of any row may carry an injected value. */
+function expectNotPersisted(db: DatabaseHandle, values: readonly string[]): void {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .all()
+    .map((row) => String(record(row).name));
+  expect(tables).toEqual(
+    expect.arrayContaining(['instances', 'creation_attempts', 'audit_events']),
+  );
+  const persisted = JSON.stringify(
+    tables.map((table) => db.prepare(`SELECT * FROM "${table}"`).all()),
+  );
+  for (const value of values) expect(persisted).not.toContain(value);
+}
 
 async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
@@ -41,6 +57,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       "INSERT INTO users VALUES (?, 'startup@example.test', 'unused-hash', 'employee', 'active', 1)",
     ).run(userId);
     const ids: string[] = [];
+    const fileTokenSecrets: string[] = [];
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const input = {
         userId,
@@ -98,6 +115,8 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
           'DMXAPI_KEY=docker-acceptance-only-not-a-model-credential',
         ]),
       );
+      // Ten concurrent attempt-0 starts share one container, so exactly one value is injected.
+      fileTokenSecrets.push(injectedFileTokenSecret(config.Env));
       const host = record(container.HostConfig);
       expect(host.Privileged).toBe(false);
       expect(host.CapAdd === null || (Array.isArray(host.CapAdd) && host.CapAdd.length === 0)).toBe(
@@ -174,6 +193,9 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       }
     }
     expect(ids[0]).not.toBe(ids[1]);
+    expect(fileTokenSecrets).toHaveLength(2);
+    expect(fileTokenSecrets[0]).not.toBe(fileTokenSecrets[1]);
+    expectNotPersisted(db, fileTokenSecrets);
     expect(
       db.prepare('SELECT event_type, target, details FROM audit_events ORDER BY id').all(),
     ).toEqual([
@@ -194,6 +216,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       independentInspection: true,
       audits: 4,
       helpersRemoved: 2,
+      fileTokenSecretsRotated: true,
     });
   } finally {
     db.close();
@@ -212,6 +235,7 @@ it('starts through the exported operation and recreates owned DSH with stable ho
         independentInspection: true,
         audits: 4,
         helpersRemoved: 2,
+        fileTokenSecretsRotated: true,
       });
     },
     undefined,

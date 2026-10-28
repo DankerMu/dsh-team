@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { recordAuditEvent } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import {
@@ -66,9 +67,15 @@ function composition(
 function validateModelEnvironment(name: string, key: string): void {
   if (
     !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
-    ['DSH_HOME', 'DSH_TELEMETRY_DISABLED', 'NODE_OPTIONS', 'PATH', 'HOME', 'LD_PRELOAD'].includes(
-      name,
-    ) ||
+    [
+      'DSH_HOME',
+      'DSH_TELEMETRY_DISABLED',
+      'DSH_TEAM_ONLYOFFICE_FILE_SECRET',
+      'NODE_OPTIONS',
+      'PATH',
+      'HOME',
+      'LD_PRELOAD',
+    ].includes(name) ||
     key.includes('\0')
   ) {
     throw new Error('Invalid model credential environment');
@@ -328,13 +335,20 @@ async function createInstance(
   inspecting: () => void,
 ): Promise<{ id: string; attempt: CreationAttempt }> {
   const { config, userId } = input;
+  // Fresh per created container and never persisted; only this create body carries it.
+  const fileTokenSecret = randomBytes(32).toString('hex');
   const id = containerId(
     await client.json('POST', `/containers/create?name=${name}`, {
       Image: image,
       Hostname: `u-${userId}`,
       User: '1001',
       WorkingDir: '/data/work',
-      Env: ['DSH_HOME=/data/home', 'DSH_TELEMETRY_DISABLED=1', `${envName}=${modelKey}`],
+      Env: [
+        'DSH_HOME=/data/home',
+        'DSH_TELEMETRY_DISABLED=1',
+        `${envName}=${modelKey}`,
+        `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${fileTokenSecret}`,
+      ],
       Cmd: [
         'dsh',
         '--profile',
