@@ -22,7 +22,7 @@ export interface AuditContext {
   assess: (
     settled?: boolean,
     external?: DockerCommand,
-  ) => Promise<{ state: string; browserExec: unknown }>;
+  ) => Promise<{ state: string; browserExec: unknown; unsettled?: unknown }>;
 }
 
 /** A separate process sees only durable evidence, never this process's memory. */

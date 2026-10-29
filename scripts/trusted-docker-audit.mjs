@@ -12,6 +12,7 @@ import { liveProcessBirth, processIdentity } from './probe-browser-native.mjs';
 import {
   browserExecRetirementSummary,
   readVerificationSubmissionsForCleanup,
+  UnsettledSubmissionsError,
 } from './verification-submission-assessment.mjs';
 import { readBrowserExecRetirementReceipt } from './probe-browser-exec.mjs';
 import {
@@ -257,7 +258,9 @@ export async function assessTrustedDockerCleanup(request, directory, settled, in
           ? null
           : browserExecRetirementSummary(browserExec.map(({ id }) => id)),
     };
-  } catch {
-    return { state: 'unconfirmed', browserExec: null };
+  } catch (error) {
+    return error instanceof UnsettledSubmissionsError
+      ? { state: 'unconfirmed', browserExec: null, unsettled: error.unsettled }
+      : { state: 'unconfirmed', browserExec: null };
   }
 }

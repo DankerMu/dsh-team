@@ -111,10 +111,20 @@ it('does not confirm an interrupted ordinary submission from empty inventories a
 
     const cleanup = await assess();
 
-    expect(cleanup).toEqual({ state: 'unconfirmed', browserExec: null });
+    // The interrupted wrapper-only CLI row stays unsettled; a later settled row adds nothing.
+    const unconfirmed = {
+      state: 'unconfirmed',
+      browserExec: null,
+      unsettled: {
+        labels: [{ transport: 'cli', operation: 'network create', caller: 'unknown', count: 1 }],
+        unlabelled: 0,
+        truncated: false,
+      },
+    };
+    expect(cleanup).toStrictEqual(unconfirmed);
     const later = ordinarySubmission(journal, false);
     expect(later.status, later.stderr).toBe(0);
-    expect(await assess()).toEqual({ state: 'unconfirmed', browserExec: null });
+    expect(await assess()).toStrictEqual(unconfirmed);
     expect(freshSubmissionAssessment(join(journal, '..'))).toBe('{"state":"unconfirmed"}\n');
   });
 });
@@ -184,7 +194,20 @@ process.stdout.write(JSON.stringify({status:result.status})+'\\n');`,
       expect(writer.error).toBeUndefined();
       expect(writer.status, writer.stderr).toBe(0);
       expect(JSON.parse(writer.stdout)).toEqual({ status });
-      expect(await assess()).toEqual({ state, browserExec: null });
+      // An unanswered wrapper-only exec keeps its labelled row unsettled.
+      expect(await assess()).toStrictEqual(
+        state === 'confirmed'
+          ? { state, browserExec: null }
+          : {
+              state,
+              browserExec: null,
+              unsettled: {
+                labels: [{ transport: 'cli', operation: 'exec', caller: 'unknown', count: 1 }],
+                unlabelled: 0,
+                truncated: false,
+              },
+            },
+      );
       expect(freshSubmissionAssessment(join(journal, '..'))).toBe(`${JSON.stringify({ state })}\n`);
     });
   },
@@ -355,7 +378,25 @@ process.stdout.write('authority-change-rejected\\n');`,
       expect(writer.status, writer.stderr).toBe(0);
       expect(writer.stdout).toBe('authority-change-rejected\n');
       expect(freshSubmissionAssessment(directory)).toBe('{"state":"unconfirmed"}\n');
-      expect(await assess()).toEqual({ state: 'unconfirmed', browserExec: null });
+      // Unlabelled rows behind intact authority: the row and its marker count once, while a
+      // retired marker name is unattributable. Other faults fail authority before projection.
+      const unlabelled = (
+        {
+          'anchor-changed': 1,
+          'marker-replaced': 2,
+          'marker-missing': 1,
+          'marker-malformed': 1,
+        } as Partial<Record<string, number>>
+      )[fault];
+      expect(await assess()).toStrictEqual(
+        unlabelled === undefined
+          ? { state: 'unconfirmed', browserExec: null }
+          : {
+              state: 'unconfirmed',
+              browserExec: null,
+              unsettled: { labels: [], unlabelled, truncated: false },
+            },
+      );
     } finally {
       if (fault === 'pending-mode') await chmod(join(directory, SUBMISSION_PENDING), 0o700);
     }
@@ -536,7 +577,27 @@ try{
       expect(writer.stderr).toBe('');
       const state = fault === 'marker-create' ? 'confirmed' : 'unconfirmed';
       expect(freshSubmissionAssessment(directory)).toBe(`${JSON.stringify({ state })}\n`);
-      expect(await assess()).toEqual({ state, browserExec: null });
+      // The settled row is visible but its retained marker keeps the labelled call unsettled.
+      expect(await assess()).toStrictEqual(
+        fault === 'marker-create'
+          ? { state, browserExec: null }
+          : {
+              state,
+              browserExec: null,
+              unsettled: {
+                labels: [
+                  {
+                    transport: 'http',
+                    operation: 'POST /networks/create',
+                    caller: 'unknown',
+                    count: 1,
+                  },
+                ],
+                unlabelled: 0,
+                truncated: false,
+              },
+            },
+      );
     });
   },
 );

@@ -8,10 +8,12 @@ import { runDockerCommand } from '../../scripts/docker-command.mjs';
 import {
   readVerificationSubmissionsForCleanup,
   readVerificationWritersBeforeRetirement,
+  UnsettledSubmissionsError,
 } from '../../scripts/verification-submission-assessment.mjs';
 import {
   initializeVerificationSubmissions,
   SUBMISSION_JOURNAL,
+  SUBMISSION_PENDING,
 } from '../../scripts/verification-submission-storage.mjs';
 import {
   beginVerificationSubmission,
@@ -19,7 +21,11 @@ import {
 } from '../../scripts/verification-submissions.mjs';
 import { DockerHttpError, type DockerClient } from '../src/orchestrator/index.ts';
 import { awaitedMutation, forwardingJson, trackedFromTimer } from './submission-call-fixture.ts';
-import { freshSubmissionAssessment, ordinarySubmission } from './trusted-docker-audit-fixture.ts';
+import {
+  freshSubmissionAssessment,
+  ordinarySubmission,
+  withAuditReceipt,
+} from './trusted-docker-audit-fixture.ts';
 
 const SELF = 'submission-call-evidence.integration.test.ts';
 const FIXTURE = 'submission-call-fixture.ts';
@@ -287,6 +293,141 @@ it('assesses a mixed journal with an unresolved older row exactly as before', as
   });
 });
 
+const submitted = (id: string, detail: object) => ({
+  version: 1,
+  id,
+  state: 'submitted',
+  ...detail,
+});
+
+function marker(directory: string, name: string): void {
+  writeFileSync(join(directory, SUBMISSION_PENDING, name), '', { mode: 0o600, flag: 'wx' });
+}
+
+function cleanupFailure(directory: string): unknown {
+  try {
+    readVerificationSubmissionsForCleanup(directory);
+  } catch (error) {
+    return error;
+  }
+  throw new Error('Expected unconfirmed submission settlement');
+}
+
+function unsettledFailure(directory: string): UnsettledSubmissionsError {
+  const failure = cleanupFailure(directory);
+  expect(failure).toBeInstanceOf(UnsettledSubmissionsError);
+  if (!(failure instanceof UnsettledSubmissionsError)) throw failure;
+  expect(failure.message).toBe('Verification submission settlement unconfirmed');
+  return failure;
+}
+
+const NETWORK_CREATE = { transport: 'cli', operation: 'network create', caller: SELF };
+const CONTAINER_START = {
+  transport: 'http',
+  operation: 'POST /containers/{id}/start',
+  caller: 'unknown',
+};
+const REMOVE = { transport: 'cli', operation: 'rm', caller: 'x.mjs' };
+
+it('projects unsettled call labels and unlabelled reservations without identities', async () => {
+  await withAuditReceipt(async ({ journal, assess }) => {
+    const directory = join(journal, '..');
+    const retained = randomUUID();
+    appendFileSync(
+      join(directory, SUBMISSION_JOURNAL),
+      pair(KILL) +
+        lines(
+          submitted(randomUUID(), { call: NETWORK_CREATE }),
+          submitted(randomUUID(), { call: NETWORK_CREATE }),
+          submitted(randomUUID(), { call: CONTAINER_START }),
+          submitted(randomUUID(), {}),
+        ) +
+        pair(REMOVE, retained),
+    );
+    // A settled pair whose host-side marker remains, a marker-only reservation and an
+    // observer-scoped marker-only reservation.
+    marker(directory, retained);
+    marker(directory, randomUUID());
+    marker(directory, `${randomUUID()}.${randomUUID()}`);
+    const expected = {
+      labels: [
+        { ...NETWORK_CREATE, count: 2 },
+        { ...CONTAINER_START, count: 1 },
+        { ...REMOVE, count: 1 },
+      ],
+      unlabelled: 3,
+      truncated: false,
+    };
+
+    const { unsettled } = unsettledFailure(directory);
+    expect(unsettled).toStrictEqual(expected);
+    expect(JSON.stringify(unsettled)).not.toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-/);
+    expect(await assess()).toStrictEqual({
+      state: 'unconfirmed',
+      browserExec: null,
+      unsettled: expected,
+    });
+    expect(freshSubmissionAssessment(directory)).toBe('{"state":"unconfirmed"}\n');
+    expect(readVerificationWritersBeforeRetirement(directory, new Set())).toEqual([]);
+  });
+});
+
+it('omits the projection when every submission settled or the command did not settle', async () => {
+  await withAuditReceipt(async ({ journal, assess }) => {
+    appendFileSync(join(journal, '..', SUBMISSION_JOURNAL), pair(KILL) + pair());
+    expect(await assess()).toStrictEqual({ state: 'confirmed', browserExec: null });
+    expect(await assess(false)).toStrictEqual({ state: 'unconfirmed', browserExec: null });
+  });
+});
+
+it('omits the projection when malformed evidence keeps cleanup unconfirmed', async () => {
+  await withAuditReceipt(async ({ journal, assess }) => {
+    const directory = join(journal, '..');
+    appendFileSync(
+      join(directory, SUBMISSION_JOURNAL),
+      lines(submitted(randomUUID(), { call: { ...KILL, caller: '../x.ts' } })),
+    );
+    const failure = cleanupFailure(directory);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(UnsettledSubmissionsError);
+    expect(await assess()).toStrictEqual({ state: 'unconfirmed', browserExec: null });
+  });
+});
+
+it.each([
+  [33, true],
+  [32, false],
+])('bounds %i distinct unsettled labels in journal order', async (distinct, truncated) => {
+  await withJournal((directory, journal) => {
+    const label = (index: number) => ({
+      transport: 'cli',
+      operation: 'rm',
+      caller: `c${String(index)}.ts`,
+    });
+    const last = distinct - 1;
+    const values = [
+      ...Array.from({ length: last }, (_, index) => label(index)),
+      ...Array.from({ length: 5 }, () => label(last)),
+    ];
+    appendFileSync(journal, lines(...values.map((call) => submitted(randomUUID(), { call }))));
+
+    const { unsettled } = unsettledFailure(directory);
+    const callers = Array.from({ length: 32 }, (_, index) => `c${String(index)}.ts`);
+    expect(unsettled).toStrictEqual({
+      labels: callers.map((caller) => ({
+        transport: 'cli',
+        operation: 'rm',
+        caller,
+        count: caller === `c${String(last)}.ts` ? 5 : 1,
+      })),
+      unlabelled: 0,
+      truncated,
+    });
+    expect(unsettled.labels[31]?.caller).toBe('c31.ts');
+    expect(JSON.stringify(unsettled)).not.toContain('c32.ts');
+  });
+});
+
 it('keeps unchanged browser exec submitted rows valid', async () => {
   await withJournal((directory, journal) => {
     const id = randomUUID();
@@ -296,13 +437,6 @@ it('keeps unchanged browser exec submitted rows valid', async () => {
     );
     expect(readVerificationWritersBeforeRetirement(directory, new Set())).toEqual([]);
   });
-});
-
-const submitted = (id: string, detail: object) => ({
-  version: 1,
-  id,
-  state: 'submitted',
-  ...detail,
 });
 
 it.each([

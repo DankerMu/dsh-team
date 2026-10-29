@@ -423,7 +423,17 @@ it.each([
         const ordinary = ordinarySubmission(journal, true);
         expect(ordinary.status, ordinary.stderr).toBe(0);
         expect(ordinary.stdout).toBe('submission-accepted\n');
-        expect(await assess()).toEqual({ state: 'unconfirmed', browserExec: null });
+        expect(await assess()).toStrictEqual({
+          state: 'unconfirmed',
+          browserExec: null,
+          unsettled: {
+            labels: [
+              { transport: 'cli', operation: 'network create', caller: 'unknown', count: 1 },
+            ],
+            unlabelled: 0,
+            truncated: false,
+          },
+        });
       }
     } finally {
       if (previousJournal === undefined) delete process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
@@ -435,6 +445,13 @@ it.each([
     }
   });
 });
+
+// A retained marker of a browser exec row, which carries no call label.
+const RETAINED_EXEC_MARKER = {
+  state: 'unconfirmed',
+  browserExec: null,
+  unsettled: { labels: [], unlabelled: 1, truncated: false },
+};
 
 it('retains a visible unknown outcome and its fence when outcome fsync fails', async () => {
   await withBoundExec(async ({ target, journal, assess }) => {
@@ -469,7 +486,7 @@ it('retains a visible unknown outcome and its fence when outcome fsync fails', a
         inspected = true;
         throw new Error('Publication uncertainty must stop assessment before resource inspection');
       }),
-    ).toEqual({ state: 'unconfirmed', browserExec: null });
+    ).toStrictEqual(RETAINED_EXEC_MARKER);
     expect(inspected).toBe(false);
   });
 });
@@ -495,7 +512,7 @@ it('rejects successful exec when its settled publication fails after the visible
     expect(() => {
       requireVerificationSubmissionsSettled(directory);
     }).toThrow();
-    expect(await assess()).toEqual({ state: 'unconfirmed', browserExec: null });
+    expect(await assess()).toStrictEqual(RETAINED_EXEC_MARKER);
   });
 });
 
