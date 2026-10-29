@@ -9,6 +9,7 @@ import { expect, it } from 'vitest';
 import { MODEL_CONFIG } from './admin-config-fixture.ts';
 import { postJson } from './auth-tcp-fixture.ts';
 import { inspectAsync, record } from './container-start-docker-fixture.ts';
+import { awaitHelperWaitingForPartner } from './composition-helper-probe.ts';
 import { cleanupTargets, output, OWNER_LABEL, removeOwned } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
@@ -243,7 +244,8 @@ it('drains an active composition helper after its caller disconnects before remo
             async () => {
               const ids = (
                 await command([
-                  'ps',
+                  'container',
+                  'ls',
                   '--filter',
                   `label=dsh-team.user=${employee.id}`,
                   '--filter',
@@ -280,14 +282,16 @@ it('drains an active composition helper after its caller disconnects before remo
                 ]),
               );
               helper = { id, labels };
-              return (
-                (await command(['exec', id, 'cat', '/proc/1/wchan'])).trim() === 'wait_for_partner'
-              );
+              return true;
             },
             { timeout: 10_000, interval: 50 },
           )
           .toBe(true);
         if (helper === undefined) throw new Error('Missing captured helper');
+        await awaitHelperWaitingForPartner(
+          { inspect: (name) => inspectAsync(lifecycle, name), exec: command },
+          helper.id,
+        );
         const platform = await inspectAsync(lifecycle, 'dsh-team-platform');
         expect(record(record(platform.Config).Labels)[OWNER_LABEL]).toBe(lifecycle.runId);
         if (typeof platform.Id !== 'string') throw new Error('Missing platform identity');
