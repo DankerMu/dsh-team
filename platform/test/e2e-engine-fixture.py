@@ -34,14 +34,21 @@ def children(pid):
     return [int(value) for value in Path('/proc/%d/task/%d/children' % (pid, pid)).read_text().split()]
 
 
+def load_supervisor(repository):
+    spec = importlib.util.spec_from_file_location('e2e_owner', repository / 'scripts/e2e-engine-supervisor.py')
+    module = importlib.util.module_from_spec(spec)
+    # Root workers would otherwise write scripts/__pycache__ into the reviewed checkout (#348).
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(module)
+    return module
+
+
 def worker(mode, owned, caller_network):
     unrelated = mode == 'unrelated-identity'
     if unrelated:
         mode = 'identity'
     repository = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location('e2e_owner', repository / 'scripts/e2e-engine-supervisor.py')
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = load_supervisor(repository)
     original_spawn = module.subprocess.Popen
     original_run = module.subprocess.run
     original_info = module.engine_info
@@ -619,6 +626,11 @@ elif sys.argv[1] == 'network-sentinel':
     subprocess.run(['/usr/sbin/ip', 'link', 'set', 'lo', 'up'], check=True)
     subprocess.run(['/usr/sbin/ip', 'link', 'add', 'docker0', 'type', 'bridge'], check=True)
     public_group(sys.argv[2], preserve_network=True)
+elif sys.argv[1] == 'load-supervisor':
+    entry = sys.dont_write_bytecode
+    module = load_supervisor(Path(__file__).resolve().parents[2])
+    print(json.dumps({'cache': importlib.util.cache_from_source(module.__file__),
+                      'loaded': hasattr(module, 'engine_info'), 'bytecodeEnabledAtEntry': not entry}))
 else:
     try:
         parent(sys.argv[1], sys.argv[2])
