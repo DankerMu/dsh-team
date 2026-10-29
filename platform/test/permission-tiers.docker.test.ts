@@ -6,7 +6,10 @@ import { runUserImage } from './user-image-fixture.ts';
 import { collectComposition, execScript } from './managed-policy-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
-import { runPermissionBrowserScenario } from './permission-browser-fixture.mjs';
+import {
+  runPermissionBrowserScenario,
+  type PermissionBrowserSuite,
+} from './permission-browser-fixture.mjs';
 import { isolatedBrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 
 it('delivers an immutable exact-peer gate outside employee profiles', async () => {
@@ -110,13 +113,72 @@ it('authorizes real released tools through native approval, Auto protocol, child
   );
 });
 
-it('enforces root and one-shot child reject, allow and cancel through the actual DSH browser UI', async () => {
+const ONE_SHOT: PermissionBrowserSuite = {
+  mode: 'one-shot',
+  prompt: 'issue83-ui',
+  title: 'issue83',
+  overlay: 'uioracle0001',
+  chrome: 'issue83-ui-chrome-',
+  scenarios: (['root', 'delegate'] as const).flatMap((scope) =>
+    (['reject', 'allow', 'cancel'] as const).map((action) => ({ scope, action })),
+  ),
+  limits: [
+    'No real model calls; #84/#85 remain unproven.',
+    'Auto selected only here; the continuable browser case (#391) covers the real Auto review allow.',
+    'No administrator-default restart/resume/PTC/unload coverage in this browser oracle.',
+  ],
+};
+
+// The rc.2 standard preset delegates with backgroundMode continuable; the owned
+// issue391-ui protocol selects it through run_in_background: true.
+const CONTINUABLE: PermissionBrowserSuite = {
+  mode: 'continuable',
+  prompt: 'issue391-ui',
+  title: 'issue391',
+  overlay: 'uioracle0391',
+  chrome: 'issue391-ui-chrome-',
+  scenarios: [
+    { scope: 'delegate', name: 'reject', action: 'reject' },
+    { scope: 'delegate', name: 'allow', action: 'allow' },
+    { scope: 'delegate', name: 'cancel', action: 'cancel' },
+    {
+      scope: 'delegate',
+      name: 'auto',
+      action: 'allow',
+      tier: 'Auto',
+      unattended: true,
+      child: { tier: 'auto-review', policy: 'ask' },
+      reviews: 1,
+    },
+    {
+      scope: 'delegate',
+      name: 'yolo',
+      action: 'allow',
+      tier: 'Yolo',
+      unattended: true,
+      child: { tier: 'danger-full-access', policy: 'never' },
+    },
+    { scope: 'delegate', name: 'resume', action: 'allow', tier: '人工批准', resume: true },
+  ],
+  limits: [
+    'No real model calls; #84/#85 remain unproven.',
+    'Auto: the real production review request is answered allow by the owned protocol; deny/timeout review fallbacks belong to production Docker protocol tests.',
+    'Parent-unavailable read-only takeover of a continuable child is not exercised: the root Session stays alive.',
+  ],
+};
+
+/** One owned user-image lifecycle per browser case; durable evidence is sanitized. */
+async function runBrowserCase(
+  issue: string,
+  prefix: string,
+  suite: PermissionBrowserSuite,
+): Promise<void> {
   if (platform() !== 'linux' || arch() !== 'x64')
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   isolatedBrowserRuntime();
-  const artifactRoot = join(process.cwd(), '.run', 'issue83');
+  const artifactRoot = join(process.cwd(), '.run', issue);
   mkdirSync(artifactRoot, { recursive: true });
-  const evidenceDirectory = mkdtempSync(join(artifactRoot, 'permission-browser-'));
+  const evidenceDirectory = mkdtempSync(join(artifactRoot, prefix));
   let runId: string | undefined;
 
   try {
@@ -132,6 +194,7 @@ it('enforces root and one-shot child reject, allow and cancel through the actual
         return runPermissionBrowserScenario(lifecycle, {
           runtime: isolatedBrowserRuntime(lifecycle.runId),
           evidenceDirectory,
+          suite,
         });
       },
     );
@@ -177,4 +240,10 @@ it('enforces root and one-shot child reject, allow and cancel through the actual
     // Lifecycle errors can include raw Docker output; durable evidence is sanitized.
     throw new Error('Permission browser failed; see retained evidence and owned cleanup inventory');
   }
-});
+}
+
+it('enforces root and one-shot child reject, allow and cancel through the actual DSH browser UI', () =>
+  runBrowserCase('issue83', 'permission-browser-', ONE_SHOT));
+
+it('enforces continuable child reject, allow, cancel, Auto, Yolo and resume through the actual DSH browser UI', () =>
+  runBrowserCase('issue391', 'permission-continuable-', CONTINUABLE));

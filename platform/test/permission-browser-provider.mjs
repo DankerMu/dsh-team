@@ -2,6 +2,8 @@
  * Loaded only by permission-browser-fixture.mjs into its disposable fixture volume.
  * Public rc.2 seam: llm.registerAdapter / LlmAdapter / StreamChunk.
  * No tool replacement, policy hooks, approval answers or synthetic Session events.
+ * As the model it also answers the production Auto review request, only for an
+ * owned issue391-ui continuable write (allow; recorded as facts.reviews).
  */
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -23,7 +25,10 @@ export const inject = [
   'subagents',
   'managedPermissions',
 ];
-const PREFIX = 'issue83-ui';
+// issue83-ui: stage-1 one-shot oracle. issue391-ui: continuable children (#391).
+const PROMPT =
+  /^(issue83-ui|issue391-ui) (root|delegate|child) (reject|allow|cancel) ([a-f0-9-]+)$/;
+const REVIEW_TARGET = /^\/data\/work\/issue391-ui-child-([a-f0-9-]+)\.txt$/;
 const body = 'issue83 browser owned write\n审批必须先于真实工具写入。\n';
 function snapshot(path) {
   try {
@@ -32,6 +37,29 @@ function snapshot(path) {
   } catch (error) {
     if (error.code === 'ENOENT') return { exists: false, bytes: 0, base64: null };
     throw error;
+  }
+}
+function latestEvent(session, type) {
+  for (let seq = session.seq - 1; seq >= 0; seq--) {
+    const event = session.eventAt(seq);
+    if (event?.type === type) return event;
+  }
+  return undefined;
+}
+// Production Auto review request (plugins/permission-tiers/review.js): no
+// Session, reviewer policy, JSON action naming one owned continuable write.
+function reviewNonce(options) {
+  if (
+    typeof options.system !== 'string' ||
+    !options.system.includes('authorization reviewer') ||
+    isAgentLoopRequest(options)
+  )
+    return undefined;
+  try {
+    const action = JSON.parse(options.messages?.[0]?.content?.[0]?.text ?? '');
+    return REVIEW_TARGET.exec(action?.arguments?.file_path ?? '')?.[1];
+  } catch {
+    return undefined;
   }
 }
 function* blockChunks(block) {
@@ -64,6 +92,7 @@ export async function apply(ctx) {
     children: [],
     delegations: [],
     holds: [],
+    reviews: [],
   };
   class OwnedAdapter extends LlmAdapter {
     providerInfo(provider) {
@@ -85,6 +114,10 @@ export async function apply(ctx) {
     }
     async *stream(options) {
       if (options.signal?.aborted) throw new Error('Owned request cancelled');
+      if (reviewNonce(options)) {
+        yield* blockChunks({ type: 'text', text: '{"decision":"allow"}' });
+        return;
+      }
       if (!owned.has(options.sessionId)) throw new Error('Unowned Session model request');
       const text = [...options.messages]
         .reverse()
@@ -93,7 +126,7 @@ export async function apply(ctx) {
         .find(
           (b) =>
             b.type === 'text' &&
-            (b.text.startsWith(PREFIX) || b.text.startsWith('issue59-idle hold ')),
+            (/^issue(83|391)-ui /.test(b.text) || b.text.startsWith('issue59-idle hold ')),
         )?.text;
       const idleHold = text?.match(/^issue59-idle hold ([a-f0-9-]+)$/);
       if (idleHold) {
@@ -101,21 +134,20 @@ export async function apply(ctx) {
         yield* holdIdleTurn(options, nonce, holds, facts);
         return;
       }
-      const match = text?.match(
-        /^issue83-ui (root|delegate|child) (reject|allow|cancel) ([a-f0-9-]+)$/,
-      );
+      const match = text?.match(PROMPT);
       if (!match) {
         yield* blockChunks({ type: 'text', text: 'Owned protocol fixture idle.' });
         return;
       }
-      const [, scope, action, nonce] = match;
+      const [, prefix, scope, action, nonce] = match;
+      const title = prefix.slice(0, -'-ui'.length);
       const key = `${options.sessionId}:${nonce}`;
       if (issued.has(key)) {
         yield* blockChunks({ type: 'text', text: 'Owned protocol fixture completed.' });
         return;
       }
       issued.add(key);
-      const id = ToolCallId(`issue83-ui-${scope}-${nonce}`);
+      const id = ToolCallId(`${prefix}-${scope}-${nonce}`);
       if (scope === 'delegate') {
         facts.calls.push({
           scope,
@@ -130,13 +162,14 @@ export async function apply(ctx) {
           id,
           name: 'subagent',
           arguments: JSON.stringify({
-            description: `issue83 child ${action} ${nonce}`,
-            prompt: `issue83-ui child ${action} ${nonce}`,
-            run_in_background: false,
+            description: `${title} child ${action} ${nonce}`,
+            prompt: `${prefix} child ${action} ${nonce}`,
+            // rc.2 standard preset: backgroundMode continuable; true selects it.
+            run_in_background: prefix === 'issue391-ui',
           }),
         });
       } else {
-        const path = `/data/work/issue83-ui-${scope}-${nonce}.txt`;
+        const path = `/data/work/${prefix}-${scope}-${nonce}.txt`;
         facts.calls.push({
           scope,
           action,
@@ -178,6 +211,12 @@ function registerObservations(ctx, owned, facts) {
     async function* (options, next) {
       if (options.provider !== 'issue83-ui-owned')
         throw new Error('Oracle forbids external model routes');
+      const reviewed = reviewNonce(options);
+      if (reviewed) {
+        facts.reviews.push({ nonce: reviewed });
+        yield* next();
+        return;
+      }
       if (!isAgentLoopRequest(options))
         throw new Error('This oracle forbids auxiliary model calls');
       if (!owned.has(options.sessionId)) throw new Error('Unowned Session model request');
@@ -191,14 +230,17 @@ function registerObservations(ctx, owned, facts) {
     },
     { prepend: true },
   );
-  ctx.on('agent/created', ({ agent }) => {
+  ctx.on('agent/created', ({ agent, source }) => {
     if (owned.has(agent.session.header.parentSession)) {
       owned.add(agent.id);
+      // One row per creation/resume; recorded now because a settled child's
+      // Session can leave ctx.sessions before a later status read.
       facts.children.push({
         sessionId: agent.id,
         parentSessionId: agent.session.header.parentSession,
         origin: agent.session.header.origin,
-        source: 'real-native-in-process-child',
+        source,
+        mode: latestEvent(agent.session, 'subagent/descriptor')?.data.mode ?? null,
         tier: ctx.permissionPresets.current(agent.session),
         policy: ctx.approval.overrideOf(agent.session),
       });
@@ -268,6 +310,9 @@ function registerObservations(ctx, owned, facts) {
         name: exec.name,
         isError: result.isError,
         signalAborted: exec.signal.aborted,
+        ...(exec.name === 'subagent' && result.isError === false
+          ? { kind: result.value?.kind, subagentId: result.value?.subagentId }
+          : {}),
       });
   });
 }
@@ -356,15 +401,7 @@ async function startControlServer(ctx, owned, facts, holds) {
       const sessions = [...owned].map((sessionId) => {
         const agent = ctx.agents.get(sessionId),
           session = ctx.sessions.get(sessionId);
-        let identity = null;
-        if (session)
-          for (let seq = session.seq - 1; seq >= 0; seq--) {
-            const event = session.eventAt(seq);
-            if (event?.type === 'permission/preset') {
-              identity = event.data;
-              break;
-            }
-          }
+        const identity = (session && latestEvent(session, 'permission/preset')?.data) ?? null;
         return {
           sessionId,
           status: agent?.status ?? 'disposed',

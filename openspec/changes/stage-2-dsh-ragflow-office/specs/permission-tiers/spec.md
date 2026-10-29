@@ -16,7 +16,7 @@ DSH 0.2.1-rc.2 中所有子 Agent 都是 continuable 子会话。新建的子会
 
 #### Scenario: 等待批准时取消
 
-- **WHEN** 子会话的写文件请求正在等待批准，员工取消父 Session 当前的任务
+- **WHEN** 子会话的写文件请求正在等待批准，员工停止该子会话当前的任务（continuable 子会话拥有自己的回合，不随父 Session 的取消而中止）
 - **THEN** 批准请求撤回，文件没有被创建，之后的批准不能让该调用继续执行
 
 #### Scenario: Yolo 和 Auto 档下的子会话

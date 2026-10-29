@@ -41,11 +41,24 @@ const TEXT = 'issue83 browser owned write\n审批必须先于真实工具写入�
 const BASE64 = Buffer.from(TEXT).toString('base64');
 const HOST = 'dsh-team-managed.invalid'; // qualifyHostSession's actual mapped host contract
 const MS = 30000;
+const CHILD_PANEL = '[data-approval-key][aria-label="子任务审批"]';
+const PARENT_ASKED = 'a continuable child approval may not surface in its parent';
 
-function auditFor(status, call) {
+const waitStatus = (control, ready, label) =>
+  waitFor(
+    () => {
+      const facts = control({ op: 'status' });
+      return ready(facts) ? facts : null;
+    },
+    MS,
+    label,
+  );
+
+function auditFor(status, call, continuable = false) {
+  // Continuable: the one question for this call exists in no other Session.
   const asked = status.audit.filter(
     (event) =>
-      event.sessionId === call.sessionId &&
+      (continuable || event.sessionId === call.sessionId) &&
       event.type === 'approval/asked' &&
       event.data.callId === call.callId,
   );
@@ -85,15 +98,43 @@ function auditFor(status, call) {
   return { asked: asked[0], decided: decided[0], request: requests[0] };
 }
 
-async function selectChild(context, call, action, nonce, label) {
-  const { browser, control, roots, report, evidenceDirectory } = context;
+async function openChild(context, call, title) {
+  const { browser, roots, report } = context;
+  const catalogQuery = `[...document.querySelectorAll('button[aria-haspopup="tree"]')].find(el=>/子智能体|subagents?/.test(el.getAttribute('aria-label')||'')&&!/切换|Switch/.test(el.getAttribute('aria-label')||''))`;
+  await waitFor(
+    () => evaluate(browser.page, `Boolean(${catalogQuery})`),
+    MS,
+    'native-child-catalog-trigger',
+  );
+  await physicalClick(browser.page, catalogQuery);
+  await clickSessionTitle(browser.page, title, report, {
+    kind: 'subagent',
+    childSessionId: call.sessionId,
+    parentSessionId: roots[0].sessionId,
+  });
+}
+
+const rootStatus = (facts, root) => facts.sessions.find((row) => row.sessionId === root.sessionId);
+const openRoot = ({ browser, roots, report }) =>
+  clickSessionTitle(browser.page, roots[0].title, report, {
+    kind: 'session',
+    sessionId: roots[0].sessionId,
+  });
+
+async function selectChild(context, call, action, nonce, label, expected = {}) {
+  const { browser, control, roots, report, evidenceDirectory, suite, continuable } = context;
   const facts = control({ op: 'status' });
   const child = facts.children.find((row) => row.sessionId === call.sessionId);
   assert(child, 'real native child must have been observed');
+  // Recorded at agent/created: a one-shot delegation fails here, not on a later wait.
+  if (continuable) {
+    assert.equal(child.mode, 'continuable', 'native descriptor must declare a continuable child');
+    assert.equal(child.source, 'startup');
+  }
   assert.equal(child.origin, 'subagent');
   assert.equal(child.parentSessionId, roots[0].sessionId);
-  assert.equal(child.tier, 'approval');
-  assert.equal(child.policy, 'ask');
+  assert.equal(child.tier, expected.tier ?? 'approval');
+  assert.equal(child.policy, expected.policy ?? 'ask');
   assert.notEqual(call.sessionId, roots[0].sessionId);
   const delegation = facts.delegations.find((row) => row.sessionId === call.sessionId);
   assert.equal(delegation?.provider, 'spawn');
@@ -106,11 +147,12 @@ async function selectChild(context, call, action, nonce, label) {
     1,
     'real registered delegation body must run',
   );
-  assert.equal(
-    facts.sessions.find((row) => row.sessionId === roots[0].sessionId).status,
-    'running',
-    'parent must be waiting on the real delegated call',
-  );
+  if (!continuable)
+    assert.equal(
+      rootStatus(facts, roots[0]).status,
+      'running',
+      'parent must be waiting on the real delegated call',
+    );
   // The parent's composer is NOT the child's approval surface.
   assert.equal(
     await evaluate(browser.page, `document.querySelectorAll(${JSON.stringify(PANEL)}).length`),
@@ -121,46 +163,72 @@ async function selectChild(context, call, action, nonce, label) {
     browser.page,
     join(evidenceDirectory, `${label}-parent-waiting.png`),
   );
-  const catalogQuery = `[...document.querySelectorAll('button[aria-haspopup="tree"]')].find(el=>/子智能体|subagents?/.test(el.getAttribute('aria-label')||'')&&!/切换|Switch/.test(el.getAttribute('aria-label')||''))`;
-  await waitFor(
-    () => evaluate(browser.page, `Boolean(${catalogQuery})`),
-    MS,
-    'native-child-catalog-trigger',
+  await openChild(context, call, `${suite.title} child ${action} ${nonce}`);
+  if (!continuable) return;
+  const modes = report.addresses
+    .filter((row) => row.kind === 'subagent' && row.childSessionId === call.sessionId)
+    .map((row) => row.mode);
+  assert(modes.length && modes.every((mode) => mode === 'continuable'), 'continuable address');
+  // The background call result can trail agent/created; wait rather than assert.
+  await waitStatus(
+    control,
+    (facts) =>
+      facts.results.some(
+        (row) =>
+          row.callId === parentCall.callId &&
+          row.kind === 'continuable' &&
+          row.subagentId === call.sessionId,
+      ),
+    `${label}-continuable-delegation-result`,
   );
-  await physicalClick(browser.page, catalogQuery);
-  await clickSessionTitle(browser.page, `issue83 child ${action} ${nonce}`, report, {
-    kind: 'subagent',
-    childSessionId: call.sessionId,
-    parentSessionId: roots[0].sessionId,
-  });
+  const idle = await waitStatus(
+    control,
+    (facts) => rootStatus(facts, roots[0])?.status === 'idle',
+    `${label}-parent-idle`,
+  );
+  assertNeverAsked(idle, roots[0].sessionId, PARENT_ASKED);
 }
 
-async function runApprovalScenario(context, scope, action) {
-  const { browser, control, rpc, roots, report, evidenceDirectory, persist } = context;
-  const nonce = randomUUID();
-  const label = `${scope}-${action}`;
-  if (scope === 'delegate' || action !== 'reject')
-    await clickSessionTitle(browser.page, roots[0].title, report, {
-      kind: 'session',
-      sessionId: roots[0].sessionId,
-    });
-  await waitComposer(browser.page, MS);
-  await typeComposer(browser.page, `issue83-ui ${scope} ${action} ${nonce}`);
+/** No approval request or native question ever reached this Session. */
+function assertNeverAsked(facts, sessionId, message) {
+  assert(
+    !facts.approvals.some((row) => row.sessionId === sessionId) &&
+      !facts.audit.some(
+        (event) => event.sessionId === sessionId && event.type === 'approval/asked',
+      ),
+    message,
+  );
+}
+
+async function sendTurn(context, text, nonce, label) {
+  const { browser, control, suite } = context;
+  await typeComposer(browser.page, `${suite.prompt} ${text}`);
   await clickSelector(browser.page, SEND_BTN);
-  const call = await waitFor(
+  return waitFor(
     () =>
       control({ op: 'status' }).calls.find((call) => call.nonce === nonce && call.name === 'write'),
     MS,
     `${label}-real-write-call`,
   );
-  if (scope === 'delegate') await selectChild(context, call, action, nonce, label);
+}
+
+async function answerApproval(context, call, action, label) {
+  const { browser, control, rpc, roots, continuable } = context;
   const { panelKey, pendingShot } = await observePendingApproval(context, call, label);
-  if (action === 'cancel') {
+  if (action === 'cancel' && continuable)
+    // The child's own Stop remote (exact gateway argument names): a parent
+    // session/cancel never reaches a continuable child's own turn.
+    await rpc('subagents/interruptByParent', {
+      childSessionId: call.sessionId,
+      parentSessionId: roots[0].sessionId,
+      mode: 'continuable',
+    });
+  else if (action === 'cancel')
     // Foreground native child is owned by the parent's tool-call signal.
     // Cancelling that parent propagates to the actual child; never claim a
     // continuable interrupt can cancel a one-shot foreground child.
     await rpc('session/cancel', { request: { sessionId: roots[0].sessionId } });
-  } else
+  else
     await physicalClick(
       browser.page,
       `[...document.querySelectorAll(${JSON.stringify(PANEL + ' button')})].find(el=>${JSON.stringify(action === 'allow' ? ['允许一次', 'Allow once'] : ['拒绝', 'Reject'])}.includes(el.textContent.trim())&&!el.disabled)`,
@@ -194,7 +262,7 @@ async function runApprovalScenario(context, scope, action) {
     MS,
     `${label}-native-settlement`,
   );
-  const audit = auditFor(final, call);
+  const audit = auditFor(final, call, continuable);
   assert.equal(
     audit.decided.data.outcome,
     action === 'allow' ? 'allowed-once' : action === 'reject' ? 'rejected' : 'cancelled',
@@ -210,25 +278,156 @@ async function runApprovalScenario(context, scope, action) {
     assert.equal(file.exists, false);
     assert.equal(dispatch.length, 0);
   }
-  await waitFor(
-    () =>
-      control({ op: 'status' }).sessions.find((row) => row.sessionId === roots[0].sessionId)
-        ?.status === 'idle',
-    MS,
-    `${label}-real-parent-turn-idle`,
+  const result = final.results.find((row) => row.callId === call.callId);
+  if (continuable && action === 'reject') assert.equal(result.isError, true, 'child learns of it');
+  return { final, audit, file, dispatch, panelKey, pendingShot };
+}
+
+/** Auto/Yolo: the real write runs without any native question. */
+async function observeUnattended(context, call, label) {
+  const { browser, control, evidenceDirectory } = context;
+  const pendingShot = join(evidenceDirectory, `${label}-pending.png`);
+  await captureSettledScreenshot(browser.page, pendingShot);
+  const final = await waitStatus(
+    control,
+    (facts) => facts.results.some((row) => row.callId === call.callId),
+    `${label}-unattended-result`,
   );
+  const file = final.files.find((row) => row.callId === call.callId);
+  const dispatch = final.dispatch.filter((row) => row.callId === call.callId);
+  assert.equal(dispatch.length, 1);
+  assert.equal(final.results.find((row) => row.callId === call.callId).isError, false);
+  assertNeverAsked(final, call.sessionId, 'no native question under this tier');
+  assert.equal(
+    await evaluate(browser.page, `document.querySelectorAll(${JSON.stringify(PANEL)}).length`),
+    0,
+    'no approval panel under this tier',
+  );
+  return { final, audit: null, file, dispatch, panelKey: null, pendingShot };
+}
+
+const rootTurns = (facts, root) =>
+  facts.audit.filter((event) => event.sessionId === root.sessionId && event.type === 'turn/start')
+    .length;
+const rootDispatch = (facts, root) =>
+  facts.dispatch.filter((row) => row.sessionId === root.sessionId).length;
+const rootBaseline = (control, root) => {
+  const facts = control({ op: 'status' });
+  return { turns: rootTurns(facts, root), dispatch: rootDispatch(facts, root) };
+};
+
+/** Child Activation release wakes the root once (subagent-settled), without tools. */
+async function settleContinuable(context, call, expected, label) {
+  const { control, roots } = context;
+  const final = await waitStatus(
+    control,
+    (facts) =>
+      facts.sessions.find((row) => row.sessionId === call.sessionId)?.status === 'disposed' &&
+      rootStatus(facts, roots[0])?.status === 'idle' &&
+      rootTurns(facts, roots[0]) >= expected.turns,
+    `${label}-subagent-settled-wake-up`,
+  );
+  assert.equal(rootTurns(final, roots[0]), expected.turns, 'exactly one settled wake-up turn');
+  assert.equal(rootDispatch(final, roots[0]), expected.dispatch, 'wake-up turn runs no tool');
+  assertNeverAsked(final, roots[0].sessionId, PARENT_ASKED);
+  return final;
+}
+
+function assertSettledEffects(final, call, nonce, allowed, childDispatch, reviews) {
+  const file = final.files.find((row) => row.callId === call.callId);
+  assert.equal(file.exists, allowed, 'file effect after the settle window');
+  if (allowed) assert.deepEqual([file.base64, file.bytes], [BASE64, Buffer.byteLength(TEXT)]);
+  assert.equal(
+    final.dispatch.filter((row) => row.sessionId === call.sessionId).length,
+    childDispatch,
+    'no child tools/execute beyond the authorized writes',
+  );
+  assert.equal(final.reviews.filter((row) => row.nonce === nonce).length, reviews);
+}
+
+/** Follow-up in the CHILD's composer cold-resumes it under its own recorded tier. */
+async function resumeChild(context, call, nonce, label) {
+  const { browser, control, roots, report, evidenceDirectory } = context;
+  await openRoot(context);
+  await waitComposer(browser.page, MS);
+  await selectTier(browser.page, 'Yolo', join(evidenceDirectory, `${label}-root-yolo.png`), report);
+  await openChild(context, call, `${context.suite.title} child allow ${nonce}`);
+  await waitComposer(browser.page, MS);
+  const baseline = rootBaseline(control, roots[0]);
+  const next = randomUUID();
+  const resumed = await sendTurn(context, `child reject ${next}`, next, `${label}-resumed`);
+  assert.equal(resumed.sessionId, call.sessionId, 'the follow-up must reach the same child');
+  const facts = control({ op: 'status' });
+  const rows = facts.children.filter((row) => row.sessionId === call.sessionId);
+  assert.equal(rows.length, 2, 'one agent/created row per residency');
+  const { source, mode, tier, policy } = rows[1];
+  assert.deepEqual(
+    { source, mode, tier, policy },
+    { source: 'resume', mode: 'continuable', tier: 'approval', policy: 'ask' },
+    'resume keeps the child-recorded tier',
+  );
+  const delegations = facts.delegations.filter((row) => row.sessionId === call.sessionId);
+  assert(
+    delegations.length === 2 && delegations.every((row) => row.local && row.provider === 'spawn'),
+  );
+  const answered = await answerApproval(context, resumed, 'reject', `${label}-resumed`);
+  const final = await settleContinuable(
+    context,
+    resumed,
+    { turns: baseline.turns + 1, dispatch: baseline.dispatch },
+    `${label}-resumed`,
+  );
+  assertSettledEffects(final, resumed, next, false, 1, 0);
+  assert.equal(rootStatus(final, roots[0]).tier, 'danger-full-access', 'root keeps its own tier');
+  return { call: resumed, children: rows, audit: answered.audit, file: answered.file, final };
+}
+
+async function runApprovalScenario(context, scenario) {
+  const { browser, control, roots, report, evidenceDirectory, persist, continuable } = context;
+  const { scope, action, tier } = scenario;
+  const nonce = randomUUID();
+  const label = continuable ? `continuable-${scenario.name}` : `${scope}-${action}`;
+  if (scope === 'delegate' || action !== 'reject') await openRoot(context);
+  await waitComposer(browser.page, MS);
+  if (tier)
+    await selectTier(browser.page, tier, join(evidenceDirectory, `${label}-tier.png`), report);
+  const baseline = continuable ? rootBaseline(control, roots[0]) : null;
+  const call = await sendTurn(context, `${scope} ${action} ${nonce}`, nonce, label);
+  if (scope === 'delegate') await selectChild(context, call, action, nonce, label, scenario.child);
+  const settled = scenario.unattended
+    ? await observeUnattended(context, call, label)
+    : await answerApproval(context, call, action, label);
+  let final = settled.final;
+  let resumed;
+  if (continuable) {
+    final = await settleContinuable(
+      context,
+      call,
+      { turns: baseline.turns + 2, dispatch: baseline.dispatch + 1 },
+      label,
+    );
+    const allowed = action === 'allow';
+    assertSettledEffects(final, call, nonce, allowed, allowed ? 1 : 0, scenario.reviews ?? 0);
+    if (scenario.resume) ({ final, ...resumed } = await resumeChild(context, call, nonce, label));
+  } else
+    await waitStatus(
+      control,
+      (facts) => rootStatus(facts, roots[0])?.status === 'idle',
+      `${label}-real-parent-turn-idle`,
+    );
   const doneShot = join(evidenceDirectory, `${label}-settled.png`);
   await captureSettledScreenshot(browser.page, doneShot);
   report.scenarios.push({
     scope,
     action,
+    ...(continuable ? { name: scenario.name, tier: tier ?? '人工批准', resumed } : {}),
     call,
-    audit,
-    file,
-    dispatch,
-    panelKey,
-    panelDisappeared: true,
-    pendingScreenshot: pendingShot,
+    audit: settled.audit,
+    file: settled.file,
+    dispatch: settled.dispatch,
+    panelKey: settled.panelKey,
+    panelDisappeared: settled.panelKey !== null,
+    pendingScreenshot: settled.pendingShot,
     settledScreenshot: doneShot,
   });
   report.latestFacts = final;
@@ -261,14 +460,19 @@ async function persistFailure(error, browser, web, control, report, evidenceDire
 }
 
 /** Canonical lifecycle owns image, volumes, containers and mapped port. */
-export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenceDirectory }) {
+export async function runPermissionBrowserScenario(
+  lifecycle,
+  { runtime, evidenceDirectory, suite },
+) {
   assert.equal(runtime.kind, 'docker-isolated-network', 'isolated browser runtime is required');
+  const { mode } = suite;
   await mkdir(evidenceDirectory, { recursive: true });
   const report = {
     status: 'RUNNING',
     runId: lifecycle.runId,
     imageId: lifecycle.imageId,
     source: 'owned-protocol-not-real-model',
+    mode,
     selections: [],
     scenarios: [],
     addresses: [],
@@ -297,7 +501,7 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
     return JSON.parse(raw);
   };
   try {
-    web = await prepareWeb(lifecycle, name, report);
+    web = await prepareWeb(lifecycle, name, report, suite.overlay);
     lifecycle.registerContainer(name);
     const startup = JSON.parse(await runWebStartup(lifecycle.command, web));
     report.startup = startup;
@@ -307,7 +511,7 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
       assert.equal(result.ok, true, `oracle-rpc-${method.replaceAll('/', '-')}`);
       return result.value;
     };
-    profile = await mkdtemp(join(tmpdir(), 'issue83-ui-chrome-'));
+    profile = await mkdtemp(join(tmpdir(), suite.chrome));
     browser = await openMappedPage({
       origin,
       cookie,
@@ -336,19 +540,24 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
       origin,
       report,
       evidenceDirectory,
+      suite.title,
     );
-    const context = { browser, control, rpc, roots, report, evidenceDirectory, persist };
-    for (const scope of ['root', 'delegate'])
-      for (const action of ['reject', 'allow', 'cancel'])
-        await runApprovalScenario(context, scope, action);
+    const context = {
+      browser,
+      control,
+      rpc,
+      roots,
+      report,
+      evidenceDirectory,
+      persist,
+      suite,
+      continuable: mode === 'continuable',
+    };
+    for (const scenario of suite.scenarios) await runApprovalScenario(context, scenario);
     assert.equal(browser.errors.length, 0, 'zero new console errors');
     report.consoleErrors = [...browser.errors];
     report.status = 'PASS';
-    report.limits = [
-      'No real model calls; #84/#85 remain unproven.',
-      'Auto selected only; review behavior belongs to production Docker protocol tests.',
-      'No administrator-default restart/resume/PTC/unload coverage in this browser oracle.',
-    ];
+    report.limits = suite.limits;
     await persist();
     return JSON.stringify({
       status: report.status,
@@ -379,7 +588,7 @@ export async function runPermissionBrowserScenario(lifecycle, { runtime, evidenc
   }
 }
 
-async function prepareWeb(lifecycle, name, report) {
+async function prepareWeb(lifecycle, name, report, overlayUser) {
   const providerSource = await readFile(
     new URL('./permission-browser-provider.mjs', import.meta.url),
     'utf8',
@@ -429,7 +638,7 @@ async function prepareWeb(lifecycle, name, report) {
   );
   const overlay = await writeManagedConfig(
     lifecycle.overlayDirectory,
-    'uioracle0001',
+    overlayUser,
     JSON.stringify(rows),
   );
   return {
@@ -445,7 +654,15 @@ async function prepareWeb(lifecycle, name, report) {
   };
 }
 
-async function verifySessionSelections(browser, control, rpc, origin, report, evidenceDirectory) {
+async function verifySessionSelections(
+  browser,
+  control,
+  rpc,
+  origin,
+  report,
+  evidenceDirectory,
+  titlePrefix,
+) {
   const status = control({ op: 'status' });
   assert.equal(status.managedPermissionsPresent, true);
   assert.equal(status.catalog.defaultPreset, 'approval');
@@ -462,7 +679,7 @@ async function verifySessionSelections(browser, control, rpc, origin, report, ev
     const { sessionId } = await rpc('session/create', {
       request: { cwd: '/data/work', agentPreset: 'standard' },
     });
-    const title = `issue83 browser root ${index + 1}`;
+    const title = `${titlePrefix} browser root ${index + 1}`;
     await rpc('session/rename', { request: { sessionId, title } });
     control({ op: 'adopt', sessionId });
     roots.push({ sessionId, title });
@@ -578,6 +795,24 @@ async function observePendingApproval(context, call, label) {
     'native tool timeline must identify this exact pending write',
   );
   const pending = control({ op: 'status' });
+  if (context.continuable) {
+    // ChildApprovalPanel shares data-approval-key; only the native panel may answer.
+    observeAssertion(
+      'pending-child-panel-absent',
+      await evaluate(
+        browser.page,
+        `document.querySelectorAll(${JSON.stringify(CHILD_PANEL)}).length`,
+      ),
+      0,
+      'continuable approval is answered by the native panel, not the read-only seat',
+    );
+    observeAssertion(
+      'pending-child-running',
+      pending.sessions.find((row) => row.sessionId === call.sessionId)?.status === 'running',
+      true,
+      'continuable child stays running while its approval is pending',
+    );
+  }
   observeAssertion(
     'pending-file-absent',
     pending.files.find((file) => file.callId === call.callId)?.exists,
