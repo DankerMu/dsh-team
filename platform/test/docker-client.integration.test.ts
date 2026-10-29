@@ -9,7 +9,10 @@ import {
   initializeVerificationSubmissions,
   SUBMISSION_JOURNAL,
 } from '../../scripts/verification-submission-storage.mjs';
-import { requireVerificationSubmissionsSettled } from '../../scripts/verification-submission-assessment.mjs';
+import {
+  requireVerificationSubmissionsSettled,
+  UnsettledSubmissionsError,
+} from '../../scripts/verification-submission-assessment.mjs';
 import { trackVerificationDockerClient } from '../../scripts/verification-submissions.mjs';
 import { createDockerClient, DockerHttpError } from '../src/orchestrator/index.ts';
 
@@ -318,9 +321,18 @@ it.each(submissionScenarios)(
         expect(error).not.toBeInstanceOf(DockerHttpError);
       }
       expect(pendingAtDispatch).toHaveLength(1);
-      expect(pendingAtDispatch[0]).toEqual(
-        new Error('Verification submission settlement unconfirmed'),
-      );
+      // In flight: the single labelled submitted row and its marker count once.
+      const pending = pendingAtDispatch[0];
+      expect(pending).toBeInstanceOf(UnsettledSubmissionsError);
+      if (!(pending instanceof UnsettledSubmissionsError)) throw pending;
+      expect(pending.message).toBe('Verification submission settlement unconfirmed');
+      expect(pending.unsettled).toStrictEqual({
+        labels: [
+          { transport: 'http', operation, caller: 'docker-client.integration.test.ts', count: 1 },
+        ],
+        unlabelled: 0,
+        truncated: false,
+      });
       expect(requests).toEqual([
         { method, path, body: JSON.stringify(body) },
         { method: 'GET', path: inventory, body: '' },

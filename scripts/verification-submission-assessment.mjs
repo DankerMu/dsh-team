@@ -5,6 +5,7 @@ import {
   BROWSER_EXEC_AUTHORITY,
   SUBMISSION_JOURNAL,
   SUBMISSION_PENDING,
+  UNSETTLED_LABEL_LIMIT,
   UUID,
   captureAuthority,
   openPrivate,
@@ -21,7 +22,17 @@ import { readVerificationDockerObserverWriters } from './verification-docker-gen
 /** @typedef {{operationOutcome: 'unknown', executionCapability: 'retired', submissions: number, sha256: string}} BrowserExecRetirementSummary */
 /** @typedef {{labels: Array<{transport: 'cli' | 'http', operation: string, caller: string, count: number}>, unlabelled: number, truncated: boolean}} UnsettledProjection */
 /** @typedef {{state: 'confirmed' | 'unconfirmed' | 'not-started', browserExec: BrowserExecRetirementSummary | null, unsettled?: UnsettledProjection}} CleanupAssessment */
-/** @typedef {{states: Map<string, import('./verification-submission-storage.mjs').SubmissionState>, execDigests: Map<string, string>, execOutcomes: Map<string, import('./verification-submission-storage.mjs').BrowserExecClientOutcome>}} SubmissionRecords */
+/** @typedef {{states: Map<string, import('./verification-submission-storage.mjs').SubmissionState>, calls: Map<string, import('./verification-submission-storage.mjs').SubmissionCall>, execDigests: Map<string, string>, execOutcomes: Map<string, import('./verification-submission-storage.mjs').BrowserExecClientOutcome>}} SubmissionRecords */
+
+/** Unconfirmed settlement that carries only a bounded call projection, never identities. */
+export class UnsettledSubmissionsError extends Error {
+  /** @param {UnsettledProjection} unsettled */
+  constructor(unsettled) {
+    super('Verification submission settlement unconfirmed');
+    /** @type {UnsettledProjection} */
+    this.unsettled = unsettled;
+  }
+}
 
 function readJournalText(descriptor) {
   // The complete ordinary suite may issue thousands of operations; evidence stays bounded.
@@ -75,11 +86,17 @@ function recordUnknownExec(value, records) {
 /** @returns {SubmissionRecords} */
 function parseSubmissionRecords(text) {
   /** @type {SubmissionRecords} */
-  const records = { states: new Map(), execDigests: new Map(), execOutcomes: new Map() };
+  const records = {
+    states: new Map(),
+    calls: new Map(),
+    execDigests: new Map(),
+    execOutcomes: new Map(),
+  };
   for (const line of text.split('\n').filter(Boolean)) {
     const value = JSON.parse(line);
     requireSubmissionTransition(value, records.states);
-    if (Object.hasOwn(value, 'call')) requireSubmissionCall(value.call);
+    if (Object.hasOwn(value, 'call'))
+      records.calls.set(value.id, requireSubmissionCall(value.call));
     if (value.state === 'submitted' && Object.hasOwn(value, 'browserExec')) {
       if (!/^[a-f0-9]{64}$/.test(value.browserExec ?? ''))
         throw new Error('Browser exec submission authority malformed');
@@ -144,6 +161,57 @@ function readUnknownExecs(directory, captured, records) {
   return browserExec;
 }
 
+// A marker is named `<id>` or `<generation>.<id>`; any other name stays unattributed.
+function markerSubmission(name) {
+  const parts = name.split('.');
+  return parts.length <= 2 && parts.every((part) => UUID.test(part)) ? parts.at(-1) : undefined;
+}
+
+/**
+ * Counts per closed call label in journal order; no identity, argument or path leaves here.
+ * @param {SubmissionRecords} records
+ * @param {readonly string[]} markerNames
+ * @returns {UnsettledProjection}
+ */
+function unsettledProjection(records, markerNames) {
+  /** @type {UnsettledProjection} */
+  const projection = { labels: [], unlabelled: 0, truncated: false };
+  const markers = new Set();
+  for (const name of markerNames) {
+    const id = markerSubmission(name);
+    if (id === undefined) projection.unlabelled += 1;
+    else markers.add(id);
+  }
+  for (const id of markers) if (!records.states.has(id)) projection.unlabelled += 1;
+  const counted = new Map();
+  for (const [id, state] of records.states) {
+    if (state !== 'submitted' && !markers.has(id)) continue;
+    const call = records.calls.get(id);
+    if (call === undefined) {
+      projection.unlabelled += 1;
+      continue;
+    }
+    const key = JSON.stringify([call.transport, call.operation, call.caller]);
+    const label = counted.get(key);
+    if (label !== undefined) label.count += 1;
+    else if (projection.labels.length < UNSETTLED_LABEL_LIMIT) {
+      const added = { ...call, count: 1 };
+      counted.set(key, added);
+      projection.labels.push(added);
+    } else projection.truncated = true;
+  }
+  return projection;
+}
+
+// Names serve only the projection; settlement never depends on this listing.
+function pendingNames(directory) {
+  try {
+    return readdirSync(join(directory, SUBMISSION_PENDING));
+  } catch {
+    return [];
+  }
+}
+
 function readCapturedSubmissions(directory) {
   const captured = captureAuthority(directory);
   return { captured, records: readSubmissionStates(directory, captured) };
@@ -175,10 +243,11 @@ export function readVerificationSubmissionsForCleanup(directory) {
       (state) => !['settled', 'client-closed-unknown'].includes(state),
     )
   )
-    throw new Error('Verification submission settlement unconfirmed');
+    throw new UnsettledSubmissionsError(unsettledProjection(records, pendingNames(directory)));
   captureAuthority(directory, captured);
-  if (readdirSync(join(directory, SUBMISSION_PENDING)).length !== 0)
-    throw new Error('Verification submission settlement unconfirmed');
+  const pending = readdirSync(join(directory, SUBMISSION_PENDING));
+  if (pending.length !== 0)
+    throw new UnsettledSubmissionsError(unsettledProjection(records, pending));
   const browserExec = readUnknownExecs(directory, captured, records);
   const writers = readVerificationDockerObserverWriters(directory, records.states, captured);
   return { writers, browserExec };
