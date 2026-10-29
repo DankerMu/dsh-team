@@ -13,6 +13,7 @@ import { awaitFile } from './browser-runtime-fixture.ts';
 import { browserDocker, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import { retireAcquisition, stopOwnedUnit } from '../../scripts/ci-vps-units.mjs';
 import { removeOwned } from './docker-cleanup.ts';
+import { settleRescue, trackRescue, type TrackedRescue } from './rescue-settlement.ts';
 import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 import { runDockerCommand, selectDockerExecution } from '../../scripts/docker-command.mjs';
 const acquisitionFence = vi.hoisted(() => ({
@@ -163,9 +164,10 @@ run().catch(()=>{process.exitCode=1;});
           )
         : spawn(process.execPath, argumentsForDriver, { env: environment, stdio: 'ignore' });
     const exited = once(driver, 'exit');
-    let pending: Promise<void> | undefined;
+    let pending: TrackedRescue | undefined;
     const birthObserved = Promise.withResolvers<undefined>();
     const birthReleased = Promise.withResolvers<undefined>();
+    let primary: { error: unknown } | undefined;
     try {
       await awaitFile(marker);
       const id = (await readFile(marker, 'utf8')).trim();
@@ -187,11 +189,11 @@ run().catch(()=>{process.exitCode=1;});
         return undefined;
       };
       acquisitionFence.release = birthReleased.promise;
-      pending = rescueChrome(receiptFile);
+      pending = trackRescue(rescueChrome(receiptFile));
       const deadline = AbortSignal.timeout(15000);
       await Promise.race([
         birthObserved.promise,
-        pending.then(() => {
+        pending.promise.then(() => {
           throw new Error('Acquisition rescue completed before the live-producer fence');
         }),
         once(deadline, 'abort').then(() => {
@@ -205,7 +207,7 @@ run().catch(()=>{process.exitCode=1;});
       await awaitFile(returned);
       const returnedId = (await readFile(returned, 'utf8')).trim();
       birthReleased.resolve(undefined);
-      await pending;
+      await pending.promise;
       const after = record(JSON.parse(await readFile(receiptFile, 'utf8')));
       expect(after.state).toBe('stopped');
       if (phase === 'network-before-id') expect(after.networkId).toBe(id);
@@ -252,14 +254,16 @@ run().catch(()=>{process.exitCode=1;});
           ]),
         ).toBe(invocation);
       }
+    } catch (error) {
+      primary = { error };
+      throw error;
     } finally {
       try {
         birthReleased.resolve(undefined);
         if (termination === 'cgroup') stopOwnedUnit(unit, `dsh-team-ci:${invocation}`);
         await writeFile(released, 'release');
         await stopDriver(driver, exited);
-        await pending?.catch(() => undefined);
-        await rescueChrome(receiptFile);
+        await settleRescue(pending, () => rescueChrome(receiptFile), primary);
         await rm(root, { recursive: true, force: true });
       } finally {
         try {
