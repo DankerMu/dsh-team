@@ -7,6 +7,7 @@ import { isAbsolute, join } from 'node:path';
 import { constants as operatingSystemConstants } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { liveProcessBirth, processIdentity } from './probe-browser-native.mjs';
+import { requireSubmissionCall } from './verification-submission-storage.mjs';
 
 export const FULL_DOCKER_COMMAND = ['pnpm', 'test:docker'];
 export const INVOCATION_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -211,7 +212,7 @@ function requireTerminalFields(value) {
     ],
     [value.command, ['exitCode', 'signal', 'settled']],
     [value.output, ['complete', 'stdout', 'stderr']],
-    [value.cleanup, ['state', 'browserExec']],
+    [value.cleanup, ['state', 'browserExec', 'unsettled']],
   ]) {
     if (
       !object ||
@@ -272,6 +273,58 @@ function validateCleanupOutcome(cleanup) {
     throw new Error('Invalid trusted Docker browser exec projection');
 }
 
+const UNSETTLED_LABEL_LIMIT = 32;
+
+function plainObjectWithKeys(value, keys) {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).sort().join(',') === keys
+  );
+}
+
+function validateUnsettledLabels(labels) {
+  if (!Array.isArray(labels) || labels.length > UNSETTLED_LABEL_LIMIT)
+    throw new Error('Invalid trusted Docker unsettled projection');
+  const seen = new Set();
+  for (const label of labels) {
+    if (!plainObjectWithKeys(label, 'caller,count,operation,transport'))
+      throw new Error('Invalid trusted Docker unsettled projection');
+    const { transport, operation, caller, count } = label;
+    try {
+      requireSubmissionCall({ transport, operation, caller });
+    } catch (cause) {
+      throw new Error('Invalid trusted Docker unsettled projection', { cause });
+    }
+    const key = JSON.stringify([transport, operation, caller]);
+    if (seen.has(key) || !Number.isSafeInteger(count) || count <= 0)
+      throw new Error('Invalid trusted Docker unsettled projection');
+    seen.add(key);
+  }
+}
+
+/** Unresolved submissions are counted per closed-set call label; settlement is not changed. */
+function validateUnsettledProjection(cleanup) {
+  if (!Object.hasOwn(cleanup, 'unsettled')) return;
+  const projection = cleanup.unsettled;
+  if (
+    cleanup.state !== 'unconfirmed' ||
+    !plainObjectWithKeys(projection, 'labels,truncated,unlabelled')
+  )
+    throw new Error('Invalid trusted Docker unsettled projection');
+  validateUnsettledLabels(projection.labels);
+  const { labels, unlabelled, truncated } = projection;
+  if (
+    !Number.isSafeInteger(unlabelled) ||
+    unlabelled < 0 ||
+    typeof truncated !== 'boolean' ||
+    (truncated && labels.length !== UNSETTLED_LABEL_LIMIT) ||
+    (labels.length === 0 && unlabelled === 0)
+  )
+    throw new Error('Invalid trusted Docker unsettled projection');
+}
+
 export function hasPassingOutcome(value) {
   return (
     value.command.exitCode === 0 &&
@@ -313,6 +366,7 @@ export function validateTerminal(value, invocation, digest) {
     ![null, 'identity', 'control', 'launch'].includes(value.failure)
   )
     throw new Error('Invalid trusted Docker terminal outcome');
+  validateUnsettledProjection(value.cleanup);
   if ((value.state === 'passed') !== hasPassingOutcome(value))
     throw new Error('Inconsistent trusted Docker terminal outcome');
   return value;

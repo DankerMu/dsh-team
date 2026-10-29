@@ -19,7 +19,8 @@ import { readVerificationDockerObserverWriters } from './verification-docker-gen
 /** @typedef {{id: string, authority: import('./probe-browser-exec.mjs').BrowserExecAuthority, client: import('./verification-submission-storage.mjs').BrowserExecClientOutcome}} BrowserExecSubmission */
 /** @typedef {{writers: import('./verification-docker-generations.mjs').DockerObserverWitness[], browserExec: BrowserExecSubmission[]}} VerificationSubmissionAssessment */
 /** @typedef {{operationOutcome: 'unknown', executionCapability: 'retired', submissions: number, sha256: string}} BrowserExecRetirementSummary */
-/** @typedef {{state: 'confirmed' | 'unconfirmed' | 'not-started', browserExec: BrowserExecRetirementSummary | null}} CleanupAssessment */
+/** @typedef {{labels: Array<{transport: 'cli' | 'http', operation: string, caller: string, count: number}>, unlabelled: number, truncated: boolean}} UnsettledProjection */
+/** @typedef {{state: 'confirmed' | 'unconfirmed' | 'not-started', browserExec: BrowserExecRetirementSummary | null, unsettled?: UnsettledProjection}} CleanupAssessment */
 /** @typedef {{states: Map<string, import('./verification-submission-storage.mjs').SubmissionState>, execDigests: Map<string, string>, execOutcomes: Map<string, import('./verification-submission-storage.mjs').BrowserExecClientOutcome>}} SubmissionRecords */
 
 function readJournalText(descriptor) {

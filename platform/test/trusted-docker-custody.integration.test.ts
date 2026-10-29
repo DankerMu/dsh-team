@@ -9,7 +9,7 @@ import {
   GROUP_MEMBER_RECORD,
   withTrustedDockerFixture,
 } from './trusted-docker-fixture.ts';
-import { validateTerminal } from '../../scripts/trusted-docker-record.mjs';
+import { hasPassingOutcome, validateTerminal } from '../../scripts/trusted-docker-record.mjs';
 import { browserExecRetirementSummary } from '../../scripts/verification-submission-assessment.mjs';
 
 type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
@@ -254,6 +254,102 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
         validateTerminal({ ...terminal, cleanup }, invocation, terminal.manifestDigest);
       }).toThrow();
     }
+    // (a) Terminals without the projection parse exactly as before.
+    for (const state of ['confirmed', 'unconfirmed']) {
+      const legacy = { ...terminal, cleanup: { state, browserExec: null } };
+      expect(validateTerminal(legacy, invocation, terminal.manifestDigest)).toBe(legacy);
+    }
+    // (b) An unconfirmed terminal carries the bounded unsettled-submission projection verbatim.
+    const unsettled = {
+      labels: [
+        {
+          transport: 'cli',
+          operation: 'network create',
+          caller: 'deployment.docker.test.ts',
+          count: 2,
+        },
+        {
+          transport: 'http',
+          operation: 'POST /containers/{id}/start',
+          caller: 'unknown',
+          count: 1,
+        },
+      ],
+      unlabelled: 1,
+      truncated: false,
+    };
+    const projected = {
+      ...terminal,
+      cleanup: { state: 'unconfirmed', browserExec: null, unsettled },
+    };
+    expect(validateTerminal(projected, invocation, terminal.manifestDigest)).toBe(projected);
+    const distinct = Array.from({ length: 33 }, (_, index) => ({
+      transport: 'cli',
+      operation: 'rm',
+      caller: `case-${String(index)}.test.ts`,
+      count: 1,
+    }));
+    const bounded = {
+      ...terminal,
+      cleanup: {
+        state: 'unconfirmed',
+        browserExec: null,
+        unsettled: { labels: distinct.slice(0, 32), unlabelled: 0, truncated: true },
+      },
+    };
+    expect(validateTerminal(bounded, invocation, terminal.manifestDigest)).toBe(bounded);
+    const [cliLabel, httpLabel] = unsettled.labels;
+    // (c) Only an unconfirmed assessment may carry the projection; (d) every malformed shape fails.
+    for (const cleanup of [
+      { state: 'confirmed', browserExec: null, unsettled },
+      { state: 'not-started', browserExec: null, unsettled },
+      ...[
+        { ...unsettled, extra: 0 },
+        { labels: unsettled.labels, unlabelled: 1 },
+        { ...unsettled, labels: {} },
+        { ...unsettled, labels: null },
+        null,
+        { ...unsettled, labels: distinct },
+        { ...unsettled, labels: [cliLabel, { ...cliLabel, count: 5 }] },
+        { ...unsettled, labels: [{ ...cliLabel, id: 'fixture' }] },
+        { ...unsettled, labels: [{ ...cliLabel, count: 0 }] },
+        { ...unsettled, labels: [{ ...cliLabel, count: -1 }] },
+        { ...unsettled, labels: [{ ...cliLabel, count: 1.5 }] },
+        { ...unsettled, unlabelled: -1 },
+        { ...unsettled, truncated: 'false' },
+        { ...unsettled, truncated: true },
+        { ...unsettled, labels: [{ ...httpLabel, operation: 'POST /containers/{id}/exec/start' }] },
+        {
+          ...unsettled,
+          labels: [{ ...cliLabel, caller: 'platform/test/deployment.docker.test.ts' }],
+        },
+        { ...unsettled, labels: [{ ...cliLabel, transport: 'grpc' }] },
+        { labels: [], unlabelled: 0, truncated: false },
+      ].map((shape) => ({ state: 'unconfirmed', browserExec: null, unsettled: shape })),
+    ]) {
+      expect(() => {
+        validateTerminal({ ...terminal, cleanup }, invocation, terminal.manifestDigest);
+      }).toThrow(new Error('Invalid trusted Docker unsettled projection'));
+      const { state, browserExec } = cleanup;
+      const stripped = { ...terminal, cleanup: { state, browserExec } };
+      expect(validateTerminal(stripped, invocation, terminal.manifestDigest)).toBe(stripped);
+    }
+    // (e) The projection never makes an unconfirmed terminal passing.
+    const unconfirmedPass = {
+      ...projected,
+      command: { exitCode: 0, signal: null, settled: true },
+      interruption: 'none',
+      failure: null,
+    };
+    expect(hasPassingOutcome(unconfirmedPass)).toBe(false);
+    expect(hasPassingOutcome({ ...unconfirmedPass, cleanup: { state: 'confirmed' } })).toBe(true);
+    expect(() => {
+      validateTerminal(
+        { ...unconfirmedPass, state: 'passed' },
+        invocation,
+        terminal.manifestDigest,
+      );
+    }).toThrow(new Error('Inconsistent trusted Docker terminal outcome'));
   });
 }, 20_000);
 
