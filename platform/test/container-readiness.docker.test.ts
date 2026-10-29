@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
 import { START_MODEL } from './container-start-fixture.ts';
+import { isBadOverlayFastExit } from './bad-overlay-start-failure.ts';
 import {
   assertFailedStartupLogs,
   corruptOwnedOverlay,
@@ -15,6 +16,10 @@ import {
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
+
+function toleratedStartFailure(badOverlay: boolean, error: unknown): boolean {
+  return badOverlay && isBadOverlayFastExit(error);
+}
 
 async function assertAuthenticatedReadiness(
   container: Record<string, unknown>,
@@ -122,7 +127,7 @@ async function readinessScenario(
       });
       expect(started.outcome).toBe('starting');
     } catch (error) {
-      if (!badOverlay) throw error;
+      if (!toleratedStartFailure(badOverlay, error)) throw error;
       // A fast real exit may precede endpoint persistence; readiness still owns the indexed row.
       startFailed = true;
     }
