@@ -120,6 +120,19 @@ const openRoot = ({ browser, roots, report }) =>
     kind: 'session',
     sessionId: roots[0].sessionId,
   });
+const waitRootIdle = ({ control, roots }, label) =>
+  waitStatus(control, (facts) => rootStatus(facts, roots[0])?.status === 'idle', label);
+
+/** A composer choice is optimistic; wait for the host-committed root preset and policy. */
+async function commitRootTier(context, label, step) {
+  const { id, approval } = EXPECTED.find((row) => row.label === label);
+  const committed = (facts) => {
+    const row = rootStatus(facts, context.roots[0]);
+    return row?.tier === id && row?.identity?.preset === id && row?.policy === approval;
+  };
+  const facts = await waitStatus(context.control, committed, `${step}-root-tier-committed`);
+  assert(committed(facts), 'root tier committed before the follow-up');
+}
 
 async function selectChild(context, call, action, nonce, label, expected = {}) {
   const { browser, control, roots, report, evidenceDirectory, suite, continuable } = context;
@@ -181,11 +194,7 @@ async function selectChild(context, call, action, nonce, label, expected = {}) {
       ),
     `${label}-continuable-delegation-result`,
   );
-  const idle = await waitStatus(
-    control,
-    (facts) => rootStatus(facts, roots[0])?.status === 'idle',
-    `${label}-parent-idle`,
-  );
+  const idle = await waitRootIdle(context, `${label}-parent-idle`);
   assertNeverAsked(idle, roots[0].sessionId, PARENT_ASKED);
 }
 
@@ -351,6 +360,7 @@ async function resumeChild(context, call, nonce, label) {
   await openRoot(context);
   await waitComposer(browser.page, MS);
   await selectTier(browser.page, 'Yolo', join(evidenceDirectory, `${label}-root-yolo.png`), report);
+  await commitRootTier(context, 'Yolo', label);
   await openChild(context, call, `${context.suite.title} child allow ${nonce}`);
   await waitComposer(browser.page, MS);
   const baseline = rootBaseline(control, roots[0]);
@@ -389,8 +399,10 @@ async function runApprovalScenario(context, scenario) {
   const label = continuable ? `continuable-${scenario.name}` : `${scope}-${action}`;
   if (scope === 'delegate' || action !== 'reject') await openRoot(context);
   await waitComposer(browser.page, MS);
-  if (tier)
+  if (tier) {
     await selectTier(browser.page, tier, join(evidenceDirectory, `${label}-tier.png`), report);
+    await commitRootTier(context, tier, label);
+  }
   const baseline = continuable ? rootBaseline(control, roots[0]) : null;
   const call = await sendTurn(context, `${scope} ${action} ${nonce}`, nonce, label);
   if (scope === 'delegate') await selectChild(context, call, action, nonce, label, scenario.child);
@@ -409,12 +421,7 @@ async function runApprovalScenario(context, scenario) {
     const allowed = action === 'allow';
     assertSettledEffects(final, call, nonce, allowed, allowed ? 1 : 0, scenario.reviews ?? 0);
     if (scenario.resume) ({ final, ...resumed } = await resumeChild(context, call, nonce, label));
-  } else
-    await waitStatus(
-      control,
-      (facts) => rootStatus(facts, roots[0])?.status === 'idle',
-      `${label}-real-parent-turn-idle`,
-    );
+  } else await waitRootIdle(context, `${label}-real-parent-turn-idle`);
   const doneShot = join(evidenceDirectory, `${label}-settled.png`);
   await captureSettledScreenshot(browser.page, doneShot);
   report.scenarios.push({
@@ -703,10 +710,7 @@ async function verifySessionSelections(
   }
   await navigateReady(browser.page, origin, MS, true);
   await waitComposer(browser.page, MS);
-  await clickSessionTitle(browser.page, roots[0].title, report, {
-    kind: 'session',
-    sessionId: roots[0].sessionId,
-  });
+  await openRoot({ browser, roots, report });
   assert.equal(await chosenLabel(browser.page), '人工批准');
   for (const label of ['Auto', 'Yolo', '人工批准'])
     await selectTier(
@@ -723,10 +727,7 @@ async function verifySessionSelections(
     sessionId: roots[1].sessionId,
   });
   assert.equal(await chosenLabel(browser.page), 'Yolo');
-  await clickSessionTitle(browser.page, roots[0].title, report, {
-    kind: 'session',
-    sessionId: roots[0].sessionId,
-  });
+  await openRoot({ browser, roots, report });
   assert.equal(await chosenLabel(browser.page), '人工批准');
   report.twoSessionIndependence = {
     first: roots[0],
