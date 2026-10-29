@@ -12,6 +12,8 @@ import {
 } from './office-writer-oracle.ts';
 import { officeDocxReadScript } from './office-docx-fixture.ts';
 import { record } from './container-start-docker-fixture.ts';
+import type { OfficeOutcome } from './office-delegation-outcome.ts';
+import { settleOfficeEvidence } from './office-delegation-outcome.ts';
 
 it('selects genuine native writer children while preserving tiers, cold identity, siblings and lifecycle', async () => {
   const host = readFileSync(new URL('./office-delegation-host.mjs', import.meta.url), 'utf8');
@@ -65,7 +67,7 @@ it('selects genuine native writer children while preserving tiers, cold identity
           return path;
         },
       );
-      let outcome: { ok: true; value: string } | { ok: false; error: unknown };
+      let outcome: OfficeOutcome<string>;
       try {
         outcome = {
           ok: true,
@@ -78,7 +80,7 @@ it('selects genuine native writer children while preserving tiers, cold identity
       } catch (error) {
         outcome = { ok: false, error };
       }
-      try {
+      return settleOfficeEvidence(outcome, () => {
         const report = execScript(
           lifecycle,
           `dsh-team-test-${lifecycle.runId}-office-evidence`,
@@ -129,14 +131,7 @@ process.stdout.write(JSON.stringify([0,1,2].map(index => ({
             `Native office delegation verified: run=${lifecycle.runId} evidence=${evidence}\n`,
           );
         }
-      } catch (error) {
-        if (outcome.ok) throw error;
-        process.stderr.write(
-          'Office failure evidence persistence failed; original failure retained\n',
-        );
-      }
-      if (!outcome.ok) throw outcome.error;
-      return outcome.value;
+      });
     },
   );
 });
