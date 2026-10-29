@@ -152,6 +152,7 @@ const EXPECTED_NETWORK_POLICY_ROWS = [
       description: 'Keep this metadata',
       plugins: [
         { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs', config: { sample: true } },
+        { id: 'renamed-plugins', name: '@deepseek-ai/dsh-plugin-manager/tools' },
         { id: 'tool-web', name: '@deepseek-ai/dsh-tool-present' },
         {
           id: 'planning',
@@ -160,6 +161,11 @@ const EXPECTED_NETWORK_POLICY_ROWS = [
           isolate: { planMode: true },
           config: [
             { id: 'plan-mode', name: '@deepseek-ai/dsh-plan-mode' },
+            {
+              id: 'nested-plugins',
+              name: '@deepseek-ai/dsh-plugin-manager/tools',
+              disabled: false,
+            },
             { id: 'tool-todo', name: '@deepseek-ai/dsh-tool-todo' },
           ],
         },
@@ -181,6 +187,7 @@ const EXPECTED_NETWORK_POLICY_ROWS = [
       id: 'custom-office',
       order: 9,
       plugins: [
+        { id: 'tool-plugin-manager', name: '@deepseek-ai/dsh-plugin-manager/tools' },
         { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
         { id: 'present', name: '@deepseek-ai/dsh-tool-present' },
       ],
@@ -254,7 +261,7 @@ describe('generateManagedConfig', () => {
     ]);
   });
 
-  it('removes renamed nested network and plugin-manager tools from every supplied preset without mutating input', () => {
+  it('removes renamed nested network tools from every supplied preset without mutating input', () => {
     const snapshot = structuredClone(NETWORK_POLICY_INPUT);
 
     const generated = generateManagedConfig(NETWORK_POLICY_INPUT);

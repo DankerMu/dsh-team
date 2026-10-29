@@ -47,16 +47,6 @@ it.each([
   { reason: 'non-string tool name', office: [42], standard: ['bash', 'read'] },
   { reason: 'missing required built-in tools', office: [], standard: [] },
   { reason: 'forbidden network tool', office: ['web_search'], standard: ['bash', 'read'] },
-  {
-    reason: 'forbidden plugin manager tool',
-    office: ['plugin_manager'],
-    standard: ['bash', 'read'],
-  },
-  {
-    reason: 'plugin manager beside required tools',
-    office: [],
-    standard: ['bash', 'read', 'plugin_manager'],
-  },
 ])('rejects $reason while permitting genuinely tool-less presets', ({ office, standard }) => {
   const observation = {
     models: EXPECTED,
@@ -74,6 +64,43 @@ it.each([
       retainedTools: { standard: ['bash', 'read'] },
     });
   }).toThrow('Invalid managed policy runtime observation');
+});
+
+function cordisObservation(cordis: readonly string[], office: readonly string[] = []) {
+  return {
+    models: EXPECTED,
+    presets: [
+      { id: 'office-general', description: '综合办公', toolNames: office },
+      { id: 'cordis', description: '', toolNames: cordis },
+    ],
+    pluginPage: PLUGIN_PAGE,
+  };
+}
+
+it('accepts the plugin manager tool when the expectation requires it', () => {
+  assertManagedPolicyRuntime(cordisObservation(['bash', 'read', 'plugin_manager']), {
+    ...EXPECTED,
+    presetIds: ['office-general', 'cordis'],
+    retainedTools: { cordis: ['bash', 'read', 'plugin_manager'] },
+  });
+});
+
+it('rejects a preset missing the required plugin manager tool', () => {
+  expect(() => {
+    assertManagedPolicyRuntime(cordisObservation(['bash', 'read']), {
+      ...EXPECTED,
+      presetIds: ['office-general', 'cordis'],
+      retainedTools: { cordis: ['bash', 'read', 'plugin_manager'] },
+    });
+  }).toThrow('Invalid managed policy runtime observation');
+});
+
+it('accepts an unrequired plugin manager tool on a preset that neither requires nor forbids it', () => {
+  assertManagedPolicyRuntime(cordisObservation(['bash', 'read'], ['plugin_manager']), {
+    ...EXPECTED,
+    presetIds: ['office-general', 'cordis'],
+    retainedTools: { cordis: ['bash', 'read'] },
+  });
 });
 
 it('rejects office capability evidence that omits its required definition metadata', () => {

@@ -155,7 +155,7 @@ const RESTART_EXPECTED: ManagedPolicyRuntimeExpectation = {
   readLimits: { [CUSTOM_PRESET_ID]: 500 },
   retainedTools: {
     ...RETAINED_TOOLS,
-    [CUSTOM_PRESET_ID]: ['read', 'present'],
+    [CUSTOM_PRESET_ID]: ['read', 'present', 'plugin_manager'],
   },
 };
 
