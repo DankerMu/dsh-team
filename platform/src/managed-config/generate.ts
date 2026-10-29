@@ -54,10 +54,7 @@ export type ManagedConfigResult =
   { outcome: 'configured'; content: string } | { outcome: 'unconfigured' };
 
 // Matched by package name: row ids are employee-renamable, names are what load.
-const REMOVED_TOOLS: ReadonlySet<string> = new Set([
-  '@deepseek-ai/dsh-tool-web',
-  '@deepseek-ai/dsh-plugin-manager/tools',
-]);
+const REMOVED_TOOLS: ReadonlySet<string> = new Set(['@deepseek-ai/dsh-tool-web']);
 
 const PERMISSION_PRESETS = {
   approval: { sandbox: 'danger-full-access', approval: 'ask', name: '人工批准' },
