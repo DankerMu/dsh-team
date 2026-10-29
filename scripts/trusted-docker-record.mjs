@@ -7,7 +7,10 @@ import { isAbsolute, join } from 'node:path';
 import { constants as operatingSystemConstants } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { liveProcessBirth, processIdentity } from './probe-browser-native.mjs';
-import { requireSubmissionCall } from './verification-submission-storage.mjs';
+import {
+  requireSubmissionCall,
+  UNSETTLED_LABEL_LIMIT,
+} from './verification-submission-storage.mjs';
 
 export const FULL_DOCKER_COMMAND = ['pnpm', 'test:docker'];
 export const INVOCATION_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -272,8 +275,6 @@ function validateCleanupOutcome(cleanup) {
   )
     throw new Error('Invalid trusted Docker browser exec projection');
 }
-
-const UNSETTLED_LABEL_LIMIT = 32;
 
 function plainObjectWithKeys(value, keys) {
   return (

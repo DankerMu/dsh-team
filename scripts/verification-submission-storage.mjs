@@ -28,6 +28,8 @@ export const SUBMISSION_AUTHORITY = 'submission-authority.json';
 export const SUBMISSION_OBSERVERS = 'observers';
 export const BROWSER_EXEC_AUTHORITY = 'browser-execs';
 export const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+// Shared by the unsettled-projection writer and the terminal parser.
+export const UNSETTLED_LABEL_LIMIT = 32;
 
 function identity(info, directory, links = 1) {
   if (

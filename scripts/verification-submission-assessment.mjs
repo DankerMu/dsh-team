@@ -5,6 +5,7 @@ import {
   BROWSER_EXEC_AUTHORITY,
   SUBMISSION_JOURNAL,
   SUBMISSION_PENDING,
+  UNSETTLED_LABEL_LIMIT,
   UUID,
   captureAuthority,
   openPrivate,
@@ -22,8 +23,6 @@ import { readVerificationDockerObserverWriters } from './verification-docker-gen
 /** @typedef {{labels: Array<{transport: 'cli' | 'http', operation: string, caller: string, count: number}>, unlabelled: number, truncated: boolean}} UnsettledProjection */
 /** @typedef {{state: 'confirmed' | 'unconfirmed' | 'not-started', browserExec: BrowserExecRetirementSummary | null, unsettled?: UnsettledProjection}} CleanupAssessment */
 /** @typedef {{states: Map<string, import('./verification-submission-storage.mjs').SubmissionState>, calls: Map<string, import('./verification-submission-storage.mjs').SubmissionCall>, execDigests: Map<string, string>, execOutcomes: Map<string, import('./verification-submission-storage.mjs').BrowserExecClientOutcome>}} SubmissionRecords */
-
-const UNSETTLED_LABEL_LIMIT = 32;
 
 /** Unconfirmed settlement that carries only a bounded call projection, never identities. */
 export class UnsettledSubmissionsError extends Error {

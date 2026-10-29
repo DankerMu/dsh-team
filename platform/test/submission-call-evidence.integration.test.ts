@@ -1,10 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, onTestFinished } from 'vitest';
 import { runDockerCommand } from '../../scripts/docker-command.mjs';
+import { validateTerminal } from '../../scripts/trusted-docker-record.mjs';
 import {
   readVerificationSubmissionsForCleanup,
   readVerificationWritersBeforeRetirement,
@@ -329,6 +330,25 @@ const CONTAINER_START = {
 };
 const REMOVE = { transport: 'cli', operation: 'rm', caller: 'x.mjs' };
 
+/** The writer's real cleanup inside a minimal failed terminal must pass the 7.2 parser as is. */
+function expectParsedTerminal(cleanup: object): void {
+  const invocation = randomUUID();
+  const manifestDigest = createHash('sha256').update(invocation).digest('hex');
+  const log = { bytes: 0, sha256: createHash('sha256').update('').digest('hex') };
+  const terminal = {
+    version: 1,
+    invocation,
+    manifestDigest,
+    state: 'failed',
+    command: { exitCode: 17, signal: null, settled: true },
+    interruption: 'none',
+    failure: null,
+    output: { complete: true, stdout: log, stderr: log },
+    cleanup,
+  };
+  expect(validateTerminal(terminal, invocation, manifestDigest)).toBe(terminal);
+}
+
 it('projects unsettled call labels and unlabelled reservations without identities', async () => {
   await withAuditReceipt(async ({ journal, assess }) => {
     const directory = join(journal, '..');
@@ -362,11 +382,13 @@ it('projects unsettled call labels and unlabelled reservations without identitie
     const { unsettled } = unsettledFailure(directory);
     expect(unsettled).toStrictEqual(expected);
     expect(JSON.stringify(unsettled)).not.toMatch(/[a-f0-9]{8}-[a-f0-9]{4}-/);
-    expect(await assess()).toStrictEqual({
+    const cleanup = await assess();
+    expect(cleanup).toStrictEqual({
       state: 'unconfirmed',
       browserExec: null,
       unsettled: expected,
     });
+    expectParsedTerminal(cleanup);
     expect(freshSubmissionAssessment(directory)).toBe('{"state":"unconfirmed"}\n');
     expect(readVerificationWritersBeforeRetirement(directory, new Set())).toEqual([]);
   });
@@ -425,6 +447,7 @@ it.each([
     });
     expect(unsettled.labels[31]?.caller).toBe('c31.ts');
     expect(JSON.stringify(unsettled)).not.toContain('c32.ts');
+    expectParsedTerminal({ state: 'unconfirmed', browserExec: null, unsettled });
   });
 });
 
