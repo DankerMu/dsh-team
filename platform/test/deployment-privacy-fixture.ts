@@ -14,6 +14,7 @@ import type { Deployment } from './deployment-fixture.ts';
 import { createDeploymentSetupEvidence } from './deployment-setup-evidence.ts';
 import type { DeploymentSetupEvidence, DeploymentSetupSink } from './deployment-setup-evidence.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
+import { awaitLocalModelReady } from './local-model-readiness.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 interface Progress {
@@ -282,15 +283,7 @@ export async function verifyDeployedCredentialPrivacy(sink?: DeploymentSetupSink
           '/verification/model.ts',
           '/verification/model.json',
         ]);
-        await expect
-          .poll(
-            async () =>
-              platformRead(
-                "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());",
-              ),
-            { timeout: 10_000 },
-          )
-          .toMatchObject({ ready: true });
+        await awaitLocalModelReady(platformRead);
         await mutate(
           '/_platform/api/admin/model-config',
           'PUT',
