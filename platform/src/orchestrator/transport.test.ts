@@ -367,3 +367,149 @@ it('retirement removes only the selected bridge and preserves platform primary a
       .all(),
   ).toEqual([{ event_type: 'instance.stopped' }]);
 });
+
+function placeInstance(
+  daemon: Awaited<ReturnType<typeof fixture>>['daemon'],
+  database: DatabaseHandle,
+  address: string,
+  declaration: unknown,
+): void {
+  const container = daemon.containers.get(START_CONTAINER);
+  const network = daemon.networks.get(START_NETWORK);
+  const attachment = container?.NetworkSettings.Networks?.[`dsh-team-net-${START_USER}`];
+  const endpoint = network?.Containers[START_CONTAINER];
+  if (typeof attachment !== 'object' || attachment === null || endpoint === undefined)
+    throw new Error('Started fixture unavailable');
+  // Literal fixture Docker state, rewritten as a daemon would report it.
+  const reported = attachment as Record<string, unknown>;
+  reported.IPAddress = address;
+  if (declaration === undefined) Reflect.deleteProperty(reported, 'IPAMConfig');
+  else reported.IPAMConfig = declaration;
+  endpoint.IPv4Address = `${address}/28`;
+  database.prepare('UPDATE instances SET upstream_host = ?').run(address);
+}
+
+it.each([
+  ['absent', undefined],
+  ['null', null],
+  ['empty', {}],
+])(
+  'a running instance with %s address declaration keeps the stage-1 range check at +5',
+  async (_label, declaration) => {
+    const { owner, input, daemon, database } = await fixture();
+    await owner.startUserContainer(input);
+    database
+      .prepare("UPDATE instances SET status = 'running', dsh_cookie = ?")
+      .run(RECONCILE_COOKIE);
+    placeInstance(daemon, database, '172.30.0.5', declaration);
+    const before = row(database);
+    const requests = daemon.requests.length;
+
+    expect(await owner.startUserContainer(input)).toEqual({
+      outcome: 'running',
+      containerId: START_CONTAINER,
+      upstreamHost: '172.30.0.5',
+      upstreamPort: 3080,
+    });
+    await owner.reconcile();
+
+    expect(row(database)).toEqual(before);
+    expect(daemon.requests.slice(requests).every(({ method }) => method === 'GET')).toBe(true);
+  },
+);
+
+it.each([
+  ['missing address', '172.30.0.2', { IPv6Address: 'fd00::2' }],
+  ['empty address', '172.30.0.2', { IPv4Address: '' }],
+  ['non-string address', '172.30.0.2', { IPv4Address: 2 }],
+  ['non-IPv4 address', '172.30.0.2', { IPv4Address: '172.30.0.2/28' }],
+  ['actual address differing from it', '172.30.0.5', { IPv4Address: '172.30.0.2' }],
+  ['address off the layout', '172.30.0.5', { IPv4Address: '172.30.0.5' }],
+])(
+  'reuse rejects a declaration with %s without mutation or recovery',
+  async (_label, address, declaration) => {
+    const { owner, input, daemon, database } = await fixture();
+    await owner.startUserContainer(input);
+    placeInstance(daemon, database, address, declaration);
+    const before = row(database);
+    const physical = structuredClone([...daemon.containers]);
+    const requests = daemon.requests.length;
+
+    await expect(owner.startUserContainer(input)).rejects.toThrow('Container startup failed');
+    await expect(owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
+
+    expect(row(database)).toEqual(before);
+    expect([...daemon.containers]).toEqual(physical);
+    expect(daemon.requests.slice(requests).every(({ method }) => method === 'GET')).toBe(true);
+  },
+);
+
+it('a replacement on the reused network whose +2 is held fails at start and leaves every resource', async () => {
+  const { owner, input, daemon, database } = await fixture();
+  await owner.startUserContainer(input);
+  daemon.removeContainer(START_CONTAINER);
+  const network = daemon.networks.get(START_NETWORK);
+  const platform = daemon.containers.get(PLATFORM)?.NetworkSettings.Networks;
+  const holder = network?.Containers[PLATFORM];
+  const held = platform?.[`dsh-team-net-${START_USER}`];
+  if (holder === undefined || typeof held !== 'object' || held === null)
+    throw new Error('Attached platform fixture unavailable');
+  holder.IPv4Address = '172.30.0.2/28';
+  // Literal fixture Docker state: the platform endpoint now holds the layout container address.
+  (held as Record<string, unknown>).IPAddress = '172.30.0.2';
+  const replacement = 'd'.repeat(64);
+  daemon.setContainerId(replacement);
+  const networkBefore = structuredClone(network);
+  const platformBefore = structuredClone(platform);
+  const audits = database.prepare('SELECT MAX(id) AS id FROM audit_events').get() as {
+    id: number;
+  };
+  const boundary = daemon.requests.length;
+
+  const failure: unknown = await owner.startUserContainer(input).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as Error).message).toBe('Container startup failed during container start');
+  expect((failure as Error).cause).toMatchObject({ stage: 'container start', dockerStatus: 500 });
+
+  expect(database.prepare('SELECT * FROM creation_attempts').all()).toEqual([]);
+  expect(row(database)).toMatchObject({
+    status: 'starting',
+    container_id: replacement,
+    upstream_host: null,
+    upstream_port: null,
+    last_error: null,
+  });
+  expect(
+    database.prepare('SELECT event_type FROM audit_events WHERE id > ? ORDER BY id').all(audits.id),
+  ).toEqual([{ event_type: 'instance.created' }]);
+  expect(daemon.containers.get(replacement)?.State.Running).toBe(false);
+  const after = daemon.networks.get(START_NETWORK);
+  if (after === undefined) throw new Error('Reused network removed');
+  // The fixture registers the created endpoint before start; real Docker attaches only on start.
+  Reflect.deleteProperty(after.Containers, replacement);
+  expect(after).toEqual(networkBefore);
+  expect(daemon.containers.get(PLATFORM)?.NetworkSettings.Networks).toEqual(platformBefore);
+  const mutations = daemon.requests
+    .slice(boundary)
+    .filter(({ method }) => method !== 'GET')
+    .map(({ method, path }) => `${method} ${path}`);
+  expect(mutations).toContain(`POST /containers/${replacement}/start`);
+  expect(
+    mutations.filter(
+      (request) =>
+        request.includes('/stop') ||
+        request.startsWith(`DELETE /containers/${replacement}`) ||
+        request.startsWith('DELETE /networks/') ||
+        request.startsWith('DELETE /volumes/') ||
+        request.endsWith('/connect') ||
+        request.endsWith('/disconnect'),
+    ),
+  ).toEqual([]);
+  // The rejection is the daemon's start-time occupancy refusal, not another start failure.
+  expect(
+    daemon.reply({ method: 'POST', path: `/containers/${replacement}/start`, body: {} }),
+  ).toEqual({
+    status: 500,
+    document: { message: 'Address already in use' },
+  });
+});

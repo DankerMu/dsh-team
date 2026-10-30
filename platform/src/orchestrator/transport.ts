@@ -63,11 +63,38 @@ export function platformMembership(
   return true;
 }
 
+/** Docker reports null for an endpoint attached without a requested address; `{}` is treated alike. */
+function declaredAddress(attachment: Record<string, unknown>): string | undefined {
+  if (attachment.IPAMConfig === undefined || attachment.IPAMConfig === null) return undefined;
+  const config = object(attachment.IPAMConfig);
+  if (Object.keys(config).length === 0) return undefined;
+  const declared = config.IPv4Address;
+  if (typeof declared !== 'string' || !isIPv4(declared))
+    throw new Error('Invalid endpoint address declaration');
+  return declared;
+}
+
+/** A requested address must be the actual address in both inspect views, whatever the endpoint role. */
+function validateDeclaredAddress(
+  attachment: Record<string, unknown>,
+  endpoint: Record<string, unknown>,
+): string | undefined {
+  const declared = declaredAddress(attachment);
+  if (
+    declared !== undefined &&
+    (attachment.IPAddress !== declared || endpoint.IPv4Address !== `${declared}/28`)
+  )
+    throw new Error('Endpoint address differs from its declaration');
+  return declared;
+}
+
+/** Returns the verified declared address, if any, so a caller can add its role's layout check. */
 export function validateEndpointAddress(
   attachment: Record<string, unknown>,
   endpoint: Record<string, unknown>,
   subnet: string,
-): void {
+  declaration: 'checked' | 'ignored' = 'checked',
+): string | undefined {
   const address = attachment.IPAddress;
   const base = subnet.slice(0, -3);
   const lastDot = base.lastIndexOf('.');
@@ -85,6 +112,7 @@ export function validateEndpointAddress(
     endpoint.EndpointID !== attachment.EndpointID
   )
     throw new Error('Endpoint address mismatch');
+  return declaration === 'checked' ? validateDeclaredAddress(attachment, endpoint) : undefined;
 }
 
 export function upstreamHost(
