@@ -581,3 +581,82 @@ it('clears the persisted token hash when a confirmed-started instance is compens
   expect(persisted).toEqual([{ status: 'starting', instance_token_hash: hash }]);
   expect(tokenRow()).toEqual({ status: 'error', instance_token_hash: null });
 });
+
+function networkOwner(context: Awaited<ReturnType<typeof fixture>>): Orchestrator {
+  seedPlatform(context.daemon, 'dsh-team-test-platform', 'f'.repeat(64));
+  return createOrchestrator({
+    client: context.client,
+    database,
+    config: { upstreamMode: 'network', platformContainerName: 'dsh-team-test-platform' },
+  });
+}
+
+function createdEndpoints(requests: readonly StartupRequest[]): unknown {
+  const create = requests.find(
+    ({ method, path }) =>
+      method === 'POST' && path === `/containers/create?name=dsh-team-u-${START_USER}`,
+  );
+  return create?.body.NetworkingConfig;
+}
+
+it('declares the layout container address only in the network-mode create body', async () => {
+  const network = await fixture();
+  await networkOwner(network).startUserContainer(network.input);
+  const loopback = await fixture();
+  await loopback.owner.startUserContainer(loopback.input);
+
+  expect(createdEndpoints(network.daemon.requests)).toEqual({
+    EndpointsConfig: {
+      [START_NETWORK]: { Aliases: [`u-${START_USER}`], IPAMConfig: { IPv4Address: '172.30.0.2' } },
+    },
+  });
+  expect(createdEndpoints(loopback.daemon.requests)).toEqual({
+    EndpointsConfig: { [START_NETWORK]: { Aliases: [`u-${START_USER}`] } },
+  });
+});
+
+it('compensates a started container whose actual address differs from its declared layout address', async () => {
+  const context = await fixture();
+  const { daemon, input } = context;
+  const owner = networkOwner(context);
+  daemon.startAddresses.set(START_CONTAINER, '172.30.0.5');
+
+  await expect(owner.startUserContainer(input)).rejects.toThrow(
+    'started container and owned network removed',
+  );
+
+  expect(
+    database.prepare('SELECT status, last_error FROM instances WHERE user_id = ?').get(START_USER),
+  ).toEqual({
+    status: 'error',
+    last_error: 'Platform attachment/startup failed; started container and owned network removed',
+  });
+  expect(
+    database
+      .prepare('SELECT event_type FROM audit_events ORDER BY id')
+      .all()
+      .map((row) => (row as { event_type: string }).event_type),
+  ).toContain('instance.start-failed');
+  const started = daemon.requests.findIndex(
+    ({ method, path }) => method === 'POST' && path === `/containers/${START_CONTAINER}/start`,
+  );
+  expect(started).toBeGreaterThan(-1);
+  expect(
+    daemon.requests
+      .slice(started + 1)
+      .filter(({ method }) => method !== 'GET')
+      .map(({ method, path }) => `${method} ${path}`),
+  ).toEqual([
+    `POST /containers/${START_CONTAINER}/stop?t=1`,
+    `DELETE /containers/${START_CONTAINER}`,
+    `DELETE /networks/${START_NETWORK}`,
+  ]);
+  expect(daemon.requests.some(({ path }) => path === `/networks/${START_NETWORK}/connect`)).toBe(
+    false,
+  );
+  expect(
+    daemon.requests.some(({ method, path }) => method === 'DELETE' && path.startsWith('/volumes/')),
+  ).toBe(false);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+});

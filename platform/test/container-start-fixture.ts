@@ -100,6 +100,8 @@ export interface StartupDaemon {
   containers: Map<string, Container>;
   networks: Map<string, StartupNetwork>;
   overrides: Map<string, Reply>;
+  /** Test-owned actual address applied only by the start-time attachment, never the declaration. */
+  startAddresses: Map<string, string>;
   reply: (request: StartupRequest) => Reply;
   transport: DockerTransport;
   attachOwnedNetwork: (user: string, id: string) => void;
@@ -129,13 +131,25 @@ function networkObject(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function fixtureAddress(row: StartupNetwork, id: string): { address: string; prefix: string } {
+function requestedAddress(endpoint: Record<string, unknown>): string | undefined {
+  if (endpoint.IPAMConfig === undefined) return undefined;
+  const address = networkObject(endpoint.IPAMConfig).IPv4Address;
+  if (typeof address !== 'string') throw new Error('Malformed fixture address request');
+  return address;
+}
+
+function fixtureAddress(
+  row: StartupNetwork,
+  id: string,
+  requested: string | undefined,
+): { address: string; prefix: string } {
   const config = networkObject(row.IPAM).Config;
   if (!Array.isArray(config)) throw new Error('Fixture network has no IPAM config');
   const subnet = networkObject(config[0]).Subnet;
   if (typeof subnet !== 'string') throw new Error('Fixture network has no subnet');
   const [base, prefix] = subnet.split('/');
   if (base === undefined || prefix === undefined) throw new Error('Fixture subnet missing prefix');
+  if (requested !== undefined) return { address: requested, prefix };
   const existing = row.Containers[id]?.IPv4Address.split('/')[0];
   if (existing !== undefined) return { address: existing, prefix };
   const lastDot = base.lastIndexOf('.');
@@ -230,18 +244,33 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
     if (method === 'POST' && url.pathname.endsWith('/disconnect')) return disconnect(row, body);
     throw new Error('Unexpected fixture network operation');
   }
-  function attach(container: Container, body: Record<string, unknown>) {
+  function endpointRequest(body: Record<string, unknown>) {
     const mode = networkObject(body.HostConfig).NetworkMode ?? 'bridge';
-    const attached: Record<string, unknown> = {};
-    if (mode === 'none') return attached;
+    if (mode === 'none') return undefined;
     const row = [...networks.values()].find((item) => item.Id === mode || item.Name === mode);
     if (row === undefined) throw new Error('Fixture container network does not exist');
     const requested =
       body.NetworkingConfig === undefined
         ? {}
         : networkObject(networkObject(body.NetworkingConfig).EndpointsConfig);
-    const endpoint = requested[row.Id] ?? requested[row.Name] ?? {};
-    const { address, prefix } = fixtureAddress(row, container.Id);
+    const endpoint = networkObject(requested[row.Id] ?? requested[row.Name] ?? {});
+    return { row, endpoint, declared: requestedAddress(endpoint) };
+  }
+  /** Like Docker, a requested address held by another endpoint is refused only when starting. */
+  function addressInUse(container: Container): boolean {
+    const request = endpointRequest(container.Config);
+    if (request?.declared === undefined) return false;
+    return Object.entries(request.row.Containers).some(
+      ([id, endpoint]) =>
+        id !== container.Id && endpoint.IPv4Address.split('/')[0] === request.declared,
+    );
+  }
+  function attach(container: Container, body: Record<string, unknown>, actual?: string) {
+    const attached: Record<string, unknown> = {};
+    const request = endpointRequest(body);
+    if (request === undefined) return attached;
+    const { row, endpoint, declared } = request;
+    const { address, prefix } = fixtureAddress(row, container.Id, actual ?? declared);
     row.Containers[container.Id] = {
       Name: container.Name.slice(1),
       IPv4Address: `${address}/${prefix}`,
@@ -251,11 +280,12 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
       NetworkID: row.Id,
       EndpointID: container.Id,
       IPAddress: address,
-      Aliases: networkObject(endpoint).Aliases ?? null,
+      Aliases: endpoint.Aliases ?? null,
+      ...(declared === undefined ? {} : { IPAMConfig: { IPv4Address: declared } }),
     };
     return attached;
   }
-  return { networks, reply, attach };
+  return { networks, reply, attach, addressInUse };
 }
 
 function publishedPorts(body: Record<string, unknown>): Record<string, unknown> {
@@ -286,6 +316,7 @@ export function startupDaemon(): StartupDaemon {
   const requests: StartupRequest[] = [];
   const containers = new Map<string, Container>();
   const overrides = new Map<string, Reply>();
+  const startAddresses = new Map<string, string>();
   const networkState = startupNetworks(containers);
   let compositionOutput = COMPOSITION;
   let nextContainerId = START_CONTAINER;
@@ -375,10 +406,16 @@ export function startupDaemon(): StartupDaemon {
       return { status: 204 };
     }
     if (path.endsWith('/start')) {
+      if (networkState.addressInUse(container))
+        return { status: 500, document: { message: 'Address already in use' } };
       container.State.Running = true;
       container.State.Status = 'running';
       container.State.StartedAt = '2026-10-01T00:00:00Z';
-      container.NetworkSettings.Networks = networkState.attach(container, container.Config);
+      container.NetworkSettings.Networks = networkState.attach(
+        container,
+        container.Config,
+        startAddresses.get(container.Id),
+      );
       return { status: 204 };
     }
     if (path.includes('/wait?')) return { status: 200, document: { StatusCode: 0 } };
@@ -428,6 +465,7 @@ export function startupDaemon(): StartupDaemon {
     containers,
     networks: networkState.networks,
     overrides,
+    startAddresses,
     reply,
     transport,
     removeContainer,

@@ -6,11 +6,15 @@ import type { DatabaseHandle } from '../db/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object, ownedContainer, resolvedImageId } from './identity.ts';
-import { captureUserNetwork, removeUserNetwork, validateUserNetwork } from './networks.ts';
+import {
+  captureUserNetwork,
+  isInstanceSubnet,
+  removeUserNetwork,
+  validateUserNetwork,
+} from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamPort } from './transport.ts';
 import type { TransportContext } from './transport.ts';
-import { allocateSubnet } from './subnet.ts';
 
 /** Only verified unknown-ID absence is nonfatal during reconciliation; callers still fail closed. */
 export class CreationQuarantinedError extends Error {}
@@ -49,7 +53,7 @@ function validateRecoveryAttempt(attempt: CreationAttempt): void {
     typeof attempt.image_tag !== 'string' ||
     attempt.image_tag.length === 0 ||
     !isAbsolute(attempt.overlay_path) ||
-    allocateSubnet(attempt.network_subnet, []) !== attempt.network_subnet
+    !isInstanceSubnet(attempt.network_subnet)
   )
     throw new Error('Invalid durable creation provenance');
 }

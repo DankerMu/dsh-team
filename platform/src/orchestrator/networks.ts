@@ -1,7 +1,7 @@
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object } from './identity.ts';
-import { allocateSubnet } from './subnet.ts';
+import { allocateSubnet, instanceAddressLayout } from './subnet.ts';
 import { platformMembership, validateEndpointAddress, verifiedPlatform } from './transport.ts';
 import type { PlatformEndpoint, TransportContext } from './transport.ts';
 
@@ -29,6 +29,17 @@ const MAX_NETWORK_BYTES = 4 * 1024 * 1024;
 const ATTACH_TIMEOUT_MS = 10_000;
 const nameFor = (userId: string) => `dsh-team-net-${userId}`;
 
+/** Exactly the canonical /28 subnets an instance address layout exists for. */
+export function isInstanceSubnet(subnet: unknown): subnet is string {
+  if (typeof subnet !== 'string') return false;
+  try {
+    instanceAddressLayout(subnet);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function inspectedNetwork(document: unknown, userId: string, id?: string): OwnedNetwork {
   const row = object(document);
   const actual = containerId(row);
@@ -36,12 +47,7 @@ export function inspectedNetwork(document: unknown, userId: string, id?: string)
   if (!Array.isArray(configs) || configs.length !== 1)
     throw new Error('Invalid owned network IPAM');
   const subnet = object(configs[0]).Subnet;
-  if (
-    typeof subnet !== 'string' ||
-    !subnet.endsWith('/28') ||
-    allocateSubnet(subnet, []) !== subnet
-  )
-    throw new Error('Invalid owned network subnet');
+  if (!isInstanceSubnet(subnet)) throw new Error('Invalid owned network subnet');
   if (
     (id !== undefined && actual !== id) ||
     row.Name !== nameFor(userId) ||
@@ -160,6 +166,8 @@ export async function validateUserNetwork(
   expected?: string,
   created = false,
   requirePlatform = !created,
+  // Only started-container compensation ignores declarations, retaining the stage-1 range check.
+  declaration: 'checked' | 'ignored' = 'checked',
 ): Promise<OwnedNetwork> {
   const id = attachedNetwork(document, userId, expected, created);
   const network = await inspect(client, id);
@@ -177,7 +185,14 @@ export async function validateUserNetwork(
   }
   const endpoint = object(object(object(document).NetworkSettings).Networks);
   const attachment = object(endpoint[nameFor(userId)]);
-  validateEndpointAddress(attachment, object(endpoints[container]), owned.subnet);
+  const declared = validateEndpointAddress(
+    attachment,
+    object(endpoints[container]),
+    owned.subnet,
+    declaration,
+  );
+  if (declared !== undefined && declared !== instanceAddressLayout(owned.subnet).container)
+    throw new Error('Instance address differs from its layout');
   return owned;
 }
 

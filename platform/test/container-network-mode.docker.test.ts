@@ -2,7 +2,7 @@ import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { loadConfig } from '../src/config.ts';
-import { createOrchestrator } from '../src/orchestrator/index.ts';
+import { createOrchestrator, instanceAddressLayout } from '../src/orchestrator/index.ts';
 import { isAbsentResource } from './docker-command.ts';
 import {
   inspect,
@@ -58,6 +58,14 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
       expect(started.upstreamPort).toBe(3080);
       const networkId = String(endpoint.NetworkID);
       const network = inspectNetwork(lifecycle, networkId);
+      const configs = record(network.IPAM).Config;
+      if (!Array.isArray(configs) || configs.length !== 1)
+        throw new Error('Unexpected instance network IPAM');
+      // Real Docker echoes the requested layout address, so the strict declared branch ran.
+      const { container: layoutAddress } = instanceAddressLayout(String(record(configs[0]).Subnet));
+      expect(record(endpoint.IPAMConfig).IPv4Address).toBe(layoutAddress);
+      expect(endpoint.IPAddress).toBe(layoutAddress);
+      expect(started.upstreamHost).toBe(layoutAddress);
       expect(Object.keys(record(network.Containers)).sort()).toEqual(
         [started.containerId, platformId].sort(),
       );

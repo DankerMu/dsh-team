@@ -11,6 +11,7 @@ import type { ManagedComposition } from '../managed-config/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
+import { instanceAddressLayout } from './subnet.ts';
 import { containerId, object, ownedContainer, resolvedImageId } from './identity.ts';
 import {
   HomeHelperUnconfirmedError,
@@ -164,7 +165,17 @@ async function compensateStarted(
     const before = await client.json('GET', `/containers/${id}/json`);
     inspectUserContainerState(before, id, name, input.userId, image);
     requireUnpublished(before, input.transport.config.upstreamMode);
-    await validateUserNetwork(client, input.userId, before, input.transport, network.id, true);
+    // The started address may contradict its declaration; this check gates only cleanup authority.
+    await validateUserNetwork(
+      client,
+      input.userId,
+      before,
+      input.transport,
+      network.id,
+      true,
+      false,
+      'ignored',
+    );
     current();
     await client.json('POST', `/containers/${id}/stop?t=1`);
     const stopped = await client.json('GET', `/containers/${id}/json`);
@@ -385,7 +396,14 @@ async function createInstance(
         ],
       },
       NetworkingConfig: {
-        EndpointsConfig: { [network.id]: { Aliases: [`u-${userId}`] } },
+        EndpointsConfig: {
+          [network.id]: {
+            Aliases: [`u-${userId}`],
+            ...(input.transport.config.upstreamMode === 'network'
+              ? { IPAMConfig: { IPv4Address: instanceAddressLayout(network.subnet).container } }
+              : {}),
+          },
+        },
       },
     }),
   );
