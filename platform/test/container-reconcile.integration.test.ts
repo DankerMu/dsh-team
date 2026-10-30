@@ -354,6 +354,47 @@ it('preserves two healthy survivors after reconstruction and a database reopen',
   expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
 });
 
+/** A survivor at +2 regains the platform at +3; a stage-1 survivor elsewhere keeps the undeclared attachment. */
+function expectLayoutAwareRecovery(
+  boundary: number,
+  platform: string,
+  legacyUser: string,
+  legacyNetwork: string,
+): void {
+  const connects = daemon.requests
+    .slice(boundary)
+    .filter(({ path }) => path.endsWith('/connect'))
+    .map(({ path, body }) => ({ path, body }));
+  expect(connects).toHaveLength(2);
+  // The decision follows the survivor's actual address: +2 asks for +3, a stage-1 address does not.
+  expect(connects).toContainEqual({
+    path: `/networks/${START_NETWORK}/connect`,
+    body: {
+      Container: platform,
+      EndpointConfig: { IPAMConfig: { IPv4Address: '172.30.0.3' } },
+    },
+  });
+  expect(connects).toContainEqual({
+    path: `/networks/${legacyNetwork}/connect`,
+    body: { Container: platform },
+  });
+  const attachments = daemon.containers.get(platform)?.NetworkSettings.Networks;
+  expect(daemon.networks.get(START_NETWORK)?.Containers[platform]?.IPv4Address).toBe(
+    '172.30.0.3/28',
+  );
+  expect(attachments?.[`dsh-team-net-${START_USER}`]).toMatchObject({
+    IPAddress: '172.30.0.3',
+    IPAMConfig: { IPv4Address: '172.30.0.3' },
+  });
+  const legacy = attachments?.[`dsh-team-net-${legacyUser}`];
+  expect(legacy).not.toHaveProperty('IPAMConfig');
+  // The fixture's next free address in 172.30.0.16/28, strictly inside (base, base+15).
+  expect(legacy).toMatchObject({ IPAddress: '172.30.0.18' });
+  expect(daemon.networks.get(legacyNetwork)?.Containers[platform]?.IPv4Address).toBe(
+    '172.30.0.18/28',
+  );
+}
+
 it('a fresh owner restores both surviving instance memberships after the configured platform is recreated without lifecycle churn', async () => {
   const other = 'mnopqrstuvwx';
   const second = 'd'.repeat(64);
@@ -365,7 +406,7 @@ it('a fresh owner restores both surviving instance memberships after the configu
   seedReconciliation(database, daemon, other, second);
   const survivors = [
     { user: START_USER, id: START_CONTAINER, network: START_NETWORK, host: '172.30.0.2' },
-    { user: other, id: second, network: secondNetwork, host: '172.30.0.18' },
+    { user: other, id: second, network: secondNetwork, host: '172.30.0.20' },
   ];
   for (const survivor of survivors) {
     const container = daemon.containers.get(survivor.id);
@@ -377,14 +418,14 @@ it('a fresh owner restores both surviving instance memberships after the configu
       network.IPAM = { Driver: 'default', Config: [{ Subnet: '172.30.0.16/28' }] };
       network.Containers[second] = {
         Name: 'dsh-team-u-mnopqrstuvwx',
-        IPv4Address: '172.30.0.18/28',
+        IPv4Address: '172.30.0.20/28',
         EndpointID: second,
       };
       container.NetworkSettings.Networks = {
         'dsh-team-net-mnopqrstuvwx': {
           NetworkID: secondNetwork,
           EndpointID: second,
-          IPAddress: '172.30.0.18',
+          IPAddress: '172.30.0.20',
           Aliases: ['u-mnopqrstuvwx'],
         },
       };
@@ -455,6 +496,7 @@ it('a fresh owner restores both surviving instance memberships after the configu
     )
     .toEqual([]);
   expect(outcome).toEqual([{ status: 'fulfilled', value: undefined }]);
+  expectLayoutAwareRecovery(recoveryBoundary, replacementPlatform, other, secondNetwork);
   const settledBoundary = daemon.requests.length;
   await reconstructed.reconcile();
   expect(reconciliationState(database)).toEqual(before);

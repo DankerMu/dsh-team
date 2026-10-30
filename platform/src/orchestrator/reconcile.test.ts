@@ -593,6 +593,44 @@ it('a rejected platform attachment retires into atomic error/null state, preserv
   });
 });
 
+it('a recovered platform endpoint whose actual address differs from its layout declaration fails without retirement', async () => {
+  const { database, daemon, owner, platform } = await networkFixture();
+  daemon.actualAddresses.set(platform, '172.30.0.5');
+  const before = reconciliationState(database);
+  const boundary = daemon.requests.length;
+
+  await expect(owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
+
+  expect(reconciliationState(database)).toEqual(before);
+  expect(database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'running' });
+  expect(before.audits).toEqual([]);
+  expect(daemon.requests.slice(boundary).filter(({ method }) => method !== 'GET')).toEqual([
+    {
+      method: 'POST',
+      path: `/networks/${START_NETWORK}/connect`,
+      body: { Container: platform, EndpointConfig: { IPAMConfig: { IPv4Address: '172.30.0.3' } } },
+    },
+  ]);
+  // The daemon accepted the connect: the platform endpoint stays declared .3 at actual .5.
+  expect(daemon.networks.get(START_NETWORK)?.Containers[platform]?.IPv4Address).toBe(
+    '172.30.0.5/28',
+  );
+  expect(
+    daemon.containers.get(platform)?.NetworkSettings.Networks?.[`dsh-team-net-${START_USER}`],
+  ).toMatchObject({ IPAddress: '172.30.0.5', IPAMConfig: { IPv4Address: '172.30.0.3' } });
+  const settled = daemon.requests.length;
+
+  await expect(owner.reconcile()).rejects.toThrow('Instance reconciliation failed');
+  await expect(owner.stopUserContainer({ userId: START_USER, reason: 'admin' })).rejects.toThrow(
+    'User container retirement failed',
+  );
+
+  expect(reconciliationState(database)).toEqual(before);
+  expect(daemon.requests.slice(settled).filter(({ method }) => method !== 'GET')).toEqual([]);
+  expect(daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
+  expect(daemon.networks.get(START_NETWORK)?.Containers).toHaveProperty(platform);
+});
+
 it('keeps a stage-1 running survivor without a token hash running, unchanged and unaudited', async () => {
   const { database, daemon, owner } = await fixture();
   const before = reconciliationState(database);

@@ -2,7 +2,11 @@ import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
-import { allocateSubnet, createOrchestrator } from '../src/orchestrator/index.ts';
+import {
+  allocateSubnet,
+  createOrchestrator,
+  instanceAddressLayout,
+} from '../src/orchestrator/index.ts';
 import { startupEvidence, START_MODEL } from './container-start-fixture.ts';
 import {
   inspect,
@@ -14,6 +18,27 @@ import {
 } from './container-start-docker-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+
+/** Real Docker accepts the requested layout platform address on connect and echoes it. */
+function expectPlatformAtLayout(
+  lifecycle: UserImageLifecycle,
+  platformId: string,
+  user: string,
+  networkId: string,
+): void {
+  const bridge = inspectNetwork(lifecycle, networkId);
+  const configs = record(bridge.IPAM).Config;
+  if (!Array.isArray(configs) || configs.length !== 1)
+    throw new Error('Unexpected instance network IPAM');
+  const { platform: address } = instanceAddressLayout(String(record(configs[0]).Subnet));
+  expect(record(record(bridge.Containers)[platformId]).IPv4Address).toBe(`${address}/28`);
+  const attachment = record(
+    record(record(inspect(lifecycle, platformId).NetworkSettings).Networks)[`dsh-team-net-${user}`],
+  );
+  expect(attachment.NetworkID).toBe(networkId);
+  expect(attachment.IPAddress).toBe(address);
+  expect(record(attachment.IPAMConfig).IPv4Address).toBe(address);
+}
 
 async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
@@ -87,6 +112,12 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
     const before = await Promise.all(
       [userA, userB].map((userId) => startupEvidence(database, { ...input, userId })),
     );
+    for (const survivor of survivors) {
+      const owned = record(
+        record(record(survivor.physical.NetworkSettings).Networks)[`dsh-team-net-${survivor.user}`],
+      );
+      expectPlatformAtLayout(lifecycle, originalPlatform, survivor.user, String(owned.NetworkID));
+    }
     expect(lifecycle.command(['container', 'rm', '--force', originalPlatform], 15_000).status).toBe(
       0,
     );
@@ -164,6 +195,7 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
       expect(Object.keys(record(bridge.Containers)).sort()).toEqual(
         [survivor.id, platformId].sort(),
       );
+      expectPlatformAtLayout(lifecycle, platformId, survivor.user, String(owned.NetworkID));
       expect(platformHttpStatus(lifecycle, platformId, survivor.host, authority)).toBe(401);
       expect(
         platformHttpStatus(lifecycle, platformId, survivor.host, authority, survivor.cookie),

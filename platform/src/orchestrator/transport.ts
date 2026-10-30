@@ -2,6 +2,7 @@ import { isIPv4 } from 'node:net';
 import type { PlatformConfig } from '../config.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object } from './identity.ts';
+import { instanceAddressLayout } from './subnet.ts';
 
 export type TransportConfig = Pick<PlatformConfig, 'upstreamMode' | 'platformContainerName'>;
 export interface TransportContext {
@@ -44,6 +45,7 @@ export function platformMembership(
   userId: string,
   subnet: string,
   required: boolean,
+  declaration: 'checked' | 'ignored' = 'checked',
 ): boolean {
   const bridge = object(network);
   const endpoint = object(bridge.Containers)[platform.id];
@@ -59,7 +61,9 @@ export function platformMembership(
   if (connected.NetworkID !== bridge.Id || inspected.Name !== platform.name)
     throw new Error('Configured platform endpoint mismatch');
   containerId({ Id: connected.EndpointID });
-  validateEndpointAddress(connected, inspected, subnet);
+  const declared = validateEndpointAddress(connected, inspected, subnet, declaration);
+  if (declared !== undefined && declared !== instanceAddressLayout(subnet).platform)
+    throw new Error('Platform endpoint address differs from its layout');
   return true;
 }
 

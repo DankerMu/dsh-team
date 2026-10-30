@@ -1,6 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { afterEach, expect, it } from 'vitest';
 import { createOrchestrator } from './index.ts';
+import { platformMembership } from './transport.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import {
   START_CONTAINER,
@@ -59,6 +60,122 @@ it('captured owner transport cannot be switched into host publication by later c
   expect(daemon.containers.get(START_CONTAINER)?.HostConfig?.PortBindings).toBeUndefined();
 });
 
+it('a fresh network-mode start attaches the platform at its layout address', async () => {
+  const { owner, input, daemon } = await fixture();
+
+  const started = await owner.startUserContainer(input);
+
+  expect(
+    daemon.requests
+      .filter(({ path }) => path === `/networks/${START_NETWORK}/connect`)
+      .map(({ body }) => body),
+  ).toEqual([
+    { Container: PLATFORM, EndpointConfig: { IPAMConfig: { IPv4Address: '172.30.0.3' } } },
+  ]);
+  expect(daemon.networks.get(START_NETWORK)?.Containers[PLATFORM]?.IPv4Address).toBe(
+    '172.30.0.3/28',
+  );
+  expect(
+    daemon.containers.get(PLATFORM)?.NetworkSettings.Networks?.[`dsh-team-net-${START_USER}`],
+  ).toMatchObject({ IPAddress: '172.30.0.3', IPAMConfig: { IPv4Address: '172.30.0.3' } });
+  expect(started).toMatchObject({ upstreamHost: '172.30.0.2' });
+});
+
+it('a started platform endpoint whose actual address differs from its layout declaration is compensated', async () => {
+  const { owner, input, daemon, database } = await fixture();
+  daemon.actualAddresses.set(PLATFORM, '172.30.0.5');
+
+  await expect(owner.startUserContainer(input)).rejects.toThrow(
+    'started container and owned network removed',
+  );
+
+  expect(
+    database.prepare('SELECT status, last_error FROM instances WHERE user_id = ?').get(START_USER),
+  ).toEqual({
+    status: 'error',
+    last_error: 'Platform attachment/startup failed; started container and owned network removed',
+  });
+  expect(
+    database
+      .prepare('SELECT event_type FROM audit_events ORDER BY id')
+      .all()
+      .map((audit) => (audit as { event_type: string }).event_type),
+  ).toContain('instance.start-failed');
+  const started = daemon.requests.findIndex(
+    ({ method, path }) => method === 'POST' && path === `/containers/${START_CONTAINER}/start`,
+  );
+  expect(started).toBeGreaterThan(-1);
+  expect(
+    daemon.requests
+      .slice(started + 1)
+      .filter(({ method }) => method !== 'GET')
+      .map(({ method, path, body }) => ({ request: `${method} ${path}`, body })),
+  ).toEqual([
+    {
+      request: `POST /networks/${START_NETWORK}/connect`,
+      body: { Container: PLATFORM, EndpointConfig: { IPAMConfig: { IPv4Address: '172.30.0.3' } } },
+    },
+    { request: `POST /containers/${START_CONTAINER}/stop?t=1`, body: {} },
+    { request: `DELETE /containers/${START_CONTAINER}`, body: {} },
+    {
+      request: `POST /networks/${START_NETWORK}/disconnect`,
+      body: { Container: PLATFORM, Force: false },
+    },
+    { request: `DELETE /networks/${START_NETWORK}`, body: {} },
+  ]);
+  expect(
+    daemon.requests.some(({ method, path }) => method === 'DELETE' && path.startsWith('/volumes/')),
+  ).toBe(false);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(daemon.containers.get(PLATFORM)?.NetworkSettings.Networks).not.toHaveProperty(
+    `dsh-team-net-${START_USER}`,
+  );
+});
+
+function membershipViews(address: string, declaration?: { IPv4Address: string }) {
+  const attachment = { NetworkID: START_NETWORK, EndpointID: PLATFORM, IPAddress: address };
+  return {
+    platform: {
+      id: PLATFORM,
+      name: NAME,
+      document: {
+        NetworkSettings: {
+          Networks: {
+            [`dsh-team-net-${START_USER}`]:
+              declaration === undefined ? attachment : { ...attachment, IPAMConfig: declaration },
+          },
+        },
+      },
+    },
+    network: {
+      Id: START_NETWORK,
+      Containers: {
+        [PLATFORM]: { Name: NAME, IPv4Address: `${address}/28`, EndpointID: PLATFORM },
+      },
+    },
+  };
+}
+
+it('platform membership accepts a declared platform address only at the layout platform address', () => {
+  const subnet = '172.30.0.0/28';
+  const off = membershipViews('172.30.0.4', { IPv4Address: '172.30.0.4' });
+  const layout = membershipViews('172.30.0.3', { IPv4Address: '172.30.0.3' });
+  const undeclared = membershipViews('172.30.0.4');
+
+  expect(() => platformMembership(off.platform, off.network, START_USER, subnet, true)).toThrow(
+    'Platform endpoint address differs from its layout',
+  );
+  expect(platformMembership(layout.platform, layout.network, START_USER, subnet, true)).toBe(true);
+  expect(
+    platformMembership(undeclared.platform, undeclared.network, START_USER, subnet, true),
+  ).toBe(true);
+  // Cleanup authority keeps only the stage-1 identity and range checks.
+  expect(platformMembership(off.platform, off.network, START_USER, subnet, true, 'ignored')).toBe(
+    true,
+  );
+});
+
 it('reuse and unchanged reconciliation validate network upstreams without reattaching', async () => {
   const { owner, input, daemon, database } = await fixture();
   const first = await owner.startUserContainer(input);
@@ -84,6 +201,7 @@ it.each([
   ['platform endpoint disagreement', 'platformEndpointDisagreement'],
   ['foreign endpoint', 'foreignEndpoint'],
   ['platform subnet', 'platformSubnet'],
+  ['platform address off its layout', 'platformLayout'],
 ])('reuse rejects %s without mutation or recovery', async (_label, failure) => {
   const { owner, input, daemon, database } = await fixture();
   await owner.startUserContainer(input);
@@ -132,6 +250,21 @@ it.each([
           NetworkID: START_NETWORK,
           EndpointID: PLATFORM,
           IPAddress: '172.31.0.3',
+        },
+      };
+    },
+    platformLayout: () => {
+      network.Containers[PLATFORM] = {
+        Name: NAME,
+        IPv4Address: '172.30.0.4/28',
+        EndpointID: PLATFORM,
+      };
+      platform.NetworkSettings.Networks = {
+        [`dsh-team-net-${START_USER}`]: {
+          NetworkID: START_NETWORK,
+          EndpointID: PLATFORM,
+          IPAddress: '172.30.0.4',
+          IPAMConfig: { IPv4Address: '172.30.0.4' },
         },
       };
     },
@@ -455,8 +588,9 @@ it('a replacement on the reused network whose +2 is held fails at start and leav
   if (holder === undefined || typeof held !== 'object' || held === null)
     throw new Error('Attached platform fixture unavailable');
   holder.IPv4Address = '172.30.0.2/28';
-  // Literal fixture Docker state: the platform endpoint now holds the layout container address.
+  // Literal fixture Docker state: an undeclared platform endpoint now holds the layout container address.
   (held as Record<string, unknown>).IPAddress = '172.30.0.2';
+  Reflect.deleteProperty(held, 'IPAMConfig');
   const replacement = 'd'.repeat(64);
   daemon.setContainerId(replacement);
   const networkBefore = structuredClone(network);

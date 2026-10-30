@@ -100,8 +100,8 @@ export interface StartupDaemon {
   containers: Map<string, Container>;
   networks: Map<string, StartupNetwork>;
   overrides: Map<string, Reply>;
-  /** Test-owned actual address applied only by the start-time attachment, never the declaration. */
-  startAddresses: Map<string, string>;
+  /** Test-owned actual address applied by start and connect attachments, never the declaration. */
+  actualAddresses: Map<string, string>;
   reply: (request: StartupRequest) => Reply;
   transport: DockerTransport;
   attachOwnedNetwork: (user: string, id: string) => void;
@@ -165,7 +165,10 @@ function fixtureAddress(
   return { address: `${addressPrefix}${String(host)}`, prefix };
 }
 
-function startupNetworks(containers: ReadonlyMap<string, Container>) {
+function startupNetworks(
+  containers: ReadonlyMap<string, Container>,
+  actualAddresses: ReadonlyMap<string, string>,
+) {
   const networks = new Map<string, StartupNetwork>();
   let sequence = 1;
   networks.set('0'.repeat(64), {
@@ -217,10 +220,14 @@ function startupNetworks(containers: ReadonlyMap<string, Container>) {
       return { status: 404, document: { message: 'container not found' } };
     if (row.Containers[container.Id] !== undefined)
       return { status: 403, document: { message: 'endpoint already exists' } };
-    const attached = attach(container, {
-      HostConfig: { NetworkMode: row.Id },
-      NetworkingConfig: { EndpointsConfig: { [row.Id]: body.EndpointConfig ?? {} } },
-    });
+    const attached = attach(
+      container,
+      {
+        HostConfig: { NetworkMode: row.Id },
+        NetworkingConfig: { EndpointsConfig: { [row.Id]: body.EndpointConfig ?? {} } },
+      },
+      actualAddresses.get(container.Id),
+    );
     container.NetworkSettings.Networks = { ...container.NetworkSettings.Networks, ...attached };
     return { status: 200 };
   }
@@ -316,8 +323,8 @@ export function startupDaemon(): StartupDaemon {
   const requests: StartupRequest[] = [];
   const containers = new Map<string, Container>();
   const overrides = new Map<string, Reply>();
-  const startAddresses = new Map<string, string>();
-  const networkState = startupNetworks(containers);
+  const actualAddresses = new Map<string, string>();
+  const networkState = startupNetworks(containers, actualAddresses);
   let compositionOutput = COMPOSITION;
   let nextContainerId = START_CONTAINER;
   let before: ((request: StartupRequest) => void) | undefined;
@@ -414,7 +421,7 @@ export function startupDaemon(): StartupDaemon {
       container.NetworkSettings.Networks = networkState.attach(
         container,
         container.Config,
-        startAddresses.get(container.Id),
+        actualAddresses.get(container.Id),
       );
       return { status: 204 };
     }
@@ -465,7 +472,7 @@ export function startupDaemon(): StartupDaemon {
     containers,
     networks: networkState.networks,
     overrides,
-    startAddresses,
+    actualAddresses,
     reply,
     transport,
     removeContainer,
