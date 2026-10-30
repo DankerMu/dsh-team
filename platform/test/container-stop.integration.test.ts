@@ -12,6 +12,7 @@ import {
   startupDaemon,
   START_CONTAINER,
   START_IMAGE,
+  START_NETWORK,
   START_USER,
 } from './container-start-fixture.ts';
 
@@ -62,8 +63,9 @@ beforeEach(async () => {
     Image: START_IMAGE,
     Config: { Labels: { 'dsh-team.user': START_USER } },
     State: { Running: true },
-    NetworkSettings: { Ports: {} },
+    NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   });
+  daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
   const socket = join(root, 'engine.sock');
   server.listen(socket);
   await once(server, 'listening');
@@ -135,6 +137,7 @@ it('retires the captured container after stopping it, retaining history and reco
   expect(writes().map(({ method, path }) => ({ method, path }))).toEqual([
     { method: 'POST', path: `/containers/${START_CONTAINER}/stop?t=1` },
     { method: 'DELETE', path: `/containers/${START_CONTAINER}` },
+    { method: 'DELETE', path: `/networks/${START_NETWORK}` },
   ]);
   expect(observations).toEqual([
     {
@@ -142,6 +145,7 @@ it('retires the captured container after stopping it, retaining history and reco
       row: before,
       audits: [],
     },
+    { running: undefined, row: before, audits: [] },
   ]);
   expect(row()).toEqual({
     user_id: START_USER,
@@ -188,7 +192,7 @@ it.each(['idle', 'admin', 'disabled', 'error'] as const)(
 );
 
 it('finishes an exact already-absent retirement without deleting a same-name replacement', async () => {
-  daemon.containers.delete(START_CONTAINER);
+  daemon.removeContainer(START_CONTAINER);
   const otherId = 'd'.repeat(64);
   daemon.containers.set(otherId, {
     Id: otherId,
@@ -201,7 +205,7 @@ it('finishes an exact already-absent retirement without deleting a same-name rep
 
   await stopUserContainer(input);
 
-  expect(writes()).toEqual([]);
+  expect(writes()).toEqual([{ method: 'DELETE', path: `/networks/${START_NETWORK}`, body: {} }]);
   expect(daemon.containers.get(otherId)?.State.Running).toBe(true);
   expectRetirementRecorded();
 });
@@ -216,6 +220,7 @@ it('deletes an already-stopped owned container without another stop request', as
 
   expect(writes().map(({ method, path }) => ({ method, path }))).toEqual([
     { method: 'DELETE', path: `/containers/${START_CONTAINER}` },
+    { method: 'DELETE', path: `/networks/${START_NETWORK}` },
   ]);
   expect(row()).toMatchObject({ status: 'stopped', last_error: 'historical diagnostic' });
 });
@@ -299,7 +304,7 @@ it.each(['state update', 'audit insert'])(
     expect(daemon.containers.has(START_CONTAINER)).toBe(false);
     expectIndexUnchanged(before);
     const deleted = writes().filter((request) => request.method === 'DELETE');
-    expect(deleted).toHaveLength(1);
+    expect(deleted).toHaveLength(2);
     database.exec('DROP TRIGGER reject_retirement');
     await stopUserContainer(input);
     await stopUserContainer(input);
@@ -429,13 +434,18 @@ it.each(['stop', 'delete'] as const)(
   async (stage) => {
     daemon.beforeRequest((request) => {
       if (request.method === (stage === 'stop' ? 'POST' : 'DELETE'))
-        daemon.containers.delete(START_CONTAINER);
+        daemon.removeContainer(START_CONTAINER);
     });
 
     await stopUserContainer(input);
 
     expectRetirementRecorded();
-    expect(writes().every((request) => request.path.includes(START_CONTAINER))).toBe(true);
+    expect(
+      writes().every(
+        (request) =>
+          request.path.includes(START_CONTAINER) || request.path === `/networks/${START_NETWORK}`,
+      ),
+    ).toBe(true);
   },
 );
 

@@ -70,10 +70,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
   if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) throw new Error();
   const imageId = resolvedImageId(instance.image_id);
   if (typeof instance.email !== 'string') throw new Error();
-  const endpoint =
-    input.transport.config.upstreamMode === 'network'
-      ? indexedEndpoint(object(row), true, 'network')
-      : instance;
+  const endpoint = indexedEndpoint(object(row), true, input.transport.config.upstreamMode);
   return {
     containerId: id,
     imageId,
@@ -132,32 +129,30 @@ async function running(
     input.userId,
     selection.imageId,
   );
-  if (input.transport.config.upstreamMode === 'network') {
-    let declared: string;
-    if (state) {
-      const port = inspectUserContainerEndpoint(
-        document,
-        selection.containerId,
-        `dsh-team-u-${input.userId}`,
-        input.userId,
-        selection.imageId,
-        input.transport.config.upstreamMode,
-      );
-      declared = containerId({ Id: object(object(document).HostConfig).NetworkMode });
-      const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
-      if (
-        (selection.upstreamPort !== null && selection.upstreamPort !== port) ||
-        (selection.upstreamHost !== null && selection.upstreamHost !== host)
-      )
-        throw new Error('Indexed network endpoint changed before retirement');
-    } else {
-      requireUnpublished(document, input.transport.config.upstreamMode);
-      declared = stoppedNetwork(document, input.userId);
-    }
-    if (selection.declaredNetworkId !== undefined && selection.declaredNetworkId !== declared)
-      throw new Error('Declared instance network changed during retirement');
-    selection.declaredNetworkId = declared;
+  let declared: string;
+  if (state) {
+    const port = inspectUserContainerEndpoint(
+      document,
+      selection.containerId,
+      `dsh-team-u-${input.userId}`,
+      input.userId,
+      selection.imageId,
+      input.transport.config.upstreamMode,
+    );
+    declared = containerId({ Id: object(object(document).HostConfig).NetworkMode });
+    const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
+    if (
+      (selection.upstreamPort !== null && selection.upstreamPort !== port) ||
+      (selection.upstreamHost !== null && selection.upstreamHost !== host)
+    )
+      throw new Error('Indexed network endpoint changed before retirement');
+  } else {
+    requireUnpublished(document, input.transport.config.upstreamMode);
+    declared = stoppedNetwork(document, input.userId);
   }
+  if (selection.declaredNetworkId !== undefined && selection.declaredNetworkId !== declared)
+    throw new Error('Declared instance network changed during retirement');
+  selection.declaredNetworkId = declared;
   return state;
 }
 
@@ -186,14 +181,13 @@ async function remove(
   }
   if (state === true) throw new Error();
   current(input, selection, signal);
-  if (input.transport.config.upstreamMode === 'network')
-    await captureUserNetwork(
-      input.client,
-      input.userId,
-      input.transport,
-      state === undefined ? undefined : selection.containerId,
-      selection.declaredNetworkId,
-    );
+  await captureUserNetwork(
+    input.client,
+    input.userId,
+    input.transport,
+    state === undefined ? undefined : selection.containerId,
+    selection.declaredNetworkId,
+  );
   current(input, selection, signal);
   if (state === undefined) return;
   try {
@@ -273,7 +267,7 @@ export async function stopUserContainer(
     current(fenced, selection, signal);
     await remove({ ...fenced, client: networkClient }, selection, signal);
     // After exact user removal, platform detach/inspect settlement retains ownership despite caller abort.
-    if (input.transport.config.upstreamMode === 'network') networkSignal = work.signal;
+    networkSignal = work.signal;
     if (network === undefined) {
       if (
         (await captureUserNetwork(

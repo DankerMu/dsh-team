@@ -37,6 +37,7 @@ it('public start directly owns its sole bridge endpoint over real Unix Docker an
         EndpointID: START_CONTAINER,
         IPAddress: '172.30.0.2',
         Aliases: [`u-${START_USER}`],
+        IPAMConfig: { IPv4Address: '172.30.0.2' },
       },
     });
     expect(daemon.networks.get(START_NETWORK)).toEqual({
@@ -62,7 +63,12 @@ it('public start directly owns its sole bridge endpoint over real Unix Docker an
       Hostname: `u-${START_USER}`,
       HostConfig: { NetworkMode: START_NETWORK },
       NetworkingConfig: {
-        EndpointsConfig: { [START_NETWORK]: { Aliases: [`u-${START_USER}`] } },
+        EndpointsConfig: {
+          [START_NETWORK]: {
+            Aliases: [`u-${START_USER}`],
+            IPAMConfig: { IPv4Address: '172.30.0.2' },
+          },
+        },
       },
     });
     const helpers = daemon.requests.filter(({ path }) =>

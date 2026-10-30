@@ -399,7 +399,10 @@ it('bulk retains an authoritative error item and continues to the next selected 
     expect(restartAuditEntries(f.database)).toEqual([{ target: 'mnopqrstuvwx', details: '{}' }]);
     expect(
       f.database.prepare('SELECT status,last_error FROM instances WHERE user_id=?').get(START_USER),
-    ).toEqual({ status: 'error', last_error: 'fixture storage failure' });
+    ).toEqual({
+      status: 'error',
+      last_error: 'Platform attachment/startup failed; started container and owned network removed',
+    });
   } finally {
     await f.close();
   }

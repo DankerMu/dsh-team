@@ -6,6 +6,7 @@ import { createDockerClient, createInstanceService } from '../src/orchestrator/i
 import {
   START_CONTAINER,
   START_IMAGE,
+  START_NETWORK,
   START_USER,
   startupUnixOwnerFixture,
 } from './container-start-fixture.ts';
@@ -114,8 +115,11 @@ it('starts a fresh known-idle interval before retiring the exact instance with a
           Image: START_IMAGE,
           Config: { Labels: { 'dsh-team.user': START_USER } },
           State: { Running: true },
-          NetworkSettings: { Ports: {} },
+          NetworkSettings: {
+            Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(target.port) }] },
+          },
         });
+        f.daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
         const before = row();
 
         // Ancient persisted activity cannot establish how long tasks have been idle.
@@ -141,6 +145,7 @@ it('starts a fresh known-idle interval before retiring the exact instance with a
         expect(mutations()).toEqual([
           { method: 'POST', path: `/containers/${START_CONTAINER}/stop?t=1`, body: {} },
           { method: 'DELETE', path: `/containers/${START_CONTAINER}`, body: {} },
+          { method: 'DELETE', path: `/networks/${START_NETWORK}`, body: {} },
         ]);
         expect(row()).toEqual({
           user_id: START_USER,

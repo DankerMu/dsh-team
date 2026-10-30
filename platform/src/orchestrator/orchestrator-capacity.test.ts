@@ -149,14 +149,17 @@ it('precreation failure releases admission without poisoning another user', asyn
   });
 });
 
-it('failed indexed start remains counted after owner reconstruction', async () => {
+it('failed indexed start compensates to error and releases admission after owner reconstruction', async () => {
   const { owner, input, database, client, daemon } = await fixture();
   database.exec(
     "CREATE TRIGGER reject_started BEFORE INSERT ON audit_events WHEN NEW.event_type = 'instance.started' BEGIN SELECT RAISE(ABORT, 'fixture failure'); END",
   );
   await expect(owner.startUserContainer(input)).rejects.toThrow('start persistence');
-  const before = database.prepare('SELECT * FROM instances').all();
-  const requests = [...daemon.requests];
+  database.exec('DROP TRIGGER reject_started');
+  const failed = () =>
+    database.prepare('SELECT * FROM instances WHERE user_id = ?').get(START_USER);
+  const before = failed();
+  daemon.setContainerId(NEXT_CONTAINER);
   const reconstructed = createOrchestrator({
     client,
     database,
@@ -164,12 +167,19 @@ it('failed indexed start remains counted after owner reconstruction', async () =
   });
 
   expect(await reconstructed.startUserContainer({ ...input, userId: OTHER_USER })).toEqual({
-    outcome: 'full',
+    outcome: 'starting',
+    containerId: NEXT_CONTAINER,
+    upstreamHost: '127.0.0.1',
+    upstreamPort: 49173,
   });
 
-  expect(database.prepare('SELECT * FROM instances').all()).toEqual(before);
-  expect(before).toMatchObject([{ user_id: START_USER, status: 'starting', upstream_host: null }]);
-  expect(daemon.requests).toEqual(requests);
+  expect(before).toMatchObject({
+    status: 'error',
+    container_id: START_CONTAINER,
+    upstream_host: null,
+  });
+  expect(failed()).toEqual(before);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
 });
 
 it.each(['starting', 'running', 'stopped', 'error'] as const)(

@@ -8,6 +8,7 @@ import {
   startupDaemon,
   START_CONTAINER,
   START_IMAGE,
+  START_NETWORK,
   START_USER,
 } from '../../test/container-start-fixture.ts';
 
@@ -61,9 +62,10 @@ function indexedFixture(transport?: DockerTransport) {
     Image: START_IMAGE,
     Config: { Labels: { 'dsh-team.user': START_USER } },
     State: { Running: true },
-    NetworkSettings: { Ports: {} },
+    NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   };
   daemon.containers.set(START_CONTAINER, container);
+  daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
   ({ stopUserContainer } = createOrchestrator({
     client: createDockerClient('/fixture/docker.sock', transport ?? daemon.transport),
     database,
@@ -191,7 +193,7 @@ it.each(['idle', 'admin', 'disabled', 'error'] as const)(
 
 it('reconciles an absent immutable ID without stopping the foreign same-name container', async () => {
   const { input, database, daemon, container } = indexedFixture();
-  daemon.containers.delete(START_CONTAINER);
+  daemon.removeContainer(START_CONTAINER);
   const otherId = 'd'.repeat(64);
   const foreign = {
     ...container,
@@ -231,7 +233,7 @@ it.each([304, 404])(
     daemon.overrides.set(`POST /containers/${START_CONTAINER}/stop?t=1`, { status });
     daemon.beforeRequest((request) => {
       if (request.method !== 'POST') return;
-      if (status === 404) daemon.containers.delete(START_CONTAINER);
+      if (status === 404) daemon.removeContainer(START_CONTAINER);
       else container.State.Running = false;
     });
 
@@ -268,7 +270,7 @@ it.each([
 it('confirms exact absence after a deletion 404 before committing retirement', async () => {
   const { input, database, daemon } = indexedFixture();
   daemon.beforeRequest((request) => {
-    if (request.method === 'DELETE') daemon.containers.delete(START_CONTAINER);
+    if (request.method === 'DELETE') daemon.removeContainer(START_CONTAINER);
   });
 
   await stopUserContainer(input);
@@ -397,4 +399,60 @@ it('disabled retirement cannot select a newly active account even when the index
   expectIndexPreserved(database, before);
   expect(daemon.requests).toEqual([]);
   expect(daemon.containers.get(START_CONTAINER)?.State.Running).toBe(true);
+});
+
+function expectLoopbackRetirementRefused(
+  database: DatabaseHandle,
+  daemon: ReturnType<typeof indexedFixture>['daemon'],
+  before: unknown,
+): void {
+  expectIndexPreserved(database, before);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(true);
+  expect(daemon.requests.filter(({ method }) => method !== 'GET')).toEqual([]);
+  expect(daemon.networks.has(START_NETWORK)).toBe(true);
+}
+
+it('fences a stopped loopback instance whose declared network differs from its canonical bridge', async () => {
+  const { input, database, daemon } = indexedFixture();
+  const before = database.prepare('SELECT * FROM instances').get();
+  const container = daemon.containers.get(START_CONTAINER);
+  if (container === undefined) throw new Error('Missing owned fixture');
+  container.State.Running = false;
+  container.NetworkSettings.Networks = {};
+  container.HostConfig = { NetworkMode: 'f'.repeat(64) };
+
+  await expect(stopUserContainer(input)).rejects.toThrow('User container retirement failed');
+
+  expectLoopbackRetirementRefused(database, daemon, before);
+});
+
+it('fences a running loopback instance whose declaration differs from its attachment', async () => {
+  const { input, database, daemon } = indexedFixture();
+  const before = database.prepare('SELECT * FROM instances').get();
+  const container = daemon.containers.get(START_CONTAINER);
+  if (container === undefined) throw new Error('Missing owned fixture');
+  container.HostConfig = { NetworkMode: 'f'.repeat(64) };
+
+  await expect(stopUserContainer(input)).rejects.toThrow('User container retirement failed');
+
+  expectLoopbackRetirementRefused(database, daemon, before);
+  expect(container.State.Running).toBe(true);
+});
+
+it('captures loopback endpoint ownership before deleting the stopped container', async () => {
+  const { input, database, daemon } = indexedFixture();
+  const before = database.prepare('SELECT * FROM instances').get();
+  daemon.beforeRequest(({ method, path }) => {
+    const network = daemon.networks.get(START_NETWORK);
+    if (method === 'POST' && path === `/containers/${START_CONTAINER}/stop?t=1` && network)
+      network.Containers['9'.repeat(64)] = { Name: 'foreign', IPv4Address: '172.30.0.9/28' };
+  });
+
+  await expect(stopUserContainer(input)).rejects.toThrow('User container retirement failed');
+
+  expectIndexPreserved(database, before);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(true);
+  expect(daemon.containers.get(START_CONTAINER)?.State.Running).toBe(false);
+  expect(daemon.requests.some(({ method }) => method === 'DELETE')).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(true);
 });

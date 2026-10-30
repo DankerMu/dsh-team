@@ -490,7 +490,8 @@ export function startupDaemon(): StartupDaemon {
           IPAM: { Driver: 'default', Config: [{ Subnet: '172.30.0.0/28' }] },
         },
       });
-      const network = networkObject(created?.document).Id;
+      if (created?.status !== 201) throw new Error('Fixture user network creation failed');
+      const network = networkObject(created.document).Id;
       container.HostConfig = { NetworkMode: network };
       container.NetworkSettings.Networks = networkState.attach(container, {
         HostConfig: { NetworkMode: network },
