@@ -37,13 +37,32 @@ image_owned=0
 probe_status=0
 cleanup_failed=0
 cleaned=0
+docker_seconds=30
 workdir=""
 
 note_cleanup_failure() { echo "probe-sandbox: cleanup failed: $1" >&2; cleanup_failed=1; }
+# Read-only absence proof, as strict as isAbsentResource: exit 1, empty stdout, exact daemon text.
+absent() {
+  local kind="$1" target="$2" noun ref errf out err status
+  case "$kind" in
+    rm) noun=container ref="$target" ;;
+    rmi) noun=image ref="$target"; case "$target" in *:*) ;; *) ref="${target}:latest" ;; esac ;;
+    *) return 1 ;;
+  esac
+  errf="$(mktemp "${TMPDIR:-/tmp}/probe-sandbox-inspect.XXXXXX")" || return 1
+  if out="$(timeout --foreground --kill-after=5 "$docker_seconds" docker "$noun" inspect --format '{{.Id}}' "$target" 2>"$errf")"; then status=0; else status=$?; fi
+  # The sentinel keeps every trailing newline so exactly one is stripped, as isAbsentResource does.
+  err="$(cat "$errf" && printf x)" || err=""
+  rm -f "$errf"
+  err="${err%x}"
+  err="${err%$'\n'}"
+  if [ "$status" -ne 1 ] || [ -n "$out" ]; then return 1; fi
+  [ "$err" = "Error response from daemon: No such ${noun}: ${ref}" ] || [ "$err" = "Error: No such ${noun}: ${ref}" ]
+}
 remove_owned() {
   local kind="$1" target="$2" err
   err="$(docker "$kind" -f "$target" 2>&1)" && return 0
-  case "$err" in *"No such container"* | *"No such image"*) return 0 ;; esac
+  absent "$kind" "$target" && return 0
   note_cleanup_failure "docker ${kind} -f ${target}: ${err}"
 }
 
@@ -79,14 +98,19 @@ write_custom_seccomp() {
 }
 
 wait_for_container() {
-  local container="$1" wait_out wait_status
+  local container="$1" wait_out wait_status kill_failed=0
   if wait_out="$(timeout --foreground "$timeout_seconds" docker wait "$container")"; then
     wait_out="${wait_out%%$'\n'*}"
     case "$wait_out" in '' | *[!0-9]*) echo "docker wait returned non-integer: ${wait_out}" >&2; return 2 ;; esac
     return "$wait_out"
   else
     wait_status=$?
-    docker kill "$container" >/dev/null 2>&1 || true
+    docker kill "$container" >/dev/null 2>&1 || kill_failed=1
+    # A container may exit just as docker wait times out; only a running survivor is a failure.
+    if [ "$kill_failed" -eq 1 ] && ! absent rm "$container" &&
+      [ "$(timeout --foreground --kill-after=5 "$docker_seconds" docker container inspect --format '{{.State.Running}}' "$container" 2>/dev/null)" != false ]; then
+      note_cleanup_failure "docker kill ${container}"
+    fi
     if [ "$wait_status" -eq 124 ]; then echo "level timeout after ${timeout_seconds}s" >&2; return 124; fi
     echo "docker wait failed: status=${wait_status}" >&2
     return "$wait_status"

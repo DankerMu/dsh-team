@@ -86,6 +86,32 @@ probe_stop_chrome() {
   fi
 }
 
+# Read-only absence proof, as strict as isAbsentResource: exit 1, empty stdout, exact daemon text.
+probe_absent() {
+  local kind="$1" target="$2" noun ref errf out err status
+  case "$kind" in
+    rm) noun=container ref="$target" ;;
+    rmi)
+      noun=image ref="$target"
+      case "$target" in *:*) ;; *) ref="${target}:latest" ;; esac
+      ;;
+    *) return 1 ;;
+  esac
+  errf="$(mktemp "${TMPDIR:-/tmp}/${probe_name}-inspect.XXXXXX")" || return 1
+  if out="$(probe_run_bound "$docker_seconds" docker "$noun" inspect --format '{{.Id}}' "$target" 2>"$errf")"; then
+    status=0
+  else
+    status=$?
+  fi
+  # The sentinel keeps every trailing newline so exactly one is stripped, as isAbsentResource does.
+  err="$(cat "$errf" && printf x)" || err=""
+  rm -f "$errf"
+  err="${err%x}"
+  err="${err%$'\n'}"
+  if [ "$status" -ne 1 ] || [ -n "$out" ]; then return 1; fi
+  [ "$err" = "Error response from daemon: No such ${noun}: ${ref}" ] || [ "$err" = "Error: No such ${noun}: ${ref}" ]
+}
+
 probe_remove_owned() {
   local kind="$1" target="$2" err status=0
   set +e
@@ -93,7 +119,7 @@ probe_remove_owned() {
   status=$?
   set -e
   [ "$status" -eq 0 ] && return 0
-  case "$err" in *"No such container"* | *"No such image"*) return 0 ;; esac
+  probe_absent "$kind" "$target" && return 0
   probe_note_cleanup_failure "docker ${kind} -f ${target}"
 }
 
@@ -107,16 +133,16 @@ probe_scrub_binds() {
       "$image" sh -c 'find /s/home /s/work -mindepth 1 -delete' 2>&1)"
     status=$?
     set -e
-    if [ "$status" -ne 0 ]; then
-      case "$err" in *"No such image"* | *"Unable to find image"*) ;; *) probe_note_cleanup_failure "scrub bind dirs" ;; esac
+    if [ "$status" -ne 0 ] && ! probe_absent rmi "$image"; then
+      probe_note_cleanup_failure "scrub bind dirs"
     fi
   fi
   set +e
   err="$(probe_run_bound "$docker_seconds" docker rm -f "$helper" 2>&1)"
   status=$?
   set -e
-  if [ "$status" -ne 0 ]; then
-    case "$err" in *"No such container"*) ;; *) probe_note_cleanup_failure "docker rm -f ${helper}" ;; esac
+  if [ "$status" -ne 0 ] && ! probe_absent rm "$helper"; then
+    probe_note_cleanup_failure "docker rm -f ${helper}"
   fi
 }
 
