@@ -133,3 +133,4 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
 - **基线**：D9、D16、D24、D25、F24、F46、F47 已在本 change 之前修订。
 
 任务 1.2c 的 fixture 等级为 compact，偏离 issue #384 建议的 expanded：该任务只新增一个 Docker 用例、不改 `platform/src/`，是对已合入 1.2a/1.2b 行为的真实 Docker 刻画。
+任务 1.4 的 fixture 等级为 compact，偏离 issue #386 建议的 expanded：该任务只改 `AGENTS.md` Environment 两段文字，把已合入的 1.1–1.3 行为写成规则，不改代码或测试。
