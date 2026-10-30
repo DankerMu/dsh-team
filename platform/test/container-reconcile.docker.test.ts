@@ -2,6 +2,7 @@ import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
 import {
   allocateSubnet,
   createOrchestrator,
@@ -15,7 +16,10 @@ import {
   createStandInPlatform,
   platformHttpStatus,
   inspectNetwork,
+  registerStartupUsers,
+  startDockerInstance,
 } from './container-start-docker-fixture.ts';
+import { isAbsentResource } from './docker-command.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -299,5 +303,314 @@ it('reconstructs the owner without replacing two ready survivors then corrects m
   );
   process.stdout.write(
     `Docker reconciliation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
+  );
+});
+
+type RawDocker = ReturnType<typeof startupClient>['raw'];
+const SURVIVOR_MARKER = 'survivor-data-retained';
+
+function bridgeSubnet(lifecycle: UserImageLifecycle, networkId: string): string {
+  const configs = record(inspectNetwork(lifecycle, networkId).IPAM).Config;
+  if (!Array.isArray(configs) || configs.length !== 1)
+    throw new Error('Unexpected instance network IPAM');
+  return String(record(configs[0]).Subnet);
+}
+
+/** The stage-1 range rule of `validateEndpointAddress`: strictly between base and base+15. */
+function inInstanceRange(address: unknown, subnet: string): boolean {
+  if (typeof address !== 'string') return false;
+  const base = subnet.slice(0, -3);
+  const lastDot = base.lastIndexOf('.');
+  const prefix = base.slice(0, lastDot + 1);
+  if (!address.startsWith(prefix)) return false;
+  const host = Number(address.slice(prefix.length));
+  const start = Number(base.slice(lastDot + 1));
+  return (
+    Number.isInteger(host) &&
+    host > start &&
+    host < start + 15 &&
+    address === `${prefix}${String(host)}`
+  );
+}
+
+function ownedAttachment(
+  lifecycle: UserImageLifecycle,
+  id: string,
+  user: string,
+): Record<string, unknown> {
+  return record(
+    record(record(inspect(lifecycle, id).NetworkSettings).Networks)[`dsh-team-net-${user}`],
+  );
+}
+
+function survivorMarker(lifecycle: UserImageLifecycle, id: string, code: string): string {
+  const result = lifecycle.command(['exec', id, 'python3', '-c', code], 10_000);
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Survivor marker access failed');
+  return result.stdout.trim();
+}
+
+/**
+ * Test-owned stage-1 survivor: the running container is re-attached through the raw Engine API
+ * with only its alias (no `IPAMConfig` key), while a placeholder holds the freed layout address.
+ */
+async function constructSurvivor(
+  lifecycle: UserImageLifecycle,
+  raw: RawDocker,
+  user: string,
+  containerId: string,
+  platformId: string,
+): Promise<string> {
+  const networkId = String(ownedAttachment(lifecycle, containerId, user).NetworkID);
+  const subnet = bridgeSubnet(lifecycle, networkId);
+  await raw.json(
+    'POST',
+    `/networks/${networkId}/disconnect`,
+    { Container: containerId, Force: false },
+    AbortSignal.timeout(15_000),
+  );
+  const placeholder = `dsh-team-test-placeholder-${lifecycle.runId}`;
+  lifecycle.registerResource('container', placeholder, { 'dsh-team.test-run': lifecycle.runId });
+  const occupied = lifecycle.command(
+    [
+      'run',
+      '--detach',
+      '--name',
+      placeholder,
+      '--network',
+      networkId,
+      '--label',
+      `dsh-team.test-run=${lifecycle.runId}`,
+      lifecycle.imageId,
+      'sleep',
+      'infinity',
+    ],
+    30_000,
+  );
+  if (occupied.status !== 0 || occupied.error !== undefined)
+    throw new Error('Placeholder startup failed');
+  await raw.json(
+    'POST',
+    `/networks/${networkId}/connect`,
+    { Container: containerId, EndpointConfig: { Aliases: [`u-${user}`] } },
+    AbortSignal.timeout(15_000),
+  );
+  const removed = lifecycle.command(['container', 'rm', '--force', placeholder], 15_000);
+  expect(removed.status).toBe(0);
+  expect(removed.error).toBeUndefined();
+  const document = inspect(lifecycle, containerId);
+  const networks = record(record(document.NetworkSettings).Networks);
+  const endpoint = record(networks[`dsh-team-net-${user}`]);
+  if (endpoint.IPAddress === instanceAddressLayout(subnet).container)
+    throw new Error('Survivor construction landed on the layout address');
+  expect(Object.keys(networks)).toEqual([`dsh-team-net-${user}`]);
+  expect(endpoint.NetworkID).toBe(networkId);
+  expect(endpoint.NetworkID).toBe(record(document.HostConfig).NetworkMode);
+  expect(endpoint.Aliases).toContain(`u-${user}`);
+  expect(endpoint.IPAMConfig).toBeNull();
+  expect(inInstanceRange(endpoint.IPAddress, subnet)).toBe(true);
+  expect(Object.keys(record(inspectNetwork(lifecycle, networkId).Containers)).sort()).toEqual(
+    [containerId, platformId].sort(),
+  );
+  return String(endpoint.IPAddress);
+}
+
+/** Reconciliation re-attached the recreated platform without requesting an address. */
+function expectSurvivorRestored(
+  lifecycle: UserImageLifecycle,
+  survivor: { user: string; id: string; address: string; cookie: string },
+  platformId: string,
+  authority: string,
+): number {
+  const document = inspect(lifecycle, survivor.id);
+  expect(document.Id).toBe(survivor.id);
+  expect(record(document.State).Running).toBe(true);
+  const endpoint = ownedAttachment(lifecycle, survivor.id, survivor.user);
+  expect(endpoint.IPAddress).toBe(survivor.address);
+  const networkId = String(endpoint.NetworkID);
+  const subnet = bridgeSubnet(lifecycle, networkId);
+  const bridge = inspectNetwork(lifecycle, networkId);
+  expect(Object.keys(record(bridge.Containers)).sort()).toEqual([survivor.id, platformId].sort());
+  const attachment = ownedAttachment(lifecycle, platformId, survivor.user);
+  expect(attachment.NetworkID).toBe(networkId);
+  // The only Docker-observable evidence that connect carried no `EndpointConfig.IPAMConfig`.
+  expect(attachment.IPAMConfig).toBeNull();
+  expect(inInstanceRange(attachment.IPAddress, subnet)).toBe(true);
+  expect(attachment.IPAddress).not.toBe(survivor.address);
+  expect(record(record(bridge.Containers)[platformId]).IPv4Address).toBe(
+    `${String(attachment.IPAddress)}/28`,
+  );
+  expect(platformHttpStatus(lifecycle, platformId, survivor.address, authority)).toBe(401);
+  return platformHttpStatus(lifecycle, platformId, survivor.address, authority, survivor.cookie);
+}
+
+function expectRetired(
+  lifecycle: UserImageLifecycle,
+  user: string,
+  containerId: string,
+  networkId: string,
+): void {
+  for (const [kind, id] of [
+    ['container', containerId],
+    ['network', networkId],
+  ] as const)
+    expect(isAbsentResource(lifecycle.command([kind, 'inspect', id], 15_000), kind, id)).toBe(true);
+  for (const kind of ['home', 'work'])
+    expect(
+      lifecycle.command(['volume', 'inspect', `dsh-team-${kind}-${user}`], 15_000).status,
+    ).toBe(0);
+}
+
+/** Admin stop through the reconstructed owner, then a fresh start lands on the layout. */
+async function stopThenRestartAtLayout(
+  lifecycle: UserImageLifecycle,
+  owner: ReturnType<typeof createOrchestrator>,
+  database: DatabaseHandle,
+  survivor: { user: string; id: string },
+  platformId: string,
+  authority: string,
+): Promise<boolean> {
+  const survivorNetwork = String(ownedAttachment(lifecycle, survivor.id, survivor.user).NetworkID);
+  await owner.stopUserContainer({ userId: survivor.user, reason: 'admin' });
+  expectRetired(lifecycle, survivor.user, survivor.id, survivorNetwork);
+  expect(
+    database.prepare('SELECT event_type, target, details FROM audit_events ORDER BY id').all(),
+  ).toEqual([
+    { event_type: 'instance.created', target: survivor.user, details: '{}' },
+    { event_type: 'instance.started', target: survivor.user, details: '{}' },
+    { event_type: 'instance.ready', target: survivor.user, details: '{}' },
+    { event_type: 'instance.stopped', target: survivor.user, details: '{"reason":"admin"}' },
+  ]);
+  const restarted = await startDockerInstance(owner, lifecycle, survivor.user, authority);
+  expect(restarted.containerId).not.toBe(survivor.id);
+  const endpoint = ownedAttachment(lifecycle, restarted.containerId, survivor.user);
+  const networkId = String(endpoint.NetworkID);
+  const { container } = instanceAddressLayout(bridgeSubnet(lifecycle, networkId));
+  expect(endpoint.IPAddress).toBe(container);
+  expect(record(endpoint.IPAMConfig).IPv4Address).toBe(container);
+  expectPlatformAtLayout(lifecycle, platformId, survivor.user, networkId);
+  const marker = survivorMarker(
+    lifecycle,
+    restarted.containerId,
+    "from pathlib import Path; print(Path('/data/work/survivor-marker').read_text())",
+  );
+  expect(marker).toBe(SURVIVOR_MARKER);
+  await owner.stopUserContainer({ userId: survivor.user, reason: 'admin' });
+  expectRetired(lifecycle, survivor.user, restarted.containerId, networkId);
+  return marker === SURVIVOR_MARKER;
+}
+
+async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> {
+  const user = lifecycle.runId.replaceAll('-', '').slice(0, 12);
+  const platformName = `dsh-team-test-survivor-${lifecycle.runId}`;
+  const originalPlatform = String(createStandInPlatform(lifecycle, platformName).Id);
+  const config = { upstreamMode: 'network' as const, platformContainerName: platformName };
+  const database = openDatabase(join(dirname(lifecycle.overlayDirectory), 'survivor-platform.db'));
+  const { raw, client } = startupClient(lifecycle);
+  const owner = createOrchestrator({ client, database, config });
+  const authority = 'survivor.example:8443';
+  const input = {
+    userId: user,
+    config: {
+      userImage: lifecycle.imageId,
+      seccompProfilePath: lifecycle.seccomp,
+      managedConfigDir: lifecycle.overlayDirectory,
+      authority,
+      subnetPool: '172.30.0.0/16',
+    },
+    modelSettings: START_MODEL,
+    modelKey: 'docker-acceptance-only-not-a-model-credential',
+  };
+  try {
+    applyMigrations(database);
+    // (1) Every resource a failed run may leave is registered before production creates it.
+    registerStartupUsers(lifecycle, database, [user], 'survivor.example');
+    lifecycle.registerResource('network', `dsh-team-net-${user}`, { 'dsh-team.user': user });
+    const started = await startDockerInstance(owner, lifecycle, user, authority);
+    const ready = record(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(user));
+    if (typeof ready.dsh_cookie !== 'string') throw new Error('Missing ready cookie');
+    const cookie = ready.dsh_cookie;
+    survivorMarker(
+      lifecycle,
+      started.containerId,
+      `from pathlib import Path; Path('/data/work/survivor-marker').write_text('${SURVIVOR_MARKER}')`,
+    );
+    // (2) Stage-1 shape: undeclared endpoint off +2, row pointing at it.
+    const address = await constructSurvivor(
+      lifecycle,
+      raw,
+      user,
+      started.containerId,
+      originalPlatform,
+    );
+    database.prepare('UPDATE instances SET upstream_host = ? WHERE user_id = ?').run(address, user);
+    expect(platformHttpStatus(lifecycle, originalPlatform, address, authority, cookie)).toBe(200);
+    // (3) Platform recreation, then a fresh owner reconciles twice.
+    const before = await startupEvidence(database, input);
+    expect(before.row).toMatchObject({
+      status: 'running',
+      container_id: started.containerId,
+      upstream_host: address,
+      dsh_cookie: cookie,
+    });
+    expect(before.audit.map((event) => record(event).event_type)).toEqual([
+      'instance.created',
+      'instance.started',
+      'instance.ready',
+    ]);
+    expect(lifecycle.command(['container', 'rm', '--force', originalPlatform], 15_000).status).toBe(
+      0,
+    );
+    const platformId = String(createStandInPlatform(lifecycle, platformName).Id);
+    expect(platformId).not.toBe(originalPlatform);
+    const reconstructed = createOrchestrator({ client, database, config });
+    await reconstructed.reconcile();
+    await reconstructed.reconcile();
+    expect(await startupEvidence(database, input)).toEqual(before);
+    const survivor = { user, id: started.containerId, address, cookie };
+    const authenticated = expectSurvivorRestored(lifecycle, survivor, platformId, authority);
+    expect(authenticated).toBe(200);
+    // (4) and (5) The original owner is pinned to the removed platform; only the reconstructed one works.
+    const markerRetained = await stopThenRestartAtLayout(
+      lifecycle,
+      reconstructed,
+      database,
+      survivor,
+      platformId,
+      authority,
+    );
+    return JSON.stringify({
+      survivorAddressOffLayout: true,
+      reattachedUndeclared: true,
+      authenticatedAfterRecreation: authenticated,
+      auditsUnchanged: true,
+      restartedAtLayout: true,
+      markerRetained,
+    });
+  } finally {
+    database.close();
+  }
+}
+
+it('reconciles a stage-1 survivor off the layout address after platform recreation without requesting an address, then restarts it at the layout', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64')
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  const result = await runUserImage(
+    'container-start',
+    (summary) => {
+      expect(JSON.parse(summary)).toEqual({
+        survivorAddressOffLayout: true,
+        reattachedUndeclared: true,
+        authenticatedAfterRecreation: 200,
+        auditsUnchanged: true,
+        restartedAtLayout: true,
+        markerRetained: true,
+      });
+    },
+    undefined,
+    survivorScenario,
+  );
+  process.stdout.write(
+    `Docker survivor reconciliation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
   );
 });
