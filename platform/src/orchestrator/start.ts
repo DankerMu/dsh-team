@@ -280,7 +280,6 @@ interface StartedIdentity {
 
 async function launchInstance(
   input: StartUserContainerInput,
-  client: DockerClient,
   cleanup: DockerClient,
   id: string,
   image: string,
@@ -288,16 +287,18 @@ async function launchInstance(
   instance: Record<string, unknown>,
   inspecting: () => void,
 ): Promise<{ document: unknown; confirmed: StartedIdentity | undefined }> {
-  const networkMode = input.transport.config.upstreamMode === 'network';
-  const wire = networkMode ? cleanup : client;
-  await wire.json('POST', `/containers/${id}/start`);
+  await cleanup.json('POST', `/containers/${id}/start`);
   inspecting();
-  const document = await wire.json('GET', `/containers/${id}/json`);
-  const confirmed =
-    networkMode &&
-    inspectUserContainerState(document, id, `dsh-team-u-${input.userId}`, input.userId, image)
-      ? { id, image, account, instance }
-      : undefined;
+  const document = await cleanup.json('GET', `/containers/${id}/json`);
+  const confirmed = inspectUserContainerState(
+    document,
+    id,
+    `dsh-team-u-${input.userId}`,
+    input.userId,
+    image,
+  )
+    ? { id, image, account, instance }
+    : undefined;
   return { document, confirmed };
 }
 
@@ -400,9 +401,7 @@ async function createInstance(
         EndpointsConfig: {
           [network.id]: {
             Aliases: [`u-${userId}`],
-            ...(input.transport.config.upstreamMode === 'network'
-              ? { IPAMConfig: { IPv4Address: instanceAddressLayout(network.subnet).container } }
-              : {}),
+            IPAMConfig: { IPv4Address: instanceAddressLayout(network.subnet).container },
           },
         },
       },
@@ -606,7 +605,6 @@ export async function startUserContainer(
     stage = 'container start';
     const launched = await launchInstance(
       input,
-      client,
       cleanupClient,
       id,
       image,

@@ -76,8 +76,9 @@ export async function accountStatusFixture(
         Image: START_IMAGE,
         Config: { Labels: { 'dsh-team.user': id } },
         State: { Running: true },
-        NetworkSettings: { Ports: {} },
+        NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
       });
+      f.daemon.attachOwnedNetwork(id, containerId);
     },
     restart(id = START_USER, payload = '{}', cookie = admin.cookie) {
       return app.inject({

@@ -23,6 +23,7 @@ import {
   START_CONTAINER,
   START_HELPER,
   START_MODEL,
+  START_NETWORK,
   START_USER,
 } from './container-start-fixture.ts';
 
@@ -112,6 +113,42 @@ function audits() {
   return database
     .prepare('SELECT event_type, target, target_email, details FROM audit_events ORDER BY id')
     .all();
+}
+
+/** A confirmed-started loopback failure retires container and bridge, never the two volumes. */
+function expectStartedCompensated(error: unknown): void {
+  expect(String(error)).toMatch(/started container and owned network removed$/);
+  expect(rows()).toMatchObject([
+    {
+      container_id: START_CONTAINER,
+      status: 'error',
+      last_error: 'Platform attachment/startup failed; started container and owned network removed',
+      upstream_host: null,
+      upstream_port: null,
+    },
+  ]);
+  expect(audits().map((row) => (row as { event_type: string }).event_type)).toEqual([
+    'instance.created',
+    'instance.start-failed',
+  ]);
+  const started = daemon.requests.findIndex(
+    ({ method, path }) => method === 'POST' && path === `/containers/${START_CONTAINER}/start`,
+  );
+  expect(
+    daemon.requests
+      .slice(started + 1)
+      .filter(({ method }) => method !== 'GET')
+      .map(({ method, path }) => `${method} ${path}`),
+  ).toEqual([
+    `POST /containers/${START_CONTAINER}/stop?t=1`,
+    `DELETE /containers/${START_CONTAINER}`,
+    `DELETE /networks/${START_NETWORK}`,
+  ]);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(
+    daemon.requests.some(({ method, path }) => method === 'DELETE' && path.startsWith('/volumes/')),
+  ).toBe(false);
 }
 
 it('persisted limit1 over Unix Docker transport denies a second actual user without changing the admitted instance', async () => {
@@ -494,26 +531,10 @@ it.each(['instance.created', 'instance.started'])(
       expect(rows()).toEqual([]);
       expect(audits()).toEqual([]);
       expect(daemon.containers.get(START_CONTAINER)?.State.Running).toBe(false);
+      expect(daemon.containers.has(START_CONTAINER)).toBe(true);
     } else {
-      expect(rows()).toMatchObject([
-        {
-          container_id: START_CONTAINER,
-          status: 'starting',
-          upstream_host: null,
-          upstream_port: null,
-          last_started_at: null,
-        },
-      ]);
-      expect(audits()).toEqual([
-        {
-          event_type: 'instance.created',
-          target: START_USER,
-          target_email: 'employee@example.test',
-          details: '{}',
-        },
-      ]);
+      expectStartedCompensated(error);
     }
-    expect(daemon.containers.has(START_CONTAINER)).toBe(true);
     expect(
       daemon.requests.some(
         (request) => request.method === 'DELETE' && request.path.startsWith('/volumes'),
@@ -522,7 +543,7 @@ it.each(['instance.created', 'instance.started'])(
   },
 );
 
-it.each(['start failure', 'foreign owner', 'wrong identity', 'not running', 'wildcard endpoint'])(
+it.each(['start failure', 'foreign owner', 'wrong identity', 'not running'])(
   'preserves created identity but no usable endpoint or started audit after %s',
   async (failure) => {
     if (failure === 'start failure')
@@ -536,10 +557,6 @@ it.each(['start failure', 'foreign owner', 'wrong identity', 'not running', 'wil
         container.Config.Labels = { 'dsh-team.user': 'mnopqrstuvwx' };
       if (failure === 'wrong identity') container.Id = 'd'.repeat(64);
       if (failure === 'not running') container.State.Running = false;
-      if (failure === 'wildcard endpoint')
-        container.NetworkSettings.Ports = {
-          '3080/tcp': [{ HostIp: '0.0.0.0', HostPort: '49173' }],
-        };
     });
 
     await expect(startUserContainer(input)).rejects.toThrow(
@@ -566,6 +583,36 @@ it.each(['start failure', 'foreign owner', 'wrong identity', 'not running', 'wil
     ]);
   },
 );
+
+it('compensates a confirmed-started loopback container whose wildcard endpoint is rejected', async () => {
+  daemon.beforeRequest((request) => {
+    const container = daemon.containers.get(START_CONTAINER);
+    if (request.path === `/containers/${START_CONTAINER}/json` && container?.State.Running)
+      container.NetworkSettings.Ports = { '3080/tcp': [{ HostIp: '0.0.0.0', HostPort: '49173' }] };
+  });
+
+  const error: unknown = await startUserContainer(input).catch((failure: unknown) => failure);
+
+  expect(String(error)).toContain('started container inspection');
+  expectStartedCompensated(error);
+});
+
+it('settles a loopback start accepted before caller cancellation and compensates it', async () => {
+  createBarrier = {
+    reached: Promise.withResolvers<undefined>(),
+    release: Promise.withResolvers<undefined>(),
+    path: `/containers/${START_CONTAINER}/start`,
+  };
+  const controller = new AbortController();
+  const first = startUserContainer({ ...input, signal: controller.signal }).catch(
+    (failure: unknown) => failure,
+  );
+  await createBarrier.reached.promise;
+  controller.abort();
+  createBarrier.release.resolve(undefined);
+
+  expectStartedCompensated(await first);
+});
 
 it('cancels a pending composition wait and still removes only its helper with a fresh cleanup deadline', async () => {
   const controller = new AbortController();

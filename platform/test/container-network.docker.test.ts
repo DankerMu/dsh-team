@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
-import { createOrchestrator } from '../src/orchestrator/index.ts';
+import { createOrchestrator, instanceAddressLayout } from '../src/orchestrator/index.ts';
 import { isAbsentResource } from './docker-command.ts';
 import {
   cookieHttpStatus,
@@ -48,6 +48,10 @@ function network(lifecycle: UserImageLifecycle, user: string, id: string) {
   if (!Array.isArray(ipam) || ipam.length !== 1) throw new Error('Expected one IPv4 subnet');
   const subnet = record(ipam[0]).Subnet;
   expect(subnet).toEqual(expect.stringMatching(/\/28$/));
+  const layout = instanceAddressLayout(String(subnet)).container;
+  expect(endpoint.IPAddress).toBe(layout);
+  expect(record(endpoint.IPAMConfig).IPv4Address).toBe(layout);
+  expect(record(record(inspected.Containers)[id]).IPv4Address).toBe(`${layout}/28`);
   expect(record(container.Config).User).toBe('1001');
   expect(endpoint.Aliases).toEqual(expect.arrayContaining([`u-${user}`]));
   return {
@@ -79,7 +83,14 @@ async function isolation(lifecycle: UserImageLifecycle): Promise<string> {
       expect(row.status).toBe('running');
       if (typeof row.dsh_cookie !== 'string') throw new Error('Ready instance missing cookie');
       expect(await cookieHttpStatus(result.upstreamPort, authority, row.dsh_cookie)).toBe(200);
-      return { result, row, network: network(lifecycle, userId, result.containerId) };
+      const owned = network(lifecycle, userId, result.containerId);
+      const host = record(owned.container.HostConfig);
+      expect(host.PublishAllPorts).not.toBe(true);
+      expect(host.PortBindings).toEqual({ '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '' }] });
+      expect(record(owned.container.NetworkSettings).Ports).toEqual({
+        '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(result.upstreamPort) }],
+      });
+      return { result, row, network: owned };
     };
     const a = await start(userA);
     const b = await start(userB);
@@ -143,6 +154,8 @@ async function isolation(lifecycle: UserImageLifecycle): Promise<string> {
       ports: [3080, 3099],
       isolatedBothWays: true,
       siblingPreserved: true,
+      atLayout: true,
+      loopbackOnly: true,
     });
   } finally {
     database.close();
@@ -156,6 +169,8 @@ it('production-ready instances isolate both listening ports by address and hostn
       ports: [3080, 3099],
       isolatedBothWays: true,
       siblingPreserved: true,
+      atLayout: true,
+      loopbackOnly: true,
     });
   });
 });
