@@ -144,6 +144,7 @@ export async function captureUserNetwork(
   transport: TransportContext,
   container: string | undefined,
   expected: string | undefined,
+  declaration: 'checked' | 'ignored' = 'checked',
 ): Promise<OwnedNetwork | undefined> {
   const document = await inspect(client, nameFor(userId));
   if (document === undefined) {
@@ -154,7 +155,8 @@ export async function captureUserNetwork(
   const network = inspectedNetwork(document, userId, expected);
   const platform = await verifiedPlatform(client, transport, false);
   ownedEndpoints(document, userId, container, platform);
-  if (platform !== undefined) platformMembership(platform, document, userId, network.subnet, false);
+  if (platform !== undefined)
+    platformMembership(platform, document, userId, network.subnet, false, declaration);
   return network;
 }
 
@@ -176,7 +178,7 @@ export async function validateUserNetwork(
   const platform = await verifiedPlatform(client, transport, requirePlatform);
   ownedEndpoints(network, userId, container, platform);
   if (platform !== undefined)
-    platformMembership(platform, network, userId, owned.subnet, requirePlatform);
+    platformMembership(platform, network, userId, owned.subnet, requirePlatform, declaration);
   const endpoints = object(object(network).Containers);
   if (!(container in endpoints)) {
     // A stopped or not-yet-started container can retain its declaration without a live endpoint.
@@ -303,7 +305,7 @@ async function disconnectPlatform(
     throw new Error('Platform disconnection outcome unconfirmed');
   if (inspectedNetwork(settled, userId, network.id).subnet !== network.subnet)
     throw new Error('Captured network subnet changed');
-  if (platformMembership(confirmed, settled, userId, network.subnet, false)) {
+  if (platformMembership(confirmed, settled, userId, network.subnet, false, 'ignored')) {
     if (failure instanceof Error) throw failure;
     throw new Error('Platform endpoint remains');
   }
@@ -356,7 +358,7 @@ export async function removeUserNetwork(
   const attached =
     platform === undefined
       ? false
-      : platformMembership(platform, found, userId, network.subnet, false);
+      : platformMembership(platform, found, userId, network.subnet, false, 'ignored');
   current();
   if (stoppedContainer !== undefined && stoppedContainer in object(object(found).Containers)) {
     await client.json('POST', `/networks/${network.id}/disconnect`, {
@@ -393,6 +395,21 @@ export async function inspectPlatformAttachment(
   return platformMembership(platform, network, userId, captured.subnet, false);
 }
 
+/** Only an instance actually at its layout container address asks for the layout platform address. */
+function connectRequest(
+  network: unknown,
+  container: string,
+  platform: string,
+  subnet: string,
+): Record<string, unknown> {
+  const endpoint = object(object(network).Containers)[container];
+  if (endpoint === undefined) throw new Error('Owned network endpoint missing');
+  const layout = instanceAddressLayout(subnet);
+  // A stage-1 survivor elsewhere keeps the undeclared stage-1 attachment.
+  if (object(endpoint).IPv4Address !== `${layout.container}/28`) return { Container: platform };
+  return { Container: platform, EndpointConfig: { IPAMConfig: { IPv4Address: layout.platform } } };
+}
+
 /** The caller supplies its independent bounded settlement client, never its cancellation signal. */
 export async function attachPlatform(
   raw: DockerClient,
@@ -416,11 +433,12 @@ export async function attachPlatform(
   ownedEndpoints(before, userId, container, platform);
   let definitiveReply = false;
   if (!platformMembership(platform, before, userId, network.subnet, false)) {
+    const request = connectRequest(before, container, platform.id, network.subnet);
     await verify?.();
     current();
     // Do not drop submitted mutation ownership on abort or on a lost response.
     try {
-      await client.json('POST', `/networks/${network.id}/connect`, { Container: platform.id });
+      await client.json('POST', `/networks/${network.id}/connect`, request);
       definitiveReply = true;
     } catch (error) {
       // A transport/parsing/deadline failure cannot establish a definitive mutation result.

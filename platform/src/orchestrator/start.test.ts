@@ -619,7 +619,7 @@ it('compensates a started container whose actual address differs from its declar
   const context = await fixture();
   const { daemon, input } = context;
   const owner = networkOwner(context);
-  daemon.startAddresses.set(START_CONTAINER, '172.30.0.5');
+  daemon.actualAddresses.set(START_CONTAINER, '172.30.0.5');
 
   await expect(owner.startUserContainer(input)).rejects.toThrow(
     'started container and owned network removed',

@@ -158,6 +158,7 @@ async function compensateStarted(
       input.transport,
       id,
       captured.id,
+      'ignored',
     );
     if (network?.id !== captured.id || network.subnet !== captured.subnet)
       throw new Error('Captured network changed before compensation');

@@ -62,7 +62,9 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
       if (!Array.isArray(configs) || configs.length !== 1)
         throw new Error('Unexpected instance network IPAM');
       // Real Docker echoes the requested layout address, so the strict declared branch ran.
-      const { container: layoutAddress } = instanceAddressLayout(String(record(configs[0]).Subnet));
+      const { container: layoutAddress, platform: layoutPlatform } = instanceAddressLayout(
+        String(record(configs[0]).Subnet),
+      );
       expect(record(endpoint.IPAMConfig).IPv4Address).toBe(layoutAddress);
       expect(endpoint.IPAddress).toBe(layoutAddress);
       expect(started.upstreamHost).toBe(layoutAddress);
@@ -73,13 +75,17 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
         IPv4Address: `${started.upstreamHost}/28`,
         EndpointID: endpoint.EndpointID,
       });
-      expect(
-        record(
-          record(record(inspect(lifecycle, platformId).NetworkSettings).Networks)[
-            `dsh-team-net-${userId}`
-          ],
-        ).NetworkID,
-      ).toBe(networkId);
+      expect(record(record(network.Containers)[platformId]).IPv4Address).toBe(
+        `${layoutPlatform}/28`,
+      );
+      const attachment = record(
+        record(record(inspect(lifecycle, platformId).NetworkSettings).Networks)[
+          `dsh-team-net-${userId}`
+        ],
+      );
+      expect(attachment.NetworkID).toBe(networkId);
+      expect(attachment.IPAddress).toBe(layoutPlatform);
+      expect(record(attachment.IPAMConfig).IPv4Address).toBe(layoutPlatform);
       expect(platformHttpStatus(lifecycle, platformId, started.upstreamHost, authority)).toBe(401);
       return { started, networkId };
     };
