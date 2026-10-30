@@ -28,6 +28,8 @@ interface CaseResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly calls: readonly (readonly string[])[];
+  /** Each accepted bounded Docker invocation as `[seconds, ...dockerArgv]`, in order. */
+  readonly bounded: readonly (readonly string[])[];
   readonly timeoutViolations: string;
   readonly cleanupFailed: string | undefined;
   readonly waitStatus: string | undefined;
@@ -55,18 +57,22 @@ function dockerStub(replies: readonly DockerReply[]): string {
   ].join('\n');
 }
 
-// Accepts only the two bounded forms the probes use, then runs the bounded command unchanged.
+// Accepts only the two bounded forms the probes use, records each accepted call as
+// `<seconds> <docker argv>`, then runs the bounded command unchanged.
 const TIMEOUT_STUB = [
   '#!/bin/bash',
   'if [ "$1" = --foreground ] && [ "$2" = "$EXPECT_WAIT_SECONDS" ] && [ "$3" = docker ] && [ "$4" = wait ]; then',
+  `  { printf '%s\\037' "$2" "\${@:4}"; printf '\\n'; } >>"$STUB_TIMEOUT_LOG"`,
   '  shift 2',
   '  exec "$@"',
   'fi',
-  'if [ "$1" = --foreground ] && [ "$2" = --kill-after=5 ] && [ "$3" = "$EXPECT_DOCKER_SECONDS" ]; then',
+  'if [ "$1" = --foreground ] && [ "$2" = --kill-after=5 ] && [ "$3" = "$EXPECT_DOCKER_SECONDS" ] &&',
+  '  [ "${4-}" = docker ] && [ "${5-}" != wait ]; then',
+  `  { printf '%s\\037' "$3" "\${@:5}"; printf '\\n'; } >>"$STUB_TIMEOUT_LOG"`,
   '  shift 3',
   '  exec "$@"',
   'fi',
-  `printf '%s\\n' "$*" >>"$STUB_TIMEOUT_LOG"`,
+  `printf '%s\\n' "$*" >>"$STUB_TIMEOUT_VIOLATIONS"`,
   'exit 98',
   '',
 ].join('\n');
@@ -111,6 +117,17 @@ function readIfPresent(path: string): string {
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
 }
 
+function readArgvLog(path: string): string[][] {
+  return readIfPresent(path)
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => line.split(SEPARATOR).slice(0, -1));
+}
+
+function boundBy(seconds: string, calls: readonly (readonly string[])[]): string[][] {
+  return calls.map((argv) => [seconds, ...argv]);
+}
+
 function runCase(
   script: string,
   dockerSeconds: string,
@@ -120,6 +137,7 @@ function runCase(
   try {
     const dockerLog = join(directory, 'docker.log');
     const timeoutLog = join(directory, 'timeout.log');
+    const timeoutViolations = join(directory, 'timeout-violations.log');
     // Controlled external executables on PATH, not mocks of the probe functions under test.
     writeFileSync(join(directory, 'docker'), dockerStub(replies), { mode: 0o700 });
     writeFileSync(join(directory, 'timeout'), TIMEOUT_STUB, { mode: 0o700 });
@@ -130,6 +148,7 @@ function runCase(
         TMPDIR: directory,
         STUB_DOCKER_LOG: dockerLog,
         STUB_TIMEOUT_LOG: timeoutLog,
+        STUB_TIMEOUT_VIOLATIONS: timeoutViolations,
         EXPECT_WAIT_SECONDS: WAIT_SECONDS,
         EXPECT_DOCKER_SECONDS: dockerSeconds,
       },
@@ -139,10 +158,6 @@ function runCase(
       timeout: SPAWN_TIMEOUT_MS,
       killSignal: 'SIGKILL',
     });
-    const calls = readIfPresent(dockerLog)
-      .split('\n')
-      .filter((line) => line !== '')
-      .map((line) => line.split(SEPARATOR).slice(0, -1));
     const field = (name: string) =>
       result.stdout
         .split('\n')
@@ -152,8 +167,9 @@ function runCase(
       status: result.status,
       stdout: result.stdout,
       stderr: result.stderr,
-      calls,
-      timeoutViolations: readIfPresent(timeoutLog),
+      calls: readArgvLog(dockerLog),
+      bounded: readArgvLog(timeoutLog),
+      timeoutViolations: readIfPresent(timeoutViolations),
       cleanupFailed: field('cleanup_failed'),
       waitStatus: field('wait_status'),
     };
@@ -211,6 +227,7 @@ describe('lifecycle probe_remove_owned', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([RM_X, INSPECT_X]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('probe-test: cleanup failed: docker rm -f x');
+    expect(result.bounded).toEqual(boundBy('5', [RM_X, INSPECT_X]));
     expect(result.timeoutViolations).toBe('');
   });
 });
@@ -234,6 +251,7 @@ describe('lifecycle probe_remove_owned absence proof', { timeout: CASE_TIMEOUT_M
       expect(result.calls).toEqual([RM_X, INSPECT_X]);
       expect(result.status).toBe(0);
       expect(result.stderr).not.toContain('cleanup failed');
+      expect(result.bounded).toEqual(boundBy('5', [RM_X, INSPECT_X]));
       expect(result.timeoutViolations).toBe('');
     },
   );
@@ -257,6 +275,7 @@ describe('lifecycle probe_remove_owned absence proof', { timeout: CASE_TIMEOUT_M
     expect(result.cleanupFailed).toBe('1');
     expect(result.calls).toEqual([RM_X, INSPECT_X]);
     expect(result.stderr).toContain('probe-test: cleanup failed: docker rm -f x');
+    expect(result.bounded).toEqual(boundBy('5', [RM_X, INSPECT_X]));
     expect(result.timeoutViolations).toBe('');
   });
 
@@ -272,6 +291,7 @@ describe('lifecycle probe_remove_owned absence proof', { timeout: CASE_TIMEOUT_M
     expect(result.cleanupFailed).toBe('0');
     expect(result.calls).toEqual([RM_X]);
     expect(result.status).toBe(0);
+    expect(result.bounded).toEqual(boundBy('5', [RM_X]));
     expect(result.timeoutViolations).toBe('');
   });
 
@@ -291,6 +311,7 @@ describe('lifecycle probe_remove_owned absence proof', { timeout: CASE_TIMEOUT_M
     expect(result.calls).toEqual([RM_X, INSPECT_X]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('probe-test: cleanup failed: docker rm -f x');
+    expect(result.bounded).toEqual(boundBy('5', [RM_X, INSPECT_X]));
     expect(result.timeoutViolations).toBe('');
   });
 
@@ -311,6 +332,7 @@ describe('lifecycle probe_remove_owned absence proof', { timeout: CASE_TIMEOUT_M
     expect(result.cleanupFailed).toBe('0');
     expect(result.calls).toEqual([rmi, inspect]);
     expect(result.status).toBe(0);
+    expect(result.bounded).toEqual(boundBy('5', [rmi, inspect]));
     expect(result.timeoutViolations).toBe('');
   });
 });
@@ -339,6 +361,7 @@ describe('lifecycle probe_scrub_binds', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([run, imageInspect, ['rm', '-f', 'h']]);
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain('cleanup failed');
+    expect(result.bounded).toEqual(boundBy('5', [run, imageInspect, ['rm', '-f', 'h']]));
     expect(result.timeoutViolations).toBe('');
   });
 
@@ -361,6 +384,7 @@ describe('lifecycle probe_scrub_binds', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([run, imageInspect, ['rm', '-f', 'h']]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('probe-test: cleanup failed: scrub bind dirs');
+    expect(result.bounded).toEqual(boundBy('5', [run, imageInspect, ['rm', '-f', 'h']]));
     expect(result.timeoutViolations).toBe('');
   });
 
@@ -387,6 +411,7 @@ describe('lifecycle probe_scrub_binds', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([run, ['rm', '-f', 'h'], inspectHelper]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('probe-test: cleanup failed: docker rm -f h');
+    expect(result.bounded).toEqual(boundBy('5', [run, ['rm', '-f', 'h'], inspectHelper]));
     expect(result.timeoutViolations).toBe('');
   });
 });
@@ -404,6 +429,7 @@ describe('sandbox remove_owned', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([RM_X, INSPECT_X]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('probe-sandbox: cleanup failed: docker rm -f x: ');
+    expect(result.bounded).toEqual(boundBy('30', [INSPECT_X]));
     expect(result.timeoutViolations).toBe('');
     expect(sandboxVariableBlock()).toMatch(/^docker_seconds=30$/m);
   });
@@ -428,6 +454,7 @@ describe('sandbox remove_owned absence proof', { timeout: CASE_TIMEOUT_MS }, () 
       expect(result.calls).toEqual([RM_X, INSPECT_X]);
       expect(result.status).toBe(0);
       expect(result.stderr).not.toContain('cleanup failed');
+      expect(result.bounded).toEqual(boundBy('30', [INSPECT_X]));
       expect(result.timeoutViolations).toBe('');
       expect(sandboxVariableBlock()).toMatch(/^docker_seconds=30$/m);
     },
@@ -456,6 +483,10 @@ describe('sandbox wait_for_container', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([['wait', 'c'], ['kill', 'c'], inspectId, inspectRunning]);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('probe-sandbox: cleanup failed: docker kill c');
+    expect(result.bounded).toEqual([
+      ['7', 'wait', 'c'],
+      ...boundBy('30', [inspectId, inspectRunning]),
+    ]);
     expect(result.timeoutViolations).toBe('');
     expect(sandboxVariableBlock()).toMatch(/^docker_seconds=30$/m);
   });
@@ -481,6 +512,10 @@ describe('sandbox wait_for_container', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.calls).toEqual([['wait', 'c'], ['kill', 'c'], inspectId, inspectRunning]);
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain('cleanup failed');
+    expect(result.bounded).toEqual([
+      ['7', 'wait', 'c'],
+      ...boundBy('30', [inspectId, inspectRunning]),
+    ]);
     expect(result.timeoutViolations).toBe('');
   });
 });
