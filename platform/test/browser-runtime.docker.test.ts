@@ -11,6 +11,7 @@ import { expect, it } from 'vitest';
 import { connectPage, observeNetwork, startChrome } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { navigateReady } from '../../scripts/probe-mapped-host.mjs';
 import { record } from './container-start-docker-fixture.ts';
+import { expectRetiredBrowserExec, settleBrowserExec } from './browser-exec-outcome.ts';
 import {
   browserPressureClient,
   execBrowser,
@@ -442,7 +443,7 @@ it('adopts only an explicitly pending identity and settles active application an
       execution,
       `const s=require('node:net').connect({host:'127.0.0.1',port:${new URL(origin).port}});s.on('error',()=>{});`,
     );
-    void client.catch(() => undefined);
+    const settlement = settleBrowserExec(client);
     const [socket] = (await accepted) as [Socket];
     const finished = once(socket, 'end');
     const original: unknown = JSON.parse(await readFile(receiptFile, 'utf8'));
@@ -457,7 +458,7 @@ it('adopts only an explicitly pending identity and settles active application an
     );
     await rescueChrome(receiptFile);
     await finished;
-    await client.catch(() => undefined);
+    expectRetiredBrowserExec(await settlement, { gracefulEmptyExit: true });
     const retired = record(JSON.parse(await readFile(receiptFile, 'utf8')));
     expect(retired.containerId).toBe(receipt.containerId);
     expect(retired.networkId).toBe(receipt.networkId);
@@ -494,9 +495,12 @@ it('adopts only an explicitly pending identity and settles active application an
         '--no-trunc',
       ]),
     ).toBe('');
-    await expect(
-      execBrowser(execution, 'process.stdout.write("unexpected-live-browser")'),
-    ).rejects.toThrow();
+    expectRetiredBrowserExec(
+      await settleBrowserExec(
+        execBrowser(execution, 'process.stdout.write("unexpected-live-browser")'),
+      ),
+      { gracefulEmptyExit: false },
+    );
     await browser.chrome.stop();
   });
 });
