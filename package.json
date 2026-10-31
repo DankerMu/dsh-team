@@ -37,6 +37,7 @@
     "test:docker": "node scripts/verify-browser-runtime.mjs docker",
     "verify:docker": "node scripts/trusted-docker-run.mjs",
     "test:deploy": "vitest run --project docker platform/test/deployment.docker.test.ts",
+    "test:stack": "node scripts/test-stack.mjs",
     "test:model": "node scripts/verify-browser-runtime.mjs model",
     "ci:model:invoke": "node scripts/ci-vps-invoke.mjs",
     "ci:model": "node scripts/ci-vps-run.mjs",

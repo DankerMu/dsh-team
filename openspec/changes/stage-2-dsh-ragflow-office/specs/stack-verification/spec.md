@@ -39,12 +39,17 @@
 
 ### Requirement: 私有配置与凭据不外泄
 
-RAGFlow 地址、密钥和嵌入模型密钥 MUST 只从开发机上的私有配置文件读取，该文件 MUST 归当前用户所有且权限为 0600。凭据 MUST NOT 出现在命令参数、仓库文件、日志、测试报告、截图或证据评论中。
+RAGFlow 地址、密钥和嵌入模型密钥 MUST 只从开发机上的私有配置文件 `~/.config/dsh-team/stack.json` 读取，该文件 MUST 归当前用户所有且权限为 0600，内容 MUST 是只含 `ragflowUrl`、`ragflowApiKey`、`embeddingApiKey` 三个键的 JSON 对象。`ragflowUrl` MUST 指向字面 loopback 主机（`127.0.0.1` 或 `[::1]`）；其他主机的配置 MUST 被拒绝，这是「只写本机测试栈」的机械保证。凭据 MUST NOT 出现在命令参数、仓库文件、日志、测试报告、截图或证据评论中。
 
 #### Scenario: 权限不安全的配置被拒
 
 - **WHEN** 私有配置文件对组或其他用户可读
 - **THEN** 命令在读取内容之前失败，错误信息中没有文件内容
+
+#### Scenario: 非 loopback 地址被拒
+
+- **WHEN** 私有配置中的 `ragflowUrl` 指向 loopback 之外的主机
+- **THEN** 命令在任何网络请求和资源创建之前失败，错误信息中没有该地址
 
 #### Scenario: 报告中没有密钥
 
