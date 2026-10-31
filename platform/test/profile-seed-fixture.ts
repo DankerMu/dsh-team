@@ -1,6 +1,7 @@
 import { deepStrictEqual, ok, strictEqual } from 'node:assert';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { DSH_ENGINES_PRELUDE } from './dsh-engines.ts';
 
 const pluginDirectory = new URL('../../plugins/zh-locale/', import.meta.url);
 const pluginPrefix = 'web/node_modules/@dsh-team/zh-locale/';
@@ -23,38 +24,51 @@ interface Readback {
   readonly liveAfter: Record<string, Entry>;
   readonly metadata: readonly { path: string; uid: number; mode: number; parent: boolean }[];
   readonly denied: Record<string, number>;
-  readonly peerVersion: string;
+  readonly enginesDsh: string;
+  readonly installedDsh: string;
+  readonly enginesSatisfied: boolean;
   readonly rootConfig: string;
   readonly patch: string;
   readonly workspace: string;
 }
 
-/** Local canonical bytes, never expectations obtained from the image under test. */
-function canonicalPluginHashes(): Record<string, Entry> {
-  const manifest: unknown = JSON.parse(
-    readFileSync(new URL('package.json', pluginDirectory), 'utf8'),
-  );
-  ok(typeof manifest === 'object' && manifest !== null && 'peerDependencies' in manifest);
-  deepStrictEqual(manifest.peerDependencies, { '@deepseek-ai/dsh': '0.2.0-rc.2' });
-  return Object.fromEntries(
-    pluginFiles.map((file) => [
-      `${pluginPrefix}${file}`,
-      { kind: 'file', sha256: digest(readFileSync(new URL(file, pluginDirectory))) },
-    ]),
-  );
+interface CanonicalPlugin {
+  readonly hashes: Record<string, Entry>;
+  readonly enginesDsh: string;
 }
 
-function validateSeed(readback: Readback, pluginHashes: Record<string, Entry>): void {
+/** Local canonical bytes and range, never expectations obtained from the image under test. */
+function canonicalPlugin(): CanonicalPlugin {
+  // JSON is the repository manifest; the assertions below validate every consumed field.
+  const manifest = JSON.parse(readFileSync(new URL('package.json', pluginDirectory), 'utf8')) as {
+    engines?: { dsh?: unknown };
+    peerDependencies?: Record<string, unknown>;
+  };
+  const enginesDsh = manifest.engines?.dsh;
+  ok(typeof enginesDsh === 'string' && enginesDsh.trim() !== '', 'Plugin must declare engines.dsh');
+  strictEqual(manifest.peerDependencies?.['@deepseek-ai/dsh'], undefined, 'No exact DSH peer');
+  const hashes = Object.fromEntries(
+    pluginFiles.map((file) => [
+      `${pluginPrefix}${file}`,
+      { kind: 'file' as const, sha256: digest(readFileSync(new URL(file, pluginDirectory))) },
+    ]),
+  );
+  return { hashes, enginesDsh };
+}
+
+function validateSeed(readback: Readback, plugin: CanonicalPlugin): void {
   strictEqual(readback.effectiveUid, 1001, 'Profile probe must run as uid1001');
   const requiredFiles = ['package.json', 'cordis.yml', 'cordis.patch.yml', 'pnpm-workspace.yaml'];
   strictEqual(readback.seed.web?.kind, 'directory', 'Seed must contain a real Web profile');
   for (const file of requiredFiles) {
     strictEqual(readback.seed[`web/${file}`]?.kind, 'file', `Missing Web profile file: ${file}`);
   }
-  for (const [path, expected] of Object.entries(pluginHashes)) {
+  for (const [path, expected] of Object.entries(plugin.hashes)) {
     deepStrictEqual(readback.seed[path], expected, `Canonical plugin bytes differ: ${path}`);
   }
-  strictEqual(readback.peerVersion, '0.2.0-rc.2', 'Plugin must pin the installed DSH release');
+  strictEqual(readback.enginesDsh, plugin.enginesDsh, 'Seeded engines.dsh must be canonical');
+  strictEqual(readback.installedDsh, '0.2.1-rc.2', 'Image must carry the pinned DSH release');
+  strictEqual(readback.enginesSatisfied, true, 'Installed DSH must satisfy engines.dsh');
   const uncomment = (text: string) =>
     text
       .split('\n')
@@ -106,13 +120,13 @@ function validateSeed(readback: Readback, pluginHashes: Record<string, Entry>): 
 
 /** Stateful test callback: first-copy equality, immutable seed, then exact same-volume edits. */
 export function profileSeedOracle(): (stdout: string) => void {
-  const pluginHashes = canonicalPluginHashes();
+  const plugin = canonicalPlugin();
   let originalSeed: Record<string, Entry> | undefined;
   let editedLive: Record<string, Entry> | undefined;
   return (stdout) => {
     // JSON is an external Python process boundary. Assertions below validate every consumed field.
     const readback = JSON.parse(stdout) as Readback;
-    validateSeed(readback, pluginHashes);
+    validateSeed(readback, plugin);
     if (originalSeed === undefined) {
       strictEqual(readback.phase, 'fresh');
       deepStrictEqual(
@@ -162,6 +176,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 # Optional roots exercise this same observer against owned local malformed filesystem fixtures.
@@ -201,10 +216,15 @@ for path in [Path("/opt"), seed.parent, seed] + sorted(seed.rglob("*")):
     info = path.lstat()
     metadata.append({"path": str(path), "uid": info.st_uid,
                      "mode": stat.S_IMODE(info.st_mode), "parent": path in (Path("/opt"), seed.parent)})
+engines_dsh = json.loads((plugin / "package.json").read_text())["engines"]["dsh"]
+# DSH's own semver decides the range in the image, exactly as its loader does.
+engines = json.loads(subprocess.run(
+    ["node", "-e", ${JSON.stringify(`${DSH_ENGINES_PRELUDE}process.stdout.write(JSON.stringify({installed:dshInstalled,satisfied:dshEnginesSatisfied(process.argv[1])}));`)}, engines_dsh],
+    check=True, capture_output=True, text=True, timeout=10).stdout)
 readback = {
     "phase": phase, "effectiveUid": os.geteuid(), "seed": before, "live": live_before,
     "metadata": metadata, "denied": {},
-    "peerVersion": json.loads((plugin / "package.json").read_text())["peerDependencies"]["@deepseek-ai/dsh"],
+    "enginesDsh": engines_dsh, "installedDsh": engines["installed"], "enginesSatisfied": engines["satisfied"],
     "rootConfig": (web / "cordis.yml").read_text(),
     "patch": (web / "cordis.patch.yml").read_text(),
     "workspace": (web / "pnpm-workspace.yaml").read_text(),

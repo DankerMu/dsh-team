@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": { "checkJs": true },
-  "include": ["index.js", "docx-construction.js", "*.d.ts"]
+  "include": ["docx-construction.js", "*.d.ts"]
 }

@@ -51,7 +51,9 @@ function observations() {
     seed,
     seedAfter: seed,
     metadata,
-    peerVersion: '0.2.0-rc.2',
+    enginesDsh: '>=0.2.1-rc.2 <0.3.0',
+    installedDsh: '0.2.1-rc.2',
+    enginesSatisfied: true,
     rootConfig: '[]\n',
     patch: '[]\n',
     workspace: 'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n',
@@ -224,7 +226,9 @@ describe('profile seed observed-behavior oracle', () => {
 
   it.each([
     { effectiveUid: 0 },
-    { peerVersion: '^0.2.0-rc.2' },
+    { enginesDsh: '>=0.3.0', enginesSatisfied: false },
+    { enginesSatisfied: false },
+    { installedDsh: '0.2.0-rc.2' },
     { rootConfig: '- name: preactivated-plugin\n' },
     { patch: '- name: duplicate-locale\n' },
     { workspace: '' },

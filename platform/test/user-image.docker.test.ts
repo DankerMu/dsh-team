@@ -1,16 +1,21 @@
 import { arch, platform } from 'node:os';
 import { expect, it } from 'vitest';
-import { assertDocxReadback, runUserImage } from './user-image-fixture.ts';
+import {
+  assertDocxReadback,
+  buildUserImageExpectingFailure,
+  runUserImage,
+} from './user-image-fixture.ts';
 import { profileSeedOracle } from './profile-seed-fixture.ts';
 import { execScript } from './managed-policy-fixture.ts';
+import { DSH_ENGINES_PRELUDE } from './dsh-engines.ts';
 
-it('builds the user image and reports exactly DSH 0.2.0-rc.2 with owned-resource cleanup', () => {
+it('builds the user image and reports exactly DSH 0.2.1-rc.2 with owned-resource cleanup', () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
 
   const result = runUserImage('version', (stdout) => {
-    expect(stdout.replace(/\r?\n$/, '')).toBe('0.2.0-rc.2');
+    expect(stdout.replace(/\r?\n$/, '')).toBe('0.2.1-rc.2');
   });
 
   process.stdout.write(
@@ -64,14 +69,14 @@ it('starts real DSH Web under shipped seccomp with separate volumes and unauthen
   );
 });
 
-it('delivers the platform navigation plugin root-owned, read-only and pinned to the installed DSH', async () => {
+it('delivers the platform navigation plugin root-owned, read-only and compatible with the installed DSH', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
   const script = `
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+${DSH_ENGINES_PRELUDE}
 const root='/opt/dsh-team/platform-nav';
 assert.deepEqual(readdirSync(root).sort(),['client.js','index.js','package.json']);
 const directory=statSync(root);
@@ -84,23 +89,26 @@ for(const path of ['/opt','/opt/dsh-team']) {
   const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.mode & 0o022,0);
 }
 const manifest=JSON.parse(readFileSync(root+'/package.json','utf8'));
-const require=createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
-const installed=require('@deepseek-ai/dsh/package.json').version;
 assert.equal(manifest.name,'@dsh-team/platform-nav');
-assert.equal(manifest.peerDependencies['@deepseek-ai/dsh'],installed);
+assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh'],undefined);
+assert.equal(dshEnginesSatisfied(manifest.engines?.dsh),true);
 assert.equal(manifest.exports['./client'],'./client.js');
 assert.equal(manifest.dsh.client.platform,'web');
 assert.throws(()=>writeFileSync(root+'/client.js','employee code'));
 assert.throws(()=>writeFileSync(root+'/employee.js','employee code'));
 assert.throws(()=>renameSync(root+'/index.js',root+'/employee.js'));
 assert.equal(process.getuid(),1001);
-process.stdout.write(JSON.stringify({immutable:true,peer:installed,uid:1001}));
+process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh,uid:1001}));
 `;
 
   await runUserImage(
     'managed-policy',
     (stdout) => {
-      expect(JSON.parse(stdout)).toEqual({ immutable: true, peer: '0.2.0-rc.2', uid: 1001 });
+      expect(JSON.parse(stdout)).toEqual({
+        immutable: true,
+        engines: '>=0.2.1-rc.2 <0.3.0',
+        uid: 1001,
+      });
     },
     undefined,
     (lifecycle) =>
@@ -110,9 +118,9 @@ process.stdout.write(JSON.stringify({immutable:true,peer:installed,uid:1001}));
   );
 });
 
-// SHA-256 of the published 0.2.0-rc.2 lib/client.js (npm tarball); any build-time change fails here.
+// SHA-256 of the published 0.2.1-rc.2 lib/client.js (npm tarball); any build-time change fails here.
 const RELEASED_PLUGIN_PAGE_SHA256 =
-  'bf25686c575d598b91a5dec43cc725d9c1066c801555ce06e6f12f0f72e94f77';
+  'b4efaa441258a547a0d7b3cab559fe073c69e69fe2bbb617c710ded134e7c4f9';
 
 it('installs the released plugin page unpatched, root-owned and unwritable by uid1001, without the removed patch script', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
@@ -162,5 +170,19 @@ process.stdout.write(JSON.stringify({
       Promise.resolve(
         execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-plugin-page`, script),
       ),
+  );
+});
+
+it('fails the user-image build when a plugin engines.dsh range excludes the installed DSH', () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+
+  const result = buildUserImageExpectingFailure('platform-nav', '>=0.3.0');
+
+  expect(result.stderr).toContain('DSH plugin compatibility failed: platform-nav');
+  process.stdout.write(
+    `Docker incompatible plugin rejected: run=${result.runId} image=${result.image} ` +
+      `status=${String(result.status)} cleanup=complete\n`,
   );
 });

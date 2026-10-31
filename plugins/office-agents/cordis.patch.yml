@@ -2,8 +2,6 @@
   config:
     default: office-general
 - insert:
-    - id: office-delegation
-      name: "@dsh-team/office-agents"
     - id: preset-office-general
       name: "@deepseek-ai/dsh-agent-preset"
       disabled: false
@@ -24,11 +22,12 @@
                 公文和材料的新建及实质性改写必须交给公文与材料写作 Agent，包括简单通知。
                 执行方式是调用现有 subagent 工具：description 简述任务，prompt 给出完整要求、
                 用户材料、必须保留的事实和目标文件路径；子 Agent 不继承当前对话，不能省略这些信息。
-                本部署会在该原生子 Session 开始工作前自动选择 office-writer，不需要也不存在 preset 参数。
+                委派工具已把子 Agent 固定为公文与材料写作（office-writer）：agent_preset 可省略，不要传入其他预设。
                 可以先整理事实、材料或草稿并完整交给子 Agent；新建所请求的 DOCX 时，子 Agent 必须用
                 build_docx 从有序段落实际构造，不能复制已完成的 DOCX 代替此操作；已有文档修订保留现有编辑工具。
                 加载 official-writing 或 office-docx 不能成为跳过委派的理由。
-                子任务完成后，核对真实文件及用户要求，可以继续编辑修正并交付；不要要求用户手动切换预设。
+                委派调用会立即返回子 Agent 编号；子 Agent 完成后会以一条结算消息把结果送回，在收到之前不要声称完成。
+                收到结算消息后，核对真实文件及用户要求，可以继续编辑修正并交付；不要要求用户手动切换预设。
                 委派不可用或失败时明确报告，不能回退为父 Agent 独自写作后声称已经委派。
           - id: tool-fs
             name: "@deepseek-ai/dsh-tool-fs"
@@ -55,6 +54,9 @@
             config:
               provider: spawn
               toolName: subagent
+              agentPreset: office-writer
+              allowedAgentPresets:
+                - office-writer
     - id: preset-office-writer
       name: "@deepseek-ai/dsh-agent-preset"
       disabled: false

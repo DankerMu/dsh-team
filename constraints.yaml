@@ -201,7 +201,7 @@ verification:
       required_at: "L3+"
     user_image_docker:
       command: "pnpm test:docker"
-      evidence: "trusted giap-vps final reviewed SHA and original discovery; pinned tools and DSH 0.2.0-rc.2; immutable CfT140 verification image/Chrome, stable internal isolated namespace, natural online/confinement, original auth/gateway first-use/reload and raw HTTP/WS/CDP pressure/FIN behavior; readable Chinese glyphs, bounded failure receipts; success/failure owned browser/container/network cleanup and unrelated sentinel preservation"
+      evidence: "trusted giap-vps final reviewed SHA and original discovery; pinned tools and DSH 0.2.1-rc.2; immutable CfT140 verification image/Chrome, stable internal isolated namespace, natural online/confinement, original auth/gateway first-use/reload and raw HTTP/WS/CDP pressure/FIN behavior; readable Chinese glyphs, bounded failure receipts; success/failure owned browser/container/network cleanup and unrelated sentinel preservation"
       required_at: "L3+"
     trusted_docker_custody:
       command: "pnpm --silent verify:docker start <reviewed-sha>"
@@ -272,7 +272,7 @@ exemptions:
       exit_condition: "remove the exact dependency exception when the image-only observer is removed or the platform owns this dependency"
     - path: "platform/test/permission-tiers-revocation-host.mjs"
       rules: [dead_code]
-      reason: "Only Knip's unlisted-dependency check for @deepseek-ai/dsh-session-checkpoint-policy is excepted via exact ignoreDependencies. This fixture executes inside the pinned DSH image and resolves its installed 0.2.0-rc.2 checkpoint policy from /usr/local/lib/node_modules/@deepseek-ai/dsh/package.json to qualify the actual post-guard durability wait; it is not a platform-installed dependency. Fixture code and every other dependency remain checked."
+      reason: "Only Knip's unlisted-dependency check for @deepseek-ai/dsh-session-checkpoint-policy is excepted via exact ignoreDependencies. This fixture executes inside the pinned DSH image and resolves its installed 0.2.1-rc.2 checkpoint policy from /usr/local/lib/node_modules/@deepseek-ai/dsh/package.json to qualify the actual post-guard durability wait; it is not a platform-installed dependency. Fixture code and every other dependency remain checked."
       expires: never
       exit_condition: "remove the exact dependency exception when the image-only checkpoint regression is removed or the platform owns this dependency"
   enforced_by: "eslint.config.mjs ignores + .prettierignore + vitest.config.ts coverage.exclude + scripts/check-test-pairing.sh + knip.json exact ignoreDependencies"

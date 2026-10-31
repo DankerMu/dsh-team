@@ -11,35 +11,40 @@ import {
   type PermissionBrowserSuite,
 } from './permission-browser-fixture.mjs';
 import { isolatedBrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
+import { DSH_ENGINES_PRELUDE } from './dsh-engines.ts';
 
-it('delivers an immutable exact-peer gate outside employee profiles', async () => {
+it('delivers an immutable DSH-compatible gate outside employee profiles', async () => {
   if (platform() !== 'linux' || arch() !== 'x64')
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   const script = `
 import assert from 'node:assert/strict';
 import { statSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { createRequire } from 'node:module';
+${DSH_ENGINES_PRELUDE}
 const root='/opt/dsh-team/permission-tiers';
 for(const path of ['/opt','/opt/dsh-team',root,root+'/index.js',root+'/review.js',root+'/client.js',root+'/package.json']) {
   const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.mode & 0o022,0);
   if(path.startsWith(root+'/')) assert.equal(stat.mode & 0o777,0o444);
 }
 const manifest=JSON.parse(readFileSync(root+'/package.json','utf8'));
-assert.equal(manifest.peerDependencies['@deepseek-ai/dsh'],'0.2.0-rc.2');
-const require=createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
-assert.equal(require('@deepseek-ai/dsh/package.json').version,'0.2.0-rc.2');
+assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh'],undefined);
+assert.equal(dshInstalled,'0.2.1-rc.2');
+assert.equal(dshEnginesSatisfied(manifest.engines?.dsh),true);
 assert.throws(()=>writeFileSync(root+'/index.js','employee code'));
 assert.throws(()=>writeFileSync(root+'/client.js','employee code'));
 assert.throws(()=>renameSync(root+'/index.js',root+'/employee.js'));
 assert.throws(()=>renameSync(root+'/client.js',root+'/employee-client.js'));
 assert.equal(process.getuid(),1001);
-process.stdout.write(JSON.stringify({immutable:true,peer:'0.2.0-rc.2',uid:1001}));
+process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh,uid:1001}));
 `;
 
   await runUserImage(
     'managed-policy',
     (stdout) => {
-      expect(JSON.parse(stdout)).toEqual({ immutable: true, peer: '0.2.0-rc.2', uid: 1001 });
+      expect(JSON.parse(stdout)).toEqual({
+        immutable: true,
+        engines: '>=0.2.1-rc.2 <0.3.0',
+        uid: 1001,
+      });
     },
     undefined,
     (lifecycle) =>

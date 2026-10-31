@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { evalPage, observeFirstRun, waitFor } from './probe-dsh-api-ui.mjs';
 
 export const COMPOSITION_PLUGIN = '@dsh-team/zh-locale';
-export const COMPOSITION_PIN = '0.2.0-rc.2';
+export const COMPOSITION_PIN = '0.2.1-rc.2';
 const GENERAL = '@deepseek-ai/dsh-client-ui-settings-general';
 const MODEL_SELECTION = '@deepseek-ai/dsh-client-ui-model-selection';
 export const PERSONAL_MODELS = '@deepseek-ai/dsh-client-ui-settings-models';
@@ -16,7 +16,10 @@ const validateCompositionPackage = async (pluginDir) => {
   const manifest = JSON.parse(await readFile(join(pluginDir, 'package.json'), 'utf8'));
   if (
     manifest.name !== COMPOSITION_PLUGIN ||
-    manifest.peerDependencies?.['@deepseek-ai/dsh'] !== COMPOSITION_PIN ||
+    // The image build decides engines.dsh with DSH's own semver; the probe pins `dsh --version`.
+    manifest.peerDependencies?.['@deepseek-ai/dsh'] !== undefined ||
+    typeof manifest.engines?.dsh !== 'string' ||
+    manifest.engines.dsh.trim() === '' ||
     manifest.dsh?.client?.platform !== 'web' ||
     manifest.exports?.['./client'] !== './client.js'
   ) {

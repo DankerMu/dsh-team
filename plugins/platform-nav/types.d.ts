@@ -1,4 +1,4 @@
-/** Structural subset of the released 0.2.0-rc.2 host webserver injection contract. */
+/** Structural subset of the released 0.2.1-rc.2 host webserver injection contract. */
 interface IndexInjectionRow {
   kind: string;
   name?: string;

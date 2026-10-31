@@ -17,7 +17,7 @@ run_composition_trial() {
   else
     version=""
   fi
-  if [ "$version" != "0.2.0-rc.2" ]; then
+  if [ "$version" != "0.2.1-rc.2" ]; then
     printf '%s\n' pin-mismatch >"${workdir}/composition/drive.reason"
     record_drive composition "${workdir}/composition/accept.json" 2 "composition"
     return 0

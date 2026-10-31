@@ -4,7 +4,7 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends bubblewrap python3 python3-docx \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.0-rc.2 \
+RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.1-rc.2 \
   && npm cache clean --force
 
 RUN useradd -m -u 1001 dsh \
@@ -17,9 +17,9 @@ ENV DSH_HOME=/data/home \
 WORKDIR /data/work
 
 # Install pin and expected version are independent literals. Equality is exact,
-# so a prefix of the installed version (for example 0.2.0-rc) must fail the build.
+# so a prefix of the installed version (for example 0.2.1-rc) must fail the build.
 RUN installed="$(dsh --version)" \
-  && expected="0.2.0-rc.2" \
+  && expected="0.2.1-rc.2" \
   && if [ "$installed" != "$expected" ]; then \
        echo "dsh version mismatch: installed=${installed} expected=${expected}" >&2; \
        exit 1; \
@@ -43,51 +43,62 @@ COPY --from=zh-locale --chown=dsh:dsh --chmod=0644 \
 # Bundle registration is an image default, below the employee and managed patch layers.
 # Pre-created directories retain traversal bits; COPY's 0644 applies only to the files.
 COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
-  package.json index.js docx-construction.js cordis.patch.yml \
+  package.json docx-construction.js cordis.patch.yml \
   /data/home/profiles/web/node_modules/@dsh-team/office-agents/
 COPY --from=office-agents --chown=dsh:dsh --chmod=0644 \
   skills/official-writing/SKILL.md \
   /data/home/profiles/web/node_modules/@dsh-team/office-agents/skills/official-writing/SKILL.md
+# DSH skips an incompatible bundle and still exits 0, so its diagnostics fail the build here.
 RUN node -e 'const fs = require("node:fs"); \
   const profile = process.env.DSH_HOME + "/profiles/web"; \
   const bundle = require(profile + "/node_modules/@dsh-team/office-agents/package.json"); \
-  if (bundle.peerDependencies["@deepseek-ai/dsh"] !== "0.2.0-rc.2") throw new Error("office-agents DSH peer mismatch"); \
   const path = profile + "/package.json"; \
   const manifest = JSON.parse(fs.readFileSync(path, "utf8")); \
   manifest.dsh.profile.bundles.push(bundle.name); \
   fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");' \
-  && dsh --profile web --dump-default-config >/dev/null
-
-RUN installed="$(dsh --version)" \
-  && peer="$(node -p 'require(process.env.DSH_HOME + "/profiles/web/node_modules/@dsh-team/zh-locale/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
-  && if [ "$installed" != "$peer" ]; then \
-       echo "zh-locale DSH peer mismatch: installed=${installed} peer=${peer}" >&2; \
-       exit 1; \
-     fi
+  && log="$(mktemp)" \
+  && if ! dsh --profile web --dump-default-config >/dev/null 2>"$log"; then cat "$log" >&2; exit 1; fi \
+  && if grep -E "dsh: (skipping profile bundle|disabling profile plugin)" "$log" >&2; then exit 1; fi \
+  && rm -f "$log"
 
 USER root
 # Security code is never resolved from the employee-writable profile.
 COPY --from=permission-tiers --chown=root:root --chmod=0444 \
   package.json index.js review.js client.js \
   /opt/dsh-team/permission-tiers/
-RUN installed="$(dsh --version)" \
-  && peer="$(node -p 'require("/opt/dsh-team/permission-tiers/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
-  && if [ "$installed" != "$peer" ]; then \
-       echo "permission-tiers DSH peer mismatch: installed=${installed} peer=${peer}" >&2; \
-       exit 1; \
-     fi \
-  && chmod 0555 /opt/dsh-team /opt/dsh-team/permission-tiers
 # Platform navigation is delivered read-only beside the security plugin; the overlay enables it.
 COPY --from=platform-nav --chown=root:root --chmod=0444 \
   package.json index.js client.js \
   /opt/dsh-team/platform-nav/
-RUN installed="$(dsh --version)" \
-  && peer="$(node -p 'require("/opt/dsh-team/platform-nav/package.json").peerDependencies["@deepseek-ai/dsh"]')" \
-  && if [ "$installed" != "$peer" ]; then \
-       echo "platform-nav DSH peer mismatch: installed=${installed} peer=${peer}" >&2; \
-       exit 1; \
-     fi \
-  && chmod 0555 /opt/dsh-team/platform-nav
+# Every delivered plugin declares engines.dsh and no exact DSH peer. The decision matches the
+# released loader: the installed DSH, DSH's own semver (declared by dsh-app-boot), prereleases included.
+# The empty credentials directory is the managed overlay's isolated credential store:
+# traversable by uid1001, never writable by it.
+RUN node -e 'const { createRequire } = require("node:module"); \
+  const dsh = "/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json"; \
+  const boot = createRequire(dsh).resolve("@deepseek-ai/dsh-app-boot/package.json"); \
+  const semver = createRequire(boot)("semver"); \
+  const installed = JSON.parse(require("node:fs").readFileSync(dsh, "utf8")).version; \
+  const plugins = { \
+    "zh-locale": "/data/home/profiles/web/node_modules/@dsh-team/zh-locale", \
+    "office-agents": "/data/home/profiles/web/node_modules/@dsh-team/office-agents", \
+    "permission-tiers": "/opt/dsh-team/permission-tiers", \
+    "platform-nav": "/opt/dsh-team/platform-nav" }; \
+  let failed = false; \
+  for (const [plugin, directory] of Object.entries(plugins)) { \
+    const manifest = require(directory + "/package.json"); \
+    const range = manifest.engines?.dsh; \
+    if (typeof range === "string" && range.trim() !== "" \
+      && manifest.peerDependencies?.["@deepseek-ai/dsh"] === undefined \
+      && semver.satisfies(installed, range, { includePrerelease: true })) continue; \
+    console.error("DSH plugin compatibility failed: " + plugin + " engines.dsh=" + JSON.stringify(range) \
+      + " peer=" + JSON.stringify(manifest.peerDependencies?.["@deepseek-ai/dsh"]) + " installed=" + installed); \
+    failed = true; \
+  } \
+  if (failed) process.exit(1);' \
+  && mkdir /opt/dsh-team/credentials \
+  && chmod 0555 /opt/dsh-team /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav \
+    /opt/dsh-team/credentials
 # Preserve the complete relative tree, including hidden entries, independently of live profiles.
 RUN mkdir -p /opt/dsh-team/profile-seed \
   && cp -a "${DSH_HOME}/profiles/." /opt/dsh-team/profile-seed/ \

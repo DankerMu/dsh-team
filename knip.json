@@ -4,7 +4,6 @@
     ".": {
       "entry": [
         "scripts/*.mjs",
-        "plugins/office-agents/index.js",
         "plugins/office-agents/docx-construction.js",
         "plugins/office-agents/*.test.js",
         "plugins/permission-tiers/index.js",

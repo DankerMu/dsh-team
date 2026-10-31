@@ -1,6 +1,6 @@
 # Office Agent bundle
 
-This DSH `0.2.0-rc.2` bundle provides `office-general` (综合办公),
+This DSH `0.2.1-rc.2` bundle provides `office-general` (综合办公),
 the fresh-profile default, and `office-writer` (公文与材料写作). General selects
 capabilities, delegates writing and checks results; writer drafts Chinese
 notices, requests, explanations and materials. Existing built-in presets remain
@@ -20,7 +20,8 @@ renderer, RAGFlow integration or additional specialist Agent is introduced.
 General's production persona distinguishes substantive writing from ordinary
 file operations: notices and materials, including short ones, go through the
 native `subagent` tool. The tool takes a short `description` and self-contained
-`prompt`, not a preset identifier; the host plugin below selects writer.
+`prompt`; its native `agentPreset`/`allowedAgentPresets` configuration fixes the
+child to writer, so `agent_preset` may be omitted and any other value is rejected.
 Include the user's facts and output path because the spawn child does not
 inherit the parent conversation. General may supply facts or drafts, then
 verifies and may edit the real artifact after child construction. Copying an
@@ -32,27 +33,34 @@ file work and post-child checks. These instructions do not constitute proof of
 model compliance: native child contribution in the unchanged real-model task is
 the acceptance gate.
 
-The host plugin selects `office-writer` on genuine fresh, unseeded, direct
-one-shot children of `office-general`, through the released awaited creation
-hook and native blank-Agent preset selection. It does not replace the spawn
-provider or manufacture a child. Root Sessions, other presets, seeded forks,
-continuable children, resumed Agents and already-writer children are unchanged.
-The child uses writer instructions/tools before its first turn; its parent,
-siblings, model route, workspace and managed permission tier remain independent.
-An unavailable writer fails creation instead of running the task under general.
+Delegation uses only released DSH behavior; the bundle adds no selection plugin.
+General's `tool-subagent` row is configured as `{ provider: spawn, toolName:
+subagent, agentPreset: office-writer, allowedAgentPresets: [office-writer] }`.
+The released tool requires the default to be one of the allowed presets, shows
+the model a single-value `agent_preset` choice, applies writer when the argument
+is omitted and rejects every other value before a child exists. The native spawn
+provider creates the child with writer from creation: its creation header and
+`agentPreset` projection name `office-writer`, and no later
+`agent-preset/selected` event rebinds it. Its parent, siblings, model route,
+workspace and managed permission tier remain independent.
 
-The immutable child header can still name its creation preset, `office-general`.
-The committed `agent-preset/selected` event, effective `agentPreset` projection
-and actual child capabilities identify the later writer selection. Cold reads
-replay that selection; do not rewrite or treat the creation header as current.
+Delegation is asynchronous. The `subagent` call returns the child's identifier
+immediately; when the child settles, the native settlement message carries its
+closing text back to the parent. Neither preset declares `tool-subagent-control`
+because no `send_message` is needed to obtain the result. General's persona
+asks it to verify the real file after that settlement and not to claim
+completion before receiving it.
 
-The image copies `package.json`, `index.js`, `docx-construction.js`, `cordis.patch.yml`
+The image copies `package.json`, `docx-construction.js`, `cordis.patch.yml`
 and `skills/official-writing/SKILL.md` into
 `$DSH_HOME/profiles/web/node_modules/@dsh-team/office-agents/`, registers the
 bundle after the released base/Web bundles, and then snapshots the complete
 profile tree into `/opt/dsh-team/profile-seed/`. Package directories are created
-before file-mode `0644` copies so uid1001 retains traversal. The exact DSH peer
-is checked during the build. No package installation or download occurs at
+before file-mode `0644` copies so uid1001 retains traversal. The manifest
+declares `engines.dsh` (`>=0.2.1-rc.2 <0.3.0`) and no DSH peer; the build fails
+unless the installed DSH satisfies that range under DSH's own `semver` with
+prereleases included, and fails if `dsh --profile web --dump-default-config`
+reports skipping the bundle. No package installation or download occurs at
 instance startup.
 
 The profile's employee patch remains empty; employee and managed layers keep
@@ -94,7 +102,7 @@ Existing image tests cover complete seed copy-up, immutability, employee edits
 across reuse, offline DOCX and real Web startup. Full Docker/model checks retain
 the existing platform/model/permission behavior. Native delegation checks use
 an explicitly deterministic, test-only adapter: actual writer composition,
-pre-turn selection, cold reads/resume, concurrent siblings, exclusions, real
+creation-time writer binding, cold reads/resume, concurrent siblings, exclusions, real
 three-tier tool effects, cancellation and missing/broken-target cleanup.
 Evidence is retained under `.run/issue213/`; no external model is called by Docker tests.
 The real-model acceptance tasks below exercise both presets; deterministic

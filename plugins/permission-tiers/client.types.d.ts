@@ -1,4 +1,4 @@
-/** Structural subset of the released 0.2.0-rc.2 Client contracts. */
+/** Structural subset of the released 0.2.1-rc.2 Client contracts. */
 interface ChildPendingApproval {
   readonly kind: 'approval';
   readonly sessionId: string;

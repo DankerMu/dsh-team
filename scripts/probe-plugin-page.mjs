@@ -5,7 +5,7 @@
 import { captureSettledScreenshot, clickSelector, evalPage, waitFor } from './probe-dsh-api-ui.mjs';
 
 const PACKAGE = '@dsh-team/office-agents';
-// Released 0.2.0-rc.2 zh labels (`panel`, `openDetail`, `enableToggle`, `refresh`, `addPlugin`,
+// Released 0.2.1-rc.2 zh labels (`panel`, `openDetail`, `enableToggle`, `refresh`, `addPlugin`,
 // `uninstall`/`uninstallLabel`); the package has no display title, so its name is the title.
 const PANEL = 'button[aria-label="插件"]';
 const OPEN = `[data-plugin-package="${PACKAGE}"] button[aria-label="查看 ${PACKAGE}"]`;

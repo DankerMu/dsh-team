@@ -9,8 +9,8 @@
     "./client": "./client.js",
     "./package.json": "./package.json"
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh": "0.2.0-rc.2"
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
   "dsh": {
     "client": {

@@ -3,9 +3,7 @@
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "main": "index.js",
   "exports": {
-    ".": "./index.js",
     "./docx-construction": "./docx-construction.js",
     "./package.json": "./package.json"
   },
@@ -15,7 +13,7 @@
       "patch": "./cordis.patch.yml"
     }
   },
-  "peerDependencies": {
-    "@deepseek-ai/dsh": "0.2.0-rc.2"
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
   }
 }

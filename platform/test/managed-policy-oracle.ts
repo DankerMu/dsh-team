@@ -68,8 +68,8 @@ export const RETAINED_TOOLS = {
   standard: ['bash', 'read'],
   ptc: ['bash', 'read'],
   minimal: ['bash'],
-  // dsh-v0.2.0-rc.2 presets/cordis.patch.yml:152-154 enables tool-plugin-manager in profile
-  // (web) instances; standard.patch.yml:144-146 and ptc.patch.yml:150-152 keep it
+  // dsh-v0.2.1-rc.2 presets/cordis.patch.yml:131-133 enables tool-plugin-manager in profile
+  // (web) instances; standard.patch.yml:123-125 and ptc.patch.yml:129-131 keep it
   // `disabled: true`, minimal and the office presets have no such row.
   cordis: ['bash', 'read', 'plugin_manager'],
   'office-general': ['bash', 'read', 'write', 'edit', 'skill', 'present', 'subagent'],
