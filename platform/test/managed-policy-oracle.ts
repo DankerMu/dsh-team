@@ -72,7 +72,14 @@ export const RETAINED_TOOLS = {
   // (web) instances; standard.patch.yml:123-125 and ptc.patch.yml:129-131 keep it
   // `disabled: true`, minimal and the office presets have no such row.
   cordis: ['bash', 'read', 'plugin_manager'],
-  'office-general': ['bash', 'read', 'write', 'edit', 'skill', 'present', 'subagent'],
+  // No `subagent`: in dsh-tool-subagent@0.2.1-rc.2 lib/index.js the tool is registered only by
+  // `install` (:373) through `runtimeCtx.tools.register(definition)` (:489, mounted at :506-508).
+  // A row with `agentPreset`/`allowedAgentPresets` (plugins/office-agents/cordis.patch.yml:57-59)
+  // in a preset composition scope without a Session skips the direct install (:532-537) and
+  // installs per Agent on `agent/created` (:570-588, :605-607), so a preset lease scope without
+  // an Agent never holds it. office-delegation.docker.test.ts proves the tool through real child
+  // creation.
+  'office-general': ['bash', 'read', 'write', 'edit', 'skill', 'present'],
   'office-writer': ['bash', 'read', 'write', 'edit', 'skill', 'present'],
 } as const;
 

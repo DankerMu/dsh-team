@@ -6,6 +6,11 @@ import {
   waitComposer,
   waitFor,
 } from './probe-dsh-api-ui.mjs';
+import {
+  ACCOUNT_MENU_SETTINGS_LABELS,
+  ACCOUNT_MENU_TRIGGER,
+  SETTINGS_BUTTON,
+} from './probe-first-run-composition.mjs';
 
 const DIALOG = '[role="dialog"][data-shortcut-modal="settings"]';
 const MODEL_TRIGGER = 'button[aria-label^="选择模型"],button[aria-label="请选择模型"]';
@@ -56,6 +61,50 @@ const modelOptions = (page) =>
 })()`,
   );
 
+/**
+ * Open Settings through the rendered `settings.launcher` entry: the 0.2.1 account menu's `设置`
+ * item, or the plain fallback button. Click-driven, no hover. The 0.2.1 open-settings shortcut has
+ * no `web:linux` binding (settings-general lib/client.js:1195-1232; dsh-client-shortcuts
+ * lib/client.js:874, 1342-1349), so the Linux verification browser cannot use the keyboard.
+ */
+const openSettings = async (page, budget) => {
+  // The launcher is a slot entry and can mount after the app reports ready.
+  const launcher = await waitFor(
+    () =>
+      evalPage(
+        page,
+        `(function(){
+      const usable=(el)=>Boolean(el&&el.getClientRects().length&&!el.disabled&&!el.closest('[inert]'));
+      const menu=[...document.querySelectorAll(${JSON.stringify(ACCOUNT_MENU_TRIGGER)})].find(usable);
+      if(menu){if(menu.getAttribute('aria-expanded')!=='true')menu.click();return 'menu';}
+      const direct=[...document.querySelectorAll(${JSON.stringify(SETTINGS_BUTTON)})].find(usable);
+      if(direct){direct.click();return 'dialog';}
+      return false;
+    })()`,
+      ),
+    budget(),
+    'preservation-settings-launcher',
+  );
+  if (launcher !== 'menu') return;
+  // Released Menu primitive portals `[role="menu"]` to document.body only while open; each item is
+  // `button[role="menuitem"]` > icon span, label span, optional aria-hidden shortcut span.
+  await waitFor(
+    () =>
+      evalPage(
+        page,
+        `(function(){
+      const labels=new Set(${JSON.stringify(ACCOUNT_MENU_SETTINGS_LABELS)});
+      const item=[...document.querySelectorAll('[role="menu"] button[role="menuitem"]')]
+        .find(el=>[...el.querySelectorAll(':scope > span')].some(s=>labels.has(s.textContent.trim())));
+      if(!item||item.disabled||item.closest('[inert]')||!item.getClientRects().length)return false;
+      item.click();return true;
+    })()`,
+      ),
+    budget(),
+    'preservation-settings-menu',
+  );
+};
+
 export const verifyPreservation = async (
   page,
   modelNames,
@@ -70,7 +119,7 @@ export const verifyPreservation = async (
   if (names.length < 2 || names.some((name) => !name) || new Set(names).size !== names.length) {
     throw new Error('stage=preservation error=distinct-models-required');
   }
-  await clickSelector(page, 'button[aria-label="设置"]');
+  await openSettings(page, budget);
   await waitFor(
     () => evalPage(page, `Boolean(document.querySelector(${JSON.stringify(DIALOG)}))`),
     budget(),

@@ -10,6 +10,20 @@ const GENERAL = '@deepseek-ai/dsh-client-ui-settings-general';
 const MODEL_SELECTION = '@deepseek-ai/dsh-client-ui-model-selection';
 export const PERSONAL_MODELS = '@deepseek-ai/dsh-client-ui-settings-models';
 const ARTIFACT_FILES = ['package.json', 'index.js', 'client.js', 'cordis.patch.yml'];
+// DSH 0.2.1-rc.2 settings entry. dsh-client-ui-renderer lib/client.js:1116-1128 wraps every slot
+// outlet in `<div data-slot=…>`; dsh-client-ui-settings-general lib/client.js:433-461 renders the
+// `settings.launcher` slot there, with a plain `aria-haspopup="dialog"` button (zh `trigger` 设置,
+// :968) only as the empty-slot fallback. dsh-client-ui-settings-account lib/client.js:4768-4772
+// fills the slot with AccountMenu, whose trigger (:1847-1856) is
+// `button[aria-label=t("menu")][aria-haspopup="menu"]` (zh 账号菜单 :3018, en Account menu :2959);
+// its `settings` item (:1873-1878, label 设置 :3016 / Settings :2957) calls `openSettings`
+// (:1897-1901), the injected settings `actions.open` (settings-general :435-437).
+export const ACCOUNT_MENU_TRIGGER = [
+  '[data-slot="settings.launcher"] button[aria-haspopup="menu"][aria-label="账号菜单"]',
+  '[data-slot="settings.launcher"] button[aria-haspopup="menu"][aria-label="Account menu"]',
+].join(',');
+export const SETTINGS_BUTTON = 'button[aria-label="设置"],button[aria-label="Settings"]';
+export const ACCOUNT_MENU_SETTINGS_LABELS = ['设置', 'Settings'];
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 const validateCompositionPackage = async (pluginDir) => {
@@ -143,9 +157,9 @@ export const waitCompositionInitialized = async (page, ms, noticeSeen, expected)
           page,
           `(function(){
             const usable=(el)=>Boolean(el&&el.getClientRects().length&&!el.disabled&&!el.closest('[inert]'));
-            const settings=document.querySelector('button[aria-label="设置"],button[aria-label="Settings"]');
-            const session=document.querySelector('button[aria-label="新建会话"],button[aria-label="New session"]');
-            return usable(settings)&&usable(session);
+            const any=(selector)=>[...document.querySelectorAll(selector)].some(usable);
+            const settings=any(${JSON.stringify(`${ACCOUNT_MENU_TRIGGER},${SETTINGS_BUTTON}`)});
+            return settings&&any('button[aria-label="新建会话"],button[aria-label="New session"]');
           })()`,
         );
         return rendered && state.composerPresent && state.workspaceSelected && state.editable
