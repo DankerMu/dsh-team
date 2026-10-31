@@ -26,17 +26,65 @@ export function webAddress(network: WebNetwork): string {
   return instanceAddressLayout(network.subnet).container;
 }
 
+const ROUTE_HEADER = [
+  'Iface',
+  'Destination',
+  'Gateway',
+  'Flags',
+  'RefCnt',
+  'Use',
+  'Metric',
+  'Mask',
+  'MTU',
+  'Window',
+  'IRTT',
+];
+
+function routeTableMalformed(): never {
+  throw new Error('Host route table malformed');
+}
+
+/** One little-endian `/proc/net/route` word as its host-order IPv4 value. */
+function routeWord(hex: string | undefined): number {
+  if (hex === undefined || !/^[0-9A-Fa-f]{8}$/.test(hex)) routeTableMalformed();
+  return Number.parseInt(hex.match(/../g)?.reverse().join('') ?? '', 16);
+}
+
 /**
- * Create one labelled /28 bridge from a fresh IPAM snapshot of every Docker network, so stale or
- * concurrent networks are excluded. The caller's registration precedes creation; a creation
- * conflict fails explicitly rather than retrying another subnet.
+ * Host IPv4 kernel routes as CIDRs (`/proc/net/route` text). The default route is skipped; any
+ * other unparseable row fails, because silently dropping one would shrink the occupied set.
+ */
+export function hostRouteCidrs(procNetRoute: string): string[] {
+  const [header = '', ...rows] = procNetRoute.split('\n');
+  if (header.trim().split(/\s+/).join(' ') !== ROUTE_HEADER.join(' ')) routeTableMalformed();
+  return rows.flatMap((row) => {
+    if (row.trim() === '') return [];
+    const fields = row.trim().split(/\s+/);
+    if (fields.length !== ROUTE_HEADER.length) routeTableMalformed();
+    const destination = routeWord(fields[1]);
+    const mask = routeWord(fields[7]);
+    if (mask === 0) return [];
+    const prefix = 32 - Math.log2(2 ** 32 - mask);
+    if (!Number.isInteger(prefix)) routeTableMalformed();
+    const address = [24, 16, 8, 0].map((bits) => (destination >>> bits) & 255).join('.');
+    return [`${address}/${String(prefix)}`];
+  });
+}
+
+/**
+ * Create one labelled /28 bridge from a fresh IPAM snapshot of every Docker network plus the host's
+ * IPv4 kernel routes, so stale or concurrent networks and host-owned ranges (a proxy tun) are
+ * excluded. The caller's registration precedes creation; a creation conflict fails explicitly
+ * rather than retrying another subnet.
  */
 export function createWebNetwork(
   command: DockerCommand,
   runId: string,
   suffix: string,
   register: (name: string, ownership: Readonly<Record<string, string>>) => void,
+  boundary: Partial<WebStartupBoundary> = {},
 ): WebNetwork {
+  const { routeTable = () => readFileSync('/proc/net/route', 'utf8') } = boundary;
   const docker = (args: string[]): string => webDocker(command, args);
   const ids = docker(['network', 'ls', '--quiet', '--no-trunc']).split('\n').filter(Boolean);
   const occupied =
@@ -54,7 +102,7 @@ export function createWebNetwork(
           .filter(Boolean);
   const network = {
     name: `dsh-team-test-net-${runId}-${suffix}`,
-    subnet: allocateSubnet(TEST_SUBNET_POOL, occupied),
+    subnet: allocateSubnet(TEST_SUBNET_POOL, [...occupied, ...hostRouteCidrs(routeTable())]),
   };
   const ownership = { 'dsh-team.test-run': runId };
   register(network.name, ownership);
@@ -76,6 +124,8 @@ export interface WebStartupBoundary {
   now: () => number;
   pause: (milliseconds: number) => Promise<void>;
   httpStatus: (port: number, authority: string, timeout: number) => Promise<number | null>;
+  /** Host `/proc/net/route` text consulted by `createWebNetwork`; absent reads the real table. */
+  routeTable?: () => string;
 }
 
 /** GET only: no credentials, redirects, response body or error text enter evidence. */

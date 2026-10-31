@@ -544,9 +544,15 @@ function runImageLifecycle(
     if (probe === 'web-startup') {
       if (volume === undefined || workVolume === undefined)
         throw new Error('Web volume setup missing');
-      const network = createWebNetwork(command, runId, 'web', (name, ownership) => {
-        registerCleanupTarget(targets, runId, { kind: 'network', name, ownership });
-      });
+      const network = createWebNetwork(
+        command,
+        runId,
+        'web',
+        (name, ownership) => {
+          registerCleanupTarget(targets, runId, { kind: 'network', name, ownership });
+        },
+        extra as Partial<WebStartupBoundary>,
+      );
       const overlay = join(config, 'web.patch.yml');
       writeFileSync(
         overlay,

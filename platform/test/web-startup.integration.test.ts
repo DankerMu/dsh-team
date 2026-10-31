@@ -5,8 +5,13 @@ import { inspect } from 'node:util';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
-import { launchTokenPresent } from '../src/orchestrator/index.ts';
-import { observeWebEndpoint, runWebRejection } from './web-startup-fixture.ts';
+import { allocateSubnet, launchTokenPresent } from '../src/orchestrator/index.ts';
+import {
+  createWebNetwork,
+  hostRouteCidrs,
+  observeWebEndpoint,
+  runWebRejection,
+} from './web-startup-fixture.ts';
 import type { WebContainer, WebStartupBoundary } from './web-startup-fixture.ts';
 
 // Shaped like a released 43-character launch token so only the address decides acceptance.
@@ -15,6 +20,19 @@ const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN_0000000000000000';
 const foreignSubnet = '198.18.0.0/28';
 const containerAddress = '198.18.0.18';
 const imageId = `sha256:${'b'.repeat(64)}`;
+// giap-vps 2026-10-31: a local proxy tun owns 198.18.0.0/30; padding tabs as the kernel writes them.
+const routeHeader =
+  'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\t\t';
+const routeRow = (iface: string, destination: string, mask: string) =>
+  `${iface}\t${destination}\t00000000\t0001\t0\t0\t0\t${mask}\t0\t0\t0\t\t\t\t`;
+const hostRouteTable = [
+  routeHeader,
+  'eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\t\t\t\t',
+  routeRow('Meta', '000012C6', 'FCFFFFFF'),
+  routeRow('eth0', '0101A8C0', 'FFFFFFFF'),
+  routeRow('docker0', '000011AC', '0000FFFF'),
+  '',
+].join('\n');
 type ResourceKind = 'image' | 'container' | 'volume' | 'network';
 interface WebDaemon {
   command: DockerCommand;
@@ -290,6 +308,7 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       if (fault === 'http-failure') return Promise.reject(new Error(privateToken));
       return Promise.resolve(Object.hasOwn(statuses, fault) ? (statuses[fault] ?? null) : 401);
     },
+    routeTable: () => hostRouteTable,
   };
   return { command, resources, boundary, createdContainers };
 }
@@ -305,6 +324,63 @@ const sentinels = {
   volume: [['foreign-volume', 'foreign-owner']],
   network: [['foreign-network', 'foreign-owner']],
 };
+
+it('converts host kernel IPv4 routes to CIDRs, skipping the header and the default route', () => {
+  expect(hostRouteCidrs(hostRouteTable)).toEqual([
+    '198.18.0.0/30',
+    '192.168.1.1/32',
+    '172.17.0.0/16',
+  ]);
+});
+
+it.each([
+  ['a missing header', routeRow('Meta', '000012C6', 'FCFFFFFF')],
+  ['a short row', `${routeHeader}\nMeta\t000012C6\t00000000\t0001`],
+  ['a non-hex destination', `${routeHeader}\n${routeRow('Meta', '0000Z2C6', 'FCFFFFFF')}`],
+  ['a seven-digit mask', `${routeHeader}\n${routeRow('Meta', '000012C6', 'FFFFFFF')}`],
+  ['a non-contiguous mask', `${routeHeader}\n${routeRow('Meta', '000012C6', 'FF00FFFF')}`],
+])('rejects a route table with %s instead of shrinking the occupied set', (_case, table) => {
+  expect(() => hostRouteCidrs(table)).toThrow('Host route table malformed');
+});
+
+it('allocates the first /28 above a host route that Docker IPAM does not report', () => {
+  const dockerIpam: string[] = [];
+
+  expect(allocateSubnet('198.18.0.0/15', [...dockerIpam, ...hostRouteCidrs(hostRouteTable)])).toBe(
+    '198.18.0.16/28',
+  );
+});
+
+it('excludes host routes as well as Docker IPAM subnets when creating the owned bridge', () => {
+  const created: string[][] = [];
+  const registered: string[] = [];
+  const command: DockerCommand = (args) => {
+    if (args[1] === 'ls') return { status: 0, stdout: 'a'.repeat(64), stderr: '' };
+    if (args[1] === 'inspect') return { status: 0, stdout: '172.17.0.0/16\n', stderr: '' };
+    created.push([...args]);
+    return { status: 0, stdout: '', stderr: '' };
+  };
+
+  const network = createWebNetwork(command, 'run1', 'web', (name) => registered.push(name), {
+    routeTable: () => `${routeHeader}\n${routeRow('Meta', '000012C6', 'E0FFFFFF')}\n`,
+  });
+
+  expect(network).toEqual({ name: 'dsh-team-test-net-run1-web', subnet: '198.18.0.32/28' });
+  expect(registered).toEqual(['dsh-team-test-net-run1-web']);
+  expect(created).toEqual([
+    [
+      'network',
+      'create',
+      '--driver',
+      'bridge',
+      '--subnet',
+      '198.18.0.32/28',
+      '--label',
+      'dsh-team.test-run=run1',
+      'dsh-team-test-net-run1-web',
+    ],
+  ]);
+});
 
 it('accepts live observations immediately before the deadline, reports selected facts and cleans both volumes', async () => {
   const daemon = webDaemon('just-before-deadline');
@@ -354,6 +430,7 @@ it('waits for the genuine launch announcement before judging a homepage that ini
       if (time < 500) earlyHttpStatuses.push(status);
       return Promise.resolve(status);
     },
+    routeTable: () => hostRouteTable,
   };
 
   const result = await runUserImage('web-startup', () => undefined, command, boundary);
@@ -548,9 +625,11 @@ it('uses real host HTTP with configured Host, no credentials and no redirect fol
   const daemon = webDaemon('', address.port);
 
   try {
-    await expect(runUserImage('web-startup', () => undefined, daemon.command)).rejects.toThrow(
-      '401',
-    );
+    await expect(
+      runUserImage('web-startup', () => undefined, daemon.command, {
+        routeTable: () => hostRouteTable,
+      }),
+    ).rejects.toThrow('401');
     expect(requests).toEqual([
       { path: '/', host: 'dsh-team.test:3080', cookie: undefined, authorization: undefined },
     ]);
@@ -623,6 +702,7 @@ it.each(['stalled', 'disconnected'])(
 
     try {
       const run = runUserImage('web-startup', () => undefined, command, {
+        routeTable: () => hostRouteTable,
         now: () => time,
         pause: (milliseconds) => {
           time += milliseconds;
