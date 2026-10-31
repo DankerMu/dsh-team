@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
@@ -53,10 +54,15 @@ function stage1Token(logs: string): string | undefined {
   return STAGE1_LAUNCH.exec(logs)?.[1];
 }
 
+/** Failures report only the verb, exit facts and timing: args and output may carry credentials. */
 function docker(lifecycle: UserImageLifecycle, args: string[], timeout = 30_000): string {
+  const started = performance.now();
   const result = lifecycle.command(args, timeout);
+  const elapsed = Math.round(performance.now() - started);
   if (result.status !== 0 || result.error !== undefined)
-    throw new Error(`Volume upgrade Docker ${args[0] ?? 'operation'} failed`);
+    throw new Error(
+      `Volume upgrade Docker ${args[0] ?? 'operation'} failed (status ${String(result.status)}, signal ${result.signal ?? 'null'}, ${String(elapsed)}ms of ${String(timeout)}ms)`,
+    );
   return result.stdout;
 }
 
