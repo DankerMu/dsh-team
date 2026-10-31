@@ -158,9 +158,12 @@ export async function runTestStack(options) {
 }
 
 /**
- * Launches the vitest entry directly under this Node, without a pnpm hop: forwarded
- * SIGINT/SIGTERM reach the case runner itself, and settlement is its own `close`, so
- * retirement never starts while it can still register resources.
+ * Launches the vitest entry directly under this Node, without a pnpm hop, so forwarded
+ * SIGINT/SIGTERM reach vitest itself and settlement is its own `close`. That settles vitest,
+ * not its forks-pool workers or docker CLI grandchildren: a signalled vitest exits without
+ * stopping a worker that may still register or create a resource. Task 10.3 must add
+ * process-group settlement (detached child, signal `-pid`, bounded ESRCH-only observation,
+ * retain the journal when unsettled) before any `*.stack.test.ts` registers resources.
  * @param {NodeJS.ProcessEnv} env
  * @param {string} cwd
  * @param {{file: string, args: string[]}} [launch]
