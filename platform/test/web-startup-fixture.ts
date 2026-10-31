@@ -7,6 +7,11 @@ import type { DockerCommand } from './docker-command.ts';
 import { launchTokenPresent } from '../src/orchestrator/index.ts';
 
 const configuredHost = 'dsh-team.test:3080';
+/**
+ * Fixed base+2 instance address that fixture-generated managed overlays bind DSH Web to.
+ * DSH 0.2.1 binds only the overlay's concrete address, so the Web container must occupy it.
+ */
+export const WEB_CONTAINER_ADDRESS = '172.30.0.2';
 const patchTarget = '/managed/patch.yml';
 
 export interface WebStartupBoundary {
@@ -49,6 +54,7 @@ export async function observeWebEndpoint(
   container: string,
   inspectPort: () => number,
   authority: string,
+  announced: (logs: string) => boolean,
   boundary: Partial<WebStartupBoundary> = {},
   deadline?: number,
 ): Promise<number> {
@@ -70,7 +76,7 @@ export async function observeWebEndpoint(
     const logs = webDocker(command, ['logs', '--tail', '50', container], remaining());
     remaining();
     // HTTP routes may still be assembling before the released readiness announcement.
-    if (!launchTokenPresent(logs)) {
+    if (!announced(logs)) {
       await pause(Math.min(250, remaining()));
       continue;
     }
@@ -240,6 +246,15 @@ function portAndSettings(value: unknown, expected: WebContainer): number {
   return port;
 }
 
+/** DSH 0.2.1 announces the concrete address it bound: the container's single network address. */
+function announcedAddress(value: unknown): string {
+  const networks = Object.values(record(record(record(value).NetworkSettings).Networks));
+  const address = networks.length === 1 ? record(networks[0]).IPAddress : undefined;
+  if (typeof address !== 'string' || address === '')
+    throw new Error('Web requires one container network address');
+  return address;
+}
+
 function selectedProcess(value: unknown): Record<string, unknown> {
   if (!Array.isArray(value) || value.length !== 1)
     throw new Error('Actual DSH process missing or ambiguous');
@@ -384,12 +399,14 @@ export async function runWebStartup(
     return text;
   }
   bounded(['start', expected.container]);
+  let address = '';
   const inspect = () => {
     const snapshot = record(
       json(bounded(['container', 'inspect', '--format', '{{json .}}', expected.container])),
     );
     if (record(snapshot.State).Running !== true)
       throw new Error('DSH Web exited before acceptance');
+    address = announcedAddress(snapshot);
     return portAndSettings(snapshot, expected);
   };
   const port = await observeWebEndpoint(
@@ -397,6 +414,7 @@ export async function runWebStartup(
     expected.container,
     inspect,
     trustedHost,
+    (logs) => launchTokenPresent(logs, address),
     { ...boundary, now },
     deadline,
   );
@@ -411,6 +429,7 @@ export async function runWebStartup(
     httpStatus: 401,
     configuredHost: trustedHost,
     hostPort: port,
+    announcedHost: address,
     ...process,
   });
 }

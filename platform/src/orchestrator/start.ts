@@ -549,15 +549,6 @@ export async function startUserContainer(
     const volumes = await ensureUserVolumes(client, userId);
     stage = 'managed composition';
     const observed = await composition(client, cleanupClient, userId, volumes.home, image, seccomp);
-    stage = 'managed overlay';
-    const generated = generateManagedConfig({
-      ...observed,
-      admin: user.role === 'admin',
-      defaultPermissionTier,
-      modelSettings,
-    });
-    if (generated.outcome === 'unconfigured') return generated;
-    const overlay = await writeManagedConfig(config.managedConfigDir, userId, generated.content);
     stage = 'network allocation';
     const cleanup = cleanupClient;
     network = await allocate(userId, () =>
@@ -571,6 +562,19 @@ export async function startUserContainer(
         replacing,
       ),
     );
+    // DSH binds only the address its overlay names, so the overlay follows the allocated bridge.
+    stage = 'managed overlay';
+    const generated = generateManagedConfig({
+      ...observed,
+      admin: user.role === 'admin',
+      instanceAddress: instanceAddressLayout(network.subnet).container,
+      defaultPermissionTier,
+      modelSettings,
+    });
+    // Checked complete above; throwing keeps the created bridge on the rollback path.
+    if (generated.outcome === 'unconfigured')
+      throw new Error('Managed overlay unexpectedly unconfigured');
+    const overlay = await writeManagedConfig(config.managedConfigDir, userId, generated.content);
     stage = 'container creation';
     signal.throwIfAborted();
     const pendingCreation = beginCreationAttempt(

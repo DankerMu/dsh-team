@@ -5,10 +5,13 @@ import { inspect } from 'node:util';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
+import { launchTokenPresent } from '../src/orchestrator/index.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 
-const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN';
+// Shaped like a released 43-character launch token so only the address decides acceptance.
+const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN_0000000000000000';
+const containerAddress = '172.17.0.2';
 const imageId = `sha256:${'b'.repeat(64)}`;
 interface WebDaemon {
   command: DockerCommand;
@@ -72,6 +75,7 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       Config: { Labels: { 'dsh-team.test-run': label } },
       HostConfig: hostConfiguration(args[args.indexOf('--security-opt') + 1]),
       NetworkSettings: {
+        Networks: { bridge: { IPAddress: containerAddress } },
         Ports: {
           '3080/tcp': [
             {
@@ -133,10 +137,10 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       }
       if (fault === 'missing-token') return ok('DSH listening\n');
       if (fault === 'false-token-line')
-        return ok(`not dsh web: http://127.0.0.1:3080/?token=${privateToken}\n`);
-      return ok(
-        `dsh web: http://127.0.0.1:3080/?token=${privateToken} (LAN: http://172.17.0.2:3080/?token=${privateToken})\n`,
-      );
+        return ok(`not dsh web: http://${containerAddress}:3080/?token=${privateToken}\n`);
+      if (fault === 'loopback-token-line')
+        return ok(`dsh web: http://127.0.0.1:3080/?token=${privateToken}\n`);
+      return ok(`dsh web: http://${containerAddress}:3080/?token=${privateToken}\n`);
     }
     if (operation === 'exec') {
       if (fault === 'late-process') time = 60_000;
@@ -240,6 +244,7 @@ it('accepts live observations immediately before the deadline, reports selected 
     httpStatus: 401,
     configuredHost: 'dsh-team.test:3080',
     hostPort: 43127,
+    announcedHost: containerAddress,
     pid: 1,
     parentPid: 0,
     effectiveUid: 1001,
@@ -291,7 +296,9 @@ function endpointObserver(announcementAt: number, statusAfterAnnouncement = 401)
     return {
       status: 0,
       stdout:
-        time >= announcementAt ? `dsh web: http://127.0.0.1:3080/?token=${privateToken}\n` : '',
+        time >= announcementAt
+          ? `dsh web: http://${containerAddress}:3080/?token=${privateToken}\n`
+          : '',
       stderr: '',
     };
   };
@@ -318,6 +325,7 @@ it('observes an already-started DSH only after its launch announcement, ignoring
     'already-started-dsh',
     () => 43127,
     'dsh-team.test:3080',
+    (logs) => launchTokenPresent(logs, containerAddress),
     fixture.boundary,
   );
 
@@ -335,6 +343,7 @@ it('rejects HTTP200 from an already-started DSH after its genuine launch announc
       'already-started-dsh',
       () => 43127,
       'dsh-team.test:3080',
+      (logs) => launchTokenPresent(logs, containerAddress),
       fixture.boundary,
     ),
   ).rejects.toThrow('Unauthenticated DSH homepage must return 401');
@@ -350,6 +359,7 @@ it('bounds observation of an already-started DSH that never announces readiness 
     'already-started-dsh',
     () => 43127,
     'dsh-team.test:3080',
+    (logs) => launchTokenPresent(logs, containerAddress),
     fixture.boundary,
   ).catch((failure: unknown) => failure);
 
@@ -362,6 +372,7 @@ it('bounds observation of an already-started DSH that never announces readiness 
 it.each([
   ['missing-token', 'deadline'],
   ['false-token-line', 'deadline'],
+  ['loopback-token-line', 'deadline'],
   ['early-exit', 'exited'],
   ['late-start', 'deadline'],
   ['late-http', 'deadline'],

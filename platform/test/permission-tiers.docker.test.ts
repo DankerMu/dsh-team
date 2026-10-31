@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import { collectComposition, execScript } from './managed-policy-fixture.ts';
+import { WEB_CONTAINER_ADDRESS } from './web-startup-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
 import {
@@ -86,6 +87,7 @@ it('authorizes real released tools through native approval, Auto protocol, child
         const generated = generateManagedConfig({
           ...composition,
           admin: false,
+          instanceAddress: WEB_CONTAINER_ADDRESS,
           defaultPermissionTier,
           modelSettings: {
             baseURL: 'http://127.0.0.1:9/v1',

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collectComposition, execScript, qualifyHostSession } from './managed-policy-fixture.ts';
-import { runWebStartup, execWebScript } from './web-startup-fixture.ts';
+import { runWebStartup, execWebScript, WEB_CONTAINER_ADDRESS } from './web-startup-fixture.ts';
 import { generateManagedConfig, writeManagedConfig } from '../src/managed-config/index.ts';
 import {
   mappedFlags,
@@ -512,7 +512,8 @@ export async function runPermissionBrowserScenario(
     lifecycle.registerContainer(name);
     const startup = JSON.parse(await runWebStartup(lifecycle.command, web));
     report.startup = startup;
-    const { origin, cookie } = await qualifyHostSession(startup.hostPort, command(['logs', name]));
+    const [logs, announced] = [command(['logs', name]), startup.announcedHost];
+    const { origin, cookie } = await qualifyHostSession(startup.hostPort, logs, announced);
     const rpc = async (method, args) => {
       const result = await mappedRpc(origin, cookie, method, args);
       assert.equal(result.ok, true, `oracle-rpc-${method.replaceAll('/', '-')}`);
@@ -610,6 +611,7 @@ async function prepareWeb(lifecycle, name, report, overlayUser) {
   const generated = generateManagedConfig({
     ...composition,
     admin: false,
+    instanceAddress: WEB_CONTAINER_ADDRESS,
     defaultPermissionTier: 'approval',
     modelSettings: {
       baseURL: 'http://127.0.0.1:9/v1',

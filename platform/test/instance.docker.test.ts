@@ -8,11 +8,7 @@ import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import type { PlatformConfig } from '../src/config.ts';
-import {
-  createInstanceService,
-  createOrchestrator,
-  extractLaunchToken,
-} from '../src/orchestrator/index.ts';
+import { createInstanceService, createOrchestrator } from '../src/orchestrator/index.ts';
 import type { DockerClient } from '../src/orchestrator/index.ts';
 import {
   assertFailedStartupLogs,
@@ -615,8 +611,8 @@ it('public real startup error retains stopped container and volumes, then same-s
         const diagnostic =
           JSON.stringify(row.last_error) + JSON.stringify(audits) + f.lines.join('');
         expect(diagnostic).not.toContain(MODEL_KEY);
-        const token = extractLaunchToken(actual.stdout);
-        if (token !== undefined) expect(diagnostic).not.toContain(token);
+        // The corrupted overlay stops boot before the Web server binds: no credential announced.
+        expect(actual.stdout).not.toMatch(/^dsh web: /m);
 
         // No fixture retirement, deletion, row repair or new service/session: disable only the fault.
         f.disableFault();

@@ -1,3 +1,4 @@
+import { isIPv4 } from 'node:net';
 import type { Settings } from '../db/index.ts';
 
 type Json = string | number | boolean | null | readonly Json[] | { readonly [key: string]: Json };
@@ -34,6 +35,8 @@ interface PresetEntry {
 export interface ManagedConfigInput {
   /** Whether the account was an administrator when this overlay was generated. */
   readonly admin: boolean;
+  /** The employee container's fixed address (base+2 of its aligned /28); DSH binds only it. */
+  readonly instanceAddress: string;
   readonly modelSettings: {
     readonly baseURL?: string | undefined;
     readonly apiKeyEnv: string;
@@ -125,10 +128,26 @@ export function hasCompleteModelSettings(
   );
 }
 
+function isInstanceAddress(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    isIPv4(value) &&
+    value.split('.').map(Number).join('.') === value &&
+    value !== '0.0.0.0' &&
+    Number(value.split('.')[3]) % 16 === 2
+  );
+}
+
 export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigResult {
   // Untyped fixture callers can omit the flag; never default it to either role.
   if (typeof input.admin !== 'boolean') {
     throw new TypeError('Managed overlay administrator flag must be boolean');
+  }
+  // DSH 0.2.1 rejects wildcard binds; a wrong concrete address would never announce or serve.
+  if (!isInstanceAddress(input.instanceAddress)) {
+    throw new TypeError(
+      'Managed overlay instance address must be the fixed container address of an aligned /28',
+    );
   }
   if (!hasCompleteModelSettings(input.modelSettings)) {
     return { outcome: 'unconfigured' };
@@ -139,7 +158,7 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
     content: JSON.stringify([
       {
         id: 'webserver',
-        config: { host: '0.0.0.0', port: 3080, compression: 'gzip' },
+        config: { host: input.instanceAddress, port: 3080, compression: 'gzip' },
       },
       { id: 'tool-web', disabled: true },
       { id: 'llm-deepseek', disabled: true },

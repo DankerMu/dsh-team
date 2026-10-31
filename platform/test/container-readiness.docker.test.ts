@@ -7,6 +7,7 @@ import { START_MODEL } from './container-start-fixture.ts';
 import { isBadOverlayFastExit } from './bad-overlay-start-failure.ts';
 import {
   assertFailedStartupLogs,
+  bridgeAddress,
   corruptOwnedOverlay,
   cookieHttpStatus,
   inspect,
@@ -19,6 +20,18 @@ import { isAbsentResource } from './docker-command.ts';
 
 function toleratedStartFailure(badOverlay: boolean, error: unknown): boolean {
   return badOverlay && isBadOverlayFastExit(error);
+}
+
+/** A corrupted overlay stops boot before the Web server binds, and its bridge is retired. */
+function observedLaunchToken(
+  stdout: string,
+  container: Record<string, unknown>,
+  userId: string,
+  badOverlay: boolean,
+): string | undefined {
+  if (!badOverlay) return extractLaunchToken(stdout, bridgeAddress(container, userId));
+  expect(stdout).not.toMatch(/^dsh web: /m);
+  return undefined;
 }
 
 async function assertAuthenticatedReadiness(
@@ -173,7 +186,7 @@ async function readinessScenario(
       JSON.stringify(failure, failure === undefined ? [] : Object.getOwnPropertyNames(failure)) +
       JSON.stringify(events) +
       JSON.stringify({ last_error: row.last_error });
-    const launchToken = extractLaunchToken(observed.stdout);
+    const launchToken = observedLaunchToken(observed.stdout, container, userId, badOverlay);
     if (launchToken !== undefined) expect(diagnostic.includes(launchToken)).toBe(false);
     if (badOverlay) {
       assertFailedStartupLogs(row, observed.stdout + observed.stderr);

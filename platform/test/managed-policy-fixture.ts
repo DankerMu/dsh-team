@@ -20,7 +20,7 @@ import type { DockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
-import { runWebStartup } from './web-startup-fixture.ts';
+import { runWebStartup, WEB_CONTAINER_ADDRESS } from './web-startup-fixture.ts';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
 import {
   browserEvidence,
@@ -363,6 +363,7 @@ async function publishOverlay(
 ): Promise<string> {
   const generated = generateManagedConfig({
     admin: false,
+    instanceAddress: WEB_CONTAINER_ADDRESS,
     modelSettings: {
       baseURL: MANAGED_ADDRESS,
       apiKeyEnv: API_KEY_ENV,
@@ -519,8 +520,9 @@ function recordBrowserObservation(
 export async function qualifyHostSession(
   hostPort: number,
   logs: string,
+  address: string,
+  token = extractLaunchToken(logs, address),
 ): Promise<{ origin: string; cookie: string; workspace: { available: true; workBound: true } }> {
-  const token = extractLaunchToken(logs);
   if (token === undefined) throw new Error(INVALID);
   const cookie = await exchangeLaunchToken({
     host: '127.0.0.1',
@@ -594,7 +596,8 @@ async function startWeb(
   if (browser === undefined) {
     return { hostPort, observation };
   }
-  const { origin, cookie, workspace } = await qualifyHostSession(hostPort, logs);
+  const announced = requireStringField(summary, 'announcedHost');
+  const { origin, cookie, workspace } = await qualifyHostSession(hostPort, logs, announced);
   const browserResult = await acceptObservation({
     origin,
     cookie,

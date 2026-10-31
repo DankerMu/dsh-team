@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import { collectComposition, execScript } from './managed-policy-fixture.ts';
+import { WEB_CONTAINER_ADDRESS } from './web-startup-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
 import {
@@ -48,6 +49,7 @@ it('selects genuine native writer children while preserving tiers, cold identity
           const generated = generateManagedConfig({
             ...composition,
             admin: false,
+            instanceAddress: WEB_CONTAINER_ADDRESS,
             defaultPermissionTier,
             modelSettings: {
               baseURL: 'http://127.0.0.1:9/v1',
@@ -157,6 +159,7 @@ it('rejects a native writer that only copies a complete parent-authored notice',
       const generated = generateManagedConfig({
         ...composition,
         admin: false,
+        instanceAddress: WEB_CONTAINER_ADDRESS,
         defaultPermissionTier: 'yolo',
         modelSettings: {
           baseURL: 'http://127.0.0.1:9/v1',

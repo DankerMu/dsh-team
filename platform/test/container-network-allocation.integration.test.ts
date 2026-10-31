@@ -1,4 +1,4 @@
-import { stat, watch } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { writeSettings } from '../src/db/index.ts';
@@ -383,20 +383,6 @@ it('public Unix allocation retains valid IPv6 inventory while selecting the firs
   }
 });
 
-async function observeOverlay(
-  directory: string,
-  userId: string,
-  signal: AbortSignal,
-): Promise<void> {
-  for await (const event of watch(directory, { signal })) {
-    if (event.filename === `${userId}.patch.yml`) {
-      await stat(join(directory, event.filename));
-      return;
-    }
-  }
-  throw new Error('Overlay observer closed without an owned committed file');
-}
-
 it.each(['before mutation', 'after mutation before response'] as const)(
   'canceling an accepted create %s retains allocation ownership until response and empty compensation settle',
   async (phase) => {
@@ -406,7 +392,7 @@ it.each(['before mutation', 'after mutation before response'] as const)(
     const mutationObserved = Promise.withResolvers<undefined>();
     const compensating = Promise.withResolvers<undefined>();
     const compensationRelease = Promise.withResolvers<undefined>();
-    const observer = new AbortController();
+    const helperRetired = Promise.withResolvers<undefined>();
     const earlyAllocations: { method: string; path: string }[] = [];
     let createHeld = false;
     let compensationSettled = false;
@@ -444,6 +430,9 @@ it.each(['before mutation', 'after mutation before response'] as const)(
         compensating.resolve(undefined);
         return compensationRelease.promise;
       }
+      // B's composition helper retirement is its last Docker effect before the allocation queue.
+      if (bLaunched && request.method === 'DELETE' && request.path.startsWith('/containers/'))
+        helperRetired.resolve(undefined);
       return undefined;
     });
     fixture.daemon.beforeRequest(({ method, path, body }) => {
@@ -474,17 +463,10 @@ it.each(['before mutation', 'after mutation before response'] as const)(
     });
     let b: Promise<unknown> | undefined;
     let bSettlement: Promise<unknown> | undefined;
-    let overlaySettlement: Promise<unknown> | undefined;
     try {
       await accepted.promise;
-      // B must reach a genuine filesystem output checkpoint before checking that allocation is held.
-      // The observation deadline only bounds a broken fixture; it is not an ordering assertion.
-      const overlay = observeOverlay(
-        fixture.input.config.managedConfigDir,
-        OTHER,
-        AbortSignal.any([observer.signal, AbortSignal.timeout(8_000)]),
-      );
-      overlaySettlement = Promise.allSettled([overlay]);
+      // B must reach a genuine Docker output checkpoint before checking that allocation is held;
+      // its overlay now follows its own allocation, so the helper retirement is that checkpoint.
       cancellation.abort();
       bLaunched = true;
       b = fixture.owner.startUserContainer({ ...fixture.input, userId: OTHER });
@@ -492,7 +474,7 @@ it.each(['before mutation', 'after mutation before response'] as const)(
         bFinished = true;
         return results;
       });
-      await overlay;
+      await helperRetired.promise;
 
       expect(aFinished).toBe(false);
       expect(bFinished).toBe(false);
@@ -537,8 +519,7 @@ it.each(['before mutation', 'after mutation before response'] as const)(
     } finally {
       createRelease.resolve(undefined);
       compensationRelease.resolve(undefined);
-      observer.abort();
-      await overlaySettlement;
+      helperRetired.resolve(undefined);
       await mutationObserved.promise;
       await aSettlement;
       await bSettlement;

@@ -119,16 +119,20 @@ export function validateEndpointAddress(
   return declaration === 'checked' ? validateDeclaredAddress(attachment, endpoint) : undefined;
 }
 
+/** The container's own address on its instance bridge, in either transport mode. */
+export function instanceBridgeAddress(document: unknown, userId: string): string {
+  const networks = object(object(object(document).NetworkSettings).Networks);
+  const host = object(networks[`dsh-team-net-${userId}`]).IPAddress;
+  if (typeof host !== 'string' || !isIPv4(host)) throw new Error('Invalid instance IPv4 endpoint');
+  return host;
+}
+
 export function upstreamHost(
   document: unknown,
   userId: string,
   mode: PlatformConfig['upstreamMode'],
 ): string {
-  if (mode === 'published-loopback') return '127.0.0.1';
-  const networks = object(object(object(document).NetworkSettings).Networks);
-  const host = object(networks[`dsh-team-net-${userId}`]).IPAddress;
-  if (typeof host !== 'string' || !isIPv4(host)) throw new Error('Invalid instance IPv4 endpoint');
-  return host;
+  return mode === 'published-loopback' ? '127.0.0.1' : instanceBridgeAddress(document, userId);
 }
 
 export function upstreamPort(document: unknown, mode: PlatformConfig['upstreamMode']): number {

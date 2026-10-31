@@ -26,6 +26,15 @@ export async function inspectAsync(
   return containerDocument(await lifecycle.commandAsync(['container', 'inspect', name], 15_000));
 }
 
+/** DSH 0.2.1 announces the address it bound: the instance's own bridge address in both modes. */
+export function bridgeAddress(container: Record<string, unknown>, userId: string): string {
+  const networks = record(record(container.NetworkSettings).Networks);
+  const address = record(networks[`dsh-team-net-${userId}`]).IPAddress;
+  if (typeof address !== 'string' || address === '')
+    throw new Error('Missing instance bridge address');
+  return address;
+}
+
 export async function corruptOwnedOverlay(
   lifecycle: UserImageLifecycle,
   userId: string,
@@ -89,6 +98,14 @@ export function inspectNetwork(lifecycle: UserImageLifecycle, id: string): Recor
   const rows: unknown = JSON.parse(result.stdout);
   if (!Array.isArray(rows) || rows.length !== 1) throw new Error('Network inspect unavailable');
   return record(rows[0]);
+}
+
+/** The single IPAM subnet of the instance's owned bridge. */
+export function bridgeSubnet(lifecycle: UserImageLifecycle, userId: string): string {
+  const configs = record(inspectNetwork(lifecycle, `dsh-team-net-${userId}`).IPAM).Config;
+  const subnet = Array.isArray(configs) && configs.length === 1 ? record(configs[0]).Subnet : null;
+  if (typeof subnet !== 'string') throw new Error('Missing instance bridge subnet');
+  return subnet;
 }
 
 export function createStandInPlatform(lifecycle: UserImageLifecycle, name: string) {
