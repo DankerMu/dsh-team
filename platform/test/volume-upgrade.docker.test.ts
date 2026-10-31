@@ -77,7 +77,9 @@ function extractStage1Sources(repositoryRoot: string, directory: string): void {
 }
 
 function buildStage1Image(lifecycle: UserImageLifecycle, sources: string): string {
-  const tag = `dsh-team-test-${lifecycle.runId}-legacy`;
+  // Explicit tag: Docker reports an untagged missing name as `<name>:latest`, which the exact
+  // absence predicate would not match.
+  const tag = `dsh-team-test-${lifecycle.runId}:legacy-0.2.0-rc.2`;
   lifecycle.registerResource('image', tag, { 'dsh-team.test-run': lifecycle.runId });
   docker(lifecycle, userImageBuildArgs(lifecycle.runId, tag, undefined, sources), 600_000);
   const imageId = docker(lifecycle, ['image', 'inspect', '--format', '{{.Id}}', tag]).trim();

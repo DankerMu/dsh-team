@@ -126,7 +126,9 @@ ${script}" "${repo_root}/platform/src/orchestrator/index.ts" "$@"
 }
 
 # DSH 0.2.1 binds only its overlay's concrete address, so each probe Web container sits at the
-# base+2 of an owned /28. The subnet is chosen from a fresh IPAM snapshot of every Docker network.
+# base+2 of an owned /28. The subnet is chosen from a fresh IPAM snapshot of every Docker network
+# merged with the host IPv4 kernel routes (a host proxy tun can own part of the test pool), parsed
+# by the same hostRouteCidrs as the Docker fixtures. A missing or malformed route table fails.
 # Prints "<subnet> <base+2 address>".
 probe_allocate_subnet() {
   local ids cidrs
@@ -134,9 +136,18 @@ probe_allocate_subnet() {
   # shellcheck disable=SC2086 # one argument per hexadecimal network ID
   cidrs="$(probe_run_bound "$docker_seconds" docker network inspect --format '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' $ids)" || return 1
   printf '%s\n' "$cidrs" | probe_orchestrator "import { readFileSync } from 'node:fs';
+const { hostRouteCidrs } = await import(pathToFileURL(process.argv[2]).href);
+let routes;
+try {
+  routes = hostRouteCidrs(readFileSync(process.argv[3], 'utf8'));
+} catch {
+  process.stderr.write(process.argv[4] + ': host route table unreadable or malformed\\n');
+  process.exit(1);
+}
 const occupied = readFileSync(0, 'utf8').split('\\n').map((line) => line.trim()).filter(Boolean);
-const subnet = orchestrator.allocateSubnet('198.18.0.0/15', occupied);
-process.stdout.write(subnet + ' ' + orchestrator.instanceAddressLayout(subnet).container);"
+const subnet = orchestrator.allocateSubnet('198.18.0.0/15', [...occupied, ...routes]);
+process.stdout.write(subnet + ' ' + orchestrator.instanceAddressLayout(subnet).container);" \
+    "${repo_root}/platform/test/web-startup-fixture.ts" "${PROBE_ROUTE_TABLE:-/proc/net/route}" "$probe_name"
 }
 
 # A creation conflict fails the probe; no other subnet is retried.

@@ -21,7 +21,9 @@ Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
 Env: CHROME_BIN (complete pinned CfT140.0.7339.82
 chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
-PROBE_BROWSER_SECONDS (1-300, default 120).
+PROBE_BROWSER_SECONDS (1-300, default 120);
+PROBE_ROUTE_TABLE (host IPv4 route table, default /proc/net/route; missing or
+malformed fails subnet allocation).
 PROBE_COMPOSITION_FAULT (negative controls only): missing-plugin, wrong-plugin,
 reenabled-notice. The acceptance roster stays unchanged; each must fail.
 PROBE_COMPOSITION_EXTRA_PATCH (optional readable YAML, composition only):

@@ -22,7 +22,9 @@ Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
 Env: DMXAPI_KEY (required); CHROME_BIN (complete pinned CfT140.0.7339.82
 chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
-PROBE_BROWSER_SECONDS (1-300, default 120); PROBE_TASK_SECONDS (1-300, default 180).
+PROBE_BROWSER_SECONDS (1-300, default 120); PROBE_TASK_SECONDS (1-300, default 180);
+PROBE_ROUTE_TABLE (host IPv4 route table, default /proc/net/route; missing or
+malformed fails subnet allocation).
 EOF
 }
 [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { usage; exit 0; }

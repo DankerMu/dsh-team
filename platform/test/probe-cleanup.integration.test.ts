@@ -128,22 +128,30 @@ function boundBy(seconds: string, calls: readonly (readonly string[])[]): string
   return calls.map((argv) => [seconds, ...argv]);
 }
 
+/**
+ * Host route table seen by `probe_allocate_subnet` through `PROBE_ROUTE_TABLE`: text is written to
+ * an owned file, `null` names a file that does not exist, absent leaves the variable unset.
+ */
 function runCase(
   script: string,
   dockerSeconds: string,
   replies: readonly DockerReply[],
+  routeTable?: string | null,
 ): CaseResult {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-team-probe-cleanup-'));
   try {
     const dockerLog = join(directory, 'docker.log');
     const timeoutLog = join(directory, 'timeout.log');
     const timeoutViolations = join(directory, 'timeout-violations.log');
+    const routeFile = join(directory, 'route');
     // Controlled external executables on PATH, not mocks of the probe functions under test.
     writeFileSync(join(directory, 'docker'), dockerStub(replies), { mode: 0o700 });
     writeFileSync(join(directory, 'timeout'), TIMEOUT_STUB, { mode: 0o700 });
+    if (typeof routeTable === 'string') writeFileSync(routeFile, routeTable, { mode: 0o600 });
     const result = spawnSync('bash', ['-c', script], {
       cwd: directory,
       env: {
+        ...(routeTable === undefined ? {} : { PROBE_ROUTE_TABLE: routeFile }),
         PATH: `${directory}:${process.env.PATH ?? ''}`,
         TMPDIR: directory,
         STUB_DOCKER_LOG: dockerLog,
@@ -581,19 +589,83 @@ describe('lifecycle fixed-address helpers', { timeout: CASE_TIMEOUT_MS }, () => 
     'b2',
   ];
 
+  // giap-vps `/proc/net/route` (2026-10-31): a local proxy tun `Meta` owns 198.18.0.0/30 and the
+  // default bridge 172.17.0.0/16; the default route is skipped.
+  const ROUTE_HEADER =
+    'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n';
+  const DOCKER0_ROUTE = 'docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n';
+  const GIAP_ROUTES =
+    ROUTE_HEADER +
+    'eth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n' +
+    'Meta\t000012C6\t00000000\t0001\t0\t0\t0\tFCFFFFFF\t0\t0\t0\n' +
+    DOCKER0_ROUTE;
+  const allocate = lifecycleScript(
+    'if allocation="$(probe_allocate_subnet)"; then printf "allocation=%s\\n" "$allocation"; ' +
+      'else printf "allocation-status=%s\\n" "$?"; fi',
+  );
+
   it('chooses the first free /28 of the test pool through the orchestrator allocator', () => {
     const result = runCase(
-      lifecycleScript('printf "allocation=%s\\n" "$(probe_allocate_subnet)"'),
+      allocate,
       LIFECYCLE_DOCKER_SECONDS,
       [
         { argv: networks, status: 0, stdout: 'a1\nb2\n' },
         { argv: subnets, status: 0, stdout: '198.18.0.0/28\nfd00::/64\n\n172.17.0.0/16\n' },
       ],
+      ROUTE_HEADER + DOCKER0_ROUTE,
     );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('allocation=198.18.0.16/28 198.18.0.18\n');
     expect(result.bounded).toEqual(boundBy('5', [networks, subnets]));
+  });
+
+  it('excludes host kernel routes, so the giap-vps proxy tun pushes allocation past both sources', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '198.18.0.16/28\n172.17.0.0/16\n' },
+      ],
+      GIAP_ROUTES,
+    );
+
+    // Docker IPAM alone leaves 198.18.0.0/28 free; only the host route table excludes it.
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('allocation=198.18.0.32/28 198.18.0.34\n');
+  });
+
+  it('fails the probe when the host route table is missing', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '172.17.0.0/16\n' },
+      ],
+      null,
+    );
+
+    expect(result.stdout).toMatch(/^allocation-status=[1-9]\d*$/m);
+    expect(result.stdout).not.toContain('allocation=');
+    expect(result.stderr).toContain('probe-test: host route table unreadable or malformed');
+  });
+
+  it('fails the probe on a malformed host route row instead of dropping it', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '172.17.0.0/16\n' },
+      ],
+      ROUTE_HEADER + 'Meta\t000012C6\t00000000\t0001\t0\t0\t0\tFCFFFFF\t0\t0\t0\n',
+    );
+
+    expect(result.stdout).toMatch(/^allocation-status=[1-9]\d*$/m);
+    expect(result.stdout).not.toContain('allocation=');
+    expect(result.stderr).toContain('probe-test: host route table unreadable or malformed');
   });
 
   const running = ['inspect', '-f', '{{.State.Running}}', 'c'];
