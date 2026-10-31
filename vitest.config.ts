@@ -40,6 +40,15 @@ export default defineConfig({
           testTimeout: 900_000,
         },
       },
+      {
+        test: {
+          name: 'stack',
+          // No case exists until task 10.3; vitest's own "No test files found" nonzero is intended.
+          include: ['platform/test/**/*.stack.test.ts'],
+          fileParallelism: false,
+          testTimeout: 900_000,
+        },
+      },
     ],
     coverage: {
       provider: 'v8',

@@ -358,6 +358,9 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
   - 内存前提：`docker info` 报告的 MemTotal ≥ 14 GiB，否则在创建资源前失败。
   - 在本机构建平台和员工镜像（arm64），用 compose 拉起平台和 Document Server。
   - 连接已运行的本机 RAGFlow 测试栈，地址和密钥只来自私有配置文件。
+  - 私有配置文件固定为 `~/.config/dsh-team/stack.json`：归当前用户、0600、≤16 KiB 的 JSON 对象，封闭键集 `ragflowUrl`、`ragflowApiKey`、`embeddingApiKey`；`ragflowUrl` 只接受字面 loopback 主机（`127.0.0.1`、`[::1]`；不接受要经解析的 `localhost`），把 D16「只写本机测试栈」变成机械检查。读取器就是 `docker-proxy-environment.mjs` 导出的 `readPrivateJsonFile`，与 `docker-proxy.json` 共用一个实现，不新建模块（该模块被按文件名发运进浏览器镜像和 VPS archive 闭包）。
+  - 版本前提用 RAGFlow 1.0 的无鉴权 `GET /api/v1/system/version`，要求 HTTP 200 且 `data` 恰为 `v1.0.0-rc2`；探测不跟随重定向、5s 超时、响应体 64 KiB 上限，错误里不出现地址与密钥。
+  - 入口是 `node scripts/test-stack.mjs`：前提全部通过后才运行 vitest 项目 `stack`（`platform/test/**/*.stack.test.ts`），用例沿用 `platform/test/docker-cleanup.ts` 的 `dsh-team.test-run` 标签、`registerCleanupTarget` 账本与 `retireCleanupJournal` 精确退休；前提检查里的 `docker info` 与账本退休经同一个 `createDockerCommands`（固定 PATH、私有空 `DOCKER_CONFIG`），所以「Docker 可用」证明的正是清理能连上的那条路；`acquireDeploymentLock` 依赖 macOS 没有的 `flock`，10.3 拉起固定名 `dsh-team-platform` 之前必须先交付一个 macOS 可用的锁；没有用例文件时以 vitest 的非零结束，不加 `passWithNoTests`，不算通过。
   - 跑知识库和 Office 的端到端浏览器与接口用例。
   - 资源命名和清理沿用 `dsh-team` 前缀和自有清单的约定。
 - **浏览器**：用仓库已钉定的 Playwright Chromium 1.63（arm64 可用），经平台网关驱动真实 DSH。

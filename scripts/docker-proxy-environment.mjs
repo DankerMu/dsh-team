@@ -3,6 +3,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 
 const INVALID = 'Trusted host Docker proxy configuration invalid';
+const PRIVATE_INVALID = 'Private configuration file invalid';
 const MAX_BYTES = 16_384;
 
 /** @param {string} value */
@@ -17,11 +18,10 @@ function loopbackProxy(value) {
 }
 
 /**
- * @param {string} text
+ * @param {unknown} value
  * @returns {{HTTP_PROXY?: string, HTTPS_PROXY?: string, NO_PROXY?: string}}
  */
-function proxyFields(text) {
-  const value = /** @type {unknown} */ (JSON.parse(text));
+function proxyFields(value) {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error(INVALID);
   /** @type {{HTTP_PROXY?: string, HTTPS_PROXY?: string, NO_PROXY?: string}} */
   const result = {};
@@ -36,10 +36,10 @@ function proxyFields(text) {
 }
 
 /** @param {number} descriptor @param {number} uid */
-function readProxyFields(descriptor, uid) {
+function readPrivateJson(descriptor, uid) {
   const info = fstatSync(descriptor);
   if (!info.isFile() || info.uid !== uid || (info.mode & 0o7777) !== 0o600 || info.size > MAX_BYTES)
-    throw new Error(INVALID);
+    throw new Error(PRIVATE_INVALID);
   const bytes = Buffer.allocUnsafe(MAX_BYTES + 1);
   let length = 0;
   while (length < bytes.length) {
@@ -47,27 +47,32 @@ function readProxyFields(descriptor, uid) {
     if (count === 0) break;
     length += count;
   }
-  if (length > MAX_BYTES) throw new Error(INVALID);
-  return proxyFields(new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length)));
+  if (length > MAX_BYTES) throw new Error(PRIVATE_INVALID);
+  const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length));
+  return /** @type {unknown} */ (JSON.parse(text));
 }
 
-/** @param {number} uid */
-function hostProxyEnvironment(uid) {
+/**
+ * Owned 0600 regular-file JSON reader; only ENOENT is absence. Every other failure is one fixed
+ * error without the path, contents or raw cause, and the descriptor is closed on every path.
+ * @param {string} path
+ * @param {number} uid
+ * @returns {{present: false} | {present: true, value: unknown}}
+ */
+export function readPrivateJsonFile(path, uid) {
   let descriptor;
   try {
-    descriptor = openSync(
-      join(homedir(), '.config/dsh-team/docker-proxy.json'),
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return {};
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      return { present: false };
     // Project the failed open below without retaining a private filesystem error.
   }
-  if (descriptor === undefined) throw new Error(INVALID);
-  /** @type {ReturnType<typeof proxyFields> | undefined} */
+  if (descriptor === undefined) throw new Error(PRIVATE_INVALID);
+  /** @type {{present: true, value: unknown} | undefined} */
   let selected;
   try {
-    selected = readProxyFields(descriptor, uid);
+    selected = { present: true, value: readPrivateJson(descriptor, uid) };
   } catch {
     // Project rejection only after closure; raw config/parse errors are not retained.
   } finally {
@@ -77,8 +82,19 @@ function hostProxyEnvironment(uid) {
       selected = undefined;
     }
   }
-  if (selected === undefined) throw new Error(INVALID);
+  if (selected === undefined) throw new Error(PRIVATE_INVALID);
   return selected;
+}
+
+/** @param {number} uid */
+function hostProxyEnvironment(uid) {
+  let file;
+  try {
+    file = readPrivateJsonFile(join(homedir(), '.config/dsh-team/docker-proxy.json'), uid);
+  } catch {
+    throw new Error(INVALID);
+  }
+  return file.present ? proxyFields(file.value) : {};
 }
 
 /** Verification Docker clients only; values may contain credentials and must never be logged. */
