@@ -199,17 +199,16 @@ async function selectChild(context, call, action, nonce, label, expected = {}) {
     `${label}-continuable-delegation-result`,
   );
   const idle = await waitRootIdle(context, `${label}-parent-idle`);
-  assertNeverAsked(idle, roots[0].sessionId, PARENT_ASKED);
+  assertNeverAsked(idle, roots[0].sessionId, call.callId, PARENT_ASKED);
   return child.mode;
 }
 
-/** No approval request or native question ever reached this Session. */
-function assertNeverAsked(facts, sessionId, message) {
+/** No approval or question for this call reached this Session; per call (STAGE1 roots ask too). */
+function assertNeverAsked(facts, sessionId, callId, message) {
+  const asked = (event) => event.type === 'approval/asked' && event.data.callId === callId;
   assert(
-    !facts.approvals.some((row) => row.sessionId === sessionId) &&
-      !facts.audit.some(
-        (event) => event.sessionId === sessionId && event.type === 'approval/asked',
-      ),
+    !facts.approvals.some((row) => row.sessionId === sessionId && row.callId === callId) &&
+      !facts.audit.some((event) => event.sessionId === sessionId && asked(event)),
     message,
   );
 }
@@ -311,7 +310,7 @@ async function observeUnattended(context, call, label) {
   const dispatch = final.dispatch.filter((row) => row.callId === call.callId);
   assert.equal(dispatch.length, 1);
   assert.equal(final.results.find((row) => row.callId === call.callId).isError, false);
-  assertNeverAsked(final, call.sessionId, 'no native question under this tier');
+  assertNeverAsked(final, call.sessionId, call.callId, 'no native question under this tier');
   assert.equal(
     await evaluate(browser.page, `document.querySelectorAll(${JSON.stringify(PANEL)}).length`),
     0,
@@ -343,7 +342,7 @@ async function settleContinuable(context, call, expected, label) {
   );
   assert.equal(rootTurns(final, roots[0]), expected.turns, 'exactly one settled wake-up turn');
   assert.equal(rootDispatch(final, roots[0]), expected.dispatch, 'wake-up turn runs no tool');
-  assertNeverAsked(final, roots[0].sessionId, PARENT_ASKED);
+  assertNeverAsked(final, roots[0].sessionId, call.callId, PARENT_ASKED);
   return final;
 }
 
@@ -806,7 +805,7 @@ async function observePendingApproval(context, call, label) {
     // No repo approval seat ships since #393: child approvals are answered by the native panel
     // in the child's own Session, never as a parent request.
     const owners = pending.approvals.filter((row) => row.callId === call.callId);
-    const parent = pending.approvals.some((row) => row.sessionId === context.roots[0].sessionId);
+    const parent = owners.some((row) => row.sessionId === context.roots[0].sessionId);
     observeAssertion(
       'pending-native-child-panel',
       owners.length === 1 && owners[0].sessionId === call.sessionId && !parent,
