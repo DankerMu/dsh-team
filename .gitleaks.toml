@@ -1,0 +1,9 @@
+# Extends the gitleaks default rules; allowlists only one historical, nonsecret fixture finding.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic 43-character DSH launch-token fixture in the parser unit test (commit 68b621b); no credential"
+condition = "AND"
+commits = ["68b621b88b227500c97f0aebe284277098ff4ce8"]
+paths = ['''^platform/src/orchestrator/web-launch-token\.test\.ts$''']

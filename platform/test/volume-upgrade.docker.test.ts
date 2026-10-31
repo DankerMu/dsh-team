@@ -144,35 +144,64 @@ function initializeStage1Volumes(lifecycle: UserImageLifecycle, userId: string, 
   ]);
 }
 
-/** Session headers of every plain JSONL generation of one Session, observed read-only. */
+/**
+ * Session headers of every generation log of one Session, observed read-only. 0.2.1
+ * `dsh-session-persistence-jsonl` defaults to zstd (`<sessionDir>/v4.jsonl.zstd`); plain `.jsonl`
+ * stays covered in case the stage-1 release wrote it. A zstd log is read whole and decompressed in
+ * memory only; logs above 8 MiB or failing decompression are recorded as skipped, never judged.
+ * The header line is tagged `type: "session"` (dsh-session-format-v1-to-v2 `encodeHeader`).
+ */
 function sessionHeaderScript(sessionId: string): string {
   return `
 import { createHash } from 'node:crypto';
-import { closeSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs';
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { zstdDecompressSync } from 'node:zlib';
+const MAX_LOG_BYTES = 8 * 1024 * 1024;
 const headers = [];
+const skipped = [];
+const plainHead = (path) => {
+  const handle = openSync(path, 'r');
+  const buffer = Buffer.alloc(65536);
+  const length = readSync(handle, buffer, 0, buffer.length, 0);
+  closeSync(handle);
+  return buffer.subarray(0, length);
+};
+const zstdLog = (path, file) => {
+  if (statSync(path).size > MAX_LOG_BYTES) {
+    skipped.push({ file, reason: 'oversized' });
+    return undefined;
+  }
+  try {
+    return zstdDecompressSync(readFileSync(path), { maxOutputLength: 8 * MAX_LOG_BYTES });
+  } catch {
+    skipped.push({ file, reason: 'decompress' });
+    return undefined;
+  }
+};
+const compressionOf = (name) =>
+  name.endsWith('.jsonl.zstd') ? 'zstd' : name.endsWith('.jsonl') ? 'none' : undefined;
 const walk = (directory, depth) => {
   if (depth > 6) return;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) walk(path, depth + 1);
-    else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      const handle = openSync(path, 'r');
-      const buffer = Buffer.alloc(65536);
-      const length = readSync(handle, buffer, 0, buffer.length, 0);
-      closeSync(handle);
-      try {
-        const header = JSON.parse(buffer.subarray(0, length).toString('utf8').split('\\n')[0]);
-        if (header.type === 'session' && header.id === ${JSON.stringify(sessionId)})
-          headers.push({ file: entry.name, formatVersion: header.version });
-      } catch {}
-    }
+    const compression = entry.isFile() ? compressionOf(entry.name) : undefined;
+    if (compression === undefined) continue;
+    const bytes = compression === 'zstd' ? zstdLog(path, entry.name) : plainHead(path);
+    if (bytes === undefined) continue;
+    try {
+      const header = JSON.parse(bytes.toString('utf8').split('\\n')[0]);
+      if (header.type === 'session' && header.id === ${JSON.stringify(sessionId)})
+        headers.push({ file: entry.name, formatVersion: header.version, compression });
+    } catch {}
   }
 };
 walk('/data/home/sessions', 0);
 const profile = readFileSync('/data/home/profiles/web/package.json');
 process.stdout.write(JSON.stringify({
   headers: headers.sort((left, right) => left.file.localeCompare(right.file)),
+  skipped,
   bundles: JSON.parse(profile).dsh?.profile?.bundles ?? null,
   profileSha256: createHash('sha256').update(profile).digest('hex'),
   marker: readFileSync(${JSON.stringify(MARKER)}, 'utf8'),
@@ -377,6 +406,7 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
         bundles: stage1.observed.bundles,
         profileSha256: stage1.observed.profileSha256,
         sessionHeaders: stage1.observed.headers,
+        skippedLogs: stage1.observed.skipped,
       },
       skippedBeforeReset: dump.skippingBundle,
       dumpExit: dump.exit,
@@ -387,6 +417,7 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
         bundles: upgraded.bundles,
         profileSha256: upgraded.profileSha256,
         sessionHeaders: upgraded.headers,
+        skippedLogs: upgraded.skipped,
       },
       retired: true,
     });
@@ -395,6 +426,15 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
     database.close();
     rmSync(sources, { recursive: true, force: true });
   }
+}
+
+/** Distinct format versions of a non-empty header list; each must be a positive safe integer. */
+function headerVersions(headers: unknown): number[] {
+  expect(Array.isArray(headers) && headers.length > 0).toBe(true);
+  const versions = (headers as unknown[]).map((header) => record(header).formatVersion);
+  for (const version of versions)
+    expect(Number.isSafeInteger(version) && Number(version) > 0).toBe(true);
+  return [...new Set(versions as number[])].sort((left, right) => left - right);
 }
 
 it('resets a stage-1 DSH 0.2.0-rc.2 volume pair to the 0.2.1-rc.2 seed and keeps its Session and files', async () => {
@@ -407,5 +447,10 @@ it('resets a stage-1 DSH 0.2.0-rc.2 volume pair to the 0.2.1-rc.2 seed and keeps
       sessionReadable: true,
       retired: true,
     });
+    // The recorded summary carries the observed version; stage-1 and upgraded logs must agree.
+    const { stage1, upgraded } = JSON.parse(summary) as Record<string, Record<string, unknown>>;
+    expect(headerVersions(upgraded?.sessionHeaders)).toEqual(
+      headerVersions(stage1?.sessionHeaders),
+    );
   });
 });

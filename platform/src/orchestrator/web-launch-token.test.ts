@@ -2,8 +2,13 @@ import { expect, it } from 'vitest';
 import { extractLaunchToken, launchTokenPresent } from './index.ts';
 
 // Released client-connection tokens are 32 random bytes in unpadded base64url: 43 characters.
-const TOKEN = 'Ab_cd-12efGHij34klMNop56qrSTuv78wxYZ90ab_-Q';
+// Low-entropy synthetic fixture covering every base64url character class, including `_` and `-`.
+const TOKEN = `${'aZ9_-'.repeat(8)}bY8`;
 const ADDRESS = '172.30.0.2';
+
+it('uses a 43-character base64url fixture', () => {
+  expect(TOKEN).toMatch(/^[A-Za-z0-9_-]{43}$/);
+});
 
 it.each([
   `dsh web: http://172.30.0.2:3080/?token=${TOKEN}\n`,

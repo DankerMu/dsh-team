@@ -15,6 +15,7 @@ import {
   ownedCompletionRows,
 } from './owned-completion-fixture.ts';
 import { record } from './docker-cleanup.ts';
+import { rejectPluginFailures } from './plugin-failure-markers.ts';
 import { execWebScript, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebContainer, WebNetwork } from './web-startup-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -25,26 +26,6 @@ const KEY_ENV = 'DMXAPI_KEY';
 const PLATFORM_VALUE = 'dsh-team-platform-credential-nonsecret';
 const EMPLOYEE_VALUE = 'dsh-team-employee-credential-nonsecret';
 const CREDENTIALS = '/data/home/.credentials.yaml';
-// dsh-app-boot 0.2.1 boot-failure and compatibility-skip stderr prefixes.
-const PLUGIN_FAILURE_PREFIXES = [
-  'Failed plugins (',
-  'plugin tree failed to load',
-  'dsh: skipping profile bundle',
-  'dsh: disabling profile plugin',
-];
-
-/**
- * Without the realm's credentials service pi-ai falls back to the launch environment, so a failed
- * isolated store would still yield the platform value. Logs carry the launch token: they are judged
- * in memory and only the matched prefix leaves.
- */
-function rejectPluginFailures(logs: { stdout: string; stderr: string }): void {
-  for (const prefix of PLUGIN_FAILURE_PREFIXES) {
-    if (logs.stdout.includes(prefix) || logs.stderr.includes(prefix))
-      throw new Error(`Restarted instance plugin load failed: ${prefix}`);
-  }
-}
-
 function bearerSha256(value: string): string {
   return createHash('sha256').update(`Bearer ${value}`).digest('hex');
 }
@@ -144,7 +125,9 @@ export async function runCredentialPriorityScenario(
   const logs = lifecycle.command(['logs', restarted.container], 30_000);
   if (logs.status !== 0 || logs.error !== undefined || typeof startup.hostPort !== 'number')
     throw new Error('Restarted instance launch unavailable');
-  rejectPluginFailures(logs);
+  // Without the realm's credentials service pi-ai falls back to the launch environment, so a failed
+  // isolated store would still yield the platform value.
+  rejectPluginFailures(logs, 'Restarted instance plugin load failed');
   const host = await qualifyHostSession(startup.hostPort, logs.stdout, webAddress(network));
   await completeOwnedTurn(mappedSessionRpc(host.origin, host.cookie), 'credential priority probe');
   const ledger = record(JSON.parse(execWebScript(lifecycle.command, restarted, ledgerScript)));

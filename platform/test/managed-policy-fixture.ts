@@ -24,6 +24,7 @@ import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebNetwork } from './web-startup-fixture.ts';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
+import { rejectPluginFailures } from './plugin-failure-markers.ts';
 import {
   browserEvidence,
   createManagedPolicyEvidence,
@@ -606,18 +607,15 @@ async function prepareState(
 }
 
 /**
- * Every delivered plugin loaded (#393): DSH 0.2.1 skips an incompatible bundle or disables an
- * inserted row with these stderr prefixes and still boots. permission-tiers is host-only, so its
- * evidence is the effective managed tier and the injected execution service.
+ * Every delivered plugin loaded (#393): DSH 0.2.1 skips an incompatible bundle, disables an inserted
+ * row or leaves an optional entry inactive and still boots (see `rejectPluginFailures`).
+ * permission-tiers is host-only, so its evidence is the effective managed tier and the injected
+ * execution service.
  */
 function assertPluginsLoaded(lifecycle: UserImageLifecycle, name: string, observation: unknown) {
   const logs = lifecycle.command(['logs', name], 30_000);
   if (logs.error !== undefined || logs.status !== 0) throw new Error(INVALID);
-  for (const prefix of ['dsh: skipping profile bundle', 'dsh: disabling profile plugin']) {
-    if (logs.stdout.includes(prefix) || logs.stderr.includes(prefix)) {
-      throw new Error(`${INVALID}: ${prefix}`);
-    }
-  }
+  rejectPluginFailures(logs, INVALID);
   const { permissions } = parseJsonRecord(JSON.stringify(observation));
   if (!isDeepStrictEqual(permissions, MANAGED_YOLO_PERMISSIONS))
     throw new Error(`${INVALID}: managed permission tier`);
