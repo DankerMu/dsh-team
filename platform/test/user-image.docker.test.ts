@@ -1,4 +1,7 @@
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
+import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
 import { instanceAddressLayout } from '../src/orchestrator/index.ts';
@@ -24,6 +27,67 @@ it('builds the user image and reports exactly DSH 0.2.1-rc.2 with owned-resource
   process.stdout.write(
     `Docker version verified: run=${result.runId} image=${result.image} ` +
       `container=${result.container} version=${result.stdout.replace(/\r?\n$/, '')} cleanup=complete\n`,
+  );
+});
+
+const repositoryCatalog = readFileSync(
+  new URL('../../images/dsh-user/catalog.json', import.meta.url),
+);
+const catalogProbe = `
+import { createHash } from 'node:crypto';
+import { readFileSync, statSync } from 'node:fs';
+const files = {};
+for (const name of ['catalog.json', 'catalog-check.mjs', 'npm-baseline.json']) {
+  const stat = statSync('/opt/dsh-team/' + name);
+  files[name] = { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 };
+}
+const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
+process.stdout.write(JSON.stringify({
+  files,
+  catalogSha256: createHash('sha256').update(readFileSync('/opt/dsh-team/catalog.json')).digest('hex'),
+  baseline: read('/opt/dsh-team/npm-baseline.json'),
+  bundles: read('/opt/dsh-team/profile-seed/web/package.json').dsh.profile.bundles,
+}));
+`;
+
+// The version probe cannot read files, so the catalog delivery of the same build is its own case.
+it('delivers the repository catalog, its gate and the toolchain+DSH baseline root-owned read-only', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  const readOnly = { uid: 0, gid: 0, mode: 0o444 };
+  const shipped = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
+
+  await runUserImage(
+    'managed-policy',
+    (stdout) => {
+      const observed = JSON.parse(stdout) as Record<string, unknown>;
+      expect(observed.files).toEqual({
+        'catalog.json': readOnly,
+        'catalog-check.mjs': readOnly,
+        'npm-baseline.json': readOnly,
+      });
+      expect(observed.catalogSha256).toBe(
+        createHash('sha256').update(repositoryCatalog).digest('hex'),
+      );
+      // The digest-pinned base ships npm and corepack; the install line adds pnpm and DSH.
+      expect(observed.baseline).toEqual({
+        globals: ['@deepseek-ai/dsh', 'corepack', 'npm', 'pnpm'],
+      });
+      // Positive control: release-shipped bundles are registered, absent from the catalog,
+      // and the build still passed its gate.
+      expect(observed.bundles).toEqual(expect.arrayContaining(shipped));
+      const catalog = JSON.parse(repositoryCatalog.toString('utf8')) as {
+        entries: { package: string }[];
+      };
+      const packages = catalog.entries.map((entry) => entry.package);
+      for (const bundle of shipped) expect(packages).not.toContain(bundle);
+    },
+    undefined,
+    (lifecycle) =>
+      Promise.resolve(
+        execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-catalog`, catalogProbe),
+      ),
   );
 });
 
@@ -231,11 +295,51 @@ it('fails the user-image build when a plugin engines.dsh range excludes the inst
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
 
-  const result = buildUserImageExpectingFailure('platform-nav', '>=0.3.0');
+  const result = buildUserImageExpectingFailure({ plugin: 'platform-nav', enginesDsh: '>=0.3.0' });
 
   expect(result.stderr).toContain('DSH plugin compatibility failed: platform-nav');
   process.stdout.write(
     `Docker incompatible plugin rejected: run=${result.runId} image=${result.image} ` +
+      `status=${String(result.status)} cleanup=complete\n`,
+  );
+});
+
+it.each([
+  [
+    'the catalog omits a preinstalled plugin',
+    (directory: string) => {
+      const path = join(directory, 'catalog.json');
+      const catalog = JSON.parse(readFileSync(path, 'utf8')) as { entries: { id: string }[] };
+      const entries = catalog.entries.filter((entry) => entry.id !== 'platform-nav');
+      writeFileSync(path, `${JSON.stringify({ ...catalog, entries }, null, 2)}\n`);
+    },
+    'preinstalled packages not in catalog: @dsh-team/platform-nav',
+  ],
+  [
+    'a global package is installed outside the catalog',
+    (directory: string) => {
+      const path = join(directory, 'Dockerfile');
+      const verify = 'RUN node /opt/dsh-team/catalog-check.mjs verify ';
+      const original = readFileSync(path, 'utf8');
+      if (original.split(verify).length !== 2)
+        throw new Error('Dockerfile copy must contain exactly one catalog verify step');
+      const extra =
+        'RUN mkdir -p /usr/local/lib/node_modules/dsh-team-extra && ' +
+        `printf '{"name":"dsh-team-extra","version":"0.0.0"}' > /usr/local/lib/node_modules/dsh-team-extra/package.json\n`;
+      writeFileSync(path, original.replace(verify, `${extra}${verify}`));
+    },
+    'preinstalled packages not in catalog: dsh-team-extra',
+  ],
+])('fails the user-image build when %s', (_name, primary, expected) => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+
+  const result = buildUserImageExpectingFailure({ primary, expect: expected });
+
+  expect(result.stderr).toContain(expected);
+  process.stdout.write(
+    `Docker inconsistent catalog rejected: run=${result.runId} image=${result.image} ` +
       `status=${String(result.status)} cleanup=complete\n`,
   );
 });

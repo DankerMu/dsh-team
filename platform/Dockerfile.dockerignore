@@ -22,6 +22,8 @@ platform/web/src/**/*.test.tsx
 !images/
 !images/seccomp/
 !images/seccomp/dsh-user.json
+!images/dsh-user/
+!images/dsh-user/catalog.json
 # Keep nested local-only files out even beneath an allowed source directory.
 **/.env
 **/.env.*

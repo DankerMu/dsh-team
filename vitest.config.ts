@@ -16,6 +16,7 @@ export default defineConfig({
             'platform/src/**/*.test.ts',
             'platform/web/src/**/*.test.{ts,tsx}',
             'plugins/**/*.test.js',
+            'images/dsh-user/*.test.mjs',
           ],
         },
       },
@@ -58,6 +59,7 @@ export default defineConfig({
         'plugins/permission-tiers/*.js',
         'plugins/office-agents/*.js',
         'plugins/platform-nav/*.js',
+        'images/dsh-user/*.mjs',
       ],
       // Exact process/browser bootstrap exemptions are registered in constraints.yaml.
       exclude: [
@@ -66,6 +68,7 @@ export default defineConfig({
         'platform/web/src/**/*.test.{ts,tsx}',
         'platform/web/src/main.tsx',
         'plugins/**/*.test.js',
+        'images/dsh-user/*.test.mjs',
       ],
       reporter: ['text', 'json-summary'],
       thresholds: {

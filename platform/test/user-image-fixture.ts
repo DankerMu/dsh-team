@@ -351,13 +351,15 @@ function requireDockerDaemon(command: DockerCommand): void {
 
 /**
  * The one user-image build argv over a source tree (this checkout, or an extracted historical
- * commit); a caller may substitute one plugin's named context.
+ * commit); a caller may substitute one plugin's named context, or the primary context together
+ * with the Dockerfile it contains.
  */
 export function userImageBuildArgs(
   runId: string,
   image: string,
   replaced?: { plugin: PluginContext; directory: string },
   root = repositoryRoot,
+  primary = join(root, 'images/dsh-user'),
 ): string[] {
   return [
     'build',
@@ -366,13 +368,13 @@ export function userImageBuildArgs(
     '--tag',
     image,
     '--file',
-    join(root, 'images/dsh-user/Dockerfile'),
+    join(primary, 'Dockerfile'),
     ...PLUGIN_CONTEXTS.flatMap((plugin) => [
       '--build-context',
       `${plugin}=${replaced?.plugin === plugin ? replaced.directory : join(root, `plugins/${plugin}`)}`,
     ]),
     // Keep the primary context narrow: no repository-root files or secrets.
-    join(root, 'images/dsh-user'),
+    primary,
   ];
 }
 
@@ -383,17 +385,53 @@ interface RejectedBuild {
   readonly stderr: string;
 }
 
+/** One plugin's `engines.dsh` replaced, or an owned primary-context copy mutated in place. */
+type RejectedBuildOptions =
+  | { readonly plugin: PluginContext; readonly enginesDsh: string }
+  | { readonly primary: (directory: string) => void; readonly expect: string };
+
+/** Prepares the owned copy under `copy` and returns the build argv over it. */
+function rejectedBuildArgs(
+  options: RejectedBuildOptions,
+  copy: string,
+  runId: string,
+  image: string,
+): string[] {
+  if ('primary' in options) {
+    const primary = join(copy, 'dsh-user');
+    cpSync(join(repositoryRoot, 'images/dsh-user'), primary, { recursive: true });
+    options.primary(primary);
+    return userImageBuildArgs(runId, image, undefined, repositoryRoot, primary);
+  }
+  const { plugin, enginesDsh } = options;
+  const directory = join(copy, plugin);
+  cpSync(join(repositoryRoot, `plugins/${plugin}`), directory, { recursive: true });
+  const manifestPath = join(directory, 'package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  const engines = {
+    ...(manifest.engines as Record<string, unknown> | undefined),
+    dsh: enginesDsh,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, engines }, null, 2)}\n`);
+  return userImageBuildArgs(runId, image, { plugin, directory });
+}
+
 /**
- * Natively build the user image with one plugin's `engines.dsh` replaced in an owned copy and
- * require the build to fail. Uploaded verification images cannot represent the changed context.
+ * Natively build the user image from an owned changed copy (one plugin's `engines.dsh`, or the
+ * primary context) and require the build to fail with the expected diagnostic. Uploaded
+ * verification images cannot represent the changed context.
  */
 export function buildUserImageExpectingFailure(
-  plugin: PluginContext,
-  enginesDsh: string,
+  options: RejectedBuildOptions,
   injectedCommand?: DockerCommand,
 ): RejectedBuild {
+  const [subject, expected, missing] =
+    'primary' in options
+      ? ['Inconsistent catalog', options.expect, `contain ${options.expect}`]
+      : [`Incompatible ${options.plugin}`, options.plugin, `name ${options.plugin}`];
   const runId = randomUUID();
-  const image = `dsh-team-test-${runId}:incompatible-${plugin}`;
+  const tag = 'primary' in options ? 'inconsistent-catalog' : `incompatible-${options.plugin}`;
+  const image = `dsh-team-test-${runId}:${tag}`;
   const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
   const copy = mkdtempSync(join(tmpdir(), 'dsh-team-test-plugin-'));
   // Unbounded mode retains the build's own stderr; the bounded mode redacts it.
@@ -403,26 +441,15 @@ export function buildUserImageExpectingFailure(
   let rejected: RejectedBuild | undefined;
   try {
     requireDockerDaemon(command);
-    const directory = join(copy, plugin);
-    cpSync(join(repositoryRoot, `plugins/${plugin}`), directory, { recursive: true });
-    const manifestPath = join(directory, 'package.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
-    const engines = {
-      ...(manifest.engines as Record<string, unknown> | undefined),
-      dsh: enginesDsh,
-    };
-    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, engines }, null, 2)}\n`);
-    const build = userImageBuildArgs(runId, image, { plugin, directory });
+    const build = rejectedBuildArgs(options, copy, runId, image);
     // A rejected build normally leaves no tag; registration still owns any it produces.
     registerCleanupTarget(targets, runId, { kind: 'image', name: image });
     const result = command(build, 600_000, 1);
     if (result.error !== undefined || result.status !== 1) {
-      throw new Error(
-        `Incompatible ${plugin} user-image build must exit 1, got ${String(result.status)}`,
-      );
+      throw new Error(`${subject} user-image build must exit 1, got ${String(result.status)}`);
     }
-    if (!result.stderr.includes(plugin))
-      throw new Error(`Rejected user-image build stderr does not name ${plugin}`);
+    if (!result.stderr.includes(expected))
+      throw new Error(`Rejected user-image build stderr does not ${missing}`);
     rejected = { runId, image, status: result.status, stderr: result.stderr };
   } catch (error) {
     failures.push(error);

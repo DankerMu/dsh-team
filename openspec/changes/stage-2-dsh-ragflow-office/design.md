@@ -311,6 +311,9 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - `images/dsh-user/catalog.json` 列出每个预装项的 id、包名、中文名、类别和镜像默认值。
 - 它同时进入用户镜像和平台镜像，是两边的唯一来源。
 - 构建时把镜像实际的预装项与它对比，两个方向有差异就失败。
+- 条目五键：`id`（稳定 kebab-case 标识；仓库插件等于 `plugins/<id>` 目录名，第三方全局包取去掉 scope 的包名）、`package`、`name`（中文）、`category`（`required` | `manageable`）、`imageDefaultEnabled`（镜像自身不经覆盖层时是否已激活，即 `employee` 态的默认值；只由覆盖层激活的插件为 `false`，由 profile 清单登记的 bundle 为 `true`）。
+- 枚举来源：全局顶层包减去「工具链 + DSH」基线（基线在同一条安装 `pnpm` 与 DSH 的 `RUN` 之后立即记录，`pnpm` 属于工具链，不是预装项）；`/opt/dsh-team/*`；profile 初始副本 `node_modules` 下的包（`zh-locale` 只交付在这里）；profile 清单登记的 bundle 中不能从 DSH 自身包树解析到的那些必须已在前三者中出现，能解析到的是 DSH 自带 bundle、不计入。
+- 一致性检查脚本随主上下文进入镜像（`/opt/dsh-team/catalog-check.mjs`，root 0444），`engines.dsh` 兼容性检查并入其中，对枚举出的仓库插件目录（`/opt/dsh-team/*` 与 profile `node_modules/@*/*`）执行；基线之外的全局包与非 scoped profile 包只参与目录集合比较。目录是唯一的已交付插件清单。
 
 **两类目录项**
 

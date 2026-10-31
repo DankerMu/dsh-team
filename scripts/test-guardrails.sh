@@ -244,6 +244,10 @@ echo "export const orphan = 1;" >plugins/office-agents/orphan.js
 expect_reject "office plugin test pairing (JS behavior has no sibling test)" "without a sibling test file" \
   pnpm lint:tests
 
+echo "export const orphan = 1;" >images/dsh-user/orphan.mjs
+expect_reject "user-image script test pairing (MJS behavior has no sibling test)" \
+  "images/dsh-user/orphan.mjs" pnpm lint:tests
+
 # ── 4. ESLint: size, complexity, logging, identifier naming ──────────────────
 max_lines="$(node scripts/constraints.mjs size_limits max_file_lines)"
 {

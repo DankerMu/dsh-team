@@ -28,6 +28,7 @@ COPY --from=build /production/node_modules ./platform/node_modules
 COPY --from=build /app/platform/dist ./platform/dist
 COPY --from=build /app/platform/web/dist ./platform/web/dist
 COPY images/seccomp/dsh-user.json ./images/seccomp/dsh-user.json
+COPY images/dsh-user/catalog.json ./images/dsh-user/catalog.json
 RUN mkdir /app/data && chown node:node /app/data
 USER node
 EXPOSE 8080
