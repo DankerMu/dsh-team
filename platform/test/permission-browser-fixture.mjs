@@ -140,7 +140,7 @@ async function commitRootTier(context, label, step) {
 
 /** Returns the child's native descriptor mode; the delegation flow branches on it, not the suite. */
 async function selectChild(context, call, action, nonce, label, expected = {}) {
-  const { browser, control, roots, report, evidenceDirectory, suite } = context;
+  const { browser, control, roots, report, evidenceDirectory, suite, parentAsked } = context;
   const facts = control({ op: 'status' });
   const child = facts.children.find((row) => row.sessionId === call.sessionId);
   assert(child, 'real native child must have been observed');
@@ -199,19 +199,19 @@ async function selectChild(context, call, action, nonce, label, expected = {}) {
     `${label}-continuable-delegation-result`,
   );
   const idle = await waitRootIdle(context, `${label}-parent-idle`);
-  assertNeverAsked(idle, roots[0].sessionId, call.callId, PARENT_ASKED);
+  assert.equal(askedCount(idle, roots[0].sessionId), parentAsked, PARENT_ASKED);
   return child.mode;
 }
 
-/** No approval or question for this call reached this Session; per call (STAGE1 roots ask too). */
-function assertNeverAsked(facts, sessionId, callId, message) {
-  const asked = (event) => event.type === 'approval/asked' && event.data.callId === callId;
-  assert(
-    !facts.approvals.some((row) => row.sessionId === sessionId && row.callId === callId) &&
-      !facts.audit.some((event) => event.sessionId === sessionId && asked(event)),
-    message,
-  );
-}
+/**
+ * Approval rows plus approval/asked events on a Session. Both arrays are append-only, so an
+ * unchanged count against a scenario baseline means nothing was asked in that window; earlier
+ * scenarios' root approvals (STAGE1) lie below the baseline.
+ */
+const askedCount = (facts, sessionId) =>
+  facts.approvals.filter((row) => row.sessionId === sessionId).length +
+  facts.audit.filter((event) => event.sessionId === sessionId && event.type === 'approval/asked')
+    .length;
 
 async function sendTurn(context, text, nonce, label) {
   const { browser, control, suite } = context;
@@ -310,7 +310,8 @@ async function observeUnattended(context, call, label) {
   const dispatch = final.dispatch.filter((row) => row.callId === call.callId);
   assert.equal(dispatch.length, 1);
   assert.equal(final.results.find((row) => row.callId === call.callId).isError, false);
-  assertNeverAsked(final, call.sessionId, call.callId, 'no native question under this tier');
+  // Unattended scenarios are delegated: this fresh child Session carries only this call.
+  assert.equal(askedCount(final, call.sessionId), 0, 'no native question under this tier');
   assert.equal(
     await evaluate(browser.page, `document.querySelectorAll(${JSON.stringify(PANEL)}).length`),
     0,
@@ -326,7 +327,8 @@ const rootDispatch = (facts, root) =>
   facts.dispatch.filter((row) => row.sessionId === root.sessionId).length;
 const rootBaseline = (control, root) => {
   const facts = control({ op: 'status' });
-  return { turns: rootTurns(facts, root), dispatch: rootDispatch(facts, root) };
+  const counts = { turns: rootTurns(facts, root), dispatch: rootDispatch(facts, root) };
+  return { ...counts, asked: askedCount(facts, root.sessionId) };
 };
 
 /** Child Activation release wakes the root once (subagent-settled), without tools. */
@@ -342,7 +344,7 @@ async function settleContinuable(context, call, expected, label) {
   );
   assert.equal(rootTurns(final, roots[0]), expected.turns, 'exactly one settled wake-up turn');
   assert.equal(rootDispatch(final, roots[0]), expected.dispatch, 'wake-up turn runs no tool');
-  assertNeverAsked(final, roots[0].sessionId, call.callId, PARENT_ASKED);
+  assert.equal(askedCount(final, roots[0].sessionId), context.parentAsked, PARENT_ASKED);
   return final;
 }
 
@@ -409,13 +411,14 @@ async function runApprovalScenario(suiteContext, scenario) {
     await commitRootTier(suiteContext, tier, label);
   }
   const baseline = rootBaseline(control, roots[0]);
+  const scoped = { ...suiteContext, parentAsked: baseline.asked };
   const call = await sendTurn(suiteContext, `${scope} ${action} ${nonce}`, nonce, label);
   let mode = null;
   if (scope === 'delegate')
-    mode = await selectChild(suiteContext, call, action, nonce, label, scenario.child);
+    mode = await selectChild(scoped, call, action, nonce, label, scenario.child);
   // Root calls have no child; a delegated child's flow follows its observed descriptor mode.
   const continuable = mode === 'continuable';
-  const context = { ...suiteContext, delegated: mode !== null, continuable };
+  const context = { ...scoped, delegated: mode !== null, continuable };
   const settled = scenario.unattended
     ? await observeUnattended(context, call, label)
     : await answerApproval(context, call, action, label);
@@ -812,6 +815,8 @@ async function observePendingApproval(context, call, label) {
       true,
       'child approvals are answered by the native panel',
     );
+    const parentAsked = askedCount(pending, context.roots[0].sessionId);
+    observeAssertion('pending-parent-unasked', parentAsked, context.parentAsked, PARENT_ASKED);
     observeAssertion(
       'pending-child-running',
       pending.sessions.find((row) => row.sessionId === call.sessionId)?.status === 'running',
