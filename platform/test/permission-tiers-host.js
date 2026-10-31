@@ -447,6 +447,9 @@ async function childEffect(ctx, parent, approval, tier, provider, answer) {
         signal: payload.signal,
       });
       assert.equal(result.isError, answer === 'rejected');
+      // A settled activation disposes its child, so the child's own later tier is recorded
+      // while it is live; resume must keep it rather than re-inherit the parent's.
+      ctx.permissionPresets.set(child.session, 'danger-full-access');
       return { kind: 'reject' };
     },
     { prepend: true },
@@ -456,11 +459,17 @@ async function childEffect(ctx, parent, approval, tier, provider, answer) {
   let run;
   try {
     await inTurn(ctx, parent, async (signal) => {
-      run = await ctx.subagents.start(provider, {
-        parent,
-        prompt: [{ type: 'text', text: 'Owned delegated mutation test' }],
+      run = await ctx.subagents.startActivation({
+        provider,
+        label: 'Owned delegated mutation test',
+        request: {
+          parent,
+          prompt: [{ type: 'text', text: 'Owned delegated mutation test' }],
+          agentOptions: { provider: 'missing-permission-test', model: 'none' },
+        },
         signal,
-        agentOptions: { provider: 'missing-permission-test', model: 'none' },
+        // Caller delivery: no settlement notice wakes the parent after its owned turn.
+        delivery: 'caller',
       });
       await run.result;
     });
@@ -489,7 +498,6 @@ async function childEffect(ctx, parent, approval, tier, provider, answer) {
       ),
     );
     const id = child.session.id;
-    ctx.permissionPresets.set(child.session, 'danger-full-access');
     await run.dispose();
     const restored = await ctx.agents.resume({
       resumeSessionId: SessionId(id),

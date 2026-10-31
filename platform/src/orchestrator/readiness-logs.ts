@@ -1,5 +1,4 @@
 import type { DockerClient } from './client.ts';
-import { extractLaunchToken } from './web-launch-token.ts';
 
 const MAX_LINE_BYTES = 1024;
 const MAX_RETAINED_LINES = 50;
@@ -9,9 +8,8 @@ function safeLine(text: string, cookies: readonly string[]): string | undefined 
   const normalized = text.replace(/\p{Cc}/gu, (character) =>
     character > '\u007f' || '\t\n\r'.includes(character) ? character : '',
   );
-  // Also reject incomplete/malformed announcements; the canonical parser handles valid ones.
+  // Drop every Web announcement, whatever its address or shape: it may carry the launch credential.
   if (
-    extractLaunchToken(normalized) !== undefined ||
     /\bdsh\s+web\b/i.test(normalized) ||
     /(?:token|api[-_]?key|authorization|set-cookie|cookie)\s*[:=]/i.test(normalized) ||
     /dsh-auth-/i.test(normalized) ||

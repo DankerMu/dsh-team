@@ -7,7 +7,7 @@ import { inspectUserContainerEndpoint } from './start-identity.ts';
 import { object, resolvedImageId } from './identity.ts';
 import { extractLaunchToken } from './web-launch-token.ts';
 import { isIPv4 } from 'node:net';
-import { upstreamHost } from './transport.ts';
+import { instanceBridgeAddress, upstreamHost } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import { validateUserNetwork } from './networks.ts';
 
@@ -115,7 +115,12 @@ export function currentInstance(
   };
 }
 
-async function launchToken(client: DockerClient, id: string, signal: AbortSignal): Promise<string> {
+async function launchToken(
+  client: DockerClient,
+  id: string,
+  address: string,
+  signal: AbortSignal,
+): Promise<string> {
   // Fixed storage avoids repeatedly copying a growing partial line. Parse only complete stdout lines.
   const line = Buffer.alloc(MAX_LINE_BYTES);
   let used = 0;
@@ -135,7 +140,7 @@ async function launchToken(client: DockerClient, id: string, signal: AbortSignal
       used += length;
       offset = end;
       if (newline === -1) continue;
-      const token = extractLaunchToken(line.toString('utf8', 0, used));
+      const token = extractLaunchToken(line.toString('utf8', 0, used), address);
       used = 0;
       if (token !== undefined) return token;
     }
@@ -171,7 +176,7 @@ function validateCookiePayload(payload: unknown, authority: string): number {
 }
 
 export function dshCookieExpiresAt(cookie: string, authority?: string): number {
-  // Released client-connection 0.2.0-rc.2: authority SHA256 name and v1.JSON.HMAC-SHA256 value.
+  // Released client-connection 0.2.1-rc.2: authority SHA256 name and v1.JSON.HMAC-SHA256 value.
   if (cookie.length > MAX_COOKIE_BYTES) throw new Error();
   const separator = cookie.indexOf('=');
   const parts = cookie.slice(separator + 1).split('.');
@@ -312,7 +317,9 @@ export async function acquireCurrentDshCookie(input: AcquireDshCookieInput): Pro
     )
       throw new Error();
     stage = 'launch announcement';
-    const token = await launchToken(input.client, instance.container_id, signal);
+    // DSH announces the address it bound: the validated bridge address, also in loopback mode.
+    const address = instanceBridgeAddress(document, input.userId);
+    const token = await launchToken(input.client, instance.container_id, address, signal);
     stage = 'HTTP exchange';
     const cookie = await exchange(host, port, authority, token, signal);
     stage = 'current instance persistence';

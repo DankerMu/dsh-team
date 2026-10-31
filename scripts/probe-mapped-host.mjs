@@ -554,6 +554,27 @@ const resolveCompositionRoster = async (composition, expectedRoster) => {
   return roster;
 };
 
+/**
+ * Compact first/reload verdicts for a rejected entry: booleans, the UI summary (control labels,
+ * language, workspace label), readiness and a console-error count. No composer text, request
+ * bodies, cookies or console messages; any `token=` value is redacted defensively.
+ */
+const entryVerdicts = (first, reload) => {
+  const pick = (entry) => ({
+    accepted: entry.accepted,
+    initialized: entry.initialized,
+    ui: entry.ui,
+    input: entry.input,
+    workBound: entry.workBound,
+    workBoundUnknown: entry.workBoundUnknown,
+    readiness: entry.readiness,
+    consoleErrors: entry.consoleErrors?.length,
+  });
+  return JSON.stringify({ first: pick(first), reload: pick(reload) })
+    .replace(/token=[A-Za-z0-9_-]+/g, 'token=<redacted>')
+    .slice(0, 4096);
+};
+
 const capturePreservation = async (
   page,
   preserveModels,
@@ -568,7 +589,10 @@ const capturePreservation = async (
 ) => {
   if (!preserveModels) return undefined;
   if (!first.accepted || !reload.accepted) {
-    throw new Error('stage=preservation error=first-entry-not-accepted');
+    // The staged message stays exact for errorCode consumers; the verdicts ride on the cause.
+    throw new Error('stage=preservation error=first-entry-not-accepted', {
+      cause: new Error(entryVerdicts(first, reload)),
+    });
   }
   try {
     const preservation = await verifyPreservation(

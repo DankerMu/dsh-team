@@ -142,9 +142,9 @@ const snapshot = {
 };
 if (${String(attest)}) {
   snapshot.installedPackages = [
-    ['@deepseek-ai/cordis-plugin-loader', '1.0.5'],
-    ['@deepseek-ai/dsh-agent-preset-registry', '0.2.0-rc.2'],
-    ['@deepseek-ai/dsh-tool-fs', '0.2.0-rc.2'],
+    ['@deepseek-ai/cordis-plugin-loader', '1.0.6'],
+    ['@deepseek-ai/dsh-agent-preset-registry', '0.2.1-rc.2'],
+    ['@deepseek-ai/dsh-tool-fs', '0.2.1-rc.2'],
   ].map(([name, expectedVersion]) => {
     try {
       const raw = readFileSync(require.resolve(name + '/package.json'));

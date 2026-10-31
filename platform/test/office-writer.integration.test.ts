@@ -200,7 +200,8 @@ const PARENT_EVENTS = [
       arguments: JSON.stringify({ description: '通知', prompt: DELEGATED_PROMPT }),
     },
   },
-  { type: 'subagent/catalog', data: { childId: 'child', mode: 'one-shot', label: '通知' } },
+  // DSH 0.2.1 delegates every in-process child as continuable.
+  { type: 'subagent/catalog', data: { childId: 'child', mode: 'continuable', label: '通知' } },
   {
     type: 'tool/result',
     data: {
@@ -223,10 +224,10 @@ const DELEGATION = {
     hasMore: false,
     cursor: PARENT_EVENTS.length - 1,
     records: PARENT_EVENTS.map((event, seq) => ({ event: { seq, ...event } })),
-    catalog: [{ id: 'child', mode: 'one-shot', label: '通知' }],
+    catalog: [{ id: 'child', mode: 'continuable', label: '通知' }],
   },
   child: { sessionId: 'child', origin: 'subagent', parentSessionId: 'parent', cwd: '/data/work' },
-  identity: { mode: 'one-shot', label: '通知', seq: 1 },
+  identity: { mode: 'continuable', label: '通知', seq: 1 },
   notice: NOTICE,
   nonce: 'office-observation',
   contribution: {
@@ -251,7 +252,7 @@ const DELEGATED_TURN = {
     ...EVENTS.slice(0, 1),
     {
       type: 'subagent/descriptor',
-      data: { version: 1, mode: 'one-shot', provider: 'spawn', label: '通知' },
+      data: { version: 1, mode: 'continuable', provider: 'spawn', label: '通知' },
     },
     ...EVENTS.slice(1, 4).map((event) =>
       event.type === 'user/message'
@@ -271,12 +272,41 @@ it('binds the model-authored child prompt to the actual human parent and native 
   expect(officeTurnEvidence(DELEGATED_TURN)).toMatchObject({ turn: 1, selectedSeq: 2 });
 });
 
+it('binds a consistent one-shot delegation too: the oracle does not depend on the mode', () => {
+  const oneShot = (value: unknown) => ({ ...(value as Record<string, unknown>), mode: 'one-shot' });
+  const records = DELEGATED_TURN.records.map((row) =>
+    row.event.type === 'subagent/descriptor'
+      ? { event: { ...row.event, data: oneShot(row.event.data) } }
+      : row,
+  );
+  const parentRecords = DELEGATION.parent.records.map((row) =>
+    row.event.type === 'subagent/catalog'
+      ? { event: { ...row.event, data: oneShot(row.event.data) } }
+      : row,
+  );
+  const delegation = {
+    ...DELEGATION,
+    identity: oneShot(DELEGATION.identity),
+    parent: {
+      ...DELEGATION.parent,
+      records: parentRecords,
+      catalog: DELEGATION.parent.catalog.map(oneShot),
+    },
+  };
+
+  expect(officeTurnEvidence({ ...DELEGATED_TURN, records, delegation })).toMatchObject({
+    turn: 1,
+    selectedSeq: 2,
+  });
+});
+
 it.each([
   { child: { ...DELEGATION.child, parentSessionId: 'unrelated' } },
   { child: { ...DELEGATION.child, origin: undefined } },
   { child: { ...DELEGATION.child, cwd: '/other' } },
   { child: { ...DELEGATION.child, sessionId: 'stale-child' } },
-  { identity: { ...DELEGATION.identity, mode: 'continuable' } },
+  { identity: { ...DELEGATION.identity, mode: 'one-shot' } },
+  { identity: { ...DELEGATION.identity, mode: 'unknown' } },
   { identity: { ...DELEGATION.identity, seq: 0 } },
   { parent: { ...DELEGATION.parent, preset: 'office-writer' } },
   { parent: { ...DELEGATION.parent, prompt: 'another human task' } },
@@ -297,7 +327,7 @@ it.each([
       arguments: JSON.stringify({ prompt: PROMPT, description: '通知' }),
     },
   },
-  { index: 4, data: { childId: 'another-child', mode: 'one-shot', label: '通知' } },
+  { index: 4, data: { childId: 'another-child', mode: 'continuable', label: '通知' } },
   {
     index: 5,
     data: {
@@ -625,16 +655,18 @@ it('allows parent edits after construction while independently checking the fina
   ).toThrow('office-docx-content');
 });
 
-it('keeps a live blank child pending until its one-shot descriptor is published', () => {
-  expect(officeChildReady(null, true)).toBe(false);
-  expect(officeChildReady({ mode: 'one-shot', seq: 2 }, true)).toBe(true);
-  expect(officeChildReady({ mode: 'one-shot', seq: 2 }, false)).toBe(true);
-});
+it.each(['one-shot', 'continuable'])(
+  'keeps a live blank child pending until its %s descriptor is published',
+  (mode) => {
+    expect(officeChildReady(null, true)).toBe(false);
+    expect(officeChildReady({ mode, seq: 2 }, true)).toBe(true);
+    expect(officeChildReady({ mode, seq: 2 }, false)).toBe(true);
+  },
+);
 
 it.each([
   { identity: null, available: false },
   { identity: undefined, available: false },
-  { identity: { mode: 'continuable', seq: 0 }, available: true },
   { identity: { mode: 'unknown', seq: 0 }, available: true },
   { identity: { mode: 'one-shot', seq: -1 }, available: true },
   { identity: { mode: 'one-shot', seq: 0.5 }, available: true },

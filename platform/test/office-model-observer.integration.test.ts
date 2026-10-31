@@ -7,8 +7,18 @@ import { apply } from './office-model-observer.mjs';
 
 type Listener = Parameters<Parameters<typeof apply>[0]['on']>[1];
 type Session = Parameters<Listener>[0];
-const CHILD = { header: { id: 'writer', origin: 'subagent', parentSession: 'general' } };
-const PARENT = { header: { id: 'general' } };
+type CommittedEvent = ReturnType<Session['snapshotEvents']>[number];
+type Header = Session['header'];
+/** A live Session: header plus its committed log, read once when the observer first sees it. */
+function session(header: Header, committed: CommittedEvent[] = []): Session {
+  return {
+    header,
+    snapshotEvents: (from, to) => committed.filter(({ seq }) => seq >= from && seq < to),
+  };
+}
+const CHILD_HEADER = { id: 'writer', origin: 'subagent', parentSession: 'general' };
+const CHILD = session(CHILD_HEADER);
+const PARENT = session({ id: 'general' });
 const DIGEST = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
 const MESSAGE = {
   role: 'tool',
@@ -67,21 +77,40 @@ process.stdout.write(JSON.stringify(bytes?{status:'parsed',path,uid:1001,bytes:b
   }
 }
 
-function startWriter(emit: Listener, session: Session = CHILD) {
-  emit(session, {
+function startWriter(emit: Listener, child: Session = CHILD, mode = 'continuable') {
+  emit(child, {
     type: 'agent-preset/selected',
     seq: 1,
     data: { agentPreset: 'office-writer' },
   });
-  // rc.2's one-shot driver appends its descriptor from the first pre-step,
-  // after the loop has opened the turn but before committing the user prompt.
-  emit(session, { type: 'turn/start', seq: 2, data: { turn: 1 } });
-  emit(session, {
+  emit(child, { type: 'turn/start', seq: 2, data: { turn: 1 } });
+  emit(child, {
     type: 'subagent/descriptor',
     seq: 3,
-    data: { version: 1, mode: 'one-shot', provider: 'spawn', label: 'notice' },
+    data: { version: 1, mode, provider: 'spawn', label: 'notice' },
   });
-  emit(session, {
+  emit(child, {
+    type: 'user/message',
+    seq: 4,
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'supplied draft' }] },
+  });
+}
+
+/** DSH 0.2.1 commits selection and descriptor before publication: no session/event for them. */
+function publishedWriter(header: Header, provider = 'spawn'): Session {
+  return session(header, [
+    { type: 'agent-preset/selected', seq: 0, data: { agentPreset: 'office-writer' } },
+    {
+      type: 'subagent/descriptor',
+      seq: 1,
+      data: { version: 1, mode: 'continuable', provider, label: 'notice' },
+    },
+  ]);
+}
+
+function startPublished(emit: Listener, child: Session) {
+  emit(child, { type: 'turn/start', seq: 2, data: { turn: 1 } });
+  emit(child, {
     type: 'user/message',
     seq: 4,
     data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'supplied draft' }] },
@@ -281,16 +310,16 @@ it.each([
 
 it.each([
   { label: 'parent', session: PARENT },
-  { label: 'sibling', session: { header: { ...CHILD.header, id: 'sibling' } } },
-  { label: 'another Session object with the same ID', session: { header: { ...CHILD.header } } },
-])('does not pair a writer call with the $label result', ({ session }) => {
+  { label: 'sibling', session: session({ ...CHILD_HEADER, id: 'sibling' }) },
+  { label: 'another Session object with the same ID', session: session({ ...CHILD_HEADER }) },
+])('does not pair a writer call with the $label result', ({ session: other }) => {
   withObserver(({ path, emit, result }) => {
     armParent(emit);
     startWriter(emit);
     emit(CHILD, constructionCall(path));
     writeFileSync(path, 'abc');
 
-    emit(session, constructionResult(path));
+    emit(other, constructionResult(path));
     expect(result()).not.toHaveProperty('receipt');
     emit(CHILD, constructionResult(path));
 
@@ -304,18 +333,71 @@ it.each([
 });
 
 it.each([
-  { label: 'unrelated parent', header: { ...CHILD.header, parentSession: 'unrelated' } },
+  { label: 'unrelated parent', header: { ...CHILD_HEADER, parentSession: 'unrelated' } },
   { label: 'root Session', header: { id: 'writer' } },
-  { label: 'fork Session', header: { ...CHILD.header, origin: 'fork' } },
+  { label: 'fork Session', header: { ...CHILD_HEADER, origin: 'fork' } },
 ])('does not collect construction from an $label', ({ header }) => {
   withObserver(({ path, emit, result }) => {
-    const session = { header };
+    const other = session(header);
     armParent(emit);
-    startWriter(emit, session);
-    emit(session, constructionCall(path));
+    startWriter(emit, other);
+    emit(other, constructionCall(path));
     writeFileSync(path, 'abc');
 
-    emit(session, constructionResult(path));
+    emit(other, constructionResult(path));
+
+    expect(result()).not.toHaveProperty('receipt');
+  });
+});
+
+it.each(['one-shot', 'continuable'])(
+  'captures a %s spawn writer: eligibility does not depend on the delegation mode',
+  (mode) => {
+    withObserver(({ path, emit, result }) => {
+      armParent(emit);
+      startWriter(emit, CHILD, mode);
+      emit(CHILD, constructionCall(path));
+      writeFileSync(path, 'abc');
+
+      emit(CHILD, constructionResult(path));
+
+      expect(result()).toMatchObject({ childId: 'writer', receipt: { sha256: DIGEST } });
+    });
+  },
+);
+
+it('arms from the committed creation prefix and header of a published 0.2.1 child', () => {
+  withObserver(({ path, emit, result }) => {
+    const child = publishedWriter({ ...CHILD_HEADER, agentPreset: 'office-writer' });
+    armParent(emit);
+    startPublished(emit, child);
+    emit(child, constructionCall(path));
+    writeFileSync(path, 'abc');
+
+    emit(child, constructionResult(path));
+
+    expect(result()).toMatchObject({ childId: 'writer', callSeq: 5, resultSeq: 6 });
+  });
+});
+
+it.each([
+  {
+    label: 'a non-writer creation header',
+    child: () => session({ ...CHILD_HEADER, agentPreset: 'office-general' }),
+  },
+  {
+    label: 'a non-spawn descriptor',
+    child: () => publishedWriter({ ...CHILD_HEADER, agentPreset: 'office-writer' }, 'fork'),
+  },
+])('does not collect construction from $label', ({ child: build }) => {
+  withObserver(({ path, emit, result }) => {
+    const child = build();
+    armParent(emit);
+    startPublished(emit, child);
+    emit(child, constructionCall(path));
+    writeFileSync(path, 'abc');
+
+    emit(child, constructionResult(path));
 
     expect(result()).not.toHaveProperty('receipt');
   });

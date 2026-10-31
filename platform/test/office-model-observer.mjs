@@ -11,7 +11,8 @@ function trackChildLifecycle(state, event) {
   const data = event.data;
   switch (event.type) {
     case 'subagent/descriptor':
-      state.eligible = data.mode === 'one-shot' && data.provider === 'spawn';
+      // Mode-agnostic: DSH 0.2.1 in-process spawn children are continuable.
+      state.eligible = data.provider === 'spawn';
       break;
     case 'agent-preset/selected':
       state.writer = data.agentPreset === 'office-writer';
@@ -157,7 +158,11 @@ export function apply(ctx, { control, evidence }) {
       // same header ID cannot supply the result for this live Session's call.
       let state = sessions.get(session);
       if (!state) {
-        state = { calls: new Map() };
+        // The creation header names the preset. DSH 0.2.1 commits the creation selection and
+        // descriptor before the child Session is published, so no session/event carries them:
+        // fold the committed prefix once.
+        state = { calls: new Map(), writer: session.header.agentPreset === 'office-writer' };
+        for (const prior of session.snapshotEvents(0, event.seq)) trackChildLifecycle(state, prior);
         sessions.set(session, state);
       }
       if (event.type === 'tool/call') {

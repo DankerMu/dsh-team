@@ -1,7 +1,7 @@
 import { dirname, join } from 'node:path';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
 import { runPty } from './cli-process-fixture.ts';
-import { inspectAsync } from './container-start-docker-fixture.ts';
+import { bridgeAddress, inspectAsync } from './container-start-docker-fixture.ts';
 import { waitForDeployment } from './deployment-account-fixture.ts';
 import { OWNER_LABEL } from './docker-cleanup.ts';
 import type { Deployment } from './deployment-fixture.ts';
@@ -141,7 +141,10 @@ export async function completeDeployedAuditSequence(input: AuditSequence): Promi
     expect(container.Name).toBe(`/dsh-team-u-${employee.id}`);
     expect(container.Image).toBe(lifecycle.imageId);
     if (typeof container.Id !== 'string') throw new Error('Missing owned audit container');
-    const token = extractLaunchToken((await input.run(['logs', container.Id])).stdout);
+    const token = extractLaunchToken(
+      (await input.run(['logs', container.Id])).stdout,
+      bridgeAddress(container, employee.id),
+    );
     const row = await input.read(
       `${input.databaseScript}try{process.stdout.write(JSON.stringify(db.prepare('SELECT dsh_cookie FROM instances WHERE user_id=?').get(${JSON.stringify(employee.id)})));}finally{db.close();}`,
     );
@@ -214,7 +217,8 @@ writeFileSync(root+'/cordis.patch.yml',JSON.stringify([{insert:[{id:'audit-boot-
   expect(record(record(failed.Config).Labels)['dsh-team.user']).toBe(employee.id);
   expect(record(failed.State)).toMatchObject({ Running: false, ExitCode: 71 });
   if (typeof failed.Id !== 'string') throw new Error('Missing failed owned instance');
-  expect(extractLaunchToken((await input.run(['logs', failed.Id])).stdout)).toBeUndefined();
+  // A boot that exits before the Web server binds announces no address at all.
+  expect((await input.run(['logs', failed.Id])).stdout).not.toMatch(/^dsh web: /m);
   await mutate(`${instancePath}/reset-config`, 'POST', {}, adminCookie, 204);
   expect(await status()).toBe('stopped');
   progress.phase = 'audit-terminal-promotion';

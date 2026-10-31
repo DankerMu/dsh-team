@@ -8,7 +8,7 @@ const checkpointPath = require.resolve('@deepseek-ai/dsh-session-checkpoint-poli
 export async function postGuardRevocation(ctx, agent, approval, { target, write, state }) {
   const checkpointManifest =
     require.resolve('@deepseek-ai/dsh-session-checkpoint-policy/package.json');
-  assert.equal(JSON.parse(readFileSync(checkpointManifest, 'utf8')).version, '0.2.0-rc.2');
+  assert.equal(JSON.parse(readFileSync(checkpointManifest, 'utf8')).version, '0.2.1-rc.2');
   assert.equal(
     createHash('sha256').update(readFileSync(checkpointPath)).digest('hex'),
     '80a4475de0594399bfdd3203e000cfe0bf1967af163f8747c45b9b80e9549f2a',

@@ -264,18 +264,21 @@ it('commits running after authenticated readiness and reuses that genuine runnin
 it.each(['stderr', 'arbitrary', 'partial', 'truncated-frame', 'large-line', 'wrong-authority'])(
   'rejects %s logs without exchanging or retaining an old cookie',
   async (kind) => {
+    // Wrong authorities: neither a hostname nor the 0.2.0 loopback line is the bound bridge address.
     frames =
       kind === 'stderr'
-        ? [frame(2, `dsh web: http://127.0.0.1:3080/?token=${token}\n`)]
+        ? [frame(2, `dsh web: http://172.30.0.2:3080/?token=${token}\n`)]
         : kind === 'arbitrary'
           ? [frame(1, `boot token=${token}\n`)]
           : kind === 'partial'
-            ? [frame(1, `dsh web: http://127.0.0.1:3080/?token=${token}`)]
+            ? [frame(1, `dsh web: http://172.30.0.2:3080/?token=${token}`)]
             : kind === 'truncated-frame'
               ? [frame(1, 'ordinary\n').subarray(0, 10)]
               : kind === 'large-line'
                 ? [frame(1, 'x'.repeat(16 * 1024 + 1))]
-                : [frame(1, `dsh web: http://remote.invalid:3080/?token=${token}\n`)];
+                : ['remote.invalid', '127.0.0.1'].map((host) =>
+                    frame(1, `dsh web: http://${host}:3080/?token=${token}\n`),
+                  );
 
     const result = await attempt();
 
@@ -729,7 +732,7 @@ it('retains the final fifty harmless lines without leaking fragmented credential
   const utf8 = Buffer.from('中文 startup 邻行\r\n');
   tailFrames = [
     frame(1, Array.from({ length: 55 }, (_, index) => `boot ${String(index + 1)}\r\n`).join('')),
-    frame(1, `dsh web: http://127.0.0.1:3080/?to`),
+    frame(1, `dsh web: http://172.30.0.2:3080/?to`),
     frame(2, `Cookie: ${cookie}\n`),
     frame(1, `ken=${token.slice(0, 13)}`),
     frame(1, `${token.slice(13)}\r\n`),

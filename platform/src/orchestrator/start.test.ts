@@ -184,7 +184,48 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
     config: { id: 'assistant', plugins: [{ name: '@deepseek-ai/dsh-tool-bash' }] },
   });
   expect(rows).toContainEqual({ id: 'locale', name: '@dsh-team/zh-locale' });
+  // Loopback publication still binds DSH to its fixed base+2 bridge address, never a wildcard.
+  expect(rows).toContainEqual({
+    id: 'webserver',
+    config: { host: '172.30.0.2', port: 3080, compression: 'gzip' },
+  });
   expect(text).not.toContain('fixture-private-key');
+});
+
+it('writes the overlay for the allocated bridge after network creation and before container creation', async () => {
+  const { beforeRequest, input } = await fixture();
+  const overlay = join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml');
+  const observed: string[] = [];
+  beforeRequest(async (method, path) => {
+    const existing = await stat(overlay).then(
+      () => 'overlay present',
+      () => 'overlay absent',
+    );
+    if (method === 'POST' && path === '/networks/create') observed.push(`network: ${existing}`);
+    if (method === 'POST' && path === `/containers/create?name=dsh-team-u-${START_USER}`)
+      observed.push(`container: ${existing}`);
+    return undefined;
+  });
+
+  await startUserContainer(input);
+
+  expect(observed).toEqual(['network: overlay absent', 'container: overlay present']);
+});
+
+it('removes the created bridge and never creates the container when the overlay write fails', async () => {
+  const { daemon, input } = await fixture();
+  // A regular file where the managed directory belongs makes the real overlay write fail.
+  await writeFile(input.config.managedConfigDir, 'not a directory');
+
+  const error: unknown = await startUserContainer(input).catch((failure: unknown) => failure);
+
+  expect(String(error)).toMatch(/during managed overlay$/);
+  const paths = daemon.requests.map((request) => `${request.method} ${request.path}`);
+  expect(paths).toContain('POST /networks/create');
+  expect(paths).toContain(`DELETE /networks/${START_NETWORK}`);
+  expect(paths).not.toContain(`POST /containers/create?name=dsh-team-u-${START_USER}`);
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(persistedTables(['instances', 'creation_attempts'])).toBe('[[],[]]');
 });
 
 it.each([
@@ -213,6 +254,17 @@ it.each([
           name: '/opt/dsh-team/platform-nav/index.js',
           disabled: false,
           config: { admin },
+        },
+        {
+          id: 'dsh-team-platform-credentials',
+          name: '@deepseek-ai/dsh-credentials-local',
+          disabled: false,
+          isolate: { credentials: 'dsh-team-platform' },
+          config: {
+            path: '/opt/dsh-team/credentials/platform.yaml',
+            dshHome: '/data/home',
+            watch: false,
+          },
         },
       ],
     });

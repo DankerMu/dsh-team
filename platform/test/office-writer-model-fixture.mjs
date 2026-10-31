@@ -27,8 +27,10 @@ const WRITER = '公文与材料写作';
 async function officeSnapshot(rpc, sessionId, address = { kind: 'session', sessionId }, child) {
   const projection = await rpc('session/projections', { request: { sessionId } });
   if (child && !officeChildReady(projection.values.subagent, child.agentAvailable)) return false;
+  // A child address names the mode its native descriptor declares.
+  const target = child ? { ...address, mode: projection.values.subagent.mode } : address;
   const history = await rpc('session/page', {
-    request: { address, throughSeq: projection.asOfSeq, maxMessages: 500 },
+    request: { address: target, throughSeq: projection.asOfSeq, maxMessages: 500 },
   });
   return {
     records: history.records,
@@ -88,7 +90,6 @@ async function delegatedSnapshot(rpc, parent, priorIds, prompt, report) {
       kind: 'subagent',
       parentSessionId: parent.sessionId,
       childSessionId: child.sessionId,
-      mode: 'one-shot',
     },
     child,
   );

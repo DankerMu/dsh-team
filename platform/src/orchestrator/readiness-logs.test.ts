@@ -60,7 +60,7 @@ it('removes malformed, partial, interleaved and oversized token announcements wi
 
   const output = await tail([
     frame(1, 'before failure\n'),
-    frame(1, 'dsh web: http://127.0.0.1:3080/?to'),
+    frame(1, 'dsh web: http://172.30.0.2:3080/?to'),
     frame(2, `Authorization: Bearer ${token}\n`),
     frame(1, `ken=${token.slice(0, 7)}`),
     frame(1, `${token.slice(7)}\n`),
@@ -69,7 +69,7 @@ it('removes malformed, partial, interleaved and oversized token announcements wi
     frame(1, `Set-Cookie: other=${cookieValue}\n`),
     frame(2, `${token}\n`),
     frame(1, 'after failure\n'),
-    frame(1, `dsh web: http://127.0.0.1:3080/?token=${token}`),
+    frame(1, `dsh web: http://172.30.0.2:3080/?token=${token}`),
   ]);
 
   expect(output).toEqual(['before failure', 'after failure']);

@@ -58,6 +58,8 @@ vi.mock('node:http', async (importOriginal) => {
 });
 
 const authority = 'team.example:8443';
+// Released launch tokens are 32 random bytes in unpadded base64url.
+const launchSecret = randomBytes(32).toString('base64url');
 const name = 'dsh-auth-3eo-BcKCoQv18vgqA6jsyDZEVweseAZ0c-hb0sOZg64';
 let row: unknown;
 let credential: unknown;
@@ -112,7 +114,8 @@ function fixture() {
     NetworkSettings: { Ports: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '49173' }] } },
   });
   daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
-  daemon.setComposition(`boot\ndsh web: http://127.0.0.1:3080/?token=release-token\n`);
+  // The fake daemon attaches the container at base+2 of its /28: DSH 0.2.1 announces that bind.
+  daemon.setComposition(`boot\ndsh web: http://172.30.0.2:3080/?token=${launchSecret}\n`);
   const client = createDockerClient('/fixture/docker.sock', daemon.transport);
   ({ acquireDshCookie } = createOrchestrator({
     client,
@@ -216,10 +219,11 @@ it.each(['no-line', 'partial', 'oversized', 'stderr', 'truncated'])(
     const { input, daemon } = fixture();
     const path = `/containers/${START_CONTAINER}/logs?stdout=true&stderr=true&follow=true`;
     if (kind === 'no-line') daemon.setComposition('not a launch line\n');
-    if (kind === 'partial') daemon.setComposition('dsh web: http://127.0.0.1:3080/?token=prefix');
+    if (kind === 'partial')
+      daemon.setComposition(`dsh web: http://172.30.0.2:3080/?token=${launchSecret}`);
     if (kind === 'oversized') daemon.setComposition('x'.repeat(16 * 1024 + 1));
     if (kind === 'stderr') {
-      const data = Buffer.from('dsh web: http://127.0.0.1:3080/?token=stderr-token\n');
+      const data = Buffer.from(`dsh web: http://172.30.0.2:3080/?token=${launchSecret}\n`);
       const header = Buffer.alloc(8);
       header[0] = 2;
       header.writeUInt32BE(data.length, 4);
@@ -232,6 +236,20 @@ it.each(['no-line', 'partial', 'oversized', 'stderr', 'truncated'])(
     expect(http.requests).toBe(0);
   },
 );
+
+it.each([
+  ['the 0.2.0 loopback announcement', '127.0.0.1'],
+  ['another instance address', '172.30.0.18'],
+  ['the platform address of the same bridge', '172.30.0.3'],
+])('does not exchange %s instead of the bridge address', async (_label, address) => {
+  const { input, daemon } = fixture();
+  daemon.setComposition(`boot\ndsh web: http://${address}:3080/?token=${launchSecret}\n`);
+
+  await expect(acquireDshCookie(input)).rejects.toThrow('launch announcement');
+
+  expect(credential).toBeNull();
+  expect(http.requests).toBe(0);
+});
 
 function invalidCookiePayload(kind: string): string {
   const payload =

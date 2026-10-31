@@ -1,4 +1,4 @@
-/** Structural subset of the released 0.2.0-rc.2 Client contracts. */
+/** Structural subset of the released 0.2.1-rc.2 Client contracts. */
 interface PlatformNavProps {
   /** Owner prop of `sidebar.footer.action`: false is the collapsed 56px rail. */
   wide: boolean;

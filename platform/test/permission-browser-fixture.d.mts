@@ -16,7 +16,8 @@ interface PermissionBrowserScenario {
 
 /** One owned browser oracle: delegation mode, protocol prefix and scenario list. */
 export interface PermissionBrowserSuite {
-  readonly mode: 'one-shot' | 'continuable';
+  /** `observed`: delegated flows follow the child's native descriptor mode; `continuable` requires it. */
+  readonly mode: 'observed' | 'continuable';
   /** Owned provider scope, e.g. `issue83-ui`; titles use `title`. */
   readonly prompt: string;
   readonly title: string;

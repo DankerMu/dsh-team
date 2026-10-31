@@ -3,7 +3,8 @@ import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
-import { collectComposition, execScript } from './managed-policy-fixture.ts';
+import { collectComposition, execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
+import { webAddress } from './web-startup-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
 import {
@@ -11,35 +12,42 @@ import {
   type PermissionBrowserSuite,
 } from './permission-browser-fixture.mjs';
 import { isolatedBrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
+import { DSH_ENGINES_PRELUDE } from './dsh-engines.ts';
 
-it('delivers an immutable exact-peer gate outside employee profiles', async () => {
+it('delivers an immutable DSH-compatible gate outside employee profiles', async () => {
   if (platform() !== 'linux' || arch() !== 'x64')
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   const script = `
 import assert from 'node:assert/strict';
-import { statSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { existsSync, statSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+${DSH_ENGINES_PRELUDE}
 const root='/opt/dsh-team/permission-tiers';
-for(const path of ['/opt','/opt/dsh-team',root,root+'/index.js',root+'/review.js',root+'/client.js',root+'/package.json']) {
+for(const path of ['/opt','/opt/dsh-team',root,root+'/index.js',root+'/review.js',root+'/package.json']) {
   const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.mode & 0o022,0);
   if(path.startsWith(root+'/')) assert.equal(stat.mode & 0o777,0o444);
 }
+// Host-only since #393: the one-shot approval seat (client half) is no longer delivered.
+assert.equal(existsSync(root+'/client.js'),false);
 const manifest=JSON.parse(readFileSync(root+'/package.json','utf8'));
-assert.equal(manifest.peerDependencies['@deepseek-ai/dsh'],'0.2.0-rc.2');
-const require=createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
-assert.equal(require('@deepseek-ai/dsh/package.json').version,'0.2.0-rc.2');
+assert.equal(manifest.dsh?.client,undefined);
+assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh'],undefined);
+assert.equal(dshInstalled,'0.2.1-rc.2');
+assert.equal(dshEnginesSatisfied(manifest.engines?.dsh),true);
 assert.throws(()=>writeFileSync(root+'/index.js','employee code'));
 assert.throws(()=>writeFileSync(root+'/client.js','employee code'));
 assert.throws(()=>renameSync(root+'/index.js',root+'/employee.js'));
-assert.throws(()=>renameSync(root+'/client.js',root+'/employee-client.js'));
 assert.equal(process.getuid(),1001);
-process.stdout.write(JSON.stringify({immutable:true,peer:'0.2.0-rc.2',uid:1001}));
+process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh,uid:1001}));
 `;
 
   await runUserImage(
     'managed-policy',
     (stdout) => {
-      expect(JSON.parse(stdout)).toEqual({ immutable: true, peer: '0.2.0-rc.2', uid: 1001 });
+      expect(JSON.parse(stdout)).toEqual({
+        immutable: true,
+        engines: '>=0.2.1-rc.2 <0.3.0',
+        uid: 1001,
+      });
     },
     undefined,
     (lifecycle) =>
@@ -77,10 +85,13 @@ it('authorizes real released tools through native approval, Auto protocol, child
         lifecycle,
         `dsh-team-test-${lifecycle.runId}-permission-compose`,
       );
+      // The scenario launches DSH Web itself, one tier after another, at this network's +2.
+      const network = lifecycleWebNetwork(lifecycle, 'permission');
       const overlays = (['yolo', 'approval', 'auto'] as const).map((defaultPermissionTier) => {
         const generated = generateManagedConfig({
           ...composition,
           admin: false,
+          instanceAddress: webAddress(network),
           defaultPermissionTier,
           modelSettings: {
             baseURL: 'http://127.0.0.1:9/v1',
@@ -108,13 +119,16 @@ it('authorizes real released tools through native approval, Auto protocol, child
         lifecycle,
         `dsh-team-test-${lifecycle.runId}-permission-behavior`,
         permissionScenarioScript(host, overlayFiles, revocationHost),
+        network,
       );
     },
   );
 });
 
-const ONE_SHOT: PermissionBrowserSuite = {
-  mode: 'one-shot',
+// Stage-1 root and delegated-child paths; the delegated flow follows the observed child mode
+// (DSH 0.2.1 in-process children are continuable).
+const STAGE1: PermissionBrowserSuite = {
+  mode: 'observed',
   prompt: 'issue83-ui',
   title: 'issue83',
   overlay: 'uioracle0001',
@@ -129,8 +143,7 @@ const ONE_SHOT: PermissionBrowserSuite = {
   ],
 };
 
-// The rc.2 standard preset delegates with backgroundMode continuable; the owned
-// issue391-ui protocol selects it through run_in_background: true.
+// Every 0.2.1 in-process delegation is continuable; this suite requires that observed mode.
 const CONTINUABLE: PermissionBrowserSuite = {
   mode: 'continuable',
   prompt: 'issue391-ui',
@@ -242,8 +255,8 @@ async function runBrowserCase(
   }
 }
 
-it('enforces root and one-shot child reject, allow and cancel through the actual DSH browser UI', () =>
-  runBrowserCase('issue83', 'permission-browser-', ONE_SHOT));
+it('enforces root and delegated child reject, allow and cancel through the actual DSH browser UI', () =>
+  runBrowserCase('issue83', 'permission-browser-', STAGE1));
 
 it('enforces continuable child reject, allow, cancel, Auto, Yolo and resume through the actual DSH browser UI', () =>
   runBrowserCase('issue391', 'permission-continuable-', CONTINUABLE));

@@ -25,7 +25,8 @@ export const inject = [
   'subagents',
   'managedPermissions',
 ];
-// issue83-ui: stage-1 one-shot oracle. issue391-ui: continuable children (#391).
+// issue83-ui: stage-1 oracle. issue391-ui: continuable children (#391). In DSH 0.2.1 every
+// in-process delegation is continuable, so the delegation call carries no mode option.
 const PROMPT =
   /^(issue83-ui|issue391-ui) (root|delegate|child) (reject|allow|cancel) ([a-f0-9-]+)$/;
 const REVIEW_TARGET = /^\/data\/work\/issue391-ui-child-([a-f0-9-]+)\.txt$/;
@@ -164,8 +165,6 @@ export async function apply(ctx) {
           arguments: JSON.stringify({
             description: `${title} child ${action} ${nonce}`,
             prompt: `${prefix} child ${action} ${nonce}`,
-            // rc.2 standard preset: backgroundMode continuable; true selects it.
-            run_in_background: prefix === 'issue391-ui',
           }),
         });
       } else {

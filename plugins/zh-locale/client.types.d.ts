@@ -1,4 +1,4 @@
-/** Structural subset of the packed 0.2.0-rc.2 public client interfaces. */
+/** Structural subset of the packed 0.2.1-rc.2 public client interfaces. */
 interface DshLocaleContext {
   locale: { setLocale(id: string): void };
 }

@@ -4,15 +4,128 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { setTimeout } from 'node:timers/promises';
 import type { DockerCommand } from './docker-command.ts';
-import { launchTokenPresent } from '../src/orchestrator/index.ts';
+import {
+  allocateSubnet,
+  instanceAddressLayout,
+  launchTokenPresent,
+} from '../src/orchestrator/index.ts';
 
 const configuredHost = 'dsh-team.test:3080';
 const patchTarget = '/managed/patch.yml';
+// RFC2544 benchmarking range: never a LAN or the platform's own instance pool.
+const TEST_SUBNET_POOL = '198.18.0.0/15';
+
+/** An invocation-owned /28 bridge holding exactly one Web container at its base+2 address. */
+export interface WebNetwork {
+  readonly name: string;
+  readonly subnet: string;
+}
+
+/** The address DSH 0.2.1 binds: it accepts only the concrete host its overlay names. */
+export function webAddress(network: WebNetwork): string {
+  return instanceAddressLayout(network.subnet).container;
+}
+
+const ROUTE_HEADER = [
+  'Iface',
+  'Destination',
+  'Gateway',
+  'Flags',
+  'RefCnt',
+  'Use',
+  'Metric',
+  'Mask',
+  'MTU',
+  'Window',
+  'IRTT',
+];
+
+function routeTableMalformed(): never {
+  throw new Error('Host route table malformed');
+}
+
+/** One little-endian `/proc/net/route` word as its host-order IPv4 value. */
+function routeWord(hex: string | undefined): number {
+  if (hex === undefined || !/^[0-9A-Fa-f]{8}$/.test(hex)) routeTableMalformed();
+  return Number.parseInt(hex.match(/../g)?.reverse().join('') ?? '', 16);
+}
+
+/**
+ * Host IPv4 kernel routes as CIDRs (`/proc/net/route` text). The default route is skipped; any
+ * other unparseable row fails, because silently dropping one would shrink the occupied set.
+ */
+export function hostRouteCidrs(procNetRoute: string): string[] {
+  const [header = '', ...rows] = procNetRoute.split('\n');
+  if (header.trim().split(/\s+/).join(' ') !== ROUTE_HEADER.join(' ')) routeTableMalformed();
+  return rows.flatMap((row) => {
+    if (row.trim() === '') return [];
+    const fields = row.trim().split(/\s+/);
+    if (fields.length !== ROUTE_HEADER.length) routeTableMalformed();
+    const destination = routeWord(fields[1]);
+    const mask = routeWord(fields[7]);
+    if (mask === 0) return [];
+    const prefix = 32 - Math.log2(2 ** 32 - mask);
+    if (!Number.isInteger(prefix)) routeTableMalformed();
+    const address = [24, 16, 8, 0].map((bits) => (destination >>> bits) & 255).join('.');
+    return [`${address}/${String(prefix)}`];
+  });
+}
+
+/**
+ * Create one labelled /28 bridge from a fresh IPAM snapshot of every Docker network plus the host's
+ * IPv4 kernel routes, so stale or concurrent networks and host-owned ranges (a proxy tun) are
+ * excluded. The caller's registration precedes creation; a creation conflict fails explicitly
+ * rather than retrying another subnet.
+ */
+export function createWebNetwork(
+  command: DockerCommand,
+  runId: string,
+  suffix: string,
+  register: (name: string, ownership: Readonly<Record<string, string>>) => void,
+  boundary: Partial<WebStartupBoundary> = {},
+): WebNetwork {
+  const { routeTable = () => readFileSync('/proc/net/route', 'utf8') } = boundary;
+  const docker = (args: string[]): string => webDocker(command, args);
+  const ids = docker(['network', 'ls', '--quiet', '--no-trunc']).split('\n').filter(Boolean);
+  const occupied =
+    ids.length === 0
+      ? []
+      : docker([
+          'network',
+          'inspect',
+          '--format',
+          '{{range .IPAM.Config}}{{println .Subnet}}{{end}}',
+          ...ids,
+        ])
+          .split('\n')
+          .map((subnet) => subnet.trim())
+          .filter(Boolean);
+  const network = {
+    name: `dsh-team-test-net-${runId}-${suffix}`,
+    subnet: allocateSubnet(TEST_SUBNET_POOL, [...occupied, ...hostRouteCidrs(routeTable())]),
+  };
+  const ownership = { 'dsh-team.test-run': runId };
+  register(network.name, ownership);
+  docker([
+    'network',
+    'create',
+    '--driver',
+    'bridge',
+    '--subnet',
+    network.subnet,
+    '--label',
+    `dsh-team.test-run=${runId}`,
+    network.name,
+  ]);
+  return network;
+}
 
 export interface WebStartupBoundary {
   now: () => number;
   pause: (milliseconds: number) => Promise<void>;
   httpStatus: (port: number, authority: string, timeout: number) => Promise<number | null>;
+  /** Host `/proc/net/route` text consulted by `createWebNetwork`; absent reads the real table. */
+  routeTable?: () => string;
 }
 
 /** GET only: no credentials, redirects, response body or error text enter evidence. */
@@ -49,6 +162,7 @@ export async function observeWebEndpoint(
   container: string,
   inspectPort: () => number,
   authority: string,
+  announced: (logs: string) => boolean,
   boundary: Partial<WebStartupBoundary> = {},
   deadline?: number,
 ): Promise<number> {
@@ -70,7 +184,7 @@ export async function observeWebEndpoint(
     const logs = webDocker(command, ['logs', '--tail', '50', container], remaining());
     remaining();
     // HTTP routes may still be assembling before the released readiness announcement.
-    if (!launchTokenPresent(logs)) {
+    if (!announced(logs)) {
       await pause(Math.min(250, remaining()));
       continue;
     }
@@ -133,8 +247,12 @@ export interface WebContainer {
   workVolume: string;
   overlay: string;
   seccomp: string;
+  /** Owned bridge; the caller's overlay names its base+2 address (or a legacy wildcard). */
+  network: WebNetwork;
   trustedHost?: string;
   env?: Readonly<Record<string, string>>;
+  /** Launch-line readiness; defaults to the released 0.2.1 line naming the base+2 address. */
+  announced?: (logs: string) => boolean;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -212,6 +330,19 @@ function assertPublication(value: unknown, port: number): void {
   }
 }
 
+/** The container's single endpoint must be its owned network at the fixed base+2 address. */
+function assertFixedAddress(value: unknown, expected: WebContainer): void {
+  const networks = record(record(record(value).NetworkSettings).Networks);
+  const endpoint: unknown = networks[expected.network.name];
+  if (
+    Object.keys(networks).length !== 1 ||
+    typeof endpoint !== 'object' ||
+    endpoint === null ||
+    record(endpoint).IPAddress !== webAddress(expected.network)
+  )
+    throw new Error('Web requires its owned network at the base+2 address');
+}
+
 function portAndSettings(value: unknown, expected: WebContainer): number {
   const observed = record(value);
   const labels = record(record(observed.Config).Labels);
@@ -228,6 +359,7 @@ function portAndSettings(value: unknown, expected: WebContainer): number {
   if (binding.HostIp !== '127.0.0.1' || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('Web requires a valid loopback port');
   }
+  assertFixedAddress(observed, expected);
   try {
     const host = record(observed.HostConfig);
     assertSecurity(host, expected.seccomp);
@@ -296,6 +428,10 @@ function createWebContainer(
     `dsh-team.test-run=${expected.runId}`,
     '--security-opt',
     `seccomp=${expected.seccomp}`,
+    '--network',
+    expected.network.name,
+    '--ip',
+    webAddress(expected.network),
     '--publish',
     '127.0.0.1::3080',
     '--mount',
@@ -334,6 +470,62 @@ function assertOwnedVolumes(
       throw new Error('Web volume ownership mismatch');
     }
   }
+}
+
+/** The single host the accepted launch line(s) name; the token never leaves this scope. */
+function launchHost(logs: string): string {
+  const hosts = new Set(
+    [...logs.matchAll(/^dsh web: http:\/\/([^\s/]+):3080\/\?token=/gm)].map((match) => match[1]),
+  );
+  const [host] = hosts;
+  if (hosts.size !== 1 || host === undefined) throw new Error('Ambiguous Web launch announcement');
+  return host;
+}
+
+/**
+ * Starts an overlay DSH must refuse and requires a nonzero exit within 60s with no launch URL.
+ * Logs are judged in memory only; called after the owner registers container/volumes/network.
+ */
+export async function runWebRejection(
+  command: DockerCommand,
+  expected: WebContainer,
+  boundary: Partial<WebStartupBoundary> = {},
+): Promise<string> {
+  const { now = () => performance.now(), pause = setTimeout } = boundary;
+  const docker = (args: string[], timeout = 30_000): string => webDocker(command, args, timeout);
+  assertOwnedVolumes(docker, expected);
+  createWebContainer(docker, expected, expected.trustedHost ?? configuredHost);
+  const deadline = now() + 60_000;
+  function remaining(): number {
+    const left = deadline - now();
+    if (left <= 0) throw new Error('Web rejection deadline exceeded (60s)');
+    return Math.max(1, Math.floor(left));
+  }
+  docker(['start', expected.container], remaining());
+  let state: Record<string, unknown>;
+  for (;;) {
+    const observed = record(
+      json(
+        docker(['container', 'inspect', '--format', '{{json .}}', expected.container], remaining()),
+      ),
+    );
+    if (
+      observed.Image !== expected.imageId ||
+      record(record(observed.Config).Labels)['dsh-team.test-run'] !== expected.runId
+    )
+      throw new Error('Web container image/ownership mismatch');
+    state = record(observed.State);
+    if (state.Running === false && state.Status === 'exited') break;
+    await pause(Math.min(250, remaining()));
+  }
+  const elapsedMs = 60_000 - remaining();
+  if (typeof state.ExitCode !== 'number' || state.ExitCode === 0)
+    throw new Error('Refused Web overlay must exit nonzero');
+  const logs = command(['logs', '--tail', '50', expected.container], remaining());
+  if (logs.error !== undefined || logs.status !== 0) throw new Error('Web Docker logs failed');
+  if ([logs.stdout, logs.stderr].some((text) => /^dsh web: http/m.test(text)))
+    throw new Error('Refused Web overlay announced a launch URL');
+  return JSON.stringify({ exited: true, exitCode: state.ExitCode, launchLine: false, elapsedMs });
 }
 
 /** Read-only fixture probes retain the startup identity, security and mount guards. */
@@ -384,6 +576,7 @@ export async function runWebStartup(
     return text;
   }
   bounded(['start', expected.container]);
+  const address = webAddress(expected.network);
   const inspect = () => {
     const snapshot = record(
       json(bounded(['container', 'inspect', '--format', '{{json .}}', expected.container])),
@@ -392,14 +585,22 @@ export async function runWebStartup(
       throw new Error('DSH Web exited before acceptance');
     return portAndSettings(snapshot, expected);
   };
+  const announced = expected.announced ?? ((logs) => launchTokenPresent(logs, address));
+  let announcement = '';
   const port = await observeWebEndpoint(
     command,
     expected.container,
     inspect,
     trustedHost,
+    (logs) => {
+      const seen = announced(logs);
+      if (seen) announcement = logs;
+      return seen;
+    },
     { ...boundary, now },
     deadline,
   );
+  const announcedHost = launchHost(announcement);
   const process = selectedProcess(
     json(bounded(['exec', expected.container, 'python3', '-c', processScript(trustedHost)])),
   );
@@ -411,6 +612,8 @@ export async function runWebStartup(
     httpStatus: 401,
     configuredHost: trustedHost,
     hostPort: port,
+    announcedHost,
+    subnet: expected.network.subnet,
     ...process,
   });
 }

@@ -2,7 +2,7 @@
 import { captureSettledScreenshot, clickSelector, evalPage, waitFor } from './probe-dsh-api-ui.mjs';
 
 const NAV = '[data-dsh-team-platform-nav]';
-// Released 0.2.0-rc.2 zh sidebar toggle labels (`toggle.collapse` / `toggle.open`).
+// Released 0.2.1-rc.2 zh sidebar toggle labels (`toggle.collapse` / `toggle.open`).
 const COLLAPSE = 'button[aria-label="收起侧边栏"]';
 const EXPAND = 'button[aria-label="打开侧边栏"]';
 const ACCOUNT = { href: '/_platform/account', label: '账号设置', heading: '修改密码' };

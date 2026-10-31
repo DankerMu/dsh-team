@@ -1,6 +1,6 @@
 # Managed Chinese Web composition
 
-This dependency-free plugin targets **DSH npm 0.2.0-rc.2 exactly**. `client.js` is
+This dependency-free plugin targets **DSH npm 0.2.1-rc.2**. `client.js` is
 its delivered classic-script artifact, not generated output. It calls the
 released public `ctx.locale.setLocale('zh')` once on every plugin load. It does
 not use native transport/locale globals, impersonate localhost, alter DSH,
@@ -14,12 +14,13 @@ remain in the roster. This is not a replacement model provider.
 
 ## Delivery
 
-The package declares the exact DSH peer pin using the published compatibility
-idiom. The user-image build and the composition probe require exact `dsh --version`
-equality with `package.json.peerDependencies['@deepseek-ai/dsh']`; do not apply an
-`allow-version` exemption. Coverage of the native startup peer check for an
-overlay-only package is not yet established, so these explicit comparisons remain
-the operative guards.
+The package declares the released compatibility field `engines.dsh`
+(`>=0.2.1-rc.2 <0.3.0`) and no `@deepseek-ai/dsh` peer. DSH's loader decides that
+range with its own `semver`, prereleases included; an unmet range skips a bundle
+or disables a profile plugin row with a stderr diagnostic while the command still
+exits 0. The user-image build therefore applies the same decision to every
+delivered plugin and fails on a mismatch, and the composition probe pins the exact
+`dsh --version`; do not apply an `allow-version` exemption.
 
 The user-image Dockerfile keeps `images/dsh-user` as its primary build context and
 requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale`,
@@ -150,7 +151,7 @@ from `verify/phase0/managed.patch.yml`. Models must come from the real configure
 catalog; do not submit a model prompt, fabricate execution, or install a
 fallback provider. The first-run matrix itself intentionally remains key-free.
 
-Packed 0.2.0-rc.2 UI selectors:
+Packed 0.2.1-rc.2 UI selectors:
 
 1. Open `button[aria-label="设置"]` (English control: `Settings`). The actual
    settings dialog is `[role="dialog"][data-shortcut-modal="settings"]`.
@@ -180,7 +181,7 @@ The parent owns this independent UI exercise and the API three-cycle regression.
 
 ## Verification contract
 
-Use the root first-run probe with DSH0.2.0-rc.2, Node24.13.1 and pinned CfT140.
+Use the root first-run probe with DSH0.2.1-rc.2, Node24.13.1 and pinned CfT140.
 Require both fresh non-loopback entry and reload: readable Chinese controls,
 no Notice, successful marker type/clear and zero console errors. The optional
 configured-model exercise must retain General settings and select both fixture
