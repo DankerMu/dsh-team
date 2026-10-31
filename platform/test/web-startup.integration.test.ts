@@ -11,11 +11,14 @@ import type { WebStartupBoundary } from './web-startup-fixture.ts';
 
 // Shaped like a released 43-character launch token so only the address decides acceptance.
 const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN_0000000000000000';
-const containerAddress = '172.17.0.2';
+// A foreign network holds the first /28 of the test pool: allocation must take the next one.
+const foreignSubnet = '198.18.0.0/28';
+const containerAddress = '198.18.0.18';
 const imageId = `sha256:${'b'.repeat(64)}`;
+type ResourceKind = 'image' | 'container' | 'volume' | 'network';
 interface WebDaemon {
   command: DockerCommand;
-  resources: Record<'image' | 'container' | 'volume', Map<string, string>>;
+  resources: Record<ResourceKind, Map<string, string>>;
   boundary: WebStartupBoundary;
   createdContainers: string[];
 }
@@ -26,7 +29,9 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
     image: new Map([['foreign-image', 'foreign-owner']]),
     container: new Map([['foreign-container', 'foreign-owner']]),
     volume: new Map([['foreign-volume', 'foreign-owner']]),
+    network: new Map([['foreign-network', 'foreign-owner']]),
   };
+  const networks = new Map([['foreign-network', { id: 'f'.repeat(64), subnet: foreignSubnet }]]);
   const createdContainers: string[] = [];
   let snapshot: Record<string, unknown> = {};
   let time = 0;
@@ -47,6 +52,18 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       PortBindings: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '' }] },
     };
   }
+  /** The container must join its invocation's network at the allocated /28's base+2. */
+  function ownedFixedNetwork(args: readonly string[], label: string): string {
+    const network = args[args.indexOf('--network') + 1] ?? '';
+    if (
+      resources.network.get(network) !== label ||
+      networks.get(network)?.subnet !== '198.18.0.16/28' ||
+      args[args.indexOf('--ip') + 1] !== containerAddress
+    ) {
+      throw new Error('Web container is not at the owned network +2 address');
+    }
+    return network;
+  }
   function createContainer(args: readonly string[], label: string): DockerCommandResult {
     if (fault === 'container-before-create') {
       return { status: 1, stdout: privateToken, stderr: privateToken };
@@ -66,16 +83,21 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
     if (overlay === undefined) throw new Error('Missing overlay');
     if (
       readFileSync(overlay, 'utf8') !==
-      '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n'
+      `- id: webserver\n  config:\n    host: ${containerAddress}\n    port: 3080\n`
     ) {
       throw new Error('Nonminimal Web overlay');
     }
+    const network = ownedFixedNetwork(args, label);
     snapshot = {
       Image: fault === 'wrong-image' ? 'sha256:wrong' : imageId,
       Config: { Labels: { 'dsh-team.test-run': label } },
       HostConfig: hostConfiguration(args[args.indexOf('--security-opt') + 1]),
       NetworkSettings: {
-        Networks: { bridge: { IPAddress: containerAddress } },
+        Networks: {
+          [fault === 'foreign-network' ? 'bridge' : network]: {
+            IPAddress: fault === 'wrong-address' ? '198.18.0.19' : containerAddress,
+          },
+        },
         Ports: {
           '3080/tcp': [
             {
@@ -120,6 +142,60 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       return ok(JSON.stringify({ ...snapshot, State: { Running: running } }));
     }
     return ok(resources[kind].get(name));
+  }
+  function networkOperation(args: readonly string[], label: string): DockerCommandResult {
+    const subcommand = args[1];
+    const target = args.at(-1) ?? '';
+    if (subcommand === 'ls') {
+      const filter = args[args.indexOf('--filter') + 1];
+      const owned = [...resources.network].filter(
+        ([, owner]) => !args.includes('--filter') || filter === `label=dsh-team.test-run=${owner}`,
+      );
+      return ok(owned.map(([name]) => `${networks.get(name)?.id ?? ''}\n`).join(''));
+    }
+    if (subcommand === 'create') {
+      if (fault === 'network-conflict') {
+        return {
+          status: 1,
+          stdout: '',
+          stderr: 'Pool overlaps with other one on this address space',
+        };
+      }
+      const subnet = args[args.indexOf('--subnet') + 1] ?? '';
+      resources.network.set(target, label);
+      networks.set(target, { id: 'e'.repeat(64), subnet });
+      return ok(networks.get(target)?.id);
+    }
+    const name = [...networks].find(([key, { id }]) => key === target || id === target)?.[0];
+    if (subcommand === 'rm') {
+      if (name !== undefined) {
+        resources.network.delete(name);
+        networks.delete(name);
+      }
+      return ok();
+    }
+    if (args.includes('--format')) {
+      const ids = args.slice(args.indexOf('--format') + 2);
+      const subnets = [...networks.values()].filter(({ id }) => ids.includes(id));
+      return ok(subnets.map(({ subnet }) => `${subnet}\n`).join(''));
+    }
+    if (name === undefined) {
+      return {
+        status: 1,
+        stdout: '[]',
+        stderr: `Error response from daemon: network ${target} not found`,
+      };
+    }
+    return ok(
+      JSON.stringify([
+        {
+          Name: name,
+          Id: networks.get(name)?.id,
+          Labels: { 'dsh-team.test-run': resources.network.get(name) },
+          Containers: {},
+        },
+      ]),
+    );
   }
   function execution(operation: string | undefined): DockerCommandResult {
     if (operation === 'start') {
@@ -188,6 +264,7 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       return ok();
     }
     if (operation === 'create') return createContainer(args, label);
+    if (operation === 'network') return networkOperation(args, label);
     if (operation === 'volume' && subcommand === 'create') {
       return createVolume(args.at(-1) ?? '', label);
     }
@@ -226,6 +303,7 @@ const sentinels = {
   image: [['foreign-image', 'foreign-owner']],
   container: [['foreign-container', 'foreign-owner']],
   volume: [['foreign-volume', 'foreign-owner']],
+  network: [['foreign-network', 'foreign-owner']],
 };
 
 it('accepts live observations immediately before the deadline, reports selected facts and cleans both volumes', async () => {
@@ -389,6 +467,9 @@ it.each([
   ['readonly-work', 'mounts'],
   ['writable-overlay', 'mounts'],
   ['public-port', 'loopback'],
+  ['wrong-address', 'network'],
+  ['foreign-network', 'network'],
+  ['network-conflict', 'failed'],
   ['wrong-image', 'ownership'],
   ['unconfined', 'security'],
   ['privileged', 'security'],
@@ -496,6 +577,7 @@ it.each(['foreign-volume-label', 'missing-volume-label'])(
     expect(daemon.createdContainers).toEqual([]);
     expect([...daemon.resources.image]).toEqual(sentinels.image);
     expect([...daemon.resources.container]).toEqual(sentinels.container);
+    expect([...daemon.resources.network]).toEqual(sentinels.network);
     expect([...daemon.resources.volume]).toEqual([
       ...sentinels.volume,
       [

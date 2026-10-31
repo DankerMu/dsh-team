@@ -43,11 +43,14 @@ export function officeDocxEvidence(value: unknown, expected: OfficeNotice) {
   return { path: expected.path, bytes: parsed.bytes, sha256: parsed.sha256, fields };
 }
 
+// Mode-agnostic: DSH 0.2.1 in-process children are continuable; 0.2.0 delegated one-shot.
+const CHILD_MODES: readonly unknown[] = ['one-shot', 'continuable'];
+
 export function officeChildReady(identity: unknown, agentAvailable: unknown): boolean {
   if (identity == null && agentAvailable === true) return false;
   const descriptor = record(identity);
   assert(
-    descriptor.mode === 'one-shot' &&
+    CHILD_MODES.includes(descriptor.mode) &&
       typeof descriptor.seq === 'number' &&
       Number.isSafeInteger(descriptor.seq) &&
       descriptor.seq >= 0,
@@ -98,7 +101,7 @@ function childLineage(delegation: OfficeDelegation, events: Record<string, unkno
     'office-child-lineage',
   );
   assert(
-    identity.mode === 'one-shot' &&
+    CHILD_MODES.includes(identity.mode) &&
       typeof identity.seq === 'number' &&
       Number.isSafeInteger(identity.seq),
     'office-child-descriptor',

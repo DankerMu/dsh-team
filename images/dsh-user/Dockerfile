@@ -64,7 +64,7 @@ RUN node -e 'const fs = require("node:fs"); \
 USER root
 # Security code is never resolved from the employee-writable profile.
 COPY --from=permission-tiers --chown=root:root --chmod=0444 \
-  package.json index.js review.js client.js \
+  package.json index.js review.js \
   /opt/dsh-team/permission-tiers/
 # Platform navigation is delivered read-only beside the security plugin; the overlay enables it.
 COPY --from=platform-nav --chown=root:root --chmod=0444 \

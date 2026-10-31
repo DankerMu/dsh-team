@@ -4,15 +4,73 @@ import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { setTimeout } from 'node:timers/promises';
 import type { DockerCommand } from './docker-command.ts';
-import { launchTokenPresent } from '../src/orchestrator/index.ts';
+import {
+  allocateSubnet,
+  instanceAddressLayout,
+  launchTokenPresent,
+} from '../src/orchestrator/index.ts';
 
 const configuredHost = 'dsh-team.test:3080';
-/**
- * Fixed base+2 instance address that fixture-generated managed overlays bind DSH Web to.
- * DSH 0.2.1 binds only the overlay's concrete address, so the Web container must occupy it.
- */
-export const WEB_CONTAINER_ADDRESS = '172.30.0.2';
 const patchTarget = '/managed/patch.yml';
+// RFC2544 benchmarking range: never a LAN or the platform's own instance pool.
+const TEST_SUBNET_POOL = '198.18.0.0/15';
+
+/** An invocation-owned /28 bridge holding exactly one Web container at its base+2 address. */
+export interface WebNetwork {
+  readonly name: string;
+  readonly subnet: string;
+}
+
+/** The address DSH 0.2.1 binds: it accepts only the concrete host its overlay names. */
+export function webAddress(network: WebNetwork): string {
+  return instanceAddressLayout(network.subnet).container;
+}
+
+/**
+ * Create one labelled /28 bridge from a fresh IPAM snapshot of every Docker network, so stale or
+ * concurrent networks are excluded. The caller's registration precedes creation; a creation
+ * conflict fails explicitly rather than retrying another subnet.
+ */
+export function createWebNetwork(
+  command: DockerCommand,
+  runId: string,
+  suffix: string,
+  register: (name: string, ownership: Readonly<Record<string, string>>) => void,
+): WebNetwork {
+  const docker = (args: string[]): string => webDocker(command, args);
+  const ids = docker(['network', 'ls', '--quiet', '--no-trunc']).split('\n').filter(Boolean);
+  const occupied =
+    ids.length === 0
+      ? []
+      : docker([
+          'network',
+          'inspect',
+          '--format',
+          '{{range .IPAM.Config}}{{println .Subnet}}{{end}}',
+          ...ids,
+        ])
+          .split('\n')
+          .map((subnet) => subnet.trim())
+          .filter(Boolean);
+  const network = {
+    name: `dsh-team-test-net-${runId}-${suffix}`,
+    subnet: allocateSubnet(TEST_SUBNET_POOL, occupied),
+  };
+  const ownership = { 'dsh-team.test-run': runId };
+  register(network.name, ownership);
+  docker([
+    'network',
+    'create',
+    '--driver',
+    'bridge',
+    '--subnet',
+    network.subnet,
+    '--label',
+    `dsh-team.test-run=${runId}`,
+    network.name,
+  ]);
+  return network;
+}
 
 export interface WebStartupBoundary {
   now: () => number;
@@ -139,8 +197,12 @@ export interface WebContainer {
   workVolume: string;
   overlay: string;
   seccomp: string;
+  /** Owned bridge; the caller's overlay names its base+2 address (or a legacy wildcard). */
+  network: WebNetwork;
   trustedHost?: string;
   env?: Readonly<Record<string, string>>;
+  /** Launch-line readiness; defaults to the released 0.2.1 line naming the base+2 address. */
+  announced?: (logs: string) => boolean;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -218,6 +280,19 @@ function assertPublication(value: unknown, port: number): void {
   }
 }
 
+/** The container's single endpoint must be its owned network at the fixed base+2 address. */
+function assertFixedAddress(value: unknown, expected: WebContainer): void {
+  const networks = record(record(record(value).NetworkSettings).Networks);
+  const endpoint: unknown = networks[expected.network.name];
+  if (
+    Object.keys(networks).length !== 1 ||
+    typeof endpoint !== 'object' ||
+    endpoint === null ||
+    record(endpoint).IPAddress !== webAddress(expected.network)
+  )
+    throw new Error('Web requires its owned network at the base+2 address');
+}
+
 function portAndSettings(value: unknown, expected: WebContainer): number {
   const observed = record(value);
   const labels = record(record(observed.Config).Labels);
@@ -234,6 +309,7 @@ function portAndSettings(value: unknown, expected: WebContainer): number {
   if (binding.HostIp !== '127.0.0.1' || !Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('Web requires a valid loopback port');
   }
+  assertFixedAddress(observed, expected);
   try {
     const host = record(observed.HostConfig);
     assertSecurity(host, expected.seccomp);
@@ -244,15 +320,6 @@ function portAndSettings(value: unknown, expected: WebContainer): number {
     throw new Error('Web security, publication or distinct writable mounts mismatch');
   }
   return port;
-}
-
-/** DSH 0.2.1 announces the concrete address it bound: the container's single network address. */
-function announcedAddress(value: unknown): string {
-  const networks = Object.values(record(record(record(value).NetworkSettings).Networks));
-  const address = networks.length === 1 ? record(networks[0]).IPAddress : undefined;
-  if (typeof address !== 'string' || address === '')
-    throw new Error('Web requires one container network address');
-  return address;
 }
 
 function selectedProcess(value: unknown): Record<string, unknown> {
@@ -311,6 +378,10 @@ function createWebContainer(
     `dsh-team.test-run=${expected.runId}`,
     '--security-opt',
     `seccomp=${expected.seccomp}`,
+    '--network',
+    expected.network.name,
+    '--ip',
+    webAddress(expected.network),
     '--publish',
     '127.0.0.1::3080',
     '--mount',
@@ -399,14 +470,13 @@ export async function runWebStartup(
     return text;
   }
   bounded(['start', expected.container]);
-  let address = '';
+  const address = webAddress(expected.network);
   const inspect = () => {
     const snapshot = record(
       json(bounded(['container', 'inspect', '--format', '{{json .}}', expected.container])),
     );
     if (record(snapshot.State).Running !== true)
       throw new Error('DSH Web exited before acceptance');
-    address = announcedAddress(snapshot);
     return portAndSettings(snapshot, expected);
   };
   const port = await observeWebEndpoint(
@@ -414,7 +484,7 @@ export async function runWebStartup(
     expected.container,
     inspect,
     trustedHost,
-    (logs) => launchTokenPresent(logs, address),
+    expected.announced ?? ((logs) => launchTokenPresent(logs, address)),
     { ...boundary, now },
     deadline,
   );

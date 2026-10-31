@@ -95,6 +95,7 @@ probe_absent() {
       noun=image ref="$target"
       case "$target" in *:*) ;; *) ref="${target}:latest" ;; esac
       ;;
+    network) noun=network ref="$target" ;;
     *) return 1 ;;
   esac
   errf="$(mktemp "${TMPDIR:-/tmp}/${probe_name}-inspect.XXXXXX")" || return 1
@@ -108,8 +109,52 @@ probe_absent() {
   rm -f "$errf"
   err="${err%x}"
   err="${err%$'\n'}"
-  if [ "$status" -ne 1 ] || [ -n "$out" ]; then return 1; fi
-  [ "$err" = "Error response from daemon: No such ${noun}: ${ref}" ] || [ "$err" = "Error: No such ${noun}: ${ref}" ]
+  if [ "$status" -ne 1 ] || { [ -n "$out" ] && ! { [ "$noun" = network ] && [ "$out" = "[]" ]; }; }; then
+    return 1
+  fi
+  [ "$err" = "Error response from daemon: No such ${noun}: ${ref}" ] || [ "$err" = "Error: No such ${noun}: ${ref}" ] ||
+    { [ "$noun" = network ] && [ "$err" = "Error response from daemon: network ${ref} not found" ]; }
+}
+
+# Runs one canonical orchestrator export from the checkout; probes never reimplement it in bash.
+probe_orchestrator() {
+  local script="$1"
+  shift
+  node --input-type=module -e "import { pathToFileURL } from 'node:url';
+const orchestrator = await import(pathToFileURL(process.argv[1]).href);
+${script}" "${repo_root}/platform/src/orchestrator/index.ts" "$@"
+}
+
+# DSH 0.2.1 binds only its overlay's concrete address, so each probe Web container sits at the
+# base+2 of an owned /28. The subnet is chosen from a fresh IPAM snapshot of every Docker network.
+# Prints "<subnet> <base+2 address>".
+probe_allocate_subnet() {
+  local ids cidrs
+  ids="$(probe_run_bound "$docker_seconds" docker network ls --quiet --no-trunc)" || return 1
+  # shellcheck disable=SC2086 # one argument per hexadecimal network ID
+  cidrs="$(probe_run_bound "$docker_seconds" docker network inspect --format '{{range .IPAM.Config}}{{println .Subnet}}{{end}}' $ids)" || return 1
+  printf '%s\n' "$cidrs" | probe_orchestrator "import { readFileSync } from 'node:fs';
+const occupied = readFileSync(0, 'utf8').split('\\n').map((line) => line.trim()).filter(Boolean);
+const subnet = orchestrator.allocateSubnet('198.18.0.0/15', occupied);
+process.stdout.write(subnet + ' ' + orchestrator.instanceAddressLayout(subnet).container);"
+}
+
+# A creation conflict fails the probe; no other subnet is retried.
+probe_create_network() {
+  local network="$1" subnet="$2"
+  probe_run_bound "$docker_seconds" docker network create --driver bridge --subnet "$subnet" \
+    --label "dsh-team.test-run=${run_id}" "$network" >/dev/null
+}
+
+probe_remove_network() {
+  local target="$1" status=0
+  set +e
+  probe_run_bound "$docker_seconds" docker network rm "$target" >/dev/null 2>&1
+  status=$?
+  set -e
+  [ "$status" -eq 0 ] && return 0
+  probe_absent network "$target" && return 0
+  probe_note_cleanup_failure "docker network rm ${target}"
 }
 
 probe_remove_owned() {
@@ -146,14 +191,17 @@ probe_scrub_binds() {
   fi
 }
 
+# The token is read only from the released launch line naming the container's base+2 address.
 probe_wait_launch_token() {
-  local container="$1" seconds="$2" elapsed=0 token=""
+  local container="$1" seconds="$2" address="$3" elapsed=0 token=""
   while [ "$elapsed" -lt "$seconds" ]; do
     probe_run_bound "$docker_seconds" docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null | grep -q true || {
       echo "${probe_name}: container exited before token line" >&2
       return 1
     }
-    token="$(probe_run_bound "$docker_seconds" docker logs "$container" 2>&1 | node -e 'const t=require("node:fs").readFileSync(0,"utf8");const m=t.match(/dsh web: http:\/\/127\.0\.0\.1:\d+\/\?token=([A-Za-z0-9_-]+)/);if(m)process.stdout.write(m[1]);')"
+    token="$(probe_run_bound "$docker_seconds" docker logs "$container" 2>&1 | probe_orchestrator "import { readFileSync } from 'node:fs';
+const token = orchestrator.extractLaunchToken(readFileSync(0, 'utf8'), process.argv[2]);
+if (token !== undefined) process.stdout.write(token);" "$address")"
     if [ -n "$token" ]; then
       printf '%s' "$token"
       return 0

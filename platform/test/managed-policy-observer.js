@@ -12,7 +12,7 @@ const { livePresetMounts } = await import(
 
 /** Fixture-only read-only observer. Does not change model, permission, or tool policy. */
 export const name = 'dsh-team-managed-policy-observer';
-export const inject = ['loader', 'llm', 'agentPresets', 'tools', 'skills'];
+export const inject = ['loader', 'llm', 'agentPresets', 'tools', 'skills', 'permissionPresets'];
 
 const FAIL = 'Invalid managed policy runtime observation';
 const MARKER = 'DSH_TEAM_MANAGED_POLICY_OBSERVATION';
@@ -207,7 +207,12 @@ async function observe(ctx) {
   if (llm === undefined || agentPresets === undefined || tools === undefined) fail();
   const models = await observeModels(ctx, llm);
   const presets = await observePresets(ctx, agentPresets, tools);
+  // Host-only permission-tiers: its effect is the managed default and the injected service.
+  const permissions = {
+    managedPermissions: ctx.get('managedPermissions') !== undefined,
+    defaultPreset: ctx.get('permissionPresets').catalog().defaultPreset,
+  };
   process.stdout.write(
-    `${MARKER}${JSON.stringify({ models, presets, pluginPage: pluginPage(ctx) })}\n`,
+    `${MARKER}${JSON.stringify({ models, presets, pluginPage: pluginPage(ctx), permissions })}\n`,
   );
 }

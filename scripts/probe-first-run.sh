@@ -66,7 +66,10 @@ done
 run_id="$(date +%s)-$$"
 prefix="dsh-team-probe-first-run-${run_id}"
 image="${prefix}-image"
+network="${prefix}-net"
+web_address=""
 image_owned=0
+network_owned=0
 probe_status=0
 cleanup_failed=0
 browser_cleanup_failed=0
@@ -114,6 +117,7 @@ cleanup() {
   trap '' INT TERM
   stop_all_chrome
   stop_owned_containers
+  [ "$network_owned" -eq 1 ] && probe_remove_network "$network"
   scrub_all_binds
   [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
   [ "$browser_cleanup_failed" -ne 0 ] || { [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || note_cleanup_failure "rm -rf workdir"; }; }
@@ -139,13 +143,18 @@ else
     --build-context "platform-nav=${repo_root}/plugins/platform-nav" "${repo_root}/images/dsh-user" >/dev/null
 fi
 image_owned=1
+# Trials run one at a time; each container is removed before the next takes this +2 address.
+allocation="$(probe_allocate_subnet)"
+web_address="${allocation#* }"
+network_owned=1
+probe_create_network "$network" "${allocation% *}"
 write_overlay() {
   local dest="$1" kind="$2"
   if [ "$kind" = "first-run" ]; then
-    cat >"$dest" <<'EOF'
+    cat >"$dest" <<EOF
 - id: webserver
   config:
-    host: 0.0.0.0
+    host: ${web_address}
     port: 3080
     compression: gzip
     compressionLevel: 1
@@ -164,10 +173,10 @@ write_overlay() {
     documentsDirectory: /data
 EOF
   else
-    cat >"$dest" <<'EOF'
+    cat >"$dest" <<EOF
 - id: webserver
   config:
-    host: 0.0.0.0
+    host: ${web_address}
     port: 3080
     compression: gzip
     compressionLevel: 1
@@ -197,13 +206,14 @@ start_instance() {
   trial_ports["$name"]="$port"
   # shellcheck disable=SC2086
   probe_run_bound "$docker_seconds" docker run -d --name "$container" --user 1001:1001 --hostname "u-probe-${name}-${run_id}" \
+    --network "$network" --ip "$web_address" \
     -p "127.0.0.1:${port}:3080" --security-opt "seccomp=${seccomp}" \
     -e DSH_TELEMETRY_DISABLED=1 \
     --mount "type=bind,src=${overlay},dst=/managed/patch.yml,ro" \
     --mount "type=bind,src=${home_dir},dst=/data/home" \
     --mount "type=bind,src=${work_dir},dst=/data/work" \
     "$image" dsh --profile web --patch /managed/patch.yml --no-open --trusted-host "${authority_host}:${port}" ${extra_args} >/dev/null
-  token="$(probe_wait_launch_token "$container" "$startup_seconds")" || return 1
+  token="$(probe_wait_launch_token "$container" "$startup_seconds" "$web_address")" || return 1
   printf '%s' "$token" >"${workdir}/${name}/launch.token"
   chmod 600 "${workdir}/${name}/launch.token"
   probe_run_bound 20 env PROBE_HOST=127.0.0.1 PROBE_PORT="$port" PROBE_COOKIE_HOST="$authority_host" \

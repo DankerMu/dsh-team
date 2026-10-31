@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
-import { runWebStartup } from './web-startup-fixture.ts';
+import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
 import type { AsyncDockerCommand, DockerCommand, DockerCommandResult } from './docker-command.ts';
@@ -537,10 +537,15 @@ function runImageLifecycle(
     if (probe === 'web-startup') {
       if (volume === undefined || workVolume === undefined)
         throw new Error('Web volume setup missing');
-      const overlay = join(config, 'web.patch.yml');
-      writeFileSync(overlay, '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n', {
-        mode: 0o444,
+      const network = createWebNetwork(command, runId, 'web', (name, ownership) => {
+        registerCleanupTarget(targets, runId, { kind: 'network', name, ownership });
       });
+      const overlay = join(config, 'web.patch.yml');
+      writeFileSync(
+        overlay,
+        `- id: webserver\n  config:\n    host: ${webAddress(network)}\n    port: 3080\n`,
+        { mode: 0o444 },
+      );
       registerCleanupTarget(targets, runId, { kind: 'container', name: container });
       return runWebStartup(
         command,
@@ -552,6 +557,7 @@ function runImageLifecycle(
           workVolume,
           overlay,
           seccomp: join(repositoryRoot, 'images/seccomp/dsh-user.json'),
+          network,
         },
         extra as Partial<WebStartupBoundary>,
       )

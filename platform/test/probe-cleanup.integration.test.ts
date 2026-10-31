@@ -519,3 +519,116 @@ describe('sandbox wait_for_container', { timeout: CASE_TIMEOUT_MS }, () => {
     expect(result.timeoutViolations).toBe('');
   });
 });
+
+const NETWORK_RM_N = ['network', 'rm', 'n'];
+const NETWORK_INSPECT_N = ['network', 'inspect', '--format', '{{.Id}}', 'n'];
+
+describe('lifecycle probe_remove_network', { timeout: CASE_TIMEOUT_MS }, () => {
+  it('accepts a successful network removal without any inspect', () => {
+    const result = runCase(lifecycleScript('probe_remove_network n'), LIFECYCLE_DOCKER_SECONDS, [
+      { argv: NETWORK_RM_N, status: 0, stdout: 'n\n' },
+    ]);
+
+    expect(result.cleanupFailed).toBe('0');
+    expect(result.calls).toEqual([NETWORK_RM_N]);
+    expect(result.bounded).toEqual(boundBy('5', [NETWORK_RM_N]));
+    expect(result.timeoutViolations).toBe('');
+  });
+
+  it('releases a failed removal only after an inspect reports that exact network absent', () => {
+    const result = runCase(lifecycleScript('probe_remove_network n'), LIFECYCLE_DOCKER_SECONDS, [
+      {
+        argv: NETWORK_RM_N,
+        status: 1,
+        stderr: 'Error response from daemon: network n not found\n',
+      },
+      {
+        argv: NETWORK_INSPECT_N,
+        status: 1,
+        stdout: '[]\n',
+        stderr: 'Error response from daemon: network n not found\n',
+      },
+    ]);
+
+    expect(result.cleanupFailed).toBe('0');
+    expect(result.calls).toEqual([NETWORK_RM_N, NETWORK_INSPECT_N]);
+    expect(result.stderr).not.toContain('cleanup failed');
+  });
+
+  it('records a failure when the network still exists after a failed removal', () => {
+    const result = runCase(lifecycleScript('probe_remove_network n'), LIFECYCLE_DOCKER_SECONDS, [
+      {
+        argv: NETWORK_RM_N,
+        status: 1,
+        stderr: 'Error response from daemon: has active endpoints\n',
+      },
+      { argv: NETWORK_INSPECT_N, status: 0, stdout: `${'e'.repeat(64)}\n` },
+    ]);
+
+    expect(result.cleanupFailed).toBe('1');
+    expect(result.stderr).toContain('probe-test: cleanup failed: docker network rm n');
+  });
+});
+
+describe('lifecycle fixed-address helpers', { timeout: CASE_TIMEOUT_MS }, () => {
+  const networks = ['network', 'ls', '--quiet', '--no-trunc'];
+  const subnets = [
+    'network',
+    'inspect',
+    '--format',
+    '{{range .IPAM.Config}}{{println .Subnet}}{{end}}',
+    'a1',
+    'b2',
+  ];
+
+  it('chooses the first free /28 of the test pool through the orchestrator allocator', () => {
+    const result = runCase(
+      lifecycleScript('printf "allocation=%s\\n" "$(probe_allocate_subnet)"'),
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '198.18.0.0/28\nfd00::/64\n\n172.17.0.0/16\n' },
+      ],
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('allocation=198.18.0.16/28 198.18.0.18\n');
+    expect(result.bounded).toEqual(boundBy('5', [networks, subnets]));
+  });
+
+  const running = ['inspect', '-f', '{{.State.Running}}', 'c'];
+  const logs = ['logs', 'c'];
+  const token = 'A'.repeat(43);
+
+  it('reads the launch token only from the line naming the container base+2 address', () => {
+    const result = runCase(
+      lifecycleScript('printf "token=%s\\n" "$(probe_wait_launch_token c 1 198.18.0.18)"'),
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: running, status: 0, stdout: 'true\n' },
+        {
+          argv: logs,
+          status: 0,
+          stdout: `dsh web: http://127.0.0.1:3080/?token=${'B'.repeat(43)}\ndsh web: http://198.18.0.18:3080/?token=${token}\n`,
+        },
+      ],
+    );
+
+    expect(result.stdout).toContain(`token=${token}\n`);
+  });
+
+  it('never accepts a launch line naming another address', () => {
+    const result = runCase(
+      lifecycleScript('probe_wait_launch_token c 1 198.18.0.18 || printf "rejected\\n"'),
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: running, status: 0, stdout: 'true\n' },
+        { argv: logs, status: 0, stdout: `dsh web: http://127.0.0.1:3080/?token=${token}\n` },
+      ],
+    );
+
+    expect(result.stdout).toContain('rejected\n');
+    expect(result.stdout).not.toContain(token);
+    expect(result.stderr).toContain('no launch-token line within 1s');
+  });
+});

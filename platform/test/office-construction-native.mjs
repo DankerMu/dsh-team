@@ -12,7 +12,7 @@ async function failedPath(ctx, parent, fixture, inTurn, path) {
   let run;
   try {
     await inTurn(parent, async (signal) => {
-      run = await ctx.subagents.start('spawn', { parent, prompt: task.prompt, signal });
+      run = await fixture.writer(parent, task.prompt, signal);
       assert.equal((await run.result).stopReason, 'completed');
     });
     const events = run.localAgent.session.snapshotEvents();
@@ -51,7 +51,7 @@ async function cancelledConstruction(ctx, parent, fixture, inTurn, path) {
   let run;
   try {
     await inTurn(parent, async (signal) => {
-      run = await ctx.subagents.start('spawn', { parent, prompt: task.prompt, signal });
+      run = await fixture.writer(parent, task.prompt, signal);
       await entered.promise;
       await run.dispose();
       assert.equal((await run.result).stopReason, 'aborted');

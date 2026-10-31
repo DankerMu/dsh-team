@@ -42,12 +42,11 @@ probe_require_bins
 probe_require_gnu_timeout
 probe_require_chrome
 seccomp="${repo_root}/images/seccomp/dsh-user.json"
-overlay_src="${repo_root}/verify/phase0/managed.patch.yml"
 driver="${repo_root}/scripts/probe-dsh-api-browser.mjs"
 ui="${repo_root}/scripts/probe-dsh-api-ui.mjs"
 cdp="${repo_root}/scripts/probe-dsh-api-cdp.mjs"
 lifecycle="${repo_root}/scripts/probe-dsh-api-lifecycle.sh"
-for f in "$seccomp" "$overlay_src" "$driver" "$ui" "$cdp" "$lifecycle"; do
+for f in "$seccomp" "$driver" "$ui" "$cdp" "$lifecycle"; do
   [ -f "$f" ] || { echo "probe-dsh-api: missing $f" >&2; exit 2; }
 done
 port="$(probe_pick_port)"
@@ -55,8 +54,10 @@ run_id="$(date +%s)-$$"
 prefix="dsh-team-probe-api-${run_id}"
 image="${prefix}-image"
 container="${prefix}-container"
+network="${prefix}-net"
 image_owned=0
 container_owned=0
+network_owned=0
 probe_status=0
 cleanup_failed=0
 browser_cleanup_failed=0
@@ -78,6 +79,7 @@ cleanup() {
   trap '' INT TERM
   stop_chrome || true
   [ "$container_owned" -eq 1 ] && remove_owned rm "$container"
+  [ "$network_owned" -eq 1 ] && probe_remove_network "$network"
   [ "$image_owned" -eq 1 ] && [ -n "$workdir" ] && scrub_binds
   [ "$image_owned" -eq 1 ] && remove_owned rmi "$image"
   [ "$browser_cleanup_failed" -ne 0 ] || { [ -n "$workdir" ] && [ -d "$workdir" ] && { rm -rf "$workdir" || probe_note_cleanup_failure "rm -rf workdir"; }; }
@@ -97,7 +99,6 @@ work_dir="${workdir}/work"
 overlay="${workdir}/patch.yml"
 mkdir -p "$home_dir" "$work_dir" "${workdir}/chrome"
 chmod 777 "$home_dir" "$work_dir"
-cp "$overlay_src" "$overlay"
 echo "probe-dsh-api: run_id=${run_id} image=${image} port=${port} workdir=${workdir} evidence=${evidence}"
 if [ "${DSH_TEAM_VERIFICATION_IMAGES+x}" = x ]; then
   probe_run_group_bound "$build_seconds" node scripts/verification-image.mjs user "$image" "$run_id" "$workdir" "$((build_seconds * 1000))"
@@ -109,8 +110,39 @@ else
     --build-context "platform-nav=${repo_root}/plugins/platform-nav" "${repo_root}/images/dsh-user" >/dev/null
 fi
 image_owned=1
+allocation="$(probe_allocate_subnet)"
+web_address="${allocation#* }"
+network_owned=1
+probe_create_network "$network" "${allocation% *}"
+# Generated here: the phase-0 sample overlay stays evidence, and DSH 0.2.1 binds only the
+# container's concrete base+2 address.
+cat >"$overlay" <<EOF
+- id: webserver
+  config:
+    host: ${web_address}
+    port: 3080
+    compression: gzip
+    compressionLevel: 1
+    compressionThresholdBytes: 1024
+- id: llm-pi-ai
+  config:
+    providers:
+      intranet:
+        displayName: 内网模型
+        apiKeyEnv: DMXAPI_KEY
+        api: openai-completions
+        baseURL: https://www.dmxapi.cn/v1
+        models:
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
+- id: agent-default-model
+  config:
+    provider: intranet
+    model: deepseek-v4.1-flash
+EOF
 container_owned=1
 run_bound "$docker_seconds" docker run -d --name "$container" --user 1001:1001 --hostname "u-probe-${run_id}" \
+  --network "$network" --ip "$web_address" \
   -p "127.0.0.1:${port}:3080" --security-opt "seccomp=${seccomp}" -e DMXAPI_KEY \
   -e DSH_TELEMETRY_DISABLED=1 \
   --mount "type=bind,src=${overlay},dst=/managed/patch.yml,ro" \
@@ -119,7 +151,7 @@ run_bound "$docker_seconds" docker run -d --name "$container" --user 1001:1001 -
   "$image" dsh --profile web --patch /managed/patch.yml --no-open --trusted-host "127.0.0.1:${port}" >/dev/null
 token=""
 set +e
-token="$(probe_wait_launch_token "$container" "$startup_seconds")"
+token="$(probe_wait_launch_token "$container" "$startup_seconds" "$web_address")"
 probe_status=$?
 set -e
 if [ "$probe_status" -ne 0 ] || [ -z "$token" ]; then

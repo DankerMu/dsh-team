@@ -60,6 +60,7 @@ async function waitReleased(directive, signal) {
 function protocol(ctx) {
   const pending = new Map();
   const observations = new Map();
+  const agents = new Map();
   const issued = new Set();
   const control = {
     answer: 'allowed-once',
@@ -107,7 +108,13 @@ function protocol(ctx) {
         .prefix;
       assert.equal(typeof instruction, 'string');
       assert(instruction.trim(), 'actual writer instruction must be present');
+      // Captured while the Agent is live: a settled activation disposes its child afterwards.
+      const live = ctx.agents.get(options.sessionId);
+      assert(live, 'native model request must come from a live Agent');
       observations.set(options.sessionId, {
+        preset: presetOf(ctx, live),
+        projectedPreset: ctx.sessionProjections.stateOf(live.session, 'agentPreset'),
+        permissions: stateOf(ctx, live).preset,
         writerInstruction: system.content.some(
           (part) => part.type === 'text' && part.text.includes(instruction),
         ),
@@ -118,6 +125,11 @@ function protocol(ctx) {
       directive.entered.resolve();
       if (directive.mode === 'hold') await waitReleased(directive, options.signal);
       const call = directive.calls?.[directive.position++];
+      if (call?.text !== undefined) {
+        // Ends this turn; the next entry runs only in a later turn (e.g. after a settlement).
+        yield* chunks({ type: 'text', text: call.text });
+        return;
+      }
       if (call) {
         yield* chunks({
           type: 'tool-call',
@@ -139,6 +151,9 @@ function protocol(ctx) {
     }
   }
   ctx.llm.registerAdapter(['office-protocol'], new OwnedAdapter());
+  ctx.on('agent/created', ({ agent }) => {
+    agents.set(agent.id, agent);
+  });
   ctx.on('session/event', (session, event) => {
     if (event.type === 'approval/asked' || event.type === 'approval/decided')
       control.audit.push({ sessionId: session.id, ...event });
@@ -166,7 +181,58 @@ function protocol(ctx) {
     pending.set(token, directive);
     return { ...directive, prompt: [{ type: 'text', text: token }] };
   }
-  return { control, observations, task };
+  /**
+   * Host-direct child creation. The office-writer default belongs to the `subagent` tool, so
+   * writer children name their preset explicitly; caller delivery keeps any settlement notice
+   * from waking the parent after its owned turn.
+   */
+  async function start(parent, prompt, signal, { provider = 'spawn', agentPreset } = {}) {
+    const activation = await ctx.subagents.startActivation({
+      provider,
+      label: 'Owned office delegation',
+      request: { parent, prompt, ...(agentPreset === undefined ? {} : { agentPreset }) },
+      signal,
+      delivery: 'caller',
+    });
+    const { childId: id, result } = activation;
+    assert(agents.has(id), 'released in-process provider must create a native child Agent');
+    return { id, localAgent: agents.get(id), result, dispose: () => activation.dispose() };
+  }
+  const writer = (parent, prompt, signal) =>
+    start(parent, prompt, signal, { agentPreset: 'office-writer' });
+  return { control, observations, agents, task, start, writer };
+}
+
+function within(promise, label, milliseconds = 30000) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label + '-deadline')), milliseconds);
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
+}
+
+/** Async delegation: completion is the child's settlement notice and the parent turn it wakes. */
+async function settledWake(ctx, parent, childId) {
+  const deadline = Date.now() + 30000;
+  for (;;) {
+    await ctx.subagents.waitForChildren(parent);
+    await parent.whenIdle();
+    const events = eventsOf(parent);
+    const notice = events.find(
+      (event) =>
+        event.type === 'user/message' &&
+        event.data.source?.kind === 'subagent-settled' &&
+        (childId === undefined || event.data.source.senderSessionId === childId),
+    );
+    if (
+      notice &&
+      parent.status === 'idle' &&
+      events.some((event) => event.type === 'turn/end' && event.seq > notice.seq)
+    )
+      return notice;
+    if (Date.now() >= deadline) throw new Error('office-settlement-wake');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 }
 
 async function create(ctx, preset = 'office-general') {
@@ -214,15 +280,21 @@ async function inTurn(agent, operation) {
   }
 }
 
+/**
+ * `selected`: the child named its preset at creation (the tool default or an explicit host
+ * request). DSH 0.2.1 then records one `agent-preset/selected` before its descriptor; a child
+ * joining its parent's preset records none. Neither is ever rebound after creation.
+ */
 function assertChild(ctx, agent, parent, expected, observations, selected = true) {
   assert.equal(agent.session.header.origin, 'subagent');
   assert.equal(agent.session.header.parentSession, parent.id);
   assert.equal(agent.session.header.cwd, '/data/work');
-  assert.equal(presetOf(ctx, agent), expected);
-  assert.equal(ctx.sessionProjections.stateOf(agent.session, 'agentPreset'), expected);
-  assert.equal(stateOf(ctx, agent).preset, stateOf(ctx, parent).preset);
+  assert.equal(agent.session.header.agentPreset, expected);
   const native = observations.get(agent.id);
   assert(native, 'actual native model request must be observed');
+  assert.equal(native.preset, expected);
+  assert.equal(native.projectedPreset, expected);
+  assert.equal(native.permissions, stateOf(ctx, parent).preset);
   assert.equal(native.provider, 'office-protocol');
   assert.equal(native.model, 'owned');
   assert.equal(native.writerInstruction, expected === 'office-writer');
@@ -236,15 +308,16 @@ function assertChild(ctx, agent, parent, expected, observations, selected = true
   const selections = own.filter((event) => event.type === 'agent-preset/selected');
   assert.equal(selections.length, selected ? 1 : 0);
   if (selected) {
-    assert.equal(selections[0].data.agentPreset, 'office-writer');
+    assert.equal(selections[0].data.agentPreset, expected);
+    const descriptor = own.find((event) => event.type === 'subagent/descriptor');
+    assert(descriptor && selections[0].seq < descriptor.seq, 'creation-time selection only');
     assert(selections[0].seq < own.find((event) => event.type === 'turn/start').seq);
-    assert.equal(agent.session.header.agentPreset, 'office-general');
   }
   return {
     childId: agent.id,
     parentId: parent.id,
     preset: expected,
-    permissions: stateOf(ctx, agent).preset,
+    permissions: native.permissions,
     selectedSeq: selections[0]?.seq ?? null,
     tools: native.tools,
     writerInstruction: native.writerInstruction,
@@ -254,14 +327,15 @@ function assertChild(ctx, agent, parent, expected, observations, selected = true
 async function coldRead(ctx, parent, childId) {
   assert.equal(ctx.agents.get(childId), undefined);
   const signal = new AbortController().signal;
+  const projection = await ctx.sessionController.projections({ sessionId: childId }, signal);
+  assert.equal(projection.values.agentPreset, 'office-writer');
+  // The address names the mode the child's native descriptor declares.
   const address = {
     kind: 'subagent',
     parentSessionId: parent.id,
     childSessionId: childId,
-    mode: 'one-shot',
+    mode: projection.values.subagent.mode,
   };
-  const projection = await ctx.sessionController.projections({ sessionId: childId }, signal);
-  assert.equal(projection.values.agentPreset, 'office-writer');
   const history = await ctx.sessionController.page(
     { address, throughSeq: projection.asOfSeq, maxMessages: 500 },
     signal,
@@ -288,22 +362,63 @@ async function coldRead(ctx, parent, childId) {
   return projection.values.agentPreset;
 }
 
+/**
+ * The office-writer default and the refusal of any other preset belong to the `subagent` tool
+ * itself, so they are proven through a real model-issued call, not a host-direct start.
+ */
 async function successfulChild(ctx, parent, fixture, report) {
-  let run;
+  const held = fixture.task('hold');
+  const refused = fixture.task();
+  const parentTask = fixture.task('complete', [
+    {
+      name: 'subagent',
+      arguments: { description: 'Owned writer default', prompt: held.prompt[0].text },
+    },
+    {
+      name: 'subagent',
+      arguments: {
+        description: 'Owned refused preset',
+        prompt: refused.prompt[0].text,
+        agent_preset: 'office-general',
+      },
+    },
+  ]);
+  const created = [];
+  const stop = ctx.on('agent/created', ({ agent }) => {
+    if (agent.session.header.parentSession === parent.id) created.push(agent);
+  });
   try {
-    await inTurn(parent, async (signal) => {
-      run = await ctx.subagents.start('spawn', { parent, prompt: fixture.task().prompt, signal });
-      assert.equal((await run.result).stopReason, 'completed');
-    });
-    report.writer = assertChild(ctx, run.localAgent, parent, 'office-writer', fixture.observations);
-    await assert.rejects(ctx.agentPresets.select(run.localAgent, 'office-general'));
-    assert.equal(presetOf(ctx, run.localAgent), 'office-writer');
-    assert.equal(selectionCount(run.localAgent), 1, 'late selection cannot forge preset history');
-    const childId = run.id;
-    await run.dispose();
-    report.coldPreset = await coldRead(ctx, parent, childId);
+    parent.followup(createUserMessage({ source: { kind: 'user' }, content: parentTask.prompt }));
+    await within(held.entered.promise, 'office-tool-delegation');
+    // The delegation returned at once: the parent turn ends while the child is still held.
+    await parent.whenIdle();
+    assert.equal(created.length, 1, 'the refused preset must create no child');
+    const child = created[0];
+    const parentEvents = eventsOf(parent);
+    const calls = parentEvents.filter(
+      (event) => event.type === 'tool/call' && event.data.name === 'subagent',
+    );
+    assert.equal(calls.length, 2);
+    const result = (call) =>
+      parentEvents.find(
+        (event) =>
+          event.type === 'tool/result' && event.data.message.toolCallId === call.data.callId,
+      );
+    assert.equal(JSON.parse(calls[0].data.arguments).agent_preset, undefined);
+    assert.notEqual(result(calls[0]).data.message.isError, true);
+    assert.equal(JSON.parse(calls[1].data.arguments).agent_preset, 'office-general');
+    assert.equal(result(calls[1]).data.message.isError, true, 'another preset is refused');
+    report.writer = assertChild(ctx, child, parent, 'office-writer', fixture.observations);
+    await assert.rejects(ctx.agentPresets.select(child, 'office-general'));
+    assert.equal(presetOf(ctx, child), 'office-writer');
+    assert.equal(selectionCount(child), 1, 'late selection cannot forge preset history');
+    held.release.resolve();
+    await settledWake(ctx, parent, child.id);
+    const end = eventsOf(child).findLast((event) => event.type === 'turn/end');
+    assert.equal(end.data.reason.kind, 'completed');
+    report.coldPreset = await coldRead(ctx, parent, child.id);
     const restored = await ctx.agents.resume({
-      resumeSessionId: SessionId(childId),
+      resumeSessionId: SessionId(child.id),
       parentAgent: parent,
       agentOptions: { provider: 'office-protocol', model: 'owned' },
       setup: async (agentCtx) => {
@@ -319,7 +434,8 @@ async function successfulChild(ctx, parent, fixture, report) {
       await restored.dispose();
     }
   } finally {
-    if (run) await run.dispose();
+    held.release.resolve();
+    stop();
   }
 }
 
@@ -333,11 +449,7 @@ async function pendingChildIdentity(ctx, parent, fixture, report) {
   });
   try {
     await inTurn(parent, async (signal) => {
-      const starting = ctx.subagents.start('spawn', {
-        parent,
-        prompt: fixture.task().prompt,
-        signal,
-      });
+      const starting = fixture.writer(parent, fixture.task().prompt, signal);
       try {
         const childId = await entered.promise;
         const listed = await ctx.sessionController.list({}, signal);
@@ -346,39 +458,22 @@ async function pendingChildIdentity(ctx, parent, fixture, report) {
         const pending = await ctx.sessionController.projections({ sessionId: childId }, signal);
         assert.equal(row.agentAvailable, true);
         assert.equal(pending.values.subagent, null);
-        const address = {
-          kind: 'subagent',
-          parentSessionId: parent.id,
-          childSessionId: childId,
-          mode: 'one-shot',
-        };
-        await assert.rejects(
-          ctx.sessionController.page(
-            { address, throughSeq: pending.asOfSeq, maxMessages: 500 },
-            signal,
-          ),
-        );
+        const page = (address, throughSeq, maxMessages) =>
+          ctx.sessionController.page({ address, throughSeq, maxMessages }, signal);
+        const child = { kind: 'subagent', parentSessionId: parent.id, childSessionId: childId };
+        // Mode-agnostic: before a descriptor exists no address mode may page the child.
+        await assert.rejects(page({ ...child, mode: 'unknown' }, pending.asOfSeq, 500));
         release.resolve();
         const run = await starting;
         assert.equal((await run.result).stopReason, 'completed');
         const ready = await ctx.sessionController.projections({ sessionId: childId }, signal);
-        const history = await ctx.sessionController.page(
-          { address, throughSeq: ready.asOfSeq, maxMessages: 500 },
-          signal,
-        );
+        const { mode } = ready.values.subagent;
+        const address = { ...child, mode };
+        const history = await page(address, ready.asOfSeq, 500);
         assert(history.records.some(({ event }) => event.type === 'turn/end'));
-        await assert.rejects(
-          ctx.sessionController.page(
-            { address: { ...address, parentSessionId: 'wrong-parent' }, throughSeq: ready.asOfSeq },
-            signal,
-          ),
-        );
-        await assert.rejects(
-          ctx.sessionController.page(
-            { address: { ...address, mode: 'continuable' }, throughSeq: ready.asOfSeq },
-            signal,
-          ),
-        );
+        await assert.rejects(page({ ...address, parentSessionId: 'wrong-parent' }, ready.asOfSeq));
+        const otherMode = mode === 'one-shot' ? 'continuable' : 'one-shot';
+        await assert.rejects(page({ ...address, mode: otherMode }, ready.asOfSeq));
         report.readiness = {
           pending: { identity: pending.values.subagent, agentAvailable: row.agentAvailable },
           ready: { identity: ready.values.subagent, agentAvailable: true },
@@ -404,14 +499,10 @@ async function siblingIsolation(ctx, parent, fixture, report) {
   try {
     assert.equal(selectionCount(manual.agent), 0);
     await inTurn(parent, async (signal) => {
-      const first = await ctx.subagents.start('spawn', { parent, prompt: held.prompt, signal });
+      const first = await fixture.writer(parent, held.prompt, signal);
       runs.push(first);
       await held.entered.promise;
-      const second = await ctx.subagents.start('spawn', {
-        parent,
-        prompt: fixture.task().prompt,
-        signal,
-      });
+      const second = await fixture.writer(parent, fixture.task().prompt, signal);
       runs.push(second);
       assert.equal((await second.result).stopReason, 'completed');
       assert.notEqual(first.id, second.id);
@@ -430,6 +521,10 @@ async function siblingIsolation(ctx, parent, fixture, report) {
   }
 }
 
+/**
+ * Children not created through the `subagent` tool get no office-writer default: a spawn child
+ * joins its parent's preset (every 0.2.1 in-process child is continuable), a fork inherits it.
+ */
 async function exclusions(ctx, parent, fixture, report) {
   const standard = await create(ctx, 'standard');
   const writer = await create(ctx, 'office-writer');
@@ -438,54 +533,24 @@ async function exclusions(ctx, parent, fixture, report) {
     for (const [owner, provider, expected] of [
       [standard.agent, 'spawn', 'standard'],
       [writer.agent, 'spawn', 'office-writer'],
+      [parent, 'spawn', 'office-general'],
       [parent, 'fork', 'office-general'],
     ]) {
       let run;
       try {
         await inTurn(owner, async (signal) => {
-          run = await ctx.subagents.start(provider, {
-            parent: owner,
-            prompt: fixture.task().prompt,
-            signal,
-          });
+          run = await fixture.start(owner, fixture.task().prompt, signal, { provider });
           assert.equal((await run.result).stopReason, 'completed');
         });
         assertChild(ctx, run.localAgent, owner, expected, fixture.observations, false);
         report.exclusions.push({
           provider,
-          preset: presetOf(ctx, run.localAgent),
+          preset: fixture.observations.get(run.id).preset,
           seeded: run.localAgent.session.header.isSeeded,
         });
       } finally {
         if (run) await run.dispose();
       }
-    }
-    const held = fixture.task('hold');
-    let childId;
-    try {
-      await inTurn(parent, async (signal) => {
-        const started = await ctx.subagents.startContinuable({
-          provider: 'spawn',
-          label: 'Owned continuation exclusion',
-          request: { parent, prompt: held.prompt },
-          signal,
-        });
-        childId = started.childId;
-        await held.entered.promise;
-        const child = ctx.agents.get(childId);
-        assertChild(ctx, child, parent, 'office-general', fixture.observations, false);
-        report.exclusions.push({
-          provider: 'continuable',
-          preset: presetOf(ctx, child),
-          seeded: child.session.header.isSeeded,
-        });
-        held.release.resolve();
-        await child.whenIdle();
-        await ctx.subagents.drainContinuableChildren(parent, [childId]);
-      });
-    } finally {
-      held.release.resolve();
-      if (childId) await ctx.subagents.drainContinuableChildren(parent, [childId]);
     }
   } finally {
     await standard.dispose();
@@ -512,7 +577,7 @@ async function mutation(ctx, parent, fixture, answer, review, expected, report, 
   let run;
   try {
     await inTurn(parent, async (signal) => {
-      run = await ctx.subagents.start('spawn', { parent, prompt: task.prompt, signal });
+      run = await fixture.writer(parent, task.prompt, signal);
       assert.equal((await run.result).stopReason, 'completed');
     });
     assertChild(ctx, run.localAgent, parent, 'office-writer', fixture.observations);
@@ -571,13 +636,7 @@ async function cancellation(ctx, parent, fixture, report) {
   await inTurn(parent, async () => {
     const aborted = new AbortController();
     aborted.abort();
-    await assert.rejects(
-      ctx.subagents.start('spawn', {
-        parent,
-        prompt: fixture.task().prompt,
-        signal: aborted.signal,
-      }),
-    );
+    await assert.rejects(fixture.writer(parent, fixture.task().prompt, aborted.signal));
   });
   assert.deepEqual(
     ctx.agents
@@ -590,7 +649,7 @@ async function cancellation(ctx, parent, fixture, report) {
   let run;
   try {
     await inTurn(parent, async (signal) => {
-      run = await ctx.subagents.start('spawn', { parent, prompt: held.prompt, signal });
+      run = await fixture.writer(parent, held.prompt, signal);
       await held.entered.promise;
       assertChild(ctx, run.localAgent, parent, 'office-writer', fixture.observations);
       await run.dispose();
@@ -622,9 +681,7 @@ async function unavailableWriter(ctx, parent, fixture, report) {
   const requests = fixture.observations.size;
   async function rejectStart() {
     await inTurn(parent, async (signal) => {
-      await assert.rejects(
-        ctx.subagents.start('spawn', { parent, prompt: fixture.task().prompt, signal }),
-      );
+      await assert.rejects(fixture.writer(parent, fixture.task().prompt, signal));
     });
     assert.deepEqual(
       ctx.agents
@@ -727,6 +784,7 @@ export function apply(ctx) {
           create,
           createUserMessage,
           eventsOf,
+          settledWake: (parent) => settledWake(ctx, parent),
         });
         writeFileSync('/data/home/office-copy-report.json', JSON.stringify(input));
         process.exit(0);

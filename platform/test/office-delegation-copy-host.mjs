@@ -4,7 +4,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-export async function copyCounterexample(ctx, fixture, { create, createUserMessage, eventsOf }) {
+export async function copyCounterexample(
+  ctx,
+  fixture,
+  { create, createUserMessage, eventsOf, settledWake },
+) {
   const control = '/data/home/office-copy-control.json';
   const evidence = '/data/home/office-copy-evidence.json';
   const config = JSON.parse(readFileSync(control, 'utf8'));
@@ -54,11 +58,12 @@ export async function copyCounterexample(ctx, fixture, { create, createUserMessa
       arguments: {
         description: 'Owned notice control',
         prompt: childTask.prompt[0].text,
-        run_in_background: false,
       },
     },
     ...(!copied
       ? [
+          // The delegation returns at once: review only in the turn the settlement wakes.
+          { text: 'Owned parent awaits the writer settlement.' },
           {
             name: 'bash',
             arguments: {
@@ -95,7 +100,7 @@ export async function copyCounterexample(ctx, fixture, { create, createUserMessa
       }),
     );
     await parentTask.entered.promise;
-    await parent.agent.whenIdle();
+    await settledWake(parent.agent);
     const signal = AbortSignal.timeout(5000);
     const parentProjection = await ctx.sessionController.projections(
       { sessionId: parent.agent.id },
@@ -115,7 +120,7 @@ export async function copyCounterexample(ctx, fixture, { create, createUserMessa
           kind: 'subagent',
           parentSessionId: parent.agent.id,
           childSessionId: child.sessionId,
-          mode: 'one-shot',
+          mode: projection.values.subagent.mode,
         },
         throughSeq: projection.asOfSeq,
         maxMessages: 500,

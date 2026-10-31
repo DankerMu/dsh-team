@@ -132,6 +132,7 @@ it('never probes credentials or endpoints inside an unowned or wrong-image conta
           workVolume: 'owned-work',
           overlay: '/owned/patch.yml',
           seccomp: '/owned/seccomp.json',
+          network: { name: 'dsh-team-test-net-owned-refusal', subnet: '198.18.0.0/28' },
         },
         'process.stdout.write("probe")',
       ),

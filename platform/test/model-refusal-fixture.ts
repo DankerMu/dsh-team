@@ -9,12 +9,13 @@ import { mappedFlags, mappedRpc } from '../../scripts/probe-mapped-host.mjs';
 import {
   collectComposition,
   execScript,
-  MANAGED_BOOT_ROSTER,
+  lifecycleWebNetwork,
   qualifyHostSession,
   waitObservation,
 } from './managed-policy-fixture.ts';
 import { employeeHomePatch } from './managed-policy-employee-edit.ts';
-import { execWebScript, runWebStartup, WEB_CONTAINER_ADDRESS } from './web-startup-fixture.ts';
+import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
+import { execWebScript, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebContainer } from './web-startup-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { assertModelRefusal, modelRefusalTurn, remoteRecord } from './model-refusal-oracle.ts';
@@ -114,10 +115,11 @@ async function prepareRefusalInstance(
     lifecycle,
     `dsh-team-test-${lifecycle.runId}-refusal-read`,
   );
+  const network = lifecycleWebNetwork(lifecycle, 'refusal');
   const generated = generateManagedConfig({
     ...composition,
     admin: false,
-    instanceAddress: WEB_CONTAINER_ADDRESS,
+    instanceAddress: webAddress(network),
     modelSettings: {
       baseURL: managedURL,
       apiKeyEnv: KEY_ENV,
@@ -141,6 +143,7 @@ async function prepareRefusalInstance(
     workVolume: lifecycle.workVolume,
     overlay,
     seccomp: lifecycle.seccomp,
+    network,
     trustedHost: HOST,
     env: { [KEY_ENV]: KEY },
   };

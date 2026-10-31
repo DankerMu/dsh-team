@@ -2,8 +2,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
-import { collectComposition, execScript } from './managed-policy-fixture.ts';
-import { WEB_CONTAINER_ADDRESS } from './web-startup-fixture.ts';
+import { collectComposition, execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
+import { webAddress } from './web-startup-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
 import {
@@ -44,12 +44,14 @@ it('selects genuine native writer children while preserving tiers, cold identity
         `dsh-team-test-${lifecycle.runId}-construction-controls`,
         `import { writeFileSync } from 'node:fs'; writeFileSync('/data/home/office-construction-native.mjs', ${JSON.stringify(construction)});`,
       );
+      // The scenario launches DSH Web itself, one tier after another, at this network's +2.
+      const network = lifecycleWebNetwork(lifecycle, 'office');
       const overlayFiles = (['yolo', 'approval', 'auto'] as const).map(
         (defaultPermissionTier, index) => {
           const generated = generateManagedConfig({
             ...composition,
             admin: false,
-            instanceAddress: WEB_CONTAINER_ADDRESS,
+            instanceAddress: webAddress(network),
             defaultPermissionTier,
             modelSettings: {
               baseURL: 'http://127.0.0.1:9/v1',
@@ -77,6 +79,7 @@ it('selects genuine native writer children while preserving tiers, cold identity
             lifecycle,
             `dsh-team-test-${lifecycle.runId}-office-native`,
             permissionScenarioScript(host, overlayFiles, ''),
+            network,
           ),
         };
       } catch (error) {
@@ -156,22 +159,25 @@ it('rejects a native writer that only copies a complete parent-authored notice',
         lifecycle,
         `dsh-team-test-${lifecycle.runId}-copy-compose`,
       );
-      const generated = generateManagedConfig({
-        ...composition,
-        admin: false,
-        instanceAddress: WEB_CONTAINER_ADDRESS,
-        defaultPermissionTier: 'yolo',
-        modelSettings: {
-          baseURL: 'http://127.0.0.1:9/v1',
-          apiKeyEnv: 'DSH_TEAM_TEST_KEY',
-          apiKeyConfigured: true,
-          models: [{ name: 'fixture' }],
-          defaultModel: 'fixture',
-        },
-      });
-      if (generated.outcome !== 'configured') throw new Error('Missing owned copy-control overlay');
       const results: { copied: boolean; accepted: boolean }[] = [];
       for (const copied of [false, true]) {
+        // Each native instance binds its own owned network's +2 (DSH 0.2.1).
+        const network = lifecycleWebNetwork(lifecycle, `copy-${String(copied)}`);
+        const generated = generateManagedConfig({
+          ...composition,
+          admin: false,
+          instanceAddress: webAddress(network),
+          defaultPermissionTier: 'yolo',
+          modelSettings: {
+            baseURL: 'http://127.0.0.1:9/v1',
+            apiKeyEnv: 'DSH_TEAM_TEST_KEY',
+            apiKeyConfigured: true,
+            models: [{ name: 'fixture' }],
+            defaultModel: 'fixture',
+          },
+        });
+        if (generated.outcome !== 'configured')
+          throw new Error('Missing owned copy-control overlay');
         const marker = `office-copy-${lifecycle.runId}-${String(copied)}`;
         const notice = {
           path: `/data/work/${marker}.docx`,
@@ -210,7 +216,9 @@ writeFileSync('/data/home/office-copy-control.json',${JSON.stringify(JSON.string
               '--user',
               '1001',
               '--network',
-              'none',
+              network.name,
+              '--ip',
+              webAddress(network),
               '--mount',
               `type=volume,source=${lifecycle.stateVolume},target=/data/home`,
               '--env',

@@ -11,7 +11,7 @@ import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
-import { MANAGED_BOOT_ROSTER } from './managed-policy-fixture.ts';
+import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
