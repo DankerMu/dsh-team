@@ -9,7 +9,8 @@
         "plugins/permission-tiers/index.js",
         "plugins/permission-tiers/*.test.js",
         "plugins/platform-nav/index.js",
-        "plugins/platform-nav/*.test.js"
+        "plugins/platform-nav/*.test.js",
+        "images/dsh-user/*.mjs"
       ],
       "project": [
         "*.{ts,mjs,cjs}",
@@ -19,7 +20,8 @@
         "plugins/permission-tiers/*.js",
         "plugins/permission-tiers/*.d.ts",
         "plugins/platform-nav/*.js",
-        "plugins/platform-nav/*.d.ts"
+        "plugins/platform-nav/*.d.ts",
+        "images/dsh-user/*.mjs"
       ]
     },
     "platform": {

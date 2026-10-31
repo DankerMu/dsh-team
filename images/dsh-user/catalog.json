@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "office-agents",
+      "package": "@dsh-team/office-agents",
+      "name": "办公 Agent",
+      "category": "manageable",
+      "imageDefaultEnabled": true
+    },
+    {
+      "id": "permission-tiers",
+      "package": "@dsh-team/permission-tiers",
+      "name": "权限档",
+      "category": "required",
+      "imageDefaultEnabled": false
+    },
+    {
+      "id": "platform-nav",
+      "package": "@dsh-team/platform-nav",
+      "name": "平台入口",
+      "category": "required",
+      "imageDefaultEnabled": false
+    },
+    {
+      "id": "zh-locale",
+      "package": "@dsh-team/zh-locale",
+      "name": "中文界面",
+      "category": "required",
+      "imageDefaultEnabled": false
+    }
+  ]
+}

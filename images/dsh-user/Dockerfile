@@ -7,6 +7,11 @@ RUN apt-get update \
 RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.1-rc.2 \
   && npm cache clean --force
 
+# The baseline is the toolchain (the base image's npm/corepack, pnpm) and DSH: global packages
+# the catalog gate below does not count as preinstalled items.
+COPY --chmod=0444 catalog-check.mjs /opt/dsh-team/catalog-check.mjs
+RUN node /opt/dsh-team/catalog-check.mjs record /opt/dsh-team/npm-baseline.json
+
 RUN useradd -m -u 1001 dsh \
   && mkdir -p /data/home /data/work \
   && chown -R dsh:dsh /data
@@ -70,32 +75,14 @@ COPY --from=permission-tiers --chown=root:root --chmod=0444 \
 COPY --from=platform-nav --chown=root:root --chmod=0444 \
   package.json index.js client.js \
   /opt/dsh-team/platform-nav/
-# Every delivered plugin declares engines.dsh and no exact DSH peer. The decision matches the
-# released loader: the installed DSH, DSH's own semver (declared by dsh-app-boot), prereleases included.
+# The catalog is the single list of preinstalled items. The gate fails the build when the image
+# and the catalog differ in either direction, and checks every delivered plugin's engines.dsh
+# (no exact DSH peer) with the released loader's decision: the installed DSH, DSH's own semver
+# (declared by dsh-app-boot), prereleases included.
+COPY --chmod=0444 catalog.json /opt/dsh-team/catalog.json
 # The empty credentials directory is the managed overlay's isolated credential store:
 # traversable by uid1001, never writable by it.
-RUN node -e 'const { createRequire } = require("node:module"); \
-  const dsh = "/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json"; \
-  const boot = createRequire(dsh).resolve("@deepseek-ai/dsh-app-boot/package.json"); \
-  const semver = createRequire(boot)("semver"); \
-  const installed = JSON.parse(require("node:fs").readFileSync(dsh, "utf8")).version; \
-  const plugins = { \
-    "zh-locale": "/data/home/profiles/web/node_modules/@dsh-team/zh-locale", \
-    "office-agents": "/data/home/profiles/web/node_modules/@dsh-team/office-agents", \
-    "permission-tiers": "/opt/dsh-team/permission-tiers", \
-    "platform-nav": "/opt/dsh-team/platform-nav" }; \
-  let failed = false; \
-  for (const [plugin, directory] of Object.entries(plugins)) { \
-    const manifest = require(directory + "/package.json"); \
-    const range = manifest.engines?.dsh; \
-    if (typeof range === "string" && range.trim() !== "" \
-      && manifest.peerDependencies?.["@deepseek-ai/dsh"] === undefined \
-      && semver.satisfies(installed, range, { includePrerelease: true })) continue; \
-    console.error("DSH plugin compatibility failed: " + plugin + " engines.dsh=" + JSON.stringify(range) \
-      + " peer=" + JSON.stringify(manifest.peerDependencies?.["@deepseek-ai/dsh"]) + " installed=" + installed); \
-    failed = true; \
-  } \
-  if (failed) process.exit(1);' \
+RUN node /opt/dsh-team/catalog-check.mjs verify /opt/dsh-team/catalog.json /opt/dsh-team/npm-baseline.json \
   && mkdir /opt/dsh-team/credentials \
   && chmod 0555 /opt/dsh-team /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav \
     /opt/dsh-team/credentials

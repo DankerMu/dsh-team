@@ -2,8 +2,9 @@
 # scripts/check-test-pairing.sh — every production source file has a sibling test.
 # TDD is required in this repo (constraints.yaml testing.tdd_mode): a source file
 # without a test next to it was written implementation-first.
-# Scans platform/src, platform/web/src and plugin host sources. Exempt by design:
-#   *.test.ts(x)            the tests themselves
+# Scans platform/src, platform/web/src, plugin host sources and user-image build scripts.
+# Exempt by design:
+#   *.test.ts(x), *.test.mjs  the tests themselves
 #   *.d.ts, types.ts, *.types.ts   type-only files with no runtime behaviour
 #   index.ts                module entry files that only re-export
 #   platform/src/main.ts    process entry point (constraints.yaml exemptions)
@@ -19,8 +20,9 @@ roots=()
 for dir in plugins/*; do
   [ -d "$dir" ] && roots+=("$dir")
 done
+[ -d images/dsh-user ] && roots+=("images/dsh-user")
 if [ "${#roots[@]}" -eq 0 ]; then
-  echo "check-test-pairing: no source roots (platform/src, platform/web/src, plugins/*) found — extend this gate" >&2
+  echo "check-test-pairing: no source roots (platform/src, platform/web/src, plugins/*, images/dsh-user) found — extend this gate" >&2
   exit 1
 fi
 
@@ -28,7 +30,7 @@ checked=0
 missing=()
 while IFS= read -r file; do
   case "$file" in
-    *.test.ts | *.test.tsx | *.test.js | *.d.ts | */types.ts | *.types.ts | */index.ts | platform/src/main.ts | platform/web/src/main.tsx) continue ;;
+    *.test.ts | *.test.tsx | *.test.js | *.test.mjs | *.d.ts | */types.ts | *.types.ts | */index.ts | platform/src/main.ts | platform/web/src/main.tsx) continue ;;
   esac
   checked=$((checked + 1))
   stem="${file%.*}"
@@ -36,7 +38,7 @@ while IFS= read -r file; do
   if [ ! -f "$stem.test.$ext" ] && [ ! -f "$stem.test.ts" ]; then
     missing+=("  $file  expected \"$stem.test.$ext\", found none")
   fi
-done < <(find "${roots[@]}" -type f \( -name '*.ts' -o -name '*.tsx' -o -path '*/permission-tiers/*.js' -o -path '*/office-agents/*.js' -o -path '*/platform-nav/*.js' \) | sort)
+done < <(find "${roots[@]}" -type f \( -name '*.ts' -o -name '*.tsx' -o -path '*/permission-tiers/*.js' -o -path '*/office-agents/*.js' -o -path '*/platform-nav/*.js' -o -path 'images/dsh-user/*.mjs' \) | sort)
 
 if [ "${#missing[@]}" -gt 0 ]; then
   {

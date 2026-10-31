@@ -69,7 +69,7 @@ export default tseslint.config(
   },
   {
     // Test suites nest many cases in one describe callback; the limit targets production code.
-    files: ['**/*.test.ts', '**/*.test.tsx'],
+    files: ['**/*.test.ts', '**/*.test.tsx', '**/*.test.mjs'],
     rules: { 'max-lines-per-function': 'off' },
   },
   prettier,

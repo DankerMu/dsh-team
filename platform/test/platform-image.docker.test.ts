@@ -26,6 +26,8 @@ assert.equal(process.arch, 'x64');
 const config = loadConfig({ PLATFORM_PUBLIC_URL: 'http://platform-image.invalid' });
 const profile = await readFile(config.seccompProfilePath);
 assert.equal(createHash('sha256').update(profile).digest('hex'), process.argv[1]);
+const catalog = await readFile('/app/images/dsh-user/catalog.json');
+assert.equal(createHash('sha256').update(catalog).digest('hex'), process.argv[2]);
 await assertWebBuild();
 await assert.rejects(access('platform/dist/main.js', constants.W_OK), { code: 'EACCES' });
 const path = join(config.dataDir, 'image-proof.db');
@@ -45,7 +47,7 @@ const nativeRoot = dirname(require.resolve('better-sqlite3/package.json'));
 assert.equal(existsSync(join(nativeRoot, 'prebuilds')), false, 'Runtime must not select a shipped prebuild');
 const loaded = Object.keys(require.cache).filter(path => path.endsWith('.node')).map(path => realpathSync(path));
 assert.deepEqual(loaded, [realpathSync(join(nativeRoot, 'build/Release/better_sqlite3.node'))]);
-process.stdout.write(JSON.stringify({ uid: process.getuid(), architecture: process.arch, databaseReopened: true, webBuild: true, seccomp: true, applicationReadOnly: true }));
+process.stdout.write(JSON.stringify({ uid: process.getuid(), architecture: process.arch, databaseReopened: true, webBuild: true, seccomp: true, catalog: true, applicationReadOnly: true }));
 `;
 
 it('ships a non-root standalone platform with working native persistence, web assets and default seccomp', () => {
@@ -106,14 +108,25 @@ it('ships a non-root standalone platform with working native persistence, web as
     const profileHash = createHash('sha256')
       .update(readFileSync(new URL('../../images/seccomp/dsh-user.json', import.meta.url)))
       .digest('hex');
+    const catalogHash = createHash('sha256')
+      .update(readFileSync(new URL('../../images/dsh-user/catalog.json', import.meta.url)))
+      .digest('hex');
     const observed: unknown = JSON.parse(
-      run('artifact', ['node', '--input-type=module', '-e', artifactProbe, profileHash]),
+      run('artifact', [
+        'node',
+        '--input-type=module',
+        '-e',
+        artifactProbe,
+        profileHash,
+        catalogHash,
+      ]),
     );
     expect(observed).toMatchObject({
       architecture: 'x64',
       databaseReopened: true,
       webBuild: true,
       seccomp: true,
+      catalog: true,
       applicationReadOnly: true,
     });
     process.stdout.write(
