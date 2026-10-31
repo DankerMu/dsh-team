@@ -1,12 +1,15 @@
 import { arch, platform } from 'node:os';
 import { expect, it } from 'vitest';
+import { writeManagedConfig } from '../src/managed-config/index.ts';
+import { instanceAddressLayout } from '../src/orchestrator/index.ts';
 import {
   assertDocxReadback,
   buildUserImageExpectingFailure,
   runUserImage,
 } from './user-image-fixture.ts';
 import { profileSeedOracle } from './profile-seed-fixture.ts';
-import { execScript } from './managed-policy-fixture.ts';
+import { execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
+import { runWebRejection } from './web-startup-fixture.ts';
 import { DSH_ENGINES_PRELUDE } from './dsh-engines.ts';
 
 it('builds the user image and reports exactly DSH 0.2.1-rc.2 with owned-resource cleanup', () => {
@@ -58,13 +61,54 @@ it('starts real DSH Web under shipped seccomp with separate volumes and unauthen
   }
 
   const result = await runUserImage('web-startup', (summary) => {
-    const observed: unknown = JSON.parse(summary);
+    const observed = JSON.parse(summary) as Record<string, unknown>;
     expect(observed).toMatchObject({ tokenSeen: true, httpStatus: 401, telemetryDisabled: true });
+    // The fixed-address overlay: the released launch line names the owned /28's base+2.
+    expect(observed.announcedHost).toBe(instanceAddressLayout(String(observed.subnet)).container);
   });
 
   process.stdout.write(
     `Docker Web startup verified: run=${result.runId} image=${result.image} ` +
       `container=${result.container} state=${String(result.volume)} work=${String(result.workVolume)} ` +
+      `readback=${result.stdout} cleanup=complete\n`,
+  );
+});
+
+it('refuses to start DSH Web on a wildcard overlay: nonzero exit within 60s and no launch URL', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+
+  const result = await runUserImage(
+    'managed-policy',
+    (summary) => {
+      expect(JSON.parse(summary)).toMatchObject({ exited: true, launchLine: false });
+    },
+    undefined,
+    async (lifecycle) => {
+      const network = lifecycleWebNetwork(lifecycle, 'wildcard');
+      const overlay = await writeManagedConfig(
+        lifecycle.overlayDirectory,
+        'wildcardhost',
+        '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n',
+      );
+      const container = `dsh-team-test-${lifecycle.runId}-wildcard`;
+      lifecycle.registerContainer(container);
+      return runWebRejection(lifecycle.command, {
+        container,
+        imageId: lifecycle.imageId,
+        runId: lifecycle.runId,
+        stateVolume: lifecycle.stateVolume,
+        workVolume: lifecycle.workVolume,
+        overlay,
+        seccomp: lifecycle.seccomp,
+        network,
+      });
+    },
+  );
+
+  process.stdout.write(
+    `Docker wildcard Web overlay refused: run=${result.runId} image=${result.image} ` +
       `readback=${result.stdout} cleanup=complete\n`,
   );
 });

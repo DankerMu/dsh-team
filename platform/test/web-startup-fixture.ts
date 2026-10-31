@@ -422,6 +422,62 @@ function assertOwnedVolumes(
   }
 }
 
+/** The single host the accepted launch line(s) name; the token never leaves this scope. */
+function launchHost(logs: string): string {
+  const hosts = new Set(
+    [...logs.matchAll(/^dsh web: http:\/\/([^\s/]+):3080\/\?token=/gm)].map((match) => match[1]),
+  );
+  const [host] = hosts;
+  if (hosts.size !== 1 || host === undefined) throw new Error('Ambiguous Web launch announcement');
+  return host;
+}
+
+/**
+ * Starts an overlay DSH must refuse and requires a nonzero exit within 60s with no launch URL.
+ * Logs are judged in memory only; called after the owner registers container/volumes/network.
+ */
+export async function runWebRejection(
+  command: DockerCommand,
+  expected: WebContainer,
+  boundary: Partial<WebStartupBoundary> = {},
+): Promise<string> {
+  const { now = () => performance.now(), pause = setTimeout } = boundary;
+  const docker = (args: string[], timeout = 30_000): string => webDocker(command, args, timeout);
+  assertOwnedVolumes(docker, expected);
+  createWebContainer(docker, expected, expected.trustedHost ?? configuredHost);
+  const deadline = now() + 60_000;
+  function remaining(): number {
+    const left = deadline - now();
+    if (left <= 0) throw new Error('Web rejection deadline exceeded (60s)');
+    return Math.max(1, Math.floor(left));
+  }
+  docker(['start', expected.container], remaining());
+  let state: Record<string, unknown>;
+  for (;;) {
+    const observed = record(
+      json(
+        docker(['container', 'inspect', '--format', '{{json .}}', expected.container], remaining()),
+      ),
+    );
+    if (
+      observed.Image !== expected.imageId ||
+      record(record(observed.Config).Labels)['dsh-team.test-run'] !== expected.runId
+    )
+      throw new Error('Web container image/ownership mismatch');
+    state = record(observed.State);
+    if (state.Running === false && state.Status === 'exited') break;
+    await pause(Math.min(250, remaining()));
+  }
+  const elapsedMs = 60_000 - remaining();
+  if (typeof state.ExitCode !== 'number' || state.ExitCode === 0)
+    throw new Error('Refused Web overlay must exit nonzero');
+  const logs = command(['logs', '--tail', '50', expected.container], remaining());
+  if (logs.error !== undefined || logs.status !== 0) throw new Error('Web Docker logs failed');
+  if ([logs.stdout, logs.stderr].some((text) => /^dsh web: http/m.test(text)))
+    throw new Error('Refused Web overlay announced a launch URL');
+  return JSON.stringify({ exited: true, exitCode: state.ExitCode, launchLine: false, elapsedMs });
+}
+
 /** Read-only fixture probes retain the startup identity, security and mount guards. */
 export function execWebScript(
   command: DockerCommand,
@@ -479,15 +535,22 @@ export async function runWebStartup(
       throw new Error('DSH Web exited before acceptance');
     return portAndSettings(snapshot, expected);
   };
+  const announced = expected.announced ?? ((logs) => launchTokenPresent(logs, address));
+  let announcement = '';
   const port = await observeWebEndpoint(
     command,
     expected.container,
     inspect,
     trustedHost,
-    expected.announced ?? ((logs) => launchTokenPresent(logs, address)),
+    (logs) => {
+      const seen = announced(logs);
+      if (seen) announcement = logs;
+      return seen;
+    },
     { ...boundary, now },
     deadline,
   );
+  const announcedHost = launchHost(announcement);
   const process = selectedProcess(
     json(bounded(['exec', expected.container, 'python3', '-c', processScript(trustedHost)])),
   );
@@ -499,7 +562,8 @@ export async function runWebStartup(
     httpStatus: 401,
     configuredHost: trustedHost,
     hostPort: port,
-    announcedHost: address,
+    announcedHost,
+    subnet: expected.network.subnet,
     ...process,
   });
 }

@@ -334,7 +334,12 @@ function createResourceRegistration(
   };
 }
 
-const PLUGIN_CONTEXTS = ['zh-locale', 'permission-tiers', 'office-agents', 'platform-nav'] as const;
+export const PLUGIN_CONTEXTS = [
+  'zh-locale',
+  'permission-tiers',
+  'office-agents',
+  'platform-nav',
+] as const;
 type PluginContext = (typeof PLUGIN_CONTEXTS)[number];
 
 function requireDockerDaemon(command: DockerCommand): void {
@@ -344,11 +349,15 @@ function requireDockerDaemon(command: DockerCommand): void {
   }
 }
 
-/** The one user-image build argv; a caller may substitute one plugin's named context. */
-function userImageBuildArgs(
+/**
+ * The one user-image build argv over a source tree (this checkout, or an extracted historical
+ * commit); a caller may substitute one plugin's named context.
+ */
+export function userImageBuildArgs(
   runId: string,
   image: string,
   replaced?: { plugin: PluginContext; directory: string },
+  root = repositoryRoot,
 ): string[] {
   return [
     'build',
@@ -357,15 +366,13 @@ function userImageBuildArgs(
     '--tag',
     image,
     '--file',
-    join(repositoryRoot, 'images/dsh-user/Dockerfile'),
+    join(root, 'images/dsh-user/Dockerfile'),
     ...PLUGIN_CONTEXTS.flatMap((plugin) => [
       '--build-context',
-      `${plugin}=${
-        replaced?.plugin === plugin ? replaced.directory : join(repositoryRoot, `plugins/${plugin}`)
-      }`,
+      `${plugin}=${replaced?.plugin === plugin ? replaced.directory : join(root, `plugins/${plugin}`)}`,
     ]),
     // Keep the primary context narrow: no repository-root files or secrets.
-    join(repositoryRoot, 'images/dsh-user'),
+    join(root, 'images/dsh-user'),
   ];
 }
 

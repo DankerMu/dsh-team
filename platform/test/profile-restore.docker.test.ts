@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
@@ -10,6 +9,7 @@ import {
   runNetworkAcceptance,
   startDockerInstance,
   startupClient,
+  volumeProbe,
 } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { profileSeedOracle, profileSeedScript } from './profile-seed-fixture.ts';
@@ -46,41 +46,6 @@ if sys.argv[1] == 'clear':
 print(json.dumps({'home': sorted(path.name for path in home.iterdir()), 'work': Path('/data/work/retained').read_text()}))
 `;
 
-async function probe(
-  lifecycle: UserImageLifecycle,
-  userId: string,
-  script: string,
-  phase: string,
-): Promise<string> {
-  const name = `dsh-team-test-${lifecycle.runId}-${randomUUID()}`;
-  lifecycle.registerContainer(name);
-  const result = await lifecycle.commandAsync(
-    [
-      'run',
-      '--rm',
-      '--name',
-      name,
-      '--label',
-      `dsh-team.test-run=${lifecycle.runId}`,
-      '--network',
-      'none',
-      '--mount',
-      `type=volume,source=dsh-team-home-${userId},target=/data/home,volume-nocopy`,
-      '--mount',
-      `type=volume,source=dsh-team-work-${userId},target=/data/work,volume-nocopy`,
-      lifecycle.imageId,
-      'python3',
-      '-c',
-      script,
-      phase,
-    ],
-    30_000,
-  );
-  if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Profile restoration probe failed');
-  return result.stdout;
-}
-
 async function restoreScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const siblingId = lifecycle.runId.replaceAll('-', '').slice(-12);
@@ -101,7 +66,7 @@ async function restoreScenario(lifecycle: UserImageLifecycle): Promise<string> {
       await inspectAsync(lifecycle, sibling.containerId),
     );
     await owner.stopUserContainer({ userId, reason: 'admin' });
-    const before = JSON.parse(await probe(lifecycle, userId, PRESERVE, 'write')) as unknown;
+    const before = JSON.parse(await volumeProbe(lifecycle, userId, PRESERVE, 'write')) as unknown;
     expect(before).toEqual({
       uid: 1001,
       home: Object.fromEntries(SENTINELS.map((name) => [name, `retained:${name}`])),
@@ -109,7 +74,7 @@ async function restoreScenario(lifecycle: UserImageLifecycle): Promise<string> {
     });
     const rows = database.prepare('SELECT * FROM instances ORDER BY user_id').all();
     const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-    await probe(
+    await volumeProbe(
       lifecycle,
       userId,
       `
@@ -125,9 +90,9 @@ Path('/data/home/profiles/extra').write_text('remove this entry')
       userId,
       config: { userImage: lifecycle.imageId, seccompProfilePath: lifecycle.seccomp },
     });
-    profileSeedOracle()(await probe(lifecycle, userId, profileSeedScript, 'fresh'));
+    profileSeedOracle()(await volumeProbe(lifecycle, userId, profileSeedScript, 'fresh'));
     for (const mode of ['nested', 'root']) {
-      await probe(
+      await volumeProbe(
         lifecycle,
         userId,
         `
@@ -146,12 +111,12 @@ else:
         userId,
         config: { userImage: lifecycle.imageId, seccompProfilePath: lifecycle.seccomp },
       });
-      profileSeedOracle()(await probe(lifecycle, userId, profileSeedScript, 'fresh'));
-      expect(JSON.parse(await probe(lifecycle, userId, PRESERVE, 'read'))).toEqual(before);
+      profileSeedOracle()(await volumeProbe(lifecycle, userId, profileSeedScript, 'fresh'));
+      expect(JSON.parse(await volumeProbe(lifecycle, userId, PRESERVE, 'read'))).toEqual(before);
     }
 
-    expect(JSON.parse(await probe(lifecycle, userId, PRESERVE, 'read'))).toEqual(before);
-    expect(JSON.parse(await probe(lifecycle, userId, EMPTY_HOME, 'clear'))).toEqual({
+    expect(JSON.parse(await volumeProbe(lifecycle, userId, PRESERVE, 'read'))).toEqual(before);
+    expect(JSON.parse(await volumeProbe(lifecycle, userId, EMPTY_HOME, 'clear'))).toEqual({
       home: [],
       work: 'work retained',
     });
@@ -159,11 +124,11 @@ else:
       userId,
       config: { userImage: lifecycle.imageId, seccompProfilePath: lifecycle.seccomp },
     });
-    expect(JSON.parse(await probe(lifecycle, userId, EMPTY_HOME, 'read'))).toEqual({
+    expect(JSON.parse(await volumeProbe(lifecycle, userId, EMPTY_HOME, 'read'))).toEqual({
       home: ['profiles'],
       work: 'work retained',
     });
-    profileSeedOracle()(await probe(lifecycle, userId, profileSeedScript, 'fresh'));
+    profileSeedOracle()(await volumeProbe(lifecycle, userId, profileSeedScript, 'fresh'));
     expect(database.prepare('SELECT * FROM instances ORDER BY user_id').all()).toEqual(rows);
     expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     expect(normalizeInspectMounts(await inspectAsync(lifecycle, sibling.containerId))).toEqual(

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { chmod, stat, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { arch, platform } from 'node:os';
@@ -33,6 +34,61 @@ export function bridgeAddress(container: Record<string, unknown>, userId: string
   if (typeof address !== 'string' || address === '')
     throw new Error('Missing instance bridge address');
   return address;
+}
+
+/** One-off offline probe over the user's existing home/work pair; never triggers copy-up. */
+export async function volumeProbe(
+  lifecycle: UserImageLifecycle,
+  userId: string,
+  script: string,
+  phase: string,
+): Promise<string> {
+  const name = `dsh-team-test-${lifecycle.runId}-${randomUUID()}`;
+  lifecycle.registerContainer(name);
+  const result = await lifecycle.commandAsync(
+    [
+      'run',
+      '--rm',
+      '--name',
+      name,
+      '--label',
+      `dsh-team.test-run=${lifecycle.runId}`,
+      '--network',
+      'none',
+      '--mount',
+      `type=volume,source=dsh-team-home-${userId},target=/data/home,volume-nocopy`,
+      '--mount',
+      `type=volume,source=dsh-team-work-${userId},target=/data/work,volume-nocopy`,
+      lifecycle.imageId,
+      'python3',
+      '-c',
+      script,
+      phase,
+    ],
+    30_000,
+  );
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Owned volume probe failed');
+  return result.stdout;
+}
+
+/** The released DSH RPC endpoint inside the instance, reached at its own bridge address. */
+export interface InstanceRpcTarget {
+  readonly host: string;
+  readonly authority: string;
+  readonly origin: string;
+  readonly cookie: string;
+}
+
+/** A uid1001 Node script that performs one bounded RPC and prints only its result value. */
+export function instanceRpcScript(
+  target: InstanceRpcTarget,
+  method: string,
+  args: unknown,
+  rpcId: string,
+): string {
+  const body = JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } });
+  return `import {request} from 'node:http'; const {promise,resolve,reject}=Promise.withResolvers(); const req=request({host:${JSON.stringify(target.host)},port:3080,path:${JSON.stringify(`/api/${method}`)},method:'POST',headers:{Host:${JSON.stringify(target.authority)},Origin:${JSON.stringify(target.origin)},Cookie:${JSON.stringify(target.cookie)},'content-type':'application/json'},signal:AbortSignal.timeout(10000),maxHeaderSize:8192},res=>{let text='';res.on('data',chunk=>{text+=chunk;if(text.length>1048576)req.destroy(new Error('limit'));});res.on('error',reject);res.on('end',()=>res.statusCode===200&&res.complete?resolve(text):reject(new Error('http')));});req.on('error',reject);req.end(${JSON.stringify(body)}); const parsed=JSON.parse(await promise);if(parsed.type!=='server-response'||parsed.rpcId!==${JSON.stringify(rpcId)}||parsed.result?.ok!==true)throw new Error('rpc');process.stdout.write(JSON.stringify(parsed.result.value));`;
 }
 
 export async function corruptOwnedOverlay(

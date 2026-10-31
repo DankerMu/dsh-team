@@ -439,45 +439,69 @@ async function successfulChild(ctx, parent, fixture, report) {
   }
 }
 
-async function pendingChildIdentity(ctx, parent, fixture, report) {
+/**
+ * DSH 0.2.1 appends the creation selection and descriptor in setup, before it publishes the
+ * child: `agent/created` already observes a pageable descriptor, with no pending window.
+ */
+async function createdChildIdentity(ctx, parent, fixture, report) {
   const entered = Promise.withResolvers();
   const release = Promise.withResolvers();
   const stop = ctx.on('agent/created', async ({ agent }) => {
     if (agent.session.header.parentSession !== parent.id) return;
-    entered.resolve(agent.id);
+    entered.resolve(agent);
     await release.promise;
   });
   try {
     await inTurn(parent, async (signal) => {
       const starting = fixture.writer(parent, fixture.task().prompt, signal);
       try {
-        const childId = await entered.promise;
+        const agent = await entered.promise;
+        const childId = agent.id;
+        const own = eventsOf(agent).slice(agent.session.inheritedEventCount);
+        const selections = own.filter((event) => event.type === 'agent-preset/selected');
+        const descriptor = own.find((event) => event.type === 'subagent/descriptor');
+        assert.equal(selections.length, 1);
+        assert.equal(selections[0].data.agentPreset, 'office-writer');
+        assert(descriptor && selections[0].seq < descriptor.seq, 'selection precedes descriptor');
         const listed = await ctx.sessionController.list({}, signal);
         const row = listed.items.find((item) => item.sessionId === childId);
         assert(row);
-        const pending = await ctx.sessionController.projections({ sessionId: childId }, signal);
         assert.equal(row.agentAvailable, true);
-        assert.equal(pending.values.subagent, null);
+        const created = await ctx.sessionController.projections({ sessionId: childId }, signal);
+        assert(created.values.subagent, 'descriptor published with the child');
         const page = (address, throughSeq, maxMessages) =>
           ctx.sessionController.page({ address, throughSeq, maxMessages }, signal);
-        const child = { kind: 'subagent', parentSessionId: parent.id, childSessionId: childId };
-        // Mode-agnostic: before a descriptor exists no address mode may page the child.
-        await assert.rejects(page({ ...child, mode: 'unknown' }, pending.asOfSeq, 500));
+        const { mode } = created.values.subagent;
+        const address = {
+          kind: 'subagent',
+          parentSessionId: parent.id,
+          childSessionId: childId,
+          mode,
+        };
+        const early = await page(address, created.asOfSeq, 500);
+        assert(early.records.some(({ event }) => event.type === 'subagent/descriptor'));
+        const otherMode = mode === 'one-shot' ? 'continuable' : 'one-shot';
+        await assert.rejects(
+          page({ ...address, parentSessionId: 'wrong-parent' }, created.asOfSeq),
+        );
+        await assert.rejects(page({ ...address, mode: otherMode }, created.asOfSeq));
         release.resolve();
         const run = await starting;
         assert.equal((await run.result).stopReason, 'completed');
         const ready = await ctx.sessionController.projections({ sessionId: childId }, signal);
-        const { mode } = ready.values.subagent;
-        const address = { ...child, mode };
+        assert.equal(ready.values.subagent.mode, mode);
+        assert.equal(ready.values.subagent.seq, created.values.subagent.seq);
         const history = await page(address, ready.asOfSeq, 500);
         assert(history.records.some(({ event }) => event.type === 'turn/end'));
+        const after = eventsOf(agent).slice(agent.session.inheritedEventCount);
+        // No post-creation rebinding: the creation selection stays the only one.
+        assert.equal(after.filter((event) => event.type === 'agent-preset/selected').length, 1);
         await assert.rejects(page({ ...address, parentSessionId: 'wrong-parent' }, ready.asOfSeq));
-        const otherMode = mode === 'one-shot' ? 'continuable' : 'one-shot';
         await assert.rejects(page({ ...address, mode: otherMode }, ready.asOfSeq));
         report.readiness = {
-          pending: { identity: pending.values.subagent, agentAvailable: row.agentAvailable },
+          created: { identity: created.values.subagent, agentAvailable: row.agentAvailable },
           ready: { identity: ready.values.subagent, agentAvailable: true },
-          pendingPageRejected: true,
+          createdPageAccepted: true,
           wrongParentRejected: true,
           wrongModeRejected: true,
         };
@@ -748,7 +772,7 @@ async function scenario(ctx, fixture) {
       report.constructionFailures = await constructionFailures(ctx, parent.agent, fixture, inTurn);
     }
     await cancellation(ctx, parent.agent, fixture, report);
-    await pendingChildIdentity(ctx, parent.agent, fixture, report);
+    await createdChildIdentity(ctx, parent.agent, fixture, report);
     await unavailableWriter(ctx, parent.agent, fixture, report);
     assert.equal(presetOf(ctx, parent.agent), 'office-general');
   } finally {

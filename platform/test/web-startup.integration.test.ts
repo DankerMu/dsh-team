@@ -6,8 +6,8 @@ import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 import { launchTokenPresent } from '../src/orchestrator/index.ts';
-import { observeWebEndpoint } from './web-startup-fixture.ts';
-import type { WebStartupBoundary } from './web-startup-fixture.ts';
+import { observeWebEndpoint, runWebRejection } from './web-startup-fixture.ts';
+import type { WebContainer, WebStartupBoundary } from './web-startup-fixture.ts';
 
 // Shaped like a released 43-character launch token so only the address decides acceptance.
 const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN_0000000000000000';
@@ -323,6 +323,7 @@ it('accepts live observations immediately before the deadline, reports selected 
     configuredHost: 'dsh-team.test:3080',
     hostPort: 43127,
     announcedHost: containerAddress,
+    subnet: '198.18.0.16/28',
     pid: 1,
     parentPid: 0,
     effectiveUid: 1001,
@@ -643,3 +644,111 @@ it.each(['stalled', 'disconnected'])(
     }
   },
 );
+
+interface RejectionFixture {
+  command: DockerCommand;
+  boundary: WebStartupBoundary;
+  created: (readonly string[])[];
+}
+
+/** Minimal boundary for an overlay DSH must refuse: exit state and logs are the only facts. */
+function rejectionDaemon(exit: { code: number; at: number }, logs: string): RejectionFixture {
+  let time = 0;
+  const created: (readonly string[])[] = [];
+  const ok = (stdout = ''): DockerCommandResult => ({ status: 0, stdout, stderr: '' });
+  const command: DockerCommand = (args) => {
+    const [operation, subcommand] = args;
+    if (operation === 'volume' && subcommand === 'inspect') return ok('rejection-run\n');
+    if (operation === 'create') {
+      created.push(args);
+      return ok('rejected-web');
+    }
+    if (operation === 'start') return ok();
+    if (operation === 'container' && subcommand === 'inspect') {
+      const exited = time >= exit.at;
+      return ok(
+        JSON.stringify({
+          Image: imageId,
+          Config: { Labels: { 'dsh-team.test-run': 'rejection-run' } },
+          State: exited
+            ? { Status: 'exited', Running: false, ExitCode: exit.code }
+            : { Status: 'running', Running: true, ExitCode: 0 },
+        }),
+      );
+    }
+    if (operation === 'logs') return { status: 0, stdout: logs, stderr: privateToken };
+    throw new Error('Unexpected Docker boundary operation');
+  };
+  const boundary: WebStartupBoundary = {
+    now: () => time,
+    pause: (milliseconds) => {
+      time += milliseconds;
+      return Promise.resolve();
+    },
+    httpStatus: () => Promise.reject(new Error('A refused Web overlay is never probed over HTTP')),
+  };
+  return { command, boundary, created };
+}
+
+const rejectedWeb: WebContainer = {
+  container: 'rejected-web',
+  imageId,
+  runId: 'rejection-run',
+  stateVolume: 'dsh-team-test-rejection-state',
+  workVolume: 'dsh-team-test-rejection-work',
+  overlay: '/owned/wildcard.patch.yml',
+  seccomp: '/owned/seccomp.json',
+  network: { name: 'dsh-team-test-net-rejection-run-wildcard', subnet: '198.18.0.16/28' },
+};
+
+it('accepts a refused Web overlay that exits nonzero without announcing a launch URL', async () => {
+  const fixture = rejectionDaemon(
+    { code: 1, at: 750 },
+    'dsh web: startup failed: webserver is not active\n',
+  );
+
+  const summary = await runWebRejection(fixture.command, rejectedWeb, fixture.boundary);
+
+  expect(JSON.parse(summary)).toEqual({
+    exited: true,
+    exitCode: 1,
+    launchLine: false,
+    elapsedMs: 750,
+  });
+  expect(summary).not.toContain(privateToken);
+  expect(fixture.created).toHaveLength(1);
+  const args = fixture.created[0] ?? [];
+  expect(args.slice(args.indexOf('--network'), args.indexOf('--network') + 4)).toEqual([
+    '--network',
+    rejectedWeb.network.name,
+    '--ip',
+    containerAddress,
+  ]);
+});
+
+it.each([
+  [
+    'a launch URL',
+    { code: 1, at: 0 },
+    `dsh web: http://0.0.0.0:3080/?token=${privateToken}\n`,
+    'announced a launch URL',
+  ],
+  ['a clean exit', { code: 0, at: 0 }, '', 'must exit nonzero'],
+  [
+    'a process still running at the deadline',
+    { code: 1, at: Number.POSITIVE_INFINITY },
+    '',
+    'deadline exceeded (60s)',
+  ],
+])('rejects a refused Web overlay observation with %s', async (_name, exit, logs, message) => {
+  const fixture = rejectionDaemon(exit, logs);
+
+  const error: unknown = await runWebRejection(
+    fixture.command,
+    rejectedWeb,
+    fixture.boundary,
+  ).catch((failure: unknown) => failure);
+
+  expect(String(error)).toContain(message);
+  expect(String(error)).not.toContain(privateToken);
+});

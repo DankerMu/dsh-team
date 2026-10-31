@@ -122,12 +122,12 @@ process.stdout.write(JSON.stringify([0,1,2].map(index => ({
           });
           for (const row of rows) {
             const readiness = record(record(record(row).result).readiness);
-            const pending = record(readiness.pending);
+            const created = record(readiness.created);
             const ready = record(readiness.ready);
-            expect(officeChildReady(pending.identity, pending.agentAvailable)).toBe(false);
+            expect(officeChildReady(created.identity, created.agentAvailable)).toBe(true);
             expect(officeChildReady(ready.identity, ready.agentAvailable)).toBe(true);
             expect(readiness).toMatchObject({
-              pendingPageRejected: true,
+              createdPageAccepted: true,
               wrongParentRejected: true,
               wrongModeRejected: true,
             });

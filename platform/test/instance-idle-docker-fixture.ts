@@ -11,7 +11,13 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
 import { createInstanceService } from '../src/orchestrator/index.ts';
 import type { InstanceService, DockerClient } from '../src/orchestrator/index.ts';
-import { inspectAsync, record, startupClient } from './container-start-docker-fixture.ts';
+import {
+  bridgeAddress,
+  inspectAsync,
+  instanceRpcScript,
+  record,
+  startupClient,
+} from './container-start-docker-fixture.ts';
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -274,7 +280,10 @@ export async function withDockerIdleInstance(
         if (typeof row.container_id !== 'string' || typeof row.dsh_cookie !== 'string')
           throw new Error('Missing real ready identity');
         containerId = row.container_id;
-        expect((await inspectAsync(lifecycle, containerId)).Image).toBe(lifecycle.imageId);
+        const readyContainer = await inspectAsync(lifecycle, containerId);
+        expect(readyContainer.Image).toBe(lifecycle.imageId);
+        // DSH 0.2.1 binds only the instance's base+2 bridge address, never container loopback.
+        const instanceHost = bridgeAddress(readyContainer, userId);
         const volumeSnapshot: unknown = JSON.parse(
           await command([
             'volume',
@@ -291,12 +300,24 @@ export async function withDockerIdleInstance(
             ['exec', '--user', '1001', containerId, 'node', '--input-type=module', '-e', script],
             15_000,
           );
-        const rpc = async (method: string, args: unknown): Promise<Record<string, unknown>> => {
-          const rpcId = randomUUID();
-          const body = JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } });
-          const script = `import {request} from 'node:http'; const {promise,resolve,reject}=Promise.withResolvers(); const req=request({host:'127.0.0.1',port:3080,path:${JSON.stringify(`/api/${method}`)},method:'POST',headers:{Host:${JSON.stringify(config.authority)},Origin:${JSON.stringify(config.publicUrl)},Cookie:${JSON.stringify(row.dsh_cookie)},'content-type':'application/json'},signal:AbortSignal.timeout(10000),maxHeaderSize:8192},res=>{let text='';res.on('data',chunk=>{text+=chunk;if(text.length>1048576)req.destroy(new Error('limit'));});res.on('error',reject);res.on('end',()=>res.statusCode===200&&res.complete?resolve(text):reject(new Error('http')));});req.on('error',reject);req.end(${JSON.stringify(body)}); const parsed=JSON.parse(await promise);if(parsed.type!=='server-response'||parsed.rpcId!==${JSON.stringify(rpcId)}||parsed.result?.ok!==true)throw new Error('rpc');process.stdout.write(JSON.stringify(parsed.result.value));`;
-          return record(JSON.parse(await exec(script)));
-        };
+        const rpc = async (method: string, args: unknown): Promise<Record<string, unknown>> =>
+          record(
+            JSON.parse(
+              await exec(
+                instanceRpcScript(
+                  {
+                    host: instanceHost,
+                    authority: config.authority,
+                    origin: config.publicUrl,
+                    cookie: String(row.dsh_cookie),
+                  },
+                  method,
+                  args,
+                  randomUUID(),
+                ),
+              ),
+            ),
+          );
         const control = async (args: unknown): Promise<Record<string, unknown>> =>
           record(
             JSON.parse(
