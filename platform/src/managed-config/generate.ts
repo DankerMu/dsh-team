@@ -128,6 +128,13 @@ export function hasCompleteModelSettings(
   );
 }
 
+/**
+ * F18: the managed provider resolves `apiKeyEnv` only inside this labelled credentials realm.
+ * Its store file never exists (the image directory is root 0555), so resolution falls back to
+ * the platform-injected process environment; the employee's global store is never consulted.
+ */
+const PLATFORM_CREDENTIALS = { credentials: 'dsh-team-platform' };
+
 function isInstanceAddress(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -165,6 +172,7 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
       { id: 'llm-deepseek-account', disabled: true },
       {
         id: 'llm-pi-ai',
+        isolate: PLATFORM_CREDENTIALS,
         config: {
           providers: {
             intranet: {
@@ -210,6 +218,18 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
             name: '/opt/dsh-team/platform-nav/index.js',
             disabled: false,
             config: { admin: input.admin },
+          },
+          {
+            id: 'dsh-team-platform-credentials',
+            name: '@deepseek-ai/dsh-credentials-local',
+            disabled: false,
+            isolate: PLATFORM_CREDENTIALS,
+            // The path never changes and never exists, so no watcher is needed.
+            config: {
+              path: '/opt/dsh-team/credentials/platform.yaml',
+              dshHome: '/data/home',
+              watch: false,
+            },
           },
         ],
       },

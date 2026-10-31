@@ -40,24 +40,40 @@ const INPUT: ManagedConfigInput = {
   ],
 };
 
-const EXPECTED_MODEL_ROWS = [
-  {
+const CREDENTIAL_REALM = { credentials: 'dsh-team-platform' };
+
+const PLATFORM_CREDENTIAL_STORE = {
+  id: 'dsh-team-platform-credentials',
+  name: '@deepseek-ai/dsh-credentials-local',
+  disabled: false,
+  isolate: CREDENTIAL_REALM,
+  config: { path: '/opt/dsh-team/credentials/platform.yaml', dshHome: '/data/home', watch: false },
+};
+
+/** The whole managed provider row, bound to the platform credential realm. */
+function providerRow(apiKeyEnv: string, baseURL: string, models: readonly unknown[]): unknown {
+  return {
     id: 'llm-pi-ai',
+    isolate: CREDENTIAL_REALM,
     config: {
       providers: {
         intranet: {
           displayName: '内网模型',
-          apiKeyEnv: 'DMXAPI_KEY',
+          apiKeyEnv,
           api: 'openai-completions',
-          baseURL: 'http://127.0.0.1:9/v1',
-          models: [
-            { id: 'alpha', name: 'alpha', contextWindow: 500000 },
-            { id: 'beta', name: 'beta' },
-          ],
+          baseURL,
+          models,
         },
       },
     },
-  },
+  };
+}
+
+const EXPECTED_MODEL_ROWS = [
+  providerRow('DMXAPI_KEY', 'http://127.0.0.1:9/v1', [
+    { id: 'alpha', name: 'alpha', contextWindow: 500000 },
+    { id: 'beta', name: 'beta' },
+  ]),
   {
     id: 'agent-default-model',
     config: {
@@ -403,23 +419,10 @@ describe('generateManagedConfig', () => {
     expect(input).toEqual(snapshot);
     expect(text.includes('sk-not-a-credential')).toBe(false);
     expect(rowsWithIds(JSON.stringify(overlay), ['llm-pi-ai', 'agent-default-model'])).toEqual([
-      {
-        id: 'llm-pi-ai',
-        config: {
-          providers: {
-            intranet: {
-              displayName: '内网模型',
-              apiKeyEnv: 'DMXAPI_KEY',
-              api: 'openai-completions',
-              baseURL: 'http://127.0.0.1:9/v1?q="x"\\y',
-              models: [
-                { id: quoted, name: quoted, contextWindow: 500000 },
-                { id: 'beta', name: 'beta' },
-              ],
-            },
-          },
-        },
-      },
+      providerRow('DMXAPI_KEY', 'http://127.0.0.1:9/v1?q="x"\\y', [
+        { id: quoted, name: quoted, contextWindow: 500000 },
+        { id: 'beta', name: 'beta' },
+      ]),
       { id: 'agent-default-model', config: { provider: 'intranet', model: quoted } },
     ]);
   });
@@ -624,23 +627,10 @@ describe('generateManagedConfig', () => {
     ok(generated.outcome === 'configured');
 
     expect(rowsWithIds(generated.content, ['llm-pi-ai', 'agent-default-model'])).toEqual([
-      {
-        id: 'llm-pi-ai',
-        config: {
-          providers: {
-            intranet: {
-              displayName: '内网模型',
-              apiKeyEnv: ' DMXAPI_KEY ',
-              api: 'openai-completions',
-              baseURL: ' http://127.0.0.1:9/v1 ',
-              models: [
-                { id: 'alpha', name: 'alpha', contextWindow: 500000 },
-                { id: 'beta', name: 'beta' },
-              ],
-            },
-          },
-        },
-      },
+      providerRow(' DMXAPI_KEY ', ' http://127.0.0.1:9/v1 ', [
+        { id: 'alpha', name: 'alpha', contextWindow: 500000 },
+        { id: 'beta', name: 'beta' },
+      ]),
       { id: 'agent-default-model', config: { provider: 'intranet', model: ' beta ' } },
     ]);
   });
@@ -667,12 +657,50 @@ describe('generateManagedConfig', () => {
               disabled: false,
               config: { admin },
             },
+            PLATFORM_CREDENTIAL_STORE,
           ],
         },
         { id: 'agent-loop', disabled: false, inject: ['managedPermissions'] },
       ]);
     },
   );
+
+  it('resolves the managed provider only from the read-only platform credential store realm', () => {
+    const generated = generateManagedConfig(INPUT);
+    ok(generated.outcome === 'configured');
+    const rows: unknown = JSON.parse(generated.content);
+    ok(Array.isArray(rows));
+    const entries = rows.flatMap((row: unknown): unknown[] =>
+      typeof row === 'object' && row !== null && 'insert' in row && Array.isArray(row.insert)
+        ? row.insert
+        : [row],
+    );
+    // Every row joining a credentials realm: exactly the provider and the platform store.
+    const realms = entries.flatMap((row: unknown) => {
+      ok(typeof row === 'object' && row !== null && 'id' in row);
+      return 'isolate' in row ? [[row.id, row.isolate]] : [];
+    });
+    const store = entries.find(
+      (row: unknown) =>
+        typeof row === 'object' &&
+        row !== null &&
+        'id' in row &&
+        row.id === 'dsh-team-platform-credentials',
+    );
+
+    expect(realms).toEqual([
+      ['llm-pi-ai', { credentials: 'dsh-team-platform' }],
+      ['dsh-team-platform-credentials', { credentials: 'dsh-team-platform' }],
+    ]);
+    // The store file never exists: its image directory is root 0555, so the realm falls back to
+    // the platform-injected process environment and never needs a watcher.
+    ok(typeof store === 'object' && store !== null && 'config' in store);
+    expect(store.config).toEqual({
+      path: '/opt/dsh-team/credentials/platform.yaml',
+      dshHome: '/data/home',
+      watch: false,
+    });
+  });
 
   it('differs between roles only in the platform entry flag', () => {
     const employee = generateManagedConfig({ ...INPUT, admin: false });

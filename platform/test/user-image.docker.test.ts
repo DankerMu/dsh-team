@@ -113,13 +113,13 @@ it('refuses to start DSH Web on a wildcard overlay: nonzero exit within 60s and 
   );
 });
 
-it('delivers the platform navigation plugin root-owned, read-only and compatible with the installed DSH', async () => {
+it('delivers the platform navigation plugin and the empty credential store root-owned, read-only and compatible with the installed DSH', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
   const script = `
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { opendirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 ${DSH_ENGINES_PRELUDE}
 const root='/opt/dsh-team/platform-nav';
 assert.deepEqual(readdirSync(root).sort(),['client.js','index.js','package.json']);
@@ -141,8 +141,16 @@ assert.equal(manifest.dsh.client.platform,'web');
 assert.throws(()=>writeFileSync(root+'/client.js','employee code'));
 assert.throws(()=>writeFileSync(root+'/employee.js','employee code'));
 assert.throws(()=>renameSync(root+'/index.js',root+'/employee.js'));
+// The managed provider's isolated credential store: traversable and empty, never writable.
+const store='/opt/dsh-team/credentials';
+const credentials=statSync(store);
+assert.equal(credentials.uid,0); assert.equal(credentials.gid,0); assert.equal(credentials.mode & 0o777,0o555);
+const listing=opendirSync(store);
+const entry=listing.readSync();
+listing.closeSync();
+assert.throws(()=>writeFileSync(store+'/platform.yaml','employee value'),{code:'EACCES'});
 assert.equal(process.getuid(),1001);
-process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh,uid:1001}));
+process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh,credentials:entry?.name??null,uid:1001}));
 `;
 
   await runUserImage(
@@ -151,6 +159,7 @@ process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh
       expect(JSON.parse(stdout)).toEqual({
         immutable: true,
         engines: '>=0.2.1-rc.2 <0.3.0',
+        credentials: null,
         uid: 1001,
       });
     },

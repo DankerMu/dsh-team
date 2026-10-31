@@ -255,6 +255,17 @@ it.each([
           disabled: false,
           config: { admin },
         },
+        {
+          id: 'dsh-team-platform-credentials',
+          name: '@deepseek-ai/dsh-credentials-local',
+          disabled: false,
+          isolate: { credentials: 'dsh-team-platform' },
+          config: {
+            path: '/opt/dsh-team/credentials/platform.yaml',
+            dshHome: '/data/home',
+            watch: false,
+          },
+        },
       ],
     });
   },
