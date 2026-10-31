@@ -158,17 +158,20 @@ export async function runTestStack(options) {
 }
 
 /**
- * Forwards SIGINT/SIGTERM and settles only on actual child closure.
+ * Launches the vitest entry directly under this Node, without a pnpm hop: forwarded
+ * SIGINT/SIGTERM reach the case runner itself, and settlement is its own `close`, so
+ * retirement never starts while it can still register resources.
  * @param {NodeJS.ProcessEnv} env
  * @param {string} cwd
+ * @param {{file: string, args: string[]}} [launch]
  * @returns {Promise<CaseOutcome>}
  */
-function spawnVitest(env, cwd) {
-  const child = spawn('pnpm', ['exec', 'vitest', 'run', '--project', 'stack'], {
-    cwd,
-    env,
-    stdio: 'inherit',
-  });
+export function spawnCases(env, cwd, launch) {
+  const { file, args } = launch ?? {
+    file: process.execPath,
+    args: [join(cwd, 'node_modules/vitest/vitest.mjs'), 'run', '--project', 'stack'],
+  };
+  const child = spawn(file, args, { cwd, env, stdio: 'inherit' });
   /** @type {NodeJS.Signals | undefined} */
   let interrupted;
   let failed = false;
@@ -202,7 +205,7 @@ if (
     repositoryRoot,
     dockerCommands: (directory, config) => createDockerCommands(directory, config, true),
     probeVersion: probeRagflowVersion,
-    spawnCases: spawnVitest,
+    spawnCases: (env, cwd) => spawnCases(env, cwd),
     retire: retireCleanupJournal,
     stderr: (text) => process.stderr.write(text),
   });

@@ -17,7 +17,7 @@ import {
   STACK_CONFIG_RELATIVE_PATH,
   assessStackPrerequisites,
 } from '../../scripts/test-stack-prerequisites.mjs';
-import { probeRagflowVersion, runTestStack } from '../../scripts/test-stack.mjs';
+import { probeRagflowVersion, runTestStack, spawnCases } from '../../scripts/test-stack.mjs';
 import { retireCleanupJournal } from './docker-cleanup.ts';
 import type { CleanupJournalEntry } from './docker-cleanup.ts';
 import { createDockerCommands } from './docker-command.ts';
@@ -247,6 +247,47 @@ it.each([
 ] as const)('maps an interrupted %s case run to %i after retirement', async (signal, status) => {
   const result = await run({ spawnCases: () => Promise.resolve({ code: null, signal }) });
   expect(result).toMatchObject({ code: status, stderr: [] });
+  expect(existsSync(result.runDir)).toBe(false);
+});
+
+it('retires only after the signalled case runner itself closes, including its late registration', async () => {
+  const runId = randomUUID();
+  const target = {
+    kind: 'container',
+    name: 'dsh-team-late',
+    ownership: { 'dsh-team.test-run': runId },
+  };
+  const row = JSON.stringify({ runId, target });
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-team-stack-marker-'));
+  const marker = join(directory, 'ready');
+  const child = String.raw`const fs=require('node:fs');const [marker,row]=process.argv.slice(1);
+    process.on('SIGTERM',()=>setTimeout(()=>{
+      fs.appendFileSync(process.env.DSH_TEAM_CI_RESOURCE_JOURNAL,row+'\n');process.exit(0);},300));
+    setTimeout(()=>process.exit(2),10000);fs.writeFileSync(marker,'ready');`;
+  const listeners = process.listenerCount('SIGTERM');
+  const retire = vi.fn<Retire>(() => Promise.resolve());
+  try {
+    const pending = run({
+      spawnCases: (env, cwd) =>
+        spawnCases(env, cwd, { file: process.execPath, args: ['-e', child, marker, row] }),
+      retire,
+    });
+    await vi.waitFor(
+      () => {
+        expect(existsSync(marker)).toBe(true);
+      },
+      { timeout: 5000 },
+    );
+    process.emit('SIGTERM', 'SIGTERM');
+    const result = await pending;
+
+    expect(result).toMatchObject({ code: 143, stderr: [] });
+    expect(retire.mock.calls[0]?.[0]).toEqual([{ runId, target }]);
+    expect(existsSync(result.runDir)).toBe(false);
+    expect(process.listenerCount('SIGTERM')).toBe(listeners);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 it.each<[string, (journal: string) => void, number]>([
