@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { isDeepStrictEqual } from 'node:util';
 import {
   generateManagedConfig,
   readManagedComposition,
@@ -20,8 +21,10 @@ import type { DockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
-import { runWebStartup } from './web-startup-fixture.ts';
+import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
+import type { WebNetwork } from './web-startup-fixture.ts';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
+import { rejectPluginFailures } from './plugin-failure-markers.ts';
 import {
   browserEvidence,
   createManagedPolicyEvidence,
@@ -42,6 +45,7 @@ import {
 import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee-edit.ts';
 import { createProfileRecorder, PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
 import type { ProfileRecorder } from './managed-policy-profile.ts';
+import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
 
 const USER_ID = 'managedpol01';
 const MANAGED_ADDRESS = 'http://127.0.0.1:9/v1';
@@ -63,76 +67,9 @@ const STATE_MARKER = '/data/home/dsh-team-user-state.txt';
 const STATE_MARKER_BODY = 'keep-across-restart\n';
 const CUSTOM_DESCRIPTION = 'brief-zh';
 const WORKSPACE_PATH = '/data/work';
-export const MANAGED_BOOT_ROSTER = [
-  '@deepseek-ai/dsh-api-gateway',
-  '@deepseek-ai/dsh-api-job-controller',
-  '@deepseek-ai/dsh-api-remotes',
-  '@deepseek-ai/dsh-api-session-controller',
-  '@deepseek-ai/dsh-api-terminal-controller',
-  '@deepseek-ai/dsh-api-workspace-controller',
-  '@deepseek-ai/dsh-api-workspace-files',
-  '@deepseek-ai/dsh-client-connection',
-  '@deepseek-ai/dsh-client-file-upload',
-  '@deepseek-ai/dsh-client-hmr',
-  '@deepseek-ai/dsh-client-locale',
-  '@deepseek-ai/dsh-client-modules',
-  '@deepseek-ai/dsh-client-resources',
-  '@deepseek-ai/dsh-client-shortcuts',
-  '@deepseek-ai/dsh-client-ui-agent-preset',
-  '@deepseek-ai/dsh-client-ui-approval',
-  '@deepseek-ai/dsh-client-ui-attachment',
-  '@deepseek-ai/dsh-client-ui-brand-official',
-  '@deepseek-ai/dsh-client-ui-chat',
-  '@deepseek-ai/dsh-client-ui-commands',
-  '@deepseek-ai/dsh-client-ui-conversation',
-  '@deepseek-ai/dsh-client-ui-cordis',
-  '@deepseek-ai/dsh-client-ui-deliverables',
-  '@deepseek-ai/dsh-client-ui-directory-picker-browse',
-  '@deepseek-ai/dsh-client-ui-goal',
-  '@deepseek-ai/dsh-client-ui-input-trigger',
-  '@deepseek-ai/dsh-client-ui-jobs',
-  '@deepseek-ai/dsh-client-ui-layout',
-  '@deepseek-ai/dsh-client-ui-message-feedback',
-  '@deepseek-ai/dsh-client-ui-model-selection',
-  '@deepseek-ai/dsh-client-ui-open-in-app',
-  '@deepseek-ai/dsh-client-ui-permission-presets',
-  '@deepseek-ai/dsh-client-ui-plan',
-  '@deepseek-ai/dsh-client-ui-plugin-manager',
-  '@deepseek-ai/dsh-client-ui-reference',
-  '@deepseek-ai/dsh-client-ui-renderer',
-  '@deepseek-ai/dsh-client-ui-session',
-  '@deepseek-ai/dsh-client-ui-settings',
-  '@deepseek-ai/dsh-client-ui-settings-account',
-  '@deepseek-ai/dsh-client-ui-settings-agent-loop',
-  '@deepseek-ai/dsh-client-ui-settings-general',
-  '@deepseek-ai/dsh-client-ui-settings-plugin-inventory',
-  '@deepseek-ai/dsh-client-ui-settings-plugins',
-  '@deepseek-ai/dsh-client-ui-settings-session-log',
-  '@deepseek-ai/dsh-client-ui-settings-shell',
-  '@deepseek-ai/dsh-client-ui-settings-subagent',
-  '@deepseek-ai/dsh-client-ui-settings-web-search',
-  '@deepseek-ai/dsh-client-ui-shortcuts',
-  '@deepseek-ai/dsh-client-ui-sidebar',
-  '@deepseek-ai/dsh-client-ui-sidebar-documentpreview',
-  '@deepseek-ai/dsh-client-ui-sidebar-files',
-  '@deepseek-ai/dsh-client-ui-sidebar-right',
-  '@deepseek-ai/dsh-client-ui-sidebar-terminal',
-  '@deepseek-ai/dsh-client-ui-skill',
-  '@deepseek-ai/dsh-client-ui-subagent',
-  '@deepseek-ai/dsh-client-ui-theme',
-  '@deepseek-ai/dsh-client-ui-tool',
-  '@deepseek-ai/dsh-client-ui-trajectory',
-  '@deepseek-ai/dsh-client-ui-user-questions',
-  '@deepseek-ai/dsh-client-ui-workflow-run',
-  '@deepseek-ai/dsh-client-ui-workspace',
-  '@deepseek-ai/dsh-cordis-client-runner',
-  '@deepseek-ai/dsh-session-log-export',
-  '@deepseek-ai/dsh-typert-registry',
-  '@dsh-team/permission-tiers',
-  '@dsh-team/platform-nav',
-  '@dsh-team/zh-locale',
-] as const;
 const TAMPERED_LIVE = '- id: ui-settings-models\n  disabled: false\n';
+// The generated overlay's yolo default, observed through the managed execution service.
+const MANAGED_YOLO_PERMISSIONS = { managedPermissions: true, defaultPreset: 'danger-full-access' };
 const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
@@ -167,7 +104,23 @@ function docker(command: DockerCommand, args: readonly string[], timeout = 30_00
   return result.stdout;
 }
 
-export function execScript(lifecycle: UserImageLifecycle, name: string, script: string): string {
+/** One owned /28 bridge per DSH Web container, registered with the lifecycle before creation. */
+export function lifecycleWebNetwork(lifecycle: UserImageLifecycle, suffix: string): WebNetwork {
+  return createWebNetwork(lifecycle.command, lifecycle.runId, suffix, (name, ownership) => {
+    lifecycle.registerResource('network', name, ownership);
+  });
+}
+
+/**
+ * Offline (`--network none`) unless the script launches DSH Web itself: DSH 0.2.1 binds only the
+ * overlay's concrete address, so such a container sits at its owned network's base+2.
+ */
+export function execScript(
+  lifecycle: UserImageLifecycle,
+  name: string,
+  script: string,
+  network?: WebNetwork,
+): string {
   const owned = docker(lifecycle.command, [
     'volume',
     'inspect',
@@ -185,8 +138,9 @@ export function execScript(lifecycle: UserImageLifecycle, name: string, script: 
     `dsh-team.test-run=${lifecycle.runId}`,
     '--user',
     '1001',
-    '--network',
-    'none',
+    ...(network === undefined
+      ? ['--network', 'none']
+      : ['--network', network.name, '--ip', webAddress(network)]),
     '--mount',
     `type=volume,source=${lifecycle.stateVolume},target=/data/home`,
     lifecycle.imageId,
@@ -360,9 +314,11 @@ async function publishOverlay(
   directory: string,
   composition: ManagedComposition,
   apiKeyConfigured: boolean,
+  network: WebNetwork,
 ): Promise<string> {
   const generated = generateManagedConfig({
     admin: false,
+    instanceAddress: webAddress(network),
     modelSettings: {
       baseURL: MANAGED_ADDRESS,
       apiKeyEnv: API_KEY_ENV,
@@ -379,11 +335,11 @@ async function publishOverlay(
   return writeManagedConfig(directory, USER_ID, generated.content);
 }
 
-async function publishTransportOverlay(directory: string): Promise<string> {
+async function publishTransportOverlay(directory: string, network: WebNetwork): Promise<string> {
   return writeManagedConfig(
     directory,
     'managedctrl1',
-    JSON.stringify([{ id: 'webserver', config: { host: '0.0.0.0', port: 3080 } }]),
+    JSON.stringify([{ id: 'webserver', config: { host: webAddress(network), port: 3080 } }]),
   );
 }
 
@@ -519,8 +475,9 @@ function recordBrowserObservation(
 export async function qualifyHostSession(
   hostPort: number,
   logs: string,
+  address: string,
+  token = extractLaunchToken(logs, address),
 ): Promise<{ origin: string; cookie: string; workspace: { available: true; workBound: true } }> {
-  const token = extractLaunchToken(logs);
   if (token === undefined) throw new Error(INVALID);
   const cookie = await exchangeLaunchToken({
     host: '127.0.0.1',
@@ -554,6 +511,7 @@ async function startWeb(
   lifecycle: UserImageLifecycle,
   name: string,
   overlay: string,
+  network: WebNetwork,
   remaining: () => number,
   evidence: ManagedPolicyEvidence,
   stage: 'start' | 'control' | 'restart',
@@ -575,6 +533,7 @@ async function startWeb(
       workVolume: lifecycle.workVolume,
       overlay,
       seccomp: lifecycle.seccomp,
+      network,
       trustedHost: HOSTNAME,
       env: { [API_KEY_ENV]: API_KEY_VALUE },
     }),
@@ -594,7 +553,8 @@ async function startWeb(
   if (browser === undefined) {
     return { hostPort, observation };
   }
-  const { origin, cookie, workspace } = await qualifyHostSession(hostPort, logs);
+  const announced = requireStringField(summary, 'announcedHost');
+  const { origin, cookie, workspace } = await qualifyHostSession(hostPort, logs, announced);
   const browserResult = await acceptObservation({
     origin,
     cookie,
@@ -619,7 +579,12 @@ async function startWeb(
 async function prepareState(
   lifecycle: UserImageLifecycle,
   plugin: string,
-): Promise<{ composition: ManagedComposition; overlay: string; seedHash: string }> {
+): Promise<{
+  composition: ManagedComposition;
+  overlay: string;
+  network: WebNetwork;
+  seedHash: string;
+}> {
   mkdirSync(lifecycle.overlayDirectory, { recursive: true });
   execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-observer`, installObserverScript(plugin));
   const hashes = parseJsonRecord(
@@ -631,17 +596,35 @@ async function prepareState(
   }
   const composition = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-read`);
   if (!sameSet(adapterPresetIds(composition), SHIPPED_PRESET_IDS)) throw new Error(INVALID);
+  const network = lifecycleWebNetwork(lifecycle, 'start');
   const overlay = await publishOverlay(
     lifecycle.overlayDirectory,
     composition,
     API_KEY_VALUE.trim() !== '',
+    network,
   );
-  return { composition, overlay, seedHash };
+  return { composition, overlay, network, seedHash };
+}
+
+/**
+ * Every delivered plugin loaded (#393): DSH 0.2.1 skips an incompatible bundle, disables an inserted
+ * row or leaves an optional entry inactive and still boots (see `rejectPluginFailures`).
+ * permission-tiers is host-only, so its evidence is the effective managed tier and the injected
+ * execution service.
+ */
+function assertPluginsLoaded(lifecycle: UserImageLifecycle, name: string, observation: unknown) {
+  const logs = lifecycle.command(['logs', name], 30_000);
+  if (logs.error !== undefined || logs.status !== 0) throw new Error(INVALID);
+  rejectPluginFailures(logs, INVALID);
+  const { permissions } = parseJsonRecord(JSON.stringify(observation));
+  if (!isDeepStrictEqual(permissions, MANAGED_YOLO_PERMISSIONS))
+    throw new Error(`${INVALID}: managed permission tier`);
 }
 
 async function acceptManaged(
   lifecycle: UserImageLifecycle,
   overlay: string,
+  network: WebNetwork,
   remaining: () => number,
   runtime: BrowserRuntime,
   work: string,
@@ -656,10 +639,12 @@ async function acceptManaged(
   browser: MappedHostAcceptResult;
 }> {
   const screenshot = join(managedPolicyEvidenceRoot(lifecycle.runId), `${label}.png`);
+  const name = `dsh-team-test-${lifecycle.runId}-${label}`;
   const started = await startWeb(
     lifecycle,
-    `dsh-team-test-${lifecycle.runId}-${label}`,
+    name,
     overlay,
+    network,
     remaining,
     evidence,
     label,
@@ -672,6 +657,7 @@ async function acceptManaged(
     },
   );
   assertManagedPolicyRuntime(started.observation, expected);
+  assertPluginsLoaded(lifecycle, name, started.observation);
   if (started.browser === undefined) throw new Error(INVALID);
   requireAccepted(started.browser, screenshot, expected.defaultModel);
   return {
@@ -703,12 +689,17 @@ async function editThenControl(
   const profile = requireStringField(edited, 'profile');
   if (home !== EMPLOYEE_HOME || live !== TAMPERED_LIVE) throw new Error(INVALID);
   if (!profile.includes(CUSTOM_PRESET_ID)) throw new Error(INVALID);
-  const transportOverlay = await publishTransportOverlay(lifecycle.overlayDirectory);
+  const controlNetwork = lifecycleWebNetwork(lifecycle, 'control');
+  const transportOverlay = await publishTransportOverlay(
+    lifecycle.overlayDirectory,
+    controlNetwork,
+  );
   const controlName = `dsh-team-test-${lifecycle.runId}-control`;
   const control = await startWeb(
     lifecycle,
     controlName,
     transportOverlay,
+    controlNetwork,
     remaining,
     evidence,
     'control',
@@ -765,6 +756,7 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
     const start = await acceptManaged(
       lifecycle,
       prepared.overlay,
+      prepared.network,
       remaining,
       runtime,
       work,
@@ -790,15 +782,18 @@ export async function runManagedPolicyScenario(lifecycle: UserImageLifecycle): P
     if (loaderExpression(inertReadLimit(changed, CUSTOM_PRESET_ID)) !== '250 + 250') {
       throw new Error(INVALID);
     }
+    const restartNetwork = lifecycleWebNetwork(lifecycle, 'restart');
     const nextOverlay = await publishOverlay(
       lifecycle.overlayDirectory,
       changed,
       API_KEY_VALUE.trim() !== '',
+      restartNetwork,
     );
     profiles.capture('recompose-published');
     await acceptManaged(
       lifecycle,
       nextOverlay,
+      restartNetwork,
       remaining,
       runtime,
       work,

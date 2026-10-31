@@ -96,7 +96,8 @@ process.once('SIGTERM', () => {
       } else if (expression.startsWith('Boolean(document.querySelector')) {
         value = false;
       } else if (
-        expression.includes('return usable(settings)') ||
+        // waitCompositionInitialized's rendered check: settings entry and new-session control.
+        expression.includes('return settings&&any(') ||
         expression.includes('el.focus()')
       ) {
         value = true;

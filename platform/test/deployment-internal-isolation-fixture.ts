@@ -72,11 +72,14 @@ console.log(JSON.stringify(paths.map(path=>readFileSync(path,'utf8')===marker)))
   };
   expect(await python(first, listen)).toEqual({ uid: 1001, port: 3099 });
   const positive = () => python(first, probe, ['127.0.0.1', ...hosts]);
-  expect(await positive()).toEqual([true, true, true, true, true, true]);
+  // DSH 0.2.1 binds only the instance's +2 address, so the container's own loopback never reaches
+  // 3080; 3099 proves loopback itself works.
+  const reachable = [false, true, true, true, true, true];
+  expect(await positive()).toEqual(reachable);
   const network: unknown = execute
     ? JSON.parse(await execute(['python3', '-c', probe, ...hosts]))
     : await python(second, probe, hosts);
-  expect(await positive()).toEqual([true, true, true, true, true, true]);
+  expect(await positive()).toEqual(reachable);
   const adminResponse = await deployment.request(`${deployment.base}/_platform/api/admin/users`, {
     headers: { cookie: admin.cookie },
   });

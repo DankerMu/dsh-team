@@ -4,6 +4,7 @@ import {
   assertRuntimeRejected,
   parseManagedPolicyRuntime,
   controlEmployeePolicyFailure,
+  RETAINED_TOOLS,
   controlExposesEmployeePolicy,
   type ManagedPolicyRuntimeObservation,
   type ManagedPolicyRuntimeExpectation,
@@ -65,6 +66,69 @@ it.each([
     });
   }).toThrow('Invalid managed policy runtime observation');
 });
+
+// Lease-scope tool names the observer reported for the office presets on DSH 0.2.1-rc.2.
+const OBSERVED_OFFICE_GENERAL = [
+  'working_directory',
+  'read',
+  'write',
+  'edit',
+  'job_output',
+  'job_list',
+  'job_kill',
+  'skill',
+  'present',
+  'bash',
+  'read_image',
+];
+const OBSERVED_OFFICE_WRITER = [
+  'working_directory',
+  'build_docx',
+  ...OBSERVED_OFFICE_GENERAL.slice(1),
+];
+
+function officeObservation(general: readonly string[]) {
+  return {
+    models: EXPECTED,
+    presets: [
+      { id: 'office-general', description: '综合办公', toolNames: general },
+      { id: 'office-writer', description: '公文与材料写作', toolNames: OBSERVED_OFFICE_WRITER },
+    ],
+    pluginPage: PLUGIN_PAGE,
+  };
+}
+
+const SHIPPED_OFFICE_EXPECTED = {
+  ...EXPECTED,
+  presetIds: ['office-general', 'office-writer'],
+  retainedTools: RETAINED_TOOLS,
+};
+
+it('retains the shipped tool expectations except the agent-scoped subagent tool', () => {
+  const office = ['bash', 'read', 'write', 'edit', 'skill', 'present'];
+  expect(RETAINED_TOOLS).toEqual({
+    standard: ['bash', 'read'],
+    ptc: ['bash', 'read'],
+    minimal: ['bash'],
+    cordis: ['bash', 'read', 'plugin_manager'],
+    'office-general': office,
+    'office-writer': office,
+  });
+});
+
+it('accepts the lease-scope office tools observed on DSH 0.2.1 without subagent', () => {
+  assertManagedPolicyRuntime(officeObservation(OBSERVED_OFFICE_GENERAL), SHIPPED_OFFICE_EXPECTED);
+});
+
+it.each(['present', 'skill', 'bash'])(
+  'rejects office-general missing the retained %s tool',
+  (missing) => {
+    const general = OBSERVED_OFFICE_GENERAL.filter((name) => name !== missing);
+    expect(() => {
+      assertManagedPolicyRuntime(officeObservation(general), SHIPPED_OFFICE_EXPECTED);
+    }).toThrow('Invalid managed policy runtime observation');
+  },
+);
 
 function cordisObservation(cordis: readonly string[], office: readonly string[] = []) {
   return {

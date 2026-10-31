@@ -83,7 +83,7 @@ describe('readManagedComposition', () => {
     ['missing localePatch', JSON.stringify({ skippedBundles: [], entries: [ROOT_PRESET] })],
     [
       'empty preset inventory',
-      completeObservation({ entries: [{ id: 'webserver', config: { host: '0.0.0.0' } }] }),
+      completeObservation({ entries: [{ id: 'webserver', config: { host: '172.30.0.2' } }] }),
     ],
     ['empty localePatch', completeObservation({ localePatch: [] })],
     ['non-object locale row', completeObservation({ localePatch: ['zh'] })],
@@ -179,7 +179,7 @@ describe('readManagedComposition', () => {
   it('projects only nested host-group presets in document order and ignores plugin-owned lookalikes', async () => {
     const observation = completeObservation({
       entries: [
-        { id: 'webserver', config: { host: '0.0.0.0', port: 3080 } },
+        { id: 'webserver', config: { host: '172.30.0.2', port: 3080 } },
         ROOT_PRESET,
         { id: 'desk-group', name: 'cordis:group', group: true, config: [GROUPED_PRESET] },
       ],

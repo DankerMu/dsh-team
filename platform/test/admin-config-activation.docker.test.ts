@@ -10,7 +10,7 @@ import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { waitDockerIdle, withDockerIdleInstance } from './instance-idle-docker-fixture.ts';
-import { MANAGED_BOOT_ROSTER } from './managed-policy-fixture.ts';
+import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
 import { runUserImage } from './user-image-fixture.ts';
 
 it('keeps the running model selector unchanged after save and activates the new exact list and default on administrator restart', async () => {

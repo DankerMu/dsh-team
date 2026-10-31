@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
@@ -6,6 +8,7 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import {
   allocateSubnet,
   createOrchestrator,
+  extractLaunchToken,
   instanceAddressLayout,
 } from '../src/orchestrator/index.ts';
 import { startupEvidence, START_MODEL } from './container-start-fixture.ts';
@@ -351,8 +354,48 @@ function survivorMarker(lifecycle: UserImageLifecycle, id: string, code: string)
 }
 
 /**
+ * Rewrite the instance's managed overlay so its `webserver` row names `to`, then restart the
+ * container so DSH rebinds there. The read-only file bind (`start.ts` `/managed/patch.yml`) is
+ * by inode: write in place, never rename, so the container sees the new bytes.
+ */
+function rebindSurvivorWeb(
+  lifecycle: UserImageLifecycle,
+  user: string,
+  containerId: string,
+  from: string,
+  to: string,
+): void {
+  const path = join(lifecycle.overlayDirectory, `${user}.patch.yml`);
+  const original = readFileSync(path, 'utf8');
+  const parsed: unknown = JSON.parse(original);
+  // generateManagedConfig writes compact JSON (a YAML subset); require an exact round trip.
+  if (!Array.isArray(parsed) || JSON.stringify(parsed) !== original)
+    throw new Error('Unexpected managed overlay format');
+  const rows: unknown[] = parsed;
+  const webserver = rows.filter((row) => record(row).id === 'webserver').map(record);
+  const config = record(webserver[0]?.config);
+  if (webserver.length !== 1 || config.host !== from || config.port !== 3080)
+    throw new Error('Unexpected managed overlay webserver row');
+  const rebound = rows.map((row) =>
+    record(row).id === 'webserver' ? { ...record(row), config: { ...config, host: to } } : row,
+  );
+  const inode = statSync(path).ino;
+  chmodSync(path, 0o600);
+  writeFileSync(path, JSON.stringify(rebound));
+  chmodSync(path, 0o444);
+  expect(statSync(path).ino).toBe(inode);
+  const restarted = lifecycle.command(['restart', containerId], 30_000);
+  if (restarted.status !== 0 || restarted.error !== undefined)
+    throw new Error('Survivor restart failed');
+}
+
+/**
  * Test-owned stage-1 survivor: the running container is re-attached through the raw Engine API
  * with only its alias (no `IPAMConfig` key), while a placeholder holds the freed layout address.
+ * A real stage-1 survivor is a DSH 0.2.0 container bound to 0.0.0.0, reachable at any address;
+ * DSH 0.2.1 binds only the overlay's literal (the +2 address), so nothing would listen at the
+ * moved address. Emulate that reachability by rebinding the overlay to it and restarting, while
+ * the placeholder still holds +2 so the restart cannot land back on the layout address.
  */
 async function constructSurvivor(
   lifecycle: UserImageLifecycle,
@@ -395,6 +438,8 @@ async function constructSurvivor(
     { Container: containerId, EndpointConfig: { Aliases: [`u-${user}`] } },
     AbortSignal.timeout(15_000),
   );
+  const moved = String(ownedAttachment(lifecycle, containerId, user).IPAddress);
+  rebindSurvivorWeb(lifecycle, user, containerId, instanceAddressLayout(subnet).container, moved);
   const removed = lifecycle.command(['container', 'rm', '--force', placeholder], 15_000);
   expect(removed.status).toBe(0);
   expect(removed.error).toBeUndefined();
@@ -403,6 +448,7 @@ async function constructSurvivor(
   const endpoint = record(networks[`dsh-team-net-${user}`]);
   if (endpoint.IPAddress === instanceAddressLayout(subnet).container)
     throw new Error('Survivor construction landed on the layout address');
+  if (endpoint.IPAddress !== moved) throw new Error('Survivor address moved across the restart');
   expect(Object.keys(networks)).toEqual([`dsh-team-net-${user}`]);
   expect(endpoint.NetworkID).toBe(networkId);
   expect(endpoint.NetworkID).toBe(record(document.HostConfig).NetworkMode);
@@ -412,7 +458,7 @@ async function constructSurvivor(
   expect(Object.keys(record(inspectNetwork(lifecycle, networkId).Containers)).sort()).toEqual(
     [containerId, platformId].sort(),
   );
-  return String(endpoint.IPAddress);
+  return moved;
 }
 
 /** Reconciliation re-attached the recreated platform without requesting an address. */
@@ -500,6 +546,79 @@ async function stopThenRestartAtLayout(
   return marker === SURVIVOR_MARKER;
 }
 
+const EXCHANGE = `
+import json, sys, urllib.error, urllib.request
+class Keep(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args): return None
+request = urllib.request.Request('http://' + sys.argv[1] + ':3080/?token=' + sys.argv[2], headers={'Host': sys.argv[3]})
+try:
+    response = urllib.request.build_opener(Keep).open(request, timeout=5)
+    status, headers = response.status, response.headers
+except urllib.error.HTTPError as error:
+    status, headers = error.code, error.headers
+print(json.dumps({'status': status, 'cookies': headers.get_all('Set-Cookie') or []}))
+`;
+
+/**
+ * Fixture-owned cookie exchange for the rebound survivor. Production acquisition is a readiness
+ * step: it selects only a `starting` row and applies the post-start layout validation, so it
+ * cannot serve this deliberately off-layout `running` survivor. DSH 0.2.1 launch tokens are per
+ * process (dsh-client-connection lib/index.js:294-300, 420), so the restarted Web process needs a
+ * fresh exchange. It mirrors credentials.ts `exchange`/`authenticationCookie`: GET `/?token=` with
+ * the trusted Host, 303 only, exactly one `dsh-auth-<sha256(authority)>` pair before `;`. Token
+ * and cookie stay in memory and exec arguments, never output.
+ */
+async function exchangeSurvivorCookie(
+  lifecycle: UserImageLifecycle,
+  platformId: string,
+  containerId: string,
+  address: string,
+  authority: string,
+): Promise<string> {
+  const deadline = Date.now() + 30_000;
+  let token: string | undefined;
+  while (token === undefined) {
+    const logs = lifecycle.command(['logs', containerId], 10_000);
+    if (logs.status !== 0 || logs.error !== undefined) throw new Error('Survivor logs unavailable');
+    // Matches only lines naming the moved address; the first boot's +2 line is ignored.
+    token = extractLaunchToken(logs.stdout, address);
+    if (token !== undefined) break;
+    if (Date.now() >= deadline) throw new Error('Survivor launch line missing');
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const result = lifecycle.command(
+    ['exec', platformId, 'python3', '-c', EXCHANGE, address, token, authority],
+    10_000,
+  );
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Survivor cookie exchange failed');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    // V8 quotes the input in JSON syntax errors; that text would carry cookie bytes.
+    throw new Error('Survivor cookie exchange unreadable');
+  }
+  const exchanged = record(parsed);
+  const name = `dsh-auth-${createHash('sha256')
+    .update(new URL(`http://${authority}`).host)
+    .digest('base64url')}`;
+  const pairs = Array.isArray(exchanged.cookies)
+    ? exchanged.cookies
+        .map((header) => String(header).split(';')[0] ?? '')
+        .filter((pair) => pair.startsWith(`${name}=`))
+    : [];
+  if (exchanged.status !== 303 || pairs.length !== 1 || pairs[0] === undefined)
+    throw new Error('Survivor cookie exchange rejected');
+  return pairs[0];
+}
+
+function rowCookie(database: DatabaseHandle, user: string): string {
+  const row = record(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(user));
+  if (typeof row.dsh_cookie !== 'string') throw new Error('Missing ready cookie');
+  return row.dsh_cookie;
+}
+
 async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const user = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const platformName = `dsh-team-test-survivor-${lifecycle.runId}`;
@@ -527,9 +646,7 @@ async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> 
     registerStartupUsers(lifecycle, database, [user], 'survivor.example');
     lifecycle.registerResource('network', `dsh-team-net-${user}`, { 'dsh-team.user': user });
     const started = await startDockerInstance(owner, lifecycle, user, authority);
-    const ready = record(database.prepare('SELECT * FROM instances WHERE user_id = ?').get(user));
-    if (typeof ready.dsh_cookie !== 'string') throw new Error('Missing ready cookie');
-    const cookie = ready.dsh_cookie;
+    rowCookie(database, user);
     survivorMarker(
       lifecycle,
       started.containerId,
@@ -544,6 +661,14 @@ async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> 
       originalPlatform,
     );
     database.prepare('UPDATE instances SET upstream_host = ? WHERE user_id = ?').run(address, user);
+    const cookie = await exchangeSurvivorCookie(
+      lifecycle,
+      originalPlatform,
+      started.containerId,
+      address,
+      authority,
+    );
+    database.prepare('UPDATE instances SET dsh_cookie = ? WHERE user_id = ?').run(cookie, user);
     expect(platformHttpStatus(lifecycle, originalPlatform, address, authority, cookie)).toBe(200);
     // (3) Platform recreation, then a fresh owner reconciles twice.
     const before = await startupEvidence(database, input);

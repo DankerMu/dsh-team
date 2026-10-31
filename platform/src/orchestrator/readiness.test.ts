@@ -140,7 +140,8 @@ beforeEach(() => {
   };
   daemon.containers.set(START_CONTAINER, container);
   daemon.attachOwnedNetwork(START_USER, START_CONTAINER);
-  daemon.setComposition(`harmless boot line\ndsh web: http://127.0.0.1:3080/?token=${token}\n`);
+  // DSH 0.2.1 announces the bound base+2 bridge address that attachOwnedNetwork assigns.
+  daemon.setComposition(`harmless boot line\ndsh web: http://172.30.0.2:3080/?token=${token}\n`);
   daemon.overrides.set(`POST /containers/${START_CONTAINER}/stop?t=1`, { status: 204 });
   daemon.beforeRequest((request) => {
     if (
@@ -271,10 +272,21 @@ it('stops an owned live instance whose endpoint was not persisted instead of tru
   expect(database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'error' });
 });
 
-it.each(['announcement', 'cookie', 'exchange'])(
+it.each([
+  ['announcement', 0],
+  ['loopback announcement', 0],
+  ['foreign-address announcement', 0],
+  ['cookie', 1],
+  ['exchange', 1],
+] as const)(
   'cleans up after invalid %s without retaining raw protocol errors',
-  async (kind) => {
+  async (kind, exchanges) => {
     if (kind === 'announcement') daemon.setComposition('ordinary failure\n');
+    // Only the line announcing the instance's own bound address is a launch credential.
+    if (kind === 'loopback announcement')
+      daemon.setComposition(`dsh web: http://127.0.0.1:3080/?token=${token}\n`);
+    if (kind === 'foreign-address announcement')
+      daemon.setComposition(`dsh web: http://172.30.0.18:3080/?token=${token}\n`);
     if (kind === 'cookie') http.missingCookie = true;
     if (kind === 'exchange') http.exchange = 500;
 
@@ -285,6 +297,7 @@ it.each(['announcement', 'cookie', 'exchange'])(
       status: 'error',
       dsh_cookie: null,
     });
+    expect(http.addresses.filter(({ path }) => path !== '/')).toHaveLength(exchanges);
   },
 );
 

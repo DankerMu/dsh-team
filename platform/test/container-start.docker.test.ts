@@ -8,13 +8,20 @@ import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { buildApp } from '../src/app.ts';
 import type { PlatformConfig } from '../src/config.ts';
-import { createOrchestrator, extractLaunchToken } from '../src/orchestrator/index.ts';
+import {
+  createOrchestrator,
+  extractLaunchToken,
+  instanceAddressLayout,
+  launchTokenPresent,
+} from '../src/orchestrator/index.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { injectedEnvSecret, START_MODEL } from './container-start-fixture.ts';
 import { observeWebEndpoint } from './web-startup-fixture.ts';
 import { observeResourceOom } from './resource-oom-fixture.ts';
 import {
+  bridgeAddress,
+  bridgeSubnet,
   cookieHttpStatus,
   inspect,
   record,
@@ -179,10 +186,12 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
       expect((await stat(overlay)).mode & 0o777).toBe(0o444);
       const overlayText = await readFile(overlay, 'utf8');
       expect(overlayText).not.toContain('docker-acceptance-only-not-a-model-credential');
+      const fixedAddress = instanceAddressLayout(bridgeSubnet(lifecycle, userId)).container;
       expect(JSON.parse(overlayText)).toContainEqual({
         id: 'webserver',
-        config: { host: '0.0.0.0', port: 3080, compression: 'gzip' },
+        config: { host: fixedAddress, port: 3080, compression: 'gzip' },
       });
+      expect(bridgeAddress(container, userId)).toBe(fixedAddress);
       expect(record(container.NetworkSettings).Ports).toEqual({
         '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: String(result.upstreamPort) }],
       });
@@ -387,8 +396,16 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     expect(firstA.Image).toBe(lifecycle.imageId);
     expect(record(firstA.Config).Labels).toMatchObject({ 'dsh-team.user': userA });
     expect(firstA.HostConfig).toMatchObject(limitsA);
+    const addressA = bridgeAddress(firstA, userA);
+    const announcedA = (logs: string) => launchTokenPresent(logs, addressA);
     stage = 'A readiness';
-    await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    await observeWebEndpoint(
+      lifecycle.command,
+      a.containerId,
+      () => a.upstreamPort,
+      authority,
+      announcedA,
+    );
     stage = 'platform health before B';
     await health();
 
@@ -415,9 +432,22 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     stage = 'sibling limits after B startup';
     expect(inspect(lifecycle, a.containerId).HostConfig).toMatchObject(limitsA);
     stage = 'B readiness';
-    await observeWebEndpoint(lifecycle.command, b.containerId, () => b.upstreamPort, authority);
+    const addressB = bridgeAddress(bounded, userB);
+    await observeWebEndpoint(
+      lifecycle.command,
+      b.containerId,
+      () => b.upstreamPort,
+      authority,
+      (logs) => launchTokenPresent(logs, addressB),
+    );
     stage = 'sibling readiness before pressure';
-    await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    await observeWebEndpoint(
+      lifecycle.command,
+      a.containerId,
+      () => a.upstreamPort,
+      authority,
+      announcedA,
+    );
     stage = 'platform health before pressure';
     await health();
 
@@ -438,7 +468,13 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     expect(afterA.HostConfig).toEqual(firstA.HostConfig);
     expect(record(afterA.State).Running).toBe(true);
     stage = 'sibling post-pressure readiness';
-    await observeWebEndpoint(lifecycle.command, a.containerId, () => a.upstreamPort, authority);
+    await observeWebEndpoint(
+      lifecycle.command,
+      a.containerId,
+      () => a.upstreamPort,
+      authority,
+      announcedA,
+    );
     stage = 'platform post-pressure health';
     await health();
     stage = 'instance postchecks';
@@ -638,7 +674,10 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
     const observed = lifecycle.command(['logs', started.containerId], 15_000);
     if (observed.status !== 0 || observed.error !== undefined)
       throw new Error('Independent launch observation failed');
-    const token = extractLaunchToken(observed.stdout);
+    const token = extractLaunchToken(
+      observed.stdout,
+      bridgeAddress(inspect(lifecycle, started.containerId), userId),
+    );
     if (token === undefined) throw new Error('Independent genuine launch token missing');
     const audits = JSON.stringify(database.prepare('SELECT * FROM audit_events').all());
     for (const cookie of cookies) {

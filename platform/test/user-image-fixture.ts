@@ -1,11 +1,11 @@
 import { deepStrictEqual } from 'node:assert';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
-import { runWebStartup } from './web-startup-fixture.ts';
+import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
 import type { AsyncDockerCommand, DockerCommand, DockerCommandResult } from './docker-command.ts';
@@ -334,6 +334,114 @@ function createResourceRegistration(
   };
 }
 
+export const PLUGIN_CONTEXTS = [
+  'zh-locale',
+  'permission-tiers',
+  'office-agents',
+  'platform-nav',
+] as const;
+type PluginContext = (typeof PLUGIN_CONTEXTS)[number];
+
+function requireDockerDaemon(command: DockerCommand): void {
+  const prerequisite = ['version', '--format', '{{.Server.Version}}'];
+  if (output(command(prerequisite, 10_000), prerequisite).trim() === '') {
+    throw new Error('Docker daemon version prerequisite returned no version');
+  }
+}
+
+/**
+ * The one user-image build argv over a source tree (this checkout, or an extracted historical
+ * commit); a caller may substitute one plugin's named context.
+ */
+export function userImageBuildArgs(
+  runId: string,
+  image: string,
+  replaced?: { plugin: PluginContext; directory: string },
+  root = repositoryRoot,
+): string[] {
+  return [
+    'build',
+    '--label',
+    `${OWNER_LABEL}=${runId}`,
+    '--tag',
+    image,
+    '--file',
+    join(root, 'images/dsh-user/Dockerfile'),
+    ...PLUGIN_CONTEXTS.flatMap((plugin) => [
+      '--build-context',
+      `${plugin}=${replaced?.plugin === plugin ? replaced.directory : join(root, `plugins/${plugin}`)}`,
+    ]),
+    // Keep the primary context narrow: no repository-root files or secrets.
+    join(root, 'images/dsh-user'),
+  ];
+}
+
+interface RejectedBuild {
+  readonly runId: string;
+  readonly image: string;
+  readonly status: number;
+  readonly stderr: string;
+}
+
+/**
+ * Natively build the user image with one plugin's `engines.dsh` replaced in an owned copy and
+ * require the build to fail. Uploaded verification images cannot represent the changed context.
+ */
+export function buildUserImageExpectingFailure(
+  plugin: PluginContext,
+  enginesDsh: string,
+  injectedCommand?: DockerCommand,
+): RejectedBuild {
+  const runId = randomUUID();
+  const image = `dsh-team-test-${runId}:incompatible-${plugin}`;
+  const config = mkdtempSync(join(tmpdir(), 'dsh-team-test-docker-'));
+  const copy = mkdtempSync(join(tmpdir(), 'dsh-team-test-plugin-'));
+  // Unbounded mode retains the build's own stderr; the bounded mode redacts it.
+  const { command } = createDockerCommands(repositoryRoot, config, false, injectedCommand);
+  const failures: unknown[] = [];
+  const targets: CleanupTarget[] = [];
+  let rejected: RejectedBuild | undefined;
+  try {
+    requireDockerDaemon(command);
+    const directory = join(copy, plugin);
+    cpSync(join(repositoryRoot, `plugins/${plugin}`), directory, { recursive: true });
+    const manifestPath = join(directory, 'package.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+    const engines = {
+      ...(manifest.engines as Record<string, unknown> | undefined),
+      dsh: enginesDsh,
+    };
+    writeFileSync(manifestPath, `${JSON.stringify({ ...manifest, engines }, null, 2)}\n`);
+    const build = userImageBuildArgs(runId, image, { plugin, directory });
+    // A rejected build normally leaves no tag; registration still owns any it produces.
+    registerCleanupTarget(targets, runId, { kind: 'image', name: image });
+    const result = command(build, 600_000, 1);
+    if (result.error !== undefined || result.status !== 1) {
+      throw new Error(
+        `Incompatible ${plugin} user-image build must exit 1, got ${String(result.status)}`,
+      );
+    }
+    if (!result.stderr.includes(plugin))
+      throw new Error(`Rejected user-image build stderr does not name ${plugin}`);
+    rejected = { runId, image, status: result.status, stderr: result.stderr };
+  } catch (error) {
+    failures.push(error);
+  }
+  cleanupTargets(command, targets, runId, failures);
+  for (const directory of [copy, config]) {
+    try {
+      rmSync(directory, { recursive: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length !== 0 || rejected === undefined) {
+    const messages = failures.flatMap((error) => nestedMessages(error));
+    throw new AggregateError(failures, messages.join('\n'));
+  }
+  return rejected;
+}
+
 function prepareUserImage(
   command: DockerCommand,
   targets: CleanupTarget[],
@@ -341,29 +449,8 @@ function prepareUserImage(
   image: string,
   config: string,
 ): string {
-  const prerequisite = ['version', '--format', '{{.Server.Version}}'];
-  if (output(command(prerequisite, 10_000), prerequisite).trim() === '') {
-    throw new Error('Docker daemon version prerequisite returned no version');
-  }
-  const build = [
-    'build',
-    '--label',
-    `${OWNER_LABEL}=${runId}`,
-    '--tag',
-    image,
-    '--file',
-    join(repositoryRoot, 'images/dsh-user/Dockerfile'),
-    '--build-context',
-    `zh-locale=${join(repositoryRoot, 'plugins/zh-locale')}`,
-    '--build-context',
-    `permission-tiers=${join(repositoryRoot, 'plugins/permission-tiers')}`,
-    '--build-context',
-    `office-agents=${join(repositoryRoot, 'plugins/office-agents')}`,
-    '--build-context',
-    `platform-nav=${join(repositoryRoot, 'plugins/platform-nav')}`,
-    // Keep the primary context narrow: no repository-root files or secrets.
-    join(repositoryRoot, 'images/dsh-user'),
-  ];
+  requireDockerDaemon(command);
+  const build = userImageBuildArgs(runId, image);
   const artifact = prepareVerificationImage(
     'user',
     image,
@@ -457,10 +544,21 @@ function runImageLifecycle(
     if (probe === 'web-startup') {
       if (volume === undefined || workVolume === undefined)
         throw new Error('Web volume setup missing');
+      const network = createWebNetwork(
+        command,
+        runId,
+        'web',
+        (name, ownership) => {
+          registerCleanupTarget(targets, runId, { kind: 'network', name, ownership });
+        },
+        extra as Partial<WebStartupBoundary>,
+      );
       const overlay = join(config, 'web.patch.yml');
-      writeFileSync(overlay, '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n', {
-        mode: 0o444,
-      });
+      writeFileSync(
+        overlay,
+        `- id: webserver\n  config:\n    host: ${webAddress(network)}\n    port: 3080\n`,
+        { mode: 0o444 },
+      );
       registerCleanupTarget(targets, runId, { kind: 'container', name: container });
       return runWebStartup(
         command,
@@ -472,6 +570,7 @@ function runImageLifecycle(
           workVolume,
           overlay,
           seccomp: join(repositoryRoot, 'images/seccomp/dsh-user.json'),
+          network,
         },
         extra as Partial<WebStartupBoundary>,
       )

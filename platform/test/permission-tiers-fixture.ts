@@ -25,7 +25,7 @@ writeFileSync('/data/home/cordis.patch.yml',JSON.stringify([
 ]));
 const employee='/data/home/profiles/web/node_modules/@dsh-team/permission-tiers';
 mkdirSync(employee,{recursive:true});
-writeFileSync(employee+'/package.json',JSON.stringify({name:'@dsh-team/permission-tiers',version:'0.1.0',type:'module',main:'index.js',peerDependencies:{'@deepseek-ai/dsh':'0.2.0-rc.2'}}));
+writeFileSync(employee+'/package.json',JSON.stringify({name:'@dsh-team/permission-tiers',version:'0.1.0',type:'module',main:'index.js',engines:{dsh:'>=0.2.1-rc.2 <0.3.0'}}));
 writeFileSync(employee+'/index.js','export function apply() { throw new Error("Employee security implementation was loaded"); }');
 const expected=['danger-full-access','approval','auto-review'];
 async function launch(document,index,invalid=false) {

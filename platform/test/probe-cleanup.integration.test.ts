@@ -128,22 +128,30 @@ function boundBy(seconds: string, calls: readonly (readonly string[])[]): string
   return calls.map((argv) => [seconds, ...argv]);
 }
 
+/**
+ * Host route table seen by `probe_allocate_subnet` through `PROBE_ROUTE_TABLE`: text is written to
+ * an owned file, `null` names a file that does not exist, absent leaves the variable unset.
+ */
 function runCase(
   script: string,
   dockerSeconds: string,
   replies: readonly DockerReply[],
+  routeTable?: string | null,
 ): CaseResult {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-team-probe-cleanup-'));
   try {
     const dockerLog = join(directory, 'docker.log');
     const timeoutLog = join(directory, 'timeout.log');
     const timeoutViolations = join(directory, 'timeout-violations.log');
+    const routeFile = join(directory, 'route');
     // Controlled external executables on PATH, not mocks of the probe functions under test.
     writeFileSync(join(directory, 'docker'), dockerStub(replies), { mode: 0o700 });
     writeFileSync(join(directory, 'timeout'), TIMEOUT_STUB, { mode: 0o700 });
+    if (typeof routeTable === 'string') writeFileSync(routeFile, routeTable, { mode: 0o600 });
     const result = spawnSync('bash', ['-c', script], {
       cwd: directory,
       env: {
+        ...(routeTable === undefined ? {} : { PROBE_ROUTE_TABLE: routeFile }),
         PATH: `${directory}:${process.env.PATH ?? ''}`,
         TMPDIR: directory,
         STUB_DOCKER_LOG: dockerLog,
@@ -517,5 +525,182 @@ describe('sandbox wait_for_container', { timeout: CASE_TIMEOUT_MS }, () => {
       ...boundBy('30', [inspectId, inspectRunning]),
     ]);
     expect(result.timeoutViolations).toBe('');
+  });
+});
+
+const NETWORK_RM_N = ['network', 'rm', 'n'];
+const NETWORK_INSPECT_N = ['network', 'inspect', '--format', '{{.Id}}', 'n'];
+
+describe('lifecycle probe_remove_network', { timeout: CASE_TIMEOUT_MS }, () => {
+  it('accepts a successful network removal without any inspect', () => {
+    const result = runCase(lifecycleScript('probe_remove_network n'), LIFECYCLE_DOCKER_SECONDS, [
+      { argv: NETWORK_RM_N, status: 0, stdout: 'n\n' },
+    ]);
+
+    expect(result.cleanupFailed).toBe('0');
+    expect(result.calls).toEqual([NETWORK_RM_N]);
+    expect(result.bounded).toEqual(boundBy('5', [NETWORK_RM_N]));
+    expect(result.timeoutViolations).toBe('');
+  });
+
+  it('releases a failed removal only after an inspect reports that exact network absent', () => {
+    const result = runCase(lifecycleScript('probe_remove_network n'), LIFECYCLE_DOCKER_SECONDS, [
+      {
+        argv: NETWORK_RM_N,
+        status: 1,
+        stderr: 'Error response from daemon: network n not found\n',
+      },
+      {
+        argv: NETWORK_INSPECT_N,
+        status: 1,
+        stdout: '[]\n',
+        stderr: 'Error response from daemon: network n not found\n',
+      },
+    ]);
+
+    expect(result.cleanupFailed).toBe('0');
+    expect(result.calls).toEqual([NETWORK_RM_N, NETWORK_INSPECT_N]);
+    expect(result.stderr).not.toContain('cleanup failed');
+  });
+
+  it('records a failure when the network still exists after a failed removal', () => {
+    const result = runCase(lifecycleScript('probe_remove_network n'), LIFECYCLE_DOCKER_SECONDS, [
+      {
+        argv: NETWORK_RM_N,
+        status: 1,
+        stderr: 'Error response from daemon: has active endpoints\n',
+      },
+      { argv: NETWORK_INSPECT_N, status: 0, stdout: `${'e'.repeat(64)}\n` },
+    ]);
+
+    expect(result.cleanupFailed).toBe('1');
+    expect(result.stderr).toContain('probe-test: cleanup failed: docker network rm n');
+  });
+});
+
+describe('lifecycle fixed-address helpers', { timeout: CASE_TIMEOUT_MS }, () => {
+  const networks = ['network', 'ls', '--quiet', '--no-trunc'];
+  const subnets = [
+    'network',
+    'inspect',
+    '--format',
+    '{{range .IPAM.Config}}{{println .Subnet}}{{end}}',
+    'a1',
+    'b2',
+  ];
+
+  // giap-vps `/proc/net/route` (2026-10-31): a local proxy tun `Meta` owns 198.18.0.0/30 and the
+  // default bridge 172.17.0.0/16; the default route is skipped.
+  const ROUTE_HEADER =
+    'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n';
+  const DOCKER0_ROUTE = 'docker0\t000011AC\t00000000\t0001\t0\t0\t0\t0000FFFF\t0\t0\t0\n';
+  const GIAP_ROUTES =
+    ROUTE_HEADER +
+    'eth0\t00000000\t0101A8C0\t0003\t0\t0\t0\t00000000\t0\t0\t0\n' +
+    'Meta\t000012C6\t00000000\t0001\t0\t0\t0\tFCFFFFFF\t0\t0\t0\n' +
+    DOCKER0_ROUTE;
+  const allocate = lifecycleScript(
+    'if allocation="$(probe_allocate_subnet)"; then printf "allocation=%s\\n" "$allocation"; ' +
+      'else printf "allocation-status=%s\\n" "$?"; fi',
+  );
+
+  it('chooses the first free /28 of the test pool through the orchestrator allocator', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '198.18.0.0/28\nfd00::/64\n\n172.17.0.0/16\n' },
+      ],
+      ROUTE_HEADER + DOCKER0_ROUTE,
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('allocation=198.18.0.16/28 198.18.0.18\n');
+    expect(result.bounded).toEqual(boundBy('5', [networks, subnets]));
+  });
+
+  it('excludes host kernel routes, so the giap-vps proxy tun pushes allocation past both sources', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '198.18.0.16/28\n172.17.0.0/16\n' },
+      ],
+      GIAP_ROUTES,
+    );
+
+    // Docker IPAM alone leaves 198.18.0.0/28 free; only the host route table excludes it.
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('allocation=198.18.0.32/28 198.18.0.34\n');
+  });
+
+  it('fails the probe when the host route table is missing', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '172.17.0.0/16\n' },
+      ],
+      null,
+    );
+
+    expect(result.stdout).toMatch(/^allocation-status=[1-9]\d*$/m);
+    expect(result.stdout).not.toContain('allocation=');
+    expect(result.stderr).toContain('probe-test: host route table unreadable or malformed');
+  });
+
+  it('fails the probe on a malformed host route row instead of dropping it', () => {
+    const result = runCase(
+      allocate,
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: networks, status: 0, stdout: 'a1\nb2\n' },
+        { argv: subnets, status: 0, stdout: '172.17.0.0/16\n' },
+      ],
+      ROUTE_HEADER + 'Meta\t000012C6\t00000000\t0001\t0\t0\t0\tFCFFFFF\t0\t0\t0\n',
+    );
+
+    expect(result.stdout).toMatch(/^allocation-status=[1-9]\d*$/m);
+    expect(result.stdout).not.toContain('allocation=');
+    expect(result.stderr).toContain('probe-test: host route table unreadable or malformed');
+  });
+
+  const running = ['inspect', '-f', '{{.State.Running}}', 'c'];
+  const logs = ['logs', 'c'];
+  const token = 'A'.repeat(43);
+
+  it('reads the launch token only from the line naming the container base+2 address', () => {
+    const result = runCase(
+      lifecycleScript('printf "token=%s\\n" "$(probe_wait_launch_token c 1 198.18.0.18)"'),
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: running, status: 0, stdout: 'true\n' },
+        {
+          argv: logs,
+          status: 0,
+          stdout: `dsh web: http://127.0.0.1:3080/?token=${'B'.repeat(43)}\ndsh web: http://198.18.0.18:3080/?token=${token}\n`,
+        },
+      ],
+    );
+
+    expect(result.stdout).toContain(`token=${token}\n`);
+  });
+
+  it('never accepts a launch line naming another address', () => {
+    const result = runCase(
+      lifecycleScript('probe_wait_launch_token c 1 198.18.0.18 || printf "rejected\\n"'),
+      LIFECYCLE_DOCKER_SECONDS,
+      [
+        { argv: running, status: 0, stdout: 'true\n' },
+        { argv: logs, status: 0, stdout: `dsh web: http://127.0.0.1:3080/?token=${token}\n` },
+      ],
+    );
+
+    expect(result.stdout).toContain('rejected\n');
+    expect(result.stdout).not.toContain(token);
+    expect(result.stderr).toContain('no launch-token line within 1s');
   });
 });

@@ -29,6 +29,7 @@ const COLLISION_BYTES = 'preexisting-temp-sentinel\n';
 
 const INPUT: ManagedConfigInput = {
   admin: false,
+  instanceAddress: '172.30.0.2',
   modelSettings: {
     baseURL: 'http://127.0.0.1:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',

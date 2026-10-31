@@ -3,8 +3,13 @@ import { randomUUID, createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { collectComposition, execScript, qualifyHostSession } from './managed-policy-fixture.ts';
-import { runWebStartup, execWebScript } from './web-startup-fixture.ts';
+import {
+  collectComposition,
+  execScript,
+  lifecycleWebNetwork,
+  qualifyHostSession,
+} from './managed-policy-fixture.ts';
+import { runWebStartup, execWebScript, webAddress } from './web-startup-fixture.ts';
 import { generateManagedConfig, writeManagedConfig } from '../src/managed-config/index.ts';
 import {
   mappedFlags,
@@ -41,7 +46,6 @@ const TEXT = 'issue83 browser owned write\n审批必须先于真实工具写入�
 const BASE64 = Buffer.from(TEXT).toString('base64');
 const HOST = 'dsh-team-managed.invalid'; // qualifyHostSession's actual mapped host contract
 const MS = 30000;
-const CHILD_PANEL = '[data-approval-key][aria-label="子任务审批"]';
 const PARENT_ASKED = 'a continuable child approval may not surface in its parent';
 
 const waitStatus = (control, ready, label) =>
@@ -134,16 +138,16 @@ async function commitRootTier(context, label, step) {
   assert(committed(facts), 'root tier committed before the follow-up');
 }
 
+/** Returns the child's native descriptor mode; the delegation flow branches on it, not the suite. */
 async function selectChild(context, call, action, nonce, label, expected = {}) {
-  const { browser, control, roots, report, evidenceDirectory, suite, continuable } = context;
+  const { browser, control, roots, report, evidenceDirectory, suite, parentAsked } = context;
   const facts = control({ op: 'status' });
   const child = facts.children.find((row) => row.sessionId === call.sessionId);
   assert(child, 'real native child must have been observed');
-  // Recorded at agent/created: a one-shot delegation fails here, not on a later wait.
-  if (continuable) {
-    assert.equal(child.mode, 'continuable', 'native descriptor must declare a continuable child');
-    assert.equal(child.source, 'startup');
-  }
+  // Recorded at agent/created from the native descriptor (#393: 0.2.1 children are continuable).
+  const continuable = child.mode === 'continuable';
+  assert(continuable || (child.mode === 'one-shot' && suite.mode === 'observed'), 'native mode');
+  assert.equal(child.source, 'startup');
   assert.equal(child.origin, 'subagent');
   assert.equal(child.parentSessionId, roots[0].sessionId);
   assert.equal(child.tier, expected.tier ?? 'approval');
@@ -177,37 +181,37 @@ async function selectChild(context, call, action, nonce, label, expected = {}) {
     join(evidenceDirectory, `${label}-parent-waiting.png`),
   );
   await openChild(context, call, `${suite.title} child ${action} ${nonce}`);
-  if (!continuable) return;
+  if (!continuable) return child.mode;
   const modes = report.addresses
     .filter((row) => row.kind === 'subagent' && row.childSessionId === call.sessionId)
     .map((row) => row.mode);
   assert(modes.length && modes.every((mode) => mode === 'continuable'), 'continuable address');
-  // The background call result can trail agent/created; wait rather than assert.
+  // The immediate activation result can trail agent/created; wait rather than assert.
   await waitStatus(
     control,
     (facts) =>
       facts.results.some(
         (row) =>
           row.callId === parentCall.callId &&
-          row.kind === 'continuable' &&
+          row.kind === 'activation' &&
           row.subagentId === call.sessionId,
       ),
     `${label}-continuable-delegation-result`,
   );
   const idle = await waitRootIdle(context, `${label}-parent-idle`);
-  assertNeverAsked(idle, roots[0].sessionId, PARENT_ASKED);
+  assert.equal(askedCount(idle, roots[0].sessionId), parentAsked, PARENT_ASKED);
+  return child.mode;
 }
 
-/** No approval request or native question ever reached this Session. */
-function assertNeverAsked(facts, sessionId, message) {
-  assert(
-    !facts.approvals.some((row) => row.sessionId === sessionId) &&
-      !facts.audit.some(
-        (event) => event.sessionId === sessionId && event.type === 'approval/asked',
-      ),
-    message,
-  );
-}
+/**
+ * Approval rows plus approval/asked events on a Session. Both arrays are append-only, so an
+ * unchanged count against a scenario baseline means nothing was asked in that window; earlier
+ * scenarios' root approvals (STAGE1) lie below the baseline.
+ */
+const askedCount = (facts, sessionId) =>
+  facts.approvals.filter((row) => row.sessionId === sessionId).length +
+  facts.audit.filter((event) => event.sessionId === sessionId && event.type === 'approval/asked')
+    .length;
 
 async function sendTurn(context, text, nonce, label) {
   const { browser, control, suite } = context;
@@ -306,7 +310,8 @@ async function observeUnattended(context, call, label) {
   const dispatch = final.dispatch.filter((row) => row.callId === call.callId);
   assert.equal(dispatch.length, 1);
   assert.equal(final.results.find((row) => row.callId === call.callId).isError, false);
-  assertNeverAsked(final, call.sessionId, 'no native question under this tier');
+  // Unattended scenarios are delegated: this fresh child Session carries only this call.
+  assert.equal(askedCount(final, call.sessionId), 0, 'no native question under this tier');
   assert.equal(
     await evaluate(browser.page, `document.querySelectorAll(${JSON.stringify(PANEL)}).length`),
     0,
@@ -322,7 +327,8 @@ const rootDispatch = (facts, root) =>
   facts.dispatch.filter((row) => row.sessionId === root.sessionId).length;
 const rootBaseline = (control, root) => {
   const facts = control({ op: 'status' });
-  return { turns: rootTurns(facts, root), dispatch: rootDispatch(facts, root) };
+  const counts = { turns: rootTurns(facts, root), dispatch: rootDispatch(facts, root) };
+  return { ...counts, asked: askedCount(facts, root.sessionId) };
 };
 
 /** Child Activation release wakes the root once (subagent-settled), without tools. */
@@ -338,7 +344,7 @@ async function settleContinuable(context, call, expected, label) {
   );
   assert.equal(rootTurns(final, roots[0]), expected.turns, 'exactly one settled wake-up turn');
   assert.equal(rootDispatch(final, roots[0]), expected.dispatch, 'wake-up turn runs no tool');
-  assertNeverAsked(final, roots[0].sessionId, PARENT_ASKED);
+  assert.equal(askedCount(final, roots[0].sessionId), context.parentAsked, PARENT_ASKED);
   return final;
 }
 
@@ -392,20 +398,27 @@ async function resumeChild(context, call, nonce, label) {
   return { call: resumed, children: rows, audit: answered.audit, file: answered.file, final };
 }
 
-async function runApprovalScenario(context, scenario) {
-  const { browser, control, roots, report, evidenceDirectory, persist, continuable } = context;
+async function runApprovalScenario(suiteContext, scenario) {
+  const { browser, control, roots, report, evidenceDirectory, persist, suite } = suiteContext;
   const { scope, action, tier } = scenario;
   const nonce = randomUUID();
-  const label = continuable ? `continuable-${scenario.name}` : `${scope}-${action}`;
-  if (scope === 'delegate' || action !== 'reject') await openRoot(context);
+  const named = suite.mode === 'continuable';
+  const label = named ? `continuable-${scenario.name}` : `${scope}-${action}`;
+  if (scope === 'delegate' || action !== 'reject') await openRoot(suiteContext);
   await waitComposer(browser.page, MS);
   if (tier) {
     await selectTier(browser.page, tier, join(evidenceDirectory, `${label}-tier.png`), report);
-    await commitRootTier(context, tier, label);
+    await commitRootTier(suiteContext, tier, label);
   }
-  const baseline = continuable ? rootBaseline(control, roots[0]) : null;
-  const call = await sendTurn(context, `${scope} ${action} ${nonce}`, nonce, label);
-  if (scope === 'delegate') await selectChild(context, call, action, nonce, label, scenario.child);
+  const baseline = rootBaseline(control, roots[0]);
+  const scoped = { ...suiteContext, parentAsked: baseline.asked };
+  const call = await sendTurn(suiteContext, `${scope} ${action} ${nonce}`, nonce, label);
+  let mode = null;
+  if (scope === 'delegate')
+    mode = await selectChild(scoped, call, action, nonce, label, scenario.child);
+  // Root calls have no child; a delegated child's flow follows its observed descriptor mode.
+  const continuable = mode === 'continuable';
+  const context = { ...scoped, delegated: mode !== null, continuable };
   const settled = scenario.unattended
     ? await observeUnattended(context, call, label)
     : await answerApproval(context, call, action, label);
@@ -427,7 +440,8 @@ async function runApprovalScenario(context, scenario) {
   report.scenarios.push({
     scope,
     action,
-    ...(continuable ? { name: scenario.name, tier: tier ?? '人工批准', resumed } : {}),
+    mode,
+    ...(named ? { name: scenario.name, tier: tier ?? '人工批准', resumed } : {}),
     call,
     audit: settled.audit,
     file: settled.file,
@@ -512,7 +526,8 @@ export async function runPermissionBrowserScenario(
     lifecycle.registerContainer(name);
     const startup = JSON.parse(await runWebStartup(lifecycle.command, web));
     report.startup = startup;
-    const { origin, cookie } = await qualifyHostSession(startup.hostPort, command(['logs', name]));
+    const [logs, announced] = [command(['logs', name]), startup.announcedHost];
+    const { origin, cookie } = await qualifyHostSession(startup.hostPort, logs, announced);
     const rpc = async (method, args) => {
       const result = await mappedRpc(origin, cookie, method, args);
       assert.equal(result.ok, true, `oracle-rpc-${method.replaceAll('/', '-')}`);
@@ -549,17 +564,7 @@ export async function runPermissionBrowserScenario(
       evidenceDirectory,
       suite.title,
     );
-    const context = {
-      browser,
-      control,
-      rpc,
-      roots,
-      report,
-      evidenceDirectory,
-      persist,
-      suite,
-      continuable: mode === 'continuable',
-    };
+    const context = { browser, control, rpc, roots, report, evidenceDirectory, persist, suite };
     for (const scenario of suite.scenarios) await runApprovalScenario(context, scenario);
     assert.equal(browser.errors.length, 0, 'zero new console errors');
     report.consoleErrors = [...browser.errors];
@@ -604,12 +609,14 @@ async function prepareWeb(lifecycle, name, report, overlayUser) {
   execScript(
     lifecycle,
     `${name}-install`,
-    `import {writeFileSync,readFileSync,statSync} from 'node:fs'; import {createRequire} from 'node:module'; const require=createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json'); const versions=Object.fromEntries(['dsh','dsh-agent','dsh-llm','dsh-session','dsh-user-approval','dsh-subagent'].map(name=>[name,JSON.parse(readFileSync(require.resolve('@deepseek-ai/'+name+'/package.json'),'utf8')).version])); for(const version of Object.values(versions))if(version!=='0.2.0-rc.2')throw new Error('Pinned release mismatch'); const paths=['/opt','/opt/dsh-team','/opt/dsh-team/permission-tiers',${JSON.stringify(PLUGIN)}]; for(const path of paths){const stat=statSync(path);if(stat.uid!==0||(stat.mode&0o022)!==0)throw new Error('Immutable plugin ownership mismatch');} writeFileSync('/data/home/issue83-ui-owned-protocol.mjs',${JSON.stringify(providerSource)},{mode:0o400}); process.stdout.write(JSON.stringify({versions,pluginPath:${JSON.stringify(PLUGIN)},rootOwned:true}));`,
+    `import {writeFileSync,readFileSync,statSync} from 'node:fs'; import {createRequire} from 'node:module'; const require=createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json'); const versions=Object.fromEntries(['dsh','dsh-agent','dsh-llm','dsh-session','dsh-user-approval','dsh-subagent'].map(name=>[name,JSON.parse(readFileSync(require.resolve('@deepseek-ai/'+name+'/package.json'),'utf8')).version])); for(const version of Object.values(versions))if(version!=='0.2.1-rc.2')throw new Error('Pinned release mismatch'); const paths=['/opt','/opt/dsh-team','/opt/dsh-team/permission-tiers',${JSON.stringify(PLUGIN)}]; for(const path of paths){const stat=statSync(path);if(stat.uid!==0||(stat.mode&0o022)!==0)throw new Error('Immutable plugin ownership mismatch');} writeFileSync('/data/home/issue83-ui-owned-protocol.mjs',${JSON.stringify(providerSource)},{mode:0o400}); process.stdout.write(JSON.stringify({versions,pluginPath:${JSON.stringify(PLUGIN)},rootOwned:true}));`,
   );
   const composition = await collectComposition(lifecycle, `${name}-composition`);
+  const network = lifecycleWebNetwork(lifecycle, 'ui');
   const generated = generateManagedConfig({
     ...composition,
     admin: false,
+    instanceAddress: webAddress(network),
     defaultPermissionTier: 'approval',
     modelSettings: {
       baseURL: 'http://127.0.0.1:9/v1',
@@ -656,6 +663,7 @@ async function prepareWeb(lifecycle, name, report, overlayUser) {
     workVolume: lifecycle.workVolume,
     overlay,
     seccomp: lifecycle.seccomp,
+    network,
     trustedHost: HOST,
     env: { ISSUE83_UI_NONSECRET: 'owned-not-secret', DSH_TELEMETRY_DISABLED: '1' },
   };
@@ -796,17 +804,19 @@ async function observePendingApproval(context, call, label) {
     'native tool timeline must identify this exact pending write',
   );
   const pending = control({ op: 'status' });
-  if (context.continuable) {
-    // ChildApprovalPanel shares data-approval-key; only the native panel may answer.
+  if (context.delegated) {
+    // No repo approval seat ships since #393: child approvals are answered by the native panel
+    // in the child's own Session, never as a parent request.
+    const owners = pending.approvals.filter((row) => row.callId === call.callId);
+    const parent = owners.some((row) => row.sessionId === context.roots[0].sessionId);
     observeAssertion(
-      'pending-child-panel-absent',
-      await evaluate(
-        browser.page,
-        `document.querySelectorAll(${JSON.stringify(CHILD_PANEL)}).length`,
-      ),
-      0,
-      'continuable approval is answered by the native panel, not the read-only seat',
+      'pending-native-child-panel',
+      owners.length === 1 && owners[0].sessionId === call.sessionId && !parent,
+      true,
+      'child approvals are answered by the native panel',
     );
+    const parentAsked = askedCount(pending, context.roots[0].sessionId);
+    observeAssertion('pending-parent-unasked', parentAsked, context.parentAsked, PARENT_ASKED);
     observeAssertion(
       'pending-child-running',
       pending.sessions.find((row) => row.sessionId === call.sessionId)?.status === 'running',

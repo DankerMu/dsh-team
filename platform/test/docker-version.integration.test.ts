@@ -59,7 +59,7 @@ function dockerFixture(
     | 'reuse-create'
     | 'reuse-start'
     | 'reuse-wait',
-  version = '0.2.0-rc.2\n',
+  version = '0.2.1-rc.2\n',
   absencePrefix: 'Error response from daemon:' | 'Error:' = 'Error response from daemon:',
 ) {
   const images = new Map<string, string>([['dsh-team-test-sentinel:kept', 'sentinel-owner']]);
@@ -201,7 +201,7 @@ describe('invocation-owned Docker version lifecycle', () => {
     runUserImage(
       'version',
       (stdout) => {
-        expect(stdout).toBe('0.2.0-rc.2\n');
+        expect(stdout).toBe('0.2.1-rc.2\n');
       },
       daemon.command,
     );
@@ -231,18 +231,18 @@ describe('invocation-owned Docker version lifecycle', () => {
   );
 
   it('preserves the exact-version assertion failure while removing both owned resources', () => {
-    const daemon = dockerFixture(undefined, '0.2.0-rc.3\n');
+    const daemon = dockerFixture(undefined, '0.2.1-rc.3\n');
 
     const run = () =>
       runUserImage(
         'version',
         (stdout) => {
-          if (stdout !== '0.2.0-rc.2\n') throw new Error(`Version mismatch: ${stdout}`);
+          if (stdout !== '0.2.1-rc.2\n') throw new Error(`Version mismatch: ${stdout}`);
         },
         daemon.command,
       );
 
-    expect(run).toThrow('Version mismatch: 0.2.0-rc.3');
+    expect(run).toThrow('Version mismatch: 0.2.1-rc.3');
     expect([...daemon.images]).toEqual([['dsh-team-test-sentinel:kept', 'sentinel-owner']]);
     expect([...daemon.containers]).toEqual([['dsh-team-test-sentinel', 'sentinel-owner']]);
   });
@@ -259,7 +259,7 @@ describe('invocation-owned Docker version lifecycle', () => {
       runUserImage(
         'version',
         (stdout) => {
-          expect(stdout).toBe('0.2.0-rc.2\n');
+          expect(stdout).toBe('0.2.1-rc.2\n');
         },
         command,
       );
@@ -301,7 +301,7 @@ describe('invocation-owned Docker version lifecycle', () => {
   it.each(['Error response from daemon:', 'Error:'] as const)(
     'accepts explicit absence (%s) after build failed before creating the owned tag',
     (prefix) => {
-      const daemon = dockerFixture('build-before-create', '0.2.0-rc.2\n', prefix);
+      const daemon = dockerFixture('build-before-create', '0.2.1-rc.2\n', prefix);
 
       const run = () =>
         runUserImage(

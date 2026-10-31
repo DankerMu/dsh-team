@@ -9,12 +9,13 @@ import { mappedFlags, mappedRpc } from '../../scripts/probe-mapped-host.mjs';
 import {
   collectComposition,
   execScript,
-  MANAGED_BOOT_ROSTER,
+  lifecycleWebNetwork,
   qualifyHostSession,
   waitObservation,
 } from './managed-policy-fixture.ts';
 import { employeeHomePatch } from './managed-policy-employee-edit.ts';
-import { execWebScript, runWebStartup } from './web-startup-fixture.ts';
+import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
+import { execWebScript, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebContainer } from './web-startup-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { assertModelRefusal, modelRefusalTurn, remoteRecord } from './model-refusal-oracle.ts';
@@ -114,9 +115,11 @@ async function prepareRefusalInstance(
     lifecycle,
     `dsh-team-test-${lifecycle.runId}-refusal-read`,
   );
+  const network = lifecycleWebNetwork(lifecycle, 'refusal');
   const generated = generateManagedConfig({
     ...composition,
     admin: false,
+    instanceAddress: webAddress(network),
     modelSettings: {
       baseURL: managedURL,
       apiKeyEnv: KEY_ENV,
@@ -140,6 +143,7 @@ async function prepareRefusalInstance(
     workVolume: lifecycle.workVolume,
     overlay,
     seccomp: lifecycle.seccomp,
+    network,
     trustedHost: HOST,
     env: { [KEY_ENV]: KEY },
   };
@@ -171,9 +175,9 @@ async function qualifyRefusalInstance(
   const logs = lifecycle.command(['logs', '--tail', '50', name], remaining());
   if (logs.status !== 0 || logs.error !== undefined)
     throw new Error('Model refusal launch unavailable');
-  if (typeof startup.hostPort !== 'number')
+  if (typeof startup.hostPort !== 'number' || typeof startup.announcedHost !== 'string')
     throw new Error('Invalid model refusal host publication');
-  const host = await qualifyHostSession(startup.hostPort, logs.stdout);
+  const host = await qualifyHostSession(startup.hostPort, logs.stdout, startup.announcedHost);
   const catalog = rpcValue(await mappedRpc(host.origin, host.cookie, 'session/modelCatalog', {}));
   const selected = remoteRecord(catalog.default);
   acquired.catalog = { default: selected, providers: catalog.routableProviders };

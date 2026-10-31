@@ -552,7 +552,9 @@ function switchParent(fixture, tier) {
   fixture.state.approval = tier === 'danger-full-access' ? 'never' : 'ask';
 }
 
-describe.each(['one-shot', 'continuable'])('a %s delegated child', (mode) => {
+// DSH 0.2.1 delegates every in-process child as continuable; the host never reads the mode.
+describe('a continuable delegated child', () => {
+  const mode = 'continuable';
   const tiers = ['approval', 'auto-review', 'danger-full-access'];
 
   it.each(tiers)('inherits the parent %s tier once at startup', (tier) => {
@@ -621,7 +623,7 @@ describe.each(['one-shot', 'continuable'])('a %s delegated child', (mode) => {
 
 it('replaces the native delegation guidance for a fresh or resumed delegated child', async () => {
   const fixture = permissionRuntime('auto-review');
-  const delegated = delegatedChild(fixture, 'one-shot');
+  const delegated = delegatedChild(fixture, 'continuable');
 
   delegated.start();
   delegated.resume();

@@ -296,10 +296,12 @@ export async function verifyDeployedCredentialPrivacy(sink?: DeploymentSetupSink
         progress.phase = 'native-credentials';
         const instance = `dsh-team-u-${employee.id}`;
         const launch = await run(['logs', instance]);
-        const token = extractLaunchToken(launch.stdout);
         const native = await platformRead(
-          `${db}try{process.stdout.write(JSON.stringify(db.prepare('SELECT dsh_cookie FROM instances WHERE user_id=?').get(${JSON.stringify(employee.id)})));}finally{db.close();}`,
+          `${db}try{process.stdout.write(JSON.stringify(db.prepare('SELECT dsh_cookie, upstream_host FROM instances WHERE user_id=?').get(${JSON.stringify(employee.id)})));}finally{db.close();}`,
         );
+        // Network mode routes to the bound base+2 bridge address, which DSH also announces.
+        if (typeof native.upstream_host !== 'string') throw new Error('Missing native endpoint');
+        const token = extractLaunchToken(launch.stdout, native.upstream_host);
         if (!token || typeof native.dsh_cookie !== 'string')
           throw new Error('Missing native credential');
         const nativeCookie = native.dsh_cookie;

@@ -103,12 +103,14 @@ async function isolation(lifecycle: UserImageLifecycle): Promise<string> {
       });
     }
     // Positive controls precede every negative: neither a closed port nor a failed probe proves isolation.
+    // DSH 0.2.1 binds only the instance's +2 address, so the container's own loopback never reaches
+    // 3080; 3099 proves loopback itself works.
     expect(
       exec(lifecycle, a.result.containerId, probe, ['127.0.0.1', a.network.ip, `u-${userA}`]),
-    ).toEqual([true, true, true, true, true, true]);
+    ).toEqual([false, true, true, true, true, true]);
     expect(
       exec(lifecycle, b.result.containerId, probe, ['127.0.0.1', b.network.ip, `u-${userB}`]),
-    ).toEqual([true, true, true, true, true, true]);
+    ).toEqual([false, true, true, true, true, true]);
     expect(exec(lifecycle, a.result.containerId, probe, [b.network.ip, `u-${userB}`])).toEqual([
       false,
       false,

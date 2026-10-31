@@ -5,14 +5,38 @@ import { inspect } from 'node:util';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
-import { observeWebEndpoint } from './web-startup-fixture.ts';
-import type { WebStartupBoundary } from './web-startup-fixture.ts';
+import { allocateSubnet, launchTokenPresent } from '../src/orchestrator/index.ts';
+import {
+  createWebNetwork,
+  hostRouteCidrs,
+  observeWebEndpoint,
+  runWebRejection,
+} from './web-startup-fixture.ts';
+import type { WebContainer, WebStartupBoundary } from './web-startup-fixture.ts';
 
-const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN';
+// Shaped like a released 43-character launch token so only the address decides acceptance.
+const privateToken = 'DO_NOT_REPORT_LAUNCH_TOKEN_0000000000000000';
+// A foreign network holds the first /28 of the test pool: allocation must take the next one.
+const foreignSubnet = '198.18.0.0/28';
+const containerAddress = '198.18.0.18';
 const imageId = `sha256:${'b'.repeat(64)}`;
+// giap-vps 2026-10-31: a local proxy tun owns 198.18.0.0/30; padding tabs as the kernel writes them.
+const routeHeader =
+  'Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\t\t';
+const routeRow = (iface: string, destination: string, mask: string) =>
+  `${iface}\t${destination}\t00000000\t0001\t0\t0\t0\t${mask}\t0\t0\t0\t\t\t\t`;
+const hostRouteTable = [
+  routeHeader,
+  'eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\t\t\t\t',
+  routeRow('Meta', '000012C6', 'FCFFFFFF'),
+  routeRow('eth0', '0101A8C0', 'FFFFFFFF'),
+  routeRow('docker0', '000011AC', '0000FFFF'),
+  '',
+].join('\n');
+type ResourceKind = 'image' | 'container' | 'volume' | 'network';
 interface WebDaemon {
   command: DockerCommand;
-  resources: Record<'image' | 'container' | 'volume', Map<string, string>>;
+  resources: Record<ResourceKind, Map<string, string>>;
   boundary: WebStartupBoundary;
   createdContainers: string[];
 }
@@ -23,7 +47,9 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
     image: new Map([['foreign-image', 'foreign-owner']]),
     container: new Map([['foreign-container', 'foreign-owner']]),
     volume: new Map([['foreign-volume', 'foreign-owner']]),
+    network: new Map([['foreign-network', 'foreign-owner']]),
   };
+  const networks = new Map([['foreign-network', { id: 'f'.repeat(64), subnet: foreignSubnet }]]);
   const createdContainers: string[] = [];
   let snapshot: Record<string, unknown> = {};
   let time = 0;
@@ -44,6 +70,18 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       PortBindings: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '' }] },
     };
   }
+  /** The container must join its invocation's network at the allocated /28's base+2. */
+  function ownedFixedNetwork(args: readonly string[], label: string): string {
+    const network = args[args.indexOf('--network') + 1] ?? '';
+    if (
+      resources.network.get(network) !== label ||
+      networks.get(network)?.subnet !== '198.18.0.16/28' ||
+      args[args.indexOf('--ip') + 1] !== containerAddress
+    ) {
+      throw new Error('Web container is not at the owned network +2 address');
+    }
+    return network;
+  }
   function createContainer(args: readonly string[], label: string): DockerCommandResult {
     if (fault === 'container-before-create') {
       return { status: 1, stdout: privateToken, stderr: privateToken };
@@ -63,15 +101,21 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
     if (overlay === undefined) throw new Error('Missing overlay');
     if (
       readFileSync(overlay, 'utf8') !==
-      '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n'
+      `- id: webserver\n  config:\n    host: ${containerAddress}\n    port: 3080\n`
     ) {
       throw new Error('Nonminimal Web overlay');
     }
+    const network = ownedFixedNetwork(args, label);
     snapshot = {
       Image: fault === 'wrong-image' ? 'sha256:wrong' : imageId,
       Config: { Labels: { 'dsh-team.test-run': label } },
       HostConfig: hostConfiguration(args[args.indexOf('--security-opt') + 1]),
       NetworkSettings: {
+        Networks: {
+          [fault === 'foreign-network' ? 'bridge' : network]: {
+            IPAddress: fault === 'wrong-address' ? '198.18.0.19' : containerAddress,
+          },
+        },
         Ports: {
           '3080/tcp': [
             {
@@ -117,6 +161,60 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
     }
     return ok(resources[kind].get(name));
   }
+  function networkOperation(args: readonly string[], label: string): DockerCommandResult {
+    const subcommand = args[1];
+    const target = args.at(-1) ?? '';
+    if (subcommand === 'ls') {
+      const filter = args[args.indexOf('--filter') + 1];
+      const owned = [...resources.network].filter(
+        ([, owner]) => !args.includes('--filter') || filter === `label=dsh-team.test-run=${owner}`,
+      );
+      return ok(owned.map(([name]) => `${networks.get(name)?.id ?? ''}\n`).join(''));
+    }
+    if (subcommand === 'create') {
+      if (fault === 'network-conflict') {
+        return {
+          status: 1,
+          stdout: '',
+          stderr: 'Pool overlaps with other one on this address space',
+        };
+      }
+      const subnet = args[args.indexOf('--subnet') + 1] ?? '';
+      resources.network.set(target, label);
+      networks.set(target, { id: 'e'.repeat(64), subnet });
+      return ok(networks.get(target)?.id);
+    }
+    const name = [...networks].find(([key, { id }]) => key === target || id === target)?.[0];
+    if (subcommand === 'rm') {
+      if (name !== undefined) {
+        resources.network.delete(name);
+        networks.delete(name);
+      }
+      return ok();
+    }
+    if (args.includes('--format')) {
+      const ids = args.slice(args.indexOf('--format') + 2);
+      const subnets = [...networks.values()].filter(({ id }) => ids.includes(id));
+      return ok(subnets.map(({ subnet }) => `${subnet}\n`).join(''));
+    }
+    if (name === undefined) {
+      return {
+        status: 1,
+        stdout: '[]',
+        stderr: `Error response from daemon: network ${target} not found`,
+      };
+    }
+    return ok(
+      JSON.stringify([
+        {
+          Name: name,
+          Id: networks.get(name)?.id,
+          Labels: { 'dsh-team.test-run': resources.network.get(name) },
+          Containers: {},
+        },
+      ]),
+    );
+  }
   function execution(operation: string | undefined): DockerCommandResult {
     if (operation === 'start') {
       if (fault === 'late-start') time = 60_000;
@@ -133,10 +231,10 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       }
       if (fault === 'missing-token') return ok('DSH listening\n');
       if (fault === 'false-token-line')
-        return ok(`not dsh web: http://127.0.0.1:3080/?token=${privateToken}\n`);
-      return ok(
-        `dsh web: http://127.0.0.1:3080/?token=${privateToken} (LAN: http://172.17.0.2:3080/?token=${privateToken})\n`,
-      );
+        return ok(`not dsh web: http://${containerAddress}:3080/?token=${privateToken}\n`);
+      if (fault === 'loopback-token-line')
+        return ok(`dsh web: http://127.0.0.1:3080/?token=${privateToken}\n`);
+      return ok(`dsh web: http://${containerAddress}:3080/?token=${privateToken}\n`);
     }
     if (operation === 'exec') {
       if (fault === 'late-process') time = 60_000;
@@ -184,6 +282,7 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       return ok();
     }
     if (operation === 'create') return createContainer(args, label);
+    if (operation === 'network') return networkOperation(args, label);
     if (operation === 'volume' && subcommand === 'create') {
       return createVolume(args.at(-1) ?? '', label);
     }
@@ -209,6 +308,7 @@ function webDaemon(fault = '', port = 43127): WebDaemon {
       if (fault === 'http-failure') return Promise.reject(new Error(privateToken));
       return Promise.resolve(Object.hasOwn(statuses, fault) ? (statuses[fault] ?? null) : 401);
     },
+    routeTable: () => hostRouteTable,
   };
   return { command, resources, boundary, createdContainers };
 }
@@ -222,7 +322,65 @@ const sentinels = {
   image: [['foreign-image', 'foreign-owner']],
   container: [['foreign-container', 'foreign-owner']],
   volume: [['foreign-volume', 'foreign-owner']],
+  network: [['foreign-network', 'foreign-owner']],
 };
+
+it('converts host kernel IPv4 routes to CIDRs, skipping the header and the default route', () => {
+  expect(hostRouteCidrs(hostRouteTable)).toEqual([
+    '198.18.0.0/30',
+    '192.168.1.1/32',
+    '172.17.0.0/16',
+  ]);
+});
+
+it.each([
+  ['a missing header', routeRow('Meta', '000012C6', 'FCFFFFFF')],
+  ['a short row', `${routeHeader}\nMeta\t000012C6\t00000000\t0001`],
+  ['a non-hex destination', `${routeHeader}\n${routeRow('Meta', '0000Z2C6', 'FCFFFFFF')}`],
+  ['a seven-digit mask', `${routeHeader}\n${routeRow('Meta', '000012C6', 'FFFFFFF')}`],
+  ['a non-contiguous mask', `${routeHeader}\n${routeRow('Meta', '000012C6', 'FF00FFFF')}`],
+])('rejects a route table with %s instead of shrinking the occupied set', (_case, table) => {
+  expect(() => hostRouteCidrs(table)).toThrow('Host route table malformed');
+});
+
+it('allocates the first /28 above a host route that Docker IPAM does not report', () => {
+  const dockerIpam: string[] = [];
+
+  expect(allocateSubnet('198.18.0.0/15', [...dockerIpam, ...hostRouteCidrs(hostRouteTable)])).toBe(
+    '198.18.0.16/28',
+  );
+});
+
+it('excludes host routes as well as Docker IPAM subnets when creating the owned bridge', () => {
+  const created: string[][] = [];
+  const registered: string[] = [];
+  const command: DockerCommand = (args) => {
+    if (args[1] === 'ls') return { status: 0, stdout: 'a'.repeat(64), stderr: '' };
+    if (args[1] === 'inspect') return { status: 0, stdout: '172.17.0.0/16\n', stderr: '' };
+    created.push([...args]);
+    return { status: 0, stdout: '', stderr: '' };
+  };
+
+  const network = createWebNetwork(command, 'run1', 'web', (name) => registered.push(name), {
+    routeTable: () => `${routeHeader}\n${routeRow('Meta', '000012C6', 'E0FFFFFF')}\n`,
+  });
+
+  expect(network).toEqual({ name: 'dsh-team-test-net-run1-web', subnet: '198.18.0.32/28' });
+  expect(registered).toEqual(['dsh-team-test-net-run1-web']);
+  expect(created).toEqual([
+    [
+      'network',
+      'create',
+      '--driver',
+      'bridge',
+      '--subnet',
+      '198.18.0.32/28',
+      '--label',
+      'dsh-team.test-run=run1',
+      'dsh-team-test-net-run1-web',
+    ],
+  ]);
+});
 
 it('accepts live observations immediately before the deadline, reports selected facts and cleans both volumes', async () => {
   const daemon = webDaemon('just-before-deadline');
@@ -240,6 +398,8 @@ it('accepts live observations immediately before the deadline, reports selected 
     httpStatus: 401,
     configuredHost: 'dsh-team.test:3080',
     hostPort: 43127,
+    announcedHost: containerAddress,
+    subnet: '198.18.0.16/28',
     pid: 1,
     parentPid: 0,
     effectiveUid: 1001,
@@ -270,6 +430,7 @@ it('waits for the genuine launch announcement before judging a homepage that ini
       if (time < 500) earlyHttpStatuses.push(status);
       return Promise.resolve(status);
     },
+    routeTable: () => hostRouteTable,
   };
 
   const result = await runUserImage('web-startup', () => undefined, command, boundary);
@@ -291,7 +452,9 @@ function endpointObserver(announcementAt: number, statusAfterAnnouncement = 401)
     return {
       status: 0,
       stdout:
-        time >= announcementAt ? `dsh web: http://127.0.0.1:3080/?token=${privateToken}\n` : '',
+        time >= announcementAt
+          ? `dsh web: http://${containerAddress}:3080/?token=${privateToken}\n`
+          : '',
       stderr: '',
     };
   };
@@ -318,6 +481,7 @@ it('observes an already-started DSH only after its launch announcement, ignoring
     'already-started-dsh',
     () => 43127,
     'dsh-team.test:3080',
+    (logs) => launchTokenPresent(logs, containerAddress),
     fixture.boundary,
   );
 
@@ -335,6 +499,7 @@ it('rejects HTTP200 from an already-started DSH after its genuine launch announc
       'already-started-dsh',
       () => 43127,
       'dsh-team.test:3080',
+      (logs) => launchTokenPresent(logs, containerAddress),
       fixture.boundary,
     ),
   ).rejects.toThrow('Unauthenticated DSH homepage must return 401');
@@ -350,6 +515,7 @@ it('bounds observation of an already-started DSH that never announces readiness 
     'already-started-dsh',
     () => 43127,
     'dsh-team.test:3080',
+    (logs) => launchTokenPresent(logs, containerAddress),
     fixture.boundary,
   ).catch((failure: unknown) => failure);
 
@@ -362,6 +528,7 @@ it('bounds observation of an already-started DSH that never announces readiness 
 it.each([
   ['missing-token', 'deadline'],
   ['false-token-line', 'deadline'],
+  ['loopback-token-line', 'deadline'],
   ['early-exit', 'exited'],
   ['late-start', 'deadline'],
   ['late-http', 'deadline'],
@@ -378,6 +545,9 @@ it.each([
   ['readonly-work', 'mounts'],
   ['writable-overlay', 'mounts'],
   ['public-port', 'loopback'],
+  ['wrong-address', 'network'],
+  ['foreign-network', 'network'],
+  ['network-conflict', 'failed'],
   ['wrong-image', 'ownership'],
   ['unconfined', 'security'],
   ['privileged', 'security'],
@@ -455,9 +625,11 @@ it('uses real host HTTP with configured Host, no credentials and no redirect fol
   const daemon = webDaemon('', address.port);
 
   try {
-    await expect(runUserImage('web-startup', () => undefined, daemon.command)).rejects.toThrow(
-      '401',
-    );
+    await expect(
+      runUserImage('web-startup', () => undefined, daemon.command, {
+        routeTable: () => hostRouteTable,
+      }),
+    ).rejects.toThrow('401');
     expect(requests).toEqual([
       { path: '/', host: 'dsh-team.test:3080', cookie: undefined, authorization: undefined },
     ]);
@@ -485,6 +657,7 @@ it.each(['foreign-volume-label', 'missing-volume-label'])(
     expect(daemon.createdContainers).toEqual([]);
     expect([...daemon.resources.image]).toEqual(sentinels.image);
     expect([...daemon.resources.container]).toEqual(sentinels.container);
+    expect([...daemon.resources.network]).toEqual(sentinels.network);
     expect([...daemon.resources.volume]).toEqual([
       ...sentinels.volume,
       [
@@ -529,6 +702,7 @@ it.each(['stalled', 'disconnected'])(
 
     try {
       const run = runUserImage('web-startup', () => undefined, command, {
+        routeTable: () => hostRouteTable,
         now: () => time,
         pause: (milliseconds) => {
           time += milliseconds;
@@ -550,3 +724,111 @@ it.each(['stalled', 'disconnected'])(
     }
   },
 );
+
+interface RejectionFixture {
+  command: DockerCommand;
+  boundary: WebStartupBoundary;
+  created: (readonly string[])[];
+}
+
+/** Minimal boundary for an overlay DSH must refuse: exit state and logs are the only facts. */
+function rejectionDaemon(exit: { code: number; at: number }, logs: string): RejectionFixture {
+  let time = 0;
+  const created: (readonly string[])[] = [];
+  const ok = (stdout = ''): DockerCommandResult => ({ status: 0, stdout, stderr: '' });
+  const command: DockerCommand = (args) => {
+    const [operation, subcommand] = args;
+    if (operation === 'volume' && subcommand === 'inspect') return ok('rejection-run\n');
+    if (operation === 'create') {
+      created.push(args);
+      return ok('rejected-web');
+    }
+    if (operation === 'start') return ok();
+    if (operation === 'container' && subcommand === 'inspect') {
+      const exited = time >= exit.at;
+      return ok(
+        JSON.stringify({
+          Image: imageId,
+          Config: { Labels: { 'dsh-team.test-run': 'rejection-run' } },
+          State: exited
+            ? { Status: 'exited', Running: false, ExitCode: exit.code }
+            : { Status: 'running', Running: true, ExitCode: 0 },
+        }),
+      );
+    }
+    if (operation === 'logs') return { status: 0, stdout: logs, stderr: privateToken };
+    throw new Error('Unexpected Docker boundary operation');
+  };
+  const boundary: WebStartupBoundary = {
+    now: () => time,
+    pause: (milliseconds) => {
+      time += milliseconds;
+      return Promise.resolve();
+    },
+    httpStatus: () => Promise.reject(new Error('A refused Web overlay is never probed over HTTP')),
+  };
+  return { command, boundary, created };
+}
+
+const rejectedWeb: WebContainer = {
+  container: 'rejected-web',
+  imageId,
+  runId: 'rejection-run',
+  stateVolume: 'dsh-team-test-rejection-state',
+  workVolume: 'dsh-team-test-rejection-work',
+  overlay: '/owned/wildcard.patch.yml',
+  seccomp: '/owned/seccomp.json',
+  network: { name: 'dsh-team-test-net-rejection-run-wildcard', subnet: '198.18.0.16/28' },
+};
+
+it('accepts a refused Web overlay that exits nonzero without announcing a launch URL', async () => {
+  const fixture = rejectionDaemon(
+    { code: 1, at: 750 },
+    'dsh web: startup failed: webserver is not active\n',
+  );
+
+  const summary = await runWebRejection(fixture.command, rejectedWeb, fixture.boundary);
+
+  expect(JSON.parse(summary)).toEqual({
+    exited: true,
+    exitCode: 1,
+    launchLine: false,
+    elapsedMs: 750,
+  });
+  expect(summary).not.toContain(privateToken);
+  expect(fixture.created).toHaveLength(1);
+  const args = fixture.created[0] ?? [];
+  expect(args.slice(args.indexOf('--network'), args.indexOf('--network') + 4)).toEqual([
+    '--network',
+    rejectedWeb.network.name,
+    '--ip',
+    containerAddress,
+  ]);
+});
+
+it.each([
+  [
+    'a launch URL',
+    { code: 1, at: 0 },
+    `dsh web: http://0.0.0.0:3080/?token=${privateToken}\n`,
+    'announced a launch URL',
+  ],
+  ['a clean exit', { code: 0, at: 0 }, '', 'must exit nonzero'],
+  [
+    'a process still running at the deadline',
+    { code: 1, at: Number.POSITIVE_INFINITY },
+    '',
+    'deadline exceeded (60s)',
+  ],
+])('rejects a refused Web overlay observation with %s', async (_name, exit, logs, message) => {
+  const fixture = rejectionDaemon(exit, logs);
+
+  const error: unknown = await runWebRejection(
+    fixture.command,
+    rejectedWeb,
+    fixture.boundary,
+  ).catch((failure: unknown) => failure);
+
+  expect(String(error)).toContain(message);
+  expect(String(error)).not.toContain(privateToken);
+});

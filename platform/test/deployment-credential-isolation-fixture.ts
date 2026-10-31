@@ -85,7 +85,7 @@ try { console.log(JSON.stringify({
     const logs = await lifecycle.commandAsync(['logs', name], 15_000);
     if (logs.status !== 0 || logs.error !== undefined)
       throw new Error('Private launch observation failed');
-    const token = extractLaunchToken(logs.stdout);
+    const token = extractLaunchToken(logs.stdout, endpoint.IPAddress);
     if (token === undefined) throw new Error('Missing actual launch token');
     return { name, host: endpoint.IPAddress, cookie, token, container };
   };

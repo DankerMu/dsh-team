@@ -5,6 +5,7 @@ import type { ManagedConfigInput } from './index.ts';
 
 const INPUT: ManagedConfigInput = {
   admin: false,
+  instanceAddress: '172.30.0.2',
   modelSettings: {
     baseURL: 'http://127.0.0.1:9/v1',
     apiKeyEnv: 'DMXAPI_KEY',
@@ -39,24 +40,40 @@ const INPUT: ManagedConfigInput = {
   ],
 };
 
-const EXPECTED_MODEL_ROWS = [
-  {
+const CREDENTIAL_REALM = { credentials: 'dsh-team-platform' };
+
+const PLATFORM_CREDENTIAL_STORE = {
+  id: 'dsh-team-platform-credentials',
+  name: '@deepseek-ai/dsh-credentials-local',
+  disabled: false,
+  isolate: CREDENTIAL_REALM,
+  config: { path: '/opt/dsh-team/credentials/platform.yaml', dshHome: '/data/home', watch: false },
+};
+
+/** The whole managed provider row, bound to the platform credential realm. */
+function providerRow(apiKeyEnv: string, baseURL: string, models: readonly unknown[]): unknown {
+  return {
     id: 'llm-pi-ai',
+    isolate: CREDENTIAL_REALM,
     config: {
       providers: {
         intranet: {
           displayName: '内网模型',
-          apiKeyEnv: 'DMXAPI_KEY',
+          apiKeyEnv,
           api: 'openai-completions',
-          baseURL: 'http://127.0.0.1:9/v1',
-          models: [
-            { id: 'alpha', name: 'alpha', contextWindow: 500000 },
-            { id: 'beta', name: 'beta' },
-          ],
+          baseURL,
+          models,
         },
       },
     },
-  },
+  };
+}
+
+const EXPECTED_MODEL_ROWS = [
+  providerRow('DMXAPI_KEY', 'http://127.0.0.1:9/v1', [
+    { id: 'alpha', name: 'alpha', contextWindow: 500000 },
+    { id: 'beta', name: 'beta' },
+  ]),
   {
     id: 'agent-default-model',
     config: {
@@ -195,6 +212,122 @@ const EXPECTED_NETWORK_POLICY_ROWS = [
   },
 ];
 
+// 0.2.1-rc.2 rows that differ from 0.2.0-rc.2, verbatim from the released dsh-web-app
+// presets/standard.patch.yml and presets/minimal.patch.yml (ptc/cordis add the same three rows).
+const RELEASE_STANDARD_PRESET = {
+  id: 'preset-standard',
+  name: '@deepseek-ai/dsh-agent-preset',
+  config: {
+    id: 'standard',
+    order: 1,
+    plugins: [
+      { id: 'persona', name: '@deepseek-ai/dsh-persona' },
+      { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
+      { id: 'tool-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
+      { id: 'tool-schedule', name: '@deepseek-ai/dsh-tool-schedule' },
+      {
+        id: 'delegation',
+        name: 'cordis:group',
+        group: true,
+        isolate: { workflowEngine: true },
+        config: [
+          {
+            id: 'tool-subagent',
+            name: '@deepseek-ai/dsh-tool-subagent',
+            config: { provider: 'spawn', toolName: 'subagent', modelSelectionSettings: true },
+          },
+          // Employee edit: the network tool moved into a nested group.
+          { id: 'nested-web', name: '@deepseek-ai/dsh-tool-web' },
+        ],
+      },
+      {
+        id: 'tool-web',
+        name: '@deepseek-ai/dsh-tool-web',
+        config: { fetch: true, searchTimeoutMs: 60000 },
+      },
+      // Employee edit: the network tool under a renamed id.
+      { id: 'web-fetch', name: '@deepseek-ai/dsh-tool-web' },
+      { id: 'present', name: '@deepseek-ai/dsh-tool-present' },
+      { id: 'tool-plugin-manager', name: '@deepseek-ai/dsh-plugin-manager/tools', disabled: true },
+      { id: 'tool-plugin-market', name: '@deepseek-ai/dsh-plugin-market/tools', disabled: true },
+    ],
+  },
+} as const;
+
+const RELEASE_MINIMAL_PRESET = {
+  id: 'preset-minimal',
+  name: '@deepseek-ai/dsh-agent-preset',
+  config: {
+    id: 'minimal',
+    order: 3,
+    plugins: [
+      { id: 'persona', name: '@deepseek-ai/dsh-persona' },
+      {
+        id: 'tool-fs',
+        name: '@deepseek-ai/dsh-tool-fs',
+        config: { read: false, readImage: true, write: false, edit: false },
+      },
+      {
+        id: 'compaction',
+        name: 'cordis:group',
+        group: true,
+        isolate: { compaction: true },
+        config: [
+          { id: 'compaction-basic', name: '@deepseek-ai/dsh-compaction-basic' },
+          { id: 'command-compact', name: '@deepseek-ai/dsh-command-compact' },
+        ],
+      },
+    ],
+  },
+} as const;
+
+type Disposition = 'retained' | 'removed' | 'absent';
+
+/**
+ * Every 0.2.1 row delta (web profile, presets, dsh-base) and its overlay disposition.
+ * Profile and dsh-base rows are never generator input: `retained` means the overlay emits no
+ * row overriding the released one, `absent` means upstream deleted it and the overlay never
+ * re-adds it. Preset rows: `retained` survives unchanged and in order, `removed` is filtered.
+ */
+const RELEASE_ROW_DISPOSITIONS: readonly (readonly [string, string, Disposition])[] = [
+  ['web profile', 'schedule', 'retained'],
+  ['web profile', 'harness-dev-context', 'retained'],
+  ['web profile', 'ui-secret-mask', 'retained'],
+  ['web profile', 'ui-schedule', 'retained'],
+  ['web profile', 'ui-deepseek-model-label-1017', 'retained'],
+  ['web profile', 'tool-ralph', 'absent'],
+  ['dsh-base', 'remote-access', 'retained'],
+  ['dsh-base', 'working-directory', 'retained'],
+  ['dsh-base', 'tool-working-directory', 'retained'],
+  ['dsh-base', 'web-deepseek-api', 'retained'],
+  ['dsh-base', 'skill-badge', 'absent'],
+  ['preset-standard', 'time-context', 'retained'],
+  ['preset-standard', 'tool-schedule', 'retained'],
+  ['preset-standard', 'tool-plugin-market', 'retained'],
+  ['preset-standard', 'tool-web', 'removed'],
+  ['preset-standard', 'nested-web', 'removed'],
+  ['preset-standard', 'web-fetch', 'removed'],
+  ['preset-standard', 'tool-subagent-codex', 'absent'],
+  ['preset-standard', 'tool-subagent-claude-code', 'absent'],
+  ['preset-standard', 'tool-ralph', 'absent'],
+  ['preset-minimal', 'tool-fs', 'retained'],
+  ['preset-minimal', 'compaction', 'retained'],
+];
+
+function pluginIds(plugins: readonly unknown[]): string[] {
+  return plugins.flatMap((plugin) => {
+    ok(typeof plugin === 'object' && plugin !== null && 'id' in plugin);
+    const nested =
+      'group' in plugin &&
+      plugin.group === true &&
+      'config' in plugin &&
+      Array.isArray(plugin.config)
+        ? pluginIds(plugin.config)
+        : [];
+    return [String(plugin.id), ...nested];
+  });
+}
+
 describe('generateManagedConfig', () => {
   it('writes two intranet models with one contextWindow and credential reference only', () => {
     const generated = generateManagedConfig(INPUT);
@@ -205,13 +338,59 @@ describe('generateManagedConfig', () => {
     );
   });
 
-  it('serves the instance web carrier on all interfaces with DSH gzip compression', () => {
-    const generated = generateManagedConfig(INPUT);
-    ok(generated.outcome === 'configured');
+  it.each(['172.30.0.2', '10.1.2.34', '0.0.0.2', '255.255.255.242'])(
+    'binds the instance web carrier only to the supplied fixed address %s with DSH gzip compression',
+    (instanceAddress) => {
+      const generated = generateManagedConfig({ ...INPUT, instanceAddress });
+      ok(generated.outcome === 'configured');
 
-    expect(rowsWithIds(generated.content, ['webserver'])).toEqual([
-      { id: 'webserver', config: { host: '0.0.0.0', port: 3080, compression: 'gzip' } },
-    ]);
+      expect(rowsWithIds(generated.content, ['webserver'])).toEqual([
+        { id: 'webserver', config: { host: instanceAddress, port: 3080, compression: 'gzip' } },
+      ]);
+    },
+  );
+
+  it.each([
+    ['the IPv4 wildcard', '0.0.0.0'],
+    ['the IPv6 wildcard', '::'],
+    ['an IPv6 address', 'fd00::2'],
+    ['a truncated address', '172.30.0'],
+    ['surrounding whitespace', ' 172.30.0.2'],
+    ['a trailing newline', '172.30.0.2\n'],
+    ['a zero-padded octet', '172.030.0.2'],
+    ['a hostname', 'instance.invalid'],
+    ['an empty value', ''],
+    ['a non-+2 address', '172.30.0.5'],
+    ['the gateway of a /28', '172.30.0.1'],
+    ['the platform address of a /28', '172.30.0.3'],
+    ['the +2 of a misaligned block', '172.30.0.10'],
+    ['a non-string', 2886729730],
+    ['an omitted value', undefined],
+  ])(
+    'rejects %s as the instance address even when model settings are incomplete',
+    (_label, instanceAddress) => {
+      const malformed = { ...INPUT, instanceAddress } as unknown as ManagedConfigInput;
+      const unconfigured = {
+        ...malformed,
+        modelSettings: { ...INPUT.modelSettings, baseURL: '' },
+      };
+      for (const input of [malformed, unconfigured]) {
+        expect(() => generateManagedConfig(input)).toThrow(TypeError);
+        expect(() => generateManagedConfig(input)).toThrow(
+          'Managed overlay instance address must be the fixed container address of an aligned /28',
+        );
+      }
+    },
+  );
+
+  it('generates byte-identical overlays for identical input', () => {
+    const first = generateManagedConfig(INPUT);
+    const second = generateManagedConfig(structuredClone(INPUT));
+    ok(first.outcome === 'configured' && second.outcome === 'configured');
+
+    expect(Buffer.from(second.content, 'utf8').equals(Buffer.from(first.content, 'utf8'))).toBe(
+      true,
+    );
   });
 
   it('keeps quote newline YAML-looking model scalars as JSON data without extra secret fields', () => {
@@ -240,23 +419,10 @@ describe('generateManagedConfig', () => {
     expect(input).toEqual(snapshot);
     expect(text.includes('sk-not-a-credential')).toBe(false);
     expect(rowsWithIds(JSON.stringify(overlay), ['llm-pi-ai', 'agent-default-model'])).toEqual([
-      {
-        id: 'llm-pi-ai',
-        config: {
-          providers: {
-            intranet: {
-              displayName: '内网模型',
-              apiKeyEnv: 'DMXAPI_KEY',
-              api: 'openai-completions',
-              baseURL: 'http://127.0.0.1:9/v1?q="x"\\y',
-              models: [
-                { id: quoted, name: quoted, contextWindow: 500000 },
-                { id: 'beta', name: 'beta' },
-              ],
-            },
-          },
-        },
-      },
+      providerRow('DMXAPI_KEY', 'http://127.0.0.1:9/v1?q="x"\\y', [
+        { id: quoted, name: quoted, contextWindow: 500000 },
+        { id: 'beta', name: 'beta' },
+      ]),
       { id: 'agent-default-model', config: { provider: 'intranet', model: quoted } },
     ]);
   });
@@ -461,23 +627,10 @@ describe('generateManagedConfig', () => {
     ok(generated.outcome === 'configured');
 
     expect(rowsWithIds(generated.content, ['llm-pi-ai', 'agent-default-model'])).toEqual([
-      {
-        id: 'llm-pi-ai',
-        config: {
-          providers: {
-            intranet: {
-              displayName: '内网模型',
-              apiKeyEnv: ' DMXAPI_KEY ',
-              api: 'openai-completions',
-              baseURL: ' http://127.0.0.1:9/v1 ',
-              models: [
-                { id: 'alpha', name: 'alpha', contextWindow: 500000 },
-                { id: 'beta', name: 'beta' },
-              ],
-            },
-          },
-        },
-      },
+      providerRow(' DMXAPI_KEY ', ' http://127.0.0.1:9/v1 ', [
+        { id: 'alpha', name: 'alpha', contextWindow: 500000 },
+        { id: 'beta', name: 'beta' },
+      ]),
       { id: 'agent-default-model', config: { provider: 'intranet', model: ' beta ' } },
     ]);
   });
@@ -504,12 +657,50 @@ describe('generateManagedConfig', () => {
               disabled: false,
               config: { admin },
             },
+            PLATFORM_CREDENTIAL_STORE,
           ],
         },
         { id: 'agent-loop', disabled: false, inject: ['managedPermissions'] },
       ]);
     },
   );
+
+  it('resolves the managed provider only from the read-only platform credential store realm', () => {
+    const generated = generateManagedConfig(INPUT);
+    ok(generated.outcome === 'configured');
+    const rows: unknown = JSON.parse(generated.content);
+    ok(Array.isArray(rows));
+    const entries = rows.flatMap((row: unknown): unknown[] =>
+      typeof row === 'object' && row !== null && 'insert' in row && Array.isArray(row.insert)
+        ? row.insert
+        : [row],
+    );
+    // Every row joining a credentials realm: exactly the provider and the platform store.
+    const realms = entries.flatMap((row: unknown) => {
+      ok(typeof row === 'object' && row !== null && 'id' in row);
+      return 'isolate' in row ? [[row.id, row.isolate]] : [];
+    });
+    const store = entries.find(
+      (row: unknown) =>
+        typeof row === 'object' &&
+        row !== null &&
+        'id' in row &&
+        row.id === 'dsh-team-platform-credentials',
+    );
+
+    expect(realms).toEqual([
+      ['llm-pi-ai', { credentials: 'dsh-team-platform' }],
+      ['dsh-team-platform-credentials', { credentials: 'dsh-team-platform' }],
+    ]);
+    // The store file never exists: its image directory is root 0555, so the realm falls back to
+    // the platform-injected process environment and never needs a watcher.
+    ok(typeof store === 'object' && store !== null && 'config' in store);
+    expect(store.config).toEqual({
+      path: '/opt/dsh-team/credentials/platform.yaml',
+      dshHome: '/data/home',
+      watch: false,
+    });
+  });
 
   it('differs between roles only in the platform entry flag', () => {
     const employee = generateManagedConfig({ ...INPUT, admin: false });
@@ -563,5 +754,91 @@ describe('generateManagedConfig', () => {
       () => generateManagedConfig({ ...INPUT, presets }),
       (error: unknown) => error === compositionError,
     );
+  });
+
+  describe('disposes every 0.2.1 row delta', () => {
+    const generated = generateManagedConfig({
+      ...INPUT,
+      presets: [RELEASE_STANDARD_PRESET, RELEASE_MINIMAL_PRESET],
+    });
+    ok(generated.outcome === 'configured');
+    const rows: unknown = JSON.parse(generated.content);
+    ok(Array.isArray(rows));
+    const overlayIds = pluginIds(
+      rows.flatMap((row: unknown): unknown[] =>
+        typeof row === 'object' && row !== null && 'insert' in row && Array.isArray(row.insert)
+          ? row.insert
+          : [row],
+      ),
+    );
+    const presetIds = new Map(
+      rowsWithIds(generated.content, ['preset-standard', 'preset-minimal']).map((row) => {
+        ok(typeof row === 'object' && row !== null && 'id' in row && 'config' in row);
+        const config = row.config;
+        ok(typeof config === 'object' && config !== null && 'plugins' in config);
+        ok(Array.isArray(config.plugins));
+        return [String(row.id), pluginIds(config.plugins)];
+      }),
+    );
+
+    it.each(RELEASE_ROW_DISPOSITIONS)('%s row %s is %s', (scope, id, disposition) => {
+      const present = scope.startsWith('preset-')
+        ? (presetIds.get(scope) ?? []).includes(id)
+        : overlayIds.includes(id);
+
+      expect(present).toBe(disposition === 'retained' && scope.startsWith('preset-'));
+    });
+
+    it('keeps the retained preset rows verbatim and in their released order', () => {
+      expect(rowsWithIds(generated.content, ['preset-standard', 'preset-minimal'])).toEqual([
+        {
+          ...RELEASE_STANDARD_PRESET,
+          config: {
+            ...RELEASE_STANDARD_PRESET.config,
+            plugins: [
+              { id: 'persona', name: '@deepseek-ai/dsh-persona' },
+              { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
+              { id: 'tool-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
+              { id: 'tool-schedule', name: '@deepseek-ai/dsh-tool-schedule' },
+              {
+                id: 'delegation',
+                name: 'cordis:group',
+                group: true,
+                isolate: { workflowEngine: true },
+                config: [
+                  {
+                    id: 'tool-subagent',
+                    name: '@deepseek-ai/dsh-tool-subagent',
+                    config: {
+                      provider: 'spawn',
+                      toolName: 'subagent',
+                      modelSelectionSettings: true,
+                    },
+                  },
+                ],
+              },
+              { id: 'present', name: '@deepseek-ai/dsh-tool-present' },
+              {
+                id: 'tool-plugin-manager',
+                name: '@deepseek-ai/dsh-plugin-manager/tools',
+                disabled: true,
+              },
+              {
+                id: 'tool-plugin-market',
+                name: '@deepseek-ai/dsh-plugin-market/tools',
+                disabled: true,
+              },
+            ],
+          },
+        },
+        RELEASE_MINIMAL_PRESET,
+      ]);
+    });
+
+    it('still disables the profile-level network tool row that web-deepseek-api serves', () => {
+      expect(rowsWithIds(generated.content, ['tool-web'])).toEqual([
+        { id: 'tool-web', disabled: true },
+      ]);
+    });
   });
 });

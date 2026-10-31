@@ -4,7 +4,6 @@
     ".": {
       "entry": [
         "scripts/*.mjs",
-        "plugins/office-agents/index.js",
         "plugins/office-agents/docx-construction.js",
         "plugins/office-agents/*.test.js",
         "plugins/permission-tiers/index.js",
@@ -39,10 +38,6 @@
       "project": ["src/**/*.{ts,tsx}", "test/**/*.{ts,tsx}"]
     }
   },
-  "ignoreDependencies": [
-    "@deepseek-ai/dsh-agent-preset-registry",
-    "@deepseek-ai/dsh-llm",
-    "@deepseek-ai/dsh-session-checkpoint-policy"
-  ],
+  "ignoreDependencies": ["@deepseek-ai/dsh-llm", "@deepseek-ai/dsh-session-checkpoint-policy"],
   "ignoreBinaries": ["hurl", "shellcheck", "systemd-run", "flock", "busctl", "openssl"]
 }

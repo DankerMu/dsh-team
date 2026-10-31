@@ -291,6 +291,8 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 
 做不到就停下来报告，不降级处理。
 
+**2026-10-30 核实与决定（#393）**：0.2.1-rc.2 的凭据解析顺序写死为 `.credentials.yaml` → 进程环境 → `.env`（`dsh-credentials-local/lib/index.js:480-497`），没有配置项能让环境来源优先，所以「显式绑定环境变量来源」没有纯配置写法。用户拍板采用隔离凭据存储（C1）：覆盖层给 `llm-pi-ai` 行加 `isolate: { credentials: dsh-team-platform }`，并插入第二个 `@deepseek-ai/dsh-credentials-local` 行到同一隔离标签，其 `path` 指向镜像里 root 所有、不存在且 uid1001 不可创建的 `/opt/dsh-team/credentials/platform.yaml`（目录 0555：可遍历，因为缺文件时 provider 会定位到最近的现存父目录），`watch: false`。pi-ai 在该 realm 解析 `apiKeyEnv` 时文件无值，落到平台注入的进程环境变量；员工的 `.credentials.yaml` 与设置页只影响全局存储。4.5 的 Docker 用例证明的只是这一点（绑定前红、绑定后绿）。残余风险仅文档化（AGENTS.md），没有用例覆盖：任何能写补丁行的层（含员工可写的 `$DSH_HOME/cordis.patch.yml`）写同一 isolate 标签即加入该 realm；替代写法 `cordis:group` + `isolate: { credentials: true }`（按条目隔离，标签不可加入）需要把 `llm-pi-ai` 换 id 重插，UI 影响未核实，另立 follow-up issue 评估；平台变量缺失时回落到 `.env`（平台总是注入，缺失则实例本就不启动）；设置页仍描述全局存储的凭据状态；pi-ai OAuth 登录在该存储不可写时失败（本项目不用）。
+
 ### 12. 安装入口与插件目录（B6、B7、B8、Q25）
 
 **撤回 #375**
