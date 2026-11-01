@@ -33,11 +33,19 @@ export type MappedHostAcceptInput = {
   readonly observeSessions?: boolean;
   /** Composition only: prove the sidebar platform links for this role, then follow one. */
   readonly platformNav?: 'employee' | 'admin';
-  /** Composition only: prove the plugin page has its install entries; switch office-agents off and on. */
-  readonly pluginPage?: boolean;
+  /** Composition only: prove the plugin page cards and install entries; round-trip one switch. */
+  readonly pluginPage?: MappedHostPluginPageOptions;
 };
 
-/** The office-agents bundle switch as read back from the card list after a reload. */
+/** The plugin page's expected catalog cards and the bundle whose switch round-trips. */
+export type MappedHostPluginPageOptions = {
+  /** Every catalog package and whether its card is selected (running) or disabled. */
+  readonly expected: readonly { readonly package: string; readonly enabled: boolean }[];
+  /** Switch away from the expected state and back, unless `leaveEnabled` is the away state. */
+  readonly roundTrip: { readonly package: string; readonly leaveEnabled: boolean };
+};
+
+/** The round-trip bundle switch as read back from the card list after a reload. */
 export type MappedHostPluginSwitch = {
   readonly checked: boolean;
   readonly status: string;
@@ -82,8 +90,14 @@ export type MappedHostAcceptResult = {
       readonly disabled: boolean;
       readonly title: string | null;
     };
-    readonly off: MappedHostPluginSwitch;
-    readonly on: MappedHostPluginSwitch;
+    /** Present for each state the round trip switched to. */
+    readonly off?: MappedHostPluginSwitch;
+    readonly on?: MappedHostPluginSwitch;
+    readonly cards: readonly {
+      readonly package: string;
+      readonly status: string;
+      readonly checked: boolean;
+    }[];
     readonly screenshots: readonly { readonly screenshot: string; readonly bytes: number }[];
   };
   readonly platformNav?: {

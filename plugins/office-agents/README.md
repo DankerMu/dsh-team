@@ -52,11 +52,14 @@ asks it to verify the real file after that settlement and not to claim
 completion before receiving it.
 
 The image copies `package.json`, `docx-construction.js`, `cordis.patch.yml`
-and `skills/official-writing/SKILL.md` into
-`$DSH_HOME/profiles/web/node_modules/@dsh-team/office-agents/`, registers the
-bundle after the released base/Web bundles, and then snapshots the complete
-profile tree into `/opt/dsh-team/profile-seed/`. Package directories are created
-before file-mode `0644` copies so uid1001 retains traversal. The manifest
+and `skills/official-writing/SKILL.md` into the canonical root-owned, mode `0444`
+copy `/opt/dsh-team/office-agents/`. `catalog-check.mjs register` then copies it to
+`$DSH_HOME/profiles/web/node_modules/@dsh-team/office-agents/` (uid1001, files
+`0644`, directories `0755`), records `file:/opt/dsh-team/office-agents` in the
+profile `dependencies` and selects the bundle after the released base/Web bundles,
+because its catalog image default is enabled; the image then snapshots the complete
+profile tree into `/opt/dsh-team/profile-seed/`. DSH loads the bundle from that
+employee-writable registration copy, and the plugin page shows its switch. The manifest
 declares `engines.dsh` (`>=0.2.1-rc.2 <0.3.0`) and no DSH peer; the build fails
 unless the installed DSH satisfies that range under DSH's own `semver` with
 prereleases included, and fails if `dsh --profile web --dump-default-config`
@@ -189,8 +192,8 @@ receipts and inconsistent receipt fields reject without successful metadata.
 This proves an observable construction operation, not independent authorship.
 Parent facts/drafts and later parent edits are permitted; boundary bytes are
 checked against the construction receipt, while final delivery is inspected
-separately without requiring final-hash equality. The employee-writable plugin
-is not a tamper-proof attestation, and directory descriptors are not a claim
+separately without requiring final-hash equality. The employee-writable profile
+registration copy that DSH loads is not a tamper-proof attestation, and directory descriptors are not a claim
 against arbitrary concurrent relocation of workspace directories.
 
 Unit contract tests live in `docx-construction.test.js`; real native scope,

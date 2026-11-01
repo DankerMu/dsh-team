@@ -11,9 +11,15 @@
   "engines": {
     "dsh": ">=0.2.1-rc.2 <0.3.0"
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "files": [
     "index.js",
     "review.js",
+    "cordis.patch.yml",
     "README.md"
   ]
 }
