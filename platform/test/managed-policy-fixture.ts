@@ -47,6 +47,7 @@ import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee
 import { createProfileRecorder, PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
 import type { ProfileRecorder } from './managed-policy-profile.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
+import { loaderExpression, proveBundleRead } from './managed-policy-bundle-read.ts';
 
 const USER_ID = 'managedpol01';
 const MANAGED_ADDRESS = 'http://127.0.0.1:9/v1';
@@ -419,12 +420,6 @@ function inertReadLimit(composition: ManagedComposition, id: string): unknown {
   return config.readLimit;
 }
 
-function loaderExpression(value: unknown): string | undefined {
-  if (typeof value !== 'object' || value === null || !('__jsExpr' in value)) return undefined;
-  const expr = value.__jsExpr;
-  return typeof expr === 'string' ? expr : undefined;
-}
-
 async function bindWorkWorkspace(
   origin: string,
   cookie: string,
@@ -613,6 +608,11 @@ async function prepareState(
   }
   const composition = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-read`);
   if (!sameSet(adapterPresetIds(composition), SHIPPED_PRESET_IDS)) throw new Error(INVALID);
+  await proveBundleRead(
+    lifecycle,
+    (name, script) => execScript(lifecycle, name, script),
+    `dsh-team-test-${lifecycle.runId}`,
+  );
   const network = lifecycleWebNetwork(lifecycle, 'start');
   const overlay = await publishOverlay(
     lifecycle.overlayDirectory,
