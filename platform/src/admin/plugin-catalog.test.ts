@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
@@ -34,6 +35,11 @@ const INVALID = {
     'Allowed states: employee | forced-on | forced-off; required entries must be forced-on',
 };
 const SENTINEL = 'PLUGIN_CATALOG_INPUT_SENTINEL';
+const INTERNAL_ERROR = {
+  statusCode: 500,
+  error: 'Internal Server Error',
+  message: 'Internal Server Error',
+};
 const ENTRIES = [
   {
     id: 'office-agents',
@@ -157,7 +163,7 @@ it.each([
   ['a missing entry', { entries: submission('employee').slice(1) }],
   [
     'a duplicate id',
-    { entries: submission('employee', [{ id: 'office-agents', state: 'employee' }]) },
+    { entries: submission('employee').with(1, { id: 'office-agents', state: 'forced-on' }) },
   ],
   [
     'an extra unknown entry',
@@ -198,6 +204,45 @@ it.each([
       expect((response.body + lines.join('')).includes(SENTINEL)).toBe(false);
       expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
       expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(before);
+    });
+  },
+);
+
+it.each(['audit', 'write', 'corrupt-json', 'corrupt-type'] as const)(
+  'returns a safe storage failure and keeps settings and audits for %s',
+  async (boundary) => {
+    await withApp(async (app, database, lines) => {
+      const { cookie } = await administrator(app, database);
+      const secret = randomBytes(32).toString('hex');
+      if (boundary === 'audit' || boundary === 'write') {
+        database.exec(
+          `CREATE TRIGGER reject_catalog_save BEFORE INSERT ON ${boundary === 'audit' ? 'audit_events' : 'settings'} BEGIN SELECT RAISE(ABORT, '${secret}'); END;`,
+        );
+      } else {
+        database
+          .prepare("UPDATE settings SET value = ? WHERE key = 'pluginCatalog'")
+          .run(boundary === 'corrupt-json' ? `{${secret}` : '{"office-agents":"maybe"}');
+      }
+      const settings = settingsRows(database);
+      const before = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
+
+      const response = await save(app, cookie, { entries: submission('forced-on') });
+      const read = await app.inject({ url: PATH, headers: { cookie } });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toEqual(INTERNAL_ERROR);
+      if (boundary === 'audit' || boundary === 'write') {
+        expect(settings).toEqual(SEEDED_SETTINGS);
+        expect(read.statusCode).toBe(200);
+        expect(read.json()).toEqual({ entries: ENTRIES });
+      } else {
+        expect(read.statusCode).toBe(500);
+        expect(read.json()).toEqual(INTERNAL_ERROR);
+      }
+      expect(settingsRows(database)).toEqual(settings);
+      expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(before);
+      for (const value of [secret, 'SQLITE', 'no such table', 'reject_catalog_save'])
+        expect((response.body + read.body + lines.join('')).includes(value)).toBe(false);
     });
   },
 );

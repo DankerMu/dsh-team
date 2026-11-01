@@ -13,6 +13,9 @@ import {
 
 const PATH = '/_platform/api/admin/plugin-catalog';
 const SENTINEL = 'PLUGIN_CATALOG_TCP_SENTINEL';
+const INVALID =
+  'Invalid plugin catalog; provide exactly { entries: [{ id, state }] } covering every catalog entry once. ' +
+  'Allowed states: employee | forced-on | forced-off; required entries must be forced-on';
 const REQUIRED = ['permission-tiers', 'platform-nav', 'zh-locale'];
 const submission = (office: string, required = 'forced-on') => ({
   entries: [
@@ -87,17 +90,27 @@ it('roundtrips a logged-in administrator save over TCP on the version-5 ledger a
     ).toEqual([{ actor_email: user.email, details: '{}' }]);
 
     const before = snapshot(database);
-    const rejected = await fetch(`${base}${PATH}`, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(submission(SENTINEL, 'forced-off')),
-    });
-    const error = await rejected.text();
+    for (const body of [submission('employee', 'forced-off'), submission(SENTINEL)]) {
+      const rejected = await fetch(`${base}${PATH}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify(body),
+      });
+      const error = await rejected.text();
 
-    expect(rejected.status).toBe(400);
-    expect(JSON.parse(error)).toMatchObject({ statusCode: 400, error: 'Bad Request' });
-    expect((error + lines.join('')).includes(SENTINEL)).toBe(false);
-    expect(snapshot(database)).toEqual(before);
+      expect(rejected.status).toBe(400);
+      expect(JSON.parse(error)).toEqual({
+        statusCode: 400,
+        error: 'Bad Request',
+        message: INVALID,
+      });
+      expect((error + lines.join('')).includes(SENTINEL)).toBe(false);
+      expect(snapshot(database)).toEqual(before);
+    }
+    expect(before.settings).toContainEqual({
+      key: 'pluginCatalog',
+      value: '{"office-agents":"forced-on"}',
+    });
   });
 });
 
