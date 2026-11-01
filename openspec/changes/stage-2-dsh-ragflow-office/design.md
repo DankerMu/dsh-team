@@ -329,11 +329,21 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - 知识库插件的启用状态完全服从三态，覆盖层只另给它平台地址。
 - ONLYOFFICE：本次启动 Office 不可用（自带未配置、Document Server 容器缺失或身份不符、published-loopback）时，无论目录状态都写为停用，后台目录页显示原因；Office 可用时服从三态。
 
+**强制状态的覆盖层机制（11.4，#407）**
+
+- DSH 0.2.1 里 bundle 的「启用」是员工 profile 清单 `dsh.profile.bundles` 的成员资格，覆盖层写不了它；覆盖层能写的是行级 `disabled` 和 `insert`（cordis-plugin-include 的 patch 只有覆盖、停用、插入三种操作，没有删除；目标 id 不存在时告警跳过，dsh-app-boot `lib/index.js:61-104`）。所以生成器按每个可管理项的规范 patch（`/opt/dsh-team/<id>/cordis.patch.yml`，由组成读取器在实例内用 `loadOverlayPatches` 读出、`!!js` 原样保留）写行：
+  - `forced-on`：bundle 的 insert 行都在观测组成里时，对每个 insert 条目 id 写 `{ id, disabled: false }`；都不在（员工取消勾选）时按原顺序写出规范 patch 全部行，预设条目经同一条联网工具规则过滤；部分在部分不在是无效组成，启动失败。
+  - `forced-off`：不论 insert 行在不在，对每个 insert 条目 id 写 `{ id, disabled: true }`，这些预设不再整行写出，并把规范 patch 的覆盖行还原——目前只支持 `agent-preset-registry`，写回 DSH 发行默认 `default: standard`（dsh-web-app `cordis.patch.yml:586-589`），否则预设注册表对已停用的默认预设抛 `agent-preset/not-found`、新建 Session 失败；其他目标的覆盖行让生成器拒绝。不看在场与否，是因为 DSH 运行中重组时也追加 `--patch` 覆盖层（dsh-app-boot `lib/index.js:1127-1132`）：员工在插件页勾选启动时缺席的 forced-off bundle 时，这些行立即生效；启动时目标不存在只是告警跳过。forced-on 做不到同样的事：insert 不幂等。
+  - `employee` 不写；必启项的激活仍是现有的 `platform-nav`/`managed-permissions` 插入行与 locale 行，状态不是 `forced-on` 时生成器拒绝。
+  - 不选「启动时改写员工清单」：那要写员工 home 卷、复用镜像脚本的登记语义，超出 11.4；员工侧的显示与锁定见下文「员工插件页」。
+- 读取器只读强制态的可管理 id；`employee` 项不读、不校验，所以镜像更新改动 bundle insert id 只影响强制态且未重置 profile 的员工（`managed composition` 阶段失败，管理员重置配置即恢复）。
+- 残余：forced-on 下员工运行中重新勾选被覆盖层插入规范行的 bundle 会得到重复 id，直到下次启动；forced-on 且启动时在场的 bundle 被员工运行中取消勾选后预设消失直到下次启动；forced-on 下员工原生卸载 bundle 后登记副本消失，规范行里 `!!js` 的技能目录在实例内解析失败、预设 broken；forced-off 时注册表默认预设被整配置改回 `standard`，员工或第三方层对它的设定失效。这些 11.6 不覆盖，只记录。
+
 **安装源和仓库探测**
 
-- 始终受管：覆盖层总是写出安装源列表（`pluginManager.registries`）和仓库探测开关。
+- 始终受管：覆盖层总是写出安装源列表和仓库探测开关：`plugin-manager` 行 `config: { registry: 第一项, fallbackRegistries: 其余项 }`，`ui-plugin-manager` 行 `config: { registryProbeEnabled }`（两行上游都没有 `config`，整配置替换不丢值）。
 - 设置的初始值等于 DSH 0.2.1 的默认值：默认公共源列表、探测开启（B7，联网部署用默认源）。内网部署由管理员改为内网镜像或关闭探测。
-- 第 2 组过渡期仍写现有的 `registryProbeEnabled:false`；第 11 组切换为「始终写出管理员值，初始为 DSH 默认」。
+- 第 2 组过渡期曾写钉死的 `registryProbeEnabled:false`；11.4（#407）起总是写出管理员值，初始为 DSH 默认。
 
 **联网工具**：开关默认关，经覆盖层下发。
 
@@ -360,7 +370,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - 每个预装项都必须有开关卡片。
 - 为此，镜像的 profile 初始副本里要把这些项登记成 DSH 视为「已安装」的形式。按 0.2.1 的 `listBundles` 核实（dsh-plugin-manager `lib/index.js:1681-1796`、client `lib/client.js:3879,2504`）：卡片只列 profile `package.json` `dependencies` 里的包，且该包必须能从 profile 解析并声明 `dsh.bundle.patch`，否则未选中时没有卡片、不能解析时是 problem 卡片；`enabled` 恰等于 `dsh.profile.bundles` 成员资格。
 - 登记形式（11.2）：每个仓库插件的规范副本在 `/opt/dsh-team/<id>/`（root 只读），profile 初始副本的 `node_modules/<package>/` 是它的完整登记副本（uid1001 可写），`dependencies[<package>] = "file:/opt/dsh-team/<id>"`，`dsh.profile.bundles` 在 DSH 自带两项之后只追加 `imageDefaultEnabled` 为 true 的条目。`platform-nav`、`permission-tiers` 为此声明一个空的 bundle 层：激活仍只属于覆盖层。登记由镜像内 `catalog-check.mjs register` 从目录生成，`verify` 反向检查登记与目录默认值一致。
-- 必启项的「显示为开启且锁定」尚未实现：`enabled` 是员工 profile 清单的状态，覆盖层写不了它；11.2 交付的必启项卡片按目录默认值为未勾选的 `disabled`，机制（客户端装饰或启动时改写清单）由 11.4/11.5 选定。
+- 必启项与强制项的「显示为开启/关闭且锁定」归 #509（11.4b）：覆盖层把强制项的有效状态随 `platform-nav` 行的 `config` 发布，platform-nav 客户端半边据此装饰 DSH 插件页卡片并禁止切换；11.4 只写实际生效状态，11.2 交付的必启项卡片在此之前仍按目录默认值显示为未勾选的 `disabled`。#409（11.6）依赖 #509。
 
 **生效时机**：实例下次启动时（B20）。
 
