@@ -83,6 +83,7 @@ async function proveOfficeRead(run: Run, prefix: string): Promise<void> {
 async function proveMissingRejected(lifecycle: UserImageLifecycle, run: Run, prefix: string) {
   const name = `${prefix}-bundle-missing`;
   let rejection: unknown;
+  // No journaled CLI call may exit nonzero (unsettled); execScript reads the exit via `wait`.
   try {
     await readManagedComposition((script) => Promise.resolve(run(name, script)), [MISSING_ID]);
   } catch (error) {

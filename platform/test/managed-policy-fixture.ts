@@ -197,8 +197,9 @@ export function execScript(
   ) {
     throw new Error(INVALID);
   }
-  docker(lifecycle.command, ['start', '--attach', name], 60_000);
-  const exit = docker(lifecycle.command, ['wait', name]).replace(/\r?\n$/, '');
+  // Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.
+  docker(lifecycle.command, ['start', name]);
+  const exit = docker(lifecycle.command, ['wait', name], 60_000).replace(/\r?\n$/, '');
   const stdout = docker(lifecycle.command, ['logs', name]);
   if (exit !== '0') throw new Error(INVALID);
   return stdout;
