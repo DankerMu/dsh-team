@@ -31,7 +31,7 @@ const MIRROR = 'https://mirror.internal/npm/';
 const audits = (database: DatabaseHandle) =>
   database
     .prepare(
-      "SELECT actor_email, source_address, details FROM audit_events WHERE event_type = 'plugin-sources.updated'",
+      "SELECT actor_email, target_email, source_address, details FROM audit_events WHERE event_type = 'plugin-sources.updated'",
     )
     .all();
 const allAudits = (database: DatabaseHandle) =>
@@ -81,7 +81,7 @@ it('saves both keys as whole values with one actor/source audit and a running-in
     expect(read.json()).toEqual({ pluginRegistries: [MIRROR], registryProbeEnabled: false });
     expect(settingsRows(database)).toEqual(sourceRows([MIRROR], false));
     expect(audits(database)).toEqual([
-      { actor_email: user.email, source_address: SOURCE, details: '{}' },
+      { actor_email: user.email, target_email: null, source_address: SOURCE, details: '{}' },
     ]);
   });
 });
@@ -127,16 +127,25 @@ it('accepts a registry carrying userinfo credentials and never logs or audits th
 });
 
 it.each([
-  ['a non-object body', SENTINEL],
-  ['an array body', [SENTINEL]],
-  ['null', null],
-  ['a missing registryProbeEnabled', { pluginRegistries: [MIRROR] }],
-  ['an extra key', { pluginRegistries: [MIRROR], registryProbeEnabled: true, [SENTINEL]: 1 }],
-  ['non-array registries', { pluginRegistries: SENTINEL, registryProbeEnabled: true }],
-  ['an empty registry list', { pluginRegistries: [], registryProbeEnabled: true }],
-  ['a string probe flag', { pluginRegistries: [MIRROR], registryProbeEnabled: 'true' }],
-  ['a numeric probe flag', { pluginRegistries: [MIRROR], registryProbeEnabled: 1 }],
-  ['a null probe flag', { pluginRegistries: [MIRROR], registryProbeEnabled: null }],
+  // Each label names the patch() rule whose deletion alone turns that case red. Envelope-shape
+  // bodies have no single such rule (object, key-set and boolean rules each reject them), and a
+  // missing registryProbeEnabled turns red only when both the key-set and boolean rules are gone.
+  ['a string body (envelope shape)', SENTINEL],
+  ['an array body (envelope shape)', [SENTINEL]],
+  ['a null body (object rule)', null],
+  ['a missing registryProbeEnabled (key-set and boolean rules)', { pluginRegistries: [MIRROR] }],
+  [
+    'an extra key (key-set rule)',
+    { pluginRegistries: [MIRROR], registryProbeEnabled: true, [SENTINEL]: 1 },
+  ],
+  ['non-array registries (array rule)', { pluginRegistries: SENTINEL, registryProbeEnabled: true }],
+  ['an empty registry list (non-empty rule)', { pluginRegistries: [], registryProbeEnabled: true }],
+  [
+    'a string probe flag (boolean rule)',
+    { pluginRegistries: [MIRROR], registryProbeEnabled: 'true' },
+  ],
+  ['a numeric probe flag (boolean rule)', { pluginRegistries: [MIRROR], registryProbeEnabled: 1 }],
+  ['a null probe flag (boolean rule)', { pluginRegistries: [MIRROR], registryProbeEnabled: null }],
 ])(
   'rejects %s with the fixed message and leaves settings and audits unchanged',
   async (_label, payload) => {

@@ -66,9 +66,9 @@ it('roundtrips a logged-in administrator save over TCP and rolls back single-rul
     expect(await read.json()).toEqual(SAVED);
     expect(
       database
-        .prepare('SELECT actor_email, details FROM audit_events WHERE event_type = ?')
+        .prepare('SELECT actor_email, target_email, details FROM audit_events WHERE event_type = ?')
         .all('plugin-sources.updated'),
-    ).toEqual([{ actor_email: user.email, details: '{}' }]);
+    ).toEqual([{ actor_email: user.email, target_email: null, details: '{}' }]);
 
     const before = snapshot(database);
     for (const [body, message] of [
@@ -99,11 +99,11 @@ it('roundtrips a logged-in administrator save over TCP and rolls back single-rul
 });
 
 it.each([
-  ['revoke', 401],
-  ['demote', 403],
+  ['revoke', { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' }],
+  ['demote', { statusCode: 403, error: 'Forbidden', message: 'Forbidden' }],
 ] as const)(
   'refuses a delayed save after the admitted administrator loses authority (%s)',
-  async (change, status) => {
+  async (change, error) => {
     await withApp(async (app, database) => {
       const send = delayedConfigBody(app, PATH);
       const { user, cookie } = await administrator(app, database);
@@ -114,7 +114,8 @@ it.each([
         loseAdministratorAuthority(database, user.id, change);
       });
 
-      expect(response.status).toBe(status);
+      expect(response.status).toBe(error.statusCode);
+      expect(JSON.parse(response.body)).toEqual(error);
       expect(snapshot(database)).toEqual(before);
       expect(before.settings).toEqual(SEEDED_SETTINGS);
     });
