@@ -10,6 +10,7 @@ import {
   collectComposition,
   execScript,
   lifecycleWebNetwork,
+  migrationOverlayInput,
   qualifyHostSession,
   waitObservation,
 } from './managed-policy-fixture.ts';
@@ -117,7 +118,7 @@ async function prepareRefusalInstance(
   );
   const network = lifecycleWebNetwork(lifecycle, 'refusal');
   const generated = generateManagedConfig({
-    ...composition,
+    ...migrationOverlayInput(composition),
     admin: false,
     instanceAddress: webAddress(network),
     modelSettings: {

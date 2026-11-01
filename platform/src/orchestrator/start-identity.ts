@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { PlatformConfig } from '../config.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { ManagedConfigInput } from '../managed-config/index.ts';
+import type { PluginCatalog } from '../plugin-catalog/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import {
@@ -29,6 +30,7 @@ export interface StartUserContainerInput {
   readonly userId: string;
   readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;
   readonly modelKey?: string | undefined;
+  readonly pluginCatalog: PluginCatalog;
   readonly signal?: AbortSignal;
   readonly onVerifiedAbsent?: (identity: AbsentInstanceIdentity) => void;
 }

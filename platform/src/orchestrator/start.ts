@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { recordAuditEvent } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
+import type { Settings } from '../db/index.ts';
 import {
   generateManagedConfig,
   hasCompleteModelSettings,
@@ -8,6 +9,8 @@ import {
   writeManagedConfig,
 } from '../managed-config/index.ts';
 import type { ManagedComposition } from '../managed-config/index.ts';
+import { catalogStates } from '../plugin-catalog/index.ts';
+import type { PluginCatalog } from '../plugin-catalog/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { ensureUserVolumes } from './volumes.ts';
@@ -52,17 +55,24 @@ const START_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
 
 function composition(
-  client: DockerClient,
-  cleanupClient: DockerClient,
-  userId: string,
-  home: string,
-  imageId: string,
-  seccomp: string,
+  helper: Omit<Parameters<typeof runHomeHelper>[0], 'role'>,
+  bundleIds: readonly string[],
 ): Promise<ManagedComposition> {
-  return runHomeHelper(
-    { client, cleanupClient, userId, home, imageId, seccomp, role: 'managed-composition' },
-    readManagedComposition,
+  return runHomeHelper({ ...helper, role: 'managed-composition' }, (execute) =>
+    readManagedComposition(execute, bundleIds),
   );
+}
+
+/** Overlay catalog inputs; only forced-state manageable bundles are read and validated. */
+function catalogInput(catalog: PluginCatalog, settings: Settings) {
+  const pluginCatalog = catalogStates(catalog, settings);
+  const { webToolsEnabled, pluginRegistries, registryProbeEnabled } = settings;
+  return {
+    bundleIds: pluginCatalog
+      .filter(({ category, state }) => category === 'manageable' && state !== 'employee')
+      .map(({ id }) => id),
+    overlay: { webToolsEnabled, pluginRegistries, registryProbeEnabled, pluginCatalog },
+  };
 }
 
 function validateModelEnvironment(name: string, key: string): void {
@@ -495,7 +505,9 @@ export async function startUserContainer(
     const envName = modelSettings.apiKeyEnv;
     validateModelEnvironment(envName, input.modelKey);
     stage = 'resource limits';
-    const { cpuCores, memoryMiB, defaultPermissionTier } = readSettings(database);
+    const settings = readSettings(database);
+    const { cpuCores, memoryMiB, defaultPermissionTier } = settings;
+    const catalog = catalogInput(input.pluginCatalog, settings);
     const nanoCpus = resourceLimit(cpuCores, 1_000_000_000);
     const memory = resourceLimit(memoryMiB, 1_048_576);
     const deadline = AbortSignal.timeout(START_TIMEOUT_MS);
@@ -548,7 +560,8 @@ export async function startUserContainer(
     stage = 'owned volumes';
     const volumes = await ensureUserVolumes(client, userId);
     stage = 'managed composition';
-    const observed = await composition(client, cleanupClient, userId, volumes.home, image, seccomp);
+    const helper = { client, cleanupClient, userId, home: volumes.home, imageId: image, seccomp };
+    const observed = await composition(helper, catalog.bundleIds);
     stage = 'network allocation';
     const cleanup = cleanupClient;
     network = await allocate(userId, () =>
@@ -570,6 +583,7 @@ export async function startUserContainer(
       instanceAddress: instanceAddressLayout(network.subnet).container,
       defaultPermissionTier,
       modelSettings,
+      ...catalog.overlay,
     });
     // Checked complete above; throwing keeps the created bridge on the rollback path.
     if (generated.outcome === 'unconfigured')

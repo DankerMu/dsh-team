@@ -10,6 +10,7 @@ import {
   writeManagedConfig,
 } from '../src/managed-config/index.ts';
 import type { ManagedComposition } from '../src/managed-config/index.ts';
+import { catalogStates, readPluginCatalog } from '../src/plugin-catalog/index.ts';
 import {
   acceptObservation,
   exchangeLaunchToken,
@@ -46,6 +47,7 @@ import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee
 import { createProfileRecorder, PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
 import type { ProfileRecorder } from './managed-policy-profile.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
+import { loaderExpression, proveBundleRead } from './managed-policy-bundle-read.ts';
 
 const USER_ID = 'managedpol01';
 const MANAGED_ADDRESS = 'http://127.0.0.1:9/v1';
@@ -74,6 +76,19 @@ const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
 
+/** Migration-5 settings: web tools off, DSH default sources, probe on, every manageable entry `employee`. */
+const MIGRATION_OVERLAY_SETTINGS = {
+  webToolsEnabled: false,
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  pluginCatalog: catalogStates(readPluginCatalog(), { pluginCatalog: {} }),
+};
+
+/** Generator input from a collected composition under the migration-5 overlay settings. */
+export function migrationOverlayInput(composition: ManagedComposition) {
+  return { ...composition, ...MIGRATION_OVERLAY_SETTINGS };
+}
+
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: MANAGED_ADDRESS,
   defaultModel: 'beta',
@@ -81,6 +96,7 @@ const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
   presetIds: [...SHIPPED_PRESET_IDS],
+  registryProbeEnabled: MIGRATION_OVERLAY_SETTINGS.registryProbeEnabled,
   retainedTools: RETAINED_TOOLS,
   officeNames: { 'office-general': '综合办公', 'office-writer': '公文与材料写作' },
 };
@@ -181,8 +197,9 @@ export function execScript(
   ) {
     throw new Error(INVALID);
   }
-  docker(lifecycle.command, ['start', '--attach', name], 60_000);
-  const exit = docker(lifecycle.command, ['wait', name]).replace(/\r?\n$/, '');
+  // Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.
+  docker(lifecycle.command, ['start', name]);
+  const exit = docker(lifecycle.command, ['wait', name], 60_000).replace(/\r?\n$/, '');
   const stdout = docker(lifecycle.command, ['logs', name]);
   if (exit !== '0') throw new Error(INVALID);
   return stdout;
@@ -305,8 +322,10 @@ export async function collectComposition(
   name: string,
 ): Promise<ManagedComposition> {
   let sequence = 0;
-  return readManagedComposition((script) =>
-    Promise.resolve(execScript(lifecycle, `${name}-${String(sequence++)}`, script)),
+  // The migration-5 catalog forces no manageable bundle, so none is requested.
+  return readManagedComposition(
+    (script) => Promise.resolve(execScript(lifecycle, `${name}-${String(sequence++)}`, script)),
+    [],
   );
 }
 
@@ -327,7 +346,7 @@ async function publishOverlay(
       defaultModel: 'beta',
     },
     defaultPermissionTier: 'yolo',
-    ...composition,
+    ...migrationOverlayInput(composition),
   });
   if (generated.outcome !== 'configured') {
     throw new Error('Managed policy generation returned no document');
@@ -400,12 +419,6 @@ function inertReadLimit(composition: ManagedComposition, id: string): unknown {
     return undefined;
   }
   return config.readLimit;
-}
-
-function loaderExpression(value: unknown): string | undefined {
-  if (typeof value !== 'object' || value === null || !('__jsExpr' in value)) return undefined;
-  const expr = value.__jsExpr;
-  return typeof expr === 'string' ? expr : undefined;
 }
 
 async function bindWorkWorkspace(
@@ -596,6 +609,11 @@ async function prepareState(
   }
   const composition = await collectComposition(lifecycle, `dsh-team-test-${lifecycle.runId}-read`);
   if (!sameSet(adapterPresetIds(composition), SHIPPED_PRESET_IDS)) throw new Error(INVALID);
+  await proveBundleRead(
+    lifecycle,
+    (name, script) => execScript(lifecycle, name, script),
+    `dsh-team-test-${lifecycle.runId}`,
+  );
   const network = lifecycleWebNetwork(lifecycle, 'start');
   const overlay = await publishOverlay(
     lifecycle.overlayDirectory,

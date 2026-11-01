@@ -4,6 +4,7 @@ import {
   collectComposition,
   execScript,
   lifecycleWebNetwork,
+  migrationOverlayInput,
   qualifyHostSession,
 } from './managed-policy-fixture.ts';
 import {
@@ -68,7 +69,7 @@ async function managedOverlay(lifecycle: UserImageLifecycle, network: WebNetwork
     `dsh-team-test-${lifecycle.runId}-credential-read`,
   );
   const generated = generateManagedConfig({
-    ...composition,
+    ...migrationOverlayInput(composition),
     admin: false,
     instanceAddress: webAddress(network),
     modelSettings: {

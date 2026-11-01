@@ -37,6 +37,7 @@ const EXPECTED: ManagedPolicyRuntimeExpectation = {
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
   presetIds: ['standard', 'minimal', 'custom-office'],
+  registryProbeEnabled: true,
   descriptions: { 'custom-office': 'brief-zh' },
   readLimits: { 'custom-office': 500 },
   retainedTools: {
@@ -64,11 +65,23 @@ const COMPLETE = {
       readLimit: 500,
     },
   ],
-  pluginPage: { registryProbeEnabled: false },
+  pluginPage: { registryProbeEnabled: true },
 };
 
 it('accepts the complete managed observation the rejection cases mutate', () => {
   assertManagedPolicyRuntime(COMPLETE, EXPECTED);
+});
+
+it('rejects a live plugin page probe that differs from the administrator value', () => {
+  expect(() => {
+    assertManagedPolicyRuntime(
+      { ...COMPLETE, pluginPage: { registryProbeEnabled: false } },
+      EXPECTED,
+    );
+  }).toThrow('Invalid managed policy runtime observation');
+  expect(() => {
+    assertManagedPolicyRuntime(COMPLETE, { ...EXPECTED, registryProbeEnabled: false });
+  }).toThrow('Invalid managed policy runtime observation');
 });
 
 it('rejects an incorrect context window even when the custom preset is present', () => {
@@ -137,7 +150,7 @@ it('rejects a no-managed control that only exposes network tools on shipped pres
         readLimit: 500,
       },
     ],
-    pluginPage: { registryProbeEnabled: true },
+    pluginPage: { registryProbeEnabled: false },
   });
   expect(controlExposesEmployeePolicy(observation, 'http://127.0.0.1:8/v1', 'alpha')).toBe(false);
 });

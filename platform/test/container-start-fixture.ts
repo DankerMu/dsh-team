@@ -39,6 +39,7 @@ const COMPOSITION = JSON.stringify({
     },
   ],
   localePatch: [{ id: 'locale', name: '@dsh-team/zh-locale' }],
+  bundles: [],
 });
 
 /** The single `name` secret in an employee container Env, as 64 lowercase hex. */

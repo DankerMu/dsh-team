@@ -52,7 +52,7 @@ docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:lo
 
 记录两个不可变 image ID。用户镜像内 DSH 固定为 `0.2.1-rc.2`，包含中文界面、权限插件、办公预设、侧栏平台入口插件和 python-docx；四个插件以 `engines.dsh` 声明兼容范围，镜像内 DSH 不满足任一范围，或 `dsh --profile web --dump-default-config` 在注册办公 bundle 后报告 `dsh: skipping profile bundle` 时，构建以非零状态失败（该命令不启动 DSH、不接受 `--patch`，不经过启动时打印 `dsh: disabling profile plugin` 的逐行检查，构建期不会出现该前缀；插入行的兼容性由 `engines.dsh` 检查保证）；平台多阶段镜像含编译服务、CLI、前端、迁移和 native SQLite 依赖，不依赖宿主源码挂载。不要省略四个插件 named context。用户镜像和验证浏览器镜像均保留已固定基础镜像的 Debian 官方普通源及安全更新源，不再使用额外的源切换上下文；archive keyring、签名/有效期校验、包列表和构建期限保持不变，获取失败不得自动换源或关闭校验。
 
-插件页保留 DSH 原生的添加、更新、卸载入口，开关和配置卡片照常；受管覆盖层不再去掉 Agent 的插件管理工具，但目前仍关闭插件页的公共仓库探测（`registryProbeEnabled: false`，第 11 组接入后台开关后改为管理员配置）。升级前员工自己安装的 bundle 仍然保留，可以关闭或卸载；管理员重置该员工的 DSH 设置可恢复镜像的 profile 初始副本。员工仍可在终端用 `dsh plugin add` 安装插件，按 D9/F46（2026-10-28 修订）这是允许的行为。
+插件页保留 DSH 原生的添加、更新、卸载入口，开关和配置卡片照常；受管覆盖层不再去掉 Agent 的插件管理工具；插件安装源与插件页的公共仓库探测由管理员配置并经覆盖层下发（后台页面在 #408 之前只有接口 `GET/PUT /_platform/api/admin/plugin-sources`），初始值等于 DSH 默认（公共源 `https://registry.npmjs.org/` 加备用 `https://registry.npmmirror.com/`、探测开启），实例下次启动生效。升级到本版本后覆盖层总是显式写出安装源，员工 profile 里的 `.npmrc` 镜像不再起作用，探测也从钉死关闭变为开启：离线部署升级后应立即通过该接口把安装源改为内网镜像并关闭探测。安装源地址原样写进实例只读挂载的覆盖层并由 DSH 返回给员工插件页，地址里的凭据对每个员工可见，与共享模型密钥相同，建议使用不带凭据的内网镜像。升级前员工自己安装的 bundle 仍然保留，可以关闭或卸载；管理员重置该员工的 DSH 设置可恢复镜像的 profile 初始副本。员工仍可在终端用 `dsh plugin add` 安装插件，按 D9/F46（2026-10-28 修订）这是允许的行为。
 
 **升级说明（本手册其余部分仍只覆盖全新安装）。** 已有员工卷的主机换用 `0.2.1-rc.2` 用户镜像后，每个现有员工的状态卷仍保存阶段 1 的 profile：DSH 0.2.1 会跳过其中的 bundle，受管组合被拒绝，该员工的实例启动失败，直到管理员在实例页面为其执行「重置配置」。这是必须的运维步骤，需对每个现有员工执行；重置只恢复 DSH 设置，文件和对话保留，重置后实例保持停止，下次需显式启动。仍在运行的 `0.2.0` 实例继续运行，直到空闲回收或重启。
 
@@ -60,7 +60,7 @@ docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:lo
 
 生产用户镜像的基础身份以 [`images/dsh-user/Dockerfile`](../images/dsh-user/Dockerfile) 的 `FROM` 为唯一来源：精确 Node24补丁版本、Bookworm-slim标签和不可变多架构 index 摘要同时保留。部署验收仍只覆盖现有 Linux amd64；index 内包含其他架构不代表已验证这些架构。不要退回 major-only 标签，也不要把浏览器或平台镜像的基础引用自动套到用户镜像。
 
-更新必须提交显式审查 PR：从 [Docker Official Image Node](https://hub.docker.com/_/node) 对应精确标签取得 index，核对官方 registry 的 index/platform manifest/config 内容摘要、Linux amd64成员和 `NODE_VERSION`；实际构建后观察 Node版本、Debian Bookworm、默认uid1001及精确DSH版本，并在受信 giap-vps 对最终审查提交运行原始完整 `pnpm test:docker`，保留独立资源清理和其他宿主工作负载未变的证据。不能用只读标签检查或较窄 smoke 替代完整验收。`images/dsh-user/` 每一行变更仍须人工白盒审查；回滚同样通过审查恢复先前引用。
+更新必须提交显式审查 PR：从 [Docker Official Image Node](https://hub.docker.com/_/node) 对应精确标签取得 index，核对官方 registry 的 index/platform manifest/config 内容摘要、Linux amd64成员和 `NODE_VERSION`；实际构建后观察 Node版本、Debian Bookworm、默认uid1001及精确DSH版本，并在受信 giap-vps 对最终审查提交运行原始完整 `pnpm test:docker`，保留独立资源清理和其他宿主工作负载未变的证据。不能用只读标签检查或较窄 smoke 替代完整验收。镜像更新若改变了某个处于强制态（`forced-on`/`forced-off`）的预装 bundle 插入的行 id，未重置配置的员工会在实例启动的 `managed composition` 阶段失败，管理员在后台对该员工执行「重置配置」即可恢复；`images/dsh-user/` 每一行变更仍须人工白盒审查；回滚同样通过审查恢复先前引用。
 
 此摘要只冻结基础层身份，不冻结后续动态 apt/npm 依赖解析，不能据此声称整个镜像逐字节可复现。保留现有 DSH/pnpm pin、Debian源及签名校验、其他构建指令和门禁；其他镜像及历史 `verify/phase0/` 不随本次固定自动修改。
 
