@@ -107,6 +107,20 @@ async function clickSessionTitle(page, title, evidence, expectedAddress) {
     MS,
     'native-selected-session-surface',
   );
+  if (expectedAddress.kind === 'session') {
+    // The next session switch or reload must not retire a sidebar session view whose reference is
+    // still opening: the released client logs that release as a console error. Chat turns render
+    // only after the session open completed.
+    await waitFor(
+      () =>
+        evaluate(
+          page,
+          `Boolean(document.querySelector(${JSON.stringify(`[data-conversation-session="${expectedAddress.sessionId}"] [data-chat-flow] [data-chat-turn]`)}))`,
+        ),
+      MS,
+      'session-open-completed',
+    );
+  }
   await waitFor(
     () =>
       evidence.addresses.some(
