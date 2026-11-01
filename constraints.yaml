@@ -130,7 +130,7 @@ anti_drift:
   duplicate_code_threshold_percent:
     value: 3
     severity: "block"
-    enforced_by: "jscpd (jscpd.json, threshold passed from this file)"
+    enforced_by: "jscpd --config jscpd.json (ts/js/tsx under platform/, *.test.ts/*.test.tsx excluded; threshold passed from this file)"
   dead_code:
     value: true
     severity: "block"

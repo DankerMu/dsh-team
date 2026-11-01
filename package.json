@@ -46,7 +46,7 @@
     "build:web": "pnpm --filter @dsh-team/web build",
     "contract:write": "node platform/scripts/openapi.ts --write",
     "contract:check": "node platform/scripts/openapi.ts --check",
-    "duplicate-code": "jscpd platform --threshold \"$(node scripts/constraints.mjs anti_drift duplicate_code_threshold_percent)\"",
+    "duplicate-code": "jscpd platform --config jscpd.json --threshold \"$(node scripts/constraints.mjs anti_drift duplicate_code_threshold_percent)\"",
     "dead-code": "knip",
     "anti-drift": "pnpm duplicate-code && pnpm dead-code",
     "smoke": "hurl --test --variable base_url=\"http://127.0.0.1:${PLATFORM_PORT:-8080}\" smoke/*.hurl",

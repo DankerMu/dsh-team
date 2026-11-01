@@ -22,18 +22,18 @@ Same logic must have exactly one implementation in the repo. Version evolution b
 
 ### Enforcement
 
-| Rule                         | Enforced by                                                      |
-| ---------------------------- | ---------------------------------------------------------------- |
-| Forbidden suffixes (paths)   | `.git-hooks/check-naming.sh` (pre-commit hook)                   |
-| Forbidden suffixes (code)    | ESLint `@typescript-eslint/naming-convention` in `pnpm lint`     |
-| Duplicate code               | `jscpd` (`jscpd.json`) in `pnpm duplicate-code` — fails above 3% |
-| Dead code and unused exports | `knip` (`knip.json`) in pre-commit and `pnpm dead-code`          |
-| Scratchpad directories       | `.git-hooks/check-naming.sh` (pre-commit hook)                   |
-| Conventional commits         | `commitlint` (`commitlint.config.cjs`) in the commit-msg hook    |
+| Rule                         | Enforced by                                                                                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Forbidden suffixes (paths)   | `.git-hooks/check-naming.sh` (pre-commit hook)                                                                                                                         |
+| Forbidden suffixes (code)    | ESLint `@typescript-eslint/naming-convention` in `pnpm lint`                                                                                                           |
+| Duplicate code               | `jscpd` (`jscpd.json`) in `pnpm duplicate-code` — fails above 3% of ts/js/tsx lines under `platform/`; `*.test.ts`/`*.test.tsx` excluded, test-support modules counted |
+| Dead code and unused exports | `knip` (`knip.json`) in pre-commit and `pnpm dead-code`                                                                                                                |
+| Scratchpad directories       | `.git-hooks/check-naming.sh` (pre-commit hook)                                                                                                                         |
+| Conventional commits         | `commitlint` (`commitlint.config.cjs`) in the commit-msg hook                                                                                                          |
 
 Commented-out code has no machine check; it is listed as `review-only` in the Enforcement Index.
 
-The duplicate-code guardrail self-test sizes its planted copies from the current `platform/` source corpus and the configured percentage, with margin for clone accounting. Repository growth therefore does not silently dilute the canary; the repository duplicate-code command, exclusions and threshold are unchanged.
+The duplicate-code guardrail self-test sizes its planted copies from the ts/js/tsx files under `platform/` that `jscpd.json` does not ignore (never fewer than the gate scans) and the configured percentage, with margin for clone accounting. Repository growth therefore does not silently dilute the canary; the threshold is unchanged.
 
 `pnpm test:guardrails` retains macOS Bash3.2 and Bash5 support through the existing `bash` entrypoint. Literal Node heredocs stay outside command substitution: Bash3.2 can misparse an unmatched apostrophe in their otherwise quoted body. The canary count uses the existing owned temporary root and EXIT cleanup; changing shell grammar must preserve the complete case inventory, corpus-sized rejection and archive-policy probes on both interpreters.
 
@@ -533,34 +533,34 @@ Classify the failing job (`layer1-fast-checks`, `layer2-unit-tests`, `layer3-int
 
 Strictness profile: **L3** (see `constraints.yaml`). Levels: `advice` < `review-only` < `warn` < `block` < `gate`. Anything below `warn` is a human promise, not a machine check.
 
-| Rule / Convention            | Where it lives                                     | Where it's checked                                    | Level       |
-| ---------------------------- | -------------------------------------------------- | ----------------------------------------------------- | ----------- |
-| Lint rules                   | `eslint.config.mjs`                                | `pnpm lint` + pre-commit + CI                         | block       |
-| Formatter                    | `.prettierrc.json`                                 | `pnpm fmt:check` + pre-commit + CI                    | block       |
-| Type strictness              | `tsconfig.json`                                    | `pnpm typecheck` + CI                                 | block       |
-| Coverage, 80% per file       | `vitest.config.ts`                                 | `pnpm test` + CI                                      | block       |
-| File size and complexity     | `constraints.yaml` (size_limits)                   | `pnpm lint` + CI                                      | block       |
-| Duplicate code, 3%           | `jscpd.json`                                       | `pnpm duplicate-code` + CI                            | block       |
-| Dead code                    | `knip.json`                                        | `pnpm dead-code` + pre-commit + CI                    | block       |
-| Module boundaries and cycles | `.dependency-cruiser.cjs`                          | `pnpm lint:deps` + CI                                 | block       |
-| Test pairing (TDD)           | `scripts/check-test-pairing.sh`                    | `pnpm lint:tests` + pre-commit + CI                   | block       |
-| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh`                       | pre-commit hook                                       | block       |
-| Conventional commits         | `commitlint.config.cjs`                            | commit-msg hook                                       | block       |
-| Secrets in commits           | gitleaks                                           | pre-commit + CI                                       | block       |
-| Static security analysis     | Semgrep in `.github/workflows/ci.yml`              | CI                                                    | block       |
-| API contract drift           | `schemas/openapi.json`                             | `pnpm contract:check` + CI                            | block       |
-| Shell scripts                | shellcheck                                         | `pnpm lint:shell` + CI                                | block       |
-| Documented commands exist    | `scripts/check-agents-commands.sh`                 | `pnpm lint:agents` + CI                               | block       |
-| Configuration inventory      | `scripts/check-config.mjs`                         | `pnpm lint:config` via lint/check + CI                | block       |
-| CI event concurrency         | `scripts/check-ci-concurrency.mjs`                 | `pnpm lint:ci` via lint/check + CI; guardrail mutants | block       |
-| PR diff size, 400 lines      | `constraints.yaml` (size_limits.max_pr_diff_lines) | CI                                                    | block       |
-| Lockfile matches manifest    | `.github/workflows/ci.yml`                         | CI                                                    | block       |
-| Gates reject violations      | `scripts/test-guardrails.sh`                       | `pnpm test:guardrails` + CI                           | block       |
-| Branch protection on `main`  | GitHub branch protection                           | server-side                                           | gate        |
-| Critical-path human review   | `## Critical Paths`                                | PR description, reviewer                              | review-only |
-| Commented-out code           | `## Code Canonicality`                             | reviewer                                              | review-only |
-| Agent co-author trailer      | `## Agent Operating Rules`                         | reviewer                                              | review-only |
-| Iteration and evidence rules | `## Agent Operating Rules`                         | reviewer                                              | review-only |
+| Rule / Convention            | Where it lives                                              | Where it's checked                                    | Level       |
+| ---------------------------- | ----------------------------------------------------------- | ----------------------------------------------------- | ----------- |
+| Lint rules                   | `eslint.config.mjs`                                         | `pnpm lint` + pre-commit + CI                         | block       |
+| Formatter                    | `.prettierrc.json`                                          | `pnpm fmt:check` + pre-commit + CI                    | block       |
+| Type strictness              | `tsconfig.json`                                             | `pnpm typecheck` + CI                                 | block       |
+| Coverage, 80% per file       | `vitest.config.ts`                                          | `pnpm test` + CI                                      | block       |
+| File size and complexity     | `constraints.yaml` (size_limits)                            | `pnpm lint` + CI                                      | block       |
+| Duplicate code, 3%           | `jscpd.json` (ts/js/tsx; `*.test.ts`/`*.test.tsx` excluded) | `pnpm duplicate-code` + CI                            | block       |
+| Dead code                    | `knip.json`                                                 | `pnpm dead-code` + pre-commit + CI                    | block       |
+| Module boundaries and cycles | `.dependency-cruiser.cjs`                                   | `pnpm lint:deps` + CI                                 | block       |
+| Test pairing (TDD)           | `scripts/check-test-pairing.sh`                             | `pnpm lint:tests` + pre-commit + CI                   | block       |
+| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh`                                | pre-commit hook                                       | block       |
+| Conventional commits         | `commitlint.config.cjs`                                     | commit-msg hook                                       | block       |
+| Secrets in commits           | gitleaks                                                    | pre-commit + CI                                       | block       |
+| Static security analysis     | Semgrep in `.github/workflows/ci.yml`                       | CI                                                    | block       |
+| API contract drift           | `schemas/openapi.json`                                      | `pnpm contract:check` + CI                            | block       |
+| Shell scripts                | shellcheck                                                  | `pnpm lint:shell` + CI                                | block       |
+| Documented commands exist    | `scripts/check-agents-commands.sh`                          | `pnpm lint:agents` + CI                               | block       |
+| Configuration inventory      | `scripts/check-config.mjs`                                  | `pnpm lint:config` via lint/check + CI                | block       |
+| CI event concurrency         | `scripts/check-ci-concurrency.mjs`                          | `pnpm lint:ci` via lint/check + CI; guardrail mutants | block       |
+| PR diff size, 400 lines      | `constraints.yaml` (size_limits.max_pr_diff_lines)          | CI                                                    | block       |
+| Lockfile matches manifest    | `.github/workflows/ci.yml`                                  | CI                                                    | block       |
+| Gates reject violations      | `scripts/test-guardrails.sh`                                | `pnpm test:guardrails` + CI                           | block       |
+| Branch protection on `main`  | GitHub branch protection                                    | server-side                                           | gate        |
+| Critical-path human review   | `## Critical Paths`                                         | PR description, reviewer                              | review-only |
+| Commented-out code           | `## Code Canonicality`                                      | reviewer                                              | review-only |
+| Agent co-author trailer      | `## Agent Operating Rules`                                  | reviewer                                              | review-only |
+| Iteration and evidence rules | `## Agent Operating Rules`                                  | reviewer                                              | review-only |
 
 `constraints.yaml` is the machine-readable source for every threshold and pattern above; lint, coverage, and hook scripts read it at run time. Change a threshold there, never in a tool config.
 
