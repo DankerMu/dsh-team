@@ -394,10 +394,12 @@ it('covers only the positive client branch', () => {
 EOF
 expect_reject "web coverage (TSX branch below the per-file threshold)" "bare.tsx" pnpm test
 
-# Fixed-size clones are diluted as platform/ grows. Count a conservative source
-# corpus (including tests), then target twice the live percentage. Even counting
+# Fixed-size clones are diluted as platform/ grows. Count a conservative corpus:
+# the ts/js/tsx files under platform/ minus exactly the tests jscpd.json ignores,
+# so it is never smaller than the set the gate scans. jscpd.json's ignore list and
+# this filter change together. Target twice the live percentage: even counting
 # only one copy as duplicated, N / (corpus + 2N) exceeds that target; the gate's
-# own threshold, configuration and clean-tree acceptance remain unchanged.
+# own threshold and clean-tree acceptance remain unchanged.
 # Bash 3.2 misparses literal quotes in heredocs nested inside command substitution.
 # Keep the program intact and let the existing temporary-root trap own its output.
 node --input-type=module >"$tmp/duplicate-lines" <<'NODE' || exit 1
@@ -412,7 +414,7 @@ if (threshold < 0 || target >= 50) {
 }
 const files = execFileSync('git', ['ls-files', '-z', '--', 'platform'], { encoding: 'utf8' })
   .split('\0')
-  .filter((file) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(file));
+  .filter((file) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(file) && !/\.test\.tsx?$/.test(file));
 let corpus = 0;
 for (const file of files) {
   const text = readFileSync(file, 'utf8');
