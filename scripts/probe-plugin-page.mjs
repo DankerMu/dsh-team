@@ -15,6 +15,16 @@ const UNINSTALL_LABEL = ['卸载 ', 'Uninstall '];
 
 const switchSelector = (name) => `button[role="switch"][aria-label="启用 ${name}"]`;
 
+/** Scroll the topmost catalog card to the top of its scroller; a no-op before the cards render. */
+const scrollCardsExpression = (packages) => `(function(){
+  const cards=${JSON.stringify(packages)}
+    .map((name)=>document.querySelector('[data-plugin-package="'+name+'"]'))
+    .filter(Boolean)
+    .sort((a,b)=>a.getBoundingClientRect().top-b.getBoundingClientRect().top);
+  if(cards.length>0)cards[0].scrollIntoView({block:'start'});
+  return cards.length;
+})()`;
+
 /**
  * Panel, toolbar, every catalog card, the round-trip package's detail and switch state; counts of
  * install/uninstall buttons anywhere.
@@ -183,9 +193,15 @@ export const verifyPluginPage = async ({
   };
   const shot = (suffix) =>
     captureSettledScreenshot(page, screenshot.replace(/\.png$/, `-plugin-page-${suffix}.png`));
+  // The catalog group sits below the released built-in sections: bring its cards into the
+  // viewport so every list screenshot shows them (DOM facts above are the gate, not the image).
+  const listShot = async (suffix) => {
+    await evalPage(page, scrollCardsExpression(expected.map((entry) => entry.package)));
+    return shot(suffix);
+  };
   const listed = await openList(page, probe, 'plugin-page-list', ms);
   requireCards(listed, expected);
-  const screenshots = [await shot('list')];
+  const screenshots = [await listShot('list')];
   await clickSelector(page, `[data-plugin-package="${name}"] button[aria-label="查看 ${name}"]`);
   const detail = await settle(page, probe, 'plugin-page-detail', ms, (state) =>
     Boolean(state.detail && switchSettled(state, 'inDetail')),
@@ -193,10 +209,10 @@ export const verifyPluginPage = async ({
   if (detail.uninstall < 1) fail('plugin-page-detail', 'uninstall', detail);
   screenshots.push(await shot('detail'));
   const legs = { [stateName(!initial)]: await leg(page, probe, ms, reload, 'inDetail', !initial) };
-  screenshots.push(await shot(stateName(!initial)));
+  screenshots.push(await listShot(stateName(!initial)));
   if (roundTrip.leaveEnabled === initial) {
     legs[stateName(initial)] = await leg(page, probe, ms, reload, 'inCard', initial);
-    screenshots.push(await shot(stateName(initial)));
+    screenshots.push(await listShot(stateName(initial)));
   }
   if (errors.length) throw new Error(`stage=plugin-page error=console count=${errors.length}`);
   const card = cardOf(listed, name);
