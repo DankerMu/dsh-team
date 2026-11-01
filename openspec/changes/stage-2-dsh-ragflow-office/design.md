@@ -347,6 +347,12 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 
 安装源和仓库探测是一个保存单元，联网工具是另一个保存单元。
 
+**设置键与接口形状（11.3）**
+
+- settings 四键：`pluginCatalog`（`{ [目录 id]: 'employee' | 'forced-on' | 'forced-off' }`，只存可管理项）、`pluginRegistries`（非空 http(s) URL 数组：首项是 `registry`，其余是 `fallbackRegistries`）、`registryProbeEnabled`、`webToolsEnabled`。初始值由迁移 5 写入：`{}`、`["https://registry.npmjs.org/","https://registry.npmmirror.com/"]`、`true`、`false`——后三者即 DSH 0.2.1-rc.2 的默认（`registry` 未设时走 pnpm 自身配置即 npmjs，`fallbackRegistries` 默认 npmmirror，探测默认开）。三组接口共用这一份迁移。
+- 目录文件由平台在构造时读一次（`platform/src/plugin-catalog/`，路径相对模块文件解析，源码树与平台镜像都落在 `images/dsh-user/catalog.json`），缺失或形状不合即启动失败。
+- `GET/PUT /_platform/api/admin/plugin-catalog`：GET 返回目录顺序的 `{ entries: [{ id, package, name, category, imageDefaultEnabled, state }] }`；PUT 提交 `{ entries: [{ id, state }] }`，必须恰好覆盖目录每个 id 一次，必启项只能是 `forced-on`，否则 400 且设置与审计不变；保存只写可管理项到 `pluginCatalog`，审计 `plugin-catalog.updated` 无细节字段。
+
 **员工插件页**
 
 - 每个预装项都必须有开关卡片。
