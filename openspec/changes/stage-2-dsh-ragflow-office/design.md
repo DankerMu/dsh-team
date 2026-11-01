@@ -352,6 +352,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - settings 四键：`pluginCatalog`（`{ [目录 id]: 'employee' | 'forced-on' | 'forced-off' }`，只存可管理项）、`pluginRegistries`（非空 http(s) URL 数组：首项是 `registry`，其余是 `fallbackRegistries`）、`registryProbeEnabled`、`webToolsEnabled`。初始值由迁移 5 写入：`{}`、`["https://registry.npmjs.org/","https://registry.npmmirror.com/"]`、`true`、`false`——后三者即 DSH 0.2.1-rc.2 的默认（`registry` 未设时走 pnpm 自身配置即 npmjs，`fallbackRegistries` 默认 npmmirror，探测默认开）。三组接口共用这一份迁移。
 - 目录文件由平台在构造时读一次（`platform/src/plugin-catalog/`，路径相对模块文件解析，源码树与平台镜像都落在 `images/dsh-user/catalog.json`），缺失或形状不合即启动失败。
 - `GET/PUT /_platform/api/admin/plugin-catalog`：GET 返回目录顺序的 `{ entries: [{ id, package, name, category, imageDefaultEnabled, state }] }`；PUT 提交 `{ entries: [{ id, state }] }`，必须恰好覆盖目录每个 id 一次，必启项只能是 `forced-on`，否则 400 且设置与审计不变；保存只写可管理项到 `pluginCatalog`，审计 `plugin-catalog.updated` 无细节字段。
+- `GET/PUT /_platform/api/admin/plugin-sources`：GET 返回 `{ pluginRegistries: string[], registryProbeEnabled: boolean }`（settings 同名两键的投影）；PUT 提交同形状对象，`pluginRegistries` 非空且每项匹配 DSH 的 `REGISTRY_URL`，`registryProbeEnabled` 严格布尔；信封不合 → 固定 400，某一项不合 → 400 只点名 `pluginRegistries[<下标>]`、不回显该项（地址可能带凭据）；整值替换，审计 `plugin-sources.updated` 无细节字段。点名下标的文案经 `config-route` 既有的 `ClientConfigValidationError` 通道：`patch` 可抛出它，调用移入事务前的 `try`，其余路由不受影响。不去重、不规范化、不限条数，与 DSH 自身一致。
 
 **员工插件页**
 

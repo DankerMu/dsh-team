@@ -1,7 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { CATALOG_STATES, catalogStates } from '../plugin-catalog/index.ts';
 import type { PluginCatalog } from '../plugin-catalog/index.ts';
-import { registerConfigRoute } from './config-route.ts';
+import { isPlainObject, registerConfigRoute } from './config-route.ts';
 import type { AdminConfigOptions } from './config-route.ts';
 
 const STATE_SCHEMA = { type: 'string', enum: CATALOG_STATES } as const;
@@ -45,9 +45,6 @@ const RESPONSE_SCHEMA = {
     },
   },
 } as const;
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** The submitted state per catalog id, or null unless it names every catalog id exactly once. */
 function submittedStates(body: unknown, size: number): Map<unknown, unknown> | null {

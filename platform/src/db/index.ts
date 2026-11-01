@@ -8,5 +8,6 @@ export {
   SettingsValidationError,
   PERMISSION_TIERS,
   CATALOG_STATES,
+  REGISTRY_URL,
 } from './settings.ts';
 export type { CatalogState, Settings } from './settings.ts';
