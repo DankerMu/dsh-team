@@ -35,23 +35,78 @@ const repositoryCatalog = readFileSync(
 );
 const catalogProbe = `
 import { createHash } from 'node:crypto';
-import { readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+const owner = (path) => {
+  const stat = statSync(path);
+  return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 };
+};
+// Every entry below a directory: owner, permission bits and file digest, by relative path.
+const tree = (root, prefix = '') => Object.fromEntries(
+  readdirSync(root + prefix, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))
+    .flatMap((entry) => {
+      const path = prefix + '/' + entry.name;
+      const facts = owner(root + path);
+      if (!entry.isDirectory()) return [[path, { ...facts, sha256: sha256(root + path) }]];
+      return [[path, { ...facts, directory: true }], ...Object.entries(tree(root, path))];
+    }),
+);
 const files = {};
-for (const name of ['catalog.json', 'catalog-check.mjs', 'npm-baseline.json']) {
-  const stat = statSync('/opt/dsh-team/' + name);
-  files[name] = { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 };
-}
+for (const name of ['catalog.json', 'catalog-check.mjs', 'npm-baseline.json'])
+  files[name] = owner('/opt/dsh-team/' + name);
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
+const seed = read('/opt/dsh-team/profile-seed/web/package.json');
 process.stdout.write(JSON.stringify({
   files,
-  catalogSha256: createHash('sha256').update(readFileSync('/opt/dsh-team/catalog.json')).digest('hex'),
+  catalogSha256: sha256('/opt/dsh-team/catalog.json'),
   baseline: read('/opt/dsh-team/npm-baseline.json'),
-  bundles: read('/opt/dsh-team/profile-seed/web/package.json').dsh.profile.bundles,
+  dependencies: seed.dependencies,
+  bundles: seed.dsh.profile.bundles,
+  // The live profile of this fresh volume is Docker's copy-up of the image profile.
+  plugins: Object.fromEntries(read('/opt/dsh-team/catalog.json').entries.map((entry) => [entry.package, {
+    canonical: { directory: owner('/opt/dsh-team/' + entry.id), tree: tree('/opt/dsh-team/' + entry.id) },
+    profile: tree('/data/home/profiles/web/node_modules/' + entry.package),
+  }])),
 }));
 `;
 
+interface TreeFacts {
+  readonly uid: number;
+  readonly gid: number;
+  readonly mode: number;
+  readonly directory?: true;
+  readonly sha256?: string;
+}
+
+/** Canonical /opt copies are root-owned read-only; profile copies are uid1001's identical files. */
+function expectRegisteredCopies(observed: unknown, catalog: { id: string; package: string }[]) {
+  const plugins = observed as Record<
+    string,
+    {
+      canonical: { directory: TreeFacts; tree: Record<string, TreeFacts> };
+      profile: Record<string, TreeFacts>;
+    }
+  >;
+  expect(Object.keys(plugins)).toEqual(catalog.map((entry) => entry.package));
+  for (const { package: name } of catalog) {
+    const copies = plugins[name];
+    if (copies === undefined) throw new Error(`Missing plugin copies: ${name}`);
+    const { canonical, profile } = copies;
+    expect(canonical.directory).toEqual({ uid: 0, gid: 0, mode: 0o555 });
+    for (const facts of Object.values(canonical.tree))
+      expect(facts).toMatchObject({ uid: 0, gid: 0, mode: facts.directory ? 0o555 : 0o444 });
+    const content = (tree: Record<string, TreeFacts>) =>
+      Object.fromEntries(
+        Object.entries(tree).map(([path, facts]) => [path, facts.sha256 ?? 'dir']),
+      );
+    expect(content(profile)).toEqual(content(canonical.tree));
+    for (const facts of Object.values(profile))
+      expect(facts).toMatchObject({ uid: 1001, mode: facts.directory ? 0o755 : 0o644 });
+  }
+}
+
 // The version probe cannot read files, so the catalog delivery of the same build is its own case.
-it('delivers the repository catalog, its gate and the toolchain+DSH baseline root-owned read-only', async () => {
+it('delivers the repository catalog, its gate, the toolchain+DSH baseline and every registered plugin copy', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
@@ -75,13 +130,20 @@ it('delivers the repository catalog, its gate and the toolchain+DSH baseline roo
         globals: ['@deepseek-ai/dsh', 'corepack', 'npm', 'pnpm'],
       });
       // Positive control: release-shipped bundles are registered, absent from the catalog,
-      // and the build still passed its gate.
-      expect(observed.bundles).toEqual(expect.arrayContaining(shipped));
+      // and the build still passed its gate. Only the image-default-enabled office bundle follows.
+      expect(observed.bundles).toEqual([...shipped, '@dsh-team/office-agents']);
       const catalog = JSON.parse(repositoryCatalog.toString('utf8')) as {
-        entries: { package: string }[];
+        entries: { id: string; package: string }[];
       };
       const packages = catalog.entries.map((entry) => entry.package);
       for (const bundle of shipped) expect(packages).not.toContain(bundle);
+      // Every catalog entry is an installed dependency DSH lists on its plugin page.
+      expect(observed.dependencies).toEqual(
+        Object.fromEntries(
+          catalog.entries.map((entry) => [entry.package, `file:/opt/dsh-team/${entry.id}`]),
+        ),
+      );
+      expectRegisteredCopies(observed.plugins, catalog.entries);
     },
     undefined,
     (lifecycle) =>
@@ -186,10 +248,10 @@ import assert from 'node:assert/strict';
 import { opendirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 ${DSH_ENGINES_PRELUDE}
 const root='/opt/dsh-team/platform-nav';
-assert.deepEqual(readdirSync(root).sort(),['client.js','index.js','package.json']);
+assert.deepEqual(readdirSync(root).sort(),['client.js','cordis.patch.yml','index.js','package.json']);
 const directory=statSync(root);
 assert.equal(directory.uid,0); assert.equal(directory.gid,0); assert.equal(directory.mode & 0o777,0o555);
-for(const name of ['client.js','index.js','package.json']) {
+for(const name of ['client.js','cordis.patch.yml','index.js','package.json']) {
   const stat=statSync(root+'/'+name);
   assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o444);
 }
@@ -304,6 +366,16 @@ it('fails the user-image build when a plugin engines.dsh range excludes the inst
   );
 });
 
+/** Insert one Dockerfile line before the single catalog verify step of a primary-context copy. */
+function beforeVerify(directory: string, line: string): void {
+  const path = join(directory, 'Dockerfile');
+  const verify = 'RUN node /opt/dsh-team/catalog-check.mjs verify ';
+  const original = readFileSync(path, 'utf8');
+  if (original.split(verify).length !== 2)
+    throw new Error('Dockerfile copy must contain exactly one catalog verify step');
+  writeFileSync(path, original.replace(verify, `${line}\n${verify}`));
+}
+
 it.each([
   [
     'the catalog omits a preinstalled plugin',
@@ -318,17 +390,27 @@ it.each([
   [
     'a global package is installed outside the catalog',
     (directory: string) => {
-      const path = join(directory, 'Dockerfile');
-      const verify = 'RUN node /opt/dsh-team/catalog-check.mjs verify ';
-      const original = readFileSync(path, 'utf8');
-      if (original.split(verify).length !== 2)
-        throw new Error('Dockerfile copy must contain exactly one catalog verify step');
-      const extra =
+      beforeVerify(
+        directory,
         'RUN mkdir -p /usr/local/lib/node_modules/dsh-team-extra && ' +
-        `printf '{"name":"dsh-team-extra","version":"0.0.0"}' > /usr/local/lib/node_modules/dsh-team-extra/package.json\n`;
-      writeFileSync(path, original.replace(verify, `${extra}${verify}`));
+          `printf '{"name":"dsh-team-extra","version":"0.0.0"}' > /usr/local/lib/node_modules/dsh-team-extra/package.json`,
+      );
     },
     'preinstalled packages not in catalog: dsh-team-extra',
+  ],
+  [
+    'a catalog entry is not registered in the profile',
+    (directory: string) => {
+      // After register, before verify: drop one installed dependency from the profile manifest.
+      beforeVerify(
+        directory,
+        `RUN node -e 'const fs = require("node:fs"); const path = "/data/home/profiles/web/package.json"; ` +
+          `const manifest = JSON.parse(fs.readFileSync(path, "utf8")); ` +
+          `delete manifest.dependencies["@dsh-team/platform-nav"]; ` +
+          `fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\\n");'`,
+      );
+    },
+    'catalog entries not registered: @dsh-team/platform-nav',
   ],
 ])('fails the user-image build when %s', (_name, primary, expected) => {
   if (platform() !== 'linux' || arch() !== 'x64') {

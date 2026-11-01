@@ -31,7 +31,9 @@ docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "platform-nav=$(pwd)/plugins/platform-nav" images/dsh-user
 ```
 
-The image copies `package.json`, `index.js` and `client.js` to root-owned mode `0444` files in the mode `0555` directory `/opt/dsh-team/platform-nav/`, outside the employee-writable `/data/home`, and fails the build unless the installed DSH satisfies the package's `engines.dsh` range under DSH's own `semver` (prereleases included); the manifest declares no `@deepseek-ai/dsh` peer. The absolute overlay row resolves the adjacent manifest, whose `dsh.client.platform: "web"`, `./client` export and `@deepseek-ai/dsh-client-ui-sidebar` injection deliver the Web artifact; React comes from DSH's seeded runtime. Roll the image and managed overlay back together.
+The image copies `package.json`, `index.js`, `client.js` and `cordis.patch.yml` to root-owned mode `0444` files in the mode `0555` directory `/opt/dsh-team/platform-nav/`, outside the employee-writable `/data/home`, and fails the build unless the installed DSH satisfies the package's `engines.dsh` range under DSH's own `semver` (prereleases included); the manifest declares no `@deepseek-ai/dsh` peer. The absolute overlay row resolves the adjacent manifest, whose `dsh.client.platform: "web"`, `./client` export and `@deepseek-ai/dsh-client-ui-sidebar` injection deliver the Web artifact; React comes from DSH's seeded runtime. Roll the image and managed overlay back together.
+
+The manifest declares `dsh.bundle.patch: ./cordis.patch.yml`, a layer with no rows. It exists only so the released plugin page lists the package: `catalog-check.mjs register` copies `/opt/dsh-team/platform-nav/` into the Web profile and records it as the installed dependency `file:/opt/dsh-team/platform-nav`, unselected. Activation stays with the overlay's absolute `/opt` row; an employee selecting the bundle adds no row.
 
 ## Verification
 

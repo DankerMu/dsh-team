@@ -1,5 +1,7 @@
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -13,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
-import { main, recordBaseline, verifyCatalog } from './catalog-check.mjs';
+import { main, recordBaseline, registerCatalog, verifyCatalog } from './catalog-check.mjs';
 
 const repository = fileURLToPath(new URL('../../', import.meta.url));
 const repositoryCatalog = join(repository, 'images/dsh-user/catalog.json');
@@ -23,6 +25,23 @@ const PROFILE = 'data/home/profiles/web';
 const DSH = `${GLOBALS}/@deepseek-ai/dsh`;
 const RANGE = '>=0.2.1-rc.2 <0.3.0';
 // CommonJS like the real dependency; accepts only the delivered range, and only with prereleases.
+const CATALOG = JSON.parse(readFileSync(repositoryCatalog, 'utf8')).entries;
+const SPECS = Object.fromEntries(
+  CATALOG.map((entry) => [entry.package, `file:/opt/dsh-team/${entry.id}`]),
+);
+const REGISTERED_BUNDLES = [
+  '@deepseek-ai/dsh-base',
+  '@deepseek-ai/dsh-web-app',
+  '@dsh-team/office-agents',
+];
+// The manifest DSH initProfile writes, serialized as DSH saves it.
+const INITIAL_MANIFEST = {
+  name: 'dsh-profile-web',
+  private: true,
+  dependencies: {},
+  dsh: { profile: { bundles: REGISTERED_BUNDLES.slice(0, 2) } },
+};
+const dshJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const SEMVER_STUB = `exports.satisfies = (version, range, options) =>
   options?.includePrerelease === true && version === '0.2.1-rc.2' && range === ${JSON.stringify(RANGE)};\n`;
 
@@ -41,8 +60,12 @@ function repositoryManifest(plugin) {
   return JSON.parse(readFileSync(join(repository, 'plugins', plugin, 'package.json'), 'utf8'));
 }
 
-/** A fake image root laid out like the Dockerfile at the verify step, with its recorded baseline. */
-function imageTree() {
+/**
+ * A fake image root laid out like the Dockerfile at the register step (all four plugins under
+ * /opt/dsh-team, the initial profile manifest), with its recorded baseline; registered by default,
+ * which is the layout at the verify step.
+ */
+function imageTree(registered = true) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-team-catalog-check-'));
   owned.push(root);
   write(root, `${DSH}/package.json`, { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2' });
@@ -58,23 +81,49 @@ function imageTree() {
   mkdirSync(join(root, OPT), { recursive: true });
   expect(main(['record', baseline, '--root', root], () => undefined)).toBe(0);
   write(root, `${OPT}/catalog-check.mjs`, '');
-  for (const plugin of ['permission-tiers', 'platform-nav'])
-    write(root, `${OPT}/${plugin}/package.json`, repositoryManifest(plugin));
-  for (const plugin of ['zh-locale', 'office-agents'])
-    write(
-      root,
-      `${PROFILE}/node_modules/@dsh-team/${plugin}/package.json`,
-      repositoryManifest(plugin),
-    );
-  write(root, `${PROFILE}/package.json`, {
-    name: 'dsh-profile-web',
-    dsh: {
-      profile: {
-        bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@dsh-team/office-agents'],
-      },
-    },
-  });
-  return { root, baseline };
+  for (const { id } of CATALOG) {
+    write(root, `${OPT}/${id}/package.json`, repositoryManifest(id));
+    write(root, `${OPT}/${id}/index.js`, `export const id = '${id}';\n`);
+    // Delivered files are read-only, like the image's COPY --chmod=0444.
+    chmodSync(join(root, OPT, id, 'index.js'), 0o444);
+  }
+  write(root, `${OPT}/office-agents/skills/official-writing/SKILL.md`, '# 公文写作\n');
+  chmodSync(join(root, OPT, 'office-agents/skills'), 0o700);
+  write(root, `${PROFILE}/package.json`, dshJson(INITIAL_MANIFEST));
+  const tree = { root, baseline };
+  if (registered) expect(register(tree)).toEqual({ status: 0, stderr: '' });
+  return tree;
+}
+
+/** Relative path -> kind, permission bits and bytes of every entry below path. */
+function snapshot(path, prefix = '') {
+  return Object.fromEntries(
+    readdirSync(join(path, prefix))
+      .sort()
+      .flatMap((name) => {
+        const relative = prefix === '' ? name : `${prefix}/${name}`;
+        const stat = lstatSync(join(path, relative));
+        const mode = stat.mode & 0o777;
+        if (!stat.isDirectory())
+          return [[relative, { mode, bytes: readFileSync(join(path, relative), 'utf8') }]];
+        return [[relative, { mode, directory: true }], ...Object.entries(snapshot(path, relative))];
+      }),
+  );
+}
+
+const withoutModes = (tree) =>
+  Object.fromEntries(
+    Object.entries(tree).map(([path, entry]) => [path, { ...entry, mode: undefined }]),
+  );
+
+function profileManifest(tree) {
+  return readFileSync(join(tree.root, PROFILE, 'package.json'), 'utf8');
+}
+
+function editProfileManifest(tree, edit) {
+  const manifest = JSON.parse(profileManifest(tree));
+  edit(manifest);
+  write(tree.root, `${PROFILE}/package.json`, dshJson(manifest));
 }
 
 function run(argv) {
@@ -85,6 +134,10 @@ function run(argv) {
 
 function verify(tree, catalog = repositoryCatalog) {
   return run(['verify', catalog, tree.baseline, '--root', tree.root]);
+}
+
+function register(tree, catalog = repositoryCatalog) {
+  return run(['register', catalog, '--root', tree.root]);
 }
 
 function catalogWith(tree, mutate) {
@@ -140,6 +193,8 @@ it.each([
   ['an unknown subcommand', ['list', 'baseline.json']],
   ['a missing record argument', ['record']],
   ['a missing verify argument', ['verify', 'catalog.json']],
+  ['a missing register argument', ['register']],
+  ['an extra register argument', ['register', 'catalog.json', 'baseline.json']],
   ['an extra argument', ['record', 'a.json', 'b.json']],
   ['an unknown option', ['verify', 'catalog.json', 'baseline.json', '--force']],
   ['a root without its value', ['record', 'baseline.json', '--root']],
@@ -148,7 +203,9 @@ it.each([
   const result = run(argv);
 
   expect(result.status).toBe(1);
-  expect(result.stderr).toMatch(/^usage: catalog-check\.mjs record .* verify .*\n$/);
+  expect(result.stderr).toMatch(
+    /^usage: catalog-check\.mjs record .* \| register .* \| verify .*\n$/,
+  );
 });
 
 it('accepts the consistent image with the repository catalog and writes nothing', () => {
@@ -211,7 +268,7 @@ it.each([
     { ...repositoryManifest('zh-locale'), name: '@dsh-team/other' },
     [
       `package name mismatch: ${PROFILE}/node_modules/@dsh-team/zh-locale declares @dsh-team/other`,
-      'catalog entries not preinstalled: @dsh-team/zh-locale',
+      'profile copy differs: @dsh-team/zh-locale',
     ],
   ],
   [
@@ -220,7 +277,7 @@ it.each([
     'not json',
     [
       `unparseable package.json: ${OPT}/permission-tiers`,
-      'catalog entries not preinstalled: @dsh-team/permission-tiers',
+      'profile copy differs: @dsh-team/permission-tiers',
     ],
   ],
 ])('fails verify for %s', (_name, path, manifest, problems) => {
@@ -262,7 +319,9 @@ it('reports a catalog entry missing from the image', () => {
 
   expect(verify(tree, catalog)).toEqual({
     status: 1,
-    stderr: 'catalog entries not preinstalled: @dsh-team/ghost\n',
+    stderr:
+      'catalog entries not preinstalled: @dsh-team/ghost\n' +
+      'catalog entries not registered: @dsh-team/ghost\n',
   });
 });
 
@@ -314,7 +373,8 @@ it('reports both directions at once, each sorted', () => {
     status: 1,
     stderr:
       'catalog entries not preinstalled: @dsh-team/ghost-a, @dsh-team/ghost-b\n' +
-      'preinstalled packages not in catalog: @aa/extra, @dsh-team/zh-locale, zz-extra\n',
+      'preinstalled packages not in catalog: @aa/extra, @dsh-team/zh-locale, zz-extra\n' +
+      'catalog entries not registered: @dsh-team/ghost-a, @dsh-team/ghost-b\n',
   });
 });
 
@@ -330,9 +390,9 @@ it('resolves DSH-shipped registered bundles from the DSH package tree only', () 
 
 it('reports a registered bundle that is neither DSH-shipped nor preinstalled', () => {
   const tree = imageTree();
-  const manifest = JSON.parse(readFileSync(join(tree.root, PROFILE, 'package.json'), 'utf8'));
-  manifest.dsh.profile.bundles.push('@dsh-team-test/missing-bundle');
-  write(tree.root, `${PROFILE}/package.json`, manifest);
+  editProfileManifest(tree, (manifest) => {
+    manifest.dsh.profile.bundles.push('@dsh-team-test/missing-bundle');
+  });
 
   expect(verify(tree)).toEqual({
     status: 1,
@@ -466,43 +526,42 @@ it('fails on a missing enumeration root', () => {
 
   expect(verify(tree).stderr).toBe(
     `enumeration root missing: ${PROFILE}/node_modules\n` +
-      'catalog entries not preinstalled: @dsh-team/office-agents, @dsh-team/zh-locale\n' +
-      'registered bundle not preinstalled: @dsh-team/office-agents\n',
+      CATALOG.map((entry) => `profile copy differs: ${entry.package}\n`).join(''),
   );
 });
 
+// Both copies change alike: the /opt plugin and its profile registration share one name, so the
+// check runs once and the copies stay equal.
 it.each([
   [
     'an excluding range',
-    `${OPT}/platform-nav`,
+    'platform-nav',
     { engines: { dsh: '>=0.3.0' } },
     'DSH plugin compatibility failed: platform-nav engines.dsh=">=0.3.0" peer=undefined installed=0.2.1-rc.2',
   ],
   [
     'a missing range',
-    `${PROFILE}/node_modules/@dsh-team/office-agents`,
+    'office-agents',
     { engines: {} },
     'DSH plugin compatibility failed: office-agents engines.dsh=undefined peer=undefined installed=0.2.1-rc.2',
   ],
   [
     'a blank range',
-    `${OPT}/permission-tiers`,
+    'permission-tiers',
     { engines: { dsh: ' ' } },
     'DSH plugin compatibility failed: permission-tiers engines.dsh=" " peer=undefined installed=0.2.1-rc.2',
   ],
   [
     'an exact DSH peer',
-    `${PROFILE}/node_modules/@dsh-team/zh-locale`,
+    'zh-locale',
     { peerDependencies: { '@deepseek-ai/dsh': '0.2.1-rc.2' } },
     'DSH plugin compatibility failed: zh-locale engines.dsh=">=0.2.1-rc.2 <0.3.0" peer="0.2.1-rc.2" installed=0.2.1-rc.2',
   ],
-])('fails the DSH compatibility check verbatim for %s', (_name, directory, change, line) => {
+])('fails the DSH compatibility check once and verbatim for %s', (_name, id, change, line) => {
   const tree = imageTree();
-  const path = join(tree.root, directory, 'package.json');
-  write(tree.root, `${directory}/package.json`, {
-    ...JSON.parse(readFileSync(path, 'utf8')),
-    ...change,
-  });
+  const manifest = { ...repositoryManifest(id), ...change };
+  write(tree.root, `${OPT}/${id}/package.json`, manifest);
+  write(tree.root, `${PROFILE}/node_modules/@dsh-team/${id}/package.json`, manifest);
 
   expect(verify(tree)).toEqual({ status: 1, stderr: `${line}\n` });
 });
@@ -532,4 +591,252 @@ it('lists every repository plugin in the catalog under its plugins/ directory na
   expect(catalog.entries.map((entry) => entry.id)).toEqual(
     [...catalog.entries.map((entry) => entry.id)].sort(),
   );
+});
+
+it('registers every catalog entry as an installed profile dependency DSH lists', () => {
+  const tree = imageTree(false);
+
+  expect(register(tree)).toEqual({ status: 0, stderr: '' });
+
+  const text = profileManifest(tree);
+  const manifest = JSON.parse(text);
+  expect(text).toBe(
+    dshJson({
+      ...INITIAL_MANIFEST,
+      dependencies: SPECS,
+      dsh: { profile: { bundles: REGISTERED_BUNDLES } },
+    }),
+  );
+  expect(Object.keys(manifest.dependencies)).toEqual(Object.keys(SPECS).sort());
+  for (const { id, package: name } of CATALOG) {
+    const copy = snapshot(join(tree.root, PROFILE, 'node_modules', name));
+    expect(withoutModes(copy)).toEqual(withoutModes(snapshot(join(tree.root, OPT, id))));
+    for (const entry of Object.values(copy))
+      expect(entry.mode).toBe(entry.directory === true ? 0o755 : 0o644);
+  }
+  expect(statSync(join(tree.root, PROFILE, 'node_modules/@dsh-team/zh-locale')).mode & 0o777).toBe(
+    0o755,
+  );
+  expect(verify(tree)).toEqual({ status: 0, stderr: '' });
+});
+
+it('keeps the existing manifest key order and unknown keys, appending after existing bundles', () => {
+  const tree = imageTree(false);
+  const initial = {
+    name: 'dsh-profile-web',
+    'x-unknown': { kept: true },
+    private: true,
+    dependencies: { '@aa/existing': '1.0.0' },
+    dsh: { profile: { bundles: [...REGISTERED_BUNDLES.slice(0, 2), '@x/kept'] }, other: 1 },
+  };
+  write(tree.root, `${PROFILE}/package.json`, dshJson(initial));
+
+  expect(registerCatalog(tree.root, repositoryCatalog)).toEqual({ problems: [] });
+
+  expect(profileManifest(tree)).toBe(
+    dshJson({
+      ...initial,
+      dependencies: { '@aa/existing': '1.0.0', ...SPECS },
+      dsh: {
+        profile: { bundles: [...initial.dsh.profile.bundles, '@dsh-team/office-agents'] },
+        other: 1,
+      },
+    }),
+  );
+});
+
+it('refuses a second registration without writing anything', () => {
+  const tree = imageTree();
+  const before = profileManifest(tree);
+
+  expect(register(tree)).toEqual({
+    status: 1,
+    stderr: CATALOG.map(
+      (entry) =>
+        `registration target exists: ${PROFILE}/node_modules/${entry.package}\n` +
+        `registration target exists: ${entry.package}\n`,
+    ).join(''),
+  });
+  expect(profileManifest(tree)).toBe(before);
+});
+
+it.each([
+  [
+    'an existing dependency key',
+    (manifest) => Object.assign(manifest.dependencies, { '@dsh-team/zh-locale': '0.1.0' }),
+  ],
+  [
+    'an existing bundle selection',
+    (manifest) => manifest.dsh.profile.bundles.push('@dsh-team/zh-locale'),
+  ],
+])('refuses %s and copies nothing', (_name, edit) => {
+  const tree = imageTree(false);
+  editProfileManifest(tree, edit);
+  const before = profileManifest(tree);
+
+  expect(register(tree)).toEqual({
+    status: 1,
+    stderr: 'registration target exists: @dsh-team/zh-locale\n',
+  });
+  expect(profileManifest(tree)).toBe(before);
+  expect(existsSync(join(tree.root, PROFILE, 'node_modules'))).toBe(false);
+});
+
+it('requires the canonical /opt/dsh-team source of every entry', () => {
+  const tree = imageTree(false);
+  rmSync(join(tree.root, OPT, 'platform-nav'), { recursive: true });
+
+  expect(register(tree)).toEqual({
+    status: 1,
+    stderr: 'registration source missing: platform-nav\n',
+  });
+  expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
+  expect(existsSync(join(tree.root, PROFILE, 'node_modules'))).toBe(false);
+});
+
+it.each([
+  ['a missing manifest', undefined],
+  ['an unparseable manifest', '{'],
+  ['a manifest without dependencies', dshJson({ ...INITIAL_MANIFEST, dependencies: undefined })],
+  ['a manifest without bundles', dshJson({ ...INITIAL_MANIFEST, dsh: { profile: {} } })],
+])('refuses to register into %s', (_name, content) => {
+  const tree = imageTree(false);
+  const path = join(tree.root, PROFILE, 'package.json');
+  if (content === undefined) rmSync(path);
+  else writeFileSync(path, content);
+
+  expect(register(tree)).toEqual({
+    status: 1,
+    stderr: `profile manifest unreadable: ${PROFILE}/package.json\n`,
+  });
+  expect(existsSync(join(tree.root, PROFILE, 'node_modules'))).toBe(false);
+});
+
+it('reports catalog shape problems before registering anything', () => {
+  const tree = imageTree(false);
+  const catalog = catalogWith(tree, (value) => {
+    value.entries[0].category = 'optional';
+  });
+
+  expect(register(tree, catalog)).toEqual({
+    status: 1,
+    stderr: 'catalog entry 0 (office-agents) has invalid category\n',
+  });
+  expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
+});
+
+it('reports a failed copy and leaves the manifest unregistered', () => {
+  const tree = imageTree(false);
+  symlinkSync(
+    join(tree.root, OPT, 'zh-locale/index.js'),
+    join(tree.root, OPT, 'zh-locale/link.js'),
+  );
+
+  expect(register(tree)).toEqual({ status: 1, stderr: 'registration copy failed: zh-locale\n' });
+  expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
+});
+
+it('reports a manifest it cannot rewrite', () => {
+  const tree = imageTree(false);
+  chmodSync(join(tree.root, PROFILE, 'package.json'), 0o444);
+
+  expect(register(tree)).toEqual({
+    status: 1,
+    stderr: `profile manifest not written: ${PROFILE}/package.json\n`,
+  });
+  expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
+});
+
+it.each([
+  ['a missing dependency key', (dependencies) => delete dependencies['@dsh-team/platform-nav']],
+  ['an exact version spec', (dependencies) => (dependencies['@dsh-team/platform-nav'] = '0.1.0')],
+  [
+    'a link: spec',
+    (dependencies) => (dependencies['@dsh-team/platform-nav'] = 'link:/opt/dsh-team/platform-nav'),
+  ],
+])('fails verify for %s', (_name, edit) => {
+  const tree = imageTree();
+  editProfileManifest(tree, (manifest) => void edit(manifest.dependencies));
+
+  expect(verify(tree)).toEqual({
+    status: 1,
+    stderr: 'catalog entries not registered: @dsh-team/platform-nav\n',
+  });
+});
+
+it('fails verify when the profile manifest has no dependencies at all', () => {
+  const tree = imageTree();
+  editProfileManifest(tree, (manifest) => delete manifest.dependencies);
+
+  expect(verify(tree).stderr).toBe(
+    `catalog entries not registered: ${Object.keys(SPECS).sort().join(', ')}\n`,
+  );
+});
+
+it.each([
+  [
+    'the manageable bundle is not selected',
+    (bundles) => bundles.splice(bundles.indexOf('@dsh-team/office-agents'), 1),
+    'catalog default state mismatch: @dsh-team/office-agents expected enabled',
+  ],
+  [
+    'a required plugin is selected',
+    (bundles) => bundles.push('@dsh-team/zh-locale'),
+    'catalog default state mismatch: @dsh-team/zh-locale expected disabled',
+  ],
+])('fails verify when %s', (_name, edit, line) => {
+  const tree = imageTree();
+  editProfileManifest(tree, (manifest) => void edit(manifest.dsh.profile.bundles));
+
+  expect(verify(tree)).toEqual({ status: 1, stderr: `${line}\n` });
+});
+
+it.each([
+  [
+    'a changed byte',
+    'node_modules/@dsh-team/zh-locale/index.js',
+    "export const id = 'zh-locale!';\n",
+  ],
+  ['an extra file', 'node_modules/@dsh-team/zh-locale/extra.js', ''],
+])('fails verify when the profile copy has %s', (_name, path, content) => {
+  const tree = imageTree();
+  write(tree.root, `${PROFILE}/${path}`, content);
+
+  expect(verify(tree)).toEqual({
+    status: 1,
+    stderr: 'profile copy differs: @dsh-team/zh-locale\n',
+  });
+});
+
+it('fails verify when a copy holds an entry that is neither file nor directory', () => {
+  const tree = imageTree();
+  const copy = join(tree.root, PROFILE, 'node_modules/@dsh-team/zh-locale');
+  symlinkSync(join(copy, 'index.js'), join(copy, 'link.js'));
+  symlinkSync(
+    join(tree.root, OPT, 'zh-locale/index.js'),
+    join(tree.root, OPT, 'zh-locale/link.js'),
+  );
+
+  expect(verify(tree).stderr).toBe('profile copy differs: @dsh-team/zh-locale\n');
+});
+
+it('declares a bundle patch layer in every repository plugin, empty for the overlay-only ones', () => {
+  const plugins = readdirSync(join(repository, 'plugins')).filter((name) =>
+    existsSync(join(repository, 'plugins', name, 'package.json')),
+  );
+
+  for (const plugin of plugins) {
+    const manifest = repositoryManifest(plugin);
+    const patch = manifest.dsh?.bundle?.patch;
+    expect(typeof patch).toBe('string');
+    const path = join(repository, 'plugins', plugin, patch);
+    expect(existsSync(path)).toBe(true);
+    if (Array.isArray(manifest.files)) expect(manifest.files).toContain(patch.replace(/^\.\//, ''));
+  }
+  for (const plugin of ['platform-nav', 'permission-tiers']) {
+    const content = readFileSync(join(repository, 'plugins', plugin, 'cordis.patch.yml'), 'utf8');
+    const lines = content.split('\n').map((line) => line.replace(/#.*$/, '').trim());
+    expect(lines.filter(Boolean)).toEqual(['[]']);
+    expect(content.startsWith('#')).toBe(true);
+  }
 });

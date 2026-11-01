@@ -10,18 +10,33 @@ afterEach(async () => {
 });
 
 const PACKAGE = '@dsh-team/office-agents';
+// The catalog's four packages and image defaults: only the office bundle is selected.
+const EXPECTED = [
+  { package: PACKAGE, enabled: true },
+  { package: '@dsh-team/permission-tiers', enabled: false },
+  { package: '@dsh-team/platform-nav', enabled: false },
+  { package: '@dsh-team/zh-locale', enabled: false },
+];
 const PANEL = 'button[aria-label="插件"]';
 const OPEN = `[data-plugin-package="${PACKAGE}"] button[aria-label="查看 ${PACKAGE}"]`;
 const SWITCH = `button[role="switch"][aria-label="启用 ${PACKAGE}"]`;
 
+interface FakeCard {
+  absent?: boolean;
+  group?: string;
+  status?: 'running' | 'disabled' | 'problem';
+  checked?: boolean;
+}
+
 interface FakeOptions {
+  /** The saved state of the office bundle when the page first loads (default on). */
+  officeEnabled?: boolean;
+  /** Per-package card overrides; by default each card follows its saved state. */
+  cards?: Record<string, FakeCard>;
   /** The header lacks the released 「添加插件」 button. */
   noAddButton?: boolean;
   /** The detail lacks the released 「卸载」 button. */
   noUninstallButton?: boolean;
-  /** The card is not in the 已安装 group (for example the dependency entry is missing). */
-  group?: string;
-  status?: 'running' | 'disabled' | 'problem';
   /** The switch carries a readOnlyReason (title) and is locked. */
   locked?: boolean;
   /** A switch change is shown but not saved, so a reload restores the previous state. */
@@ -42,8 +57,8 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     // Reads until the panel finishes loading after it opens; each change is busy for one read.
     loading: 0,
     busy: 0,
-    saved: true,
-    shown: true,
+    saved: options.officeEnabled ?? true,
+    shown: options.officeEnabled ?? true,
     clicks: [] as string[],
     reloads: 0,
     panelAttempts: 0,
@@ -77,7 +92,7 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     return text.includes('role="switch"') && toggle();
   };
   const toggleState = (loaded: boolean, busy: boolean) =>
-    loaded
+    loaded && (state.detail || options.cards?.[PACKAGE]?.absent !== true)
       ? {
           checked: String(state.shown),
           disabled: busy || options.locked === true,
@@ -86,13 +101,24 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
           inCard: !state.detail,
         }
       : null;
-  const cardState = (loaded: boolean) =>
-    loaded && !state.detail
-      ? {
-          group: options.group ?? 'bundles',
-          status: options.status ?? (state.shown ? 'running' : 'disabled'),
-        }
-      : null;
+  // DSH renders every listed package as a card in the 已安装 group: running when selected.
+  const cards = (listed: boolean) =>
+    EXPECTED.map(({ package: name }) => {
+      const enabled = name === PACKAGE && state.shown;
+      const card = {
+        group: 'bundles',
+        status: enabled ? 'running' : 'disabled',
+        ...options.cards?.[name],
+      };
+      const present = listed && card.absent !== true;
+      return {
+        package: name,
+        present,
+        group: present ? card.group : null,
+        status: present ? card.status : null,
+        checked: present ? String(card.checked ?? enabled) : null,
+      };
+    });
   const observe = () => {
     const loaded = state.panel && state.loading === 0;
     if (state.loading > 0) state.loading -= 1;
@@ -105,7 +131,7 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
       refresh: listed && options.noRefresh !== true,
       add: listed && options.noAddButton !== true ? 1 : 0,
       uninstall: state.detail && options.noUninstallButton !== true ? 1 : 0,
-      card: cardState(loaded),
+      cards: cards(loaded && listed),
       detail: loaded && state.detail,
       toggle: toggleState(loaded, busy),
     };
@@ -134,7 +160,11 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
   };
 }
 
-async function run(options: FakeOptions, ms = 3_000) {
+async function run(
+  options: FakeOptions,
+  ms = 3_000,
+  pluginPage = { expected: EXPECTED, roundTrip: { package: PACKAGE, leaveEnabled: true } },
+) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-plugin-page-'));
   roots.push(root);
   const errors: unknown[] = [];
@@ -145,9 +175,19 @@ async function run(options: FakeOptions, ms = 3_000) {
     screenshot: join(root, 'entry.png'),
     ms,
     reload,
+    ...pluginPage,
   });
   return { result, state, root };
 }
+
+const shots = (root: string, ...names: string[]) =>
+  names.map((name) => ({ screenshot: join(root, `entry-plugin-page-${name}.png`), bytes: 3 }));
+const cardsWith = (office: { status: string; checked: boolean }) =>
+  EXPECTED.map(({ package: name }) =>
+    name === PACKAGE
+      ? { package: name, ...office }
+      : { package: name, status: 'disabled', checked: false },
+  );
 
 it('accepts a page with install entries whose switch round-trips across reloads', async () => {
   const { result, state, root } = await run({});
@@ -159,12 +199,8 @@ it('accepts a page with install entries whose switch round-trips across reloads'
     detail: { uninstallButtons: 1, checked: true, disabled: false, title: null },
     off: { checked: false, status: 'disabled' },
     on: { checked: true, status: 'running' },
-    screenshots: [
-      { screenshot: join(root, 'entry-plugin-page-list.png'), bytes: 3 },
-      { screenshot: join(root, 'entry-plugin-page-detail.png'), bytes: 3 },
-      { screenshot: join(root, 'entry-plugin-page-off.png'), bytes: 3 },
-      { screenshot: join(root, 'entry-plugin-page-on.png'), bytes: 3 },
-    ],
+    cards: cardsWith({ status: 'running', checked: true }),
+    screenshots: shots(root, 'list', 'detail', 'off', 'on'),
   });
   expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL, SWITCH, PANEL]);
   expect(state.reloads).toBe(2);
@@ -174,6 +210,45 @@ it('accepts a page with install entries whose switch round-trips across reloads'
     'entry-plugin-page-off.png',
     'entry-plugin-page-on.png',
   ]);
+});
+
+it('leaves the bundle switched off when the round trip says so', async () => {
+  const { result, state, root } = await run({}, 3_000, {
+    expected: EXPECTED,
+    roundTrip: { package: PACKAGE, leaveEnabled: false },
+  });
+
+  const evidence = await result;
+
+  expect(evidence).toEqual({
+    list: { refresh: true, addButtons: 1, group: 'bundles', status: 'running', checked: true },
+    detail: { uninstallButtons: 1, checked: true, disabled: false, title: null },
+    off: { checked: false, status: 'disabled' },
+    cards: cardsWith({ status: 'running', checked: true }),
+    screenshots: shots(root, 'list', 'detail', 'off'),
+  });
+  expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL]);
+  expect(state.saved).toBe(false);
+});
+
+it('starts from a disabled bundle when the catalog state says so, and switches it back on', async () => {
+  const expected = EXPECTED.map((entry) => ({ ...entry, enabled: false }));
+  const { result, state, root } = await run({ officeEnabled: false }, 3_000, {
+    expected,
+    roundTrip: { package: PACKAGE, leaveEnabled: true },
+  });
+
+  const evidence = await result;
+
+  expect(evidence).toEqual({
+    list: { refresh: true, addButtons: 1, group: 'bundles', status: 'disabled', checked: false },
+    detail: { uninstallButtons: 1, checked: false, disabled: false, title: null },
+    on: { checked: true, status: 'running' },
+    cards: cardsWith({ status: 'disabled', checked: false }),
+    screenshots: shots(root, 'list', 'detail', 'on'),
+  });
+  expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL]);
+  expect(state.saved).toBe(true);
 });
 
 it('waits for a sidebar panel row that renders after the app is ready', async () => {
@@ -190,8 +265,36 @@ it.each<[string, FakeOptions, RegExp]>([
     { noUninstallButton: true },
     /stage=plugin-page-detail error=uninstall/,
   ],
-  ['a card outside the 已安装 group', { group: 'official' }, /plugin-page-list error=group/],
-  ['a card with a problem', { status: 'problem' }, /stage=plugin-page-list error=status/],
+  [
+    'a card outside the 已安装 group',
+    { cards: { [PACKAGE]: { group: 'official' } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a missing catalog card',
+    { cards: { '@dsh-team/platform-nav': { absent: true } } },
+    /stage=plugin-page-list error=catalog-card observed=.*"package":"@dsh-team\/platform-nav","present":false/,
+  ],
+  [
+    'a missing round-trip card',
+    { cards: { [PACKAGE]: { absent: true } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a catalog card with a problem',
+    { cards: { '@dsh-team/zh-locale': { status: 'problem' } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a required plugin shown running',
+    { cards: { '@dsh-team/permission-tiers': { status: 'running', checked: true } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'the office bundle shown disabled',
+    { officeEnabled: false },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
   ['a locked switch', { locked: true }, /stage=plugin-page-list/],
   ['a toolbar without refresh', { noRefresh: true }, /stage=plugin-page-list/],
   ['a switch change that a reload forgets', { forgets: true }, /stage=plugin-page-off/],
@@ -201,4 +304,18 @@ it.each<[string, FakeOptions, RegExp]>([
   const { result } = await run(options, 600);
 
   await expect(result).rejects.toThrow(failure);
+});
+
+it.each<[string, Record<string, unknown>]>([
+  ['no catalog table', { roundTrip: { package: PACKAGE, leaveEnabled: true } }],
+  [
+    'a round trip outside the catalog table',
+    { expected: EXPECTED, roundTrip: { package: '@x/other', leaveEnabled: true } },
+  ],
+  ['no final state', { expected: EXPECTED, roundTrip: { package: PACKAGE } }],
+])('rejects options with %s before touching the page', async (_name, pluginPage) => {
+  const { result, state } = await run({}, 600, pluginPage as never);
+
+  await expect(result).rejects.toThrow(/^stage=plugin-page error=options$/);
+  expect(state.clicks).toEqual([]);
 });

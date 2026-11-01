@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { arch, platform, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -122,76 +122,79 @@ function expectEmployeeNavigation(observation: MappedHostAcceptResult): void {
 }
 
 const OFFICE_AGENTS = '@dsh-team/office-agents';
-const PROFILE_MANIFEST = '/data/home/profiles/web/package.json';
+// The catalog the image was built from: each entry is a registered card in its image default.
+const CATALOG = (
+  JSON.parse(
+    readFileSync(new URL('../../images/dsh-user/catalog.json', import.meta.url), 'utf8'),
+  ) as { entries: { id: string; package: string; imageDefaultEnabled: boolean }[] }
+).entries;
 
-/**
- * Hand-add the image-delivered office-agents bundle to the profile `dependencies`, as an
- * installed bundle would be listed; the bundle files and its `dsh.profile.bundles` entry are
- * already in the image. Writes the manifest the way DSH saves it and returns the prior bytes.
- */
-const ADD_DEPENDENCY = `import { readFileSync, writeFileSync } from 'node:fs';
-const path = ${JSON.stringify(PROFILE_MANIFEST)};
-const before = readFileSync(path);
-const manifest = JSON.parse(before.toString('utf8'));
-const bundle = JSON.parse(readFileSync('/data/home/profiles/web/node_modules/${OFFICE_AGENTS}/package.json', 'utf8'));
-const hadDependencies = Object.hasOwn(manifest, 'dependencies');
-manifest.dependencies = { ...manifest.dependencies, [bundle.name]: bundle.version };
-writeFileSync(path, JSON.stringify(manifest, null, 2) + '\\n');
-process.stdout.write(JSON.stringify({ uid: process.getuid(), before: before.toString('base64'),
-  hadDependencies, dependencies: manifest.dependencies, bundles: manifest.dsh.profile.bundles }));`;
-
-/** Remove only the hand-added entry; every other byte DSH wrote is kept for the comparison. */
-function removeDependency(hadDependencies: boolean): string {
-  return `import { readFileSync, writeFileSync } from 'node:fs';
-const path = ${JSON.stringify(PROFILE_MANIFEST)};
-const manifest = JSON.parse(readFileSync(path, 'utf8'));
-delete manifest.dependencies[${JSON.stringify(OFFICE_AGENTS)}];
-if (!${String(hadDependencies)} && Object.keys(manifest.dependencies).length === 0) delete manifest.dependencies;
-writeFileSync(path, JSON.stringify(manifest, null, 2) + '\\n');
-process.stdout.write(JSON.stringify({ uid: process.getuid(), after: readFileSync(path).toString('base64') }));`;
+/** The expected card states, with the office bundle switched as given. */
+function pluginExpectations(officeEnabled: boolean) {
+  return CATALOG.map((entry) => ({
+    package: entry.package,
+    enabled: entry.package === OFFICE_AGENTS ? officeEnabled : entry.imageDefaultEnabled,
+  }));
 }
 
-/** One offline uid1001 helper over a stopped employee's home volume. */
-async function editProfile(lifecycle: UserImageLifecycle, userId: string, script: string) {
-  const name = `dsh-team-test-${lifecycle.runId}-${randomUUID()}`;
-  lifecycle.registerContainer(name);
+/** The live Web profile manifest and the image's seed copy, read inside the running instance. */
+async function profileManifests(lifecycle: UserImageLifecycle, id: string) {
+  const script = `import { readFileSync } from 'node:fs';
+process.stdout.write(JSON.stringify({
+  live: readFileSync('/data/home/profiles/web/package.json', 'utf8'),
+  seed: readFileSync('/opt/dsh-team/profile-seed/web/package.json', 'utf8'),
+}));`;
   const result = await lifecycle.commandAsync(
-    [
-      'run',
-      '--rm',
-      '--name',
-      name,
-      '--label',
-      `dsh-team.test-run=${lifecycle.runId}`,
-      '--network',
-      'none',
-      '--mount',
-      `type=volume,source=dsh-team-home-${userId},target=/data/home,volume-nocopy`,
-      lifecycle.imageId,
-      'node',
-      '--input-type=module',
-      '-e',
-      script,
-    ],
-    30_000,
+    ['exec', id, 'node', '--input-type=module', '-e', script],
+    15_000,
   );
   if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Employee profile edit failed');
-  const edited = record(JSON.parse(result.stdout));
-  expect(edited.uid).toBe(1001);
-  return edited;
+    throw new Error('Profile manifest observation failed');
+  const read = record(JSON.parse(result.stdout));
+  if (typeof read.live !== 'string' || typeof read.seed !== 'string')
+    throw new Error('Profile manifest observation is malformed');
+  return { live: read.live, seed: read.seed };
 }
 
-/** The released install and uninstall entries; the bundle switch round-trips across reloads. */
-function expectPluginPage(observation: MappedHostAcceptResult): void {
+/** Every catalog entry is an installed `file:` dependency; only a switched-on office is selected. */
+function requireRegistration(manifest: string, officeEnabled: boolean): void {
+  const parsed = record(JSON.parse(manifest));
+  expect(parsed.dependencies).toEqual(
+    Object.fromEntries(CATALOG.map((entry) => [entry.package, `file:/opt/dsh-team/${entry.id}`])),
+  );
+  expect(record(record(parsed.dsh).profile).bundles).toEqual([
+    '@deepseek-ai/dsh-base',
+    '@deepseek-ai/dsh-web-app',
+    ...(officeEnabled ? [OFFICE_AGENTS] : []),
+  ]);
+}
+
+/** One card per catalog entry, the released install and uninstall entries, and the switch legs. */
+function expectPluginPage(
+  observation: MappedHostAcceptResult,
+  officeEnabled: boolean,
+  legs: readonly ('off' | 'on')[],
+): void {
   expect(observation.accepted).toBe(true);
+  const status = officeEnabled ? 'running' : 'disabled';
   expect(observation.pluginPage).toMatchObject({
-    list: { refresh: true, addButtons: 1, group: 'bundles', status: 'running', checked: true },
-    detail: { uninstallButtons: 1, checked: true, disabled: false, title: null },
-    off: { checked: false, status: 'disabled' },
-    on: { checked: true, status: 'running' },
+    list: { refresh: true, addButtons: 1, group: 'bundles', status, checked: officeEnabled },
+    detail: { uninstallButtons: 1, checked: officeEnabled, disabled: false, title: null },
   });
-  expect(observation.pluginPage?.screenshots).toHaveLength(4);
+  expect(observation.pluginPage?.off).toEqual(
+    legs.includes('off') ? { checked: false, status: 'disabled' } : undefined,
+  );
+  expect(observation.pluginPage?.on).toEqual(
+    legs.includes('on') ? { checked: true, status: 'running' } : undefined,
+  );
+  expect(observation.pluginPage?.cards).toEqual(
+    pluginExpectations(officeEnabled).map(({ package: name, enabled }) => ({
+      package: name,
+      status: enabled ? 'running' : 'disabled',
+      checked: enabled,
+    })),
+  );
+  expect(observation.pluginPage?.screenshots).toHaveLength(2 + legs.length);
 }
 
 function requireAutomaticSession(observation: MappedHostAcceptResult): string {
@@ -463,55 +466,64 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
           ),
         );
 
-        // Dedicated employee: the home volume fills from the image only on its first start, so
-        // the hand-added dependency (an installed bundle with an uninstall entry) needs a restart.
+        // Dedicated employee: the plugin page lists every catalog entry from the image's registration.
         const plugins = await registerInstanceUser(base, origin, 'first-use-plugins@example.test');
-        await retire(await start(plugins));
-        const added = await editProfile(lifecycle, plugins.id, ADD_DEPENDENCY);
-        // Vitest's matcher is untyped; it is an expected-value sentinel, not manifest data.
-        expect(added.dependencies).toEqual({ [OFFICE_AGENTS]: expect.any(String) as unknown });
-        expect(added.bundles).toContain(OFFICE_AGENTS);
-        const pluginsId = await start(plugins);
-        const profile = await mkdtemp(join(tmpdir(), 'dsh-team-first-use-plugins-'));
-        let pluginObservation: MappedHostAcceptResult;
-        try {
-          pluginObservation = await acceptObservation({
-            origin,
-            cookie: plugins.cookie,
-            extraFlags: mappedFlags(host),
-            expectedHost: host,
-            composition: true,
-            expectedRoster: MANAGED_BOOT_ROSTER,
-            runtime: isolatedBrowserRuntime(lifecycle.runId),
-            profile: join(profile, 'profile'),
-            receiptFile: join(profile, 'chrome.receipt.json'),
-            screenshot: join(evidence, 'plugins.png'),
-            browserMs: 30_000,
-            workspace: { available: true, workBound: true },
-            pluginPage: true,
-          });
-        } finally {
-          await rescueChrome(join(profile, 'chrome.receipt.json'));
-          await rm(profile, { recursive: true, force: true });
-        }
-        await writeFile(
-          join(evidence, 'plugins.json'),
-          JSON.stringify({ added, observation: pluginObservation }, null, 2),
-        );
-        expectPluginPage(pluginObservation);
-        // Restore: the switch ends on; remove the hand-added entry and compare the exact bytes.
+        const observePlugins = async (label: string, office: boolean, leaveEnabled: boolean) => {
+          const profile = await mkdtemp(join(tmpdir(), 'dsh-team-first-use-plugins-'));
+          let observation: MappedHostAcceptResult;
+          try {
+            observation = await acceptObservation({
+              origin,
+              cookie: plugins.cookie,
+              extraFlags: mappedFlags(host),
+              expectedHost: host,
+              composition: true,
+              expectedRoster: MANAGED_BOOT_ROSTER,
+              runtime: isolatedBrowserRuntime(lifecycle.runId),
+              profile: join(profile, 'profile'),
+              receiptFile: join(profile, 'chrome.receipt.json'),
+              screenshot: join(evidence, `${label}.png`),
+              browserMs: 30_000,
+              workspace: { available: true, workBound: true },
+              pluginPage: {
+                expected: pluginExpectations(office),
+                roundTrip: { package: OFFICE_AGENTS, leaveEnabled },
+              },
+            });
+          } finally {
+            await rescueChrome(join(profile, 'chrome.receipt.json'));
+            await rm(profile, { recursive: true, force: true });
+          }
+          await writeFile(join(evidence, `${label}.json`), JSON.stringify(observation, null, 2));
+          return observation;
+        };
+        let pluginsId = await start(plugins);
+        const fresh = await profileManifests(lifecycle, pluginsId);
+        requireRegistration(fresh.live, true);
+        expect(fresh.live).toBe(fresh.seed);
+        expectPluginPage(await observePlugins('plugins', true, true), true, ['off', 'on']);
+        // DSH's saveManifest after switching off and on rewrites the image's exact bytes and order.
+        expect((await profileManifests(lifecycle, pluginsId)).live).toBe(fresh.seed);
+
+        // The switch state persists: off across a restart (the instance still starts), then on.
+        expectPluginPage(await observePlugins('plugins-off', true, false), true, ['off']);
         await retire(pluginsId);
-        const restored = await editProfile(
-          lifecycle,
-          plugins.id,
-          removeDependency(added.hadDependencies === true),
-        );
-        expect(restored.after).toBe(added.before);
+        pluginsId = await start(plugins);
+        requireRegistration((await profileManifests(lifecycle, pluginsId)).live, false);
+        expectPluginPage(await observePlugins('plugins-restarted-off', false, true), false, ['on']);
+        await retire(pluginsId);
+        pluginsId = await start(plugins);
+        requireRegistration((await profileManifests(lifecycle, pluginsId)).live, true);
+        expectPluginPage(await observePlugins('plugins-restarted-on', true, true), true, [
+          'off',
+          'on',
+        ]);
         return JSON.stringify({
           automaticWorkSessions: true,
           isolatedEmployees: true,
           preservedEmployeeState: true,
           pluginPageWithInstallEntries: true,
+          pluginSwitchPersists: true,
         });
       } finally {
         await app.close();

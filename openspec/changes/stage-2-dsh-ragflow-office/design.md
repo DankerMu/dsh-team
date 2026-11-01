@@ -312,7 +312,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - 它同时进入用户镜像和平台镜像，是两边的唯一来源。
 - 构建时把镜像实际的预装项与它对比，两个方向有差异就失败。
 - 条目五键：`id`（稳定 kebab-case 标识；仓库插件等于 `plugins/<id>` 目录名，第三方全局包取去掉 scope 的包名）、`package`、`name`（中文）、`category`（`required` | `manageable`）、`imageDefaultEnabled`（镜像自身不经覆盖层时是否已激活，即 `employee` 态的默认值；只由覆盖层激活的插件为 `false`，由 profile 清单登记的 bundle 为 `true`）。
-- 枚举来源：全局顶层包减去「工具链 + DSH」基线（基线在同一条安装 `pnpm` 与 DSH 的 `RUN` 之后立即记录，`pnpm` 属于工具链，不是预装项）；`/opt/dsh-team/*`；profile 初始副本 `node_modules` 下的包（`zh-locale` 只交付在这里）；profile 清单登记的 bundle 中不能从 DSH 自身包树解析到的那些必须已在前三者中出现，能解析到的是 DSH 自带 bundle、不计入。
+- 枚举来源：全局顶层包减去「工具链 + DSH」基线（基线在同一条安装 `pnpm` 与 DSH 的 `RUN` 之后立即记录，`pnpm` 属于工具链，不是预装项）；`/opt/dsh-team/*`；profile 初始副本 `node_modules` 下的包（11.2 起它们是 `/opt/dsh-team/<id>` 规范副本的登记副本，与前者同名、按包名去重）；profile 清单登记的 bundle 中不能从 DSH 自身包树解析到的那些必须已在前三者中出现，能解析到的是 DSH 自带 bundle、不计入。
 - 一致性检查脚本随主上下文进入镜像（`/opt/dsh-team/catalog-check.mjs`，root 0444），`engines.dsh` 兼容性检查并入其中，对枚举出的仓库插件目录（`/opt/dsh-team/*` 与 profile `node_modules/@*/*`）执行；基线之外的全局包与非 scoped profile 包只参与目录集合比较。目录是唯一的已交付插件清单。
 
 **两类目录项**
@@ -350,7 +350,9 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 **员工插件页**
 
 - 每个预装项都必须有开关卡片。
-- 为此，镜像的 profile 初始副本里要把这些项登记成 DSH 视为「已安装」的形式。具体形式按 0.2.1 的 `listBundles` 核实。
+- 为此，镜像的 profile 初始副本里要把这些项登记成 DSH 视为「已安装」的形式。按 0.2.1 的 `listBundles` 核实（dsh-plugin-manager `lib/index.js:1681-1796`、client `lib/client.js:3879,2504`）：卡片只列 profile `package.json` `dependencies` 里的包，且该包必须能从 profile 解析并声明 `dsh.bundle.patch`，否则未选中时没有卡片、不能解析时是 problem 卡片；`enabled` 恰等于 `dsh.profile.bundles` 成员资格。
+- 登记形式（11.2）：每个仓库插件的规范副本在 `/opt/dsh-team/<id>/`（root 只读），profile 初始副本的 `node_modules/<package>/` 是它的完整登记副本（uid1001 可写），`dependencies[<package>] = "file:/opt/dsh-team/<id>"`，`dsh.profile.bundles` 在 DSH 自带两项之后只追加 `imageDefaultEnabled` 为 true 的条目。`platform-nav`、`permission-tiers` 为此声明一个空的 bundle 层：激活仍只属于覆盖层。登记由镜像内 `catalog-check.mjs register` 从目录生成，`verify` 反向检查登记与目录默认值一致。
+- 必启项的「显示为开启且锁定」尚未实现：`enabled` 是员工 profile 清单的状态，覆盖层写不了它；11.2 交付的必启项卡片按目录默认值为未勾选的 `disabled`，机制（客户端装饰或启动时改写清单）由 11.4/11.5 选定。
 
 **生效时机**：实例下次启动时（B20）。
 

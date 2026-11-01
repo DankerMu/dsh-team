@@ -29,14 +29,20 @@ requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale`,
 `platform-nav=<repo>/plugins/platform-nav`. The image retains its pinned base's
 official Debian ordinary and security sources without an auxiliary source-rewrite
 context. The image
+copies only `package.json`, `index.js`, `client.js`, and `cordis.patch.yml` from that
+context to the canonical root-owned, mode `0444` copy `/opt/dsh-team/zh-locale/`. It
 initializes the released Web profile with the boot-free
-`dsh --profile web --dump-default-config` command, then copies only `package.json`,
-`index.js`, `client.js`, and `cordis.patch.yml` from that context to
-`$DSH_HOME/profiles/web/node_modules/@dsh-team/zh-locale/`. These four files remain
-the canonical offline delivery artifacts; there is no copied second plugin source
-or runtime installer. The image snapshots the whole `profiles/` tree at
-`/opt/dsh-team/profile-seed/`, with root-owned read-only seed contents and protected
-replacement parents, while live profiles remain writable by uid1001.
+`dsh --profile web --dump-default-config` command, then
+`catalog-check.mjs register` copies it, like every catalog entry, to
+`$DSH_HOME/profiles/web/node_modules/@dsh-team/zh-locale/` (uid1001, files `0644`) and
+records `"@dsh-team/zh-locale": "file:/opt/dsh-team/zh-locale"` in the profile
+`dependencies`, the form the released plugin page lists as installed; it stays out of
+`dsh.profile.bundles`, so its card starts disabled. There is no runtime installer. The
+image snapshots the whole `profiles/` tree at `/opt/dsh-team/profile-seed/`, with
+root-owned read-only seed contents and protected replacement parents, while live
+profiles, including this registration copy, remain writable by uid1001. Docker fills
+only an empty home volume from the image, so a home volume created by an earlier image
+lists the plugin only after an administrator reset restores the profile from the seed.
 
 Artifact delivery does **not** activate this plugin or modify the profile's user
 patch. Managed-config generation remains a separate task and will apply the

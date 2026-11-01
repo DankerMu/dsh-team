@@ -1,0 +1,3 @@
+# Activation belongs to the managed overlay, which inserts this plugin from /opt/dsh-team.
+# This layer is empty and exists only so the DSH plugin page lists the plugin.
+[]
