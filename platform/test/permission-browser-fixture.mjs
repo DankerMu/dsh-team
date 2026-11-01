@@ -7,6 +7,7 @@ import {
   collectComposition,
   execScript,
   lifecycleWebNetwork,
+  migrationOverlayInput,
   qualifyHostSession,
 } from './managed-policy-fixture.ts';
 import { runWebStartup, execWebScript, webAddress } from './web-startup-fixture.ts';
@@ -614,7 +615,7 @@ async function prepareWeb(lifecycle, name, report, overlayUser) {
   const composition = await collectComposition(lifecycle, `${name}-composition`);
   const network = lifecycleWebNetwork(lifecycle, 'ui');
   const generated = generateManagedConfig({
-    ...composition,
+    ...migrationOverlayInput(composition),
     admin: false,
     instanceAddress: webAddress(network),
     defaultPermissionTier: 'approval',

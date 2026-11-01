@@ -10,6 +10,7 @@ import {
   writeManagedConfig,
 } from '../src/managed-config/index.ts';
 import type { ManagedComposition } from '../src/managed-config/index.ts';
+import { catalogStates, readPluginCatalog } from '../src/plugin-catalog/index.ts';
 import {
   acceptObservation,
   exchangeLaunchToken,
@@ -74,6 +75,19 @@ const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
 
+/** Migration-5 settings: web tools off, DSH default sources, probe on, every manageable entry `employee`. */
+const MIGRATION_OVERLAY_SETTINGS = {
+  webToolsEnabled: false,
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  pluginCatalog: catalogStates(readPluginCatalog(), { pluginCatalog: {} }),
+};
+
+/** Generator input from a collected composition under the migration-5 overlay settings. */
+export function migrationOverlayInput(composition: ManagedComposition) {
+  return { ...composition, ...MIGRATION_OVERLAY_SETTINGS };
+}
+
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: MANAGED_ADDRESS,
   defaultModel: 'beta',
@@ -81,6 +95,7 @@ const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
   presetIds: [...SHIPPED_PRESET_IDS],
+  registryProbeEnabled: MIGRATION_OVERLAY_SETTINGS.registryProbeEnabled,
   retainedTools: RETAINED_TOOLS,
   officeNames: { 'office-general': '综合办公', 'office-writer': '公文与材料写作' },
 };
@@ -305,8 +320,10 @@ export async function collectComposition(
   name: string,
 ): Promise<ManagedComposition> {
   let sequence = 0;
-  return readManagedComposition((script) =>
-    Promise.resolve(execScript(lifecycle, `${name}-${String(sequence++)}`, script)),
+  // The migration-5 catalog forces no manageable bundle, so none is requested.
+  return readManagedComposition(
+    (script) => Promise.resolve(execScript(lifecycle, `${name}-${String(sequence++)}`, script)),
+    [],
   );
 }
 
@@ -327,7 +344,7 @@ async function publishOverlay(
       defaultModel: 'beta',
     },
     defaultPermissionTier: 'yolo',
-    ...composition,
+    ...migrationOverlayInput(composition),
   });
   if (generated.outcome !== 'configured') {
     throw new Error('Managed policy generation returned no document');

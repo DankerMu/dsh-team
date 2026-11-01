@@ -38,6 +38,11 @@ const INPUT: ManagedConfigInput = {
     { id: 'ui-settings-models', disabled: true },
     { insert: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }] },
   ],
+  webToolsEnabled: false,
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  pluginCatalog: [],
+  bundles: [],
 };
 
 const CREDENTIAL_REALM = { credentials: 'dsh-team-platform' };
@@ -439,19 +444,23 @@ describe('generateManagedConfig', () => {
     );
   });
 
-  it('turns the plugin page registry probe off in exactly one whole-config row', () => {
-    const generated = generateManagedConfig(INPUT);
-    ok(generated.outcome === 'configured');
+  it.each([true, false])(
+    'writes the administrator registry probe value %s in exactly one whole-config row',
+    (registryProbeEnabled) => {
+      const generated = generateManagedConfig({ ...INPUT, registryProbeEnabled });
+      ok(generated.outcome === 'configured');
 
-    expect(rowsWithIds(generated.content, ['ui-plugin-manager'])).toEqual([
-      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
-    ]);
-  });
+      expect(rowsWithIds(generated.content, ['ui-plugin-manager'])).toEqual([
+        { id: 'ui-plugin-manager', config: { registryProbeEnabled } },
+      ]);
+    },
+  );
 
-  it('places the registry probe row after profile and locale rows that try to re-enable it', () => {
+  it('places the source and probe rows after profile and locale rows that try to replace them', () => {
     const reenable = { id: 'ui-plugin-manager', config: { registryProbeEnabled: true } };
     const generated = generateManagedConfig({
       ...INPUT,
+      registryProbeEnabled: false,
       localePatch: [...INPUT.localePatch, reenable],
     });
     ok(generated.outcome === 'configured');
@@ -462,8 +471,15 @@ describe('generateManagedConfig', () => {
         typeof row === 'object' && row !== null && 'id' in row && row.id === 'ui-plugin-manager',
     );
 
-    expect(rows.slice(probe - 1, probe + 2)).toEqual([
+    expect(rows.slice(probe - 2, probe + 2)).toEqual([
       reenable,
+      {
+        id: 'plugin-manager',
+        config: {
+          registry: 'https://registry.npmjs.org/',
+          fallbackRegistries: ['https://registry.npmmirror.com/'],
+        },
+      },
       { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
       { id: 'auto-review', disabled: true },
     ]);
@@ -835,10 +851,17 @@ describe('generateManagedConfig', () => {
       ]);
     });
 
-    it('still disables the profile-level network tool row that web-deepseek-api serves', () => {
-      expect(rowsWithIds(generated.content, ['tool-web'])).toEqual([
-        { id: 'tool-web', disabled: true },
-      ]);
-    });
+    it.each([
+      [false, [{ id: 'tool-web', disabled: true }]],
+      [true, []],
+    ])(
+      'with web tools enabled=%s writes the profile-level network tool row %j',
+      (webToolsEnabled, expected) => {
+        const switched = generateManagedConfig({ ...INPUT, webToolsEnabled });
+        ok(switched.outcome === 'configured');
+
+        expect(rowsWithIds(switched.content, ['tool-web'])).toEqual(expected);
+      },
+    );
   });
 });

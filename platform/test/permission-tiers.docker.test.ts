@@ -3,7 +3,12 @@ import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
-import { collectComposition, execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
+import {
+  collectComposition,
+  execScript,
+  lifecycleWebNetwork,
+  migrationOverlayInput,
+} from './managed-policy-fixture.ts';
 import { webAddress } from './web-startup-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
@@ -89,7 +94,7 @@ it('authorizes real released tools through native approval, Auto protocol, child
       const network = lifecycleWebNetwork(lifecycle, 'permission');
       const overlays = (['yolo', 'approval', 'auto'] as const).map((defaultPermissionTier) => {
         const generated = generateManagedConfig({
-          ...composition,
+          ...migrationOverlayInput(composition),
           admin: false,
           instanceAddress: webAddress(network),
           defaultPermissionTier,

@@ -16,8 +16,9 @@ const EXPECTED: Omit<ManagedPolicyRuntimeExpectation, 'presetIds'> = {
   catalog: [{ id: 'intranet', models: ['alpha', 'beta'] }],
   alphaContextWindow: 500_000,
   betaContextWindow: 262_144,
+  registryProbeEnabled: false,
 };
-// Live `ui-plugin-manager` config as the observer reads it; managed policy requires false.
+// Live `ui-plugin-manager` config as the observer reads it; it must match the expected value.
 const PLUGIN_PAGE = { registryProbeEnabled: false };
 
 it('accepts a tool-less preset alongside independently required built-in tools', () => {

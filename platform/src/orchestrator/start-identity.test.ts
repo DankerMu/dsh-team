@@ -107,6 +107,7 @@ it.each(['stopped', 'running', 'detached'] as const)(
           },
         ],
         localePatch: [{ id: 'locale', name: '@dsh-team/zh-locale' }],
+        bundles: [],
       }),
     );
 

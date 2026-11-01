@@ -2,7 +2,12 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { runUserImage } from './user-image-fixture.ts';
-import { collectComposition, execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
+import {
+  collectComposition,
+  execScript,
+  lifecycleWebNetwork,
+  migrationOverlayInput,
+} from './managed-policy-fixture.ts';
 import { webAddress } from './web-startup-fixture.ts';
 import { generateManagedConfig } from '../src/managed-config/index.ts';
 import { permissionScenarioScript } from './permission-tiers-fixture.ts';
@@ -49,7 +54,7 @@ it('selects genuine native writer children while preserving tiers, cold identity
       const overlayFiles = (['yolo', 'approval', 'auto'] as const).map(
         (defaultPermissionTier, index) => {
           const generated = generateManagedConfig({
-            ...composition,
+            ...migrationOverlayInput(composition),
             admin: false,
             instanceAddress: webAddress(network),
             defaultPermissionTier,
@@ -164,7 +169,7 @@ it('rejects a native writer that only copies a complete parent-authored notice',
         // Each native instance binds its own owned network's +2 (DSH 0.2.1).
         const network = lifecycleWebNetwork(lifecycle, `copy-${String(copied)}`);
         const generated = generateManagedConfig({
-          ...composition,
+          ...migrationOverlayInput(composition),
           admin: false,
           instanceAddress: webAddress(network),
           defaultPermissionTier: 'yolo',

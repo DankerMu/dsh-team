@@ -1,6 +1,7 @@
 import { validateStopReason } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { readPluginCatalog } from '../plugin-catalog/index.ts';
 import type { DockerClient } from './client.ts';
 import { acquireDshCookie } from './credentials.ts';
 import type { AcquireDshCookieInput as AcquisitionInput } from './credentials.ts';
@@ -29,7 +30,10 @@ export interface OrchestratorDependencies {
   readonly config: TransportConfig;
 }
 
-export type StartUserContainerInput = Omit<StartupInput, 'client' | 'database' | 'transport'>;
+export type StartUserContainerInput = Omit<
+  StartupInput,
+  'client' | 'database' | 'transport' | 'pluginCatalog'
+>;
 export type AcquireDshCookieInput = Omit<AcquisitionInput, 'client' | 'database' | 'transport'>;
 export type StopUserContainerInput = Omit<RetirementInput, 'client' | 'database' | 'transport'> & {
   readonly allowMissingInstance?: boolean;
@@ -308,6 +312,8 @@ async function reconcileCreationAttempt(
 /** One owner belongs to the platform/database lifetime, not to an individual request. */
 export function createOrchestrator(dependencies: OrchestratorDependencies): Orchestrator {
   const { client, database } = dependencies;
+  // Read once per owner, before listening: a missing or malformed catalog fails startup.
+  const pluginCatalog = readPluginCatalog();
   const transport: TransportContext = {
     config: Object.freeze({
       upstreamMode: dependencies.config.upstreamMode,
@@ -488,7 +494,11 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
       await allocationTail;
     },
     startUserContainer: (input: StartUserContainerInput) =>
-      schedule(input, start, 'Container startup failed during account validation or cancellation'),
+      schedule(
+        { ...input, pluginCatalog },
+        start,
+        'Container startup failed during account validation or cancellation',
+      ),
     acquireDshCookie: (input: AcquireDshCookieInput) =>
       schedule(
         input,

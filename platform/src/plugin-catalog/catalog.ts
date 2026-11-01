@@ -33,7 +33,7 @@ interface CatalogEntry {
 export interface PluginCatalog {
   readonly entries: readonly CatalogEntry[];
 }
-interface CatalogEntryState extends CatalogEntry {
+export interface CatalogEntryState extends CatalogEntry {
   readonly state: CatalogState;
 }
 

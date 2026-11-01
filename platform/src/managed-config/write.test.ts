@@ -40,6 +40,11 @@ const INPUT: ManagedConfigInput = {
   defaultPermissionTier: 'yolo',
   presets: [{ id: 'preset-office', config: { plugins: [] } }],
   localePatch: [{ id: 'zh-locale', name: '@dsh-team/zh-locale' }],
+  webToolsEnabled: false,
+  pluginRegistries: ['https://registry.npmjs.org/'],
+  registryProbeEnabled: true,
+  pluginCatalog: [],
+  bundles: [],
 };
 
 const OTHER_INPUT: ManagedConfigInput = {

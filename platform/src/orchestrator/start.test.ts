@@ -762,3 +762,99 @@ it('compensates a started loopback container whose actual address differs from i
   expect(daemon.containers.has(START_CONTAINER)).toBe(false);
   expect(daemon.networks.has(START_NETWORK)).toBe(false);
 });
+
+const OFFICE_PRESET = {
+  id: 'preset-office-general',
+  name: '@deepseek-ai/dsh-agent-preset',
+  config: { id: 'office-general', plugins: [{ name: '@deepseek-ai/dsh-tool-fs' }] },
+};
+
+async function startedOverlay(input: Parameters<typeof startUserContainer>[0]) {
+  await startUserContainer(input);
+  const rows: unknown = JSON.parse(
+    await readFile(join(input.config.managedConfigDir, 'abcdefghijkl.patch.yml'), 'utf8'),
+  );
+  return rows;
+}
+
+function compositionScripts(requests: readonly StartupRequest[]): unknown[] {
+  return requests
+    .filter((request) => request.path.startsWith('/containers/create?name=dsh-team-compose-'))
+    .map((request) => {
+      const command: unknown[] = Array.isArray(request.body.Cmd) ? request.body.Cmd : [];
+      return command[3];
+    });
+}
+
+it('delivers saved sources, probe, web switch and forced-off office rows to the overlay', async () => {
+  const { daemon, input } = await fixture();
+  writeSettings(database, {
+    pluginRegistries: ['http://npm.intranet:4873/'],
+    registryProbeEnabled: false,
+    webToolsEnabled: true,
+    pluginCatalog: { 'office-agents': 'forced-off' },
+  });
+  daemon.setComposition(
+    JSON.stringify({
+      skippedBundles: [],
+      entries: [
+        {
+          id: 'assistant',
+          name: '@deepseek-ai/dsh-agent-preset',
+          config: { id: 'assistant', plugins: [{ name: '@deepseek-ai/dsh-tool-web' }] },
+        },
+        OFFICE_PRESET,
+      ],
+      localePatch: [{ id: 'locale', name: '@dsh-team/zh-locale' }],
+      bundles: [
+        {
+          id: 'office-agents',
+          patch: [
+            { id: 'agent-preset-registry', config: { default: 'office-general' } },
+            { insert: [OFFICE_PRESET] },
+          ],
+        },
+      ],
+    }),
+  );
+
+  const rows = await startedOverlay(input);
+
+  expect(compositionScripts(daemon.requests)).toEqual([
+    expect.stringContaining('const BUNDLE_IDS = ["office-agents"];'),
+  ]);
+  expect(rows).toContainEqual({
+    id: 'plugin-manager',
+    config: { registry: 'http://npm.intranet:4873/', fallbackRegistries: [] },
+  });
+  expect(rows).toContainEqual({ id: 'ui-plugin-manager', config: { registryProbeEnabled: false } });
+  expect(rows).not.toContainEqual({ id: 'tool-web', disabled: true });
+  expect(rows).toContainEqual({
+    id: 'assistant',
+    name: '@deepseek-ai/dsh-agent-preset',
+    config: { id: 'assistant', plugins: [{ name: '@deepseek-ai/dsh-tool-web' }] },
+  });
+  expect(rows).toContainEqual({ id: 'preset-office-general', disabled: true });
+  expect(rows).toContainEqual({ id: 'agent-preset-registry', config: { default: 'standard' } });
+  expect(rows).not.toContainEqual(OFFICE_PRESET);
+});
+
+it('requests no bundle and writes the migration defaults when every manageable entry is employee', async () => {
+  const { daemon, input } = await fixture();
+
+  const rows = await startedOverlay(input);
+
+  expect(compositionScripts(daemon.requests)).toEqual([
+    expect.stringContaining('const BUNDLE_IDS = [];'),
+  ]);
+  expect(rows).toContainEqual({
+    id: 'plugin-manager',
+    config: {
+      registry: 'https://registry.npmjs.org/',
+      fallbackRegistries: ['https://registry.npmmirror.com/'],
+    },
+  });
+  expect(rows).toContainEqual({ id: 'ui-plugin-manager', config: { registryProbeEnabled: true } });
+  expect(rows).toContainEqual({ id: 'tool-web', disabled: true });
+  expect(JSON.stringify(rows)).not.toContain('office-agents');
+});

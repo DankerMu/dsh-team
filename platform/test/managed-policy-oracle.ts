@@ -45,6 +45,8 @@ export interface ManagedPolicyRuntimeExpectation {
   readonly alphaContextWindow: number;
   readonly betaContextWindow: number;
   readonly presetIds: readonly string[];
+  /** The administrator value the overlay wrote; the live plugin page must match it. */
+  readonly registryProbeEnabled: boolean;
   readonly descriptions?: Readonly<Record<string, string>>;
   readonly retainedTools?: Readonly<Record<string, readonly string[]>>;
   readonly readLimits?: Readonly<Record<string, number>>;
@@ -258,7 +260,7 @@ export function assertManagedPolicyRuntime(
     observed.models.alphaContextWindow !== expected.alphaContextWindow ||
     observed.models.betaContextWindow !== expected.betaContextWindow ||
     observed.models.betaContextWindow !== RELEASED_BETA_CONTEXT_WINDOW ||
-    observed.pluginPage.registryProbeEnabled
+    observed.pluginPage.registryProbeEnabled !== expected.registryProbeEnabled
   ) {
     invalid();
   }
