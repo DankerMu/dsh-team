@@ -14,6 +14,10 @@ const SETTINGS: Settings = {
   modelBaseUrl: 'http://models.invalid/v1',
   modelApiKey: KEY,
   defaultModel: 'beta',
+  pluginCatalog: {},
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  webToolsEnabled: false,
 };
 const COMPLETION = JSON.stringify({ id: 'x', choices: [{ index: 0, message: { content: '' } }] });
 

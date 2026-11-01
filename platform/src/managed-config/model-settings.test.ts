@@ -12,6 +12,10 @@ const SETTINGS: Settings = {
   modelBaseUrl: ' http://models.invalid/v1/ ',
   modelApiKey: 'owned-nonsecret-key',
   defaultModel: 'beta',
+  pluginCatalog: {},
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  webToolsEnabled: false,
 };
 
 it('maps stored settings to the managed model reference and the separate injected key', () => {

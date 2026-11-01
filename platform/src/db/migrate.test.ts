@@ -143,6 +143,15 @@ describe('applyMigrations', () => {
     ).toThrow();
   });
 
+  it('records every shipped migration file, through 5-plugin-settings, once', () => {
+    applyMigrations(db);
+    applyMigrations(db);
+
+    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual(
+      [1, 2, 3, 4, 5].map((version) => ({ version })),
+    );
+  });
+
   it('applies numbered SQL in numeric order and records the ledger', () => {
     dir = writeSqlDir({
       '10-second.sql': 'INSERT INTO ordered (n) VALUES (10);',

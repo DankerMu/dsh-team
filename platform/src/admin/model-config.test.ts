@@ -6,6 +6,8 @@ import {
   administrator,
   MODEL_CONFIG as CONFIG,
   putConfig,
+  SEEDED_SETTINGS,
+  settingsRows,
 } from '../../test/admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/model-config';
@@ -82,7 +84,7 @@ it.each([
     const response = await putConfig(app, PATH, cookie, JSON.stringify(payload));
 
     expect(response.statusCode).toBe(400);
-    expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+    expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
     expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(before);
   });
 });

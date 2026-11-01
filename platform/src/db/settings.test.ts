@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import { applyMigrations, openDatabase, readSettings, writeSettings } from './index.ts';
 import type { Settings } from './index.ts';
+import { SEEDED_SETTINGS } from '../../test/admin-config-fixture.ts';
 
 const DEFAULTS: Settings = {
   idleMinutes: 30,
@@ -14,6 +15,10 @@ const DEFAULTS: Settings = {
   modelBaseUrl: '',
   modelApiKey: '',
   defaultModel: '',
+  pluginCatalog: {},
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  webToolsEnabled: false,
 };
 
 const UNSAFE_INTEGER = 2 ** 53;
@@ -29,6 +34,10 @@ const FULL_PATCH: Settings = {
   modelBaseUrl: 'http://models.invalid/v1',
   modelApiKey: randomBytes(32).toString('hex'),
   defaultModel: 'beta',
+  pluginCatalog: { 'office-agents': 'forced-off', other: 'forced-on', third: 'employee' },
+  pluginRegistries: ['http://registry.invalid/npm/'],
+  registryProbeEnabled: false,
+  webToolsEnabled: true,
 };
 const AFTER_PARTIAL: Settings = {
   ...FULL_PATCH,
@@ -48,9 +57,13 @@ describe('settings', () => {
     db.close();
   });
   describe('readSettings', () => {
-    it('returns defaults without persisting rows when no settings are stored', () => {
+    it('has exactly the four migration-seeded rows after migration and reads them as the defaults', () => {
+      expect(db.prepare('SELECT key, value FROM settings ORDER BY key').all()).toEqual(
+        SEEDED_SETTINGS,
+      );
       expect(readSettings(db)).toEqual(DEFAULTS);
-      expect(db.prepare('SELECT key, value FROM settings').all()).toEqual([]);
+      db.exec('DELETE FROM settings');
+      expect(readSettings(db)).toEqual(DEFAULTS);
     });
 
     it('returns independent models arrays so caller mutation cannot change later reads', () => {
@@ -128,6 +141,24 @@ describe('settings', () => {
       ['models', [{ name: 'alpha', contextWindow: undefined }]],
       ['models', [{ name: 'alpha', contextWindow: 'x' }]],
       ['models', [{ name: 'alpha', contextWindow: UNSAFE_INTEGER }]],
+      ['pluginCatalog', null],
+      ['pluginCatalog', []],
+      ['pluginCatalog', 'employee'],
+      ['pluginCatalog', { 'office-agents': 'on' }],
+      ['pluginCatalog', { 'office-agents': true }],
+      ['pluginCatalog', { 'office-agents': 'toString' }],
+      ['pluginRegistries', []],
+      ['pluginRegistries', 'https://registry.npmjs.org/'],
+      ['pluginRegistries', ['']],
+      ['pluginRegistries', [5]],
+      ['pluginRegistries', ['ftp://registry.invalid/']],
+      ['pluginRegistries', ['https://']],
+      ['pluginRegistries', ['https://registry .invalid/']],
+      ['pluginRegistries', ['https://registry.npmjs.org/', ' https://registry.invalid/']],
+      ['registryProbeEnabled', 'true'],
+      ['registryProbeEnabled', 1],
+      ['webToolsEnabled', null],
+      ['webToolsEnabled', 0],
     ])('rejects %s with an invalid value and leaves prior rows unchanged', (field, value) => {
       writeSettings(db, { idleMinutes: 15 });
 
@@ -206,8 +237,14 @@ describe('settings', () => {
       ['defaultModel', 'false'],
       ['defaultModel', '"missing"'],
       ['modelApiKey', '{not-json-CORRUPT_SENTINEL'],
+      ['pluginCatalog', '{"office-agents":"CORRUPT_SENTINEL"}'],
+      ['pluginCatalog', '["CORRUPT_SENTINEL"]'],
+      ['pluginRegistries', '["CORRUPT_SENTINEL"]'],
+      ['pluginRegistries', '[]'],
+      ['registryProbeEnabled', '"CORRUPT_SENTINEL"'],
+      ['webToolsEnabled', '{not-json-CORRUPT_SENTINEL'],
     ])('rejects stored %s corruption without echoing the raw sentinel', (field, stored) => {
-      db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run(field, stored);
+      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(field, stored);
 
       expect(() => {
         readSettings(db);

@@ -16,7 +16,13 @@ import {
   START_USER,
 } from './container-start-fixture.ts';
 import { registerAccount, successfulLogin, withListeningApp } from './auth-tcp-fixture.ts';
-import { administrator, delayedConfigBody, MODEL_CONFIG } from './admin-config-fixture.ts';
+import {
+  administrator,
+  delayedConfigBody,
+  MODEL_CONFIG,
+  SEEDED_SETTINGS,
+  settingsRows,
+} from './admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/runtime-config';
 const CONFIG = {
@@ -201,7 +207,7 @@ it('requires an administrator before parsing and preserves Origin, size and JSON
     } finally {
       request.destroy();
     }
-    expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+    expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
     expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
   });
 });
@@ -220,7 +226,7 @@ it.each(['revoked', 'demoted'] as const)(
         else database.prepare("UPDATE users SET role = 'employee' WHERE id = ?").run(user.id);
       });
       expect(response.status).toBe(state === 'revoked' ? 401 : 403);
-      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+      expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
       expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     });
   },

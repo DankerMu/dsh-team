@@ -11,9 +11,9 @@ export interface AdminConfigOptions {
   resolveSourceAddress: SourceAddressResolver;
 }
 interface ConfigDescriptor {
-  name: 'model' | 'runtime';
+  name: 'model' | 'runtime' | 'plugin-catalog';
   path: string;
-  auditType: 'model-config.updated' | 'runtime-config.updated';
+  auditType: 'model-config.updated' | 'runtime-config.updated' | 'plugin-catalog.updated';
   bodySchema: FastifySchema['body'];
   responseSchema: {
     readonly type: 'object';

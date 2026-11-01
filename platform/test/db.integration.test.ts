@@ -21,6 +21,7 @@ import {
   writeSettings,
   type DatabaseHandle,
 } from '../src/db/index.ts';
+import { SEEDED_SETTINGS } from './admin-config-fixture.ts';
 
 describe('openDatabase on a file', () => {
   let dir = '';
@@ -342,7 +343,7 @@ describe('platform startup on a real database file', () => {
       expect(readSettings(reopened).idleMinutes).toBe(15);
       expect(
         reopened.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-      ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+      ).toEqual([1, 2, 3, 4, 5].map((version) => ({ version })));
     } finally {
       reopened.close();
     }
@@ -385,7 +386,7 @@ it('forward migration preserves historical instance data and leaves unknown immu
     const historical = {
       users: database.prepare('SELECT * FROM users').all(),
       sessions: database.prepare('SELECT * FROM platform_sessions').all(),
-      settings: database.prepare('SELECT * FROM settings').all(),
+      settings: database.prepare('SELECT * FROM settings ORDER BY key').all(),
       audits: database.prepare('SELECT * FROM audit_events').all(),
     };
 
@@ -407,9 +408,12 @@ it('forward migration preserves historical instance data and leaves unknown immu
     expect({
       users: database.prepare('SELECT * FROM users').all(),
       sessions: database.prepare('SELECT * FROM platform_sessions').all(),
-      settings: database.prepare('SELECT * FROM settings').all(),
+      settings: database.prepare('SELECT * FROM settings ORDER BY key').all(),
       audits: database.prepare('SELECT * FROM audit_events').all(),
-    }).toEqual(historical);
+    }).toEqual({
+      ...historical,
+      settings: [...historical.settings, ...SEEDED_SETTINGS],
+    });
     expect(database.prepare('SELECT attempt_id,container_id FROM creation_attempts').get()).toEqual(
       {
         attempt_id: 'pending-attempt',
@@ -431,7 +435,7 @@ it('forward migration preserves historical instance data and leaves unknown immu
     });
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    ).toEqual([1, 2, 3, 4, 5].map((version) => ({ version })));
   } finally {
     database.close();
     rmSync(root, { recursive: true, force: true });

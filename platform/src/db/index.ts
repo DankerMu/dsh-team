@@ -7,5 +7,6 @@ export {
   writeSettings,
   SettingsValidationError,
   PERMISSION_TIERS,
+  CATALOG_STATES,
 } from './settings.ts';
-export type { Settings } from './settings.ts';
+export type { CatalogState, Settings } from './settings.ts';
