@@ -263,6 +263,10 @@ it('reaches the deadline before and after the status at the probe seam', async (
     modelBaseUrl: `${upstream.origin}/v1`,
     modelApiKey: UPSTREAM_KEY,
     defaultModel: UPSTREAM_MODEL,
+    pluginCatalog: {},
+    pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+    registryProbeEnabled: true,
+    webToolsEnabled: false,
   });
   upstream.setHandler(() => undefined);
   const silent = await probeModel(snapshot, new AbortController().signal, 150);

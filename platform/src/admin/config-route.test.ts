@@ -2,7 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { deleteUserSessions } from '../auth/index.ts';
 import { jsonRequestHeaders, withApp } from '../../test/auth-fixture.ts';
-import { administrator, MODEL_CONFIG as CONFIG } from '../../test/admin-config-fixture.ts';
+import {
+  administrator,
+  MODEL_CONFIG as CONFIG,
+  SEEDED_SETTINGS,
+  settingsRows,
+} from '../../test/admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/model-config';
 const INTERNAL_ERROR = {
@@ -57,7 +62,7 @@ it.each([
       expect(read.json()).toEqual(INTERNAL_ERROR);
     } else {
       expect(read.statusCode).toBe(200);
-      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+      expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
     }
     expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(before);
     for (const value of [secret, 'SQLITE', 'no such table', 'reject_model_save'])
@@ -86,7 +91,7 @@ it('preserves body-size and JSON media classifications without echoing secret va
 
     expect(oversized.statusCode).toBe(413);
     expect(unsupported.statusCode).toBe(415);
-    expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+    expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
     expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(before);
     expect((oversized.body + unsupported.body + lines.join('')).includes(secret)).toBe(false);
   });
@@ -156,7 +161,7 @@ it.each(['model', 'runtime'] as const)(
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ error: 'Bad Request' });
       expect((response.body + lines.join('')).includes(secret)).toBe(false);
-      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+      expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
       expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     });
   },
@@ -197,7 +202,7 @@ it.each([
               },
       });
       expect(response.statusCode).toBe(status);
-      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+      expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
       expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);
     });
   },

@@ -213,6 +213,12 @@ async function copyDevRuntime(repository: string, root: string): Promise<void> {
     recursive: true,
   });
   await copyFile(join(repository, 'platform/package.json'), join(root, 'platform/package.json'));
+  // The plugin catalog ships beside the platform (same relative path in the image); main reads it at start.
+  await mkdir(join(root, 'images/dsh-user'), { recursive: true });
+  await copyFile(
+    join(repository, 'images/dsh-user/catalog.json'),
+    join(root, 'images/dsh-user/catalog.json'),
+  );
   for (const file of ['package.json', 'tsconfig.json', 'vite.config.ts', 'index.html']) {
     await copyFile(join(repository, 'platform/web', file), join(root, 'platform/web', file));
   }

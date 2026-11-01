@@ -11,6 +11,21 @@ export const MODEL_CONFIG = {
   defaultModel: 'beta',
 };
 
+/** Migration 5 seeds these rows; they are every unmodified database's settings baseline. */
+export const SEEDED_SETTINGS = [
+  { key: 'pluginCatalog', value: '{}' },
+  {
+    key: 'pluginRegistries',
+    value: '["https://registry.npmjs.org/","https://registry.npmmirror.com/"]',
+  },
+  { key: 'registryProbeEnabled', value: 'true' },
+  { key: 'webToolsEnabled', value: 'false' },
+];
+
+export function settingsRows(database: DatabaseHandle): unknown[] {
+  return database.prepare('SELECT * FROM settings ORDER BY key').all();
+}
+
 export function putConfig(app: FastifyInstance, path: string, cookie: string, payload: string) {
   return app.inject({ method: 'PUT', url: path, headers: jsonRequestHeaders({ cookie }), payload });
 }

@@ -2,6 +2,13 @@ import type Database from 'better-sqlite3';
 
 type PermissionTier = 'approval' | 'auto' | 'yolo';
 
+const STATES: Record<string, true> = { employee: true, 'forced-on': true, 'forced-off': true };
+/** Closed administrator states of one catalog entry. */
+export const CATALOG_STATES = Object.freeze(Object.keys(STATES)) as readonly CatalogState[];
+export type CatalogState = 'employee' | 'forced-on' | 'forced-off';
+/** DSH plugin-manager's own registry URL rule. */
+const REGISTRY_URL = /^https?:\/\/\S+$/;
+
 interface ModelSetting {
   readonly name: string;
   readonly contextWindow?: number;
@@ -16,6 +23,12 @@ export interface Settings {
   readonly modelBaseUrl: string;
   readonly modelApiKey: string;
   readonly defaultModel: string;
+  /** Manageable catalog ids only; required entries are never stored. */
+  readonly pluginCatalog: Readonly<Record<string, CatalogState>>;
+  /** First item is the install registry, the rest are fallbacks. */
+  readonly pluginRegistries: readonly string[];
+  readonly registryProbeEnabled: boolean;
+  readonly webToolsEnabled: boolean;
 }
 const UPSERT_SETTING =
   'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
@@ -33,6 +46,10 @@ const DEFAULT_SETTINGS: Settings = {
   modelBaseUrl: '',
   modelApiKey: '',
   defaultModel: '',
+  pluginCatalog: {},
+  pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
+  registryProbeEnabled: true,
+  webToolsEnabled: false,
 };
 interface SettingRow {
   key: string;
@@ -74,6 +91,45 @@ function parseModels(value: unknown): ModelSetting[] {
   return models;
 }
 
+function parsePluginCatalog(value: unknown): Record<string, CatalogState> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw fieldError('pluginCatalog');
+  }
+  const entries = Object.entries(value);
+  if (!entries.every(([, state]) => typeof state === 'string' && Object.hasOwn(STATES, state))) {
+    throw fieldError('pluginCatalog');
+  }
+  // fromEntries defines data properties, so an own "__proto__" id cannot replace the prototype.
+  return Object.fromEntries(entries);
+}
+
+function parseRegistries(value: unknown): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((url) => typeof url === 'string' && REGISTRY_URL.test(url))
+  ) {
+    throw fieldError('pluginRegistries');
+  }
+  return [...(value as string[])];
+}
+
+/** Plugin-catalog, plugin-source and web-tool keys; any other key is not an owned setting. */
+function parsePluginSetting(key: string, value: unknown): unknown {
+  switch (key) {
+    case 'pluginCatalog':
+      return parsePluginCatalog(value);
+    case 'pluginRegistries':
+      return parseRegistries(value);
+    case 'registryProbeEnabled':
+    case 'webToolsEnabled':
+      if (typeof value !== 'boolean') throw fieldError(key);
+      return value;
+    default:
+      throw fieldError(key);
+  }
+}
+
 const STRING_FIELDS = ['modelBaseUrl', 'modelApiKey', 'defaultModel'];
 
 function parseOwned(key: string, value: unknown): unknown {
@@ -99,7 +155,7 @@ function parseOwned(key: string, value: unknown): unknown {
     case 'models':
       return parseModels(value);
     default:
-      throw fieldError(key);
+      return parsePluginSetting(key, value);
   }
 }
 
@@ -115,23 +171,16 @@ function validateDefault(settings: Settings): void {
 }
 
 export function readSettings(db: Database.Database): Settings {
-  const settings = { ...DEFAULT_SETTINGS, models: [] as ModelSetting[] };
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    models: [] as ModelSetting[],
+    pluginCatalog: {},
+    pluginRegistries: [...DEFAULT_SETTINGS.pluginRegistries],
+  };
   const rows = db.prepare<[], SettingRow>('SELECT key, value FROM settings').all();
   for (const row of rows) {
-    switch (row.key) {
-      case 'idleMinutes':
-      case 'cpuCores':
-      case 'memoryMiB':
-      case 'maxRunningInstances':
-      case 'defaultPermissionTier':
-      case 'models':
-      case 'modelBaseUrl':
-      case 'modelApiKey':
-      case 'defaultModel':
-        break;
-      default:
-        continue;
-    }
+    // The defaults enumerate exactly the owned keys; other stored rows are left unread.
+    if (!Object.hasOwn(DEFAULT_SETTINGS, row.key)) continue;
     let parsed: unknown;
     try {
       parsed = JSON.parse(row.value) as unknown;

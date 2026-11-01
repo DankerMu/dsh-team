@@ -4,11 +4,14 @@ import type { SourceAddressResolver } from '../auth/index.ts';
 import { modelConfigRoutes } from './model-config.ts';
 import { modelConnectionRoutes } from './model-connection.ts';
 import { runtimeConfigRoutes } from './runtime-config.ts';
+import { pluginCatalogRoutes } from './plugin-catalog.ts';
 import { accountStatusRoutes } from './account-status.ts';
 import { passwordResetRoutes } from './password-reset.ts';
 import { instanceActionRoutes } from './instance-actions.ts';
 import { auditEventRoutes } from './audit-events.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
+import { readPluginCatalog } from '../plugin-catalog/index.ts';
+import type { PluginCatalog } from '../plugin-catalog/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
 interface AccountQuery {
@@ -200,6 +203,16 @@ export const adminRoutes: FastifyPluginCallback<{
   // Separate plugin: modelConfigRoutes rewrites every 400 as invalid configuration.
   app.register(modelConnectionRoutes, { database, shutdown });
   app.register(runtimeConfigRoutes, { database, resolveSourceAddress, subnetPool });
+  // Read once at construction: a missing or malformed catalog fails buildApp instead of degrading.
+  // A synchronous plugin throw would escape registration, so the error settles through done().
+  let catalog: PluginCatalog;
+  try {
+    catalog = readPluginCatalog();
+  } catch (error) {
+    done(error instanceof Error ? error : new Error('Plugin catalog unavailable'));
+    return;
+  }
+  app.register(pluginCatalogRoutes, { database, resolveSourceAddress, catalog });
   app.register(passwordResetRoutes, { database, resolveSourceAddress });
   const pending = new Set<string>();
   app.register(accountStatusRoutes, {

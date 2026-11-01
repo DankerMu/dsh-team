@@ -4,7 +4,12 @@ import { createSession, deleteUserSessions } from '../src/auth/index.ts';
 import { readSettings } from '../src/db/index.ts';
 import { jsonRequestHeaders, withApp } from './auth-fixture.ts';
 import { registerAccount, successfulLogin, withListeningApp } from './auth-tcp-fixture.ts';
-import { administrator, delayedConfigBody } from './admin-config-fixture.ts';
+import {
+  administrator,
+  delayedConfigBody,
+  SEEDED_SETTINGS,
+  settingsRows,
+} from './admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/model-config';
 const CONFIG = {
@@ -209,7 +214,7 @@ it('requires an administrator and preserves Origin and JSON admission', async ()
       await response.text();
     }
 
-    expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+    expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
     expect(
       database
         .prepare("SELECT * FROM audit_events WHERE event_type = 'model-config.updated'")
@@ -234,7 +239,7 @@ it.each(['revoked', 'demoted'] as const)(
       });
 
       expect(response.status).toBe(state === 'revoked' ? 401 : 403);
-      expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+      expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
       expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(before);
       expect((response.body + lines.join('')).includes(secret)).toBe(false);
     });

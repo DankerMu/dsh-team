@@ -2,7 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { readSettings, writeSettings } from '../db/index.ts';
 import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
-import { administrator, putConfig } from '../../test/admin-config-fixture.ts';
+import {
+  administrator,
+  putConfig,
+  SEEDED_SETTINGS,
+  settingsRows,
+} from '../../test/admin-config-fixture.ts';
 
 const PATH = '/_platform/api/admin/runtime-config';
 const CONFIG = {
@@ -151,7 +156,7 @@ it.each(['1e400', '-1e400'])('rejects nonfinite CPU parsed from JSON %s', async 
     );
     expect(response.statusCode).toBe(400);
     expect(response.json<{ message: string }>().message).toContain('cpuCores');
-    expect(database.prepare('SELECT * FROM settings').all()).toEqual([]);
+    expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
     expect(database.prepare('SELECT * FROM audit_events').all()).toEqual(before);
   });
 });
