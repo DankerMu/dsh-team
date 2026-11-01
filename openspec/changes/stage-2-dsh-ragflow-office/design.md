@@ -353,6 +353,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - 目录文件由平台在构造时读一次（`platform/src/plugin-catalog/`，路径相对模块文件解析，源码树与平台镜像都落在 `images/dsh-user/catalog.json`），缺失或形状不合即启动失败。
 - `GET/PUT /_platform/api/admin/plugin-catalog`：GET 返回目录顺序的 `{ entries: [{ id, package, name, category, imageDefaultEnabled, state }] }`；PUT 提交 `{ entries: [{ id, state }] }`，必须恰好覆盖目录每个 id 一次，必启项只能是 `forced-on`，否则 400 且设置与审计不变；保存只写可管理项到 `pluginCatalog`，审计 `plugin-catalog.updated` 无细节字段。
 - `GET/PUT /_platform/api/admin/plugin-sources`：GET 返回 `{ pluginRegistries: string[], registryProbeEnabled: boolean }`（settings 同名两键的投影）；PUT 提交同形状对象，`pluginRegistries` 非空且每项匹配 DSH 的 `REGISTRY_URL`，`registryProbeEnabled` 严格布尔；信封不合 → 固定 400，某一项不合 → 400 只点名 `pluginRegistries[<下标>]`、不回显该项（地址可能带凭据）；整值替换，审计 `plugin-sources.updated` 无细节字段。点名下标的文案经 `config-route` 既有的 `ClientConfigValidationError` 通道：`patch` 可抛出它，调用移入事务前的 `try`，其余路由不受影响。不去重、不规范化、不限条数，与 DSH 自身一致。
+- `GET/PUT /_platform/api/admin/web-tools`：GET 返回 `{ webToolsEnabled: boolean }`（settings 同名键的投影）；PUT 提交恰为该形状的对象，值为严格布尔，其余一律固定 400；整值替换，审计 `web-tools.updated` 无细节字段。开关只负责存储与审计；覆盖层是否移除 `@deepseek-ai/dsh-tool-web` 由 11.4 按本键决定，在此之前生成器保持无条件移除。
 
 **员工插件页**
 
