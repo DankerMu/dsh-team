@@ -5,6 +5,7 @@ import { modelConfigRoutes } from './model-config.ts';
 import { modelConnectionRoutes } from './model-connection.ts';
 import { runtimeConfigRoutes } from './runtime-config.ts';
 import { pluginCatalogRoutes } from './plugin-catalog.ts';
+import { pluginSourcesRoutes } from './plugin-sources.ts';
 import { accountStatusRoutes } from './account-status.ts';
 import { passwordResetRoutes } from './password-reset.ts';
 import { instanceActionRoutes } from './instance-actions.ts';
@@ -213,6 +214,7 @@ export const adminRoutes: FastifyPluginCallback<{
     return;
   }
   app.register(pluginCatalogRoutes, { database, resolveSourceAddress, catalog });
+  app.register(pluginSourcesRoutes, { database, resolveSourceAddress });
   app.register(passwordResetRoutes, { database, resolveSourceAddress });
   const pending = new Set<string>();
   app.register(accountStatusRoutes, {

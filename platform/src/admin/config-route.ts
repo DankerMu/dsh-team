@@ -11,9 +11,13 @@ export interface AdminConfigOptions {
   resolveSourceAddress: SourceAddressResolver;
 }
 interface ConfigDescriptor {
-  name: 'model' | 'runtime' | 'plugin-catalog';
+  name: 'model' | 'runtime' | 'plugin-catalog' | 'plugin-sources';
   path: string;
-  auditType: 'model-config.updated' | 'runtime-config.updated' | 'plugin-catalog.updated';
+  auditType:
+    | 'model-config.updated'
+    | 'runtime-config.updated'
+    | 'plugin-catalog.updated'
+    | 'plugin-sources.updated';
   bodySchema: FastifySchema['body'];
   responseSchema: {
     readonly type: 'object';
@@ -37,7 +41,11 @@ export const ERROR_SCHEMA = {
   },
 } as const;
 
-class ClientConfigValidationError extends Error {}
+export class ClientConfigValidationError extends Error {}
+
+/** True for a non-null, non-array object, such as a parsed JSON object body. */
+export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /** Internal transport/commit boundary for administrator configuration descriptors. */
 export function registerConfigRoute(
@@ -104,9 +112,9 @@ export function registerConfigRoute(
       validatorCompiler: () => (value: unknown) => ({ value }),
     },
     (request, reply) => {
-      const patch = descriptor.patch(request.body);
-      if (patch === null) return reply.code(400).send(invalid);
       try {
+        const patch = descriptor.patch(request.body);
+        if (patch === null) return reply.code(400).send(invalid);
         const commit = database.transaction(() => {
           const now = Date.now();
           const token = readSessionCookie(request.headers.cookie);

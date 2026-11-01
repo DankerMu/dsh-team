@@ -7,7 +7,7 @@ const STATES: Record<string, true> = { employee: true, 'forced-on': true, 'force
 export const CATALOG_STATES = Object.freeze(Object.keys(STATES)) as readonly CatalogState[];
 export type CatalogState = 'employee' | 'forced-on' | 'forced-off';
 /** DSH plugin-manager's own registry URL rule. */
-const REGISTRY_URL = /^https?:\/\/\S+$/;
+export const REGISTRY_URL = /^https?:\/\/\S+$/;
 
 interface ModelSetting {
   readonly name: string;
