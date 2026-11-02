@@ -418,8 +418,11 @@ describe('forced plugin lock display', () => {
   it('queries only added subtrees and inserts nothing while unrelated content streams in', async () => {
     document.body.append(list());
     install({ admin: false, pluginCatalog: LOCKS });
-    const documentQuery = vi.spyOn(Document.prototype, 'querySelectorAll');
-    const elementQuery = vi.spyOn(Element.prototype, 'querySelectorAll');
+    const documentQueryAll = vi.spyOn(Document.prototype, 'querySelectorAll');
+    const documentQuery = vi.spyOn(Document.prototype, 'querySelector');
+    const elementQueryAll = vi.spyOn(Element.prototype, 'querySelectorAll');
+    const elementQuery = vi.spyOn(Element.prototype, 'querySelector');
+    const elementClosest = vi.spyOn(Element.prototype, 'closest');
     const added = new Set();
     const chat = document.createElement('main');
     document.body.append(chat);
@@ -431,9 +434,14 @@ describe('forced plugin lock display', () => {
       chat.append(message, document.createTextNode(`token ${turn}`));
     }
     await flush();
+    const anchorChecks = [...elementQuery.mock.contexts, ...elementClosest.mock.contexts];
+    const scans = elementQueryAll.mock.calls.length;
+    const documentQueries = documentQueryAll.mock.calls.length + documentQuery.mock.calls.length;
 
-    expect(documentQuery).not.toHaveBeenCalled();
-    for (const call of elementQuery.mock.contexts) expect(added.has(call)).toBe(true);
+    expect(documentQueries).toBe(0);
+    expect(scans).toBe(0);
+    expect(anchorChecks.length).toBeGreaterThan(0);
+    for (const context of anchorChecks) expect(added.has(context)).toBe(true);
     expect(marks(chat)).toEqual([]);
     expect(document.body.querySelectorAll(`[${LOCK}]`)).toHaveLength(2);
   });
