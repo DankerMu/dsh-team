@@ -217,7 +217,7 @@ verification:
       required_at: "L3+"
     local_stack:
       command: "pnpm test:stack"
-      evidence: "macOS arm64 local functional lane, not the isolated CfT lane and no isolation evidence; prerequisites (host, Docker, MemTotal, private 0600 loopback config, compose/buildx, python3 fcntl, pinned Playwright Chromium, RAGFlow v1.0.0-rc2) fail before any resource; local image builds, delivered Compose health, GET-only seed dataset read with unchanged snapshots, real DSH turn through the owned deterministic provider via admin model-config with exact /data/work bytes, transcript reply, zero console errors and external-origin requests; exact-owned retirement and unchanged RAGFlow stack; exact-head evidence comment for RAGFlow/Office PRs"
+      evidence: "macOS arm64 local functional lane, not the isolated CfT lane and no isolation evidence; prerequisites (host, Docker, MemTotal, private 0600 loopback config, compose/buildx, python3 fcntl, pinned Playwright Chromium, RAGFlow v1.0.0-rc2) fail before any resource; local image builds, delivered Compose health, GET-only seed dataset read with unchanged snapshots, Playwright Chromium drives real DSH through the gateway; a real DSH turn through the owned deterministic provider via admin model-config with exact /data/work bytes, transcript reply, zero console errors and external-origin requests; exact-owned retirement and unchanged RAGFlow stack; exact-head evidence comment for RAGFlow/Office PRs"
       required_at: "L3+"
     platform_ui:
       command: "pnpm test:ui"

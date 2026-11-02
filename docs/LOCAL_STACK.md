@@ -11,21 +11,22 @@ giap-vps 上 `pnpm test:docker` 与 `pnpm test:deploy` 的门禁不变，本机�
 
 ## 1. 前提
 
-`pnpm test:stack` 在创建任何资源之前逐项检查以下前提，任一项不满足就以非零状态退出并说明原因：
+`pnpm test:stack` 在创建任何资源之前按下面的顺序检查前提，任一项不满足就以非零状态退出并说明原因：
 
-- 主机是 macOS arm64，本机 Docker 可用，并且没有设置 `DOCKER_HOST`、`DOCKER_CONTEXT`。
-- `docker info` 报告的 MemTotal 不低于 14 GiB。可以在 Docker Desktop 的 Resources 里调整。
-- 私有配置文件 `~/.config/dsh-team/stack.json` 存在、归当前用户所有、权限为 0600，格式见第 3 节。
-- Docker Compose 2.33.1 或更新，`docker buildx` 可用。本通道使用私有的 Docker 配置目录，会自动指向 Docker Desktop 自带的插件目录。
-- `/usr/bin/python3` 可用，并且带 `fcntl` 模块。部署锁由它持有。
-- 钉定的 Playwright Chromium 已安装。首次使用前运行：
+1. 没有设置 `DOCKER_HOST`、`DOCKER_CONTEXT`。
+2. 主机是 macOS arm64。
+3. 私有配置文件 `~/.config/dsh-team/stack.json` 存在、归当前用户所有、权限为 0600，格式见第 3 节。
+4. 本机 Docker 可用，`docker info` 报告的 MemTotal 不低于 14 GiB（在 Docker Desktop 的 Resources 里调整）。本通道只在固定 PATH `/usr/local/bin:/usr/bin:/bin` 中查找 `docker`，所以 Docker Desktop 的 CLI 必须装在 `/usr/local/bin/docker`。只为当前用户安装 CLI 时，即使你自己的 shell 能运行 `docker info`，这一项也会以 Docker 不可用失败。
+5. Docker Compose 2.33.1 或更新，`docker buildx` 可用。本通道使用私有的 Docker 配置目录，并从 `/usr/local/bin/docker` 的实际位置推出 Docker Desktop 自带的插件目录。
+6. `/usr/bin/python3` 可用，并且带 `fcntl` 模块。部署锁由它持有。
+7. 钉定的 Playwright Chromium 已安装。首次使用前运行：
 
-  ```bash
-  pnpm install
-  pnpm test:ui:install
-  ```
+   ```bash
+   pnpm install
+   pnpm test:ui:install
+   ```
 
-- 本机 RAGFlow 测试栈可达，版本接口报告 `v1.0.0-rc2`，部署方法见第 2 节。
+8. 本机 RAGFlow 测试栈可达，版本接口报告 `v1.0.0-rc2`，部署方法见第 2 节。
 
 ## 2. 部署本机 RAGFlow 测试栈
 
@@ -61,7 +62,7 @@ services:
 ```
 
 这个覆盖文件做了两件事：
-- Infinity 改用 x64 镜像，在 arm64 上经仿真运行。
+- Infinity 从上游的 `v0.7.4-x64-v3` 换成 `v0.7.4-x64-v2`，并固定 `platform: linux/amd64`，在 arm64 上经仿真运行（arm64 标签需要 glibc 2.38）。
 - 只在 loopback 上发布 RAGFlow 的 API 端口 19380 和网页端口 19080；其他服务一律不发布端口。
 
 启动和检查：
@@ -85,7 +86,12 @@ curl -s http://127.0.0.1:19380/api/v1/system/version
 
 ## 3. 私有配置文件
 
-`~/.config/dsh-team/stack.json` 归当前用户、权限 0600、不超过 16 KiB，必须恰好是下面三个键的 JSON 对象：
+`~/.config/dsh-team/stack.json` 归当前用户、权限 0600、不超过 16 KiB，必须恰好是下面三个键的 JSON 对象。先建目录和一个 0600 的空文件，再用编辑器写入内容：
+
+```bash
+mkdir -p ~/.config/dsh-team && chmod 700 ~/.config/dsh-team
+touch ~/.config/dsh-team/stack.json && chmod 600 ~/.config/dsh-team/stack.json
+```
 
 ```json
 {
@@ -93,11 +99,6 @@ curl -s http://127.0.0.1:19380/api/v1/system/version
   "ragflowApiKey": "<第 2 节创建的 RAGFlow API 密钥>",
   "embeddingApiKey": "<第 2 节配置的嵌入模型提供方密钥>"
 }
-```
-
-```bash
-mkdir -p ~/.config/dsh-team && chmod 700 ~/.config/dsh-team
-chmod 600 ~/.config/dsh-team/stack.json
 ```
 
 规则：
@@ -114,7 +115,7 @@ pnpm seed:stack
 
 - 种子脚本只对私有配置里的地址写入。它建立 3 个固定的库（`dsh-team-seed-policies`、`dsh-team-seed-products`、`dsh-team-seed-minutes`），每个库上传 2 个仓库内的小文本文件并解析。
 - 已经存在并解析完成的数据会被复用。第二次运行不发出任何上传或解析请求。
-- 可以带一个与私有配置字节相等的地址参数，例如 `pnpm seed:stack http://127.0.0.1:19380`；地址不一致时脚本在任何网络请求之前拒绝执行。
+- 可以带一个地址参数，例如 `pnpm seed:stack http://127.0.0.1:19380`。比较前两边各去掉一个结尾斜线，之后必须与私有配置字节相等；不一致时脚本在任何网络请求之前拒绝执行。
 - 脚本没有删除、更新或停止解析的路径。解析失败时只报库名与文件名，并以非零状态结束。
 - 库有 chunk 之后，RAGFlow 不允许再改嵌入模型。要换模型，先在 RAGFlow 界面删除这三个库，再重新运行 `pnpm seed:stack`。
 
@@ -127,24 +128,27 @@ pnpm test:stack
 **一次运行做的事：**
 
 1. 检查第 1 节的前提，然后把本次运行目录写到 stderr：`test:stack run directory <dir>`。
-2. 运行 vitest 项目 `stack`，即 `platform/test/*.stack.test.ts`：
-   1. 在本机构建两个镜像。
-   2. 用 compose 拉起平台，检查 `/healthz`。
-   3. 核对三个库共六个文件都已 `COMPLETED`。
+2. 运行 vitest 项目 `stack`，即 `platform/test/**/*.stack.test.ts`：
+   1. 只读核对三个库共六个文件都已 `COMPLETED`，记下快照。
+   2. 取得部署锁，在本机构建两个镜像。
+   3. 用 compose 拉起平台，检查 `/healthz`。
    4. 在平台容器里启动确定性 provider，并把管理员模型配置指向它。
    5. 让员工经网关登录真实 DSH 并发一条消息。
    6. 核对回复显示在对话里，`/data/work` 下写出的文件与脚本逐字节一致；同时核对零控制台错误、没有对外 origin 的请求。
+   7. 排空并拆除部署、释放锁之后，再读一次种子快照，要求与开始时相同。
 3. 截图保存在 `reports/stack/<runId>/`。
 4. 结束后，按账本精确退休本次创建的容器、网络、卷和镜像，固定名平台先排空再删除。
 
 **清理规则：**
-- 资源统一使用 `dsh-team` 前缀和 `dsh-team.test-run` 标签。
-- 用例进程组在 2 秒内没有结算、清理失败，或退休后按标签清点仍有残留时，运行目录和账本会保留，命令以非零状态结束。
+- 资源都使用 `dsh-team` 前缀，并在创建之前写进账本，每条账本记录带着该资源的所有权标签：
+  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform` 和 compose 网络，带 `dsh-team.test-run=<runId>`。
+  - 平台为员工创建的实例资源 `dsh-team-u-<id>`、`dsh-team-home-<id>`、`dsh-team-work-<id>`、`dsh-team-net-<id>`，带 `dsh-team.user=<id>`，不带运行标签。
+- vitest 自己结束后，它的进程组要在 2 秒内结算。没有结算、清理失败，或退休后按 `dsh-team.test-run` 标签清点仍有残留时，运行目录和账本会保留，命令以非零状态结束。按运行标签的清点看不到员工实例资源，它们由账本的精确退休删除。
 - 账本保留后没有可以重新进入的退休入口，按以下顺序手工恢复：
-  1. 确认运行目录记录的进程已不存在，并且没有其他部署入口持有 `/tmp/dsh-team-deployment.lock`。
-  2. 对带本次 `dsh-team.test-run` 标签、ID 已核实的 `dsh-team-platform` 先执行 `docker stop`，并确认它正常退出（`ExitCode 0`、未 OOM）。
-  3. 按容器、网络、卷、镜像的顺序，只删除账本列出且带本次标签的精确名。
-  4. 删除运行目录。
+  1. 确认没有残留的 `scripts/test-stack.mjs`、`vitest run --project stack` 或 docker CLI 进程，并且没有进程持有 `/tmp/dsh-team-deployment.lock`（例如 `lsof /tmp/dsh-team-deployment.lock` 没有输出）。手工恢复期间不持有部署锁，期间不要启动任何部署入口。
+  2. 若账本里有 `dsh-team-platform`，先核实它带本次 `dsh-team.test-run` 标签，再按代码的排空方式处理：`docker kill --signal SIGTERM <ID>`，然后 `docker wait <ID>` 必须输出 `0`，再用 `docker inspect` 确认 `Running=false`、`ExitCode=0`、`OOMKilled=false`。任一项不满足就停止，什么都不删。不要用 `docker stop`：它在宽限期后发 SIGKILL，强制终止不能证明平台已排空。
+  3. 按容器、网络、卷、镜像的顺序，逐条删除账本列出的精确名。删除前核对该资源的标签与账本同一条记录里的所有权标签一致：员工实例资源核对 `dsh-team.user`，其余核对 `dsh-team.test-run`。
+  4. 删除运行目录，以及 `$TMPDIR` 下这次运行留下的 `dsh-team-test-docker-*` 私有目录（里面是平台数据、`compose.env` 和绑定源）。
 
   在此之前，遗留的 `dsh-team-platform` 会让下一次运行在准入时被拒绝。
 
@@ -158,7 +162,7 @@ pnpm test:stack
 | 命令 | `pnpm test:stack`，以及主机的 Docker Desktop 与 Compose 版本 |
 | 退出码 | 命令的实际退出码 |
 | 用例计数 | vitest 报告的文件数与用例数，以及用例打印的 `stackEvidence` 行 |
-| 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；带该标签的镜像清单与运行前相同 |
+| 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷为 0（覆盖只带 `dsh-team.user` 的员工实例资源）；带运行标签的镜像清单与运行前相同 |
 | RAGFlow 测试栈 | 运行前后的 `ragflow-rc2-*` 容器 ID、StartedAt、状态、重启次数与数据卷清单逐行一致 |
 | 凭据 | 运行日志中没有密钥 |
 
