@@ -181,6 +181,21 @@ DSH 升级到 0.2.1-rc.2 后，本能力既有的受管行为 MUST 保持不变�
 
 ## MODIFIED Requirements
 
+### Requirement: 受管覆盖层启用平台入口插件
+
+受管覆盖层 MUST 为每个员工实例插入并启用 `/opt/dsh-team/platform-nav/index.js`，其 `config` 恰为 `{ admin, pluginCatalog }`：`admin` 是生成覆盖层时该账号是否为管理员；`pluginCatalog` 以目录项包名为键、按目录文件顺序列出每个状态为 `forced-on` 或 `forced-off` 的目录项及其状态（受管必启项恒为 `forced-on`，`employee` 项不出现）。其他受管行及其顺序不变；实例启动后浏览器收到的启动模块清单 MUST 恰好包含该插件。平台入口插件 MUST 把这两个值发布给它的客户端半边，客户端半边据此在员工插件页把强制项显示为锁定（见 plugin-catalog「员工插件页每个预装项都有开关」）。
+
+#### Scenario: 实例加载平台入口插件
+
+- **WHEN** 员工实例按受管覆盖层启动并在真实浏览器中打开工作台
+- **THEN** 启动模块清单与预期精确一致且包含 `@dsh-team/platform-nav`，侧栏底部出现平台入口，原有插件和受管设置不变
+- **AND** 员工账号的覆盖层 `config.admin` 为 false，管理员账号为 true；直接打开 DSH 的验证通道仍无控制台错误
+
+#### Scenario: 目录强制状态随平台入口行下发
+
+- **WHEN** 目录设置为默认（三个受管必启项、办公 Agent bundle 为 `employee`），以及办公 Agent bundle 改为 `forced-off`
+- **THEN** 前者的 `config.pluginCatalog` 恰为三个必启项包名各对 `forced-on`，后者在目录顺序上多出办公 Agent 包名对 `forced-off`；相同输入逐字节相同
+
 ### Requirement: 员工不能覆盖受管配置
 
 员工在自己实例里做的任何设置修改 MUST NOT 改变受管覆盖层规定的值。
