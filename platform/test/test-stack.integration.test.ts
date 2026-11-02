@@ -362,6 +362,50 @@ it('retires only after the signalled case runner itself closes, including its la
   }
 });
 
+it('records an EPERM-refused group SIGTERM and still settles through the group observation', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-team-stack-eperm-'));
+  const [marker, go] = [join(directory, 'ready'), join(directory, 'go')];
+  // The refused group signal never reaches the runner: it exits only once told to, after it.
+  const child = String.raw`const fs=require('node:fs');const [marker,go]=process.argv.slice(1);
+    setInterval(()=>{if(fs.existsSync(go))process.exit(0);},20);
+    setTimeout(()=>process.exit(2),10000);fs.writeFileSync(marker,'ready');`;
+  const listeners = process.listenerCount('SIGTERM');
+  const retire = vi.fn<Retire>(() => Promise.resolve());
+  const kill = process.kill.bind(process);
+  // Darwin's answer for a group of unreaped zombies; group observation (signal 0) stays real.
+  const refused = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+    if (pid < 0 && signal === 'SIGTERM')
+      throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+    return kill(pid, signal);
+  });
+  try {
+    const pending = run({
+      spawnCases: (env, cwd) =>
+        spawnCases(env, cwd, { file: process.execPath, args: ['-e', child, marker, go] }),
+      retire,
+    });
+    await vi.waitFor(
+      () => {
+        expect(existsSync(marker)).toBe(true);
+      },
+      { timeout: 5000 },
+    );
+    expect(() => process.emit('SIGTERM', 'SIGTERM')).not.toThrow();
+    await writeFile(go, '');
+    const result = await pending;
+
+    expect(refused).toHaveBeenCalledWith(expect.any(Number), 'SIGTERM');
+    expect(refused.mock.calls.find(([, signal]) => signal === 'SIGTERM')?.[0]).toBeLessThan(0);
+    expect(result).toMatchObject({ code: 143, stderr: [runLine(result.runDir)] });
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(existsSync(result.runDir)).toBe(false);
+    expect(process.listenerCount('SIGTERM')).toBe(listeners);
+  } finally {
+    refused.mockRestore();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 it.each<[string, (journal: string) => void, number]>([
   ['a retirement failure', () => undefined, 1],
   [

@@ -251,7 +251,10 @@ export async function spawnCases(env, cwd, launch) {
     try {
       process.kill(-child.pid, signal);
     } catch (error) {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ESRCH') throw error;
+      // Darwin answers EPERM for a group of unreaped zombies: like ESRCH, the interruption stays
+      // recorded and the bounded group observation alone decides settlement.
+      const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+      if (code !== 'ESRCH' && code !== 'EPERM') throw error;
     }
   };
   process.on('SIGINT', forward);

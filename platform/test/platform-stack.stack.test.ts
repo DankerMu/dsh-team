@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { readPrivateJsonFile } from '../../scripts/docker-proxy-environment.mjs';
 import { SEED_DATASETS, readSeedDatasets } from '../../scripts/seed-stack.mjs';
@@ -98,7 +98,9 @@ async function composeScenario(lifecycle: UserImageLifecycle, timings: Timings):
   const project = `dsh-team-test-${runId}`;
   const network = `${project}_default`;
   // Compose binds source and target identically: Docker Desktop needs the resolved host path.
-  const directory = await mkdtemp(join(realpathSync(tmpdir()), 'dsh-team-stack-deployment-'));
+  // The lifecycle's private directory outlives this case: `finish()` removes it only after the
+  // exact-owned retirement, so an undrained platform never loses its bind sources while alive.
+  const directory = realpathSync(dirname(lifecycle.overlayDirectory));
   let submitted = false;
   const failures: unknown[] = [];
   try {
@@ -151,15 +153,10 @@ async function composeScenario(lifecycle: UserImageLifecycle, timings: Timings):
       failures.push(error);
     }
   }
-  try {
-    await rm(directory, { recursive: true, force: true });
-  } catch (error) {
-    failures.push(error);
-  }
-  // The original failure stays first; drainage and directory removal failures follow it.
+  // The original failure stays first; a drainage failure follows it.
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1)
-    throw new AggregateError(failures, 'Local stack deployment and teardown failed');
+    throw new AggregateError(failures, 'Local stack deployment and drainage failed');
   return 'verified';
 }
 

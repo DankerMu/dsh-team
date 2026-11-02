@@ -15,7 +15,8 @@ const daemon = fileURLToPath(new URL('./trusted-docker-fake-daemon.mjs', import.
 const calls = new URL('../../.run/fake-daemon/calls.jsonl', import.meta.url);
 const ledger = new URL('../../.run/fake-daemon/preload.jsonl', import.meta.url);
 const lock = '/tmp/dsh-team-deployment.lock';
-const LOCK_HOLDER_MARK = 'dsh-team deployment lock holder';
+// Pinned to the darwin holder script in docker-cleanup.ts by docker-cleanup.integration.test.ts.
+export const LOCK_HOLDER_MARK = 'dsh-team deployment lock holder';
 const original = { ...childProcess };
 
 function intercepted(command, args) {

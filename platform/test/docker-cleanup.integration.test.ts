@@ -1,5 +1,6 @@
 import type * as ChildProcessModule from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -536,6 +537,32 @@ it('holds the darwin deployment lock through the exact isolated python3 fcntl ho
     const again = await acquireDeploymentLock(path);
     await again();
     expect(existsSync(path)).toBe(true);
+  });
+});
+
+/** The custody preload patches child_process on import: read its mark in a throwaway process. */
+function preloadLockHolderMark(): unknown {
+  const preload = new URL('./trusted-docker-fake-preload.mjs', import.meta.url).href;
+  const read =
+    'const { LOCK_HOLDER_MARK } = await import(process.argv[1]);' +
+    'process.stdout.write(JSON.stringify(LOCK_HOLDER_MARK ?? null));';
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', read, preload], {
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  expect(result.status).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+it('marks the darwin holder script with the mark the custody preload intercepts', async () => {
+  const mark = preloadLockHolderMark();
+  expect(mark).toEqual(expect.stringMatching(/\S/));
+  host.platform = 'darwin';
+  await ownedLockPath(async (path) => {
+    const release = await acquireDeploymentLock(path);
+    await release();
+    expect(host.spawned[0]?.file).toBe('/usr/bin/python3');
+    expect(host.spawned[0]?.args[2]?.split('\n')[0]).toBe(`# ${String(mark)}`);
   });
 });
 

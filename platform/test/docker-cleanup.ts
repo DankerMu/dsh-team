@@ -12,6 +12,7 @@ const DEPLOYMENT_PLATFORM = 'dsh-team-platform';
 const DEPLOYMENT_LOCK = '/tmp/dsh-team-deployment.lock';
 // macOS has no flock(1): the same kernel flock(2) semantics through Python's fcntl. A busy lock
 // exits nonzero silently; stdin EOF or holder death releases it; the file is never unlinked.
+// Its first line is the custody preload's interception mark (`LOCK_HOLDER_MARK`).
 const DARWIN_LOCK_HOLDER = `# dsh-team deployment lock holder
 import fcntl, os, sys
 try:
