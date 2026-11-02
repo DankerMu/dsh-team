@@ -99,12 +99,13 @@ export async function holdAdminList(
   page: Page,
   url: string,
   release: Promise<undefined>,
+  method: 'GET' | 'PUT' = 'GET',
 ): Promise<PromiseWithResolvers<undefined>> {
   const arrival = Promise.withResolvers<undefined>();
   await page.route(
     url,
     async (route) => {
-      expect(route.request().method()).toBe('GET');
+      expect(route.request().method()).toBe(method);
       arrival.resolve(undefined);
       await release;
       await route.continue();

@@ -1,7 +1,7 @@
 export function AdminNavigation({
   page,
 }: {
-  page: 'accounts' | 'instances' | 'audit' | 'models' | 'runtime';
+  page: 'accounts' | 'instances' | 'audit' | 'models' | 'runtime' | 'plugins';
 }) {
   return (
     <div className="admin-sidebar">
@@ -25,6 +25,9 @@ export function AdminNavigation({
           </a>
           <a href="/_platform/admin/runtime" aria-current={page === 'runtime' ? 'page' : undefined}>
             运行参数
+          </a>
+          <a href="/_platform/admin/plugins" aria-current={page === 'plugins' ? 'page' : undefined}>
+            插件目录
           </a>
           <a href="/_platform/account">账号设置</a>
           <a href="/">返回工作台</a>

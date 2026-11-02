@@ -237,7 +237,8 @@ legend {
 
 /* Controls */
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-width: 0;
   min-height: 2.75rem;
@@ -271,13 +272,15 @@ select {
 }
 
 input:hover:not(:disabled),
-select:hover:not(:disabled) {
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
   border-color: rgb(15 23 42 / 22%);
   background-color: rgb(255 255 255 / 78%);
 }
 
 input:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: none;
   border-color: var(--focus);
   background-color: rgb(255 255 255 / 92%);
@@ -287,7 +290,8 @@ select:focus {
 }
 
 input:disabled,
-select:disabled {
+select:disabled,
+textarea:disabled {
   color: var(--text-secondary);
   background-color: rgb(241 245 249 / 60%);
   cursor: not-allowed;
@@ -1212,6 +1216,34 @@ pre {
 
 .model-actions button {
   min-width: 9rem;
+}
+
+/* Plugin catalog page: single-column sections with a multi-line source list and switches. */
+.admin .plugins-form > fieldset {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+textarea {
+  min-height: 6.5rem;
+  padding: 0.625rem 0.875rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  justify-self: start;
+}
+
+.toggle input {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  min-height: 0;
+  padding: 0;
+  accent-color: var(--focus);
 }
 
 .field .key-state {

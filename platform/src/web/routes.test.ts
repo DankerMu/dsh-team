@@ -87,16 +87,18 @@ describe('declared platform static routes', () => {
     expect(response.body).toBe(HTML);
   });
 
-  it.each(['/_platform/admin/audit', '/_platform/admin/models', '/_platform/admin/runtime'])(
-    'serves %s through the confined HTML owner',
-    async (url) => {
-      const response = await app.inject(url);
+  it.each([
+    '/_platform/admin/audit',
+    '/_platform/admin/models',
+    '/_platform/admin/runtime',
+    '/_platform/admin/plugins',
+  ])('serves %s through the confined HTML owner', async (url) => {
+    const response = await app.inject(url);
 
-      expect(response.statusCode).toBe(200);
-      expect(response.headers['content-type']).toContain('text/html');
-      expect(response.body).toBe(HTML);
-    },
-  );
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toBe(HTML);
+  });
 
   it('serves HEAD metadata without a body and bounded byte ranges', async () => {
     const cases: [string, string][] = [
@@ -108,6 +110,7 @@ describe('declared platform static routes', () => {
       ['/_platform/admin/audit', HTML],
       ['/_platform/admin/models', HTML],
       ['/_platform/admin/runtime', HTML],
+      ['/_platform/admin/plugins', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -155,6 +158,10 @@ describe('declared platform static routes', () => {
     '/_platform/admin/runtime/settings',
     '/_platform/admin/runtime%00',
     '/_platform/admin/runtime%2fsettings',
+    '/_platform/admin/plugins/',
+    '/_platform/admin/plugins/settings',
+    '/_platform/admin/plugins%00',
+    '/_platform/admin/plugins%2fsettings',
     '/_platform/api/unknown',
     '/_platform/assets/missing.js',
     '/_platform/assets/',
