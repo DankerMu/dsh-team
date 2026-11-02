@@ -37,11 +37,14 @@ interface Logged {
   query: URLSearchParams;
   authorization: string | undefined;
   json?: unknown;
-  files?: { name: string; bytes: Buffer }[];
+  files?: { field: string | undefined; name: string; bytes: Buffer }[];
 }
 interface Reply {
   status: number;
-  body: unknown;
+  body?: unknown;
+  raw?: string;
+  headers?: Record<string, string>;
+  destroy?: true;
 }
 interface Fake {
   datasets: FakeDataset[];
@@ -49,6 +52,7 @@ interface Fake {
   embedding: string;
   parseOutcome: string[];
   createdName: (name: string) => string;
+  uploadedName: (name: string) => string;
   override: (entry: Logged) => Reply | undefined;
 }
 interface Options {
@@ -61,6 +65,10 @@ interface Options {
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const [ragflowKey, embeddingKey, progressSentinel] = [randomUUID(), randomUUID(), randomUUID()];
 const MODEL = 'text-embedding-3-small@OpenAI';
+// RAGFlow's text run states, indexed by their numeric synonyms 0..5.
+const RUN_NAMES = ['UNSTART', 'RUNNING', 'CANCEL', 'DONE', 'FAIL', 'SCHEDULE'];
+const runName = (run: string | number) =>
+  typeof run === 'number' || /^[0-5]$/.test(run) ? RUN_NAMES[Number(run)] : run;
 const [POLICIES, PRODUCTS, MINUTES] = SEED_DATASETS.map(({ name }) => name) as [
   string,
   string,
@@ -80,7 +88,7 @@ const doc = (name: string, run: string | number, queue: string[] = []): FakeDoc 
   id: randomUUID(),
   name,
   run,
-  chunks: run === 'DONE' ? 1 : 0,
+  chunks: runName(run) === 'DONE' ? 1 : 0,
   queue,
 });
 const dataset = (name: string, docs: FakeDoc[] = [], embedding = MODEL): FakeDataset => ({
@@ -96,27 +104,35 @@ afterEach(async () => {
   for (const close of closers.splice(0)) await close();
 });
 
-function summary(set: FakeDataset) {
-  const count = (run: string) => set.docs.filter((item) => item.run === run).length;
+// The parsing counts appear only with `include_parsing_status=true`, as in the reference.
+function summary(set: FakeDataset, parsingStatus: boolean) {
+  const count = (run: string) => set.docs.filter((item) => runName(item.run) === run).length;
+  const counts = {
+    unstart_count: count('UNSTART'),
+    running_count: count('RUNNING'),
+    cancel_count: count('CANCEL'),
+    done_count: count('DONE'),
+    fail_count: count('FAIL'),
+  };
   return {
     id: set.id,
     name: set.name,
     embedding_model: set.embedding,
     document_count: set.docs.length,
     chunk_count: set.docs.reduce((total, item) => total + item.chunks, 0),
-    done_count: count('DONE'),
-    fail_count: count('FAIL'),
-    running_count: count('RUNNING'),
+    ...(parsingStatus ? counts : {}),
   };
 }
 
-function listDocuments(set: FakeDataset): Reply {
+const pageSize = (entry: Logged) => Number(entry.query.get('page_size') ?? 30);
+
+function listDocuments(set: FakeDataset, entry: Logged): Reply {
   for (const item of set.docs) {
     const next = item.queue.shift();
     if (next !== undefined) item.run = next;
-    if (item.run === 'DONE') item.chunks = 1;
+    if (runName(item.run) === 'DONE') item.chunks = 1;
   }
-  const docs = set.docs.map(({ id, name, run, chunks }) => ({
+  const docs = set.docs.slice(0, pageSize(entry)).map(({ id, name, run, chunks }) => ({
     id,
     name,
     run,
@@ -141,9 +157,9 @@ function multipart(body: Buffer, type: string) {
     });
 }
 
-function upload(set: FakeDataset, entry: Logged): Reply {
+function upload(fake: Fake, set: FakeDataset, entry: Logged): Reply {
   entry.files ??= [];
-  const created = entry.files.map(({ name }) => doc(name, 'UNSTART'));
+  const created = entry.files.map(({ name }) => doc(fake.uploadedName(name), 'UNSTART'));
   set.docs.push(...created);
   return {
     status: 200,
@@ -165,12 +181,17 @@ function datasets(fake: Fake, entry: Logged): Reply {
     const name = (entry.json as { name: string }).name;
     const set = dataset(fake.createdName(name), [], fake.embedding);
     fake.datasets.push(set);
-    return { status: 200, body: { code: 0, data: { ...summary(set), chunk_method: 'naive' } } };
+    const data = { ...summary(set, false), chunk_method: 'naive' };
+    return { status: 200, body: { code: 0, data } };
   }
   if (entry.query.has('name'))
     return { status: 200, body: { code: 102, message: "The dataset doesn't exist" } };
   const id = entry.query.get('id');
-  const data = fake.datasets.filter((set) => id === null || set.id === id).map(summary);
+  const parsingStatus = entry.query.get('include_parsing_status') === 'true';
+  const data = fake.datasets
+    .filter((set) => id === null || set.id === id)
+    .slice(0, pageSize(entry))
+    .map((set) => summary(set, parsingStatus));
   return { status: 200, body: { code: 0, data, total_datasets: data.length } };
 }
 
@@ -184,8 +205,17 @@ function route(fake: Fake, entry: Logged): Reply {
   const set = fake.datasets.find((item) => item.id === id);
   if (set === undefined) return { status: 404, body: { code: 404 } };
   if (kind === 'chunks' && entry.method === 'POST') return parse(fake, set, entry);
-  if (entry.method === 'POST') return upload(set, entry);
-  return listDocuments(set);
+  if (entry.method === 'POST') return upload(fake, set, entry);
+  return listDocuments(set, entry);
+}
+
+function respond(reply: Reply, response: ServerResponse) {
+  if (reply.destroy === true) {
+    response.destroy();
+    return;
+  }
+  response.writeHead(reply.status, { 'content-type': 'application/json', ...reply.headers });
+  response.end(reply.raw ?? JSON.stringify(reply.body));
 }
 
 async function handle(
@@ -208,15 +238,9 @@ async function handle(
       ? { json: JSON.parse(body.toString()) as unknown }
       : {}),
   };
-  if (type.startsWith('multipart/form-data'))
-    entry.files = multipart(body, type).map(({ field, name, bytes }) => {
-      expect(field).toBe('file');
-      return { name, bytes };
-    });
+  if (type.startsWith('multipart/form-data')) entry.files = multipart(body, type);
   log.push(entry);
-  const reply = route(fake, entry);
-  response.writeHead(reply.status, { 'content-type': 'application/json' });
-  response.end(JSON.stringify(reply.body));
+  respond(route(fake, entry), response);
 }
 
 async function start(overrides: Partial<Fake> = {}) {
@@ -226,6 +250,7 @@ async function start(overrides: Partial<Fake> = {}) {
     embedding: MODEL,
     parseOutcome: ['RUNNING', 'DONE'],
     createdName: (name) => name,
+    uploadedName: (name) => name,
     override: () => undefined,
     ...overrides,
   };
@@ -294,6 +319,7 @@ async function run(fake: Fake, log: Logged[], url: string, home: string, options
     expect(authorization).toBe(
       path === '/api/v1/system/version' ? undefined : `Bearer ${ragflowKey}`,
     );
+  for (const { files } of requests) for (const { field } of files ?? []) expect(field).toBe('file');
   expect(sleeps.every((ms) => ms === 2000)).toBe(true);
   return {
     code,
@@ -335,6 +361,19 @@ it('seeds an empty stack once, then a second run sends no POST and reports ident
     'page_size=100&include_parsing_status=true',
   ]);
   expect(first.requests.some((r) => r.query.has('name'))).toBe(false);
+  const documentLists = first.requests.filter(
+    (r) => r.method === 'GET' && r.path.endsWith('/documents'),
+  );
+  expect(documentLists.map((r) => r.query.toString())).toEqual(many(9, () => 'page_size=100'));
+  const summaries = first.requests.filter(
+    (r) => r.path === '/api/v1/datasets' && r.query.has('id'),
+  );
+  expect(summaries.map((r) => r.query.toString())).toEqual(
+    stack.fake.datasets.map(({ id }) => `id=${id}&include_parsing_status=true`),
+  );
+  expect(uploads(first.requests).flatMap((r) => r.files?.map(({ field }) => field))).toEqual(
+    many(6, () => 'file'),
+  );
   expect(datasetPosts(first.requests).map((r) => r.json)).toEqual(
     SEED_DATASETS.map(({ name }) => ({ name })),
   );
@@ -422,6 +461,43 @@ it('treats the numeric run state 0 as UNSTART', async () => {
   expect(parses(result.requests)[0]?.json).toEqual({ document_ids: docs.map(({ id }) => id) });
 });
 
+it('waits for a SCHEDULE residue without putting it in a parse request', async () => {
+  const scheduled = doc(ATTENDANCE, 'SCHEDULE', ['SCHEDULE', 'DONE']);
+  const stack = await start({ datasets: [dataset(POLICIES, [scheduled, doc(EXPENSE, 'DONE')])] });
+  const result = await stack.run();
+
+  expect(result).toMatchObject({ code: 0, stderr: [] });
+  expect(result.stdout[0]).toBe(line(POLICIES, 'existing', 0, 0));
+  expect(parsedIds(result.requests)).not.toContain(scheduled.id);
+  expect(parses(result.requests)).toHaveLength(2);
+});
+
+it('parses the numeric run states 2 (CANCEL) and 4 (FAIL)', async () => {
+  const docs = [doc(ATTENDANCE, '2'), doc(EXPENSE, '4')];
+  const stack = await start({ datasets: [dataset(POLICIES, docs)] });
+  const result = await stack.run();
+
+  expect(result).toMatchObject({ code: 0, stderr: [] });
+  expect(result.stdout[0]).toBe(line(POLICIES, 'existing', 0, 2));
+  expect(parses(result.requests)[0]?.json).toEqual({ document_ids: docs.map(({ id }) => id) });
+});
+
+it('treats the numeric run state 3 as DONE: neither parsed nor awaited', async () => {
+  const datasets = SEED_DATASETS.map(({ name, files }) =>
+    dataset(
+      name,
+      files.map((file) => doc(file, '3')),
+    ),
+  );
+  const result = await (await start({ datasets })).run({ parseDeadline: 1 });
+
+  expect(result).toMatchObject({ code: 0, stderr: [], sleeps: [], posts: [] });
+  expect(result.stdout).toEqual([
+    ...SEED_DATASETS.map(({ name }) => line(name, 'existing', 0, 0)),
+    COMPLETE,
+  ]);
+});
+
 it.each<[string, (url: string) => string[]]>([
   ['the configured address', (url) => [url]],
   ['the configured address with a trailing slash', (url) => [`${url}/`]],
@@ -449,6 +525,11 @@ it.each<[string, Options, string]>([
     'prerequisite failed: private configuration missing',
   ],
   ['a 0644 configuration', { mode: 0o644 }, 'prerequisite failed: private configuration invalid'],
+  [
+    'a localhost configuration',
+    { config: (url) => settings(url.replace('127.0.0.1', 'localhost')) },
+    'prerequisite failed: private configuration invalid',
+  ],
 ])('rejects %s without any connection', async (_name, options, text) => {
   const stack = await start();
   const result = await stack.run(options);
@@ -473,6 +554,56 @@ const api = (reply: Reply) => (entry: Logged) =>
   entry.path === '/api/v1/system/version' ? undefined : reply;
 const many = (count: number, make: (index: number) => string) =>
   Array.from({ length: count }, (_value, index) => make(index));
+
+// Valid success JSON one byte over the 1 MiB body limit: only the limit rejects it.
+const PADDED = '{"code":0,"data":[],"message":""}';
+const OVERSIZED = PADDED.replace('""', `"${'x'.repeat(1_048_577 - PADDED.length)}"`);
+
+it.each<[string, Reply, string]>([
+  ['a destroyed socket', { status: 0, destroy: true }, 'RAGFlow list datasets request unreachable'],
+  [
+    'HTTP 403',
+    { status: 403, body: { code: 403, message: 'Forbidden' } },
+    'RAGFlow rejected the configured key',
+  ],
+  [
+    'HTTP 500 with a non-JSON body',
+    { status: 500, raw: 'Internal Server Error', headers: { 'content-type': 'text/plain' } },
+    'RAGFlow list datasets request failed (HTTP 500, code none)',
+  ],
+  [
+    'a 1048577-byte success body',
+    { status: 200, raw: OVERSIZED },
+    'RAGFlow list datasets response malformed',
+  ],
+  [
+    'an HTTP 302 back to the listing',
+    {
+      status: 302,
+      body: {},
+      headers: { location: '/api/v1/datasets?page_size=100&include_parsing_status=true' },
+    },
+    'RAGFlow list datasets request unreachable',
+  ],
+])('fails on %s from the first listing after one request', async (_name, reply, text) => {
+  const result = await (await start({ override: api(reply) })).run();
+  failure(result.code, result.stderr, `failed: ${text}`);
+  expect(result.requests.map(({ method, path }) => [method, path])).toEqual([
+    ['GET', '/api/v1/system/version'],
+    ['GET', '/api/v1/datasets'],
+  ]);
+});
+
+it('rejects an upload reply that renames a document before any parse request', async () => {
+  const uploadedName = (name: string) => (name === EXPENSE ? `${name}(1)` : name);
+  const result = await (await start({ uploadedName })).run();
+  failure(result.code, result.stderr, 'failed: RAGFlow upload documents response malformed');
+  expect(result.posts.map(({ path }) => path.replace(/[^/]{36}/, '<id>'))).toEqual([
+    '/api/v1/datasets',
+    '/api/v1/datasets/<id>/documents',
+  ]);
+  expect(parses(result.requests)).toEqual([]);
+});
 
 it.each<[string, Partial<Fake>, string]>([
   [
@@ -553,10 +684,10 @@ it('stops polling at the parse deadline with the fixed 600s line', async () => {
 
 it('ships exactly three datasets of two small numbered UTF-8 seed files', () => {
   const codes = ['POL', 'PRD', 'MIN'];
-  expect(SEED_DATASETS.map(({ name, files }) => [name, files.length])).toEqual([
-    [POLICIES, 2],
-    [PRODUCTS, 2],
-    [MINUTES, 2],
+  expect(SEED_DATASETS).toEqual([
+    { name: 'dsh-team-seed-policies', files: ['attendance-policy.txt', 'expense-policy.txt'] },
+    { name: 'dsh-team-seed-products', files: ['product-catalog.txt', 'after-sales-terms.txt'] },
+    { name: 'dsh-team-seed-minutes', files: ['weekly-minutes-01.txt', 'weekly-minutes-02.txt'] },
   ]);
   SEED_DATASETS.forEach(({ name, files }, index) => {
     files.forEach((file, position) => {
@@ -588,11 +719,15 @@ it('projects the configured stack and assesses only configuration and version', 
     ok: false,
     reason: 'private configuration invalid',
   });
-  expect(
-    assessSeedPrerequisites({
-      config: { present: true, value: { ragflowUrl: 'http://localhost' } },
-    }),
-  ).toEqual({ ok: false, reason: 'private configuration invalid' });
+  const localhost = {
+    present: true,
+    value: JSON.parse(settings('http://localhost:19380')) as unknown,
+  } as const;
+  expect(configuredStack(localhost)).toBeUndefined();
+  expect(assessSeedPrerequisites({ config: localhost })).toEqual({
+    ok: false,
+    reason: 'private configuration invalid',
+  });
   expect(assessSeedPrerequisites({ config })).toEqual({ ok: undefined, stack });
   expect(assessSeedPrerequisites({ config, version: 'unreachable' })).toEqual({
     ok: false,
