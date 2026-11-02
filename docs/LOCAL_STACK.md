@@ -141,13 +141,18 @@ pnpm test:stack
 
 **清理规则：**
 - 资源都使用 `dsh-team` 前缀，并在创建之前写进账本，每条账本记录带着该资源的所有权标签：
-  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform` 和 compose 网络，带 `dsh-team.test-run=<runId>`。
+  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform`、compose 网络，以及用户镜像夹具的两个生命周期卷（名字形如 `dsh-team-home-<runId 前 12 位>`、`dsh-team-work-<runId 前 12 位>`），带 `dsh-team.test-run=<runId>`。
   - 平台为员工创建的实例资源 `dsh-team-u-<id>`、`dsh-team-home-<id>`、`dsh-team-work-<id>`、`dsh-team-net-<id>`，带 `dsh-team.user=<id>`，不带运行标签。
 - vitest 自己结束后，它的进程组要在 2 秒内结算。没有结算、清理失败，或退休后按 `dsh-team.test-run` 标签清点仍有残留时，运行目录和账本会保留，命令以非零状态结束。按运行标签的清点看不到员工实例资源，它们由账本的精确退休删除。
 - 账本保留后没有可以重新进入的退休入口，按以下顺序手工恢复：
-  1. 确认没有残留的 `scripts/test-stack.mjs`、`vitest run --project stack` 或 docker CLI 进程，并且没有进程持有 `/tmp/dsh-team-deployment.lock`（例如 `lsof /tmp/dsh-team-deployment.lock` 没有输出）。手工恢复期间不持有部署锁，期间不要启动任何部署入口。
-  2. 若账本里有 `dsh-team-platform`，先核实它带本次 `dsh-team.test-run` 标签，再按代码的排空方式处理：`docker kill --signal SIGTERM <ID>`，然后 `docker wait <ID>` 必须输出 `0`，再用 `docker inspect` 确认 `Running=false`、`ExitCode=0`、`OOMKilled=false`。任一项不满足就停止，什么都不删。不要用 `docker stop`：它在宽限期后发 SIGKILL，强制终止不能证明平台已排空。
-  3. 按容器、网络、卷、镜像的顺序，逐条删除账本列出的精确名。删除前核对该资源的标签与账本同一条记录里的所有权标签一致：员工实例资源核对 `dsh-team.user`，其余核对 `dsh-team.test-run`。
+  1. 确认这次运行的整个进程组都已不在，包括入口、vitest 主进程、它的 forks 工作进程、docker CLI 子进程和持锁进程。例如 `ps -ax -o pid,pgid,command | grep -E 'scripts/test-stack.mjs|node_modules/vitest|docker'` 里不再有属于这次运行的进程。同时确认没有进程持有 `/tmp/dsh-team-deployment.lock`（`lsof /tmp/dsh-team-deployment.lock` 没有输出）。手工恢复期间不持有部署锁，期间不要启动任何部署入口。
+  2. 若账本里有 `dsh-team-platform`，按代码的排空方式处理（`platform/test/docker-cleanup.ts` 的 `drainDeploymentPlatform`）：
+     - 先 `docker inspect dsh-team-platform`。容器已不存在就跳过这一步；存在时核实它带本次 `dsh-team.test-run` 标签，不带就停止，什么都不删。
+     - 状态为 `created`（从未启动）时不需要排空，直接进入第 3 步。
+     - 正在运行时执行 `docker kill --signal SIGTERM <ID>`，然后 `docker wait <ID>` 必须输出 `0`。
+     - 对所有不是 `created` 的情况，再用 `docker inspect` 确认 `Running=false`、`ExitCode=0`、`OOMKilled=false`。任一项不满足就停止，什么都不删。
+     - 不要用 `docker stop`：它在宽限期后发 SIGKILL，强制终止不能证明平台已排空。
+  3. 按容器、网络、卷、镜像的顺序，逐条处理账本列出的精确名。资源已不存在就视为已退休、跳过；存在时核对它的标签与账本同一条记录里的所有权标签一致（以账本记录为准，不要按名字推断），一致才删除，不一致就停止。
   4. 删除运行目录，以及 `$TMPDIR` 下这次运行留下的 `dsh-team-test-docker-*` 私有目录（里面是平台数据、`compose.env` 和绑定源）。
 
   在此之前，遗留的 `dsh-team-platform` 会让下一次运行在准入时被拒绝。
@@ -162,7 +167,7 @@ pnpm test:stack
 | 命令 | `pnpm test:stack`，以及主机的 Docker Desktop 与 Compose 版本 |
 | 退出码 | 命令的实际退出码 |
 | 用例计数 | vitest 报告的文件数与用例数，以及用例打印的 `stackEvidence` 行 |
-| 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷为 0（覆盖只带 `dsh-team.user` 的员工实例资源）；带运行标签的镜像清单与运行前相同 |
+| 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷清单与运行前逐行相同（覆盖只带 `dsh-team.user` 的员工实例资源；`docker … --filter name=` 是子串匹配，按名字前缀筛选时用 `--format '{{.Name}}'` 加 `grep '^dsh-team-'`）；带运行标签的镜像清单与运行前相同 |
 | RAGFlow 测试栈 | 运行前后的 `ragflow-rc2-*` 容器 ID、StartedAt、状态、重启次数与数据卷清单逐行一致 |
 | 凭据 | 运行日志中没有密钥 |
 
