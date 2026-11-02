@@ -16,6 +16,10 @@ const DOCKER_UNAVAILABLE = 'local Docker daemon unavailable';
  * }} StackFacts
  * @typedef {{ok: false, reason: string} | {ok: true, ragflowUrl: string}
  *   | {ok: undefined, ragflowUrl?: string}} StackAssessment
+ * @typedef {{ragflowUrl: string, ragflowApiKey: string}} ConfiguredStack
+ * @typedef {{config: ConfigFact, version?: VersionFact}} SeedFacts
+ * @typedef {{ok: false, reason: string} | {ok: true, stack: ConfiguredStack}
+ *   | {ok: undefined, stack: ConfiguredStack}} SeedAssessment
  */
 
 /** @param {unknown} value @returns {Record<string, unknown> | undefined} */
@@ -27,9 +31,9 @@ function record(value) {
 /**
  * A literal loopback origin only: no resolver-dependent name, credentials, query or path.
  * @param {ConfigFact} config
- * @returns {string | undefined} the origin without a trailing slash
+ * @returns {ConfiguredStack | undefined} the origin without a trailing slash, and the RAGFlow key
  */
-function configuredOrigin(config) {
+export function configuredStack(config) {
   const value = config === 'invalid' || !config.present ? undefined : record(config.value);
   if (value === undefined || Object.keys(value).length !== KEYS.length) return undefined;
   const fields = KEYS.map((key) => value[key]);
@@ -38,7 +42,7 @@ function configuredOrigin(config) {
   const url = String(value.ragflowUrl);
   if (!/^https?:\/\/(?:127\.0\.0\.1|\[::1\])(?::\d{1,5})?\/?$/.test(url) || !URL.canParse(url))
     return undefined;
-  return url.replace(/\/$/, '');
+  return { ragflowUrl: url.replace(/\/$/, ''), ragflowApiKey: String(value.ragflowApiKey) };
 }
 
 /** @param {DockerInfoFact} info @returns {string | undefined} */
@@ -85,7 +89,7 @@ export function assessStackPrerequisites(facts) {
   if (facts.config === undefined) return { ok: undefined };
   if (facts.config !== 'invalid' && !facts.config.present)
     return { ok: false, reason: 'private configuration missing' };
-  const ragflowUrl = configuredOrigin(facts.config);
+  const ragflowUrl = configuredStack(facts.config)?.ragflowUrl;
   if (ragflowUrl === undefined) return { ok: false, reason: 'private configuration invalid' };
   if (facts.dockerInfo === undefined) return { ok: undefined, ragflowUrl };
   const docker = dockerFailure(facts.dockerInfo);
@@ -93,4 +97,20 @@ export function assessStackPrerequisites(facts) {
   if (facts.version === undefined) return { ok: undefined, ragflowUrl };
   const version = versionFailure(facts.version);
   return version === undefined ? { ok: true, ragflowUrl } : { ok: false, reason: version };
+}
+
+/**
+ * The seed entry creates no Docker resource: only ③ configuration and ⑤ version apply, with the
+ * same reasons as `assessStackPrerequisites`. Reasons never carry configuration.
+ * @param {SeedFacts} facts
+ * @returns {SeedAssessment}
+ */
+export function assessSeedPrerequisites(facts) {
+  if (facts.config !== 'invalid' && !facts.config.present)
+    return { ok: false, reason: 'private configuration missing' };
+  const stack = configuredStack(facts.config);
+  if (stack === undefined) return { ok: false, reason: 'private configuration invalid' };
+  if (facts.version === undefined) return { ok: undefined, stack };
+  const version = versionFailure(facts.version);
+  return version === undefined ? { ok: true, stack } : { ok: false, reason: version };
 }
