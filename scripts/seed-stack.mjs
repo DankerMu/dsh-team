@@ -21,15 +21,16 @@ const BODY_LIMIT = 1_048_576;
 const PAGE_SIZE = 100;
 const POLL_INTERVAL = 2000;
 const SEED_ROOT = new URL('./seed-stack/', import.meta.url);
-// RAGFlow's text run states, indexed by their numeric synonyms 0..5.
-const RUN_STATES = ['UNSTART', 'RUNNING', 'CANCEL', 'DONE', 'FAIL', 'SCHEDULE'];
-const PARSEABLE = ['UNSTART', 'FAIL', 'CANCEL'];
+// rc2 `ingestion_status`: the latest ingestion task's state, UNSTART when there is none.
+const PARSEABLE = ['UNSTART', 'FAILED', 'STOPPED'];
+const AWAITED = ['CREATED', 'SCHEDULED', 'RUNNING', 'STOPPING'];
+const INGESTION_STATES = [...PARSEABLE, ...AWAITED, 'COMPLETED'];
 
 /**
  * @typedef {import('./test-stack-prerequisites.mjs').ConfiguredStack} Stack
  * @typedef {import('./test-stack-prerequisites.mjs').SeedAssessment} SeedAssessment
  * @typedef {{id: string, name: string} & Record<string, unknown>} DatasetItem
- * @typedef {{id: string, name: string, run: string}} DocumentItem
+ * @typedef {{id: string, name: string, status: string}} DocumentItem
  * @typedef {{name: string, files: string[]}} SeedDataset
  * @typedef {{
  *   argv: string[], home: string, uid: number,
@@ -116,22 +117,15 @@ async function call(stack, op, path, request = {}) {
   return document.data;
 }
 
-/** @param {unknown} value @returns {string | undefined} */
-function runState(value) {
-  if (typeof value === 'string' && RUN_STATES.includes(value)) return value;
-  const index = typeof value === 'string' && /^[0-5]$/.test(value) ? Number(value) : value;
-  return typeof index === 'number' && Number.isInteger(index) ? RUN_STATES[index] : undefined;
-}
-
 /** @param {unknown} data @param {string} op @returns {DocumentItem[]} */
 function documentList(data, op) {
   if (!Array.isArray(data)) throw malformed(op);
   return data.map((value) => {
     const item = record(value);
-    const run = runState(item?.run);
-    if (typeof item?.id !== 'string' || typeof item.name !== 'string' || run === undefined)
-      throw malformed(op);
-    return { id: item.id, name: item.name, run };
+    const status = item?.ingestion_status;
+    if (typeof item?.id !== 'string' || typeof item.name !== 'string') throw malformed(op);
+    if (typeof status !== 'string' || !INGESTION_STATES.includes(status)) throw malformed(op);
+    return { id: item.id, name: item.name, status };
   });
 }
 
@@ -179,7 +173,8 @@ const namedDataset = (listed, name) =>
 
 /** @param {Stack} stack @param {string} name @returns {Promise<DatasetItem>} */
 async function createDataset(stack, name) {
-  const json = { name };
+  // rc2 requires `parse_type`; BuiltIn (1) also requires `parser_id`. The tenant default embeds.
+  const json = { name, parse_type: 1, parser_id: 'general' };
   const data = record(
     await call(stack, 'create dataset', '/api/v1/datasets', { method: 'POST', json }),
   );
@@ -204,43 +199,44 @@ async function upload(stack, base, name, files) {
 }
 
 /**
- * Waits until every seed document is DONE; FAIL/CANCEL while polling are terminal.
+ * Waits until every seed document is COMPLETED; FAILED/STOPPED while polling are terminal.
  * @param {Stack} stack @param {SeedRun} options @param {number} start @param {string} base
- * @param {SeedDataset} seed @param {DocumentItem[]} documents
+ * @param {SeedDataset} seed @param {DocumentItem[]} documents @param {DocumentItem[]} listed
+ * @returns {Promise<DocumentItem[]>} the dataset's last documents listing
  */
-async function settle(stack, options, start, base, seed, documents) {
-  if (documents.every((item) => item.run === 'DONE')) return;
+async function settle(stack, options, start, base, seed, documents, listed) {
+  if (documents.every((item) => item.status === 'COMPLETED')) return listed;
   for (;;) {
     await options.sleep(POLL_INTERVAL);
-    const listed = await listDocuments(stack, base);
-    const states = documents.map(({ id }) => listed.find((item) => item.id === id)?.run);
+    const latest = await listDocuments(stack, base);
+    const states = documents.map(({ id }) => latest.find((item) => item.id === id)?.status);
     for (const [index, state] of states.entries()) {
       const target = `${seed.name}/${String(seed.files[index])}`;
       if (state === undefined) throw malformed('list documents');
-      if (state === 'FAIL') throw fail(`parsing failed for ${target}`);
-      if (state === 'CANCEL') throw fail(`parsing was cancelled for ${target}`);
+      if (state === 'FAILED') throw fail(`parsing failed for ${target}`);
+      if (state === 'STOPPED') throw fail(`parsing was cancelled for ${target}`);
     }
-    if (states.every((state) => state === 'DONE')) return;
+    if (states.every((state) => state === 'COMPLETED')) return latest;
     if (options.now() - start > options.parseDeadline)
       throw fail('parsing did not finish within 600s');
   }
 }
 
-/** @param {Stack} stack @param {string} id */
-async function datasetSummary(stack, id) {
-  const [item, ...rest] = await listDatasets(
-    stack,
-    `id=${encodeURIComponent(id)}&include_parsing_status=true`,
-  );
-  const counts = ['document_count', 'chunk_count', 'done_count', 'fail_count'].map(
-    (key) => item?.[key],
-  );
+/**
+ * rc2 dataset items carry no parsing counters; done/failed count the whole last listing.
+ * @param {Stack} stack @param {string} id @param {DocumentItem[]} listed
+ */
+async function datasetSummary(stack, id, listed) {
+  const [item, ...rest] = await listDatasets(stack, `id=${encodeURIComponent(id)}`);
+  const counts = [item?.document_count, item?.chunk_count];
   const model = item?.embedding_model;
   if (item?.id !== id || rest.length > 0 || typeof model !== 'string' || model === '')
     throw malformed('list datasets');
   if (!counts.every((count) => Number.isSafeInteger(count))) throw malformed('list datasets');
-  const [documents, chunks, done, failed] = counts.map(String);
-  return `documents ${documents}; chunks ${chunks}; done ${done}; failed ${failed}; embedding ${model}`;
+  const [documents, chunks] = counts.map(String);
+  const count = (/** @type {string} */ status) =>
+    String(listed.filter((doc) => doc.status === status).length);
+  return `documents ${documents}; chunks ${chunks}; done ${count('COMPLETED')}; failed ${count('FAILED')}; embedding ${model}`;
 }
 
 /** @param {DocumentItem[]} listed @param {SeedDataset} seed */
@@ -276,14 +272,14 @@ async function seedDataset(stack, options, start, listed, seed) {
     (file, index) =>
       present[index] ?? /** @type {DocumentItem} */ (uploaded.find((item) => item.name === file)),
   );
-  // DONE never enters a parse request; RUNNING/SCHEDULE are only awaited.
-  const parse = documents.filter((item) => PARSEABLE.includes(item.run)).map((item) => item.id);
+  // COMPLETED never enters a parse request (rc2 reruns with delete); AWAITED states only wait.
+  const parse = documents.filter((item) => PARSEABLE.includes(item.status)).map((item) => item.id);
   if (parse.length > 0) {
     const json = { document_ids: parse };
     await call(stack, 'parse documents', `${base}/chunks`, { method: 'POST', json });
   }
-  await settle(stack, options, start, base, seed, documents);
-  const counts = await datasetSummary(stack, dataset.id);
+  const last = await settle(stack, options, start, base, seed, documents, docs);
+  const counts = await datasetSummary(stack, dataset.id, last);
   const state = existing === undefined ? 'created' : 'existing';
   return `${seed.name}: ${state}; uploaded ${String(missing.length)}; parsed ${String(parse.length)}; ${counts}\n`;
 }
@@ -315,7 +311,7 @@ async function seed(options) {
   const stack = admitted(assessSeedPrerequisites({ config, version }));
   const start = options.now();
   // One unfiltered listing: `?name=` answers code 102 for an absent dataset.
-  const listed = await listDatasets(stack, 'page_size=100&include_parsing_status=true');
+  const listed = await listDatasets(stack, 'page_size=100');
   if (listed.length >= PAGE_SIZE) throw fail('RAGFlow list datasets listing is full');
   for (const { name } of SEED_DATASETS) namedDataset(listed, name);
   for (const dataset of SEED_DATASETS)
