@@ -390,9 +390,12 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
   - 这是新的本机功能证据通道，不是 VPS 上的隔离 CfT 通道，不提供隔离证据。
   - 在 stack-verification spec 和 AGENTS.md 里写明。
 - **对话模型**：用测试自有的确定性 provider 驱动工具调用、委派和写文件，复用第 3 组和 office-delegation 已有的确定性协议适配器。不调用外部模型。
-- **种子脚本**
-  - 只对本机测试栈建库、上传、解析。
-  - 固定 3 个库、少量小文件，检测到已存在就不再重复解析，以控制嵌入调用量。
+- **种子脚本**（10.2，#400）
+  - 入口 `pnpm seed:stack`（`node scripts/seed-stack.mjs`），可选一个位置参数 `<ragflowUrl>`：有参数时必须与私有配置里的 `ragflowUrl` 字节相等（只去掉一个尾斜线），否则在任何网络请求之前拒绝；地址与密钥仍只来自 `~/.config/dsh-team/stack.json`，经同一个 `readPrivateJsonFile` 和同一套校验，版本前提与 `test:stack` 相同；它不创建 Docker 资源，所以不检查 Docker 和主机架构。
+  - 只对本机测试栈建库、上传、解析。固定 3 个库（`dsh-team-seed-policies`、`dsh-team-seed-products`、`dsh-team-seed-minutes`），每库 2 个仓库内的小纯文本文件（`scripts/seed-stack/<库名>/`，每个 ≤ 2 KiB），库名与文件名由 `scripts/seed-stack.mjs` 导出的 `SEED_DATASETS` 给出，10.3 与知识库用例据此核对。
+  - 幂等靠「先列后写」：每次运行取一次不带 `name` 过滤的完整数据集列表（`?name=` 对不存在的库返回 `code 102`），数据集与文档都在客户端按 `name` 严格相等匹配；RAGFlow 库名不区分大小写、重名自动加后缀，所以只在大小写上相同的名字以及满页（100）列表都在任何写请求之前拒绝；缺的才建、才传；只把 `run` 为 UNSTART/FAIL/CANCEL 的文档送去解析，DONE 永不重解析，RUNNING/SCHEDULE 只等待。第二次运行不发出任何 POST。嵌入调用量由此受控。
+  - 嵌入模型不写死：建库请求不带 `embedding_model`，由 RAGFlow 租户默认决定（在 RAGFlow 界面配置，换模型不改代码也不改配置文件）；脚本只要求返回的 `embedding_model` 非空。已接受的限制：库有 chunk 后 RAGFlow 不允许改嵌入模型，换模型要先在界面删除这三个库。
+  - 脚本没有任何删除、更新或 stop-parse 路径；解析失败只报库名与文件名并以非零结束。输出只含库名、计数与模型名，不含地址、密钥、id 与响应体。
 - **证据**：PR 贴 exact-head 证据评论，不新增 CI 必需检查，不改 workflow。
 
 ### 14. 阶段 1 技术债（B25）
