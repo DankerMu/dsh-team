@@ -413,3 +413,18 @@ it('accepts the maximum representable local date and clears validation on valid 
   );
   expect(view.textContent).not.toContain('时间范围无效');
 });
+
+it.each([
+  ['plugin-catalog.updated', '修改插件目录'],
+  ['plugin-sources.updated', '修改插件安装源'],
+  ['web-tools.updated', '修改联网工具开关'],
+])('names the %s event in the filter and its row', async (type, name) => {
+  const { view } = await ready(
+    vi.fn<typeof fetch>().mockResolvedValue(receipt({ ...LIST, items: [{ ...ITEM, type }] })),
+  );
+
+  const option = element(view, `#audit-type option[value="${type}"]`, HTMLOptionElement);
+  expect(option.textContent).toBe(name);
+  expect(element(view, 'tbody tr', HTMLTableRowElement).textContent).toContain(name);
+  expect(view.querySelector('tbody')?.textContent).not.toContain(type);
+});
