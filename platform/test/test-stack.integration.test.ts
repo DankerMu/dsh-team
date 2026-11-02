@@ -37,6 +37,7 @@ interface Scenario {
   compose?: DockerCommandResult;
   buildx?: DockerCommandResult;
   python?: boolean;
+  chromium?: boolean;
   answer?: (args: readonly string[]) => DockerCommandResult | undefined;
   handler?: Handler | 'closed';
   deadline?: number;
@@ -71,6 +72,7 @@ const MALFORMED = 'RAGFlow test stack version response malformed';
 const COMPOSE = 'docker compose 2.33.1 or newer required';
 const BUILDX = 'docker buildx unavailable';
 const PYTHON = '/usr/bin/python3 with fcntl required';
+const CHROMIUM = 'playwright chromium not installed; run pnpm test:ui:install';
 const PREREQUISITE_DOCKER = [
   'info --format {{json .}}',
   'compose version --short',
@@ -143,6 +145,7 @@ async function run(scenario: Scenario, stderr: string[] = []) {
   const docker: { args: readonly string[]; timeout: number }[] = [];
   const probes: string[] = [];
   const pythonProbes: number[] = [];
+  const chromiumProbes: number[] = [];
   let runDir = '';
   let code: number | undefined;
   let thrown = '';
@@ -174,6 +177,10 @@ async function run(scenario: Scenario, stderr: string[] = []) {
         pythonProbes.push(1);
         return scenario.python ?? true;
       },
+      probeChromium: () => {
+        chromiumProbes.push(1);
+        return scenario.chromium ?? true;
+      },
       spawnCases: scenario.spawnCases ?? (() => settled(0)),
       retire: scenario.retire ?? retireCleanupJournal,
       // No test ever reaches the host-wide deployment lock file.
@@ -196,7 +203,18 @@ async function run(scenario: Scenario, stderr: string[] = []) {
         (PREREQUISITE_DOCKER.includes(args.join(' ')) || INVENTORY.test(args.join(' '))),
     ),
   ).toBe(true);
-  return { code, stderr, docker, probes, pythonProbes, requests, runDir, thrown, url };
+  return {
+    code,
+    stderr,
+    docker,
+    probes,
+    pythonProbes,
+    chromiumProbes,
+    requests,
+    runDir,
+    thrown,
+    url,
+  };
 }
 
 it.each<[string, Scenario, string]>([
@@ -231,6 +249,7 @@ it.each<[string, Scenario, string]>([
   ['unparseable compose version', { compose: dockerInfo('compose\n') }, COMPOSE],
   ['buildx nonzero', { buildx: dockerInfo('', 1) }, BUILDX],
   ['python3 without fcntl', { python: false }, PYTHON],
+  ['missing pinned Playwright Chromium', { chromium: false }, CHROMIUM],
   ['closed port', { handler: 'closed' }, UNREACHABLE],
   ['timeout', { handler: () => undefined, deadline: 200 }, UNREACHABLE],
   ['302', { handler: (_q, s) => s.writeHead(302, { location: '/' }).end() }, UNREACHABLE],
@@ -246,12 +265,15 @@ it.each<[string, Scenario, string]>([
   const result = await run({ ...scenario, spawnCases: cases });
   const probed = reason.startsWith('RAGFlow') ? 1 : 0;
   const dockerCalls =
-    { [UNAVAILABLE]: 1, [BELOW]: 1, [COMPOSE]: 2, [BUILDX]: 3, [PYTHON]: 3 }[reason] ?? 3 * probed;
+    { [UNAVAILABLE]: 1, [BELOW]: 1, [COMPOSE]: 2, [BUILDX]: 3, [PYTHON]: 3, [CHROMIUM]: 3 }[
+      reason
+    ] ?? 3 * probed;
 
   expect(result).toMatchObject({ code: 1, thrown: '', stderr: [`${FAILED}${reason}\n`] });
   expect(result.probes).toHaveLength(probed);
   expect(result.docker).toHaveLength(dockerCalls);
-  expect(result.pythonProbes).toHaveLength(reason === PYTHON ? 1 : probed);
+  expect(result.pythonProbes).toHaveLength(reason === PYTHON || reason === CHROMIUM ? 1 : probed);
+  expect(result.chromiumProbes).toHaveLength(reason === CHROMIUM ? 1 : probed);
   expect(cases).not.toHaveBeenCalled();
   expect(existsSync(result.runDir)).toBe(false);
 });
@@ -286,6 +308,7 @@ it('admits exactly 14 GiB and v1.0.0-rc2, runs cases against an empty private jo
   });
   expect(result.docker.map(({ args }) => args.join(' '))).toEqual(PREREQUISITE_DOCKER);
   expect(result.pythonProbes).toHaveLength(1);
+  expect(result.chromiumProbes).toHaveLength(1);
   expect(
     result.requests.map(({ method, url, headers }) => [method, url, headers.authorization]),
   ).toEqual([['GET', '/api/v1/system/version', undefined]]);
@@ -308,6 +331,7 @@ it('accepts the bracketed IPv6 loopback address as a literal RAGFlow origin', ()
       compose: dockerInfo('2.40.3-desktop.1\n'),
       buildx: dockerInfo('github.com/docker/buildx v0.30.1-desktop.1\n'),
       python: true,
+      chromium: true,
       version: { status: 200, body: JSON.stringify({ code: 0, data: 'v1.0.0-rc2' }) },
     }),
   ).toEqual({ ok: true, ragflowUrl: 'https://[::1]:9380' });

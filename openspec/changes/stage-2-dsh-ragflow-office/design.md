@@ -389,7 +389,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - **浏览器**：用仓库已钉定的 Playwright Chromium 1.63（arm64 可用），经平台网关驱动真实 DSH。
   - 这是新的本机功能证据通道，不是 VPS 上的隔离 CfT 通道，不提供隔离证据。
   - 在 stack-verification spec 和 AGENTS.md 里写明。
-- **对话模型**：用测试自有的确定性 provider 驱动工具调用、委派和写文件，复用第 3 组和 office-delegation 已有的确定性协议适配器。不调用外部模型。
+- **对话模型**：用测试自有的确定性 provider 驱动工具调用、委派和写文件。provider 是在平台容器内运行、经管理员 model-config → `llm-pi-ai` 真实路径被调用的 `platform/test/deployment-model-wire.ts`，只复用第 3 组和 office-delegation 已有确定性协议适配器的脚本约定（工具名与参数、见到工具结果后回文本），不把这些适配器作为插件装进员工 home（它们绕过管理员 model-config）。不调用外部模型。
 - **种子脚本**（10.2，#400）
   - 入口 `pnpm seed:stack`（`node scripts/seed-stack.mjs`），可选一个位置参数 `<ragflowUrl>`：有参数时必须与私有配置里的 `ragflowUrl` 字节相等（只去掉一个尾斜线），否则在任何网络请求之前拒绝；地址与密钥仍只来自 `~/.config/dsh-team/stack.json`，经同一个 `readPrivateJsonFile` 和同一套校验，版本前提与 `test:stack` 相同；它不创建 Docker 资源，所以不检查 Docker 和主机架构。
   - 只对本机测试栈建库、上传、解析。固定 3 个库（`dsh-team-seed-policies`、`dsh-team-seed-products`、`dsh-team-seed-minutes`），每库 2 个仓库内的小纯文本文件（`scripts/seed-stack/<库名>/`，每个 ≤ 2 KiB），库名与文件名由 `scripts/seed-stack.mjs` 导出的 `SEED_DATASETS` 给出，10.3 与知识库用例据此核对。

@@ -40,6 +40,9 @@ export interface DockerCommands {
   readonly commandAsync: AsyncDockerCommand;
 }
 
+/** The fixed PATH every owned Docker CLI process runs with; Docker Desktop installs into /usr/local/bin. */
+export const DOCKER_CLI_PATH = '/usr/local/bin:/usr/bin:/bin';
+
 function processOptions(
   repositoryRoot: string,
   config: string,
@@ -51,7 +54,7 @@ function processOptions(
     cwd: repositoryRoot,
     // No GitHub/SSH/model credentials or user Docker configuration reach either execution mode.
     env: {
-      PATH: '/usr/local/bin:/usr/bin:/bin',
+      PATH: DOCKER_CLI_PATH,
       DOCKER_CONFIG: config,
       ...dockerProxyEnvironment(),
     },

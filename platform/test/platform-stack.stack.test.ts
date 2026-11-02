@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -9,11 +10,13 @@ import {
   STACK_CONFIG_RELATIVE_PATH,
   configuredStack,
 } from '../../scripts/test-stack-prerequisites.mjs';
+import { prepareDeploymentAccounts } from './deployment-account-fixture.ts';
 import {
   buildPlatformImage,
   platformImageId,
   pollHealth,
   writeComposeConfiguration,
+  writeModelProviderOverride,
 } from './deployment-compose-fixture.ts';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
@@ -24,6 +27,10 @@ import {
 } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
+import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
+import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
+import { converseInWorkbench, until } from './stack-browser-fixture.ts';
+import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -89,7 +96,103 @@ interface Timings {
   platformImageBuildMs?: number;
 }
 
-async function composeScenario(lifecycle: UserImageLifecycle, timings: Timings): Promise<string> {
+interface ConversationEvidence {
+  browser?: StackBrowserEvidence;
+  provider?: Record<string, unknown>;
+}
+
+/** The owned deterministic provider's script for one run; every value is a nonsecret nonce. */
+function ownedModel(runId: string) {
+  const name = 'owned-stack-model';
+  return {
+    name,
+    provider: {
+      key: randomUUID(),
+      model: name,
+      marker: `stack-marker-${randomUUID()}`,
+      reply: `stack-reply-${randomUUID()}`,
+      script: { path: `/data/work/stack-${runId}.txt`, content: `stack-content-${randomUUID()}\n` },
+    },
+  };
+}
+
+const PROVIDER_HEALTH =
+  "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());";
+
+/**
+ * Real gateway, real model-config and real DSH: one employee message through Chromium makes the
+ * owned provider script a `write` call, then the reply; the file and counters are read back.
+ */
+async function converse(
+  lifecycle: UserImageLifecycle,
+  run: DockerOutput,
+  target: { base: string; directory: string; dataDir: string; compose: string[] },
+  model: ReturnType<typeof ownedModel>,
+  evidence: ConversationEvidence,
+): Promise<void> {
+  const { base } = target;
+  const { provider } = model;
+  const platformRead = (script: string) =>
+    privatePlatformRead(async (args) => ({ stdout: await run(args) }), script);
+  const timeout = 120_000;
+  await run([
+    'exec',
+    '--detach',
+    PLATFORM,
+    'node',
+    '/verification/model.ts',
+    '/verification/model.json',
+  ]);
+  await awaitLocalModelReady(platformRead);
+  const { employee } = await prepareDeploymentAccounts(
+    lifecycle,
+    { ...target, request: fetch },
+    {
+      settings: {
+        baseURL: `http://${PLATFORM}:3099/v1`,
+        models: [{ name: model.name }],
+        defaultModel: model.name,
+      },
+      apiKey: provider.key,
+    },
+  );
+  const gateway = instanceGatewayFixture({ lifecycle, base, origin: base });
+  try {
+    await gateway.state(employee.cookie, true);
+    // Bounds only the poll: the platform's own 60s limits decide whether the start succeeds.
+    await gateway.ready(employee.cookie, 180_000);
+  } finally {
+    gateway.close();
+  }
+  evidence.browser = await converseInWorkbench({
+    base,
+    directory: join(lifecycle.repositoryRoot, 'reports/stack', lifecycle.runId),
+    email: employee.email,
+    password: 'instance-acceptance-password',
+    message: `${provider.marker} 请按脚本写入文件`,
+    reply: provider.reply,
+    timeout,
+    // Tool-call round, tool-result round and the title request: the write has landed by then.
+    turnComplete: () =>
+      until(
+        async () => {
+          const { requests, toolResults } = await platformRead(PROVIDER_HEALTH);
+          return Number(toolResults) >= 1 && Number(requests) >= 3;
+        },
+        timeout,
+        'provider turn',
+      ),
+  });
+  const read = ['exec', '--user', '1001', `dsh-team-u-${employee.id}`, 'cat', provider.script.path];
+  expect(await run(read)).toBe(provider.script.content);
+  evidence.provider = await platformRead(PROVIDER_HEALTH);
+}
+
+async function composeScenario(
+  lifecycle: UserImageLifecycle,
+  timings: Timings,
+  evidence: ConversationEvidence,
+): Promise<string> {
   const { runId } = lifecycle;
   const run: DockerOutput = async (args, timeout = 30_000) =>
     output(await lifecycle.commandAsync(args, timeout), args);
@@ -125,6 +228,13 @@ async function composeScenario(lifecycle: UserImageLifecycle, timings: Timings):
     const managedDir = join(directory, 'managed');
     await mkdir(dataDir, { mode: 0o700 });
     await mkdir(managedDir, { mode: 0o700 });
+    const model = ownedModel(runId);
+    // A running platform cannot gain bind mounts: the provider joins before `compose up`.
+    const provider = await writeModelProviderOverride(
+      lifecycle.repositoryRoot,
+      directory,
+      model.provider,
+    );
     const { base, compose } = await writeComposeConfiguration({
       repositoryRoot: lifecycle.repositoryRoot,
       directory,
@@ -137,11 +247,12 @@ async function composeScenario(lifecycle: UserImageLifecycle, timings: Timings):
       runId,
       project,
       network,
-      overrides: [],
+      overrides: [provider],
     });
     submitted = true;
     await run([...compose, 'up', '-d', '--no-build', '--pull', 'never'], 120_000);
     await pollHealth(fetch, base, 60_000);
+    await converse(lifecycle, run, { base, directory, dataDir, compose }, model, evidence);
   } catch (error) {
     failures.push(error);
   }
@@ -160,7 +271,7 @@ async function composeScenario(lifecycle: UserImageLifecycle, timings: Timings):
   return 'verified';
 }
 
-it('builds both images, starts the delivered compose platform and reads the seeded stack', async () => {
+it('builds both images, starts the delivered compose platform, converses through the real workbench and reads the seeded stack', async () => {
   const stack = privateStack();
   const before = await seedSnapshot(stack);
   expect(before).toEqual(
@@ -170,6 +281,7 @@ it('builds both images, starts the delivered compose platform and reads the seed
     })),
   );
   const timings: Timings = {};
+  const evidence: ConversationEvidence = {};
   // Held from before fixed-name admission through exact-owned teardown.
   const release = await acquireDeploymentLock();
   try {
@@ -180,14 +292,47 @@ it('builds both images, starts the delivered compose platform and reads the seed
       undefined,
       (lifecycle) => {
         timings.userImageBuildMs = Math.round(performance.now() - started);
-        return composeScenario(lifecycle, timings);
+        return composeScenario(lifecycle, timings, evidence);
       },
     );
   } finally {
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
+  const { browser, provider } = evidence;
+  if (browser === undefined || provider === undefined)
+    throw new Error('Conversation evidence missing');
+  expect(browser.screenshots).toEqual(['login.png', 'workbench.png', 'reply.png']);
+  expect({
+    consoleErrors: browser.consoleErrors,
+    pageErrors: browser.pageErrors,
+    failedRequests: browser.failedRequests,
+    externalRequests: browser.externalRequests,
+  }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
+  expect(browser.requests).toBeGreaterThan(0);
+  expect(browser.websockets).toBeGreaterThan(0);
+  // Tool-call round, tool-result round and the title request, all marked by the message.
+  expect(provider).toMatchObject({ ready: true });
+  expect(provider.requests).toBeGreaterThanOrEqual(3);
+  expect(provider.toolResults).toBeGreaterThanOrEqual(1);
+  expect(provider.markedRequests).toBeGreaterThanOrEqual(3);
   process.stdout.write(
-    `${JSON.stringify({ stackEvidence: { ...timings, datasets: 3, files: 6 } })}\n`,
+    `${JSON.stringify({
+      stackEvidence: {
+        ...timings,
+        datasets: 3,
+        files: 6,
+        screenshots: browser.screenshots,
+        browserRequests: browser.requests,
+        websockets: browser.websockets,
+        consoleErrors: browser.consoleErrors.length,
+        externalRequests: browser.externalRequests.length,
+        provider: {
+          requests: provider.requests,
+          toolResults: provider.toolResults,
+          markedRequests: provider.markedRequests,
+        },
+      },
+    })}\n`,
   );
 });

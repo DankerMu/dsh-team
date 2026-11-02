@@ -1,10 +1,11 @@
 /** Local full-stack verification entry: prerequisites before any resource, exact-owned retirement. */
 import { spawn, spawnSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { arch, homedir, platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { chromium } from '@playwright/test';
 import { createDockerCommands } from '../platform/test/docker-command.ts';
 import {
   acquireDeploymentLock,
@@ -32,6 +33,7 @@ const BODY_LIMIT = 65_536;
  *   dockerCommands: (repositoryRoot: string, config: string) => DockerCommands,
  *   probeVersion: (ragflowUrl: string) => Promise<VersionFact>,
  *   probePython: () => boolean,
+ *   probeChromium: () => boolean,
  *   spawnCases: (env: NodeJS.ProcessEnv, repositoryRoot: string) => Promise<CaseOutcome>,
  *   retire: typeof retireCleanupJournal,
  *   acquireLock: () => Promise<() => Promise<void>>,
@@ -79,6 +81,15 @@ function probePython() {
   return result.error === undefined && result.status === 0;
 }
 
+/** The repository-pinned Playwright Chromium the browser cases launch, as `test:ui:install` placed it. */
+function probeChromium() {
+  try {
+    return existsSync(chromium.executablePath());
+  } catch {
+    return false;
+  }
+}
+
 /** @param {DockerCommands} commands @param {string[]} args */
 function dockerFact(commands, args) {
   try {
@@ -119,6 +130,7 @@ async function assess(options, commands) {
     ['compose', () => dockerFact(commands, ['compose', 'version', '--short'])],
     ['buildx', () => dockerFact(commands, ['buildx', 'version'])],
     ['python', () => options.probePython()],
+    ['chromium', () => options.probeChromium()],
   ];
   for (const [fact, gather] of gathered) {
     if (assessment.ok !== undefined || assessment.ragflowUrl === undefined) break;
@@ -288,6 +300,7 @@ if (
     dockerCommands: (directory, config) => createDockerCommands(directory, config, true),
     probeVersion: probeRagflowVersion,
     probePython,
+    probeChromium,
     spawnCases: (env, cwd) => spawnCases(env, cwd),
     retire: retireCleanupJournal,
     acquireLock: () => acquireDeploymentLock(),

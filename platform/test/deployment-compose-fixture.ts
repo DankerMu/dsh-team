@@ -115,6 +115,49 @@ export async function writeComposeConfiguration(
 }
 
 /**
+ * The owned deterministic model provider (`deployment-model-wire.ts`) and its 0600 configuration,
+ * bound read-only into the platform container by a 0600 override file whose path is returned. A
+ * running platform cannot gain bind mounts, so callers add the path before `compose up`.
+ */
+export async function writeModelProviderOverride(
+  repositoryRoot: string,
+  directory: string,
+  config: Readonly<Record<string, unknown>>,
+): Promise<string> {
+  const configPath = join(directory, 'model-provider.json');
+  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  const override = join(directory, 'model-provider-compose.json');
+  await writeFile(
+    override,
+    JSON.stringify({
+      services: {
+        platform: {
+          environment: { PLATFORM_LOG_LEVEL: 'info' },
+          volumes: [
+            {
+              type: 'bind',
+              source: join(repositoryRoot, 'platform/test/deployment-model-wire.ts'),
+              target: '/verification/model.ts',
+              read_only: true,
+              bind: { create_host_path: false },
+            },
+            {
+              type: 'bind',
+              source: configPath,
+              target: '/verification/model.json',
+              read_only: true,
+              bind: { create_host_path: false },
+            },
+          ],
+        },
+      },
+    }),
+    { mode: 0o600 },
+  );
+  return override;
+}
+
+/**
  * Only readiness polling; never recreate a failed deployment to obtain success. Vitest-free:
  * the deployment fixture is also loaded by plain Node (`deployment.docker.test.ts` contention).
  */

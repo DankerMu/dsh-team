@@ -59,8 +59,9 @@ export function instanceGatewayFixture(
     expect(response.status).toBe(200);
     return record(await response.json());
   };
-  const ready = async (cookie: string) => {
-    const signal = AbortSignal.timeout(90_000);
+  /** The platform's own 60s start/readiness/credential limits decide; this only bounds the poll. */
+  const ready = async (cookie: string, timeout = 90_000) => {
+    const signal = AbortSignal.timeout(timeout);
     for (;;) {
       const observed = await state(cookie);
       if (observed.status === 'running') {

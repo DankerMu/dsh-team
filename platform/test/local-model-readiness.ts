@@ -1,3 +1,5 @@
+import { record } from './docker-cleanup.ts';
+
 /**
  * In-container readiness poll for the deployed local model stub. A refused or unanswered
  * `/health` request is the stub's normal not-yet-listening state, so retries stay inside the
@@ -36,4 +38,23 @@ export async function awaitLocalModelReady(
 ): Promise<void> {
   const result = await read(LOCAL_MODEL_READY_SCRIPT);
   if (result.ready !== true) throw new Error('Local model stub not ready');
+}
+
+/**
+ * One JSON-printing module script in the deployed platform container; `run` must reject a failed
+ * exec. The readiness script above and the provider's `/health` counters are read this way.
+ */
+export async function privatePlatformRead(
+  run: (args: string[]) => Promise<{ stdout: string }>,
+  script: string,
+): Promise<Record<string, unknown>> {
+  const result = await run([
+    'exec',
+    'dsh-team-platform',
+    'node',
+    '--input-type=module',
+    '-e',
+    script,
+  ]);
+  return record(JSON.parse(result.stdout));
 }
