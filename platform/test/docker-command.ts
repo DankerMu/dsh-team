@@ -1,4 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { platform } from 'node:os';
+import { dirname, join } from 'node:path';
 import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 import { buildFailureDiagnostic } from '../../scripts/docker-build-diagnostics.mjs';
 import {
@@ -99,6 +102,31 @@ function redactResult(
   return result;
 }
 
+/**
+ * Docker Desktop installs compose/buildx only under the user's ~/.docker/cli-plugins; a private
+ * empty DOCKER_CONFIG must name the application's own plugin directory. Best effort: a failure
+ * writes nothing and throws nothing, so the later compose/buildx prerequisite names the cause.
+ */
+function linkDesktopCliPlugins(config: string): void {
+  if (platform() !== 'darwin') return;
+  try {
+    const plugins = join(dirname(realpathSync('/usr/local/bin/docker')), '..', 'cli-plugins');
+    const file = join(config, 'config.json');
+    const content = JSON.stringify({ cliPluginsExtraDirs: [plugins] });
+    let current: string | undefined;
+    try {
+      current = readFileSync(file, 'utf8');
+    } catch {
+      current = undefined;
+    }
+    if (current === content) return;
+    writeFileSync(file, content, { mode: 0o600 });
+    chmodSync(file, 0o600);
+  } catch {
+    // Absent Docker Desktop or an unwritable directory: leave the configuration unchanged.
+  }
+}
+
 /** One invocation's isolated policy, with distinct setup/cleanup and live execution modes. */
 export function createDockerCommands(
   repositoryRoot: string,
@@ -106,6 +134,8 @@ export function createDockerCommands(
   bounded: boolean,
   injectedCommand?: DockerCommand,
 ): DockerCommands {
+  // Only a real Docker CLI reads the configuration; an injected boundary never does.
+  if (injectedCommand === undefined) linkDesktopCliPlugins(config);
   const externalCommand: DockerCommand = (args, timeout, acceptedStatus) =>
     runDockerCommand(
       selectDockerExecution(args),

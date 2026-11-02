@@ -7,22 +7,12 @@ import { registerInstanceUser } from './instance-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { requireDeploymentObservationReady } from './deployment-observer-fixture.ts';
+import { pollHealth } from './deployment-compose-fixture.ts';
 import type { DeploymentSetupEvidence } from './deployment-setup-evidence.ts';
 
 export async function waitForDeployment(deployment: Deployment, setup?: DeploymentSetupEvidence) {
   const wait = async () => {
-    // Only readiness polling; never recreate a failed deployment to obtain success.
-    await expect
-      .poll(
-        async () => {
-          const response = await deployment.request(`${deployment.base}/healthz`, {
-            signal: AbortSignal.timeout(2_000),
-          });
-          return { status: response.status, body: await response.json() };
-        },
-        { timeout: 30_000 },
-      )
-      .toEqual({ status: 200, body: { status: 'ok' } });
+    await pollHealth(deployment.request, deployment.base, 30_000);
     requireDeploymentObservationReady(deployment.observation);
   };
   return setup ? setup.run('health', wait) : wait();

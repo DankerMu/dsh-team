@@ -1,7 +1,6 @@
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, stat } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
-import { parseEnv } from 'node:util';
 import { isAbsentResource } from './docker-command.ts';
 import {
   acquireDeploymentLock,
@@ -15,6 +14,11 @@ import { deploymentSetupStep } from './deployment-setup-evidence.ts';
 import type { DeploymentSetupEvidence } from './deployment-setup-evidence.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
+import {
+  buildPlatformImage,
+  platformImageId,
+  writeComposeConfiguration,
+} from './deployment-compose-fixture.ts';
 import {
   bindDeploymentObservation,
   createDeploymentObservation,
@@ -75,23 +79,10 @@ async function startDeployment(
         await lifecycle.registerResourceAsync(kind, name, ownership);
     });
     await deploymentSetupStep(setup, 'platform-build', () =>
-      command(
-        artifact?.args ?? [
-          'build',
-          '--label',
-          `${OWNER_LABEL}=${lifecycle.runId}`,
-          '--tag',
-          image,
-          '--file',
-          'platform/Dockerfile',
-          '.',
-        ],
-        600_000,
-      ),
+      buildPlatformImage(command, lifecycle.runId, image, artifact?.args),
     );
     const imageId = await deploymentSetupStep(setup, 'platform-image-identity', async () => {
-      const id = (await command(['image', 'inspect', '--format', '{{.Id}}', image])).trim();
-      if (!/^sha256:[a-f0-9]{64}$/.test(id)) throw new Error('Platform image identity missing');
+      const id = await platformImageId(command, image);
       artifact?.verify(id);
       return id;
     });
@@ -103,54 +94,21 @@ async function startDeployment(
       await mkdir(dataDir, { mode: 0o700 });
       await mkdir(lifecycle.overlayDirectory, { mode: 0o700 });
       const port = await unusedPort();
-      const base = `http://127.0.0.1:${String(port)}`;
-      const environment = {
-        ...parseEnv(await readFile(join(lifecycle.repositoryRoot, '.env.example'), 'utf8')),
-        PLATFORM_HOST: '0.0.0.0',
-        PLATFORM_PORT: String(port),
-        PLATFORM_LOG_LEVEL: 'silent',
-        PLATFORM_DATA_DIR: dataDir,
-        PLATFORM_MANAGED_CONFIG_DIR: lifecycle.overlayDirectory,
-        PLATFORM_DOCKER_SOCKET: '/var/run/docker.sock',
-        PLATFORM_USER_IMAGE: lifecycle.imageId,
-        PLATFORM_SECCOMP_PROFILE: '/app/images/seccomp/dsh-user.json',
-        PLATFORM_PUBLIC_URL: base,
-        PLATFORM_UPSTREAM_MODE: 'network',
-        PLATFORM_CONTAINER_NAME: 'dsh-team-platform',
-        DEPLOY_DOCKER_GID: String((await stat('/var/run/docker.sock')).gid),
-      };
-      const environmentPath = join(directory, 'compose.env');
-      const override = join(directory, 'compose.json');
-      await writeFile(
-        environmentPath,
-        Object.entries(environment)
-          .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-          .join('\n') + '\n',
-        { mode: 0o600 },
-      );
-      await writeFile(
-        override,
-        JSON.stringify({
-          services: { platform: { image: imageId, labels: ownership } },
-          networks: { default: { name: network, labels: ownership } },
-        }),
-        { mode: 0o600 },
-      );
-      const compose = [
-        'compose',
-        '--project-directory',
-        lifecycle.repositoryRoot,
-        '--env-file',
-        environmentPath,
-        '--file',
-        join(lifecycle.repositoryRoot, 'deploy/compose.yml'),
-        '--file',
-        override,
-        '--file',
-        observation.override,
-        '--project-name',
+      const { base, compose } = await writeComposeConfiguration({
+        repositoryRoot: lifecycle.repositoryRoot,
+        directory,
+        dataDir,
+        managedDir: lifecycle.overlayDirectory,
+        port,
+        userImage: lifecycle.imageId,
+        platformImage: imageId,
+        // The trusted Linux host's actual socket group, never a hardcoded verification value.
+        dockerGid: (await stat('/var/run/docker.sock')).gid,
+        runId: lifecycle.runId,
         project,
-      ];
+        network,
+        overrides: [observation.override],
+      });
       return { base, port, directory, dataDir, compose, request: fetch, observation };
     });
     if (prepare)

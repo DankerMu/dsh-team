@@ -284,6 +284,33 @@ async function seedDataset(stack, options, start, listed, seed) {
   return `${seed.name}: ${state}; uploaded ${String(missing.length)}; parsed ${String(parse.length)}; ${counts}\n`;
 }
 
+/**
+ * Read-only snapshot of the seeded datasets in `SEED_DATASETS` order: GET requests only, the same
+ * exact-name rules as seeding. A missing dataset, or a document set that is not exactly the seed
+ * files, fails with a line naming only the dataset; it never seeds.
+ * @param {Stack} stack
+ * @returns {Promise<{name: string, files: {name: string, status: string}[]}[]>}
+ */
+export async function readSeedDatasets(stack) {
+  const listed = await listDatasets(stack, 'page_size=100');
+  if (listed.length >= PAGE_SIZE) throw fail('RAGFlow list datasets listing is full');
+  const snapshot = [];
+  for (const seed of SEED_DATASETS) {
+    const dataset = namedDataset(listed, seed.name);
+    if (dataset === undefined) throw fail(`dataset ${seed.name} is missing`);
+    const docs = await listDocuments(stack, `/api/v1/datasets/${encodeURIComponent(dataset.id)}`);
+    const present = presentDocuments(docs, seed);
+    if (docs.length !== seed.files.length || present.includes(undefined))
+      throw fail(`dataset ${seed.name} does not hold exactly its seed files`);
+    const files = present.map((item) => ({
+      name: String(item?.name),
+      status: String(item?.status),
+    }));
+    snapshot.push({ name: seed.name, files });
+  }
+  return snapshot;
+}
+
 /** @param {SeedAssessment} assessment @returns {Stack} */
 function admitted(assessment) {
   if (assessment.ok === false)

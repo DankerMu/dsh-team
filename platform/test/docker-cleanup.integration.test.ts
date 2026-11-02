@@ -1,5 +1,14 @@
+import type * as ChildProcessModule from 'node:child_process';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import { once } from 'node:events';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import type * as Os from 'node:os';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
+  acquireDeploymentLock,
   cleanupTargets,
   OWNER_LABEL,
   output,
@@ -10,11 +19,35 @@ import {
 import type { CleanupJournalEntry, CleanupTarget, JournalRetirement } from './docker-cleanup.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
+// The lock branch is chosen through the same node:os seam the deployment lifecycle mocks.
+const host = vi.hoisted(() => ({
+  platform: undefined as string | undefined,
+  spawned: [] as { file: string; args: readonly string[]; options: SpawnOptions; child: unknown }[],
+}));
+vi.mock('node:os', async (importOriginal) => {
+  const original = await importOriginal<typeof Os>();
+  return { ...original, platform: () => host.platform ?? original.platform() };
+});
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof ChildProcessModule>();
+  return {
+    ...original,
+    // Records the exact launch and still runs the real program.
+    spawn(file: string, args: readonly string[], options: SpawnOptions) {
+      const child = original.spawn(file, args, options);
+      host.spawned.push({ file, args, options, child });
+      return child;
+    },
+  };
+});
+
 const runId = 'cleanup-run';
 const untagged = 'dsh-team-probe-user-cleanup-run-image';
 const labelFormat = `{{ index .Config.Labels "${OWNER_LABEL}" }}`;
 afterEach(() => {
   vi.unstubAllEnvs();
+  host.platform = undefined;
+  host.spawned.length = 0;
 });
 
 /** Docker 29.1.3 image store: an untagged reference resolves to, and is reported as, `:latest`. */
@@ -468,4 +501,66 @@ it('retires the latest registration first so an earlier foreign sentinel then se
       'dsh-team-platform',
     ],
   ]);
+});
+
+async function ownedLockPath(run: (path: string) => Promise<void>) {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-team-lock-'));
+  try {
+    await run(join(directory, 'deployment.lock'));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+it('holds the darwin deployment lock through the exact isolated python3 fcntl holder', async () => {
+  host.platform = 'darwin';
+  await ownedLockPath(async (path) => {
+    const release = await acquireDeploymentLock(path);
+    try {
+      expect(host.spawned).toHaveLength(1);
+      expect(host.spawned[0]).toMatchObject({
+        file: '/usr/bin/python3',
+        args: ['-I', '-c', expect.stringContaining('fcntl.LOCK_EX | fcntl.LOCK_NB'), path],
+        options: { env: { PATH: '/usr/bin:/bin' } },
+      });
+      expect(Object.keys(host.spawned[0]?.options.env ?? {})).toEqual(['PATH']);
+      // A second acquirer is refused while the first holder keeps the kernel lock.
+      await expect(acquireDeploymentLock(path)).rejects.toThrow(
+        /^Deployment verification lock unavailable$/,
+      );
+    } finally {
+      await release();
+    }
+    // stdin EOF released it: a later acquirer is admitted, and the file is never unlinked.
+    expect(existsSync(path)).toBe(true);
+    const again = await acquireDeploymentLock(path);
+    await again();
+    expect(existsSync(path)).toBe(true);
+  });
+});
+
+it('releases the darwin deployment lock when its holder is killed', async () => {
+  host.platform = 'darwin';
+  await ownedLockPath(async (path) => {
+    const release = await acquireDeploymentLock(path);
+    const holder = host.spawned[0]?.child as ChildProcess;
+    const closed = once(holder, 'close');
+    holder.kill('SIGKILL');
+    await closed;
+    await release();
+    const again = await acquireDeploymentLock(path);
+    await again();
+    expect(existsSync(path)).toBe(true);
+  });
+});
+
+it('refuses a deployment lock on an unsupported platform before any launch', async () => {
+  host.platform = 'win32';
+  await ownedLockPath(async (path) => {
+    await expect(acquireDeploymentLock(path)).rejects.toThrow(
+      /^Deployment verification lock unavailable$/,
+    );
+    expect(host.spawned).toEqual([]);
+    expect(existsSync(path)).toBe(false);
+  });
 });

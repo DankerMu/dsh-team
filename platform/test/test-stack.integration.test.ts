@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { appendFileSync, existsSync, statSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -18,14 +18,15 @@ import {
   assessStackPrerequisites,
 } from '../../scripts/test-stack-prerequisites.mjs';
 import { probeRagflowVersion, runTestStack, spawnCases } from '../../scripts/test-stack.mjs';
-import { retireCleanupJournal } from './docker-cleanup.ts';
-import type { CleanupJournalEntry } from './docker-cleanup.ts';
+import type * as RecordModule from '../../scripts/trusted-docker-record.mjs';
+import { OWNER_LABEL, retireCleanupJournal } from './docker-cleanup.ts';
 import { createDockerCommands } from './docker-command.ts';
 import type { DockerCommandResult } from './docker-command.ts';
 
 type Handler = (request: IncomingMessage, response: ServerResponse) => void;
 type Cases = Parameters<typeof runTestStack>[0]['spawnCases'];
 type Retire = Parameters<typeof runTestStack>[0]['retire'];
+type Lock = Parameters<typeof runTestStack>[0]['acquireLock'];
 interface Scenario {
   env?: NodeJS.ProcessEnv;
   host?: [string, string];
@@ -33,11 +34,29 @@ interface Scenario {
   mode?: number;
   link?: boolean;
   info?: DockerCommandResult;
+  compose?: DockerCommandResult;
+  buildx?: DockerCommandResult;
+  python?: boolean;
+  answer?: (args: readonly string[]) => DockerCommandResult | undefined;
   handler?: Handler | 'closed';
   deadline?: number;
   spawnCases?: Cases;
   retire?: Retire;
+  acquireLock?: Lock;
 }
+
+// Group settlement is the real exported observer unless a case makes it throw.
+const settlement = vi.hoisted(() => ({ fail: false }));
+vi.mock('../../scripts/trusted-docker-record.mjs', async (importOriginal) => {
+  const original = await importOriginal<typeof RecordModule>();
+  return {
+    ...original,
+    groupSettlesAfterClose: (pid: number) =>
+      settlement.fail
+        ? Promise.reject(Object.assign(new Error('denied'), { code: 'EPERM' }))
+        : original.groupSettlesAfterClose(pid),
+  };
+});
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const [ragflowKey, embeddingKey, segment] = [randomUUID(), randomUUID(), randomUUID()];
@@ -49,6 +68,21 @@ const UNAVAILABLE = 'local Docker daemon unavailable';
 const BELOW = 'docker info MemTotal below 14 GiB';
 const UNREACHABLE = 'RAGFlow test stack unreachable';
 const MALFORMED = 'RAGFlow test stack version response malformed';
+const COMPOSE = 'docker compose 2.33.1 or newer required';
+const BUILDX = 'docker buildx unavailable';
+const PYTHON = '/usr/bin/python3 with fcntl required';
+const PREREQUISITE_DOCKER = [
+  'info --format {{json .}}',
+  'compose version --short',
+  'buildx version',
+];
+const INVENTORY =
+  /^(container ls --all|network ls|volume ls|image ls --all) --quiet( --no-trunc)? --filter label=dsh-team\.test-run=[a-f0-9-]{36}$/;
+const runLine = (directory: string) => `test:stack run directory ${directory}\n`;
+const UNSETTLED = (directory: string) =>
+  `test:stack case processes unsettled; journal retained at ${directory}\n`;
+const settled = (code: number | null, signal: NodeJS.Signals | null = null) =>
+  Promise.resolve({ code, signal, settled: true });
 const shown = (version: string) => `RAGFlow test stack version is ${version}, expected v1.0.0-rc2`;
 const dockerInfo = (document: unknown, status = 0) => ({
   status,
@@ -70,7 +104,10 @@ const reply =
 
 const fields = (extra: Record<string, unknown>) => (url: string) => settings(url, extra);
 const origin = (select: (url: string) => string) => (url: string) => settings(select(url));
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  settlement.fail = false;
+});
 
 async function serve(handler: Handler | 'closed') {
   const requests: IncomingMessage[] = [];
@@ -96,7 +133,7 @@ async function writeSettings(home: string, scenario: Scenario, url: string) {
   if (target !== file) await symlink(target, file);
 }
 
-async function run(scenario: Scenario) {
+async function run(scenario: Scenario, stderr: string[] = []) {
   const home = await mkdtemp(join(tmpdir(), 'dsh-team-stack-home-'));
   vi.stubEnv('HOME', home);
   const { server, requests, url } = await serve(
@@ -104,8 +141,8 @@ async function run(scenario: Scenario) {
   );
   await writeSettings(home, scenario, url);
   const docker: { args: readonly string[]; timeout: number }[] = [];
-  const stderr: string[] = [];
   const probes: string[] = [];
+  const pythonProbes: number[] = [];
   let runDir = '';
   let code: number | undefined;
   let thrown = '';
@@ -118,7 +155,14 @@ async function run(scenario: Scenario) {
       dockerCommands: (directory, config) => {
         runDir = dirname(config);
         return createDockerCommands(directory, config, true, (args, timeout) => {
+          // A scenario's own answers are its evidence; only the rest must be prerequisites/inventory.
+          const answered = scenario.answer?.(args);
+          if (answered !== undefined) return answered;
           docker.push({ args, timeout });
+          if (args[0] === 'compose') return scenario.compose ?? dockerInfo('2.40.3-desktop.1\n');
+          if (args[0] === 'buildx')
+            return scenario.buildx ?? dockerInfo('github.com/docker/buildx v0.30.1-desktop.1\n');
+          if (args.includes('ls')) return dockerInfo('');
           return scenario.info ?? linuxInfo();
         });
       },
@@ -126,8 +170,14 @@ async function run(scenario: Scenario) {
         probes.push(target);
         return probeRagflowVersion(target, scenario.deadline);
       },
-      spawnCases: scenario.spawnCases ?? (() => Promise.resolve({ code: 0, signal: null })),
+      probePython: () => {
+        pythonProbes.push(1);
+        return scenario.python ?? true;
+      },
+      spawnCases: scenario.spawnCases ?? (() => settled(0)),
       retire: scenario.retire ?? retireCleanupJournal,
+      // No test ever reaches the host-wide deployment lock file.
+      acquireLock: scenario.acquireLock ?? (() => Promise.resolve(() => Promise.resolve())),
       stderr: (text) => stderr.push(text),
     });
   } catch (error) {
@@ -141,10 +191,12 @@ async function run(scenario: Scenario) {
     expect(stderr.join('') + String(code) + thrown).not.toContain(secret);
   expect(
     docker.every(
-      ({ args, timeout }) => timeout === 30_000 && args.join(' ') === 'info --format {{json .}}',
+      ({ args, timeout }) =>
+        timeout === 30_000 &&
+        (PREREQUISITE_DOCKER.includes(args.join(' ')) || INVENTORY.test(args.join(' '))),
     ),
   ).toBe(true);
-  return { code, stderr, docker, probes, requests, runDir, thrown, url };
+  return { code, stderr, docker, probes, pythonProbes, requests, runDir, thrown, url };
 }
 
 it.each<[string, Scenario, string]>([
@@ -174,6 +226,11 @@ it.each<[string, Scenario, string]>([
   ['non-linux OSType', { info: dockerInfo({ OSType: 'windows', MemTotal: 2 ** 40 }) }, UNAVAILABLE],
   ['missing MemTotal', { info: dockerInfo({ OSType: 'linux' }) }, UNAVAILABLE],
   ['13.9 GiB MemTotal', { info: linuxInfo(14_925_011_353) }, BELOW],
+  ['missing compose plugin', { compose: dockerInfo('', 1) }, COMPOSE],
+  ['compose 2.33.0', { compose: dockerInfo('2.33.0\n') }, COMPOSE],
+  ['unparseable compose version', { compose: dockerInfo('compose\n') }, COMPOSE],
+  ['buildx nonzero', { buildx: dockerInfo('', 1) }, BUILDX],
+  ['python3 without fcntl', { python: false }, PYTHON],
   ['closed port', { handler: 'closed' }, UNREACHABLE],
   ['timeout', { handler: () => undefined, deadline: 200 }, UNREACHABLE],
   ['302', { handler: (_q, s) => s.writeHead(302, { location: '/' }).end() }, UNREACHABLE],
@@ -188,10 +245,13 @@ it.each<[string, Scenario, string]>([
   const cases = vi.fn<Cases>();
   const result = await run({ ...scenario, spawnCases: cases });
   const probed = reason.startsWith('RAGFlow') ? 1 : 0;
+  const dockerCalls =
+    { [UNAVAILABLE]: 1, [BELOW]: 1, [COMPOSE]: 2, [BUILDX]: 3, [PYTHON]: 3 }[reason] ?? 3 * probed;
 
   expect(result).toMatchObject({ code: 1, thrown: '', stderr: [`${FAILED}${reason}\n`] });
   expect(result.probes).toHaveLength(probed);
-  expect(result.docker).toHaveLength([UNAVAILABLE, BELOW].includes(reason) ? 1 : probed);
+  expect(result.docker).toHaveLength(dockerCalls);
+  expect(result.pythonProbes).toHaveLength(reason === PYTHON ? 1 : probed);
   expect(cases).not.toHaveBeenCalled();
   expect(existsSync(result.runDir)).toBe(false);
 });
@@ -199,24 +259,33 @@ it.each<[string, Scenario, string]>([
 it('admits exactly 14 GiB and v1.0.0-rc2, runs cases against an empty private journal and retires it', async () => {
   let journal = '';
   const retire = vi.fn<Retire>(() => Promise.resolve());
-  const result = await run({
-    info: linuxInfo(15_032_385_536),
-    config: (url) => settings(`${url}/`),
-    spawnCases: (env) => {
-      journal = env.DSH_TEAM_CI_RESOURCE_JOURNAL ?? '';
-      expect(env.DOCKER_CONFIG).toBeUndefined();
-      expect(statSync(journal)).toMatchObject({ size: 0, mode: 0o100600 });
-      expect(statSync(dirname(journal)).mode & 0o777).toBe(0o700);
-      return Promise.resolve({ code: 1, signal: null });
+  const stderr: string[] = [];
+  const result = await run(
+    {
+      info: linuxInfo(15_032_385_536),
+      compose: dockerInfo('2.33.1\n'),
+      config: (url) => settings(`${url}/`),
+      spawnCases: (env) => {
+        journal = env.DSH_TEAM_CI_RESOURCE_JOURNAL ?? '';
+        expect(env.DOCKER_CONFIG).toBeUndefined();
+        expect(statSync(journal)).toMatchObject({ size: 0, mode: 0o100600 });
+        expect(statSync(dirname(journal)).mode & 0o777).toBe(0o700);
+        // The run directory is announced before any case output.
+        expect(stderr).toEqual([runLine(dirname(journal))]);
+        return settled(1);
+      },
+      retire,
     },
-    retire,
-  });
+    stderr,
+  );
 
   expect(result).toMatchObject({
     code: 1,
-    stderr: [],
+    stderr: [runLine(result.runDir)],
     probes: [result.url],
   });
+  expect(result.docker.map(({ args }) => args.join(' '))).toEqual(PREREQUISITE_DOCKER);
+  expect(result.pythonProbes).toHaveLength(1);
   expect(
     result.requests.map(({ method, url, headers }) => [method, url, headers.authorization]),
   ).toEqual([['GET', '/api/v1/system/version', undefined]]);
@@ -236,6 +305,9 @@ it('accepts the bracketed IPv6 loopback address as a literal RAGFlow origin', ()
       arch: 'arm64',
       config,
       dockerInfo: linuxInfo(),
+      compose: dockerInfo('2.40.3-desktop.1\n'),
+      buildx: dockerInfo('github.com/docker/buildx v0.30.1-desktop.1\n'),
+      python: true,
       version: { status: 200, body: JSON.stringify({ code: 0, data: 'v1.0.0-rc2' }) },
     }),
   ).toEqual({ ok: true, ragflowUrl: 'https://[::1]:9380' });
@@ -245,8 +317,8 @@ it.each([
   ['SIGINT', 130],
   ['SIGTERM', 143],
 ] as const)('maps an interrupted %s case run to %i after retirement', async (signal, status) => {
-  const result = await run({ spawnCases: () => Promise.resolve({ code: null, signal }) });
-  expect(result).toMatchObject({ code: status, stderr: [] });
+  const result = await run({ spawnCases: () => settled(null, signal) });
+  expect(result).toMatchObject({ code: status, stderr: [runLine(result.runDir)] });
   expect(existsSync(result.runDir)).toBe(false);
 });
 
@@ -281,7 +353,7 @@ it('retires only after the signalled case runner itself closes, including its la
     process.emit('SIGTERM', 'SIGTERM');
     const result = await pending;
 
-    expect(result).toMatchObject({ code: 143, stderr: [] });
+    expect(result).toMatchObject({ code: 143, stderr: [runLine(result.runDir)] });
     expect(retire.mock.calls[0]?.[0]).toEqual([{ runId, target }]);
     expect(existsSync(result.runDir)).toBe(false);
     expect(process.listenerCount('SIGTERM')).toBe(listeners);
@@ -307,7 +379,7 @@ it.each<[string, (journal: string) => void, number]>([
   const result = await run({
     spawnCases: (env) => {
       write(env.DSH_TEAM_CI_RESOURCE_JOURNAL ?? '');
-      return Promise.resolve({ code: 0, signal: null });
+      return settled(0);
     },
     retire,
   });
@@ -315,7 +387,10 @@ it.each<[string, (journal: string) => void, number]>([
     expect(retire).toHaveBeenCalledTimes(retireCalls);
     expect(result).toMatchObject({
       code: 1,
-      stderr: [`test:stack cleanup failed (1); journal retained at ${result.runDir}\n`],
+      stderr: [
+        runLine(result.runDir),
+        `test:stack cleanup failed (1); journal retained at ${result.runDir}\n`,
+      ],
     });
     expect(existsSync(join(result.runDir, 'cleanup.journal'))).toBe(true);
   } finally {
@@ -323,32 +398,259 @@ it.each<[string, (journal: string) => void, number]>([
   }
 });
 
-it('removes nothing of a run that registered the fixed platform without the deployment lock', async () => {
+it('retires a registered fixed platform only under the injected deployment lock', async () => {
   const runId = randomUUID();
-  const failures: string[] = [];
+  const order: string[] = [];
+  const platformId = 'e'.repeat(64);
+  let present = true;
+  const ok = (stdout = '') => ({ status: 0, stdout, stderr: '' });
   const result = await run({
     spawnCases: (env) => {
-      const ownership = { 'dsh-team.test-run': runId };
+      const ownership = { [OWNER_LABEL]: runId };
       const target = { kind: 'container', name: 'dsh-team-platform', ownership };
       appendFileSync(
         env.DSH_TEAM_CI_RESOURCE_JOURNAL ?? '',
         `${JSON.stringify({ runId, target })}\n`,
       );
-      return Promise.resolve({ code: 0, signal: null });
+      return settled(0);
     },
-    retire: async (entries: readonly CleanupJournalEntry[], retirement, collected) => {
-      await retireCleanupJournal(entries, retirement, collected);
-      failures.push(...collected.map((error) => (error instanceof Error ? error.message : '')));
+    acquireLock: () => {
+      order.push('lock');
+      return Promise.resolve(() => {
+        order.push('release');
+        return Promise.resolve();
+      });
+    },
+    answer: (args) => {
+      if (args[0] !== 'container' || args[1] === 'ls') return undefined;
+      order.push(args.join(' '));
+      if (!present)
+        return {
+          status: 1,
+          stdout: '',
+          stderr: `Error: No such container: ${String(args.at(-1))}\n`,
+        };
+      if (args[1] === 'rm') {
+        present = false;
+        return ok();
+      }
+      if (args.includes('--format')) return ok(`${runId}\n`);
+      const document = {
+        Id: platformId,
+        Name: '/dsh-team-platform',
+        Config: { Labels: { [OWNER_LABEL]: runId } },
+        State: { Status: 'created', Running: false, ExitCode: 0, OOMKilled: false },
+      };
+      return ok(JSON.stringify([document]));
     },
   });
-  await rm(result.runDir, { recursive: true, force: true });
 
-  expect(failures).toEqual(['deployment lock unavailable in the local lane']);
-  expect(result.docker).toHaveLength(1);
-  expect(result).toMatchObject({
-    code: 1,
-    stderr: [`test:stack cleanup failed (1); journal retained at ${result.runDir}\n`],
+  expect(result).toMatchObject({ code: 0, stderr: [runLine(result.runDir)] });
+  expect(order[0]).toBe('lock');
+  expect(order.indexOf('container rm --force dsh-team-platform')).toBeGreaterThan(0);
+  expect(order.at(-1)).toBe('release');
+  expect(present).toBe(false);
+  expect(existsSync(result.runDir)).toBe(false);
+});
+
+it('retains the journal when the post-retirement label inventory still lists a resource', async () => {
+  const runId = randomUUID();
+  const inventories: string[] = [];
+  const result = await run({
+    spawnCases: (env) => {
+      const target = {
+        kind: 'network',
+        name: 'dsh-team-late',
+        ownership: { [OWNER_LABEL]: runId },
+      };
+      appendFileSync(
+        env.DSH_TEAM_CI_RESOURCE_JOURNAL ?? '',
+        `${JSON.stringify({ runId, target })}\n`,
+      );
+      return settled(0);
+    },
+    // The registered name is absent; a daemon-side late creation still carries the label.
+    answer: (args) => {
+      if (args.includes('ls')) {
+        inventories.push(args.join(' '));
+        return dockerInfo(args[0] === 'container' ? `${'d'.repeat(64)}\n` : '');
+      }
+      if (args[0] !== 'network') return undefined;
+      return {
+        status: 1,
+        stdout: '',
+        stderr: 'Error response from daemon: network dsh-team-late not found\n',
+      };
+    },
   });
+  try {
+    const filter = `--filter label=${OWNER_LABEL}=${runId}`;
+    expect(inventories).toEqual([
+      `container ls --all --quiet --no-trunc ${filter}`,
+      `network ls --quiet --no-trunc ${filter}`,
+      `volume ls --quiet ${filter}`,
+      `image ls --all --quiet --no-trunc ${filter}`,
+    ]);
+    expect(result).toMatchObject({
+      code: 1,
+      stderr: [
+        runLine(result.runDir),
+        `test:stack cleanup failed (1); journal retained at ${result.runDir}\n`,
+      ],
+    });
+    expect(readFileSync(join(result.runDir, 'cleanup.journal'), 'utf8')).toContain(runId);
+  } finally {
+    await rm(result.runDir, { recursive: true, force: true });
+  }
+});
+
+it('retains the journal without reading or retiring it when the case launch rejects', async () => {
+  const retire = vi.fn<Retire>(() => Promise.resolve());
+  const result = await run({
+    spawnCases: () => Promise.reject(new Error('launch failed')),
+    retire,
+  });
+  try {
+    expect(result).toMatchObject({
+      code: 1,
+      stderr: [runLine(result.runDir), UNSETTLED(result.runDir)],
+    });
+    expect(retire).not.toHaveBeenCalled();
+    expect(existsSync(join(result.runDir, 'cleanup.journal'))).toBe(true);
+  } finally {
+    await rm(result.runDir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A vitest stand-in that leaves one same-group grandchild: `linger` outlives the settlement
+ * window, `timely` exits within it, and `term` exits only on a group SIGTERM.
+ */
+function standIn(mode: 'linger' | 'timely' | 'term') {
+  const grandchild = String.raw`const fs=require('node:fs');const [dir,mode]=process.argv.slice(1);
+    process.on('SIGTERM',()=>{fs.writeFileSync(dir+'/term','');process.exit(0);});
+    fs.writeFileSync(dir+'/grandchild',String(process.pid));
+    setTimeout(()=>process.exit(0),mode==='timely'?300:10000);`;
+  const parent = String.raw`const fs=require('node:fs');const {spawn}=require('node:child_process');
+    const [dir,mode,grandchild]=process.argv.slice(1);
+    spawn(process.execPath,['-e',grandchild,dir,mode],{stdio:'ignore'}).unref();
+    fs.writeFileSync(dir+'/stand-in',String(process.pid));
+    const ready=setInterval(()=>{if(fs.existsSync(dir+'/grandchild')){clearInterval(ready);process.exit(0);}},20);`;
+  return (directory: string): Cases =>
+    (env, cwd) =>
+      spawnCases(env, cwd, {
+        file: process.execPath,
+        args: ['-e', parent, directory, mode, grandchild],
+      });
+}
+
+/** The stand-in's group is owned by its case: retire any lingering member. */
+function killGroup(pid: number) {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+async function withStandIn(
+  run: (directory: string, pid: (name: string) => number) => Promise<void>,
+) {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-team-stack-group-'));
+  const pid = (name: string) => Number(readFileSync(join(directory, name), 'utf8'));
+  try {
+    await run(directory, pid);
+  } finally {
+    if (existsSync(join(directory, 'stand-in'))) killGroup(pid('stand-in'));
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+it('retains the journal and retires nothing while a case grandchild outlives its runner', async () => {
+  await withStandIn(async (directory) => {
+    const retire = vi.fn<Retire>(() => Promise.resolve());
+    const listeners = process.listenerCount('SIGTERM');
+    const result = await run({ spawnCases: standIn('linger')(directory), retire });
+    try {
+      expect(result).toMatchObject({
+        code: 1,
+        stderr: [runLine(result.runDir), UNSETTLED(result.runDir)],
+      });
+      expect(retire).not.toHaveBeenCalled();
+      expect(existsSync(join(result.runDir, 'cleanup.journal'))).toBe(true);
+      expect(process.listenerCount('SIGTERM')).toBe(listeners);
+    } finally {
+      await rm(result.runDir, { recursive: true, force: true });
+    }
+  });
+});
+
+it('retires only after the whole case process group has settled', async () => {
+  await withStandIn(async (directory, pid) => {
+    const retire = vi.fn<Retire>(() => {
+      expect(alive(pid('grandchild'))).toBe(false);
+      return Promise.resolve();
+    });
+    const result = await run({ spawnCases: standIn('timely')(directory), retire });
+
+    expect(result).toMatchObject({ code: 0, stderr: [runLine(result.runDir)] });
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(existsSync(result.runDir)).toBe(false);
+  });
+});
+
+it('keeps forwarding SIGTERM to the whole group until it settles after the runner closed', async () => {
+  await withStandIn(async (directory, pid) => {
+    const listeners = process.listenerCount('SIGTERM');
+    const retire = vi.fn<Retire>(() => Promise.resolve());
+    const pending = run({ spawnCases: standIn('term')(directory), retire });
+    await vi.waitFor(
+      () => {
+        expect(existsSync(join(directory, 'grandchild'))).toBe(true);
+        expect(alive(pid('stand-in'))).toBe(false);
+      },
+      { timeout: 5000, interval: 20 },
+    );
+    // The runner itself closed; its forwarding handler remains while the group lives.
+    expect(process.listenerCount('SIGTERM')).toBe(listeners + 1);
+    process.emit('SIGTERM', 'SIGTERM');
+    const result = await pending;
+
+    expect(existsSync(join(directory, 'term'))).toBe(true);
+    expect(result).toMatchObject({ code: 143, stderr: [runLine(result.runDir)] });
+    expect(retire).toHaveBeenCalledTimes(1);
+    expect(process.listenerCount('SIGTERM')).toBe(listeners);
+  });
+});
+
+it('treats a failed group observation as unsettled', async () => {
+  settlement.fail = true;
+  const retire = vi.fn<Retire>(() => Promise.resolve());
+  const listeners = process.listenerCount('SIGINT');
+  const result = await run({
+    spawnCases: (env, cwd) =>
+      spawnCases(env, cwd, { file: process.execPath, args: ['-e', 'process.exit(0)'] }),
+    retire,
+  });
+  try {
+    expect(result).toMatchObject({
+      code: 1,
+      stderr: [runLine(result.runDir), UNSETTLED(result.runDir)],
+    });
+    expect(retire).not.toHaveBeenCalled();
+    expect(process.listenerCount('SIGINT')).toBe(listeners);
+  } finally {
+    await rm(result.runDir, { recursive: true, force: true });
+  }
 });
 
 it('reads only an owned private file and reports absence separately', async () => {

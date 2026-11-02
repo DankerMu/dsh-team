@@ -1,4 +1,4 @@
-// Owned custody fixture daemon: the owner preload routes every docker/flock process here.
+// Owned custody fixture daemon: the owner preload routes every docker/lock-holder process here.
 // It answers only from the fixture's private state file and never reaches a Docker Engine.
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -95,7 +95,8 @@ async function wait() {
   reply(`${String(platformExit().exitCode)}\n`);
 }
 
-// Same handshake as `flock --nonblock <lock> node -e ...`; stdin EOF releases it.
+// Same handshake as `flock --nonblock <lock> node -e ...` and the darwin python3 fcntl holder;
+// stdin EOF releases it.
 function lock() {
   if (state.scenario === 'lock-unavailable') {
     process.exitCode = 1;
@@ -109,7 +110,7 @@ function lock() {
 }
 
 async function dispatch() {
-  if (binary === 'flock') return lock();
+  if (binary === 'flock' || binary === 'python3') return lock();
   const scoped = ['container', 'image', 'network', 'volume'].includes(args[0]);
   const kind = scoped ? args[0] : 'container';
   const verb = scoped ? args[1] : args[0];

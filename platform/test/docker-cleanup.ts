@@ -2,6 +2,7 @@ import { deepStrictEqual } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { appendFileSync, readFileSync, statSync } from 'node:fs';
+import { platform } from 'node:os';
 import { canonicalImageReference, isAbsentResource } from './docker-command.ts';
 import type { AsyncDockerCommand, DockerCommand, DockerCommandResult } from './docker-command.ts';
 
@@ -9,6 +10,19 @@ export const OWNER_LABEL = 'dsh-team.test-run';
 // The fixed deployment name is host-wide even when each invocation has a private TMPDIR.
 const DEPLOYMENT_PLATFORM = 'dsh-team-platform';
 const DEPLOYMENT_LOCK = '/tmp/dsh-team-deployment.lock';
+// macOS has no flock(1): the same kernel flock(2) semantics through Python's fcntl. A busy lock
+// exits nonzero silently; stdin EOF or holder death releases it; the file is never unlinked.
+const DARWIN_LOCK_HOLDER = `# dsh-team deployment lock holder
+import fcntl, os, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(1)
+sys.stdout.write('locked\\n')
+sys.stdout.flush()
+sys.stdin.buffer.read()
+`;
 export interface CleanupTarget {
   readonly kind: 'container' | 'image' | 'volume' | 'network';
   readonly name: string;
@@ -179,16 +193,19 @@ export async function drainDeploymentPlatform(
   return platform.id;
 }
 
-/**
- * Non-blocking host-wide deployment lock. The lock file is never unlinked; stdin EOF releases
- * the holder even if its parent dies, so there is no stale-file takeover.
- */
-export async function acquireDeploymentLock(): Promise<() => Promise<void>> {
-  const lock = spawn(
+function spawnLockHolder(path: string) {
+  const host = platform();
+  if (host === 'darwin')
+    return spawn('/usr/bin/python3', ['-I', '-c', DARWIN_LOCK_HOLDER, path], {
+      env: { PATH: '/usr/bin:/bin' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  if (host !== 'linux') throw new Error('Deployment verification lock unavailable');
+  return spawn(
     'flock',
     [
       '--nonblock',
-      DEPLOYMENT_LOCK,
+      path,
       process.execPath,
       '-e',
       "process.stdout.write('locked\\n');process.stdin.resume();",
@@ -198,6 +215,14 @@ export async function acquireDeploymentLock(): Promise<() => Promise<void>> {
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   );
+}
+
+/**
+ * Non-blocking host-wide deployment lock. The lock file is never unlinked; stdin EOF releases
+ * the holder even if its parent dies, so there is no stale-file takeover.
+ */
+export async function acquireDeploymentLock(path = DEPLOYMENT_LOCK): Promise<() => Promise<void>> {
+  const lock = spawnLockHolder(path);
   const closed = once(lock, 'close');
   const release = async () => {
     lock.stdin.end();
