@@ -32,6 +32,8 @@ const SOURCES = {
 const WEB = { webToolsEnabled: false };
 const HINT = '修改在每个实例下次启动时生效；保存不会重启正在运行的实例。';
 const SAVE = ['保存插件目录', '保存安装源', '保存联网工具设置'] as const;
+const FORMS = ['预装插件', '插件安装源', '联网工具'] as const;
+const COUNT = '保存时运行中的实例数';
 type Reply = Response | Promise<Response> | (() => Promise<Response>);
 const offline = () => Promise.reject(new Error('private-data'));
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
@@ -93,6 +95,26 @@ function sent(request: ReturnType<typeof serve>, index: number): unknown {
 }
 function alerts(view: HTMLDivElement): string[] {
   return [...view.querySelectorAll('[role="alert"]')].map((node) => node.textContent);
+}
+function formText(view: HTMLDivElement, name: string): string {
+  return element(view, `form[aria-label="${name}"]`, HTMLFormElement).textContent;
+}
+/** The running count appears under exactly the saved form and no other. */
+function expectCountOnlyUnder(view: HTMLDivElement, saved: string, count: number): void {
+  for (const name of FORMS)
+    if (name === saved)
+      expect(formText(view, name)).toContain(`${COUNT}：${String(count)}（非实时统计）。`);
+    else expect(formText(view, name)).not.toContain(COUNT);
+}
+/** The single alert sits inside the form whose save button was used; the other forms carry none. */
+function expectAlertOnlyUnder(view: HTMLDivElement, label: (typeof SAVE)[number]): void {
+  const saved = FORMS[SAVE.indexOf(label)];
+  expect(
+    element(view, '[role="alert"]', HTMLElement).closest('form')?.getAttribute('aria-label'),
+  ).toBe(saved);
+  for (const name of FORMS)
+    if (name !== saved)
+      expect(view.querySelector(`form[aria-label="${name}"] [role="alert"]`)).toBeNull();
 }
 function expectNoConfiguration(view: HTMLDivElement): void {
   expect(view.querySelector('form')).toBeNull();
@@ -245,6 +267,7 @@ it('saves the full catalog with required entries forced on and shows the running
   expect(element(view, 'form[aria-label="预装插件"]', HTMLFormElement).textContent).toContain(
     '保存时运行中的实例数：2（非实时统计）。',
   );
+  expectCountOnlyUnder(view, '预装插件', 2);
 });
 
 it.each([
@@ -273,7 +296,7 @@ it.each([
 it('saves web tools alone and keeps the other unsaved drafts', async () => {
   const request = serve({
     ...loads(),
-    [`PUT ${WEB_API}`]: [json({ webToolsEnabled: true, runningInstances: 0 })],
+    [`PUT ${WEB_API}`]: [json({ webToolsEnabled: true, runningInstances: 3 })],
   });
   const { view } = renderAccountPage(<PluginsPage />, PATH, request);
   await flush();
@@ -289,9 +312,9 @@ it('saves web tools alone and keeps the other unsaved drafts', async () => {
   expect(textarea(view).value).toBe('http://draft.invalid/');
   expect(element(view, 'select', HTMLSelectElement).value).toBe('forced-on');
   expect(element(view, 'form[aria-label="联网工具"]', HTMLFormElement).textContent).toContain(
-    '保存时运行中的实例数：0（非实时统计）。',
+    '保存时运行中的实例数：3（非实时统计）。',
   );
-  expect(view.textContent).not.toContain('保存时运行中的实例数：2');
+  expectCountOnlyUnder(view, '联网工具', 3);
 });
 
 it('replaces the sources draft only from its own saved response', async () => {
@@ -317,6 +340,7 @@ it('replaces the sources draft only from its own saved response', async () => {
   expect(textarea(view).value).toBe('http://saved.invalid/');
   expect(checkbox(view, '插件安装源').checked).toBe(true);
   expect(view.textContent).toContain('保存时运行中的实例数：4（非实时统计）。');
+  expectCountOnlyUnder(view, '插件安装源', 4);
 });
 
 it.each([
@@ -347,6 +371,7 @@ it.each([
   await click(view, label);
   await flush();
   expect(alerts(view)).toEqual([expected]);
+  expectAlertOnlyUnder(view, label);
   expect(view.innerHTML).not.toContain('private-data');
   expect(view.textContent).not.toContain('pluginRegistries');
   for (const name of SAVE) expect(button(view, name).matches(':disabled')).toBe(false);
@@ -364,6 +389,7 @@ it('sends an empty registry list for empty text and shows the envelope guidance'
   await flush();
   expect(sent(request, 3)).toEqual({ pluginRegistries: [], registryProbeEnabled: true });
   expect(alerts(view)).toEqual(['至少填写一个安装源。']);
+  expectAlertOnlyUnder(view, SAVE[1]);
   expect(textarea(view).value).toBe('');
 });
 
@@ -381,6 +407,7 @@ it.each([
   await click(view, label);
   await flush();
   expect(alerts(view)).toEqual(['保存失败，请重试。']);
+  expectAlertOnlyUnder(view, label);
   expect(view.innerHTML).not.toContain('private-data');
   expect(view.textContent).not.toContain('保存时运行中的实例数');
   expect(checkbox(view, '联网工具').checked).toBe(false);

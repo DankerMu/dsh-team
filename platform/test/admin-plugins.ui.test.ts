@@ -23,6 +23,7 @@ const HINT = '修改在每个实例下次启动时生效；保存不会重启正
 const DEFAULT_REGISTRIES = ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'];
 const LOCKED = '强制开（必启，不可修改）';
 const COUNT = '保存时运行中的实例数：0（非实时统计）。';
+const FORMS = ['预装插件', '插件安装源', '联网工具'] as const;
 
 interface ImageCatalogEntry {
   id: string;
@@ -67,6 +68,14 @@ async function save(page: Page, url: string, label: string) {
   );
   await page.getByRole('button', { name: label, exact: true }).click();
   return response;
+}
+/** Counts persist per saved section, so only the forms not yet saved must lack the line. */
+async function expectCountUnder(page: Page, saved: readonly string[]): Promise<void> {
+  // The awaited positive assertions retry until React commits; only then check absence.
+  for (const name of saved) await expect(form(page, name)).toContainText(COUNT);
+  for (const name of FORMS)
+    if (!saved.includes(name))
+      await expect(form(page, name)).not.toContainText('保存时运行中的实例数');
 }
 async function expectNoConfiguration(page: Page): Promise<void> {
   await expect(page.getByRole('form')).toHaveCount(0);
@@ -132,7 +141,7 @@ test('administrator sees the image catalog and saves each section through the re
     });
     expect(readSettings(database).pluginCatalog).toEqual({ 'office-agents': 'forced-off' });
     expect(auditCount(database, 'plugin-catalog.updated')).toBe(1);
-    await expect(form(page, '预装插件')).toContainText(COUNT);
+    await expectCountUnder(page, ['预装插件']);
 
     await registries(page).fill('http://mirror.intranet.invalid/');
     await page.getByLabel('开启仓库探测', { exact: true }).uncheck();
@@ -148,7 +157,7 @@ test('administrator sees the image catalog and saves each section through the re
       registryProbeEnabled: false,
     });
     expect(auditCount(database, 'plugin-sources.updated')).toBe(1);
-    await expect(form(page, '插件安装源')).toContainText(COUNT);
+    await expectCountUnder(page, ['插件安装源', '预装插件']);
 
     await page.getByLabel('允许联网搜索与抓取工具', { exact: true }).check();
     const savedWeb = await save(page, api.web, '保存联网工具设置');
@@ -156,7 +165,7 @@ test('administrator sees the image catalog and saves each section through the re
     expect(await savedWeb.json()).toEqual({ webToolsEnabled: true, runningInstances: 0 });
     expect(readSettings(database).webToolsEnabled).toBe(true);
     expect(auditCount(database, 'web-tools.updated')).toBe(1);
-    await expect(form(page, '联网工具')).toContainText(COUNT);
+    await expectCountUnder(page, ['联网工具', '预装插件', '插件安装源']);
     await expect(page.getByText(HINT, { exact: true })).toBeVisible();
     await observed.screenshot('plugins-saved');
 
@@ -187,9 +196,12 @@ test('a rejected registry line leaves settings and audits unchanged', async ({
     await registries(page).fill('https://registry.npmjs.org/\nftp://mirror.invalid/');
     const rejected = await save(page, observed.api.sources, '保存安装源');
     expect(rejected.status()).toBe(400);
-    await expect(page.getByRole('alert')).toHaveText(
+    await expect(form(page, '插件安装源').getByRole('alert')).toHaveText(
       '第 2 行的安装源地址无效：须以 http:// 或 https:// 开头且不含空白。',
     );
+    await expect(page.getByRole('alert')).toHaveCount(1);
+    await expect(form(page, '预装插件').getByRole('alert')).toHaveCount(0);
+    await expect(form(page, '联网工具').getByRole('alert')).toHaveCount(0);
     await expect(registries(page)).toHaveValue(
       'https://registry.npmjs.org/\nftp://mirror.invalid/',
     );
