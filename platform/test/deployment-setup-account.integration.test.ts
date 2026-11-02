@@ -1,4 +1,6 @@
 import type * as ChildProcessModule from 'node:child_process';
+import type * as OsModule from 'node:os';
+import { dirname } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { configureDeployment } from './deployment-account-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
@@ -10,6 +12,15 @@ import type * as ObserverModule from './deployment-observer-fixture.ts';
 import { substituteObservation } from './deployment-observer-substitute.ts';
 
 const observer = vi.hoisted(() => ({ events: [] as string[] }));
+// The administrator terminal's host platform and the PTY requests it submitted.
+const host = vi.hoisted(() => ({
+  platform: undefined as string | undefined,
+  terminals: [] as { command: string[]; env: Record<string, string> }[],
+}));
+vi.mock('node:os', async (importOriginal) => {
+  const original = await importOriginal<typeof OsModule>();
+  return { ...original, platform: () => host.platform ?? original.platform() };
+});
 vi.mock('./deployment-observer-fixture.ts', async (importOriginal) => {
   const { observerSubstitute } = await import('./deployment-observer-substitute.ts');
   return observerSubstitute(await importOriginal<typeof ObserverModule>(), (event) => {
@@ -20,9 +31,10 @@ vi.mock('./deployment-observer-fixture.ts', async (importOriginal) => {
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof ChildProcessModule>()),
   // Substitute only the external PTY process, not configureDeployment/runPty.
-  spawnSync(binary: string, args: readonly string[]) {
+  spawnSync(binary: string, args: readonly string[], options?: { input?: string }) {
     if (binary !== 'python3' || !args[0]?.endsWith('/cli-pty.py'))
       throw new Error('Unexpected external process in account setup regression');
+    host.terminals.push(JSON.parse(options?.input ?? '{}') as (typeof host.terminals)[number]);
     return {
       status: 0,
       stdout: JSON.stringify({
@@ -283,3 +295,58 @@ it('completes account setup only after employee registration and keeps cleanup u
   ]);
   expect([...daemon.images]).toEqual([]);
 });
+
+it.each([
+  ['linux', `${dirname(process.execPath)}:/usr/bin:/bin`],
+  ['darwin', '/usr/local/bin:/usr/bin:/bin'],
+])(
+  'runs the %s administrator terminal with the PATH that holds its Docker CLI',
+  async (platform, path) => {
+    host.platform = platform;
+    host.terminals.splice(0);
+    const daemon = imageDaemon();
+    try {
+      await runUserImage(
+        'container-start',
+        () => undefined,
+        daemon.command,
+        async (lifecycle) => {
+          const deployment: Deployment = {
+            base: 'http://deployment.example.test',
+            port: 80,
+            directory: lifecycle.overlayDirectory,
+            dataDir: lifecycle.overlayDirectory,
+            compose: ['compose', '--project-name', 'owned'],
+            observation: substituteObservation(true),
+            request: (url) =>
+              Promise.resolve().then(() => {
+                if (new URL(url).pathname === '/healthz') return Response.json({ status: 'ok' });
+                throw new Error('Account work stops after the administrator terminal');
+              }),
+          };
+          await configureDeployment(lifecycle, () => Promise.resolve(deployment));
+          return 'unexpected acceptance';
+        },
+      ).catch(() => undefined);
+    } finally {
+      host.platform = undefined;
+    }
+
+    expect(observer.events.splice(0)).toEqual(['ready']);
+    expect(host.terminals).toHaveLength(1);
+    expect(host.terminals[0]?.env.PATH).toBe(path);
+    expect(host.terminals[0]?.command.slice(0, 2)).toEqual(['docker', '--config']);
+    expect(host.terminals[0]?.command.slice(3)).toEqual([
+      'compose',
+      '--project-name',
+      'owned',
+      'exec',
+      'platform',
+      'node',
+      'platform/dist/cli.js',
+      'admin',
+      'create',
+      'administrator@deployment.example.test',
+    ]);
+  },
+);

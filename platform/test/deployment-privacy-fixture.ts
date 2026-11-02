@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { expect } from 'vitest';
 import { extractLaunchToken } from '../src/orchestrator/index.ts';
 import { record } from './container-start-docker-fixture.ts';
@@ -10,12 +8,11 @@ import {
   verifyDeployedAuditEvents,
 } from './deployment-audit-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
-import type { Deployment } from './deployment-fixture.ts';
+import { writeModelProviderOverride } from './deployment-compose-fixture.ts';
 import { createDeploymentSetupEvidence } from './deployment-setup-evidence.ts';
 import type { DeploymentSetupEvidence, DeploymentSetupSink } from './deployment-setup-evidence.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
-import { awaitLocalModelReady } from './local-model-readiness.ts';
-import type { UserImageLifecycle } from './user-image-fixture.ts';
+import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 
 interface Progress {
   phase: string;
@@ -156,59 +153,6 @@ function scanEvidence(snapshot: PrivacySnapshot, progress: Progress): void {
       },
     }) + '\n',
   );
-}
-
-async function preparePrivacyModel(
-  lifecycle: UserImageLifecycle,
-  deployment: Deployment,
-  config: Record<string, string>,
-): Promise<void> {
-  const configPath = join(deployment.directory, 'privacy-model.json');
-  await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
-  const override = join(deployment.directory, 'privacy-compose.json');
-  await writeFile(
-    override,
-    JSON.stringify({
-      services: {
-        platform: {
-          environment: { PLATFORM_LOG_LEVEL: 'info' },
-          volumes: [
-            {
-              type: 'bind',
-              source: join(lifecycle.repositoryRoot, 'platform/test/deployment-model-wire.ts'),
-              target: '/verification/model.ts',
-              read_only: true,
-              bind: { create_host_path: false },
-            },
-            {
-              type: 'bind',
-              source: configPath,
-              target: '/verification/model.json',
-              read_only: true,
-              bind: { create_host_path: false },
-            },
-          ],
-        },
-      },
-    }),
-    { mode: 0o600 },
-  );
-  deployment.compose.push('--file', override);
-}
-
-async function privatePlatformRead(
-  run: (args: string[]) => Promise<{ stdout: string }>,
-  script: string,
-): Promise<Record<string, unknown>> {
-  const result = await run([
-    'exec',
-    'dsh-team-platform',
-    'node',
-    '--input-type=module',
-    '-e',
-    script,
-  ]);
-  return record(JSON.parse(result.stdout));
 }
 
 async function publishPrivacySetup(
@@ -406,8 +350,17 @@ export async function verifyDeployedCredentialPrivacy(sink?: DeploymentSetupSink
           employee,
         );
       },
-      (lifecycle, deployment) =>
-        preparePrivacyModel(lifecycle, deployment, { key, model, marker, reply }),
+      async (lifecycle, deployment) => {
+        deployment.compose.push(
+          '--file',
+          await writeModelProviderOverride(lifecycle.repositoryRoot, deployment.directory, {
+            key,
+            model,
+            marker,
+            reply,
+          }),
+        );
+      },
       setup,
     );
   } catch {

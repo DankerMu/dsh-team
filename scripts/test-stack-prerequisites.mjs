@@ -15,7 +15,7 @@ const MIN_COMPOSE_VERSION = [2, 33, 1];
  *   dockerHost?: string | undefined, dockerContext?: string | undefined,
  *   platform: string, arch: string,
  *   config?: ConfigFact, dockerInfo?: DockerInfoFact,
- *   compose?: DockerInfoFact, buildx?: DockerInfoFact, python?: boolean,
+ *   compose?: DockerInfoFact, buildx?: DockerInfoFact, python?: boolean, chromium?: boolean,
  *   version?: VersionFact,
  * }} StackFacts
  * @typedef {{ok: false, reason: string} | {ok: true, ragflowUrl: string}
@@ -72,7 +72,8 @@ function composeSupported(compose) {
 }
 
 /**
- * ④ `docker info`, then the builder and locking tools the local lane needs, before RAGFlow.
+ * ④ `docker info`, then the builder, locking and browser tools the local lane needs, before
+ * RAGFlow.
  * @param {StackFacts} facts
  * @returns {{ok: false, reason: string} | {ok: undefined} | undefined}
  */
@@ -87,7 +88,12 @@ function localFailure(facts) {
   if (facts.buildx.status !== 0) return { ok: false, reason: 'docker buildx unavailable' };
   if (facts.platform !== 'darwin') return undefined;
   if (facts.python === undefined) return { ok: undefined };
-  return facts.python ? undefined : { ok: false, reason: '/usr/bin/python3 with fcntl required' };
+  if (!facts.python) return { ok: false, reason: '/usr/bin/python3 with fcntl required' };
+  if (facts.chromium === undefined) return { ok: undefined };
+  // The reason never names the cache path the executable was expected at.
+  return facts.chromium
+    ? undefined
+    : { ok: false, reason: 'playwright chromium not installed; run pnpm test:ui:install' };
 }
 
 /** @param {VersionFact} version @returns {string | undefined} */
@@ -108,7 +114,7 @@ function versionFailure(version) {
 }
 
 /**
- * Ordered ①→④, compose/buildx/python3, then ⑤; the first failure wins. An absent later fact
+ * Ordered ①→④, compose/buildx/python3/Chromium, then ⑤; the first failure wins. An absent later fact
  * yields `ok: undefined` so the caller gathers it only after every earlier prerequisite passed.
  * Reasons never carry configuration.
  * @param {StackFacts} facts
