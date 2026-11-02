@@ -126,14 +126,22 @@ const OFFICE_AGENTS = '@dsh-team/office-agents';
 const CATALOG = (
   JSON.parse(
     readFileSync(new URL('../../images/dsh-user/catalog.json', import.meta.url), 'utf8'),
-  ) as { entries: { id: string; package: string; imageDefaultEnabled: boolean }[] }
+  ) as {
+    entries: { id: string; package: string; category: string; imageDefaultEnabled: boolean }[];
+  }
 ).entries;
+// Default catalog settings: required entries are forced on, the office bundle is the employee's.
+const FIRST_LOCKED = CATALOG.find((entry) => entry.category === 'required')?.package;
 
-/** The expected card states, with the office bundle switched as given. */
+/**
+ * The expected card states, with the office bundle switched as given: each required card shows
+ * the platform lock forced on over its unselected native switch.
+ */
 function pluginExpectations(officeEnabled: boolean) {
   return CATALOG.map((entry) => ({
     package: entry.package,
     enabled: entry.package === OFFICE_AGENTS ? officeEnabled : entry.imageDefaultEnabled,
+    ...(entry.category === 'required' ? { locked: 'forced-on' as const } : {}),
   }));
 }
 
@@ -188,13 +196,22 @@ function expectPluginPage(
     legs.includes('on') ? { checked: true, status: 'running' } : undefined,
   );
   expect(observation.pluginPage?.cards).toEqual(
-    pluginExpectations(officeEnabled).map(({ package: name, enabled }) => ({
-      package: name,
-      status: enabled ? 'running' : 'disabled',
-      checked: enabled,
+    pluginExpectations(officeEnabled).map((entry) => ({
+      package: entry.package,
+      status: entry.enabled ? 'running' : 'disabled',
+      checked: entry.enabled,
+      locked: 'locked' in entry ? entry.locked : null,
     })),
   );
-  expect(observation.pluginPage?.screenshots).toHaveLength(2 + legs.length);
+  // The first required card: never focused by Tab, unchanged by pointer/Enter/Space, locked detail.
+  expect(observation.pluginPage?.locked).toMatchObject({
+    package: FIRST_LOCKED,
+    focus: { roundTripSwitch: true },
+    input: { checked: false, lock: 'forced-on' },
+    detail: { lock: 'forced-on' },
+  });
+  // list, locked (after the input reload), locked-detail, detail, then one per leg.
+  expect(observation.pluginPage?.screenshots).toHaveLength(4 + legs.length);
 }
 
 function requireAutomaticSession(observation: MappedHostAcceptResult): string {

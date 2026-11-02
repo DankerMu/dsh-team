@@ -189,6 +189,17 @@ function catalogRows(input: ManagedConfigInput): { rows: Json[]; disabled: Set<s
   return { rows, disabled };
 }
 
+type ForcedState = Exclude<CatalogEntryState['state'], 'employee'>;
+
+/** Forced catalog states by package name in catalog order, for the platform entry's lock display. */
+function forcedPackageStates(catalog: readonly CatalogEntryState[]): Record<string, ForcedState> {
+  const states: Record<string, ForcedState> = {};
+  for (const entry of catalog) {
+    if (entry.state !== 'employee') states[entry.package] = entry.state;
+  }
+  return states;
+}
+
 function serializeModels(models: readonly Settings['models'][number][]): Json {
   const rows: Json[] = [];
   for (const model of models) {
@@ -331,7 +342,7 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
             id: 'platform-nav',
             name: '/opt/dsh-team/platform-nav/index.js',
             disabled: false,
-            config: { admin: input.admin },
+            config: { admin: input.admin, pluginCatalog: forcedPackageStates(input.pluginCatalog) },
           },
           {
             id: 'dsh-team-platform-credentials',

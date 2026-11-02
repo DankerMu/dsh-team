@@ -1,6 +1,7 @@
 /**
  * Real DSH sidebar plugin page evidence: every catalog package has its card in the expected state,
- * the released install and uninstall entries are present, and one bundle switch stays usable and
+ * the released install and uninstall entries are present, every administrator-forced card shows the
+ * platform lock instead of a reachable native switch, and one bundle switch stays usable and
  * round-trips across reloads. DOM facts only.
  */
 import { captureSettledScreenshot, clickSelector, evalPage, waitFor } from './probe-dsh-api-ui.mjs';
@@ -14,6 +15,16 @@ const UNINSTALL = ['卸载', 'Uninstall'];
 const UNINSTALL_LABEL = ['卸载 ', 'Uninstall '];
 
 const switchSelector = (name) => `button[role="switch"][aria-label="启用 ${name}"]`;
+const openSelector = (name) => `[data-plugin-package="${name}"] button[aria-label="查看 ${name}"]`;
+// The platform-nav client's lock mark (`plugins/platform-nav/client.js`).
+const LOCK = 'data-dsh-team-plugin-lock';
+const LOCK_TEXT = { 'forced-on': '已开启 · 由管理员设定', 'forced-off': '已关闭 · 由管理员设定' };
+// Puppeteer's US layout key events: Tab has no text, so it is a raw key-down.
+const KEYS = {
+  Tab: { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 },
+  Enter: { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' },
+  Space: { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, text: ' ' },
+};
 
 /** Scroll the topmost catalog card to the top of its scroller; a no-op before the cards render. */
 const scrollCardsExpression = (packages) => `(function(){
@@ -43,6 +54,16 @@ const observeExpression = (packages, name) => `(function(){
   const card=cardOf(${JSON.stringify(name)});
   const detail=document.querySelector(${JSON.stringify(`[data-plugin-detail="${name}"]`)});
   const toggle=document.querySelector(${JSON.stringify(switchSelector(name))});
+  const unrendered=(el)=>getComputedStyle(el).display==='none'&&el.getClientRects().length===0;
+  const lockOf=(scope,sw)=>{
+    const marks=scope?[...scope.querySelectorAll('[${LOCK}]')]:[];
+    const mark=marks.length===1&&sw&&sw.nextElementSibling===marks[0]&&marks[0].tagName==='SPAN'?marks[0]:null;
+    return {hidden:sw?unrendered(sw):null,marks:marks.length,
+      lock:mark?mark.getAttribute('${LOCK}'):null,lockText:mark?text(mark):null};
+  };
+  const opened=document.querySelector('[data-plugin-detail]');
+  const top=opened&&opened.firstElementChild;
+  const topSwitch=top&&top.querySelector('button[role="switch"]:last-of-type');
   return {
     panel:Boolean(panel),
     busy:panel?panel.getAttribute('aria-busy'):null,
@@ -52,9 +73,12 @@ const observeExpression = (packages, name) => `(function(){
     cards:${JSON.stringify(packages)}.map((pkg)=>{
       const el=cardOf(pkg),group=el&&el.closest('[data-plugin-group]'),sw=el&&el.querySelector('button[role="switch"]');
       return {package:pkg,present:Boolean(el),group:group?group.getAttribute('data-plugin-group'):null,
-        status:el?el.getAttribute('data-plugin-status'):null,checked:sw?sw.getAttribute('aria-checked'):null};
+        status:el?el.getAttribute('data-plugin-status'):null,checked:sw?sw.getAttribute('aria-checked'):null,
+        ...lockOf(el,sw)};
     }),
     detail:Boolean(detail),
+    opened:opened?{package:opened.getAttribute('data-plugin-detail'),switch:Boolean(topSwitch),
+      checked:topSwitch?topSwitch.getAttribute('aria-checked'):null,...lockOf(top,topSwitch)}:null,
     toggle:toggle?{
       checked:toggle.getAttribute('aria-checked'),
       disabled:toggle.disabled,
@@ -146,24 +170,147 @@ const leg = async (page, probe, ms, reload, place, enabled) => {
   return { checked: enabled, status: card.status };
 };
 
-/** Each catalog card listed in the 已安装 group, running and switched on exactly when expected. */
-const requireCards = (observed, expected) => {
-  const matches = ({ package: name, enabled }) => {
+/** The native switch is unrendered and followed by exactly one mark naming the forced state. */
+const lockedAs = (facts, locked) =>
+  facts.hidden === true &&
+  facts.marks === 1 &&
+  facts.lock === locked &&
+  facts.lockText === LOCK_TEXT[locked];
+
+/**
+ * Each catalog card listed in the 已安装 group with DSH's own status and switch state as expected
+ * (profile selection, also for a locked card); a forced card is locked, every other one untouched.
+ */
+const requireCards = (observed, expected, stage = 'plugin-page-list') => {
+  const matches = ({ package: name, enabled, locked }) => {
     const card = cardOf(observed, name);
     return (
       card?.present === true &&
       card.group === 'bundles' &&
       card.status === statusOf(enabled) &&
-      card.checked === String(enabled)
+      card.checked === String(enabled) &&
+      (locked === undefined ? card.hidden === false && card.marks === 0 : lockedAs(card, locked))
     );
   };
-  if (!expected.every(matches)) fail('plugin-page-list', 'catalog-card', observed.cards);
+  if (!expected.every(matches)) fail(stage, 'catalog-card', observed.cards);
 };
 
 const validOptions = (expected, roundTrip) =>
   Array.isArray(expected) &&
   typeof roundTrip?.leaveEnabled === 'boolean' &&
-  expected.some((entry) => entry.package === roundTrip.package);
+  expected.every(({ locked }) => locked === undefined || Object.hasOwn(LOCK_TEXT, locked)) &&
+  expected.some((entry) => entry.package === roundTrip.package && entry.locked === undefined);
+
+const press = async (page, name) => {
+  await page.send('Input.dispatchKeyEvent', KEYS[name]);
+  await page.send('Input.dispatchKeyEvent', { ...KEYS[name], type: 'keyUp' });
+};
+
+/** The focused element's catalog card, whether it is a bundle switch, and whether focus left the cards. */
+const focusExpression = (packages) => `(function(){
+  const a=document.activeElement;
+  const cards=${JSON.stringify(packages)}
+    .map((name)=>document.querySelector('[data-plugin-package="'+name+'"]'))
+    .filter(Boolean)
+    .sort((x,y)=>x.compareDocumentPosition(y)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1);
+  const last=cards.at(-1);
+  const card=a&&a.closest?a.closest('[data-plugin-package]'):null;
+  return {card:card?card.getAttribute('data-plugin-package'):null,
+    toggle:Boolean(a&&a.matches&&a.matches('button[role="switch"]')),
+    past:!a||a===document.body||!last||Boolean(last.compareDocumentPosition(a)&Node.DOCUMENT_POSITION_FOLLOWING)&&!last.contains(a)};
+})()`;
+
+/** Focus the open button of the first catalog card in document order. */
+const focusStartExpression = (packages) => `(function(){
+  const first=${JSON.stringify(packages)}
+    .map((name)=>document.querySelector('[data-plugin-package="'+name+'"] button[aria-label="查看 '+name+'"]'))
+    .filter(Boolean)
+    .sort((x,y)=>x.compareDocumentPosition(y)&Node.DOCUMENT_POSITION_FOLLOWING?-1:1)[0];
+  if(!first)return false;
+  first.focus();
+  return document.activeElement===first;
+})()`;
+
+/**
+ * Tab through every catalog card with real key events: a locked switch is never focused, every
+ * locked card is still reached, and the round-trip switch is focused (the traversal reaches switches).
+ */
+const traverseCards = async (page, probe, expected) => {
+  const packages = expected.map((entry) => entry.package);
+  const locked = new Set(expected.filter((entry) => entry.locked).map((entry) => entry.package));
+  if (!(await evalPage(page, focusStartExpression(packages)))) fail('plugin-page-focus', 'start');
+  const visited = [];
+  let roundTripSwitch = false;
+  let presses = 0;
+  for (; presses <= 8 * packages.length; presses += 1) {
+    const focus = await evalPage(page, focusExpression(packages));
+    if (focus.past) break;
+    if (focus.card !== null && !visited.includes(focus.card)) visited.push(focus.card);
+    if (focus.toggle && locked.has(focus.card)) fail('plugin-page-focus', 'locked-switch', focus);
+    if (focus.toggle && focus.card === probe.name) roundTripSwitch = true;
+    await press(page, 'Tab');
+  }
+  const reached = [...locked].every((name) => visited.includes(name));
+  if (!reached || !roundTripSwitch)
+    fail('plugin-page-focus', 'traversal', { visited, roundTripSwitch, presses });
+  return { presses, visited, roundTripSwitch };
+};
+
+/** The centre of a locked card's mark, scrolled into view; null when it has no rendered box. */
+const markCentreExpression = (name) => `(function(){
+  const mark=document.querySelector('[data-plugin-package="${name}"] [${LOCK}]');
+  if(!mark)return null;
+  mark.scrollIntoView({block:'center'});
+  const r=mark.getBoundingClientRect();
+  return r.width>0&&r.height>0?{x:r.left+r.width/2,y:r.top+r.height/2}:null;
+})()`;
+
+/** A real pointer click on the mark, then Enter and Space, never a script click on the native switch. */
+const pressLock = async (page, name) => {
+  const centre = await evalPage(page, markCentreExpression(name));
+  if (!centre) fail('plugin-page-locked-input', 'mark-box');
+  const pointer = { x: centre.x, y: centre.y, button: 'left', clickCount: 1 };
+  await page.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: centre.x, y: centre.y });
+  await page.send('Input.dispatchMouseEvent', { ...pointer, type: 'mousePressed', buttons: 1 });
+  await page.send('Input.dispatchMouseEvent', { ...pointer, type: 'mouseReleased', buttons: 0 });
+  await press(page, 'Enter');
+  await press(page, 'Space');
+};
+
+/**
+ * Locked-card evidence on the loaded list: keyboard traversal, then pointer/Enter/Space on the first
+ * forced card's mark with a reload (the card reads back unchanged), then that card's detail page.
+ */
+const verifyLocks = async ({ page, probe, ms, reload, expected, listShot, shot }) => {
+  const target = expected.find((entry) => entry.locked);
+  const focus = await traverseCards(page, probe, expected);
+  await pressLock(page, target.package);
+  await reload();
+  const after = await openList(page, probe, 'plugin-page-locked', ms);
+  // The same expectations as before the input: the mark and DSH's own `aria-checked` are unchanged.
+  requireCards(after, expected, 'plugin-page-locked');
+  const now = cardOf(after, target.package);
+  const screenshots = [await listShot('locked')];
+  await clickSelector(page, openSelector(target.package));
+  const opened = await settle(page, probe, 'plugin-page-locked-detail', ms, (state) =>
+    Boolean(state.opened?.package === target.package && state.opened.marks === 1),
+  );
+  if (!opened.opened.switch || !lockedAs(opened.opened, target.locked))
+    fail('plugin-page-locked-detail', 'lock', opened.opened);
+  if (opened.uninstall < 1) fail('plugin-page-locked-detail', 'uninstall', opened);
+  screenshots.push(await shot('locked-detail'));
+  await reload();
+  await openList(page, probe, 'plugin-page-list', ms);
+  return {
+    evidence: {
+      package: target.package,
+      focus,
+      input: { checked: now.checked === 'true', lock: now.lock },
+      detail: { lock: opened.opened.lock, uninstallButtons: opened.uninstall },
+    },
+    screenshots,
+  };
+};
 
 /**
  * Prove the plugin page lists every `expected` package with its state and offers its install and
@@ -202,7 +349,11 @@ export const verifyPluginPage = async ({
   const listed = await openList(page, probe, 'plugin-page-list', ms);
   requireCards(listed, expected);
   const screenshots = [await listShot('list')];
-  await clickSelector(page, `[data-plugin-package="${name}"] button[aria-label="查看 ${name}"]`);
+  const locks = expected.some((entry) => entry.locked)
+    ? await verifyLocks({ page, probe, ms, reload, expected, listShot, shot })
+    : undefined;
+  if (locks) screenshots.push(...locks.screenshots);
+  await clickSelector(page, openSelector(name));
   const detail = await settle(page, probe, 'plugin-page-detail', ms, (state) =>
     Boolean(state.detail && switchSettled(state, 'inDetail')),
   );
@@ -235,7 +386,9 @@ export const verifyPluginPage = async ({
       package: card.package,
       status: card.status,
       checked: card.checked === 'true',
+      locked: card.lock,
     })),
+    ...(locks ? { locked: locks.evidence } : {}),
     screenshots,
   };
 };

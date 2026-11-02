@@ -671,7 +671,7 @@ describe('generateManagedConfig', () => {
               id: 'platform-nav',
               name: '/opt/dsh-team/platform-nav/index.js',
               disabled: false,
-              config: { admin },
+              config: { admin, pluginCatalog: {} },
             },
             PLATFORM_CREDENTIAL_STORE,
           ],
@@ -724,7 +724,10 @@ describe('generateManagedConfig', () => {
     ok(employee.outcome === 'configured' && administrator.outcome === 'configured');
 
     expect(
-      administrator.content.replace('"config":{"admin":true}', '"config":{"admin":false}'),
+      administrator.content.replace(
+        '"config":{"admin":true,"pluginCatalog":{}}',
+        '"config":{"admin":false,"pluginCatalog":{}}',
+      ),
     ).toBe(employee.content);
     expect(administrator.content.split('"admin":').length).toBe(2);
   });

@@ -34,3 +34,35 @@ declare const window: {
     }): void;
   };
 };
+
+/** Structural subset of the browser DOM the plugin page lock decoration uses. */
+interface PlatformNavNode {
+  readonly nodeType: number;
+}
+
+interface PlatformNavElement extends PlatformNavNode {
+  readonly parentElement: PlatformNavElement | null;
+  readonly children: Iterable<PlatformNavElement>;
+  textContent: string | null;
+  readonly style: { cssText: string };
+  matches(selector: string): boolean;
+  closest(selector: string): PlatformNavElement | null;
+  querySelector(selector: string): PlatformNavElement | null;
+  querySelectorAll(selector: string): Iterable<PlatformNavElement>;
+  hasAttribute(name: string): boolean;
+  setAttribute(name: string, value: string): void;
+  append(node: PlatformNavElement): void;
+  after(node: PlatformNavElement): void;
+}
+
+declare const document: {
+  readonly head: PlatformNavElement;
+  readonly body: PlatformNavElement;
+  createElement(tag: 'span' | 'style'): PlatformNavElement;
+};
+
+declare const MutationObserver: new (
+  callback: (records: Iterable<{ readonly addedNodes: Iterable<PlatformNavNode> }>) => void,
+) => {
+  observe(target: PlatformNavElement, options: { childList: true; subtree: true }): void;
+};
