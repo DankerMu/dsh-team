@@ -29,7 +29,7 @@ import { isAbsentResource } from './docker-command.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
-import { converseInWorkbench } from './stack-browser-fixture.ts';
+import { converseInWorkbench, until } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -116,6 +116,9 @@ function ownedModel(runId: string) {
   };
 }
 
+const PROVIDER_HEALTH =
+  "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());";
+
 /**
  * Real gateway, real model-config and real DSH: one employee message through Chromium makes the
  * owned provider script a `write` call, then the reply; the file and counters are read back.
@@ -131,6 +134,7 @@ async function converse(
   const { provider } = model;
   const platformRead = (script: string) =>
     privatePlatformRead(async (args) => ({ stdout: await run(args) }), script);
+  const timeout = 120_000;
   await run([
     'exec',
     '--detach',
@@ -167,13 +171,21 @@ async function converse(
     password: 'instance-acceptance-password',
     message: `${provider.marker} 请按脚本写入文件`,
     reply: provider.reply,
-    timeout: 120_000,
+    timeout,
+    // Tool-call round, tool-result round and the title request: the write has landed by then.
+    turnComplete: () =>
+      until(
+        async () => {
+          const { requests, toolResults } = await platformRead(PROVIDER_HEALTH);
+          return Number(toolResults) >= 1 && Number(requests) >= 3;
+        },
+        timeout,
+        'provider turn',
+      ),
   });
   const read = ['exec', '--user', '1001', `dsh-team-u-${employee.id}`, 'cat', provider.script.path];
   expect(await run(read)).toBe(provider.script.content);
-  evidence.provider = await platformRead(
-    "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());",
-  );
+  evidence.provider = await platformRead(PROVIDER_HEALTH);
 }
 
 async function composeScenario(
@@ -297,12 +309,13 @@ it('builds both images, starts the delivered compose platform, converses through
     failedRequests: browser.failedRequests,
     externalRequests: browser.externalRequests,
   }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
+  expect(browser.requests).toBeGreaterThan(0);
   expect(browser.websockets).toBeGreaterThan(0);
   // Tool-call round, tool-result round and the title request, all marked by the message.
   expect(provider).toMatchObject({ ready: true });
   expect(provider.requests).toBeGreaterThanOrEqual(3);
   expect(provider.toolResults).toBeGreaterThanOrEqual(1);
-  expect(provider.markedRequests).toBeGreaterThanOrEqual(1);
+  expect(provider.markedRequests).toBeGreaterThanOrEqual(3);
   process.stdout.write(
     `${JSON.stringify({
       stackEvidence: {

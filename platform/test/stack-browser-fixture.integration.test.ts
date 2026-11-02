@@ -1,0 +1,200 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import type { Browser } from '@playwright/test';
+import { afterEach, expect, it } from 'vitest';
+import { converseInWorkbench, StackWorkbenchFailure } from './stack-browser-fixture.ts';
+
+const REPLY = 'owned-reply-nonce';
+const directories: string[] = [];
+
+afterEach(async () => {
+  for (const directory of directories.splice(0))
+    await rm(directory, { recursive: true, force: true });
+});
+
+/** What the stub page renders; the transcript is the only region a reply may count in. */
+interface Dom {
+  stop: boolean;
+  send: boolean;
+  transcript: string[];
+  header: string[];
+}
+
+type Handler = (value: unknown) => void;
+
+interface StubOptions {
+  /** Runs when the employee clicks SEND; schedules the stub's turn. */
+  onSend: (dom: Dom, events: string[]) => void;
+  /** Rejects the login navigation after emitting browser failures. */
+  gotoFailure?: Error;
+  closeFailure?: Error;
+}
+
+/** A Chromium-free page: just the calls `converseInWorkbench` makes, over a mutable fake DOM. */
+function stubBrowser(options: StubOptions) {
+  const dom: Dom = { stop: false, send: true, transcript: [], header: [] };
+  const events: string[] = [];
+  const handlers = new Map<string, Handler>();
+  const visible = (check: () => boolean, click = () => undefined) => {
+    const locator = {
+      first: () => locator,
+      count: () => Promise.resolve(check() ? 1 : 0),
+      focus: () => Promise.resolve(),
+      click() {
+        click();
+        return Promise.resolve();
+      },
+      async waitFor({ timeout }: { timeout: number }) {
+        const deadline = performance.now() + timeout;
+        while (!check()) {
+          if (performance.now() > deadline) throw new Error('stub waitFor timeout');
+          await delay(10);
+        }
+      },
+    };
+    return locator;
+  };
+  const page = {
+    on: (name: string, handler: Handler) => handlers.set(name, handler),
+    goto() {
+      if (options.gotoFailure === undefined) return Promise.resolve();
+      handlers.get('console')?.({ type: () => 'error', text: () => 'stub console failure' });
+      handlers.get('pageerror')?.(new Error('stub page failure'));
+      handlers.get('requestfailed')?.({ method: () => 'GET', url: () => 'http://stub/asset.js' });
+      return Promise.reject(options.gotoFailure);
+    },
+    screenshot({ path }: { path: string }) {
+      events.push(`screenshot:${basename(path)}`);
+      return Promise.resolve();
+    },
+    getByLabel: () => ({ fill: () => Promise.resolve() }),
+    getByRole: () => ({ click: () => Promise.resolve() }),
+    waitForURL: () => Promise.resolve(),
+    evaluate: () => Promise.resolve('ready'),
+    keyboard: { insertText: () => Promise.resolve() },
+    getByText: (text: string) =>
+      visible(() => dom.transcript.includes(text) || dom.header.includes(text)),
+    locator(selector: string) {
+      if (selector === '[data-chat-flow]')
+        return { getByText: (text: string) => visible(() => dom.transcript.includes(text)) };
+      if (selector.includes('Stop generating')) return visible(() => dom.stop);
+      if (selector.includes('Send message')) {
+        return visible(
+          () => dom.send,
+          () => {
+            options.onSend(dom, events);
+          },
+        );
+      }
+      return visible(() => true);
+    },
+  };
+  const context = {
+    on: (name: string, handler: Handler) => handlers.set(name, handler),
+    newPage: () => Promise.resolve(page),
+  };
+  const browser = {
+    newContext: () => Promise.resolve(context),
+    close: () =>
+      options.closeFailure === undefined ? Promise.resolve() : Promise.reject(options.closeFailure),
+  };
+  return { events, launch: () => Promise.resolve(browser as unknown as Browser) };
+}
+
+async function conversation(turnComplete: () => Promise<void>, timeout = 5_000) {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-team-stack-browser-'));
+  directories.push(directory);
+  return {
+    base: 'http://127.0.0.1:1',
+    directory,
+    email: 'employee@example.test',
+    password: 'stub-password',
+    message: 'stub message',
+    reply: REPLY,
+    timeout,
+    turnComplete,
+  };
+}
+
+it('waits past an early reply until STOP has appeared, disappeared and the provider completed', async () => {
+  const stub = stubBrowser({
+    onSend(dom, events) {
+      // The title request's reply is already rendered before the turn visibly starts.
+      dom.transcript.push(REPLY);
+      void (async () => {
+        await delay(600);
+        dom.stop = true;
+        dom.send = false;
+        events.push('stop-shown');
+        await delay(600);
+        dom.stop = false;
+        dom.send = true;
+        events.push('stop-hidden');
+      })();
+    },
+  });
+  const turnComplete = async () => {
+    await delay(1_800);
+    stub.events.push('turn-complete');
+  };
+  const evidence = await converseInWorkbench(await conversation(turnComplete), stub.launch);
+  expect(stub.events).toEqual([
+    'screenshot:login.png',
+    'screenshot:workbench.png',
+    'stop-shown',
+    'stop-hidden',
+    'turn-complete',
+    'screenshot:reply.png',
+  ]);
+  expect(evidence.screenshots).toEqual(['login.png', 'workbench.png', 'reply.png']);
+});
+
+it('does not accept the reply outside the conversation transcript', async () => {
+  const stub = stubBrowser({
+    onSend(dom) {
+      // Only the session title carries the reply; the transcript never does.
+      dom.header.push(REPLY);
+      dom.stop = true;
+      dom.send = false;
+      setTimeout(() => {
+        dom.stop = false;
+        dom.send = true;
+      }, 400);
+    },
+  });
+  const failure = converseInWorkbench(
+    await conversation(() => Promise.resolve(), 1_500),
+    stub.launch,
+  );
+  await expect(failure).rejects.toThrow('stub waitFor timeout');
+  expect(stub.events).not.toContain('screenshot:reply.png');
+  expect(stub.events.at(-1)).toBe('screenshot:failure.png');
+  await expect(failure).rejects.toBeInstanceOf(StackWorkbenchFailure);
+});
+
+it('keeps the original failure and its browser evidence when closing the browser also fails', async () => {
+  const original = new Error('stub navigation failure');
+  const closeFailure = new Error('stub close failure');
+  const stub = stubBrowser({ onSend: () => undefined, gotoFailure: original, closeFailure });
+  const error: unknown = await converseInWorkbench(
+    await conversation(() => Promise.resolve()),
+    stub.launch,
+  ).catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(AggregateError);
+  const [first, second] = (error as AggregateError).errors as unknown[];
+  expect(first).toBeInstanceOf(StackWorkbenchFailure);
+  const failure = first as StackWorkbenchFailure;
+  expect(failure.cause).toBe(original);
+  expect(second).toBe(closeFailure);
+  expect(failure.message).toContain('stub navigation failure');
+  expect(failure.message).toContain('consoleErrors=1 pageErrors=1 failedRequests=1');
+  expect(failure.evidence).toMatchObject({
+    screenshots: ['failure.png'],
+    consoleErrors: ['stub console failure'],
+    pageErrors: ['stub page failure'],
+    failedRequests: ['GET http://stub/asset.js'],
+  });
+  expect(JSON.stringify(failure.evidence)).not.toContain('stub-password');
+});
