@@ -1,7 +1,8 @@
-// Owner-only custody preload: docker and flock processes become the owned fake daemon, and the
-// host-wide deployment lock path can never be unlinked from the owner. Every child_process
-// launch named docker or flock is either routed or refused, and counted in preload.jsonl, so
-// no such call can reach a real binary unaccounted.
+// Owner-only custody preload: docker and deployment-lock processes (Linux flock, the darwin
+// python3 fcntl holder) become the owned fake daemon, and the host-wide deployment lock path can
+// never be unlinked from the owner. Every child_process launch named docker or flock, or a
+// python3 launch carrying the lock holder script, is either routed or refused, and counted in
+// preload.jsonl, so no such call can reach a real binary unaccounted.
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
@@ -14,14 +15,20 @@ const daemon = fileURLToPath(new URL('./trusted-docker-fake-daemon.mjs', import.
 const calls = new URL('../../.run/fake-daemon/calls.jsonl', import.meta.url);
 const ledger = new URL('../../.run/fake-daemon/preload.jsonl', import.meta.url);
 const lock = '/tmp/dsh-team-deployment.lock';
+// Pinned to the darwin holder script in docker-cleanup.ts by docker-cleanup.integration.test.ts.
+export const LOCK_HOLDER_MARK = 'dsh-team deployment lock holder';
 const original = { ...childProcess };
 
-function intercepted(command) {
+function intercepted(command, args) {
   // Shell-form commands are scanned word by word; any docker/flock word is intercepted.
   const names = String(command)
     .split(/[\s;&|()`]+/)
     .map((word) => basename(word));
-  return names.find((name) => name === 'docker' || name === 'flock');
+  const holder =
+    Array.isArray(args) && args.some((value) => String(value).includes(LOCK_HOLDER_MARK));
+  return names.find(
+    (name) => name === 'docker' || name === 'flock' || (holder && name === 'python3'),
+  );
 }
 
 // A ledger write failure fails the launch closed rather than leaving an uncounted call.
@@ -38,7 +45,7 @@ function launcher(launch) {
   return (command, ...rest) => {
     if (command === process.execPath && Array.isArray(rest[0]) && rest[0][1] === 'own')
       return launch(command, ['--import', import.meta.url, ...rest[0]], ...rest.slice(1));
-    const name = intercepted(command);
+    const name = intercepted(command, rest[0]);
     if (name === undefined) return launch(command, ...rest);
     const [args, options] = Array.isArray(rest[0]) ? rest : [[], rest[0]];
     if (basename(String(command)) !== name || options?.shell) return refuse(name);
@@ -49,7 +56,7 @@ function launcher(launch) {
 
 function refusing(run) {
   const wrapped = (command, ...rest) => {
-    const name = intercepted(command);
+    const name = intercepted(command, rest[0]);
     return name === undefined ? run(command, ...rest) : refuse(name);
   };
   const custom = run[promisify.custom];

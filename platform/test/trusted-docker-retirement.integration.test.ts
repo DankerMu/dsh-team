@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { platform } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { processBirth, processIdentity } from '../../scripts/probe-browser-native.mjs';
@@ -13,6 +14,13 @@ type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>
 
 const PLATFORM_ID = 'a'.repeat(64);
 const READ_ONLY = new Set(['inspect', 'ls', 'wait']);
+// The deployment lock holder program the owner launches on this host.
+const LOCK_HOLDER = platform() === 'darwin' ? 'python3' : 'flock';
+const LOCK = '/tmp/dsh-team-deployment.lock';
+const LOCK_ARGS: unknown[] =
+  LOCK_HOLDER === 'flock'
+    ? ['--nonblock', LOCK, expect.any(String), '-e', expect.any(String)]
+    : ['-I', '-c', expect.any(String), LOCK];
 const RESULT_WAIT_MS = 60_000;
 // Readiness, the cancelled result wait and fixture-owned retirement share one case bound.
 const CASE_TIMEOUT_MS = 90_000;
@@ -41,7 +49,7 @@ function daemonEvidence(repository: string) {
   const routed = launches.filter(([outcome]) => outcome === 'routed').length;
   const refused = launches.filter(([outcome]) => outcome !== 'routed').length;
   // The daemon also appends flock-released and the lock guard unlink; neither is a launch.
-  const daemonLaunches = calls.filter(([binary]) => binary === 'docker' || binary === 'flock');
+  const daemonLaunches = calls.filter(([binary]) => binary === 'docker' || binary === LOCK_HOLDER);
   return {
     names,
     calls,
@@ -140,11 +148,8 @@ it(
       const removals = daemon.docker.flatMap((call, index) => (call.includes('rm') ? [index] : []));
       expect(removals.length).toBeGreaterThan(0);
       expect(Math.min(...removals)).toBeGreaterThan(kill);
-      const acquired = daemon.calls.findIndex((call) => call[0] === 'flock');
-      expect(daemon.calls[acquired]?.slice(1, 3)).toEqual([
-        '--nonblock',
-        '/tmp/dsh-team-deployment.lock',
-      ]);
+      const acquired = daemon.calls.findIndex((call) => call[0] === LOCK_HOLDER);
+      expect(daemon.calls[acquired]?.slice(1)).toEqual(LOCK_ARGS);
       const released = daemon.calls.findIndex((call) => call[0] === 'flock-released');
       const lastRemoval = daemon.calls.findLastIndex((call) => call.includes('rm'));
       expect(acquired).toBeLessThan(daemon.calls.findIndex((call) => call[1] === 'kill'));
@@ -205,7 +210,7 @@ it.each([
       });
       expect(retirement).toMatchObject({ failures: 1 });
       expect(daemon.mutations).toEqual([]);
-      expect(daemon.calls.some((call) => call[0] === 'flock')).toBe(false);
+      expect(daemon.calls.some((call) => call[0] === LOCK_HOLDER)).toBe(false);
     });
   },
   CASE_TIMEOUT_MS,
@@ -263,15 +268,8 @@ it(
         cleanup: { state: 'unconfirmed' },
       });
       expect(retirement).toMatchObject({ failures: 1 });
-      expect(daemon.calls.filter((call) => call[0] === 'flock')).toEqual([
-        [
-          'flock',
-          '--nonblock',
-          '/tmp/dsh-team-deployment.lock',
-          expect.any(String),
-          '-e',
-          expect.any(String),
-        ],
+      expect(daemon.calls.filter((call) => call[0] === LOCK_HOLDER)).toEqual([
+        [LOCK_HOLDER, ...LOCK_ARGS],
       ]);
       expect(daemon.mutations).toEqual([]);
       expect(daemon.calls.some((call) => call[0] === 'unlink')).toBe(false);

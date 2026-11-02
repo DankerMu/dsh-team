@@ -1,31 +1,40 @@
 /** Local full-stack verification entry: prerequisites before any resource, exact-owned retirement. */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { arch, homedir, platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDockerCommands } from '../platform/test/docker-command.ts';
-import { readCleanupJournal, retireCleanupJournal } from '../platform/test/docker-cleanup.ts';
+import {
+  acquireDeploymentLock,
+  output,
+  OWNER_LABEL,
+  readCleanupJournal,
+  retireCleanupJournal,
+} from '../platform/test/docker-cleanup.ts';
 import { readPrivateJsonFile } from './docker-proxy-environment.mjs';
 import {
   STACK_CONFIG_RELATIVE_PATH,
   assessStackPrerequisites,
 } from './test-stack-prerequisites.mjs';
+import { groupSettlesAfterClose } from './trusted-docker-record.mjs';
 
 const BODY_LIMIT = 65_536;
 
 /**
  * @typedef {import('./test-stack-prerequisites.mjs').StackFacts} StackFacts
  * @typedef {import('./test-stack-prerequisites.mjs').VersionFact} VersionFact
- * @typedef {{code: number | null, signal: NodeJS.Signals | null}} CaseOutcome
+ * @typedef {{code: number | null, signal: NodeJS.Signals | null, settled: boolean}} CaseOutcome
+ * @typedef {import('../platform/test/docker-command.ts').DockerCommands} DockerCommands
  * @typedef {{
  *   env: NodeJS.ProcessEnv, platform: string, arch: string, repositoryRoot: string,
- *   dockerCommands: (repositoryRoot: string, config: string) =>
- *     import('../platform/test/docker-command.ts').DockerCommands,
+ *   dockerCommands: (repositoryRoot: string, config: string) => DockerCommands,
  *   probeVersion: (ragflowUrl: string) => Promise<VersionFact>,
+ *   probePython: () => boolean,
  *   spawnCases: (env: NodeJS.ProcessEnv, repositoryRoot: string) => Promise<CaseOutcome>,
  *   retire: typeof retireCleanupJournal,
+ *   acquireLock: () => Promise<() => Promise<void>>,
  *   stderr: (text: string) => void,
  * }} StackRun
  */
@@ -60,10 +69,29 @@ export async function probeRagflowVersion(ragflowUrl, deadline = 5000) {
   }
 }
 
+/** The darwin deployment lock holder's interpreter and module, as `acquireDeploymentLock` runs it. */
+function probePython() {
+  const result = spawnSync('/usr/bin/python3', ['-I', '-c', 'import fcntl'], {
+    env: { PATH: '/usr/bin:/bin' },
+    stdio: 'ignore',
+    timeout: 30_000,
+  });
+  return result.error === undefined && result.status === 0;
+}
+
+/** @param {DockerCommands} commands @param {string[]} args */
+function dockerFact(commands, args) {
+  try {
+    return commands.command(args, 30_000);
+  } catch {
+    return { status: null, stdout: '' };
+  }
+}
+
 /**
  * Facts are gathered lazily: a later fact is never observed after an earlier failure.
  * @param {StackRun} options
- * @param {import('../platform/test/docker-command.ts').DockerCommands} commands
+ * @param {DockerCommands} commands
  */
 async function assess(options, commands) {
   /** @type {StackFacts} */
@@ -85,12 +113,17 @@ async function assess(options, commands) {
     }
     assessment = assessStackPrerequisites(facts);
   }
-  if (assessment.ok === undefined) {
-    try {
-      facts.dockerInfo = commands.command(['info', '--format', '{{json .}}'], 30_000);
-    } catch {
-      facts.dockerInfo = { status: null, stdout: '' };
-    }
+  /** @type {[keyof StackFacts, () => StackFacts[keyof StackFacts]][]} */
+  const gathered = [
+    ['dockerInfo', () => dockerFact(commands, ['info', '--format', '{{json .}}'])],
+    ['compose', () => dockerFact(commands, ['compose', 'version', '--short'])],
+    ['buildx', () => dockerFact(commands, ['buildx', 'version'])],
+    ['python', () => options.probePython()],
+  ];
+  for (const [fact, gather] of gathered) {
+    if (assessment.ok !== undefined || assessment.ragflowUrl === undefined) break;
+    if (fact === 'python' && options.platform !== 'darwin') break;
+    Object.assign(facts, { [fact]: gather() });
     assessment = assessStackPrerequisites(facts);
   }
   if (assessment.ok === undefined) {
@@ -100,10 +133,36 @@ async function assess(options, commands) {
   return assessment;
 }
 
-/** @param {CaseOutcome} outcome */
+/** @param {Omit<CaseOutcome, 'settled'>} outcome */
 function caseStatus({ code, signal }) {
   if (code !== null) return code;
   return signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1;
+}
+
+/**
+ * Read-only: a killed CLI's daemon-side creation can land after exact retirement, and the local
+ * lane has no submission ledger. Every journal run label must list nothing afterwards.
+ * @param {DockerCommands} commands
+ * @param {readonly import('../platform/test/docker-cleanup.ts').CleanupJournalEntry[]} entries
+ * @param {unknown[]} failures
+ */
+function requireEmptyInventory(commands, entries, failures) {
+  for (const runId of new Set(entries.map((entry) => entry.runId))) {
+    const filter = ['--filter', `label=${OWNER_LABEL}=${runId}`];
+    for (const args of [
+      ['container', 'ls', '--all', '--quiet', '--no-trunc', ...filter],
+      ['network', 'ls', '--quiet', '--no-trunc', ...filter],
+      ['volume', 'ls', '--quiet', ...filter],
+      ['image', 'ls', '--all', '--quiet', '--no-trunc', ...filter],
+    ]) {
+      try {
+        if (output(commands.command(args, 30_000), args).trim() !== '')
+          throw new Error(`Owned ${String(args[0])} remains after retirement`);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
 }
 
 /**
@@ -123,16 +182,23 @@ export async function runTestStack(options) {
     options.stderr(`test:stack prerequisite failed: ${String(assessment.reason)}\n`);
     return 1;
   }
-  let status = 1;
+  // Announced before any case output: an operator still finds the journal after SIGKILL.
+  options.stderr(`test:stack run directory ${runDir}\n`);
+  /** @type {CaseOutcome | undefined} */
+  let outcome;
   try {
-    status = caseStatus(
-      await options.spawnCases(
-        { ...options.env, DSH_TEAM_CI_RESOURCE_JOURNAL: journal },
-        options.repositoryRoot,
-      ),
+    outcome = await options.spawnCases(
+      { ...options.env, DSH_TEAM_CI_RESOURCE_JOURNAL: journal },
+      options.repositoryRoot,
     );
   } catch {
-    // A failed case launch still retires whatever the journal registered.
+    outcome = undefined;
+  }
+  const status = outcome === undefined ? 1 : caseStatus(outcome);
+  if (outcome?.settled !== true) {
+    // A live group member may still register or create: neither read nor retire the journal.
+    options.stderr(`test:stack case processes unsettled; journal retained at ${runDir}\n`);
+    return status || 1;
   }
   /** @type {unknown[]} */
   const failures = [];
@@ -141,11 +207,12 @@ export async function runTestStack(options) {
     commandAsync: commands.commandAsync,
     // The local lane sets no DSH_TEAM_VERIFICATION_SUBMISSIONS: there is no submission ledger.
     requireSettled: () => undefined,
-    // flock is absent on macOS; 10.3 replaces this before it registers the fixed platform.
-    acquireLock: () => Promise.reject(new Error('deployment lock unavailable in the local lane')),
+    acquireLock: options.acquireLock,
   };
   try {
-    await options.retire(readCleanupJournal(journal), retirement, failures);
+    const entries = readCleanupJournal(journal);
+    await options.retire(entries, retirement, failures);
+    requireEmptyInventory(commands, entries, failures);
   } catch (error) {
     failures.push(error);
   }
@@ -158,42 +225,54 @@ export async function runTestStack(options) {
 }
 
 /**
- * Launches the vitest entry directly under this Node, without a pnpm hop, so forwarded
- * SIGINT/SIGTERM reach vitest itself and settlement is its own `close`. That settles vitest,
- * not its forks-pool workers or docker CLI grandchildren: a signalled vitest exits without
- * stopping a worker that may still register or create a resource. Task 10.3 must add
- * process-group settlement (detached child, signal `-pid`, bounded ESRCH-only observation,
- * retain the journal when unsettled) before any `*.stack.test.ts` registers resources.
+ * Launches the vitest entry directly under this Node, without a pnpm hop, as the leader of its
+ * own process group: forks-pool workers, docker CLI children and the deployment lock holder are
+ * its members. SIGINT/SIGTERM are forwarded to the whole group until it settles, not only until
+ * vitest closes; settlement is vitest's own `close` followed by the bounded ESRCH-only group
+ * observation. An unsettled group is reported, never inferred settled.
  * @param {NodeJS.ProcessEnv} env
  * @param {string} cwd
  * @param {{file: string, args: string[]}} [launch]
  * @returns {Promise<CaseOutcome>}
  */
-export function spawnCases(env, cwd, launch) {
+export async function spawnCases(env, cwd, launch) {
   const { file, args } = launch ?? {
     file: process.execPath,
     args: [join(cwd, 'node_modules/vitest/vitest.mjs'), 'run', '--project', 'stack'],
   };
-  const child = spawn(file, args, { cwd, env, stdio: 'inherit' });
+  const child = spawn(file, args, { cwd, env, stdio: 'inherit', detached: true });
   /** @type {NodeJS.Signals | undefined} */
   let interrupted;
   let failed = false;
   /** @param {NodeJS.Signals} signal */
   const forward = (signal) => {
     interrupted ??= signal;
-    child.kill(signal);
+    if (child.pid === undefined) return;
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      // Darwin answers EPERM for a group of unreaped zombies: like ESRCH, the interruption stays
+      // recorded and the bounded group observation alone decides settlement.
+      const code = /** @type {NodeJS.ErrnoException} */ (error).code;
+      if (code !== 'ESRCH' && code !== 'EPERM') throw error;
+    }
   };
   process.on('SIGINT', forward);
   process.on('SIGTERM', forward);
   child.once('error', () => (failed = true));
-  return new Promise((done) => {
-    child.once('close', (code, signal) => {
-      process.off('SIGINT', forward);
-      process.off('SIGTERM', forward);
-      if (interrupted !== undefined) done({ code: null, signal: interrupted });
-      else done(failed ? { code: 1, signal: null } : { code, signal });
+  try {
+    /** @type {[number | null, NodeJS.Signals | null]} */
+    const [code, signal] = await new Promise((done) => {
+      child.once('close', (...closed) => done(closed));
     });
-  });
+    // No pid means no process, hence no group, was ever created.
+    const settled = child.pid === undefined || (await groupSettlesAfterClose(child.pid));
+    if (interrupted !== undefined) return { code: null, signal: interrupted, settled };
+    return failed ? { code: 1, signal: null, settled } : { code, signal, settled };
+  } finally {
+    process.off('SIGINT', forward);
+    process.off('SIGTERM', forward);
+  }
 }
 
 if (
@@ -208,8 +287,10 @@ if (
     repositoryRoot,
     dockerCommands: (directory, config) => createDockerCommands(directory, config, true),
     probeVersion: probeRagflowVersion,
+    probePython,
     spawnCases: (env, cwd) => spawnCases(env, cwd),
     retire: retireCleanupJournal,
+    acquireLock: () => acquireDeploymentLock(),
     stderr: (text) => process.stderr.write(text),
   });
 }
