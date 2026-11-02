@@ -13,6 +13,13 @@ import { waitDockerIdle, withDockerIdleInstance } from './instance-idle-docker-f
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
 import { runUserImage } from './user-image-fixture.ts';
 
+// Default catalog settings: the three required packages are forced on, the office bundle is the employee's.
+const REQUIRED_LOCKS = {
+  '@dsh-team/permission-tiers': 'forced-on',
+  '@dsh-team/platform-nav': 'forced-on',
+  '@dsh-team/zh-locale': 'forced-on',
+};
+
 it('keeps the running model selector unchanged after save and activates the new exact list and default on administrator restart', async () => {
   isolatedBrowserRuntime();
   await runUserImage(
@@ -265,7 +272,7 @@ it('keeps the running model selector unchanged after save and activates the new 
             id: 'platform-nav',
             name: '/opt/dsh-team/platform-nav/index.js',
             disabled: false,
-            config: { admin: false },
+            config: { admin: false, pluginCatalog: REQUIRED_LOCKS },
           },
         ]);
         // The administrator's own instance carries the console flag from its launch-time role.
@@ -287,7 +294,7 @@ it('keeps the running model selector unchanged after save and activates the new 
             id: 'platform-nav',
             name: '/opt/dsh-team/platform-nav/index.js',
             disabled: false,
-            config: { admin: true },
+            config: { admin: true, pluginCatalog: REQUIRED_LOCKS },
           },
         ]);
         await observeAdministrator();

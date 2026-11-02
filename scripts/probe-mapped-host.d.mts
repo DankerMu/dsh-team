@@ -39,8 +39,15 @@ export type MappedHostAcceptInput = {
 
 /** The plugin page's expected catalog cards and the bundle whose switch round-trips. */
 export type MappedHostPluginPageOptions = {
-  /** Every catalog package and whether its card is selected (running) or disabled. */
-  readonly expected: readonly { readonly package: string; readonly enabled: boolean }[];
+  /**
+   * Every catalog package, whether its card is selected in the profile (running) or disabled, and
+   * the administrator-forced state its card must show locked (absent: an ordinary native switch).
+   */
+  readonly expected: readonly {
+    readonly package: string;
+    readonly enabled: boolean;
+    readonly locked?: 'forced-on' | 'forced-off';
+  }[];
   /** Switch away from the expected state and back, unless `leaveEnabled` is the away state. */
   readonly roundTrip: { readonly package: string; readonly leaveEnabled: boolean };
 };
@@ -97,7 +104,21 @@ export type MappedHostAcceptResult = {
       readonly package: string;
       readonly status: string;
       readonly checked: boolean;
+      /** The platform lock mark's state, null for an ordinary card. */
+      readonly locked: string | null;
     }[];
+    /** Present when a package is expected locked: evidence for the first locked card. */
+    readonly locked?: {
+      readonly package: string;
+      readonly focus: {
+        readonly presses: number;
+        readonly visited: readonly string[];
+        readonly roundTripSwitch: boolean;
+      };
+      /** The card read back after a pointer click on its mark, Enter, Space and a reload. */
+      readonly input: { readonly checked: boolean; readonly lock: string | null };
+      readonly detail: { readonly lock: string | null; readonly uninstallButtons: number };
+    };
     readonly screenshots: readonly { readonly screenshot: string; readonly bytes: number }[];
   };
   readonly platformNav?: {

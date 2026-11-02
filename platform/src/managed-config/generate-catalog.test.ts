@@ -1,6 +1,7 @@
 import { ok } from 'node:assert';
 import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, it } from 'vitest';
+import { catalogStates, readPluginCatalog } from '../plugin-catalog/index.ts';
 import type { CatalogEntryState } from '../plugin-catalog/index.ts';
 import { generateManagedConfig } from './index.ts';
 import type { ManagedConfigInput } from './index.ts';
@@ -386,5 +387,91 @@ describe('generateManagedConfig plugin catalog', () => {
       { id: 'ui-plugin-manager', config: { registryProbeEnabled: true } },
       { id: 'auto-review', disabled: true },
     ]);
+  });
+});
+
+describe('generateManagedConfig platform entry catalog states', () => {
+  const SHIPPED = readPluginCatalog();
+
+  /** The shipped catalog with the office bundle stored as given; required entries are forced-on. */
+  function shipped(office?: CatalogEntryState['state']): ManagedConfigInput {
+    const stored = office === undefined ? {} : { 'office-agents': office };
+    return {
+      ...BASE,
+      pluginCatalog: catalogStates(SHIPPED, { pluginCatalog: stored }),
+      bundles: [{ id: 'office-agents', patch: officePatch(true), present: true }],
+    };
+  }
+
+  function navigationConfig(input: ManagedConfigInput): unknown {
+    const inserted = rows(input).flatMap((row: unknown): unknown[] =>
+      typeof row === 'object' && row !== null && 'insert' in row && Array.isArray(row.insert)
+        ? row.insert
+        : [],
+    );
+    const navigation = inserted.filter(hasId('platform-nav'));
+    expect(navigation).toHaveLength(1);
+    const [row] = navigation;
+    ok(typeof row === 'object' && row !== null && 'config' in row);
+    return row.config;
+  }
+
+  const REQUIRED_STATES = {
+    '@dsh-team/permission-tiers': 'forced-on',
+    '@dsh-team/platform-nav': 'forced-on',
+    '@dsh-team/zh-locale': 'forced-on',
+  };
+
+  it.each([undefined, 'employee'] as const)(
+    'publishes exactly the three required packages forced-on for office state %s',
+    (office) => {
+      const config = navigationConfig(shipped(office));
+
+      expect(config).toEqual({ admin: false, pluginCatalog: REQUIRED_STATES });
+      ok(typeof config === 'object' && config !== null && 'pluginCatalog' in config);
+      ok(typeof config.pluginCatalog === 'object' && config.pluginCatalog !== null);
+      expect(Object.keys(config.pluginCatalog)).toEqual(Object.keys(REQUIRED_STATES));
+    },
+  );
+
+  it.each(['forced-on', 'forced-off'] as const)(
+    'lists a %s office bundle first, in catalog file order',
+    (state) => {
+      const config = navigationConfig({ ...shipped(state), admin: true });
+
+      expect(config).toEqual({
+        admin: true,
+        pluginCatalog: { '@dsh-team/office-agents': state, ...REQUIRED_STATES },
+      });
+      ok(typeof config === 'object' && config !== null && 'pluginCatalog' in config);
+      ok(typeof config.pluginCatalog === 'object' && config.pluginCatalog !== null);
+      expect(Object.keys(config.pluginCatalog)).toEqual([
+        '@dsh-team/office-agents',
+        ...Object.keys(REQUIRED_STATES),
+      ]);
+    },
+  );
+
+  it('keys the published states by package name, never by catalog id', () => {
+    const input = {
+      ...BASE,
+      pluginCatalog: [{ ...REQUIRED, package: '@scope/other-name' }],
+    };
+
+    expect(navigationConfig(input)).toEqual({
+      admin: false,
+      pluginCatalog: { '@scope/other-name': 'forced-on' },
+    });
+  });
+
+  it('generates byte-identical platform entry states for identical input', () => {
+    const input = shipped('forced-off');
+
+    expect(content(structuredClone(input))).toBe(content(input));
+    expect(content(input)).toContain(
+      '"config":{"admin":false,"pluginCatalog":{"@dsh-team/office-agents":"forced-off",' +
+        '"@dsh-team/permission-tiers":"forced-on","@dsh-team/platform-nav":"forced-on",' +
+        '"@dsh-team/zh-locale":"forced-on"}}',
+    );
   });
 });

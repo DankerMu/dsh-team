@@ -10,16 +10,28 @@ afterEach(async () => {
 });
 
 const PACKAGE = '@dsh-team/office-agents';
-// The catalog's four packages and image defaults: only the office bundle is selected.
-const EXPECTED = [
+const TIERS = '@dsh-team/permission-tiers';
+type LockState = 'forced-on' | 'forced-off';
+// The catalog's four packages and image defaults: only the office bundle is selected, and the
+// three required packages are forced on by the administrator catalog.
+const EXPECTED: { package: string; enabled: boolean; locked?: LockState }[] = [
   { package: PACKAGE, enabled: true },
-  { package: '@dsh-team/permission-tiers', enabled: false },
-  { package: '@dsh-team/platform-nav', enabled: false },
-  { package: '@dsh-team/zh-locale', enabled: false },
+  { package: TIERS, enabled: false, locked: 'forced-on' },
+  { package: '@dsh-team/platform-nav', enabled: false, locked: 'forced-on' },
+  { package: '@dsh-team/zh-locale', enabled: false, locked: 'forced-on' },
 ];
 const PANEL = 'button[aria-label="插件"]';
 const OPEN = `[data-plugin-package="${PACKAGE}"] button[aria-label="查看 ${PACKAGE}"]`;
+const OPEN_TIERS = `[data-plugin-package="${TIERS}"] button[aria-label="查看 ${TIERS}"]`;
 const SWITCH = `button[role="switch"][aria-label="启用 ${PACKAGE}"]`;
+const LOCK_TEXT = { 'forced-on': '已开启 · 由管理员设定', 'forced-off': '已关闭 · 由管理员设定' };
+
+interface LockFacts {
+  hidden: boolean | null;
+  marks: number;
+  lock: string | null;
+  lockText: string | null;
+}
 
 interface FakeCard {
   absent?: boolean;
@@ -47,13 +59,41 @@ interface FakeOptions {
   errorWhenOff?: boolean;
   /** The sidebar panel row renders only after this many click attempts on each page load. */
   latePanel?: number;
+  /** Per-package overrides of the card's native-switch rendering and platform lock mark. */
+  lockFacts?: Record<string, Partial<LockFacts>>;
+  /** Overrides of the locked package's detail top switch rendering and mark. */
+  detailLock?: Partial<LockFacts>;
+  /** Tab reaches the hidden native switches of locked cards. */
+  focusLocked?: boolean;
+  /** Tab never reaches the round-trip switch. */
+  skipRoundTripFocus?: boolean;
+  /** A pointer click on a locked card's mark switches its native bundle selection. */
+  lockClickToggles?: boolean;
+  /** The lock mark has no rendered box. */
+  noMarkBox?: boolean;
 }
+
+const lockedState = (name: string) => EXPECTED.find((entry) => entry.package === name)?.locked;
+
+/** Rendered facts of a native switch and its mark: locked when forced, untouched otherwise. */
+function lockFacts(name: string, override: Partial<LockFacts> | undefined): LockFacts {
+  const locked = lockedState(name);
+  const base =
+    locked === undefined
+      ? { hidden: false, marks: 0, lock: null, lockText: null }
+      : { hidden: true, marks: 1, lock: locked, lockText: LOCK_TEXT[locked] };
+  return { ...base, ...override };
+}
+
+const ABSENT: LockFacts = { hidden: null, marks: 0, lock: null, lockText: null };
+// A rendered native switch without a mark: the page of a deployment that forces nothing.
+const ABSENT_MARK: Partial<LockFacts> = { hidden: false, marks: 0, lock: null, lockText: null };
 
 /** Scripted CDP page answering the evidence module's DOM expressions from released page state. */
 function fakePage(options: FakeOptions, errors: unknown[]) {
   const state = {
     panel: false,
-    detail: false,
+    detail: null as string | null,
     // Reads until the panel finishes loading after it opens; each change is busy for one read.
     loading: 0,
     busy: 0,
@@ -62,6 +102,11 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     clicks: [] as string[],
     reloads: 0,
     panelAttempts: 0,
+    /** Saved native selection of the locked cards. */
+    lockedSaved: false,
+    /** Index into the card focus order; -1 when no catalog element has focus. */
+    focus: -1,
+    input: [] as string[],
   };
   const openPanel = (): boolean => {
     state.panelAttempts += 1;
@@ -85,26 +130,30 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     if (text.includes('aria-label="插件"')) return openPanel();
     if (!state.panel || state.loading > 0) return false;
     if (text.includes('查看 ')) {
-      if (state.detail) return false;
-      state.detail = true;
+      if (state.detail !== null) return false;
+      state.detail = /查看 ([^"]+)"/.exec(text)?.[1] ?? null;
       return true;
     }
     return text.includes('role="switch"') && toggle();
   };
   const toggleState = (loaded: boolean, busy: boolean) =>
-    loaded && (state.detail || options.cards?.[PACKAGE]?.absent !== true)
+    loaded &&
+    (state.detail === PACKAGE ||
+      (state.detail === null && options.cards?.[PACKAGE]?.absent !== true))
       ? {
           checked: String(state.shown),
           disabled: busy || options.locked === true,
           title: options.locked === true ? '插件管理所需，不能停用或卸载' : null,
-          inDetail: state.detail,
-          inCard: !state.detail,
+          inDetail: state.detail === PACKAGE,
+          inCard: state.detail === null,
         }
       : null;
+  const checkedOf = (name: string) =>
+    name === PACKAGE ? state.shown : lockedState(name) !== undefined && state.lockedSaved;
   // DSH renders every listed package as a card in the 已安装 group: running when selected.
   const cards = (listed: boolean) =>
     EXPECTED.map(({ package: name }) => {
-      const enabled = name === PACKAGE && state.shown;
+      const enabled = checkedOf(name);
       const card = {
         group: 'bundles',
         status: enabled ? 'running' : 'disabled',
@@ -117,44 +166,94 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
         group: present ? card.group : null,
         status: present ? card.status : null,
         checked: present ? String(card.checked ?? enabled) : null,
+        ...(present ? lockFacts(name, options.lockFacts?.[name]) : ABSENT),
       };
     });
+  const opened = (loaded: boolean) =>
+    loaded && state.detail !== null
+      ? {
+          package: state.detail,
+          switch: true,
+          checked: String(checkedOf(state.detail)),
+          ...lockFacts(
+            state.detail,
+            lockedState(state.detail) === undefined ? undefined : options.detailLock,
+          ),
+        }
+      : null;
+  // DOM order of focusable catalog elements: each card's open button, then its rendered switch.
+  const focusOrder = EXPECTED.flatMap(({ package: name, locked }) => {
+    const reachable =
+      (locked === undefined || options.focusLocked === true) &&
+      !(name === PACKAGE && options.skipRoundTripFocus === true);
+    return [{ card: name, toggle: false }, ...(reachable ? [{ card: name, toggle: true }] : [])];
+  });
+  const focused = () => {
+    const entry = focusOrder[state.focus];
+    return entry === undefined
+      ? { card: null, toggle: false, past: true }
+      : { ...entry, past: false };
+  };
   const observe = () => {
     const loaded = state.panel && state.loading === 0;
     if (state.loading > 0) state.loading -= 1;
     const busy = state.busy > 0;
     if (busy) state.busy -= 1;
-    const listed = state.panel && !state.detail;
+    const listed = state.panel && state.detail === null;
     return {
       panel: state.panel,
       busy: state.panel ? String(!loaded) : null,
       refresh: listed && options.noRefresh !== true,
       add: listed && options.noAddButton !== true ? 1 : 0,
-      uninstall: state.detail && options.noUninstallButton !== true ? 1 : 0,
+      uninstall: state.detail !== null && options.noUninstallButton !== true ? 1 : 0,
       cards: cards(loaded && listed),
-      detail: loaded && state.detail,
+      detail: loaded && state.detail === PACKAGE,
+      opened: opened(loaded),
       toggle: toggleState(loaded, busy),
     };
   };
   const reload = (): Promise<void> => {
     state.reloads += 1;
     state.panel = false;
-    state.detail = false;
+    state.detail = null;
     state.panelAttempts = 0;
+    state.focus = -1;
     state.shown = state.saved;
     return Promise.resolve();
+  };
+  const evaluate = (expression: string): unknown => {
+    if (expression.includes('el.click()')) return click(expression);
+    if (expression.includes('first.focus()')) {
+      if (!state.panel || state.detail !== null) return false;
+      state.focus = 0;
+      return true;
+    }
+    if (expression.includes('document.activeElement')) return focused();
+    if (expression.includes("block:'center'"))
+      return options.noMarkBox === true ? null : { x: 640, y: 360 };
+    return observe();
   };
   return {
     state,
     reload,
     page: {
-      send(method: string, params: { expression?: string }) {
+      send(method: string, params: Record<string, unknown>) {
         if (method === 'Page.captureScreenshot')
           return Promise.resolve({ data: Buffer.from('png').toString('base64') });
+        if (method === 'Input.dispatchMouseEvent') {
+          state.input.push(`mouse:${String(params.type)}@${String(params.x)},${String(params.y)}`);
+          if (params.type === 'mouseReleased' && options.lockClickToggles === true)
+            state.lockedSaved = !state.lockedSaved;
+          return Promise.resolve({});
+        }
+        if (method === 'Input.dispatchKeyEvent') {
+          state.input.push(`key:${String(params.type)}:${String(params.key)}`);
+          if (params.key === 'Tab' && params.type === 'rawKeyDown') state.focus += 1;
+          return Promise.resolve({});
+        }
         if (method !== 'Runtime.evaluate') return Promise.reject(new Error(method));
-        const expression = params.expression ?? '';
-        const value = expression.includes('el.click()') ? click(expression) : observe();
-        return Promise.resolve({ result: { value } });
+        const expression = typeof params.expression === 'string' ? params.expression : '';
+        return Promise.resolve({ result: { value: evaluate(expression) } });
       },
     },
   };
@@ -183,11 +282,32 @@ async function run(
 const shots = (root: string, ...names: string[]) =>
   names.map((name) => ({ screenshot: join(root, `entry-plugin-page-${name}.png`), bytes: 3 }));
 const cardsWith = (office: { status: string; checked: boolean }) =>
-  EXPECTED.map(({ package: name }) =>
+  EXPECTED.map(({ package: name, locked }) =>
     name === PACKAGE
-      ? { package: name, ...office }
-      : { package: name, status: 'disabled', checked: false },
+      ? { package: name, ...office, locked: null }
+      : { package: name, status: 'disabled', checked: false, locked },
   );
+// Every catalog card reached by Tab in order; the locked switches are skipped.
+const LOCKED_EVIDENCE = {
+  package: TIERS,
+  focus: {
+    presses: 5,
+    visited: EXPECTED.map((entry) => entry.package),
+    roundTripSwitch: true,
+  },
+  input: { checked: false, lock: 'forced-on' },
+  detail: { lock: 'forced-on', uninstallButtons: 1 },
+};
+const LOCK_INPUT = [
+  ...Array.from({ length: 5 }, () => ['key:rawKeyDown:Tab', 'key:keyUp:Tab']).flat(),
+  'mouse:mouseMoved@640,360',
+  'mouse:mousePressed@640,360',
+  'mouse:mouseReleased@640,360',
+  'key:keyDown:Enter',
+  'key:keyUp:Enter',
+  'key:keyDown: ',
+  'key:keyUp: ',
+];
 
 it('accepts a page with install entries whose switch round-trips across reloads', async () => {
   const { result, state, root } = await run({});
@@ -200,13 +320,28 @@ it('accepts a page with install entries whose switch round-trips across reloads'
     off: { checked: false, status: 'disabled' },
     on: { checked: true, status: 'running' },
     cards: cardsWith({ status: 'running', checked: true }),
-    screenshots: shots(root, 'list', 'detail', 'off', 'on'),
+    locked: LOCKED_EVIDENCE,
+    screenshots: shots(root, 'list', 'locked', 'locked-detail', 'detail', 'off', 'on'),
   });
-  expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL, SWITCH, PANEL]);
-  expect(state.reloads).toBe(2);
+  expect(state.clicks).toEqual([
+    PANEL,
+    PANEL,
+    OPEN_TIERS,
+    PANEL,
+    OPEN,
+    SWITCH,
+    PANEL,
+    SWITCH,
+    PANEL,
+  ]);
+  expect(state.input).toEqual(LOCK_INPUT);
+  expect(state.lockedSaved).toBe(false);
+  expect(state.reloads).toBe(4);
   expect((await readdir(root)).sort()).toEqual([
     'entry-plugin-page-detail.png',
     'entry-plugin-page-list.png',
+    'entry-plugin-page-locked-detail.png',
+    'entry-plugin-page-locked.png',
     'entry-plugin-page-off.png',
     'entry-plugin-page-on.png',
   ]);
@@ -225,9 +360,10 @@ it('leaves the bundle switched off when the round trip says so', async () => {
     detail: { uninstallButtons: 1, checked: true, disabled: false, title: null },
     off: { checked: false, status: 'disabled' },
     cards: cardsWith({ status: 'running', checked: true }),
-    screenshots: shots(root, 'list', 'detail', 'off'),
+    locked: LOCKED_EVIDENCE,
+    screenshots: shots(root, 'list', 'locked', 'locked-detail', 'detail', 'off'),
   });
-  expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL]);
+  expect(state.clicks).toEqual([PANEL, PANEL, OPEN_TIERS, PANEL, OPEN, SWITCH, PANEL]);
   expect(state.saved).toBe(false);
 });
 
@@ -245,25 +381,55 @@ it('starts from a disabled bundle when the catalog state says so, and switches i
     detail: { uninstallButtons: 1, checked: false, disabled: false, title: null },
     on: { checked: true, status: 'running' },
     cards: cardsWith({ status: 'disabled', checked: false }),
-    screenshots: shots(root, 'list', 'detail', 'on'),
+    locked: LOCKED_EVIDENCE,
+    screenshots: shots(root, 'list', 'locked', 'locked-detail', 'detail', 'on'),
   });
-  expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL]);
+  expect(state.clicks).toEqual([PANEL, PANEL, OPEN_TIERS, PANEL, OPEN, SWITCH, PANEL]);
   expect(state.saved).toBe(true);
 });
 
+const UNLOCKED = EXPECTED.map(({ package: name, enabled }) => ({ package: name, enabled }));
+const UNLOCKED_PAGE: Partial<FakeOptions> = {
+  lockFacts: Object.fromEntries(UNLOCKED.slice(1).map(({ package: name }) => [name, ABSENT_MARK])),
+};
+
+it('runs no lock steps when no package is expected locked', async () => {
+  const { result, state, root } = await run(UNLOCKED_PAGE, 3_000, {
+    expected: UNLOCKED,
+    roundTrip: { package: PACKAGE, leaveEnabled: true },
+  });
+
+  const evidence = await result;
+
+  expect(evidence.locked).toBeUndefined();
+  expect(evidence.screenshots).toEqual(shots(root, 'list', 'detail', 'off', 'on'));
+  expect(state.clicks).toEqual([PANEL, OPEN, SWITCH, PANEL, SWITCH, PANEL]);
+  expect(state.input).toEqual([]);
+});
+
+it('rejects a round-trip detail without 卸载 when nothing is locked', async () => {
+  const { result } = await run({ ...UNLOCKED_PAGE, noUninstallButton: true }, 600, {
+    expected: UNLOCKED,
+    roundTrip: { package: PACKAGE, leaveEnabled: true },
+  });
+
+  await expect(result).rejects.toThrow(/stage=plugin-page-detail error=uninstall/);
+});
+
+// Five page loads (the first and four reloads), each answering the panel click only on attempt 3.
 it('waits for a sidebar panel row that renders after the app is ready', async () => {
   const { result, state } = await run({ latePanel: 2 });
 
   await expect(result).resolves.toMatchObject({ on: { checked: true, status: 'running' } });
-  expect(state.clicks.filter((click) => click === PANEL)).toHaveLength(9);
-});
+  expect(state.clicks.filter((click) => click === PANEL)).toHaveLength(15);
+}, 15_000);
 
 it.each<[string, FakeOptions, RegExp]>([
   ['a list without 添加插件', { noAddButton: true }, /stage=plugin-page-list error=add-plugin/],
   [
-    'a detail without 卸载',
+    'a locked detail without 卸载',
     { noUninstallButton: true },
-    /stage=plugin-page-detail error=uninstall/,
+    /stage=plugin-page-locked-detail error=uninstall/,
   ],
   [
     'a card outside the 已安装 group',
@@ -296,6 +462,67 @@ it.each<[string, FakeOptions, RegExp]>([
     /stage=plugin-page-list error=catalog-card/,
   ],
   ['a locked switch', { locked: true }, /stage=plugin-page-list/],
+  [
+    'a forced card whose native switch still renders',
+    { lockFacts: { [TIERS]: { hidden: false } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a forced card without its mark',
+    { lockFacts: { [TIERS]: { marks: 0, lock: null, lockText: null } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a forced card with two marks',
+    { lockFacts: { [TIERS]: { marks: 2, lock: null, lockText: null } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a forced-on card marked off',
+    { lockFacts: { [TIERS]: { lock: 'forced-off', lockText: LOCK_TEXT['forced-off'] } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a mark without the administrator text',
+    { lockFacts: { [TIERS]: { lockText: '已开启' } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'an ordinary card with a mark',
+    { lockFacts: { [PACKAGE]: { marks: 1 } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'an ordinary card whose switch is hidden',
+    { lockFacts: { [PACKAGE]: { hidden: true } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a forced switch reachable by Tab',
+    { focusLocked: true },
+    /stage=plugin-page-focus error=locked-switch/,
+  ],
+  [
+    'a traversal that never reaches a switch',
+    { skipRoundTripFocus: true },
+    /stage=plugin-page-focus error=traversal/,
+  ],
+  [
+    'a forced card that a pointer click switches',
+    { lockClickToggles: true },
+    /stage=plugin-page-locked error=catalog-card/,
+  ],
+  ['a mark without a box', { noMarkBox: true }, /stage=plugin-page-locked-input error=mark-box/],
+  [
+    'a forced detail whose native switch still renders',
+    { detailLock: { hidden: false } },
+    /stage=plugin-page-locked-detail error=lock/,
+  ],
+  [
+    'a forced detail without its mark',
+    { detailLock: { marks: 0, lock: null, lockText: null } },
+    /stage=plugin-page-locked-detail error=timeout/,
+  ],
   ['a toolbar without refresh', { noRefresh: true }, /stage=plugin-page-list/],
   ['a switch change that a reload forgets', { forgets: true }, /stage=plugin-page-off/],
   ['a console error while switched off', { errorWhenOff: true }, /error=console count=1/],
@@ -313,6 +540,17 @@ it.each<[string, Record<string, unknown>]>([
     { expected: EXPECTED, roundTrip: { package: '@x/other', leaveEnabled: true } },
   ],
   ['no final state', { expected: EXPECTED, roundTrip: { package: PACKAGE } }],
+  [
+    'a round trip on a locked package',
+    { expected: EXPECTED, roundTrip: { package: TIERS, leaveEnabled: true } },
+  ],
+  [
+    'an unknown lock state',
+    {
+      expected: EXPECTED.map((entry) => (entry.locked ? { ...entry, locked: 'employee' } : entry)),
+      roundTrip: { package: PACKAGE, leaveEnabled: true },
+    },
+  ],
 ])('rejects options with %s before touching the page', async (_name, pluginPage) => {
   const { result, state } = await run({}, 600, pluginPage as never);
 

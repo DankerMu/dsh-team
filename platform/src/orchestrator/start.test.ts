@@ -253,7 +253,14 @@ it.each([
           id: 'platform-nav',
           name: '/opt/dsh-team/platform-nav/index.js',
           disabled: false,
-          config: { admin },
+          config: {
+            admin,
+            pluginCatalog: {
+              '@dsh-team/permission-tiers': 'forced-on',
+              '@dsh-team/platform-nav': 'forced-on',
+              '@dsh-team/zh-locale': 'forced-on',
+            },
+          },
         },
         {
           id: 'dsh-team-platform-credentials',
