@@ -452,7 +452,7 @@ Evidence (13.1 连接配置，#410):
   - `null`、数组或字符串 body；
   - 缺 `baseURL`；
   - 有多余键；
-  - `baseURL` 是数字或全空白；
+  - `baseURL` 是数字；全空白值同时被原始串规则和 URL 解析拒绝，无法隔离到单条规则，由隔离原始串空白规则的用例（内嵌制表符等，URL 解析会静默剥掉）覆盖；
   - `apiKey` 是 `''`、`'   '` 或数字；
   - 地址规则逐条：`ftp:`、带 `user:pass@`、`https://@kb.internal/`、带 `?q`、`https://kb.internal/?`、带 `#f`、`https://kb.internal/#`、首尾空白、中间带空白或换行、`\x01` 控制字符、反斜杠、超过 2048 字符、不能解析；全部回固定 `invalidMessage`。
 - 允许带路径（`https://kb.internal/ragflow`），原样保存。
