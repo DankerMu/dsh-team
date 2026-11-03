@@ -172,12 +172,12 @@ DSH 迁移是阶段 2 的第一批，其余功能组都依赖它。第一批由�
 - RAGFlow 地址、密钥和检索参数存在既有的 settings 中，用一次新迁移。密钥只返回「已配置」。
 - 检索参数按 RAGFlow v1.0.0-rc2 `POST /api/v1/retrieval` 的实际语义保存（用户 2026-11-02 拍板）。上游的 `top_k` 是参与向量计算的候选数，已废弃；决定返回片段数的是 `page_size`；重排只接受重排模型 ID `rerank_id`，没有布尔开关。所以平台保存四个字段，由代理按下表映射：
 
-  | 平台字段（settings 键）                   | 默认  | 取值               | 代理发给 RAGFlow                       |
-  | ----------------------------------------- | ----- | ------------------ | -------------------------------------- |
-  | 返回片段数 `retrievalTopK`                | `8`   | 整数 1..100        | `page: 1`、`page_size`；不发 `top_k`   |
-  | 相似度阈值 `retrievalSimilarityThreshold` | `0.2` | 有限数 0..1        | `similarity_threshold`                 |
-  | 关键词权重 `retrievalKeywordsWeight`      | `0.7` | 有限数 0..1        | `keywords_similarity_weight`           |
-  | 重排模型 `retrievalRerankId`              | `''`  | 字符串，空为不重排 | 非空时原样作为 `rerank_id`，为空时不发 |
+  | 平台字段（settings 键）                   | 默认  | 取值                                                  | 代理发给 RAGFlow                       |
+  | ----------------------------------------- | ----- | ----------------------------------------------------- | -------------------------------------- |
+  | 返回片段数 `retrievalTopK`                | `8`   | 整数 1..100                                           | `page: 1`、`page_size`；不发 `top_k`   |
+  | 相似度阈值 `retrievalSimilarityThreshold` | `0.2` | 有限数 0..1                                           | `similarity_threshold`                 |
+  | 关键词权重 `retrievalKeywordsWeight`      | `0.7` | 有限数 0..1                                           | `keywords_similarity_weight`           |
+  | 重排模型 `retrievalRerankId`              | `''`  | 字符串，空为不重排；非空时首尾不能有空白（#446 收窄） | 非空时原样作为 `rerank_id`，为空时不发 |
 
   后两项默认值取上游文档的默认值；返回片段数默认 8，不用上游的 30，因为片段要进 Agent 上下文。
 

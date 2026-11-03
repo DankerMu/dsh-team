@@ -11,7 +11,14 @@ export interface AdminConfigOptions {
   resolveSourceAddress: SourceAddressResolver;
 }
 interface ConfigDescriptor {
-  name: 'model' | 'runtime' | 'plugin-catalog' | 'plugin-sources' | 'web-tools' | 'ragflow';
+  name:
+    | 'model'
+    | 'runtime'
+    | 'plugin-catalog'
+    | 'plugin-sources'
+    | 'web-tools'
+    | 'ragflow'
+    | 'retrieval';
   path: string;
   auditType:
     | 'model-config.updated'
@@ -19,7 +26,8 @@ interface ConfigDescriptor {
     | 'plugin-catalog.updated'
     | 'plugin-sources.updated'
     | 'web-tools.updated'
-    | 'ragflow-config.updated';
+    | 'ragflow-config.updated'
+    | 'retrieval-config.updated';
   bodySchema: FastifySchema['body'];
   responseSchema: {
     readonly type: 'object';

@@ -8,6 +8,7 @@ import { pluginCatalogRoutes } from './plugin-catalog.ts';
 import { pluginSourcesRoutes } from './plugin-sources.ts';
 import { webToolsRoutes } from './web-tools.ts';
 import { ragflowConfigRoutes } from './ragflow-config.ts';
+import { retrievalConfigRoutes } from './retrieval-config.ts';
 import { accountStatusRoutes } from './account-status.ts';
 import { passwordResetRoutes } from './password-reset.ts';
 import { instanceActionRoutes } from './instance-actions.ts';
@@ -219,6 +220,7 @@ export const adminRoutes: FastifyPluginCallback<{
   app.register(pluginSourcesRoutes, { database, resolveSourceAddress });
   app.register(webToolsRoutes, { database, resolveSourceAddress });
   app.register(ragflowConfigRoutes, { database, resolveSourceAddress });
+  app.register(retrievalConfigRoutes, { database, resolveSourceAddress });
   app.register(passwordResetRoutes, { database, resolveSourceAddress });
   const pending = new Set<string>();
   app.register(accountStatusRoutes, {
