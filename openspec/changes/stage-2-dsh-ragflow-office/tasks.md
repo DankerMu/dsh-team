@@ -999,6 +999,143 @@ Evidence (14.1 实例接口鉴权与版本路由，#413):
 - 14.2–14.4：在 `ragflow-proxy/routes.ts` 添加路由，从 `request.instanceUserId` 取身份，沿用 200 加 `result` 的回应约定与 `INSTANCE_ERRORS`；每个新 GET 都设路由级 `exposeHeadRoute: false`；检索 POST 自行要求 `application/json`（415）。#524 评审建议补一条绝对形式目标（`GET http://h/_platform/instance-api/ragflow/version` 经原始 socket 发送，无令牌 → 401、0 个上游请求）的集成用例，把对 find-my-way 去掉绝对形式 authority 的依赖钉住；14.2 一并加。
 - 14.5 或 15.x：在真实 Docker 网桥上证明实例从 +2 地址带令牌可达、其他实例地址被拒。本 issue 的集成测试只能在 loopback 上模拟地址比较。
 
+Risk packs (14.2 库列表路由，#414): fixture level expanded（与 issue 建议一致：员工可见的上游数据第一次经代理返回，14.4 的检索预检也要用同一份完整列表）。selected：
+
+- **Public API / Schema / field names**：
+  - 新增 `GET /_platform/instance-api/ragflow/datasets`。
+  - 回应沿用 #413 约定：成功为 `{ result: 'ok', datasets: [{ id, name }] }`；失败为 `{ result }`，取值是 `not-configured`、`invalid-request`、`timeout`、`unavailable`、`upstream-error` 之一。
+  - 结果集合常量 `RAGFLOW_RESULTS` 加入 `invalid-request`。`no-results` 留给 14.4。库列表为空时回 `ok` 加空数组，面板据此显示「空」，不当作错误。
+  - 只返回 `id` 与 `name`：spec 只要求面板显示库名，搜索和分页由面板在完整列表上本地完成。200 schema 的外层和条目都设 `additionalProperties: false`，即使映射代码有缺陷，序列化器也会丢弃 `description`、`tenant_id`、`avatar` 等字段。
+  - 路由设 `exposeHeadRoute: false`，鉴权沿用 #413 的钩子。
+  - 查询参数：
+    - 不声明 `querystring` schema。Fastify 默认的 Ajv `removeAdditional` 会静默丢弃多余字段，而不是拒绝。
+    - 改为检查原始 `request.url`：含 `?`（包括末尾只有一个 `?`）就回 `invalid-request`，不访问 RAGFlow。
+    - 契约里表达不出这条拒绝，在路由 `summary` 中写明。
+- **Resource limits / large input**：
+  - 一次请求取完整列表：`GET /api/v1/datasets?page=1&page_size=1001&orderby=create_time&desc=false`。
+    - rc2 源码 `internal/handler/dataset.go:94-121` 对 `page_size` 只要求 ≥ 1，没有上限；未知查询参数一律拒绝（`listDatasetsAllowedParams`），所以这里只用 `page`、`page_size`、`orderby`、`desc` 四个参数。
+    - 用一次请求，不分页：分页翻页期间删库会让后面的条目前移、跳过一个仍存在的库，14.4 预检就会把它误判为已删除。单次请求没有这个竞态，也不需要去重或跨页截止。
+    - 固定排序（创建时间升序），不依赖默认排序。
+  - 数量上限 1000 个库：
+    - 返回 1001 个条目 → `upstream-error`，不截断。截断会让 14.4 误把存在的库判为已删除。
+    - 返回条目数必须等于 `total_datasets`；`total_datasets` 缺失、不是非负整数、或与条目数不等 → `upstream-error`。这一条防住上游悄悄截断。
+  - 回应体上限 `RAGFLOW_LIST_BODY_LIMIT = 8 MiB`，只用于列表；版本和测试连接仍为 64 KiB。`ragflow-proxy/client.ts` 的 `call` 改为接收上限参数。
+    - 依据：rc2 实测每个库约 2.1 KB，其中 `parser_config` 1.6 KB；实测的库和所有者账号都没有头像。
+    - 头像体积不受控：rc2 的列表查询给每一行都附带库自己的 `avatar`，以及库所有者账号的头像 `tenant_avatar`（`internal/dao/kb.go:259-277`、`internal/service/dataset/utils.go:18-45`）。两者都是不限长的 `longtext`，以 base64 data URL 保存，保存时只校验 MIME 前缀（`validateDatasetAvatar`）。
+    - 通常所有库由同一个账号所有。该账号设了头像时，头像字节会在每一行重复一次。例如 100 KB 的账号头像，约 80 个库就会超过 8 MiB；不设头像时约可容纳 1000 个库。
+    - 超过上限 → `upstream-error`，整个列表和 14.4 的所有检索都会失败。这是用户 2026-11-03 拍板接受的残余风险（另两种做法是放宽到 32 MiB，或流式解析只保留 id/name，均不采用）。AGENTS.md 和部署文档写明：建 RAGFlow 知识库的账号不要设大头像，库也尽量不设大头像。
+  - 单次请求沿用固定截止 `RAGFLOW_TIMEOUT_MS`（覆盖读体），不重试、不缓存，每次请求都重新拉取。
+- **Error handling / partial outputs**：
+  - `data` 必须是数组。任一条目不合格时整体为 `upstream-error`，从不返回部分列表。条目合格的条件：
+    - `id` 匹配 `^[0-9a-f]{32}$`（rc2 实测 ID 格式）；
+    - `name` 为非空字符串，UTF-8 不超过 1024 字节。
+  - rc2 的库名规则：去掉首尾空白后非空，最多 128 字节，见 `internal/service/dataset/crud.go:30-38` 与 `internal/entity/dataset.go:25` 的 `DatasetNameLimit = 128`；它不限制控制字符。所以代理不按字符内容拒绝，只设一个宽松的字节上限，免得一个合法库名让整个列表和所有检索失败。显示时的转义由面板负责（React 文本节点）。
+  - 重复 ID → `upstream-error`。单次请求里出现重复 ID 说明上游异常。
+- **Auth / permissions / secrets**：
+  - 只在鉴权通过后执行。密钥只放在 RAGFlow 请求头里。
+  - 回应和日志不含地址、密钥、上游消息和被丢弃的字段。
+- **Code Canonicality**：
+  - 列表逻辑放在 `ragflow-proxy/client.ts` 的 `listRagflowDatasets(settings, signal, deadlineMs, send?)`，复用 `call`、`endpoint`、`envelope` 和映射；14.4 预检直接调用它。
+  - 路由放在 `ragflow-proxy/routes.ts`，复用 `withRequestAbort` 与固定 500。
+- **Legacy compatibility**：
+  - `RAGFLOW_VERSION_SCHEMA` 的 `result` 枚举随 `RAGFLOW_RESULTS` 扩大，`schemas/openapi.json` 中版本路由和管理员测试连接路由的枚举随之变化。这两条路由的行为不变，它们从不产生 `invalid-request`。design 决定 3 要求全模块共用一个封闭集合，目前还没有 Web 消费方。
+- **Documentation / migration notes**（由 orchestrator 改）：AGENTS.md 代理条目补上：库列表路由、只返回 `{id,name}`、1000 个库与 8 MiB 上限及超限时的 `upstream-error`（含账号头像在每一行重复的说明）、查询参数拒绝。部署文档 `docs/DEPLOY.md` 的 RAGFlow 说明加一句头像提示（若该文档尚无 RAGFlow 段落，交给 16.4 / 19 组的部署文档任务，并在交接中写明）。
+
+not selected：
+
+- Config / project setup：数量与体积上限是代码常量，不新增环境变量。
+- Concurrency / shared state：请求之间互不共享状态；单次请求没有翻页竞态。
+- File IO / path safety：本路由没有路径参数（14.3 才有）。
+- Release / packaging、Migration：无。
+
+**不变量**：
+
+- 回应中的库列表是一次上游回应的完整内容：条目数等于 `total_datasets`，不超过 1000，每条只含合格的 `id` 和 `name`。
+- 未配置或请求带查询参数时，不发任何外部请求。
+- 回应只含封闭集合中的 `result`，成功时加 `datasets`。
+
+**Must preserve**：
+
+- `version` 路由与 #411 测试连接的行为不变：仍是 64 KiB 上限，结果相同。
+- #413 鉴权钩子不变。
+
+**同级面**：
+
+- 14.3 文件路由用同一个 ID 格式校验路径参数。
+- 14.4 检索预检调用 `listRagflowDatasets`。
+- 15.2 面板在完整列表上本地搜索、分页。
+
+**宽度**：client 扩展、路由、单元与集成测试，加上本段 fixture 与 AGENTS.md，可能超过 400 行；超过时打 `diff-limit-exempt`。
+
+Evidence (14.2 库列表路由，#414):
+
+**改动点**：
+
+- 修改：
+  - `ragflow-proxy/client.ts` 与测试：`call` 接收体积上限；新增 `listRagflowDatasets`；`RAGFLOW_RESULTS` 加入 `invalid-request`；
+  - `ragflow-proxy/routes.ts` 与测试；
+  - `ragflow-proxy/index.ts`；
+  - 集成测试：新建 `platform/test/ragflow-proxy-datasets.integration.test.ts`，复用 `instance-token-fixture.ts` 和 `model-upstream-fixture.ts`；
+  - `schemas/openapi.json`。
+- AGENTS.md 由 orchestrator 改。
+
+**测试**：
+
+`client.test.ts`（注入 `send`）：
+
+- 未配置时不调用 `send`。
+- 3 个库、`total_datasets: 3` → `ok`：
+  - 只请求一次，路径恰为 `/api/v1/datasets?page=1&page_size=1001&orderby=create_time&desc=false`，带 `Authorization`；
+  - 输出恰为 `[{id,name}]`，顺序与上游一致，被丢弃的字段不出现。
+- 0 个库、`total_datasets: 0` → `{ result: 'ok', datasets: [] }`。
+- 1000 个库 → `ok`；1001 个库 → `upstream-error`。
+- 条目数与 `total_datasets` 不等，或 `total_datasets` 缺失、为 `-1`、为 `1.5`、为字符串 → `upstream-error`。
+- 条目不合格：ID 大写、长度 31、名字为空、名字为数字、名字超过 1024 字节、`data` 不是数组 → `upstream-error`。名字含 `\u0001`、或 1024 字节整（多字节字符）→ 接受。
+- 重复 ID → `upstream-error`。
+- 回应体超过 8 MiB → `upstream-error`。
+- `code: 102`、超时、拒绝连接 → 对应的失败取值。
+- 外部中止 → 抛出。
+- 测试连接与版本路由仍用 64 KiB：64 KiB+1 的回应仍为 `upstream-error`。
+
+集成测试（真实 TCP、自有假 RAGFlow、有效实例令牌）：
+
+- 成功：
+  - 回应恰为 `{ result: 'ok', datasets: [...] }`；
+  - 假服务收到 1 个请求，路径和 `Authorization` 正确；
+  - 回应文本不含假服务 origin、密钥，也不含 handler 放在 `description`、`avatar`、`tenant_avatar` 和 `nickname` 中的 MARKER。
+- 空库列表 → `{ result: 'ok', datasets: [] }`。
+- 未配置 → `not-configured`，假服务收到 0 个请求。
+- HTTP 200 加 `code: 102` → `upstream-error`。
+- 超时：集成测试经 `index.ts` 直接调用 `listRagflowDatasets`，传 200 ms → `timeout`（同 #411 的做法）。
+- 拒绝连接 → `unavailable`（`refusedOrigin()`）。
+- 查询参数：`?page=2` 和只有 `?` → `invalid-request`，假服务收到 0 个请求。
+- 无令牌 → 401，假服务收到 0 个请求（#413 回归）。
+- 鉴权通过后 `HEAD …/datasets` → 404，假服务收到 0 个请求。
+- 绝对形式目标 `GET http://h/_platform/instance-api/ragflow/datasets`，经原始 socket 发送、不带令牌 → 401，假服务收到 0 个请求（#524 评审交接）。
+
+**运行时证据**（对本机 RAGFlow rc2 只读，脚本只打印结果、个数、ID 格式和 `total_datasets` 是否相等）：
+
+- 直接调用 `listRagflowDatasets`。期望结果：`ok`，3 个库，ID 格式合格，个数等于 `total_datasets`。
+- 用同一脚本确认 rc2 遵守 `page_size` 且 `page` 从 1 开始。期望：
+  - `page=1&page_size=2` 返回 2 条；
+  - `page=2&page_size=2` 返回 1 条；
+  - `page=3&page_size=2` 返回 `code: 0` 和空数组；
+  - `orderby=create_time&desc=false` 被接受。
+
+**命令**：
+
+- `pnpm test`、`pnpm test:integration`、`pnpm contract:check`、`pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`
+- 本机 exact-head 的 `pnpm test:stack` 证据评论
+
+**交接**：
+
+- 14.3：库 ID 路径参数用同一个 `^[0-9a-f]{32}$`，并说明其文件分页策略。
+- 14.4：预检调用 `listRagflowDatasets`，它的失败取值直接成为检索结果。
+- 15.2：面板在 `datasets` 上本地搜索、分页。
+- 部署文档：`docs/DEPLOY.md` 目前没有 RAGFlow 段落（第 246 行写明本阶段不交付）。头像提示交给第 19 组集成验收的部署文档更新，届时写入「建 RAGFlow 知识库的账号和库不要设大头像，否则库列表超过 8 MiB 会返回 `upstream-error`」。
+- 后续：#411 的测试连接只取 1 行、上限 64 KiB；单个头像超过约 64 KiB 时，测试连接会误报 `upstream-error`。另开 issue 跟踪。
+
 ## 15. 「知识库」插件
 
 依赖：4、10（含 10.2 种子和 10.4 本机浏览器）、11、14。关键路径 `images/dsh-user/`（15.1 镜像交付）。

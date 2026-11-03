@@ -4439,7 +4439,8 @@
                         "not-configured",
                         "unavailable",
                         "timeout",
-                        "upstream-error"
+                        "upstream-error",
+                        "invalid-request"
                       ]
                     },
                     "version": {
@@ -6974,13 +6975,121 @@
                         "not-configured",
                         "unavailable",
                         "timeout",
-                        "upstream-error"
+                        "upstream-error",
+                        "invalid-request"
                       ]
                     },
                     "version": {
                       "type": "string",
                       "pattern": "^[\\x20-\\x7e]{1,64}$",
                       "maxLength": 64
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_platform/instance-api/ragflow/datasets": {
+      "get": {
+        "summary": "List the ID and name of every dataset of the configured RAGFlow for an authenticated instance. Any query string, even a bare \"?\", answers invalid-request without contacting RAGFlow.",
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "result"
+                  ],
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "not-configured",
+                        "unavailable",
+                        "timeout",
+                        "upstream-error",
+                        "invalid-request"
+                      ]
+                    },
+                    "datasets": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "id",
+                          "name"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{32}$"
+                          },
+                          "name": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      }
                     }
                   }
                 }
