@@ -9,5 +9,6 @@ export {
   PERMISSION_TIERS,
   CATALOG_STATES,
   REGISTRY_URL,
+  isRagflowBaseUrl,
 } from './settings.ts';
 export type { CatalogState, Settings } from './settings.ts';

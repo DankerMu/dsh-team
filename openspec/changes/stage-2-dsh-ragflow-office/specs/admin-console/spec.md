@@ -28,7 +28,7 @@
 
 ### Requirement: 检索参数配置
 
-后台 MUST 提供检索参数的编辑：返回片段数、相似度阈值、关键词权重和是否启用重排序。接口为 `GET/PUT /_platform/api/admin/retrieval-config`，保存写入 `retrieval-config.updated` 审计。这些参数 MUST 只能由管理员修改，MUST 在平台代理处应用，保存后立即对之后的检索生效；员工和插件都不能调整。
+后台 MUST 提供检索参数的编辑：返回片段数、相似度阈值、关键词权重和重排模型（留空即不启用重排序）。接口为 `GET/PUT /_platform/api/admin/retrieval-config`，保存写入 `retrieval-config.updated` 审计。这些参数 MUST 只能由管理员修改，MUST 在平台代理处应用，保存后立即对之后的检索生效；员工和插件都不能调整。
 
 #### Scenario: 参数校验
 

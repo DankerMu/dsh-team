@@ -7,6 +7,7 @@ import {
   administrator,
   putConfig,
   SEEDED_SETTINGS,
+  seededWith,
   settingsRows,
 } from '../../test/admin-config-fixture.ts';
 
@@ -38,10 +39,7 @@ const save = (app: FastifyInstance, cookie: string, webToolsEnabled: boolean) =>
     headers: jsonRequestHeaders({ cookie }),
     payload: JSON.stringify({ webToolsEnabled }),
   });
-const withWebTools = (value: string) => [
-  ...SEEDED_SETTINGS.slice(0, 3),
-  { key: 'webToolsEnabled', value },
-];
+const withWebTools = (value: string) => seededWith({ webToolsEnabled: value });
 
 it('reports the seeded web tools switch as off', async () => {
   await withApp(async (app, database) => {

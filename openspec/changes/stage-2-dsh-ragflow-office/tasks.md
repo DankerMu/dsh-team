@@ -308,6 +308,196 @@ Evidence (12.2): 生成与注入——`createInstance` 在生成文件令牌密�
 Suggested fixture level: expanded - 新增外部凭据的保管和后台写入口
 Minimal mergeable slice: 13.1 设置和接口单独合入（还没有消费者，不改变运行行为）
 
+Risk packs (13.1 连接配置，#410): fixture level expanded（与 issue 建议一致）。13.1 按宽度拆成两个 issue：本 issue 交付共用的设置迁移、密钥保管和 `ragflow-config` 接口；`retrieval-config` 接口和它的审计事件属于 #446，#446 只读写本迁移建好的检索参数，不再新增迁移。
+
+selected：
+
+- **Schema**：
+  - 迁移 6 `platform/src/db/migrations/6-ragflow-settings.sql` 用 `INSERT OR IGNORE` 播种六行（键名和默认值见 design 决定 3「其他约定」的表）：`ragflowBaseUrl` `""`、`ragflowApiKey` `""`、`retrievalTopK` `8`、`retrievalSimilarityThreshold` `0.2`、`retrievalKeywordsWeight` `0.7`、`retrievalRerankId` `""`。
+  - `Settings` 接口和 `DEFAULT_SETTINGS` 加同名六个字段。`parseOwned` 的取值域：
+    - `ragflowApiKey`、`retrievalRerankId` 是字符串；
+    - `ragflowBaseUrl` 是 `''`（未配置），或满足下面地址规则的字符串；
+    - `retrievalTopK` 是 1..100 的安全整数；
+    - 两个比例是闭区间 0..1 内的有限数。
+  - 地址规则由 `db/settings.ts` 导出唯一实现 `isRagflowBaseUrl(value)`，本 PR 的路由 `patch` 与 settings 层都调用它，14.1 代理复用，不复制。规则先检查原始字符串，再做解析检查，因为 `URL` 解析会把 `?`/`#` 空串、`@` 空 userinfo 和中间换行都静默吞掉：
+    - 原始串不超过 2048 个字符；
+    - 原始串匹配 `/^[^\s\x00-\x1f\x7f]+$/`：挡住首尾和中间的空白字符，以及 C0 控制字符和 DEL（`\S` 本身放行 `\x01` 这类控制字符）；
+    - 原始串不含 `?`、`#`、`@`、`\`；
+    - `new URL()` 能解析，协议是 `http:` 或 `https:`；
+    - 允许路径，原样保存，不规范化末尾斜杠，拼接交给 14.1。原始串检查保证字符串拼接 `/api/v1/...` 不会落进 query 或 fragment。
+  - 接口形状：
+    - GET `/_platform/api/admin/ragflow-config` 恰好返回 `{ baseURL: string, apiKeyConfigured: boolean }`。`apiKeyConfigured` 为 `ragflowApiKey.trim() !== ''`。字段名沿用 `model-config`。
+    - PUT body 是对象，只允许 `baseURL`（必填）和 `apiKey`（可选）。
+    - `baseURL` 必须是非空且满足地址规则的字符串。
+    - `apiKey` 省略时保留已存值；非空白字符串替换已存值；空串、全空白或非字符串返回 400。
+    - 首次保存可以不带 `apiKey`，此时 `apiKeyConfigured` 为 `false`，代理按 `not-configured` 处理（14.1）。
+    - 成功响应是 GET 的形状，加上共用提交边界附加的 `runningInstances`。
+    - 存储只写 `ragflowBaseUrl`，以及给出时的 `ragflowApiKey`；检索参数四行不动。
+- **Auth / permissions / secrets**：
+  - 沿用 `registerConfigRoute`：`adminRoutes` 的 `onRequest` 先挡匿名和员工；body 读完后在同一事务里重核当前活动管理员；401/403 时不写设置、不写审计。
+  - 密钥从不进入响应（只投影 `apiKeyConfigured`）、审计（细节 `{}`）和日志。路由只记固定的 `storageFailure` 文案。
+  - `app.ts` 的 `LOG_REDACT_PATHS` 加 `ragflowApiKey` 和 `*.ragflowApiKey`；请求体字段 `apiKey` 已由 `req.body.apiKey` / `*.apiKey` 覆盖。
+- **Error handling / rollback**：
+  - `patch` 只返回 `null` 或补丁，不抛出。信封不合法时返回固定 400，文案不回显输入。
+  - 地址不满足规则时，`patch` 调 `isRagflowBaseUrl` 返回 `null`，与信封错误统一回固定 `invalidMessage`（同 `plugin-sources` 用 `REGISTRY_URL` 的先例）。settings 层的同一检查是不变量兜底，经路由不会触发。
+  - 存储损坏或审计写入失败时返回 500 固定体，整体回滚。
+- **Public API**：
+  - `config-route.ts` 的 `name` 联合加 `'ragflow'`，`auditType` 联合加 `'ragflow-config.updated'`。
+  - `audit/record.ts` 的 `EVENT_DETAIL_FIELDS` 加 `'ragflow-config.updated': []`，`record.test.ts` 的封闭集合清单同步。`retrieval-config.updated` 不在本 issue。
+  - `db/index.ts` 转出 `isRagflowBaseUrl`。
+- **边界外改动**（issue 的 PR Boundary 字面只列 `platform/src/admin/`、`platform/src/db/`、`schemas/openapi.json`，以下由任务文字授权）：
+  - `platform/src/audit/record.ts` 和 `record.test.ts`：审计事件 `ragflow-config.updated`；
+  - `platform/src/app.ts` 和 `app.test.ts`：「密钥加入日志脱敏」；
+  - `scripts/e2e-scenario.sh` 与 `platform/test/*` 的账本断言：「新增迁移同步更新迁移账本断言」；
+  - `platform/src/admin/model-probe.test.ts:7` 与 `platform/src/managed-config/model-settings.test.ts:5`：构造完整 `Settings` 字面量，新字段使类型检查要求补齐；
+  - `SEEDED_SETTINGS` 的 13 个引用文件（见同级面）。
+- **Legacy compatibility**：
+  - 既有五条配置路由的请求、响应和审计都不变。`readSettings` 遇到未知键仍然跳过。
+  - 迁移只新增行；已有数据库上 `INSERT OR IGNORE` 不覆盖已有的同名键。
+- **Documentation**（由 orchestrator 改）：
+  - AGENTS.md 验证矩阵的 Database 行把「versions 1 to 5」改为「1 to 6」。
+  - Environment 段在 `web-tools` 条目之后，记录本接口和迁移 6 的形状、校验与密钥保管。
+
+not selected：
+
+- File IO：不读文件。
+- Concurrency：单事务。
+- Release / packaging：不改镜像。
+- Performance：body 受 Fastify 默认 1 MiB 上限。
+
+**不变量**：
+
+- 存储中的 `ragflowBaseUrl` 永远是 `''` 或合规地址，六个字段永远在各自的取值域内；由 `parseOwned` 保证；路由 `patch` 先用同一个 `isRagflowBaseUrl` 校验，不合规回固定 400。
+- 密钥明文只存在于 SQLite 行里。
+- 400 文案只含固定文字或字段名，不含任何输入字节。
+
+**Must preserve**：
+
+- `model-config`、`runtime-config`、`plugin-catalog`、`plugin-sources`、`web-tools` 的请求、响应与审计不变。
+- `registerConfigRoute` 的提交边界语义不变。
+- 迁移 1–5 的内容不变，`applyMigrations` 的账本语义不变。
+
+**同级面**：
+
+- 迁移账本断言：`platform/src/db/migrate.test.ts:146`（标题「through 5-plugin-settings」）与 `:151`、`platform/src/db/schema.test.ts`、`platform/test/db.integration.test.ts:346,438`、`platform/test/admin-plugin-catalog.integration.test.ts:64`，以及 e2e 的 `scripts/e2e-scenario.sh:109`。
+- `platform/test/admin-config-fixture.ts` 的 `SEEDED_SETTINGS`：`settingsRows` 按 key 排序（`:26`），改后恰为十行，依次是 `pluginCatalog` `{}`、`pluginRegistries`（原值）、`ragflowApiKey` `""`、`ragflowBaseUrl` `""`、`registryProbeEnabled` `true`、`retrievalKeywordsWeight` `0.7`、`retrievalRerankId` `""`、`retrievalSimilarityThreshold` `0.2`、`retrievalTopK` `8`、`webToolsEnabled` `false`（value 为 JSON 文本，如 `'""'`、`'0.7'`）；`:14` 注释改为「Migrations 5 and 6 seed these rows」。引用它的 13 个文件：`platform/src/admin/` 的 `plugin-sources`、`runtime-config`、`web-tools`、`config-route`、`plugin-catalog`、`model-config` 六个测试，`platform/src/db/settings.test.ts`，`platform/test/` 的 6 个集成测试。按下标取值的两处必须改为按 key 构造：`plugin-sources.test.ts:40,43`（`SEEDED_SETTINGS[0]`/`[3]`）、`web-tools.test.ts:42`（`.slice(0, 3)`）；`settings.test.ts:60` 标题「exactly the four migration-seeded rows」改为十行。
+- 构造完整 `Settings` 字面量的测试：`platform/src/admin/model-probe.test.ts:7`、`platform/src/managed-config/model-settings.test.ts:5`。
+- `platform/web/src/audit-page.tsx` 的 `EVENT_NAMES`：中文名和筛选项由 13.3（#412）加，本 issue 不改。
+- 14.1 代理复用 `isRagflowBaseUrl` 和这六个设置。
+
+**宽度**：
+
+- 估算：迁移约 7 行；`settings.ts` 约 35 行；路由约 60 行；`config-route.ts`、`record.ts`、`app.ts`、`routes.ts`、`db/index.ts` 合计约 10 行；单元测试约 250 行；集成测试约 110 行；账本断言约 15 行。
+- 加上 13 个 `SEEDED_SETTINGS` 引用文件与 `app.test.ts` 的少量改动（约 30 行），合计可能超过 400 行。超出时打 `diff-limit-exempt`，理由是 issue 已声明 atomic：只有共用迁移、密钥保管和连接配置接口这一条验证路径。
+
+Evidence (13.1 连接配置，#410):
+
+**现状**：
+
+- 迁移目录到 `5-plugin-settings.sql` 为止，迁移 5 用 `INSERT OR IGNORE` 播种四行。
+- `platform/src/db/settings.ts`：`parseOwned` 用 `STRING_FIELDS` 校验模型字符串，用 `parsePluginSetting` 校验插件键；`readSettings` 跳过 `DEFAULT_SETTINGS` 之外的键。
+- `platform/src/admin/config-route.ts:14-21` 的 `name`/`auditType` 联合为五元。
+- `platform/src/admin/routes.ts:219` 注册 `webToolsRoutes`。
+- `platform/src/audit/record.ts` 的 `EVENT_DETAIL_FIELDS` 中配置类事件到 `web-tools.updated`（`:49`）为止，其后是 `instance.*` 七个事件（`:50-56`），没有 RAGFlow 事件。
+- `platform/src/app.ts:33` 的 `LOG_REDACT_PATHS` 含 `apiKey`、`modelApiKey` 及其通配。
+- 平台中没有任何 RAGFlow 代码。
+
+**改动点**：
+
+- 新文件：
+  - `platform/src/db/migrations/6-ragflow-settings.sql`
+  - `platform/src/admin/ragflow-config.ts`
+  - `platform/src/admin/ragflow-config.test.ts`
+  - `platform/test/admin-ragflow-config.integration.test.ts`
+- 修改：
+  - `platform/src/db/settings.ts`：六个字段、取值域、`isRagflowBaseUrl`。
+  - `platform/src/db/index.ts`：转出。
+  - `platform/src/db/settings.test.ts`、`migrate.test.ts`、`schema.test.ts`：账本和新键。
+  - `platform/src/admin/config-route.ts`：联合。
+  - `platform/src/admin/routes.ts`：在 `webToolsRoutes` 之后执行 `app.register(ragflowConfigRoutes, { database, resolveSourceAddress })`。
+  - `platform/src/audit/record.ts` 和 `record.test.ts`。
+  - `platform/src/app.ts`：两条脱敏路径；`platform/src/app.test.ts:108`「redacts credentials before they reach the log」在顶层和 `user.` 下各加一个 `ragflowApiKey` marker，断言 `'[redacted]'` 且 marker 不出现（先红后绿）。
+  - 账本与 `SEEDED_SETTINGS` 相关测试，以及 `scripts/e2e-scenario.sh` 的账本数组。
+  - `schemas/openapi.json`：运行 `pnpm contract:write`。
+- AGENTS.md 由 orchestrator 改。
+
+(1) `ragflowConfigRoutes` 经 `registerConfigRoute` 注册：
+
+- `name: 'ragflow'`，`path: '/_platform/api/admin/ragflow-config'`，`auditType: 'ragflow-config.updated'`。
+- `bodySchema` 为 `{ baseURL: { type: 'string', minLength: 1, maxLength: 2048 }, apiKey: { type: 'string', minLength: 1 } }`，`required: ['baseURL']`，`additionalProperties: false`。schema 只记录契约，校验在 `patch` 和 settings 里。
+- `responseSchema` 为两键对象。
+- `invalidMessage` 固定为「Invalid RAGFlow configuration; provide { baseURL: http(s) URL without credentials, query or fragment, apiKey?: non-blank string }」。
+- `patch(body)` 在以下情况返回 `null`：不是普通对象、有 `baseURL`/`apiKey` 之外的键、`baseURL` 不是字符串或 `!isRagflowBaseUrl(baseURL)`、给了 `apiKey` 但它不是字符串或 trim 后为空。否则返回 `{ ragflowBaseUrl: baseURL, ...(给了 apiKey ? { ragflowApiKey: apiKey } : {}) }`。
+- `project(settings)` 返回 `{ baseURL: settings.ragflowBaseUrl, apiKeyConfigured: settings.ragflowApiKey.trim() !== '' }`。
+
+(2) `settings.ts`：
+
+- `isRagflowBaseUrl` 实现 Risk packs 里的地址规则，`URL` 构造失败时返回 `false`。
+- `parseOwned` 新增分支：`ragflowApiKey` 和 `retrievalRerankId` 是字符串；`ragflowBaseUrl` 是 `''` 或 `isRagflowBaseUrl`；`retrievalTopK` 是 `requirePositiveSafeInteger` 且不超过 100；两个比例是 `typeof number`、`Number.isFinite`，且在 0..1 内。其他字段报 `fieldError`。
+
+**测试**：
+
+单元测试 `ragflow-config.test.ts` 经 `withApp`：
+
+- GET 初始值恰好是 `{ baseURL: '', apiKeyConfigured: false }`。
+- PUT 带地址和密钥成功：
+  - 两行恰为新值；
+  - 检索参数四行和其余播种行都不变；
+  - 审计一行 `ragflow-config.updated`，带 actor/source，`target_email` 为空，细节为 `{}`；
+  - 响应是 `{ baseURL, apiKeyConfigured: true, runningInstances }`，且不含密钥 SENTINEL；
+  - 随后 GET 一致。
+- 再 PUT 只带新地址：密钥行不变，`apiKeyConfigured` 仍为 `true`。
+- 首次只带地址：`apiKeyConfigured` 为 `false`。
+- 400 清单。每例之后 settings 与审计都不变，响应和日志都不含输入 SENTINEL，标签写明各自隔离的规则：
+  - `null`、数组或字符串 body；
+  - 缺 `baseURL`；
+  - 有多余键；
+  - `baseURL` 是数字或全空白；
+  - `apiKey` 是 `''`、`'   '` 或数字；
+  - 地址规则逐条：`ftp:`、带 `user:pass@`、`https://@kb.internal/`、带 `?q`、`https://kb.internal/?`、带 `#f`、`https://kb.internal/#`、首尾空白、中间带空白或换行、`\x01` 控制字符、反斜杠、超过 2048 字符、不能解析；全部回固定 `invalidMessage`。
+- 允许带路径（`https://kb.internal/ragflow`），原样保存。
+- 日志全程不含密钥 SENTINEL。
+- 存储故障按 `audit`/`write` 参数化（`BEFORE INSERT` 触发器）：返回 500 固定体，settings 等于触发器建立前的快照，审计不变，随后 GET 返回 200。
+- 改坏数据：`corrupt-json`、`corrupt-type`（`ragflowBaseUrl` 存成 `"ftp://x"`）。GET 与 PUT 都返回 500。
+
+`settings.test.ts`：
+
+- 默认值；
+- 六个字段各自的越界与类型错误，逐个点名；
+- `retrievalTopK` 的 0、101、1.5，以及比例的 -0.1、1.1、`NaN`（JSON 无法表示的值经 `writeSettings`）；
+- 写入后能读回；
+- `isRagflowBaseUrl` 的边界。
+
+`record.test.ts`：封闭集合含新事件。
+
+集成测试 `admin-ragflow-config.integration.test.ts` 经真实 TCP 的 `withListeningApp`：
+
+- 匿名返回 401，员工返回 403（GET/PUT 都不动 settings，返回固定错误体）。
+- 管理员 GET，PUT 地址和密钥返回 200，再 GET。
+- 用 `delayedConfigBody` 在 body 被接收之后撤销会话或降级：返回 401/403 固定错误体，不写入，不审计。
+- 审计失败回滚（同 `admin-model-config.integration.test.ts:249`）：先保存地址和密钥 A；建 `BEFORE INSERT ON audit_events` 触发器；PUT 地址和密钥 B 返回 500 固定体；settings 仍是 A（密钥行不变）、审计行数不变；响应和日志不含 B 的 SENTINEL、触发器名和 `SQLITE`。
+- 一次 400 之后，快照（含已保存值）不变。
+- 审计行的 actor 为该管理员。
+- 迁移账本恰为 1..6。
+- 响应体、审计行和捕获的日志中都没有密钥 SENTINEL。
+
+**命令**：
+
+- `pnpm test`（逐文件 80%）
+- `pnpm test:integration`（全量：账本与 `SEEDED_SETTINGS` 的期望变化波及 7 个集成测试文件）
+- `pnpm contract:check`
+- `pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 和 `pnpm test:deploy`（含 platform-image 的迁移重开）
+- 本机 exact-head 的 `pnpm test:stack` 证据评论（本 issue 涉及 RAGFlow；用例没有覆盖本接口，证据只证明入口未回归）
+
+**交接**：
+
+- 检索参数接口和 `retrieval-config.updated`：#446。
+- 测试连接：13.2。
+- #446 的 PR Boundary 不含 `platform/src/audit/`，但 `retrieval-config.updated` 需要改 `record.ts`（含 `record.test.ts`）和 `config-route.ts` 联合，届时按本条授权。
+- 页面与审计中文名：13.3。
+- 代理读取与映射：14.x。
+
 ## 14. RAGFlow 只读代理
 
 依赖：1（来源 IP 核对需要 +2 地址）、10（含 10.2 种子）、12、13。

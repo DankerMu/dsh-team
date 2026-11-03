@@ -18,6 +18,12 @@ const SETTINGS: Settings = {
   pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
   registryProbeEnabled: true,
   webToolsEnabled: false,
+  ragflowBaseUrl: '',
+  ragflowApiKey: '',
+  retrievalTopK: 8,
+  retrievalSimilarityThreshold: 0.2,
+  retrievalKeywordsWeight: 0.7,
+  retrievalRerankId: '',
 };
 const COMPLETION = JSON.stringify({ id: 'x', choices: [{ index: 0, message: { content: '' } }] });
 

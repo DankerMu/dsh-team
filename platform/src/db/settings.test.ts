@@ -1,7 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
-import { applyMigrations, openDatabase, readSettings, writeSettings } from './index.ts';
+import {
+  applyMigrations,
+  isRagflowBaseUrl,
+  openDatabase,
+  readSettings,
+  writeSettings,
+} from './index.ts';
 import type { Settings } from './index.ts';
 import { SEEDED_SETTINGS } from '../../test/admin-config-fixture.ts';
 
@@ -19,6 +25,12 @@ const DEFAULTS: Settings = {
   pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
   registryProbeEnabled: true,
   webToolsEnabled: false,
+  ragflowBaseUrl: '',
+  ragflowApiKey: '',
+  retrievalTopK: 8,
+  retrievalSimilarityThreshold: 0.2,
+  retrievalKeywordsWeight: 0.7,
+  retrievalRerankId: '',
 };
 
 const UNSAFE_INTEGER = 2 ** 53;
@@ -38,6 +50,12 @@ const FULL_PATCH: Settings = {
   pluginRegistries: ['http://registry.invalid/npm/'],
   registryProbeEnabled: false,
   webToolsEnabled: true,
+  ragflowBaseUrl: 'https://kb.internal/ragflow',
+  ragflowApiKey: randomBytes(32).toString('hex'),
+  retrievalTopK: 100,
+  retrievalSimilarityThreshold: 0,
+  retrievalKeywordsWeight: 1,
+  retrievalRerankId: 'bge-reranker',
 };
 const AFTER_PARTIAL: Settings = {
   ...FULL_PATCH,
@@ -57,7 +75,7 @@ describe('settings', () => {
     db.close();
   });
   describe('readSettings', () => {
-    it('has exactly the four migration-seeded rows after migration and reads them as the defaults', () => {
+    it('has exactly the ten migration-seeded rows after migration and reads them as the defaults', () => {
       expect(db.prepare('SELECT key, value FROM settings ORDER BY key').all()).toEqual(
         SEEDED_SETTINGS,
       );
@@ -159,6 +177,27 @@ describe('settings', () => {
       ['registryProbeEnabled', 1],
       ['webToolsEnabled', null],
       ['webToolsEnabled', 0],
+      ['ragflowBaseUrl', 5],
+      ['ragflowBaseUrl', ' '],
+      ['ragflowBaseUrl', 'ftp://kb.internal/'],
+      ['ragflowBaseUrl', 'https://kb.internal/?q'],
+      ['ragflowApiKey', null],
+      ['ragflowApiKey', 5],
+      ['retrievalRerankId', null],
+      ['retrievalRerankId', false],
+      ['retrievalTopK', 0],
+      ['retrievalTopK', 101],
+      ['retrievalTopK', 1.5],
+      ['retrievalTopK', '8'],
+      ['retrievalSimilarityThreshold', -0.1],
+      ['retrievalSimilarityThreshold', 1.1],
+      ['retrievalSimilarityThreshold', Number.NaN],
+      ['retrievalSimilarityThreshold', '0.2'],
+      ['retrievalKeywordsWeight', -0.1],
+      ['retrievalKeywordsWeight', 1.1],
+      ['retrievalKeywordsWeight', Number.NaN],
+      ['retrievalKeywordsWeight', Number.POSITIVE_INFINITY],
+      ['retrievalKeywordsWeight', null],
     ])('rejects %s with an invalid value and leaves prior rows unchanged', (field, value) => {
       writeSettings(db, { idleMinutes: 15 });
 
@@ -243,6 +282,12 @@ describe('settings', () => {
       ['pluginRegistries', '[]'],
       ['registryProbeEnabled', '"CORRUPT_SENTINEL"'],
       ['webToolsEnabled', '{not-json-CORRUPT_SENTINEL'],
+      ['ragflowBaseUrl', '"ftp://CORRUPT_SENTINEL"'],
+      ['ragflowApiKey', '{not-json-CORRUPT_SENTINEL'],
+      ['retrievalTopK', '"CORRUPT_SENTINEL"'],
+      ['retrievalSimilarityThreshold', '2'],
+      ['retrievalKeywordsWeight', '"CORRUPT_SENTINEL"'],
+      ['retrievalRerankId', '0'],
     ])('rejects stored %s corruption without echoing the raw sentinel', (field, stored) => {
       db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(field, stored);
 
@@ -277,6 +322,45 @@ describe('settings', () => {
         writeSettings(db, { models: [{ name: 'alpha' }] });
       }).toThrow(/modelApiKey/);
       expect(db.prepare('SELECT * FROM settings').all()).toEqual(before);
+    });
+  });
+  describe('isRagflowBaseUrl', () => {
+    it.each([
+      'http://kb.internal',
+      'https://kb.internal/',
+      'https://kb.internal/ragflow',
+      'https://kb.internal:9380/ragflow/',
+      'http://10.0.0.5:80',
+      `https://kb.internal/${'a'.repeat(2048 - 'https://kb.internal/'.length)}`,
+    ])('accepts %s', (value) => {
+      expect(isRagflowBaseUrl(value)).toBe(true);
+    });
+
+    it.each([
+      ['an empty string', ''],
+      ['a non-http scheme', 'ftp://kb.internal/'],
+      ['a non-network scheme', 'javascript:alert(1)'],
+      ['credentials', 'https://user:pass@kb.internal/'],
+      ['an empty userinfo', 'https://@kb.internal/'],
+      ['a query', 'https://kb.internal/?q'],
+      ['an empty query', 'https://kb.internal/?'],
+      ['a fragment', 'https://kb.internal/#f'],
+      ['an empty fragment', 'https://kb.internal/#'],
+      ['leading whitespace', ' https://kb.internal/'],
+      ['trailing whitespace', 'https://kb.internal/ '],
+      ['inner whitespace', 'https://kb .internal/'],
+      ['an inner line break', 'https://kb.internal/\nragflow'],
+      ['a C0 control character', 'https://kb.internal/\x01'],
+      ['DEL', 'https://kb.internal/\x7f'],
+      ['a backslash', 'https:\\kb.internal\\'],
+      [
+        'more than 2048 characters',
+        `https://kb.internal/${'a'.repeat(2049 - 'https://kb.internal/'.length)}`,
+      ],
+      ['an unparseable address', 'https://'],
+      ['a scheme-less address', 'kb.internal'],
+    ])('rejects %s', (_label, value) => {
+      expect(isRagflowBaseUrl(value)).toBe(false);
     });
   });
   describe('writeSettings atomicity', () => {

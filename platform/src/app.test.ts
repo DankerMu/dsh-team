@@ -116,11 +116,13 @@ describe('buildApp', () => {
       instanceToken: 'instance-token-top-marker',
       instanceTokenHash: 'instance-hash-top-marker',
       instance_token_hash: 'instance-row-hash-top-marker',
+      ragflowApiKey: 'ragflow-key-top-marker',
       user: {
         fileTokenSecret: 'file-secret-nested-marker',
         instanceToken: 'instance-token-nested-marker',
         instanceTokenHash: 'instance-hash-nested-marker',
         instance_token_hash: 'instance-row-hash-nested-marker',
+        ragflowApiKey: 'ragflow-key-nested-marker',
         password: 'hunter2',
         currentPassword: 'current-password-marker',
         newPassword: 'new-password-marker',
@@ -138,11 +140,13 @@ describe('buildApp', () => {
       instanceToken: '[redacted]',
       instanceTokenHash: '[redacted]',
       instance_token_hash: '[redacted]',
+      ragflowApiKey: '[redacted]',
       user: {
         fileTokenSecret: '[redacted]',
         instanceToken: '[redacted]',
         instanceTokenHash: '[redacted]',
         instance_token_hash: '[redacted]',
+        ragflowApiKey: '[redacted]',
         password: '[redacted]',
         currentPassword: '[redacted]',
         newPassword: '[redacted]',
@@ -167,6 +171,8 @@ describe('buildApp', () => {
       'instance-hash-nested-marker',
       'instance-row-hash-top-marker',
       'instance-row-hash-nested-marker',
+      'ragflow-key-top-marker',
+      'ragflow-key-nested-marker',
     ]) {
       expect(written).not.toContain(secret);
     }

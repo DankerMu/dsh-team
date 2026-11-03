@@ -16,6 +16,12 @@ const SETTINGS: Settings = {
   pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
   registryProbeEnabled: true,
   webToolsEnabled: false,
+  ragflowBaseUrl: '',
+  ragflowApiKey: '',
+  retrievalTopK: 8,
+  retrievalSimilarityThreshold: 0.2,
+  retrievalKeywordsWeight: 0.7,
+  retrievalRerankId: '',
 };
 
 it('maps stored settings to the managed model reference and the separate injected key', () => {

@@ -11,16 +11,30 @@ export const MODEL_CONFIG = {
   defaultModel: 'beta',
 };
 
-/** Migration 5 seeds these rows; they are every unmodified database's settings baseline. */
+/** Migrations 5 and 6 seed these rows; they are every unmodified database's settings baseline. */
 export const SEEDED_SETTINGS = [
   { key: 'pluginCatalog', value: '{}' },
   {
     key: 'pluginRegistries',
     value: '["https://registry.npmjs.org/","https://registry.npmmirror.com/"]',
   },
+  { key: 'ragflowApiKey', value: '""' },
+  { key: 'ragflowBaseUrl', value: '""' },
   { key: 'registryProbeEnabled', value: 'true' },
+  { key: 'retrievalKeywordsWeight', value: '0.7' },
+  { key: 'retrievalRerankId', value: '""' },
+  { key: 'retrievalSimilarityThreshold', value: '0.2' },
+  { key: 'retrievalTopK', value: '8' },
   { key: 'webToolsEnabled', value: 'false' },
 ];
+
+/** The seeded rows in key order with the given keys' stored JSON text replaced. */
+export function seededWith(overrides: Readonly<Record<string, string>>) {
+  return SEEDED_SETTINGS.map((row) => {
+    const value = Object.hasOwn(overrides, row.key) ? overrides[row.key] : undefined;
+    return value === undefined ? row : { key: row.key, value };
+  });
+}
 
 export function settingsRows(database: DatabaseHandle): unknown[] {
   return database.prepare('SELECT * FROM settings ORDER BY key').all();
