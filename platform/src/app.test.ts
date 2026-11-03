@@ -178,6 +178,45 @@ describe('buildApp', () => {
     }
   });
 
+  it('replaces the query of RAGFlow proxy request URLs in request logs and keeps other URLs', async () => {
+    const log = captureLog();
+    const database = openDatabase(':memory:');
+    applyMigrations(database);
+    const app = await buildApp({ ...SILENT_CONFIG, logLevel: 'info' }, database, log);
+    const documents = `/_platform/instance-api/ragflow/datasets/${'d'.repeat(32)}/documents`;
+    const targets = [
+      // The declared route, its encoded spelling and an undeclared path under the prefix.
+      [`${documents}?page=1&page_size=10&keywords=kwmarker411`, `${documents}?[redacted]`],
+      [
+        '/_platform/instance-api/ragflo%77/version?x=kwmarker411',
+        '/_platform/instance-api/ragflo%77/version?[redacted]',
+      ],
+      [
+        '/_platform/instance-api/ragflow/none?x=kwmarker411#y',
+        '/_platform/instance-api/ragflow/none?[redacted]',
+      ],
+      ['/_platform/instance-api/ragflow/version', '/_platform/instance-api/ragflow/version'],
+      ['/healthz?x=kept', '/healthz?x=kept'],
+    ] as const;
+
+    for (const [url] of targets) await app.inject({ method: 'GET', url });
+    await app.close();
+
+    expect(log.lines.join('')).not.toContain('kwmarker411');
+    const requests = log.lines
+      .map((line) => JSON.parse(line) as { msg: string; req?: unknown })
+      .filter(({ msg }) => msg === 'incoming request')
+      .map(({ req }) => req);
+    expect(requests).toEqual(
+      targets.map(([, url]) => ({
+        method: 'GET',
+        url,
+        host: 'localhost:80',
+        remoteAddress: '127.0.0.1',
+      })),
+    );
+  });
+
   it('leaves the caller-owned database open after construction failure', async () => {
     const failure = new Error('health plugin refused');
     healthFault.failWith = failure;

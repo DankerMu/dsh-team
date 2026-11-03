@@ -3,6 +3,7 @@ import {
   RAGFLOW_RESULTS,
   RAGFLOW_TIMEOUT_MS,
   listRagflowDatasets,
+  listRagflowDocuments,
   ragflowVersion,
   testRagflowConnection,
 } from './client.ts';
@@ -503,5 +504,209 @@ it('propagates an external cancellation while listing instead of classifying it'
 
   await expect(
     listRagflowDatasets({ baseURL: BASE, apiKey: KEY }, owner.signal, 60_000, send),
+  ).rejects.toThrow();
+});
+
+const DATASET = 'd'.repeat(32);
+const DOCUMENTS_URL = `https://kb.invalid/api/v1/datasets/${DATASET}/documents`;
+/** RAGFlow v1.0.0-rc2 document rows carry far more than the proxy returns. */
+function documentRow(index: number, name = `文件 ${String(index)}.txt`): Record<string, unknown> {
+  return {
+    id: ID(index),
+    name,
+    dataset_id: DATASET,
+    thumbnail: 'data:image/png;base64,AAAA',
+    location: 'dropped-location',
+    created_by: 'f'.repeat(32),
+    nickname: 'owner',
+    meta_fields: { secret: 'dropped' },
+    parser_config: { chunk_token_num: 512 },
+  };
+}
+function page(docs: unknown, total: unknown = Array.isArray(docs) ? docs.length : 0): string {
+  return JSON.stringify({ code: 0, data: { total, docs }, message: 'success' });
+}
+function documents(
+  send: Send,
+  query: { page: number; pageSize: number; keywords?: string } = { page: 2, pageSize: 30 },
+  settings = { baseURL: BASE, apiKey: KEY },
+  deadlineMs = 1_000,
+) {
+  return listRagflowDocuments(
+    settings,
+    DATASET,
+    query,
+    new AbortController().signal,
+    deadlineMs,
+    send,
+  );
+}
+
+it.each([
+  ['an empty address', { baseURL: '', apiKey: KEY }],
+  ['an empty key', { baseURL: BASE, apiKey: '' }],
+  ['a key that cannot form a header', { baseURL: BASE, apiKey: `${KEY}\nX-Injected: 1` }],
+])('lists no documents for %s and reports not-configured', async (_label, settings) => {
+  const send = sender(() => new Response(page([])));
+
+  expect(await documents(send, undefined, settings)).toEqual({ result: 'not-configured' });
+  expect(send).not.toHaveBeenCalled();
+});
+
+it('reads one document page with the key and returns only ids and names in upstream order', async () => {
+  const send = sender(() => new Response(page([documentRow(3), documentRow(1)], 42)));
+
+  const outcome = await documents(send);
+
+  expect(outcome).toEqual({
+    result: 'ok',
+    total: 42,
+    documents: [
+      { id: ID(3), name: '文件 3.txt' },
+      { id: ID(1), name: '文件 1.txt' },
+    ],
+  });
+  expect(send).toHaveBeenCalledTimes(1);
+  const request = send.mock.calls[0]?.[0];
+  expect([request?.method, request?.url, request?.redirect]).toEqual([
+    'GET',
+    `${DOCUMENTS_URL}?page=2&page_size=30&orderby=create_time&desc=false`,
+    'manual',
+  ]);
+  expect(request?.headers.get('authorization')).toBe(`Bearer ${KEY}`);
+});
+
+it.each([
+  ['报告 a_b%', '%E6%8A%A5%E5%91%8A%20a_b%25'],
+  ['a b', 'a%20b'],
+  ['a+b', 'a%2Bb'],
+  [' a&b=c#d ', '%20a%26b%3Dc%23d%20'],
+])('forwards the file-name filter %j untrimmed as %s', async (keywords, encoded) => {
+  const send = sender(() => new Response(page([])));
+
+  await documents(send, { page: 1, pageSize: 10, keywords });
+
+  expect(send.mock.calls[0]?.[0].url).toBe(
+    `${DOCUMENTS_URL}?page=1&page_size=10&orderby=create_time&desc=false&keywords=${encoded}`,
+  );
+});
+
+it.each([
+  ['an empty page', page([], 0), 0],
+  ['a page past the end', page([], 2), 2],
+])('reports %s as ok with no documents and the upstream total', async (_label, body, total) => {
+  expect(await documents(sender(() => new Response(body)))).toEqual({
+    result: 'ok',
+    total,
+    documents: [],
+  });
+});
+
+it.each([
+  ['a missing dataset (code 404)', '{"code":404,"data":null,"message":"x"}', 'invalid-request'],
+  ['a dataset the key cannot read (code 403)', '{"code":403,"message":"x"}', 'invalid-request'],
+  ['a rejected key (code 401)', '{"code":401,"message":"x"}', 'not-configured'],
+  ['another non-zero code', '{"code":102,"message":"x"}', 'upstream-error'],
+] as const)('maps %s to its closed result', async (_label, body, result) => {
+  expect(await documents(sender(() => new Response(body)))).toEqual({ result });
+});
+
+it('keeps code 404 an upstream-error for the dataset list and the connection test', async () => {
+  const missing = () => new Response('{"code":404,"data":null}');
+
+  expect(await list(sender(missing))).toEqual({ result: 'upstream-error' });
+  expect(await check(steps(() => new Response(VERSION_BODY), missing))).toEqual({
+    result: 'upstream-error',
+  });
+});
+
+it('accepts a page exactly as long as the requested page size and the total', async () => {
+  const rows = [documentRow(1), documentRow(2)];
+
+  const outcome = await documents(
+    sender(() => new Response(page(rows, 2))),
+    {
+      page: 1,
+      pageSize: 2,
+    },
+  );
+
+  expect(outcome.result).toBe('ok');
+});
+
+it.each([
+  ['more entries than the page size', page([documentRow(1), documentRow(2)], 9), 1],
+  ['more entries than the total', page([documentRow(1), documentRow(2)], 1), 30],
+  ['a negative total', page([], -1), 30],
+  ['a fractional total', page([], 1.5), 30],
+  ['a string total', page([], '0'), 30],
+  ['a missing total', JSON.stringify({ code: 0, data: { docs: [] } }), 30],
+  ['non-array docs', JSON.stringify({ code: 0, data: { total: 0, docs: {} } }), 30],
+  ['a null data', JSON.stringify({ code: 0, data: null }), 30],
+  ['an entry of another dataset', page([{ ...documentRow(1), dataset_id: 'e'.repeat(32) }]), 30],
+  ['an entry without a dataset', page([{ id: ID(1), name: 'x' }]), 30],
+  ['an uppercase id', page([{ ...documentRow(1), id: 'A'.repeat(32) }]), 30],
+  ['a 31-character id', page([{ ...documentRow(1), id: 'a'.repeat(31) }]), 30],
+  ['an empty name', page([documentRow(1, '')]), 30],
+  ['a name over 1024 UTF-8 bytes', page([documentRow(1, '库'.repeat(341) + 'xx')]), 30],
+  ['a duplicate id', page([documentRow(1), documentRow(2), documentRow(1)]), 30],
+])('rejects the whole page with %s as upstream-error', async (_label, body, pageSize) => {
+  const send = sender(() => new Response(body));
+
+  expect(await documents(send, { page: 1, pageSize })).toEqual({ result: 'upstream-error' });
+});
+
+it('reads a document page larger than 64 KiB and rejects one byte over 8 MiB unread', async () => {
+  const pulls: number[] = [];
+  const padded = JSON.stringify({
+    code: 0,
+    data: { total: 1, docs: [documentRow(1)] },
+    padding: 'x'.repeat(8_388_608 - 600),
+  });
+
+  const large = await documents(sender(() => new Response(padded)));
+  const oversized = await documents(sender(() => new Response(oversizedBody(8_388_608, pulls))));
+
+  expect(new TextEncoder().encode(padded).byteLength).toBeLessThanOrEqual(8_388_608);
+  expect(new TextEncoder().encode(padded).byteLength).toBeGreaterThan(65_536);
+  expect(large).toEqual({ result: 'ok', total: 1, documents: [{ id: ID(1), name: '文件 1.txt' }] });
+  expect(oversized).toEqual({ result: 'upstream-error' });
+  expect(pulls.length).toBeLessThanOrEqual(2);
+});
+
+it.each([
+  ['a refused connection', () => Promise.reject(new TypeError('fetch failed')), 'unavailable'],
+  ['a rejected key status', () => new Response(null, { status: 403 }), 'not-configured'],
+] as const)(
+  'maps %s while reading documents to its closed result',
+  async (_label, respond, result) => {
+    expect(await documents(sender(respond))).toEqual({ result });
+  },
+);
+
+it('reports a document page that stalls past the deadline as timeout', async () => {
+  const send = sender((_request, signal) => new Response(heldBody(signal, '{"code":0,')));
+
+  expect(await documents(send, undefined, undefined, 20)).toEqual({ result: 'timeout' });
+});
+
+it('propagates an external cancellation while reading documents instead of classifying it', async () => {
+  const owner = new AbortController();
+  const send = sender((_request, signal) => {
+    queueMicrotask(() => {
+      owner.abort();
+    });
+    return new Response(heldBody(signal, '{'));
+  });
+
+  await expect(
+    listRagflowDocuments(
+      { baseURL: BASE, apiKey: KEY },
+      DATASET,
+      { page: 1, pageSize: 10 },
+      owner.signal,
+      60_000,
+      send,
+    ),
   ).rejects.toThrow();
 });
