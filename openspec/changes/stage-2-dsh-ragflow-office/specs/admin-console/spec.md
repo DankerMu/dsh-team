@@ -17,7 +17,7 @@
 #### Scenario: 测试连接
 
 - **WHEN** 管理员点击“测试连接”，即请求 `POST /_platform/api/admin/ragflow-config/test`
-- **THEN** 平台只调用 RAGFlow 的版本查询接口，不写审计，结果为 `ok`，或与代理相同的失败取值之一：`not-configured`（未配置或密钥被拒）、`unavailable`（地址不可达）、`timeout`、`upstream-error`（返回异常），页面为每个取值显示不同的中文说明；按响应体中的业务代码判定成败，HTTP 200 加非零业务代码不算成功
+- **THEN** 平台调用 RAGFlow 的版本查询接口，再用已存密钥做一次只读的库列表查询（只取 1 条，内容不返回），不写审计，结果为 `ok`，或与代理相同的失败取值之一：`not-configured`（未配置或密钥被拒）、`unavailable`（地址不可达）、`timeout`、`upstream-error`（返回异常），页面为每个取值显示不同的中文说明；按响应体中的业务代码判定成败，HTTP 200 加非零业务代码不算成功
 - **AND** 结果为 `ok` 时回应还带 RAGFlow 的版本字符串，页面显示该版本；版本取自版本接口的业务数据，必须是不超过 64 个字符的可打印 ASCII 字符串，缺失、类型不对或超长时结果为 `upstream-error`，不原样返回；失败结果不带版本
 - **AND** 回应、日志和审计不含密钥、上游回应体或完整地址
 

@@ -302,7 +302,7 @@ Evidence (12.2): 生成与注入——`createInstance` 在生成文件令牌密�
 依赖：10（RAGFlow 相关 PR 的本机证据）。
 
 - [ ] 13.1 新增设置迁移，保存 RAGFlow 地址、密钥和检索参数：top_k、相似度阈值、关键词权重、rerank。新增后台接口 `GET/PUT /_platform/api/admin/ragflow-config`（审计 `ragflow-config.updated`）和 `GET/PUT /_platform/api/admin/retrieval-config`（审计 `retrieval-config.updated`）：密钥只返回「已配置」，省略时保留原值，空值拒绝；保存与审计同在一个事务内。密钥加入日志脱敏。验证：集成测试覆盖校验、权限、回滚、审计和迁移账本；`pnpm contract:check` 通过。
-- [ ] 13.2 「测试连接」接口 `POST /_platform/api/admin/ragflow-config/test` 只调用版本接口，按响应体 `code` 判断成败，不写审计。请求固定超时、不跟随重定向、限制响应体大小；结果为 `ok` 或 `not-configured`、`unavailable`、`timeout`、`upstream-error` 之一，不含上游内容和密钥。`ok` 时回应带版本字符串（不超过 64 个字符的可打印 ASCII），版本缺失、类型不对或超长时结果为 `upstream-error`，失败结果不带版本。验证：集成测试用自有的假 RAGFlow HTTP 服务覆盖成功（回应含版本）、版本缺失、版本非字符串、版本超长、HTTP 200 加非零 code、密钥被拒、超时、拒绝连接、重定向，并断言审计行数不变，回应中没有地址和密钥。
+- [ ] 13.2 「测试连接」接口 `POST /_platform/api/admin/ragflow-config/test` 调用版本接口，再用已存密钥做一次只读库列表查询验证密钥（design 决定 3），按响应体 `code` 判断成败，不写审计。请求固定超时、不跟随重定向、限制响应体大小；结果为 `ok` 或 `not-configured`、`unavailable`、`timeout`、`upstream-error` 之一，不含上游内容和密钥。`ok` 时回应带版本字符串（不超过 64 个字符的可打印 ASCII），版本缺失、类型不对或超长时结果为 `upstream-error`，失败结果不带版本。验证：集成测试用自有的假 RAGFlow HTTP 服务覆盖成功（回应含版本）、版本缺失、版本非字符串、版本超长、HTTP 200 加非零 code、密钥被拒、超时、拒绝连接、重定向，并断言审计行数不变，回应中没有地址和密钥。
 - [ ] 13.3 后台「知识库」页：连接配置、检索参数、测试连接（每个结果取值一条不同的中文说明，成功时显示 RAGFlow 版本），提示「保存即生效」。验证：`pnpm test:ui` 通过，断言成功结果显示版本，有截图。
 
 Suggested fixture level: expanded - 新增外部凭据的保管和后台写入口
@@ -648,6 +648,157 @@ Evidence (13.1 检索参数，#446):
 
 - 页面与审计中文名：13.3（#412）。
 - 代理在检索时应用参数（14.4）：映射见 design 决定 3；重排 ID 为空时不发 `rerank_id`；实例请求中带 `top_k`、`page_size`、`similarity_threshold`、`keywords_similarity_weight`、`vector_similarity_weight`、`rerank_id` 等检索参数字段时，按 design 表拒绝为 `invalid-request`。
+
+Risk packs (13.2 测试连接，#411): fixture level expanded（与 issue 建议一致：本接口第一次用已存的 RAGFlow 密钥向外发请求）。selected：
+
+- **Schema**：
+  - `POST /_platform/api/admin/ragflow-config/test` 沿用 `model-config/test` 的空 body 约定（`empty-body.ts` 的 `emptyBodyPolicy`，body 只能是 `{}`；400/413/415 固定体）。
+  - 200 回应：`{ result: 'ok', version }`，或失败时只有 `{ result }`。`result` 取 `ok`、`not-configured`、`unavailable`、`timeout`、`upstream-error`；`version` 必须匹配 `^[\x20-\x7e]{1,64}$`。schema 写 `additionalProperties: false`、`required: ['result']`。
+  - 不返回 HTTP 状态和耗时：design 决定 3 只规定结果和版本；模型测试回 `httpStatus` 是那条接口自己的约定，这里不照搬。
+- **Auth / permissions / secrets**（密钥）：
+  - 密钥只放进 `Authorization: Bearer <key>` 请求头。回应、日志、审计和错误里都不出现密钥、地址和上游回应体。
+  - 日志只有固定文字加 `result`（同 `model-connection.ts:76`）。
+  - 已存密钥让 `new Headers()` 抛错时（例如含换行），按 `not-configured` 处理，不发请求，错误文字（会引用密钥）不外传，同 `model-probe.ts:101-104` 的做法。
+- **Resource limits / large input**（对外请求）：一次测试最多两个请求，顺序固定：
+  1. `GET <base>/api/v1/system/version`，不带密钥。RAGFlow v1.0.0-rc2 的该接口在 `apiNoAuth` 组，本机实测返回 `{"code":0,"data":"v1.0.0-rc2","message":"success"}`。
+  2. 只有第 1 步 `code: 0` 且版本合法时，才发 `GET <base>/api/v1/datasets?page=1&page_size=1`，带密钥。只看 `code`，不读 `data`。实测无效密钥返回 HTTP 401 加 `{"code":401,…,"message":"Invalid access token"}`。
+  - 每个请求 `redirect: 'manual'`、固定超时 `RAGFLOW_TIMEOUT_MS = 10_000`（覆盖到回应体读完）、回应体上限 64 KiB、不重试、不缓存。两步最坏 20 s，与模型测试的 20 s 同级。
+  - 管理员断开连接或应用关闭时，中止进行中的请求。中止不是测试结果：同模型测试，抛出后路由回 500 固定体。
+- **Error handling / rollback / partial outputs**：结果映射（第一个失败即停）：
+  - 地址或密钥为空串 → `not-configured`，不发任何请求。
+  - 请求头无法构造 → `not-configured`。
+  - HTTP 401/403，或回应体 `code` 为 401 → `not-configured`。
+  - 自身超时 → `timeout`。
+  - 其他传输失败（拒绝连接、DNS、重置）→ `unavailable`。
+  - 以下都是 `upstream-error`：3xx（含重定向）；其他非 2xx（含 404）；回应体超过 64 KiB；不是 JSON；`code` 不是数字；`code` 非零（401 除外）；第 1 步版本缺失、不是字符串、为空、超过 64 个字符或含不可打印字符。
+  - 404 不算 `not-configured`：design 决定 3 结果表与 ragflow-proxy spec 已同步澄清（用户 2026-11-03 拍板），`not-configured` 只含未配置和密钥被拒。地址在保存时已由 `isRagflowBaseUrl` 校验，运行时能到达却回 404 的地址属于上游返回异常；14.x 继承同一映射（库或文档不存在同样不应显示为「知识库未配置」）。
+  - `code: 401` 是 v1.0.0-rc2 实测的认证失败码。其他认证失败码（例如旧 Python API 的 `109`）没有在 rc2 上观察到，不猜，按 `upstream-error`。
+- **Public API / 模块**：
+  - 新模块 `platform/src/ragflow-proxy/`，含 `client.ts`、`client.test.ts` 和只做转出的 `index.ts`。`client.ts` 是唯一的 RAGFlow HTTP 实现：拼 URL、带密钥、超时、`redirect: 'manual'`、体积上限，以及按 HTTP 状态和 `code` 映射失败。
+  - 超出 issue 字面的 PR Boundary（`platform/src/admin/`）。理由：第 14 组的代理需要完全相同的拼接、超时、体积上限和 `code` 映射；放在 `admin/` 里，14.1 要么复制（违反 Code Canonicality），要么从 `admin/` 搬走。直接放在设计规定的代理模块（`docs/IMPLEMENTATION_PLAN.md` §3 的 `ragflow-proxy`）只建一次。模块只导出本 issue 用到的东西；14.x 再按需扩展，`knip` 会挡住未用导出。
+  - 拼接：去掉 `baseURL` 末尾所有 `/`，再接 `/api/v1/...` 路径，用 `new URL()` 解析，实际连接目标以解析结果为准（#410 交接）。保存的地址已由 `isRagflowBaseUrl` 保证没有 `?#@\` 和空白，拼出的路径不会落进查询或片段。
+  - `admin/ragflow-connection.ts` 只做路由：空 body、读完 body 后复核权限、组合中止信号、调用 `index.ts` 导出的测试函数、记日志。它在 `routes.ts` 中紧接 `ragflowConfigRoutes` 注册，传入 `{ database, shutdown }`。
+- **Auth / permissions / secrets**（权限）：沿用 `model-connection.ts:12-18` 的 `authorityRejection`：入口由 `adminRoutes` 拦截；body 读完后再按当前会话复核，401/403 时不发请求。复核函数与模型测试是同一份逻辑：移到 `admin/empty-body.ts`（两条测试路由共用的空 body 约定和 `ADMIN_ERRORS` 已在此文件），导出名 `authorityRejection`，`model-connection.ts` 改为引用它；测试补进 `empty-body.test.ts`（匿名、过期、员工、管理员四种）。`instance-actions.ts` 与 `config-route.ts` 的复核与各自事务/准入绑定，不动。
+- **Code Canonicality**（与 `model-probe.ts` 的重叠）：
+  - 64 KiB 截断读取 `readLimited`（`model-probe.ts:47-65`）移到新的顶层文件 `platform/src/bounded-body.ts`（导出 `readLimited(response, limit)`，配 `bounded-body.test.ts`），`model-probe.ts` 与 `ragflow-proxy/client.ts` 都引用它。放顶层而不放 `admin/` 或 `ragflow-proxy/`：放 `admin/` 会形成 `ragflow-proxy → admin/index.ts → routes.ts → ragflow-connection.ts → ragflow-proxy` 循环；让模型测试引用 RAGFlow 模块则方向错误。顶层 `platform/src/unicode.ts` 被 `auth/`、`db/` 引用是先例。
+  - 截止组合（`AbortController` + `setTimeout` + `AbortSignal.any`）和 `new Headers` 抛错兜底各 3–5 行，是平台 API 的惯用写法，不抽取：抽成函数要多传回调或返回多值，比原写法更长。jscpd 阈值不变。
+- **Legacy compatibility**：
+  - 不改设置、迁移、审计事件和其他路由。
+  - 模型测试的请求、回应和日志不变。
+  - `schemas/openapi.json` 用 `pnpm contract:write` 重生成。
+- **Documentation**（由 orchestrator 改）：
+  - AGENTS.md Environment 段 `ragflow-config` 条目末句「No route reads RAGFlow yet: the connection test, the administrator page and the proxy belong to later tasks.」改为只剩页面和代理。
+  - 另起一条记录测试连接的两步请求、结果映射、限制和不写审计。
+
+not selected：
+
+- Config / project setup：超时是代码常量 `RAGFLOW_TIMEOUT_MS`，不新增环境变量；`.env.example` 不变。
+- Concurrency / shared state / ordering：管理员同时点击两次就是两次独立的只读请求，不加锁。
+- File IO / path safety、Release / packaging：没有落盘，不改镜像和依赖。
+- Documentation / migration notes 中的迁移部分：不新增设置。
+
+**不变量**：
+
+- 本接口不写 settings 和审计。测试前后两张表的快照相同。
+- 不带密钥的请求只有版本接口；带密钥的请求只有那一次库列表查询，方法都是 GET。
+- 回应只有封闭集合的 `result`，`ok` 时加一个合法版本串。上游的任何其他字节都不会进入回应和日志。
+
+**Must preserve**：
+
+- `model-config/test` 的行为、日志与 schema 不变（`authorityRejection` 抽取后的调用点行为相同）。
+- 既有七条配置路由不变。
+- 应用关闭顺序不变：`shutdown` 信号在排空在途回应之前中止。
+
+**同级面**：
+
+- 14.1–14.4 代理复用 `ragflow-proxy/client.ts`，到时扩展结果集合（`no-results`、`invalid-request`）与路径。
+- 13.3（#412）的页面按 `result` 显示中文说明和版本。
+- `platform/test/model-upstream-fixture.ts` 的 `startModelUpstream(handler)` 与 `refusedOrigin()` 是现成的自有 loopback HTTP 假服务。集成测试用自定义 handler 复用它，不另起第二个假服务。
+
+**宽度**：client、路由、两份单元测试和集成测试，加上本段 fixture 与 AGENTS.md，预计超过 400 行；本 PR 打 `diff-limit-exempt`，理由同 issue 的 atomic 声明：一条接口，一条验证路径。
+
+Evidence (13.2 测试连接，#411):
+
+**现状**：
+
+- `platform/src/admin/model-probe.ts`：`readLimited` 64 KiB、`redirect: 'manual'`、`AbortSignal.any` 截止加外部中止、请求头抛错映射为固定结果。
+- `model-connection.ts`：空 body、`authorityRejection`、`reply.raw` 的 `close` 中止、失败日志只带 `result`。
+- `routes.ts:208` 注册模型测试，`shutdown` 已传入。
+- `settings.ts` 已有 `ragflowBaseUrl`、`ragflowApiKey`（#410）。
+- `platform/src/ragflow-proxy/` 尚不存在。
+
+**改动点**：
+
+- 新文件：
+  - `platform/src/ragflow-proxy/client.ts` 与 `client.test.ts`、`index.ts`；
+  - `platform/src/admin/ragflow-connection.ts` 与 `ragflow-connection.test.ts`；
+  - `platform/test/admin-ragflow-connection.integration.test.ts`。
+- 新文件（共用）：`platform/src/bounded-body.ts` 与 `bounded-body.test.ts`。
+- 修改：
+  - `platform/src/admin/routes.ts`：注册；
+  - `empty-body.ts` 与 `empty-body.test.ts`：接收 `authorityRejection`；
+  - `model-connection.ts`：改用 `empty-body.ts` 的 `authorityRejection`；
+  - `model-probe.ts`：改用 `bounded-body.ts` 的 `readLimited`，行为不变（`model-probe.test.ts` 与模型测试集成用例原样通过）；
+  - `schemas/openapi.json`。
+- AGENTS.md 由 orchestrator 改。
+
+**测试**：
+
+单元测试 `client.test.ts`（注入 `send`，不连网）：
+
+- URL 拼接覆盖 `https://kb`、`https://kb/`、`https://kb//`、`https://kb/sub/`：实际请求 URL 分别是 `https://kb/api/v1/system/version`、同上、同上、`https://kb/sub/api/v1/system/version`。第二步路径带 `?page=1&page_size=1`。
+- 第一步不带 `Authorization`；第二步恰好带 `Bearer <key>`；两步都是 GET 且 `redirect: 'manual'`。
+- 映射表逐项一例：
+  - 地址或密钥为空时不调用 `send`；
+  - 请求头构造失败（密钥含 `\n`）时不调用 `send`；
+  - HTTP 401、403、200 加 `code: 401` → `not-configured`；
+  - 302、404、500 → `upstream-error`；
+  - 非 JSON、`code: "0"`、`code: 102`、体积 64 KiB+1 → `upstream-error`，且确认未读完；
+  - 版本缺失、为数字、为空串、65 个字符、含 `\u0007` 与非 ASCII → `upstream-error`，且不发第二步；
+  - 版本恰为 64 个可打印字符 → 接受；
+  - 第二步失败时结果里没有版本；
+  - 截止触发 → `timeout`；
+  - `send` 抛 `TypeError` → `unavailable`；
+  - 外部中止 → 抛出，不返回结果。
+
+单元测试 `ragflow-connection.test.ts` 经 `withApp`，用 `writeSettings` 存入地址与密钥：
+
+- 未配置 → `{ result: 'not-configured' }`。
+- 匿名 401、员工 403。
+- 非 `{}` body 返回 400/415。
+- 日志里没有密钥 SENTINEL。
+
+集成测试 `admin-ragflow-connection.integration.test.ts`：真实 TCP，经 `startModelUpstream` 用自定义 handler 模拟 rc2 的两条路径，密钥正确时库列表回 `{"code":0,"data":[],…}`，错误时回 HTTP 401 加 `code: 401`。
+
+- 成功：回应恰为 `{ result: 'ok', version: 'v1.0.0-rc2' }`；假服务收到恰好两个请求，顺序与 `Authorization` 有无符合上文。
+- 以下各例都断言回应形状和结果：
+  - 版本缺失、版本非字符串、版本超长 → `upstream-error`，且假服务只收到一个请求；
+  - HTTP 200 加 `code: 102` → `upstream-error`；
+  - 密钥被拒 → `not-configured`；
+  - 超时：handler 不回应。测试函数与 `probeModel` 同形，接收 `deadlineMs` 参数（路由固定传 `RAGFLOW_TIMEOUT_MS`）；集成测试经 `ragflow-proxy/index.ts` 直接调用它，传 200 ms → `timeout`。这与 `admin-model-connection.integration.test.ts` 直接调用 `probeModel` 是同一做法；
+  - 拒绝连接：用 `refusedOrigin()` → `unavailable`；
+  - 重定向：302 指向另一个自有假服务 → `upstream-error`，且该服务收到 0 个请求。
+- 每例断言：审计行数和 settings 快照不变；回应文本不含地址（假服务 origin）、密钥和 handler 写入的上游 MARKER；日志不含密钥和 MARKER。
+- 管理员在 body 被接收后被撤销或降级（`delayedConfigBody`）→ 401/403，假服务收到 0 个请求。
+- 客户端在请求挂起时断开 → 假服务的该连接被关闭（`socketClosed`）。
+- 回应体卡住：第 2 步库列表先回 200 头，写出半个 JSON（`{"code":0,`）后停住；测试函数传 200 ms 截止 → `timeout`，结果没有 `version`（参照 `admin-model-connection.integration.test.ts:279-283`）。
+- 应用关闭时测试在途（参照 `admin-model-connection.integration.test.ts:378-399`）：第 1 步 handler 收到请求后不回应，此时关闭应用 → 管理员收到 500 固定体，假服务的该连接被关闭，回应和日志不含密钥和假服务 origin。
+
+`bounded-body.test.ts`：恰好上限的体返回全文；上限 +1 返回 `null` 且流被取消；`body` 为 `null` 返回空串。
+
+**命令**：
+
+- `pnpm test`（逐文件 80%）
+- `pnpm test:integration`
+- `pnpm contract:check`
+- `pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 和 `pnpm test:deploy`
+- 本机 exact-head 的 `pnpm test:stack` 证据评论（本 issue 涉及 RAGFlow；用例不覆盖本接口，只证明入口未回归）
+
+**交接**：
+
+- 13.3（#412）：页面为五个 `result` 各写一条中文说明，`ok` 时显示 `version`。
+- 14.1：在 `ragflow-proxy/client.ts` 上扩展，不新建第二个 RAGFlow HTTP 实现；结果集合加入 `no-results`、`invalid-request`。
 
 ## 14. RAGFlow 只读代理
 
