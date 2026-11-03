@@ -24,6 +24,7 @@ import {
   type GatewayActivity,
 } from './gateway/index.ts';
 import type { InstanceService } from './orchestrator/index.ts';
+import { installInstanceAuth, ragflowProxyRoutes } from './ragflow-proxy/index.ts';
 import { webRoutes } from './web/index.ts';
 
 /**
@@ -99,6 +100,7 @@ export async function buildApp(
 
   try {
     installRequestGuard(app, config.publicUrl);
+    installInstanceAuth(app, database, config.upstreamMode);
     installSessionHeal(app, config.publicUrl, config.cookieSecure);
     const resolveSourceAddress = createSourceAddressResolver(config.trustedProxies);
     await app.register(swagger, {
@@ -140,6 +142,7 @@ export async function buildApp(
       database,
       ...(instanceService === undefined ? {} : { service: instanceService }),
     });
+    await app.register(ragflowProxyRoutes, { database, shutdown: shutdown.signal });
     await app.register(webRoutes);
     await app.register(gatewayRoutes, {
       database,

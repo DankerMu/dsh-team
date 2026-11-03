@@ -8,15 +8,16 @@ const BODY_LIMIT = 65_536;
 export const RAGFLOW_VERSION_PATTERN = '^[\\x20-\\x7e]{1,64}$';
 const VERSION = new RegExp(RAGFLOW_VERSION_PATTERN);
 
-export const RAGFLOW_TEST_RESULTS = [
+/** Closed result set of every RAGFlow answer the platform reports. */
+export const RAGFLOW_RESULTS = [
   'ok',
   'not-configured',
   'unavailable',
   'timeout',
   'upstream-error',
 ] as const;
-type RagflowFailure = Exclude<(typeof RAGFLOW_TEST_RESULTS)[number], 'ok'>;
-type RagflowTestOutcome =
+type RagflowFailure = Exclude<(typeof RAGFLOW_RESULTS)[number], 'ok'>;
+type RagflowVersionOutcome =
   { readonly result: 'ok'; readonly version: string } | { readonly result: RagflowFailure };
 interface RagflowConnection {
   readonly baseURL: string;
@@ -83,24 +84,16 @@ async function call(
 }
 
 /**
- * Reads the unauthenticated version, then lists one dataset with the saved key: the version
- * endpoint alone cannot reveal a rejected key. Every outcome is a closed-set result without
- * upstream text; only a valid version string leaves this function.
+ * Reads the unauthenticated version endpoint of a configured RAGFlow; an empty address or key is
+ * not configured and sends nothing. Only a valid version string leaves this function.
  */
-export async function testRagflowConnection(
+export async function ragflowVersion(
   settings: RagflowConnection,
   signal: AbortSignal,
   deadlineMs: number,
   send: Send = fetch,
-): Promise<RagflowTestOutcome> {
+): Promise<RagflowVersionOutcome> {
   if (settings.baseURL === '' || settings.apiKey === '') return { result: 'not-configured' };
-  let headers: Headers;
-  try {
-    headers = new Headers({ Authorization: `Bearer ${settings.apiKey}` });
-  } catch {
-    // The rejection text quotes the key; only the fixed result leaves this function.
-    return { result: 'not-configured' };
-  }
   const version = await call(
     new Request(endpoint(settings.baseURL, '/api/v1/system/version'), { redirect: 'manual' }),
     signal,
@@ -110,6 +103,29 @@ export async function testRagflowConnection(
   if (typeof version === 'string') return { result: version };
   if (typeof version.data !== 'string' || !VERSION.test(version.data))
     return { result: 'upstream-error' };
+  return { result: 'ok', version: version.data };
+}
+
+/**
+ * Reads the unauthenticated version, then lists one dataset with the saved key: the version
+ * endpoint alone cannot reveal a rejected key. Every outcome is a closed-set result without
+ * upstream text; only a valid version string leaves this function.
+ */
+export async function testRagflowConnection(
+  settings: RagflowConnection,
+  signal: AbortSignal,
+  deadlineMs: number,
+  send: Send = fetch,
+): Promise<RagflowVersionOutcome> {
+  let headers: Headers;
+  try {
+    headers = new Headers({ Authorization: `Bearer ${settings.apiKey}` });
+  } catch {
+    // The rejection text quotes the key; only the fixed result leaves this function.
+    return { result: 'not-configured' };
+  }
+  const version = await ragflowVersion(settings, signal, deadlineMs, send);
+  if (version.result !== 'ok') return version;
   const list = await call(
     new Request(endpoint(settings.baseURL, '/api/v1/datasets?page=1&page_size=1'), {
       headers,
@@ -119,5 +135,5 @@ export async function testRagflowConnection(
     deadlineMs,
     send,
   );
-  return typeof list === 'string' ? { result: list } : { result: 'ok', version: version.data };
+  return typeof list === 'string' ? { result: list } : version;
 }
