@@ -1,5 +1,6 @@
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { buildApp } from '../src/app.ts';
+import type { PlatformConfig } from '../src/config.ts';
 import type { DatabaseHandle, Settings } from '../src/db/index.ts';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import type { GatewayUpstreamResolver } from '../src/gateway/index.ts';
@@ -125,7 +126,12 @@ export async function withApp(
   cookieSecure = false,
   trustedProxies: readonly string[] = [],
   resolveUpstream?: GatewayUpstreamResolver,
-  options: { subnetPool?: string; initialSettings?: Partial<Settings>; publicUrl?: string } = {},
+  options: {
+    subnetPool?: string;
+    initialSettings?: Partial<Settings>;
+    publicUrl?: string;
+    upstreamMode?: PlatformConfig['upstreamMode'];
+  } = {},
 ): Promise<void> {
   const lines: string[] = [];
   const database = openDatabase(':memory:');
@@ -139,6 +145,7 @@ export async function withApp(
         cookieSecure,
         trustedProxies,
         subnetPool: options.subnetPool ?? CONFIG.subnetPool,
+        upstreamMode: options.upstreamMode ?? CONFIG.upstreamMode,
         ...(options.publicUrl === undefined
           ? {}
           : { publicUrl: options.publicUrl, authority: new URL(options.publicUrl).host }),

@@ -830,6 +830,175 @@ Evidence (13.2 测试连接，#411):
 Suggested fixture level: expanded - 新的对外数据通道，包括鉴权、越界和错误映射
 Minimal mergeable slice: 14.1 鉴权加版本查询路由单独合入（只读、无检索，可以独立验证）
 
+Risk packs (14.1 实例接口鉴权与版本路由，#413): fixture level expanded（与 issue 建议一致：新的对外数据通道入口与鉴权）。selected：
+
+- **Public API / CLI / script entry**：
+  - 新前缀 `/_platform/instance-api/ragflow/`，本 issue 只声明 `GET /_platform/instance-api/ragflow/version`。
+  - 回应约定由本 issue 定下，14.2–14.4 沿用，记入 design 决定 3：
+    - 鉴权失败一律 401，固定体 `{ error, message }`，复用 `ERROR_SCHEMA`；
+    - 未声明的路径或方法返回 404（Fastify 默认，或网关保留路径的平台 404），405 不另造；
+    - 鉴权通过后，结果一律 HTTP 200，body 是封闭集合 `{ result, … }`，例如 `{ result: 'ok', version }` 或 `{ result: 'timeout' }`。
+  - 理由：插件和工具只看 `result`，模型测试连接（`model-config/test`）与 #411 已是这一形状。415 与 404 是 HTTP 层的拒绝，不是结果取值。
+- **Auth / permissions / secrets**：
+  - 鉴权在根级 `onRequest` 钩子里先于路由执行，覆盖整个前缀（同 `installRequestGuard` 的安装方式）。因此前缀下的普通 HTTP 请求（不含 WebSocket 升级，见下），任何方法、任何路径，没有有效令牌都是 401；只有鉴权通过后才会出现 404。这满足「无令牌无 Origin 的 POST 被拒为 401」：本 issue 还没有 POST 路由，但该请求也必须得到 401，而不是 404。
+  - 前缀判定用两个条件之一成立即鉴权：
+    - ① 路由视角：`request.routeOptions.url` 以前缀开头（同 `installRequestGuard` 用 `routeOptions.url`）。find-my-way 在路由前会解码非保留字符的 `%XX`，所以 `/_platform/instance-api/ragflo%77/version`、`/_platfor%6d/instance-api/ragflow/version` 都会命中已声明的版本路由。只看原始路径就会绕过鉴权（fixture 评审指出的 P0）。
+    - ② 原始路径视角：去掉查询串后的原始路径以前缀开头。它覆盖落到网关 `'/*'` 的未声明路径，使其在鉴权前得到 401。
+  - 已声明路由一律设路由级 `exposeHeadRoute: false`（Fastify 5 的路由选项是单数；复数 `exposeHeadRoutes` 只是建应用时的选项，实现时实测确认）：Fastify 5 默认会为 GET 隐式生成 HEAD，这会在鉴权后向 RAGFlow 发请求，违反「只有四个接口」。HEAD 因此落到网关 `'/*'`，在保留路径下得到平台 404。
+  - 令牌：`Authorization` 必须恰为 `Bearer <64 个小写十六进制字符>`（`start.ts:365` 的生成格式），否则直接 401，不查库。
+  - 查库：对令牌求 SHA-256（hex），`SELECT instances.user_id, instances.upstream_host FROM instances JOIN users ON users.id = instances.user_id WHERE instances.instance_token_hash = ? AND instances.status = 'running' AND users.status = 'active'`。
+    - 只读查询，参照 `admin/config-route.ts:161`、`admin/instance-actions.ts:227` 直接读 `instances` 的先例，不改编排器。
+    - 停用账号在停用到实例退休之间的窗口内也被拒。
+  - 来源核对：取 socket 对端地址（`request.socket.remoteAddress`），**不**经 `X-Forwarded-For` 和可信代理解析。实例总是直连自己网桥上的 +3 地址，转发头不可能合法地出现在这里。
+    - 地址先按 `auth/source-address.ts` 的 `parseAddress` 规范化（`::ffff:a.b.c.d` → `a.b.c.d`）。该函数改为经 `auth/index.ts` 导出，不复制。
+    - 规范化后必须等于该行的 `upstream_host`（网络方式下即员工容器端点 IPv4，按 `instanceAddressLayout` 为 +2）。比较 `upstream_host` 而不从子网推算 +2，是有意为之：阶段 1 遗留、端点不在 +2 的存活实例（AGENTS.md「Stage-1 instances created before the layout」）也能用它真实的地址通过，而推算会把它们误拒。
+  - published-loopback 方式下整个前缀一律 401：该方式下行的 `upstream_host` 是 `127.0.0.1`，不是实例地址；design 决定 2 已说明该方式下代理不可用。实现上路由插件接收 `config.upstreamMode`。
+  - 平台会话 cookie 不参与鉴权：只带 cookie → 401；带 cookie 加有效令牌 → 按令牌处理，cookie 忽略。
+  - 所有拒绝原因共用一个 401 回应，日志只有固定文字，不含令牌、哈希、地址或用户。令牌只在 `Authorization` 头里，已在既有脱敏路径中（`app.ts` 的 authorization 头脱敏）。
+  - 鉴权通过后把用户 ID 挂在请求上（`request.instanceUserId`，Fastify decorateRequest），供 14.2–14.4 使用；本 issue 的版本路由不使用它。
+- **Resource limits / large input**：版本路由复用 #411 的 `client.ts`。
+  - 从 `testRagflowConnection` 中抽出 `ragflowVersion(settings, signal, deadlineMs, send?)`，测试连接改为调用它再做库列表查询，不复制。
+  - 每次请求读设置；地址或密钥为空 → `not-configured`，不发请求。密钥为空也算未配置：spec「RAGFlow 未配置时 … 不发出外部请求」。
+  - 固定超时 `RAGFLOW_TIMEOUT_MS`、`redirect: 'manual'`、64 KiB、不重试。
+  - 客户端断开或应用关闭时中止请求；应用关闭回 500 固定体，同 #411。
+  - 结果集合常量 `RAGFLOW_TEST_RESULTS` 改名为 `RAGFLOW_RESULTS`，就地重命名，供两条路由共用；14.x 再加入 `no-results`、`invalid-request`。
+- **Error handling / rollback / partial outputs**：
+  - 鉴权查库抛错（存储故障）→ 500 固定体，日志只有固定文字。不能回成 401，否则会把故障伪装成令牌错误。
+  - 钩子必须在内部 `try/catch`，自己 `reply.code(500).send(固定体)` 后返回，同 `installRequestGuard` 自行回应的写法。不能让异常落到 Fastify 默认错误处理器：那会在回应体里带出 `error.message`（例如 `no such table`）。
+  - 版本路由的映射与 #411 相同，由 `client.test.ts` 覆盖；路由测试只验证接线。
+- **Code Canonicality / 模块方向**：`ragflow-proxy` 不能引用 `admin`（#411 已记录的循环：`ragflow-proxy → admin/index.ts → routes.ts → ragflow-connection.ts → ragflow-proxy`）。
+  - 中止接线（回应 `close` 中止控制器、与 `shutdown` 组合的 `AbortSignal.any`、`finally` 解除监听）从 `admin/empty-body.ts` 的 `runConnectionTest` 中拆出，放到新的顶层文件 `platform/src/request-abort.ts`（配 `request-abort.test.ts`），导出 `withRequestAbort(reply, shutdown, run)`。
+    - `runConnectionTest` 保留管理员权限复核、非 ok 告警和固定 500，改为调用它。
+    - 版本路由同样调用它。
+    - 顶层放置的先例是 #411 的 `bounded-body.ts`。
+  - 固定错误体与 `ERROR_SCHEMA`：现状已是按模块各自定义（`gateway/routes.ts:29`、`gateway/instance-routes.ts:6`、`admin/config-route.ts`）。`ragflow-proxy` 按同样做法在 `routes.ts` 定义自己的 401/500 固定体和 `ERROR_SCHEMA`，不跨模块引用。三处既有副本的收敛不在本 issue 范围，作为后续记录。
+- **Legacy compatibility**：
+  - `installRequestGuard` 只管 `/_platform/api/`，新前缀天然不在其中，不改它。
+  - 网关保留路径逻辑（`gateway/routes.ts:43-46`）已覆盖 `/_platform/` 后代，不改网关代码，只加回归测试。
+  - `admin/ragflow-connection.ts` 的请求、回应与日志不变。
+  - `schemas/openapi.json` 用 `pnpm contract:write` 重生成。
+- **Documentation / migration notes**（由 orchestrator 改）：
+  - AGENTS.md Environment 段新增一条：前缀、Origin/JSON 守卫例外及理由、Bearer 加来源地址核对、published-loopback 一律 401、回应约定。
+  - 测试连接条目里的 `ragflow-proxy` 描述同步。
+  - design 决定 3 记录回应约定。
+
+- **File IO / path safety**（URL 路径规范化）：上面的双条件判定与编码绕过用例。网关 `platformPath` 对编码路径的既有判定不在本 issue 范围，作为后续记录。
+
+not selected：
+
+- Config / project setup：不新增环境变量；`upstreamMode` 是已有配置。
+- Schema / migration：不改表；`instance_token_hash` 已由迁移 4 建立。
+- Concurrency / shared state / ordering：只读查询，单语句。
+- Release / packaging：无。
+
+**不变量**：
+
+- 前缀下的任何请求（含编码变体与升级请求），在鉴权通过前都不会读 RAGFlow 设置，也不会发出外部请求。
+- 鉴权通过当且仅当同时满足：令牌哈希匹配一条 `running` 行；所属账号 `active`；socket 对端规范化后等于该行的 `upstream_host`；运行在 `network` 方式。
+- 401 回应不随原因变化（状态、头、体逐字节相同）。
+- 令牌明文不落库、不进日志、不进回应。
+
+**Must preserve**：
+
+- 网关对 `/_platform/` 后代的保留与平台 404 不变；匿名 HTML GET 到其他路径仍重定向到登录页。唯一有意的例外：本前缀下未声明的路径，无令牌时先得到 401，鉴权通过后才是平台 404。AGENTS.md 的「unknown reserved paths stay platform404」同步写明这一例外。
+- WebSocket 升级不经 Fastify 钩子，仍由网关 `admission` 按保留路径以 404 拒绝。
+- `/_platform/api/` 的 Origin/JSON 守卫不变。
+- #411 测试连接的行为、日志与契约不变。
+- 编排器对 `instance_token_hash` 的写入与清除不变（本 issue 不改编排器，关键路径不涉及）。
+
+**同级面**：
+
+- 14.2–14.4 在同一前缀与鉴权钩子下添加路由；`request.instanceUserId` 是它们的身份来源。
+- 15.1（#418/#447）的插件只拿平台地址和 `DSH_TEAM_INSTANCE_TOKEN`。
+- `gateway/routes.ts` 的升级处理：前缀下的 WebSocket 升级不转发给 DSH，保持现状。
+- `auth/source-address.ts` 的 `parseAddress` 由私有变为经 `auth/index.ts` 导出。
+
+**宽度**：鉴权钩子、版本路由、client 抽取、单元与集成测试，加上本段 fixture 与 AGENTS.md，预计超过 400 行；本 PR 打 `diff-limit-exempt`，理由同 issue 的 atomic 声明。
+
+Evidence (14.1 实例接口鉴权与版本路由，#413):
+
+**现状**：
+
+- `orchestrator/start.ts:365-366`：令牌为 32 字节随机数的 hex，库里存 SHA-256 hex；`start.ts:460-466` 写入，`stop.ts:215`、`readiness.ts:290`、`start.ts:214`、`creation-attempt.ts:349` 清除。
+- `instances.upstream_host` 在网络方式下是员工容器端点 IPv4。
+- `auth/request-guard.ts:42` 的守卫只作用于 `/_platform/api/`。
+- `gateway/routes.ts:43-46` 把 `/_platform/` 后代视为保留路径；`'/*'` 通配路由回平台 404，不转发、不重定向。
+- `platform/src/ragflow-proxy/client.ts`（#411）已有 `call`、`endpoint`、映射和 `testRagflowConnection`。
+
+**改动点**：
+
+- 新文件：
+  - `platform/src/ragflow-proxy/instance-auth.ts` 与 `instance-auth.test.ts`：令牌解析、查库、来源核对、根级钩子安装函数；
+  - `platform/src/ragflow-proxy/routes.ts` 与 `routes.test.ts`：版本路由；
+  - `platform/test/ragflow-proxy-auth.integration.test.ts`。
+- 修改：
+  - `ragflow-proxy/client.ts` 与测试：抽出 `ragflowVersion`，`RAGFLOW_TEST_RESULTS` 改名为 `RAGFLOW_RESULTS`；
+  - `ragflow-proxy/index.ts`；
+  - `admin/ragflow-connection.ts`：跟随改名；
+  - `admin/empty-body.ts` 与测试：`runConnectionTest` 改用 `withRequestAbort`，行为与日志不变；
+  - 新文件 `platform/src/request-abort.ts` 与 `request-abort.test.ts`：客户端断开中止、应用关闭中止、正常完成后监听已解除；
+  - `auth/source-address.ts` 与 `auth/index.ts`：导出 `parseAddress`；
+  - `app.ts`：在路由插件之前安装鉴权钩子并注册路由，传入 `database`、`upstreamMode` 和 `shutdown`；
+  - `schemas/openapi.json`。
+- AGENTS.md、design.md 由 orchestrator 改。
+
+**测试**：
+
+单元测试 `instance-auth.test.ts`：
+
+- `Authorization` 解析：
+  - 接受恰好 64 个小写 hex；
+  - 拒绝缺失、`Basic …`、`bearer`（小写）、63/65 个字符、大写 hex、首尾空白、多个空格。
+  - 拒绝时不查库（用会抛错的数据库替身证明）。
+- 地址规范化：`::ffff:172.30.0.2` 等于 `172.30.0.2`。
+- `remoteAddress` 为 `undefined` 或无法解析时 → 401，不查库。
+
+集成测试 `ragflow-proxy-auth.integration.test.ts`：真实 TCP 监听 `127.0.0.1`，配置 `upstreamMode: 'network'`，直接写入用户与实例行。
+
+- 有效：`running` 行、账号 active、`upstream_host = '127.0.0.1'`、令牌哈希匹配。
+  - 未配置 RAGFlow → 200 `{ result: 'not-configured' }`，假 RAGFlow 收到 0 个请求。
+  - 配置指向自有假 RAGFlow（复用 `startModelUpstream`）→ 200 `{ result: 'ok', version: 'v1.0.0-rc2' }`；假服务恰好收到 1 个不带 `Authorization` 的 GET。
+- 以下每一项都得到逐字节相同的 401（状态、`content-type`、体），且假 RAGFlow 收到 0 个请求：
+  - 无令牌；
+  - 格式错误的令牌；
+  - 只带有效 `platform_session`；
+  - 实例停止后的旧令牌（行 `status = 'stopped'`、哈希为 NULL）；
+  - 重启轮换后的上一次令牌（行哈希已换）；
+  - `status = 'starting'` 的行的令牌；
+  - 账号 `disabled` 而行仍为 `running`；
+  - 他人地址（行 `upstream_host = '127.0.0.2'`）；
+  - 带 `X-Forwarded-For: 127.0.0.2`，行地址为 `127.0.0.2`，配置 `trustedProxies` 含 `127.0.0.1`：审计用的来源解析器此时会采信该头，但代理必须仍为 401（转发头不被采信）；
+  - `upstreamMode: 'published-loopback'` 下的完全有效请求；
+  - 无令牌无 Origin 的 `POST /_platform/instance-api/ragflow/retrieval`（路由尚不存在，仍为 401）；
+- 鉴权通过后，未声明路径 `GET …/ragflow/datasets-x` 与未声明方法 `DELETE …/ragflow/version`、`POST …/ragflow/version`、`HEAD …/ragflow/version` → 404，假 RAGFlow 收到 0 个请求。
+- 编码变体 `/_platform/instance-api/ragflo%77/version` 与 `/_platfor%6d/instance-api/ragflow/version`：
+  - 无令牌 → 401，假 RAGFlow 收到 0 个请求；
+  - 带有效令牌 → 200 `{ result }`（与未编码路径相同）。
+- 网关：
+  - 无令牌、`Accept: text/html` 的 `GET …/ragflow/version` → 401，不是 302 到登录页；
+  - 注入的 `resolveUpstream` 在整个文件中从未被调用（计数为 0）；
+  - 前缀下的 WebSocket 升级请求被网关以 404 拒绝，`resolveUpstream` 计数仍为 0，假 RAGFlow 收到 0 个请求。
+- 存储故障：用 `DROP TABLE instances` 让读取失败（先例见 `platform/test/container-start.integration.test.ts:459` 的 `DROP TABLE settings`；若外键约束阻止删除，测试写明采用的绕行方式），→ 500 固定体，不是 401。回应和日志不含 `SQLITE`、表名或触发器名（同 #446 的断言）。
+- 每例断言：回应和日志不含令牌明文、令牌哈希和假 RAGFlow origin。
+- 应用关闭时版本请求在途 → 500 固定体，假服务连接被关闭。
+
+`client.test.ts`：`ragflowVersion` 的未配置（地址空、密钥空）不发请求；成功；一个失败映射；测试连接用例保持通过。
+
+**命令**：
+
+- `pnpm test`（逐文件 80%）
+- `pnpm test:integration`
+- `pnpm contract:check`
+- `pnpm lint:agents`
+- `pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 和 `pnpm test:deploy`
+- 本机 exact-head 的 `pnpm test:stack` 证据评论（用例不覆盖本接口，只证明入口未回归；真实实例经网桥访问代理由 14.5 和 15.x 验证）
+
+**交接**：
+
+- 14.2–14.4：在 `ragflow-proxy/routes.ts` 添加路由，从 `request.instanceUserId` 取身份，沿用 200 加 `result` 的回应约定；检索 POST 自行要求 `application/json`（415）。
+- 14.5 或 15.x：在真实 Docker 网桥上证明实例从 +2 地址带令牌可达、其他实例地址被拒。本 issue 的集成测试只能在 loopback 上模拟地址比较。
+
 ## 15. 「知识库」插件
 
 依赖：4、10（含 10.2 种子和 10.4 本机浏览器）、11、14。关键路径 `images/dsh-user/`（15.1 镜像交付）。

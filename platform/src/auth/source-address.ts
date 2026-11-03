@@ -7,7 +7,8 @@ export type SourceAddressResolver = (request: {
   readonly headers: Readonly<Record<string, string | string[] | undefined>>;
 }) => string;
 
-function parseAddress(raw: string): string | undefined {
+/** Canonical text of an IP literal (IPv4-mapped IPv6 as IPv4), or undefined for anything else. */
+export function parseAddress(raw: string): string | undefined {
   const kind = isIP(raw);
   if (kind === 0) {
     return undefined;

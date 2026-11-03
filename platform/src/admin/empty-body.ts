@@ -6,6 +6,7 @@ import type {
 } from 'fastify';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { withRequestAbort } from '../request-abort.ts';
 
 interface AdminError {
   readonly statusCode: number;
@@ -59,23 +60,17 @@ export async function runConnectionTest<Outcome extends { readonly result: strin
   reply: FastifyReply,
   test: (signal: AbortSignal) => Promise<Outcome>,
 ): Promise<Outcome | FastifyReply> {
-  const owner = new AbortController();
-  // The response, not the request stream, closes when the client disconnects before a reply.
-  const disconnected = () => {
-    owner.abort();
-  };
-  reply.raw.once('close', disconnected);
   try {
-    const rejection = authorityRejection(route.database, request);
-    if (rejection !== null) return await reply.code(rejection.statusCode).send(rejection);
-    const outcome = await test(AbortSignal.any([owner.signal, route.shutdown]));
-    // Fixed text and the closed-set code only: errors, addresses and upstream bodies stay out.
-    if (outcome.result !== 'ok') route.log.warn({ result: outcome.result }, route.failed);
-    return outcome;
+    return await withRequestAbort(reply, route.shutdown, async (signal) => {
+      const rejection = authorityRejection(route.database, request);
+      if (rejection !== null) return await reply.code(rejection.statusCode).send(rejection);
+      const outcome = await test(signal);
+      // Fixed text and the closed-set code only: errors, addresses and upstream bodies stay out.
+      if (outcome.result !== 'ok') route.log.warn({ result: outcome.result }, route.failed);
+      return outcome;
+    });
   } catch {
     return await reply.code(500).send(route.failure());
-  } finally {
-    reply.raw.off('close', disconnected);
   }
 }
 

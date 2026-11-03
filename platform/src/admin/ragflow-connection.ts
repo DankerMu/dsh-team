@@ -2,9 +2,8 @@ import type { FastifyPluginCallback } from 'fastify';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import {
-  RAGFLOW_TEST_RESULTS,
   RAGFLOW_TIMEOUT_MS,
-  RAGFLOW_VERSION_PATTERN,
+  RAGFLOW_VERSION_SCHEMA,
   testRagflowConnection,
 } from '../ragflow-proxy/index.ts';
 import { ERROR_SCHEMA } from './config-route.ts';
@@ -36,15 +35,7 @@ export const ragflowConnectionRoutes: FastifyPluginCallback<{
         summary: 'Read the RAGFlow version, then list one dataset with the saved key',
         body: EMPTY_BODY_SCHEMA,
         response: {
-          200: {
-            type: 'object',
-            additionalProperties: false,
-            required: ['result'],
-            properties: {
-              result: { type: 'string', enum: RAGFLOW_TEST_RESULTS },
-              version: { type: 'string', pattern: RAGFLOW_VERSION_PATTERN, maxLength: 64 },
-            },
-          },
+          200: RAGFLOW_VERSION_SCHEMA,
           400: ERROR_SCHEMA,
           401: ERROR_SCHEMA,
           403: ERROR_SCHEMA,

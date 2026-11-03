@@ -1,5 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { RAGFLOW_TEST_RESULTS, RAGFLOW_TIMEOUT_MS, testRagflowConnection } from './client.ts';
+import {
+  RAGFLOW_RESULTS,
+  RAGFLOW_TIMEOUT_MS,
+  ragflowVersion,
+  testRagflowConnection,
+} from './client.ts';
 
 const KEY = 'owned-nonsecret-ragflow-key';
 const BASE = 'https://kb.invalid';
@@ -45,7 +50,7 @@ afterEach(() => {
 
 it('uses a ten-second per-request deadline and a closed result set', () => {
   expect(RAGFLOW_TIMEOUT_MS).toBe(10_000);
-  expect(RAGFLOW_TEST_RESULTS).toEqual([
+  expect(RAGFLOW_RESULTS).toEqual([
     'ok',
     'not-configured',
     'unavailable',
@@ -266,4 +271,46 @@ it('does not send when already cancelled', async () => {
     testRagflowConnection({ baseURL: BASE, apiKey: KEY }, owner.signal, 1_000, send),
   ).rejects.toThrow();
   expect(send).not.toHaveBeenCalled();
+});
+
+function version(send: Send, settings = { baseURL: BASE, apiKey: KEY }) {
+  return ragflowVersion(settings, new AbortController().signal, 1_000, send);
+}
+
+it.each([
+  ['an empty address', { baseURL: '', apiKey: KEY }],
+  ['an empty key', { baseURL: BASE, apiKey: '' }],
+])('reads no version for %s and reports not-configured', async (_label, settings) => {
+  const send = steps(() => new Response(VERSION_BODY));
+
+  expect(await version(send, settings)).toEqual({ result: 'not-configured' });
+  expect(send).not.toHaveBeenCalled();
+});
+
+it('reads only the version, without the key', async () => {
+  const send = steps(() => new Response(VERSION_BODY));
+
+  const outcome = await version(send);
+
+  expect(outcome).toEqual({ result: 'ok', version: 'v1.0.0-rc2' });
+  expect(send).toHaveBeenCalledTimes(1);
+  const request = send.mock.calls[0]?.[0];
+  expect([request?.method, request?.url, request?.redirect]).toEqual([
+    'GET',
+    'https://kb.invalid/api/v1/system/version',
+    'manual',
+  ]);
+  expect(request?.headers.has('authorization')).toBe(false);
+});
+
+it.each([
+  [
+    'an invalid version string',
+    () => new Response(JSON.stringify({ code: 0, data: 'v1\u0007' })),
+    'upstream-error',
+  ],
+  ['a rejected key code', () => new Response('{"code":401}'), 'not-configured'],
+  ['a refused connection', () => Promise.reject(new TypeError('fetch failed')), 'unavailable'],
+] as const)('maps %s to its closed result', async (_label, respond, result) => {
+  expect(await version(steps(respond))).toEqual({ result });
 });
