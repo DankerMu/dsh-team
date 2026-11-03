@@ -7175,13 +7175,12 @@
           },
           {
             "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 256
+              "type": "string"
             },
             "in": "query",
             "name": "keywords",
-            "required": false
+            "required": false,
+            "description": "Must not be blank; at most 256 UTF-8 bytes."
           },
           {
             "schema": {

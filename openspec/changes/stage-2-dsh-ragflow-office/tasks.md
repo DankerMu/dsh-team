@@ -1246,7 +1246,8 @@ Evidence (14.3 库内文件路由，#415):
 - 查询参数（同样在读设置之前被拒）：
   - 缺 `page`、缺 `page_size` → `invalid-request`；
   - `page=0`、`page=01`、`page=1000000`、`page_size=0`、`page_size=101`、`page_size=1.5` → `invalid-request`；
-  - `keywords=`（空）、`keywords=%20%20`（纯空白）、`keywords` 超过 256 字节、`keywords=%zz`、`keywords=%ff`、`keywords=%C3`、重复的 `page`、未知键 `x=1`、没有 `=` 的项 `page`、 - 边界接受：`page=1`、`page=999999`、`page_size=1`、`page_size=100`、`keywords` 恰为 256 字节。
+  - `keywords=`（空）、`keywords=%20%20`（纯空白）、`keywords` 超过 256 字节、`keywords=%zz`、`keywords=%ff`、`keywords=%C3`、重复的 `page`、未知键 `x=1`、没有 `=` 的项 `page`、只含 U+0085 的 `keywords=%C2%85`（rc2 的 Go `TrimSpace` 会把它当空白）→ `invalid-request`；
+  - 边界接受：`page=1`、`page=999999`、`page_size=1`、`page_size=100`、`keywords` 恰为 256 字节。
 - 未配置 → `not-configured`；HEAD → 404；存储故障 → 500。
 
 集成测试（真实 TCP、自有假 RAGFlow、有效实例令牌）：

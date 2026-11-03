@@ -130,6 +130,7 @@ it.each([
   ['empty keywords', '?page=1&page_size=10&keywords='],
   ['whitespace-only keywords', '?page=1&page_size=10&keywords=%20%20'],
   ['plus-encoded whitespace-only keywords', '?page=1&page_size=10&keywords=++'],
+  ['NEL-only keywords', '?page=1&page_size=10&keywords=%C2%85'],
   ['keywords over 256 UTF-8 bytes', `?page=1&page_size=10&keywords=${OVERLONG_KEYWORDS}`],
   ['an invalid escape', '?page=1&page_size=10&keywords=%zz'],
   ['an escape that is not UTF-8', '?page=1&page_size=10&keywords=%ff'],

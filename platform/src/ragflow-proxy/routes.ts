@@ -119,8 +119,10 @@ function documentsQuery(url: string): RagflowDocumentsQuery | null {
   if (page === undefined || !PAGE.test(page)) return null;
   if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
   if (keywords === undefined) return { page: Number(page), pageSize: Number(pageSize) };
-  // rc2 trims the filter, so a blank one would silently list every document.
-  if (keywords.trim() === '' || Buffer.byteLength(keywords) > MAX_KEYWORDS_BYTES) return null;
+  // rc2 trims the filter with Go's TrimSpace, which also strips U+0085 (JS `trim` keeps it),
+  // so a blank one would silently list every document.
+  if (/^[\s\u0085]*$/u.test(keywords) || Buffer.byteLength(keywords) > MAX_KEYWORDS_BYTES)
+    return null;
   return { page: Number(page), pageSize: Number(pageSize), keywords };
 }
 
@@ -223,7 +225,10 @@ export const ragflowProxyRoutes: FastifyPluginCallback<{
           properties: {
             page: { type: 'string', pattern: PAGE_PATTERN },
             page_size: { type: 'string', pattern: PAGE_SIZE_PATTERN },
-            keywords: { type: 'string', minLength: 1, maxLength: MAX_KEYWORDS_BYTES },
+            keywords: {
+              type: 'string',
+              description: `Must not be blank; at most ${String(MAX_KEYWORDS_BYTES)} UTF-8 bytes.`,
+            },
           },
         },
         response: {
