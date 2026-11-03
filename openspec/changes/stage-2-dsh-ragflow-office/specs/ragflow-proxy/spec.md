@@ -106,7 +106,7 @@
 平台 MUST 依据 RAGFlow 响应体的 `code` 判断成败，不能只看 HTTP 状态。结果取值是唯一的封闭集合，代理、插件和测试都只用这一套。检索成功但没有片段 MUST 表示为 `no-results`，不算错误。所有失败 MUST 映射为下面之一：
 
 - `invalid-request`：请求不合法（空范围、自带检索参数、字段错误）；
-- `not-configured`：RAGFlow 未配置，或地址、密钥被拒（配置错误）；
+- `not-configured`：RAGFlow 未配置，或密钥被拒（配置错误）；地址写错导致的 404 等非 2xx 属于 `upstream-error`；
 - `timeout`：超时；
 - `unavailable`：连接失败（服务中断）；
 - `upstream-error`：其他非零 `code`、越界片段或响应不可解析（服务异常）。

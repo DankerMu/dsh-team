@@ -1,4 +1,11 @@
-import type { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+import type {
+  FastifyBaseLogger,
+  FastifyReply,
+  FastifyRequest,
+  HookHandlerDoneFunction,
+} from 'fastify';
+import { getSessionUser, readSessionCookie } from '../auth/index.ts';
+import type { DatabaseHandle } from '../db/index.ts';
 
 interface AdminError {
   readonly statusCode: number;
@@ -18,6 +25,59 @@ export const EMPTY_BODY_SCHEMA = {
   additionalProperties: false,
   properties: {},
 } as const;
+
+/** Current authority after the body is read; entry admission alone is not enough. */
+export function authorityRejection(
+  database: DatabaseHandle,
+  request: Pick<FastifyRequest, 'headers'>,
+): AdminError | null {
+  const token = readSessionCookie(request.headers.cookie);
+  const actor = token === null ? null : getSessionUser(database, token, Date.now(), false);
+  if (actor === null) return ADMIN_ERRORS[401];
+  return actor.role === 'admin' ? null : ADMIN_ERRORS[403];
+}
+
+/** What one administrator connection-test route supplies to the shared runner. */
+interface ConnectionTestRoute {
+  readonly database: DatabaseHandle;
+  /** Aborted by the application before it drains in-flight responses. */
+  readonly shutdown: AbortSignal;
+  readonly log: FastifyBaseLogger;
+  /** Fixed warning text for a non-ok outcome. */
+  readonly failed: string;
+  /** Logs the route's fixed failure text and returns its fixed 500 body. */
+  readonly failure: () => AdminError;
+}
+
+/**
+ * Runs one connection test after the body is read: current authority is rechecked first, and
+ * the test's signal aborts when the client disconnects or the application shuts down.
+ */
+export async function runConnectionTest<Outcome extends { readonly result: string }>(
+  route: ConnectionTestRoute,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  test: (signal: AbortSignal) => Promise<Outcome>,
+): Promise<Outcome | FastifyReply> {
+  const owner = new AbortController();
+  // The response, not the request stream, closes when the client disconnects before a reply.
+  const disconnected = () => {
+    owner.abort();
+  };
+  reply.raw.once('close', disconnected);
+  try {
+    const rejection = authorityRejection(route.database, request);
+    if (rejection !== null) return await reply.code(rejection.statusCode).send(rejection);
+    const outcome = await test(AbortSignal.any([owner.signal, route.shutdown]));
+    // Fixed text and the closed-set code only: errors, addresses and upstream bodies stay out.
+    if (outcome.result !== 'ok') route.log.warn({ result: outcome.result }, route.failed);
+    return outcome;
+  } catch {
+    return await reply.code(500).send(route.failure());
+  } finally {
+    reply.raw.off('close', disconnected);
+  }
+}
 
 /** Exact `{}` body admission and its 400/413/415 transport mapping for one route family. */
 export function emptyBodyPolicy(message: string) {

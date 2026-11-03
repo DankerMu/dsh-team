@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { readLimited } from '../bounded-body.ts';
 import { hasCompleteModelSnapshot } from '../managed-config/index.ts';
 import type { ModelSnapshot } from '../managed-config/index.ts';
 
@@ -45,26 +46,6 @@ function completionUrl(address: string): URL | null {
   return url.protocol === 'http:' || url.protocol === 'https:' ? url : null;
 }
 
-/** Returns the body text, or null once it exceeds the limit (the rest is cancelled, not read). */
-async function readLimited(response: Response): Promise<string | null> {
-  if (response.body === null) return '';
-  // Fetch bodies are byte streams; Node's global typing leaves their chunk type as any.
-  const reader = response.body.getReader() as ReadableStreamDefaultReader<Uint8Array>;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) return Buffer.concat(chunks).toString('utf8');
-    size += value.byteLength;
-    if (size > BODY_LIMIT) {
-      // Cancellation failure only concerns an already-rejected response.
-      reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-}
-
 function hasChoices(text: string): boolean {
   let value: unknown;
   try {
@@ -84,7 +65,7 @@ function hasChoices(text: string): boolean {
 async function classify(response: Response): Promise<ModelProbeResult> {
   const status = response.status;
   if (status >= 200 && status < 300) {
-    const text = await readLimited(response);
+    const text = await readLimited(response, BODY_LIMIT);
     return text !== null && hasChoices(text) ? 'ok' : 'bad-response';
   }
   // Only a 2xx body is inspected; others are released without reading.
