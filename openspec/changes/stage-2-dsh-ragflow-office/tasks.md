@@ -671,7 +671,7 @@ Risk packs (13.2 测试连接，#411): fixture level expanded（与 issue 建议
   - 自身超时 → `timeout`。
   - 其他传输失败（拒绝连接、DNS、重置）→ `unavailable`。
   - 以下都是 `upstream-error`：3xx（含重定向）；其他非 2xx（含 404）；回应体超过 64 KiB；不是 JSON；`code` 不是数字；`code` 非零（401 除外）；第 1 步版本缺失、不是字符串、为空、超过 64 个字符或含不可打印字符。
-  - 404 不算 `not-configured`：design 决定 3 结果表与 ragflow-proxy spec 已同步澄清，`not-configured` 只含未配置和密钥被拒。地址在保存时已由 `isRagflowBaseUrl` 校验，运行时能到达却回 404 的地址属于上游返回异常；14.x 继承同一映射（库或文档不存在同样不应显示为「知识库未配置」）。
+  - 404 不算 `not-configured`：design 决定 3 结果表与 ragflow-proxy spec 已同步澄清（用户 2026-11-03 拍板），`not-configured` 只含未配置和密钥被拒。地址在保存时已由 `isRagflowBaseUrl` 校验，运行时能到达却回 404 的地址属于上游返回异常；14.x 继承同一映射（库或文档不存在同样不应显示为「知识库未配置」）。
   - `code: 401` 是 v1.0.0-rc2 实测的认证失败码。其他认证失败码（例如旧 Python API 的 `109`）没有在 rc2 上观察到，不猜，按 `upstream-error`。
 - **Public API / 模块**：
   - 新模块 `platform/src/ragflow-proxy/`，含 `client.ts`、`client.test.ts` 和只做转出的 `index.ts`。`client.ts` 是唯一的 RAGFlow HTTP 实现：拼 URL、带密钥、超时、`redirect: 'manual'`、体积上限，以及按 HTTP 状态和 `code` 映射失败。
