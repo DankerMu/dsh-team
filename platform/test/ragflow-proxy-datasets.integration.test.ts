@@ -1,20 +1,15 @@
 import { randomBytes } from 'node:crypto';
-import { once } from 'node:events';
-import { connect } from 'node:net';
 import { afterEach, beforeEach, expect, it } from 'vitest';
-import { writeSettings } from '../src/db/index.ts';
 import { listRagflowDatasets } from '../src/ragflow-proxy/index.ts';
-import { withApp } from './auth-fixture.ts';
-import { observeHttp, sendHttp } from './gateway-http-fixture.ts';
-import { instanceToken, instanceTokenHash, seedInstance } from './instance-token-fixture.ts';
 import { refusedOrigin, startModelUpstream } from './model-upstream-fixture.ts';
 import type { ModelUpstream } from './model-upstream-fixture.ts';
+import { UNAUTHORIZED, rawBody, withProxy as withRagflowProxy } from './ragflow-proxy-fixture.ts';
+import type { Proxy } from './ragflow-proxy-fixture.ts';
 
 const DATASETS = '/_platform/instance-api/ragflow/datasets';
 const LIST_PATH = '/api/v1/datasets?page=1&page_size=1001&orderby=create_time&desc=false';
 const RAGFLOW_KEY = `owned-ragflow-key-${randomBytes(8).toString('hex')}`;
 const MARKER = `owned-upstream-marker-${randomBytes(8).toString('hex')}`;
-const UNAUTHORIZED = { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' };
 const IDS = [randomBytes(16).toString('hex'), randomBytes(16).toString('hex')] as const;
 type Handler = Parameters<ModelUpstream['setHandler']>[0];
 
@@ -57,76 +52,14 @@ afterEach(async () => {
   await upstream.close();
 });
 
-interface Answer {
-  readonly status: number;
-  readonly body: string;
-}
-interface Proxy {
-  readonly base: string;
-  readonly token: string;
-  /** One real HTTP request whose target is sent verbatim, so a bare "?" survives. */
-  readonly send: (path: string, options?: { method?: string; token?: boolean }) => Promise<Answer>;
-  /** Raw bytes over a fresh socket, read until the platform closes it. */
-  readonly raw: (head: string) => Promise<string>;
-}
-
-/**
- * Real loopback listener in network mode with one running instance and its token. Afterwards
- * neither responses nor logs carry the token, its hash, the RAGFlow authority, key or marker.
- */
-async function withProxy(
+/** The proxy over the owned fake RAGFlow, which never sees the marker echoed. */
+function withProxy(
   run: (proxy: Proxy) => Promise<void>,
   options: { readonly baseURL?: string } = {},
 ): Promise<void> {
-  await withApp(
-    async (app, database, lines) => {
-      const token = instanceToken();
-      seedInstance(database, { userId: 'owner', token, host: '127.0.0.1' });
-      if (options.baseURL !== '')
-        writeSettings(database, {
-          ragflowBaseUrl: options.baseURL ?? upstream.origin,
-          ragflowApiKey: RAGFLOW_KEY,
-        });
-      const base = await app.listen({ host: '127.0.0.1', port: 0 });
-      const texts: string[] = [];
-      const send: Proxy['send'] = async (
-        path,
-        { method = 'GET', token: withToken = true } = {},
-      ) => {
-        const headers = withToken ? { authorization: `Bearer ${token}` } : {};
-        const response = await sendHttp(base, { method, path, headers });
-        const body = response.body.toString('utf8');
-        texts.push(body);
-        return { status: response.status, body };
-      };
-      const raw: Proxy['raw'] = async (head) => {
-        const address = new URL(base);
-        const socket = connect(Number(address.port), address.hostname);
-        const chunks: Buffer[] = [];
-        socket.on('data', (chunk: Buffer) => chunks.push(chunk));
-        const closed = once(socket, 'close');
-        try {
-          await once(socket, 'connect');
-          socket.write(head);
-          await observeHttp(closed);
-        } finally {
-          socket.destroy();
-        }
-        const text = Buffer.concat(chunks).toString('utf8');
-        texts.push(text);
-        return text;
-      };
-
-      await run({ base, token, send, raw });
-
-      const output = texts.join('') + lines.join('');
-      const leaks = [token, instanceTokenHash(token), new URL(upstream.origin).host, RAGFLOW_KEY];
-      for (const leak of [...leaks, MARKER]) expect(output.includes(leak)).toBe(false);
-    },
-    false,
-    [],
-    undefined,
-    { upstreamMode: 'network' },
+  return withRagflowProxy(
+    { upstream, key: RAGFLOW_KEY, markers: [MARKER], baseURL: options.baseURL },
+    run,
   );
 }
 
@@ -254,7 +187,7 @@ it('authenticates an absolute-form target before routing it to the dataset list'
     );
 
     expect(text).toMatch(/^HTTP\/1\.1 401 /);
-    expect(JSON.parse(text.slice(text.indexOf('\r\n\r\n') + 4))).toEqual(UNAUTHORIZED);
+    expect(JSON.parse(rawBody(text))).toEqual(UNAUTHORIZED);
     expect(upstream.requests).toEqual([]);
   });
 });

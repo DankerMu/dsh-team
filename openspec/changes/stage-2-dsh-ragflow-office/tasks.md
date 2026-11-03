@@ -1136,6 +1136,159 @@ Evidence (14.2 库列表路由，#414):
 - 部署文档：`docs/DEPLOY.md` 目前没有 RAGFlow 段落（第 246 行写明本阶段不交付）。头像提示交给第 19 组集成验收的部署文档更新，届时写入「建 RAGFlow 知识库的账号和库不要设大头像，否则库列表超过 8 MiB 会返回 `upstream-error`」。
 - 后续：#411 的测试连接只取 1 行、上限 64 KiB；单个头像超过约 64 KiB 时，测试连接会误报 `upstream-error`。另开 issue 跟踪。
 
+Risk packs (14.3 库内文件路由，#415): fixture level expanded（与 issue 建议一致：第一个带路径参数和员工输入的代理路由）。selected：
+
+- **Public API / Schema / field names**：
+  - 新增 `GET /_platform/instance-api/ragflow/datasets/:id/documents`。
+  - 成功回应 `{ result: 'ok', total, documents: [{ id, name }] }`。其中 `total` 是筛选后的总数（rc2 语义，见下），供面板分页；失败时只回 `{ result }`。
+  - 只返回 `id` 与 `name`（spec：面板只读展示库内文件名）。200 schema 外层与条目都设 `additionalProperties: false`。
+  - 路由设 `exposeHeadRoute: false`，鉴权沿用 #413 的钩子，结果集合不新增取值。
+  - 契约里声明请求 schema：`params`（`id`，pattern 32 位 hex）和 `querystring`（`page`、`page_size`、`keywords`，`additionalProperties: false`），满足 spec「每个接口 MUST 声明请求和响应 schema」，先例是 `admin/routes.ts` 的 `/users/{userId}/password`。
+    - 路由设 `attachValidation: true`，Fastify 的校验结果不发出 400。
+    - 以下面的原始解析为准，`request.query`、`request.params` 被 Ajv 强转或删字段也不影响结果。
+- **File IO / path safety**（路径参数）：
+  - 以下两种请求在路由之前就被 Fastify 处理，与本路由无关，记为现状：
+    - 路径里有无法解码的 `%`（如 `/datasets/%zz/documents`）：Fastify `onBadUrl` 在鉴权钩子之前返回 400 `FST_ERR_BAD_URL`。
+    - `:id` 超过 `maxParamLength`（100 字符）：返回 404。
+  - `:id` 必须匹配 `RAGFLOW_DATASET_ID_PATTERN`（`^[0-9a-f]{32}$`，#414 已导出）。匹配在 find-my-way 解码路径参数之后进行，不匹配 → `invalid-request`，不访问 RAGFlow。
+  - 拼上游路径时只用通过校验的 32 位 hex，不做任何编码转换。因此 `..`、`%2F`、大写 hex 都到不了上游。
+  - 点段只能经原始 socket 测试：`app.inject` 与 `fetch` 都会用 WHATWG URL 把 `..`、`%2e%2e` 折叠掉，请求根本到不了路由。find-my-way 不折叠点段，`%2e` 解码为 `.`，所以经原始 socket 发送时参数是 `..`，应得到 `invalid-request`。
+- **Config / input validation**（员工查询参数）：
+  - 以原始 `request.url` 为准自行解析，原因同 #414：Ajv 的 `removeAdditional` 和类型强转会改写 `request.query`。
+    - 原始 URL 含 `#` → `invalid-request`。find-my-way 会在 `#` 处截断，`request.url` 保留原样。
+    - 取第一个 `?` 之后的部分，按 `&` 切分；每一项按第一个 `=` 拆成名和值，没有 `=` 的项 → `invalid-request`。
+    - 名和值各自先把 `+` 换成空格，再 `decodeURIComponent`；抛 `URIError` → `invalid-request`。`URLSearchParams` 不能代替这一步：它不会因非法编码抛错，`%zz` 原样保留，`%ff` 变成 U+FFFD。
+    - 因此 `a+b` 解码为 `a b`，`a%2Bb` 解码为 `a+b`。
+  - 允许的键：
+    - `page`：必填，匹配 `^[1-9][0-9]{0,5}$`；
+    - `page_size`：必填，1..100，匹配 `^(100|[1-9][0-9]?)$`；
+    - `keywords`：可选；去掉首尾空白后必须非空（rc2 会 trim，纯空白等于不筛选，返回的 `total` 会让面板的「无匹配」状态失真）；UTF-8 不超过 256 字节；原样转发，不在代理里 trim。
+  - 以下情况都回 `invalid-request`，不访问 RAGFlow：出现其他键；同一个键出现多次；缺少必填键；任一值不合规；查询串含无法解码的 `%`。
+  - `page_size` 上限 100 的依据：rc2 `internal/handler/document.go` 在 `page_size < 1 || page_size > 100` 时静默改为 10，不报错。代理必须先拒绝，否则员工会拿到与请求不符的页大小。
+  - 文件名筛选是 rc2 的 `keywords`，语义为 `LOWER(name) LIKE %kw%`，不转义（`internal/dao/document.go:313-314`）。所以 `%` 和 `_` 是通配符，`\` 是 MySQL LIKE 默认的转义字符，筛选结果可能多于或少于字面匹配。这只影响只读结果，记作已接受的语义差异。代理原样转发、做 URL 编码，不自行转义。
+- **Resource limits / large input**：
+  - 上游请求 `GET /api/v1/datasets/{id}/documents?page=P&page_size=S&orderby=create_time&desc=false[&keywords=K]`，每页只发一次请求，不在代理里翻页。
+  - 回应体上限复用 `RAGFLOW_LIST_BODY_LIMIT`（8 MiB）。依据：rc2 实测每个文件约 2.5 KB，包括 `parser_config`、`meta_fields` 和 `thumbnail`。实测文本文件的 `thumbnail` 为空，但 PDF 或图片的缩略图可能是 base64。页大小由员工控制（≤ 100），面板应选用较小的页（交接给 15.2）。超限 → `upstream-error`。
+  - 固定截止 `RAGFLOW_TIMEOUT_MS`，不重试，不缓存。
+- **Error handling / partial outputs**：
+  - 上游 `code: 404`（库不存在；rc2 实测：HTTP 200 加 `code: 404`，`data: null`）和 `code: 403`（库存在但密钥无权访问；rc2 `ListDocuments` 调 `CheckAccess` 时 `hideResource=false`，`internal/permission/response/errors.go:45-66` 把 `ErrPermissionDenied`、`ErrMembershipNotFound` 映射为 403）→ `invalid-request`。两者都表示请求指向的库不在本密钥可见的库列表里，属于请求不合法，面板据此刷新库列表。其他非零 `code` 仍按共用映射处理（401 → `not-configured`，其余 → `upstream-error`）。
+  - `data.total` 必须是非负整数；`data.docs` 必须是数组，长度不超过请求的 `page_size`，也不超过 `total`。
+  - 每个条目的要求：`id` 匹配 `^[0-9a-f]{32}$`（rc2 实测格式）；`name` 为非空字符串，UTF-8 不超过 1024 字节；`dataset_id` 必须等于请求的库 ID。任一条目不合格 → 整体 `upstream-error`，不返回部分页面。
+  - 同一页里有重复 ID → `upstream-error`。
+  - 超出末页（`total > 0`、`docs: []`）→ `ok`，`documents: []`，`total` 照实返回。
+  - 跨页顺序不稳定，属于已接受的残余风险：rc2 按 `document.create_time ASC` 排序，没有次排序键（`internal/dao/document.go:222-233`），本接口也不读 `sort`。同一毫秒创建的文件，或翻页期间有上传、删除，都可能让条目跨页重复或被跳过。面板需要容忍跨页出现重复的 `id`；同一页内的重复仍是 `upstream-error`。
+- **Auth / permissions / secrets**：只在鉴权通过后执行，且路径与查询参数都通过校验后才读设置。密钥只放在请求头里。回应和日志不含地址、密钥和上游消息，也不含员工的 `keywords`。
+  - 现状：`app.ts` 的 Fastify 默认请求日志（`incoming request`）记录带查询串的 `req.url`，`keywords` 会以百分号编码的形式进入每条请求日志。
+  - 修复：在 `app.ts` 的 logger 中加 `serializers.req`，对本前缀的请求把 `url` 的查询串替换为 `?[redacted]`，其他路径的日志不变。路由日志仍然只有固定文字加 `result`。
+    - 判定与鉴权钩子共用同一个函数：把 `instance-auth.ts` 的 `underPrefix`（路由视角或去掉查询串后的原始路径）导出后复用，不复制。只看原始路径会漏掉编码变体 `/_platform/instance-api/ragflo%77/…` 和绝对形式目标 `GET http://h/_platform/instance-api/ragflow/…`：两者都会到达路由。
+    - 写 `incoming request` 日志时路由已完成匹配。
+    - 替换后的序列化器保留 Fastify 默认的 `req` 字段（`method`、`url`、`version`、`host`、`remoteAddress`、`remotePort`，见 `fastify/lib/logger-pino.js:47-56`），只改 `url`。
+- **Code Canonicality**：
+  - `listRagflowDocuments(settings, datasetId, query, signal, deadlineMs, send?)` 放在 `client.ts`，复用 `call`、`endpoint`、`keyHeaders`、`envelope` 和映射规则。条目校验与 `listRagflowDatasets` 共用 ID/名字校验函数，不复制。
+  - 路由复用 `relay`。
+- **Legacy compatibility**：不改既有路由与结果集合；`schemas/openapi.json` 只新增这条路由。前缀以外的请求日志格式不变。
+- **Documentation / migration notes**（由 orchestrator 改）：AGENTS.md 代理条目补上文件路由的参数、上限、404 映射和 `keywords` 通配符语义。
+
+not selected：
+
+- Concurrency / shared state：代理没有共享状态；跨页顺序不稳定见上面的残余风险。
+- Release / packaging、Migration：无。
+
+**不变量**：
+
+- 每个回应的页面都来自一次合格的上游回应：条目数不超过 `page_size` 和 `total`，每条都属于所请求的库。
+- 路径参数或查询参数不合规时，不读设置，也不发外部请求。
+- 回应只含封闭集合的 `result`，成功时再加 `total` 和 `documents`。
+
+**Must preserve**：
+
+- `version` 与 `datasets` 路由、#411 测试连接、#413 鉴权钩子的行为不变。
+
+**同级面**：
+
+- 15.2 面板展开库时调用本路由，自行分页并做文件名筛选。
+- 14.4 检索结果里的来源文件名来自检索接口本身，不调用本路由。
+
+**宽度**：client、路由、测试，加上本段 fixture 与 AGENTS.md，可能超过 400 行；超过时打 `diff-limit-exempt`。
+
+Evidence (14.3 库内文件路由，#415):
+
+**改动点**：
+
+- 修改：
+  - `ragflow-proxy/client.ts` 与测试：`listRagflowDocuments` 及共用的条目校验；
+  - `ragflow-proxy/routes.ts` 与测试；
+  - `ragflow-proxy/index.ts`；
+  - `platform/src/app.ts` 与 `app.test.ts`：logger 的 `serializers.req` 去掉本前缀请求日志中的查询串；
+  - `schemas/openapi.json`。
+- 新建 `platform/test/ragflow-proxy-documents.integration.test.ts`，复用 `instance-token-fixture.ts` 和 `model-upstream-fixture.ts`。
+- AGENTS.md 由 orchestrator 改。
+
+**测试**：
+
+`client.test.ts`（注入 `send`）：
+
+- 未配置时不调用 `send`。
+- 成功：
+  - 请求路径恰为 `/api/v1/datasets/<id>/documents?page=2&page_size=30&orderby=create_time&desc=false`，带 `Authorization`；
+  - 输出恰为 `{ result: 'ok', total, documents: [{id,name}] }`，顺序与上游一致；
+  - 不出现 `thumbnail`、`location`、`created_by`、`nickname`、`meta_fields` 等丢弃字段。
+- 带 `keywords`：`keywords=报告 a_b%` 经 URL 编码后出现在上游查询串中；已解码的 `a b` 与 `a+b` 分别编码为 `a%20b` 与 `a%2Bb`。
+- 空页（`total: 0`，`docs: []`）→ `ok`。
+- 超出末页（`total: 2`，`docs: []`）→ `{ result: 'ok', total: 2, documents: [] }`。
+- 上游 `code: 404` 与 `code: 403` → `invalid-request`；`code: 102` → `upstream-error`；`code: 401` → `not-configured`。
+- 以下情况 → `upstream-error`：`docs` 长度超过 `page_size`；`docs` 长度超过 `total`；`total` 为 `-1`、`1.5`、字符串或缺失；条目 `dataset_id` 不等于请求的库；条目 ID 不合格；名字为空或超过 1024 字节；重复 ID；回应体超过 8 MiB。
+- 超时、拒绝连接、外部中止的映射与其他路由一致。
+
+`routes.test.ts`：
+
+- 路径参数不合格 → `invalid-request`。用 `DROP TABLE settings` 证明在读设置之前就被拒绝。不合格的写法：31 位、33 位、大写 hex、`%2F` 混入（点段改到集成测试中走原始 socket）。
+- 查询参数（同样在读设置之前被拒）：
+  - 缺 `page`、缺 `page_size` → `invalid-request`；
+  - `page=0`、`page=01`、`page=1000000`、`page_size=0`、`page_size=101`、`page_size=1.5` → `invalid-request`；
+  - `keywords=`（空）、`keywords=%20%20`（纯空白）、`keywords` 超过 256 字节、`keywords=%zz`、`keywords=%ff`、`keywords=%C3`、重复的 `page`、未知键 `x=1`、没有 `=` 的项 `page`、 - 边界接受：`page=1`、`page=999999`、`page_size=1`、`page_size=100`、`keywords` 恰为 256 字节。
+- 未配置 → `not-configured`；HEAD → 404；存储故障 → 500。
+
+集成测试（真实 TCP、自有假 RAGFlow、有效实例令牌）：
+
+- 成功：
+  - 恰好收到 1 个请求，路径、查询串与 `Authorization` 正确；
+  - 回应恰为期望的 JSON；
+  - 回应文本不含 handler 放进 `thumbnail`、`location`、`nickname` 和上游 `message` 里的 MARKER，也不含假服务 origin 和密钥。
+- 分页：`page=2&page_size=1`，假服务按页返回，回应中 `total` 与条目正确。
+- 非法 ID（`/datasets/ABC/documents?page=1&page_size=10`）与非法参数（`page_size=101`）→ `invalid-request`，假服务收到 0 个请求。
+- 点段：经原始 socket 发 `/_platform/instance-api/ragflow/datasets/../documents?page=1&page_size=10` 与 `…/datasets/%2e%2e/documents?…` → `invalid-request`，假服务收到 0 个请求。
+- 原始 URL 含 `#`（经原始 socket 发 `…/documents?page=1&page_size=10#x`）→ `invalid-request`，假服务收到 0 个请求。`app.inject` 会丢掉片段，所以这条只能放在这里测。
+- 解码往返：`keywords=a+b` 时假服务收到 `keywords=a%20b`，`keywords=a%2Bb` 时收到 `keywords=a%2Bb`。断言假服务收到的查询串。
+- 日志：`keywords` 放 ASCII MARKER（如 `kwmarker411`），分别用以下三种形式请求。每种请求之后，所有日志行（含 Fastify 的 `incoming request` 与 `request completed`）都不含 MARKER，且请求日志仍有 `method`、`url`、`remoteAddress` 字段：
+  - 普通路径；
+  - 编码变体 `/_platform/instance-api/ragflo%77/datasets/<id>/documents?…`；
+  - 经原始 socket 发送的绝对形式目标。
+- 上游 `code: 404` → `invalid-request`；HTTP 200 加 `code: 102` → `upstream-error`。
+- 超时：经 `index.ts` 直接调用 `listRagflowDocuments`，传 200 ms → `timeout`。
+- 拒绝连接 → `unavailable`。
+- 无令牌 → 401，假服务收到 0 个请求。
+
+**运行时证据**（对本机 RAGFlow rc2 只读，脚本只打印结果、个数和格式事实）：
+
+- 对每个种子库调用 `listRagflowDocuments`（`page=1&page_size=100`）：结果 `ok`，个数等于 `total`（每库 2 个），ID 格式合格。
+- 分页 `page=2&page_size=1`：1 条，`total` 为 2；`page=3&page_size=1`：0 条，`total` 为 2。
+- 不存在的库：`invalid-request`。
+
+**命令**：
+
+- `pnpm test`、`pnpm test:integration`、`pnpm contract:check`、`pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`
+- 本机 exact-head 的 `pnpm test:stack` 证据评论
+
+**交接**：
+
+- 15.2：
+  - 面板用 `page_size` 30 左右分页，并容忍跨页出现重复的 `id`；
+  - 文件名筛选走 `keywords`，接受 `%`、`_`、`\` 的 LIKE 语义；
+  - 收到 `invalid-request`（库不存在或无权访问，即上游 404/403）时刷新库列表。
+- 14.4：检索的来源文件名直接取检索结果，不调用本路由。
+
 ## 15. 「知识库」插件
 
 依赖：4、10（含 10.2 种子和 10.4 本机浏览器）、11、14。关键路径 `images/dsh-user/`（15.1 镜像交付）。

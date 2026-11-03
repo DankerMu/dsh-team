@@ -51,8 +51,11 @@ export function authenticateInstance(
   return row?.upstream_host === source ? row.user_id : null;
 }
 
-/** Either the matched route or the query-stripped raw path lies under the proxy prefix. */
-function underPrefix(request: FastifyRequest): boolean {
+/**
+ * Either the matched route or the query-stripped raw path lies under the proxy prefix. Shared by
+ * authentication and request-log redaction so both cover the same requests.
+ */
+export function underPrefix(request: FastifyRequest): boolean {
   // The router decodes unreserved escapes, so a declared route can match an encoded raw path.
   if (request.routeOptions.url?.startsWith(PREFIX) === true) return true;
   return request.url.split('?', 1)[0]?.startsWith(PREFIX) === true;

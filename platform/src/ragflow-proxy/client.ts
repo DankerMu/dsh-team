@@ -15,9 +15,14 @@ const DATASETS_PATH = '/api/v1/datasets?page=1&page_size=1001&orderby=create_tim
 const MAX_DATASETS = 1_000;
 // rc2 limits names to 128 bytes; a loose bound keeps one odd valid name from failing the list.
 const MAX_NAME_BYTES = 1_024;
-/** RAGFlow v1.0.0-rc2 dataset IDs. */
+/** RAGFlow v1.0.0-rc2 dataset IDs; its document IDs share the format. */
 export const RAGFLOW_DATASET_ID_PATTERN = '^[0-9a-f]{32}$';
-const DATASET_ID = new RegExp(RAGFLOW_DATASET_ID_PATTERN);
+const ENTRY_ID = new RegExp(RAGFLOW_DATASET_ID_PATTERN);
+// The requested dataset is outside what the key can see: rc2 answers 404 (absent) or 403 (no access).
+const DOCUMENT_CODES: ReadonlyMap<number, RagflowFailure> = new Map([
+  [404, 'invalid-request'],
+  [403, 'invalid-request'],
+]);
 /** Shown on the administrator page; anything else from upstream is not echoed. */
 export const RAGFLOW_VERSION_PATTERN = '^[\\x20-\\x7e]{1,64}$';
 const VERSION = new RegExp(RAGFLOW_VERSION_PATTERN);
@@ -34,12 +39,27 @@ export const RAGFLOW_RESULTS = [
 type RagflowFailure = Exclude<(typeof RAGFLOW_RESULTS)[number], 'ok'>;
 type RagflowVersionOutcome =
   { readonly result: 'ok'; readonly version: string } | { readonly result: RagflowFailure };
-interface RagflowDataset {
+/** One listed dataset or document: only these two fields leave the module. */
+interface RagflowEntry {
   readonly id: string;
   readonly name: string;
 }
 type RagflowDatasetsOutcome =
-  | { readonly result: 'ok'; readonly datasets: readonly RagflowDataset[] }
+  | { readonly result: 'ok'; readonly datasets: readonly RagflowEntry[] }
+  | { readonly result: RagflowFailure };
+/** One page of a dataset's documents; the route has already validated every field. */
+export interface RagflowDocumentsQuery {
+  readonly page: number;
+  readonly pageSize: number;
+  readonly keywords?: string;
+}
+type RagflowDocumentsOutcome =
+  | {
+      readonly result: 'ok';
+      /** Documents matching the filter across all pages, as RAGFlow counts them. */
+      readonly total: number;
+      readonly documents: readonly RagflowEntry[];
+    }
   | { readonly result: RagflowFailure };
 interface RagflowConnection {
   readonly baseURL: string;
@@ -60,7 +80,11 @@ function endpoint(baseURL: string, path: string): URL {
   return new URL(baseURL.slice(0, end) + path);
 }
 
-function envelope(text: string | null): Answer | RagflowFailure {
+/** `codes` maps a non-zero RAGFlow code to its result; any other non-zero code is upstream-error. */
+function envelope(
+  text: string | null,
+  codes: ReadonlyMap<number, RagflowFailure>,
+): Answer | RagflowFailure {
   if (text === null) return 'upstream-error';
   let value: unknown;
   try {
@@ -72,16 +96,20 @@ function envelope(text: string | null): Answer | RagflowFailure {
   if (typeof value.code !== 'number') return 'upstream-error';
   // RAGFlow v1.0.0-rc2 reports a rejected key as code 401; other codes are not guessed.
   if (value.code === 401) return 'not-configured';
-  if (value.code !== 0) return 'upstream-error';
+  if (value.code !== 0) return codes.get(value.code) ?? 'upstream-error';
   return {
     data: 'data' in value ? value.data : undefined,
     total_datasets: 'total_datasets' in value ? value.total_datasets : undefined,
   };
 }
 
-async function classify(response: Response, limit: number): Promise<Answer | RagflowFailure> {
+async function classify(
+  response: Response,
+  limit: number,
+  codes: ReadonlyMap<number, RagflowFailure>,
+): Promise<Answer | RagflowFailure> {
   const status = response.status;
-  if (status >= 200 && status < 300) return envelope(await readLimited(response, limit));
+  if (status >= 200 && status < 300) return envelope(await readLimited(response, limit), codes);
   // Only a 2xx body is inspected; others are released without reading.
   response.body?.cancel().catch(() => undefined);
   return status === 401 || status === 403 ? 'not-configured' : 'upstream-error';
@@ -94,6 +122,7 @@ async function call(
   deadlineMs: number,
   send: Send,
   limit: number,
+  codes: ReadonlyMap<number, RagflowFailure> = new Map(),
 ): Promise<Answer | RagflowFailure> {
   signal.throwIfAborted();
   const deadline = new AbortController();
@@ -102,7 +131,7 @@ async function call(
   }, deadlineMs);
   try {
     const response = await send(request, { signal: AbortSignal.any([signal, deadline.signal]) });
-    return await classify(response, limit);
+    return await classify(response, limit, codes);
   } catch {
     // Cancellation by the route owner is not a test outcome; transport causes carry host:port.
     signal.throwIfAborted();
@@ -174,24 +203,36 @@ export async function testRagflowConnection(
   return typeof list === 'string' ? { result: list } : version;
 }
 
-/** The rows of one complete listing, or null when anything about it is not a valid answer. */
-function datasetRows(answer: Answer): RagflowDataset[] | null {
-  if (!Array.isArray(answer.data)) return null;
-  const rows: readonly unknown[] = answer.data;
-  // A count that differs from the rows means the upstream cut the list short.
-  if (rows.length > MAX_DATASETS || answer.total_datasets !== rows.length) return null;
-  const datasets: RagflowDataset[] = [];
+/**
+ * The ID and name of every row that `admits`, in order, or null when any row is not an object
+ * with a valid ID and name, repeats an ID or is not admitted: a partial list is never returned.
+ */
+function entries(
+  rows: readonly unknown[],
+  admits: (row: object) => boolean = () => true,
+): RagflowEntry[] | null {
+  const valid: RagflowEntry[] = [];
   const seen = new Set<string>();
   for (const row of rows) {
     if (typeof row !== 'object' || row === null || !('id' in row) || !('name' in row)) return null;
     const { id, name } = row;
-    if (typeof id !== 'string' || !DATASET_ID.test(id) || seen.has(id)) return null;
+    if (typeof id !== 'string' || !ENTRY_ID.test(id) || seen.has(id)) return null;
     if (typeof name !== 'string' || name === '' || Buffer.byteLength(name) > MAX_NAME_BYTES)
       return null;
+    if (!admits(row)) return null;
     seen.add(id);
-    datasets.push({ id, name });
+    valid.push({ id, name });
   }
-  return datasets;
+  return valid;
+}
+
+/** The rows of one complete listing, or null when anything about it is not a valid answer. */
+function datasetRows(answer: Answer): RagflowEntry[] | null {
+  if (!Array.isArray(answer.data)) return null;
+  const rows: readonly unknown[] = answer.data;
+  // A count that differs from the rows means the upstream cut the list short.
+  if (rows.length > MAX_DATASETS || answer.total_datasets !== rows.length) return null;
+  return entries(rows);
 }
 
 /**
@@ -218,4 +259,59 @@ export async function listRagflowDatasets(
   if (typeof answer === 'string') return { result: answer };
   const datasets = datasetRows(answer);
   return datasets === null ? { result: 'upstream-error' } : { result: 'ok', datasets };
+}
+
+/** The total and rows of one document page, or null when anything about it is not valid. */
+function documentPage(
+  answer: Answer,
+  datasetId: string,
+  pageSize: number,
+): { total: number; documents: RagflowEntry[] } | null {
+  const data = answer.data;
+  if (typeof data !== 'object' || data === null || !('total' in data) || !('docs' in data))
+    return null;
+  const { total, docs } = data;
+  if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0) return null;
+  if (!Array.isArray(docs)) return null;
+  const rows: readonly unknown[] = docs;
+  if (rows.length > pageSize || rows.length > total) return null;
+  const documents = entries(rows, (row) => 'dataset_id' in row && row.dataset_id === datasetId);
+  return documents === null ? null : { total, documents };
+}
+
+/**
+ * Reads one page of a dataset's documents, oldest first, optionally filtered by file name, in a
+ * single request; an empty address or key is not configured and sends nothing. The dataset ID and
+ * page come validated from the route. Only each document's ID and name leave this function, in
+ * upstream order, and only when the whole page is valid. A dataset that the key cannot see
+ * answers invalid-request.
+ */
+export async function listRagflowDocuments(
+  settings: RagflowConnection,
+  datasetId: string,
+  query: RagflowDocumentsQuery,
+  signal: AbortSignal,
+  deadlineMs: number,
+  send: Send = fetch,
+): Promise<RagflowDocumentsOutcome> {
+  if (settings.baseURL === '' || settings.apiKey === '') return { result: 'not-configured' };
+  const headers = keyHeaders(settings.apiKey);
+  if (headers === null) return { result: 'not-configured' };
+  // encodeURIComponent keeps a decoded space as %20; URLSearchParams would send "+".
+  const filter =
+    query.keywords === undefined ? '' : `&keywords=${encodeURIComponent(query.keywords)}`;
+  const path =
+    `/api/v1/datasets/${datasetId}/documents?page=${String(query.page)}` +
+    `&page_size=${String(query.pageSize)}&orderby=create_time&desc=false${filter}`;
+  const answer = await call(
+    new Request(endpoint(settings.baseURL, path), { headers, redirect: 'manual' }),
+    signal,
+    deadlineMs,
+    send,
+    RAGFLOW_LIST_BODY_LIMIT,
+    DOCUMENT_CODES,
+  );
+  if (typeof answer === 'string') return { result: answer };
+  const documents = documentPage(answer, datasetId, query.pageSize);
+  return documents === null ? { result: 'upstream-error' } : { result: 'ok', ...documents };
 }

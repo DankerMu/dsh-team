@@ -1,5 +1,5 @@
 import swagger from '@fastify/swagger';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import { adminRoutes } from './admin/index.ts';
@@ -24,7 +24,7 @@ import {
   type GatewayActivity,
 } from './gateway/index.ts';
 import type { InstanceService } from './orchestrator/index.ts';
-import { installInstanceAuth, ragflowProxyRoutes } from './ragflow-proxy/index.ts';
+import { installInstanceAuth, ragflowProxyRoutes, underPrefix } from './ragflow-proxy/index.ts';
 import { webRoutes } from './web/index.ts';
 
 /**
@@ -64,6 +64,26 @@ const LOG_REDACT_PATHS = [
   '*.cookie',
 ];
 
+/**
+ * Fastify's default request fields (`fastify/lib/logger-pino.js`), except that a RAGFlow proxy
+ * URL loses its query: employee file-name filters are conversation-adjacent input (F6).
+ */
+function serializeRequest(request: FastifyRequest): Record<string, unknown> {
+  // A fragment never reaches a route, but its text is the employee's as much as the query is.
+  const query = request.url.search(/[?#]/);
+  return {
+    method: request.method,
+    url:
+      query !== -1 && underPrefix(request)
+        ? `${request.url.slice(0, query)}?[redacted]`
+        : request.url,
+    version: request.headers['accept-version'],
+    host: request.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket.remotePort,
+  };
+}
+
 /** Destination for log lines; defaults to stdout when omitted. */
 export interface LogDestination {
   write(line: string): void;
@@ -88,6 +108,10 @@ export async function buildApp(
     logger: {
       level: config.logLevel,
       redact: { paths: LOG_REDACT_PATHS, censor: '[redacted]' },
+      serializers: {
+        // Fastify logs its own request object (lib/log-controller.js); the declared raw type is wrong.
+        req: (request) => serializeRequest(request as unknown as FastifyRequest),
+      },
       ...(logDestination === undefined ? {} : { stream: logDestination }),
     },
   });
