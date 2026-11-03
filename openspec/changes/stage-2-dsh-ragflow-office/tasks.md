@@ -835,7 +835,7 @@ Risk packs (14.1 实例接口鉴权与版本路由，#413): fixture level expand
 - **Public API / CLI / script entry**：
   - 新前缀 `/_platform/instance-api/ragflow/`，本 issue 只声明 `GET /_platform/instance-api/ragflow/version`。
   - 回应约定由本 issue 定下，14.2–14.4 沿用，记入 design 决定 3：
-    - 鉴权失败一律 401，固定体 `{ error, message }`，复用 `ERROR_SCHEMA`；
+    - 鉴权失败一律 401，固定体 `{ statusCode, error, message }`：401/500 固定体是模块内共用的 `INSTANCE_ERRORS`（`instance-auth.ts`），schema 是模块内的 `ERROR_SCHEMA`（`routes.ts`），形状与仓库既有副本相同；
     - 未声明的路径或方法返回 404（Fastify 默认，或网关保留路径的平台 404），405 不另造；
     - 鉴权通过后，结果一律 HTTP 200，body 是封闭集合 `{ result, … }`，例如 `{ result: 'ok', version }` 或 `{ result: 'timeout' }`。
   - 理由：插件和工具只看 `result`，模型测试连接（`model-config/test`）与 #411 已是这一形状。415 与 404 是 HTTP 层的拒绝，不是结果取值。
@@ -852,7 +852,7 @@ Risk packs (14.1 实例接口鉴权与版本路由，#413): fixture level expand
   - 来源核对：取 socket 对端地址（`request.socket.remoteAddress`），**不**经 `X-Forwarded-For` 和可信代理解析。实例总是直连自己网桥上的 +3 地址，转发头不可能合法地出现在这里。
     - 地址先按 `auth/source-address.ts` 的 `parseAddress` 规范化（`::ffff:a.b.c.d` → `a.b.c.d`）。该函数改为经 `auth/index.ts` 导出，不复制。
     - 规范化后必须等于该行的 `upstream_host`（网络方式下即员工容器端点 IPv4，按 `instanceAddressLayout` 为 +2）。比较 `upstream_host` 而不从子网推算 +2，是有意为之：阶段 1 遗留、端点不在 +2 的存活实例（AGENTS.md「Stage-1 instances created before the layout」）也能用它真实的地址通过，而推算会把它们误拒。
-  - published-loopback 方式下整个前缀一律 401：该方式下行的 `upstream_host` 是 `127.0.0.1`，不是实例地址；design 决定 2 已说明该方式下代理不可用。实现上路由插件接收 `config.upstreamMode`。
+  - published-loopback 方式下整个前缀一律 401：该方式下行的 `upstream_host` 是 `127.0.0.1`，不是实例地址；design 决定 2 已说明该方式下代理不可用。实现上由鉴权钩子 `installInstanceAuth(app, database, upstreamMode)` 接收它，而不是路由插件，因为落到网关 `'/*'` 的未声明前缀路径也必须被拒；路由插件只接收 `{ database, shutdown }`。
   - 平台会话 cookie 不参与鉴权：只带 cookie → 401；带 cookie 加有效令牌 → 按令牌处理，cookie 忽略。
   - 所有拒绝原因共用一个 401 回应，日志只有固定文字，不含令牌、哈希、地址或用户。令牌只在 `Authorization` 头里，已在既有脱敏路径中（`app.ts` 的 authorization 头脱敏）。
   - 鉴权通过后把用户 ID 挂在请求上（`request.instanceUserId`，Fastify decorateRequest），供 14.2–14.4 使用；本 issue 的版本路由不使用它。
@@ -996,7 +996,7 @@ Evidence (14.1 实例接口鉴权与版本路由，#413):
 
 **交接**：
 
-- 14.2–14.4：在 `ragflow-proxy/routes.ts` 添加路由，从 `request.instanceUserId` 取身份，沿用 200 加 `result` 的回应约定；检索 POST 自行要求 `application/json`（415）。
+- 14.2–14.4：在 `ragflow-proxy/routes.ts` 添加路由，从 `request.instanceUserId` 取身份，沿用 200 加 `result` 的回应约定与 `INSTANCE_ERRORS`；每个新 GET 都设路由级 `exposeHeadRoute: false`；检索 POST 自行要求 `application/json`（415）。#524 评审建议补一条绝对形式目标（`GET http://h/_platform/instance-api/ragflow/version` 经原始 socket 发送，无令牌 → 401、0 个上游请求）的集成用例，把对 find-my-way 去掉绝对形式 authority 的依赖钉住；14.2 一并加。
 - 14.5 或 15.x：在真实 Docker 网桥上证明实例从 +2 地址带令牌可达、其他实例地址被拒。本 issue 的集成测试只能在 loopback 上模拟地址比较。
 
 ## 15. 「知识库」插件
