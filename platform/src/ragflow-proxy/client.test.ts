@@ -206,6 +206,20 @@ it('rejects a body one byte over 64 KiB without reading the remainder', async ()
   expect(pulls.length).toBeLessThanOrEqual(2);
 });
 
+it('still limits the connection test list step to 64 KiB', async () => {
+  const pulls: number[] = [];
+  const send = steps(
+    () => new Response(VERSION_BODY),
+    () => new Response(oversizedBody(65_536, pulls)),
+  );
+
+  const outcome = await check(send);
+
+  expect(outcome).toEqual({ result: 'upstream-error' });
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(pulls.length).toBeLessThanOrEqual(2);
+});
+
 it.each([
   ['before a status', (signal: AbortSignal) => rejectOnAbort(signal)],
   ['while reading the body', (signal: AbortSignal) => new Response(heldBody(signal, '{"co'))],
@@ -432,10 +446,10 @@ it.each([
 });
 
 it.each([
-  ['a control character', 'a\u0001b'],
-  ['exactly 1024 UTF-8 bytes of multibyte text', '库'.repeat(341) + 'x'],
-])('accepts a name with %s without judging its content', async (_label, name) => {
-  expect(new TextEncoder().encode(name).byteLength).toBeLessThanOrEqual(1_024);
+  ['a control character', 'a\u0001b', 3],
+  ['exactly 1024 UTF-8 bytes of multibyte text', '库'.repeat(341) + 'x', 1_024],
+])('accepts a name with %s without judging its content', async (_label, name, bytes) => {
+  expect(Buffer.byteLength(name)).toBe(bytes);
 
   const outcome = await list(sender(() => new Response(listing([row(1, name)]))));
 
