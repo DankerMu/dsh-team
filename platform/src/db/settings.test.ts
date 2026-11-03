@@ -331,6 +331,7 @@ describe('settings', () => {
       'https://kb.internal/ragflow',
       'https://kb.internal:9380/ragflow/',
       'http://10.0.0.5:80',
+      'http://[::1]:9380',
       `https://kb.internal/${'a'.repeat(2048 - 'https://kb.internal/'.length)}`,
     ])('accepts %s', (value) => {
       expect(isRagflowBaseUrl(value)).toBe(true);

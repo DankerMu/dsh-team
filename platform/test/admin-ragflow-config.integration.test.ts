@@ -162,7 +162,7 @@ it('rolls back the previous connection when the RAGFlow audit cannot be inserted
       message: 'Internal Server Error',
     });
     expect(snapshot(database)).toEqual(before);
-    for (const secret of [apiKey, replacement])
-      expect((body + lines.join('')).includes(secret)).toBe(false);
+    for (const value of [apiKey, replacement, 'reject_ragflow_audit', 'SQLITE'])
+      expect((body + lines.join('')).includes(value)).toBe(false);
   });
 });

@@ -103,18 +103,25 @@ it('saves address and key with one actor/source audit, then keeps the key when o
   });
 });
 
-it('saves a first address without a key as unconfigured and keeps its path verbatim', async () => {
-  await withApp(async (app, database) => {
-    const { cookie } = await administrator(app, database);
-    const baseURL = 'https://kb.internal/ragflow';
+it.each(['https://kb.internal/ragflow', 'http://[::1]:9380'])(
+  'saves a first address %s without a key as unconfigured and returns it verbatim',
+  async (baseURL) => {
+    await withApp(async (app, database) => {
+      const { cookie } = await administrator(app, database);
 
-    const saved = await save(app, cookie, { baseURL });
+      const saved = await save(app, cookie, { baseURL });
+      const after = await read(app, cookie);
 
-    expect(saved.statusCode).toBe(200);
-    expect(saved.json()).toEqual({ baseURL, apiKeyConfigured: false, runningInstances: 0 });
-    expect(settingsRows(database)).toEqual(seededWith({ ragflowBaseUrl: JSON.stringify(baseURL) }));
-  });
-});
+      expect(saved.statusCode).toBe(200);
+      expect(saved.json()).toEqual({ baseURL, apiKeyConfigured: false, runningInstances: 0 });
+      expect(after.statusCode).toBe(200);
+      expect(after.json()).toEqual({ baseURL, apiKeyConfigured: false });
+      expect(settingsRows(database)).toEqual(
+        seededWith({ ragflowBaseUrl: JSON.stringify(baseURL) }),
+      );
+    });
+  },
+);
 
 it.each([
   // Each label names the patch() rule that isolates the case; address cases name the
@@ -125,7 +132,10 @@ it.each([
   ['a missing baseURL (string rule)', { apiKey: SENTINEL }],
   ['an extra key (key-set rule)', { baseURL: BASE_URL, [SENTINEL]: 1 }],
   ['a numeric baseURL (string rule)', { baseURL: 9 }],
-  ['a blank baseURL (raw whitespace rule)', { baseURL: ' \t' }],
+  [
+    'an inner tab the URL parser strips (raw whitespace rule)',
+    { baseURL: `https://kb.internal/\t${SENTINEL}` },
+  ],
   ['an empty apiKey (non-blank key rule)', { baseURL: BASE_URL, apiKey: '' }],
   ['a blank apiKey (non-blank key rule)', { baseURL: BASE_URL, apiKey: '   ' }],
   ['a numeric apiKey (key string rule)', { baseURL: BASE_URL, apiKey: 9 }],

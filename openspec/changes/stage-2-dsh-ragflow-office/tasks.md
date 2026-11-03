@@ -496,7 +496,7 @@ Evidence (13.1 连接配置，#410):
 - 测试连接：13.2。
 - #446 的 PR Boundary 不含 `platform/src/audit/`，但 `retrieval-config.updated` 需要改 `record.ts`（含 `record.test.ts`）和 `config-route.ts` 联合，届时按本条授权。
 - 页面与审计中文名：13.3。
-- 代理读取与映射：14.x。
+- 代理读取与映射：14.x。14.1 拼接前须去掉 `baseURL` 末尾的 `/`（否则 `https://kb/` 拼出 `//api/v1/...`），并以 `new URL()` 解析后的结果为实际连接目标：保存的字符串不一定等于实际主机（IDN、软连字符、`http:kb` 这类合规写法）。补单元测试覆盖 `https://kb/` 与 `https://kb/sub/` 两种 base 拼出的路径。
 
 ## 14. RAGFlow 只读代理
 
