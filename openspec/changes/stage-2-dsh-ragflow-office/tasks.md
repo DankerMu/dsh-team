@@ -498,6 +498,157 @@ Evidence (13.1 连接配置，#410):
 - 页面与审计中文名：13.3。
 - 代理读取与映射：14.x。14.1 拼接前须去掉 `baseURL` 末尾的 `/`（否则 `https://kb/` 拼出 `//api/v1/...`），并以 `new URL()` 解析后的结果为实际连接目标：保存的字符串不一定等于实际主机（IDN、软连字符、`http:kb` 这类合规写法）。补单元测试覆盖 `https://kb/` 与 `https://kb/sub/` 两种 base 拼出的路径。
 
+Risk packs (13.1 检索参数，#446): fixture level expanded（与 issue 建议一致；本接口不涉及凭据，但它是员工检索结果的管理员写入口，沿用同组的 expanded）。selected：
+
+- **Schema**：
+  - GET `/_platform/api/admin/retrieval-config` 恰好返回 `{ retrievalTopK, retrievalSimilarityThreshold, retrievalKeywordsWeight, retrievalRerankId }`，即 settings 同名四键的投影。字段名与 settings 键一致，沿用 `runtime-config`、`plugin-sources` 的做法，不另起映射。
+  - PUT body 恰为同形状对象，四键都必填，整值替换，没有「省略即保留」。
+  - 成功响应 = GET 形状加共用提交边界附加的 `runningInstances`。
+  - 存储只写这四个键。`ragflowBaseUrl`、`ragflowApiKey` 和其余设置不动。
+- **Config**：
+  - 取值域沿用 #410 的 settings 层：`retrievalTopK` 是整数 1..100；两个比例是 0..1 的有限数；`retrievalRerankId` 是字符串。
+  - 例外只有一条，放在路由：`retrievalRerankId` 为 `''`（不重排），或首尾没有空白的非空字符串（design 决定 3 表已记录这次收窄）。原因：14.4 会把非空值原样作为 `rerank_id` 发给 RAGFlow，`' '` 或带首尾空白的 ID 会让所有员工的检索失败。它放在路由而不在 settings 层，是因为本 issue 的 PR Boundary 不含 `platform/src/db/`；存储层的取值域仍是 `string`。不设长度上限（上游没有依据）。
+  - 默认值是迁移 6 播种的 `8`/`0.2`/`0.7`/`''`。映射见 design 决定 3。
+- **Auth / permissions**：沿用 `registerConfigRoute`：
+  - `adminRoutes` 的 `onRequest` 先挡匿名和员工；
+  - body 读完后在同一事务里重核当前活动管理员；
+  - 401/403 时不写设置、不写审计。
+- **Error handling / rollback**：
+  - `patch` 只做信封检查：不是普通对象、键集合不恰为这四个 → 返回 `null`，回固定 `invalidMessage`。
+  - 值域错误（类型不对、越界、`NaN` 无法经 JSON 到达）由 `writeSettings` 抛 `SettingsValidationError`，经既有通道转成 400：消息点名字段，后接 `validationGuidance`（四个取值域的固定文字，满足 spec「指出取值范围」）。原参数不变。
+  - 重排模型规则放在 descriptor 的 `validate(settings)`（写入后、审计前，在同一事务内），抛出即 400 加回滚，与 `runtime-config` 的子网容量校验同一机制。消息为固定文字，不回显输入。
+  - 存储损坏或审计写入失败时返回 500 固定体，整体回滚。
+- **Public API**：
+  - `config-route.ts` 的 `name` 联合加 `'retrieval'`，`auditType` 联合加 `'retrieval-config.updated'`。
+  - `audit/record.ts` 的 `EVENT_DETAIL_FIELDS` 加 `'retrieval-config.updated': []`，`record.test.ts` 封闭集合同步。这两处超出 issue 字面的 PR Boundary，由 #410 fixture 的交接条目授权。
+  - `routes.ts` 在 `ragflowConfigRoutes` 之后注册。
+- **Legacy compatibility**：
+  - 不新增迁移，不改 `platform/src/db/`。
+  - 既有六条配置路由的请求、响应和审计不变。
+  - `schemas/openapi.json` 用 `pnpm contract:write` 重生成。
+- **Documentation**（由 orchestrator 改）：AGENTS.md Environment 段 `ragflow-config` 条目末句「No route reads RAGFlow yet: the connection test, the retrieval-parameter API, the administrator page and the proxy belong to later tasks.」只删去其中的 `the retrieval-parameter API`；另起一条记录本接口的形状、整值替换、校验规则和审计。
+
+not selected：
+
+- Secrets：本接口没有凭据字段，不新增脱敏路径。
+- File IO、Concurrency：单事务。
+- Release / packaging。
+- Performance：四个标量。
+
+**不变量**：
+
+- 存储中的四个检索参数永远在各自的取值域内：settings 层的 `parseOwned` 保证，路由不复制取值域。
+- 经本接口写入的 `retrievalRerankId` 永远是 `''` 或修剪后等于自身的非空字符串（存储层本身只保证是字符串）。
+- 400 文案只含固定文字和字段名，不含任何输入字节。
+
+**Must preserve**：
+
+- `model-config`、`runtime-config`、`plugin-catalog`、`plugin-sources`、`web-tools`、`ragflow-config` 的请求、响应与审计不变。
+- `registerConfigRoute` 的提交边界语义不变（`validate` 在写后、审计前，失败整体回滚）。
+
+**同级面**：
+
+- `config-route.ts` 联合；
+- `record.ts` 封闭集合；
+- `routes.ts` 注册顺序；
+- `platform/web/src/audit-page.tsx` 的 `EVENT_NAMES`：中文名与筛选项由 13.3（#412）加；
+- 14.4 代理读取这四个键；
+- `platform/test/admin-config-fixture.ts` 的 `seededWith`，测试用它按 key 构造期望行。
+
+**宽度**：
+
+- 同构的 #410 三件套是 52 + 207 + 168 = 427 行；diff-size-guard 只排除 `pnpm-lock.yaml` 和 `schemas/openapi.json`，本段 fixture 与 AGENTS.md 也计入。预计超过 400 行，本 PR 打 `diff-limit-exempt`，理由同 issue 的 atomic 声明：一组接口，一条验证路径。
+- 不重复覆盖：存储写入失败（`write` 触发器）与损坏数据只在单元测试；审计失败回滚只在集成测试（真实 TCP）。
+
+Evidence (13.1 检索参数，#446):
+
+**现状**：
+
+- 迁移 6 已播种四键：`retrievalTopK` `8`、`retrievalSimilarityThreshold` `0.2`、`retrievalKeywordsWeight` `0.7`、`retrievalRerankId` `""`。
+- `platform/src/db/settings.ts:60-64,88-91` 声明字段与默认值；`parseRagflowSetting` 校验取值域：`requireTopK` 1..100，比例为 0..1 的有限数，重排为字符串。
+- `platform/src/admin/config-route.ts:14,22` 的联合已含 `ragflow`；`descriptor.validate` 在写后、审计前执行，抛出转为 400（`validationGuidance` 追加在消息后）。
+- `routes.ts:221` 注册 `ragflowConfigRoutes`。
+- `audit/record.ts:50` 有 `ragflow-config.updated`，没有 `retrieval-config.updated`。
+- `platform/src/admin/runtime-config.ts` 是同构先例：四个以上必填字段、只做信封检查的 `patch`、`DOMAINS` 文案、`validate`。
+
+**改动点**：
+
+- 新文件：`platform/src/admin/retrieval-config.ts`、`platform/src/admin/retrieval-config.test.ts`、`platform/test/admin-retrieval-config.integration.test.ts`。
+- 修改：
+  - `platform/src/admin/config-route.ts`：联合；
+  - `platform/src/admin/routes.ts`：注册；
+  - `platform/src/audit/record.ts` 与 `record.test.ts`；
+  - `schemas/openapi.json`。
+- AGENTS.md 由 orchestrator 改。
+
+(1) `retrievalConfigRoutes` 经 `registerConfigRoute` 注册：
+
+- `name: 'retrieval'`，`path: '/_platform/api/admin/retrieval-config'`，`auditType: 'retrieval-config.updated'`。
+- `bodySchema` 与 `responseSchema` 都是四键对象，只记录契约：
+  - `additionalProperties: false`，四键 `required`；
+  - `retrievalTopK`：`integer`，1..100；
+  - 两个比例：`number`，0..1；
+  - `retrievalRerankId`：`string`。
+- `DOMAINS` 固定文字：「Allowed domains: retrievalTopK: integer 1..100 (returned chunk count); retrievalSimilarityThreshold, retrievalKeywordsWeight: finite numbers 0..1; retrievalRerankId: rerank model ID without surrounding whitespace, or empty for no reranking」。
+- `invalidMessage` 为 `Invalid retrieval configuration; provide exactly <四键>. <DOMAINS>`；`validationGuidance: DOMAINS`。
+- `patch(body)`：非普通对象（复用 `isPlainObject`）、有多余键、或缺任一键 → `null`；否则返回 `body` 原样，值域交给 `writeSettings`。
+- `validate(settings)`：`retrievalRerankId` 非空且 `trim()` 不等于自身时，抛 `new Error('retrievalRerankId must be empty or a rerank model ID without surrounding whitespace')`。
+- `project(settings)` 返回四键。
+
+**测试**：
+
+单元测试 `retrieval-config.test.ts` 经 `withApp`：
+
+- GET 初始值恰为 `{ retrievalTopK: 8, retrievalSimilarityThreshold: 0.2, retrievalKeywordsWeight: 0.7, retrievalRerankId: '' }`。
+- PUT 成功（`3`/`0.5`/`0.3`/`'bge-reranker-v2-m3'`）：
+  - 存储四行恰为新值，其余播种行不变（`seededWith`）；
+  - 审计一行 `retrieval-config.updated`，带 actor/source，`target_email` 为空，细节 `{}`；
+  - 响应为新值加 `runningInstances`；
+  - 随后 GET 一致。
+- 再 PUT 一次，`retrievalRerankId: ''` 证明能关闭重排。
+- 边界接受：
+  - `retrievalTopK` 取 1 和 100；
+  - 两个比例取 0 和 1；
+  - 带内部空格和 `/`、`@` 的重排 ID（`'BAAI/bge-reranker-v2-m3@Builtin'` 与 `'my reranker@Builtin'`）。
+- 400 清单。每例之后 settings 与审计不变，响应和日志不含输入 SENTINEL，标签写明各自隔离的规则：
+  - `null`、数组或字符串 body（信封）；
+  - 缺任一键（键集合）；
+  - 有多余键（键集合）；
+  - `retrievalTopK` 为 0、101、1.5、`'8'`（settings 取值域，消息含字段名与 `DOMAINS`）；
+  - 相似度阈值为 -0.1、1.1、`'0.2'`；
+  - 关键词权重为 -0.1、1.1、`null`；
+  - `retrievalRerankId` 为数字（settings 层）；
+  - `retrievalTopK: SENTINEL`（类型错误，SENTINEL 不进响应和日志）；
+  - 重排 ID 为 `' '`、`` ` ${SENTINEL}` ``、`` `${SENTINEL} ` ``（`validate` 规则：写入已发生但整体回滚，消息为固定文字加 `DOMAINS`，SENTINEL 不进响应和日志）；
+  - 数值越界各例不带 SENTINEL，只断言 settings 与审计不变和消息内容。
+- 存储写入失败（`BEFORE INSERT ON settings` 触发器）：返回 500 固定体，settings 等于触发器建立前快照，审计不变，随后 GET 返回 200。
+- 改坏数据 `corrupt-json`、`corrupt-type`（把 `retrievalTopK` 存成 `"8"`）：GET 与 PUT 均返回 500。
+
+`record.test.ts`：封闭集合含新事件。
+
+集成测试 `admin-retrieval-config.integration.test.ts`，真实 TCP 的 `withListeningApp`：
+
+- 匿名返回 401，员工返回 403（GET/PUT 都不动 settings，返回固定错误体）。
+- 管理员 GET 默认值，PUT 新值返回 200，再 GET。
+- 用 `delayedConfigBody` 在 body 被接收之后撤销会话或降级：返回 401/403 固定错误体，不写入，不审计。
+- 审计失败回滚：先保存 A，建 `BEFORE INSERT ON audit_events` 触发器，PUT B 返回 500 固定体；settings 仍是 A，审计行数不变，响应和日志不含触发器名与 `SQLITE`。
+- 一次值域 400 之后快照不变。
+- 审计行 actor 为该管理员。
+
+**命令**：
+
+- `pnpm test`（逐文件 80%）
+- `pnpm test:integration`
+- `pnpm contract:check`
+- `pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 和 `pnpm test:deploy`
+- 本机 exact-head 的 `pnpm test:stack` 证据评论（本 issue 涉及 RAGFlow；用例不覆盖本接口，只证明入口未回归）
+
+**交接**：
+
+- 页面与审计中文名：13.3（#412）。
+- 代理在检索时应用参数（14.4）：映射见 design 决定 3；重排 ID 为空时不发 `rerank_id`；实例请求中带 `top_k`、`page_size`、`similarity_threshold`、`keywords_similarity_weight`、`vector_similarity_weight`、`rerank_id` 等检索参数字段时，按 design 表拒绝为 `invalid-request`。
+
 ## 14. RAGFlow 只读代理
 
 依赖：1（来源 IP 核对需要 +2 地址）、10（含 10.2 种子）、12、13。
