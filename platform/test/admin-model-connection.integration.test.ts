@@ -267,6 +267,12 @@ it('reaches the deadline before and after the status at the probe seam', async (
     pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
     registryProbeEnabled: true,
     webToolsEnabled: false,
+    ragflowBaseUrl: '',
+    ragflowApiKey: '',
+    retrievalTopK: 8,
+    retrievalSimilarityThreshold: 0.2,
+    retrievalKeywordsWeight: 0.7,
+    retrievalRerankId: '',
   });
   upstream.setHandler(() => undefined);
   const silent = await probeModel(snapshot, new AbortController().signal, 150);

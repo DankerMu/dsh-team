@@ -9,6 +9,30 @@ export type CatalogState = 'employee' | 'forced-on' | 'forced-off';
 /** DSH plugin-manager's own registry URL rule. */
 export const REGISTRY_URL = /^https?:\/\/\S+$/;
 
+const MAX_RAGFLOW_BASE_URL = 2048;
+// Rejects whitespace, C0 controls and DEL anywhere: URL parsing would silently strip them.
+// eslint-disable-next-line no-control-regex -- the control-character range is the rule itself.
+const RAGFLOW_BASE_URL_CHARACTERS = /^[^\s\x00-\x1f\x7f]+$/;
+/**
+ * RAGFlow base-address rule, checked on the raw string before parsing: URL parsing silently
+ * drops an empty query, fragment or userinfo, so appending an API path stays inside the path.
+ */
+export function isRagflowBaseUrl(value: string): boolean {
+  if (
+    value.length > MAX_RAGFLOW_BASE_URL ||
+    !RAGFLOW_BASE_URL_CHARACTERS.test(value) ||
+    /[?#@\\]/.test(value)
+  )
+    return false;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    // Only the URL constructor throws here: an unparseable address is not a RAGFlow address.
+    return false;
+  }
+}
+
 interface ModelSetting {
   readonly name: string;
   readonly contextWindow?: number;
@@ -29,6 +53,15 @@ export interface Settings {
   readonly pluginRegistries: readonly string[];
   readonly registryProbeEnabled: boolean;
   readonly webToolsEnabled: boolean;
+  /** `''` until configured, otherwise an `isRagflowBaseUrl` address stored verbatim. */
+  readonly ragflowBaseUrl: string;
+  readonly ragflowApiKey: string;
+  /** Returned chunk count (RAGFlow `page_size`), 1..100. */
+  readonly retrievalTopK: number;
+  readonly retrievalSimilarityThreshold: number;
+  readonly retrievalKeywordsWeight: number;
+  /** Empty for no reranking. */
+  readonly retrievalRerankId: string;
 }
 const UPSERT_SETTING =
   'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
@@ -50,6 +83,12 @@ const DEFAULT_SETTINGS: Settings = {
   pluginRegistries: ['https://registry.npmjs.org/', 'https://registry.npmmirror.com/'],
   registryProbeEnabled: true,
   webToolsEnabled: false,
+  ragflowBaseUrl: '',
+  ragflowApiKey: '',
+  retrievalTopK: 8,
+  retrievalSimilarityThreshold: 0.2,
+  retrievalKeywordsWeight: 0.7,
+  retrievalRerankId: '',
 };
 interface SettingRow {
   key: string;
@@ -66,6 +105,12 @@ function requirePositiveSafeInteger(field: string, value: unknown): number {
     throw fieldError(field);
   }
   return value;
+}
+
+function requireTopK(value: unknown): number {
+  const topK = requirePositiveSafeInteger('retrievalTopK', value);
+  if (topK > 100) throw fieldError('retrievalTopK');
+  return topK;
 }
 
 function parseModels(value: unknown): ModelSetting[] {
@@ -114,7 +159,32 @@ function parseRegistries(value: unknown): string[] {
   return [...(value as string[])];
 }
 
-/** Plugin-catalog, plugin-source and web-tool keys; any other key is not an owned setting. */
+/** RAGFlow connection and retrieval keys; any other key is not an owned setting. */
+function parseRagflowSetting(key: string, value: unknown): unknown {
+  switch (key) {
+    case 'ragflowBaseUrl':
+      if (typeof value !== 'string' || (value !== '' && !isRagflowBaseUrl(value))) {
+        throw fieldError(key);
+      }
+      return value;
+    case 'ragflowApiKey':
+    case 'retrievalRerankId':
+      if (typeof value !== 'string') throw fieldError(key);
+      return value;
+    case 'retrievalTopK':
+      return requireTopK(value);
+    case 'retrievalSimilarityThreshold':
+    case 'retrievalKeywordsWeight':
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1) {
+        throw fieldError(key);
+      }
+      return value;
+    default:
+      throw fieldError(key);
+  }
+}
+
+/** Plugin-catalog, plugin-source and web-tool keys; other keys continue to the RAGFlow keys. */
 function parsePluginSetting(key: string, value: unknown): unknown {
   switch (key) {
     case 'pluginCatalog':
@@ -126,7 +196,7 @@ function parsePluginSetting(key: string, value: unknown): unknown {
       if (typeof value !== 'boolean') throw fieldError(key);
       return value;
     default:
-      throw fieldError(key);
+      return parseRagflowSetting(key, value);
   }
 }
 

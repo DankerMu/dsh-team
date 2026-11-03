@@ -45,6 +45,8 @@ const LOG_REDACT_PATHS = [
   'apiKey',
   'modelApiKey',
   '*.modelApiKey',
+  'ragflowApiKey',
+  '*.ragflowApiKey',
   'fileTokenSecret',
   '*.fileTokenSecret',
   'instanceToken',

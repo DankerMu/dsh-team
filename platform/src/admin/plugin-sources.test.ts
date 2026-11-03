@@ -7,6 +7,7 @@ import {
   administrator,
   putConfig,
   SEEDED_SETTINGS,
+  seededWith,
   settingsRows,
 } from '../../test/admin-config-fixture.ts';
 
@@ -36,12 +37,8 @@ const audits = (database: DatabaseHandle) =>
     .all();
 const allAudits = (database: DatabaseHandle) =>
   database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-const sourceRows = (registries: string[], probe: boolean) => [
-  SEEDED_SETTINGS[0],
-  { key: 'pluginRegistries', value: JSON.stringify(registries) },
-  { key: 'registryProbeEnabled', value: String(probe) },
-  SEEDED_SETTINGS[3],
-];
+const sourceRows = (registries: string[], probe: boolean) =>
+  seededWith({ pluginRegistries: JSON.stringify(registries), registryProbeEnabled: String(probe) });
 const save = (app: FastifyInstance, cookie: string, payload: unknown) =>
   app.inject({
     method: 'PUT',

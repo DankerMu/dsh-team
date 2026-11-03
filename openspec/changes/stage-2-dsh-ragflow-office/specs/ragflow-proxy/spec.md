@@ -56,12 +56,12 @@
 
 ### Requirement: 连接设置和检索参数在平台侧应用且保存即生效
 
-代理每次处理请求时 MUST 读取最新保存的 RAGFlow 地址、密钥和检索参数（top_k、相似度阈值、关键词权重、rerank 选择），不缓存。检索参数 MUST 只由平台在调用 RAGFlow 时加入；实例请求中携带的任何检索参数字段 MUST 被拒绝为 `invalid-request`，不访问 RAGFlow。RAGFlow 未配置时，代理接口 MUST 返回 `not-configured` 且不发出外部请求。
+代理每次处理请求时 MUST 读取最新保存的 RAGFlow 地址、密钥和检索参数（返回片段数、相似度阈值、关键词权重、重排模型），不缓存。检索参数 MUST 只由平台在调用 RAGFlow 时加入；实例请求中携带的任何检索参数字段 MUST 被拒绝为 `invalid-request`，不访问 RAGFlow。RAGFlow 未配置时，代理接口 MUST 返回 `not-configured` 且不发出外部请求。
 
 #### Scenario: 管理员改参数后下一次检索立即使用新值
 
-- **WHEN** 管理员把 top_k 从 8 改为 3 并保存，之后实例发起一次检索
-- **THEN** 平台发给 RAGFlow 的检索请求使用 top_k=3，无需重启实例
+- **WHEN** 管理员把返回片段数从 8 改为 3 并保存，之后实例发起一次检索
+- **THEN** 平台发给 RAGFlow 的检索请求返回片段数（`page_size`）为 3，无需重启实例
 
 #### Scenario: 实例不能自带检索参数
 

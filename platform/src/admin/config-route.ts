@@ -11,14 +11,15 @@ export interface AdminConfigOptions {
   resolveSourceAddress: SourceAddressResolver;
 }
 interface ConfigDescriptor {
-  name: 'model' | 'runtime' | 'plugin-catalog' | 'plugin-sources' | 'web-tools';
+  name: 'model' | 'runtime' | 'plugin-catalog' | 'plugin-sources' | 'web-tools' | 'ragflow';
   path: string;
   auditType:
     | 'model-config.updated'
     | 'runtime-config.updated'
     | 'plugin-catalog.updated'
     | 'plugin-sources.updated'
-    | 'web-tools.updated';
+    | 'web-tools.updated'
+    | 'ragflow-config.updated';
   bodySchema: FastifySchema['body'];
   responseSchema: {
     readonly type: 'object';
