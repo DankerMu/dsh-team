@@ -46,8 +46,12 @@ export default defineConfig({
           name: 'stack',
           include: ['platform/test/**/*.stack.test.ts'],
           fileParallelism: false,
-          // Two cold image builds (600s each) plus compose, health and drainage.
-          testTimeout: 1_800_000,
+          // Two cold image builds (600s each, 1200s) leave 1200s for compose, health, the
+          // conversation, 13 in-instance proxy calls (30s each at most), drainage and the RAGFlow
+          // restore, which is bounded at 300s from before `docker start` (its 60s CLI bound lies
+          // inside). That remainder is a margin, not the sum of every per-step bound: a vitest
+          // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5).
+          testTimeout: 2_400_000,
         },
       },
     ],
