@@ -1816,6 +1816,154 @@ Evidence (15.1 覆盖层下发平台地址，#447):
 - 15.2：`platformUrl` 已由覆盖层给出；host 半区读取 `DSH_TEAM_INSTANCE_TOKEN`、注册路由并调用 `<platformUrl>/_platform/instance-api/ragflow/…`。
 - 残余（写进 AGENTS.md 与交接）：「平台在 +3 上监听 `PLATFORM_PORT`」只在 `PLATFORM_HOST` 绑到所有地址时成立（Compose 要求 `0.0.0.0`）；网络方式下平台容器若绑定别的地址，插件到不了平台。运营方改了 `PLATFORM_PORT` 并重建平台后，运行中的实例在下次启动前仍持有旧端口。
 
+Risk packs (15.2 左侧栏「知识库」面板，#419): fixture level expanded（与 issue 建议一致：员工第一次在浏览器里看到上游数据，请求经插件自己的 host 路由用实例令牌访问平台代理）。范围控件是 15.3（#420），检索工具是 15.4（#421）；本 issue 不涉及检索范围。selected：
+
+- **Public API**（DSH 0.2.1-rc.2 发行版接口，编排者从本机用户镜像只读提取发行包核对）：
+  - host 路由用 `ctx.connection.fetch.register({ path, methods: ['GET'], requestBody: 'buffered', fetch })`（`dsh-client-connection/lib/index.js:840-854`，类型 `lib/types/rpc.d.ts:114-141`）。
+    - 路径必须是 `/api/<段>`，段只能用 `[A-Za-z0-9_$.-]`，只能精确匹配，没有路径参数。
+    - DSH 在交给处理函数之前完成鉴权：`/api` 前缀路由先走 `connection.admit`：未鉴权得到 401，Host 或 Origin 不受信任得到 403，不是本人的 Peer 得到 403（`:1048-1055`、`:742-751`、`:826-831`）。浏览器经平台网关到达时，带的是网关注入的 DSH cookie。
+    - 发行插件 `dsh-client-ui-deliverables`、`dsh-client-file-upload` 用的是同一种写法。
+    - host 模块因此新增导出 `inject = ['connection']`。
+  - 两条路由，编排者钉死：
+    - `GET /api/knowledge-base.datasets`：无查询参数。有任何查询串时，返回 `invalid-request` 并且不发上游请求。它转发到 `<platformUrl>/_platform/instance-api/ragflow/datasets`。
+    - `GET /api/knowledge-base.documents?datasetId=<32 位小写 hex>&page=<1..999999>&pageSize=<1..100>[&keywords=<非空白，≤256 UTF-8 字节>]`：
+      - 查询串的解析规则与 #415 的代理一致：严格解析并做百分号解码，未知、重复、格式不合法的参数都返回 `invalid-request`，不发上游请求；
+      - 合法时转发到 `<platformUrl>/_platform/instance-api/ragflow/datasets/<id>/documents?page=&page_size=&keywords=`。
+  - 两条路由都只回 HTTP 200，响应头 `content-type: application/json`、`cache-control: no-store`。响应体是封闭集合：
+    - `{ result: 'ok', datasets: [{ id, name }] }`；
+    - `{ result: 'ok', total, documents: [{ id, name }] }`；
+    - `{ result }`，`result` 取 `not-configured`、`unavailable`、`timeout`、`upstream-error`、`invalid-request` 之一。
+  - host 到平台这一跳：
+    - 请求头 `Authorization: Bearer <DSH_TEAM_INSTANCE_TOKEN>`，令牌直接从 `process.env` 读取；
+    - `redirect: 'manual'`；单次 25 秒期限（代理每次上游调用 10 秒），覆盖到响应体读完；响应体上限 2 MiB（代理自身允许 1000 个库 × 名字 1024 字节，约 1.07 MB；rc2 实际把库名限制在 128 字节），上限作为平台请求函数的参数，15.4 的检索回应用 8 MiB；不重试；
+    - 客户端断开或插件卸载时中止请求。
+  - 平台回应的映射：
+    - 平台回 HTTP 200，并且回应体能通过本插件对代理响应形状的严格校验时，原样转出（只保留上面列出的字段）；
+    - 3xx、401 和其他非 200、超出上限、无法解析或形状不合法 → `upstream-error`；401 单独记一行固定日志，便于排查令牌问题；
+    - 传输失败 → `unavailable`；超时 → `timeout`。
+    - 平台自己的 `result`（例如 `not-configured`）原样传出。
+- **Config / 可用性**：
+  - 插件可用的条件是同时满足两点：覆盖层给了合法的 `{ platformUrl }`（#418 的校验、#447 的输出），并且 `DSH_TEAM_INSTANCE_TOKEN` 是 64 位小写 hex。
+  - 可用时注册两条路由，并经 `webserver/index-inject` 发布页面全局 `__DSH_TEAM_KNOWLEDGE_BASE__ = { available: true }`（与 `platform-nav` 发布全局变量的机制相同）。
+  - 不可用时（published-loopback、员工的旧覆盖层、令牌缺失或形状不合法）：不注册路由，发布 `{ available: false }`。client 据此不注册面板，这对应设计里的「插件在该实例不可用」。
+  - 令牌不在页面全局、日志或回应里出现。
+- **Client 半区**（左侧栏面板的落点，编排者裁定）：
+  - DSH 0.2.1 的左侧栏没有可以放内容的槽位：`sidebar.workspaces` 是会话树单槽，`sidebar.footer.action` 是页脚入口（`dsh-client-ui-sidebar/lib/client.js:487-521`）。
+  - 发行版的「面板」做法是成对注册（参照 `dsh-client-ui-schedule/lib/client.js:7467-7490`）：
+    - 在 `sidebar.panellist` 注册一行入口（`{ id: 'knowledge-base', order, label: () => '知识库' }`，组件接收 `{ size, active }`，用内联 SVG 图标）；
+    - 在 `main` 注册同一个 key 的页面组件；
+    - `layout.selectPanel(id)` 要求 `main` 中存在同 key 的条目（`dsh-client-ui-layout`，`:469`）。
+  - 「左侧栏『知识库』面板」按这个发行版定义实现：入口在左侧栏，内容显示在主区域，和 DSH 自带的定时任务面板一样。
+  - `package.json` 的 `dsh.client.inject` 加上 `@deepseek-ai/dsh-client-ui-layout`。client 运行时的 `inject` 为 `['slots']`。React 用 `requireClient('react')` 取得。不依赖 `primitives` 组件，界面元素用普通 DOM 元素加 DSH 的 CSS 变量，与 `platform-nav` 相同。
+  - 所有文案固定为中文，不注册多语言资源。
+  - 结构（`eslint.config.mjs:25-30` 对 `plugins/*/client.js` 限制每个函数 200 行、复杂度 15、整个文件 800 行）：组件和辅助函数放在文件顶层的 IIFE 或块里（该规则不计 IIFE），`factory` 只做注入和注册。host 与 client 都保持单文件；如果超过 800 行必须拆文件，就会改到关键路径 `images/dsh-user/Dockerfile` 的 COPY 列表，这时停下来报告。
+  - 请求一律是同源相对地址 `fetch('api/knowledge-base.…')`（`frontend-static` 注入了 `<base href="./">`）。所有回应体都要读完，再更新界面状态。
+- **状态机**（spec「五种状态可区分」，编排者钉死映射）：
+  - 库列表：
+    - 加载中：首次打开与刷新时；
+    - 知识库未配置：`not-configured`；不显示空列表，也不给重试按钮；
+    - 失败可重试：`unavailable`、`timeout`、`upstream-error`、`invalid-request`，并给一个重试按钮；
+    - 空库：`ok` 并且 0 个库；
+    - 无匹配：有库，但按库名搜索（客户端过滤，不区分大小写的子串匹配，搜索框非空）后一个都不剩；
+    - 列表：其余情况。
+  - 展开的库：
+    - 文件分页大小固定 20，由 client 传给 `pageSize`；
+    - 加载中 / 知识库未配置 / 失败可重试（重试同一页）；
+    - 空库：`total` 为 0 且没有文件名筛选；
+    - 无匹配：`total` 为 0 且有筛选；
+    - 文件列表：带「上一页／下一页」和「第 x / N 页」。按文件名筛选用 `keywords`：按回车或点击筛选按钮提交，提交后回到第 1 页。
+    - 筛选词在发请求前用与代理相同的规则校验（空白判断含 U+0085，上限 256 个 UTF-8 字节）：全是空白就当作清除筛选；超出上限就不提交，显示单独的提示「筛选词过长」，不进入失败可重试（否则重试永远失败）。
+    - `total > 0` 但当前页为空（文件在两次请求之间被删，页码超出末页）：退回到最后一页重新请求一次，仍为空就显示空库或无匹配。
+  - 每种状态的文案互不相同，界面元素带稳定的 `data-dsh-team-kb-state` 属性，单元测试和浏览器用例按它定位。
+  - 刷新按钮重新拉库列表并收起所有展开的库。
+  - 旧请求不能覆盖新状态：每个库、以及库列表各有一个请求序号，过期回应直接丢弃。
+  - 浏览操作不读也不写任何 Session 或范围数据（spec「浏览不改变范围」；15.3 之前没有范围可言）。
+- **Auth / permissions / secrets**：
+  - 浏览器只访问 DSH 自己的 `/api/knowledge-base.*`，拿不到实例令牌，也看不到平台地址。
+  - 回应里只有库与文件的 ID 和名称、文件总数和封闭集合的 `result`。
+  - host 日志只写固定文本和 `result`，不写 `keywords`、令牌、平台地址或回应体。
+- **Error handling**：
+  - 平台回应或网络发生任何异常，都映射成封闭集合，不抛到 DSH（处理函数抛错时 DSH 会回 400，不可控）。
+  - client 遇到非 200 或无法解析的 JSON 时，按「失败可重试」处理，不在控制台报错。
+- **Resource limits**：每个库最多一个进行中的请求，新请求发出前中止旧请求；库列表同理。
+
+not selected：
+
+- Concurrency / shared state：插件没有持久状态。
+- Migration / Schema：没有数据库或设置变化。
+
+**不变量**：
+
+- 不可用的实例上没有面板、没有路由、也不发请求；直接打开 DSH 的验证通道仍然没有控制台错误。
+- 浏览器拿不到令牌和平台地址；面板只显示库名与文件名。
+- 五种状态（以及「列表」）可区分，文案互不相同。
+
+**Must preserve**：
+
+- #418 的配置契约（`apply` 对畸形配置抛错、没有地址时什么都不做），只在此基础上加路由和页面全局。
+- 启动模块清单不变（client 模块 id 仍为 `@dsh-team/knowledge-base`）；managed-policy 中 loader 条目的断言不变。
+- #417 的本机通道用例的全部既有断言与顺序：停机期间员工登录、启动、对话，以及四个接口的两组结果。
+
+**同级面**：
+
+- 15.3：在同一个 client 模块里加输入区范围控件，同样借用 host 路由取库列表。
+- 15.4：检索工具在 host 半区直接调用代理，不经过浏览器路由。
+
+**宽度**：host 路由、client 面板、两个测试文件和本机通道用例，预计超过 400 行，开 PR 时打 `diff-limit-exempt`（创建 PR 之后再加标签，并确认 `opened` 那次的 diff 守卫有没有被重跑覆盖）。`plugins/` 不是关键路径；`images/dsh-user/Dockerfile` 只 COPY 四个文件，host 与 client 各保持单文件，所以 Dockerfile 不变（镜像内容随插件变化）。
+
+Evidence (15.2 左侧栏「知识库」面板，#419):
+
+**改动点**：
+
+- `plugins/knowledge-base/index.js`：
+  - 导出 `inject`；
+  - 可用性判断、页面全局、两条路由、查询串解析、到平台的请求与回应校验和映射。
+- `plugins/knowledge-base/client.js`：面板入口、主区页面和状态机。
+- `index.test.js`、`client.test.js`：client 测试用 jsdom 加 `react-test-renderer`，照 `platform-nav` 的写法。
+- `types.d.ts`、`client.types.d.ts`、`package.json`（`dsh.client.inject`）、`README.md`。
+- 本机通道用例：`platform/test/platform-stack.stack.test.ts`。浏览器操作新写在 `platform/test/knowledge-panel-stack-fixture.ts`，复用 `stack-browser-fixture.ts` 的登录、证据收集和截图写法；不依赖 Docker 的纯函数配一个集成测试。
+- 截图目录照现有的 `reports/stack/<runId>`。
+- `AGENTS.md`、`docs/LOCAL_STACK.md` 由 orchestrator 改。
+
+**测试**：
+
+- 单元测试（`pnpm test`），覆盖率逐文件 80%。
+  - host：
+    - 可用性矩阵（地址有或无 × 令牌合法、缺失或畸形）决定是否注册路由，以及页面全局的取值；
+    - 两条路由的查询串合法与非法情况：非法时没有上游请求；
+    - 上游请求的地址、方法、`Authorization` 和 `redirect` 选项；
+    - 平台回应的每一种映射：`ok` 透传，平台自己的 `not-configured` 等原样传出，3xx、401、500、超出上限、非 JSON、形状不合法都是 `upstream-error`，传输失败是 `unavailable`，超时是 `timeout`；
+    - 请求中止；日志里没有 keywords 和令牌。
+  - client：
+    - 只在 `available: true` 时注册面板入口和 `main`，两者的 key 一致；页面全局缺失、不是对象或 `available` 不是 `true` 时什么都不注册（对应 spec「启用状态服从目录」中 forced-off 没有面板，以及不可用实例）；
+    - 库列表六种显示（加载中、未配置、失败可重试、空库、无匹配、列表），文案互不相同；重试；刷新会收起展开的库；
+    - 展开的库六种显示；筛选回到第 1 页；空白筛选当作清除，超长筛选显示单独提示且不发请求；页码超出末页时退回；翻页边界；
+    - 过期回应被丢弃；
+    - 只请求 `api/knowledge-base.*`，回应体都被读完。
+- 本机通道（`pnpm test:stack`，Playwright Chromium 经网关访问真实种子数据），截图都带面板状态：
+  1. **知识库未配置**：在管理员保存模型设置之后、`configureRagflow` 之前，用 `registerDeploymentEmployee` 注册第二个员工，它的容器、卷和网络由该函数登记清理。用 `instanceGatewayFixture` 预先启动它的实例（照 `platform-stack.stack.test.ts:209-216`），打开「知识库」面板，看到「知识库未配置」，没有重试按钮，截图 `kb-not-configured.png`。截图后先结束这个员工的面板浏览器会话（停止观察并关闭浏览器；禁用会主动断开该用户的 WebSocket，开着的页面会产生重连错误），再由管理员 `PUT /_platform/api/admin/users/<id>/status`（`{ status: 'disabled' }`，带 origin 与管理员 cookie），要求回 204：204 只在实例退役完成之后才返回（`platform/src/admin/account-status.ts:72-93`，`instance-service.ts:333`），不需要轮询，非 204 就让用例失败。`runningInstances` 在下一次配置 PUT 时现查（`config-route.ts:160-163`），所以随后的 `configureRagflow` 看到 0。第二个员工的邮箱与 `employee@deployment.example.test` 不同。之后进入 #417 的流程。这样 `ragflow-stack-fixture.ts:604`（`runningInstances: 0`）与 `:708`（`runningInstances: 1`）不用改。不用管理员本人的实例：它会改变这两处计数，资源也没有登记清理。
+  2. **失败可重试**：RAGFlow 停机期间，放在 `proxyWhileDown` 之后、`proxyAfterRestore` 之前（恢复在后者里面，`ragflow-stack-fixture.ts:681`）。员工打开面板，库列表是失败可重试；点重试仍然失败。截图 `kb-unavailable.png`。
+  3. **恢复后**：在 `proxyAfterRestore` 之后（阈值改动不影响浏览）：
+     - 刷新，三个种子库名都在列表中（本机 RAGFlow 里可能还有别的库），截图 `kb-datasets.png`；
+     - 展开 `dsh-team-seed-policies`，看到 2 个文件，截图 `kb-files.png`；
+     - 文件名筛选 `expense`，看到 1 个文件 `expense-policy.txt`，截图 `kb-filter.png`；
+     - 按库名搜索一个随机字符串，看到「无匹配」，截图 `kb-no-match.png`。
+  - 所有面板会话：控制台错误 0、页面错误 0、失败请求 0、外部请求 0。每一步都等 `data-dsh-team-kb-state` 离开「加载中」再做下一步，因为被中止的请求在 Playwright 里算失败请求（`net::ERR_ABORTED`）；关闭浏览器之前先停止观察（照 `stack-browser-fixture.ts:186`）。
+  - `stackEvidence` 增加单独的 `panel` 证据对象，只记各步的状态名、库数、文件数和面板截图名；面板截图不并入既有的截图列表（`platform-stack.stack.test.ts:374` 对它做精确比较），名字也不与 `failure.png` 等既有名重复。
+  - 种子库每个只有 2 个文件，真实数据走不到翻页；翻页由单元测试覆盖，PR 里写明。
+- 先红后绿：新的单元断言先失败，stack 中的面板步骤也先失败（面板不存在），再实现。
+
+**命令**：
+
+- `pnpm test`、`pnpm check`
+- 本机 exact-head 的 `pnpm test:stack`，并贴证据评论
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`（清理已确认）
+
+**交接**：
+
+- 15.3：范围控件同样通过 `api/knowledge-base.datasets` 取库列表；Session 事件的读写在 client 里做。
+- 15.4：检索工具在 host 半区复用本 issue 的平台请求函数，增加 `POST retrieval`。
+
 ## 16. Document Server 部署与实例网络接入
 
 依赖：1、10（Office 相关 PR 的本机证据）。关键路径 `platform/src/orchestrator/`（16.3）。

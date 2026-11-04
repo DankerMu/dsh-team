@@ -26,30 +26,44 @@ export interface StackBrowserEvidence {
   readonly websockets: number;
 }
 
-export interface StackConversation {
+/** One employee's observed browser session on the platform's public origin. */
+export interface StackSession {
   /** The platform's public origin, the only origin the browser may contact. */
   readonly base: string;
   /** Screenshot directory, `reports/stack/<runId>/`. */
   readonly directory: string;
   readonly email: string;
   readonly password: string;
+  readonly timeout: number;
+}
+
+export interface StackConversation extends StackSession {
   readonly message: string;
   readonly reply: string;
-  readonly timeout: number;
   /** Resolves once the provider has served the whole turn; the transcript checks follow it. */
   readonly turnComplete: () => Promise<void>;
 }
 
-/** A failed conversation: the original failure as `cause`, plus everything observed so far. */
+/** What a session names in its messages and screenshots. */
+export interface StackSessionNames {
+  /** Used in failure messages: `Stack workbench <label> failed`. */
+  readonly label: string;
+  /** Taken on the login page before any field holds a credential; omitted when absent. */
+  readonly login?: string;
+  /** Best-effort screenshot of a failed session. */
+  readonly failure: string;
+}
+
+/** A failed session: the original failure as `cause`, plus everything observed so far. */
 export class StackWorkbenchFailure extends Error {
   readonly evidence: StackBrowserEvidence;
 
-  constructor(cause: unknown, evidence: StackBrowserEvidence) {
+  constructor(cause: unknown, evidence: StackBrowserEvidence, label = 'conversation') {
     const counts = (['consoleErrors', 'pageErrors', 'failedRequests', 'externalRequests'] as const)
       .map((key) => `${key}=${String(evidence[key].length)}`)
       .join(' ');
     const reason = cause instanceof Error ? cause.message : 'unknown failure';
-    super(`Stack workbench conversation failed (${counts}): ${reason}`, { cause });
+    super(`Stack workbench ${label} failed (${counts}): ${reason}`, { cause });
     this.name = 'StackWorkbenchFailure';
     this.evidence = evidence;
   }
@@ -81,15 +95,17 @@ export async function until(check: () => Promise<boolean>, timeout: number, labe
 }
 
 /**
- * Logs one employee in through the platform login page, lands on the gateway's real DSH
- * workbench and sends one message. The turn must visibly start, the provider must report it
- * served, and only then are the transcript reply and the end of the turn accepted.
+ * Logs one employee in through the platform login page and waits for the gateway's real DSH
+ * workbench composer; `body` then drives the page. Console, page, request-failure and external
+ * request evidence covers the whole session and stops before the browser closes.
  */
-export async function converseInWorkbench(
-  conversation: StackConversation,
+export async function workbenchSession(
+  session: StackSession,
+  names: StackSessionNames,
+  body: (page: Page, shoot: (name: string) => Promise<void>) => Promise<void>,
   launch: () => Promise<Browser> = () => chromium.launch(),
 ): Promise<StackBrowserEvidence> {
-  const { base, directory, timeout } = conversation;
+  const { base, directory, timeout } = session;
   const platform = new URL(base);
   const screenshots: string[] = [];
   const consoleErrors: string[] = [];
@@ -145,53 +161,73 @@ export async function converseInWorkbench(
     });
     await page.goto(`${base}/_platform/login`, { waitUntil: 'networkidle' });
     // Captured before any field holds a credential.
-    await shoot('login');
-    await page.getByLabel('邮箱').fill(conversation.email);
-    await page.getByLabel('密码').fill(conversation.password);
+    if (names.login !== undefined) await shoot(names.login);
+    await page.getByLabel('邮箱').fill(session.email);
+    await page.getByLabel('密码').fill(session.password);
     await Promise.all([
       page.waitForURL(`${base}/`, { timeout }),
       page.getByRole('button', { name: '登录', exact: true }).click(),
     ]);
     const workbench = page;
     await until(async () => (await composerState(workbench)) === 'ready', timeout, 'composer');
-    await shoot('workbench');
-    await page.locator('[contenteditable="true"]').first().focus();
-    await page.keyboard.insertText(conversation.message);
-    // A turn-end state before the turn ever started proves nothing: latch STOP first. A scripted
-    // turn can finish within a second, so the in-page wait is armed before the click.
-    await Promise.all([
-      page.locator(STOP).first().waitFor({ state: 'visible', timeout }),
-      page.locator(SEND).first().click(),
-    ]);
-    await conversation.turnComplete();
-    await page
-      .locator(TRANSCRIPT)
-      .getByText(conversation.reply)
-      .first()
-      .waitFor({ state: 'visible', timeout });
-    await until(
-      async () =>
-        (await workbench.locator(STOP).count()) === 0 &&
-        (await workbench.locator(SEND).count()) > 0,
-      timeout,
-      'turn end',
-    );
-    await shoot('reply');
+    await body(workbench, shoot);
   } catch (error) {
-    // Best effort: a failed screenshot must not replace the conversation's own failure.
-    await shoot('failure').catch(() => undefined);
-    failures.push(new StackWorkbenchFailure(error, evidence()));
+    // Best effort: a failed screenshot must not replace the session's own failure.
+    await shoot(names.failure).catch(() => undefined);
+    failures.push(new StackWorkbenchFailure(error, evidence(), names.label));
   }
-  // Teardown aborts are not part of the observed conversation.
+  // Teardown aborts are not part of the observed session.
   observing = false;
   try {
     await browser.close();
   } catch (error) {
     failures.push(error);
   }
-  // The conversation's failure stays first; a close failure follows it.
+  // The session's failure stays first; a close failure follows it.
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1)
-    throw new AggregateError(failures, 'Stack workbench conversation and browser close failed');
+    throw new AggregateError(failures, `Stack workbench ${names.label} and browser close failed`);
   return evidence();
+}
+
+/**
+ * Logs one employee in, lands on the gateway's real DSH workbench and sends one message. The
+ * turn must visibly start, the provider must report it served, and only then are the transcript
+ * reply and the end of the turn accepted.
+ */
+export function converseInWorkbench(
+  conversation: StackConversation,
+  launch?: () => Promise<Browser>,
+): Promise<StackBrowserEvidence> {
+  const { timeout } = conversation;
+  const names = { label: 'conversation', login: 'login', failure: 'failure' };
+  return workbenchSession(
+    conversation,
+    names,
+    async (page, shoot) => {
+      await shoot('workbench');
+      await page.locator('[contenteditable="true"]').first().focus();
+      await page.keyboard.insertText(conversation.message);
+      // A turn-end state before the turn ever started proves nothing: latch STOP first. A
+      // scripted turn can finish within a second, so the in-page wait is armed before the click.
+      await Promise.all([
+        page.locator(STOP).first().waitFor({ state: 'visible', timeout }),
+        page.locator(SEND).first().click(),
+      ]);
+      await conversation.turnComplete();
+      await page
+        .locator(TRANSCRIPT)
+        .getByText(conversation.reply)
+        .first()
+        .waitFor({ state: 'visible', timeout });
+      await until(
+        async () =>
+          (await page.locator(STOP).count()) === 0 && (await page.locator(SEND).count()) > 0,
+        timeout,
+        'turn end',
+      );
+      await shoot('reply');
+    },
+    launch,
+  );
 }

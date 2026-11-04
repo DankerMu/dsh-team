@@ -10,7 +10,10 @@ import {
   STACK_CONFIG_RELATIVE_PATH,
   configuredStack,
 } from '../../scripts/test-stack-prerequisites.mjs';
-import { prepareDeploymentAccounts } from './deployment-account-fixture.ts';
+import {
+  prepareDeploymentAccounts,
+  registerDeploymentEmployee,
+} from './deployment-account-fixture.ts';
 import {
   buildPlatformImage,
   platformImageId,
@@ -28,6 +31,12 @@ import {
 import { isAbsentResource } from './docker-command.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
+import {
+  notConfiguredPanel,
+  restoredPanel,
+  unavailablePanel,
+} from './knowledge-panel-stack-fixture.ts';
+import type { PanelSessionEvidence } from './knowledge-panel-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 import {
   comparableRagflowStack,
@@ -40,7 +49,7 @@ import {
   ragflowStackSnapshot,
 } from './ragflow-stack-fixture.ts';
 import { converseInWorkbench, until } from './stack-browser-fixture.ts';
-import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
+import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -108,8 +117,16 @@ interface Timings {
 
 type RagflowStack = Awaited<ReturnType<typeof ragflowStackSnapshot>>;
 
+/** The 「知识库」 panel's three observed sessions, kept apart from the conversation's. */
+interface PanelEvidence {
+  notConfigured: PanelSessionEvidence;
+  unavailable?: PanelSessionEvidence;
+  restored?: PanelSessionEvidence;
+}
+
 interface ConversationEvidence {
   browser?: StackBrowserEvidence;
+  panel?: PanelEvidence;
   provider?: Record<string, unknown>;
   proxy?: Awaited<ReturnType<typeof proxyWhileDown>> &
     Awaited<ReturnType<typeof proxyAfterRestore>>;
@@ -135,6 +152,53 @@ function ownedModel(runId: string) {
       script: { path: `/data/work/stack-${runId}.txt`, content: `stack-content-${randomUUID()}\n` },
     },
   };
+}
+
+const PASSWORD = 'instance-acceptance-password';
+
+/** Starts one employee's instance through the platform API and waits until it is running. */
+async function startInstance(lifecycle: UserImageLifecycle, base: string, cookie: string) {
+  const gateway = instanceGatewayFixture({ lifecycle, base, origin: base });
+  try {
+    await gateway.state(cookie, true);
+    // Bounds only the poll: the platform's own 60s limits decide whether the start succeeds.
+    await gateway.ready(cookie, 180_000);
+  } finally {
+    gateway.close();
+  }
+}
+
+/** One employee's panel browser session; screenshots share the run's report directory. */
+function panelSession(lifecycle: UserImageLifecycle, base: string, email: string): StackSession {
+  const directory = join(lifecycle.repositoryRoot, 'reports/stack', lifecycle.runId);
+  return { base, directory, email, password: PASSWORD, timeout: 60_000 };
+}
+
+/**
+ * Before RAGFlow is configured, a second employee's panel shows 「知识库未配置」. Its browser has
+ * closed before the administrator disables the account (disabling drops the user's WebSockets);
+ * 204 arrives only after the instance is retired, so the running counts later stay unchanged.
+ */
+async function unconfiguredEmployeePanel(
+  lifecycle: UserImageLifecycle,
+  administrator: { base: string; cookie: string },
+): Promise<PanelSessionEvidence> {
+  const { base } = administrator;
+  const second = await registerDeploymentEmployee(
+    lifecycle,
+    { base, request: fetch },
+    'knowledge@deployment.example.test',
+  );
+  await startInstance(lifecycle, base, second.cookie);
+  const panel = await notConfiguredPanel(panelSession(lifecycle, base, second.email));
+  const disabled = await fetch(`${base}/_platform/api/admin/users/${second.id}/status`, {
+    method: 'PUT',
+    headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'disabled' }),
+  });
+  await disabled.arrayBuffer();
+  expect(disabled.status).toBe(204);
+  return panel;
 }
 
 const PROVIDER_HEALTH =
@@ -180,13 +244,20 @@ async function converse(
     },
   );
   const administrator = { base, cookie: admin.cookie };
+  const panel: PanelEvidence = {
+    notConfigured: await unconfiguredEmployeePanel(lifecycle, administrator),
+  };
+  evidence.panel = panel;
   const baseURL = await configureRagflow(administrator, ragflow.stack);
   const outage = ragflowOutage(run, ragflow.stack, ragflow.seed);
   await duringRagflowOutage(outage, async () => {
     await workbenchTurn(lifecycle, run, { base, employee, model, evidence });
     const call = await instanceProxy(run, employee.id);
     const down = await proxyWhileDown(administrator, baseURL, call);
+    panel.unavailable = await unavailablePanel(panelSession(lifecycle, base, employee.email));
     evidence.proxy = { ...down, ...(await proxyAfterRestore(administrator, outage, call)) };
+    // Browsing ignores the retrieval threshold proxyAfterRestore has just saved.
+    panel.restored = await restoredPanel(panelSession(lifecycle, base, employee.email));
   });
 }
 
@@ -206,19 +277,12 @@ async function workbenchTurn(
   const platformRead = (script: string) =>
     privatePlatformRead(async (args) => ({ stdout: await run(args) }), script);
   const timeout = 120_000;
-  const gateway = instanceGatewayFixture({ lifecycle, base, origin: base });
-  try {
-    await gateway.state(employee.cookie, true);
-    // Bounds only the poll: the platform's own 60s limits decide whether the start succeeds.
-    await gateway.ready(employee.cookie, 180_000);
-  } finally {
-    gateway.close();
-  }
+  await startInstance(lifecycle, base, employee.cookie);
   evidence.browser = await converseInWorkbench({
     base,
     directory: join(lifecycle.repositoryRoot, 'reports/stack', lifecycle.runId),
     email: employee.email,
-    password: 'instance-acceptance-password',
+    password: PASSWORD,
     message: `${provider.marker} 请按脚本写入文件`,
     reply: provider.reply,
     timeout,
@@ -363,9 +427,11 @@ it('builds both images, starts the delivered compose platform, converses through
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
-  const { browser, provider, proxy, ragflow } = evidence;
+  const { browser, provider, proxy, ragflow, panel } = evidence;
   if (browser === undefined || provider === undefined || proxy === undefined)
     throw new Error('Conversation evidence missing');
+  if (panel?.unavailable === undefined || panel.restored === undefined)
+    throw new Error('Knowledge panel evidence missing');
   if (ragflow === undefined) throw new Error('RAGFlow test stack evidence missing');
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
@@ -385,6 +451,26 @@ it('builds both images, starts the delivered compose platform, converses through
   expect(provider.requests).toBeGreaterThanOrEqual(3);
   expect(provider.toolResults).toBeGreaterThanOrEqual(1);
   expect(provider.markedRequests).toBeGreaterThanOrEqual(3);
+  const sessions = [panel.notConfigured, panel.unavailable, panel.restored];
+  for (const session of sessions)
+    expect({
+      consoleErrors: session.browser.consoleErrors,
+      pageErrors: session.browser.pageErrors,
+      failedRequests: session.browser.failedRequests,
+      externalRequests: session.browser.externalRequests,
+    }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
+  const panelSteps = sessions.flatMap(({ steps }) => steps);
+  expect(panelSteps.map(({ step, state, screenshot }) => [step, state, screenshot])).toEqual([
+    ['not-configured', 'not-configured', 'kb-not-configured.png'],
+    ['unavailable', 'failed', 'kb-unavailable.png'],
+    ['datasets', 'list', 'kb-datasets.png'],
+    ['files', 'list', 'kb-files.png'],
+    ['filter', 'list', 'kb-filter.png'],
+    ['no-match', 'no-match', 'kb-no-match.png'],
+  ]);
+  expect(panelSteps.map(({ files }) => files)).toEqual([0, 0, 0, 2, 1, 0]);
+  const panelScreenshots = sessions.flatMap(({ browser: observed }) => observed.screenshots);
+  expect(panelScreenshots).toEqual(panelSteps.map(({ screenshot }) => screenshot));
   process.stdout.write(
     `${JSON.stringify({
       stackEvidence: {
@@ -402,6 +488,7 @@ it('builds both images, starts the delivered compose platform, converses through
           markedRequests: provider.markedRequests,
         },
         proxy,
+        panel: { steps: panelSteps, screenshots: panelScreenshots },
       },
     })}\n`,
   );
