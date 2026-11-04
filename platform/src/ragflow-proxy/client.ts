@@ -7,14 +7,24 @@ const BODY_LIMIT = 65_536;
 /**
  * The complete dataset list. Every rc2 row repeats the dataset's and its owner's base64 avatars,
  * so large avatars can exceed this; the list then fails as upstream-error rather than truncating.
+ * A document page and a retrieval answer, whose chunks carry rc2's token fields, share it.
  */
 const RAGFLOW_LIST_BODY_LIMIT = 8 * 1024 * 1024;
 // One unpaged read: paging while a dataset is deleted could skip one that still exists.
 const DATASETS_PATH = '/api/v1/datasets?page=1&page_size=1001&orderby=create_time&desc=false';
 /** Upper bound of the complete list; one more row fails instead of being cut off. */
-const MAX_DATASETS = 1_000;
+export const MAX_DATASETS = 1_000;
 // rc2 limits names to 128 bytes; a loose bound keeps one odd valid name from failing the list.
 const MAX_NAME_BYTES = 1_024;
+const RETRIEVAL_PATH = '/api/v1/retrieval';
+/**
+ * rc2's default rerank candidate pool. It rejects a page whose number exceeds candidates divided
+ * by page size (integer division), so a page size above 64 needs at least that many candidates.
+ */
+const RERANK_CANDIDATES = 64;
+// rc2 positions are five-number tuples whose meaning depends on the file type.
+const POSITION_LENGTH = 5;
+const MAX_POSITIONS = 1_024;
 /** RAGFlow v1.0.0-rc2 dataset IDs; its document IDs share the format. */
 export const RAGFLOW_DATASET_ID_PATTERN = '^[0-9a-f]{32}$';
 const ENTRY_ID = new RegExp(RAGFLOW_DATASET_ID_PATTERN);
@@ -35,8 +45,9 @@ export const RAGFLOW_RESULTS = [
   'timeout',
   'upstream-error',
   'invalid-request',
+  'no-results',
 ] as const;
-type RagflowFailure = Exclude<(typeof RAGFLOW_RESULTS)[number], 'ok'>;
+type RagflowFailure = Exclude<(typeof RAGFLOW_RESULTS)[number], 'ok' | 'no-results'>;
 type RagflowVersionOutcome =
   { readonly result: 'ok'; readonly version: string } | { readonly result: RagflowFailure };
 /** One listed dataset or document: only these two fields leave the module. */
@@ -65,6 +76,36 @@ interface RagflowConnection {
   readonly baseURL: string;
   readonly apiKey: string;
 }
+/** The saved connection and retrieval parameters, all from one settings read. */
+export interface RagflowSettings extends RagflowConnection {
+  readonly retrievalTopK: number;
+  readonly retrievalSimilarityThreshold: number;
+  readonly retrievalKeywordsWeight: number;
+  /** Empty for no reranking. */
+  readonly retrievalRerankId: string;
+}
+/** A retrieval the route has validated: a non-blank question and 1..1000 distinct dataset IDs. */
+export interface RagflowRetrievalRequest {
+  readonly question: string;
+  readonly datasetIds: readonly string[];
+}
+/** One retrieved chunk: only these fields leave the module. */
+interface RagflowChunk {
+  readonly content: string;
+  readonly documentName: string;
+  readonly datasetName: string;
+  /** rc2's tuples as sent, only when it has any; no page number is derived from them. */
+  readonly positions?: readonly (readonly number[])[];
+}
+type RagflowRetrievalOutcome =
+  | {
+      readonly result: 'ok';
+      /** Requested IDs absent from the current dataset list, in request order. */
+      readonly excluded: readonly string[];
+      readonly chunks: readonly RagflowChunk[];
+    }
+  | { readonly result: 'no-results'; readonly excluded: readonly string[] }
+  | { readonly result: RagflowFailure };
 type Send = (request: Request, init: { signal: AbortSignal }) => Promise<Response>;
 /** The unvalidated members of a RAGFlow envelope whose `code` is 0. */
 interface Answer {
@@ -115,7 +156,7 @@ async function classify(
   return status === 401 || status === 403 ? 'not-configured' : 'upstream-error';
 }
 
-/** One GET with its own deadline; external cancellation rejects instead of becoming a result. */
+/** One request with its own deadline; external cancellation rejects instead of becoming a result. */
 async function call(
   request: Request,
   signal: AbortSignal,
@@ -314,4 +355,136 @@ export async function listRagflowDocuments(
   if (typeof answer === 'string') return { result: answer };
   const documents = documentPage(answer, datasetId, query.pageSize);
   return documents === null ? { result: 'upstream-error' } : { result: 'ok', ...documents };
+}
+
+/** The upstream body: the saved parameters only, never anything the instance supplied. */
+function retrievalBody(
+  settings: RagflowSettings,
+  question: string,
+  datasetIds: readonly string[],
+): string {
+  return JSON.stringify({
+    question,
+    dataset_ids: datasetIds,
+    page: 1,
+    page_size: settings.retrievalTopK,
+    similarity_threshold: settings.retrievalSimilarityThreshold,
+    // rc2 derives the vector weight as 1 minus this one; sending both can contradict it.
+    keywords_similarity_weight: settings.retrievalKeywordsWeight,
+    ...(settings.retrievalRerankId === '' ? {} : { rerank_id: settings.retrievalRerankId }),
+    rerank_candidates_count: Math.max(RERANK_CANDIDATES, settings.retrievalTopK),
+    // Compiled knowledge rows have no source file, so they cannot become chunks.
+    include_knowledge_compilation: false,
+  });
+}
+
+function isPosition(value: unknown): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length === POSITION_LENGTH &&
+    value.every((item: unknown) => typeof item === 'number' && Number.isFinite(item))
+  );
+}
+
+/** A chunk's positions when it has any, undefined when absent, null or empty, null when invalid. */
+function positionsOf(row: object): readonly number[][] | undefined | null {
+  const value = 'positions' in row ? row.positions : undefined;
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_POSITIONS) return null;
+  const tuples: readonly unknown[] = value;
+  if (tuples.length === 0) return undefined;
+  return tuples.every(isPosition) ? tuples : null;
+}
+
+/** The source file name of a chunk, or null when it is not a usable name. */
+function documentName(row: object): string | null {
+  const name = 'document_keyword' in row ? row.document_keyword : undefined;
+  if (typeof name !== 'string' || name === '' || Buffer.byteLength(name) > MAX_NAME_BYTES)
+    return null;
+  return name;
+}
+
+/** One chunk as returned, or null unless it is valid and belongs to a retrieved dataset. */
+function chunkOf(row: unknown, scope: ReadonlyMap<string, string>): RagflowChunk | null {
+  if (typeof row !== 'object' || row === null) return null;
+  const content = 'content' in row ? row.content : undefined;
+  const name = documentName(row);
+  const datasetId = 'dataset_id' in row ? row.dataset_id : undefined;
+  // A chunk outside the retrieved datasets is out of scope, not merely unnamed.
+  const datasetName = typeof datasetId === 'string' ? scope.get(datasetId) : undefined;
+  const positions = positionsOf(row);
+  if (typeof content !== 'string' || name === null || datasetName === undefined) return null;
+  if (positions === null) return null;
+  const chunk = { content, documentName: name, datasetName };
+  return positions === undefined ? chunk : { ...chunk, positions };
+}
+
+/** Every chunk of one retrieval answer, or null when any part of it is not valid. */
+function retrievedChunks(
+  answer: Answer,
+  scope: ReadonlyMap<string, string>,
+  topK: number,
+): RagflowChunk[] | null {
+  const data = answer.data;
+  if (typeof data !== 'object' || data === null || !('chunks' in data)) return null;
+  if (!Array.isArray(data.chunks) || data.chunks.length > topK) return null;
+  const rows: readonly unknown[] = data.chunks;
+  const chunks: RagflowChunk[] = [];
+  for (const row of rows) {
+    const chunk = chunkOf(row, scope);
+    if (chunk === null) return null;
+    chunks.push(chunk);
+  }
+  return chunks;
+}
+
+/**
+ * Lists the current datasets, drops requested IDs that no longer exist, and retrieves from the
+ * rest in one request with the saved parameters; an empty address or key is not configured and
+ * sends nothing. An empty remaining scope is never retrieved. Only each chunk's text, file name,
+ * dataset name and any positions leave this function, and only when every chunk is valid and
+ * belongs to a retrieved dataset. The list and the retrieval each have their own deadline.
+ */
+export async function retrieveRagflow(
+  settings: RagflowSettings,
+  request: RagflowRetrievalRequest,
+  signal: AbortSignal,
+  deadlineMs: number,
+  send: Send = fetch,
+): Promise<RagflowRetrievalOutcome> {
+  if (settings.baseURL === '' || settings.apiKey === '') return { result: 'not-configured' };
+  const headers = keyHeaders(settings.apiKey);
+  if (headers === null) return { result: 'not-configured' };
+  const listed = await listRagflowDatasets(settings, signal, deadlineMs, send);
+  if (listed.result !== 'ok') return listed;
+  const names = new Map(listed.datasets.map(({ id, name }) => [id, name]));
+  // Insertion order keeps the request order; the list also names each retrieved dataset.
+  const scope = new Map<string, string>();
+  const excluded: string[] = [];
+  for (const id of request.datasetIds) {
+    const name = names.get(id);
+    if (name === undefined) excluded.push(id);
+    else scope.set(id, name);
+  }
+  // Never fall back to an empty or omitted scope.
+  if (scope.size === 0) return { result: 'no-results', excluded };
+  headers.set('Content-Type', 'application/json');
+  const answer = await call(
+    new Request(endpoint(settings.baseURL, RETRIEVAL_PATH), {
+      method: 'POST',
+      headers,
+      body: retrievalBody(settings, request.question, [...scope.keys()]),
+      redirect: 'manual',
+    }),
+    signal,
+    deadlineMs,
+    send,
+    RAGFLOW_LIST_BODY_LIMIT,
+  );
+  if (typeof answer === 'string') return { result: answer };
+  const chunks = retrievedChunks(answer, scope, settings.retrievalTopK);
+  if (chunks === null) return { result: 'upstream-error' };
+  return chunks.length === 0
+    ? { result: 'no-results', excluded }
+    : { result: 'ok', excluded, chunks };
 }

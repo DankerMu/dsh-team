@@ -18,9 +18,11 @@ const SELECT_INSTANCE = `SELECT instances.user_id, instances.upstream_host FROM 
   JOIN users ON users.id = instances.user_id
   WHERE instances.instance_token_hash = ? AND instances.status = 'running'
     AND users.status = 'active'`;
-/** Fixed bodies: every rejection reason shares the one 401. */
+/** Fixed bodies: every rejection reason shares the one 401; none carries request-derived text. */
 export const INSTANCE_ERRORS = {
   401: { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
+  413: { statusCode: 413, error: 'Payload Too Large', message: 'Request body too large' },
+  415: { statusCode: 415, error: 'Unsupported Media Type', message: 'JSON request body required' },
   500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
 } as const;
 

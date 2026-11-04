@@ -1,7 +1,9 @@
 import { once } from 'node:events';
 import { connect } from 'node:net';
+import type { FastifyInstance } from 'fastify';
 import { expect } from 'vitest';
 import { writeSettings } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
 import { withApp } from './auth-fixture.ts';
 import { observeHttp, sendHttp } from './gateway-http-fixture.ts';
 import { instanceToken, instanceTokenHash, seedInstance } from './instance-token-fixture.ts';
@@ -13,13 +15,22 @@ interface Answer {
   readonly status: number;
   readonly body: string;
 }
+interface SendOptions {
+  readonly method?: string;
+  readonly token?: boolean;
+  /** Sent verbatim; no Content-Type is added unless `contentType` is given. */
+  readonly body?: string;
+  readonly contentType?: string;
+}
 export interface Proxy {
+  readonly app: FastifyInstance;
+  readonly database: DatabaseHandle;
   readonly base: string;
   readonly token: string;
   /** Every log line the application has written so far. */
   readonly lines: readonly string[];
   /** One real HTTP request whose target is sent verbatim, so a bare "?" survives. */
-  readonly send: (path: string, options?: { method?: string; token?: boolean }) => Promise<Answer>;
+  readonly send: (path: string, options?: SendOptions) => Promise<Answer>;
   /** Raw bytes over a fresh socket, read until the platform closes it. */
   readonly raw: (head: string) => Promise<string>;
 }
@@ -60,10 +71,12 @@ export async function withProxy(
       const texts: string[] = [];
       const send: Proxy['send'] = async (
         path,
-        { method = 'GET', token: withToken = true } = {},
+        { method = 'GET', token: withToken = true, body: payload, contentType } = {},
       ) => {
-        const headers = withToken ? { authorization: `Bearer ${token}` } : {};
-        const response = await sendHttp(base, { method, path, headers });
+        const headers: Record<string, string> = {};
+        if (withToken) headers.authorization = `Bearer ${token}`;
+        if (contentType !== undefined) headers['content-type'] = contentType;
+        const response = await sendHttp(base, { method, path, headers }, payload);
         const body = response.body.toString('utf8');
         texts.push(body);
         return { status: response.status, body };
@@ -86,7 +99,7 @@ export async function withProxy(
         return text;
       };
 
-      await run({ base, token, lines, send, raw });
+      await run({ app, database, base, token, lines, send, raw });
 
       const output = texts.join('') + lines.join('');
       const leaks = [token, instanceTokenHash(token), new URL(upstream.origin).host, key];

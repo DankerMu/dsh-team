@@ -1,8 +1,16 @@
-import type { FastifyPluginCallback, FastifyReply } from 'fastify';
+import type {
+  FastifyError,
+  FastifyPluginCallback,
+  FastifyReply,
+  FastifyRequest,
+  HookHandlerDoneFunction,
+} from 'fastify';
+import { isJsonMediaType } from '../auth/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { withRequestAbort } from '../request-abort.ts';
 import {
+  MAX_DATASETS,
   RAGFLOW_DATASET_ID_PATTERN,
   RAGFLOW_RESULTS,
   RAGFLOW_TIMEOUT_MS,
@@ -10,8 +18,9 @@ import {
   listRagflowDatasets,
   listRagflowDocuments,
   ragflowVersion,
+  retrieveRagflow,
 } from './client.ts';
-import type { RagflowDocumentsQuery } from './client.ts';
+import type { RagflowDocumentsQuery, RagflowRetrievalRequest, RagflowSettings } from './client.ts';
 import { INSTANCE_ERRORS } from './instance-auth.ts';
 
 const ERROR_SCHEMA = {
@@ -76,6 +85,69 @@ const PAGE = new RegExp(PAGE_PATTERN);
 const PAGE_SIZE_PATTERN = '^(100|[1-9][0-9]?)$';
 const PAGE_SIZE = new RegExp(PAGE_SIZE_PATTERN);
 const MAX_KEYWORDS_BYTES = 256;
+const MAX_QUESTION_BYTES = 4_096;
+// A 4096-byte question and 1000 IDs take about 35 KB.
+const RETRIEVAL_BODY_LIMIT = 65_536;
+/** A closed-set result that carries the excluded IDs when retrieved and the chunks when `ok`. */
+const RAGFLOW_RETRIEVAL_SCHEMA = {
+  type: 'object',
+  // Closed at both levels so the serializer drops any upstream field a mapping defect let through.
+  additionalProperties: false,
+  required: ['result'],
+  properties: {
+    result: { type: 'string', enum: RAGFLOW_RESULTS },
+    excluded: { type: 'array', items: { type: 'string', pattern: RAGFLOW_DATASET_ID_PATTERN } },
+    chunks: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['content', 'documentName', 'datasetName'],
+        properties: {
+          content: { type: 'string' },
+          documentName: { type: 'string', minLength: 1 },
+          datasetName: { type: 'string', minLength: 1 },
+          positions: {
+            type: 'array',
+            description:
+              "RAGFlow's position tuples, present only when it has any. Their meaning depends " +
+              'on the file type; for a PDF the first number is the 1-based page.',
+            minItems: 1,
+            maxItems: 1_024,
+            items: { type: 'array', minItems: 5, maxItems: 5, items: { type: 'number' } },
+          },
+        },
+      },
+    },
+  },
+} as const;
+/** Documents the request; the handler's own check is the authority. */
+const RETRIEVAL_BODY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['question', 'datasetIds'],
+  properties: {
+    question: {
+      type: 'string',
+      description: `Must not be blank; at most ${String(MAX_QUESTION_BYTES)} UTF-8 bytes.`,
+    },
+    datasetIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: MAX_DATASETS,
+      uniqueItems: true,
+      items: { type: 'string', pattern: RAGFLOW_DATASET_ID_PATTERN },
+    },
+  },
+} as const;
+
+/**
+ * Empty or only whitespace as rc2 trims it: Go's TrimSpace also strips U+0085, which JS `trim`
+ * keeps, so a text that looks non-blank here would reach rc2 empty.
+ */
+function isBlank(text: string): boolean {
+  return /^[\s\u0085]*$/u.test(text);
+}
 
 /** The decoded name/value pairs of a raw request target, or null when any item is malformed. */
 function queryFields(url: string): Map<string, string> | null {
@@ -119,11 +191,72 @@ function documentsQuery(url: string): RagflowDocumentsQuery | null {
   if (page === undefined || !PAGE.test(page)) return null;
   if (pageSize === undefined || !PAGE_SIZE.test(pageSize)) return null;
   if (keywords === undefined) return { page: Number(page), pageSize: Number(pageSize) };
-  // rc2 trims the filter with Go's TrimSpace, which also strips U+0085 (JS `trim` keeps it),
-  // so a blank one would silently list every document.
-  if (/^[\s\u0085]*$/u.test(keywords) || Buffer.byteLength(keywords) > MAX_KEYWORDS_BYTES)
-    return null;
+  // A blank filter would silently list every document.
+  if (isBlank(keywords) || Buffer.byteLength(keywords) > MAX_KEYWORDS_BYTES) return null;
   return { page: Number(page), pageSize: Number(pageSize), keywords };
+}
+
+const isDatasetId = (value: unknown): value is string =>
+  typeof value === 'string' && DATASET_ID.test(value);
+
+/** 1..1000 distinct dataset IDs, or null for anything else. */
+function datasetIdsOf(value: unknown): readonly string[] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_DATASETS) return null;
+  const ids: readonly unknown[] = value;
+  if (!ids.every(isDatasetId) || new Set(ids).size !== ids.length) return null;
+  return ids;
+}
+
+/** The question and scope of a retrieval body, or null for anything else. */
+function retrievalRequest(body: unknown): RagflowRetrievalRequest | null {
+  if (typeof body !== 'object' || body === null) return null;
+  // Any other key, retrieval parameters included, is not the instance's to send.
+  if (Object.keys(body).length !== 2 || !('question' in body) || !('datasetIds' in body))
+    return null;
+  const { question } = body;
+  if (typeof question !== 'string' || isBlank(question)) return null;
+  if (Buffer.byteLength(question) > MAX_QUESTION_BYTES) return null;
+  const datasetIds = datasetIdsOf(body.datasetIds);
+  // The question is forwarded verbatim, untrimmed.
+  return datasetIds === null ? null : { question, datasetIds };
+}
+
+/** Refuses any media type but JSON before the body is read; the root hook has run first. */
+function requireJson(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  done: HookHandlerDoneFunction,
+): void {
+  if (isJsonMediaType(request.headers['content-type'])) {
+    done();
+    return;
+  }
+  void reply.code(415).send(INSTANCE_ERRORS[415]);
+}
+
+/**
+ * Maps a retrieval body error. Fastify's own handler would log the error object, whose text can
+ * quote the request, so every other error is the fixed 500 with fixed log text.
+ */
+function retrievalBodyError(
+  error: FastifyError,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): void {
+  // Prototype-poisoning keys fail as invalid JSON as well.
+  if (
+    error.code === 'FST_ERR_CTP_INVALID_JSON_BODY' ||
+    error.code === 'FST_ERR_CTP_EMPTY_JSON_BODY'
+  ) {
+    void reply.code(200).send({ result: 'invalid-request' });
+    return;
+  }
+  if (error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+    void reply.code(413).send(INSTANCE_ERRORS[413]);
+    return;
+  }
+  request.log.error('RAGFlow proxy retrieval request failure');
+  void reply.code(500).send(INSTANCE_ERRORS[500]);
 }
 
 /**
@@ -135,21 +268,27 @@ export const ragflowProxyRoutes: FastifyPluginCallback<{
   /** Aborted by the application before it drains in-flight responses. */
   shutdown: AbortSignal;
 }> = (app, { database, shutdown }, done) => {
-  /** One read of the saved RAGFlow connection; any failure is the fixed 500 with `failure` logged. */
+  /**
+   * One read of the saved RAGFlow connection and retrieval parameters; any failure is the fixed
+   * 500 with `failure` logged.
+   */
   async function relay<T>(
     reply: FastifyReply,
-    read: (
-      settings: { baseURL: string; apiKey: string },
-      signal: AbortSignal,
-      deadlineMs: number,
-    ) => Promise<T>,
+    read: (settings: RagflowSettings, signal: AbortSignal, deadlineMs: number) => Promise<T>,
     failure: string,
   ): Promise<T> {
     try {
       return await withRequestAbort(reply, shutdown, (signal) => {
         const settings = readSettings(database);
         return read(
-          { baseURL: settings.ragflowBaseUrl, apiKey: settings.ragflowApiKey },
+          {
+            baseURL: settings.ragflowBaseUrl,
+            apiKey: settings.ragflowApiKey,
+            retrievalTopK: settings.retrievalTopK,
+            retrievalSimilarityThreshold: settings.retrievalSimilarityThreshold,
+            retrievalKeywordsWeight: settings.retrievalKeywordsWeight,
+            retrievalRerankId: settings.retrievalRerankId,
+          },
           signal,
           RAGFLOW_TIMEOUT_MS,
         );
@@ -248,6 +387,42 @@ export const ragflowProxyRoutes: FastifyPluginCallback<{
         (settings, signal, deadlineMs) =>
           listRagflowDocuments(settings, id, query, signal, deadlineMs),
         'RAGFlow proxy documents failure',
+      );
+    },
+  );
+  app.post(
+    '/_platform/instance-api/ragflow/retrieval',
+    {
+      bodyLimit: RETRIEVAL_BODY_LIMIT,
+      // Ajv's removeAdditional would silently drop top_k and its coercion would turn "abc" into
+      // ["abc"]; the schema documents the contract and the handler's own check is the authority.
+      validatorCompiler: () => (value: unknown) => ({ value }),
+      onRequest: requireJson,
+      errorHandler: retrievalBodyError,
+      schema: {
+        summary:
+          'Retrieve chunks of the given datasets of the configured RAGFlow with the saved ' +
+          'retrieval parameters for an authenticated instance. Requested datasets that no ' +
+          'longer exist are dropped and listed in excluded; when none remains nothing is ' +
+          'retrieved and the result is no-results. Any other body key, a blank question, an ' +
+          'empty, repeated or malformed dataset ID and unparseable JSON answer invalid-request.',
+        body: RETRIEVAL_BODY_SCHEMA,
+        response: {
+          200: RAGFLOW_RETRIEVAL_SCHEMA,
+          401: ERROR_SCHEMA,
+          413: ERROR_SCHEMA,
+          415: ERROR_SCHEMA,
+          500: ERROR_SCHEMA,
+        },
+      },
+    },
+    (request, reply) => {
+      const retrieval = retrievalRequest(request.body);
+      if (retrieval === null) return Promise.resolve({ result: 'invalid-request' as const });
+      return relay(
+        reply,
+        (settings, signal, deadlineMs) => retrieveRagflow(settings, retrieval, signal, deadlineMs),
+        'RAGFlow proxy retrieval failure',
       );
     },
   );

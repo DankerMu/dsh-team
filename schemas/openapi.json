@@ -4440,7 +4440,8 @@
                         "unavailable",
                         "timeout",
                         "upstream-error",
-                        "invalid-request"
+                        "invalid-request",
+                        "no-results"
                       ]
                     },
                     "version": {
@@ -6976,7 +6977,8 @@
                         "unavailable",
                         "timeout",
                         "upstream-error",
-                        "invalid-request"
+                        "invalid-request",
+                        "no-results"
                       ]
                     },
                     "version": {
@@ -7067,7 +7069,8 @@
                         "unavailable",
                         "timeout",
                         "upstream-error",
-                        "invalid-request"
+                        "invalid-request",
+                        "no-results"
                       ]
                     },
                     "datasets": {
@@ -7212,7 +7215,8 @@
                         "unavailable",
                         "timeout",
                         "upstream-error",
-                        "invalid-request"
+                        "invalid-request",
+                        "no-results"
                       ]
                     },
                     "total": {
@@ -7246,6 +7250,222 @@
             }
           },
           "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/_platform/instance-api/ragflow/retrieval": {
+      "post": {
+        "summary": "Retrieve chunks of the given datasets of the configured RAGFlow with the saved retrieval parameters for an authenticated instance. Requested datasets that no longer exist are dropped and listed in excluded; when none remains nothing is retrieved and the result is no-results. Any other body key, a blank question, an empty, repeated or malformed dataset ID and unparseable JSON answer invalid-request.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "question",
+                  "datasetIds"
+                ],
+                "properties": {
+                  "question": {
+                    "type": "string",
+                    "description": "Must not be blank; at most 4096 UTF-8 bytes."
+                  },
+                  "datasetIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{32}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "result"
+                  ],
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "enum": [
+                        "ok",
+                        "not-configured",
+                        "unavailable",
+                        "timeout",
+                        "upstream-error",
+                        "invalid-request",
+                        "no-results"
+                      ]
+                    },
+                    "excluded": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{32}$"
+                      }
+                    },
+                    "chunks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "content",
+                          "documentName",
+                          "datasetName"
+                        ],
+                        "properties": {
+                          "content": {
+                            "type": "string"
+                          },
+                          "documentName": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "datasetName": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "positions": {
+                            "type": "array",
+                            "description": "RAGFlow's position tuples, present only when it has any. Their meaning depends on the file type; for a PDF the first number is the 1-based page.",
+                            "minItems": 1,
+                            "maxItems": 1024,
+                            "items": {
+                              "type": "array",
+                              "minItems": 5,
+                              "maxItems": 5,
+                              "items": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "statusCode",
+                    "error",
+                    "message"
+                  ],
+                  "properties": {
+                    "statusCode": {
+                      "type": "integer"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "415": {
             "description": "Default Response",
             "content": {
               "application/json": {

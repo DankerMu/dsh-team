@@ -33,6 +33,13 @@ export function hasValidOrigin(request: IncomingMessage, publicUrl: string): boo
   return origins === 1;
 }
 
+/** The media type before any parameter, trimmed and lowercased, is exactly `application/json`. */
+export function isJsonMediaType(contentType: string | undefined): boolean {
+  const parameterStart = contentType?.indexOf(';') ?? -1;
+  const mediaType = parameterStart === -1 ? contentType : contentType?.slice(0, parameterStart);
+  return mediaType?.trim().toLowerCase() === 'application/json';
+}
+
 /** Installs the platform mutation boundary on the root app, before route plugins. */
 export function installRequestGuard(app: FastifyInstance, publicUrl: string): void {
   app.addHook('onRequest', (request, reply, done) => {
@@ -51,10 +58,7 @@ export function installRequestGuard(app: FastifyInstance, publicUrl: string): vo
       return;
     }
 
-    const contentType = request.headers['content-type'];
-    const parameterStart = contentType?.indexOf(';') ?? -1;
-    const mediaType = parameterStart === -1 ? contentType : contentType?.slice(0, parameterStart);
-    if (mediaType?.trim().toLowerCase() !== 'application/json') {
+    if (!isJsonMediaType(request.headers['content-type'])) {
       void reply.code(415).send(JSON_REQUIRED);
       return;
     }

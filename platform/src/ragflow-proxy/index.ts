@@ -2,6 +2,7 @@ export {
   RAGFLOW_TIMEOUT_MS,
   listRagflowDatasets,
   listRagflowDocuments,
+  retrieveRagflow,
   testRagflowConnection,
 } from './client.ts';
 export { installInstanceAuth, underPrefix } from './instance-auth.ts';

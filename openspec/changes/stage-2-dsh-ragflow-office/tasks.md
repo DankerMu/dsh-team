@@ -1290,6 +1290,206 @@ Evidence (14.3 库内文件路由，#415):
   - 收到 `invalid-request`（库不存在或无权访问，即上游 404/403）时刷新库列表。
 - 14.4：检索的来源文件名直接取检索结果，不调用本路由。
 
+Risk packs (14.4 检索路由，#416): fixture level expanded（与 issue 建议一致：员工的问题第一次经平台发往 RAGFlow，结果直接进入 Agent 上下文）。selected：
+
+- **Public API / Schema / field names**：
+  - 新增 `POST /_platform/instance-api/ragflow/retrieval`，鉴权沿用 #413 的钩子。
+  - 请求体恰为 `{ question, datasetIds }`：
+    - `question`：字符串，空白判定与 14.3 的 `keywords` 共用同一个函数（`\s` 加 U+0085，对齐 rc2 的 Go `TrimSpace`），纯空白 → `invalid-request`；UTF-8 不超过 4096 字节；原样转发，不在代理里 trim。
+    - `datasetIds`：非空数组，1..1000 项（上限与库列表的 `MAX_DATASETS` 相同，超出的部分不可能都存在），每项匹配 `RAGFLOW_DATASET_ID_PATTERN`，不得重复。
+    - 出现其他任何键 → `invalid-request`。这一条覆盖 spec「实例不能自带检索参数」：`top_k`、`page_size`、`similarity_threshold`、`keywords_similarity_weight`、`vector_similarity_weight`、`rerank_id` 都属于其他键，不必逐个列举。
+  - 请求体校验手写在路由里，用 `validatorCompiler: () => (value) => ({ value })` 关掉 Ajv（先例：`admin/empty-body.ts`）。原因：Fastify 默认的 Ajv 带 `removeAdditional: true` 和 `coerceTypes: 'array'`，声明的 body schema 会悄悄删掉 `top_k`（spec 场景就失效了），还会把 `datasetIds: "abc"` 强转为 `["abc"]`。body schema 照常声明，只用于契约。
+  - 成功回应：
+    - `{ result: 'ok', excluded, chunks }`；
+    - 检索成功但零片段：`{ result: 'no-results', excluded }`；
+    - 剔除后范围为空（spec「全部失效时不检索」的空范围结果）：同样是 `{ result: 'no-results', excluded }`，`excluded` 恰为全部请求的 ID，不发检索请求；
+    - 失败只有 `{ result }`。
+    - `excluded` 是请求中不在当前库列表里的 ID，按请求顺序排列；成功时总是出现，可以为空数组。
+  - 片段 `{ content, documentName, datasetName, positions? }`：
+    - `content` 取上游 `content`（rc2 由 `content_with_weight` 改名）；
+    - `documentName` 取 `document_keyword`（由 `docnm_kwd` 改名）；
+    - `datasetName` 取预检库列表里该 `dataset_id` 的名字。rc2 片段只带 `dataset_id`，不带库名，所以预检列表同时是名字表；
+    - `positions` 见下面「结果字段只含真实值」。
+    - 其他上游字段一律丢弃：`id`、`document_id`、`content_ltks`、`similarity`、`term_similarity`、`vector_similarity`、`image_id`、`important_keywords`、`questions`、`doc_type_kwd`、`highlight`，以及 `data` 里的 `doc_aggs`、`labels`、`total`。
+  - 200 schema 外层与片段都设 `additionalProperties: false`；另声明 401、413、415、500 的 `ERROR_SCHEMA`。
+  - `RAGFLOW_RESULTS` 加入 `no-results`。version、datasets、documents 三条路由和 #411 测试连接共用这个枚举，它们契约里的 `result` 枚举随之多一个值，但这些路由的行为不变（#414 加入 `invalid-request` 时同样如此）。
+- **Config / input validation**（传输层）：
+  - 路由级 `onRequest` 检查 `Content-Type`：媒体类型（`;` 之前，trim、小写）必须恰为 `application/json`，否则返回固定体 415（`INSTANCE_ERRORS` 新增 415），不解析请求体。它排在根鉴权钩子之后，所以无令牌的请求仍是 401。
+    - 判定与 `auth/request-guard.ts` 的平台变更守卫共用同一个函数：把那里的媒体类型判断抽成导出函数，经 `auth/index.ts` 导出，守卫行为不变。这一处超出 issue 的 PR Boundary，由本条授权。
+    - 依据（Fastify 5.12.7 实测）：没有 `Content-Type` 也没有请求体时，`body` 是 `undefined`，会进入 handler；`text/plain` 会被默认解析器解析为字符串；只有带请求体又没有 `Content-Type`，或用了没有解析器的类型（如 `application/vnd.api+json`），Fastify 才自己回 415。所以必须由路由自己检查。
+  - 路由 `bodyLimit` 为 64 KiB（4096 字节的问题加 1000 个 ID 约 35 KB）。
+  - 路由级 `errorHandler`：
+    - `FST_ERR_CTP_INVALID_JSON_BODY`（含 `__proto__`、`constructor.prototype` 投毒，实测都是这个错误码）和 `FST_ERR_CTP_EMPTY_JSON_BODY` → HTTP 200 `{ result: 'invalid-request' }`；
+    - `FST_ERR_CTP_BODY_TOO_LARGE` → 固定体 413（`INSTANCE_ERRORS` 新增 413）；
+    - 其他错误 → 固定体 500，只记固定文字。不交给 Fastify 默认错误处理，因为它会把错误对象写进日志。
+  - JSON `null`、数组、字符串等非对象请求体 → `invalid-request`。
+- **Resource limits / large input**：
+  - 顺序：鉴权 → 媒体类型 → 解析请求体 → 校验请求体 → 一次 `readSettings`（连接设置和四个检索参数取自同一次读取）→ 预检 → 检索。前四步任一不过都不读设置、不发外部请求。design 决定 3 的「处理顺序」把读设置写在校验之前；两者对外行为相同，本路由沿用 14.2、14.3 先校验后读设置的做法。
+  - 预检直接调用 `listRagflowDatasets`（#414），它的失败取值直接成为检索结果，检索请求不发出。
+  - 检索请求：`POST <base>/api/v1/retrieval`，`Content-Type: application/json`，带 `Authorization`，`redirect: 'manual'`。请求体恰为：
+    - `question`；
+    - `dataset_ids`：剔除后剩余的 ID，按请求顺序；
+    - `page: 1`、`page_size: retrievalTopK`；
+    - `similarity_threshold: retrievalSimilarityThreshold`；
+    - `keywords_similarity_weight: retrievalKeywordsWeight`；
+    - `rerank_id`：只在 `retrievalRerankId` 非空时出现，值原样；
+    - `rerank_candidates_count: max(64, retrievalTopK)`。rc2 默认候选数是 64（`internal/service/dataset/search.go:49-52`，只有 `search_id` 分支会改它），而 `internal/service/nlp/retrieval.go:141-145` 在 `page > rerank_candidates_count / page_size`（Go 整数除法）时报错。不发这个字段时，返回片段数 65..100 会让 `64/page_size` 为 0，每次检索都以 `code: 102` 失败，而管理员接口允许 1..100。取 `max(64, …)`，小值时保持 rc2 默认的候选池；
+    - `include_knowledge_compilation: false`。不发时，rc2 的过滤条件是「普通片段或 `scope_kwd = dataset`」（`search.go:364-378`），会返回库级的编译知识行。这些行由 `internal/ingestion/knowledge_compile/writer.go:553-568` 写入，`content_with_weight` 是 JSON，没有 `docnm_kwd`，没有来源文件，不满足 spec「每个片段 MUST 包含片段文本、文件名和所属知识库名称」；在任一选中的库有编译输出之后，它们会让整次检索变成 `upstream-error`。`false` 只保留普通片段（`must_not exists compile_kwd`）。
+    - 不发 `top_k`（design 决定 3）、`vector_similarity_weight`（rc2 由 `keywords_similarity_weight` 推导为 1 减它，`internal/service/similarity_weight.go:29-44`；两者同时发且和不为 1 会报错）、`highlight`、`keyword`、`document_ids`。
+  - 预检和检索各有自己的 `RAGFLOW_TIMEOUT_MS` 截止（先例：#411 测试连接的两步），最坏约 20 秒；不重试，不缓存。
+  - 检索回应体上限复用 `RAGFLOW_LIST_BODY_LIMIT`（8 MiB）。最多 100 个片段，但 rc2 每个片段还带 `content_ltks` 分词结果，`data` 里另有 `doc_aggs` 和 `labels`。超限 → `upstream-error`。
+  - 每次检索都会再拉一次完整库列表。#414 交接里的「限制并发的列表拉取」本 issue 不做，记作残余风险：库列表实际只有几 KB 到几百 KB，只有库数很多、头像很大时，多个实例并发检索才会占用可观的内存。
+- **Error handling / partial outputs**：
+  - 检索回应：`data` 必须是对象，`data.chunks` 必须是数组，长度不超过 `retrievalTopK`。
+  - 每个片段的要求：
+    - 是对象；
+    - `content` 是字符串；
+    - `document_keyword` 是非空字符串，UTF-8 不超过 1024 字节；
+    - `dataset_id` 是字符串，且在本次实际检索的集合内。否则就是越界片段（spec「返回片段越界校验」）：整次检索 `upstream-error`，回应中没有任何片段；
+    - `positions` 缺失、`null` 或是数组（见下）。
+    - 任一片段不合格 → `upstream-error`，不返回部分结果。
+  - `code` 映射沿用默认规则：`401` → `not-configured`，其余非零 → `upstream-error`。rc2 中可能出现的情况（`internal/handler/dataset.go:1093-1170`、`internal/service/dataset/search.go`）：
+    - 所选库使用不同的 embedding 模型，或有的库没有 embedding 模型（`ValidateDatasetEmbeddingModels`）→ `code: 102`；
+    - 预检之后库被删除（竞态）→ 权限或「not found」错误；
+    - 重排模型 ID 不存在或调用失败 → `code: 102`；
+    - 参数错误 → `code: 101`。
+  - **用户决定（2026-11-03）**：所选库混用 embedding 模型时，整次检索 `upstream-error`。代理不按模型分组检索，design 决定 3 仍是「一次多库检索」。新 Session 默认全选（D10），所以管理员必须让所有知识库使用同一个 embedding 模型。AGENTS.md 写明这一条，部署文档交给第 19 组。
+- **结果字段只含真实值**（spec「没有页码就不显示页码」）：
+  - rc2 主路径总是返回 `positions`，没有值时是 `[]`（`internal/service/nlp/retrieval.go:313-316`）；父子聚合的片段直接取父片段的 `position_int`，没有时是 JSON `null`（`retrieval.go:1171`）。代理只在 `positions` 是非空数组时输出它；`[]`、`null` 或缺失时片段里没有这个字段，不填 0 或空串。
+  - 代理不从 `positions` 推导页码。rc2 的五元组含义取决于文件类型（`internal/ingestion/task/indexdoc/position.go`）：PDF 是 `[页码, left, right, top, bottom]`，页码从 1 开始；表格是 `[sheet, rowStart, rowEnd, colStart, colEnd]`。代理推导出的「页码」对表格就是伪造。
+  - 校验：每个元素都是恰好 5 个有限数的数组，最多 1024 个元素；否则 `upstream-error`。数组原样输出。
+  - 运行时只能验证空数组这一支：种子数据全是 `.txt`。非空分支依据源码，在有 PDF 种子之前没有运行时证据。
+- **Auth / permissions / secrets**：
+  - 只在鉴权通过后执行。密钥只放在请求头里。
+  - `question` 和 `datasetIds` 属于对话相关内容（F6），不进任何日志：请求体本来就不被记录，路由日志只有固定文字；`errorHandler` 不记录错误对象；回应不回显请求内容。
+  - 回应和日志都不含地址、密钥和上游消息。
+- **Code Canonicality**：
+  - `retrieveRagflow(settings, request, signal, deadlineMs, send?)` 放在 `client.ts`，内部调用 `listRagflowDatasets`，复用 `call`、`endpoint`、`keyHeaders`、`envelope` 和映射规则，不新建第二个 HTTP 实现。
+  - 路由复用 `relay`。为了传出检索参数，可以把 `relay` 交给回调的设置扩成连接设置加四个检索参数，但仍然只调用一次 `readSettings`。
+  - 空白判定与 14.3 共用一个函数；媒体类型判定与平台变更守卫共用一个函数（见上）。
+- **Legacy compatibility**：
+  - 其他三条路由、#411 测试连接和 #413 鉴权钩子的行为不变，只有 `result` 枚举多一个值。
+  - 平台变更守卫抽出函数后行为不变，既有测试不改。
+  - `schemas/openapi.json` 新增本路由，并给共用的 `result` 枚举加 `no-results`。
+- **Documentation / migration notes**（由 orchestrator 改）：AGENTS.md 代理条目改为四条路由都已声明，补上检索的请求体、映射、`no-results`、`excluded`、`positions` 规则和 embedding 模型约束。
+
+not selected：
+
+- Concurrency / shared state：代理没有共享状态；并发拉取列表见上面的残余风险。
+- Release / packaging、Migration：无。四个检索参数已由迁移 6 播种。
+
+**不变量**：
+
+- 发给 RAGFlow 的检索请求，`dataset_ids` 总是预检后非空的子集；没有任何路径会用空集合或省略范围去检索。
+- 每个返回的片段都属于本次实际检索的集合，库名来自同一次预检。
+- 请求体不合规时，不读设置，也不发外部请求。
+- 回应只含封闭集合的 `result`；`ok` 和 `no-results` 时再加 `excluded`，`ok` 时再加 `chunks`。
+
+**Must preserve**：
+
+- `version`、`datasets`、`documents` 路由，#411 测试连接，#413 鉴权钩子，平台变更守卫的行为。
+
+**同级面**：
+
+- 15.x 的插件检索工具：这是它唯一的调用方。
+- 14.5 本机通道用例：真实种子数据上的检索、改参数即生效、RAGFlow 停机时的 `unavailable`。
+
+**宽度**：client、路由、测试，加上本段 fixture 与 AGENTS.md，会超过 400 行；打 `diff-limit-exempt`。
+
+Evidence (14.4 检索路由，#416):
+
+**改动点**：
+
+- 修改：
+  - `ragflow-proxy/client.ts` 与测试：`retrieveRagflow`，`RAGFLOW_RESULTS` 加 `no-results`；
+  - `ragflow-proxy/routes.ts` 与测试：检索路由、共用的空白判定；
+  - `ragflow-proxy/instance-auth.ts` 与测试：`INSTANCE_ERRORS` 加 413、415；
+  - `ragflow-proxy/index.ts`；
+  - `auth/request-guard.ts`、`auth/index.ts`：抽出并导出媒体类型判定，守卫行为不变；
+  - `schemas/openapi.json`。
+- 新建 `platform/test/ragflow-proxy-retrieval.integration.test.ts`，复用 `ragflow-proxy-fixture.ts`、`instance-token-fixture.ts` 和 `model-upstream-fixture.ts`。`ragflow-proxy-fixture.ts` 的 `Proxy.send` 扩展出请求体和 `Content-Type` 选项（`sendHttp` 已经能带请求体）。
+- AGENTS.md 由 orchestrator 改。
+
+**测试**：
+
+`client.test.ts`（注入 `send`）：
+
+- 未配置、密钥无法构成请求头时不调用 `send`。
+- 预检失败（`timeout`、`unavailable`、`upstream-error`、`not-configured`）直接成为结果，只有 1 次 `send`。
+- 成功：
+  - 第 2 次 `send` 是 `POST /api/v1/retrieval`，带 `Authorization` 和 `Content-Type: application/json`；
+  - 请求体恰为上面列出的键值，`dataset_ids` 是剔除后的子集、按请求顺序；
+  - `retrievalRerankId` 为空时请求体里没有 `rerank_id`，非空时原样出现；
+  - `retrievalTopK` 为 8 时 `rerank_candidates_count` 为 64，为 100 时为 100；
+  - `include_knowledge_compilation` 恰为 `false`；
+  - 请求体里没有 `top_k`、`vector_similarity_weight`；
+  - 输出恰为 `{ result: 'ok', excluded, chunks }`，`datasetName` 按 `dataset_id` 从预检列表取得，丢弃的字段都不出现。
+- 剔除：请求 `{A, B}` 且列表里只有 A → 检索只用 `[A]`，`excluded: [B]`。
+- 全部剔除 → `{ result: 'no-results', excluded: [全部] }`，只有 1 次 `send`。
+- 零片段 → `{ result: 'no-results', excluded: [] }`。
+- 越界：一个片段的 `dataset_id` 被剔除或不在列表中 → `upstream-error`，输出里没有 `chunks`。
+- `positions`：`[]`、`null` 和缺失时片段没有该字段；`[[1,10,20,30,40]]` 原样输出；4 元组、含字符串、超过 1024 个元素 → `upstream-error`。
+- 以下情况 → `upstream-error`：`chunks` 超过 `retrievalTopK`；`data` 或 `chunks` 不是预期类型；`content` 不是字符串；`document_keyword` 为空或超过 1024 字节；检索回应体超过 8 MiB；`code: 102`；`code: 101`。
+- `code: 401` → `not-configured`。
+- 检索一步的超时、拒绝连接和外部中止，映射与其他路由一致。
+
+`routes.test.ts`（`app.inject`）：
+
+- 用 `DROP TABLE settings` 证明下列请求都在读设置之前被拒绝：
+  - 415：没有 `Content-Type`（有请求体和没有请求体两种）、`text/plain`、`application/vnd.api+json`；
+  - 413：请求体超过 64 KiB；
+  - `invalid-request`：
+    - 无法解析的 JSON、空请求体、`__proto__` 投毒；
+    - `null`、数组、字符串；
+    - 缺 `question`、缺 `datasetIds`；
+    - 多出 `top_k`、`similarity_threshold`、`page_size`、`rerank_id`、`x`；
+    - `question` 为空、纯空白、只含 U+0085、超过 4096 字节、不是字符串；
+    - `datasetIds` 为 `[]`、超过 1000 项、含重复项、含大写 hex、含 31 位 ID、不是数组、是字符串 `"abc"`。
+- 边界接受：`question` 恰为 4096 字节、`datasetIds` 恰为 1000 项、`application/json; charset=utf-8`、`Application/JSON`。断言 `not-configured`，证明请求越过了校验。
+- 未配置 → `not-configured`；无令牌 → 401（即使请求体不是 JSON）；存储故障 → 500；`GET`/`HEAD` → 404。
+
+`request-guard` 的既有测试不改，照常通过。
+
+集成测试（真实 TCP、自有假 RAGFlow、有效实例令牌）逐条对应 spec 场景：
+
+- 剔除不存在的库后检索：假服务列表只有库1，请求 {库1, 库2} → 检索请求的 `dataset_ids` 恰为 `[库1]`，回应 `excluded: [库2]`，片段带库1的名字。
+- 全部失效时不检索：假服务只收到 1 个请求（列表），回应 `no-results`，`excluded` 为全部 ID。
+- 空范围被拒：`datasetIds: []` → `invalid-request`，假服务收到 0 个请求。
+- 实例不能自带检索参数：请求体带 `top_k` 或 `similarity_threshold` → `invalid-request`，假服务收到 0 个请求。
+- 管理员改参数后下一次检索立即使用新值：经 HTTP `PUT /_platform/api/admin/retrieval-config` 把返回片段数从 8 改为 3、设置重排 ID，紧接着的检索请求体 `page_size` 为 3、带 `rerank_id`；再改为 100，请求体 `page_size` 为 100、`rerank_candidates_count` 为 100；改回空重排 ID 后再检索，请求体没有 `rerank_id`。不重启应用。
+- 越界片段导致整体失败：假服务返回一个 `dataset_id` 不在请求集合内的片段 → `upstream-error`，回应文本不含任何片段内容。
+- HTTP 200 但 `code: 102` → `upstream-error`。
+- 超时与中断可区分：检索一步超时（经 `index.ts` 直接调用 `retrieveRagflow`，传 200 ms）→ `timeout`；拒绝连接 → `unavailable`。
+- 无结果不是错误：零片段 → `no-results`。
+- 没有页码就不显示页码：`positions: []` 的片段在回应里没有 `positions` 字段。
+- 检索要求 JSON：`text/plain` → 415，假服务收到 0 个请求。
+- 无令牌无 Origin 的 POST → 401，假服务收到 0 个请求。
+- 泄露检查：假服务把 MARKER 放进 `content_ltks`、`similarity`、`important_keywords`、`doc_aggs`、`labels` 和上游 `message`；`question` 放另一个 MARKER。回应文本不含前一组 MARKER、假服务 origin 和密钥。所有日志行都不含任一 MARKER 和密钥。
+
+**运行时证据**（对本机 RAGFlow rc2，用户 2026-11-03 授权最多 5 次只读 `POST /api/v1/retrieval`；脚本自己读私有配置，只打印结果、个数、字段名和耗时，不打印问题和片段内容）：
+
+1. 一个种子库、一个真实问题（实现前已直接对 rc2 发出，用于核对字段）：HTTP 200、`code: 0`，`data` 的键为 `chunks,doc_aggs,labels,total`，1 个片段，字段含 `content`、`document_keyword`（以 `.txt` 结尾）、`dataset_id`（等于请求的库）、`positions`（空数组），耗时 977 ms；三个种子库的 embedding 模型相同。
+2. 三个种子库（经实现的 `retrieveRagflow`）：`datasetName` 与 `dataset_id` 对应正确。
+3. 一个真实库加一个伪造 ID：`excluded` 有 1 项，检索仍然发出。
+4. 只有伪造 ID：`no-results`，`excluded` 为全部，没有检索请求（不产生 embedding 费用）。
+5. 请求体带 `top_k`：`invalid-request`，没有外部请求（不产生费用）。
+
+**命令**：
+
+- `pnpm test`、`pnpm test:integration`、`pnpm contract:check`、`pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`
+- 本机 exact-head 的 `pnpm test:stack` 证据评论
+
+**交接**：
+
+- 15.x 插件检索工具：
+  - 请求体 `{ question, datasetIds }`，`question` 不超过 4096 字节；
+  - 片段字段 `content`、`documentName`、`datasetName`，`positions` 可能没有；只有 PDF（按文件扩展名判断）才把 `positions[i][0]` 当页码显示，表格的五元组不是页码；
+  - `excluded` 非空时提示这些库已不存在；`no-results` 和每个失败取值各有一条中文提示；
+  - 最坏等待约 20 秒（两次各 10 秒）。
+- 14.5：真实种子数据检索、改参数即生效、停机 `unavailable`。
+- 第 19 组部署文档：「所有知识库必须使用同一个 embedding 模型，否则检索失败（`upstream-error`）」。另写明 rc2 会在自己的服务日志里以 Info 级别记录员工的检索问题（`internal/service/dataset/search.go:37`），这在平台 F6 边界之外，由运营方管理 RAGFlow 日志。
+
 ## 15. 「知识库」插件
 
 依赖：4、10（含 10.2 种子和 10.4 本机浏览器）、11、14。关键路径 `images/dsh-user/`（15.1 镜像交付）。
