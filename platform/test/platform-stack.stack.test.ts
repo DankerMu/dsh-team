@@ -29,6 +29,16 @@ import { isAbsentResource } from './docker-command.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
+import {
+  comparableRagflowStack,
+  configureRagflow,
+  duringRagflowOutage,
+  instanceProxy,
+  proxyAfterRestore,
+  proxyWhileDown,
+  ragflowOutage,
+  ragflowStackSnapshot,
+} from './ragflow-stack-fixture.ts';
 import { converseInWorkbench, until } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
@@ -96,9 +106,20 @@ interface Timings {
   platformImageBuildMs?: number;
 }
 
+type RagflowStack = Awaited<ReturnType<typeof ragflowStackSnapshot>>;
+
 interface ConversationEvidence {
   browser?: StackBrowserEvidence;
   provider?: Record<string, unknown>;
+  proxy?: Awaited<ReturnType<typeof proxyWhileDown>> &
+    Awaited<ReturnType<typeof proxyAfterRestore>>;
+  ragflow?: { before: RagflowStack; after: RagflowStack };
+}
+
+/** The private RAGFlow test stack and its seed snapshot taken before any Docker work. */
+interface RagflowContext {
+  stack: Stack;
+  seed: Awaited<ReturnType<typeof seedSnapshot>>;
 }
 
 /** The owned deterministic provider's script for one run; every value is a nonsecret nonce. */
@@ -122,19 +143,21 @@ const PROVIDER_HEALTH =
 /**
  * Real gateway, real model-config and real DSH: one employee message through Chromium makes the
  * owned provider script a `write` call, then the reply; the file and counters are read back.
+ * Login, instance start and the conversation run while RAGFlow is really stopped; the proxy is
+ * then called from inside the instance during the outage and again after RAGFlow is back.
  */
 async function converse(
   lifecycle: UserImageLifecycle,
   run: DockerOutput,
   target: { base: string; directory: string; dataDir: string; compose: string[] },
   model: ReturnType<typeof ownedModel>,
-  evidence: ConversationEvidence,
+  context: { evidence: ConversationEvidence; ragflow: RagflowContext },
 ): Promise<void> {
+  const { evidence, ragflow } = context;
   const { base } = target;
   const { provider } = model;
   const platformRead = (script: string) =>
     privatePlatformRead(async (args) => ({ stdout: await run(args) }), script);
-  const timeout = 120_000;
   await run([
     'exec',
     '--detach',
@@ -144,7 +167,7 @@ async function converse(
     '/verification/model.json',
   ]);
   await awaitLocalModelReady(platformRead);
-  const { employee } = await prepareDeploymentAccounts(
+  const { employee, admin } = await prepareDeploymentAccounts(
     lifecycle,
     { ...target, request: fetch },
     {
@@ -156,6 +179,33 @@ async function converse(
       apiKey: provider.key,
     },
   );
+  const administrator = { base, cookie: admin.cookie };
+  const baseURL = await configureRagflow(administrator, ragflow.stack);
+  const outage = ragflowOutage(run, ragflow.stack, ragflow.seed);
+  await duringRagflowOutage(outage, async () => {
+    await workbenchTurn(lifecycle, run, { base, employee, model, evidence });
+    const call = await instanceProxy(run, employee.id);
+    const down = await proxyWhileDown(administrator, baseURL, call);
+    evidence.proxy = { ...down, ...(await proxyAfterRestore(administrator, outage, call)) };
+  });
+}
+
+/** The existing gateway admission and workbench conversation for one registered employee. */
+async function workbenchTurn(
+  lifecycle: UserImageLifecycle,
+  run: DockerOutput,
+  turn: {
+    base: string;
+    employee: { id: string; email: string; cookie: string };
+    model: ReturnType<typeof ownedModel>;
+    evidence: ConversationEvidence;
+  },
+): Promise<void> {
+  const { base, employee, evidence } = turn;
+  const { provider } = turn.model;
+  const platformRead = (script: string) =>
+    privatePlatformRead(async (args) => ({ stdout: await run(args) }), script);
+  const timeout = 120_000;
   const gateway = instanceGatewayFixture({ lifecycle, base, origin: base });
   try {
     await gateway.state(employee.cookie, true);
@@ -191,8 +241,9 @@ async function converse(
 async function composeScenario(
   lifecycle: UserImageLifecycle,
   timings: Timings,
-  evidence: ConversationEvidence,
+  context: { evidence: ConversationEvidence; ragflow: RagflowContext },
 ): Promise<string> {
+  const { evidence } = context;
   const { runId } = lifecycle;
   const run: DockerOutput = async (args, timeout = 30_000) =>
     output(await lifecycle.commandAsync(args, timeout), args);
@@ -205,8 +256,10 @@ async function composeScenario(
   // exact-owned retirement, so an undrained platform never loses its bind sources while alive.
   const directory = realpathSync(dirname(lifecycle.overlayDirectory));
   let submitted = false;
+  let ragflowBefore: RagflowStack | undefined;
   const failures: unknown[] = [];
   try {
+    ragflowBefore = await ragflowStackSnapshot(run);
     const existing = await lifecycle.commandAsync(['container', 'inspect', PLATFORM], 30_000);
     if (!isAbsentResource(existing, 'container', PLATFORM))
       throw new Error(
@@ -252,7 +305,7 @@ async function composeScenario(
     submitted = true;
     await run([...compose, 'up', '-d', '--no-build', '--pull', 'never'], 120_000);
     await pollHealth(fetch, base, 60_000);
-    await converse(lifecycle, run, { base, directory, dataDir, compose }, model, evidence);
+    await converse(lifecycle, run, { base, directory, dataDir, compose }, model, context);
   } catch (error) {
     failures.push(error);
   }
@@ -264,7 +317,15 @@ async function composeScenario(
       failures.push(error);
     }
   }
-  // The original failure stays first; a drainage failure follows it.
+  // Read-only: the stack's state after this case's own stop/start has settled.
+  if (ragflowBefore !== undefined) {
+    try {
+      evidence.ragflow = { before: ragflowBefore, after: await ragflowStackSnapshot(run) };
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  // The original failure stays first; drainage and inspection failures follow it.
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1)
     throw new AggregateError(failures, 'Local stack deployment and drainage failed');
@@ -292,16 +353,23 @@ it('builds both images, starts the delivered compose platform, converses through
       undefined,
       (lifecycle) => {
         timings.userImageBuildMs = Math.round(performance.now() - started);
-        return composeScenario(lifecycle, timings, evidence);
+        return composeScenario(lifecycle, timings, {
+          evidence,
+          ragflow: { stack, seed: before },
+        });
       },
     );
   } finally {
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
-  const { browser, provider } = evidence;
-  if (browser === undefined || provider === undefined)
+  const { browser, provider, proxy, ragflow } = evidence;
+  if (browser === undefined || provider === undefined || proxy === undefined)
     throw new Error('Conversation evidence missing');
+  if (ragflow === undefined) throw new Error('RAGFlow test stack evidence missing');
+  // IDs, states, restart counts and volumes unchanged; only ragflow-cpu's StartedAt may move.
+  expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
+  expect(ragflow.after.service('ragflow-cpu').state).toBe('running');
   expect(browser.screenshots).toEqual(['login.png', 'workbench.png', 'reply.png']);
   expect({
     consoleErrors: browser.consoleErrors,
@@ -332,6 +400,7 @@ it('builds both images, starts the delivered compose platform, converses through
           toolResults: provider.toolResults,
           markedRequests: provider.markedRequests,
         },
+        proxy,
       },
     })}\n`,
   );

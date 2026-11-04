@@ -46,8 +46,10 @@ export default defineConfig({
           name: 'stack',
           include: ['platform/test/**/*.stack.test.ts'],
           fileParallelism: false,
-          // Two cold image builds (600s each) plus compose, health and drainage.
-          testTimeout: 1_800_000,
+          // Two cold image builds (600s each) plus compose, health and drainage, and the 300s
+          // RAGFlow restore window: a vitest timeout skips the restore `finally` and leaves
+          // ragflow-cpu stopped, so the bound keeps room for the worst-case restore.
+          testTimeout: 2_400_000,
         },
       },
     ],

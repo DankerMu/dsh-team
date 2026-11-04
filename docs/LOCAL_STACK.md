@@ -28,6 +28,8 @@ giap-vps 上 `pnpm test:docker` 与 `pnpm test:deploy` 的门禁不变，本机�
 
 8. 本机 RAGFlow 测试栈可达，版本接口报告 `v1.0.0-rc2`，部署方法见第 2 节。
 
+用例会停掉并重新启动测试栈的 `ragflow-rc2-ragflow-cpu-1`，以验证 RAGFlow 停机时平台照常工作（用户 2026-11-03 特批）。它只对这一个容器做 `docker stop` 和 `docker start`，不删除、不重建、不改配置；停之前核对容器的 compose 项目与服务标签，结束前等它恢复，并核对种子快照不变。
+
 ## 2. 部署本机 RAGFlow 测试栈
 
 测试栈使用官方 `infiniflow/ragflow:v1.0.0-rc2`，上游文件保持原样，只加一个本机覆盖文件。下面以 `~/ragflow-rc2` 为工作目录。
@@ -132,10 +134,11 @@ pnpm test:stack
    1. 只读核对三个库共六个文件都已 `COMPLETED`，记下快照。
    2. 取得部署锁，在本机构建两个镜像。
    3. 用 compose 拉起平台，检查 `/healthz`。
-   4. 在平台容器里启动确定性 provider，并把管理员模型配置指向它。
-   5. 让员工经网关登录真实 DSH 并发一条消息。
-   6. 核对回复显示在对话里，`/data/work` 下写出的文件与脚本逐字节一致；同时核对零控制台错误、没有对外 origin 的请求。
-   7. 排空并拆除部署、释放锁之后，再读一次种子快照，要求与开始时相同。
+   4. 在平台容器里启动确定性 provider，并把管理员模型配置指向它；管理员保存 RAGFlow 地址（`host.docker.internal:<端口>`）和密钥，测试连接成功。
+   5. 停掉 `ragflow-cpu`（停之前在 stderr 写出被停的容器和恢复命令）。
+   6. 在 RAGFlow 停机期间让员工经网关登录真实 DSH 并发一条消息；核对回复显示在对话里，`/data/work` 下写出的文件与脚本逐字节一致；同时核对零控制台错误、没有对外 origin 的请求。管理员的 RAGFlow 设置页照常读取，测试连接报告 `unavailable`；从员工实例内调用四个代理接口，都返回 `unavailable`。
+   7. 重新启动 `ragflow-cpu` 并等待就绪，再从员工实例内调用四个代理接口：版本、三个种子库、库内文件与文件名筛选、检索（含剔除伪造库）。管理员把相似度阈值改为 1 之后，下一次检索立即变为 `no-results`。
+   8. 排空并拆除部署、释放锁之后，再读一次种子快照，要求与开始时相同；6 个 `ragflow-rc2-*` 容器的 ID、状态、重启次数与数据卷不变，`StartedAt` 只有 `ragflow-cpu` 改变。
 3. 截图保存在 `reports/stack/<runId>/`。
 4. 结束后，按账本精确退休本次创建的容器、网络、卷和镜像，固定名平台先排空再删除。
 
@@ -156,6 +159,13 @@ pnpm test:stack
   4. 删除运行目录，以及 `$TMPDIR` 下这次运行留下的 `dsh-team-test-docker-*` 私有目录（里面是平台数据、`compose.env` 和绑定源）。
 
   在此之前，遗留的 `dsh-team-platform` 会让下一次运行在准入时被拒绝。
+- 用例停掉 `ragflow-cpu` 之后，只要 `docker stop` 已经提交，`finally` 就会重新启动它。但进程被强杀、`test-stack.mjs` 把 SIGINT/SIGTERM 转发给整个进程组，或 vitest 超时，都不会执行 `finally`，容器会停在停止状态，下一次运行的前提检查会以「RAGFlow test stack unreachable」失败。此时手工恢复：
+
+  ```bash
+  docker start ragflow-rc2-ragflow-cpu-1
+  ```
+
+  然后确认 `curl -s http://127.0.0.1:19380/api/v1/system/version` 报告 `v1.0.0-rc2`。
 
 ## 6. 证据评论格式
 
@@ -168,7 +178,8 @@ pnpm test:stack
 | 退出码 | 命令的实际退出码 |
 | 用例计数 | vitest 报告的文件数与用例数，以及用例打印的 `stackEvidence` 行 |
 | 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷清单与运行前逐行相同（覆盖只带 `dsh-team.user` 的员工实例资源；`docker … --filter name=` 是子串匹配，按名字前缀筛选时容器用 `docker ps -a --format '{{.Names}}'`、网络和卷用 `--format '{{.Name}}'`，再加 `grep '^dsh-team-'`）；带运行标签的镜像清单与运行前相同 |
-| RAGFlow 测试栈 | 运行前后的 `ragflow-rc2-*` 容器 ID、StartedAt、状态、重启次数与数据卷清单逐行一致 |
+| RAGFlow 测试栈 | 运行前后的 6 个 `ragflow-rc2-*` 容器 ID、状态、重启次数与数据卷清单逐行一致；`StartedAt` 只有 `ragflow-cpu` 因用例自己的停启而改变 |
+| 代理 | 用例打印的 `stackEvidence.proxy`：停机期间四个接口与测试连接的结果、恢复后的版本、种子库数、文件数、检索结果与片段数、剔除数、改阈值后的结果 |
 | 凭据 | 运行日志中没有密钥 |
 
 最后注明：本机 arm64 结果只作功能证据，不代表 amd64 生产环境，也不作隔离证据。

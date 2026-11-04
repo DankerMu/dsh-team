@@ -1490,6 +1490,129 @@ Evidence (14.4 检索路由，#416):
 - 14.5：真实种子数据检索、改参数即生效、停机 `unavailable`。
 - 第 19 组部署文档：「所有知识库必须使用同一个 embedding 模型，否则检索失败（`upstream-error`）」。另写明 rc2 会在自己的服务日志里以 Info 级别记录员工的检索问题（`internal/service/dataset/search.go:37`），这在平台 F6 边界之外，由运营方管理 RAGFlow 日志。
 
+Risk packs (14.5 本机通道 RAGFlow 代理用例，#417): fixture level expanded（与 issue 建议一致：第一次从真实员工实例经网桥调用代理，并且用例要停启一个不属于本项目的测试栈容器）。selected：
+
+- **Auth / permissions / secrets**：
+  - 用例不新增或改变任何路由，只调用 #413–#416 已交付的四个接口和既有的后台接口：`GET/PUT /_platform/api/admin/ragflow-config`、`POST /_platform/api/admin/ragflow-config/test`、`PUT /_platform/api/admin/retrieval-config`。
+  - 实例侧请求由 `docker exec --user 1001 dsh-team-u-<id> node …` 在员工容器里发出，令牌取自容器环境里平台注入的 `DSH_TEAM_INSTANCE_TOKEN`。来源地址因此是实例的 +2，这正是生产路径：插件在容器内调用平台。
+    - 平台地址是平台容器在该实例网桥上的端点地址（+3），端口是容器内的 `PLATFORM_PORT`。两者都从 `docker inspect` 读取，不靠推算。
+    - 失败路径也不能泄露。`docker-cleanup.ts` 的 `output()` 会在退出码非零时把完整参数、stdout 和 stderr 写进抛出的错误，所以：
+      - 实例脚本在任何路径上都只写固定字符串、每次调用的 HTTP 状态、封闭集合的 `result`、个数、32 位 hex 库 ID（不是秘密；后续调用和 `excluded` 断言要用），以及种子库名和种子文件名，失败时也一样；不打印回应体、异常消息、令牌和片段内容；
+      - 脚本本身以退出码 0 结束，调用失败也照常输出状态，由测试进程判定；
+      - 脚本以 `node --input-type=module -e <脚本>` 送进容器，参数里只有脚本文本、平台地址和端口。令牌只在容器内从 `process.env.DSH_TEAM_INSTANCE_TOKEN` 读取，从不出现在参数里。检索问题是固定的测试常量（「报销需要提交哪些材料」），不是员工输入，可以出现在脚本文本里。既有的 `createDockerCommands` 异步路径没有 stdin 输入通道，本 issue 不新增；
+      - 记录每次调用的 HTTP 状态：令牌或来源校验失败时报告为 401，而不是被当作解析失败。
+  - not selected：真实网桥上的错误令牌和错误来源地址。#413 的集成测试已经覆盖这两种情况；为了构造它们，要么把令牌带出容器，要么从别处发起调用，这本身就是暴露。
+  - RAGFlow 地址：平台容器经 `host.docker.internal:<端口>` 访问只在主机 loopback 上发布的 RAGFlow API。端口取自私有配置里的 `ragflowUrl`，把主机部分 `127.0.0.1` 或 `[::1]` 换成 `host.docker.internal`。
+    - Docker Desktop 实测（2026-11-03）：一次性容器 `fetch('http://host.docker.internal:19380/api/v1/system/version')` 得到 HTTP 200、`code: 0`、`v1.0.0-rc2`。
+    - 密钥只在测试进程发给平台的 `PUT` 请求体里，不写入日志、证据和报告。
+- **Lifecycle / external state**（停启 RAGFlow，用户 2026-11-03 特批）：
+  - 「RAGFlow 停机」用真实停机验证，不用改地址模拟：用例对本机测试栈的 `ragflow-rc2-ragflow-cpu-1` 执行 `docker stop`，之后再 `docker start`。只做这两种操作，不删除、不重建、不改配置，也不碰该栈的其他 5 个服务。
+  - 停机之前先核对身份：按名字 inspect，标签 `com.docker.compose.project=ragflow-rc2`、`com.docker.compose.service=ragflow-cpu`，状态 `running`。记下容器 ID 和 `RestartCount`；之后的停、启、复核都按这个 ID 进行。身份不符时用例失败，不停任何容器。
+  - 停机前向 stderr 写一行，格式与 `test-stack.mjs` 的 run directory 提示相同，说明被停的容器和人工恢复命令 `docker start ragflow-rc2-ragflow-cpu-1`。
+  - 恢复放在 `finally` 里：只要 `docker stop <ID>` 已经提交（沿用 `composeScenario` 的 `submitted` 写法；CLI 超时的 stop 也可能已经停掉容器），就一定执行 `docker start <ID>`，然后等待（上限 300 秒）版本接口返回 `v1.0.0-rc2`，且 `readSeedDatasets` 的快照与运行前相同。恢复失败时，这个失败附在原始错误后面一起抛出，信息里说明人工恢复的命令。
+  - 结束时由用例断言：
+    - 6 个 `ragflow-rc2-*` 容器的 ID 都不变；
+    - 其他 5 个容器的 `StartedAt` 不变；
+    - `ragflow-cpu` 是 `running`，`RestartCount` 不变（`docker stop`/`start` 不增加它）；
+    - 数据卷清单不变。
+  - 以下情况都不会执行 `finally`，容器会停留在停止状态：
+    - 进程被强杀；
+    - `test-stack.mjs` 把 SIGINT/SIGTERM 转发给整个进程组（`:250-271`），vitest 的 fork worker 被直接杀死；
+    - vitest 超时（`vitest.config.ts:50`）。
+    - 下一次运行的前提检查会以通用的「RAGFlow test stack unreachable」失败。上面那行 stderr 提示和 `docs/LOCAL_STACK.md` 第 5 节的人工恢复命令就是为这种情况准备的。
+  - 整个过程都在既有的部署锁 `acquireDeploymentLock` 之内。
+- **Error handling / partial outputs**（spec「RAGFlow 不可用不影响平台其他功能」「RAGFlow 停机时仍能进入工作台」）：
+  - 顺序：
+    1. 拉起平台。
+    2. 管理员保存模型设置（既有）和 RAGFlow 地址与密钥，测试连接得到 `{ result: 'ok', version: 'v1.0.0-rc2' }`。这也是 `host.docker.internal` 路径的正向对照。
+    3. 停掉 `ragflow-cpu`。停机放在 `prepareDeploymentAccounts` 之后、`gateway.state` 之前。
+    4. 员工登录、启动实例、经工作台完成一轮对话（既有流程）。这证明登录、实例启动和网关在 RAGFlow 停机时照常工作。
+    5. 停机期间的后台页面（spec「后台其他页面照常工作」）：管理员 `GET /_platform/api/admin/ragflow-config` 返回 200 和 `{ baseURL, apiKeyConfigured: true }`；`POST /_platform/api/admin/ragflow-config/test` 返回 `{ result: 'unavailable' }`。
+    6. 从实例内调用四个接口：`version`、`datasets`、`datasets/<ID>/documents?page=1&page_size=10` 和检索，都必须是 HTTP 200 加 `unavailable`。这一步不需要真实的库 ID：文件列表和检索都在发往 RAGFlow 时失败，所以任何合格的 32 位 hex ID（例如 32 个 `0`）都可以。
+    7. 启动 `ragflow-cpu` 并等待就绪。
+    8. 再从实例内调用四个接口，结果见下。这是代理第一次对真实的 rc2 发请求：此时出现 `upstream-error`，说明 client 的回应映射有缺陷，而不是测试栈的问题。用例失败并停下报告，不放宽断言。
+  - Docker Desktop 在容器停止后会撤掉发布端口，所以连接被拒绝，结果是 `unavailable`。如果实测得到的是 `timeout`，用例失败并停下报告，不放宽断言。
+- **恢复后的四个接口**（spec「实例可以调用四个只读接口」）：
+  - `version` → `{ result: 'ok', version: 'v1.0.0-rc2' }`。
+  - `datasets` → `ok`，列表包含三个种子库，按名字匹配。之后的文件列表和检索用这里得到的 ID。
+  - `documents`：
+    - 每个种子库 `page=1&page_size=10` → `ok`，`total` 为 2，文件名集合等于该库的种子文件；
+    - `dsh-team-seed-policies` 加 `keywords=expense` → `total` 为 1，文件名为 `expense-policy.txt`。
+  - 检索（付费，用户 2026-11-03 接受）：
+    1. 三个种子库，问题「报销需要提交哪些材料」→ `ok`，`excluded: []`，至少 1 个片段；每个片段的 `datasetName` 都是种子库名，`documentName` 都是该库的种子文件名。
+    2. 种子库 `dsh-team-seed-policies` 加一个伪造 ID（32 个 `0`）→ `ok`，`excluded` 恰为伪造 ID。
+    3. 保存即生效：管理员 `PUT retrieval-config`，把 `retrievalSimilarityThreshold` 改为 `1`，其余保持默认，然后重复检索 1 → `no-results`。不重启实例，也不重启平台。
+    - 不再做其他检索：全部剔除的情况不发检索请求，由 #416 的集成测试覆盖。
+- **Resource limits**：
+  - 实例侧每次 `docker exec` 设 30 秒上限。
+  - RAGFlow 恢复的等待上限 300 秒，按 1 秒间隔轮询版本接口，再读一次种子快照；不用固定的 sleep。
+  - 用例的总时长上限随之增加（`vitest` 的 stack 项目超时如有需要就调整，并在 PR 中说明）。
+- **Documentation / migration notes**（由 orchestrator 改）：
+  - `docs/LOCAL_STACK.md`：
+    - 第 1 节说明用例会停启 `ragflow-cpu`；
+    - 第 5 节写人工恢复命令 `docker start ragflow-rc2-ragflow-cpu-1`；
+    - 第 6 节「RAGFlow 测试栈」一行改为：「6 个容器的 ID、状态、重启次数和数据卷清单逐行一致；`StartedAt` 只有 `ragflow-cpu` 因用例自己的停启而改变」，并要求证据评论附上 `stackEvidence.proxy` 行。
+  - `AGENTS.md`：
+    - Agent Operating Rules 的 RAGFlow 例外补一句：用户 2026-11-03 授权本机通道用例停启自己验证过身份的 `ragflow-rc2-ragflow-cpu-1`，此外不做任何改动；
+    - 验证矩阵的 Local full stack 一行补上四个接口、停机 `unavailable` 和保存即生效。
+
+not selected：
+
+- Concurrency / shared state：部署锁已经串行化本机通道。
+- Migration / release：无。
+
+**不变量**：
+
+- 用例结束时，本机 RAGFlow 测试栈恢复运行，种子快照与运行前相同。只有 `ragflow-cpu` 的 `StartedAt` 可以改变。
+- 停机期间平台的登录、实例启动、网关和对话照常工作；代理只回 `unavailable`，不是 500，也不挂起。
+- 用例输出与日志中没有 RAGFlow 密钥、实例令牌和片段内容。检索问题是固定的测试常量，不受此限。
+
+**Must preserve**：
+
+- 既有的 stack 用例断言：镜像构建、健康检查、对话、文件写入、截图、零控制台错误、零外部请求、种子快照不变。
+- 部署锁和精确归属的清理顺序。
+
+**同级面**：
+
+- 15.x 插件将用同一条容器内路径（+2 到 +3:端口，令牌来自环境变量）调用代理。
+
+**宽度**：stack 用例、可能新增的 `platform/test/ragflow-stack-fixture.ts`，加上本段 fixture 和文档，可能超过 400 行；超过时打 `diff-limit-exempt`。
+
+Evidence (14.5 本机通道 RAGFlow 代理用例，#417):
+
+**改动点**：
+
+- 修改 `platform/test/platform-stack.stack.test.ts`。
+- 实例侧调用、RAGFlow 停启与就绪等待可以抽到新的 `platform/test/ragflow-stack-fixture.ts`。它是测试辅助模块，计入 jscpd。
+  - 其中不依赖 Docker 的纯函数，例如把 `ragflowUrl` 换成 `host.docker.internal`、解析实例脚本的输出，配套 `platform/test/ragflow-stack-fixture.integration.test.ts`，在 `pnpm test:integration` 里运行。
+- `docs/LOCAL_STACK.md`、`AGENTS.md` 由 orchestrator 改。
+
+**测试**：
+
+- `pnpm test:stack`：上面列出的顺序与断言全部通过。`stackEvidence` 增加 `proxy` 字段，只含结果和个数，例如：
+
+  ```
+  { downResults: { version, datasets, documents, retrieval }, adminDown: { configStatus, testResult },
+    version, seedDatasets, documentsTotals, keywordsTotal,
+    retrieval: { result, chunks }, excluded, thresholdResult, ragflowRestartMs }
+  ```
+
+- 辅助模块的集成测试覆盖：
+  - 地址替换：`127.0.0.1` 和 `[::1]` 都换成 `host.docker.internal`，端口保留；
+  - 实例脚本输出的解析：输出不合格时失败，而不是当作结果。
+- 先红后绿：新增断言要在实现之前失败（例如 `stackEvidence.proxy` 缺失，或者对代理的调用失败）。
+
+**命令**：
+
+- `pnpm test:integration`（辅助模块）、`pnpm check`
+- 本机 exact-head 的 `pnpm test:stack`，并贴证据评论
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`
+
+**交接**：
+
+- 15.x 插件：容器内调用代理的地址、端口与令牌来源，同本用例。
+- 第 19 组：集成验收复用本用例的停机步骤。
+
 ## 15. 「知识库」插件
 
 依赖：4、10（含 10.2 种子和 10.4 本机浏览器）、11、14。关键路径 `images/dsh-user/`（15.1 镜像交付）。
