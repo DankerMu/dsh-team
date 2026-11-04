@@ -7,7 +7,7 @@ import {
   seedInstance,
 } from '../../test/instance-token-fixture.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { authenticateInstance } from './instance-auth.ts';
+import { INSTANCE_ERRORS, authenticateInstance } from './instance-auth.ts';
 
 const TOKEN = 'a1'.repeat(32);
 const HOST = '172.30.0.2';
@@ -24,6 +24,19 @@ function peer(authorization: string | undefined, remoteAddress: string | undefin
 }
 const unreachable = vi.fn<Lookup>(() => {
   throw new Error('the token store must not be read');
+});
+
+it('keeps fixed rejection bodies that never carry request-derived text', () => {
+  expect(INSTANCE_ERRORS).toStrictEqual({
+    401: UNAUTHORIZED,
+    413: { statusCode: 413, error: 'Payload Too Large', message: 'Request body too large' },
+    415: {
+      statusCode: 415,
+      error: 'Unsupported Media Type',
+      message: 'JSON request body required',
+    },
+    500: { statusCode: 500, error: 'Internal Server Error', message: 'Internal Server Error' },
+  });
 });
 
 it('looks up the SHA-256 of a bearer of exactly 64 lowercase hex and returns its owner', () => {

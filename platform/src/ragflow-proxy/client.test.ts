@@ -68,6 +68,7 @@ it('uses a ten-second per-request deadline and a closed result set', () => {
     'timeout',
     'upstream-error',
     'invalid-request',
+    'no-results',
   ]);
 });
 

@@ -9,6 +9,6 @@ export { admitCurrentSession, currentSessionRoutes } from './current-session.ts'
 export { passwordChangeRoutes } from './password-change.ts';
 export { createSourceAddressResolver, parseAddress } from './source-address.ts';
 export type { SourceAddressResolver } from './source-address.ts';
-export { hasValidOrigin, installRequestGuard } from './request-guard.ts';
+export { hasValidOrigin, installRequestGuard, isJsonMediaType } from './request-guard.ts';
 export { normalizeEmail } from './identity.ts';
 export { administerAccount, AdministratorConflictError } from './administrator.ts';

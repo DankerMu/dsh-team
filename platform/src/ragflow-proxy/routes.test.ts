@@ -8,6 +8,12 @@ const DATASETS = '/_platform/instance-api/ragflow/datasets';
 const DATASET = 'd'.repeat(32);
 const DOCUMENTS = `${DATASETS}/${DATASET}/documents`;
 const PAGE = `${DOCUMENTS}?page=1&page_size=10`;
+const RETRIEVAL = '/_platform/instance-api/ragflow/retrieval';
+/** One retrieval POST with `payload` sent verbatim and the given headers beside the token. */
+type Post = (
+  payload: string | undefined,
+  headers?: Record<string, string>,
+) => Promise<[number, string]>;
 
 /** The real application in network mode with one running loopback instance and its token. */
 async function withProxyRoutes(
@@ -15,6 +21,7 @@ async function withProxyRoutes(
     send: (method: 'GET' | 'HEAD', url: string) => Promise<[number, string]>,
     database: DatabaseHandle,
     lines: string[],
+    post: Post,
   ) => Promise<void>,
 ): Promise<void> {
   await withApp(
@@ -30,7 +37,18 @@ async function withProxyRoutes(
         });
         return [response.statusCode, response.body];
       };
-      await run(send, database, lines);
+      // A string payload keeps light-my-request from adding its own JSON Content-Type.
+      const post: Post = async (payload, headers = { 'content-type': 'application/json' }) => {
+        const response = await app.inject({
+          method: 'POST',
+          url: RETRIEVAL,
+          remoteAddress: '127.0.0.1',
+          headers: { authorization: `Bearer ${token}`, ...headers },
+          ...(payload === undefined ? {} : { payload }),
+        });
+        return [response.statusCode, response.body];
+      };
+      await run(send, database, lines, post);
     },
     false,
     [],
@@ -74,6 +92,11 @@ it.each(['?page=2', '?=', '?page_size=1001&orderby=create_time'])(
   },
 );
 
+const INTERNAL = {
+  statusCode: 500,
+  error: 'Internal Server Error',
+  message: 'Internal Server Error',
+};
 it.each([
   [VERSION, 'RAGFlow proxy version failure'],
   [DATASETS, 'RAGFlow proxy datasets failure'],
@@ -181,3 +204,172 @@ it.each([
     });
   },
 );
+
+const UNSUPPORTED = {
+  statusCode: 415,
+  error: 'Unsupported Media Type',
+  message: 'JSON request body required',
+};
+const TOO_LARGE = {
+  statusCode: 413,
+  error: 'Payload Too Large',
+  message: 'Request body too large',
+};
+const VALID = JSON.stringify({ question: '年假怎么申请？', datasetIds: [DATASET] });
+const QUESTION_4096 = '库'.repeat(1_365) + 'x';
+const ids = (count: number) =>
+  Array.from({ length: count }, (_value, index) => index.toString(16).padStart(32, '0'));
+const retrievalBody = (fields: Record<string, unknown>) =>
+  JSON.stringify({ question: '年假怎么申请？', datasetIds: [DATASET], ...fields });
+
+it.each([
+  ['no Content-Type with a body', VALID, {}],
+  ['no Content-Type and no body', undefined, {}],
+  ['text/plain', VALID, { 'content-type': 'text/plain' }],
+  ['application/vnd.api+json', VALID, { 'content-type': 'application/vnd.api+json' }],
+  ['a JSON parameter without the JSON type', VALID, { 'content-type': 'text/plain; x=json' }],
+])(
+  'answers a retrieval with %s with the fixed 415 before reading settings',
+  async (_label, payload, headers) => {
+    await withProxyRoutes(async (_send, database, _lines, post) => {
+      database.exec('DROP TABLE settings');
+
+      const [status, body] = await post(payload, headers);
+
+      expect([status, JSON.parse(body)]).toEqual([415, UNSUPPORTED]);
+    });
+  },
+);
+
+it('answers a retrieval body over 64 KiB with the fixed 413 before reading settings', async () => {
+  await withProxyRoutes(async (_send, database, _lines, post) => {
+    database.exec('DROP TABLE settings');
+    const payload = retrievalBody({ padding: 'x'.repeat(65_536) });
+
+    const [status, body] = await post(payload);
+
+    expect([status, JSON.parse(body)]).toEqual([413, TOO_LARGE]);
+  });
+});
+
+it.each([
+  ['unparseable JSON', '{"question":'],
+  ['an empty body', ''],
+  ['a __proto__ key', '{"__proto__":{"x":1},"question":"q","datasetIds":[]}'],
+  ['a constructor.prototype key', '{"constructor":{"prototype":{"x":1}}}'],
+  ['JSON null', 'null'],
+  ['a JSON array', JSON.stringify([VALID])],
+  ['a JSON string', JSON.stringify(VALID)],
+  ['a missing question', JSON.stringify({ datasetIds: [DATASET] })],
+  ['missing dataset IDs', JSON.stringify({ question: 'q' })],
+  ['an added top_k', retrievalBody({ top_k: 1024 })],
+  ['an added similarity_threshold', retrievalBody({ similarity_threshold: 0 })],
+  ['an added page_size', retrievalBody({ page_size: 100 })],
+  ['an added rerank_id', retrievalBody({ rerank_id: 'x' })],
+  ['an added unknown key', retrievalBody({ x: 1 })],
+  ['an empty question', retrievalBody({ question: '' })],
+  ['a whitespace-only question', retrievalBody({ question: ' \t\n　' })],
+  ['a NEL-only question', retrievalBody({ question: '\u0085' })],
+  ['a question over 4096 UTF-8 bytes', retrievalBody({ question: QUESTION_4096 + 'x' })],
+  ['a numeric question', retrievalBody({ question: 7 })],
+  ['an empty dataset scope', retrievalBody({ datasetIds: [] })],
+  ['1001 dataset IDs', retrievalBody({ datasetIds: ids(1_001) })],
+  ['a repeated dataset ID', retrievalBody({ datasetIds: [DATASET, DATASET] })],
+  ['an uppercase dataset ID', retrievalBody({ datasetIds: ['D'.repeat(32)] })],
+  ['a 31-character dataset ID', retrievalBody({ datasetIds: ['d'.repeat(31)] })],
+  ['a numeric dataset ID', retrievalBody({ datasetIds: [7] })],
+  ['dataset IDs that are an object', retrievalBody({ datasetIds: { 0: DATASET } })],
+  ['dataset IDs that are the string "abc"', retrievalBody({ datasetIds: 'abc' })],
+])(
+  'answers a retrieval with %s as invalid-request before reading settings',
+  async (_label, payload) => {
+    await withProxyRoutes(async (_send, database, _lines, post) => {
+      database.exec('DROP TABLE settings');
+
+      const [status, body] = await post(payload);
+
+      expect([status, JSON.parse(body)]).toEqual([200, { result: 'invalid-request' }]);
+    });
+  },
+);
+
+it.each([
+  ['a question of exactly 4096 UTF-8 bytes', retrievalBody({ question: QUESTION_4096 }), {}],
+  ['a question with surrounding whitespace', retrievalBody({ question: ' a ' }), {}],
+  ['exactly 1000 dataset IDs', retrievalBody({ datasetIds: ids(1_000) }), {}],
+  ['a charset parameter', VALID, { 'content-type': 'application/json; charset=utf-8' }],
+  ['a mixed-case media type', VALID, { 'content-type': 'Application/JSON' }],
+])(
+  'admits a retrieval with %s past validation to the saved settings',
+  async (_label, payload, headers) => {
+    expect(Buffer.byteLength(QUESTION_4096)).toBe(4_096);
+    await withProxyRoutes(async (_send, _database, _lines, post) => {
+      const [status, body] = await post(payload, {
+        'content-type': 'application/json',
+        ...headers,
+      });
+
+      // Nothing is saved, so an admitted request stops at the settings it would read.
+      expect([status, JSON.parse(body)]).toEqual([200, { result: 'not-configured' }]);
+    });
+  },
+);
+
+it('answers a retrieval without a token with the fixed 401 even when its body is not JSON', async () => {
+  await withApp(
+    async (app) => {
+      const response = await app.inject({
+        method: 'POST',
+        url: RETRIEVAL,
+        remoteAddress: '127.0.0.1',
+        headers: { 'content-type': 'text/plain' },
+        payload: 'not json',
+      });
+
+      expect([response.statusCode, JSON.parse(response.body)]).toEqual([
+        401,
+        { statusCode: 401, error: 'Unauthorized', message: 'Unauthorized' },
+      ]);
+    },
+    false,
+    [],
+    undefined,
+    { upstreamMode: 'network' },
+  );
+});
+
+it('answers a settings storage failure on a valid retrieval with the fixed 500 and log text', async () => {
+  await withProxyRoutes(async (_send, database, lines, post) => {
+    database.exec('DROP TABLE settings');
+
+    const [status, body] = await post(VALID);
+
+    expect([status, JSON.parse(body)]).toEqual([500, INTERNAL]);
+    const output = body + lines.join('');
+    expect(output).toContain('RAGFlow proxy retrieval failure');
+    for (const leak of ['SQLITE', 'no such table', 'settings', '年假'])
+      expect(output.includes(leak)).toBe(false);
+  });
+});
+
+it('answers any other body error with the fixed 500 and logs only fixed text', async () => {
+  await withProxyRoutes(async (_send, _database, lines, post) => {
+    // A declared length that differs from the sent body is a body error the route does not map.
+    const [status, body] = await post(VALID, {
+      'content-type': 'application/json',
+      'content-length': '5',
+    });
+
+    expect([status, JSON.parse(body)]).toEqual([500, INTERNAL]);
+    const output = body + lines.join('');
+    expect(output).toContain('RAGFlow proxy retrieval request failure');
+    for (const leak of ['FST_ERR', 'Content-Length', 'did not match', '年假'])
+      expect(output.includes(leak)).toBe(false);
+  });
+});
+
+it.each(['GET', 'HEAD'] as const)('declares no %s route for retrieval', async (method) => {
+  await withProxyRoutes(async (send) => {
+    expect((await send(method, RETRIEVAL))[0]).toBe(404);
+  });
+});
