@@ -1488,7 +1488,7 @@ Evidence (14.4 检索路由，#416):
   - `excluded` 非空时提示这些库已不存在；`no-results` 和每个失败取值各有一条中文提示；
   - 最坏等待约 20 秒（两次各 10 秒）。
 - 14.5：真实种子数据检索、改参数即生效、停机 `unavailable`。
-- 第 19 组部署文档：「所有知识库必须使用同一个 embedding 模型，否则检索失败（`upstream-error`）」。
+- 第 19 组部署文档：「所有知识库必须使用同一个 embedding 模型，否则检索失败（`upstream-error`）」。另写明 rc2 会在自己的服务日志里以 Info 级别记录员工的检索问题（`internal/service/dataset/search.go:37`），这在平台 F6 边界之外，由运营方管理 RAGFlow 日志。
 
 ## 15. 「知识库」插件
 
