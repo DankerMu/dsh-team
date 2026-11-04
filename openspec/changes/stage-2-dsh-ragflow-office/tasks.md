@@ -1564,7 +1564,7 @@ not selected：
 
 **不变量**：
 
-- 用例结束时，本机 RAGFlow 测试栈恢复运行，种子快照与运行前相同。只有 `ragflow-cpu` 的 `StartedAt` 可以改变。
+- 用例结束时，本机 RAGFlow 测试栈恢复运行，种子快照与运行前相同。只有 `ragflow-cpu` 的 `StartedAt` 和 `RestartCount` 可以改变。
 - 停机期间平台的登录、实例启动、网关和对话照常工作；代理只回 `unavailable`，不是 500，也不挂起。
 - 用例输出与日志中没有 RAGFlow 密钥、实例令牌和片段内容。检索问题是固定的测试常量，不受此限。
 

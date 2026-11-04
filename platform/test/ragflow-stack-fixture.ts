@@ -382,8 +382,9 @@ export async function ragflowStackSnapshot(run: DockerOutput): Promise<RagflowSt
 
 type SeedSnapshot = Awaited<ReturnType<typeof readSeedDatasets>>;
 
-async function ragflowReady(stack: ConfiguredStack): Promise<boolean> {
-  const fact = await probeRagflowVersion(stack.ragflowUrl);
+/** The version probe, bounded by `deadlineMs` through the end of its body. */
+async function ragflowReady(stack: ConfiguredStack, deadlineMs: number): Promise<boolean> {
+  const fact = await probeRagflowVersion(stack.ragflowUrl, deadlineMs);
   if (fact === 'unreachable' || fact.status !== 200) return false;
   try {
     const document = record(JSON.parse(fact.body));
@@ -394,41 +395,95 @@ async function ragflowReady(stack: ConfiguredStack): Promise<boolean> {
   }
 }
 
-/** The seed snapshot, or undefined while a restarted RAGFlow still fails the read. */
-async function seedWhenWarm(stack: ConfiguredStack): Promise<SeedSnapshot | undefined> {
+/**
+ * The seed snapshot, or undefined while a restarted RAGFlow still fails the read or has not
+ * answered within `remainingMs`; the read itself has no signal, so the wait is a race.
+ */
+async function seedWhenWarm(
+  stack: ConfiguredStack,
+  remainingMs: number,
+): Promise<SeedSnapshot | undefined> {
+  const read = readSeedDatasets(stack);
+  // A read that loses the race still settles later; its failure is already accounted for.
+  read.catch(() => undefined);
+  let timer: NodeJS.Timeout | undefined;
+  const expired = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      resolve(undefined);
+    }, remainingMs);
+  });
   try {
-    return await readSeedDatasets(stack);
+    return await Promise.race([read, expired]);
   } catch {
     // Warm-up failures are retried within the restore deadline; the deadline error is final.
     return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Restore polling bounds: production uses the 300s deadline at a 1s interval. */
+interface RestoreTiming {
+  readonly deadlineMs: number;
+  readonly intervalMs: number;
+}
+
+/**
+ * Polls until the version is ready and the seed snapshot reads; every probe, read and sleep is
+ * bounded by the time left before `deadline`, so the wait never outlives it.
+ */
+async function awaitRestored(
+  stack: ConfiguredStack,
+  seed: SeedSnapshot,
+  deadline: number,
+  timing: RestoreTiming,
+): Promise<void> {
+  const seconds = String(Math.round(timing.deadlineMs / 1_000));
+  const remaining = () => deadline - performance.now();
+  let seedUnreadable = false;
+  for (;;) {
+    if (remaining() <= 0)
+      throw new Error(
+        seedUnreadable
+          ? `RAGFlow version ready but seed snapshot unreadable within ${seconds}s`
+          : `RAGFlow version not ready within ${seconds}s`,
+      );
+    // AbortSignal.timeout rejects a fractional delay, which the probe would report as unreachable.
+    if (await ragflowReady(stack, Math.max(1, Math.floor(Math.min(5_000, remaining()))))) {
+      const snapshot = await seedWhenWarm(stack, Math.max(0, remaining()));
+      // A successful but different snapshot is a real change, not warm-up.
+      if (snapshot !== undefined && !isDeepStrictEqual(snapshot, seed))
+        throw new Error('RAGFlow seed snapshot changed');
+      if (snapshot !== undefined) return;
+      seedUnreadable = true;
+    } else seedUnreadable = false;
+    await delay(Math.max(0, Math.min(timing.intervalMs, remaining())));
   }
 }
 
 /**
  * A real outage of the identity-checked `ragflow-cpu` container (user-authorized 2026-11-03):
  * `docker stop` and `docker start` of its captured ID only. `restore()` performs the start and
- * the bounded readiness wait once; later calls resolve undefined without touching Docker.
+ * the bounded readiness wait once; later calls resolve undefined without touching Docker. The
+ * deadline runs from before `docker start`, whose own 60s CLI bound lies inside it.
  */
-export function ragflowOutage(run: DockerOutput, stack: ConfiguredStack, seed: SeedSnapshot) {
+export function ragflowOutage(
+  run: DockerOutput,
+  stack: ConfiguredStack,
+  seed: SeedSnapshot,
+  timing: RestoreTiming = { deadlineMs: RESTORE_DEADLINE_MS, intervalMs: 1_000 },
+) {
   let id: string | undefined;
   let restored = false;
   async function start(container: string): Promise<number> {
     const started = performance.now();
     try {
       await run(['start', container], 60_000);
-      const deadline = started + RESTORE_DEADLINE_MS;
-      for (;;) {
-        const snapshot = (await ragflowReady(stack)) ? await seedWhenWarm(stack) : undefined;
-        // A successful but different snapshot is a real change, not warm-up.
-        if (snapshot !== undefined && !isDeepStrictEqual(snapshot, seed))
-          throw new Error('RAGFlow seed snapshot changed');
-        if (snapshot !== undefined) break;
-        if (performance.now() >= deadline)
-          throw new Error('RAGFlow version and seed snapshot not ready in 300s');
-        await delay(1_000);
-      }
+      await awaitRestored(stack, seed, started + timing.deadlineMs, timing);
     } catch (error) {
-      throw new Error(`RAGFlow restore failed; recover manually with: ${RECOVERY}`, {
+      // Our own reasons and the redacted CLI failure name no address, key or body.
+      const reason = error instanceof Error ? error.message : 'unknown failure';
+      throw new Error(`RAGFlow restore failed (${reason}); recover manually with: ${RECOVERY}`, {
         cause: error,
       });
     }

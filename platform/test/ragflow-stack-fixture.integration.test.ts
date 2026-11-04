@@ -2,15 +2,18 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, expect, it } from 'vitest';
-import { SEED_DATASETS } from '../../scripts/seed-stack.mjs';
+import { afterEach, expect, it, vi } from 'vitest';
+import { SEED_DATASETS, readSeedDatasets } from '../../scripts/seed-stack.mjs';
+import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   comparableRagflowStack,
+  duringRagflowOutage,
   instanceScript,
   parseInstanceOutput,
   parseRagflowStack,
   platformEndpoint,
   platformRagflowUrl,
+  ragflowOutage,
   verifiedRagflowContainer,
 } from './ragflow-stack-fixture.ts';
 import type { InstanceCall } from './ragflow-stack-fixture.ts';
@@ -24,6 +27,7 @@ const servers: { close: () => void }[] = [];
 
 afterEach(() => {
   for (const server of servers.splice(0)) server.close();
+  vi.restoreAllMocks();
 });
 
 interface Seen {
@@ -479,4 +483,205 @@ it.each([
   const verify = () => verifiedRagflowContainer(inspected([row]));
 
   expect(verify).toThrow(/^RAGFlow container identity mismatch; nothing stopped$/);
+});
+
+interface RagflowStubState {
+  version: 'ready' | 'down' | 'hang';
+  datasets: 'ok' | 'fail' | 'hang';
+}
+
+/** A loopback stand-in for the RAGFlow API: the version and the seed listings it is read for. */
+async function stubRagflow(state: RagflowStubState) {
+  const ids = SEED_DATASETS.map((_, index) => String(index + 1).repeat(32));
+  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    const url = request.url ?? '';
+    const send = (status: number, body: unknown) => {
+      response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+    };
+    const hang = url === '/api/v1/system/version' ? state.version : state.datasets;
+    if (hang === 'hang') return;
+    if (url === '/api/v1/system/version') {
+      if (state.version === 'ready') send(200, { code: 0, data: 'v1.0.0-rc2' });
+      else send(503, { code: 1 });
+    } else if (state.datasets === 'fail') send(500, { code: 100 });
+    else if (url === '/api/v1/datasets?page_size=100')
+      send(200, {
+        code: 0,
+        data: SEED_DATASETS.map(({ name }, index) => ({ id: ids[index], name })),
+      });
+    else {
+      const index = ids.findIndex((id) => url === `/api/v1/datasets/${id}/documents?page_size=100`);
+      const files = SEED_DATASETS[index]?.files ?? [];
+      const docs = files.map((name, file) => ({
+        id: `${String(index)}-${String(file)}`,
+        name,
+        ingestion_status: 'COMPLETED',
+      }));
+      send(200, { code: 0, data: { docs } });
+    }
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  servers.push({
+    close: () => {
+      // Hanging requests would otherwise keep the server open past the test.
+      server.closeAllConnections();
+      server.close();
+    },
+  });
+  const port = (server.address() as AddressInfo).port;
+  return { ragflowUrl: `http://127.0.0.1:${String(port)}`, ragflowApiKey: 'stub-key' };
+}
+
+/** A recording Docker boundary; the stderr announcement is recorded in the same sequence. */
+function fakeDocker(
+  failures: { stop?: Error; start?: Error } = {},
+  inspection = inspected([container('ragflow-cpu')]),
+) {
+  const calls: string[] = [];
+  const run: DockerOutput = (args) => {
+    const [verb] = args;
+    calls.push(verb === 'container' ? `inspect ${String(args.at(-1))}` : args.join(' '));
+    if (verb === 'container') return Promise.resolve(inspection);
+    const failure = verb === 'stop' ? failures.stop : verb === 'start' ? failures.start : undefined;
+    return failure === undefined ? Promise.resolve('') : Promise.reject(failure);
+  };
+  vi.spyOn(process.stderr, 'write').mockImplementation((text) => {
+    calls.push(`announce ${String(text)}`);
+    return true;
+  });
+  return { run, calls };
+}
+
+const READY: RagflowStubState = { version: 'ready', datasets: 'ok' };
+const QUICK = { deadlineMs: 2_000, intervalMs: 10 };
+const ANNOUNCE =
+  'announce test:stack stopping RAGFlow container ragflow-rc2-ragflow-cpu-1 (ragflow-cpu-id); ' +
+  'restore manually with docker start ragflow-rc2-ragflow-cpu-1\n';
+const STOPPED = ['inspect ragflow-rc2-ragflow-cpu-1', ANNOUNCE, 'stop ragflow-cpu-id'];
+
+it('stops nothing and runs no body when the named container is not the verified stop target', async () => {
+  const stack = await stubRagflow({ ...READY });
+  const docker = fakeDocker({}, inspected([container('ragflow-cpu', { project: 'other' })]));
+  const body = vi.fn(() => Promise.resolve('ran'));
+
+  const outcome = duringRagflowOutage(ragflowOutage(docker.run, stack, [], QUICK), body);
+
+  await expect(outcome).rejects.toThrow(/^RAGFlow container identity mismatch; nothing stopped$/);
+  expect(docker.calls).toEqual(['inspect ragflow-rc2-ragflow-cpu-1']);
+  expect(body).not.toHaveBeenCalled();
+});
+
+it('starts the captured ID once and rethrows the stop failure after a submitted stop', async () => {
+  const stack = await stubRagflow({ ...READY });
+  const seed = await readSeedDatasets(stack);
+  const stopFailure = new Error('docker stop timed out');
+  const docker = fakeDocker({ stop: stopFailure });
+  const body = vi.fn(() => Promise.resolve('ran'));
+
+  const outcome = duringRagflowOutage(ragflowOutage(docker.run, stack, seed, QUICK), body);
+
+  await expect(outcome).rejects.toBe(stopFailure);
+  expect(docker.calls).toEqual([...STOPPED, 'start ragflow-cpu-id']);
+  expect(body).not.toHaveBeenCalled();
+});
+
+it('restores once and rethrows the body failure unchanged', async () => {
+  const stack = await stubRagflow({ ...READY });
+  const seed = await readSeedDatasets(stack);
+  const docker = fakeDocker();
+  const failure = new Error('instance call failed');
+
+  const outcome = duringRagflowOutage(ragflowOutage(docker.run, stack, seed, QUICK), () =>
+    Promise.reject(failure),
+  );
+
+  await expect(outcome).rejects.toBe(failure);
+  expect(docker.calls).toEqual([...STOPPED, 'start ragflow-cpu-id']);
+});
+
+it.each([
+  ['the start fails', { ...READY }, new Error('docker start failed'), /docker start failed/],
+  [
+    'the version never answers',
+    { version: 'hang', datasets: 'ok' } as const,
+    undefined,
+    /version not ready within 1s/,
+  ],
+  [
+    'the version stays down',
+    { version: 'down', datasets: 'ok' } as const,
+    undefined,
+    /version not ready within 1s/,
+  ],
+  [
+    'the seed read keeps failing',
+    { version: 'ready', datasets: 'fail' } as const,
+    undefined,
+    /version ready but seed snapshot unreadable within 1s/,
+  ],
+  [
+    'the seed read never answers',
+    { version: 'ready', datasets: 'hang' } as const,
+    undefined,
+    /version ready but seed snapshot unreadable within 1s/,
+  ],
+])(
+  'aggregates the body failure first and a restore failure naming the recovery when %s',
+  async (_name, state, start, reason) => {
+    const stack = await stubRagflow(state);
+    const docker = fakeDocker(start === undefined ? {} : { start });
+    const failure = new Error('instance call failed');
+    const began = performance.now();
+
+    const outcome = duringRagflowOutage(
+      ragflowOutage(docker.run, stack, [], { deadlineMs: 1_000, intervalMs: 20 }),
+      () => Promise.reject(failure),
+    );
+
+    const error: unknown = await outcome.catch((rejection: unknown) => rejection);
+    expect(error).toBeInstanceOf(AggregateError);
+    // Checked to be an AggregateError just above; its errors are the case's own failures.
+    const [first, restore] = (error as AggregateError).errors as [unknown, Error];
+    expect(first).toBe(failure);
+    expect(restore.message).toMatch(reason);
+    expect(restore.message).toMatch(
+      /^RAGFlow restore failed \(.*\); recover manually with: docker start ragflow-rc2-ragflow-cpu-1$/,
+    );
+    // Every probe and read is bounded by the deadline that runs from before `docker start`.
+    expect(performance.now() - began).toBeLessThan(2_500);
+    expect(docker.calls).toEqual([...STOPPED, 'start ragflow-cpu-id']);
+  },
+);
+
+it('fails the restore at once when a successful seed read differs from the recorded snapshot', async () => {
+  const stack = await stubRagflow({ ...READY });
+  const docker = fakeDocker();
+  const outage = ragflowOutage(docker.run, stack, [], { deadlineMs: 60_000, intervalMs: 20 });
+  await outage.stop();
+  const began = performance.now();
+
+  const restored = outage.restore();
+
+  await expect(restored).rejects.toThrow(
+    /^RAGFlow restore failed \(RAGFlow seed snapshot changed\)/,
+  );
+  expect(performance.now() - began).toBeLessThan(5_000);
+});
+
+it('starts exactly once when the body restores before the outer restoration', async () => {
+  const stack = await stubRagflow({ ...READY });
+  const seed = await readSeedDatasets(stack);
+  const docker = fakeDocker();
+  const outage = ragflowOutage(docker.run, stack, seed, QUICK);
+  let restartMs: number | undefined;
+
+  const value = await duringRagflowOutage(outage, async () => {
+    restartMs = await outage.restore();
+    return 'done';
+  });
+
+  expect(value).toBe('done');
+  expect(restartMs).toBeGreaterThanOrEqual(0);
+  expect(await outage.restore()).toBeUndefined();
+  expect(docker.calls).toEqual([...STOPPED, 'start ragflow-cpu-id']);
 });

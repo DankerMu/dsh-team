@@ -136,7 +136,7 @@ pnpm test:stack
    3. 用 compose 拉起平台，检查 `/healthz`。
    4. 在平台容器里启动确定性 provider，并把管理员模型配置指向它；管理员保存 RAGFlow 地址（`host.docker.internal:<端口>`）和密钥，测试连接成功。
    5. 停掉 `ragflow-cpu`（停之前在 stderr 写出被停的容器和恢复命令）。
-   6. 在 RAGFlow 停机期间让员工经网关登录真实 DSH 并发一条消息；核对回复显示在对话里，`/data/work` 下写出的文件与脚本逐字节一致；同时核对零控制台错误、没有对外 origin 的请求。管理员的 RAGFlow 设置页照常读取，测试连接报告 `unavailable`；从员工实例内调用四个代理接口，都返回 `unavailable`。
+   6. 在 RAGFlow 停机期间让员工经网关登录真实 DSH 并发一条消息；核对回复显示在对话里，`/data/work` 下写出的文件与脚本逐字节一致；同时核对零控制台错误、没有对外 origin 的请求。管理员的 RAGFlow 设置接口照常读取，测试连接报告 `unavailable`；从员工实例内调用四个代理接口，都返回 `unavailable`。
    7. 重新启动 `ragflow-cpu` 并等待就绪，再从员工实例内调用四个代理接口：版本、三个种子库、库内文件与文件名筛选、检索（含剔除伪造库）。管理员把相似度阈值改为 1 之后，下一次检索立即变为 `no-results`。
    8. 排空并拆除部署、释放锁之后，再读一次种子快照，要求与开始时相同；6 个 `ragflow-rc2-*` 容器的 ID、状态与数据卷不变；`ragflow-cpu` 的 `StartedAt` 和重启次数会变（`docker start` 把重启次数清零），其他 5 个容器的 `StartedAt` 和重启次数不变。
 3. 截图保存在 `reports/stack/<runId>/`。
@@ -165,7 +165,7 @@ pnpm test:stack
   docker start ragflow-rc2-ragflow-cpu-1
   ```
 
-  然后确认 `curl -s http://127.0.0.1:19380/api/v1/system/version` 报告 `v1.0.0-rc2`。
+  然后确认 `curl -s http://127.0.0.1:19380/api/v1/system/version` 报告 `v1.0.0-rc2`。这几种中断也会留下 `$TMPDIR/dsh-team-test-docker-*/platform-data/platform.db`，其中存着本机 RAGFlow 测试栈的真实密钥（目录 0700、只属于当前用户）；按上面的手工恢复步骤删除这些私有目录。
 
 ## 6. 证据评论格式
 
