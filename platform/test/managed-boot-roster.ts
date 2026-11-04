@@ -71,6 +71,8 @@ export const MANAGED_BOOT_ROSTER = [
   '@deepseek-ai/dsh-cordis-client-runner',
   '@deepseek-ai/dsh-session-log-export',
   '@deepseek-ai/dsh-typert-registry',
+  // The knowledge-base client half arrives through its profile bundle layer, not the overlay.
+  '@dsh-team/knowledge-base',
   // permission-tiers is host-only since #393: no client half enters the roster.
   '@dsh-team/platform-nav',
   '@dsh-team/zh-locale',

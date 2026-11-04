@@ -44,14 +44,15 @@ The shipped footer cell is a single flex row sized for the Cordis plugin action.
 
 ## Trusted delivery
 
-Build the user image with all four narrow plugin named contexts:
+Build the user image with all five narrow plugin named contexts:
 
 ```sh
 docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "zh-locale=$(pwd)/plugins/zh-locale" \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
   --build-context "office-agents=$(pwd)/plugins/office-agents" \
-  --build-context "platform-nav=$(pwd)/plugins/platform-nav" images/dsh-user
+  --build-context "platform-nav=$(pwd)/plugins/platform-nav" \
+  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" images/dsh-user
 ```
 
 The image copies `package.json`, `index.js`, `client.js` and `cordis.patch.yml` to root-owned mode `0444` files in the mode `0555` directory `/opt/dsh-team/platform-nav/`, outside the employee-writable `/data/home`, and fails the build unless the installed DSH satisfies the package's `engines.dsh` range under DSH's own `semver` (prereleases included); the manifest declares no `@deepseek-ai/dsh` peer. The absolute overlay row resolves the adjacent manifest, whose `dsh.client.platform: "web"`, `./client` export and `@deepseek-ai/dsh-client-ui-sidebar` injection deliver the Web artifact; React comes from DSH's seeded runtime. Roll the image and managed overlay back together.

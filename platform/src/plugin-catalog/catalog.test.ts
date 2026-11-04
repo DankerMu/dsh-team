@@ -42,6 +42,7 @@ describe('readPluginCatalog', () => {
     const catalog = readPluginCatalog();
 
     expect(catalog.entries.map(({ id }) => id)).toEqual([
+      'knowledge-base',
       'office-agents',
       'permission-tiers',
       'platform-nav',

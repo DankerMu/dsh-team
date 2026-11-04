@@ -32,12 +32,16 @@ COPY --from=permission-tiers --chown=root:root --chmod=0444 \
 COPY --from=platform-nav --chown=root:root --chmod=0444 \
   package.json index.js client.js cordis.patch.yml \
   /opt/dsh-team/platform-nav/
+# The knowledge-base bundle's patch inserts its host half from this canonical copy by absolute path.
+COPY --from=knowledge-base --chown=root:root --chmod=0444 \
+  package.json index.js client.js cordis.patch.yml \
+  /opt/dsh-team/knowledge-base/
 # The catalog is the single list of preinstalled items, read by registration and the gate below.
 COPY --chmod=0444 catalog.json /opt/dsh-team/catalog.json
 # COPY --chmod also applies to the directories it creates; restore traversal for uid1001.
 RUN chmod 0555 /opt/dsh-team /opt/dsh-team/zh-locale /opt/dsh-team/office-agents \
     /opt/dsh-team/office-agents/skills /opt/dsh-team/office-agents/skills/official-writing \
-    /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav
+    /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav /opt/dsh-team/knowledge-base
 
 RUN useradd -m -u 1001 dsh \
   && mkdir -p /data/home /data/work \

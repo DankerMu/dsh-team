@@ -10,6 +10,8 @@
         "plugins/permission-tiers/*.test.js",
         "plugins/platform-nav/index.js",
         "plugins/platform-nav/*.test.js",
+        "plugins/knowledge-base/index.js",
+        "plugins/knowledge-base/*.test.js",
         "images/dsh-user/*.mjs"
       ],
       "project": [
@@ -21,6 +23,8 @@
         "plugins/permission-tiers/*.d.ts",
         "plugins/platform-nav/*.js",
         "plugins/platform-nav/*.d.ts",
+        "plugins/knowledge-base/*.js",
+        "plugins/knowledge-base/*.d.ts",
         "images/dsh-user/*.mjs"
       ]
     },

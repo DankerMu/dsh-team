@@ -72,6 +72,8 @@ const WORKSPACE_PATH = '/data/work';
 const TAMPERED_LIVE = '- id: ui-settings-models\n  disabled: false\n';
 // The generated overlay's yolo default, observed through the managed execution service.
 const MANAGED_YOLO_PERMISSIONS = { managedPermissions: true, defaultPreset: 'danger-full-access' };
+// The employee-state knowledge-base bundle row: present, not disabled and active (cordis fiber 2).
+const KNOWLEDGE_BASE_LOADED = { present: true, enabled: true, fiberState: 2 };
 const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
@@ -628,15 +630,17 @@ async function prepareState(
  * Every delivered plugin loaded (#393): DSH 0.2.1 skips an incompatible bundle, disables an inserted
  * row or leaves an optional entry inactive and still boots (see `rejectPluginFailures`).
  * permission-tiers is host-only, so its evidence is the effective managed tier and the injected
- * execution service.
+ * execution service; the knowledge-base host half is evidenced by its active loader row.
  */
 function assertPluginsLoaded(lifecycle: UserImageLifecycle, name: string, observation: unknown) {
   const logs = lifecycle.command(['logs', name], 30_000);
   if (logs.error !== undefined || logs.status !== 0) throw new Error(INVALID);
   rejectPluginFailures(logs, INVALID);
-  const { permissions } = parseJsonRecord(JSON.stringify(observation));
+  const { permissions, knowledgeBase } = parseJsonRecord(JSON.stringify(observation));
   if (!isDeepStrictEqual(permissions, MANAGED_YOLO_PERMISSIONS))
     throw new Error(`${INVALID}: managed permission tier`);
+  if (!isDeepStrictEqual(knowledgeBase, KNOWLEDGE_BASE_LOADED))
+    throw new Error(`${INVALID}: knowledge-base plugin row`);
 }
 
 async function acceptManaged(

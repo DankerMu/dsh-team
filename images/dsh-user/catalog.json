@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "knowledge-base",
+      "package": "@dsh-team/knowledge-base",
+      "name": "知识库",
+      "category": "manageable",
+      "imageDefaultEnabled": true
+    },
+    {
       "id": "office-agents",
       "package": "@dsh-team/office-agents",
       "name": "办公 Agent",

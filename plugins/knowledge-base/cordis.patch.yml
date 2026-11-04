@@ -1,0 +1,4 @@
+# One insert row, no config: the managed overlay targets id knowledge-base. The absolute path
+# resolves to the root-owned canonical copy even where the profile has no registered copy (an
+# older home volume, or a native uninstall) and the overlay writes this whole patch for forced-on.
+- insert: [{ id: knowledge-base, name: /opt/dsh-team/knowledge-base/index.js }]

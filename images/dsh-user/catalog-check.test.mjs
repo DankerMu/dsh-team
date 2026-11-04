@@ -32,6 +32,7 @@ const SPECS = Object.fromEntries(
 const REGISTERED_BUNDLES = [
   '@deepseek-ai/dsh-base',
   '@deepseek-ai/dsh-web-app',
+  '@dsh-team/knowledge-base',
   '@dsh-team/office-agents',
 ];
 // The manifest DSH initProfile writes, serialized as DSH saves it.
@@ -420,54 +421,54 @@ it.each([
 it.each([
   [
     'a duplicate id',
-    (entries) => entries.push({ ...entries[0], package: '@x/y' }),
-    'catalog entry 4 (office-agents) duplicates id office-agents',
+    (entries) => entries.push({ ...entries[1], package: '@x/y' }),
+    'catalog entry 5 (office-agents) duplicates id office-agents',
   ],
   [
     'a duplicate package',
-    (entries) => entries.push({ ...entries[0], id: 'other' }),
-    'catalog entry 4 (other) duplicates package @dsh-team/office-agents',
+    (entries) => entries.push({ ...entries[1], id: 'other' }),
+    'catalog entry 5 (other) duplicates package @dsh-team/office-agents',
   ],
   [
     'an unknown key',
-    (entries) => Object.assign(entries[1], { extra: 1 }),
-    'catalog entry 1 (permission-tiers) has unknown key extra',
+    (entries) => Object.assign(entries[2], { extra: 1 }),
+    'catalog entry 2 (permission-tiers) has unknown key extra',
   ],
   [
     'a missing key',
-    (entries) => delete entries[2].category,
-    'catalog entry 2 (platform-nav) has invalid category',
+    (entries) => delete entries[3].category,
+    'catalog entry 3 (platform-nav) has invalid category',
   ],
   [
     'a category outside the closed set',
-    (entries) => Object.assign(entries[0], { category: 'optional' }),
-    'catalog entry 0 (office-agents) has invalid category',
+    (entries) => Object.assign(entries[1], { category: 'optional' }),
+    'catalog entry 1 (office-agents) has invalid category',
   ],
   [
     'an empty name',
-    (entries) => Object.assign(entries[3], { name: ' ' }),
-    'catalog entry 3 (zh-locale) has invalid name',
+    (entries) => Object.assign(entries[4], { name: ' ' }),
+    'catalog entry 4 (zh-locale) has invalid name',
   ],
   [
     'a non-boolean default',
-    (entries) => Object.assign(entries[3], { imageDefaultEnabled: 'true' }),
-    'catalog entry 3 (zh-locale) has invalid imageDefaultEnabled',
+    (entries) => Object.assign(entries[4], { imageDefaultEnabled: 'true' }),
+    'catalog entry 4 (zh-locale) has invalid imageDefaultEnabled',
   ],
   [
     'a non-kebab-case id',
-    (entries) => Object.assign(entries[2], { id: 'Platform_Nav' }),
-    'catalog entry 2 (Platform_Nav) has invalid id',
+    (entries) => Object.assign(entries[3], { id: 'Platform_Nav' }),
+    'catalog entry 3 (Platform_Nav) has invalid id',
   ],
-  ['a missing id', (entries) => delete entries[2].id, 'catalog entry 2 has invalid id'],
+  ['a missing id', (entries) => delete entries[3].id, 'catalog entry 3 has invalid id'],
   [
     'an empty package',
-    (entries) => Object.assign(entries[0], { package: '' }),
-    'catalog entry 0 (office-agents) has invalid package',
+    (entries) => Object.assign(entries[1], { package: '' }),
+    'catalog entry 1 (office-agents) has invalid package',
   ],
   [
     'a non-object entry',
     (entries) => entries.push('zh-locale'),
-    'catalog entry 4 must be an object',
+    'catalog entry 5 must be an object',
   ],
 ])('fails the catalog shape for %s and names the entry', (_name, mutate, problem) => {
   const tree = imageTree();
@@ -638,7 +639,13 @@ it('keeps the existing manifest key order and unknown keys, appending after exis
       ...initial,
       dependencies: { '@aa/existing': '1.0.0', ...SPECS },
       dsh: {
-        profile: { bundles: [...initial.dsh.profile.bundles, '@dsh-team/office-agents'] },
+        profile: {
+          bundles: [
+            ...initial.dsh.profile.bundles,
+            '@dsh-team/knowledge-base',
+            '@dsh-team/office-agents',
+          ],
+        },
         other: 1,
       },
     }),
@@ -715,12 +722,12 @@ it.each([
 it('reports catalog shape problems before registering anything', () => {
   const tree = imageTree(false);
   const catalog = catalogWith(tree, (value) => {
-    value.entries[0].category = 'optional';
+    value.entries[1].category = 'optional';
   });
 
   expect(register(tree, catalog)).toEqual({
     status: 1,
-    stderr: 'catalog entry 0 (office-agents) has invalid category\n',
+    stderr: 'catalog entry 1 (office-agents) has invalid category\n',
   });
   expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
 });

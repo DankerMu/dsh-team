@@ -109,7 +109,8 @@ else
     --build-context "zh-locale=${repo_root}/plugins/zh-locale" \
     --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
     --build-context "office-agents=${repo_root}/plugins/office-agents" \
-    --build-context "platform-nav=${repo_root}/plugins/platform-nav" "${repo_root}/images/dsh-user" >/dev/null
+    --build-context "platform-nav=${repo_root}/plugins/platform-nav" \
+    --build-context "knowledge-base=${repo_root}/plugins/knowledge-base" "${repo_root}/images/dsh-user" >/dev/null
 fi
 image_owned=1
 allocation="$(probe_allocate_subnet)"

@@ -19,6 +19,7 @@ const INVALID =
 const REQUIRED = ['permission-tiers', 'platform-nav', 'zh-locale'];
 const submission = (office: string, required = 'forced-on') => ({
   entries: [
+    { id: 'knowledge-base', state: 'employee' },
     { id: 'office-agents', state: office },
     ...REQUIRED.map((id) => ({ id, state: required })),
   ],
@@ -74,6 +75,7 @@ it('roundtrips a logged-in administrator save over TCP on the version-6 ledger a
 
     expect(initial.status).toBe(200);
     expect(states(await initial.json())).toEqual([
+      ['knowledge-base', 'employee'],
       ['office-agents', 'employee'],
       ...REQUIRED.map((id) => [id, 'forced-on']),
     ]);
@@ -82,7 +84,10 @@ it('roundtrips a logged-in administrator save over TCP on the version-6 ledger a
     expect(await read.json()).toEqual({
       entries: (savedBody as { entries: unknown[] }).entries,
     });
-    expect(states(savedBody)[0]).toEqual(['office-agents', 'forced-on']);
+    expect(states(savedBody).slice(0, 2)).toEqual([
+      ['knowledge-base', 'employee'],
+      ['office-agents', 'forced-on'],
+    ]);
     expect(
       database
         .prepare('SELECT actor_email, details FROM audit_events WHERE event_type = ?')
@@ -109,7 +114,7 @@ it('roundtrips a logged-in administrator save over TCP on the version-6 ledger a
     }
     expect(before.settings).toContainEqual({
       key: 'pluginCatalog',
-      value: '{"office-agents":"forced-on"}',
+      value: '{"knowledge-base":"employee","office-agents":"forced-on"}',
     });
   });
 });
