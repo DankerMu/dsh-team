@@ -189,6 +189,8 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
     id: 'webserver',
     config: { host: '172.30.0.2', port: 3080, compression: 'gzip' },
   });
+  // Loopback publication attaches no platform endpoint, so the knowledge base gets no address.
+  expect(text).not.toContain('knowledge-base');
   expect(text).not.toContain('fixture-private-key');
 });
 
@@ -679,6 +681,17 @@ it("declares the layout container address in both transport modes' create bodies
   );
   expect(create?.body.HostConfig).toMatchObject({
     PortBindings: { '3080/tcp': [{ HostIp: '127.0.0.1', HostPort: '' }] },
+  });
+});
+
+it("gives the knowledge base the bridge's +3 platform address and port in network mode", async () => {
+  const context = await fixture();
+  await networkOwner(context).startUserContainer(context.input);
+
+  const overlay = join(context.input.config.managedConfigDir, 'abcdefghijkl.patch.yml');
+  expect(JSON.parse(await readFile(overlay, 'utf8'))).toContainEqual({
+    id: 'knowledge-base',
+    config: { platformUrl: 'http://172.30.0.3:8080' },
   });
 });
 

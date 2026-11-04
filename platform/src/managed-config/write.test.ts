@@ -45,6 +45,7 @@ const INPUT: ManagedConfigInput = {
   registryProbeEnabled: true,
   pluginCatalog: [],
   bundles: [],
+  platformPort: null,
 };
 
 const OTHER_INPUT: ManagedConfigInput = {

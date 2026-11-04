@@ -604,6 +604,7 @@ function startupInput(
       managedConfigDir: join(root, 'managed'),
       authority: 'team.example:8443',
       subnetPool,
+      port: 8080,
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',

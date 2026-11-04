@@ -99,7 +99,10 @@ function pluginPage(ctx) {
   return { registryProbeEnabled: enabled };
 }
 
-/** The knowledge-base bundle row as the loader holds it: present, not disabled, fiber state. */
+/**
+ * The knowledge-base bundle row as the loader holds it: present, not disabled, fiber state and the
+ * validated config, which cordis passes to `apply` unchanged (the plugin declares no schema).
+ */
 function knowledgeBase(ctx) {
   const entries = [...ctx.loader.entries()].filter(
     (entry) =>
@@ -112,6 +115,7 @@ function knowledgeBase(ctx) {
     present: entry !== undefined,
     enabled: entry !== undefined && !entry.disabled,
     fiberState: entry?.fiber?.state ?? null,
+    config: entry?.fiber?.config ?? null,
   };
 }
 

@@ -134,6 +134,7 @@ async function readinessScenario(
           managedConfigDir: lifecycle.overlayDirectory,
           authority,
           subnetPool: '172.30.0.0/16',
+          port: 8080,
         },
         modelSettings: START_MODEL,
         modelKey: 'docker-acceptance-only-not-a-model-credential',

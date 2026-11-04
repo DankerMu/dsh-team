@@ -131,6 +131,7 @@ export async function assertRunningReuse(
         managedConfigDir,
         authority,
         subnetPool: '172.30.0.0/16',
+        port: 8080,
       },
       modelSettings: START_MODEL,
       modelKey: 'fixture-key',

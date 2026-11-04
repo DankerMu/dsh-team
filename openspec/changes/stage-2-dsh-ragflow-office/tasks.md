@@ -1727,6 +1727,95 @@ Evidence (15.1 插件骨架与镜像交付，#418):
 - #447：覆盖层的 `knowledge-base` 行形状与 `platformUrl` 规则见上；生成器单元测试覆盖三种目录状态和两种上游方式。
 - 15.2：host 半区读取令牌并注册路由，client 半区加面板；浏览器页面资源中没有 RAGFlow 密钥的断言在 15.2 的本机通道用例里做。
 
+Risk packs (15.1 覆盖层下发平台地址，#447): fixture level expanded（与 issue 建议一致：覆盖层第一次给插件一个平台内部地址，且需要改关键路径 `platform/src/orchestrator/` 的两处输入传递）。本 issue 只交付覆盖层输出；插件骨架与配置校验已由 #418 合入（`plugins/knowledge-base/index.js`），面板、范围控件和检索工具是 15.2–15.4。selected：
+
+- **Public API / Schema**（生成器输入与输出，编排者裁定）：
+  - `ManagedConfigInput` 新增必填键 `platformPort: number | null`：
+    - `null` 表示该实例没有平台地址（published-loopback）；
+    - 数字必须是 1..65535 的整数，否则 `TypeError`（固定消息，不回显输入），与其他必填输入的处理相同。
+    - 不再另传平台地址：地址由已有输入 `instanceAddress`（+2，已校验末八位组模 16 等于 2）把末八位组加 1 得到 +3，与 `instanceAddressLayout(...).platform`（`platform/src/orchestrator/subnet.ts:96`）一致，生成器只有这一个地址来源。选择在生成器里推出 +3 而不是由 `start.ts` 传 `layout.platform`：`managed-config` 不能 import orchestrator，生成器本来就自带 +2 的规则（`isInstanceAddress`），两种做法改 orchestrator 的行数相同，而这种做法不会出现地址与 `instanceAddress` 不在同一 /28 的输入。
+  - `platformPort` 为数字时，覆盖层恰好多一行 `{ id: 'knowledge-base', config: { platformUrl: 'http://<+3>:<platformPort>' } }`；为 `null` 时没有任何 `knowledge-base` 配置行。
+    - 位置：紧跟目录行 `...catalog.rows` 之后、`plugin-manager` 行之前。`forced-on` 且 bundle 缺席时，目录行里整段写出的规范 patch 已插入 `knowledge-base`，这条覆盖行在它之后，目标存在（#418 交接）。
+    - 与目录状态无关：`employee`、`forced-on`、`forced-off` 三种状态下这一行逐字节相同（spec「三种情况下平台地址配置相同」）。启用状态仍只由 11.4 的目录行决定：`employee` 不写，`forced-on` 写 `{ id: 'knowledge-base', disabled: false }`（在场时）或整段 patch（缺席时），`forced-off` 写 `{ id: 'knowledge-base', disabled: true }`。本 issue 不改这部分逻辑。
+    - 行 id 是固定常量 `knowledge-base`，不随目录内容变化；目录里没有该项时（只有自造目录的测试会出现），覆盖行的目标不存在，DSH 只告警跳过，与 `forced-off` 对缺席目标的既有处理同类。
+  - `config` 是整块替换：bundle 层的插入行没有 `config`（#418），所以这一行就是插件的全部配置，恰为 #418 host 半区接受的形状。
+- **Config**（编排器输入，关键路径）：
+  - `platform/src/orchestrator/start-identity.ts` 的 `StartUserContainerInput.config` 的 `Pick` 加入 `'port'`；`instance-service.ts` 传的是完整 `PlatformConfig`，不用改。
+  - `platform/src/orchestrator/start.ts` 调用生成器时传 `platformPort: input.transport.config.upstreamMode === 'network' ? config.port : null`。
+    - 端口是平台进程自己的 `PLATFORM_PORT`：网络方式下平台在实例 bridge 上的端点是 +3，监听的就是这个端口（#417 从容器内经 +3:`PLATFORM_PORT` 调用代理已实测）。
+    - published-loopback 下平台不接入实例网络，不给地址（设计决定 2、managed-config「回环方式不给平台地址」）。
+  - 偏离 issue 的 PR 边界（「只改 `platform/src/managed-config/`」）：生成器自己不知道上游方式和平台端口，只能由调用方传入，所以必须改上面两处共两行左右；`orchestrator/` 的其他行为不变。PR 描述写明触及关键路径 `platform/src/orchestrator/`，人工逐行审查推迟到 Epic #380 完成，未通过。
+  - 阶段 1 的幸存实例不重新生成覆盖层（只在启动时生成），旧覆盖层没有这一行，插件处于「没有平台地址」态，不受影响。
+- **Auth / permissions / secrets**：
+  - 这一行只有平台地址，不含 RAGFlow 地址、密钥或检索参数，也不含实例令牌（令牌由 15.2 从环境变量读取）。
+  - 生成器测试断言：在 settings 层面放入 RAGFlow 地址与密钥的取值无从进入生成器（`ManagedConfigInput` 没有这些字段）；对网络方式的输出断言它不包含 `ragflow`、`retrieval`、`apiKey` 这些键名（大小写不敏感），以及测试给出的 RAGFlow 哨兵取值。
+- **Legacy compatibility**：
+  - 现有覆盖层的其他行和顺序不变；`platformPort: null` 时输出与改动前逐字节相同（published-loopback 的回归基线）。
+  - 直接调用生成器的地方（以 `grep -rln generateManagedConfig platform/src platform/test` 为全集）补上 `platformPort`：`platform/test/managed-policy-fixture.ts`、`model-refusal-fixture.ts`、`permission-browser-fixture.mjs`、`permission-tiers.docker.test.ts:96`、`office-delegation.docker.test.ts:56,171`、`credential-priority-fixture.ts:71`、`platform/src/managed-config/write.test.ts`。除了 managed-policy（见下），一律传 `null`，保持它们原有的覆盖层。
+  - 构造 `StartUserContainerInput` 的测试辅助代码补 `config.port`，统一传 `8080`（与 `auth-fixture.ts:13` 一致；传 0 会让网络方式启动在 `managed overlay` 阶段抛错）：`platform/test/container-start-fixture.ts:604`（`start.test.ts`、`container-network-mode`、`container-reconcile.integration`、`container-network-allocation` 共用）、`container-start-docker-fixture.ts:350`、`instance-browser-docker-fixture.ts:35`、`instance-idle-docker-fixture.ts:191`、`dsh-cookie-fixture.ts:74,131`；其余以 `pnpm typecheck` 为准。
+  - 间接影响：`container-reconcile.docker.test.ts` 经真实启动路径以网络方式启动实例，覆盖层会带上原子网 +3 的这一行；它的 `rebindSurvivorWeb`（`:360-389`）只改 `webserver` 行，断言不受影响（模拟的幸存者因此多了这一行，不再是阶段 1 的形态，不影响它要证明的重新接入）。
+- **Error handling**：非整数、0、65536、负数、`NaN`、字符串、缺失（未定义）的 `platformPort` 都抛 `TypeError`；`null` 不抛。
+
+not selected：
+
+- Concurrency / shared state：生成器是纯函数，编排器只多传一个值。
+- Migration：没有数据库或 settings 变化。
+- Resource limits：无。
+
+**不变量**：
+
+- 网络方式下，每个新启动实例的覆盖层恰有一条 `knowledge-base` 配置行，地址是该实例 bridge 的 +3，端口是平台的 `PLATFORM_PORT`；三种目录状态下这一行相同。
+- published-loopback 下覆盖层没有 `knowledge-base` 配置行，输出与改动前相同。
+- 覆盖层中没有 RAGFlow 地址、密钥或检索参数；相同输入得到逐字节相同的输出。
+
+**Must preserve**：
+
+- 11.4（#407）和 11.4b（#509）的目录行、`platform-nav` 行、安装源与联网工具行的内容和顺序。
+- 启动失败补偿、网络分配和覆盖层写入顺序：覆盖层仍在网络分配之后生成（`start.ts` 的 `managed overlay` 阶段）。
+
+**同级面**：
+
+- #418 的 host 半区校验这一行；畸形值让插件加载失败（失败标记检查兜底）。
+- 15.2：host 半区用 `platformUrl` 加环境变量里的令牌调用代理。
+
+**宽度**：生成器与测试、编排器两行与 `start.test.ts`、测试辅助代码的机械更新、managed-policy 的 Docker 断言、AGENTS.md 一句，预计不超过 400 行。
+
+Evidence (15.1 覆盖层下发平台地址，#447):
+
+**改动点**：
+
+- `platform/src/managed-config/generate.ts`、`generate.test.ts`、`generate-catalog.test.ts`（3×2 矩阵，见测试）、`write.test.ts`（只补输入）。`generate.test.ts` 的共享 `INPUT`（`:6`）与 `generate-catalog.test.ts` 的 `BASE` 固定传 `platformPort: null`，保持 `:474` 等「目录行后紧跟 `plugin-manager`」的位置断言；网络方式由单独的用例覆盖。
+- `platform/src/orchestrator/start-identity.ts`（`Pick` 加 `'port'`）、`start.ts`（传 `platformPort`）、`start.test.ts`：
+  - 默认 `fixture()` 是 published-loopback（`start.test.ts:186`、`:661-683`）：扩展 `:173-192` 现有的覆盖层断言，要求没有 `knowledge-base` 配置行；
+  - 网络方式用 `networkOwner()`（`:643-650`），断言覆盖层含 `{ id: 'knowledge-base', config: { platformUrl: 'http://172.30.0.3:8080' } }`（分配子网 +3 加夹具端口）。
+- 测试辅助：上面 Legacy 一节列出的调用方。
+- managed-policy 的 Docker 断言：`publishOverlay` 传固定测试端口 `8080`；它有首启（`:620`）和重启（`:808`）两次调用，网络不同，所以期望的 `platformUrl` 按各自的 `webAddress(network)` 推出 +3，传给 `assertPluginsLoaded`，`KNOWLEDGE_BASE_LOADED`（`:76`）不再是常量；observer 的 `knowledgeBase()` 照 `entryConfig`（`managed-policy-observer.js:62-73`）的写法读 `entry.fiber.config`，增加 `config` 字段；断言它恰为 `{ platformUrl: 'http://<该网络 +3>:8080' }`。这是 #418 的 host 校验第一次在真实 DSH 上收到生成器的输出：没有插件失败标记、条目已激活，证明两边的契约一致。用例里没有平台监听那个地址，15.1 的 host 半区也不发请求，所以不需要真实平台。
+- `AGENTS.md` 的覆盖层生成器段落（由 orchestrator 改）：加一句 `platformPort` 和 `knowledge-base` 行，以及下面的残余。
+- `plugins/knowledge-base/README.md`（implementer 改）：`:17`「In 15.1 this is always the state」与 `:38`「after #447」的将来时改为现状：网络方式下覆盖层给出 `platformUrl`，published-loopback 下没有。
+
+**测试**：
+
+- 单元（`pnpm test`）：
+  - 3 种目录状态 × 2 种上游方式（放在 `generate-catalog.test.ts`，用它的 `entry()` 与 bundle 辅助，`knowledge-base` 的规范 patch 取 #418 的一行插入）：网络方式三种状态下这一行逐字节相同且地址为 +3；published-loopback 三种状态下没有这一行；启用状态行与 11.4 相同。
+  - 位置：网络方式加 `forced-on` 缺席时，这一行出现在整段规范 patch 的插入行之后、`plugin-manager` 之前。
+  - 基准：同一输入下，`platformPort: null` 的输出等于网络方式的输出去掉那一行 `knowledge-base` 配置行；并钉死网络方式的行 id 序列。
+  - 相同输入两次生成逐字节相同。
+  - 没有 RAGFlow 键名和哨兵取值。
+  - 每种非法 `platformPort` 抛 `TypeError`，消息不含输入。
+  - `start.test.ts` 的两种上游方式。
+- 先红后绿：生成器的新断言先失败（缺少这一行或缺少输入校验），再实现。
+
+**命令**：
+
+- `pnpm test`、`pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`（清理已确认）
+- 本机 exact-head 的 `pnpm test:stack`，并贴证据评论（控制台错误仍为 0）。「Compose 网络方式下真实实例收到这一行」由编排者在运行后核对：在宿主机读该员工的 `<managedConfigDir>/<userId>.patch.yml`，与 inspect 到的实例子网 +3 和 `PLATFORM_PORT` 比对（如果运行结束时目录已随运行目录删除，就在 stack 用例里加一条只读断言，由 implementer 实现）。
+
+**交接**：
+
+- 15.2：`platformUrl` 已由覆盖层给出；host 半区读取 `DSH_TEAM_INSTANCE_TOKEN`、注册路由并调用 `<platformUrl>/_platform/instance-api/ragflow/…`。
+- 残余（写进 AGENTS.md 与交接）：「平台在 +3 上监听 `PLATFORM_PORT`」只在 `PLATFORM_HOST` 绑到所有地址时成立（Compose 要求 `0.0.0.0`）；网络方式下平台容器若绑定别的地址，插件到不了平台。运营方改了 `PLATFORM_PORT` 并重建平台后，运行中的实例在下次启动前仍持有旧端口。
+
 ## 16. Document Server 部署与实例网络接入
 
 依赖：1、10（Office 相关 PR 的本机证据）。关键路径 `platform/src/orchestrator/`（16.3）。
