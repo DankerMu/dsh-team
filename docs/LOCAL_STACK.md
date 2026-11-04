@@ -138,7 +138,7 @@ pnpm test:stack
    5. 停掉 `ragflow-cpu`（停之前在 stderr 写出被停的容器和恢复命令）。
    6. 在 RAGFlow 停机期间让员工经网关登录真实 DSH 并发一条消息；核对回复显示在对话里，`/data/work` 下写出的文件与脚本逐字节一致；同时核对零控制台错误、没有对外 origin 的请求。管理员的 RAGFlow 设置页照常读取，测试连接报告 `unavailable`；从员工实例内调用四个代理接口，都返回 `unavailable`。
    7. 重新启动 `ragflow-cpu` 并等待就绪，再从员工实例内调用四个代理接口：版本、三个种子库、库内文件与文件名筛选、检索（含剔除伪造库）。管理员把相似度阈值改为 1 之后，下一次检索立即变为 `no-results`。
-   8. 排空并拆除部署、释放锁之后，再读一次种子快照，要求与开始时相同；6 个 `ragflow-rc2-*` 容器的 ID、状态、重启次数与数据卷不变，`StartedAt` 只有 `ragflow-cpu` 改变。
+   8. 排空并拆除部署、释放锁之后，再读一次种子快照，要求与开始时相同；6 个 `ragflow-rc2-*` 容器的 ID、状态与数据卷不变；`ragflow-cpu` 的 `StartedAt` 和重启次数会变（`docker start` 把重启次数清零），其他 5 个容器的 `StartedAt` 和重启次数不变。
 3. 截图保存在 `reports/stack/<runId>/`。
 4. 结束后，按账本精确退休本次创建的容器、网络、卷和镜像，固定名平台先排空再删除。
 
@@ -178,7 +178,7 @@ pnpm test:stack
 | 退出码 | 命令的实际退出码 |
 | 用例计数 | vitest 报告的文件数与用例数，以及用例打印的 `stackEvidence` 行 |
 | 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷清单与运行前逐行相同（覆盖只带 `dsh-team.user` 的员工实例资源；`docker … --filter name=` 是子串匹配，按名字前缀筛选时容器用 `docker ps -a --format '{{.Names}}'`、网络和卷用 `--format '{{.Name}}'`，再加 `grep '^dsh-team-'`）；带运行标签的镜像清单与运行前相同 |
-| RAGFlow 测试栈 | 运行前后的 6 个 `ragflow-rc2-*` 容器 ID、状态、重启次数与数据卷清单逐行一致；`StartedAt` 只有 `ragflow-cpu` 因用例自己的停启而改变 |
+| RAGFlow 测试栈 | 运行前后的 6 个 `ragflow-rc2-*` 容器 ID、状态与数据卷清单一致；只有 `ragflow-cpu` 的 `StartedAt` 和重启次数因用例自己的停启而改变（`docker start` 把重启次数清零），其他 5 个容器逐行一致 |
 | 代理 | 用例打印的 `stackEvidence.proxy`：停机期间四个接口与测试连接的结果、恢复后的版本、种子库数、文件数、检索结果与片段数、剔除数、改阈值后的结果 |
 | 凭据 | 运行日志中没有密钥 |
 

@@ -363,7 +363,7 @@ const inspected = (rows: Record<string, unknown>[]) =>
   rows.map((row) => JSON.stringify(row)).join('\n') + '\n';
 const VOLUMES = 'ragflow-rc2_mysql_data\nragflow-rc2_minio_data\n';
 
-it('compares the six RAGFlow containers ignoring only the restarted service start time', () => {
+it('compares the six RAGFlow containers ignoring only the start time and restart count of the restarted service', () => {
   const before = parseRagflowStack(
     inspected(SERVICES.map((service) => container(service))),
     VOLUMES,
@@ -373,7 +373,10 @@ it('compares the six RAGFlow containers ignoring only the restarted service star
       [...SERVICES]
         .reverse()
         .map((service) =>
-          container(service, service === 'ragflow-cpu' ? { startedAt: 'later' } : {}),
+          container(
+            service,
+            service === 'ragflow-cpu' ? { startedAt: 'later', restartCount: 0 } : {},
+          ),
         ),
     ),
     VOLUMES,
@@ -388,7 +391,8 @@ it('compares the six RAGFlow containers ignoring only the restarted service star
 
 it.each([
   ['a changed ID', 'mysql', { id: 'other' }],
-  ['a changed restart count', 'ragflow-cpu', { restartCount: 6 }],
+  ['a changed ragflow-cpu ID', 'ragflow-cpu', { id: 'other' }],
+  ['another restart count', 'mysql', { restartCount: 6 }],
   ['a changed state', 'ragflow-cpu', { state: 'exited' }],
   ['another service restarted', 'nats', { startedAt: 'later' }],
 ])('detects %s in the RAGFlow stack', (_name, changed, change) => {

@@ -367,7 +367,8 @@ it('builds both images, starts the delivered compose platform, converses through
   if (browser === undefined || provider === undefined || proxy === undefined)
     throw new Error('Conversation evidence missing');
   if (ragflow === undefined) throw new Error('RAGFlow test stack evidence missing');
-  // IDs, states, restart counts and volumes unchanged; only ragflow-cpu's StartedAt may move.
+  // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
+  // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
   expect(ragflow.after.service('ragflow-cpu').state).toBe('running');
   expect(browser.screenshots).toEqual(['login.png', 'workbench.png', 'reply.png']);

@@ -1507,13 +1507,14 @@ Risk packs (14.5 本机通道 RAGFlow 代理用例，#417): fixture level expand
     - 密钥只在测试进程发给平台的 `PUT` 请求体里，不写入日志、证据和报告。
 - **Lifecycle / external state**（停启 RAGFlow，用户 2026-11-03 特批）：
   - 「RAGFlow 停机」用真实停机验证，不用改地址模拟：用例对本机测试栈的 `ragflow-rc2-ragflow-cpu-1` 执行 `docker stop`，之后再 `docker start`。只做这两种操作，不删除、不重建、不改配置，也不碰该栈的其他 5 个服务。
-  - 停机之前先核对身份：按名字 inspect，标签 `com.docker.compose.project=ragflow-rc2`、`com.docker.compose.service=ragflow-cpu`，状态 `running`。记下容器 ID 和 `RestartCount`；之后的停、启、复核都按这个 ID 进行。身份不符时用例失败，不停任何容器。
+  - 停机之前先核对身份：按名字 inspect，标签 `com.docker.compose.project=ragflow-rc2`、`com.docker.compose.service=ragflow-cpu`，状态 `running`。记下容器 ID；之后的停、启、复核都按这个 ID 进行。身份不符时用例失败，不停任何容器。
   - 停机前向 stderr 写一行，格式与 `test-stack.mjs` 的 run directory 提示相同，说明被停的容器和人工恢复命令 `docker start ragflow-rc2-ragflow-cpu-1`。
   - 恢复放在 `finally` 里：只要 `docker stop <ID>` 已经提交（沿用 `composeScenario` 的 `submitted` 写法；CLI 超时的 stop 也可能已经停掉容器），就一定执行 `docker start <ID>`，然后等待（上限 300 秒）版本接口返回 `v1.0.0-rc2`，且 `readSeedDatasets` 的快照与运行前相同。恢复失败时，这个失败附在原始错误后面一起抛出，信息里说明人工恢复的命令。
   - 结束时由用例断言：
     - 6 个 `ragflow-rc2-*` 容器的 ID 都不变；
     - 其他 5 个容器的 `StartedAt` 不变；
-    - `ragflow-cpu` 是 `running`，`RestartCount` 不变（`docker stop`/`start` 不增加它）；
+    - `ragflow-cpu` 是 `running`；它的 `StartedAt` 和 `RestartCount` 允许改变：第一次实跑（2026-11-04）观察到 `docker start` 把 `RestartCount` 从 5 清零；
+    - 其他 5 个容器的 `RestartCount` 也不变；
     - 数据卷清单不变。
   - 以下情况都不会执行 `finally`，容器会停留在停止状态：
     - 进程被强杀；
@@ -1540,7 +1541,7 @@ Risk packs (14.5 本机通道 RAGFlow 代理用例，#417): fixture level expand
     - `dsh-team-seed-policies` 加 `keywords=expense` → `total` 为 1，文件名为 `expense-policy.txt`。
   - 检索（付费，用户 2026-11-03 接受）：
     1. 三个种子库，问题「报销需要提交哪些材料」→ `ok`，`excluded: []`，至少 1 个片段；每个片段的 `datasetName` 都是种子库名，`documentName` 都是该库的种子文件名。
-    2. 种子库 `dsh-team-seed-policies` 加一个伪造 ID（32 个 `0`）→ `ok`，`excluded` 恰为伪造 ID。
+    2. 三个种子库加一个伪造 ID（32 个 `0`）→ `ok`，`excluded` 恰为伪造 ID，片段都属于种子库。第一次实跑（2026-11-04）中，只用 `dsh-team-seed-policies` 加伪造 ID 时同一问题得到 `no-results`，所以改用与检索 1 相同的范围。
     3. 保存即生效：管理员 `PUT retrieval-config`，把 `retrievalSimilarityThreshold` 改为 `1`，其余保持默认，然后重复检索 1 → `no-results`。不重启实例，也不重启平台。
     - 不再做其他检索：全部剔除的情况不发检索请求，由 #416 的集成测试覆盖。
 - **Resource limits**：
@@ -1551,7 +1552,7 @@ Risk packs (14.5 本机通道 RAGFlow 代理用例，#417): fixture level expand
   - `docs/LOCAL_STACK.md`：
     - 第 1 节说明用例会停启 `ragflow-cpu`；
     - 第 5 节写人工恢复命令 `docker start ragflow-rc2-ragflow-cpu-1`；
-    - 第 6 节「RAGFlow 测试栈」一行改为：「6 个容器的 ID、状态、重启次数和数据卷清单逐行一致；`StartedAt` 只有 `ragflow-cpu` 因用例自己的停启而改变」，并要求证据评论附上 `stackEvidence.proxy` 行。
+    - 第 6 节「RAGFlow 测试栈」一行改为：「6 个容器的 ID、状态和数据卷清单一致；只有 `ragflow-cpu` 的 `StartedAt` 和重启次数因用例自己的停启而改变」，并要求证据评论附上 `stackEvidence.proxy` 行。
   - `AGENTS.md`：
     - Agent Operating Rules 的 RAGFlow 例外补一句：用户 2026-11-03 授权本机通道用例停启自己验证过身份的 `ragflow-rc2-ragflow-cpu-1`，此外不做任何改动；
     - 验证矩阵的 Local full stack 一行补上四个接口、停机 `unavailable` 和保存即生效。

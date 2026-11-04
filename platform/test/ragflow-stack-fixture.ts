@@ -344,13 +344,19 @@ export function parseRagflowStack(inspection: string, volumes: string): RagflowS
   };
 }
 
-/** IDs, states, restart counts and volumes must not change; only ragflow-cpu may restart. */
+/**
+ * IDs, states and volumes must not change; the other five containers also keep their restart
+ * count and start time. ragflow-cpu is restarted by this case, and `docker start` resets its
+ * RestartCount (observed 5 to 0 on Docker Desktop), so both are excluded for it alone.
+ */
 export function comparableRagflowStack(stack: RagflowStack) {
   return {
     containers: [...stack.containers]
       .sort((left, right) => left.service.localeCompare(right.service))
-      .map(({ startedAt, ...container }) =>
-        container.service === RAGFLOW_SERVICE ? container : { ...container, startedAt },
+      .map(({ startedAt, restartCount, ...container }) =>
+        container.service === RAGFLOW_SERVICE
+          ? container
+          : { ...container, restartCount, startedAt },
       ),
     volumes: [...stack.volumes].sort(),
   };
@@ -633,9 +639,10 @@ export async function proxyAfterRestore(admin: Administrator, outage: Outage, ca
   expect(retrieval).toMatchObject({ status: 200, result: 'ok', excluded: [] });
   expect(retrieval.chunks).toBeGreaterThanOrEqual(1);
   expect(retrieval.seedChunks).toBe(retrieval.chunks);
-  const policies = String(ids.get(POLICIES));
-  const excluded = await call({ kind: 'retrieval', datasetIds: [policies, MISSING_ID] });
+  // The passing scope plus a fake ID: a narrower scope may legitimately find no chunk.
+  const excluded = await call({ kind: 'retrieval', datasetIds: [...all, MISSING_ID] });
   expect(excluded).toMatchObject({ status: 200, result: 'ok', excluded: [MISSING_ID] });
+  expect(excluded.seedChunks).toBe(excluded.chunks);
   expect(await adminJson(admin, 'GET', 'retrieval-config')).toEqual({
     status: 200,
     body: DEFAULT_RETRIEVAL,
