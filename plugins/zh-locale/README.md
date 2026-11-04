@@ -25,8 +25,9 @@ delivered plugin and fails on a mismatch, and the composition probe pins the exa
 The user-image Dockerfile keeps `images/dsh-user` as its primary build context and
 requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale`,
 `permission-tiers=<repo>/plugins/permission-tiers`,
-`office-agents=<repo>/plugins/office-agents`, and
-`platform-nav=<repo>/plugins/platform-nav`. The image retains its pinned base's
+`office-agents=<repo>/plugins/office-agents`,
+`platform-nav=<repo>/plugins/platform-nav`, and
+`knowledge-base=<repo>/plugins/knowledge-base`. The image retains its pinned base's
 official Debian ordinary and security sources without an auxiliary source-rewrite
 context. The image
 copies only `package.json`, `index.js`, `client.js`, and `cordis.patch.yml` from that

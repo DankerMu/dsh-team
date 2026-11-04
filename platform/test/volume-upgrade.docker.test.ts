@@ -33,7 +33,7 @@ import {
 } from './owned-completion-fixture.ts';
 import type { SessionRpc } from './owned-completion-fixture.ts';
 import { profileSeedOracle, profileSeedScript } from './profile-seed-fixture.ts';
-import { PLUGIN_CONTEXTS, userImageBuildArgs } from './user-image-fixture.ts';
+import { STAGE1_PLUGIN_CONTEXTS, userImageBuildArgs } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { execWebScript, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebContainer } from './web-startup-fixture.ts';
@@ -68,7 +68,7 @@ function docker(lifecycle: UserImageLifecycle, args: string[], timeout = 30_000)
 
 /** `git archive <commit> <user-image sources> | tar -x`; a missing object fails, never skips. */
 function extractStage1Sources(repositoryRoot: string, directory: string): void {
-  const paths = ['images/dsh-user', ...PLUGIN_CONTEXTS.map((plugin) => `plugins/${plugin}`)];
+  const paths = ['images/dsh-user', ...STAGE1_PLUGIN_CONTEXTS.map((plugin) => `plugins/${plugin}`)];
   const archive = spawnSync('git', ['-C', repositoryRoot, 'archive', STAGE1_COMMIT, ...paths], {
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -87,7 +87,11 @@ function buildStage1Image(lifecycle: UserImageLifecycle, sources: string): strin
   // absence predicate would not match.
   const tag = `dsh-team-test-${lifecycle.runId}:legacy-0.2.0-rc.2`;
   lifecycle.registerResource('image', tag, { 'dsh-team.test-run': lifecycle.runId });
-  docker(lifecycle, userImageBuildArgs(lifecycle.runId, tag, undefined, sources), 600_000);
+  docker(
+    lifecycle,
+    userImageBuildArgs(lifecycle.runId, tag, undefined, sources, undefined, STAGE1_PLUGIN_CONTEXTS),
+    600_000,
+  );
   const imageId = docker(lifecycle, ['image', 'inspect', '--format', '{{.Id}}', tag]).trim();
   if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new Error('Stage-1 image identity missing');
   const probe = `dsh-team-test-${lifecycle.runId}-legacy-version`;

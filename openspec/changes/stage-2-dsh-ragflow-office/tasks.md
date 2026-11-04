@@ -1626,6 +1626,107 @@ Evidence (14.5 本机通道 RAGFlow 代理用例，#417):
 Suggested fixture level: expanded - 新插件，涉及 Session 状态、子 Agent 继承和外部数据展示
 Minimal mergeable slice: 15.1 插件骨架和镜像交付单独合入（没有界面和工具，不影响现有行为）
 
+Risk packs (15.1 插件骨架与镜像交付，#418): fixture level expanded（与 issue 建议一致：新插件第一次经 profile 清单登记的 bundle 层进入员工默认组成，且触及关键路径 `images/dsh-user/`）。本 issue 只交付插件骨架、镜像交付和目录登记；覆盖层给平台地址的部分是 #447，面板、范围控件和检索工具是 15.2–15.4。selected：
+
+- **Public API / Schema**（插件包形状，编排者裁定）：
+  - `plugins/knowledge-base/package.json`：`name` 为 `@dsh-team/knowledge-base`，`version` `0.1.0`，`private`，`type: module`，`main: index.js`；`exports` 恰为 `.`、`./client`、`./package.json`；`engines.dsh` 为 `>=0.2.1-rc.2 <0.3.0`，没有 `@deepseek-ai/dsh` peer；`dsh.bundle.patch` 为 `./cordis.patch.yml`；`dsh.client` 与 `platform-nav` 相同：`{ platform: 'web', inject: ['@deepseek-ai/dsh-client-ui-sidebar'] }`（15.2 的面板挂在左侧栏，沿用已在 VPS 上证明可交付的形状）；`files` 列出四个交付文件和 README。
+  - `cordis.patch.yml`：恰好一行插入，`- insert: [{ id: knowledge-base, name: /opt/dsh-team/knowledge-base/index.js }]`，没有覆盖行、没有 `config`。
+    - 必须非空：目录项是可管理项，#447 起 `forced-on`/`forced-off` 经 `forcedBundle` 读取规范 patch，空 patch 让生成器抛 `TypeError`（`platform/src/managed-config/generate.ts:125`）。
+    - 不能有覆盖行：`forced-off` 只会还原 `agent-preset-registry`，其他目标的覆盖行让生成器拒绝。
+    - 行 id 钉死为 `knowledge-base`：#447 的平台地址行和 15.2–15.4 都以它为目标。
+    - `name` 用 `/opt` 绝对路径而不是包名：`forced-on` 在 profile 里没有登记副本时（阶段 2 之前建的 home 卷不重新灌种子；员工用原生卸载入口删掉副本）整段写出规范 patch，包名在这些 profile 里解析不到，绝对路径总能解析到 root 只读的规范副本，并像覆盖层的 `platform-nav` 行一样经相邻清单交付 client 半区。这是 profile bundle 层第一次用绝对路径行，但代码路径与覆盖层相同：领先于发布版的 `resource/deepseek-harness/packages/boot/app-boot/src/profile.ts:754-755` 让 bundle 层的 patch 与覆盖层一样经 `loadOverlayPatches` → `parsePatchList`（`src/index.ts:388`）→ `anchorInsertedPluginNames`（`:347-356`，把绝对路径转成 file URL），而覆盖层的 `/opt/dsh-team/platform-nav/index.js` 行已在 VPS 上证明经相邻清单交付 client 半区（启动模块清单含 `@dsh-team/platform-nav`）。`resource/` 不代替 0.2.1-rc.2 的实测（开发注记 1），所以仍由下面的「已加载」断言在真实镜像上证明；组成读取器（`read.ts`）只按 id 判断在场，`forcedBundle`（`generate.ts:118-128`）对只有插入行的非空 patch 两种强制态都能处理。VPS 实测如果证明 bundle 层的绝对路径行不加载，停下报告、回到 fixture，不静默改成包名。
+  - `catalog.json` 新增一项 `{ id: 'knowledge-base', package: '@dsh-team/knowledge-base', name: '知识库', category: 'manageable', imageDefaultEnabled: true }`，按现有的 id 字母序放在第一项。
+    - `imageDefaultEnabled: true`：设计决定 12 的分类是「只由覆盖层激活的插件为 `false`，由 profile 清单登记的 bundle 为 `true`」；知识库由 profile 清单的 bundle 层激活，覆盖层「不另行启用」（managed-config「知识库插件取得平台地址」）。后果：`catalog-check.mjs register` 把它追加进 `dsh.profile.bundles`（目录顺序，在 `@dsh-team/office-agents` 之前），员工插件页的卡片状态为 `running`，`employee` 态下新实例加载插件。
+- **Config**（host 半区的配置契约，#447 照此写行）：
+  - `index.js` 导出 `name = 'dsh-team-knowledge-base'` 和 `apply(ctx, config)`。
+  - 「没有平台地址」是设计内的状态，不是错误：`config` 为 `undefined`、`null` 或没有自有键的普通对象时，`apply` 什么都不做、不抛错。15.1 里永远是这一态（#447 未合入）；#447 之后 published-loopback、以及员工取消勾选时覆盖行的目标不存在（告警跳过），也是这一态。
+  - 有平台地址时 `config` 恰为 `{ platformUrl }`：字符串 `http://<规范点分 IPv4>:<端口>`，最后一个八位组模 16 等于 3（实例 bridge 的 +3，与生成器对 +2 的检查同一写法），端口是 1..65535 且没有前导零的十进制，没有路径（结尾的 `/` 也不接受）、查询、片段或用户信息。
+  - 其他任何形状（多余的键、非字符串、地址不合格、非普通对象）让 `apply` 抛 `TypeError`，消息固定、不回显输入。这与 `platform-nav` 对被篡改行的处理相同：整个插件加载失败，由既有的插件失败标记检查发现。
+  - 15.1 的 host 半区只做这一项校验，校验结果没有消费者；读取 `DSH_TEAM_INSTANCE_TOKEN`、注册插件路由属于 15.2，本 issue 不读环境变量。
+- **Client 半区**：
+  - `client.js` 是 classic script，`window.__ModuleLoader__.load({ id: '@dsh-team/knowledge-base', factory })`，factory 返回的注册不注入任何服务、不注册任何 slot、不发网络请求、不写控制台。
+  - 它在 15.1 存在，是为了在这个关键路径镜像 PR 里证明 client 半区经 bundle 层交付到浏览器；面板和范围控件由 15.2、15.3 加入。这是组 15 声明的分步交付（「没有界面和工具，不影响现有行为」），不是假实现。
+- **Auth / permissions / secrets**（spec「插件随镜像交付且不接触 RAGFlow 凭据」「实例内找不到 RAGFlow 密钥」）：
+  - 插件的代码、清单、patch 中没有 RAGFlow 地址、密钥或检索参数的任何键名或取值。
+  - 正向断言，不能空过：Docker 用例在启动实例前用 `writeSettings` 写入、再用 `readSettings` 回读确认已存入，向测试自己的 SQLite 写入不是秘密的哨兵值 `ragflowBaseUrl`（例如 `http://ragflow-sentinel.invalid:9380`）和 `ragflowApiKey`（例如 `ragflow-sentinel-not-a-key`），实例就绪后断言这两个哨兵都不出现在：
+    - `docker inspect` 的 `Config.Env`；
+    - 该实例生成的覆盖层文件字节；
+    - `/opt/dsh-team/knowledge-base/` 下全部文件字节，以及 profile 中的登记副本。
+  - 每个被扫描对象先证明读到的是真内容，否则「不包含」会因为读错路径而空过：`Config.Env` 含 `DSH_TEAM_MODEL_API_KEY=` 条目；覆盖层字节含 `webserver` 行；`/opt/dsh-team/knowledge-base` 恰为四个文件且非空；profile 登记副本与规范副本逐字节相等。
+  - 这组断言不声称先红：交付前后都没有东西会泄漏哨兵。它的强度来自上面的正向标记和回读。
+  - 哨兵值是测试常量，可以出现在测试代码和失败信息里；真实密钥从不参与本 issue 的任何用例。
+  - spec 的第四处（浏览器页面资源）推迟到 15.2：15.1 的 client 半区没有内容，页面资源里没有可检查的插件数据。15.2 的本机通道用例负责这一处。
+- **Release / packaging**（关键路径 `images/dsh-user/`；`images/seccomp/README.md` 的构建示例也是关键路径文件）：
+  - Dockerfile 在 `platform-nav` 的 COPY 之后加 `COPY --from=knowledge-base --chown=root:root --chmod=0444 package.json index.js client.js cordis.patch.yml /opt/dsh-team/knowledge-base/`，并把 `/opt/dsh-team/knowledge-base` 加进 `chmod 0555` 那一行。`register`/`verify` 由目录驱动，不改。
+  - BuildKit 命名上下文 `knowledge-base=<repo>/plugins/knowledge-base` 加到每个构建入口：`scripts/probe-sandbox.sh`、`scripts/probe-dsh-api.sh`、`scripts/probe-first-run.sh`、`platform/test/user-image-fixture.ts` 的 `PLUGIN_CONTEXTS`、`platform/test/user-image-rejection.integration.test.ts`（上下文名单与断言）。
+  - 文档里的构建示例（由 orchestrator 改）：`docs/DEPLOY.md`、`images/seccomp/README.md`、四个插件 README 的构建示例（「four narrow plugin named contexts」改为五个）、`AGENTS.md` 的 Docker suite 段落（命名上下文清单与「Every delivered plugin manifest」清单）。新插件的 `plugins/knowledge-base/README.md` 由 implementer 写，说明 15.1 的范围、配置契约、交付方式和验证。
+- **Legacy compatibility**：
+  - 新建的 home 卷从镜像种子得到登记副本和 bundle 成员资格；已有 home 卷不重新灌种子，`employee` 态下这些员工在管理员重置 profile 之前没有知识库（与办公 Agent bundle 的既有行为相同）。#447 之后 `forced-on` 经绝对路径行也能在这些卷上加载。这一点写进插件 README 和 PR 的 Risk。
+  - `employee` 态的目录项不进入组成读取（`platform/src/orchestrator/start.ts:66-72`），编排器和生成器的现有测试不受新目录项影响；`platform/src/orchestrator/` 不改。
+- **Error handling**：`apply` 对「没有平台地址」不抛错（否则每个新实例都出现插件失败标记）；对畸形配置抛固定消息的 `TypeError`。client 不抛错。
+
+not selected：
+
+- Concurrency / shared state：插件不持有状态。
+- Migration：没有数据库迁移；settings 不变（目录状态仍由 #405 的 `pluginCatalog` 保存，新目录项默认 `employee`）。
+- Resource limits：无新的网络或文件操作。
+
+**不变量**：
+
+- 现有四个目录项的交付、登记、三态和锁定显示不变；`required` 项仍恒为 `forced-on`。
+- 员工默认组成里新增且只新增 `@dsh-team/knowledge-base` 一个启动模块；其他模块和插件失败标记检查不变，直接打开 DSH 的验证通道仍无控制台错误。
+- 插件目录、覆盖层和实例环境中没有 RAGFlow 地址、密钥或检索参数。
+
+**Must preserve**：
+
+- `catalog-check.mjs` 的一致性、兼容性和登记校验（目录与镜像内容两个方向一致、`engines.dsh` 满足、登记副本逐字节相同、默认状态一致）在新目录项上照常生效，不放宽。
+- 不兼容范围的拒绝构建用例（`platform-nav` 副本 `>=0.3.0`）仍然失败并点名该插件。
+- 管理员插件目录页与接口：PUT 必须覆盖目录中每个 id 恰好一次，所以写死目录的测试随之更新，规则本身不变。
+
+**同级面**：
+
+- #447：覆盖层按本 fixture 钉死的 `{ id: 'knowledge-base', config: { platformUrl } }` 写平台地址；`forced-on`/`forced-off` 读本 patch 的插入行 `knowledge-base`。`forced-on` 且 bundle 缺席时，这条覆盖行必须排在整段规范 patch 的插入行之后，否则目标尚不存在，只会告警跳过（设计决定 12 的「目标 id 不存在时告警跳过」）。
+- 15.2：host 半区在同一个 `apply` 里读取令牌、注册路由；client 半区加面板。
+
+**宽度**：插件十个文件、Dockerfile、目录、三个门禁配置、五个构建入口、Docker 与目录相关测试、文档，预计超过 400 行，开 PR 时打 `diff-limit-exempt`。PR 描述写明触及关键路径 `images/dsh-user/` 和 `images/seccomp/`（README），人工逐行审查推迟到 Epic #380 完成，未通过。
+
+Evidence (15.1 插件骨架与镜像交付，#418):
+
+**改动点**：
+
+- 新建 `plugins/knowledge-base/`：`package.json`、`cordis.patch.yml`、`index.js`、`index.test.js`、`client.js`、`client.test.js`、`types.d.ts`、`client.types.d.ts`、`tsconfig.json`（与 `platform-nav` 相同）、`README.md`。
+- `images/dsh-user/Dockerfile`、`images/dsh-user/catalog.json`。
+- 门禁配置照 `platform-nav` 扩展：`knip.json`（entry 加 `index.js` 与 `*.test.js`，project 加 `*.js` 与 `*.d.ts`）、`vitest.config.ts` 覆盖率清单、`scripts/check-test-pairing.sh` 的 find 路径（新插件的每个 `.js` 都要成对测试，不像 `zh-locale` 那样豁免）、根 `package.json` 的 `typecheck` 加 `tsc -p plugins/knowledge-base/tsconfig.json`。ESLint 与 vitest 的 include 已经按通配覆盖，核对即可。`scripts/test-guardrails.sh` 照 `plugins/office-agents/orphan.js` 的写法加 `plugins/knowledge-base/orphan.js` 拒绝用例，证明新的 find 子句生效。
+- 构建入口：上面 Release 一节列出的五处。
+- 阶段 1 卷升级用例：`platform/test/volume-upgrade.docker.test.ts:70-79,90` 用 `PLUGIN_CONTEXTS` 从阶段 1 提交 `3482a520…` 做 `git archive` 并为旧镜像生成 `--build-context`；该提交没有 `plugins/knowledge-base`（`git archive` 退出 128）。在 `user-image-fixture.ts` 钉死一份阶段 1 的四项上下文集（`office-agents`、`permission-tiers`、`platform-nav`、`zh-locale`），阶段 1 的提取与旧镜像构建只用它；当前镜像构建用五项。验证仍是 exact-head 全量 `pnpm test:docker` 中该用例通过。
+- 写死目录或启动模块清单的测试随新目录项更新（implementer 用 grep `office-agents` 与 `MANAGED_BOOT_ROSTER` 核对全集）：`platform/test/managed-boot-roster.ts`（加 `@dsh-team/knowledge-base`）、`platform/test/admin-plugin-catalog.integration.test.ts`、`platform/test/admin-plugins.ui.test.ts`、`platform/src/plugin-catalog/catalog.test.ts`、`platform/src/admin/plugin-catalog.test.ts`、`images/dsh-user/catalog-check.test.mjs`（`:590-592` 的排序断言与新项放第一位一致）、`platform/test/probe-plugin-page.integration.test.ts`、`platform/test/user-image.docker.test.ts`、`platform/test/first-use.docker.test.ts` 和 managed-policy 的 oracle/fixture 中与员工默认组成相关的期望。只改受新目录项影响的期望，不改断言强度。`platform/src/managed-config/generate-catalog.test.ts` 与 `platform/web/src/plugins-page.test.tsx` 经核对不受影响（前者的目录项都是 `employee` 态，后者用自造目录），不改。`platform/test/model-refusal-fixture.ts:372` 是启动模块清单的第四个消费方，共享常量自动覆盖它；`pnpm test:model` 不在本 issue 的命令里，这是已知验证缺口。
+- 不改 `platform/src/orchestrator/`、`platform/src/managed-config/`。
+
+**测试**：
+
+- 单元（`pnpm test`）：
+  - `index.test.js`：`undefined`、`null`、`{}` 不抛错且不注册任何东西；合格的 `{ platformUrl }` 被接受（含端口边界 1 与 65535、最后八位组 3 与 19 等 +3 地址）；以下每种都抛 `TypeError` 且消息不含输入：多余的键、非字符串、`https:`、非规范 IPv4（前导零、越界八位组）、非 +3 地址、端口 0/65536/前导零、带路径或结尾 `/`、查询、片段、用户信息、数组和非普通对象。
+  - `client.test.js`（jsdom）：恰好一次 `__ModuleLoader__.load`，id 为 `@dsh-team/knowledge-base`；`apply` 不注册 slot、不调用 `fetch`、不写控制台。
+  - 目录相关的既有单元测试在五项目录上通过。
+- 集成（`pnpm test:integration`）：管理员插件目录接口在五项目录上通过；拒绝构建用例的上下文名单含 `knowledge-base`。
+- Docker（`pnpm test:docker`，VPS exact-head）：
+  - 只读（`user-image.docker.test.ts`，把 `platform-nav` 的只读用例扩展为同时覆盖两个目录，不复制一份）：`/opt/dsh-team/knowledge-base/` 恰有四个文件，目录 root 0555、文件 root 0444，uid1001 写入、新建、改名都被拒绝；清单名、`engines.dsh` 满足、没有 DSH peer、`./client` 导出与 `dsh.client.platform`。
+  - 目录交付用例：`dsh.profile.bundles` 为 `[...shipped, '@dsh-team/knowledge-base', '@dsh-team/office-agents']`；`dependencies` 与登记副本由目录驱动，自动覆盖新项。
+  - 已加载：以 managed-policy 用例为准：它用真实目录、全部 `employee` 态（`managed-policy-fixture.ts:84`），同时精确比较启动模块清单（新清单含 `@dsh-team/knowledge-base`，证明 client 半区交付）和 `rejectPluginFailures`（host 半区 `apply` 没有加载失败，这只能从失败标记看出；「未停用、已激活」由下面的 observer 断言证明）；并用 managed-policy observer 正向断言 `ctx.loader.entries()` 中有 id `knowledge-base`、未停用且已激活的条目。`first-use` 与 `admin-config-activation` 的精确清单比较随共享常量更新；首次使用的插件页用例中知识库卡片为 `running`、开关可见（`employee` 项不锁定）。
+  - 无 RAGFlow 密钥：`first-use` 用例写入上面的哨兵后，断言实例环境、覆盖层字节、`/opt/dsh-team/knowledge-base/` 与 profile 登记副本中都没有哨兵。
+- 先红后绿：新的只读、名单、启动模块和 loader 条目断言要在插件交付之前失败（例如目录项存在但镜像没有 COPY 时构建门禁失败，或启动模块清单缺少新项）；哨兵断言例外，见上。
+
+**命令**：
+
+- `pnpm test`、`pnpm test:integration`、`pnpm check`
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`（清理已确认）
+- 本机 exact-head 的 `pnpm test:stack`，并贴证据评论（新插件进入员工默认组成，零控制台错误照常要求）
+
+**交接**：
+
+- #447：覆盖层的 `knowledge-base` 行形状与 `platformUrl` 规则见上；生成器单元测试覆盖三种目录状态和两种上游方式。
+- 15.2：host 半区读取令牌并注册路由，client 半区加面板；浏览器页面资源中没有 RAGFlow 密钥的断言在 15.2 的本机通道用例里做。
+
 ## 16. Document Server 部署与实例网络接入
 
 依赖：1、10（Office 相关 PR 的本机证据）。关键路径 `platform/src/orchestrator/`（16.3）。

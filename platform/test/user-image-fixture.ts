@@ -334,13 +334,22 @@ function createResourceRegistration(
   };
 }
 
-export const PLUGIN_CONTEXTS = [
+const PLUGIN_CONTEXTS = [
   'zh-locale',
   'permission-tiers',
   'office-agents',
   'platform-nav',
+  'knowledge-base',
 ] as const;
 type PluginContext = (typeof PLUGIN_CONTEXTS)[number];
+
+/** The named contexts of the stage-1 commit's user image, which predates `knowledge-base`. */
+export const STAGE1_PLUGIN_CONTEXTS = [
+  'zh-locale',
+  'permission-tiers',
+  'office-agents',
+  'platform-nav',
+] as const satisfies readonly PluginContext[];
 
 function requireDockerDaemon(command: DockerCommand): void {
   const prerequisite = ['version', '--format', '{{.Server.Version}}'];
@@ -360,6 +369,7 @@ export function userImageBuildArgs(
   replaced?: { plugin: PluginContext; directory: string },
   root = repositoryRoot,
   primary = join(root, 'images/dsh-user'),
+  contexts: readonly PluginContext[] = PLUGIN_CONTEXTS,
 ): string[] {
   return [
     'build',
@@ -369,7 +379,7 @@ export function userImageBuildArgs(
     image,
     '--file',
     join(primary, 'Dockerfile'),
-    ...PLUGIN_CONTEXTS.flatMap((plugin) => [
+    ...contexts.flatMap((plugin) => [
       '--build-context',
       `${plugin}=${replaced?.plugin === plugin ? replaced.directory : join(root, `plugins/${plugin}`)}`,
     ]),

@@ -42,6 +42,14 @@ const INTERNAL_ERROR = {
 };
 const ENTRIES = [
   {
+    id: 'knowledge-base',
+    package: '@dsh-team/knowledge-base',
+    name: '知识库',
+    category: 'manageable',
+    imageDefaultEnabled: true,
+    state: 'employee',
+  },
+  {
     id: 'office-agents',
     package: '@dsh-team/office-agents',
     name: '办公 Agent',
@@ -81,6 +89,8 @@ const submission = (office: string, extra: { id: string; state: unknown }[] = []
   { id: 'permission-tiers', state: 'forced-on' },
   { id: 'platform-nav', state: 'forced-on' },
   { id: 'zh-locale', state: 'forced-on' },
+  // Submission order is free; the manageable knowledge-base entry keeps its default.
+  { id: 'knowledge-base', state: 'employee' },
   ...extra,
 ];
 const audits = (database: DatabaseHandle) =>
@@ -122,7 +132,10 @@ it('saves only manageable states with one actor/source audit and a running-insta
     expect(saved.json()).toEqual({ entries: officeAs('forced-off'), runningInstances: 0 });
     expect(read.json()).toEqual({ entries: officeAs('forced-off') });
     expect(settingsRows(database)).toEqual([
-      { key: 'pluginCatalog', value: '{"office-agents":"forced-off"}' },
+      {
+        key: 'pluginCatalog',
+        value: '{"knowledge-base":"employee","office-agents":"forced-off"}',
+      },
       ...SEEDED_SETTINGS.slice(1),
     ]);
     expect(audits(database)).toEqual([
@@ -143,7 +156,9 @@ it('ignores a stored id no longer in the catalog and drops it on the next whole-
 
     expect(read.json()).toEqual({ entries: officeAs('forced-on') });
     expect(saved.statusCode).toBe(200);
-    expect(storedCatalog(database)).toEqual({ value: '{"office-agents":"employee"}' });
+    expect(storedCatalog(database)).toEqual({
+      value: '{"knowledge-base":"employee","office-agents":"employee"}',
+    });
   });
 });
 

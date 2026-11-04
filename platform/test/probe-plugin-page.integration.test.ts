@@ -11,10 +11,12 @@ afterEach(async () => {
 
 const PACKAGE = '@dsh-team/office-agents';
 const TIERS = '@dsh-team/permission-tiers';
+const KNOWLEDGE = '@dsh-team/knowledge-base';
 type LockState = 'forced-on' | 'forced-off';
-// The catalog's four packages and image defaults: only the office bundle is selected, and the
-// three required packages are forced on by the administrator catalog.
+// The catalog's five packages and image defaults: the two manageable bundles are selected and
+// employee-chosen, and the three required packages are forced on by the administrator catalog.
 const EXPECTED: { package: string; enabled: boolean; locked?: LockState }[] = [
+  { package: KNOWLEDGE, enabled: true },
   { package: PACKAGE, enabled: true },
   { package: TIERS, enabled: false, locked: 'forced-on' },
   { package: '@dsh-team/platform-nav', enabled: false, locked: 'forced-on' },
@@ -74,6 +76,9 @@ interface FakeOptions {
 }
 
 const lockedState = (name: string) => EXPECTED.find((entry) => entry.package === name)?.locked;
+/** Saved selection of an unlocked card other than the round-trip one: its catalog default. */
+const defaultEnabled = (name: string) =>
+  EXPECTED.find((entry) => entry.package === name)?.enabled === true;
 
 /** Rendered facts of a native switch and its mark: locked when forced, untouched otherwise. */
 function lockFacts(name: string, override: Partial<LockFacts> | undefined): LockFacts {
@@ -148,8 +153,10 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
           inCard: state.detail === null,
         }
       : null;
-  const checkedOf = (name: string) =>
-    name === PACKAGE ? state.shown : lockedState(name) !== undefined && state.lockedSaved;
+  const checkedOf = (name: string) => {
+    if (name === PACKAGE) return state.shown;
+    return lockedState(name) === undefined ? defaultEnabled(name) : state.lockedSaved;
+  };
   // DSH renders every listed package as a card in the 已安装 group: running when selected.
   const cards = (listed: boolean) =>
     EXPECTED.map(({ package: name }) => {
@@ -282,16 +289,21 @@ async function run(
 const shots = (root: string, ...names: string[]) =>
   names.map((name) => ({ screenshot: join(root, `entry-plugin-page-${name}.png`), bytes: 3 }));
 const cardsWith = (office: { status: string; checked: boolean }) =>
-  EXPECTED.map(({ package: name, locked }) =>
-    name === PACKAGE
-      ? { package: name, ...office, locked: null }
-      : { package: name, status: 'disabled', checked: false, locked },
-  );
+  EXPECTED.map(({ package: name, enabled, locked }) => {
+    if (name === PACKAGE) return { package: name, ...office, locked: null };
+    if (locked !== undefined) return { package: name, status: 'disabled', checked: false, locked };
+    return {
+      package: name,
+      status: enabled ? 'running' : 'disabled',
+      checked: enabled,
+      locked: null,
+    };
+  });
 // Every catalog card reached by Tab in order; the locked switches are skipped.
 const LOCKED_EVIDENCE = {
   package: TIERS,
   focus: {
-    presses: 5,
+    presses: 7,
     visited: EXPECTED.map((entry) => entry.package),
     roundTripSwitch: true,
   },
@@ -299,7 +311,7 @@ const LOCKED_EVIDENCE = {
   detail: { lock: 'forced-on', uninstallButtons: 1 },
 };
 const LOCK_INPUT = [
-  ...Array.from({ length: 5 }, () => ['key:rawKeyDown:Tab', 'key:keyUp:Tab']).flat(),
+  ...Array.from({ length: 7 }, () => ['key:rawKeyDown:Tab', 'key:keyUp:Tab']).flat(),
   'mouse:mouseMoved@640,360',
   'mouse:mousePressed@640,360',
   'mouse:mouseReleased@640,360',
@@ -368,7 +380,9 @@ it('leaves the bundle switched off when the round trip says so', async () => {
 });
 
 it('starts from a disabled bundle when the catalog state says so, and switches it back on', async () => {
-  const expected = EXPECTED.map((entry) => ({ ...entry, enabled: false }));
+  const expected = EXPECTED.map((entry) =>
+    entry.package === PACKAGE ? { ...entry, enabled: false } : entry,
+  );
   const { result, state, root } = await run({ officeEnabled: false }, 3_000, {
     expected,
     roundTrip: { package: PACKAGE, leaveEnabled: true },
@@ -390,7 +404,9 @@ it('starts from a disabled bundle when the catalog state says so, and switches i
 
 const UNLOCKED = EXPECTED.map(({ package: name, enabled }) => ({ package: name, enabled }));
 const UNLOCKED_PAGE: Partial<FakeOptions> = {
-  lockFacts: Object.fromEntries(UNLOCKED.slice(1).map(({ package: name }) => [name, ABSENT_MARK])),
+  lockFacts: Object.fromEntries(
+    EXPECTED.filter((entry) => entry.locked).map(({ package: name }) => [name, ABSENT_MARK]),
+  ),
 };
 
 it('runs no lock steps when no package is expected locked', async () => {
@@ -454,6 +470,11 @@ it.each<[string, FakeOptions, RegExp]>([
   [
     'a required plugin shown running',
     { cards: { '@dsh-team/permission-tiers': { status: 'running', checked: true } } },
+    /stage=plugin-page-list error=catalog-card/,
+  ],
+  [
+    'a default-enabled manageable card shown disabled',
+    { cards: { [KNOWLEDGE]: { status: 'disabled', checked: false } } },
     /stage=plugin-page-list error=catalog-card/,
   ],
   [

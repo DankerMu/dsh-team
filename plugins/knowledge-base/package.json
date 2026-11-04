@@ -1,0 +1,34 @@
+{
+  "name": "@dsh-team/knowledge-base",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Knowledge-base plugin for the managed DSH Web composition",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  },
+  "files": [
+    "package.json",
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md"
+  ]
+}

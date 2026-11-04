@@ -25,6 +25,8 @@ const CUSTOM_PRESET_ID = 'custom-office';
 const TOOL_FS_MODULE = '@deepseek-ai/dsh-tool-fs';
 const PERSONA_MODULE = '@deepseek-ai/dsh-persona';
 const PLUGIN_PAGE_ID = 'ui-plugin-manager';
+// The knowledge-base bundle's insert row (plugins/knowledge-base/cordis.patch.yml).
+const KNOWLEDGE_BASE_ID = 'knowledge-base';
 // dsh-system-prompt 0.2.1-rc.2 lib/index.js:59
 //   const PERSONA_PREFIX_SECTION = "deployment:persona-prefix";
 const PERSONA_PREFIX_SECTION = 'deployment:persona-prefix';
@@ -95,6 +97,22 @@ function pluginPage(ctx) {
   const enabled = typeof value?.get === 'function' ? value.get() : value;
   if (typeof enabled !== 'boolean') fail();
   return { registryProbeEnabled: enabled };
+}
+
+/** The knowledge-base bundle row as the loader holds it: present, not disabled, fiber state. */
+function knowledgeBase(ctx) {
+  const entries = [...ctx.loader.entries()].filter(
+    (entry) =>
+      !entry.options?.group &&
+      (entry.id === KNOWLEDGE_BASE_ID || entry.options?.id === KNOWLEDGE_BASE_ID),
+  );
+  if (entries.length > 1) fail();
+  const entry = entries[0];
+  return {
+    present: entry !== undefined,
+    enabled: entry !== undefined && !entry.disabled,
+    fiberState: entry?.fiber?.state ?? null,
+  };
 }
 
 function toolNames(schemas) {
@@ -291,6 +309,12 @@ async function observe(ctx) {
     defaultPreset: ctx.get('permissionPresets').catalog().defaultPreset,
   };
   process.stdout.write(
-    `${MARKER}${JSON.stringify({ models, presets, pluginPage: pluginPage(ctx), permissions })}\n`,
+    `${MARKER}${JSON.stringify({
+      models,
+      presets,
+      pluginPage: pluginPage(ctx),
+      permissions,
+      knowledgeBase: knowledgeBase(ctx),
+    })}\n`,
   );
 }

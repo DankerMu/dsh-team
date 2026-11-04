@@ -38,6 +38,11 @@ async function readImageCatalog(): Promise<ImageCatalogEntry[]> {
   const parsed = JSON.parse(await readFile(file, 'utf8')) as { entries: ImageCatalogEntry[] };
   return parsed.entries;
 }
+/** The test switches only 办公 Agent: required entries stay forced on, other manageable ones employee. */
+function savedState(item: ImageCatalogEntry): string {
+  if (item.category === 'required') return 'forced-on';
+  return item.id === 'office-agents' ? 'forced-off' : 'employee';
+}
 function urls(baseUrl: string) {
   return {
     catalog: `${baseUrl}/_platform/api/admin/plugin-catalog`,
@@ -100,7 +105,7 @@ test('administrator sees the image catalog and saves each section through the re
     await expect(page.getByText(HINT, { exact: true })).toBeVisible();
     const rows = form(page, '预装插件').locator('tbody tr');
     await expect(rows).toHaveCount(catalog.length);
-    expect(catalog.length).toBe(4);
+    expect(catalog.length).toBe(5);
     for (const [index, item] of catalog.entries()) {
       const cells = rows.nth(index).locator('td');
       await expect(cells.nth(0)).toHaveText(item.name);
@@ -127,19 +132,16 @@ test('administrator sees the image catalog and saves each section through the re
     const savedCatalog = await save(page, api.catalog, '保存插件目录');
     expect(savedCatalog.status()).toBe(200);
     expect(await savedCatalog.json()).toEqual({
-      entries: catalog.map((item) => ({
-        ...item,
-        state: item.category === 'required' ? 'forced-on' : 'forced-off',
-      })),
+      entries: catalog.map((item) => ({ ...item, state: savedState(item) })),
       runningInstances: 0,
     });
     expect(savedCatalog.request().postDataJSON()).toEqual({
-      entries: catalog.map((item) => ({
-        id: item.id,
-        state: item.category === 'required' ? 'forced-on' : 'forced-off',
-      })),
+      entries: catalog.map((item) => ({ id: item.id, state: savedState(item) })),
     });
-    expect(readSettings(database).pluginCatalog).toEqual({ 'office-agents': 'forced-off' });
+    expect(readSettings(database).pluginCatalog).toEqual({
+      'knowledge-base': 'employee',
+      'office-agents': 'forced-off',
+    });
     expect(auditCount(database, 'plugin-catalog.updated')).toBe(1);
     await expectCountUnder(page, ['预装插件']);
 

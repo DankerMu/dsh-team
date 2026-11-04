@@ -130,8 +130,13 @@ it('delivers the repository catalog, its gate, the toolchain+DSH baseline and ev
         globals: ['@deepseek-ai/dsh', 'corepack', 'npm', 'pnpm'],
       });
       // Positive control: release-shipped bundles are registered, absent from the catalog,
-      // and the build still passed its gate. Only the image-default-enabled office bundle follows.
-      expect(observed.bundles).toEqual([...shipped, '@dsh-team/office-agents']);
+      // and the build still passed its gate. Only the image-default-enabled bundles follow, in
+      // catalog order.
+      expect(observed.bundles).toEqual([
+        ...shipped,
+        '@dsh-team/knowledge-base',
+        '@dsh-team/office-agents',
+      ]);
       const catalog = JSON.parse(repositoryCatalog.toString('utf8')) as {
         entries: { id: string; package: string }[];
       };
@@ -239,7 +244,7 @@ it('refuses to start DSH Web on a wildcard overlay: nonzero exit within 60s and 
   );
 });
 
-it('delivers the platform navigation plugin and the empty credential store root-owned, read-only and compatible with the installed DSH', async () => {
+it('delivers the platform navigation and knowledge-base plugins and the empty credential store root-owned, read-only and compatible with the installed DSH', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
@@ -247,26 +252,30 @@ it('delivers the platform navigation plugin and the empty credential store root-
 import assert from 'node:assert/strict';
 import { opendirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 ${DSH_ENGINES_PRELUDE}
-const root='/opt/dsh-team/platform-nav';
-assert.deepEqual(readdirSync(root).sort(),['client.js','cordis.patch.yml','index.js','package.json']);
-const directory=statSync(root);
-assert.equal(directory.uid,0); assert.equal(directory.gid,0); assert.equal(directory.mode & 0o777,0o555);
-for(const name of ['client.js','cordis.patch.yml','index.js','package.json']) {
-  const stat=statSync(root+'/'+name);
-  assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o444);
+const engines={};
+for(const id of ['platform-nav','knowledge-base']) {
+  const root='/opt/dsh-team/'+id;
+  assert.deepEqual(readdirSync(root).sort(),['client.js','cordis.patch.yml','index.js','package.json']);
+  const directory=statSync(root);
+  assert.equal(directory.uid,0); assert.equal(directory.gid,0); assert.equal(directory.mode & 0o777,0o555);
+  for(const name of ['client.js','cordis.patch.yml','index.js','package.json']) {
+    const stat=statSync(root+'/'+name);
+    assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o444);
+  }
+  const manifest=JSON.parse(readFileSync(root+'/package.json','utf8'));
+  assert.equal(manifest.name,'@dsh-team/'+id);
+  assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh'],undefined);
+  assert.equal(dshEnginesSatisfied(manifest.engines?.dsh),true);
+  assert.equal(manifest.exports['./client'],'./client.js');
+  assert.equal(manifest.dsh.client.platform,'web');
+  assert.throws(()=>writeFileSync(root+'/client.js','employee code'));
+  assert.throws(()=>writeFileSync(root+'/employee.js','employee code'));
+  assert.throws(()=>renameSync(root+'/index.js',root+'/employee.js'));
+  engines[id]=manifest.engines.dsh;
 }
 for(const path of ['/opt','/opt/dsh-team']) {
   const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.mode & 0o022,0);
 }
-const manifest=JSON.parse(readFileSync(root+'/package.json','utf8'));
-assert.equal(manifest.name,'@dsh-team/platform-nav');
-assert.equal(manifest.peerDependencies?.['@deepseek-ai/dsh'],undefined);
-assert.equal(dshEnginesSatisfied(manifest.engines?.dsh),true);
-assert.equal(manifest.exports['./client'],'./client.js');
-assert.equal(manifest.dsh.client.platform,'web');
-assert.throws(()=>writeFileSync(root+'/client.js','employee code'));
-assert.throws(()=>writeFileSync(root+'/employee.js','employee code'));
-assert.throws(()=>renameSync(root+'/index.js',root+'/employee.js'));
 // The managed provider's isolated credential store: traversable and empty, never writable.
 const store='/opt/dsh-team/credentials';
 const credentials=statSync(store);
@@ -276,7 +285,7 @@ const entry=listing.readSync();
 listing.closeSync();
 assert.throws(()=>writeFileSync(store+'/platform.yaml','employee value'),{code:'EACCES'});
 assert.equal(process.getuid(),1001);
-process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh,credentials:entry?.name??null,uid:1001}));
+process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.name??null,uid:1001}));
 `;
 
   await runUserImage(
@@ -284,7 +293,7 @@ process.stdout.write(JSON.stringify({immutable:true,engines:manifest.engines.dsh
     (stdout) => {
       expect(JSON.parse(stdout)).toEqual({
         immutable: true,
-        engines: '>=0.2.1-rc.2 <0.3.0',
+        engines: { 'platform-nav': '>=0.2.1-rc.2 <0.3.0', 'knowledge-base': '>=0.2.1-rc.2 <0.3.0' },
         credentials: null,
         uid: 1001,
       });

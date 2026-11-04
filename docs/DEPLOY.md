@@ -42,7 +42,8 @@ docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
   --build-context zh-locale=plugins/zh-locale \
   --build-context permission-tiers=plugins/permission-tiers \
   --build-context office-agents=plugins/office-agents \
-  --build-context platform-nav=plugins/platform-nav images/dsh-user
+  --build-context platform-nav=plugins/platform-nav \
+  --build-context knowledge-base=plugins/knowledge-base images/dsh-user
 
 docker build --label "dsh-team.deploy-run=$DEPLOY_RUN" \
   -t dsh-team-platform:local -f platform/Dockerfile .
