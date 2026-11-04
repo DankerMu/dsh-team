@@ -24,7 +24,7 @@ import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browse
 import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebNetwork } from './web-startup-fixture.ts';
-import { extractLaunchToken } from '../src/orchestrator/index.ts';
+import { extractLaunchToken, instanceAddressLayout } from '../src/orchestrator/index.ts';
 import { rejectPluginFailures } from './plugin-failure-markers.ts';
 import {
   browserEvidence,
@@ -72,8 +72,14 @@ const WORKSPACE_PATH = '/data/work';
 const TAMPERED_LIVE = '- id: ui-settings-models\n  disabled: false\n';
 // The generated overlay's yolo default, observed through the managed execution service.
 const MANAGED_YOLO_PERMISSIONS = { managedPermissions: true, defaultPreset: 'danger-full-access' };
-// The employee-state knowledge-base bundle row: present, not disabled and active (cordis fiber 2).
-const KNOWLEDGE_BASE_LOADED = { present: true, enabled: true, fiberState: 2 };
+/**
+ * The employee-state knowledge-base row: present, enabled, active (cordis fiber 2) and holding the
+ * network's +3 with the port `publishOverlay` passes (no platform listens; 15.1 sends nothing).
+ */
+function knowledgeBaseLoaded(network: WebNetwork) {
+  const platformUrl = `http://${instanceAddressLayout(network.subnet).platform}:8080`;
+  return { present: true, enabled: true, fiberState: 2, config: { platformUrl } };
+}
 const EMPLOYEE_HOME = employeeHomePatch(API_KEY_ENV, ALT_ADDRESS);
 const CUSTOM_INSERT = customOfficeInsert(CUSTOM_PRESET_ID);
 const OBSERVER_INSERT = { id: OBSERVER_ID, name: OBSERVER_PATH };
@@ -86,9 +92,12 @@ const MIGRATION_OVERLAY_SETTINGS = {
   pluginCatalog: catalogStates(readPluginCatalog(), { pluginCatalog: {} }),
 };
 
-/** Generator input from a collected composition under the migration-5 overlay settings. */
+/**
+ * Generator input from a collected composition under the migration-5 overlay settings, without a
+ * platform address: these fixtures run no platform on the instance bridge (published-loopback).
+ */
 export function migrationOverlayInput(composition: ManagedComposition) {
-  return { ...composition, ...MIGRATION_OVERLAY_SETTINGS };
+  return { ...composition, ...MIGRATION_OVERLAY_SETTINGS, platformPort: null };
 }
 
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
@@ -349,6 +358,8 @@ async function publishOverlay(
     },
     defaultPermissionTier: 'yolo',
     ...migrationOverlayInput(composition),
+    // After the spread, replacing its null: stands in for PLATFORM_PORT (knowledgeBaseLoaded).
+    platformPort: 8080,
   });
   if (generated.outcome !== 'configured') {
     throw new Error('Managed policy generation returned no document');
@@ -632,14 +643,19 @@ async function prepareState(
  * permission-tiers is host-only, so its evidence is the effective managed tier and the injected
  * execution service; the knowledge-base host half is evidenced by its active loader row.
  */
-function assertPluginsLoaded(lifecycle: UserImageLifecycle, name: string, observation: unknown) {
+function assertPluginsLoaded(
+  lifecycle: UserImageLifecycle,
+  name: string,
+  observation: unknown,
+  network: WebNetwork,
+) {
   const logs = lifecycle.command(['logs', name], 30_000);
   if (logs.error !== undefined || logs.status !== 0) throw new Error(INVALID);
   rejectPluginFailures(logs, INVALID);
   const { permissions, knowledgeBase } = parseJsonRecord(JSON.stringify(observation));
   if (!isDeepStrictEqual(permissions, MANAGED_YOLO_PERMISSIONS))
     throw new Error(`${INVALID}: managed permission tier`);
-  if (!isDeepStrictEqual(knowledgeBase, KNOWLEDGE_BASE_LOADED))
+  if (!isDeepStrictEqual(knowledgeBase, knowledgeBaseLoaded(network)))
     throw new Error(`${INVALID}: knowledge-base plugin row`);
 }
 
@@ -679,7 +695,7 @@ async function acceptManaged(
     },
   );
   assertManagedPolicyRuntime(started.observation, expected);
-  assertPluginsLoaded(lifecycle, name, started.observation);
+  assertPluginsLoaded(lifecycle, name, started.observation, network);
   if (started.browser === undefined) throw new Error(INVALID);
   requireAccepted(started.browser, screenshot, expected.defaultModel);
   return {

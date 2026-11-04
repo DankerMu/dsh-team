@@ -43,6 +43,7 @@ const INPUT: ManagedConfigInput = {
   registryProbeEnabled: true,
   pluginCatalog: [],
   bundles: [],
+  platformPort: null,
 };
 
 const CREDENTIAL_REALM = { credentials: 'dsh-team-platform' };

@@ -581,6 +581,7 @@ export async function startUserContainer(
       ...observed,
       admin: user.role === 'admin',
       instanceAddress: instanceAddressLayout(network.subnet).container,
+      platformPort: input.transport.config.upstreamMode === 'network' ? config.port : null,
       defaultPermissionTier,
       modelSettings,
       ...catalog.overlay,

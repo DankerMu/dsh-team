@@ -60,6 +60,11 @@ export interface ManagedConfigInput {
   readonly pluginCatalog: readonly CatalogEntryState[];
   /** Canonical patch and observed presence of each forced-state manageable bundle. */
   readonly bundles: readonly ManagedBundle[];
+  /**
+   * The platform's own listening port in network mode, where it is the instance bridge's +3;
+   * null in published-loopback mode, where no platform address exists inside the instance.
+   */
+  readonly platformPort: number | null;
 }
 
 interface ManagedBundle {
@@ -253,6 +258,23 @@ function isInstanceAddress(value: unknown): value is string {
   );
 }
 
+function isPlatformPort(value: unknown): value is number | null {
+  return (
+    value === null ||
+    (typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535)
+  );
+}
+
+/** The knowledge-base plugin's whole config: only the platform's +3 address, never RAGFlow's. */
+function knowledgeBaseRows(instanceAddress: string, platformPort: number | null): Json[] {
+  if (platformPort === null) return [];
+  const octets = instanceAddress.split('.');
+  // The validated +2 address ends at most in .242, so +3 stays inside its /28.
+  octets[3] = String(Number(octets[3]) + 1);
+  const platformUrl = `http://${octets.join('.')}:${String(platformPort)}`;
+  return [{ id: 'knowledge-base', config: { platformUrl } }];
+}
+
 export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigResult {
   // Untyped fixture callers can omit the flag; never default it to either role.
   if (typeof input.admin !== 'boolean') {
@@ -275,6 +297,10 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
   const [registry, ...fallbackRegistries] = Array.isArray(registries) ? input.pluginRegistries : [];
   if (registry === undefined) {
     throw new TypeError('Managed overlay plugin registries must be a nonempty list');
+  }
+  // Untyped fixture callers can omit the port; never default it to either upstream mode.
+  if (!isPlatformPort(input.platformPort)) {
+    throw new TypeError('Managed overlay platform port must be null or an integer 1..65535');
   }
   if (!hasCompleteModelSettings(input.modelSettings)) {
     return { outcome: 'unconfigured' };
@@ -319,6 +345,8 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
       ...input.localePatch,
       // Managed policy is last: profile/home/locale edits cannot replace it.
       ...catalog.rows,
+      // After the catalog rows, so a forced-on whole patch has already inserted the target.
+      ...knowledgeBaseRows(input.instanceAddress, input.platformPort),
       // Neither upstream row has a config; a row's config is whole, so this is all of it.
       { id: 'plugin-manager', config: { registry, fallbackRegistries } },
       { id: 'ui-plugin-manager', config: { registryProbeEnabled: input.registryProbeEnabled } },

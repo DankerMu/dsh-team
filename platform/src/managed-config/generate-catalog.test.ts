@@ -94,6 +94,7 @@ const BASE: ManagedConfigInput = {
   registryProbeEnabled: true,
   pluginCatalog: [REQUIRED],
   bundles: [],
+  platformPort: null,
 };
 
 function content(input: ManagedConfigInput): string {
@@ -473,5 +474,149 @@ describe('generateManagedConfig platform entry catalog states', () => {
         '"@dsh-team/permission-tiers":"forced-on","@dsh-team/platform-nav":"forced-on",' +
         '"@dsh-team/zh-locale":"forced-on"}}',
     );
+  });
+});
+
+describe('generateManagedConfig knowledge-base platform address', () => {
+  // plugins/knowledge-base/cordis.patch.yml: the bundle's single config-free insert row (#418).
+  const KNOWLEDGE_PATCH = [
+    { insert: [{ id: 'knowledge-base', name: '/opt/dsh-team/knowledge-base/index.js' }] },
+  ];
+  const PLATFORM_ROW = { id: 'knowledge-base', config: { platformUrl: 'http://172.30.0.3:8080' } };
+  const RAGFLOW_URL = 'http://ragflow-sentinel.invalid:9380';
+  const RAGFLOW_KEY = 'ragflow-sentinel-key';
+
+  function knowledge(
+    state: CatalogEntryState['state'],
+    present: boolean,
+    platformPort: number | null,
+  ): ManagedConfigInput {
+    return {
+      ...BASE,
+      platformPort,
+      pluginCatalog: [REQUIRED, entry('knowledge-base', 'manageable', state)],
+      bundles: [{ id: 'knowledge-base', patch: KNOWLEDGE_PATCH, present }],
+    };
+  }
+
+  const withoutRow = (all: readonly unknown[]) =>
+    all.filter((row) => !isDeepStrictEqual(row, PLATFORM_ROW));
+
+  const rowId = (row: unknown) =>
+    typeof row === 'object' && row !== null && 'id' in row ? String(row.id) : undefined;
+  const hasConfig = (row: unknown) => typeof row === 'object' && row !== null && 'config' in row;
+
+  function keyNames(value: unknown): string[] {
+    if (Array.isArray(value)) return value.flatMap(keyNames);
+    if (typeof value !== 'object' || value === null) return [];
+    return Object.entries(value).flatMap(([key, nested]) => [key, ...keyNames(nested)]);
+  }
+
+  it.each([
+    ['employee', true, []],
+    ['forced-on', true, [{ id: 'knowledge-base', disabled: false }]],
+    ['forced-on', false, KNOWLEDGE_PATCH],
+    ['forced-off', true, [{ id: 'knowledge-base', disabled: true }]],
+  ] as const)(
+    'writes the same platform address after the %s rows (present=%s) only in network mode',
+    (state, present, enableRows) => {
+      const network = knowledge(state, present, 8080);
+      const loopback = knowledge(state, present, null);
+
+      expect(catalogSegment(network)).toEqual([...enableRows, PLATFORM_ROW]);
+      expect(catalogSegment(loopback)).toEqual(enableRows);
+      expect(
+        rows(loopback).filter((row) => rowId(row) === 'knowledge-base' && hasConfig(row)),
+      ).toEqual([]);
+      expect(content(network)).toContain(
+        '{"id":"knowledge-base","config":{"platformUrl":"http://172.30.0.3:8080"}},{"id":"plugin-manager"',
+      );
+    },
+  );
+
+  it.each([
+    ['10.1.2.34', 1, 'http://10.1.2.35:1'],
+    ['0.0.0.2', 65535, 'http://0.0.0.3:65535'],
+    ['255.255.255.242', 3000, 'http://255.255.255.243:3000'],
+  ])(
+    'derives the +3 platform address from instance %s and port %d',
+    (instanceAddress, port, url) => {
+      const all = rows({ ...knowledge('employee', true, port), instanceAddress });
+
+      expect(all.filter(hasId('knowledge-base'))).toEqual([
+        { id: 'knowledge-base', config: { platformUrl: url } },
+      ]);
+    },
+  );
+
+  it('differs between upstream modes only in the platform address row, in a pinned order', () => {
+    const network = rows(knowledge('employee', true, 8080));
+    const loopback = content(knowledge('employee', true, null));
+
+    expect(loopback).toBe(JSON.stringify(withoutRow(network)));
+    expect(network.map((row) => rowId(row) ?? 'insert')).toEqual([
+      'webserver',
+      'tool-web',
+      'llm-deepseek',
+      'llm-deepseek-account',
+      'llm-pi-ai',
+      'agent-default-model',
+      'preset-standard',
+      'insert',
+      'knowledge-base',
+      'plugin-manager',
+      'ui-plugin-manager',
+      'auto-review',
+      'permission',
+      'insert',
+      'agent-loop',
+    ]);
+  });
+
+  it('generates byte-identical network overlays for identical input', () => {
+    const input = knowledge('forced-off', false, 8080);
+
+    expect(content(structuredClone(input))).toBe(content(input));
+  });
+
+  it('carries no RAGFlow address, key or retrieval parameter into the overlay', () => {
+    // An untyped caller adding RAGFlow settings: the input type has no such fields to carry.
+    const input = {
+      ...knowledge('forced-on', false, 8080),
+      ragflowBaseUrl: RAGFLOW_URL,
+      ragflowApiKey: RAGFLOW_KEY,
+      retrievalTopK: 8,
+    } as ManagedConfigInput;
+
+    const document = content(input);
+
+    expect(document).not.toContain(RAGFLOW_URL);
+    expect(document).not.toContain(RAGFLOW_KEY);
+    expect(
+      keyNames(JSON.parse(document)).filter((key) => /ragflow|retrieval|^apikey$/i.test(key)),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ['zero', 0],
+    ['65536', 65536],
+    ['a negative port', -8080],
+    ['a fraction', 8080.5],
+    ['NaN', Number.NaN],
+    ['a string', '8080'],
+    ['an undefined value', undefined],
+  ])('rejects %s as the platform port even when model settings are incomplete', (_label, port) => {
+    // Untyped fixture callers: the declared type admits neither these values nor the omission.
+    const malformed = { ...BASE, platformPort: port } as unknown as ManagedConfigInput;
+    const unconfigured = { ...malformed, modelSettings: { ...BASE.modelSettings, baseURL: '' } };
+    const missing: Record<string, unknown> = { ...BASE };
+    delete missing.platformPort;
+
+    for (const input of [malformed, unconfigured, missing as unknown as ManagedConfigInput]) {
+      expect(() => generateManagedConfig(input)).toThrow(TypeError);
+      expect(() => generateManagedConfig(input)).toThrow(
+        new TypeError('Managed overlay platform port must be null or an integer 1..65535'),
+      );
+    }
   });
 });

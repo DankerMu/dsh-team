@@ -25,7 +25,7 @@ export interface StartUserContainerInput {
   readonly transport: TransportContext;
   readonly config: Pick<
     PlatformConfig,
-    'userImage' | 'seccompProfilePath' | 'managedConfigDir' | 'authority' | 'subnetPool'
+    'userImage' | 'seccompProfilePath' | 'managedConfigDir' | 'authority' | 'subnetPool' | 'port'
   >;
   readonly userId: string;
   readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;

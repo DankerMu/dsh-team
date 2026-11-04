@@ -94,6 +94,7 @@ async function quarantineBootstrap(discoveryFailure: boolean, missingBridge = fa
                     managedConfigDir: join(directory, 'managed'),
                     authority: 'team.example:8443',
                     subnetPool: '172.30.0.0/16',
+                    port: 8080,
                   },
                   modelSettings: START_MODEL,
                   modelKey: 'fixture-private-key',
