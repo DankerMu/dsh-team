@@ -1948,6 +1948,7 @@ Evidence (15.2 左侧栏「知识库」面板，#419):
      - 展开 `dsh-team-seed-policies`，看到 2 个文件，截图 `kb-files.png`；
      - 文件名筛选 `expense`，看到 1 个文件 `expense-policy.txt`，截图 `kb-filter.png`；
      - 按库名搜索一个随机字符串，看到「无匹配」，截图 `kb-no-match.png`。
+  - 浏览器页面资源（#418 交接的 spec 第四处，审查轮 1 补入）：三个面板会话收集同源 200 回应的正文（DSH HTML 文档、全部 javascript 脚本含合并插件脚本、`/api/knowledge-base.*` 回答；不含 `/_platform/` 页面、`text/event-stream` 与重定向），断言其中不含已保存的 RAGFlow 密钥、已保存的 RAGFlow 地址、该员工容器的实例令牌和 `<+3 地址>:<端口>`。阳性对照：至少一个 HTML 含 `__DSH_TEAM_KNOWLEDGE_BASE__`，至少一个脚本含 `data-dsh-team-kb-page`，至少一个面板路由回答。取值只在内存里比较，失败信息只写针的种类和 URL path。
   - 所有面板会话：控制台错误 0、页面错误 0、失败请求 0、外部请求 0。每一步都等 `data-dsh-team-kb-state` 离开「加载中」再做下一步，因为被中止的请求在 Playwright 里算失败请求（`net::ERR_ABORTED`）；关闭浏览器之前先停止观察（照 `stack-browser-fixture.ts:186`）。
   - `stackEvidence` 增加单独的 `panel` 证据对象，只记各步的状态名、库数、文件数和面板截图名；面板截图不并入既有的截图列表（`platform-stack.stack.test.ts:374` 对它做精确比较），名字也不与 `failure.png` 等既有名重复。
   - 种子库每个只有 2 个文件，真实数据走不到翻页；翻页由单元测试覆盖，PR 里写明。

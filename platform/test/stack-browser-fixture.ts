@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
-import type { Browser, Page } from '@playwright/test';
+import type { Browser, Page, Response } from '@playwright/test';
 
 // DSH workbench selectors, as scripts/probe-dsh-api-ui.mjs drives the released client.
 const SEND = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
@@ -97,13 +97,15 @@ export async function until(check: () => Promise<boolean>, timeout: number, labe
 /**
  * Logs one employee in through the platform login page and waits for the gateway's real DSH
  * workbench composer; `body` then drives the page. Console, page, request-failure and external
- * request evidence covers the whole session and stops before the browser closes.
+ * request evidence covers the whole session and stops before the browser closes. `onResponse`
+ * sees every response of the observed session, the login and workbench documents included.
  */
 export async function workbenchSession(
   session: StackSession,
   names: StackSessionNames,
   body: (page: Page, shoot: (name: string) => Promise<void>) => Promise<void>,
   launch: () => Promise<Browser> = () => chromium.launch(),
+  onResponse?: (response: Response) => void,
 ): Promise<StackBrowserEvidence> {
   const { base, directory, timeout } = session;
   const platform = new URL(base);
@@ -146,6 +148,9 @@ export async function workbenchSession(
     });
     context.on('requestfailed', (request) => {
       if (observing) failedRequests.push(`${request.method()} ${request.url()}`);
+    });
+    context.on('response', (response) => {
+      if (observing) onResponse?.(response);
     });
     page = await context.newPage();
     page.on('console', (message) => {

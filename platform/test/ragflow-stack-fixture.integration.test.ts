@@ -8,6 +8,7 @@ import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   comparableRagflowStack,
   duringRagflowOutage,
+  instancePlatformEndpoint,
   instanceScript,
   parseInstanceOutput,
   parseRagflowStack,
@@ -334,6 +335,29 @@ it('reads the platform endpoint on the employee bridge and its configured port',
   const endpoint = platformEndpoint(document, '7');
 
   expect(endpoint).toEqual({ host: '172.30.0.19', port: 41234 });
+});
+
+it('reads the endpoint from one inspection of the live platform container', async () => {
+  const calls: string[][] = [];
+  const run: DockerOutput = (args) => {
+    calls.push(args);
+    const networks = { 'dsh-team-net-7': { IPAddress: '172.30.0.19' } };
+    return Promise.resolve(`${JSON.stringify({ networks, env: ['PLATFORM_PORT=41234'] })}\n`);
+  };
+
+  await expect(instancePlatformEndpoint(run, '7')).resolves.toEqual({
+    host: '172.30.0.19',
+    port: 41234,
+  });
+  expect(calls).toEqual([
+    [
+      'container',
+      'inspect',
+      '--format',
+      '{"networks":{{json .NetworkSettings.Networks}},"env":{{json .Config.Env}}}',
+      'dsh-team-platform',
+    ],
+  ]);
 });
 
 it.each([

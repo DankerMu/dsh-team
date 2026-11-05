@@ -131,25 +131,48 @@ const RAGFLOW_SENTINELS = {
 };
 const KNOWLEDGE_BASE_FILES = ['client.js', 'cordis.patch.yml', 'index.js', 'package.json'];
 
-/** Every entry of the canonical knowledge-base copy and its profile registration, as base64. */
-async function knowledgeBaseCopies(lifecycle: UserImageLifecycle, id: string) {
-  const script = `import { readdirSync, readFileSync } from 'node:fs';
-const read = (root) => Object.fromEntries(readdirSync(root, { withFileTypes: true }).map((entry) => [
-  entry.name,
-  entry.isFile() ? readFileSync(root + '/' + entry.name).toString('base64') : null,
-]));
+/**
+ * Every entry of the canonical knowledge-base copy and its profile registration, compared inside
+ * the instance: name, kind, byte size, SHA-256 and whether each needle occurs in its bytes. The
+ * output is a few hundred bytes whatever the file sizes, far below the bounded command cap.
+ */
+async function knowledgeBaseCopies(
+  lifecycle: UserImageLifecycle,
+  id: string,
+  needles: readonly string[],
+) {
+  const script = `import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+const needles = process.argv.slice(1).map((needle) => Buffer.from(needle, 'utf8'));
+const read = (root) => readdirSync(root, { withFileTypes: true })
+  .sort((a, b) => (a.name < b.name ? -1 : 1))
+  .map((entry) => {
+    if (!entry.isFile()) return { name: entry.name, file: false };
+    const bytes = readFileSync(root + '/' + entry.name);
+    return {
+      name: entry.name,
+      file: true,
+      size: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      contains: needles.map((needle) => bytes.includes(needle)),
+    };
+  });
 process.stdout.write(JSON.stringify({
   canonical: read('/opt/dsh-team/knowledge-base'),
   profile: read('/data/home/profiles/web/node_modules/${KNOWLEDGE_BASE}'),
 }));`;
   const result = await lifecycle.commandAsync(
-    ['exec', id, 'node', '--input-type=module', '-e', script],
+    ['exec', id, 'node', '--input-type=module', '-e', script, ...needles],
     15_000,
   );
   if (result.status !== 0 || result.error !== undefined)
     throw new Error('Knowledge-base copy observation failed');
   const read = record(JSON.parse(result.stdout));
-  return { canonical: record(read.canonical), profile: record(read.profile) };
+  const entries = (value: unknown) => {
+    if (!Array.isArray(value)) throw new Error('Knowledge-base copy observation is malformed');
+    return value.map(record);
+  };
+  return { canonical: entries(read.canonical), profile: entries(read.profile) };
 }
 
 /**
@@ -169,16 +192,31 @@ async function requireNoRagflowSettings(
   const rows: unknown = parse(overlay);
   if (!Array.isArray(rows)) throw new Error('Instance overlay is not a row list');
   expect(rows.some((row: unknown) => record(row).id === 'webserver')).toBe(true);
-  const { canonical, profile } = await knowledgeBaseCopies(lifecycle, containerId);
-  expect(Object.keys(canonical).sort()).toEqual(KNOWLEDGE_BASE_FILES);
-  const files = Object.values(canonical).map((bytes) => {
-    if (typeof bytes !== 'string' || bytes === '') throw new Error('Empty knowledge-base file');
-    return Buffer.from(bytes, 'base64').toString('utf8');
-  });
-  expect(profile).toEqual(canonical);
-  for (const sentinel of Object.values(RAGFLOW_SENTINELS))
-    for (const scanned of [env.join('\n'), overlay, ...files])
-      expect(scanned.includes(sentinel)).toBe(false);
+  const sentinels = Object.values(RAGFLOW_SENTINELS);
+  // Positive control for the in-instance scan: the package name occurs in its own manifest.
+  const { canonical, profile } = await knowledgeBaseCopies(lifecycle, containerId, [
+    KNOWLEDGE_BASE,
+    ...sentinels,
+  ]);
+  expect(canonical.map((entry) => entry.name)).toEqual(KNOWLEDGE_BASE_FILES);
+  for (const entry of canonical) {
+    expect(entry.file).toBe(true);
+    if (typeof entry.size !== 'number' || entry.size <= 0)
+      throw new Error('Empty knowledge-base file');
+    expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
+  }
+  const content = (entries: Record<string, unknown>[]) =>
+    entries.map(({ name, file, size, sha256 }) => ({ name, file, size, sha256 }));
+  expect(content(profile)).toEqual(content(canonical));
+  for (const entry of [...canonical, ...profile]) {
+    if (!Array.isArray(entry.contains)) throw new Error('Knowledge-base scan is malformed');
+    const contains: unknown[] = entry.contains;
+    const [packageName, ...found] = contains;
+    if (entry.name === 'package.json') expect(packageName).toBe(true);
+    expect(found).toEqual(sentinels.map(() => false));
+  }
+  for (const sentinel of sentinels)
+    for (const scanned of [env.join('\n'), overlay]) expect(scanned.includes(sentinel)).toBe(false);
 }
 
 // The catalog the image was built from: each entry is a registered card in its image default.

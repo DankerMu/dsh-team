@@ -533,8 +533,8 @@ export async function duringRagflowOutage<T>(outage: Outage, body: () => Promise
   return value as T;
 }
 
-/** Proxy calls from inside one employee instance to the platform on that instance's bridge. */
-export async function instanceProxy(run: DockerOutput, employeeId: string) {
+/** The live platform container's endpoint on one employee's bridge, as `platformEndpoint` reads it. */
+export async function instancePlatformEndpoint(run: DockerOutput, employeeId: string) {
   const document = record(
     JSON.parse(
       await run([
@@ -546,7 +546,12 @@ export async function instanceProxy(run: DockerOutput, employeeId: string) {
       ]),
     ),
   );
-  const endpoint = platformEndpoint({ networks: document.networks, env: document.env }, employeeId);
+  return platformEndpoint({ networks: document.networks, env: document.env }, employeeId);
+}
+
+/** Proxy calls from inside one employee instance to the platform on that instance's bridge. */
+export async function instanceProxy(run: DockerOutput, employeeId: string) {
+  const endpoint = await instancePlatformEndpoint(run, employeeId);
   return async <C extends InstanceCall>(call: C): Promise<FactsByKind[C['kind']]> => {
     const exec = ['exec', '--user', '1001', `dsh-team-u-${employeeId}`, 'node'];
     const script = ['--input-type=module', '-e', instanceScript(call)];

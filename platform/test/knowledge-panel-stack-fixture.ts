@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import { SEED_DATASETS } from '../../scripts/seed-stack.mjs';
+import type { DockerOutput } from './deployment-compose-fixture.ts';
+import { instancePlatformEndpoint, platformRagflowUrl } from './ragflow-stack-fixture.ts';
 import { until, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
@@ -132,6 +134,145 @@ export interface PanelSessionEvidence {
   readonly steps: readonly PanelStep[];
 }
 
+/** The values no page resource of a panel session may carry; compared in memory, never printed. */
+export interface PanelNeedles {
+  readonly ragflowApiKey: string;
+  readonly ragflowBaseUrl: string;
+  readonly instanceToken: string;
+  /** The platform's `<instance +3 address>:<port>`, the authority of the overlay's platformUrl. */
+  readonly platformUrl: string;
+}
+
+const NEEDLE_KINDS = ['ragflowApiKey', 'ragflowBaseUrl', 'instanceToken', 'platformUrl'] as const;
+const TOKEN_VARIABLE = /^DSH_TEAM_INSTANCE_TOKEN=([0-9a-f]{64})$/;
+
+/**
+ * The needles for one employee's panel session, read while its instance runs (the token changes
+ * with every start). The token and RAGFlow key stay in this process's memory; a missing or
+ * malformed token fails with a fixed message.
+ */
+export async function panelNeedles(
+  run: DockerOutput,
+  employeeId: string,
+  stack: { readonly ragflowUrl: string; readonly ragflowApiKey: string },
+): Promise<PanelNeedles> {
+  const env: unknown = JSON.parse(
+    await run([
+      'container',
+      'inspect',
+      '--format',
+      '{{json .Config.Env}}',
+      `dsh-team-u-${employeeId}`,
+    ]),
+  );
+  const tokens = (Array.isArray(env) ? env : []).flatMap((entry: unknown) => {
+    const match = typeof entry === 'string' ? TOKEN_VARIABLE.exec(entry) : null;
+    return match?.[1] === undefined ? [] : [match[1]];
+  });
+  const [instanceToken] = tokens;
+  if (tokens.length !== 1 || instanceToken === undefined)
+    throw new Error('Instance token unavailable');
+  const { host, port } = await instancePlatformEndpoint(run, employeeId);
+  return {
+    ragflowApiKey: stack.ragflowApiKey,
+    ragflowBaseUrl: platformRagflowUrl(stack.ragflowUrl),
+    instanceToken,
+    platformUrl: `${host}:${String(port)}`,
+  };
+}
+
+/** What a session's resource scan reads of one Playwright response. */
+export type ScannedResponse = Pick<Response, 'url' | 'status' | 'headers' | 'body'>;
+type ScannedKind = 'html' | 'script' | 'panel-route';
+const PANEL_ROUTES = new Set(['/api/knowledge-base.datasets', '/api/knowledge-base.documents']);
+
+/**
+ * Same-origin 200 bodies a panel session scans: the panel routes, and the DSH documents and
+ * scripts. Platform pages are left out (a navigated-away login document may lose its body), and so
+ * is the event stream, whose body never completes.
+ */
+export function scannedKind(response: ScannedResponse, base: string): ScannedKind | undefined {
+  const url = new URL(response.url());
+  if (url.origin !== new URL(base).origin || response.status() !== 200) return undefined;
+  if (PANEL_ROUTES.has(url.pathname)) return 'panel-route';
+  if (url.pathname === '/_platform' || url.pathname.startsWith('/_platform/')) return undefined;
+  const type = response.headers()['content-type'] ?? '';
+  if (/^text\/event-stream/i.test(type)) return undefined;
+  if (/^text\/html/i.test(type)) return 'html';
+  return /javascript/i.test(type) ? 'script' : undefined;
+}
+
+// The host half publishes its page global into the DSH document; only client.js renders the page.
+const HTML_MARKER = '__DSH_TEAM_KNOWLEDGE_BASE__';
+const CLIENT_MARKER = 'data-dsh-team-kb-page';
+
+/** What a settled scan found: positive-control counts, and needle kinds by URL path only. */
+export interface ResourceScan {
+  /** DSH documents carrying the knowledge-base page global. */
+  readonly html: number;
+  /** Scripts carrying the knowledge-base client. */
+  readonly clientScripts: number;
+  readonly panelRoutes: number;
+  /** `<needle kind> <path>` for every match; never the needle or the body. */
+  readonly matches: readonly string[];
+  /** Paths of scanned kinds whose body could not be read. */
+  readonly unreadable: readonly string[];
+}
+
+/** Collects the scanned bodies of one session; `settle` must run while the browser is open. */
+export function resourceScan(base: string, needles: PanelNeedles) {
+  const found = { html: 0, clientScripts: 0, panelRoutes: 0 };
+  const matches: string[] = [];
+  const unreadable: string[] = [];
+  const pending: Promise<void>[] = [];
+  let accepting = true;
+  const scan = (kind: ScannedKind, path: string, body: Buffer) => {
+    if (kind === 'html' && body.includes(HTML_MARKER)) found.html++;
+    if (kind === 'script' && body.includes(CLIENT_MARKER)) found.clientScripts++;
+    if (kind === 'panel-route') found.panelRoutes++;
+    for (const needle of NEEDLE_KINDS)
+      if (body.includes(needles[needle])) matches.push(`${needle} ${path}`);
+  };
+  return {
+    onResponse: (response: ScannedResponse) => {
+      const kind = accepting ? scannedKind(response, base) : undefined;
+      if (kind === undefined) return;
+      const path = new URL(response.url()).pathname;
+      pending.push(
+        response.body().then(
+          (body) => {
+            scan(kind, path, body);
+          },
+          () => {
+            unreadable.push(path);
+          },
+        ),
+      );
+    },
+    async settle(): Promise<ResourceScan> {
+      accepting = false;
+      await Promise.all(pending);
+      return { ...found, matches, unreadable };
+    },
+  };
+}
+
+/**
+ * No scanned body carries a needle, and the scan saw the DSH document with the page global, the
+ * knowledge-base client script and at least one panel route answer. Messages name only needle
+ * kinds and paths.
+ */
+export function expectNoPanelSecrets(scan: ResourceScan): void {
+  // Explicit messages: an assertion diff would truncate the list.
+  if (scan.matches.length > 0)
+    throw new Error(`Panel page resources carry a secret: ${scan.matches.join(', ')}`);
+  if (scan.unreadable.length > 0)
+    throw new Error(`Panel page resources left unread: ${scan.unreadable.join(', ')}`);
+  expect(scan.html, 'DSH documents with the knowledge-base global').toBeGreaterThan(0);
+  expect(scan.clientScripts, 'scripts with the knowledge-base client').toBeGreaterThan(0);
+  expect(scan.panelRoutes, 'knowledge-base route answers').toBeGreaterThan(0);
+}
+
 const routeAnswer = (route: string) => (response: Response) =>
   new URL(response.url()).pathname === `/api/knowledge-base.${route}`;
 
@@ -167,13 +308,18 @@ function panelDriver(page: Page, shoot: (name: string) => Promise<void>, timeout
   return { driver, steps };
 }
 
-/** One observed workbench session that opens the 「知识库」 panel and runs `script` on it. */
+/**
+ * One observed workbench session that opens the 「知识库」 panel and runs `script` on it; its
+ * page resources are then scanned for `needles` before the browser closes.
+ */
 async function panelSession(
   session: StackSession,
   label: string,
+  needles: PanelNeedles,
   script: (panel: PanelDriver) => Promise<void>,
 ): Promise<PanelSessionEvidence> {
   let steps: readonly PanelStep[] = [];
+  const resources = resourceScan(session.base, needles);
   const browser = await workbenchSession(
     session,
     { label: `knowledge panel ${label}`, failure: `kb-${label}-failure` },
@@ -181,25 +327,29 @@ async function panelSession(
       const panel = panelDriver(page, shoot, session.timeout);
       steps = panel.steps;
       await script(panel.driver);
+      expectNoPanelSecrets(await resources.settle());
     },
+    undefined,
+    resources.onResponse,
   );
   return { browser, steps };
 }
 
-/** Before RAGFlow is configured: 「知识库未配置」, with no list and no retry. */
-export function notConfiguredPanel(session: StackSession) {
-  return panelSession(session, 'not-configured', async (panel) => {
+/** Before RAGFlow is configured: 「知识库未配置」, with no list and no retry, but 「刷新」. */
+export function notConfiguredPanel(session: StackSession, needles: PanelNeedles) {
+  return panelSession(session, 'not-configured', needles, async (panel) => {
     const opened = await panel.open();
     expect(opened.datasets).toMatchObject({ state: 'not-configured', names: [] });
     expect(opened.datasets?.text).toContain('知识库未配置');
     expect(opened.buttons).not.toContain('重试');
+    expect(opened.buttons).toContain('刷新');
     await panel.record('not-configured', opened, 'kb-not-configured');
   });
 }
 
 /** While RAGFlow is stopped: a retryable failure, and the retry fails again. */
-export function unavailablePanel(session: StackSession) {
-  return panelSession(session, 'unavailable', async (panel) => {
+export function unavailablePanel(session: StackSession, needles: PanelNeedles) {
+  return panelSession(session, 'unavailable', needles, async (panel) => {
     const opened = await panel.open();
     expect(opened.datasets?.state).toBe('failed');
     expect(opened.buttons).toContain('重试');
@@ -210,8 +360,8 @@ export function unavailablePanel(session: StackSession) {
 }
 
 /** After RAGFlow is back: seed libraries, one library's files, a file filter and a no-match search. */
-export function restoredPanel(session: StackSession) {
-  return panelSession(session, 'restored', async (panel) => {
+export function restoredPanel(session: StackSession, needles: PanelNeedles) {
+  return panelSession(session, 'restored', needles, async (panel) => {
     await panel.open();
     const refreshed = await panel.answered('datasets', panel.button('刷新'));
     expect(refreshed.datasets?.state).toBe('list');

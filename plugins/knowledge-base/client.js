@@ -311,10 +311,12 @@
     React.useEffect(() => {
       load(1, undefined);
     }, [load]);
+    // A blank draft clears the filter whatever its length; only a real one can be too long.
     const submit = () => {
-      const bytes = new TextEncoder().encode(draft).byteLength;
-      setTooLong(bytes > MAX_KEYWORDS_BYTES);
-      if (bytes <= MAX_KEYWORDS_BYTES) load(1, isBlank(draft) ? undefined : draft);
+      const blank = isBlank(draft);
+      const refused = !blank && new TextEncoder().encode(draft).byteLength > MAX_KEYWORDS_BYTES;
+      setTooLong(refused);
+      if (!refused) load(1, blank ? undefined : draft);
     };
     const body =
       view.state === 'list'
@@ -416,7 +418,8 @@
             style: CONTROL,
           })
         : null,
-      configured ? button('刷新', load) : null,
+      // Refresh stays when not configured: the administrator may configure RAGFlow meanwhile.
+      button('刷新', load),
     );
     const content =
       view.state === 'list'

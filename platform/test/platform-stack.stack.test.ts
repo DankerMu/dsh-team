@@ -33,6 +33,7 @@ import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import {
   notConfiguredPanel,
+  panelNeedles,
   restoredPanel,
   unavailablePanel,
 } from './knowledge-panel-stack-fixture.ts';
@@ -182,6 +183,7 @@ function panelSession(lifecycle: UserImageLifecycle, base: string, email: string
 async function unconfiguredEmployeePanel(
   lifecycle: UserImageLifecycle,
   administrator: { base: string; cookie: string },
+  secrets: { run: DockerOutput; stack: Stack },
 ): Promise<PanelSessionEvidence> {
   const { base } = administrator;
   const second = await registerDeploymentEmployee(
@@ -190,7 +192,8 @@ async function unconfiguredEmployeePanel(
     'knowledge@deployment.example.test',
   );
   await startInstance(lifecycle, base, second.cookie);
-  const panel = await notConfiguredPanel(panelSession(lifecycle, base, second.email));
+  const needles = await panelNeedles(secrets.run, second.id, secrets.stack);
+  const panel = await notConfiguredPanel(panelSession(lifecycle, base, second.email), needles);
   const disabled = await fetch(`${base}/_platform/api/admin/users/${second.id}/status`, {
     method: 'PUT',
     headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
@@ -245,7 +248,10 @@ async function converse(
   );
   const administrator = { base, cookie: admin.cookie };
   const panel: PanelEvidence = {
-    notConfigured: await unconfiguredEmployeePanel(lifecycle, administrator),
+    notConfigured: await unconfiguredEmployeePanel(lifecycle, administrator, {
+      run,
+      stack: ragflow.stack,
+    }),
   };
   evidence.panel = panel;
   const baseURL = await configureRagflow(administrator, ragflow.stack);
@@ -254,10 +260,16 @@ async function converse(
     await workbenchTurn(lifecycle, run, { base, employee, model, evidence });
     const call = await instanceProxy(run, employee.id);
     const down = await proxyWhileDown(administrator, baseURL, call);
-    panel.unavailable = await unavailablePanel(panelSession(lifecycle, base, employee.email));
+    // The saved RAGFlow address, its key, the instance token and the platform address reach no
+    // page resource of the panel sessions; the values stay in memory.
+    const needles = await panelNeedles(run, employee.id, ragflow.stack);
+    // Compared as a boolean so a failure prints neither value.
+    expect(needles.ragflowBaseUrl === baseURL).toBe(true);
+    const session = panelSession(lifecycle, base, employee.email);
+    panel.unavailable = await unavailablePanel(session, needles);
     evidence.proxy = { ...down, ...(await proxyAfterRestore(administrator, outage, call)) };
     // Browsing ignores the retrieval threshold proxyAfterRestore has just saved.
-    panel.restored = await restoredPanel(panelSession(lifecycle, base, employee.email));
+    panel.restored = await restoredPanel(session, needles);
   });
 }
 

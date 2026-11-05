@@ -55,17 +55,21 @@ function install(value, present = true) {
 let calls;
 let responses;
 let consoleSpies;
+/** When set, the fetch mock ignores its abort signal, as a fetch that already has its answer. */
+let ignoreAbort;
 const mounted = [];
 beforeEach(() => {
   calls = [];
   responses = [];
+  ignoreAbort = false;
   vi.stubGlobal(
     'fetch',
     vi.fn((url, init) => {
       const deferred = Promise.withResolvers();
-      init.signal.addEventListener('abort', () =>
-        deferred.reject(new DOMException('aborted', 'AbortError')),
-      );
+      if (!ignoreAbort)
+        init.signal.addEventListener('abort', () =>
+          deferred.reject(new DOMException('aborted', 'AbortError')),
+        );
       calls.push({ url, init, deferred });
       return deferred.promise;
     }),
@@ -248,13 +252,28 @@ describe('dataset list', () => {
     expect(texts.get('not-configured')).toContain('知识库未配置');
   });
 
-  it('shows not-configured without a list, a search box, a refresh or a retry button', async () => {
+  it('shows not-configured without a list, a search box or a retry button, but with refresh', async () => {
     const page = renderPage();
     await respond(0, { result: 'not-configured' });
 
     expect(page.state()).toBe('not-configured');
-    expect(page.view.root.findAll((node) => node.type === 'button')).toEqual([]);
+    const buttons = page.view.root.findAll((node) => node.type === 'button');
+    expect(buttons.map((node) => textOf(node))).toEqual(['刷新']);
     expect(page.inputs('按库名搜索')).toEqual([]);
+  });
+
+  it('lists the libraries after refresh once the route answers ok', async () => {
+    const page = renderPage();
+    await respond(0, { result: 'not-configured' });
+
+    await page.click(page.view.root, '刷新');
+    expect(calls.map(({ url }) => url)).toEqual([DATASETS_URL, DATASETS_URL]);
+    expect(page.state()).toBe('loading');
+    await respond(1, SEEDED);
+
+    expect(page.state()).toBe('list');
+    expect(page.inputs('按库名搜索')).toHaveLength(1);
+    expect(page.text()).toContain('Seed-Policies');
   });
 
   it.each([
@@ -332,10 +351,6 @@ describe('dataset list', () => {
     await page.click(page.view.root, '刷新');
     expect(calls[0].init.signal.aborted).toBe(true);
     await respond(1, { result: 'ok', datasets: [] });
-    expect(page.state()).toBe('empty');
-
-    // The superseded answer arrives late (a fetch that ignored its abort) and changes nothing.
-    calls[0].deferred = Promise.withResolvers();
     expect(page.state()).toBe('empty');
   });
 
@@ -589,5 +604,55 @@ describe('expanded library', () => {
     );
     expect(contracts.props[STATE]).toBe('empty');
     expect(page.fileState()).toBe('list');
+  });
+});
+
+/** The blank check precedes the byte limit: a blank draft only ever clears the filter. */
+describe('filter length', () => {
+  it('clears a blank filter over 256 UTF-8 bytes instead of calling it too long', async () => {
+    const page = await expandedPolicies();
+    await respond(1, { result: 'ok', total: 1, documents: documents(1) });
+    await page.type('按文件名筛选', 'expense');
+    await page.submit(POLICIES);
+    await respond(2, { result: 'ok', total: 1, documents: documents(1) });
+    const blank = '　'.repeat(100);
+    expect(new TextEncoder().encode(blank).byteLength).toBeGreaterThan(256);
+
+    await page.type('按文件名筛选', blank);
+    await page.submit(POLICIES);
+    expect(calls[3].url).toBe(documentsUrl(POLICIES, 1));
+    expect(
+      page.files().findAll((node) => node.props['data-dsh-team-kb-hint'] === 'keywords-too-long'),
+    ).toEqual([]);
+  });
+});
+
+/** Requests whose fetch ignores its abort signal: only the latest answer may render. */
+describe('late superseded answers', () => {
+  it('never renders a superseded list answer that arrives after the latest one', async () => {
+    ignoreAbort = true;
+    const page = renderPage();
+    await page.click(page.view.root, '刷新');
+    await respond(1, { result: 'ok', datasets: [] });
+    expect(page.state()).toBe('empty');
+
+    // Request A ignored its abort and answers last; its body is read and then dropped.
+    await respond(0, SEEDED);
+    expect(page.state()).toBe('empty');
+    expect(page.text()).not.toContain('Seed-Policies');
+  });
+
+  it('never renders a superseded documents answer that arrives after the latest one', async () => {
+    ignoreAbort = true;
+    const page = await expandedPolicies();
+    await page.type('按文件名筛选', 'expense');
+    await page.submit(POLICIES);
+    await respond(2, { result: 'ok', total: 1, documents: documents(1) });
+    expect(page.fileNames()).toEqual(['file-0.txt']);
+
+    // Request A (the unfiltered first page) ignored its abort and answers last.
+    await respond(1, { result: 'ok', total: 45, documents: documents(20, 100) });
+    expect(page.fileNames()).toEqual(['file-0.txt']);
+    expect(page.fileText()).toContain('第 1 / 1 页');
   });
 });
