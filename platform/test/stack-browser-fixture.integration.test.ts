@@ -4,7 +4,11 @@ import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { Browser } from '@playwright/test';
 import { afterEach, expect, it } from 'vitest';
-import { converseInWorkbench, StackWorkbenchFailure } from './stack-browser-fixture.ts';
+import {
+  converseInWorkbench,
+  StackWorkbenchFailure,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
 
 const REPLY = 'owned-reply-nonce';
 const directories: string[] = [];
@@ -59,6 +63,7 @@ function stubBrowser(options: StubOptions) {
   const page = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     goto() {
+      handlers.get('response')?.('login document');
       if (options.gotoFailure === undefined) return Promise.resolve();
       handlers.get('console')?.({ type: () => 'error', text: () => 'stub console failure' });
       handlers.get('pageerror')?.(new Error('stub page failure'));
@@ -100,7 +105,8 @@ function stubBrowser(options: StubOptions) {
     close: () =>
       options.closeFailure === undefined ? Promise.resolve() : Promise.reject(options.closeFailure),
   };
-  return { events, launch: () => Promise.resolve(browser as unknown as Browser) };
+  const emit = (name: string, value: unknown) => handlers.get(name)?.(value);
+  return { events, emit, launch: () => Promise.resolve(browser as unknown as Browser) };
 }
 
 async function conversation(turnComplete: () => Promise<void>, timeout = 5_000) {
@@ -197,4 +203,23 @@ it('keeps the original failure and its browser evidence when closing the browser
     failedRequests: ['GET http://stub/asset.js'],
   });
   expect(JSON.stringify(failure.evidence)).not.toContain('stub-password');
+});
+
+it('hands every response of the observed session to the observer, and none after teardown', async () => {
+  const stub = stubBrowser({ onSend: () => undefined });
+  const seen: unknown[] = [];
+  const session = await conversation(() => Promise.resolve());
+  await workbenchSession(
+    session,
+    { label: 'observer', failure: 'observer-failure' },
+    () => {
+      stub.emit('response', 'workbench document');
+      return Promise.resolve();
+    },
+    stub.launch,
+    (response) => seen.push(response),
+  );
+  stub.emit('response', 'teardown response');
+
+  expect(seen).toEqual(['login document', 'workbench document']);
 });

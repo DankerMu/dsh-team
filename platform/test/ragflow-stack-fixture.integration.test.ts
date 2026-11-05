@@ -5,9 +5,11 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it, vi } from 'vitest';
 import { SEED_DATASETS, readSeedDatasets } from '../../scripts/seed-stack.mjs';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
+import type { AsyncDockerCommand, DockerCommandResult } from './docker-command.ts';
 import {
   comparableRagflowStack,
   duringRagflowOutage,
+  instancePlatformEndpoint,
   instanceScript,
   parseInstanceOutput,
   parseRagflowStack,
@@ -334,6 +336,30 @@ it('reads the platform endpoint on the employee bridge and its configured port',
   const endpoint = platformEndpoint(document, '7');
 
   expect(endpoint).toEqual({ host: '172.30.0.19', port: 41234 });
+});
+
+it('reads the endpoint from one inspection of the live platform container', async () => {
+  const calls: (readonly string[])[] = [];
+  const command: AsyncDockerCommand = (args) => {
+    calls.push(args);
+    const networks = { 'dsh-team-net-7': { IPAddress: '172.30.0.19' } };
+    const stdout = `${JSON.stringify({ networks, env: ['PLATFORM_PORT=41234'] })}\n`;
+    return Promise.resolve({ status: 0, stdout, stderr: '' });
+  };
+
+  await expect(instancePlatformEndpoint(command, '7')).resolves.toEqual({
+    host: '172.30.0.19',
+    port: 41234,
+  });
+  expect(calls).toEqual([
+    [
+      'container',
+      'inspect',
+      '--format',
+      '{"networks":{{json .NetworkSettings.Networks}},"env":{{json .Config.Env}}}',
+      'dsh-team-platform',
+    ],
+  ]);
 });
 
 it.each([
@@ -685,3 +711,40 @@ it('starts exactly once when the body restores before the outer restoration', as
   expect(await outage.restore()).toBeUndefined();
   expect(docker.calls).toEqual([...STOPPED, 'start ragflow-cpu-id']);
 });
+
+const ENV_SECRET = 'PLATFORM_SECRET_SENTINEL=env-secret-nonce';
+const FAILED_INSPECTIONS: [string, () => Promise<DockerCommandResult>][] = [
+  [
+    'a command error after a partial write',
+    () =>
+      Promise.resolve({
+        status: null,
+        stdout: `{"env":["${ENV_SECRET}"`,
+        stderr: ENV_SECRET,
+        error: new Error(`spawnSync docker ENOBUFS ${ENV_SECRET}`),
+      }),
+  ],
+  [
+    'a nonzero status',
+    () => Promise.resolve({ status: 1, stdout: `["${ENV_SECRET}"]`, stderr: ENV_SECRET }),
+  ],
+  [
+    'malformed JSON',
+    () => Promise.resolve({ status: 0, stdout: `{"env":["${ENV_SECRET}"]`, stderr: '' }),
+  ],
+  ['a rejected command', () => Promise.reject(new Error(`docker failed ${ENV_SECRET}`))],
+];
+
+it.each(FAILED_INSPECTIONS)(
+  'reports %s as the fixed endpoint failure, without the output or a cause',
+  async (_label, command) => {
+    const error: unknown = await instancePlatformEndpoint(command, '7').catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Platform endpoint on the employee bridge unavailable');
+    expect((error as Error).cause).toBeUndefined();
+    expect(String(error)).not.toContain('env-secret-nonce');
+  },
+);

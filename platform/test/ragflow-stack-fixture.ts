@@ -7,7 +7,8 @@ import { EXPECTED_RAGFLOW_VERSION } from '../../scripts/test-stack-prerequisites
 import type { ConfiguredStack } from '../../scripts/test-stack-prerequisites.mjs';
 import { RAGFLOW_VERSION_SCHEMA } from '../src/ragflow-proxy/index.ts';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
-import { record } from './docker-cleanup.ts';
+import { output, record } from './docker-cleanup.ts';
+import type { AsyncDockerCommand } from './docker-command.ts';
 
 /** The single closed result set the proxy routes declare. */
 const RESULTS = RAGFLOW_VERSION_SCHEMA.properties.result.enum;
@@ -236,6 +237,8 @@ export function parseInstanceOutput<K extends Kind>(stdout: string, kind: K): Fa
   return facts as unknown as FactsByKind[K];
 }
 
+const ENDPOINT_UNAVAILABLE = 'Platform endpoint on the employee bridge unavailable';
+
 /** A JSON object member, or undefined when `value` is not an object. */
 function member(value: unknown, key: string): unknown {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
@@ -255,7 +258,7 @@ export function platformEndpoint(
     .map((entry) => /^PLATFORM_PORT=([1-9]\d{0,4})$/.exec(String(entry)))
     .find((match) => match !== null);
   if (address === null || Number(address[1]) % 16 !== 3 || port === undefined)
-    throw new Error('Platform endpoint on the employee bridge unavailable');
+    throw new Error(ENDPOINT_UNAVAILABLE);
   return { host: address[0], port: Number(port[1]) };
 }
 
@@ -533,20 +536,45 @@ export async function duringRagflowOutage<T>(outage: Outage, body: () => Promise
   return value as T;
 }
 
-/** Proxy calls from inside one employee instance to the platform on that instance's bridge. */
-export async function instanceProxy(run: DockerOutput, employeeId: string) {
-  const document = record(
-    JSON.parse(
-      await run([
-        'container',
-        'inspect',
-        '--format',
-        '{"networks":{{json .NetworkSettings.Networks}},"env":{{json .Config.Env}}}',
-        PLATFORM,
-      ]),
-    ),
+/**
+ * One `docker container inspect --format` result as JSON. A container environment may carry
+ * secrets, so every failure (a rejected or failed command, malformed JSON) is the fixed `failure`
+ * message without a cause, never the command's output.
+ */
+export async function inspectJson(
+  command: AsyncDockerCommand,
+  format: string,
+  name: string,
+  failure: string,
+): Promise<unknown> {
+  const result = await command(['container', 'inspect', '--format', format, name], 30_000).catch(
+    () => undefined,
   );
-  const endpoint = platformEndpoint({ networks: document.networks, env: document.env }, employeeId);
+  if (result === undefined || result.error !== undefined || result.status !== 0)
+    throw new Error(failure);
+  try {
+    return JSON.parse(result.stdout) as unknown;
+  } catch {
+    // The parse error would quote part of the output.
+    throw new Error(failure);
+  }
+}
+
+/** The live platform container's endpoint on one employee's bridge, as `platformEndpoint` reads it. */
+export async function instancePlatformEndpoint(command: AsyncDockerCommand, employeeId: string) {
+  const format = '{"networks":{{json .NetworkSettings.Networks}},"env":{{json .Config.Env}}}';
+  const document = await inspectJson(command, format, PLATFORM, ENDPOINT_UNAVAILABLE);
+  return platformEndpoint(
+    { networks: member(document, 'networks'), env: member(document, 'env') },
+    employeeId,
+  );
+}
+
+/** Proxy calls from inside one employee instance to the platform on that instance's bridge. */
+export async function instanceProxy(command: AsyncDockerCommand, employeeId: string) {
+  const endpoint = await instancePlatformEndpoint(command, employeeId);
+  const run: DockerOutput = async (args, timeout = 30_000) =>
+    output(await command(args, timeout), args);
   return async <C extends InstanceCall>(call: C): Promise<FactsByKind[C['kind']]> => {
     const exec = ['exec', '--user', '1001', `dsh-team-u-${employeeId}`, 'node'];
     const script = ['--input-type=module', '-e', instanceScript(call)];
