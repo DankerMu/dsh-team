@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { DockerOutput } from './deployment-compose-fixture.ts';
+import type { AsyncDockerCommand, DockerCommandResult } from './docker-command.ts';
 import {
   expectNoPanelSecrets,
   panelNeedles,
@@ -108,12 +108,17 @@ const PLATFORM_DOCUMENT = {
 };
 
 /** A canned `docker container inspect` for the employee container and the platform. */
-function inspections(employeeEnv: unknown) {
-  const calls: string[][] = [];
-  const run: DockerOutput = (args) => {
+function inspections(
+  employee: unknown,
+  result: (stdout: string) => DockerCommandResult = (stdout) => ({ status: 0, stdout, stderr: '' }),
+) {
+  const calls: (readonly string[])[] = [];
+  const run: AsyncDockerCommand = (args) => {
     calls.push(args);
-    const document = args.at(-1) === 'dsh-team-platform' ? PLATFORM_DOCUMENT : employeeEnv;
-    return Promise.resolve(`${JSON.stringify(document)}\n`);
+    if (args.at(-1) === 'dsh-team-platform')
+      return Promise.resolve({ status: 0, stdout: JSON.stringify(PLATFORM_DOCUMENT), stderr: '' });
+    const stdout = typeof employee === 'string' ? employee : `${JSON.stringify(employee)}\n`;
+    return Promise.resolve(result(stdout));
   };
   return { calls, run };
 }
@@ -150,6 +155,34 @@ it.each([
   await expect(panelNeedles(run, '7', stack)).rejects.toThrow(/^Instance token unavailable$/);
 });
 
+const ENVIRONMENT = `["DSH_TEAM_INSTANCE_TOKEN=${TOKEN}","DSH_TEAM_MODEL_API_KEY=model-nonce"]`;
+it.each([
+  [
+    'a command error after a partial write',
+    inspections(ENVIRONMENT.slice(0, -2), (stdout) => ({
+      status: null,
+      stdout,
+      stderr: stdout,
+      error: new Error(`spawnSync docker ENOBUFS ${stdout}`),
+    })),
+  ],
+  ['a nonzero status', inspections(ENVIRONMENT, (stdout) => ({ status: 1, stdout, stderr: '' }))],
+  ['malformed JSON', inspections(`${ENVIRONMENT.slice(0, -1)},`)],
+])(
+  'reports %s as the fixed token failure, without the environment or a cause',
+  async (_label, { calls, run }) => {
+    const stack = { ragflowUrl: 'http://127.0.0.1:9380', ragflowApiKey: 'ragflow-key-nonce' };
+    const error: unknown = await panelNeedles(run, '7', stack).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('Instance token unavailable');
+    expect((error as Error).cause).toBeUndefined();
+    for (const secret of [TOKEN, 'model-nonce', 'DSH_TEAM_INSTANCE_TOKEN'])
+      expect(String(error)).not.toContain(secret);
+    expect(calls.map((args) => args.at(-1))).toEqual(['dsh-team-u-7']);
+  },
+);
+
 /** A Playwright-like response; `body` rejects when `bytes` is an Error. */
 function response(
   path: string,
@@ -184,6 +217,11 @@ it.each([
   ['a platform script', response('/_platform/assets/a.js', 'text/javascript', ''), undefined],
   ['the event stream', response('/plugins/events', 'text/event-stream', ''), undefined],
   ['a redirect', response('/', 'text/html', '', { status: 302 }), undefined],
+  [
+    'a failed panel route answer',
+    response('/api/knowledge-base.datasets', 'text/plain', '', { status: 500 }),
+    'panel-route',
+  ],
   ['a foreign origin', response('/', 'text/html', '', { origin: 'http://127.0.0.1:1' }), undefined],
   ['a stylesheet', response('/assets/index.css', 'text/css', ''), undefined],
   ['another API answer', response('/api/session', 'application/json', ''), undefined],
@@ -298,4 +336,20 @@ it('does not count a document without the global or a script without the client'
   scan.onResponse(response('/api/knowledge-base.documents', 'application/json', '{}'));
 
   await expect(scan.settle()).resolves.toEqual({ ...CLEAN, html: 0, clientScripts: 0 });
+});
+
+it('reports a needle in a panel route answer whatever its status', async () => {
+  const scan = resourceScan(BASE, NEEDLES);
+  for (const observed of sessionResponses()) scan.onResponse(observed);
+  const failed = `{"error":"${NEEDLES.instanceToken}"}`;
+  scan.onResponse(
+    response('/api/knowledge-base.documents', 'application/json', failed, { status: 502 }),
+  );
+  scan.onResponse(
+    response('/assets/a.js', 'text/javascript', NEEDLES.instanceToken, { status: 404 }),
+  );
+
+  const settled = await scan.settle();
+  expect(settled.matches).toEqual(['instanceToken /api/knowledge-base.documents']);
+  expect(settled.panelRoutes).toBe(2);
 });

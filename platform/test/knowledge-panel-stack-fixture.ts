@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import { SEED_DATASETS } from '../../scripts/seed-stack.mjs';
-import type { DockerOutput } from './deployment-compose-fixture.ts';
-import { instancePlatformEndpoint, platformRagflowUrl } from './ragflow-stack-fixture.ts';
+import type { AsyncDockerCommand } from './docker-command.ts';
+import {
+  inspectJson,
+  instancePlatformEndpoint,
+  platformRagflowUrl,
+} from './ragflow-stack-fixture.ts';
 import { until, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
@@ -144,6 +148,7 @@ export interface PanelNeedles {
 }
 
 const NEEDLE_KINDS = ['ragflowApiKey', 'ragflowBaseUrl', 'instanceToken', 'platformUrl'] as const;
+const TOKEN_UNAVAILABLE = 'Instance token unavailable';
 const TOKEN_VARIABLE = /^DSH_TEAM_INSTANCE_TOKEN=([0-9a-f]{64})$/;
 
 /**
@@ -152,27 +157,19 @@ const TOKEN_VARIABLE = /^DSH_TEAM_INSTANCE_TOKEN=([0-9a-f]{64})$/;
  * malformed token fails with a fixed message.
  */
 export async function panelNeedles(
-  run: DockerOutput,
+  command: AsyncDockerCommand,
   employeeId: string,
   stack: { readonly ragflowUrl: string; readonly ragflowApiKey: string },
 ): Promise<PanelNeedles> {
-  const env: unknown = JSON.parse(
-    await run([
-      'container',
-      'inspect',
-      '--format',
-      '{{json .Config.Env}}',
-      `dsh-team-u-${employeeId}`,
-    ]),
-  );
+  const container = `dsh-team-u-${employeeId}`;
+  const env = await inspectJson(command, '{{json .Config.Env}}', container, TOKEN_UNAVAILABLE);
   const tokens = (Array.isArray(env) ? env : []).flatMap((entry: unknown) => {
     const match = typeof entry === 'string' ? TOKEN_VARIABLE.exec(entry) : null;
     return match?.[1] === undefined ? [] : [match[1]];
   });
   const [instanceToken] = tokens;
-  if (tokens.length !== 1 || instanceToken === undefined)
-    throw new Error('Instance token unavailable');
-  const { host, port } = await instancePlatformEndpoint(run, employeeId);
+  if (tokens.length !== 1 || instanceToken === undefined) throw new Error(TOKEN_UNAVAILABLE);
+  const { host, port } = await instancePlatformEndpoint(command, employeeId);
   return {
     ragflowApiKey: stack.ragflowApiKey,
     ragflowBaseUrl: platformRagflowUrl(stack.ragflowUrl),
@@ -187,14 +184,16 @@ type ScannedKind = 'html' | 'script' | 'panel-route';
 const PANEL_ROUTES = new Set(['/api/knowledge-base.datasets', '/api/knowledge-base.documents']);
 
 /**
- * Same-origin 200 bodies a panel session scans: the panel routes, and the DSH documents and
+ * Same-origin bodies a panel session scans: every panel route answer, and 200 DSH documents and
  * scripts. Platform pages are left out (a navigated-away login document may lose its body), and so
  * is the event stream, whose body never completes.
  */
 export function scannedKind(response: ScannedResponse, base: string): ScannedKind | undefined {
   const url = new URL(response.url());
-  if (url.origin !== new URL(base).origin || response.status() !== 200) return undefined;
+  if (url.origin !== new URL(base).origin) return undefined;
+  // A panel route's body is scanned whatever its status; documents and scripts only when 200.
   if (PANEL_ROUTES.has(url.pathname)) return 'panel-route';
+  if (response.status() !== 200) return undefined;
   if (url.pathname === '/_platform' || url.pathname.startsWith('/_platform/')) return undefined;
   const type = response.headers()['content-type'] ?? '';
   if (/^text\/event-stream/i.test(type)) return undefined;

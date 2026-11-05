@@ -183,7 +183,7 @@ function panelSession(lifecycle: UserImageLifecycle, base: string, email: string
 async function unconfiguredEmployeePanel(
   lifecycle: UserImageLifecycle,
   administrator: { base: string; cookie: string },
-  secrets: { run: DockerOutput; stack: Stack },
+  stack: Stack,
 ): Promise<PanelSessionEvidence> {
   const { base } = administrator;
   const second = await registerDeploymentEmployee(
@@ -192,7 +192,7 @@ async function unconfiguredEmployeePanel(
     'knowledge@deployment.example.test',
   );
   await startInstance(lifecycle, base, second.cookie);
-  const needles = await panelNeedles(secrets.run, second.id, secrets.stack);
+  const needles = await panelNeedles(lifecycle.commandAsync, second.id, stack);
   const panel = await notConfiguredPanel(panelSession(lifecycle, base, second.email), needles);
   const disabled = await fetch(`${base}/_platform/api/admin/users/${second.id}/status`, {
     method: 'PUT',
@@ -248,21 +248,18 @@ async function converse(
   );
   const administrator = { base, cookie: admin.cookie };
   const panel: PanelEvidence = {
-    notConfigured: await unconfiguredEmployeePanel(lifecycle, administrator, {
-      run,
-      stack: ragflow.stack,
-    }),
+    notConfigured: await unconfiguredEmployeePanel(lifecycle, administrator, ragflow.stack),
   };
   evidence.panel = panel;
   const baseURL = await configureRagflow(administrator, ragflow.stack);
   const outage = ragflowOutage(run, ragflow.stack, ragflow.seed);
   await duringRagflowOutage(outage, async () => {
     await workbenchTurn(lifecycle, run, { base, employee, model, evidence });
-    const call = await instanceProxy(run, employee.id);
+    const call = await instanceProxy(lifecycle.commandAsync, employee.id);
     const down = await proxyWhileDown(administrator, baseURL, call);
     // The saved RAGFlow address, its key, the instance token and the platform address reach no
     // page resource of the panel sessions; the values stay in memory.
-    const needles = await panelNeedles(run, employee.id, ragflow.stack);
+    const needles = await panelNeedles(lifecycle.commandAsync, employee.id, ragflow.stack);
     // Compared as a boolean so a failure prints neither value.
     expect(needles.ragflowBaseUrl === baseURL).toBe(true);
     const session = panelSession(lifecycle, base, employee.email);
