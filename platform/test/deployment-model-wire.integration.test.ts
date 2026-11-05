@@ -216,3 +216,98 @@ it('rejects a malformed port argument before listening', async () => {
   expect(code).not.toBe(0);
   expect(stderr).toContain('Invalid owned model port');
 });
+
+const HOLD = 'hold-nonce-7';
+const held = (tools?: unknown[], extra: unknown[] = []) => ({
+  ...userTurn(tools, extra),
+  messages: [{ role: 'user', content: `please ${HOLD}` }, ...extra],
+});
+const health = async (origin: string) => (await fetch(`${origin}/health`)).json() as unknown;
+const release = (origin: string) => fetch(`${origin}/release`, { method: 'POST' });
+
+it('holds only the first write-capable hold request without a tool result until released', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, hold: HOLD });
+  expect(await health(origin)).toEqual({
+    ready: true,
+    markedRequests: 0,
+    requests: 0,
+    toolResults: 0,
+    held: 0,
+  });
+  const first = complete(origin, held([WRITE_TOOL]));
+  for (;;) {
+    const observed = (await health(origin)) as { held: number };
+    if (observed.held === 1) break;
+    await delay(20);
+  }
+  // Title requests, tool-result rounds, unmarked turns and a second hold request answer at once.
+  expect(await streamed(await complete(origin, held()))).toEqual(replyChunks);
+  expect(await streamed(await complete(origin, held([WRITE_TOOL], toolResult)))).toEqual(
+    replyChunks,
+  );
+  expect(await streamed(await complete(origin, userTurn([WRITE_TOOL])))).toHaveLength(2);
+  expect(await streamed(await complete(origin, held([WRITE_TOOL])))).toHaveLength(2);
+  expect(await health(origin)).toMatchObject({ held: 1, requests: 5 });
+  const released = await release(origin);
+  expect(released.status).toBe(200);
+  expect(await released.json()).toEqual({ released: 1 });
+  expect(await streamed(await first)).toEqual([
+    chunk({ index: 0, delta: { role: 'assistant', tool_calls: [writeCall] }, finish_reason: null }),
+    chunk({ index: 0, delta: {}, finish_reason: 'tool_calls' }),
+  ]);
+  expect(await health(origin)).toMatchObject({ held: 0 });
+  // Released and disarmed: a later hold request answers at once and a second release is empty.
+  expect(await streamed(await complete(origin, held([WRITE_TOOL])))).toHaveLength(2);
+  expect(await (await release(origin)).json()).toEqual({ released: 0 });
+});
+
+it('keeps release unavailable and health unchanged without a hold', async () => {
+  const origin = await start(BASE);
+  const rejected = await release(origin);
+  expect(rejected.status).toBe(403);
+  await rejected.arrayBuffer();
+  await (await complete(origin, held([WRITE_TOOL]))).arrayBuffer();
+  expect(await health(origin)).toEqual({
+    ready: true,
+    markedRequests: 0,
+    requests: 1,
+    toolResults: 0,
+  });
+});
+
+it('counts requests whose messages carry a forbidden string', async () => {
+  const origin = await start({ ...BASE, forbidden: ['kb-scope', '知识库范围'] });
+  for (const content of [
+    '/kb-scope {}',
+    '知识库范围：全部',
+    'unrelated',
+    `${BASE.marker} kb-scope`,
+  ])
+    await (
+      await complete(origin, {
+        model: BASE.model,
+        stream: true,
+        messages: [{ role: 'user', content }],
+      })
+    ).arrayBuffer();
+  expect(await health(origin)).toEqual({
+    ready: true,
+    markedRequests: 1,
+    requests: 4,
+    toolResults: 0,
+    forbiddenRequests: 3,
+  });
+});
+
+it.each([
+  ['a non-string hold', { hold: 7 }],
+  ['an empty hold', { hold: '' }],
+  ['a non-array forbidden', { forbidden: 'kb-scope' }],
+  ['a non-string forbidden entry', { forbidden: ['kb-scope', 1] }],
+  ['an empty forbidden entry', { forbidden: [''] }],
+])('rejects %s before listening', async (_name, extra) => {
+  const { closed } = await launch({ ...BASE, ...extra }, await unusedPort());
+  const { code, stderr } = await closed;
+  expect(code).not.toBe(0);
+  expect(stderr).toContain('Invalid owned model configuration');
+});

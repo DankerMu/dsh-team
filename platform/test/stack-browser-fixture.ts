@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
-import type { Browser, Page, Response } from '@playwright/test';
+import type { Browser, Page, Request, Response } from '@playwright/test';
 
 // DSH workbench selectors, as scripts/probe-dsh-api-ui.mjs drives the released client.
 const SEND = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
@@ -84,7 +84,7 @@ const COMPOSER_STATE = `(() => {
   notice.click();
   return 'notice';
 })()`;
-const composerState = (page: Page) => page.evaluate<string>(COMPOSER_STATE);
+export const composerState = (page: Page) => page.evaluate<string>(COMPOSER_STATE);
 
 export async function until(check: () => Promise<boolean>, timeout: number, label: string) {
   const deadline = performance.now() + timeout;
@@ -99,11 +99,17 @@ export async function until(check: () => Promise<boolean>, timeout: number, labe
  * workbench composer; `body` then drives the page. Console, page, request-failure and external
  * request evidence covers the whole session and stops before the browser closes. `onResponse`
  * sees every response of the observed session, the login and workbench documents included.
+ * `reload` reloads the page and waits for the composer again; only the requests still open when
+ * it navigates (the event stream, for one) may fail without counting, as at teardown.
  */
 export async function workbenchSession(
   session: StackSession,
   names: StackSessionNames,
-  body: (page: Page, shoot: (name: string) => Promise<void>) => Promise<void>,
+  body: (
+    page: Page,
+    shoot: (name: string) => Promise<void>,
+    reload: () => Promise<void>,
+  ) => Promise<void>,
   launch: () => Promise<Browser> = () => chromium.launch(),
   onResponse?: (response: Response) => void,
 ): Promise<StackBrowserEvidence> {
@@ -117,6 +123,8 @@ export async function workbenchSession(
   let requests = 0;
   let websockets = 0;
   let observing = true;
+  const open = new Set<Request>();
+  const cancelled = new Set<Request>();
   const foreign = (url: string, scheme: 'http:' | 'ws:') => {
     const target = new URL(url);
     if (target.protocol !== scheme || target.host !== platform.host) externalRequests.push(url);
@@ -144,9 +152,15 @@ export async function workbenchSession(
     context.on('request', (request) => {
       if (!observing) return;
       requests++;
+      open.add(request);
       foreign(request.url(), 'http:');
     });
+    context.on('requestfinished', (request) => {
+      open.delete(request);
+    });
     context.on('requestfailed', (request) => {
+      open.delete(request);
+      if (cancelled.delete(request)) return;
       if (observing) failedRequests.push(`${request.method()} ${request.url()}`);
     });
     context.on('response', (response) => {
@@ -174,8 +188,14 @@ export async function workbenchSession(
       page.getByRole('button', { name: '登录', exact: true }).click(),
     ]);
     const workbench = page;
-    await until(async () => (await composerState(workbench)) === 'ready', timeout, 'composer');
-    await body(workbench, shoot);
+    const ready = () =>
+      until(async () => (await composerState(workbench)) === 'ready', timeout, 'composer');
+    await ready();
+    await body(workbench, shoot, async () => {
+      for (const request of open) cancelled.add(request);
+      await workbench.reload({ waitUntil: 'load', timeout });
+      await ready();
+    });
   } catch (error) {
     // Best effort: a failed screenshot must not replace the session's own failure.
     await shoot(names.failure).catch(() => undefined);

@@ -35,8 +35,27 @@ export interface KbReact {
   useCallback<T>(callback: T, deps: readonly unknown[]): T;
 }
 
+/** The `kbScope` wire view as the composer control reads it. */
+export interface KbScopeView {
+  readonly child: boolean;
+  readonly selection: string[] | null;
+}
+
+/** Structural subset of the released `remote.commands.execute` RemoteResult<CommandExecution>. */
+export type KbCommandResult =
+  | {
+      readonly ok: true;
+      // A JSON carrier may deliver an absent execution or result as null.
+      readonly value: { readonly result?: { readonly kind: string } | null } | null | undefined;
+    }
+  | { readonly ok: false };
+
 interface KbSlots {
-  inject(name: 'main' | 'sidebar.panellist', install: () => () => void): void;
+  inject(
+    name:
+      'main' | 'sidebar.panellist' | 'conversation.input.left' | 'conversation.chat.commandview',
+    install: () => () => void,
+  ): void;
   register(entry: Record<string, unknown>, component: (props: never) => unknown): () => void;
 }
 
@@ -48,7 +67,18 @@ declare global {
         id: string;
         factory: (require: (id: 'react') => KbReact) => {
           inject: string[];
-          apply(ctx: { slots: KbSlots }): void;
+          apply(ctx: {
+            slots: KbSlots;
+            remote: {
+              commands: {
+                execute(
+                  sessionId: string,
+                  line: string,
+                  attachments: readonly never[],
+                ): Promise<KbCommandResult>;
+              };
+            };
+          }): void;
         };
       }): void;
     };

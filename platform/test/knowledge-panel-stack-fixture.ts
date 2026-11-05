@@ -272,10 +272,11 @@ export function expectNoPanelSecrets(scan: ResourceScan): void {
   expect(scan.panelRoutes, 'knowledge-base route answers').toBeGreaterThan(0);
 }
 
-const routeAnswer = (route: string) => (response: Response) =>
+export const routeAnswer = (route: string) => (response: Response) =>
   new URL(response.url()).pathname === `/api/knowledge-base.${route}`;
 
-function panelDriver(page: Page, shoot: (name: string) => Promise<void>, timeout: number) {
+/** The panel actions on one observed page; the scope lane browses with them too. */
+export function panelDriver(page: Page, shoot: (name: string) => Promise<void>, timeout: number) {
   const steps: PanelStep[] = [];
   const settle = () =>
     settledPanel(async () => panelSnapshot(await page.evaluate<unknown>(SNAPSHOT)), timeout);

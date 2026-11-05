@@ -1,9 +1,11 @@
 // @ts-check
 /**
- * Classic-script client half of the knowledge-base plugin: the 「知识库」 panel. As with the
- * released panels (定时任务), its entry is one `sidebar.panellist` row and its content is the
- * `main` page under the same key. It reads only this instance's own `api/knowledge-base.*` routes,
- * whose host half forwards to the platform proxy; browsing touches no Session or scope data.
+ * Classic-script client half of the knowledge-base plugin: the 「知识库」 panel and the composer
+ * scope control. As with the released panels (定时任务), the panel's entry is one
+ * `sidebar.panellist` row and its content is the `main` page under the same key. It reads only
+ * this instance's own `api/knowledge-base.*` routes, whose host half forwards to the platform
+ * proxy; browsing touches no Session or scope data. The scope control reads the host's `kbScope`
+ * projection and writes only through the `/kb-scope` command.
  */
 (() => {
   const ID = 'knowledge-base';
@@ -28,6 +30,9 @@
   };
   /** @type {import('./client.types.js').KbAnswer} */
   const FAILED = { result: 'failed' };
+  const SCOPE = 'data-dsh-team-kb-scope';
+  const SCOPE_STATE = 'data-dsh-team-kb-scope-state';
+  const SCOPE_FAILED = '范围保存失败，请重试';
   /** Set once by the factory from the DSH runtime seed; components only run after that. */
   /** @type {import('./client.types.js').KbReact} */
   let React = /** @type {any} */ (undefined);
@@ -447,12 +452,181 @@
     );
   }
 
+  /**
+   * The `kbScope` wire view, or undefined when absent or not the host's shape.
+   * @param {unknown} value
+   * @returns {import('./client.types.js').KbScopeView | undefined}
+   */
+  function scopeView(value) {
+    if (typeof value !== 'object' || value === null) return undefined;
+    const { child, selection } = /** @type {Record<string, unknown>} */ (value);
+    if (typeof child !== 'boolean') return undefined;
+    const listed = Array.isArray(selection) && selection.every((id) => typeof id === 'string');
+    if (selection !== null && !listed) return undefined;
+    return { child, selection: /** @type {string[] | null} */ (selection) };
+  }
+
+  /**
+   * The selection after toggling one listed library: from the whole scope, every listed library
+   * but this one; otherwise this one removed or appended, unlisted (deleted) IDs kept.
+   * @param {string[] | null} selection
+   * @param {string[]} listed
+   * @param {string} id
+   */
+  function toggled(selection, listed, id) {
+    if (selection === null) return listed.filter((item) => item !== id);
+    return selection.includes(id) ? selection.filter((item) => item !== id) : [...selection, id];
+  }
+
+  /**
+   * The popover: whole-scope and no-scope actions, then one checkbox per listed library. Its
+   * library list reuses the panel's request slot, states and texts.
+   * @param {{ selection: string[] | null; pending: boolean; failed: boolean; write: (ids: string[] | null) => void }} props
+   */
+  function ScopePopover({ selection, pending, failed, write }) {
+    const request = useRequest();
+    /** @type {[import('./client.types.js').KbAnswer | { result: 'loading' }, (list: import('./client.types.js').KbAnswer | { result: 'loading' }) => void]} */
+    const [list, setList] = React.useState(
+      /** @type {import('./client.types.js').KbAnswer | { result: 'loading' }} */ ({
+        result: 'loading',
+      }),
+    );
+    const load = React.useCallback(() => {
+      setList({ result: 'loading' });
+      request('api/knowledge-base.datasets', setList);
+    }, [request]);
+    React.useEffect(load, [load]);
+    const view = datasetsView(list, '');
+    const listed = view.rows.map(({ id }) => id);
+    const rows = view.rows.map(({ id, name }) =>
+      h(
+        'label',
+        { key: id, style: { display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 0' } },
+        h('input', {
+          type: 'checkbox',
+          'data-dsh-team-kb-scope-dataset': id,
+          checked: selection === null || selection.includes(id),
+          disabled: pending,
+          onChange: () => write(toggled(selection, listed, id)),
+        }),
+        name,
+      ),
+    );
+    const content =
+      view.state === 'list'
+        ? rows
+        : [notice(LIST_TEXT[view.state], view.state === 'failed' ? [button('重试', load)] : [])];
+    return h(
+      'div',
+      {
+        role: 'dialog',
+        'aria-label': '知识库检索范围',
+        style: {
+          position: 'absolute',
+          bottom: 'calc(100% + 6px)',
+          left: 0,
+          zIndex: 20,
+          boxSizing: 'border-box',
+          width: '260px',
+          maxHeight: '320px',
+          overflowY: 'auto',
+          padding: '8px 10px',
+          border: '1px solid var(--dsw-alias-border-primary, currentColor)',
+          borderRadius: 'var(--dsw-radius-md, 6px)',
+          background: 'var(--dsw-alias-bg-base, Canvas)',
+          color: 'var(--dsw-alias-label-primary)',
+          fontSize: '13px',
+        },
+      },
+      h(
+        'div',
+        { style: { display: 'flex', gap: '8px', marginBottom: '6px' } },
+        button('全选', () => write(null), pending),
+        button('取消全选', () => write([]), pending),
+      ),
+      h('div', { [SCOPE_STATE]: view.state }, ...content),
+      failed
+        ? h('p', { 'data-dsh-team-kb-scope-error': '', style: { margin: '6px 0 0' } }, SCOPE_FAILED)
+        : null,
+    );
+  }
+
+  /**
+   * The composer control: a button labelled from the projection and its popover. Writes go one
+   * at a time through `execute`; the label changes only when the projection does.
+   * @param {{ sessionId: string; useProjection: (key: 'kbScope') => unknown; execute: (sessionId: string, line: string) => Promise<import('./client.types.js').KbCommandResult> }} props
+   */
+  function ScopeControl({ sessionId, useProjection, execute }) {
+    const scope = scopeView(useProjection('kbScope'));
+    const [open, setOpen] = React.useState(false);
+    const [pending, setPending] = React.useState(false);
+    const [failed, setFailed] = React.useState(false);
+    const writing = React.useRef(false);
+    const alive = React.useRef(true);
+    React.useEffect(
+      () => () => {
+        alive.current = false;
+      },
+      [],
+    );
+    // A child Agent's Session has its root's scope; the controller refuses commands there.
+    if (scope === undefined || scope.child) return null;
+    /** @param {string[] | null} datasetIds */
+    const write = (datasetIds) => {
+      if (writing.current) return;
+      writing.current = true;
+      setPending(true);
+      setFailed(false);
+      /** @param {boolean} saved */
+      const settle = (saved) => {
+        writing.current = false;
+        if (!alive.current) return;
+        setPending(false);
+        setFailed(!saved);
+      };
+      // Any answer that is not a success settles as a failure, so the fence always clears.
+      execute(sessionId, `/kb-scope ${JSON.stringify({ datasetIds })}`).then(
+        (result) => {
+          settle(result.ok && result.value?.result?.kind === 'success');
+        },
+        () => {
+          settle(false);
+        },
+      );
+    };
+    const { selection } = scope;
+    const [state, summary] =
+      selection === null
+        ? ['all', '全部']
+        : selection.length === 0
+          ? ['none', '不检索']
+          : ['some', `${String(selection.length)} 个`];
+    const toggle = h(
+      'button',
+      {
+        type: 'button',
+        'aria-haspopup': 'dialog',
+        'aria-expanded': open,
+        onClick: () => setOpen(!open),
+        style: { ...CONTROL, height: '26px', padding: '0 8px', fontSize: '12px' },
+      },
+      `知识库：${summary}`,
+    );
+    return h(
+      'span',
+      { [SCOPE]: state, style: { position: 'relative', display: 'inline-flex' } },
+      toggle,
+      open ? h(ScopePopover, { selection, pending, failed, write }) : null,
+    );
+  }
+
   window.__ModuleLoader__.load({
     id: '@dsh-team/knowledge-base',
     factory: (requireClient) => {
       React = requireClient('react');
       return {
-        inject: ['slots'],
+        // As the released plan client, the command remote is reached through `remote`.
+        inject: ['slots', 'remote', 'remote.commands'],
         apply(ctx) {
           // An unavailable instance (no platform address or token) gets no panel at all.
           if (!available()) return;
@@ -464,6 +638,26 @@
             ctx.slots.register(
               { name: 'sidebar.panellist', id: ID, order: 20, label: () => '知识库' },
               PanelIcon,
+            ),
+          );
+          /** @param {{ sessionId: string; useProjection: (key: 'kbScope') => unknown }} props */
+          const ScopeEntry = (props) =>
+            h(ScopeControl, {
+              ...props,
+              /** @param {string} sessionId @param {string} line */
+              execute: (sessionId, line) => ctx.remote.commands.execute(sessionId, line, []),
+            });
+          ctx.slots.inject('conversation.input.left', () =>
+            ctx.slots.register(
+              { name: 'conversation.input.left', id: 'knowledge-base-scope', order: 100 },
+              ScopeEntry,
+            ),
+          );
+          // The command row the control leaves in the transcript renders nothing.
+          ctx.slots.inject('conversation.chat.commandview', () =>
+            ctx.slots.register(
+              { name: 'conversation.chat.commandview', key: 'kb-scope' },
+              () => null,
             ),
           );
         },

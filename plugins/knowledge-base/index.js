@@ -2,7 +2,8 @@
 /**
  * Host half of the knowledge-base plugin. It validates the platform address the managed overlay
  * may give it, publishes whether the plugin is usable on this instance, and registers the browser
- * routes that forward the sidebar panel's reads to the platform's instance RAGFlow proxy.
+ * routes that forward the sidebar panel's reads to the platform's instance RAGFlow proxy, plus the
+ * `/kb-scope` command and the `kbScope` projection that keep each Session's retrieval scope.
  */
 export const name = 'dsh-team-knowledge-base';
 export const inject = ['connection'];
@@ -31,6 +32,164 @@ const PAGE = /^[1-9][0-9]{0,5}$/;
 // rc2 silently replaces a page size outside 1..100 with 10 instead of rejecting it.
 const PAGE_SIZE = /^(100|[1-9][0-9]?)$/;
 const MAX_KEYWORDS_BYTES = 256;
+/** 1000 IDs serialize to about 35 KB; anything longer is not a scope argument. */
+const MAX_SCOPE_BYTES = 40_000;
+const MAX_SCOPE_IDS = 1000;
+const SCOPE_INVALID = '知识库范围参数无效';
+
+/**
+ * A stored selection: null (every library, later ones included) or 0..1000 distinct IDs.
+ * @param {unknown} value
+ * @returns {value is import('./types.js').ScopeSelection}
+ */
+function isSelection(value) {
+  if (value === null) return true;
+  if (!Array.isArray(value) || value.length > MAX_SCOPE_IDS) return false;
+  const valid = value.every((id) => typeof id === 'string' && ENTRY_ID.test(id));
+  return valid && new Set(value).size === value.length;
+}
+
+/**
+ * The selection a `/kb-scope` argument line sets, or undefined for anything but exactly
+ * `{"datasetIds": null | [...]}`. The handler and the fold share this one parser.
+ * @param {unknown} args the command's raw input after its name
+ * @returns {{ selection: import('./types.js').ScopeSelection } | undefined}
+ */
+function scopeArgument(args) {
+  if (typeof args !== 'string' || Buffer.byteLength(args) > MAX_SCOPE_BYTES) return undefined;
+  let value;
+  try {
+    value = JSON.parse(args.trim());
+  } catch {
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const keys = Object.keys(value);
+  if (keys.length !== 1 || keys[0] !== 'datasetIds') return undefined;
+  const selection = /** @type {{ datasetIds: unknown }} */ (value).datasetIds;
+  return isSelection(selection) ? { selection } : undefined;
+}
+
+/**
+ * Checks that `value` is a plain object with exactly `keys`, then returns it as a record.
+ * @param {unknown} value
+ * @param {string[]} keys
+ */
+function exactRecord(value, keys) {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new TypeError('kbScope value malformed');
+  const own = Object.keys(value);
+  if (own.length !== keys.length || !keys.every((key) => own.includes(key)))
+    throw new TypeError('kbScope value malformed');
+  return /** @type {Record<string, unknown>} */ (value);
+}
+
+/** @param {unknown} value */
+function checkSelection(value) {
+  if (!isSelection(value)) throw new TypeError('kbScope value malformed');
+}
+
+/** @param {unknown} value */
+function checkTurn(value) {
+  if (value === null) return;
+  const turn = exactRecord(value, ['turn', 'scope']);
+  if (!Number.isSafeInteger(turn.turn) || Number(turn.turn) < 0)
+    throw new TypeError('kbScope value malformed');
+  checkSelection(turn.scope);
+}
+
+/** The released projection layer only calls `parse` and uses its result. */
+const stateSchema = {
+  /** @param {unknown} value */
+  parse(value) {
+    const state = exactRecord(value, ['child', 'selection', 'running', 'turn']);
+    if (typeof state.child !== 'boolean') throw new TypeError('kbScope value malformed');
+    checkSelection(state.selection);
+    if (state.running !== null) {
+      const running = exactRecord(state.running, ['commandId', 'selection']);
+      if (typeof running.commandId !== 'string') throw new TypeError('kbScope value malformed');
+      checkSelection(running.selection);
+    }
+    checkTurn(state.turn);
+    return /** @type {import('./types.js').ScopeState} */ (value);
+  },
+};
+
+const viewSchema = {
+  /** @param {unknown} value */
+  parse(value) {
+    const view = exactRecord(value, ['child', 'selection', 'turn']);
+    if (typeof view.child !== 'boolean') throw new TypeError('kbScope value malformed');
+    checkSelection(view.selection);
+    checkTurn(view.turn);
+    return /** @type {import('./types.js').ScopeView} */ (value);
+  },
+};
+
+/**
+ * The `kbScope` fold over the Session log: a `/kb-scope` command takes effect only when its
+ * `command/run` arguments parse and its paired `command/done` succeeded; `turn/start` snapshots
+ * the selection at that moment. A Session without records reads as every library.
+ * @type {import('./types.js').ScopeProjection}
+ */
+export const scopeProjection = {
+  key: 'kbScope',
+  stateVersion: 1,
+  stateSchema,
+  init: (header) => ({
+    child: header.origin === 'subagent',
+    selection: null,
+    running: null,
+    turn: null,
+  }),
+  apply(state, event) {
+    const { type, data } = event;
+    if (type === 'command/run' && data.name === 'kb-scope') {
+      const parsed = scopeArgument(data.args);
+      if (parsed === undefined) return state.running === null ? state : { ...state, running: null };
+      const commandId = /** @type {string} */ (data.commandId);
+      return { ...state, running: { commandId, selection: parsed.selection } };
+    }
+    const { running } = state;
+    if (type === 'command/done' && running !== null && data.commandId === running.commandId) {
+      const selection = data.kind === 'success' ? running.selection : state.selection;
+      return { ...state, selection, running: null };
+    }
+    if (type === 'turn/start')
+      return {
+        ...state,
+        turn: { turn: /** @type {number} */ (data.turn), scope: state.selection },
+      };
+    return state;
+  },
+  wire: {
+    viewSchema,
+    view: ({ child, selection, turn }) => ({ child, selection, turn }),
+  },
+};
+
+/** @param {import('./types.js').ScopeSelection} selection */
+function scopeSummary(selection) {
+  if (selection === null) return '全部';
+  return selection.length === 0 ? '不检索' : `${String(selection.length)} 个`;
+}
+
+/**
+ * `/kb-scope {"datasetIds": ...}`, sent by the composer control; the arguments are logged by the
+ * released command runtime and folded by `scopeProjection`. A rejected input is never echoed.
+ * @type {import('./types.js').ScopeCommand}
+ */
+export const scopeCommand = {
+  definitionId: '@dsh-team/knowledge-base',
+  name: 'kb-scope',
+  description: '设置本 Session 的知识库检索范围（由输入区控件调用）',
+  input: { hint: '<json>' },
+  handler: ({ rawInput }) => {
+    const parsed = scopeArgument(rawInput);
+    if (parsed === undefined) return { kind: 'error', text: SCOPE_INVALID };
+    return { kind: 'success', text: `知识库范围：${scopeSummary(parsed.selection)}` };
+  },
+};
 
 /**
  * `http://<canonical dotted IPv4>:<port>` with the instance bridge's +3 last octet (the same
@@ -273,6 +432,11 @@ export function apply(ctx, config) {
     table.push({ kind: 'global', name: GLOBAL, value: { available } });
   });
   if (!available) return;
+  // Without these services the panel still works; the scope control then has no projection.
+  ctx.inject(['sessionProjections', 'commands'], (scoped) => {
+    scoped.sessionProjections.register(scopeProjection);
+    scoped.commands.register(scopeCommand);
+  });
   const lifetime = new AbortController();
   /** @type {Set<Promise<Response>>} */
   const pending = new Set();

@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it } from 'vitest';
-import { SEED_DATASETS, readSeedDatasets } from '../../scripts/seed-stack.mjs';
+import { SEED_DATASETS, readSeedDatasetIds, readSeedDatasets } from '../../scripts/seed-stack.mjs';
 
 interface FakeSet {
   id: string;
@@ -101,4 +101,23 @@ it.each<[string, () => FakeSet[], string]>([
   ],
 ])('refuses %s with a fixed name-only line', async (_case, sets, text) => {
   expect((await readSnapshot(sets())).snapshot).toBe(`seed:stack failed: ${text}`);
+});
+
+it('reads the seed dataset IDs in seed order with one GET', async () => {
+  const sets = seeded();
+  const { log, url } = await serve([...sets].reverse());
+
+  expect(await readSeedDatasetIds({ ragflowUrl: url, ragflowApiKey: key })).toEqual(
+    sets.map(({ id, name }) => ({ name, id })),
+  );
+  expect(log).toEqual([`GET Bearer ${key}`]);
+});
+
+it('refuses a missing seed dataset ID with a fixed name-only line', async () => {
+  const { url } = await serve(seeded().slice(1));
+  const failure = await readSeedDatasetIds({ ragflowUrl: url, ragflowApiKey: key }).catch(
+    (error: unknown) => (error instanceof Error ? error.message : error),
+  );
+
+  expect(failure).toBe(`seed:stack failed: dataset ${String(POLICIES)} is missing`);
 });

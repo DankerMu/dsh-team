@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { readPrivateJsonFile } from '../../scripts/docker-proxy-environment.mjs';
-import { SEED_DATASETS, readSeedDatasets } from '../../scripts/seed-stack.mjs';
+import { SEED_DATASETS, readSeedDatasetIds, readSeedDatasets } from '../../scripts/seed-stack.mjs';
 import {
   STACK_CONFIG_RELATIVE_PATH,
   configuredStack,
@@ -38,7 +38,10 @@ import {
   unavailablePanel,
 } from './knowledge-panel-stack-fixture.ts';
 import type { PanelSessionEvidence } from './knowledge-panel-stack-fixture.ts';
+import { scopeScenario } from './knowledge-scope-stack-fixture.ts';
+import type { ScopeEvidence } from './knowledge-scope-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
+import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
   comparableRagflowStack,
   configureRagflow,
@@ -74,9 +77,9 @@ function privateStack(): Stack {
 }
 
 /** Read-only GETs; an unreadable or incomplete seed fails the case and is never seeded here. */
-async function seedSnapshot(stack: Stack) {
+async function seedRead<T>(read: () => Promise<T>): Promise<T> {
   try {
-    return await readSeedDatasets(stack);
+    return await read();
   } catch (error) {
     // SeedFailure lines name only datasets and files.
     const reason = error instanceof Error ? error.message : 'unknown failure';
@@ -85,6 +88,7 @@ async function seedSnapshot(stack: Stack) {
     });
   }
 }
+const seedSnapshot = (stack: Stack) => seedRead(() => readSeedDatasets(stack));
 
 /** Docker Desktop's socket group, observed through the same source/target bind compose uses. */
 async function socketGroup(run: DockerOutput, lifecycle: UserImageLifecycle, image: string) {
@@ -132,16 +136,23 @@ interface ConversationEvidence {
   proxy?: Awaited<ReturnType<typeof proxyWhileDown>> &
     Awaited<ReturnType<typeof proxyAfterRestore>>;
   ragflow?: { before: RagflowStack; after: RagflowStack };
+  scope?: ScopeEvidence & { forbiddenRequests: unknown };
 }
 
 /** The private RAGFlow test stack and its seed snapshot taken before any Docker work. */
 interface RagflowContext {
   stack: Stack;
   seed: Awaited<ReturnType<typeof seedSnapshot>>;
+  /** The seed dataset IDs in seed order; not secret. */
+  seedIds: readonly { name: string; id: string }[];
 }
 
-/** The owned deterministic provider's script for one run; every value is a nonsecret nonce. */
-function ownedModel(runId: string) {
+/**
+ * The owned deterministic provider's script for one run; every value is a nonsecret nonce. The
+ * scope lane holds its first marked turn and counts requests carrying any `forbidden` string: the
+ * command name, its summary text and the seed dataset IDs must never reach the model.
+ */
+function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
   const name = 'owned-stack-model';
   return {
     name,
@@ -151,6 +162,8 @@ function ownedModel(runId: string) {
       marker: `stack-marker-${randomUUID()}`,
       reply: `stack-reply-${randomUUID()}`,
       script: { path: `/data/work/stack-${runId}.txt`, content: `stack-content-${randomUUID()}\n` },
+      hold: `stack-hold-${randomUUID()}`,
+      forbidden: ['kb-scope', '知识库范围', ...seedIds.map(({ id }) => id)],
     },
   };
 }
@@ -206,6 +219,69 @@ async function unconfiguredEmployeePanel(
 
 const PROVIDER_HEALTH =
   "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());";
+const PROVIDER_RELEASE =
+  "const r=await fetch('http://127.0.0.1:3099/release',{method:'POST'});process.stdout.write(await r.text());";
+
+/** The administrator restart of one employee's instance, awaited until it runs again. */
+async function restartInstance(
+  lifecycle: UserImageLifecycle,
+  administrator: { base: string; cookie: string },
+  employee: { id: string; cookie: string },
+) {
+  const { base } = administrator;
+  const restarted = await fetch(`${base}/_platform/api/admin/instances/${employee.id}/restart`, {
+    method: 'POST',
+    headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
+    body: '{}',
+  });
+  expect({ status: restarted.status, body: await restarted.json() }).toEqual({
+    status: 200,
+    body: { userId: employee.id, status: 'starting', reason: 'starting' },
+  });
+  const gateway = instanceGatewayFixture({ lifecycle, base, origin: base });
+  try {
+    await gateway.ready(employee.cookie, 180_000);
+  } finally {
+    gateway.close();
+  }
+}
+
+/**
+ * The composer scope lane after the panel: the owned provider holds one turn so the scope can
+ * change while it runs; nothing of the scope may reach the model.
+ */
+async function scopeLane(
+  lifecycle: UserImageLifecycle,
+  platformRead: (script: string) => Promise<Record<string, unknown>>,
+  lane: {
+    administrator: { base: string; cookie: string };
+    employee: { id: string; email: string; cookie: string };
+    model: ReturnType<typeof ownedModel>;
+    ragflow: RagflowContext;
+  },
+): Promise<NonNullable<ConversationEvidence['scope']>> {
+  const { administrator, employee, ragflow } = lane;
+  const { base } = administrator;
+  const [first, second] = ragflow.seedIds;
+  if (first === undefined || second === undefined) throw new Error('Seed dataset IDs missing');
+  const scope = await scopeScenario({
+    session: panelSession(lifecycle, base, employee.email),
+    rpc: mappedSessionRpc(base, employee.cookie),
+    seeds: { first: first.id, second: second.id, firstName: first.name },
+    hold: {
+      nonce: lane.model.provider.hold,
+      held: async () => Number((await platformRead(PROVIDER_HEALTH)).held),
+      release: async () => {
+        expect((await platformRead(PROVIDER_RELEASE)).released).toBe(1);
+      },
+    },
+    needles: () => panelNeedles(lifecycle.commandAsync, employee.id, ragflow.stack),
+    restart: () => restartInstance(lifecycle, administrator, employee),
+  });
+  const { forbiddenRequests } = await platformRead(PROVIDER_HEALTH);
+  expect(forbiddenRequests).toBe(0);
+  return { ...scope, forbiddenRequests };
+}
 
 /**
  * Real gateway, real model-config and real DSH: one employee message through Chromium makes the
@@ -267,6 +343,13 @@ async function converse(
     evidence.proxy = { ...down, ...(await proxyAfterRestore(administrator, outage, call)) };
     // Browsing ignores the retrieval threshold proxyAfterRestore has just saved.
     panel.restored = await restoredPanel(session, needles);
+    // RAGFlow is back, so the scope popover lists the seed libraries.
+    evidence.scope = await scopeLane(lifecycle, platformRead, {
+      administrator,
+      employee,
+      model,
+      ragflow,
+    });
   });
 }
 
@@ -354,7 +437,7 @@ async function composeScenario(
     const managedDir = join(directory, 'managed');
     await mkdir(dataDir, { mode: 0o700 });
     await mkdir(managedDir, { mode: 0o700 });
-    const model = ownedModel(runId);
+    const model = ownedModel(runId, context.ragflow.seedIds);
     // A running platform cannot gain bind mounts: the provider joins before `compose up`.
     const provider = await writeModelProviderOverride(
       lifecycle.repositoryRoot,
@@ -408,6 +491,8 @@ async function composeScenario(
 it('builds both images, starts the delivered compose platform, converses through the real workbench and reads the seeded stack', async () => {
   const stack = privateStack();
   const before = await seedSnapshot(stack);
+  // Before compose: the provider's forbidden strings are bound into the platform container.
+  const seedIds = await seedRead(() => readSeedDatasetIds(stack));
   expect(before).toEqual(
     SEED_DATASETS.map(({ name, files }) => ({
       name,
@@ -428,7 +513,7 @@ it('builds both images, starts the delivered compose platform, converses through
         timings.userImageBuildMs = Math.round(performance.now() - started);
         return composeScenario(lifecycle, timings, {
           evidence,
-          ragflow: { stack, seed: before },
+          ragflow: { stack, seed: before, seedIds },
         });
       },
     );
@@ -436,12 +521,13 @@ it('builds both images, starts the delivered compose platform, converses through
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
-  const { browser, provider, proxy, ragflow, panel } = evidence;
+  const { browser, provider, proxy, ragflow, panel, scope } = evidence;
   if (browser === undefined || provider === undefined || proxy === undefined)
     throw new Error('Conversation evidence missing');
   if (panel?.unavailable === undefined || panel.restored === undefined)
     throw new Error('Knowledge panel evidence missing');
   if (ragflow === undefined) throw new Error('RAGFlow test stack evidence missing');
+  if (scope === undefined) throw new Error('Knowledge scope evidence missing');
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -480,6 +566,42 @@ it('builds both images, starts the delivered compose platform, converses through
   expect(panelSteps.map(({ files }) => files)).toEqual([0, 0, 0, 2, 1, 0]);
   const panelScreenshots = sessions.flatMap(({ browser: observed }) => observed.screenshots);
   expect(panelScreenshots).toEqual(panelSteps.map(({ screenshot }) => screenshot));
+  for (const observed of scope.sessions)
+    expect({
+      consoleErrors: observed.consoleErrors,
+      pageErrors: observed.pageErrors,
+      failedRequests: observed.failedRequests,
+      externalRequests: observed.externalRequests,
+    }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
+  const restored = { button: '知识库：1 个', selected: 1, snapshot: 1 };
+  const none = { button: '知识库：不检索', selected: 0, snapshot: 'all' };
+  expect(scope.steps).toEqual([
+    {
+      step: 'default',
+      button: '知识库：全部',
+      selected: 'all',
+      snapshot: null,
+      screenshot: 'scope-default.png',
+    },
+    { step: 'running', ...restored, screenshot: 'scope-running.png' },
+    { step: 'next-turn', ...restored },
+    { step: 'second-session', ...none },
+    { step: 'first-session', ...restored },
+    { step: 'third-session', button: '知识库：全部', selected: 'all', snapshot: null },
+    { step: 'browse', ...restored },
+    { step: 'reload-first', ...restored },
+    { step: 'reload-second', ...none },
+    { step: 'relogin-first', ...restored },
+    { step: 'relogin-second', ...none },
+    { step: 'restart-first', ...restored, screenshot: 'scope-restored.png' },
+    { step: 'restart-second', ...none },
+  ]);
+  const scopeScreenshots = scope.sessions.flatMap(({ screenshots }) => screenshots);
+  expect(scopeScreenshots).toEqual([
+    'scope-default.png',
+    'scope-running.png',
+    'scope-restored.png',
+  ]);
   process.stdout.write(
     `${JSON.stringify({
       stackEvidence: {
@@ -498,6 +620,7 @@ it('builds both images, starts the delivered compose platform, converses through
         },
         proxy,
         panel: { steps: panelSteps, screenshots: panelScreenshots },
+        scope: { steps: scope.steps },
       },
     })}\n`,
   );

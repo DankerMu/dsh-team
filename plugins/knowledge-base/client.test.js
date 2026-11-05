@@ -154,18 +154,25 @@ function renderPage() {
 }
 
 describe('registration', () => {
-  it('loads one classic-script registration that needs only slots and React', () => {
+  it('loads one classic-script registration that needs slots, the command remote and React', () => {
     expect(loads).toHaveLength(1);
     expect(loads[0].id).toBe('@dsh-team/knowledge-base');
     expect(Object.keys(loads[0])).toEqual(['id', 'factory']);
-    expect(plugin.inject).toEqual(['slots']);
+    // As the released plan client: the command remote is reached through `remote`.
+    expect(plugin.inject).toEqual(['slots', 'remote', 'remote.commands']);
     expect(required).toEqual(['react']);
   });
 
   it('registers the sidebar panel row and the main page under one key when available', () => {
     const { injected, registered } = install({ available: true });
 
-    expect(injected).toEqual(['main', 'sidebar.panellist']);
+    // The scope control and its command renderer are client-scope.test.js's.
+    expect(injected).toEqual([
+      'main',
+      'sidebar.panellist',
+      'conversation.input.left',
+      'conversation.chat.commandview',
+    ]);
     const [main, row] = registered.map(({ options }) => options);
     expect(main).toEqual({ name: 'main', key: 'knowledge-base' });
     expect(row).toMatchObject({ name: 'sidebar.panellist', id: 'knowledge-base', order: 20 });
