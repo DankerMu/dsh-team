@@ -92,12 +92,13 @@ function renderScope(initial) {
   const { find, execute } = install();
   const Entry = find('conversation.input.left').component;
   let projected = initial;
+  let session = SESSION;
   const keys = [];
   const useProjection = (key) => {
     keys.push(key);
     return projected;
   };
-  const element = () => React.createElement(Entry, { sessionId: SESSION, useProjection });
+  const element = () => React.createElement(Entry, { sessionId: session, useProjection });
   let view;
   act(() => {
     view = create(element());
@@ -124,6 +125,10 @@ function renderScope(initial) {
     error: () => control().findAll((node) => node.props['data-dsh-team-kb-scope-error'] === ''),
     project(next) {
       projected = next;
+      act(() => view.update(element()));
+    },
+    rebind(next) {
+      session = next;
       act(() => view.update(element()));
     },
     async click(label) {
@@ -320,12 +325,74 @@ describe('writes', () => {
     });
     expect(executions).toHaveLength(1);
     await settle(0, success());
-    expect(scope.byLabel('全选').props.disabled).toBe(false);
-    // No optimistic update: the label waits for the projection.
+    // No optimistic update: the label waits for the projection, and so do the actions, so a
+    // second change cannot start from the stale selection.
     expect(scope.label()).toBe('知识库：全部');
     expect(scope.error()).toEqual([]);
+    expect(scope.byLabel('全选').props.disabled).toBe(true);
+    await act(async () => {
+      scope.box(CONTRACTS).props.onChange();
+    });
+    expect(executions).toHaveLength(1);
     scope.project({ child: false, selection: [CONTRACTS], turn: null });
     expect(scope.label()).toBe('知识库：1 个');
+    expect(scope.byLabel('全选').props.disabled).toBe(false);
+  });
+
+  it('waits for the written list in any order, not for an unrelated projection change', async () => {
+    const scope = renderScope({ child: false, selection: [], turn: null });
+    await scope.open();
+    await scope.click('全选');
+    await settle(0, success());
+    // A turn snapshot alone is not the written selection.
+    scope.project({ child: false, selection: [], turn: { turn: 1, scope: [] } });
+    expect(scope.byLabel('取消全选').props.disabled).toBe(true);
+    scope.project({ child: false, selection: null, turn: { turn: 1, scope: [] } });
+    expect(scope.byLabel('取消全选').props.disabled).toBe(false);
+    await scope.toggle(POLICIES);
+    expect(executions[1].line).toBe(line([CONTRACTS]));
+    await settle(1, success());
+    scope.project({ child: false, selection: [POLICIES, CONTRACTS], turn: null });
+    expect(scope.byLabel('全选').props.disabled).toBe(true);
+    scope.project({ child: false, selection: [CONTRACTS], turn: null });
+    expect(scope.byLabel('全选').props.disabled).toBe(false);
+    scope.project({ child: false, selection: [STALE], turn: null });
+    await scope.toggle(POLICIES);
+    expect(executions[2].line).toBe(line([STALE, POLICIES]));
+    await settle(2, success());
+    scope.project({ child: false, selection: [POLICIES, STALE], turn: null });
+    expect(scope.byLabel('全选').props.disabled).toBe(false);
+  });
+
+  it('re-enables after a bounded wait when the projection never catches up', async () => {
+    vi.useFakeTimers();
+    try {
+      const scope = renderScope({ child: false, selection: [], turn: null });
+      await scope.open();
+      await scope.click('全选');
+      await settle(0, success());
+      await act(async () => {
+        vi.advanceTimersByTime(1_999);
+      });
+      expect(scope.byLabel('全选').props.disabled).toBe(true);
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(scope.byLabel('全选').props.disabled).toBe(false);
+      expect(scope.label()).toBe('知识库：不检索');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-enables when the control moves to another Session', async () => {
+    const scope = renderScope({ child: false, selection: [], turn: null });
+    await scope.open();
+    await scope.click('全选');
+    await settle(0, success());
+    expect(scope.byLabel('全选').props.disabled).toBe(true);
+    scope.rebind('session-2');
+    expect(scope.byLabel('全选').props.disabled).toBe(false);
   });
 
   it.each([
@@ -368,6 +435,10 @@ describe('writes', () => {
     await scope.click('全选');
     act(() => scope.view.unmount());
     mounted.splice(0);
+    const renders = scope.keys.length;
     await settle(0, success());
+    // Nothing renders after unmounting, and the answer leaves no console output (afterEach).
+    expect(scope.keys.length).toBe(renders);
+    expect(scope.view.toJSON()).toBeNull();
   });
 });

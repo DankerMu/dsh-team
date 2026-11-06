@@ -174,23 +174,45 @@ export function scopeRuns(events: readonly HistoryEvent[]) {
 const sameSelection = (left: ScopeSelection, right: ScopeSelection) =>
   JSON.stringify(left) === JSON.stringify(right);
 
-/** Whether the last run setting `selection` precedes or follows the one start of `turn`. */
+/** The one event of `type` for `turn`, or the fixed failure naming what is missing. */
+function turnEvent(events: readonly HistoryEvent[], type: 'turn/start' | 'turn/end', turn: number) {
+  const found = events.filter((event) => event.type === type && dataOf(event).turn === turn);
+  const [event] = found;
+  if (found.length !== 1 || event === undefined)
+    throw new Error(`turn ${String(turn)} ${type === 'turn/start' ? 'start' : 'end'} missing`);
+  return Number(event.seq);
+}
+
+/**
+ * Where the last run setting `selection` falls against the one whole `turn`: before its
+ * `turn/start`, between its start and `turn/end`, or after its end.
+ */
 export function commandSide(
   events: readonly HistoryEvent[],
   turn: number,
   selection: ScopeSelection,
-): 'before' | 'after' {
-  const starts = events.filter(
-    (event) => event.type === 'turn/start' && dataOf(event).turn === turn,
-  );
-  const [start] = starts;
-  if (starts.length !== 1 || start === undefined)
-    throw new Error(`turn ${String(turn)} start missing`);
+): 'before' | 'during' | 'after' {
+  const start = turnEvent(events, 'turn/start', turn);
+  const end = turnEvent(events, 'turn/end', turn);
   const run = scopeRuns(events)
     .filter((item) => sameSelection(item.selection, selection))
     .at(-1);
   if (run === undefined) throw new Error('kb-scope command missing');
-  return run.seq < Number(start.seq) ? 'before' : 'after';
+  if (run.seq < start) return 'before';
+  return run.seq < end ? 'during' : 'after';
+}
+
+/**
+ * The live main transcript of one Session: present, carrying the prompt just sent (the positive
+ * control), and free of the control's command line and summary text.
+ */
+export function transcriptCheck(
+  text: string | null,
+  prompt: string,
+): 'quiet' | 'missing' | 'prompt-missing' | 'leak' {
+  if (text === null) return 'missing';
+  if (!text.includes(prompt)) return 'prompt-missing';
+  return text.includes('kb-scope') || text.includes('知识库范围') ? 'leak' : 'quiet';
 }
 
 /** Whether the native history holds the end of `turn`. */
@@ -319,7 +341,18 @@ export function composerCard(value: unknown): ComposerState | null {
     throw new Error('Knowledge scope composer state malformed');
   return { draft: value.draft, focused: value.focused, send: value.send, stop: value.stop };
 }
-const TRANSCRIPT = '[data-chat-flow]';
+/**
+ * The live main chat column of one Session (dsh-client-ui-chat lib/client.js, ChatView's
+ * `data-chat-flow` column), never a step group's nested `data-chat-flow` content.
+ */
+const TRANSCRIPT = (id: string) => `(() => {
+  const live = (node) => node.closest('[inert]') === null && node.getClientRects().length > 0;
+  const views = document.querySelectorAll('[data-conversation-session="' + ${JSON.stringify(id)} + '"]');
+  for (const view of views)
+    for (const flow of view.querySelectorAll('[data-chat-flow]:not([data-step-process-content])'))
+      if (live(flow)) return flow.innerText;
+  return null;
+})()`;
 
 /** The owned provider's hold, as the stack test reads it inside the platform container. */
 interface HoldControl {
@@ -481,10 +514,22 @@ function scopeDriver(page: Page, rpc: SessionRpc, timeout: number) {
         return state !== null && !state.stop;
       }, 'scope composer idle');
     },
-    /** The transcript holds no command row text of the control. */
-    async expectQuietTranscript() {
-      const text = await page.locator(TRANSCRIPT).first().innerText();
-      expect(text.includes('kb-scope') || text.includes('知识库范围')).toBe(false);
+    /** Session `id`'s live transcript shows `prompt` and no command text of the control. */
+    async expectQuietTranscript(id: string, prompt: string) {
+      focus.id = id;
+      const seen: { verdict?: ReturnType<typeof transcriptCheck> } = {};
+      // A reopened Session loads its history first; only a rendered prompt settles the read.
+      await wait(async () => {
+        const text = await page.evaluate<unknown>(TRANSCRIPT(id));
+        seen.verdict = transcriptCheck(typeof text === 'string' ? text : null, prompt);
+        return seen.verdict === 'quiet' || seen.verdict === 'leak';
+      }, 'scope transcript');
+      expect(seen.verdict).toBe('quiet');
+    },
+    /** The composer of the current Session still shows its stop button: a turn is running. */
+    async expectRunning() {
+      const state = composerCard(await page.evaluate<unknown>(COMPOSER('state')));
+      expect(state?.stop).toBe(true);
     },
   };
   return driver;
@@ -541,6 +586,10 @@ interface SessionTools {
   readonly reload: () => Promise<void>;
 }
 
+// The ordinary prompts: Session 1's turn after the held one, and Session 2's only turn.
+const NEXT_PROMPT = '请再回复一次';
+const SECOND_PROMPT = '第二个会话';
+
 /** Steps 1 and 2: the default scope, then a change during a held turn. */
 async function snapshotSteps(
   scenario: ScopeScenario,
@@ -562,25 +611,27 @@ async function snapshotSteps(
   const heldTurn = await scope.send(id, `${scenario.hold.nonce} 请回复`, () =>
     until(async () => (await scenario.hold.held()) >= 1, scenario.session.timeout, 'held request'),
   );
+  await scope.expectRunning();
   await scope.open();
   await scope.write(id, 'none', []);
   await scope.write(id, second, [second]);
   await tools.shoot('scope-running');
   await scope.close();
+  await scope.expectRunning();
   await scenario.hold.release();
   await scope.turnEnd(id, heldTurn);
   const running = await scope.expectScope(id, [second]);
   expect(running.value.turn).toEqual({ turn: heldTurn, scope: [first] });
   const history = await sessionEvents(scenario.rpc, id);
   expect(commandSide(history, heldTurn, [first])).toBe('before');
-  expect(commandSide(history, heldTurn, [second])).toBe('after');
+  expect(commandSide(history, heldTurn, [second])).toBe('during');
   steps.push(scopeStep('running', running.shown, running.value, 'scope-running'));
-  const nextTurn = await scope.send(id, '请再回复一次');
+  const nextTurn = await scope.send(id, NEXT_PROMPT);
   await scope.turnEnd(id, nextTurn);
   const next = await scope.expectScope(id, [second]);
   expect(next.value.turn).toEqual({ turn: nextTurn, scope: [second] });
   steps.push(scopeStep('next-turn', next.shown, next.value));
-  await scope.expectQuietTranscript();
+  await scope.expectQuietTranscript(id, NEXT_PROMPT);
   return id;
 }
 
@@ -595,11 +646,12 @@ async function independentSteps(
   const id = await scope.newSession(new Set([first]));
   await scope.expectScope(id, null);
   // A turn makes it an ordinary Session that stays in the tree.
-  await scope.turnEnd(id, await scope.send(id, '第二个会话'));
+  await scope.turnEnd(id, await scope.send(id, SECOND_PROMPT));
   await scope.open();
   await scope.write(id, 'none', []);
   await scope.close();
   const none = await scope.expectScope(id, []);
+  await scope.expectQuietTranscript(id, SECOND_PROMPT);
   expect(none.shown.state).toBe('none');
   steps.push(scopeStep('second-session', none.shown, none.value));
   await scope.select(first);
@@ -646,11 +698,12 @@ async function restoredSteps(
   const listed = await scope.open();
   expect(listed.list?.checked).toEqual([scenario.seeds.second]);
   await scope.close();
-  await scope.expectQuietTranscript();
+  await scope.expectQuietTranscript(sessions.first, NEXT_PROMPT);
   if (shoot !== undefined) await shoot('scope-restored');
   steps.push(scopeStep(`${step}-first`, first.shown, first.value, shoot && 'scope-restored'));
   await scope.select(sessions.second);
   const second = await scope.expectScope(sessions.second, []);
+  await scope.expectQuietTranscript(sessions.second, SECOND_PROMPT);
   steps.push(scopeStep(`${step}-second`, second.shown, second.value));
 }
 

@@ -33,6 +33,8 @@
   const SCOPE = 'data-dsh-team-kb-scope';
   const SCOPE_STATE = 'data-dsh-team-kb-scope-state';
   const SCOPE_FAILED = '范围保存失败，请重试';
+  /** How long a saved write waits for its projection frame before the actions re-enable. */
+  const SCOPE_SETTLE_MS = 2000;
   /** Set once by the factory from the DSH runtime seed; components only run after that. */
   /** @type {import('./client.types.js').KbReact} */
   let React = /** @type {any} */ (undefined);
@@ -467,6 +469,16 @@
   }
 
   /**
+   * Whether two selections are the same scope: both the whole scope, or the same IDs in any order.
+   * @param {string[] | null} left
+   * @param {string[] | null} right
+   */
+  function sameScope(left, right) {
+    if (left === null || right === null) return left === right;
+    return left.length === right.length && left.every((id) => right.includes(id));
+  }
+
+  /**
    * The selection after toggling one listed library: from the whole scope, every listed library
    * but this one; otherwise this one removed or appended, unlisted (deleted) IDs kept.
    * @param {string[] | null} selection
@@ -563,12 +575,35 @@
     const [failed, setFailed] = React.useState(false);
     const writing = React.useRef(false);
     const alive = React.useRef(true);
+    // A saved write's selection, held until the projection shows it: the remote answer can
+    // arrive before the projection frame, and a change computed from the stale selection would
+    // overwrite the saved one. A Session change or SCOPE_SETTLE_MS releases it as well.
+    /** @type {[{ sessionId: string; selection: string[] | null } | null, (next: { sessionId: string; selection: string[] | null } | null) => void]} */
+    const [awaited, setAwaited] = React.useState(
+      /** @type {{ sessionId: string; selection: string[] | null } | null} */ (null),
+    );
+    const current = scope === undefined ? undefined : scope.selection;
     React.useEffect(
       () => () => {
         alive.current = false;
       },
       [],
     );
+    React.useEffect(() => {
+      if (awaited === null) return undefined;
+      const release = () => {
+        writing.current = false;
+        setAwaited(null);
+        setPending(false);
+      };
+      const shown = current !== undefined && sameScope(current, awaited.selection);
+      if (shown || awaited.sessionId !== sessionId) {
+        release();
+        return undefined;
+      }
+      const timer = setTimeout(release, SCOPE_SETTLE_MS);
+      return () => clearTimeout(timer);
+    }, [awaited, current, sessionId]);
     // A child Agent's Session has its root's scope; the controller refuses commands there.
     if (scope === undefined || scope.child) return null;
     /** @param {string[] | null} datasetIds */
@@ -579,10 +614,17 @@
       setFailed(false);
       /** @param {boolean} saved */
       const settle = (saved) => {
+        if (!alive.current) {
+          writing.current = false;
+          return;
+        }
+        if (saved) {
+          setAwaited({ sessionId, selection: datasetIds });
+          return;
+        }
         writing.current = false;
-        if (!alive.current) return;
         setPending(false);
-        setFailed(!saved);
+        setFailed(true);
       };
       // Any answer that is not a success settles as a failure, so the fence always clears.
       execute(sessionId, `/kb-scope ${JSON.stringify({ datasetIds })}`).then(

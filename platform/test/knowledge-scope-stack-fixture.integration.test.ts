@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import {
   commandSide,
+  transcriptCheck,
   composerCard,
   createdSessionId,
   scopeStall,
@@ -124,13 +125,21 @@ it.each([
   expect(() => scopeRuns(events)).toThrow('kb-scope command history malformed');
 });
 
-it('places the last run of a selection before or after a turn start', () => {
+it('places the last run of a selection before, during or after one whole turn', () => {
   expect(commandSide(HISTORY, 1, [FIRST])).toBe('before');
-  expect(commandSide(HISTORY, 1, [SECOND])).toBe('after');
+  expect(commandSide(HISTORY, 1, [SECOND])).toBe('during');
+  // A change landing after the turn ended (an early end) is not a mid-turn change.
+  const late = [
+    ...HISTORY.slice(0, 5),
+    HISTORY[6],
+    run(9, JSON.stringify({ datasetIds: [SECOND] })),
+  ];
+  expect(commandSide(late as typeof HISTORY, 1, [SECOND])).toBe('after');
   expect(() => commandSide(HISTORY, 1, null)).toThrow('kb-scope command missing');
   expect(() => commandSide(HISTORY, 3, [FIRST])).toThrow('turn 3 start missing');
   const repeated = [...HISTORY, { type: 'turn/start', seq: 9, data: { turn: 2 } }];
   expect(() => commandSide(repeated, 2, [FIRST])).toThrow('turn 2 start missing');
+  expect(() => commandSide(HISTORY, 2, [FIRST])).toThrow('turn 2 end missing');
 });
 
 it('sees a turn end only for that turn', () => {
@@ -217,4 +226,14 @@ it.each([
   ['a non-boolean stop', { draft: '', focused: true, send: 'none', stop: 1 }],
 ])('rejects a composer state with %s', (_label, value) => {
   expect(() => composerCard(value)).toThrow('Knowledge scope composer state malformed');
+});
+
+it.each([
+  ['quiet', '请再回复一次\nstack-reply-1', 'quiet'],
+  ['no live transcript', null, 'missing'],
+  ['a transcript without the prompt', 'stack-reply-1', 'prompt-missing'],
+  ['a command line', '请再回复一次\n/kb-scope {"datasetIds":[]}', 'leak'],
+  ['a command summary', '请再回复一次\n知识库范围：不检索', 'leak'],
+])('judges a transcript that is %s', (_label, text, verdict) => {
+  expect(transcriptCheck(text, '请再回复一次')).toBe(verdict);
 });

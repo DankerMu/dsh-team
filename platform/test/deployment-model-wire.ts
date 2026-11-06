@@ -201,7 +201,9 @@ const server = createServer((request, response) => {
         throw new Error('Invalid owned model request');
       const text = JSON.stringify(body.messages);
       if (text.includes(marker)) markedRequests++;
-      if (forbidden?.some((item) => text.includes(item)) === true) forbiddenRequests++;
+      // The whole request, tools and system fields included, not only its messages.
+      const whole = JSON.stringify(body);
+      if (forbidden?.some((item) => whole.includes(item)) === true) forbiddenRequests++;
       const toolResult = hasToolResult(body.messages);
       if (toolResult) toolResults++;
       const answer = () => {

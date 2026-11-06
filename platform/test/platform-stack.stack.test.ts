@@ -620,7 +620,11 @@ it('builds both images, starts the delivered compose platform, converses through
         },
         proxy,
         panel: { steps: panelSteps, screenshots: panelScreenshots },
-        scope: { steps: scope.steps },
+        scope: {
+          steps: scope.steps,
+          screenshots: scopeScreenshots,
+          forbiddenRequests: scope.forbiddenRequests,
+        },
       },
     })}\n`,
   );

@@ -275,7 +275,7 @@ it('keeps release unavailable and health unchanged without a hold', async () => 
   });
 });
 
-it('counts requests whose messages carry a forbidden string', async () => {
+it('counts requests whose body carries a forbidden string anywhere', async () => {
   const origin = await start({ ...BASE, forbidden: ['kb-scope', '知识库范围'] });
   for (const content of [
     '/kb-scope {}',
@@ -290,12 +290,16 @@ it('counts requests whose messages carry a forbidden string', async () => {
         messages: [{ role: 'user', content }],
       })
     ).arrayBuffer();
+  // Outside the messages: a tool description and a system field.
+  const tool = { type: 'function', function: { name: 'read', description: '知识库范围' } };
+  await (await complete(origin, { ...userTurn([tool]), messages: [] })).arrayBuffer();
+  await (await complete(origin, { ...userTurn(), system: 'kb-scope' })).arrayBuffer();
   expect(await health(origin)).toEqual({
     ready: true,
-    markedRequests: 1,
-    requests: 4,
+    markedRequests: 2,
+    requests: 6,
     toolResults: 0,
-    forbiddenRequests: 3,
+    forbiddenRequests: 5,
   });
 });
 
