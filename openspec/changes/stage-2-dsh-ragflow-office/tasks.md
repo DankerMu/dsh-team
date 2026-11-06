@@ -2427,6 +2427,36 @@ Sibling surfaces：`platform/scripts/openapi.ts` 的 `PlatformConfig` 字面量�
 
 Evidence：`pnpm test`（config/app 单元）、`pnpm test:integration` 的启动用例、`pnpm lint:config`、`pnpm test:guardrails`、`pnpm lint:agents`、`pnpm check`；VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy`（compose 部署下平台读到已配置并照常启动）；本机 exact-head `pnpm test:stack`。
 
+Risk packs (16.2b 外部 Document Server 设置与后台接口，#424): fixture level expanded（与 issue 建议一致：新的密钥保管入口与迁移）。本任务只交付设置、迁移与接口；后台页面是 16.2c（#425），编排器与覆盖层按模式取值是 16.3 与 18.2。selected：
+
+- **Schema（迁移 7）**：新文件 `platform/src/db/migrations/7-document-server-settings.sql`，按迁移 6 的写法 `INSERT OR IGNORE` 两行：`documentServerUrl` `""`、`documentServerJwtSecret` `""`。`platform/src/db/settings.ts` 的 `Settings` 增加两个字段（默认值都是 `''`），按键校验：`documentServerUrl` 为 `''` 或满足 `isRagflowBaseUrl`（同一条服务地址规则：最长 2048、无空白与控制字符、无 `?`、`#`、`@`、`\`、`http:`/`https:`；本任务不改名，改名会牵动 `ragflow-proxy/`，列为后续），`documentServerJwtSecret` 为字符串。`db/settings.ts` 同时导出纯函数 `documentServerMode(settings): 'bundled' | 'external'`（`documentServerUrl !== ''` 即 `external`），经 `db/index.ts` 暴露；本路由的 `project`/`validate` 与日后 16.3、18.2 都用它，不在 `admin/` 里另写一份（orchestrator 不能 import `admin/`）。同步点（全部列出，照此改到测试通过）：迁移账本精确版本列表 1–6 → 1–7——`platform/src/db/migrate.test.ts`（含 `:146` 标题「through 6-ragflow-settings」改为 7）、`platform/test/db.integration.test.ts`（两处）、`platform/test/admin-plugin-catalog.integration.test.ts:57,65`、`platform/test/admin-ragflow-config.integration.test.ts:49,58`、`scripts/e2e-scenario.sh:109`、AGENTS.md 验证矩阵「Database」一行；种子设置——`platform/test/admin-config-fixture.ts` 的 `SEEDED_SETTINGS` 按 key 顺序加入 `documentServerJwtSecret`、`documentServerUrl` 两行（都排在 `pluginCatalog` 前，注释「Migrations 5 and 6」改为 5–7），`platform/src/db/settings.test.ts` 的 `DEFAULTS` 补两个字段，直接构造 `Settings` 字面量的单元测试（`model-probe.test.ts`、`generate-catalog.test.ts`、`model-settings.test.ts` 等）补字段到通过类型检查；`platform/test/db.integration.test.ts:416` 的前向迁移期望 `[...historical.settings, ...SEEDED_SETTINGS]` 改为按 key 排序后再比较（查询是 `ORDER BY key`，新键排在 `historical-setting` 之前）。
+- **Public API（`GET/PUT /_platform/api/admin/document-server`）**：新文件 `platform/src/admin/document-server-config.ts`，用既有 `registerConfigRoute`（`name: 'document-server'`，`auditType: 'document-server-config.updated'`），在 `admin/routes.ts` 注册。
+  - 模式由存储推导：`documentServerUrl !== ''` 即 `external`（外部配置优先），否则 `bundled`。
+  - GET 恰为 `{ mode, bundledConfigured, url, jwtConfigured }`（GET 与 PUT 用同一个字段名 `url`）：`bundledConfigured` 是部署配置 `config.documentServer !== null`（`app.ts` 只向 `adminRoutes` 多传这一个布尔值 `documentServerBundled`，先例是 `subnetPool`；自带的容器名和 JWT 都不进入后台模块）；`url` 是存储的外部地址（`bundled` 时为 `''`）；`jwtConfigured` 是存储的外部 JWT 非空。JWT 原文从不出现在任何回应里，自带 JWT 也不出现。
+  - PUT 只接受两种信封：恰为 `{ mode: 'bundled' }` → 写入 `documentServerUrl: ''`、`documentServerJwtSecret: ''`（切回自带即清除外部值）；或 `{ mode: 'external', url, jwtSecret? }` → `url` 须满足上面的地址规则，原样保存；带 `jwtSecret` 时须为非空且不只含空白的字符串（原样保存，不 trim），替换已存值；省略 `jwtSecret` 时保留已存值。PUT 的 `bodySchema`（只作契约文档，生成 `openapi.json`）用 `oneOf` 列出两种信封，各自 `additionalProperties: false`。其他任何形状（未知字段、`mode` 取其他值、`bundled` 带多余键、类型错误、空白 JWT）返回固定 400 `Invalid Document Server configuration; provide { mode: 'bundled' } or { mode: 'external', url: http(s) URL without credentials, query or fragment, jwtSecret?: non-blank string }`，不修改、不审计。
+  - 合并后的配对约束由描述符的 `validate(settings)` 在同一事务内检查：地址与 JWT 必须同时为空或同时非空；`external` 首次保存却省略 `jwtSecret`（已存 JWT 为空）→ 400，消息 `External Document Server requires jwtSecret`，事务回滚，不审计。
+  - 沿用共享提交边界：读完请求体后在事务内重新校验当前有效管理员（401/403），设置与 `document-server-config.updated` 审计（无 details）同事务，审计失败整体回滚并返回固定 500；PUT 回应附 `runningInstances`。`platform/src/audit/record.ts` 的事件清单加入该类型（details 为空数组）；`config-route.ts` 的 `name`/`auditType` 联合类型各加一项。`pnpm contract:write` 重新生成 `schemas/openapi.json`。
+- **Auth / permissions / secrets**：
+  - JWT 只存在 SQLite（与模型密钥、RAGFlow 密钥同一个 0600 数据库），不进入回应、日志、审计、错误消息。`platform/src/app.ts` 的 `LOG_REDACT_PATHS` 增加 `req.body.jwtSecret`、`documentServerJwtSecret`、`*.documentServerJwtSecret`（`jwtSecret`/`*.jwtSecret` 已由 #423 加入），`app.test.ts` 的脱敏用例补对应标记。
+  - 修改在实例下次启动时生效；本任务没有任何读取方（16.3/18.2 才读），GET/PUT 不联系 Document Server、不重启实例。
+- **测试**：
+  - `platform/src/admin/document-server-config.test.ts`（单元，同 `ragflow-config.test.ts` 的写法）：每种信封的 `patch` 结果与拒绝；`project` 在两种模式下的精确回应；`validate` 的配对规则。
+  - `platform/src/db/settings.test.ts`：两个键的默认值、合法与非法取值、读回。
+  - 集成 `platform/test/admin-document-server-config.integration.test.ts`（同 `admin-ragflow-config.integration.test.ts`）：未登录 401、员工 403、请求体收取期间被降权 → 拒绝且设置与审计不变；全部非法信封 400 且不变；首次切到外部（带 JWT）→ 保存、审计一行、GET 为 `external` 且 `jwtConfigured: true`；再次 PUT 省略 JWT → 地址更新、JWT 保留；PUT 新 JWT → 替换；切回 `bundled` → 两值清空、GET 为 `bundled`；外部首次省略 JWT → 400 且不变；审计写入失败（同既有用例的注入方式）→ 500、设置保持原值；所有回应与日志不含外部 JWT 标记；`bundledConfigured` 在 `documentServer` 为 `null` 与非 `null` 的两个 app 上分别为 `false`/`true`——为此 `platform/test/auth-fixture.ts` 的 `withApp` 选项新增 `documentServer?: PlatformConfig['documentServer']`（缺省仍为 `null`），非 `null` 的 app 用带标记的自带 `jwtSecret` 与容器名构造，并断言 GET/PUT 回应体与全部日志行都不含这两个标记（spec「JWT 不回显」：自带 JWT 也不出现）；迁移账本 1–7、迁移 7 种子两行，旧库前向升级后既有设置不变（见上面的排序比较）。
+- **Documentation**（编排者同 PR 改）：AGENTS.md Environment 新增一条 `document-server` 接口说明（模式推导、回应形状、两种 PUT 信封、清除语义、配对 400、共享提交边界、JWT 不回显、下次启动生效、地址规则复用 `isRagflowBaseUrl`），验证矩阵「Database」一行的账本版本改为 1–7。审计页的中文事件名（`document-server-config.updated`）随 16.2c 的页面一起加入。
+
+PR 范围说明：除 issue 列出的 `admin/`、`db/`、`openapi` 外，还需改 `app.ts`（一个布尔选项与三条脱敏路径）、`app.test.ts`、`audit/record.ts`（事件类型）、`scripts/e2e-scenario.sh`（账本）、`auth-fixture.ts`、`admin-config-fixture.ts` 与上面列出的测试同步点；都是新接口与迁移的直接需要。连同单元与集成测试可能超过 400 行，届时加 `diff-limit-exempt` 并在 PR 描述写明理由。
+
+剩余风险：外部地址原样保存，可以带末尾 `/`；18.2 写覆盖层时按 RAGFlow 先例在使用处去掉末尾 `/`。`isRagflowBaseUrl` 名字已不准确，改名另开 issue。
+
+not selected：Concurrency（沿用共享提交边界的事务）、Resource limits、File IO、Release（无新依赖）、Legacy compatibility（迁移只新增两行 `INSERT OR IGNORE`，旧行不动；阶段 1 与 #423 之后的库升级后为 `bundled`，行为不变）。无关键路径文件。
+
+Governing invariant：存储中的外部地址与 JWT 要么同时为空（自带模式），要么同时非空（外部模式）；任何回应、日志、审计都不含 JWT。
+
+Sibling surfaces：`admin/ragflow-config.ts` 与其集成测试（模板）、`admin/config-route.ts`、`db/settings.ts`、`audit/record.ts`、`platform/web/src/audit-page.tsx`（中文名留给 16.2c）、`scripts/e2e-scenario.sh` 的账本检查、`schemas/openapi.json`。
+
+Evidence：`pnpm test`、`pnpm test:integration platform/test/admin-document-server-config.integration.test.ts platform/test/db.integration.test.ts`、`pnpm contract:write` 后 `pnpm contract:check`、`pnpm check`；VPS exact-head `pnpm test:docker`、`pnpm test:deploy`；本机 exact-head `pnpm test:stack`。
+
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 
 依赖：4、10（本机通道用例）、11。关键路径 `images/dsh-user/`。
