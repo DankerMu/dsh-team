@@ -172,7 +172,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
   - cookie 总量超过请求头上限（431）时平台无法自愈，需要清除站点数据；只种在工作台 WebSocket 路径上的遮蔽 cookie，若浏览器不接受被拒绝握手里的 Set-Cookie，也需要清除站点数据。
 - 建议每人使用自己的浏览器配置；交接时先登出，并关闭上一位用户的全部标签页。
 
-`pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界、HTTPS/WSS、双员工HTTP/原生Session长连接及实例内部隔离；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [AGENTS.md](../AGENTS.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
+`pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界、HTTPS/WSS、双员工HTTP/原生Session长连接及实例内部隔离；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [scripts/README.md](../scripts/README.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
 
 受信验收可由本机完成最终审查提交的 Linux/amd64 镜像构建，再通过可信 SSH 传输。运维方核对源提交、导出文件大小/SHA256和 OCI 内容摘要，将三个角色的布局保存在私有目录，并准备0600映射文件：顶层 `roles` 下的 `user`、`platform`、`browser` 各含绝对路径 `layout`、运行平台 manifest 的 `manifestDigest` 和 `configId`（两者都是完整 `sha256:` 摘要）。设置 `DSH_TEAM_VERIFICATION_IMAGES=/绝对路径/images.json` 后仍运行原始 `pnpm test:docker`、`pnpm test:deploy`；浏览器、主机和工具链先决条件不变。
 
