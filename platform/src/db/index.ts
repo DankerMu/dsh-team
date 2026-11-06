@@ -10,5 +10,6 @@ export {
   CATALOG_STATES,
   REGISTRY_URL,
   isRagflowBaseUrl,
+  documentServerMode,
 } from './settings.ts';
 export type { CatalogState, Settings } from './settings.ts';

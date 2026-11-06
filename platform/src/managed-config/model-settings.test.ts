@@ -22,6 +22,8 @@ const SETTINGS: Settings = {
   retrievalSimilarityThreshold: 0.2,
   retrievalKeywordsWeight: 0.7,
   retrievalRerankId: '',
+  documentServerUrl: '',
+  documentServerJwtSecret: '',
 };
 
 it('maps stored settings to the managed model reference and the separate injected key', () => {

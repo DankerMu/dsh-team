@@ -58,7 +58,7 @@ Model verification waits only while the live child's descriptor is absent, befor
 
 Verify with: Real-file SQLite through the integration suite. Command: `pnpm test:integration`.
 
-real-file SQLite migrate, settings, reopen: tempfile `platform.db`, exact migration ledger versions 1 to 6, preserved historical rows and durable creation attempts, closed handle
+real-file SQLite migrate, settings, reopen: tempfile `platform.db`, exact migration ledger matching `platform/src/db/migrations/`, preserved historical rows and durable creation attempts, closed handle
 
 ## Evidence required: User-image Docker
 

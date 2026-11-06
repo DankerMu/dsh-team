@@ -25,6 +25,7 @@ const CLOSED_EVENT_TYPES = [
   'web-tools.updated',
   'ragflow-config.updated',
   'retrieval-config.updated',
+  'document-server-config.updated',
   'instance.restarted',
   'instance.config-reset',
   'instance.created',
