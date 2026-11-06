@@ -2600,6 +2600,216 @@ Evidence (#534):
 - `pnpm check`。
 - VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy` 证据（门禁要求）；本机 exact-head `pnpm test:stack` 证据评论（本夹具属于 stack 通道，证明真实恢复路径未回归）。
 
+Risk packs (16.3 编排器以 +4 接入 Document Server，#426): fixture level expanded（与 issue 建议一致：关键路径 `platform/src/orchestrator/` 的网络生命周期、新迁移、新的退役授权）。
+
+本任务只交付接入、记录、退役和对账。覆盖层的 Office 配置由 18.2 写入，它消费本任务在覆盖层写入前得到的接入决定；本任务的覆盖层仍不含任何 Office 键。
+
+selected：
+
+- **Schema（迁移 8）**：
+  - 新文件 `platform/src/db/migrations/8-instance-document-server.sql`，给 `instances` 新增三列，全部允许 `NULL`，旧行和阶段 1 存量行都为 `NULL`，表示「无记录」：
+    - `document_server_mode TEXT CHECK (document_server_mode IN ('bundled','external','unconfigured'))`；
+    - `document_server_container_id TEXT`：本次启动接入 +4 的容器 ID（64 位小写十六进制）；
+    - `document_server_reason TEXT CHECK (document_server_reason IN ('absent','identity-mismatch'))`。
+  - 模式在启动时推导：
+    - `documentServerMode(readSettings(db)) === 'external'` → `external`；
+    - 否则 `config.documentServer === null` → `unconfigured`；
+    - 否则 `bundled`。
+  - 原因只用上面的闭集，不含名字、ID、错误文本或凭据。`last_error` 不用于此：它表示启动失败，而这里的实例照常就绪。
+  - 写入与清除只在两处：
+    - `persistCreatedInstance`（`start.ts:448`）的插入和 `ON CONFLICT` 更新写入三列；
+    - `stop.ts` 的 `commit()`（`:215` 一带）把三列置 `NULL`。这次提交已经被 `removeUserNetwork` 确认删除网络 fence 住。
+  - 以下行更新都不碰这三列，记录保留，直到下次重试时 `retireCurrentErrorContainer` 走停止退役并按记录回收网络：
+    - 补偿（`start.ts:210-223`）和就绪失败（`readiness.ts:285-301`）。这两处在网络清理失败或未确认时也会无条件写 `error` 行；未确认的 connect 若迟到落地，也要靠记录才能被断开。
+    - 创建中断恢复的 upsert（`creation-attempt.ts:345-350`）。它清除时没有网络删除的 fence，保留旧记录只会放行同一个容器 ID 的端点。
+  - `start-identity.ts:182-197` 构造停止后的期望快照时，三列补为 `null`。
+  - `RetirementRow`（`stop.ts:32`）、`CURRENT_RETIREMENT`（`:51`）和 `Selection.identity` 带上 `document_server_container_id`。退役 fence 因此包括记录的端点。
+  - `credentials.ts:83-123` 的 `currentInstance` 返回值加 `document_server_container_id`。
+  - `idle.ts` 的 `RuntimeRow` 和 `instance-service.ts` 中按列读取行的地方按需补字段，三列不进入任何 HTTP 回应。
+  - 行值在使用前用 `^[a-f0-9]{64}$` 校验（同 `stop.ts:70`），不合法则 fail closed。
+  - 同步点（照此改到测试通过）：
+    - 迁移账本精确列表 1–7 → 1–8：`platform/src/db/migrate.test.ts:146,151`、`platform/src/db/schema.test.ts:264-272`、`platform/test/db.integration.test.ts:347,444`、`platform/test/admin-plugin-catalog.integration.test.ts:57,65`、`platform/test/admin-document-server-config.integration.test.ts:93,110`、`platform/test/admin-ragflow-config.integration.test.ts:49,58`（含标题里的 version-7）、`scripts/e2e-scenario.sh:109`；
+    - 精确列集合与整行字面量：
+      - `platform/src/db/schema.test.ts`：`SELECT_INSTANCE`（`:30-31`，显式列出，新列加入，以覆盖迁移）、`STOPPED_INSTANCE`、`PRESTART_NULLS`（`:67-78`）；
+      - `platform/test/container-reconcile-fixture.ts:111-125` 的 `stoppedRow()`；
+      - `platform/test/container-stop.integration.test.ts:150-163`、`platform/test/instance-idle.integration.test.ts:150-163`、`platform/test/container-start.integration.test.ts:340-356`（starting 行带 `document_server_mode: 'unconfigured'`）；
+      - `container-reconcile.docker.test.ts` 中按整行 `toEqual` 的断言。
+  - `platform/test/README.md` § Evidence required: Database 只写「与 `platform/src/db/migrations/` 一致的精确账本」，AGENTS.md 只链到那里，两者都不改。issue 里「AGENTS.md 迁移版本列表」一句是 #539/#542 之前的说法，已失效。
+- **接入决定（启动，覆盖层写入前）**：在 `start.ts` 的 `verifiedPlatform`（`'platform identity'` 阶段）之后、`generateManagedConfig` 之前，新增阶段 `'document server identity'`。
+  - 只在 `upstreamMode === 'network'` 且模式为 `bundled` 时解析：
+    - `GET /containers/<containerName>/json` 取 `Id`；
+    - 再 `GET /containers/<Id>/json`，要求 `Id` 相同、`Name === '/<containerName>'`、`State.Running === true`。
+  - 判定：
+    - 按名字 404 → `reason: 'absent'`；
+    - 其余不一致（ID 不符、名字不符、未运行、ID 非 64 位十六进制）→ `reason: 'identity-mismatch'`；
+    - 两种都不接入，实例照常启动、照常就绪。
+    - 非 404 的 Docker 错误、传输错误或解析错误按现有失败路径让启动失败。Docker 错误不能当作「不存在」，这一点与对账规则一致。
+  - 解析通过 → 决定为 `{ mode: 'bundled', containerId }`。不缓存：与 `transport.platformId` 不同，每次启动都重新解析，不写入 `transport`。
+  - 以下情况都不解析，`containerId` 与 `reason` 均为 `NULL`：
+    - `external`；
+    - `unconfigured`；
+    - published-loopback（模式照常记录）。
+  - 决定是 `start.ts` 内的一个值。它随 `persistCreatedInstance` 写入行，并传给接入步骤；18.2 再把它传给覆盖层，本任务不预留覆盖层参数（YAGNI）。
+  - `StartUserContainerInput.config` 的 `Pick`（`start-identity.ts:26-29`）加 `documentServer`；`instance-service.ts` 已传完整 `PlatformConfig`。编排器只读 `containerName`，`jwtSecret` 不进入任何日志、错误或行。
+- **+4 接入（启动后）**：
+  - 在 `startedUpstream`（`start.ts:227`）的 `attachPlatform` 之后，`validateUserNetwork` 之前，对决定中的 `containerId` 以 `instanceAddressLayout(subnet).documentServer`（+4）发起 `POST /networks/<id>/connect`，请求体是 `{ Container, EndpointConfig: { IPAMConfig: { IPv4Address: <+4> } } }`。
+  - 新阶段名 `'document server attachment'`，失败消息沿用 `Container startup failed during <stage>; <outcome>`。
+  - 必须复用 `attachPlatform` 的 settle 语义，做法是把它参数化或抽出公共内核，不另写一份（jscpd 3% 与 Code Canonicality），包括：
+    - 独立的 10s 期限；
+    - `DockerHttpError` 视为确定答复，其他错误视为结果未知；
+    - 连接后重新 inspect 核实成员关系。
+  - 确定失败 → 抛出接入失败；结果未知且 inspect 未证实 → `'... outcome unconfirmed'`。两者都走现有启动失败路径：`failedStartup` → `compensateStarted`，行记 `error`，审计 `instance.start-failed`。
+  - connect 前用 `verify` 钩子按记录的 ID 重新核验：同 ID、同名、运行中。此时任何不符都按接入失败处理，启动失败。只有覆盖层写入前的那一次解析可以把结果降级为「不可用」，因为 18.2 之后覆盖层已经按「可用」写好。
+  - 成员关系核验把 `platformMembership`（`transport.ts:42`）参数化为「对端 `{ id, name }` + 期望地址」，供平台（+3）和 Document Server（+4）共用，不复制：
+    - 两个 inspect 视图一致；
+    - `NetworkID`、`EndpointID` 一致；
+    - 地址在 (base, base+15) 内且等于声明的 `IPAMConfig`；
+    - Document Server 的声明地址必须等于 +4。
+  - Document Server 对端的身份从容器本身取：`GET /containers/<记录 ID>/json`，`Id` 必须等于记录值，名字取该文档的 `Name`（去掉前导 `/`），从不读配置。停止时 `config.documentServer` 可能已经是 `null`，行里也不存名字。
+    - 网络视图里没有该 ID 时，不要求容器存在，404 可接受。
+    - 网络视图里有、但容器 inspect 返回 404 或 `Id` 不符时，fail closed。
+    - **停止中的接入**：记录 ID 不在网络视图里，但该容器存在，且它的 `NetworkSettings.Networks` 中有一项 `NetworkID === network.id`。Docker 在容器停止时拆掉端点，但保留这份配置，容器再次启动时按配置重新接入。
+      - 健康、就绪、复用和对账都接受这种状态，不抛错。成员关系核验在这种状态下不走「两个视图一致」的比较。
+      - 所有放行和断开判断都把它算作「在网络上」。
+  - 端点存在与否以网络视图为准；停止中的接入另按上一条处理。
+  - Document Server 没有阶段 1 的不声明地址形态：新启动的实例总在布局上。
+  - 随后的 `validateUserNetwork` 要求网络上恰好有员工容器、平台和记录的 Document Server 三个端点，并核对各自地址。
+- **端点所有权（全部网络路径）**：`ownedEndpoints`（`networks.ts:109`）新增必填参数「记录的 Document Server 容器 ID」，类型为 `string | null`，只放行 ID 恰为该值的端点。必填是为了让编译器列出全部调用点。网络地址与名字都不作为授权依据：重建后的同名容器 ID 不同，按未知端点 fail closed。
+  - 记录的 ID 逐个传到以下调用点（行号为当前 main）：
+    - `start.ts:239,262`，以及补偿处的 `:165,180,205`（取自本次启动的决定）；
+    - `start-identity.ts:155`（`reuseCurrentContainer`）；
+    - `credentials.ts:310`（`acquireCurrentDshCookie`）；
+    - `readiness.ts:120`（`networkCurrent`：`observe` 和 `monitor` 的轮询）、`:142`（`cleanupNetwork`）；
+    - `stop.ts:184,260,273,283`（取自 `RetirementRow`）；
+    - `reconcile.ts:134,149,158,202`：`restorePlatform` 的 `verify`、`attachPlatform`、`inspectPlatformAttachment` 以及 `healthy()`，都取自行；
+    - `network-reconcile.ts:100,132`：取自 `reconcileOrphanNetwork` 已读的 `instances` 行（`:59-61`）；
+    - `start.ts:430`（`createInstance` 里 `created=true` 的 `validateUserNetwork`）：它在 `persistCreatedInstance` 之前对着可能是复用的网络运行，所以取本次启动的决定；
+    - `creation-attempt.ts:291,304,317,337`（两处 `validateUserNetwork`、一处 `captureUserNetwork`、一处 `removeUserNetwork`）：取自 `instances` 旧行。崩溃发生在 persist 之前时，旧行还没有被覆盖；
+    - 传 `null` 的点：`start.ts:137`（只用于新建的网络）、`networks.ts:275`（新建网络的回滚）、`networks.ts:327`（`deleteEmptyUserNetwork` 要求网络完全为空）。
+  - `inspectPlatformAttachment`（`networks.ts:394`）和 `attachPlatform` 的预检（`:433`）也放行记录的 ID。平台已接入、不需要 connect 时同样会走这两步（对账的 `restorePlatform`）。
+  - 记录存在时，该端点可以在，也可以已消失：Document Server 被删除时，Docker 会随容器一起移除它的端点。
+  - **`createUserNetwork`（`networks.ts:221`）**：
+    - 新建分支（`:266`）不放行任何 Document Server 端点。
+    - 复用分支（`replacing`，`:231-241`，即容器在外部被删除而行仍非终态，见 `start-identity.ts:137`）：
+      - 复用的网络上出现 Document Server 端点（含停止中的接入）时，只有它的 ID 等于本次 `'document server identity'` 解析出的 ID 才放行，否则 fail closed。
+      - 旧行三列为 `NULL`、网络上没有 Document Server 端点时，行为与阶段 1 只有平台端点的复用相同。
+      - 这个解析决定产生于网络分配之前，所以 `persistCreatedInstance` 的 `ON CONFLICT` 覆盖记录时，绝不会抹掉一个仍在网络上、ID 不同的端点。
+      - Document Server 没有变化时，这条规则保住了阶段 1 在该路径上的自愈。
+- **退役按记录断开**：`removeUserNetwork`（`networks.ts:338`）按以下顺序处理：
+  1. 断开仍在的员工容器；
+  2. 断开已验证的平台端点；
+  3. 断开记录的 Document Server 端点。记录 ID 在网络视图里，或属于停止中的接入时，都发出 `POST /networks/<id>/disconnect` `{ Container: <记录 ID>, Force: false }`。Docker 允许断开已停止的容器，并会删除它配置里的这一项；否则该网络删除后，Document Server 下次启动会因为网络不存在而失败。
+  - 第 3 步复用 `disconnectPlatform` 的 settle：
+    - 重新 inspect 网络，要求该端点消失；
+    - 再 inspect 该容器，要求它的 `NetworkSettings.Networks` 中已没有本网络。容器返回 404 视为已消失，可以接受。
+    - 不满足时报 `'Document Server endpoint remains'`；结果未知时报 `'... disconnection outcome unconfirmed'`。
+  - 断开时成员关系核验用 `'ignored'` 声明模式，与平台的清理授权相同。
+  - 随后 `deleteEmptyUserNetwork` 要求网络完全为空。
+  - 断开只依据记录，不读当前设置、当前 `config.documentServer` 或当前名字解析。切到外部后停止，以及 `config.documentServer` 已被移除后停止，都照记录断开。
+  - Document Server 在其自身主网络和其他实例网络上的端点不受影响：断开只针对本网络 ID。
+- **对账**：
+  - `healthy()`（`reconcile.ts:171`）的 `validateUserNetwork` 放行记录的端点，存在或消失都可以。若存在，必须是记录的 ID，地址为 +4。
+  - `restorePlatform` 只补接平台，但把行里记录的 ID 转交给 `verify`、`attachPlatform` 和 `inspectPlatformAttachment`。对账从不为任何实例接入或补接 Document Server，也不因记录的端点消失而停止实例。
+  - 当前解析出的 Document Server 若不是记录的 ID 而出现在网络上，属于未知端点，对账失败，不断开、不删除。
+  - 平台重启（同一平台容器、新 owner）与平台容器重建（新 ID，对账以 +3 补接平台）都适用。
+- **崩溃窗口与写入顺序**：本次启动接入的 Document Server ID 在 `persistCreatedInstance` 时就已写入行（容器创建后、启动前），connect 在启动之后才发出。
+  - 在复用分支上，`beginCreationAttempt`（`start.ts:595`）与 persist（`:623`）之间崩溃时，网络上可能留有旧记录的端点。
+  - `creation_attempts`（迁移 3）不需要新列：persist 没有执行，所以记录仍在 `instances` 旧行里。`recoverCreationAttempt` 按旧行记录放行和断开它（见上面的调用点清单）。
+
+PR 范围说明：
+
+- 本 PR 改动：
+  - `platform/src/orchestrator/` 的 `start.ts`、`start-identity.ts`、`networks.ts`、`transport.ts`、`stop.ts`、`readiness.ts`、`reconcile.ts`、`network-reconcile.ts`，按需改 `idle.ts`，以及各自的同目录单元测试；
+  - 迁移 8 与上面的账本、列集合同步点；
+  - `platform/test/container-start-docker-fixture.ts`：Document Server 替身直接复用 `createStandInPlatform`，保留原名以减少 diff，不另写一份；
+  - `container-reconcile.docker.test.ts` 与新的 Document Server Docker 用例文件；
+  - 假 daemon 夹具 `container-start-fixture.ts` / `container-reconcile-fixture.ts` 中必要的扩展。
+- 编排者在同一 PR 更新 `platform/src/orchestrator/README.md`：
+  - 网络模式一条：+4 接入、每次启动解析、不可用不阻断、按记录退役、不热补接；
+  - 对账、孤儿回收一条：「已验证的平台端点和已记录的 Document Server 端点」。
+- 连同测试必然超过 400 行：加 `diff-limit-exempt`，并在 PR 描述写明超出部分是测试和账本同步。
+
+剩余风险：
+
+- **重建窗口**：Document Server 在覆盖层写入前的解析与 +4 connect 之间被删除重建时，启动失败而不是降级。这是有意的，失败是明确的，员工重试即可。
+- **旧端点不回收**：Document Server 被重建后，已运行实例在下次启动前 Office 不可用（不热补接，design Risks）。部署文档的说明属 16.4。
+- **复用分支 fail closed**：旧记录的容器仍然存在，但本次决定不是同一个 ID，复用分支就 fail closed。例如切到了外部、配置被移除，或旧容器已停止（判为 `identity-mismatch`，决定 ID 为 `NULL`）。该用户要等对账或管理员停止按记录回收网络之后才能再启动。Document Server 重建时旧容器已删除，旧端点随之消失，复用照常进行。
+- **未知端点**：未记录的 Document Server 端点（例如运维手工 connect）会让该用户的对账和退役 fail closed，需要人工处理。这与平台对任何未知端点的既有规则相同。
+
+not selected：
+
+- Public API：无新路由，`schemas/openapi.json` 不变。
+- Auth：无新权限面，JWT 不被编排器使用。
+- Resource limits：沿用 10s 接入期限和启动总期限。
+- File IO：覆盖层写入不变。
+- Release：无新依赖。
+- Legacy compatibility：三列为 `NULL` 的旧行，行为与今天完全相同；阶段 1 存量实例规则不变。
+
+Governing invariant：员工实例网络上存在 Document Server 端点（含停止中的接入），必须满足：
+
+- 该端点的容器 ID 在 connect 发出前已写入该用户的 `instances` 行；
+- 该记录只在网络确认删除后的同一提交里清除（`stop.ts` `commit()`），其他任何行更新都不清除它。
+
+退役、清理与孤儿回收只断开记录中的那个 ID，从不依据当前设置或当前名字解析。对账从不新增或补接 Document Server 端点。
+
+Sibling surfaces：
+
+- `attachPlatform`、`inspectPlatformAttachment`、`disconnectPlatform`、`deleteEmptyUserNetwork`（`networks.ts`）；
+- `verifiedPlatform`、`platformMembership`（`transport.ts`）；
+- `instanceAddressLayout().documentServer`（`subnet.ts:84,97`，尚无使用方）；
+- `compensateStarted`、`rollbackStartupNetwork`、`startedUpstream`（`start.ts`）；
+- `cleanupNetwork`（`readiness.ts:134`）、`restorePlatform`（`reconcile.ts:111`）、`reconcileOrphanNetwork`（`network-reconcile.ts:46`）；
+- `instance-isolation` 的三端点断言属 16.5（#428），本任务不改隔离用例。
+
+关键路径：`platform/src/orchestrator/` 的每一行都需要人工白盒审查。PR 描述写明「human white-box review deferred to Epic #380 completion, not passed」。
+
+Evidence (16.3 编排器以 +4 接入 Document Server，#426):
+
+- **单元测试**（同目录，逐文件覆盖率 80%），每个分支一例：
+  - 模式推导三态；
+  - external、unconfigured、published-loopback 三种：不发容器 GET、不发 connect，模式照常记录，ID 与原因为 `NULL`；
+  - 名字 404 → `absent`、实例就绪且不接入；
+  - 名字、ID 不符或未运行 → `identity-mismatch`；
+  - 非 404 Docker 错误 → 启动失败；
+  - 解析通过 → 行记录 ID，并以 +4 发出带 `IPAMConfig` 的 connect；
+  - connect 返回 `DockerHttpError` → 启动失败并补偿，网络删除、行 `error`、审计 `instance.start-failed`；
+  - connect 结果丢失但 inspect 证实 → 成功；
+  - connect 结果丢失且未证实 → unconfirmed 失败；
+  - connect 前 `verify` 发现 ID 变化 → 启动失败；
+  - `ownedEndpoints` 放行记录 ID，拒绝同名不同 ID 与未记录端点；
+  - `removeUserNetwork` 按记录断开（存在 / 已消失 / 断开后仍在 / 断开结果未知）；
+  - 停止在切到外部或 `documentServer: null` 后仍按记录断开；
+  - 对账在记录端点存在或消失时都健康，且不发出任何 connect；
+  - 孤儿回收放行行中记录的端点，拒绝未记录的端点。这条只有单元测试覆盖：现有代码里，没有可达的 Docker 状态能让孤儿回收看到非空记录，因为非终态行会先被用户对账按记录回收；
+  - `createUserNetwork` 复用分支：同 ID 放行，ID 不等 fail closed 且不执行 `persistCreatedInstance`；
+  - 对端 inspect：记录 ID 不在网络上且容器 404 → 可接受；在网络上但容器 404 或 `Id` 不符 → fail closed；
+  - 停止提交后三列为 `NULL`；补偿和就绪清理在网络删除失败或未确认时，行为 `error` 且三列保留，各一例；
+  - 创建中断恢复的 upsert 不改三列；崩溃时复用网络已带记录端点，恢复按旧行记录断开它并删除网络；
+  - 停止中的接入：健康和复用都接受；退役对它发出 disconnect，并核实容器配置里已无本网络。
+- **集成测试**：迁移账本 1–8；旧库前向升级后 `instances` 三列为 `NULL` 且既有列不变；`schema.test.ts` 的列集合。
+- **`pnpm test:docker`**：新文件 `platform/test/container-document-server.docker.test.ts`，用自有替身（`dsh-team-test-` 前缀、`dsh-team.test-run` 标签，注册到 lifecycle 清理）断言：
+  - 以自带模式启动两个实例，替身在每个实例网络上恰为一个 +4 端点，三个 inspect 视图一致。停止其一后，该网络上的端点断开、空网络删除；另一实例网络上的 +4 端点 ID 和地址不变；替身主网络端点不变。
+  - 替身不存在（`absent`）、替身已停止（`identity-mismatch`）：实例照常就绪且经网关可访问，网络只有员工容器和平台两个端点，覆盖层文件不含 `onlyoffice`/`documentServer` 键，行记录对应原因。
+  - 接入失败：替身以 `--network container:<另一自有替身>` 运行。Docker 拒绝把共享网络命名空间的容器接入其他网络，所以 connect 确定失败，启动失败，网络与容器删除，行 `error`，没有残留端点。若 VPS daemon 接受此 connect，编排者改用其他能让 connect 确定失败的构造，并在 PR 中写明。
+  - 停止中的替身（两个子场景）：
+    - 停止替身，再停止实例 A，A 的网络被删除；随后启动替身。断言替身能启动，A 的网络不在替身配置里。
+    - 停止替身，重建 owner 并对账。断言实例保持运行，没有停止审计。
+  - 以自带模式启动后，把设置切到外部（直接写 `documentServerUrl`/`documentServerJwtSecret`），再停止：按记录断开，网络删除。
+  - 替身重建：A 运行期间删除替身并以同名重建，再启动 B。断言 B 接入新 ID、A 未被补接。停止 A：记录的旧端点已消失，A 的网络删除。
+  - 带 Document Server 端点的网络回收（issue 里的「孤儿网络」）：实际走的是对账 404 → `stopUserContainer` 按记录回收（`reconcile.ts:184,242`），孤儿回收函数本身见单元测试。做法是启动后在编排器外删除员工容器（自有资源），然后重建 owner 并对账。断言网络与 Document Server 端点都被回收，行为 `stopped` 且三列为 `NULL`，替身其他端点不变。
+- **`pnpm test:docker platform/test/container-reconcile.docker.test.ts`** 新增两例：
+  - 平台重启：同一平台替身、新 owner；
+  - 平台容器重建：平台替身删除并重建，对账以 +3 补接。
+  - 两例各有两个以自带模式启动的运行实例：
+    - A 先启动；
+    - 替身随后删除并以同名重建，A 的记录端点因此消失；
+    - B 接入重建后的替身，记录端点仍在。
+  - 断言对账后：两者仍为运行且可经网关访问；没有额外启动或停止审计；没有任何新增 Document Server 端点；平台端点在 +3；仍在的替身端点 ID 和地址不变。
+- 现有 Docker 用例不加 Document Server 前提（`documentServer: null` → `unconfigured`），其余断言不变。
+- `pnpm check`。
+- VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论：Office 相关门禁要求；本任务不改 stack 通道，证据证明它未被破坏。
+
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 
 依赖：4、10（本机通道用例）、11。关键路径 `images/dsh-user/`。
