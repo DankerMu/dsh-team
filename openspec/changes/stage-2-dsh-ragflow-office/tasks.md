@@ -2101,7 +2101,7 @@ Risk packs (15.4 知识库检索工具与来源展示，#421): fixture level exp
   - 注册放在既有的 `ctx.inject(['sessionProjections', 'commands'], …)` 旁，新增 `ctx.inject(['tools', 'sessionProjections', 'agents'], …)`，只在插件可用（#419 的条件）时注册；缺服务时面板与范围控件照常工作。全局注册：子 Agent 继承全局工具（`R/dsh-tools/lib/types/index.d.ts:632-668`），`tool-subagent` 不接受 `toolFilter`（`R/dsh-tool-subagent/lib/index.js:355`），综合办公与公文与材料写作都能看到该工具，`plugins/office-agents` 不改。
   - 工具名 `knowledge_base_search`（编排者钉死）；`parameters` 恰为 `{ question: string }`，`additionalProperties: false`；`question` 在 `execute` 内按代理的规则校验（非空白、含 U+0085 的空白判断与 #419 相同，≤4096 UTF-8 字节），不合法时不发请求，返回 `invalid-question`。
   - 结果不抛错：所有结局都返回封闭集合的值，由 `render` 给模型中文文本。不注册 client 侧的 `tool.call.toolview`：发行版 Web 客户端不消费 host 的 `presentCall`/`presentResult`（`R/dsh-tools/README.zh.md:95`、`R/dsh-client-ui-tool/README.zh.md:54`），员工看到的是通用 `GenericToolCard`（标题「工具调用」，摘要 `knowledge_base_search · <问题>`），展开该行后输出区显示 `tool/result` 的文本，即 `render` 给模型的同一段文本（`R/dsh-client-ui-tool/lib/client.js:320`）。所以不实现 `presentResult`（PR #535 审查第 1 轮发现后删除）。
-  - 形状（编排者钉死）：`execute` 返回值与 `output.schema` 为 `{ result, chunks?, excluded? }`，`chunks` 为 `[{ content, documentName, datasetName, positions? }]`，`excluded` 为剔除的数量（整数，不放 ID）。`presentResult` 拿不到返回值，只拿到 `content`、`isError` 和 `meta`，所以卡片数据经 `output.presentationMeta(args, value)` 给出：`{ result, title, excluded, chunks }`（同样不含 ID）；`meta` 会持久化进 `tool/result` 并发到浏览器，「不含库 ID」的检查也覆盖原生历史里的 `meta`。
+  - 形状（编排者钉死）：`execute` 返回值与 `output.schema` 为 `{ result, chunks?, excluded? }`，`chunks` 为 `[{ content, documentName, datasetName, positions? }]`，`excluded` 为剔除的数量（整数，不放 ID）。`output.presentationMeta(args, value)` 给出 `{ result, title, excluded, chunks }`（同样不含 ID），持久化为 `tool/result` 的 `meta`；Web 客户端不渲染它，本机通道从原生历史读取它；`meta` 会随 Session 发到浏览器，「不含库 ID」的检查也覆盖原生历史里的 `meta`。
   - 工具名、description 和参数描述里不出现 `kb-scope`、「知识库范围」与任何库 ID：工具是全局的，它的定义随每个模型请求的 `tools[]` 发给 provider，而 #420 的 `forbidden` 扫描整个请求体；单元测试断言这一点。
   - `exec.agent` 缺失时返回 `scope-unavailable`；`exec.signal` 中止时返回 `unavailable`。DSH Web 组成里没有找到 `dsh-tool-call-timeout-policy`，`timeoutMs` 可能不生效，期限以插件内部的两次 25 秒为准。
   - `permission-tiers` 只拦截 `write`、`edit`、`bash`、`run_code`、`build_docx`（`plugins/permission-tiers/index.js:16`），新工具不进入该集合，任何权限档位都不需要审批。
@@ -2109,13 +2109,13 @@ Risk packs (15.4 知识库检索工具与来源展示，#421): fixture level exp
   - 根 Session：从 `exec.agent.session` 开始，只在头部 `origin === 'subagent'` 时经 `ctx.agents.get(header.parentSession)?.session` 看父 Session；员工 fork 出的 Session 是自己的根。孙子 Agent 复制父 Agent 的记录（见下一条），所以只有父 Session 是根的子 Agent 才读根，无需逐层上溯（PR #535 审查后删去原来的 16 层上限）。
   - 根 Session 自己调用时：快照是 `ctx.sessionProjections.stateOf(root, 'kbScope')?.turn`。根 Session 的 agent 在本轮内调用工具，`kbScope.turn` 必然是本轮，不另做轮次核对（#420 交接中的核对由此满足）。
   - 子 Agent 调用时：委派是异步的，父轮可能已结束、员工可能已经改了范围并开始了新的一轮，所以不能读根 Session 的最新快照（spec「该任务的所有检索只针对库1」「子 Agent MUST NOT 扩大范围」）。host 半区监听 `agent/created`：新建的 agent 头部 `origin === 'subagent'` 时按 `source`（`'startup' | 'resume' | 'clear' | 'compact'`，`R/dsh-agent/lib/types/runtime-types.d.ts:105`）处理：`startup` 记下创建那一刻根 Session 的 `kbScope.turn`；`resume` 也记下根 Session 当前一轮（恢复是员工或父 Agent 发起的新任务，README 与不变量写明）；`compact`/`clear` 不覆盖已有记录，记录已被删掉时检索返回 `scope-unavailable`。记下的是（孙子 Agent，即父 Session 自身 `origin === 'subagent'` 的 Agent，不论 `startup` 还是 `resume` 都复制父 Agent 的记录，父 Agent 没有记录时为 `scope-unavailable`；只有父 Session 是根的子 Agent 在 `resume` 时才读根 Session 当前一轮。PR #535 审查第 1 轮：否则后台继续运行的子 Agent 冷恢复其孙子时会取到根 Session 更宽的新范围，违反「子 Agent MUST NOT 扩大范围」），按子 Session ID 存在插件内存里，`agent/disposed` 时删除。子 Agent 检索用这份记录。实现前核对 `agent/created` 的载荷与触发时机（发行包 `R/dsh-agent`、`R/dsh-subagent/lib/index.js:344-400`），以及它在子 Agent 第一次调用工具之前触发。
-  - 没有记录（实例重启后恢复的子 Agent、插件晚于子 Agent 加载）、父 Session 不在内存中、投影缺失、`turn` 为 `null`、超过层数上限：返回 `scope-unavailable`，不发请求（不扩大范围）。
+  - 没有记录（没有活着的父 Agent 时恢复的子 Agent，例如实例重启后；插件晚于子 Agent 加载）、孙子 Agent 的父 Agent 没有记录、父 Session 不在内存中、投影缺失、`turn` 为 `null`、读取投影抛错：返回 `scope-unavailable`，不发请求（不扩大范围）。
   - `scope` 为 `[]`：不发请求，返回 `no-scope`。
   - `scope` 为 `null`：先用 #419 的平台请求函数 `GET …/ragflow/datasets` 取全部库，得到空列表时返回 `no-datasets`（不发检索，空 `datasetIds` 是 `invalid-request`）；列表失败时返回该失败取值。
   - 否则直接用 `scope` 中的 ID。
   - 然后 `POST …/ragflow/retrieval`，请求体恰为 `{ question, datasetIds }`；平台请求函数新增 POST 变体（`content-type: application/json`，`redirect: 'manual'`，Bearer 实例令牌），单次期限 25 秒，回应上限 8 MiB；`exec.signal` 与期限合并。工具 `timeoutMs` 为 60 秒（列表加检索两次调用）。
-- **结果与提示**（编排者钉死的封闭集合，每个 `result` 的模型文本与卡片标题互不相同，单元测试断言两两不同）：
-  - `ok`：卡片标题「知识库检索：N 条结果」；每个片段显示 `content`、文件名、所属知识库，`positions` 有值时原样显示为「位置：…」（不推导页码）；`excluded` 非空时另加一行「有 K 个已选知识库已不可用，已跳过」。
+- **结果与提示**（编排者钉死的封闭集合，每个 `result` 的模型文本与 meta 标题互不相同，单元测试断言两两不同）：
+  - `ok`：标题「知识库检索：N 条结果」；每个片段显示 `content`、文件名、所属知识库，`positions` 有值时原样显示为「位置：…」（不推导页码）；`excluded` 非空时另加一行「有 K 个已选知识库已不可用，已跳过」。
   - `no-results`：「知识库中没有找到相关内容」；同样附 `excluded` 提示。
   - `no-scope`：「本轮没有选择知识库，未检索」（spec「取消全部后不检索」）。
   - `no-datasets`：「平台上还没有任何知识库，未检索」（范围为全选、但平台上没有任何库；与员工取消全部的 `no-scope` 区分）。
@@ -2135,7 +2135,7 @@ not selected：
 
 **不变量**：
 
-- 子 Agent 的检索范围等于它被创建（`startup`）或恢复（`resume`）时根 Session 那一轮的快照，之后根 Session 的修改与新一轮都不影响它；拿不到这份快照时不检索，不扩大范围。
+- 根的子 Agent 的检索范围等于它被创建（`startup`）或恢复（`resume`）时根 Session 那一轮的快照；更深的子 Agent 在创建与恢复时都复制委派它的父 Agent 的记录，所以范围不会比父 Agent 更宽；之后根 Session 的修改与新一轮都不影响它们；拿不到这份快照时不检索，不扩大范围。
 - `[]` 不发任何请求；`null` 不把空列表发给检索。
 - 每种结局的提示互不相同；知识库不可用时工具返回提示，对话继续。
 
@@ -2167,7 +2167,7 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
   - 根解析：根自身；一层、两层子 Agent；fork（有 `parentSession` 无 `origin`）是自己的根；父不在内存、投影缺失、`turn` 为 `null` 都是 `scope-unavailable`；17 层链条逐层传递同一记录；
   - 范围：`[]` 不发任何请求；`null` 先列表再检索，空列表 `no-datasets` 且不检索，列表失败传出失败取值；ID 列表直接检索；请求体恰为 `{ question, datasetIds }`、方法、`Authorization`、`content-type`、`redirect`；
   - 子 Agent 的快照：`compact`/`clear` 重新 announce 后范围不变（或在记录已删时为 `scope-unavailable`）；根 Session 第 N 轮创建子 Agent 后，根 Session 改成更宽的范围并进入第 N+1 轮，子 Agent 仍用第 N 轮的范围；孙子 Agent 继承同一记录（`startup` 与 `resume` 都是；根 Session 之后改宽、孙子 Agent 以 `resume` 重新 announce 时仍用父 Agent 的记录；父 Agent 没有记录时 `scope-unavailable`）；`sessionProjections.stateOf` 抛错时返回 `scope-unavailable`，模型文本里没有 `Error:`；结果文本中文件名与库名里的换行被替换，不能伪造条目；`agent/disposed` 后记录删除；没有记录时 `scope-unavailable`；
-  - 结局：11 种结局（插件 6 种加代理 5 种）的模型文本两两不同、卡片标题两两不同；工具名与描述不含 `kb-scope`、「知识库范围」；`excluded` 提示；`positions` 只在有值时显示；文本与卡片不含库 ID、令牌、平台地址；回应形状不合法为 `upstream-error`；超时、传输失败、中止；
+  - 结局：11 种结局（插件 6 种加代理 5 种）的模型文本两两不同、meta 标题两两不同；工具名与描述不含 `kb-scope`、「知识库范围」；`excluded` 提示；`positions` 只在有值时显示；文本与 meta 不含库 ID、令牌、平台地址；回应形状不合法为 `upstream-error`；超时、传输失败、中止；
   - `question` 校验：空白、超 4096 字节不发请求；
   - 插件不可用或缺 `tools`/`agents` 时不注册工具。
 - 本机通道（`pnpm test:stack`，Playwright Chromium 经网关，确定性 provider），放在 #420 的范围步骤之后，同一员工：

@@ -786,6 +786,18 @@ describe('outcome texts and meta', () => {
     expect(block.text).toContain(CHUNK.content);
   });
 
+  it('keeps line breaks inside chunk content unchanged in the text and the meta', () => {
+    const { tool } = world();
+    const content = '一、提交发票\n二、填写报销单\r\n三、附审批单\u2028四、结束';
+    const chunk = { ...CHUNK, documentName: 'a.txt\nb.txt', content };
+    const value = { result: 'ok', chunks: [chunk], excluded: 0 };
+    const [block] = text(tool, value);
+
+    expect(block.text.endsWith(`\n${content}`)).toBe(true);
+    expect(block.text).toContain('文件：a.txt b.txt；');
+    expect(meta(tool, value).chunks[0].content).toBe(content);
+  });
+
   it('projects meta without IDs, and the text and meta carry no ID, token or address', async () => {
     platform({ retrieval: okRetrieval([CHUNK], [SECOND]) });
     const { tool, live, turn, search } = world();
