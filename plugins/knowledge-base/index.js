@@ -40,8 +40,6 @@ const SCOPE_INVALID = '知识库范围参数无效';
 /** The retrieval answer: up to 100 chunks of RAGFlow text, the proxy's own 8 MiB cap. */
 const RETRIEVAL_LIMIT = 8 * 1024 * 1024;
 const MAX_QUESTION_BYTES = 4096;
-/** Parent hops a child Agent walks to its root Session. */
-const MAX_DEPTH = 16;
 /** The fixed Chinese text of every search outcome but `ok`, whose title counts its chunks. */
 const OUTCOME_TEXTS = {
   'no-results': '知识库中没有找到相关内容',
@@ -497,7 +495,7 @@ function questionOf(args) {
 }
 
 /**
- * The card data of one outcome; like the value it names libraries only, never their IDs.
+ * The `tool/result` meta of one outcome; like the value it names libraries only, never their IDs.
  * @param {import('./types.js').SearchValue} value
  * @returns {import('./types.js').SearchMeta}
  */
@@ -510,40 +508,26 @@ function metaOf(value) {
   return { result: value.result, title, excluded: value.excluded ?? 0, chunks };
 }
 
+// A name keeps to its own entry line: CR, LF, VT, FF, NEL, LS and PS each become a space.
+/** @param {string} name */
+const flat = (name) => name.replace(/[\n\r\v\f\u0085\u2028\u2029]/g, ' ');
+
 /**
- * The one text both the model and the card show: the title, the exclusion count, then every
- * chunk with its file, its library and, only when present, its verbatim positions.
+ * The one text the model gets and the employee sees when expanding the native tool row: the
+ * title, the exclusion count, then every chunk with its file, its library and, only when present,
+ * its verbatim positions.
  * @param {import('./types.js').SearchMeta} meta
  */
 function describe({ title, excluded, chunks }) {
   const lines = [title];
   if (excluded > 0) lines.push(`有 ${String(excluded)} 个已选知识库已不可用，已跳过`);
   chunks.forEach((chunk, index) => {
-    lines.push(
-      '',
-      `[${String(index + 1)}] 文件：${chunk.documentName}；所属知识库：${chunk.datasetName}`,
-    );
+    const file = flat(chunk.documentName);
+    lines.push('', `[${String(index + 1)}] 文件：${file}；所属知识库：${flat(chunk.datasetName)}`);
     if (chunk.positions !== undefined) lines.push(`位置：${JSON.stringify(chunk.positions)}`);
     lines.push(chunk.content);
   });
   return lines.join('\n');
-}
-
-/**
- * Persisted `meta` narrowed back to the card data; undefined when malformed.
- * @param {unknown} meta
- * @returns {import('./types.js').SearchMeta | undefined}
- */
-function shownMeta(meta) {
-  if (typeof meta !== 'object' || meta === null || Array.isArray(meta)) return undefined;
-  const { result, title, excluded, chunks } = /** @type {Record<string, unknown>} */ (meta);
-  if (typeof result !== 'string' || !RESULTS.includes(result) || typeof title !== 'string')
-    return undefined;
-  if (!Number.isSafeInteger(excluded) || Number(excluded) < 0) return undefined;
-  const shown = chunksOf(chunks);
-  if (shown === undefined) return undefined;
-  const narrowed = { result, title, excluded: Number(excluded), chunks: shown };
-  return /** @type {import('./types.js').SearchMeta} */ (narrowed);
 }
 
 const CHUNK_SCHEMA = {
@@ -570,23 +554,6 @@ function turnScope(projections, session) {
 }
 
 /**
- * The root Session: `session` itself unless it belongs to a child Agent, then up through live
- * parents, at most 16 hops. An employee fork has a parent but no origin and is its own root.
- * @param {import('./types.js').SearchServices['agents']} agents
- * @param {import('./types.js').SearchSession} session
- */
-function rootOf(agents, session) {
-  let current = session;
-  for (let hops = 0; current.header.origin === 'subagent'; hops++) {
-    const id = current.header.parentSession;
-    const parent = hops < MAX_DEPTH && id !== undefined ? agents.get(id)?.session : undefined;
-    if (parent === undefined) return undefined;
-    current = parent;
-  }
-  return current;
-}
-
-/**
  * `knowledge_base_search`, registered globally so every child Agent sees it. A root Session
  * searches its own turn snapshot; a child Agent searches the record taken when it was created or
  * resumed, never its own projection, so a delegation cannot widen the scope.
@@ -605,12 +572,14 @@ function searchTool(scoped, retrieve) {
       if (header.origin !== 'subagent' || (source !== 'startup' && source !== 'resume')) return;
       const parentId = header.parentSession;
       const parent = parentId === undefined ? undefined : scoped.agents.get(parentId)?.session;
-      // A grandchild inherits its parent's record; any other child snapshots the root's turn.
-      const root = rootOf(scoped.agents, agent.session);
+      // A grandchild, created or resumed, copies its parent's record; only a child of the root
+      // snapshots the root's current turn, so a delegation never widens its scope.
       const record =
-        source === 'startup' && parent?.header.origin === 'subagent'
-          ? records.get(parent.id)
-          : root && turnScope(scoped.sessionProjections, root);
+        parent === undefined
+          ? undefined
+          : parent.header.origin === 'subagent'
+            ? records.get(parent.id)
+            : turnScope(scoped.sessionProjections, parent);
       if (record !== undefined) records.set(id, record);
       else {
         records.delete(id);
@@ -666,21 +635,17 @@ function searchTool(scoped, retrieve) {
     async execute(args, exec) {
       const question = questionOf(args);
       if (question === undefined) return { result: 'invalid-question' };
-      const record = exec.agent === undefined ? undefined : scopeOf(exec.agent.session);
+      let record;
+      try {
+        record = exec.agent === undefined ? undefined : scopeOf(exec.agent.session);
+      } catch {
+        // A broken projection or Session leaves the scope unknown; never search wider.
+        record = undefined;
+      }
       if (record === undefined) return { result: 'scope-unavailable' };
       if (exec.signal.aborted) return { result: 'unavailable' };
       if (record.scope?.length === 0) return { result: 'no-scope' };
       return retrieve(question, record.scope, exec.signal);
-    },
-    /** @param {unknown} _args @param {{ isError: boolean; meta?: unknown }} result */
-    presentResult(_args, result) {
-      const meta = result.isError ? undefined : shownMeta(result.meta);
-      if (meta === undefined) return undefined;
-      return {
-        card: 'generic',
-        title: meta.title,
-        content: [{ type: 'text', text: describe(meta) }],
-      };
     },
   };
 }

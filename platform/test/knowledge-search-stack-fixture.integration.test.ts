@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  cardTexts,
   childSessionOf,
   scopeCommandOutcome,
   searchCard,
@@ -38,6 +39,7 @@ const CHUNK = {
 };
 const TEXT = `知识库检索：1 条结果\n有 1 个已选知识库已不可用，已跳过\n\n[1] 文件：expense-policy.txt；所属知识库：${POLICIES.name}\n提交发票`;
 const META = { result: 'ok', title: '知识库检索：1 条结果', excluded: 1, chunks: [CHUNK] };
+const TEXT_WITH = (chunks: number) => TEXT.replace('1 条结果', `${String(chunks)} 条结果`);
 const searched = (text = TEXT, meta: unknown = META, isError = false) => ({ text, meta, isError });
 const ROOT = { expected: SELECTION, turn: { turn: 1, scope: SELECTION } };
 
@@ -177,21 +179,40 @@ describe('searchCard', () => {
     groupsClicked: false,
     cards: 1,
     visible: 1,
+    rowOpen: true,
+    rowClicked: false,
+    title: true,
+    excluded: true,
+    dataset: true,
     ...fields,
   });
-  const closed = { cards: 0, visible: 0 };
+  const unread = { title: false, excluded: false, dataset: false };
+  const noRow = { rowOpen: null, ...unread };
+  const closed = { cards: 0, visible: 0, ...noRow };
+  const verified = { fold: 'open', group: 'open', cards: 1, visible: 1, row: 'open' };
 
-  it('reads the turn fold, the step groups, the counted cards and the visible ones', () => {
-    expect(searchCard(page({}))).toEqual({ fold: 'open', group: 'open', cards: 1, visible: 1 });
-    expect(searchCard(page({ visible: 0 }))).toEqual({
-      fold: 'open',
-      group: 'open',
-      cards: 1,
+  it('reads the disclosures, the card counts and which expected texts the open row shows', () => {
+    expect(searchCard(page({}))).toEqual({
+      ...verified,
+      title: true,
+      excluded: true,
+      dataset: true,
+    });
+    expect(searchCard(page({ excluded: false, rowClicked: true }))).toEqual({
+      ...verified,
+      title: true,
+      excluded: false,
+      dataset: true,
+    });
+    expect(searchCard(page({ visible: 0, ...noRow }))).toEqual({
+      ...verified,
       visible: 0,
+      row: 'none',
+      ...unread,
     });
     expect(
-      searchCard(page({ groups: 0, groupsOpen: null, cards: 2, groupsClicked: true })),
-    ).toEqual({ fold: 'open', group: 'none', cards: 2, visible: 1 });
+      searchCard(page({ groups: 0, groupsOpen: null, cards: 2, groupsClicked: true, ...noRow })),
+    ).toEqual({ ...verified, group: 'none', cards: 2, row: 'none', ...unread });
   });
 
   it.each([
@@ -216,6 +237,14 @@ describe('searchCard', () => {
   });
 
   it.each([
+    ['no card row', noRow, 'none'],
+    ['a collapsed card row', { rowOpen: false, ...unread }, 'collapsed'],
+    ['an open card row', {}, 'open'],
+  ])('names the card row state of %s', (_label, fields, row) => {
+    expect(searchCard(page(fields)).row).toBe(row);
+  });
+
+  it.each([
     ['no state', null],
     ['an array', []],
     ['a text card count', page({ cards: '1' })],
@@ -230,9 +259,12 @@ describe('searchCard', () => {
     ['a text group count', page({ groups: '1' })],
     ['a text group state', page({ groupsOpen: 'true' })],
     ['a text group click', page({ groupsClicked: 'true' })],
+    ['a text row state', page({ rowOpen: 'true' })],
+    ['a text row click', page({ rowClicked: 'true' })],
+    ['a text title check', page({ title: 'true' })],
+    ['a missing dataset check', { ...page({}), dataset: undefined }],
     ['a group state without groups', page({ groups: 0, groupsOpen: true })],
     ['groups without a group state', page({ groups: 1, groupsOpen: null })],
-    ['a missing visible count', { ...page({}), visible: undefined }],
     [
       'cards counted under a collapsed fold',
       page({ foldOpen: false, groups: 0, groupsOpen: null }),
@@ -240,18 +272,47 @@ describe('searchCard', () => {
     ['cards counted without a fold', page({ foldOpen: null, groups: 0, groupsOpen: null })],
     ['groups read under a collapsed fold', page({ foldOpen: false, ...closed })],
     ['cards counted under a collapsed group', page({ groupsOpen: false })],
+    ['a row read without a visible card', page({ visible: 0 })],
+    ['a row read beside a second visible card', page({ cards: 2, visible: 2 })],
+    ['texts read under a collapsed row', page({ rowOpen: false })],
+    ['texts read without a row', page({ rowOpen: null })],
     ['card text leaving the page', page({ text: '' })],
   ])('fails for %s', (_label, value) => {
     expect(() => searchCard(value)).toThrow(/^Search card state malformed$/);
   });
 });
 
+describe('cardTexts', () => {
+  it('expects the counted title, the one skipped library and the library name, no ID', () => {
+    const texts = cardTexts(3, POLICIES.name);
+
+    expect(texts).toEqual({
+      title: '知识库检索：3 条结果',
+      excluded: '有 1 个已选知识库已不可用，已跳过',
+      dataset: `所属知识库：${POLICIES.name}`,
+    });
+    for (const line of Object.values(texts)) expect(TEXT_WITH(3)).toContain(line);
+    expect(JSON.stringify(texts)).not.toMatch(/[0-9a-f]{32}/);
+  });
+});
+
 describe('searchCardPhase', () => {
-  const state = (fold: string, group: string, cards = 0, visible = 0) => ({
+  const state = (
+    fold: string,
+    group: string,
+    cards = 0,
+    visible = 0,
+    row = 'none',
+    texts = [false, false, false],
+  ) => ({
     fold,
     group,
     cards,
     visible,
+    row,
+    title: texts[0],
+    excluded: texts[1],
+    dataset: texts[2],
   });
 
   it.each([
@@ -262,8 +323,13 @@ describe('searchCardPhase', () => {
     [state('open', 'open'), 'fold expanded but no card'],
     [state('open', 'none'), 'fold expanded but no card'],
     [state('open', 'open', 1), 'fold expanded but no visible card'],
-    [state('open', 'open', 1, 1), 'card visible'],
-    [state('open', 'none', 2, 1), 'card visible'],
+    [state('open', 'open', 2, 2), 'more than one visible card'],
+    [state('open', 'open', 1, 1), 'card row not found'],
+    [state('open', 'open', 1, 1, 'collapsed'), 'card row still collapsed'],
+    [state('open', 'open', 1, 1, 'open', [true, false, true]), 'card without expected content'],
+    [state('open', 'open', 1, 1, 'open', [false, true, true]), 'card without expected content'],
+    [state('open', 'open', 1, 1, 'open', [true, true, false]), 'card without expected content'],
+    [state('open', 'none', 2, 1, 'open', [true, true, true]), 'card verified'],
   ] as const)('names the step a card wait stopped at for %j', (shown, phase) => {
     expect(searchCardPhase(shown as Parameters<typeof searchCardPhase>[0])).toBe(phase);
   });

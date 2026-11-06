@@ -212,11 +212,16 @@ export function settledAfter(events: readonly HistoryEvent[], turn: number): boo
 // holds; once it reads "true", every collapsed group header of that Turn is clicked open while
 // `click.groups` holds; cards (the released ToolRow root `data-tool`, dsh-client-ui-tool) are
 // counted only when the fold and all of the Turn's groups read "true". A card is visible when,
-// scrolled to the centre, its rect has a size and the element at its centre lies inside it.
-// Only counts and booleans leave the page, never a card's text.
+// scrolled to the centre, its rect has a size and the element at its centre lies inside it. With
+// exactly one visible card, its own row (the primitives' DisclosureRow with `expandOnRowClick`:
+// `[data-disclosure-row]`, `role="button"` and `aria-expanded` while expandable) is clicked open
+// while it reads "false" and `click.row` holds; once it reads "true" the card's text, which then
+// includes the `tool/result` output, is matched against the expected strings in the page. Only
+// counts and booleans leave the page, never a card's text.
 const CARD = (
   childId: string,
-  click: { readonly fold: boolean; readonly groups: boolean },
+  click: { readonly fold: boolean; readonly groups: boolean; readonly row: boolean },
+  expected: CardTexts,
 ) => `(() => {
   const live = (node) => node.closest('[inert]') === null && node.getClientRects().length > 0;
   const view = document.querySelector('[data-conversation-session="' + ${JSON.stringify(childId)} + '"]') || document;
@@ -228,7 +233,10 @@ const CARD = (
   const foldOpen = disclosure === 'true' ? true : disclosure === 'false' ? false : null;
   const foldClicked = ${JSON.stringify(click.fold)} && foldOpen === false && !fold.disabled;
   if (foldClicked) fold.click();
-  const state = { folds: folds.length, foldOpen, foldClicked, groups: 0, groupsOpen: null, groupsClicked: false, cards: 0, visible: 0 };
+  const state = {
+    folds: folds.length, foldOpen, foldClicked, groups: 0, groupsOpen: null, groupsClicked: false,
+    cards: 0, visible: 0, rowOpen: null, rowClicked: false, title: false, excluded: false, dataset: false,
+  };
   if (foldOpen !== true) return state;
   const turn = fold.getAttribute('data-turn-process');
   const headers = [...view.querySelectorAll('[data-step-process][data-chat-turn]')]
@@ -249,12 +257,41 @@ const CARD = (
     const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
     return hit !== null && card.contains(hit);
   };
+  const visible = cards.filter(shown);
   state.cards = cards.length;
-  state.visible = cards.filter(shown).length;
+  state.visible = visible.length;
+  if (visible.length !== 1) return state;
+  const card = visible[0];
+  const row = card.querySelector('[data-disclosure-row][aria-expanded]');
+  if (row === null) return state;
+  state.rowOpen = row.getAttribute('aria-expanded') === 'true';
+  state.rowClicked = ${JSON.stringify(click.row)} && !state.rowOpen;
+  if (state.rowClicked) row.click();
+  if (!state.rowOpen) return state;
+  const text = card.innerText;
+  state.title = text.includes(${JSON.stringify(expected.title)});
+  state.excluded = text.includes(${JSON.stringify(expected.excluded)});
+  state.dataset = text.includes(${JSON.stringify(expected.dataset)});
   return state;
 })()`;
 
-/** What a card wait observed: the turn fold, its step groups, the counted and visible cards. */
+/** The strings the expanded search row must show; fixed texts and a library name, never an ID. */
+export interface CardTexts {
+  readonly title: string;
+  readonly excluded: string;
+  readonly dataset: string;
+}
+
+/** The expanded row's expected texts for a search whose native history holds `chunks` chunks. */
+export function cardTexts(chunks: number, datasetName: string): CardTexts {
+  return {
+    title: `${OK_TITLE}${String(chunks)} 条结果`,
+    excluded: '有 1 个已选知识库已不可用，已跳过',
+    dataset: `所属知识库：${datasetName}`,
+  };
+}
+
+/** What a card wait observed: the disclosures, the card counts and the matched texts. */
 export interface SearchCardState {
   /** `missing`: no live fold of a Turn with tool calls carries a disclosure state. */
   readonly fold: 'missing' | 'collapsed' | 'open';
@@ -262,25 +299,33 @@ export interface SearchCardState {
   readonly group: 'none' | 'collapsed' | 'open';
   readonly cards: number;
   readonly visible: number;
+  /** `none`: no single visible card, or its row is not expandable. */
+  readonly row: 'none' | 'collapsed' | 'open';
+  readonly title: boolean;
+  readonly excluded: boolean;
+  readonly dataset: boolean;
 }
 
 const isCount = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
 const isState = (value: unknown) => value === null || typeof value === 'boolean';
+const FLAGS = ['foldClicked', 'groupsClicked', 'rowClicked', 'title', 'excluded', 'dataset'];
 const CARD_KEYS = [
-  'cards',
-  'foldClicked',
-  'foldOpen',
-  'folds',
-  'groups',
-  'groupsClicked',
-  'groupsOpen',
-  'visible',
-].join();
+  ...FLAGS,
+  ...['folds', 'foldOpen', 'groups', 'groupsOpen', 'cards', 'visible', 'rowOpen'],
+]
+  .sort()
+  .join();
 
-/** The page reads groups only under an open fold and cards only when every group is open. */
+/**
+ * The page reads groups only under an open fold, cards only when every group is open, the row
+ * only beside exactly one visible card, and texts only under an open row.
+ */
 function consistentCard(value: Record<string, unknown>) {
+  const read = value.title === true || value.excluded === true || value.dataset === true;
   if (Number(value.visible) > Number(value.cards)) return false;
   if ((value.groups === 0) !== (value.groupsOpen === null)) return false;
+  if (value.rowOpen !== null && value.visible !== 1) return false;
+  if (read && value.rowOpen !== true) return false;
   if (value.foldOpen !== true) return value.groups === 0 && value.cards === 0;
   return value.groupsOpen !== false || value.cards === 0;
 }
@@ -291,10 +336,8 @@ export function searchCard(value: unknown): SearchCardState {
     !isRecord(value) ||
     Object.keys(value).sort().join() !== CARD_KEYS ||
     ![value.folds, value.groups, value.cards, value.visible].every(isCount) ||
-    !isState(value.foldOpen) ||
-    !isState(value.groupsOpen) ||
-    typeof value.foldClicked !== 'boolean' ||
-    typeof value.groupsClicked !== 'boolean' ||
+    ![value.foldOpen, value.groupsOpen, value.rowOpen].every(isState) ||
+    !FLAGS.every((flag) => typeof value[flag] === 'boolean') ||
     !consistentCard(value)
   )
     throw new Error('Search card state malformed');
@@ -305,6 +348,10 @@ export function searchCard(value: unknown): SearchCardState {
     group: disclosure(value.groupsOpen, 'none'),
     cards: Number(value.cards),
     visible: Number(value.visible),
+    row: disclosure(value.rowOpen, 'none'),
+    title: value.title === true,
+    excluded: value.excluded === true,
+    dataset: value.dataset === true,
   };
 }
 
@@ -315,7 +362,12 @@ export function searchCardPhase(state: SearchCardState | undefined): string {
   if (state.fold === 'collapsed') return 'turn fold still collapsed';
   if (state.group === 'collapsed') return 'step group still collapsed';
   if (state.cards === 0) return 'fold expanded but no card';
-  return state.visible === 0 ? 'fold expanded but no visible card' : 'card visible';
+  if (state.visible === 0) return 'fold expanded but no visible card';
+  if (state.visible > 1) return 'more than one visible card';
+  if (state.row === 'none') return 'card row not found';
+  if (state.row === 'collapsed') return 'card row still collapsed';
+  const shows = state.title && state.excluded && state.dataset;
+  return shows ? 'card verified' : 'card without expected content';
 }
 
 /** Everything the search step needs from the stack test; values stay in memory. */
@@ -457,20 +509,20 @@ export async function searchScenario(scenario: SearchScenario): Promise<SearchEv
     const shown: { state?: SearchCardState } = {};
     await timed('card', async () => {
       await openChild(page, timeout);
-      // The turn fold and the Turn's step groups are each clicked open at most once on this page,
-      // never toggled back; the card's own row is never clicked. Its content is proved by the
-      // native history meta above.
-      const clicked = { fold: false, groups: false };
+      // The turn fold, the Turn's step groups and the card's own row are each clicked open at
+      // most once on this page, never toggled back.
+      const clicked = { fold: false, groups: false, row: false };
+      const expected = cardTexts(facts.chunks, scenario.policies.name);
       try {
         await until(
           async () => {
-            const click = { fold: !clicked.fold, groups: !clicked.groups };
-            const state = await page.evaluate<unknown>(CARD(childSessionId, click));
+            const click = { fold: !clicked.fold, groups: !clicked.groups, row: !clicked.row };
+            const state = await page.evaluate<unknown>(CARD(childSessionId, click, expected));
             if (isRecord(state) && state.foldClicked === true) clicked.fold = true;
             if (isRecord(state) && state.groupsClicked === true) clicked.groups = true;
+            if (isRecord(state) && state.rowClicked === true) clicked.row = true;
             shown.state = searchCard(state);
-            const { fold, group, visible } = shown.state;
-            return fold === 'open' && group !== 'collapsed' && visible > 0;
+            return searchCardPhase(shown.state) === 'card verified';
           },
           timeout,
           'search card',
@@ -481,9 +533,17 @@ export async function searchScenario(scenario: SearchScenario): Promise<SearchEv
         });
       }
     });
-    // The poll that ended the wait scrolled the card into view under the open fold and groups;
+    // The poll that ended the wait scrolled the expanded card into view and matched its texts;
     // the screenshot follows it at once, so the evidence shows the state asserted here.
-    expect(shown.state).toMatchObject({ fold: 'open', cards: 1, visible: 1 });
+    expect(shown.state).toMatchObject({
+      fold: 'open',
+      cards: 1,
+      visible: 1,
+      row: 'open',
+      title: true,
+      excluded: true,
+      dataset: true,
+    });
     expect(shown.state?.group).not.toBe('collapsed');
     await tools.shoot('search-sources');
   });

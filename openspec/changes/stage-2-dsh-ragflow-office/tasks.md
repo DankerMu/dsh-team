@@ -2100,15 +2100,15 @@ Risk packs (15.4 知识库检索工具与来源展示，#421): fixture level exp
   - 工具注册：`ctx.tools.register(definition)`（`R/dsh-tools/lib/types/index.d.ts:632-637`）；定义为 `{ name, description, parameters, output: { schema, render, presentationMeta? }, execute, timeoutMs?, isConcurrencySafe?, presentCall?, presentResult? }`（`:106-115`），`execute(args, exec)` 的 `exec` 带 `callId`、`agent`、`signal`（`:216-247`）。仓库内先例：`plugins/office-agents/docx-construction.js:191-263`。
   - 注册放在既有的 `ctx.inject(['sessionProjections', 'commands'], …)` 旁，新增 `ctx.inject(['tools', 'sessionProjections', 'agents'], …)`，只在插件可用（#419 的条件）时注册；缺服务时面板与范围控件照常工作。全局注册：子 Agent 继承全局工具（`R/dsh-tools/lib/types/index.d.ts:632-668`），`tool-subagent` 不接受 `toolFilter`（`R/dsh-tool-subagent/lib/index.js:355`），综合办公与公文与材料写作都能看到该工具，`plugins/office-agents` 不改。
   - 工具名 `knowledge_base_search`（编排者钉死）；`parameters` 恰为 `{ question: string }`，`additionalProperties: false`；`question` 在 `execute` 内按代理的规则校验（非空白、含 U+0085 的空白判断与 #419 相同，≤4096 UTF-8 字节），不合法时不发请求，返回 `invalid-question`。
-  - 结果不抛错：所有结局都返回封闭集合的值，由 `render` 给模型中文文本，由 `presentResult` 给员工一张 generic 卡片（`{ card: 'generic', title, content }`，先例 `R/dsh-tool-web/lib/index.js:86-175`）。不注册 client 侧的 `tool.call.toolview`。
+  - 结果不抛错：所有结局都返回封闭集合的值，由 `render` 给模型中文文本。不注册 client 侧的 `tool.call.toolview`：发行版 Web 客户端不消费 host 的 `presentCall`/`presentResult`（`R/dsh-tools/README.zh.md:95`、`R/dsh-client-ui-tool/README.zh.md:54`），员工看到的是通用 `GenericToolCard`（标题「工具调用」，摘要 `knowledge_base_search · <问题>`），展开该行后输出区显示 `tool/result` 的文本，即 `render` 给模型的同一段文本（`R/dsh-client-ui-tool/lib/client.js:320`）。所以不实现 `presentResult`（PR #535 审查第 1 轮发现后删除）。
   - 形状（编排者钉死）：`execute` 返回值与 `output.schema` 为 `{ result, chunks?, excluded? }`，`chunks` 为 `[{ content, documentName, datasetName, positions? }]`，`excluded` 为剔除的数量（整数，不放 ID）。`presentResult` 拿不到返回值，只拿到 `content`、`isError` 和 `meta`，所以卡片数据经 `output.presentationMeta(args, value)` 给出：`{ result, title, excluded, chunks }`（同样不含 ID）；`meta` 会持久化进 `tool/result` 并发到浏览器，「不含库 ID」的检查也覆盖原生历史里的 `meta`。
   - 工具名、description 和参数描述里不出现 `kb-scope`、「知识库范围」与任何库 ID：工具是全局的，它的定义随每个模型请求的 `tools[]` 发给 provider，而 #420 的 `forbidden` 扫描整个请求体；单元测试断言这一点。
   - `exec.agent` 缺失时返回 `scope-unavailable`；`exec.signal` 中止时返回 `unavailable`。DSH Web 组成里没有找到 `dsh-tool-call-timeout-policy`，`timeoutMs` 可能不生效，期限以插件内部的两次 25 秒为准。
   - `permission-tiers` 只拦截 `write`、`edit`、`bash`、`run_code`、`build_docx`（`plugins/permission-tiers/index.js:16`），新工具不进入该集合，任何权限档位都不需要审批。
 - **范围解析**（编排者钉死）：
-  - 根 Session：从 `exec.agent.session` 开始，只在头部 `origin === 'subagent'` 时经 `ctx.agents.get(header.parentSession)?.session` 上溯，最多 16 层；员工 fork 出的 Session 是自己的根。
+  - 根 Session：从 `exec.agent.session` 开始，只在头部 `origin === 'subagent'` 时经 `ctx.agents.get(header.parentSession)?.session` 看父 Session；员工 fork 出的 Session 是自己的根。孙子 Agent 复制父 Agent 的记录（见下一条），所以只有父 Session 是根的子 Agent 才读根，无需逐层上溯（PR #535 审查后删去原来的 16 层上限）。
   - 根 Session 自己调用时：快照是 `ctx.sessionProjections.stateOf(root, 'kbScope')?.turn`。根 Session 的 agent 在本轮内调用工具，`kbScope.turn` 必然是本轮，不另做轮次核对（#420 交接中的核对由此满足）。
-  - 子 Agent 调用时：委派是异步的，父轮可能已结束、员工可能已经改了范围并开始了新的一轮，所以不能读根 Session 的最新快照（spec「该任务的所有检索只针对库1」「子 Agent MUST NOT 扩大范围」）。host 半区监听 `agent/created`：新建的 agent 头部 `origin === 'subagent'` 时按 `source`（`'startup' | 'resume' | 'clear' | 'compact'`，`R/dsh-agent/lib/types/runtime-types.d.ts:105`）处理：`startup` 记下创建那一刻根 Session 的 `kbScope.turn`；`resume` 也记下根 Session 当前一轮（恢复是员工或父 Agent 发起的新任务，README 与不变量写明）；`compact`/`clear` 不覆盖已有记录，记录已被删掉时检索返回 `scope-unavailable`。记下的是（孙子 Agent 复制父 Agent 的记录），按子 Session ID 存在插件内存里，`agent/disposed` 时删除。子 Agent 检索用这份记录。实现前核对 `agent/created` 的载荷与触发时机（发行包 `R/dsh-agent`、`R/dsh-subagent/lib/index.js:344-400`），以及它在子 Agent 第一次调用工具之前触发。
+  - 子 Agent 调用时：委派是异步的，父轮可能已结束、员工可能已经改了范围并开始了新的一轮，所以不能读根 Session 的最新快照（spec「该任务的所有检索只针对库1」「子 Agent MUST NOT 扩大范围」）。host 半区监听 `agent/created`：新建的 agent 头部 `origin === 'subagent'` 时按 `source`（`'startup' | 'resume' | 'clear' | 'compact'`，`R/dsh-agent/lib/types/runtime-types.d.ts:105`）处理：`startup` 记下创建那一刻根 Session 的 `kbScope.turn`；`resume` 也记下根 Session 当前一轮（恢复是员工或父 Agent 发起的新任务，README 与不变量写明）；`compact`/`clear` 不覆盖已有记录，记录已被删掉时检索返回 `scope-unavailable`。记下的是（孙子 Agent，即父 Session 自身 `origin === 'subagent'` 的 Agent，不论 `startup` 还是 `resume` 都复制父 Agent 的记录，父 Agent 没有记录时为 `scope-unavailable`；只有父 Session 是根的子 Agent 在 `resume` 时才读根 Session 当前一轮。PR #535 审查第 1 轮：否则后台继续运行的子 Agent 冷恢复其孙子时会取到根 Session 更宽的新范围，违反「子 Agent MUST NOT 扩大范围」），按子 Session ID 存在插件内存里，`agent/disposed` 时删除。子 Agent 检索用这份记录。实现前核对 `agent/created` 的载荷与触发时机（发行包 `R/dsh-agent`、`R/dsh-subagent/lib/index.js:344-400`），以及它在子 Agent 第一次调用工具之前触发。
   - 没有记录（实例重启后恢复的子 Agent、插件晚于子 Agent 加载）、父 Session 不在内存中、投影缺失、`turn` 为 `null`、超过层数上限：返回 `scope-unavailable`，不发请求（不扩大范围）。
   - `scope` 为 `[]`：不发请求，返回 `no-scope`。
   - `scope` 为 `null`：先用 #419 的平台请求函数 `GET …/ragflow/datasets` 取全部库，得到空列表时返回 `no-datasets`（不发检索，空 `datasetIds` 是 `invalid-request`）；列表失败时返回该失败取值。
@@ -2164,9 +2164,9 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
 **测试**：
 
 - 单元测试（`pnpm test`），覆盖率逐文件 80%：
-  - 根解析：根自身；一层、两层子 Agent；fork（有 `parentSession` 无 `origin`）是自己的根；父不在内存、投影缺失、`turn` 为 `null`、超层数都是 `scope-unavailable`；
+  - 根解析：根自身；一层、两层子 Agent；fork（有 `parentSession` 无 `origin`）是自己的根；父不在内存、投影缺失、`turn` 为 `null` 都是 `scope-unavailable`；17 层链条逐层传递同一记录；
   - 范围：`[]` 不发任何请求；`null` 先列表再检索，空列表 `no-datasets` 且不检索，列表失败传出失败取值；ID 列表直接检索；请求体恰为 `{ question, datasetIds }`、方法、`Authorization`、`content-type`、`redirect`；
-  - 子 Agent 的快照：`compact`/`clear` 重新 announce 后范围不变（或在记录已删时为 `scope-unavailable`）；根 Session 第 N 轮创建子 Agent 后，根 Session 改成更宽的范围并进入第 N+1 轮，子 Agent 仍用第 N 轮的范围；孙子 Agent 继承同一记录；`agent/disposed` 后记录删除；没有记录时 `scope-unavailable`；
+  - 子 Agent 的快照：`compact`/`clear` 重新 announce 后范围不变（或在记录已删时为 `scope-unavailable`）；根 Session 第 N 轮创建子 Agent 后，根 Session 改成更宽的范围并进入第 N+1 轮，子 Agent 仍用第 N 轮的范围；孙子 Agent 继承同一记录（`startup` 与 `resume` 都是；根 Session 之后改宽、孙子 Agent 以 `resume` 重新 announce 时仍用父 Agent 的记录；父 Agent 没有记录时 `scope-unavailable`）；`sessionProjections.stateOf` 抛错时返回 `scope-unavailable`，模型文本里没有 `Error:`；结果文本中文件名与库名里的换行被替换，不能伪造条目；`agent/disposed` 后记录删除；没有记录时 `scope-unavailable`；
   - 结局：11 种结局（插件 6 种加代理 5 种）的模型文本两两不同、卡片标题两两不同；工具名与描述不含 `kb-scope`、「知识库范围」；`excluded` 提示；`positions` 只在有值时显示；文本与卡片不含库 ID、令牌、平台地址；回应形状不合法为 `upstream-error`；超时、传输失败、中止；
   - `question` 校验：空白、超 4096 字节不发请求；
   - 插件不可用或缺 `tools`/`agents` 时不注册工具。
@@ -2183,11 +2183,11 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
      - 子 Session 中恰有一次 `knowledge_base_search` 的 `tool/call` 与成功的 `tool/result`；
      - 工具结果文本含「知识库检索：」与「有 1 个已选知识库已不可用，已跳过」，所有片段的所属知识库都是 `dsh-team-seed-policies`（范围没有扩大到另外两个种子库）；
      - 结果文本与 `meta` 都不含任何库 ID（三个种子库 ID 与伪造 ID）；provider 的 `forbiddenRequests` 仍为 0，`delegations`、`searches` 各为 1；
-     - 检索卡片在子 Session 里（`tool/result` 追加到执行工具的 agent 的 Session，`R/dsh-agent-loop/lib/index.js:691-706`）：浏览器进入子 Session（沿用 `platform/test/permission-browser-fixture.mjs` 的 `openChild` 做法），先展开该轮折叠的步骤行（发行版 `TurnProcessNodeView` 的 `button[data-turn-process]`，只点一次，不来回切换），DOM 断言子 Session 视图里恰有一张可见的 `[data-tool="knowledge_base_search"]` 卡片，截图 `search-sources.png`。片段、文件名与所属知识库以原生历史里该次 `tool/result` 的 meta 为准（上面「核对」已断言），浏览器不再逐字校验卡片文案（用户决定 2026-11-06：第 6 次本机运行时卡片已找到，但文案校验未通过，故放宽）。
+     - 检索卡片在子 Session 里（`tool/result` 追加到执行工具的 agent 的 Session，`R/dsh-agent-loop/lib/index.js:691-706`）：浏览器进入子 Session（沿用 `platform/test/permission-browser-fixture.mjs` 的 `openChild` 做法），先展开该轮折叠的步骤行（发行版 `TurnProcessNodeView` 的 `button[data-turn-process]`）和其中的步骤组标题「已调用工具」（`ProcessGroupHeader` 的 `button[data-process-activity][aria-controls]`），各只点一次、不来回切换；子 Session 视图里恰有一张可见的 `[data-tool="knowledge_base_search"]` 卡片（`elementFromPoint` 命中卡片内部），再点开这一行一次，断言展开后的输出文本含「知识库检索：N 条结果」（N 等于原生历史的片段数）、剔除提示「有 1 个已选知识库已不可用，已跳过」和「所属知识库：dsh-team-seed-policies」，然后截图 `search-sources.png`。片段、文件名与所属知识库同时以原生历史里该次 `tool/result` 的 meta 为准（上面「核对」已断言）。用户决定：2026-11-06 一度放宽为只证明卡片可见（当时报告的原因只是「文案校验未通过」）；PR #535 审查查明根因是 Web 客户端不用 `presentResult`、要点开工具行才显示 `render` 文本，用户 2026-11-06 决定恢复内容校验。
   - 每一步写明等待上限，耗时记进证据。
   - 检索会话：控制台错误 0、页面错误 0、失败请求 0、外部请求 0；沿用页面资源秘密扫描。
   - `stackEvidence` 增加单独的 `search` 对象，只记结局、片段数、所属知识库名集合、剔除数和截图名。
-  - 本步骤多一次付费检索（每次运行约 4 次，在用户 2026-11-03 接受的「约 3 次」附近，PR 中写明）。
+  - 每次运行共 5 次付费检索（`proxyAfterRestore` 4 次，子 Agent 1 次；见上方 2026-11-05 的单库正对照决定，AGENTS.md 同步）。
 - 先红后绿：新的单元断言先失败；stack 中的检索步骤先失败（工具不存在），再实现。
 
 **命令**：

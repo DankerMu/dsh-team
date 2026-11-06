@@ -71,7 +71,7 @@ export interface SearchValue {
   readonly excluded?: number;
 }
 
-/** The card data persisted as the tool result's `meta`. */
+/** The outcome persisted as the tool result's `meta`; no Web view renders it, the stack lane reads it. */
 export interface SearchMeta {
   readonly result: SearchResult;
   readonly title: string;

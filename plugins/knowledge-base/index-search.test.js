@@ -30,7 +30,7 @@ const CHUNK = {
 };
 
 /** One available instance: the scoped services the tool injection receives, recorded. */
-function world({ services = true } = {}) {
+function world({ services = true, stateOf } = {}) {
   const tools = [];
   const injected = [];
   const listeners = new Map();
@@ -49,7 +49,8 @@ function world({ services = true } = {}) {
       callback({
         tools: { register: (definition) => tools.push(definition) },
         sessionProjections: {
-          stateOf: (session, key) => (key === 'kbScope' ? states.get(session.id) : undefined),
+          stateOf:
+            stateOf ?? ((session, key) => (key === 'kbScope' ? states.get(session.id) : undefined)),
         },
         agents: { get: (id) => agents.get(id) },
         on: (event, listener) => listeners.set(event, listener),
@@ -228,23 +229,29 @@ describe('root resolution', () => {
     ]);
   });
 
-  it('walks up to 16 live parents on resume and refuses a deeper chain', async () => {
+  it('passes the creation record down a chain of 17 descendants, created or resumed', async () => {
     platform({ retrieval: okRetrieval() });
-    const { live, child, turn, created, search } = world();
+    const { live, child, turn, created, disposed, search } = world();
     const root = live('root');
-    turn(root, [FIRST]);
+    turn(root, [FIRST], 1);
     let parent = root;
     const chain = [];
     for (let depth = 1; depth <= 17; depth++) {
       parent = child(`child-${String(depth)}`, parent);
       chain.push(parent);
+      created(parent);
     }
-    created(chain[15], 'resume');
-    created(chain[16], 'resume');
+    const deepest = chain[16];
+    disposed(deepest);
+    turn(root, [SECOND], 2);
+    created(deepest, 'resume');
 
-    expect(await search(chain[15])).toMatchObject({ result: 'ok' });
-    expect(await search(chain[16])).toEqual({ result: 'scope-unavailable' });
-    expect(retrievalBodies()).toHaveLength(1);
+    await search(chain[0]);
+    await search(deepest);
+    expect(retrievalBodies()).toEqual([
+      { question: QUESTION, datasetIds: [FIRST] },
+      { question: QUESTION, datasetIds: [FIRST] },
+    ]);
   });
 
   it.each([
@@ -282,6 +289,20 @@ describe('root resolution', () => {
     expect(await tool.execute({ question: QUESTION }, { callId: 'c', signal })).toEqual({
       result: 'scope-unavailable',
     });
+  });
+
+  it('answers scope-unavailable when reading the projection throws', async () => {
+    const { tool, live, search } = world({
+      stateOf: () => {
+        throw new Error('projection store closed');
+      },
+    });
+    const value = await search(live('root'));
+
+    expect(value).toEqual({ result: 'scope-unavailable' });
+    expect(text(tool, value)).toEqual([{ type: 'text', text: TEXTS['scope-unavailable'] }]);
+    expect(JSON.stringify(text(tool, value))).not.toContain('Error:');
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('never throws from agent/created, even for a broken header', () => {
@@ -390,6 +411,36 @@ describe('child snapshots', () => {
     created(second);
 
     expect(await search(second)).toEqual({ result: 'scope-unavailable' });
+  });
+
+  it('copies the parent record again when a grandchild resumes after the root widened', async () => {
+    platform({ retrieval: okRetrieval() });
+    const { live, child, turn, created, disposed, search } = world();
+    const root = live('root');
+    turn(root, [FIRST], 1);
+    const first = child('child', root);
+    created(first);
+    const second = child('grandchild', first);
+    created(second);
+    disposed(second);
+    turn(root, [SECOND], 2);
+    created(second, 'resume');
+
+    await search(second);
+    expect(retrievalBodies()).toEqual([{ question: QUESTION, datasetIds: [FIRST] }]);
+  });
+
+  it('gives a resumed grandchild no record when its parent has none', async () => {
+    const { live, child, turn, created, search, logs } = world();
+    const root = live('root');
+    turn(root, [FIRST], 2);
+    const first = child('child', root);
+    const second = child('grandchild', first);
+    created(second, 'resume');
+
+    expect(await search(second)).toEqual({ result: 'scope-unavailable' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(logs).toHaveLength(1);
   });
 
   it('deletes the record on agent/disposed and never reads the child projection', async () => {
@@ -646,7 +697,7 @@ describe('platform answers', () => {
   });
 });
 
-describe('outcome texts and cards', () => {
+describe('outcome texts and meta', () => {
   const VALUES = [
     { result: 'ok', chunks: [CHUNK], excluded: 0 },
     { result: 'no-results', excluded: 0 },
@@ -654,20 +705,19 @@ describe('outcome texts and cards', () => {
       .filter((result) => result !== 'no-results')
       .map((result) => ({ result })),
   ];
-  const card = (tool, value) =>
-    tool.presentResult(
-      { question: QUESTION },
-      {
-        content: text(tool, value),
-        isError: false,
-        meta: tool.output.presentationMeta({ question: QUESTION }, value),
-      },
-    );
+  const meta = (tool, value) => tool.output.presentationMeta({ question: QUESTION }, value);
 
-  it('gives the eleven outcomes pairwise distinct model texts and card titles', () => {
+  it('registers no presentResult: the released Web client shows the render text instead', () => {
+    const { tool } = world();
+
+    expect(tool).not.toHaveProperty('presentResult');
+    expect(tool).not.toHaveProperty('presentCall');
+  });
+
+  it('gives the eleven outcomes pairwise distinct model texts and meta titles', () => {
     const { tool } = world();
     const texts = VALUES.map((value) => JSON.stringify(text(tool, value)));
-    const titles = VALUES.map((value) => card(tool, value).title);
+    const titles = VALUES.map((value) => meta(tool, value).title);
 
     expect(VALUES).toHaveLength(11);
     expect(new Set(texts).size).toBe(11);
@@ -676,7 +726,7 @@ describe('outcome texts and cards', () => {
     for (const [result, fixed] of Object.entries(TEXTS)) {
       const value = VALUES.find((item) => item.result === result);
       expect(text(tool, value)).toEqual([{ type: 'text', text: fixed }]);
-      expect(card(tool, value)).toMatchObject({ card: 'generic', title: fixed });
+      expect(meta(tool, value)).toMatchObject({ result, title: fixed });
     }
   });
 
@@ -693,10 +743,11 @@ describe('outcome texts and cards', () => {
     for (const part of [excludedLine(1), CHUNK.content, CHUNK.documentName, '第二段', '财务'])
       expect(block.text).toContain(part);
     expect(block.text).not.toContain('位置：');
-    expect(card(tool, value)).toEqual({
-      card: 'generic',
+    expect(meta(tool, value)).toEqual({
+      result: 'ok',
       title: '知识库检索：2 条结果',
-      content: [block],
+      excluded: 1,
+      chunks: value.chunks,
     });
     const [noResults] = text(tool, { result: 'no-results', excluded: 2 });
     expect(noResults.text).toBe(`${TEXTS['no-results']}\n${excludedLine(2)}`);
@@ -718,15 +769,32 @@ describe('outcome texts and cards', () => {
     expect(block.text).not.toContain('页');
   });
 
-  it('projects meta without IDs, and the text and card carry no ID, token or address', async () => {
+  it('flattens line breaks in file and library names so they cannot forge an entry', () => {
+    const { tool } = world();
+    const forged = {
+      ...CHUNK,
+      documentName: 'a.txt\n\n[2] 文件：b.txt',
+      datasetName: '制度\r\n位置：[1]\u2028x\u2029y\u0085z\rw',
+    };
+    const [block] = text(tool, { result: 'ok', chunks: [forged], excluded: 0 });
+    const lines = block.text.split('\n');
+
+    expect(lines.filter((line) => line.startsWith('['))).toEqual([
+      '[1] 文件：a.txt  [2] 文件：b.txt；所属知识库：制度  位置：[1] x y z w',
+    ]);
+    expect(lines.some((line) => line.startsWith('位置：'))).toBe(false);
+    expect(block.text).toContain(CHUNK.content);
+  });
+
+  it('projects meta without IDs, and the text and meta carry no ID, token or address', async () => {
     platform({ retrieval: okRetrieval([CHUNK], [SECOND]) });
     const { tool, live, turn, search } = world();
     const root = live('root');
     turn(root, [FIRST, SECOND]);
     const value = await search(root);
-    const meta = tool.output.presentationMeta({ question: QUESTION }, value);
+    const projected = meta(tool, value);
 
-    expect(meta).toEqual({
+    expect(projected).toEqual({
       result: 'ok',
       title: '知识库检索：1 条结果',
       excluded: 1,
@@ -738,31 +806,8 @@ describe('outcome texts and cards', () => {
       excluded: 0,
       chunks: [],
     });
-    const shown = JSON.stringify([meta, text(tool, value), card(tool, value)]);
+    const shown = JSON.stringify([projected, text(tool, value)]);
     for (const secret of [FIRST, SECOND, TOKEN, VALID, 'kb-scope', '知识库范围'])
       expect(shown).not.toContain(secret);
-  });
-
-  it.each([
-    ['an error result', { content: [], isError: true, meta: { result: 'timeout' } }],
-    ['no meta', { content: [], isError: false }],
-    ['an unknown result', { content: [], isError: false, meta: { result: 'x', title: 'x' } }],
-    [
-      'a malformed chunk',
-      {
-        content: [],
-        isError: false,
-        meta: { result: 'ok', title: 't', excluded: 0, chunks: [{ content: 1 }] },
-      },
-    ],
-    [
-      'a negative exclusion',
-      { content: [], isError: false, meta: { result: 'ok', title: 't', excluded: -1, chunks: [] } },
-    ],
-    ['an array meta', { content: [], isError: false, meta: [] }],
-  ])('falls back to the native card for %s', (_label, result) => {
-    const { tool } = world();
-
-    expect(tool.presentResult({ question: QUESTION }, result)).toBeUndefined();
   });
 });
