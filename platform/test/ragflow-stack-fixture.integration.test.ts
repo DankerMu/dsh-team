@@ -557,22 +557,36 @@ it.each([
 });
 
 interface RagflowStubState {
-  version: 'ready' | 'down' | 'hang';
+  /**
+   * `ready-then-hang` and `ready-then-down`: the first version request answers ready, every later
+   * one hangs or answers 503 like `down`.
+   */
+  version: 'ready' | 'down' | 'hang' | 'ready-then-hang' | 'ready-then-down';
   datasets: 'ok' | 'fail' | 'hang';
 }
 
 /** A loopback stand-in for the RAGFlow API: the version and the seed listings it is read for. */
 async function stubRagflow(state: RagflowStubState) {
   const ids = SEED_DATASETS.map((_, index) => String(index + 1).repeat(32));
+  let versionRequests = 0;
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const url = request.url ?? '';
     const send = (status: number, body: unknown) => {
       response.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body));
     };
-    const hang = url === '/api/v1/system/version' ? state.version : state.datasets;
+    const isVersion = url === '/api/v1/system/version';
+    if (isVersion) versionRequests += 1;
+    const later =
+      state.version === 'ready-then-hang'
+        ? 'hang'
+        : state.version === 'ready-then-down'
+          ? 'down'
+          : undefined;
+    const version = later === undefined ? state.version : versionRequests === 1 ? 'ready' : later;
+    const hang = isVersion ? version : state.datasets;
     if (hang === 'hang') return;
-    if (url === '/api/v1/system/version') {
-      if (state.version === 'ready') send(200, { code: 0, data: 'v1.0.0-rc2' });
+    if (isVersion) {
+      if (version === 'ready') send(200, { code: 0, data: 'v1.0.0-rc2' });
       else send(503, { code: 1 });
     } else if (state.datasets === 'fail') send(500, { code: 100 });
     else if (url === '/api/v1/datasets?page_size=100')
@@ -695,6 +709,18 @@ it.each([
     { version: 'ready', datasets: 'hang' } as const,
     undefined,
     /version ready but seed snapshot unreadable within 1s/,
+  ],
+  [
+    'the seed read fails and the next version probe outlasts the deadline',
+    { version: 'ready-then-hang', datasets: 'fail' } as const,
+    undefined,
+    /version ready but seed snapshot unreadable within 1s/,
+  ],
+  [
+    'the seed read fails and the next version probe answers not ready',
+    { version: 'ready-then-down', datasets: 'fail' } as const,
+    undefined,
+    /version not ready within 1s/,
   ],
 ])(
   'aggregates the body failure first and a restore failure naming the recovery when %s',
