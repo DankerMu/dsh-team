@@ -21,6 +21,11 @@ export interface PlatformConfig {
   readonly authority: string;
   readonly cookieSecure: boolean;
   readonly trustedProxies: readonly string[];
+  /** `null`: the bundled Document Server is unconfigured and Office is unavailable. */
+  readonly documentServer: {
+    readonly containerName: string;
+    readonly jwtSecret: string;
+  } | null;
 }
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -106,10 +111,38 @@ function parseUpstreamMode(raw: string): PlatformConfig['upstreamMode'] {
   return raw;
 }
 
-function parsePlatformContainerName(raw: string): string {
+function parseContainerName(variable: string, raw: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(raw) || /^[a-fA-F0-9]{12,64}$/.test(raw))
-    throw new Error('PLATFORM_CONTAINER_NAME must be a Docker container name, not an ID or path');
+    throw new Error(`${variable} must be a Docker container name, not an ID or path`);
   return raw;
+}
+
+const DOCUMENT_SERVER_CONTAINER_NAME = 'DOCUMENT_SERVER_CONTAINER_NAME';
+const DOCUMENT_SERVER_JWT_SECRET = 'DOCUMENT_SERVER_JWT_SECRET';
+
+/** Both inputs absent means unconfigured; an empty value is never treated as absent. */
+function parseDocumentServer(
+  containerName: string | undefined,
+  jwtSecret: string | undefined,
+): PlatformConfig['documentServer'] {
+  if (containerName === undefined && jwtSecret === undefined) return null;
+  const empty = [
+    ...(containerName === '' ? [DOCUMENT_SERVER_CONTAINER_NAME] : []),
+    ...(jwtSecret === '' ? [DOCUMENT_SERVER_JWT_SECRET] : []),
+  ];
+  if (empty.length > 0) throw new Error(`${empty.join(' and ')} must not be empty`);
+  if (jwtSecret === undefined)
+    throw new Error(
+      `${DOCUMENT_SERVER_JWT_SECRET} is required when ${DOCUMENT_SERVER_CONTAINER_NAME} is set`,
+    );
+  if (containerName === undefined)
+    throw new Error(
+      `${DOCUMENT_SERVER_CONTAINER_NAME} is required when ${DOCUMENT_SERVER_JWT_SECRET} is set`,
+    );
+  return {
+    containerName: parseContainerName(DOCUMENT_SERVER_CONTAINER_NAME, containerName),
+    jwtSecret,
+  };
 }
 
 function rejectPublicUrl(): never {
@@ -208,12 +241,18 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
     ),
     subnetPool: env.PLATFORM_SUBNET_POOL ?? '172.30.0.0/16',
     upstreamMode: parseUpstreamMode(env.PLATFORM_UPSTREAM_MODE ?? 'network'),
-    platformContainerName: parsePlatformContainerName(
+    platformContainerName: parseContainerName(
+      'PLATFORM_CONTAINER_NAME',
       env.PLATFORM_CONTAINER_NAME ?? 'dsh-team-platform',
     ),
     publicUrl: publicOrigin.origin,
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),
     trustedProxies: parseTrustedProxies(env.PLATFORM_TRUSTED_PROXIES),
+    // Last, so a verbatim .env.example copy reports its empty JWT only after every other field.
+    documentServer: parseDocumentServer(
+      env.DOCUMENT_SERVER_CONTAINER_NAME,
+      env.DOCUMENT_SERVER_JWT_SECRET,
+    ),
   };
 }

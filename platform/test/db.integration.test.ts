@@ -330,6 +330,7 @@ describe('platform startup on a real database file', () => {
         authority: '127.0.0.1',
         cookieSecure: false,
         trustedProxies: [],
+        documentServer: null,
       },
       db,
     );

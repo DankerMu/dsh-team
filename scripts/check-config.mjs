@@ -24,8 +24,10 @@ function platformReads() {
         ts.isStringLiteral(parent.argumentExpression)
       )
         name = parent.argumentExpression.text;
-      if (!/^PLATFORM_[A-Z0-9_]+$/.test(name ?? ''))
-        throw new Error('config.ts inventory requires literal PLATFORM_* environment reads');
+      if (!/^(?:PLATFORM|DOCUMENT_SERVER)_[A-Z0-9_]+$/.test(name ?? ''))
+        throw new Error(
+          'config.ts inventory requires literal PLATFORM_* or DOCUMENT_SERVER_* environment reads',
+        );
       names.add(name);
     }
     ts.forEachChild(node, visit);
@@ -89,9 +91,11 @@ function compare(prefix, reads, example) {
 try {
   const example = parseEnv(readFileSync('.env.example', 'utf8'));
   const compose = composeReads();
-  const platform = compare('PLATFORM_', platformReads(), example);
+  const reads = platformReads();
+  const platform = compare('PLATFORM_', reads, example);
   const deployment = compare('DEPLOY_', compose, example);
-  const documentServer = compare('DOCUMENT_SERVER_', compose, example);
+  // Shared inputs: consumed when either the platform reads or compose interpolates them.
+  const documentServer = compare('DOCUMENT_SERVER_', new Set([...reads, ...compose]), example);
   if (!platform || !deployment || !documentServer) process.exitCode = 1;
   else
     process.stdout.write(

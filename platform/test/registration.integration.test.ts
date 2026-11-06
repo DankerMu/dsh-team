@@ -39,6 +39,7 @@ const CONFIG = {
   authority: '127.0.0.1',
   cookieSecure: false,
   trustedProxies: [],
+  documentServer: null,
 } as const;
 
 function cookieToken(setCookie: readonly string[]): string {

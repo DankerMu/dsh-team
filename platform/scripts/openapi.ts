@@ -31,6 +31,7 @@ async function render(): Promise<string> {
         authority: '127.0.0.1',
         cookieSecure: false,
         trustedProxies: [],
+        documentServer: null,
       },
       database,
     );

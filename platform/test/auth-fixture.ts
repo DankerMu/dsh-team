@@ -24,6 +24,7 @@ const CONFIG = {
   authority: '127.0.0.1:8080',
   cookieSecure: false,
   trustedProxies: [],
+  documentServer: null,
 } as const;
 
 const TOKEN_VALUE = /^platform_session=([0-9a-f]{64})/;

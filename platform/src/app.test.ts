@@ -22,6 +22,7 @@ const SILENT_CONFIG = {
   authority: '127.0.0.1:8080',
   cookieSecure: false,
   trustedProxies: [],
+  documentServer: null,
 } as const;
 
 const healthFault = vi.hoisted(() => ({
@@ -117,12 +118,14 @@ describe('buildApp', () => {
       instanceTokenHash: 'instance-hash-top-marker',
       instance_token_hash: 'instance-row-hash-top-marker',
       ragflowApiKey: 'ragflow-key-top-marker',
+      jwtSecret: 'jwt-secret-top-marker',
       user: {
         fileTokenSecret: 'file-secret-nested-marker',
         instanceToken: 'instance-token-nested-marker',
         instanceTokenHash: 'instance-hash-nested-marker',
         instance_token_hash: 'instance-row-hash-nested-marker',
         ragflowApiKey: 'ragflow-key-nested-marker',
+        jwtSecret: 'jwt-secret-nested-marker',
         password: 'hunter2',
         currentPassword: 'current-password-marker',
         newPassword: 'new-password-marker',
@@ -141,12 +144,14 @@ describe('buildApp', () => {
       instanceTokenHash: '[redacted]',
       instance_token_hash: '[redacted]',
       ragflowApiKey: '[redacted]',
+      jwtSecret: '[redacted]',
       user: {
         fileTokenSecret: '[redacted]',
         instanceToken: '[redacted]',
         instanceTokenHash: '[redacted]',
         instance_token_hash: '[redacted]',
         ragflowApiKey: '[redacted]',
+        jwtSecret: '[redacted]',
         password: '[redacted]',
         currentPassword: '[redacted]',
         newPassword: '[redacted]',
@@ -173,6 +178,8 @@ describe('buildApp', () => {
       'instance-row-hash-nested-marker',
       'ragflow-key-top-marker',
       'ragflow-key-nested-marker',
+      'jwt-secret-top-marker',
+      'jwt-secret-nested-marker',
     ]) {
       expect(written).not.toContain(secret);
     }

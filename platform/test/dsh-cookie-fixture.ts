@@ -82,6 +82,7 @@ export function buildCookieFixtureApp(
       authority,
       cookieSecure: false,
       trustedProxies: [],
+      documentServer: null,
     },
     database,
     { write },

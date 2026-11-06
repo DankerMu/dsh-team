@@ -343,6 +343,7 @@ async function resourceScenario(lifecycle: UserImageLifecycle): Promise<string> 
     authority,
     cookieSecure: false,
     trustedProxies: [],
+    documentServer: null,
   };
   const limitsA = {
     NanoCpus: 500_000_000,
@@ -577,6 +578,7 @@ async function cookieScenario(lifecycle: UserImageLifecycle): Promise<string> {
     authority,
     cookieSecure: false,
     trustedProxies: [],
+    documentServer: null,
   };
   let platformLogs = '';
   let app: FastifyInstance | undefined;

@@ -39,6 +39,7 @@ const CONSTRUCTION_CONFIG = {
   authority: '127.0.0.1:8080',
   cookieSecure: false,
   trustedProxies: [],
+  documentServer: null,
 } as const;
 
 interface UserRow {

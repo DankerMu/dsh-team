@@ -30,6 +30,7 @@ describe('platform over a real TCP port', () => {
           authority: '127.0.0.1',
           cookieSecure: false,
           trustedProxies: [],
+          documentServer: null,
         },
         database,
       );

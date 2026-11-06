@@ -44,7 +44,7 @@ function environmentFacts(container: Record<string, unknown>) {
 it('starts the bundled Document Server stand-in unpublished, with the fixture JWT reaching it and the platform', async () => {
   await withDeployment(async (lifecycle, start) => {
     const deployment = await start();
-    // The platform does not read either value yet: its health is unchanged.
+    // The platform reads both values as configured and starts as usual.
     await waitForDeployment(deployment);
     const expected = sha256(deployment.documentServerJwt);
 
