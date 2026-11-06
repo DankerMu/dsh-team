@@ -2392,6 +2392,41 @@ Sibling surfaces：`deployment-observer-fixture.ts` 的暴露清单（按 compos
 
 Evidence：`pnpm lint:config`、`pnpm test:guardrails`、`pnpm check`；VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy`（新文件两例在两次运行中都出现，清理已确认）；本机 exact-head `pnpm test:stack`（运行前先 `docker pull onlyoffice/documentserver:9.4.0`，证据评论含 Document Server 容器断言与运行前后全部卷清单相同）。
 
+Risk packs (16.2a 平台启动读取并校验 Document Server 配置，#423): fixture level expanded（与 issue 建议一致：新的启动配置契约，其中一项是密钥）。本任务只读取和校验；编排器使用这两项属于 16.3，外部 Document Server 设置属于 16.2b。selected：
+
+- **Config（读取与三态校验，`platform/src/config.ts`）**：
+  - `PlatformConfig` 新增必填字段 `documentServer: { readonly containerName: string; readonly jwtSecret: string } | null`；`null` 表示自带 Document Server 未配置（Office 不可用）。`loadConfig` 在现有字段之后计算它（示例中其他取值合法，所以原样载入时第一个错误就是 Document Server 这一项）。
+  - 「存在」按 `!== undefined` 判断；「为空」按 `=== ''` 判断。两项都用字面量读取（`env.DOCUMENT_SERVER_CONTAINER_NAME`、`env.DOCUMENT_SERVER_JWT_SECRET`），不经变量下标，否则 `lint:config` 的字面量检查会拒绝。规则按下面顺序，第一条命中即抛错，不回显任何取值：
+    1. 两项都不存在 → `null`。
+    2. 存在且为空的项 → `<NAME> must not be empty`；两项都存在且都为空时，一条消息同时列出两者：`DOCUMENT_SERVER_CONTAINER_NAME and DOCUMENT_SERVER_JWT_SECRET must not be empty`。空值不当作未配置。
+    3. 只存在一项（非空）→ `DOCUMENT_SERVER_JWT_SECRET is required when DOCUMENT_SERVER_CONTAINER_NAME is set`，或反过来 `DOCUMENT_SERVER_CONTAINER_NAME is required when DOCUMENT_SERVER_JWT_SECRET is set`。
+    4. 两项都非空：容器名沿用 `PLATFORM_CONTAINER_NAME` 的同一条 Docker 容器名规则（把现有 `parsePlatformContainerName` 改为带变量名参数的单一实现，两处共用，不复制正则），失败消息 `DOCUMENT_SERVER_CONTAINER_NAME must be a Docker container name, not an ID or path`；JWT 不做其他格式限制，原样保存（不 trim）。
+  - 平台不为容器名提供默认值。`main.ts` 现有的「`loadConfig` 抛错即在监听前退出」路径不变，不新增启动步骤。
+- **Auth / permissions / secrets（JWT）**：
+  - `platform/src/app.ts` 的 `LOG_REDACT_PATHS` 按现有先例新增 `jwtSecret` 与 `*.jwtSecret`；`app.test.ts` 的顶层与嵌套脱敏用例各加一个 `jwtSecret` 标记，`toMatchObject` 的期望与随后遍历标记、断言日志不含这些值的循环（约 `:159-178`）都加上这两个标记。
+  - 所有错误消息只含变量名；测试对每个失败用例断言消息不含所给取值（用带标记的取值，如 `jwt-marker-…`、`name-marker-…`）。
+- **Config（示例文件与清单）**：
+  - `.env.example` 在 `DOCUMENT_SERVER_JWT_SECRET=` 之前新增有效赋值 `DOCUMENT_SERVER_CONTAINER_NAME=dsh-team-documentserver`，注释写明取值与交付 compose 的字面量相同、compose 固定它而不读这一行；JWT 的注释改为「平台和 compose 都读取」。文件开头的复制说明新增一段：不经 compose 的本地运行（`pnpm dev`、`pnpm dev:bg`、`pnpm start`）原样复制会因空 JWT 在监听前失败，必须二选一——删去这两行（Office 不可用），或两项都填非空值。
+  - `scripts/check-config.mjs`：`platformReads()` 同时接受配置模块中字面量的 `DOCUMENT_SERVER_*` 读取（非字面量或其他前缀仍报 `config.ts inventory requires literal PLATFORM_* or DOCUMENT_SERVER_* environment reads`）；`DOCUMENT_SERVER_*` 的已消费集合是平台读取与 compose 插值的并集，与示例文件双向比较；`PLATFORM_*` 只比平台读取，`DEPLOY_*` 只比 compose 插值。`scripts/test-guardrails.sh` 的动态读取用例的期望子串随消息更新，并新增一条「`config.ts` 字面量读取未列出的 `DOCUMENT_SERVER_UNDOCUMENTED` → `undocumented DOCUMENT_SERVER_UNDOCUMENTED`」。
+- **Error handling / Legacy compatibility（入口）**：
+  - 测试、e2e、UI 入口自己构造环境，不新增变量，落在「两项都不存在」，行为不变。阶段 1 留下的 `.env` 没有这两行，行为不变。
+  - 交付的 compose 传入字面量容器名和非空 JWT（16.1），平台从此在 compose 部署里读到「已配置」；`test:deploy`、`test:stack` 不改行为，作为端到端证据。`platform/test/deployment-document-server.docker.test.ts` 中「The platform does not read either value yet」一句注释同 PR 改为「平台读到两项已配置并照常启动」。
+- **测试**：
+  - `platform/src/config.test.ts`：两项都不存在 → `documentServer: null`；都给非空值 → 原样返回，其中 JWT 用带首尾空格的标记，断言 `jwtSecret` 一字不差（不 trim）；只有容器名、只有 JWT、容器名为空、JWT 为空、两项都为空、只有一项且为空、容器名不合法（路径、64 位 hex ID）→ 每个失败用例都用 `toThrow('<固定的完整消息>')` 断言消息全文（几条消息同时含两个变量名，只断言含变量名区分不了规则），另断言消息不含所给取值；读取仓库真实 `.env.example`（`parseEnv`）：原样载入抛出完整消息 `DOCUMENT_SERVER_JWT_SECRET must not be empty`；删去两个键后 `documentServer` 为 `null`，并且除 `documentServer` 外所有字段都与「同一示例、JWT 填一个非空标记值」的载入结果相同。集成用例的 stderr 只断言含对应变量、不含取值，消息契约归单元测试。
+  - `platform/test/subnet-startup.integration.test.ts`（或同目录新的 `document-server-startup.integration.test.ts`，复用 `observeStartup`）：真实源码进程在只有容器名、只有 JWT、容器名为空、JWT 为空、两项都为空时 `health` 为 `null`、退出码大于 0、stderr 含对应变量且不含所给取值；两项都不存在、两项都非空时照常提供 health 200。
+  - 现有直接构造 `PlatformConfig` 字面量的测试补 `documentServer: null`（只改到通过类型检查为止）。
+- **Documentation**（编排者同 PR 改）：AGENTS.md Environment 中 `lint:config` 一条改为三类（平台读取的 `PLATFORM_*`；只给 compose 的 `DEPLOY_*` 插值；平台读取与 compose 插值共用的 `DOCUMENT_SERVER_*`，其中 `DOCUMENT_SERVER_CONTAINER_NAME` 只计平台读取，`DOCUMENT_SERVER_JWT_SECRET` 两边都计）；「Copy it to `.env`」与本地运行说明写明不经 compose 时删去两行或两项都填，原样复制会在监听前失败；Compose 一节的「reading and validating both inputs belongs to task16.2a」改为实际行为。`constraints.yaml` 的 `configuration_inventory.description` 写入第三类。
+
+not selected：Schema（无迁移、无接口，`schemas/openapi.json` 不变）、Concurrency、Resource limits、File IO（只读环境）、Release（无新依赖）、Public API（无路由变化）。无关键路径文件（不改 `platform/src/orchestrator/`）。
+
+Governing invariant：平台进入监听时，Document Server 配置要么两项都不存在（未配置），要么两项都非空且容器名合法；任何错误消息、日志都不含 JWT 或容器名取值。
+
+剩余风险：`DOCUMENT_SERVER_*` 按并集比较后，若交付的 compose 去掉 JWT 插值，`lint:config` 不会发现（平台读取仍算作已消费）；由 `deployment-document-server.docker.test.ts` 断言 JWT 到达平台、以及平台启动时拒绝「只有容器名」两处兜住。
+
+Sibling surfaces：`platform/scripts/openapi.ts` 的 `PlatformConfig` 字面量（补 `documentServer: null`）、`platform/src/main.ts`（启动失败路径）、`platform/test/main-startup-fixture.ts`、`deployment-compose-fixture.ts`（compose 传给平台的两项，16.1）、`scripts/test-guardrails.sh` 的配置清单用例。
+
+Evidence：`pnpm test`（config/app 单元）、`pnpm test:integration` 的启动用例、`pnpm lint:config`、`pnpm test:guardrails`、`pnpm lint:agents`、`pnpm check`；VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy`（compose 部署下平台读到已配置并照常启动）；本机 exact-head `pnpm test:stack`。
+
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 
 依赖：4、10（本机通道用例）、11。关键路径 `images/dsh-user/`。
