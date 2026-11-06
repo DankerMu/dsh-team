@@ -3,7 +3,7 @@
 # Agents execute documented commands verbatim, so a stale command is worse than none.
 # Checks every command written as code (`pnpm [--silent] <script>` in backticks,
 # or a quoted "pnpm [--silent] <script>" in constraints.yaml) in AGENTS.md, platform/AGENTS.md,
-# the module READMEs that AGENTS.md indexes, and constraints.yaml against the root package.json scripts. Prose mentions of pnpm
+# the platform, module, deploy and scripts READMEs listed below, and constraints.yaml against the root package.json scripts. Prose mentions of pnpm
 # are not commands and are ignored.
 set -euo pipefail
 

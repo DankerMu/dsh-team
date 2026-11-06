@@ -64,9 +64,11 @@ platform/                   platform service, one Node process: config, startup,
                             admin/, gateway/, orchestrator/ (critical path), managed-config/, ragflow-proxy/
   test/                     integration, Docker, model and stack suites (platform/test/README.md)
   scripts/                  generators (openapi.ts)
+  src/web/                  server-side static delivery of the built pages
   web/                      React/Vite pages; src/ browser-only, dist/ generated (platform/web/README.md)
 plugins/<id>/               DSH plugins (plugins/<id>/README.md)
-images/                     user image dsh-user/, seccomp/ (images/seccomp/README.md), browser-verification/
+images/                     user image dsh-user/ (build gates: platform/test/README.md), seccomp/ (images/seccomp/README.md),
+                            browser-verification/
 deploy/                     Compose deployment (deploy/README.md, docs/DEPLOY.md)
 scripts/                    gates and lanes behind package.json: guardrails, e2e, custody, CI (scripts/README.md)
 schemas/                    generated HTTP contract (openapi.json)
@@ -122,28 +124,28 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 
 - `.env.example` is the single inventory of platform and Compose inputs; `pnpm lint:config` matches it against every consumer in both directions. Invalid values stop startup before listening and errors name the variable without echoing its value. Details: `platform/README.md` § Configuration.
 - Administrator CLI: always `pnpm --silent cli admin create <email>` (plain `pnpm cli` can disclose rejected arguments); never pass a password as an argument or environment value. Compose: `docker compose --project-directory . --env-file .env -f deploy/compose.yml up -d` from the repository root (`deploy/README.md`).
-- Docker verification runs only on trusted giap-vps; leave `DOCKER_HOST` and `DOCKER_CONTEXT` unset. Details: `platform/test/README.md`, `scripts/README.md`.
+- Only the trusted parent session runs `pnpm test:docker`, `pnpm test:deploy` and `pnpm test:model` on giap-vps; `pnpm test:stack` and `pnpm e2e` run locally. Leave `DOCKER_HOST` and `DOCKER_CONTEXT` unset. Details: `platform/test/README.md`, `scripts/README.md`.
 
 ## Verification Matrix
 
-| Surface                | Command                                            | Evidence required                                                                                                                      |
-| ---------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Liveness / health      | `pnpm dev:status`                                  | exit 0 and `health: OK`                                                                                                                |
-| API endpoint           | `pnpm smoke`                                       | HTTP status and response body per route                                                                                                |
-| Database               | `pnpm test:integration`                            | tempfile `platform.db`, exact migration ledger versions 1 to 6, preserved historical rows and durable creation attempts, closed handle |
-| Built artifact         | `pnpm e2e`                                         | [scripts/README.md](scripts/README.md#evidence-required-built-artifact)                                                                |
-| Platform UI            | `pnpm test:ui`                                     | [platform/web/README.md](platform/web/README.md#evidence-required-platform-ui)                                                         |
-| Administrator CLI      | `pnpm test:cli`                                    | [platform/README.md](platform/README.md#evidence-required-administrator-cli)                                                           |
-| User-image Docker      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-user-image-docker)                                                 |
-| Platform image         | `pnpm test:docker`                                 | [platform/README.md](platform/README.md#evidence-required-platform-image)                                                              |
-| Compose deployment     | `pnpm test:deploy`                                 | [deploy/README.md](deploy/README.md#evidence-required-compose-deployment)                                                              |
-| DSH permission UI      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-dsh-permission-ui)                                                 |
-| Office delegation      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-office-delegation)                                                 |
-| Real model tool        | `pnpm test:model`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-real-model-tool)                                                   |
-| Local full stack       | `pnpm test:stack`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-local-full-stack)                                                  |
-| CI Docker evidence     | `pnpm verify:docker-evidence`                      | [scripts/README.md](scripts/README.md#evidence-required-ci-docker-evidence)                                                            |
-| CI event scheduling    | `pnpm lint:ci`                                     | [scripts/README.md](scripts/README.md#evidence-required-ci-event-scheduling)                                                           |
-| Trusted Docker custody | `pnpm --silent verify:docker start <reviewed-sha>` | [scripts/README.md](scripts/README.md#evidence-required-trusted-docker-custody)                                                        |
+| Surface                | Command                                            | Evidence required                                                                                                                                                                  |
+| ---------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Liveness / health      | `pnpm dev:status`                                  | probe of `/healthz` on the dev server: exit 0 and `health: OK`                                                                                                                     |
+| API endpoint           | `pnpm smoke`                                       | hurl suite against the running dev server: HTTP status and response body per route                                                                                                 |
+| Database               | `pnpm test:integration`                            | real-file SQLite migrate, settings, reopen: tempfile `platform.db`, exact migration ledger versions 1 to 6, preserved historical rows and durable creation attempts, closed handle |
+| Built artifact         | `pnpm e2e`                                         | [scripts/README.md](scripts/README.md#evidence-required-built-artifact)                                                                                                            |
+| Platform UI            | `pnpm test:ui`                                     | [platform/web/README.md](platform/web/README.md#evidence-required-platform-ui)                                                                                                     |
+| Administrator CLI      | `pnpm test:cli`                                    | [platform/README.md](platform/README.md#evidence-required-administrator-cli)                                                                                                       |
+| User-image Docker      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-user-image-docker)                                                                                             |
+| Platform image         | `pnpm test:docker`                                 | [platform/README.md](platform/README.md#evidence-required-platform-image)                                                                                                          |
+| Compose deployment     | `pnpm test:deploy`                                 | [deploy/README.md](deploy/README.md#evidence-required-compose-deployment)                                                                                                          |
+| DSH permission UI      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-dsh-permission-ui)                                                                                             |
+| Office delegation      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-office-delegation)                                                                                             |
+| Real model tool        | `pnpm test:model`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-real-model-tool)                                                                                               |
+| Local full stack       | `pnpm test:stack`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-local-full-stack)                                                                                              |
+| CI Docker evidence     | `pnpm verify:docker-evidence`                      | [scripts/README.md](scripts/README.md#evidence-required-ci-docker-evidence)                                                                                                        |
+| CI event scheduling    | `pnpm lint:ci`                                     | [scripts/README.md](scripts/README.md#evidence-required-ci-event-scheduling)                                                                                                       |
+| Trusted Docker custody | `pnpm --silent verify:docker start <reviewed-sha>` | [scripts/README.md](scripts/README.md#evidence-required-trusted-docker-custody)                                                                                                    |
 
 - Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
 - A surface with no verification command is review-only, and the PR must say so.

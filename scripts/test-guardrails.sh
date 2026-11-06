@@ -358,7 +358,8 @@ restore
 # Module READMEs indexed by AGENTS.md are part of the documented command surface.
 # shellcheck disable=SC2016 # literal Markdown backticks, not a command substitution
 printf '\nRun `pnpm no-such-readme-script` first.\n' >>platform/src/gateway/README.md
-expect_reject "documented commands (module README)" "platform/src/gateway/README.md" pnpm lint:agents
+expect_reject "documented commands (module README)" '"pnpm no-such-readme-script" is not a script' \
+  pnpm lint:agents
 rm platform/src/gateway/README.md
 expect_reject "documented commands (missing module README)" "platform/src/gateway/README.md is missing" \
   pnpm lint:agents
