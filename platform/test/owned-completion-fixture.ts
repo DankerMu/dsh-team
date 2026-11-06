@@ -51,15 +51,32 @@ export function mappedSessionRpc(origin: string, cookie: string): SessionRpc {
   };
 }
 
-/** The complete event history of a short Session through the released projection/page RPC. */
+/**
+ * The released controller's page address: a root Session by ID, a child Agent's Session only
+ * through its durable parent and descriptor mode.
+ */
+export type SessionAddress =
+  | { readonly kind: 'session'; readonly sessionId: string }
+  | {
+      readonly kind: 'subagent';
+      readonly parentSessionId: string;
+      readonly childSessionId: string;
+      readonly mode: 'continuable' | 'one-shot' | 'unknown';
+    };
+
+/**
+ * The complete event history of a short Session through the released projection/page RPC; a
+ * child Agent's Session is read through its `subagent` address.
+ */
 export async function sessionEvents(
   rpc: SessionRpc,
   sessionId: string,
+  address: SessionAddress = { kind: 'session', sessionId },
 ): Promise<Record<string, unknown>[]> {
   const projection = await rpc('session/projections', { request: { sessionId } });
   const page = await rpc('session/page', {
     request: {
-      address: { kind: 'session', sessionId },
+      address,
       throughSeq: projection.asOfSeq,
       maxMessages: 100,
     },

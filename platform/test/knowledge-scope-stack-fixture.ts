@@ -342,6 +342,14 @@ export function composerCard(value: unknown): ComposerState | null {
   return { draft: value.draft, focused: value.focused, send: value.send, stop: value.stop };
 }
 /**
+ * Whether the composer holds `shown` with its send button enabled. A composer missing for a
+ * moment (it re-renders after taking a line) is simply not ready yet; waits keep polling.
+ */
+export function draftReady(state: ComposerState | null, shown: string): boolean {
+  return state !== null && state.draft.includes(shown) && state.send === 'enabled';
+}
+
+/**
  * The live main chat column of one Session (dsh-client-ui-chat lib/client.js, ChatView's
  * `data-chat-flow` column), never a step group's nested `data-chat-flow` content.
  */
@@ -360,7 +368,7 @@ interface HoldControl {
   release(): Promise<void>;
 }
 
-/** The scope actions on one observed workbench page. */
+/** The scope actions on one observed workbench page; the search lane reuses them. */
 function scopeDriver(page: Page, rpc: SessionRpc, timeout: number) {
   const snapshot = async () => scopeSnapshot(await page.evaluate<unknown>(SNAPSHOT));
   // The Session the current step is about; failure messages compare the page against it.
@@ -394,6 +402,23 @@ function scopeDriver(page: Page, rpc: SessionRpc, timeout: number) {
   };
   const ready = async (latest: ScopeSnapshot, id: string) =>
     latest.current === id && latest.label !== null && (await composerState(page)) === 'ready';
+  const card = async (action: 'focus' | 'state' | 'submit') => {
+    const state = composerCard(await page.evaluate<unknown>(COMPOSER(action)));
+    if (state === null) throw new Error('Knowledge scope composer missing');
+    return state;
+  };
+  /** Types `text` into Session `id`'s scope composer and submits it once `shown` is drafted. */
+  const submit = async (id: string, text: string, shown: string) => {
+    focus.id = id;
+    await wait((latest) => ready(latest, id), 'scope composer');
+    if (!(await card('focus')).focused) throw new Error('Knowledge scope composer not focused');
+    await page.keyboard.insertText(text);
+    await wait(
+      async () => draftReady(composerCard(await page.evaluate<unknown>(COMPOSER('state'))), shown),
+      'scope draft',
+    );
+    await card('submit');
+  };
   const driver = {
     snapshot,
     /** The control shows `selection` for the current Session `id`, as does the host. */
@@ -482,21 +507,8 @@ function scopeDriver(page: Page, rpc: SessionRpc, timeout: number) {
      * state (a stop button that a fast turn shows only briefly) is waited for.
      */
     async send(id: string, text: string, started: () => Promise<void> = () => Promise.resolve()) {
-      focus.id = id;
-      await wait((latest) => ready(latest, id), 'scope composer');
       const before = (await readScope(rpc, id)).turn?.turn;
-      const card = async (action: 'focus' | 'state' | 'submit') => {
-        const state = composerCard(await page.evaluate<unknown>(COMPOSER(action)));
-        if (state === null) throw new Error('Knowledge scope composer missing');
-        return state;
-      };
-      if (!(await card('focus')).focused) throw new Error('Knowledge scope composer not focused');
-      await page.keyboard.insertText(text);
-      await wait(async () => {
-        const state = await card('state');
-        return state.draft.includes(text) && state.send === 'enabled';
-      }, 'scope draft');
-      await card('submit');
+      await submit(id, text, text);
       await started();
       const seen: { turn: number | undefined } = { turn: undefined };
       await wait(async () => {
@@ -504,6 +516,19 @@ function scopeDriver(page: Page, rpc: SessionRpc, timeout: number) {
         return seen.turn !== undefined && seen.turn !== before;
       }, 'scope turn start');
       return Number(seen.turn);
+    },
+    /**
+     * Types the `/<name> <arguments>` line into Session `id`'s composer and submits it on the
+     * command path, which starts no turn; the composer may render the leading token as its own
+     * element, so only the arguments are awaited in the draft. Settled once the host projection
+     * holds `selection`; the caller checks `command/done` and the turn count.
+     */
+    async command(id: string, line: string, selection: ScopeSelection) {
+      await submit(id, line, line.slice(line.indexOf(' ') + 1));
+      await wait(
+        async () => sameSelection((await readScope(rpc, id)).selection, selection),
+        'command taken',
+      );
     },
     /** The host's native turn end, then a composer without a stop button. */
     async turnEnd(id: string, turn: number) {
@@ -534,7 +559,7 @@ function scopeDriver(page: Page, rpc: SessionRpc, timeout: number) {
   };
   return driver;
 }
-type ScopeDriver = ReturnType<typeof scopeDriver>;
+export type ScopeDriver = ReturnType<typeof scopeDriver>;
 
 /** Everything the scope lane needs from the stack test; values stay in memory. */
 export interface ScopeScenario {
@@ -562,8 +587,8 @@ interface ScopeSessions {
  * One observed workbench session running `script` on the scope driver; its page resources are
  * scanned for the needles as in the panel sessions (the popover's list is the route answer).
  */
-async function scopeSession(
-  scenario: ScopeScenario,
+export async function scopeSession(
+  scenario: Pick<ScopeScenario, 'session' | 'rpc' | 'needles'>,
   label: string,
   script: (scope: ScopeDriver, page: Page, tools: SessionTools) => Promise<void>,
 ): Promise<StackBrowserEvidence> {

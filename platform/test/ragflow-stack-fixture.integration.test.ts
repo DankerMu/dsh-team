@@ -16,6 +16,7 @@ import {
   platformEndpoint,
   platformRagflowUrl,
   ragflowOutage,
+  SEARCH_QUESTION,
   verifiedRagflowContainer,
 } from './ragflow-stack-fixture.ts';
 import type { InstanceCall } from './ragflow-stack-fixture.ts';
@@ -202,6 +203,16 @@ it('reports retrieval counts and exclusions without chunk content', async () => 
           documentName: 'product-catalog.txt',
         },
         { content: SECRET, datasetName: SECRET, documentName: 'expense-policy.txt' },
+        {
+          content: SECRET,
+          datasetName: 'dsh-team-seed-minutes',
+          documentName: 'weekly-minutes-02.txt',
+        },
+        {
+          content: SECRET,
+          datasetName: 'dsh-team-seed-policies',
+          documentName: 'attendance-policy.txt',
+        },
       ],
     }),
   );
@@ -213,8 +224,10 @@ it('reports retrieval counts and exclusions without chunk content', async () => 
     kind: 'retrieval',
     status: 200,
     result: 'ok',
-    chunks: 3,
-    seedChunks: 1,
+    chunks: 5,
+    seedChunks: 3,
+    // Seed names of the seed chunks only, each once, in seed order.
+    seedDatasets: ['dsh-team-seed-policies', 'dsh-team-seed-minutes'],
     excluded: [MISSING],
   });
   expect(stub.seen).toEqual([
@@ -225,6 +238,25 @@ it('reports retrieval counts and exclusions without chunk content', async () => 
       contentType: 'application/json',
       body: JSON.stringify({ question: '报销需要提交哪些材料', datasetIds: [POLICIES, MISSING] }),
     },
+  ]);
+});
+
+it('sends the question the call names instead of the default one', async () => {
+  const stub = await stubPlatform(() => json({ result: 'no-results', excluded: [] }));
+
+  const run = await runScript(
+    { kind: 'retrieval', datasetIds: [POLICIES], question: SEARCH_QUESTION },
+    stub.port,
+  );
+
+  expectNoLeak(run);
+  expect(parseInstanceOutput(run.stdout, 'retrieval')).toMatchObject({
+    status: 200,
+    result: 'no-results',
+    excluded: [],
+  });
+  expect(stub.seen.map(({ body }) => body)).toEqual([
+    JSON.stringify({ question: '在琥珀报销台报销需要上传哪些材料', datasetIds: [POLICIES] }),
   ]);
 });
 
@@ -244,6 +276,7 @@ it.each([
     result: null,
     chunks: null,
     seedChunks: 0,
+    seedDatasets: [],
     excluded: null,
   });
 });
@@ -309,12 +342,24 @@ it.each([
 
 it.each([
   ['a non-hex excluded ID', { excluded: ['xyz'] }],
+  ['a non-seed chunk dataset', { excluded: [], seedDatasets: ['other'] }],
+  [
+    'a repeated chunk dataset',
+    { excluded: [], seedDatasets: ['dsh-team-seed-minutes', 'dsh-team-seed-minutes'] },
+  ],
   ['a non-seed dataset', { seeds: [{ name: 'other', id: POLICIES }] }],
   ['a non-hex dataset ID', { seeds: [{ name: 'dsh-team-seed-policies', id: 'abc' }] }],
   ['an extra seed key', { seeds: [{ name: 'dsh-team-seed-policies', id: POLICIES, x: 1 }] }],
 ])('rejects dataset and retrieval output with %s', (_name, change) => {
   const datasets = { kind: 'datasets', status: 200, result: 'ok', datasets: 1, seeds: [] };
-  const retrieval = { kind: 'retrieval', status: 200, result: 'ok', chunks: 1, seedChunks: 1 };
+  const retrieval = {
+    kind: 'retrieval',
+    status: 200,
+    result: 'ok',
+    chunks: 1,
+    seedChunks: 1,
+    seedDatasets: ['dsh-team-seed-policies'],
+  };
   const [kind, facts] =
     'excluded' in change ? (['retrieval', retrieval] as const) : (['datasets', datasets] as const);
 

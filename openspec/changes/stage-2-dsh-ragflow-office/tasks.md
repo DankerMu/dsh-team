@@ -2171,8 +2171,11 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
   - `question` 校验：空白、超 4096 字节不发请求；
   - 插件不可用或缺 `tools`/`agents` 时不注册工具。
 - 本机通道（`pnpm test:stack`，Playwright Chromium 经网关，确定性 provider），放在 #420 的范围步骤之后，同一员工：
-  - 正对照（放在既有的 `proxyAfterRestore` 里，不在检索步骤中执行）：`proxyAfterRestore` 里已有的全库检索记下所属知识库名的集合，要求其中至少有一个不是 `dsh-team-seed-policies`（不增加付费检索）；这样「范围没有扩大」才有区分力。正对照失败就停下报告，不得改 `QUESTION` 或阈值（`proxyAfterRestore` 的既有断言共用它们）。
-  0. **恢复检索参数**：`proxyAfterRestore` 把相似度阈值设成了 1（`ragflow-stack-fixture.ts:733-740`），检索步骤前由管理员 PUT `DEFAULT_RETRIEVAL`，要求 200。`delegation.question` 用既有的 `QUESTION`（「报销需要提交哪些材料」）。
+  - 正对照（放在既有的 `proxyAfterRestore` 里，不在检索步骤中执行）：
+    - `proxyAfterRestore` 里已有的全库检索记下所属知识库名的集合，要求其中至少有一个不是 `dsh-team-seed-policies`；这样「范围没有扩大」才有区分力。
+    - 单库正对照（用户决定 2026-11-05）：第 3、4 次本机运行实测，真实 rc2 对 `QUESTION`「报销需要提交哪些材料」只检索 policies 库时，默认参数下是 `no-results`（库里 2 个文档、2 个 chunk 都已解析，embedding 与其他库相同），所以检索步骤改用专门的 `SEARCH_QUESTION`「在琥珀报销台报销需要上传哪些材料」（含种子文件 `expense-policy.txt` 独有的「琥珀报销台」）。`proxyAfterRestore` 在严格阈值 PUT 之前，以默认参数对 `[policies]` 检索一次 `SEARCH_QUESTION`：要求 `ok`、`excluded: []`、至少 1 个片段，所有片段都是种子片段，来源库恰为 `[dsh-team-seed-policies]`。每次运行的付费检索因此为 5 次（`proxyAfterRestore` 4 次，子 Agent 1 次）。
+    - 任一正对照失败就停下报告。`QUESTION` 和阈值不变（`proxyAfterRestore` 的既有断言共用它们）。
+  0. **恢复检索参数**：`proxyAfterRestore` 把相似度阈值设成了 1（`ragflow-stack-fixture.ts:733-740`），检索步骤前由管理员 PUT `DEFAULT_RETRIEVAL`，要求 200。`delegation.question` 用 `SEARCH_QUESTION`（见上方单库正对照）。
   1. **子 Agent 用根 Session 的范围**：新建 Session（综合办公），在输入区以员工身份输入 `/kb-scope {"datasetIds":["<dsh-team-seed-policies 的 ID>","<32 个 0>"]}`（伪造的 ID 模拟已删除的库，不写 RAGFlow，同 #417 的 `MISSING_ID`）（输入框的前导 `/` 走命令路径，`R/dsh-client-ui-commands/lib/client.js:1624-1666`），确认控件显示「知识库：2 个」、投影 `selection` 恰为这两个 ID、`command/done` 成功且没有新的 `turn/start`；然后发一条带 `childMarker` 的消息。provider 让综合办公调用 `subagent`，子 Agent（公文与材料写作）调用 `knowledge_base_search`。
   2. **核对**（经网关读原生历史，`mappedSessionRpc` + `sessionEvents`）：
      - 子 Session ID 从根 Session 的 `subagent` 工具结果文本 `started subagent <id>` 解析（根 Session 的 `tool/result` 不持久化返回值）；
@@ -2180,7 +2183,7 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
      - 子 Session 中恰有一次 `knowledge_base_search` 的 `tool/call` 与成功的 `tool/result`；
      - 工具结果文本含「知识库检索：」与「有 1 个已选知识库已不可用，已跳过」，所有片段的所属知识库都是 `dsh-team-seed-policies`（范围没有扩大到另外两个种子库）；
      - 结果文本与 `meta` 都不含任何库 ID（三个种子库 ID 与伪造 ID）；provider 的 `forbiddenRequests` 仍为 0，`delegations`、`searches` 各为 1；
-     - 检索卡片在子 Session 里（`tool/result` 追加到执行工具的 agent 的 Session，`R/dsh-agent-loop/lib/index.js:691-706`）：浏览器进入子 Session（沿用 `platform/test/permission-browser-fixture.mjs` 的 `openChild` 做法），卡片若默认折叠先展开，DOM 断言卡片里有片段、文件名与所属知识库，截图 `search-sources.png`。
+     - 检索卡片在子 Session 里（`tool/result` 追加到执行工具的 agent 的 Session，`R/dsh-agent-loop/lib/index.js:691-706`）：浏览器进入子 Session（沿用 `platform/test/permission-browser-fixture.mjs` 的 `openChild` 做法），先展开该轮折叠的步骤行（发行版 `TurnProcessNodeView` 的 `button[data-turn-process]`，只点一次，不来回切换），DOM 断言子 Session 视图里恰有一张可见的 `[data-tool="knowledge_base_search"]` 卡片，截图 `search-sources.png`。片段、文件名与所属知识库以原生历史里该次 `tool/result` 的 meta 为准（上面「核对」已断言），浏览器不再逐字校验卡片文案（用户决定 2026-11-06：第 6 次本机运行时卡片已找到，但文案校验未通过，故放宽）。
   - 每一步写明等待上限，耗时记进证据。
   - 检索会话：控制台错误 0、页面错误 0、失败请求 0、外部请求 0；沿用页面资源秘密扫描。
   - `stackEvidence` 增加单独的 `search` 对象，只记结局、片段数、所属知识库名集合、剔除数和截图名。

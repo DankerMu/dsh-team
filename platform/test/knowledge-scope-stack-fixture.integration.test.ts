@@ -4,6 +4,7 @@ import {
   transcriptCheck,
   composerCard,
   createdSessionId,
+  draftReady,
   scopeStall,
   readScope,
   scopeLabel,
@@ -236,4 +237,22 @@ it.each([
   ['a command summary', '请再回复一次\n知识库范围：不检索', 'leak'],
 ])('judges a transcript that is %s', (_label, text, verdict) => {
   expect(transcriptCheck(text, '请再回复一次')).toBe(verdict);
+});
+
+it.each([
+  ['a composer that is momentarily absent', null, false],
+  ['a draft without the text', { draft: '', focused: true, send: 'enabled', stop: false }, false],
+  [
+    'a disabled send button',
+    { draft: 'x {}', focused: true, send: 'disabled', stop: false },
+    false,
+  ],
+  ['no send button', { draft: 'x {}', focused: true, send: 'none', stop: false }, false],
+  [
+    'the drafted text with send enabled',
+    { draft: 'x {}', focused: true, send: 'enabled', stop: false },
+    true,
+  ],
+] as const)('judges %s without failing', (_label, state, ready) => {
+  expect(draftReady(state, '{}')).toBe(ready);
 });

@@ -9,7 +9,15 @@ interface KnowledgeBaseEntry {
   readonly name: string;
 }
 
-/** The closed set both browser routes answer with HTTP 200. */
+/** One retrieved passage; `positions` is RAGFlow's verbatim 5-number tuple list. */
+export interface SearchChunk {
+  readonly content: string;
+  readonly documentName: string;
+  readonly datasetName: string;
+  readonly positions?: readonly (readonly number[])[];
+}
+
+/** The closed set both browser routes answer with HTTP 200, plus the retrieval answer. */
 export type KnowledgeBaseAnswer =
   | { readonly result: 'ok'; readonly datasets: readonly KnowledgeBaseEntry[] }
   | {
@@ -17,6 +25,12 @@ export type KnowledgeBaseAnswer =
       readonly total: number;
       readonly documents: readonly KnowledgeBaseEntry[];
     }
+  | {
+      readonly result: 'ok';
+      readonly excluded: readonly string[];
+      readonly chunks: readonly SearchChunk[];
+    }
+  | { readonly result: 'no-results'; readonly excluded: readonly string[] }
   | {
       readonly result:
         'not-configured' | 'unavailable' | 'timeout' | 'upstream-error' | 'invalid-request';
@@ -26,14 +40,75 @@ interface KnowledgeBaseLogger {
   warn(format: string, ...args: unknown[]): void;
 }
 
-/** One platform proxy read; `limit` bounds the answer body in bytes. */
+/** One platform proxy call; `limit` bounds the answer body in bytes; `body` makes it a POST. */
 export interface PlatformRequest {
   readonly url: string;
   readonly token: string;
-  readonly kind: 'datasets' | 'documents';
+  readonly kind: 'datasets' | 'documents' | 'retrieval';
   readonly limit: number;
   readonly signal: AbortSignal;
   readonly logger: KnowledgeBaseLogger;
+  readonly body?: unknown;
+}
+
+type SearchResult =
+  | 'ok'
+  | 'no-results'
+  | 'no-scope'
+  | 'no-datasets'
+  | 'scope-unavailable'
+  | 'invalid-question'
+  | 'not-configured'
+  | 'unavailable'
+  | 'timeout'
+  | 'upstream-error'
+  | 'invalid-request';
+
+/** The `knowledge_base_search` value: names only, `excluded` a count, never a dataset ID. */
+export interface SearchValue {
+  readonly result: SearchResult;
+  readonly chunks?: readonly SearchChunk[];
+  readonly excluded?: number;
+}
+
+/** The card data persisted as the tool result's `meta`. */
+export interface SearchMeta {
+  readonly result: SearchResult;
+  readonly title: string;
+  readonly excluded: number;
+  readonly chunks: readonly SearchChunk[];
+}
+
+/** Structural subset of the released 0.2.1-rc.2 Session the tool reads. */
+export interface SearchSession {
+  readonly id: string;
+  readonly header: { readonly origin?: string; readonly parentSession?: string };
+}
+
+interface SearchAgent {
+  readonly session: SearchSession;
+}
+
+/** Structural subset of the released 0.2.1-rc.2 tool execution context. */
+export interface SearchExecution {
+  readonly agent?: SearchAgent;
+  readonly signal: AbortSignal;
+}
+
+/** The released 0.2.1-rc.2 `agent/created` sources (`dsh-agent` runtime types). */
+type SessionStartSource = 'startup' | 'resume' | 'clear' | 'compact';
+
+/** The services and events the retrieval tool's injection uses. */
+export interface SearchServices {
+  tools: { register(definition: object): unknown };
+  sessionProjections: { stateOf(session: SearchSession, key: 'kbScope'): ScopeState | undefined };
+  agents: { get(id: string): SearchAgent | undefined };
+  logger: KnowledgeBaseLogger;
+  on(
+    event: 'agent/created',
+    callback: (payload: { agent: SearchAgent; source: SessionStartSource }) => void,
+  ): unknown;
+  on(event: 'agent/disposed', callback: (payload: { agent: SearchAgent }) => void): unknown;
 }
 
 /** Structural subset of the released 0.2.1-rc.2 host webserver injection contract. */
@@ -123,6 +198,10 @@ export interface KnowledgeBaseHostContext {
   inject(
     deps: ['sessionProjections', 'commands'],
     callback: (ctx: ScopedServices) => void,
+  ): unknown;
+  inject(
+    deps: ['tools', 'sessionProjections', 'agents'],
+    callback: (ctx: SearchServices) => void,
   ): unknown;
   connection: { fetch: { register(route: FetchRoute): () => Promise<void> } };
   logger: KnowledgeBaseLogger;

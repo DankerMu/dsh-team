@@ -21,7 +21,8 @@ function scopedContext(services = true) {
     logger: { warn: () => undefined },
     inject(deps, callback) {
       injected.push(deps);
-      if (!services) return;
+      // The retrieval tool's injection is index-search.test.js's.
+      if (!services || deps.includes('tools')) return;
       callback({
         sessionProjections: { register: (definition) => projections.push(definition) },
         commands: { register: (definition) => commands.push(definition) },
@@ -44,7 +45,10 @@ describe('registration', () => {
 
     apply(ctx, { platformUrl: VALID });
 
-    expect(injected).toEqual([['sessionProjections', 'commands']]);
+    expect(injected).toEqual([
+      ['sessionProjections', 'commands'],
+      ['tools', 'sessionProjections', 'agents'],
+    ]);
     expect(projections).toEqual([scopeProjection]);
     expect(commands).toEqual([scopeCommand]);
   });
@@ -54,7 +58,10 @@ describe('registration', () => {
 
     apply(ctx, { platformUrl: VALID });
 
-    expect(injected).toEqual([['sessionProjections', 'commands']]);
+    expect(injected).toEqual([
+      ['sessionProjections', 'commands'],
+      ['tools', 'sessionProjections', 'agents'],
+    ]);
     expect(projections).toEqual([]);
     expect(commands).toEqual([]);
   });

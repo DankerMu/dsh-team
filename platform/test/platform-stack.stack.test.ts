@@ -40,6 +40,8 @@ import {
 import type { PanelSessionEvidence } from './knowledge-panel-stack-fixture.ts';
 import { scopeScenario } from './knowledge-scope-stack-fixture.ts';
 import type { ScopeEvidence } from './knowledge-scope-stack-fixture.ts';
+import { searchScenario } from './knowledge-search-stack-fixture.ts';
+import type { SearchEvidence } from './knowledge-search-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
@@ -47,10 +49,14 @@ import {
   configureRagflow,
   duringRagflowOutage,
   instanceProxy,
+  MISSING_ID,
+  POLICIES,
   proxyAfterRestore,
   proxyWhileDown,
   ragflowOutage,
   ragflowStackSnapshot,
+  restoreRetrievalDefaults,
+  SEARCH_QUESTION,
 } from './ragflow-stack-fixture.ts';
 import { converseInWorkbench, until } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
@@ -137,6 +143,7 @@ interface ConversationEvidence {
     Awaited<ReturnType<typeof proxyAfterRestore>>;
   ragflow?: { before: RagflowStack; after: RagflowStack };
   scope?: ScopeEvidence & { forbiddenRequests: unknown };
+  search?: SearchEvidence & { provider: Record<string, unknown> };
 }
 
 /** The private RAGFlow test stack and its seed snapshot taken before any Docker work. */
@@ -150,7 +157,8 @@ interface RagflowContext {
 /**
  * The owned deterministic provider's script for one run; every value is a nonsecret nonce. The
  * scope lane holds its first marked turn and counts requests carrying any `forbidden` string: the
- * command name, its summary text and the seed dataset IDs must never reach the model.
+ * command name, its summary text and the seed dataset IDs must never reach the model. The search
+ * lane's marked turn makes the general office Agent delegate and the writer child search.
  */
 function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
   const name = 'owned-stack-model';
@@ -164,6 +172,7 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
       script: { path: `/data/work/stack-${runId}.txt`, content: `stack-content-${randomUUID()}\n` },
       hold: `stack-hold-${randomUUID()}`,
       forbidden: ['kb-scope', '知识库范围', ...seedIds.map(({ id }) => id)],
+      delegation: { childMarker: `stack-child-${randomUUID()}`, question: SEARCH_QUESTION },
     },
   };
 }
@@ -284,6 +293,43 @@ async function scopeLane(
 }
 
 /**
+ * The retrieval lane after the scope lane, same employee: the retrieval defaults come back first
+ * (proxyAfterRestore saved threshold 1), then the delegated child searches the root's two-ID scope.
+ * The provider saw no scope text or dataset ID, one delegation and one search.
+ */
+async function searchLane(
+  lifecycle: UserImageLifecycle,
+  platformRead: (script: string) => Promise<Record<string, unknown>>,
+  lane: {
+    administrator: { base: string; cookie: string };
+    employee: { id: string; email: string; cookie: string };
+    model: ReturnType<typeof ownedModel>;
+    ragflow: RagflowContext;
+  },
+): Promise<NonNullable<ConversationEvidence['search']>> {
+  const { administrator, employee, ragflow } = lane;
+  await restoreRetrievalDefaults(administrator);
+  const policies = ragflow.seedIds.find(({ name }) => name === POLICIES);
+  if (policies === undefined) throw new Error('Seed policies dataset ID missing');
+  const search = await searchScenario({
+    session: panelSession(lifecycle, administrator.base, employee.email),
+    rpc: mappedSessionRpc(administrator.base, employee.cookie),
+    policies,
+    missingId: MISSING_ID,
+    ids: [...ragflow.seedIds.map(({ id }) => id), MISSING_ID],
+    childMarker: lane.model.provider.delegation.childMarker,
+    needles: () => panelNeedles(lifecycle.commandAsync, employee.id, ragflow.stack),
+  });
+  const provider = await platformRead(PROVIDER_HEALTH);
+  expect({
+    forbiddenRequests: provider.forbiddenRequests,
+    delegations: provider.delegations,
+    searches: provider.searches,
+  }).toEqual({ forbiddenRequests: 0, delegations: 1, searches: 1 });
+  return { ...search, provider };
+}
+
+/**
  * Real gateway, real model-config and real DSH: one employee message through Chromium makes the
  * owned provider script a `write` call, then the reply; the file and counters are read back.
  * Login, instance start and the conversation run while RAGFlow is really stopped; the proxy is
@@ -345,6 +391,12 @@ async function converse(
     panel.restored = await restoredPanel(session, needles);
     // RAGFlow is back, so the scope popover lists the seed libraries.
     evidence.scope = await scopeLane(lifecycle, platformRead, {
+      administrator,
+      employee,
+      model,
+      ragflow,
+    });
+    evidence.search = await searchLane(lifecycle, platformRead, {
       administrator,
       employee,
       model,
@@ -521,13 +573,14 @@ it('builds both images, starts the delivered compose platform, converses through
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
-  const { browser, provider, proxy, ragflow, panel, scope } = evidence;
+  const { browser, provider, proxy, ragflow, panel, scope, search } = evidence;
   if (browser === undefined || provider === undefined || proxy === undefined)
     throw new Error('Conversation evidence missing');
   if (panel?.unavailable === undefined || panel.restored === undefined)
     throw new Error('Knowledge panel evidence missing');
   if (ragflow === undefined) throw new Error('RAGFlow test stack evidence missing');
   if (scope === undefined) throw new Error('Knowledge scope evidence missing');
+  if (search === undefined) throw new Error('Knowledge search evidence missing');
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -602,6 +655,14 @@ it('builds both images, starts the delivered compose platform, converses through
     'scope-running.png',
     'scope-restored.png',
   ]);
+  expect({
+    consoleErrors: search.browser.consoleErrors,
+    pageErrors: search.browser.pageErrors,
+    failedRequests: search.browser.failedRequests,
+    externalRequests: search.browser.externalRequests,
+  }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
+  expect(search.browser.screenshots).toEqual(['search-sources.png']);
+  expect(search.facts).toMatchObject({ result: 'ok', datasetNames: [POLICIES], excluded: 1 });
   process.stdout.write(
     `${JSON.stringify({
       stackEvidence: {
@@ -624,6 +685,15 @@ it('builds both images, starts the delivered compose platform, converses through
           steps: scope.steps,
           screenshots: scopeScreenshots,
           forbiddenRequests: scope.forbiddenRequests,
+        },
+        search: {
+          result: search.facts.result,
+          chunks: search.facts.chunks,
+          datasetNames: search.facts.datasetNames,
+          excluded: search.facts.excluded,
+          screenshot: search.screenshot,
+          elapsedMs: search.elapsedMs,
+          waitLimitMs: search.waitLimitMs,
         },
       },
     })}\n`,
