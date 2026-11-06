@@ -49,6 +49,7 @@ const EVENT_DETAIL_FIELDS: Record<string, readonly string[]> = {
   'web-tools.updated': [],
   'ragflow-config.updated': [],
   'retrieval-config.updated': [],
+  'document-server-config.updated': [],
   'instance.restarted': [],
   'instance.config-reset': [],
   'instance.created': [],

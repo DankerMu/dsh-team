@@ -273,6 +273,8 @@ it('reaches the deadline before and after the status at the probe seam', async (
     retrievalSimilarityThreshold: 0.2,
     retrievalKeywordsWeight: 0.7,
     retrievalRerankId: '',
+    documentServerUrl: '',
+    documentServerJwtSecret: '',
   });
   upstream.setHandler(() => undefined);
   const silent = await probeModel(snapshot, new AbortController().signal, 150);

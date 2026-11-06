@@ -18,7 +18,8 @@ interface ConfigDescriptor {
     | 'plugin-sources'
     | 'web-tools'
     | 'ragflow'
-    | 'retrieval';
+    | 'retrieval'
+    | 'document-server';
   path: string;
   auditType:
     | 'model-config.updated'
@@ -27,7 +28,8 @@ interface ConfigDescriptor {
     | 'plugin-sources.updated'
     | 'web-tools.updated'
     | 'ragflow-config.updated'
-    | 'retrieval-config.updated';
+    | 'retrieval-config.updated'
+    | 'document-server-config.updated';
   bodySchema: FastifySchema['body'];
   responseSchema: {
     readonly type: 'object';

@@ -10,6 +10,7 @@ import { webToolsRoutes } from './web-tools.ts';
 import { ragflowConfigRoutes } from './ragflow-config.ts';
 import { ragflowConnectionRoutes } from './ragflow-connection.ts';
 import { retrievalConfigRoutes } from './retrieval-config.ts';
+import { documentServerConfigRoutes } from './document-server-config.ts';
 import { accountStatusRoutes } from './account-status.ts';
 import { passwordResetRoutes } from './password-reset.ts';
 import { instanceActionRoutes } from './instance-actions.ts';
@@ -85,9 +86,14 @@ export const adminRoutes: FastifyPluginCallback<{
   database: DatabaseHandle;
   resolveSourceAddress: SourceAddressResolver;
   subnetPool: string;
+  documentServerBundled: boolean;
   shutdown: AbortSignal;
   service?: InstanceService;
-}> = (app, { database, resolveSourceAddress, subnetPool, shutdown, service }, done) => {
+}> = (
+  app,
+  { database, resolveSourceAddress, subnetPool, documentServerBundled, shutdown, service },
+  done,
+) => {
   app.addHook('onRequest', (request, reply, next) => {
     try {
       const token = readSessionCookie(request.headers.cookie);
@@ -224,6 +230,11 @@ export const adminRoutes: FastifyPluginCallback<{
   // Separate plugin: ragflowConfigRoutes rewrites every 400 as invalid configuration.
   app.register(ragflowConnectionRoutes, { database, shutdown });
   app.register(retrievalConfigRoutes, { database, resolveSourceAddress });
+  app.register(documentServerConfigRoutes, {
+    database,
+    resolveSourceAddress,
+    documentServerBundled,
+  });
   app.register(passwordResetRoutes, { database, resolveSourceAddress });
   const pending = new Set<string>();
   app.register(accountStatusRoutes, {

@@ -11,8 +11,10 @@ export const MODEL_CONFIG = {
   defaultModel: 'beta',
 };
 
-/** Migrations 5 and 6 seed these rows; they are every unmodified database's settings baseline. */
+/** Migrations 5–7 seed these rows; they are every unmodified database's settings baseline. */
 export const SEEDED_SETTINGS = [
+  { key: 'documentServerJwtSecret', value: '""' },
+  { key: 'documentServerUrl', value: '""' },
   { key: 'pluginCatalog', value: '{}' },
   {
     key: 'pluginRegistries',

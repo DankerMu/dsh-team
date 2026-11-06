@@ -33,6 +33,11 @@ export function isRagflowBaseUrl(value: string): boolean {
   }
 }
 
+/** A stored external address selects the external Document Server; otherwise the bundled one. */
+export function documentServerMode(settings: Settings): 'bundled' | 'external' {
+  return settings.documentServerUrl === '' ? 'bundled' : 'external';
+}
+
 interface ModelSetting {
   readonly name: string;
   readonly contextWindow?: number;
@@ -62,6 +67,10 @@ export interface Settings {
   readonly retrievalKeywordsWeight: number;
   /** Empty for no reranking. */
   readonly retrievalRerankId: string;
+  /** `''` selects the bundled Document Server, otherwise an `isRagflowBaseUrl` address stored verbatim. */
+  readonly documentServerUrl: string;
+  /** External Document Server JWT; empty exactly when `documentServerUrl` is empty. */
+  readonly documentServerJwtSecret: string;
 }
 const UPSERT_SETTING =
   'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
@@ -89,6 +98,8 @@ const DEFAULT_SETTINGS: Settings = {
   retrievalSimilarityThreshold: 0.2,
   retrievalKeywordsWeight: 0.7,
   retrievalRerankId: '',
+  documentServerUrl: '',
+  documentServerJwtSecret: '',
 };
 interface SettingRow {
   key: string;
@@ -159,7 +170,23 @@ function parseRegistries(value: unknown): string[] {
   return [...(value as string[])];
 }
 
-/** RAGFlow connection and retrieval keys; any other key is not an owned setting. */
+/** Document Server keys; any other key is not an owned setting. */
+function parseDocumentServerSetting(key: string, value: unknown): unknown {
+  switch (key) {
+    case 'documentServerUrl':
+      if (typeof value !== 'string' || (value !== '' && !isRagflowBaseUrl(value))) {
+        throw fieldError(key);
+      }
+      return value;
+    case 'documentServerJwtSecret':
+      if (typeof value !== 'string') throw fieldError(key);
+      return value;
+    default:
+      throw fieldError(key);
+  }
+}
+
+/** RAGFlow connection and retrieval keys; other keys continue to the Document Server keys. */
 function parseRagflowSetting(key: string, value: unknown): unknown {
   switch (key) {
     case 'ragflowBaseUrl':
@@ -180,7 +207,7 @@ function parseRagflowSetting(key: string, value: unknown): unknown {
       }
       return value;
     default:
-      throw fieldError(key);
+      return parseDocumentServerSetting(key, value);
   }
 }
 

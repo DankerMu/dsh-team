@@ -24,6 +24,8 @@ const SETTINGS: Settings = {
   retrievalSimilarityThreshold: 0.2,
   retrievalKeywordsWeight: 0.7,
   retrievalRerankId: '',
+  documentServerUrl: '',
+  documentServerJwtSecret: '',
 };
 const COMPLETION = JSON.stringify({ id: 'x', choices: [{ index: 0, message: { content: '' } }] });
 

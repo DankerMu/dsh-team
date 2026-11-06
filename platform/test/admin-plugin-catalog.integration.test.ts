@@ -54,7 +54,7 @@ it('rejects anonymous and employee callers on both methods before touching setti
   });
 });
 
-it('roundtrips a logged-in administrator save over TCP on the version-6 ledger and rolls back a rejected save', async () => {
+it('roundtrips a logged-in administrator save over TCP on the version-7 ledger and rolls back a rejected save', async () => {
   await withListeningApp(async (base, app, database, lines) => {
     const user = await registerAccount(app, 'catalog-admin@example.com');
     database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
@@ -62,7 +62,7 @@ it('roundtrips a logged-in administrator save over TCP on the version-6 ledger a
     const headers = jsonRequestHeaders({ cookie: login.header });
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([1, 2, 3, 4, 5, 6].map((version) => ({ version })));
+    ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
 
     const initial = await fetch(`${base}${PATH}`, { headers: { cookie: login.header } });
     const saved = await fetch(`${base}${PATH}`, {

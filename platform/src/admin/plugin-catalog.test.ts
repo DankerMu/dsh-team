@@ -8,6 +8,7 @@ import {
   administrator,
   putConfig,
   SEEDED_SETTINGS,
+  seededWith,
   settingsRows,
 } from '../../test/admin-config-fixture.ts';
 
@@ -131,13 +132,9 @@ it('saves only manageable states with one actor/source audit and a running-insta
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toEqual({ entries: officeAs('forced-off'), runningInstances: 0 });
     expect(read.json()).toEqual({ entries: officeAs('forced-off') });
-    expect(settingsRows(database)).toEqual([
-      {
-        key: 'pluginCatalog',
-        value: '{"knowledge-base":"employee","office-agents":"forced-off"}',
-      },
-      ...SEEDED_SETTINGS.slice(1),
-    ]);
+    expect(settingsRows(database)).toEqual(
+      seededWith({ pluginCatalog: '{"knowledge-base":"employee","office-agents":"forced-off"}' }),
+    );
     expect(audits(database)).toEqual([
       { actor_email: user.email, source_address: SOURCE, details: '{}' },
     ]);

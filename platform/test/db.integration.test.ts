@@ -344,7 +344,7 @@ describe('platform startup on a real database file', () => {
       expect(readSettings(reopened).idleMinutes).toBe(15);
       expect(
         reopened.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-      ).toEqual([1, 2, 3, 4, 5, 6].map((version) => ({ version })));
+      ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
     } finally {
       reopened.close();
     }
@@ -387,7 +387,9 @@ it('forward migration preserves historical instance data and leaves unknown immu
     const historical = {
       users: database.prepare('SELECT * FROM users').all(),
       sessions: database.prepare('SELECT * FROM platform_sessions').all(),
-      settings: database.prepare('SELECT * FROM settings ORDER BY key').all(),
+      settings: database
+        .prepare<[], { key: string; value: string }>('SELECT * FROM settings ORDER BY key')
+        .all(),
       audits: database.prepare('SELECT * FROM audit_events').all(),
     };
 
@@ -413,7 +415,10 @@ it('forward migration preserves historical instance data and leaves unknown immu
       audits: database.prepare('SELECT * FROM audit_events').all(),
     }).toEqual({
       ...historical,
-      settings: [...historical.settings, ...SEEDED_SETTINGS],
+      // ORDER BY key is a byte comparison; seeded keys sort on both sides of the historical row.
+      settings: [...historical.settings, ...SEEDED_SETTINGS].sort((left, right) =>
+        left.key < right.key ? -1 : Number(left.key > right.key),
+      ),
     });
     expect(database.prepare('SELECT attempt_id,container_id FROM creation_attempts').get()).toEqual(
       {
@@ -436,7 +441,7 @@ it('forward migration preserves historical instance data and leaves unknown immu
     });
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([1, 2, 3, 4, 5, 6].map((version) => ({ version })));
+    ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
   } finally {
     database.close();
     rmSync(root, { recursive: true, force: true });
