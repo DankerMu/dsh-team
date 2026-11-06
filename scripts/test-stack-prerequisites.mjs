@@ -4,7 +4,7 @@ export const STACK_CONFIG_RELATIVE_PATH = '.config/dsh-team/stack.json';
 
 const KEYS = ['ragflowUrl', 'ragflowApiKey', 'embeddingApiKey'];
 const DOCKER_UNAVAILABLE = 'local Docker daemon unavailable';
-// The delivered compose file needs endpoint `gw_priority` (AGENTS.md Compose deployment).
+// The delivered compose file needs endpoint `gw_priority` (deploy/README.md).
 const MIN_COMPOSE_VERSION = [2, 33, 1];
 /** The delivered compose's Document Server image; the local lane never pulls it. */
 export const DOCUMENT_SERVER_IMAGE = 'onlyoffice/documentserver:9.4.0';
