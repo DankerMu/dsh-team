@@ -4,8 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import type * as Os from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDockerCommands } from './docker-command.ts';
+import type { DockerCommandResult } from './docker-command.ts';
 
 // Docker Desktop's CLI resolves through its application bundle; the host need not have one.
 const DESKTOP_DOCKER = '/Applications/Docker.app/Contents/Resources/bin/docker';
@@ -113,5 +114,74 @@ it('neither writes nor throws when the private configuration directory is unwrit
     const missing = join(directory, 'absent');
     expect(() => construct(missing)).not.toThrow();
     expect(readdirSync(directory)).toEqual([]);
+  });
+});
+
+describe("compose's required-variable rejection projection", () => {
+  const REJECTION =
+    'error while interpolating services.platform.environment.DOCUMENT_SERVER_JWT_SECRET: required variable DOCUMENT_SERVER_JWT_SECRET is missing a value: Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server\n';
+  const FIXED = { status: 1, stdout: '', stderr: 'Web Docker operation failed' };
+  const commands = (result: DockerCommandResult) =>
+    createDockerCommands('unused', 'unused', true, () => result);
+
+  it('projects only the variable name of a declared compose interpolation exit', () => {
+    const { command } = commands({ status: 1, stdout: 'private-stdout', stderr: REJECTION });
+
+    expect(command(['compose', 'up', '-d'], 30_000, 1)).toEqual({
+      status: 1,
+      stdout: '',
+      stderr: 'required variable DOCUMENT_SERVER_JWT_SECRET is missing a value',
+    });
+  });
+
+  it.each<[string, readonly string[], DockerCommandResult, number | undefined]>([
+    [
+      'an undeclared status',
+      ['compose', 'up'],
+      { status: 1, stdout: '', stderr: REJECTION },
+      undefined,
+    ],
+    ['a different status', ['compose', 'up'], { status: 2, stdout: '', stderr: REJECTION }, 1],
+    ['a non-compose command', ['exec', 'compose'], { status: 1, stdout: '', stderr: REJECTION }, 1],
+    [
+      'a process error',
+      ['compose', 'up'],
+      { status: 1, stdout: '', stderr: REJECTION, error: new Error('private-process-error') },
+      1,
+    ],
+    [
+      'a signal',
+      ['compose', 'up'],
+      { status: 1, stdout: '', stderr: REJECTION, signal: 'SIGKILL' },
+      1,
+    ],
+    [
+      'an extra line',
+      ['compose', 'up'],
+      { status: 1, stdout: '', stderr: `private-line\n${REJECTION}` },
+      1,
+    ],
+    [
+      'other text',
+      ['compose', 'up'],
+      { status: 1, stdout: '', stderr: REJECTION.replace('error while', 'private error while') },
+      1,
+    ],
+    [
+      'a lowercase name',
+      ['compose', 'up'],
+      { status: 1, stdout: '', stderr: REJECTION.replaceAll('DOCUMENT_SERVER', 'document_server') },
+      1,
+    ],
+  ])('keeps the fixed redaction for %s', (_name, args, result, acceptedStatus) => {
+    const { command } = commands(result);
+
+    expect(command(args, 30_000, acceptedStatus)).toEqual({ ...FIXED, status: result.status });
+  });
+
+  it('keeps the fixed redaction on the asynchronous path, which declares no status', async () => {
+    const { commandAsync } = commands({ status: 1, stdout: '', stderr: REJECTION });
+
+    expect(await commandAsync(['compose', 'up'], 30_000)).toEqual(FIXED);
   });
 });

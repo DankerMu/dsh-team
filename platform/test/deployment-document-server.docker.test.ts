@@ -128,12 +128,18 @@ it('fails compose before creating any container when the JWT is unset or empty',
       const lines = (await readFile(join(directory, 'compose.env'), 'utf8')).split('\n');
       expect(lines.some((line) => line.startsWith(`${JWT}=`))).toBe(mode === 'empty');
 
-      const result = await lifecycle.commandAsync(
+      // Exit 1 is declared because the absence checks below independently prove it; only then
+      // does the bounded boundary project compose's message down to the variable name.
+      const result = lifecycle.command(
         [...compose, 'up', '-d', '--no-build', '--pull', 'never'],
         30_000,
+        1,
       );
-      expect(result.status === 0).toBe(false);
-      expect(result.stderr).toContain(JWT);
+      expect(result).toEqual({
+        status: 1,
+        stdout: '',
+        stderr: `required variable ${JWT} is missing a value`,
+      });
 
       for (const [kind, name] of [
         ['container', PLATFORM],
