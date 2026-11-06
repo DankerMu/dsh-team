@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
 import { afterEach, expect, it } from 'vitest';
+import { parse } from 'yaml';
 import { writeComposeConfiguration } from './deployment-compose-fixture.ts';
 import type { ComposeConfiguration } from './deployment-compose-fixture.ts';
 import { OWNER_LABEL } from './docker-cleanup.ts';
@@ -114,4 +115,21 @@ it('replaces the Document Server with the captured image, an idle entrypoint and
     ],
     labels: { [OWNER_LABEL]: RUN },
   });
+});
+
+// The VPS stand-in rewrites this mount by target, so only the delivered file itself proves it.
+it('delivers the operator fonts as one read-only, never-created repository-root bind', async () => {
+  const delivered = parse(await readFile(join(root, 'deploy/compose.yml'), 'utf8')) as {
+    services: Record<string, { volumes?: unknown }>;
+  };
+
+  expect(delivered.services.documentserver?.volumes).toEqual([
+    {
+      type: 'bind',
+      source: './assets/fonts',
+      target: '/usr/share/fonts/truetype/custom',
+      read_only: true,
+      bind: { create_host_path: false },
+    },
+  ]);
 });

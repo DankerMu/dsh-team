@@ -56,6 +56,8 @@ it('starts the bundled Document Server stand-in unpublished, with the fixture JW
     // Image EXPOSE entries with null bindings are not published host ports.
     for (const binding of Object.values(record(record(server.NetworkSettings).Ports ?? {})))
       expect(binding, 'Document Server effective publication').toBeNull();
+    // The stand-in override's own mount (it replaces the delivered entry by target); the delivered
+    // bind is proven by the Docker-free compose test and the local stack lane.
     const mounts: unknown = server.Mounts;
     if (!Array.isArray(mounts)) throw new Error('Document Server mounts unavailable');
     expect(
@@ -63,6 +65,7 @@ it('starts the bundled Document Server stand-in unpublished, with the fixture JW
         .map((mount) => record(mount))
         .filter((mount) => mount.Destination === FONTS)
         .map(({ Destination, RW }) => ({ Destination, RW })),
+      'Stand-in override font mount',
     ).toEqual([{ Destination: FONTS, RW: false }]);
     expect(environmentFacts(server)).toMatchObject({
       jwtEnabled: true,

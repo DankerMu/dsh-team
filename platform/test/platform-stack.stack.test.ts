@@ -69,6 +69,7 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 type Stack = NonNullable<ReturnType<typeof configuredStack>>;
 const PLATFORM = 'dsh-team-platform';
 const DOCUMENT_SERVER = 'dsh-team-documentserver';
+const DOCUMENT_SERVER_FONTS = '/usr/share/fonts/truetype/custom';
 const FIXED_CONTAINERS = [
   [PLATFORM, 'Platform'],
   [DOCUMENT_SERVER, 'Document Server'],
@@ -157,8 +158,9 @@ interface ConversationEvidence {
 }
 
 /**
- * The delivered Document Server runs the real image without a host publication; only started,
- * never awaited or contacted. Returns its anonymous (image `VOLUME`) volume names.
+ * The delivered Document Server runs the real image without a host publication over the
+ * delivered read-only repository font bind; only started, never awaited or contacted. Returns
+ * its anonymous (image `VOLUME`) volume names.
  */
 async function documentServerVolumes(lifecycle: UserImageLifecycle): Promise<string[]> {
   const server = containerDocument(
@@ -172,9 +174,18 @@ async function documentServerVolumes(lifecycle: UserImageLifecycle): Promise<str
     expect(binding, 'Document Server effective publication').toBeNull();
   const mounts: unknown = server.Mounts;
   if (!Array.isArray(mounts)) throw new Error('Document Server mounts unavailable');
-  return (mounts as unknown[])
-    .map((mount) => record(mount))
-    .filter((mount) => mount.Type === 'volume')
+  const documents = (mounts as unknown[]).map((mount) => record(mount));
+  // Without the delivered bind the image's own VOLUME would silently take this target.
+  const fonts = documents.filter((mount) => mount.Destination === DOCUMENT_SERVER_FONTS);
+  expect(
+    fonts.map(({ Type, RW }) => ({ Type, RW })),
+    'Delivered font mount',
+  ).toEqual([{ Type: 'bind', RW: false }]);
+  const source = fonts[0]?.Source;
+  if (typeof source !== 'string') throw new Error('Delivered font mount source unavailable');
+  expect(realpathSync(source)).toBe(realpathSync(join(lifecycle.repositoryRoot, 'assets/fonts')));
+  return documents
+    .filter((mount) => mount.Type === 'volume' && mount.Destination !== DOCUMENT_SERVER_FONTS)
     .map(({ Name }) => {
       if (typeof Name !== 'string' || Name === '') throw new Error('Anonymous volume unnamed');
       return Name;
