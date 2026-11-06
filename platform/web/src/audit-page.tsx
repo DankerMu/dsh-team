@@ -17,6 +17,8 @@ const EVENT_NAMES: Record<string, string> = {
   'plugin-catalog.updated': '修改插件目录',
   'plugin-sources.updated': '修改插件安装源',
   'web-tools.updated': '修改联网工具开关',
+  'ragflow-config.updated': '修改知识库连接',
+  'retrieval-config.updated': '修改检索参数',
   'instance.restarted': '重启实例',
   'instance.config-reset': '重置实例配置',
   'instance.created': '创建实例',

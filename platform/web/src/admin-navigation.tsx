@@ -1,7 +1,7 @@
 export function AdminNavigation({
   page,
 }: {
-  page: 'accounts' | 'instances' | 'audit' | 'models' | 'runtime' | 'plugins';
+  page: 'accounts' | 'instances' | 'audit' | 'models' | 'runtime' | 'plugins' | 'knowledge-base';
 }) {
   return (
     <div className="admin-sidebar">
@@ -28,6 +28,12 @@ export function AdminNavigation({
           </a>
           <a href="/_platform/admin/plugins" aria-current={page === 'plugins' ? 'page' : undefined}>
             插件目录
+          </a>
+          <a
+            href="/_platform/admin/knowledge-base"
+            aria-current={page === 'knowledge-base' ? 'page' : undefined}
+          >
+            知识库
           </a>
           <a href="/_platform/account">账号设置</a>
           <a href="/">返回工作台</a>

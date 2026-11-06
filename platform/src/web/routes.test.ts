@@ -92,6 +92,7 @@ describe('declared platform static routes', () => {
     '/_platform/admin/models',
     '/_platform/admin/runtime',
     '/_platform/admin/plugins',
+    '/_platform/admin/knowledge-base',
   ])('serves %s through the confined HTML owner', async (url) => {
     const response = await app.inject(url);
 
@@ -111,6 +112,7 @@ describe('declared platform static routes', () => {
       ['/_platform/admin/models', HTML],
       ['/_platform/admin/runtime', HTML],
       ['/_platform/admin/plugins', HTML],
+      ['/_platform/admin/knowledge-base', HTML],
       ['/_platform/assets/entry.js', SCRIPT],
     ];
     for (const [url, bytes] of cases) {
@@ -162,6 +164,10 @@ describe('declared platform static routes', () => {
     '/_platform/admin/plugins/settings',
     '/_platform/admin/plugins%00',
     '/_platform/admin/plugins%2fsettings',
+    '/_platform/admin/knowledge-base/',
+    '/_platform/admin/knowledge-base/settings',
+    '/_platform/admin/knowledge-base%00',
+    '/_platform/admin/knowledge-base%2fsettings',
     '/_platform/api/unknown',
     '/_platform/assets/missing.js',
     '/_platform/assets/',

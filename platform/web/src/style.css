@@ -1206,7 +1206,8 @@ pre {
   margin-top: 0.25rem;
 }
 
-.admin form > fieldset > .model-actions {
+.admin form > fieldset > .model-actions,
+.admin-content > .model-actions {
   display: flex;
   flex-wrap: wrap;
   grid-column: 1 / -1;

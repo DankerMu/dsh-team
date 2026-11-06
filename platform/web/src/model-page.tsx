@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
+import { adminRequest } from './admin-request.ts';
 import {
   MODEL_CONFIG_API,
   connectionMessage,
@@ -93,27 +94,13 @@ function restartMessage(value: unknown): string {
   return `已提交 ${String(body.items.length)} 个实例重启，启动可能仍在进行中。`;
 }
 
-async function requestConfiguration(
+function requestConfiguration(
   action: Action,
   signal: AbortSignal,
   payload?: Record<string, unknown>,
 ) {
-  const response = await fetch(ENDPOINT[action], {
-    method: action === 'load' ? 'GET' : action === 'save' ? 'PUT' : 'POST',
-    credentials: 'same-origin',
-    redirect: 'error',
-    signal,
-    ...(payload === undefined
-      ? {}
-      : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }),
-  });
-  try {
-    const body: unknown =
-      response.status === 200 ? await response.json() : await response.arrayBuffer();
-    return { status: response.status, body, readable: true };
-  } catch {
-    return { status: response.status, body: undefined, readable: false };
-  }
+  const method = action === 'load' ? 'GET' : action === 'save' ? 'PUT' : 'POST';
+  return adminRequest(ENDPOINT[action], signal, method, payload);
 }
 function useModelEditor() {
   const [draft, setDraft] = useState<ModelDraft>(EMPTY);
