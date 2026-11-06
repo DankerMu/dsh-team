@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Response } from '@playwright/test';
 import { readSettings, type DatabaseHandle } from '../src/db/index.ts';
 import {
   expectNoBrowserStorage,
@@ -89,6 +89,23 @@ async function press(page: Page, url: string, method: string, label: string) {
   );
   await page.getByRole('button', { name: label, exact: true }).click();
   return response;
+}
+/** Clicks 保存检索参数 with its real PUT held at the browser until `pending` has run. */
+async function withHeldSave(page: Page, url: string, pending: () => Promise<void>) {
+  let answer: Promise<Response> | undefined;
+  await withAccountUiRouteCleanup(page, async (release) => {
+    const held = await holdAdminList(page, url, release.promise, 'PUT');
+    answer = page.waitForResponse(
+      (candidate) => candidate.url() === url && candidate.request().method() === 'PUT',
+    );
+    await page.getByRole('button', { name: '保存检索参数', exact: true }).click();
+    await held.promise;
+    await pending();
+    release.resolve(undefined);
+    await answer;
+  });
+  if (answer === undefined) throw new Error('Missing held save response');
+  return answer;
 }
 /** Runs one connection test and proves it wrote no audit row. */
 async function testConnection(page: Page, url: string, database: DatabaseHandle) {
@@ -182,6 +199,7 @@ test('administrator configures, tests and tunes RAGFlow through the real APIs', 
       const tests = () =>
         observed.actionRequests.filter((request) => request.url === api.test).length;
       const before = tests();
+      const heldAudits = readAuditSnapshot(database);
       await page.getByRole('button', { name: '测试连接', exact: true }).dblclick();
       await upstream.received(3);
       await expect(page.getByRole('status')).toHaveText('正在测试连接…');
@@ -190,6 +208,7 @@ test('administrator configures, tests and tunes RAGFlow through the real APIs', 
       await observed.screenshot('admin-knowledge-base-testing');
       release.resolve(undefined);
       await expect(page.getByRole('status')).toHaveText(CONNECTED);
+      expectAuditUnchanged(database, heldAudits);
       for (const label of BUTTONS)
         await expect(page.getByRole('button', { name: label, exact: true })).toBeEnabled();
       expect(tests() - before).toBe(1);
@@ -238,7 +257,11 @@ test('administrator configures, tests and tunes RAGFlow through the real APIs', 
       await expect(page.getByRole('alert')).toHaveText(PARAMETERS_INVALID);
       await field(page, '重排模型 ID').fill('');
       await field(page, '返回片段数').fill('0');
-      const outOfRange = await press(page, api.retrieval, 'PUT', '保存检索参数');
+      // Hold the real PUT so the previous 400 text is seen to clear before this answer arrives.
+      const outOfRange = await withHeldSave(page, api.retrieval, async () => {
+        await expect(page.getByRole('status')).toHaveText('正在保存…');
+        await expect(page.getByRole('alert')).toHaveCount(0);
+      });
       expect(outOfRange.request().postDataJSON()).toMatchObject({
         retrievalTopK: 0,
         retrievalRerankId: '',
@@ -306,6 +329,7 @@ test('loading holds a real read and one controlled failure retries the real APIs
       await page.getByRole('button', { name: '重试', exact: true }).click();
       await expect(form(page, '检索参数')).toBeVisible();
     });
+    await expectNoBrowserStorage(page);
     expect(observed.actionRequests.every((request) => request.method === 'GET')).toBe(true);
     observed.expectHealthy([{ url: observed.api.retrieval, status: 500 }]);
   });

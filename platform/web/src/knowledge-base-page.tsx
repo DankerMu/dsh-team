@@ -130,9 +130,10 @@ function testMessage(value: unknown): { ok: boolean; text: string } {
     return { ok: true, text: `连接成功，RAGFlow 版本：${version}` };
   }
   exactly(value, ['result']);
-  const text = typeof result === 'string' ? TEST_RESULTS[result] : undefined;
-  if (text === undefined) throw new Error('Invalid connection test result');
-  return { ok: false, text };
+  // Own keys only: inherited names such as __proto__ or constructor are not results.
+  if (typeof result !== 'string' || !Object.hasOwn(TEST_RESULTS, result))
+    throw new Error('Invalid connection test result');
+  return { ok: false, text: TEST_RESULTS[result] ?? '' };
 }
 /** A typed number, or null for an empty or non-finite input. */
 function numeric(value: string): number | null {
