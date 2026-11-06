@@ -557,8 +557,11 @@ it.each([
 });
 
 interface RagflowStubState {
-  /** `ready-then-hang`: the first version request answers ready, every later one hangs. */
-  version: 'ready' | 'down' | 'hang' | 'ready-then-hang';
+  /**
+   * `ready-then-hang` and `ready-then-down`: the first version request answers ready, every later
+   * one hangs or answers 503 like `down`.
+   */
+  version: 'ready' | 'down' | 'hang' | 'ready-then-hang' | 'ready-then-down';
   datasets: 'ok' | 'fail' | 'hang';
 }
 
@@ -573,12 +576,13 @@ async function stubRagflow(state: RagflowStubState) {
     };
     const isVersion = url === '/api/v1/system/version';
     if (isVersion) versionRequests += 1;
-    const version =
+    const later =
       state.version === 'ready-then-hang'
-        ? versionRequests === 1
-          ? 'ready'
-          : 'hang'
-        : state.version;
+        ? 'hang'
+        : state.version === 'ready-then-down'
+          ? 'down'
+          : undefined;
+    const version = later === undefined ? state.version : versionRequests === 1 ? 'ready' : later;
     const hang = isVersion ? version : state.datasets;
     if (hang === 'hang') return;
     if (isVersion) {
@@ -711,6 +715,12 @@ it.each([
     { version: 'ready-then-hang', datasets: 'fail' } as const,
     undefined,
     /version ready but seed snapshot unreadable within 1s/,
+  ],
+  [
+    'the seed read fails and the next version probe answers not ready',
+    { version: 'ready-then-down', datasets: 'fail' } as const,
+    undefined,
+    /version not ready within 1s/,
   ],
 ])(
   'aggregates the body failure first and a restore failure naming the recovery when %s',
