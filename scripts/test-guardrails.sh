@@ -353,6 +353,16 @@ NODE
 printf '\nRun `pnpm no-such-script` first.\n' >>AGENTS.md
 expect_reject "documented commands (pnpm no-such-script)" "is not a script in package.json" \
   pnpm lint:agents
+restore
+
+# Module READMEs indexed by AGENTS.md are part of the documented command surface.
+# shellcheck disable=SC2016 # literal Markdown backticks, not a command substitution
+printf '\nRun `pnpm no-such-readme-script` first.\n' >>platform/src/gateway/README.md
+expect_reject "documented commands (module README)" "platform/src/gateway/README.md" pnpm lint:agents
+rm platform/src/gateway/README.md
+expect_reject "documented commands (missing module README)" "platform/src/gateway/README.md is missing" \
+  pnpm lint:agents
+restore
 
 echo "export   const   spaced=1" >platform/src/spaced.ts
 expect_reject "format (unformatted file)" "platform/src/spaced.ts" pnpm fmt:check

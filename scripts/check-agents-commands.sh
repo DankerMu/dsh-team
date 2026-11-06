@@ -2,8 +2,8 @@
 # scripts/check-agents-commands.sh — AGENTS.md may only document commands that exist.
 # Agents execute documented commands verbatim, so a stale command is worse than none.
 # Checks every command written as code (`pnpm [--silent] <script>` in backticks,
-# or a quoted "pnpm [--silent] <script>" in constraints.yaml) in AGENTS.md, platform/AGENTS.md and
-# constraints.yaml against the root package.json scripts. Prose mentions of pnpm
+# or a quoted "pnpm [--silent] <script>" in constraints.yaml) in AGENTS.md, platform/AGENTS.md,
+# the module READMEs that AGENTS.md indexes, and constraints.yaml against the root package.json scripts. Prose mentions of pnpm
 # are not commands and are ignored.
 set -euo pipefail
 
@@ -17,7 +17,11 @@ scripts="$(node -e 'process.stdout.write(Object.keys(require("./package.json").s
 
 checked=0
 missing=()
-for doc in AGENTS.md platform/AGENTS.md constraints.yaml; do
+docs=(AGENTS.md platform/AGENTS.md constraints.yaml platform/README.md platform/web/README.md
+  platform/test/README.md platform/src/admin/README.md platform/src/gateway/README.md
+  platform/src/managed-config/README.md platform/src/orchestrator/README.md
+  platform/src/ragflow-proxy/README.md deploy/README.md scripts/README.md)
+for doc in "${docs[@]}"; do
   if [ ! -f "$doc" ]; then
     echo "check-agents-commands: $doc is missing — it is part of the documented command surface" >&2
     exit 1
