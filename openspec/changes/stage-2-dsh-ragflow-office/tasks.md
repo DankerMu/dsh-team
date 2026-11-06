@@ -2094,6 +2094,108 @@ Evidence (15.3 输入区检索范围控件与提交快照，#420):
 
 - 15.4：按上面「同级面」读取根 Session 的 `turn.scope`；`excluded` 报告已删除的库。
 
+Risk packs (15.4 知识库检索工具与来源展示，#421): fixture level expanded（与 issue 建议一致：Agent 第一次经插件取得上游数据，涉及子 Agent 继承根 Session 的本轮范围和员工可见的来源展示）。范围的存储与快照由 #420 交付；本 issue 只读快照，不改快照语义。selected：
+
+- **Public API**（DSH 0.2.1-rc.2 发行版接口，编排者从本机用户镜像只读提取发行包核对，R = 发行包的 `@deepseek-ai/` 目录）：
+  - 工具注册：`ctx.tools.register(definition)`（`R/dsh-tools/lib/types/index.d.ts:632-637`）；定义为 `{ name, description, parameters, output: { schema, render, presentationMeta? }, execute, timeoutMs?, isConcurrencySafe?, presentCall?, presentResult? }`（`:106-115`），`execute(args, exec)` 的 `exec` 带 `callId`、`agent`、`signal`（`:216-247`）。仓库内先例：`plugins/office-agents/docx-construction.js:191-263`。
+  - 注册放在既有的 `ctx.inject(['sessionProjections', 'commands'], …)` 旁，新增 `ctx.inject(['tools', 'sessionProjections', 'agents'], …)`，只在插件可用（#419 的条件）时注册；缺服务时面板与范围控件照常工作。全局注册：子 Agent 继承全局工具（`R/dsh-tools/lib/types/index.d.ts:632-668`），`tool-subagent` 不接受 `toolFilter`（`R/dsh-tool-subagent/lib/index.js:355`），综合办公与公文与材料写作都能看到该工具，`plugins/office-agents` 不改。
+  - 工具名 `knowledge_base_search`（编排者钉死）；`parameters` 恰为 `{ question: string }`，`additionalProperties: false`；`question` 在 `execute` 内按代理的规则校验（非空白、含 U+0085 的空白判断与 #419 相同，≤4096 UTF-8 字节），不合法时不发请求，返回 `invalid-question`。
+  - 结果不抛错：所有结局都返回封闭集合的值，由 `render` 给模型中文文本，由 `presentResult` 给员工一张 generic 卡片（`{ card: 'generic', title, content }`，先例 `R/dsh-tool-web/lib/index.js:86-175`）。不注册 client 侧的 `tool.call.toolview`。
+  - 形状（编排者钉死）：`execute` 返回值与 `output.schema` 为 `{ result, chunks?, excluded? }`，`chunks` 为 `[{ content, documentName, datasetName, positions? }]`，`excluded` 为剔除的数量（整数，不放 ID）。`presentResult` 拿不到返回值，只拿到 `content`、`isError` 和 `meta`，所以卡片数据经 `output.presentationMeta(args, value)` 给出：`{ result, title, excluded, chunks }`（同样不含 ID）；`meta` 会持久化进 `tool/result` 并发到浏览器，「不含库 ID」的检查也覆盖原生历史里的 `meta`。
+  - 工具名、description 和参数描述里不出现 `kb-scope`、「知识库范围」与任何库 ID：工具是全局的，它的定义随每个模型请求的 `tools[]` 发给 provider，而 #420 的 `forbidden` 扫描整个请求体；单元测试断言这一点。
+  - `exec.agent` 缺失时返回 `scope-unavailable`；`exec.signal` 中止时返回 `unavailable`。DSH Web 组成里没有找到 `dsh-tool-call-timeout-policy`，`timeoutMs` 可能不生效，期限以插件内部的两次 25 秒为准。
+  - `permission-tiers` 只拦截 `write`、`edit`、`bash`、`run_code`、`build_docx`（`plugins/permission-tiers/index.js:16`），新工具不进入该集合，任何权限档位都不需要审批。
+- **范围解析**（编排者钉死）：
+  - 根 Session：从 `exec.agent.session` 开始，只在头部 `origin === 'subagent'` 时经 `ctx.agents.get(header.parentSession)?.session` 上溯，最多 16 层；员工 fork 出的 Session 是自己的根。
+  - 根 Session 自己调用时：快照是 `ctx.sessionProjections.stateOf(root, 'kbScope')?.turn`，核对 `turn.turn` 为当前轮（#420 交接）。
+  - 子 Agent 调用时：委派是异步的，父轮可能已结束、员工可能已经改了范围并开始了新的一轮，所以不能读根 Session 的最新快照（spec「该任务的所有检索只针对库1」「子 Agent MUST NOT 扩大范围」）。host 半区监听 `agent/created`：新建的 agent 头部 `origin === 'subagent'` 时，记下创建它的那一刻根 Session 的 `kbScope.turn`（孙子 Agent 复制父 Agent 的记录），按子 Session ID 存在插件内存里，`agent/disposed` 时删除。子 Agent 检索用这份记录。实现前核对 `agent/created` 的载荷与触发时机（发行包 `R/dsh-agent`、`R/dsh-subagent/lib/index.js:344-400`），以及它在子 Agent 第一次调用工具之前触发。
+  - 没有记录（实例重启后恢复的子 Agent、插件晚于子 Agent 加载）、父 Session 不在内存中、投影缺失、`turn` 为 `null`、超过层数上限：返回 `scope-unavailable`，不发请求（不扩大范围）。
+  - `scope` 为 `[]`：不发请求，返回 `no-scope`。
+  - `scope` 为 `null`：先用 #419 的平台请求函数 `GET …/ragflow/datasets` 取全部库，得到空列表时返回 `no-datasets`（不发检索，空 `datasetIds` 是 `invalid-request`）；列表失败时返回该失败取值。
+  - 否则直接用 `scope` 中的 ID。
+  - 然后 `POST …/ragflow/retrieval`，请求体恰为 `{ question, datasetIds }`；平台请求函数新增 POST 变体（`content-type: application/json`，`redirect: 'manual'`，Bearer 实例令牌），单次期限 25 秒，回应上限 8 MiB；`exec.signal` 与期限合并。工具 `timeoutMs` 为 60 秒（列表加检索两次调用）。
+- **结果与提示**（编排者钉死的封闭集合，每个 `result` 的模型文本与卡片标题互不相同，单元测试断言两两不同）：
+  - `ok`：卡片标题「知识库检索：N 条结果」；每个片段显示 `content`、文件名、所属知识库，`positions` 有值时原样显示为「位置：…」（不推导页码）；`excluded` 非空时另加一行「有 K 个已选知识库已不可用，已跳过」。
+  - `no-results`：「知识库中没有找到相关内容」；同样附 `excluded` 提示。
+  - `no-scope`：「本轮没有选择知识库，未检索」（spec「取消全部后不检索」）。
+  - `no-datasets`：「全部知识库都为空，未检索」（范围为全选、但平台上没有任何库；与员工取消全部的 `no-scope` 区分）。
+  - `scope-unavailable`：「无法确定本轮的检索范围，未检索」。
+  - `invalid-question`：「检索问题为空或过长，未检索」。
+  - 代理取值：`invalid-request`「检索请求无效」、`not-configured`「知识库未配置，请联系管理员」、`timeout`「知识库检索超时，请稍后重试」、`unavailable`「知识库暂时不可用，请稍后重试」、`upstream-error`「知识库返回了异常结果，请稍后重试」。
+  - 模型文本与卡片里只有库名和文件名，不出现库 ID、令牌、平台地址、`kb-scope` 或「知识库范围」字样（本机通道 provider 的 `forbidden` 扫描整个请求体，包括工具结果）。
+  - 回应校验沿用 #419 的严格形状校验：`ok` 的每个片段都要有字符串 `content`、`documentName`、`datasetName`，`positions` 若有则为非空的 5 数字元组数组；`excluded` 为字符串数组；其他形状一律 `upstream-error`。
+- **Auth / permissions / secrets**：令牌只在 host 半区；日志只写固定文本和 `result`，不写问题、片段、库 ID 或平台地址。
+- **Error handling**：任何异常（网络、解析、平台非 200）都映射成封闭集合，工具不抛错，对话可以继续（spec「对话可以继续」）。
+- **Resource limits**：片段数由平台的 `retrievalTopK`（≤100）决定；回应上限 8 MiB；单次调用 25 秒、整次工具 60 秒。
+
+not selected：
+
+- Migration / Schema：平台代理与 HTTP 契约不变（「全部库」由插件先列表再检索，不给代理加新模式）。
+- Concurrency / shared state：工具只读快照，不写 Session。
+
+**不变量**：
+
+- 子 Agent 的检索范围等于它被创建时根 Session 那一轮的快照，之后根 Session 的修改与新一轮都不影响它；拿不到这份快照时不检索，不扩大范围。
+- `[]` 不发任何请求；`null` 不把空列表发给检索。
+- 每种结局的提示互不相同；知识库不可用时工具返回提示，对话继续。
+
+**Must preserve**：
+
+- #419 的面板路由与平台请求函数的既有行为（GET 变体不变）、#420 的命令、投影和控件，以及两者的全部测试。
+- 本机通道 #417、#419、#420 的全部既有断言与顺序；`deployment-model-wire.ts` 不配置新脚本时行为不变（`test:deploy` 共用）。
+
+**同级面**：
+
+- 16.x 以后与知识库无关；本 issue 完成后第 15 组结束。
+
+Evidence (15.4 知识库检索工具与来源展示，#421):
+
+**改动点**：
+
+- `plugins/knowledge-base/index.js`：工具定义、根 Session 解析、POST 变体、结果映射与中文文本；`types.d.ts`；`README.md`（工具名、范围解析、异步委派下的快照、结局文本、模型只看到库名）。
+- 单元测试：新建 `index-search.test.js`（`index.test.js` 与 `index-scope.test.js` 已接近 800 行上限）。
+- `platform/test/deployment-model-wire.ts`：可选配置 `delegation: { childMarker, question }`，不出现时行为不变（`/health` 只在配置了 `delegation` 时才多出 `delegations`、`searches`，同 `held` 的写法）。委派的两条谓词在 `scriptedCall` 与 `hold` 之前判断，并且都要求消息含 `childMarker`，所以 #417 的 write 步骤和 #420 各 Session 的首轮不受影响：
+  - 父请求（消息含 `childMarker`、提供了 `subagent` 工具、还没有工具结果）→ 调用 `subagent`，`{ description, prompt: '<childMarker> …' }`（参数形状见 `R/dsh-tool-subagent/lib/index.js:392-398`，省略 `agent_preset` 时用综合办公的默认 `office-writer`）；
+  - 子请求（提供了 `knowledge_base_search`、没有提供 `subagent`、消息含 `childMarker`、还没有工具结果）→ 调用 `knowledge_base_search`，`{ question }`；
+  - 其余请求照旧回固定文本；`/health` 增加 `delegations`、`searches` 计数。
+- 本机通道：浏览器操作写在 `platform/test/knowledge-search-stack-fixture.ts`，纯函数配集成测试；`platform/test/platform-stack.stack.test.ts` 在 #420 的范围步骤之后加检索步骤。
+- `AGENTS.md`、`docs/LOCAL_STACK.md` 由 orchestrator 改。
+
+**测试**：
+
+- 单元测试（`pnpm test`），覆盖率逐文件 80%：
+  - 根解析：根自身；一层、两层子 Agent；fork（有 `parentSession` 无 `origin`）是自己的根；父不在内存、投影缺失、`turn` 为 `null`、超层数都是 `scope-unavailable`；
+  - 范围：`[]` 不发任何请求；`null` 先列表再检索，空列表 `no-datasets` 且不检索，列表失败传出失败取值；ID 列表直接检索；请求体恰为 `{ question, datasetIds }`、方法、`Authorization`、`content-type`、`redirect`；
+  - 子 Agent 的快照：根 Session 第 N 轮创建子 Agent 后，根 Session 改成更宽的范围并进入第 N+1 轮，子 Agent 仍用第 N 轮的范围；孙子 Agent 继承同一记录；`agent/disposed` 后记录删除；没有记录时 `scope-unavailable`；
+  - 结局：11 种结局（插件 6 种加代理 5 种）的模型文本两两不同、卡片标题两两不同；工具名与描述不含 `kb-scope`、「知识库范围」；`excluded` 提示；`positions` 只在有值时显示；文本与卡片不含库 ID、令牌、平台地址；回应形状不合法为 `upstream-error`；超时、传输失败、中止；
+  - `question` 校验：空白、超 4096 字节不发请求；
+  - 插件不可用或缺 `tools`/`agents` 时不注册工具。
+- 本机通道（`pnpm test:stack`，Playwright Chromium 经网关，确定性 provider），放在 #420 的范围步骤之后，同一员工：0. **恢复检索参数**：`proxyAfterRestore` 把相似度阈值设成了 1（`ragflow-stack-fixture.ts:733-740`），检索步骤前由管理员 PUT `DEFAULT_RETRIEVAL`，要求 200。`delegation.question` 用既有的 `QUESTION`（「报销需要提交哪些材料」）。
+  - 正对照：`proxyAfterRestore` 里已有的全库检索记下所属知识库名的集合，要求其中至少有一个不是 `dsh-team-seed-policies`（不增加付费检索）；这样「范围没有扩大」才有区分力。
+  1. **子 Agent 用根 Session 的范围**：新建 Session（综合办公），在输入区以员工身份输入 `/kb-scope {"datasetIds":["<dsh-team-seed-policies 的 ID>","<32 个 0>"]}`（伪造的 ID 模拟已删除的库，不写 RAGFlow，同 #417 的 `MISSING_ID`）（输入框的前导 `/` 走命令路径，`R/dsh-client-ui-commands/lib/client.js:1624-1666`），确认控件显示「知识库：2 个」、投影 `selection` 恰为这两个 ID、`command/done` 成功且没有新的 `turn/start`；然后发一条带 `childMarker` 的消息。provider 让综合办公调用 `subagent`，子 Agent（公文与材料写作）调用 `knowledge_base_search`。
+  2. **核对**（经网关读原生历史，`mappedSessionRpc` + `sessionEvents`）：
+     - 子 Session ID 从根 Session 的 `subagent` 工具结果文本 `started subagent <id>` 解析（根 Session 的 `tool/result` 不持久化返回值）；
+     - `sessionEvents` 增加地址参数，用 `{ kind: 'subagent', parentSessionId, childSessionId, mode }` 读子 Session（控制器拒绝用 `kind: 'session'` 读子 Agent，`R/dsh-api-session-controller/lib/index.js:1690-1693`）；不复制新 helper；地址校验通过即证明了 `origin` 与父 Session；
+     - 子 Session 中恰有一次 `knowledge_base_search` 的 `tool/call` 与成功的 `tool/result`；
+     - 工具结果文本含「知识库检索：」与「有 1 个已选知识库已不可用，已跳过」，所有片段的所属知识库都是 `dsh-team-seed-policies`（范围没有扩大到另外两个种子库）；
+     - 结果文本与 `meta` 都不含任何库 ID（三个种子库 ID 与伪造 ID）；provider 的 `forbiddenRequests` 仍为 0，`delegations`、`searches` 各为 1；
+     - 检索卡片在子 Session 里（`tool/result` 追加到执行工具的 agent 的 Session，`R/dsh-agent-loop/lib/index.js:691-706`）：浏览器进入子 Session（沿用 `platform/test/permission-browser-fixture.mjs` 的 `openChild` 做法），卡片若默认折叠先展开，DOM 断言卡片里有片段、文件名与所属知识库，截图 `search-sources.png`。
+  - 每一步写明等待上限，耗时记进证据。
+  - 检索会话：控制台错误 0、页面错误 0、失败请求 0、外部请求 0；沿用页面资源秘密扫描。
+  - `stackEvidence` 增加单独的 `search` 对象，只记结局、片段数、所属知识库名集合、剔除数和截图名。
+  - 本步骤多一次付费检索（每次运行约 4 次，在用户 2026-11-03 接受的「约 3 次」附近，PR 中写明）。
+- 先红后绿：新的单元断言先失败；stack 中的检索步骤先失败（工具不存在），再实现。
+
+**命令**：
+
+- `pnpm test`、`pnpm check`
+- 本机 exact-head 的 `pnpm test:stack`，并贴证据评论
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`（清理已确认）
+
+**宽度**：工具与单元测试、provider 脚本和本机通道步骤，预计超过 400 行，开 PR 时打 `diff-limit-exempt`。`plugins/` 与 `platform/test/` 不是关键路径；host 保持单文件，Dockerfile 不变。如果必须拆文件就会改到关键路径 `images/dsh-user/Dockerfile`，这时停下来报告。
+
+**交接**：第 15 组完成；19.x 的阶段验收复用本机通道的检索步骤。
+
 ## 16. Document Server 部署与实例网络接入
 
 依赖：1、10（Office 相关 PR 的本机证据）。关键路径 `platform/src/orchestrator/`（16.3）。
