@@ -7,6 +7,7 @@ import { ModelPage } from './model-page.tsx';
 import { RuntimePage } from './runtime-page.tsx';
 import { PluginsPage } from './plugins-page.tsx';
 import { KnowledgeBasePage } from './knowledge-base-page.tsx';
+import { OfficePage } from './office-page.tsx';
 import { InstancePage } from './instance-page.tsx';
 import { clearOriginState } from './origin-state.ts';
 
@@ -71,6 +72,7 @@ export function AccountPage() {
   if (window.location.pathname === '/_platform/admin/runtime') return <RuntimePage />;
   if (window.location.pathname === '/_platform/admin/plugins') return <PluginsPage />;
   if (window.location.pathname === '/_platform/admin/knowledge-base') return <KnowledgeBasePage />;
+  if (window.location.pathname === '/_platform/admin/office') return <OfficePage />;
   if (window.location.pathname === '/_platform/wait') return <WaitPage />;
   return window.location.pathname === '/_platform/account' ? <PasswordPage /> : <CredentialForm />;
 }

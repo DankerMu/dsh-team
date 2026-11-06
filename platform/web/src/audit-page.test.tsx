@@ -420,6 +420,7 @@ it.each([
   ['web-tools.updated', '修改联网工具开关'],
   ['ragflow-config.updated', '修改知识库连接'],
   ['retrieval-config.updated', '修改检索参数'],
+  ['document-server-config.updated', '修改 Office 配置'],
 ])('names the %s event in the filter and its row', async (type, name) => {
   const { view } = await ready(
     vi.fn<typeof fetch>().mockResolvedValue(receipt({ ...LIST, items: [{ ...ITEM, type }] })),
