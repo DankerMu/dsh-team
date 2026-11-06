@@ -54,6 +54,12 @@ Model verification waits only while the live child's descriptor is absent, befor
 
 - The DSH permission plugin UI has real Docker browser coverage (§ Evidence required: DSH permission UI); the platform-owned login baseline has independent Playwright coverage. No background-job surface exists yet.
 
+## Evidence required: Database
+
+Verify with: Real-file SQLite through the integration suite. Command: `pnpm test:integration`.
+
+real-file SQLite migrate, settings, reopen: tempfile `platform.db`, exact migration ledger matching `platform/src/db/migrations/`, preserved historical rows and durable creation attempts, closed handle
+
 ## Evidence required: User-image Docker
 
 Verify with: Real user image and isolated CfT140 DSH browser over original host endpoints. Command: `pnpm test:docker`.

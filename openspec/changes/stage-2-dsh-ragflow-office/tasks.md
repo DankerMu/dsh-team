@@ -11,7 +11,7 @@
   - 连接真实 RAGFlow 和 Document Server 的用例放本机通道 `pnpm test:stack`（第 10 组建立）。本机浏览器是经平台网关的 Playwright Chromium，模型是测试自有的确定性 provider；本机结果只是功能证据，不是隔离证据。
 - **新增密钥字段**（RAGFlow 密钥、实例令牌、文件令牌密钥、Document Server JWT）在引入它的同一变更里加入日志脱敏路径。日志、响应、审计、报告中都不能出现明文。
 - **新增 HTTP 路由**声明 schema，并在同一 PR 里运行 `pnpm contract:write`。
-- **新增迁移**要同步更新集成测试里的迁移账本断言，以及 AGENTS.md 验证矩阵的版本列表。
+- **新增迁移**要同步更新集成测试里的迁移账本断言，以及 `platform/test/README.md` § Evidence required: Database 的版本列表（AGENTS.md 验证矩阵的 Database 行链接到这里）。
 - **新增后台页面**要同步更新三处：静态页面清单、`AdminNavigation`、AGENTS.md 的页面清单。还要在 `pnpm test:ui` 中保留桌面和窄屏截图，并做到零控制台错误。
 - **RAGFlow 结果取值**只用 `no-results`、`invalid-request`、`not-configured`、`timeout`、`unavailable`、`upstream-error` 这一套（design 决定 3）。
 - **插件目录三态**的机器取值只用 `employee`、`forced-on`、`forced-off`（design 决定 12）。

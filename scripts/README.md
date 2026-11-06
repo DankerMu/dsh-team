@@ -17,6 +17,8 @@ Moved verbatim from the root `AGENTS.md`; normative behaviour lives in the OpenS
 
 Commented-out code has no machine check; it is listed as `review-only` in the Enforcement Index.
 
+User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed. The dated change name follows OpenSpec's lowercase alphanumeric, single-hyphen grammar. Other scratchpad components, forbidden suffixes, dot-segment aliases and unrelated staged violations remain rejected. The pattern lives in `constraints.yaml`; both hook entrypoints share one classifier, and `pnpm test:guardrails` proves acceptance and rejection.
+
 The duplicate-code guardrail self-test sizes its planted copies from the ts/js/tsx files under `platform/` that `jscpd.json` does not ignore (never fewer than the gate scans) and the configured percentage, with margin for clone accounting. Repository growth therefore does not silently dilute the canary; the threshold is unchanged.
 
 `pnpm test:guardrails` retains macOS Bash3.2 and Bash5 support through the existing `bash` entrypoint. Literal Node heredocs stay outside command substitution: Bash3.2 can misparse an unmatched apostrophe in their otherwise quoted body. The canary count uses the existing owned temporary root and EXIT cleanup; changing shell grammar must preserve the complete case inventory, corpus-sized rejection and archive-policy probes on both interpreters.

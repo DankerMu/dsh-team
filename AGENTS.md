@@ -15,9 +15,10 @@ Same logic must have exactly one implementation in the repo. Version evolution b
 - Commented-out code is deleted, not kept. Git remembers.
 - Unreferenced exports and dead code paths are debt. Wire them up in the same change or delete them.
 - Do not use the repo as a scratchpad: `tmp/`, `scratch/`, `backup/`, `_old/`, `deprecated/`, `archive/`, `wip/` must not appear in commits.
-- User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed. The dated change name follows OpenSpec's lowercase alphanumeric, single-hyphen grammar. Other scratchpad components, forbidden suffixes, dot-segment aliases and unrelated staged violations remain rejected. The pattern lives in `constraints.yaml`; both hook entrypoints share one classifier, and `pnpm test:guardrails` proves acceptance and rejection.
+- User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed.
+  Grammar, rejections, classifier and proof: `scripts/README.md` § Canonicality enforcement and guardrail self-test.
 
-Enforcement: path suffixes and scratchpad directories by `.git-hooks/check-naming.sh` (pre-commit); code suffixes by ESLint `@typescript-eslint/naming-convention` in `pnpm lint`; duplicate code by `pnpm duplicate-code` (jscpd, 3% of `platform/` ts/js/tsx, tests excluded); dead code by `pnpm dead-code` (knip); commits by commitlint. Commented-out code is review-only. Table and guardrail self-test details: `scripts/README.md`.
+Enforcement: `## Enforcement Index`; per-rule table and guardrail self-test details: `scripts/README.md`.
 
 ## Project Identity
 
@@ -74,7 +75,7 @@ scripts/                    gates and lanes behind package.json: guardrails, e2e
 schemas/                    generated HTTP contract (openapi.json)
 smoke/                      hurl suites run by smoke and e2e
 openspec/                   normative specs/ and per-change fixtures changes/<change>/; glossary.md
-docs/                       requirements baseline, plan, deployment and local-stack guides (prose; not linted)
+docs/                       requirements baseline, plan, deployment and local-stack guides, development notes (prose; not linted)
 verify/phase0/              one-off phase-0 verification evidence (not platform code)
 constraints.yaml            machine-readable thresholds and patterns for every gate
 resource/, assets/fonts/    local only, gitignored: upstream reference repos, licensed fonts
@@ -86,8 +87,6 @@ resource/, assets/fonts/    local only, gitignored: upstream reference repos, li
 - Only the `db` module imports a SQLite driver.
 - `platform/` and `plugins/` never import each other. No circular imports anywhere.
 - `platform/web/src/` cannot import backend/test/plugin code, server libraries or Node builtins; backend source never imports browser source.
-
-Boundaries are enforced by dependency-cruiser (`.dependency-cruiser.cjs`) in `pnpm lint:deps`.
 
 ### Where new behavior goes
 
@@ -102,11 +101,10 @@ Boundaries are enforced by dependency-cruiser (`.dependency-cruiser.cjs`) in `pn
 
 ### Local setup
 
-Run `pnpm install` after clone. It needs Node and pnpm at the versions in `.tool-versions`, plus `hurl`, `shellcheck`, and `gitleaks` on `PATH`.
-
-Python 3 with standard-library `pty`/`termios` support is required for administrator CLI terminal integration verification on POSIX hosts; missing prerequisites fail rather than skip that coverage.
-
-`pnpm dev` builds the web package and runs the native Node watcher; a missing `.env` is optional (`platform/README.md` § Local development). The source and built entrypoints need a real Docker Unix socket and await reconciliation; `pnpm e2e` provisions its own private Docker/containerd runtime on a nonroot Linux host with sudo (`scripts/README.md` § Fresh-data e2e runtime).
+- Run `pnpm install` after clone. It needs Node and pnpm at the versions in `.tool-versions`, plus `hurl`, `shellcheck`, and `gitleaks` on `PATH`.
+- Python 3 with standard-library `pty`/`termios` support is required for administrator CLI terminal integration verification on POSIX hosts; missing prerequisites fail rather than skip that coverage.
+- `pnpm dev` builds the web package and runs the native Node watcher; a missing `.env` is optional (`platform/README.md` § Local development).
+- The source and built entrypoints need a real Docker Unix socket and await reconciliation; `pnpm e2e` provisions its own private Docker/containerd runtime on a nonroot Linux host with sudo (`scripts/README.md` § Fresh-data e2e runtime).
 
 ### Daily commands
 
@@ -123,34 +121,33 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 ### Environment
 
 - `.env.example` is the single inventory of platform and Compose inputs; `pnpm lint:config` matches it against every consumer in both directions. Invalid values stop startup before listening and errors name the variable without echoing its value. Details: `platform/README.md` § Configuration.
-- Administrator CLI: always `pnpm --silent cli admin create <email>` (plain `pnpm cli` can disclose rejected arguments); never pass a password as an argument or environment value. Compose: `docker compose --project-directory . --env-file .env -f deploy/compose.yml up -d` from the repository root (`deploy/README.md`).
+- Administrator CLI: always `pnpm --silent cli admin create <email>` (plain `pnpm cli` can disclose rejected arguments); never pass a password as an argument or environment value.
+- Compose: `docker compose --project-directory . --env-file .env -f deploy/compose.yml up -d` from the repository root (`deploy/README.md`).
 - Only the trusted parent session runs `pnpm test:docker`, `pnpm test:deploy` and `pnpm test:model` on giap-vps; `pnpm test:stack` and `pnpm e2e` run locally. Leave `DOCKER_HOST` and `DOCKER_CONTEXT` unset. Details: `platform/test/README.md`, `scripts/README.md`.
 
 ## Verification Matrix
 
-| Surface                | Command                                            | Evidence required                                                                                                                                                                                         |
-| ---------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Liveness / health      | `pnpm dev:status`                                  | probe of `/healthz` on the dev server: exit 0 and `health: OK`                                                                                                                                            |
-| API endpoint           | `pnpm smoke`                                       | hurl suite against the running dev server: HTTP status and response body per route                                                                                                                        |
-| Database               | `pnpm test:integration`                            | real-file SQLite migrate, settings, reopen: tempfile `platform.db`, exact migration ledger matching `platform/src/db/migrations/`, preserved historical rows and durable creation attempts, closed handle |
-| Built artifact         | `pnpm e2e`                                         | [scripts/README.md](scripts/README.md#evidence-required-built-artifact)                                                                                                                                   |
-| Platform UI            | `pnpm test:ui`                                     | [platform/web/README.md](platform/web/README.md#evidence-required-platform-ui)                                                                                                                            |
-| Administrator CLI      | `pnpm test:cli`                                    | [platform/README.md](platform/README.md#evidence-required-administrator-cli)                                                                                                                              |
-| User-image Docker      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-user-image-docker)                                                                                                                    |
-| Platform image         | `pnpm test:docker`                                 | [platform/README.md](platform/README.md#evidence-required-platform-image)                                                                                                                                 |
-| Compose deployment     | `pnpm test:deploy`                                 | [deploy/README.md](deploy/README.md#evidence-required-compose-deployment)                                                                                                                                 |
-| DSH permission UI      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-dsh-permission-ui)                                                                                                                    |
-| Office delegation      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-office-delegation)                                                                                                                    |
-| Real model tool        | `pnpm test:model`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-real-model-tool)                                                                                                                      |
-| Local full stack       | `pnpm test:stack`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-local-full-stack)                                                                                                                     |
-| CI Docker evidence     | `pnpm verify:docker-evidence`                      | [scripts/README.md](scripts/README.md#evidence-required-ci-docker-evidence)                                                                                                                               |
-| CI event scheduling    | `pnpm lint:ci`                                     | [scripts/README.md](scripts/README.md#evidence-required-ci-event-scheduling)                                                                                                                              |
-| Trusted Docker custody | `pnpm --silent verify:docker start <reviewed-sha>` | [scripts/README.md](scripts/README.md#evidence-required-trusted-docker-custody)                                                                                                                           |
+| Surface                | Command                                            | Evidence required                                                                      |
+| ---------------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Liveness / health      | `pnpm dev:status`                                  | probe of `/healthz` on the dev server: exit 0 and `health: OK`                         |
+| API endpoint           | `pnpm smoke`                                       | hurl suite against the running dev server: HTTP status and response body per route     |
+| Database               | `pnpm test:integration`                            | [platform/test/README.md](platform/test/README.md#evidence-required-database)          |
+| Built artifact         | `pnpm e2e`                                         | [scripts/README.md](scripts/README.md#evidence-required-built-artifact)                |
+| Platform UI            | `pnpm test:ui`                                     | [platform/web/README.md](platform/web/README.md#evidence-required-platform-ui)         |
+| Administrator CLI      | `pnpm test:cli`                                    | [platform/README.md](platform/README.md#evidence-required-administrator-cli)           |
+| User-image Docker      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-user-image-docker) |
+| Platform image         | `pnpm test:docker`                                 | [platform/README.md](platform/README.md#evidence-required-platform-image)              |
+| Compose deployment     | `pnpm test:deploy`                                 | [deploy/README.md](deploy/README.md#evidence-required-compose-deployment)              |
+| DSH permission UI      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-dsh-permission-ui) |
+| Office delegation      | `pnpm test:docker`                                 | [platform/test/README.md](platform/test/README.md#evidence-required-office-delegation) |
+| Real model tool        | `pnpm test:model`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-real-model-tool)   |
+| Local full stack       | `pnpm test:stack`                                  | [platform/test/README.md](platform/test/README.md#evidence-required-local-full-stack)  |
+| CI Docker evidence     | `pnpm verify:docker-evidence`                      | [scripts/README.md](scripts/README.md#evidence-required-ci-docker-evidence)            |
+| CI event scheduling    | `pnpm lint:ci`                                     | [scripts/README.md](scripts/README.md#evidence-required-ci-event-scheduling)           |
+| Trusted Docker custody | `pnpm --silent verify:docker start <reviewed-sha>` | [scripts/README.md](scripts/README.md#evidence-required-trusted-docker-custody)        |
 
 - Every command here is a root `package.json` script and is mirrored in `constraints.yaml` `verification`.
 - A surface with no verification command is review-only, and the PR must say so.
-
-Every row requires fresh evidence from the current session — see `## Agent Operating Rules`.
 
 ## Runtime Lifecycle
 
@@ -162,18 +159,18 @@ Every row requires fresh evidence from the current session — see `## Agent Ope
 
 ## Important Development Notes
 
-Max 10 entries, dated, pruned at milestones. Each records a verified development lesson that cost real time.
+Max 10 entries, dated, pruned at milestones. Each records a verified development lesson that cost real time. Entries keep one rule verbatim; full entries: `docs/DEVELOPMENT_NOTES.md` (same numbers, edited together).
 
-1. 2026-10-03 — Check DSH flags/endpoints against the installed npm release, not the ahead-of-release `resource/deepseek-harness` (`--public-url` does not exist in 0.2.0-rc.2). Launch as `dsh --profile web --patch <file> --no-open --trusted-host <authority>`; `--patch` is a launcher flag before app arguments (`dsh web --patch` fails with "unknown option"). Write each instance's `cordis.patch.yml` as a whole file, never by appending: broken YAML stops boot.
+1. 2026-10-03 — Check DSH flags/endpoints against the installed npm release, not the ahead-of-release `resource/deepseek-harness` (`--public-url` does not exist in 0.2.0-rc.2). Write each instance's `cordis.patch.yml` as a whole file, never by appending: broken YAML stops boot.
 2. 2026-10-03 — Exchange the DSH launch token with `node:http` and an explicit `Host` header, not `fetch`: `fetch` cannot override `Host`, the cookie binds to the wrong authority, and DSH answers 401.
-3. 2026-10-14 — Containerized platform admission needs a primary-network `gw_priority` above employee attachments; otherwise a gateway switch can drop an in-flight request while fresh health still succeeds. On fixture failure, drain the actual platform owner before force-removing resources: its composition helper belongs to that live owner. Qualify this ordering with an independently event-gated blocked helper, not a release sleep that may run before teardown.
-4. 2026-10-03 — Phase0 arm64 Docker Desktop required seccomp and `systempaths=unconfined` relaxations for DSH's shell sandbox; this is not a requirement for every Docker host. On giap-vps (Ubuntu24.04/amd64), the shipped pinned Moby default seccomp passed without extra relaxation, and the delivered contract prohibits `systempaths=unconfined`; see [host-specific evidence](images/seccomp/README.md#验证状态) and [design decision12](openspec/changes/archive/2026-10-16-stage-1-accounts-instances/design.md#12-用户镜像和容器安全设置). The environment difference remains unexplained; do not extrapolate to other hosts. The project party must separately verify Ubuntu22.04. On each target host, prove the proposed settings with DSH's own `bash` tool: workspace write/read succeeds, state-directory writes are denied and leave no file. A hand-written bubblewrap probe or success text alone is insufficient evidence.
-5. 2026-10-17 — A separate dockerd data-root/PID namespace is not host-network isolation: `--bridge=none` explicitly deletes `docker0` in the daemon's current network namespace. Verify a different live namespace for both daemons and preserve an independent caller default-bridge sentinel; narrow employee-bridge tests can pass after the host default bridge is already gone. Never use BuildKit history queries on the shared verification daemon: Docker29.1.3's filtered history query triggered a nil-pointer panic and automatic restart. Read bounded existing diagnostics instead; host/shared-workload restoration requires explicit operator authorization. The [operator prohibition and version-qualification boundary](docs/DEPLOY.md#共享验证-daemon-的-history-诊断禁令) retain the exact query, observed versions, assistant attribution and recovery limits. The older RAGFlow HTTP200/nonzero-code lesson remains in requirements F34 and the architecture analysis.
+3. 2026-10-14 — Containerized platform admission needs a primary-network `gw_priority` above employee attachments; otherwise a gateway switch can drop an in-flight request while fresh health still succeeds.
+4. 2026-10-03 — Phase0 arm64 Docker Desktop required seccomp and `systempaths=unconfined` relaxations for DSH's shell sandbox; this is not a requirement for every Docker host.
+5. 2026-10-17 — Never use BuildKit history queries on the shared verification daemon: Docker29.1.3's filtered history query triggered a nil-pointer panic and automatic restart.
 6. 2026-10-03 — Office files open in ONLYOFFICE only with the build-time patch to `dsh-better-sidebar` (`HOST_OWNED_EXTS`). The patch must fail the image build when the version does not match.
-7. 2026-10-08 — Docker can lose the OOM notification: an owned stopped instance may have exit137 and `OOMKilled=false` despite an exact pressure-window kernel `CONSTRAINT_MEMCG` kill. Never accept exit137 alone or alter victim priorities/limits to obtain proof; retain physical-touch, cgroup, pre-live and identity checks, and supplement only with trusted read-only host evidence.
+7. 2026-10-08 — Never accept exit137 alone or alter victim priorities/limits to obtain proof; retain physical-touch, cgroup, pre-live and identity checks, and supplement only with trusted read-only host evidence.
 8. 2026-10-10 — Confirmed: DSH's composer chain selects the first non-null entry in ascending priority; a one-shot readonly seat can hide a valid native child approval. Verify the selected child's actual UI and decision/file/audit effects, not only host approval registration.
-9. 2026-10-11 — In pinned Chromium, an unread administrator PUT204 produced `net::ERR_ABORTED` despite committed effects; the same actual endpoint with response-body consumption produced requestfinished and a complete zero-byte response. Consume mutation/error responses before UI settlement/navigation and never abort an already-answered authority read. Diagnose with exact request/status/abort/body-completion evidence before considering any observer exception; #74 kept the observer unchanged.
-10. 2026-10-12 — Browser `network=none` makes `navigator.onLine=false`, so the released DSH client suspends initialization despite usable loopback relays. Use the prelaunch stable internal/isolated bridge, never an online override. Its owned host IPv6 positive control must await the same link-local address's usable DAD state before one connect, inside the unchanged 5s readiness-plus-connect deadline; tentative state can otherwise produce `EADDRNOTAVAIL`. This positive-control readiness race is distinct from host-churn cancellation of queued browser requests.
+9. 2026-10-11 — Consume mutation/error responses before UI settlement/navigation and never abort an already-answered authority read.
+10. 2026-10-12 — Browser `network=none` makes `navigator.onLine=false`, so the released DSH client suspends initialization despite usable loopback relays. Use the prelaunch stable internal/isolated bridge, never an online override.
 
 ## Conventions
 
@@ -194,7 +191,9 @@ Max 10 entries, dated, pruned at milestones. Each records a verified development
 - `main` is protected: changes land through a PR on which `All checks passed`, `PR diff size guard`, and `Lockfile-manifest consistency` are green; administrators are not exempt.
 - No stacked-PR chains: land dependent PRs sequentially. History rewrites use `--force-with-lease`, never raw `--force`.
 - A PR stays under 400 changed lines (lockfiles and snapshots excluded) or carries the `diff-limit-exempt` label with a justification.
-- Before merging, inspect the full `gh pr view <PR> --json headRefOid,statusCheckRollup` for the frozen head and all required contexts. `gh pr checks` alone can hide an older same-head cancelled run. A successful sibling does not erase failure; resolve the actual failed/cancelled run and recheck. Never use admin bypass, delete required checks or treat skipped/cancelled dependencies as successful.
+- Before merging, inspect the full `gh pr view <PR> --json headRefOid,statusCheckRollup` for the frozen head and all required contexts.
+  `gh pr checks` alone can hide an older same-head cancelled run. A successful sibling does not erase failure; resolve the actual failed/cancelled run and recheck.
+  Never use admin bypass, delete required checks or treat skipped/cancelled dependencies as successful.
 
 ## Code Review Self-Check
 
@@ -240,7 +239,11 @@ Agents may commit to feature branches, open PRs targeting `main`, run every loca
 
 - Push to `main`, force-push a shared branch, or use `--no-verify`.
 - Modify DSH source, or reset, clean, or check out anything under `resource/`.
-- Write to RAGFlow, or to any existing intranet service (RAGFlow, Document Server, model gateway). Exception (D16, 2026-10-28): the local RAGFlow test stack this project deploys on the development machine for the stage-2 local full-stack verification lane may be seeded (datasets, uploads, parsing) by its seed script; keep parsing small, and use the embedding key only through private configuration, never printed. Exception (user, 2026-11-03): `pnpm test:stack` may `docker stop` and `docker start` its identity-verified `ragflow-rc2-ragflow-cpu-1` (compose project `ragflow-rc2`, service `ragflow-cpu`) to prove the platform works while RAGFlow is down, restoring it in `finally` once the stop is submitted; nothing else in that stack is touched, and its retrievals (five per run since the #421 retrieval tool, user decision 2026-11-05) may spend the stack's embedding quota.
+- Write to RAGFlow, or to any existing intranet service (RAGFlow, Document Server, model gateway).
+  - Exception (D16, 2026-10-28): the local RAGFlow test stack this project deploys on the development machine for the stage-2 local full-stack verification lane may be seeded (datasets, uploads, parsing) by its seed script;
+    keep parsing small, and use the embedding key only through private configuration, never printed.
+  - Exception (user, 2026-11-03): `pnpm test:stack` may `docker stop` and `docker start` its identity-verified `ragflow-rc2-ragflow-cpu-1` (compose project `ragflow-rc2`, service `ragflow-cpu`)
+    to prove the platform works while RAGFlow is down, restoring it in `finally` once the stop is submitted; nothing else in that stack is touched, and its retrievals (five per run since the #421 retrieval tool, user decision 2026-11-05) may spend the stack's embedding quota.
 - Run destructive container, volume, or database operations against anything but test resources this project created (`dsh-team` prefix), locally or on the verification host (decision D16).
 - Upgrade a major dependency version, or change `.github/workflows/`, without flagging it in the PR description.
 - Weaken, skip, or delete a test or a gate to get green.
