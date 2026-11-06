@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -53,19 +54,56 @@ export interface ComposeConfiguration {
   readonly network: string;
   /** Additional override files appended after the ownership override. */
   readonly overrides: readonly string[];
+  /**
+   * The VPS stand-in for the bundled Document Server: an already captured owned image idling in
+   * place of the real 8.7 GB image, with an empty private font directory. The local lane omits
+   * it and runs the delivered image over the repository's `assets/fonts`.
+   */
+  readonly documentServer?: { readonly image: string; readonly fontsDir: string };
+  /**
+   * Only the rejection cases: `empty` keeps the example's empty line, `unset` drops the key.
+   * Otherwise a fresh invocation-owned, nonsecret JWT is injected.
+   */
+  readonly documentServerJwt?: 'empty' | 'unset';
+}
+
+const DOCUMENT_SERVER_FONTS = '/usr/share/fonts/truetype/custom';
+
+function documentServerOverride(
+  ownership: Readonly<Record<string, string>>,
+  standIn: ComposeConfiguration['documentServer'],
+): Record<string, unknown> {
+  if (standIn === undefined) return { labels: ownership };
+  return {
+    image: standIn.image,
+    // Compose clears the image's default command when the entrypoint is set.
+    entrypoint: ['node', '-e', 'setInterval(() => {}, 1 << 30)'],
+    // Merged by target; every field is restated rather than inherited from the delivered entry.
+    volumes: [
+      {
+        type: 'bind',
+        source: standIn.fontsDir,
+        target: DOCUMENT_SERVER_FONTS,
+        read_only: true,
+        bind: { create_host_path: false },
+      },
+    ],
+    labels: ownership,
+  };
 }
 
 /**
  * `.env.example` with the deployment's overrides as a 0600 env file, the ownership override, and
- * the delivered-compose argv over both (callers append the verb).
+ * the delivered-compose argv over both (callers append the verb). The returned JWT lives only in
+ * memory, the 0600 env file and the two containers' environments: never log or report it.
  */
 export async function writeComposeConfiguration(
   configuration: ComposeConfiguration,
-): Promise<{ base: string; compose: string[] }> {
+): Promise<{ base: string; compose: string[]; documentServerJwt: string | undefined }> {
   const { repositoryRoot, directory, port, runId, project, network } = configuration;
   const base = `http://127.0.0.1:${String(port)}`;
   const ownership = { [OWNER_LABEL]: runId };
-  const environment = {
+  const environment: Record<string, string | undefined> = {
     ...parseEnv(await readFile(join(repositoryRoot, '.env.example'), 'utf8')),
     PLATFORM_HOST: '0.0.0.0',
     PLATFORM_PORT: String(port),
@@ -80,6 +118,11 @@ export async function writeComposeConfiguration(
     PLATFORM_CONTAINER_NAME: 'dsh-team-platform',
     DEPLOY_DOCKER_GID: String(configuration.dockerGid),
   };
+  const documentServerJwt =
+    configuration.documentServerJwt === undefined ? randomBytes(32).toString('hex') : undefined;
+  if (documentServerJwt !== undefined) environment.DOCUMENT_SERVER_JWT_SECRET = documentServerJwt;
+  else if (configuration.documentServerJwt === 'unset')
+    delete environment.DOCUMENT_SERVER_JWT_SECRET;
   const environmentPath = join(directory, 'compose.env');
   const override = join(directory, 'compose.json');
   await writeFile(
@@ -92,7 +135,10 @@ export async function writeComposeConfiguration(
   await writeFile(
     override,
     JSON.stringify({
-      services: { platform: { image: configuration.platformImage, labels: ownership } },
+      services: {
+        platform: { image: configuration.platformImage, labels: ownership },
+        documentserver: documentServerOverride(ownership, configuration.documentServer),
+      },
       networks: { default: { name: network, labels: ownership } },
     }),
     { mode: 0o600 },
@@ -111,7 +157,7 @@ export async function writeComposeConfiguration(
     '--project-name',
     project,
   ];
-  return { base, compose };
+  return { base, compose, documentServerJwt };
 }
 
 /**

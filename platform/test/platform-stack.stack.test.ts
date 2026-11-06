@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { readPrivateJsonFile } from '../../scripts/docker-proxy-environment.mjs';
 import { SEED_DATASETS, readSeedDatasetIds, readSeedDatasets } from '../../scripts/seed-stack.mjs';
@@ -24,11 +25,13 @@ import {
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   acquireDeploymentLock,
+  containerDocument,
   drainDeploymentPlatform,
   output,
   OWNER_LABEL,
+  record,
 } from './docker-cleanup.ts';
-import { isAbsentResource } from './docker-command.ts';
+import { createDockerCommands, isAbsentResource } from './docker-command.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import {
@@ -65,6 +68,11 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 type Stack = NonNullable<ReturnType<typeof configuredStack>>;
 const PLATFORM = 'dsh-team-platform';
+const DOCUMENT_SERVER = 'dsh-team-documentserver';
+const FIXED_CONTAINERS = [
+  [PLATFORM, 'Platform'],
+  [DOCUMENT_SERVER, 'Document Server'],
+] as const;
 
 /** The RAGFlow origin and key come only from the private file; nothing here may print them. */
 function privateStack(): Stack {
@@ -144,6 +152,49 @@ interface ConversationEvidence {
   ragflow?: { before: RagflowStack; after: RagflowStack };
   scope?: ScopeEvidence & { forbiddenRequests: unknown };
   search?: SearchEvidence & { provider: Record<string, unknown> };
+  /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
+  documentServerVolumes?: readonly string[];
+}
+
+/**
+ * The delivered Document Server runs the real image without a host publication; only started,
+ * never awaited or contacted. Returns its anonymous (image `VOLUME`) volume names.
+ */
+async function documentServerVolumes(lifecycle: UserImageLifecycle): Promise<string[]> {
+  const server = containerDocument(
+    await lifecycle.commandAsync(['container', 'inspect', DOCUMENT_SERVER], 30_000),
+  );
+  expect(record(server.State).Running).toBe(true);
+  expect(record(server.Config).Image).toBe('onlyoffice/documentserver:9.4.0');
+  expect(record(record(server.HostConfig).PortBindings ?? {})).toEqual({});
+  // The image's EXPOSE 80/443 leave null entries, which are not published host ports.
+  for (const binding of Object.values(record(record(server.NetworkSettings).Ports ?? {})))
+    expect(binding, 'Document Server effective publication').toBeNull();
+  const mounts: unknown = server.Mounts;
+  if (!Array.isArray(mounts)) throw new Error('Document Server mounts unavailable');
+  return (mounts as unknown[])
+    .map((mount) => record(mount))
+    .filter((mount) => mount.Type === 'volume')
+    .map(({ Name }) => {
+      if (typeof Name !== 'string' || Name === '') throw new Error('Anonymous volume unnamed');
+      return Name;
+    });
+}
+
+/** After the lifecycle's own exact retirement, `--volumes` must have taken each one with it. */
+async function expectVolumesRetired(volumes: readonly string[]): Promise<void> {
+  const config = await mkdtemp(join(tmpdir(), 'dsh-team-test-docker-'));
+  try {
+    const root = fileURLToPath(new URL('../../', import.meta.url));
+    const { command } = createDockerCommands(root, config, true);
+    for (const volume of volumes)
+      expect(
+        isAbsentResource(command(['volume', 'inspect', volume], 30_000), 'volume', volume),
+        'Document Server anonymous volume retired',
+      ).toBe(true);
+  } finally {
+    await rm(config, { recursive: true, force: true });
+  }
 }
 
 /** The private RAGFlow test stack and its seed snapshot taken before any Docker work. */
@@ -468,15 +519,18 @@ async function composeScenario(
   const failures: unknown[] = [];
   try {
     ragflowBefore = await ragflowStackSnapshot(run);
-    const existing = await lifecycle.commandAsync(['container', 'inspect', PLATFORM], 30_000);
-    if (!isAbsentResource(existing, 'container', PLATFORM))
-      throw new Error(
-        'Platform container already exists or absence is unproven; refusing deployment',
-      );
+    for (const [name, subject] of FIXED_CONTAINERS) {
+      const existing = await lifecycle.commandAsync(['container', 'inspect', name], 30_000);
+      if (!isAbsentResource(existing, 'container', name))
+        throw new Error(
+          `${subject} container already exists or absence is unproven; refusing deployment`,
+        );
+    }
     for (const [kind, name] of [
       ['image', image],
       ['container', `dsh-team-test-${runId}-socket-probe`],
       ['container', PLATFORM],
+      ['container', DOCUMENT_SERVER],
       ['network', network],
     ] as const)
       await lifecycle.registerResourceAsync(kind, name, ownership);
@@ -512,6 +566,7 @@ async function composeScenario(
     });
     submitted = true;
     await run([...compose, 'up', '-d', '--no-build', '--pull', 'never'], 120_000);
+    evidence.documentServerVolumes = await documentServerVolumes(lifecycle);
     await pollHealth(fetch, base, 60_000);
     await converse(lifecycle, run, { base, directory, dataDir, compose }, model, context);
   } catch (error) {
@@ -574,6 +629,10 @@ it('builds both images, starts the delivered compose platform, converses through
   }
   expect(await seedSnapshot(stack)).toEqual(before);
   const { browser, provider, proxy, ragflow, panel, scope, search } = evidence;
+  // The real image declares VOLUMEs; the fonts bind replaces only one of them.
+  const volumes = evidence.documentServerVolumes ?? [];
+  expect(volumes.length).toBeGreaterThan(0);
+  await expectVolumesRetired(volumes);
   if (browser === undefined || provider === undefined || proxy === undefined)
     throw new Error('Conversation evidence missing');
   if (panel?.unavailable === undefined || panel.restored === undefined)

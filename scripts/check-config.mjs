@@ -63,19 +63,21 @@ function scalar(line) {
   return value;
 }
 
-function deploymentReads() {
+// Literal values (such as fixed container names) are not interpolation and never count.
+function composeReads() {
   const names = new Set();
   for (const line of readFileSync('deploy/compose.yml', 'utf8').split('\n')) {
     const value = scalar(line).replaceAll('$$', '');
     for (const match of value.matchAll(
-      /\$(?:\{(DEPLOY_[A-Z0-9_]+)(?=[:?+\-}])|(DEPLOY_[A-Z0-9_]+))/g,
+      /\$(?:\{((?:DEPLOY|DOCUMENT_SERVER)_[A-Z0-9_]+)(?=[:?+\-}])|((?:DEPLOY|DOCUMENT_SERVER)_[A-Z0-9_]+))/g,
     ))
       names.add(match[1] ?? match[2]);
   }
   return names;
 }
 
-function compare(prefix, consumed, example) {
+function compare(prefix, reads, example) {
+  const consumed = new Set([...reads].filter((name) => name.startsWith(prefix)));
   const declared = new Set(Object.keys(example).filter((name) => name.startsWith(prefix)));
   const missing = [...consumed].filter((name) => !declared.has(name));
   const unused = [...declared].filter((name) => !consumed.has(name));
@@ -86,10 +88,15 @@ function compare(prefix, consumed, example) {
 
 try {
   const example = parseEnv(readFileSync('.env.example', 'utf8'));
+  const compose = composeReads();
   const platform = compare('PLATFORM_', platformReads(), example);
-  const deployment = compare('DEPLOY_', deploymentReads(), example);
-  if (!platform || !deployment) process.exitCode = 1;
-  else process.stdout.write('Configuration inventories match: PLATFORM_* and DEPLOY_*\n');
+  const deployment = compare('DEPLOY_', compose, example);
+  const documentServer = compare('DOCUMENT_SERVER_', compose, example);
+  if (!platform || !deployment || !documentServer) process.exitCode = 1;
+  else
+    process.stdout.write(
+      'Configuration inventories match: PLATFORM_*, DEPLOY_* and DOCUMENT_SERVER_*\n',
+    );
 } catch (error) {
   process.stderr.write(`${error.message}\n`);
   process.exitCode = 1;

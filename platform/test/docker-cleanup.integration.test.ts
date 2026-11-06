@@ -426,7 +426,9 @@ it('retires a non-platform run by exact forced removal without signalling or loc
   );
 
   expect(failures).toEqual([]);
-  expect(fixture.mutations()).toEqual([['container', 'rm', '--force', 'dsh-team-test-sleeper']]);
+  expect(fixture.mutations()).toEqual([
+    ['container', 'rm', '--force', '--volumes', 'dsh-team-test-sleeper'],
+  ]);
   expect(fixture.calls.some((call) => call[0] === 'lock')).toBe(false);
   expect(fixture.resources).toEqual([]);
 });

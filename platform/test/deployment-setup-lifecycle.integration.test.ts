@@ -72,7 +72,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-function deploymentDaemon(cleanupFails: boolean, drainFails = false) {
+function deploymentDaemon(cleanupFails: boolean, drainFails = false, documentServer = false) {
   const images = new Map<string, string>([['dsh-team-test-sentinel:kept', 'foreign-owner']]);
   const calls: string[][] = [];
   let platformOwner: string | undefined;
@@ -122,6 +122,9 @@ function deploymentDaemon(cleanupFails: boolean, drainFails = false) {
     return undefined;
   }
   function inspect(kind: string, args: readonly string[], name: string): DockerCommandResult {
+    // A foreign fixed-name Document Server: present, never adopted.
+    if (documentServer && kind === 'container' && name === 'dsh-team-documentserver')
+      return ok(JSON.stringify([{ Id: 'c'.repeat(64), Name: '/dsh-team-documentserver' }]));
     if (kind === 'container') {
       const result = inspectPlatform(args, name);
       if (result !== undefined) return result;
@@ -366,4 +369,72 @@ it('records completed deployment setup separately from actual owned drainage and
   expect(daemon.calls.at(-1)).toEqual(['observer', 'finish:true']);
   expect(daemon.platformPresent()).toBe(false);
   expect([...daemon.images]).toEqual([['dsh-team-test-sentinel:kept', 'foreign-owner']]);
+});
+
+it('refuses a pre-existing fixed Document Server before any build without adopting or removing it', async () => {
+  const daemon = deploymentDaemon(false, false, true);
+  external.command = daemon.command;
+  external.observe = (event) => daemon.calls.push(['observer', event]);
+  const uid =
+    process.getuid === undefined ? undefined : vi.spyOn(process, 'getuid').mockReturnValue(1000);
+  const reports: DeploymentSetupSnapshot[] = [];
+  const setup = createDeploymentSetupEvidence((snapshot) => {
+    reports.push(snapshot);
+  });
+  let observed: unknown;
+
+  try {
+    await withDeployment(
+      async (_lifecycle, start) => {
+        await start();
+      },
+      undefined,
+      setup,
+    ).catch((error: unknown) => {
+      observed = error;
+    });
+    await setup.publish();
+  } finally {
+    external.command = undefined;
+    external.observe = undefined;
+    uid?.mockRestore();
+  }
+
+  expect(observed).toBeInstanceOf(Error);
+  expect((observed as Error).message).toBe(
+    'Document Server container already exists or absence is unproven; refusing deployment',
+  );
+  // Both fixed names are admitted in order; nothing past admission ran.
+  expect(
+    daemon.calls
+      .filter((args) => args[0] === 'container' && args[1] === 'inspect')
+      .map((args) => args.at(-1)),
+  ).toEqual(['dsh-team-platform', 'dsh-team-documentserver']);
+  expect(
+    daemon.calls.some((args) => args[0] === 'compose' || args.includes('platform/Dockerfile')),
+  ).toBe(false);
+  expect(daemon.calls.some((args) => args[0] === 'observer')).toBe(false);
+  expect(
+    daemon.calls.some((args) => args[1] === 'rm' && args.at(-1) === 'dsh-team-documentserver'),
+  ).toBe(false);
+  expect(reports).toEqual([
+    {
+      current: 'fixed-name-admission',
+      lastCompleted: 'user-image-preparation',
+      firstFailure: { phase: 'fixed-name-admission', code: 'operation-failed', cause: 'unknown' },
+      operations: {
+        'deployment-host-admission': 'completed',
+        'deployment-lock-admission': 'completed',
+        'user-image-preparation': 'completed',
+        'deployment-creation': 'failed',
+        'fixed-name-admission': 'failed',
+      },
+      cleanup: {
+        deploymentDrain: 'not-required',
+        resources: 'confirmed',
+        observation: 'not-required',
+      },
+      evidence: 'retained',
+    },
+  ]);
 });

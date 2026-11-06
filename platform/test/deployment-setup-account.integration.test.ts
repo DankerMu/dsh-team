@@ -123,6 +123,7 @@ it('distinguishes late model configuration rejection from completed administrato
         dataDir: lifecycle.overlayDirectory,
         compose: [],
         observation: substituteObservation(true),
+        documentServerJwt: 'unused-document-server-jwt',
         request: (url) =>
           Promise.resolve().then(() => {
             const path = new URL(url).pathname;
@@ -202,6 +203,7 @@ it('completes account setup only after employee registration and keeps cleanup u
         dataDir: lifecycle.overlayDirectory,
         compose: [],
         observation: substituteObservation(true),
+        documentServerJwt: 'unused-document-server-jwt',
         request: (url, init) =>
           Promise.resolve().then(() => {
             const path = new URL(url).pathname;
@@ -318,6 +320,7 @@ it.each([
             dataDir: lifecycle.overlayDirectory,
             compose: ['compose', '--project-name', 'owned'],
             observation: substituteObservation(true),
+            documentServerJwt: 'unused-document-server-jwt',
             request: (url) =>
               Promise.resolve().then(() => {
                 if (new URL(url).pathname === '/healthz') return Response.json({ status: 'ok' });

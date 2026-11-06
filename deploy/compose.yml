@@ -19,6 +19,8 @@ services:
       PLATFORM_PUBLIC_URL: ${PLATFORM_PUBLIC_URL:?}
       PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE-false}
       PLATFORM_TRUSTED_PROXIES: ${PLATFORM_TRUSTED_PROXIES:-}
+      DOCUMENT_SERVER_CONTAINER_NAME: dsh-team-documentserver
+      DOCUMENT_SERVER_JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET:?Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server}
     ports:
       - "${PLATFORM_PORT:?}:${PLATFORM_PORT:?}"
     networks:
@@ -39,5 +41,20 @@ services:
       - type: bind
         source: ${PLATFORM_MANAGED_CONFIG_DIR:?}
         target: ${PLATFORM_MANAGED_CONFIG_DIR:?}
+        bind:
+          create_host_path: false
+  documentserver:
+    image: onlyoffice/documentserver:9.4.0
+    container_name: dsh-team-documentserver
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET:?Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server}
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
+    volumes:
+      # Operator-supplied fonts, resolved from --project-directory (the repository root).
+      - type: bind
+        source: ./assets/fonts
+        target: /usr/share/fonts/truetype/custom
+        read_only: true
         bind:
           create_host_path: false
