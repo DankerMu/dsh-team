@@ -237,7 +237,7 @@ verification:
       required_at: "L3+"
     docker_ci_evidence:
       command: "pnpm verify:docker-evidence"
-      evidence: "read-only latest exact-head DankerMu success or associated merged PR exact-merge-SHA/tree-equivalent reuse; missing/invalid evidence fails"
+      evidence: "read-only latest exact-head DankerMu success or associated merged PR exact-merge-SHA/tree-equivalent reuse; missing/invalid evidence fails; documentation-only diffs (Markdown outside plugins/ and images/) are exempt"
       required_at: "L3+"
   enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
 

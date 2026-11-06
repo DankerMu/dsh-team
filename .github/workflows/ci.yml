@@ -191,14 +191,38 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # Markdown outside plugins/ and images/ cannot change what the Docker suites
+      # build or run, so a diff made only of it needs no trusted Docker evidence.
+      # Plugin and image Markdown (skills, prompts) ships in images: never exempt.
+      # The job still runs and succeeds, so the aggregator never sees "skipped".
+      - name: Detect documentation-only change
+        id: scope
+        env:
+          RANGE: >-
+            ${{ github.event_name == 'pull_request'
+            && format('{0}...HEAD', github.event.pull_request.base.sha)
+            || format('{0}..{1}', github.event.before, github.event.after) }}
+        run: |
+          changed="$(git diff --no-renames --name-only "$RANGE")"
+          code="$(printf '%s\n' "$changed" | grep -Ev '\.md$' || true)"
+          shipped="$(printf '%s\n' "$changed" | grep -E '^(plugins|images)/' || true)"
+          if [ -n "$changed" ] && [ -z "$code" ] && [ -z "$shipped" ]; then
+            echo "docs_only=true" >> "$GITHUB_OUTPUT"
+            echo "Documentation-only change ($RANGE); trusted Docker evidence not required:"
+            printf '%s\n' "$changed"
+          fi
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        if: steps.scope.outputs.docs_only != 'true'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.scope.outputs.docs_only != 'true'
         with:
           node-version-file: .tool-versions
       # Full test:docker discovery includes deployment.docker.test.ts. Trusted
       # orchestration also runs test:deploy on that head before publishing proof;
       # hosted CI receives no VPS credentials and cannot substitute an older run.
       - name: Verify exact-head owner evidence or proved squash tree equivalence
+        if: steps.scope.outputs.docs_only != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: pnpm verify:docker-evidence
