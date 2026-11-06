@@ -2,8 +2,9 @@
 /**
  * Host half of the knowledge-base plugin. It validates the platform address the managed overlay
  * may give it, publishes whether the plugin is usable on this instance, and registers the browser
- * routes that forward the sidebar panel's reads to the platform's instance RAGFlow proxy, plus the
- * `/kb-scope` command and the `kbScope` projection that keep each Session's retrieval scope.
+ * routes that forward the sidebar panel's reads to the platform's instance RAGFlow proxy, the
+ * `/kb-scope` command and the `kbScope` projection that keep each Session's retrieval scope, and the
+ * `knowledge_base_search` tool that retrieves within the root Session's turn snapshot.
  */
 export const name = 'dsh-team-knowledge-base';
 export const inject = ['connection'];
@@ -36,6 +37,23 @@ const MAX_KEYWORDS_BYTES = 256;
 const MAX_SCOPE_BYTES = 40_000;
 const MAX_SCOPE_IDS = 1000;
 const SCOPE_INVALID = '知识库范围参数无效';
+/** The retrieval answer: up to 100 chunks of RAGFlow text, the proxy's own 8 MiB cap. */
+const RETRIEVAL_LIMIT = 8 * 1024 * 1024;
+const MAX_QUESTION_BYTES = 4096;
+/** The fixed Chinese text of every search outcome but `ok`, whose title counts its chunks. */
+const OUTCOME_TEXTS = {
+  'no-results': '知识库中没有找到相关内容',
+  'no-scope': '本轮没有选择知识库，未检索',
+  'no-datasets': '平台上还没有任何知识库，未检索',
+  'scope-unavailable': '无法确定本轮的检索范围，未检索',
+  'invalid-question': '检索问题为空或过长，未检索',
+  'invalid-request': '检索请求无效',
+  'not-configured': '知识库未配置，请联系管理员',
+  timeout: '知识库检索超时，请稍后重试',
+  unavailable: '知识库暂时不可用，请稍后重试',
+  'upstream-error': '知识库返回了异常结果，请稍后重试',
+};
+const RESULTS = ['ok', ...Object.keys(OUTCOME_TEXTS)];
 
 /**
  * A stored selection: null (every library, later ones included) or 0..1000 distinct IDs.
@@ -306,11 +324,54 @@ function entries(value) {
   return listed;
 }
 
+/** @param {unknown} value */
+const isPosition = (value) =>
+  Array.isArray(value) &&
+  value.length === 5 &&
+  value.every((item) => typeof item === 'number' && Number.isFinite(item));
+
+/**
+ * Retrieved chunks with only their declared fields, or undefined when any is malformed:
+ * string `content`, `documentName` and `datasetName`, and `positions` absent or a non-empty list
+ * of 5-number tuples, kept verbatim.
+ * @param {unknown} value
+ * @returns {import('./types.js').SearchChunk[] | undefined}
+ */
+function chunksOf(value) {
+  if (!Array.isArray(value)) return undefined;
+  const chunks = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) return undefined;
+    const { content, documentName, datasetName, positions } = entry;
+    if (typeof content !== 'string' || typeof documentName !== 'string') return undefined;
+    if (typeof datasetName !== 'string') return undefined;
+    const chunk = { content, documentName, datasetName };
+    if (positions === undefined) chunks.push(chunk);
+    else if (Array.isArray(positions) && positions.length > 0 && positions.every(isPosition))
+      chunks.push({ ...chunk, positions });
+    else return undefined;
+  }
+  return chunks;
+}
+
+/**
+ * The proxy retrieval answer: `ok` with chunks or `no-results`, both with the excluded IDs.
+ * @param {Record<string, unknown>} record
+ * @returns {import('./types.js').KnowledgeBaseAnswer | undefined}
+ */
+function retrievalAnswer(record) {
+  const { excluded } = record;
+  if (!Array.isArray(excluded) || !excluded.every((id) => typeof id === 'string')) return undefined;
+  if (record.result === 'no-results') return { result: 'no-results', excluded };
+  const chunks = record.result === 'ok' ? chunksOf(record.chunks) : undefined;
+  return chunks && { result: 'ok', excluded, chunks };
+}
+
 /**
  * A proxy answer reduced to the closed set this plugin forwards, or undefined when its shape is
  * not one the proxy declares for the route.
  * @param {unknown} body
- * @param {'datasets' | 'documents'} kind
+ * @param {import('./types.js').PlatformRequest['kind']} kind
  * @returns {import('./types.js').KnowledgeBaseAnswer | undefined}
  */
 function answerOf(body, kind) {
@@ -319,6 +380,7 @@ function answerOf(body, kind) {
   const result = record.result;
   if (typeof result === 'string' && FAILURES.has(result))
     return /** @type {import('./types.js').KnowledgeBaseAnswer} */ ({ result });
+  if (kind === 'retrieval') return retrievalAnswer(record);
   if (result !== 'ok') return undefined;
   if (kind === 'datasets') {
     const datasets = entries(record.datasets);
@@ -366,12 +428,13 @@ async function readBody(response, limit, signal) {
 }
 
 /**
- * One GET to the platform's instance proxy with the instance token, mapped onto the closed set.
- * Every failure becomes a result; nothing here throws.
+ * One request to the platform's instance proxy with the instance token, mapped onto the closed
+ * set: a GET, or a JSON POST when `body` is given. Every failure becomes a result; nothing here
+ * throws.
  * @param {import('./types.js').PlatformRequest} request
  * @returns {Promise<import('./types.js').KnowledgeBaseAnswer>}
  */
-async function platformRequest({ url, token, kind, limit, signal, logger }) {
+async function platformRequest({ url, token, kind, limit, signal, logger, body: payload }) {
   const deadline = new AbortController();
   const timer = setTimeout(() => {
     deadline.abort();
@@ -386,12 +449,16 @@ async function platformRequest({ url, token, kind, limit, signal, logger }) {
   try {
     let bytes;
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { authorization: `Bearer ${token}` },
-        redirect: 'manual',
-        signal: combined,
-      });
+      const authorization = `Bearer ${token}`;
+      const init =
+        payload === undefined
+          ? { method: 'GET', headers: { authorization } }
+          : {
+              method: 'POST',
+              headers: { authorization, 'content-type': 'application/json' },
+              body: JSON.stringify(payload),
+            };
+      const response = await fetch(url, { ...init, redirect: 'manual', signal: combined });
       if (response.status !== 200) {
         response.body?.cancel().catch(() => undefined);
         if (response.status === 401)
@@ -413,6 +480,174 @@ async function platformRequest({ url, token, kind, limit, signal, logger }) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * The search question as the proxy accepts it (non-blank, at most 4096 UTF-8 bytes), forwarded
+ * untrimmed; undefined for anything but exactly `{ question }`.
+ * @param {unknown} args
+ */
+function questionOf(args) {
+  if (typeof args !== 'object' || args === null || Object.keys(args).length !== 1) return undefined;
+  const { question } = /** @type {{ question?: unknown }} */ (args);
+  if (typeof question !== 'string' || isBlank(question)) return undefined;
+  return Buffer.byteLength(question) > MAX_QUESTION_BYTES ? undefined : question;
+}
+
+/**
+ * The `tool/result` meta of one outcome; like the value it names libraries only, never their IDs.
+ * @param {import('./types.js').SearchValue} value
+ * @returns {import('./types.js').SearchMeta}
+ */
+function metaOf(value) {
+  const chunks = value.chunks ?? [];
+  const title =
+    value.result === 'ok'
+      ? `知识库检索：${String(chunks.length)} 条结果`
+      : OUTCOME_TEXTS[value.result];
+  return { result: value.result, title, excluded: value.excluded ?? 0, chunks };
+}
+
+// A name keeps to its own entry line: CR, LF, VT, FF, NEL, LS and PS each become a space.
+/** @param {string} name */
+const flat = (name) => name.replace(/[\n\r\v\f\u0085\u2028\u2029]/g, ' ');
+
+/**
+ * The one text the model gets and the employee sees when expanding the native tool row: the
+ * title, the exclusion count, then every chunk with its file, its library and, only when present,
+ * its verbatim positions.
+ * @param {import('./types.js').SearchMeta} meta
+ */
+function describe({ title, excluded, chunks }) {
+  const lines = [title];
+  if (excluded > 0) lines.push(`有 ${String(excluded)} 个已选知识库已不可用，已跳过`);
+  chunks.forEach((chunk, index) => {
+    const file = flat(chunk.documentName);
+    lines.push('', `[${String(index + 1)}] 文件：${file}；所属知识库：${flat(chunk.datasetName)}`);
+    if (chunk.positions !== undefined) lines.push(`位置：${JSON.stringify(chunk.positions)}`);
+    lines.push(chunk.content);
+  });
+  return lines.join('\n');
+}
+
+const CHUNK_SCHEMA = {
+  type: 'object',
+  required: ['content', 'documentName', 'datasetName'],
+  additionalProperties: false,
+  properties: {
+    content: { type: 'string' },
+    documentName: { type: 'string' },
+    datasetName: { type: 'string' },
+    positions: { type: 'array', items: { type: 'array', items: { type: 'number' } } },
+  },
+};
+
+/**
+ * The scope record of a root Session's current turn: `{ scope }`, or undefined without a turn.
+ * @param {import('./types.js').SearchServices['sessionProjections']} projections
+ * @param {import('./types.js').SearchSession} session
+ * @returns {{ scope: import('./types.js').ScopeSelection } | undefined}
+ */
+function turnScope(projections, session) {
+  const turn = projections.stateOf(session, 'kbScope')?.turn;
+  return turn === null || turn === undefined ? undefined : { scope: turn.scope };
+}
+
+/**
+ * `knowledge_base_search`, registered globally so every child Agent sees it. A root Session
+ * searches its own turn snapshot; a child Agent searches the record taken when it was created or
+ * resumed, never its own projection, so a delegation cannot widen the scope.
+ * @param {import('./types.js').SearchServices} scoped
+ * @param {(question: string, scope: import('./types.js').ScopeSelection, signal: AbortSignal) => Promise<import('./types.js').SearchValue>} retrieve
+ */
+function searchTool(scoped, retrieve) {
+  /** @type {Map<string, { scope: import('./types.js').ScopeSelection }>} */
+  const records = new Map();
+  const unrecorded = () => {
+    scoped.logger.warn('knowledge-base: no retrieval scope recorded for a child Agent');
+  };
+  scoped.on('agent/created', ({ agent, source }) => {
+    try {
+      const { id, header } = agent.session;
+      if (header.origin !== 'subagent' || (source !== 'startup' && source !== 'resume')) return;
+      const parentId = header.parentSession;
+      const parent = parentId === undefined ? undefined : scoped.agents.get(parentId)?.session;
+      // A grandchild, created or resumed, copies its parent's record; only a child of the root
+      // snapshots the root's current turn, so a delegation never widens its scope.
+      const record =
+        parent === undefined
+          ? undefined
+          : parent.header.origin === 'subagent'
+            ? records.get(parent.id)
+            : turnScope(scoped.sessionProjections, parent);
+      if (record !== undefined) records.set(id, record);
+      else {
+        records.delete(id);
+        unrecorded();
+      }
+    } catch {
+      // A malformed Agent only leaves no record; delegation itself must never fail here.
+      unrecorded();
+    }
+  });
+  scoped.on('agent/disposed', ({ agent }) => {
+    records.delete(agent.session.id);
+  });
+  /** @param {import('./types.js').SearchSession} session */
+  const scopeOf = (session) =>
+    session.header.origin === 'subagent'
+      ? records.get(session.id)
+      : turnScope(scoped.sessionProjections, session);
+  return {
+    name: 'knowledge_base_search',
+    description:
+      '在员工为本轮选定的知识库中检索与问题相关的原文片段，返回片段内容、文件名和所属知识库名称。没有选定知识库、没有结果或知识库不可用时返回中文说明，对话可以继续。',
+    parameters: {
+      type: 'object',
+      required: ['question'],
+      additionalProperties: false,
+      properties: {
+        question: {
+          type: 'string',
+          description: '要检索的问题，用自然语言描述；不能为空，最多 4096 字节（UTF-8）。',
+        },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        required: ['result'],
+        additionalProperties: false,
+        properties: {
+          result: { type: 'string', enum: RESULTS },
+          chunks: { type: 'array', items: CHUNK_SCHEMA },
+          excluded: { type: 'integer' },
+        },
+      },
+      /** @param {unknown} _args @param {import('./types.js').SearchValue} value */
+      render: (_args, value) => [{ type: 'text', text: describe(metaOf(value)) }],
+      /** @param {unknown} _args @param {import('./types.js').SearchValue} value */
+      presentationMeta: (_args, value) => metaOf(value),
+    },
+    // A list and a retrieval call of 25 seconds each; the Web composition may not enforce it.
+    timeoutMs: 60_000,
+    /** @param {unknown} args @param {import('./types.js').SearchExecution} exec */
+    async execute(args, exec) {
+      const question = questionOf(args);
+      if (question === undefined) return { result: 'invalid-question' };
+      let record;
+      try {
+        record = exec.agent === undefined ? undefined : scopeOf(exec.agent.session);
+      } catch {
+        // A broken projection or Session leaves the scope unknown; never search wider.
+        record = undefined;
+      }
+      if (record === undefined) return { result: 'scope-unavailable' };
+      if (exec.signal.aborted) return { result: 'unavailable' };
+      if (record.scope?.length === 0) return { result: 'no-scope' };
+      return retrieve(question, record.scope, exec.signal);
+    },
+  };
 }
 
 /** @param {import('./types.js').KnowledgeBaseAnswer} answer */
@@ -438,31 +673,69 @@ export function apply(ctx, config) {
     scoped.commands.register(scopeCommand);
   });
   const lifetime = new AbortController();
-  /** @type {Set<Promise<Response>>} */
+  /** @type {Set<Promise<unknown>>} */
   const pending = new Set();
   ctx.effect(() => async () => {
     lifetime.abort();
     await Promise.allSettled(pending);
   });
   /**
-   * @param {Request} request
-   * @param {'datasets' | 'documents'} kind
-   * @param {string | null} path
+   * One platform request, aborted with `signal` or the plugin's disposal, which awaits it.
+   * @param {string} path
+   * @param {import('./types.js').PlatformRequest['kind']} kind
+   * @param {AbortSignal} signal
+   * @param {{ limit?: number; body?: unknown }} [options]
    */
-  const forward = (request, kind, path) => {
-    if (path === null) return Promise.resolve(answered({ result: 'invalid-request' }));
+  const request = (path, kind, signal, { limit = LIST_LIMIT, body } = {}) => {
     const task = platformRequest({
       url: `${platform.platformUrl}${path}`,
       token,
       kind,
-      limit: LIST_LIMIT,
-      signal: AbortSignal.any([request.signal, lifetime.signal]),
+      limit,
+      signal: AbortSignal.any([signal, lifetime.signal]),
       logger: ctx.logger,
-    }).then(answered);
+      body,
+    });
     pending.add(task);
     void task.finally(() => pending.delete(task));
     return task;
   };
+  /**
+   * @param {Request} browser
+   * @param {'datasets' | 'documents'} kind
+   * @param {string | null} path
+   */
+  const forward = (browser, kind, path) =>
+    path === null
+      ? Promise.resolve(answered({ result: 'invalid-request' }))
+      : request(path, kind, browser.signal).then(answered);
+  /**
+   * The whole scope lists every library first: an empty list retrieves nothing.
+   * @type {Parameters<typeof searchTool>[1]}
+   */
+  const retrieve = async (question, scope, signal) => {
+    let datasetIds = scope;
+    if (datasetIds === null) {
+      const listed = await request(`${PROXY}/datasets`, 'datasets', signal);
+      if (!('datasets' in listed)) return { result: listed.result };
+      if (listed.datasets.length === 0) return { result: 'no-datasets' };
+      datasetIds = listed.datasets.map(({ id }) => id);
+    }
+    const body = { question, datasetIds };
+    const answer = await request(`${PROXY}/retrieval`, 'retrieval', signal, {
+      limit: RETRIEVAL_LIMIT,
+      body,
+    });
+    if (!('excluded' in answer)) return { result: answer.result };
+    const excluded = answer.excluded.length;
+    return 'chunks' in answer
+      ? { result: 'ok', chunks: answer.chunks, excluded }
+      : { result: 'no-results', excluded };
+  };
+  // Without these services the panel and the scope control still work, without the tool.
+  ctx.inject(['tools', 'sessionProjections', 'agents'], (scoped) => {
+    scoped.tools.register(searchTool(scoped, retrieve));
+  });
   ctx.connection.fetch.register({
     path: '/api/knowledge-base.datasets',
     methods: ['GET'],

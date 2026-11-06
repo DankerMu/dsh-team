@@ -15,6 +15,9 @@ const RESULTS = RAGFLOW_VERSION_SCHEMA.properties.result.enum;
 type RagflowResult = (typeof RESULTS)[number];
 // A fixed test constant, not employee input: it may appear in the script text.
 const QUESTION = '报销需要提交哪些材料';
+// Real rc2 finds no chunk for QUESTION in the policies library alone under the default
+// parameters; this question names the seed file's own term (expense-policy.txt 「琥珀报销台」).
+export const SEARCH_QUESTION = '在琥珀报销台报销需要上传哪些材料';
 const HEX_ID = /^[0-9a-f]{32}$/;
 const SEED_FILES: readonly string[] = SEED_DATASETS.flatMap(({ files }) => files);
 const PLATFORM = 'dsh-team-platform';
@@ -29,7 +32,12 @@ export type InstanceCall =
   | { readonly kind: 'version' }
   | { readonly kind: 'datasets' }
   | { readonly kind: 'documents'; readonly datasetId: string; readonly keywords?: string }
-  | { readonly kind: 'retrieval'; readonly datasetIds: readonly string[] };
+  | {
+      readonly kind: 'retrieval';
+      readonly datasetIds: readonly string[];
+      /** QUESTION unless named. */
+      readonly question?: string;
+    };
 type Kind = InstanceCall['kind'];
 
 interface CallFacts<K extends Kind> {
@@ -56,6 +64,8 @@ interface FactsByKind {
     readonly chunks: number | null;
     /** Chunks whose dataset is a seed dataset and whose document is one of its seed files. */
     readonly seedChunks: number;
+    /** The seed dataset names of those chunks, each once, in seed order. */
+    readonly seedDatasets: readonly string[];
     readonly excluded: readonly string[] | null;
   };
 }
@@ -79,7 +89,7 @@ const DEFAULTS = {
   version: { version: null },
   datasets: { datasets: null, seeds: [] },
   documents: { total: null, documents: null, files: [], others: 0 },
-  retrieval: { chunks: null, seedChunks: 0, excluded: null },
+  retrieval: { chunks: null, seedChunks: 0, seedDatasets: [], excluded: null },
 } as const;
 const VALIDATORS: { [K in Kind]: Record<keyof (typeof DEFAULTS)[K], (value: unknown) => boolean> } =
   {
@@ -99,6 +109,10 @@ const VALIDATORS: { [K in Kind]: Record<keyof (typeof DEFAULTS)[K], (value: unkn
     retrieval: {
       chunks: nullableCount,
       seedChunks: isCount,
+      seedDatasets: (value) =>
+        Array.isArray(value) &&
+        new Set(value).size === value.length &&
+        value.every((name: unknown) => SEED_DATASETS.some((seed) => seed.name === name)),
       excluded: (value) => value === null || (Array.isArray(value) && value.every(isHexId)),
     },
   };
@@ -130,7 +144,7 @@ function callRequest(call: InstanceCall) {
       return {
         path: 'retrieval',
         method: 'POST',
-        body: { question: QUESTION, datasetIds: call.datasetIds },
+        body: { question: call.question ?? QUESTION, datasetIds: call.datasetIds },
       };
   }
 }
@@ -176,9 +190,13 @@ const project = {
   retrieval(body) {
     const chunks = list(body.chunks);
     facts.chunks = chunks === undefined ? null : chunks.length;
-    facts.seedChunks = (chunks ?? []).filter((chunk) =>
+    const seeded = (chunks ?? []).filter((chunk) =>
       seeds.some((seed) => seed.name === chunk.datasetName && seed.files.includes(chunk.documentName)),
-    ).length;
+    );
+    facts.seedChunks = seeded.length;
+    facts.seedDatasets = seeds
+      .map((seed) => seed.name)
+      .filter((name) => seeded.some((chunk) => chunk.datasetName === name));
     facts.excluded = Array.isArray(body.excluded) && body.excluded.every(isId) ? body.excluded : null;
   },
 };
@@ -608,8 +626,9 @@ async function adminJson(
 }
 
 type InstanceProxy = Awaited<ReturnType<typeof instanceProxy>>;
-const MISSING_ID = '0'.repeat(32);
-const POLICIES = 'dsh-team-seed-policies';
+/** A well-formed dataset ID no library has: a library deleted in RAGFlow, without writing it. */
+export const MISSING_ID = '0'.repeat(32);
+export const POLICIES = 'dsh-team-seed-policies';
 const DEFAULT_RETRIEVAL = {
   retrievalTopK: 8,
   retrievalSimilarityThreshold: 0.2,
@@ -703,7 +722,8 @@ async function seedDocuments(call: InstanceProxy, ids: Map<string, string>) {
 
 /**
  * After `ragflow-cpu` is back: the proxy's first requests to the real rc2. Retrieval is paid
- * (user-accepted 2026-11-03) and limited to these three calls.
+ * (user-accepted 2026-11-03) and limited to these four calls: three ask QUESTION, the policies-only
+ * positive control asks SEARCH_QUESTION.
  */
 export async function proxyAfterRestore(admin: Administrator, outage: Outage, call: InstanceProxy) {
   const ragflowRestartMs = await outage.restore();
@@ -722,10 +742,24 @@ export async function proxyAfterRestore(admin: Administrator, outage: Outage, ca
   expect(retrieval).toMatchObject({ status: 200, result: 'ok', excluded: [] });
   expect(retrieval.chunks).toBeGreaterThanOrEqual(1);
   expect(retrieval.seedChunks).toBe(retrieval.chunks);
+  // Positive control for the search lane: the whole scope reaches beyond the policies library,
+  // so a policies-only search result there shows that the scope did not widen.
+  expect(retrieval.seedDatasets.some((name) => name !== POLICIES)).toBe(true);
   // The passing scope plus a fake ID: a narrower scope may legitimately find no chunk.
   const excluded = await call({ kind: 'retrieval', datasetIds: [...all, MISSING_ID] });
   expect(excluded).toMatchObject({ status: 200, result: 'ok', excluded: [MISSING_ID] });
   expect(excluded.seedChunks).toBe(excluded.chunks);
+  // Positive control for the search lane: under the default parameters its question finds chunks
+  // in the policies library alone, so a policies-only search there may not legitimately be empty.
+  const policies = await call({
+    kind: 'retrieval',
+    datasetIds: [String(ids.get(POLICIES))],
+    question: SEARCH_QUESTION,
+  });
+  expect(policies).toMatchObject({ status: 200, result: 'ok', excluded: [] });
+  expect(policies.chunks).toBeGreaterThanOrEqual(1);
+  expect(policies.seedChunks).toBe(policies.chunks);
+  expect(policies.seedDatasets).toEqual([POLICIES]);
   expect(await adminJson(admin, 'GET', 'retrieval-config')).toEqual({
     status: 200,
     body: DEFAULT_RETRIEVAL,
@@ -742,9 +776,21 @@ export async function proxyAfterRestore(admin: Administrator, outage: Outage, ca
     version: version.version,
     seedDatasets: ids.size,
     ...documents,
-    retrieval: { result: retrieval.result, chunks: retrieval.chunks },
+    retrieval: {
+      result: retrieval.result,
+      chunks: retrieval.chunks,
+      seedDatasets: retrieval.seedDatasets,
+    },
     excluded: excluded.excluded?.length ?? 0,
+    policiesChunks: policies.chunks,
     thresholdResult: thresholded.result,
     ragflowRestartMs,
   };
+}
+
+/** The retrieval parameters back to their defaults after proxyAfterRestore's strict threshold. */
+export async function restoreRetrievalDefaults(admin: Administrator): Promise<void> {
+  const saved = await adminJson(admin, 'PUT', 'retrieval-config', DEFAULT_RETRIEVAL);
+  expect(saved.status).toBe(200);
+  expect(saved.body).toMatchObject(DEFAULT_RETRIEVAL);
 }

@@ -59,18 +59,41 @@ function ownedForbidden(value: unknown): readonly string[] | undefined {
     throw new Error('Invalid owned model configuration');
   return value as string[];
 }
+/**
+ * Optional nonsecret delegation script: exactly `{ childMarker, question }`, non-empty strings.
+ * A marked parent turn calls `subagent`, the marked child turn `knowledge_base_search`.
+ */
+function ownedDelegation(value: unknown): { childMarker: string; question: string } | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Object.keys(value).sort().join() !== 'childMarker,question' ||
+    !('childMarker' in value) ||
+    typeof value.childMarker !== 'string' ||
+    value.childMarker === '' ||
+    !('question' in value) ||
+    typeof value.question !== 'string' ||
+    value.question === ''
+  )
+    throw new Error('Invalid owned model configuration');
+  return { childMarker: value.childMarker, question: value.question };
+}
 const hold = ownedHold('hold' in config ? config.hold : undefined);
+const delegation = ownedDelegation('delegation' in config ? config.delegation : undefined);
 const forbidden = ownedForbidden('forbidden' in config ? config.forbidden : undefined);
 /** Held answers, released together by `POST /release`; at most one request is ever held. */
 const heldAnswers: (() => void)[] = [];
 let holding = hold !== undefined;
 let forbiddenRequests = 0;
 
+let delegations = 0;
+let searches = 0;
 let markedRequests = 0;
 let requests = 0;
 let toolResults = 0;
 
-const offersWrite = (tools: unknown) =>
+const offers = (tools: unknown, name: string) =>
   Array.isArray(tools) &&
   tools.some(
     (tool: unknown) =>
@@ -80,8 +103,9 @@ const offersWrite = (tools: unknown) =>
       typeof tool.function === 'object' &&
       tool.function !== null &&
       'name' in tool.function &&
-      tool.function.name === 'write',
+      tool.function.name === name,
   );
+const offersWrite = (tools: unknown) => offers(tools, 'write');
 const hasToolResult = (messages: unknown[]) =>
   messages.some(
     (message: unknown) =>
@@ -102,6 +126,43 @@ function scriptedCall(body: object, toolResult: boolean) {
     function: {
       name: 'write',
       arguments: JSON.stringify({ file_path: script.path, content: script.content }),
+    },
+  };
+}
+
+/** The delegated child's title: the browser lane finds the child Session by it. */
+const DELEGATION_TITLE = '检索知识库';
+
+/**
+ * A marked turn without a tool result: the parent, offered `subagent`, delegates; the child,
+ * offered `knowledge_base_search` but not `subagent`, searches. Every other request falls through.
+ */
+function delegatedCall(body: object, text: string, toolResult: boolean) {
+  if (delegation === undefined || toolResult || !text.includes(delegation.childMarker))
+    return undefined;
+  const tools = 'tools' in body ? body.tools : undefined;
+  if (offers(tools, 'subagent')) {
+    delegations++;
+    const prompt = `${delegation.childMarker} 请调用 knowledge_base_search 检索：${delegation.question}`;
+    return {
+      index: 0,
+      id: 'owned-subagent-1',
+      type: 'function',
+      function: {
+        name: 'subagent',
+        arguments: JSON.stringify({ description: DELEGATION_TITLE, prompt }),
+      },
+    };
+  }
+  if (!offers(tools, 'knowledge_base_search')) return undefined;
+  searches++;
+  return {
+    index: 0,
+    id: 'owned-search-1',
+    type: 'function',
+    function: {
+      name: 'knowledge_base_search',
+      arguments: JSON.stringify({ question: delegation.question }),
     },
   };
 }
@@ -146,7 +207,7 @@ function holds(body: object, text: string, toolResult: boolean) {
   return 'tools' in body && offersWrite(body.tools);
 }
 
-/** Health stays byte-identical unless a hold or forbidden strings are configured. */
+/** Health stays byte-identical unless a hold, forbidden strings or a delegation are configured. */
 function health() {
   return JSON.stringify({
     ready: true,
@@ -155,6 +216,7 @@ function health() {
     toolResults,
     ...(hold === undefined ? {} : { held: heldAnswers.length }),
     ...(forbidden === undefined ? {} : { forbiddenRequests }),
+    ...(delegation === undefined ? {} : { delegations, searches }),
   });
 }
 
@@ -206,6 +268,12 @@ const server = createServer((request, response) => {
       if (forbidden?.some((item) => whole.includes(item)) === true) forbiddenRequests++;
       const toolResult = hasToolResult(body.messages);
       if (toolResult) toolResults++;
+      // Before the script and the hold: both predicates require the child marker.
+      const delegated = delegatedCall(body, text, toolResult);
+      if (delegated !== undefined) {
+        respond(response, 'stream' in body && body.stream === true, delegated);
+        return;
+      }
       const answer = () => {
         respond(response, 'stream' in body && body.stream === true, scriptedCall(body, toolResult));
       };

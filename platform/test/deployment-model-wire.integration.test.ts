@@ -315,3 +315,99 @@ it.each([
   expect(code).not.toBe(0);
   expect(stderr).toContain('Invalid owned model configuration');
 });
+
+const DELEGATION = { childMarker: 'child-marker-9', question: '在琥珀报销台报销需要上传哪些材料' };
+const SUBAGENT_TOOL = { type: 'function', function: { name: 'subagent', parameters: {} } };
+const SEARCH_TOOL = {
+  type: 'function',
+  function: { name: 'knowledge_base_search', parameters: {} },
+};
+const delegated = (tools?: unknown[], extra: unknown[] = []) => ({
+  ...userTurn(tools, extra),
+  messages: [{ role: 'user', content: `please ${DELEGATION.childMarker}` }, ...extra],
+});
+const callChunks = (call: unknown) => [
+  chunk({ index: 0, delta: { role: 'assistant', tool_calls: [call] }, finish_reason: null }),
+  chunk({ index: 0, delta: {}, finish_reason: 'tool_calls' }),
+];
+const subagentCall = {
+  index: 0,
+  id: 'owned-subagent-1',
+  type: 'function',
+  function: {
+    name: 'subagent',
+    arguments: JSON.stringify({
+      description: '检索知识库',
+      prompt: `${DELEGATION.childMarker} 请调用 knowledge_base_search 检索：${DELEGATION.question}`,
+    }),
+  },
+};
+const searchCall = {
+  index: 0,
+  id: 'owned-search-1',
+  type: 'function',
+  function: {
+    name: 'knowledge_base_search',
+    arguments: JSON.stringify({ question: DELEGATION.question }),
+  },
+};
+
+it('delegates a marked parent turn and makes the marked child search, before script and hold', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, hold: HOLD, delegation: DELEGATION });
+  expect(await health(origin)).toEqual({
+    ready: true,
+    markedRequests: 0,
+    requests: 0,
+    toolResults: 0,
+    held: 0,
+    delegations: 0,
+    searches: 0,
+  });
+  // The parent offers both tools (the search tool is global); the child lacks the subagent tool.
+  const parentTools = [WRITE_TOOL, SUBAGENT_TOOL, SEARCH_TOOL];
+  expect(await streamed(await complete(origin, delegated(parentTools)))).toEqual(
+    callChunks(subagentCall),
+  );
+  const childTools = [WRITE_TOOL, SEARCH_TOOL];
+  expect(await streamed(await complete(origin, delegated(childTools)))).toEqual(
+    callChunks(searchCall),
+  );
+  const plain = await complete(origin, { ...delegated(childTools), stream: false });
+  expect(await plain.json()).toMatchObject({
+    choices: [{ message: { tool_calls: [searchCall] }, finish_reason: 'tool_calls' }],
+  });
+  expect(await health(origin)).toMatchObject({ delegations: 1, searches: 2, held: 0 });
+});
+
+it.each([
+  ['the parent tool-result round', delegated([SUBAGENT_TOOL, SEARCH_TOOL], toolResult)],
+  ['the child tool-result round', delegated([SEARCH_TOOL], toolResult)],
+  ['the tool-free title request', delegated()],
+  ['a marked request without either tool', delegated([READ_TOOL])],
+])('replies with text to %s under a delegation', async (_name, body) => {
+  const origin = await start({ ...BASE, delegation: DELEGATION });
+  expect(await streamed(await complete(origin, body))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ delegations: 0, searches: 0 });
+});
+
+it('leaves unmarked turns to the script and the hold under a delegation', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, delegation: DELEGATION });
+  expect(await streamed(await complete(origin, userTurn([WRITE_TOOL, SUBAGENT_TOOL])))).toEqual(
+    callChunks(writeCall),
+  );
+  expect(await streamed(await complete(origin, userTurn([SEARCH_TOOL])))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ delegations: 0, searches: 0 });
+});
+
+it.each([
+  ['a non-object delegation', 'delegate'],
+  ['an extra delegation key', { ...DELEGATION, mode: 'spawn' }],
+  ['a missing question', { childMarker: DELEGATION.childMarker }],
+  ['an empty marker', { ...DELEGATION, childMarker: '' }],
+  ['a non-string question', { ...DELEGATION, question: 7 }],
+])('rejects %s before listening', async (_name, delegation) => {
+  const { closed } = await launch({ ...BASE, delegation }, await unusedPort());
+  const { code, stderr } = await closed;
+  expect(code).not.toBe(0);
+  expect(stderr).toContain('Invalid owned model configuration');
+});
