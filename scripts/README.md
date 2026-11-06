@@ -6,6 +6,8 @@ Moved verbatim from the root `AGENTS.md`; normative behaviour lives in the OpenS
 
 ## Canonicality enforcement and guardrail self-test
 
+User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed. The dated change name follows OpenSpec's lowercase alphanumeric, single-hyphen grammar. Other scratchpad components, forbidden suffixes, dot-segment aliases and unrelated staged violations remain rejected. The pattern lives in `constraints.yaml`; both hook entrypoints share one classifier, and `pnpm test:guardrails` proves acceptance and rejection.
+
 | Rule                         | Enforced by                                                                                                                                                            |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Forbidden suffixes (paths)   | `.git-hooks/check-naming.sh` (pre-commit hook)                                                                                                                         |

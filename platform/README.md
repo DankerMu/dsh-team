@@ -46,6 +46,12 @@ Run `pnpm test:docker platform/test/platform-image.docker.test.ts` on giap-vps f
 
 Platform-image Docker calls use the canonical verification client environment: fixed PATH, launcher-owned `DSH_TEAM_BROWSER_DOCKER_CONFIG` as Docker's private configuration, and only the optional uppercase proxy fields. Missing or empty launcher configuration fails before Docker; caller credentials, remote Engine selectors and ambient Docker configuration are not inherited. The original30s operation/600s build deadlines,16MiB raw-output contract and exact-owned cleanup remain. Issue#270 explicitly adopts the canonical helper's SIGKILL timeout termination instead of the former implicit SIGTERM.
 
+## Evidence required: Database
+
+Verify with: Real-file SQLite migrate, settings, reopen. Command: `pnpm test:integration`.
+
+Tempfile `platform.db`, exact migration ledger matching `platform/src/db/migrations/`, preserved historical rows and durable creation attempts, closed handle.
+
 ## Evidence required: Administrator CLI
 
 Verify with: Actual Node and pinned silent-pnpm processes with hidden-input PTYs. Command: `pnpm test:cli`.
