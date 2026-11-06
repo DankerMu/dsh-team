@@ -2107,8 +2107,8 @@ Risk packs (15.4 知识库检索工具与来源展示，#421): fixture level exp
   - `permission-tiers` 只拦截 `write`、`edit`、`bash`、`run_code`、`build_docx`（`plugins/permission-tiers/index.js:16`），新工具不进入该集合，任何权限档位都不需要审批。
 - **范围解析**（编排者钉死）：
   - 根 Session：从 `exec.agent.session` 开始，只在头部 `origin === 'subagent'` 时经 `ctx.agents.get(header.parentSession)?.session` 上溯，最多 16 层；员工 fork 出的 Session 是自己的根。
-  - 根 Session 自己调用时：快照是 `ctx.sessionProjections.stateOf(root, 'kbScope')?.turn`，核对 `turn.turn` 为当前轮（#420 交接）。
-  - 子 Agent 调用时：委派是异步的，父轮可能已结束、员工可能已经改了范围并开始了新的一轮，所以不能读根 Session 的最新快照（spec「该任务的所有检索只针对库1」「子 Agent MUST NOT 扩大范围」）。host 半区监听 `agent/created`：新建的 agent 头部 `origin === 'subagent'` 时，记下创建它的那一刻根 Session 的 `kbScope.turn`（孙子 Agent 复制父 Agent 的记录），按子 Session ID 存在插件内存里，`agent/disposed` 时删除。子 Agent 检索用这份记录。实现前核对 `agent/created` 的载荷与触发时机（发行包 `R/dsh-agent`、`R/dsh-subagent/lib/index.js:344-400`），以及它在子 Agent 第一次调用工具之前触发。
+  - 根 Session 自己调用时：快照是 `ctx.sessionProjections.stateOf(root, 'kbScope')?.turn`。根 Session 的 agent 在本轮内调用工具，`kbScope.turn` 必然是本轮，不另做轮次核对（#420 交接中的核对由此满足）。
+  - 子 Agent 调用时：委派是异步的，父轮可能已结束、员工可能已经改了范围并开始了新的一轮，所以不能读根 Session 的最新快照（spec「该任务的所有检索只针对库1」「子 Agent MUST NOT 扩大范围」）。host 半区监听 `agent/created`：新建的 agent 头部 `origin === 'subagent'` 时按 `source`（`'startup' | 'resume' | 'clear' | 'compact'`，`R/dsh-agent/lib/types/runtime-types.d.ts:105`）处理：`startup` 记下创建那一刻根 Session 的 `kbScope.turn`；`resume` 也记下根 Session 当前一轮（恢复是员工或父 Agent 发起的新任务，README 与不变量写明）；`compact`/`clear` 不覆盖已有记录，记录已被删掉时检索返回 `scope-unavailable`。记下的是（孙子 Agent 复制父 Agent 的记录），按子 Session ID 存在插件内存里，`agent/disposed` 时删除。子 Agent 检索用这份记录。实现前核对 `agent/created` 的载荷与触发时机（发行包 `R/dsh-agent`、`R/dsh-subagent/lib/index.js:344-400`），以及它在子 Agent 第一次调用工具之前触发。
   - 没有记录（实例重启后恢复的子 Agent、插件晚于子 Agent 加载）、父 Session 不在内存中、投影缺失、`turn` 为 `null`、超过层数上限：返回 `scope-unavailable`，不发请求（不扩大范围）。
   - `scope` 为 `[]`：不发请求，返回 `no-scope`。
   - `scope` 为 `null`：先用 #419 的平台请求函数 `GET …/ragflow/datasets` 取全部库，得到空列表时返回 `no-datasets`（不发检索，空 `datasetIds` 是 `invalid-request`）；列表失败时返回该失败取值。
@@ -2118,12 +2118,12 @@ Risk packs (15.4 知识库检索工具与来源展示，#421): fixture level exp
   - `ok`：卡片标题「知识库检索：N 条结果」；每个片段显示 `content`、文件名、所属知识库，`positions` 有值时原样显示为「位置：…」（不推导页码）；`excluded` 非空时另加一行「有 K 个已选知识库已不可用，已跳过」。
   - `no-results`：「知识库中没有找到相关内容」；同样附 `excluded` 提示。
   - `no-scope`：「本轮没有选择知识库，未检索」（spec「取消全部后不检索」）。
-  - `no-datasets`：「全部知识库都为空，未检索」（范围为全选、但平台上没有任何库；与员工取消全部的 `no-scope` 区分）。
+  - `no-datasets`：「平台上还没有任何知识库，未检索」（范围为全选、但平台上没有任何库；与员工取消全部的 `no-scope` 区分）。
   - `scope-unavailable`：「无法确定本轮的检索范围，未检索」。
   - `invalid-question`：「检索问题为空或过长，未检索」。
   - 代理取值：`invalid-request`「检索请求无效」、`not-configured`「知识库未配置，请联系管理员」、`timeout`「知识库检索超时，请稍后重试」、`unavailable`「知识库暂时不可用，请稍后重试」、`upstream-error`「知识库返回了异常结果，请稍后重试」。
   - 模型文本与卡片里只有库名和文件名，不出现库 ID、令牌、平台地址、`kb-scope` 或「知识库范围」字样（本机通道 provider 的 `forbidden` 扫描整个请求体，包括工具结果）。
-  - 回应校验沿用 #419 的严格形状校验：`ok` 的每个片段都要有字符串 `content`、`documentName`、`datasetName`，`positions` 若有则为非空的 5 数字元组数组；`excluded` 为字符串数组；其他形状一律 `upstream-error`。
+  - 回应校验沿用 #419 的严格形状校验：`ok` 的每个片段都要有字符串 `content`、`documentName`、`datasetName`，`positions` 若有则为非空的 5 数字元组数组；代理回应的 `excluded` 为字符串数组（工具返回值里的 `excluded` 是数量）；其他形状一律 `upstream-error`。
 - **Auth / permissions / secrets**：令牌只在 host 半区；日志只写固定文本和 `result`，不写问题、片段、库 ID 或平台地址。
 - **Error handling**：任何异常（网络、解析、平台非 200）都映射成封闭集合，工具不抛错，对话可以继续（spec「对话可以继续」）。
 - **Resource limits**：片段数由平台的 `retrievalTopK`（≤100）决定；回应上限 8 MiB；单次调用 25 秒、整次工具 60 秒。
@@ -2135,7 +2135,7 @@ not selected：
 
 **不变量**：
 
-- 子 Agent 的检索范围等于它被创建时根 Session 那一轮的快照，之后根 Session 的修改与新一轮都不影响它；拿不到这份快照时不检索，不扩大范围。
+- 子 Agent 的检索范围等于它被创建（`startup`）或恢复（`resume`）时根 Session 那一轮的快照，之后根 Session 的修改与新一轮都不影响它；拿不到这份快照时不检索，不扩大范围。
 - `[]` 不发任何请求；`null` 不把空列表发给检索。
 - 每种结局的提示互不相同；知识库不可用时工具返回提示，对话继续。
 
@@ -2166,12 +2166,13 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
 - 单元测试（`pnpm test`），覆盖率逐文件 80%：
   - 根解析：根自身；一层、两层子 Agent；fork（有 `parentSession` 无 `origin`）是自己的根；父不在内存、投影缺失、`turn` 为 `null`、超层数都是 `scope-unavailable`；
   - 范围：`[]` 不发任何请求；`null` 先列表再检索，空列表 `no-datasets` 且不检索，列表失败传出失败取值；ID 列表直接检索；请求体恰为 `{ question, datasetIds }`、方法、`Authorization`、`content-type`、`redirect`；
-  - 子 Agent 的快照：根 Session 第 N 轮创建子 Agent 后，根 Session 改成更宽的范围并进入第 N+1 轮，子 Agent 仍用第 N 轮的范围；孙子 Agent 继承同一记录；`agent/disposed` 后记录删除；没有记录时 `scope-unavailable`；
+  - 子 Agent 的快照：`compact`/`clear` 重新 announce 后范围不变（或在记录已删时为 `scope-unavailable`）；根 Session 第 N 轮创建子 Agent 后，根 Session 改成更宽的范围并进入第 N+1 轮，子 Agent 仍用第 N 轮的范围；孙子 Agent 继承同一记录；`agent/disposed` 后记录删除；没有记录时 `scope-unavailable`；
   - 结局：11 种结局（插件 6 种加代理 5 种）的模型文本两两不同、卡片标题两两不同；工具名与描述不含 `kb-scope`、「知识库范围」；`excluded` 提示；`positions` 只在有值时显示；文本与卡片不含库 ID、令牌、平台地址；回应形状不合法为 `upstream-error`；超时、传输失败、中止；
   - `question` 校验：空白、超 4096 字节不发请求；
   - 插件不可用或缺 `tools`/`agents` 时不注册工具。
-- 本机通道（`pnpm test:stack`，Playwright Chromium 经网关，确定性 provider），放在 #420 的范围步骤之后，同一员工：0. **恢复检索参数**：`proxyAfterRestore` 把相似度阈值设成了 1（`ragflow-stack-fixture.ts:733-740`），检索步骤前由管理员 PUT `DEFAULT_RETRIEVAL`，要求 200。`delegation.question` 用既有的 `QUESTION`（「报销需要提交哪些材料」）。
-  - 正对照：`proxyAfterRestore` 里已有的全库检索记下所属知识库名的集合，要求其中至少有一个不是 `dsh-team-seed-policies`（不增加付费检索）；这样「范围没有扩大」才有区分力。
+- 本机通道（`pnpm test:stack`，Playwright Chromium 经网关，确定性 provider），放在 #420 的范围步骤之后，同一员工：
+  - 正对照（放在既有的 `proxyAfterRestore` 里，不在检索步骤中执行）：`proxyAfterRestore` 里已有的全库检索记下所属知识库名的集合，要求其中至少有一个不是 `dsh-team-seed-policies`（不增加付费检索）；这样「范围没有扩大」才有区分力。正对照失败就停下报告，不得改 `QUESTION` 或阈值（`proxyAfterRestore` 的既有断言共用它们）。
+  0. **恢复检索参数**：`proxyAfterRestore` 把相似度阈值设成了 1（`ragflow-stack-fixture.ts:733-740`），检索步骤前由管理员 PUT `DEFAULT_RETRIEVAL`，要求 200。`delegation.question` 用既有的 `QUESTION`（「报销需要提交哪些材料」）。
   1. **子 Agent 用根 Session 的范围**：新建 Session（综合办公），在输入区以员工身份输入 `/kb-scope {"datasetIds":["<dsh-team-seed-policies 的 ID>","<32 个 0>"]}`（伪造的 ID 模拟已删除的库，不写 RAGFlow，同 #417 的 `MISSING_ID`）（输入框的前导 `/` 走命令路径，`R/dsh-client-ui-commands/lib/client.js:1624-1666`），确认控件显示「知识库：2 个」、投影 `selection` 恰为这两个 ID、`command/done` 成功且没有新的 `turn/start`；然后发一条带 `childMarker` 的消息。provider 让综合办公调用 `subagent`，子 Agent（公文与材料写作）调用 `knowledge_base_search`。
   2. **核对**（经网关读原生历史，`mappedSessionRpc` + `sessionEvents`）：
      - 子 Session ID 从根 Session 的 `subagent` 工具结果文本 `started subagent <id>` 解析（根 Session 的 `tool/result` 不持久化返回值）；
