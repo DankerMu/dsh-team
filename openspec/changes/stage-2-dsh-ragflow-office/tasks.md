@@ -800,6 +800,141 @@ Evidence (13.2 测试连接，#411):
 - 13.3（#412）：页面为五个 `result` 各写一条中文说明，`ok` 时显示 `version`。
 - 14.1：在 `ragflow-proxy/client.ts` 上扩展，不新建第二个 RAGFlow HTTP 实现；结果集合加入 `no-results`、`invalid-request`。
 
+Risk packs (13.3 后台「知识库」页，#412): fixture level expanded（与 issue 建议一致：本页是 RAGFlow 密钥和检索参数的后台写入口）。只做页面：三个接口已由 #410、#446、#411 交付，本任务不改任何接口、设置或迁移，`schemas/openapi.json` 不变。selected：
+
+- **Public API（页面地址）**：
+  - 新页面 `/_platform/admin/knowledge-base`，导航名「知识库」，链接排在「插件目录」之后、「账号设置」之前。
+  - `platform/src/web/routes.ts` 的静态页面清单加这一项，与既有页面一样只答 GET/HEAD、`sendFile('index.html')`；尾斜线、子路径、`%00`、`%2f` 仍是 404。
+  - `account-page.tsx` 的路径分派加一支；`AdminNavigation` 的 `page` 联合加 `'knowledge-base'`。
+- **Auth / permissions / secrets**：
+  - 进入页面时并发 GET `/_platform/api/admin/ragflow-config` 与 `/_platform/api/admin/retrieval-config`，作为当前权限探测。两个请求都结算、响应体都读完之后才按优先级决定（同 #408）：任一 401 → `window.location.assign('/_platform/login')`，只导航一次；任一 403 → 只显示 `无权限`（`role="alert"`），不渲染地址、密钥状态、参数或任何按钮；其他任一失败 → 整页失败态；两个都 200 → 就绪。不得在兄弟请求仍在途时导航（AGENTS.md 开发笔记 9）。
+  - 保存和测试连接的 401/403 与 `model-page.tsx` 相同：401 → 导航登录；403 → 页面只剩 `无权限`，表单全部移除，草稿和已输入的密钥都清空。
+  - 密钥：输入框 `type="password"`、`autoComplete="new-password"`，旁边只显示 `已配置`/`未配置`（来自 `apiKeyConfigured`；规格写「只显示已配置」，本页用这对文案，不沿用模型页的 `已设置`），提示 `留空保留原密钥。`。PUT 时密钥框为空串就不带 `apiKey`；非空但只含空白时在页面上拒绝（`密钥不能只包含空白字符。`），不发请求。任何一次加载、保存（成功或失败）之后都清空密钥框；测试连接不清空，也不发送它。页面任何地方都不显示密钥原文，`localStorage`、`sessionStorage`、URL 里都没有它。
+  - 页面只调用这三个接口（两个 GET/PUT 加 `POST …/ragflow-config/test`），不调其他 `/_platform/api/`。
+- **Concurrency / shared state**：
+  - 两个保存区和测试连接共用一个页面级 pending 锁（同 `model-page.tsx` 的 `owner` ref 与 `current()` 失效判定）。加载、任一保存或测试进行中，两个表单的 `fieldset` 都 `disabled`，「测试连接」也不可点，杜绝重复与交叉提交。
+  - 离开页面时中止在途请求。每个响应体在结算前读完（含 400/500）；过期响应不覆盖当前状态。
+  - 保存成功只用该保存区自己的响应更新该区草稿，另一区草稿不动。
+- **Error handling**（页面只显示下列固定中文，从不显示服务端 message 或响应体原文）：
+  - 加载中：状态行只显示 `加载中…`，不渲染任何表单。
+  - 加载失败（非 401/403）：`知识库配置加载失败，请重试。` 加「重试」按钮（重新发两个 GET），不显示任何部分数据。
+  - 连接配置保存 400：`RAGFlow 地址无效：须以 http:// 或 https:// 开头，不含空白、?、#、@ 或 \，最长 2048 个字符。`。
+  - 检索参数保存 400：`检索参数无效：返回片段数为 1–100 的整数，相似度阈值和关键词权重为 0–1 之间的数，重排模型 ID 前后不能有空白。`。
+  - 其他保存失败：`保存失败，请重试。`；测试请求失败（非 200 或回应不合法）：`连接测试请求失败，请重试。`。
+  - 页面侧只做两项必要检查，其余交给服务端 400（检索参数表单 `noValidate`，所以 0、101、1.5 等越界值也会真实发出并得到 400）：地址为空 → `请输入 RAGFlow 地址。`；四个检索参数里数字框为空或不是有限数字 → 检索参数 400 那一行。重排模型 ID 的前后空白不在页面检查，原样发送，由服务端 400 拒绝（这样浏览器用例能走到真实的 400）。
+- **Config（页面结构）**：
+  - 页面顶部（两个表单之上）一行固定提示：`保存即生效：平台之后的每次知识库请求都使用新配置，不需要重启实例。`。
+  - ① 「连接配置」表单（`aria-label="RAGFlow 连接"`，按钮「保存连接配置」）：`RAGFlow 地址` 输入框（说明 `RAGFlow 服务的根地址，例如 http://ragflow.intranet:9380；平台会在其后拼接 /api/v1/…`）与密钥框（见上）。PUT body 恰为 `{ baseURL }` 或 `{ baseURL, apiKey }`，`baseURL` 原样发送，不去空白、不改写。成功后状态行 `已保存，立即生效。`。
+  - ② 「检索参数」表单（`aria-label="检索参数"`，按钮「保存检索参数」；`<form noValidate>`，越界值不由浏览器原生约束拦截，而是发出 PUT、由服务端 400 判定，页面显示参数那一行）：`返回片段数`（`type="number"`，`min=1`、`max=100`、`step=1`）、`相似度阈值`、`关键词权重`（都是 `type="number"`，`min=0`、`max=1`、`step="any"`，同 `runtime-page.tsx:254`）、`重排模型 ID`（文本框，说明 `留空即不启用重排序`）。PUT body 恰为 `{ retrievalTopK, retrievalSimilarityThreshold, retrievalKeywordsWeight, retrievalRerankId }`，三个数字取 `Number(<输入>)`，重排模型 ID 原样。成功后状态行 `已保存，立即生效。`。
+  - ③ 「测试连接」按钮放在连接配置表单下方，旁边固定说明 `测试使用上次保存的配置，未保存的修改不参与`。它发 `POST …/ragflow-config/test`，body 为 `{}`。回应必须恰为 `{ result }`，或 `ok` 时恰为 `{ result: 'ok', version }`（`version` 匹配 `^[\x20-\x7e]{1,64}$`）；其他形状按请求失败处理。五个取值各一条不同的中文：
+    - `ok` → `连接成功，RAGFlow 版本：<version>`（`role="status"`；`version` 作为文本节点渲染，不当 HTML）；
+    - `not-configured` → `未配置 RAGFlow 地址或密钥，或密钥被拒绝`；
+    - `unavailable` → `无法连接到 RAGFlow 地址`；
+    - `timeout` → `连接 RAGFlow 超时`；
+    - `upstream-error` → `RAGFlow 返回了异常结果`。
+    - 失败四项用 `role="alert"`。
+    - 请求进行中状态行为 `正在测试连接…`；保存进行中为 `正在保存…`（同 `model-page.tsx:36-40`）。
+  - 两个 PUT 回应都带 `runningInstances`。页面校验它是非负安全整数，但不显示：本页设置保存即生效，与运行中的实例数无关。
+- **Documentation**（编排者同 PR 更新）：
+  - AGENTS.md：「Static delivery declares …」一句加入 `/_platform/admin/knowledge-base`；RAGFlow 连接配置条目里「the administrator page belongs to a later task」改为指向该页面。
+  - `platform/web/src/audit-page.tsx` 的 `EVENT_NAMES` 补上 13.1 推迟到本任务的两个事件中文名：`ragflow-config.updated` → `修改知识库连接`，`retrieval-config.updated` → `修改检索参数`。这两个事件没有 details，审计页按既有规则只显示中文名。
+
+not selected：
+
+- Schema、Legacy compatibility：没有接口、数据库或迁移变化；既有页面行为不变，`admin-navigation.test.tsx` 只扩表。
+- File IO、Resource limits、Release：没有新依赖。
+- 「保存即生效」的运行时效果（员工刷新知识库列表看到新服务、下一次检索用新参数）由 #410/#446/#417 的接口与代理测试承担；本页只写提示，不另行证明。
+- 接口层的拒绝与事务语义由 #410/#446 已合入的接口测试承担：服务端拒绝只含空白的密钥、「提交期间被降权」、「审计失败回滚」。本页只覆盖页面对 400/401/403 的呈现。
+
+Governing invariant：
+
+- 页面上任何一次 PUT 或测试 POST 发出时，没有其他请求在途；PUT 的 body 只来自该保存区当前的草稿。
+- 任何 401/403 之后，页面不再显示任何配置数据。
+- 密钥原文从不出现在页面、存储或 URL 中。
+
+Sibling surfaces：
+
+- `model-page.tsx`：密钥框与状态、测试连接、单页 pending 锁。
+- `plugins-page.tsx`：多保存区、并发 GET 后再决定权限。
+- `admin-models-connection.ui.test.ts`：本机回环上游、挂住的测试请求、固定文案。
+- `admin-plugins.ui.test.ts`：两个以上 GET 的拒绝与失败用例。
+- `admin-ui-fixture.ts`：`withAdminUi`、`holdAdminList`、`failAdminList`、`expectPlatformLogin`。
+- `model-upstream-fixture.ts`：`startModelUpstream` 的 `setHandler` 与 `requests`。
+
+无关键路径文件。
+
+Evidence (13.3 后台「知识库」页，#412):
+
+**现状**：
+
+- 后台页面是单个 `index.html` 加客户端路径分派（`platform/web/src/account-page.tsx`）。`platform/src/web/routes.ts:58-67` 的静态清单到 `/_platform/admin/plugins` 为止；`AdminNavigation` 的 `page` 联合是 `accounts|instances|audit|models|runtime|plugins`。
+- 三个接口：
+  - `platform/src/admin/ragflow-config.ts`：GET 恰为 `{ baseURL, apiKeyConfigured }`，PUT 再加 `runningInstances`。
+  - `platform/src/admin/retrieval-config.ts`：四个字段，PUT 再加 `runningInstances`。
+  - `platform/src/admin/ragflow-connection.ts`：回应 `{ result: 'ok', version }` 或 `{ result }`；RAGFlow 请求的固定超时是 `RAGFLOW_TIMEOUT_MS = 10_000`（`platform/src/ragflow-proxy/client.ts:4`）。
+- 设置初始值（迁移 6）：地址与密钥为空，`retrievalTopK` 8、`retrievalSimilarityThreshold` 0.2、`retrievalKeywordsWeight` 0.7、`retrievalRerankId` 空。
+- `audit-page.tsx:4-27` 的 `EVENT_NAMES` 没有两个 RAGFlow 事件。
+
+**改动点**：
+
+- 实现者新建：
+  - `platform/web/src/knowledge-base-page.tsx`，与同目录 `knowledge-base-page.test.tsx`（jsdom，沿用 `platform/web/test/account-dom-fixture.tsx`）；
+  - `platform/test/admin-knowledge-base.ui.test.ts`。
+- 实现者修改：
+  - `account-page.tsx`（分派一支）；
+  - `admin-navigation.tsx` 与其测试；
+  - `audit-page.tsx` 与其测试（两个事件名）；
+  - `platform/src/web/routes.ts` 与 `routes.test.ts`（新路径进 GET、HEAD、拒绝三张表）；
+  - 样式只在 `platform/web/src/style.css` 复用既有类。
+- 编排者修改：AGENTS.md。
+- 若新页面与 `model-page.tsx` 的请求骨架构成 jscpd 克隆，允许在 `platform/web/src/` 新建一个小的共享模块（带同目录测试），并让构成克隆的那个既有页面改用它：行为不变，该页既有测试一字不改且仍通过。`pnpm duplicate-code` 仍须低于 3%，阈值不动。
+- RAGFlow 测试回应的解析与五条中文放在页面模块里的一个纯函数中（同 `model-config.ts` 的 `connectionMessage`）。不要改 `model-config.ts`，除非为了上面的共享模块。
+
+**测试**：
+
+- (a) `knowledge-base-page.test.tsx` 用桩 `fetch` 覆盖：
+  - 加载：`加载中…` 且无表单；两 GET 成功渲染（地址、`已配置`/`未配置`、四个参数、页顶提示逐字）；任一 GET 401 → 两个都结算后才 `assign('/_platform/login')`，且只调用一次；403 → 只有 `无权限` 且无表单；403+401 → 只导航登录；200+500 → 失败态且无任何部分数据；「重试」重新发两个 GET。
+  - 连接配置：PUT body 逐字——密钥框空则无 `apiKey`；有密钥则带上；`baseURL` 带前后空格时原样发送。只含空白的密钥和空地址不发请求，显示固定文案。400 → 地址那一行；500 → `保存失败，请重试。`。成功后密钥框清空、状态 `已配置`、提示 `已保存，立即生效。`。
+  - 检索参数：PUT body 逐字（数字是 number，重排 ID 原样）；空数字框或非有限数字不发请求并显示参数那一行；400 → 参数那一行；成功只更新本区，连接区草稿（含已输入未保存的地址）不变。
+  - 测试连接：body `{}`；五个取值的五条文案两两不同；`ok` 显示版本；版本缺失、超长、含控制字符、多出字段，以及失败结果带版本，都按 `连接测试请求失败，请重试。` 处理；测试不清空密钥框，也不发送它。
+  - 401/403 在保存和测试时的处理同上。
+  - pending 期间所有按钮禁用，第二次点击不发请求；卸载时中止在途请求；过期响应不覆盖当前状态；`runningInstances` 不合法按保存失败处理。
+  - 逐文件覆盖率 ≥ 80%。
+- (b) `admin-knowledge-base.ui.test.ts`（真实应用、SQLite 与三个接口，`withAdminUi`；用 `startModelUpstream` 在本机回环起一个测试自有的假 RAGFlow，按路径回答 `/api/v1/system/version` 与 `/api/v1/datasets`）：
+  1. 管理员打开页面：地址为空、`未配置`、四个参数为 8/0.2/0.7/空，页顶提示逐字可见。此时测试连接 → `未配置 RAGFlow 地址或密钥，或密钥被拒绝`，假服务收到 0 个请求。
+  2. 填假服务地址与一把测试密钥后保存 → 响应 200；`readSettings(database)` 的地址等于输入、密钥等于输入；新增恰一条 `ragflow-config.updated` 审计；页面显示 `已配置`，密钥框为空；页面 HTML 与所有浏览器存储里都没有这把密钥。
+  3. 测试连接（假服务版本回 `{code:0,data:"v1.0.0-rc2"}`，库列表回 `{code:0,data:[]}`；测试接口对库列表只看 HTTP 状态和 `code`，见 `platform/src/ragflow-proxy/client.ts:232-244`）→ 状态行恰为 `连接成功，RAGFlow 版本：v1.0.0-rc2`，截图 `admin-knowledge-base-connection-ok`。假服务收到的第二个请求带 `Authorization: Bearer <测试密钥>`，第一个不带。
+  4. 挂住一个真实测试请求（假服务延迟回答版本接口）：状态 `正在测试连接…`，两个保存按钮与「测试连接」都禁用，双击只发一次；放行后恢复正常回答。
+  5. 假服务库列表改回 HTTP 401 → `未配置 RAGFlow 地址或密钥，或密钥被拒绝`；版本接口改为 HTTP 200 加 `{code:500,message:"x"}` → `RAGFlow 返回了异常结果`（覆盖「HTTP 200 加非零业务代码不算成功」）；最后保存一个指向已关闭回环端口的地址（这一次保存恰好新增一条 `ragflow-config.updated`）→ 测试连接 → `无法连接到 RAGFlow 地址`。三条文案两两不同。每次点击「测试连接」前后各取一次审计表快照，两者相等（测试连接不写审计）。`timeout` 需要 10 秒固定超时，只在 (a) 覆盖。
+  6. 检索参数：把返回片段数改为 3 保存 → `readSettings` 的 `retrievalTopK` 为 3，其余不变；恰一条 `retrieval-config.updated`。接着，返回片段数保持 3，重排模型 ID 填 `" rr "`（JSON 字符串，前后各一个空格）保存 → 断言发出的 PUT body 恰为 `retrievalTopK: 3` 且 `retrievalRerankId` 为 `" rr "`，得到真实 400（`retrieval-config.ts` 的 `validate` 拒绝），页面显示参数那一行，settings 与审计行数不变。然后把重排模型 ID 清空、返回片段数填 0 保存 → 断言 PUT body 的 `retrievalTopK` 为 0、`retrievalRerankId` 为空串，真实 PUT 得到 400（表单 `noValidate`；`writeSettings` 拒绝），页面显示参数那一行，settings 与审计行数不变（规格「参数校验…指出取值范围」的浏览器证据）。两次失败都不改动草稿，所以顺序不能颠倒。
+  7. 地址填 `http://ragflow.invalid/?x` 保存 → 真实 400，显示地址那一行，settings 与审计不变。
+  8. 重新打开页面（重载）后两区显示保存后的值；密钥状态为 `已配置`，密钥框为空，页面 HTML 与浏览器存储里都没有测试密钥（规格「密钥只显示已配置」）。
+  9. 拒绝与失败：
+     - 挂住一个真实 GET 时只见 `加载中…`，`form` 个数为 0（`openPendingAdminList` 断言的是表格个数，本页没有表格，须另断言表单）；
+     - 一次受控的 GET 500（`failAdminList`）→ 失败文案，不回显诊断，「重试」随后对真实接口成功；
+     - 员工账号打开 → 403，页面只有 `无权限`；
+     - 登出后打开 → 回到登录页；
+     - 页面就绪后删除管理员会话、或把账号降为员工，再点保存 → 分别回到登录页或只剩 `无权限`，settings 与整张审计表不变，留截图。
+  10. 桌面与窄屏截图（`expectViewportLayout`，前缀 `glass-admin-knowledge-base`，无横向溢出）。`observeAccountUi` 只列三个接口；`expectHealthy` 只允许本用例明确制造的状态；零控制台错误、零外部请求（假服务在回环上，经平台服务端访问，浏览器不直连它）、`otherMutations` 为空、无浏览器存储。
+  11. 审计页筛选下拉的选项文本含 `修改知识库连接` 与 `修改检索参数`：在本文件拆成独立用例，用 `observeAuditUi` 观察 `/_platform/api/admin/audit-events`，不放进第 10 步只列三个接口的观察。
+- (c) `routes.test.ts`、`admin-navigation.test.tsx`、`audit-page.test.tsx` 扩表。
+
+**验证**：
+
+- `pnpm check`（含 lint、typecheck、单元/覆盖率、集成、build、contract、`duplicate-code`、`dead-code`）。
+- `pnpm test:ui`：实现者跑一次全量，贴通过数；新文件单独再跑一次。PR 附截图说明。
+- VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy` 证据：本任务不改 Docker 用例，预期与 #535 一致。
+- 本机 exact-head `pnpm test:stack` 证据评论：本 issue 涉及 RAGFlow，但 stack 用例经接口配置 RAGFlow、不经本页，只证明入口未回归。
+
+**PR 体量**：目标 ≤ 400 行。若只因测试文件超出，按 #408 的先例加 `diff-limit-exempt`，并在正文写明超出部分是测试。
+
+**不做**：
+
+- 任何接口、设置或迁移改动；
+- 显示运行中实例数或重启实例；
+- 员工侧知识库面板；
+- 在页面上预检 RAGFlow 地址规则（服务端 `isRagflowBaseUrl` 是唯一实现）。
+
 ## 14. RAGFlow 只读代理
 
 依赖：1（来源 IP 核对需要 +2 地址）、10（含 10.2 种子）、12、13。
