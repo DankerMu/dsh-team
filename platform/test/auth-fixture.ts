@@ -132,6 +132,7 @@ export async function withApp(
     initialSettings?: Partial<Settings>;
     publicUrl?: string;
     upstreamMode?: PlatformConfig['upstreamMode'];
+    documentServer?: PlatformConfig['documentServer'];
   } = {},
 ): Promise<void> {
   const lines: string[] = [];
@@ -147,6 +148,7 @@ export async function withApp(
         trustedProxies,
         subnetPool: options.subnetPool ?? CONFIG.subnetPool,
         upstreamMode: options.upstreamMode ?? CONFIG.upstreamMode,
+        documentServer: options.documentServer ?? CONFIG.documentServer,
         ...(options.publicUrl === undefined
           ? {}
           : { publicUrl: options.publicUrl, authority: new URL(options.publicUrl).host }),

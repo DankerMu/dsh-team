@@ -119,6 +119,7 @@ describe('buildApp', () => {
       instance_token_hash: 'instance-row-hash-top-marker',
       ragflowApiKey: 'ragflow-key-top-marker',
       jwtSecret: 'jwt-secret-top-marker',
+      documentServerJwtSecret: 'document-server-jwt-top-marker',
       user: {
         fileTokenSecret: 'file-secret-nested-marker',
         instanceToken: 'instance-token-nested-marker',
@@ -126,6 +127,7 @@ describe('buildApp', () => {
         instance_token_hash: 'instance-row-hash-nested-marker',
         ragflowApiKey: 'ragflow-key-nested-marker',
         jwtSecret: 'jwt-secret-nested-marker',
+        documentServerJwtSecret: 'document-server-jwt-nested-marker',
         password: 'hunter2',
         currentPassword: 'current-password-marker',
         newPassword: 'new-password-marker',
@@ -145,6 +147,7 @@ describe('buildApp', () => {
       instance_token_hash: '[redacted]',
       ragflowApiKey: '[redacted]',
       jwtSecret: '[redacted]',
+      documentServerJwtSecret: '[redacted]',
       user: {
         fileTokenSecret: '[redacted]',
         instanceToken: '[redacted]',
@@ -152,6 +155,7 @@ describe('buildApp', () => {
         instance_token_hash: '[redacted]',
         ragflowApiKey: '[redacted]',
         jwtSecret: '[redacted]',
+        documentServerJwtSecret: '[redacted]',
         password: '[redacted]',
         currentPassword: '[redacted]',
         newPassword: '[redacted]',
@@ -180,6 +184,8 @@ describe('buildApp', () => {
       'ragflow-key-nested-marker',
       'jwt-secret-top-marker',
       'jwt-secret-nested-marker',
+      'document-server-jwt-top-marker',
+      'document-server-jwt-nested-marker',
     ]) {
       expect(written).not.toContain(secret);
     }

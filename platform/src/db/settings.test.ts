@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type Database from 'better-sqlite3';
 import {
   applyMigrations,
+  documentServerMode,
   isRagflowBaseUrl,
   openDatabase,
   readSettings,
@@ -31,6 +32,8 @@ const DEFAULTS: Settings = {
   retrievalSimilarityThreshold: 0.2,
   retrievalKeywordsWeight: 0.7,
   retrievalRerankId: '',
+  documentServerUrl: '',
+  documentServerJwtSecret: '',
 };
 
 const UNSAFE_INTEGER = 2 ** 53;
@@ -56,6 +59,8 @@ const FULL_PATCH: Settings = {
   retrievalSimilarityThreshold: 0,
   retrievalKeywordsWeight: 1,
   retrievalRerankId: 'bge-reranker',
+  documentServerUrl: 'https://office.internal/ds/',
+  documentServerJwtSecret: ` ${randomBytes(32).toString('hex')} `,
 };
 const AFTER_PARTIAL: Settings = {
   ...FULL_PATCH,
@@ -75,7 +80,7 @@ describe('settings', () => {
     db.close();
   });
   describe('readSettings', () => {
-    it('has exactly the ten migration-seeded rows after migration and reads them as the defaults', () => {
+    it('has exactly the twelve migration-seeded rows after migration and reads them as the defaults', () => {
       expect(db.prepare('SELECT key, value FROM settings ORDER BY key').all()).toEqual(
         SEEDED_SETTINGS,
       );
@@ -198,6 +203,15 @@ describe('settings', () => {
       ['retrievalKeywordsWeight', Number.NaN],
       ['retrievalKeywordsWeight', Number.POSITIVE_INFINITY],
       ['retrievalKeywordsWeight', null],
+      ['documentServerUrl', null],
+      ['documentServerUrl', 5],
+      ['documentServerUrl', ' '],
+      ['documentServerUrl', 'ftp://office.internal/'],
+      ['documentServerUrl', 'https://user:pass@office.internal/'],
+      ['documentServerUrl', 'https://office.internal/#f'],
+      ['documentServerJwtSecret', null],
+      ['documentServerJwtSecret', 5],
+      ['documentServerJwtSecret', ['secret']],
     ])('rejects %s with an invalid value and leaves prior rows unchanged', (field, value) => {
       writeSettings(db, { idleMinutes: 15 });
 
@@ -288,6 +302,8 @@ describe('settings', () => {
       ['retrievalSimilarityThreshold', '2'],
       ['retrievalKeywordsWeight', '"CORRUPT_SENTINEL"'],
       ['retrievalRerankId', '0'],
+      ['documentServerUrl', '"https://office.internal/?CORRUPT_SENTINEL"'],
+      ['documentServerJwtSecret', '{not-json-CORRUPT_SENTINEL'],
     ])('rejects stored %s corruption without echoing the raw sentinel', (field, stored) => {
       db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(field, stored);
 
@@ -322,6 +338,35 @@ describe('settings', () => {
         writeSettings(db, { models: [{ name: 'alpha' }] });
       }).toThrow(/modelApiKey/);
       expect(db.prepare('SELECT * FROM settings').all()).toEqual(before);
+    });
+  });
+  describe('Document Server settings', () => {
+    it.each(['', 'http://10.0.0.7', 'https://office.internal/ds/', 'http://[::1]:8000'])(
+      'stores and reads back address %s verbatim',
+      (documentServerUrl) => {
+        writeSettings(db, { documentServerUrl });
+
+        expect(readSettings(db)).toEqual({ ...DEFAULTS, documentServerUrl });
+      },
+    );
+
+    it.each(['', '   ', ' padded-secret ', 'secret'])(
+      'stores and reads back JWT %j verbatim, blank included',
+      (documentServerJwtSecret) => {
+        writeSettings(db, { documentServerJwtSecret });
+
+        expect(readSettings(db)).toEqual({ ...DEFAULTS, documentServerJwtSecret });
+      },
+    );
+
+    it('derives the mode from the stored address alone', () => {
+      expect(documentServerMode(DEFAULTS)).toBe('bundled');
+      expect(documentServerMode({ ...DEFAULTS, documentServerJwtSecret: 'secret' })).toBe(
+        'bundled',
+      );
+      expect(
+        documentServerMode({ ...DEFAULTS, documentServerUrl: 'https://office.internal/' }),
+      ).toBe('external');
     });
   });
   describe('isRagflowBaseUrl', () => {
