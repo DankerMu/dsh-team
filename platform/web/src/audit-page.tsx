@@ -19,6 +19,7 @@ const EVENT_NAMES: Record<string, string> = {
   'web-tools.updated': '修改联网工具开关',
   'ragflow-config.updated': '修改知识库连接',
   'retrieval-config.updated': '修改检索参数',
+  'document-server-config.updated': '修改 Office 配置',
   'instance.restarted': '重启实例',
   'instance.config-reset': '重置实例配置',
   'instance.created': '创建实例',

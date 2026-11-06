@@ -312,6 +312,8 @@ export interface AccountUiOptions {
   canonicalInstanceService?: boolean;
   /** An owned Engine-protocol dependency; omitted means the existing unavailable socket. */
   dockerSocketPath?: string;
+  /** The bundled Document Server deployment pair; omitted means it is unconfigured. */
+  documentServer?: { containerName: string; jwtSecret: string };
   /** Replaces the plain-text destination; every request is still recorded first. */
   upstream?: RequestListener;
   observeInitialization?: (
@@ -334,6 +336,12 @@ function accountUiConfig(directory: string, port: number, options: AccountUiOpti
     PLATFORM_DATA_DIR: directory,
     PLATFORM_LOG_LEVEL: 'silent',
     PLATFORM_COOKIE_SECURE: 'false',
+    ...(options.documentServer === undefined
+      ? {}
+      : {
+          DOCUMENT_SERVER_CONTAINER_NAME: options.documentServer.containerName,
+          DOCUMENT_SERVER_JWT_SECRET: options.documentServer.jwtSecret,
+        }),
     ...(options.canonicalInstanceService === true
       ? {
           PLATFORM_DOCKER_SOCKET:
