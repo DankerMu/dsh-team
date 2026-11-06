@@ -124,7 +124,9 @@ export function removeOwned(
       throw new Error(`Refusing cleanup of ${kind} ${name}: invocation label does not match`);
     }
   }
-  const remove = [kind, 'rm', ...(kind === 'container' ? ['--force'] : []), reference];
+  // A container's anonymous volumes (image VOLUME declarations) go with it; named volumes stay
+  // separate ledger targets.
+  const remove = [kind, 'rm', ...(kind === 'container' ? ['--force', '--volumes'] : []), reference];
   output(command(remove, 30_000), remove);
   if (ownership !== undefined) {
     const absent = command([kind, 'inspect', reference], 30_000);

@@ -1,6 +1,6 @@
 /** Local full-stack verification entry: prerequisites before any resource, exact-owned retirement. */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { arch, homedir, platform, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +16,7 @@ import {
 } from '../platform/test/docker-cleanup.ts';
 import { readPrivateJsonFile } from './docker-proxy-environment.mjs';
 import {
+  DOCUMENT_SERVER_IMAGE,
   STACK_CONFIG_RELATIVE_PATH,
   assessStackPrerequisites,
 } from './test-stack-prerequisites.mjs';
@@ -32,6 +33,7 @@ const BODY_LIMIT = 65_536;
  *   env: NodeJS.ProcessEnv, platform: string, arch: string, repositoryRoot: string,
  *   dockerCommands: (repositoryRoot: string, config: string) => DockerCommands,
  *   probeVersion: (ragflowUrl: string) => Promise<VersionFact>,
+ *   probeFonts: (path: string) => boolean,
  *   probePython: () => boolean,
  *   probeChromium: () => boolean,
  *   spawnCases: (env: NodeJS.ProcessEnv, repositoryRoot: string) => Promise<CaseOutcome>,
@@ -90,6 +92,18 @@ function probeChromium() {
   }
 }
 
+/**
+ * The operator font directory the delivered compose binds read-only; never created here.
+ * @param {string} path
+ */
+function probeFonts(path) {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** @param {DockerCommands} commands @param {string[]} args */
 function dockerFact(commands, args) {
   try {
@@ -129,6 +143,12 @@ async function assess(options, commands) {
     ['dockerInfo', () => dockerFact(commands, ['info', '--format', '{{json .}}'])],
     ['compose', () => dockerFact(commands, ['compose', 'version', '--short'])],
     ['buildx', () => dockerFact(commands, ['buildx', 'version'])],
+    // Present locally, never pulled; the font directory resolves from the repository root.
+    [
+      'documentServerImage',
+      () => dockerFact(commands, ['image', 'inspect', DOCUMENT_SERVER_IMAGE]),
+    ],
+    ['fonts', () => options.probeFonts(join(options.repositoryRoot, 'assets/fonts'))],
     ['python', () => options.probePython()],
     ['chromium', () => options.probeChromium()],
   ];
@@ -299,6 +319,7 @@ if (
     repositoryRoot,
     dockerCommands: (directory, config) => createDockerCommands(directory, config, true),
     probeVersion: probeRagflowVersion,
+    probeFonts,
     probePython,
     probeChromium,
     spawnCases: (env, cwd) => spawnCases(env, cwd),

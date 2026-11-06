@@ -18,15 +18,17 @@ giap-vps 上 `pnpm test:docker` 与 `pnpm test:deploy` 的门禁不变，本机�
 3. 私有配置文件 `~/.config/dsh-team/stack.json` 存在、归当前用户所有、权限为 0600，格式见第 3 节。
 4. 本机 Docker 可用，`docker info` 报告的 MemTotal 不低于 14 GiB（在 Docker Desktop 的 Resources 里调整）。本通道只在固定 PATH `/usr/local/bin:/usr/bin:/bin` 中查找 `docker`，所以 Docker Desktop 的 CLI 必须装在 `/usr/local/bin/docker`。只为当前用户安装 CLI 时，即使你自己的 shell 能运行 `docker info`，这一项也会以 Docker 不可用失败。
 5. Docker Compose 2.33.1 或更新，`docker buildx` 可用。本通道使用私有的 Docker 配置目录，并从 `/usr/local/bin/docker` 的实际位置推出 Docker Desktop 自带的插件目录。
-6. `/usr/bin/python3` 可用，并且带 `fcntl` 模块。部署锁由它持有。
-7. 钉定的 Playwright Chromium 已安装。首次使用前运行：
+6. 本机已有 Document Server 镜像 `onlyoffice/documentserver:9.4.0`（arm64 约 1.3 GB）。通道不会自动拉取，首次使用前运行 `docker pull onlyoffice/documentserver:9.4.0`。
+7. 仓库根下有运营方字体目录 `assets/fonts/`（不入库，见 `docs/IMPLEMENTATION_PLAN.md` §6）。交付的 compose 把它只读挂进 Document Server，并且不会自动创建这个目录。
+8. `/usr/bin/python3` 可用，并且带 `fcntl` 模块。部署锁由它持有。
+9. 钉定的 Playwright Chromium 已安装。首次使用前运行：
 
    ```bash
    pnpm install
    pnpm test:ui:install
    ```
 
-8. 本机 RAGFlow 测试栈可达，版本接口报告 `v1.0.0-rc2`，部署方法见第 2 节。
+10. 本机 RAGFlow 测试栈可达，版本接口报告 `v1.0.0-rc2`，部署方法见第 2 节。
 
 用例会停掉并重新启动测试栈的 `ragflow-rc2-ragflow-cpu-1`，以验证 RAGFlow 停机时平台照常工作（用户 2026-11-03 特批）。它只对这一个容器做 `docker stop` 和 `docker start`，不删除、不重建、不改配置；停之前核对容器的 compose 项目与服务标签，结束前等它恢复，并核对种子快照不变。
 
@@ -146,7 +148,7 @@ pnpm test:stack
 
 **清理规则：**
 - 资源都使用 `dsh-team` 前缀，并在创建之前写进账本，每条账本记录带着该资源的所有权标签：
-  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform` 和 compose 网络，带 `dsh-team.test-run=<runId>`。
+  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform`、固定名 Document Server `dsh-team-documentserver`（退休时连同它的匿名卷一起删除）和 compose 网络，带 `dsh-team.test-run=<runId>`。
   - 平台为员工创建的实例资源 `dsh-team-u-<id>`、`dsh-team-home-<id>`、`dsh-team-work-<id>`、`dsh-team-net-<id>`，带 `dsh-team.user=<id>`，不带运行标签。
 - vitest 自己结束后，它的进程组要在 2 秒内结算。没有结算、清理失败，或退休后按 `dsh-team.test-run` 标签清点仍有残留时，运行目录和账本会保留，命令以非零状态结束。按运行标签的清点看不到员工实例资源，它们由账本的精确退休删除。
 - 账本保留后没有可以重新进入的退休入口，按以下顺序手工恢复：
@@ -179,7 +181,7 @@ pnpm test:stack
 | 命令 | `pnpm test:stack`，以及主机的 Docker Desktop 与 Compose 版本 |
 | 退出码 | 命令的实际退出码 |
 | 用例计数 | vitest 报告的文件数与用例数，以及用例打印的 `stackEvidence` 行 |
-| 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷清单与运行前逐行相同（覆盖只带 `dsh-team.user` 的员工实例资源；`docker … --filter name=` 是子串匹配，按名字前缀筛选时容器用 `docker ps -a --format '{{.Names}}'`、网络和卷用 `--format '{{.Name}}'`，再加 `grep '^dsh-team-'`）；带运行标签的镜像清单与运行前相同 |
+| 清理 | 运行目录已删除；带 `dsh-team.test-run` 标签的容器、网络、卷为 0；名字以 `dsh-team-` 开头的容器、网络、卷清单与运行前逐行相同（覆盖只带 `dsh-team.user` 的员工实例资源；`docker … --filter name=` 是子串匹配，按名字前缀筛选时容器用 `docker ps -a --format '{{.Names}}'`、网络和卷用 `--format '{{.Name}}'`，再加 `grep '^dsh-team-'`）；带运行标签的镜像清单与运行前相同；用例已断言 Document Server 容器的匿名卷在退休后不存在，运行前后的全部卷清单（`docker volume ls -q`）也逐行相同 |
 | RAGFlow 测试栈 | 运行前后的 6 个 `ragflow-rc2-*` 容器 ID、状态与数据卷清单一致；只有 `ragflow-cpu` 的 `StartedAt` 和重启次数因用例自己的停启而改变（`docker start` 把重启次数清零），其他 5 个容器逐行一致 |
 | 代理 | 用例打印的 `stackEvidence.proxy`：停机期间四个接口与测试连接的结果、恢复后的版本、种子库数、文件数、检索结果与片段数、剔除数、改阈值后的结果 |
 | 知识库面板 | 用例打印的 `stackEvidence.panel`：未配置、停机、恢复后各步的状态名、库数、文件数与截图名；面板会话的控制台错误、页面错误、失败请求与对外请求都是 0；页面资源秘密扫描通过（用例失败时只报针的种类与路径） |

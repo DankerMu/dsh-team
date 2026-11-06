@@ -78,11 +78,28 @@ function commandFailure(error: unknown, timeout: number, started: number | undef
   );
 }
 
+/** Compose's single-line `${NAME:?…}` interpolation failure; only the name is ever projected. */
+const REQUIRED_VARIABLE =
+  /^error while interpolating [A-Za-z0-9_.-]+: required variable ([A-Z][A-Z0-9_]*) is missing a value(?:: [\x20-\x7e]*)?\n?$/;
+
+/** The declared, normally exited compose rejection a caller independently proves, else nothing. */
+function requiredVariable(
+  args: readonly string[],
+  result: DockerCommandResult,
+  acceptedStatus: number | undefined,
+): string | undefined {
+  if (args[0] !== 'compose' || acceptedStatus === undefined) return undefined;
+  if (result.error !== undefined || result.signal || result.status !== acceptedStatus)
+    return undefined;
+  return REQUIRED_VARIABLE.exec(result.stderr)?.[1];
+}
+
 function redactResult(
   args: readonly string[],
   result: DockerCommandResult,
   timeout: number,
   buildStarted: number | undefined,
+  acceptedStatus?: number,
 ): DockerCommandResult {
   const kind = args[0];
   if (
@@ -92,6 +109,13 @@ function redactResult(
   ) {
     return result;
   }
+  const variable = requiredVariable(args, result, acceptedStatus);
+  if (variable !== undefined)
+    return {
+      status: result.status,
+      stdout: '',
+      stderr: `required variable ${variable} is missing a value`,
+    };
   if (result.error !== undefined || result.status !== 0) {
     return {
       status: result.status === 0 ? 1 : result.status,
@@ -223,7 +247,13 @@ export function createDockerCommands(
     command: (args, timeout, acceptedStatus) => {
       const started = args[0] === 'build' ? performance.now() : undefined;
       try {
-        return redactResult(args, externalCommand(args, timeout, acceptedStatus), timeout, started);
+        return redactResult(
+          args,
+          externalCommand(args, timeout, acceptedStatus),
+          timeout,
+          started,
+          acceptedStatus,
+        );
       } catch (error) {
         throw commandFailure(error, timeout, started);
       }

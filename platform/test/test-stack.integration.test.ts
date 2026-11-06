@@ -36,6 +36,8 @@ interface Scenario {
   info?: DockerCommandResult;
   compose?: DockerCommandResult;
   buildx?: DockerCommandResult;
+  documentServerImage?: DockerCommandResult;
+  fonts?: boolean;
   python?: boolean;
   chromium?: boolean;
   answer?: (args: readonly string[]) => DockerCommandResult | undefined;
@@ -71,13 +73,17 @@ const UNREACHABLE = 'RAGFlow test stack unreachable';
 const MALFORMED = 'RAGFlow test stack version response malformed';
 const COMPOSE = 'docker compose 2.33.1 or newer required';
 const BUILDX = 'docker buildx unavailable';
+const IMAGE = 'Document Server image onlyoffice/documentserver:9.4.0 missing; docker pull it first';
+const FONTS = 'assets/fonts directory missing';
 const PYTHON = '/usr/bin/python3 with fcntl required';
 const CHROMIUM = 'playwright chromium not installed; run pnpm test:ui:install';
 const PREREQUISITE_DOCKER = [
   'info --format {{json .}}',
   'compose version --short',
   'buildx version',
+  'image inspect onlyoffice/documentserver:9.4.0',
 ];
+const FONTS_DIRECTORY = join(root, 'assets/fonts');
 const INVENTORY =
   /^(container ls --all|network ls|volume ls|image ls --all) --quiet( --no-trunc)? --filter label=dsh-team\.test-run=[a-f0-9-]{36}$/;
 const runLine = (directory: string) => `test:stack run directory ${directory}\n`;
@@ -144,6 +150,7 @@ async function run(scenario: Scenario, stderr: string[] = []) {
   await writeSettings(home, scenario, url);
   const docker: { args: readonly string[]; timeout: number }[] = [];
   const probes: string[] = [];
+  const fontProbes: string[] = [];
   const pythonProbes: number[] = [];
   const chromiumProbes: number[] = [];
   let runDir = '';
@@ -165,6 +172,8 @@ async function run(scenario: Scenario, stderr: string[] = []) {
           if (args[0] === 'compose') return scenario.compose ?? dockerInfo('2.40.3-desktop.1\n');
           if (args[0] === 'buildx')
             return scenario.buildx ?? dockerInfo('github.com/docker/buildx v0.30.1-desktop.1\n');
+          if (args[0] === 'image' && args[1] === 'inspect')
+            return scenario.documentServerImage ?? dockerInfo('[{}]\n');
           if (args.includes('ls')) return dockerInfo('');
           return scenario.info ?? linuxInfo();
         });
@@ -172,6 +181,10 @@ async function run(scenario: Scenario, stderr: string[] = []) {
       probeVersion: (target) => {
         probes.push(target);
         return probeRagflowVersion(target, scenario.deadline);
+      },
+      probeFonts: (path) => {
+        fontProbes.push(path);
+        return scenario.fonts ?? true;
       },
       probePython: () => {
         pythonProbes.push(1);
@@ -208,6 +221,7 @@ async function run(scenario: Scenario, stderr: string[] = []) {
     stderr,
     docker,
     probes,
+    fontProbes,
     pythonProbes,
     chromiumProbes,
     requests,
@@ -248,6 +262,8 @@ it.each<[string, Scenario, string]>([
   ['compose 2.33.0', { compose: dockerInfo('2.33.0\n') }, COMPOSE],
   ['unparseable compose version', { compose: dockerInfo('compose\n') }, COMPOSE],
   ['buildx nonzero', { buildx: dockerInfo('', 1) }, BUILDX],
+  ['missing Document Server image', { documentServerImage: dockerInfo('', 1) }, IMAGE],
+  ['missing font directory', { fonts: false }, FONTS],
   ['python3 without fcntl', { python: false }, PYTHON],
   ['missing pinned Playwright Chromium', { chromium: false }, CHROMIUM],
   ['closed port', { handler: 'closed' }, UNREACHABLE],
@@ -265,13 +281,22 @@ it.each<[string, Scenario, string]>([
   const result = await run({ ...scenario, spawnCases: cases });
   const probed = reason.startsWith('RAGFlow') ? 1 : 0;
   const dockerCalls =
-    { [UNAVAILABLE]: 1, [BELOW]: 1, [COMPOSE]: 2, [BUILDX]: 3, [PYTHON]: 3, [CHROMIUM]: 3 }[
-      reason
-    ] ?? 3 * probed;
+    {
+      [UNAVAILABLE]: 1,
+      [BELOW]: 1,
+      [COMPOSE]: 2,
+      [BUILDX]: 3,
+      [IMAGE]: 4,
+      [FONTS]: 4,
+      [PYTHON]: 4,
+      [CHROMIUM]: 4,
+    }[reason] ?? 4 * probed;
+  const fontsProbed = [FONTS, PYTHON, CHROMIUM].includes(reason) ? 1 : probed;
 
   expect(result).toMatchObject({ code: 1, thrown: '', stderr: [`${FAILED}${reason}\n`] });
   expect(result.probes).toHaveLength(probed);
   expect(result.docker).toHaveLength(dockerCalls);
+  expect(result.fontProbes).toEqual(Array.from({ length: fontsProbed }, () => FONTS_DIRECTORY));
   expect(result.pythonProbes).toHaveLength(reason === PYTHON || reason === CHROMIUM ? 1 : probed);
   expect(result.chromiumProbes).toHaveLength(reason === CHROMIUM ? 1 : probed);
   expect(cases).not.toHaveBeenCalled();
@@ -307,6 +332,8 @@ it('admits exactly 14 GiB and v1.0.0-rc2, runs cases against an empty private jo
     probes: [result.url],
   });
   expect(result.docker.map(({ args }) => args.join(' '))).toEqual(PREREQUISITE_DOCKER);
+  // Resolved from the repository root, not the working directory.
+  expect(result.fontProbes).toEqual([FONTS_DIRECTORY]);
   expect(result.pythonProbes).toHaveLength(1);
   expect(result.chromiumProbes).toHaveLength(1);
   expect(
@@ -330,6 +357,8 @@ it('accepts the bracketed IPv6 loopback address as a literal RAGFlow origin', ()
       dockerInfo: linuxInfo(),
       compose: dockerInfo('2.40.3-desktop.1\n'),
       buildx: dockerInfo('github.com/docker/buildx v0.30.1-desktop.1\n'),
+      documentServerImage: dockerInfo('[{}]\n'),
+      fonts: true,
       python: true,
       chromium: true,
       version: { status: 200, body: JSON.stringify({ code: 0, data: 'v1.0.0-rc2' }) },
@@ -515,7 +544,7 @@ it('retires a registered fixed platform only under the injected deployment lock'
 
   expect(result).toMatchObject({ code: 0, stderr: [runLine(result.runDir)] });
   expect(order[0]).toBe('lock');
-  expect(order.indexOf('container rm --force dsh-team-platform')).toBeGreaterThan(0);
+  expect(order.indexOf('container rm --force --volumes dsh-team-platform')).toBeGreaterThan(0);
   expect(order.at(-1)).toBe('release');
   expect(present).toBe(false);
   expect(existsSync(result.runDir)).toBe(false);

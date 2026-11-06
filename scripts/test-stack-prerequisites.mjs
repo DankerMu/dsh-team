@@ -6,6 +6,8 @@ const KEYS = ['ragflowUrl', 'ragflowApiKey', 'embeddingApiKey'];
 const DOCKER_UNAVAILABLE = 'local Docker daemon unavailable';
 // The delivered compose file needs endpoint `gw_priority` (AGENTS.md Compose deployment).
 const MIN_COMPOSE_VERSION = [2, 33, 1];
+/** The delivered compose's Document Server image; the local lane never pulls it. */
+export const DOCUMENT_SERVER_IMAGE = 'onlyoffice/documentserver:9.4.0';
 
 /**
  * @typedef {{present: false} | {present: true, value: unknown} | 'invalid'} ConfigFact
@@ -15,8 +17,8 @@ const MIN_COMPOSE_VERSION = [2, 33, 1];
  *   dockerHost?: string | undefined, dockerContext?: string | undefined,
  *   platform: string, arch: string,
  *   config?: ConfigFact, dockerInfo?: DockerInfoFact,
- *   compose?: DockerInfoFact, buildx?: DockerInfoFact, python?: boolean, chromium?: boolean,
- *   version?: VersionFact,
+ *   compose?: DockerInfoFact, buildx?: DockerInfoFact, documentServerImage?: DockerInfoFact,
+ *   fonts?: boolean, python?: boolean, chromium?: boolean, version?: VersionFact,
  * }} StackFacts
  * @typedef {{ok: false, reason: string} | {ok: true, ragflowUrl: string}
  *   | {ok: undefined, ragflowUrl?: string}} StackAssessment
@@ -72,12 +74,12 @@ function composeSupported(compose) {
 }
 
 /**
- * ④ `docker info`, then the builder, locking and browser tools the local lane needs, before
- * RAGFlow.
+ * ④ `docker info`, then compose, the builder and the delivered Document Server's image and
+ * repository-root font directory.
  * @param {StackFacts} facts
  * @returns {{ok: false, reason: string} | {ok: undefined} | undefined}
  */
-function localFailure(facts) {
+function dockerToolFailure(facts) {
   if (facts.dockerInfo === undefined) return { ok: undefined };
   const docker = dockerFailure(facts.dockerInfo);
   if (docker !== undefined) return { ok: false, reason: docker };
@@ -86,6 +88,24 @@ function localFailure(facts) {
     return { ok: false, reason: 'docker compose 2.33.1 or newer required' };
   if (facts.buildx === undefined) return { ok: undefined };
   if (facts.buildx.status !== 0) return { ok: false, reason: 'docker buildx unavailable' };
+  if (facts.documentServerImage === undefined) return { ok: undefined };
+  if (facts.documentServerImage.status !== 0)
+    return {
+      ok: false,
+      reason: `Document Server image ${DOCUMENT_SERVER_IMAGE} missing; docker pull it first`,
+    };
+  if (facts.fonts === undefined) return { ok: undefined };
+  return facts.fonts ? undefined : { ok: false, reason: 'assets/fonts directory missing' };
+}
+
+/**
+ * The Docker tools, then the locking and browser tools the local lane needs, before RAGFlow.
+ * @param {StackFacts} facts
+ * @returns {{ok: false, reason: string} | {ok: undefined} | undefined}
+ */
+function localFailure(facts) {
+  const docker = dockerToolFailure(facts);
+  if (docker !== undefined) return docker;
   if (facts.platform !== 'darwin') return undefined;
   if (facts.python === undefined) return { ok: undefined };
   if (!facts.python) return { ok: false, reason: '/usr/bin/python3 with fcntl required' };
@@ -114,8 +134,9 @@ function versionFailure(version) {
 }
 
 /**
- * Ordered ①→④, compose/buildx/python3/Chromium, then ⑤; the first failure wins. An absent later fact
- * yields `ok: undefined` so the caller gathers it only after every earlier prerequisite passed.
+ * Ordered ①→④, compose/buildx/Document Server image/fonts/python3/Chromium, then ⑤; the first
+ * failure wins. An absent later fact yields `ok: undefined` so the caller gathers it only after
+ * every earlier prerequisite passed.
  * Reasons never carry configuration.
  * @param {StackFacts} facts
  * @returns {StackAssessment}

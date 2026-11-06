@@ -35,7 +35,15 @@ export interface Deployment {
   compose: string[];
   request: (url: string, init?: RequestInit) => Promise<Response>;
   observation: DeploymentObservation;
+  /** Invocation-owned, nonsecret; only in memory, `compose.env` and both containers' environments. */
+  documentServerJwt: string;
 }
+
+/** Fixed names the delivered compose creates; both are admitted absent before any build. */
+const FIXED_CONTAINERS = [
+  ['dsh-team-platform', 'Platform'],
+  ['dsh-team-documentserver', 'Document Server'],
+] as const;
 
 async function startDeployment(
   lifecycle: UserImageLifecycle,
@@ -45,14 +53,13 @@ async function startDeployment(
 ): Promise<Deployment> {
   return deploymentSetupStep(setup, 'deployment-creation', async () => {
     await deploymentSetupStep(setup, 'fixed-name-admission', async () => {
-      const existing = await lifecycle.commandAsync(
-        ['container', 'inspect', 'dsh-team-platform'],
-        30_000,
-      );
-      if (!isAbsentResource(existing, 'container', 'dsh-team-platform'))
-        throw new Error(
-          'Platform container already exists or absence is unproven; refusing deployment',
-        );
+      for (const [name, subject] of FIXED_CONTAINERS) {
+        const existing = await lifecycle.commandAsync(['container', 'inspect', name], 30_000);
+        if (!isAbsentResource(existing, 'container', name))
+          throw new Error(
+            `${subject} container already exists or absence is unproven; refusing deployment`,
+          );
+      }
     });
     const command = async (args: string[], timeout = 30_000) =>
       output(await lifecycle.commandAsync(args, timeout), args);
@@ -74,6 +81,7 @@ async function startDeployment(
       for (const [kind, name] of [
         ['image', image],
         ['container', 'dsh-team-platform'],
+        ['container', 'dsh-team-documentserver'],
         ['network', network],
       ] as const)
         await lifecycle.registerResourceAsync(kind, name, ownership);
@@ -93,8 +101,11 @@ async function startDeployment(
       const dataDir = join(directory, 'platform-data');
       await mkdir(dataDir, { mode: 0o700 });
       await mkdir(lifecycle.overlayDirectory, { mode: 0o700 });
+      // The stand-in's empty private font directory; the real fonts serve only the local lane.
+      const fontsDir = join(directory, 'document-server-fonts');
+      await mkdir(fontsDir, { mode: 0o700 });
       const port = await unusedPort();
-      const { base, compose } = await writeComposeConfiguration({
+      const { base, compose, documentServerJwt } = await writeComposeConfiguration({
         repositoryRoot: lifecycle.repositoryRoot,
         directory,
         dataDir,
@@ -108,8 +119,19 @@ async function startDeployment(
         project,
         network,
         overrides: [observation.override],
+        documentServer: { image: imageId, fontsDir },
       });
-      return { base, port, directory, dataDir, compose, request: fetch, observation };
+      if (documentServerJwt === undefined) throw new Error('Deployment JWT was not generated');
+      return {
+        base,
+        port,
+        directory,
+        dataDir,
+        compose,
+        request: fetch,
+        observation,
+        documentServerJwt,
+      };
     });
     if (prepare)
       await deploymentSetupStep(setup, 'scenario-preparation', () =>

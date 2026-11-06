@@ -460,6 +460,8 @@ echo 'PLATFORM_UNUSED=sentinel' >>.env.example
 expect_reject "unused platform setting" "unconsumed PLATFORM_UNUSED" pnpm lint:config
 echo 'DEPLOY_UNUSED=sentinel' >>.env.example
 expect_reject "unused deployment setting" "unconsumed DEPLOY_UNUSED" pnpm lint:config
+echo 'DOCUMENT_SERVER_UNUSED=sentinel' >>.env.example
+expect_reject "unused Document Server setting" "unconsumed DOCUMENT_SERVER_UNUSED" pnpm lint:config
 node --input-type=module <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs';
 const path = 'platform/src/config.ts';
@@ -470,6 +472,9 @@ NODE
 expect_reject "undocumented platform read" "undocumented PLATFORM_UNDOCUMENTED" pnpm lint:config
 echo "    x-inventory: \${DEPLOY_UNDOCUMENTED:?}" >>deploy/compose.yml
 expect_reject "undocumented deployment interpolation" "undocumented DEPLOY_UNDOCUMENTED" pnpm lint:config
+echo "    x-inventory: \${DOCUMENT_SERVER_UNDOCUMENTED:?}" >>deploy/compose.yml
+expect_reject "undocumented Document Server interpolation" "undocumented DOCUMENT_SERVER_UNDOCUMENTED" \
+  pnpm lint:config
 echo "    labels: { inventory: \"\${DEPLOY_UNDOCUMENTED}\", other: \"fixed\" }" >>deploy/compose.yml
 expect_reject "flow mapping inventory" "does not support flow collections" pnpm lint:config
 echo "    group_add: [\"\${DEPLOY_UNDOCUMENTED}\", \"1000\"]" >>deploy/compose.yml

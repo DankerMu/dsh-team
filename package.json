@@ -36,7 +36,7 @@
     "test:cli": "vitest run --project integration platform/test/cli.integration.test.ts",
     "test:docker": "node scripts/verify-browser-runtime.mjs docker",
     "verify:docker": "node scripts/trusted-docker-run.mjs",
-    "test:deploy": "vitest run --project docker platform/test/deployment.docker.test.ts",
+    "test:deploy": "vitest run --project docker platform/test/deployment.docker.test.ts platform/test/deployment-document-server.docker.test.ts",
     "test:stack": "node scripts/test-stack.mjs",
     "seed:stack": "node scripts/seed-stack.mjs",
     "test:model": "node scripts/verify-browser-runtime.mjs model",
