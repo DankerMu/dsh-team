@@ -2573,6 +2573,33 @@ Evidence (16.2c 后台「Office」页，#425):
 - 员工侧 Office 编辑与 ONLYOFFICE 停用原因（#436）；
 - 在页面上预检地址规则（服务端 `isRagflowBaseUrl` 是唯一实现）。
 
+Risk packs (14.5 跟进：恢复期限末尾的版本探测超时不再改写已观察到的状态，#534): fixture level compact（只改测试夹具 `platform/test/ragflow-stack-fixture.ts` 的两个私有函数 `ragflowReady`/`awaitRestored` 与它们的集成用例；不改产品代码、恢复期限数值、`probeRagflowVersion` 或 `ragflowOutage` 的 stop/start 语义）。selected：
+
+- **Error handling（恢复失败的原因文字）**：判据在探测之前确定，不在探测之后读时钟（复核实测：超时返回后 `remaining()` 仍可能为正，空载 300 ms 预算约 3%，负载下更高）。
+  - 私有 `ragflowReady` 改为返回三态 `'ready' | 'not-ready' | 'unreachable'`：`probeRagflowVersion` 返回 `'unreachable'` → `'unreachable'`；其余（非 200、正文不可解析、`code`/版本不符）→ `'not-ready'`；符合 → `'ready'`。
+  - `awaitRestored` 在每次探测前算出探测期限 `probeMs = Math.max(1, Math.floor(Math.min(5_000, remaining())))`，并记下 `budgetBounded = probeMs < 5_000`（期限取自剩余预算而不是 5 s 上限）。结果为 `'ready'` 时照旧读种子；为 `'not-ready'` 时 `seedUnreadable = false`；为 `'unreachable'` 且 `budgetBounded` 时保持 `seedUnreadable` 原值；为 `'unreachable'` 且未受预算限制时 `seedUnreadable = false`。
+  - 不加重试，不改探测期限的算法、`intervalMs`、`deadlineMs` 或循环其余结构。
+  - 残留风险（写进代码注释）：真实 `pnpm test:stack` 恢复期限最后 5 s 内，种子读不出之后若版本又连接失败（如 connection refused），报错仍是 seed-unreadable；只影响诊断文字，不会把失败变成通过。
+- **Tests**（`platform/test/ragflow-stack-fixture.integration.test.ts`）：
+  - 在 `stubRagflow` 上原地扩展（不新建第二个桩），支持「版本先就绪、之后不再回答」：例如 `version` 取值增加 `'ready-then-hang'`，第一次版本请求回答就绪，此后的版本请求都挂起。
+  - 新增确定性用例：`{ version: 'ready-then-hang', datasets: 'fail' }`，预算 `{ deadlineMs: 1_000, intervalMs: 20 }`，断言恢复错误匹配 `/version ready but seed snapshot unreadable within 1s/`，其余断言与同一 `it.each` 一致（`AggregateError` 先是主体失败、恢复消息格式、墙钟 `< 2_500` ms、Docker 调用序列）。它在修复前稳定失败（报 `version not ready`），修复后通过；先红后绿都要记录。可以直接加进现有 `it.each` 表。
+  - 现有 `version: 'hang'` 与 `'down'` 两例仍报 `version not ready within 1s`；`'ready'` 加 `datasets: 'fail'`/`'hang'` 两例仍报 `version ready but seed snapshot unreadable within 1s`。
+  - 不放宽 1 s 预算或 2.5 s 墙钟断言。
+
+not selected：Concurrency、Resource limits、File IO、Public API、Auth、Schema、Release、Legacy compatibility（只改测试夹具中一个状态迁移，真实 `pnpm test:stack` 只在恢复失败时的报错文字上受益，成功路径不变）。无关键路径文件。
+
+Governing invariant：恢复失败的报错只依据期限内已完成的真实观察；预算耗尽导致的探测超时不能抹掉此前「版本就绪但种子读不出」的观察。
+
+Sibling surfaces：同一 `it.each` 的五个兄弟用例；`seedWhenWarm`（不改）；`scripts/test-stack.mjs` 的 `probeRagflowVersion`（不改）。
+
+Evidence (#534):
+
+- 先红：新用例在修复前的运行输出（报 `version not ready within 1s`）。
+- 绿：`pnpm test:integration platform/test/ragflow-stack-fixture.integration.test.ts` 通过。
+- 负载冒烟：用 `2 × $(sysctl -n hw.ncpu)` 个 `yes > /dev/null` 进程施压，期间用 `sysctl -n vm.loadavg` 记录负载平均值，连续运行该文件 10 次，全部通过；结束后 `pkill -x yes` 回收并确认无残留。10 次只是冒烟，抓不住低概率抖动；真正的证明是上面的确定性用例。
+- `pnpm check`。
+- VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy` 证据（门禁要求）；本机 exact-head `pnpm test:stack` 证据评论（本夹具属于 stack 通道，证明真实恢复路径未回归）。
+
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 
 依赖：4、10（本机通道用例）、11。关键路径 `images/dsh-user/`。
