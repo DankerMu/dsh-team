@@ -1620,7 +1620,7 @@ Evidence (14.5 本机通道 RAGFlow 代理用例，#417):
 
 - [ ] 15.1 新建 `plugins/knowledge-base/`，包含 host 和 client 两半、`engines.dsh` 和成对单元测试。插件以 root 所有、只读的方式随用户镜像交付，并作为可管理项加入 `catalog.json`；三处探测构建和文档中的构建示例都加入 BuildKit 命名上下文。覆盖层在网络方式下给插件平台地址（+3 加平台端口），published-loopback 下不给；插件启用状态只服从目录三态。验证：用户镜像 Docker 用例断言插件只读、已加载，环境、覆盖层和插件目录中都没有 RAGFlow 密钥；生成器单元测试覆盖三种目录状态和两种上游方式。
 - [ ] 15.2 左侧栏「知识库」面板：库列表、展开文件、搜索、筛选、分页、刷新，以及加载中、空库、无匹配、失败可重试、知识库未配置五种状态。浏览器请求经插件自己的路由转发到代理。验证：插件单元测试覆盖状态机和取值到状态的映射；本机通道 Playwright 用例在真实种子数据上通过，并有截图，包括未配置 RAGFlow 时的「知识库未配置」。
-- [ ] 15.3 输入区范围控件：多选、全选、取消全选；选择存为 `ignorable: true` 的 Session 事件，新 Session 默认全选；提交时快照本轮范围。验证：单元测试覆盖快照语义；本机通道 Playwright 用例用确定性 provider 驱动任务，覆盖刷新和重开后恢复、两个 Session 互相独立、提交后修改不影响进行中的任务。
+- [ ] 15.3 输入区范围控件：多选、全选、取消全选；选择记在 Session 日志中（经插件命令的 `command/run`/`command/done`，见下方 #420 fixture），新 Session 默认全选；提交时快照本轮范围（在 `turn/start` 折叠）。验证：单元测试覆盖快照语义；本机通道 Playwright 用例用确定性 provider 驱动任务，覆盖刷新和重开后恢复、两个 Session 互相独立、提交后修改不影响进行中的任务。
 - [ ] 15.4 检索工具：沿父 Session 回溯到根 Session，取本轮快照；范围为空时不发请求；展示来源；对被剔除的库、`no-results` 和每个失败取值分别给出互不相同的中文提示。验证：单元测试覆盖回溯和六种取值的提示；本机通道用例由确定性 provider 驱动综合办公委派给子 Agent 并调用检索，断言范围不变，以及删除一个库后出现提示。
 
 Suggested fixture level: expanded - 新插件，涉及 Session 状态、子 Agent 继承和外部数据展示
@@ -1964,6 +1964,135 @@ Evidence (15.2 左侧栏「知识库」面板，#419):
 
 - 15.3：范围控件同样通过 `api/knowledge-base.datasets` 取库列表；Session 事件的读写在 client 里做。
 - 15.4：检索工具在 host 半区复用本 issue 的平台请求函数，增加 `POST retrieval`。
+
+Risk packs (15.3 输入区检索范围控件与提交快照，#420): fixture level expanded（与 issue 建议一致：插件第一次写 Session 状态，并为 15.4 的子 Agent 继承定下快照形状）。检索工具是 15.4（#421）；本 issue 不发检索请求。selected：
+
+- **Public API**（DSH 0.2.1-rc.2 发行版接口，编排者从本机用户镜像只读提取发行包核对，R = 发行包的 `@deepseek-ai/` 目录）：
+  - 存储落点（用户 2026-11-05 裁定，改写 design 决定 4 与任务 15.3 的「`ignorable: true` 的 Session 事件」）：
+    - 不用插件记录：发行文档禁止 DSH 之外的插件调用 `appendPluginRecord`（`R/dsh-session/README.md:70`，`R/dsh-agent-preset/skills/cordis-plugin-development/references/practices.md` 的 Do not append 一条）；插件从 `/opt/dsh-team/knowledge-base/` 也解析不到 `@deepseek-ai/dsh-session`；`Session.append` 不能设 `ignorable`，写新类型会让 Session 无法重开（`R/dsh-session-persistence/lib/index.js:171-184`）。
+    - 改用命令：host 注册 `/kb-scope` 命令；`CommandRuntime.execute` 在处理函数前后追加 `command/run`（`{ commandId, name, args, source }`，`recordInput` 保持默认 true 才记 `args`）与 `command/done`（`{ commandId, kind, text? }`）（`R/dsh-commands/lib/index.js:327-400`）。两者是已知事件类型，正常持久化，不进模型可见面（`R/dsh-commands/lib/types/types.d.ts:93-100`，`R/dsh-session/lib/index.js:157-163`）。命令执行没有忙碌检查，运行中的一轮里也立即追加；冷 Session 由控制器先恢复（`R/dsh-api-session-controller/lib/index.js:189-230`）。
+  - 命令（编排者钉死）：
+    - `name: 'kb-scope'`，`description: '设置本 Session 的知识库检索范围（由输入区控件调用）'`，`input: { hint: '<json>' }`，不接受附件，`definitionId` 用插件包名。
+    - 参数是一行 JSON：`{"datasetIds":null}`（全选，之后新建的库也包括在内）或 `{"datasetIds":[...]}`（0..1000 个互不相同的 32 位小写 hex；`[]` 是取消全选）。`rawInput`/`args` 是命令名之后的原样输入（可能带前导空白），去掉首尾空白后交给 `JSON.parse`。其他形状、多余键、重复 ID、超过 40000 个 UTF-8 字节返回 `{ kind: 'error', text: '知识库范围参数无效' }`，不回显输入。
+    - 成功返回 `{ kind: 'success', text }`，`text` 是固定的中文摘要（「知识库范围：全部」「知识库范围：不检索」「知识库范围：N 个」）。
+    - 员工手动输入 `/kb-scope …` 等同于点控件，同样校验；命令出现在 `/` 菜单里（`CommandDescriptor` 没有隐藏字段，`R/dsh-commands/lib/types/types.d.ts:55-64`），作为已知残余写进 README。
+  - 投影（编排者钉死，照 `R/dsh-plan-mode/lib/index.js:65-122` 的折叠方式）：`ctx.sessionProjections.register({ key: 'kbScope', stateVersion: 1, stateSchema, init, apply, wire: { viewSchema, view } })`。
+    - `stateSchema`/`viewSchema` 只需要 `parse(value)`（`R/dsh-session-projection/lib/index.js:254-304,421-432` 只调用 `.parse` 并使用它的返回值）；插件没有 zod，手写校验对象：`parse` 返回经过校验的输入，校验失败抛错。
+    - 状态 `{ child, selection, running, turn }`：
+      - `init(header)`：`child` 为 `header.origin === 'subagent'`（与控制器 `hasApiSessionSubagentOwner` 的判断一致，`R/dsh-subagent/lib/index.js:352`；员工自己 fork 出的 Session 也带 `parentSession` 但没有 `origin`，不算子 Session，`R/dsh-session/lib/index.js:2017`），`selection: null`，`running: null`，`turn: null`；
+      - `command/run` 且 `name === 'kb-scope'`：`args` 能解析为合法参数时 `running = { commandId, selection }`，否则 `running = null`；
+      - `command/done` 且 `commandId === running?.commandId`：`kind === 'success'` 时 `selection = running.selection`；无论成败 `running = null`；
+      - `turn/start`：`turn = { turn: event.data.turn, scope: selection }`；
+      - 其余事件返回同一个 state 引用。
+    - 折叠是纯函数：每个 `command/run` 都重新校验 `args`（旧日志或手写的坏参数不改变 `selection`），只有配对成功的命令生效；只有 `command/run` 没有 `command/done`（崩溃）时不生效。
+    - wire 视图 `{ child, selection, turn }`，给 client 和本机通道读取。
+    - 没有记录的 Session 为 `selection: null`，即新 Session 默认全选（D10）；`[]` 与 `null` 可区分。
+  - 快照时点（用户 2026-11-05 裁定）：`turn/start` 时折叠。运行中的一轮里改范围，`command/run` 的 seq 在该轮 `turn/start` 之后，只影响下一轮；空闲时提交立刻开轮；在上一轮运行中排队的提交，取该轮真正开始时的选择（已知残余，写进 README 与 PR Risk）。
+  - host 注册放在 `ctx.inject(['sessionProjections', 'commands'], …)` 里，并且只在插件可用（#419 的条件）时注册；缺这两个服务时面板照常工作。
+- **Client 半区**（输入区控件）：
+  - 槽位 `conversation.input.left`，条目 `{ name: 'knowledge-base-scope', id: 'knowledge-base-scope', order: 100 }`（`list`、`scope: 'session'`，`R/dsh-client-ui-conversation/lib/types/client/contract/slots.d.ts:311-315`，渲染于 `client.js:19072`）。条目收到标准 Session 工具集 `sessionId`、`useProjection` 等（`R/dsh-cordis-client-runner/lib/client.js:3401-3456`）。
+  - 控件只读 `useProjection('kbScope')`，不另存选择；`child` 为 true（子 Agent 的 Session）或投影缺失时不渲染。
+  - 写入经 `ctx.remote.commands.execute(sessionId, '/kb-scope ' + JSON.stringify({ datasetIds }), [])`（`R/dsh-commands/lib/typert.remote-client.d.ts:12`，返回 `RemoteResult<CommandExecution | undefined>`；用法同 `R/dsh-client-ui-plan/lib/client.js:704-708`）。`ok: false`、`value === undefined`、`result.kind === 'error'` 都显示「范围保存失败，请重试」；写入进行中禁用控件（一个同步的进行中标志），不做乐观更新，界面以投影回推的值为准。
+  - client 运行时 `inject` 加 `remote.commands`。`package.json` 的 `dsh.client.inject` 照 `dsh-client-ui-plan` 的先例加 `@deepseek-ai/dsh-api-remotes`、`@deepseek-ai/dsh-client-ui-conversation`、`@deepseek-ai/dsh-client-ui-chat`（`package.json` 已在 Dockerfile 的 COPY 列表中，不碰关键路径）。
+  - 控件外观：一个按钮，文字按投影显示「知识库：全部」「知识库：不检索」「知识库：N 个」（N 为 `selection` 中的 ID 数）。点开后是一个弹层：
+    - 「全选」写 `null`，「取消全选」写 `[]`；
+    - 库列表经 `api/knowledge-base.datasets`（复用 #419 的请求与状态：加载中、知识库未配置、失败可重试、空库、列表），每个库一个复选框；
+    - `selection` 为 `null` 时全部勾选；取消某一库时写入当前列出的全部 ID 去掉这一个；在 ID 列表上勾选或取消时增删这一个，保持原顺序、追加到末尾；
+    - `selection` 里不在当前列表中的 ID（库已删除）保留不动，由 15.4 的 `excluded` 报告；
+    - 状态元素带 `data-dsh-team-kb-scope` 属性，单元测试和浏览器用例按它定位。
+  - 对话记录里的命令行：注册 `conversation.chat.commandview`，`key: 'kb-scope'`，渲染 `null`（`R/dsh-client-ui-chat/lib/types/client/contract/slots.d.ts:360-367`，同 key 替换命令渲染器）。外层 `div.callRow` 仍在（`R/dsh-client-ui-chat/lib/client.js:6504`），本机通道截图检查没有多余的可见行；如果有，报告，不改 DSH。
+  - 面板（#419）与控件互不影响：浏览不读写范围（spec「浏览不改变范围」）。
+  - 结构约束与 #419 相同：host、client 各保持单文件，800 行上限；如果必须拆文件就会改到关键路径 `images/dsh-user/Dockerfile`，这时停下来报告。
+- **Concurrency / shared state**：
+  - 选择只在 Session 日志里；client 不缓存，Session 切换时由 `useProjection` 跟随（槽位是 `scope: 'session'`）。
+  - 两个 Session 的选择互不影响；同一 Session 的两个浏览器标签页都从投影读取。
+  - 快速连续点击由进行中标志串行化；命令按到达顺序追加，最后一条成功的生效。
+- **Auth / permissions / secrets**：
+  - 命令参数只含库 ID；不含 RAGFlow 地址、密钥、实例令牌或检索参数（spec「实例内找不到 RAGFlow 密钥」的 Session 数据部分）。
+  - 子 Agent 的 Session 由控制器拒绝命令（`R/dsh-api-session-controller/lib/index.js:128-133,225`）；控件在子 Session 不渲染。
+- **Legacy compatibility**：
+  - 已有 Session 没有 `kb-scope` 记录，读作全选。
+  - `stateVersion: 1`；以后改折叠语义要升版本，投影缓存会重新折叠（`R/dsh-session-projection/lib/types/index.d.ts`）。
+  - fork 复制事件前缀，范围随之继承；fork 出的 Session 照常显示控件。写进 README。
+  - 空白 Session 复用（已知残余，写进 README 与 PR Risk）：DSH 把没有 `turn/start` 的 Session 算作空白（`R/dsh-api-session-controller/lib/index.js:493`），「新建」和登录落地会复用空白 Session（`R/dsh-client-ui-workspace/lib/client.js:1406-1427`），投影看不到这次复用。员工在新 Session 里改了范围但还没提交，再点「新建」时会回到这个 Session，看到的是自己改过的范围而不是「全部」。
+
+not selected：
+
+- Migration / Schema：没有平台数据库、设置或 HTTP 契约变化。
+- Resource limits：命令参数上限约 35 KB（1000 个 ID）；不新增网络请求，库列表复用 #419 的路由。
+
+**不变量**：
+
+- 新 Session 默认全选；`[]` 与全选可区分。
+- 某一轮的 `turn.scope` 等于 `command/done`（`kind: success`）在该轮 `turn/start` 之前的最后一条 `kb-scope` 命令的选择；之后的修改只改 `selection`。
+- 范围不进模型上下文；确定性 provider 收到的消息里没有范围或命令。
+- 浏览面板不改变范围。
+
+**Must preserve**：
+
+- #419 的面板、路由、页面全局和全部测试；本机通道 #417、#419 的全部既有断言与顺序。
+- 启动模块清单与 managed-policy 中 loader 条目的断言不变。
+- `deployment-model-wire.ts` 被 `test:deploy` 共用：新增的保持能力只在配置里出现保持标记时启用，其他用法的行为不变。
+
+**同级面**：
+
+- 15.4：检索工具只在当前 Session 头部 `origin === 'subagent'` 时沿 `parentSession` 上溯，直到头部不再是子 Agent 为止，那就是根 Session（`ctx.agents.get`，冷 Session 用 `ctx.sessions.get`，同 `plugins/permission-tiers/index.js` 的 `initializeChild`）；员工 fork 出的 Session 是自己的根，读 `ctx.sessionProjections.stateOf(root, 'kbScope').turn.scope`：`null` 为全部库，`[]` 不发请求。读取时核对 `turn.turn` 等于根 Session 当前打开的一轮。
+
+Evidence (15.3 输入区检索范围控件与提交快照，#420):
+
+**改动点**：
+
+- `plugins/knowledge-base/index.js`：投影定义（导出纯函数 `scopeProjection` 或同等形式供单元测试）、`kb-scope` 命令与参数校验、`ctx.inject(['sessionProjections', 'commands'], …)` 注册。
+- `plugins/knowledge-base/client.js`：输入区控件、弹层、命令渲染器替换。
+- `index.test.js`、`client.test.js` 与新建的 `client-scope.test.js`（`client.test.js` 已 658 行，范围控件的测试放在新文件里，守住 800 行上限）、`types.d.ts`/`client.types.d.ts`、`README.md`（范围的存储与快照语义、排队提交的残余、`/kb-scope` 出现在 `/` 菜单、fork 继承）。
+- `platform/test/deployment-model-wire.ts`：可选的配置项 `hold`（非机密 nonce），不出现时行为不变：
+  - 只保持第一个「消息含 `hold`、提供了工具、还没有工具结果」的请求（与 `scriptedCall` 同一谓词，标题请求和工具结果轮不保持），只保持一次；
+  - `POST /release` 释放全部已挂起请求并解除保持；`/health` 增加 `held`（当前挂起数）；
+  - 释放与读取都经 `privatePlatformRead` 在平台容器内发出，与 `PROVIDER_HEALTH` 同一条路；
+  - 可选配置项 `forbidden`（字符串数组，非机密）：任何请求的消息含其中任一字符串时计入 `/health` 的 `forbiddenRequests`。
+- 本机通道：`platform/test/platform-stack.stack.test.ts` 加范围步骤；浏览器操作写在 `platform/test/knowledge-scope-stack-fixture.ts`（或扩展 `knowledge-panel-stack-fixture.ts`），复用 `workbenchSession` 与 #419 的证据写法；纯函数配集成测试。
+- `AGENTS.md`、`docs/LOCAL_STACK.md` 由 orchestrator 改。
+
+**测试**：
+
+- 单元测试（`pnpm test`），覆盖率逐文件 80%。
+  - host：
+    - 折叠矩阵：无记录为 `null`；成功命令对生效；失败的 `command/done`、坏参数、不配对的 `commandId`、只有 `command/run`、其他命令名都不生效；`turn/start` 快照当时的 `selection`；`turn/start` 之后的命令只改 `selection` 不改 `turn`；连续两轮各自快照；`init` 的 `child`；无关事件返回同一引用；
+    - schema 对象的 `parse` 接受合法状态与视图、拒绝畸形值；
+    - 命令处理函数：合法 `null`/`[]`/列表成功，各种非法参数返回固定错误且不回显；
+    - 插件不可用或缺服务时不注册命令和投影。
+  - client：
+    - 投影缺失或 `child` 时不渲染；三种按钮文字；
+    - 弹层的库列表状态复用；全选、取消全选、从全选取消一个、在列表上增删一个时写出的命令行；
+    - 进行中禁用，三种失败显示同一提示；成功后不做乐观更新；
+    - 不在列表中的已选 ID 保留；
+    - 命令渲染器替换返回 `null`。
+- 本机通道（`pnpm test:stack`，Playwright Chromium 经网关，确定性 provider），放在 #419 恢复后的面板步骤之后：
+  1. **新 Session 默认全选**：员工新建 Session 1，控件显示「知识库：全部」，`session/projections` 的 `kbScope` 为 `selection: null`。截图 `scope-default.png`。
+  2. **提交后修改不影响进行中的任务**：在 Session 1 只选 `dsh-team-seed-policies`；提交一条带 `hold` 标记的消息，等 `/health` 的 `held` ≥ 1（证明该轮已经 `turn/start`）；任务运行期间把范围改成另一个种子库；`POST /release`，等该轮结束。核对：该轮 `turn.scope` 为第一个库、`selection` 为第二个库；原生历史里第二条 `kb-scope` 的 `command/run` 在该轮 `turn/start` 之后（独立证据）；再提交一条普通消息，新一轮的 `turn.scope` 为第二个库。截图 `scope-running.png`。
+  3. **两个 Session 互相独立**：新建 Session 2，控件显示「知识库：全部」；Session 2 先发一条普通消息（让它不再是空白 Session，出现在侧栏），再取消全选，显示「知识库：不检索」；切回 Session 1 仍是第二个库。Session 2 已非空白之后再点「新建」得到 Session 3，控件显示「知识库：全部」。
+     - **浏览不改变范围**：在 Session 1 打开「知识库」面板，展开并按文件名筛选一个未选中的种子库，回到 Session 1，核对按钮文字和投影的 `selection` 都没变。
+  4. **刷新与重开后恢复**：刷新页面，Session 1、Session 2 各自恢复；关闭浏览器、用新的浏览器上下文重新登录，再次核对；管理员重启该员工实例（既有重启接口，等待就绪）后再核对一次。截图 `scope-restored.png`。
+  - 对话记录里没有命令行：`[data-chat-flow]` 内的文本不含 `kb-scope` 和「知识库范围」（DOM 断言），截图供人工核对空的 `callRow` 是否可见。
+  - 范围不进模型上下文：provider 配置的 `forbidden` 为 `kb-scope`、「知识库范围」和三个种子库 ID（compose 启动前从 RAGFlow 种子数据读出，非机密），`forbiddenRequests` 断言为 0。
+  - Session 定位：DSH 没有 URL 路由，确定性 provider 让 Session 标题相同；侧栏行用 `[data-row-key="session:<id>"]` 取 id 并点击切换，当前 Session 由 `aria-selected="true"` 判断（`R/dsh-client-ui-workspace/lib/client.js:2275`）。
+  - 投影读取：经网关用 `mappedSessionRpc(base, <员工 cookie>)`（`platform/test/owned-completion-fixture.ts`）调用 `session/projections`，`kind === 'sequenced'` 时取 `values.kbScope`；返回 `null` 或 `migration-required` 时该步失败。原生历史用同文件的 `sessionEvents`。
+  - 位置：范围步骤放在 `restoredPanel` 之后、`duringRagflowOutage` 回调之内（RAGFlow 已恢复，弹层能取到库列表）；实例重启用既有 `/_platform/api/admin/instances/<id>/restart`，就绪用 `instanceGatewayFixture` 的等待。
+  - 所有范围会话：控制台错误 0、页面错误 0、失败请求 0、外部请求 0；沿用 #419 的页面资源秘密扫描。
+  - `stackEvidence` 增加单独的 `scope` 对象，只记各步的按钮文字、选择的库数、快照的库数和截图名。
+- 先红后绿：新的单元断言先失败，stack 中的范围步骤也先失败（控件不存在），再实现。
+
+**命令**：
+
+- `pnpm test`、`pnpm check`
+- 本机 exact-head 的 `pnpm test:stack`，并贴证据评论
+- VPS exact-head 的 `pnpm test:docker` 与 `pnpm test:deploy`（清理已确认）
+
+**宽度**：host 投影与命令、client 控件、单元测试、provider 保持能力和本机通道步骤，预计超过 400 行，开 PR 时打 `diff-limit-exempt`。`plugins/` 与 `platform/test/` 不是关键路径；host、client 各保持单文件，Dockerfile 不变。
+
+**交接**：
+
+- 15.4：按上面「同级面」读取根 Session 的 `turn.scope`；`excluded` 报告已删除的库。
 
 ## 16. Document Server 部署与实例网络接入
 

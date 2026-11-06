@@ -201,8 +201,10 @@ DSH 迁移是阶段 2 的第一批，其余功能组都依赖它。第一批由�
     DSH 0.2.1 的左侧栏没有内容槽位，面板按发行版自带面板（如定时任务）的方式实现：左侧栏 `sidebar.panellist` 一行入口，内容显示在主区域 `main`（#419）。
   - 输入区的范围控件，显示当前范围。
 - **范围选择**
-  - 用一条 `ignorable: true` 的 Session 事件记录；新 Session 默认全选（D10）。
+  - 记在 Session 日志中；新 Session 默认全选（D10）。
+    落点（#420，用户 2026-11-05 裁定）：插件注册 `/kb-scope` 命令，由 DSH 自己记录的 `command/run`/`command/done`（已知事件类型，正常持久化，不进模型上下文）承载选择，host 投影按 `dsh-plan-mode` 的先例从成功的命令对折叠出范围。不用 `ignorable: true` 的插件记录：DSH 0.2.1 发行文档禁止 DSH 之外的插件调用 `appendPluginRecord`（`dsh-session/README.md:70`，格式迁移只尽力保留），`Session.append` 写新类型又会让 Session 无法重开。
   - 提交时把选择快照进本轮，之后的修改只影响后续任务（F30）。
+    落点：DSH 0.2.1 没有提交前钩子，投影在每个 `turn/start` 折叠快照。空闲时提交立刻开轮，等同提交时；在上一轮运行中排队的提交，取该轮真正开始时的选择（用户 2026-11-05 接受）。
 - **检索工具**
   - 沿 `parentSession` 回溯到根 Session，取本轮快照（F25，T10）。
   - 来源展示片段、文件名和所属库；页码和位置只在有值时显示（F32）。

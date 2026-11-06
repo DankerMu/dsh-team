@@ -74,6 +74,10 @@ function stubBrowser(options: StubOptions) {
       events.push(`screenshot:${basename(path)}`);
       return Promise.resolve();
     },
+    reload() {
+      events.push('reload');
+      return Promise.resolve();
+    },
     getByLabel: () => ({ fill: () => Promise.resolve() }),
     getByRole: () => ({ click: () => Promise.resolve() }),
     waitForURL: () => Promise.resolve(),
@@ -222,4 +226,34 @@ it('hands every response of the observed session to the observer, and none after
   stub.emit('response', 'teardown response');
 
   expect(seen).toEqual(['login document', 'workbench document']);
+});
+
+it('excuses only the requests a deliberate reload cancels, then waits for the composer', async () => {
+  const stub = stubBrowser({ onSend: () => undefined });
+  const request = (url: string) => ({ method: () => 'GET', url: () => url });
+  const [stream, finished, later] = [
+    request('http://stub/plugins/events'),
+    request('http://stub/done.js'),
+    request('http://stub/late.js'),
+  ];
+  const evidence = await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'reload', failure: 'reload-failure' },
+    async (_page, _shoot, reload) => {
+      stub.emit('request', stream);
+      stub.emit('request', finished);
+      stub.emit('requestfinished', finished);
+      await reload();
+      // The reload cancelled the open stream; a request failing after it still counts.
+      stub.emit('requestfailed', stream);
+      stub.emit('requestfailed', finished);
+      stub.emit('request', later);
+      stub.emit('requestfailed', later);
+    },
+    stub.launch,
+  );
+
+  expect(stub.events).toEqual(['reload']);
+  expect(evidence.failedRequests).toEqual(['GET http://stub/done.js', 'GET http://stub/late.js']);
+  expect(evidence.requests).toBe(3);
 });

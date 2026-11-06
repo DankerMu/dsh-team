@@ -45,6 +45,27 @@ function ownedScript(value: unknown): { path: string; content: string } | undefi
 }
 const script = ownedScript('script' in config ? config.script : undefined);
 
+/** Optional nonsecret hold nonce: a non-empty string, absent by default. */
+function ownedHold(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value === '')
+    throw new Error('Invalid owned model configuration');
+  return value;
+}
+/** Optional nonsecret strings no model request may carry: non-empty strings, absent by default. */
+function ownedForbidden(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item !== ''))
+    throw new Error('Invalid owned model configuration');
+  return value as string[];
+}
+const hold = ownedHold('hold' in config ? config.hold : undefined);
+const forbidden = ownedForbidden('forbidden' in config ? config.forbidden : undefined);
+/** Held answers, released together by `POST /release`; at most one request is ever held. */
+const heldAnswers: (() => void)[] = [];
+let holding = hold !== undefined;
+let forbiddenRequests = 0;
+
 let markedRequests = 0;
 let requests = 0;
 let toolResults = 0;
@@ -119,9 +140,35 @@ function respond(response: ServerResponse, stream: boolean, call: object | undef
   );
 }
 
+/** The first marked write-capable request without a tool result: the scriptedCall predicate. */
+function holds(body: object, text: string, toolResult: boolean) {
+  if (!holding || hold === undefined || toolResult || !text.includes(hold)) return false;
+  return 'tools' in body && offersWrite(body.tools);
+}
+
+/** Health stays byte-identical unless a hold or forbidden strings are configured. */
+function health() {
+  return JSON.stringify({
+    ready: true,
+    markedRequests,
+    requests,
+    toolResults,
+    ...(hold === undefined ? {} : { held: heldAnswers.length }),
+    ...(forbidden === undefined ? {} : { forbiddenRequests }),
+  });
+}
+
 const server = createServer((request, response) => {
   if (request.method === 'GET' && request.url === '/health') {
-    response.end(JSON.stringify({ ready: true, markedRequests, requests, toolResults }));
+    response.end(health());
+    return;
+  }
+  if (hold !== undefined && request.method === 'POST' && request.url === '/release') {
+    holding = false;
+    const answers = heldAnswers.splice(0);
+    for (const answer of answers) answer();
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ released: answers.length }));
     return;
   }
   if (
@@ -152,10 +199,22 @@ const server = createServer((request, response) => {
         !Array.isArray(body.messages)
       )
         throw new Error('Invalid owned model request');
-      if (JSON.stringify(body.messages).includes(marker)) markedRequests++;
+      const text = JSON.stringify(body.messages);
+      if (text.includes(marker)) markedRequests++;
+      // The whole request, tools and system fields included, not only its messages.
+      const whole = JSON.stringify(body);
+      if (forbidden?.some((item) => whole.includes(item)) === true) forbiddenRequests++;
       const toolResult = hasToolResult(body.messages);
       if (toolResult) toolResults++;
-      respond(response, 'stream' in body && body.stream === true, scriptedCall(body, toolResult));
+      const answer = () => {
+        respond(response, 'stream' in body && body.stream === true, scriptedCall(body, toolResult));
+      };
+      if (!holds(body, text, toolResult)) {
+        answer();
+        return;
+      }
+      holding = false;
+      heldAnswers.push(answer);
     } catch {
       response.writeHead(400).end();
     }

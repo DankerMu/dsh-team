@@ -52,9 +52,78 @@ interface FetchRoute {
   readonly fetch: (request: Request) => Promise<Response>;
 }
 
+/** null: every library, later ones included; otherwise 0..1000 distinct dataset IDs. */
+export type ScopeSelection = readonly string[] | null;
+
+/** The `kbScope` fold state; plain JSON so the projection cache can persist it. */
+export interface ScopeState {
+  readonly child: boolean;
+  readonly selection: ScopeSelection;
+  readonly running: { readonly commandId: string; readonly selection: ScopeSelection } | null;
+  readonly turn: { readonly turn: number; readonly scope: ScopeSelection } | null;
+}
+
+/** The `kbScope` wire view the client and the local lane read. */
+export interface ScopeView {
+  readonly child: boolean;
+  readonly selection: ScopeSelection;
+  readonly turn: ScopeState['turn'];
+}
+
+/**
+ * Structural subset of the released 0.2.1-rc.2 Session event the fold reads: `command/run`
+ * (`commandId`, `name`, `args?`), `command/done` (`commandId`, `kind`) and `turn/start` (`turn`).
+ */
+interface ScopeEvent {
+  readonly type: string;
+  readonly data: {
+    readonly commandId?: string;
+    readonly name?: string;
+    readonly args?: string;
+    readonly kind?: string;
+    readonly turn?: number;
+  };
+}
+
+/** Structural subset of the released 0.2.1-rc.2 SessionProjectionDefinition. */
+export interface ScopeProjection {
+  readonly key: 'kbScope';
+  readonly stateVersion: 1;
+  readonly stateSchema: { parse(value: unknown): ScopeState };
+  init(header: { readonly origin?: string }): ScopeState;
+  apply(state: ScopeState, event: ScopeEvent): ScopeState;
+  readonly wire: {
+    readonly viewSchema: { parse(value: unknown): ScopeView };
+    view(state: ScopeState): ScopeView;
+  };
+}
+
+interface CommandResult {
+  readonly kind: 'success' | 'error';
+  readonly text: string;
+}
+
+/** Structural subset of the released 0.2.1-rc.2 CommandDefinition. */
+export interface ScopeCommand {
+  readonly definitionId: string;
+  readonly name: 'kb-scope';
+  readonly description: string;
+  readonly input: { readonly hint: string };
+  handler(invocation: { readonly rawInput: string }): CommandResult;
+}
+
+interface ScopedServices {
+  sessionProjections: { register(definition: ScopeProjection): unknown };
+  commands: { register(definition: ScopeCommand): unknown };
+}
+
 export interface KnowledgeBaseHostContext {
   on(event: 'webserver/index-inject', callback: (table: IndexInjectionRow[]) => void): unknown;
   effect(callback: () => () => Promise<void>): unknown;
+  inject(
+    deps: ['sessionProjections', 'commands'],
+    callback: (ctx: ScopedServices) => void,
+  ): unknown;
   connection: { fetch: { register(route: FetchRoute): () => Promise<void> } };
   logger: KnowledgeBaseLogger;
 }

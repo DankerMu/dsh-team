@@ -311,6 +311,22 @@ export async function readSeedDatasets(stack) {
   return snapshot;
 }
 
+/**
+ * The seed datasets' IDs in `SEED_DATASETS` order from one GET listing, by the same exact-name
+ * rules; a missing dataset fails with a line naming only the dataset. IDs are not secret.
+ * @param {Stack} stack
+ * @returns {Promise<{name: string, id: string}[]>}
+ */
+export async function readSeedDatasetIds(stack) {
+  const listed = await listDatasets(stack, 'page_size=100');
+  if (listed.length >= PAGE_SIZE) throw fail('RAGFlow list datasets listing is full');
+  return SEED_DATASETS.map(({ name }) => {
+    const dataset = namedDataset(listed, name);
+    if (dataset === undefined) throw fail(`dataset ${name} is missing`);
+    return { name, id: dataset.id };
+  });
+}
+
 /** @param {SeedAssessment} assessment @returns {Stack} */
 function admitted(assessment) {
   if (assessment.ok === false)

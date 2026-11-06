@@ -36,6 +36,7 @@ function recordingContext() {
   const effects = [];
   const routes = new Map();
   const logs = [];
+  const scoped = [];
   const log =
     (level) =>
     (...args) =>
@@ -60,8 +61,10 @@ function recordingContext() {
       },
     },
     logger: { info: log('info'), warn: log('warn'), error: log('error') },
+    // The scope registrations are index-scope.test.js's; here only the request is recorded.
+    inject: (deps) => scoped.push(deps),
   };
-  return { ctx, injections, effects, routes, logs };
+  return { ctx, injections, effects, routes, logs, scoped };
 }
 
 function rejection(config) {
@@ -97,9 +100,10 @@ describe('availability', () => {
   it.each(EMPTY.map((config) => [config]))(
     'publishes an unavailable page global and registers nothing without an address (%s)',
     (config) => {
-      const { ctx, injections, effects, routes } = recordingContext();
+      const { ctx, injections, effects, routes, scoped } = recordingContext();
 
       expect(apply(ctx, config)).toBeUndefined();
+      expect(scoped).toEqual([]);
       expect(injections).toEqual([
         'webserver/index-inject',
         [{ kind: 'global', name: GLOBAL, value: { available: false } }],
@@ -618,7 +622,13 @@ it('ships the fixed manifest and exactly one config-free insert row addressed by
       bundle: { patch: './cordis.patch.yml' },
       client: {
         platform: 'web',
-        inject: ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-ui-layout'],
+        inject: [
+          '@deepseek-ai/dsh-client-ui-sidebar',
+          '@deepseek-ai/dsh-client-ui-layout',
+          '@deepseek-ai/dsh-api-remotes',
+          '@deepseek-ai/dsh-client-ui-conversation',
+          '@deepseek-ai/dsh-client-ui-chat',
+        ],
       },
     },
   });
