@@ -10,6 +10,7 @@ import { isIPv4 } from 'node:net';
 import { instanceBridgeAddress, upstreamHost } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import { validateUserNetwork } from './networks.ts';
+import { recordedDocumentServer } from './document-server.ts';
 
 export interface AcquireDshCookieInput {
   readonly client: DockerClient;
@@ -26,6 +27,7 @@ export interface IndexedInstance {
   image_tag: string;
   image_id: string;
   last_started_at: number | null;
+  document_server_container_id: string | null;
 }
 interface Instance extends IndexedInstance {
   upstream_host: string;
@@ -112,6 +114,7 @@ export function currentInstance(
     ...indexedEndpoint(instance, allowIncomplete, input.transport.config.upstreamMode),
     image_tag: instance.image_tag,
     image_id: resolvedImageId(instance.image_id),
+    document_server_container_id: recordedDocumentServer(instance),
   };
 }
 
@@ -307,7 +310,13 @@ export async function acquireCurrentDshCookie(input: AcquireDshCookieInput): Pro
       json: (method, path, body, _signal, maxBytes) =>
         input.client.json(method, path, body, signal, maxBytes),
     };
-    await validateUserNetwork(client, input.userId, document, input.transport);
+    await validateUserNetwork(
+      client,
+      input.userId,
+      document,
+      input.transport,
+      instance.document_server_container_id,
+    );
     const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
     if (port !== instance.upstream_port || host !== instance.upstream_host) throw new Error();
     if (

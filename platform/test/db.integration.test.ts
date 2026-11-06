@@ -344,7 +344,7 @@ describe('platform startup on a real database file', () => {
       expect(readSettings(reopened).idleMinutes).toBe(15);
       expect(
         reopened.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-      ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
+      ).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })));
     } finally {
       reopened.close();
     }
@@ -438,10 +438,13 @@ it('forward migration preserves historical instance data and leaves unknown immu
       upstream_port: 12345,
       last_started_at: 7,
       instance_token_hash: null,
+      document_server_mode: null,
+      document_server_container_id: null,
+      document_server_reason: null,
     });
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })));
   } finally {
     database.close();
     rmSync(root, { recursive: true, force: true });

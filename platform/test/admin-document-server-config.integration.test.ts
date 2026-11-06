@@ -90,7 +90,7 @@ it.each([
   },
 );
 
-it('walks bundled → external → keep JWT → replace JWT → bundled over TCP on the version-7 ledger', async () => {
+it('walks bundled → external → keep JWT → replace JWT → bundled over TCP on the version-8 ledger', async () => {
   await withListeningApp(async (base, app, database, lines) => {
     const user = await registerAccount(app, 'document-server-admin@example.com');
     database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
@@ -107,7 +107,7 @@ it('walks bundled → external → keep JWT → replace JWT → bundled over TCP
     const audit = { actor_email: user.email, target_email: null, details: '{}' };
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })));
     const bodies: string[] = [];
 
     const initial = await get();

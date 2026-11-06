@@ -46,7 +46,7 @@ it('rejects anonymous and employee callers on both methods with fixed bodies', a
   });
 });
 
-it('roundtrips a logged-in administrator save over TCP on the version-7 ledger and rolls back a rejected save', async () => {
+it('roundtrips a logged-in administrator save over TCP on the version-8 ledger and rolls back a rejected save', async () => {
   await withListeningApp(async (base, app, database, lines) => {
     const user = await registerAccount(app, 'ragflow-admin@example.com');
     database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
@@ -55,7 +55,7 @@ it('roundtrips a logged-in administrator save over TCP on the version-7 ledger a
     const apiKey = randomBytes(32).toString('hex');
     expect(
       database.prepare('SELECT version FROM schema_migrations ORDER BY version').all(),
-    ).toEqual([1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })));
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })));
 
     const initial = await fetch(`${base}${PATH}`, { headers: { cookie: login.header } });
     const saved = await fetch(`${base}${PATH}`, {

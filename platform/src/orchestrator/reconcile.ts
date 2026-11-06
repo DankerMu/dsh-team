@@ -16,6 +16,7 @@ import {
 } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import { stopUserContainer } from './stop.ts';
+import { recordedDocumentServer } from './document-server.ts';
 import { upstreamHost } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 
@@ -119,6 +120,8 @@ async function restorePlatform(
   const id = containerId({ Id: instance.container_id });
   const image = resolvedImageId(instance.image_id);
   const name = `dsh-team-u-${input.userId}`;
+  // Only the platform is ever re-attached; the recorded endpoint is admitted, present or gone.
+  const documentServer = recordedDocumentServer(instance);
   const current = () => {
     assertCurrentSnapshot(input, account, instance, signal);
   };
@@ -136,6 +139,7 @@ async function restorePlatform(
       input.userId,
       after,
       input.transport,
+      documentServer,
       network.id,
       false,
       requirePlatform,
@@ -146,7 +150,16 @@ async function restorePlatform(
   current();
   let attachmentFailed = false;
   try {
-    await attachPlatform(input.client, input.transport, input.userId, id, network, current, verify);
+    await attachPlatform(
+      input.client,
+      input.transport,
+      input.userId,
+      id,
+      network,
+      documentServer,
+      current,
+      verify,
+    );
   } catch (error) {
     if (!(error instanceof PlatformAttachmentFailedError)) throw error;
     attachmentFailed = true;
@@ -155,7 +168,16 @@ async function restorePlatform(
   await verify(!attachmentFailed);
   if (attachmentFailed) {
     // Retirement authority must still describe missing membership, not a subsequently recovered survivor.
-    if (await inspectPlatformAttachment(client, input.transport, input.userId, id, network))
+    if (
+      await inspectPlatformAttachment(
+        client,
+        input.transport,
+        input.userId,
+        id,
+        network,
+        documentServer,
+      )
+    )
       throw new Error('Platform membership recovered after rejected connection');
     current();
     await stopUserContainer(
@@ -204,6 +226,7 @@ async function healthy(
     input.userId,
     document,
     input.transport,
+    recordedDocumentServer(instance),
     undefined,
     false,
     false,

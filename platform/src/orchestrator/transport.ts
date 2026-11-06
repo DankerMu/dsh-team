@@ -38,9 +38,17 @@ export async function verifiedPlatform(
   return { id, name, document };
 }
 
-/** Require agreement between independently inspected container and bridge endpoint views. */
-export function platformMembership(
-  platform: PlatformEndpoint,
+/** The configured platform asks for base+3; the recorded Document Server for base+4. */
+type PeerRole = 'platform' | 'documentServer';
+const PEER = {
+  platform: { label: 'Configured platform', layout: 'Platform' },
+  documentServer: { label: 'Recorded Document Server', layout: 'Document Server' },
+} as const;
+
+/** Require agreement between independently inspected peer container and bridge endpoint views. */
+export function endpointMembership(
+  peer: PlatformEndpoint,
+  role: PeerRole,
   network: unknown,
   userId: string,
   subnet: string,
@@ -48,23 +56,49 @@ export function platformMembership(
   declaration: 'checked' | 'ignored' = 'checked',
 ): boolean {
   const bridge = object(network);
-  const endpoint = object(bridge.Containers)[platform.id];
-  const attachment = object(object(platform.document.NetworkSettings).Networks)[
+  const endpoint = object(bridge.Containers)[peer.id];
+  const attachment = object(object(peer.document.NetworkSettings).Networks)[
     `dsh-team-net-${userId}`
   ];
   if (endpoint === undefined && attachment === undefined) {
-    if (required) throw new Error('Configured platform endpoint missing');
+    if (required) throw new Error(`${PEER[role].label} endpoint missing`);
     return false;
   }
   const connected = object(attachment);
+  // Docker drops a stopped container's endpoint but keeps its configuration, re-attaching on start.
+  if (
+    role === 'documentServer' &&
+    endpoint === undefined &&
+    connected.NetworkID === bridge.Id &&
+    object(peer.document.State).Running === false
+  )
+    return true;
   const inspected = object(endpoint);
-  if (connected.NetworkID !== bridge.Id || inspected.Name !== platform.name)
-    throw new Error('Configured platform endpoint mismatch');
+  if (connected.NetworkID !== bridge.Id || inspected.Name !== peer.name)
+    throw new Error(`${PEER[role].label} endpoint mismatch`);
   containerId({ Id: connected.EndpointID });
-  const declared = validateEndpointAddress(connected, inspected, subnet, declaration);
-  if (declared !== undefined && declared !== instanceAddressLayout(subnet).platform)
-    throw new Error('Platform endpoint address differs from its layout');
+  requireLayoutAddress(
+    role,
+    validateEndpointAddress(connected, inspected, subnet, declaration),
+    declaration,
+    subnet,
+  );
   return true;
+}
+
+/** Only the platform has an undeclared stage-1 form; a Document Server is always on the layout. */
+function requireLayoutAddress(
+  role: PeerRole,
+  declared: string | undefined,
+  declaration: 'checked' | 'ignored',
+  subnet: string,
+): void {
+  const undeclared = role === 'documentServer' && declaration === 'checked';
+  if (
+    (declared === undefined && undeclared) ||
+    (declared !== undefined && declared !== instanceAddressLayout(subnet)[role])
+  )
+    throw new Error(`${PEER[role].layout} endpoint address differs from its layout`);
 }
 
 /** Docker reports null for an endpoint attached without a requested address; `{}` is treated alike. */

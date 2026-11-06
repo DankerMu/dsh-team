@@ -77,6 +77,7 @@ beforeEach(() => {
     image_tag: 'dsh-team-user:local',
     image_id: START_IMAGE,
     last_started_at: 1,
+    document_server_container_id: null,
   };
   credential = 'previous';
   clearChanges = 1;

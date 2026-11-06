@@ -143,12 +143,12 @@ describe('applyMigrations', () => {
     ).toThrow();
   });
 
-  it('records every shipped migration file, through 7-document-server-settings, once', () => {
+  it('records every shipped migration file, through 8-instance-document-server, once', () => {
     applyMigrations(db);
     applyMigrations(db);
 
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual(
-      [1, 2, 3, 4, 5, 6, 7].map((version) => ({ version })),
+      [1, 2, 3, 4, 5, 6, 7, 8].map((version) => ({ version })),
     );
   });
 

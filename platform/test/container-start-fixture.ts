@@ -605,6 +605,7 @@ function startupInput(
       authority: 'team.example:8443',
       subnetPool,
       port: 8080,
+      documentServer: null,
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',

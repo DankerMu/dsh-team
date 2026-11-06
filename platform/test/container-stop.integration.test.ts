@@ -160,6 +160,9 @@ it('retires the captured container after stopping it, retaining history and reco
     last_activity_at: 202,
     last_error: 'historical diagnostic',
     instance_token_hash: null,
+    document_server_mode: null,
+    document_server_container_id: null,
+    document_server_reason: null,
   });
   expect(audits()).toEqual([
     {

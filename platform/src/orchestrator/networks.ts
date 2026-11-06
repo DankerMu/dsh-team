@@ -2,7 +2,8 @@ import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object } from './identity.ts';
 import { allocateSubnet, instanceAddressLayout } from './subnet.ts';
-import { platformMembership, validateEndpointAddress, verifiedPlatform } from './transport.ts';
+import { documentServerPeer } from './document-server.ts';
+import { endpointMembership, validateEndpointAddress, verifiedPlatform } from './transport.ts';
 import type { PlatformEndpoint, TransportContext } from './transport.ts';
 
 export interface OwnedNetwork {
@@ -106,22 +107,46 @@ export function stoppedNetwork(document: unknown, userId: string): string {
   return attachedNetwork(row, userId, declared, true);
 }
 
+/** Only the exact recorded Document Server ID is admitted; its name and address grant nothing. */
 function ownedEndpoints(
   document: unknown,
   userId: string,
-  container?: string,
-  platform?: PlatformEndpoint,
+  container: string | undefined,
+  platform: PlatformEndpoint | undefined,
+  documentServer: string | null,
 ): void {
   if (container !== undefined && platform?.id === container)
     throw new Error('Platform and instance identities must be distinct');
+  if (documentServer !== null && (documentServer === container || documentServer === platform?.id))
+    throw new Error('Document Server identity must be distinct');
   const endpoints = object(object(document).Containers);
   for (const id of Object.keys(endpoints)) {
+    if (id === documentServer) continue;
     const expected =
       id === container ? `dsh-team-u-${userId}` : id === platform?.id ? platform.name : undefined;
     if (expected === undefined) throw new Error('Network has unknown endpoints');
     if (object(endpoints[id]).Name !== expected)
       throw new Error('Network endpoint ownership mismatch');
   }
+}
+
+/** Whether the recorded Document Server is on the bridge, live or as a stopped attachment. */
+async function recordedMembership(
+  client: DockerClient,
+  network: unknown,
+  userId: string,
+  subnet: string,
+  documentServer: string | null,
+  declaration: 'checked' | 'ignored',
+  required = false,
+): Promise<boolean> {
+  if (documentServer === null) return false;
+  const peer = await documentServerPeer(client, documentServer, network);
+  if (peer === undefined) {
+    if (required) throw new Error('Recorded Document Server endpoint missing');
+    return false;
+  }
+  return endpointMembership(peer, 'documentServer', network, userId, subnet, required, declaration);
 }
 
 async function inspect(client: DockerClient, target: string): Promise<unknown> {
@@ -144,6 +169,7 @@ export async function captureUserNetwork(
   transport: TransportContext,
   container: string | undefined,
   expected: string | undefined,
+  documentServer: string | null,
   declaration: 'checked' | 'ignored' = 'checked',
 ): Promise<OwnedNetwork | undefined> {
   const document = await inspect(client, nameFor(userId));
@@ -154,9 +180,10 @@ export async function captureUserNetwork(
   }
   const network = inspectedNetwork(document, userId, expected);
   const platform = await verifiedPlatform(client, transport, false);
-  ownedEndpoints(document, userId, container, platform);
+  ownedEndpoints(document, userId, container, platform, documentServer);
   if (platform !== undefined)
-    platformMembership(platform, document, userId, network.subnet, false, declaration);
+    endpointMembership(platform, 'platform', document, userId, network.subnet, false, declaration);
+  await recordedMembership(client, document, userId, network.subnet, documentServer, declaration);
   return network;
 }
 
@@ -165,20 +192,40 @@ export async function validateUserNetwork(
   userId: string,
   document: unknown,
   transport: TransportContext,
+  documentServer: string | null,
   expected?: string,
   created = false,
   requirePlatform = !created,
   // Only started-container compensation ignores declarations, retaining the stage-1 range check.
   declaration: 'checked' | 'ignored' = 'checked',
+  // Only the start that just attached it requires the recorded endpoint; elsewhere it may be gone.
+  requireDocumentServer = false,
 ): Promise<OwnedNetwork> {
   const id = attachedNetwork(document, userId, expected, created);
   const network = await inspect(client, id);
   const owned = inspectedNetwork(network, userId, id);
   const container = containerId(document);
   const platform = await verifiedPlatform(client, transport, requirePlatform);
-  ownedEndpoints(network, userId, container, platform);
+  ownedEndpoints(network, userId, container, platform, documentServer);
   if (platform !== undefined)
-    platformMembership(platform, network, userId, owned.subnet, requirePlatform, declaration);
+    endpointMembership(
+      platform,
+      'platform',
+      network,
+      userId,
+      owned.subnet,
+      requirePlatform,
+      declaration,
+    );
+  await recordedMembership(
+    client,
+    network,
+    userId,
+    owned.subnet,
+    documentServer,
+    declaration,
+    requireDocumentServer,
+  );
   const endpoints = object(object(network).Containers);
   if (!(container in endpoints)) {
     // A stopped or not-yet-started container can retain its declaration without a live endpoint.
@@ -225,19 +272,28 @@ export async function createUserNetwork(
   pool: string,
   transport: TransportContext,
   signal: AbortSignal,
-  reuse = false,
+  documentServer: string | null,
+  // A replaced instance's prior record; only this start's decision may remain on the reused bridge.
+  reuse?: { readonly previous: string | null },
 ): Promise<OwnedNetwork> {
   const existing = await inspect(client, nameFor(userId));
   if (existing !== undefined) {
-    if (!reuse) throw new Error('Canonical user network already exists');
+    if (reuse === undefined) throw new Error('Canonical user network already exists');
     const network = inspectedNetwork(existing, userId);
     const current = await inspect(client, network.id);
     if (inspectedNetwork(current, userId, network.id).subnet !== network.subnet)
       throw new Error('Owned network subnet changed');
     const platform = await verifiedPlatform(client, transport, true);
-    ownedEndpoints(current, userId, undefined, platform);
+    ownedEndpoints(current, userId, undefined, platform, documentServer);
     if (platform !== undefined)
-      platformMembership(platform, current, userId, network.subnet, false);
+      endpointMembership(platform, 'platform', current, userId, network.subnet, false);
+    await recordedMembership(client, current, userId, network.subnet, documentServer, 'checked');
+    if (
+      reuse.previous !== null &&
+      reuse.previous !== documentServer &&
+      (await recordedMembership(client, current, userId, network.subnet, reuse.previous, 'ignored'))
+    )
+      throw new Error('Network has unknown endpoints');
     return network;
   }
   const subnet = allocateSubnet(
@@ -263,7 +319,7 @@ export async function createUserNetwork(
     const document = await inspect(client, id);
     const network = inspectedNetwork(document, userId, id);
     if (network.subnet !== subnet) throw new Error('Allocated subnet changed');
-    ownedEndpoints(document, userId);
+    ownedEndpoints(document, userId, undefined, undefined, null);
     return { ...network, created: true };
   } catch (error) {
     if (id === undefined) {
@@ -272,10 +328,15 @@ export async function createUserNetwork(
       throw new NetworkCreationUnconfirmedError();
     }
     try {
-      await removeUserNetwork(cleanup, userId, transport, () => undefined, undefined, {
-        id,
-        subnet,
-      });
+      await removeUserNetwork(
+        cleanup,
+        userId,
+        transport,
+        () => undefined,
+        undefined,
+        { id, subnet },
+        null,
+      );
     } catch {
       throw new Error('Network allocation and rollback failed');
     }
@@ -283,31 +344,34 @@ export async function createUserNetwork(
   }
 }
 
-async function disconnectPlatform(
+/** Submit one non-forced disconnect; only a fresh settled inspection decides its outcome. */
+async function settleDisconnection(
   client: DockerClient,
-  transport: TransportContext,
   userId: string,
   network: OwnedNetwork,
-  platform: PlatformEndpoint,
+  peer: string,
+  label: 'Platform' | 'Document Server',
+  // Resolves the peer afresh: `undefined` when its identity cannot be confirmed.
+  member: (settled: unknown) => Promise<boolean | undefined>,
 ): Promise<void> {
   let failure: unknown;
   try {
     await client.json('POST', `/networks/${network.id}/disconnect`, {
-      Container: platform.id,
+      Container: peer,
       Force: false,
     });
   } catch (error) {
     failure = error;
   }
   const settled = await inspect(client, network.id);
-  const confirmed = await verifiedPlatform(client, transport, false);
-  if (confirmed === undefined || settled === undefined)
-    throw new Error('Platform disconnection outcome unconfirmed');
+  if (settled === undefined) throw new Error(`${label} disconnection outcome unconfirmed`);
   if (inspectedNetwork(settled, userId, network.id).subnet !== network.subnet)
     throw new Error('Captured network subnet changed');
-  if (platformMembership(confirmed, settled, userId, network.subnet, false, 'ignored')) {
+  const remaining = await member(settled);
+  if (remaining === undefined) throw new Error(`${label} disconnection outcome unconfirmed`);
+  if (remaining) {
     if (failure instanceof Error) throw failure;
-    throw new Error('Platform endpoint remains');
+    throw new Error(`${label} endpoint remains`);
   }
 }
 
@@ -324,7 +388,7 @@ async function deleteEmptyUserNetwork(
   if (empty === undefined) return;
   if (inspectedNetwork(empty, userId, network.id).subnet !== network.subnet)
     throw new Error('Owned network subnet changed');
-  ownedEndpoints(empty, userId);
+  ownedEndpoints(empty, userId, undefined, undefined, null);
   current();
   await verifyAbsence?.();
   try {
@@ -342,6 +406,8 @@ export async function removeUserNetwork(
   current: () => void,
   stoppedContainer: string | undefined,
   captured: Pick<OwnedNetwork, 'id' | 'subnet'>,
+  // Retirement goes by the record alone, never by current settings or name resolution.
+  documentServer: string | null,
   verifyAbsence?: () => Promise<void>,
 ): Promise<void> {
   current();
@@ -354,11 +420,19 @@ export async function removeUserNetwork(
   const network = inspectedNetwork(found, userId, captured.id);
   if (captured.subnet !== network.subnet) throw new Error('Captured network subnet changed');
   const platform = await verifiedPlatform(client, transport, false);
-  ownedEndpoints(found, userId, stoppedContainer, platform);
+  ownedEndpoints(found, userId, stoppedContainer, platform, documentServer);
   const attached =
     platform === undefined
       ? false
-      : platformMembership(platform, found, userId, network.subnet, false, 'ignored');
+      : endpointMembership(platform, 'platform', found, userId, network.subnet, false, 'ignored');
+  const recorded = await recordedMembership(
+    client,
+    found,
+    userId,
+    network.subnet,
+    documentServer,
+    'ignored',
+  );
   current();
   if (stoppedContainer !== undefined && stoppedContainer in object(object(found).Containers)) {
     await client.json('POST', `/networks/${network.id}/disconnect`, {
@@ -369,7 +443,33 @@ export async function removeUserNetwork(
   if (attached && platform !== undefined) {
     await verifyAbsence?.();
     current();
-    await disconnectPlatform(client, transport, userId, network, platform);
+    await settleDisconnection(client, userId, network, platform.id, 'Platform', async (settled) => {
+      const confirmed = await verifiedPlatform(client, transport, false);
+      if (confirmed === undefined) return undefined;
+      return endpointMembership(
+        confirmed,
+        'platform',
+        settled,
+        userId,
+        network.subnet,
+        false,
+        'ignored',
+      );
+    });
+  }
+  if (recorded && documentServer !== null) {
+    await verifyAbsence?.();
+    current();
+    // Docker removes a stopped peer's configured attachment too, so its next start cannot fail.
+    await settleDisconnection(
+      client,
+      userId,
+      network,
+      documentServer,
+      'Document Server',
+      (settled) =>
+        recordedMembership(client, settled, userId, network.subnet, documentServer, 'ignored'),
+    );
   }
   await deleteEmptyUserNetwork(client, userId, network, current, verifyAbsence);
   current();
@@ -385,14 +485,30 @@ export async function inspectPlatformAttachment(
   userId: string,
   container: string,
   captured: OwnedNetwork,
+  documentServer: string | null,
+): Promise<boolean> {
+  return inspectAttachment(client, transport, userId, container, captured, documentServer, false);
+}
+
+/** One post-connect view: the platform's membership, or the recorded Document Server's. */
+async function inspectAttachment(
+  client: DockerClient,
+  transport: TransportContext,
+  userId: string,
+  container: string,
+  captured: OwnedNetwork,
+  documentServer: string | null,
+  peer: boolean,
 ): Promise<boolean> {
   const network = await inspect(client, captured.id);
   if (inspectedNetwork(network, userId, captured.id).subnet !== captured.subnet)
     throw new Error('Captured network subnet changed');
   const platform = await verifiedPlatform(client, transport, true);
   if (platform === undefined) throw new Error('Platform attachment outcome unconfirmed');
-  ownedEndpoints(network, userId, container, platform);
-  return platformMembership(platform, network, userId, captured.subnet, false);
+  ownedEndpoints(network, userId, container, platform, documentServer);
+  if (peer)
+    return recordedMembership(client, network, userId, captured.subnet, documentServer, 'checked');
+  return endpointMembership(platform, 'platform', network, userId, captured.subnet, false);
 }
 
 /** Only an instance actually at its layout container address asks for the layout platform address. */
@@ -410,30 +526,38 @@ function connectRequest(
   return { Container: platform, EndpointConfig: { IPAMConfig: { IPv4Address: layout.platform } } };
 }
 
-/** The caller supplies its independent bounded settlement client, never its cancellation signal. */
-export async function attachPlatform(
+interface AttachmentTarget {
+  /** Preflight over the captured bridge view: ownership plus current membership. */
+  readonly member: (before: unknown) => Promise<boolean>;
+  readonly request: (before: unknown) => Record<string, unknown>;
+  /** A fresh post-connect inspection of both views. */
+  readonly confirm: () => Promise<boolean>;
+  readonly failed: () => Error;
+  readonly unconfirmed: string;
+}
+
+/** Shared platform and Document Server settlement: one deadline, definitive replies, fresh inspection. */
+async function settleAttachment(
   raw: DockerClient,
-  transport: TransportContext,
   userId: string,
-  container: string,
   captured: OwnedNetwork,
-  current: () => void = () => undefined,
-  verify?: () => Promise<void>,
+  prepare: (client: DockerClient) => Promise<AttachmentTarget | undefined>,
+  current: () => void,
+  verify: (() => Promise<void>) | undefined,
 ): Promise<void> {
   const signal = AbortSignal.timeout(ATTACH_TIMEOUT_MS);
   const client: DockerClient = {
     ...raw,
     json: (method, path, body, _signal, maxBytes) => raw.json(method, path, body, signal, maxBytes),
   };
-  const platform = await verifiedPlatform(client, transport, true);
-  if (platform === undefined) return;
+  const target = await prepare(client);
+  if (target === undefined) return;
   const before = await inspect(client, captured.id);
   const network = inspectedNetwork(before, userId, captured.id);
   if (network.subnet !== captured.subnet) throw new Error('Captured network subnet changed');
-  ownedEndpoints(before, userId, container, platform);
   let definitiveReply = false;
-  if (!platformMembership(platform, before, userId, network.subnet, false)) {
-    const request = connectRequest(before, container, platform.id, network.subnet);
+  if (!(await target.member(before))) {
+    const request = target.request(before);
     await verify?.();
     current();
     // Do not drop submitted mutation ownership on abort or on a lost response.
@@ -446,9 +570,92 @@ export async function attachPlatform(
       definitiveReply = error instanceof DockerHttpError;
     }
   }
-  const attached = await inspectPlatformAttachment(client, transport, userId, container, network);
+  const attached = await target.confirm();
   current();
   if (attached) return;
-  if (definitiveReply) throw new PlatformAttachmentFailedError();
-  throw new Error('Platform attachment outcome unconfirmed');
+  if (definitiveReply) throw target.failed();
+  throw new Error(target.unconfirmed);
+}
+
+/** The caller supplies its independent bounded settlement client, never its cancellation signal. */
+export async function attachPlatform(
+  raw: DockerClient,
+  transport: TransportContext,
+  userId: string,
+  container: string,
+  captured: OwnedNetwork,
+  documentServer: string | null,
+  current: () => void = () => undefined,
+  verify?: () => Promise<void>,
+): Promise<void> {
+  await settleAttachment(
+    raw,
+    userId,
+    captured,
+    async (client) => {
+      const platform = await verifiedPlatform(client, transport, true);
+      if (platform === undefined) return undefined;
+      return {
+        member: (before) => {
+          ownedEndpoints(before, userId, container, platform, documentServer);
+          return Promise.resolve(
+            endpointMembership(platform, 'platform', before, userId, captured.subnet, false),
+          );
+        },
+        request: (before) => connectRequest(before, container, platform.id, captured.subnet),
+        confirm: () =>
+          inspectPlatformAttachment(client, transport, userId, container, captured, documentServer),
+        failed: () => new PlatformAttachmentFailedError(),
+        unconfirmed: 'Platform attachment outcome unconfirmed',
+      };
+    },
+    current,
+    verify,
+  );
+}
+
+/** Attach this start's verified Document Server at base+4, re-verified just before connect. */
+export async function attachDocumentServer(
+  raw: DockerClient,
+  transport: TransportContext,
+  userId: string,
+  container: string,
+  captured: OwnedNetwork,
+  documentServer: string,
+  verify: () => Promise<void>,
+): Promise<void> {
+  await settleAttachment(
+    raw,
+    userId,
+    captured,
+    async (client) => {
+      // Only network mode records a Document Server, so the configured platform is present here.
+      const platform = await verifiedPlatform(client, transport, true);
+      return {
+        member: (before) => {
+          ownedEndpoints(before, userId, container, platform, documentServer);
+          return recordedMembership(
+            client,
+            before,
+            userId,
+            captured.subnet,
+            documentServer,
+            'checked',
+          );
+        },
+        request: () => ({
+          Container: documentServer,
+          EndpointConfig: {
+            IPAMConfig: { IPv4Address: instanceAddressLayout(captured.subnet).documentServer },
+          },
+        }),
+        confirm: () =>
+          inspectAttachment(client, transport, userId, container, captured, documentServer, true),
+        failed: () => new Error('Document Server attachment confirmed absent after connect'),
+        unconfirmed: 'Document Server attachment outcome unconfirmed',
+      };
+    },
+    () => undefined,
+    verify,
+  );
 }

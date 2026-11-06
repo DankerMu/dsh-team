@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { object } from './identity.ts';
+import { recordedDocumentServer } from './document-server.ts';
 import { captureUserNetwork, inspectedNetwork, removeUserNetwork } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import type { ReconciliationInput } from './reconcile.ts';
@@ -73,6 +74,7 @@ export async function reconcileOrphanNetwork(
     )
       throw new Error('Current orphan network identity changed');
   };
+  const documentServer = recordedDocumentServer(instance);
   const targets = new Set([`dsh-team-u-${input.userId}`]);
   if (instance !== undefined && object(instance).container_id !== null) {
     const id = object(instance).container_id;
@@ -103,6 +105,7 @@ export async function reconcileOrphanNetwork(
       input.transport,
       undefined,
       captured.id,
+      documentServer,
     );
     if (network !== undefined && network.subnet !== captured.subnet)
       throw new Error('Captured network subnet changed');
@@ -136,6 +139,7 @@ export async function reconcileOrphanNetwork(
     current,
     undefined,
     captured,
+    documentServer,
     validate,
   );
   await validate();

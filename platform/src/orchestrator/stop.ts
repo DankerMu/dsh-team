@@ -8,6 +8,7 @@ import { containerId, isTerminalInstance, object, resolvedImageId } from './iden
 import { indexedEndpoint } from './credentials.ts';
 import { captureUserNetwork, removeUserNetwork, stoppedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamHost } from './transport.ts';
+import { recordedDocumentServer } from './document-server.ts';
 import type { TransportContext } from './transport.ts';
 
 export interface StopUserContainerInput {
@@ -26,6 +27,7 @@ interface Selection {
   declaredNetworkId: string | undefined;
   upstreamHost: string | null;
   upstreamPort: number | null;
+  documentServer: string | null;
   identity: (string | number | null)[];
 }
 
@@ -38,6 +40,7 @@ interface RetirementRow {
   upstream_port: number | null;
   dsh_cookie: string | null;
   last_started_at: number | null;
+  document_server_container_id: string | null;
   email: string;
   account_status: string;
 }
@@ -50,7 +53,7 @@ interface FencedRetirementInput extends StopUserContainerInput {
 const STOP_TIMEOUT_MS = 10_000;
 const CURRENT_RETIREMENT = `user_id = ? AND container_id = ? AND image_id = ?
   AND image_tag IS ? AND status = ? AND upstream_host IS ? AND upstream_port IS ?
-  AND dsh_cookie IS ? AND last_started_at IS ?
+  AND dsh_cookie IS ? AND last_started_at IS ? AND document_server_container_id IS ?
   AND EXISTS (SELECT 1 FROM users WHERE id = instances.user_id AND email = ? AND status = ?)`;
 
 function select(input: StopUserContainerInput): Selection | undefined {
@@ -71,6 +74,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
   const imageId = resolvedImageId(instance.image_id);
   if (typeof instance.email !== 'string') throw new Error();
   const endpoint = indexedEndpoint(object(row), true, input.transport.config.upstreamMode);
+  const documentServer = recordedDocumentServer(row);
   return {
     containerId: id,
     imageId,
@@ -78,6 +82,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
     declaredNetworkId: undefined,
     upstreamHost: endpoint.upstream_host,
     upstreamPort: endpoint.upstream_port,
+    documentServer,
     identity: [
       input.userId,
       id,
@@ -88,6 +93,7 @@ function select(input: StopUserContainerInput): Selection | undefined {
       instance.upstream_port,
       instance.dsh_cookie,
       instance.last_started_at,
+      documentServer,
       instance.email,
       instance.account_status,
     ],
@@ -187,6 +193,7 @@ async function remove(
     input.transport,
     state === undefined ? undefined : selection.containerId,
     selection.declaredNetworkId,
+    selection.documentServer,
   );
   current(input, selection, signal);
   if (state === undefined) return;
@@ -212,7 +219,9 @@ function commit(
       .prepare(
         `UPDATE instances SET status = ?, last_error = COALESCE(?, last_error),
       container_id = NULL, image_id = NULL, image_tag = NULL, upstream_host = NULL,
-      upstream_port = NULL, dsh_cookie = NULL, instance_token_hash = NULL WHERE ${CURRENT_RETIREMENT}`,
+      upstream_port = NULL, dsh_cookie = NULL, instance_token_hash = NULL,
+      document_server_mode = NULL, document_server_container_id = NULL, document_server_reason = NULL
+      WHERE ${CURRENT_RETIREMENT}`,
       )
       .run(
         terminalError === undefined ? 'stopped' : 'error',
@@ -263,6 +272,7 @@ export async function stopUserContainer(
       input.transport,
       state === undefined ? undefined : selection.containerId,
       selection.declaredNetworkId,
+      selection.documentServer,
     );
     current(fenced, selection, signal);
     await remove({ ...fenced, client: networkClient }, selection, signal);
@@ -276,6 +286,7 @@ export async function stopUserContainer(
           input.transport,
           undefined,
           selection.declaredNetworkId,
+          selection.documentServer,
         )) !== undefined
       )
         throw new Error();
@@ -289,6 +300,7 @@ export async function stopUserContainer(
         },
         undefined,
         network,
+        selection.documentServer,
       );
     }
     commit(fenced, selection, reason, signal, terminalError);

@@ -18,6 +18,7 @@ import { attachedNetwork, validateUserNetwork } from './networks.ts';
 import { upstreamHost, upstreamPort } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import { readCreationAttempt } from './creation-attempt.ts';
+import { recordedDocumentServer } from './document-server.ts';
 
 export interface StartUserContainerInput {
   readonly client: DockerClient;
@@ -25,7 +26,13 @@ export interface StartUserContainerInput {
   readonly transport: TransportContext;
   readonly config: Pick<
     PlatformConfig,
-    'userImage' | 'seccompProfilePath' | 'managedConfigDir' | 'authority' | 'subnetPool' | 'port'
+    | 'userImage'
+    | 'seccompProfilePath'
+    | 'managedConfigDir'
+    | 'authority'
+    | 'subnetPool'
+    | 'port'
+    | 'documentServer'
   >;
   readonly userId: string;
   readonly modelSettings: Omit<ManagedConfigInput['modelSettings'], 'apiKeyConfigured'>;
@@ -112,7 +119,7 @@ export async function reuseCurrentContainer(
   client: DockerClient,
   account: Record<string, unknown>,
   signal: AbortSignal,
-  missing: () => void,
+  missing: (instance: Record<string, unknown>) => void,
   retry: (instance: Record<string, unknown>) => void,
 ): Promise<StartResult | undefined> {
   if (readCreationAttempt(input) !== undefined) return undefined;
@@ -134,7 +141,7 @@ export async function reuseCurrentContainer(
     assertCurrentSnapshot(input, account, instance, signal);
     const identity = absentInstanceIdentity(instance, id);
     input.onVerifiedAbsent?.(identity);
-    missing();
+    missing(instance);
     return undefined;
   }
   if (instance.status === 'error') {
@@ -152,7 +159,13 @@ export async function reuseCurrentContainer(
     image,
     input.transport.config.upstreamMode,
   );
-  await validateUserNetwork(client, input.userId, document, input.transport);
+  await validateUserNetwork(
+    client,
+    input.userId,
+    document,
+    input.transport,
+    recordedDocumentServer(instance),
+  );
   const host = upstreamHost(document, input.userId, input.transport.config.upstreamMode);
   assertCurrentEndpoint(instance, host, port);
   assertCurrentSnapshot(input, account, instance, signal);
@@ -192,6 +205,9 @@ export async function retireCurrentErrorContainer(
       upstream_port: null,
       dsh_cookie: null,
       instance_token_hash: null,
+      document_server_mode: null,
+      document_server_container_id: null,
+      document_server_reason: null,
     },
     signal,
   );

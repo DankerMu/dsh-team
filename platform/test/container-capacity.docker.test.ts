@@ -36,6 +36,7 @@ async function capacityScenario(lifecycle: UserImageLifecycle): Promise<string> 
       authority,
       subnetPool: '172.30.0.0/16',
       port: 8080,
+      documentServer: null,
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
