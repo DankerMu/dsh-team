@@ -50,6 +50,8 @@ const LOG_REDACT_PATHS = [
   '*.ragflowApiKey',
   'fileTokenSecret',
   '*.fileTokenSecret',
+  'jwtSecret',
+  '*.jwtSecret',
   'instanceToken',
   '*.instanceToken',
   'instanceTokenHash',

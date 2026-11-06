@@ -297,6 +297,7 @@ it('the same owner admits two users at 60 then denies a third after an HTTP limi
         authority: '127.0.0.1:8080',
         cookieSecure: false,
         trustedProxies: [],
+        documentServer: null,
       },
       database,
     );

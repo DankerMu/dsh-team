@@ -470,6 +470,15 @@ writeFileSync(path, readFileSync(path, 'utf8').replace(
 ));
 NODE
 expect_reject "undocumented platform read" "undocumented PLATFORM_UNDOCUMENTED" pnpm lint:config
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+const path = 'platform/src/config.ts';
+writeFileSync(path, readFileSync(path, 'utf8').replace(
+  'const publicOrigin =', 'void env.DOCUMENT_SERVER_UNDOCUMENTED; const publicOrigin =',
+));
+NODE
+expect_reject "undocumented Document Server platform read" "undocumented DOCUMENT_SERVER_UNDOCUMENTED" \
+  pnpm lint:config
 echo "    x-inventory: \${DEPLOY_UNDOCUMENTED:?}" >>deploy/compose.yml
 expect_reject "undocumented deployment interpolation" "undocumented DEPLOY_UNDOCUMENTED" pnpm lint:config
 echo "    x-inventory: \${DOCUMENT_SERVER_UNDOCUMENTED:?}" >>deploy/compose.yml
@@ -495,7 +504,8 @@ writeFileSync(path, readFileSync(path, 'utf8').replace(
   'const publicOrigin =', 'void env[configurationKey]; const publicOrigin =',
 ));
 NODE
-expect_reject "dynamic environment read" "requires literal PLATFORM_*" pnpm lint:config
+expect_reject "dynamic environment read" "requires literal PLATFORM_* or DOCUMENT_SERVER_*" \
+  pnpm lint:config
 
 # ── 8. Secret scan ───────────────────────────────────────────────────────────
 # Assembled at run time so this script never contains a matchable secret.

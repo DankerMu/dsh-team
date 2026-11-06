@@ -1,4 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseEnv } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from './config.ts';
 
@@ -376,5 +378,115 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_CONTAINER_NAME: raw })).toThrow(
       'PLATFORM_CONTAINER_NAME must be a Docker container name, not an ID or path',
     );
+  });
+});
+
+const CONTAINER_NAME = 'DOCUMENT_SERVER_CONTAINER_NAME';
+const JWT_SECRET = 'DOCUMENT_SERVER_JWT_SECRET';
+const NAME_MARKER = 'name-marker-4a7c';
+const JWT_MARKER = 'jwt-marker-9e1b';
+
+/** The thrown message in full: `toThrow(string)` alone only matches a substring. */
+function rejection(env: NodeJS.ProcessEnv): string {
+  try {
+    loadConfig({ ...REQUIRED_PUBLIC_URL, ...env });
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error('loadConfig accepted the environment');
+}
+
+function exampleEnvironment(): NodeJS.ProcessEnv {
+  return parseEnv(readFileSync(new URL('../../.env.example', import.meta.url), 'utf8'));
+}
+
+describe('loadConfig Document Server inputs', () => {
+  it('reports the bundled Document Server as unconfigured when both inputs are absent', () => {
+    expect(loadConfig(REQUIRED_PUBLIC_URL).documentServer).toBeNull();
+  });
+
+  it('returns both nonempty inputs verbatim without trimming the JWT', () => {
+    const jwtSecret = `  ${JWT_MARKER}  `;
+
+    expect(
+      loadConfig({
+        ...REQUIRED_PUBLIC_URL,
+        [CONTAINER_NAME]: 'dsh-team-documentserver',
+        [JWT_SECRET]: jwtSecret,
+      }).documentServer,
+    ).toStrictEqual({ containerName: 'dsh-team-documentserver', jwtSecret });
+  });
+
+  it.each([
+    [
+      'only the container name',
+      { [CONTAINER_NAME]: NAME_MARKER },
+      'DOCUMENT_SERVER_JWT_SECRET is required when DOCUMENT_SERVER_CONTAINER_NAME is set',
+    ],
+    [
+      'only the JWT',
+      { [JWT_SECRET]: JWT_MARKER },
+      'DOCUMENT_SERVER_CONTAINER_NAME is required when DOCUMENT_SERVER_JWT_SECRET is set',
+    ],
+    [
+      'an empty container name',
+      { [CONTAINER_NAME]: '', [JWT_SECRET]: JWT_MARKER },
+      'DOCUMENT_SERVER_CONTAINER_NAME must not be empty',
+    ],
+    [
+      'an empty JWT',
+      { [CONTAINER_NAME]: NAME_MARKER, [JWT_SECRET]: '' },
+      'DOCUMENT_SERVER_JWT_SECRET must not be empty',
+    ],
+    [
+      'both inputs empty',
+      { [CONTAINER_NAME]: '', [JWT_SECRET]: '' },
+      'DOCUMENT_SERVER_CONTAINER_NAME and DOCUMENT_SERVER_JWT_SECRET must not be empty',
+    ],
+    [
+      'only an empty container name',
+      { [CONTAINER_NAME]: '' },
+      'DOCUMENT_SERVER_CONTAINER_NAME must not be empty',
+    ],
+    ['only an empty JWT', { [JWT_SECRET]: '' }, 'DOCUMENT_SERVER_JWT_SECRET must not be empty'],
+    [
+      'a container path',
+      { [CONTAINER_NAME]: `/${NAME_MARKER}`, [JWT_SECRET]: JWT_MARKER },
+      'DOCUMENT_SERVER_CONTAINER_NAME must be a Docker container name, not an ID or path',
+    ],
+    [
+      'a 64-hex container ID',
+      { [CONTAINER_NAME]: 'a'.repeat(64), [JWT_SECRET]: JWT_MARKER },
+      'DOCUMENT_SERVER_CONTAINER_NAME must be a Docker container name, not an ID or path',
+    ],
+  ] as const)('rejects %s with its full message and without echoing values', (_, env, message) => {
+    const actual = rejection(env);
+
+    expect(actual).toBe(message);
+    expect(actual).not.toContain(NAME_MARKER);
+    expect(actual).not.toContain(JWT_MARKER);
+    expect(actual).not.toContain('a'.repeat(12));
+  });
+
+  it('rejects the repository .env.example copied verbatim at its empty JWT', () => {
+    const example = exampleEnvironment();
+
+    expect(example[CONTAINER_NAME]).toBe('dsh-team-documentserver');
+    expect(example[JWT_SECRET]).toBe('');
+    expect(() => loadConfig(example)).toThrow(/^DOCUMENT_SERVER_JWT_SECRET must not be empty$/);
+  });
+
+  it('loads .env.example without both lines exactly as with a filled JWT, minus Office', () => {
+    const example = exampleEnvironment();
+    const removed = Object.fromEntries(
+      Object.entries(example).filter(([name]) => name !== CONTAINER_NAME && name !== JWT_SECRET),
+    );
+    const filled = loadConfig({ ...example, [JWT_SECRET]: JWT_MARKER });
+
+    expect(filled.documentServer).toStrictEqual({
+      containerName: 'dsh-team-documentserver',
+      jwtSecret: JWT_MARKER,
+    });
+    expect(loadConfig(removed)).toStrictEqual({ ...filled, documentServer: null });
   });
 });
