@@ -403,16 +403,26 @@ export async function ragflowStackSnapshot(run: DockerOutput): Promise<RagflowSt
 
 type SeedSnapshot = Awaited<ReturnType<typeof readSeedDatasets>>;
 
-/** The version probe, bounded by `deadlineMs` through the end of its body. */
-async function ragflowReady(stack: ConfiguredStack, deadlineMs: number): Promise<boolean> {
+/**
+ * The version probe, bounded by `deadlineMs` through the end of its body: `unreachable` exactly
+ * when `probeRagflowVersion` reports it (no usable answer, timeout included), `not-ready` for any
+ * answer that is not the expected version.
+ */
+async function ragflowReady(
+  stack: ConfiguredStack,
+  deadlineMs: number,
+): Promise<'ready' | 'not-ready' | 'unreachable'> {
   const fact = await probeRagflowVersion(stack.ragflowUrl, deadlineMs);
-  if (fact === 'unreachable' || fact.status !== 200) return false;
+  if (fact === 'unreachable') return 'unreachable';
+  if (fact.status !== 200) return 'not-ready';
   try {
     const document = record(JSON.parse(fact.body));
-    return document.code === 0 && document.data === EXPECTED_RAGFLOW_VERSION;
+    return document.code === 0 && document.data === EXPECTED_RAGFLOW_VERSION
+      ? 'ready'
+      : 'not-ready';
   } catch {
     // A warming server may answer an unparseable body; the next poll decides.
-    return false;
+    return 'not-ready';
   }
 }
 
@@ -470,14 +480,22 @@ async function awaitRestored(
           : `RAGFlow version not ready within ${seconds}s`,
       );
     // AbortSignal.timeout rejects a fractional delay, which the probe would report as unreachable.
-    if (await ragflowReady(stack, Math.max(1, Math.floor(Math.min(5_000, remaining()))))) {
+    const probeMs = Math.max(1, Math.floor(Math.min(5_000, remaining())));
+    // Decided before the probe: a timeout can return while `remaining()` is still positive.
+    const budgetBounded = probeMs < 5_000;
+    const version = await ragflowReady(stack, probeMs);
+    if (version === 'ready') {
       const snapshot = await seedWhenWarm(stack, Math.max(0, remaining()));
       // A successful but different snapshot is a real change, not warm-up.
       if (snapshot !== undefined && !isDeepStrictEqual(snapshot, seed))
         throw new Error('RAGFlow seed snapshot changed');
       if (snapshot !== undefined) return;
       seedUnreadable = true;
-    } else seedUnreadable = false;
+    } else if (version === 'not-ready' || !budgetBounded) seedUnreadable = false;
+    // An unanswered probe cut short by the deadline observes nothing, so it keeps the earlier
+    // seed-unreadable fact. Residual risk: within the last 5s of the deadline a genuine connection
+    // failure (such as connection refused) after an unreadable seed still reports seed-unreadable;
+    // only the diagnostic wording is affected, never a failure turned into a pass.
     await delay(Math.max(0, Math.min(timing.intervalMs, remaining())));
   }
 }
