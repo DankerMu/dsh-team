@@ -12,7 +12,7 @@
 - **新增密钥字段**（RAGFlow 密钥、实例令牌、文件令牌密钥、Document Server JWT）在引入它的同一变更里加入日志脱敏路径。日志、响应、审计、报告中都不能出现明文。
 - **新增 HTTP 路由**声明 schema，并在同一 PR 里运行 `pnpm contract:write`。
 - **新增迁移**要同步更新集成测试里的迁移账本断言，以及 `platform/test/README.md` § Evidence required: Database 的版本列表（AGENTS.md 验证矩阵的 Database 行链接到这里）。
-- **新增后台页面**要同步更新三处：静态页面清单、`AdminNavigation`、AGENTS.md 的页面清单。还要在 `pnpm test:ui` 中保留桌面和窄屏截图，并做到零控制台错误。
+- **新增后台页面**要同步更新三处：静态页面清单、`AdminNavigation`、`platform/web/README.md` 的页面清单（页面与接口说明不放 AGENTS.md）。还要在 `pnpm test:ui` 中保留桌面和窄屏截图，并做到零控制台错误。
 - **RAGFlow 结果取值**只用 `no-results`、`invalid-request`、`not-configured`、`timeout`、`unavailable`、`upstream-error` 这一套（design 决定 3）。
 - **插件目录三态**的机器取值只用 `employee`、`forced-on`、`forced-off`（design 决定 12）。
 - **证据门禁**：
@@ -2456,6 +2456,122 @@ Governing invariant：存储中的外部地址与 JWT 要么同时为空（自�
 Sibling surfaces：`admin/ragflow-config.ts` 与其集成测试（模板）、`admin/config-route.ts`、`db/settings.ts`、`audit/record.ts`、`platform/web/src/audit-page.tsx`（中文名留给 16.2c）、`scripts/e2e-scenario.sh` 的账本检查、`schemas/openapi.json`。
 
 Evidence：`pnpm test`、`pnpm test:integration platform/test/admin-document-server-config.integration.test.ts platform/test/db.integration.test.ts`、`pnpm contract:write` 后 `pnpm contract:check`、`pnpm check`；VPS exact-head `pnpm test:docker`、`pnpm test:deploy`；本机 exact-head `pnpm test:stack`。
+
+Risk packs (16.2c 后台「Office」页，#425): fixture level expanded（与 issue 建议一致：本页是外部 Document Server JWT 的后台写入口）。只做页面：接口已由 #424 交付，本任务不改任何接口、设置或迁移，`schemas/openapi.json` 不变。selected：
+
+- **Public API（页面地址）**：
+  - 新页面 `/_platform/admin/office`，导航名「Office」，链接排在「知识库」之后、「账号设置」之前。
+  - `platform/src/web/routes.ts` 的静态页面清单加这一项，与既有页面一样只答 GET/HEAD、`sendFile('index.html')`；尾斜线、子路径、`%00`、`%2f` 仍是 404。
+  - `account-page.tsx` 的路径分派加一支；`AdminNavigation` 的 `page` 联合加 `'office'`。
+- **Auth / permissions / secrets**：
+  - 进入页面时 GET `/_platform/api/admin/document-server`，作为当前权限探测；响应体读完后才决定：401 → `window.location.assign('/_platform/login')`，只导航一次；403 → 只显示 `无权限`（`role="alert"`），不渲染模式、地址、JWT 状态或任何按钮；其他失败 → 整页失败态；200 → 就绪。
+  - 保存的 401/403 与 `knowledge-base-page.tsx` 相同：401 → 导航登录；403 → 页面只剩 `无权限`，表单全部移除，草稿和已输入的 JWT 都清空。
+  - JWT：输入框 `type="password"`、`autoComplete="new-password"`，旁边只显示 `已配置`/`未配置`（来自 `jwtConfigured`，规格「JWT 只显示已配置」）；`jwtConfigured` 为真时提示 `留空保留原 JWT。`。任何一次加载、保存（成功或失败）之后都清空 JWT 框。页面任何地方都不显示 JWT 原文，`localStorage`、`sessionStorage`、URL 里都没有它。自带 Document Server 的容器名和 JWT 本来就不在接口回应里，页面也不显示。
+  - 页面只调用这一个接口（GET/PUT `/_platform/api/admin/document-server`），不调其他 `/_platform/api/`。
+- **Concurrency / shared state**：
+  - 一个页面级 pending 锁（同 `knowledge-base-page.tsx` 的 `owner` ref 与 `current()` 失效判定）。加载或任一保存进行中，表单 `fieldset` `disabled`，「切回自带」也不可点，杜绝重复与交叉提交。
+  - 离开页面时中止在途请求。每个响应体在结算前读完（含 400/500）；过期响应不覆盖当前状态。
+- **Error handling**（页面只显示下列固定中文，从不显示服务端 message 或响应体原文）：
+  - 加载中：状态行只显示 `加载中…`，不渲染任何表单。
+  - 加载失败（非 401/403）或回应不合法：`Office 配置加载失败，请重试。` 加「重试」按钮，不显示任何部分数据。回应必须恰为 `{ mode, bundledConfigured, url, jwtConfigured }`，`mode` 为 `bundled`/`external`，两个布尔，`url` 为字符串；PUT 回应再加非负安全整数 `runningInstances`；其他形状按失败处理。
+  - 页面侧只做三项检查，不发请求：地址为空 → `请输入 Document Server 地址。`；JWT 非空但只含空白 → `JWT 不能只包含空白字符。`；当前 `jwtConfigured` 为假且 JWT 框为空 → `首次切换到外部 Document Server 时必须填写 JWT。`。
+  - 保存 400：页面经既有 `adminRequest`（`platform/web/src/admin-request.ts`，不改）发请求，它把非 200 回应体读成 `ArrayBuffer`；页面用 `TextDecoder` 解码、`JSON.parse`（失败按其他 400 处理），只比较 `message` 是否恰为 `External Document Server requires jwtSecret` → 上面「首次切换」那一行（状态过期时才会走到）；其他 400 → `Document Server 地址无效：须以 http:// 或 https:// 开头，不含空白、?、#、@ 或 \，最长 2048 个字符。`；其他失败 → `保存失败，请重试。`。
+- **Code Canonicality**：页面的全部请求都走既有 `adminRequest`，不新建请求模块或第二份请求骨架。
+- **Config（页面结构）**：
+  - 页面顶部一行固定提示：`修改在每个实例下次启动时生效；保存不会重启正在运行的实例。`。
+  - 状态区（`aria-label="当前 Office 配置"`）：
+    - `bundled`：`当前使用：自带 Document Server`；`bundledConfigured` 为真 → `自带 Document Server：已配置`；为假 → `自带 Document Server：未配置，Office 不可用`（`role="alert"`），下方外部表单照常可用（规格「自带未配置时显示 Office 不可用」）。
+    - `external`：`当前使用：外部 Document Server`，并显示已保存地址（文本节点）与 `JWT：已配置`/`JWT：未配置`。
+  - 「外部 Document Server」表单（`aria-label="外部 Document Server"`，按钮：`bundled` 时「切换到外部」，`external` 时「保存外部配置」）：`Document Server 地址` 输入框（说明 `外部 Document Server 的根地址，例如 https://office.intranet`）与 JWT 框（见上）。`external` 时地址框预填已保存地址。PUT body 恰为 `{ mode: 'external', url }` 或 `{ mode: 'external', url, jwtSecret }`（JWT 框非空时带上），`url` 原样发送，不去空白、不改写。
+  - 「切回自带」按钮只在 `external` 时出现，旁边固定说明 `切回自带会清除已保存的外部地址和 JWT。`；点击发 PUT body 恰为 `{ mode: 'bundled' }`，没有二次确认（外部值可重新填写，规格不要求确认）。
+  - 保存成功后用 PUT 回应整体刷新状态区与表单（地址框取回应 `url`），状态行 `已保存，实例下次启动时生效。`，并显示 `保存时运行中的实例数：<n>（非实时统计）。`（同 `plugins-page.tsx`）。
+- **Documentation**（编排者同 PR 改；按用户 2026-11-06 决定，页面与接口说明放模块 README，不放 AGENTS.md）：
+  - `platform/web/README.md`：「Static delivery declares …」一句加入 `/_platform/admin/office`，并加一条 Office 页说明。
+  - `platform/src/admin/README.md`：`document-server` 条目末尾指向该页面。
+  - 本文件开头「新增后台页面要同步更新三处」的约定里，「AGENTS.md 的页面清单」改为 `platform/web/README.md` 的页面清单（页面清单已在那里）。
+  - 实现者：`platform/web/src/audit-page.tsx` 的 `EVENT_NAMES` 补上 #424 推迟到本任务的事件中文名 `document-server-config.updated` → `修改 Office 配置`（无 details，按既有规则只显示中文名）。
+
+not selected：
+
+- Schema、Legacy compatibility：没有接口、数据库或迁移变化；既有页面行为不变，`admin-navigation.test.tsx` 只扩表。
+- File IO、Resource limits、Release：没有新依赖。
+- 「切换到外部后员工重启实例，Office 指向外部地址、平台不再接入自带」由 16.3 与 18.2 承担；本页只写提示，不另行证明。
+- 接口层的拒绝与事务语义（降权、审计失败回滚、未知字段、配对 400）由 #424 已合入的接口测试承担；本页只覆盖页面对 400/401/403 的呈现。
+
+Governing invariant：
+
+- 页面上任何一次 PUT 发出时，没有其他请求在途；PUT 的 body 只来自当前草稿或「切回自带」的固定信封。
+- 任何 401/403 之后，页面不再显示任何配置数据。
+- JWT 原文从不出现在页面、存储或 URL 中。
+
+Sibling surfaces：
+
+- `admin-request.ts`：`adminRequest`，本页唯一的请求入口（不改）。
+- `knowledge-base-page.tsx`：密钥框与 `已配置`/`未配置`、单页 pending 锁、固定 400 文案。
+- `plugins-page.tsx`：`runningInstances` 行与「下次启动生效」提示。
+- `admin-knowledge-base.ui.test.ts`：真实接口保存、拒绝、截图、HTML 与浏览器存储无密钥。
+- `admin-ui-fixture.ts`/`account-ui-fixture.ts`：`withAdminUi`、`holdAdminList`、`failAdminList`、`expectPlatformLogin`、`AccountUiOptions`。
+
+无关键路径文件。
+
+Evidence (16.2c 后台「Office」页，#425):
+
+**现状**：
+
+- `platform/src/web/routes.ts` 的静态清单到 `/_platform/admin/knowledge-base` 为止；`AdminNavigation` 的 `page` 联合到 `'knowledge-base'`；`account-page.tsx` 分派知识库页。
+- 接口 `platform/src/admin/document-server-config.ts`（#424）：GET 恰为 `{ mode, bundledConfigured, url, jwtConfigured }`，PUT 再加 `runningInstances`；两种 PUT 信封；配对 400 的 message 是 `External Document Server requires jwtSecret`，其他信封错误是固定 400。
+- `bundledConfigured` 来自部署配置 `config.documentServer !== null`。UI 夹具 `account-ui-fixture.ts` 的 `accountUiConfig` 用 `loadConfig` 构造配置，目前不设 `DOCUMENT_SERVER_*`，所以自带为未配置。
+- `audit-page.tsx` 的 `EVENT_NAMES` 没有 `document-server-config.updated`。
+
+**改动点**：
+
+- 实现者新建：
+  - `platform/web/src/office-page.tsx`，与同目录 `office-page.test.tsx`（jsdom，沿用 `platform/web/test/account-dom-fixture.tsx`）；
+  - `platform/test/admin-office.ui.test.ts`。
+- 实现者修改：
+  - `account-page.tsx`（分派一支）；`admin-navigation.tsx` 与其测试；`audit-page.tsx` 与其测试（一个事件名）；`platform/src/web/routes.ts` 与 `routes.test.ts`（新路径进 GET、HEAD、拒绝三张表）；样式只在 `platform/web/src/style.css` 复用既有类。
+  - `platform/test/account-ui-fixture.ts`：`AccountUiOptions` 加可选 `documentServer?: { containerName: string; jwtSecret: string }`，提供时 `accountUiConfig` 把两项作为 `DOCUMENT_SERVER_CONTAINER_NAME`/`DOCUMENT_SERVER_JWT_SECRET` 传给 `loadConfig`；省略时行为不变。
+- 编排者修改：`platform/web/README.md`、`platform/src/admin/README.md`、本文件。
+- 请求一律用既有 `adminRequest`，不新建请求模块。若页面状态骨架与 `knowledge-base-page.tsx` 构成 jscpd 克隆，只在页面内收敛写法，不新建并行实现；`pnpm duplicate-code` 仍须低于 3%，阈值不动。
+
+**测试**：
+
+- (a) `office-page.test.tsx` 用桩 `fetch` 覆盖：
+  - 加载：`加载中…` 且无表单；`bundled`+已配置、`bundled`+未配置（`Office 不可用` 为 `role="alert"` 且外部表单可用）、`external`（地址文本、`JWT：已配置`、地址框预填、「切回自带」与说明逐字）三种渲染，页顶提示逐字；401 → `assign('/_platform/login')` 一次；403 → 只有 `无权限` 且无表单；500 与回应形状不合法（多字段、`mode` 非法、缺字段）→ 失败态且无部分数据；「重试」重新发 GET。
+  - 外部表单：PUT body 逐字——JWT 框空则无 `jwtSecret`（`jwtConfigured` 为真时）；有 JWT 则带上；`url` 带前后空格时原样发送。空地址、只含空白的 JWT、`jwtConfigured` 为假且 JWT 为空三种情况不发请求，显示各自固定文案。400 两种映射经真实 `adminRequest`（桩 `fetch` 返回 `new Response(JSON.stringify({ message }), { status: 400 })`，不预先解析）：配对 message → 首次切换那一行；其他 message、非 JSON 回应体 → 地址那一行；500 → `保存失败，请重试。`。成功后 JWT 框清空、状态区按回应刷新、`已保存，实例下次启动时生效。` 与 `保存时运行中的实例数：0（非实时统计）。`。
+  - 切回自带：body 恰为 `{ mode: 'bundled' }`；成功后状态区变为自带、「切回自带」消失、地址框清空。
+  - 401/403 在保存时的处理同上；403 后 JWT 框与草稿不再存在。
+  - pending 期间所有按钮禁用，第二次点击不发请求；卸载时中止在途请求；过期响应不覆盖当前状态；`runningInstances` 不合法按保存失败处理。
+  - 逐文件覆盖率 ≥ 80%。
+- (b) `admin-office.ui.test.ts`（真实应用、SQLite 与接口，`withAdminUi`）：
+  1. 不设 `documentServer`：管理员打开页面 → `当前使用：自带 Document Server` 与 `自带 Document Server：未配置，Office 不可用` 可见，页顶提示逐字，截图 `admin-office-bundled-unconfigured`。
+  2. 首次切换只填地址不填 JWT → 不发 PUT（`observeAccountUi` 记录的 PUT 数为 0），显示首次切换那一行。
+  3. 填地址 `https://office.intranet.invalid` 与测试 JWT 点「切换到外部」→ 200；`readSettings(database)` 的 `documentServerUrl` 等于输入、`documentServerJwtSecret` 等于测试 JWT；新增恰一条 `document-server-config.updated` 审计；状态区为外部、`JWT：已配置`，JWT 框为空；页面 HTML 与所有浏览器存储里都没有测试 JWT。
+  4. 只改地址为 `https://office2.intranet.invalid`、JWT 留空保存 → 发出的 PUT body 无 `jwtSecret`；settings 地址更新、JWT 不变；恰一条新审计。
+  5. 地址填 `https://office.invalid/?x` 保存 → 真实 400，显示地址那一行，settings 与审计行数不变。
+  6. 重载后状态区为外部、地址框为第 4 步地址、`已配置`，JWT 框为空，HTML 与浏览器存储里没有测试 JWT（规格「JWT 不回显」）。
+  7. 「切回自带」→ settings 两值都为空串，恰一条新审计，状态区回到自带。
+  8. 独立的 `test()`（同一测试里第二个 `withAdminUi` 会因 127.0.0.1 上已有 cookie 被 `seedAdminUi` 拒绝），用设了 `documentServer` 的应用：容器名 `dsh-team-office-ui`（满足 `parseContainerName`，不是 12–64 位十六进制）、JWT 为非空的非秘密标记 `office-ui-bundled-jwt-marker`；页面显示 `自带 Document Server：已配置`，没有 `Office 不可用`；页面 HTML、浏览器存储与 GET 回应里都没有该容器名和 JWT 标记。
+  9. 拒绝与失败：挂住一个真实 GET 时只见 `加载中…`，`form` 个数为 0；一次受控的 GET 500（`failAdminList`）→ 失败文案、不回显诊断，「重试」随后对真实接口成功；员工账号打开 → 403 只有 `无权限`；登出后打开 → 回到登录页；页面就绪后先填好能通过页面检查和地址规则的草稿（地址 `https://office.intranet.invalid` 加测试 JWT），再删除管理员会话、或把账号降为员工，然后点「切换到外部」→ 真实 PUT 分别得到 401/403，页面回到登录页或只剩 `无权限`，settings 与整张审计表不变，留截图。
+  10. 桌面与窄屏截图（`expectViewportLayout`，前缀 `glass-admin-office`，无横向溢出）。`observeAccountUi` 只列这一个接口；`expectHealthy` 只允许本用例明确制造的状态；零控制台错误、零外部请求、`otherMutations` 为空、无浏览器存储。
+  11. 审计页筛选下拉的选项文本含 `修改 Office 配置`：本文件独立用例，用 `observeAuditUi`。
+- (c) `routes.test.ts`、`admin-navigation.test.tsx`、`audit-page.test.tsx` 扩表。
+
+**验证**：
+
+- `pnpm check`。
+- `pnpm test:ui`：实现者跑一次全量，贴通过数；新文件单独再跑一次。PR 附截图说明。
+- VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy` 证据：本任务不改 Docker 用例。
+- 本机 exact-head `pnpm test:stack` 证据评论：本 issue 涉及 Office，stack 用例不经本页，只证明入口未回归。
+
+**PR 体量**：目标 ≤ 400 行。若只因测试文件超出，按 #408 的先例加 `diff-limit-exempt`，并在正文写明超出部分是测试。
+
+**不做**：
+
+- 任何接口、设置或迁移改动；
+- 重启实例或显示实时实例数；
+- 员工侧 Office 编辑与 ONLYOFFICE 停用原因（#436）；
+- 在页面上预检地址规则（服务端 `isRagflowBaseUrl` 是唯一实现）。
 
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 
