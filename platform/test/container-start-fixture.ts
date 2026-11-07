@@ -206,8 +206,15 @@ function startupNetworks(
   }
   function disconnect(row: StartupNetwork, body: Record<string, unknown>): Reply {
     if (body.Force === true) throw new Error('Fixture refuses forced endpoint disconnection');
-    Reflect.deleteProperty(row.Containers, String(body.Container));
     const container = containers.get(String(body.Container));
+    // Like moby, a `Running` container (also in restart backoff) takes the live path and needs its
+    // endpoint; a released one is refused. The error is unclassified, so the API answers 500.
+    if (container?.State.Running === true && !(container.Id in row.Containers))
+      return {
+        status: 500,
+        document: { message: `container ${container.Id} is not connected to network ${row.Name}` },
+      };
+    Reflect.deleteProperty(row.Containers, String(body.Container));
     if (container?.NetworkSettings.Networks !== undefined)
       Reflect.deleteProperty(container.NetworkSettings.Networks, row.Name);
     return { status: 200 };

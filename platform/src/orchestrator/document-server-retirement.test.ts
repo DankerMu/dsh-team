@@ -237,24 +237,96 @@ it.each([
   },
 );
 
-it.each(['stopped', 'restarting'] as const)(
-  'a %s Document Server attachment is accepted by health and reuse and disconnected on retirement',
-  async (state) => {
+it('a stopped Document Server attachment is accepted by health and reuse and disconnected on retirement', async () => {
+  const f = await attached();
+  markRunning(f.database);
+  stopDocumentServer(f.daemon);
+  const before = reconciliationState(f.database);
+
+  await f.ownerFor().reconcile();
+  const reused = await f.owner.startUserContainer(f.input);
+  await f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+
+  expect(reconciliationState(f.database).audits.length).toBe(before.audits.length + 1);
+  expect(reused).toMatchObject({ outcome: 'running', containerId: START_CONTAINER });
+  expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
+  expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(documentServerAttachment(f.daemon)).toBeUndefined();
+  expect(documentServerRecord(f.database)).toEqual(NULL_RECORD);
+});
+
+/**
+ * Restart-policy backoff: Docker reports the peer `Running` with its endpoint released, so a
+ * non-force disconnect is refused until the peer stops (config-only removal) or rejoins (live).
+ */
+function backoff(daemon: StartupDaemon): (recovery: 'stopped' | 'rejoined') => void {
+  const network = daemon.networks.get(START_NETWORK);
+  const live = structuredClone({
+    endpoint: network?.Containers[DS_ID],
+    attachment: documentServerAttachment(daemon),
+  });
+  stopDocumentServer(daemon, 'restarting');
+  return (recovery) => {
+    if (recovery === 'stopped') {
+      stopDocumentServer(daemon);
+      return;
+    }
+    const container = daemon.containers.get(DS_ID);
+    const networks = container?.NetworkSettings.Networks;
+    if (
+      network === undefined ||
+      container === undefined ||
+      networks === undefined ||
+      live.endpoint === undefined
+    )
+      throw new Error('Missing fixture Document Server attachment');
+    Object.assign(container.State, { Running: true, Restarting: false });
+    network.Containers[DS_ID] = live.endpoint;
+    networks[`dsh-team-net-${START_USER}`] = live.attachment;
+  };
+}
+
+/** During backoff the bridge, the peer's configuration and the record all remain. */
+function retained(f: Awaited<ReturnType<typeof attached>>, status: string): void {
+  expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
+  expect(f.daemon.networks.get(START_NETWORK)?.Containers).not.toHaveProperty(DS_ID);
+  expect(documentServerAttachment(f.daemon)).toMatchObject({
+    NetworkID: START_NETWORK,
+    EndpointID: '',
+  });
+  expect(documentServerRecord(f.database)).toEqual(BUNDLED_RECORD);
+  expect(f.database.prepare('SELECT status FROM instances').get()).toEqual({ status });
+}
+
+/** A retried retirement after backoff removes the bridge and the peer's attachment and clears the record. */
+async function retired(f: Awaited<ReturnType<typeof attached>>): Promise<void> {
+  await f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+
+  expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(documentServerAttachment(f.daemon)).toBeUndefined();
+  expect(documentServerRecord(f.database)).toEqual(NULL_RECORD);
+  expect(f.database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'stopped' });
+}
+
+it.each(['stopped', 'rejoined'] as const)(
+  'a restarting Document Server attachment passes health and reuse, fails retirement closed and retires once it has %s',
+  async (recovery) => {
     const f = await attached();
     markRunning(f.database);
-    stopDocumentServer(f.daemon, state);
+    const recover = backoff(f.daemon);
     const before = reconciliationState(f.database);
 
     await f.ownerFor().reconcile();
     const reused = await f.owner.startUserContainer(f.input);
-    await f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+    await expect(
+      f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' }),
+    ).rejects.toThrow('User container retirement failed');
 
-    expect(reconciliationState(f.database).audits.length).toBe(before.audits.length + 1);
     expect(reused).toMatchObject({ outcome: 'running', containerId: START_CONTAINER });
-    expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
-    expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
-    expect(documentServerAttachment(f.daemon)).toBeUndefined();
-    expect(documentServerRecord(f.database)).toEqual(NULL_RECORD);
+    expect(reconciliationState(f.database).audits).toEqual(before.audits);
+    retained(f, 'running');
+    recover(recovery);
+    await retired(f);
   },
 );
 
@@ -299,20 +371,34 @@ it.each(['owned network removed', 'network cleanup failed or unconfirmed'])(
   },
 );
 
-it.each(['stopped', 'restarting'] as const)(
-  'readiness failure cleanup disconnects a %s Document Server attachment and removes the bridge',
-  async (state) => {
+it('readiness failure cleanup disconnects a stopped Document Server attachment and removes the bridge', async () => {
+  const f = await attached();
+  stopDocumentServer(f.daemon);
+  f.daemon.setComposition('boot failure without a launch line\n');
+
+  await expect(
+    f.owner.waitForUserContainerReady({ userId: START_USER, authority: 'team.example:8443' }),
+  ).rejects.toThrow('owned network removed');
+
+  expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
+  expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
+  expect(documentServerAttachment(f.daemon)).toBeUndefined();
+});
+
+it.each(['stopped', 'rejoined'] as const)(
+  'readiness failure cleanup fails closed on a restarting Document Server attachment and a retried retirement succeeds once it has %s',
+  async (recovery) => {
     const f = await attached();
-    stopDocumentServer(f.daemon, state);
+    const recover = backoff(f.daemon);
     f.daemon.setComposition('boot failure without a launch line\n');
 
     await expect(
       f.owner.waitForUserContainerReady({ userId: START_USER, authority: 'team.example:8443' }),
-    ).rejects.toThrow('owned network removed');
+    ).rejects.toThrow('network cleanup failed or unconfirmed');
 
-    expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
-    expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
-    expect(documentServerAttachment(f.daemon)).toBeUndefined();
+    retained(f, 'error');
+    recover(recovery);
+    await retired(f);
   },
 );
 

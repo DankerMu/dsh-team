@@ -111,7 +111,7 @@ export function stopDocumentServer(
   const container = daemon.containers.get(DS_ID);
   if (container === undefined) throw new Error('Missing fixture Document Server');
   container.State.Running = state === 'restarting';
-  if (state === 'restarting') container.State.Restarting = true;
+  container.State.Restarting = state === 'restarting';
   for (const network of daemon.networks.values()) Reflect.deleteProperty(network.Containers, DS_ID);
   for (const attachment of Object.values(container.NetworkSettings.Networks ?? {}))
     Object.assign(attachment as object, { EndpointID: '', IPAddress: '' });
