@@ -95,6 +95,30 @@ stat -c %g /var/run/docker.sock
 
 两个目录在宿主与平台容器中必须是**同一绝对路径**，并且预先可由 uid1000 写入；Compose 不自动创建缺失的 bind 目录。不要把宿主路径 `/srv/...` 映射到不同的容器路径 `/data/...`。不要设置 `DMXAPI_KEY`、`CHROME_BIN` 或 CI channel/journal 作为平台部署输入。
 
+### 自带 Document Server（Office）
+
+同一条 Compose 命令会启动自带的 Document Server：镜像 `onlyoffice/documentserver:9.4.0`，固定容器名 `dsh-team-documentserver`，开启 JWT，不发布宿主端口。员工实例每次启动时，平台在该实例网络的子网基址 +4 上接入它。
+
+- **JWT 必须填写**：`.env` 里的 `DOCUMENT_SERVER_JWT_SECRET` 要填一个足够长的随机值。Compose 把这一个值同时交给 Document Server 和平台；该值未设置或为空时，Compose 在创建任何容器之前就失败。可以用下面的命令就地写入，命令不会打印密钥（GNU sed）：
+
+  ```sh
+  sed -i "s/^DOCUMENT_SERVER_JWT_SECRET=$/DOCUMENT_SERVER_JWT_SECRET=$(openssl rand -hex 32)/" .env
+  grep -c '^DOCUMENT_SERVER_JWT_SECRET=.\{64\}$' .env
+  ```
+
+  第二条命令输出 `1`，说明该行已写入 64 位十六进制值。不要用 `cat` 或 `grep` 打印这一行。
+- **容器名不用改**：`DOCUMENT_SERVER_CONTAINER_NAME` 保持示例里的 `dsh-team-documentserver`。容器名由 Compose 固定，Compose 不读这一行，平台读。
+- **字体目录必须存在**：Compose 把仓库根目录下的 `assets/fonts/` 只读挂载到 `/usr/share/fonts/truetype/custom`，并且不会自动创建这个目录。目录缺失时 Document Server 无法创建。这个目录已被 git 忽略，运营方自行放入有授权的字体文件：
+
+  ```sh
+  install -d -m 755 assets/fonts
+  ```
+
+- **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
+- **Document Server 重建后，已运行的实例要重启才能恢复 Office**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前用不了 Office，聊天和文件功能不受影响。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
+- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙。
+- **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。缺 JWT 时，升级后的 `up -d` 在创建任何容器之前就失败；缺字体目录时，要到创建 Document Server 容器时才失败，`up -d` 返回非零，平台可能已经用新镜像启动，但 Office 不可用。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。
+
 ## 4. 在目标主机运行真实沙箱探针
 
 ```sh
