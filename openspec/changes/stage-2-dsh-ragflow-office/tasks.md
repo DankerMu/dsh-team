@@ -3080,8 +3080,7 @@ selected：
   - 新增 `platform/test/sidebar-archive-stack-fixture.ts`，整个 lane 函数照 `scopeLane`/`searchLane` 的写法放在里面。入参是浏览器会话、实例 exec 和 provider 计数读取，返回 `ArchiveEvidence`。
   - 配对的 `sidebar-archive-stack-fixture.integration.test.ts` 覆盖纯函数：tar 解析和条目比对。
   - `platform/test/platform-stack.stack.test.ts` 只加调用、`stackEvidence.archive` 证据字段和断言输出行。调用位置写死在 `searchLane` 之后、`duringRagflowOutage` 回调返回之前。用同一个员工账号，但本 lane 自己开一个 `workbenchSession`（与其他 lane 一样新开浏览器并登录，`stack-browser-fixture.ts:142`）。
-  - `stack-browser-fixture.ts` 和它的配对测试 `stack-browser-fixture.integration.test.ts`（`:207`、`:257` 的完整 URL 断言）随下面的失败请求口径一起改，先红后绿。
-  - 不从 stack 测试往外搬无关代码。行数预算：stack 测试增量 ≤ 30 行；fixture 模块和配对测试合计 ≤ 300 行；`stack-browser-fixture` 两个文件 ≤ 20 行；整个 PR（含本段 tasks.md）≤ 400 行，超出就停下报告。
+  - 不从 stack 测试往外搬无关代码。行数预算：stack 测试增量 ≤ 30 行；fixture 模块和配对测试合计 ≤ 300 行；整个 PR（含本段 tasks.md）≤ 400 行，超出就停下报告。
 - **复用 better-sidebar 文件区驱动**：
   - `platform/test/better-sidebar-browser-fixture.mjs:22-150` 已有发行版标记：`ROW`/`rowQuery`、`explorerStripTab`、`explorerReselect`、`openExplorer` 的选择器。它们处理了侧栏收起和 guide 入口两种状态，以及 #429 的教训（打开的文件标签会遮住文件区）。
   - 那个驱动用 CDP，本通道用 Playwright。所以只把选择器字符串的构造函数导出共用，驱动本身不共用，不另造一套选择器（jscpd 3%）。`rowQuery`、`explorerStripTab`、`explorerReselect`（`:61-78`）构造的是 JS 表达式，不是 CSS 选择器：在 Playwright 里用 `page.evaluateHandle(...)` 取元素，再点击返回的元素。
@@ -3097,10 +3096,7 @@ selected：
   - 先挂上 `page.waitForEvent('download')`（照 STOP 的先挂等待写法），再按完整文案点「压缩并下载（2 项）」。
   - 断言 `download.suggestedFilename() === 'archive.tar.gz'` 且 `await download.failure() === null`；关闭浏览器前 `saveAs` 到 `mkdtemp` 目录，算完 sha256 后删除，不留在 `reports/stack/<runId>/`。
   - 打开菜单时截一张图，证据保留在 `reports/stack/<runId>/`。
-- **下载导航造成的失败请求**：
-  - Chromium 把 `<a download>` 导航转成下载，请求以 `net::ERR_ABORTED` 结束。Playwright 1.63 会为它发出 RequestFailed（`playwright-core` `coreBundle.js:23325-23336`），`workbenchSession` 会记下完整 URL（`stack-browser-fixture.ts:174-178`）。
-  - 处理办法：`workbenchSession` 把失败请求记为 `${method} ${pathname}`，丢掉 origin、查询串和 hash，下载请求因此记为 `GET /sidebar/archive`。本 lane 的会话断言失败请求恰好为 `['GET /sidebar/archive']`；其余场景的 `failedRequests: []` 断言不变（各 lane 的会话各自独立，消费方只断言空列表，失败时只打印计数）。
-  - 证据和失败输出都不得含 `sessionId` 或任何查询串。
+- **下载与失败请求**（本机 exact-head `pnpm test:stack` 实测，2026-11-07）：本 lane 的会话里，下载导航没有被记为失败请求，所以本 lane 和其余场景一样断言 `failedRequests: []`，`workbenchSession` 不改。证据行不得含 cookie、令牌或带查询串的 URL；失败时 `workbenchSession` 照旧记录完整 URL（其中的 DSH Session ID 不是凭据）。
 - **tar 解析（fixture 模块内的最小解析器）**：
   - 先用 `zlib.gunzipSync` 解压，要求以 gzip 魔数 `1f 8b` 开头。
   - 头部魔数接受 POSIX `ustar\0`+`00` 和 GNU `ustar  \0` 两种，并校验头部 checksum。
@@ -3119,7 +3115,7 @@ selected：
   - 现有 `test:stack` 前后清单的口径（`ragflow-cpu-1` 的 `StartedAt` 和重启次数、卷集合）不变。
 - **文档（编排者同 PR 改）**：
   - `platform/test/README.md:89` 的 stack 证据清单加 `stackEvidence.archive`；
-  - `docs/LOCAL_STACK.md` §5 第 9 步的场景列表加上打包下载；§6 证据表加一行：条目、字节数、sha256、格式、截图名，以及失败请求只记 pathname 的口径。
+  - `docs/LOCAL_STACK.md` §5 第 9 步的场景列表加上打包下载；§6 证据表加一行：条目、字节数、sha256、格式、截图名，以及本 lane 失败请求为空。
 
 must-preserve：
 
@@ -3143,7 +3139,7 @@ Governing invariant：员工在文件区选中两个文件并下载压缩包，�
 Sibling surfaces：
 
 - `better-sidebar-browser-fixture.mjs`（17.1 的 Docker 浏览器用例；只共享选择器）。
-- `stack-browser-fixture.ts` 的失败请求记录（改为 `${method} ${pathname}`，对所有场景生效）。
+- `stack-browser-fixture.ts` 的浏览器会话与失败请求记录（复用，不改）。
 - #556：员工插件操作与 `file:` 依赖（与本用例无关）。
 
 Evidence (17.2 文件区打包下载，#430):

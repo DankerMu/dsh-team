@@ -204,7 +204,7 @@ it('keeps the original failure and its browser evidence when closing the browser
     screenshots: ['failure.png'],
     consoleErrors: ['stub console failure'],
     pageErrors: ['stub page failure'],
-    failedRequests: ['GET /asset.js'],
+    failedRequests: ['GET http://stub/asset.js'],
   });
   expect(JSON.stringify(failure.evidence)).not.toContain('stub-password');
 });
@@ -234,7 +234,7 @@ it('excuses only the requests a deliberate reload cancels, then waits for the co
   const [stream, finished, later] = [
     request('http://stub/plugins/events'),
     request('http://stub/done.js'),
-    request('http://stub/late.js?sessionId=secret#frag'),
+    request('http://stub/late.js'),
   ];
   const evidence = await workbenchSession(
     await conversation(() => Promise.resolve()),
@@ -254,7 +254,6 @@ it('excuses only the requests a deliberate reload cancels, then waits for the co
   );
 
   expect(stub.events).toEqual(['reload']);
-  // Only the pathname: origin, query string and hash never reach the evidence.
-  expect(evidence.failedRequests).toEqual(['GET /done.js', 'GET /late.js']);
+  expect(evidence.failedRequests).toEqual(['GET http://stub/done.js', 'GET http://stub/late.js']);
   expect(evidence.requests).toBe(3);
 });

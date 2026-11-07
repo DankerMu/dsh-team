@@ -743,12 +743,12 @@ it('builds both images, starts the delivered compose platform, converses through
   }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
   expect(search.browser.screenshots).toEqual(['search-sources.png']);
   expect(search.facts).toMatchObject({ result: 'ok', datasetNames: [POLICIES], excluded: 1 });
-  // Chromium turns the archive's `<a download>` navigation into a download ending ERR_ABORTED.
+  // The archive's `<a download>` hand-off leaves no failed request behind, like every other lane.
   expect(archive.browser).toMatchObject({
     screenshots: ['archive-menu.png'],
     consoleErrors: [],
     pageErrors: [],
-    failedRequests: ['GET /sidebar/archive'],
+    failedRequests: [],
     externalRequests: [],
   });
   process.stdout.write(

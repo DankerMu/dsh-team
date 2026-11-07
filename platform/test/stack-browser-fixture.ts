@@ -161,8 +161,7 @@ export async function workbenchSession(
     context.on('requestfailed', (request) => {
       open.delete(request);
       if (cancelled.delete(request)) return;
-      // Only the pathname: a query string can carry a session ID (the sidebar archive's does).
-      if (observing) failedRequests.push(`${request.method()} ${new URL(request.url()).pathname}`);
+      if (observing) failedRequests.push(`${request.method()} ${request.url()}`);
     });
     context.on('response', (response) => {
       if (observing) onResponse?.(response);
