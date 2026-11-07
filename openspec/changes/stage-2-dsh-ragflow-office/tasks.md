@@ -2810,6 +2810,86 @@ Evidence (16.3 编排器以 +4 接入 Document Server，#426):
 - VPS exact-head `pnpm test:docker` 与 `pnpm test:deploy`，清理已确认。
 - 本机 exact-head `pnpm test:stack` 证据评论：Office 相关门禁要求；本任务不改 stack 通道，证据证明它未被破坏。
 
+Risk packs (16.5 Document Server 接入后的隔离验证与文档，#428): fixture level expanded（与 issue 建议一致）。
+
+本任务只交付隔离 Docker 用例和部署文档隔离一节，不改任何生产代码。接入行为本身由 16.3（#426）交付，本任务不改。selected：
+
+- **Isolation boundary（Docker 用例）**：在 `platform/test/container-network.docker.test.ts` 新增一个 network 方式的用例，名为 `bundled Document Server joins both instance networks without bridging them`。现有 published-loopback 用例保留原样，一字不改。
+  - **构造**：
+    - 平台替身和 Document Server 替身都用 `createStandInPlatform`，名字分别为 `dsh-team-test-isolation-platform-<runId>` 与 `dsh-team-test-isolation-ds-<runId>`。
+    - 编排器为 `createOrchestrator({ config: { upstreamMode: 'network', platformContainerName: <平台替身> } })`。
+    - A、B 两个实例都用 `startDockerInstance(..., documentServerConfig(<DS 替身>))` 以自带模式启动。
+    - 复用 `container-document-server-docker-fixture.ts` 与 `container-start-docker-fixture.ts` 的现有 helper：`documentServerConfig`、`bridgeEndpoints`、`containerNetworks`、`expectDocumentServerAtLayout`、`expectPlatformAtLayout`、`gatewayStatus`、`dockerStep`。不另写同功能的 helper。
+  - **三端点断言**（spec「检查实例网络端点」）：A、B 各自网络的 `bridgeEndpoints` 恰为 `[员工容器, 平台替身, DS 替身]` 三个 ID（排序后比较），地址依次为 +2、+3、+4。+3 由 `expectPlatformAtLayout` 断言，+4 由 `expectDocumentServerAtLayout` 断言。两个网络的 ID 和子网都不同。
+  - **正向对照（先于所有负向断言）**：
+    - A、B 都从平台替身直连自己的 +2:3080 返回 200（`gatewayStatus`；这不经过网关）。
+    - 两个员工容器、平台替身和 DS 替身各自运行现有 `listen`，在 0.0.0.0 上监听 3099。
+    - 在 DS 替身内，用 probe 连接 A 和 B 的 +2:3080，都成功。这说明 Document Server 是两个网络的共享对端，网络本身可达。
+    - 各实例连接自己的 +2:3080 和 3099 都成功。
+    - A 员工容器连接 A 网络上的 +3:3099、+4:3099 都成功，B 侧同理。监听进程是同一个，所以从本网络能到达，从对方网络不能，这才有判别力。
+  - **负向断言**（spec「从 B 的实例访问 A 的实例仍失败」）：
+    - 在 B 的实例内，向 A 网络上的 +2（员工）、+3（平台端点）、+4（Document Server 端点）三个地址，逐个连接这组端口：`3080, 3099, 22, 80, 443, 3000, 8080`。全部失败，A→B 同样全部失败。
+    - 按目标地址逐个调用 `exec`：每次只探一个地址的 7 个端口，单连接超时 1s，总计 ≤7s，低于 `exec` 的 15s 时限。不调高 `exec` 超时，也不缩短单连接超时，因为跨 bridge 隔离是丢包，每个连接都要等满超时。
+    - 判据有正向对照的只有 3080 和 3099。22/80/443/3000/8080 在 A 侧没有监听者，只是为了覆盖 spec 的「常见端口」。
+    - 不能借 Document Server 绕道：B 连接 A 网络上的 +4 地址也失败。原因是 B 以 uid1001 运行，没有有效的 NET_ADMIN/NET_RAW，不能把 DS 设为下一跳，发往 A 子网的包只能经 B 的网关，被 Docker 的跨 bridge 隔离丢弃。本用例不证明 DS 的网络命名空间不做转发。
+    - 端口列表扩展的做法：在 `network-probe-fixture.ts` 里由一个生成函数产出脚本，导出的 `probe` 是 `(3080, 3099)` 的那一份，**字节与现在完全相同**。`platform/test/deployment-isolation.model.test.ts:145-147` 会把 `probe` 原样嵌进真实 Agent 的提示词，字节一变，19.5 的模型证据就失效。新用例用同一生成函数产出 7 端口版本，不另写第二份脚本逻辑。字节相同要用可复现的直接比较证明：`main` 上 `probe` 的字节与新 `probe` 的字节做比较（或比较两者的 sha256），把比较输出贴到 PR。
+  - **退役**：
+    - 停止 A 后，A 的网络被删除，DS 替身的 `containerNetworks` 恰为 `['bridge', dsh-team-net-<B>]`（排序后比较）。B 网络上三个端点的 ID 与地址不变，B 仍返回 200。
+    - 再停止 B，网络删除，DS 替身的 `containerNetworks` 恰为 `['bridge']`。
+  - **汇总**：用例照现有用例的写法，经 `runNetworkAcceptance` 返回 JSON 汇总并逐键断言。例如 `{ instances: 2, endpointsPerNetwork: 3, ports: [...], isolatedBothWays: true, viaDocumentServer: false, siblingPreserved: true }`。
+- **Documentation（编排者同 PR 改 `docs/DEPLOY.md` §7「隔离提供什么、不提供什么」）**：
+  - 改写现有「每个实例只加入自己的bridge网络…平台分别接入各实例网络」一条，拆成两条：
+    - 「实例网络端点（网络方式）：员工容器在 +2，平台在 +3；使用自带 Document Server 且本次启动接入成功时再加 Document Server +4，恰好三个端点；外部或不可用时没有 +4。网络身份不可信，或出现既非已验证平台端点、也非已记录 Document Server 端点的不明端点时，操作失败，不强制删除。验收：`container-network.docker.test.ts` 的 network 用例（`test:docker`）。」
+    - 「Document Server 是除平台外唯一接入各实例网络的对端，能直连每个实例的 +2:3080（用例的正向对照断言了这一点）。在网络层，B 向 A 网络 +2/+3/+4 的所列端口发起的连接全部失败，原因是 Docker 的跨 bridge 隔离，且 B 不能改路由；这不是 65535 端口的穷举。在应用层，持有 Document Server JWT 的人可以让它代为请求任何实例。跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护由第 18 组随 Office 在线编辑一起交付，并由跨用户攻击用例验证；在那之前实例内不启用 ONLYOFFICE，也没有经 Document Server 取文件的路径。」
+  - 在「不提供」中新增一条：**Document Server 的 JWT 在实例内可读**（Office 配置写入覆盖层之后），需要按共享凭据对待。
+  - 新增一条：员工可以在自己实例内安装插件、开启的联网工具可以访问外网；这些**不改变隔离边界**，员工本来就有终端和完全访问权限，插件只在员工自己的实例内运行。
+  - 改写 §7 末行（`docs/DEPLOY.md:271`，它与 #427 写入的 §3 Document Server 部署矛盾）：
+    - 「离线包、升级回滚、备份恢复和生产TLS证书管理」这部分保留；
+    - Office 部分改为「自带 Document Server 已随部署交付并接入实例网络，Office 在线编辑（ONLYOFFICE 插件、文件令牌密钥）尚未交付」；
+    - RAGFlow 部分改为「RAGFlow 知识库检索通过后台配置交付（本文档不含 RAGFlow 部署说明）」。落笔前要对照 `platform/src/admin/ragflow-config.ts` 与 `platform/src/ragflow-proxy/` 核实交付状态。
+  - 对应关系（spec「文档与实际一致」）：
+    - 本用例断言的每一条（三端点、+2/+3/+4、DS 能直连各实例 +2:3080、双向不可达、经 DS 不可达、退役不影响兄弟）在 §7 都有对应文字；
+    - PR 中的逐条对应表把「文件令牌密钥阻止跨用户取文件」标为「待第 18 组验证」，不算作已验证；
+    - §7 列为「不提供」的条目（JWT 可读、内网出站、模型密钥），没有任何用例断言其成立。
+
+PR 范围说明：
+
+- `platform/test/container-network.docker.test.ts`：新增一个用例；若文件超过 size 上限，把场景函数放进 `container-document-server-docker-fixture.ts`，按 #426 的先例。
+- `platform/test/network-probe-fixture.ts`：`probe` 原地扩展。
+- `docs/DEPLOY.md` §7。
+- 不改生产代码。
+
+剩余风险：
+
+- 端口列表是有限集合，不是 65535 端口穷举；文档如实写明。
+- DS 替身用用户镜像的 `sleep infinity`，不是真实 ONLYOFFICE。真实 Document Server 在实例网络上的监听端口不影响「B 到达 A」的判定：B 根本不在 A 的网络上。
+
+not selected：
+
+- Schema、Public API、Auth：无新接口和迁移。
+- Concurrency、Resource limits：沿用夹具。
+- File IO：无。
+- Release：无新依赖。
+- Legacy compatibility：现有 published-loopback 用例不变。
+- 无关键路径文件：只改测试与文档。
+
+Governing invariant：自带 Document Server 接入成功后，每个员工实例网络上恰好有员工容器、平台、Document Server 三个端点。在网络层，B 不能经自己的网络（包括 Document Server 在 B 网络上的端点）连接 A 网络上的地址，所列端口全部失败。应用层上经 Document Server 的代为请求由第 18 组的文件令牌密钥约束。
+
+Sibling surfaces：
+
+- `container-document-server.docker.test.ts`（16.3 的接入与退役用例，不改）；
+- `container-network-mode.docker.test.ts`（平台 +3 用例，不改）；
+- `network-probe-fixture.ts` 的其他调用方：`deployment-internal-isolation-fixture.ts` 的返回形状不变；`deployment-isolation.model.test.ts` 把 `probe` 的原始字节嵌进模型提示词，默认字节保持不变，所以 19.5 的模型证据仍然有效，本次也不重跑 `test:model`；
+- `test:deploy` 的 19.3 隔离用例（不改）。
+
+Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
+
+- 本机：`pnpm check`。
+- VPS exact-head `pnpm test:docker`（含新用例），以及 `pnpm test:docker platform/test/container-network.docker.test.ts`。后者由全量运行覆盖，PR 中引用全量 stdout 中该文件的结果行。
+- VPS exact-head `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+- PR 描述列出 §7 文字与用例断言的逐条对应表。
+
 ## 17. 文件区：better-sidebar、下载、HTML 沙箱与旧格式预览
 
 依赖：4、10（本机通道用例）、11。关键路径 `images/dsh-user/`。
