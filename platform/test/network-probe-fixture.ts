@@ -12,13 +12,19 @@ while True:
         time.sleep(.05)
 print(json.dumps({'uid': os.geteuid(), 'port': 3099}))
 `;
-export const probe = `
+/** One 1s connect per host and port; a single port would render a Python int, not a tuple. */
+export function probeScript(ports: readonly number[]): string {
+  if (ports.length < 2) throw new Error('Probe needs at least two ports');
+  return `
 import json, socket, sys
 results = []
 for host in sys.argv[1:]:
-    for port in (3080, 3099):
+    for port in (${ports.join(', ')}):
         try:
             with socket.create_connection((host, port), timeout=1): results.append(True)
         except OSError: results.append(False)
 print(json.dumps(results))
 `;
+}
+// The model acceptance embeds these exact bytes in a real Agent prompt; keep them stable.
+export const probe = probeScript([3080, 3099]);
