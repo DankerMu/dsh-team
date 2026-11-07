@@ -41,19 +41,42 @@ const CONVERSION_MS = 240_000;
  *   missing-font notice `data-office-font-warning` (FontNotice), which is not a failure.
  * Native handoff (src/client/native/index.ts HOST_OWNED_EXTS): better-sidebar refuses docx, so the
  * address falls to the built-in preview, which converts it to PDF inside the instance.
+ * Tab strip (dockkit, bundled in dsh-web-frontend dist/assets/index-CN7NIWNw.js:188): `pZ` keeps
+ * an inactive tab's body mounted but `hidden`/`aria-hidden`/inert, and only the active tab's pane
+ * draws the strip (`ux`), whose `[role="tab"][data-dockkit-tab="<tab id>"]` carries
+ * `aria-selected` and selects its tab on click; its `[data-dockkit-tab-title]` span is laid out
+ * (index-BxpfOGf3.css `._tabTitle_6nhg2_389{display:flex}`), unlike the Sidebar's own title span
+ * inside it (dsh-client-ui-sidebar-right lib/client.js:1289-1293 `tabTitle`, `:1143`
+ * `.P3OORG_tabTitle{display:contents}`), which has no box to click.
  */
 const OFFICE_PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/office';
 const PANEL = '[data-sidebar-right-open]';
 
 const visible = `(el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && el.closest('[hidden],[aria-hidden="true"]') === null; }`;
 
+const ROW = '[data-dsh-native-tab-host] [role="button"][title]';
+const titled = (name) =>
+  `(el) => el.title === ${JSON.stringify(name)} || el.title.endsWith(${JSON.stringify(`/${name}`)})`;
+
 /** The visible explorer row of one workspace file, drawn by better-sidebar wherever it docks. */
 const rowQuery = (name) =>
-  `[...document.querySelectorAll(${JSON.stringify('[data-dsh-native-tab-host] [role="button"][title]')})].find((el) => (el.title === ${JSON.stringify(name)} || el.title.endsWith(${JSON.stringify(`/${name}`)})) && (${visible})(el))`;
+  `[...document.querySelectorAll(${JSON.stringify(ROW)})].find((el) => (${titled(name)})(el) && (${visible})(el))`;
 
-/** The sidebar tab id whose body holds better-sidebar's explorer row for `name`, visible or not. */
-const explorerTabQuery = (name) =>
-  `(() => { const row = [...document.querySelectorAll(${JSON.stringify('[data-dsh-native-tab-host] [role="button"][title]')})].find((el) => el.title === ${JSON.stringify(name)} || el.title.endsWith(${JSON.stringify(`/${name}`)})); return row?.closest('div[data-sidebar-right-tab]')?.getAttribute('data-sidebar-right-tab') ?? null; })()`;
+/**
+ * The one dock strip tab of the Sidebar tab whose body holds better-sidebar's explorer row for
+ * `name`, visible or not; null unless exactly one tab body and exactly one strip tab match.
+ */
+const explorerStripTab = (name) => `(() => {
+  const rows = [...document.querySelectorAll(${JSON.stringify(ROW)})].filter(${titled(name)});
+  const ids = [...new Set(rows.map((row) => row.closest('div[data-sidebar-right-tab]')?.getAttribute('data-sidebar-right-tab') ?? ''))];
+  if (ids.length !== 1 || ids[0] === '') return null;
+  const tabs = [...document.querySelectorAll('[role="tab"][data-dockkit-tab]')].filter((el) => el.getAttribute('data-dockkit-tab') === ids[0]);
+  return tabs.length === 1 ? tabs[0] : null;
+})()`;
+
+/** The clickable title of the explorer's strip tab while another tab covers the explorer. */
+const explorerReselect = (name) =>
+  `(() => { const tab = ${explorerStripTab(name)}; const title = tab?.getAttribute('aria-selected') === 'false' ? tab.querySelector('[data-dockkit-tab-title]') : null; return (${visible})(title) ? title : null; })()`;
 
 /** Compact, secret-free DOM summary of the right Sidebar for a failed wait. */
 const panelSummary = `(() => {
@@ -122,18 +145,30 @@ async function openExplorer(page, evidence, name) {
   });
 }
 
-/** Click one explorer row, first re-selecting the explorer tab when an opened file covers it. */
+/**
+ * Click one explorer row. Two states are recognized: the row is visible, or an opened file covers
+ * the explorer and its unselected strip tab is shown; that tab is selected first and the row must
+ * then be visible in a selected explorer tab. Any other state times out with the stage diagnostics.
+ */
 async function openFromExplorer(page, evidence, label, name) {
   await stage(page, evidence, label, async () => {
-    if (!(await evaluate(page, `Boolean(${rowQuery(name)})`))) {
-      const tab = await evaluate(page, explorerTabQuery(name));
-      assert.equal(typeof tab, 'string', 'better-sidebar explorer tab must remain open');
-      await physicalClick(
-        page,
-        `document.querySelector(${JSON.stringify(`span[data-sidebar-right-tab="${tab}"]`)})`,
-      );
+    const shown = await waitFor(
+      () =>
+        evaluate(
+          page,
+          `(${rowQuery(name)}) ? 'row' : (${explorerReselect(name)}) ? 'reselect' : null`,
+        ),
+      MS,
+      'better-sidebar-explorer-row-or-tab',
+    );
+    if (shown === 'reselect') {
+      await physicalClick(page, explorerReselect(name));
       await waitFor(
-        () => evaluate(page, `Boolean(${rowQuery(name)})`),
+        () =>
+          evaluate(
+            page,
+            `Boolean(${rowQuery(name)}) && (${explorerStripTab(name)})?.getAttribute('aria-selected') === 'true'`,
+          ),
         MS,
         'better-sidebar-explorer-reselected',
       );

@@ -79,10 +79,11 @@ it('opens Markdown in better-sidebar and hands a docx from its file area to the 
         expect(observed.docx).toMatchObject({ nativeHost: false, downloads: 0, editors: 0 });
         expect(observed.docx.pages).toBeGreaterThanOrEqual(1);
         expect(observed.consoleErrors).toEqual([]);
-        rejectPluginFailures(
-          await lifecycle.commandAsync(['logs', id], 30_000),
-          'Sidebar instance plugin load failed',
-        );
+        // A failed or over-limit read returns empty output, which must not pass the marker check.
+        const logs = await lifecycle.commandAsync(['logs', id], 30_000);
+        if (logs.error !== undefined || logs.status !== 0)
+          throw new Error('Sidebar instance logs unavailable');
+        rejectPluginFailures(logs, 'Sidebar instance plugin load failed');
         process.stdout.write(
           `Docker better-sidebar handoff verified: run=${lifecycle.runId} pages=${String(observed.docx.pages)} ` +
             `fontWarning=${String(observed.docx.fontWarning)} screenshots=${evidence}\n`,

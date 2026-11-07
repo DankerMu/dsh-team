@@ -113,9 +113,11 @@ RUN node /opt/dsh-team/catalog-check.mjs verify /opt/dsh-team/catalog.json /opt/
   && mkdir /opt/dsh-team/credentials \
   && chmod 0555 /opt/dsh-team/credentials
 # Preserve the complete relative tree, including hidden entries, independently of live profiles.
+# cp -a keeps uid1001 ownership; the seed is the only such tree, as everything else under
+# /opt/dsh-team was written root-owned above, and re-chowning it would copy it into this layer.
 RUN mkdir -p /opt/dsh-team/profile-seed \
   && cp -a "${DSH_HOME}/profiles/." /opt/dsh-team/profile-seed/ \
-  && chown -R root:root /opt/dsh-team \
+  && chown -R root:root /opt/dsh-team/profile-seed \
   && chmod -R a-w /opt/dsh-team/profile-seed \
   && chown root:root /opt \
   && chmod go-w /opt /opt/dsh-team
