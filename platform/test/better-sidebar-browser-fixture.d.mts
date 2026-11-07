@@ -1,5 +1,11 @@
 import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 
+/** In-page JS expressions (not CSS selectors) yielding one visible element, or nothing. */
+export declare function rowQuery(name: string): string;
+export declare function explorerReselect(name: string): string;
+export declare const EXPAND_BUTTON: string;
+export declare const FILES_GUIDE: string;
+
 /** A workspace file the employee opens from better-sidebar's explorer. */
 interface SidebarFile {
   readonly name: string;

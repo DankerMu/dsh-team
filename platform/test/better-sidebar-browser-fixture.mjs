@@ -58,7 +58,7 @@ const titled = (name) =>
   `(el) => el.title === ${JSON.stringify(name)} || el.title.endsWith(${JSON.stringify(`/${name}`)})`;
 
 /** The visible explorer row of one workspace file, drawn by better-sidebar wherever it docks. */
-const rowQuery = (name) =>
+export const rowQuery = (name) =>
   `[...document.querySelectorAll(${JSON.stringify(ROW)})].find((el) => (${titled(name)})(el) && (${visible})(el))`;
 
 /**
@@ -74,8 +74,14 @@ const explorerStripTab = (name) => `(() => {
 })()`;
 
 /** The clickable title of the explorer's strip tab while another tab covers the explorer. */
-const explorerReselect = (name) =>
+export const explorerReselect = (name) =>
   `(() => { const tab = ${explorerStripTab(name)}; const title = tab?.getAttribute('aria-selected') === 'false' ? tab.querySelector('[data-dockkit-tab-title]') : null; return (${visible})(title) ? title : null; })()`;
+
+/** The collapsed right Sidebar's visible expand button; ExpandButton renders nothing while open. */
+export const EXPAND_BUTTON = `(() => { const el = document.querySelector('button[data-sidebar-right-expand]'); return (${visible})(el) ? el : null; })()`;
+
+/** The visible guide entry of the built-in `files` kind, which better-sidebar's explorer takes over. */
+export const FILES_GUIDE = `([...document.querySelectorAll('[data-sidebar-right-guide-entry="files"]')].find(${visible}) ?? null)`;
 
 /** Compact, secret-free DOM summary of the right Sidebar for a failed wait. */
 const panelSummary = `(() => {
@@ -113,15 +119,13 @@ async function stage(page, evidence, label, run) {
 /** Expand the right Sidebar and show better-sidebar's explorer, from the guide when it is shown. */
 async function openExplorer(page, evidence, name) {
   await stage(page, evidence, 'expand', async () => {
-    // ExpandButton renders nothing while the panel is already expanded.
-    const expand = `document.querySelector('button[data-sidebar-right-expand]')`;
     const open = `Boolean(document.querySelector(${JSON.stringify(PANEL)}))`;
     const state = await waitFor(
-      () => evaluate(page, `${open} ? 'open' : (${visible})(${expand}) ? 'collapsed' : null`),
+      () => evaluate(page, `${open} ? 'open' : (${EXPAND_BUTTON}) ? 'collapsed' : null`),
       60_000,
       'sidebar-expand-or-open',
     );
-    if (state === 'collapsed') await physicalClick(page, expand);
+    if (state === 'collapsed') await physicalClick(page, EXPAND_BUTTON);
     await waitFor(
       () => evaluate(page, `Boolean(document.querySelector(${JSON.stringify(PANEL)}))`),
       MS,
@@ -129,13 +133,12 @@ async function openExplorer(page, evidence, name) {
     );
   });
   await stage(page, evidence, 'explorer', async () => {
-    const guide = `[...document.querySelectorAll('[data-sidebar-right-guide-entry="files"]')].find(${visible})`;
     const shown = await waitFor(
-      () => evaluate(page, `(${rowQuery(name)}) ? 'row' : (${guide}) ? 'guide' : null`),
+      () => evaluate(page, `(${rowQuery(name)}) ? 'row' : ${FILES_GUIDE} ? 'guide' : null`),
       MS,
       'sidebar-explorer-or-guide',
     );
-    if (shown === 'guide') await physicalClick(page, guide);
+    if (shown === 'guide') await physicalClick(page, FILES_GUIDE);
     await waitFor(
       () => evaluate(page, `Boolean(${rowQuery(name)})`),
       MS,

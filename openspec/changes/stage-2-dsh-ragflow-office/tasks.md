@@ -3061,6 +3061,93 @@ Evidence (17.1 用户镜像安装 dsh-better-sidebar@0.28.0，#429):
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 - PR 记录三份副本的字节数和镜像体积变化。
 
+Risk packs (17.2 文件区打包下载，#430): fixture level expanded（与 issue 建议一致）。本任务只交付本机通道（`pnpm test:stack`）的浏览器用例，不改镜像、平台代码和插件；打包能力来自 17.1 已交付、未打补丁的 `dsh-better-sidebar@0.28.0`。不改 `images/dsh-user/`，因此关键路径逐行审查一项不适用。
+
+发行包事实（`dsh-better-sidebar@0.28.0`，只读副本，路径相对包根）：
+
+- 宿主打包（`lib/index.js:3994-4480`，`src/archive-tools.ts`）：依次探测系统的 `zip`（`-r -q -X -y -`，产物 `.zip`）和 `tar`（`-czf -`，产物 `.tar.gz`），用第一个能运行 `--version` 的（`:4033-4053`）。两者都没有时宿主返回 `unavailable`（501），客户端把它翻成 `archiveToolMissing` 文案（`src/client/FileTree.tsx:1845`）。用户镜像基于 `node:24.22.0-bookworm-slim`，有 Debian `tar` 1.34（默认 GNU 格式）和 `gzip`，没有 `zip`，所以产物是 GNU 格式的 `.tar.gz`。打包在实例内完成，临时文件 `dsh-better-sidebar-ar-*` 放在实例的 `/tmp`，取走后释放（`:4316`、`:4420-4424`）。
+- 打包根是选中项的最深公共祖先（`planArchive` `:4153`、`commonAncestor`）。`/data/work` 下的两个文件以 `/data/work` 为根，条目名就是两个文件名。中文名按原始 UTF-8 字节写进 tar 头的 100 字节 name 字段，`打包甲.txt` 共 13 字节，不需要 pax 头或长文件名头。下载响应头用 RFC 5987 的 `filename*`（`:4275`）。
+- 客户端（`src/client/FileTree.tsx`）：
+  - 普通点击会清空选中并打开文件（`:1235-1238`）；Ctrl/Meta 加点击切换选中（`:1226-1229`）；Shift 加点击选一段（`:1230`）。
+  - 在选中范围内右键保留整批，范围外右键收成一行（`:1255-1259`）。
+  - 选中两项及以上时，菜单出现「压缩并下载（{count} 项）」（`:1686-1692`；中文文案在 `lib/client.js:2392-2395`）。
+  - 先建打包任务，`ready` 后用 `<a download>` 指向 `/sidebar/archive?sessionId=…&id=…`（`:1776-1784`、`:1823-1851`；`archiveDownloadUrl` 在 `lib/client.js:4410-4415`）。多选时文件名 stem 是 `archive`（`:1828`），经 `archiveFileName`（`lib/index.js:4251`）得到 `archive.tar.gz`。
+  - 选中行带 `data-dsh-selected="true"` 和 `aria-pressed`（`:258-359`）。
+
+selected：
+
+- **结构**：
+  - 新增 `platform/test/sidebar-archive-stack-fixture.ts`，整个 lane 函数照 `scopeLane`/`searchLane` 的写法放在里面。入参是浏览器会话、实例 exec 和 provider 计数读取，返回 `ArchiveEvidence`。
+  - 配对的 `sidebar-archive-stack-fixture.integration.test.ts` 覆盖纯函数：tar 解析和条目比对。
+  - `platform/test/platform-stack.stack.test.ts` 只加调用、`stackEvidence.archive` 证据字段和断言输出行。调用位置写死在 `searchLane` 之后、`duringRagflowOutage` 回调返回之前。用同一个员工账号，但本 lane 自己开一个 `workbenchSession`（与其他 lane 一样新开浏览器并登录，`stack-browser-fixture.ts:142`）。
+  - 不从 stack 测试往外搬无关代码。行数预算：stack 测试增量 ≤ 30 行；fixture 模块和配对测试合计 ≤ 300 行；整个 PR（含本段 tasks.md）≤ 400 行，超出就停下报告。
+- **复用 better-sidebar 文件区驱动**：
+  - `platform/test/better-sidebar-browser-fixture.mjs:22-150` 已有发行版标记：`ROW`/`rowQuery`、`explorerStripTab`、`explorerReselect`、`openExplorer` 的选择器。它们处理了侧栏收起和 guide 入口两种状态，以及 #429 的教训（打开的文件标签会遮住文件区）。
+  - 那个驱动用 CDP，本通道用 Playwright。所以只把选择器字符串的构造函数导出共用，驱动本身不共用，不另造一套选择器（jscpd 3%）。`rowQuery`、`explorerStripTab`、`explorerReselect`（`:61-78`）构造的是 JS 表达式，不是 CSS 选择器：在 Playwright 里用 `page.evaluateHandle(...)` 取元素，再点击返回的元素。
+- **构造（实例内，uid1001，`docker exec --user 1001 dsh-team-u-<id> …`，与 `platform-stack.stack.test.ts:506` 同法）**：
+  - 在 `/data/work/` 写两个文件：
+    - `打包甲.txt`：已知的多行中文 UTF-8 文本；
+    - `archive-b.bin`：由固定种子生成的 65536 字节伪随机内容。
+  - 在实例内读出两者的字节数和 sha256。先断言字节数分别等于已知 UTF-8 长度和 65536，排除空文件让两边 sha256 碰巧相等，再把 sha256 作为期望值。
+- **浏览器步骤**：
+  - 打开右侧栏的 better-sidebar 文件区；必要时按复用的 `explorerReselect` 重新选中文件区标签，等两行可见。
+  - 两行依次 `click({ modifiers: ['ControlOrMeta'] })`。断言两行都是 `data-dsh-selected="true"`，没有其他行被选中。
+  - 在已选中的一行上 `click({ button: 'right' })`。
+  - 先挂上 `page.waitForEvent('download')`（照 STOP 的先挂等待写法），再按完整文案点「压缩并下载（2 项）」。
+  - 断言 `download.suggestedFilename() === 'archive.tar.gz'` 且 `await download.failure() === null`；关闭浏览器前 `saveAs` 到 `mkdtemp` 目录，算完 sha256 后删除，不留在 `reports/stack/<runId>/`。
+  - 打开菜单时截一张图，证据保留在 `reports/stack/<runId>/`。
+- **下载与失败请求**（本机 exact-head `pnpm test:stack` 实测，2026-11-07）：本 lane 的会话里，下载导航没有被记为失败请求，所以本 lane 和其余场景一样断言 `failedRequests: []`，`workbenchSession` 不改。证据行不得含 cookie、令牌或带查询串的 URL；失败时 `workbenchSession` 照旧记录完整 URL（其中的 DSH Session ID 不是凭据）。
+- **tar 解析（fixture 模块内的最小解析器）**：
+  - 先用 `zlib.gunzipSync` 解压，要求以 gzip 魔数 `1f 8b` 开头。
+  - 头部魔数接受 POSIX `ustar\0`+`00` 和 GNU `ustar  \0` 两种，并校验头部 checksum。
+  - 文件名按 UTF-8 解码，截到第一个 NUL。
+  - typeflag `0` 或 `\0` 算普通文件；遇到 `L`、`K`、`x`、`g`、`2` 或其他类型直接报错，不静默跳过。
+  - 最后一个条目之后至少有两个全零块，其余字节全部为零（GNU tar 把输出补齐到 10240 字节的记录）。
+  - 配对测试用真实 GNU 格式的头部字节做样例（按 GNU tar 规范手写的固定字节，补齐到 10240 字节，不用同一个解析器生成）；也覆盖 ustar 样例，以及拒绝 checksum 错误、长名类型、缺少结尾块和结尾有非零字节这几种情况。
+- **断言**：
+  - 归档条目恰为 `打包甲.txt` 和 `archive-b.bin` 两个普通文件：没有目录前缀、没有多余条目；每个条目的字节数和 sha256 等于实例内读出的值。
+  - 页面没有出现「打包失败」或 `archiveToolMissing` 文案；控制台错误和页面错误为空；没有对平台公开源以外的请求。
+  - 用例前后各读一次 `PROVIDER_HEALTH`，断言 `requests`、`searches`、`delegations` 前后相等，证明本用例没有调用模型和检索。
+  - 下载之后，用现有的 `until` 轮询实例 `/tmp`，直到没有 `dsh-better-sidebar-ar-*` 残留（`release` 的删除不等待完成，`lib/index.js:4332-4334`、`:4419-4423`），证明临时文件已释放。打包在实例内完成的证据是头部格式为 `gnu`：macOS 宿主的 bsdtar 默认不产生这种格式。
+  - 证据行输出条目名、字节数、sha256、头部格式（gnu 或 ustar）加 `.tar.gz`、截图名。
+- **清理**：
+  - 两个工作文件在本用例结束时用同样的 exec 删除，删除后断言不存在。
+  - 现有 `test:stack` 前后清单的口径（`ragflow-cpu-1` 的 `StartedAt` 和重启次数、卷集合）不变。
+- **文档（编排者同 PR 改）**：
+  - `platform/test/README.md:89` 的 stack 证据清单加 `stackEvidence.archive`；
+  - `docs/LOCAL_STACK.md` §5 第 9 步的场景列表加上打包下载；§6 证据表加一行：条目、字节数、sha256、格式、截图名，以及本 lane 失败请求为空。
+
+must-preserve：
+
+- 现有 stack 场景（会话、知识库面板、范围、检索、RAGFlow 停机）的顺序和断言不变；其余场景的失败请求仍为空。
+- 每次运行的付费检索次数仍为五次（2026-11-05 用户决定）。
+
+not selected：
+
+- Schema、API、迁移：无。
+- 镜像：不加 `zip`。产物格式由发行版的工具顺序决定。
+
+剩余风险：
+
+- 本机通道的用户镜像是 arm64，VPS 上是 amd64。`tar` 行为相同；`test:docker` 不跑这个用例。
+- 大文件和目录打包不在本任务范围内。
+- `PROVIDER_HEALTH` 前后相等的断言可能偶发失败：检索 lane 迟到的会话标题模型请求可能落进本 lane 的时间窗口（未验证，可能性低）。
+- 镜像中 tar 的默认格式（GNU）按 Debian 默认值推断，没有实测；解析器两种格式都接受，首次运行的证据行会给出实际格式。
+
+Governing invariant：员工在文件区选中两个文件并下载压缩包，压缩包里恰好是这两个文件，字节与工作目录一致。打包在实例内完成。
+
+Sibling surfaces：
+
+- `better-sidebar-browser-fixture.mjs`（17.1 的 Docker 浏览器用例；只共享选择器）。
+- `stack-browser-fixture.ts` 的浏览器会话与失败请求记录（复用，不改）。
+- #556：员工插件操作与 `file:` 依赖（与本用例无关）。
+
+Evidence (17.2 文件区打包下载，#430):
+
+- 本机：`pnpm check`；配对的 integration 测试先红后绿。
+- 本机 exact-head `pnpm test:stack`（门禁）：包含本用例，附截图、条目、sha256、格式证据，以及前后清单。
+- VPS exact-head `pnpm test:docker` 和 `pnpm test:deploy`（例行回归）。
+
 ## 18. Office 在线编辑
 
 依赖：10（含 10.4 本机浏览器）、11、12、16、17。关键路径 `images/dsh-user/`。
