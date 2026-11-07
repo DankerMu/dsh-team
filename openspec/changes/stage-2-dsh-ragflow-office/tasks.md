@@ -3148,6 +3148,84 @@ Evidence (17.2 文件区打包下载，#430):
 - 本机 exact-head `pnpm test:stack`（门禁）：包含本用例，附截图、条目、sha256、格式证据，以及前后清单。
 - VPS exact-head `pnpm test:docker` 和 `pnpm test:deploy`（例行回归）。
 
+Risk packs (#555 better-sidebar `/sidebar/file` 工作区文档同源执行；17.3 #431 的前置): fixture level expanded（安全边界：网关响应头）。#431 的夹具评审发现 17.3 的保证依赖本项：iframe 的 `sandbox` 属性被员工设置或临时解除去掉后，预览脚本可以把自己的帧导航到 `/sidebar/file?sessionId=…&path=<同一文件>`。这个路由返回 `text/html` 时没有 CSP，帧随即与平台同源，攻击变成零点击。修复层：平台网关。DSH 和 better-sidebar 源码都不改，也不打补丁。
+
+发行版事实：
+
+- **better-sidebar 0.28.0 的 `/sidebar/file`**：
+  - 是 prefix 路由（`lib/index.js:9153-9190`），按扩展名给出 `content-type`（`MEDIA_TYPES` 在 `:8090-8104`），只对 SVG 加 `content-security-policy: sandbox; object-src 'none'`（`:9180-9184`；网关覆盖成 `sandbox`，效果不变）。
+  - 用户是在文件区下载单个文件，以及 `<img>`/`<video>` 等子资源（`src/client/binary-download.tsx`、文件区的 `downloadUrl`）。对子资源和下载，CSP 不起作用。
+  - `/sidebar/html` 已有 CSP，`/sidebar/archive` 只返回附件，`/sidebar/upload` 和 `/sidebar/write` 只收写请求。
+- **DSH 0.2.1-rc.2 的路由匹配**（`dsh-host-webserver/lib/index.js:381-382,494-503`）：
+  - pathname 取 `new URL(req.url ?? '/', 'http://x').pathname`；
+  - prefix 路由在 `pathname === prefix || pathname.startsWith(prefix + '/')` 时命中，最长前缀优先。
+  - 网关转发给 DSH 的是 `requestTarget(rawTarget)`（`platform/src/gateway/http.ts:30-33,133`），它会剥掉绝对形式里的 `http(s)://authority`。网关对同一个转发目标套用同样的表达式和匹配规则，就和 DSH 的路由结果一致，`/./`、`..`、`%2e`、`//x/…`、绝对形式等写法都不能绕过。
+- **已核对的其他路由**：DSH `/api/file` 自带 `sandbox; default-src 'none'` 和 `nosniff`（`dsh-api-session-controller` 的 `BASE_HEADERS`）；`/sidebar/html` 带不含 `allow-same-origin` 的 sandbox；`/sidebar/archive` 是附件；`/sidebar/api` 只收 POST、回 JSON；`/sidebar/bundle` 是静态插件包。都不需要同样的规则。
+
+selected：
+
+- **网关规则（`platform/src/gateway/http.ts`）**：
+  - 新增一个纯函数，名字由实现者按现有 `isImmutableAsset` 的写法取，例如 `isWorkspaceDocument(rawTarget)`。
+  - 判定输入是转发给 DSH 的同一个目标 `requestTarget(rawTarget)`；pathname 用 `new URL(target, 'http://x').pathname`，命中条件是等于 `/sidebar/file` 或以 `/sidebar/file/` 开头。`new URL` 抛错时按命中处理（fail closed）。
+  - 命中时，`forwardHttp` 在 `writeHead` 之前把响应头设为 `content-security-policy: sandbox`（覆盖上游的值）和 `x-content-type-options: nosniff`，状态码和方法不限。
+  - 其余路径（含 `/sidebar/html`）的响应头一字不变。
+  - 只改 HTTP 转发，WebSocket 不涉及。
+- **单元测试（`platform/src/gateway/http.test.ts`，先红后绿）**：每一行写死期望的布尔值，并用参照函数 `dshMatch(requestTarget(raw))`（测试内按 DSH 发行版的表达式写）复核，两者结论必须相同。
+  - 命中：`/sidebar/file`、`/sidebar/file?sessionId=a&path=/data/work/x.html`、`/sidebar/file/x`、`/sidebar/./file?…`、`/sidebar/x/../file?…`、`/x/../sidebar/file`、`/sidebar/%2e/file`、`/%2e%2e/sidebar/file`、`//x/sidebar/file?…`（`new URL` 把 `x` 当主机名，pathname 是 `/sidebar/file`）、`http://h/sidebar/file?…`、`http://h//x/sidebar/file?…`、`/sidebar\file`（Node 原样转发，`new URL` 归一为 `/sidebar/file`）；`new URL` 抛错的输入按命中处理（fail closed）。
+  - 不命中：`/sidebar/files`、`/sidebar/filex`、`/sidebar//file`、`/sidebar/html/…`、`/sidebar/api`、`/`、`/assets/…`、`/sidebar/%66ile`、`*`。
+- **集成测试（`platform/test/gateway-http.integration.test.ts`，沿用 `gateway-http-fixture.ts` 的 stub upstream）**：
+  - stub 对 `/sidebar/file?…` 返回不带 CSP 的 `text/html`；经网关后，响应带 `content-security-policy: sandbox` 和 `nosniff`，body 和状态码不变。stub 自带宽松 CSP 时，也被覆盖成 `sandbox`。
+  - `/sidebar/html/…` 的上游 CSP 原样保留；其他路径没有新增的头。
+  - 差分用例：用 raw socket 发 origin-form、`//x/…` 和绝对形式三种请求目标。stub 对自己收到的 `req.url` 套用 DSH 的匹配规则，决定返回内容；断言 stub 判定命中时响应一定带 `sandbox`，不命中时一定不带。
+- **Docker 浏览器用例（`platform/test/better-sidebar.docker.test.ts` 新增一个 `it`，复用 17.1 的 CDP 驱动）**：
+  - 以 uid1001 写 `/data/work/file-probe.html`：`<head>` 含 `<link rel="icon" href="data:,">`（避免 favicon 请求），页内脚本在 `<body>` 末尾写入 `<pre id="ran">` 和 `self.origin`。`CSP: sandbox` 不含 `allow-scripts`，脚本在 `/sidebar/file` 下不会执行。
+  - 探测 URL 取自下面 markdown 对照渲染出的 `<img src>`（一个真实的 `/sidebar/file?sessionId=…&cwd=…&path=…`），只把 `path` 换成 `/data/work/file-probe.html`。新标签用现有驱动的 `connectPage`（`probe-dsh-api-cdp.mjs:168`）开 `about:blank`，attach 后在该 session 上启用 `Network`/`Page`/`Log`/`DOM`，再 `Page.navigate`，然后在这个 target 上观察：
+    - `Network.responseReceived` 的 `content-security-policy` 恰为 `sandbox`，`x-content-type-options` 为 `nosniff`；
+    - 源的判定：用 `Page.createIsolatedWorld`（frameId 取自 `Page.getFrameTree`）建一个 isolated world，在其中 `Runtime.evaluate`（`returnByValue`），读 `self.origin` 和两个异常名 `localStorage.length`、`document.cookie`。期望 origin 是字符串 `'null'`，两个异常名都是 `SecurityError`。isolated world 在不含 `allow-scripts` 的沙箱文档里照样能执行，页面自己的脚本不能。
+    - frame tree 的 `securityOrigin` 不能当判据。Chrome 从 URL 推导这个字段，沙箱文档也报平台源：#558 首次 VPS 运行实测如此，本机 Chromium 153 的对照实验结果相同。
+    - 判据自身的正向对照：同一表达式在平台主页面的 isolated world 中求值，origin 等于平台公开源，两个异常名都是 `ok`。这证明该读法能区分两种源。
+    - 用 `DOM.*` 读，`#ran` 不存在，说明脚本被拦。
+  - 正向对照：同一个文件经 `/sidebar/html/…` 打开（该路由带 `allow-scripts`，不含 `allow-same-origin`），`#ran` 存在且写出的 origin 为 `null`。这证明探测脚本本身可用，读取方式也有效。
+  - must-preserve 的子资源对照：以 uid1001 写一张 PNG 和一个引用它的 `.md`，在 better-sidebar 文件区打开 `.md`。图片经 `/sidebar/file` 作为 `<img>` 加载（`src/client/markdown-images.ts:94-99`），断言 `naturalWidth > 0`。
+  - 控制台：探测 target 上 Chrome 打出的被拦脚本提示，按两个固定片段 `Blocked script execution` 和 `'allow-scripts' permission is not set` 匹配，列入白名单，只对该 target 生效；证据里的 URL 打码。其他 target 的控制台错误仍为零。
+  - 截图。sessionId 不写进证据行。
+- **文档（编排者同 PR 改）**：
+  - `platform/src/gateway/README.md` 加一条：`/sidebar/file` 的 CSP sandbox、匹配规则与 DSH 一致、fail closed；
+  - `docs/DEPLOY.md` §7 隔离段落加一句：工作区文件以文档打开时运行在不透明源；
+  - `platform/test/README.md` 写明 Docker 用例证明的内容。
+
+must-preserve：
+
+- `/sidebar/file` 的真正使用方照常可用。这些都不是文档导航，CSP 对它们不生效：
+  - `<img>` 和 markdown 图片（Docker 对照覆盖）；
+  - `PdfView` 用 fetch 取字节转 blob（`src/client/PdfView.tsx:25-32`）；
+  - `downloadUrl` 生成的 `download` 链接（`FileTree.tsx:1702`、`binary-download.tsx:18`）。
+- 网关其他响应头的处理（Vary、immutable 缓存、去掉 set-cookie）不变。
+
+not selected：
+
+- Schema、API、迁移：无。
+- 镜像和插件：不改。
+
+剩余风险：
+
+- 规则依赖 better-sidebar 0.28.0 的路由名。版本变化由 17.1 的版本门禁和本用例兜住。
+- CSP `sandbox` 会让以顶层文档打开的工作区 HTML 不能执行脚本或提交表单，这是预期行为。
+- 员工手动在标签页直接打开 `/sidebar/file` 的 PDF 时，sandbox 下 Chrome 内置查看器可能无法渲染（沙箱禁插件）。这只出现在手动操作中，作为已接受风险。
+
+Governing invariant：员工浏览器经网关以文档方式打开的任何工作区文件，都运行在不透明源中，不能读取平台源的存储，也不能以员工身份调用同源接口。
+
+Sibling surfaces：
+
+- 17.3（#431）：HTML 预览沙箱，本项合入后它的「靠 CSP」才完整；
+- 网关的 `isImmutableAsset`。
+
+Evidence (#555):
+
+- 本机：`pnpm check`；单元测试和集成测试先红后绿。
+- VPS exact-head `pnpm test:docker`（含新的浏览器用例，附截图和探测结果）和 `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+
 ## 18. Office 在线编辑
 
 依赖：10（含 10.4 本机浏览器）、11、12、16、17。关键路径 `images/dsh-user/`。

@@ -74,6 +74,22 @@ export function isImmutableAsset(
   );
 }
 
+// better-sidebar serves any workspace file under this prefix route with an extension-derived type;
+// opened as a document it must not run in, and act for the employee on, the platform origin.
+const WORKSPACE_FILE_ROUTE = '/sidebar/file';
+
+/** DSH's own pathname and prefix rule over the target forwarded to it; unparsable fails closed. */
+export function isWorkspaceDocument(rawTarget: string): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(requestTarget(rawTarget), 'http://x').pathname;
+  } catch {
+    // DSH parses the same target with the same expression; never guess which route it reaches.
+    return true;
+  }
+  return pathname === WORKSPACE_FILE_ROUTE || pathname.startsWith(`${WORKSPACE_FILE_ROUTE}/`);
+}
+
 // Each login's HttpOnly session is in the browser's Cookie header, so one session's HTTP cache
 // entries never answer another session's requests.
 export function withSessionVary(value: string | undefined): string {
@@ -145,6 +161,10 @@ export function forwardHttp(
         const responseHeaders = forwardHeaders(response.headers, 'set-cookie');
         if (isImmutableAsset(incoming.method, rawTarget, response.statusCode, responseHeaders))
           responseHeaders['cache-control'] = IMMUTABLE_ASSET_CACHE;
+        if (isWorkspaceDocument(rawTarget)) {
+          responseHeaders['content-security-policy'] = 'sandbox';
+          responseHeaders['x-content-type-options'] = 'nosniff';
+        }
         const vary = responseHeaders.vary;
         // Node joins repeated incoming Vary fields into one string.
         responseHeaders.vary = withSessionVary(typeof vary === 'string' ? vary : undefined);

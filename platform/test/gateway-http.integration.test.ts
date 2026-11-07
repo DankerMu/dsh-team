@@ -1,5 +1,6 @@
 import { once } from 'node:events';
 import type { IncomingHttpHeaders, RequestListener } from 'node:http';
+import { connect } from 'node:net';
 import { gzipSync } from 'node:zlib';
 import { expect, it } from 'vitest';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
@@ -342,6 +343,161 @@ it('marks only a hashed DSH asset 200 immutable and forwards every other respons
           expect(missing.headers['cache-control']).toBeUndefined();
           expect(missing.headers['x-upstream']).toBe('missing');
           expect(missing.body.toString()).toBe('missing');
+        },
+      );
+    },
+  );
+});
+
+// The released better-sidebar 0.28.0 HTML preview policy (lib/index.js `/sidebar/html` route).
+const HTML_PREVIEW_CSP =
+  "sandbox allow-scripts allow-popups allow-downloads allow-modals; object-src 'none'";
+
+it('sandboxes every workspace file document and forwards the HTML preview and other responses unchanged', async () => {
+  await withUpstream(
+    (request, response) => {
+      const path = request.url ?? '';
+      if (path.startsWith('/sidebar/file?sessionId=s&path=/data/work/plain.html')) {
+        response.writeHead(200, { 'content-type': 'text/html', 'cache-control': 'no-cache' });
+        response.end('<script>self.origin</script>');
+      } else if (path.startsWith('/sidebar/file?sessionId=s&path=/data/work/loose.html')) {
+        response.writeHead(request.method === 'POST' ? 405 : 404, {
+          'content-type': 'text/html',
+          'content-security-policy': 'sandbox allow-scripts allow-same-origin',
+          'x-content-type-options': 'sniff',
+        });
+        response.end('loose');
+      } else if (path === '/sidebar/html/s/data/work/plain.html') {
+        response.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'content-security-policy': HTML_PREVIEW_CSP,
+          'x-content-type-options': 'nosniff',
+        });
+        response.end('preview');
+      } else {
+        response.writeHead(200, { 'content-type': 'text/html', vary: 'Accept-Encoding' });
+        response.end('other');
+      }
+    },
+    async (target) => {
+      await withForwardingApp(
+        () => target,
+        async ({ base, cookie }) => {
+          const get = (path: string, method = 'GET') =>
+            sendHttp(base, { method, path, headers: { cookie } });
+
+          const plain = await get('/sidebar/file?sessionId=s&path=/data/work/plain.html');
+          const missing = await get('/sidebar/file?sessionId=s&path=/data/work/loose.html');
+          const posted = await get('/sidebar/file?sessionId=s&path=/data/work/loose.html', 'POST');
+          const preview = await get('/sidebar/html/s/data/work/plain.html');
+          const files = await get('/sidebar/files?sessionId=s&path=/data/work/plain.html');
+          const other = await get('/api/session/list');
+
+          expect(plain.status).toBe(200);
+          expect(plain.body.toString()).toBe('<script>self.origin</script>');
+          expect(plain.headers['content-type']).toBe('text/html');
+          expect(plain.headers['cache-control']).toBe('no-cache');
+          expect(plain.headers.vary).toBe('Cookie');
+          for (const [response, status] of [
+            [plain, 200],
+            [missing, 404],
+            [posted, 405],
+          ] as const) {
+            expect(response.status).toBe(status);
+            expect(response.headers['content-security-policy']).toBe('sandbox');
+            expect(response.headers['x-content-type-options']).toBe('nosniff');
+          }
+          expect(missing.body.toString()).toBe('loose');
+          expect(preview.headers['content-security-policy']).toBe(HTML_PREVIEW_CSP);
+          expect(preview.headers['x-content-type-options']).toBe('nosniff');
+          expect(preview.body.toString()).toBe('preview');
+          for (const response of [files, other]) {
+            expect(response.status).toBe(200);
+            expect(response.headers['content-security-policy']).toBeUndefined();
+            expect(response.headers['x-content-type-options']).toBeUndefined();
+            expect(response.headers.vary).toBe('Accept-Encoding, Cookie');
+            expect(response.body.toString()).toBe('other');
+          }
+        },
+      );
+    },
+  );
+});
+
+/** The released DSH 0.2.1-rc.2 router expression, applied by the stub to the target it received. */
+function dshRoutesWorkspaceFile(url: string): boolean {
+  const pathname = new URL(url, 'http://x').pathname;
+  return pathname === '/sidebar/file' || pathname.startsWith('/sidebar/file/');
+}
+
+/** One raw HTTP/1.1 exchange, so the gateway receives exactly the given request target. */
+async function rawExchange(base: string, cookie: string, target: string) {
+  const address = new URL(base);
+  const socket = connect(Number(address.port), address.hostname);
+  const chunks: Buffer[] = [];
+  socket.on('data', (chunk: Buffer) => {
+    chunks.push(chunk);
+  });
+  const closed = once(socket, 'close');
+  try {
+    await once(socket, 'connect');
+    socket.write(
+      `GET ${target} HTTP/1.1\r\nHost: ${address.host}\r\nCookie: ${cookie}\r\nConnection: close\r\n\r\n`,
+    );
+    await observeHttp(closed);
+  } finally {
+    socket.destroy();
+  }
+  const raw = Buffer.concat(chunks).toString('latin1');
+  const [head = '', ...body] = raw.split('\r\n\r\n');
+  const headers = new Map<string, string>();
+  for (const line of head.split('\r\n').slice(1)) {
+    const at = line.indexOf(':');
+    headers.set(line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim());
+  }
+  return { status: head.split(' ', 2)[1], headers, body: body.join('\r\n\r\n') };
+}
+
+it('adds the sandbox exactly when DSH would route the forwarded target to the workspace file route', async () => {
+  const targets = [
+    ['/sidebar/file?sessionId=s&path=x.html', true],
+    ['/sidebar/x/../file?sessionId=s&path=x.html', true],
+    ['/sidebar\\file?sessionId=s&path=x.html', true],
+    ['/sidebar/files?sessionId=s&path=x.html', false],
+    ['/sidebar//file?sessionId=s&path=x.html', false],
+    ['//x/sidebar/file?sessionId=s&path=x.html', true],
+    ['//x/sidebar/html/s/x.html', false],
+    ['http://h/sidebar/file?sessionId=s&path=x.html', true],
+    ['http://h//x/sidebar/file?sessionId=s&path=x.html', true],
+    ['http://h/sidebar/filex?sessionId=s&path=x.html', false],
+  ] as const;
+  const observed: string[] = [];
+  await withUpstream(
+    (request, response) => {
+      const url = request.url ?? '/';
+      observed.push(url);
+      response.writeHead(200, { 'content-type': 'text/html' });
+      response.end(dshRoutesWorkspaceFile(url) ? 'stub-hit' : 'stub-miss');
+    },
+    async (target) => {
+      await withForwardingApp(
+        () => target,
+        async ({ base, cookie }) => {
+          for (const [requestTarget, expected] of targets) {
+            const response = await rawExchange(base, cookie, requestTarget);
+
+            expect(response.status).toBe('200');
+            const hit = response.body.includes('stub-hit');
+            expect(hit || response.body.includes('stub-miss')).toBe(true);
+            expect(hit).toBe(expected);
+            expect(response.headers.get('content-security-policy')).toBe(
+              hit ? 'sandbox' : undefined,
+            );
+            expect(response.headers.get('x-content-type-options')).toBe(
+              hit ? 'nosniff' : undefined,
+            );
+          }
+          expect(observed).toHaveLength(targets.length);
         },
       );
     },

@@ -12,7 +12,13 @@ import {
   sessionCookieToken,
   withApp,
 } from '../../test/auth-fixture.ts';
-import { forwardHeaders, isImmutableAsset, requestTarget, withSessionVary } from './http.ts';
+import {
+  forwardHeaders,
+  isImmutableAsset,
+  isWorkspaceDocument,
+  requestTarget,
+  withSessionVary,
+} from './http.ts';
 
 interface TransportState {
   mode: string;
@@ -191,6 +197,79 @@ it.each([
   'leaves %s %s with status %i and headers %j uncached',
   (method, target, status, headers) => {
     expect(isImmutableAsset(method, target, status, headers)).toBe(false);
+  },
+);
+
+/**
+ * The released DSH 0.2.1-rc.2 router (dsh-host-webserver lib/index.js:381-382,494-503), written
+ * independently of the gateway: it throws where DSH's own `new URL` would throw.
+ */
+function dshMatch(target: string): boolean {
+  const pathname = new URL(target, 'http://x').pathname;
+  return pathname === '/sidebar/file' || pathname.startsWith('/sidebar/file/');
+}
+
+it.each([
+  ['/sidebar/file', true],
+  ['/sidebar/file?sessionId=a&path=/data/work/x.html', true],
+  ['/sidebar/file/x', true],
+  ['/sidebar/./file?sessionId=a&path=x.html', true],
+  ['/sidebar/x/../file?sessionId=a&path=x.html', true],
+  ['/x/../sidebar/file', true],
+  ['/sidebar/%2e/file', true],
+  ['/%2e%2e/sidebar/file', true],
+  ['//x/sidebar/file?sessionId=a&path=x.html', true],
+  ['http://h/sidebar/file?sessionId=a&path=x.html', true],
+  ['http://h//x/sidebar/file?sessionId=a&path=x.html', true],
+  ['/sidebar\\file', true],
+  ['/sidebar/files', false],
+  ['/sidebar/filex', false],
+  ['/sidebar//file', false],
+  ['/sidebar/html/s/data/work/x.html', false],
+  ['/sidebar/api', false],
+  ['/', false],
+  ['/assets/index-5SrrfWpU.js', false],
+  ['/sidebar/%66ile', false],
+  ['*', false],
+] as const)('classifies %s as a workspace document: %s, like DSH routes it', (raw, expected) => {
+  expect(isWorkspaceDocument(raw)).toBe(expected);
+  expect(dshMatch(requestTarget(raw))).toBe(expected);
+});
+
+it.each(['//[/sidebar/file', '//x:99999/sidebar/file', 'http://h//[::1/sidebar/file'])(
+  'fails closed on %s, which DSH cannot parse either',
+  (raw) => {
+    expect(isWorkspaceDocument(raw)).toBe(true);
+    expect(() => dshMatch(requestTarget(raw))).toThrow();
+  },
+);
+
+it.each([
+  ['/sidebar/file?sessionId=a&path=/data/work/x.html', 'sandbox', 'nosniff'],
+  ['/sidebar/files', undefined, undefined],
+] as const)(
+  'forwards %s with content-security-policy %j and x-content-type-options %j',
+  async (url, csp, nosniff) => {
+    await withApp(
+      async (app) => {
+        const registered = await injectRegister(app, {
+          email: 'http-document@example.com',
+          password: 'test-password',
+        });
+        const cookie = `platform_session=${sessionCookieToken(cookieHeaders(registered))}`;
+
+        const response = await app.inject({ method: 'GET', url, headers: { cookie } });
+
+        expect(response.statusCode).toBe(401);
+        expect(response.headers['content-security-policy']).toBe(csp);
+        expect(response.headers['x-content-type-options']).toBe(nosniff);
+        expect(response.headers['content-type']).toBe('application/json');
+        expect(response.json()).toEqual({ upstreamError: true });
+      },
+      false,
+      [],
+      () => ({ outcome: 'running', host: '127.0.0.1', port: 3080, cookie: 'backend=private' }),
+    );
   },
 );
 
