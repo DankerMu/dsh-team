@@ -2902,6 +2902,165 @@ Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
 Suggested fixture level: expanded - 关键路径镜像变更
 Minimal mergeable slice: 17.1 better-sidebar 单独合入（不打补丁，Office 文件仍由它的原生预览打开，其他功能不变）
 
+Risk packs (17.1 用户镜像安装 dsh-better-sidebar@0.28.0，#429): fixture level expanded（与 issue 建议一致：关键路径 `images/dsh-user/`）。
+
+本任务不打补丁，Office 扩展名补丁是 18.3。下面的事实以 npm 发行包 `dsh-better-sidebar@0.28.0` 和 `@deepseek-ai/dsh@0.2.1-rc.2` 为准（本地只读副本，不在仓库内）：
+
+- 包：整包约 19 MB（`lib/` 约 15 MB），`dsh.bundle.patch = ./cordis.patch.yml`。补丁只有一行 `insert`：`{ id: better-sidebar, name: 'dsh-better-sidebar', disabled: !!js "…" }`，这个 `!!js` 用来防止重复挂载。
+- 兼容性声明：没有 `engines.dsh`，只有 `@deepseek-ai/dsh-*` peer（`^0.2.1-rc.1`）。宿主半边 `lib/index.js` 运行时只 import `ws`、`yaml`、`@deepseek-ai/schemastery` 和 DSH peer；客户端 `lib/client*.js` 是自包含的打包产物。
+- docx 的去向：`lib/client-registry.js` 中 `HOST_OWNED_EXTS` 含 docx、xlsx、pptx、doc、xls、ppt、pdf 和图片。better-sidebar 对这些扩展名 `canOpen` 返回 false，把地址交还 DSH 自带的文档预览（`@deepseek-ai/dsh-client-ui-sidebar-documentpreview`）。DSH 通过 `dsh-office-to-pdf`（`libreoffice-kit`）在实例内把文件转成 PDF。所以 issue 中的「由 better-sidebar 的原生预览显示」，指的是 better-sidebar 原生交接（其源码 `src/client/native/`）后，由 DSH 自带预览显示，不是 better-sidebar 自己的查看器。本任务按这个含义验收。
+- 兼容性判定：DSH 的加载器判定在 `dsh-app-boot/lib/index.js`（`unmetRequirements`、`evaluatePluginCompatibility`）。插件有 `engines.dsh` 时由它单独决定；没有时，每个 `@deepseek-ai/dsh` 或 `@deepseek-ai/dsh-*` peer 都要满足运行时版本。判定包含预发布版本；peer 写 `workspace:^|~|*` 时视为当前运行时版本。
+- profile 安装：profile 的 `pnpm-workspace.yaml` 是 `nodeLinker: hoisted`、`autoInstallPeers: false`。原生 `dsh plugin add` 会把约 90 个依赖铺到 profile `node_modules/` 顶层，目录门禁会把它们全部报为 `preinstalled packages not in catalog`。所以本任务不走原生安装。
+- npm 安装的实测：
+  - 默认 `npm install -g`（npm 11）共 242 个包，会把 `@deepseek-ai/dsh-agent`、`dsh-session` 等 DSH 包和 react、react-dom 装进插件自己的 `node_modules`，等于插件下面多了一套 DSH。`--omit=peer` 不能阻止这一点。
+  - 加 `--legacy-peer-deps` 后是 170 个包、约 285 MB、约 1.3 万个文件，`@deepseek-ai/` 下只有 `schemastery` 和 `cosmokit`，没有 react。
+  - 加 `--no-bin-links` 后不产生符号链接。
+
+selected：
+
+- **交付位置（Config）**：
+  - better-sidebar 和 #404 的仓库插件一样，交付到 `/opt/dsh-team/<id>/`：
+    - `id` 等于去掉 scope 的包名 `dsh-better-sidebar`（design.md 决定 12 第三方包的取法）；
+    - 这是真实目录，不是符号链接，依赖闭包嵌套在它自己的 `node_modules/` 下。
+  - 位置由三处现有约束决定，不能改为全局包：
+    - 覆盖层读取器只读 `/opt/dsh-team/<id>`（`platform/src/managed-config/read.ts:48`），强制开/关要用它的规范补丁；
+    - `catalog-check.mjs register` 和 `verify` 只认 `file:/opt/dsh-team/<id>` 加逐字节相同的 profile 副本；
+    - profile 顶层只能出现目录项本身。
+  - 目录门禁中「基线之外的全局包」这一分支本任务不用。`/usr/local/lib/node_modules` 里 MUST NOT 出现 `dsh-better-sidebar`，基线 `npm-baseline.json` 不变。
+- **安装与版本门（Release）**：
+  - Dockerfile 新增一条以 root 运行的 `RUN`：
+    - 装进构建期的临时 prefix：`npm install -g --prefix <tmp> --legacy-peer-deps --ignore-scripts --no-bin-links --no-audit --no-fund --before=2026-10-31T00:00:00Z dsh-better-sidebar@0.28.0`；
+    - `--before` 把整个依赖闭包钉在 0.28.0 发布（2026-10-17）之后、本任务之前的一个固定时刻，满足仓库「7 天内的新版本不可安装」的要求，两次构建解析出相同的闭包；
+    - 把 `<tmp>/lib/node_modules/dsh-better-sidebar` 移到 `/opt/dsh-team/dsh-better-sidebar`；
+    - 删除临时 prefix，执行 `npm cache clean --force`。
+  - 版本检查是安装之后的独立 `RUN`（拒绝构建可复用安装层缓存）。安装钉和期望版本是两个独立字面值，和 `dsh --version` 那段（Dockerfile:55-62）同构。读取 `/opt/dsh-team/dsh-better-sidebar/package.json` 的 `version`，必须严格等于 `0.28.0`，否则打印 `dsh-better-sidebar version mismatch: installed=<v> expected=0.28.0` 并以非零状态退出。前缀（如 `0.28`）也算不符。
+  - 权限：整棵树归 root，目录 0555、文件 0444，与现有 `/opt/dsh-team/*` 相同。
+  - 不手工裁剪依赖闭包，不引入锁文件；可复现性由 `--before` 提供。
+  - 构建守门：
+    - 现有 `--dump-default-config` 的 stderr 守门不变，better-sidebar 被跳过时构建失败；
+    - 不加 `engines.dsh`，那是改包。
+- **目录项（Schema）**：
+  - `catalog.json` 新增一项，按 `id` 排序位于首位：
+    ```json
+    {
+      "id": "dsh-better-sidebar",
+      "package": "dsh-better-sidebar",
+      "name": "增强侧栏",
+      "category": "manageable",
+      "imageDefaultEnabled": true
+    }
+    ```
+  - 原因：Office 文件经它打开，镜像默认就要启用。
+  - `register` 之后，`dsh.profile.bundles` 为 `[…DSH 自带, "dsh-better-sidebar", "@dsh-team/knowledge-base", "@dsh-team/office-agents"]`，按目录顺序。
+  - 平台镜像中的 `catalog.json` 字节相同，后台目录页和员工插件页随之多出「增强侧栏」，三态与其他可管理项相同。
+- **兼容性门禁（Compatibility）**：在 `catalog-check.mjs` 的 `compatibility()` 中按包名分两种规则：
+  - `@dsh-team/*` 保持现有的仓库规则：`engines.dsh` 非空，满足运行时版本，且没有 `@deepseek-ai/dsh` peer。
+  - 其他包直接调用已安装 DSH 自己导出的加载器判定 `evaluatePluginCompatibility(manifest, {}, installed)`（`dsh-app-boot/lib/index.js` 导出列表；它经 `catalog-check.mjs:148` 已有的 DSH 锚点解析）。返回非 `undefined` 或抛错都判失败，打印现有的 `DSH plugin compatibility failed: <dir> …` 一行。不在仓库里另写一份 `unmetRequirements`（Code Canonicality）。
+  - app-boot 是 ESM：Node 24 的同步 `require(esm)` 能加载它就用同步方式；不能时，`verify` 与 CLI 改为异步，由实现者核实后选择，并在注释中写明。app-boot 不可加载时报现有的 `DSH semver unavailable` 同类问题并失败。
+  - `catalog-check.test.mjs` 的夹具改动：
+    - `imageTree()` 目前对每个目录项读 `plugins/<id>/package.json`（`:60-62,85-90`），对非仓库项改为一份按发行版字段构造的清单桩（`name`、`version`、`peerDependencies`、`dsh.bundle.patch`）；
+    - 假 DSH 树提供一个 app-boot 桩，导出 `evaluatePluginCompatibility`，按清单桩中的标记返回 `undefined`、问题对象或抛错，并记录收到的 `installed` 参数。规则本身的正确性属于 DSH，由真实构建（`test:docker`）证明。
+  - 新增行，先红后绿：
+    - 评估器返回 `undefined` → 通过；
+    - 返回问题对象 → 失败并点名该目录；
+    - 抛错 → 失败并点名；
+    - 评估器收到的第三个参数等于已安装 DSH 的版本；
+    - `@dsh-team/*` 缺 `engines.dsh` 仍按仓库规则失败，且不调用评估器；
+    - app-boot 不可加载 → 失败。
+- **用户镜像 Docker 用例（`user-image.docker.test.ts`）**：
+  - 现有的目录交付用例改为覆盖新项：`observed.bundles` 加入 `dsh-better-sidebar`；`expectRegisteredCopies` 覆盖新项。
+  - 新项约 1.4 万个文件，现有整树 probe 会超出输出上限：bounded 模式 `maxBuffer` 64 KiB（`platform/test/docker-command.ts:64`），profile-seed 清单每份约 2.3 MB。以下 probe MUST 改为在容器内逐项判定、只输出摘要：
+    - 目录交付用例（`user-image.docker.test.ts:116`，`catalogProbe`）；
+    - `profile-seed-fixture.ts` 的 `profileSeedScript`（seed 与 live 两份清单，`:190-215`），以及使用它的 `user-image.docker.test.ts:180`、`profile-restore.docker.test.ts:93,114,131`、`volume-upgrade.docker.test.ts:351`；
+    - 实现者再用 `grep -rn "rglob\|readdirSync\|profiles/web/node_modules" platform/test` 核对其他整树 probe。
+  - 摘要形式下的判定强度不得降低：
+    - 容器内对每一项检查属主、权限和类型，输出违规计数，断言为 0；
+    - 规范副本与 profile 副本的树摘要（按相对路径排序的路径、类型、文件 sha256）相等；
+    - 文件数不低于一个写死的下限（防止空树通过）；
+    - profile-seed 用例中 seed 与 live 的摘要相等；员工编辑后，只允许原用例已列出的那几项差异，差异项本身仍逐项输出。
+    - 这一改动只改输出形式，原有五项的判定结果不变。
+  - 新增断言，均对规范副本：
+    - `package.json` 的 `name`/`version` 恰为 `dsh-better-sidebar`/`0.28.0`；
+    - 整棵树中没有符号链接；
+    - better-sidebar 自己 `peerDependencies` 中的每个包名（含 `@deepseek-ai/cordis`、`react`、`react-dom`），在任何深度都不出现 `node_modules/<name>` 路径；按路径段判定，例如 `node_modules/@formkit/auto-animate/react` 不算；
+    - `/usr/local/lib/node_modules/dsh-better-sidebar` 不存在；
+    - `@deepseek-ai/libreoffice-kit-wasm` 能从 DSH 包树解析到（下面浏览器用例的前提）；
+    - 输出三份副本的字节数：规范副本、profile 副本、profile-seed 副本，用作镜像体积变化的证据。
+  - 版本不符的拒绝用例放在 `user-image.docker.test.ts`，用 `buildUserImageExpectingFailure({ primary, expect })` 的真实构建模式（`:369-440`）：派生 Dockerfile 只把期望字面值改为 `0.28.1`，要求构建以非零状态失败，stderr 含 `dsh-better-sidebar version mismatch`。
+- **覆盖层读取（Config）**：
+  - 在已构建镜像上，用 `readManagedComposition(…, ['dsh-better-sidebar'])` 读取规范补丁（复用 `managed-policy-bundle-read.ts` 的模式，不另写读取器）。
+  - 断言 insert id 恰为 `['better-sidebar']`，`present === true`（参照 `managed-policy-bundle-read.ts:62`），`disabled` 保留为 `{ __jsExpr }` 形式（`loaderExpression` 非空）。
+  - 这证明管理员把它设为强制开或强制关时，实例启动不会因读取失败而失败。
+  - 生成器逻辑不改。
+- **Docker 浏览器用例（docx 打开）**：
+  - 复用现有 Docker 浏览器通道（`first-use.docker.test.ts` 插件页用例所用的 helper）。新开一个员工实例，镜像默认启用 better-sidebar。
+  - 实例内用镜像自带的 python3-docx 在 `/data/work/` 写一个已知中文内容的 docx，复用 `assertDocxReadback` 所在 fixture 的写法；再写一个已知内容的 `.md` 作为正向对照。
+  - 判别断言：
+    - 正向对照：在 better-sidebar 的文件区打开 `.md`，由 better-sidebar 自己的渲染器显示。断言一个只属于 better-sidebar 客户端的标记，由实现者从发行版 `lib/client.js` 中找出并在测试注释中写明来源，证明插件确实生效。
+    - docx：在同一文件区打开 docx。门禁断言是交接本身：显示面属于 `@deepseek-ai/dsh-client-ui-sidebar-documentpreview` 的 office 预览，better-sidebar 自己的查看器（代码编辑器、下载面板）没有出现。
+    - 渲染（用户决定 2026-11-07，改为只记录）：office 预览经 `officeToPdf` 在实例内转换。DSH 0.2.1 在 Linux 上只用 `libreoffice-kit-wasm`，不调用系统 soffice。首次 VPS 实测转换失败（`gateway/internal`，「Office 预览不可用」）。17.1 的门禁只断言上面的交接；渲染结果（成功出现页面元素，或失败的 code 和文案）写进用例输出和 PR 证据，不作断言。诊断与修复归 #554，17.4 的前提由 #554 修正。
+    - 截图存证；没有新的控制台错误。
+    - 实例日志不含 `plugin-failure-markers` 中的任何失败标记。
+  - 嵌套的 `@deepseek-ai/schemastery` 会不会形成双实例，静态分析无法判定，由这个运行时用例覆盖。
+- **文档（编排者同 PR 改）**：
+  - `platform/test/README.md:17`：交付清单加入 better-sidebar，写明安装方式、`--before`、版本门、副本形态和摘要式 probe；改写「Every delivered plugin manifest … declares a nonempty `engines.dsh`」「five copies」等失效的句子，写明两种兼容性规则。
+  - `images/dsh-user` 没有 README，不新建。
+
+must-preserve：
+
+- 现有五个目录项的交付、登记、默认状态和兼容性规则不变。
+- 基线全局包集合 `['@deepseek-ai/dsh', 'corepack', 'npm', 'pnpm']` 不变。
+- 插件管理器客户端仍为发行版原样。
+- 覆盖层生成器和读取器的代码不变。
+
+PR 范围说明：
+
+- `images/dsh-user/Dockerfile`、`catalog.json`、`catalog-check.mjs`、`catalog-check.test.mjs`。
+- `platform/test/` 中所有枚举目录项或 profile bundles 的断言。实现者用 `grep -rn "office-agents\|knowledge-base" platform/test` 逐个核对，已知有 `user-image.docker.test.ts`、`first-use.docker.test.ts`、`admin-config-activation.docker.test.ts`、`admin-plugin-catalog.integration.test.ts`、`probe-plugin-page.integration.test.ts`、`admin-plugins.ui.test.ts`、`managed-policy-*`、`user-image-rejection.integration.test.ts`。只更新期望值，不放宽判定。
+- 新的浏览器用例文件（或放进现有的 Docker 浏览器测试文件），以及 `platform/test/README.md`。
+- 不改 `platform/src/` 产品代码；`platform/src/plugin-catalog/catalog.test.ts:44-50`、`platform/src/admin/plugin-catalog.test.ts`（`ENTRIES`）等写死目录项的单元测试只改期望值。实现者用 `grep -rn "office-agents\|knowledge-base" platform/src platform/web/src platform/test` 核对全部。
+- 预计接近或超过 400 行；超过时带 `diff-limit-exempt` 标签并说明理由。
+- PR 写明：关键路径 `images/dsh-user/`，人工白盒审查推迟到 Epic #380 完成时进行，本 PR 未通过该审查。
+
+剩余风险：
+
+- 没有锁文件：`--before` 钉住解析时刻，但注册表若撤回某个版本，构建会失败而不是换版本。
+- 镜像每多一份副本约增大 285 MB（规范副本、profile 副本、profile-seed 各一份）。每个新员工的 home 卷首次 copy-up 也会多出约 285 MB。PR 记录实测字节数。
+- Legacy compatibility：补丁行是裸包名 `name: 'dsh-better-sidebar'`，本包不能改为绝对路径（15.1 的做法）。阶段 2 之前创建的 home 卷没有登记副本：`employee` 态下管理员重置 profile 之前看不到这张卡片；在这类卷上设 `forced-on`，`forcedOnRows` 重插的行解析不到，会出现插件失败标记。与 office-agents 属同一类问题（design.md:357），本任务只记录。
+- 员工在插件页安装或卸载其他插件时，DSH 会对 profile 执行 pnpm 操作；带约 170 个传递依赖的 `file:/opt/dsh-team/dsh-better-sidebar` 依赖在离线内网上的行为本任务没有验证，只记录。
+- 与 design.md 决定 12 的偏离（只记录）：第三方包没有走「第三方全局包」形态，而是交付到 `/opt/dsh-team/<id>`；兼容性检查不再只对仓库插件执行。
+- 18.3 的提前说明（只报告，不在本任务修改）：
+  - user-image spec「侧栏插件与 Office 扩展名补丁」中「全局模块中该包不是恰好一份」，与本任务的交付位置不符；
+  - DSH 实际加载的是 `register` 产生的 uid1001 profile 副本，而 spec 要求被补文件归 root、uid1001 不可写；
+  - 这两点由 18.3 的夹具处理，本任务不预先设计。
+
+not selected：
+
+- Public API、Auth、Schema 迁移：无新接口和迁移。
+- Concurrency：无。
+- 运行时资源：沿用夹具。
+
+Governing invariant：用户镜像中 `dsh-better-sidebar` 恰为 0.28.0，且未打补丁。它只交付到 `/opt/dsh-team/dsh-better-sidebar`，并按目录项登记一份 profile 副本。镜像默认启用，按可管理项参与三态。docx 由 better-sidebar 交还 DSH 自带的预览显示。
+
+Sibling surfaces：
+
+- 覆盖层强制开/关（`generate.ts` `catalogRows`，本任务不改，只证明读取成功）。
+- 后台目录页和员工插件页（数据来自 `catalog.json`）。
+- 18.3 补丁目标。
+- 17.2 打包下载、17.3 `htmlViewerNoSandbox`：这两项依赖本插件，本任务不做。
+
+Evidence (17.1 用户镜像安装 dsh-better-sidebar@0.28.0，#429):
+
+- 本机：`pnpm check`。`catalog-check.test.mjs` 的新增行先红后绿。
+- VPS exact-head `pnpm test:docker`：
+  - 全量，含用户镜像用例（版本、目录一致、无符号链接、无嵌套 DSH、三份副本字节数）；
+  - 覆盖层读取；
+  - Docker 浏览器 docx/md 用例，附截图；
+  - 版本不符的拒绝用例。
+- VPS exact-head `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+- PR 记录三份副本的字节数和镜像体积变化。
+
 ## 18. Office 在线编辑
 
 依赖：10（含 10.4 本机浏览器）、11、12、16、17。关键路径 `images/dsh-user/`。

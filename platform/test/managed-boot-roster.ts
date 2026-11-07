@@ -76,4 +76,6 @@ export const MANAGED_BOOT_ROSTER = [
   // permission-tiers is host-only since #393: no client half enters the roster.
   '@dsh-team/platform-nav',
   '@dsh-team/zh-locale',
+  // The image-default-enabled sidebar's client half (dsh.client in its released manifest).
+  'dsh-better-sidebar',
 ] as const;

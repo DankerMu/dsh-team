@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "dsh-better-sidebar",
+      "package": "dsh-better-sidebar",
+      "name": "增强侧栏",
+      "category": "manageable",
+      "imageDefaultEnabled": true
+    },
+    {
       "id": "knowledge-base",
       "package": "@dsh-team/knowledge-base",
       "name": "知识库",

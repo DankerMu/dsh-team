@@ -42,6 +42,7 @@ describe('readPluginCatalog', () => {
     const catalog = readPluginCatalog();
 
     expect(catalog.entries.map(({ id }) => id)).toEqual([
+      'dsh-better-sidebar',
       'knowledge-base',
       'office-agents',
       'permission-tiers',
