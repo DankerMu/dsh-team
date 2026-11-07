@@ -61,6 +61,8 @@ import {
   restoreRetrievalDefaults,
   SEARCH_QUESTION,
 } from './ragflow-stack-fixture.ts';
+import { archiveScenario } from './sidebar-archive-stack-fixture.ts';
+import type { ArchiveEvidence } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, until } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
@@ -153,6 +155,7 @@ interface ConversationEvidence {
   ragflow?: { before: RagflowStack; after: RagflowStack };
   scope?: ScopeEvidence & { forbiddenRequests: unknown };
   search?: SearchEvidence & { provider: Record<string, unknown> };
+  archive?: ArchiveEvidence;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
@@ -464,6 +467,12 @@ async function converse(
       model,
       ragflow,
     });
+    // The file area's two-file archive, built in the instance without a model or a retrieval.
+    evidence.archive = await archiveScenario({
+      session: panelSession(lifecycle, base, employee.email),
+      exec: (args) => run(['exec', '--user', '1001', `dsh-team-u-${employee.id}`, ...args]),
+      provider: () => platformRead(PROVIDER_HEALTH),
+    });
   });
 }
 
@@ -639,7 +648,7 @@ it('builds both images, starts the delivered compose platform, converses through
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
-  const { browser, provider, proxy, ragflow, panel, scope, search } = evidence;
+  const { browser, provider, proxy, ragflow, panel, scope, search, archive } = evidence;
   // The real image declares VOLUMEs; the fonts bind replaces only one of them.
   const volumes = evidence.documentServerVolumes ?? [];
   expect(volumes.length).toBeGreaterThan(0);
@@ -651,6 +660,7 @@ it('builds both images, starts the delivered compose platform, converses through
   if (ragflow === undefined) throw new Error('RAGFlow test stack evidence missing');
   if (scope === undefined) throw new Error('Knowledge scope evidence missing');
   if (search === undefined) throw new Error('Knowledge search evidence missing');
+  if (archive === undefined) throw new Error('Sidebar archive evidence missing');
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -733,6 +743,14 @@ it('builds both images, starts the delivered compose platform, converses through
   }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
   expect(search.browser.screenshots).toEqual(['search-sources.png']);
   expect(search.facts).toMatchObject({ result: 'ok', datasetNames: [POLICIES], excluded: 1 });
+  // Chromium turns the archive's `<a download>` navigation into a download ending ERR_ABORTED.
+  expect(archive.browser).toMatchObject({
+    screenshots: ['archive-menu.png'],
+    consoleErrors: [],
+    pageErrors: [],
+    failedRequests: ['GET /sidebar/archive'],
+    externalRequests: [],
+  });
   process.stdout.write(
     `${JSON.stringify({
       stackEvidence: {
@@ -764,6 +782,11 @@ it('builds both images, starts the delivered compose platform, converses through
           screenshot: search.screenshot,
           elapsedMs: search.elapsedMs,
           waitLimitMs: search.waitLimitMs,
+        },
+        archive: {
+          entries: archive.entries,
+          format: `${archive.format}.tar.gz`,
+          screenshots: archive.browser.screenshots,
         },
       },
     })}\n`,
