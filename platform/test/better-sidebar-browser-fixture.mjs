@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -195,45 +194,42 @@ async function observeMarkdown(page, evidence, markdown) {
   });
 }
 
-/** The docx: DSH's own Office preview converted it; better-sidebar drew no viewer for it. */
+/**
+ * The docx: better-sidebar handed it to DSH's own Office preview and drew no viewer for it. The
+ * preview must then settle in exactly one released state, read only inside the matched container:
+ * `rendered` (a drawn PDF page canvas) or `failed` (`data-textpreview-failed`, whose value is the
+ * code, or a `[role="alert"]` status, which has none). Which state occurred is recorded, not
+ * asserted (#554); an unsettled preview times out.
+ */
 async function observeDocx(page, evidence, docx) {
   return stage(page, evidence, 'docx', async () => {
     const container = `[...document.querySelectorAll(${JSON.stringify(`[data-document-preview="${OFFICE_PREVIEW}"]`)})].find((el) => (${visible})(el) && decodeURIComponent(el.getAttribute('data-textpreview-url') ?? '').endsWith(${JSON.stringify(`/${docx.name}`)}))`;
-    const outcome = await waitFor(
+    const observed = await waitFor(
       () =>
         evaluate(
           page,
           `(() => {
-            const failed = [...document.querySelectorAll('[data-textpreview-failed]')].find(${visible});
-            if (failed) return { failed: failed.getAttribute('data-textpreview-failed'), text: failed.textContent.trim().slice(0, 200) };
             const el = ${container};
             if (!el) return null;
+            // The visible message without the retry button's label.
+            const message = (node) => { const copy = node.cloneNode(true); copy.querySelectorAll('button').forEach((b) => b.remove()); return copy.textContent.trim().slice(0, 200); };
+            const failed = [...el.querySelectorAll('[data-textpreview-failed]')].find(${visible});
             const alert = [...el.querySelectorAll('[role="alert"]')].find(${visible});
-            if (alert) return { failed: 'alert', text: alert.textContent.trim().slice(0, 200) };
-            const ready = [...el.querySelectorAll('section[data-pdf-preview] [data-pdf-page] [data-document-zoom-surface]:not([hidden]) canvas')].filter(${visible});
-            return ready.length > 0 ? { failed: null } : null;
+            const rendered = [...el.querySelectorAll('section[data-pdf-preview] [data-pdf-page] [data-document-zoom-surface]:not([hidden]) canvas')].some(${visible});
+            if (rendered === Boolean(failed ?? alert)) return null;
+            const outcome = rendered ? { state: 'rendered' } : failed ? { state: 'failed', code: failed.getAttribute('data-textpreview-failed'), message: message(failed) } : { state: 'failed', message: message(alert) };
+            return {
+              ...outcome,
+              pages: el.querySelectorAll('section[data-pdf-preview] [data-pdf-page]').length,
+              nativeHost: el.closest('[data-dsh-native-tab-host]') !== null,
+              fontWarning: el.querySelector('[data-office-font-warning]') !== null,
+              downloads: [...document.querySelectorAll('a[download]')].filter((a) => decodeURIComponent(a.href).includes(${JSON.stringify(docx.name)})).length,
+              editors: [...document.querySelectorAll('[data-dsh-native-tab-host] .cm-editor')].filter(${visible}).length,
+            };
           })()`,
         ),
       CONVERSION_MS,
-      'office-preview-conversion',
-    );
-    assert.equal(
-      outcome.failed,
-      null,
-      `Office preview failed: ${outcome.failed} ${outcome.text ?? ''}`,
-    );
-    const observed = await evaluate(
-      page,
-      `(() => {
-        const el = ${container};
-        return {
-          pages: el.querySelectorAll('section[data-pdf-preview] [data-pdf-page]').length,
-          nativeHost: el.closest('[data-dsh-native-tab-host]') !== null,
-          fontWarning: el.querySelector('[data-office-font-warning]') !== null,
-          downloads: [...document.querySelectorAll('a[download]')].filter((a) => decodeURIComponent(a.href).includes(${JSON.stringify(docx.name)})).length,
-          editors: [...document.querySelectorAll('[data-dsh-native-tab-host] .cm-editor')].filter(${visible}).length,
-        };
-      })()`,
+      'office-preview-settled',
     );
     const shot = await captureSettledScreenshot(page, join(evidence, 'docx.png'));
     return { ...observed, screenshot: shot.screenshot };

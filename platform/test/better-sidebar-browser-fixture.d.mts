@@ -12,7 +12,11 @@ export interface SidebarHandoffObservation {
     readonly dshMarkdown: boolean;
     readonly screenshot: string;
   };
+  /** The recorded, unasserted Office outcome: a code only for `data-textpreview-failed`. */
   readonly docx: {
+    readonly state: 'rendered' | 'failed';
+    readonly code?: string;
+    readonly message?: string;
     readonly pages: number;
     readonly nativeHost: boolean;
     readonly fontWarning: boolean;

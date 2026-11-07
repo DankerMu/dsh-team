@@ -2998,7 +2998,7 @@ selected：
   - 判别断言：
     - 正向对照：在 better-sidebar 的文件区打开 `.md`，由 better-sidebar 自己的渲染器显示。断言一个只属于 better-sidebar 客户端的标记，由实现者从发行版 `lib/client.js` 中找出并在测试注释中写明来源，证明插件确实生效。
     - docx：在同一文件区打开 docx。门禁断言是交接本身：显示面属于 `@deepseek-ai/dsh-client-ui-sidebar-documentpreview` 的 office 预览，better-sidebar 自己的查看器（代码编辑器、下载面板）没有出现。
-    - 渲染：office 预览经 `officeToPdf` 在实例内用 `libreoffice-kit-wasm` 转换。断言转换成功，出现页面元素，没有错误或转换失败状态；首次 WASM 转换给足等待时间。「缺失字体」提示不算失败（镜像没有中文字体）。若在实例的 seccomp 或内存限制下转换失败，停下报告，不放宽断言，也不把 17.4 的 LibreOffice 提前。
+    - 渲染（用户决定 2026-11-07，改为只记录）：office 预览经 `officeToPdf` 在实例内转换。DSH 0.2.1 在 Linux 上只用 `libreoffice-kit-wasm`，不调用系统 soffice。首次 VPS 实测转换失败（`gateway/internal`，「Office 预览不可用」）。17.1 的门禁只断言上面的交接；渲染结果（成功出现页面元素，或失败的 code 和文案）写进用例输出和 PR 证据，不作断言。诊断与修复归 #554，17.4 的前提由 #554 修正。
     - 截图存证；没有新的控制台错误。
     - 实例日志不含 `plugin-failure-markers` 中的任何失败标记。
   - 嵌套的 `@deepseek-ai/schemastery` 会不会形成双实例，静态分析无法判定，由这个运行时用例覆盖。

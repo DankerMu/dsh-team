@@ -75,9 +75,9 @@ it('opens Markdown in better-sidebar and hands a docx from its file area to the 
           paragraph: true,
           dshMarkdown: false,
         });
-        // DSH's Office preview converted the docx; better-sidebar drew no editor or download pane.
+        // DSH's Office preview received the docx and settled; its outcome is recorded, not
+        // asserted (#554). better-sidebar drew no editor or download pane.
         expect(observed.docx).toMatchObject({ nativeHost: false, downloads: 0, editors: 0 });
-        expect(observed.docx.pages).toBeGreaterThanOrEqual(1);
         expect(observed.consoleErrors).toEqual([]);
         // A failed or over-limit read returns empty output, which must not pass the marker check.
         const logs = await lifecycle.commandAsync(['logs', id], 30_000);
@@ -85,8 +85,10 @@ it('opens Markdown in better-sidebar and hands a docx from its file area to the 
           throw new Error('Sidebar instance logs unavailable');
         rejectPluginFailures(logs, 'Sidebar instance plugin load failed');
         process.stdout.write(
-          `Docker better-sidebar handoff verified: run=${lifecycle.runId} pages=${String(observed.docx.pages)} ` +
-            `fontWarning=${String(observed.docx.fontWarning)} screenshots=${evidence}\n`,
+          `Docker better-sidebar handoff verified: run=${lifecycle.runId} preview=${observed.docx.state} ` +
+            `code=${observed.docx.code ?? '-'} message=${JSON.stringify(observed.docx.message ?? '')} ` +
+            `pages=${String(observed.docx.pages)} fontWarning=${String(observed.docx.fontWarning)} ` +
+            `screenshots=${evidence}\n`,
         );
         return JSON.stringify({
           markdown: true,
