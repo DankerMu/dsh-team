@@ -9,9 +9,11 @@ import {
 } from '../../scripts/probe-mapped-host.mjs';
 import {
   captureSettledScreenshot,
+  errorCode,
   waitComposer,
   waitFor,
 } from '../../scripts/probe-dsh-api-ui.mjs';
+import { connectPage } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { retainPageRequestFailure } from '../../scripts/probe-browser-evidence.mjs';
 import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import { evaluate, physicalClick } from '../../scripts/probe-permission-ui.mjs';
@@ -240,19 +242,11 @@ async function observeDocx(page, evidence, docx) {
 }
 
 /**
- * One owned Chrome on the employee's platform origin: better-sidebar's explorer opens the Markdown
- * control in its own renderer and hands the docx to DSH's Office preview. Console errors are
- * counted from the first navigation; screenshots and failure DOM summaries stay in `evidence`.
+ * One owned Chrome on the employee's platform origin, its workbench started and its composer
+ * ready, handed to `run`. Console errors are counted from the first navigation; screenshots and
+ * failure DOM summaries stay in `evidence`.
  */
-export async function observeSidebarHandoff({
-  origin,
-  cookie,
-  host,
-  runtime,
-  evidence,
-  markdown,
-  docx,
-}) {
+async function withSidebarBrowser({ origin, cookie, host, runtime, evidence }, run) {
   const profile = await mkdtemp(join(tmpdir(), 'dsh-team-better-sidebar-browser-'));
   let browser;
   let failure;
@@ -266,7 +260,7 @@ export async function observeSidebarHandoff({
       profile: join(profile, 'profile'),
       receiptFile: join(profile, 'chrome.receipt.json'),
     });
-    const { page, errors } = browser;
+    const { page } = browser;
     await page.send('Emulation.setDeviceMetricsOverride', {
       width: 1600,
       height: 1000,
@@ -277,12 +271,7 @@ export async function observeSidebarHandoff({
       await navigateReady(page, origin, MS);
       await waitComposer(page, MS);
     });
-    await openExplorer(page, evidence, markdown.name);
-    await openFromExplorer(page, evidence, 'open-markdown', markdown.name);
-    const markdownView = await observeMarkdown(page, evidence, markdown);
-    await openFromExplorer(page, evidence, 'open-docx', docx.name);
-    const docxView = await observeDocx(page, evidence, docx);
-    return { markdown: markdownView, docx: docxView, consoleErrors: [...errors] };
+    return await run(browser);
   } catch (error) {
     failure = { error };
     throw error;
@@ -296,4 +285,149 @@ export async function observeSidebarHandoff({
       await rm(profile, { recursive: true, force: true });
     }
   }
+}
+
+/**
+ * better-sidebar's explorer opens the Markdown control in its own renderer and hands the docx to
+ * DSH's Office preview.
+ */
+export async function observeSidebarHandoff({ markdown, docx, ...input }) {
+  return withSidebarBrowser(input, async ({ page, errors }) => {
+    await openExplorer(page, input.evidence, markdown.name);
+    await openFromExplorer(page, input.evidence, 'open-markdown', markdown.name);
+    const markdownView = await observeMarkdown(page, input.evidence, markdown);
+    await openFromExplorer(page, input.evidence, 'open-docx', docx.name);
+    const docxView = await observeDocx(page, input.evidence, docx);
+    return { markdown: markdownView, docx: docxView, consoleErrors: [...errors] };
+  });
+}
+
+/** The Markdown control's image, loaded from `/sidebar/file` and decoded; its URL stays in memory. */
+async function observeMarkdownImage(page, evidence, markdown) {
+  return stage(page, evidence, 'markdown-image', async () => {
+    const image = `[...document.querySelectorAll('[data-dsh-md-surface] img')].find((img) => { const url = new URL(img.src, location.href); return url.origin === location.origin && url.pathname === '/sidebar/file' && (url.searchParams.get('path') ?? '').endsWith(${JSON.stringify(`/${markdown.image}`)}); })`;
+    const observed = await waitFor(
+      () =>
+        evaluate(
+          page,
+          `(() => { const img = ${image}; return img?.complete && img.naturalWidth > 0 ? { src: img.src, naturalWidth: img.naturalWidth } : null; })()`,
+        ),
+      MS,
+      'better-sidebar-markdown-image',
+    );
+    const shot = await captureSettledScreenshot(page, join(evidence, 'markdown-image.png'));
+    return { src: observed.src, naturalWidth: observed.naturalWidth, screenshot: shot.screenshot };
+  });
+}
+
+// Chrome's notice for a script the document's sandbox refuses; the only allowed probe error.
+const BLOCKED_SCRIPT = ['Blocked script execution', "'allow-scripts' permission is not set"];
+const redactUrls = (text) =>
+  String(text ?? '')
+    .replace(/https?:\/\/[^\s'"]+/gi, '[url]')
+    .slice(0, 240);
+
+/** A fresh tab of the same browser whose document responses and console errors are recorded. */
+async function openProbeTab(browserWs) {
+  const tab = await connectPage(browserWs);
+  const state = { loads: 0, documents: new Map(), blocked: [], errors: [] };
+  tab.on('Page.loadEventFired', () => {
+    state.loads++;
+  });
+  tab.on('Network.responseReceived', ({ requestId, type, response }) => {
+    if (type !== 'Document') return;
+    const headers = Object.fromEntries(
+      Object.entries(response.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
+    );
+    state.documents.set(requestId, { status: response.status, headers });
+  });
+  tab.on('Log.entryAdded', ({ entry }) => {
+    if (entry?.level !== 'error') return;
+    const text = String(entry.text ?? '');
+    if (BLOCKED_SCRIPT.every((fragment) => text.includes(fragment)))
+      state.blocked.push(redactUrls(text));
+    else state.errors.push(redactUrls(text));
+  });
+  tab.on('Runtime.exceptionThrown', (params) => {
+    state.errors.push(errorCode(params.exceptionDetails?.text));
+  });
+  tab.on('Runtime.consoleAPICalled', (params) => {
+    if (params.type === 'error') state.errors.push(errorCode(params.args?.[0]?.value));
+  });
+  for (const domain of ['Network', 'Page', 'Log', 'DOM', 'Runtime'])
+    await tab.send(`${domain}.enable`);
+  return { tab, state };
+}
+
+/**
+ * Navigate the probe tab as a top-level document, then read its response headers, the frame's
+ * security origin and, through DOM.*, the static `#probe` marker and the script-written `#ran`.
+ */
+async function probeDocument({ tab, state }, url, evidence, label) {
+  return stage(tab, evidence, label, async () => {
+    const before = state.loads;
+    const { loaderId, errorText } = await tab.send('Page.navigate', { url });
+    if (errorText !== undefined) throw new Error('probe-navigation-failed');
+    await waitFor(
+      () => state.loads > before && state.documents.has(loaderId),
+      MS,
+      `${label}-document-load`,
+    );
+    const response = state.documents.get(loaderId);
+    const { frameTree } = await tab.send('Page.getFrameTree');
+    const { root } = await tab.send('DOM.getDocument', { depth: 0 });
+    const marker = async (selector) =>
+      (await tab.send('DOM.querySelector', { nodeId: root.nodeId, selector })).nodeId;
+    const ran = await marker('#ran');
+    const shot = await captureSettledScreenshot(tab, join(evidence, `${label}.png`));
+    return {
+      status: response.status,
+      contentType: response.headers['content-type'] ?? null,
+      csp: response.headers['content-security-policy'] ?? null,
+      nosniff: response.headers['x-content-type-options'] ?? null,
+      securityOrigin: frameTree.frame.securityOrigin,
+      probe: (await marker('#probe')) !== 0,
+      ran: ran === 0 ? null : (await tab.send('DOM.getOuterHTML', { nodeId: ran })).outerHTML,
+      screenshot: shot.screenshot,
+    };
+  });
+}
+
+/**
+ * The workspace HTML probe opened as a top-level document in a new tab: once through the URL
+ * better-sidebar's own Markdown image uses (`/sidebar/file`, only `path` replaced) and once
+ * through its `/sidebar/html` preview route as the positive control. The image proves the
+ * subresource use still loads; no URL or session id enters the observation.
+ */
+export async function observeWorkspaceDocument({ markdown, probePath, ...input }) {
+  return withSidebarBrowser(input, async ({ page, chrome, errors }) => {
+    await openExplorer(page, input.evidence, markdown.name);
+    await openFromExplorer(page, input.evidence, 'open-markdown', markdown.name);
+    const markdownView = await observeMarkdown(page, input.evidence, markdown);
+    const { src, ...image } = await observeMarkdownImage(page, input.evidence, markdown);
+    const fileUrl = new URL(src);
+    const sessionId = fileUrl.searchParams.get('sessionId') ?? '';
+    if (fileUrl.origin !== input.origin || sessionId === '')
+      throw new Error('better-sidebar-browser-image-url');
+    fileUrl.searchParams.set('path', probePath);
+    const htmlPath = probePath.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+    const htmlUrl = `${input.origin}/sidebar/html/${encodeURIComponent(sessionId)}/${htmlPath}`;
+    const probe = await openProbeTab(chrome.browserWs);
+    try {
+      const document = await probeDocument(probe, fileUrl.href, input.evidence, 'file-document');
+      const preview = await probeDocument(probe, htmlUrl, input.evidence, 'html-preview');
+      await probe.tab.send('Page.close');
+      return {
+        markdown: markdownView,
+        image,
+        document,
+        preview,
+        blockedScripts: [...probe.state.blocked],
+        probeConsoleErrors: [...probe.state.errors],
+        consoleErrors: [...errors],
+      };
+    } finally {
+      probe.tab.close();
+    }
+  });
 }
