@@ -114,10 +114,16 @@ export async function accountStatusFixture(
   };
 }
 
-export async function postRestart(base: string, cookie: string, id = START_USER) {
+/** The real admin restart over HTTP; `origin` must be the platform's public origin. */
+export async function postRestart(
+  base: string,
+  cookie: string,
+  id = START_USER,
+  origin = PUBLIC_ORIGIN,
+) {
   const response = await fetch(`${base}/_platform/api/admin/instances/${id}/restart`, {
     method: 'POST',
-    headers: jsonRequestHeaders({ cookie }),
+    headers: jsonRequestHeaders({ cookie, origin }),
     body: '{}',
   });
   const body: unknown = await response.json();

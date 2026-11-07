@@ -284,7 +284,7 @@ B 能读到 Document Server 的 JWT，但不知道 A 的文件令牌密钥：
   - Office 编辑组在 ONLYOFFICE 及其覆盖层配置合入之后再加补丁（同一组）：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py`，改为与 #375 同构的 Node 脚本，钉住 0.28.0 和两个文件的输入、输出哈希，只从 `HOST_OWNED_EXTS` 里去掉 docx、xlsx、pptx。
 - **Office 提示**：新建镜像插件 `plugins/office-hints/`，承载三条界面提示：人机同写提示（F40）、无 Session 提示、满员提示和退回预览（F42）。不给第三方包加第二个补丁。它是受管必启项（决定 12），只在 ONLYOFFICE 生效时显示。员工文档放在新建的 `docs/EMPLOYEE_GUIDE.md`。
 - **LibreOffice**：用户镜像装 LibreOffice，供 DSH 自带预览把旧格式、Office 不可用时以及 Document Server 满员时的 docx/xlsx/pptx 转成 PDF 只读显示。
-- `htmlViewerNoSandbox` 由覆盖层钉为关闭，即沙箱开启（F36）。
+- HTML 预览沙箱（F36，用户决定 2026-11-07）：better-sidebar 0.28.0 的预览路由 `/sidebar/html` 始终下发 `Content-Security-Policy: sandbox allow-scripts allow-popups allow-downloads allow-modals`（不含 `allow-same-origin`），预览脚本总在不透明源中运行，`htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 和状态栏的临时解除都只改 iframe 属性，不能解除它。覆盖层不写 better-sidebar 的 `config`：DSH 0.2.1 对行的 `config` 整体替换，员工此后对该行的任何设置写入都会被拒绝（`dsh-config-editor` 的 overlay 检查），钉一个字段就会冻结全部侧栏偏好。两个开关由 `platform-nav` 客户端显示为受管锁定。
 - 下载使用 better-sidebar 文件菜单里的「打包下载」。
 
 ### 9. 办公委派改用原生 agentPreset（B4）

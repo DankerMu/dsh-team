@@ -67,7 +67,7 @@ const modelOptions = (page) =>
  * no `web:linux` binding (settings-general lib/client.js:1195-1232; dsh-client-shortcuts
  * lib/client.js:874, 1342-1349), so the Linux verification browser cannot use the keyboard.
  */
-const openSettings = async (page, budget) => {
+export const openSettings = async (page, budget) => {
   // The launcher is a slot entry and can mount after the app reports ready.
   const launcher = await waitFor(
     () =>

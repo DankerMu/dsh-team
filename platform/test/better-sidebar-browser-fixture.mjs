@@ -97,7 +97,7 @@ const panelSummary = `(() => {
   };
 })()`;
 
-async function stage(page, evidence, label, run) {
+export async function stage(page, evidence, label, run) {
   try {
     return await run();
   } catch (error) {
@@ -119,7 +119,7 @@ async function stage(page, evidence, label, run) {
 }
 
 /** Expand the right Sidebar and show better-sidebar's explorer, from the guide when it is shown. */
-async function openExplorer(page, evidence, name) {
+export async function openExplorer(page, evidence, name) {
   await stage(page, evidence, 'expand', async () => {
     const open = `Boolean(document.querySelector(${JSON.stringify(PANEL)}))`;
     const state = await waitFor(
@@ -154,7 +154,7 @@ async function openExplorer(page, evidence, name) {
  * the explorer and its unselected strip tab is shown; that tab is selected first and the row must
  * then be visible in a selected explorer tab. Any other state times out with the stage diagnostics.
  */
-async function openFromExplorer(page, evidence, label, name) {
+export async function openFromExplorer(page, evidence, label, name) {
   await stage(page, evidence, label, async () => {
     const shown = await waitFor(
       () =>
@@ -246,7 +246,7 @@ async function observeDocx(page, evidence, docx) {
  * ready, handed to `run`. Console errors are counted from the first navigation; screenshots and
  * failure DOM summaries stay in `evidence`.
  */
-async function withSidebarBrowser({ origin, cookie, host, runtime, evidence }, run) {
+export async function withSidebarBrowser({ origin, cookie, host, runtime, evidence }, run) {
   const profile = await mkdtemp(join(tmpdir(), 'dsh-team-better-sidebar-browser-'));
   let browser;
   let failure;
@@ -321,8 +321,8 @@ async function observeMarkdownImage(page, evidence, markdown) {
 }
 
 // Chrome's notice for a script the document's sandbox refuses; the only allowed probe error.
-const BLOCKED_SCRIPT = ['Blocked script execution', "'allow-scripts' permission is not set"];
-const redactUrls = (text) =>
+export const BLOCKED_SCRIPT = ['Blocked script execution', "'allow-scripts' permission is not set"];
+export const redactUrls = (text) =>
   String(text ?? '')
     .replace(/https?:\/\/[^\s'"]+/gi, '[url]')
     .slice(0, 240);
@@ -362,25 +362,39 @@ async function openProbeTab(browserWs) {
 // The document's real origin and whether it may touch the origin's storage and cookies.
 const ORIGIN_READ = `(() => { const name = (f) => { try { f(); return 'ok'; } catch (e) { return e.name; } }; return { origin: self.origin, storage: name(() => localStorage.length), cookie: name(() => document.cookie) }; })()`;
 
+/** @returns {{ id: string } | undefined} */
+const findFrame = (tree, frameId) =>
+  tree.frame.id === frameId
+    ? tree.frame
+    : (tree.childFrames ?? []).map((child) => findFrame(child, frameId)).find(Boolean);
+
 /**
- * Evaluate ORIGIN_READ in a fresh isolated world of the main frame, which runs even where the
- * document's sandbox blocks page script. The frame tree's `securityOrigin` is derived from the URL
- * and reports the platform origin for a sandboxed document, so it is no oracle.
+ * Evaluate `expression` by value in a fresh isolated world of one frame of `target`'s own frame
+ * tree (its main frame by default). The world runs even where the document's sandbox blocks page
+ * script, and shares the document's DOM. A frame the target does not hold is an error.
  */
-async function readOrigin(target) {
+export async function isolatedEvaluate(target, expression, frameId) {
   const { frameTree } = await target.send('Page.getFrameTree');
+  const frame = frameId === undefined ? frameTree.frame : findFrame(frameTree, frameId);
+  if (frame === undefined) throw new Error('isolated-world-frame-missing');
   const { executionContextId } = await target.send('Page.createIsolatedWorld', {
-    frameId: frameTree.frame.id,
-    worldName: 'dsh-team-origin-read',
+    frameId: frame.id,
+    worldName: 'dsh-team-isolated-read',
   });
   const result = await target.send('Runtime.evaluate', {
-    expression: ORIGIN_READ,
+    expression,
     contextId: executionContextId,
     returnByValue: true,
   });
-  if (result.exceptionDetails) throw new Error('origin-read-evaluation-failed');
+  if (result.exceptionDetails) throw new Error('isolated-world-evaluation-failed');
   return result.result.value;
 }
+
+/**
+ * ORIGIN_READ in an isolated world of one frame. The frame tree's `securityOrigin` is derived from
+ * the URL and reports the platform origin for a sandboxed document, so it is no oracle.
+ */
+export const readOrigin = (target, frameId) => isolatedEvaluate(target, ORIGIN_READ, frameId);
 
 /**
  * Navigate the probe tab as a top-level document, then read its response headers, its origin in

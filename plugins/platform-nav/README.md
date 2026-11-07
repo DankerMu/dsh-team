@@ -27,7 +27,17 @@ DSH 0.2.1-rc.2's plugin page has no slot for a card or its switch, and its own r
 - inserts exactly one non-interactive `<span data-dsh-team-plugin-lock="forced-on|forced-off">` right after each hidden switch, reading `已开启 · 由管理员设定` or `已关闭 · 由管理员设定`. A parent that already holds a mark gets no second one. The client inserts only its own nodes and never changes or removes a node or attribute DSH rendered, including `data-plugin-status` and `aria-checked`.
 - scans the page once, then keeps one `MutationObserver` on `document.body` (`childList`, `subtree`). Because required items are always forced on, it stays resident on every DSH page, chat streaming included. Each callback looks only at added element nodes. An added node that is not inside or does not contain a `[data-plugin-package]`/`[data-plugin-detail]` element is skipped without a whole-document query; otherwise only that added subtree is searched for the forced switches.
 
-A missing, malformed or empty `pluginCatalog` adds no style and no observer, and the client never throws over it. A hidden switch cannot be clicked or focused, so a forced card has no control that could call `pluginManager.setBundleEnabled`. The native 「添加插件」, update and uninstall entries, `employee` items and packages outside the catalog are unchanged.
+A missing, malformed or empty `pluginCatalog` adds no catalog style and no catalog marks, and the client never throws over it; the observer and the sandbox style below exist regardless. A hidden switch cannot be clicked or focused, so a forced card has no control that could call `pluginManager.setBundleEnabled`. The native 「添加插件」, update and uninstall entries, `employee` items and packages outside the catalog are unchanged.
+
+## Locked HTML preview sandbox switches
+
+dsh-better-sidebar 0.28.0's HTML viewer settings carry two toggles, `htmlViewerNoSandbox` and `htmlViewerDefaultUnsafe`, rendered as a `<label>` holding `<input type="checkbox" aria-label={title}>` with no key in the DOM. The client locks both unconditionally (product policy F36): no page global or overlay input is read.
+
+- One `<style data-dsh-team-plugin-lock="html-sandbox">` is appended before anything renders. It holds `label:has(> input[aria-label="<title>"]){display:none !important}` for the zh titles 「关闭 HTML 预览沙箱（不安全）」「HTML 预览默认以非沙箱模式打开（不安全）」 and their en titles, so no clickable switch flashes. The catalog style's guard matches only `[data-dsh-team-plugin-lock=""]`.
+- A `<span data-dsh-team-plugin-lock="html-sandbox">沙箱开启 · 由管理员设定</span>` is inserted after each matched label (not inside it), once per toggle row.
+- The same single observer also searches an added subtree that holds one of those inputs: one `querySelector` per added element, never a whole-document query.
+
+The lock is display only. The sandbox guarantee is the preview route's own CSP (`sandbox` without `allow-same-origin`) and the gateway's CSP on `/sidebar/file`; an employee who writes either key in the profile, or clicks the status bar's temporary unlock, removes only the iframe's `sandbox` attribute. Titles are matched in zh and en only; zh-locale selects zh on every load. A changed title in a later better-sidebar release silently drops the lock, which the Docker case catches.
 
 Accepted residuals:
 

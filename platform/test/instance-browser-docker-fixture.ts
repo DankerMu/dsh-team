@@ -73,6 +73,19 @@ export async function startEmployeeInstance(
   });
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ status: 'starting', reason: 'starting' });
+  return awaitEmployeeInstance(lifecycle, base, database, user);
+}
+
+/**
+ * Wait until the employee's starting instance runs, then prove the ready container is this
+ * image's, named, labelled and mounted on the employee's own home and work volumes.
+ */
+export async function awaitEmployeeInstance(
+  lifecycle: UserImageLifecycle,
+  base: string,
+  database: DatabaseHandle,
+  user: { id: string; cookie: string },
+): Promise<string> {
   const deadline = Date.now() + 90_000;
   for (;;) {
     const status = await fetch(`${base}/_platform/api/instance`, {

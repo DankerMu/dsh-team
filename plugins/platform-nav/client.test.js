@@ -17,6 +17,15 @@ const plugin = registration.factory((id) => {
 });
 const injected = [];
 const registered = [];
+// The registration apply also installs the page's locks; its observer is retired before any test.
+const bootObservers = [];
+const BootObserver = globalThis.MutationObserver;
+globalThis.MutationObserver = class extends BootObserver {
+  constructor(callback) {
+    super(callback);
+    bootObservers.push(this);
+  }
+};
 plugin.apply({
   slots: {
     inject: (name, install) => {
@@ -30,6 +39,12 @@ plugin.apply({
   },
 });
 const Entry = registered[0]?.component;
+globalThis.MutationObserver = BootObserver;
+for (const observer of bootObservers) observer.disconnect();
+const bootStyles = [...document.head.querySelectorAll('style')].map((style) =>
+  style.getAttribute('data-dsh-team-plugin-lock'),
+);
+document.head.replaceChildren();
 
 let fetchSpy;
 let consoleSpies;
@@ -91,6 +106,9 @@ it('registers exactly one sidebar footer list entry through React from the DSH s
   expect(registered.map(({ options }) => options)).toEqual([
     { name: 'sidebar.footer.action', id: 'dsh-team-platform-nav', order: 1 },
   ]);
+  // Without any page global the same apply still installs the sandbox lock, and only it.
+  expect(bootObservers).toHaveLength(1);
+  expect(bootStyles).toEqual(['html-sandbox']);
 });
 
 const ACCOUNT_WIDE = {
@@ -181,6 +199,8 @@ const ON = '已开启 · 由管理员设定';
 const OFF = '已关闭 · 由管理员设定';
 const LOCKS = { [LOCALE]: 'forced-on', [OFFICE]: 'forced-off' };
 const LOCK = 'data-dsh-team-plugin-lock';
+const CATALOG_STYLE = `style[${LOCK}=""]`;
+const SANDBOX_STYLE = `style[${LOCK}="html-sandbox"]`;
 
 /** Run the client's apply as DSH does once per page, with the page global as given. */
 function install(value, present = true) {
@@ -305,26 +325,31 @@ describe('forced plugin lock display', () => {
       { admin: false, pluginCatalog: { [LOCALE]: 'forced-on', 'x"] *': 'forced-off' } },
       true,
     ],
-  ])('adds no style and no observer for %s', async (_name, value, present) => {
-    document.body.append(list(), detail(LOCALE));
-    const before = document.body.innerHTML;
+  ])(
+    'adds no catalog rule or mark for %s, only the sandbox lock',
+    async (_name, value, present) => {
+      document.body.append(list(), detail(LOCALE));
+      const before = document.body.innerHTML;
 
-    install(value, present);
-    document.body.append(card(LOCALE, false));
-    await flush();
+      install(value, present);
+      document.body.append(card(LOCALE, false));
+      await flush();
 
-    expect(document.head.querySelectorAll('style')).toHaveLength(0);
-    expect(observers).toHaveLength(0);
-    expect(marks(document.body)).toEqual([]);
-    expect(document.body.innerHTML).toBe(before + card(LOCALE, false).outerHTML);
-  });
+      expect(document.head.querySelectorAll(CATALOG_STYLE)).toHaveLength(0);
+      expect(document.head.querySelectorAll(SANDBOX_STYLE)).toHaveLength(1);
+      expect(observers).toHaveLength(1);
+      expect(marks(document.body)).toEqual([]);
+      expect(document.body.innerHTML).toBe(before + card(LOCALE, false).outerHTML);
+    },
+  );
 
   it('injects exactly one style element holding only the two rules of each forced package', () => {
     install({ admin: false, pluginCatalog: LOCKS });
 
-    const styles = [...document.querySelectorAll('style')];
+    const styles = [...document.querySelectorAll(CATALOG_STYLE)];
 
     expect(styles).toHaveLength(1);
+    expect(document.querySelectorAll(SANDBOX_STYLE)).toHaveLength(1);
     expect(styles[0].parentElement).toBe(document.head);
     expect(styles[0].hasAttribute(LOCK)).toBe(true);
     expect(styles[0].textContent).toBe(
@@ -383,7 +408,8 @@ describe('forced plugin lock display', () => {
     await flush();
 
     expect(marks(document.body)).toHaveLength(3);
-    expect(document.querySelectorAll('style')).toHaveLength(1);
+    expect(document.querySelectorAll(CATALOG_STYLE)).toHaveLength(1);
+    expect(document.querySelectorAll(SANDBOX_STYLE)).toHaveLength(1);
     expect(observers).toHaveLength(1);
     expect(cardSwitch(LOCALE).getAttribute('aria-checked')).toBe('true');
   });
@@ -444,5 +470,142 @@ describe('forced plugin lock display', () => {
     for (const context of anchorChecks) expect(added.has(context)).toBe(true);
     expect(marks(chat)).toEqual([]);
     expect(document.body.querySelectorAll(`[${LOCK}]`)).toHaveLength(2);
+  });
+});
+
+// The released dsh-better-sidebar 0.28.0 HTML viewer toggles (lib/client.js:2713-2716 zh,
+// :3343-3346 en) and one other viewer toggle, rendered by FeatureSettingsRows/Switch
+// (:31018-31035, :31044-31080): one `div.popupRow` per toggle, the title and description, then a
+// `<label>` holding the checkbox (aria-label = title) and its track. Class names are hashed there.
+const SANDBOX_ZH = ['关闭 HTML 预览沙箱（不安全）', 'HTML 预览默认以非沙箱模式打开（不安全）'];
+const SANDBOX_EN = [
+  'Disable HTML preview sandbox (unsafe)',
+  'Open HTML previews unsandboxed by default (unsafe)',
+];
+const GIT_GUTTER = '编辑器未提交变更提示';
+const SANDBOX_MARK = '沙箱开启 · 由管理员设定';
+
+function settingRow(title, checked = false) {
+  return fromHtml(`
+    <div class="popupRow">
+      <span class="rowText"><span class="title">${title}</span><span class="desc">desc</span></span>
+      <label class="switch"><input type="checkbox" class="switchInput"${checked ? ' checked' : ''} aria-label="${title}"><span class="switchTrack" aria-hidden="true"><span class="switchThumb"></span></span></label>
+    </div>`);
+}
+
+/** The released feature settings popup body with the given toggle titles. */
+function settingsPopup(titles) {
+  const rows = fromHtml('<div class="popupRows"></div>');
+  rows.append(...titles.map((title) => settingRow(title)));
+  return rows;
+}
+
+const switchLabel = (title) =>
+  [...document.querySelectorAll('input[type="checkbox"]')]
+    .find((input) => input.getAttribute('aria-label') === title)
+    ?.closest('label');
+const sandboxMarks = () => [...document.querySelectorAll(`span[${LOCK}="html-sandbox"]`)];
+
+/** Each locked title's label is followed, outside it, by exactly one sandbox mark. */
+function expectSandboxLocked(titles) {
+  for (const title of titles) {
+    const label = switchLabel(title);
+    expect(lockAfter(label)).toEqual({ tag: 'SPAN', state: 'html-sandbox', text: SANDBOX_MARK });
+    expect(label.querySelector(`[${LOCK}]`)).toBeNull();
+    expect(label.parentElement.querySelectorAll(`[${LOCK}]`)).toHaveLength(1);
+  }
+}
+
+describe('HTML preview sandbox lock display', () => {
+  it('locks both Chinese and both English sandbox titles without any page global', async () => {
+    install(undefined, false);
+    document.body.append(settingsPopup([...SANDBOX_ZH, GIT_GUTTER]));
+    document.body.append(settingsPopup(SANDBOX_EN));
+    await flush();
+
+    expectSandboxLocked([...SANDBOX_ZH, ...SANDBOX_EN]);
+    expect(sandboxMarks()).toHaveLength(4);
+  });
+
+  it('leaves another viewer toggle and every DSH node as rendered', () => {
+    document.body.append(settingsPopup([...SANDBOX_ZH, GIT_GUTTER]));
+    const before = document.body.innerHTML;
+
+    install({ admin: false });
+
+    expect(lockAfter(switchLabel(GIT_GUTTER))).toBeNull();
+    expect(switchLabel(GIT_GUTTER).parentElement.querySelector(`[${LOCK}]`)).toBeNull();
+    expect(dshMarkup()).toBe(before);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('locks toggles rendered before the client arrives', () => {
+    document.body.append(settingsPopup(SANDBOX_ZH));
+
+    install({ admin: false, pluginCatalog: LOCKS });
+
+    expectSandboxLocked(SANDBOX_ZH);
+  });
+
+  it('inserts one mark per row across re-renders, re-mounts and a repeated apply', async () => {
+    install(undefined, false);
+    const popup = settingsPopup(SANDBOX_ZH);
+    document.body.append(popup);
+    await flush();
+    const [first] = SANDBOX_ZH;
+
+    popup.append(popup.firstElementChild);
+    const label = switchLabel(first);
+    label.replaceChildren(...[...label.childNodes].map((node) => node.cloneNode(true)));
+    label.parentElement.append(document.createElement('i'));
+    install(undefined, false);
+    await flush();
+
+    expectSandboxLocked(SANDBOX_ZH);
+    expect(sandboxMarks()).toHaveLength(2);
+    expect(document.querySelectorAll(SANDBOX_STYLE)).toHaveLength(1);
+    expect(observers).toHaveLength(1);
+  });
+
+  it('locks a popup that opens long after the client arrives', async () => {
+    install(undefined, false);
+    document.body.append(list());
+    await flush();
+    expect(sandboxMarks()).toEqual([]);
+
+    const portal = document.createElement('div');
+    document.body.append(portal);
+    await flush();
+    portal.append(settingsPopup(SANDBOX_EN));
+    await flush();
+
+    expectSandboxLocked(SANDBOX_EN);
+  });
+
+  it('hides each sandbox switch label by one rule per title, before its node appears', () => {
+    install(undefined, false);
+
+    const styles = [...document.querySelectorAll(SANDBOX_STYLE)];
+
+    expect(styles).toHaveLength(1);
+    expect(styles[0].parentElement).toBe(document.head);
+    expect(styles[0].textContent).toBe(
+      [...SANDBOX_ZH, ...SANDBOX_EN]
+        .map((title) => `label:has(> input[aria-label="${title}"]){display:none !important}`)
+        .join(''),
+    );
+    expect(document.querySelectorAll(CATALOG_STYLE)).toHaveLength(0);
+  });
+
+  it('keeps the catalog lock unchanged beside the sandbox lock on one page', async () => {
+    install({ admin: false, pluginCatalog: LOCKS });
+    document.body.append(list(), detail(LOCALE), settingsPopup(SANDBOX_ZH));
+    await flush();
+
+    expect(marks(document.body)).toHaveLength(5);
+    expectSandboxLocked(SANDBOX_ZH);
+    expect(lockAfter(cardSwitch(LOCALE))).toEqual({ tag: 'SPAN', state: 'forced-on', text: ON });
+    expect(observers).toHaveLength(1);
   });
 });

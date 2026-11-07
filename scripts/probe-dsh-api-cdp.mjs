@@ -91,6 +91,7 @@ class Cdp {
     this.next = 1;
     this.pending = new Map();
     this.handlers = new Map();
+    this.listeners = new Map();
     this.timeoutMs = timeoutMs;
     this.ws = ws;
     ws.addEventListener('message', (event) => {
@@ -108,15 +109,26 @@ class Cdp {
         return;
       }
       if (msg.method) {
-        const sessionKey = msg.sessionId ?? '';
-        this.handlers.get(`${sessionKey}\0${msg.method}`)?.(msg.params ?? {});
+        const key = `${msg.sessionId ?? ''}\0${msg.method}`;
+        const params = msg.params ?? {};
+        this.handlers.get(key)?.(params);
+        for (const listener of [...(this.listeners.get(key) ?? [])]) listener(params);
       }
     });
     ws.addEventListener('close', () => drain(this.pending, 'cdp-closed'), { once: true });
     ws.addEventListener('error', () => drain(this.pending, 'cdp-error'), { once: true });
   }
+  /** The one handler of (session, method); a later call replaces it. */
   on(method, handler, sessionId = '') {
     this.handlers.set(`${sessionId}\0${method}`, handler);
+  }
+  /** One more handler of (session, method), beside `on`'s; the result unsubscribes it. */
+  listen(method, handler, sessionId = '') {
+    const key = `${sessionId}\0${method}`;
+    const listeners = this.listeners.get(key) ?? new Set();
+    this.listeners.set(key, listeners);
+    listeners.add(handler);
+    return () => listeners.delete(handler);
   }
   send(method, params = {}, sessionId) {
     const id = this.next++;
@@ -165,14 +177,23 @@ const openWs = (url, extra, ms = WS_MS) =>
     ws.addEventListener('close', () => finish(reject, new Error('ws-closed')), { once: true });
   });
 
+/** Commands and events of one flattened session of the shared browser connection. */
+const cdpSession = (root, sessionId) => ({
+  sessionId,
+  send: (method, params = {}) => root.send(method, params, sessionId),
+  on: (method, handler) => root.on(method, handler, sessionId),
+  listen: (method, handler) => root.listen(method, handler, sessionId),
+});
+
+/** A new blank tab; `session(id)` reaches any session attached through it, e.g. its iframes. */
 export const connectPage = async (browserWs) => {
   const browser = await openWs(browserWs);
   const root = new Cdp(browser);
   const { targetId } = await root.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await root.send('Target.attachToTarget', { targetId, flatten: true });
   return {
-    send: (method, params = {}) => root.send(method, params, sessionId),
-    on: (method, handler) => root.on(method, handler, sessionId),
+    ...cdpSession(root, sessionId),
+    session: (id) => cdpSession(root, id),
     close: () => browser.close(),
   };
 };
@@ -186,7 +207,7 @@ const networkEvents = [
   'Network.resourceChangedPriority',
 ];
 
-/** One Network owner per page; global Cdp.on still replaces its single handler. */
+/** One Network owner per page; `on` still replaces its single handler per method. */
 export const observeNetwork = (page, handlers) => {
   if (Object.keys(handlers).some((method) => !networkEvents.includes(method))) {
     throw new Error('unsupported browser Network observer');
