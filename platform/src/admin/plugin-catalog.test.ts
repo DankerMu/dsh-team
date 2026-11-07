@@ -43,6 +43,14 @@ const INTERNAL_ERROR = {
 };
 const ENTRIES = [
   {
+    id: 'dsh-better-sidebar',
+    package: 'dsh-better-sidebar',
+    name: '增强侧栏',
+    category: 'manageable',
+    imageDefaultEnabled: true,
+    state: 'employee',
+  },
+  {
     id: 'knowledge-base',
     package: '@dsh-team/knowledge-base',
     name: '知识库',
@@ -90,8 +98,9 @@ const submission = (office: string, extra: { id: string; state: unknown }[] = []
   { id: 'permission-tiers', state: 'forced-on' },
   { id: 'platform-nav', state: 'forced-on' },
   { id: 'zh-locale', state: 'forced-on' },
-  // Submission order is free; the manageable knowledge-base entry keeps its default.
+  // Submission order is free; the other manageable entries keep their default.
   { id: 'knowledge-base', state: 'employee' },
+  { id: 'dsh-better-sidebar', state: 'employee' },
   ...extra,
 ];
 const audits = (database: DatabaseHandle) =>
@@ -133,7 +142,10 @@ it('saves only manageable states with one actor/source audit and a running-insta
     expect(saved.json()).toEqual({ entries: officeAs('forced-off'), runningInstances: 0 });
     expect(read.json()).toEqual({ entries: officeAs('forced-off') });
     expect(settingsRows(database)).toEqual(
-      seededWith({ pluginCatalog: '{"knowledge-base":"employee","office-agents":"forced-off"}' }),
+      seededWith({
+        pluginCatalog:
+          '{"dsh-better-sidebar":"employee","knowledge-base":"employee","office-agents":"forced-off"}',
+      }),
     );
     expect(audits(database)).toEqual([
       { actor_email: user.email, source_address: SOURCE, details: '{}' },
@@ -154,7 +166,8 @@ it('ignores a stored id no longer in the catalog and drops it on the next whole-
     expect(read.json()).toEqual({ entries: officeAs('forced-on') });
     expect(saved.statusCode).toBe(200);
     expect(storedCatalog(database)).toEqual({
-      value: '{"knowledge-base":"employee","office-agents":"employee"}',
+      value:
+        '{"dsh-better-sidebar":"employee","knowledge-base":"employee","office-agents":"employee"}',
     });
   });
 });

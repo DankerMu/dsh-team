@@ -5,6 +5,7 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 const INVALID = 'Invalid managed bundle read observation';
 const INVALID_COMPOSITION = 'Invalid managed composition';
 const OFFICE_ID = 'office-agents';
+const SIDEBAR_ID = 'dsh-better-sidebar';
 const MISSING_ID = 'no-such-bundle';
 
 type Run = (name: string, script: string) => string;
@@ -80,6 +81,27 @@ async function proveOfficeRead(run: Run, prefix: string): Promise<void> {
   if (!entries.some(hasSkillDirExpression)) throw new Error(INVALID);
 }
 
+/**
+ * The third-party sidebar's released patch (dsh-better-sidebar@0.28.0 cordis.patch.yml): exactly
+ * one insert, `better-sidebar`, composed in the image profile, its `!!js` double-mount guard kept
+ * as a loader expression. A forced state can therefore re-insert or disable it at boot.
+ */
+async function proveSidebarRead(run: Run, prefix: string): Promise<void> {
+  const composition = await readManagedComposition(
+    (script) => Promise.resolve(run(`${prefix}-sidebar-read`, script)),
+    [SIDEBAR_ID],
+  );
+  const [bundle] = composition.bundles;
+  if (composition.bundles.length !== 1 || bundle?.id !== SIDEBAR_ID || !bundle.present) {
+    throw new Error(INVALID);
+  }
+  const entries = bundle.patch.flatMap((row) => list(record(row).insert).map(record));
+  const ids = entries.map((entry) => entry.id);
+  if (ids.length !== 1 || ids[0] !== 'better-sidebar') throw new Error(INVALID);
+  const guard = loaderExpression(entries[0]?.disabled);
+  if (guard === undefined || guard.trim() === '') throw new Error(INVALID);
+}
+
 async function proveMissingRejected(lifecycle: UserImageLifecycle, run: Run, prefix: string) {
   const name = `${prefix}-bundle-missing`;
   let rejection: unknown;
@@ -101,9 +123,9 @@ async function proveMissingRejected(lifecycle: UserImageLifecycle, run: Run, pre
 }
 
 /**
- * In-image forced-state bundle read (#407): the shipped office bundle resolves through
- * dsh-app-boot `bundlePatchPaths`/`loadOverlayPatches` and is composed; a missing bundle rejects.
- * Results stay in memory; nothing is printed.
+ * In-image forced-state bundle read (#407): the shipped office bundle and the third-party sidebar
+ * resolve through dsh-app-boot `bundlePatchPaths`/`loadOverlayPatches` and are composed; a missing
+ * bundle rejects. Results stay in memory; nothing is printed.
  */
 export async function proveBundleRead(
   lifecycle: UserImageLifecycle,
@@ -111,5 +133,6 @@ export async function proveBundleRead(
   prefix: string,
 ): Promise<void> {
   await proveOfficeRead(run, prefix);
+  await proveSidebarRead(run, prefix);
   await proveMissingRejected(lifecycle, run, prefix);
 }

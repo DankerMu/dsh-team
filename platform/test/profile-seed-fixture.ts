@@ -15,14 +15,30 @@ interface Entry {
   readonly kind: 'directory' | 'file';
   readonly sha256?: string;
 }
+/** A whole tree judged inside the container: digest of its sorted paths, kinds and bytes. */
+interface TreeDigest {
+  readonly digest: string;
+  readonly count: number;
+}
+/** The live entries differing from the seed (null: absent from live), the first 20 by path. */
+interface TreeDiff {
+  readonly count: number;
+  readonly entries: Record<string, Entry | null>;
+}
 interface Readback {
   readonly phase: 'fresh' | 'reuse';
   readonly effectiveUid: number;
-  readonly seed: Record<string, Entry>;
-  readonly seedAfter: Record<string, Entry>;
-  readonly live: Record<string, Entry>;
-  readonly liveAfter: Record<string, Entry>;
-  readonly metadata: readonly { path: string; uid: number; mode: number; parent: boolean }[];
+  readonly seed: TreeDigest;
+  readonly seedAfter: TreeDigest;
+  readonly pinned: Record<string, Entry | null>;
+  readonly live: TreeDiff;
+  readonly liveAfter: TreeDiff;
+  readonly metadata: {
+    readonly checked: number;
+    readonly owner: number;
+    readonly writable: number;
+    readonly first: readonly string[];
+  };
   readonly denied: Record<string, number>;
   readonly enginesDsh: string;
   readonly installedDsh: string;
@@ -31,6 +47,11 @@ interface Readback {
   readonly patch: string;
   readonly workspace: string;
 }
+
+/** Hardcoded floor against an empty seed passing: the sidebar's closure alone is ~14,600 entries. */
+const SEED_ENTRY_FLOOR = 14_000;
+const REQUIRED_FILES = ['package.json', 'cordis.yml', 'cordis.patch.yml', 'pnpm-workspace.yaml'];
+const noDifference: TreeDiff = { count: 0, entries: {} };
 
 interface CanonicalPlugin {
   readonly hashes: Record<string, Entry>;
@@ -58,14 +79,14 @@ function canonicalPlugin(): CanonicalPlugin {
 
 function validateSeed(readback: Readback, plugin: CanonicalPlugin): void {
   strictEqual(readback.effectiveUid, 1001, 'Profile probe must run as uid1001');
-  const requiredFiles = ['package.json', 'cordis.yml', 'cordis.patch.yml', 'pnpm-workspace.yaml'];
-  strictEqual(readback.seed.web?.kind, 'directory', 'Seed must contain a real Web profile');
-  for (const file of requiredFiles) {
-    strictEqual(readback.seed[`web/${file}`]?.kind, 'file', `Missing Web profile file: ${file}`);
+  strictEqual(readback.pinned.web?.kind, 'directory', 'Seed must contain a real Web profile');
+  for (const file of REQUIRED_FILES) {
+    strictEqual(readback.pinned[`web/${file}`]?.kind, 'file', `Missing Web profile file: ${file}`);
   }
   for (const [path, expected] of Object.entries(plugin.hashes)) {
-    deepStrictEqual(readback.seed[path], expected, `Canonical plugin bytes differ: ${path}`);
+    deepStrictEqual(readback.pinned[path], expected, `Canonical plugin bytes differ: ${path}`);
   }
+  ok(readback.seed.count >= SEED_ENTRY_FLOOR, 'Seed must hold the delivered profile tree');
   strictEqual(readback.enginesDsh, plugin.enginesDsh, 'Seeded engines.dsh must be canonical');
   strictEqual(readback.installedDsh, '0.2.1-rc.2', 'Image must carry the pinned DSH release');
   strictEqual(readback.enginesSatisfied, true, 'Installed DSH must satisfy engines.dsh');
@@ -86,31 +107,22 @@ function validateSeed(readback: Readback, plugin: CanonicalPlugin): void {
     'packages:\n- .\nnodeLinker: hoisted\nautoInstallPeers: false',
     'Web profile must include the released plugin workspace settings',
   );
-  const expectedPaths = [
-    '/opt',
-    '/opt/dsh-team',
-    '/opt/dsh-team/profile-seed',
-    ...Object.keys(readback.seed).map((path) => `/opt/dsh-team/profile-seed/${path}`),
-  ].sort();
-  deepStrictEqual(
-    readback.metadata.map(({ path }) => path).sort(),
-    expectedPaths,
+  // Every seed entry plus /opt, /opt/dsh-team and the seed root, each judged in the container.
+  strictEqual(
+    readback.metadata.checked,
+    readback.seed.count + 3,
     'Permissions must cover the entire seed and replacement-sensitive parents',
   );
-  for (const metadata of readback.metadata) {
-    strictEqual(metadata.uid, 0, `Seed boundary must be root-owned: ${metadata.path}`);
-    ok(
-      Number.isInteger(metadata.mode) && metadata.mode >= 0 && metadata.mode <= 0o7777,
-      `Seed boundary must report a valid permission mode: ${metadata.path}`,
-    );
-    const parent = metadata.path === '/opt' || metadata.path === '/opt/dsh-team';
-    strictEqual(metadata.parent, parent);
-    strictEqual(
-      metadata.mode & (parent ? 0o022 : 0o222),
-      0,
-      `Seed boundary must not be writable: ${metadata.path}`,
-    );
-  }
+  deepStrictEqual(
+    [readback.metadata.owner, readback.metadata.first],
+    [0, []],
+    'Seed boundary must be root-owned',
+  );
+  deepStrictEqual(
+    [readback.metadata.writable, readback.metadata.first],
+    [0, []],
+    'Seed boundary must not be writable',
+  );
   deepStrictEqual(
     readback.seedAfter,
     readback.seed,
@@ -121,8 +133,15 @@ function validateSeed(readback: Readback, plugin: CanonicalPlugin): void {
 /** Stateful test callback: first-copy equality, immutable seed, then exact same-volume edits. */
 export function profileSeedOracle(): (stdout: string) => void {
   const plugin = canonicalPlugin();
-  let originalSeed: Record<string, Entry> | undefined;
-  let editedLive: Record<string, Entry> | undefined;
+  // The only differences a uid1001 edit may leave between the live profile and the seed.
+  const edited: TreeDiff = {
+    count: 2,
+    entries: {
+      'web/cordis.patch.yml': { kind: 'file', sha256: digest(editedPatch) },
+      [markerPath]: { kind: 'file', sha256: digest(markerBytes) },
+    },
+  };
+  let originalSeed: TreeDigest | undefined;
   return (stdout) => {
     // JSON is an external Python process boundary. Assertions below validate every consumed field.
     const readback = JSON.parse(stdout) as Readback;
@@ -131,7 +150,7 @@ export function profileSeedOracle(): (stdout: string) => void {
       strictEqual(readback.phase, 'fresh');
       deepStrictEqual(
         readback.live,
-        readback.seed,
+        noDifference,
         'Fresh volume must receive identical recursive paths and bytes',
       );
       deepStrictEqual(
@@ -139,14 +158,9 @@ export function profileSeedOracle(): (stdout: string) => void {
         { write: 13, delete: 13, replace: 13, replaceSeed: 13 },
         'Seed write, deletion and replacement must fail specifically with permission denied',
       );
-      editedLive = {
-        ...readback.seed,
-        'web/cordis.patch.yml': { kind: 'file', sha256: digest(editedPatch) },
-        [markerPath]: { kind: 'file', sha256: digest(markerBytes) },
-      };
       deepStrictEqual(
         readback.liveAfter,
-        editedLive,
+        edited,
         'uid1001 must modify a live profile and create a marker',
       );
       originalSeed = readback.seed;
@@ -159,10 +173,10 @@ export function profileSeedOracle(): (stdout: string) => void {
       );
       deepStrictEqual(
         readback.live,
-        editedLive,
+        edited,
         'Reused volume must preserve exact user edits and marker',
       );
-      deepStrictEqual(readback.liveAfter, editedLive, 'Reuse must not reset the live profile');
+      deepStrictEqual(readback.liveAfter, edited, 'Reuse must not reset the live profile');
       deepStrictEqual(readback.denied, {});
     }
   };
@@ -200,30 +214,49 @@ def inventory(root):
             raise AssertionError("Unexpected seed/profile entry type: " + str(path))
     return entries
 
+# Whole trees are judged here and leave as digests, counts and bounded differences: the delivered
+# profile holds ~14,600 entries, far above the probe's bounded output.
+def tree_digest(entries):
+    lines = "\\n".join(path + "\\0" + entry["kind"] + "\\0" + entry.get("sha256", "")
+                      for path, entry in sorted(entries.items()))
+    return {"digest": hashlib.sha256(lines.encode()).hexdigest(), "count": len(entries)}
+
+def difference(base, other):
+    paths = sorted(path for path in set(base) | set(other) if base.get(path) != other.get(path))
+    return {"count": len(paths), "entries": {path: other.get(path) for path in paths[:20]}}
+
 before = inventory(seed)
 live_before = inventory(live)
 web = seed / "web"
 plugin = web / "node_modules/@dsh-team/zh-locale"
-for relative in ("package.json", "cordis.yml", "cordis.patch.yml", "pnpm-workspace.yaml",
-                 "node_modules/@dsh-team/zh-locale/package.json",
-                 "node_modules/@dsh-team/zh-locale/index.js",
-                 "node_modules/@dsh-team/zh-locale/client.js",
-                 "node_modules/@dsh-team/zh-locale/cordis.patch.yml"):
+pinned_paths = ("package.json", "cordis.yml", "cordis.patch.yml", "pnpm-workspace.yaml",
+                "node_modules/@dsh-team/zh-locale/package.json",
+                "node_modules/@dsh-team/zh-locale/index.js",
+                "node_modules/@dsh-team/zh-locale/client.js",
+                "node_modules/@dsh-team/zh-locale/cordis.patch.yml")
+for relative in pinned_paths:
     if not (web / relative).is_file():
         raise FileNotFoundError("Missing required profile seed file: " + str(web / relative))
-metadata = []
-for path in [Path("/opt"), seed.parent, seed] + sorted(seed.rglob("*")):
+pinned = {path: before.get(path) for path in ["web"] + ["web/" + relative for relative in pinned_paths]}
+parents = (seed.parent.parent, seed.parent)
+metadata = {"checked": 0, "owner": 0, "writable": 0, "first": []}
+for path in [*parents, seed] + sorted(seed.rglob("*")):
     info = path.lstat()
-    metadata.append({"path": str(path), "uid": info.st_uid,
-                     "mode": stat.S_IMODE(info.st_mode), "parent": path in (Path("/opt"), seed.parent)})
+    metadata["checked"] += 1
+    owner = info.st_uid != 0
+    writable = (stat.S_IMODE(info.st_mode) & (0o022 if path in parents else 0o222)) != 0
+    metadata["owner"] += owner
+    metadata["writable"] += writable
+    if (owner or writable) and len(metadata["first"]) < 5:
+        metadata["first"].append(str(path))
 engines_dsh = json.loads((plugin / "package.json").read_text())["engines"]["dsh"]
 # DSH's own semver decides the range in the image, exactly as its loader does.
 engines = json.loads(subprocess.run(
     ["node", "-e", ${JSON.stringify(`${DSH_ENGINES_PRELUDE}process.stdout.write(JSON.stringify({installed:dshInstalled,satisfied:dshEnginesSatisfied(process.argv[1])}));`)}, engines_dsh],
     check=True, capture_output=True, text=True, timeout=10).stdout)
 readback = {
-    "phase": phase, "effectiveUid": os.geteuid(), "seed": before, "live": live_before,
-    "metadata": metadata, "denied": {},
+    "phase": phase, "effectiveUid": os.geteuid(), "seed": tree_digest(before), "pinned": pinned,
+    "live": difference(before, live_before), "metadata": metadata, "denied": {},
     "enginesDsh": engines_dsh, "installedDsh": engines["installed"], "enginesSatisfied": engines["satisfied"],
     "rootConfig": (web / "cordis.yml").read_text(),
     "patch": (web / "cordis.patch.yml").read_text(),
@@ -246,7 +279,7 @@ if phase == "fresh":
             if error.errno != errno.EACCES:
                 raise
             readback["denied"][name] = error.errno
-readback["seedAfter"] = inventory(seed)
-readback["liveAfter"] = inventory(live)
+readback["seedAfter"] = tree_digest(inventory(seed))
+readback["liveAfter"] = difference(before, inventory(live))
 print(json.dumps(readback, ensure_ascii=False, sort_keys=True))
 `;

@@ -12,6 +12,29 @@ RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.1-rc.2 \
 COPY --chmod=0444 catalog-check.mjs /opt/dsh-team/catalog-check.mjs
 RUN node /opt/dsh-team/catalog-check.mjs record /opt/dsh-team/npm-baseline.json
 
+# The third-party sidebar is the unpatched npm release, delivered like the repository plugins: a
+# real root-owned directory with its dependency closure nested below it, never a global package.
+# --legacy-peer-deps keeps a second DSH and React out of that closure, --no-bin-links leaves no
+# symlink for registration to refuse, and --before pins every dependency to one resolution moment
+# (after the 0.28.0 release, older than the repository's 7-day minimum release age).
+RUN prefix="$(mktemp -d)" \
+  && npm install -g --prefix "$prefix" --legacy-peer-deps --ignore-scripts --no-bin-links \
+       --no-audit --no-fund --before=2026-10-31T00:00:00Z dsh-better-sidebar@0.28.0 \
+  && mv "$prefix/lib/node_modules/dsh-better-sidebar" /opt/dsh-team/dsh-better-sidebar \
+  && rm -rf "$prefix" \
+  && npm cache clean --force \
+  && chown -R root:root /opt/dsh-team/dsh-better-sidebar \
+  && find /opt/dsh-team/dsh-better-sidebar -type d -exec chmod 0555 {} + \
+  && find /opt/dsh-team/dsh-better-sidebar -type f -exec chmod 0444 {} +
+# Install pin and expected version are independent literals, like the DSH check below; equality
+# is exact, so a prefix of the installed version (for example 0.28) must fail the build.
+RUN installed="$(node -p 'require("/opt/dsh-team/dsh-better-sidebar/package.json").version')" \
+  && expected="0.28.0" \
+  && if [ "$installed" != "$expected" ]; then \
+       echo "dsh-better-sidebar version mismatch: installed=${installed} expected=${expected}" >&2; \
+       exit 1; \
+     fi
+
 # Each named context contains only canonical plugin sources, not the repository root.
 # /opt/dsh-team/<id> is every plugin's canonical copy, outside the employee-writable home.
 # Delivery does not activate a plugin; the managed overlay owns composition policy.
@@ -81,18 +104,20 @@ RUN log="$(mktemp)" \
 
 USER root
 # The gate fails the build when the image and the catalog differ in either direction or an entry
-# is not registered as above, and checks every delivered plugin's engines.dsh (no exact DSH peer)
-# with the released loader's decision: the installed DSH, DSH's own semver (declared by
-# dsh-app-boot), prereleases included.
+# is not registered as above, and checks every delivered plugin against the installed DSH: a
+# repository plugin's engines.dsh (no exact DSH peer) with DSH's own semver (declared by
+# dsh-app-boot), prereleases included; any other package with dsh-app-boot's own loader decision.
 # The empty credentials directory is the managed overlay's isolated credential store:
 # traversable by uid1001, never writable by it.
 RUN node /opt/dsh-team/catalog-check.mjs verify /opt/dsh-team/catalog.json /opt/dsh-team/npm-baseline.json \
   && mkdir /opt/dsh-team/credentials \
   && chmod 0555 /opt/dsh-team/credentials
 # Preserve the complete relative tree, including hidden entries, independently of live profiles.
+# cp -a keeps uid1001 ownership; the seed is the only such tree, as everything else under
+# /opt/dsh-team was written root-owned above, and re-chowning it would copy it into this layer.
 RUN mkdir -p /opt/dsh-team/profile-seed \
   && cp -a "${DSH_HOME}/profiles/." /opt/dsh-team/profile-seed/ \
-  && chown -R root:root /opt/dsh-team \
+  && chown -R root:root /opt/dsh-team/profile-seed \
   && chmod -R a-w /opt/dsh-team/profile-seed \
   && chown root:root /opt \
   && chmod go-w /opt /opt/dsh-team

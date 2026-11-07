@@ -3,7 +3,6 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -11,90 +10,32 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { main, recordBaseline, registerCatalog, verifyCatalog } from './catalog-check.mjs';
+import { recordBaseline, registerCatalog, verifyCatalog } from './catalog-check.mjs';
+import {
+  CATALOG,
+  DSH,
+  dshJson,
+  GLOBALS,
+  imageTree,
+  INITIAL_MANIFEST,
+  OPT,
+  PROFILE,
+  RANGE,
+  register,
+  REGISTERED_BUNDLES,
+  removeImageTrees,
+  repository,
+  repositoryCatalog,
+  repositoryManifest,
+  run,
+  SPECS,
+  verify,
+  write,
+} from './catalog-check-fixture.mjs';
 
-const repository = fileURLToPath(new URL('../../', import.meta.url));
-const repositoryCatalog = join(repository, 'images/dsh-user/catalog.json');
-const GLOBALS = 'usr/local/lib/node_modules';
-const OPT = 'opt/dsh-team';
-const PROFILE = 'data/home/profiles/web';
-const DSH = `${GLOBALS}/@deepseek-ai/dsh`;
-const RANGE = '>=0.2.1-rc.2 <0.3.0';
-// CommonJS like the real dependency; accepts only the delivered range, and only with prereleases.
-const CATALOG = JSON.parse(readFileSync(repositoryCatalog, 'utf8')).entries;
-const SPECS = Object.fromEntries(
-  CATALOG.map((entry) => [entry.package, `file:/opt/dsh-team/${entry.id}`]),
-);
-const REGISTERED_BUNDLES = [
-  '@deepseek-ai/dsh-base',
-  '@deepseek-ai/dsh-web-app',
-  '@dsh-team/knowledge-base',
-  '@dsh-team/office-agents',
-];
-// The manifest DSH initProfile writes, serialized as DSH saves it.
-const INITIAL_MANIFEST = {
-  name: 'dsh-profile-web',
-  private: true,
-  dependencies: {},
-  dsh: { profile: { bundles: REGISTERED_BUNDLES.slice(0, 2) } },
-};
-const dshJson = (value) => `${JSON.stringify(value, null, 2)}\n`;
-const SEMVER_STUB = `exports.satisfies = (version, range, options) =>
-  options?.includePrerelease === true && version === '0.2.1-rc.2' && range === ${JSON.stringify(RANGE)};\n`;
-
-const owned = [];
-afterEach(() => {
-  for (const root of owned.splice(0)) rmSync(root, { recursive: true, force: true });
-});
-
-function write(root, path, value) {
-  const target = join(root, path);
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, typeof value === 'string' ? value : JSON.stringify(value));
-}
-
-function repositoryManifest(plugin) {
-  return JSON.parse(readFileSync(join(repository, 'plugins', plugin, 'package.json'), 'utf8'));
-}
-
-/**
- * A fake image root laid out like the Dockerfile at the register step (all four plugins under
- * /opt/dsh-team, the initial profile manifest), with its recorded baseline; registered by default,
- * which is the layout at the verify step.
- */
-function imageTree(registered = true) {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-team-catalog-check-'));
-  owned.push(root);
-  write(root, `${DSH}/package.json`, { name: '@deepseek-ai/dsh', version: '0.2.1-rc.2' });
-  for (const name of ['dsh-app-boot', 'dsh-base', 'dsh-web-app'])
-    write(root, `${DSH}/node_modules/@deepseek-ai/${name}/package.json`, {
-      name: `@deepseek-ai/${name}`,
-    });
-  write(root, `${DSH}/node_modules/semver/package.json`, { name: 'semver', main: 'index.js' });
-  write(root, `${DSH}/node_modules/semver/index.js`, SEMVER_STUB);
-  for (const name of ['corepack', 'npm', 'pnpm'])
-    write(root, `${GLOBALS}/${name}/package.json`, { name });
-  const baseline = join(root, OPT, 'npm-baseline.json');
-  mkdirSync(join(root, OPT), { recursive: true });
-  expect(main(['record', baseline, '--root', root], () => undefined)).toBe(0);
-  write(root, `${OPT}/catalog-check.mjs`, '');
-  for (const { id } of CATALOG) {
-    write(root, `${OPT}/${id}/package.json`, repositoryManifest(id));
-    write(root, `${OPT}/${id}/index.js`, `export const id = '${id}';\n`);
-    // Delivered files are read-only, like the image's COPY --chmod=0444.
-    chmodSync(join(root, OPT, id, 'index.js'), 0o444);
-  }
-  write(root, `${OPT}/office-agents/skills/official-writing/SKILL.md`, '# 公文写作\n');
-  chmodSync(join(root, OPT, 'office-agents/skills'), 0o700);
-  write(root, `${PROFILE}/package.json`, dshJson(INITIAL_MANIFEST));
-  const tree = { root, baseline };
-  if (registered) expect(register(tree)).toEqual({ status: 0, stderr: '' });
-  return tree;
-}
+afterEach(removeImageTrees);
 
 /** Relative path -> kind, permission bits and bytes of every entry below path. */
 function snapshot(path, prefix = '') {
@@ -125,20 +66,6 @@ function editProfileManifest(tree, edit) {
   const manifest = JSON.parse(profileManifest(tree));
   edit(manifest);
   write(tree.root, `${PROFILE}/package.json`, dshJson(manifest));
-}
-
-function run(argv) {
-  const chunks = [];
-  const status = main(argv, (text) => chunks.push(text));
-  return { status, stderr: chunks.join('') };
-}
-
-function verify(tree, catalog = repositoryCatalog) {
-  return run(['verify', catalog, tree.baseline, '--root', tree.root]);
-}
-
-function register(tree, catalog = repositoryCatalog) {
-  return run(['register', catalog, '--root', tree.root]);
 }
 
 function catalogWith(tree, mutate) {
@@ -172,14 +99,6 @@ it('records the sorted top-level and scoped global package names in a read-only 
   expect(recordBaseline(root).problems).toEqual([]);
 });
 
-it('records exactly the toolchain and DSH in the fake image baseline', () => {
-  const { baseline } = imageTree();
-
-  expect(JSON.parse(readFileSync(baseline, 'utf8'))).toEqual({
-    globals: ['@deepseek-ai/dsh', 'corepack', 'npm', 'pnpm'],
-  });
-});
-
 it('refuses to overwrite an existing baseline', () => {
   const tree = imageTree();
 
@@ -207,13 +126,6 @@ it.each([
   expect(result.stderr).toMatch(
     /^usage: catalog-check\.mjs record .* \| register .* \| verify .*\n$/,
   );
-});
-
-it('accepts the consistent image with the repository catalog and writes nothing', () => {
-  const tree = imageTree();
-
-  expect(verify(tree)).toEqual({ status: 0, stderr: '' });
-  expect(verifyCatalog(tree.root, repositoryCatalog, tree.baseline)).toEqual({ problems: [] });
 });
 
 it.each([
@@ -421,54 +333,54 @@ it.each([
 it.each([
   [
     'a duplicate id',
-    (entries) => entries.push({ ...entries[1], package: '@x/y' }),
-    'catalog entry 5 (office-agents) duplicates id office-agents',
+    (entries) => entries.push({ ...entries[2], package: '@x/y' }),
+    'catalog entry 6 (office-agents) duplicates id office-agents',
   ],
   [
     'a duplicate package',
-    (entries) => entries.push({ ...entries[1], id: 'other' }),
-    'catalog entry 5 (other) duplicates package @dsh-team/office-agents',
+    (entries) => entries.push({ ...entries[2], id: 'other' }),
+    'catalog entry 6 (other) duplicates package @dsh-team/office-agents',
   ],
   [
     'an unknown key',
-    (entries) => Object.assign(entries[2], { extra: 1 }),
-    'catalog entry 2 (permission-tiers) has unknown key extra',
+    (entries) => Object.assign(entries[3], { extra: 1 }),
+    'catalog entry 3 (permission-tiers) has unknown key extra',
   ],
   [
     'a missing key',
-    (entries) => delete entries[3].category,
-    'catalog entry 3 (platform-nav) has invalid category',
+    (entries) => delete entries[4].category,
+    'catalog entry 4 (platform-nav) has invalid category',
   ],
   [
     'a category outside the closed set',
-    (entries) => Object.assign(entries[1], { category: 'optional' }),
-    'catalog entry 1 (office-agents) has invalid category',
+    (entries) => Object.assign(entries[2], { category: 'optional' }),
+    'catalog entry 2 (office-agents) has invalid category',
   ],
   [
     'an empty name',
-    (entries) => Object.assign(entries[4], { name: ' ' }),
-    'catalog entry 4 (zh-locale) has invalid name',
+    (entries) => Object.assign(entries[5], { name: ' ' }),
+    'catalog entry 5 (zh-locale) has invalid name',
   ],
   [
     'a non-boolean default',
-    (entries) => Object.assign(entries[4], { imageDefaultEnabled: 'true' }),
-    'catalog entry 4 (zh-locale) has invalid imageDefaultEnabled',
+    (entries) => Object.assign(entries[5], { imageDefaultEnabled: 'true' }),
+    'catalog entry 5 (zh-locale) has invalid imageDefaultEnabled',
   ],
   [
     'a non-kebab-case id',
-    (entries) => Object.assign(entries[3], { id: 'Platform_Nav' }),
-    'catalog entry 3 (Platform_Nav) has invalid id',
+    (entries) => Object.assign(entries[4], { id: 'Platform_Nav' }),
+    'catalog entry 4 (Platform_Nav) has invalid id',
   ],
-  ['a missing id', (entries) => delete entries[3].id, 'catalog entry 3 has invalid id'],
+  ['a missing id', (entries) => delete entries[4].id, 'catalog entry 4 has invalid id'],
   [
     'an empty package',
-    (entries) => Object.assign(entries[1], { package: '' }),
-    'catalog entry 1 (office-agents) has invalid package',
+    (entries) => Object.assign(entries[2], { package: '' }),
+    'catalog entry 2 (office-agents) has invalid package',
   ],
   [
     'a non-object entry',
     (entries) => entries.push('zh-locale'),
-    'catalog entry 5 must be an object',
+    'catalog entry 6 must be an object',
   ],
 ])('fails the catalog shape for %s and names the entry', (_name, mutate, problem) => {
   const tree = imageTree();
@@ -529,52 +441,6 @@ it('fails on a missing enumeration root', () => {
     `enumeration root missing: ${PROFILE}/node_modules\n` +
       CATALOG.map((entry) => `profile copy differs: ${entry.package}\n`).join(''),
   );
-});
-
-// Both copies change alike: the /opt plugin and its profile registration share one name, so the
-// check runs once and the copies stay equal.
-it.each([
-  [
-    'an excluding range',
-    'platform-nav',
-    { engines: { dsh: '>=0.3.0' } },
-    'DSH plugin compatibility failed: platform-nav engines.dsh=">=0.3.0" peer=undefined installed=0.2.1-rc.2',
-  ],
-  [
-    'a missing range',
-    'office-agents',
-    { engines: {} },
-    'DSH plugin compatibility failed: office-agents engines.dsh=undefined peer=undefined installed=0.2.1-rc.2',
-  ],
-  [
-    'a blank range',
-    'permission-tiers',
-    { engines: { dsh: ' ' } },
-    'DSH plugin compatibility failed: permission-tiers engines.dsh=" " peer=undefined installed=0.2.1-rc.2',
-  ],
-  [
-    'an exact DSH peer',
-    'zh-locale',
-    { peerDependencies: { '@deepseek-ai/dsh': '0.2.1-rc.2' } },
-    'DSH plugin compatibility failed: zh-locale engines.dsh=">=0.2.1-rc.2 <0.3.0" peer="0.2.1-rc.2" installed=0.2.1-rc.2',
-  ],
-])('fails the DSH compatibility check once and verbatim for %s', (_name, id, change, line) => {
-  const tree = imageTree();
-  const manifest = { ...repositoryManifest(id), ...change };
-  write(tree.root, `${OPT}/${id}/package.json`, manifest);
-  write(tree.root, `${PROFILE}/node_modules/@dsh-team/${id}/package.json`, manifest);
-
-  expect(verify(tree)).toEqual({ status: 1, stderr: `${line}\n` });
-});
-
-it('fails when the installed DSH semver cannot be loaded', () => {
-  const tree = imageTree();
-  write(tree.root, `${DSH}/node_modules/semver/index.js`, "throw new Error('broken');\n");
-
-  expect(verify(tree)).toEqual({
-    status: 1,
-    stderr: `DSH semver unavailable: ${DSH}/package.json\n`,
-  });
 });
 
 it('lists every repository plugin in the catalog under its plugins/ directory name', () => {
@@ -642,6 +508,7 @@ it('keeps the existing manifest key order and unknown keys, appending after exis
         profile: {
           bundles: [
             ...initial.dsh.profile.bundles,
+            'dsh-better-sidebar',
             '@dsh-team/knowledge-base',
             '@dsh-team/office-agents',
           ],
@@ -722,12 +589,12 @@ it.each([
 it('reports catalog shape problems before registering anything', () => {
   const tree = imageTree(false);
   const catalog = catalogWith(tree, (value) => {
-    value.entries[1].category = 'optional';
+    value.entries[2].category = 'optional';
   });
 
   expect(register(tree, catalog)).toEqual({
     status: 1,
-    stderr: 'catalog entry 1 (office-agents) has invalid category\n',
+    stderr: 'catalog entry 2 (office-agents) has invalid category\n',
   });
   expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
 });
