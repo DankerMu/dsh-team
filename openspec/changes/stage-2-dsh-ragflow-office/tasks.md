@@ -3308,7 +3308,7 @@ selected：
   - **阶段 2（员工改写）**：
     - 以 uid1001 用 `managed-policy-fixture.ts:289-303` 的整文件写入（开发笔记 1）在 profile 的 `cordis.patch.yml` 加一行 `{ id: <profile 中 dsh-better-sidebar 加载行的 id，从镜像默认 profile 读出，不写死>, config: { htmlViewerNoSandbox: true, htmlViewerDefaultUnsafe: true } }`，保留原有行。
     - 经真实网关重启实例并等就绪：复用 `account-status-fixture.ts:117` 的 `postRestart`（`:83` 是 `app.inject` 版本，Docker 里用不了）。
-    - 再打开探测页：断言 iframe 一载入就没有 `sandbox` 属性，以此证明 `htmlViewerNoSandbox` 生效（正向对照）。断言状态栏没有临时解锁按钮、有「恢复沙箱」按钮（`client-editor.js:49335-49340`），这是 `htmlViewerDefaultUnsafe` 生效的唯一可观察证据。然后按同样的期望检查三次载入（`/sidebar/html`、脚本自导航、浏览器导航）；截图。
+    - 再打开探测页：断言 iframe 一载入就没有 `sandbox` 属性，这说明两个键至少有一个生效（下面点「恢复沙箱」再分辨是哪一个）。断言状态栏没有临时解锁按钮、有「恢复沙箱」按钮（`client-editor.js:49335-49340`），这是 `htmlViewerDefaultUnsafe` 生效的唯一可观察证据。然后按同样的期望检查三次载入（`/sidebar/html`、脚本自导航、浏览器导航）；截图。
     - 单靠载入时没有 `sandbox` 属性，证明不了 `htmlViewerNoSandbox` 生效：`htmlViewerDefaultUnsafe` 单独开启也会去掉这个属性（发行版 `client-editor.js:54645-54646`）。所以要点「恢复沙箱」，它只执行 `setLocalUnlock(false)`，不重挂载 iframe。点完后断言：`sandbox` 属性仍为 null，帧 ID 不变，状态栏两个按钮都不显示。这才证明 `htmlViewerNoSandbox` 生效。
   - **控制台**：
     - 白名单只对该帧生效。本机 Chromium 153 上沙箱 iframe 与主页面同进程，没有子 target，它的条目都到主 session，所以按帧归属，不按 session：
@@ -3346,7 +3346,7 @@ not selected：
 - 锁定按标题文字匹配。better-sidebar 改了文案，锁定就会静默失效；Docker 用例会抓到这种情况。CSP 保证不依赖锁定显示。
 - 员工仍可在 profile 里写这两个键；它们只影响 iframe 属性，不影响沙箱。
 - 锁定只匹配中文和英文标题；better-sidebar 带约 20 种语言（`lib/client-locale.js`）。zh-locale 每次加载都 `setLocale('zh')`，影响有限。
-- 脚本自导航不带 cookie，没有 #558 也会先被网关的匿名跳转挡住；带着 cookie 的浏览器导航由 #558 的 CSP 保证不透明。DSH 的 fence 对 `cross-site` 另有一道拒绝。
+- 脚本自导航不带 cookie，没有 #558 也会先被网关的匿名跳转挡住；带着 cookie 的浏览器导航由 #558 的 CSP 保证不透明。DSH 的 fence 虽然对 `cross-site` 有拒绝，但 HTTP 源收不到 `Sec-Fetch-*`，这道拒绝不能依赖。
 
 Governing invariant：经网关送达的 HTML 预览文档总带不含 `allow-same-origin` 的 CSP sandbox；任何员工设置或临时解除都不能让预览脚本访问父页面。员工设置中两个沙箱开关显示为受管锁定。
 
