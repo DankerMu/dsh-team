@@ -25,6 +25,13 @@ import {
 import { requireUnpublished, upstreamHost, verifiedPlatform } from './transport.ts';
 import type { TransportContext } from './transport.ts';
 import {
+  documentServerDecision,
+  recordedDocumentServer,
+  verifyDocumentServer,
+} from './document-server.ts';
+import type { DocumentServerDecision } from './document-server.ts';
+import {
+  attachDocumentServer,
   attachPlatform,
   captureUserNetwork,
   createUserNetwork,
@@ -134,7 +141,8 @@ async function rollbackStartupNetwork(
 ): Promise<void> {
   if (network?.created !== true || containerAttempted || client === undefined) return;
   try {
-    await removeUserNetwork(client, userId, transport, () => undefined, undefined, network);
+    // A bridge this start created carries no Document Server endpoint.
+    await removeUserNetwork(client, userId, transport, () => undefined, undefined, network, null);
   } catch (error) {
     throw startupFailure('network rollback failed', error);
   }
@@ -155,6 +163,8 @@ async function compensateStarted(
       input.client.json(method, path, body, signal, maxBytes),
   };
   if (instance.container_id !== id || instance.image_id !== image) throw new Error();
+  // This start's decision, persisted before any connect; compensation never clears it.
+  const documentServer = recordedDocumentServer(instance);
   const current = () => {
     assertCurrentSnapshot(input, account, instance, signal);
   };
@@ -168,6 +178,7 @@ async function compensateStarted(
       input.transport,
       id,
       captured.id,
+      documentServer,
       'ignored',
     );
     if (network?.id !== captured.id || network.subnet !== captured.subnet)
@@ -182,6 +193,7 @@ async function compensateStarted(
       input.userId,
       before,
       input.transport,
+      documentServer,
       network.id,
       true,
       false,
@@ -202,7 +214,15 @@ async function compensateStarted(
     } catch (error) {
       if (!(error instanceof DockerHttpError) || error.statusCode !== 404) throw error;
     }
-    await removeUserNetwork(client, input.userId, input.transport, current, undefined, network);
+    await removeUserNetwork(
+      client,
+      input.userId,
+      input.transport,
+      current,
+      undefined,
+      network,
+      documentServer,
+    );
     outcome = 'started container and owned network removed';
   } catch {
     // Unknown endpoints, identity loss, failed stop/detach or lost outcomes preserve remaining resources.
@@ -233,14 +253,17 @@ async function startedUpstream(
   signal: AbortSignal,
   id: string,
   image: string,
-  attaching: () => void,
+  decision: DocumentServerDecision,
+  attaching: (stage: string) => void,
 ): Promise<{ host: string; port: number }> {
   const networkMode = input.transport.config.upstreamMode === 'network';
+  const documentServer = decision.containerId;
   await validateUserNetwork(
     client,
     input.userId,
     document,
     input.transport,
+    documentServer,
     network.id,
     networkMode,
   );
@@ -254,12 +277,36 @@ async function startedUpstream(
   );
   let currentDocument = document;
   if (networkMode) {
-    attaching();
+    attaching('platform attachment');
     signal.throwIfAborted();
-    await attachPlatform(cleanup, input.transport, input.userId, id, network);
+    await attachPlatform(cleanup, input.transport, input.userId, id, network, documentServer);
     signal.throwIfAborted();
+    if (documentServer !== null) {
+      attaching('document server attachment');
+      await attachDocumentServer(
+        cleanup,
+        input.transport,
+        input.userId,
+        id,
+        network,
+        documentServer,
+        () => verifyDocumentServer(client, documentServer, input.config.documentServer),
+      );
+      signal.throwIfAborted();
+    }
     currentDocument = await client.json('GET', `/containers/${id}/json`);
-    await validateUserNetwork(client, input.userId, currentDocument, input.transport, network.id);
+    await validateUserNetwork(
+      client,
+      input.userId,
+      currentDocument,
+      input.transport,
+      documentServer,
+      network.id,
+      false,
+      true,
+      'checked',
+      documentServer !== null,
+    );
     const currentPort = inspectUserContainerEndpoint(
       currentDocument,
       id,
@@ -356,6 +403,7 @@ async function createInstance(
   envName: string,
   modelKey: string,
   attempt: CreationAttempt,
+  documentServer: string | null,
   inspecting: () => void,
 ): Promise<{ id: string; attempt: CreationAttempt; instanceTokenHash: string }> {
   const { config, userId } = input;
@@ -427,7 +475,16 @@ async function createInstance(
   );
   if (created.Id !== id) throw new Error('Created container identity mismatch');
   requireUnpublished(created, input.transport.config.upstreamMode);
-  await validateUserNetwork(client, userId, created, input.transport, network.id, true);
+  // A reused bridge may already carry this start's Document Server endpoint.
+  await validateUserNetwork(
+    client,
+    userId,
+    created,
+    input.transport,
+    documentServer,
+    network.id,
+    true,
+  );
   return { id, attempt: bound, instanceTokenHash };
 }
 
@@ -445,25 +502,82 @@ function startupCleanupClient(input: StartUserContainerInput): DockerClient {
   };
 }
 
+/** DSH binds only the address its overlay names, so the overlay follows the allocated bridge. */
+async function managedOverlay(
+  input: StartUserContainerInput,
+  network: OwnedNetwork,
+  composed: Omit<Parameters<typeof generateManagedConfig>[0], 'instanceAddress' | 'platformPort'>,
+): Promise<string> {
+  const generated = generateManagedConfig({
+    ...composed,
+    instanceAddress: instanceAddressLayout(network.subnet).container,
+    platformPort: input.transport.config.upstreamMode === 'network' ? input.config.port : null,
+  });
+  // Checked complete above; throwing keeps the created bridge on the rollback path.
+  if (generated.outcome === 'unconfigured')
+    throw new Error('Managed overlay unexpectedly unconfigured');
+  return writeManagedConfig(input.config.managedConfigDir, input.userId, generated.content);
+}
+
+function persistStarted(
+  input: StartUserContainerInput,
+  account: Record<string, unknown>,
+  created: Record<string, unknown>,
+  signal: AbortSignal,
+  started: { readonly id: string; readonly host: string; readonly port: number },
+): void {
+  const { database, userId } = input;
+  database.transaction(() => {
+    assertCurrentSnapshot(input, account, created, signal);
+    const changed = database
+      .prepare(
+        `UPDATE instances SET upstream_host = ?, upstream_port = ?, last_started_at = ?
+        WHERE user_id = ? AND container_id = ? AND status = 'starting'`,
+      )
+      .run(started.host, started.port, Date.now(), userId, started.id);
+    if (changed.changes !== 1) throw new Error();
+    recordAuditEvent(database, {
+      type: 'instance.started',
+      createdAt: Date.now(),
+      targetEmail: String(account.email),
+      target: userId,
+    });
+  })();
+}
+
 function persistCreatedInstance(
   input: StartUserContainerInput,
   account: Record<string, unknown>,
   attempt: CreationAttempt,
   id: string,
   instanceTokenHash: string,
+  decision: DocumentServerDecision,
 ): Record<string, unknown> {
   const { database, userId } = input;
   database.transaction(() => {
     consumeCreationAttempt(input, attempt, account);
     database
       .prepare(
-        `INSERT INTO instances (user_id,status,container_id,image_tag,image_id,instance_token_hash)
-      VALUES (?, 'starting', ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
+        `INSERT INTO instances (user_id,status,container_id,image_tag,image_id,instance_token_hash,
+      document_server_mode,document_server_container_id,document_server_reason)
+      VALUES (?, 'starting', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET
       status='starting',container_id=excluded.container_id,image_tag=excluded.image_tag,
       image_id=excluded.image_id,instance_token_hash=excluded.instance_token_hash,
-      upstream_host=NULL,upstream_port=NULL,dsh_cookie=NULL,last_started_at=NULL,last_error=NULL`,
+      upstream_host=NULL,upstream_port=NULL,dsh_cookie=NULL,last_started_at=NULL,last_error=NULL,
+      document_server_mode=excluded.document_server_mode,
+      document_server_container_id=excluded.document_server_container_id,
+      document_server_reason=excluded.document_server_reason`,
       )
-      .run(userId, id, attempt.image_tag, attempt.image_id, instanceTokenHash);
+      .run(
+        userId,
+        id,
+        attempt.image_tag,
+        attempt.image_id,
+        instanceTokenHash,
+        decision.mode,
+        decision.containerId,
+        decision.reason,
+      );
     recordAuditEvent(database, {
       type: 'instance.created',
       createdAt: Date.now(),
@@ -486,7 +600,7 @@ export async function startUserContainer(
   let network: OwnedNetwork | undefined;
   let cleanupClient: DockerClient | undefined;
   let containerAttempted = false;
-  let replacing = false;
+  let replaced: { previous: string | null } | undefined;
   let retryInstance: Record<string, unknown> | undefined;
   let confirmedStarted: StartedIdentity | undefined;
   try {
@@ -495,7 +609,6 @@ export async function startUserContainer(
     const account: unknown = database.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     const user = object(account);
     if (user.status !== 'active' || typeof user.email !== 'string') throw new Error();
-    const email = user.email;
     // Key availability comes only from the exact credential that will enter Env.
     if (input.modelKey === undefined || input.modelKey.trim() === '')
       return { outcome: 'unconfigured' };
@@ -530,8 +643,8 @@ export async function startUserContainer(
       client,
       user,
       signal,
-      () => {
-        replacing = true;
+      (instance) => {
+        replaced = { previous: recordedDocumentServer(instance) };
       },
       (instance) => {
         retryInstance = instance;
@@ -551,6 +664,14 @@ export async function startUserContainer(
     await requireAbsent(client, name);
     stage = 'platform identity';
     await verifiedPlatform(client, input.transport, true);
+    // Before network allocation and the overlay: only this resolution may degrade Office.
+    stage = 'document server identity';
+    const documentServer = await documentServerDecision(
+      client,
+      settings,
+      config.documentServer,
+      input.transport.config.upstreamMode,
+    );
     stage = 'seccomp policy';
     const seccomp = await readSeccompPolicy(config.seccompProfilePath, signal);
     stage = 'image resolution';
@@ -572,24 +693,18 @@ export async function startUserContainer(
         config.subnetPool,
         input.transport,
         signal,
-        replacing,
+        documentServer.containerId,
+        replaced,
       ),
     );
-    // DSH binds only the address its overlay names, so the overlay follows the allocated bridge.
     stage = 'managed overlay';
-    const generated = generateManagedConfig({
+    const overlay = await managedOverlay(input, network, {
       ...observed,
       admin: user.role === 'admin',
-      instanceAddress: instanceAddressLayout(network.subnet).container,
-      platformPort: input.transport.config.upstreamMode === 'network' ? config.port : null,
       defaultPermissionTier,
       modelSettings,
       ...catalog.overlay,
     });
-    // Checked complete above; throwing keeps the created bridge on the rollback path.
-    if (generated.outcome === 'unconfigured')
-      throw new Error('Managed overlay unexpectedly unconfigured');
-    const overlay = await writeManagedConfig(config.managedConfigDir, userId, generated.content);
     stage = 'container creation';
     signal.throwIfAborted();
     const pendingCreation = beginCreationAttempt(
@@ -615,12 +730,20 @@ export async function startUserContainer(
       envName,
       input.modelKey,
       pendingCreation,
+      documentServer.containerId,
       () => {
         stage = 'created container inspection';
       },
     );
     stage = 'creation persistence';
-    const createdInstance = persistCreatedInstance(input, user, attempt, id, instanceTokenHash);
+    const createdInstance = persistCreatedInstance(
+      input,
+      user,
+      attempt,
+      id,
+      instanceTokenHash,
+      documentServer,
+    );
     stage = 'container start';
     const launched = await launchInstance(
       input,
@@ -643,27 +766,13 @@ export async function startUserContainer(
       signal,
       id,
       image,
-      () => {
-        stage = 'platform attachment';
+      documentServer,
+      (next) => {
+        stage = next;
       },
     );
     stage = 'start persistence';
-    database.transaction(() => {
-      assertCurrentSnapshot(input, user, createdInstance, signal);
-      const changed = database
-        .prepare(
-          `UPDATE instances SET upstream_host = ?, upstream_port = ?, last_started_at = ?
-        WHERE user_id = ? AND container_id = ? AND status = 'starting'`,
-        )
-        .run(host, port, Date.now(), userId, id);
-      if (changed.changes !== 1) throw new Error();
-      recordAuditEvent(database, {
-        type: 'instance.started',
-        createdAt: Date.now(),
-        targetEmail: email,
-        target: userId,
-      });
-    })();
+    persistStarted(input, user, createdInstance, signal, { id, host, port });
     return { outcome: 'starting', containerId: id, upstreamHost: host, upstreamPort: port };
   } catch (error) {
     return failedStartup(

@@ -122,6 +122,7 @@ async function networkCurrent(
     selection.input.userId,
     document,
     selection.input.transport,
+    selection.instance.document_server_container_id,
     selection.network?.id,
     stopped,
   );
@@ -149,6 +150,7 @@ async function cleanupNetwork(selection: Selection, signal: AbortSignal): Promis
       },
       selection.instance.container_id,
       selection.network,
+      selection.instance.document_server_container_id,
     );
     return 'owned network removed';
   } catch {

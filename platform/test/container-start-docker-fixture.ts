@@ -5,9 +5,14 @@ import { arch, platform } from 'node:os';
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import { trackVerificationDockerClient } from '../../scripts/verification-submissions.mjs';
-import { createDockerClient, DockerHttpError } from '../src/orchestrator/index.ts';
+import {
+  createDockerClient,
+  DockerHttpError,
+  instanceAddressLayout,
+} from '../src/orchestrator/index.ts';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
+import type { PlatformConfig } from '../src/config.ts';
 import { START_MODEL } from './container-start-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -164,7 +169,12 @@ export function bridgeSubnet(lifecycle: UserImageLifecycle, userId: string): str
   return subnet;
 }
 
-export function createStandInPlatform(lifecycle: UserImageLifecycle, name: string) {
+/** Also the Document Server stand-in; `network` may share another owned stand-in's namespace. */
+export function createStandInPlatform(
+  lifecycle: UserImageLifecycle,
+  name: string,
+  network = 'bridge',
+) {
   lifecycle.registerResource('container', name, { 'dsh-team.test-run': lifecycle.runId });
   const result = lifecycle.command(
     [
@@ -173,7 +183,7 @@ export function createStandInPlatform(lifecycle: UserImageLifecycle, name: strin
       '--name',
       name,
       '--network',
-      'bridge',
+      network,
       '--label',
       `dsh-team.test-run=${lifecycle.runId}`,
       lifecycle.imageId,
@@ -335,14 +345,14 @@ export function registerStartupUsers(
   }
 }
 
-/** Only common production input/launch is shared; protocol and isolation assertions remain independent. */
-export async function startDockerInstance(
-  owner: Orchestrator,
+/** The common production start input; protocol and isolation assertions remain per test. */
+export function dockerStartInput(
   lifecycle: UserImageLifecycle,
   userId: string,
   authority: string,
+  documentServer: PlatformConfig['documentServer'] = null,
 ) {
-  const result = await owner.startUserContainer({
+  return {
     userId,
     config: {
       userImage: lifecycle.imageId,
@@ -351,13 +361,48 @@ export async function startDockerInstance(
       authority,
       subnetPool: '172.30.0.0/16',
       port: 8080,
+      documentServer,
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
-  });
+  };
+}
+
+/** Only common production input/launch is shared; protocol and isolation assertions remain independent. */
+export async function startDockerInstance(
+  owner: Orchestrator,
+  lifecycle: UserImageLifecycle,
+  userId: string,
+  authority: string,
+  documentServer: PlatformConfig['documentServer'] = null,
+) {
+  const result = await owner.startUserContainer(
+    dockerStartInput(lifecycle, userId, authority, documentServer),
+  );
   if (result.outcome !== 'starting') throw new Error('Production instance did not start');
   await owner.waitForUserContainerReady({ userId, authority });
   return result;
+}
+
+/** Real Docker accepts the requested layout platform address on connect and echoes it. */
+export function expectPlatformAtLayout(
+  lifecycle: UserImageLifecycle,
+  platformId: string,
+  user: string,
+  networkId: string,
+): void {
+  const bridge = inspectNetwork(lifecycle, networkId);
+  const configs = record(bridge.IPAM).Config;
+  if (!Array.isArray(configs) || configs.length !== 1)
+    throw new Error('Unexpected instance network IPAM');
+  const { platform: address } = instanceAddressLayout(String(record(configs[0]).Subnet));
+  expect(record(record(bridge.Containers)[platformId]).IPv4Address).toBe(`${address}/28`);
+  const attachment = record(
+    record(record(inspect(lifecycle, platformId).NetworkSettings).Networks)[`dsh-team-net-${user}`],
+  );
+  expect(attachment.NetworkID).toBe(networkId);
+  expect(attachment.IPAddress).toBe(address);
+  expect(record(attachment.IPAMConfig).IPv4Address).toBe(address);
 }
 
 export async function runNetworkAcceptance(

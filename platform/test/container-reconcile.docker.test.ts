@@ -21,31 +21,12 @@ import {
   inspectNetwork,
   registerStartupUsers,
   startDockerInstance,
+  expectPlatformAtLayout,
 } from './container-start-docker-fixture.ts';
+import { documentServerReconciliation } from './container-document-server-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
-
-/** Real Docker accepts the requested layout platform address on connect and echoes it. */
-function expectPlatformAtLayout(
-  lifecycle: UserImageLifecycle,
-  platformId: string,
-  user: string,
-  networkId: string,
-): void {
-  const bridge = inspectNetwork(lifecycle, networkId);
-  const configs = record(bridge.IPAM).Config;
-  if (!Array.isArray(configs) || configs.length !== 1)
-    throw new Error('Unexpected instance network IPAM');
-  const { platform: address } = instanceAddressLayout(String(record(configs[0]).Subnet));
-  expect(record(record(bridge.Containers)[platformId]).IPv4Address).toBe(`${address}/28`);
-  const attachment = record(
-    record(record(inspect(lifecycle, platformId).NetworkSettings).Networks)[`dsh-team-net-${user}`],
-  );
-  expect(attachment.NetworkID).toBe(networkId);
-  expect(attachment.IPAddress).toBe(address);
-  expect(record(attachment.IPAMConfig).IPv4Address).toBe(address);
-}
 
 async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userA = lifecycle.runId.replaceAll('-', '').slice(0, 12);
@@ -72,6 +53,7 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
       authority,
       subnetPool: '172.30.0.0/16',
       port: 8080,
+      documentServer: null,
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
@@ -251,6 +233,9 @@ async function reconciliationScenario(lifecycle: UserImageLifecycle): Promise<st
         upstream_port: null,
         dsh_cookie: null,
         instance_token_hash: null,
+        document_server_mode: null,
+        document_server_container_id: null,
+        document_server_reason: null,
       });
       await expect(
         raw.json('GET', `/containers/${survivor.id}/json`, undefined, AbortSignal.timeout(15_000)),
@@ -638,6 +623,7 @@ async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> 
       authority,
       subnetPool: '172.30.0.0/16',
       port: 8080,
+      documentServer: null,
     },
     modelSettings: START_MODEL,
     modelKey: 'docker-acceptance-only-not-a-model-credential',
@@ -741,3 +727,32 @@ it('reconciles a stage-1 survivor off the layout address after platform recreati
     `Docker survivor reconciliation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
   );
 });
+
+it.each([
+  ['a platform restart', false],
+  ['a platform container recreation', true],
+])(
+  'after %s reconciles two bundled survivors whose recorded Document Server endpoints are present and gone without attaching any',
+  async (_case, recreatePlatform) => {
+    if (platform() !== 'linux' || arch() !== 'x64')
+      throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+    const expected = {
+      survivors: 2,
+      recordedPresent: 1,
+      recordedGone: 1,
+      platformRecreated: recreatePlatform,
+      documentServerAttached: 0,
+    };
+    const result = await runUserImage(
+      'container-start',
+      (summary) => {
+        expect(JSON.parse(summary)).toEqual(expected);
+      },
+      undefined,
+      (lifecycle) => documentServerReconciliation(lifecycle, recreatePlatform),
+    );
+    process.stdout.write(
+      `Docker Document Server reconciliation verified: run=${result.runId} image=${result.image} readback=${result.stdout} cleanup=complete\n`,
+    );
+  },
+);

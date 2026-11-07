@@ -160,6 +160,9 @@ it('starts a fresh known-idle interval before retiring the exact instance with a
           last_activity_at: 202,
           last_error: 'historical diagnostic',
           instance_token_hash: null,
+          document_server_mode: null,
+          document_server_container_id: null,
+          document_server_reason: null,
         });
         expect(audits()).toEqual([
           {

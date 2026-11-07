@@ -15,6 +15,7 @@ import {
 import type { OwnedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamPort } from './transport.ts';
 import type { TransportContext } from './transport.ts';
+import { recordedDocumentServer } from './document-server.ts';
 
 /** Only verified unknown-ID absence is nonfatal during reconciliation; callers still fail closed. */
 export class CreationQuarantinedError extends Error {}
@@ -260,6 +261,11 @@ export async function recoverCreationAttempt(
     attempt.upstream_mode !== input.transport.config.upstreamMode
   )
     throw new Error('Creation account or transport changed');
+  // Persistence never ran, so the old row still records any reused bridge's Document Server.
+  const prior: unknown = input.database
+    .prepare('SELECT * FROM instances WHERE user_id=?')
+    .get(input.userId);
+  const documentServer = recordedDocumentServer(prior);
   const settlement = AbortSignal.timeout(10_000);
   const admission =
     input.signal === undefined ? settlement : AbortSignal.any([input.signal, settlement]);
@@ -293,6 +299,7 @@ export async function recoverCreationAttempt(
       input.userId,
       exact,
       input.transport,
+      documentServer,
       attempt.network_id,
       true,
     );
@@ -306,6 +313,7 @@ export async function recoverCreationAttempt(
       input.userId,
       fresh,
       input.transport,
+      documentServer,
       attempt.network_id,
       true,
     );
@@ -320,6 +328,7 @@ export async function recoverCreationAttempt(
       input.transport,
       undefined,
       attempt.network_id,
+      documentServer,
     );
     if (network?.subnet !== attempt.network_subnet)
       throw new Error('Captured creation network changed');
@@ -334,10 +343,15 @@ export async function recoverCreationAttempt(
   )
     throw new Error('Created container removal unconfirmed');
   current();
-  await removeUserNetwork(client, input.userId, input.transport, current, undefined, {
-    id: attempt.network_id,
-    subnet: attempt.network_subnet,
-  });
+  await removeUserNetwork(
+    client,
+    input.userId,
+    input.transport,
+    current,
+    undefined,
+    { id: attempt.network_id, subnet: attempt.network_subnet },
+    documentServer,
+  );
   input.database.transaction(() => {
     current();
     consumeCreationAttempt(input, attempt, account);

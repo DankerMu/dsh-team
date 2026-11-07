@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { afterEach, expect, it } from 'vitest';
 import { createOrchestrator } from './index.ts';
-import { platformMembership } from './transport.ts';
+import { endpointMembership } from './transport.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import {
   START_CONTAINER,
@@ -163,17 +163,26 @@ it('platform membership accepts a declared platform address only at the layout p
   const layout = membershipViews('172.30.0.3', { IPv4Address: '172.30.0.3' });
   const undeclared = membershipViews('172.30.0.4');
 
-  expect(() => platformMembership(off.platform, off.network, START_USER, subnet, true)).toThrow(
-    'Platform endpoint address differs from its layout',
-  );
-  expect(platformMembership(layout.platform, layout.network, START_USER, subnet, true)).toBe(true);
+  expect(() =>
+    endpointMembership(off.platform, 'platform', off.network, START_USER, subnet, true),
+  ).toThrow('Platform endpoint address differs from its layout');
   expect(
-    platformMembership(undeclared.platform, undeclared.network, START_USER, subnet, true),
+    endpointMembership(layout.platform, 'platform', layout.network, START_USER, subnet, true),
+  ).toBe(true);
+  expect(
+    endpointMembership(
+      undeclared.platform,
+      'platform',
+      undeclared.network,
+      START_USER,
+      subnet,
+      true,
+    ),
   ).toBe(true);
   // Cleanup authority keeps only the stage-1 identity and range checks.
-  expect(platformMembership(off.platform, off.network, START_USER, subnet, true, 'ignored')).toBe(
-    true,
-  );
+  expect(
+    endpointMembership(off.platform, 'platform', off.network, START_USER, subnet, true, 'ignored'),
+  ).toBe(true);
 });
 
 it('reuse and unchanged reconciliation validate network upstreams without reattaching', async () => {

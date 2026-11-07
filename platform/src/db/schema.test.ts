@@ -29,7 +29,7 @@ const SELECT_SESSIONS =
   'SELECT token_hash, user_id, created_at, last_activity_at FROM platform_sessions ORDER BY token_hash';
 const INSERT_INSTANCE = 'INSERT INTO instances (user_id, status) VALUES (?, ?)';
 const SELECT_INSTANCE =
-  'SELECT user_id, status, container_id, upstream_host, upstream_port, dsh_cookie, image_tag, image_id, last_started_at, last_activity_at, last_error, instance_token_hash FROM instances WHERE user_id = ?';
+  'SELECT user_id, status, container_id, upstream_host, upstream_port, dsh_cookie, image_tag, image_id, last_started_at, last_activity_at, last_error, instance_token_hash, document_server_mode, document_server_container_id, document_server_reason FROM instances WHERE user_id = ?';
 const INSERT_SETTING = 'INSERT INTO settings (key, value) VALUES (?, ?)';
 const SELECT_SETTING = 'SELECT key, value FROM settings WHERE key = ?';
 const INSERT_AUDIT =
@@ -69,6 +69,9 @@ const PRESTART_NULLS = {
   last_activity_at: null,
   last_error: null,
   instance_token_hash: null,
+  document_server_mode: null,
+  document_server_container_id: null,
+  document_server_reason: null,
 };
 const STOPPED_INSTANCE = {
   user_id: ORIGINAL_USER.id,
@@ -269,6 +272,7 @@ describe('initial schema', () => {
       { version: 5 },
       { version: 6 },
       { version: 7 },
+      { version: 8 },
     ]);
   });
 
@@ -308,5 +312,31 @@ describe('initial schema', () => {
     expect(db.prepare(SELECT_SESSIONS).all()).toEqual([FIRST_USER_SESSION_A]);
     expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual(STOPPED_INSTANCE);
     expect(db.prepare(SELECT_SETTING).get(MODEL_ENDPOINT.key)).toEqual(MODEL_ENDPOINT);
+  });
+
+  it('keeps the Document Server record within its closed mode and reason sets', () => {
+    db.prepare(INSERT_USER).run(ORIGINAL_USER);
+    db.prepare(INSERT_INSTANCE).run(ORIGINAL_USER.id, 'stopped');
+    const record = db.prepare(
+      'UPDATE instances SET document_server_mode = ?, document_server_container_id = ?, document_server_reason = ? WHERE user_id = ?',
+    );
+
+    for (const mode of ['bundled', 'external', 'unconfigured'])
+      record.run(mode, null, null, ORIGINAL_USER.id);
+    for (const reason of ['absent', 'identity-mismatch'])
+      record.run('bundled', null, reason, ORIGINAL_USER.id);
+    record.run('bundled', 'b'.repeat(64), null, ORIGINAL_USER.id);
+
+    expect(db.prepare(SELECT_INSTANCE).get(ORIGINAL_USER.id)).toEqual({
+      ...STOPPED_INSTANCE,
+      document_server_mode: 'bundled',
+      document_server_container_id: 'b'.repeat(64),
+    });
+    expect(() => record.run('remote', null, null, ORIGINAL_USER.id)).toThrow(
+      /CHECK constraint failed/,
+    );
+    expect(() => record.run('bundled', null, 'connect-failed', ORIGINAL_USER.id)).toThrow(
+      /CHECK constraint failed/,
+    );
   });
 });

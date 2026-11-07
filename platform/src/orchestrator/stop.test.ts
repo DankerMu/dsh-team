@@ -160,6 +160,9 @@ it('retires a disabled instance exactly once with captured caller reason and int
     last_activity_at: 202,
     last_error: 'old error',
     instance_token_hash: null,
+    document_server_mode: null,
+    document_server_container_id: null,
+    document_server_reason: null,
   });
   expect(
     database.prepare('SELECT event_type, target, target_email, details FROM audit_events').all(),

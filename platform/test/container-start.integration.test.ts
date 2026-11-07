@@ -89,6 +89,7 @@ beforeEach(async () => {
       authority: 'team.example:8443',
       subnetPool: '172.30.0.0/16',
       port: 8080,
+      documentServer: null,
     },
     modelSettings: START_MODEL,
     modelKey: 'fixture-private-key',
@@ -353,6 +354,9 @@ it('commits completed creation and start separately, persists inspected endpoint
       instance_token_hash: createHash('sha256')
         .update(createdEnvSecret(daemon.requests, 'DSH_TEAM_INSTANCE_TOKEN'))
         .digest('hex'),
+      document_server_mode: 'unconfigured',
+      document_server_container_id: null,
+      document_server_reason: null,
     },
   ]);
   expect(audits()).toEqual(CREATED_AND_STARTED);
