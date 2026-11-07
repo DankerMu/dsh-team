@@ -104,6 +104,9 @@ function isDefinitiveRejection(method, endpoint, statusCode) {
     (method === 'POST' &&
       /^\/containers\/[a-zA-Z0-9][a-zA-Z0-9_.-]*\/stop$/.test(endpoint) &&
       statusCode === 304) ||
+    (method === 'POST' &&
+      /^\/networks\/[a-zA-Z0-9][a-zA-Z0-9_.-]*\/connect$/.test(endpoint) &&
+      statusCode === 400) ||
     (method === 'DELETE' &&
       /^\/(?:containers|networks|volumes)\/[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(endpoint) &&
       statusCode === 404)
