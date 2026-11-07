@@ -3181,7 +3181,9 @@ selected：
   - 以 uid1001 写 `/data/work/file-probe.html`：`<head>` 含 `<link rel="icon" href="data:,">`（避免 favicon 请求），页内脚本在 `<body>` 末尾写入 `<pre id="ran">` 和 `self.origin`。`CSP: sandbox` 不含 `allow-scripts`，脚本在 `/sidebar/file` 下不会执行。
   - 探测 URL 取自下面 markdown 对照渲染出的 `<img src>`（一个真实的 `/sidebar/file?sessionId=…&cwd=…&path=…`），只把 `path` 换成 `/data/work/file-probe.html`。新标签用现有驱动的 `connectPage`（`probe-dsh-api-cdp.mjs:168`）开 `about:blank`，attach 后在该 session 上启用 `Network`/`Page`/`Log`/`DOM`，再 `Page.navigate`，然后在这个 target 上观察：
     - `Network.responseReceived` 的 `content-security-policy` 恰为 `sandbox`，`x-content-type-options` 为 `nosniff`；
-    - frame tree 的 `securityOrigin` 是不透明源，不等于平台公开源；
+    - 源的判定：用 `Page.createIsolatedWorld`（frameId 取自 `Page.getFrameTree`）建一个 isolated world，在其中 `Runtime.evaluate`（`returnByValue`），读 `self.origin` 和两个异常名 `localStorage.length`、`document.cookie`。期望 origin 是字符串 `'null'`，两个异常名都是 `SecurityError`。isolated world 在不含 `allow-scripts` 的沙箱文档里照样能执行，页面自己的脚本不能。
+    - frame tree 的 `securityOrigin` 不能当判据。Chrome 从 URL 推导这个字段，沙箱文档也报平台源：#558 首次 VPS 运行实测如此，本机 Chromium 153 的对照实验结果相同。
+    - 判据自身的正向对照：同一表达式在平台主页面的 isolated world 中求值，origin 等于平台公开源，两个异常名都是 `ok`。这证明该读法能区分两种源。
     - 用 `DOM.*` 读，`#ran` 不存在，说明脚本被拦。
   - 正向对照：同一个文件经 `/sidebar/html/…` 打开（该路由带 `allow-scripts`，不含 `allow-same-origin`），`#ran` 存在且写出的 origin 为 `null`。这证明探测脚本本身可用，读取方式也有效。
   - must-preserve 的子资源对照：以 uid1001 写一张 PNG 和一个引用它的 `.md`，在 better-sidebar 文件区打开 `.md`。图片经 `/sidebar/file` 作为 `<img>` 加载（`src/client/markdown-images.ts:94-99`），断言 `naturalWidth > 0`。

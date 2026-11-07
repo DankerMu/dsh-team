@@ -359,9 +359,32 @@ async function openProbeTab(browserWs) {
   return { tab, state };
 }
 
+// The document's real origin and whether it may touch the origin's storage and cookies.
+const ORIGIN_READ = `(() => { const name = (f) => { try { f(); return 'ok'; } catch (e) { return e.name; } }; return { origin: self.origin, storage: name(() => localStorage.length), cookie: name(() => document.cookie) }; })()`;
+
 /**
- * Navigate the probe tab as a top-level document, then read its response headers, the frame's
- * security origin and, through DOM.*, the static `#probe` marker and the script-written `#ran`.
+ * Evaluate ORIGIN_READ in a fresh isolated world of the main frame, which runs even where the
+ * document's sandbox blocks page script. The frame tree's `securityOrigin` is derived from the URL
+ * and reports the platform origin for a sandboxed document, so it is no oracle.
+ */
+async function readOrigin(target) {
+  const { frameTree } = await target.send('Page.getFrameTree');
+  const { executionContextId } = await target.send('Page.createIsolatedWorld', {
+    frameId: frameTree.frame.id,
+    worldName: 'dsh-team-origin-read',
+  });
+  const result = await target.send('Runtime.evaluate', {
+    expression: ORIGIN_READ,
+    contextId: executionContextId,
+    returnByValue: true,
+  });
+  if (result.exceptionDetails) throw new Error('origin-read-evaluation-failed');
+  return result.result.value;
+}
+
+/**
+ * Navigate the probe tab as a top-level document, then read its response headers, its origin in
+ * an isolated world and, through DOM.*, the static `#probe` marker and the script-written `#ran`.
  */
 async function probeDocument({ tab, state }, url, evidence, label) {
   return stage(tab, evidence, label, async () => {
@@ -374,7 +397,7 @@ async function probeDocument({ tab, state }, url, evidence, label) {
       `${label}-document-load`,
     );
     const response = state.documents.get(loaderId);
-    const { frameTree } = await tab.send('Page.getFrameTree');
+    const originRead = await readOrigin(tab);
     const { root } = await tab.send('DOM.getDocument', { depth: 0 });
     const marker = async (selector) =>
       (await tab.send('DOM.querySelector', { nodeId: root.nodeId, selector })).nodeId;
@@ -385,7 +408,7 @@ async function probeDocument({ tab, state }, url, evidence, label) {
       contentType: response.headers['content-type'] ?? null,
       csp: response.headers['content-security-policy'] ?? null,
       nosniff: response.headers['x-content-type-options'] ?? null,
-      securityOrigin: frameTree.frame.securityOrigin,
+      originRead,
       probe: (await marker('#probe')) !== 0,
       ran: ran === 0 ? null : (await tab.send('DOM.getOuterHTML', { nodeId: ran })).outerHTML,
       screenshot: shot.screenshot,
@@ -397,7 +420,8 @@ async function probeDocument({ tab, state }, url, evidence, label) {
  * The workspace HTML probe opened as a top-level document in a new tab: once through the URL
  * better-sidebar's own Markdown image uses (`/sidebar/file`, only `path` replaced) and once
  * through its `/sidebar/html` preview route as the positive control. The image proves the
- * subresource use still loads; no URL or session id enters the observation.
+ * subresource use still loads; the platform page's own origin read proves the read tells origins
+ * apart. No URL or session id enters the observation.
  */
 export async function observeWorkspaceDocument({ markdown, probePath, ...input }) {
   return withSidebarBrowser(input, async ({ page, chrome, errors }) => {
@@ -405,6 +429,8 @@ export async function observeWorkspaceDocument({ markdown, probePath, ...input }
     await openFromExplorer(page, input.evidence, 'open-markdown', markdown.name);
     const markdownView = await observeMarkdown(page, input.evidence, markdown);
     const { src, ...image } = await observeMarkdownImage(page, input.evidence, markdown);
+    // The origin read's own positive control, on the platform page itself.
+    const platformOriginRead = await readOrigin(page);
     const fileUrl = new URL(src);
     const sessionId = fileUrl.searchParams.get('sessionId') ?? '';
     if (fileUrl.origin !== input.origin || sessionId === '')
@@ -420,6 +446,7 @@ export async function observeWorkspaceDocument({ markdown, probePath, ...input }
       return {
         markdown: markdownView,
         image,
+        platformOriginRead,
         document,
         preview,
         blockedScripts: [...probe.state.blocked],

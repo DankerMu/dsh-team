@@ -168,6 +168,8 @@ const PNG_SCRIPT = [
 // The released better-sidebar 0.28.0 `/sidebar/html` policy: scripts, never the platform origin.
 const HTML_PREVIEW_CSP =
   "sandbox allow-scripts allow-popups allow-downloads allow-modals; object-src 'none'";
+// An opaque origin, read in an isolated world: no origin, no storage, no cookies.
+const OPAQUE_ORIGIN_READ = { origin: 'null', storage: 'SecurityError', cookie: 'SecurityError' };
 
 it('opens a workspace HTML file as a document from /sidebar/file only in an opaque origin, without script', async () => {
   await withSidebarEmployee(
@@ -215,8 +217,10 @@ it('opens a workspace HTML file as a document from /sidebar/file only in an opaq
         probe: true,
         ran: null,
       });
-      expect(observed.document.securityOrigin).not.toBe(origin);
-      expect(observed.document.securityOrigin).not.toMatch(/^https?:\/\//);
+      // The real origin, read in an isolated world; the frame tree's URL-derived one is no oracle.
+      expect(observed.document.originRead).toEqual(OPAQUE_ORIGIN_READ);
+      // The read's own positive control: on the platform page it sees the platform origin.
+      expect(observed.platformOriginRead).toEqual({ origin, storage: 'ok', cookie: 'ok' });
       // Positive control: the same file and DOM reading, where the released route runs scripts.
       expect(observed.preview).toMatchObject({
         status: 200,
@@ -224,13 +228,17 @@ it('opens a workspace HTML file as a document from /sidebar/file only in an opaq
         probe: true,
         ran: '<pre id="ran">null</pre>',
       });
+      // That route's sandbox lacks allow-same-origin, so it is opaque as well.
+      expect(observed.preview.originRead).toEqual(OPAQUE_ORIGIN_READ);
       expect(observed.probeConsoleErrors).toEqual([]);
       expect(observed.consoleErrors).toEqual([]);
       return {
         summary: JSON.stringify({ sandboxed: true, consoleErrors: observed.consoleErrors.length }),
         report:
           `Docker sidebar file document verified: csp=${observed.document.csp ?? '-'} ` +
-          `origin=${JSON.stringify(observed.document.securityOrigin)} ` +
+          `originRead=${JSON.stringify(observed.document.originRead)} ` +
+          `previewOriginRead=${JSON.stringify(observed.preview.originRead)} ` +
+          `platformOriginRead=${JSON.stringify({ ...observed.platformOriginRead, origin: observed.platformOriginRead.origin === origin ? 'platform' : 'other' })} ` +
           `blockedScripts=${String(observed.blockedScripts.length)} image=${String(observed.image.naturalWidth)}`,
       };
     },
