@@ -115,7 +115,7 @@ stat -c %g /var/run/docker.sock
   ```
 
 - **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
-- **Document Server 重建后，已运行的实例要重启才能恢复 Office**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前用不了 Office，聊天和文件功能不受影响。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
+- **Document Server 重建后，已运行的实例要重启才能重新接入**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前不接入新的 Document Server，聊天和文件功能不受影响（Office 在线编辑本身见 §7 末尾的交付状态）。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
 - **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙。
 - **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。缺 JWT 时，升级后的 `up -d` 在创建任何容器之前就失败；缺字体目录时，要到创建 Document Server 容器时才失败，`up -d` 返回非零，平台可能已经用新镜像启动，但 Office 不可用。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。
 
@@ -254,7 +254,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - 19.2通过真正的`session/follow`逻辑流核验长连接：A/B各自取得绑定自身Session的快照和实时改名事件，B在同一carrier请求A的Session得到`session/not-found`且无内容，之后B原流继续收到自己的事件。101握手/Pong或等待超时不是此验收；不宣称覆盖全部原生流端点或实例内部越界。
 - 19.3在B内以uid1001执行真实命令：A已读回的home/work标记在B的同路径及A的宿主卷路径均不可读，Docker socket不存在且读取/调用失败；A的3080/3099在本机、IP和别名持续可达，B按IP/别名均连接失败。B能写自己的工作区、访问平台health200，但无平台会话访问管理用户接口为401；覆盖层覆盖写返回EROFS，删除/替换失败且摘要不变。跨卷rename可先返回EXDEV，不能把该结果单独归因为只读挂载。这里不是65535端口穷举、平台数据全扫描或真实Yolo Agent验收；后两项分别属于19.4/19.5。
 - 每个实例只加入自己的bridge网络；实例间地址/主机名不可达，平台分别接入各实例网络。停止一个实例不应影响兄弟实例。
-- 实例网络端点（网络方式）：员工容器在子网基址+2，平台在+3。使用自带 Document Server 且本次启动接入成功时，再加 Document Server 在+4，恰好三个端点；外部 Document Server 或自带的不可用时没有+4。网络身份不可信，或出现既不是已验证平台端点、也不是已记录 Document Server 端点的不明端点时，操作失败，不强制删除。验收：`container-network.docker.test.ts` 的 network 用例（`test:docker`）。
+- 实例网络端点（网络方式）：员工容器在子网基址+2，平台在+3。使用自带 Document Server 且本次启动接入成功时，再加 Document Server 在+4，恰好三个端点；外部 Document Server 或自带的不可用时没有+4。网络身份不可信，或出现既不是已验证平台端点、也不是已记录 Document Server 端点的不明端点时，操作失败，不强制删除。验收：三端点与地址由 `container-network.docker.test.ts` 的 network 用例断言，自带不可用时无+4 由 `container-document-server.docker.test.ts` 断言（均在 `test:docker`），外部模式不接入由编排器单元测试断言。
 - Document Server 是除平台外唯一接入各实例网络的对端，能直连每个实例的+2:3080（用例的正向对照断言了这一点）。网络层：B 向 A 网络上+2/+3/+4 的 3080、3099、22、80、443、3000、8080 发起的连接全部失败，原因是 Docker 的跨 bridge 隔离，而 B 以 uid1001 运行，不能改路由，也不能把 Document Server 当作下一跳；这不是65535端口穷举。应用层：持有 Document Server JWT 的人可以让它代为请求任何实例。跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护由第18组随 Office 在线编辑一起交付，并由跨用户攻击用例验证；在那之前实例内不启用 ONLYOFFICE，也没有经 Document Server 取文件的路径。
 - 部署实例不发布宿主端口、不挂Docker socket、不使用特权模式；uid1001运行。只有平台持有Docker控制权限。`published-loopback`只是显式宿主开发方式，不满足部署无端口映射边界。
 - 实例不持有平台数据库、密码哈希、平台session或管理员凭据；A的DSH凭据不能在B使用。平台API在来自实例的请求上仍鉴权：无平台session为401，员工调用管理接口为403。
@@ -272,7 +272,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - 员工可以在自己的实例里安装插件，开启的联网工具可以访问外网。这些**不改变隔离边界**：员工本来就有终端和完全访问权限，插件只在员工自己的实例内运行。
 - 共享单机内核不是独立虚拟机；管理员与Docker操作者是可信边界。没有多机HA或已认证的60并发容量保证。
 
-RAGFlow 知识库检索通过后台配置交付（本文档不含 RAGFlow 部署说明）；自带 Document Server 已随部署交付并接入实例网络，Office 在线编辑（ONLYOFFICE 插件、文件令牌密钥）尚未交付。本文档不覆盖离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
+RAGFlow 知识库检索通过后台配置交付（本文档不含 RAGFlow 部署说明）；自带 Document Server 已随部署交付并接入实例网络，Office 在线编辑（ONLYOFFICE 插件及其基于每实例文件令牌密钥的校验）尚未交付；该密钥本身已在每次启动时注入实例。本文档不覆盖离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
 
 ## 8. 停止与一次性验收清理
 
