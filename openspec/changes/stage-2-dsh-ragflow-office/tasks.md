@@ -2896,7 +2896,7 @@ Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
 
 - [ ] 17.1 用户镜像安装 `dsh-better-sidebar@0.28.0`，不打补丁，并作为可管理项加入 `catalog.json`。版本不符时构建失败。验证：用户镜像 Docker 用例断言版本和目录一致；Docker 浏览器用例打开一个 docx，由 better-sidebar 的原生预览显示。
 - [ ] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
-- [ ] 17.3 覆盖层把 `htmlViewerNoSandbox` 钉为关闭。验证：生成器单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明员工设置中该项显示为受管锁定，HTML 预览中的脚本无法访问父页面；员工在自己的 profile 中把 `htmlViewerNoSandbox` 写为开启并重启实例后，结果不变。
+- [ ] 17.3 HTML 预览沙箱（用户决定 2026-11-07：靠预览路由的 CSP，不钉 better-sidebar 配置）：`platform-nav` 客户端把 better-sidebar 的 `htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 两个开关显示为受管锁定。验证：platform-nav 单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明两个开关显示为受管锁定，经网关的预览文档带不含 `allow-same-origin` 的 CSP sandbox，HTML 预览中的脚本无法访问父页面；员工在自己的 profile 中把 `htmlViewerNoSandbox` 写为开启并重启实例、再点状态栏临时解除后，结果不变。
 - [ ] 17.4 用户镜像安装 LibreOffice，DOC、XLS、PPT 只读预览，在实例内转换。验证：Docker 用例在 `--network none` 下转换三种旧格式成功；记录镜像大小的变化；本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
 
 Suggested fixture level: expanded - 关键路径镜像变更
@@ -3109,7 +3109,7 @@ selected：
   - 页面没有出现「打包失败」或 `archiveToolMissing` 文案；控制台错误和页面错误为空；没有对平台公开源以外的请求。
   - 用例前后各读一次 `PROVIDER_HEALTH`，断言 `requests`、`searches`、`delegations` 前后相等，证明本用例没有调用模型和检索。
   - 下载之后，用现有的 `until` 轮询实例 `/tmp`，直到没有 `dsh-better-sidebar-ar-*` 残留（`release` 的删除不等待完成，`lib/index.js:4332-4334`、`:4419-4423`），证明临时文件已释放。打包在实例内完成的证据是头部格式为 `gnu`：macOS 宿主的 bsdtar 默认不产生这种格式。
-  - 证据行输出条目名、字节数、sha256、头部格式（gnu 或 ustar）加 `.tar.gz`、截图名。
+  - 断言头部格式为 `gnu`；证据行输出条目名、字节数、sha256、`gnu.tar.gz`、截图名。
 - **清理**：
   - 两个工作文件在本用例结束时用同样的 exec 删除，删除后断言不存在。
   - 现有 `test:stack` 前后清单的口径（`ragflow-cpu-1` 的 `StartedAt` 和重启次数、卷集合）不变。
@@ -3132,7 +3132,6 @@ not selected：
 - 本机通道的用户镜像是 arm64，VPS 上是 amd64。`tar` 行为相同；`test:docker` 不跑这个用例。
 - 大文件和目录打包不在本任务范围内。
 - `PROVIDER_HEALTH` 前后相等的断言可能偶发失败：检索 lane 迟到的会话标题模型请求可能落进本 lane 的时间窗口（未验证，可能性低）。
-- 镜像中 tar 的默认格式（GNU）按 Debian 默认值推断，没有实测；解析器两种格式都接受，首次运行的证据行会给出实际格式。
 
 Governing invariant：员工在文件区选中两个文件并下载压缩包，压缩包里恰好是这两个文件，字节与工作目录一致。打包在实例内完成。
 
@@ -3224,6 +3223,95 @@ Evidence (#555):
 
 - 本机：`pnpm check`；单元测试和集成测试先红后绿。
 - VPS exact-head `pnpm test:docker`（含新的浏览器用例，附截图和探测结果）和 `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+
+Risk packs (17.3 HTML 预览沙箱，#431): fixture level expanded（与 issue 建议一致）。用户决定（2026-11-07，两次提问）：
+
+- 范围扩到 `plugins/platform-nav/` 客户端，照 #509 的做法显示受管锁定；
+- 靠预览路由的 CSP 保证沙箱，不在覆盖层钉 better-sidebar 的 `config`。
+
+spec「HTML 预览保持沙箱」、design.md 决定 8 和任务 17.3 的文字已随本段改写。本任务不改 `platform/src/`（包括 managed-config）、不改镜像。
+
+发行版事实：
+
+- **better-sidebar 0.28.0**（只读副本，路径相对包根）：
+  - **预览路由**：`/sidebar/html`（`lib/index.js:9192-9228`）对每个响应都下发 `content-security-policy: sandbox allow-scripts allow-popups allow-downloads allow-modals; object-src 'none'`，外加 `x-content-type-options: nosniff` 和 `referrer-policy: no-referrer`。CSP `sandbox` 不含 `allow-same-origin`，文档因此运行在不透明源中，与 iframe 有没有 `sandbox` 属性无关。
+  - **预览 iframe**：在 `lib/client-editor.js:54645-54812`。
+    - `htmlNoSandbox = prefs.htmlViewerNoSandbox === true || localUnlock` 时只去掉 iframe 的 `sandbox` 属性；
+    - `localUnlock` 初值取 `htmlViewerDefaultUnsafe`；
+    - 状态栏 `SandboxStatusBar` 的 `onUnlock` 可以临时解除，它不读任何偏好。
+  - **设置开关**：两项都声明在 html 查看器的 `settings.toggles`（`lib/client.js:26867-26875`），由 `FeatureSettingsRows` 渲染为 `Switch`（`:31018-31035`、`:31044-31080`）。`Switch` 是 `<label>` 包着 `<input type="checkbox" aria-label={title}>`，DOM 里没有键名。中文标题是「关闭 HTML 预览沙箱（不安全）」「HTML 预览默认以非沙箱模式打开（不安全）」（`:2713-2716`），英文标题在 `:3343-3346`。
+- **DSH 0.2.1-rc.2**：
+  - `applyEntryPatches` 对补丁行的每个键整体赋值（`dsh-app-boot/lib/index.js:61-110`）。
+  - `dsh-config-editor` 写入前会重组补丁并比较（`lib/index.js:122`）：如果 home 补丁或命令行 overlay 覆盖了这一行的 `config`，写入就报「overridden by a home patch or command-line overlay」并被拒绝。
+  - 所以覆盖层一旦写这一行的 `config`，better-sidebar 的全部偏好都会被冻结。本任务不这样做。
+
+selected：
+
+- **锁定显示（`plugins/platform-nav/client.js`）**：
+  - 照 `lockForcedSwitches` 的写法（`:85-118`）新增一组固定的锁定目标：aria-label 恰为上面两项中文或两项英文标题的 checkbox。
+  - 用样式隐藏原生 `Switch`（它所在的 `<label>`），在其后插入一个不可交互的标记 `[data-dsh-team-plugin-lock="html-sandbox"]`，文字「沙箱开启 · 由管理员设定」。
+  - 已插过标记就不重复插入。复用现有的 MutationObserver：选择器只扫描新增节点，不另起一个 observer；若现有 observer 只看插件页锚点，就把这两类目标的选择器并入扫描条件，并写明成本。
+  - 这一锁定不依赖任何页面全局或覆盖层输入，无条件生效，因为这是固定产品策略 F36。
+  - 不改 DSH 或 better-sidebar 的节点内容，只隐藏和追加。
+  - **单元测试（`plugins/platform-nav/client.test.js`，先红后绿）**：
+    - 中英文两种标题都被锁定；
+    - 其他开关（例如 `editorGitGutter` 的标题）不受影响；
+    - 重复渲染只插入一个标记；
+    - 节点晚于加载才出现时也能锁定；
+    - 现有 `pluginCatalog` 锁定的用例全部保持不变。
+- **Docker 浏览器用例**（在 `platform/test/better-sidebar.docker.test.ts` 新增一个 `it`；复用 `better-sidebar-browser-fixture.mjs` 的 CDP 驱动、文件区和标签选择器）：
+  - **构造**：
+    - 新员工实例，镜像默认状态。
+    - 以 uid1001 在 `/data/work/sandbox-probe.html` 写一个探测页。页内脚本依次尝试读 `window.parent.document.title`、`window.top.location.href`、`document.cookie`、`localStorage.length`，每项记为 `blocked` 或 `read`，连同 `self.origin` 一起写进本文档 `<pre id="result">`；脚本自身执行到底时写 `done`。
+  - **阶段 1（默认）**：
+    - 在 better-sidebar 文件区打开探测页，等 iframe 的 `#result` 含 `done`（经 CDP 读取 iframe 帧的 DOM，不依赖页面脚本）。
+    - 断言 `origin` 为 `null`，四项全部 `blocked`。
+    - 从 CDP Network 事件读取该文档经网关的响应头，断言 `content-security-policy` 含 `sandbox` 且不含 `allow-same-origin`。
+    - 打开 better-sidebar 的 HTML 查看器设置面板，断言两个开关都被隐藏，并且各自跟着锁定标记「沙箱开启 · 由管理员设定」；截图。
+  - **阶段 2（员工改写）**：
+    - 以 uid1001 用整文件写入（开发笔记 1）在 profile 的 `cordis.patch.yml` 加一行 `{ id: better-sidebar, config: { htmlViewerNoSandbox: true, htmlViewerDefaultUnsafe: true } }`，保留原有行。
+    - 经平台重启实例并等就绪。
+    - 再打开探测页：断言 iframe 已没有 `sandbox` 属性，以此证明改写确实生效（正向对照）。
+    - 再点状态栏的临时解除（在改写已生效时，这一步按发行版的状态处理：没有该按钮就记为 `n/a`，不跳过整步）。
+    - 断言 `origin` 仍为 `null`、四项仍全部 `blocked`、响应头不变；截图。
+    - 断言零控制台错误；实例日志里没有插件失败标记，读取日志前先检查状态，沿用 17.1 的守卫。
+  - **清理**：随该用例的实例和卷一起清理。
+- **文档（编排者同 PR 改）**：
+  - `plugins/platform-nav/README.md`（若有）写入锁定目标；
+  - `platform/test/README.md` 的用户镜像和浏览器段落加一句本用例证明的内容；
+  - `docs/DEPLOY.md` §7 若列有「HTML 预览」相关条目则同步，没有就不加。
+
+must-preserve：
+
+- `pluginCatalog` 的锁定显示和行为不变；platform-nav 页脚入口不变。
+- 覆盖层生成器输出不变。
+- 17.1 的 docx/md 用例不变。
+
+not selected：
+
+- Schema、API、迁移：无。
+- `platform/src/`：不改。
+- `/sidebar/file` 以同源 `text/html` 返回 HTML 文件：#555，本任务不处理，PR 的 Risk 段写明。
+
+剩余风险：
+
+- 锁定按标题文字匹配。better-sidebar 改了文案，锁定就会静默失效；Docker 用例会抓到这种情况。CSP 保证不依赖锁定显示。
+- 员工仍可在 profile 里写这两个键；它们只影响 iframe 属性，不影响沙箱。
+
+Governing invariant：经网关送达的 HTML 预览文档总带不含 `allow-same-origin` 的 CSP sandbox；任何员工设置或临时解除都不能让预览脚本访问父页面。员工设置中两个沙箱开关显示为受管锁定。
+
+Sibling surfaces：
+
+- `/sidebar/file`（#555）；
+- `platform-nav` 的 `pluginCatalog` 锁定（#509）；
+- 17.1 的 better-sidebar 浏览器驱动。
+
+Evidence (17.3 HTML 预览沙箱，#431):
+
+- 本机：`pnpm check`；platform-nav 单元测试先红后绿。
+- VPS exact-head `pnpm test:docker`：包含新的浏览器用例，附两阶段截图、响应头和探测结果。
+- VPS exact-head `pnpm test:deploy`，清理已确认。
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 
 ## 18. Office 在线编辑

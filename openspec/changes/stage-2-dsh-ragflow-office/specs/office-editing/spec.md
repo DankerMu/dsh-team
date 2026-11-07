@@ -108,12 +108,17 @@ DOC、XLS、PPT MUST 只能只读预览，不能编辑。Document Server 达到�
 
 ### Requirement: HTML 预览保持沙箱
 
-HTML 文件预览 MUST 在受限沙箱中渲染。「关闭 HTML 预览沙箱」设置 MUST 由受管配置钉为关闭，员工不能修改。
+HTML 文件预览 MUST 在受限沙箱中渲染：经平台网关送达的预览文档 MUST 带有不含 `allow-same-origin` 的 CSP sandbox，预览脚本 MUST NOT 能访问父页面。员工设置中的「关闭 HTML 预览沙箱」和「HTML 预览默认以非沙箱模式打开」两个开关 MUST 显示为受管锁定、沙箱开启，员工点不到原生开关。员工通过 profile 改写这两项或在预览上临时解除沙箱，MUST NOT 让预览脚本访问父页面。
 
 #### Scenario: 员工不能关闭沙箱
 
 - **WHEN** 员工在设置中查找 HTML 预览沙箱相关的开关
-- **THEN** 该设置显示为受管锁定，状态为沙箱开启
+- **THEN** 两个开关都显示为受管锁定，状态为沙箱开启
+
+#### Scenario: 改写设置不能解除沙箱
+
+- **WHEN** 员工在自己的 profile 中把 `htmlViewerNoSandbox` 写为开启并重启实例，再在 HTML 预览上点临时解除沙箱
+- **THEN** 预览中的脚本仍然无法访问父页面
 
 ### Requirement: Office 配置由受管配置决定
 
