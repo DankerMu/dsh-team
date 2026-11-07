@@ -6,6 +6,18 @@ export type CdpPage = {
   on(method: string, handler: (params: Record<string, unknown>) => void): void;
   close(): void;
 };
+/** One flattened session: `on` keeps a single handler per method, `listen` adds more. */
+export type CdpSession = {
+  readonly sessionId: string;
+  send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown>;
+  on(method: string, handler: (params: Record<string, unknown>) => void): void;
+  listen(method: string, handler: (params: Record<string, unknown>) => void): () => void;
+};
+/** The page session of a new tab, and access to the sessions attached through it. */
+export type CdpTarget = CdpPage &
+  CdpSession & {
+    session(sessionId: string): CdpSession;
+  };
 export type ChromeHandle = { readonly browserWs: string; stop(): Promise<void> };
 export type NetworkRequestEvent = {
   requestId: string;
@@ -52,7 +64,7 @@ export declare function httpRequest(
   body?: string,
   ms?: number,
 ): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }>;
-export declare function connectPage(browserWs: string): Promise<CdpPage>;
+export declare function connectPage(browserWs: string): Promise<CdpTarget>;
 export declare function observeNetwork(page: CdpPage, handlers: NetworkObservers): () => void;
 export declare function startChrome(input: ChromeLaunchInput): Promise<ChromeHandle>;
 export declare function exchangeLaunchToken(input: {

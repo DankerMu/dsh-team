@@ -3289,11 +3289,13 @@ selected：
     - 每次在 `/sidebar/html` 下载入，`#result` 都是 `done`，`origin` 为 `null`。parent 和 top 两项为 `SecurityError`，cookie 和 storage 两项为 `SecurityError`，fetch 一项为 `TypeError`（不透明源的跨源请求被 CORS 拒绝）。
     - 响应头 `content-security-policy` 恰为 better-sidebar 0.28.0 的 `/sidebar/html` 值。
     - 脚本自导航（不透明源发起）：
-      - 请求头 `sec-fetch-site` 为 `cross-site`，取自 `requestWillBeSentExtraInfo`，作为原因证据；
-      - DSH 的 fence 拒绝它：better-sidebar 的 `fence` 调 `requestRejection`，`dsh-client-connection` 的 `isTrustedApiRequest` 对 `cross-site` 返回 false。期望状态 403、正文 `forbidden`；
-      - 网关不看状态码，响应头 `content-security-policy` 恰为 `sandbox`、带 `nosniff`；
-      - `#probe` 和 `#result` 都不存在，isolated world 读到不透明源。
-      - 这是首轮 VPS 必须记入证据的推断（Chrome 对不透明源发起的导航如何标 `sec-fetch-site`、子帧导航带不带 Lax cookie）。实测不同就改夹具，不放宽断言。
+      - 本机 Chromium 153 实测（2026-11-07）：这次请求带 `sec-fetch-site: cross-site`，SameSite 为 Strict（测试浏览器注入的值）或 Lax（生产值）时都不带 cookie。浏览器发起的 `Page.navigate({ frameId })` 带 `sec-fetch-site: none` 和 cookie。
+      - 因此网关看不到平台会话，按匿名 HTML GET 回 302 跳到 `/_platform/login`（gateway README 的 admission 规则），请求到不了 DSH，更到不了 better-sidebar 的 fence。
+      - 期望：
+        - `/sidebar/file` 请求的 `sec-fetch-site` 为 `cross-site`，取自 `requestWillBeSentExtraInfo`；只记一个布尔值表示是否带了 `cookie` 头，期望为 false，不记 cookie 的值；
+        - 响应 302，`location` 的 pathname 为 `/_platform/login`；
+        - 帧最终文档的 pathname 为 `/_platform/login`，`#probe` 和 `#result` 都不存在。工作区内容没有送达，攻击脚本也没有执行。
+      - 首轮 VPS 若与本机实测不同，就改夹具，不放宽断言。
     - 浏览器发起的导航，证明文件送达后仍不透明：在拥有该帧的 session 上 `Page.navigate({ frameId, url: <同一 /sidebar/file URL> })`。这时 `sec-fetch-site: none`，能通过 fence。期望状态 200，`#probe` 存在（文件确实送达），`#result` 不存在（脚本没有执行），CSP 恰为 `sandbox`、带 `nosniff`，源不透明。
   - **阶段 1（默认）**：
     - 在 better-sidebar 文件区打开探测页，断言 iframe 带 `sandbox` 属性，然后按上面的期望检查三次载入（`/sidebar/html`、脚本自导航、浏览器导航；后两次之后用 `Page.navigate({ frameId })` 回到 `/sidebar/html` 的原 src）。
@@ -3305,10 +3307,14 @@ selected：
     - 经真实网关重启实例并等就绪：复用 `account-status-fixture.ts:117` 的 `postRestart`（`:83` 是 `app.inject` 版本，Docker 里用不了）。
     - 再打开探测页：断言 iframe 一载入就没有 `sandbox` 属性，以此证明 `htmlViewerNoSandbox` 生效（正向对照）。断言状态栏没有临时解锁按钮、有「恢复沙箱」按钮（`client-editor.js:49335-49340`），这是 `htmlViewerDefaultUnsafe` 生效的唯一可观察证据。然后按同样的期望检查三次载入（`/sidebar/html`、脚本自导航、浏览器导航）；截图。
   - **控制台**：
-    - 白名单只对该帧生效，按 `Log.entryAdded` 的 `entry.networkRequestId` 对到 `requestWillBeSent.frameId` 归属；进程内帧的条目没有 `frameId`。没有 request id 的条目按所在 session 归属。白名单片段（字面量）：
+    - 白名单只对该帧生效。本机 Chromium 153 上沙箱 iframe 与主页面同进程，没有子 target，它的条目都到主 session，所以按帧归属，不按 session：
+      - `Runtime.consoleAPICalled` 和 `Runtime.exceptionThrown`：`executionContextId` 对到 `Runtime.executionContextCreated` 的 `auxData.frameId`；
+      - `Log.entryAdded`：`entry.networkRequestId` 对到 `requestWillBeSent.frameId`；
+      - 没有 request id 的条目：`entry.url` 等于该帧当前文档的 URL 时归该帧。
+      - 不能归到该帧的错误都算主页面的，主页面的控制台错误必须为零。进程外 iframe 时子 session 上的条目同样按这些规则归属。
+    - 白名单片段（字面量）：
       - 浏览器导航的 `/sidebar/file` 文档：`Blocked script execution` 和 `'allow-scripts' permission is not set`（同 #555）；
-      - fetch 一项：`has been blocked by CORS policy` 加 `from origin 'null'`，以及 `Failed to load resource: net::ERR_FAILED`；
-      - 脚本自导航的 403：`Failed to load resource: the server responded with a status of 403`（若 Chrome 对文档 403 打出）。
+      - fetch 一项：`has been blocked by CORS policy` 加 `from origin 'null'`，以及 `Failed to load resource: net::ERR_FAILED`。
     - 证据里的 URL 打码。
     - 主页面和其他 target 的控制台错误仍为零。
     - 实例日志里没有插件失败标记，读取日志前先检查状态，沿用 17.1 的守卫。
@@ -3336,7 +3342,7 @@ not selected：
 - 锁定按标题文字匹配。better-sidebar 改了文案，锁定就会静默失效；Docker 用例会抓到这种情况。CSP 保证不依赖锁定显示。
 - 员工仍可在 profile 里写这两个键；它们只影响 iframe 属性，不影响沙箱。
 - 锁定只匹配中文和英文标题；better-sidebar 带约 20 种语言（`lib/client-locale.js`）。zh-locale 每次加载都 `setLocale('zh')`，影响有限。
-- 脚本自导航即使没有 #558 也会先被 DSH 的 fence 以 403 挡住；#558 的 CSP 是纵深防御。
+- 脚本自导航不带 cookie，没有 #558 也会先被网关的匿名跳转挡住；带着 cookie 的浏览器导航由 #558 的 CSP 保证不透明。DSH 的 fence 对 `cross-site` 另有一道拒绝。
 
 Governing invariant：经网关送达的 HTML 预览文档总带不含 `allow-same-origin` 的 CSP sandbox；任何员工设置或临时解除都不能让预览脚本访问父页面。员工设置中两个沙箱开关显示为受管锁定。
 
