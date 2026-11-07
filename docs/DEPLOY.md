@@ -115,9 +115,9 @@ stat -c %g /var/run/docker.sock
   ```
 
 - **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
-- **Document Server 重建后，已运行的实例要重启才能恢复 Office**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前用不了 Office，聊天和文件功能不受影响。实例停止后再启动（管理员停止、空闲回收后由员工重新打开）就会接入新容器。
-- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，平台不再接入自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙。
-- **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。否则升级后的 `up -d` 在创建容器之前就会失败。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。
+- **Document Server 重建后，已运行的实例要重启才能恢复 Office**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前用不了 Office，聊天和文件功能不受影响。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
+- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙。
+- **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。缺 JWT 时，升级后的 `up -d` 在创建任何容器之前就失败；缺字体目录时，要到创建 Document Server 容器时才失败，`up -d` 返回非零，平台可能已经用新镜像启动，但 Office 不可用。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。
 
 ## 4. 在目标主机运行真实沙箱探针
 
