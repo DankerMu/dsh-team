@@ -25,7 +25,7 @@ import { prepareVerificationImage } from '../../scripts/verification-image.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
-const offlineDocxScript = `
+export const offlineDocxScript = `
 import json
 import os
 from docx import Document

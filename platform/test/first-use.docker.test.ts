@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { arch, platform, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { parse } from 'yaml';
 import { acceptObservation, mappedFlags, mappedRpc } from '../../scripts/probe-mapped-host.mjs';
@@ -11,7 +10,7 @@ import { readSettings, writeSettings } from '../src/db/index.ts';
 import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
-import { startBrowserPlatform } from './instance-browser-docker-fixture.ts';
+import { startBrowserPlatform, startEmployeeInstance } from './instance-browser-docker-fixture.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -261,7 +260,7 @@ process.stdout.write(JSON.stringify({
   return { live: read.live, seed: read.seed };
 }
 
-/** Every catalog entry is an installed `file:` dependency; the knowledge base and a switched-on office are selected. */
+/** Every catalog entry is an installed `file:` dependency; the sidebar, the knowledge base and a switched-on office are selected. */
 function requireRegistration(manifest: string, officeEnabled: boolean): void {
   const parsed = record(JSON.parse(manifest));
   expect(parsed.dependencies).toEqual(
@@ -270,6 +269,7 @@ function requireRegistration(manifest: string, officeEnabled: boolean): void {
   expect(record(record(parsed.dsh).profile).bundles).toEqual([
     '@deepseek-ai/dsh-base',
     '@deepseek-ai/dsh-web-app',
+    'dsh-better-sidebar',
     KNOWLEDGE_BASE,
     ...(officeEnabled ? [OFFICE_AGENTS] : []),
   ]);
@@ -379,63 +379,8 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
         });
         writeSettings(database, RAGFLOW_SENTINELS);
         expect(readSettings(database)).toMatchObject(RAGFLOW_SENTINELS);
-        const start = async (user: { id: string; cookie: string }): Promise<string> => {
-          const ownership = { 'dsh-team.user': user.id };
-          for (const name of [`dsh-team-home-${user.id}`, `dsh-team-work-${user.id}`])
-            await lifecycle.registerResourceAsync('volume', name, ownership);
-          await lifecycle.registerResourceAsync('container', `dsh-team-u-${user.id}`, ownership);
-          const response = await fetch(`${base}/_platform/api/instance/start`, {
-            method: 'POST',
-            headers: { cookie: user.cookie, origin, 'content-type': 'application/json' },
-            body: '{}',
-          });
-          expect(response.status).toBe(200);
-          expect(await response.json()).toEqual({ status: 'starting', reason: 'starting' });
-          const deadline = Date.now() + 90_000;
-          for (;;) {
-            const status = await fetch(`${base}/_platform/api/instance`, {
-              headers: { cookie: user.cookie },
-            });
-            expect(status.status).toBe(200);
-            const state = record(await status.json());
-            if (state.status === 'running') {
-              expect(state.reason).toBeNull();
-              break;
-            }
-            expect(state).toEqual({ status: 'starting', reason: 'starting' });
-            if (Date.now() >= deadline) throw new Error('First-use instance readiness deadline');
-            await delay(100);
-          }
-          const row = record(
-            database.prepare('SELECT container_id FROM instances WHERE user_id=?').get(user.id),
-          );
-          if (typeof row.container_id !== 'string') throw new Error('Missing ready container ID');
-          const container = await inspectAsync(lifecycle, row.container_id);
-          expect(container.Id).toBe(row.container_id);
-          expect(container.Image).toBe(lifecycle.imageId);
-          expect(container.Name).toBe(`/dsh-team-u-${user.id}`);
-          expect(record(container.Config).Labels).toMatchObject({
-            'dsh-team.user': user.id,
-            'dsh-team.test-run': lifecycle.runId,
-          });
-          expect(container.Mounts).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                Type: 'volume',
-                Name: `dsh-team-home-${user.id}`,
-                Destination: '/data/home',
-                RW: true,
-              }),
-              expect.objectContaining({
-                Type: 'volume',
-                Name: `dsh-team-work-${user.id}`,
-                Destination: '/data/work',
-                RW: true,
-              }),
-            ]),
-          );
-          return row.container_id;
-        };
+        const start = (user: { id: string; cookie: string }) =>
+          startEmployeeInstance(lifecycle, base, origin, database, user);
         const enter = async (cookie: string, label: string, initial: Record<string, unknown>) => {
           const profile = await mkdtemp(join(tmpdir(), 'dsh-team-first-use-browser-'));
           try {

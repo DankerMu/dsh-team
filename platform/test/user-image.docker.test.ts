@@ -33,76 +33,157 @@ it('builds the user image and reports exactly DSH 0.2.1-rc.2 with owned-resource
 const repositoryCatalog = readFileSync(
   new URL('../../images/dsh-user/catalog.json', import.meta.url),
 );
+// Judged inside the container, entry by entry, so the output stays a few KiB whatever the trees
+// hold (the bounded command cap is 64 KiB; the sidebar's closure alone is ~14,000 files).
 const catalogProbe = `
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-const sha256 = (path) => createHash('sha256').update(readFileSync(path)).digest('hex');
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const owner = (path) => {
-  const stat = statSync(path);
+  const stat = lstatSync(path);
   return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 };
 };
-// Every entry below a directory: owner, permission bits and file digest, by relative path.
-const tree = (root, prefix = '') => Object.fromEntries(
-  readdirSync(root + prefix, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))
-    .flatMap((entry) => {
-      const path = prefix + '/' + entry.name;
-      const facts = owner(root + path);
-      if (!entry.isDirectory()) return [[path, { ...facts, sha256: sha256(root + path) }]];
-      return [[path, { ...facts, directory: true }], ...Object.entries(tree(root, path))];
-    }),
-);
+// Every entry below a directory, parents first, by relative path; symlinks are never followed.
+const walk = (root, prefix = '') => readdirSync(root + prefix).sort().flatMap((name) => {
+  const path = prefix + '/' + name;
+  const stat = lstatSync(root + path);
+  const kind = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : stat.isSymbolicLink() ? 'symlink' : 'other';
+  const entry = { path, kind, uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777, size: stat.isFile() ? stat.size : 0 };
+  return kind === 'directory' ? [entry, ...walk(root, path)] : [entry];
+});
+// Tree digest over sorted paths, kinds and file SHA-256; owner and mode judged per entry.
+const summary = (root, uid, gid, directoryMode, fileMode) => {
+  const entries = walk(root);
+  const lines = entries.map((entry) => entry.path + '\\0' + entry.kind +
+    (entry.kind === 'file' ? '\\0' + sha256(readFileSync(root + entry.path)) : ''));
+  const violations = entries.filter((entry) => !(
+    (entry.kind === 'directory' || entry.kind === 'file') && entry.uid === uid &&
+    (gid === undefined || entry.gid === gid) &&
+    entry.mode === (entry.kind === 'directory' ? directoryMode : fileMode))).map((entry) => entry.path);
+  return {
+    digest: sha256(lines.join('\\n')),
+    files: entries.filter((entry) => entry.kind === 'file').length,
+    symlinks: entries.filter((entry) => entry.kind === 'symlink').length,
+    bytes: entries.reduce((total, entry) => total + entry.size, 0),
+    violations: violations.length,
+    firstViolations: violations.slice(0, 5),
+    paths: entries.map((entry) => entry.path),
+  };
+};
+const strip = ({ paths, ...rest }) => rest;
 const files = {};
 for (const name of ['catalog.json', 'catalog-check.mjs', 'npm-baseline.json'])
   files[name] = owner('/opt/dsh-team/' + name);
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
 const seed = read('/opt/dsh-team/profile-seed/web/package.json');
+const plugins = {};
+let sidebar;
+for (const entry of read('/opt/dsh-team/catalog.json').entries) {
+  const canonical = summary('/opt/dsh-team/' + entry.id, 0, 0, 0o555, 0o444);
+  // The live profile of this fresh volume is Docker's copy-up of the image profile.
+  const profile = summary('/data/home/profiles/web/node_modules/' + entry.package, 1001, undefined, 0o755, 0o644);
+  plugins[entry.package] = { canonical: { directory: owner('/opt/dsh-team/' + entry.id), ...strip(canonical) }, profile: strip(profile) };
+  if (entry.id !== 'dsh-better-sidebar') continue;
+  const manifest = read('/opt/dsh-team/dsh-better-sidebar/package.json');
+  const seedCopy = summary('/opt/dsh-team/profile-seed/web/node_modules/dsh-better-sidebar', 0, 0, 0o555, 0o444);
+  // A peer is installed when node_modules/<name> occurs at any depth, judged by path segment.
+  const peers = Object.fromEntries(Object.keys(manifest.peerDependencies ?? {}).map((name) => {
+    const needle = ['node_modules', ...name.split('/')];
+    return [name, canonical.paths.filter((path) => {
+      const segments = path.split('/');
+      return segments.some((_, index) => needle.every((part, offset) => segments[index + offset] === part));
+    }).length];
+  }));
+  // The released document preview's converter resolves its WASM engine this way (libreoffice-kit).
+  const dsh = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
+  const kit = createRequire(dsh.resolve('@deepseek-ai/dsh-office-to-pdf/package.json'))
+    .resolve('@deepseek-ai/libreoffice-kit/package.json');
+  sidebar = {
+    name: manifest.name,
+    version: manifest.version,
+    peers,
+    global: lstatSync('/usr/local/lib/node_modules/dsh-better-sidebar', { throwIfNoEntry: false }) !== undefined,
+    wasm: createRequire(kit).resolve('@deepseek-ai/libreoffice-kit-wasm/package.json'),
+    seed: { digest: seedCopy.digest, bytes: seedCopy.bytes, violations: seedCopy.violations },
+  };
+}
 process.stdout.write(JSON.stringify({
   files,
-  catalogSha256: sha256('/opt/dsh-team/catalog.json'),
+  catalogSha256: sha256(readFileSync('/opt/dsh-team/catalog.json')),
   baseline: read('/opt/dsh-team/npm-baseline.json'),
   dependencies: seed.dependencies,
   bundles: seed.dsh.profile.bundles,
-  // The live profile of this fresh volume is Docker's copy-up of the image profile.
-  plugins: Object.fromEntries(read('/opt/dsh-team/catalog.json').entries.map((entry) => [entry.package, {
-    canonical: { directory: owner('/opt/dsh-team/' + entry.id), tree: tree('/opt/dsh-team/' + entry.id) },
-    profile: tree('/data/home/profiles/web/node_modules/' + entry.package),
-  }])),
+  plugins,
+  sidebar,
 }));
 `;
 
-interface TreeFacts {
-  readonly uid: number;
-  readonly gid: number;
-  readonly mode: number;
-  readonly directory?: true;
-  readonly sha256?: string;
+interface TreeSummary {
+  readonly digest: string;
+  readonly files: number;
+  readonly symlinks: number;
+  readonly bytes: number;
+  readonly violations: number;
+  readonly firstViolations: readonly string[];
 }
 
-/** Canonical /opt copies are root-owned read-only; profile copies are uid1001's identical files. */
+// Hardcoded floors against an empty or truncated tree passing: every repository plugin delivers
+// at least four files; the sidebar release with its closure about 13,700.
+const FILE_FLOORS: Readonly<Record<string, number>> = { 'dsh-better-sidebar': 13_000 };
+
+/**
+ * Canonical /opt copies are root-owned read-only; profile copies are uid1001's identical files.
+ * The judgement is per entry inside the container; only digests and counters arrive here.
+ */
 function expectRegisteredCopies(observed: unknown, catalog: { id: string; package: string }[]) {
   const plugins = observed as Record<
     string,
-    {
-      canonical: { directory: TreeFacts; tree: Record<string, TreeFacts> };
-      profile: Record<string, TreeFacts>;
-    }
+    { canonical: TreeSummary & { directory: unknown }; profile: TreeSummary }
   >;
   expect(Object.keys(plugins)).toEqual(catalog.map((entry) => entry.package));
-  for (const { package: name } of catalog) {
+  for (const { id, package: name } of catalog) {
     const copies = plugins[name];
     if (copies === undefined) throw new Error(`Missing plugin copies: ${name}`);
     const { canonical, profile } = copies;
     expect(canonical.directory).toEqual({ uid: 0, gid: 0, mode: 0o555 });
-    for (const facts of Object.values(canonical.tree))
-      expect(facts).toMatchObject({ uid: 0, gid: 0, mode: facts.directory ? 0o555 : 0o444 });
-    const content = (tree: Record<string, TreeFacts>) =>
-      Object.fromEntries(
-        Object.entries(tree).map(([path, facts]) => [path, facts.sha256 ?? 'dir']),
-      );
-    expect(content(profile)).toEqual(content(canonical.tree));
-    for (const facts of Object.values(profile))
-      expect(facts).toMatchObject({ uid: 1001, mode: facts.directory ? 0o755 : 0o644 });
+    expect([name, canonical.violations, canonical.firstViolations]).toEqual([name, 0, []]);
+    expect([name, profile.violations, profile.firstViolations]).toEqual([name, 0, []]);
+    expect(canonical.files).toBeGreaterThanOrEqual(FILE_FLOORS[id] ?? 4);
+    expect(profile.digest).toBe(canonical.digest);
+    expect(profile.bytes).toBe(canonical.bytes);
   }
+}
+
+interface SidebarFacts {
+  readonly name: string;
+  readonly version: string;
+  readonly peers: Record<string, number>;
+  readonly global: boolean;
+  readonly wasm: string;
+  readonly seed: { readonly digest: string; readonly bytes: number; readonly violations: number };
+}
+
+/** The unpatched release, nested without DSH or React, only at its catalog location. */
+function expectSidebarRelease(observed: Record<string, unknown>): string {
+  const sidebar = observed.sidebar as SidebarFacts;
+  const copies = (
+    observed.plugins as Record<string, { canonical: TreeSummary; profile: TreeSummary } | undefined>
+  )['dsh-better-sidebar'];
+  if (copies === undefined) throw new Error('Missing sidebar copies');
+  const { canonical, profile } = copies;
+  expect([sidebar.name, sidebar.version]).toEqual(['dsh-better-sidebar', '0.28.0']);
+  expect(canonical.symlinks).toBe(0);
+  expect(Object.keys(sidebar.peers)).toEqual(
+    expect.arrayContaining(['@deepseek-ai/cordis', 'react', 'react-dom']),
+  );
+  for (const count of Object.values(sidebar.peers)) expect(count).toBe(0);
+  expect(sidebar.global).toBe(false);
+  expect(sidebar.wasm).toMatch(
+    /^\/usr\/local\/lib\/node_modules\/@deepseek-ai\/dsh\/node_modules\/(?:.+\/)?@deepseek-ai\/libreoffice-kit-wasm\/package\.json$/,
+  );
+  expect(sidebar.seed).toEqual({ digest: canonical.digest, bytes: canonical.bytes, violations: 0 });
+  return `canonicalBytes=${String(canonical.bytes)} profileBytes=${String(profile.bytes)} seedBytes=${String(sidebar.seed.bytes)}`;
 }
 
 // The version probe cannot read files, so the catalog delivery of the same build is its own case.
@@ -112,8 +193,9 @@ it('delivers the repository catalog, its gate, the toolchain+DSH baseline and ev
   }
   const readOnly = { uid: 0, gid: 0, mode: 0o444 };
   const shipped = ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'];
+  let sidebarBytes = '';
 
-  await runUserImage(
+  const result = await runUserImage(
     'managed-policy',
     (stdout) => {
       const observed = JSON.parse(stdout) as Record<string, unknown>;
@@ -134,6 +216,7 @@ it('delivers the repository catalog, its gate, the toolchain+DSH baseline and ev
       // catalog order.
       expect(observed.bundles).toEqual([
         ...shipped,
+        'dsh-better-sidebar',
         '@dsh-team/knowledge-base',
         '@dsh-team/office-agents',
       ]);
@@ -149,12 +232,19 @@ it('delivers the repository catalog, its gate, the toolchain+DSH baseline and ev
         ),
       );
       expectRegisteredCopies(observed.plugins, catalog.entries);
+      sidebarBytes = expectSidebarRelease(observed);
     },
     undefined,
     (lifecycle) =>
       Promise.resolve(
         execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-catalog`, catalogProbe),
       ),
+  );
+
+  // Image-size evidence: each of the three sidebar copies adds its bytes to the image or volume.
+  process.stdout.write(
+    `Docker catalog delivery verified: run=${result.runId} image=${result.image} ` +
+      `dsh-better-sidebar ${sidebarBytes} cleanup=complete\n`,
   );
 });
 
@@ -420,6 +510,19 @@ it.each([
       );
     },
     'catalog entries not registered: @dsh-team/platform-nav',
+  ],
+  [
+    'the installed sidebar release is not the expected version',
+    (directory: string) => {
+      // Only the expected literal changes; the install pin still installs 0.28.0.
+      const path = join(directory, 'Dockerfile');
+      const literal = 'expected="0.28.0"';
+      const original = readFileSync(path, 'utf8');
+      if (original.split(literal).length !== 2)
+        throw new Error('Dockerfile copy must contain exactly one sidebar version literal');
+      writeFileSync(path, original.replace(literal, 'expected="0.28.1"'));
+    },
+    'dsh-better-sidebar version mismatch: installed=0.28.0 expected=0.28.1',
   ],
 ])('fails the user-image build when %s', (_name, primary, expected) => {
   if (platform() !== 'linux' || arch() !== 'x64') {

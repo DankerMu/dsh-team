@@ -19,6 +19,7 @@ const INVALID =
 const REQUIRED = ['permission-tiers', 'platform-nav', 'zh-locale'];
 const submission = (office: string, required = 'forced-on') => ({
   entries: [
+    { id: 'dsh-better-sidebar', state: 'employee' },
     { id: 'knowledge-base', state: 'employee' },
     { id: 'office-agents', state: office },
     ...REQUIRED.map((id) => ({ id, state: required })),
@@ -75,6 +76,7 @@ it('roundtrips a logged-in administrator save over TCP on the version-8 ledger a
 
     expect(initial.status).toBe(200);
     expect(states(await initial.json())).toEqual([
+      ['dsh-better-sidebar', 'employee'],
       ['knowledge-base', 'employee'],
       ['office-agents', 'employee'],
       ...REQUIRED.map((id) => [id, 'forced-on']),
@@ -84,7 +86,8 @@ it('roundtrips a logged-in administrator save over TCP on the version-8 ledger a
     expect(await read.json()).toEqual({
       entries: (savedBody as { entries: unknown[] }).entries,
     });
-    expect(states(savedBody).slice(0, 2)).toEqual([
+    expect(states(savedBody).slice(0, 3)).toEqual([
+      ['dsh-better-sidebar', 'employee'],
       ['knowledge-base', 'employee'],
       ['office-agents', 'forced-on'],
     ]);
@@ -114,7 +117,8 @@ it('roundtrips a logged-in administrator save over TCP on the version-8 ledger a
     }
     expect(before.settings).toContainEqual({
       key: 'pluginCatalog',
-      value: '{"knowledge-base":"employee","office-agents":"forced-on"}',
+      value:
+        '{"dsh-better-sidebar":"employee","knowledge-base":"employee","office-agents":"forced-on"}',
     });
   });
 });

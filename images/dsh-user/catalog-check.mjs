@@ -5,8 +5,9 @@
  * installed dependency (selected when its image default is enabled), the form DSH 0.2.1 lists on
  * its plugin page; `verify` enumerates what the build added beyond that baseline (globals,
  * /opt/dsh-team plugins, profile node_modules, registered non-DSH bundles), checks each delivered
- * plugin's engines.dsh against the installed DSH, compares the package-name sets in both
- * directions and checks every entry's registration. No dependencies.
+ * plugin against the installed DSH (`@dsh-team/*` by engines.dsh, every other package by DSH's own
+ * loader decision), compares the package-name sets in both directions and checks every entry's
+ * registration. No dependencies beyond the installed DSH.
  */
 import {
   chmodSync,
@@ -136,11 +137,12 @@ function plugins(root, problems) {
 }
 
 /**
- * The released loader's decision: the installed DSH, DSH's own semver (declared by
- * dsh-app-boot), prereleases included, and no exact DSH peer.
- * @param {string} root @param {Found[]} delivered @param {Problems} problems
+ * The installed DSH's version, its own semver (declared by dsh-app-boot) and its loader decision
+ * `evaluatePluginCompatibility`, or undefined after recording why one is unavailable.
+ * @param {string} root @param {Problems} problems
+ * @returns {{ installed: string, semver: any, evaluate: (...args: unknown[]) => any } | undefined}
  */
-function compatibility(root, delivered, problems) {
+function releasedDsh(root, problems) {
   const dsh = join(root, DSH);
   let semver;
   let installed;
@@ -150,26 +152,77 @@ function compatibility(root, delivered, problems) {
     installed = JSON.parse(readFileSync(dsh, 'utf8')).version;
   } catch {
     problems.push(`DSH semver unavailable: ${DSH}`);
-    return;
+    return undefined;
   }
+  try {
+    // dsh-app-boot is ESM. Node 24 loads it with a synchronous require(esm) because its module
+    // graph in 0.2.1-rc.2 has no top-level await (checked statically); verify and the CLI stay
+    // synchronous. A graph that gains one throws ERR_REQUIRE_ASYNC_MODULE and fails here.
+    const { evaluatePluginCompatibility } = createRequire(dsh)('@deepseek-ai/dsh-app-boot');
+    if (typeof evaluatePluginCompatibility !== 'function') throw new TypeError('not exported');
+    return { installed, semver, evaluate: evaluatePluginCompatibility };
+  } catch {
+    problems.push(`DSH app-boot unavailable: ${DSH}`);
+    return undefined;
+  }
+}
+
+/** One diagnostic line: whitespace runs, including newlines, collapse to one space. */
+const oneLine = (/** @type {unknown} */ value) =>
+  JSON.stringify(String(value).replace(/\s+/g, ' ').trim());
+
+/**
+ * The repository rule for `@dsh-team/*`: a nonempty engines.dsh the installed DSH satisfies with
+ * DSH's own semver, prereleases included, and no exact DSH peer. Undefined when compatible.
+ * @param {Record<string, any>} manifest @param {NonNullable<ReturnType<typeof releasedDsh>>} dsh
+ */
+function repositoryRule(manifest, dsh) {
+  const range = manifest.engines?.dsh;
+  const peer = manifest.peerDependencies?.['@deepseek-ai/dsh'];
+  if (
+    typeof range === 'string' &&
+    range.trim() !== '' &&
+    peer === undefined &&
+    dsh.semver.satisfies(dsh.installed, range, { includePrerelease: true })
+  )
+    return undefined;
+  return `engines.dsh=${JSON.stringify(range)} peer=${JSON.stringify(peer)}`;
+}
+
+/**
+ * Every other package: the released loader's own decision, called as DSH's loader calls it with
+ * no exemptions. A returned issue or a throw is a failure. Undefined when compatible.
+ * @param {Record<string, any>} manifest @param {NonNullable<ReturnType<typeof releasedDsh>>} dsh
+ */
+function releasedRule(manifest, dsh) {
+  try {
+    const issue = dsh.evaluate(manifest, {}, dsh.installed);
+    return issue === undefined ? undefined : `requirements=${JSON.stringify(issue.requirements)}`;
+  } catch (error) {
+    return `error=${oneLine(error)}`;
+  }
+}
+
+/**
+ * Each delivered plugin against the installed DSH: `@dsh-team/*` by the repository rule, every
+ * other package by the released loader's decision.
+ * @param {string} root @param {Found[]} delivered @param {Problems} problems
+ */
+function compatibility(root, delivered, problems) {
+  const dsh = releasedDsh(root, problems);
+  if (dsh === undefined) return;
   // The /opt plugin and its profile registration share a name; the first one found is checked.
   const checked = new Set();
   for (const plugin of delivered) {
     if (checked.has(plugin.name)) continue;
     checked.add(plugin.name);
-    const range = plugin.manifest.engines?.dsh;
-    const peer = plugin.manifest.peerDependencies?.['@deepseek-ai/dsh'];
-    if (
-      typeof range === 'string' &&
-      range.trim() !== '' &&
-      peer === undefined &&
-      semver.satisfies(installed, range, { includePrerelease: true })
-    )
-      continue;
-    problems.push(
-      `DSH plugin compatibility failed: ${basename(plugin.directory)} engines.dsh=${JSON.stringify(range)}` +
-        ` peer=${JSON.stringify(peer)} installed=${installed}`,
-    );
+    const rule = plugin.name.startsWith('@dsh-team/') ? repositoryRule : releasedRule;
+    const failure = rule(plugin.manifest, dsh);
+    if (failure !== undefined)
+      problems.push(
+        `DSH plugin compatibility failed: ${basename(plugin.directory)} ${failure}` +
+          ` installed=${dsh.installed}`,
+      );
   }
 }
 
