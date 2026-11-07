@@ -21,20 +21,15 @@ import {
   containerNetworks,
   dockerStep,
   documentServerConfig,
-  documentServerRecord,
   expectDocumentServerAtLayout,
   gatewayStatus,
   overlayKeys,
   userNetworkId,
 } from './container-document-server-docker-fixture.ts';
+import { NULL_RECORD, documentServerRecord } from './container-document-server-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 const AUTHORITY = 'document-server.example:8443';
-const NULL_RECORD = {
-  document_server_mode: null,
-  document_server_container_id: null,
-  document_server_reason: null,
-};
 
 interface Context {
   readonly lifecycle: UserImageLifecycle;

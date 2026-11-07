@@ -16,6 +16,7 @@ import {
   DS_NAME,
   DS_PLATFORM,
   DS_PLATFORM_NAME,
+  NULL_RECORD,
   documentServerAttachment,
   documentServerFixture,
   documentServerRecord,
@@ -40,11 +41,6 @@ async function attached() {
   return f;
 }
 
-const NULL_RECORD = {
-  document_server_mode: null,
-  document_server_container_id: null,
-  document_server_reason: null,
-};
 const BUNDLED_RECORD = {
   document_server_mode: 'bundled',
   document_server_container_id: DS_ID,
@@ -218,23 +214,49 @@ it.each(['same name, other ID', 'unrecorded', 'container gone', 'identity change
   },
 );
 
-it('a stopped Document Server attachment is accepted by health and reuse and disconnected on retirement', async () => {
-  const f = await attached();
-  markRunning(f.database);
-  stopDocumentServer(f.daemon);
-  const before = reconciliationState(f.database);
+/** Off the bridge, only a stopped or restart-backoff peer whose endpoint Docker released passes. */
+it.each([
+  ['running, not restarting', 'restarting', { Restarting: false }, {}],
+  ['restarting with an endpoint ID', 'restarting', {}, { EndpointID: '8'.repeat(64) }],
+  ['stopped with an endpoint ID', 'stopped', {}, { EndpointID: '8'.repeat(64) }],
+] as const)(
+  'reconciliation fails closed on an off-bridge %s Document Server without writes',
+  async (_kind, state, status, endpoint) => {
+    const f = await attached();
+    markRunning(f.database);
+    stopDocumentServer(f.daemon, state);
+    const container = f.daemon.containers.get(DS_ID);
+    const attachment = documentServerAttachment(f.daemon);
+    if (container === undefined || typeof attachment !== 'object' || attachment === null)
+      throw new Error('Missing fixture Document Server attachment');
+    Object.assign(container.State, status);
+    Object.assign(attachment, endpoint);
+    f.daemon.requests.splice(0);
 
-  await f.ownerFor().reconcile();
-  const reused = await f.owner.startUserContainer(f.input);
-  await f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+    await expectReconciliationRejected(f.database, f.daemon, f.ownerFor());
+  },
+);
 
-  expect(reconciliationState(f.database).audits.length).toBe(before.audits.length + 1);
-  expect(reused).toMatchObject({ outcome: 'running', containerId: START_CONTAINER });
-  expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
-  expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
-  expect(documentServerAttachment(f.daemon)).toBeUndefined();
-  expect(documentServerRecord(f.database)).toEqual(NULL_RECORD);
-});
+it.each(['stopped', 'restarting'] as const)(
+  'a %s Document Server attachment is accepted by health and reuse and disconnected on retirement',
+  async (state) => {
+    const f = await attached();
+    markRunning(f.database);
+    stopDocumentServer(f.daemon, state);
+    const before = reconciliationState(f.database);
+
+    await f.ownerFor().reconcile();
+    const reused = await f.owner.startUserContainer(f.input);
+    await f.owner.stopUserContainer({ userId: START_USER, reason: 'admin' });
+
+    expect(reconciliationState(f.database).audits.length).toBe(before.audits.length + 1);
+    expect(reused).toMatchObject({ outcome: 'running', containerId: START_CONTAINER });
+    expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
+    expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
+    expect(documentServerAttachment(f.daemon)).toBeUndefined();
+    expect(documentServerRecord(f.database)).toEqual(NULL_RECORD);
+  },
+);
 
 it.each(['recorded', 'unrecorded'])(
   'orphan network reclamation %s Document Server endpoint',
@@ -274,6 +296,23 @@ it.each(['owned network removed', 'network cleanup failed or unconfirmed'])(
     expect(f.database.prepare('SELECT status FROM instances').get()).toEqual({ status: 'error' });
     expect(documentServerRecord(f.database)).toEqual(BUNDLED_RECORD);
     expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
+  },
+);
+
+it.each(['stopped', 'restarting'] as const)(
+  'readiness failure cleanup disconnects a %s Document Server attachment and removes the bridge',
+  async (state) => {
+    const f = await attached();
+    stopDocumentServer(f.daemon, state);
+    f.daemon.setComposition('boot failure without a launch line\n');
+
+    await expect(
+      f.owner.waitForUserContainerReady({ userId: START_USER, authority: 'team.example:8443' }),
+    ).rejects.toThrow('owned network removed');
+
+    expect(mutations(f.daemon.requests)).toContainEqual(DS_DISCONNECT);
+    expect(f.daemon.networks.has(START_NETWORK)).toBe(false);
+    expect(documentServerAttachment(f.daemon)).toBeUndefined();
   },
 );
 

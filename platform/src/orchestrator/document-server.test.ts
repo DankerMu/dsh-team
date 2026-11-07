@@ -149,13 +149,15 @@ it('a missing Document Server name records absent and the instance starts withou
   expect(endpoints(f.daemon)).toEqual([START_CONTAINER, DS_PLATFORM].sort());
 });
 
-it.each(['stopped', 'renamed', 'replaced', 'malformed', 'vanished'])(
+it.each(['stopped', 'restarting', 'renamed', 'replaced', 'malformed', 'vanished'])(
   'a %s Document Server records identity-mismatch and the instance starts without it',
   async (kind) => {
     const f = await fixture();
     const container = f.daemon.containers.get(DS_ID);
     if (container === undefined) throw new Error('Missing fixture Document Server');
     if (kind === 'stopped') stopDocumentServer(f.daemon);
+    // Restart-policy backoff: Docker reports `Running` and `Restarting` together.
+    if (kind === 'restarting') stopDocumentServer(f.daemon, 'restarting');
     const exact = `GET /containers/${DS_ID}/json`;
     if (kind === 'renamed')
       f.daemon.overrides.set(exact, { status: 200, document: { ...container, Name: '/other' } });

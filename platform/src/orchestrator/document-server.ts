@@ -25,7 +25,10 @@ export function recordedDocumentServer(row: unknown): string | null {
   return recorded;
 }
 
-/** Same ID, configured name and running; an exact-ID 404 is a changed identity, not a Docker error. */
+/**
+ * Same ID, configured name and running outside restart-policy backoff (which Docker still reports as
+ * `Running`, without an endpoint); an exact-ID 404 is a changed identity, not a Docker error.
+ */
 async function isDocumentServer(client: DockerClient, id: string, name: string): Promise<boolean> {
   let document: Record<string, unknown>;
   try {
@@ -34,8 +37,12 @@ async function isDocumentServer(client: DockerClient, id: string, name: string):
     if (error instanceof DockerHttpError && error.statusCode === 404) return false;
     throw error;
   }
+  const state = object(document.State);
   return (
-    document.Id === id && document.Name === `/${name}` && object(document.State).Running === true
+    document.Id === id &&
+    document.Name === `/${name}` &&
+    state.Running === true &&
+    state.Restarting !== true
   );
 }
 

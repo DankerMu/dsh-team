@@ -75,6 +75,12 @@ export function rejectDocumentServer(daemon: StartupDaemon, operation: 'connect'
   });
 }
 
+export const NULL_RECORD = {
+  document_server_mode: null,
+  document_server_container_id: null,
+  document_server_reason: null,
+};
+
 export function documentServerRecord(database: DatabaseHandle, user = START_USER): unknown {
   return database
     .prepare(
@@ -94,11 +100,18 @@ export function mutations(requests: readonly StartupRequest[], from = 0) {
     .map(({ method, path, body }) => ({ request: `${method} ${path}`, body }));
 }
 
-/** Like Docker: a stopped container leaves every bridge view but keeps its own network configuration. */
-export function stopDocumentServer(daemon: StartupDaemon): void {
+/**
+ * Like Docker: a stopped container, or one in restart-policy backoff (still `Running`), leaves every
+ * bridge view but keeps its own network configuration.
+ */
+export function stopDocumentServer(
+  daemon: StartupDaemon,
+  state: 'stopped' | 'restarting' = 'stopped',
+): void {
   const container = daemon.containers.get(DS_ID);
   if (container === undefined) throw new Error('Missing fixture Document Server');
-  container.State.Running = false;
+  container.State.Running = state === 'restarting';
+  if (state === 'restarting') container.State.Restarting = true;
   for (const network of daemon.networks.values()) Reflect.deleteProperty(network.Containers, DS_ID);
   for (const attachment of Object.values(container.NetworkSettings.Networks ?? {}))
     Object.assign(attachment as object, { EndpointID: '', IPAddress: '' });

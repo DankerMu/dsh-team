@@ -4,6 +4,7 @@ import { expect } from 'vitest';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import { createOrchestrator, instanceAddressLayout } from '../src/orchestrator/index.ts';
+import { documentServerRecord } from './container-document-server-fixture.ts';
 import { startupEvidence } from './container-start-fixture.ts';
 import {
   createStandInPlatform,
@@ -64,14 +65,6 @@ export function expectDocumentServerAtLayout(
   expect(attachment.IPAddress).toBe(address);
   expect(record(attachment.IPAMConfig).IPv4Address).toBe(address);
   return { endpointId: String(endpoint.EndpointID), address };
-}
-
-export function documentServerRecord(database: DatabaseHandle, user: string): unknown {
-  return database
-    .prepare(
-      'SELECT document_server_mode, document_server_container_id, document_server_reason FROM instances WHERE user_id = ?',
-    )
-    .get(user);
 }
 
 /** Every object key in the instance's managed overlay (compact JSON, a YAML subset). */

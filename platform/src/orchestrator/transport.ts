@@ -65,12 +65,11 @@ export function endpointMembership(
     return false;
   }
   const connected = object(attachment);
-  // Docker drops a stopped container's endpoint but keeps its configuration, re-attaching on start.
   if (
     role === 'documentServer' &&
     endpoint === undefined &&
     connected.NetworkID === bridge.Id &&
-    object(peer.document.State).Running === false
+    releasedEndpoint(peer.document, connected)
   )
     return true;
   const inspected = object(endpoint);
@@ -84,6 +83,21 @@ export function endpointMembership(
     subnet,
   );
   return true;
+}
+
+/**
+ * Docker releases the endpoint of a stopped container, or one in restart-policy backoff (still
+ * `Running`), but keeps its configuration with a cleared endpoint ID, re-attaching on start.
+ */
+function releasedEndpoint(
+  document: Record<string, unknown>,
+  attachment: Record<string, unknown>,
+): boolean {
+  const state = object(document.State);
+  return (
+    (state.Running === false || state.Restarting === true) &&
+    (attachment.EndpointID === undefined || attachment.EndpointID === '')
+  );
 }
 
 /** Only the platform has an undeclared stage-1 form; a Document Server is always on the layout. */

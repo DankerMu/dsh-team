@@ -81,7 +81,7 @@ export interface Container {
   Config: Record<string, unknown>;
   HostConfig?: Record<string, unknown>;
   Mounts?: unknown;
-  State: { Running: boolean; Status?: string; StartedAt?: string };
+  State: { Running: boolean; Restarting?: boolean; Status?: string; StartedAt?: string };
   NetworkSettings: { Ports: unknown; Networks?: Record<string, unknown> };
 }
 
