@@ -202,6 +202,48 @@ it('merges one document and its redirect hops across sessions, never keeping a c
   frames.dispose();
 });
 
+it('settles a document only once the frame committed it, redirect hops included', async () => {
+  const tab = fakeTab();
+  const frames = await trackFrames(tab.page, ALLOWED);
+  tab.emit('page', 'Target.attachedToTarget', {
+    sessionId: 'frame-session',
+    targetInfo: { targetId: 'F', type: 'iframe' },
+    waitingForDebugger: true,
+  });
+  const navigated = (sessionId: string, frameId: string, loaderId: string, url: string) => {
+    tab.emit(sessionId, 'Page.frameNavigated', { frame: { id: frameId, loaderId, url } });
+  };
+  const state = { settled: false, failed: false };
+  navigated('page', 'F', 'old', 'http://h/sidebar/html/s/x');
+  // The reload answered, but the frame still shows the previous document of the same route.
+  const reload = frames.committed('F', 'reload', 2000, 'reload').then(
+    () => (state.settled = true),
+    () => (state.failed = true),
+  );
+  tab.emit('page', 'Network.responseReceived', {
+    requestId: 'reload',
+    frameId: 'F',
+    type: 'Document',
+    response: { status: 200, headers: {} },
+  });
+  await tab.settled();
+  navigated('page', 'F', 'old', 'http://h/sidebar/html/s/x');
+  navigated('page', 'G', 'reload', 'http://h/elsewhere');
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(state).toEqual({ settled: false, failed: false });
+  navigated('frame-session', 'F', 'reload', 'http://h/sidebar/html/s/x');
+  await reload;
+  expect(state).toEqual({ settled: true, failed: false });
+
+  // A redirected navigation keeps one request id across hops and commits once, on its last hop.
+  const self = frames.committed('F', 'self', 1000, 'self');
+  navigated('page', 'F', 'self', 'http://h/_platform/login');
+  await expect(self).resolves.toBeUndefined();
+  // A document the frame never commits times out by label.
+  await expect(frames.committed('F', 'never', 300, 'never')).rejects.toThrow('never uncommitted');
+  frames.dispose();
+});
+
 it('records null request headers when Chrome reports none in time', async () => {
   const tab = fakeTab();
   const frames = await trackFrames(tab.page, ALLOWED);

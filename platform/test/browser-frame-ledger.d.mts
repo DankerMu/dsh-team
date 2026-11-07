@@ -14,7 +14,7 @@ export interface FrameHop {
   readonly cookie: boolean | null;
 }
 
-/** One frame document, merged from whichever sessions reported it; the last hop committed. */
+/** One frame document, merged from whichever sessions reported it, once its last hop answered. */
 export interface FrameDocument {
   readonly requestId: string;
   /** The first hop's URL. */
@@ -51,6 +51,8 @@ export interface FrameTracker {
     ms: number,
     label: string,
   ): Promise<FrameDocument>;
+  /** Resolve once `frameId` committed navigation `requestId` (its `Page.frameNavigated` loader). */
+  committed(frameId: string, requestId: string, ms: number, label: string): Promise<void>;
   consoleReport(frameId: string): ConsoleReport;
   failures(): { readonly type: string; readonly error: string }[];
   dispose(): void;

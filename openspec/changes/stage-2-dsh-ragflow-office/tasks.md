@@ -3277,6 +3277,7 @@ selected：
       - 读 `document.cookie`；
       - 读 `localStorage.length`；
       - `await fetch('/_platform/api/session', { credentials: 'include' })` 并读 `.json()`。这是从不透明源发往平台源的跨源带凭据请求；该接口只回当前账号的邮箱和角色。
+    - 脚本的第一条语句是同步的 `document.documentElement.dataset.dshTeamRan = '1'`，在任何 `await` 之前执行；脚本是否运行以这个标记为准，不以 `#result` 是否缺席为准。
     - 结果连同 `self.origin`（字符串）写进 `<pre id="result">`，执行到底时写 `done`。
     - 脚本自导航由测试放行，避免与 `#result` 的读取竞态：脚本写完 `done` 后，用 MutationObserver 等 `document.documentElement.dataset.dshTeamGo === '1'`（测试读完 `#result` 后在该帧的 isolated world 中写入，DOM 在 world 之间共享），再执行 `location.href = '/sidebar/file?sessionId=<从自身 /sidebar/html/<sessionId>/… 路径取>&path=/data/work/sandbox-probe.html'`。导航仍由不透明源的页面脚本发起。这一步对应 #431 夹具评审的 P1：sandbox 属性被去掉后，最直接的逃逸就是这次导航。
   - **CDP 读帧的方式**：
@@ -3285,18 +3286,20 @@ selected：
     - 所有 session 都监听 `Network.requestWillBeSent`、`Network.requestWillBeSentExtraInfo`、`Network.responseReceived`，按 `frameId` 加 `type === 'Document'` 匹配该帧的文档请求。OOPIF 的导航请求可能报在父 session 上。每次导航（脚本自导航、`Page.navigate`）之后都重新确定哪个 session 拥有该帧。
     - 读 `#result` 用 `DOM.*`，或在该帧的 isolated world 中求值，不依赖页面脚本。
     - 帧的真实源同样用 isolated world 读（`readOrigin` 的写法，帧 ID 取自所在 session 的 frame tree），期望 `{ origin: 'null', storage: 'SecurityError', cookie: 'SecurityError' }`。不读 frame tree 的 `securityOrigin`：#558 已实测它从 URL 推导。
+  - **读帧前先确认已提交**：每次载入都要等 `Page.frameNavigated` 报出的该帧 `loaderId` 等于这次导航的文档请求 id（导航请求的 requestId 就是 loaderId，重定向各跳不变），再读帧、截图、写放行信号。只收到响应就读，可能读到旧文档（复审 P2）。
   - **期望**：
-    - 每次在 `/sidebar/html` 下载入，`#result` 都是 `done`，`origin` 为 `null`。parent 和 top 两项为 `SecurityError`，cookie 和 storage 两项为 `SecurityError`，fetch 一项为 `TypeError`（不透明源的跨源请求被 CORS 拒绝）。
+    - 每次在 `/sidebar/html` 下载入，`dshTeamRan` 标记存在，`#result` 都是 `done`，`origin` 为 `null`。parent 和 top 两项为 `SecurityError`，cookie 和 storage 两项为 `SecurityError`，fetch 一项为 `TypeError`（不透明源的跨源请求被 CORS 拒绝）。
     - 响应头 `content-security-policy` 恰为 better-sidebar 0.28.0 的 `/sidebar/html` 值。
     - 脚本自导航（不透明源发起）：
       - 本机 Chromium 153 实测（2026-11-07）：这次请求带 `sec-fetch-site: cross-site`，SameSite 为 Strict（测试浏览器注入的值）或 Lax（生产值）时都不带 cookie。浏览器发起的 `Page.navigate({ frameId })` 带 `sec-fetch-site: none` 和 cookie。
       - 因此网关看不到平台会话，按匿名 HTML GET 回 302 跳到 `/_platform/login`（gateway README 的 admission 规则），请求到不了 DSH，更到不了 better-sidebar 的 fence。
       - 期望：
-        - `/sidebar/file` 请求的 `sec-fetch-site` 为 `cross-site`，取自 `requestWillBeSentExtraInfo`；只记一个布尔值表示是否带了 `cookie` 头，期望为 false，不记 cookie 的值；
+        - 从 `requestWillBeSentExtraInfo` 取请求头，只记一个布尔值表示是否带了 `cookie` 头，期望为 false，不记 cookie 的值；没收到 ExtraInfo 时记为 null，断言失败。这个布尔值是原因证据；
+        - `sec-fetch-site` 只记录，不断言：#560 首轮 VPS 运行时，测试源是 `http://…invalid:<port>`，不属于可信源，Chrome 对它不发 `Sec-Fetch-*`，每次载入都记为 null。本机 127.0.0.1 属于可信源，所以本机能看到这个头。生产内网的 HTTP 源同样收不到它，fence 的 `cross-site` 拒绝因此不能依赖；
         - 响应 302，`location` 的 pathname 为 `/_platform/login`；
-        - 帧最终文档的 pathname 为 `/_platform/login`，`#probe` 和 `#result` 都不存在。工作区内容没有送达，攻击脚本也没有执行。
+        - 帧最终文档的 pathname 为 `/_platform/login`，`#probe`、`dshTeamRan` 标记和 `#result` 都不存在。工作区内容没有送达，攻击脚本也没有执行。
       - 首轮 VPS 若与本机实测不同，就改夹具，不放宽断言。
-    - 浏览器发起的导航，证明文件送达后仍不透明：在拥有该帧的 session 上 `Page.navigate({ frameId, url: <同一 /sidebar/file URL> })`。这时 `sec-fetch-site: none`，能通过 fence。期望状态 200，`#probe` 存在（文件确实送达），`#result` 不存在（脚本没有执行），CSP 恰为 `sandbox`、带 `nosniff`，源不透明。
+    - 浏览器发起的导航，证明文件送达后仍不透明：在拥有该帧的 session 上 `Page.navigate({ frameId, url: <同一 /sidebar/file URL> })`。这时带 cookie（断言 `cookie` 为 true），能通过网关和 fence。期望状态 200，`#probe` 存在（文件确实送达），`dshTeamRan` 标记和 `#result` 都不存在（脚本没有执行），并且至少有一条归到该帧的被拦脚本提示（`Blocked script execution`；本机实测其 `Log.entryAdded` 的 `url` 就是文档 URL），CSP 恰为 `sandbox`、带 `nosniff`，源不透明。
   - **阶段 1（默认）**：
     - 在 better-sidebar 文件区打开探测页，断言 iframe 带 `sandbox` 属性，然后按上面的期望检查三次载入（`/sidebar/html`、脚本自导航、浏览器导航；后两次之后用 `Page.navigate({ frameId })` 回到 `/sidebar/html` 的原 src）。
     - 打开 better-sidebar 的 HTML 查看器设置面板，断言两个开关都被隐藏，并且各自跟着锁定标记「沙箱开启 · 由管理员设定」；截图。
@@ -3306,6 +3309,7 @@ selected：
     - 以 uid1001 用 `managed-policy-fixture.ts:289-303` 的整文件写入（开发笔记 1）在 profile 的 `cordis.patch.yml` 加一行 `{ id: <profile 中 dsh-better-sidebar 加载行的 id，从镜像默认 profile 读出，不写死>, config: { htmlViewerNoSandbox: true, htmlViewerDefaultUnsafe: true } }`，保留原有行。
     - 经真实网关重启实例并等就绪：复用 `account-status-fixture.ts:117` 的 `postRestart`（`:83` 是 `app.inject` 版本，Docker 里用不了）。
     - 再打开探测页：断言 iframe 一载入就没有 `sandbox` 属性，以此证明 `htmlViewerNoSandbox` 生效（正向对照）。断言状态栏没有临时解锁按钮、有「恢复沙箱」按钮（`client-editor.js:49335-49340`），这是 `htmlViewerDefaultUnsafe` 生效的唯一可观察证据。然后按同样的期望检查三次载入（`/sidebar/html`、脚本自导航、浏览器导航）；截图。
+    - 单靠载入时没有 `sandbox` 属性，证明不了 `htmlViewerNoSandbox` 生效：`htmlViewerDefaultUnsafe` 单独开启也会去掉这个属性（发行版 `client-editor.js:54645-54646`）。所以要点「恢复沙箱」，它只执行 `setLocalUnlock(false)`，不重挂载 iframe。点完后断言：`sandbox` 属性仍为 null，帧 ID 不变，状态栏两个按钮都不显示。这才证明 `htmlViewerNoSandbox` 生效。
   - **控制台**：
     - 白名单只对该帧生效。本机 Chromium 153 上沙箱 iframe 与主页面同进程，没有子 target，它的条目都到主 session，所以按帧归属，不按 session：
       - `Runtime.consoleAPICalled` 和 `Runtime.exceptionThrown`：`executionContextId` 对到 `Runtime.executionContextCreated` 的 `auxData.frameId`；

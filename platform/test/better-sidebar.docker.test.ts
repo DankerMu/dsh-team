@@ -269,12 +269,14 @@ it('opens a workspace HTML file as a document from /sidebar/file only in an opaq
 
 const SANDBOX_PROBE = { name: 'sandbox-probe.html' };
 const SANDBOX_PROBE_PATH = `/data/work/${SANDBOX_PROBE.name}`;
-// Five attempts, each `ok` or the caught error's name, then `done`. Once the test has read
+// The first, synchronous statement marks the document as run, before any await. Then five
+// attempts, each `ok` or the caught error's name, then `done`. Once the test has read
 // `#result` it sets `data-dsh-team-go` from an isolated world (the DOM is shared), and only then
 // does the opaque page navigate its own frame to `/sidebar/file` for the same file.
 const SANDBOX_PROBE_HTML =
   '<!doctype html><html><head><meta charset="utf-8"><link rel="icon" href="data:,">' +
   '<title>sandbox probe</title></head><body><p id="probe">sandbox probe</p><script>' +
+  "document.documentElement.dataset.dshTeamRan = '1';" +
   '(async () => {' +
   "const name = (read) => { try { read(); return 'ok'; } catch (e) { return e.name; } };" +
   'const result = { origin: String(self.origin),' +
@@ -343,37 +345,47 @@ const PREVIEW_RESULT = {
   state: 'done',
 };
 
-/** Every round's three loads stay opaque, whatever the iframe attribute or employee setting. */
+/**
+ * Every round's three loads stay opaque, whatever the iframe attribute or employee setting.
+ * `secFetchSite` is evidence only: the test origin is not potentially trustworthy, so Chrome sends
+ * no `Sec-Fetch-*` header. Whether a cookie was sent is the observed cause (null, never false,
+ * when Chrome reported no request headers).
+ */
 function expectOpaqueRound(round: FrameRound) {
   expect(round.preview).toMatchObject({
     route: '/sidebar/html',
+    cookie: true,
     status: 200,
     csp: HTML_PREVIEW_CSP,
     probe: true,
+    ran: true,
     result: PREVIEW_RESULT,
   });
-  // The opaque page's own navigation carries no cookie, so the gateway sends it to the login
-  // page before DSH: the workspace file is never delivered and the probe script never runs.
+  // The opaque page's own navigation sends no cookie, so the gateway sends it to the login page
+  // before DSH: the workspace file is never delivered and the probe script never runs.
   expect(round.self).toMatchObject({
     route: '/sidebar/file',
-    secFetchSite: 'cross-site',
     cookie: false,
     status: 302,
     location: '/_platform/login',
     finalRoute: '/_platform/login',
     probe: false,
+    ran: false,
     result: null,
   });
-  // The browser's navigation passes the fence: the file arrives but its script never runs.
+  // The browser's navigation sends the platform cookie and passes the fence: the file arrives but
+  // its script never runs.
   expect(round.browser).toMatchObject({
     route: '/sidebar/file',
-    secFetchSite: 'none',
+    cookie: true,
     status: 200,
     csp: 'sandbox',
     nosniff: 'nosniff',
     probe: true,
+    ran: false,
     result: null,
   });
+  expect(round.browser.blockedScripts).toBeGreaterThan(0);
   expect(round.preview.finalRoute).toBe('/sidebar/html');
   expect(round.browser.finalRoute).toBe('/sidebar/file');
   for (const load of [round.preview, round.browser])
@@ -444,10 +456,17 @@ it('keeps the HTML preview opaque by default, after a temporary unlock and after
       });
       const { kept, rows } = edit as { kept: number; rows: number };
       expect(rows).toBe(kept + 1);
-      // htmlViewerNoSandbox took effect (no attribute at load), htmlViewerDefaultUnsafe too
-      // (no unlock, only the restore action).
+      // Either key alone drops the attribute at load; the restore action shows that
+      // htmlViewerDefaultUnsafe started the local unlock.
       expect(employee.sandbox).toBeNull();
       expect(employee.statusBar).toMatchObject({ unlock: false, restore: true });
+      // Restoring cleared the local unlock: the same frame stays without the attribute only
+      // through htmlViewerNoSandbox, and the bar offers neither action.
+      expect(employee.restore).toMatchObject({
+        sandbox: null,
+        sameFrame: true,
+        statusBar: { unlock: false, restore: false },
+      });
       expect(employee.rounds).toHaveLength(1);
       const rounds = [...locked.rounds, ...employee.rounds];
       for (const round of rounds) expectOpaqueRound(round);

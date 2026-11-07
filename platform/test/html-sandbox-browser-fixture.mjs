@@ -16,6 +16,7 @@ import {
 import { routeOf, trackFrames } from './browser-frame-ledger.mjs';
 
 const MS = 30_000;
+const CONSOLE_MS = 5_000;
 
 /*
  * Released markers (dsh-better-sidebar@0.28.0, @deepseek-ai/dsh@0.2.1-rc.2):
@@ -52,11 +53,15 @@ const FRAME_ALLOWED = [
 const usableText = (selector, labels) =>
   `[...document.querySelectorAll(${JSON.stringify(selector)})].find((el) => ${JSON.stringify(labels)}.includes((el.textContent ?? '').trim()) && !el.disabled && el.getClientRects().length > 0)`;
 
-/** The frame document as its own isolated world sees it; page script is not involved. */
+/**
+ * The frame document as its own isolated world sees it; page script is not involved. `ran` is the
+ * mark the probe script sets synchronously as its first statement, before any await.
+ */
 const FRAME_STATE = `(() => ({
   path: location.pathname,
   ready: document.readyState,
   probe: document.getElementById('probe') !== null,
+  ran: document.documentElement.dataset.dshTeamRan === '1',
   result: document.getElementById('result')?.textContent ?? null,
 }))()`;
 const RELEASE = `(document.documentElement.dataset.dshTeamGo = '1', true)`;
@@ -84,11 +89,13 @@ async function frameRead(ctx, expression, accept, label) {
 }
 
 /**
- * Wait for the frame's next document whose first URL `accept`s, and for its final hop to be the
- * frame's current, complete document.
+ * Wait for the frame's next document whose first URL `accept`s, for the frame to commit it (an
+ * answered document may still sit behind the previous one, of the same route on a reload), and
+ * only then for it to be complete. With `script`, the probe script must have run and finished.
  */
 async function settle(ctx, before, accept, script, label) {
   const response = await ctx.frames.nextDocument(ctx.frameId, before, accept, MS, label);
+  await ctx.frames.committed(ctx.frameId, response.requestId, MS, `html-sandbox-${label}-commit`);
   const route = routeOf(response.hops.at(-1).url);
   const state = await frameRead(
     ctx,
@@ -96,7 +103,7 @@ async function settle(ctx, before, accept, script, label) {
     (value) =>
       routeOf(`http://x${value.path}`) === route &&
       value.ready === 'complete' &&
-      (!script || value.result !== null),
+      (!script || (value.ran && value.result !== null)),
     `${label}-state`,
   );
   return { response, route, state };
@@ -129,11 +136,19 @@ async function recordLoad(ctx, label, { response, route, state }) {
     hops: response.hops.length,
     finalRoute: route,
     probe: state.probe,
+    ran: state.ran,
     result: state.result === null ? null : JSON.parse(state.result),
     originRead: await readOrigin(ctx.frames.owner(ctx.frameId), ctx.frameId),
     screenshot: basename(shot.screenshot),
   };
 }
+
+/** Console entries of the probed frame reporting a blocked script, so far. */
+const blockedScripts = (ctx) =>
+  ctx.frames
+    .consoleReport(ctx.frameId)
+    .allowed.filter((row) => BLOCKED_SCRIPT.every((fragment) => row.text.includes(fragment)))
+    .length;
 
 /** Return the frame to the iframe's own src and wait until its probe script finished again. */
 async function returnToPreview(ctx, label) {
@@ -161,9 +176,15 @@ async function threeLoads(ctx, label, before, settled) {
     const self = await recordLoad(ctx, `${label}-self`, selfLoad);
     await returnToPreview(ctx, `${label}-self-return`);
     const beforeBrowser = ctx.frames.known();
+    const blockedBefore = blockedScripts(ctx);
     await navigateFrame(ctx, selfLoad.response.url);
     const browserLoad = await settle(ctx, beforeBrowser, fileRoute, false, `${label}-browser`);
     const browser = await recordLoad(ctx, `${label}-browser`, browserLoad);
+    // Chrome reports the blocked inline script while parsing; a missing report is recorded as 0.
+    await waitFor(() => blockedScripts(ctx) > blockedBefore, CONSOLE_MS, 'blocked').catch(
+      () => undefined,
+    );
+    browser.blockedScripts = blockedScripts(ctx) - blockedBefore;
     await returnToPreview(ctx, `${label}-browser-return`);
     return { label, preview, self, browser };
   });
@@ -266,14 +287,40 @@ async function defaultPhase(ctx, iframe, opened) {
   };
 }
 
-/** Phase 2: the employee's own profile turned both keys on; the preview opens unsandboxed. */
+/**
+ * Phase 2: the employee's own profile turned both keys on; the preview opens unsandboxed. Either
+ * key alone drops the attribute (the local unlock starts at `htmlViewerDefaultUnsafe`), so the
+ * status bar's 恢复沙箱 then clears the local unlock: the same iframe element, never remounted nor
+ * reloaded (lib/client-editor.js:54645-54646, :54797-54812), stays without the attribute only
+ * through `htmlViewerNoSandbox`, and the bar offers neither action (:49327-49340).
+ */
 async function employeePhase(ctx, opened) {
   const bar = await statusBar(ctx.page);
   const shot = await captureSettledScreenshot(ctx.page, join(ctx.evidence, 'employee-opened.png'));
-  return {
-    statusBar: { ...bar, screenshot: basename(shot.screenshot) },
-    rounds: [await threeLoads(ctx, 'employee', undefined, opened)],
-  };
+  const rounds = [await threeLoads(ctx, 'employee', undefined, opened)];
+  const restore = await stage(ctx.page, ctx.evidence, 'employee-restore', async () => {
+    await physicalClick(ctx.page, usableText('button', RESTORE));
+    const after = await waitFor(
+      async () => {
+        const now = await statusBar(ctx.page);
+        return !now.unlock && !now.restore ? now : null;
+      },
+      MS,
+      'html-sandbox-restore-applied',
+    );
+    const iframe = await previewFrame(ctx.page, ctx.name);
+    const restored = await captureSettledScreenshot(
+      ctx.page,
+      join(ctx.evidence, 'employee-restored.png'),
+    );
+    return {
+      sandbox: iframe.sandbox,
+      sameFrame: iframe.frameId === ctx.frameId,
+      statusBar: after,
+      screenshot: basename(restored.screenshot),
+    };
+  });
+  return { statusBar: { ...bar, screenshot: basename(shot.screenshot) }, rounds, restore };
 }
 
 /**
@@ -298,6 +345,7 @@ export async function observeHtmlSandbox({ probe, phase, ...input }) {
         frames,
         frameId: iframe.frameId,
         src: iframe.src,
+        name: probe.name,
         evidence: input.evidence,
       };
       const opened = await settle(ctx, before, htmlRoute, true, `${phase}-opened`);

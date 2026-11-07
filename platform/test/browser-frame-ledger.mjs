@@ -10,6 +10,10 @@
  * holds it right now. Navigation requests of an out-of-process frame may be reported on the
  * parent session, so all sessions feed one ledger keyed by request id.
  *
+ * A navigation request's request id is the loader id of the document it commits, redirects
+ * included, so `Page.frameNavigated` tells when a frame shows that document rather than the one
+ * before it (a response arrives before its commit).
+ *
  * Console errors belong to a frame by evidence, never by the reporting session: a Runtime event's
  * execution context (`executionContextCreated` `auxData.frameId`), a Log entry's network request
  * (`requestWillBeSent.frameId`), or else a Log entry's `url` equal to a frame's current document.
@@ -60,6 +64,8 @@ function createLedger() {
     contexts: new Map(),
     /** frameId -> URL of its current document. */
     current: new Map(),
+    /** frameId -> loader id of its current (committed) document. */
+    loaders: new Map(),
     /** Raw console errors, classified only once the probed frame is known. */
     console: [],
     failures: [],
@@ -101,6 +107,7 @@ function networkListeners(ledger, session) {
     }),
     session.listen('Page.frameNavigated', ({ frame }) => {
       ledger.current.set(frame.id, `${frame.url}${frame.urlFragment ?? ''}`);
+      ledger.loaders.set(frame.id, frame.loaderId);
     }),
   ];
 }
@@ -247,6 +254,13 @@ export async function trackFrames(page, allowed) {
     };
   }
 
+  /** Resolve once `frameId` has committed the document of navigation request `requestId`. */
+  async function committed(frameId, requestId, ms, label) {
+    await waitFor(() => ledger.loaders.get(frameId) === requestId, ms, label).catch((error) => {
+      throw new Error(`${label} uncommitted`, { cause: error });
+    });
+  }
+
   /**
    * Console errors by frame: a request id names its frame at report time; other rows carry the
    * frame their context or URL named when they arrived. Whatever is not the probed frame's is the
@@ -269,6 +283,7 @@ export async function trackFrames(page, allowed) {
     owner,
     known,
     nextDocument,
+    committed,
     consoleReport,
     failures: () => [...ledger.failures],
     /** Stop listening; the tab's browser is closed with its owner, auto-attach included. */

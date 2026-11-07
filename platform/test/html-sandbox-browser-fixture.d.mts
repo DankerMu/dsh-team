@@ -21,7 +21,10 @@ export interface FrameLoad {
   readonly location: string | null;
   readonly csp: string | null;
   readonly nosniff: string | null;
-  /** The first request's `sec-fetch-site` as sent, or null if Chrome reported no headers. */
+  /**
+   * The first request's `sec-fetch-site` as sent, or null: Chrome sends none to an origin that is
+   * not potentially trustworthy, or reported no headers. Evidence only.
+   */
   readonly secFetchSite: string | null;
   /** Whether the first request sent a cookie header (never its value), or null as above. */
   readonly cookie: boolean | null;
@@ -30,6 +33,8 @@ export interface FrameLoad {
   /** The route of the document the frame ended on. */
   readonly finalRoute: string;
   readonly probe: boolean;
+  /** Whether the probe script's first, synchronous statement marked the document. */
+  readonly ran: boolean;
   readonly result: ProbeScriptResult | null;
   /** Read in an isolated world of the frame on the session that owns it. */
   readonly originRead: OriginRead;
@@ -41,7 +46,8 @@ export interface FrameRound {
   readonly label: string;
   readonly preview: FrameLoad;
   readonly self: FrameLoad;
-  readonly browser: FrameLoad;
+  /** `blockedScripts`: the probed frame's blocked-script console entries during this load. */
+  readonly browser: FrameLoad & { readonly blockedScripts: number };
 }
 
 export interface SandboxStatusBar {
@@ -66,6 +72,14 @@ export interface HtmlSandboxObservation {
   readonly settings?: { readonly toggles: readonly SandboxToggle[]; readonly screenshot: string };
   readonly unlock?: {
     readonly sandbox: null;
+    readonly statusBar: SandboxStatusBar;
+    readonly screenshot: string;
+  };
+  /** Phase 2: after the status bar's 恢复沙箱 cleared the local unlock. */
+  readonly restore?: {
+    readonly sandbox: string | null;
+    /** The preview iframe is the same frame as before the click (not remounted). */
+    readonly sameFrame: boolean;
     readonly statusBar: SandboxStatusBar;
     readonly screenshot: string;
   };
