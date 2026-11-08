@@ -85,7 +85,7 @@
 
 ### Requirement: 旧格式只读预览与满员退路
 
-DOC、XLS、PPT MUST 只能只读预览，不能编辑。Document Server 达到连接上限时，员工 MUST 看到明确的提示，并且可以退回到同一文件的只读预览。预览 MUST 在员工自己的实例内完成转换，不访问外部服务。
+DOC、XLS、PPT MUST 只能只读预览，不能编辑。Document Server 达到连接上限时，员工 MUST 看到明确的提示，并且可以退回到同一文件的只读预览。DOC、PPT 的预览 MUST 在员工自己的实例内转换；XLS 由 DSH 的浏览器表格视图显示；两者都 MUST NOT 访问外部服务。
 
 #### Scenario: 旧格式只读
 

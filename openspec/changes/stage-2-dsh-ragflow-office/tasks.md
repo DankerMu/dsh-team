@@ -3412,7 +3412,7 @@ selected：
 - **Docker 用例**（`user-image.docker.test.ts` 新增一个 `it`；在 `user-image-fixture.ts` 新增 probe 成员 `office-convert`，不改 `offline-docx` 的行为）：
   - 现有 `Probe` 路径做不到实例同等限制：`create` 只带 `--network none`，入口固定是 `python3 -c`，`start --attach`/`wait` 上限 30s，未知 probe 会悄悄退回 `offlineDocxScript`（`user-image-fixture.ts:94,120-186`）。所以：
     - 未知 probe 改为抛错，不再退回；
-    - `office-convert` 的 `create` 带 `--user 1001`、`--network none`、`--memory 4g --memory-swap 4g`、`--pids-limit 512`、`--cpus 2`（默认 `cpuCores: 2`，`settings.ts:83`），`--security-opt seccomp=<交付的 images/seccomp/dsh-user.json 的内容>`（照现有 seccomp 用例的传法），`--mount type=bind,source=<repo>/platform/test/office-legacy,target=/fixtures,readonly`；
+    - `office-convert` 的 `create` 带 `--user 1001`、`--network none`、`--memory 4g --memory-swap 4g`、`--pids-limit 512`、`--cpus 2`（默认 `cpuCores: 2`，`settings.ts:83`），`--security-opt seccomp=<repo>/images/seccomp/dsh-user.json`（CLI 传文件路径，照 `web-startup-fixture.ts:429-430`；inspect 时照 `assertSecurity` 比对内容），`--mount type=bind,source=<repo>/platform/test/office-legacy,target=/fixtures,readonly`；
     - 入口为 `node --input-type=module -e <脚本>`；先 `start`，再有界 `wait`，上限 300s；
     - `create` 之后 inspect 一次，断言 `Memory`/`MemorySwap` 为 4294967296、`PidsLimit` 为 512、`NanoCpus` 为 2000000000、`NetworkMode` 为 `none`、seccomp 内容与文件一致（照 `web-startup-fixture.ts:275-284` 的 `assertSecurity`）、`/fixtures` 挂载只读。
   - 容器内脚本：
@@ -3421,17 +3421,18 @@ selected：
     - `discoverRuntime()` 的 backend 为 `wasm`；`createConverter()` 不传参数，与 `dsh-office-to-pdf` 的默认用法相同；
     - 输入：`/fixtures/probe.doc`、`/fixtures/probe.ppt`，以及 `execFileSync('python3', ['-c', offlineDocxScript])` 生成的 `/data/work/offline.docx`（标记为既有的「离线办公验证」等段落）。输出统一写到新建的 `/data/work/out/`，每个输出路径都事先不存在；
     - 每个输入做一次 `render`：PDF 以 `%PDF-` 开头、以 `%%EOF` 结尾，至少嵌入一个名字含 `CJK` 的 `/BaseFont`，`missingFonts` 为空数组；
-    - 每个输入做一次 `convert` 回读中文：DOC 转 txt 去掉 BOM 和 `\r` 后等于标记；DOCX 转 txt 包含 offline-docx 的全部标记段落；PPT 转 pptx 后用 python3 `zipfile`，只取 `^ppt/slides/slide\d+\.xml$`，按数字顺序，拼接其中 `<a:t>` 文本，等于标记；
+    - 每个输入做一次 `convert` 回读中文：DOC 转 txt 去掉 BOM、`\r` 和末尾换行后等于标记；DOCX 转 txt 包含 offline-docx 的全部标记段落；PPT 转 pptx 后用 python3 `zipfile`，只取 `^ppt/slides/slide\d+\.xml$`，按数字顺序，拼接其中 `<a:t>` 文本，等于标记；
     - 共 6 次转换，证据记录每次耗时、每个 PDF 的字节数、嵌入的 CJK 字体名、`missingFonts`；
-    - 再用两个转换器并行 `render` 同一个 DOCX 一次，模拟 `dsh-office-to-pdf` 的默认两路并发；
-    - 有 `/sys/fs/cgroup/memory.peak` 就记录，缺失不算失败（内核低于 5.19 没有这个文件）。
+    - 串行阶段结束后读一次 `/sys/fs/cgroup/memory.peak`（只增不减），记为单次峰值；
+    - 再用两个转换器并行 `render` 同一个 DOCX 一次，模拟 `dsh-office-to-pdf` 的默认两路并发。两路都必须成功；在 4GiB 下被 OOM 终止，就停下来报告，作为产品层面的发现，不放宽限制。之后再读一次 `memory.peak`，记为并发峰值；
+    - `memory.peak` 缺失不算失败（内核低于 5.19 没有这个文件），两次都记为 null。
   - 镜像大小：容器内用 `dpkg-query -W -f='${Installed-Size}'` 读两个字体包的安装大小并记录，它就是本任务带来的增量；再记录 `docker image inspect` 的 Size。
   - 红：VPS 无字体时的两条已有证据。一条是 #553 VPS 报告行 `preview=failed code=gateway/internal`；另一条是 #554 诊断评论，`render` 返回 `unavailable`：「No usable fonts were found」。新探针在本机跑不了（linux/x64 守卫）。
   - 构建期字体门禁的拒绝用例：在 `user-image.docker.test.ts:477-539` 的 `it.each` 加一行，从 primary 副本的 apt 行去掉 `fonts-noto-cjk`，期望输出 `preview fonts missing: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`。
 - **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。`observeDocx`（`better-sidebar-browser-fixture.mjs:209-240`）只有在有可见页面 canvas、且没有 failed/alert 时才判为 `rendered`。现在断言 `state === 'rendered'`、`code` 为 undefined、页数至少 1。报告行保留 `pages=`。`fontWarning` 照常记录，不断言：python-docx 模板请求 Calibri，镜像里没有它的替代字体。`:148` 的注释同步改写。
 - **文档（编排者同 PR 改）**：
   - `platform/test/README.md`：用户镜像段写字体与新 probe；
-  - `docs/DEPLOY.md`：在资源相关处写实测数值，不给阈值：DOC/PPT/DOCX 只读预览在实例内转换，单次 cgroup 峰值（本探针记录的数值）不含 DSH 常驻内存，DSH 默认最多两路并发；被 OOM 终止会连带 DSH 进程；
+  - `docs/DEPLOY.md`：在资源相关处写实测数值，不给阈值：DOC/PPT/DOCX 只读预览在实例内转换，单次和两路并发的 cgroup 峰值（本探针记录的两个数值），不含 DSH 常驻内存，DSH 默认最多两路并发；被 OOM 终止会连带 DSH 进程；
   - `platform/test/office-legacy/README.md`：编排者提供。
 
 must-preserve：
