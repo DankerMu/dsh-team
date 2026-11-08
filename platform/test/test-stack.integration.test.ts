@@ -601,6 +601,59 @@ it('retains the journal when the post-retirement label inventory still lists a r
   }
 });
 
+it('retains the journal when a resource still lists under its record ownership after retirement', async () => {
+  const runId = randomUUID();
+  const inventories: string[] = [];
+  const result = await run({
+    spawnCases: (env) => {
+      const target = {
+        kind: 'volume',
+        name: 'dsh-team-home-u1',
+        ownership: { 'dsh-team.user': 'u1' },
+      };
+      appendFileSync(
+        env.DSH_TEAM_CI_RESOURCE_JOURNAL ?? '',
+        `${JSON.stringify({ runId, target })}\n`,
+      );
+      return settled(0);
+    },
+    // Retirement finds the registered volume absent; only its own ownership label still lists one.
+    answer: (args) => {
+      if (args.includes('ls')) {
+        inventories.push(args.join(' '));
+        const employee = args[0] === 'volume' && args.at(-1) === 'label=dsh-team.user=u1';
+        return dockerInfo(employee ? 'dsh-team-home-u1\n' : '');
+      }
+      if (args[0] !== 'volume') return undefined;
+      return { status: 1, stdout: '', stderr: 'Error: No such volume: dsh-team-home-u1\n' };
+    },
+  });
+  try {
+    const inventory = (filter: string) => [
+      `container ls --all --quiet --no-trunc ${filter}`,
+      `network ls --quiet --no-trunc ${filter}`,
+      `volume ls --quiet ${filter}`,
+      `image ls --all --quiet --no-trunc ${filter}`,
+    ];
+    expect(inventories).toEqual([
+      ...inventory(`--filter label=${OWNER_LABEL}=${runId}`),
+      ...inventory('--filter label=dsh-team.user=u1'),
+    ]);
+    expect(result).toMatchObject({
+      code: 1,
+      stderr: [
+        runLine(result.runDir),
+        `test:stack cleanup failed (1); journal retained at ${result.runDir}\n`,
+      ],
+    });
+    expect(readFileSync(join(result.runDir, 'cleanup.journal'), 'utf8')).toContain(
+      'dsh-team-home-u1',
+    );
+  } finally {
+    await rm(result.runDir, { recursive: true, force: true });
+  }
+});
+
 it('retains the journal without reading or retiring it when the case launch rejects', async () => {
   const retire = vi.fn<Retire>(() => Promise.resolve());
   const result = await run({

@@ -173,14 +173,27 @@ function caseStatus({ code, signal }) {
 
 /**
  * Read-only: a killed CLI's daemon-side creation can land after exact retirement, and the local
- * lane has no submission ledger. Every journal run label must list nothing afterwards.
+ * lane has no submission ledger. Every journal run label, then every distinct record ownership
+ * not equal to one, must list nothing afterwards; multiple label filters all have to match.
  * @param {DockerCommands} commands
  * @param {readonly import('../platform/test/docker-cleanup.ts').CleanupJournalEntry[]} entries
  * @param {unknown[]} failures
  */
 function requireEmptyInventory(commands, entries, failures) {
-  for (const runId of new Set(entries.map((entry) => entry.runId))) {
-    const filter = ['--filter', `label=${OWNER_LABEL}=${runId}`];
+  /** @type {Map<string, [string, string][]>} */
+  const owners = new Map();
+  for (const ownership of [
+    ...entries.map(({ runId }) => ({ [OWNER_LABEL]: runId })),
+    // Absent ownership means the run label, as retirement reads it.
+    ...entries.map(({ runId, target }) => target.ownership ?? { [OWNER_LABEL]: runId }),
+  ]) {
+    const pairs = Object.entries(ownership).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    const key = JSON.stringify(pairs);
+    if (!owners.has(key)) owners.set(key, pairs);
+  }
+  for (const pairs of owners.values()) {
+    const filter = pairs.flatMap(([label, value]) => ['--filter', `label=${label}=${value}`]);
+    const labels = pairs.map(([label]) => label).join(', ');
     for (const args of [
       ['container', 'ls', '--all', '--quiet', '--no-trunc', ...filter],
       ['network', 'ls', '--quiet', '--no-trunc', ...filter],
@@ -189,7 +202,7 @@ function requireEmptyInventory(commands, entries, failures) {
     ]) {
       try {
         if (output(commands.command(args, 30_000), args).trim() !== '')
-          throw new Error(`Owned ${String(args[0])} remains after retirement`);
+          throw new Error(`Owned ${String(args[0])} remains after retirement (${labels})`);
       } catch (error) {
         failures.push(error);
       }
