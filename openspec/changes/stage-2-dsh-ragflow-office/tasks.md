@@ -4335,3 +4335,55 @@ Evidence (28.1):
 剩余风险：其他 Docker 构建器（旧版 builder）的目录遍历行为没有实测。仓库的构建全部走 BuildKit/buildx。
 
 Must preserve：`platform/Dockerfile` 的全部 COPY 能成功；运行时镜像内容；末尾全局排除（`**/.env`、`**/.env.*`、`**/.git`、`**/node_modules`、`**/.run`）；测试文件排除。
+
+## 29. 技术债 #483：`stopUserContainer` 在「容器已移除、自有网络未删」窗口内被调用方中止的回归测试
+
+依赖：无。由 #483 承载，处理方式同第 6 组。只加测试，不改生产代码。`platform/src/orchestrator/stop.test.ts` 在关键路径目录内，PR 说明逐行人工白盒审查推迟到 Epic #380 完成，尚未通过。（23–28 节在其他未合并的 PR 分支上。）
+
+- [ ] 29.1 published-loopback 模式，在精确用户容器已确认移除之后、`DELETE /networks/<START_NETWORK>` 之前，中止调用方信号。断言：
+  - `stopUserContainer` 以 `User container retirement failed` 拒绝；
+  - `DELETE /networks/<START_NETWORK>` 已发出，网络已不存在；
+  - 行与审计不变；
+  - 不带信号重试一次后，行为 `stopped`、`container_id` 为 null，审计恰好一条。
+
+  单元层（`stop.test.ts`）和 Unix 传输集成层（`container-stop.integration.test.ts`）各加一条。验证：把 `stop.ts:280` 的 `networkSignal = work.signal;` 删掉后，两条新用例都失败；恢复后通过。
+
+Suggested fixture level: compact - 只补已有取消安全的回归测试
+Minimal mergeable slice: atomic: 两条用例
+Risk packs (29.1): selected - Concurrency（中止落在容器已移除、网络删除之前的窗口）、Legacy compatibility（生产行为不变，现有用例不变）；not selected - Config、Schema、Auth、Public API、Error handling（拒绝消息不变）、File IO、Resource limits、Release、Migration、Documentation。
+Evidence (29.1):
+
+现状（main `0d87c77`）：
+
+- `platform/src/orchestrator/stop.ts:262-267`：`networkSignal` 初值为调用方合并信号，`networkClient` 把所有 Docker JSON 请求改用当时的 `networkSignal`。
+- `:278`：`remove(...)` 使用的就是 `networkClient`，所以容器删除后的核验仍用调用方信号。
+- `:280`：之后才执行 `networkSignal = work.signal;`，后续的 `removeUserNetwork`（`:294-304`，回调 `current(fenced, selection, networkSignal)` 在 `:299`；`network === undefined` 分支 `:281-292` 同样用 `networkSignal`）不再受调用方中止影响。
+- `:306`：`commit(fenced, selection, reason, signal, …)` 仍用调用方信号，所以在这个窗口里中止时，网络照样被删除，但提交会被拒绝。
+- 现有中止用例都不落在这个窗口里：
+  - `stop.test.ts:349-366` 在容器的 `DELETE` 上中止；
+  - `container-stop.integration.test.ts:393-420` 的四个阶段都在网络阶段之前；
+  - 这些用例也都不断言网络已被删除。
+
+触发点：容器已删除之后，第一个以 `/networks/` 开头的请求，在测试 daemon 的 `beforeRequest` 里中止调用方。
+
+- 记一个标志：先见到 `DELETE /containers/<START_CONTAINER>…`，此后第一个 `path.startsWith('/networks/')` 的请求触发 `controller.abort()`。
+- published-loopback 下 `verifiedPlatform` 不发请求（`transport.ts:24`），所以容器删除（`stop.ts:201`）和删除后核验（`:206`）之后的第一个请求，就是 `removeUserNetwork` 的 `GET /networks/<START_NETWORK>`（`networks.ts:414`），一定落在窗口内。必须先见到容器 `DELETE` 才置标志：删容器之前，`stop.ts:269` 和 `:190` 也会按名字发 `GET /networks/dsh-team-net-<user>`。
+- 删掉 `stop.ts:280` 后，`current()` 回调在 `networks.ts:436` 和 `:386` 先执行 `throwIfAborted`，都早于 `:395` 的网络 DELETE，所以网络 DELETE 不会发出、网络仍存在；拒绝消息两种情况下相同，只有网络断言变红。
+
+单元层（`stop.test.ts`，`indexedFixture` 为 published-loopback）：
+
+- 新用例紧跟 `:349` 那一条，写法与它相同。额外断言 `daemon.requests` 中有 `expect.objectContaining({ method: 'DELETE', path: '/networks/<START_NETWORK>' })`（元素带 `body`，`container-start-fixture.ts:460`），并且 `daemon.networks.has(START_NETWORK) === false`。
+- 之后 `expectIndexPreserved(database, before)`；清掉 `beforeRequest`，重试，再 `expectRetiredOnce(database)`。
+
+集成层（`container-stop.integration.test.ts`，真实 Unix 传输）：
+
+- 新用例复用 `:122-140` 的请求记录和 `DELETE /networks/<START_NETWORK>` 断言写法（`writes()`）。
+- 断言 `daemon.networks.has(START_NETWORK) === false`，`expectIndexUnchanged(before)`。重试后断言 `row()` 符合 `{ status: 'stopped', container_id: null }`，`audits()` 长度为 1。
+
+先红：在工作区临时删掉 `stop.ts:280` 那一行，跑两条新用例，贴出失败输出（预期是网络 `DELETE` 没有发出，或网络仍存在），然后恢复该行，`git diff platform/src/orchestrator/stop.ts` 为空。
+
+network 模式的孪生用例：不做（issue 列为可选）。`container-network-mode.integration.test.ts:139` 的断开取消用例最终由后继调用删除网络，不能证明这个窗口；本任务只按验收覆盖 published-loopback 的单元层和集成层。
+
+验证：`pnpm check`；先红后绿；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁；本机 exact-head `pnpm test:stack`，只是满足门禁。
+
+Must preserve：`stop.ts`、`networks.ts`、`reconcile.ts` 的生产代码；所有现有用例及其断言。
