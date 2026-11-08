@@ -3228,6 +3228,56 @@ Evidence (#555):
 - VPS exact-head `pnpm test:docker`（含新的浏览器用例，附截图和探测结果）和 `pnpm test:deploy`，清理已确认。
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 
+Risk packs (#523 网关保留路径按路由器的解码规则判断): fixture level standard（网关准入分类，不改鉴权）。
+
+已核实的事实（行号以 `main` 为准）：
+
+- `platform/src/gateway/routes.ts:43-46` 的 `platformPath(url)` 只对 `requestTarget(url)` 去掉 query，不解码。`admission(request)`（`:79-90`）对 HTTP 的 `/*` 兜底路由（`admit`）和 WebSocket upgrade（`admitUpgrade`，`:166-206`）共用这一判断。
+- Fastify 5 的路由器 find-my-way 9.9.0 在匹配前解码路径（`index.js:602-614`）：
+  - 除 `#$&+,/:;=?@` 外的 `%XX` 都按 `decodeURI` 解码（`lib/url-sanitizer.js`），例如 `%5F` → `_`、`%6d` → `m`；
+  - 无法解码的 `%` 序列走 `_onBadUrl`，Fastify 默认回 400，所以 HTTP 网关路由见不到它，只有 upgrade 会见到。
+- `decodeURI` 恰好不解码 `;/?:@&=+$,#` 这组保留字符的转义，与路由器的例外集合相同；遇到非法序列时抛 `URIError`。
+- 转发用的是原始目标（`http.ts` 的 `requestTarget(rawTarget)`），DSH 收到的仍是编码后的路径。
+
+selected：
+
+- **分类与路由器一致（`platform/src/gateway/routes.ts`）**：
+  - `platformPath` 先去掉 query，再对路径部分用 `decodeURI` 解码，然后判断：等于 `/healthz` 或 `/_platform`，或以 `/_platform/` 开头。
+  - `decodeURI` 抛错时按保留路径处理，返回 true（fail closed）：`admission` 回 404，HTTP 和 upgrade 都不转发、不鉴权。
+  - HTTP 和 upgrade 继续共用这一个函数，不新增第二份分类逻辑。不新增状态码，所以路由 schema 和 `schemas/openapi.json` 不变。
+  - `%2F` 等保留字符的转义保持不解码，与路由器一致：`/_platform%2Fx` 两边都不算保留路径。大小写和重复斜杠仍与路由器一致，不处理。
+- **单元测试**：`platformPath` 如有导出需要，照 `isImmutableAsset` 的做法导出并配单测；否则在集成测试覆盖。每行写死期望值：
+  - 保留：`/_platform`、`/_platform/x`、`/%5Fplatform/missing`、`/_platfor%6d/missing`、`/%5F%70latform`、`/%68ealthz`、`/healthz?x=1`、绝对形式 `http://h/%5Fplatform/x`、非法 `/%E0%A4%A`、`/%zz`；
+  - 不保留：`/`、`/_platformx`、`/_platform%2Fx`、`/_PLATFORM/x`、`/x/_platform`、`/healthzx`。
+- **集成测试（`platform/test/gateway-http.integration.test.ts` 和 WebSocket 集成测试，沿用 stub upstream）**：
+  - 带有效会话的 `GET /%5Fplatform/missing`、`GET /_platfor%6d/missing` 返回平台 404，上游收不到请求。不带会话时同样返回 404，不再是 401 或跳转登录页。
+  - `GET /%68ealthz` 由健康检查路由应答（路由器解码后命中已声明路由），上游收不到请求。
+  - 带有效会话、Origin 正确的 WebSocket upgrade 到 `/%5Fplatform/x`、`/%68ealthz` 和非法 `%` 序列路径，都被 `rejectUpgrade(404)` 拒绝，上游收不到连接。
+  - 先红后绿：修改前这些编码变体会被转发或回 401。
+  - 现有 `/_platform/missing` 和 RAGFlow 实例接口前缀的用例不变。
+
+must-preserve：
+
+- 规范写法的分类结果不变；已声明的平台路由仍由路由器匹配，各自的钩子照常执行。
+- `installRequestGuard` 和 session-heal 不在范围内（#523 已核实它们看的是 `routeOptions.url`）。
+- 网关其他响应头和转发行为不变。
+
+not selected：Schema、API、迁移：无。
+
+剩余风险：
+
+- DSH 自己是否解码 `%2F`：保留字符转义的路径仍会转发给员工自己的实例，与路由器的行为一致，不跨用户。
+
+Governing invariant：路由器视为保留命名空间（`/healthz`、`/_platform` 及其后代）的任何请求目标，网关都不转发给实例；解码失败的目标也不转发。
+
+Sibling surfaces：`isWorkspaceDocument`（#555，用 DSH 自己的规则判断 `/sidebar/file`）；RAGFlow 实例接口前缀（#413）。
+
+Evidence (#523):
+
+- 本机：`pnpm check`；单元测试和集成测试先红后绿。
+- VPS exact-head `pnpm test:docker` 和 `pnpm test:deploy`（例行回归），清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+
 Risk packs (17.3 HTML 预览沙箱，#431): fixture level expanded（与 issue 建议一致）。用户决定（2026-11-07，两次提问）：
 
 - 范围扩到 `plugins/platform-nav/` 客户端，照 #509 的做法显示受管锁定；
