@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Response } from '@playwright/test';
-import { recordAuditEvent } from '../src/audit/index.ts';
+import { PROFILE_INCOMPATIBLE, recordAuditEvent } from '../src/audit/index.ts';
 import {
   expectNoBrowserStorage,
   expectNoScriptVisibleCookie,
@@ -26,6 +26,19 @@ test('administrator opens the built audit page and sees a real stored event', as
       sourceAddress: '192.0.2.76',
       details: { reason: 'admin' },
     });
+    recordAuditEvent(database, {
+      type: 'instance.start-failed',
+      createdAt: 1_900_000_000_001,
+      targetEmail: target.email,
+      target: 'audit-coded-failure',
+      details: { code: PROFILE_INCOMPATIBLE },
+    });
+    recordAuditEvent(database, {
+      type: 'instance.start-failed',
+      createdAt: 1_900_000_000_002,
+      targetEmail: target.email,
+      target: 'audit-uncoded-failure',
+    });
     const before = readAuditSnapshot(database);
     const { url, actionResponses, otherMutations, screenshot, expectHealthy } = observeAuditUi(
       page,
@@ -42,6 +55,16 @@ test('administrator opens the built audit page and sees a real stored event', as
     await expect(event).toContainText(admin.email);
     await expect(event).toContainText(target.email);
     await expect(event).toContainText('192.0.2.76');
+    await expect(page.getByRole('columnheader', { name: '细节', exact: true })).toBeVisible();
+    for (const [failure, detail] of [
+      ['audit-coded-failure', '旧版 profile 不兼容'],
+      ['audit-uncoded-failure', '—'],
+    ] as const) {
+      const row = page.getByRole('row').filter({ hasText: failure });
+      await expect(row).toContainText('实例启动失败');
+      await expect(row.locator('td').last()).toHaveText(detail);
+    }
+    await expect(page.locator('body')).not.toContainText(PROFILE_INCOMPATIBLE);
     expect(actionResponses).toEqual([{ url, status: 200 }]);
     expect(otherMutations).toEqual([]);
     expectAuditUnchanged(database, before);

@@ -34,6 +34,10 @@ const STOP_NAMES: Record<string, string> = {
   disabled: '禁用',
   error: '出错',
 };
+// Browser code cannot import the backend; the closed start-failure code is a literal here.
+const FAILURE_CODE_NAMES: Record<string, string> = {
+  'profile-incompatible': '旧版 profile 不兼容',
+};
 interface AuditItem {
   id: number;
   createdAt: number;
@@ -42,7 +46,7 @@ interface AuditItem {
   targetEmail: string | null;
   target: string | null;
   sourceAddress: string | null;
-  details: { reason?: string };
+  details: { reason?: string; code?: string };
 }
 interface Filters {
   eventType: string;
@@ -113,14 +117,23 @@ function validTime(value: unknown): value is number {
     Math.abs(value) <= 8_640_000_000_000_000
   );
 }
+function closedField(value: object, field: string, names: Record<string, string>): boolean {
+  if (!(field in value)) return true;
+  const named: unknown = Reflect.get(value, field);
+  return typeof named === 'string' && Object.hasOwn(names, named);
+}
 function validDetails(value: unknown): value is AuditItem['details'] {
   return (
     typeof value === 'object' &&
     value !== null &&
     !Array.isArray(value) &&
-    (!('reason' in value) ||
-      (typeof value.reason === 'string' && Object.hasOwn(STOP_NAMES, value.reason)))
+    closedField(value, 'reason', STOP_NAMES) &&
+    closedField(value, 'code', FAILURE_CODE_NAMES)
   );
+}
+function detailText({ reason, code }: AuditItem['details']): string {
+  if (reason !== undefined) return presentation(STOP_NAMES, reason);
+  return code === undefined ? '—' : presentation(FAILURE_CODE_NAMES, code);
 }
 function validItem(value: unknown): value is AuditItem {
   if (typeof value !== 'object' || value === null) return false;
@@ -363,13 +376,11 @@ function AuditRows({ items }: { items: AuditItem[] }) {
       <table aria-label="审计记录">
         <thead>
           <tr>
-            {['时间', '事件', '操作者邮箱', '对象邮箱', '对象', '来源地址', '停止原因'].map(
-              (name) => (
-                <th key={name} scope="col">
-                  {name}
-                </th>
-              ),
-            )}
+            {['时间', '事件', '操作者邮箱', '对象邮箱', '对象', '来源地址', '细节'].map((name) => (
+              <th key={name} scope="col">
+                {name}
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
@@ -385,11 +396,7 @@ function AuditRows({ items }: { items: AuditItem[] }) {
                 <td>{item.targetEmail ?? '—'}</td>
                 <td>{item.target ?? '—'}</td>
                 <td>{item.sourceAddress ?? '—'}</td>
-                <td>
-                  {item.details.reason === undefined
-                    ? '—'
-                    : presentation(STOP_NAMES, item.details.reason)}
-                </td>
+                <td>{detailText(item.details)}</td>
               </tr>
             );
           })}

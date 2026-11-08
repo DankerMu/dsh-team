@@ -1,4 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
+import { PROFILE_INCOMPATIBLE } from '../audit/index.ts';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import { modelConfigRoutes } from './model-config.ts';
@@ -15,6 +16,7 @@ import { accountStatusRoutes } from './account-status.ts';
 import { passwordResetRoutes } from './password-reset.ts';
 import { instanceActionRoutes } from './instance-actions.ts';
 import { auditEventRoutes } from './audit-events.ts';
+import { lastErrorCode } from '../orchestrator/index.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
 import { readPluginCatalog } from '../plugin-catalog/index.ts';
 import type { PluginCatalog } from '../plugin-catalog/index.ts';
@@ -70,7 +72,15 @@ const ACCOUNT_SCHEMA = {
 const INSTANCE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['userId', 'email', 'status', 'lastStartedAt', 'lastActivityAt', 'lastError'],
+  required: [
+    'userId',
+    'email',
+    'status',
+    'lastStartedAt',
+    'lastActivityAt',
+    'lastError',
+    'lastErrorCode',
+  ],
   properties: {
     userId: { type: 'string' },
     email: { type: 'string' },
@@ -78,6 +88,7 @@ const INSTANCE_SCHEMA = {
     lastStartedAt: { type: ['integer', 'null'] },
     lastActivityAt: { type: ['integer', 'null'] },
     lastError: { type: ['string', 'null'] },
+    lastErrorCode: { type: ['string', 'null'], enum: [PROFILE_INCOMPATIBLE, null] },
   },
 } as const;
 const ACCOUNT_FILTER = ' FROM users WHERE instr(email, ?) > 0';
@@ -201,7 +212,12 @@ export const adminRoutes: FastifyPluginCallback<{
             FROM users LEFT JOIN instances ON instances.user_id = users.id
             ORDER BY users.created_at DESC, users.id DESC`,
           )
-          .all();
+          .all()
+          .map((row) => ({
+            ...row,
+            // Only a current failure asks for a reset; a reset stop keeps the log but not the hint.
+            lastErrorCode: row.status === 'error' ? lastErrorCode(row.lastError) : null,
+          }));
         return { items };
       } catch {
         app.log.error('Administrator instance query storage failure');

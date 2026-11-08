@@ -15,6 +15,7 @@ interface InstanceRow {
   lastStartedAt: number | null;
   lastActivityAt: number | null;
   lastError: string | null;
+  lastErrorCode: typeof PROFILE_INCOMPATIBLE | null;
 }
 interface ReadAttempt {
   controller: AbortController;
@@ -24,6 +25,9 @@ interface Selection {
   row: InstanceRow;
   action: 'restart' | 'reset-config';
 }
+// Browser code cannot import the backend; the closed code and its fixed hint are literals here.
+const PROFILE_INCOMPATIBLE = 'profile-incompatible';
+const PROFILE_HINT = '该用户的 DSH 配置来自旧版本，需要执行“重置配置”';
 const ACTION_FAILURE = '操作失败，状态可能已变更；请查看刷新后的实例状态，再决定是否重试。';
 const RESTART_NAMES: Record<string, string> = {
   ...STATUS_NAMES,
@@ -96,8 +100,15 @@ function validRow(value: unknown): value is InstanceRow {
     !Object.hasOwn(STATUS_NAMES, value.status)
   )
     return false;
-  if (!validTimes(value)) return false;
-  return 'lastError' in value && (value.lastError === null || typeof value.lastError === 'string');
+  return validTimes(value) && validError(value);
+}
+function validError(value: object): boolean {
+  return (
+    'lastError' in value &&
+    (value.lastError === null || typeof value.lastError === 'string') &&
+    'lastErrorCode' in value &&
+    (value.lastErrorCode === null || value.lastErrorCode === PROFILE_INCOMPATIBLE)
+  );
 }
 function readRows(value: unknown): InstanceRow[] {
   if (
@@ -383,6 +394,9 @@ function InstanceView({
                                 {action === 'restart' ? '重启' : '重置配置'}
                               </button>
                             ))}
+                            {row.lastErrorCode === PROFILE_INCOMPATIBLE && (
+                              <p className="instance-hint">{PROFILE_HINT}</p>
+                            )}
                           </td>
                         </tr>
                       ))}

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { recordAuditEvent } from '../audit/index.ts';
+import { PROFILE_INCOMPATIBLE, recordAuditEvent } from '../audit/index.ts';
 import { readSettings } from '../db/index.ts';
 import type { Settings } from '../db/index.ts';
 import {
@@ -58,6 +58,8 @@ import {
   recoverCreationAttempt,
 } from './creation-attempt.ts';
 import type { CreationAttempt } from './creation-attempt.ts';
+import { LOG_TIMEOUT_MS, startupLogTail } from './readiness-logs.ts';
+import { withFailureCode } from './start-failure.ts';
 
 // Composition may load the installed Web profile; a hung helper must not retain home access.
 const START_TIMEOUT_MS = 60_000;
@@ -172,8 +174,16 @@ async function compensateStarted(
   };
   const persistenceSignal = new AbortController().signal;
   let outcome = 'started container compensation failed or unconfirmed';
+  let incompatible = false;
   try {
     current();
+    // Read-only, before removal; a failed or late read classifies only lines it already completed.
+    ({ profileIncompatible: incompatible } = await startupLogTail(
+      input.client,
+      id,
+      AbortSignal.any([signal, AbortSignal.timeout(LOG_TIMEOUT_MS)]),
+      [],
+    ));
     const network = await captureUserNetwork(
       client,
       input.userId,
@@ -235,12 +245,17 @@ async function compensateStarted(
       .prepare(
         "UPDATE instances SET status = 'error', dsh_cookie = NULL, instance_token_hash = NULL, last_error = ? WHERE user_id = ? AND container_id = ?",
       )
-      .run(`Platform attachment/startup failed; ${outcome}`, input.userId, id);
+      .run(
+        withFailureCode(`Platform attachment/startup failed; ${outcome}`, incompatible),
+        input.userId,
+        id,
+      );
     recordAuditEvent(input.database, {
       type: 'instance.start-failed',
       createdAt: Date.now(),
       targetEmail: String(account.email),
       target: input.userId,
+      ...(incompatible ? { details: { code: PROFILE_INCOMPATIBLE } } : {}),
     });
   })();
   return outcome;

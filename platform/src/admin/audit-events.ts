@@ -1,5 +1,11 @@
 import type { FastifyPluginCallback } from 'fastify';
-import { queryAuditEvents, validateStopReason } from '../audit/index.ts';
+import {
+  PROFILE_INCOMPATIBLE,
+  queryAuditEvents,
+  validateFailureCode,
+  validateStopReason,
+} from '../audit/index.ts';
+import type { InstanceStopReason } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import { ERROR_SCHEMA } from './config-route.ts';
 
@@ -35,16 +41,27 @@ const ITEM_SCHEMA = {
     details: {
       type: 'object',
       additionalProperties: false,
-      properties: { reason: { type: 'string', enum: ['idle', 'admin', 'disabled', 'error'] } },
+      properties: {
+        reason: { type: 'string', enum: ['idle', 'admin', 'disabled', 'error'] },
+        code: { type: 'string', enum: [PROFILE_INCOMPATIBLE] },
+      },
     },
   },
 } as const;
 const TIME_SCHEMA = { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER } as const;
 
 function projectDetails(value: unknown) {
-  if (typeof value !== 'object' || value === null || !('reason' in value)) return {};
-  validateStopReason(value.reason);
-  return { reason: value.reason };
+  const projected: { reason?: InstanceStopReason; code?: typeof PROFILE_INCOMPATIBLE } = {};
+  if (typeof value !== 'object' || value === null) return projected;
+  if ('reason' in value) {
+    validateStopReason(value.reason);
+    projected.reason = value.reason;
+  }
+  if ('code' in value) {
+    validateFailureCode(value.code);
+    projected.code = value.code;
+  }
+  return projected;
 }
 
 export const auditEventRoutes: FastifyPluginCallback<{ database: DatabaseHandle }> = (

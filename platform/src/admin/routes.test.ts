@@ -101,6 +101,7 @@ it('reads fresh persisted instance history on every administrator request', asyn
       lastStartedAt: null,
       lastActivityAt: null,
       lastError: null,
+      lastErrorCode: null,
     };
     const missing = await app.inject({ url: INSTANCES_PATH, headers: { cookie } });
     expect(missing.statusCode).toBe(200);
@@ -144,3 +145,48 @@ it('reads fresh persisted instance history on every administrator request', asyn
     });
   });
 });
+
+it.each([
+  [
+    'error',
+    'profile-incompatible\nDSH readiness failed; container stopped',
+    'profile-incompatible',
+  ],
+  ['error', 'profile-incompatible', 'profile-incompatible'],
+  ['error', 'DSH readiness failed; container stopped\nprofile-incompatible', null],
+  ['error', 'profile-incompatible-other\nDSH readiness failed', null],
+  ['error', null, null],
+  // Reset stops through stop('admin'), which keeps the diagnostic log: no reset hint any more.
+  ['stopped', 'profile-incompatible\nDSH readiness failed; container stopped', null],
+  ['starting', 'profile-incompatible\nDSH readiness failed; container stopped', null],
+  ['running', 'profile-incompatible\nDSH readiness failed; container stopped', null],
+] as const)(
+  'projects lastErrorCode only for an error row: %s %j',
+  async (status, lastError, expected) => {
+    await withApp(async (app, database) => {
+      const { user, cookie } = await administrator(app, database);
+      database
+        .prepare('INSERT INTO instances(user_id,status,last_error) VALUES (?,?,?)')
+        .run(user.id, status, lastError);
+      const before = JSON.stringify(database.prepare('SELECT * FROM instances').all());
+
+      const response = await app.inject({ url: INSTANCES_PATH, headers: { cookie } });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        items: [
+          {
+            userId: user.id,
+            email: user.email,
+            status,
+            lastStartedAt: null,
+            lastActivityAt: null,
+            lastError,
+            lastErrorCode: expected,
+          },
+        ],
+      });
+      expect(JSON.stringify(database.prepare('SELECT * FROM instances').all())).toBe(before);
+    });
+  },
+);

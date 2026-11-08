@@ -7,8 +7,14 @@ import { performance } from 'node:perf_hooks';
 import { expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
-import { createOrchestrator } from '../src/orchestrator/index.ts';
+import {
+  createOrchestrator,
+  lastErrorCode,
+  PROFILE_REJECTION_MARKERS,
+} from '../src/orchestrator/index.ts';
+import type { Orchestrator } from '../src/orchestrator/index.ts';
 import {
   bridgeAddress,
   createStandInPlatform,
@@ -302,13 +308,61 @@ function skippedBeforeReset(lifecycle: UserImageLifecycle): Record<string, unkno
 import json, subprocess
 run = subprocess.run(["dsh", "--profile", "web", "--dump-default-config"], capture_output=True, timeout=60)
 lines = run.stderr.decode("utf-8", "replace").splitlines()
-print(json.dumps({"exit": run.returncode, "skippingBundle": any(line.startswith("dsh: skipping profile bundle") for line in lines)}))
+print(json.dumps({"exit": run.returncode, "skippingBundle": any(line.startswith(${JSON.stringify(PROFILE_REJECTION_MARKERS[0])}) for line in lines)}))
 `,
         ],
         90_000,
       ),
     ),
   );
+}
+
+/**
+ * The stage-1 volume started as-is on 0.2.1 fails as profile-incompatible and is never reset
+ * automatically. Readiness failure keeps the stopped container (its logs hold the launch token);
+ * compensation already removed it. An explicit admin stop retires it before the reset needs it gone.
+ */
+async function startBeforeReset(
+  owner: Orchestrator,
+  lifecycle: UserImageLifecycle,
+  database: DatabaseHandle,
+  userId: string,
+): Promise<{ status: unknown; code: string | null }> {
+  const outcome = await startDockerInstance(owner, lifecycle, userId, AUTHORITY).then(
+    () => 'started',
+    () => 'failed',
+  );
+  expect(outcome).toBe('failed');
+  const row = record(database.prepare('SELECT * FROM instances WHERE user_id=?').get(userId));
+  expect(row.status).toBe('error');
+  expect(row.dsh_cookie).toBeNull();
+  if (typeof row.last_error !== 'string') throw new Error('Missing pre-reset startup diagnostic');
+  const code = lastErrorCode(row.last_error);
+  expect(code).toBe('profile-incompatible');
+  const audit = record(
+    database
+      .prepare(
+        "SELECT details FROM audit_events WHERE event_type='instance.start-failed' AND target=? ORDER BY id DESC LIMIT 1",
+      )
+      .get(userId),
+  );
+  expect(audit.details).toBe('{"code":"profile-incompatible"}');
+  const evidence = `${row.last_error}\n${String(audit.details)}`;
+  expect(evidence).not.toMatch(/dsh\s+web|token\s*[:=]|dsh-auth-/i);
+  if (typeof row.container_id === 'string') {
+    const logs = await lifecycle.commandAsync(['logs', '--tail', '1000', row.container_id], 15_000);
+    for (const [, token] of `${logs.stdout}${logs.stderr}`.matchAll(/token=([A-Za-z0-9_-]{16,})/g))
+      if (token !== undefined) expect(evidence.includes(token)).toBe(false);
+  }
+  await owner.stopUserContainer({ userId, reason: 'admin' });
+  const name = `dsh-team-u-${userId}`;
+  expect(
+    isAbsentResource(lifecycle.command(['container', 'inspect', name], 15_000), 'container', name),
+  ).toBe(true);
+  expect(
+    database.prepare('SELECT status, container_id FROM instances WHERE user_id=?').get(userId),
+  ).toEqual({ status: 'stopped', container_id: null });
+  return { status: row.status, code };
 }
 
 async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
@@ -342,6 +396,7 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
     // A stage-1 account at rest: a stopped row without a container, as retirement leaves it.
     database.prepare("INSERT INTO instances(user_id,status) VALUES (?,'stopped')").run(userId);
     createStandInPlatform(lifecycle, platformName);
+    const beforeReset = await startBeforeReset(owner, lifecycle, database, userId);
     const restore = () =>
       owner.restoreUserProfiles({
         userId,
@@ -414,6 +469,7 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
       },
       skippedBeforeReset: dump.skippingBundle,
       dumpExit: dump.exit,
+      startBeforeReset: beforeReset,
       profilesEqual: true,
       markerIntact: true,
       sessionReadable: true,
@@ -446,6 +502,7 @@ it('resets a stage-1 DSH 0.2.0-rc.2 volume pair to the 0.2.1-rc.2 seed and keeps
     expect(JSON.parse(summary)).toMatchObject({
       stage1: { dsh: '0.2.0-rc.2' },
       skippedBeforeReset: true,
+      startBeforeReset: { status: 'error', code: 'profile-incompatible' },
       profilesEqual: true,
       markerIntact: true,
       sessionReadable: true,

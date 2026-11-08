@@ -1,11 +1,12 @@
 import { request } from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
-import { recordAuditEvent } from '../audit/index.ts';
+import { PROFILE_INCOMPATIBLE, recordAuditEvent } from '../audit/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { AcquireDshCookieInput, IndexedInstance } from './credentials.ts';
 import { acquireCurrentDshCookie, CURRENT_INSTANCE, currentInstance } from './credentials.ts';
-import { startupLogTail } from './readiness-logs.ts';
+import { LOG_TIMEOUT_MS, startupLogTail } from './readiness-logs.ts';
+import { withFailureCode } from './start-failure.ts';
 import { inspectUserContainerEndpoint, inspectUserContainerState } from './start-identity.ts';
 import { removeUserNetwork, validateUserNetwork } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
@@ -14,7 +15,6 @@ import { upstreamHost } from './transport.ts';
 
 const READINESS_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
-const LOG_TIMEOUT_MS = 3_000;
 const POLL_INTERVAL_MS = 250;
 
 interface Selection {
@@ -249,7 +249,7 @@ async function fail(selection: Selection, reason: string): Promise<string> {
   }, LOG_TIMEOUT_MS);
   const signal = cleanup.signal;
   let stop = 'container already stopped';
-  let tail: string[];
+  let tail: Awaited<ReturnType<typeof startupLogTail>>;
   try {
     if (!cleanupCurrent(selection)) return 'newer credential preserved';
     tail = await startupLogTail(
@@ -283,7 +283,8 @@ async function fail(selection: Selection, reason: string): Promise<string> {
     if (!cleanupCurrent(selection)) return 'newer credential preserved';
     if (stop !== 'container stop failed or unconfirmed')
       stop = `${stop}; ${await cleanupNetwork(selection, signal)}`;
-    const lastError = `${reason}; ${stop}\n${tail.join('\n')}`;
+    const incompatible = tail.profileIncompatible;
+    const lastError = withFailureCode(`${reason}; ${stop}\n${tail.lines.join('\n')}`, incompatible);
     selection.input.database.transaction(() => {
       const { email } = current(selection);
       if (!cleanupCurrent(selection)) throw new Error();
@@ -299,6 +300,7 @@ async function fail(selection: Selection, reason: string): Promise<string> {
         createdAt: Date.now(),
         targetEmail: email,
         target: selection.input.userId,
+        ...(incompatible ? { details: { code: PROFILE_INCOMPATIBLE } } : {}),
       });
     })();
     return stop;

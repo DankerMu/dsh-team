@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { observeAccountUi, withAccountUiRouteCleanup } from './account-ui-fixture.ts';
+import {
+  expectViewportLayout,
+  observeAccountUi,
+  withAccountUiRouteCleanup,
+} from './account-ui-fixture.ts';
+import { readPublicIdentity } from './auth-fixture.ts';
 import {
   ADMIN_UI_PASSWORD,
   withAdminUi,
@@ -130,5 +135,64 @@ test('current administrator revocation at confirmation rejects the real reset wi
     );
     await observed.screenshot('instances-reset-current-authority');
     observed.expectHealthy([{ url: reset, status: 403 }]);
+  });
+});
+
+test('only a current profile-incompatible error row shows the fixed reset hint beside its reset action', async ({
+  page,
+  playwright,
+}, testInfo) => {
+  await withAdminUi(playwright, page, async ({ baseUrl, database, seed, target }) => {
+    const hint = '该用户的 DSH 配置来自旧版本，需要执行“重置配置”';
+    const coded =
+      'profile-incompatible\nDSH readiness failed during startup; container stopped; owned network removed\ndsh: skipping profile bundle "@deepseek-ai/dsh-web-app": incompatible';
+    const insert = database.prepare(
+      'INSERT INTO instances(user_id,status,last_error) VALUES (?,?,?)',
+    );
+    insert.run(target.id, 'error', coded);
+    const others = [
+      ['plain-error', 'error', 'DSH readiness failed: deadline or cancellation; container stopped'],
+      // A reset stops through stop('admin') and keeps the coded diagnostic: no hint once stopped.
+      ['reset-stopped', 'stopped', coded],
+    ] as const;
+    for (const [name, status, lastError] of others) {
+      const registered = await seed.post('/_platform/api/register', {
+        data: { email: `${name}@example.test`, password: ADMIN_UI_PASSWORD },
+      });
+      expect(registered.status()).toBe(201);
+      insert.run(readPublicIdentity(await registered.json()).id, status, lastError);
+    }
+    const url = `${baseUrl}${API}`;
+    const observed = observeAccountUi(page, testInfo, baseUrl, url);
+    const before = readAuditSnapshot(database);
+
+    await page.goto(`${baseUrl}${PAGE}`, { waitUntil: 'networkidle' });
+
+    const row = page.getByRole('row').filter({ hasText: target.email });
+    await expect(row.getByText(hint, { exact: true })).toBeVisible();
+    await expect(
+      row
+        .getByRole('button', { name: '重置配置', exact: true })
+        .locator('xpath=following-sibling::*[1]'),
+    ).toHaveText(hint);
+    await expect(page.getByText(hint, { exact: true })).toHaveCount(1);
+    for (const [name] of others)
+      await expect(
+        page.getByRole('row').filter({ hasText: `${name}@example.test` }),
+      ).not.toContainText(hint);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await observed.screenshot('instances-profile-incompatible-hint');
+    await expectViewportLayout(
+      page,
+      observed.screenshot,
+      'glass-admin-instances-profile-hint',
+      async () => {
+        await expect(row.getByText(hint, { exact: true })).toBeVisible();
+      },
+    );
+    expectAuditUnchanged(database, before);
+    expect(observed.actionRequests).toEqual([{ url, method: 'GET' }]);
+    expect(observed.otherMutations).toEqual([]);
+    observed.expectHealthy([]);
   });
 });

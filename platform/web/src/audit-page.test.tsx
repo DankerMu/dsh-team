@@ -194,6 +194,9 @@ it.each([
     { ...ITEM, details: [] },
     { ...ITEM, details: { reason: 'constructor' } },
     { ...ITEM, details: { reason: 42 } },
+    { ...ITEM, details: { code: 'other-code' } },
+    { ...ITEM, details: { code: null } },
+    { ...ITEM, details: { code: ['profile-incompatible'] } },
     { id: 7 },
     { id: 7, createdAt: 0 },
     { id: 7, createdAt: 0, type: 'login.failed' },
@@ -205,6 +208,25 @@ it.each([
   expect(view.textContent).toContain('加载失败');
   expect(view.querySelector('table')).toBeNull();
   expect(view.textContent).not.toContain('暂无审计记录');
+});
+
+it('names the closed profile-incompatible start failure code and keeps an uncoded failure as —', async () => {
+  const failed = { ...ITEM, type: 'instance.start-failed' };
+  const items = [
+    { ...failed, id: 2, details: { code: 'profile-incompatible' } },
+    { ...failed, id: 1, details: {} },
+  ];
+  const { view } = await ready(
+    vi.fn<typeof fetch>().mockResolvedValue(receipt({ ...LIST, items })),
+  );
+
+  const cells = [...view.querySelectorAll('tbody tr')].map(
+    (row) => row.lastElementChild?.textContent,
+  );
+  expect(view.querySelector('thead th:last-child')?.textContent).toBe('细节');
+  expect(cells).toEqual(['旧版 profile 不兼容', '—']);
+  expect(view.textContent).not.toContain('profile-incompatible');
+  expect(view.textContent).not.toContain('加载失败');
 });
 
 it('renders nullable metadata and both representable Date-domain endpoints safely', async () => {
