@@ -4171,6 +4171,51 @@ Evidence (34.1):
 - 真实的红就是 stack 实验本身。如果 Chromium 153 上任一文件 `failed`、超时，或页数不是 1，就停下来，在本节追加实测记录并报告，不放宽判定。
 - blob 以外出现任何新的外部请求或失败请求，同样停下来报告。
 
+## 32. 技术债 #495：survivor 用例改用生产签发的 row cookie
+
+依赖：无。由 #495 承载，处理方式同第 6 组。VPS lane 本身就是实验：rebind 重启后，首次启动时 readiness 写进行里的 cookie 是否仍对新地址返回 200。
+
+- [ ] 32.1 `platform/test/container-reconcile.docker.test.ts` 的 `survivorScenario` 不再自己换 cookie，200 断言改用 `rowCookie` 读出的生产 cookie。验证：giap-vps exact-head custody `test:docker` 中该文件全部 4 个用例通过，summary 的 `authenticatedAfterRecreation` 为 200。
+
+Suggested fixture level: compact - 一个 Docker 测试文件内删去 fixture 自有的重复实现
+Minimal mergeable slice: atomic: 一个测试文件和一处 README 措辞
+Risk packs (32.1): selected - Auth（survivor 的 200 证据从 fixture 换的 cookie 改为生产 readiness 签发的 cookie；无 cookie 401 的断言保留）、Legacy compatibility（阶段 1 survivor 场景的步骤 (1)–(5) 与 summary 字段不变）、Documentation（`platform/src/managed-config/README.md:13`）；not selected - Config、Schema、Public API、Concurrency、File IO、Resource limits、Release。不改 `platform/src/` 代码；文件在 `platform/test/`，不属关键路径目录。
+Evidence (32.1):
+
+现状（main `c710f41`）：
+
+- `container-reconcile.docker.test.ts:535-600`：`EXCHANGE` 和 `exchangeSurvivorCookie` 从重启后的日志取新启动令牌，在平台容器里用 python 换 cookie。这重写了 `credentials.ts` 的 `exchange`/`authenticationCookie`，还省掉了过期校验。
+- `:652-660`：把换来的 cookie 用 `UPDATE instances SET dsh_cookie` 写回行，再拿它做 200 断言。
+- `:342-346`：`rebindSurvivorWeb` 的注释说单文件 bind「按 inode」。
+
+依据（#495，读 0.2.1 发行包源码，未实测）：
+
+- `dsh-client-connection` 的 `authenticate()`（lib/index.js:559-570）只校验签名、authority 和时间窗，不看进程级启动令牌。
+- 签名密钥由 `initializeSecret`（:391-404）从全局 credentials store 复用。全局 store 位于 `DSH_HOME=/data/home`（`start.ts:422`），该目录是 home 卷挂载（`start.ts:453`），restart 后仍在。
+- cookie 只绑定 Host authority（`survivor.example:8443`），与监听地址无关。启动令牌是进程级的（`:294-300`），但只在签发 cookie 时使用。
+- `cookieMaxAgeDays` 默认 30 天（`:1017/1030`），overlay 没有覆盖。用例只跑几分钟，碰不到过期。
+
+改动：
+
+- 删除 `EXCHANGE` 及其 python 换取。`exchangeSurvivorCookie` 改为 `awaitSurvivorLaunch(lifecycle, containerId, address)`，只保留原来 30s、250ms 间隔的启动行轮询，直到 `extractLaunchToken(logs.stdout, address) !== undefined` 才返回。它只用于就绪等待，不返回令牌，令牌也不离开函数。这样 restart 之后、200 断言之前仍有一次等待：发行版 Web 在宣告启动之前，路由可能还在组装（`web-startup-fixture.ts:183`）。docblock 改写为这层意思。
+- 删除 `:659` 的 `UPDATE instances SET dsh_cookie`。
+- 删除只被换取用到的 `createHash` 导入；`extractLaunchToken` 的导入保留，供 `awaitSurvivorLaunch` 使用。其他文件的导出不动。
+- `:637` 的 `rowCookie(database, user)` 结果保存为 `cookie`。步骤 (2) 的 200 断言、步骤 (3) 的 `before.row.dsh_cookie` 和 `survivor.cookie` 都用它。
+- 步骤 (2) 依次做三件事：先 `awaitSurvivorLaunch`；再断言原平台不带 cookie 访问新地址返回 401；最后带 row cookie 访问返回 200。
+- 步骤 (2) 处加一行注释：rebind 重启后，readiness 签发的 cookie 仍然有效，因为 DSH 只校验签名、authority 和时间窗，签名密钥在 home 卷的 `.credentials.yaml` 里。
+- `rebindSurvivorWeb` 注释改为：Docker 在容器启动时按路径解析单文件 bind，restart 会重新解析。所以容器并不依赖同一个 inode。原地写入是为了保持文件模式、属主和路径不变；写入后的 inode 断言保留，作为「没有改名」的证据。
+- `platform/src/managed-config/README.md:13`：「by rebinding the moved container's overlay to its new address and re-acquiring the cookie」整句改为「by rebinding the moved container's overlay to its new address, restarting it, and then requiring the readiness-issued row cookie to authenticate at that address」（编排者同 PR 改）。
+
+红先：本机没有 Docker，测不出红。这个改动删除的是 fixture 的旁路，所以「红」就是实验本身：如果 row cookie 在 rebind 重启后失效，步骤 (2) 的 200 断言会在 VPS 上失败。
+
+实验结果的处理：
+
+判读按启动行出现之后的两次请求：
+
+- 不带 cookie 得到 401、带 row cookie 得到 200：cookie 在重启后仍然有效，计划成立。
+- 401 之后仍是 401：cookie 失效。停下来，在本节追加实测记录，改走 #495 的备选方案。备选方案是保留换取，注释写明实测原因，cookie 截取改为复用生产导出。不得为了转绿重新加回 `UPDATE dsh_cookie`。这时 `before.row.dsh_cookie` 的期望用 `rowCookie` 的值，`survivor.cookie` 用换来的值，两者分开。
+- 启动行超时或连接失败：属于就绪问题，不触发备选方案，按普通失败诊断。
+
 验证：
 
 - `pnpm check`。
@@ -4545,3 +4590,14 @@ Evidence (31.1):
 - 同类问题不在本任务范围：前台运行的 `docker run`（不带 `--detach`）同样让 CLI 退出码跟随容器，而且 `run` 会记账。涉及 `container-create-recovery.docker.test.ts:88`、`container-network-mode.docker.test.ts:134`、`container-start-docker-fixture.ts:55`、`instance-idle-docker-fixture.ts:77/148`、`platform-stack.stack.test.ts:114`、`probe-cleanup.integration.test.ts:203`、`volume-upgrade.docker.test.ts:100/131/288`。另开 issue 跟进。
 
 Must preserve：各调用方的 stdout 内容和失败语义；超时上限不收紧；`scripts/docker-command.mjs` 不改。
+
+- giap-vps exact-head lane（custody `test:docker` 全量 + `test:deploy`），cleanup confirmed。
+- 本机 exact-head `pnpm test:stack`：仅为满足合并门禁。
+
+Must preserve：
+
+- `reconciliationScenario` 用例及其 summary；
+- survivor 场景的构造步骤、地址与 IPAM 断言、审计断言；
+- 无 cookie 401 的断言；
+- 所有自有资源的登记与清理；
+- 令牌和 cookie 永不进入输出。
