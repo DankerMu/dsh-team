@@ -4189,3 +4189,20 @@ Must preserve：
 
 - 渲染只在本机 Chromium 153 上证明，VPS 的 Chrome 140 由 #565 处理。
 - 表格单元格画在 canvas 上，用例只证明表格视图打开、工作表名正确，以及公式栏能显示选中单元格的值，覆盖不到所有单元格。
+
+实测记录（2026-11-08，本机 Chromium 153，在未提交的实现上跑 stack）：
+
+- DOC 已渲染出中文正文（`legacy-doc.png`），四个浏览器列表都为空。
+- XLS 第一次运行时超时。原因是 Fortune-sheet 在 `section[data-excel-preview]` 内放了两个屏幕阅读器用的 `role="alert"`（`client.excel.js:126909-126916`，`#sr-selection`、`#sr-sheetFocus`，`.sr-only`），它们被当成了失败提示。
+  - 修法：`previewOutcome` 查找失败提示时，排除 section 内部的 alert。ExcelBody 真正的失败提示会替换整个 section，不受影响。
+- XLS 第二次运行时，只读事实里多出一个 `contenteditable="true"`。它是 Fortune-sheet 的单元格输入框 `#luckysheet-rich-text-editor`（`.luckysheet-cell-input`），叠在选中单元格上，平时 `zIndex -1`、压在 canvas 下面。
+  - 它的 `allowEdit` 取值是 `edit ? !isHidenRC : edit`，其中 `edit = !((只读行列) && context.allowEdit === true)`。没有配置只读行列时 `edit` 恒为 true，与工作簿的 `allowEdit:false` 无关。所以单凭结构计数，判断不了它能不能编辑。
+  - 修订后的规则：
+    - 只读事实里，这个按 id 精确命中的元素不计入 contenteditable 数，单独回传 `cellInput: true`。其他任何 contenteditable 仍算违规。
+    - XLS 改为行为证明：
+      1. 用 Playwright 点击 `#luckysheet-rich-text-editor` 当前矩形（即 A1）的中心；
+      2. 键入 `ZZ`，按 Enter，再按 Escape；
+      3. 断言公式栏 `.fortune-fx-input` 仍然等于 `旧格式探针 XLS：部门`；
+      4. 断言 `.luckysheet-input-box` 的 `z-index` 仍为 `-1`，即没有进入单元格编辑态；
+      5. 截图 `legacy-xls-typed`。
+    - 如果键入后值变了，或者进入了编辑态，就停下来报告：那是产品层面的可编辑预览，不能在测试里绕过。

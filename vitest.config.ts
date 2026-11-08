@@ -49,9 +49,12 @@ export default defineConfig({
           // Two cold image builds (600s each, 1200s) leave 1200s for compose, health, the
           // conversation, 13 in-instance proxy calls (30s each at most), drainage and the RAGFlow
           // restore, which is bounded at 300s from before `docker start` (its 60s CLI bound lies
-          // inside). That remainder is a margin, not the sum of every per-step bound: a vitest
-          // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5).
-          testTimeout: 2_400_000,
+          // inside). The legacy preview lane (#433) adds 600s: its DOC and PPT conversions wait
+          // 240s each and its XLS view 60s, plus 12 in-instance execs (nine chunk writes, two
+          // read-backs, one removal). That remainder is a margin, not the sum of every per-step
+          // bound: a vitest timeout skips the restore `finally` and leaves ragflow-cpu stopped
+          // (LOCAL_STACK.md §5).
+          testTimeout: 3_000_000,
         },
       },
     ],

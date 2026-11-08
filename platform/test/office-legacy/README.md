@@ -1,6 +1,6 @@
 # Legacy Office conversion fixtures
 
-These are test data for the user-image Docker case that converts DOC, XLS and PPT with DSH's bundled WASM LibreOffice engine (task 17.4, #432). They are not platform code.
+These are test data for the user-image Docker case that converts DOC, XLS and PPT with DSH's bundled WASM LibreOffice engine (task 17.4, #432) and for the local stack lane's read-only preview of all three in a real browser (#433, `legacy-preview-stack-fixture.ts`, which pins each file's size and sha256). They are not platform code. Sizes: `probe.doc` 8704 bytes, `probe.xls` 5632 bytes, `probe.ppt` 459264 bytes.
 
 | File        | Content                                                                             | Generated from |
 | ----------- | ----------------------------------------------------------------------------------- | -------------- |

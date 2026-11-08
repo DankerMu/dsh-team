@@ -6,6 +6,43 @@ export declare function explorerReselect(name: string): string;
 export declare const EXPAND_BUTTON: string;
 export declare const FILES_GUIDE: string;
 
+/**
+ * In-page JS expressions over DSH's document preview of one file, evaluated by value. The
+ * outcome's `state` is null while its container is absent or unsettled; `code` only for
+ * `data-textpreview-failed`.
+ */
+export interface PreviewOutcome {
+  readonly state: 'rendered' | 'failed' | null;
+  readonly code?: string;
+  readonly message?: string;
+  readonly pages: number;
+  readonly nativeHost: boolean;
+  readonly fontWarning: boolean;
+}
+export declare function previewOutcome(previewId: string, name: string): string;
+/** Yields null without a matched container. */
+export interface PreviewFacts {
+  readonly labels: readonly string[];
+  /** Editable surfaces other than Fortune-sheet's cell input, which `cellInput` reports. */
+  readonly contentEditable: number;
+  readonly cellInput: boolean;
+  readonly editors: number;
+  readonly iframes: number;
+  readonly cell: string | null;
+}
+export declare function previewFacts(previewId: string, name: string): string;
+export interface CellInputState {
+  readonly rect: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  } | null;
+  readonly cell: string | null;
+  readonly zIndex: string | null;
+}
+export declare function cellInputState(previewId: string, name: string): string;
+
 /** A workspace file the employee opens from better-sidebar's explorer. */
 interface SidebarFile {
   readonly name: string;
