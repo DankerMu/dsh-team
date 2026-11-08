@@ -4842,3 +4842,84 @@ Must preserve：
 - 不改 `platform/src/orchestrator/volumes.ts`。
 
 残留风险：CI 那次失败的第二个错误没有被抓到，这里修的是最可能的机制。下次如果还复现，新的诊断输出会直接给出错误的类名和消息。
+
+## 37. 旧版 profile 启动失败可诊断（#492）
+
+依赖：#393（PR #490，已合入）。由 #492 承载。改 `platform/src/orchestrator/`（关键路径，PR 写明人工白盒评审推迟到 Epic #380 完成时，未通过）、`platform/src/audit/`、`platform/src/admin/` 和管理员实例页、审计页；不改 DSH 源码，不自动重置（重置会丢弃员工设置，只能由管理员确认后执行）。
+
+- [ ] 37.1 启动失败时，如果读到的启动日志里有 0.2.1 跳过或禁用 profile 内容的标记，就把这次失败归为封闭失败码 `profile-incompatible`。覆盖两条会写 `instance.start-failed` 的启动后失败路径：就绪失败（`readiness.ts` `fail()`）和平台接入失败的补偿（`start.ts` `compensateStarted()`）。这个码写进实例行最近错误的首行和 `instance.start-failed` 的审计细节 `{"code":"profile-incompatible"}`，管理员审计接口和审计页如实显示；管理员实例列表回应的 `lastErrorCode` 只在行状态为 `error` 时给出这个码。其他失败的最近错误和审计细节（`{}`）都不变。验证：单元测试覆盖分类器、两条路径的持久化、审计投影和两个管理员路由；`pnpm test:ui`；VPS exact-head `test:docker` 中 `volume-upgrade.docker.test.ts` 的旧卷不重置直接启动。
+- [ ] 37.2 管理员实例页对 `lastErrorCode === 'profile-incompatible'` 的行显示固定提示「该用户的 DSH 配置来自旧版本，需要执行“重置配置”」，提示紧挨现有的「重置配置」按钮；审计页对带这个码的 `instance.start-failed` 在细节列显示「旧版 profile 不兼容」。验证：`instance-page.test.tsx`、`audit-page.test.tsx` 和 `pnpm test:ui` 截图。
+
+Suggested fixture level: expanded - 关键路径的两条启动失败持久化、审计封闭细节和两个管理员 API 契约同时改变
+Minimal mergeable slice: atomic: 分类、持久化、审计、路由和页面提示是同一条诊断路径，拆开后任何一片都不能独立交付可见行为
+Risk packs (37.1–37.2): selected - Schema（实例列表加 `lastErrorCode`、审计 `details` 加 `code`，`schemas/openapi.json` 用 `pnpm contract:write` 重新生成）、Public API（同上，只加字段）、Security（分类只读已脱敏的行，新码是封闭常量，不回显日志原文）、Legacy compatibility（已有 `{}` 细节行照常可读、显示「—」，最近错误的其余格式不变，其他写入方不变）、Migration（不加列、不加迁移：码由最近错误首行推出）；not selected - Config、Auth、Concurrency、Resource limits、Release。
+
+Evidence (37.1–37.2):
+
+发行包事实（`dsh-app-boot@0.2.1-rc.2`，`lib/index.js`）：
+
+- `loadProfileDirectory` 把 profile 里每个装不上的 bundle 记进 `skippedBundles`。原因包括：包解析不到、manifest 不可读、缺 `dsh.bundle`、兼容性不通过、patch 加载失败（`:1000`、`:1016-1040`）。`reportSkippedBundles` 为每个这样的 bundle 写一行 stderr：`dsh: skipping profile bundle "<包名>": <原因>`（`:537-538`，`binName` 为 `dsh`）。`prepareProfileEntries` 对兼容性预检拒绝的行写 `dsh: disabling profile plugin <行>: <原因>`（`:2305-2308`）。这两类原因都出在 profile 自己的 bundle 和插件列表上，用镜像种子替换 `profiles/`（即「重置配置」）就能消除，所以把它们映射为「需要重置配置」。
+- `plugin tree failed to load`（`:4537`）和 `Failed plugins (`（`:4435`）是所有插件加载失败共用的通用标签，不专属 profile，所以不进分类器，否则别的启动失败也会被错报成需要重置。
+- 两类标记行都能通过 `safeLine`：不含 `dsh web`（包名是连字符 `dsh-web-app`），不含 token/cookie 赋值，不是 16 位以上的纯令牌行。按发行包模板估算，每行 250–560 字节，低于 1024 的上限。stderr 由平台按换行切分，行首没有时间戳，可以用 `startsWith` 匹配。
+- 阶段 1 卷的 profile 列出 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@dsh-team/office-agents` 三个 bundle，0.2.1 全部跳过。PR #588 的 VPS 运行（invocation `d483f788…`）中，`volume-upgrade` 摘要给出 `skippedBeforeReset: true` 和 `dumpExit: 1`：只读的 `dsh --profile web --dump-default-config` 也以 1 退出。由此推断正式启动到不了 Web 公告。DSH 可能在平台接入复查之前退出（走 `compensateStarted`），也可能之后退出或超时（走 `fail()`）。两条路径都分类，所以 Docker 断言的结果是确定的。如果用例红了，说明推断不成立，PR 不合并并回报。
+
+改动：
+
+- 失败码常量放在 audit 模块，因为 orchestrator 已经引用 audit，反过来引用会成环：`platform/src/audit/record.ts` 导出 `PROFILE_INCOMPATIBLE = 'profile-incompatible'`，经 `audit/index.ts` 导出。
+- 新模块 `platform/src/orchestrator/start-failure.ts`（加同名 `.test.ts`）：
+  - `PROFILE_REJECTION_MARKERS = ['dsh: skipping profile bundle', 'dsh: disabling profile plugin']`；
+  - `profileIncompatible(lines: readonly string[]): boolean`：任一行以某个标记开头即为真（`startsWith`，不用正则，不看行内其余文字）；
+  - `lastErrorCode(lastError: string | null): typeof PROFILE_INCOMPATIBLE | null`：最近错误首行恰好等于该码时返回它，否则返回 null；
+  - `withFailureCode(lastError: string, incompatible: boolean): string`：为真时在前面加 `profile-incompatible\n`。两条写入路径和读取方都用这一组函数，不另存一列。
+- 同一字串只保留一份：`platform/test/plugin-failure-markers.ts` 的 `PLUGIN_FAILURE_MARKERS` 里这两句改为展开 `PROFILE_REJECTION_MARKERS`（经 `orchestrator/index.ts` 导出），其余三句不变；`volume-upgrade.docker.test.ts` 的 `skippedBeforeReset` 内嵌 Python 里的字面量改为插值 `JSON.stringify(PROFILE_REJECTION_MARKERS[0])`。浏览器代码不能引用后端，所以两个页面里的码和中文名只能写字面量。
+- `readiness-logs.ts`：`startupLogTail` 返回 `{ lines: string[]; profileIncompatible: boolean }`。分类在 `safeLine` 之后、50 行截断之前进行，覆盖读到的每一条安全行，也就是 `tail=1000` 的整个窗口，这样启动早期打印的标记不会因为后续日志多而被挤掉。抛错分支同样返回已判定的值。行的脱敏、字节上限、保留条数都不变。`readiness.ts` 的 3 s 日志期限常量移到 `readiness-logs.ts`，两条路径共用，不复制。
+- `readiness.ts` `fail()`：`lastError = withFailureCode(原来的整段, tail.profileIncompatible)`。不含标记时首行仍是 `<原因>; <停止结果>`，现有 `/^DSH readiness failed/` 断言照常成立。同一事务里的审计在判定为真时带 `details: { code: PROFILE_INCOMPATIBLE }`，否则不带 details。
+- `start.ts` `compensateStarted()`：在 `try` 里第一个 `current()` 之后、`captureUserNetwork` 之前，用 `startupLogTail(input.client, id, AbortSignal.any([signal, AbortSignal.timeout(LOG_TIMEOUT_MS)]), [])` 读这个刚启动容器的日志，只取 `profileIncompatible`。读日志不改任何资源，后面的身份、网络、停止和删除检查顺序都不变。日志在删除容器之前读。读取失败或超时的结果是 false，不影响补偿。然后最近错误为对原来的 `Platform attachment/startup failed; <outcome>` 调用 `withFailureCode` 的结果，审计细节同 `fail()`。
+- 中断创建恢复（`creation-attempt.ts`）、`start.ts:566` 的重置和 `stop.ts` 不变。它们的首行都是固定文本，从不等于该码。
+- `platform/src/audit/record.ts`：`instance.start-failed` 的 `code` 是可选细节，取值封闭为 `profile-incompatible`。缺省时存 `{}`，所以中断创建恢复等不带细节的调用照常写入。值存在但非法（其他字符串、对象、数组、null）时写入失败、行数不变、错误不回显输入。校验按字段分派，`instance.stopped` 的 `reason` 仍是必填，校验不变。
+- 管理员审计接口（`platform/src/admin/audit-events.ts`）：`details` schema 加 `code`（`{ type: 'string', enum: ['profile-incompatible'] }`），`projectDetails` 对 `code` 用同一个封闭校验，其余字段照旧丢弃。审计页（`platform/web/src/audit-page.tsx`）的细节校验接受这个值，细节列显示「旧版 profile 不兼容」；没有 `reason` 也没有 `code` 的行仍显示「—」。
+- `platform/src/admin/routes.ts`：实例列表每项加必填的 `lastErrorCode`（schema `{ type: ['string', 'null'], enum: ['profile-incompatible', null] }`）。只有 `status === 'error'` 时取 `lastErrorCode(lastError)`，其他状态为 null。原因是重置配置会先经 `stop('admin')` 停止实例，`stop.ts` 的 `COALESCE(?, last_error)` 会保留诊断日志，状态变成 `stopped`；这时不能再提示「需要重置」。最近错误的日志仍按原样返回。改完用 `pnpm contract:write` 重新生成 `schemas/openapi.json`。
+- `platform/web/src/instance-page.tsx`：行类型和校验加 `lastErrorCode`。该码为 `profile-incompatible` 时，在操作区「重置配置」按钮旁渲染固定提示，不从 `lastError` 文本取任何内容。错误日志的 `<details>` 照旧。
+- Docker（`platform/test/volume-upgrade.docker.test.ts`）：在 `skippedBeforeReset` 之后、第一次 `restore()` 之前（迁移、`stopped` 行、`registerResource` 和替身平台此时都已就绪），用同一个 `owner` 不重置直接启动该用户。
+  - 断言：启动以失败结束；实例行 `status = 'error'`，`lastErrorCode(last_error) === 'profile-incompatible'`；最近一条 `instance.start-failed` 审计细节为 `{"code":"profile-incompatible"}`；最近错误和审计里没有启动令牌或 cookie（`fail()` 路径的容器还在，`compensateStarted` 路径的容器已删）。
+  - 然后显式调用 `owner.stopUserContainer({ userId, reason: 'admin' })`，断言容器名不存在、行为终态，再走原来的「重置 → 启动成功」流程；原有断言全部保留。`restoreUserProfiles` 要求实例无容器（`identity.ts:44`、`requireAbsent`），所以这次停止不能省。
+  - 摘要加 `startBeforeReset: { status, code }`，`it` 的 `toMatchObject` 断言 `{ status: 'error', code: 'profile-incompatible' }`。
+
+会受影响、需要同步更新的现有测试（实现时逐一核对，不放宽断言）：
+
+- `readiness.test.ts:671`：不含标记的就绪失败 `details` 仍为 `'{}'`，保持不变；新增含标记的用例。
+- `readiness-logs.test.ts`：`startupLogTail` 的返回类型变了。
+- `start.test.ts`：给补偿路径加含标记和不含标记两个用例。
+- `audit/record.test.ts`：覆盖可选 `code`。
+- `admin/routes.test.ts`、`admin/audit-events` 的测试、`instance-page.test.tsx`、`audit-page.test.tsx`。
+- `platform/test/container-start-docker-fixture.ts:150` 的 `assertFailedStartupLogs` 把第 0 行当原因行。现有 Docker 失败用例不含标记，首行不变，所以仍然成立。
+- `container-readiness.docker.test.ts:182` 和 `instance.docker.test.ts:563-573` 的 `{}` 细节期望不变，因为它们的失败不是 profile 引起的。只有在 VPS exact-head 运行时才能确认，如果变红就按实际原因回报。
+
+文档（编排者在同一 PR 里改）：
+
+- `docs/DEPLOY.md` 升级说明里「实例启动失败」那句，改为说明管理员实例页会显示这条固定提示，以及怎么处理；
+- `platform/src/orchestrator/README.md` 的就绪失败段，补充失败码和两条路径；
+- `platform/src/admin/README.md`，如果有实例列表字段表，补上 `lastErrorCode`。
+
+验证：
+
+- `pnpm check`；
+- `pnpm test:ui`：实例页提示截图，零新增控制台错误；
+- VPS exact-head 的 `test:docker`（含上面的旧卷用例）和 `test:deploy`，cleanup confirmed；
+- 本机 exact-head `pnpm test:stack`，满足合并门禁。
+
+剩余风险：
+
+- 员工自己装了一个与 0.2.1 不兼容的插件时，`dsh: disabling profile plugin` 也会出现。如果就绪又因为别的原因失败，提示会建议重置配置。重置本身确实会清掉这个插件，但真正的失败原因可能另有所在。管理员仍能在错误日志里看到全部安全行。
+- 将来某个 DSH 版本改了这两句 stderr 的措辞，分类会静默失效。Docker 用例能发现这一点。
+- DSH 若在 `POST /start` 和随后第一次 inspect 之间就退出（`launchInstance`），`failedStartup` 不补偿，也不写 `instance.start-failed`，这一路径不分类。Node 加载 dsh-app-boot 需要的时间远长于这个窗口，实际不可达。补偿路径读日志最多占用 10 s 清理期限中的 3 s，结构与 `fail()` 相同；如果 VPS 上出现 `compensation failed or unconfirmed`，先查这里。
+
+Must preserve：
+
+- 最近错误的脱敏规则、字节和行数上限；
+- `instance.stopped` 的停止原因校验；
+- 不带细节的 `instance.start-failed` 写入方照常成功；
+- 重置接口的确认、停止、恢复、审计顺序；
+- 补偿路径的身份、网络、停止、删除检查顺序；
+- `volume-upgrade` 原有的重置后断言；
+- 员工侧状态回应仍不含 `last_error`，也不含新码。
