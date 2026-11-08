@@ -160,8 +160,14 @@ fallback provider. The first-run matrix itself intentionally remains key-free.
 
 Packed 0.2.1-rc.2 UI selectors:
 
-1. Open `button[aria-label="设置"]` (English control: `Settings`). The actual
-   settings dialog is `[role="dialog"][data-shortcut-modal="settings"]`.
+1. Open the account menu `[data-slot="settings.launcher"] button[aria-haspopup="menu"][aria-label="账号菜单"]`
+   (English: `Account menu`), then click its menu item `设置` (`Settings`). The
+   account menu comes from `dsh-client-ui-settings-account`, which fills the
+   `settings.launcher` slot; a plain `button[aria-label="设置"]` (`Settings`)
+   appears only as that slot's empty fallback. The selectors live in
+   `scripts/probe-first-run-composition.mjs` (`ACCOUNT_MENU_TRIGGER`,
+   `ACCOUNT_MENU_SETTINGS_LABELS`, `SETTINGS_BUTTON`). The actual settings
+   dialog is `[role="dialog"][data-shortcut-modal="settings"]`.
 2. Click its `nav button` whose normalized text is `通用设置` (`General`), then
    assert `aria-current="true"` and visible `[data-slot="settings.general.item"]`
    content, including the language row (`语言`) and current-version row.
