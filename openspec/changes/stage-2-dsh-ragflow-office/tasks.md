@@ -4719,3 +4719,77 @@ Must preserve：
 - 外部 Document Server 的地址按原样保存，平台不探测它。地址写错时，Office 打开失败的提示属于 18.6。
 - 目录状态为 `forced-on`、旧 home 卷的 profile 里又没有该包时，停用行指向缺席的目标，只产生一条警告；这和知识库的先例相同。
 - Office 不可用时，员工插件页上 ONLYOFFICE 的开关仍按目录三态显示，但实际不生效。后台目录页显示原因属于 #436；员工页的锁定显示另行跟进，本节不做。
+
+## 35. 技术债 #546：管理页面的页面级请求属主收敛为一个 hook
+
+依赖：无。由 #546 承载，处理方式同第 6 组。
+
+- [ ] 35.1 在 `platform/web/src/request-owner.ts` 新建 `useRequestOwner`，A 组四个页面原地改用它；B 组五个页面逐页评估，保留的写明理由。验证：新 hook 的成对单元测试；四个页面现有的卸载、过期响应、并发栅栏测试一行不改，照样通过；`pnpm test:ui`。
+
+Suggested fixture level: compact - 浏览器侧一个 hook 和四处机械替换，行为不变
+Minimal mergeable slice: atomic: 一个新模块及其测试、四个页面的替换
+Risk packs (35.1): selected - Concurrency（先到先得的页面级栅栏、卸载中止、过期响应丢弃，这三点语义逐字保持）、Legacy compatibility（四个页面的 UI、请求和文案不变）；not selected - Auth、Config、Schema、Public API、File IO、Resource limits、Release、Documentation。不碰关键路径。
+
+Evidence (35.1):
+
+现状（main `c485634`）：A 组四份逻辑完全相同，只有变量名不同。
+
+- `knowledge-base-page.tsx:210-246`
+- `plugins-page.tsx:224-254`
+- `runtime-page.tsx:107-163`
+- `office-page.tsx:105-137`
+
+共同模式：
+
+- 属主 `useRef<AbortController | null>`；
+- 已有属主就直接返回；
+- 新建 controller 并登记为属主；
+- `current = () => owner.current === controller && !signal.aborted`；
+- `finally` 里 `current()` 成立时清空属主；
+- 加载 effect 的 cleanup 先 `owner.current?.abort()` 再置 null；
+- 四页的提交和保存处理函数另外读 `owner.current !== null` 判断是否忙：kb:252、kb:261、plugins:259、runtime:167、office:140。
+
+改动：
+
+- 新文件 `platform/web/src/request-owner.ts`，导出 `useRequestOwner()`，返回 `{ claim, busy }`：
+  - `claim()`：已有属主时返回 `null`；否则登记一个新的 `AbortController`，返回 `{ signal, current, release }`。
+    - `current()` 与现在的判定逐字相同；
+    - `release()` 只在 `current()` 成立时清空属主，等于现在 `finally` 里的那一行。
+  - `busy()`：返回是否有属主。
+  - hook 自己用一个空依赖的 effect，在卸载时 abort 并清空属主。
+  - 返回值和其中的 `claim`、`busy` 在多次渲染之间引用稳定，由 `useRef`/`useMemo(…, [])` 持有。四页的 `perform`/`run` 的 `useCallback` 依赖保持 `[]`，加载 effect 的依赖保持 `[perform]`/`[run]`，所以只在挂载和卸载时运行。这是等价性的前提：仓库没有启用 `react-hooks/exhaustive-deps`，不能把 hook 的返回值加进这些依赖。
+- 四个页面改为 `const claim = owner.claim(); if (claim === null) return; try { … claim.signal … claim.current() … } finally { claim.release(); }`。
+  - 加载 effect 只保留 `void perform(...)`，不再写 cleanup，卸载中止统一由 hook 负责。
+  - 上面五处读点一律改为 `owner.busy()`。替换后，四页不再出现 `owner.current`。
+  - 注释：原来有说明栅栏范围那一行注释的页面（kb:212、plugins:226、office:107）保留它，runtime 不新增；hook 内的注释写明三条语义。
+- 等价性：在依赖稳定的前提下，页面加载 effect 只在挂载和卸载时运行。卸载中止从页面 effect 的 cleanup 移到 hook 自己的 cleanup，两处都只在卸载时执行，行为相同。`main.tsx` 和测试夹具都没有用 StrictMode。
+- B 组五页保持原实现，理由写进 PR 描述：
+  - `admin-page.tsx:86-156`、`audit-page.tsx:175-228`、`instance-page.tsx:124-178`：属主是随查询 effect 变化的「后到者胜」读尝试，`query` 或 `revision` 一变就换属主，不是先到先得的页面级栅栏。admin 页在 cleanup 时无条件中止；audit 和 instance 页只中止尚未应答的请求（`finished`）。此外，admin 和 instance 还会在 effect 之外主动清空属主：`rejectAuthority`（admin:96、instance:127）和 instance 的 `refresh`（instance:181）。
+  - `model-page.tsx:113-189`：用独立的 `pending` 栅栏，开始时先中止上一个属主。
+  - `wait-page.tsx:55-150`：属主还带着轮询 timer 和另一个身份 controller。
+  - 把这些都塞进同一个 hook，需要为每种变体加开关，正是 issue 要求避免的「开关集合」。
+- 范围外，只在 PR 里报告：audit 和 instance 两页各声明了一份相同的 `interface ReadAttempt`；admin 页也有一份，但少了 `finished` 字段。
+
+先红后绿：`request-owner.test.ts` 先写，模块不存在时失败。用例覆盖：
+
+- 已有属主时 `claim` 返回 `null`；
+- `release` 之后可以再次 `claim`；
+- 被中止的属主 `current()` 为 false，它的 `release` 不会清掉后来的属主；
+- 卸载时中止在途的属主；
+- `busy` 的值随 claim 和 release 变化；
+- 多次渲染之间返回值的身份不变。
+
+测试写法：`request-owner.test.ts` 首行写 `// @vitest-environment jsdom`；不写 JSX，用 `createElement` 加 `react-dom/client` 的 `createRoot` 和 `act` 渲染一个最小组件，用 `root.unmount()` 卸载。`.ts` 源文件的配对测试必须是 `.test.ts`。
+
+验证：
+
+- `pnpm check`（含覆盖率、`duplicate-code`、`dead-code`）；
+- `pnpm test:ui`（`pnpm check` 不含它）；
+- VPS exact-head `test:docker`、`test:deploy` 和本机 exact-head `test:stack`，仅为满足合并门禁。
+
+Must preserve：
+
+- 四个页面现有的单元测试和 UI 测试不改；
+- 不改任何请求、文案或 UI；
+- 卸载后不再 `setState`；
+- 401 只导航一次。
