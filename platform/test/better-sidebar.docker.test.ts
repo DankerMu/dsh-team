@@ -145,9 +145,18 @@ it('opens Markdown in better-sidebar and hands a docx from its file area to the 
         paragraph: true,
         dshMarkdown: false,
       });
-      // DSH's Office preview received the docx and settled; its outcome is recorded, not
-      // asserted (#554). better-sidebar drew no editor or download pane.
-      expect(observed.docx).toMatchObject({ nativeHost: false, downloads: 0, editors: 0 });
+      // DSH's Office preview received the docx and rendered at least one page with the image's
+      // preview fonts (#554). The font warning is recorded, not asserted: python-docx's template
+      // asks for Calibri, which the image does not substitute. better-sidebar drew no editor or
+      // download pane.
+      expect(observed.docx).toMatchObject({
+        state: 'rendered',
+        nativeHost: false,
+        downloads: 0,
+        editors: 0,
+      });
+      expect(observed.docx.code).toBeUndefined();
+      expect(observed.docx.pages).toBeGreaterThanOrEqual(1);
       expect(observed.consoleErrors).toEqual([]);
       return {
         summary: JSON.stringify({

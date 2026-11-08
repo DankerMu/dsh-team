@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
+import { runOfficeConvert } from './office-convert-fixture.ts';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
@@ -91,7 +92,14 @@ function assertOfflineContainerConfiguration(command: DockerCommand, container: 
   }
 }
 
-type Probe = 'version' | 'offline-docx' | 'profile-seed';
+type Probe = 'version' | 'offline-docx' | 'profile-seed' | 'office-convert';
+
+// The python3 offline probes; `version` runs DSH itself and `office-convert` its own runner.
+const PYTHON_PROBES: Partial<Record<string, string>> = {
+  'offline-docx': offlineDocxScript,
+  'profile-seed': profileSeedScript,
+};
+
 export interface UserImageLifecycle {
   readonly command: DockerCommand;
   readonly commandAsync: AsyncDockerCommand;
@@ -127,8 +135,14 @@ function runContainer(
   volume: string | undefined,
   phase: 'fresh' | 'reuse',
 ): string {
-  const offline = probe !== 'version';
-  const script = probe === 'profile-seed' ? profileSeedScript : offlineDocxScript;
+  if (probe === 'office-convert') {
+    const run = { container, imageId, runId, docxScript: offlineDocxScript };
+    return runOfficeConvert(command, targets, run);
+  }
+  const script = PYTHON_PROBES[probe];
+  if (probe !== 'version' && script === undefined)
+    throw new Error(`Unknown user-image probe: ${probe}`);
+  const offline = script !== undefined;
   if (volume !== undefined) {
     const inspectVolume = [
       'volume',
@@ -150,7 +164,7 @@ function runContainer(
     '--label',
     `${OWNER_LABEL}=${runId}`,
     imageId,
-    ...(offline ? ['python3', '-c', script, phase] : ['dsh', '--version']),
+    ...(script === undefined ? ['dsh', '--version'] : ['python3', '-c', script, phase]),
   ];
   registerCleanupTarget(targets, runId, { kind: 'container', name: container });
   output(command(create, 30_000), create);

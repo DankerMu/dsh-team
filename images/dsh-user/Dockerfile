@@ -1,8 +1,17 @@
 FROM node:24.22.0-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5
 
+# DSH's document preview converts DOC/PPT/DOCX in the instance with its bundled WASM LibreOffice,
+# which imports only installed fonts and refuses to convert without any (#554); no system
+# LibreOffice is installed. The Debian free fonts cover Chinese and Latin text.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends bubblewrap python3 python3-docx \
+  && apt-get install -y --no-install-recommends bubblewrap python3 python3-docx fonts-noto-cjk fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
+# Paths as installed by the bookworm packages (dpkg -L): fonts-noto-cjk 1:20220127+repack1-1 and
+# fonts-dejavu-core 2.37-6.
+RUN for font in /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
+      /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf; do \
+       if [ ! -f "$font" ]; then echo "preview fonts missing: $font" >&2; exit 1; fi; \
+     done
 
 RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.1-rc.2 \
   && npm cache clean --force
