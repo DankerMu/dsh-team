@@ -32,7 +32,7 @@ export const ragflowConnectionRoutes: FastifyPluginCallback<{
       validatorCompiler: EMPTY_BODY.validatorCompiler,
       preValidation: EMPTY_BODY.preValidation,
       schema: {
-        summary: 'Read the RAGFlow version, then list one dataset with the saved key',
+        summary: "Read the RAGFlow version, then the saved key's tenant models",
         body: EMPTY_BODY_SCHEMA,
         response: {
           200: RAGFLOW_VERSION_SCHEMA,

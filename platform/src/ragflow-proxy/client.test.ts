@@ -11,18 +11,55 @@ import {
 const KEY = 'owned-nonsecret-ragflow-key';
 const BASE = 'https://kb.invalid';
 const VERSION_BODY = JSON.stringify({ code: 0, data: 'v1.0.0-rc2', message: 'success' });
-const LIST_BODY = JSON.stringify({ code: 0, data: [], message: 'success' });
+/** RAGFlow v1.0.0-rc2's `TenantInfoResponse`: tenant and model IDs, no avatar. */
+const MODELS_BODY = JSON.stringify({
+  code: 0,
+  data: {
+    tenant_id: 'f'.repeat(32),
+    name: "owner's Kingdom",
+    llm_id: 'deepseek-chat@DeepSeek',
+    embd_id: 'BAAI/bge-m3@Builtin',
+    rerank_id: '',
+    asr_id: '',
+    img2txt_id: '',
+    tts_id: '',
+    parser_ids: 'naive:General,qa:Q&A,table:Table',
+    role: 'owner',
+  },
+  message: 'success',
+});
 
 type Send = (request: Request, init: { signal: AbortSignal }) => Promise<Response>;
 type Respond = (request: Request, signal: AbortSignal) => Promise<Response> | Response;
 function sender(respond: Respond) {
   return vi.fn<Send>((request, init) => Promise.resolve(respond(request, init.signal)));
 }
-/** Answers the version step with `version` and the list step with `list`. */
-function steps(version: Respond, list: Respond = () => new Response(LIST_BODY)) {
-  return sender((request, signal) =>
-    request.url.includes('/system/version') ? version(request, signal) : list(request, signal),
-  );
+const VERSION_PATH = '/api/v1/system/version';
+const MODELS_PATH = '/api/v1/users/me/models';
+/** Answers the version step with `version`, the key step with `key` and any other path with 404. */
+function steps(version: Respond, key: Respond = () => new Response(MODELS_BODY)) {
+  return sender((request, signal) => {
+    // A suffix match also serves a saved address with a path prefix.
+    const path = new URL(request.url).pathname;
+    if (path.endsWith(VERSION_PATH)) return version(request, signal);
+    if (path.endsWith(MODELS_PATH)) return key(request, signal);
+    return new Response('{"code":404}', { status: 404 });
+  });
+}
+/** The version step went first without the key, then the key step with it, and nothing else. */
+function expectProbes(send: ReturnType<typeof sender>) {
+  const requests = send.mock.calls.map(([request]) => request);
+  expect(
+    requests.map((request) => [
+      request.method,
+      request.url,
+      request.redirect,
+      request.headers.get('authorization'),
+    ]),
+  ).toEqual([
+    ['GET', `${BASE}${VERSION_PATH}`, 'manual', null],
+    ['GET', `${BASE}${MODELS_PATH}`, 'manual', `Bearer ${KEY}`],
+  ]);
 }
 function check(send: Send, settings = { baseURL: BASE, apiKey: KEY }, deadlineMs = 1_000) {
   return testRagflowConnection(settings, new AbortController().signal, deadlineMs, send);
@@ -72,26 +109,33 @@ it('uses a ten-second per-request deadline and a closed result set', () => {
   ]);
 });
 
-it('reads the version without the key, then lists one dataset with the key', async () => {
+it("reads the version without the key, then the key's tenant models with the key", async () => {
   const send = steps(() => new Response(VERSION_BODY));
 
   const outcome = await check(send);
 
   expect(outcome).toEqual({ result: 'ok', version: 'v1.0.0-rc2' });
-  const [version, list] = send.mock.calls.map(([request]) => request);
-  expect(send).toHaveBeenCalledTimes(2);
-  expect([version?.method, version?.url, version?.redirect]).toEqual([
-    'GET',
-    'https://kb.invalid/api/v1/system/version',
-    'manual',
-  ]);
-  expect(version?.headers.has('authorization')).toBe(false);
-  expect([list?.method, list?.url, list?.redirect]).toEqual([
-    'GET',
-    'https://kb.invalid/api/v1/datasets?page=1&page_size=1',
-    'manual',
-  ]);
-  expect(list?.headers.get('authorization')).toBe(`Bearer ${KEY}`);
+  expectProbes(send);
+});
+
+it('checks the key without reading a dataset row whose avatar exceeds 64 KiB', async () => {
+  const avatar = `data:image/png;base64,${'A'.repeat(65_535 - 22)}`;
+  const row = { id: 'a'.repeat(32), name: 'kb', avatar, tenant_avatar: avatar };
+  const datasets = JSON.stringify({ code: 0, data: [row], message: 'success' });
+  const send = sender((request) => {
+    const path = new URL(request.url).pathname;
+    if (path === VERSION_PATH) return new Response(VERSION_BODY);
+    if (path === '/api/v1/datasets') return new Response(datasets);
+    if (path === MODELS_PATH) return new Response(MODELS_BODY);
+    return new Response('{"code":404}', { status: 404 });
+  });
+
+  const outcome = await check(send);
+
+  expect(avatar).toHaveLength(65_535);
+  expect(new TextEncoder().encode(datasets).byteLength).toBeGreaterThan(65_536);
+  expect(outcome).toEqual({ result: 'ok', version: 'v1.0.0-rc2' });
+  expect(send.mock.calls.some(([request]) => request.url.includes('/api/v1/datasets'))).toBe(false);
 });
 
 it.each([
@@ -106,7 +150,7 @@ it.each([
 
   expect(send.mock.calls.map(([request]) => request.url)).toEqual([
     url,
-    url.replace('/system/version', '/datasets?page=1&page_size=1'),
+    url.replace('/system/version', '/users/me/models'),
   ]);
 });
 
@@ -134,7 +178,7 @@ it.each([
   );
 
   expect(await check(send)).toEqual({ result: 'not-configured' });
-  expect(send).toHaveBeenCalledTimes(2);
+  expectProbes(send);
 });
 
 it.each([
@@ -182,11 +226,13 @@ it('accepts a version of exactly 64 printable ASCII characters', async () => {
 
 it.each([
   [302, null],
-  [404, LIST_BODY],
-  [200, '{"code":102,"message":"x"}'],
+  [404, MODELS_BODY],
+  [200, 'not json'],
+  // rc2's answer when the key's tenant is not found.
+  [200, '{"code":102,"data":false,"message":"Tenant not found!"}'],
   [200, '{"code":"0"}'],
 ] as const)(
-  'reports a failed list step (HTTP %i, body %j) without the version',
+  'reports a failed key step (HTTP %i, body %j) without the version',
   async (status, body) => {
     const send = steps(
       () => new Response(VERSION_BODY),
@@ -194,6 +240,7 @@ it.each([
     );
 
     expect(await check(send)).toEqual({ result: 'upstream-error' });
+    expectProbes(send);
   },
 );
 
@@ -208,7 +255,7 @@ it('rejects a body one byte over 64 KiB without reading the remainder', async ()
   expect(pulls.length).toBeLessThanOrEqual(2);
 });
 
-it('still limits the connection test list step to 64 KiB', async () => {
+it('still limits the connection test key step to 64 KiB', async () => {
   const pulls: number[] = [];
   const send = steps(
     () => new Response(VERSION_BODY),
@@ -218,7 +265,7 @@ it('still limits the connection test list step to 64 KiB', async () => {
   const outcome = await check(send);
 
   expect(outcome).toEqual({ result: 'upstream-error' });
-  expect(send).toHaveBeenCalledTimes(2);
+  expectProbes(send);
   expect(pulls.length).toBeLessThanOrEqual(2);
 });
 
@@ -232,6 +279,7 @@ it.each([
   );
 
   expect(await check(send, undefined, 20)).toEqual({ result: 'timeout' });
+  expectProbes(send);
 });
 
 it('gives each request its own deadline', async () => {
@@ -240,7 +288,7 @@ it('gives each request its own deadline', async () => {
   const send = sender((request, signal) => {
     vi.advanceTimersByTime(900);
     signal.throwIfAborted();
-    return new Response(request.url.includes('/system/') ? VERSION_BODY : LIST_BODY);
+    return new Response(request.url.includes('/system/') ? VERSION_BODY : MODELS_BODY);
   });
 
   expect(await check(send, undefined, 1_000)).toEqual({ result: 'ok', version: 'v1.0.0-rc2' });
@@ -263,9 +311,11 @@ it('reports transport failures before and after a status as unavailable', async 
 
   expect(await check(refused)).toEqual({ result: 'unavailable' });
   expect(await check(reset)).toEqual({ result: 'unavailable' });
+  expect(refused).toHaveBeenCalledTimes(1);
+  expectProbes(reset);
 });
 
-it.each(['the version step', 'the list step'])(
+it.each(['the version step', 'the key step'])(
   'propagates an external cancellation during %s instead of classifying it',
   async (step) => {
     const owner = new AbortController();

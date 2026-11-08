@@ -4407,7 +4407,7 @@
     },
     "/_platform/api/admin/ragflow-config/test": {
       "post": {
-        "summary": "Read the RAGFlow version, then list one dataset with the saved key",
+        "summary": "Read the RAGFlow version, then the saved key's tenant models",
         "requestBody": {
           "required": true,
           "content": {

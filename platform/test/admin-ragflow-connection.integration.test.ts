@@ -13,14 +13,14 @@ import type { ModelUpstream } from './model-upstream-fixture.ts';
 
 const PATH = '/_platform/api/admin/ragflow-config/test';
 const VERSION_PATH = '/api/v1/system/version';
-const LIST_PATH = '/api/v1/datasets?page=1&page_size=1';
+const MODELS_PATH = '/api/v1/users/me/models';
 const RAGFLOW_KEY = `owned-ragflow-key-${randomBytes(8).toString('hex')}`;
 const MARKER = `owned-upstream-marker-${randomBytes(8).toString('hex')}`;
 type Handler = Parameters<ModelUpstream['setHandler']>[0];
 let upstream: ModelUpstream;
 let texts: string[];
 
-/** Answers like RAGFlow v1.0.0-rc2: open version endpoint, bearer-checked dataset list. */
+/** Answers like RAGFlow v1.0.0-rc2: open version endpoint, bearer-checked tenant models. */
 function ragflowHandler(version: Record<string, unknown> = { data: 'v1.0.0-rc2' }): Handler {
   return (request, response) => {
     const answer = (status: number, body: Record<string, unknown>) => {
@@ -29,10 +29,20 @@ function ragflowHandler(version: Record<string, unknown> = { data: 'v1.0.0-rc2' 
     };
     if (request.method === 'GET' && request.path === VERSION_PATH)
       answer(200, { code: 0, ...version });
-    else if (request.method !== 'GET' || request.path !== LIST_PATH) answer(404, { code: 404 });
+    else if (request.method !== 'GET' || request.path !== MODELS_PATH) answer(404, { code: 404 });
     else if (request.headers.authorization !== `Bearer ${RAGFLOW_KEY}`)
       answer(401, { code: 401, data: null });
-    else answer(200, { code: 0, data: [{ id: MARKER, name: MARKER }] });
+    else
+      answer(200, {
+        code: 0,
+        data: {
+          tenant_id: MARKER,
+          name: MARKER,
+          llm_id: MARKER,
+          parser_ids: MARKER,
+          role: 'owner',
+        },
+      });
   };
 }
 
@@ -108,7 +118,7 @@ function result(text: string): unknown {
   return JSON.parse(text);
 }
 
-it('reads the version without the key, then lists one dataset with it', async () => {
+it("reads the version without the key, then the key's tenant models with it", async () => {
   await withAdmin(async ({ base, cookie }) => {
     const response = await test(base, cookie);
 
@@ -118,7 +128,7 @@ it('reads the version without the key, then lists one dataset with it', async ()
     ]);
     expect(upstream.requests.map(({ method, path }) => [method, path])).toEqual([
       ['GET', VERSION_PATH],
-      ['GET', LIST_PATH],
+      ['GET', MODELS_PATH],
     ]);
     expect(upstream.requests[0]?.headers.authorization).toBeUndefined();
     expect(upstream.requests[1]?.headers.authorization).toBe(`Bearer ${RAGFLOW_KEY}`);
@@ -141,12 +151,12 @@ it.each([
 
 it('reports HTTP 200 with a non-zero code as upstream-error', async () => {
   upstream.setHandler((request, response, socket) => {
-    if (request.path !== LIST_PATH) {
+    if (request.path !== MODELS_PATH) {
       ragflowHandler()(request, response, socket);
       return;
     }
     response.writeHead(200, { 'content-type': 'application/json' });
-    response.end(JSON.stringify({ code: 102, message: MARKER }));
+    response.end(JSON.stringify({ code: 102, data: false, message: MARKER }));
   });
   await withAdmin(async ({ base, cookie }) => {
     const response = await test(base, cookie);
@@ -201,13 +211,13 @@ it('does not follow a redirect and never reaches its target', async () => {
   }
 });
 
-it('reaches the per-request deadline before a status and while the list body stalls', async () => {
+it('reaches the per-request deadline before a status and while the key body stalls', async () => {
   const settings = { baseURL: upstream.origin, apiKey: RAGFLOW_KEY };
   upstream.setHandler(() => undefined);
   const silent = await testRagflowConnection(settings, new AbortController().signal, 200);
   await upstream.socketClosed(1);
   upstream.setHandler((request, response, socket) => {
-    if (request.path !== LIST_PATH) {
+    if (request.path !== MODELS_PATH) {
       ragflowHandler()(request, response, socket);
       return;
     }
@@ -221,7 +231,7 @@ it('reaches the per-request deadline before a status and while the list body sta
   expect(upstream.requests.map(({ path }) => path)).toEqual([
     VERSION_PATH,
     VERSION_PATH,
-    LIST_PATH,
+    MODELS_PATH,
   ]);
   await upstream.socketClosed(3);
 });
