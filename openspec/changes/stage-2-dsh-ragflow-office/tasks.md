@@ -3677,6 +3677,7 @@ not selected：Schema、API、迁移：无；平台源码不改。
 - 既有 home 卷升级：已有卷不重新灌种子，profile 里没有本包。`employee` 态下员工在管理员重置 profile 前看不到这张卡片；`forced-on` 时生成器整段插入规范 patch，而它的插入行用裸包名，旧 profile 解析不到，启动会带插件失败标记。与 better-sidebar 的同类问题一样只记录，18.2 让 Office 可用时再处理。
 - 插件之间的依赖：本包的客户端半区注入 `dsh-better-sidebar`，生成器不处理目录项之间的依赖。管理员把 better-sidebar 设为 `forced-off`、ONLYOFFICE 保持开启时，客户端半区预计停在 pending，这个组合没有测试，留给 18.2/18.5。
 - `webStartup.trustedHosts` 不含 0.2.0 按监听地址推出的 LAN 信任，所以 config/watch 路由只信 loopback Host 和显式配置的 trusted host。经平台网关进来的浏览器请求能否通过这道检查，在 18.5 端到端验证。
+- 设置卡片在 0.2.1 中不可用（PR #567 第二轮审查发现，不阻止激活）：宿主半区 `lib/index.js:930-936` 调 `settings.register`，0.2.1-rc.2 的 `SettingsForms`（`dsh-settings/lib/index.js:327-370`）没有这个方法，插件吞掉 TypeError 只记 warn；客户端的 `settingsScope` 服务和 `settings.plugin.item` 槽位在 0.2.1-rc.2 里都不存在，设置卡片不挂载。路由照常注册，Document Server 地址等只能由组合配置提供，即 18.2 的覆盖层；员工和管理员都没有图形界面可改。按"只做 webStartup 映射"的决定，不为它再加补丁。
 - 注册表跨重启持久化：上一次启动用旧密钥派生的 key 在下一次启动后仍被回调接受（只受 size/mtime 守卫约束）；不带密钥启动时也会加载这些旧 key。旧密钥不可推知，所以不构成跨用户风险。是否在启动时丢弃持久化的注册表，交给 18.5 判定。
 
 Governing invariant：本次启动签发的文件令牌和新注册的文档 key 都由本次启动的密钥派生，别的实例和公开算法都得不到；没有密钥时插件既不签发令牌，也不注册新的 key，并且不会因此崩溃。
