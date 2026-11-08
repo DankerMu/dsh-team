@@ -10,6 +10,7 @@ import {
   buildUserImageExpectingFailure,
   runUserImage,
 } from './user-image-fixture.ts';
+import { assertOfficeConversion } from './office-convert-fixture.ts';
 import { profileSeedOracle } from './profile-seed-fixture.ts';
 import { execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
 import { runWebRejection } from './web-startup-fixture.ts';
@@ -259,6 +260,25 @@ it('saves and reopens exact Chinese DOCX content offline as the normal uid1001 u
     `Docker offline DOCX verified: run=${result.runId} image=${result.image} ` +
       `container=${result.container} network=none configuredUser=dsh ` +
       `readback=${result.stdout.replace(/\r?\n$/, '')} cleanup=complete\n`,
+  );
+});
+
+// Red without fonts (#553 VPS report `preview=failed code=gateway/internal`; #554 diagnosis:
+// `render` rejects `unavailable`, "No usable fonts were found").
+it('converts DOC, PPT and DOCX to Chinese PDFs offline under instance limits with the released preview engine', () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  let evidence = '';
+
+  const result = runUserImage('office-convert', (stdout) => {
+    evidence = assertOfficeConversion(stdout, assertDocxReadback);
+  });
+
+  process.stdout.write(
+    `Docker office conversion verified: run=${result.runId} image=${result.image} ` +
+      `container=${result.container} network=none user=1001 memory=4g pids=512 cpus=2 ` +
+      `${evidence} cleanup=complete\n`,
   );
 });
 
@@ -523,6 +543,19 @@ it.each([
       writeFileSync(path, original.replace(literal, 'expected="0.28.1"'));
     },
     'dsh-better-sidebar version mismatch: installed=0.28.0 expected=0.28.1',
+  ],
+  [
+    'the preview fonts are not installed',
+    (directory: string) => {
+      // Only the apt line loses fonts-noto-cjk; the font gate must name its missing face.
+      const path = join(directory, 'Dockerfile');
+      const packages = ' fonts-noto-cjk fonts-dejavu-core ';
+      const original = readFileSync(path, 'utf8');
+      if (original.split(packages).length !== 2)
+        throw new Error('Dockerfile copy must install the preview fonts exactly once');
+      writeFileSync(path, original.replace(packages, ' fonts-dejavu-core '));
+    },
+    'preview fonts missing: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
   ],
 ])('fails the user-image build when %s', (_name, primary, expected) => {
   if (platform() !== 'linux' || arch() !== 'x64') {

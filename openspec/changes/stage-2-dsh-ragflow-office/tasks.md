@@ -2897,7 +2897,10 @@ Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
 - [ ] 17.1 用户镜像安装 `dsh-better-sidebar@0.28.0`，不打补丁，并作为可管理项加入 `catalog.json`。版本不符时构建失败。验证：用户镜像 Docker 用例断言版本和目录一致；Docker 浏览器用例打开一个 docx，由 better-sidebar 的原生预览显示。
 - [ ] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
 - [ ] 17.3 HTML 预览沙箱（用户决定 2026-11-07：靠预览路由的 CSP，不钉 better-sidebar 配置）：`platform-nav` 客户端把 better-sidebar 的 `htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 两个开关显示为受管锁定。验证：platform-nav 单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明两个开关显示为受管锁定，经网关的预览文档带不含 `allow-same-origin` 的 CSP sandbox，HTML 预览中的脚本无法访问父页面；默认设置下点状态栏临时解锁后，以及员工在自己的 profile 中把两个键写为开启并重启实例后，结果不变。
-- [ ] 17.4 用户镜像安装 LibreOffice，DOC、XLS、PPT 只读预览，在实例内转换。验证：Docker 用例在 `--network none` 下转换三种旧格式成功；记录镜像大小的变化；本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
+- [ ] 17.4 DOC、XLS、PPT 只读预览（#554 诊断，用户决定 2026-11-07：DSH 0.2.1 的 DOC/PPT 预览只用自带的 WASM 引擎在实例内转换，缺的是字体，不装 LibreOffice；XLS 由 DSH 的浏览器表格视图显示，不经转换）。分三部分：
+  - （镜像，#432）用户镜像装 `fonts-noto-cjk`、`fonts-dejavu-core`。验证：Docker 用例在 `--network none`、实例同等限制下，用 DSH 自带的引擎把 DOC、PPT、DOCX 转成含中文内容的 PDF；17.1 的 docx 交接用例改为断言转换成功（页数至少 1、没有缺字体提示），渲染成功的要求见 #565；记录镜像大小的变化。
+  - （授权字体挂载，#561）部署配置授权字体目录时，平台把它只读挂载进每个实例的 `/usr/share/fonts/truetype/custom`。验证：Docker 用例证明实例内可读不可写，转换使用其中的字体；未配置时实例照常启动。
+  - （本机预览，#433）本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
 
 Suggested fixture level: expanded - 关键路径镜像变更
 Minimal mergeable slice: 17.1 better-sidebar 单独合入（不打补丁，Office 文件仍由它的原生预览打开，其他功能不变）
@@ -3361,6 +3364,109 @@ Evidence (17.3 HTML 预览沙箱，#431):
 - 本机：`pnpm check`；platform-nav 单元测试先红后绿。
 - VPS exact-head `pnpm test:docker`：包含新的浏览器用例，附两阶段截图、响应头和探测结果。
 - VPS exact-head `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+
+Risk packs (17.4 镜像部分：只读预览字体，#432，同时关闭 #554): fixture level expanded（关键路径 `images/dsh-user/`）。
+
+用户决定（2026-11-07）：镜像装 Debian 自由字体，保证任何部署下都能预览；部署配置了 D13 授权字体目录时再把它只读挂载进实例，挂载归 #561，本任务不做。spec「旧格式只读预览所需的运行环境」、design.md 决定 8 和任务 17.4 的文字已随本段改写。
+
+已核实的事实：
+
+- **DSH 0.2.1-rc.2 的转换链**：
+  - 预览调 `dsh-office-to-pdf`（`dsh-web-app/cordis.patch.yml` 的 `office-to-pdf` 行），它再调 `@deepseek-ai/libreoffice-kit@0.1.5` 的 `createConverter`。
+  - `resolveEngine`（`libreoffice-kit/lib/index.js:1519-1541`）在 Linux 上只用随 DSH 安装的 `@deepseek-ai/libreoffice-kit-wasm@0.1.5`：`os: ["linux"]`，status `built`，约 152MB。它不调用系统 soffice。
+  - 字体目录默认取 `XDG_DATA_DIRS`（`/usr/local/share:/usr/share`）下的 `fonts`，再加 `~/.fonts`、`~/.local/share/fonts`（`:1236-1250`）。
+  - 每次转换新起一个 Worker，重新实例化约 152MB 的 WASM（`:1818-1849`）。`outputPath` 用 `wx` 打开（`:1956-1967`），所以输出文件不能事先存在，所在目录必须可写。kit 是 `"type":"module"`，只能用 `import()` 加载。
+  - `dsh-office-to-pdf` 默认 `maxConcurrentConversions` 为 2（`lib/index.js:379`），每个 slot 一个转换器（`:589-600`）；转换在 DSH 进程的 Worker 里运行。
+- **哪些格式经转换**（`dsh-client-ui-sidebar-documentpreview/lib/client.js`）：
+  - office（PDF）预览只注册 `doc, docx, ppt, pptx`（`:6043-6048`）；
+  - `/excel` 预览注册 `xlsx, xls, csv, tsv`，由浏览器解析（`:6255-6266`），包 README 写明「Spreadsheet preview does not call the Office conversion service」。
+  - 所以 XLS/XLSX 不在本任务范围内：它们不依赖镜像字体，由 #433 断言 `/excel` 视图。
+- **bookworm 字体包**（`debian:bookworm-slim` 中 `dpkg -L` 实测）：
+  - `fonts-noto-cjk` `1:20220127+repack1-1` 安装 `/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`，Installed-Size 91003 KiB；
+  - `fonts-dejavu-core` `2.37-6` 安装 `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`，Installed-Size 2960 KiB。
+- **#554 本机实测**：
+  - 条件：用户镜像（`main` 3a30c99，原生 arm64），`--network none`，`--memory 4g --memory-swap 4g`（默认 `memoryMiB` 为 4096），`--pids-limit 512`，seccomp 取 `images/seccomp/dsh-user.json`，uid1001。
+  - 现状：`discoverRuntime` 正常（backend `wasm`），`createConverter` 正常。`render` 返回 `ConversionError` `unavailable`：「No usable fonts were found」。`dsh-office-to-pdf` 把它包装成 `document-render/failed`，`reason` 为 `unavailable`。前端 `conversionErrorKey('unavailable')` 显示的就是 17.1 用例看到的「Office 预览不可用」。
+  - 加装 `fonts-dejavu-core fonts-noto-cjk` 后：
+    - docx 转 PDF 成功，用时 2.1s，`missingFonts` 为空，内存峰值 1.56GB；
+    - 下面三个旧格式夹具各自转 PDF 也成功：每个 PDF 以 `%PDF-1.7` 开头、以 `%%EOF` 结尾，嵌入 `NotoSansCJK*` 子集字体，`missingFonts` 为空；同一转换器连续转三个，峰值 2.14GB；
+    - 镜像从 485MB 增加到 562MB（+78MB）。
+  - 中文内容回读：DOC 转 txt、XLS 转 csv 逐字包含标记。PPT 转 pptx 后，把各 slide XML 里的 `<a:t>` 文本按顺序拼接，等于标记。
+
+selected：
+
+- **镜像（`images/dsh-user/Dockerfile`）**：
+  - 在现有 `apt-get install -y --no-install-recommends` 一行加上 `fonts-noto-cjk fonts-dejavu-core`，不另起一层，不装 LibreOffice。
+  - 紧跟一个构建期门禁 RUN：`/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc` 和 `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` 必须是普通文件，否则以 `preview fonts missing: <path>` 失败。路径按 bookworm 包的实际安装位置核对，写进 Dockerfile 注释。
+- **旧格式夹具（测试数据，编排者生成，实现者原样入库）**：
+  - 放在 `platform/test/office-legacy/`，由编排者提供：
+    - 源文件：`probe.fodt`、`probe.fods`、`probe.fodp`，Flat ODF XML；
+    - 二进制：`probe.doc`（MS Word 97）、`probe.xls`（MS Excel 97）、`probe.ppt`（MS PowerPoint 97），用 Debian bookworm `debian:bookworm-slim` 中 `libreoffice-*-nogui` 的 LibreOffice 7.4.7.2 生成。`probe.xls` 供 #433 的 `/excel` 视图用例使用，本任务的探针不转换它；
+    - 同目录 `README.md`：写明来源、生成命令（`soffice --headless --convert-to "doc:MS Word 97"` 等）、版本，以及六个文件的 sha256。
+  - 中文标记：
+    - `旧格式探针 DOC：关于开展年度检查的通知`；
+    - `旧格式探针 XLS：部门`，另一格为 `金额`，下一行 `综合科`、`1234`；
+    - `旧格式探针 PPT：工作汇报`。
+  - 生成脚本不入库，仓库里只有数据和说明。
+- **Docker 用例**（`user-image.docker.test.ts` 新增一个 `it`；在 `user-image-fixture.ts` 新增 probe 成员 `office-convert`，不改 `offline-docx` 的行为）：
+  - 现有 `Probe` 路径做不到实例同等限制：`create` 只带 `--network none`，入口固定是 `python3 -c`，`start --attach`/`wait` 上限 30s，未知 probe 会悄悄退回 `offlineDocxScript`（`user-image-fixture.ts:94,120-186`）。所以：
+    - 未知 probe 改为抛错，不再退回；
+    - `office-convert` 的 `create` 带 `--user 1001`、`--network none`、`--memory 4g --memory-swap 4g`、`--pids-limit 512`、`--cpus 2`（默认 `cpuCores: 2`，`settings.ts:83`），`--security-opt seccomp=<repo>/images/seccomp/dsh-user.json`（CLI 传文件路径，照 `web-startup-fixture.ts:429-430`；inspect 时照 `assertSecurity` 比对内容），`--mount type=bind,source=<repo>/platform/test/office-legacy,target=/fixtures,readonly`；
+    - 入口为 `node --input-type=module -e <脚本>`；先 `start`，再有界 `wait`，上限 300s；
+    - `create` 之后 inspect 一次，断言 `Memory`/`MemorySwap` 为 4294967296、`PidsLimit` 为 512、`NanoCpus` 为 2000000000、`NetworkMode` 为 `none`、seccomp 内容与文件一致（照 `web-startup-fixture.ts:275-284` 的 `assertSecurity`）、`/fixtures` 挂载只读。
+  - 容器内脚本：
+    - 读 `/sys/fs/cgroup/memory.max`，应为 `4294967296`；
+    - 解析链照 `user-image.docker.test.ts:99-101`：DSH 包 → `@deepseek-ai/dsh-office-to-pdf` → `@deepseek-ai/libreoffice-kit`，用 `createRequire` 逐级 `resolve` 出 `package.json`，再 `import(pathToFileURL(<kit>/lib/index.js))`；
+    - `discoverRuntime()` 的 backend 为 `wasm`；`createConverter` 传 `dsh-office-to-pdf` 实际传入的九个选项及其发行默认值（`lib/index.js:387-397,458-470`：`timeoutMs` 60000 等），不传 `fontDirectories` 和 `fontFallbacks`，与产品相同，这样超过产品 60s 超时的转换也会让探针失败；
+    - 输入：`/fixtures/probe.doc`、`/fixtures/probe.ppt`，以及 `execFileSync('python3', ['-c', offlineDocxScript])` 生成的 `/data/work/offline.docx`（标记为既有的「离线办公验证」等段落）。输出统一写到新建的 `/data/work/out/`，每个输出路径都事先不存在；
+    - 每个输入做一次 `render`：PDF 以 `%PDF-` 开头、以 `%%EOF` 结尾，至少嵌入一个名字含 `CJK` 的 `/BaseFont`，`missingFonts` 为空数组；
+    - 每个输入做一次 `convert` 回读中文：DOC 转 txt 去掉 BOM、`\r` 和末尾换行后等于标记；DOCX 转 odt 后用 python3 `zipfile` 读 `content.xml`，段落和表格单元格文本精确等于 offline-docx 的两段和四个单元格（不用 txt：libreoffice-kit 0.1.5 的 WASM 引擎把带表格的 DOCX 导出为 txt 时挂起到超时，VPS 实测，见 #566）；PPT 转 pptx 后用 python3 `zipfile`，只取 `^ppt/slides/slide\d+\.xml$`，按数字顺序，拼接其中 `<a:t>` 文本，等于标记；
+    - 共 6 次转换，证据记录每次耗时、每个 PDF 的字节数、嵌入的 CJK 字体名、`missingFonts`；
+    - 串行阶段结束后读一次 `/sys/fs/cgroup/memory.peak`（只增不减），记为单次峰值；
+    - 再用两个转换器并行 `render` 同一个 DOCX 一次，模拟 `dsh-office-to-pdf` 的默认两路并发。两路都必须成功；在 4GiB 下被 OOM 终止，就停下来报告，作为产品层面的发现，不放宽限制。之后再读一次 `memory.peak`，记为并发峰值；
+    - `memory.peak` 缺失不算失败（内核低于 5.19 没有这个文件），两次都记为 null。
+  - 镜像大小：容器内用 `dpkg-query -W -f='${Installed-Size}'` 读两个字体包的安装大小并记录，它就是本任务带来的增量；再记录 `docker image inspect` 的 Size。
+  - 红：VPS 无字体时的两条已有证据。一条是 #553 VPS 报告行 `preview=failed code=gateway/internal`；另一条是 #554 诊断评论，`render` 返回 `unavailable`：「No usable fonts were found」。新探针在本机跑不了（linux/x64 守卫）。
+  - 构建期字体门禁的拒绝用例：在 `user-image.docker.test.ts:477-539` 的 `it.each` 加一行，从 primary 副本的 apt 行去掉 `fonts-noto-cjk`，期望输出 `preview fonts missing: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`。
+- **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。`observeDocx`（`better-sidebar-browser-fixture.mjs:209-240`）只有在有可见页面 canvas、且没有 failed/alert 时才判为 `rendered`。现在断言页数至少 1、`fontWarning` 为 false，状态只能是 `rendered`，或者恰好是 `failed` 且消息含 `getOrInsertComputed`。后者是已知的验证浏览器限制：DSH 0.2.1 的 PDF 查看器需要 Chrome/Edge 145+、Firefox 144+、Safari 26.2+，受信 VPS 的 Chrome for Testing 140 不支持（VPS 实测转换成功、`pages: 1`；用户决定 2026-11-08）。其他任何失败仍让用例失败。升级验证浏览器、把状态收紧为只接受 `rendered`，见 #565。报告行保留 `pages=`。断言 `fontWarning` 为 false：kit 在未给 `fontDirectories` 时带上自带的 office 字体（`includeOfficeFonts`，`libreoffice-kit/lib/index.js:1455`），并把 Calibri 映射到 Carlito（`:1291`）；#554 本机用同一 python-docx 文档实测 `missingFonts` 为空，与探针对 DOCX 的断言一致。`:148` 的注释同步改写。
+- **文档（编排者同 PR 改）**：
+  - `platform/test/README.md`：用户镜像段写字体与新 probe；
+  - `docs/DEPLOY.md`：在资源相关处写实测数值，不给阈值：DOC/PPT/DOCX 只读预览在实例内转换，单次和两路并发的 cgroup 峰值（本探针记录的两个数值），不含 DSH 常驻内存，DSH 默认最多两路并发；被 OOM 终止会连带 DSH 进程；
+  - `platform/test/office-legacy/README.md`：编排者提供。
+
+must-preserve：
+
+- 现有 `apt-get` 一行的其他包、DSH 版本门禁、catalog 门禁、profile-seed 不变。
+- `offline-docx` 用例不变。
+- 17.1 的交接断言（`HOST_OWNED_EXTS` 把 docx 交给 DSH 预览）不变，只是在它之上加渲染成功断言。
+
+not selected：
+
+- 授权字体挂载（#561）、本机通道预览（#433）：各自的 issue。
+- 系统 LibreOffice：不装。DSH 0.2.1 不用它。
+- Schema、API、迁移：无。
+
+剩余风险：
+
+- 免费字体只是替代，公文字体（仿宋_GB2312 等）由 #561 解决；在那之前预览用替代字体排版。
+- arm64 本机实测不能代表 amd64；VPS 用例是门禁。
+- 镜像变大约 78MB（两个字体包安装大小合计约 92MiB）。
+- `~/.fonts` 在员工可写的 home 中，员工能给自己的实例加字体，影响只限本实例，与 D9 的边界相同，作为已接受的风险。
+- PR 和 issue #432 的标题、任务清单已过时（仍写 LibreOffice，必读表指向已删除的 managed-config 要求），以本夹具为准，PR 中注明。
+
+Governing invariant：员工实例在不联网、实例资源限制下，能用 DSH 自带的引擎把 DOC、PPT、DOCX 转成含中文内容的 PDF；镜像不依赖系统 LibreOffice。
+
+Sibling surfaces：
+
+- 17.1 的 docx 交接用例；
+- `offline-docx` probe；
+- 18.6 满员退路（退回本预览）。
+
+Evidence (17.4 镜像部分，#432):
+
+- 本机：`pnpm check`。
+- VPS exact-head `pnpm test:docker`（新 probe 和升级后的 17.1 用例，附证据）和 `pnpm test:deploy`，清理已确认；PR 写明镜像大小变化。
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 
 ## 18. Office 在线编辑

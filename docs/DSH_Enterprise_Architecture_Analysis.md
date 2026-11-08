@@ -222,7 +222,7 @@
 - **未测**：XLSX 和 PPTX 的编辑、编辑器开着时 Agent 改文件后的自动刷新、人机同时写的覆盖表现、网关断开重连、20 连接上限的实际表现、amd64 上的 Document Server。
 - **使用上的约束**：编辑器要求当前有 Session，没有 Session 时打不开 Office 文件。
 - **附带发现**：
-  - DSH 自带的 Office 只读预览需要镜像里有 LibreOffice，否则报不可用。打了上面的补丁后 docx/xlsx/pptx 不再走它，但旧 DOC/XLS/PPT 仍走它。
+  - DSH 自带的 Office 只读预览需要镜像里有 LibreOffice，否则报不可用。打了上面的补丁后 docx/xlsx/pptx 不再走它，但旧 DOC/XLS/PPT 仍走它。（2026-11-07 #554 更正：DSH 0.2.1 的 DOC/PPT 预览只用随 DSH 安装的 WASM LibreOffice，不用系统 LibreOffice，缺的是字体；XLS/XLSX 在浏览器表格视图里显示，不经转换。）
   - `better-sidebar` 的版本与 DSH 版本线强绑定（其 README 有对应表），升级 DSH 时两个插件和补丁要一起验证。
   - `better-sidebar` 有“关闭 HTML 预览沙箱”的设置项（`htmlViewerNoSandbox`，默认关），受管配置应把它钉死为关闭。
   - `better-sidebar` 的右侧栏带终端入口。项目方决定不隐藏，保持可展开折叠。

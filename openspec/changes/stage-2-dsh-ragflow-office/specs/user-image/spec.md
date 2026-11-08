@@ -71,7 +71,7 @@
 
 ### Requirement: 旧格式只读预览所需的运行环境
 
-用户镜像 MUST 带有 LibreOffice，使 DSH 自带的文档预览能在实例内、不联网地把 DOC、XLS、PPT，以及 Document Server 不可用时的 DOCX、XLSX、PPTX 转成 PDF 只读显示。
+用户镜像 MUST 带有中文和西文字体（Debian `fonts-noto-cjk`、`fonts-dejavu-core`），使 DSH 自带的文档预览（随 DSH 安装的 WASM LibreOffice 引擎，缺字体时拒绝转换）能在实例内、不联网地把 DOC、PPT，以及 Document Server 不可用时的 DOCX、PPTX 转成 PDF 只读显示。XLS、XLSX 由 DSH 的浏览器表格视图只读显示，不经转换。镜像 MUST NOT 另装系统 LibreOffice：DSH 0.2.1 不使用它。
 
 #### Scenario: 断网转换旧格式
 

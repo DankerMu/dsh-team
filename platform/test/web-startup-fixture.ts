@@ -272,7 +272,7 @@ function json(text: string): unknown {
   }
 }
 
-function assertSecurity(host: Record<string, unknown>, seccomp: string): void {
+export function assertSecurity(host: Record<string, unknown>, seccomp: string): void {
   const security = host.SecurityOpt;
   // Docker versions normalize the supplied path into seccomp=<policy JSON> in inspect.
   if (!Array.isArray(security) || security.length !== 1 || typeof security[0] !== 'string') {

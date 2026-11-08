@@ -203,8 +203,8 @@ async function observeMarkdown(page, evidence, markdown) {
  * The docx: better-sidebar handed it to DSH's own Office preview and drew no viewer for it. The
  * preview must then settle in exactly one released state, read only inside the matched container:
  * `rendered` (a drawn PDF page canvas) or `failed` (`data-textpreview-failed`, whose value is the
- * code, or a `[role="alert"]` status, which has none). Which state occurred is recorded, not
- * asserted (#554); an unsettled preview times out.
+ * code, or a `[role="alert"]` status, which has none). The state is recorded here and the caller
+ * judges it (#554); an unsettled preview times out.
  */
 async function observeDocx(page, evidence, docx) {
   return stage(page, evidence, 'docx', async () => {

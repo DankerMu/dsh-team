@@ -145,9 +145,24 @@ it('opens Markdown in better-sidebar and hands a docx from its file area to the 
         paragraph: true,
         dshMarkdown: false,
       });
-      // DSH's Office preview received the docx and settled; its outcome is recorded, not
-      // asserted (#554). better-sidebar drew no editor or download pane.
-      expect(observed.docx).toMatchObject({ nativeHost: false, downloads: 0, editors: 0 });
+      // DSH's Office preview received the docx and converted it to at least one page with the
+      // image's preview fonts (#554), without the missing-fonts warning: the preview shows it only
+      // for a non-empty missingFonts, which the office-convert probe asserts empty for this docx.
+      // better-sidebar drew no editor or download pane.
+      expect(observed.docx).toMatchObject({
+        fontWarning: false,
+        nativeHost: false,
+        downloads: 0,
+        editors: 0,
+      });
+      expect(observed.docx.code).toBeUndefined();
+      // DSH 0.2.1's pdf.js viewer calls Map.prototype.getOrInsertComputed (Chrome/Edge 145+,
+      // Firefox 144+, Safari 26.2+), absent from the pinned Chrome for Testing 140, so the converted
+      // PDF may stop there and only that exact failure is tolerated. #565 makes `rendered` mandatory.
+      expect(`${observed.docx.state}: ${observed.docx.message ?? ''}`).toMatch(
+        /^rendered: |^failed: .*getOrInsertComputed/,
+      );
+      expect(observed.docx.pages).toBeGreaterThanOrEqual(1);
       expect(observed.consoleErrors).toEqual([]);
       return {
         summary: JSON.stringify({
