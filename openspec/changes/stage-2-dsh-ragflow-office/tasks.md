@@ -3280,7 +3280,7 @@ selected：
   - 未匹配的绝对形式目标（`HEAD http://h/_platform/instance-api/ragflow/datasets/<id>/documents?keywords=S`，以及带结尾斜杠的 GET），日志里不出现 query 内容，只有 `?[redacted]`。
   - 都不读设置，也不访问 RAGFlow。
 - **文档（编排者同 PR 改）**：
-  - `platform/src/gateway/README.md` 第 9 行一带写明：先在 `?`/`#` 前截断，再按 `decodeURI` 解码后分类；`%2F` 这类保留字符的转义不解码；无法解码的目标回 404。
+  - `platform/src/gateway/README.md` 第 9 行一带写明：先在 `?`/`#` 前截断，再按 `decodeURI` 解码后分类；`%2F` 这类保留字符的转义不解码；无法解码的目标，HTTP 由路由器回 400，upgrade 回 404。
   - `platform/src/ragflow-proxy/README.md` 第 9 行一带（目前写的是 query-stripped raw path 的前缀判定）必须同步改写：原始路径先在 `?`/`#` 前截断、按 `decodeURI` 解码，再判断前缀。
 
 must-preserve：
