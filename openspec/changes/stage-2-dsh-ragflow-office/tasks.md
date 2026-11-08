@@ -3228,49 +3228,75 @@ Evidence (#555):
 - VPS exact-head `pnpm test:docker`（含新的浏览器用例，附截图和探测结果）和 `pnpm test:deploy`，清理已确认。
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 
-Risk packs (#523 网关保留路径按路由器的解码规则判断): fixture level standard（网关准入分类，不改鉴权）。
+Risk packs (#523 保留路径与 RAGFlow 代理前缀按路由器的解码规则判断): fixture level standard（准入分类和日志脱敏，不改鉴权本身）。范围包含 issue 下的三条补充评论：代理的 `underPrefix` 改用同一个函数，绝对形式和编码变体的鉴权与日志脱敏一起修好。
 
 已核实的事实（行号以 `main` 为准）：
 
-- `platform/src/gateway/routes.ts:43-46` 的 `platformPath(url)` 只对 `requestTarget(url)` 去掉 query，不解码。`admission(request)`（`:79-90`）对 HTTP 的 `/*` 兜底路由（`admit`）和 WebSocket upgrade（`admitUpgrade`，`:166-206`）共用这一判断。
-- Fastify 5 的路由器 find-my-way 9.9.0 在匹配前解码路径（`index.js:602-614`）：
-  - 除 `#$&+,/:;=?@` 外的 `%XX` 都按 `decodeURI` 解码（`lib/url-sanitizer.js`），例如 `%5F` → `_`、`%6d` → `m`；
-  - 无法解码的 `%` 序列走 `_onBadUrl`，Fastify 默认回 400，所以 HTTP 网关路由见不到它，只有 upgrade 会见到。
-- `decodeURI` 恰好不解码 `;/?:@&=+$,#` 这组保留字符的转义，与路由器的例外集合相同；遇到非法序列时抛 `URIError`。
-- 转发用的是原始目标（`http.ts` 的 `requestTarget(rawTarget)`），DSH 收到的仍是编码后的路径。
+- `platform/src/gateway/routes.ts:43-46` 的 `platformPath(url)` 只对 `requestTarget(url)` 去掉 `?` 之后的部分，不解码。`admission(request)`（`:79-90`）对 HTTP 的 `/*` 兜底路由（`admit`）和 WebSocket upgrade（`admitUpgrade`）共用这一判断。
+- `platform/src/ragflow-proxy/instance-auth.ts:60-64` 的 `underPrefix`：
+  - 先看 `routeOptions.url`；
+  - 否则看 `request.url.split('?')[0]` 是否以 `/_platform/instance-api/ragflow/` 开头：不处理绝对形式，不解码，也不在 `#` 处截断。
+  - 它同时用于代理鉴权（`:77`）和请求日志脱敏（`platform/src/app.ts:76-88` 的 `serializeRequest`）。
+- **find-my-way 9.9.0 的规则**：
+  - 在第一个 `?` 或 `#` 处截断路径（`lib/url-sanitizer.js:101,146`）；`useSemicolonDelimiter` 默认关闭，`;` 不算分隔符。
+  - 除 `#$&+,/:;=?@` 和 `%25` 外，其余 `%XX` 都解码（`%5F` → `_`）。`%25` 会被重新编码，保留为 `%25`。
+  - 无法解码时走 `_onBadUrl`（Fastify 回 400）。
+- `decodeURI` 不解码 `;/?:@&=+$,#` 的转义，与路由器的例外集合相同。唯一的差别是 `%25`，`decodeURI` 会把它解成 `%`；保留前缀里不含 `%`，所以分类结论不受影响。遇到非法序列时 `decodeURI` 抛 `URIError`。
+- Node 解析器在 HTTP 和 upgrade 里都接受 `#`，`request.url` 原样保留。`app.inject` 和 `fetch` 会丢掉 `#`，所以带 fragment 的用例必须用原始 socket 发送（`sendHttp`、`rejectedUpgrade` 等）。
+- 转发用的是原始目标（`http.ts` 的 `requestTarget(rawTarget)`）。
 
 selected：
 
-- **分类与路由器一致（`platform/src/gateway/routes.ts`）**：
-  - `platformPath` 先去掉 query，再对路径部分用 `decodeURI` 解码，然后判断：等于 `/healthz` 或 `/_platform`，或以 `/_platform/` 开头。
-  - `decodeURI` 抛错时按保留路径处理，返回 true（fail closed）：`admission` 回 404，HTTP 和 upgrade 都不转发、不鉴权。
-  - HTTP 和 upgrade 继续共用这一个函数，不新增第二份分类逻辑。不新增状态码，所以路由 schema 和 `schemas/openapi.json` 不变。
-  - `%2F` 等保留字符的转义保持不解码，与路由器一致：`/_platform%2Fx` 两边都不算保留路径。大小写和重复斜杠仍与路由器一致，不处理。
-- **单元测试**：`platformPath` 如有导出需要，照 `isImmutableAsset` 的做法导出并配单测；否则在集成测试覆盖。每行写死期望值：
-  - 保留：`/_platform`、`/_platform/x`、`/%5Fplatform/missing`、`/_platfor%6d/missing`、`/%5F%70latform`、`/%68ealthz`、`/healthz?x=1`、绝对形式 `http://h/%5Fplatform/x`、非法 `/%E0%A4%A`、`/%zz`；
-  - 不保留：`/`、`/_platformx`、`/_platform%2Fx`、`/_PLATFORM/x`、`/x/_platform`、`/healthzx`。
-- **集成测试（`platform/test/gateway-http.integration.test.ts` 和 WebSocket 集成测试，沿用 stub upstream）**：
-  - 带有效会话的 `GET /%5Fplatform/missing`、`GET /_platfor%6d/missing` 返回平台 404，上游收不到请求。不带会话时同样返回 404，不再是 401 或跳转登录页。
-  - `GET /%68ealthz` 由健康检查路由应答（路由器解码后命中已声明路由），上游收不到请求。
-  - 带有效会话、Origin 正确的 WebSocket upgrade 到 `/%5Fplatform/x`、`/%68ealthz` 和非法 `%` 序列路径，都被 `rejectUpgrade(404)` 拒绝，上游收不到连接。
-  - 先红后绿：修改前这些编码变体会被转发或回 401。
-  - 现有 `/_platform/missing` 和 RAGFlow 实例接口前缀的用例不变。
+- **唯一的路径函数（新文件 `platform/src/request-path.ts` 及其单测）**：
+  - `requestTarget` 从 `gateway/http.ts` 原样移到这里。网关改为从这里 import，不再保留第二份。
+  - 新增 `routerPath(rawUrl): string | null`：`requestTarget(rawUrl).split(/[?#]/, 1)[0]` 再 `decodeURI`；抛错时返回 null。
+  - 根级文件的先例是 `bounded-body.ts`。网关和 ragflow-proxy 都 import 它，不经对方的 `index.ts`。
+- **网关（`platform/src/gateway/routes.ts`）**：
+  - `platformPath` 改为：`routerPath` 为 null 时返回 true（fail closed，`admission` 回 404，不鉴权、不转发）；否则判断是否等于 `/healthz` 或 `/_platform`，或以 `/_platform/` 开头。
+  - HTTP 和 upgrade 继续共用这一判断。不新增状态码，路由 schema 和 `schemas/openapi.json` 不变。
+- **代理（`platform/src/ragflow-proxy/instance-auth.ts`）**：
+  - `underPrefix` 的原始路径分支改为 `routerPath(request.url)?.startsWith(PREFIX) === true`。`ragflow%2Fversion` 按路由器的规则不在前缀内，所以照旧回网关 404，不是 401。
+  - `serializeRequest` 不改，它经 `underPrefix` 自动覆盖。
+- **单元测试（`request-path.test.ts`）**：每行写死 `routerPath` 的期望值：
+  - 正常解码：`/%5Fplatform/x` → `/_platform/x`；`/%5fplatform/x` 也是。`/_platfor%6d/x` → `/_platform/x`。`/_platform%2Fx` → 原样，`%2F` 不解码。
+  - 先截断再解码：`/_platform#x` → `/_platform`；`/healthz#x` → `/healthz`。`/x#%zz` 和 `/x?%zz` 都 → `/x`，截断后不解码后面的部分。
+  - 绝对形式：`http://h/%5Fplatform#x` → `/_platform`；`HTTP://h/%5Fplatform/x` → `/_platform/x`。
+  - `%25`：`/_platform/%25` 的解码结果以 `/_platform/` 开头。
+  - 非 ASCII：`/%C3%A9` → `/é`。
+  - 非法序列：`/%zz`、`/%E0%A4%A`、超长编码 `/_platform/%C0%AF` 都 → null。
+  - `requestTarget` 原有的单测随它一起移过来。
+- **网关集成测试（`platform/test/gateway-http.integration.test.ts`，以及 WebSocket 集成测试）**：
+  - 沿用 `:178-198` 的做法：resolver 返回 running 的 stub，同时断言 resolver 一次都没被调用，stub 的请求记录为空。不能只看 stub 有没有收到请求：resolver 返回 `stopped` 时，stub 本来就收不到。
+  - HTTP 用例：
+    - 带会话的 `GET /%5Fplatform/missing`、`/_platfor%6d/missing`、`/_platform#x`（原始 socket）都返回 404；
+    - 不带会话的 `/%5Fplatform/missing` 返回 404，不再是 401 或跳转登录页。
+  - upgrade 用例：带会话、Origin 正确，目标为 `/%5Fplatform/x`、`/%68ealthz`、`/%5Fplatform#x`、`/%zz`，全部 `rejectUpgrade(404)`，resolver 没被调用。
+  - 原样转发的正向对照：带会话的 `GET /files/a%20b` 和 `GET /_platform%2Fx`，上游收到的 path 与原始目标逐字相同。
+  - HTTP `GET /%68ealthz` 由健康检查路由应答。修改前它也是绿的，只作为守护行，不计入「先红后绿」。
+  - 先红后绿：其余编码和 fragment 变体在修改前会被转发或回 401。
+- **代理集成测试（`platform/test/ragflow-proxy-documents.integration.test.ts` 或同类文件）**：
+  - 不带令牌时，`GET /%5Fplatform/instance-api/ragflow/x?keywords=S`、`/_platform/instance-api/ragflo%77/x`、`GET http://h/_platform/instance-api/ragflow/x?keywords=S`（原始 socket，绝对形式）都返回 401；`/_platform/instance-api/ragflow%2Fversion` 仍是 404。
+  - 未匹配的绝对形式目标（`HEAD http://h/_platform/instance-api/ragflow/datasets/<id>/documents?keywords=S`，以及带结尾斜杠的 GET），日志里不出现 query 内容，只有 `?[redacted]`。
+  - 都不读设置，也不访问 RAGFlow。
+- **文档（编排者同 PR 改）**：
+  - `platform/src/gateway/README.md` 第 9 行一带写明：先在 `?`/`#` 前截断，再按 `decodeURI` 解码后分类；`%2F` 这类保留字符的转义不解码；无法解码的目标回 404。
+  - `platform/src/ragflow-proxy/README.md` 若写有前缀判定，同步改写。
 
 must-preserve：
 
-- 规范写法的分类结果不变；已声明的平台路由仍由路由器匹配，各自的钩子照常执行。
-- `installRequestGuard` 和 session-heal 不在范围内（#523 已核实它们看的是 `routeOptions.url`）。
-- 网关其他响应头和转发行为不变。
+- 规范写法的分类结果不变。唯一有意的改变：带 fragment 的 `/_platform#x` 以前会被转发，现在回 404。
+- 已声明的平台路由仍由路由器匹配，各自的钩子照常执行；`installRequestGuard` 和 session-heal 不改。
+- 网关其他响应头和转发行为不变，包括 `isWorkspaceDocument`。
 
 not selected：Schema、API、迁移：无。
 
 剩余风险：
 
-- DSH 自己是否解码 `%2F`：保留字符转义的路径仍会转发给员工自己的实例，与路由器的行为一致，不跨用户。
+- 带保留字符转义的路径（`%2F`）仍会转发给员工自己的实例，与路由器一致，不会跨到其他用户的实例。DSH 自己是否解码，不在本任务范围。
 
-Governing invariant：路由器视为保留命名空间（`/healthz`、`/_platform` 及其后代）的任何请求目标，网关都不转发给实例；解码失败的目标也不转发。
+Governing invariant：路由器视为保留命名空间（`/healthz`、`/_platform` 及其后代）的任何请求目标，包括绝对形式和带 fragment 的写法，网关都不转发给实例；解码失败的目标也不转发。代理鉴权和日志脱敏对同一组请求生效。
 
-Sibling surfaces：`isWorkspaceDocument`（#555，用 DSH 自己的规则判断 `/sidebar/file`）；RAGFlow 实例接口前缀（#413）。
+Sibling surfaces：`isWorkspaceDocument`（#555）；RAGFlow 代理前缀（#413）；`serializeRequest`（#527）。
 
 Evidence (#523):
 
