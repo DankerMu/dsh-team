@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
+import { useRequestOwner } from './request-owner.ts';
 
 type Section = 'catalog' | 'sources' | 'web';
 type CatalogState = 'employee' | 'forced-on' | 'forced-off';
@@ -221,42 +222,34 @@ async function save(section: Section, body: unknown, signal: AbortSignal): Promi
 
 export function PluginsPage() {
   const [view, setView] = useState<View>(INITIAL);
-  const owner = useRef<AbortController | null>(null);
+  const owner = useRequestOwner();
   const perform = useCallback(async (section?: Section, body?: unknown) => {
     // One page-level owner: no request starts while another load or save is in flight.
-    if (owner.current !== null) return;
-    const controller = new AbortController();
-    owner.current = controller;
-    const current = () => owner.current === controller && !controller.signal.aborted;
+    const claim = owner.claim();
+    if (claim === null) return;
     setView((previous) =>
       section === undefined ? INITIAL : { ...previous, phase: 'saving', error: null },
     );
     try {
       const outcome =
-        section === undefined
-          ? await load(controller.signal)
-          : await save(section, body, controller.signal);
-      if (!current()) return;
+        section === undefined ? await load(claim.signal) : await save(section, body, claim.signal);
+      if (!claim.current()) return;
       if (typeof outcome === 'function') setView(outcome);
       else {
         setView(DENIED);
         if (outcome === 401) window.location.assign('/_platform/login');
       }
     } finally {
-      if (current()) owner.current = null;
+      claim.release();
     }
   }, []);
   useEffect(() => {
     void perform();
-    return () => {
-      owner.current?.abort();
-      owner.current = null;
-    };
   }, [perform]);
   function submit(section: Section) {
     return (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (owner.current !== null || view.drafts === null) return;
+      if (owner.busy() || view.drafts === null) return;
       void perform(section, payload(section, view.drafts));
     };
   }

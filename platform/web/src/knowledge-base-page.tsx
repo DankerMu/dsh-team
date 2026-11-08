@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
 import { adminRequest } from './admin-request.ts';
+import { useRequestOwner } from './request-owner.ts';
 
 type Section = 'connection' | 'retrieval';
 type Action = 'load' | Section | 'test';
@@ -207,13 +208,11 @@ async function test(signal: AbortSignal): Promise<Outcome> {
 function useKnowledgeBase() {
   const [view, setView] = useState<View>(INITIAL);
   const [key, setKey] = useState('');
-  const owner = useRef<AbortController | null>(null);
+  const owner = useRequestOwner();
   const perform = useCallback(async (action: Action, payload?: unknown) => {
     // One page-level owner: no load, save or test starts while another is in flight.
-    if (owner.current !== null) return;
-    const controller = new AbortController();
-    owner.current = controller;
-    const current = () => owner.current === controller && !controller.signal.aborted;
+    const claim = owner.claim();
+    if (claim === null) return;
     // A connection test uses saved values only; every load and save clears the typed key.
     if (action !== 'test') setKey('');
     setView((previous) =>
@@ -222,11 +221,11 @@ function useKnowledgeBase() {
     try {
       const outcome =
         action === 'load'
-          ? await load(controller.signal)
+          ? await load(claim.signal)
           : action === 'test'
-            ? await test(controller.signal)
-            : await save(action, payload, controller.signal);
-      if (!current()) return;
+            ? await test(claim.signal)
+            : await save(action, payload, claim.signal);
+      if (!claim.current()) return;
       if (typeof outcome === 'function') setView(outcome);
       else {
         setKey('');
@@ -234,22 +233,18 @@ function useKnowledgeBase() {
         if (outcome === 401) window.location.assign('/_platform/login');
       }
     } finally {
-      if (current()) owner.current = null;
+      claim.release();
     }
   }, []);
   useEffect(() => {
     void perform('load');
-    return () => {
-      owner.current?.abort();
-      owner.current = null;
-    };
   }, [perform]);
   const reject = (text: string) => {
     setView((previous) => ({ ...previous, notice: { text, alert: true } }));
   };
   function saveConnection(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (owner.current !== null || view.drafts === null) return;
+    if (owner.busy() || view.drafts === null) return;
     const { baseURL } = view.drafts.connection;
     if (baseURL === '') reject('请输入 RAGFlow 地址。');
     else if (key !== '' && key.trim() === '') reject('密钥不能只包含空白字符。');
@@ -258,7 +253,7 @@ function useKnowledgeBase() {
   }
   function saveRetrieval(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (owner.current !== null || view.drafts === null) return;
+    if (owner.busy() || view.drafts === null) return;
     const { topK, threshold, weight, rerankId } = view.drafts.retrieval;
     const [retrievalTopK, retrievalSimilarityThreshold, retrievalKeywordsWeight] = [
       topK,

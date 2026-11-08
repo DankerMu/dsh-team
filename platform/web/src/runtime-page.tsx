@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
+import { useRequestOwner } from './request-owner.ts';
 
 const NUMBERS = [
   { name: 'idleMinutes', label: '空闲分钟数', integer: true },
@@ -104,12 +105,10 @@ async function requestRuntime(signal: AbortSignal, payload?: RuntimeValues) {
 
 export function RuntimePage() {
   const [view, setView] = useState<View>(INITIAL);
-  const owner = useRef<AbortController | null>(null);
+  const owner = useRequestOwner();
   const perform = useCallback(async (payload?: RuntimeValues) => {
-    if (owner.current !== null) return;
-    const controller = new AbortController();
-    owner.current = controller;
-    const current = () => owner.current === controller && !controller.signal.aborted;
+    const claim = owner.claim();
+    if (claim === null) return;
     const saving = payload !== undefined;
     const failed = (message: string) => {
       setView((previous) => ({
@@ -126,8 +125,8 @@ export function RuntimePage() {
       message: '',
     }));
     try {
-      const response = await requestRuntime(controller.signal, payload);
-      if (!current()) return;
+      const response = await requestRuntime(claim.signal, payload);
+      if (!claim.current()) return;
       if (response.status === 401 || response.status === 403) {
         setView({ ...INITIAL, phase: 'denied', error: '无权限' });
         if (response.status === 401) window.location.assign('/_platform/login');
@@ -150,21 +149,17 @@ export function RuntimePage() {
         message: saving ? '已保存运行参数。' : '',
       });
     } catch {
-      if (current()) failed(saving ? FAILURE : '运行参数加载失败，请重试。');
+      if (claim.current()) failed(saving ? FAILURE : '运行参数加载失败，请重试。');
     } finally {
-      if (current()) owner.current = null;
+      claim.release();
     }
   }, []);
   useEffect(() => {
     void perform();
-    return () => {
-      owner.current?.abort();
-      owner.current = null;
-    };
   }, [perform]);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (owner.current !== null || view.draft === null) return;
+    if (owner.busy() || view.draft === null) return;
     const payload = {
       idleMinutes: Number(view.draft.idleMinutes),
       cpuCores: Number(view.draft.cpuCores),
