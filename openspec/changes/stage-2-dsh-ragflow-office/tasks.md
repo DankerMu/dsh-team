@@ -3700,3 +3700,31 @@ Evidence (18.1):
 
 Suggested fixture level: none - 只做集成验证，不改代码
 Minimal mergeable slice: atomic: 只有验证和记录，没有可合并的代码
+
+## 20. 技术债 #568：实例列表泄漏断言里的端口字面量会随机命中日志数字
+
+依赖：无。由 #568 承载，处理方式同第 6 组。
+
+- [ ] 20.1 `platform/test/admin-instances.integration.test.ts` 的泄漏检查中，种子端口 `49173` 对日志行的检查不再受日志运行时字段的取值影响；对响应正文的检查和其他密钥的检查不变。验证：Docker-free 用例证明日志运行时字段含 `49173` 时不误报，`msg` 或其他字段、响应正文含 `49173` 时仍然失败。
+
+Suggested fixture level: compact - 只改一个测试的断言方式，产品代码不变
+Minimal mergeable slice: atomic: 一个测试文件加一个小 helper
+Risk packs (20.1): selected - Legacy compatibility（泄漏检查不能变弱：只对数字端口字面量做日志归一化；其他密钥和字段名仍逐字节匹配原始 `text + lines.join('')`）、Error handling（日志行必须能解析为 JSON，否则用例失败，不跳过）；not selected - Config、Schema、Auth、Public API、Concurrency、File IO、Resource limits、Release、Documentation。无关键路径文件。
+Evidence (20.1): **现状**：`:59` 把 `upstream_port` 写死为 `49173`；`:150-166` 对密钥列表（含 `'49173'`，`:156`）做 `expect(text + lines.join('')).not.toContain(secret)`。`lines` 是 `withApp`（`platform/test/auth-fixture.ts:125-170`）收集的全部 pino JSON 行，带 pino 的 `time`、`pid`、`hostname`，请求日志的 `req.host`（含临时监听端口）和 `req.remotePort`（`platform/src/app.ts:76-90`），以及完成日志的 `responseTime`。这些数字任一含有 `49173` 就误报：rebase 后的 #564 分支上实测失败一次，单独重跑通过。**改动**：
+
+- 把 `'49173'` 移出逐字节列表。正文 `text` 仍做 `not.toContain('49173')`。
+- 日志另做一次检查：逐行 `JSON.parse`，解析失败就让用例失败。删掉顶层 `time`、`pid`、`hostname`、`responseTime`，以及 `req.host`、`req.remotePort`，再对 `JSON.stringify` 的结果做 `not.toContain('49173')`。删除只在字段存在时进行，不新增字段。Fastify 启动日志的 `msg` 也要排除：只在它与 `` `Server listening at ${base}` `` 完全相等时才删掉，`base` 是 `withListeningApp` 给的地址（Fastify 5.12 `lib/server.js:24,394`；临时端口可能正好是 49173）。其他 `msg` 照常检查。
+- 归一化写成本文件内的小函数，或放进 `auth-fixture.ts` 并导出。先 grep：只在已有同类 helper 时复用，否则留在本文件。不另建模块，`knip` 不得报出未用导出。
+
+**回归**：同文件新增一个不起应用的用例，直接调用归一化后的检查函数：
+
+- 一组合成日志行，`time`、`responseTime`、`pid`、`req.host`、`req.remotePort` 各自含 `49173` → 不报；
+- `msg` 为 `Server listening at http://127.0.0.1:49173`，且 `base` 是同一地址 → 不报；
+- 同一 `base`，但 `msg` 在这串地址后面多出内容，或者是其他含 `49173` 的文本；`err.message`、任一自定义字段含 `49173`；或某行不是 JSON → 报（断言抛错）。
+- 先看到旧的裸子串写法在第一组上报错（红），再换成新写法转绿。
+
+验证：`pnpm test:integration platform/test/admin-instances.integration.test.ts` 通过；`pnpm check` 通过；VPS exact-head 全量 `test:docker` 和 `test:deploy` 通过，cleanup confirmed（产品代码不变，只是满足合并门禁）；本机 exact-head `pnpm test:stack` 证据评论。
+
+Must preserve：`:59` 的种子值，以及 `:150-166` 列表中其他各项和它们的匹配范围；`platform/src/app.ts` 的日志字段与脱敏配置；用例其余断言（403、恢复、无变更）不变。
+
+残留风险：`req.host` 和 `req.remotePort` 被排除后，端口若只以这两个字段的值泄漏，本检查发现不了。按完全相等排除的 Fastify 启动 `msg` 同理。这些值由 logger 序列化器和 Fastify 从套接字与请求头生成，不来自数据库行，属于接受的盲区。

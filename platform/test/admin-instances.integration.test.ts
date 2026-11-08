@@ -9,6 +9,75 @@ import {
 } from './auth-tcp-fixture.ts';
 
 const PATH = '/_platform/api/admin/instances';
+const SEEDED_PORT = '49173';
+
+/**
+ * Pino's time/pid/hostname, Fastify's responseTime and listen message, and the request
+ * serializer's host/remotePort come from the clock, the process and ephemeral sockets, never
+ * from an instance row, so their digits may contain the seeded port by chance (#568).
+ */
+function withoutGeneratedFields(line: string, base: string): string {
+  const entry: unknown = JSON.parse(line);
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry))
+    throw new Error(`expected a JSON object log line: ${line}`);
+  const fields = entry as Record<string, unknown>;
+  delete fields.time;
+  delete fields.pid;
+  delete fields.hostname;
+  delete fields.responseTime;
+  if (fields.msg === `Server listening at ${base}`) delete fields.msg;
+  const request = fields.req;
+  if (typeof request === 'object' && request !== null) {
+    const requestFields = request as Record<string, unknown>;
+    delete requestFields.host;
+    delete requestFields.remotePort;
+  }
+  return JSON.stringify(fields);
+}
+
+function expectSeededPortAbsentFromLogs(lines: readonly string[], base: string): void {
+  for (const line of lines) expect(withoutGeneratedFields(line, base)).not.toContain(SEEDED_PORT);
+}
+
+it('checks the seeded port in log lines outside logger- and socket-generated fields', () => {
+  const base = `http://127.0.0.1:${SEEDED_PORT}`;
+  const generated = [
+    { level: 30, time: 1794129491735, msg: 'incoming request' },
+    { level: 30, responseTime: 34.491730001, msg: 'request completed' },
+    { level: 30, pid: 49173, hostname: 'host-49173', msg: 'request completed' },
+    {
+      level: 30,
+      req: {
+        method: 'GET',
+        url: PATH,
+        host: `127.0.0.1:${SEEDED_PORT}`,
+        remoteAddress: '127.0.0.1',
+        remotePort: 49173,
+      },
+      msg: 'incoming request',
+    },
+    { level: 30, msg: `Server listening at ${base}` },
+  ].map((entry) => JSON.stringify(entry));
+  expect(() => {
+    expectSeededPortAbsentFromLogs(generated, base);
+  }).not.toThrow();
+  for (const leaked of [
+    JSON.stringify({ level: 30, msg: `Server listening at ${base}/` }),
+    JSON.stringify({ level: 30, msg: `Server listening at ${base} and upstream` }),
+    JSON.stringify({ level: 30, msg: `upstream 127.0.0.1:${SEEDED_PORT} refused` }),
+    JSON.stringify({
+      level: 50,
+      err: { message: `connect ECONNREFUSED 127.0.0.1:${SEEDED_PORT}` },
+    }),
+    JSON.stringify({ level: 30, upstreamPort: 49173 }),
+    JSON.stringify({ level: 30, req: { method: 'GET', url: `${PATH}?port=${SEEDED_PORT}` } }),
+    'not json',
+    '[]',
+  ])
+    expect(() => {
+      expectSeededPortAbsentFromLogs([leaked], base);
+    }, leaked).toThrow();
+});
 
 it('rejects unauthenticated instance listing', async () => {
   await withListeningApp(async (base) => {
@@ -153,7 +222,6 @@ it('lists all five persisted instance states without private metadata or mutatio
       employee.token,
       createHash('sha256').update(login.token).digest('hex'),
       createHash('sha256').update(employee.token).digest('hex'),
-      '49173',
       'password_hash',
       'token_hash',
       'dsh_cookie',
@@ -164,6 +232,8 @@ it('lists all five persisted instance states without private metadata or mutatio
       'image_id',
     ])
       expect(text + lines.join('')).not.toContain(secret);
+    expect(text).not.toContain(SEEDED_PORT);
+    expectSeededPortAbsentFromLogs(lines, base);
     database.prepare("UPDATE users SET role = 'employee' WHERE id = ?").run(operator.id);
     expect((await fetch(endpoint, { headers })).status).toBe(403);
     database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(operator.id);
