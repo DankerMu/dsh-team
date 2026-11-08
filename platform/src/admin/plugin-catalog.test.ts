@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
 import type * as CatalogModule from '../plugin-catalog/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -120,14 +119,6 @@ const audits = (database: DatabaseHandle) =>
     .all();
 const storedCatalog = (database: DatabaseHandle) =>
   database.prepare("SELECT value FROM settings WHERE key = 'pluginCatalog'").get();
-const save = (app: FastifyInstance, cookie: string, payload: unknown) =>
-  app.inject({
-    method: 'PUT',
-    url: PATH,
-    remoteAddress: SOURCE,
-    headers: jsonRequestHeaders({ cookie }),
-    payload: JSON.stringify(payload),
-  });
 
 it('reports every catalog entry in file order with required entries forced on and office employee-chosen', async () => {
   await withApp(async (app, database) => {
@@ -144,7 +135,7 @@ it('saves only manageable states with one actor/source audit and a running-insta
   await withApp(async (app, database) => {
     const { user, cookie } = await administrator(app, database);
 
-    const saved = await save(app, cookie, { entries: submission('forced-off') });
+    const saved = await putConfig(app, PATH, cookie, { entries: submission('forced-off') }, SOURCE);
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);
@@ -170,7 +161,7 @@ it('ignores a stored id no longer in the catalog and drops it on the next whole-
       .run('{"retired-plugin":"forced-off","office-agents":"forced-on"}');
 
     const read = await app.inject({ url: PATH, headers: { cookie } });
-    const saved = await save(app, cookie, { entries: submission('employee') });
+    const saved = await putConfig(app, PATH, cookie, { entries: submission('employee') }, SOURCE);
 
     expect(read.json()).toEqual({ entries: officeAs('forced-on') });
     expect(saved.statusCode).toBe(200);
@@ -260,7 +251,13 @@ it.each(['audit', 'write', 'corrupt-json', 'corrupt-type'] as const)(
       const settings = settingsRows(database);
       const before = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
 
-      const response = await save(app, cookie, { entries: submission('forced-on') });
+      const response = await putConfig(
+        app,
+        PATH,
+        cookie,
+        { entries: submission('forced-on') },
+        SOURCE,
+      );
       const read = await app.inject({ url: PATH, headers: { cookie } });
 
       expect(response.statusCode).toBe(500);

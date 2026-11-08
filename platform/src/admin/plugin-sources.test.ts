@@ -1,8 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -39,14 +38,6 @@ const allAudits = (database: DatabaseHandle) =>
   database.prepare('SELECT * FROM audit_events ORDER BY id').all();
 const sourceRows = (registries: string[], probe: boolean) =>
   seededWith({ pluginRegistries: JSON.stringify(registries), registryProbeEnabled: String(probe) });
-const save = (app: FastifyInstance, cookie: string, payload: unknown) =>
-  app.inject({
-    method: 'PUT',
-    url: PATH,
-    remoteAddress: SOURCE,
-    headers: jsonRequestHeaders({ cookie }),
-    payload: JSON.stringify(payload),
-  });
 
 it('reports the seeded DSH default registries with the registry probe enabled', async () => {
   await withApp(async (app, database) => {
@@ -63,10 +54,16 @@ it('saves both keys as whole values with one actor/source audit and a running-in
   await withApp(async (app, database) => {
     const { user, cookie } = await administrator(app, database);
 
-    const saved = await save(app, cookie, {
-      pluginRegistries: [MIRROR],
-      registryProbeEnabled: false,
-    });
+    const saved = await putConfig(
+      app,
+      PATH,
+      cookie,
+      {
+        pluginRegistries: [MIRROR],
+        registryProbeEnabled: false,
+      },
+      SOURCE,
+    );
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);
@@ -87,12 +84,24 @@ it('replaces the whole registry list on the next save without merging the previo
   await withApp(async (app, database) => {
     const { cookie } = await administrator(app, database);
     const registries = ['http://second.internal/', MIRROR];
-    await save(app, cookie, { pluginRegistries: [MIRROR], registryProbeEnabled: false });
+    await putConfig(
+      app,
+      PATH,
+      cookie,
+      { pluginRegistries: [MIRROR], registryProbeEnabled: false },
+      SOURCE,
+    );
 
-    const saved = await save(app, cookie, {
-      pluginRegistries: registries,
-      registryProbeEnabled: true,
-    });
+    const saved = await putConfig(
+      app,
+      PATH,
+      cookie,
+      {
+        pluginRegistries: registries,
+        registryProbeEnabled: true,
+      },
+      SOURCE,
+    );
 
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toEqual({
@@ -110,10 +119,16 @@ it('accepts a registry carrying userinfo credentials and never logs or audits th
     const { cookie } = await administrator(app, database);
     const registry = 'https://user:secret@mirror.internal/';
 
-    const saved = await save(app, cookie, {
-      pluginRegistries: [registry],
-      registryProbeEnabled: true,
-    });
+    const saved = await putConfig(
+      app,
+      PATH,
+      cookie,
+      {
+        pluginRegistries: [registry],
+        registryProbeEnabled: true,
+      },
+      SOURCE,
+    );
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);
@@ -172,10 +187,16 @@ it.each([
     const { cookie } = await administrator(app, database);
     const before = allAudits(database);
 
-    const response = await save(app, cookie, {
-      pluginRegistries: [MIRROR, item, `ftp://${SENTINEL}-later/`],
-      registryProbeEnabled: true,
-    });
+    const response = await putConfig(
+      app,
+      PATH,
+      cookie,
+      {
+        pluginRegistries: [MIRROR, item, `ftp://${SENTINEL}-later/`],
+        registryProbeEnabled: true,
+      },
+      SOURCE,
+    );
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual({
@@ -211,10 +232,16 @@ it.each(['audit', 'write', 'corrupt-json', 'corrupt-type'] as const)(
       const settings = settingsRows(database);
       const before = allAudits(database);
 
-      const response = await save(app, cookie, {
-        pluginRegistries: [`https://user:${secret}@mirror.internal/`],
-        registryProbeEnabled: false,
-      });
+      const response = await putConfig(
+        app,
+        PATH,
+        cookie,
+        {
+          pluginRegistries: [`https://user:${secret}@mirror.internal/`],
+          registryProbeEnabled: false,
+        },
+        SOURCE,
+      );
       const read = await app.inject({ url: PATH, headers: { cookie } });
 
       expect(response.statusCode).toBe(500);

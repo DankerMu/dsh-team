@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -33,14 +33,6 @@ const audits = (database: DatabaseHandle) =>
     .all();
 const allAudits = (database: DatabaseHandle) =>
   database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-const save = (app: FastifyInstance, cookie: string, payload: unknown) =>
-  app.inject({
-    method: 'PUT',
-    url: PATH,
-    remoteAddress: SOURCE,
-    headers: jsonRequestHeaders({ cookie }),
-    payload: JSON.stringify(payload),
-  });
 const read = (app: FastifyInstance, cookie: string) =>
   app.inject({ url: PATH, headers: { cookie } });
 
@@ -61,7 +53,7 @@ it('saves address and key with one actor/source audit, then keeps the key when o
     const apiKey = `${SENTINEL}-${randomBytes(16).toString('hex')}`;
     const audit = { actor_email: user.email, target_email: null, source_address: SOURCE };
 
-    const saved = await save(app, cookie, { baseURL: BASE_URL, apiKey });
+    const saved = await putConfig(app, PATH, cookie, { baseURL: BASE_URL, apiKey }, SOURCE);
     const first = await read(app, cookie);
 
     expect(saved.statusCode).toBe(200);
@@ -79,7 +71,7 @@ it('saves address and key with one actor/source audit, then keeps the key when o
     );
     expect(audits(database)).toEqual([{ ...audit, details: '{}' }]);
 
-    const moved = await save(app, cookie, { baseURL: 'http://10.0.0.5:9380' });
+    const moved = await putConfig(app, PATH, cookie, { baseURL: 'http://10.0.0.5:9380' }, SOURCE);
     const second = await read(app, cookie);
 
     expect(moved.json()).toEqual({
@@ -109,7 +101,7 @@ it.each(['https://kb.internal/ragflow', 'http://[::1]:9380'])(
     await withApp(async (app, database) => {
       const { cookie } = await administrator(app, database);
 
-      const saved = await save(app, cookie, { baseURL });
+      const saved = await putConfig(app, PATH, cookie, { baseURL }, SOURCE);
       const after = await read(app, cookie);
 
       expect(saved.statusCode).toBe(200);
@@ -195,7 +187,13 @@ it.each(['audit', 'write', 'corrupt-json', 'corrupt-type'] as const)(
       const settings = settingsRows(database);
       const before = allAudits(database);
 
-      const response = await save(app, cookie, { baseURL: BASE_URL, apiKey: secret });
+      const response = await putConfig(
+        app,
+        PATH,
+        cookie,
+        { baseURL: BASE_URL, apiKey: secret },
+        SOURCE,
+      );
       const after = await read(app, cookie);
 
       expect(response.statusCode).toBe(500);

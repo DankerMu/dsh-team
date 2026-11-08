@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { readSettings, writeSettings } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -31,13 +31,7 @@ it('saves only runtime fields and an actor/source audit while preserving model c
     writeSettings(database, models);
     database.prepare('INSERT INTO settings VALUES (?, ?)').run('unowned', 'unchanged');
 
-    const saved = await app.inject({
-      method: 'PUT',
-      url: PATH,
-      remoteAddress: SOURCE,
-      headers: jsonRequestHeaders({ cookie }),
-      payload: CONFIG,
-    });
+    const saved = await putConfig(app, PATH, cookie, CONFIG, SOURCE);
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);
@@ -77,12 +71,7 @@ it.each([
 ])('roundtrips canonical legal boundaries and permission tiers: %j', async (payload) => {
   await withApp(async (app, database) => {
     const { cookie } = await administrator(app, database);
-    const saved = await app.inject({
-      method: 'PUT',
-      url: PATH,
-      headers: jsonRequestHeaders({ cookie }),
-      payload,
-    });
+    const saved = await putConfig(app, PATH, cookie, payload);
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toEqual({ ...payload, runningInstances: 0 });
     expect((await app.inject({ url: PATH, headers: { cookie } })).json()).toEqual(payload);

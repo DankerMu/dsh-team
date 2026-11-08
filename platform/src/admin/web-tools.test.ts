@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -32,13 +32,7 @@ const audits = (database: DatabaseHandle) =>
 const allAudits = (database: DatabaseHandle) =>
   database.prepare('SELECT * FROM audit_events ORDER BY id').all();
 const save = (app: FastifyInstance, cookie: string, webToolsEnabled: boolean) =>
-  app.inject({
-    method: 'PUT',
-    url: PATH,
-    remoteAddress: SOURCE,
-    headers: jsonRequestHeaders({ cookie }),
-    payload: JSON.stringify({ webToolsEnabled }),
-  });
+  putConfig(app, PATH, cookie, { webToolsEnabled }, SOURCE);
 const withWebTools = (value: string) => seededWith({ webToolsEnabled: value });
 
 it('reports the seeded web tools switch as off', async () => {

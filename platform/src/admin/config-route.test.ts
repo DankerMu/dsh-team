@@ -5,6 +5,7 @@ import { jsonRequestHeaders, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   MODEL_CONFIG as CONFIG,
+  putConfig,
   SEEDED_SETTINGS,
   settingsRows,
 } from '../../test/admin-config-fixture.ts';
@@ -47,12 +48,7 @@ it.each([
         );
     const before = database.prepare('SELECT * FROM audit_events').all();
 
-    const response = await app.inject({
-      method: 'PUT',
-      url: PATH,
-      headers: jsonRequestHeaders({ cookie }),
-      payload: { ...CONFIG, apiKey: secret },
-    });
+    const response = await putConfig(app, PATH, cookie, { ...CONFIG, apiKey: secret });
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(response.statusCode).toBe(500);
@@ -76,12 +72,12 @@ it('preserves body-size and JSON media classifications without echoing secret va
     const secret = randomBytes(32).toString('hex');
     const before = database.prepare('SELECT * FROM audit_events').all();
 
-    const oversized = await app.inject({
-      method: 'PUT',
-      url: PATH,
-      headers: jsonRequestHeaders({ cookie }),
-      payload: JSON.stringify({ ...CONFIG, apiKey: secret, padding: 'x'.repeat(1048576) }),
-    });
+    const oversized = await putConfig(
+      app,
+      PATH,
+      cookie,
+      JSON.stringify({ ...CONFIG, apiKey: secret, padding: 'x'.repeat(1048576) }),
+    );
     const unsupported = await app.inject({
       method: 'PUT',
       url: PATH,
@@ -118,17 +114,12 @@ it.each(['audit', 'write', 'corrupt-json', 'corrupt-type', 'corrupt-model-key'] 
       const before = database.prepare('SELECT * FROM settings ORDER BY key').all();
       const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
       const path = '/_platform/api/admin/runtime-config';
-      const response = await app.inject({
-        method: 'PUT',
-        url: path,
-        headers: jsonRequestHeaders({ cookie }),
-        payload: {
-          idleMinutes: 15,
-          cpuCores: 0.25,
-          memoryMiB: 2048,
-          maxRunningInstances: 2,
-          defaultPermissionTier: 'auto',
-        },
+      const response = await putConfig(app, path, cookie, {
+        idleMinutes: 15,
+        cpuCores: 0.25,
+        memoryMiB: 2048,
+        maxRunningInstances: 2,
+        defaultPermissionTier: 'auto',
       });
       const read = await app.inject({ url: path, headers: { cookie } });
       expect(response.statusCode).toBe(500);
@@ -152,12 +143,12 @@ it.each(['model', 'runtime'] as const)(
       const { cookie } = await administrator(app, database);
       const secret = randomBytes(32).toString('hex');
       const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-      const response = await app.inject({
-        method: 'PUT',
-        url: `/_platform/api/admin/${name}-config`,
-        headers: jsonRequestHeaders({ cookie }),
-        payload: `{"modelApiKey":"${secret}",broken`,
-      });
+      const response = await putConfig(
+        app,
+        `/_platform/api/admin/${name}-config`,
+        cookie,
+        `{"modelApiKey":"${secret}",broken`,
+      );
       expect(response.statusCode).toBe(400);
       expect(response.json()).toMatchObject({ error: 'Bad Request' });
       expect((response.body + lines.join('')).includes(secret)).toBe(false);
@@ -186,21 +177,20 @@ it.each([
       });
       const { user, cookie } = await administrator(app, database);
       const audits = database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-      const response = await app.inject({
-        method: 'PUT',
-        url: path,
-        headers: jsonRequestHeaders({ cookie }),
-        payload:
-          name === 'model'
-            ? CONFIG
-            : {
-                idleMinutes: 15,
-                cpuCores: 0.25,
-                memoryMiB: 2048,
-                maxRunningInstances: 2,
-                defaultPermissionTier: 'auto',
-              },
-      });
+      const response = await putConfig(
+        app,
+        path,
+        cookie,
+        name === 'model'
+          ? CONFIG
+          : {
+              idleMinutes: 15,
+              cpuCores: 0.25,
+              memoryMiB: 2048,
+              maxRunningInstances: 2,
+              defaultPermissionTier: 'auto',
+            },
+      );
       expect(response.statusCode).toBe(status);
       expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
       expect(database.prepare('SELECT * FROM audit_events ORDER BY id').all()).toEqual(audits);

@@ -3728,3 +3728,50 @@ Evidence (20.1): **现状**：`:59` 把 `upstream_port` 写死为 `49173`；`:15
 Must preserve：`:59` 的种子值，以及 `:150-166` 列表中其他各项和它们的匹配范围；`platform/src/app.ts` 的日志字段与脱敏配置；用例其余断言（403、恢复、无变更）不变。
 
 残留风险：`req.host` 和 `req.remotePort` 被排除后，端口若只以这两个字段的值泄漏，本检查发现不了。按完全相等排除的 Fastify 启动 `msg` 同理。这些值由 logger 序列化器和 Fastify 从套接字与请求头生成，不来自数据库行，属于接受的盲区。
+
+## 21. 技术债 #508：管理员配置 PUT 注入收敛到 `putConfig`
+
+依赖：无。由 #508 承载，处理方式同第 6 组。issue 正文同步改为本节的清单与验收。
+
+- [ ] 21.1 `platform/test/admin-config-fixture.ts` 的 `putConfig` 增加可选的来源地址，`payload` 放宽为 `unknown`：字符串原样发送，其他值先 `JSON.stringify` 再发送。下面清单中的 14 处注入改为调用它。验证：所有 `source_address` 断言不变且通过；`grep -n "method: 'PUT'" platform/src/admin/*.test.ts` 只剩下面的保留项；`pnpm test`（每文件 80% 覆盖率）、`pnpm lint`、`pnpm typecheck`、`pnpm dead-code` 通过。
+
+Suggested fixture level: compact - 只改测试辅助函数和调用方，产品代码不变
+Minimal mergeable slice: atomic: 一个 fixture 加它的调用方
+Risk packs (21.1): selected - Legacy compatibility（每个请求的方法、URL、头、payload 字节和 `remoteAddress` 都不变）；not selected - Config、Schema、Auth、Public API、Error handling、Concurrency、File IO、Resource limits、Release、Documentation。无关键路径文件。
+Evidence (21.1):
+
+现状（main `01eb933`）：`putConfig`（`admin-config-fixture.ts:45-47`）发出 `{ method: 'PUT', url: path, headers: jsonRequestHeaders({ cookie }), payload }`，`payload` 必须是字符串，不设 `remoteAddress`。light-my-request 6.6.0 对对象 payload 做 `JSON.stringify`（`lib/request.js:167`），`remoteAddress` 缺省为 `127.0.0.1`（`:143`），所以对象 payload 改由 `putConfig` 内部 stringify 后，发出的字节不变。
+
+替换清单（14 处；其中 document-server-config、ragflow-config、retrieval-config、config-route 是 issue 之后才清点到的）：
+
+- 带 `remoteAddress: SOURCE` 的具名 `save`：
+  - `document-server-config.test.ts:43`
+  - `plugin-catalog.test.ts:114`
+  - `plugin-sources.test.ts:42`
+  - `ragflow-config.test.ts:36`
+  - `web-tools.test.ts:34`
+  - `retrieval-config.test.ts:50`
+- 带 `SOURCE` 的内联注入：`model-config.test.ts:20`、`runtime-config.test.ts:34`。
+- 不带 `SOURCE` 的内联注入：
+  - `runtime-config.test.ts:80`；
+  - `config-route.test.ts` 中符合规则的 5 处（`method` 行 `:51`、`:80`、`:122`、`:156`、`:190`），它们和其他文件一样用共享的 `withApp`、`administrator()`。
+
+规则：
+
+- 签名为 `putConfig(app, path, cookie, payload: unknown, remoteAddress?: string)`。`tsconfig.json:20` 开着 `exactOptionalPropertyTypes`，所以 `remoteAddress` 为 undefined 时用条件展开，注入对象里不出现这个键。
+- 被替换的注入，其选项键恰好是 `method`、`url`、`headers`、`payload`，最多再加 `remoteAddress`，头恰好是 `jsonRequestHeaders({ cookie })`。`url` 和 `remoteAddress` 的值原样传入。
+- `save` 包装只接收对象。替换后只剩一行转发的就删掉，调用点直接用 `putConfig`；`web-tools` 的布尔包装可以保留一行。
+- 已有的 `putConfig(…, JSON.stringify(payload))` 调用一律不动，`JSON.stringify` 不删：web-tools、plugin-sources 的用例表里有裸字符串 `SENTINEL`，删掉会改变发出的字节。
+
+保留项（不改）：
+
+- `config-route.test.ts:86`：`text/plain` 媒体类型。
+- `account-status.test.ts:37`：覆盖 content-type。
+- `account-status.test.ts:93-98` 的 `put` 包装：账号状态接口，不是管理员配置 PUT，issue 没有列出。
+- `password-reset.test.ts:159`：xml body。
+
+`platform/test/*.integration.test.ts` 和其他经 TCP `fetch` 的用例不在范围内。
+
+验证：同 21.1；另需 `pnpm check`、VPS exact-head `test:docker` 和 `test:deploy`（cleanup confirmed，只是满足合并门禁），以及本机 exact-head `pnpm test:stack` 证据评论。
+
+Must preserve：每个用例的断言，包括 `source_address: SOURCE`、状态码和响应体；所有产品代码。
