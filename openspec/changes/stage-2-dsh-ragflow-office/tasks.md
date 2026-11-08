@@ -3955,3 +3955,45 @@ Evidence (23.1):
 Must preserve：连接测试路由（`admin/ragflow-connection.ts`）的鉴权、审计和结果集合；`ragflowVersion` 与其 64 KiB 上限；代理列表、文档、检索的 8 MiB 上限。
 
 残留风险：`users/me/models` 只证明密钥有效、tenant 存在，不证明这个密钥对库有读权限。rc2 的 API token 解析为 tenant 所有者（`internal/service/user.go:852-853`），所有者能读本 tenant 的库，所以在 rc2 上两者等价。以后若 RAGFlow 引入受限 token，需要重新评估。
+
+## 24. 技术债 #519：stack 通道退休后的清点按每条记录自己的所有权标签查询
+
+依赖：无。由 #519 承载，处理方式同第 6 组。
+
+- [ ] 24.1 `scripts/test-stack.mjs` 的 `requireEmptyInventory`：除了每个 `runId` 的运行标签，还要按账本每条记录自己的所有权标签清点。任一查询非空，就以非零结束并保留账本。验证：`platform/test/test-stack.integration.test.ts` 新增用例，员工资源（只带 `dsh-team.user=<id>`）在退休后仍残留时，命令以非零结束并保留账本。旧代码上命令以 0 结束，断言失败为红；修复后以 1 结束，转绿。
+
+Suggested fixture level: compact - 一个只读清点函数的过滤条件
+Minimal mergeable slice: atomic: 一个函数加一个集成用例
+Risk packs (24.1): selected - Legacy compatibility（只读：清点只做 `ls`，不删任何东西；每个 `runId` 的运行标签清点照旧无条件进行；失败时仍保留账本、以非零结束）、Error handling（每次查询的失败照旧记入 failures，不吞掉）；not selected - Config、Schema、Auth、Public API、Concurrency、File IO、Resource limits、Release、Documentation。不碰关键路径。
+Evidence (24.1):
+
+现状（main `b75138d`）：
+
+- `scripts/test-stack.mjs:181-197` 对账本中出现过的每个 `runId`，四类资源各查一次，过滤条件是 `--filter label=dsh-team.test-run=<runId>`。
+- 账本写入时总会带上 ownership（`platform/test/docker-cleanup.ts:278`：`target.ownership ?? { [OWNER_LABEL]: runId }`），读取时也强制要求非空（`:298`、`:305-306`）。所以 `readCleanupJournal` 返回的每条记录都是 `{ runId, target: { kind, name, ownership } }`。
+- 员工实例资源的 ownership 是 `{ 'dsh-team.user': <id> }`（`deployment-account-fixture.ts:46-53`）。其他产出账本的地方用的是多键 ownership，例如 `container-start-docker-fixture.ts:281-284`、`resource-oom-fixture.ts:396-400`、`instance-browser-docker-fixture.ts:113-114`。
+
+改动：
+
+- 清点对象有两类：
+  - 每个去重后的 `runId` 的运行标签 `{ 'dsh-team.test-run': runId }`，查询与现在逐字相同；
+  - 每条记录去重后的 `target.ownership`，按排序后的键值对去重；与某个运行标签完全相同的，不再重复查。
+- 每个对象四类资源各查一次，顺序为 `container ls --all`、`network ls`、`volume ls`、`image ls --all`。每个标签对一个 `--filter label=<k>=<v>`，Docker 对多个 label 过滤取「与」。
+- 顺序固定：先按 `runId` 首次出现的顺序查运行标签，再按 ownership 首次出现的顺序查。
+- 错误信息照旧是 `Owned <kind> remains after retirement`，再加上所有权的标签键，不带值。
+
+回归（`test-stack.integration.test.ts`，仿照 `:553` 的现有用例）：
+
+- 账本含一条 volume 记录 `dsh-team-home-u1`，ownership 为 `{ 'dsh-team.user': 'u1' }`。
+- 替身的 `answer` 接住三类调用：
+  - 退休阶段的 `volume inspect`：返回 `isAbsentResource`（`platform/test/docker-command.ts:278-298`）认得的「不存在」，即 status 1、stdout 为空、stderr 为 `Error: No such volume: dsh-team-home-u1`；
+  - 所有 `ls`：只有 `--filter label=dsh-team.user=u1` 的 `volume ls` 返回一个名字，其余返回空；
+  - 记录每次 `ls` 的参数。
+- 断言：
+  - 命令以 1 结束，账本保留；
+  - `ls` 调用恰好是 4 条运行标签查询，再加 4 条员工标签查询，顺序如上。
+- 旧代码只发 4 条运行标签查询，命令以 0 结束，断言失败为红；修复后转绿。
+
+验证：`pnpm check`；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁；本机 exact-head `pnpm test:stack` 证据评论，真实运行下两类清点都为空。真实运行只证明两类清点都为空。多个 label 过滤取「与」的依据是 Docker 的标签过滤要求全部键值对都匹配；即使实际是取「或」，查询范围也只会更宽，偏向多报残留。
+
+Must preserve：`retire` 的行为、账本格式、`requireSettled` 和锁的用法、退出码规则，以及 `:553` 的现有用例（只有一条运行标签记录，仍然只发同样的 4 条查询）。
