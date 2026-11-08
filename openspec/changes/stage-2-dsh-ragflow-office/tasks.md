@@ -4387,3 +4387,113 @@ network 模式的孪生用例：不做（issue 列为可选）。`container-netw
 验证：`pnpm check`；先红后绿；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁；本机 exact-head `pnpm test:stack`，只是满足门禁。
 
 Must preserve：`stop.ts`、`networks.ts`、`reconcile.ts` 的生产代码；所有现有用例及其断言。
+
+## 30. 17.4（授权字体挂载，#561）：员工实例只读挂载授权字体目录
+
+依赖：#432（已合入）。由 #561 承载。用户决定（2026-11-08）：新增一个可选配置变量，未设置时不挂载。改动涉及 `platform/src/orchestrator/`（关键路径），PR 说明逐行人工白盒审查推迟到 Epic #380 完成，尚未通过。预计超过 400 行，加 `diff-limit-exempt` 标签并说明理由。（23–29 节在其他未合并的 PR 分支上。）
+
+- [ ] 30.1 新变量 `PLATFORM_INSTANCE_FONTS_DIR`：
+  - 值非空时，平台创建实例容器时把它只读 bind 到 `/usr/share/fonts/truetype/custom`，与 Document Server 的目标路径相同。
+  - 值为空或未设置时不挂载，与 #432 一致。
+  - 值非空但不是绝对路径、含 NUL，或不是可读目录时，启动失败；报错点名变量，不回显值。
+  - Compose 透传并在平台容器内同路径只读挂载，`.env.example` 写入清单。
+
+  验证：单元和集成测试先红后绿；VPS Docker 用例证明实例内该路径可读、uid1001 写入得到 EROFS 或 EACCES，并证明 DSH 自带引擎用这个目录里的改名字体渲染了 DOCX。
+
+Suggested fixture level: expanded - 关键路径编排器变更
+Minimal mergeable slice: atomic: 配置、实例挂载、Compose、文档和两条 Docker 证据
+Risk packs (30.1): selected - Config（新变量、空值语义、启动前失败、不回显值）、Security（只读挂载，uid1001 不可写；不放宽其他挂载校验）、Legacy compatibility（未设置时实例挂载与 #432 完全一致，现有恢复路径不变）、Release（Compose 部署）、Documentation；not selected - Schema（无迁移）、Auth、Public API、Concurrency、Resource limits、Migration。
+Evidence (30.1):
+
+事实（main `973d391`）：
+
+- 引擎的字体扫描：`@deepseek-ai/libreoffice-kit@0.1.5` 在 Linux 上的默认字体目录是 `XDG_DATA_DIRS`（默认 `/usr/local/share:/usr/share`）各自加 `fonts`，再加 `~/.fonts` 和 `~/.local/share/fonts`（`lib/index.js:1236-1250`）。系统字体扫描递归子目录（`lib/font-snapshot-worker.js` `fontPaths` `:59-90`，`:83` 压栈），按字体 name 表里的 family 名匹配（`lib/worker.js:193`，别名经 `normalize()` 去掉空白和大小写）。持久缓存 `~/.cache/libreoffice-kit/font-metadata.json` 按文件路径和 dev/ino/size/mtime/ctime 键控，每次获取都重新遍历目录（`index.js:1726`），所以新挂载的字体不会被旧缓存遮住。所以挂到 `/usr/share/fonts/truetype/custom` 的字体能被看到，不需要覆盖层配置。改名必须改 name 表，只改文件名没有用。
+- 配置：
+  - `platform/src/config.ts` 用 `env.PLATFORM_*` 字面量读取变量，`scripts/check-config.mjs` 据此和 `.env.example` 做双向比对。
+  - 根 `tsconfig.json:20` 开着 `exactOptionalPropertyTypes`，所以新字段可以声明为 `readonly instanceFontsDir?: string`，那十几个构造配置对象的测试夹具不用改。
+  - `config.test.ts:471` 把 `.env.example` 原样喂给 `loadConfig`，期望第一个报错是 JWT。因此 `.env.example` 里的 `PLATFORM_INSTANCE_FONTS_DIR=` 必须能通过校验：**空值等同未设置**，与 `PLATFORM_TRUSTED_PROXIES` 相同。这是对 issue 原文的明确收窄：「设置了但不可读就失败」只针对非空值。
+- 实例创建：
+  - `platform/src/orchestrator/start.ts:452-456` 创建三个挂载，配置经 `StartUserContainerInput.config` 的 `Pick` 传入（`start-identity.ts:27-36`）。
+  - 创建恢复时，`creation-attempt.ts:167-188` 的 `validateMounts` 把挂载数量硬编码为 3。恢复有三个入口：`start.ts:658`、`orchestrator.ts:286`（`retireScheduled`，stop 和 disable 用）、`orchestrator.ts:305`（`reconcileCreationAttempt`，启动时的 reconcile 用）。后两个的入参没有 `PlatformConfig`，只有 `transport`。
+  - `createOrchestrator` 只把 `TransportConfig`（`transport.ts:7`，`Pick<PlatformConfig, 'upstreamMode' | 'platformContainerName'>`）冻结进 `transport.config`（`orchestrator.ts:317-323`）。`instance-service.ts:195` 传进来的是完整 `PlatformConfig`，但其余字段到不了 orchestrator。
+  - 恢复失败时：启动 reconcile 致命失败（`orchestrator.ts:455-459`，`main.ts:76` 等待），平台起不来；stop 和 disable 以 `User container retirement failed` 失败关闭。两种情况下容器都保留，不会被误删。
+- Compose：
+  - `deploy/compose.yml:12,:42-43` 的先例是 `PLATFORM_MANAGED_CONFIG_DIR`：宿主路径和平台容器内路径相同，平台进程内的检查和 daemon 解析的 bind `Source` 一致。
+  - Document Server 的字体挂载在 `:54-60`（`./assets/fonts`）。
+  - `check-config.mjs` 不检查 compose 里的 `${PLATFORM_*}` 插值，透传那一行只有部署测试能兜住。
+
+改动：
+
+- `config.ts`：
+  - 新增 `parseInstanceFontsDir(env.PLATFORM_INSTANCE_FONTS_DIR)`。
+  - `undefined` 或全空白时返回 `undefined`。
+  - 否则要求不含 NUL、是绝对路径，并且 `statSync(...).isDirectory()` 加 `accessSync(path, R_OK | X_OK)` 都成立。任何一项不满足，都抛出 `PLATFORM_INSTANCE_FONTS_DIR must be an absolute readable directory`，不带值。
+  - 字段 `instanceFontsDir?: string` 只在有值时出现在返回对象里。返回对象的字段顺序保持 `documentServer` 最后。
+  - `loadConfig` 由 `main.ts` 和 `cli.ts` 调用，在监听之前同步失败。
+- 实例挂载（一个来源：`transport.config`）：
+  - `TransportConfig` 扩为 `Pick<PlatformConfig, 'upstreamMode' | 'platformContainerName' | 'instanceFontsDir'>`；`createOrchestrator` 冻结对象时，只在有值时带上 `instanceFontsDir`（`exactOptionalPropertyTypes`）。这样三个恢复入口和创建路径通过已有的 `transport` 读到同一个值，不改 `StartUserContainerInput.config` 的 `Pick`，也不改 stop、reconcile 的入参。
+  - `start.ts` 在三个挂载之后，`transport.config.instanceFontsDir` 有值时追加 `{ Type: 'bind', Source: <值>, Target: '/usr/share/fonts/truetype/custom', ReadOnly: true }`。
+  - `creation-attempt.ts` 的 `validateMounts` 按 `transport.config.instanceFontsDir` 给出期望集合：未配置时恰为 3 个，与现在相同；配置后恰为 4 个，第 4 个必须和上面那条完全一致。不放宽任何已有挂载的校验。
+  - 一个 `createOrchestrator` 层的单元用例，断言传入的 `instanceFontsDir` 出现在创建体里。这条用例防止 `orchestrator.ts:318-321` 漏拷这个字段：漏拷时字段会静默缺失，类型检查拦不住。
+  - 剩余风险：运营方在一次未完成的创建期间改了变量并重启，恢复会失败关闭。表现为启动 reconcile 致命失败、平台起不来（或该用户 stop/disable 失败），容器保留；把变量改回原值即可恢复。不为此加迁移。
+
+- Compose（`deploy/compose.yml`，platform 服务）：
+  - 环境变量写 `PLATFORM_INSTANCE_FONTS_DIR: ${PLATFORM_INSTANCE_FONTS_DIR:-}`。
+  - 新增只读 bind，`source: ${PLATFORM_INSTANCE_FONTS_DIR:-./deploy}`，`target: ${PLATFORM_INSTANCE_FONTS_DIR:-/opt/dsh-team/instance-fonts-unset}`，`read_only: true`，`bind.create_host_path: false`。
+  - 未设置时，它把检出里必然存在的 `deploy/`（只有 `compose.yml` 和 `README.md`，没有密钥）挂到一个平台不读的占位路径，`up -d` 不会因为空 source 失败。不用 `./assets/fonts` 作回退：它被 git 忽略，VPS 部署通道刻意不依赖它（`deployment-fixture.ts:104-106`、`deployment-compose-fixture.ts:58-62`）。设置时同路径挂载，平台的可读性检查才能在容器内成立。
+  - 运营方要让实例和 Document Server 共用同一组授权字体，就把变量设为仓库根下 `assets/fonts` 的宿主绝对路径。
+- `.env.example`：在 `PLATFORM_*` 区段加一行 `PLATFORM_INSTANCE_FONTS_DIR=`，前面写注释：可选；宿主绝对路径；Compose 会同路径挂进平台容器；空值表示不挂载。
+
+测试（TDD，先红）：
+
+- `config.test.ts`：
+  - 未设置和空白都不出现字段；
+  - 有效目录会出现字段；
+  - 相对路径、含 NUL、指向文件、不存在的路径都以完整消息失败，并且 `.not.toThrow(/<值>/)`；
+  - `.env.example` 原样复制的用例仍然先报 JWT。
+- 创建体：`start.test.ts` 和 `container-start.integration.test.ts` 都已接近 800 行上限（不计空行和注释约 797 行），不往里加。用例放进有余量的 `start-identity.test.ts`，或把挂载列表的构造抽成带配对测试的小函数；以 `pnpm lint` 为准。断言配置后创建体多出第 4 个挂载，内容精确；未配置时仍为 3 个。
+- `creation-attempt.test.ts`：用带 `instanceFontsDir` 的 transport 直接调用 `recoverCreationAttempt`，配置后的 4 挂载容器能恢复。两条私有入口（`orchestrator.ts:272`、`:301`）的用例经 `createOrchestrator().reconcile()` 和 `stopUserContainer()` 放进 `orchestrator.test.ts`。另外，未配置却出现第 4 个挂载、配置后缺第 4 个挂载、第 4 个挂载 `ReadOnly` 为 false 或 Source 不同，这些情况都以 `Creation mount identity changed` 失败。
+- 现有 `container-network-mounts.integration.test.ts:52` 的三挂载 `EXPECTED` 不改，用来证明未配置时行为不变。
+- 字体改名辅助函数：
+  - 新增 `platform/test/font-rename-fixture.ts`，导出纯函数 `renameFontFamily(bytes, from, to)`。
+  - 要求 `from` 与 `to` 等长。它在 TTF 的 `name` 表中，把所有记录里的 `from` 原位替换成 `to`：platform 0 和 3 按 UTF-16BE，platform 1 按 MacRoman/ASCII。表目录、偏移和长度不变。kit 和 FreeType 都不校验 checksum。
+  - 找不到 `name` 表、一处都没替换，或替换后任何记录里仍含 `from`，就抛错。
+  - 配对测试 `font-rename.integration.test.ts` 用手工构造的最小 TTF 字节（只含表目录和一个 `name` 表）覆盖：替换成功、不等长被拒、没有 `name` 表被拒、零替换被拒。
+- Docker（VPS）：
+  - 字体来源：用 `docker create` 建一个不启动的用户镜像容器（登记清理），`docker cp` 取出 `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf`，在宿主上用 `renameFontFamily` 把 `DejaVu` 换成等长的 `DshTmP`，写进本次测试自有的临时目录（目录 0755，文件 0644）。不使用任何真实授权字体。
+  - (a) 编排器挂载：在已有的真实编排器 Docker 用例文件中挑一个还有行数余量的，例如 `instance.docker.test.ts` 或 `container-network-mode.docker.test.ts`，加一个用例。配置 `instanceFontsDir` 为上述目录，启动实例后断言：
+    - 用例使用自己的 config 对象，不影响 `instance.docker.test.ts:582`、`:635` 对 `Mounts` 的精确断言；
+    - inspect 出的 `Mounts` 含一条只读 bind，Source 和 Destination 精确；
+    - 以 uid1001 在实例内 `test -r` 该路径下的字体文件成功；
+    - 写入失败，错误为 EROFS 或 EACCES。
+  - (b) 引擎读到这个路径：给 `office-convert-fixture.ts` 的 `runOfficeConvert` 加一个可选 `fonts` 参数。有值时：
+    - 额外只读 bind 同一目录到 `/usr/share/fonts/truetype/custom`；
+    - `assertInstanceLimits` 改为按参数给出期望的挂载列表，默认调用仍然只有 `/fixtures`；
+    - 额外渲染一个 DOCX，正文只用拉丁文本，`w:rFonts` 的 `w:ascii` 和 `w:hAnsi` 指定 `DshTmP Sans`（DejaVu 没有 CJK 字形，中文会回退到 Noto CJK，`worker.js:195-218`）；断言该渲染的 `missingFonts` 不含 `DshTmP Sans`，PDF 的 `/BaseFont` 名中有包含 `DshTmP` 的项（`pdf()` 增加按给定名字过滤，现有的 CJK 过滤不变）。
+  - (a) 证明编排器把目录挂到了 P，(b) 证明引擎从 P 读到了字体，两者合起来覆盖验收。
+
+文档（编排者同 PR 改）：
+
+- `docs/DEPLOY.md`：
+  - 在字体段落写明：Compose 把 `assets/fonts/` 交给 Document Server；设置 `PLATFORM_INSTANCE_FONTS_DIR` 为它的宿主绝对路径后，同一组字体也只读交给每个员工实例；授权字体不入库。
+  - `:199` 那句「授权字体挂载进实例见 #561」改为具体说明。
+  - `:120` 那句「缺字体目录时……平台可能已经用新镜像启动」按新的 Compose 行为核对并改写。
+  - 写明改变量后只对新启动的实例生效：`reconcile.ts` 的 `healthy()` 不比较挂载，`start.ts:641` 复用现有容器。
+- `platform/README.md:15` 配置段加上这个变量。
+- `platform/src/orchestrator/README.md` 写明实例挂载的契约：三个挂载，配置后为四个。
+- `platform/test/README.md` 的 user-image 和 instance 证据句补上新用例。
+
+验证：`pnpm check`（含 `lint:config`）；先红后绿；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed；本机 exact-head `pnpm test:stack`。
+
+剩余风险：
+
+- 第 (b) 条依赖等长改名后 FreeType 能接受这个字体。若 VPS 首次运行发现引擎不认这个改名字体，就停下报告，不改用真实授权字体。
+- 恢复期间改变量的窗口见上。
+
+Must preserve：
+
+- 未设置时实例的三个挂载、`creation_attempts` 表结构、恢复的失败关闭语义；
+- 不回显配置值；
+- `.env.example` 原样复制的报错顺序；
+- Document Server 的字体挂载；
+- 用户镜像内容不变（本任务不改 `images/`）。
