@@ -114,7 +114,7 @@ stat -c %g /var/run/docker.sock
   install -d -m 755 assets/fonts
   ```
 
-- **同一组授权字体交给员工实例（可选，#561）**：把 `.env` 里的 `PLATFORM_INSTANCE_FONTS_DIR` 设为 `assets/fonts` 的宿主绝对路径（例如 `$(pwd)/assets/fonts`，写入时展开为字面路径）。Compose 把它按同一路径只读挂进平台容器，平台在监听前检查它是可读目录，不满足就启动失败并点名该变量，不回显取值。之后每个新创建的员工实例都会把它只读挂到 `/usr/share/fonts/truetype/custom`，DSH 自带的只读预览引擎会扫描到其中的字体；员工不能写入或替换它。留空表示不挂载，实例只用镜像自带的 `fonts-noto-cjk` 和 `fonts-dejavu-core`。改了这个变量后，已在运行的实例保持原有挂载，要等它下次重新创建（管理员重启、空闲回收后重新打开）才生效；不要在实例正在创建时修改它。授权字体文件不入库。
+- **同一组授权字体交给员工实例（可选，#561）**：把 `.env` 里的 `PLATFORM_INSTANCE_FONTS_DIR` 设为 `assets/fonts` 的宿主绝对路径（例如 `$(pwd)/assets/fonts`，写入时展开为字面路径）。Compose 把它按同一路径只读挂进平台容器（不会自动创建：宿主上没有这个目录时，`up -d` 在创建平台容器时就失败，报错来自 Docker，会带出路径）；目录存在但不是可读目录时，平台在监听前启动失败并点名该变量，不回显取值。之后每个新创建的员工实例都会把它只读挂到 `/usr/share/fonts/truetype/custom`，DSH 自带的只读预览引擎会扫描到其中的字体；员工不能写入或替换它。留空表示不挂载，实例只用镜像自带的 `fonts-noto-cjk` 和 `fonts-dejavu-core`。改了这个变量后，已在运行的实例保持原有挂载，要等它下次重新创建（管理员重启、空闲回收后重新打开）才生效；不要在实例正在创建时修改它。授权字体文件不入库。
 
 - **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
 - **Document Server 重建后，已运行的实例要重启才能重新接入**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前不接入新的 Document Server，聊天和文件功能不受影响（Office 在线编辑本身见 §7 末尾的交付状态）。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
