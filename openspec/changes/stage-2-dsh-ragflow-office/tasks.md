@@ -3594,6 +3594,7 @@ Risk packs (18.1): fixture level expanded，关键路径 `images/dsh-user/`。se
   - config 路由经 `isTrustedApiRequest`（`:142-157`）：Host 为 loopback、没有 Origin 时放行。`sessionId` 可以是任意值，cwd 取查询参数 `cwd`（`sessionCwdOf`，`:1868-1873`）。
   - 受管覆盖层让 DSH 只监听实例 +2 地址（`dsh-host-webserver` `:468` 用 `config.host` listen），所以容器内用 `node:http` 连 +2 地址，并显式带 `Host: 127.0.0.1:3080`。信任检查只看 Host 和 Origin，这样仍算 loopback、无 Origin。
   - DSH 0.2.1-rc.2 没有把插件日志写到 stderr 的 exporter（只有 cordis 内存缓冲和启动期日志），所以 `docker logs` 里看不到 `unknown document key`。判据改用注册表文件 `/data/home/plugins/dsh-sidebar-onlyoffice/registry.json` 和回调的实际下载次数。
+- **宿主服务不兼容（PR #567 审查发现，已核实）**：`lib/index.js:1832-1836` 的 `inject` 是 `["webServer", "sessions", "webRuntime"]`，`:630`、`:1906`、`:2193` 读 `webRuntime.trustedHosts`。DSH 0.2.0-rc.2 的 `dsh-web-app` 提供 `webRuntime`（`lib/index.js:30,175`，值为 `resolveLanTrust(webServer.host, config.trustedHosts)`），0.2.1-rc.2 已删掉它，只有 `webStartup`（`dsh-web-app/lib/startup.js:19,61-67`，含 `trustedHosts`，不再含按监听地址推出的 LAN 信任）。cordis 把 inject 数组里的服务都当作必需，所以未打补丁时插件停在 `waiting for service: webRuntime`，路由从不注册，DSH 只在 stderr 写 `dsh: warning: 1 entry did not activate`；现有的 Docker 用例（`managed-policy-fixture.ts:654`、`better-sidebar.docker.test.ts:100`、`credential-priority-fixture.ts:131`）会因这行警告变红。
 - 文件令牌密钥由编排器每次启动注入 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`（64 位十六进制，12.1 已完成，`platform/src/orchestrator/start.ts:425`）。
 - 先例：#375 的 `patch-plugin-manager.mjs`（a7fb25c 删除，见 `git show a7fb25c^:images/dsh-user/patch-plugin-manager.mjs`）。它早于现行门禁：`scripts/check-test-pairing.sh:41` 要求 `images/dsh-user/*.mjs` 有同目录的 `*.test.mjs`；`vitest.config.ts:60-67` 把它们纳入 unit 项目的每文件 80% 覆盖率。入口守卫照 `images/dsh-user/catalog-check.mjs:576-581`（只在作为脚本执行时跑 `main`，被 import 时不跑）。better-sidebar 的安装方式见 `images/dsh-user/Dockerfile:15-37`。
 
@@ -3612,12 +3613,13 @@ selected：
   - 版本必须是 `0.2.0`。`lib/index.js` 的输入 SHA-256 必须是上面的值；补丁结果的 SHA-256 必须是评审过的值（实现时在真实文件上算出，写进脚本和 PR 描述）。
   - 同目录临时文件加 rename，原子写入，保留原 mode 和属主（root）。
   - 拒绝时只输出失败的检查名，不打印路径和内容，以非零状态退出，目标文件逐字节不变。
-  - `onlyoffice` 的替换表只有下面五处精确文本替换，每处原文必须恰好出现一次，否则拒绝：
+  - `onlyoffice` 的替换表只有下面几处精确文本替换，每处原文必须恰好出现一次，否则拒绝（第 6 项是用户 2026-11-08 决定的兼容映射）：
     1. `:1839` 改为 `const FILE_TOKEN_SECRET = process.env.DSH_TEAM_ONLYOFFICE_FILE_SECRET ?? "";`。
     2. `documentKey` 的函数体：密钥为空时 `throw new Error("onlyoffice: file token secret unavailable")`；否则返回 `createHmac("sha256", FILE_TOKEN_SECRET).update(<原输入串，逐字不变>).digest("hex")`。仍是 64 位小写十六进制，`isUsableDocumentKey` 照常接受。
     3. `mintFileToken` 开头：`secret === ""` 时抛同一个错误。
     4. `verifyFileToken` 开头：`secret === ""` 时返回 `{ ok: false, reason: "bad-signature" }`。
     5. `signatureOf` 开头（锚点是唯一的 `async function signatureOf(host, path) {`）：`FILE_TOKEN_SECRET === ""` 时 `return null`。watch hub 把文件当作不存在，不派生 key，也不产生未处理的 rejection。
+    6. 宿主服务映射：`inject` 数组里的 `"webRuntime"` 改为 `"webStartup"`；`:630` 的 `ctx.webRuntime`、`:1906` 和 `:2193` 的 `plugin.webRuntime.trustedHosts` 改为 `webStartup`。注释里的 `webRuntime` 不改。只做这一处兼容映射；实测还有别的 0.2.1 不兼容就停下报告。
   - 别的文件和别的行都不碰（`lib/client.js` 不改）。
 - **目录（`images/dsh-user/catalog.json`）**：新增 `{ "id": "dsh-sidebar-onlyoffice", "package": "dsh-sidebar-onlyoffice", "name": "Office 在线编辑", "category": "manageable", "imageDefaultEnabled": true }`，放在 `dsh-better-sidebar` 之后。
   - 构建期 `catalog-check.mjs` 的 register 和 verify 照常处理。
@@ -3643,7 +3645,7 @@ selected：
   - 断言 `/opt/dsh-team/dsh-sidebar-onlyoffice/package.json` 的版本是 `0.2.0`；`lib/index.js` 的 SHA-256 等于补丁后的值；`lib/client.js` 等于发行值 `13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc`。
   - 断言属主 root，uid1001 不可写；镜像里找不到 `patch-package.mjs`。
 - **令牌和 key 的 Docker 用例**：两次启动 DSH web，一次不带 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，一次带测试自有的随机 64 位十六进制值 S。可以新建 `*.docker.test.ts`，或放进已有启动 DSH web 的 fixture，沿用它的启动方式。
-  - 插件必须真的在运行：每次启动都先断言 `GET /sidebar/onlyoffice/file`（不带 token）回 400 `missing token`，不是 404。
+  - 插件必须真的在运行：每次启动都先断言 `GET /sidebar/onlyoffice/file`（不带 token）回 400 `missing token`，不是 404；DSH 输出里没有 `did not activate` 和 `waiting for service`。
   - 测试在容器内建一个 `.docx` 文件 F（任意字节），从容器内读 `os.hostname()` 和 F 的 size、`Math.round(mtimeMs)`，算出两个 key：
     - K0 = 原公开算法的 key；
     - K1 = `HMAC-SHA256(S, 同一输入串)`。
@@ -3672,6 +3674,9 @@ not selected：Schema、API、迁移：无；平台源码不改。
 
 - 端到端证明（跨实例令牌、猜测 key 打开编辑器、Document Server 回调）在 18.5。
 - 环境变量在模块加载时读取一次；实例运行中不会轮换，与编排器每次启动注入的设计一致。
+- 既有 home 卷升级：已有卷不重新灌种子，profile 里没有本包。`employee` 态下员工在管理员重置 profile 前看不到这张卡片；`forced-on` 时生成器整段插入规范 patch，而它的插入行用裸包名，旧 profile 解析不到，启动会带插件失败标记。与 better-sidebar 的同类问题一样只记录，18.2 让 Office 可用时再处理。
+- 插件之间的依赖：本包的客户端半区注入 `dsh-better-sidebar`，生成器不处理目录项之间的依赖。管理员把 better-sidebar 设为 `forced-off`、ONLYOFFICE 保持开启时，客户端半区预计停在 pending，这个组合没有测试，留给 18.2/18.5。
+- `webStartup.trustedHosts` 不含 0.2.0 按监听地址推出的 LAN 信任，所以 config/watch 路由只信 loopback Host 和显式配置的 trusted host。经平台网关进来的浏览器请求能否通过这道检查，在 18.5 端到端验证。
 - 注册表跨重启持久化：上一次启动用旧密钥派生的 key 在下一次启动后仍被回调接受（只受 size/mtime 守卫约束）；不带密钥启动时也会加载这些旧 key。旧密钥不可推知，所以不构成跨用户风险。是否在启动时丢弃持久化的注册表，交给 18.5 判定。
 
 Governing invariant：本次启动签发的文件令牌和新注册的文档 key 都由本次启动的密钥派生，别的实例和公开算法都得不到；没有密钥时插件既不签发令牌，也不注册新的 key，并且不会因此崩溃。
