@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { PERMISSION_TIERS } from '../db/index.ts';
 import { validateSubnetPool } from '../orchestrator/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 import { registerConfigRoute } from './config-route.ts';
 import type { AdminConfigOptions } from './config-route.ts';
 
@@ -44,15 +45,13 @@ export const runtimeConfigRoutes: FastifyPluginCallback<
     invalidMessage: `Invalid runtime configuration; provide exactly ${FIELDS.join(', ')}. ${DOMAINS}`,
     validationGuidance: DOMAINS,
     patch(body) {
-      if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
-      // Envelope only: canonical writeSettings validates all raw values without coercion.
-      const input = body as Record<string, unknown>;
+      if (!isPlainObject(body)) return null;
       if (
-        Object.keys(input).some((key) => !FIELDS.includes(key)) ||
-        FIELDS.some((key) => !Object.hasOwn(input, key))
+        Object.keys(body).some((key) => !FIELDS.includes(key)) ||
+        FIELDS.some((key) => !Object.hasOwn(body, key))
       )
         return null;
-      return input;
+      return body;
     },
     validate(settings) {
       validateSubnetPool(options.subnetPool, settings.maxRunningInstances);

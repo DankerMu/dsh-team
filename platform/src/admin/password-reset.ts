@@ -9,6 +9,7 @@ import {
 } from '../auth/index.ts';
 import type { SourceAddressResolver } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 import { ERROR_SCHEMA } from './config-route.ts';
 
 const ERRORS = {
@@ -109,9 +110,7 @@ export const passwordResetRoutes: FastifyPluginCallback<{
       const body = request.body;
       if (
         !/^[a-z0-9]{12}$/.test(userId) ||
-        typeof body !== 'object' ||
-        body === null ||
-        Array.isArray(body) ||
+        !isPlainObject(body) ||
         Object.keys(body).length !== 1 ||
         !('newPassword' in body) ||
         typeof body.newPassword !== 'string'

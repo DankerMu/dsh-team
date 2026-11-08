@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CatalogState, Settings } from '../db/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 
 /** Source tree, build output and platform image all place images/ three levels above this module. */
 const DEFAULT_CATALOG_PATH = join(
@@ -36,9 +37,6 @@ export interface PluginCatalog {
 export interface CatalogEntryState extends CatalogEntry {
   readonly state: CatalogState;
 }
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 function parseEntries(raw: unknown, fail: (detail: string) => Error): CatalogEntry[] {
   if (!isPlainObject(raw)) throw fail('must be an object');

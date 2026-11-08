@@ -1,7 +1,8 @@
 import type { FastifyPluginCallback, FastifyPluginOptions } from 'fastify';
 import { recordAuditEvent } from '../audit/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import { ERROR_RESPONSE_SCHEMA, isPlainObject, rejectInvalidBody } from './credentials.ts';
+import { isPlainObject } from '../plain-object.ts';
+import { ERROR_RESPONSE_SCHEMA, rejectInvalidBody } from './credentials.ts';
 import { hashPassword, verifyPassword } from './password.ts';
 import { ORIGIN_HEADERS_SCHEMA } from './request-guard.ts';
 import { formatSessionCookie, readSessionCookie } from './session-cookie.ts';

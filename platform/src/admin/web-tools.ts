@@ -1,5 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
-import { isPlainObject, registerConfigRoute } from './config-route.ts';
+import { isPlainObject } from '../plain-object.ts';
+import { registerConfigRoute } from './config-route.ts';
 import type { AdminConfigOptions } from './config-route.ts';
 
 const SCHEMA = {

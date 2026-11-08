@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { readLimited } from '../bounded-body.ts';
 import { hasCompleteModelSnapshot } from '../managed-config/index.ts';
 import type { ModelSnapshot } from '../managed-config/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 
 /** Overall bound through the end of the response body; the route always uses this value. */
 export const MODEL_PROBE_DEADLINE_MS = 20_000;
@@ -53,13 +54,7 @@ function hasChoices(text: string): boolean {
   } catch {
     return false;
   }
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    !Array.isArray(value) &&
-    'choices' in value &&
-    Array.isArray(value.choices)
-  );
+  return isPlainObject(value) && 'choices' in value && Array.isArray(value.choices);
 }
 
 async function classify(response: Response): Promise<ModelProbeResult> {

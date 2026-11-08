@@ -55,10 +55,6 @@ export const ERROR_SCHEMA = {
 
 export class ClientConfigValidationError extends Error {}
 
-/** True for a non-null, non-array object, such as a parsed JSON object body. */
-export const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
 /** Internal transport/commit boundary for administrator configuration descriptors. */
 export function registerConfigRoute(
   app: FastifyInstance,

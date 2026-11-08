@@ -4,6 +4,7 @@ import { deleteUserSessions, getSessionUser, readSessionCookie } from '../auth/i
 import type { SourceAddressResolver } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 import { ERROR_SCHEMA } from './config-route.ts';
 
 type AccountStatus = 'active' | 'disabled';
@@ -32,7 +33,7 @@ class StatusRejection extends Error {
   }
 }
 function requestedStatus(body: unknown): AccountStatus | undefined {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) return undefined;
+  if (!isPlainObject(body)) return undefined;
   if (Object.keys(body).length !== 1 || !('status' in body)) return undefined;
   return body.status === 'active' || body.status === 'disabled' ? body.status : undefined;
 }

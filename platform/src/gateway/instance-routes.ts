@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { admitCurrentSession } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 
 const ERROR_SCHEMA = {
   type: 'object',
@@ -86,12 +87,7 @@ export const instanceRoutes: FastifyPluginCallback<{
       // Reject raw identifiers rather than allowing AJV to remove unknown properties.
       preValidation: (request, reply, next) => {
         const body: unknown = request.body;
-        if (
-          typeof body !== 'object' ||
-          body === null ||
-          Array.isArray(body) ||
-          Object.keys(body).length !== 0
-        ) {
+        if (!isPlainObject(body) || Object.keys(body).length !== 0) {
           void reply.code(400).send(ERRORS[400]);
           return;
         }

@@ -6,6 +6,7 @@ import type {
 } from 'fastify';
 import { getSessionUser, readSessionCookie } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 import { withRequestAbort } from '../request-abort.ts';
 
 interface AdminError {
@@ -93,12 +94,7 @@ export function emptyBodyPolicy(message: string) {
       next: HookHandlerDoneFunction,
     ): void => {
       const body: unknown = request.body;
-      if (
-        typeof body !== 'object' ||
-        body === null ||
-        Array.isArray(body) ||
-        Object.keys(body).length !== 0
-      ) {
+      if (!isPlainObject(body) || Object.keys(body).length !== 0) {
         void reply.code(400).send(invalid);
         return;
       }
