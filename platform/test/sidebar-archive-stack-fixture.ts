@@ -162,9 +162,11 @@ async function downloadArchive(page: Page, shoot: Shoot, saved: string, timeout:
 }
 
 // better-sidebar 0.28.0's 「下载」 (lib/client.js downloadFile): an `<a href>` navigation, no `download`.
-const fileDownload = ({ url }: { url: () => string }) =>
-  new URL(url()).pathname === '/sidebar/file' &&
-  new URL(url()).searchParams.get('download') === '1';
+// Called on the Playwright object: its `url` reads `this`, so it is never destructured.
+const fileDownload = (event: { url(): string }) => {
+  const { pathname, searchParams } = new URL(event.url());
+  return pathname === '/sidebar/file' && searchParams.get('download') === '1';
+};
 
 /** Downloads one row from the context menu; its own response carries the gateway's sandbox CSP. */
 async function downloadSingle(page: Page, saved: string, timeout: number): Promise<SingleDownload> {
