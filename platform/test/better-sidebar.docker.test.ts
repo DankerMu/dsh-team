@@ -146,11 +146,12 @@ it('opens Markdown in better-sidebar and hands a docx from its file area to the 
         dshMarkdown: false,
       });
       // DSH's Office preview received the docx and rendered at least one page with the image's
-      // preview fonts (#554). The font warning is recorded, not asserted: python-docx's template
-      // asks for Calibri, which the image does not substitute. better-sidebar drew no editor or
-      // download pane.
+      // preview fonts (#554), without the missing-fonts warning: the preview shows it only for a
+      // non-empty missingFonts, which the office-convert probe asserts empty for this docx.
+      // better-sidebar drew no editor or download pane.
       expect(observed.docx).toMatchObject({
         state: 'rendered',
+        fontWarning: false,
         nativeHost: false,
         downloads: 0,
         editors: 0,

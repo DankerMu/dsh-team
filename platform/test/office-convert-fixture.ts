@@ -39,7 +39,7 @@ sys.stdout.buffer.write("".join(runs).encode("utf-8"))
 
 /**
  * Converts with the released document preview's own engine, resolved the way the preview resolves
- * it, and `createConverter()` with the preview's defaults; only facts leave the container, the
+ * it, and `createConverter` with the preview's own options; only facts leave the container, the
  * judgement is `assertOfficeConversion`. Raw so the PDF and Python patterns keep their escapes.
  */
 function officeConvertScript(docxScript: string): string {
@@ -83,7 +83,16 @@ const timed = async (operation) => {
 };
 const inputs = [['doc', '/fixtures/probe.doc', 'txt'], ['ppt', '/fixtures/probe.ppt', 'pptx'], ['docx', DOCX, 'txt']];
 const conversions = [];
-const converter = await kit.createConverter();
+// Exactly the options dsh-office-to-pdf passes (its released defaults, lib/index.js:387-397, built
+// into this.options at :458-470): no fontDirectories or fontFallbacks, so the kit's bundled office
+// fonts and default fallbacks apply, and a conversion slower than the product's 60s timeout fails.
+const MiB = 1024 * 1024;
+const options = {
+  timeoutMs: 60000, maxInputBytes: 50 * MiB, maxOutputBytes: 100 * MiB, maxImageResolution: 192,
+  maxArchiveEntries: 10000, maxUncompressedBytes: 250 * MiB, maxFontFiles: 20000,
+  maxFontFileBytes: 256 * MiB, maxLoadedFontBytes: 512 * MiB,
+};
+const converter = await kit.createConverter(options);
 try {
   for (const [input, inputPath, readback] of inputs) {
     const rendered = OUT + '/' + input + '.pdf';
@@ -102,8 +111,8 @@ const serialPeak = peak();
 const pair = [];
 let parallel;
 try {
-  pair.push(await kit.createConverter());
-  pair.push(await kit.createConverter());
+  pair.push(await kit.createConverter(options));
+  pair.push(await kit.createConverter(options));
   parallel = await Promise.all(pair.map(async (each, index) => {
     const rendered = OUT + '/parallel-' + (index + 1) + '.pdf';
     const render = await timed(() => each.render({ inputPath: DOCX, outputPath: rendered }));
@@ -249,6 +258,8 @@ function assertRender(entry: Conversion | undefined, input: string): string {
   strictEqual(entry?.input, input, `${label} out of order`);
   strictEqual(entry.operation, 'render', `${label} out of order`);
   strictEqual(entry.backend, 'wasm', `${label} must use the WASM engine`);
+  // For OLE inputs (DOC/PPT) the kit reports no document families, so [] is trivially true there;
+  // the embedded CJK /BaseFont and the text readback discriminate. DOCX missingFonts is meaningful.
   deepStrictEqual(entry.missingFonts, [], `${label} reports missing fonts`);
   const { pdf } = entry;
   if (pdf === undefined) throw new Error(`${label} produced no PDF`);
