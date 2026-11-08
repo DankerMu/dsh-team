@@ -13,10 +13,11 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { vitestSpawnInterception } from './vitest-stand-in-fixture.ts';
 
 const verifier = resolve(import.meta.dirname, '../../scripts/verify-browser-runtime.mjs');
 const executable = String.raw`import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 const root=dirname(fileURLToPath(import.meta.url));
 const file=join(root,'daemon.json');
@@ -29,8 +30,7 @@ if(state.mode==='changed-after-publication'&&!state.rescuing&&args[0]==='image')
 }
 state.calls.push(args);
 const save=()=>{writeFileSync(file+'.pending',JSON.stringify(state));renameSync(file+'.pending',file);};
-if(basename(process.argv[1])==='pnpm'){state.verificationStarted=true;process.exitCode=8;}
-else if(args[0]==='--user')process.stdout.write('LoadState=not-found\n');
+if(args[0]==='--user')process.stdout.write('LoadState=not-found\n');
 else if(args[0]==='info')process.stdout.write(JSON.stringify({OSType:'linux',Architecture:'amd64',SecurityOptions:[]}));
 else if(args[0]==='build') {
  if(state.mode==='absent'){
@@ -166,7 +166,6 @@ export async function runBrowserBuildFailure(
     const tool = join(root, 'docker.mjs');
     await writeFile(tool, `#!${process.execPath}\n${executable}`, { mode: 0o700 });
     await symlink(tool, join(bin, 'docker'));
-    await symlink(tool, join(bin, 'pnpm'));
     await writeFile(
       join(root, 'daemon.json'),
       JSON.stringify({
@@ -183,6 +182,14 @@ export async function runBrowserBuildFailure(
     );
     await writeFile(join(chrome, 'chrome-headless-shell'), 'owned browser distribution boundary');
     await writeFile(join(chrome, 'deb.deps'), 'owned dependency manifest');
+    // Any verification launch is a tripwire: record it and fail the stand-in vitest with 8.
+    const vitest = join(root, 'vitest.cjs');
+    await writeFile(
+      vitest,
+      `const fs=require('node:fs');const file=${JSON.stringify(join(root, 'daemon.json'))};
+const state=JSON.parse(fs.readFileSync(file,'utf8'));state.verificationStarted=true;
+fs.writeFileSync(file,JSON.stringify(state));process.exitCode=8;`,
+    );
     const preload = join(root, 'host.mjs');
     // Only host qualification and the external process boundary are adapted; streams/results are real.
     await writeFile(
@@ -196,7 +203,7 @@ cp.spawnSync=(binary,args,options)=>{
  state.buildAttempts+=1;fs.writeFileSync(file,JSON.stringify(state));
  // Fixture-only external-call deadline compression; the verifier still declares600s.
  return original(state.mode==='spawn-failed'?${JSON.stringify(join(root, 'absent-docker'))}:binary,args,state.mode==='deadline'?{...options,timeout:50}:options);
-};syncBuiltinESMExports();`,
+};${vitestSpawnInterception(vitest, join(root, 'spawns.jsonl'))}syncBuiltinESMExports();`,
     );
     const result = spawnSync(process.execPath, ['--import', preload, verifier, 'docker'], {
       env: {

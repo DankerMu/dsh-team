@@ -15,9 +15,11 @@ import { prepareVerificationImage } from './verification-image.mjs';
 import { runDockerCommand, selectDockerExecution } from './docker-command.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+// Vitest runs directly under this Node, so signals reach it and its own exit becomes the result.
+const vitest = join(root, 'node_modules/vitest/vitest.mjs');
 const commands = {
-  docker: ['pnpm', ['exec', 'vitest', 'run', '--project', 'docker']],
-  model: ['pnpm', ['exec', 'vitest', 'run', '--project', 'model']],
+  docker: [process.execPath, [vitest, 'run', '--project', 'docker']],
+  model: [process.execPath, [vitest, 'run', '--project', 'model']],
   'dsh-api': ['bash', [join(root, 'scripts/probe-dsh-api.sh')]],
   'first-run': ['bash', [join(root, 'scripts/probe-first-run.sh')]],
 };
@@ -86,7 +88,7 @@ function runVerificationChild(env) {
   return new Promise((done, reject) => {
     child = spawn(command[0], command[1], { cwd: root, env, stdio: 'inherit' });
     child.once('error', reject);
-    child.once('exit', (code, signal) =>
+    child.once('close', (code, signal) =>
       done(interrupted ? status : signal ? (signal === 'SIGINT' ? 130 : 143) : (code ?? 1)),
     );
   });
