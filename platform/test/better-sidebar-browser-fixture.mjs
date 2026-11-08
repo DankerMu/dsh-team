@@ -19,8 +19,9 @@ import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import { evaluate, physicalClick } from '../../scripts/probe-permission-ui.mjs';
 
 const MS = 30_000;
-// The first WASM LibreOffice conversion of an instance loads the engine before it converts.
-const CONVERSION_MS = 240_000;
+// The product's own conversion timeout is 60s (dsh-office-to-pdf lib/index.js); the first WASM
+// LibreOffice conversion of an instance also loads the ~150 MB engine, and the PDF must then render.
+export const CONVERSION_MS = 240_000;
 
 /*
  * Markers, all from the released packages (dsh-better-sidebar@0.28.0, @deepseek-ai/dsh@0.2.1-rc.2):
@@ -265,8 +266,9 @@ export const previewFacts = (previewId, name) => `(() => {
 
 /**
  * The matched workbook's cell input state: the viewport rectangle of the cell input (over the
- * selected cell; null without one), the formula bar's text, and the input box's z-index, inline
- * first (Fortune-sheet sets -1 while no cell is being edited, 19 while one is).
+ * selected cell, parked at -10000 without a selection; null without an input) and the viewport's
+ * own size, whether the input holds the focus, the formula bar's text, and the input box's
+ * z-index, inline first (Fortune-sheet sets -1 while no cell is being edited, 19 while one is).
  */
 export const cellInputState = (previewId, name) => `(() => {
   const el = ${previewContainer(previewId, name)};
@@ -275,6 +277,8 @@ export const cellInputState = (previewId, name) => `(() => {
   const r = input?.getBoundingClientRect();
   return {
     rect: r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null,
+    viewport: { width: innerWidth, height: innerHeight },
+    focused: input !== undefined && input !== null && document.activeElement === input,
     cell: el?.querySelector('.fortune-fx-input')?.textContent ?? null,
     zIndex: box ? box.style.zIndex || getComputedStyle(box).zIndex : null,
   };

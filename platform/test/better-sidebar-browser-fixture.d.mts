@@ -31,6 +31,8 @@ export interface PreviewFacts {
   readonly cell: string | null;
 }
 export declare function previewFacts(previewId: string, name: string): string;
+/** The first WASM conversion's wait: the product's 60s bound plus the engine load and render. */
+export declare const CONVERSION_MS: number;
 export interface CellInputState {
   readonly rect: {
     readonly x: number;
@@ -38,6 +40,8 @@ export interface CellInputState {
     readonly width: number;
     readonly height: number;
   } | null;
+  readonly viewport: { readonly width: number; readonly height: number };
+  readonly focused: boolean;
   readonly cell: string | null;
   readonly zIndex: string | null;
 }

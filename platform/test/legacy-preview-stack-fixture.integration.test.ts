@@ -3,6 +3,7 @@ import { expect, it } from 'vitest';
 import { cellInputState, previewFacts, previewOutcome } from './better-sidebar-browser-fixture.mjs';
 import {
   base64Chunks,
+  inViewport,
   readLegacySamples,
   readOnlyViolations,
 } from './legacy-preview-stack-fixture.ts';
@@ -146,15 +147,38 @@ it('reads read-only facts and the formula bar only inside the matched preview co
   expect(facts).not.toContain("document.querySelectorAll('[contenteditable");
 });
 
-it('reads the cell input rectangle, the formula bar and the input box z-index of the workbook', () => {
+it('reads the cell input rectangle and focus, the viewport, the formula bar and the input box z-index', () => {
   const state = cellInputState(EXCEL, '旧报表.xls');
 
   for (const selector of [
     JSON.stringify(`[data-document-preview="${EXCEL}"]`),
     '"#luckysheet-rich-text-editor"',
+    'viewport: { width: innerWidth, height: innerHeight }',
+    'document.activeElement === input',
     "'.luckysheet-input-box'",
     "'.fortune-fx-input'",
     'box.style.zIndex || getComputedStyle(box).zIndex',
   ])
     expect(state).toContain(selector);
+});
+
+const VIEWPORT = { width: 1280, height: 800 };
+
+it.each([
+  ['the A1 input of a drawn workbook', { x: 40, y: 200, width: 115, height: 15 }, true],
+  [
+    'a rectangle flush with the bottom-right corner',
+    { x: 1180, y: 790, width: 100, height: 10 },
+    true,
+  ],
+  [
+    'the input parked off-screen without a selection',
+    { x: -10000, y: -10000, width: 115, height: 15 },
+    false,
+  ],
+  ['a rectangle past the right edge', { x: 1200, y: 200, width: 115, height: 15 }, false],
+  ['a rectangle past the bottom edge', { x: 40, y: 790, width: 115, height: 15 }, false],
+  ['a rectangle above the top edge', { x: 40, y: -1, width: 115, height: 15 }, false],
+])('judges %s inside the viewport: %s', (_case, rect, inside) => {
+  expect(inViewport(rect, VIEWPORT)).toBe(inside);
 });

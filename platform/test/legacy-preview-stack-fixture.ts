@@ -4,6 +4,7 @@ import type { Page } from '@playwright/test';
 import { expect } from 'vitest';
 import {
   cellInputState,
+  CONVERSION_MS,
   previewFacts,
   previewOutcome,
   rowQuery,
@@ -58,9 +59,6 @@ const SAMPLES: readonly LegacySample[] = [
 const NAMES = SAMPLES.map(({ name }) => name);
 // A1 of the probe workbook's sheet 报表 (office-legacy/README.md).
 const FIRST_CELL = '旧格式探针 XLS：部门';
-// The product's own conversion timeout is 60s (dsh-office-to-pdf lib/index.js); the first one of
-// an instance also loads the ~150 MB WASM engine, and the PDF must then render.
-const CONVERSION_MS = 240_000;
 const EDITING = /编辑|保存|edit|save/i;
 
 const digest = (data: Buffer) => createHash('sha256').update(data).digest('hex');
@@ -116,13 +114,29 @@ const READ = `import hashlib, json, pathlib, sys
 data = [(n, pathlib.Path(sys.argv[1], n).read_bytes()) for n in sys.argv[2:]]
 print(json.dumps([{"name": n, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()} for n, b in data]))`;
 
+// Fortune-sheet focuses the cell input in a timeout after the mouse-down (client.excel.js Sheet
+// cellAreaMouseDown); a few seconds cover that render tick on a loaded host.
+const FOCUS_MS = 5_000;
+
+/** The rectangle lies wholly inside the viewport, where a click lands on the page. */
+export const inViewport = (
+  rect: NonNullable<CellInputState['rect']>,
+  viewport: CellInputState['viewport'],
+) =>
+  rect.x >= 0 &&
+  rect.y >= 0 &&
+  rect.x + rect.width <= viewport.width &&
+  rect.y + rect.height <= viewport.height;
+
 /** One previewed file; `pages` for the converted PDFs, `cell` for the spreadsheet's formula bar. */
 interface LegacyFile extends ArchiveEntry {
   readonly preview: Preview;
   readonly pages?: number;
   readonly cell?: string | null;
-  /** The workbook after typing into the selected cell: the formula bar and the input box z-index. */
-  readonly typed?: Pick<CellInputState, 'cell' | 'zIndex'>;
+  /** Typing into the focused cell input: the formula bar and input box z-index after Enter/Escape. */
+  readonly typed?: Pick<CellInputState, 'focused' | 'cell' | 'zIndex'> & {
+    readonly zIndexBeforeEnter: string | null;
+  };
 }
 
 export interface LegacyPreviewEvidence {
@@ -133,21 +147,29 @@ export interface LegacyPreviewEvidence {
 type Shoot = (name: string) => Promise<void>;
 
 /**
- * Clicks the selected cell where its input lies, types `ZZ`, then Enter and Escape: a read-only
- * workbook keeps the formula bar's text and never enters the cell edit state (input box z-index
- * stays -1; 19 while a cell is edited).
+ * Clicks the selected cell where its input lies, waits for the input to take the focus, so the
+ * keys reach the sheet, and types `ZZ`. A read-only workbook keeps the formula bar's text and
+ * never enters the cell edit state: the input box z-index stays -1 while the keys are pending (an
+ * editable sheet shows 19 there; after Enter commits it would be -1 again), and after Enter and
+ * Escape.
  */
 async function typeIntoWorkbook(page: Page, shoot: Shoot, id: string, name: string) {
-  const { rect } = await page.evaluate<CellInputState>(cellInputState(id, name));
-  if (rect === null) throw new Error(`Legacy ${name} cell input missing`);
+  const read = () => page.evaluate<CellInputState>(cellInputState(id, name));
+  const { rect, viewport } = await read();
+  if (rect === null || !inViewport(rect, viewport))
+    throw new Error(`Legacy ${name} cell input not inside the viewport: no cell selected`);
   await page.mouse.click(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  await until(async () => (await read()).focused, FOCUS_MS, `legacy ${name} cell input focus`);
   await page.keyboard.type('ZZ');
+  const typing = await read();
+  const unchanged = { cell: FIRST_CELL, zIndex: '-1' };
+  expect({ cell: typing.cell, zIndex: typing.zIndex }, `${name} typed`).toEqual(unchanged);
   await page.keyboard.press('Enter');
   await page.keyboard.press('Escape');
-  const { cell, zIndex } = await page.evaluate<CellInputState>(cellInputState(id, name));
+  const { cell, zIndex } = await read();
   await shoot('legacy-xls-typed');
-  expect({ cell, zIndex }, `${name} after typing`).toEqual({ cell: FIRST_CELL, zIndex: '-1' });
-  return { cell, zIndex };
+  expect({ cell, zIndex }, `${name} after Enter and Escape`).toEqual(unchanged);
+  return { focused: true, cell, zIndex, zIndexBeforeEnter: typing.zIndex };
 }
 
 /** Opens one file from the file area and waits for DSH's preview to settle read-only. */
