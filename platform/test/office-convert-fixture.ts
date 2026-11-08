@@ -37,6 +37,24 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 sys.stdout.buffer.write("".join(runs).encode("utf-8"))
 `;
 
+// Every non-empty <text:p>/<text:h> of the ODT body in document order, body paragraphs then each
+// table cell, one per line, read with python3 zipfile. Writer always keeps an empty paragraph after a
+// table that ends the document, and empty paragraphs carry no content, so they are dropped.
+export const ODT_TEXT = String.raw`
+import sys, zipfile
+import xml.etree.ElementTree as ElementTree
+OFFICE = "{urn:oasis:names:tc:opendocument:xmlns:office:1.0}"
+TEXT = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    body = ElementTree.fromstring(archive.read("content.xml")).find(OFFICE + "body/" + OFFICE + "text")
+lines = [
+    "".join(node.itertext())
+    for node in body.iter()
+    if node.tag in (TEXT + "p", TEXT + "h")
+]
+sys.stdout.buffer.write("\n".join(line for line in lines if line).encode("utf-8"))
+`;
+
 /**
  * Converts with the released document preview's own engine, resolved the way the preview resolves
  * it, and `createConverter` with the preview's own options; only facts leave the container, the
@@ -52,6 +70,7 @@ import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 const docxScript = ${JSON.stringify(docxScript)};
 const pptxText = ${JSON.stringify(PPTX_TEXT)};
+const odtText = ${JSON.stringify(ODT_TEXT)};
 // memory.peak only exists from Linux 5.19; its absence is recorded as null.
 const cgroup = (name) => {
   try { return readFileSync('/sys/fs/cgroup/' + name, 'utf8').trim(); }
@@ -81,7 +100,11 @@ const timed = async (operation) => {
   const { backend, missingFonts } = await operation();
   return { backend, missingFonts, ms: Math.round(performance.now() - started) };
 };
-const inputs = [['doc', '/fixtures/probe.doc', 'txt'], ['ppt', '/fixtures/probe.ppt', 'pptx'], ['docx', DOCX, 'txt']];
+const zipped = (script) => (path) => execFileSync('python3', ['-c', script, path], { encoding: 'utf8' });
+const readers = { txt: text, pptx: zipped(pptxText), odt: zipped(odtText) };
+// The DOCX reads back as odt, never txt: libreoffice-kit 0.1.5's WASM engine hangs exporting a DOCX
+// that contains a table to txt until the 60s timeout, while the same DOCX exports to odt in ~4s.
+const inputs = [['doc', '/fixtures/probe.doc', 'txt'], ['ppt', '/fixtures/probe.ppt', 'pptx'], ['docx', DOCX, 'odt']];
 const conversions = [];
 // Exactly the options dsh-office-to-pdf passes (its released defaults, lib/index.js:387-397, built
 // into this.options at :458-470): no fontDirectories or fontFallbacks, so the kit's bundled office
@@ -100,8 +123,7 @@ try {
     conversions.push({ input, operation: 'render', ...render, pdf: pdf(rendered) });
     const converted = OUT + '/' + input + '.' + readback;
     const convert = await timed(() => converter.convert({ inputPath, outputPath: converted }));
-    conversions.push({ input, operation: 'convert', ...convert, text: readback === 'pptx'
-      ? execFileSync('python3', ['-c', pptxText, converted], { encoding: 'utf8' }) : text(converted) });
+    conversions.push({ input, operation: 'convert', ...convert, text: readers[readback](converted) });
   }
 } finally {
   await converter.dispose();
@@ -249,7 +271,15 @@ interface OfficeObservation {
 
 const DOC_MARKER = '旧格式探针 DOC：关于开展年度检查的通知';
 const PPT_MARKER = '旧格式探针 PPT：工作汇报';
-const DOCX_PARAGRAPHS = ['离线办公验证', '中文段落：无需联网即可生成文档。'];
+// offlineDocxScript's two paragraphs, then its 2x2 table cells row by row.
+const DOCX_READBACK = [
+  '离线办公验证',
+  '中文段落：无需联网即可生成文档。',
+  '项目',
+  '状态',
+  '文档生成',
+  '成功',
+].join('\n');
 const DSH_MODULE =
   '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/(?:.+/)?@deepseek-ai/';
 
@@ -321,7 +351,7 @@ export function assertOfficeConversion(
     assertRender(pptRender, 'ppt'),
     assertReadback(ppt, 'ppt', (text) => text === PPT_MARKER),
     assertRender(docxRender, 'docx'),
-    assertReadback(docx, 'docx', (text) => DOCX_PARAGRAPHS.every((line) => text.includes(line))),
+    assertReadback(docx, 'docx', (text) => text === DOCX_READBACK),
     ...observed.parallel.map((entry) => `parallel-${assertRender(entry, 'docx')}`),
     `serialPeak=${String(observed.serialPeak)} concurrentPeak=${String(observed.concurrentPeak)}`,
     `installedKiB=${JSON.stringify(observed.installedKiB)} imageSize=${String(observed.imageSize)}`,

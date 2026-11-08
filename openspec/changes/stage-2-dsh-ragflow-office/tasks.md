@@ -3421,7 +3421,7 @@ selected：
     - `discoverRuntime()` 的 backend 为 `wasm`；`createConverter` 传 `dsh-office-to-pdf` 实际传入的九个选项及其发行默认值（`lib/index.js:387-397,458-470`：`timeoutMs` 60000 等），不传 `fontDirectories` 和 `fontFallbacks`，与产品相同，这样超过产品 60s 超时的转换也会让探针失败；
     - 输入：`/fixtures/probe.doc`、`/fixtures/probe.ppt`，以及 `execFileSync('python3', ['-c', offlineDocxScript])` 生成的 `/data/work/offline.docx`（标记为既有的「离线办公验证」等段落）。输出统一写到新建的 `/data/work/out/`，每个输出路径都事先不存在；
     - 每个输入做一次 `render`：PDF 以 `%PDF-` 开头、以 `%%EOF` 结尾，至少嵌入一个名字含 `CJK` 的 `/BaseFont`，`missingFonts` 为空数组；
-    - 每个输入做一次 `convert` 回读中文：DOC 转 txt 去掉 BOM、`\r` 和末尾换行后等于标记；DOCX 转 txt 包含 offline-docx 的全部标记段落；PPT 转 pptx 后用 python3 `zipfile`，只取 `^ppt/slides/slide\d+\.xml$`，按数字顺序，拼接其中 `<a:t>` 文本，等于标记；
+    - 每个输入做一次 `convert` 回读中文：DOC 转 txt 去掉 BOM、`\r` 和末尾换行后等于标记；DOCX 转 odt 后用 python3 `zipfile` 读 `content.xml`，段落和表格单元格文本精确等于 offline-docx 的两段和四个单元格（不用 txt：libreoffice-kit 0.1.5 的 WASM 引擎把带表格的 DOCX 导出为 txt 时挂起到超时，VPS 实测，见 #566）；PPT 转 pptx 后用 python3 `zipfile`，只取 `^ppt/slides/slide\d+\.xml$`，按数字顺序，拼接其中 `<a:t>` 文本，等于标记；
     - 共 6 次转换，证据记录每次耗时、每个 PDF 的字节数、嵌入的 CJK 字体名、`missingFonts`；
     - 串行阶段结束后读一次 `/sys/fs/cgroup/memory.peak`（只增不减），记为单次峰值；
     - 再用两个转换器并行 `render` 同一个 DOCX 一次，模拟 `dsh-office-to-pdf` 的默认两路并发。两路都必须成功；在 4GiB 下被 OOM 终止，就停下来报告，作为产品层面的发现，不放宽限制。之后再读一次 `memory.peak`，记为并发峰值；
@@ -3429,7 +3429,7 @@ selected：
   - 镜像大小：容器内用 `dpkg-query -W -f='${Installed-Size}'` 读两个字体包的安装大小并记录，它就是本任务带来的增量；再记录 `docker image inspect` 的 Size。
   - 红：VPS 无字体时的两条已有证据。一条是 #553 VPS 报告行 `preview=failed code=gateway/internal`；另一条是 #554 诊断评论，`render` 返回 `unavailable`：「No usable fonts were found」。新探针在本机跑不了（linux/x64 守卫）。
   - 构建期字体门禁的拒绝用例：在 `user-image.docker.test.ts:477-539` 的 `it.each` 加一行，从 primary 副本的 apt 行去掉 `fonts-noto-cjk`，期望输出 `preview fonts missing: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`。
-- **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。`observeDocx`（`better-sidebar-browser-fixture.mjs:209-240`）只有在有可见页面 canvas、且没有 failed/alert 时才判为 `rendered`。现在断言 `state === 'rendered'`、`code` 为 undefined、页数至少 1。报告行保留 `pages=`。断言 `fontWarning` 为 false：kit 在未给 `fontDirectories` 时带上自带的 office 字体（`includeOfficeFonts`，`libreoffice-kit/lib/index.js:1455`），并把 Calibri 映射到 Carlito（`:1291`）；#554 本机用同一 python-docx 文档实测 `missingFonts` 为空，与探针对 DOCX 的断言一致。`:148` 的注释同步改写。
+- **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。`observeDocx`（`better-sidebar-browser-fixture.mjs:209-240`）只有在有可见页面 canvas、且没有 failed/alert 时才判为 `rendered`。现在断言页数至少 1、`fontWarning` 为 false，状态只能是 `rendered`，或者恰好是 `failed` 且消息含 `getOrInsertComputed`。后者是已知的验证浏览器限制：DSH 0.2.1 的 PDF 查看器需要 Chrome/Edge 145+、Firefox 144+、Safari 26.2+，受信 VPS 的 Chrome for Testing 140 不支持（VPS 实测转换成功、`pages: 1`；用户决定 2026-11-08）。其他任何失败仍让用例失败。升级验证浏览器、把状态收紧为只接受 `rendered`，见 #565。报告行保留 `pages=`。断言 `fontWarning` 为 false：kit 在未给 `fontDirectories` 时带上自带的 office 字体（`includeOfficeFonts`，`libreoffice-kit/lib/index.js:1455`），并把 Calibri 映射到 Carlito（`:1291`）；#554 本机用同一 python-docx 文档实测 `missingFonts` 为空，与探针对 DOCX 的断言一致。`:148` 的注释同步改写。
 - **文档（编排者同 PR 改）**：
   - `platform/test/README.md`：用户镜像段写字体与新 probe；
   - `docs/DEPLOY.md`：在资源相关处写实测数值，不给阈值：DOC/PPT/DOCX 只读预览在实例内转换，单次和两路并发的 cgroup 峰值（本探针记录的两个数值），不含 DSH 常驻内存，DSH 默认最多两路并发；被 OOM 终止会连带 DSH 进程；

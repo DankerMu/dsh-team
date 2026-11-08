@@ -1,7 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { assertOfficeConversion } from './office-convert-fixture.ts';
+import { assertOfficeConversion, ODT_TEXT } from './office-convert-fixture.ts';
 import { assertDocxReadback, offlineDocxScript, runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
@@ -123,6 +126,10 @@ describe('office-convert user-image probe', () => {
     expect(script).toContain(JSON.stringify(offlineDocxScript));
     expect(script).toContain('/fixtures/probe.doc');
     expect(script).toContain('/fixtures/probe.ppt');
+    // The DOCX with a table hangs the WASM engine's txt export; it reads back through odt.
+    expect(script).toContain("['docx', DOCX, 'odt']");
+    expect(script).not.toContain("['docx', DOCX, 'txt']");
+    expect(script).toContain(JSON.stringify(ODT_TEXT));
     expect(fake.calls.find(({ args }) => args[0] === 'wait')?.timeout).toBe(300_000);
     expect(fake.calls.find(({ args }) => args[0] === 'start')?.args).not.toContain('--attach');
     expect(observed).toEqual({ ...observation, imageSize: 589_000_000 });
@@ -166,6 +173,8 @@ describe('office-convert user-image probe', () => {
   });
 });
 
+/** offlineDocxScript's paragraphs and table cells, as the odt readback lists them. */
+const DOCX_ODT_TEXT = '离线办公验证\n中文段落：无需联网即可生成文档。\n项目\n状态\n文档生成\n成功';
 const DSH_MODULES = '/usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai';
 const pdf = {
   bytes: 14_383,
@@ -216,7 +225,7 @@ function accepted(): Record<string, unknown> {
       render('ppt'),
       convert('ppt', '旧格式探针 PPT：工作汇报'),
       render('docx'),
-      convert('docx', '离线办公验证\n中文段落：无需联网即可生成文档。\n项目\n状态'),
+      convert('docx', DOCX_ODT_TEXT),
     ],
     serialPeak: 2_140_000_000,
     parallel: [render('docx'), render('docx')],
@@ -283,7 +292,22 @@ describe('office-convert observation oracle', () => {
     ],
     [
       'a lost DOCX paragraph',
-      replaceConversion(5, { text: '离线办公验证' }),
+      replaceConversion(5, { text: DOCX_ODT_TEXT.replace('离线办公验证\n', '') }),
+      'docx readback lost the Chinese markers',
+    ],
+    [
+      'a lost DOCX table cell',
+      replaceConversion(5, { text: DOCX_ODT_TEXT.replace('\n成功', '') }),
+      'docx readback lost the Chinese markers',
+    ],
+    [
+      'reordered DOCX table cells',
+      replaceConversion(5, { text: DOCX_ODT_TEXT.replace('项目\n状态', '状态\n项目') }),
+      'docx readback lost the Chinese markers',
+    ],
+    [
+      'the paragraphs-only txt-shaped DOCX readback',
+      replaceConversion(5, { text: '离线办公验证\n中文段落：无需联网即可生成文档。\n' }),
       'docx readback lost the Chinese markers',
     ],
     ['a swapped order', replaceConversion(0, { input: 'ppt' }), 'doc render out of order'],
@@ -333,5 +357,58 @@ describe('office-convert observation oracle', () => {
     expect(() =>
       assertOfficeConversion(JSON.stringify(change(accepted())), assertDocxReadback),
     ).toThrow(message);
+  });
+});
+
+const ODF = (prefix: string) => `urn:oasis:names:tc:opendocument:xmlns:${prefix}`;
+/** The shape Writer exports for offlineDocxScript: spans, a table, then the trailing empty paragraph. */
+const WRITER_CONTENT =
+  '<?xml version="1.0" encoding="UTF-8"?>' +
+  `<office:document-content xmlns:office="${ODF('office:1.0')}" xmlns:text="${ODF('text:1.0')}" ` +
+  `xmlns:table="${ODF('table:1.0')}" office:version="1.3"><office:body><office:text>` +
+  '<text:sequence-decls><text:sequence-decl text:display-outline-level="0" text:name="Table"/></text:sequence-decls>' +
+  '<text:p text:style-name="P1"><text:span text:style-name="T1">离线</text:span>办公验证</text:p>' +
+  '<text:p text:style-name="P1">中文段落：无需联网即可生成文档。</text:p>' +
+  '<table:table table:name="Table1"><table:table-column table:number-columns-repeated="2"/>' +
+  '<table:table-row><table:table-cell office:value-type="string"><text:p>项目</text:p></table:table-cell>' +
+  '<table:table-cell office:value-type="string"><text:p>状态</text:p></table:table-cell></table:table-row>' +
+  '<table:table-row><table:table-cell office:value-type="string"><text:p>文档生成</text:p></table:table-cell>' +
+  '<table:table-cell office:value-type="string"><text:p><text:span>成功</text:span></text:p></table:table-cell>' +
+  '</table:table-row></table:table><text:p text:style-name="Standard"/></office:text></office:body>' +
+  '</office:document-content>';
+// Builds the archive with python3 zipfile, the reader's own library, then runs the reader on it.
+const ARCHIVE = String.raw`
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    archive.writestr("mimetype", "application/vnd.oasis.opendocument.text")
+    archive.writestr("content.xml", sys.argv[2])
+`;
+
+function readOdt(content: string) {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-team-test-odt-'));
+  try {
+    const path = join(directory, 'docx.odt');
+    const built = spawnSync('python3', ['-c', ARCHIVE, path, content], { encoding: 'utf8' });
+    expect(built.status, built.stderr).toBe(0);
+    return spawnSync('python3', ['-c', ODT_TEXT, path], { encoding: 'utf8' });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+describe('office-convert odt readback', () => {
+  it('lists the body paragraphs then every table cell, dropping the trailing empty paragraph', () => {
+    const read = readOdt(WRITER_CONTENT);
+
+    expect(read.status, read.stderr).toBe(0);
+    expect(read.stdout).toBe(DOCX_ODT_TEXT);
+  });
+
+  it('fails loud on an odt without a text body instead of reporting empty text', () => {
+    const read = readOdt(WRITER_CONTENT.replaceAll('office:text>', 'office:spreadsheet>'));
+
+    expect(read.status).not.toBe(0);
+    expect(read.stdout).toBe('');
+    expect(read.stderr).toContain('AttributeError');
   });
 });

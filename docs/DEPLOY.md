@@ -198,6 +198,8 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 
 **Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑（第 18 组）上线之前，DOCX、PPTX 也都走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS、XLSX 在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；授权字体挂载进实例见 #561。
 
+**预览对员工浏览器版本的要求**：DSH 0.2.1 显示转换结果所用的 PDF 查看器需要浏览器支持 `Map.prototype.getOrInsertComputed`，即 Chrome 或 Edge 145 及以上、Firefox 144 及以上、Safari 26.2 及以上。更旧的浏览器能完成转换，但页面显示「无法显示 PDF」。内网员工的浏览器要先升级到这些版本。受信 VPS 验证所用的 Chrome for Testing 140 低于这个版本，升级见 #565。
+
 `pnpm test:deploy` 在 giap-vps 的**独立临时验收环境**验证直连、持久化、端口/socket边界、HTTPS/WSS、双员工HTTP/原生Session长连接及实例内部隔离；需要固定平台名称空闲，不能在生产平台旁边运行。它使用自己的测试配置和资源，不验证你已经运行的生产部署。原始 `pnpm test:docker` 还需要 [scripts/README.md](../scripts/README.md) 所述隔离浏览器运行时；不要拿历史成功替代当前提交证明。
 
 受信验收可由本机完成最终审查提交的 Linux/amd64 镜像构建，再通过可信 SSH 传输。运维方核对源提交、导出文件大小/SHA256和 OCI 内容摘要，将三个角色的布局保存在私有目录，并准备0600映射文件：顶层 `roles` 下的 `user`、`platform`、`browser` 各含绝对路径 `layout`、运行平台 manifest 的 `manifestDigest` 和 `configId`（两者都是完整 `sha256:` 摘要）。设置 `DSH_TEAM_VERIFICATION_IMAGES=/绝对路径/images.json` 后仍运行原始 `pnpm test:docker`、`pnpm test:deploy`；浏览器、主机和工具链先决条件不变。
