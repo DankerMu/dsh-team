@@ -4119,7 +4119,7 @@ Evidence (34.1):
 改动：
 
 - `stack-browser-fixture.ts`：
-  - `foreign()` 遇到 `target.protocol === 'blob:'` 时，改为比较 `target.origin === <平台 origin>`。http 和 ws 两条分支不变，因为 `ws://` 的 origin 不等于 `http://`。
+  - `foreign()` 遇到 `target.protocol === 'blob:'` 时，改为比较 `target.origin === <平台 origin>`。http 和 WebSocket 两条分支不变，因为 WebSocket 地址的 origin 与页面的 http origin 协议不同，从来不相等。
   - 新增导出 `element(page, expression)` 和 `showSidebarRows(page, names: readonly string[])`，从 `sidebar-archive-stack-fixture.ts:128-141` 挪过来：
     - `names` 全部可见才算成功；重选标签页用 `names[0]`；
     - 打包夹具传 `NAMES`，语义完全不变；新夹具传 `[name]`；
