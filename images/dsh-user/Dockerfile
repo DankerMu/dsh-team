@@ -44,6 +44,28 @@ RUN installed="$(node -p 'require("/opt/dsh-team/dsh-better-sidebar/package.json
        exit 1; \
      fi
 
+# The ONLYOFFICE editor plugin is delivered the same way (its 0.2.0 release predates --before).
+RUN prefix="$(mktemp -d)" \
+  && npm install -g --prefix "$prefix" --legacy-peer-deps --ignore-scripts --no-bin-links \
+       --no-audit --no-fund --before=2026-10-31T00:00:00Z dsh-sidebar-onlyoffice@0.2.0 \
+  && mv "$prefix/lib/node_modules/dsh-sidebar-onlyoffice" /opt/dsh-team/dsh-sidebar-onlyoffice \
+  && rm -rf "$prefix" \
+  && npm cache clean --force \
+  && chown -R root:root /opt/dsh-team/dsh-sidebar-onlyoffice \
+  && find /opt/dsh-team/dsh-sidebar-onlyoffice -type d -exec chmod 0555 {} + \
+  && find /opt/dsh-team/dsh-sidebar-onlyoffice -type f -exec chmod 0444 {} +
+RUN installed="$(node -p 'require("/opt/dsh-team/dsh-sidebar-onlyoffice/package.json").version')" \
+  && expected="0.2.0" \
+  && if [ "$installed" != "$expected" ]; then \
+       echo "dsh-sidebar-onlyoffice version mismatch: installed=${installed} expected=${expected}" >&2; \
+       exit 1; \
+     fi
+# Before registration and the profile seed, so every later copy is the patched file: the file
+# token secret and document key derive from the per-instance DSH_TEAM_ONLYOFFICE_FILE_SECRET.
+# Any version, copy or hash drift fails the build; the bind mount keeps the script out of layers.
+RUN --mount=type=bind,source=patch-package.mjs,target=/tmp/patch-package.mjs \
+  node /tmp/patch-package.mjs onlyoffice /opt/dsh-team "$(npm root -g)"
+
 # Each named context contains only canonical plugin sources, not the repository root.
 # /opt/dsh-team/<id> is every plugin's canonical copy, outside the employee-writable home.
 # Delivery does not activate a plugin; the managed overlay owns composition policy.

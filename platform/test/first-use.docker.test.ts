@@ -260,7 +260,7 @@ process.stdout.write(JSON.stringify({
   return { live: read.live, seed: read.seed };
 }
 
-/** Every catalog entry is an installed `file:` dependency; the sidebar, the knowledge base and a switched-on office are selected. */
+/** Every catalog entry is an installed `file:` dependency; the sidebar, ONLYOFFICE, the knowledge base and a switched-on office are selected. */
 function requireRegistration(manifest: string, officeEnabled: boolean): void {
   const parsed = record(JSON.parse(manifest));
   expect(parsed.dependencies).toEqual(
@@ -270,6 +270,7 @@ function requireRegistration(manifest: string, officeEnabled: boolean): void {
     '@deepseek-ai/dsh-base',
     '@deepseek-ai/dsh-web-app',
     'dsh-better-sidebar',
+    'dsh-sidebar-onlyoffice',
     KNOWLEDGE_BASE,
     ...(officeEnabled ? [OFFICE_AGENTS] : []),
   ]);

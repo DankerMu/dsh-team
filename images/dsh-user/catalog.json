@@ -9,6 +9,13 @@
       "imageDefaultEnabled": true
     },
     {
+      "id": "dsh-sidebar-onlyoffice",
+      "package": "dsh-sidebar-onlyoffice",
+      "name": "Office 在线编辑",
+      "category": "manageable",
+      "imageDefaultEnabled": true
+    },
+    {
       "id": "knowledge-base",
       "package": "@dsh-team/knowledge-base",
       "name": "知识库",

@@ -218,6 +218,7 @@ it('delivers the repository catalog, its gate, the toolchain+DSH baseline and ev
       expect(observed.bundles).toEqual([
         ...shipped,
         'dsh-better-sidebar',
+        'dsh-sidebar-onlyoffice',
         '@dsh-team/knowledge-base',
         '@dsh-team/office-agents',
       ]);
@@ -413,6 +414,65 @@ process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.n
       Promise.resolve(
         execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-platform-nav-trust`, script),
       ),
+  );
+});
+
+// dsh-sidebar-onlyoffice@0.2.0: the reviewed build-time patch of lib/index.js (published
+// e2148f01…b29b) and the unpatched published lib/client.js.
+const ONLYOFFICE_PATCHED_INDEX_SHA256 =
+  '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef';
+const ONLYOFFICE_RELEASED_CLIENT_SHA256 =
+  '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc';
+
+it('delivers dsh-sidebar-onlyoffice 0.2.0 patched, root-owned and unwritable by uid1001, without the patch script', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  const script = `
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+const root='/opt/dsh-team/dsh-sidebar-onlyoffice';
+const sha=(path)=>createHash('sha256').update(readFileSync(path)).digest('hex');
+for(const path of [root,root+'/lib']) {
+  const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o555);
+}
+const target=root+'/lib/index.js';
+const stat=statSync(target);
+assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o444);
+assert.throws(()=>writeFileSync(target,'employee code',{flag:'a'}),{code:'EACCES'});
+assert.throws(()=>renameSync(target,root+'/lib/employee.js'),{code:'EACCES'});
+assert.throws(()=>writeFileSync(root+'/lib/employee.js','employee code'),{code:'EACCES'});
+assert.equal(process.getuid(),1001);
+process.stdout.write(JSON.stringify({
+  version:JSON.parse(readFileSync(root+'/package.json','utf8')).version,
+  index:sha(target),
+  profileIndex:sha('/data/home/profiles/web/node_modules/dsh-sidebar-onlyoffice/lib/index.js'),
+  seedIndex:sha('/opt/dsh-team/profile-seed/web/node_modules/dsh-sidebar-onlyoffice/lib/index.js'),
+  client:sha(root+'/lib/client.js'),
+  global:lstatSync('/usr/local/lib/node_modules/dsh-sidebar-onlyoffice',{throwIfNoEntry:false})!==undefined,
+  script:existsSync('/tmp/patch-package.mjs') || readdirSync('/opt/dsh-team').includes('patch-package.mjs'),
+  uid:1001,
+}));
+`;
+
+  await runUserImage(
+    'managed-policy',
+    (stdout) => {
+      expect(JSON.parse(stdout)).toEqual({
+        version: '0.2.0',
+        index: ONLYOFFICE_PATCHED_INDEX_SHA256,
+        profileIndex: ONLYOFFICE_PATCHED_INDEX_SHA256,
+        seedIndex: ONLYOFFICE_PATCHED_INDEX_SHA256,
+        client: ONLYOFFICE_RELEASED_CLIENT_SHA256,
+        global: false,
+        script: false,
+        uid: 1001,
+      });
+    },
+    undefined,
+    (lifecycle) =>
+      Promise.resolve(execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-onlyoffice`, script)),
   );
 });
 

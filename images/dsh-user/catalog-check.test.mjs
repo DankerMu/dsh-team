@@ -333,54 +333,54 @@ it.each([
 it.each([
   [
     'a duplicate id',
-    (entries) => entries.push({ ...entries[2], package: '@x/y' }),
-    'catalog entry 6 (office-agents) duplicates id office-agents',
+    (entries) => entries.push({ ...entries[3], package: '@x/y' }),
+    'catalog entry 7 (office-agents) duplicates id office-agents',
   ],
   [
     'a duplicate package',
-    (entries) => entries.push({ ...entries[2], id: 'other' }),
-    'catalog entry 6 (other) duplicates package @dsh-team/office-agents',
+    (entries) => entries.push({ ...entries[3], id: 'other' }),
+    'catalog entry 7 (other) duplicates package @dsh-team/office-agents',
   ],
   [
     'an unknown key',
-    (entries) => Object.assign(entries[3], { extra: 1 }),
-    'catalog entry 3 (permission-tiers) has unknown key extra',
+    (entries) => Object.assign(entries[4], { extra: 1 }),
+    'catalog entry 4 (permission-tiers) has unknown key extra',
   ],
   [
     'a missing key',
-    (entries) => delete entries[4].category,
-    'catalog entry 4 (platform-nav) has invalid category',
+    (entries) => delete entries[5].category,
+    'catalog entry 5 (platform-nav) has invalid category',
   ],
   [
     'a category outside the closed set',
-    (entries) => Object.assign(entries[2], { category: 'optional' }),
-    'catalog entry 2 (office-agents) has invalid category',
+    (entries) => Object.assign(entries[3], { category: 'optional' }),
+    'catalog entry 3 (office-agents) has invalid category',
   ],
   [
     'an empty name',
-    (entries) => Object.assign(entries[5], { name: ' ' }),
-    'catalog entry 5 (zh-locale) has invalid name',
+    (entries) => Object.assign(entries[6], { name: ' ' }),
+    'catalog entry 6 (zh-locale) has invalid name',
   ],
   [
     'a non-boolean default',
-    (entries) => Object.assign(entries[5], { imageDefaultEnabled: 'true' }),
-    'catalog entry 5 (zh-locale) has invalid imageDefaultEnabled',
+    (entries) => Object.assign(entries[6], { imageDefaultEnabled: 'true' }),
+    'catalog entry 6 (zh-locale) has invalid imageDefaultEnabled',
   ],
   [
     'a non-kebab-case id',
-    (entries) => Object.assign(entries[4], { id: 'Platform_Nav' }),
-    'catalog entry 4 (Platform_Nav) has invalid id',
+    (entries) => Object.assign(entries[5], { id: 'Platform_Nav' }),
+    'catalog entry 5 (Platform_Nav) has invalid id',
   ],
-  ['a missing id', (entries) => delete entries[4].id, 'catalog entry 4 has invalid id'],
+  ['a missing id', (entries) => delete entries[5].id, 'catalog entry 5 has invalid id'],
   [
     'an empty package',
-    (entries) => Object.assign(entries[2], { package: '' }),
-    'catalog entry 2 (office-agents) has invalid package',
+    (entries) => Object.assign(entries[3], { package: '' }),
+    'catalog entry 3 (office-agents) has invalid package',
   ],
   [
     'a non-object entry',
     (entries) => entries.push('zh-locale'),
-    'catalog entry 6 must be an object',
+    'catalog entry 7 must be an object',
   ],
 ])('fails the catalog shape for %s and names the entry', (_name, mutate, problem) => {
   const tree = imageTree();
@@ -509,6 +509,7 @@ it('keeps the existing manifest key order and unknown keys, appending after exis
           bundles: [
             ...initial.dsh.profile.bundles,
             'dsh-better-sidebar',
+            'dsh-sidebar-onlyoffice',
             '@dsh-team/knowledge-base',
             '@dsh-team/office-agents',
           ],
@@ -589,12 +590,12 @@ it.each([
 it('reports catalog shape problems before registering anything', () => {
   const tree = imageTree(false);
   const catalog = catalogWith(tree, (value) => {
-    value.entries[2].category = 'optional';
+    value.entries[3].category = 'optional';
   });
 
   expect(register(tree, catalog)).toEqual({
     status: 1,
-    stderr: 'catalog entry 2 (office-agents) has invalid category\n',
+    stderr: 'catalog entry 3 (office-agents) has invalid category\n',
   });
   expect(profileManifest(tree)).toBe(dshJson(INITIAL_MANIFEST));
 });
