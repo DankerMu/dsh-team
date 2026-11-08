@@ -24,6 +24,7 @@ import {
   PROFILE,
   RANGE,
   register,
+  RELEASED_MANIFESTS,
   REGISTERED_BUNDLES,
   removeImageTrees,
   repository,
@@ -114,6 +115,8 @@ it.each([
   ['a missing record argument', ['record']],
   ['a missing verify argument', ['verify', 'catalog.json']],
   ['a missing register argument', ['register']],
+  ['a missing bundle argument', ['bundle']],
+  ['an extra bundle argument', ['bundle', 'catalog.json', 'baseline.json']],
   ['an extra register argument', ['register', 'catalog.json', 'baseline.json']],
   ['an extra argument', ['record', 'a.json', 'b.json']],
   ['an unknown option', ['verify', 'catalog.json', 'baseline.json', '--force']],
@@ -714,4 +717,126 @@ it('declares a bundle patch layer in every repository plugin, empty for the over
     expect(lines.filter(Boolean)).toEqual(['[]']);
     expect(content.startsWith('#')).toBe(true);
   }
+});
+
+const SIDEBAR = 'dsh-better-sidebar';
+const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+const manifestPath = (id) => `${OPT}/${id}/package.json`;
+const bundle = (tree) => run(['bundle', repositoryCatalog, '--root', tree.root]);
+
+/**
+ * Write a released entry's canonical manifest with `dependencies` (and any extra fields) and nest
+ * every dependency below it except the `missing` ones; the fixture already nests schemastery.
+ */
+function releasedWith(tree, id, names, extra = {}, missing = []) {
+  const dependencies = Object.fromEntries(names.map((name) => [name, '^1.0.0']));
+  const manifest = { ...RELEASED_MANIFESTS[id], dependencies, ...extra };
+  write(tree.root, manifestPath(id), manifest);
+  for (const name of names.filter((each) => !missing.includes(each)))
+    write(tree.root, `${OPT}/${id}/node_modules/${name}/package.json`, { name });
+  return manifest;
+}
+
+it('bundles the sorted dependency names of every entry with dependencies, keeping mode and leaving the rest byte-identical', () => {
+  const tree = imageTree(false);
+  const sidebar = releasedWith(tree, SIDEBAR, ['yaml', '@deepseek-ai/schemastery', 'ws']);
+  const onlyoffice = releasedWith(tree, ONLYOFFICE, ['@deepseek-ai/schemastery']);
+  chmodSync(join(tree.root, manifestPath(SIDEBAR)), 0o444);
+  const before = snapshot(join(tree.root, OPT));
+
+  expect(bundle(tree)).toEqual({ status: 0, stderr: '' });
+
+  const after = snapshot(join(tree.root, OPT));
+  const changed = [`${SIDEBAR}/package.json`, `${ONLYOFFICE}/package.json`];
+  expect(after[changed[0]]).toEqual({
+    mode: 0o444,
+    bytes: dshJson({
+      ...sidebar,
+      bundleDependencies: ['@deepseek-ai/schemastery', 'ws', 'yaml'],
+    }),
+  });
+  expect(after[changed[1]]).toEqual({
+    mode: before[changed[1]].mode,
+    bytes: dshJson({ ...onlyoffice, bundleDependencies: ['@deepseek-ai/schemastery'] }),
+  });
+  for (const state of [before, after]) for (const path of changed) delete state[path];
+  // Every other path, the repository plugins' manifests included: same set, bytes and modes.
+  expect(after).toEqual(before);
+  expect(register(tree)).toEqual({ status: 0, stderr: '' });
+  expect(verify(tree)).toEqual({ status: 0, stderr: '' });
+});
+
+it.each([
+  [
+    'a dependency that is not nested',
+    (tree) => releasedWith(tree, ONLYOFFICE, ['@deepseek-ai/schemastery', 'clsx'], {}, ['clsx']),
+    `bundle dependency not nested: ${ONLYOFFICE} clsx`,
+  ],
+  [
+    'an existing bundleDependencies field',
+    (tree) => releasedWith(tree, ONLYOFFICE, ['clsx'], { bundleDependencies: ['clsx'] }),
+    `bundle field exists: ${ONLYOFFICE}`,
+  ],
+  [
+    'an existing bundledDependencies field',
+    (tree) => releasedWith(tree, ONLYOFFICE, ['clsx'], { bundledDependencies: true }),
+    `bundle field exists: ${ONLYOFFICE}`,
+  ],
+  [
+    'a missing canonical manifest',
+    (tree) => rmSync(join(tree.root, manifestPath('platform-nav'))),
+    'bundle manifest unreadable: platform-nav',
+  ],
+])('refuses to bundle with %s and writes no entry', (_name, arrange, problem) => {
+  const tree = imageTree(false);
+  // A valid entry ahead of the refused one in catalog order: all or nothing.
+  releasedWith(tree, SIDEBAR, ['@deepseek-ai/schemastery', 'yaml']);
+  arrange(tree);
+  const before = snapshot(join(tree.root, OPT));
+
+  expect(bundle(tree)).toEqual({ status: 1, stderr: `${problem}\n` });
+  expect(snapshot(join(tree.root, OPT))).toEqual(before);
+});
+
+it('reports a manifest it cannot replace and leaves no temporary file', () => {
+  const tree = imageTree(false);
+  releasedWith(tree, SIDEBAR, ['yaml']);
+  const before = snapshot(join(tree.root, OPT));
+  chmodSync(join(tree.root, OPT, SIDEBAR), 0o555);
+
+  const result = bundle(tree);
+  chmodSync(join(tree.root, OPT, SIDEBAR), 0o755);
+
+  expect(result).toEqual({ status: 1, stderr: `bundle manifest not written: ${SIDEBAR}\n` });
+  expect(snapshot(join(tree.root, OPT))).toEqual(before);
+});
+
+it.each([
+  ['no bundle field', ['yaml'], {}],
+  ['an incomplete bundle', ['ws', 'yaml'], { bundleDependencies: ['yaml'] }],
+  ['an extra bundled name', ['yaml'], { bundleDependencies: ['ws', 'yaml'] }],
+  ['an unsorted bundle', ['ws', 'yaml'], { bundleDependencies: ['yaml', 'ws'] }],
+  ['the alias field only', ['yaml'], { bundledDependencies: ['yaml'] }],
+])('fails verify when a canonical entry with dependencies has %s', (_name, names, extra) => {
+  const tree = imageTree(false);
+  // ws is nested in every row, so only the declaration differs.
+  write(tree.root, `${OPT}/${SIDEBAR}/node_modules/ws/package.json`, { name: 'ws' });
+  releasedWith(tree, SIDEBAR, names, extra);
+  expect(register(tree)).toEqual({ status: 0, stderr: '' });
+
+  expect(verify(tree)).toEqual({
+    status: 1,
+    stderr: `catalog entry dependencies not bundled: ${SIDEBAR}\n`,
+  });
+});
+
+it('fails verify when a bundled dependency is not nested below the entry', () => {
+  const tree = imageTree(false);
+  releasedWith(tree, SIDEBAR, ['ws', 'yaml'], { bundleDependencies: ['ws', 'yaml'] }, ['ws']);
+  expect(register(tree)).toEqual({ status: 0, stderr: '' });
+
+  expect(verify(tree)).toEqual({
+    status: 1,
+    stderr: `catalog entry dependencies not bundled: ${SIDEBAR}\n`,
+  });
 });

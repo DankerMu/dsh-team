@@ -99,7 +99,21 @@
 #### Scenario: 插件文件只读且不改第三方包
 
 - **WHEN** 检查构建出的用户镜像
-- **THEN** `/opt/dsh-team/office-hints/` 下文件归 root 所有、普通用户不可写，其兼容性声明满足镜像内的 DSH 版本；ONLYOFFICE 包的文件只有文件令牌补丁的改动
+- **THEN** `/opt/dsh-team/office-hints/` 下文件归 root 所有、普通用户不可写，其兼容性声明满足镜像内的 DSH 版本；ONLYOFFICE 包的代码文件只有文件令牌补丁的改动，manifest 只多出 `bundleDependencies`
+
+### Requirement: 预装项的依赖闭包随包交付
+
+有 `dependencies` 的预装项 MUST 在其 `/opt/dsh-team/<id>/package.json` 中声明 `bundleDependencies`，等于其 `dependencies` 的键，且每个名字都嵌套交付在该包的 `node_modules` 下；任一不满足时用户镜像构建 MUST 失败。员工安装、卸载插件时，pnpm MUST NOT 去安装源重新解析任何预装项的依赖。
+
+#### Scenario: 内网源缺少预装项依赖时员工仍能安装和卸载插件
+
+- **WHEN** 员工实例不联网，安装源只提供员工要装的插件，员工用 DSH 安装再卸载这个插件
+- **THEN** 安装和卸载都成功，安装源收不到任何预装项依赖的请求，预装项仍按镜像交付的版本加载
+
+#### Scenario: 预装项的依赖没有随包声明时构建失败
+
+- **WHEN** 有 `dependencies` 的预装项缺少 `bundleDependencies`，或声明与 `dependencies` 的键不一致，或某个依赖没有嵌套交付
+- **THEN** 用户镜像构建以非零状态失败，并指出该预装项
 
 ### Requirement: 插件目录文件随镜像交付
 
