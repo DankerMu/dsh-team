@@ -2,7 +2,7 @@ import { readLimited } from '../bounded-body.ts';
 
 /** Per-request bound through the end of the response body; the route always uses this value. */
 export const RAGFLOW_TIMEOUT_MS = 10_000;
-// Version and one-row list answers are tiny; a larger body is not a RAGFlow answer.
+// The version and `users/me/models` answers are tiny; a larger body is not a RAGFlow answer.
 const BODY_LIMIT = 65_536;
 /**
  * The complete dataset list. Every rc2 row repeats the dataset's and its owner's base64 avatars,
@@ -217,9 +217,10 @@ export async function ragflowVersion(
 }
 
 /**
- * Reads the unauthenticated version, then lists one dataset with the saved key: the version
- * endpoint alone cannot reveal a rejected key. Every outcome is a closed-set result without
- * upstream text; only a valid version string leaves this function.
+ * Reads the unauthenticated version, then the saved key's tenant models: the version endpoint
+ * alone cannot reveal a rejected key. rc2's tenant answer carries no avatar, unlike a dataset row,
+ * so it fits the small body limit; its tenant and model IDs are not read. Every outcome is a
+ * closed-set result without upstream text; only a valid version string leaves this function.
  */
 export async function testRagflowConnection(
   settings: RagflowConnection,
@@ -231,8 +232,8 @@ export async function testRagflowConnection(
   if (headers === null) return { result: 'not-configured' };
   const version = await ragflowVersion(settings, signal, deadlineMs, send);
   if (version.result !== 'ok') return version;
-  const list = await call(
-    new Request(endpoint(settings.baseURL, '/api/v1/datasets?page=1&page_size=1'), {
+  const key = await call(
+    new Request(endpoint(settings.baseURL, '/api/v1/users/me/models'), {
       headers,
       redirect: 'manual',
     }),
@@ -241,7 +242,7 @@ export async function testRagflowConnection(
     send,
     BODY_LIMIT,
   );
-  return typeof list === 'string' ? { result: list } : version;
+  return typeof key === 'string' ? { result: key } : version;
 }
 
 /**

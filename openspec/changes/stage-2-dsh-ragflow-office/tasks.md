@@ -3910,3 +3910,48 @@ Evidence (22.1):
 验证：同 22.1；另需 `pnpm check`、VPS exact-head `test:docker` 和 `test:deploy`（cleanup confirmed，只是满足合并门禁），以及本机 exact-head `pnpm test:stack` 证据评论。
 
 Must preserve：所有 400 响应、错误消息和审计行为；所有现有测试的断言。
+
+## 23. 技术债 #525：连接测试的密钥探针改用不带头像的接口
+
+依赖：无。由 #525 承载，处理方式同第 6 组。用户决定（2026-11-08）：换成不返回头像的接口 `GET /api/v1/users/me/models`；如果真实 rc2 上 API token 用不了这个接口，就停下来报告。
+
+- [ ] 23.1 `platform/src/ragflow-proxy/client.ts` 的 `testRagflowConnection` 改用 `GET /api/v1/users/me/models` 校验密钥，不再读单行库列表。验证：
+  - `client.test.ts` 用替身覆盖：rc2 形状的回答返回 `ok` 和版本号，且从未请求 `/api/v1/datasets`；401 和 `code: 401` 返回 `not-configured`；非 JSON、`code` 非 0、超限返回 `upstream-error`；超时和传输失败的分类不变。
+  - 本机 `pnpm test:stack` 的连接测试用例（`ragflow-stack-fixture.ts:671`，真实 rc2、真实密钥）仍返回 `{ result: 'ok', version }`。
+
+Suggested fixture level: compact - 一个函数的上游端点，结果集合不变
+Minimal mergeable slice: atomic: 一个函数、它的单元测试，以及描述这个探针的替身、路由摘要和文档
+Risk packs (23.1): selected - Error handling（结果集合与分类规则不变：版本探针仍先发；401 和 `code: 401` 归 `not-configured`；其他非 0 `code`、非 JSON、超限归 `upstream-error`）、Legacy compatibility（函数签名和返回值 `{ result, version? }` 不变，回答中的租户和模型信息不离开函数）、Schema（路由 summary 进 `schemas/openapi.json`，用 `pnpm contract:write` 重新生成）、Documentation（`admin/README.md:25`、`design.md:188`）；not selected - Config、Auth（鉴权仍是同一个 Bearer 密钥）、Public API、Concurrency、File IO、Resource limits、Release。不碰关键路径。
+Evidence (23.1):
+
+现状（main `b75138d`）：`client.ts:224-242` 用 `/api/v1/datasets?page=1&page_size=1` 校验密钥，经 `BODY_LIMIT`（`:6`，64 KiB）读回答。rc2 的每一行库都带库头像和账号头像，两者都是 base64，见 #525 的源码证据。头像一大，正确的密钥也会被判成 `upstream-error`。
+
+改动：
+
+- 探针路径改为 `/api/v1/users/me/models`，方法、`Authorization`、超时、`BODY_LIMIT` 都不变。rc2 的 `TenantInfoResponse` 只有 tenant ID、名称、模型 ID、parser 列表和角色（结构体 `internal/service/tenant.go:57-69`），没有头像字段，所以 64 KiB 足够。
+- 成功判定不变：HTTP 2xx 且 JSON 信封 `code === 0`，与现有 `envelope()`（`client.ts:125-145`）一致；`data` 不读、不返回。rc2 的错误码：无效密钥是 HTTP 401 加 `code: 401`，落到 `not-configured`；找不到 tenant 是 HTTP 200 加 `code: 102`、`data: false`（`internal/handler/tenant.go:149-152`），落到 `upstream-error`。
+- 注释：`:5` 改为说明两个探针（版本、`users/me/models`）的回答都很小；`:219-223` 的 docblock 也改写。
+- 同一转绿步骤里改掉描述旧探针的替身和文字：
+  - `platform/test/admin-ragflow-connection.integration.test.ts:16,111` 的 `LIST_PATH` 替身和用例名；
+  - `platform/test/admin-knowledge-base.ui.test.ts:35` 的替身路径；
+  - `platform/src/admin/ragflow-connection.ts:35` 的路由 summary，随后 `pnpm contract:write`。
+- 编排者同 PR 改：`platform/src/admin/README.md:25` 的探针描述；`design.md:188` 补上 2026-11-08 的替代决定。
+- 与 #414 的 8 MiB 列表上限无关，不改。
+
+回归（`client.test.ts`，先红后绿）：
+
+- 先加用例「替身对 `/api/v1/datasets` 返回一行带 65535 字符 data URL 头像的库、对 `/api/v1/users/me/models` 返回 rc2 形状的回答」，断言 `ok` 和版本号，并且没有请求 datasets。在旧代码上它会失败（超限，得到 `upstream-error`）。
+- 然后改端点转绿。
+- 现有的 not-configured、upstream-error、超时、传输失败用例改为针对新路径，断言请求路径和 `Authorization` 头，并且版本探针仍然先发。`code` 非 0 的用例用 rc2 找不到 tenant 时的真实回答 `{ code: 102, data: false }`。
+- 新用例里的替身按路径分发：datasets 和 `users/me/models` 分别给不同的回答。
+
+验证：
+
+- `pnpm check`（`client.ts` 单文件覆盖率不低于门槛）。
+- `pnpm test:ui`：`pnpm check` 不包含它，单独跑。
+- 本机 exact-head `pnpm test:stack`：真实 rc2 上连接测试为 `ok`，证明 API token 能用这个接口。若返回 `not-configured` 或 `upstream-error`，停下来报告，不退回旧探针。
+- VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
+
+Must preserve：连接测试路由（`admin/ragflow-connection.ts`）的鉴权、审计和结果集合；`ragflowVersion` 与其 64 KiB 上限；代理列表、文档、检索的 8 MiB 上限。
+
+残留风险：`users/me/models` 只证明密钥有效、tenant 存在，不证明这个密钥对库有读权限。rc2 的 API token 解析为 tenant 所有者（`internal/service/user.go:852-853`），所有者能读本 tenant 的库，所以在 rc2 上两者等价。以后若 RAGFlow 引入受限 token，需要重新评估。

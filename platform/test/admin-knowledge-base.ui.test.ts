@@ -32,7 +32,7 @@ const PARAMETERS_INVALID =
   '检索参数无效：返回片段数为 1–100 的整数，相似度阈值和关键词权重为 0–1 之间的数，重排模型 ID 前后不能有空白。';
 const LOAD_FAILED = '知识库配置加载失败，请重试。';
 const VERSION_PATH = '/api/v1/system/version';
-const DATASETS_PATH = '/api/v1/datasets?page=1&page_size=1';
+const MODELS_PATH = '/api/v1/users/me/models';
 const BUTTONS = ['保存连接配置', '保存检索参数', '测试连接'] as const;
 
 type Handler = Parameters<Awaited<ReturnType<typeof startModelUpstream>>['setHandler']>[0];
@@ -43,15 +43,15 @@ function answer(status: number, body: unknown): Handler {
   };
 }
 const VERSION_OK = answer(200, { code: 0, data: 'v1.0.0-rc2' });
-const DATASETS_OK = answer(200, { code: 0, data: [] });
+const MODELS_OK = answer(200, { code: 0, data: { tenant_id: 'f'.repeat(32), role: 'owner' } });
 /** A test-owned loopback RAGFlow answering only the two connection-test paths. */
-function ragflow(version: Handler = VERSION_OK, datasets: Handler = DATASETS_OK): Handler {
+function ragflow(version: Handler = VERSION_OK, models: Handler = MODELS_OK): Handler {
   return (request, response, socket) => {
     const route =
       request.path === VERSION_PATH
         ? version
-        : request.path === DATASETS_PATH
-          ? datasets
+        : request.path === MODELS_PATH
+          ? models
           : answer(404, {});
     route(request, response, socket);
   };
@@ -181,10 +181,7 @@ test('administrator configures, tests and tunes RAGFlow through the real APIs', 
       await testConnection(page, api.test, database);
       await expect(page.getByRole('status')).toHaveText(CONNECTED);
       await observed.screenshot('admin-knowledge-base-connection-ok');
-      expect(upstream.requests.map((request) => request.path)).toEqual([
-        VERSION_PATH,
-        DATASETS_PATH,
-      ]);
+      expect(upstream.requests.map((request) => request.path)).toEqual([VERSION_PATH, MODELS_PATH]);
       expect(upstream.requests[0]?.headers.authorization).toBeUndefined();
       expect(upstream.requests[1]?.headers.authorization).toBe(`Bearer ${key}`);
 
