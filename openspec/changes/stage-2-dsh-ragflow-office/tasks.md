@@ -3997,3 +3997,45 @@ Evidence (24.1):
 验证：`pnpm check`；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁；本机 exact-head `pnpm test:stack` 证据评论，真实运行下两类清点都为空。真实运行只证明两类清点都为空。多个 label 过滤取「与」的依据是 Docker 的标签过滤要求全部键值对都匹配；即使实际是取「或」，查询范围也只会更宽，偏向多报残留。
 
 Must preserve：`retire` 的行为、账本格式、`requireSettled` 和锁的用法、退出码规则，以及 `:553` 的现有用例（只有一条运行标签记录，仍然只发同样的 4 条查询）。
+
+## 25. 技术债 #517：stack 浏览器夹具在页面内锁定「回合已开始」
+
+依赖：无。由 #517 承载，处理方式同第 6 组。用户决定（2026-11-08，复核后改选）：用页面内的 `MutationObserver` 锁定 STOP，保留「UI 确实走过一个回合」的证明，不改成只以 provider 完成为准。理由：DSH 会在回合开始前，因为生成会话标题，先把同一段回复渲染进 transcript（stub 用例 `stack-browser-fixture.integration.test.ts:131` 模拟的就是这种情况），所以单凭 provider 完成加上回复可见，不能证明 UI 渲染过这个回合。
+
+- [ ] 25.1 `platform/test/stack-browser-fixture.ts` 的 `converseInWorkbench`：点击 SEND 之前，用 `page.evaluate` 在页面里装一个 `MutationObserver`，并立即检查一次。STOP（`STOP` 选择器）只要出现过一次，就在 `window` 上设置一个标志。点击后用 `page.waitForFunction` 等这个标志，超时用 `conversation.timeout`。其余顺序不变：`turnComplete()`，然后 transcript 中的回复可见，然后 STOP 消失、SEND 出现。`:236-241` 处的注释改为如实描述。验证：stub 用例覆盖三点：短回合（STOP 落在旧轮询的采样间隙里）也能锁定；STOP 从未出现时失败；现有三条性质保持不变（早到的回复不放行、header 里的回复不算、失败时保留原错误）。另外本机 `pnpm test:stack` 连续 3 次通过。
+
+Suggested fixture level: compact - 测试夹具的等待方式，产品代码不变
+Minimal mergeable slice: atomic: 一个函数加 stub 用例
+Risk packs (25.1): selected - Concurrency（观察器必须在点击之前装好，并且安装时先检查一次当前 DOM；标志只置位不复位）、Legacy compatibility（顺序保证不变：先锁定回合开始，再等 provider 完成、回复和回合结束）；not selected - Config、Schema、Auth、Public API、Error handling（失败路径不变）、File IO、Resource limits、Release、Documentation。不碰关键路径。
+Evidence (25.1):
+
+现状（main `197de57`）：`stack-browser-fixture.ts:236-241` 把 `locator(STOP).first().waitFor({ state: 'visible' })` 和点击放在同一个 `Promise.all` 里。Playwright 1.63 的 `waitFor` 由服务端按退避间隔重新查询，间隔依次是 0、20、50、100、100ms，之后每次 500ms，所以累计采样点落在 0、20、70、170、270、770ms（见 #517 的源码证据）。STOP 如果只在两个采样点之间短暂出现，就会被漏掉，最终 120s 超时。
+
+改动：
+
+- 页面脚本写成常量字符串，和 `COMPOSER_STATE` 一样：根 `tsconfig` 没有 DOM lib，`window` 在 TypeScript 里没有声明。
+  - STOP 选择器用 `${JSON.stringify(STOP)}` 直接写进脚本，照 `:76` 处 `NOTICE_LABELS` 的做法。Playwright 对字符串表达式不传参数（playwright-core@1.63.0 `lib/coreBundle.js:60622` 的 `isFunction` 判断，以及 `:19480`），所以不能当参数传进去。
+  - 脚本先用 `document.querySelector` 查一次；再观察 `document`，选项为 `childList`、`subtree`、`attributes`。一旦命中，就设置 `window.__dshTeamStopSeen = true`，之后不再复位。重复安装是幂等的。
+- 点击之前先 `await page.evaluate(<安装脚本>)`。`observe()` 在页面里同步执行，`evaluate` 返回时观察器已经装好。
+- 点击之后调用 `page.waitForFunction('window.__dshTeamStopSeen === true', undefined, { timeout })`。谓词是字符串表达式，页面内用 rAF 轮询，读的是已经锁存的标志。
+- 观察器不用断开：会话结束时页面随之关闭。导航会清掉标志，`waitForFunction` 会在新的上下文里重试，最终超时，属于 fail-closed。
+
+回归（`stack-browser-fixture.integration.test.ts`）：
+
+- stub 的 `page.evaluate` 按表达式分派：
+  - composer 脚本照旧返回 `'ready'`；
+  - 观察器脚本（含 `MutationObserver` 和 STOP 选择器文本）装上锁存：先做一次初始检查，之后 `dom.stop` 只要被设为 true，就用 setter 捕获并置 `stopSeen`；
+  - 每次调用记进单独的 `evaluations` 数组，不进 `events`，所以 `:131` 和 `:231` 对 `events` 的精确断言保持不变。
+- `page.waitForFunction` 等待 `stopSeen`，超时则 reject。
+- stub 中 STOP 的 `waitFor` 改为按真实退避间隔采样，采样点为 0、20、70、170、270、770ms 等。
+- 新用例「短回合」：STOP 在点击后约 100ms 出现、150ms 消失，落在 70 与 170 两个采样点之间，前后都留出 20ms 以上的余量。
+  - 旧代码按退避采样会漏掉它，等到超时：红。
+  - 修复后由锁存捕获，用例通过；并用 `evaluations` 和点击时刻断言观察器安装排在 SEND 点击之前。
+- 新用例「STOP 从未出现」：provider 完成，回复在 transcript 里，SEND 存在，但 STOP 一直没有出现。预期因等标志超时而 reject，没有 `reply.png`，最后一张截图是 `failure.png`。这条用例证明代码确实在等标志，而且「UI 走过一个回合」的要求没有被削弱。
+- 现有 `:131`、`:164`、`:187` 三个用例的断言不变。
+
+验证：`pnpm check`；本机 exact-head `pnpm test:stack` 连续 3 次都通过，证据评论贴出 3 次结果；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
+
+剩余风险：观察器脚本本身只有真实的 `pnpm test:stack` 会执行，stub 验证不了它。连跑 3 次都通过，也不能证明短回合真的被锁住了：如果这 3 次的回合都够长，旧代码同样能过。
+
+Must preserve：`turnComplete` 的判定、transcript 范围、失败截图与原错误优先、观察者转发和 reload 豁免逻辑。

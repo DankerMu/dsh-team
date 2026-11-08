@@ -36,12 +36,44 @@ interface StubOptions {
   closeFailure?: Error;
 }
 
+/** Playwright 1.63's `waitFor` re-query back-off: 0, 20, 50, 100, 100ms, then every 500ms. */
+const BACKOFF = [0, 20, 50, 100, 100];
+const backoff = (attempt: number) => BACKOFF[attempt] ?? 500;
+
+/** One `page.evaluate` call, ordered against the SEND click by a shared sequence. */
+interface Evaluation {
+  script: 'composer' | 'stop-latch';
+  order: number;
+}
+
 /** A Chromium-free page: just the calls `converseInWorkbench` makes, over a mutable fake DOM. */
 function stubBrowser(options: StubOptions) {
-  const dom: Dom = { stop: false, send: true, transcript: [], header: [] };
+  let stop = false;
+  // The in-page latch: armed only by the observer script, set on any STOP sighting, never reset.
+  let latchArmed = false;
+  let stopSeen = false;
+  const dom: Dom = {
+    get stop() {
+      return stop;
+    },
+    set stop(value: boolean) {
+      stop = value;
+      if (value && latchArmed) stopSeen = true;
+    },
+    send: true,
+    transcript: [],
+    header: [],
+  };
   const events: string[] = [];
+  const evaluations: Evaluation[] = [];
+  const clicks: number[] = [];
+  let sequence = 0;
   const handlers = new Map<string, Handler>();
-  const visible = (check: () => boolean, click = () => undefined) => {
+  const visible = (
+    check: () => boolean,
+    click = () => undefined,
+    pause = (attempt: number): number => (attempt === 0 ? 0 : 10),
+  ) => {
     const locator = {
       first: () => locator,
       count: () => Promise.resolve(check() ? 1 : 0),
@@ -52,13 +84,45 @@ function stubBrowser(options: StubOptions) {
       },
       async waitFor({ timeout }: { timeout: number }) {
         const deadline = performance.now() + timeout;
-        while (!check()) {
+        for (let attempt = 0; ; attempt++) {
+          const wait = pause(attempt);
+          if (wait > 0) await delay(wait);
+          if (check()) return;
           if (performance.now() > deadline) throw new Error('stub waitFor timeout');
-          await delay(10);
         }
       },
     };
     return locator;
+  };
+  const evaluate = (expression: string) => {
+    if (expression.includes('[contenteditable="true"]')) {
+      evaluations.push({ script: 'composer', order: sequence++ });
+      return Promise.resolve('ready');
+    }
+    if (
+      expression.includes('MutationObserver') &&
+      expression.includes('Stop generating') &&
+      expression.includes('window.__dshTeamStopSeen = true')
+    ) {
+      evaluations.push({ script: 'stop-latch', order: sequence++ });
+      latchArmed = true;
+      if (stop) stopSeen = true;
+      return Promise.resolve(undefined);
+    }
+    return Promise.reject(new Error('stub evaluate: unexpected script'));
+  };
+  const waitForFunction = async (
+    expression: string,
+    _arg: undefined,
+    { timeout }: { timeout: number },
+  ) => {
+    if (expression !== 'window.__dshTeamStopSeen === true')
+      throw new Error('stub waitForFunction: unexpected predicate');
+    const deadline = performance.now() + timeout;
+    while (!stopSeen) {
+      if (performance.now() > deadline) throw new Error('stub waitForFunction timeout');
+      await delay(10);
+    }
   };
   const page = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
@@ -81,18 +145,20 @@ function stubBrowser(options: StubOptions) {
     getByLabel: () => ({ fill: () => Promise.resolve() }),
     getByRole: () => ({ click: () => Promise.resolve() }),
     waitForURL: () => Promise.resolve(),
-    evaluate: () => Promise.resolve('ready'),
+    evaluate,
+    waitForFunction,
     keyboard: { insertText: () => Promise.resolve() },
     getByText: (text: string) =>
       visible(() => dom.transcript.includes(text) || dom.header.includes(text)),
     locator(selector: string) {
       if (selector === '[data-chat-flow]')
         return { getByText: (text: string) => visible(() => dom.transcript.includes(text)) };
-      if (selector.includes('Stop generating')) return visible(() => dom.stop);
+      if (selector.includes('Stop generating')) return visible(() => dom.stop, undefined, backoff);
       if (selector.includes('Send message')) {
         return visible(
           () => dom.send,
           () => {
+            clicks.push(sequence++);
             options.onSend(dom, events);
           },
         );
@@ -110,7 +176,13 @@ function stubBrowser(options: StubOptions) {
       options.closeFailure === undefined ? Promise.resolve() : Promise.reject(options.closeFailure),
   };
   const emit = (name: string, value: unknown) => handlers.get(name)?.(value);
-  return { events, emit, launch: () => Promise.resolve(browser as unknown as Browser) };
+  return {
+    events,
+    evaluations,
+    clicks,
+    emit,
+    launch: () => Promise.resolve(browser as unknown as Browser),
+  };
 }
 
 async function conversation(turnComplete: () => Promise<void>, timeout = 5_000) {
@@ -159,6 +231,64 @@ it('waits past an early reply until STOP has appeared, disappeared and the provi
     'screenshot:reply.png',
   ]);
   expect(evidence.screenshots).toEqual(['login.png', 'workbench.png', 'reply.png']);
+});
+
+it('latches a short turn whose STOP shows only between two back-off samples', async () => {
+  const stub = stubBrowser({
+    onSend(dom, events) {
+      dom.transcript.push(REPLY);
+      // Visible from about 100ms to 150ms after the click: between the 70ms and 170ms samples.
+      void (async () => {
+        await delay(100);
+        dom.stop = true;
+        dom.send = false;
+        events.push('stop-shown');
+        await delay(50);
+        dom.stop = false;
+        dom.send = true;
+        events.push('stop-hidden');
+      })();
+    },
+  });
+  const turnComplete = async () => {
+    await delay(300);
+    stub.events.push('turn-complete');
+  };
+
+  const evidence = await converseInWorkbench(await conversation(turnComplete, 1_500), stub.launch);
+
+  expect(stub.events).toEqual([
+    'screenshot:login.png',
+    'screenshot:workbench.png',
+    'stop-shown',
+    'stop-hidden',
+    'turn-complete',
+    'screenshot:reply.png',
+  ]);
+  expect(evidence.screenshots).toEqual(['login.png', 'workbench.png', 'reply.png']);
+  const latch = stub.evaluations.filter((evaluation) => evaluation.script === 'stop-latch');
+  expect(latch).toHaveLength(1);
+  expect(stub.clicks).toHaveLength(1);
+  expect(latch[0]?.order).toBeLessThan(stub.clicks[0] ?? -1);
+});
+
+it('fails when STOP never appears, even after the provider served the reply', async () => {
+  const stub = stubBrowser({
+    onSend(dom) {
+      // The reply is in the transcript and SEND stays available, but the turn never shows STOP.
+      dom.transcript.push(REPLY);
+    },
+  });
+
+  const failure = converseInWorkbench(
+    await conversation(() => Promise.resolve(), 1_500),
+    stub.launch,
+  );
+
+  await expect(failure).rejects.toThrow('stub waitForFunction timeout');
+  await expect(failure).rejects.toBeInstanceOf(StackWorkbenchFailure);
+  expect(stub.events).not.toContain('screenshot:reply.png');
+  expect(stub.events.at(-1)).toBe('screenshot:failure.png');
 });
 
 it('does not accept the reply outside the conversation transcript', async () => {

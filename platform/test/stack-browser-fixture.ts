@@ -86,6 +86,21 @@ const COMPOSER_STATE = `(() => {
 })()`;
 export const composerState = (page: Page) => page.evaluate<string>(COMPOSER_STATE);
 
+// Latches the first sighting of STOP in the page, however briefly it shows. The flag is only
+// ever set, so a second install has no further effect. The root config has no DOM lib.
+const STOP_LATCH = `(() => {
+  const selector = ${JSON.stringify(STOP)};
+  const check = () => {
+    if (document.querySelector(selector) !== null) window.__dshTeamStopSeen = true;
+  };
+  check();
+  new MutationObserver(check).observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+  });
+})()`;
+
 export async function until(check: () => Promise<boolean>, timeout: number, label: string) {
   const deadline = performance.now() + timeout;
   while (!(await check())) {
@@ -233,12 +248,12 @@ export function converseInWorkbench(
       await shoot('workbench');
       await page.locator('[contenteditable="true"]').first().focus();
       await page.keyboard.insertText(conversation.message);
-      // A turn-end state before the turn ever started proves nothing: latch STOP first. A
-      // scripted turn can finish within a second, so the in-page wait is armed before the click.
-      await Promise.all([
-        page.locator(STOP).first().waitFor({ state: 'visible', timeout }),
-        page.locator(SEND).first().click(),
-      ]);
+      // A turn-end state before the turn ever started proves nothing: latch STOP first. A short
+      // turn can show STOP only between two of Playwright's re-query back-off samples, so an
+      // in-page observer, installed before the click, records any sighting of STOP.
+      await page.evaluate(STOP_LATCH);
+      await page.locator(SEND).first().click();
+      await page.waitForFunction('window.__dshTeamStopSeen === true', undefined, { timeout });
       await conversation.turnComplete();
       await page
         .locator(TRANSCRIPT)
