@@ -2898,7 +2898,7 @@ Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
 - [ ] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
 - [ ] 17.3 HTML 预览沙箱（用户决定 2026-11-07：靠预览路由的 CSP，不钉 better-sidebar 配置）：`platform-nav` 客户端把 better-sidebar 的 `htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 两个开关显示为受管锁定。验证：platform-nav 单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明两个开关显示为受管锁定，经网关的预览文档带不含 `allow-same-origin` 的 CSP sandbox，HTML 预览中的脚本无法访问父页面；默认设置下点状态栏临时解锁后，以及员工在自己的 profile 中把两个键写为开启并重启实例后，结果不变。
 - [ ] 17.4 DOC、XLS、PPT 只读预览（#554 诊断，用户决定 2026-11-07：DSH 0.2.1 的 DOC/PPT 预览只用自带的 WASM 引擎在实例内转换，缺的是字体，不装 LibreOffice；XLS 由 DSH 的浏览器表格视图显示，不经转换）。分三部分：
-  - （镜像，#432）用户镜像装 `fonts-noto-cjk`、`fonts-dejavu-core`。验证：Docker 用例在 `--network none`、实例同等限制下，用 DSH 自带的引擎把 DOC、PPT、DOCX 转成含中文内容的 PDF；17.1 的 docx 交接用例改为断言预览渲染成功；记录镜像大小的变化。
+  - （镜像，#432）用户镜像装 `fonts-noto-cjk`、`fonts-dejavu-core`。验证：Docker 用例在 `--network none`、实例同等限制下，用 DSH 自带的引擎把 DOC、PPT、DOCX 转成含中文内容的 PDF；17.1 的 docx 交接用例改为断言转换成功（页数至少 1、没有缺字体提示），渲染成功的要求见 #565；记录镜像大小的变化。
   - （授权字体挂载，#561）部署配置授权字体目录时，平台把它只读挂载进每个实例的 `/usr/share/fonts/truetype/custom`。验证：Docker 用例证明实例内可读不可写，转换使用其中的字体；未配置时实例照常启动。
   - （本机预览，#433）本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
 
