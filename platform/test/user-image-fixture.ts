@@ -111,7 +111,7 @@ const OFFLINE_PLUGIN_DEADLINE_MS = 4 * PLUGIN_STEP_MS + 2 * PROFILE_DUMP_MS + 60
 const offlinePluginScript = `
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 const PROFILE = '/data/home/profiles/web';
 const NAME = ${JSON.stringify(PROBE_PLUGIN)};
@@ -188,26 +188,38 @@ const step = async (name, file, args, cwd) => {
   return { name, status, signal, error, timedOut, requests: [...requests].sort(), tail: (stdout + stderr).slice(-2000) };
 };
 const add = () => step('add', 'dsh', ['plugin', '--profile', 'web', 'add', NAME, '--registry=' + registry]);
-const steps = [await add()];
-if (steps[0].status === 0) steps.push(await step('remove', 'dsh', ['plugin', '--profile', 'web', 'remove', NAME, '--config.registry=' + registry]));
-if (steps.at(-1).status === 0) steps.push(await step('install', 'pnpm', ['install', '--config.lockfile=false', '--config.registry=' + registry], PROFILE));
+const steps = [];
 const observed = { uid: process.getuid(), bundled: bundled.map((entry) => entry.id), nestedNames, steps };
-if (steps.length === 3 && steps[2].status === 0) {
-  observed.state = await state();
-  observed.stripped = [];
-  for (const entry of bundled) {
-    const path = PROFILE + '/node_modules/' + entry.package + '/package.json';
-    const copy = read(path);
-    if (!Object.hasOwn(copy, 'bundleDependencies')) continue;
-    delete copy.bundleDependencies;
-    writeFileSync(path, JSON.stringify(copy, null, 2) + '\\n');
-    observed.stripped.push(entry.id);
+// A throw still emits the steps done so far, with their request logs, and exits 1.
+let failure;
+try {
+  steps.push(await add());
+  if (steps[0].status === 0) steps.push(await step('remove', 'dsh', ['plugin', '--profile', 'web', 'remove', NAME, '--config.registry=' + registry]));
+  if (steps.at(-1).status === 0) steps.push(await step('install', 'pnpm', ['install', '--config.lockfile=false', '--config.registry=' + registry], PROFILE));
+  if (steps.length === 3 && steps[2].status === 0) {
+    observed.state = await state();
+    observed.stripped = [];
+    for (const entry of bundled) {
+      const path = PROFILE + '/node_modules/' + entry.package + '/package.json';
+      const copy = read(path);
+      if (!Object.hasOwn(copy, 'bundleDependencies')) continue;
+      // pnpm re-copies the 0444 canonical files; an older image's register copy is 0644.
+      const before = statSync(path);
+      if (before.uid !== process.getuid()) throw new Error('profile copy not owned by the employee: ' + path);
+      chmodSync(path, 0o644);
+      delete copy.bundleDependencies;
+      writeFileSync(path, JSON.stringify(copy, null, 2) + '\\n');
+      observed.stripped.push({ id: entry.id, uid: before.uid, modeBefore: before.mode & 0o777, modeAfter: statSync(path).mode & 0o777 });
+    }
+    observed.oldVolume = { step: await add() };
+    if (observed.oldVolume.step.status === 0) observed.oldVolume.state = await state();
   }
-  observed.oldVolume = { step: await add() };
-  if (observed.oldVolume.step.status === 0) observed.oldVolume.state = await state();
+} catch (error) {
+  failure = error;
+  observed.failure = String(error?.stack ?? error);
 }
 server.close();
-process.stdout.write(JSON.stringify(observed), () => process.exit(0));
+process.stdout.write(JSON.stringify(observed), () => process.exit(failure === undefined ? 0 : 1));
 `;
 
 /** Create, start and boundedly wait for the offline plugin probe as uid1001 without a network. */
@@ -217,22 +229,10 @@ function runOfflinePlugin(
   run: { container: string; imageId: string; runId: string },
 ): string {
   const { container, imageId, runId } = run;
-  const create = [
-    'create',
-    '--user',
-    '1001',
-    '--network',
-    'none',
-    '--name',
-    container,
-    '--label',
-    `${OWNER_LABEL}=${runId}`,
-    imageId,
-    'node',
-    '--input-type=module',
-    '-e',
-    offlinePluginScript,
-  ];
+  const label = `${OWNER_LABEL}=${runId}`;
+  const offline = ['--user', '1001', '--network', 'none', '--name', container, '--label', label];
+  const script = ['node', '--input-type=module', '-e', offlinePluginScript];
+  const create = ['create', ...offline, imageId, ...script];
   registerCleanupTarget(targets, runId, { kind: 'container', name: container });
   output(command(create, 30_000), create);
   const format = '{{.HostConfig.NetworkMode}} {{.Config.User}}';

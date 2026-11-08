@@ -522,7 +522,13 @@ interface OfflinePluginObservation {
   readonly nestedNames: readonly string[];
   readonly steps: readonly PluginStep[];
   readonly state?: ProfileState;
-  readonly stripped?: readonly string[];
+  readonly stripped?: readonly {
+    readonly id: string;
+    readonly uid: number;
+    readonly modeBefore: number;
+    readonly modeAfter: number;
+  }[];
+  readonly failure?: string;
   readonly oldVolume?: { readonly step: PluginStep; readonly state?: ProfileState };
 }
 
@@ -584,6 +590,7 @@ it('installs, uninstalls and repairs an employee plugin offline from a registry 
 
   const result = runUserImage('offline-plugin', (stdout) => {
     const observed = JSON.parse(stdout) as OfflinePluginObservation;
+    expect(observed.failure).toBeUndefined();
     expect(observed.uid).toBe(1001);
     expect(observed.bundled).toEqual(BUNDLED_ENTRIES);
     expect(observed.nestedNames).toEqual(
@@ -602,7 +609,12 @@ it('installs, uninstalls and repairs an employee plugin offline from a registry 
     expect(extra).toBeUndefined();
     expectProfile(observed.state, packages);
     // A home volume seeded by an older image: profile copies without the field.
-    expect(observed.stripped).toEqual(BUNDLED_ENTRIES);
+    expect(observed.stripped?.map((copy) => copy.id)).toEqual(BUNDLED_ENTRIES);
+    for (const copy of observed.stripped ?? []) {
+      // pnpm's re-copy of the 0444 canonical file, or an older image's 0644 register copy.
+      expect([0o444, 0o644]).toContain(copy.modeBefore);
+      expect([copy.id, copy.uid, copy.modeAfter]).toEqual([copy.id, 1001, 0o644]);
+    }
     expectStep(observed.oldVolume?.step, 'add');
     expect(observed.oldVolume?.step.requests).toContain(METADATA_REQUEST);
     expectProfile(observed.oldVolume?.state, [...packages, PROBE_PLUGIN].sort());
