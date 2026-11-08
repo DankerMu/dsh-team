@@ -57,7 +57,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
     - better-sidebar 的 Office 扩展名表；
     - ONLYOFFICE 文件令牌和文档 key 改用每个实例单独的密钥，防止借 Document Server 跨用户取文件或推算 key。
   - 新增镜像插件「Office 提示」，显示人机同写、无 Session、满员三条提示；员工文档新建 `docs/EMPLOYEE_GUIDE.md`。
-  - 用户镜像装中西文字体（DSH 自带的 WASM 转换引擎缺字体时不能工作），部署的授权字体目录只读挂载进实例，供旧格式只读预览，以及 Document Server 满员时的退路。
+  - 用户镜像装中西文字体（DSH 自带的 WASM 转换引擎缺字体时不能工作），部署的授权字体目录只读挂载进实例，供 DOC、PPT 只读预览（XLS 由 DSH 的浏览器表格视图显示），以及 Document Server 满员时的退路。
   - 覆盖层下发 Office 配置；HTML 预览沙箱由预览路由的 CSP 保证，两个沙箱开关显示为受管锁定。
   - 文件区的下载由 better-sidebar 的「打包下载」提供。
 - **本机验证通道**

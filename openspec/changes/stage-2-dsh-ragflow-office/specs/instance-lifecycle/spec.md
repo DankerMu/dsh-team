@@ -3,6 +3,12 @@
 ### Requirement: 安全创建并启动用户容器
 
 平台 MUST 使用同一用户镜像的完整受管配置输入和该用户的两个持久卷，创建名称 `dsh-team-u-<id>`、主机名 `u-<id>`、用户标签匹配的非特权容器；覆盖层只读挂载，seccomp配置以文件内容交给Docker，DSH信任的平台authority取自平台配置。容器 MUST 以其独立 /28 子网内的固定地址（子网基址+2）接入实例网络，DSH MUST 只监听该地址的 3080 端口，MUST NOT 使用通配监听地址。
+部署配置了授权字体目录时，平台 MUST 把它只读挂载到容器的 `/usr/share/fonts/truetype/custom`；未配置时 MUST NOT 挂载，容器照常创建（#561）。
+
+#### Scenario: 授权字体进入实例
+
+- **WHEN** 部署配置了授权字体目录，平台启动一个员工实例
+- **THEN** 该目录只读出现在实例的 `/usr/share/fonts/truetype/custom`，预览转换使用其中的字体；员工不能写入或替换它
 
 #### Scenario: 创建并启动后索引真实回环端点
 
