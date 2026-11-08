@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 
 
 class FaultPhaseUnavailable(RuntimeError):
@@ -25,13 +26,161 @@ def birth(pid):
     return fields[19], fields[0]
 
 
-def absent(pid, identity):
-    current = birth(pid)
+def absent(pid, identity, birth_of=birth):
+    current = birth_of(pid)
     return current is None or current[0] != identity or current[1] in ('Z', 'X', 'x')
 
 
 def children(pid):
     return [int(value) for value in Path('/proc/%d/task/%d/children' % (pid, pid)).read_text().split()]
+
+
+class ProcReader:
+    """Read-only /proc observations for capture_tree."""
+
+    def birth(self, pid):
+        try:
+            return birth(pid)
+        except ProcessLookupError:
+            # Linux answers ESRCH for /proc/<pid>/stat when the process is reaped between open and read.
+            return None
+
+    def children(self, pid):
+        return children(pid)
+
+    def cmdline(self, pid):
+        return (Path('/proc') / str(pid) / 'cmdline').read_bytes()
+
+    def net_namespace(self, pid):
+        return os.readlink('/proc/%d/ns/net' % pid)
+
+    def self_net_namespace(self):
+        return os.readlink('/proc/self/ns/net')
+
+    def stat(self, path):
+        return path.stat()
+
+
+def capture_tree(child, state, repository, uid, proc):
+    root = proc.birth(child['pid'])
+    if root is None:
+        return []
+    if 'linux:' + str(child['pid']) + ':' + root[0] != child['birth']:
+        raise RuntimeError('Captured custody child generation changed')
+    captured, launchers, roots = state['captured'], state['launchers'], state['roots']
+    skipped = []
+    pending = [child['pid']]
+    while pending:
+        pid = pending.pop()
+        identity = proc.birth(pid)
+        if identity is None:
+            continue
+        try:
+            descendants = proc.children(pid)
+            args = proc.cmdline(pid).split(b'\0')
+        except (FileNotFoundError, ProcessLookupError):
+            if absent(pid, identity[0], proc.birth):
+                skipped.append(pid)
+                continue
+            raise
+        if absent(pid, identity[0], proc.birth):
+            continue
+        if (pid, identity[0]) not in captured:
+            captured.append((pid, identity[0]))
+        pending.extend(descendants)
+        if str(repository / 'scripts/e2e-engine.mjs').encode() in args:
+            if (pid, identity[0]) not in launchers:
+                launchers.append((pid, identity[0]))
+        if args[0] == b'/usr/bin/dockerd':
+            engine = Path(os.fsdecode(args[args.index(b'--data-root') + 1])).parent
+            client = Path(os.fsdecode(args[args.index(b'--host') + 1]).removeprefix('unix://')).parent
+            verified = []
+            for path, prefix, owner in ((engine, 'dsh-team-e2e-engine-', 0),
+                                        (client, 'dsh-team-e2e-client-', uid)):
+                info = proc.stat(path)
+                if path.parent != Path('/tmp') or not path.name.startswith(prefix) or info.st_uid != owner:
+                    raise RuntimeError('Private runtime authority mismatch')
+                verified.append(path)
+            try:
+                network = proc.net_namespace(pid)
+            except (FileNotFoundError, ProcessLookupError):
+                # A vanished Engine never counts as verified; a still-present one fails here.
+                if absent(pid, identity[0], proc.birth):
+                    skipped.append(pid)
+                    continue
+                raise
+            if network == proc.self_net_namespace():
+                raise RuntimeError('Private Engine shares caller network namespace')
+            # Roots are recorded only after every check for this candidate completed.
+            for path in verified:
+                if path not in roots:
+                    roots.append(path)
+    return skipped
+
+
+class ScriptSequenceError(RuntimeError):
+    pass
+
+
+class ScriptedProcReader:
+    """Docker-free replay of scripted /proc reads; every call consumes its next item."""
+    errors = {'FileNotFoundError': FileNotFoundError, 'ProcessLookupError': ProcessLookupError,
+              'PermissionError': PermissionError}
+
+    def __init__(self, script):
+        self.reads = script['reads']
+        self.stats = script['stats']
+        self.self_net = script['self_net']
+
+    def take(self, sequence, label):
+        if not sequence:
+            raise ScriptSequenceError('unscripted ' + label)
+        item = sequence.pop(0)
+        if isinstance(item, dict) and 'raise' in item:
+            raise self.errors[item['raise']]()
+        return item
+
+    def read(self, pid, method):
+        return self.take(self.reads.get(str(pid), {}).get(method), method + ' ' + str(pid))
+
+    def birth(self, pid):
+        item = self.read(pid, 'birth')
+        return None if item is None else tuple(item)
+
+    def children(self, pid):
+        return self.read(pid, 'children')
+
+    def cmdline(self, pid):
+        return b''.join(os.fsencode(arg) + b'\0' for arg in self.read(pid, 'cmdline'))
+
+    def net_namespace(self, pid):
+        return self.read(pid, 'net_namespace')
+
+    def self_net_namespace(self):
+        return self.self_net
+
+    def stat(self, path):
+        return types.SimpleNamespace(st_uid=self.take(self.stats.get(str(path)), 'stat ' + str(path))['uid'])
+
+    def unconsumed(self):
+        return any(sequence for reads in self.reads.values() for sequence in reads.values()) or any(self.stats.values())
+
+
+def capture_script(script):
+    proc = ScriptedProcReader(script)
+    state = {'captured': [], 'launchers': [], 'roots': []}
+    skipped = []
+    error = None
+    try:
+        for _ in range(script.get('observations', 1)):
+            skipped.extend(capture_tree(script['child'], state, Path(script['repository']), script['uid'], proc))
+        # Leftover reads are judged only after every observation returned normally.
+        if proc.unconsumed():
+            raise ScriptSequenceError('unconsumed reads')
+    except Exception as failure:
+        error = {'type': type(failure).__name__, 'message': str(failure)}
+    print(json.dumps({'captured': state['captured'], 'launchers': state['launchers'],
+                      'roots': [str(path) for path in state['roots']], 'skipped': skipped, 'error': error}))
 
 
 def load_supervisor(repository):
@@ -474,51 +623,13 @@ def custody(caller_path):
                           text=True, timeout=30).stdout.strip()
     sentinel = subprocess.Popen(['/usr/bin/sleep', '300'])
     captured, launchers, roots = [], [], []
+    state = {'captured': captured, 'launchers': launchers, 'roots': roots}
     start = None
     temporary = None
     temporary_identity = None
     failure = None
     cleanup_failures = []
     success = False
-    def capture(child):
-        root = birth(child['pid'])
-        if root is None:
-            return
-        if 'linux:' + str(child['pid']) + ':' + root[0] != child['birth']:
-            raise RuntimeError('Captured custody child generation changed')
-        pending = [child['pid']]
-        while pending:
-            pid = pending.pop()
-            identity = birth(pid)
-            if identity is None:
-                continue
-            try:
-                descendants = children(pid)
-                args = (Path('/proc') / str(pid) / 'cmdline').read_bytes().split(b'\0')
-            except FileNotFoundError:
-                if absent(pid, identity[0]):
-                    continue
-                raise
-            if absent(pid, identity[0]):
-                continue
-            if (pid, identity[0]) not in captured:
-                captured.append((pid, identity[0]))
-            pending.extend(descendants)
-            if str(repository / 'scripts/e2e-engine.mjs').encode() in args:
-                if (pid, identity[0]) not in launchers:
-                    launchers.append((pid, identity[0]))
-            if args[0] == b'/usr/bin/dockerd':
-                engine = Path(os.fsdecode(args[args.index(b'--data-root') + 1])).parent
-                client = Path(os.fsdecode(args[args.index(b'--host') + 1]).removeprefix('unix://')).parent
-                for path, prefix, owner in ((engine, 'dsh-team-e2e-engine-', 0),
-                                            (client, 'dsh-team-e2e-client-', uid)):
-                    info = path.stat()
-                    if path.parent != Path('/tmp') or not path.name.startswith(prefix) or info.st_uid != owner:
-                        raise RuntimeError('Private runtime authority mismatch')
-                    if path not in roots:
-                        roots.append(path)
-                if os.readlink('/proc/%d/ns/net' % pid) == os.readlink('/proc/self/ns/net'):
-                    raise RuntimeError('Private Engine shares caller network namespace')
     try:
         started = command('start', head)
         if started.returncode != 0:
@@ -534,12 +645,12 @@ def custody(caller_path):
         while not marker.exists():
             child_path = directory / 'child.json'
             if child_path.exists():
-                capture(json.loads(child_path.read_text())['owner'])
+                capture_tree(json.loads(child_path.read_text())['owner'], state, repository, uid, ProcReader())
             if (directory / 'result.json').exists() or time.monotonic() >= deadline:
                 raise RuntimeError('Actual custody e2e did not complete HTTP before hold')
             time.sleep(.05)
         child = json.loads((directory / 'child.json').read_text())['owner']
-        capture(child)
+        capture_tree(child, state, repository, uid, ProcReader())
         if len(launchers) != 1 or len(roots) != 2:
             raise RuntimeError('Exact detached launcher and private Engine were not observed')
         (owned / 'authority.json').write_text(json.dumps({
@@ -631,6 +742,8 @@ elif sys.argv[1] == 'load-supervisor':
     module = load_supervisor(Path(__file__).resolve().parents[2])
     print(json.dumps({'cache': importlib.util.cache_from_source(module.__file__),
                       'loaded': hasattr(module, 'engine_info'), 'bytecodeEnabledAtEntry': not entry}))
+elif sys.argv[1] == 'capture-script':
+    capture_script(json.loads(sys.argv[2]))
 else:
     try:
         parent(sys.argv[1], sys.argv[2])
