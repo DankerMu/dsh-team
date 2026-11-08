@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import type { ServerResponse } from 'node:http';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -42,16 +42,60 @@ vi.mock('../src/orchestrator/index.ts', async (importOriginal) => {
   };
 });
 
+// Each aggregated error as `Class: message`, plus one cause level, so a length
+// mismatch names the unexpected error instead of only counting it.
+function describeErrors(errors: unknown[]): string[] {
+  return errors.map((error) => {
+    if (!(error instanceof Error)) return typeof error;
+    const head = `${error.constructor.name}: ${error.message}`;
+    const { cause } = error;
+    if (cause === undefined) return head;
+    if (!(cause instanceof Error)) return `${head} (cause ${typeof cause})`;
+    return `${head} (cause ${cause.constructor.name}: ${cause.message})`;
+  });
+}
+
+interface DelayedRequest {
+  method: string | undefined;
+  path: string | undefined;
+  status?: number;
+}
+
+// The injected delay must hit cleanup's first GET (the absent work volume of the
+// stalled user) and still be answered, proving the slow request was in cleanup.
+function expectDelayedCleanup(
+  delayed: DelayedRequest | undefined,
+  delaysCleanup: boolean,
+  persistedName: string | undefined,
+): void {
+  if (!delaysCleanup) {
+    expect(delayed).toBeUndefined();
+    return;
+  }
+  expect(delayed).toEqual({
+    method: 'GET',
+    path: `/volumes/${persistedName?.replace('-home-', '-work-') ?? ''}`,
+    status: 404,
+  });
+}
+
 it.each([
   {
     name: 'aborts a persisted stalled create and reaches exact-owned cleanup without watchdog rescue',
     stalls: true,
+    delaysCleanup: false,
+  },
+  {
+    name: 'cleanup slower than the stall budget still aggregates only the cancellation',
+    stalls: true,
+    delaysCleanup: true,
   },
   {
     name: 'settles successful volume creation and exact-owned cleanup while preserving unrelated volumes',
     stalls: false,
+    delaysCleanup: false,
   },
-])('$name', async ({ stalls }) => {
+])('$name', async ({ stalls, delaysCleanup }) => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-volumes-'));
   const socket = join(directory, 'engine.sock');
   const submissions = join(directory, SUBMISSION_JOURNAL);
@@ -65,6 +109,21 @@ it.each([
   let stalled: ServerResponse | undefined;
   let connectionClosed: Promise<unknown> | undefined;
   let persistedName: string | undefined;
+  // The first request after the stalled create is cleanup's first GET; delaying it past
+  // the 200 ms stall budget reproduces a slow runner deterministically.
+  let delayedCleanup: DelayedRequest | undefined;
+  let cleanupTimer: NodeJS.Timeout | undefined;
+  function answer(request: IncomingMessage, response: ServerResponse): void {
+    const name = request.url?.slice('/volumes/'.length) ?? '';
+    if (!volumes.has(name)) {
+      response.writeHead(404).end();
+    } else if (request.method === 'DELETE') {
+      volumes.delete(name);
+      response.writeHead(204).end();
+    } else {
+      response.end(JSON.stringify(volumes.get(name)));
+    }
+  }
   const server = createServer((request, response) => {
     requests.push({ method: request.method, path: request.url });
     if (request.method === 'POST' && request.url === '/volumes/create') {
@@ -94,15 +153,20 @@ it.each([
       });
       return;
     }
-    const name = request.url?.slice('/volumes/'.length) ?? '';
-    if (!volumes.has(name)) {
-      response.writeHead(404).end();
-    } else if (request.method === 'DELETE') {
-      volumes.delete(name);
-      response.writeHead(204).end();
-    } else {
-      response.end(JSON.stringify(volumes.get(name)));
+    if (delaysCleanup && stalled !== undefined && delayedCleanup === undefined) {
+      const delayed: DelayedRequest = {
+        method: request.method,
+        path: request.url,
+      };
+      delayedCleanup = delayed;
+      cleanupTimer = setTimeout(() => {
+        if (response.destroyed) return;
+        answer(request, response);
+        delayed.status = response.statusCode;
+      }, 300);
+      return;
     }
+    answer(request, response);
   });
   try {
     initializeVerificationSubmissions(directory);
@@ -111,7 +175,7 @@ it.each([
     process.env.DSH_TEAM_CI_RESOURCE_JOURNAL = resources;
     server.listen(socket);
     await once(server, 'listening');
-    const settled = runUserVolumes(socket, 200).then(
+    const settled = runUserVolumes(socket, 200, 1_000).then(
       () => ({ error: undefined }),
       (error: unknown) => ({ error }),
     );
@@ -138,7 +202,8 @@ it.each([
       expect(error).toBeInstanceOf(AggregateError);
       if (!(error instanceof AggregateError))
         throw new Error('Expected aggregated acceptance failure');
-      expect(error.errors).toHaveLength(1);
+      // Exactly one error; a mismatch diff prints every description.
+      expect(describeErrors(error.errors)).toEqual([expect.any(String)]);
       expect(error.errors[0]).toBeInstanceOf(Error);
       const cancellation = cancellations.get(socket);
       if (cancellation === undefined)
@@ -154,6 +219,7 @@ it.each([
       expect(requests.filter(({ method }) => method === 'DELETE')).toEqual([
         { method: 'DELETE', path: `/volumes/${persistedName ?? ''}` },
       ]);
+      expectDelayedCleanup(delayedCleanup, delaysCleanup, persistedName);
     } else {
       expect(error).toBeUndefined();
       expect(requests.filter(({ method }) => method === 'POST')).toEqual(
@@ -189,6 +255,7 @@ it.each([
       }).not.toThrow();
     }
   } finally {
+    clearTimeout(cleanupTimer);
     cancellations.delete(socket);
     if (previousSubmissions === undefined) delete process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
     else process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = previousSubmissions;

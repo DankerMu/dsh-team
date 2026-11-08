@@ -9,7 +9,13 @@ import {
 import { registerCleanupTarget } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
 
-export async function runUserVolumes(socketPath: string, requestTimeoutMs = 10_000): Promise<void> {
+// The stall budget (requestTimeoutMs) bounds acceptance requests only; cleanup has its
+// own bounded deadline so a slow cleanup request is not misreported as a second failure.
+export async function runUserVolumes(
+  socketPath: string,
+  requestTimeoutMs = 10_000,
+  cleanupTimeoutMs = 10_000,
+): Promise<void> {
   const rawClient = trackVerificationDockerClient(createDockerClient(socketPath), DockerHttpError);
   // Every acceptance request gets a fresh deadline, including requests made
   // inside ensureUserVolumes. Forward documents/errors and retain caller cancellation.
@@ -96,7 +102,7 @@ export async function runUserVolumes(socketPath: string, requestTimeoutMs = 10_0
             'GET',
             `/volumes/${name}`,
             undefined,
-            AbortSignal.timeout(requestTimeoutMs),
+            AbortSignal.timeout(cleanupTimeoutMs),
           );
         } catch (error) {
           if (error instanceof DockerHttpError && error.statusCode === 404) continue;
@@ -108,14 +114,14 @@ export async function runUserVolumes(socketPath: string, requestTimeoutMs = 10_0
           'DELETE',
           `/volumes/${name}`,
           undefined,
-          AbortSignal.timeout(requestTimeoutMs),
+          AbortSignal.timeout(cleanupTimeoutMs),
         );
         await expect(
           rawClient.json(
             'GET',
             `/volumes/${name}`,
             undefined,
-            AbortSignal.timeout(requestTimeoutMs),
+            AbortSignal.timeout(cleanupTimeoutMs),
           ),
         ).rejects.toMatchObject({ statusCode: 404 });
       } catch (error) {
