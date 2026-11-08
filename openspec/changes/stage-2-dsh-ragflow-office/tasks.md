@@ -4079,3 +4079,113 @@ Evidence (26.1):
 剩余风险：只验证本机 Playwright Chromium（arm64）；VPS 的 CfT 隔离通道不跑这个用例。目录下载、大文件下载不在范围内。
 
 Must preserve：17.2 打包下载的全部步骤和断言、两个工作文件的清理、provider 计数前后不变、每次运行 5 次付费检索；`/sidebar/file` 的 CSP 规则。
+
+## 34. #433：DOC、XLS、PPT 只读预览的本机通道用例（17.4 预览部分）
+
+依赖：#432（字体，17.4 镜像部分）、#402，均已合入。由 #433 承载。用户决定（2026-11-07，见 17.4）：DOC 和 PPT 预览只用 DSH 0.2.1 自带的 WASM 引擎在实例内转换；XLS 由 DSH 的浏览器表格视图显示，不经转换。本机 `pnpm test:stack` 使用 Playwright Chromium 153，能渲染 PDF 查看器；VPS 的 Chrome 140 不能（#565），所以渲染断言只放在本机通道。
+
+- [ ] 34.1 stack 浏览器用例在员工自己的实例里，从侧栏文件区依次打开 `旧通知.doc`、`旧报表.xls`、`旧汇报.ppt`。每个文件都显示只读预览，没有编辑或保存入口；预览结束后，实例里的原文件字节不变。验证：本机 exact-head `pnpm test:stack`。
+
+Suggested fixture level: expanded - 真实浏览器、真实实例内转换和新的 stack 分支；不改产品代码
+Minimal mergeable slice: atomic: 一个新 stack 夹具及其成对的集成测试、stack 用例接线、共享取行和预览判定的辅助函数，以及文档
+Risk packs (34.1): selected - File IO（样本以 uid 1001 写进 `/data/work`，并在实例内回读 sha256）、Legacy compatibility（打包和单文件下载用例、better-sidebar Docker 用例的行为和证据不变；辅助函数挪动后语义不变）、Documentation（`platform/test/README.md`、`platform/test/office-legacy/README.md`、`docs/LOCAL_STACK.md`）；not selected - Auth、Config、Schema、Public API、Concurrency、Resource limits、Release。不碰关键路径。issue 验收里关于 `images/dsh-user/` 的勾选不适用，镜像部分已在 #432 交付。
+
+Evidence (34.1):
+
+现状（main `f166f22`）：
+
+- stack 用例的浏览器分支走 `stack-browser-fixture.ts` 的 `workbenchSession`。它负责登录、等待 composer，并收集 `consoleErrors`、`pageErrors`、`failedRequests`、`externalRequests` 和截图。
+  - `foreign()`（`:153-156`）只接受 `http:`，且 host 等于平台 host 的请求。
+- 侧栏取行：
+  - `sidebar-archive-stack-fixture.ts:128-141` 有私有的 `element` 和 `showRows`；
+  - `showRows` 等两行同时可见（`ROWS_SHOWN`），重选标签页用 `TEXT_NAME`。
+- 预览终态：`better-sidebar-browser-fixture.mjs:211-228` 的页内表达式（`observeDocx`）判定 rendered 和 failed。
+  - rendered 的条件是 `section[data-pdf-preview] [data-pdf-page] [data-document-zoom-surface]:not([hidden]) canvas`；
+  - failed 的条件是 `[data-textpreview-failed]` 或 `[role="alert"]`；
+  - 还记录 `nativeHost`。
+- 样本是 `platform/test/office-legacy/probe.{doc,xls,ppt}`，README 只记录 sha256（实测字节数为 8704、5632、459264）。
+- 文件归属：
+  - better-sidebar 的 `HOST_OWNED_EXTS` 包含 doc、xls、ppt；
+  - ONLYOFFICE 只注册 docx、xlsx、pptx（`dsh-sidebar-onlyoffice/lib/client.js:1473-1475`）；
+  - 所以这三种文件都由 DSH 自己的 documentpreview 打开：
+    - DOC、PPT 走 `…/office` 渲染器，经 `remote.officeToPdf.render` 在实例内转换（`client.js:6100-6106`）；
+    - XLS 走 `…/excel` 渲染器，即 Fortune-sheet（`allowEdit:false`、`showToolbar:false`、`showFormulaBar:true`）。
+  - 外层容器都是 `[data-document-preview="<id>"][data-textpreview-url]`（`client.js:838-839`）。
+- PDF 预览和表格解析都通过同源 `blob:` 地址起 Worker（`client.pdf.js:24707-24711`、`client.excel.js` `parseExcel`）。
+  - Playwright 只对 `data:` 做特殊处理；
+  - `new URL('blob:http://h:p/x').host` 是空串，所以现在的 `foreign()` 会把它记成外部请求。
+- 产品的单次 Office 转换超时默认是 60 s（`dsh-office-to-pdf/lib/index.js:387`）。第一次转换要加载约 150 MB 的 WASM。
+
+改动：
+
+- `stack-browser-fixture.ts`：
+  - `foreign()` 遇到 `target.protocol === 'blob:'` 时，改为比较 `target.origin === <平台 origin>`。http 和 ws 两条分支不变，因为 `ws://` 的 origin 不等于 `http://`。
+  - 新增导出 `element(page, expression)` 和 `showSidebarRows(page, names: readonly string[])`，从 `sidebar-archive-stack-fixture.ts:128-141` 挪过来：
+    - `names` 全部可见才算成功；重选标签页用 `names[0]`；
+    - 打包夹具传 `NAMES`，语义完全不变；新夹具传 `[name]`；
+    - 打包夹具删除自己的那份，`ROWS_SHOWN` 改由 `showSidebarRows` 生成。
+- `better-sidebar-browser-fixture.mjs`：
+  - 把 `:211-228` 的页内终态表达式抽成导出 `previewOutcome(previewId, name)`，返回 `{ state: 'rendered'|'failed'|null, message?, pages, nativeHost, fontWarning }`；
+  - 选择器与现在的完全相同；
+  - `observeDocx` 改为调用它，better-sidebar Docker 用例的行为和证据不变；
+  - XLS 的 rendered 条件是 `section[data-excel-preview]` 可见，并且工作表名 `#fortune-sheettab-container-c .luckysheet-sheets-item-name` 可见，且 `textContent === '报表'`，作为 `previewId` 为 `…/excel` 时的分支。
+- 新文件 `platform/test/legacy-preview-stack-fixture.ts`，导出 `legacyPreviewScenario(lane)`。`lane` 复用 `ArchiveLane` 的形状（`session`、`exec`、`provider`），必要时改名为共享类型，以 `pnpm dead-code` 和 `pnpm duplicate-code` 通过为准。
+  1. **样本常量。** `{ file, name, size, sha256, preview }` 三条，注释引用 `office-legacy/README.md` 的摘要表。宿主读取样本后，先核对 size 和 sha256。
+  2. **写入。** `exec python3 -c <WRITER> <path> <mode> <base64>`：
+     - 按原始字节每 73 728 B 切一块，对应 98 304 个 base64 字符，4 字节对齐，每块可以单独解码，并且小于 Linux 单参数上限 131 072；
+     - 第一块截断写，后续块追加，ppt 共 7 块；
+     - 不用 stdin，也不用 `docker cp`：`docker-command.ts:190-191` 会关闭 stdin，`docker cp` 写出的文件归 root；
+     - 写完在实例内回读 `{ name, size, sha256 }`，必须等于常量。
+  3. **逐个预览。** 在同一个 `workbenchSession` 里按文件串行，一个文件全部做完再点下一个。先打开的标签页会被设为 hidden/inert（`better-sidebar-browser-fixture.mjs:44-46`）。每个文件依次：
+     - `showSidebarRows(page, [name])`，然后 Playwright `click()` 该行；
+     - 轮询 `previewOutcome`，直到 `state !== null`。上限：DOC、PPT 各 240 s，因为产品自己的转换超时是 60 s，再加上冷启动和渲染；XLS 用 `session.timeout`；
+     - 要求 `state === 'rendered'` 且 `nativeHost === false`，即确实由 DSH 容器打开，没有交给 better-sidebar 或 ONLYOFFICE；
+     - DOC、PPT 还要求 `pages === 1`（一段正文、一张幻灯片）；
+     - XLS 记录 `.fortune-fx-input` 的 `textContent`。默认选中 A1 时，断言它等于 `旧格式探针 XLS：部门`；如果实测默认选中不在 A1，按观测改写这条断言并在本节记录，不删掉它；
+     - 页内表达式回传原始事实：容器内可见的 button、`[role="button"]`、`[role="menuitem"]`、`[role="tab"]` 的文本和 `aria-label` 列表，以及 `[contenteditable="true"]`、`.cm-editor`、`iframe` 的数量；
+     - 纯 TS 函数 `readOnlyViolations(facts)` 判定：标签匹配 `/编辑|保存|edit|save/i` 或任一计数大于 0 都算违规，要求违规为空；
+     - 只在容器内查询（composer 在容器外，本身可以编辑），不做双击（双击会让工作表名进入改名状态）；
+     - 截图：`legacy-doc`、`legacy-xls`、`legacy-ppt`。
+  4. **字节不变。** 三个文件都预览完后，在实例内再回读一次 `{ name, size, sha256 }`，必须等于常量。provider 计数前后不变，即没有发生模型请求或检索。
+  5. **清理。** 与打包用例相同：不论成功失败都删掉三个文件，并断言它们已不存在。原失败排在前面，清理失败跟在后面，合成一个 `AggregateError`。
+  - 证据：`{ browser, files: [{ name, size, sha256, preview, pages?, cell? }] }`。
+- `platform-stack.stack.test.ts`：
+  - 在 `archiveScenario` 之后调用 `legacyPreviewScenario`，参数与它相同；
+  - 打印 `legacyPreview: { files, screenshots }`，不打印浏览器的原始列表；
+  - 最终断言照 `:709-715` 的 `toMatchObject` 写法：`screenshots` 为 `['legacy-doc.png','legacy-xls.png','legacy-ppt.png']`，四个列表都为空；
+  - 总超时按需要加长，同时改 `vitest.config.ts:48-53` 的预算注释，写明新分支的上限：约 240 + 240 + 60 s，加 9 次以上 exec。
+- 成对测试：
+  - `legacy-preview-stack-fixture.integration.test.ts`：
+    - 分块按原始字节计：0 字节拒绝；73 728 字节得 1 块；73 729 字节得 2 块；459 264 字节得 7 块；拼回后与原字节一致；
+    - `readOnlyViolations`：「保存」「Edit」标签、contenteditable、iframe、`.cm-editor` 各自判为违规；「重新加载」「打开方式」「另存为」不判为违规。
+  - `stack-browser-fixture.integration.test.ts`：同源 `blob:` 不算外部，异源 `blob:` 算外部；http 和 ws 的现有用例不变。
+  - `better-sidebar-browser-fixture` 的现有测试覆盖 `observeDocx` 抽取后的行为不变；没有这类测试时，`previewOutcome` 的纯部分在新集成测试里覆盖。
+- 文档（编排者同 PR 改）：
+  - `platform/test/README.md` 的 stack 证据段加入 `legacyPreview`；
+  - `platform/test/office-legacy/README.md` 的使用方加上 stack 通道，并补上字节数；
+  - `docs/LOCAL_STACK.md` 在步骤清单（约 :144）加一步，在证据表（约 :190）加一行。
+
+先红后绿：
+
+- 集成测试先写，在旧代码上失败：模块或导出不存在，blob 用例失败。实现后转绿。
+- 真实的红就是 stack 实验本身。如果 Chromium 153 上任一文件 `failed`、超时，或页数不是 1，就停下来，在本节追加实测记录并报告，不放宽判定。
+- blob 以外出现任何新的外部请求或失败请求，同样停下来报告。
+
+验证：
+
+- `pnpm check`。
+- 本机 exact-head `pnpm test:stack` 证据评论：三个文件都是 rendered，记录页数、XLS 公式栏文字和 sha256；四个浏览器列表为空；卷不变。
+- VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed：`better-sidebar.docker.test.ts` 换用抽取后的 `previewOutcome`，用来证明它的行为不变。
+
+Must preserve：
+
+- 打包、单文件下载、better-sidebar Docker 用例的行为与证据；
+- 其他 stack 分支不产生 `blob:` 请求，`foreign()` 对它们的结果不变；
+- 转换只在员工自己的实例里完成，`externalRequests` 为空；
+- stack 其他分支的顺序和超时；
+- 样本文件不改。
+
+残留风险：
+
+- 渲染只在本机 Chromium 153 上证明，VPS 的 Chrome 140 由 #565 处理。
+- 表格单元格画在 canvas 上，用例只证明表格视图打开、工作表名正确，以及公式栏能显示选中单元格的值，覆盖不到所有单元格。
