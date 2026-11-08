@@ -365,6 +365,33 @@ it('cancels after actual removal without committing stopped, then reconciles tru
   expectRetiredOnce(database);
 });
 
+it('settles owned network removal when cancelled after actual removal, then commits once on retry', async () => {
+  const { input, database, daemon } = indexedFixture();
+  const before = database.prepare('SELECT * FROM instances').get();
+  const controller = new AbortController();
+  let removed = false;
+  daemon.beforeRequest((request) => {
+    if (request.method === 'DELETE' && request.path === `/containers/${START_CONTAINER}`)
+      removed = true;
+    else if (removed && request.path.startsWith('/networks/')) controller.abort();
+  });
+
+  await expect(stopUserContainer({ ...input, signal: controller.signal })).rejects.toThrow(
+    'User container retirement failed',
+  );
+
+  expect(controller.signal.aborted).toBe(true);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(daemon.requests).toContainEqual(
+    expect.objectContaining({ method: 'DELETE', path: `/networks/${START_NETWORK}` }),
+  );
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expectIndexPreserved(database, before);
+  daemon.beforeRequest(() => undefined);
+  await stopUserContainer(input);
+  expectRetiredOnce(database);
+});
+
 it('bounds a silent external Docker transport without discarding retryable identity', async () => {
   const reached = Promise.withResolvers<undefined>();
   const { input, database, daemon } = indexedFixture(
