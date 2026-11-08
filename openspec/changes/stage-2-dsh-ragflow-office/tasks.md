@@ -3259,7 +3259,7 @@ selected：
   - `serializeRequest` 不改，它经 `underPrefix` 自动覆盖。
 - **单元测试（`request-path.test.ts`）**：每行写死 `routerPath` 的期望值：
   - 正常解码：`/%5Fplatform/x` → `/_platform/x`；`/%5fplatform/x` 也是。`/_platfor%6d/x` → `/_platform/x`。`/_platform%2Fx` → 原样，`%2F` 不解码。
-  - 先截断再解码：`/_platform#x` → `/_platform`；`/healthz#x` → `/healthz`。`/x#%zz` 和 `/x?%zz` 都 → `/x`，截断后不解码后面的部分。
+  - 先截断再解码：`/_platform#x` 和 `/_platform#/x` → `/_platform`；`/%5Fplatform#x` → `/_platform`；`/healthz#x` → `/healthz`。`/x#%zz` 和 `/x?%zz` 都 → `/x`，截断后不解码后面的部分。
   - 绝对形式：`http://h/%5Fplatform#x` → `/_platform`；`HTTP://h/%5Fplatform/x` → `/_platform/x`。
   - `%25`：`/_platform/%25` 的解码结果以 `/_platform/` 开头。
   - 非 ASCII：`/%C3%A9` → `/é`。
@@ -3275,12 +3275,13 @@ selected：
   - HTTP `GET /%68ealthz` 由健康检查路由应答。修改前它也是绿的，只作为守护行，不计入「先红后绿」。
   - 先红后绿：其余编码和 fragment 变体在修改前会被转发或回 401。
 - **代理集成测试（`platform/test/ragflow-proxy-documents.integration.test.ts` 或同类文件）**：
-  - 不带令牌时，`GET /%5Fplatform/instance-api/ragflow/x?keywords=S`、`/_platform/instance-api/ragflo%77/x`、`GET http://h/_platform/instance-api/ragflow/x?keywords=S`（原始 socket，绝对形式）都返回 401；`/_platform/instance-api/ragflow%2Fversion` 仍是 404。
+  - 不带令牌时，`GET /%5Fplatform/instance-api/ragflow/x?keywords=<KEYWORD_MARKER>`、`/_platform/instance-api/ragflo%77/x`、`GET http://h/_platform/instance-api/ragflow/x?keywords=S`（原始 socket，绝对形式）都返回 401；`/_platform/instance-api/ragflow%2Fversion` 仍是 404。
+  - 编码前缀那一行改前改后都是 401：网关和代理的 401 响应体相同。它真正的先红后绿在日志：这条请求的日志 url 以 `?[redacted]` 结尾，`withProxy` 的标记泄漏检查在修改前会红。
   - 未匹配的绝对形式目标（`HEAD http://h/_platform/instance-api/ragflow/datasets/<id>/documents?keywords=S`，以及带结尾斜杠的 GET），日志里不出现 query 内容，只有 `?[redacted]`。
   - 都不读设置，也不访问 RAGFlow。
 - **文档（编排者同 PR 改）**：
   - `platform/src/gateway/README.md` 第 9 行一带写明：先在 `?`/`#` 前截断，再按 `decodeURI` 解码后分类；`%2F` 这类保留字符的转义不解码；无法解码的目标回 404。
-  - `platform/src/ragflow-proxy/README.md` 若写有前缀判定，同步改写。
+  - `platform/src/ragflow-proxy/README.md` 第 9 行一带（目前写的是 query-stripped raw path 的前缀判定）必须同步改写：原始路径先在 `?`/`#` 前截断、按 `decodeURI` 解码，再判断前缀。
 
 must-preserve：
 
@@ -3292,6 +3293,7 @@ not selected：Schema、API、迁移：无。
 
 剩余风险：
 
+- 带 fragment 的绝对形式 upgrade 目标（`http://h#x`）：路由器对 HTTP 回 400，`routerPath` 返回 `''`，网关会把它转发给员工自己的实例。不越过保留路径，也不跨实例。
 - 带保留字符转义的路径（`%2F`）仍会转发给员工自己的实例，与路由器一致，不会跨到其他用户的实例。DSH 自己是否解码，不在本任务范围。
 
 Governing invariant：路由器视为保留命名空间（`/healthz`、`/_platform` 及其后代）的任何请求目标，包括绝对形式和带 fragment 的写法，网关都不转发给实例；解码失败的目标也不转发。代理鉴权和日志脱敏对同一组请求生效。
