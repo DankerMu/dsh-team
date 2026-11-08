@@ -277,13 +277,16 @@ B 能读到 Document Server 的 JWT，但不知道 A 的文件令牌密钥：
 
 **备选**：由平台代理 Document Server 与实例之间的全部流量。不采用：要实现文档归属判定，工作量远超收益。
 
-### 8. better-sidebar、Office 提示与 LibreOffice（B26、B27）
+### 8. better-sidebar、Office 提示与只读预览字体（B26、B27）
 
 - **better-sidebar 分两步**
   - 文件区组先装 `dsh-better-sidebar@0.28.0`，不打补丁。Office 文件仍由它的原生预览打开。
   - Office 编辑组在 ONLYOFFICE 及其覆盖层配置合入之后再加补丁（同一组）：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py`，改为与 #375 同构的 Node 脚本，钉住 0.28.0 和两个文件的输入、输出哈希，只从 `HOST_OWNED_EXTS` 里去掉 docx、xlsx、pptx。
 - **Office 提示**：新建镜像插件 `plugins/office-hints/`，承载三条界面提示：人机同写提示（F40）、无 Session 提示、满员提示和退回预览（F42）。不给第三方包加第二个补丁。它是受管必启项（决定 12），只在 ONLYOFFICE 生效时显示。员工文档放在新建的 `docs/EMPLOYEE_GUIDE.md`。
-- **LibreOffice**：用户镜像装 LibreOffice，供 DSH 自带预览把旧格式、Office 不可用时以及 Document Server 满员时的 docx/xlsx/pptx 转成 PDF 只读显示。
+- **只读预览的字体**（#554 诊断，用户决定 2026-11-07）：DSH 0.2.1 的预览经 `dsh-office-to-pdf` 调 `@deepseek-ai/libreoffice-kit`，Linux 上只用随 DSH 安装的 `libreoffice-kit-wasm@0.1.5`，从不调用系统 soffice，所以镜像不装 LibreOffice。转换失败的原因是镜像里没有任何字体（`unavailable`：「No usable fonts were found」）。处理分两层：
+  - 用户镜像装 Debian 的 `fonts-noto-cjk` 和 `fonts-dejavu-core`，使旧格式、Office 不可用时以及 Document Server 满员时的 docx/xlsx/pptx 在任何部署下都能在实例内、不联网地转成 PDF 只读显示。
+  - 部署配置了 D13 授权字体目录时，平台把它只读挂载进每个实例的 `/usr/share/fonts/truetype/custom`（与 Document Server 相同的目标路径）。引擎默认扫描 `/usr/share/fonts`，不需要覆盖层配置，公文字体按原样显示。
+  - 转换峰值内存约 1.5GB（#554 实测），管理员把 `memoryMiB` 设得过低会使预览被 OOM 终止，部署文档写明。
 - HTML 预览沙箱（F36，用户决定 2026-11-07）：better-sidebar 0.28.0 的预览路由 `/sidebar/html` 始终下发 `Content-Security-Policy: sandbox allow-scripts allow-popups allow-downloads allow-modals`（不含 `allow-same-origin`），预览脚本总在不透明源中运行，`htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 和状态栏的临时解除都只改 iframe 属性，不能解除它。覆盖层不写 better-sidebar 的 `config`：DSH 0.2.1 对行的 `config` 整体替换，员工此后对该行的任何设置写入都会被拒绝（`dsh-config-editor` 的 overlay 检查），钉一个字段就会冻结全部侧栏偏好。两个开关由 `platform-nav` 客户端显示为受管锁定。
 - 下载使用 better-sidebar 文件菜单里的「打包下载」。
 
@@ -444,7 +447,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - [arm64 本机结果不能代表 amd64] → VPS 门禁不变；Document Server 的 amd64 验证列入阶段 3 的 3.7。
 - [内网各库的嵌入模型可能不一致] → 不一致时单次多库检索不可用。阶段 3 的 3.7 确认后，届时重新评估被排除的逐库合并。
 - [放开安装入口后，员工可以装未审核的插件] → 项目方的决定（D9）。安全边界仍是实例隔离（#372），插件只在员工自己的实例内运行。
-- [LibreOffice 让镜像变大、转换消耗实例 CPU] → 受实例 CPU 和内存上限约束；记录镜像大小的变化。
+- [预览字体让镜像变大（约 +78MB），转换消耗实例 CPU 和约 1.5GB 内存] → 受实例 CPU 和内存上限约束；记录镜像大小的变化；部署文档写明内存下限。
 - [Document Server 接入所有实例网络，成为共享对端] → 每实例的文件令牌密钥和文档 key，加上回调查注册表，加上攻击验证。
 - [Document Server 被重建后，已运行实例的 Office 不可用，直到实例下次启动] → 不热补接，部署文档写明；重启实例即恢复。
 - [Document Server 满员时可观测的信号未知：F42 规定了提示和退路，但插件或 Document Server 会给出哪种错误还没有实测] → 先在本机通道制造满员、记录实际信号，再实现提示和退路；信号不可区分时停下来报告。

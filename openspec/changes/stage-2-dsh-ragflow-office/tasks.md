@@ -2897,7 +2897,10 @@ Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
 - [ ] 17.1 用户镜像安装 `dsh-better-sidebar@0.28.0`，不打补丁，并作为可管理项加入 `catalog.json`。版本不符时构建失败。验证：用户镜像 Docker 用例断言版本和目录一致；Docker 浏览器用例打开一个 docx，由 better-sidebar 的原生预览显示。
 - [ ] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
 - [ ] 17.3 HTML 预览沙箱（用户决定 2026-11-07：靠预览路由的 CSP，不钉 better-sidebar 配置）：`platform-nav` 客户端把 better-sidebar 的 `htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 两个开关显示为受管锁定。验证：platform-nav 单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明两个开关显示为受管锁定，经网关的预览文档带不含 `allow-same-origin` 的 CSP sandbox，HTML 预览中的脚本无法访问父页面；默认设置下点状态栏临时解锁后，以及员工在自己的 profile 中把两个键写为开启并重启实例后，结果不变。
-- [ ] 17.4 用户镜像安装 LibreOffice，DOC、XLS、PPT 只读预览，在实例内转换。验证：Docker 用例在 `--network none` 下转换三种旧格式成功；记录镜像大小的变化；本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
+- [ ] 17.4 DOC、XLS、PPT 只读预览，在实例内转换（#554 诊断，用户决定 2026-11-07：DSH 0.2.1 只用自带的 WASM 引擎，缺的是字体，不装 LibreOffice）。分三部分：
+  - （镜像，#432）用户镜像装 `fonts-noto-cjk`、`fonts-dejavu-core`。验证：Docker 用例在 `--network none`、实例同等限制下，用 DSH 自带的引擎把 DOC、XLS、PPT、DOCX 转成含中文内容的 PDF；17.1 的 docx 交接用例改为断言预览渲染成功；记录镜像大小的变化。
+  - （授权字体挂载，#561）部署配置授权字体目录时，平台把它只读挂载进每个实例的 `/usr/share/fonts/truetype/custom`。验证：Docker 用例证明实例内可读不可写，转换使用其中的字体；未配置时实例照常启动。
+  - （本机预览，#433）本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
 
 Suggested fixture level: expanded - 关键路径镜像变更
 Minimal mergeable slice: 17.1 better-sidebar 单独合入（不打补丁，Office 文件仍由它的原生预览打开，其他功能不变）
@@ -3361,6 +3364,85 @@ Evidence (17.3 HTML 预览沙箱，#431):
 - 本机：`pnpm check`；platform-nav 单元测试先红后绿。
 - VPS exact-head `pnpm test:docker`：包含新的浏览器用例，附两阶段截图、响应头和探测结果。
 - VPS exact-head `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+
+Risk packs (17.4 镜像部分：只读预览字体，#432，同时关闭 #554): fixture level expanded（关键路径 `images/dsh-user/`）。
+
+用户决定（2026-11-07）：镜像装 Debian 自由字体，保证任何部署下都能预览；部署配置了 D13 授权字体目录时再把它只读挂载进实例，挂载归 #561，本任务不做。spec「旧格式只读预览所需的运行环境」、design.md 决定 8 和任务 17.4 的文字已随本段改写。
+
+已核实的事实：
+
+- **DSH 0.2.1-rc.2 的转换链**：
+  - 预览调 `dsh-office-to-pdf`（`dsh-web-app/cordis.patch.yml` 的 `office-to-pdf` 行），它再调 `@deepseek-ai/libreoffice-kit@0.1.5` 的 `createConverter`。
+  - `resolveEngine`（`libreoffice-kit/lib/index.js:1519-1541`）在 Linux 上只用随 DSH 安装的 `@deepseek-ai/libreoffice-kit-wasm@0.1.5`：`os: ["linux"]`，status `built`，约 152MB。它不调用系统 soffice。
+  - 字体目录默认取 `XDG_DATA_DIRS`（`/usr/local/share:/usr/share`）下的 `fonts`，再加 `~/.fonts`、`~/.local/share/fonts`（`:1236-1250`）。
+- **#554 本机实测**：
+  - 条件：用户镜像（`main` 3a30c99，原生 arm64），`--network none`，`--memory 4g --memory-swap 4g`（默认 `memoryMiB` 为 4096），`--pids-limit 512`，seccomp 取 `images/seccomp/dsh-user.json`，uid1001。
+  - 现状：`discoverRuntime` 正常（backend `wasm`），`createConverter` 正常。`render` 返回 `ConversionError` `unavailable`：「No usable fonts were found」。`dsh-office-to-pdf` 把它包装成 `document-render/failed`，`reason` 为 `unavailable`。前端 `conversionErrorKey('unavailable')` 显示的就是 17.1 用例看到的「Office 预览不可用」。
+  - 加装 `fonts-dejavu-core fonts-noto-cjk` 后：
+    - docx 转 PDF 成功，用时 2.1s，`missingFonts` 为空，内存峰值 1.56GB；
+    - 下面三个旧格式夹具各自转 PDF 也成功：每个 PDF 以 `%PDF-1.7` 开头、以 `%%EOF` 结尾，嵌入 `NotoSansCJK*` 子集字体，`missingFonts` 为空；同一转换器连续转三个，峰值 2.14GB；
+    - 镜像从 485MB 增加到 562MB（+78MB）。
+  - 中文内容回读：DOC 转 txt、XLS 转 csv 逐字包含标记。PPT 转 pptx 后，把各 slide XML 里的 `<a:t>` 文本按顺序拼接，等于标记。
+
+selected：
+
+- **镜像（`images/dsh-user/Dockerfile`）**：
+  - 在现有 `apt-get install -y --no-install-recommends` 一行加上 `fonts-noto-cjk fonts-dejavu-core`，不另起一层，不装 LibreOffice。
+  - 紧跟一个构建期门禁 RUN：`/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc` 和 `/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf` 必须是普通文件，否则以 `preview fonts missing: <path>` 失败。路径按 bookworm 包的实际安装位置核对，写进 Dockerfile 注释。
+- **旧格式夹具（测试数据，编排者生成，实现者原样入库）**：
+  - 放在 `platform/test/office-legacy/`，由编排者提供：
+    - 源文件：`probe.fodt`、`probe.fods`、`probe.fodp`，Flat ODF XML；
+    - 二进制：`probe.doc`（MS Word 97）、`probe.xls`（MS Excel 97）、`probe.ppt`（MS PowerPoint 97），用 Debian bookworm `debian:bookworm-slim` 中 `libreoffice-*-nogui` 的 LibreOffice 7.4.7.2 生成；
+    - 同目录 `README.md`：写明来源、生成命令（`soffice --headless --convert-to "doc:MS Word 97"` 等）、版本，以及六个文件的 sha256。
+  - 中文标记：
+    - `旧格式探针 DOC：关于开展年度检查的通知`；
+    - `旧格式探针 XLS：部门`，另一格为 `金额`，下一行 `综合科`、`1234`；
+    - `旧格式探针 PPT：工作汇报`。
+  - 生成脚本不入库，仓库里只有数据和说明。
+- **Docker 用例**（照 `user-image.docker.test.ts` 的 `offline-docx` 探针，新增一个 probe，经 `runUserImage`）：
+  - 运行条件：uid1001，`NetworkMode: none`。`HostConfig` 与实例一致：`Memory`/`MemorySwap` 都是 4GiB，`PidsLimit` 512，seccomp 取自交付的 `images/seccomp/dsh-user.json`。夹具目录只读挂入。
+  - 容器内的 node 脚本从已安装 DSH 的包目录解析 `@deepseek-ai/libreoffice-kit`，用 `require.resolve`，不写死路径。先 `discoverRuntime`，断言 backend 为 `wasm`；然后用同一个转换器依次处理 `probe.doc`、`probe.xls`、`probe.ppt` 和一个 python-docx 现场生成的 DOCX：
+    - `render` 转 PDF：`%PDF-` 开头，`%%EOF` 结尾，至少嵌入一个名字含 `CJK` 的 `/BaseFont`，`missingFonts` 为空数组；
+    - 中文回读：DOC 转 txt，XLS 转 csv，DOCX 转 txt，各自包含完整标记；PPT 转 pptx 后，把 slide XML 的 `<a:t>` 文本按顺序拼接，等于标记；
+    - 证据记录每个 PDF 的字节数、嵌入的 CJK 字体名、`missingFonts`、cgroup 的 `memory.peak`，以及镜像大小（`docker image inspect` 的 Size）。
+  - 红：#554 的诊断已经是这一断言的红，无字体时 `render` 为 `unavailable`。用例先写，并在本地用无字体镜像的结论说明。
+- **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。现在改为断言预览渲染成功：出现 PDF 页面元素，页数至少 1，没有失败 code 和文案。报告行保留 `pages=`；`fontWarning` 照常记录，不断言。
+- **文档（编排者同 PR 改）**：
+  - `platform/test/README.md`：用户镜像段写字体与新 probe；
+  - `docs/DEPLOY.md`：在资源或隔离相关处加一句，Office 只读预览在实例内转换，峰值约 1.5–2.1GB，`memoryMiB` 低于 2048 时预览可能被 OOM 终止；
+  - `platform/test/office-legacy/README.md`：编排者提供。
+
+must-preserve：
+
+- 现有 `apt-get` 一行的其他包、DSH 版本门禁、catalog 门禁、profile-seed 不变。
+- `offline-docx` 用例不变。
+- 17.1 的交接断言（`HOST_OWNED_EXTS` 把 docx 交给 DSH 预览）不变，只是在它之上加渲染成功断言。
+
+not selected：
+
+- 授权字体挂载（#561）、本机通道预览（#433）：各自的 issue。
+- 系统 LibreOffice：不装。DSH 0.2.1 不用它。
+- Schema、API、迁移：无。
+
+剩余风险：
+
+- 免费字体只是替代，公文字体（仿宋_GB2312 等）由 #561 解决；在那之前预览用替代字体排版。
+- arm64 本机实测不能代表 amd64；VPS 用例是门禁。
+- 镜像变大约 78MB。
+
+Governing invariant：员工实例在不联网、实例资源限制下，能用 DSH 自带的引擎把 DOC、XLS、PPT、DOCX 转成含中文内容的 PDF；镜像不依赖系统 LibreOffice。
+
+Sibling surfaces：
+
+- 17.1 的 docx 交接用例；
+- `offline-docx` probe；
+- 18.6 满员退路（退回本预览）。
+
+Evidence (17.4 镜像部分，#432):
+
+- 本机：`pnpm check`。
+- VPS exact-head `pnpm test:docker`（新 probe 和升级后的 17.1 用例，附证据）和 `pnpm test:deploy`，清理已确认；PR 写明镜像大小变化。
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 
 ## 18. Office 在线编辑

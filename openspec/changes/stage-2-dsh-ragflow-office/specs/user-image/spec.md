@@ -71,12 +71,17 @@
 
 ### Requirement: 旧格式只读预览所需的运行环境
 
-用户镜像 MUST 带有 LibreOffice，使 DSH 自带的文档预览能在实例内、不联网地把 DOC、XLS、PPT，以及 Document Server 不可用时的 DOCX、XLSX、PPTX 转成 PDF 只读显示。
+用户镜像 MUST 带有中文和西文字体（Debian `fonts-noto-cjk`、`fonts-dejavu-core`），使 DSH 自带的文档预览（随 DSH 安装的 WASM LibreOffice 引擎，缺字体时拒绝转换）能在实例内、不联网地把 DOC、XLS、PPT，以及 Document Server 不可用时的 DOCX、XLSX、PPTX 转成 PDF 只读显示。镜像 MUST NOT 另装系统 LibreOffice：DSH 0.2.1 不使用它。
 
 #### Scenario: 断网转换旧格式
 
 - **WHEN** 在实际网络模式为 `none` 的非 root 容器里把一个 DOC 文件转换为 PDF
 - **THEN** 转换成功，得到的 PDF 能被打开且包含原文中文内容
+
+#### Scenario: 授权字体进入实例
+
+- **WHEN** 部署配置了授权字体目录，平台启动一个员工实例
+- **THEN** 该目录只读出现在实例的 `/usr/share/fonts/truetype/custom`，预览转换使用其中的字体；员工不能写入或替换它
 
 ### Requirement: 知识库插件随镜像交付
 

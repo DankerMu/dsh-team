@@ -132,15 +132,6 @@ Office 可用是指：使用外部 Document Server 且地址和 JWT 已配置；
 - **WHEN** 既没有自带 Document Server 的配置，也没有外部 Document Server 的配置；或自带 Document Server 本次没有接入；或实例以 published-loopback 方式启动
 - **THEN** 生成的覆盖层中没有 Office 配置，ONLYOFFICE 插件不启用，模型、权限和其他受管行保持完整
 
-### Requirement: HTML 预览沙箱钉死为开启
-
-覆盖层 MUST 把“关闭 HTML 预览沙箱”设置钉为关闭，员工在实例里的修改 MUST NOT 生效。
-
-#### Scenario: 员工尝试关闭沙箱
-
-- **WHEN** 员工在实例设置里关闭 HTML 预览沙箱并重启实例，然后预览一个含脚本的 HTML 文件
-- **THEN** 预览仍在沙箱中渲染，脚本不能访问工作台页面
-
 ### Requirement: 知识库插件取得平台地址
 
 覆盖层 MUST 只给知识库插件一个平台地址：该实例子网内平台的固定地址（基址 +3）加平台监听端口。知识库插件的启用状态 MUST 完全服从插件目录的三态，覆盖层 MUST NOT 另行启用它。published-loopback 方式下覆盖层 MUST NOT 给出平台地址，知识库在该实例不可用。覆盖层 MUST NOT 包含 RAGFlow 地址、RAGFlow 密钥或检索参数。
@@ -218,7 +209,7 @@ DSH 升级到 0.2.1-rc.2 后，本能力既有的受管行为 MUST 保持不变�
 
 #### Scenario: 员工改写强制的插件状态和 Office 配置
 
-- **WHEN** 员工在自己的 profile 中打开一个强制关的预装插件、关闭一个受管必启项、改写 ONLYOFFICE 插件的 Document Server 地址或 JWT、改写插件安装源，或关闭 HTML 预览沙箱，然后实例重启
+- **WHEN** 员工在自己的 profile 中打开一个强制关的预装插件、关闭一个受管必启项、改写 ONLYOFFICE 插件的 Document Server 地址或 JWT、或改写插件安装源，然后实例重启
 - **THEN** 实际生效的值仍是覆盖层规定的值
 
 ### Requirement: 配置变更在下次启动时生效

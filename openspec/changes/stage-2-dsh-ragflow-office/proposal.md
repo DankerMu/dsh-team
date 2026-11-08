@@ -57,8 +57,8 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
     - better-sidebar 的 Office 扩展名表；
     - ONLYOFFICE 文件令牌和文档 key 改用每个实例单独的密钥，防止借 Document Server 跨用户取文件或推算 key。
   - 新增镜像插件「Office 提示」，显示人机同写、无 Session、满员三条提示；员工文档新建 `docs/EMPLOYEE_GUIDE.md`。
-  - 用户镜像装 LibreOffice，供旧格式只读预览，以及 Document Server 满员时的退路。
-  - 覆盖层下发 Office 配置，HTML 预览沙箱钉死为开启。
+  - 用户镜像装中西文字体（DSH 自带的 WASM 转换引擎缺字体时不能工作），部署的授权字体目录只读挂载进实例，供旧格式只读预览，以及 Document Server 满员时的退路。
+  - 覆盖层下发 Office 配置；HTML 预览沙箱由预览路由的 CSP 保证，两个沙箱开关显示为受管锁定。
   - 文件区的下载由 better-sidebar 的「打包下载」提供。
 - **本机验证通道**
   - 在开发机 arm64 上跑全栈：平台、员工镜像、Document Server、RAGFlow 测试栈。
@@ -92,7 +92,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
 - `user-image`：
   - DSH 版本钉定改为 0.2.1-rc.2；
   - 删除插件页补丁要求；
-  - 新增 better-sidebar、ONLYOFFICE 插件及其补丁、知识库和 Office 提示插件、LibreOffice；
+  - 新增 better-sidebar、ONLYOFFICE 插件及其补丁、知识库和 Office 提示插件、预览字体；
   - 镜像插件改用 `engines.dsh`。
 - `instance-lifecycle`：
   - 固定 IP；
@@ -123,7 +123,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
 - **插件**：
   - 新增 `plugins/knowledge-base/`、`plugins/office-hints/`；
   - `plugins/office-agents/`、`plugins/permission-tiers/`、`plugins/zh-locale/`、`plugins/platform-nav/` 的兼容性和委派改动。
-- **镜像**：`images/dsh-user/`（关键路径：DSH 版本、两个第三方侧栏插件和两个补丁、知识库和 Office 提示插件、插件目录文件、LibreOffice，删除插件页补丁）。
+- **镜像**：`images/dsh-user/`（关键路径：DSH 版本、两个第三方侧栏插件和两个补丁、知识库和 Office 提示插件、插件目录文件、预览字体，删除插件页补丁）。
 - **部署**：`deploy/compose.yml`、`.env.example`、`scripts/check-config.mjs`、`docs/DEPLOY.md`、AGENTS.md 的配置清单和本地运行说明；员工文档 `docs/EMPLOYEE_GUIDE.md`（新建）。
 - **验证**：
   - 新增 `pnpm test:stack`；
