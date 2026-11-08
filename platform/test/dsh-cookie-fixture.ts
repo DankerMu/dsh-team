@@ -131,6 +131,7 @@ export async function assertRunningReuse(
         seccompProfilePath: join(root, 'unavailable-seccomp.json'),
         managedConfigDir,
         authority,
+        publicUrl: `http://${authority}`,
         subnetPool: '172.30.0.0/16',
         port: 8080,
         documentServer: null,

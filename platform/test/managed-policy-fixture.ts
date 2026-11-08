@@ -94,10 +94,11 @@ const MIGRATION_OVERLAY_SETTINGS = {
 
 /**
  * Generator input from a collected composition under the migration-5 overlay settings, without a
- * platform address: these fixtures run no platform on the instance bridge (published-loopback).
+ * platform address or Office: these fixtures run no platform or Document Server on the instance
+ * bridge (published-loopback), so ONLYOFFICE is disabled.
  */
 export function migrationOverlayInput(composition: ManagedComposition) {
-  return { ...composition, ...MIGRATION_OVERLAY_SETTINGS, platformPort: null };
+  return { ...composition, ...MIGRATION_OVERLAY_SETTINGS, platformPort: null, office: null };
 }
 
 const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {

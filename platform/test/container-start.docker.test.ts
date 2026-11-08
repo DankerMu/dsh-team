@@ -83,6 +83,7 @@ async function startupScenario(lifecycle: UserImageLifecycle): Promise<string> {
           seccompProfilePath: lifecycle.seccomp,
           managedConfigDir: lifecycle.overlayDirectory,
           authority: 'startup.example:8443',
+          publicUrl: 'https://startup.example:8443',
           subnetPool: '172.30.0.0/16',
           port: 8080,
           documentServer: null,

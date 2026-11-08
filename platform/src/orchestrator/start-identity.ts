@@ -30,6 +30,7 @@ export interface StartUserContainerInput {
     | 'seccompProfilePath'
     | 'managedConfigDir'
     | 'authority'
+    | 'publicUrl'
     | 'subnetPool'
     | 'port'
     | 'documentServer'

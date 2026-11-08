@@ -20,6 +20,8 @@ function entry(
 }
 
 const REQUIRED = entry('platform-nav', 'required', 'forced-on');
+// Written whenever Office is unavailable (`office: null`), whatever the catalog holds.
+const ONLYOFFICE_OFF = { id: 'dsh-sidebar-onlyoffice', disabled: true };
 
 /** A canonical bundle preset carrying web tools at top level and in a nested group. */
 function bundlePreset(id: string, webTools: boolean) {
@@ -95,6 +97,7 @@ const BASE: ManagedConfigInput = {
   pluginCatalog: [REQUIRED],
   bundles: [],
   platformPort: null,
+  office: null,
 };
 
 function content(input: ManagedConfigInput): string {
@@ -117,6 +120,20 @@ function catalogSegment(input: ManagedConfigInput): unknown[] {
   const all = rows(input);
   const start = all.findIndex((row) => isDeepStrictEqual(row, LOCALE_ROW)) + 1;
   return all.slice(start, all.findIndex(hasId('plugin-manager')));
+}
+
+/** The platform entry's config: its admin flag and forced catalog states. */
+function navigationConfig(input: ManagedConfigInput): unknown {
+  const inserted = rows(input).flatMap((row: unknown): unknown[] =>
+    typeof row === 'object' && row !== null && 'insert' in row && Array.isArray(row.insert)
+      ? row.insert
+      : [],
+  );
+  const navigation = inserted.filter(hasId('platform-nav'));
+  expect(navigation).toHaveLength(1);
+  const [row] = navigation;
+  ok(typeof row === 'object' && row !== null && 'config' in row);
+  return row.config;
 }
 
 function forced(state: 'forced-on' | 'forced-off', present: boolean): ManagedConfigInput {
@@ -214,6 +231,31 @@ describe('generateManagedConfig plugin sources', () => {
     expect(JSON.stringify(all.find(hasId('preset-standard')))).toContain('tool-plugin-manager');
   });
 
+  it('places the source and probe rows after profile and locale rows that try to replace them', () => {
+    const reenable = { id: 'ui-plugin-manager', config: { registryProbeEnabled: true } };
+    const all = rows({
+      ...BASE,
+      registryProbeEnabled: false,
+      localePatch: [...BASE.localePatch, reenable],
+    });
+    const probe = all.findLastIndex(hasId('ui-plugin-manager'));
+
+    expect(all.slice(probe - 3, probe + 2)).toEqual([
+      reenable,
+      // BASE has no Office: ONLYOFFICE is disabled right after the catalog rows.
+      ONLYOFFICE_OFF,
+      {
+        id: 'plugin-manager',
+        config: {
+          registry: 'https://registry.npmjs.org/',
+          fallbackRegistries: ['https://registry.npmmirror.com/'],
+        },
+      },
+      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
+      { id: 'auto-review', disabled: true },
+    ]);
+  });
+
   it('splits [A, B, C] into registry A and fallbacks [B, C] without normalising values', () => {
     const registries = ['http://A.intranet/npm', 'https://u:p@b.intranet', 'http://c.intranet//'];
 
@@ -262,7 +304,7 @@ describe('generateManagedConfig plugin catalog', () => {
     const document = content(input);
 
     expect(document).toBe(content({ ...input, pluginCatalog: [REQUIRED] }));
-    expect(catalogSegment(input)).toEqual([]);
+    expect(catalogSegment(input)).toEqual([ONLYOFFICE_OFF]);
     // The observed preset passes through the ordinary web tool filter, nothing else.
     expect(rows(input).filter(hasId('preset-office-general'))).toEqual([
       bundlePreset('office-general', false),
@@ -273,6 +315,7 @@ describe('generateManagedConfig plugin catalog', () => {
     expect(catalogSegment(forced('forced-on', true))).toEqual([
       { id: 'preset-office-general', disabled: false },
       { id: 'preset-office-writer', disabled: false },
+      ONLYOFFICE_OFF,
     ]);
   });
 
@@ -284,7 +327,7 @@ describe('generateManagedConfig plugin catalog', () => {
     (webToolsEnabled, kept) => {
       const segment = catalogSegment({ ...forced('forced-on', false), webToolsEnabled });
 
-      expect(segment).toEqual(officePatch(kept));
+      expect(segment).toEqual([...officePatch(kept), ONLYOFFICE_OFF]);
     },
   );
 
@@ -295,7 +338,7 @@ describe('generateManagedConfig plugin catalog', () => {
 
       const all = rows(input);
 
-      expect(catalogSegment(input)).toEqual(FORCED_OFF_ROWS);
+      expect(catalogSegment(input)).toEqual([...FORCED_OFF_ROWS, ONLYOFFICE_OFF]);
       expect(all.filter(hasId('preset-office-general'))).toEqual([FORCED_OFF_ROWS[1]]);
       expect(all.filter(hasId('preset-office-writer'))).toEqual([FORCED_OFF_ROWS[2]]);
     },
@@ -337,6 +380,7 @@ describe('generateManagedConfig plugin catalog', () => {
       { id: 'preset-beta', disabled: false },
       { id: 'agent-preset-registry', config: { default: 'standard' } },
       { id: 'preset-gamma', disabled: true },
+      ONLYOFFICE_OFF,
     ]);
     expect(all.filter(hasId('preset-alpha'))).toEqual([bundlePreset('alpha', false)]);
     expect(all.filter(hasId('preset-beta'))).toEqual([
@@ -380,10 +424,11 @@ describe('generateManagedConfig plugin catalog', () => {
     const all = rows(forced('forced-on', true));
     const source = all.findIndex(hasId('plugin-manager'));
 
-    expect(all.slice(source - 3, source + 3)).toEqual([
+    expect(all.slice(source - 4, source + 3)).toEqual([
       LOCALE_ROW,
       { id: 'preset-office-general', disabled: false },
       { id: 'preset-office-writer', disabled: false },
+      ONLYOFFICE_OFF,
       all[source],
       { id: 'ui-plugin-manager', config: { registryProbeEnabled: true } },
       { id: 'auto-review', disabled: true },
@@ -402,19 +447,6 @@ describe('generateManagedConfig platform entry catalog states', () => {
       pluginCatalog: catalogStates(SHIPPED, { pluginCatalog: stored }),
       bundles: [{ id: 'office-agents', patch: officePatch(true), present: true }],
     };
-  }
-
-  function navigationConfig(input: ManagedConfigInput): unknown {
-    const inserted = rows(input).flatMap((row: unknown): unknown[] =>
-      typeof row === 'object' && row !== null && 'insert' in row && Array.isArray(row.insert)
-        ? row.insert
-        : [],
-    );
-    const navigation = inserted.filter(hasId('platform-nav'));
-    expect(navigation).toHaveLength(1);
-    const [row] = navigation;
-    ok(typeof row === 'object' && row !== null && 'config' in row);
-    return row.config;
   }
 
   const REQUIRED_STATES = {
@@ -523,8 +555,8 @@ describe('generateManagedConfig knowledge-base platform address', () => {
       const network = knowledge(state, present, 8080);
       const loopback = knowledge(state, present, null);
 
-      expect(catalogSegment(network)).toEqual([...enableRows, PLATFORM_ROW]);
-      expect(catalogSegment(loopback)).toEqual(enableRows);
+      expect(catalogSegment(network)).toEqual([...enableRows, ONLYOFFICE_OFF, PLATFORM_ROW]);
+      expect(catalogSegment(loopback)).toEqual([...enableRows, ONLYOFFICE_OFF]);
       expect(
         rows(loopback).filter((row) => rowId(row) === 'knowledge-base' && hasConfig(row)),
       ).toEqual([]);
@@ -563,6 +595,7 @@ describe('generateManagedConfig knowledge-base platform address', () => {
       'agent-default-model',
       'preset-standard',
       'insert',
+      'dsh-sidebar-onlyoffice',
       'knowledge-base',
       'plugin-manager',
       'ui-plugin-manager',
@@ -618,5 +651,202 @@ describe('generateManagedConfig knowledge-base platform address', () => {
         new TypeError('Managed overlay platform port must be null or an integer 1..65535'),
       );
     }
+  });
+});
+
+describe('generateManagedConfig ONLYOFFICE availability', () => {
+  const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+  // The released 0.2.0 package's canonical patch: one config-free insert row.
+  const ONLYOFFICE_PATCH = [{ insert: [{ id: ONLYOFFICE, name: ONLYOFFICE, config: {} }] }];
+  // An obvious test constant: it may appear in assertions, never in an error message.
+  const JWT = 'unit-test-not-a-jwt-secret';
+  const OFFICE = {
+    documentServerUrl: 'http://172.30.0.4',
+    jwtSecret: JWT,
+    publicBaseUrl: 'https://team.example:8443',
+  };
+  const CONFIG_ROW = {
+    id: ONLYOFFICE,
+    config: {
+      documentServerUrl: 'http://172.30.0.4',
+      jwtSecret: JWT,
+      internalBaseUrl: 'http://172.30.0.2:3080',
+      publicBaseUrl: 'https://team.example:8443',
+    },
+  };
+  const KNOWLEDGE_PATCH = [
+    { insert: [{ id: 'knowledge-base', name: '/opt/dsh-team/knowledge-base/index.js' }] },
+  ];
+  const PLATFORM_ROW = { id: 'knowledge-base', config: { platformUrl: 'http://172.30.0.3:8080' } };
+  const MESSAGE = 'Managed overlay Office config must be null or complete';
+
+  function onlyoffice(
+    state: CatalogEntryState['state'],
+    present: boolean,
+    office: ManagedConfigInput['office'],
+  ): ManagedConfigInput {
+    return {
+      ...BASE,
+      office,
+      pluginCatalog: [REQUIRED, entry(ONLYOFFICE, 'manageable', state)],
+      bundles: [{ id: ONLYOFFICE, patch: ONLYOFFICE_PATCH, present }],
+    };
+  }
+
+  const withoutOffice = (all: readonly unknown[]) => all.filter((row) => !hasId(ONLYOFFICE)(row));
+
+  it.each([
+    ['unavailable', 'employee', true, null, [ONLYOFFICE_OFF]],
+    ['unavailable', 'employee', false, null, [ONLYOFFICE_OFF]],
+    ['unavailable', 'forced-on', true, null, [ONLYOFFICE_OFF]],
+    ['unavailable', 'forced-on', false, null, [ONLYOFFICE_OFF]],
+    ['unavailable', 'forced-off', true, null, [ONLYOFFICE_OFF]],
+    ['unavailable', 'forced-off', false, null, [ONLYOFFICE_OFF]],
+    ['available', 'employee', true, OFFICE, [CONFIG_ROW]],
+    ['available', 'employee', false, OFFICE, [CONFIG_ROW]],
+    ['available', 'forced-on', true, OFFICE, [{ id: ONLYOFFICE, disabled: false }, CONFIG_ROW]],
+    ['available', 'forced-on', false, OFFICE, [...ONLYOFFICE_PATCH, CONFIG_ROW]],
+    ['available', 'forced-off', true, OFFICE, [ONLYOFFICE_OFF, CONFIG_ROW]],
+    ['available', 'forced-off', false, OFFICE, [ONLYOFFICE_OFF, CONFIG_ROW]],
+  ] as const)(
+    'with %s Office writes the %s catalog rows (present=%s) followed by the ONLYOFFICE row',
+    (_label, state, present, office, expected) => {
+      const input = onlyoffice(state, present, office);
+
+      const all = rows(input);
+
+      expect(catalogSegment(input)).toEqual(expected);
+      expect(all.filter(hasId(ONLYOFFICE))).toEqual(expected.filter(hasId(ONLYOFFICE)));
+      expect(navigationConfig(input)).toEqual({
+        admin: false,
+        pluginCatalog: {
+          ...(state === 'employee' ? {} : { [`@dsh-team/${ONLYOFFICE}`]: state }),
+          '@dsh-team/platform-nav': 'forced-on',
+        },
+      });
+    },
+  );
+
+  it.each(['employee', 'forced-on', 'forced-off'] as const)(
+    'changes no other managed row between unavailable and available Office in state %s',
+    (state) => {
+      const unavailable = rows(onlyoffice(state, true, null));
+      const available = rows(onlyoffice(state, true, OFFICE));
+
+      expect(withoutOffice(available)).toEqual(withoutOffice(unavailable));
+    },
+  );
+
+  it.each([
+    [
+      'unavailable',
+      null,
+      [{ id: 'knowledge-base', disabled: false }, ONLYOFFICE_OFF, PLATFORM_ROW],
+    ],
+    [
+      'available',
+      OFFICE,
+      [
+        { id: ONLYOFFICE, disabled: false },
+        { id: 'knowledge-base', disabled: false },
+        CONFIG_ROW,
+        PLATFORM_ROW,
+      ],
+    ],
+  ] as const)(
+    'with %s Office writes the ONLYOFFICE row after every catalog row and before the platform address',
+    (_label, office, expected) => {
+      const input: ManagedConfigInput = {
+        ...onlyoffice('forced-on', true, office),
+        platformPort: 8080,
+        pluginCatalog: [
+          REQUIRED,
+          entry(ONLYOFFICE, 'manageable', 'forced-on'),
+          entry('knowledge-base', 'manageable', 'forced-on'),
+        ],
+        bundles: [
+          { id: ONLYOFFICE, patch: ONLYOFFICE_PATCH, present: true },
+          { id: 'knowledge-base', patch: KNOWLEDGE_PATCH, present: true },
+        ],
+      };
+
+      expect(catalogSegment(input)).toEqual(expected);
+    },
+  );
+
+  it('derives the internal address from the instance address', () => {
+    const all = rows({ ...BASE, instanceAddress: '10.1.2.34', office: OFFICE });
+
+    expect(all.filter(hasId(ONLYOFFICE))).toEqual([
+      {
+        id: ONLYOFFICE,
+        config: { ...CONFIG_ROW.config, internalBaseUrl: 'http://10.1.2.34:3080' },
+      },
+    ]);
+  });
+
+  it('writes the configuration row without a catalog entry for ONLYOFFICE', () => {
+    expect(rows({ ...BASE, office: OFFICE }).filter(hasId(ONLYOFFICE))).toEqual([CONFIG_ROW]);
+  });
+
+  it('writes only the four configuration keys of a caller that carries more', () => {
+    // An untyped caller adding fields: the declared type has no such fields to carry.
+    const office = { ...OFFICE, proxy: 'http://legacy.invalid' } as ManagedConfigInput['office'];
+
+    expect(rows({ ...BASE, office }).filter(hasId(ONLYOFFICE))).toEqual([CONFIG_ROW]);
+  });
+
+  it.each(['forced-on', 'forced-off'] as const)(
+    'still rejects a %s ONLYOFFICE entry without a canonical patch when Office is unavailable',
+    (state) => {
+      const input = onlyoffice(state, false, null);
+
+      expect(() =>
+        generateManagedConfig({
+          ...input,
+          bundles: [{ id: ONLYOFFICE, patch: [], present: false }],
+        }),
+      ).toThrow(TypeError);
+      expect(() => generateManagedConfig({ ...input, bundles: [] })).toThrow(TypeError);
+    },
+  );
+
+  it.each([
+    ['an undefined value', undefined],
+    ['an empty object', {}],
+    ['an empty Document Server address', { ...OFFICE, documentServerUrl: '' }],
+    ['an empty JWT', { ...OFFICE, jwtSecret: '' }],
+    ['an empty public address', { ...OFFICE, publicBaseUrl: '' }],
+    ['a missing JWT', { documentServerUrl: OFFICE.documentServerUrl, publicBaseUrl: 'x' }],
+    ['a non-string address', { ...OFFICE, documentServerUrl: 4 }],
+    ['a string', JWT],
+  ])(
+    'rejects %s as the Office config even when model settings are incomplete',
+    (_label, office) => {
+      // Untyped fixture callers: the declared type admits neither these values nor the omission.
+      const malformed = { ...BASE, office } as unknown as ManagedConfigInput;
+      const unconfigured = { ...malformed, modelSettings: { ...BASE.modelSettings, baseURL: '' } };
+      const missing: Record<string, unknown> = { ...BASE };
+      delete missing.office;
+
+      for (const input of [malformed, unconfigured, missing as unknown as ManagedConfigInput]) {
+        expect(() => generateManagedConfig(input)).toThrow(new TypeError(MESSAGE));
+      }
+    },
+  );
+
+  it('names no Office value in its rejection', () => {
+    let message = '';
+
+    try {
+      generateManagedConfig({ ...BASE, office: { ...OFFICE, publicBaseUrl: '' } });
+    } catch (error) {
+      ok(error instanceof TypeError);
+      message = error.message;
+    }
+
+    expect(message).toBe(MESSAGE);
+    expect(message).not.toContain(JWT);
+    expect(message).not.toContain(OFFICE.documentServerUrl);
   });
 });

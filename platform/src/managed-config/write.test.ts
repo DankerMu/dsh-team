@@ -46,6 +46,7 @@ const INPUT: ManagedConfigInput = {
   pluginCatalog: [],
   bundles: [],
   platformPort: null,
+  office: null,
 };
 
 const OTHER_INPUT: ManagedConfigInput = {
