@@ -3627,7 +3627,7 @@ selected：
   - 列出目录项的既有测试按 7 项更新，不放宽断言：`platform/test/admin-plugins.ui.test.ts:108`、`platform/test/first-use.docker.test.ts:272-278`（bundle 顺序在 better-sidebar 之后、knowledge-base 之前）、`platform/test/managed-boot-roster.ts:80`（本包的客户端半区进入 roster）；实现时再 grep 一遍，有遗漏一并改。
 - **单元测试（同目录 `images/dsh-user/patch-package.test.mjs`，unit 项目，覆盖率每文件 80%）**：
   - 不下载、不入库发行包。拒绝用例和成功路径都用合成树：合成源文件带替换表的锚点，测试传入自己算出的输入和输出哈希，走完通用函数。
-  - `onlyoffice` 钉住值本身（真实输入、输出哈希）只由镜像构建和 Docker 用例证明。单元测试另外断言：它的替换表正好五项，且每项原文互不相同。
+  - `onlyoffice` 钉住值本身（真实输入、输出哈希）只由镜像构建和 Docker 用例证明。单元测试另外断言：它的替换表正好九项（五项密钥和 key、四项宿主服务映射），且每项原文互不相同。
   - 用例：
     - 成功：目标被替换、哈希等于期望、mode 不变、没有临时文件残留；
     - 版本不符；

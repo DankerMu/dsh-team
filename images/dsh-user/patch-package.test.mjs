@@ -234,9 +234,14 @@ it('applies the onlyoffice table when each original occurs exactly once', () => 
   expect(text).toContain('createHmac("sha256", FILE_TOKEN_SECRET)');
   expect(text).not.toContain('"dsh-sidebar-onlyoffice/file-token/v1"');
   expect(text).not.toContain('createHash("sha256").update(`${host}');
+  // DSH 0.2.1-rc.2 host service: every injected and read webRuntime becomes webStartup.
+  expect(text).not.toContain('webRuntime');
+  expect(text).toContain('\t"webStartup"\n];');
+  expect(text).toContain('const runtime = () => ctx.webStartup;');
+  expect(text.split('isTrustedApiRequest(req, plugin.webStartup.trustedHosts)')).toHaveLength(3);
 });
 
-it('pins exactly five distinct onlyoffice replacements for the released lib/index.js', () => {
+it('pins exactly nine distinct onlyoffice replacements for the released lib/index.js', () => {
   const pin = PINS.onlyoffice;
 
   const originals = pin.replacements.map(([original]) => original);
@@ -249,8 +254,8 @@ it('pins exactly five distinct onlyoffice replacements for the released lib/inde
     inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
   });
   expect(pin.outputSha256).toMatch(/^[0-9a-f]{64}$/);
-  expect(originals).toHaveLength(5);
-  expect(new Set(originals).size).toBe(5);
+  expect(originals).toHaveLength(9);
+  expect(new Set(originals).size).toBe(9);
 });
 
 function runMain(argv, pins) {

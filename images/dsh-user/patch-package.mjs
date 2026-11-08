@@ -27,12 +27,20 @@ const MINT_SIGNATURE = 'function mintFileToken(claims, secret) {\n';
 const VERIFY_SIGNATURE =
   'function verifyFileToken(token, secret, now = Math.floor(Date.now() / 1e3)) {\n';
 const WATCH_SIGNATURE = 'async function signatureOf(host, path) {\n';
+const INJECT_HEAD = 'const inject = [\n\t"webServer",\n\t"sessions",\n\t';
+/** The route's trust fence, anchored by its unique route path (the fence line itself repeats). */
+const fence = (route, opening, service) =>
+  `\t\t\tpath: "/sidebar/onlyoffice/${route}",\n\t\t\thandler: async (req, res) => {\n${opening}` +
+  `\t\t\t\ttry {\n\t\t\t\t\tif (!isTrustedApiRequest(req, plugin.${service}.trustedHosts)) {`;
+const WATCH_OPENING = '\t\t\t\tlet streaming = false;\n';
 
 /** Pinned values per package; each replacement's original text must occur exactly once. */
 export const PINS = {
   // dsh-sidebar-onlyoffice@0.2.0: the file-token secret and the document key derive from the
   // per-instance DSH_TEAM_ONLYOFFICE_FILE_SECRET instead of a public constant; without it nothing
   // is minted, verified, registered or derived, and the watch hub treats the file as absent.
+  // DSH 0.2.1-rc.2 provides webStartup (with trustedHosts) instead of webRuntime, so the injected
+  // service and its three trustedHosts reads are remapped; comments naming webRuntime stay.
   onlyoffice: {
     package: 'dsh-sidebar-onlyoffice',
     directory: 'dsh-sidebar-onlyoffice',
@@ -40,7 +48,7 @@ export const PINS = {
     target: 'lib/index.js',
     // SHA-256 of the published lib/index.js (npm tarball) and of the reviewed patched result.
     inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
-    outputSha256: 'd7755d3baa54d4f4865a10ef5e88b63bd18c6484d764246a38f1469f9020f4c7',
+    outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
     replacements: [
       [
         'const FILE_TOKEN_SECRET = "dsh-sidebar-onlyoffice/file-token/v1";',
@@ -57,6 +65,10 @@ export const PINS = {
         `${VERIFY_SIGNATURE}\tif (secret === "") return {\n\t\tok: false,\n\t\treason: "bad-signature"\n\t};\n`,
       ],
       [WATCH_SIGNATURE, `${WATCH_SIGNATURE}\tif (FILE_TOKEN_SECRET === "") return null;\n`],
+      [`${INJECT_HEAD}"webRuntime"\n];`, `${INJECT_HEAD}"webStartup"\n];`],
+      ['const runtime = () => ctx.webRuntime;', 'const runtime = () => ctx.webStartup;'],
+      [fence('config', '', 'webRuntime'), fence('config', '', 'webStartup')],
+      [fence('watch', WATCH_OPENING, 'webRuntime'), fence('watch', WATCH_OPENING, 'webStartup')],
     ],
   },
 };

@@ -11,6 +11,8 @@ import type { WebContainer, WebNetwork } from './web-startup-fixture.ts';
 const SECRET_ENV = 'DSH_TEAM_ONLYOFFICE_FILE_SECRET';
 // dsh-app-boot 0.2.1 installFailLoud labels: an unhandled rejection or exception ends dsh web.
 const FATAL_MARKERS = ['fatal load failure', 'fatal uncaught exception'];
+// A pending plugin (e.g. an injected host service DSH no longer provides) never registers routes.
+const ACTIVATION_MARKERS = ['did not activate', 'waiting for service'];
 
 type Phase = 'absent' | 'present';
 
@@ -160,6 +162,20 @@ function docker(lifecycle: UserImageLifecycle, args: string[]) {
   return result;
 }
 
+/** DSH output so far holds none of `markers`; logs are judged in memory, only the marker leaves. */
+function rejectMarkers(
+  lifecycle: UserImageLifecycle,
+  container: string,
+  phase: Phase,
+  markers: string[],
+) {
+  const logs = docker(lifecycle, ['logs', container]);
+  for (const marker of markers)
+    if (logs.stdout.includes(marker) || logs.stderr.includes(marker))
+      throw new Error(`ONLYOFFICE ${phase}-secret start logged ${marker}`);
+  return logs;
+}
+
 /** Plugin-relevant log lines only; launch tokens and the secret never leave this scope. */
 function diagnosticLines(lifecycle: UserImageLifecycle, container: string, secret: string) {
   const logs = lifecycle.command(['logs', '--tail', '200', container], 30_000);
@@ -198,8 +214,9 @@ function webContainer(
   };
 }
 
-/** One start: the probe, a second liveness read, then fatal and plugin-failure markers; any
- * failure carries the container state and its redacted plugin log lines. */
+/** One start: activation markers, the probe, a second liveness read, then activation, fatal and
+ * plugin-failure markers; any failure carries the container state and its redacted plugin log
+ * lines. */
 async function probeStart(
   lifecycle: UserImageLifecycle,
   expected: WebContainer,
@@ -208,6 +225,7 @@ async function probeStart(
 ): Promise<Record<string, unknown>> {
   try {
     await runWebStartup(lifecycle.command, expected);
+    rejectMarkers(lifecycle, expected.container, phase, ACTIVATION_MARKERS);
     const observed = record(
       JSON.parse(
         execWebScript(
@@ -234,10 +252,10 @@ async function probeStart(
     );
     if (!isDeepStrictEqual(JSON.parse(later), MISSING_TOKEN))
       throw new Error(`ONLYOFFICE ${phase}-secret liveness differs: ${later}`);
-    const logs = docker(lifecycle, ['logs', expected.container]);
-    for (const marker of FATAL_MARKERS)
-      if (logs.stdout.includes(marker) || logs.stderr.includes(marker))
-        throw new Error(`ONLYOFFICE ${phase}-secret start logged ${marker}`);
+    const logs = rejectMarkers(lifecycle, expected.container, phase, [
+      ...ACTIVATION_MARKERS,
+      ...FATAL_MARKERS,
+    ]);
     rejectPluginFailures(logs, `ONLYOFFICE ${phase}-secret start plugin load failed`);
     return observed;
   } catch (error) {

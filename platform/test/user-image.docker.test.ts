@@ -420,7 +420,7 @@ process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.n
 // dsh-sidebar-onlyoffice@0.2.0: the reviewed build-time patch of lib/index.js (published
 // e2148f01…b29b) and the unpatched published lib/client.js.
 const ONLYOFFICE_PATCHED_INDEX_SHA256 =
-  'd7755d3baa54d4f4865a10ef5e88b63bd18c6484d764246a38f1469f9020f4c7';
+  '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef';
 const ONLYOFFICE_RELEASED_CLIENT_SHA256 =
   '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc';
 
