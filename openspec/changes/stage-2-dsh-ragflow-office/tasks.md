@@ -4216,6 +4216,102 @@ Evidence (32.1):
 - 401 之后仍是 401：cookie 失效。停下来，在本节追加实测记录，改走 #495 的备选方案。备选方案是保留换取，注释写明实测原因，cookie 截取改为复用生产导出。不得为了转绿重新加回 `UPDATE dsh_cookie`。这时 `before.row.dsh_cookie` 的期望用 `rowCookie` 的值，`survivor.cookie` 用换来的值，两者分开。
 - 启动行超时或连接失败：属于就绪问题，不触发备选方案，按普通失败诊断。
 
+## 33. #435：覆盖层下发 ONLYOFFICE 配置（18.2 覆盖层部分）
+
+依赖：#434（18.1）、#426（16.3）、#407（11.4），均已合入。由 #435 承载。用户决定（2026-11-07）：允许小改 `platform/src/orchestrator/start.ts`，把「本次启动 Office 是否可用」传给生成器。后台目录页显示原因属于 #436，不在本节。
+
+- [ ] 33.1 生成器按本次启动的 Office 可用性写 ONLYOFFICE 行；编排器从 16.3 的 Document Server 决定推导可用性并传入。验证：
+  - 生成器单元测试覆盖 Office 可用与不可用，各自在三种目录状态下的输出；
+  - 推导函数单元测试覆盖自带已接入、外部、自带未配置、本次未接入（absent、identity-mismatch）、published-loopback（自带和外部各一例）；
+  - VPS 上 Document Server 的 Docker 用例断言真实覆盖层的 Office 行。
+
+Suggested fixture level: expanded - 新的共享对端配置和跨用户隔离边界（JWT 进入每个实例的覆盖层）
+Minimal mergeable slice: atomic: 一条生成器输入、一个推导函数、`start.ts` 一处接线，以及随之必须同步的测试、boot roster 和文档；目录页原因显示在 #436。新增的必填输入要求每个直接构造 `ManagedConfigInput` 和启动 `config` 字面量的测试同步，diff 会超过 400 行，PR 带 `diff-limit-exempt` 标签，理由写进描述：同步是类型检查强制的机械改动，拆开就会有一个 PR 无法通过类型检查。
+Risk packs (33.1): selected - Config（新的必填生成器输入 `office`；published-loopback 与外部同时出现时以 published-loopback 为准）、Auth（Document Server JWT 写进覆盖层；不得出现在日志、错误信息、测试输出里）、Legacy compatibility（Office 不可用时每个实例都多一行 ONLYOFFICE 停用；boot roster 随之变化；其他受管行不变）、Documentation（`managed-config/README.md`、`orchestrator/README.md`）；not selected - Schema（无迁移、无接口变化，`schemas/openapi.json` 不变）、Public API、Concurrency、File IO（覆盖层写入路径不变）、Resource limits、Release。触及关键路径 `platform/src/orchestrator/`：PR 描述写明人工逐行审查推迟到 Epic #380 完成时进行，现在没有通过。 用户授权的「小改 `start.ts`」按同一意图包括 `orchestrator/document-server.ts`（新增纯函数 `officeOverlay`）和 `start-identity.ts`（Pick 加 `publicUrl`）。issue 验收里关于 `images/dsh-user/` 的勾选不适用：本节不碰镜像。
+
+Evidence (33.1):
+
+现状（main `edf40d4`）：
+
+- 生成器 `generateManagedConfig`（`managed-config/generate.ts:278`）没有任何 Office 输入。ONLYOFFICE（目录 id `dsh-sidebar-onlyoffice`，`images/dsh-user/catalog.json:11-15`，manageable，镜像默认开）只按三态处理：`employee` 不写，`forced-on` 写启用或整段 patch，`forced-off` 写停用。
+- 0.2.0 包的规范 patch 插入 `{ id: dsh-sidebar-onlyoffice, name: dsh-sidebar-onlyoffice, config: {} }`。配置 schema（`src/config.ts:47-56`）接受 `jwtSecret`、`documentServerUrl`、`internalBaseUrl`、`publicBaseUrl` 等键，都可省略，默认 `''`。
+- 16.3 的决定 `DocumentServerDecision { mode, containerId, reason }`（`orchestrator/document-server.ts:10-14`）在 `start.ts:669-674` 网络分配和覆盖层之前算出，但没有传给 `managedOverlay`（`start.ts:506-520`）。
+- `documentServerDecision` 有两点要注意：
+  - 外部模式不看 `upstreamMode`，直接返回 `external`；
+  - published-loopback 下自带模式返回 `{ mode: 'bundled', containerId: null, reason: null }`。
+- `StartUserContainerInput.config`（`start-identity.ts:27-36`）只 Pick 了 `authority`，没有 `publicUrl`。`config.publicUrl` 是 `PLATFORM_PUBLIC_URL` 的 origin（`config.ts:248`）。
+
+规则（spec `managed-config` 「Office 插件配置经覆盖层下发」，design `:109`、`:253-257`、`:350`）：
+
+- Office 可用有两种情况，其他一律不可用：
+  - `upstreamMode === 'network'`，自带模式，且决定的 `containerId !== null`（本次已核验，将以 +4 接入）。
+  - `upstreamMode === 'network'`，外部模式，且地址和 JWT 都非空。
+- 不可用时（自带未配置、absent、identity-mismatch、published-loopback；外部模式在 published-loopback 下也算），覆盖层：
+  - 不写任何 Office 配置；
+  - 不论目录状态，ONLYOFFICE 都写为停用。
+- 可用时：
+  - ONLYOFFICE 的启用服从三态；
+  - 三种状态下都写同一个配置行。
+
+改动：
+
+- `managed-config/generate.ts`：
+  - `ManagedConfigInput` 增加必填 `office: ManagedOffice | null`，其中 `ManagedOffice = { documentServerUrl: string; jwtSecret: string; publicBaseUrl: string }`，经 `managed-config/index.ts` 导出类型。
+  - 校验紧挨 `platformPort` 的校验，放在 `unconfigured` 提前返回之前：未定义或不完整（任一字段不是非空字符串）抛 `TypeError('Managed overlay Office config must be null or complete')`。错误信息不含任何值。
+  - 不检查目录里有没有这一项，与知识库行的先例相同：目标缺席只产生警告。
+  - `office === null` 时：
+    - `catalogRows` 跳过 id 为 `dsh-sidebar-onlyoffice` 的项，不写启用行，也不插入整段 patch，所以不会出现两行冲突的 `disabled`；
+    - 跳过之前仍对强制态调用 `forcedBundle` 做「规范 patch 非空」的校验。这样同一份设置能否启动，与 Document Server 是否可用无关。
+    - 在目录行之后、`knowledgeBaseRows` 旁写一行 `{ id: 'dsh-sidebar-onlyoffice', disabled: true }`；
+    - `platform-nav` 的 `pluginCatalog`（`forcedPackageStates`）不变。规格没有要求员工插件页显示锁定，这一点作为残留风险记录。
+  - `office !== null` 时：
+    - 目录行照常；
+    - 在同一位置写 `{ id: 'dsh-sidebar-onlyoffice', config: { documentServerUrl, jwtSecret, internalBaseUrl: 'http://<instanceAddress>:3080', publicBaseUrl } }`，三种状态相同。
+    - 只写这四个键（行的 config 是整块替换，其余键取插件默认值）；不写旧键（`proxy`、`proxyUpstream` 等）。
+- `orchestrator/document-server.ts`：新增纯函数 `officeOverlay(decision, settings, configured, upstreamMode, documentServerAddress, publicUrl): ManagedOffice | null`，按上面的规则推导。
+  - 自带模式：`documentServerUrl` 为 `http://<+4>`，`jwtSecret` 为 `configured.jwtSecret`。
+  - 外部模式：
+    - `documentServerUrl` 为 `settings.documentServerUrl` 去掉末尾所有 `/`，与 `ragflow-proxy/client.ts:118-121` 的做法相同；
+    - `jwtSecret` 为 `settings.documentServerJwtSecret`，为空串时返回 `null`。
+  - `publicBaseUrl` 为 `publicUrl`。
+- `orchestrator/start.ts`：`managedOverlay` 多收 `documentServer` 决定和 `settings`，用 `instanceAddressLayout(network.subnet).documentServer` 和 `input.config.publicUrl` 调用 `officeOverlay`，再传给生成器（`composed` 的 `Omit` 加上 `'office'`）。其他启动步骤不变。
+- `start-identity.ts`：`config` 的 Pick 加入 `'publicUrl'`。
+  - 生产调用方传完整 `PlatformConfig`，不受影响。
+  - 测试和夹具里的字面量补上 `publicUrl`，以类型检查通过为准。
+- 同步：
+  - 所有直接构造 `ManagedConfigInput` 的测试和夹具补上 `office`。已知的有 `generate.test.ts`、`generate-catalog.test.ts`、`write.test.ts`、`managed-policy-fixture.ts`、`credential-priority-fixture.ts`、`model-refusal-fixture.ts`、`office-delegation.docker.test.ts`、`permission-tiers.docker.test.ts`。
+    - `managed-policy-fixture.ts:99-101` 的 `migrationOverlayInput` 加 `office: null`（它本就是 published-loopback 语义）。展开它的调用方因此一处全覆盖：`managed-policy-fixture.ts:360`、`model-refusal-fixture.ts:121`、`credential-priority-fixture.ts:72`、`office-delegation.docker.test.ts:57,172`、`permission-tiers.docker.test.ts:97`，以及不做类型检查的 `permission-browser-fixture.mjs:617-618`（`checkJs: false`，类型检查抓不到，必须靠这一处）。
+    - 原本断言「没有 Office 配置」的，传 `null`；
+    - 所有传 `office: null`、又用 `toEqual` 断言整份行列表的用例，都补上停用行，与目录内容无关（例如 `generate.test.ts` 以 `agent-loop` 结尾的全量断言）。
+  - `start.test.ts`：现有断言（`:177-196`、`:244-283` 用 `toContainEqual`；`:255-262` 的 `platform-nav` 三个必启项 `forced-on`）不变。
+  - `platform/test/managed-boot-roster.ts`：使用它的 Docker 用例（`first-use`、`admin-config-activation`、`managed-policy-fixture`、`model-refusal-fixture`）都没有 Document Server，ONLYOFFICE 现在会停用。
+    - 依据：0.2.1 的 `dsh-client-modules/lib/index.js:855` 在组装 client 表时跳过 `entry.disabled` 的条目。
+    - 所以从名单删去 `dsh-sidebar-onlyoffice`，注释改为说明它只在 Office 可用时出现。
+  - `first-use.docker.test.ts:263-278` 断言的是 profile 的 `bundles` 成员，覆盖层不改它，不动。
+  - `office-delegation.docker.test.ts` 测的是 Agent 经 office-agents 写 DOCX，不依赖 ONLYOFFICE，传 `office: null`。
+  - `container-document-server.docker.test.ts`：
+    - absent 和 identity-mismatch 两例（`:203`）改为断言覆盖层里没有 `documentServerUrl`、`jwtSecret`、`internalBaseUrl`、`publicBaseUrl` 这些键，并且恰有一行 `{ id: 'dsh-sidebar-onlyoffice', disabled: true }`。
+    - 已接入的一例（`:107` 起）新增断言：覆盖层里恰有一行 ONLYOFFICE 配置行，其 `documentServerUrl` 为该实例子网的 `http://<+4>`，`internalBaseUrl` 为 `http://<+2>:3080`，`publicBaseUrl` 为夹具的 `publicUrl`；`jwtSecret` 与夹具配置的测试值在内存中相等，不打印。
+
+先红后绿：
+
+- `generate-catalog.test.ts` 新增一个 describe，按 `office`（null / 完整）×三态 ×（规范 patch 在场 / 缺席）参数化，精确断言 ONLYOFFICE 相关行、位置和 `platform-nav` 的 `pluginCatalog`。先在旧代码上写出来：类型和行断言会失败，再改实现转绿。
+  - 另有用例覆盖：`office` 未定义、字段为空串时抛 `TypeError`，且错误信息不含 JWT 值；目录缺 ONLYOFFICE 项而 `office` 非空时照常写配置行、不抛（与知识库先例相同）。
+- `document-server.test.ts` 为 `officeOverlay` 增加表格用例：
+  - 自带已接入；
+  - 自带 absent、identity-mismatch；
+  - 自带未配置；
+  - 自带 published-loopback；
+  - 外部 network；
+  - 外部 published-loopback；
+  - 外部地址带一个和多个末尾 `/`；
+  - 外部 JWT 为空串。
+- 启动层接线：`document-server.test.ts` 现有经 `startUserContainer` 的用例（`:107-133` external、unconfigured、published-loopback；`:135` absent；`:152` identity-mismatch）每例加一条对写出覆盖层的断言：
+  - external：恰有一行配置行，地址为 `http://office.example`，JWT 等于夹具值；
+  - 其余：恰有一行 `{ id: 'dsh-sidebar-onlyoffice', disabled: true }`，且没有任何 Office 配置键。
+  - 另加一例：自带已接入时配置行的地址是 `http://<+4>`。
+  - 先在旧代码上写出来，确认失败。
+
 验证：
 
 - `pnpm check`。
@@ -4601,3 +4697,25 @@ Must preserve：
 - 无 cookie 401 的断言；
 - 所有自有资源的登记与清理；
 - 令牌和 cookie 永不进入输出。
+
+- VPS exact-head lane：custody `test:docker` 全量和 `test:deploy`，cleanup confirmed。boot roster 的变化以这次观测为准。
+- 本机 exact-head `pnpm test:stack`：本机栈带自带 Document Server，ONLYOFFICE 第一次以可用状态启动；原有用例必须仍然通过。
+- `pnpm test:model` 也用 `MANAGED_BOOT_ROSTER`，按规则需要按 SHA 单独授权，本 PR 不跑；PR 描述写明这一点。
+
+Must preserve：
+
+- 16.3 的接入、记录、退役、对账，以及 `documentServerDecision` 的语义；
+- 覆盖层写在网络分配之后、容器创建之前；
+- 其他受管行（模型、权限、知识库、插件源、联网工具、凭据隔离）逐字不变；
+- JWT 不进日志、错误和测试输出。`generate.ts`、`write.ts`、`start.ts` 都不记录覆盖层内容（grep 不到 logger 调用）。唯一带真实 JWT 的覆盖层是 Document Server 的 Docker 用例，只在内存里比较；不新增需要脱敏的日志字段；
+- `DSH_TEAM_ONLYOFFICE_FILE_SECRET` 只在容器环境里，覆盖层不写它。
+
+残留风险：
+
+- 插件的 `migrateLegacyConfig`（`src/config.ts:82-87`）把不含 `/onlyoffice` 的非空 `documentServerUrl` 当成旧键处理，所以每次 Office 可用的启动都会打一条 `legacy config keys ignored — documentServerUrl` 警告。值会映射回它自己，功能上无害，也不命中 `plugin-failure-markers.ts` 的失败标记。
+- DSH 设置服务的 `describe()`（`dsh-settings/lib/index.js:430-457`）会把 `jwtSecret` 原样返回给员工浏览器，因为插件 schema 没有把它标成密钥。这和 design :30「覆盖层 0444、实例内可读」是同一条边界，JWT 本来就对实例内可见。
+- `readiness-logs.ts:13` 的脱敏规则不匹配 `secret`/`jwt`。目前没有发现 DSH 打印插件配置值的路径。
+
+- 外部 Document Server 的地址按原样保存，平台不探测它。地址写错时，Office 打开失败的提示属于 18.6。
+- 目录状态为 `forced-on`、旧 home 卷的 profile 里又没有该包时，停用行指向缺席的目标，只产生一条警告；这和知识库的先例相同。
+- Office 不可用时，员工插件页上 ONLYOFFICE 的开关仍按目录三态显示，但实际不生效。后台目录页显示原因属于 #436；员工页的锁定显示另行跟进，本节不做。
