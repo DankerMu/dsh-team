@@ -743,12 +743,13 @@ it('builds both images, starts the delivered compose platform, converses through
   }).toEqual({ consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] });
   expect(search.browser.screenshots).toEqual(['search-sources.png']);
   expect(search.facts).toMatchObject({ result: 'ok', datasetNames: [POLICIES], excluded: 1 });
-  // The archive's `<a download>` hand-off leaves no failed request behind, like every other lane.
+  // The archive's `<a download>` leaves no failed request; the file-row download's navigation, by
+  // design, leaves exactly one `net::ERR_ABORTED`.
   expect(archive.browser).toMatchObject({
     screenshots: ['archive-menu.png'],
     consoleErrors: [],
     pageErrors: [],
-    failedRequests: [],
+    failedRequests: [archive.single.request],
     externalRequests: [],
   });
   process.stdout.write(
@@ -787,6 +788,8 @@ it('builds both images, starts the delivered compose platform, converses through
           entries: archive.entries,
           format: `${archive.format}.tar.gz`,
           screenshots: archive.browser.screenshots,
+          // `request` carries the download URL; `undefined` keeps it out of the JSON line.
+          single: { ...archive.single, request: undefined },
         },
       },
     })}\n`,
