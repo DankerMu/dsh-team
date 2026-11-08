@@ -78,4 +78,6 @@ export const MANAGED_BOOT_ROSTER = [
   '@dsh-team/zh-locale',
   // The image-default-enabled sidebar's client half (dsh.client in its released manifest).
   'dsh-better-sidebar',
+  // The image-default-enabled ONLYOFFICE plugin's client half (dsh.client in its released manifest).
+  'dsh-sidebar-onlyoffice',
 ] as const;

@@ -43,6 +43,7 @@ describe('readPluginCatalog', () => {
 
     expect(catalog.entries.map(({ id }) => id)).toEqual([
       'dsh-better-sidebar',
+      'dsh-sidebar-onlyoffice',
       'knowledge-base',
       'office-agents',
       'permission-tiers',

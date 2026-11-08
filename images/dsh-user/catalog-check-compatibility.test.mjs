@@ -69,12 +69,13 @@ function changeReleased(tree, change) {
   write(tree.root, `${PROFILE}/node_modules/dsh-better-sidebar/package.json`, manifest);
 }
 
-it('passes a non-repository plugin the released loader decision accepts, once and with no exemptions', () => {
+it('passes each non-repository plugin the released loader decision accepts, once and with no exemptions', () => {
   const tree = imageTree();
 
   expect(verify(tree)).toEqual({ status: 0, stderr: '' });
   expect(evaluations(tree)).toEqual([
     { name: 'dsh-better-sidebar', exemptions: {}, installed: '0.2.1-rc.2' },
+    { name: 'dsh-sidebar-onlyoffice', exemptions: {}, installed: '0.2.1-rc.2' },
   ]);
 });
 
@@ -84,7 +85,7 @@ it('hands the released loader decision the installed DSH version, not a constant
 
   verify(tree);
 
-  expect(evaluations(tree).map((call) => call.installed)).toEqual(['0.2.9-rc.7']);
+  expect(evaluations(tree).map((call) => call.installed)).toEqual(['0.2.9-rc.7', '0.2.9-rc.7']);
 });
 
 it.each([
@@ -121,7 +122,10 @@ it('keeps the repository rule for @dsh-team plugins without consulting the relea
     stderr:
       'DSH plugin compatibility failed: office-agents engines.dsh=undefined peer=undefined installed=0.2.1-rc.2\n',
   });
-  expect(evaluations(tree).map((call) => call.name)).toEqual(['dsh-better-sidebar']);
+  expect(evaluations(tree).map((call) => call.name)).toEqual([
+    'dsh-better-sidebar',
+    'dsh-sidebar-onlyoffice',
+  ]);
 });
 
 it.each([

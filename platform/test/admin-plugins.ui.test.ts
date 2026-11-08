@@ -105,7 +105,7 @@ test('administrator sees the image catalog and saves each section through the re
     await expect(page.getByText(HINT, { exact: true })).toBeVisible();
     const rows = form(page, '预装插件').locator('tbody tr');
     await expect(rows).toHaveCount(catalog.length);
-    expect(catalog.length).toBe(6);
+    expect(catalog.length).toBe(7);
     for (const [index, item] of catalog.entries()) {
       const cells = rows.nth(index).locator('td');
       await expect(cells.nth(0)).toHaveText(item.name);
@@ -140,6 +140,7 @@ test('administrator sees the image catalog and saves each section through the re
     });
     expect(readSettings(database).pluginCatalog).toEqual({
       'dsh-better-sidebar': 'employee',
+      'dsh-sidebar-onlyoffice': 'employee',
       'knowledge-base': 'employee',
       'office-agents': 'forced-off',
     });

@@ -36,6 +36,7 @@ export const REGISTERED_BUNDLES = [
   '@deepseek-ai/dsh-base',
   '@deepseek-ai/dsh-web-app',
   'dsh-better-sidebar',
+  'dsh-sidebar-onlyoffice',
   '@dsh-team/knowledge-base',
   '@dsh-team/office-agents',
 ];
@@ -67,7 +68,8 @@ export function evaluatePluginCompatibility(manifest, exemptions, installed) {
   return undefined;
 }
 `;
-// The released fields of the one non-repository entry (npm dsh-better-sidebar@0.28.0).
+// The released fields of the non-repository entries (npm dsh-better-sidebar@0.28.0 and
+// dsh-sidebar-onlyoffice@0.2.0).
 export const RELEASED_MANIFESTS = {
   'dsh-better-sidebar': {
     name: 'dsh-better-sidebar',
@@ -77,6 +79,17 @@ export const RELEASED_MANIFESTS = {
       '@deepseek-ai/cordis': '^4.0.5',
       '@deepseek-ai/dsh-agent': '^0.2.1-rc.1',
       react: '^18.2.0',
+    },
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  },
+  'dsh-sidebar-onlyoffice': {
+    name: 'dsh-sidebar-onlyoffice',
+    version: '0.2.0',
+    type: 'module',
+    peerDependencies: {
+      '@deepseek-ai/cordis': '>=4.0.1-rc.1 <5',
+      'dsh-better-sidebar': '>=0.6.0',
+      react: '>=18.2.0',
     },
     dsh: { bundle: { patch: './cordis.patch.yml' } },
   },

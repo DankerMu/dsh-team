@@ -3592,7 +3592,8 @@ Risk packs (18.1): fixture level expanded，关键路径 `images/dsh-user/`。se
 - DSH 0.2.1 的 webserver 不做鉴权，路由各自负责（`dsh-host-webserver/lib/index.js:381-393`）。
   - `file` 路由（`:2074-2118`）只验令牌：缺 token 回 400，令牌无效回 403、正文 `invalid token: <reason>`，文件不存在回 404。
   - config 路由经 `isTrustedApiRequest`（`:142-157`）：Host 为 loopback、没有 Origin 时放行。`sessionId` 可以是任意值，cwd 取查询参数 `cwd`（`sessionCwdOf`，`:1868-1873`）。
-  - 所以容器内经 `http://127.0.0.1:3080` 可以直接请求这三个路由。
+  - 受管覆盖层让 DSH 只监听实例 +2 地址（`dsh-host-webserver` `:468` 用 `config.host` listen），所以容器内用 `node:http` 连 +2 地址，并显式带 `Host: 127.0.0.1:3080`。信任检查只看 Host 和 Origin，这样仍算 loopback、无 Origin。
+  - DSH 0.2.1-rc.2 没有把插件日志写到 stderr 的 exporter（只有 cordis 内存缓冲和启动期日志），所以 `docker logs` 里看不到 `unknown document key`。判据改用注册表文件 `/data/home/plugins/dsh-sidebar-onlyoffice/registry.json` 和回调的实际下载次数。
 - 文件令牌密钥由编排器每次启动注入 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`（64 位十六进制，12.1 已完成，`platform/src/orchestrator/start.ts:425`）。
 - 先例：#375 的 `patch-plugin-manager.mjs`（a7fb25c 删除，见 `git show a7fb25c^:images/dsh-user/patch-plugin-manager.mjs`）。它早于现行门禁：`scripts/check-test-pairing.sh:41` 要求 `images/dsh-user/*.mjs` 有同目录的 `*.test.mjs`；`vitest.config.ts:60-67` 把它们纳入 unit 项目的每文件 80% 覆盖率。入口守卫照 `images/dsh-user/catalog-check.mjs:576-581`（只在作为脚本执行时跑 `main`，被 import 时不跑）。better-sidebar 的安装方式见 `images/dsh-user/Dockerfile:15-37`。
 
@@ -3647,15 +3648,16 @@ selected：
     - K0 = 原公开算法的 key；
     - K1 = `HMAC-SHA256(S, 同一输入串)`。
   - 带 S：
-    1. `GET /sidebar/onlyoffice/config?sessionId=t&path=<F>&cwd=<F 所在目录>`（Host `127.0.0.1:3080`，无 Origin）会注册 key。没有 Document Server 配置，所以回 503 `config-error`。
+    1. `GET /sidebar/onlyoffice/config?sessionId=t&path=<F>&cwd=<F 所在目录>`（连 +2 地址，Host `127.0.0.1:3080`，无 Origin）会注册 key。没有 Document Server 配置，所以回 503 `config-error`。
     2. 用 S 签 `{ key: K1, path: F, cwd, exp: 未来 }` 的令牌请求 `file` 路由，回 200，正文等于 F 的字节。这是正向对照。
     3. 用公开常量签的同一 claims 请求 `file`，回 403，正文以 `invalid token:` 开头。
-    4. 分别以 K0 和 K1 发 `POST /sidebar/onlyoffice/callback`，body 为 `{ key, status: 2, url: "http://127.0.0.1:9/none" }`，两个都回 `{ error: 1 }`。区别在日志：K0 有 `unknown document key "<K0>"`，K1 没有这行（它已注册，失败在下载）。
+    4. 注册表文件里有 K1、没有 K0。
+    5. 分别以 K0 和 K1 发 `POST /sidebar/onlyoffice/callback`，body 为 `{ key, status: 2, url: <容器内测试自有 HTTP 服务的地址> }`。K0 回 `{ error: 1 }`，服务收到 0 次下载，F 不变；K1 回 `{ error: 0 }`，服务收到 1 次下载，F 被写回为服务返回的字节。
   - 不带 S：
     1. 用公开常量签的令牌和用空串签的令牌请求 `file`，都回 403。
-    2. 同样的 config 请求回非 2xx。之后以 K0 回调，日志有 `unknown document key`。
-    3. `GET /sidebar/onlyoffice/watch?sessionId=t&path=<F>&cwd=<F 所在目录>`（loopback，无 Origin）之后，DSH 进程仍在，`file` 路由仍回 400 `missing token`，日志没有未处理的 rejection。
-  - 修改前（未打补丁的发行文件）会变红：K0 被注册，K1 是 unknown，公开常量签的令牌回 200。
+    2. 同样的 config 请求回非 2xx，注册表文件不存在。之后以 K0 回调，回 `{ error: 1 }`，0 次下载。
+    3. `GET /sidebar/onlyoffice/watch?sessionId=t&path=<F>&cwd=<F 所在目录>`（loopback，无 Origin）之后，容器仍在运行，再做两次存活读取，`file` 路由仍回 400 `missing token`，`docker logs` 里没有 `installFailLoud` 的 `fatal load failure` 或 `fatal uncaught exception`。
+  - 修改前（未打补丁的发行文件）会变红：注册表里是 K0 而不是 K1，K0 回调触发下载，公开常量签的令牌回 200。
   - 测试只用自己的随机值。S 不进断言消息、快照或证据文件；证据里只写它的 SHA-256 前缀。
 
 must-preserve：

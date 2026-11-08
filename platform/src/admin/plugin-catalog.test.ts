@@ -51,6 +51,14 @@ const ENTRIES = [
     state: 'employee',
   },
   {
+    id: 'dsh-sidebar-onlyoffice',
+    package: 'dsh-sidebar-onlyoffice',
+    name: 'Office 在线编辑',
+    category: 'manageable',
+    imageDefaultEnabled: true,
+    state: 'employee',
+  },
+  {
     id: 'knowledge-base',
     package: '@dsh-team/knowledge-base',
     name: '知识库',
@@ -101,6 +109,7 @@ const submission = (office: string, extra: { id: string; state: unknown }[] = []
   // Submission order is free; the other manageable entries keep their default.
   { id: 'knowledge-base', state: 'employee' },
   { id: 'dsh-better-sidebar', state: 'employee' },
+  { id: 'dsh-sidebar-onlyoffice', state: 'employee' },
   ...extra,
 ];
 const audits = (database: DatabaseHandle) =>
@@ -144,7 +153,7 @@ it('saves only manageable states with one actor/source audit and a running-insta
     expect(settingsRows(database)).toEqual(
       seededWith({
         pluginCatalog:
-          '{"dsh-better-sidebar":"employee","knowledge-base":"employee","office-agents":"forced-off"}',
+          '{"dsh-better-sidebar":"employee","dsh-sidebar-onlyoffice":"employee","knowledge-base":"employee","office-agents":"forced-off"}',
       }),
     );
     expect(audits(database)).toEqual([
@@ -167,7 +176,7 @@ it('ignores a stored id no longer in the catalog and drops it on the next whole-
     expect(saved.statusCode).toBe(200);
     expect(storedCatalog(database)).toEqual({
       value:
-        '{"dsh-better-sidebar":"employee","knowledge-base":"employee","office-agents":"employee"}',
+        '{"dsh-better-sidebar":"employee","dsh-sidebar-onlyoffice":"employee","knowledge-base":"employee","office-agents":"employee"}',
     });
   });
 });
