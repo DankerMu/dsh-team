@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { parseAddress } from '../auth/index.ts';
 import type { PlatformConfig } from '../config.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { routerPath } from '../request-path.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -54,13 +55,13 @@ export function authenticateInstance(
 }
 
 /**
- * Either the matched route or the query-stripped raw path lies under the proxy prefix. Shared by
- * authentication and request-log redaction so both cover the same requests.
+ * Either the matched route or the router's path of the raw URL lies under the proxy prefix. Shared
+ * by authentication and request-log redaction so both cover the same requests.
  */
 export function underPrefix(request: FastifyRequest): boolean {
   // The router decodes unreserved escapes, so a declared route can match an encoded raw path.
   if (request.routeOptions.url?.startsWith(PREFIX) === true) return true;
-  return request.url.split('?', 1)[0]?.startsWith(PREFIX) === true;
+  return routerPath(request.url)?.startsWith(PREFIX) === true;
 }
 
 /**

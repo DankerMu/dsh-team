@@ -7,6 +7,7 @@ import type {
 } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { requestTarget } from '../request-path.ts';
 import type { GatewayUpstream } from './types.ts';
 
 const HOP_HEADERS = [
@@ -26,11 +27,6 @@ export const BAD_GATEWAY = {
   message: 'Instance unavailable',
 } as const;
 const BAD_GATEWAY_BODY = JSON.stringify(BAD_GATEWAY);
-
-export function requestTarget(url: string): string {
-  const target = url.replace(/^https?:\/\/[^/?#]*/i, '');
-  return target === '' || target.startsWith('?') ? `/${target}` : target;
-}
 
 export function forwardHeaders(
   headers: IncomingHttpHeaders,

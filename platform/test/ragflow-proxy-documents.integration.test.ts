@@ -93,12 +93,28 @@ function withProxy(
   );
 }
 
-/** An authenticated raw HTTP/1.1 request with `target` written verbatim. */
-function rawGet(proxy: Proxy, target: string): Promise<string> {
+/** A raw HTTP/1.1 request with `target` written verbatim, authenticated unless anonymous. */
+function rawGet(
+  proxy: Proxy,
+  target: string,
+  {
+    method = 'GET',
+    anonymous = false,
+  }: { readonly method?: string; readonly anonymous?: boolean } = {},
+): Promise<string> {
+  const authorization = anonymous ? '' : `Authorization: Bearer ${proxy.token}\r\n`;
   return proxy.raw(
-    `GET ${target} HTTP/1.1\r\nHost: h\r\nAuthorization: Bearer ${proxy.token}\r\n` +
-      'Connection: close\r\n\r\n',
+    `${method} ${target} HTTP/1.1\r\nHost: h\r\n${authorization}Connection: close\r\n\r\n`,
   );
+}
+
+/** The URL of every request log line so far, in order. */
+function loggedUrls(proxy: Proxy): unknown[] {
+  // pino writes one JSON object per line.
+  return proxy.lines
+    .map((line) => JSON.parse(line) as Line)
+    .filter(({ msg }) => msg === 'incoming request')
+    .map(({ req }) => req?.url);
 }
 
 it('reads one page once with the key and returns only the total, ids and names', async () => {
@@ -216,6 +232,53 @@ it('keeps keywords out of every log line for plain, encoded and absolute-form ta
     );
     expect(lines.filter(({ msg }) => msg === 'request completed')).toHaveLength(3);
     expect(upstream.requests).toHaveLength(3);
+  });
+});
+
+it('authenticates every router spelling of the prefix and redacts its logged query', async () => {
+  const query = `?keywords=${KEYWORD_MARKER}`;
+  await withProxy(async (proxy) => {
+    const encoded = await proxy.send(`/%5Fplatform/instance-api/ragflow/x${query}`, {
+      token: false,
+    });
+    const decoded = await proxy.send('/_platform/instance-api/ragflo%77/x', { token: false });
+    const absolute = await rawGet(proxy, `http://h/_platform/instance-api/ragflow/x${query}`, {
+      anonymous: true,
+    });
+    const escaped = await proxy.send('/_platform/instance-api/ragflow%2Fversion', { token: false });
+
+    expect(loggedUrls(proxy)).toEqual([
+      '/%5Fplatform/instance-api/ragflow/x?[redacted]',
+      '/_platform/instance-api/ragflo%77/x',
+      'http://h/_platform/instance-api/ragflow/x?[redacted]',
+      '/_platform/instance-api/ragflow%2Fversion',
+    ]);
+    expect(
+      [encoded, decoded].map(({ status, body }) => [status, JSON.parse(body) as unknown]),
+    ).toEqual([
+      [401, UNAUTHORIZED],
+      [401, UNAUTHORIZED],
+    ]);
+    expect(absolute).toMatch(/^HTTP\/1\.1 401 /);
+    expect(JSON.parse(rawBody(absolute))).toEqual(UNAUTHORIZED);
+    expect(escaped.status).toBe(404);
+    expect(upstream.requests).toEqual([]);
+  });
+});
+
+it('redacts the logged query of an absolute-form target no proxy route matches', async () => {
+  const query = `?keywords=${KEYWORD_MARKER}`;
+  await withProxy(async (proxy) => {
+    const head = await rawGet(proxy, `http://h${DOCUMENTS}${query}`, { method: 'HEAD' });
+    const slashed = await rawGet(proxy, `http://h${DOCUMENTS}/${query}`);
+
+    expect(head).toMatch(/^HTTP\/1\.1 404 /);
+    expect(slashed).toMatch(/^HTTP\/1\.1 404 /);
+    expect(loggedUrls(proxy)).toEqual([
+      `http://h${DOCUMENTS}?[redacted]`,
+      `http://h${DOCUMENTS}/?[redacted]`,
+    ]);
+    expect(upstream.requests).toEqual([]);
   });
 });
 
