@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import type { ElementHandle, Page } from '@playwright/test';
+import type { ElementHandle, Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import {
   EXPAND_BUTTON,
@@ -24,6 +24,7 @@ export interface ArchiveEntry {
 type TarFormat = 'gnu' | 'ustar';
 
 const BLOCK = 512;
+const digest = (data: Buffer) => createHash('sha256').update(data).digest('hex');
 const isZero = (bytes: Buffer) => bytes.every((byte) => byte === 0);
 /** A header field up to its first NUL; no UTF-8 sequence holds a zero byte. */
 const field = (block: Buffer, start: number, length: number, encoding: BufferEncoding = 'latin1') =>
@@ -66,8 +67,7 @@ export function parseTarGz(compressed: Buffer): { format: TarFormat; entries: Ar
     const size = octal(block, 124, 12);
     const data = tar.subarray(offset + BLOCK, offset + BLOCK + size);
     if (data.length !== size) throw new Error('Tar member truncated');
-    const sha256 = createHash('sha256').update(data).digest('hex');
-    entries.push({ name: field(block, 0, 100, 'utf8'), size, sha256 });
+    entries.push({ name: field(block, 0, 100, 'utf8'), size, sha256: digest(data) });
     offset += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
   }
   const rest = tar.subarray(offset);
@@ -84,7 +84,8 @@ export const byName = (entries: readonly ArchiveEntry[]) =>
 
 const WORK = '/data/work';
 const TEXT_NAME = '打包甲.txt';
-const NAMES = [TEXT_NAME, 'archive-b.bin'];
+const BINARY = 'archive-b.bin';
+const NAMES = [TEXT_NAME, BINARY];
 const TEXT = '文件区打包下载的第一行。\n第二行：压缩包里应当恰好是这两个文件。\n第三行结束。\n';
 // Python in the instance; names and text arrive as argv, never through a shell. Both files are
 // read back from disk after writing: their sizes and sha256 are the expected values.
@@ -118,7 +119,10 @@ export interface ArchiveEvidence {
   readonly browser: StackBrowserEvidence;
   readonly entries: readonly ArchiveEntry[];
   readonly format: TarFormat;
+  readonly single: ArchiveEntry & SingleDownload;
 }
+/** The file-row download's own response; `request` is asserted, never printed. */
+type SingleDownload = Record<'csp' | 'aborted' | 'request', string> & { disposition: 'attachment' };
 
 /** What an in-page expression yields: the typings, without the DOM lib, never admit null. */
 const element = async (page: Page, expression: string): Promise<ElementHandle | null> =>
@@ -157,6 +161,50 @@ async function downloadArchive(page: Page, shoot: Shoot, saved: string, timeout:
   for (const text of FAILURE_TEXTS) expect(await page.getByText(text).count(), text).toBe(0);
 }
 
+// better-sidebar 0.28.0's 「下载」 (lib/client.js downloadFile): an `<a href>` navigation, no `download`.
+// Called on the Playwright object: its `url` reads `this`, so it is never destructured.
+const fileDownload = (event: { url(): string }) => {
+  const { pathname, searchParams } = new URL(event.url());
+  return pathname === '/sidebar/file' && searchParams.get('download') === '1';
+};
+
+/** Downloads one row from the context menu; its own response carries the gateway's sandbox CSP. */
+async function downloadSingle(page: Page, saved: string, timeout: number): Promise<SingleDownload> {
+  const url = page.url();
+  const responses: Response[] = [];
+  const record = (response: Response) => fileDownload(response) && responses.push(response);
+  page.on('response', record);
+  try {
+    await (await element(page, rowQuery(BINARY)))?.click({ button: 'right' });
+    const item = page.getByRole('menuitem', { name: '下载', exact: true });
+    await item.waitFor({ state: 'visible', timeout });
+    // The download (browser session) and the aborted navigation (page) come in no fixed order.
+    const [download, failed] = await Promise.all([
+      page.waitForEvent('download', { timeout }),
+      page.waitForEvent('requestfailed', { predicate: fileDownload, timeout }),
+      item.click(),
+    ]);
+    expect(download.suggestedFilename()).toBe(BINARY);
+    expect(await download.failure()).toBeNull();
+    await download.saveAs(saved);
+    // The saved bytes' own response, as the page saw it; no second request, no allHeaders().
+    const response = responses.find((candidate) => candidate.url() === download.url());
+    if (response === undefined) throw new Error('Sidebar single download response missing');
+    const { 'content-security-policy': csp = '', 'content-disposition': disposition = '' } =
+      response.headers();
+    expect(response.status()).toBe(200);
+    expect(csp).toBe('sandbox');
+    expect(disposition).toMatch(/^attachment/);
+    const aborted = failed.failure()?.errorText ?? '';
+    expect(failed === response.request(), "The saved response's own request failed").toBe(true);
+    expect([failed.isNavigationRequest(), aborted]).toEqual([true, 'net::ERR_ABORTED']);
+    expect(page.url(), 'No document committed').toBe(url);
+    return { csp, disposition: 'attachment', aborted, request: `GET ${download.url()}` };
+  } finally {
+    page.off('response', record);
+  }
+}
+
 /** The files, the browser session and every check of the lane; cleanup is the caller's. */
 async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
   const { exec, session } = lane;
@@ -174,9 +222,16 @@ async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
   try {
     const saved = join(directory, 'archive.tar.gz');
     const names = { label: 'sidebar archive', failure: 'archive-failure' };
-    const browser = await workbenchSession(session, names, (page, shoot) =>
-      downloadArchive(page, shoot, saved, session.timeout),
-    );
+    const kept = join(directory, BINARY);
+    let single: SingleDownload | undefined;
+    const browser = await workbenchSession(session, names, async (page, shoot) => {
+      await downloadArchive(page, shoot, saved, session.timeout);
+      single = await downloadSingle(page, kept, session.timeout);
+    });
+    if (single === undefined) throw new Error('Sidebar single download missing');
+    const bytes = await readFile(kept);
+    const file = { name: BINARY, size: bytes.length, sha256: digest(bytes) };
+    expect([file]).toEqual(expected.filter(({ name }) => name === BINARY));
     const { format, entries } = parseTarGz(await readFile(saved));
     expect(byName(entries)).toEqual(byName(expected));
     // GNU headers come from the image's Debian tar; the macOS host's bsdtar writes none.
@@ -185,7 +240,7 @@ async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
     const temp = ['find', '/tmp', '-maxdepth', '1', '-name', 'dsh-better-sidebar-ar-*'];
     await until(async () => (await exec(temp)) === '', session.timeout, 'archive temp release');
     expect(await counts(), 'No model request or retrieval').toEqual(before);
-    return { browser, entries, format };
+    return { browser, entries, format, single: { ...file, ...single } };
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

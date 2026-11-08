@@ -4039,3 +4039,43 @@ Evidence (25.1):
 剩余风险：观察器脚本本身只有真实的 `pnpm test:stack` 会执行，stub 验证不了它。连跑 3 次都通过，也不能证明短回合真的被锁住了：如果这 3 次的回合都够长，旧代码同样能过。
 
 Must preserve：`turnComplete` 的判定、transcript 范围、失败截图与原错误优先、观察者转发和 reload 豁免逻辑。
+
+## 26. 技术债 #559：单文件下载通过 `/sidebar/file` 的 CSP sandbox 的运行时证明
+
+依赖：#558（#555，已合入）、#430（17.2，已合入）。由 #559 承载，处理方式同第 6 组。只改测试，不改网关规则、镜像和插件；不碰关键路径。用户决定（2026-11-08）：这次下载导航必然产生的那一条 `net::ERR_ABORTED` 失败请求，按「精确断言那一条」处理：会话的失败请求必须恰好是它，其余仍为空；不改 `workbenchSession`，也不加通用过滤。
+
+- [ ] 26.1 在 17.2 的打包下载会话（`platform/test/sidebar-archive-stack-fixture.ts`）里，打包下载完成后，再用文件区右键菜单的「下载」下载 `archive-b.bin` 一次。断言：下载完成，字节数和 sha256 与 uid1001 在实例内写入的值一致；这次下载自己的响应带 `content-security-policy: sandbox` 和 `content-disposition: attachment`；页面没有被导航走；该会话的失败请求恰好是这次下载导航的那一条（`net::ERR_ABORTED`），控制台错误、页面错误、对外请求都为空。验证：本机 exact-head `pnpm test:stack` 的 `stackEvidence.archive.single` 给出比对结果。
+
+Suggested fixture level: compact - 在已有 stack 会话里加一次下载，产品代码不变
+Minimal mergeable slice: atomic: 一个 fixture 函数、stack 证据字段和文档
+Risk packs (26.1): selected - Security（证明 #558 的 sandbox 不挡附件下载，同时证明 sandbox 头确实在这次响应上；不放宽规则）、Legacy compatibility（17.2 打包下载的步骤和断言不变）；not selected - Config、Schema、Auth、Public API、Concurrency、Resource limits、Release、Migration。
+Evidence (26.1):
+
+发行包事实（`dsh-better-sidebar@0.28.0`，`lib/client.js`）：
+
+- 文件行（`isDir === false`）的右键菜单含「下载」（`id: "download"`，`:8257-8261`；中文文案 `download: "下载"`，`:2641`）。`exact: true` 不会匹配「压缩并下载（2 项）」。在已选中的范围内右键会保留整批选中（`handleContextMenu` `:7260-7273`，`:7263` 判断、`:7268` `setRowMenu`），菜单的 `target` 是被右键的那一行（`const target = rowMenu`，约 `:8308`；`download` 分支 `:8343-8345`）。
+- `downloadFile`（`:7705-7716`）创建**不带 `download` 属性**的 `<a href>` 并 `click()`（`:7714`），效果是对 `/sidebar/file?sessionId=…&path=…&download=1` 的顶层导航（`downloadUrl` `:4381-4383` → `fileUrl` `:4417-4425`）。宿主对 `download=1` 返回 `content-disposition: attachment; filename*=UTF-8''<basename>`（`lib/index.js:9185`）。
+- 平台网关对 `/sidebar/file` 的响应一律加 `content-security-policy: sandbox` 和 `x-content-type-options: nosniff`（`platform/src/gateway/http.ts:160-163`，#558）。
+
+改动（只在 `sidebar-archive-stack-fixture.ts`；同一个 `workbenchSession`，不新开浏览器）：
+
+- `downloadArchive` 存好 `archive.tar.gz` 之后，调用新的单文件下载步骤：
+  - 记下 `page.url()`；在 `archive-b.bin` 行上 `click({ button: 'right' })`；等菜单项 `getByRole('menuitem', { name: '下载', exact: true })` 可见；
+  - 先挂 `page.waitForEvent('download')` 和 `page.waitForEvent('requestfailed', <url 为 `/sidebar/file`且`download=1`>)`，与点菜单项放进同一个 `Promise.all`（与打包下载同一写法）。失败事件来自页面会话，`download` 事件来自浏览器会话，两者没有先后保证，所以两个都要等到；
+  - 断言 `suggestedFilename() === 'archive-b.bin'`、`failure() === null`；`saveAs` 到同一个 `mkdtemp` 目录；
+  - 点击前在 `page` 上挂 `response` 和 `requestfailed` 监听（只在本步骤内，步骤结束即移除），记下 `/sidebar/file` 的响应与失败。下载完成后取 `url() === download.url()` 的那一个响应：断言状态 200、同步 `headers()` 的 `content-security-policy` 恰为 `sandbox`、`content-disposition` 以 `attachment` 开头；同一请求 `isNavigationRequest()` 为真，`failure()?.errorText` 为 `net::ERR_ABORTED`。证明落盘的字节来自带 sandbox 的那次响应，不额外发请求，不用 `allHeaders()`；
+  - 断言 `page.url()` 不变：附件响应按下载处理，没有提交新文档。
+- `archiveDownload` 把存下的文件读回，算字节数和 sha256，断言等于实例内 `archive-b.bin` 的期望值（`expected` 中同名项）。
+- `ArchiveEvidence` 加 `single: ArchiveEntry & { csp: string; disposition: 'attachment'; aborted: string; request: string }`。`request` 是 `workbenchSession` 记失败请求时的同一格式（`GET <download.url()>`），只用于断言，不进证据行；证据行只输出名字、字节数、sha256、`csp`、`attachment` 和 `aborted`（`net::ERR_ABORTED`），不输出 URL、cookie 或 Session ID。
+- `platform-stack.stack.test.ts`：`archive.browser` 的断言把 `failedRequests: []` 改为 `failedRequests: [archive.single.request]`（恰好一条），其余（截图 `archive-menu.png`，控制台错误、页面错误、对外请求为空）不变；`:746` 的注释改为如实说明 `<a download>` 不留失败请求、单文件下载的导航恰留一条 `ERR_ABORTED`；`stackEvidence.archive` 加 `single`。
+- 行数预算：fixture 净增约 55 行以内（实现为 +53：步骤内响应记录、两个等待事件和头部、导航、URL 三项检查），stack 测试增量 ≤ 5 行，整个 PR（含本段和文档）≤ 400 行。
+
+失败请求口径（本机实测，2026-11-08，Playwright 1.63 Chromium 153.0.8010.12，独立探针：不带 `download` 属性的 `<a>` 点击，响应带 `attachment` 与 `content-security-policy: sandbox`）：`download` 事件触发，`failure()` 为 null，`page.url()` 不变；同一导航请求先有 `response`（可读到 `sandbox`），随后 `requestfailed`，`errorText` 为 `net::ERR_ABORTED`。Playwright 的 `requestFailed` 只跳过 favicon（`playwright-core@1.63.0/lib/coreBundle.js:23325-23337`）。17.2 的 `<a download>` 不走导航，所以没有这一条。按用户决定精确断言它，不扩大到别的请求。
+
+文档（编排者同 PR 改）：`platform/test/README.md` 的 stack 证据句和 `docs/LOCAL_STACK.md` §5 第 9 步、§6 打包下载行，补上单文件下载及其比对内容。
+
+验证：`pnpm check`；本机 exact-head `pnpm test:stack`（门禁），证据评论给出 `single` 的比对结果；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
+
+剩余风险：只验证本机 Playwright Chromium（arm64）；VPS 的 CfT 隔离通道不跑这个用例。目录下载、大文件下载不在范围内。
+
+Must preserve：17.2 打包下载的全部步骤和断言、两个工作文件的清理、provider 计数前后不变、每次运行 5 次付费检索；`/sidebar/file` 的 CSP 规则。
