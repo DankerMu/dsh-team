@@ -1,3 +1,4 @@
+import { accessSync, constants, statSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { isAbsolute, resolve } from 'node:path';
 
@@ -21,6 +22,8 @@ export interface PlatformConfig {
   readonly authority: string;
   readonly cookieSecure: boolean;
   readonly trustedProxies: readonly string[];
+  /** Absent: employee instances get no fonts bind (blank values count as unset). */
+  readonly instanceFontsDir?: string;
   /** `null`: the bundled Document Server is unconfigured and Office is unavailable. */
   readonly documentServer: {
     readonly containerName: string;
@@ -217,6 +220,22 @@ function parseTrustedProxies(raw: string | undefined): readonly string[] {
   return members;
 }
 
+/** Blank is unset; otherwise an absolute readable directory, reported without its value. */
+function parseInstanceFontsDir(raw: string | undefined): Pick<PlatformConfig, 'instanceFontsDir'> {
+  if (raw === undefined || raw.trim() === '') return {};
+  if (!raw.includes('\0') && isAbsolute(raw)) {
+    try {
+      if (statSync(raw).isDirectory()) {
+        accessSync(raw, constants.R_OK | constants.X_OK);
+        return { instanceFontsDir: raw };
+      }
+    } catch {
+      // The filesystem error names the path; the fixed message below never does.
+    }
+  }
+  throw new Error('PLATFORM_INSTANCE_FONTS_DIR must be an absolute readable directory');
+}
+
 /**
  * Resolve the platform configuration from environment variables.
  * Invalid values throw at startup; they are never replaced by a default.
@@ -249,6 +268,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): PlatformConfig {
     authority: publicOrigin.host,
     cookieSecure: parseCookieSecure(env.PLATFORM_COOKIE_SECURE),
     trustedProxies: parseTrustedProxies(env.PLATFORM_TRUSTED_PROXIES),
+    ...parseInstanceFontsDir(env.PLATFORM_INSTANCE_FONTS_DIR),
     // Last, so a verbatim .env.example copy reports its empty JWT only after every other field.
     documentServer: parseDocumentServer(
       env.DOCUMENT_SERVER_CONTAINER_NAME,

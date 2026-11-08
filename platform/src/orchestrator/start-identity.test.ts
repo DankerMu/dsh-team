@@ -13,8 +13,10 @@ import {
   startupBarrier as barrier,
   startupOwnerFixture,
   START_CONTAINER,
+  START_FONTS_TRANSPORT,
   START_MODEL,
   START_NETWORK,
+  START_TRANSPORT,
   START_USER,
 } from '../../test/container-start-fixture.ts';
 import type { StartupBarrier, StartupOwnerFixture } from '../../test/container-start-fixture.ts';
@@ -29,8 +31,8 @@ afterEach(async () => {
   }
 });
 
-async function fixture() {
-  const context = await startupOwnerFixture();
+async function fixture(config = START_TRANSPORT) {
+  const context = await startupOwnerFixture(config);
   contexts.push(context);
   return context;
 }
@@ -41,6 +43,42 @@ const STARTED: StartResult = {
   upstreamHost: '127.0.0.1',
   upstreamPort: 49173,
 };
+
+// Through the public owner: a fonts directory not copied into its transport would vanish silently.
+it.each([
+  ['without', START_TRANSPORT, []],
+  [
+    'with',
+    START_FONTS_TRANSPORT,
+    [
+      {
+        Type: 'bind',
+        Source: '/srv/dsh-team/instance-fonts',
+        Target: '/usr/share/fonts/truetype/custom',
+        ReadOnly: true,
+      },
+    ],
+  ],
+] as const)(
+  'creates exactly the instance mounts %s an instance fonts directory',
+  async (_, config, fonts) => {
+    const context = await fixture(config);
+
+    expect(await context.owner.startUserContainer(context.input)).toEqual(STARTED);
+
+    expect(context.daemon.containers.get(START_CONTAINER)?.HostConfig?.Mounts).toEqual([
+      { Type: 'volume', Source: `dsh-team-home-${START_USER}`, Target: '/data/home' },
+      { Type: 'volume', Source: `dsh-team-work-${START_USER}`, Target: '/data/work' },
+      {
+        Type: 'bind',
+        Source: join(context.input.config.managedConfigDir, `${START_USER}.patch.yml`),
+        Target: '/managed/patch.yml',
+        ReadOnly: true,
+      },
+      ...fonts,
+    ]);
+  },
+);
 
 async function retainedErrorFixture(running = false) {
   const context = await fixture();

@@ -1,18 +1,20 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { expect, it } from 'vitest';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
 import { instanceAddressLayout } from '../src/orchestrator/index.ts';
 import {
   assertDocxReadback,
   buildUserImageExpectingFailure,
+  offlineDocxScript,
   PROBE_PLUGIN,
   PROBE_TARBALL,
   runUserImage,
 } from './user-image-fixture.ts';
-import { assertOfficeConversion } from './office-convert-fixture.ts';
+import { assertOfficeConversion, runOfficeConvert } from './office-convert-fixture.ts';
+import { RENAMED_FONT, renamedFontDirectory } from './font-rename-fixture.ts';
 import { profileSeedOracle } from './profile-seed-fixture.ts';
 import { execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
 import { runWebRejection } from './web-startup-fixture.ts';
@@ -290,6 +292,37 @@ it('converts DOC, PPT and DOCX to Chinese PDFs offline under instance limits wit
   process.stdout.write(
     `Docker office conversion verified: run=${result.runId} image=${result.image} ` +
       `container=${result.container} network=none user=1001 memory=4g pids=512 cpus=2 ` +
+      `${evidence} cleanup=complete\n`,
+  );
+});
+
+// With the instance fonts bind (#561): the engine must read the renamed family from that path.
+it('renders a Latin DOCX in the family of a bound instance fonts directory with the released preview engine', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  let evidence = '';
+  let container = '';
+
+  const result = await runUserImage(
+    'container-start',
+    (stdout) => {
+      evidence = assertOfficeConversion(stdout, assertDocxReadback, RENAMED_FONT);
+    },
+    undefined,
+    (lifecycle) => {
+      const fonts = renamedFontDirectory(lifecycle, dirname(lifecycle.overlayDirectory));
+      container = `dsh-team-test-${lifecycle.runId}-office-fonts`;
+      lifecycle.registerContainer(container);
+      const { imageId, runId } = lifecycle;
+      const run = { container, imageId, runId, docxScript: offlineDocxScript, fonts };
+      return Promise.resolve(runOfficeConvert(lifecycle.command, run));
+    },
+  );
+
+  process.stdout.write(
+    `Docker office instance fonts verified: run=${result.runId} image=${result.image} ` +
+      `container=${container} network=none user=1001 fonts=${RENAMED_FONT.family} ` +
       `${evidence} cleanup=complete\n`,
   );
 });

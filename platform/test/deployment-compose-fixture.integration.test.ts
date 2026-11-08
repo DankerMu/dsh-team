@@ -133,3 +133,22 @@ it('delivers the operator fonts as one read-only, never-created repository-root 
     },
   ]);
 });
+
+// No inventory gate reads compose interpolation; only the delivered file proves the passthrough.
+it('passes the instance fonts directory to the platform at the identical read-only path', async () => {
+  const delivered = parse(await readFile(join(root, 'deploy/compose.yml'), 'utf8')) as {
+    services: Record<string, { environment?: Record<string, unknown>; volumes?: unknown[] }>;
+  };
+  const platform = delivered.services.platform;
+
+  expect(platform?.environment?.PLATFORM_INSTANCE_FONTS_DIR).toBe(
+    '${PLATFORM_INSTANCE_FONTS_DIR:-}',
+  );
+  expect(platform?.volumes).toContainEqual({
+    type: 'bind',
+    source: '${PLATFORM_INSTANCE_FONTS_DIR:-./deploy}',
+    target: '${PLATFORM_INSTANCE_FONTS_DIR:-/opt/dsh-team/instance-fonts-unset}',
+    read_only: true,
+    bind: { create_host_path: false },
+  });
+});

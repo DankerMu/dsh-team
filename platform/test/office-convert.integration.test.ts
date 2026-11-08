@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { assertOfficeConversion, ODT_TEXT } from './office-convert-fixture.ts';
+import { assertOfficeConversion, ODT_TEXT, runOfficeConvert } from './office-convert-fixture.ts';
 import { assertDocxReadback, offlineDocxScript, runUserImage } from './user-image-fixture.ts';
 import type { DockerCommand, DockerCommandResult } from './docker-command.ts';
 
@@ -18,7 +18,7 @@ const observation = { conversions: [] };
 type Fault = 'memory' | 'network' | 'user' | 'writable' | 'seccomp' | 'oom';
 
 /** Substitute daemon boundary for the office-convert probe: owned resources and every call. */
-function daemon(fault?: Fault) {
+function daemon(fault?: Fault, fontsMount?: Record<string, unknown>) {
   const resources = new Map<string, string>([['dsh-team-test-sentinel', 'sentinel-owner']]);
   const calls: { args: readonly string[]; timeout: number }[] = [];
   const ok = (stdout = ''): DockerCommandResult => ({ status: 0, stdout, stderr: '' });
@@ -44,6 +44,7 @@ function daemon(fault?: Fault) {
       ReadonlyPaths: ['/proc/bus'],
     },
     Mounts: [
+      ...(fontsMount === undefined ? [] : [fontsMount]),
       { Type: 'bind', Source: fixtures, Destination: '/fixtures', RW: fault === 'writable' },
     ],
   });
@@ -242,6 +243,53 @@ const replaceConversion =
     return { ...observed, conversions };
   };
 
+const FONTS = { directory: '/owned/instance-fonts', family: 'DshTmP Sans', baseFont: 'DshTmP' };
+const FONTS_MOUNT = {
+  Type: 'bind',
+  Source: FONTS.directory,
+  Destination: '/usr/share/fonts/truetype/custom',
+  RW: false,
+};
+
+describe('office-convert probe with an instance fonts directory', () => {
+  const run = (fake: ReturnType<typeof daemon>) =>
+    runOfficeConvert(fake.command, {
+      container: 'dsh-team-test-fonts-office-convert',
+      imageId,
+      runId: 'fonts',
+      docxScript: offlineDocxScript,
+      fonts: FONTS,
+    });
+
+  it('binds the directory read-only at the instance fonts path and renders its family', () => {
+    const fake = daemon(undefined, FONTS_MOUNT);
+
+    expect(JSON.parse(run(fake))).toEqual({ ...observation, imageSize: 589_000_000 });
+
+    const create = fake.calls.find(({ args }) => args[0] === 'create')?.args ?? [];
+    const mounts = create.flatMap((arg, index) => (create[index - 1] === '--mount' ? [arg] : []));
+    expect(mounts).toEqual([
+      `type=bind,source=${fixtures},target=/fixtures,readonly`,
+      'type=bind,source=/owned/instance-fonts,target=/usr/share/fonts/truetype/custom,readonly',
+    ]);
+    const script = create.at(-1) ?? '';
+    expect(script).toContain('"family":"DshTmP Sans","baseFont":"DshTmP"');
+    expect(script).toContain('qn(\\"w:ascii\\"), family');
+    expect(script).toContain('qn(\\"w:hAnsi\\"), family');
+  });
+
+  it.each([
+    ['without the fonts bind', undefined],
+    ['with a writable fonts bind', { ...FONTS_MOUNT, RW: true }],
+    ['with another fonts source', { ...FONTS_MOUNT, Source: '/owned/other-fonts' }],
+  ])('refuses to start a probe inspected %s', (_, mount) => {
+    const fake = daemon(undefined, mount);
+
+    expect(() => run(fake)).toThrow('read-only /fixtures and fonts');
+    expect(fake.operations()).not.toContain('start');
+  });
+});
+
 describe('office-convert observation oracle', () => {
   it('accepts the fonts-installed conversion facts and reports every measurement', () => {
     const evidence = assertOfficeConversion(JSON.stringify(accepted()), assertDocxReadback);
@@ -356,6 +404,42 @@ describe('office-convert observation oracle', () => {
   ] as const)('rejects %s', (_name, change, message) => {
     expect(() =>
       assertOfficeConversion(JSON.stringify(change(accepted())), assertDocxReadback),
+    ).toThrow(message);
+  });
+
+  const fontRender = {
+    ...render('fonts-docx'),
+    pdf: { ...pdf, cjkFonts: [], namedFonts: ['GHIJKL+DshTmPSans'] },
+  };
+
+  it('accepts the fonts render of the bound family and reports its embedded font', () => {
+    const observed = { ...accepted(), fontRender };
+
+    expect(assertOfficeConversion(JSON.stringify(observed), assertDocxReadback, FONTS)).toContain(
+      'fonts:render=2100ms/GHIJKL+DshTmPSans',
+    );
+  });
+
+  it.each([
+    ['an unrendered family', { fontRender: null }, FONTS, 'did not render the fonts DOCX'],
+    [
+      'a missing family',
+      { fontRender: { ...fontRender, missingFonts: ['DshTmP Sans'] } },
+      FONTS,
+      'fonts render misses DshTmP Sans',
+    ],
+    [
+      'no embedded family font',
+      { fontRender: { ...fontRender, pdf: { ...fontRender.pdf, namedFonts: [] } } },
+      FONTS,
+      'fonts render PDF embeds no DshTmP font',
+    ],
+    ['a fonts render without a directory', { fontRender }, undefined, 'without a fonts directory'],
+  ] as const)('rejects %s', (_name, change, fonts, message) => {
+    const observed = { ...accepted(), ...change };
+
+    expect(() =>
+      assertOfficeConversion(JSON.stringify(observed), assertDocxReadback, fonts),
     ).toThrow(message);
   });
 });

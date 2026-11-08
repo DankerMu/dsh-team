@@ -7,6 +7,7 @@ import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
+import { loadConfig } from '../src/config.ts';
 import type { PlatformConfig } from '../src/config.ts';
 import { createInstanceService, createOrchestrator } from '../src/orchestrator/index.ts';
 import type { DockerClient } from '../src/orchestrator/index.ts';
@@ -15,8 +16,11 @@ import {
   corruptOwnedOverlay,
   inspectAsync,
   record,
+  registerStartupUsers,
+  startDockerInstance,
   startupClient,
 } from './container-start-docker-fixture.ts';
+import { renamedFontDirectory } from './font-rename-fixture.ts';
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -675,6 +679,69 @@ it('public real startup error retains stopped container and volumes, then same-s
         return 'public-error-retained-retry';
       } finally {
         await f.app.close();
+      }
+    },
+  );
+});
+
+// Prints the errno name of an exclusive create in the fonts bind, or `written` if it succeeds.
+const FONTS_WRITE_PROBE = `
+import errno
+try:
+    open("/usr/share/fonts/truetype/custom/write-probe", "x").close()
+    print("written")
+except OSError as error:
+    print(errno.errorcode[error.errno])
+`;
+
+it('binds a configured instance fonts directory read-only: uid1001 reads the font but cannot write', async () => {
+  expect(platform()).toBe('linux');
+  expect(arch()).toBe('x64');
+  await runUserImage(
+    'container-start',
+    (summary) => {
+      expect(['fonts-bind-read-only:EROFS', 'fonts-bind-read-only:EACCES']).toContain(summary);
+    },
+    undefined,
+    async (lifecycle) => {
+      const root = dirname(lifecycle.overlayDirectory);
+      const fonts = renamedFontDirectory(lifecycle, root).directory;
+      const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
+      const authority = 'fonts.example:8443';
+      const database = openDatabase(join(root, 'fonts-platform.db'));
+      // Its own configuration through the real loader; the shared instanceConfig stays without fonts.
+      const config = loadConfig({
+        PLATFORM_PUBLIC_URL: `http://${authority}`,
+        PLATFORM_UPSTREAM_MODE: 'published-loopback',
+        PLATFORM_INSTANCE_FONTS_DIR: fonts,
+      });
+      const { client } = startupClient(lifecycle);
+      const owner = createOrchestrator({ client, database, config });
+      try {
+        applyMigrations(database);
+        registerStartupUsers(lifecycle, database, [userId], 'fonts.example');
+        const { containerId } = await startDockerInstance(owner, lifecycle, userId, authority);
+        const mounts = orderedMounts((await inspectAsync(lifecycle, containerId)).Mounts, false);
+        expect(mounts.map(({ Type, Destination, RW }) => ({ Type, Destination, RW }))).toEqual([
+          { Type: 'volume', Destination: '/data/home', RW: true },
+          { Type: 'volume', Destination: '/data/work', RW: true },
+          { Type: 'bind', Destination: '/managed/patch.yml', RW: false },
+          { Type: 'bind', Destination: '/usr/share/fonts/truetype/custom', RW: false },
+        ]);
+        expect(mounts.at(-1)?.Source).toBe(fonts);
+        const exec = ['exec', '--user', '1001', containerId];
+        const font = '/usr/share/fonts/truetype/custom/DshTmPSans.ttf';
+        const read = await lifecycle.commandAsync([...exec, 'test', '-r', font], 15_000);
+        expect([read.status, read.error]).toEqual([0, undefined]);
+        const write = await lifecycle.commandAsync(
+          [...exec, 'python3', '-c', FONTS_WRITE_PROBE],
+          15_000,
+        );
+        expect([write.status, write.error]).toEqual([0, undefined]);
+        await owner.stopUserContainer({ userId, reason: 'admin' });
+        return `fonts-bind-read-only:${write.stdout.trim()}`;
+      } finally {
+        database.close();
       }
     },
   );

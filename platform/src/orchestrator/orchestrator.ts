@@ -314,10 +314,12 @@ export function createOrchestrator(dependencies: OrchestratorDependencies): Orch
   const { client, database } = dependencies;
   // Read once per owner, before listening: a missing or malformed catalog fails startup.
   const pluginCatalog = readPluginCatalog();
+  const { instanceFontsDir } = dependencies.config;
   const transport: TransportContext = {
     config: Object.freeze({
       upstreamMode: dependencies.config.upstreamMode,
       platformContainerName: dependencies.config.platformContainerName,
+      ...(instanceFontsDir === undefined ? {} : { instanceFontsDir }),
     }),
     platformId: undefined,
   };
