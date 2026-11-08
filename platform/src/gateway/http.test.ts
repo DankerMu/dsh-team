@@ -12,13 +12,8 @@ import {
   sessionCookieToken,
   withApp,
 } from '../../test/auth-fixture.ts';
-import {
-  forwardHeaders,
-  isImmutableAsset,
-  isWorkspaceDocument,
-  requestTarget,
-  withSessionVary,
-} from './http.ts';
+import { forwardHeaders, isImmutableAsset, isWorkspaceDocument, withSessionVary } from './http.ts';
+import { requestTarget } from '../request-path.ts';
 
 interface TransportState {
   mode: string;
@@ -137,15 +132,6 @@ it('reconstructs request framing after hop filtering but never invents response 
   expect(forwardHeaders({ 'content-length': '11' }, 'cookie')).toEqual({ 'content-length': '11' });
   expect(forwardHeaders({ 'transfer-encoding': 'chunked' }, 'set-cookie')).toEqual({});
 });
-it.each([
-  ['http://host/api/%2F/../x?q=1', '/api/%2F/../x?q=1'],
-  ['https://host?x=1', '/?x=1'],
-  ['http://host', '/'],
-  ['/raw//path', '/raw//path'],
-])('preserves raw target semantics for %s', (input, expected) => {
-  expect(requestTarget(input)).toBe(expected);
-});
-
 it.each([
   [undefined, 'Cookie'],
   ['', 'Cookie'],

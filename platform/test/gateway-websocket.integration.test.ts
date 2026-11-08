@@ -245,6 +245,42 @@ it.each(['h2c', 'websocket, h2c', 'websocket, websocket'])(
   },
 );
 
+it.each(['/%5Fplatform/x', '/%68ealthz', '/%5Fplatform#x', '/%zz'])(
+  'answers an upgrade to %s with the platform 404 before resolving a destination',
+  async (path) => {
+    let resolutions = 0;
+    let connections = 0;
+    await withUpstream(
+      (_request, response) => {
+        response.end();
+      },
+      async (target, server) => {
+        server.on('connection', () => {
+          connections += 1;
+        });
+        await withForwardingApp(
+          () => {
+            resolutions += 1;
+            return target;
+          },
+          async ({ base, cookie }) => {
+            const headers = await rejectedUpgrade(
+              base,
+              cookie,
+              [`Origin: ${PUBLIC_ORIGIN}`, 'Upgrade: websocket'],
+              path,
+            );
+
+            expect(headers).toMatch(/^HTTP\/1\.1 404 Not Found\r\n/);
+            expect(resolutions).toBe(0);
+            expect(connections).toBe(0);
+          },
+        );
+      },
+    );
+  },
+);
+
 it('delivers separately sent early frames exactly once before a delayed 101', async () => {
   await withUpstream(
     (_request, response) => {

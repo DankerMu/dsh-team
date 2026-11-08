@@ -199,6 +199,65 @@ it('never resolves platform or anonymous traffic and preserves unavailable desti
   );
 });
 
+it('never resolves an encoded or fragment spelling of the reserved namespace', async () => {
+  const observed: string[] = [];
+  const selected: string[] = [];
+  await withUpstream(
+    (request, response) => {
+      observed.push(request.url ?? '');
+      response.end('forwarded');
+    },
+    async (target) => {
+      await withForwardingApp(
+        (id) => {
+          selected.push(id);
+          return target;
+        },
+        async ({ base, cookie }) => {
+          for (const path of ['/%5Fplatform/missing', '/_platfor%6d/missing'])
+            expect((await sendHttp(base, { path, headers: { cookie } })).status).toBe(404);
+          expect((await rawExchange(base, cookie, '/_platform#x')).status).toBe('404');
+          for (const accept of ['application/json', 'text/html']) {
+            const anonymous = await sendHttp(base, {
+              path: '/%5Fplatform/missing',
+              headers: { accept },
+            });
+            expect([anonymous.status, anonymous.headers.location]).toEqual([404, undefined]);
+          }
+          // Guard: the router itself answers this decoded spelling with the health route.
+          expect((await sendHttp(base, { path: '/%68ealthz', headers: { cookie } })).status).toBe(
+            200,
+          );
+          expect(selected).toEqual([]);
+          expect(observed).toEqual([]);
+        },
+      );
+    },
+  );
+});
+
+it('forwards a non-reserved or reserved-escape target to the instance verbatim', async () => {
+  const observed: string[] = [];
+  await withUpstream(
+    (request, response) => {
+      observed.push(request.url ?? '');
+      response.end('forwarded');
+    },
+    async (target) => {
+      await withForwardingApp(
+        () => target,
+        async ({ base, cookie }) => {
+          for (const path of ['/files/a%20b', '/_platform%2Fx']) {
+            const response = await sendHttp(base, { path, headers: { cookie } });
+            expect([response.status, response.body.toString()]).toEqual([200, 'forwarded']);
+          }
+          expect(observed).toEqual(['/files/a%20b', '/_platform%2Fx']);
+        },
+      );
+    },
+  );
+});
+
 it.each(['resolver', 'endpoint', 'reset', 'upgrade'] as const)(
   'returns safe 502 for %s failure and remains usable',
   async (failure) => {

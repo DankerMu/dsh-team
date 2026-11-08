@@ -8,13 +8,8 @@ import {
   sessionHealCookies,
 } from '../auth/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
-import {
-  BAD_GATEWAY,
-  forwardHttp,
-  forwardWebSocket,
-  rejectUpgrade,
-  requestTarget,
-} from './http.ts';
+import { routerPath } from '../request-path.ts';
+import { BAD_GATEWAY, forwardHttp, forwardWebSocket, rejectUpgrade } from './http.ts';
 import type { GatewayUnavailableReason, GatewayUpstreamResolver } from './types.ts';
 import type { GatewayConnections } from './connections.ts';
 
@@ -40,9 +35,12 @@ function unavailable(reason: GatewayUnavailableReason) {
   return { ...ERRORS[503], reason };
 }
 
+/** The router's view of the reserved namespace; a target it cannot decode is never forwarded. */
 function platformPath(url: string): boolean {
-  const path = requestTarget(url).split('?', 1)[0];
-  return path === '/healthz' || path === '/_platform' || path?.startsWith('/_platform/') === true;
+  const path = routerPath(url);
+  return (
+    path === null || path === '/healthz' || path === '/_platform' || path.startsWith('/_platform/')
+  );
 }
 
 function pageRequest(request: FastifyRequest): boolean {
