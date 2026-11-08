@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest, HookHandlerDoneFunction } from 'fastify';
+import { isPlainObject } from '../plain-object.ts';
 import { normalizeEmail } from './identity.ts';
 
 const INVALID_EMAIL = 'Invalid email';
@@ -13,10 +14,6 @@ export const ERROR_RESPONSE_SCHEMA = {
     message: { type: 'string' },
   },
 } as const;
-
-export function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 export function rejectInvalidBody(reply: FastifyReply, message: string): void {
   void reply.code(400).send({ statusCode: 400, error: 'Bad Request', message });

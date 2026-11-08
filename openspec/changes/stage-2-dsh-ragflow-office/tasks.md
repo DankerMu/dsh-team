@@ -3775,3 +3775,44 @@ Evidence (21.1):
 验证：同 21.1；另需 `pnpm check`、VPS exact-head `test:docker` 和 `test:deploy`（cleanup confirmed，只是满足合并门禁），以及本机 exact-head `pnpm test:stack` 证据评论。
 
 Must preserve：每个用例的断言，包括 `source_address: SOURCE`、状态码和响应体；所有产品代码。
+
+## 22. 技术债 #504：普通 JSON 对象判断只留一份实现
+
+依赖：无。由 #504 承载，处理方式同第 6 组。用户决定（2026-11-08）：走路线 A，建一个共享叶子模块；orchestrator（关键路径）不改。
+
+- [ ] 22.1 backend 的「普通 JSON 对象」判断（`typeof value === 'object' && value !== null && !Array.isArray(value)`，以及它的取反写法）只保留一份实现。auth、admin、gateway、plugin-catalog、db、managed-config 都改为调用它，删掉各自的副本和内联写法。验证：`grep -rnE "function isPlainObject|isPlainObject =" platform/src` 只剩 1 处；`pnpm lint:deps`、`pnpm dead-code`、`pnpm lint:tests`、`pnpm test`、`pnpm test:integration` 都通过；HTTP 400 的语义不变。
+
+Suggested fixture level: compact - 纯重构，运行时行为逐字不变
+Minimal mergeable slice: atomic: 一个新叶子文件加它的调用方
+Risk packs (22.1): selected - Legacy compatibility（每个调用点的运行时判断与原来完全一致；只是类型收窄从 `object` 变为 `Record<string, unknown>`，不能借机改判断语义，例如排除 `Object.create(null)`）、Public API（新文件的导出就是一个函数）；not selected - Config、Schema、Auth、Error handling、Concurrency、File IO、Resource limits、Release、Documentation。不碰关键路径。
+Evidence (22.1):
+
+位置：仓库已有的共享叶子是 `platform/src/` 顶层的单文件，例如 `unicode.ts`、`request-path.ts`、`bounded-body.ts`，各模块用 `../unicode.ts` 这样的路径导入，同目录有成对测试，dependency-cruiser 和 knip 都已覆盖。所以新建 `platform/src/plain-object.ts`，导出 `isPlainObject(value: unknown): value is Record<string, unknown>`，配 `platform/src/plain-object.test.ts`。这与用户选的「共享叶子模块」是同一个意思，用的是仓库现有的写法，不另建目录。测试覆盖：对象、`Object.create(null)` 为真；null、数组、字符串、数字、undefined、函数为假。
+
+替换清单（main `01eb933`）：
+
+- 具名副本，删掉：
+  - `auth/credentials.ts:17`：同时删掉它的导出，`password-change.ts:4` 改为从新文件导入；
+  - `admin/config-route.ts:59`：同时删掉它的导出，admin 内部的 6 个导入方改为从新文件导入：`document-server-config.ts:3`、`ragflow-config.ts:3`、`web-tools.ts:2`、`plugin-sources.ts:3`、`retrieval-config.ts:2`、`plugin-catalog.ts:4`；
+  - `plugin-catalog/catalog.ts:40`：模块私有。
+- 内联写法，改为调用：
+  - admin：`account-status.ts:35`、`runtime-config.ts:47`、`model-config.ts:35`、`model-config.ts:78`；
+  - 其他模块：`managed-config/read.ts:70`、`db/settings.ts:133`、`db/settings.ts:151`、`db/settings.ts:294`；
+  - 跨行的写法：`admin/empty-body.ts:97-99`、`admin/password-reset.ts:112-114`、`gateway/instance-routes.ts:90-92`（issue 漏了这一处）；
+  - 复合判断：`admin/model-probe.ts:57-59` 只替换这三个子句，后面的 `'choices' in value && Array.isArray(value.choices)` 保留。
+- 合计：3 个具名副本，12 处内联写法。
+
+规则：
+
+- 判断结果逐字不变。原来是 `if (typeof x !== 'object' || x === null || Array.isArray(x)) …` 的，改成 `if (!isPlainObject(x)) …`。
+- 如果类型收窄变化引出 TypeScript 或 lint 错误，只调整类型标注，不改判断。替换后变成多余的 `as Record<string, unknown>` 断言要删掉，连同它们上面的说明注释，否则会触发 `strictTypeChecked` 的 `no-unnecessary-type-assertion`（`eslint.config.mjs:46`）：
+  - `admin/model-config.ts:79-80`
+  - `admin/runtime-config.ts:48-49`
+  - `db/settings.ts:136-137`、`:297-298`
+  - `managed-config/read.ts:73-74`：`asObject` 改为直接 `return value`
+- 不碰 `platform/src/orchestrator/` 整个目录（`identity.ts:2`、`task-state.ts:7`、`volumes.ts:13-15`）。PR 里写明：这些在关键路径上，留给单独处理。
+- `platform/web/src/**`、`scripts/*.mjs` 和测试文件里的写法不在范围内。
+
+验证：同 22.1；另需 `pnpm check`、VPS exact-head `test:docker` 和 `test:deploy`（cleanup confirmed，只是满足合并门禁），以及本机 exact-head `pnpm test:stack` 证据评论。
+
+Must preserve：所有 400 响应、错误消息和审计行为；所有现有测试的断言。

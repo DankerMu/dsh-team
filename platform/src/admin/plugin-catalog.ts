@@ -1,7 +1,8 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { CATALOG_STATES, catalogStates } from '../plugin-catalog/index.ts';
 import type { PluginCatalog } from '../plugin-catalog/index.ts';
-import { isPlainObject, registerConfigRoute } from './config-route.ts';
+import { isPlainObject } from '../plain-object.ts';
+import { registerConfigRoute } from './config-route.ts';
 import type { AdminConfigOptions } from './config-route.ts';
 
 const STATE_SCHEMA = { type: 'string', enum: CATALOG_STATES } as const;

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3';
+import { isPlainObject } from '../plain-object.ts';
 
 type PermissionTier = 'approval' | 'auto' | 'yolo';
 
@@ -130,17 +131,15 @@ function parseModels(value: unknown): ModelSetting[] {
   }
   const models: ModelSetting[] = [];
   for (const entry of value) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    if (!isPlainObject(entry)) {
       throw fieldError('models');
     }
-    // Model entries arrive as unknown JSON or patch objects; fields are checked below.
-    const record = entry as Record<string, unknown>;
-    if (typeof record.name !== 'string' || record.name.trim() === '') {
+    if (typeof entry.name !== 'string' || entry.name.trim() === '') {
       throw fieldError('models');
     }
-    const model: { name: string; contextWindow?: number } = { name: record.name };
-    if (Object.hasOwn(record, 'contextWindow')) {
-      model.contextWindow = requirePositiveSafeInteger('models', record.contextWindow);
+    const model: { name: string; contextWindow?: number } = { name: entry.name };
+    if (Object.hasOwn(entry, 'contextWindow')) {
+      model.contextWindow = requirePositiveSafeInteger('models', entry.contextWindow);
     }
     models.push(model);
   }
@@ -148,11 +147,16 @@ function parseModels(value: unknown): ModelSetting[] {
 }
 
 function parsePluginCatalog(value: unknown): Record<string, CatalogState> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isPlainObject(value)) {
     throw fieldError('pluginCatalog');
   }
   const entries = Object.entries(value);
-  if (!entries.every(([, state]) => typeof state === 'string' && Object.hasOwn(STATES, state))) {
+  if (
+    !entries.every(
+      (entry): entry is [string, CatalogState] =>
+        typeof entry[1] === 'string' && Object.hasOwn(STATES, entry[1]),
+    )
+  ) {
     throw fieldError('pluginCatalog');
   }
   // fromEntries defines data properties, so an own "__proto__" id cannot replace the prototype.
@@ -291,13 +295,11 @@ export function readSettings(db: Database.Database): Settings {
 }
 
 export function writeSettings(db: Database.Database, patch: unknown): void {
-  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+  if (!isPlainObject(patch)) {
     throw new SettingsValidationError('Invalid settings patch');
   }
-  // HTTP/admin callers supply untyped objects; field validation below is the type boundary.
-  const record = patch as Record<string, unknown>;
   const entries: [string, unknown][] = [];
-  for (const [key, value] of Object.entries(record)) {
+  for (const [key, value] of Object.entries(patch)) {
     entries.push([key, parseOwned(key, value)]);
   }
   if (entries.length === 0) {

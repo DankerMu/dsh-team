@@ -1,5 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { Settings } from '../db/index.ts';
+import { isPlainObject } from '../plain-object.ts';
 import { registerConfigRoute } from './config-route.ts';
 import type { AdminConfigOptions } from './config-route.ts';
 const PATH = '/_platform/api/admin/model-config';
@@ -32,7 +33,7 @@ function hasUnknownModelFields(models: unknown): boolean {
   if (!Array.isArray(models)) return false;
   const entries: readonly unknown[] = models;
   for (const entry of entries) {
-    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    if (!isPlainObject(entry)) continue;
     for (const key in entry) {
       if (Object.hasOwn(entry, key) && !Object.hasOwn(MODEL_SCHEMA.items.properties, key)) {
         return true;
@@ -75,26 +76,24 @@ export const modelConfigRoutes: FastifyPluginCallback<AdminConfigOptions> = (
     responseSchema: SAFE_SCHEMA,
     project,
     patch(body) {
-      if (typeof body !== 'object' || body === null || Array.isArray(body)) return null;
-      // Raw model entries remain unknown until the canonical settings parser validates them.
-      const input = body as Record<string, unknown>;
+      if (!isPlainObject(body)) return null;
       if (
-        Object.keys(input).some((key) => !INPUT_FIELDS.includes(key)) ||
-        hasUnknownModelFields(input.models) ||
-        typeof input.baseURL !== 'string' ||
-        input.baseURL.trim() === '' ||
-        typeof input.defaultModel !== 'string' ||
-        input.defaultModel.trim() === '' ||
-        !Object.hasOwn(input, 'models') ||
-        (Object.hasOwn(input, 'apiKey') &&
-          (typeof input.apiKey !== 'string' || input.apiKey.trim() === ''))
+        Object.keys(body).some((key) => !INPUT_FIELDS.includes(key)) ||
+        hasUnknownModelFields(body.models) ||
+        typeof body.baseURL !== 'string' ||
+        body.baseURL.trim() === '' ||
+        typeof body.defaultModel !== 'string' ||
+        body.defaultModel.trim() === '' ||
+        !Object.hasOwn(body, 'models') ||
+        (Object.hasOwn(body, 'apiKey') &&
+          (typeof body.apiKey !== 'string' || body.apiKey.trim() === ''))
       )
         return null;
       return {
-        modelBaseUrl: input.baseURL,
-        models: input.models,
-        defaultModel: input.defaultModel,
-        ...(Object.hasOwn(input, 'apiKey') ? { modelApiKey: input.apiKey } : {}),
+        modelBaseUrl: body.baseURL,
+        models: body.models,
+        defaultModel: body.defaultModel,
+        ...(Object.hasOwn(body, 'apiKey') ? { modelApiKey: body.apiKey } : {}),
       };
     },
   });

@@ -1,3 +1,4 @@
+import { isPlainObject } from '../plain-object.ts';
 import type { ManagedConfigInput } from './generate.ts';
 
 export type ManagedComposition = Pick<ManagedConfigInput, 'presets' | 'localePatch' | 'bundles'>;
@@ -67,11 +68,10 @@ function invalid(): never {
 }
 
 function asObject(value: unknown): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isPlainObject(value)) {
     invalid();
   }
-  // JSON objects arrive untyped; field checks below are the contract.
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function requirePlugins(value: unknown): void {
