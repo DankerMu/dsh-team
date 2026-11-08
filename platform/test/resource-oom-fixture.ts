@@ -420,10 +420,12 @@ function readProof(lifecycle: UserImageLifecycle, userId: string): unknown {
   args.push(lifecycle.imageId, 'python3', '-c', readScript);
   output(lifecycle.command, args, 15_000);
   verifyReader(inspect(lifecycle.command, 'container', name), lifecycle, volume, labels);
-  // A separate offline helper survives B's cgroup; its attach/read is still bounded.
-  const proof = output(lifecycle.command, ['start', '--attach', name], 15_000);
-  if (output(lifecycle.command, ['wait', name], 5_000).trim() !== '0')
-    throw new Error('Owned OOM proof reader failed');
+  // A separate offline helper survives B's cgroup; its run and read are still bounded.
+  // Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.
+  output(lifecycle.command, ['start', name], 15_000);
+  const exit = output(lifecycle.command, ['wait', name], 15_000).trim();
+  const proof = output(lifecycle.command, ['logs', name], 15_000);
+  if (exit !== '0') throw new Error('Owned OOM proof reader failed');
   const document: unknown = JSON.parse(proof);
   return document;
 }

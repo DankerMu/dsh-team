@@ -226,7 +226,13 @@ it('drains an active composition helper after its caller disconnects before remo
         '-c',
         'rm -f /data/home/cordis.patch.yml && mkfifo -m 600 /data/home/cordis.patch.yml',
       ]);
-      await command(['start', '--attach', seed]);
+      // Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.
+      await command(['start', seed]);
+      const exit = (await command(['wait', seed])).trim();
+      if (exit !== '0') {
+        const logs = await lifecycle.commandAsync(['logs', seed], 30_000);
+        throw new Error(`FIFO seed container exited ${exit}:\n${logs.stdout}\n${logs.stderr}`);
+      }
       const abort = new AbortController();
       const pending = fetch(`${deployment.base}/_platform/api/instance/start`, {
         method: 'POST',

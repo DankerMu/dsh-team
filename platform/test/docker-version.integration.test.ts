@@ -163,10 +163,7 @@ function dockerFixture(
     args: readonly string[],
   ): DockerCommandResult {
     const reused = args.at(-1)?.endsWith('-reuse') === true;
-    if (operation === 'start') {
-      if (reused && failAt === 'reuse-start') return fail;
-      return ok(version);
-    }
+    if (operation === 'start') return reused && failAt === 'reuse-start' ? fail : ok();
     return ok(reused && failAt === 'reuse-wait' ? '7\n' : '0\n');
   }
   const command: DockerCommand = (args, timeout) => {
@@ -182,6 +179,8 @@ function dockerFixture(
       case 'start':
       case 'wait':
         return containerExecutionResult(operation, args);
+      case 'logs':
+        return ok(version);
       case 'image':
       case 'container':
       case 'volume':
@@ -205,6 +204,8 @@ describe('invocation-owned Docker version lifecycle', () => {
       },
       daemon.command,
     );
+
+    expect(daemon.calls.find(({ args }) => args[0] === 'start')?.args).not.toContain('--attach');
 
     expect([...daemon.images]).toEqual([['dsh-team-test-sentinel:kept', 'sentinel-owner']]);
     expect([...daemon.containers]).toEqual([['dsh-team-test-sentinel', 'sentinel-owner']]);
@@ -466,7 +467,7 @@ describe('invocation-owned profile volume lifecycle', () => {
       const daemon = dockerFixture(stage);
 
       expect(() => runUserImage('profile-seed', () => undefined, daemon.command)).toThrow(
-        stage === 'reuse-wait' ? 'container exited 7' : 'induced daemon failure',
+        stage === 'reuse-wait' ? 'container exited 7:\n0.2.1-rc.2\n' : 'induced daemon failure',
       );
 
       assertProfileInventory(daemon);
