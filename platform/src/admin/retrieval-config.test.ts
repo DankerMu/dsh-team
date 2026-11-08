@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -47,14 +47,6 @@ const audits = (database: DatabaseHandle) =>
     .all();
 const allAudits = (database: DatabaseHandle) =>
   database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-const save = (app: FastifyInstance, cookie: string, payload: unknown) =>
-  app.inject({
-    method: 'PUT',
-    url: PATH,
-    remoteAddress: SOURCE,
-    headers: jsonRequestHeaders({ cookie }),
-    payload: JSON.stringify(payload),
-  });
 const read = (app: FastifyInstance, cookie: string) =>
   app.inject({ url: PATH, headers: { cookie } });
 
@@ -74,7 +66,7 @@ it('replaces only the four retrieval rows with one actor/source audit, then turn
     const { user, cookie } = await administrator(app, database);
     const audit = { actor_email: user.email, target_email: null, source_address: SOURCE };
 
-    const saved = await save(app, cookie, CONFIG);
+    const saved = await putConfig(app, PATH, cookie, CONFIG, SOURCE);
     const first = await read(app, cookie);
 
     expect(saved.statusCode).toBe(200);
@@ -84,7 +76,7 @@ it('replaces only the four retrieval rows with one actor/source audit, then turn
     expect(audits(database)).toEqual([{ ...audit, details: '{}' }]);
 
     const off = { ...CONFIG, retrievalRerankId: '' };
-    const disabled = await save(app, cookie, off);
+    const disabled = await putConfig(app, PATH, cookie, off, SOURCE);
     const second = await read(app, cookie);
 
     expect(disabled.statusCode).toBe(200);
@@ -107,7 +99,7 @@ it.each([
   await withApp(async (app, database) => {
     const { cookie } = await administrator(app, database);
 
-    const saved = await save(app, cookie, payload);
+    const saved = await putConfig(app, PATH, cookie, payload, SOURCE);
     const after = await read(app, cookie);
 
     expect(saved.statusCode).toBe(200);
@@ -205,7 +197,7 @@ it.each(['write', 'corrupt-json', 'corrupt-type'] as const)(
       const settings = settingsRows(database);
       const before = allAudits(database);
 
-      const response = await save(app, cookie, CONFIG);
+      const response = await putConfig(app, PATH, cookie, CONFIG, SOURCE);
       const after = await read(app, cookie);
 
       expect(response.statusCode).toBe(500);

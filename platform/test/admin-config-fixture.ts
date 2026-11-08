@@ -42,8 +42,21 @@ export function settingsRows(database: DatabaseHandle): unknown[] {
   return database.prepare('SELECT * FROM settings ORDER BY key').all();
 }
 
-export function putConfig(app: FastifyInstance, path: string, cookie: string, payload: string) {
-  return app.inject({ method: 'PUT', url: path, headers: jsonRequestHeaders({ cookie }), payload });
+/** A string payload is sent verbatim; any other value is sent as its JSON text. */
+export function putConfig(
+  app: FastifyInstance,
+  path: string,
+  cookie: string,
+  payload: unknown,
+  remoteAddress?: string,
+) {
+  return app.inject({
+    method: 'PUT',
+    url: path,
+    headers: jsonRequestHeaders({ cookie }),
+    payload: typeof payload === 'string' ? payload : JSON.stringify(payload),
+    ...(remoteAddress === undefined ? {} : { remoteAddress }),
+  });
 }
 
 export async function administrator(app: FastifyInstance, database: DatabaseHandle) {

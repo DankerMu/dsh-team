@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { readSettings } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   MODEL_CONFIG as CONFIG,
@@ -17,13 +17,7 @@ it('saves a safe projection and an actor/source audit without reading audits', a
     const { user, cookie } = await administrator(app, database);
     const apiKey = randomBytes(32).toString('hex');
 
-    const saved = await app.inject({
-      method: 'PUT',
-      url: PATH,
-      remoteAddress: SOURCE,
-      headers: jsonRequestHeaders({ cookie }),
-      payload: { ...CONFIG, apiKey },
-    });
+    const saved = await putConfig(app, PATH, cookie, { ...CONFIG, apiKey }, SOURCE);
     const read = await app.inject({ url: PATH, headers: { cookie } });
 
     expect(saved.statusCode).toBe(200);

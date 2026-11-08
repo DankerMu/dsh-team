@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { DatabaseHandle } from '../db/index.ts';
-import { jsonRequestHeaders, SOURCE, withApp } from '../../test/auth-fixture.ts';
+import { SOURCE, withApp } from '../../test/auth-fixture.ts';
 import {
   administrator,
   putConfig,
@@ -40,14 +40,6 @@ const audits = (database: DatabaseHandle) =>
     .all();
 const allAudits = (database: DatabaseHandle) =>
   database.prepare('SELECT * FROM audit_events ORDER BY id').all();
-const save = (app: FastifyInstance, cookie: string, payload: unknown) =>
-  app.inject({
-    method: 'PUT',
-    url: PATH,
-    remoteAddress: SOURCE,
-    headers: jsonRequestHeaders({ cookie }),
-    payload: JSON.stringify(payload),
-  });
 const read = (app: FastifyInstance, cookie: string) =>
   app.inject({ url: PATH, headers: { cookie } });
 
@@ -70,7 +62,7 @@ it('reports a configured bundled deployment without echoing its container name o
       const { cookie } = await administrator(app, database);
 
       const initial = await read(app, cookie);
-      const saved = await save(app, cookie, { mode: 'bundled' });
+      const saved = await putConfig(app, PATH, cookie, { mode: 'bundled' }, SOURCE);
 
       expect(initial.json()).toEqual({ ...BUNDLED, bundledConfigured: true });
       expect(saved.json()).toEqual({ ...BUNDLED, bundledConfigured: true, runningInstances: 0 });
@@ -92,11 +84,17 @@ it('switches to external, keeps an omitted JWT, replaces a supplied one and clea
     const audit = { actor_email: user.email, target_email: null, source_address: SOURCE };
     const external = { mode: 'external', bundledConfigured: false, jwtConfigured: true };
 
-    const saved = await save(app, cookie, {
-      mode: 'external',
-      url: EXTERNAL_URL,
-      jwtSecret: first,
-    });
+    const saved = await putConfig(
+      app,
+      PATH,
+      cookie,
+      {
+        mode: 'external',
+        url: EXTERNAL_URL,
+        jwtSecret: first,
+      },
+      SOURCE,
+    );
     expect(saved.statusCode).toBe(200);
     expect(saved.json()).toEqual({ ...external, url: EXTERNAL_URL, runningInstances: 0 });
     expect((await read(app, cookie)).json()).toEqual({ ...external, url: EXTERNAL_URL });
@@ -107,7 +105,13 @@ it('switches to external, keeps an omitted JWT, replaces a supplied one and clea
       }),
     );
 
-    const moved = await save(app, cookie, { mode: 'external', url: 'http://10.0.0.7' });
+    const moved = await putConfig(
+      app,
+      PATH,
+      cookie,
+      { mode: 'external', url: 'http://10.0.0.7' },
+      SOURCE,
+    );
     expect(moved.json()).toEqual({ ...external, url: 'http://10.0.0.7', runningInstances: 0 });
     expect(settingsRows(database)).toEqual(
       seededWith({
@@ -116,11 +120,17 @@ it('switches to external, keeps an omitted JWT, replaces a supplied one and clea
       }),
     );
 
-    const replaced = await save(app, cookie, {
-      mode: 'external',
-      url: 'http://10.0.0.7',
-      jwtSecret: second,
-    });
+    const replaced = await putConfig(
+      app,
+      PATH,
+      cookie,
+      {
+        mode: 'external',
+        url: 'http://10.0.0.7',
+        jwtSecret: second,
+      },
+      SOURCE,
+    );
     expect(replaced.json()).toEqual({ ...external, url: 'http://10.0.0.7', runningInstances: 0 });
     expect(settingsRows(database)).toEqual(
       seededWith({
@@ -129,7 +139,7 @@ it('switches to external, keeps an omitted JWT, replaces a supplied one and clea
       }),
     );
 
-    const bundled = await save(app, cookie, { mode: 'bundled' });
+    const bundled = await putConfig(app, PATH, cookie, { mode: 'bundled' }, SOURCE);
     expect(bundled.json()).toEqual({ ...BUNDLED, runningInstances: 0 });
     expect((await read(app, cookie)).json()).toEqual(BUNDLED);
     expect(settingsRows(database)).toEqual(SEEDED_SETTINGS);
@@ -146,7 +156,13 @@ it('rejects a first external save without a JWT through the pairing rule and rol
     const { cookie } = await administrator(app, database);
     const before = allAudits(database);
 
-    const response = await save(app, cookie, { mode: 'external', url: EXTERNAL_URL });
+    const response = await putConfig(
+      app,
+      PATH,
+      cookie,
+      { mode: 'external', url: EXTERNAL_URL },
+      SOURCE,
+    );
 
     expect(response.statusCode).toBe(400);
     expect(response.json()).toEqual(PAIRING);
@@ -161,7 +177,13 @@ it('accepts an omitted JWT when a stored JWT already pairs with the new address'
     async (app, database) => {
       const { cookie } = await administrator(app, database);
 
-      const response = await save(app, cookie, { mode: 'external', url: EXTERNAL_URL });
+      const response = await putConfig(
+        app,
+        PATH,
+        cookie,
+        { mode: 'external', url: EXTERNAL_URL },
+        SOURCE,
+      );
 
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({
@@ -244,11 +266,17 @@ it.each(['audit', 'corrupt'] as const)(
       const settings = settingsRows(database);
       const before = allAudits(database);
 
-      const response = await save(app, cookie, {
-        mode: 'external',
-        url: EXTERNAL_URL,
-        jwtSecret: secret,
-      });
+      const response = await putConfig(
+        app,
+        PATH,
+        cookie,
+        {
+          mode: 'external',
+          url: EXTERNAL_URL,
+          jwtSecret: secret,
+        },
+        SOURCE,
+      );
       const after = await read(app, cookie);
 
       expect(response.statusCode).toBe(500);
