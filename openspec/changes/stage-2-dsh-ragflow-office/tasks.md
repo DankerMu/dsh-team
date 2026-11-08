@@ -3573,6 +3573,102 @@ Evidence (17.4 镜像部分，#432):
 Suggested fixture level: expanded - 跨用户隔离和新的共享对端
 Minimal mergeable slice: 18.1 插件和补丁单独合入（插件路由会注册，但补丁保证缺少或不匹配密钥时 `file` 路由拒绝一切令牌；用直接请求 `file` 路由的拒绝测试证明，端到端证明在 18.5）
 
+Risk packs (18.1): fixture level expanded，关键路径 `images/dsh-user/`。selected - Auth（文件令牌密钥与文档 key 改为每实例密钥，缺失即拒绝）、File IO（构建期改写第三方文件：版本、副本、哈希漂移都拒绝且不写文件）、Release（用户镜像新增第三方包和目录项）、Legacy compatibility（既有目录项、侧栏和覆盖层行为不变）；not selected - Schema、Public API、Config（覆盖层的 Office 配置在 18.2）、Concurrency。
+
+已核实的事实（发行包 `dsh-sidebar-onlyoffice@0.2.0`，npm integrity `sha512-fXJsEup/thRpqHtDR2u+A+5feiKqH8AVqFh+t88rd4iTVybk9yMHwSKwF0Peak3x1UMXqiCuWUs5k3CVw3k2Zg==`，发布于 2026-09-02；`lib/index.js` SHA-256 `e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b`，行号以它为准）：
+
+- 宿主半区只有 `lib/index.js` 一个文件，ESM；依赖 `@deepseek-ai/schemastery >=3.18.1-rc.1 <4`，peer 依赖 `@deepseek-ai/cordis`、`dsh-better-sidebar >=0.6.0`、`react`。`cordis.patch.yml` 只插入一行 `{ id: dsh-sidebar-onlyoffice, name: dsh-sidebar-onlyoffice, config: {} }`。
+- 文件令牌：
+  - `:1839` 是公开常量 `const FILE_TOKEN_SECRET = "dsh-sidebar-onlyoffice/file-token/v1";`；
+  - `mintFileToken(claims, secret)`（`:1151-1154`）的格式是 `base64url(JSON claims).base64url(HMAC-SHA256(secret, payload))`，claims 为 `{ key, path, cwd, exp }`；
+  - `verifyFileToken(token, secret)`（`:1161` 起）先比签名，再查 `exp`。
+  - `node:crypto` 接受空字符串作 HMAC 密钥，所以空密钥必须显式拒绝，不能交给 `createHmac`。
+- 文档 key：`documentKey(host, path, size, mtimeMs)`（`:1093-1095`）返回 `sha256(host\0path\0size\0mtimeMs)` 的十六进制。
+  - 调用方有两处：config 路由（`:1998`，`host` 是 `:1889` 的 `os.hostname()`，`mtimeMs` 取 `Math.round(info.mtimeMs)`）和 watch hub 的 `signatureOf`（`:1559-1567`）。
+  - config 路由在签发令牌（`:2045-2050`）**之前**就 `registry.set(key, …)`（`:2001`）和 `dsProxy.noteDocumentKey(key)`（`:2044`）。所以空密钥时 `documentKey` 本身必须抛错：只让签发失败不够，那样公开算法能算出的 key 仍会进入注册表。
+- 回调（`:2123-2185`）：jwtSecret 为空时不验 JWT；status 2/6 走 `registry.saveFromCallback(key, …)`，未注册的 key 抛 `onlyoffice: unknown document key "<key>"`（`:1441`），记一条 error 日志，回 `{ error: 1 }`。
+- DSH 0.2.1 的 webserver 不做鉴权，路由各自负责（`dsh-host-webserver/lib/index.js:381-393`）。
+  - `file` 路由（`:2074-2118`）只验令牌：缺 token 回 400，令牌无效回 403、正文 `invalid token: <reason>`，文件不存在回 404。
+  - config 路由经 `isTrustedApiRequest`（`:142-157`）：Host 为 loopback、没有 Origin 时放行。`sessionId` 可以是任意值，cwd 取查询参数 `cwd`（`sessionCwdOf`，`:1868-1873`）。
+  - 所以容器内经 `http://127.0.0.1:3080` 可以直接请求这三个路由。
+- 文件令牌密钥由编排器每次启动注入 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`（64 位十六进制，12.1 已完成，`platform/src/orchestrator/start.ts:425`）。
+- 先例：#375 的 `patch-plugin-manager.mjs`（a7fb25c 删除，见 `git show a7fb25c^:images/dsh-user/patch-plugin-manager.mjs`）和它的合成树集成测试 `platform/test/plugin-manager-patch.integration.test.ts`。better-sidebar 的安装方式见 `images/dsh-user/Dockerfile:15-37`。
+
+selected：
+
+- **安装（`images/dsh-user/Dockerfile`）**：
+  - 照 better-sidebar 的写法装到 `/opt/dsh-team/dsh-sidebar-onlyoffice`：`npm install -g --prefix <临时目录> --legacy-peer-deps --ignore-scripts --no-bin-links --no-audit --no-fund --before=2026-10-31T00:00:00Z dsh-sidebar-onlyoffice@0.2.0`。依赖闭包嵌在其下，属主 root，目录 0555、文件 0444。
+  - 版本用独立字面量精确比对，不等就构建失败。
+  - 补丁紧跟在安装和版本检查之后，在 `catalog-check.mjs register` 和 profile 种子之前，这样后续一切副本都来自补过的文件。
+  - 补丁脚本用 `RUN --mount=type=bind` 执行，不进任何镜像层。
+- **补丁脚本（新文件 `images/dsh-user/patch-onlyoffice.mjs`）**，结构照 #375 的先例：
+  - 参数是 `/opt/dsh-team` 和 `$(npm root -g)`。在两个根下只找真实目录（不跟随、不计符号链接）中 `package.json` 的 `name` 为 `dsh-sidebar-onlyoffice` 的副本，合计必须恰好一份，且位于 `/opt/dsh-team/dsh-sidebar-onlyoffice`。
+  - 版本必须是 `0.2.0`。`lib/index.js` 的输入 SHA-256 必须是上面的值；补丁结果的 SHA-256 必须是评审过的值（实现时在真实文件上算出，写进脚本和 PR 描述）。
+  - 同目录临时文件加 rename，原子写入，保留原 mode 和属主（root）。
+  - 拒绝时只输出失败的检查名，不打印路径和内容，以非零状态退出，目标文件逐字节不变。
+  - 只做下面四处精确文本替换，每处原文必须恰好出现一次，否则拒绝：
+    1. `:1839` 改为 `const FILE_TOKEN_SECRET = process.env.DSH_TEAM_ONLYOFFICE_FILE_SECRET ?? "";`。
+    2. `documentKey` 的函数体：密钥为空时 `throw new Error("onlyoffice: file token secret unavailable")`；否则返回 `createHmac("sha256", FILE_TOKEN_SECRET).update(<原输入串，逐字不变>).digest("hex")`。仍是 64 位小写十六进制，`isUsableDocumentKey` 照常接受。
+    3. `mintFileToken` 开头：`secret === ""` 时抛同一个错误。
+    4. `verifyFileToken` 开头：`secret === ""` 时返回 `{ ok: false, reason: "bad-signature" }`。
+  - 别的文件和别的行都不碰（`lib/client.js` 不改）。
+- **目录（`images/dsh-user/catalog.json`）**：新增 `{ "id": "dsh-sidebar-onlyoffice", "package": "dsh-sidebar-onlyoffice", "name": "Office 在线编辑", "category": "manageable", "imageDefaultEnabled": true }`，放在 `dsh-better-sidebar` 之后。
+  - 构建期 `catalog-check.mjs` 的 register 和 verify 照常处理。
+  - 平台读目录的地方（`platform/src/plugin-catalog/catalog.ts`，以及覆盖层生成器从 `/opt/dsh-team/<id>/cordis.patch.yml` 读规范 patch）不需要改代码。
+  - 列出目录项的既有测试和期望（插件页探针、first-use、管理页 UI 等）按 7 项更新，不放宽断言。
+- **集成测试（`platform/test/onlyoffice-patch.integration.test.ts`，Docker-free）**：
+  - 照 #375 的先例用合成树，不下载、不入库发行包，所以合成树最多走到输入哈希检查。
+  - 用例：
+    - 版本不符；
+    - 零份副本；
+    - 两份副本：一份在 `/opt` 根，一份在全局根或嵌套的 `node_modules`；
+    - 只有符号链接（不计数）；
+    - 唯一副本不在 `/opt/dsh-team/dsh-sidebar-onlyoffice`；
+    - 输入哈希不符。
+  - 每个用例都断言：非零退出，stderr 只含检查名，且不含路径和内容标记；所有文件逐字节不变，没有残留的临时文件。
+  - 补丁成功的路径由镜像构建和下面的 Docker 用例证明。
+- **用户镜像 Docker 用例（`platform/test/user-image.docker.test.ts` 及其 fixture）**：
+  - 断言 `/opt/dsh-team/dsh-sidebar-onlyoffice/package.json` 的版本是 `0.2.0`；`lib/index.js` 的 SHA-256 等于补丁后的值；`lib/client.js` 等于发行值 `13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc`。
+  - 断言属主 root，uid1001 不可写；镜像里找不到 `patch-onlyoffice.mjs`。
+- **令牌和 key 的 Docker 用例**：两次启动 DSH web，一次不带 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，一次带测试自有的随机 64 位十六进制值 S。可以新建 `*.docker.test.ts`，或放进已有启动 DSH web 的 fixture，沿用它的启动方式。
+  - 插件必须真的在运行：每次启动都先断言 `GET /sidebar/onlyoffice/file`（不带 token）回 400 `missing token`，不是 404。
+  - 测试在容器内建一个 `.docx` 文件 F（任意字节），从容器内读 `os.hostname()` 和 F 的 size、`Math.round(mtimeMs)`，算出两个 key：
+    - K0 = 原公开算法的 key；
+    - K1 = `HMAC-SHA256(S, 同一输入串)`。
+  - 带 S：
+    1. `GET /sidebar/onlyoffice/config?sessionId=t&path=<F>&cwd=<F 所在目录>`（Host `127.0.0.1:3080`，无 Origin）会注册 key。没有 Document Server 配置，所以回 503 `config-error`。
+    2. 用 S 签 `{ key: K1, path: F, cwd, exp: 未来 }` 的令牌请求 `file` 路由，回 200，正文等于 F 的字节。这是正向对照。
+    3. 用公开常量签的同一 claims 请求 `file`，回 403，正文以 `invalid token:` 开头。
+    4. 分别以 K0 和 K1 发 `POST /sidebar/onlyoffice/callback`，body 为 `{ key, status: 2, url: "http://127.0.0.1:9/none" }`，两个都回 `{ error: 1 }`。区别在日志：K0 有 `unknown document key "<K0>"`，K1 没有这行（它已注册，失败在下载）。
+  - 不带 S：
+    1. 用公开常量签的令牌和用空串签的令牌请求 `file`，都回 403。
+    2. 同样的 config 请求回非 2xx。之后以 K0 回调，日志有 `unknown document key`。
+  - 修改前（未打补丁的发行文件）会变红：K0 被注册，K1 是 unknown，公开常量签的令牌回 200。
+  - 测试只用自己的随机值。S 不进断言消息、快照或证据文件；证据里只写它的 SHA-256 前缀。
+
+must-preserve：
+
+- 既有 6 个目录项、better-sidebar 及其 `HOST_OWNED_EXTS`（补丁在 18.3）、覆盖层生成器和插件页锁定显示的行为不变。
+- ONLYOFFICE 的 Office 配置（Document Server 地址、JWT 等）不在本任务写，不可用时停用 ONLYOFFICE 也不在本任务（18.2）。
+- 目录项新增后，员工实例在 18.2 合入前会加载 ONLYOFFICE，但没有 Document Server 配置，config 路由回 503。这是 18.1 最小切片声明里接受的中间状态。
+
+not selected：Schema、API、迁移：无；平台源码不改。
+
+剩余风险：
+
+- 端到端证明（跨实例令牌、猜测 key 打开编辑器、Document Server 回调）在 18.5。
+- 环境变量在模块加载时读取一次；实例运行中不会轮换，与编排器每次启动注入的设计一致。
+
+Governing invariant：一个实例签发的文件令牌和文档 key，只在持有同一启动期密钥的同一实例中有效；没有密钥时插件既不签发令牌，也不注册任何 key。
+
+Sibling surfaces：12.1 的密钥注入；18.2 的覆盖层 Office 配置；18.3 的 better-sidebar 补丁（复用本脚本的结构，但各写一份脚本，各钉各的哈希）；18.5 的跨用户攻击用例。
+
+Evidence (18.1):
+
+- 本机：`pnpm check`；集成测试各拒绝用例。
+- VPS exact-head `pnpm test:docker`（新的用户镜像断言和令牌用例）和 `pnpm test:deploy`，清理已确认。
+- PR 描述写明关键路径：human white-box review deferred to Epic #380 completion, not passed。
+
 ## 19. 阶段 2 集成验收
 
 依赖：1–4、6–18。
