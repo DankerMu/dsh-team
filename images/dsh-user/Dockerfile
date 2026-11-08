@@ -21,8 +21,9 @@ RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.1-rc.2 \
 COPY --chmod=0444 catalog-check.mjs /opt/dsh-team/catalog-check.mjs
 RUN node /opt/dsh-team/catalog-check.mjs record /opt/dsh-team/npm-baseline.json
 
-# The third-party sidebar is the unpatched npm release, delivered like the repository plugins: a
-# real root-owned directory with its dependency closure nested below it, never a global package.
+# The third-party sidebar's code is the unpatched npm release; its manifest only gains
+# bundleDependencies (below). It is delivered like the repository plugins: a real root-owned
+# directory with its dependency closure nested below it, never a global package.
 # --legacy-peer-deps keeps a second DSH and React out of that closure, --no-bin-links leaves no
 # symlink for registration to refuse, and --before pins every dependency to one resolution moment
 # (after the 0.28.0 release, older than the repository's 7-day minimum release age).
@@ -96,6 +97,11 @@ COPY --chmod=0444 catalog.json /opt/dsh-team/catalog.json
 RUN chmod 0555 /opt/dsh-team /opt/dsh-team/zh-locale /opt/dsh-team/office-agents \
     /opt/dsh-team/office-agents/skills /opt/dsh-team/office-agents/skills/official-writing \
     /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav /opt/dsh-team/knowledge-base
+# Every entry with dependencies declares them as bundleDependencies, so the employee's pnpm takes
+# the nested closure from the package instead of resolving it from a registry; a missing nested
+# dependency or an existing bundle field fails the build. It runs as root after the patch and the
+# catalog, before registration and the profile seed copy these manifests.
+RUN node /opt/dsh-team/catalog-check.mjs bundle /opt/dsh-team/catalog.json
 
 RUN useradd -m -u 1001 dsh \
   && mkdir -p /data/home /data/work \

@@ -3549,6 +3549,100 @@ Evidence (17.4 镜像部分，#432):
 - VPS exact-head `pnpm test:docker`（新 probe 和升级后的 17.1 用例，附证据）和 `pnpm test:deploy`，清理已确认；PR 写明镜像大小变化。
 - 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
 
+Risk packs (#556 员工插件操作不重新解析预装项的依赖闭包；17.1、18.1 的交付缺陷): fixture level expanded（关键路径 `images/dsh-user/`）。
+
+红（本机 arm64，origin/main 19e2a6b 构建的用户镜像，`--user 1001 --network none`，容器内回环的 registry 替身只提供一个小插件 `dsh-team-probe-plugin@1.0.0`）：
+
+- profile 没有 `pnpm-lock.yaml`。`pnpm add dsh-team-probe-plugin --registry=<替身>` 退出 1：`ERR_PNPM_FETCH_404 GET …/@codemirror%2Fcommands`，「This error happened while installing the dependencies of dsh-better-sidebar@0.28.0」。替身收到 35 个不同的包名请求（`yaml`、`ws`、`@deepseek-ai/schemastery` 等）。
+- 不带源的 `pnpm remove @dsh-team/zh-locale` 去公共源重新解析 better-sidebar 的依赖，离线时挂到超时。
+- 原因：`register` 把 `file:/opt/dsh-team/<id>` 记进 profile（`catalog-check.mjs:317`）。pnpm 每次操作都读 `file:` 目标的 manifest，即 `/opt/dsh-team/<id>/package.json`，从源里重新解析其 `dependencies` 的整个闭包（约 170 个包），不用嵌套在包下的 `node_modules`。
+
+绿（同一镜像，只在 `/opt/dsh-team/dsh-better-sidebar/package.json` 加 `bundleDependencies` = 其 `dependencies` 的全部键；profile 副本保持旧 manifest）：
+
+- `add`、`remove`、修复路径 `install --config.lockfile=false` 都退出 0。替身只收到 `GET /dsh-team-probe-plugin`、它的 tarball 和 `GET /pnpm`。
+- `node_modules/dsh-better-sidebar` 仍是普通目录，嵌套 `node_modules` 完整；`dsh --profile web --dump-default-config` 没有 skip 诊断。
+- onlyoffice（18.1，PR #567）没有实测过：红绿都在它合入之前。它的 bundle 由构建门禁和新 Docker 用例证明；被拒时停下来报告，不放宽规则。
+
+修复层：用户镜像构建。`bundleDependencies` 是 npm/pnpm 声明「依赖闭包随包交付」的标准字段，与 17.1 的交付形态一致：真实目录，依赖闭包嵌套在包下。不生成 lockfile：lockfile 引用的包不在 store 里，离线照样要取。也不加 `.pnpmfile.cjs` 钩子：它只能删依赖，删了以后闭包不会被复制。DSH 源码不改。
+
+口径（用户镜像 spec 同 PR 修改）：
+
+- 17.1、17.2 的「不打补丁」「未打补丁」从此指代码文件。第三方包的 manifest 只多出 `bundleDependencies`。
+- `patch-package.mjs` 只对 `target` 文件（onlyoffice 为 `lib/index.js`）算哈希。manifest 的改动不在 18.1、18.3 的哈希输入里，两份钉定哈希不变。
+- `specs/user-image/spec.md`：
+  - 「Office 提示插件随镜像交付」场景的 THEN 改为「ONLYOFFICE 包的代码文件只有文件令牌补丁的改动，manifest 只多出 `bundleDependencies`」；
+  - 新增 Requirement「预装项的依赖闭包随包交付」：有 `dependencies` 的预装项 MUST 声明 `bundleDependencies`，等于其 `dependencies` 的键，每个名字都嵌套交付在包下，否则构建失败。场景：内网源只提供员工要装的插件时，员工安装、卸载插件都成功，源收不到任何预装项依赖的请求。
+
+实现：
+
+- **`images/dsh-user/catalog-check.mjs`**：
+  - 新命令 `bundle <catalog.json> [--root <prefix>]`。对每个目录项读 `/opt/dsh-team/<id>/package.json`：
+    - `dependencies` 为空或缺失：不改文件；
+    - 否则写入 `bundleDependencies` = `dependencies` 的键排序。每个名字都必须有嵌套的 `node_modules/<name>/package.json`，并且不能已有 `bundleDependencies`/`bundledDependencies`；任一不满足就报错，所有项都不写；
+    - 文件以原模式和属主原子替换（同目录临时文件加 rename）。
+  - `verify` 加一条不变量：每个目录项的 canonical manifest 中，`dependencies` 非空时，`bundleDependencies` 恰为其键排序，且每个名字都嵌套交付；否则报 `catalog entry dependencies not bundled: <id>`。profile 副本相同的检查不变，副本里也带着这个字段。
+  - `optionalDependencies`、`peerDependencies` 不在本条规则内。better-sidebar、onlyoffice 的 peer 在 `--legacy-peer-deps` 下不安装，红绿实测中 pnpm 也没有请求它们。
+- **Dockerfile**：`RUN node /opt/dsh-team/catalog-check.mjs bundle /opt/dsh-team/catalog.json` 放在恢复目录权限的 `RUN chmod 0555 …` 之后、`useradd` 之前。这个位置在 onlyoffice 补丁和 `COPY catalog.json` 之后，仍以 root 运行，也是唯一同时满足这几个条件的位置。better-sidebar 段的注释改写为：代码是未打补丁的发行版，manifest 只多出 `bundleDependencies`。
+- **单元测试（`catalog-check.test.mjs`）**：
+  - 有依赖的项被写入，无依赖的项文件字节不变；
+  - 缺少嵌套依赖、已有 bundle 字段时拒绝，所有文件都不变；
+  - `verify` 对未 bundle、bundle 不全、bundle 多出一项都报错。
+- **Docker 用例（`user-image.docker.test.ts`，在 `user-image-fixture.ts` 新增 probe 成员）**：
+  - `--user 1001 --network none`；容器内起回环 registry 替身，记录每个请求路径，只提供 `dsh-team-probe-plugin@1.0.0`：
+    - tarball 在容器内生成，`dsh.bundle.patch` 为空补丁 `[]`；
+    - manifest 不声明 `engines.dsh`，也不对 `@deepseek-ai/*` 声明 peer。这样 `dsh-plugin-manager` 的兼容性预检从替身读到 manifest 后判为兼容（不是因查询失败而跳过），`lib/index.js:725-760` 的 restore 和 repair 分支不会触发，退出码只反映 pnpm 的结果。
+  - 依次跑真实 DSH 入口，每步有超时上限（150s，高于 CLI 120s 的查询超时）：
+    - `dsh plugin --profile web add dsh-team-probe-plugin --registry=<替身>`：与插件页安装同一形式（`lib/index.js:818-819`、`:2033-2038`），只有 `--registry=` 会转给安装前的兼容性预检 `pnpm view`（`:595-597`、`:409-422`），所以替身会多收到一次预检的元数据请求；
+    - `dsh plugin --profile web remove dsh-team-probe-plugin --config.registry=<替身>`（真实卸载带源，`lib/index.js:2151-2156`）；
+    - `pnpm install --config.lockfile=false --config.registry=<替身>`（修复路径的同一参数，`:742`）。
+  - 每步都退出 0。替身请求只含 `dsh-team-probe-plugin` 的元数据和 tarball，外加 pnpm 自查 `GET /pnpm`。
+  - 之后：
+    - `node_modules/dsh-better-sidebar/package.json` 的版本仍为 0.28.0；
+    - 嵌套 `node_modules` 的条目数与 canonical 副本相同；
+    - profile 顶层只有登记的依赖，better-sidebar 和 onlyoffice 的依赖都没有被提升上来；
+    - `dsh --profile web --dump-default-config` 没有 `skipping profile bundle`/`disabling profile plugin`。
+  - 旧卷子步骤：先把 profile 副本 manifest 中的 `bundleDependencies` 删掉，再做一次 `add`。结果同上，证明 pnpm 只读 canonical manifest。
+  - 已有的 `expectSidebarRelease` 和 onlyoffice 的交付断言加一条：canonical manifest 的 `bundleDependencies` 等于其 `dependencies` 的键排序。用例标题和注释中的「unpatched」按上面的口径改写。
+- **PR 范围**：
+  - `images/dsh-user/Dockerfile`、`catalog-check.mjs`、`catalog-check.test.mjs`；
+  - `platform/test/user-image.docker.test.ts`、`user-image-fixture.ts`；
+  - `specs/user-image/spec.md`；
+  - `platform/test/README.md` 用户镜像段：交付形态的描述和新 probe。
+  - PR 写明：关键路径 `images/dsh-user/`，人工白盒审查推迟到 Epic #380 完成时进行，本 PR 未通过该审查。
+  - 本项关闭 17.1 剩余风险中离线 pnpm 行为那一条。
+
+must-preserve：
+
+- 17.1 的版本门禁、目录位置、root 只读，profile 副本和 seed 都与 canonical 一致。
+- 18.1 补丁的输入、输出哈希。
+- 没有依赖的仓库插件 manifest 字节不变。
+- 员工从管理员配置的源安装插件的路径（D9/F46）不变。本项只是让它不再被预装项拖累。
+
+not selected：
+
+- 员工自己安装的插件仍要从源里取依赖，那是它们自己的事。
+- #409 的外联审计：依赖本项，另做。
+
+剩余风险：
+
+- 旧 home 卷换到新镜像启动后立即受益，因为 pnpm 读的是镜像层里的 canonical manifest。卷里 profile 副本的 manifest 与 canonical 不同，直到下一次 pnpm 操作重新复制为止。运行时没有任何检查依赖二者相同；旧卷子步骤测的就是这一点。
+- pnpm 主版本升级时，bundled 依赖的语义要重新核对，本项的 Docker 用例就是这个核对。
+
+Governing invariant：员工在不联网或只有内网源时安装、卸载插件，pnpm 不会去源里重新解析任何预装项的依赖闭包；预装项的依赖只来自镜像里嵌套交付的那一份。
+
+Sibling surfaces：
+
+- 17.1 better-sidebar 交付；
+- 18.1 onlyoffice 交付和补丁；
+- 插件管理器的修复路径；
+- #409。
+
+Evidence (#556):
+
+- 本机：`pnpm check`。
+- VPS exact-head `pnpm test:docker`（新 probe，附替身请求日志的计数）和 `pnpm test:deploy`，清理已确认。
+- 本机 exact-head `pnpm test:stack` 证据评论（门禁）。
+
 ## 18. Office 在线编辑
 
 依赖：10（含 10.4 本机浏览器）、11、12、16、17。关键路径 `images/dsh-user/`。

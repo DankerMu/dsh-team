@@ -8,6 +8,8 @@ import { instanceAddressLayout } from '../src/orchestrator/index.ts';
 import {
   assertDocxReadback,
   buildUserImageExpectingFailure,
+  PROBE_PLUGIN,
+  PROBE_TARBALL,
   runUserImage,
 } from './user-image-fixture.ts';
 import { assertOfficeConversion } from './office-convert-fixture.ts';
@@ -103,6 +105,8 @@ for (const entry of read('/opt/dsh-team/catalog.json').entries) {
   sidebar = {
     name: manifest.name,
     version: manifest.version,
+    dependencies: Object.keys(manifest.dependencies ?? {}),
+    bundleDependencies: manifest.bundleDependencies,
     peers,
     global: lstatSync('/usr/local/lib/node_modules/dsh-better-sidebar', { throwIfNoEntry: false }) !== undefined,
     wasm: createRequire(kit).resolve('@deepseek-ai/libreoffice-kit-wasm/package.json'),
@@ -159,13 +163,18 @@ function expectRegisteredCopies(observed: unknown, catalog: { id: string; packag
 interface SidebarFacts {
   readonly name: string;
   readonly version: string;
+  readonly dependencies: readonly string[];
+  readonly bundleDependencies: unknown;
   readonly peers: Record<string, number>;
   readonly global: boolean;
   readonly wasm: string;
   readonly seed: { readonly digest: string; readonly bytes: number; readonly violations: number };
 }
 
-/** The unpatched release, nested without DSH or React, only at its catalog location. */
+/**
+ * The release's code unpatched (its manifest only gains `bundleDependencies`), nested without DSH
+ * or React, only at its catalog location.
+ */
 function expectSidebarRelease(observed: Record<string, unknown>): string {
   const sidebar = observed.sidebar as SidebarFacts;
   const copies = (
@@ -174,6 +183,8 @@ function expectSidebarRelease(observed: Record<string, unknown>): string {
   if (copies === undefined) throw new Error('Missing sidebar copies');
   const { canonical, profile } = copies;
   expect([sidebar.name, sidebar.version]).toEqual(['dsh-better-sidebar', '0.28.0']);
+  expect(sidebar.dependencies.length).toBeGreaterThan(0);
+  expect(sidebar.bundleDependencies).toEqual([...sidebar.dependencies].sort());
   expect(canonical.symlinks).toBe(0);
   expect(Object.keys(sidebar.peers)).toEqual(
     expect.arrayContaining(['@deepseek-ai/cordis', 'react', 'react-dom']),
@@ -418,13 +429,14 @@ process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.n
 });
 
 // dsh-sidebar-onlyoffice@0.2.0: the reviewed build-time patch of lib/index.js (published
-// e2148f01…b29b) and the unpatched published lib/client.js.
+// e2148f01…b29b) and the unpatched published lib/client.js; its manifest only gains
+// `bundleDependencies`.
 const ONLYOFFICE_PATCHED_INDEX_SHA256 =
   '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef';
 const ONLYOFFICE_RELEASED_CLIENT_SHA256 =
   '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc';
 
-it('delivers dsh-sidebar-onlyoffice 0.2.0 patched, root-owned and unwritable by uid1001, without the patch script', async () => {
+it('delivers dsh-sidebar-onlyoffice 0.2.0 with only the file-token code patch and bundleDependencies, root-owned and unwritable by uid1001, without the patch script', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
@@ -433,6 +445,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 const root='/opt/dsh-team/dsh-sidebar-onlyoffice';
+const manifest=JSON.parse(readFileSync(root+'/package.json','utf8'));
 const sha=(path)=>createHash('sha256').update(readFileSync(path)).digest('hex');
 for(const path of [root,root+'/lib']) {
   const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o555);
@@ -445,7 +458,9 @@ assert.throws(()=>renameSync(target,root+'/lib/employee.js'),{code:'EACCES'});
 assert.throws(()=>writeFileSync(root+'/lib/employee.js','employee code'),{code:'EACCES'});
 assert.equal(process.getuid(),1001);
 process.stdout.write(JSON.stringify({
-  version:JSON.parse(readFileSync(root+'/package.json','utf8')).version,
+  version:manifest.version,
+  dependencies:Object.keys(manifest.dependencies??{}),
+  bundleDependencies:manifest.bundleDependencies,
   index:sha(target),
   profileIndex:sha('/data/home/profiles/web/node_modules/dsh-sidebar-onlyoffice/lib/index.js'),
   seedIndex:sha('/opt/dsh-team/profile-seed/web/node_modules/dsh-sidebar-onlyoffice/lib/index.js'),
@@ -459,7 +474,13 @@ process.stdout.write(JSON.stringify({
   await runUserImage(
     'managed-policy',
     (stdout) => {
-      expect(JSON.parse(stdout)).toEqual({
+      const { dependencies, bundleDependencies, ...observed } = JSON.parse(stdout) as {
+        dependencies: string[];
+        bundleDependencies: unknown;
+      };
+      expect(dependencies.length).toBeGreaterThan(0);
+      expect(bundleDependencies).toEqual([...dependencies].sort());
+      expect(observed).toEqual({
         version: '0.2.0',
         index: ONLYOFFICE_PATCHED_INDEX_SHA256,
         profileIndex: ONLYOFFICE_PATCHED_INDEX_SHA256,
@@ -473,6 +494,127 @@ process.stdout.write(JSON.stringify({
     undefined,
     (lifecycle) =>
       Promise.resolve(execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-onlyoffice`, script)),
+  );
+});
+
+interface PluginStep {
+  readonly name: string;
+  readonly status: number | null;
+  readonly signal: string | null;
+  readonly error?: string;
+  readonly timedOut: boolean;
+  readonly requests: readonly string[];
+  readonly tail: string;
+}
+
+interface ProfileState {
+  readonly sidebar: { readonly version: string; readonly directory: boolean };
+  readonly nested: Record<string, { readonly canonical: number; readonly profile: number }>;
+  readonly top: readonly string[];
+  readonly dependencies: readonly string[];
+  readonly hoisted: readonly string[];
+  readonly dump: { readonly status: number | null; readonly diagnostics: readonly string[] };
+}
+
+interface OfflinePluginObservation {
+  readonly uid: number;
+  readonly bundled: readonly string[];
+  readonly nestedNames: readonly string[];
+  readonly steps: readonly PluginStep[];
+  readonly state?: ProfileState;
+  readonly stripped?: readonly string[];
+  readonly oldVolume?: { readonly step: PluginStep; readonly state?: ProfileState };
+}
+
+const BUNDLED_ENTRIES = ['dsh-better-sidebar', 'dsh-sidebar-onlyoffice'];
+const METADATA_REQUEST = `GET /${PROBE_PLUGIN}`;
+const TARBALL_REQUEST = `GET ${PROBE_TARBALL}`;
+// The probe plugin's metadata (the preflight and pnpm) and tarball, and pnpm's own version check.
+const STAND_IN_REQUESTS = [
+  METADATA_REQUEST,
+  TARBALL_REQUEST,
+  'GET /pnpm',
+  // The add preflight's `pnpm view` runs npm, whose own version check fetches the npm packument.
+  'GET /npm',
+];
+
+/** The nested package names a request path names as segments, raw, `%2F`-encoded or decoded. */
+function namedPackages(request: string, names: readonly string[]): string[] {
+  const raw = `${request.replace(/^\S+ /, '').replace(/[?#].*$/, '')}/`;
+  const forms = [raw, raw.toLowerCase(), decodeURIComponent(raw)];
+  return names.filter((name) =>
+    [name, name.replace('/', '%2f')].some((form) =>
+      forms.some((path) => path.includes(`/${form}/`)),
+    ),
+  );
+}
+
+/** One step exited 0 within its bound and asked the stand-in for nothing a preinstalled item needs. */
+function expectStep(step: PluginStep | undefined, name: string): void {
+  expect([step?.name, step?.status, step?.signal, step?.error, step?.timedOut], step?.tail).toEqual(
+    [name, 0, null, undefined, false],
+  );
+  for (const request of step?.requests ?? []) expect(STAND_IN_REQUESTS).toContain(request);
+}
+
+/** The preinstalled items stay as delivered: nothing re-resolved, hoisted or skipped by DSH. */
+function expectProfile(state: ProfileState | undefined, registered: readonly string[]): void {
+  if (state === undefined) throw new Error('Missing profile state');
+  expect(state.sidebar).toEqual({ version: '0.28.0', directory: true });
+  expect(Object.keys(state.nested)).toEqual(BUNDLED_ENTRIES);
+  for (const [id, { canonical, profile }] of Object.entries(state.nested)) {
+    expect([id, profile]).toEqual([id, canonical]);
+    expect(canonical).toBeGreaterThan(0);
+  }
+  expect(state.top).toEqual(registered);
+  expect(state.dependencies).toEqual(registered);
+  expect(state.hoisted).toEqual([]);
+  expect(state.dump).toEqual({ status: 0, diagnostics: [] });
+}
+
+it('installs, uninstalls and repairs an employee plugin offline from a registry holding only that plugin, without resolving any preinstalled dependency', () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  const catalog = JSON.parse(repositoryCatalog.toString('utf8')) as {
+    entries: { package: string }[];
+  };
+  const packages = catalog.entries.map((entry) => entry.package).sort();
+  let evidence = '';
+
+  const result = runUserImage('offline-plugin', (stdout) => {
+    const observed = JSON.parse(stdout) as OfflinePluginObservation;
+    expect(observed.uid).toBe(1001);
+    expect(observed.bundled).toEqual(BUNDLED_ENTRIES);
+    expect(observed.nestedNames).toEqual(
+      expect.arrayContaining(['@deepseek-ai/schemastery', 'yaml']),
+    );
+    // The invariant itself: no request names any package of the canonical nested closures.
+    const requests = [...observed.steps, observed.oldVolume?.step].flatMap(
+      (step) => step?.requests ?? [],
+    );
+    expect(requests.flatMap((request) => namedPackages(request, observed.nestedNames))).toEqual([]);
+    const [add, remove, install, extra] = observed.steps;
+    expectStep(add, 'add');
+    expect(add?.requests).toEqual(expect.arrayContaining([METADATA_REQUEST, TARBALL_REQUEST]));
+    expectStep(remove, 'remove');
+    expectStep(install, 'install');
+    expect(extra).toBeUndefined();
+    expectProfile(observed.state, packages);
+    // A home volume seeded by an older image: profile copies without the field.
+    expect(observed.stripped).toEqual(BUNDLED_ENTRIES);
+    expectStep(observed.oldVolume?.step, 'add');
+    expect(observed.oldVolume?.step.requests).toContain(METADATA_REQUEST);
+    expectProfile(observed.oldVolume?.state, [...packages, PROBE_PLUGIN].sort());
+    const counts = [...observed.steps, observed.oldVolume?.step].map(
+      (step) => `${String(step?.name)}=${String(step?.requests.length)}`,
+    );
+    evidence = `requests ${counts.join(' ')} nested=${JSON.stringify(observed.state?.nested)}`;
+  });
+
+  process.stdout.write(
+    `Docker offline plugin operations verified: run=${result.runId} image=${result.image} ` +
+      `container=${result.container} network=none user=1001 ${evidence} cleanup=complete\n`,
   );
 });
 

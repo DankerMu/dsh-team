@@ -1,22 +1,26 @@
 /**
  * Build-time gate of the user image: the preinstalled items equal images/dsh-user/catalog.json.
- * `record` captures the toolchain+DSH global packages right after their install line; `register`
- * copies each catalog entry's /opt/dsh-team/<id> into the Web profile and records it as an
- * installed dependency (selected when its image default is enabled), the form DSH 0.2.1 lists on
- * its plugin page; `verify` enumerates what the build added beyond that baseline (globals,
+ * `record` captures the toolchain+DSH global packages right after their install line; `bundle`
+ * declares each entry's nested dependency closure as its `bundleDependencies`; `register` copies
+ * each catalog entry's /opt/dsh-team/<id> into the Web profile and records it as an installed
+ * dependency (selected when its image default is enabled), the form DSH 0.2.1 lists on its
+ * plugin page; `verify` enumerates what the build added beyond that baseline (globals,
  * /opt/dsh-team plugins, profile node_modules, registered non-DSH bundles), checks each delivered
  * plugin against the installed DSH (`@dsh-team/*` by engines.dsh, every other package by DSH's own
  * loader decision), compares the package-name sets in both directions and checks every entry's
- * registration. No dependencies beyond the installed DSH.
+ * registration and dependency bundle. No dependencies beyond the installed DSH.
  */
 import {
   chmodSync,
+  chownSync,
   copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -40,11 +44,13 @@ const ENTRY_FIELDS = {
 };
 const ARITY = new Map([
   ['record', 1],
+  ['bundle', 1],
   ['register', 1],
   ['verify', 2],
 ]);
 const USAGE =
   'usage: catalog-check.mjs record <baseline.json> [--root <prefix>]' +
+  ' | bundle <catalog.json> [--root <prefix>]' +
   ' | register <catalog.json> [--root <prefix>]' +
   ' | verify <catalog.json> <baseline.json> [--root <prefix>]\n';
 
@@ -393,6 +399,34 @@ function registration(root, entries, profile, problems) {
       problems.push(`profile copy differs: ${entry.package}`);
 }
 
+/** The sorted names of a manifest's `dependencies`; empty when it has none. */
+function dependencyNames(/** @type {Record<string, any>} */ manifest) {
+  return isRecord(manifest.dependencies) ? Object.keys(manifest.dependencies).sort() : [];
+}
+
+/** The names not delivered as `<directory>/node_modules/<name>/package.json`. */
+function unnested(/** @type {string} */ directory, /** @type {string[]} */ names) {
+  return names.filter((name) => !existsSync(join(directory, 'node_modules', name, 'package.json')));
+}
+
+/**
+ * Every canonical entry with dependencies declares exactly their sorted names as
+ * `bundleDependencies`, each nested below it: pnpm then takes the closure from the package instead
+ * of resolving it from a registry on every employee operation. The profile copy is `sameTree`'s.
+ * @param {string} root @param {Entry[]} entries @param {Found[]} repository @param {Problems} problems
+ */
+function bundled(root, entries, repository, problems) {
+  for (const entry of entries) {
+    const found = repository.find((plugin) => basename(plugin.directory) === entry.id);
+    if (found === undefined) continue;
+    const names = dependencyNames(found.manifest);
+    if (names.length === 0) continue;
+    const declared = JSON.stringify(found.manifest.bundleDependencies) === JSON.stringify(names);
+    if (!declared || unnested(join(root, found.directory), names).length !== 0)
+      problems.push(`catalog entry dependencies not bundled: ${entry.id}`);
+  }
+}
+
 /** @param {string} path @param {Problems} problems @returns {Set<string> | undefined} */
 function baselineGlobals(path, problems) {
   const baseline = readJson(path);
@@ -443,6 +477,7 @@ export function verifyCatalog(root, catalogPath, baselinePath) {
     if (extra.length !== 0)
       problems.push(`preinstalled packages not in catalog: ${extra.join(', ')}`);
   }
+  if (catalog !== undefined) bundled(root, catalog.entries, repository, problems);
   const read = profileManifest(root);
   if (read === undefined) {
     problems.push(`profile bundles unreadable: ${PROFILE}/package.json`);
@@ -521,6 +556,73 @@ export function registerCatalog(root, catalogPath) {
 }
 
 /**
+ * The replacement manifest of one entry with dependencies, or none; a problem when an existing
+ * bundle field or a missing nested dependency forbids it.
+ * @param {string} root @param {Entry} entry @param {Problems} problems
+ * @returns {{ id: string, path: string, manifest: Record<string, any> }[]}
+ */
+function bundlePlan(root, entry, problems) {
+  const directory = join(root, PLUGINS, entry.id);
+  const path = join(directory, 'package.json');
+  const manifest = readJson(path);
+  if (!isRecord(manifest)) {
+    problems.push(`bundle manifest unreadable: ${entry.id}`);
+    return [];
+  }
+  const names = dependencyNames(manifest);
+  if (names.length === 0) return [];
+  if (
+    Object.hasOwn(manifest, 'bundleDependencies') ||
+    Object.hasOwn(manifest, 'bundledDependencies')
+  )
+    problems.push(`bundle field exists: ${entry.id}`);
+  for (const name of unnested(directory, names))
+    problems.push(`bundle dependency not nested: ${entry.id} ${name}`);
+  return [{ id: entry.id, path, manifest: { ...manifest, bundleDependencies: names } }];
+}
+
+/** A same-directory temporary file renamed over path, with the replaced file's mode and owner. */
+function replaceManifest(/** @type {string} */ path, /** @type {string} */ content) {
+  const { mode, uid, gid } = statSync(path);
+  const temporary = `${path}.${String(process.pid)}.bundle.tmp`;
+  // `wx` never adopts an existing path, so a failure here leaves nothing of this run to remove.
+  writeFileSync(temporary, content, { flag: 'wx', mode: 0o600 });
+  try {
+    chownSync(temporary, uid, gid);
+    chmodSync(temporary, mode & 0o7777);
+    renameSync(temporary, path);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+/**
+ * Declare every catalog entry's dependencies as its `bundleDependencies` (the sorted names, after
+ * the existing keys) in /opt/dsh-team/<id>/package.json; entries without dependencies keep their
+ * bytes. Nothing is written when the catalog, a manifest, an existing bundle field or a missing
+ * nested dependency is a problem.
+ * @param {string} root @param {string} catalogPath @returns {{ problems: Problems }}
+ */
+function bundleCatalog(root, catalogPath) {
+  /** @type {Problems} */
+  const problems = [];
+  const catalog = catalogEntries(catalogPath, problems);
+  if (catalog === undefined || problems.length !== 0) return { problems };
+  const planned = catalog.entries.flatMap((entry) => bundlePlan(root, entry, problems));
+  if (problems.length !== 0) return { problems };
+  for (const { id, path, manifest } of planned) {
+    try {
+      replaceManifest(path, `${JSON.stringify(manifest, null, 2)}\n`);
+    } catch {
+      // An earlier replacement is not rolled back: the failing build discards the layer.
+      problems.push(`bundle manifest not written: ${id}`);
+    }
+  }
+  return { problems };
+}
+
+/**
  * @param {string[]} argv
  * @returns {{ command: string, paths: string[], root: string } | undefined}
  */
@@ -542,9 +644,9 @@ function parse(argv) {
 }
 
 /**
- * CLI: `record <baseline.json>`, `register <catalog.json>` or `verify <catalog.json>
- * <baseline.json>`, optional `--root <prefix>` for the image paths. Problems go to stderr, one
- * per line.
+ * CLI: `record <baseline.json>`, `bundle <catalog.json>`, `register <catalog.json>` or
+ * `verify <catalog.json> <baseline.json>`, optional `--root <prefix>` for the image paths.
+ * Problems go to stderr, one per line.
  * @param {string[]} argv @param {(text: string) => void} stderr @returns {number} exit status
  */
 export function main(argv, stderr) {
@@ -567,7 +669,8 @@ export function main(argv, stderr) {
         problems.push(`baseline not written: ${first}`);
       }
     }
-  } else if (parsed.command === 'register') problems = registerCatalog(parsed.root, first).problems;
+  } else if (parsed.command === 'bundle') problems = bundleCatalog(parsed.root, first).problems;
+  else if (parsed.command === 'register') problems = registerCatalog(parsed.root, first).problems;
   else problems = verifyCatalog(parsed.root, first, second).problems;
   stderr(problems.map((problem) => `${problem}\n`).join(''));
   return problems.length === 0 ? 0 : 1;
