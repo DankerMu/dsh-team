@@ -4312,6 +4312,44 @@ Evidence (33.1):
   - 另加一例：自带已接入时配置行的地址是 `http://<+4>`。
   - 先在旧代码上写出来，确认失败。
 
+## 36. 技术债 #494：volumes 夹具的清理请求不再共用 200 ms 的停滞预算
+
+依赖：无。由 #494 承载，处理方式同第 6 组。
+
+- [ ] 36.1 `runUserVolumes` 的清理请求改用独立期限，不再沿用验收阶段的 `requestTimeoutMs`。聚合错误的长度断言在失败时打印每个错误的类名和消息。验证：新增一个先红后绿的集成用例，确定性地复现「清理阶段慢于停滞预算」时多出来的第二个错误。
+
+Suggested fixture level: compact - 测试夹具的期限参数和诊断输出
+Minimal mergeable slice: atomic: 一个夹具、一个集成测试文件
+Risk packs (36.1): selected - Error handling（聚合错误只包含真实的失败；取消错误仍是唯一一项）、Resource limits（清理期限有界）；not selected - Auth、Config、Schema、Public API、Concurrency、File IO、Legacy compatibility、Release、Documentation。不碰 `platform/src/`，不属关键路径。
+
+Evidence (36.1):
+
+现状（main `c485634`）：
+
+- `volumes-fixture.integration.test.ts:114` 以 `runUserVolumes(socket, 200)` 制造停滞的创建请求，`:141` 断言 `error.errors` 长度为 1。
+- `volumes-fixture.ts:86-124` 的 `finally` 清理段：每个目标依次发 GET、DELETE、GET，三次都用 `AbortSignal.timeout(requestTimeoutMs)`，也就是同样的 200 ms。
+- 只要慢 runner 上任意一次清理请求超过 200 ms，`failures` 就会多出一项 `Cleanup failed for <name>`，正好对上 CI run 41221938056 的「expected length 1 but got 2」。
+- 本机加 10 个 `yes` 进程做 CPU 负载，连跑 15 次都没有复现（2026-11-08），所以需要用确定性注入来证明这个机制。
+- 另一个调用方是 `volumes.docker.test.ts:10`，它用默认的 10 000 ms。
+- 第二个错误只可能来自清理期限：
+  - 停滞的 POST 抛错后，try 块直接跳出，后续的验收请求都不会发出；
+  - 取消只会 reject 一次，并且原样重抛同一个对象；
+  - 碰撞 GET 超时时，`attemptedUsers` 仍为空，不会进入清理。
+- 在清理的四次请求里，DELETE 的期限先于 `beginVerificationSubmission` 的同步写盘创建，所以 CI 磁盘慢时，DELETE 最可能超时。
+
+改动：
+
+- `runUserVolumes(socketPath, requestTimeoutMs = 10_000, cleanupTimeoutMs = 10_000)`：
+  - 清理段的三次请求改用 `cleanupTimeoutMs`；
+  - 验收段的语义不变；
+  - 注释写明：停滞预算只约束验收，清理有自己的有界期限。
+- `volumes-fixture.integration.test.ts`：
+  - 集成用例显式传第三个参数，改成 `runUserVolumes(socket, 200, 1_000)`。1 000 ms 大于注入的 300 ms；最坏情况下 4 次清理请求各 1 s，加上 0.2 s，仍小于 integration 项目默认的 5 s 用例时限，挂起时报的还是看门狗的断言，而不是 vitest 超时。`volumes.docker.test.ts` 继续用默认值；
+  - 长度断言改为对 `error.errors` 的描述数组做断言，失败时直接打印每一项的 `constructor.name: message`，有 `cause` 时再带一层 `cause` 的 `constructor.name: message`（`DockerTransportError` 和 `DockerHttpError` 都没有设置 `name`）。期望值仍然是恰好一项、类型和身份断言不变，断言没有放宽。
+  - 新增用例「cleanup slower than the stall budget still aggregates only the cancellation」：沿用停滞替身；替身在验收停滞之后，把清理阶段的第一次 GET 延迟 300 ms 再应答；断言聚合错误恰好一项，就是那次取消。在旧代码上，这次延迟会让清理 GET 超时，得到两项，这就是红。
+  - 用例同时断言被延迟的请求是 `GET /volumes/dsh-team-work-<inv>00`，并且应答 404，以证明注入点确实在清理阶段。
+  - 延迟用替身里的 `setTimeout` 实现，定时器在 `finally` 中 `clearTimeout`；应答前检查 `response.destroyed`。测试总时长仍受现有 2 s 看门狗约束。
+
 验证：
 
 - `pnpm check`。
@@ -4793,3 +4831,14 @@ Must preserve：
 - 不改任何请求、文案或 UI；
 - 卸载后不再 `setState`；
 - 401 只导航一次。
+
+- 新用例先在旧代码上红（两项），再绿。
+- VPS exact-head `test:docker` 和 `test:deploy`（含 `volumes.docker.test.ts`），以及本机 exact-head `test:stack`，仅为满足合并门禁。
+
+Must preserve：
+
+- 取消错误身份与清洗的断言（`:142-149`）；
+- 精确的 POST/DELETE 请求清单；
+- 不改 `platform/src/orchestrator/volumes.ts`。
+
+残留风险：CI 那次失败的第二个错误没有被抓到，这里修的是最可能的机制。下次如果还复现，新的诊断输出会直接给出错误的类名和消息。
