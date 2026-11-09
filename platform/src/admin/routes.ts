@@ -215,7 +215,8 @@ export const adminRoutes: FastifyPluginCallback<{
           .all()
           .map((row) => ({
             ...row,
-            // Only a current failure asks for a reset; a reset stop keeps the log but not the hint.
+            // Only a current failure asks for a reset; a successful reset turns a container-less
+            // error row stopped, so the log stays but the hint clears.
             lastErrorCode: row.status === 'error' ? lastErrorCode(row.lastError) : null,
           }));
         return { items };

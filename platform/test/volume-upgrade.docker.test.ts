@@ -394,6 +394,9 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
         config: { userImage: lifecycle.imageId, seccompProfilePath: lifecycle.seccomp },
       });
     await restore();
+    const reset = record(database.prepare('SELECT * FROM instances WHERE user_id=?').get(userId));
+    expect(reset.status).toBe('stopped');
+    expect(reset.container_id).toBeNull();
     profileSeedOracle()(await volumeProbe(lifecycle, userId, profileSeedScript, 'fresh'));
     // The oracle's own uid1001 edit probe changed the live profile; reset it once more.
     await restore();
