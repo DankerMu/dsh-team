@@ -1,5 +1,3 @@
-import { PROFILE_REJECTION_MARKERS } from '../src/orchestrator/index.ts';
-
 /**
  * dsh-app-boot 0.2.1 (`lib/index.js`) diagnostics, matched as substrings rather than line prefixes,
  * that mean a delivered plugin did not load although the instance may still boot:
@@ -11,7 +9,8 @@ import { PROFILE_REJECTION_MARKERS } from '../src/orchestrator/index.ts';
 const PLUGIN_FAILURE_MARKERS = [
   'Failed plugins (',
   'plugin tree failed to load',
-  ...PROFILE_REJECTION_MARKERS,
+  'dsh: skipping profile bundle',
+  'dsh: disabling profile plugin',
   'did not activate',
 ];
 

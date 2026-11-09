@@ -12,7 +12,7 @@ function frame(stream: 1 | 2, bytes: string | Buffer): Buffer {
   return Buffer.concat([header, body]);
 }
 
-async function read(frames: Buffer[], cookies: string[] = []) {
+async function tail(frames: Buffer[], cookies: string[] = []) {
   const daemon = startupDaemon();
   daemon.overrides.set(
     `GET /containers/${START_CONTAINER}/logs?stdout=true&stderr=true&follow=false&tail=1000`,
@@ -25,19 +25,6 @@ async function read(frames: Buffer[], cookies: string[] = []) {
     cookies,
   );
 }
-
-async function tail(frames: Buffer[], cookies: string[] = []) {
-  const { lines, profileIncompatible } = await read(frames, cookies);
-  // None of the retention cases below carries a profile rejection line.
-  expect(profileIncompatible).toBe(false);
-  return lines;
-}
-
-// dsh-app-boot 0.2.1-rc.2 `reportSkippedBundles` / `prepareProfileEntries` stderr templates.
-const SKIPPED =
-  'dsh: skipping profile bundle "@deepseek-ai/dsh-web-app": bundle is incompatible with dsh 0.2.1-rc.2';
-const DISABLED = 'dsh: disabling profile plugin @dsh-team/office-agents: engines.dsh >=0.3.0';
-const BOOT = Array.from({ length: 60 }, (_, index) => `boot ${String(index + 1)}\n`).join('');
 
 it('retains exactly the final fifty noncredential lines including stderr and a final partial harmless line', async () => {
   const output = await tail([
@@ -196,48 +183,3 @@ it.each(['token', 'known-cookie', 'released-cookie'])(
     ]);
   },
 );
-
-it.each([SKIPPED, DISABLED])(
-  'classifies an early profile rejection %j across the whole read window before the fifty-line bound',
-  async (marker) => {
-    const output = await read([frame(2, `${marker}\n`), frame(1, BOOT)]);
-
-    expect(output.profileIncompatible).toBe(true);
-    expect(output.lines).toHaveLength(50);
-    expect(output.lines.includes(marker)).toBe(false);
-    expect(output.lines.at(-1)).toBe('boot 60');
-  },
-);
-
-it('keeps a completed profile rejection when the Docker tail later becomes unreadable', async () => {
-  const truncated = frame(1, 'raw partial line');
-
-  const output = await read([
-    frame(2, `${SKIPPED}\n`),
-    truncated.subarray(0, truncated.length - 2),
-  ]);
-
-  expect(output).toEqual({
-    lines: [SKIPPED, 'Startup logs unavailable: incomplete or unreadable Docker tail'],
-    profileIncompatible: true,
-  });
-});
-
-it.each([
-  ['generic plugin failure labels', 'plugin tree failed to load\nFailed plugins (1): office\n'],
-  ['a marker that is not a line prefix', `warning ${SKIPPED}\n`],
-  ['an unsafe marker line', `${DISABLED} token=${'a'.repeat(43)}\n`],
-  ['an overlong marker line', `${SKIPPED} ${'x'.repeat(1024)}\n`],
-])('does not classify %s', async (_label, text) => {
-  const output = await read([frame(2, text)]);
-
-  expect(output.profileIncompatible).toBe(false);
-  expect(output.lines.join('\n').includes('token=')).toBe(false);
-});
-
-it('does not classify a missing log stream', async () => {
-  expect(await read([])).toEqual({
-    lines: ['Startup logs unavailable: no retained safe lines'],
-    profileIncompatible: false,
-  });
-});

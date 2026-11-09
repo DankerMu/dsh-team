@@ -442,59 +442,6 @@ it.each(['ready', 'failure'])(
   },
 );
 
-it.each([
-  [
-    'skipping profile bundle',
-    'dsh: skipping profile bundle "@deepseek-ai/dsh-web-app": incompatible',
-  ],
-  ['disabling profile plugin', 'dsh: disabling profile plugin @dsh-team/office-agents: engines'],
-])(
-  'prefixes the closed profile-incompatible code for a %s readiness failure in one transaction',
-  async (_label, marker) => {
-    daemon.setComposition(`${marker}\nordinary failure\n`);
-
-    const error = await failure();
-
-    expect(error).toContain('DSH readiness failed');
-    expect(error.includes('profile-incompatible')).toBe(false);
-    const row = database.prepare('SELECT status, last_error FROM instances').get() as {
-      status: string;
-      last_error: string;
-    };
-    expect(row.status).toBe('error');
-    const lines = row.last_error.split('\n');
-    expect(lines[0]).toBe('profile-incompatible');
-    expect(lines[1]).toMatch(/^DSH readiness failed.*; container stopped; owned network removed$/);
-    expect(lines.slice(2)).toEqual([marker, 'ordinary failure']);
-    expect(
-      database.prepare('SELECT event_type, target, target_email, details FROM audit_events').all(),
-    ).toEqual([
-      {
-        event_type: 'instance.start-failed',
-        target: START_USER,
-        target_email: 'ready@example.test',
-        details: '{"code":"profile-incompatible"}',
-      },
-    ]);
-  },
-);
-
-it('keeps the unchanged first line and {} details for a readiness failure without a profile marker', async () => {
-  daemon.setComposition('plugin tree failed to load\nordinary failure\n');
-
-  await failure();
-
-  const row = database.prepare('SELECT last_error FROM instances').get() as { last_error: string };
-  expect(row.last_error.split('\n')).toEqual([
-    expect.stringMatching(/^DSH readiness failed.*; container stopped; owned network removed$/),
-    'plugin tree failed to load',
-    'ordinary failure',
-  ]);
-  expect(database.prepare('SELECT event_type, details FROM audit_events').all()).toEqual([
-    { event_type: 'instance.start-failed', details: '{}' },
-  ]);
-});
-
 it('preserves replacement ownership appearing while failure logs are being obtained', async () => {
   daemon.setComposition('boot failure\n');
   daemon.beforeRequest((request) => {

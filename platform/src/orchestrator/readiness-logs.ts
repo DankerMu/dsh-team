@@ -1,10 +1,7 @@
 import type { DockerClient } from './client.ts';
-import { profileIncompatible } from './start-failure.ts';
 
 const MAX_LINE_BYTES = 1024;
 const MAX_RETAINED_LINES = 50;
-/** One startup-log read deadline shared by readiness failure and started-container compensation. */
-export const LOG_TIMEOUT_MS = 3_000;
 
 function safeLine(text: string, cookies: readonly string[]): string | undefined {
   // Removing controls can reconstruct a credential; classify only the final normalized text.
@@ -35,18 +32,14 @@ function safeLine(text: string, cookies: readonly string[]): string | undefined 
     : sanitized;
 }
 
-/**
- * A finite Docker tail, never a raw log/error export. Overlong lines are discarded whole.
- * Every safe line of the read window is classified before the retained-line bound drops it.
- */
+/** A finite Docker tail, never a raw log/error export. Overlong lines are discarded whole. */
 export async function startupLogTail(
   client: DockerClient,
   containerId: string,
   signal: AbortSignal,
   cookies: readonly string[],
-): Promise<{ lines: string[]; profileIncompatible: boolean }> {
+): Promise<string[]> {
   const retained: string[] = [];
-  let incompatible = false;
   const streams = {
     stdout: { bytes: Buffer.alloc(MAX_LINE_BYTES), used: 0, discarded: false },
     stderr: { bytes: Buffer.alloc(MAX_LINE_BYTES), used: 0, discarded: false },
@@ -56,7 +49,6 @@ export async function startupLogTail(
       const text = line.bytes.toString('utf8', 0, line.used).replace(/\r$/, '');
       const safe = safeLine(text, cookies);
       if (safe !== undefined) {
-        incompatible ||= profileIncompatible([safe]);
         if (retained.length === MAX_RETAINED_LINES) retained.shift();
         retained.push(safe);
       }
@@ -88,15 +80,11 @@ export async function startupLogTail(
     for (const line of Object.values(streams)) {
       if (line.used > 0 || line.discarded) finish(line);
     }
-    return {
-      lines:
-        retained.length === 0 ? ['Startup logs unavailable: no retained safe lines'] : retained,
-      profileIncompatible: incompatible,
-    };
+    return retained.length === 0 ? ['Startup logs unavailable: no retained safe lines'] : retained;
   } catch {
     // Partial frames/lines are not evidence. Keep only completed safe lines and a safe diagnostic.
     if (retained.length === MAX_RETAINED_LINES) retained.shift();
     retained.push('Startup logs unavailable: incomplete or unreadable Docker tail');
-    return { lines: retained, profileIncompatible: incompatible };
+    return retained;
   }
 }

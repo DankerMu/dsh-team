@@ -3,5 +3,5 @@ export type { ManagedConfigInput, ManagedConfigResult, ManagedOffice } from './g
 export { hasCompleteModelSnapshot, modelSnapshot } from './model-settings.ts';
 export type { ModelSnapshot } from './model-settings.ts';
 export { writeManagedConfig } from './write.ts';
-export { readManagedComposition } from './read.ts';
+export { ProfileIncompatibleError, readManagedComposition } from './read.ts';
 export type { ManagedComposition } from './read.ts';

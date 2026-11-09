@@ -144,15 +144,15 @@ test('only a current profile-incompatible error row shows the fixed reset hint b
 }, testInfo) => {
   await withAdminUi(playwright, page, async ({ baseUrl, database, seed, target }) => {
     const hint = '该用户的 DSH 配置来自旧版本，需要执行“重置配置”';
-    const coded =
-      'profile-incompatible\nDSH readiness failed during startup; container stopped; owned network removed\ndsh: skipping profile bundle "@deepseek-ai/dsh-web-app": incompatible';
+    // The fixed pre-create managed composition rejection written by the orchestrator.
+    const coded = 'profile-incompatible\nManaged composition rejected: incompatible DSH profile';
     const insert = database.prepare(
       'INSERT INTO instances(user_id,status,last_error) VALUES (?,?,?)',
     );
     insert.run(target.id, 'error', coded);
     const others = [
       ['plain-error', 'error', 'DSH readiness failed: deadline or cancellation; container stopped'],
-      // A reset stops through stop('admin') and keeps the coded diagnostic: no hint once stopped.
+      // A row whose status is no longer error keeps the coded diagnostic but shows no hint.
       ['reset-stopped', 'stopped', coded],
     ] as const;
     for (const [name, status, lastError] of others) {

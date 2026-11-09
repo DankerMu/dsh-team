@@ -12,7 +12,7 @@ import { writeManagedConfig } from '../src/managed-config/index.ts';
 import {
   createOrchestrator,
   lastErrorCode,
-  PROFILE_REJECTION_MARKERS,
+  PROFILE_INCOMPATIBLE_ERROR,
 } from '../src/orchestrator/index.ts';
 import type { Orchestrator } from '../src/orchestrator/index.ts';
 import {
@@ -308,7 +308,7 @@ function skippedBeforeReset(lifecycle: UserImageLifecycle): Record<string, unkno
 import json, subprocess
 run = subprocess.run(["dsh", "--profile", "web", "--dump-default-config"], capture_output=True, timeout=60)
 lines = run.stderr.decode("utf-8", "replace").splitlines()
-print(json.dumps({"exit": run.returncode, "skippingBundle": any(line.startswith(${JSON.stringify(PROFILE_REJECTION_MARKERS[0])}) for line in lines)}))
+print(json.dumps({"exit": run.returncode, "skippingBundle": any(line.startswith("dsh: skipping profile bundle") for line in lines)}))
 `,
         ],
         90_000,
@@ -318,9 +318,9 @@ print(json.dumps({"exit": run.returncode, "skippingBundle": any(line.startswith(
 }
 
 /**
- * The stage-1 volume started as-is on 0.2.1 fails as profile-incompatible and is never reset
- * automatically. Readiness failure keeps the stopped container (its logs hold the launch token);
- * compensation already removed it. An explicit admin stop retires it before the reset needs it gone.
+ * The stage-1 volume started as-is on 0.2.1 is rejected by the managed composition before any
+ * network or container exists: an error row without a container and a coded audit, never an
+ * automatic reset. That terminal state is what the following reset accepts.
  */
 async function startBeforeReset(
   owner: Orchestrator,
@@ -335,10 +335,8 @@ async function startBeforeReset(
   expect(outcome).toBe('failed');
   const row = record(database.prepare('SELECT * FROM instances WHERE user_id=?').get(userId));
   expect(row.status).toBe('error');
-  expect(row.dsh_cookie).toBeNull();
-  if (typeof row.last_error !== 'string') throw new Error('Missing pre-reset startup diagnostic');
-  const code = lastErrorCode(row.last_error);
-  expect(code).toBe('profile-incompatible');
+  expect(row.container_id).toBeNull();
+  expect(row.last_error).toBe(PROFILE_INCOMPATIBLE_ERROR);
   const audit = record(
     database
       .prepare(
@@ -347,21 +345,14 @@ async function startBeforeReset(
       .get(userId),
   );
   expect(audit.details).toBe('{"code":"profile-incompatible"}');
-  const evidence = `${row.last_error}\n${String(audit.details)}`;
-  expect(evidence).not.toMatch(/dsh\s+web|token\s*[:=]|dsh-auth-/i);
-  if (typeof row.container_id === 'string') {
-    const logs = await lifecycle.commandAsync(['logs', '--tail', '1000', row.container_id], 15_000);
-    for (const [, token] of `${logs.stdout}${logs.stderr}`.matchAll(/token=([A-Za-z0-9_-]{16,})/g))
-      if (token !== undefined) expect(evidence.includes(token)).toBe(false);
-  }
-  await owner.stopUserContainer({ userId, reason: 'admin' });
-  const name = `dsh-team-u-${userId}`;
-  expect(
-    isAbsentResource(lifecycle.command(['container', 'inspect', name], 15_000), 'container', name),
-  ).toBe(true);
-  expect(
-    database.prepare('SELECT status, container_id FROM instances WHERE user_id=?').get(userId),
-  ).toEqual({ status: 'stopped', container_id: null });
+  for (const [kind, name] of [
+    ['container', `dsh-team-u-${userId}`],
+    ['network', `dsh-team-net-${userId}`],
+  ] as const)
+    expect(isAbsentResource(lifecycle.command([kind, 'inspect', name], 15_000), kind, name)).toBe(
+      true,
+    );
+  const code = typeof row.last_error === 'string' ? lastErrorCode(row.last_error) : null;
   return { status: row.status, code };
 }
 

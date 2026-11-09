@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readManagedComposition } from './index.ts';
+import { ProfileIncompatibleError, readManagedComposition } from './index.ts';
 import type { ManagedComposition, ManagedConfigInput } from './index.ts';
 
 const PRESET_NAME = '@deepseek-ai/dsh-agent-preset';
@@ -97,6 +97,51 @@ describe('readManagedComposition', () => {
     });
 
     await expect(readManagedComposition(() => Promise.resolve(observation), [])).rejects.toThrow();
+  });
+
+  it('raises the fixed profile-incompatible rejection for exactly the helper short-circuit', async () => {
+    const error: unknown = await readManagedComposition(
+      () => Promise.resolve('{"profileIncompatible":true}'),
+      ['office-agents'],
+    ).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(ProfileIncompatibleError);
+    expect(error).toHaveProperty(
+      'message',
+      'Managed composition rejected: incompatible DSH profile',
+    );
+  });
+
+  it.each([
+    ['an extra key', { profileIncompatible: true, skippedBundles: [] }],
+    ['a leaked bundle name', { profileIncompatible: true, packageName: '@deepseek-ai/dsh-base' }],
+    ['a false flag', { profileIncompatible: false }],
+    ['a non-boolean flag', { profileIncompatible: 'true' }],
+  ])('treats a short-circuit with %s as an ordinary invalid composition', async (_label, raw) => {
+    const error: unknown = await readManagedComposition(
+      () => Promise.resolve(JSON.stringify(raw)),
+      [],
+    ).catch((failure: unknown) => failure);
+
+    expect(error).not.toBeInstanceOf(ProfileIncompatibleError);
+    expect(error).toHaveProperty('message', INVALID);
+  });
+
+  it('short-circuits a skipped profile bundle right after loading, without names or reasons', async () => {
+    const scripts: string[] = [];
+    await readManagedComposition((script) => {
+      scripts.push(script);
+      return Promise.resolve(completeObservation());
+    }, []);
+
+    const [script = ''] = scripts;
+    const check = script.indexOf('if (profile.skippedBundles.length > 0) {');
+    expect(check).toBeGreaterThan(script.indexOf('const profile = loadProfileDirectory('));
+    expect(check).toBeLessThan(script.indexOf('composeEntries('));
+    expect(script.slice(check)).toMatch(
+      /^if \(profile\.skippedBundles\.length > 0\) \{\n\s*process\.stdout\.write\('\{"profileIncompatible":true\}'\);\n\s*\} else \{/,
+    );
+    expect(script).not.toContain('process.exit(0)');
   });
 
   it.each([
