@@ -5308,3 +5308,27 @@ Evidence (38.1–38.2):
 剩余风险：根因仍是 UNKNOWN。本 PR 只让复发时能够归因，不加重试，不改 deadline，不跳过用例，也不拿之后的绿色结果改写 #540 那次失败。#541 的最后一条验收是有条件的：合并时如果没有复发，就关闭 #541，原因记为 UNKNOWN；之后若复发，按投影出的类别码另开 issue 归因并修复，并附 failing-before/passing-after 证据。
 
 Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清语义、`buildFailureDiagnostic`、inspect 缺席判定、HTTPS 用例的全部业务断言、隐私用例的阶段证据和脱敏失败契约，以及完整的 Docker discovery。
+
+## 39. 11.6 插件目录 Docker 浏览器与出口观测用例（#409）
+
+依赖：#405、#406、#407、#444、#445、#509 均已合入；#556（PR #572，离线安装替身）已合入。本节由 #409 承载。用户决定：npm registry 替身跑在实例自己的 loopback 上（沿用 #556 的先例）；出口观测允许用 tcpdump，只读抓包。只改 `platform/test/` 下的 Docker 用例和夹具、`scripts/probe-plugin-page.mjs`（加安装对话框驱动）及其测试，外加文档；不改产品代码、镜像和关键路径。
+
+- [ ] 39.1 锁定状态与联网工具：一次 managed-policy 式 standalone web 运行。覆盖层把某个可管理预装项设为 `forced-off`、另一个设为 `forced-on`，其余保持 `employee`，并打开联网工具。插件页里要看到：必启项锁定且开启，`forced-off` 项锁定且关闭（`已关闭 · 由管理员设定`），`forced-on` 项锁定且开启，`employee` 项可以切换。重启后，Agent 工具里出现 `web_search` 和 `web_fetch`。每个阶段截图。
+- [ ] 39.2 员工改写被覆盖：停止实例后，员工在自己的 profile `cordis.patch.yml` 里做三件事：打开那个 `forced-off` 项，关闭一个必启项，把 `plugin-manager` 的 `registry` 改成别的地址。重启后，插件页的锁定状态不变，容器内实际生效的启用状态和安装源（`plugin-manager` 的 `registry`/`fallbackRegistries`）与覆盖层一致。
+- [ ] 39.3 出口观测与插件页安装：覆盖层把 `pluginRegistries` 设为实例 loopback 上的替身（固定端口），并关闭仓库探测（`registryProbeEnabled: false`）。启动后用 `docker exec` 在实例里拉起替身。在宿主上用 `sudo -n nsenter -t <实例 pid> -n tcpdump` 只读抓实例网络命名空间的包，覆盖重启到安装完成的整个过程。通过插件页「添加插件」对话框，按默认安装源安装测试插件：安装成功，插件出现在插件页，替身日志里有 packument 和 tarball 的 GET。抓包结果：非 loopback 的 80/443/53 包数为 0，即没有发往公共仓库的探测，也没有发往公共仓库的请求。替身、抓包进程和所有自有资源都清理干净。
+
+验证：VPS exact-head `pnpm test:docker` 里的新用例通过并有截图；`pnpm test:deploy`；cleanup confirmed，主机围栏通过；本机 exact-head `pnpm test:stack` 满足合并门禁。
+
+Suggested fixture level: expanded - 新的 Docker 浏览器用例，首次在宿主上做只读抓包，并新增插件页安装驱动
+Minimal mergeable slice: 39.1+39.2 一个 PR（锁定状态、联网工具、员工改写），39.3 一个 PR（替身安装源、抓包、安装对话框）；两者各自能独立合并
+Risk packs (39.1–39.3): selected - Security（抓包只记包数和端口类别，不落盘原始包，不记载荷）、Resource limits（tcpdump 进程有期限，在 finally 里结束并确认退出）、Legacy compatibility（#556 的离线安装用例改用抽出的共享替身后，断言不变）、Release（只用测试自有资源，前缀为 `dsh-team`）；not selected - Config、Schema、Auth、Public API、Concurrency、Migration。
+
+Evidence：见 PR #591 期间的只读梳理（2026-11-08）。
+
+- 已覆盖：必启锁定（`first-use.docker.test.ts:231-318`）；员工开关往返（`scripts/probe-plugin-page.mjs`）；联网工具关闭（`managed-policy.docker.test.ts:17`）；离线安装替身（`user-image.docker.test.ts:581`，`user-image-fixture.ts:97-250`）。
+- 未覆盖：`forced-off`/`forced-on` 的实况；联网工具打开；替身作为配置的安装源；插件页 UI 安装；员工改写插件启用状态和安装源；出口抓包。
+- DSH 0.2.1 的事实：
+  - 不指定安装源时，`registryPlan` 先问配置的第一个源（`dsh-plugin-manager/lib/index.js:969-988`）。覆盖层只写一个源时没有 fallback（`generate.ts:297,351`）。
+  - 安装请求依次是 `pnpm view`（packument GET），然后 `pnpm add`（packument GET 加 tarball GET），pnpm 自检还会 `GET /pnpm`。
+  - 探测是宿主端 fetch `https://registry.npmjs.org/-/ping` 和 npmmirror 的同类地址；`registryProbeEnabled=false` 时什么也不发（`dsh-client-ui-plugin-manager/lib/index.js:60-130`）。
+- 宿主条件：giap-vps 有 `/usr/bin/tcpdump`、`/usr/bin/nsenter`，sudo 免密（2026-11-08 只读确认）。
