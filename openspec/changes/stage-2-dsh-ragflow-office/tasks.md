@@ -4917,30 +4917,33 @@ Evidence (37.1–37.2):
 
 ## 40. 技术债 #579：包装器清理前等已登记的浏览器 driver 结算
 
-依赖：#497（PR #580，已合入 `e534737`）。由 #579 承载，处理方式同第 6 组。用户决定（2026-11-09）：采用方案 C，在同一进程组内按登记等待 driver。不用嵌套进程组，不只改文档。只改 `scripts/verify-browser-runtime.mjs` 和它的测试，以及 `scripts/README.md`；不改 `scripts/trusted-docker-owner.mjs`，不放宽 `cleanup()`、`rescueChrome`、`requireStoppedDriver` 的任何规则，不碰 `dsh-api`/`first-run` 的 bash 车道，不碰关键路径。
+依赖：#497（PR #580，已合入 `e534737`）。由 #579 承载，处理方式同第 6 组。
 
-- [ ] 40.1 `cleanup()` 在逐个 `rescueRegistration` 之前，对目录里每个 `*.launch.json` 指针做一次有界等待。等待对象是这样的指针：状态不是 `stopped`，并且记录的 `driver.pid`/`driver.birth` 仍是活进程（`liveProcessBirth(pid) === birth`）。指针变为 `stopped`，或者 driver 已退出、出生标识不符、进程是僵尸，都算结算完成。所有指针共用一个总上限，到点后不再等，照原样进入 rescue；仍存活的 driver 会被 `requireStoppedDriver` 拒绝，结果如实记为 `unconfirmed`，与现状一致。
-      验证：
-  - Docker-free 集成测试：真实子进程作 driver，覆盖以下情况——driver 延迟数百毫秒后退出（等待会返回，rescue 不再遇到存活的 driver）；driver 先把指针改写为 `stopped`；driver 一直不退出（到点返回，结果为 `unconfirmed`，不会提前确认）；指针里的出生标识不符（立即返回）。
-  - 包装器的接线证明：stand-in vitest 主进程收到信号后立即退出，同组的 stand-in worker 延迟结算。断言 `cleanup()` 的读目录发生在 worker 退出之后。
-  - VPS exact-head `test:docker` 通过，cleanup confirmed。
+用户决定（2026-11-09）：采用方案 C，在同一进程组内按登记等待 driver。不用嵌套进程组，也不只改文档。
 
-Suggested fixture level: compact - 包装器内一个有界等待，不改清理规则、custody 和进程组
-Minimal mergeable slice: atomic: 等待和接线一起才能消除竞争
-Risk packs (40.1): selected - Concurrency（包装器和 worker 的先后顺序靠等待保证，只会等更久，不会改变谁有资格清理）、Resource limits（等待总上限 20 s，覆盖浏览器 stop 的 `docker stop --time 8` 加网络回收的余量；中断场景下 custody 的组结算在其后，仍由 custody 自己的期限约束）、Legacy compatibility（未中断的正常路径：worker 早已把指针改写为 `stopped`，等待立即返回，行为不变）；not selected - Security、Config、Schema、Auth、Public API、Release、Migration。
+改动范围：只改 `scripts/probe-browser-runtime.mjs`、`scripts/verify-browser-runtime.mjs`、它们的测试和 `scripts/README.md`。不改 `scripts/trusted-docker-owner.mjs`，不放宽 `cleanup()`、`rescueChrome`、`requireStoppedDriver` 的任何判定，不碰 `dsh-api`/`first-run` 的 bash 车道，不碰关键路径。`probe-browser-runtime.mjs` 会被复制进浏览器镜像的 build context（`verify-browser-runtime.mjs:183-186`），所以改它会改变镜像输入，这在预期之内。
 
-Evidence (40.1)：见 #579 正文（vitest 5.0.2 `onExit` 只等 1 ms，forks worker 与主进程同组，`probe-browser-runtime.mjs:84` 在登记里记下 driver 的 pid/birth，`:285-293` 的 `requireStoppedDriver`，`verify-browser-runtime.mjs:326-361` 的 `cleanup()`）。`liveProcessBirth`（`probe-browser-native.mjs:101`）把僵尸和已回收的进程视为不存活，正好拿来判断结算。
+事实（fixture 评审，2026-11-09，对照代码核对）：
 
-改动：
+- 在 custody 的组 SIGINT 下（`trusted-docker-owner.mjs:170`），forks worker 没有 SIGINT 监听：
+  - `vitest/dist/chunks/init-forks.CdGu3HUy.js:11` 只在 `--prof` 类参数下装 SIGTERM；`init.IsjtLXKe.js:113-114` 只装 uncaughtException 和 unhandledRejection。
+  - `vitest.config.ts` 的 `docker`/`model` 项目没有 setup 文件。
+  - driver 代码（`probe-dsh-api-cdp.mjs`、`probe-mapped-host.mjs`）里也没有监听。`probe-browser-runtime.mjs:676-681` 的监听在容器内的 `privateRuntime` 里，不在 worker。
+- 所以 worker 会按默认处置立即死亡：afterAll 和 `chrome.stop()` 都不跑，指针也不会被改写为 `stopped`。包装器进入 `cleanup()` 时，driver 已经是僵尸或已被收割，`liveProcessBirth` 返回 null（`probe-browser-native.mjs:104,112`；Darwin 的 `SZOMB` 映射为 `Z`，见 `:78`），`requireStoppedDriver` 放行。#579 的后果（1）在 custody 组中断下按现有代码其实不会出现；它本来就只是推断，没有复现。
+- 等待真正起作用的场景是：收割窗口（主进程 1 ms 退出后，worker 尚未被收割）；装了信号处理、或者没收到信号的 driver（例如只向包装器 pid 发信号时，worker 直到下一次 IPC send 才 `processExit(1)`）。等待只会更久，不会让任何一个结果变坏。
+- 另一个确实存在的风险会被等待放大：包装器的信号处理是 `process.once`（`verify-browser-runtime.mjs:290`），第二个 SIGINT/SIGTERM 会用默认处置杀死包装器，回执和镜像清理都会被跳过。第二个信号可能来自人连按两次 Ctrl-C，也可能来自 custody 下 pnpm 的再转发（`procInterrupt`）。等待把这个窗口拉长到最多 20 s。
+- custody 发信号之后，到 close 之前没有期限，也不会升级到 SIGKILL（`trusted-docker-owner.mjs:205-216,307`）。`groupSettlesAfterClose` 的 2000 ms 窗口要等 close 之后才开始。所以 20 s 的等待不会让 custody 杀掉包装器。
 
-- `scripts/verify-browser-runtime.mjs`：新增 `awaitRegisteredDrivers(directory, deadlineMs)`，在 `cleanup()` 开头、读目录逐个 rescue 之前调用。
-  - 每 100 ms 重新读一次指针，因为指针可能被 worker 改写为 `stopped`，并重新判断 driver 是否存活。
-  - 读到格式错误的指针时不在这里报错，直接留给后面的 `rescueRegistration`，按现有规则判为 `unconfirmed`。
-  - `liveProcessBirth` 抛错（状态不可读）时，同样留给 rescue 判定。
-  - 需要的 `liveProcessBirth` 经 `probe-browser-runtime.mjs` 现有的导出路径取得。只增加导出，不复制实现。
-- 已知限制（如实写进 `scripts/README.md` 的 browser runtime 段）：worker 如果在写出 `*.launch.json` 指针之前就被中断（还在 `startChrome` 里），包装器看不到它，也就不会等。这时由 custody 的组信号、组结算和 `retireAfterCancellation`（`trusted-docker-owner.mjs:170`、`:178-181`、`:266-280`）兜底，这三处的语义不变。只向包装器 pid 发信号的中断方式仍不受支持，worker 收不到信号，也写进 README。
+- [ ] 40.1 在 `scripts/probe-browser-runtime.mjs` 抽出唯一的判定函数 `driverMayOwnRelays(receipt)`。判定为真的条件：`kind === 'docker-isolated-network'`、`state !== 'stopped'`、`driver.pid !== process.pid`，并且 `liveProcessBirth(driver.pid) === driver.birth`。`requireStoppedDriver` 改用这个函数，判定结果和改动前完全一致。
 
-文档（编排者同 PR 改）：`scripts/README.md` 的 DSH browser runtime 段补一句：包装器在清理前有界等待已登记的 driver 结算，以及上面的已知限制。
+  同一模块新增并导出 `awaitRegisteredDrivers(directory, limitMs)`：
+  - 每 100 ms 重读一次目录里的 `*.launch.json` 指针，直到没有一个指针满足 `driverMayOwnRelays`，或者到达上限；
+  - 格式错误、读不到的指针，以及 `liveProcessBirth` 抛错的情况都不在这里判定，原样留给后面的 rescue；
+  - 返回 `{ settled: boolean }`，只用于测试和日志，不参与清理判定。
+
+  包装器 `cleanup()` 在逐个 rescue 之前调用 `awaitRegisteredDrivers(directory, 20_000)`；到上限后照原样进入 rescue，结果如实记录。
+
+- [ ] 40.2 包装器的 SIGINT/SIGTERM 处理从 `process.once` 改为 `process.on`。现有处理体已经幂等（有 `if (!interrupted)` 守卫，并继续转发 `child?.kill(signal)`），130/143 退出码不变。这样第二个信号不会再在等待或清理期间杀死包装器。
 
 验证：
 
@@ -5484,9 +5487,38 @@ Must preserve：
 - 真实的 custody 取消没有在 VPS 上演练，与 #497 相同。
 - 等待上限是 20 s：worker 的 teardown 超过 20 s 时，仍会出现 `unconfirmed`，但这是如实结果，不是虚假结果。
 
+- `probe-browser-runtime` 的 Docker-free 集成测试只测 helper：用真实子进程作 driver，加手写的 stand-in 指针，不调用 `rescueChrome`。每种情况都断言返回时机和 `settled` 值：
+  - driver 延迟数百毫秒后退出 → 退出后返回，`settled: true`；
+  - driver 把指针改写为 `stopped` → 改写后返回；
+  - driver 一直不退出 → 到上限返回，`settled: false`；
+  - birth 不符 → 立即返回；
+  - 僵尸 driver（子进程已退出但父进程未收割）→ 立即返回；
+  - 自身 pid → 立即返回；
+  - 非 `docker-isolated-network` 的指针 → 立即返回；
+  - `requireStoppedDriver` 原有用例照常通过。
+- 包装器信号处理：在 `platform/test/verify-browser-runtime.integration.test.ts` 里沿用 stand-in vitest 的 `--help` 路径，连发两个 SIGTERM，断言包装器以 143 结束，且没有被第二个信号以默认处置杀死（退出不是由 signal 造成的）。
+- 接线证明的落点：包装器级的「`cleanup()` 在 driver 结算之后才读目录」需要 `prepare()`（包括 `requireLocalRuntime`、`docker info`、镜像构建），Docker-free 测试做不到，所以由 VPS 上的 `browser-wrapper.docker.test.ts` 加 exact-head `test:docker` 兜底。这与 #579 验收里「Docker-free 接线测试」的字面要求有偏差，在这里明确记录：Docker-free 的证明只覆盖 helper 和信号处理，包装器的调用顺序靠代码评审和 VPS 运行。
+- VPS exact-head `test:docker` 和 `test:deploy` 都要求 cleanup confirmed；另外在本机 exact-head 跑 `pnpm test:stack`。
+
+Suggested fixture level: compact - 一个共享判定函数、一个有界等待、信号处理从 once 改 on；不改清理规则，不动 custody 和进程组
+Minimal mergeable slice: atomic
+Risk packs (40.1–40.2): selected - Concurrency（等待只延后清理开始的时间，不改变谁有资格清理）、Resource limits（20 s 上限覆盖 `docker stop --time 8` 和网络回收；custody 在 close 之前不设期限）、Legacy compatibility（`requireStoppedDriver` 判定逐字不变；正常路径下指针都已是 `stopped`，等待立即返回；退出码映射不变）、Release（浏览器镜像的 build context 输入会变）；not selected - Security、Config、Schema、Auth、Public API、Migration。
+
+文档（编排者同 PR 改）：`scripts/README.md` 的 DSH browser runtime 段写明以下内容：
+
+- 包装器在清理前，会对已登记的 driver 做有界等待，直到它结算；
+- 两次信号都由同一个幂等处理接住；
+- 已知限制：worker 写出指针之前就被中断时，包装器看不到它，由 custody 的组结算和 `retireAfterCancellation` 兜底；只向包装器 pid 发信号的中断方式仍不受支持。
+
+剩余风险：
+
+- 真实的 custody 取消没有在 VPS 上演练过，与 #497 相同。
+- pnpm（钉定版本 10.34.6）的再转发时序没有在受信主机上核实。40.2 让包装器不会被第二个信号杀死，但第一个信号到达之前、JS 监听还没装好的极早窗口不在本节范围内。
+- 后果（1）和（2）的实际发生频率仍然未知。
+
 Must preserve：
 
-- `cleanup()` 和 `rescueChrome`/`requireStoppedDriver` 的全部判定；
-- 包装器的退出码映射（130/143）；
+- `cleanup()`、`rescueChrome`、`requireStoppedDriver` 的全部判定；
+- 退出码映射（130/143）；
 - custody 的组信号、组结算和退役语义；
-- 非 `detached` 的 spawn。
+- spawn 不使用 `detached`。
