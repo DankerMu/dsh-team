@@ -5243,3 +5243,68 @@ Must preserve：
 - 第 43 节的条件补丁语义；
 - 现有必启项的生成行；
 - 目录门禁（目录项与镜像一一对应）。
+
+## 38. 技术债 #541：部署用例里 compose 失败可以归因
+
+依赖：无（相关 #303、#422、#511）。由 #541 承载，处理方式同第 6 组。只改测试夹具和测试，不改 `deploy/`、compose 文件、生产代码和 `scripts/docker-command.mjs` 的结清规则；不碰关键路径。
+
+- [ ] 38.1 非 0 退出的 `docker compose` 结果在脱敏后带一个封闭的失败类别码，不回显原文。验证：`docker-command.integration.test.ts` 覆盖每个类别的正例、`unknown` 兜底和带秘密样式内容的 canary，`REQUIRED_VARIABLE`/`acceptedStatus` 的声明投影和结清语义不变。
+- [ ] 38.2 HTTPS/TLS 代理部署用例接入 `DeploymentSetupEvidence`：失败时输出闭集 `deploymentSetup` 阶段，原错误链里带 compose 类别码。验证：integration 层用注入的失败 compose，分别在 `scenario-preparation`（代理 `up`）和 `compose-creation`（主栈 `up`）两处失败，断言输出的阶段和类别码；VPS exact-head `test:docker` 全绿。
+
+Suggested fixture level: compact - 只改验证夹具的诊断投影，产品行为不变
+Minimal mergeable slice: atomic: 类别投影和阶段接线一起才能回答「哪一次 `up`、什么原因」
+Risk packs (38.1–38.2): selected - Security（投影只输出固定码，canary 证明秘密不出现在结果、异常消息和 stdout 证据里）、Legacy compatibility（声明投影、build 诊断、inspect 缺席判定、非 compose 结果的固定文本和 submission 结清都不变；隐私用例的脱敏失败契约不变）；not selected - Config、Schema、Auth、Public API、Concurrency、Resource limits、Release、Migration。
+
+Evidence (38.1–38.2):
+
+- 现状：`platform/test/docker-command.ts` 的 `redactResult` 把所有非 0 结果改写成 `stderr: 'Web Docker operation failed'`（build 例外，附 `buildFailureDiagnostic`）。只有声明了 `acceptedStatus` 的 compose 调用，才经 `requiredVariable` 投影出变量名（#422）。bounded 模式的 `command` 和 `commandAsync` 都经过 `redactResult`（`:250`、`:264`），两次 `up` 都走 bounded 的 `commandAsync`。结清发生在 `runDockerCommand` 里、脱敏之前（`scripts/docker-command.mjs:31-42`），投影不影响结清。
+- HTTPS 用例（`deployment.docker.test.ts` 的 `serves native HTTPS and WSS behind an exact trusted TLS proxy…`）有两次 `compose up`：一次是 `prepareTlsDeployment` 的代理 `up … proxy`（`deployment-tls-fixture.ts:109-119`），处在 `scenario-preparation` 阶段；另一次是主栈 `up`，处在 `compose-creation` 阶段（`deployment-fixture.ts:137-143`）。这个用例调用 `withDeployment(run, prepare)` 时没有传 `setup`。
+- 失败的错误链：可观测对象在 `local-configuration` 阶段就已 `submitted()`（`deployment-fixture.ts:98-99`），所以无论哪次 `up` 失败，`finishDeploymentObservation` 都会以 "never bound" 拒绝。最外层因此是 `AggregateError('Deployment scenario and observation retirement failed')`（`:247-250`），固定文本。compose 结果在其 `errors` 的嵌套里（`user-image-fixture.ts:736-738` 的 `finish()`）。
+- Compose v2 / Engine 的真实失败消息带缩进、`Error response from daemon:` 前缀，或者是嵌套的长句，例如 `failed to set up container networking: … failed to bind host port …: address already in use`。所以分类用不锚定的子串搜索。由于输出只有固定码，锚定不会带来安全收益。
+
+改动：
+
+- `docker-command.ts`：
+  - 新增不导出的 `composeFailureCode(stderr: string)`，逐行做不锚定的子串（或简单正则）搜索。按以下固定顺序，第一个命中的类别生效，都不命中时为 `unknown`：
+    1. `required-variable`：`REQUIRED_VARIABLE` 的模式命中某一行；
+    2. `port-allocated`：`port is already allocated`、`address already in use`；
+    3. `image-missing`：`No such image`、`pull access denied`；
+    4. `network-pool-exhausted`：`could not find an available, non-overlapping IPv4 address pool`、`all predefined address pools have been fully subnetted`；
+    5. `network-conflict`：`Pool overlaps with other one on this address space`、`network with name`…`already exists`；
+    6. `container-name-conflict`：`Conflict. The container name`…`is already in use`。
+  - `redactResult`：对满足以下全部条件的结果——`args[0] === 'compose'`、`result.error === undefined`、无信号、`status` 非 0、没有走 `requiredVariable` 声明投影——把 stderr 改为 `Web Docker operation failed\ncompose-failure: <code>`。`status` 照旧，`stdout` 仍为空。投影里只有封闭码，不带端口号、名字或任何原文令牌。分类放在独立函数里，`redactResult` 的复杂度不超出 `constraints.yaml` 的上限。
+  - 其他结果的规则都不变：build 诊断、inspect 缺席判定、`acceptedStatus` 下的 `required variable … is missing a value`、超时/信号/spawn 错误（这些都带 `error` 或 `signal`，被排除）。
+- HTTPS 用例：在 `platform/test/deployment-tls-fixture.ts` 新增 `withTlsDeployment(run, sink?)`，签名参照 `verifyDeployedCredentialPrivacy(sink?)`。它的行为：
+  - 建 `createDeploymentSetupEvidence(sink)`；
+  - 调 `withDeployment(run 包装, prepareTlsDeployment 包装, setup)`，并把 `setup` 交给 run 内的 `configureDeployment(lifecycle, start, setup)`；
+  - **只在失败时** `await setup.publish()`，然后把 `setup.snapshot()` 作为属性 `setup` 附到**原错误**上并重抛，不重写、不丢弃原错误。成功路径不 publish。
+  - `deployment.docker.test.ts` 的 HTTPS 用例改为调用它，业务断言逐字不变。
+- `publishPrivacySetup` 保持原样，不提取。它构造新的脱敏错误、丢弃原错误，这是 `deployment-setup.integration.test.ts:84-111` 和 `deployment-audit-stop.docker.test.ts:214` 锁定的另一套契约，与 HTTPS 的「保留原错误」语义不同，不算重复实现。
+- 只接这一个部署用例（issue 的最小范围），其余 `deployment.docker.test.ts` 用例不变。
+
+测试：
+
+- `docker-command.integration.test.ts`：
+  - 每个类别一个 stderr 正例，使用真实形态的消息（带缩进或 `Error response from daemon:` 前缀，端口错误用 Engine 28 之后的长句），另加多行混合和无匹配（`unknown`）各一例；
+  - canary：stderr 里埋 `https://user:secret@host/x`、`Authorization: Bearer <JWT 样式>`、`DSH_TEAM_MODEL_API_KEY=<值>` 和一个端口号，断言它们都不出现在投影结果里，也不出现在 `output()` 抛出的异常消息里；
+  - 需要更新期望的现有用例（它们落进新投影，`FIXED` 之后多一行类别码）：`:138` undeclared status、`:144` different status、`:154` extra line、`:185` 异步路径改为 `required-variable`，`:159` other text、`:164` lowercase name 改为 `unknown`。每处只把期望 stderr 换成 `FIXED + '\ncompose-failure: <码>'`，其余断言（status、stdout、submission 状态）不变；
+  - 保持不变的：`:127-134` 声明投影，`:146` 非 compose，`:147-158` process error 和 signal，`deployment-document-server.docker.test.ts:134-142`，`docker-version.integration.test.ts` 里的非 compose 用例。
+- `deployment-setup-lifecycle.integration.test.ts`（沿用它的 `node:child_process` 替身）直接测 `withTlsDeployment`。替身需要两处扩展：
+  - (a) `compose()` 按参数里是否含 `proxy` 选择性失败；`compose-creation` 场景下代理 `up` 必须成功，并且对代理容器名的 `inspect` 要返回恰好一个带 `IPAddress` 的 `NetworkSettings.Networks`（`deployment-tls-fixture.ts:120-124`）。
+  - (b) `prepareTlsDeployment` 调用真实的 `execFileSync('openssl')`，这是 integration 主机的前提（本机 LibreSSL 在固定 PATH 下可用）。
+
+  两个场景的 stderr 分别为端口占用和容器名冲突。断言：
+  - 发布的 `deploymentSetup` 快照 `firstFailure.phase` 分别为 `scenario-preparation` 和 `compose-creation`；
+  - 抛出的错误带 `setup` 属性，等于发布的快照；
+  - 按 `user-image-fixture.ts:76-82` 的 `nestedMessages` 方式递归展开 `AggregateError.errors` 后，消息里分别含 `compose-failure: port-allocated` 和 `compose-failure: container-name-conflict`；
+  - 快照经 sink 只发布一次。
+
+  另加一个成功场景，断言不 publish。
+
+文档（编排者同 PR 改）：`platform/test/README.md` 的「Verification notes」一节，补上 compose 类别码和 HTTPS 用例的阶段证据。
+
+验证：`pnpm check`；VPS exact-head `test:docker`（含 HTTPS 用例，必须通过）和 `test:deploy`，cleanup confirmed；本机 exact-head `pnpm test:stack` 满足合并门禁。
+
+剩余风险：根因仍是 UNKNOWN。本 PR 只让复发时能够归因，不加重试，不改 deadline，不跳过用例，也不拿之后的绿色结果改写 #540 那次失败。#541 的最后一条验收是有条件的：合并时如果没有复发，就关闭 #541，原因记为 UNKNOWN；之后若复发，按投影出的类别码另开 issue 归因并修复，并附 failing-before/passing-after 证据。
+
+Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清语义、`buildFailureDiagnostic`、inspect 缺席判定、HTTPS 用例的全部业务断言、隐私用例的阶段证据和脱敏失败契约，以及完整的 Docker discovery。
