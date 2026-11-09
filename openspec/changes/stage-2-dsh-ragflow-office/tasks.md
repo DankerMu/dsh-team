@@ -5528,3 +5528,34 @@ Must preserve：
 - 退出码映射（130/143）；
 - custody 的组信号、组结算和退役语义；
 - spawn 不使用 `detached`。
+
+## 41. #565：DSH 验证浏览器升级到 Chrome for Testing 156，Office 预览只接受 `rendered`
+
+依赖：#562 已合并（17.1 的容忍断言和 `docs/DEPLOY.md` 的员工浏览器要求）。由 #565 承载。不碰关键路径（`images/browser-verification/` 不在关键路径表内）。
+
+选型（2026-11-09 查询 `googlechromelabs.github.io/chrome-for-testing`）：
+
+- 当前 Stable 是 157.0.8103.38，存储对象 `Last-Modified` 为 2026-11-03，不满 7 天，不选。
+- 选 156.0.8078.80：156 稳定线的最后一个补丁，`chrome-headless-shell-linux64.zip` 的 `Last-Modified` 为 2026-10-28，满足 ≥145 且 ≥7 天。
+- 受信主机已安装（编排者，2026-11-09）：从 `storage.googleapis.com/chrome-for-testing-public/156.0.8078.80/linux64/chrome-headless-shell-linux64.zip` 下载，文件 md5 与存储返回的 `x-goog-hash` 一致，zip sha256 `547dcd37…2a0b3eb4`；解压到 `~/.local/share/dsh-team/toolchain/chrome-156.0.8078.80/chrome-headless-shell-linux64/`，可执行文件 sha256 `d34f5d19…8fd2b73fa`。旧的 `chrome-140.0.7339.82` 目录保留，供未合并分支的 lane 使用。
+- `deb.deps` 与 140 相比包集合不变，只有四个最低版本提高（`libc6 >= 2.25`、`libcairo2 >= 1.14.0`、`libcups2 >= 1.7.0`、`libglib2.0-0 >= 2.49.3`），bookworm 的版本都满足。所以 `images/browser-verification/Dockerfile` 的 apt 行不变，只改第 3 行注释里的版本号。
+
+- [ ] 41.1 把仓库里所有 `140.0.7339.82` 版本字面量改成 `156.0.8078.80`，并收紧 better-sidebar 的 docx 断言。
+  - 代码字面量：`scripts/verify-browser-runtime.mjs:173`、`:264`、`:272`、`:399`；`scripts/probe-dsh-api-cdp.mjs:373` 的正则（这是唯一真正比对版本的地方，比对 CDP `Browser` 字符串）；`platform/test/ci-vps-worker.ts:260` 的 toolchain 路径段；`scripts/probe-dsh-api.sh:22`、`scripts/probe-first-run.sh:21` 的帮助文字；`images/browser-verification/Dockerfile:3` 注释。
+  - 文档字面量：`.env.example:40`、`AGENTS.md:46` Stack 表、`scripts/README.md:60`、`plugins/zh-locale/README.md:65`、`:197`、`platform/test/README.md:65`、`:71`、`constraints.yaml:204`、`:228` 里的 `CfT140` 简写改成 `CfT156`。`openspec/changes/archive/**` 是历史，不改。
+  - `platform/test/better-sidebar.docker.test.ts:159-164`：删掉 `getOrInsertComputed` 的三行注释和正则断言，在 `:152` 的 `toMatchObject` 里加 `state: 'rendered'`；`:148` 的注释同步改写（转换成功并显示出来）。`pages >= 1`、`code` 为 undefined、`consoleErrors` 为空、报告行不变。
+  - 17.1 条目（本文件 `:3512` 附近）改写断言描述：状态只能是 `rendered`，页数至少 1，`fontWarning` 为 false；删去「或者恰好是 failed 且消息含 getOrInsertComputed」的容忍和「见 #565」。`docs/DEPLOY.md:201` 删去「受信 VPS 验证所用的 Chrome for Testing 140 低于这个版本，升级见 #565」一句，员工浏览器版本要求原样保留。第 34 节 `:4085`、`:4190` 的「VPS 的 Chrome 140（#565）」改成说明 VPS 验证浏览器已是 CfT 156（#565）；渲染断言仍只在本机通道，第 34 节的范围不变。`openspec/changes/stage-2-dsh-ragflow-office/design.md:435` 的 `CfT140` 改成 `CfT156`。
+  - 验证：`pnpm check`；`git grep -n -i -E '140\\?\.0\\?\.7339|CfT ?140|Chrome for Testing 140|Chrome 140' -- . ':!openspec/changes/archive'` 的输出只剩第 41 节自身的行（`\\?` 用来匹配 `probe-dsh-api-cdp.mjs:373` 正则里转义的点；本节记录历史版本、原句和这条命令本身）；受信 VPS exact-head 完整 `pnpm test:docker`（`CHROME_BIN` 指向 156），better-sidebar 报告行为 `preview=rendered`，其他浏览器用例全部通过，cleanup confirmed；`pnpm test:deploy` 通过。
+  - `test:model` 车道（`ci-vps-worker.ts:252` 调 `pnpm test:model`，`:260` 是它的 `CHROME_BIN`）需要用户按 SHA 授权，本任务不跑。这处路径改动的证据：受信主机上 `stat` 该路径存在且是上面记录的可执行文件；其余三条车道共用同一份资格检查（见下）。
+  - 受信主机 lane 的 `CHROME_BIN` 来自 operator 环境（`scripts/trusted-docker-owner.mjs:43` 透传），exact-head 运行必须指向 `chrome-156.0.8078.80`，证据评论写明。
+  - 红：
+    - 断言：#562 的 VPS 运行（invocation `3c1dd3e6-…`，CfT 140）报告 `无法显示 PDF：this[#methodPromises].getOrInsertComputed is not a function`，新断言在该运行下会失败。
+    - 字面量：四条车道（`package.json` 的 `test:docker`、`test:model`、`probe:dsh-api`、`probe:first-run`）都经 `scripts/verify-browser-runtime.mjs` 的 `prepare()`（`:245`）启动隔离浏览器，`probe-dsh-api-cdp.mjs:397` 的 `requireDebugger` 在 `:373` 比对 CDP `Browser` 字符串。所以在 main 上把 `CHROME_BIN` 指向 156 跑 `pnpm test:docker`，会在资格检查阶段以 `isolated browser version differs from pinned CfT`（`:375`）失败；编排者在受信主机上跑这一次作为红（只到资格检查即止，cleanup 仍须 confirmed），之后才跑 exact-head 绿。
+
+Suggested fixture level: compact - 版本字面量替换加一条断言收紧，没有新逻辑
+Minimal mergeable slice: atomic（字面量必须一起改：`probe-dsh-api-cdp.mjs:373` 的版本比对与 `CHROME_BIN` 不一致时，四条浏览器车道的资格检查都会失败）
+Risk packs (41.1): selected - Release（受信验证工具链换版本）、Legacy compatibility（更新后的浏览器对 DSH 0.2.1 界面的全部 docker 用例仍须通过）；not selected - Config、Schema、Auth、Public API、Concurrency、File IO、Resource limits、Migration、Security（隔离、挂载和网络方式不变）。
+
+剩余风险：`test:model` 车道的 156 路径只有 `stat` 证据，要等下一次用户授权的 `test:model` 才有运行证据。
+
+Must preserve：`images/browser-verification/Dockerfile` 的基础镜像摘要和 apt 包集合；`CHROME_BIN` 的完整分发校验（`chrome-headless-shell` 文件名、同目录 `deb.deps`、sha256 收据）；浏览器以只读方式挂载、不进镜像；DSH 员工浏览器版本要求文字。
