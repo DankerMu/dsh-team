@@ -5418,7 +5418,7 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
     - 替身日志正好落在 `STAND_IN_REQUESTS` 集合内，并且含 packument 和 tarball 的 GET；
     - 首轮用日志确认对话框路径的 `installBundle` 没有重新解析预装闭包；
     - live config 回读 `registryProbeEnabled: false`；
-    - 在实例里由 observer 调用 `ctx.get('pluginRegistryProbe').fastest()`，期望返回 `null`。这条才是探测关闭的证据：UI 本来就不发探测，单看 UI 的断言是空转。
+    - 在实例里由 observer 调用 `ctx.get('pluginRegistryProbe').fastest()`，期望返回 `null`。只有 live config 回读到 `registryProbeEnabled === false` 时才调用。原因是 managed-policy 和 credential-priority 用例共用这个 observer，而它们的探测是开着的，无条件调用会多出一条公共出网路径。这条才是探测关闭的证据：UI 本来就不发探测，单看 UI 的断言是空转。
   - 验证：同 39.B。
 
 - [ ] 39.C2 只读出口抓包：
@@ -5428,7 +5428,7 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
        ```
        /usr/bin/sudo -n /usr/bin/timeout -k 5 <bound>s /usr/bin/nsenter -t <pid> -n /usr/bin/tcpdump -i any -nn -l -s 128 'port 53 or port 80 or port 443 or udp port 9'
        ```
-    3. 要求 stderr 里的 `listening on any` 出现在 DSH 启动公告之前。
+    3. 要求 stderr 里的 `listening on any` 先于 DSH 启动公告和 observer 的标记行出现。observer 在 `loader.await()` 之后就会输出，它调用的 `fastest()` 必须落在抓包窗口内。
 
     每次启动都是新的 netns，所以每次启动单独抓。启动到挂上抓包之间的几毫秒空窗如实写进证据：探测是惰性的，这段空窗藏不住探测。
 
@@ -5436,9 +5436,8 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
     - stdout 在内存里按「接口是否为 lo × 端口」计数，DNS 只保留查询名。不写文件，不用 `-w`、`-A`、`-X`。
     - 门禁：任何接口上 port 53 的包数为 0；非 loopback 的 80/443 包数为 0。
     - 正向对照：抓包期间用 `docker exec` 从实例向 bridge 网关的 `udp/9` 发一个金丝雀包，计数必须至少为 1。这同时证明 netns 对、过滤器对、解析器活着。
-    - 另记「其他非 loopback、非 3080 的包数」作证据，不进门禁。docker-proxy 到 `:3080` 的流量属于已知正常。
-  - 结束：在 finally 里向 `sudo` 发 SIGINT（sudo 会转发给 tcpdump），在上限内等它 `close`；再确认 tcpdump 已退出，只有 ESRCH 算退出，EPERM 不算，与 `scripts/README.md` 口径一致。内层的 `timeout -k` 是唯一不依赖测试进程的硬上限，测试进程被 SIGKILL 时由它回收。
-  - 保管模型：root 的 tcpdump 不是 Docker 资源，不进登记目标，保管观察者不认它。测试自己确认退出并打印证据。lane 的主机围栏增加一项：运行前后 `pgrep -x tcpdump` 和 `pgrep -x nsenter` 都为空。抓包不碰 iptables、网络和文件。
+  - 结束：发 SIGINT 之前，沿 `/proc/<sudo pid>/task/*/children` 找到并记下 tcpdump 的 pid（链路为 sudo → use_pty monitor → timeout → tcpdump，`nsenter -n` 直接 exec 成 tcpdump）。然后在 finally 里向 `sudo` 发 SIGINT，信号经 sudo 转给 timeout、再转给 tcpdump，在上限内等它 `close`；再确认 tcpdump 已退出，只有 ESRCH 算退出，EPERM 不算，与 `scripts/README.md` 口径一致。内层的 `timeout -k` 是唯一不依赖测试进程的硬上限，测试进程被 SIGKILL 时由它回收。
+  - 保管模型：root 的 tcpdump 不是 Docker 资源，不进登记目标，保管观察者不认它。测试自己确认退出并打印证据。lane 的主机围栏增加一项：运行后 `pgrep -x tcpdump` 和 `pgrep -x nsenter` 的结果与运行前的基线一致。抓包不碰 iptables、网络和文件。
   - 首轮实测 `sudo -n` 能否在保管 owner 的分离会话里使用；命令全部写绝对路径。
   - 验证：同 39.B，另加围栏前后的 `pgrep` 证据。
 
