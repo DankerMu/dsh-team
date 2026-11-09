@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
+import { PROBE_PLUGIN, registryStandInScript } from './registry-stand-in.ts';
 import { runOfficeConvert } from './office-convert-fixture.ts';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
@@ -94,8 +95,6 @@ function assertOfflineContainerConfiguration(command: DockerCommand, container: 
 
 type Probe = 'version' | 'offline-docx' | 'profile-seed' | 'office-convert' | 'offline-plugin';
 
-export const PROBE_PLUGIN = 'dsh-team-probe-plugin';
-export const PROBE_TARBALL = `/${PROBE_PLUGIN}/-/${PROBE_PLUGIN}-1.0.0.tgz`;
 // Each DSH/pnpm step is bounded above the CLI's 120s registry lookup; the profile dump at 60s.
 const PLUGIN_STEP_MS = 150_000;
 const PROFILE_DUMP_MS = 60_000;
@@ -110,12 +109,11 @@ const OFFLINE_PLUGIN_DEADLINE_MS = 4 * PLUGIN_STEP_MS + 2 * PROFILE_DUMP_MS + 60
  */
 const offlinePluginScript = `
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { chmodSync, lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+${registryStandInScript({ port: 0 })}
 const PROFILE = '/data/home/profiles/web';
 const NAME = ${JSON.stringify(PROBE_PLUGIN)};
-const TARBALL = ${JSON.stringify(PROBE_TARBALL)};
+const { registry } = registryStandIn;
 const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
 // Each run is its own process group, killed whole at its bound with the pnpm DSH starts.
 const run = (file, args, bound, cwd) => new Promise((resolve) => {
@@ -133,31 +131,6 @@ const run = (file, args, bound, cwd) => new Promise((resolve) => {
   child.on('error', (error) => settle(null, null, error.code));
   child.on('close', (status, signal) => settle(status, signal, undefined));
 });
-// No engines.dsh and no @deepseek-ai peer: DSH's preflight reads the manifest as compatible.
-const work = mkdtempSync('/tmp/dsh-team-registry-');
-mkdirSync(work + '/package');
-writeFileSync(work + '/package/package.json', JSON.stringify({ name: NAME, version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
-writeFileSync(work + '/package/cordis.patch.yml', '[]\\n');
-const packed = await run('tar', ['-czf', work + '/probe.tgz', '-C', work, 'package'], 30000);
-if (packed.status !== 0) throw new Error('probe tarball not packed: ' + packed.stderr);
-const tarball = readFileSync(work + '/probe.tgz');
-let requests = [];
-let documentText = '';
-const server = createServer((request, response) => {
-  requests.push(request.method + ' ' + request.url);
-  if (request.url === '/' + NAME) {
-    response.setHeader('content-type', 'application/json');
-    response.end(documentText);
-  } else if (request.url === TARBALL) response.end(tarball);
-  else { response.statusCode = 404; response.end('{}'); }
-});
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-const registry = 'http://127.0.0.1:' + String(server.address().port) + '/';
-const version = { name: NAME, version: '1.0.0', dsh: { bundle: { patch: './cordis.patch.yml' } }, dist: {
-  tarball: registry.slice(0, -1) + TARBALL,
-  integrity: 'sha512-' + createHash('sha512').update(tarball).digest('base64'),
-  shasum: createHash('sha1').update(tarball).digest('hex') } };
-documentText = JSON.stringify({ name: NAME, 'dist-tags': { latest: '1.0.0' }, versions: { '1.0.0': version } });
 const catalog = read('/opt/dsh-team/catalog.json').entries;
 const bundled = catalog.filter((entry) => Object.keys(read('/opt/dsh-team/' + entry.id + '/package.json').dependencies ?? {}).length > 0);
 const closure = new Set(bundled.flatMap((entry) => Object.keys(read('/opt/dsh-team/' + entry.id + '/package.json').dependencies)));
@@ -182,10 +155,10 @@ const state = async () => {
   };
 };
 const step = async (name, file, args, cwd) => {
-  requests = [];
+  registryStandIn.requests.length = 0;
   const result = await run(file, args, ${String(PLUGIN_STEP_MS)}, cwd);
   const { status, signal, error, timedOut, stdout, stderr } = result;
-  return { name, status, signal, error, timedOut, requests: [...requests].sort(), tail: (stdout + stderr).slice(-2000) };
+  return { name, status, signal, error, timedOut, requests: [...registryStandIn.requests].sort(), tail: (stdout + stderr).slice(-2000) };
 };
 const add = () => step('add', 'dsh', ['plugin', '--profile', 'web', 'add', NAME, '--registry=' + registry]);
 const steps = [];
@@ -218,7 +191,7 @@ try {
   failure = error;
   observed.failure = String(error?.stack ?? error);
 }
-server.close();
+registryStandIn.server.close();
 process.stdout.write(JSON.stringify(observed), () => process.exit(failure === undefined ? 0 : 1));
 `;
 
