@@ -350,10 +350,13 @@ function runContainer(
       throw new Error('Profile probe requires the owned writable named volume at /data/home');
     }
   }
-  const start = ['start', '--attach', container];
-  const stdout = output(command(start, 30_000), start);
+  // Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.
+  const start = ['start', container];
+  output(command(start, 30_000), start);
   const wait = ['wait', container];
   const exit = output(command(wait, 30_000), wait).replace(/\r?\n$/, '');
+  const logs = ['logs', container];
+  const stdout = output(command(logs, 30_000), logs);
   if (exit !== '0') throw new Error(`${probe} container exited ${exit}:\n${stdout}`);
   return stdout;
 }

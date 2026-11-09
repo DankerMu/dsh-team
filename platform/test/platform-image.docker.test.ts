@@ -75,7 +75,13 @@ it('ships a non-root standalone platform with working native persistence, web as
       imageId,
       ...args,
     ]);
-    return execute(['start', '--attach', name]);
+    // Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.
+    execute(['start', name]);
+    const exit = execute(['wait', name]).trim();
+    const logs = command(['logs', name], 30_000);
+    if (exit !== '0')
+      throw new Error(`${suffix} container exited ${exit}:\n${logs.stdout}\n${logs.stderr}`);
+    return output(logs, ['logs', name]);
   };
   let imageId = '';
   try {

@@ -4497,3 +4497,51 @@ Must preserve：
 - `.env.example` 原样复制的报错顺序；
 - Document Server 的字体挂载；
 - 用户镜像内容不变（本任务不改 `images/`）。
+
+## 31. 技术债 #511：Docker 夹具不再用 `start --attach` 等待一次性容器
+
+依赖：#572（#556，已合入；`user-image-fixture.ts` 的行数余量以合入后为准）。由 #511 承载，处理方式同第 6 组。只改测试夹具，不改 `scripts/docker-command.mjs` 的结清规则，不碰关键路径。（24–30 节在其他未合并的 PR 分支上。）
+
+- [ ] 31.1 下面四处一次性容器的 `docker start --attach <name>`，统一改成 `start <name>`、有界的 `wait <name>`（退出码不是 `0` 时抛错，并带上 `logs`），需要 stdout 的再用 `logs <name>` 读。写法照同文件现成的 `user-image-fixture.ts:243-250`（`runOfflinePlugin`：同一个 `output()`，保留原错误文本），注释照 `managed-policy-fixture.ts:211`。同步改 `docker-version.integration.test.ts` 的假 Docker。新增一个守卫测试：`platform/test/` 下的 `.ts` 文件里不得出现 `'start', '--attach'`。验证：守卫测试先红后绿；VPS exact-head `test:docker` 和 `test:deploy` 通过，cleanup confirmed，并且没有 `cleanup.unsettled`。
+
+Suggested fixture level: compact - 测试夹具的等待方式
+Minimal mergeable slice: atomic: 四处改写、一个假 Docker 的同步和一个守卫
+Risk packs (31.1): selected - Legacy compatibility（每处调用方拿到的 stdout 和失败语义不变：非 0 退出仍然失败）、Resource limits（`wait` 有界，超时沿用原调用的上限）；not selected - Config、Schema、Auth、Public API、Concurrency、File IO、Release、Migration、Security。
+Evidence (31.1):
+
+现状（main `c710f41`）：
+
+- `scripts/docker-command.mjs` 的 `completeResult` 只在 CLI 退出码为 0，或等于调用方声明的 `acceptedStatus` 时，才把提交行记为 settled。`start --attach` 的 CLI 退出码跟随容器退出码，所以容器一旦非 0 退出，就会留下一条未结清的 `start` 行，custody 判定为 `cleanup: unconfirmed`。
+- #510 已把 `managed-policy-fixture.ts` 改成 `start` 加 `wait`，`:211` 注释为「Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.」。
+- 仍在用 `start --attach` 的四处：
+  - `platform/test/user-image-fixture.ts:353`：`runContainer`。stdout 来自 attach，之后 `wait` 并检查是否为 `0`。
+  - `platform/test/resource-oom-fixture.ts:424`：OOM 证明读取器。超时 15s，之后 `wait` 用 5s 并检查是否为 `0`。
+  - `platform/test/platform-image.docker.test.ts:78`：`run()`，返回 stdout。`execute` 的默认超时是 30s，非 0 退出由 `output` 抛错。
+  - `platform/test/deployment.docker.test.ts:229`：FIFO 种子容器（`await command([...])`，异步）。
+- `office-convert.integration.test.ts:134` 已经断言 office 探针的 `start` 不带 `--attach`。
+
+改动（每处保持原来的超时上限、stdout 和失败语义）：
+
+- `user-image-fixture.ts`：
+  - 写法改成 `start`（30s），然后 `wait`（30s），再 `logs`（30s）读出 stdout；退出码不是 `0` 时抛出原来的 `${probe} container exited ${exit}:\n${stdout}`，否则返回 stdout。
+  - 这个文件按 eslint 口径（不计空行和注释）是 797/800 行，最多只能净增 2 行，以 `pnpm lint` 为准。超了就停下报告，不在本任务里拆文件（拆分由 #576 跟进）。
+- `resource-oom-fixture.ts`：`start`（15s），然后 `wait`（15s，原来真正约束读取器运行时间的是 attach 的 15s，实际约束不变），再 `logs`（15s）读出证明 JSON；退出码不是 `0` 时抛出原错误 `Owned OOM proof reader failed`。读取器是单独的容器，有自己的 cgroup，在 B 的 `wait` 返回 137 之后才启动（`:396-420`、`:537`），不受 OOM 影响。
+- `platform-image.docker.test.ts` 的 `run()`：`start`，然后 `wait`；退出码不是 `0` 时，抛出点名容器后缀和退出码的错误，并附上 `logs`；之后返回 `logs` 的 stdout。
+- `deployment.docker.test.ts:229`：`start`，然后 `wait`；退出码不是 `0` 时，读 `logs` 并抛错带上它。成功时 stdout 不被使用，不读 `logs`。
+- 每处都沿用 managed-policy 的那行注释，不另写新说法。
+- `platform/test/docker-version.integration.test.ts`（假 Docker，`:160-191`）：`start` 改为返回 `ok()`；新增 `case 'logs'` 返回探针 stdout，以证明 stdout 来自 `logs`；加一条断言，确认 `start` 的参数不含 `--attach`，写法照 `office-convert.integration.test.ts:134`。`reuse-wait`（退出码 7）照旧失败，失败前先读 `logs`。其他假 Docker（`web-startup`、`container-start-lifecycle`、`deployment-setup-account`）不经过 `runContainer`，`managed-policy.integration.test.ts:502` 已经认识 `logs`。
+
+守卫（新文件 `platform/test/docker-start-attach.integration.test.ts`，纯文本，不跑 Docker）：
+
+- 读 `platform/test/` 下除自身以外的所有 `*.ts`。断言没有任何文件匹配 `/'start',\s*'--attach'/`，报错列出文件名和行号。
+- 先红：在 main 上会列出上面四处。`office-convert.integration.test.ts:134` 写的是 `'start')`，不会被误报；`\s*` 能跨行。
+- 覆盖不到的写法：`-a` 短参数、`[name, '--attach']` 这种参数顺序、`platform/test/` 下的 `.mjs`。目前都没有出现，算剩余风险。
+
+验证：`pnpm check`；守卫测试先红后绿；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，custody 的 `cleanup.unsettled` 为空；本机 exact-head `pnpm test:stack`，只是满足门禁。
+
+剩余风险：
+
+- 正常通过的运行里，这四个容器都以 0 退出，所以非 0 路径只有改写本身保证，VPS 运行覆盖不到。
+- 同类问题不在本任务范围：前台运行的 `docker run`（不带 `--detach`）同样让 CLI 退出码跟随容器，而且 `run` 会记账。涉及 `container-create-recovery.docker.test.ts:88`、`container-network-mode.docker.test.ts:134`、`container-start-docker-fixture.ts:55`、`instance-idle-docker-fixture.ts:77/148`、`platform-stack.stack.test.ts:114`、`probe-cleanup.integration.test.ts:203`、`volume-upgrade.docker.test.ts:100/131/288`。另开 issue 跟进。
+
+Must preserve：各调用方的 stdout 内容和失败语义；超时上限不收紧；`scripts/docker-command.mjs` 不改。
