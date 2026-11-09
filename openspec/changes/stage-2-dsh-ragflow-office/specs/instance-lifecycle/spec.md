@@ -133,9 +133,9 @@
 
 #### Scenario: 旧卷不重置直接启动时给出 profile 不兼容码
 
-- **WHEN** 同一个由 DSH 0.2.0-rc.2 初始化的状态卷不经重置，直接在 DSH 0.2.1-rc.2 镜像上启动，DSH 在启动日志里打印 `dsh: skipping profile bundle` 或 `dsh: disabling profile plugin`，随后就绪失败或平台接入失败
-- **THEN** 实例为 error，最近错误首行 MUST 为封闭失败码 `profile-incompatible`，其后仍是该路径原来的最近错误；`instance.start-failed` 审计细节 MUST 为 `{"code":"profile-incompatible"}`
-- **AND** 启动日志不含这两句标记的其他启动失败，最近错误格式和审计细节 `{}` 都不变；平台 MUST NOT 自动重置配置
+- **WHEN** 同一个由 DSH 0.2.0-rc.2 初始化的状态卷不经重置，直接在 DSH 0.2.1-rc.2 镜像上启动，受管组合发现该 profile 里有 bundle 被跳过
+- **THEN** 平台 MUST 在创建容器之前拒绝启动；实例为 error 且不关联容器，最近错误首行 MUST 为封闭失败码 `profile-incompatible`，其后是固定说明，不含 profile 内容；同一事务 MUST 写入 `instance.start-failed`，细节为 `{"code":"profile-incompatible"}`
+- **AND** 该行已有容器或处于启动中、运行中，或账号已变化时，MUST NOT 写行或审计；其他创建前失败仍不改行、不写审计；平台 MUST NOT 自动重置配置
 
 #### Scenario: 停止状态下只恢复 profiles
 
