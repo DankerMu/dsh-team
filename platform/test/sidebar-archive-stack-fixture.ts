@@ -3,15 +3,10 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import type { ElementHandle, Page, Response } from '@playwright/test';
+import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
-import {
-  EXPAND_BUTTON,
-  explorerReselect,
-  FILES_GUIDE,
-  rowQuery,
-} from './better-sidebar-browser-fixture.mjs';
-import { until, workbenchSession } from './stack-browser-fixture.ts';
+import { rowQuery } from './better-sidebar-browser-fixture.mjs';
+import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
 /** One regular file of an archive, or of the instance's work directory. */
@@ -82,7 +77,8 @@ export function parseTarGz(compressed: Buffer): { format: TarFormat; entries: Ar
 export const byName = (entries: readonly ArchiveEntry[]) =>
   [...entries].sort((a, b) => (a.name < b.name ? -1 : Number(a.name > b.name)));
 
-const WORK = '/data/work';
+/** The employee instance's work directory, which the Sidebar's file area lists. */
+export const WORK = '/data/work';
 const TEXT_NAME = '打包甲.txt';
 const BINARY = 'archive-b.bin';
 const NAMES = [TEXT_NAME, BINARY];
@@ -103,7 +99,6 @@ print(json.dumps([p.exists() for p in paths]))`;
 // better-sidebar 0.28.0's zh strings (lib/client.js zipDownloadCount, zipFailed, archiveToolMissing).
 const MENU = '压缩并下载（2 项）';
 const FAILURE_TEXTS = ['打包失败', '系统上没有可用的打包命令'];
-const ROWS_SHOWN = NAMES.map((name) => `Boolean(${rowQuery(name)})`).join(' && ');
 const SELECTION = `JSON.stringify({ rows: [${NAMES.map((name) => `(${rowQuery(name)})?.getAttribute('data-dsh-selected')`).join(', ')}], selected: document.querySelectorAll('[data-dsh-native-tab-host] [data-dsh-selected="true"]').length })`;
 
 /** Everything the archive lane needs from the stack test. */
@@ -115,6 +110,12 @@ export interface ArchiveLane {
   readonly provider: () => Promise<Record<string, unknown>>;
 }
 
+/** The provider counters a file-area lane must leave unchanged: no model request or retrieval. */
+export async function providerCounts(lane: ArchiveLane) {
+  const { requests, searches, delegations } = await lane.provider();
+  return { requests, searches, delegations };
+}
+
 export interface ArchiveEvidence {
   readonly browser: StackBrowserEvidence;
   readonly entries: readonly ArchiveEntry[];
@@ -124,25 +125,11 @@ export interface ArchiveEvidence {
 /** The file-row download's own response; `request` is asserted, never printed. */
 type SingleDownload = Record<'csp' | 'aborted' | 'request', string> & { disposition: 'attachment' };
 
-/** What an in-page expression yields: the typings, without the DOM lib, never admit null. */
-const element = async (page: Page, expression: string): Promise<ElementHandle | null> =>
-  (await page.evaluateHandle(expression)).asElement();
-
-/** One step toward both rows visible: expand the Sidebar, take the guide or reselect the tab. */
-async function showRows(page: Page): Promise<boolean> {
-  if (await page.evaluate<boolean>(ROWS_SHOWN)) return true;
-  for (const expression of [EXPAND_BUTTON, FILES_GUIDE, explorerReselect(TEXT_NAME)]) {
-    const target = await element(page, expression);
-    if (target !== null) return target.click().then(() => false);
-  }
-  return false;
-}
-
 type Shoot = (name: string) => Promise<void>;
 
 /** Selects both rows, archives them from the context menu and saves the download. */
 async function downloadArchive(page: Page, shoot: Shoot, saved: string, timeout: number) {
-  await until(() => showRows(page), timeout, 'sidebar archive rows');
+  await until(() => showSidebarRows(page, NAMES), timeout, 'sidebar archive rows');
   for (const name of NAMES)
     await (await element(page, rowQuery(name)))?.click({ modifiers: ['ControlOrMeta'] });
   const bothOnly = JSON.stringify({ rows: ['true', 'true'], selected: 2 });
@@ -208,11 +195,7 @@ async function downloadSingle(page: Page, saved: string, timeout: number): Promi
 /** The files, the browser session and every check of the lane; cleanup is the caller's. */
 async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
   const { exec, session } = lane;
-  const counts = async () => {
-    const { requests, searches, delegations } = await lane.provider();
-    return { requests, searches, delegations };
-  };
-  const before = await counts();
+  const before = await providerCounts(lane);
   const written = await exec(['python3', '-c', WRITE, WORK, ...NAMES, TEXT]);
   // The instance's own JSON for the files it has just written.
   const expected = JSON.parse(written) as ArchiveEntry[];
@@ -239,7 +222,7 @@ async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
     // The host's release does not await the unlink of its temporary archive.
     const temp = ['find', '/tmp', '-maxdepth', '1', '-name', 'dsh-better-sidebar-ar-*'];
     await until(async () => (await exec(temp)) === '', session.timeout, 'archive temp release');
-    expect(await counts(), 'No model request or retrieval').toEqual(before);
+    expect(await providerCounts(lane), 'No model request or retrieval').toEqual(before);
     return { browser, entries, format, single: { ...file, ...single } };
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -247,21 +230,32 @@ async function archiveDownload(lane: ArchiveLane): Promise<ArchiveEvidence> {
 }
 
 /**
- * Better-sidebar's 「压缩并下载」 (#430): two work-directory files selected in the file area download
- * as one archive built in the instance, matching them byte for byte; both are then removed.
+ * Runs `lane` and then, whether it succeeded or failed, removes the named work-directory files and
+ * checks them gone. The lane's failure stays first; a cleanup failure follows it.
  */
-export async function archiveScenario(lane: ArchiveLane): Promise<ArchiveEvidence> {
+export async function withWorkFiles<T>(
+  lane: ArchiveLane,
+  names: readonly string[],
+  label: string,
+  run: () => Promise<T>,
+): Promise<T> {
   const removed = async () => {
-    const exists: unknown = JSON.parse(await lane.exec(['python3', '-c', REMOVE, WORK, ...NAMES]));
-    expect(exists, 'Sidebar archive files removed').toEqual([false, false]);
+    const exists: unknown = JSON.parse(await lane.exec(['python3', '-c', REMOVE, WORK, ...names]));
+    expect(exists, `${label} files removed`).toEqual(names.map(() => false));
   };
-  const evidence = await archiveDownload(lane).catch(async (error: unknown) => {
-    // The lane's failure stays first; a cleanup failure follows it.
+  const evidence = await run().catch(async (error: unknown) => {
     await removed().catch((cleanup: unknown) => {
-      throw new AggregateError([error, cleanup], 'Sidebar archive lane and cleanup failed');
+      throw new AggregateError([error, cleanup], `${label} lane and cleanup failed`);
     });
     throw error;
   });
   await removed();
   return evidence;
 }
+
+/**
+ * Better-sidebar's 「压缩并下载」 (#430): two work-directory files selected in the file area download
+ * as one archive built in the instance, matching them byte for byte; both are then removed.
+ */
+export const archiveScenario = (lane: ArchiveLane): Promise<ArchiveEvidence> =>
+  withWorkFiles(lane, NAMES, 'Sidebar archive', () => archiveDownload(lane));

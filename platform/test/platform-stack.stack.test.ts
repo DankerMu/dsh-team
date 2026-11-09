@@ -45,6 +45,8 @@ import { scopeScenario } from './knowledge-scope-stack-fixture.ts';
 import type { ScopeEvidence } from './knowledge-scope-stack-fixture.ts';
 import { searchScenario } from './knowledge-search-stack-fixture.ts';
 import type { SearchEvidence } from './knowledge-search-stack-fixture.ts';
+import { legacyPreviewScenario } from './legacy-preview-stack-fixture.ts';
+import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
@@ -156,6 +158,7 @@ interface ConversationEvidence {
   scope?: ScopeEvidence & { forbiddenRequests: unknown };
   search?: SearchEvidence & { provider: Record<string, unknown> };
   archive?: ArchiveEvidence;
+  legacyPreview?: LegacyPreviewEvidence;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
@@ -468,11 +471,15 @@ async function converse(
       ragflow,
     });
     // The file area's two-file archive, built in the instance without a model or a retrieval.
-    evidence.archive = await archiveScenario({
+    const lane = {
       session: panelSession(lifecycle, base, employee.email),
-      exec: (args) => run(['exec', '--user', '1001', `dsh-team-u-${employee.id}`, ...args]),
+      exec: (args: readonly string[]) =>
+        run(['exec', '--user', '1001', `dsh-team-u-${employee.id}`, ...args]),
       provider: () => platformRead(PROVIDER_HEALTH),
-    });
+    };
+    evidence.archive = await archiveScenario(lane);
+    // DOC, PPT converted in the instance and XLS in the browser, all read-only (#433).
+    evidence.legacyPreview = await legacyPreviewScenario(lane);
   });
 }
 
@@ -648,7 +655,8 @@ it('builds both images, starts the delivered compose platform, converses through
     await release();
   }
   expect(await seedSnapshot(stack)).toEqual(before);
-  const { browser, provider, proxy, ragflow, panel, scope, search, archive } = evidence;
+  const { browser, provider, proxy, ragflow, panel, scope, search, archive, legacyPreview } =
+    evidence;
   // The real image declares VOLUMEs; the fonts bind replaces only one of them.
   const volumes = evidence.documentServerVolumes ?? [];
   expect(volumes.length).toBeGreaterThan(0);
@@ -661,6 +669,7 @@ it('builds both images, starts the delivered compose platform, converses through
   if (scope === undefined) throw new Error('Knowledge scope evidence missing');
   if (search === undefined) throw new Error('Knowledge search evidence missing');
   if (archive === undefined) throw new Error('Sidebar archive evidence missing');
+  if (legacyPreview === undefined) throw new Error('Legacy preview evidence missing');
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -752,6 +761,14 @@ it('builds both images, starts the delivered compose platform, converses through
     failedRequests: [archive.single.request],
     externalRequests: [],
   });
+  // The PDF and spreadsheet Workers' same-origin `blob:` URLs are not external.
+  expect(legacyPreview.browser).toMatchObject({
+    screenshots: ['legacy-doc.png', 'legacy-xls.png', 'legacy-xls-typed.png', 'legacy-ppt.png'],
+    consoleErrors: [],
+    pageErrors: [],
+    failedRequests: [],
+    externalRequests: [],
+  });
   process.stdout.write(
     `${JSON.stringify({
       stackEvidence: {
@@ -790,6 +807,10 @@ it('builds both images, starts the delivered compose platform, converses through
           screenshots: archive.browser.screenshots,
           // `request` carries the download URL; `undefined` keeps it out of the JSON line.
           single: { ...archive.single, request: undefined },
+        },
+        legacyPreview: {
+          files: legacyPreview.files,
+          screenshots: legacyPreview.browser.screenshots,
         },
       },
     })}\n`,

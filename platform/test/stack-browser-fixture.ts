@@ -2,7 +2,13 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
-import type { Browser, Page, Request, Response } from '@playwright/test';
+import type { Browser, ElementHandle, Page, Request, Response } from '@playwright/test';
+import {
+  EXPAND_BUTTON,
+  explorerReselect,
+  FILES_GUIDE,
+  rowQuery,
+} from './better-sidebar-browser-fixture.mjs';
 
 // DSH workbench selectors, as scripts/probe-dsh-api-ui.mjs drives the released client.
 const SEND = 'button[aria-label="Send message"],button[aria-label="发送消息"]';
@@ -101,6 +107,24 @@ const STOP_LATCH = `(() => {
   });
 })()`;
 
+/** What an in-page expression yields: the typings, without the DOM lib, never admit null. */
+export const element = async (page: Page, expression: string): Promise<ElementHandle | null> =>
+  (await page.evaluateHandle(expression)).asElement();
+
+/**
+ * One step toward every named file-area row visible: expand the Sidebar, take the files guide or
+ * reselect the explorer tab covered by an opened file (found by `names[0]`).
+ */
+export async function showSidebarRows(page: Page, names: readonly string[]): Promise<boolean> {
+  const shown = names.map((name) => `Boolean(${rowQuery(name)})`).join(' && ');
+  if (await page.evaluate<boolean>(shown)) return true;
+  for (const expression of [EXPAND_BUTTON, FILES_GUIDE, explorerReselect(names[0] ?? '')]) {
+    const target = await element(page, expression);
+    if (target !== null) return target.click().then(() => false);
+  }
+  return false;
+}
+
 export async function until(check: () => Promise<boolean>, timeout: number, label: string) {
   const deadline = performance.now() + timeout;
   while (!(await check())) {
@@ -140,9 +164,15 @@ export async function workbenchSession(
   let observing = true;
   const open = new Set<Request>();
   const cancelled = new Set<Request>();
+  // A `blob:` URL has no host of its own; its origin is the document that created it (the PDF
+  // and spreadsheet Workers). `ws:` never equals `http:`, so the http and ws checks are unchanged.
   const foreign = (url: string, scheme: 'http:' | 'ws:') => {
     const target = new URL(url);
-    if (target.protocol !== scheme || target.host !== platform.host) externalRequests.push(url);
+    const own =
+      target.protocol === 'blob:'
+        ? target.origin === platform.origin
+        : target.protocol === scheme && target.host === platform.host;
+    if (!own) externalRequests.push(url);
   };
   const evidence = (): StackBrowserEvidence => ({
     screenshots,

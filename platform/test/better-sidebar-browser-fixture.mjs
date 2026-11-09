@@ -19,8 +19,9 @@ import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import { evaluate, physicalClick } from '../../scripts/probe-permission-ui.mjs';
 
 const MS = 30_000;
-// The first WASM LibreOffice conversion of an instance loads the engine before it converts.
-const CONVERSION_MS = 240_000;
+// The product's own conversion timeout is 60s (dsh-office-to-pdf lib/index.js); the first WASM
+// LibreOffice conversion of an instance also loads the ~150 MB engine, and the PDF must then render.
+export const CONVERSION_MS = 240_000;
 
 /*
  * Markers, all from the released packages (dsh-better-sidebar@0.28.0, @deepseek-ai/dsh@0.2.1-rc.2):
@@ -51,6 +52,8 @@ const CONVERSION_MS = 240_000;
  * `.P3OORG_tabTitle{display:contents}`), which has no box to click.
  */
 const OFFICE_PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/office';
+// XLS: Fortune-sheet, `allowEdit: false` (client.excel.js ExcelBody: `section[data-excel-preview]`).
+const EXCEL_PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/excel';
 const PANEL = '[data-sidebar-right-open]';
 
 const visible = `(el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && el.closest('[hidden],[aria-hidden="true"]') === null; }`;
@@ -199,35 +202,104 @@ async function observeMarkdown(page, evidence, markdown) {
   });
 }
 
+/** The visible preview container of `previewId` whose address ends in `/<name>`, or undefined. */
+const previewContainer = (previewId, name) =>
+  `[...document.querySelectorAll(${JSON.stringify(`[data-document-preview="${previewId}"]`)})].find((el) => (${visible})(el) && decodeURIComponent(el.getAttribute('data-textpreview-url') ?? '').endsWith(${JSON.stringify(`/${name}`)}))`;
+
+// The probe workbook's one sheet (platform/test/office-legacy/README.md).
+const SHEET = '报表';
+/** Drawn, read inside the container `el`: a PDF page canvas, or the Fortune-sheet workbook. */
+const drawn = (previewId) =>
+  previewId === EXCEL_PREVIEW
+    ? `(${visible})(el.querySelector('section[data-excel-preview]')) && [...el.querySelectorAll('#fortune-sheettab-container-c .luckysheet-sheets-item-name')].some((item) => (${visible})(item) && item.textContent === ${JSON.stringify(SHEET)})`
+    : `[...el.querySelectorAll('section[data-pdf-preview] [data-pdf-page] [data-document-zoom-surface]:not([hidden]) canvas')].some(${visible})`;
+
+/**
+ * DSH's own document preview of `name`, read only inside the matched container, settles in
+ * exactly one released state: `rendered` (drawn, see above) or `failed` (`data-textpreview-failed`,
+ * whose value is the code, or a `[role="alert"]` status, which has none). `state` stays null
+ * while the container is absent or unsettled.
+ */
+export const previewOutcome = (previewId, name) => `(() => {
+  const el = ${previewContainer(previewId, name)};
+  if (!el) return { state: null, pages: 0, nativeHost: false, fontWarning: false };
+  // The visible message without the retry button's label.
+  const message = (node) => { const copy = node.cloneNode(true); copy.querySelectorAll('button').forEach((b) => b.remove()); return copy.textContent.trim().slice(0, 200); };
+  const failed = [...el.querySelectorAll('[data-textpreview-failed]')].find(${visible});
+  // Fortune-sheet's own screen-reader live regions (client.excel.js Sheet: #sr-selection and
+  // #sr-sheetFocus, .sr-only with role alert) sit inside a drawn workbook; ExcelBody's failure
+  // alerts render instead of section[data-excel-preview], never inside it.
+  const alert = [...el.querySelectorAll('[role="alert"]')].filter((node) => node.closest('section[data-excel-preview]') === null).find(${visible});
+  const rendered = ${drawn(previewId)};
+  const outcome = rendered === Boolean(failed ?? alert) ? { state: null } : rendered ? { state: 'rendered' } : failed ? { state: 'failed', code: failed.getAttribute('data-textpreview-failed'), message: message(failed) } : { state: 'failed', message: message(alert) };
+  return {
+    ...outcome,
+    pages: el.querySelectorAll('section[data-pdf-preview] [data-pdf-page]').length,
+    nativeHost: el.closest('[data-dsh-native-tab-host]') !== null,
+    fontWarning: el.querySelector('[data-office-font-warning]') !== null,
+  };
+})()`;
+
+// Fortune-sheet's cell input (client.excel.js InputBox): contenteditable whenever no row or column
+// is read-only, whatever the workbook's `allowEdit`; only typing into it shows whether it edits.
+const CELL_INPUT = 'luckysheet-rich-text-editor';
+
+/**
+ * Raw read-only facts of the matched container, judged by the caller: the text and `aria-label`
+ * of its visible controls, its editable surfaces other than the cell input (reported apart as
+ * `cellInput`), its frames, and the formula bar's text (null without one). Never the composer,
+ * which lies outside every preview container.
+ */
+export const previewFacts = (previewId, name) => `(() => {
+  const el = ${previewContainer(previewId, name)};
+  if (!el) return null;
+  const controls = [...el.querySelectorAll('button,[role="button"],[role="menuitem"],[role="tab"]')].filter(${visible});
+  return {
+    labels: controls.flatMap((node) => [node.textContent.trim(), node.getAttribute('aria-label') ?? ''].filter(Boolean)),
+    contentEditable: [...el.querySelectorAll('[contenteditable="true"]')].filter((node) => node.id !== ${JSON.stringify(CELL_INPUT)}).length,
+    cellInput: el.querySelector(${JSON.stringify(`#${CELL_INPUT}`)}) !== null,
+    editors: el.querySelectorAll('.cm-editor').length,
+    iframes: el.querySelectorAll('iframe').length,
+    cell: el.querySelector('.fortune-fx-input')?.textContent ?? null,
+  };
+})()`;
+
+/**
+ * The matched workbook's cell input state: the viewport rectangle of the cell input (over the
+ * selected cell, parked at -10000 without a selection; null without an input) and the viewport's
+ * own size, whether the input holds the focus, the formula bar's text, and the input box's
+ * z-index, inline first (Fortune-sheet sets -1 while no cell is being edited, 19 while one is).
+ */
+export const cellInputState = (previewId, name) => `(() => {
+  const el = ${previewContainer(previewId, name)};
+  const input = el?.querySelector(${JSON.stringify(`#${CELL_INPUT}`)});
+  const box = el?.querySelector('.luckysheet-input-box');
+  const r = input?.getBoundingClientRect();
+  return {
+    rect: r ? { x: r.x, y: r.y, width: r.width, height: r.height } : null,
+    viewport: { width: innerWidth, height: innerHeight },
+    focused: input !== undefined && input !== null && document.activeElement === input,
+    cell: el?.querySelector('.fortune-fx-input')?.textContent ?? null,
+    zIndex: box ? box.style.zIndex || getComputedStyle(box).zIndex : null,
+  };
+})()`;
+
 /**
  * The docx: better-sidebar handed it to DSH's own Office preview and drew no viewer for it. The
- * preview must then settle in exactly one released state, read only inside the matched container:
- * `rendered` (a drawn PDF page canvas) or `failed` (`data-textpreview-failed`, whose value is the
- * code, or a `[role="alert"]` status, which has none). The state is recorded here and the caller
- * judges it (#554); an unsettled preview times out.
+ * preview must then settle in exactly one released state (`previewOutcome`). The state is
+ * recorded here and the caller judges it (#554); an unsettled preview times out.
  */
 async function observeDocx(page, evidence, docx) {
   return stage(page, evidence, 'docx', async () => {
-    const container = `[...document.querySelectorAll(${JSON.stringify(`[data-document-preview="${OFFICE_PREVIEW}"]`)})].find((el) => (${visible})(el) && decodeURIComponent(el.getAttribute('data-textpreview-url') ?? '').endsWith(${JSON.stringify(`/${docx.name}`)}))`;
     const observed = await waitFor(
       () =>
         evaluate(
           page,
           `(() => {
-            const el = ${container};
-            if (!el) return null;
-            // The visible message without the retry button's label.
-            const message = (node) => { const copy = node.cloneNode(true); copy.querySelectorAll('button').forEach((b) => b.remove()); return copy.textContent.trim().slice(0, 200); };
-            const failed = [...el.querySelectorAll('[data-textpreview-failed]')].find(${visible});
-            const alert = [...el.querySelectorAll('[role="alert"]')].find(${visible});
-            const rendered = [...el.querySelectorAll('section[data-pdf-preview] [data-pdf-page] [data-document-zoom-surface]:not([hidden]) canvas')].some(${visible});
-            if (rendered === Boolean(failed ?? alert)) return null;
-            const outcome = rendered ? { state: 'rendered' } : failed ? { state: 'failed', code: failed.getAttribute('data-textpreview-failed'), message: message(failed) } : { state: 'failed', message: message(alert) };
+            const outcome = ${previewOutcome(OFFICE_PREVIEW, docx.name)};
+            if (outcome.state === null) return null;
             return {
               ...outcome,
-              pages: el.querySelectorAll('section[data-pdf-preview] [data-pdf-page]').length,
-              nativeHost: el.closest('[data-dsh-native-tab-host]') !== null,
-              fontWarning: el.querySelector('[data-office-font-warning]') !== null,
               downloads: [...document.querySelectorAll('a[download]')].filter((a) => decodeURIComponent(a.href).includes(${JSON.stringify(docx.name)})).length,
               editors: [...document.querySelectorAll('[data-dsh-native-tab-host] .cm-editor')].filter(${visible}).length,
             };

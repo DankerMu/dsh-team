@@ -2,10 +2,17 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import type { Browser } from '@playwright/test';
+import type { Browser, Page } from '@playwright/test';
 import { afterEach, expect, it } from 'vitest';
 import {
+  EXPAND_BUTTON,
+  explorerReselect,
+  FILES_GUIDE,
+  rowQuery,
+} from './better-sidebar-browser-fixture.mjs';
+import {
   converseInWorkbench,
+  showSidebarRows,
   StackWorkbenchFailure,
   workbenchSession,
 } from './stack-browser-fixture.ts';
@@ -386,4 +393,91 @@ it('excuses only the requests a deliberate reload cancels, then waits for the co
   expect(stub.events).toEqual(['reload']);
   expect(evidence.failedRequests).toEqual(['GET http://stub/done.js', 'GET http://stub/late.js']);
   expect(evidence.requests).toBe(3);
+});
+
+it('counts only requests and WebSockets off the platform origin, a same-origin blob: included', async () => {
+  const stub = stubBrowser({ onSend: () => undefined });
+  const urls = {
+    http: 'http://127.0.0.1:1/plugins/client.js',
+    foreignHttp: 'http://127.0.0.2:1/font.woff2',
+    https: 'https://127.0.0.1:1/plugins/client.js',
+    blob: 'blob:http://127.0.0.1:1/2f6c2d1e-pdf-worker',
+    foreignBlob: 'blob:http://127.0.0.2:1/2f6c2d1e-pdf-worker',
+    ws: 'ws://127.0.0.1:1/events',
+    foreignWs: 'ws://127.0.0.2:1/events',
+    wss: 'wss://127.0.0.1:1/events',
+  };
+  const event = (url: string) => ({ method: () => 'GET', url: () => url });
+
+  const evidence = await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'origins', failure: 'origins-failure' },
+    () => {
+      for (const url of [urls.http, urls.foreignHttp, urls.https, urls.blob, urls.foreignBlob])
+        stub.emit('request', event(url));
+      for (const url of [urls.ws, urls.foreignWs, urls.wss]) stub.emit('websocket', event(url));
+      return Promise.resolve();
+    },
+    stub.launch,
+  );
+
+  expect(evidence.externalRequests).toEqual([
+    urls.foreignHttp,
+    urls.https,
+    urls.foreignBlob,
+    urls.foreignWs,
+    urls.wss,
+  ]);
+  expect([evidence.requests, evidence.websockets]).toEqual([5, 3]);
+});
+
+/** A page whose in-page expressions answer from `shown`; clicks are recorded by expression. */
+function sidebarPage(shown: Set<string>) {
+  const clicks: string[] = [];
+  const page = {
+    evaluate: (expression: string) => Promise.resolve(shown.has(expression)),
+    evaluateHandle: (expression: string) =>
+      Promise.resolve({
+        asElement: () =>
+          shown.has(expression)
+            ? { click: () => Promise.resolve(void clicks.push(expression)) }
+            : null,
+      }),
+  };
+  // Only `evaluate` and `evaluateHandle` are called; the stub stands in for a Playwright page.
+  return { clicks, page: page as unknown as Page };
+}
+
+const rowsShown = (names: readonly string[]) =>
+  names.map((name) => `Boolean(${rowQuery(name)})`).join(' && ');
+
+it('reports the sidebar rows shown only when every named row is visible, without a click', async () => {
+  const names = ['打包甲.txt', 'archive-b.bin'];
+  const { clicks, page } = sidebarPage(new Set([rowsShown(names), EXPAND_BUTTON]));
+
+  expect(await showSidebarRows(page, names)).toBe(true);
+
+  expect(clicks).toEqual([]);
+});
+
+const RESELECT = explorerReselect('旧通知.doc');
+
+it.each([
+  ['expands the collapsed Sidebar first', [EXPAND_BUTTON, FILES_GUIDE, RESELECT], EXPAND_BUTTON],
+  ['takes the files guide next', [FILES_GUIDE, RESELECT], FILES_GUIDE],
+  ['reselects the explorer tab of the first name last', [RESELECT], RESELECT],
+])('%s, one step toward the rows', async (_case, present, target) => {
+  const { clicks, page } = sidebarPage(new Set(present));
+
+  expect(await showSidebarRows(page, ['旧通知.doc', '旧报表.xls'])).toBe(false);
+
+  expect(clicks).toEqual([target]);
+});
+
+it('takes no step when no row, expand button, guide or reselectable tab is shown', async () => {
+  const { clicks, page } = sidebarPage(new Set([explorerReselect('旧报表.xls')]));
+
+  expect(await showSidebarRows(page, ['旧通知.doc'])).toBe(false);
+
+  expect(clicks).toEqual([]);
 });
