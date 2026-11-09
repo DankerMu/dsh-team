@@ -1,9 +1,9 @@
 import { type ChildProcessByStdio, spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, beforeEach, expect, it } from 'vitest';
@@ -60,9 +60,9 @@ async function identity(pid: number | undefined): Promise<Identity> {
   return { pid, birth: await processBirth(pid) };
 }
 
-async function register(driver: Identity, overrides: Record<string, unknown> = {}) {
+async function register(driver: Identity, overrides: Record<string, unknown> = {}, prefix = '') {
   const nonce = randomUUID();
-  const path = join(directory, `${nonce}.launch.json`);
+  const path = join(directory, `${prefix}${nonce}.launch.json`);
   await writeReceipt(path, {
     version: 1,
     nonce,
@@ -205,6 +205,41 @@ it('leaves malformed registrations and unobservable drivers to rescue without wa
 
   expect(settled).toBe(true);
   expect(elapsed).toBeLessThan(2_000);
+}, 20_000);
+
+it('keeps waiting for a live driver listed among malformed and unobservable registrations', async () => {
+  const { driver } = await node(LIVE);
+  const live = await identity(driver.pid);
+  const liveName = basename(await register(live, {}, 'm-'));
+  // readdir order is filesystem-defined, so add bad pointers until each kind lies on both sides.
+  const kinds = new Map<string, string>();
+  const surrounds = (names: string[], kind: string) => {
+    const at = names.indexOf(liveName);
+    const sides = names.map((name, index) =>
+      kinds.get(name) === kind ? Math.sign(index - at) : 0,
+    );
+    return sides.includes(-1) && sides.includes(1);
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    const names = await readdir(directory);
+    if (surrounds(names, 'malformed') && surrounds(names, 'unobservable')) break;
+    if (attempt > 50) throw new Error('Owned registrations never surrounded the live driver');
+    const prefix = attempt % 2 === 0 ? 'a-' : 'z-';
+    const malformed = `${prefix}${randomUUID()}.launch.json`;
+    await writeFile(join(directory, malformed), '{', { mode: 0o600 });
+    kinds.set(malformed, 'malformed');
+    // A readable pointer, so `liveProcessBirth(0)` rather than parsing rejects it.
+    const unobservable = await register({ pid: 0, birth: live.birth }, {}, prefix);
+    await readReceipt(unobservable);
+    kinds.set(basename(unobservable), 'unobservable');
+  }
+
+  const { settled, elapsed } = await timedWait(800);
+
+  expect(settled).toBe(false);
+  expect(elapsed).toBeGreaterThanOrEqual(800);
+  expect(elapsed).toBeLessThan(4_000);
+  expect(processState(live.pid)).toMatch(/^[^Z]/);
 }, 20_000);
 
 it('returns immediately for a zombie driver whose parent never reaps it', async () => {
