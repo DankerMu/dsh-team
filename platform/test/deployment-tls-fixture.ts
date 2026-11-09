@@ -9,7 +9,10 @@ import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { activityUpgradeRequest } from './gateway-activity-fixture.ts';
 import { observeHttp, reader, unusedPort } from './gateway-http-fixture.ts';
+import { withDeployment } from './deployment-fixture.ts';
 import type { Deployment } from './deployment-fixture.ts';
+import { createDeploymentSetupEvidence } from './deployment-setup-evidence.ts';
+import type { DeploymentSetupEvidence, DeploymentSetupSink } from './deployment-setup-evidence.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 function tlsRequest(certificate: Buffer): Deployment['request'] {
@@ -50,7 +53,7 @@ function tlsRequest(certificate: Buffer): Deployment['request'] {
     });
 }
 
-export async function prepareTlsDeployment(lifecycle: UserImageLifecycle, deployment: Deployment) {
+async function prepareTlsDeployment(lifecycle: UserImageLifecycle, deployment: Deployment) {
   const directory = join(deployment.directory, 'tls');
   await mkdir(directory, { mode: 0o700 });
   execFileSync(
@@ -142,6 +145,44 @@ export async function prepareTlsDeployment(lifecycle: UserImageLifecycle, deploy
     { mode: 0o600 },
   );
   return { certificate, name, address };
+}
+
+type TlsDeployment = Awaited<ReturnType<typeof prepareTlsDeployment>>;
+
+/**
+ * A deployment behind the TLS proxy with phase evidence. Only a failure publishes the closed
+ * snapshot, then rethrows the original error carrying it as `setup`.
+ */
+export async function withTlsDeployment(
+  run: (
+    lifecycle: UserImageLifecycle,
+    start: () => Promise<Deployment>,
+    setup: DeploymentSetupEvidence,
+    tls: () => TlsDeployment,
+  ) => Promise<void>,
+  sink?: DeploymentSetupSink,
+): Promise<void> {
+  const setup = createDeploymentSetupEvidence(sink);
+  let prepared: TlsDeployment | undefined;
+  // The proxy is prepared inside `start`, so `run` reads it only after starting.
+  const tls = () => {
+    if (prepared === undefined) throw new Error('TLS preparation missing');
+    return prepared;
+  };
+  try {
+    await withDeployment(
+      (lifecycle, start) => run(lifecycle, start, setup, tls),
+      async (lifecycle, deployment) => {
+        prepared = await prepareTlsDeployment(lifecycle, deployment);
+      },
+      setup,
+    );
+  } catch (error) {
+    await setup.publish();
+    if (typeof error === 'object' && error !== null)
+      Object.assign(error, { setup: setup.snapshot() });
+    throw error;
+  }
 }
 
 export async function verifyTlsCarrier(
