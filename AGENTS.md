@@ -43,7 +43,7 @@ Enforcement: `## Enforcement Index`; per-rule table and guardrail self-test deta
 | Test runner              | Vitest + v8 coverage              | 5             |                                                           |
 | Platform UI              | React + Vite                      | 18, 8         | local static build served by the same Fastify origin      |
 | Platform UI browser      | Playwright Chromium               | 1.63          | pinned verification-only platform UI lane                 |
-| DSH verification browser | Chrome for Testing headless shell | 140.0.7339.82 | verification-only isolated Docker runtime                 |
+| DSH verification browser | Chrome for Testing headless shell | 156.0.8078.80 | verification-only isolated Docker runtime                 |
 | Linter                   | ESLint, typescript-eslint         | 10, 8         | strict type-checked rule set                              |
 | Formatter                | Prettier                          | 3             |                                                           |
 

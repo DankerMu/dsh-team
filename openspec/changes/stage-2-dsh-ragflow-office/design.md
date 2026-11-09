@@ -432,7 +432,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 | 平台 HTTP 应用（`buildApp`）                               | 后台配置、代理接口、实例令牌鉴权都用真实 HTTP 和 SQLite 验证，这是阶段 1 已有的最高 seam |
 | 覆盖层生成函数（`generateManagedOverlay` 的纯输入输出）    | 监听地址、目录状态、安装源、Office、联网工具开关都是可以穷举的纯数据                     |
 | 编排器 owner 接口（start/stop/reconcile，配合真实 Docker） | 固定 IP、令牌注入、Document Server 的接入和断开只有真实 Engine 能证明                    |
-| VPS 真实 DSH 浏览器（隔离的 CfT140 加网关）                | 插件页、子会话权限档等不依赖 RAGFlow 和 Document Server 的界面行为，并提供隔离证据       |
+| VPS 真实 DSH 浏览器（隔离的 CfT156 加网关）                | 插件页、子会话权限档等不依赖 RAGFlow 和 Document Server 的界面行为，并提供隔离证据       |
 | 本机真实 DSH 浏览器（Playwright Chromium 加网关）          | 知识库面板、范围控件、Office 编辑器；只是功能证据，不是隔离证据                          |
 | 构建期补丁脚本（只读的子进程调用）                         | 沿用 #375 的拒绝矩阵测试方法                                                             |
 | `pnpm test:stack` 端到端                                   | 唯一连接真实 RAGFlow 和 Document Server 的 seam                                          |

@@ -257,7 +257,7 @@ process.exit(r.status??1);`;
       ...environment,
       CHROME_BIN: join(
         homedir(),
-        '.local/share/dsh-team/toolchain/chrome-140.0.7339.82/chrome-headless-shell-linux64/chrome-headless-shell',
+        '.local/share/dsh-team/toolchain/chrome-156.0.8078.80/chrome-headless-shell-linux64/chrome-headless-shell',
       ),
       DSH_TEAM_CI_RESOURCE_JOURNAL: join(root, 'resources.jsonl'),
       DSH_TEAM_CI_INVOCATION: id,

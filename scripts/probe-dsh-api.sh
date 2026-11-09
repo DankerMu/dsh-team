@@ -19,7 +19,7 @@ Private runtime/qualification-failure receipt locations are printed; timeout and
 signal rescue use per-launch ownership receipts, not PID-only files.
 --help prints usage only; it does not qualify the runtime.
 Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
-Env: DMXAPI_KEY (required); CHROME_BIN (complete pinned CfT140.0.7339.82
+Env: DMXAPI_KEY (required); CHROME_BIN (complete pinned CfT156.0.8078.80
 chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120); PROBE_TASK_SECONDS (1-300, default 180);

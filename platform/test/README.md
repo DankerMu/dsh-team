@@ -63,13 +63,13 @@ real-file SQLite migrate, settings, reopen: tempfile `platform.db`, exact migrat
 
 ## Evidence required: User-image Docker
 
-Verify with: Real user image and isolated CfT140 DSH browser over original host endpoints. Command: `pnpm test:docker`.
+Verify with: Real user image and isolated CfT156 DSH browser over original host endpoints. Command: `pnpm test:docker`.
 
 giap-vps exact reviewed SHA and pinned tools; exact `0.2.1-rc.2`/DOCX, `engines.dsh` and stderr-skip build gates with an incompatible-range rejection build, profile/seed equality and permissions, root0555 isolated credential store; shipped seccomp on an owned fixed-address `/28` bridge (host routes excluded), genuine base+2 launch token plus host HTTP401 within60s, wildcard overlay refused, nonroot DSH/telemetry and distinct volumes; immutable browser image/Chrome and stable isolated namespace, natural online/confinement, raw HTTP/WS/CDP pressure/FIN behavior, Chinese first-use/reload through real auth/gateway; bounded failure evidence and no owned resources on success/failure
 
 ## Evidence required: DSH permission UI
 
-Verify with: Isolated CfT140 composer and native root/continuable child approvals through an owned protocol. Command: `pnpm test:docker`.
+Verify with: Isolated CfT156 composer and native root/continuable child approvals through an owned protocol. Command: `pnpm test:docker`.
 
 Complete pinned `CHROME_BIN` distribution and root provisioning; exact three choices and two-Session independence; all six root/delegated-child (observed mode) reject/allow/cancel paths and the six continuable reject/allow/cancel/Auto/Yolo/resume scenarios, native child identity/audit and exact file effects; readable Chinese screenshots, bounded request-failure evidence and receipt-owned browser/container/network cleanup
 

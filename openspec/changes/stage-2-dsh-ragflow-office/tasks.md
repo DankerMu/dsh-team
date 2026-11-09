@@ -3509,7 +3509,7 @@ selected：
   - 镜像大小：容器内用 `dpkg-query -W -f='${Installed-Size}'` 读两个字体包的安装大小并记录，它就是本任务带来的增量；再记录 `docker image inspect` 的 Size。
   - 红：VPS 无字体时的两条已有证据。一条是 #553 VPS 报告行 `preview=failed code=gateway/internal`；另一条是 #554 诊断评论，`render` 返回 `unavailable`：「No usable fonts were found」。新探针在本机跑不了（linux/x64 守卫）。
   - 构建期字体门禁的拒绝用例：在 `user-image.docker.test.ts:477-539` 的 `it.each` 加一行，从 primary 副本的 apt 行去掉 `fonts-noto-cjk`，期望输出 `preview fonts missing: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc`。
-- **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。`observeDocx`（`better-sidebar-browser-fixture.mjs:209-240`）只有在有可见页面 canvas、且没有 failed/alert 时才判为 `rendered`。现在断言页数至少 1、`fontWarning` 为 false，状态只能是 `rendered`，或者恰好是 `failed` 且消息含 `getOrInsertComputed`。后者是已知的验证浏览器限制：DSH 0.2.1 的 PDF 查看器需要 Chrome/Edge 145+、Firefox 144+、Safari 26.2+，受信 VPS 的 Chrome for Testing 140 不支持（VPS 实测转换成功、`pages: 1`；用户决定 2026-11-08）。其他任何失败仍让用例失败。升级验证浏览器、把状态收紧为只接受 `rendered`，见 #565。报告行保留 `pages=`。断言 `fontWarning` 为 false：kit 在未给 `fontDirectories` 时带上自带的 office 字体（`includeOfficeFonts`，`libreoffice-kit/lib/index.js:1455`），并把 Calibri 映射到 Carlito（`:1291`）；#554 本机用同一 python-docx 文档实测 `missingFonts` 为空，与探针对 DOCX 的断言一致。`:148` 的注释同步改写。
+- **17.1 门禁升级（`platform/test/better-sidebar.docker.test.ts` 的 docx 交接用例）**：原来只记录渲染结果（用户决定 2026-11-07，等 #554）。`observeDocx`（`better-sidebar-browser-fixture.mjs:209-240`）只有在有可见页面 canvas、且没有 failed/alert 时才判为 `rendered`。现在断言页数至少 1、`fontWarning` 为 false，状态只能是 `rendered`。DSH 0.2.1 的 PDF 查看器需要 Chrome/Edge 145+、Firefox 144+、Safari 26.2+；受信 VPS 的验证浏览器是 Chrome for Testing 156（#565，第 41 节）。报告行保留 `pages=`。断言 `fontWarning` 为 false：kit 在未给 `fontDirectories` 时带上自带的 office 字体（`includeOfficeFonts`，`libreoffice-kit/lib/index.js:1455`），并把 Calibri 映射到 Carlito（`:1291`）；#554 本机用同一 python-docx 文档实测 `missingFonts` 为空，与探针对 DOCX 的断言一致。`:148` 的注释同步改写。
 - **文档（编排者同 PR 改）**：
   - `platform/test/README.md`：用户镜像段写字体与新 probe；
   - `docs/DEPLOY.md`：在资源相关处写实测数值，不给阈值：DOC/PPT/DOCX 只读预览在实例内转换，单次和两路并发的 cgroup 峰值（本探针记录的两个数值），不含 DSH 常驻内存，DSH 默认最多两路并发；被 OOM 终止会连带 DSH 进程；
@@ -4082,7 +4082,7 @@ Must preserve：17.2 打包下载的全部步骤和断言、两个工作文件�
 
 ## 34. #433：DOC、XLS、PPT 只读预览的本机通道用例（17.4 预览部分）
 
-依赖：#432（字体，17.4 镜像部分）、#402，均已合入。由 #433 承载。用户决定（2026-11-07，见 17.4）：DOC 和 PPT 预览只用 DSH 0.2.1 自带的 WASM 引擎在实例内转换；XLS 由 DSH 的浏览器表格视图显示，不经转换。本机 `pnpm test:stack` 使用 Playwright Chromium 153，能渲染 PDF 查看器；VPS 的 Chrome 140 不能（#565），所以渲染断言只放在本机通道。
+依赖：#432（字体，17.4 镜像部分）、#402，均已合入。由 #433 承载。用户决定（2026-11-07，见 17.4）：DOC 和 PPT 预览只用 DSH 0.2.1 自带的 WASM 引擎在实例内转换；XLS 由 DSH 的浏览器表格视图显示，不经转换。本机 `pnpm test:stack` 使用 Playwright Chromium 153，能渲染 PDF 查看器；VPS 的验证浏览器后来由 #565 升级到 CfT 156（第 41 节），本节的渲染断言仍只放在本机通道。
 
 - [ ] 34.1 stack 浏览器用例在员工自己的实例里，从侧栏文件区依次打开 `旧通知.doc`、`旧报表.xls`、`旧汇报.ppt`。每个文件都显示只读预览，没有编辑或保存入口；预览结束后，实例里的原文件字节不变。验证：本机 exact-head `pnpm test:stack`。
 
@@ -4366,7 +4366,7 @@ Must preserve：
 
 残留风险：
 
-- 渲染只在本机 Chromium 153 上证明，VPS 的 Chrome 140 由 #565 处理。
+- 本节的渲染只在本机 Chromium 153 上证明；VPS 验证浏览器已由 #565 升级到 CfT 156，VPS 上的 DOCX 渲染由 17.1 的断言证明。
 - 表格单元格画在 canvas 上，用例只证明表格视图打开、工作表名正确，以及公式栏能显示选中单元格的值，覆盖不到所有单元格。
 
 实测记录（2026-11-08，本机 Chromium 153，在未提交的实现上跑 stack）：
