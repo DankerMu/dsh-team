@@ -4289,3 +4289,49 @@ Must preserve：
 - `DMXAPI_KEY` 的前置检查。
 - `browser-wrapper.docker.test.ts` 全部用例及其断言，其中 help-child 的 `docker` SIGTERM 用例：`childStarted`、`childSignal`、`childExitCode: 0`。
 - `browser-build.integration.test.ts` 中 `verificationStarted: false` 的绊线依然有效。
+
+## 28. 技术债 #499：平台镜像的 `.dockerignore` 只放行指定文件，不再用目录级 `!dir/` 放行整棵子树
+
+依赖：无。由 #499 承载，处理方式同第 6 组。改 `platform/Dockerfile.dockerignore`，另加一个 Docker-free 的守卫测试；`platform/Dockerfile` 的 COPY 和运行时镜像内容不变；不碰关键路径。（22–27 节在其他未合并的 PR 分支上。）
+
+- [ ] 28.1 删去 `platform/Dockerfile.dockerignore` 中七条目录级重新包含：`!platform/`、`!platform/src/`、`!platform/web/`、`!platform/web/src/`、`!images/`、`!images/seccomp/`、`!images/dsh-user/`。精确文件行、`!platform/src/**`、`!platform/web/src/**`、测试排除和末尾的全局排除保持不变。新增 `platform/test/platform-dockerignore.integration.test.ts`：首条有效规则是 `**`；每条 `!` 规则要么是 git 跟踪的精确文件，要么属于固定的子树集合 `{platform/src/**, platform/web/src/**}`；最后 5 条是全局排除。验证：守卫测试先红后绿；用探针在本机和 giap-vps 上比对修改前后的实际构建上下文；VPS `platform-image.docker.test.ts` 通过。
+
+Suggested fixture level: compact - 一个构建上下文配置文件加一个守卫测试
+Minimal mergeable slice: atomic
+Risk packs (28.1): selected - Release（平台镜像构建输入；运行时镜像不变）、Security（构建上下文必须 fail-closed：只放行列出的输入，新目录默认不进入上下文）；not selected - Config、Schema、Auth、Public API、Concurrency、File IO、Resource limits、Migration、Legacy compatibility。
+Evidence (28.1):
+
+本机实测（2026-11-08，树为 `e366bee`，即 main `0d87c77` 加本节；Docker Desktop BuildKit；探针 Dockerfile `FROM scratch` + `COPY . /ctx/`，同目录放 `Dockerfile.dockerignore`；以仓库根为上下文，`docker buildx build --no-cache --output type=local,dest=<dir>`，只导出文件，不生成镜像和容器）：
+
+- 修改前（main 的规则文件）共 720 个文件，其中：`platform/test` 350 个、`platform/dist` 206 个（本地 gitignored 构建产物）、`platform/web` 28 个（含 `test/` 和 `dist/`）、`images/dsh-user` 10 个、`images/seccomp` 3 个，以及 `images/browser-verification`、`platform/scripts`、`platform/README.md`、`platform/AGENTS.md`、`platform/Dockerfile`。这证实了 issue 的推断。
+- 删去七行之后共 141 个文件。其中 `platform/src/**` 和 `platform/web/src/**` 两部分，与 `git ls-files platform/src platform/web/src` 去掉 `*.test.ts(x)` 后的集合逐一一致；其余是 12 个精确文件：根目录 4 个；`platform/package.json`、`platform/tsconfig.build.json`；`platform/web/` 下 `index.html`、`package.json`、`tsconfig.json`、`vite.config.ts`；`images/seccomp/dsh-user.json`、`images/dsh-user/catalog.json`。上下文里没有任何测试文件。
+
+守卫测试（`platform-dockerignore.integration.test.ts`，纯文本，不跑 Docker）：
+
+- 读 `platform/Dockerfile.dockerignore`，跳过注释行和空行，得到有效规则列表。断言：
+  - 第一条有效规则恰为 `**`（默认全部排除）。
+  - 最后 5 条有效规则恰为 `**/.env`、`**/.env.*`、`**/.git`、`**/node_modules`、`**/.run`，并且它们之后没有 `!` 规则（「后者胜」，防止全局排除被后来的放行覆盖）。
+  - 每条以 `!` 开头的规则，去掉 `!` 后的路径必须满足以下二者之一：
+    - 属于固定集合 `{platform/src/**, platform/web/src/**}`，这是有意放行的整棵子树，不接受 `!platform/**` 之类更宽的写法；
+    - 原样出现在 `git ls-files -z` 输出的路径集合里，也就是 git 跟踪的普通文件。不用 pathspec 匹配（目录也会命中），也不用 `statSync`（会放过本地 gitignored 的构建产物，结果随本机状态变化）。
+- 违反时报错，报错信息列出违规行。
+- 先红：在 main 的规则文件上，测试应列出这七条目录行。
+- 不在 Node 里重写 moby 的 patternmatcher。守卫只禁止已经证实会出问题的形状，实际的上下文以探针证据为准。
+
+受信主机证据（giap-vps）：
+
+- 在两次 lane 之间单独跑一次，不与其他 Docker 任务并发。用同一个探针，在 exact-head 源码目录上以 `--output type=local` 分别导出修改前和修改后的上下文清单，各一次。不生成镜像和容器。
+- 不清理也不 prune 共享的 BuildKit 缓存。
+- 清单只记录数量、目录分布，以及修改后与意图集合的比对结果，不贴文件内容。
+- 探针用一个新建的空 `DOCKER_CONFIG` 和默认 `docker` driver 的 builder（与 lane 中私有 `DOCKER_CONFIG` 的处理一致，`platform/test/docker-command.ts:46-60`）。探针目录和导出目录放在源码目录之外，跑完删除。`FROM scratch` 不拉镜像，没有 `# syntax=`，不需要代理。
+- COPY 能成功的原生构建证据：
+  - VPS 的 `platform-image.docker.test.ts` 和 `test:deploy` 在设置了 `DSH_TEAM_VERIFICATION_IMAGES` 时，走 `scripts/verification-image.mjs:81-95` 的 `FROM base` + oci-layout 路径，不读本文件。lane 上传的平台镜像必须由 exact head 带新的 ignore 文件原生构建，证据评论写明。
+  - 本机 exact-head `pnpm test:stack` 固定原生构建 `platform/Dockerfile`（`platform/test/platform-stack.stack.test.ts:558`），是本改动 COPY 成功的直接证据，不只是门禁。
+
+文档：不改。`platform/README.md:41` 那句「adjacent allowlist excludes local dependencies, credentials and verification evidence」依然成立，修改后在文件粒度上也成立。
+
+验证：`pnpm check`；守卫测试先红后绿；本机和 VPS 的探针清单；VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed；本机 exact-head `pnpm test:stack`（原生构建证据）。
+
+剩余风险：其他 Docker 构建器（旧版 builder）的目录遍历行为没有实测。仓库的构建全部走 BuildKit/buildx。
+
+Must preserve：`platform/Dockerfile` 的全部 COPY 能成功；运行时镜像内容；末尾全局排除（`**/.env`、`**/.env.*`、`**/.git`、`**/node_modules`、`**/.run`）；测试文件排除。
