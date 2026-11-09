@@ -419,6 +419,34 @@ it.each(['before selection', 'stop', 'delete', 'removed verify'] as const)(
   },
 );
 
+it('removes the owned network when cancelled after actual removal and permits a truthful retry', async () => {
+  const before = row();
+  const controller = new AbortController();
+  let removed = false;
+  daemon.beforeRequest((request) => {
+    if (request.method === 'DELETE' && request.path === `/containers/${START_CONTAINER}`)
+      removed = true;
+    else if (removed && request.path.startsWith('/networks/')) controller.abort();
+  });
+
+  await expect(stopUserContainer({ ...input, signal: controller.signal })).rejects.toThrow(
+    'User container retirement failed',
+  );
+
+  expect(controller.signal.aborted).toBe(true);
+  expect(daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(writes().map(({ method, path }) => ({ method, path }))).toContainEqual({
+    method: 'DELETE',
+    path: `/networks/${START_NETWORK}`,
+  });
+  expect(daemon.networks.has(START_NETWORK)).toBe(false);
+  expectIndexUnchanged(before);
+  daemon.beforeRequest(() => undefined);
+  await stopUserContainer(input);
+  expect(row()).toMatchObject({ status: 'stopped', container_id: null });
+  expect(audits()).toHaveLength(1);
+});
+
 it.each(['missing instance', 'missing account'])(
   'rejects %s before any Docker write',
   async (missing) => {
