@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { parseEnv } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { loadConfig } from './config.ts';
 
 const REQUIRED_PUBLIC_URL = {
@@ -473,6 +474,7 @@ describe('loadConfig Document Server inputs', () => {
 
     expect(example[CONTAINER_NAME]).toBe('dsh-team-documentserver');
     expect(example[JWT_SECRET]).toBe('');
+    expect(example.PLATFORM_INSTANCE_FONTS_DIR).toBe('');
     expect(() => loadConfig(example)).toThrow(/^DOCUMENT_SERVER_JWT_SECRET must not be empty$/);
   });
 
@@ -488,5 +490,41 @@ describe('loadConfig Document Server inputs', () => {
       jwtSecret: JWT_MARKER,
     });
     expect(loadConfig(removed)).toStrictEqual({ ...filled, documentServer: null });
+  });
+});
+
+describe('loadConfig instance fonts directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-team-fonts-config-'));
+  const directory = join(root, 'fonts-marker-5d2e');
+  const file = join(root, 'file-marker-8b3f');
+  writeFileSync(file, '');
+  mkdirSync(directory);
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each([undefined, '', '   ', '\t'])('omits instanceFontsDir for unset or blank %j', (raw) => {
+    const config = loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_INSTANCE_FONTS_DIR: raw });
+
+    expect(Object.hasOwn(config, 'instanceFontsDir')).toBe(false);
+  });
+
+  it('returns an absolute readable directory verbatim, before the Document Server field', () => {
+    const config = loadConfig({ ...REQUIRED_PUBLIC_URL, PLATFORM_INSTANCE_FONTS_DIR: directory });
+
+    expect(config.instanceFontsDir).toBe(directory);
+    expect(Object.keys(config).slice(-2)).toEqual(['instanceFontsDir', 'documentServer']);
+  });
+
+  it.each([
+    ['a relative path', 'fonts-marker-5d2e'],
+    ['a path containing NUL', `${directory}\0`],
+    ['a regular file', file],
+    ['a missing path', join(root, 'missing-marker-2c9a')],
+  ])('rejects %s with its full message and without echoing it', (_, raw) => {
+    const actual = rejection({ PLATFORM_INSTANCE_FONTS_DIR: raw });
+
+    expect(actual).toBe('PLATFORM_INSTANCE_FONTS_DIR must be an absolute readable directory');
+    expect(actual).not.toContain('marker');
   });
 });

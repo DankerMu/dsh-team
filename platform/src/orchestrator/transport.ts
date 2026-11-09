@@ -4,7 +4,10 @@ import type { DockerClient } from './client.ts';
 import { containerId, object } from './identity.ts';
 import { instanceAddressLayout } from './subnet.ts';
 
-export type TransportConfig = Pick<PlatformConfig, 'upstreamMode' | 'platformContainerName'>;
+export type TransportConfig = Pick<
+  PlatformConfig,
+  'upstreamMode' | 'platformContainerName' | 'instanceFontsDir'
+>;
 export interface TransportContext {
   readonly config: TransportConfig;
   platformId: string | undefined;

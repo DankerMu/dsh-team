@@ -14,7 +14,7 @@ import {
 } from './networks.ts';
 import type { OwnedNetwork } from './networks.ts';
 import { requireUnpublished, upstreamPort } from './transport.ts';
-import type { TransportContext } from './transport.ts';
+import type { TransportConfig, TransportContext } from './transport.ts';
 import { recordedDocumentServer } from './document-server.ts';
 
 /** Only verified unknown-ID absence is nonfatal during reconciliation; callers still fail closed. */
@@ -164,13 +164,29 @@ export function consumeCreationAttempt(
     .run(input.userId, attempt.attempt_id);
 }
 
-function validateMounts(document: Record<string, unknown>, attempt: CreationAttempt): void {
+/** The owner's configured licensed fonts: absent adds no mount, as before the setting existed. */
+export function instanceFontsMounts(config: TransportConfig) {
+  const source = config.instanceFontsDir;
+  if (source === undefined) return [];
+  return [
+    { Type: 'bind', Source: source, Target: '/usr/share/fonts/truetype/custom', ReadOnly: true },
+  ];
+}
+
+function validateMounts(
+  document: Record<string, unknown>,
+  attempt: CreationAttempt,
+  config: TransportConfig,
+): void {
   const mounts = object(document.HostConfig).Mounts;
-  if (!Array.isArray(mounts) || mounts.length !== 3) throw new Error('Creation mounts changed');
-  const expected = new Map([
+  if (!Array.isArray(mounts)) throw new Error('Creation mounts changed');
+  const expected = new Map<string, readonly [string, string, boolean]>([
     ['/data/home', ['volume', `dsh-team-home-${attempt.user_id}`, false]],
     ['/data/work', ['volume', `dsh-team-work-${attempt.user_id}`, false]],
     ['/managed/patch.yml', ['bind', attempt.overlay_path, true]],
+    ...instanceFontsMounts(config).map(
+      ({ Type, Source, Target, ReadOnly }) => [Target, [Type, Source, ReadOnly]] as const,
+    ),
   ]);
   for (const value of mounts) {
     const mount = object(value);
@@ -185,6 +201,8 @@ function validateMounts(document: Record<string, unknown>, attempt: CreationAtte
       throw new Error('Creation mount identity changed');
     expected.delete(mount.Target);
   }
+  // Each mount consumed a distinct expectation; any left over means one is missing.
+  if (expected.size !== 0) throw new Error('Creation mount identity changed');
 }
 
 function validateCreationPublication(row: Record<string, unknown>, attempt: CreationAttempt): void {
@@ -204,7 +222,11 @@ function validateCreationPublication(row: Record<string, unknown>, attempt: Crea
   if (Object.values(ports).some((value) => value !== null)) upstreamPort(row, 'published-loopback');
 }
 
-function validateCreated(document: unknown, attempt: CreationAttempt): string {
+function validateCreated(
+  document: unknown,
+  attempt: CreationAttempt,
+  transport: TransportConfig,
+): string {
   const row = ownedContainer(
     document,
     `dsh-team-u-${attempt.user_id}`,
@@ -227,7 +249,7 @@ function validateCreated(document: unknown, attempt: CreationAttempt): string {
     host.PublishAllPorts === true
   )
     throw new Error('Creation provenance or never-started state changed');
-  validateMounts(row, attempt);
+  validateMounts(row, attempt, transport);
   validateCreationPublication(row, attempt);
   return id;
 }
@@ -291,9 +313,10 @@ export async function recoverCreationAttempt(
   const named = await inspect(client, name);
   current();
   if (named !== undefined) {
-    const id = validateCreated(named, attempt);
+    const id = validateCreated(named, attempt, input.transport.config);
     const exact = await inspect(client, id);
-    if (validateCreated(exact, attempt) !== id) throw new Error('Created identity changed');
+    if (validateCreated(exact, attempt, input.transport.config) !== id)
+      throw new Error('Created identity changed');
     const network = await validateUserNetwork(
       client,
       input.userId,
@@ -307,7 +330,8 @@ export async function recoverCreationAttempt(
     current();
     attempt = bindCreatedContainer(input, attempt, id);
     const fresh = await inspect(client, id);
-    if (validateCreated(fresh, attempt) !== id) throw new Error('Created identity changed');
+    if (validateCreated(fresh, attempt, input.transport.config) !== id)
+      throw new Error('Created identity changed');
     await validateUserNetwork(
       client,
       input.userId,

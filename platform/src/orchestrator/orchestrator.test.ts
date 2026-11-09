@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { writeSettings } from '../db/index.ts';
 import type { DatabaseHandle } from '../db/index.ts';
+import { createOrchestrator } from './index.ts';
 import type { AcquireDshCookieInput, StartResult } from './index.ts';
 import {
   expectDockerReads,
@@ -11,8 +12,10 @@ import {
   startupBarrier as barrier,
   startupOwnerFixture,
   START_CONTAINER,
+  START_FONTS_TRANSPORT,
   START_IMAGE,
   START_MODEL,
+  START_TRANSPORT,
   START_USER,
 } from '../../test/container-start-fixture.ts';
 
@@ -25,8 +28,8 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture() {
-  const context = await startupOwnerFixture();
+async function fixture(config = START_TRANSPORT) {
+  const context = await startupOwnerFixture(config);
   roots.push(context.root);
   databases.push(context.database);
   return context;
@@ -635,3 +638,56 @@ it('drains actual queue tails after a waiting caller cancels without releasing p
     await owner.drain();
   }
 });
+
+// The owner's transport reaches both private recovery entries; a changed setting fails closed.
+it.each([
+  ['reconcile', 'the same', START_FONTS_TRANSPORT, undefined],
+  ['stop', 'the same', START_FONTS_TRANSPORT, undefined],
+  ['reconcile', 'no', START_TRANSPORT, 'Instance reconciliation failed'],
+  ['stop', 'no', START_TRANSPORT, 'User container retirement failed'],
+] as const)(
+  '%s under %s fonts directory settles a never-started fonts-bind creation only when unchanged',
+  async (entry, _, recovering, failure) => {
+    const f = await fixture(START_FONTS_TRANSPORT);
+    let failing = true;
+    f.beforeRequest((method, path) =>
+      failing && method === 'GET' && path === `/containers/${START_CONTAINER}/json`
+        ? Promise.reject(new Error('Fixture loses the creation inspection'))
+        : Promise.resolve(undefined),
+    );
+    await expect(f.owner.startUserContainer(f.input)).rejects.toThrow('Container startup failed');
+    failing = false;
+    expect(f.daemon.containers.get(START_CONTAINER)?.HostConfig?.Mounts).toContainEqual({
+      Type: 'bind',
+      Source: '/srv/dsh-team/instance-fonts',
+      Target: '/usr/share/fonts/truetype/custom',
+      ReadOnly: true,
+    });
+    const attempts = () => f.database.prepare('SELECT * FROM creation_attempts').all();
+    const retained = attempts();
+    const owner = createOrchestrator({
+      client: f.client,
+      database: f.database,
+      config: recovering,
+    });
+
+    const recovery =
+      entry === 'reconcile'
+        ? owner.reconcile()
+        : owner.stopUserContainer({
+            userId: START_USER,
+            reason: 'admin',
+            allowMissingInstance: true,
+          });
+
+    if (failure === undefined) {
+      await recovery;
+      expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+      expect(attempts()).toEqual([]);
+    } else {
+      await expect(recovery).rejects.toThrow(failure);
+      expect(f.daemon.containers.has(START_CONTAINER)).toBe(true);
+      expect(attempts()).toEqual(retained);
+    }
+  },
+);

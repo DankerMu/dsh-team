@@ -114,6 +114,8 @@ stat -c %g /var/run/docker.sock
   install -d -m 755 assets/fonts
   ```
 
+- **同一组授权字体交给员工实例（可选，#561）**：把 `.env` 里的 `PLATFORM_INSTANCE_FONTS_DIR` 设为 `assets/fonts` 的宿主绝对路径（例如 `$(pwd)/assets/fonts`，写入时展开为字面路径）。Compose 把它按同一路径只读挂进平台容器（不会自动创建：宿主上没有这个目录时，`up -d` 在创建平台容器时就失败，报错来自 Docker，会带出路径）；目录存在但不是可读目录时，平台在监听前启动失败并点名该变量，不回显取值。之后每个新创建的员工实例都会把它只读挂到 `/usr/share/fonts/truetype/custom`，DSH 自带的只读预览引擎会扫描到其中的字体；员工不能写入或替换它。留空表示不挂载，实例只用镜像自带的 `fonts-noto-cjk` 和 `fonts-dejavu-core`。改了这个变量后，已在运行的实例保持原有挂载，要等它下次重新创建（管理员重启、空闲回收后重新打开）才生效；不要在实例正在创建时修改它。授权字体文件不入库。
+
 - **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
 - **Document Server 重建后，已运行的实例要重启才能重新接入**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前不接入新的 Document Server，聊天和文件功能不受影响（Office 在线编辑本身见 §7 末尾的交付状态）。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
 - **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙。
@@ -196,7 +198,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
   - cookie 总量超过请求头上限（431）时平台无法自愈，需要清除站点数据；只种在工作台 WebSocket 路径上的遮蔽 cookie，若浏览器不接受被拒绝握手里的 Set-Cookie，也需要清除站点数据。
 - 建议每人使用自己的浏览器配置；交接时先登出，并关闭上一位用户的全部标签页。
 
-**Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑（第 18 组）上线之前，DOCX、PPTX 也都走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS、XLSX 在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；授权字体挂载进实例见 #561。
+**Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑（第 18 组）上线之前，DOCX、PPTX 也都走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS、XLSX 在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；配置 `PLATFORM_INSTANCE_FONTS_DIR` 后，授权字体也会挂进实例，用于预览（见 §3 字体目录）。
 
 **预览对员工浏览器版本的要求**：DSH 0.2.1 显示转换结果所用的 PDF 查看器需要浏览器支持 `Map.prototype.getOrInsertComputed`，即 Chrome 或 Edge 145 及以上、Firefox 144 及以上、Safari 26.2 及以上。更旧的浏览器能完成转换，但页面显示「无法显示 PDF」。内网员工的浏览器要先升级到这些版本。受信 VPS 验证所用的 Chrome for Testing 140 低于这个版本，升级见 #565。
 

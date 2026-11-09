@@ -1,14 +1,7 @@
 import { deepStrictEqual, match, ok, strictEqual } from 'node:assert';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  containerDocument,
-  output,
-  OWNER_LABEL,
-  record,
-  registerCleanupTarget,
-} from './docker-cleanup.ts';
-import type { CleanupTarget } from './docker-cleanup.ts';
+import { containerDocument, output, OWNER_LABEL, record } from './docker-cleanup.ts';
 import type { DockerCommand } from './docker-command.ts';
 import { assertSecurity } from './web-startup-fixture.ts';
 
@@ -16,6 +9,7 @@ const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const SECCOMP = join(repositoryRoot, 'images/seccomp/dsh-user.json');
 const FIXTURES = join(repositoryRoot, 'platform/test/office-legacy');
 const GiB = 1024 * 1024 * 1024;
+const INSTANCE_FONTS = '/usr/share/fonts/truetype/custom';
 // Six serial and two parallel conversions, each starting a fresh ~152MB WASM engine.
 const CONVERSION_DEADLINE_MS = 300_000;
 
@@ -55,12 +49,38 @@ lines = [
 sys.stdout.buffer.write("\n".join(line for line in lines if line).encode("utf-8"))
 `;
 
+/** A directory bound like an instance's fonts, the family it adds and its PDF `/BaseFont` token. */
+export interface InstanceFonts {
+  readonly directory: string;
+  readonly family: string;
+  readonly baseFont: string;
+}
+
+// A Latin-only DOCX whose run asks for argv[2] as w:ascii and w:hAnsi: DejaVu-derived families
+// have no CJK glyphs, so Chinese text would fall back to Noto CJK and prove nothing.
+const FONTS_DOCX = String.raw`
+import sys
+from docx import Document
+from docx.oxml.ns import qn
+path, family = sys.argv[1], sys.argv[2]
+document = Document()
+run = document.add_paragraph().add_run("Instance fonts probe: the quick brown fox jumps over the lazy dog.")
+fonts = run._element.get_or_add_rPr().get_or_add_rFonts()
+fonts.set(qn("w:ascii"), family)
+fonts.set(qn("w:hAnsi"), family)
+document.save(path)
+`;
+
 /**
  * Converts with the released document preview's own engine, resolved the way the preview resolves
  * it, and `createConverter` with the preview's own options; only facts leave the container, the
  * judgement is `assertOfficeConversion`. Raw so the PDF and Python patterns keep their escapes.
  */
-function officeConvertScript(docxScript: string): string {
+function officeConvertScript(docxScript: string, fonts: InstanceFonts | undefined): string {
+  const fontProbe =
+    fonts === undefined
+      ? null
+      : { family: fonts.family, baseFont: fonts.baseFont, docx: FONTS_DOCX };
   return String.raw`
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync } from 'node:fs';
@@ -71,6 +91,7 @@ import { pathToFileURL } from 'node:url';
 const docxScript = ${JSON.stringify(docxScript)};
 const pptxText = ${JSON.stringify(PPTX_TEXT)};
 const odtText = ${JSON.stringify(ODT_TEXT)};
+const fontProbe = ${JSON.stringify(fontProbe)};
 // memory.peak only exists from Linux 5.19; its absence is recorded as null.
 const cgroup = (name) => {
   try { return readFileSync('/sys/fs/cgroup/' + name, 'utf8').trim(); }
@@ -87,12 +108,13 @@ const DOCX = '/data/work/offline.docx';
 const OUT = '/data/work/out';
 // A fresh directory: the engine opens every output exclusively.
 mkdirSync(OUT);
-const pdf = (path) => {
+const pdf = (path, named) => {
   const bytes = readFileSync(path);
   const latin = bytes.toString('latin1');
   const fonts = [...latin.matchAll(/\/BaseFont\s*\/([^\s\/<>\[\]()]+)/g)].map((found) => found[1]);
   return { bytes: bytes.length, header: latin.slice(0, 8), trailer: latin.trimEnd().slice(-5),
-    cjkFonts: [...new Set(fonts.filter((name) => name.includes('CJK')))] };
+    cjkFonts: [...new Set(fonts.filter((name) => name.includes('CJK')))],
+    ...(named === undefined ? {} : { namedFonts: [...new Set(fonts.filter((name) => name.includes(named)))] }) };
 };
 const text = (path) => readFileSync(path, 'utf8').replace(/^\uFEFF/, '').replaceAll('\r', '').replace(/\n+$/, '');
 const timed = async (operation) => {
@@ -144,19 +166,33 @@ try {
   await Promise.all(pair.map((each) => each.dispose()));
 }
 const concurrentPeak = peak();
+// Only with a bound fonts directory, after both peaks: a fresh converter renders its family.
+let fontRender = null;
+if (fontProbe !== null) {
+  const inputPath = '/data/work/fonts.docx';
+  execFileSync('python3', ['-c', fontProbe.docx, inputPath, fontProbe.family]);
+  const each = await kit.createConverter(options);
+  try {
+    const rendered = OUT + '/fonts.pdf';
+    const render = await timed(() => each.render({ inputPath, outputPath: rendered }));
+    fontRender = { input: 'fonts-docx', operation: 'render', ...render, pdf: pdf(rendered, fontProbe.baseFont) };
+  } finally {
+    await each.dispose();
+  }
+}
 const installedKiB = Object.fromEntries(['fonts-noto-cjk', 'fonts-dejavu-core'].map((name) =>
   [name, Number(execFileSync('dpkg-query', ['-W', '-f=\x24{Installed-Size}', name], { encoding: 'utf8' }))]));
 process.stdout.write(JSON.stringify({
   uid: process.getuid(), memoryMax: cgroup('memory.max'),
   runtime: { backend: runtime.backend, version: runtime.version },
   resolution: { officeToPdf, kit: kitManifest },
-  docxReadback, conversions, serialPeak, parallel, concurrentPeak, installedKiB,
+  docxReadback, conversions, serialPeak, parallel, concurrentPeak, fontRender, installedKiB,
 }));
 `;
 }
 
 /** The create flags of an employee instance (`orchestrator/start.ts`), with the fixtures read-only. */
-function assertInstanceLimits(document: Record<string, unknown>): void {
+function assertInstanceLimits(document: Record<string, unknown>, fonts: string | undefined): void {
   const host = record(document.HostConfig);
   deepStrictEqual(
     {
@@ -180,22 +216,35 @@ function assertInstanceLimits(document: Record<string, unknown>): void {
   assertSecurity(host, SECCOMP);
   const mounts = Array.isArray(document.Mounts) ? document.Mounts.map(record) : [];
   deepStrictEqual(
-    mounts.map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW })),
-    [{ Type: 'bind', Source: FIXTURES, Destination: '/fixtures', RW: false }],
-    'office-convert container must mount only a read-only /fixtures',
+    mounts
+      .map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW }))
+      .sort((a, b) => String(a.Destination).localeCompare(String(b.Destination))),
+    [
+      { Type: 'bind', Source: FIXTURES, Destination: '/fixtures', RW: false },
+      ...(fonts === undefined
+        ? []
+        : [{ Type: 'bind', Source: fonts, Destination: INSTANCE_FONTS, RW: false }]),
+    ],
+    `office-convert container must mount only a read-only /fixtures${fonts === undefined ? '' : ' and fonts'}`,
   );
 }
 
 /**
- * Create, start and boundedly wait for one conversion container; its stdout observation is
- * returned with the image's size, read here before cleanup removes the owned tag.
+ * Create, start and boundedly wait for one conversion container the caller has registered for
+ * cleanup; its stdout observation is returned with the image's size, read here before cleanup
+ * removes the owned tag. `fonts` adds the instance fonts bind and one render of its family.
  */
 export function runOfficeConvert(
   command: DockerCommand,
-  targets: CleanupTarget[],
-  run: { container: string; imageId: string; runId: string; docxScript: string },
+  run: {
+    container: string;
+    imageId: string;
+    runId: string;
+    docxScript: string;
+    fonts?: InstanceFonts;
+  },
 ): string {
-  const { container, imageId, runId } = run;
+  const { container, imageId, runId, fonts } = run;
   const create = [
     'create',
     '--user',
@@ -214,6 +263,9 @@ export function runOfficeConvert(
     `seccomp=${SECCOMP}`,
     '--mount',
     `type=bind,source=${FIXTURES},target=/fixtures,readonly`,
+    ...(fonts === undefined
+      ? []
+      : ['--mount', `type=bind,source=${fonts.directory},target=${INSTANCE_FONTS},readonly`]),
     '--name',
     container,
     '--label',
@@ -222,11 +274,13 @@ export function runOfficeConvert(
     'node',
     '--input-type=module',
     '-e',
-    officeConvertScript(run.docxScript),
+    officeConvertScript(run.docxScript, fonts),
   ];
-  registerCleanupTarget(targets, runId, { kind: 'container', name: container });
   output(command(create, 30_000), create);
-  assertInstanceLimits(containerDocument(command(['container', 'inspect', container], 30_000)));
+  assertInstanceLimits(
+    containerDocument(command(['container', 'inspect', container], 30_000)),
+    fonts?.directory,
+  );
   const start = ['start', container];
   output(command(start, 30_000), start);
   const wait = ['wait', container];
@@ -251,7 +305,13 @@ interface Conversion {
   readonly backend: string;
   readonly missingFonts: readonly string[];
   readonly ms: number;
-  readonly pdf?: { bytes: number; header: string; trailer: string; cjkFonts: string[] };
+  readonly pdf?: {
+    bytes: number;
+    header: string;
+    trailer: string;
+    cjkFonts: string[];
+    namedFonts?: string[];
+  };
   readonly text?: string;
 }
 
@@ -265,6 +325,7 @@ interface OfficeObservation {
   readonly serialPeak: number | null;
   readonly parallel: readonly Conversion[];
   readonly concurrentPeak: number | null;
+  readonly fontRender?: Conversion | null;
   readonly installedKiB: Readonly<Record<string, number>>;
   readonly imageSize: number;
 }
@@ -313,10 +374,31 @@ function assertReadback(
   return `${input}:convert=${String(entry.ms)}ms missingFonts=${JSON.stringify(entry.missingFonts)}`;
 }
 
+/** The fonts DOCX render exists exactly when a fonts directory was bound, and used its family. */
+function assertFontRender(
+  entry: Conversion | null | undefined,
+  fonts: Omit<InstanceFonts, 'directory'> | undefined,
+): string[] {
+  if (fonts === undefined) {
+    strictEqual(entry ?? null, null, 'office-convert rendered fonts without a fonts directory');
+    return [];
+  }
+  if (entry === null || entry === undefined)
+    throw new Error('office-convert did not render the fonts DOCX');
+  strictEqual(entry.backend, 'wasm', 'fonts render must use the WASM engine');
+  ok(!entry.missingFonts.includes(fonts.family), `fonts render misses ${fonts.family}`);
+  const pdf = entry.pdf;
+  ok(pdf?.header.startsWith('%PDF-') === true && pdf.trailer === '%%EOF', 'fonts render no PDF');
+  const named = pdf.namedFonts ?? [];
+  ok(named.length > 0, `fonts render PDF embeds no ${fonts.baseFont} font`);
+  return [`fonts:render=${String(entry.ms)}ms/${named.join('+')}`];
+}
+
 /** Independent oracle over the probe's facts; returns the evidence line's measurements. */
 export function assertOfficeConversion(
   stdout: string,
   assertDocx: (stdout: string) => void,
+  fonts?: Omit<InstanceFonts, 'directory'>,
 ): string {
   const observed = JSON.parse(stdout) as OfficeObservation;
   deepStrictEqual(
@@ -353,6 +435,7 @@ export function assertOfficeConversion(
     assertRender(docxRender, 'docx'),
     assertReadback(docx, 'docx', (text) => text === DOCX_READBACK),
     ...observed.parallel.map((entry) => `parallel-${assertRender(entry, 'docx')}`),
+    ...assertFontRender(observed.fontRender, fonts),
     `serialPeak=${String(observed.serialPeak)} concurrentPeak=${String(observed.concurrentPeak)}`,
     `installedKiB=${JSON.stringify(observed.installedKiB)} imageSize=${String(observed.imageSize)}`,
     `engine=${observed.runtime.version}`,

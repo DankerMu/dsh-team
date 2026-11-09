@@ -5,12 +5,14 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { applyMigrations, openDatabase } from '../db/index.ts';
 import { createDockerClient, createOrchestrator } from './index.ts';
-import type { DockerClient, StopUserContainerInput } from './index.ts';
+import type { DockerClient, OrchestratorDependencies, StopUserContainerInput } from './index.ts';
 import { recoverCreationAttempt } from './creation-attempt.ts';
 import {
   START_CONTAINER,
+  START_FONTS_TRANSPORT,
   START_IMAGE,
   START_NETWORK,
+  START_TRANSPORT,
   START_USER,
   startupDaemon,
   startupOwnerFixture,
@@ -28,8 +30,9 @@ afterEach(async () => {
 async function interrupted(
   kind: 'response' | 'inspection' = 'inspection',
   priorRow?: 'stopped' | 'absent-running',
+  config = START_TRANSPORT,
 ) {
-  const f = await startupOwnerFixture();
+  const f = await startupOwnerFixture(config);
   fixtures.push(f);
   if (priorRow === 'stopped')
     f.database
@@ -57,12 +60,7 @@ async function interrupted(
       return result;
     },
   };
-  const fresh = () =>
-    createOrchestrator({
-      client,
-      database: f.database,
-      config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
-    });
+  const fresh = () => createOrchestrator({ client, database: f.database, config });
   const owner = fresh();
   await expect(owner.startUserContainer(f.input)).rejects.toThrow('Container startup failed');
   failing = false;
@@ -396,3 +394,73 @@ it('recovers a pending attempt whose prior-row digest was written before migrati
     await rm(root, { recursive: true, force: true });
   }
 });
+
+const FONTS_MOUNT = {
+  Type: 'bind',
+  Source: '/srv/dsh-team/instance-fonts',
+  Target: '/usr/share/fonts/truetype/custom',
+  ReadOnly: true,
+};
+
+function recoverUnder(
+  f: Awaited<ReturnType<typeof interrupted>>,
+  config: OrchestratorDependencies['config'],
+) {
+  return recoverCreationAttempt({
+    database: f.database,
+    userId: START_USER,
+    client: f.client,
+    transport: { config, platformId: undefined },
+  });
+}
+
+it('recovers a never-started candidate carrying the configured read-only fonts bind', async () => {
+  const f = await interrupted('inspection', undefined, START_FONTS_TRANSPORT);
+  expect(f.candidate.HostConfig?.Mounts).toEqual([
+    expect.objectContaining({ Target: '/data/home' }),
+    expect.objectContaining({ Target: '/data/work' }),
+    expect.objectContaining({ Target: '/managed/patch.yml' }),
+    FONTS_MOUNT,
+  ]);
+
+  await expect(recoverUnder(f, START_FONTS_TRANSPORT)).resolves.toBe(true);
+
+  expect(f.daemon.containers.has(START_CONTAINER)).toBe(false);
+  expect(f.attempt()).toBeUndefined();
+});
+
+it.each([
+  ['an unconfigured owner sees a fonts bind', START_FONTS_TRANSPORT, START_TRANSPORT, {}],
+  ['a configured owner misses the fonts bind', START_TRANSPORT, START_FONTS_TRANSPORT, {}],
+  [
+    'the fonts bind became writable',
+    START_FONTS_TRANSPORT,
+    START_FONTS_TRANSPORT,
+    { ReadOnly: false },
+  ],
+  [
+    'the fonts bind changed its source',
+    START_FONTS_TRANSPORT,
+    START_FONTS_TRANSPORT,
+    { Source: '/srv/dsh-team/other-fonts' },
+  ],
+] as const)(
+  'quarantines a candidate when %s without deleting it or forgetting provenance',
+  async (_, created, recovering, change) => {
+    const f = await interrupted('inspection', undefined, created);
+    const mounts: unknown = f.candidate.HostConfig?.Mounts;
+    if (Object.keys(change).length > 0) {
+      const fonts = Array.isArray(mounts)
+        ? (mounts as Record<string, unknown>[]).find(({ Target }) => Target === FONTS_MOUNT.Target)
+        : undefined;
+      if (fonts === undefined) throw new Error('Expected the candidate fonts bind');
+      Object.assign(fonts, change);
+    }
+    const retained = f.attempt();
+
+    await expect(recoverUnder(f, recovering)).rejects.toThrow('Creation mount identity changed');
+
+    expect(f.daemon.containers.has(START_CONTAINER)).toBe(true);
+    expect(f.attempt()).toEqual(retained);
+  },
+);

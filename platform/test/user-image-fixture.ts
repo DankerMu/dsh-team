@@ -293,8 +293,8 @@ function runContainer(
   phase: 'fresh' | 'reuse',
 ): string {
   if (probe === 'office-convert') {
-    const run = { container, imageId, runId, docxScript: offlineDocxScript };
-    return runOfficeConvert(command, targets, run);
+    registerCleanupTarget(targets, runId, { kind: 'container', name: container });
+    return runOfficeConvert(command, { container, imageId, runId, docxScript: offlineDocxScript });
   }
   if (probe === 'offline-plugin')
     return runOfflinePlugin(command, targets, { container, imageId, runId });

@@ -19,6 +19,7 @@ services:
       PLATFORM_PUBLIC_URL: ${PLATFORM_PUBLIC_URL:?}
       PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE-false}
       PLATFORM_TRUSTED_PROXIES: ${PLATFORM_TRUSTED_PROXIES:-}
+      PLATFORM_INSTANCE_FONTS_DIR: ${PLATFORM_INSTANCE_FONTS_DIR:-}
       DOCUMENT_SERVER_CONTAINER_NAME: dsh-team-documentserver
       DOCUMENT_SERVER_JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET:?Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server}
     ports:
@@ -41,6 +42,14 @@ services:
       - type: bind
         source: ${PLATFORM_MANAGED_CONFIG_DIR:?}
         target: ${PLATFORM_MANAGED_CONFIG_DIR:?}
+        bind:
+          create_host_path: false
+      # Same path, so the platform's readability check sees the source Docker binds into instances.
+      # Unset: the checkout's secret-free deploy/ at a path the platform never reads.
+      - type: bind
+        source: ${PLATFORM_INSTANCE_FONTS_DIR:-./deploy}
+        target: ${PLATFORM_INSTANCE_FONTS_DIR:-/opt/dsh-team/instance-fonts-unset}
+        read_only: true
         bind:
           create_host_path: false
   documentserver:

@@ -53,6 +53,7 @@ import {
   beginCreationAttempt,
   bindCreatedContainer,
   consumeCreationAttempt,
+  instanceFontsMounts,
   recoverCreationAttempt,
 } from './creation-attempt.ts';
 import type { CreationAttempt } from './creation-attempt.ts';
@@ -453,6 +454,7 @@ async function createInstance(
           { Type: 'volume', Source: volumes.home, Target: '/data/home' },
           { Type: 'volume', Source: volumes.work, Target: '/data/work' },
           { Type: 'bind', Source: overlay, Target: '/managed/patch.yml', ReadOnly: true },
+          ...instanceFontsMounts(input.transport.config),
         ],
       },
       NetworkingConfig: {

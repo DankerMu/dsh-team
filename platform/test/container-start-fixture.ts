@@ -619,8 +619,18 @@ function startupInput(
   };
 }
 
+/** The public-owner fixture's transport; a configured fonts directory adds the instance fonts bind. */
+export const START_TRANSPORT: OrchestratorDependencies['config'] = {
+  upstreamMode: 'published-loopback',
+  platformContainerName: 'dsh-team-platform',
+};
+export const START_FONTS_TRANSPORT: OrchestratorDependencies['config'] = {
+  ...START_TRANSPORT,
+  instanceFontsDir: '/srv/dsh-team/instance-fonts',
+};
+
 /** Reusable public-owner fixture with actual SQLite; callers own closing/removing its resources. */
-export async function startupOwnerFixture() {
+export async function startupOwnerFixture(config = START_TRANSPORT) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-owner-'));
   const database = openDatabase(':memory:');
   applyMigrations(database);
@@ -642,11 +652,7 @@ export async function startupOwnerFixture() {
       return raw.json(method, path, body, signal, maxBytes);
     },
   };
-  const owner = createOrchestrator({
-    client,
-    database,
-    config: { upstreamMode: 'published-loopback', platformContainerName: 'dsh-team-platform' },
-  });
+  const owner = createOrchestrator({ client, database, config });
   const input = startupInput(root, seccompProfilePath, 'dsh-team-user:local', '172.30.0.0/16');
   return {
     root,
