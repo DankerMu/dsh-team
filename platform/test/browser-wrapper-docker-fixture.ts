@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { awaitFile } from './browser-runtime-fixture.ts';
 import { record } from './container-start-docker-fixture.ts';
+import { vitestSpawnInterception } from './vitest-stand-in-fixture.ts';
 import { dockerProxyEnvironment } from '../../scripts/docker-proxy-environment.mjs';
 import {
   browserDocker,
@@ -56,6 +57,7 @@ async function startWrapper(
   await mkdir(temporary, { mode: 0o700 });
   await mkdir(binaries, { mode: 0o700 });
   const preload = join(root, 'publication.mjs');
+  const vitest = join(root, 'vitest-stand-in.cjs');
   const preloadCode = `
 import promises from 'node:fs/promises';
 import fs from 'node:fs';
@@ -88,6 +90,7 @@ promises.writeFile = async (...args) => {
   }
   return result;
 };
+${vitestSpawnInterception(vitest, join(root, 'spawns.jsonl'))}
 syncBuiltinESMExports();
 `;
   await writeFile(preload, preloadCode, { mode: 0o600 });
@@ -110,7 +113,7 @@ process.stdin.resume();
 publish('child-ready.json', { pid: process.pid });
 if (${JSON.stringify(options.boundary === 'publication')}) process.exit(0);
 `;
-  await writeFile(join(binaries, 'pnpm'), child, { mode: 0o700 });
+  await writeFile(vitest, child, { mode: 0o600 });
   await writeFile(join(binaries, 'bash'), child, { mode: 0o700 });
   const wrapper = fileURLToPath(
     new URL('../../scripts/verify-browser-runtime.mjs', import.meta.url),

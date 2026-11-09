@@ -4206,3 +4206,86 @@ Must preserve：
       4. 断言 `.luckysheet-input-box` 的 `z-index` 仍为 `-1`，即没有进入单元格编辑态；
       5. 截图 `legacy-xls-typed`。
     - 如果键入后值变了，或者进入了编辑态，就停下来报告：那是产品层面的可编辑预览，不能在测试里绕过。
+
+## 27. 技术债 #497：`verify-browser-runtime` 的 docker/model 车道去掉 pnpm 中间层，直接启动 vitest
+
+依赖：无。由 #497 承载，处理方式同第 6 组。改 `scripts/verify-browser-runtime.mjs`、两个伪造 `pnpm` 的测试夹具和一个新的 Docker-free 集成测试；不放宽任何清理或 rescue 规则，不碰关键路径。（22–26 节在其他未合并的 PR 分支上。）
+
+- [ ] 27.1 `docker`/`model` 车道不经 pnpm，改为 `spawn(process.execPath, [join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--project', <lane>, ...forwarded])`。SIGINT/SIGTERM 由包装器直接转发给 vitest 主进程，包装器的结果取自 vitest 本身；退出码映射（130/143）、转发参数和 `--help`/`-h` 行为不变。两个用 PATH 上的假 `pnpm` 测试包装器的夹具改为在 preload 里拦截这次 spawn，测试口径不变。验证：新增 `platform/test/verify-browser-runtime.integration.test.ts`，先红后绿；`browser-build.integration.test.ts` 通过；VPS `browser-wrapper.docker.test.ts` 通过。
+
+Suggested fixture level: compact - 子进程启动方式，行为口径不变
+Minimal mergeable slice: atomic: 一处启动命令、两个夹具的接缝和一个集成测试
+Risk packs (27.1): selected - Concurrency（信号必须到达 vitest，包装器在 vitest 退出后才进入 `cleanup()`）、Legacy compatibility（退出码 130/143、转发参数、`--help` 透传；`dsh-api`/`first-run` 的 bash 车道不变；现有包装器测试的断言不变）；not selected - Config、Schema、Auth、Public API、File IO、Resource limits、Release、Migration。
+Evidence (27.1):
+
+现状（main `0d87c77`）：
+
+- `scripts/verify-browser-runtime.mjs:19-20` 的车道命令是 `pnpm exec vitest …`。`runVerificationChild`（`:84-93`）在子进程 `exit` 上 resolve；`:284-295` 只对这个 pnpm 进程转发信号；`:410-411` 的 `finally { await cleanup(); }` 紧接着执行。
+- #497 的本机复现有两种情况：
+  - pinned pnpm 转发信号后 3ms 就退出，孙进程 3s 后才退出；
+  - PATH 上的版本切换 pnpm 根本不转发信号，孙进程和父进程的 `exit` 都等不到。
+- custody 对整个进程组发 SIGINT（`scripts/trusted-docker-owner.mjs:170`），并按进程组消失结算（`:266-274`）。`:260` 只是 `detached: true` 的 spawn。
+
+改动：
+
+- `commands.docker` 和 `commands.model` 改为 `[process.execPath, [join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--project', 'docker'|'model']]`，形状照 `scripts/test-stack.mjs:271-274`。`dsh-api` 和 `first-run` 不动。
+- `runVerificationChild` 的结算事件由 `exit` 改为 `close`，与 `spawnCases` 保持一致。在 `stdio: 'inherit'` 下这个改动只是表面一致，修复机制是去掉 pnpm 这一层：信号直达 vitest，退出码也来自 vitest。
+- 不用 `detached`，也不复用 `spawnCases`。本脚本运行在 custody 的进程组里，forks 池 worker 能直接收到 custody 的组信号，并由 custody 的组结算统一观察；vitest 若另起进程组，就会脱离这两者。
+
+测试接缝：一个共享的假 vitest 生成器，加上 preload 里对 `child_process.spawn` 的拦截。
+
+- 新文件 `platform/test/vitest-stand-in-fixture.ts` 导出两样东西：
+  - 假 vitest 脚本文本的生成函数。参数直接写进脚本文本，照 `browser-wrapper-docker-fixture.ts` 现有的 `${JSON.stringify(options.boundary === 'publication')}` 写法，不经环境变量传递。
+  - preload 中 spawn 拦截代码段的生成函数：当 `file === process.execPath` 且 `args[0]` 是仓库的 `node_modules/vitest/vitest.mjs` 时，把 `args[0]` 换成假 vitest 的路径，其余参数原样传递，并把这次调用的 `(file, args)` 追加记录到 JSON 行文件；其他调用原样放行。
+- 拦截靠 preload 里的 `syncBuiltinESMExports`。本脚本对 `node:child_process` 用的是具名导入，属于活绑定，仓库已有先例（`browser-build-fixture.ts:186-200` 用同法替换 `spawnSync`）。生产代码不加任何环境变量或测试开关。
+- `scripts/check-test-pairing.sh` 不扫描 `platform/test/`，新夹具文件不需要配对测试。
+- 假 vitest 的行为：
+  - 先装好 SIGTERM/SIGINT 处理器，再写 `started` 标记，标记内容为 pid 和收到的参数。
+  - 收到信号时，先写 `signal:<name>`，再写 `exit` 标记，然后以 0 退出。
+  - `hold` 为假时，写完 `started` 立即以 0 退出；为真时一直存活，直到收到信号。
+
+`browser-wrapper-docker-fixture.ts`（VPS docker 项目）：
+
+- 在它现有的 preload（结尾 `syncBuiltinESMExports()`）里加入共享的 spawn 拦截，把 vitest 入口换成它已经生成的那个子进程脚本，`child-ready`/`child-signal`/`child-exit` 三个标记不变。
+- 删掉 `bin/pnpm` 的写入；`bin/bash` 保留，`dsh-api`/`first-run` 车道不变。
+- `browser-wrapper.docker.test.ts:18`（publication，`docker`）和 `:64`（help-child，`docker`）两个用例因此不会启动真实的 `vitest run --project docker`，断言不变。
+
+`browser-build-fixture.ts`（integration 项目）：
+
+- 在它的 preload（`:186-200`）里加入同一个拦截：一旦命中 vitest 入口，就在 `daemon.json` 里写 `verificationStarted = true`，并换成一个立即以 8 退出的假脚本，与原来 `basename(argv[1]) === 'pnpm'` 时 `process.exitCode = 8` 的绊线等价。
+- 删掉 `bin/pnpm` 软链（`:169`）和假 docker 工具里那条 `basename(argv[1]) === 'pnpm'` 分支（`:32`）。`verificationStarted: false` 的断言因此仍然有效，不会因为不再走 pnpm 而变成空断言。
+
+回归（新文件 `platform/test/verify-browser-runtime.integration.test.ts`，Docker-free）：
+
+- 为什么单独建文件：`model-entry.integration.test.ts` 的辅助函数断言退出码为 1 且目录为空，测的是拒绝路径；本组用例走 stand-in，退出码是 0、130、143。
+- 环境：`HOME`/`TMPDIR` 指向临时目录，`PATH` 为空。`model` 车道给一个明显是假的 `DMXAPI_KEY`，不是任何真实密钥。所有用例都走 `--help`/`-h` 路径：它跳过 `prepare()`（`:381-385`），不调用 Docker，也不建 receipt 目录，`cleanup()` 在 `directory` 未设置时直接返回（`:324-325`）。
+- 用例 1（参数，`hold` 为假）：`docker --help`、`model --help`、`docker -h`。断言：只 spawn 一次；`file` 是 `process.execPath`；参数是 `[<vitest.mjs>, 'run', '--project', <lane>, <--help|-h>]`；包装器退出码 0。
+- 用例 2（`it.each` SIGTERM/SIGINT，`docker --help`，`hold` 为真）：
+  - 等 `started` 标记，并与包装器退出赛跑，照 `browser-wrapper-docker-fixture.ts:150-170` 的 `marker()` 写法，这样旧代码会快速失败，不必等到超时。
+  - 然后向包装器发送信号。
+  - 断言：假 vitest 收到同一个信号；包装器退出码分别为 143 和 130；在包装器的 `exit` 事件里同步检查，假 vitest 的 `exit` 标记文件此时已经存在。不比较时间戳，也不用 `close`：stand-in 继承了测试的管道，`close` 必然等它退出。
+  - 用例的 `finally` 按 `started` 标记里的 pid 对假 vitest 发 SIGKILL（忽略 ESRCH），避免回归时留下占着管道的孤儿进程。
+- 旧代码为什么红：
+  - 用例 1：spawn 记录里是 `pnpm`，且 `PATH` 为空导致 ENOENT，包装器退出码 1。
+  - 用例 2：`started` 标记永远不会出现，包装器先退出，`marker()` 报错。
+
+文档：不改。`scripts/README.md` 没有描述包装器如何启动 vitest（`grep -n 'pnpm exec\|verify-browser-runtime' scripts/README.md` 无结果）。
+
+`platform/test/ci-vps-worker.ts:251` 的 `spawnSync('pnpm', ['test:model'])`：不纳入本任务。这一层由 systemd scope 和 watcher 按 cgroup 终止并结算，PR 描述中写明理由。
+
+验证：`pnpm check`（含 `lint:tests`、`duplicate-code`）；新测试先红后绿；VPS exact-head `test:docker`（含 `browser-wrapper.docker.test.ts`）和 `test:deploy`，cleanup confirmed；本机 exact-head `pnpm test:stack`，只是满足门禁。
+
+剩余风险：
+
+- vitest 5.0.2 的主进程收到 SIGINT/SIGTERM 后，只做终端清理并设置 exitCode，然后 `setTimeout(() => process.exit(), 1)`，不等 forks 池 worker 的 teardown（`node_modules/vitest/dist/chunks/index.C-uw7tH9.js:14090-14101`，已核对）。所以本改动之后，`cleanup()` 仍可能与仍在运行的 worker 并发。
+- 本改动消除的是：版本切换型 pnpm 不转发信号；包装器的结果取自 pnpm 而不是 vitest。它并不保证 `cleanup()` 一定在 worker 结算之后开始。要做到这一点，需要观察 vitest 的进程组，与留在 custody 进程组相冲突。
+- 受信通道里 custody 只部分覆盖这个缺口：组结算且 producer 清理确认之后，`retireAfterCancellation`（`trusted-docker-owner.mjs:178-180`）退役 journal 中的登记，兜住资源残留；但包装器 `cleanup()` 与 worker 并发时写出的虚假 `browserResources: unconfirmed` 和 status 1 不受保护。直接只对包装器 pid 发信号则两者都不覆盖。另开 issue 跟进。
+
+Must preserve：
+
+- `dsh-api`/`first-run` 车道。
+- 130/143 退出码，`--help` 透传。
+- `cleanup()` 与 receipt 的全部规则。
+- `DMXAPI_KEY` 的前置检查。
+- `browser-wrapper.docker.test.ts` 全部用例及其断言，其中 help-child 的 `docker` SIGTERM 用例：`childStarted`、`childSignal`、`childExitCode: 0`。
+- `browser-build.integration.test.ts` 中 `verificationStarted: false` 的绊线依然有效。
