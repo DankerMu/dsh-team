@@ -4894,6 +4894,11 @@ Evidence (37.1–37.2):
   - 然后不经停止，直接走原来的「重置 → 启动成功」流程（`error` 加无容器满足 `restoreUserProfiles` 的终态要求）。原有断言全部保留。启动成功时，`start.ts:566` 和就绪流程会清空最近错误。
   - 摘要加 `startBeforeReset: { status, code }`，`it` 里用 `toMatchObject` 断言 `{ status: 'error', code: 'profile-incompatible' }`。
 
+- 重置后提示消失（PR #591 第 2 轮 P1）：管理员重置要先 `stop('admin')`，但 `error` 加无容器的行属于终态，`stop` 会直接跳过。`restoreUserProfiles` 原本不写实例行，所以重置之后这一行仍是 `error`，提示也还在。修复：`platform/src/orchestrator/profile-restore.ts` 在恢复成功、最后一次 `assertCurrent()` 之后，在同一个 owner FIFO 里执行一次 `UPDATE instances SET status='stopped' WHERE user_id=? AND status='error' AND container_id IS NULL`，保留 `last_error`，不写审计（因为没有容器被停止；`instance.config-reset` 审计仍由管理员动作写）。这样实例列表回应 `stopped`，`lastErrorCode` 为 null，提示消失；下次启动照常清空最近错误。`stopped` 行不变。instance-lifecycle 的「停止状态下只恢复 profiles」场景同步加上这一处例外。证明：
+  - 一个经 `InstanceService.resetConfig`（或管理员 reset 路由）的集成测试，起点是带码的 `error` 加无容器行，断言重置后管理员实例列表回应 `status: 'stopped'`、`lastErrorCode: null`，最近错误仍在；
+  - `profile-restore` 的单元测试覆盖 `error` 改为 `stopped`、`stopped` 保持不变、恢复失败时不改；
+  - `volume-upgrade.docker.test.ts` 在 `restore()` 之后读一次行，断言 `status === 'stopped'` 且 `container_id` 为 null。
+
 需要同步核对的现有测试：
 
 - `read.test.ts:93-99`：`skippedBundles` 非空仍被拒绝，期望不变；新增 `{profileIncompatible:true}` 抛出 `ProfileIncompatibleError` 的用例，以及多带一个键时 `invalid` 的用例。
