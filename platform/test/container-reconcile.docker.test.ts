@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { chmodSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -341,8 +340,10 @@ function survivorMarker(lifecycle: UserImageLifecycle, id: string, code: string)
 
 /**
  * Rewrite the instance's managed overlay so its `webserver` row names `to`, then restart the
- * container so DSH rebinds there. The read-only file bind (`start.ts` `/managed/patch.yml`) is
- * by inode: write in place, never rename, so the container sees the new bytes.
+ * container so DSH rebinds there. Docker resolves the read-only single-file bind (`start.ts`
+ * `/managed/patch.yml`) by path at container start and the restart resolves it again, so the
+ * container does not depend on the same inode. The in-place write keeps the file's mode, owner
+ * and path; the inode assertion stays as evidence that nothing was renamed.
  */
 function rebindSurvivorWeb(
   lifecycle: UserImageLifecycle,
@@ -532,71 +533,26 @@ async function stopThenRestartAtLayout(
   return marker === SURVIVOR_MARKER;
 }
 
-const EXCHANGE = `
-import json, sys, urllib.error, urllib.request
-class Keep(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args): return None
-request = urllib.request.Request('http://' + sys.argv[1] + ':3080/?token=' + sys.argv[2], headers={'Host': sys.argv[3]})
-try:
-    response = urllib.request.build_opener(Keep).open(request, timeout=5)
-    status, headers = response.status, response.headers
-except urllib.error.HTTPError as error:
-    status, headers = error.code, error.headers
-print(json.dumps({'status': status, 'cookies': headers.get_all('Set-Cookie') or []}))
-`;
-
 /**
- * Fixture-owned cookie exchange for the rebound survivor. Production acquisition is a readiness
- * step: it selects only a `starting` row and applies the post-start layout validation, so it
- * cannot serve this deliberately off-layout `running` survivor. DSH 0.2.1 launch tokens are per
- * process (dsh-client-connection lib/index.js:294-300, 420), so the restarted Web process needs a
- * fresh exchange. It mirrors credentials.ts `exchange`/`authenticationCookie`: GET `/?token=` with
- * the trusted Host, 303 only, exactly one `dsh-auth-<sha256(authority)>` pair before `;`. Token
- * and cookie stay in memory and exec arguments, never output.
+ * Wait until the restarted survivor announces its launch line for the moved address. Released
+ * DSH Web routes may still be assembling before that announcement, so authenticated requests
+ * wait for it. The token is only checked for presence: it stays in memory and never leaves this
+ * function.
  */
-async function exchangeSurvivorCookie(
+async function awaitSurvivorLaunch(
   lifecycle: UserImageLifecycle,
-  platformId: string,
   containerId: string,
   address: string,
-  authority: string,
-): Promise<string> {
+): Promise<void> {
   const deadline = Date.now() + 30_000;
-  let token: string | undefined;
-  while (token === undefined) {
+  for (;;) {
     const logs = lifecycle.command(['logs', containerId], 10_000);
     if (logs.status !== 0 || logs.error !== undefined) throw new Error('Survivor logs unavailable');
     // Matches only lines naming the moved address; the first boot's +2 line is ignored.
-    token = extractLaunchToken(logs.stdout, address);
-    if (token !== undefined) break;
+    if (extractLaunchToken(logs.stdout, address) !== undefined) return;
     if (Date.now() >= deadline) throw new Error('Survivor launch line missing');
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  const result = lifecycle.command(
-    ['exec', platformId, 'python3', '-c', EXCHANGE, address, token, authority],
-    10_000,
-  );
-  if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Survivor cookie exchange failed');
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    // V8 quotes the input in JSON syntax errors; that text would carry cookie bytes.
-    throw new Error('Survivor cookie exchange unreadable');
-  }
-  const exchanged = record(parsed);
-  const name = `dsh-auth-${createHash('sha256')
-    .update(new URL(`http://${authority}`).host)
-    .digest('base64url')}`;
-  const pairs = Array.isArray(exchanged.cookies)
-    ? exchanged.cookies
-        .map((header) => String(header).split(';')[0] ?? '')
-        .filter((pair) => pair.startsWith(`${name}=`))
-    : [];
-  if (exchanged.status !== 303 || pairs.length !== 1 || pairs[0] === undefined)
-    throw new Error('Survivor cookie exchange rejected');
-  return pairs[0];
 }
 
 function rowCookie(database: DatabaseHandle, user: string): string {
@@ -634,7 +590,7 @@ async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> 
     registerStartupUsers(lifecycle, database, [user], 'survivor.example');
     lifecycle.registerResource('network', `dsh-team-net-${user}`, { 'dsh-team.user': user });
     const started = await startDockerInstance(owner, lifecycle, user, authority);
-    rowCookie(database, user);
+    const cookie = rowCookie(database, user);
     survivorMarker(
       lifecycle,
       started.containerId,
@@ -649,14 +605,11 @@ async function survivorScenario(lifecycle: UserImageLifecycle): Promise<string> 
       originalPlatform,
     );
     database.prepare('UPDATE instances SET upstream_host = ? WHERE user_id = ?').run(address, user);
-    const cookie = await exchangeSurvivorCookie(
-      lifecycle,
-      originalPlatform,
-      started.containerId,
-      address,
-      authority,
-    );
-    database.prepare('UPDATE instances SET dsh_cookie = ? WHERE user_id = ?').run(cookie, user);
+    await awaitSurvivorLaunch(lifecycle, started.containerId, address);
+    expect(platformHttpStatus(lifecycle, originalPlatform, address, authority)).toBe(401);
+    // The readiness-issued row cookie survives the rebind restart: DSH authenticate() checks only
+    // signature, authority and time window, and the signing secret is reused from the global
+    // credentials store under the home volume (`DSH_HOME=/data/home`).
     expect(platformHttpStatus(lifecycle, originalPlatform, address, authority, cookie)).toBe(200);
     // (3) Platform recreation, then a fresh owner reconciles twice.
     const before = await startupEvidence(database, input);
