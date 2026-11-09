@@ -26,6 +26,7 @@ import { requireUnpublished, upstreamHost, verifiedPlatform } from './transport.
 import type { TransportContext } from './transport.ts';
 import {
   documentServerDecision,
+  officeOverlay,
   recordedDocumentServer,
   verifyDocumentServer,
 } from './document-server.ts';
@@ -504,16 +505,33 @@ function startupCleanupClient(input: StartUserContainerInput): DockerClient {
   };
 }
 
-/** DSH binds only the address its overlay names, so the overlay follows the allocated bridge. */
+/**
+ * DSH binds only the address its overlay names, so the overlay follows the allocated bridge;
+ * Office follows this start's Document Server decision.
+ */
 async function managedOverlay(
   input: StartUserContainerInput,
   network: OwnedNetwork,
-  composed: Omit<Parameters<typeof generateManagedConfig>[0], 'instanceAddress' | 'platformPort'>,
+  office: { readonly decision: DocumentServerDecision; readonly settings: Settings },
+  composed: Omit<
+    Parameters<typeof generateManagedConfig>[0],
+    'instanceAddress' | 'platformPort' | 'office'
+  >,
 ): Promise<string> {
+  const layout = instanceAddressLayout(network.subnet);
+  const { upstreamMode } = input.transport.config;
   const generated = generateManagedConfig({
     ...composed,
-    instanceAddress: instanceAddressLayout(network.subnet).container,
-    platformPort: input.transport.config.upstreamMode === 'network' ? input.config.port : null,
+    instanceAddress: layout.container,
+    platformPort: upstreamMode === 'network' ? input.config.port : null,
+    office: officeOverlay(
+      office.decision,
+      office.settings,
+      input.config.documentServer,
+      upstreamMode,
+      layout.documentServer,
+      input.config.publicUrl,
+    ),
   });
   // Checked complete above; throwing keeps the created bridge on the rollback path.
   if (generated.outcome === 'unconfigured')
@@ -700,13 +718,18 @@ export async function startUserContainer(
       ),
     );
     stage = 'managed overlay';
-    const overlay = await managedOverlay(input, network, {
-      ...observed,
-      admin: user.role === 'admin',
-      defaultPermissionTier,
-      modelSettings,
-      ...catalog.overlay,
-    });
+    const overlay = await managedOverlay(
+      input,
+      network,
+      { decision: documentServer, settings },
+      {
+        ...observed,
+        admin: user.role === 'admin',
+        defaultPermissionTier,
+        modelSettings,
+        ...catalog.overlay,
+      },
+    );
     stage = 'container creation';
     signal.throwIfAborted();
     const pendingCreation = beginCreationAttempt(

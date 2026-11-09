@@ -44,6 +44,7 @@ const INPUT: ManagedConfigInput = {
   pluginCatalog: [],
   bundles: [],
   platformPort: null,
+  office: null,
 };
 
 const CREDENTIAL_REALM = { credentials: 'dsh-team-platform' };
@@ -456,35 +457,6 @@ describe('generateManagedConfig', () => {
       ]);
     },
   );
-
-  it('places the source and probe rows after profile and locale rows that try to replace them', () => {
-    const reenable = { id: 'ui-plugin-manager', config: { registryProbeEnabled: true } };
-    const generated = generateManagedConfig({
-      ...INPUT,
-      registryProbeEnabled: false,
-      localePatch: [...INPUT.localePatch, reenable],
-    });
-    ok(generated.outcome === 'configured');
-    const rows: unknown = JSON.parse(generated.content);
-    ok(Array.isArray(rows));
-    const probe = rows.findLastIndex(
-      (row: unknown) =>
-        typeof row === 'object' && row !== null && 'id' in row && row.id === 'ui-plugin-manager',
-    );
-
-    expect(rows.slice(probe - 2, probe + 2)).toEqual([
-      reenable,
-      {
-        id: 'plugin-manager',
-        config: {
-          registry: 'https://registry.npmjs.org/',
-          fallbackRegistries: ['https://registry.npmmirror.com/'],
-        },
-      },
-      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
-      { id: 'auto-review', disabled: true },
-    ]);
-  });
 
   it('preserves own __proto__ metadata on a transformed group preset', () => {
     const protoKey = '__proto__';

@@ -20,7 +20,7 @@ import {
 } from './container-start-docker-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
-/** Acceptance-only configuration; the orchestrator never reads the JWT. */
+/** Acceptance-only configuration; the JWT reaches only the written overlay of an admitted start. */
 export function documentServerConfig(containerName: string) {
   return { containerName, jwtSecret: 'docker-acceptance-only-not-a-jwt-secret' };
 }
@@ -67,8 +67,13 @@ export function expectDocumentServerAtLayout(
   return { endpointId: String(endpoint.EndpointID), address };
 }
 
-/** Every object key in the instance's managed overlay (compact JSON, a YAML subset). */
-export function overlayKeys(lifecycle: UserImageLifecycle, user: string): string[] {
+/** The instance's managed overlay (compact JSON, a YAML subset). */
+function overlayDocument(lifecycle: UserImageLifecycle, user: string): unknown {
+  return JSON.parse(readFileSync(join(lifecycle.overlayDirectory, `${user}.patch.yml`), 'utf8'));
+}
+
+/** Every object key in the instance's managed overlay. */
+function overlayKeys(lifecycle: UserImageLifecycle, user: string): string[] {
   const keys: string[] = [];
   const visit = (value: unknown): void => {
     if (Array.isArray(value)) value.forEach(visit);
@@ -78,8 +83,51 @@ export function overlayKeys(lifecycle: UserImageLifecycle, user: string): string
         visit(nested);
       }
   };
-  visit(JSON.parse(readFileSync(join(lifecycle.overlayDirectory, `${user}.patch.yml`), 'utf8')));
+  visit(overlayDocument(lifecycle, user));
   return keys;
+}
+
+const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+/** Every key the overlay's ONLYOFFICE configuration row can carry. */
+const OFFICE_KEYS = ['documentServerUrl', 'jwtSecret', 'internalBaseUrl', 'publicBaseUrl'];
+
+function onlyofficeRows(lifecycle: UserImageLifecycle, user: string): Record<string, unknown>[] {
+  const document = overlayDocument(lifecycle, user);
+  if (!Array.isArray(document)) throw new Error('Unexpected managed overlay');
+  return document.map((row) => record(row)).filter((row) => row.id === ONLYOFFICE);
+}
+
+/** Unavailable Office: no Office key anywhere and exactly one disabled ONLYOFFICE row. */
+export function expectUnavailableOffice(lifecycle: UserImageLifecycle, user: string): void {
+  expect(overlayKeys(lifecycle, user).filter((key) => OFFICE_KEYS.includes(key))).toEqual([]);
+  expect(onlyofficeRows(lifecycle, user)).toEqual([{ id: ONLYOFFICE, disabled: true }]);
+}
+
+/**
+ * Exactly one ONLYOFFICE row, its configuration naming this bridge's +4 and +2 and the public
+ * origin; the JWT is compared in memory and never enters an assertion message.
+ */
+export function expectAdmittedOffice(
+  lifecycle: UserImageLifecycle,
+  user: string,
+  networkId: string,
+  publicUrl: string,
+  jwtSecret: string,
+): void {
+  const configs = record(inspectNetwork(lifecycle, networkId).IPAM).Config;
+  if (!Array.isArray(configs) || configs.length !== 1)
+    throw new Error('Unexpected instance network IPAM');
+  const layout = instanceAddressLayout(String(record(configs[0]).Subnet));
+  const rows = onlyofficeRows(lifecycle, user);
+  expect(rows.length).toBe(1);
+  expect(rows.filter((row) => 'config' in row).length).toBe(1);
+  const { jwtSecret: written, ...config } = record(rows[0]?.config);
+  expect(written === jwtSecret).toBe(true);
+  expect(config).toEqual({
+    documentServerUrl: `http://${layout.documentServer}`,
+    internalBaseUrl: `http://${layout.container}:3080`,
+    publicBaseUrl: publicUrl,
+  });
 }
 
 export function gatewayStatus(

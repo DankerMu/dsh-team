@@ -1,3 +1,4 @@
+import { ok } from 'node:assert';
 import { afterEach, expect, it } from 'vitest';
 import { writeSettings } from '../db/index.ts';
 import {
@@ -5,6 +6,7 @@ import {
   START_NETWORK,
   START_USER,
   seedPlatform,
+  startupEvidence,
 } from '../../test/container-start-fixture.ts';
 import type { StartupDaemon } from '../../test/container-start-fixture.ts';
 import {
@@ -19,6 +21,8 @@ import {
   rejectDocumentServer,
   stopDocumentServer,
 } from '../../test/container-document-server-fixture.ts';
+import { officeOverlay } from './document-server.ts';
+import type { DocumentServerDecision } from './document-server.ts';
 
 const fixtures: Awaited<ReturnType<typeof documentServerFixture>>[] = [];
 afterEach(async () => {
@@ -60,6 +64,30 @@ function resolutions(daemon: StartupDaemon): string[] {
 function endpoints(daemon: StartupDaemon): string[] {
   return Object.keys(daemon.networks.get(START_NETWORK)?.Containers ?? {}).sort();
 }
+
+const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+const OFFICE_KEYS = ['documentServerUrl', 'jwtSecret', 'internalBaseUrl', 'publicBaseUrl'];
+
+function keyNames(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(keyNames);
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([key, nested]) => [key, ...keyNames(nested)]);
+}
+
+/** The written overlay's ONLYOFFICE rows and every Office configuration key anywhere in it. */
+async function officeEvidence(f: Awaited<ReturnType<typeof fixture>>) {
+  const parsed: unknown = JSON.parse((await startupEvidence(f.database, f.input)).bytes.toString());
+  ok(Array.isArray(parsed));
+  return {
+    rows: parsed.filter(
+      (row: unknown) =>
+        typeof row === 'object' && row !== null && 'id' in row && row.id === ONLYOFFICE,
+    ),
+    keys: keyNames(parsed).filter((key) => OFFICE_KEYS.includes(key)),
+  };
+}
+
+const UNAVAILABLE_OFFICE = { rows: [{ id: ONLYOFFICE, disabled: true }], keys: [] };
 
 function startedAt(daemon: StartupDaemon): number {
   return daemon.requests.findIndex(
@@ -104,6 +132,27 @@ it('a bundled network start records the resolved Document Server before connecti
   expect(f.daemon.containers.get(DS_ID)?.NetworkSettings.Networks).toHaveProperty('bridge');
 });
 
+it('a bundled network start writes the base+4 Document Server and the deployment JWT into the overlay', async () => {
+  const f = await fixture();
+
+  await f.owner.startUserContainer(f.input);
+
+  expect(await officeEvidence(f)).toEqual({
+    rows: [
+      {
+        id: ONLYOFFICE,
+        config: {
+          documentServerUrl: 'http://172.30.0.4',
+          jwtSecret: f.input.config.documentServer.jwtSecret,
+          internalBaseUrl: 'http://172.30.0.2:3080',
+          publicBaseUrl: f.input.config.publicUrl,
+        },
+      },
+    ],
+    keys: OFFICE_KEYS,
+  });
+});
+
 it.each([
   ['external', 'external'],
   ['unconfigured', 'unconfigured'],
@@ -130,6 +179,24 @@ it.each([
   expect(resolutions(f.daemon)).toEqual([]);
   expect(connects(f.daemon).filter((body) => JSON.stringify(body).includes(DS_ID))).toEqual([]);
   expect(endpoints(f.daemon)).not.toContain(DS_ID);
+  expect(await officeEvidence(f)).toEqual(
+    kind === 'external'
+      ? {
+          rows: [
+            {
+              id: ONLYOFFICE,
+              config: {
+                documentServerUrl: 'http://office.example',
+                jwtSecret: 'fixture-external-jwt',
+                internalBaseUrl: 'http://172.30.0.2:3080',
+                publicBaseUrl: f.input.config.publicUrl,
+              },
+            },
+          ],
+          keys: OFFICE_KEYS,
+        }
+      : UNAVAILABLE_OFFICE,
+  );
 });
 
 it('a missing Document Server name records absent and the instance starts without it', async () => {
@@ -147,6 +214,7 @@ it('a missing Document Server name records absent and the instance starts withou
   });
   expect(connects(f.daemon)).toEqual([PLATFORM_CONNECT]);
   expect(endpoints(f.daemon)).toEqual([START_CONTAINER, DS_PLATFORM].sort());
+  expect(await officeEvidence(f)).toEqual(UNAVAILABLE_OFFICE);
 });
 
 it.each(['stopped', 'restarting', 'renamed', 'replaced', 'malformed', 'vanished'])(
@@ -184,6 +252,7 @@ it.each(['stopped', 'restarting', 'renamed', 'replaced', 'malformed', 'vanished'
     });
     expect(connects(f.daemon)).toEqual([PLATFORM_CONNECT]);
     expect(endpoints(f.daemon)).toEqual([START_CONTAINER, DS_PLATFORM].sort());
+    expect(await officeEvidence(f)).toEqual(UNAVAILABLE_OFFICE);
   },
 );
 
@@ -396,3 +465,140 @@ it('an invalid recorded Document Server identity fails reuse closed', async () =
 
   expect(mutations(f.daemon.requests, from)).toEqual([]);
 });
+
+const CONFIGURED = { containerName: DS_NAME, jwtSecret: 'unit-test-bundled-jwt' };
+const ADMITTED: DocumentServerDecision = { mode: 'bundled', containerId: DS_ID, reason: null };
+const NO_EXTERNAL = { documentServerUrl: '', documentServerJwtSecret: '' };
+const PUBLIC_URL = 'https://team.example:8443';
+
+function external(documentServerUrl: string, documentServerJwtSecret = 'unit-test-external-jwt') {
+  return { documentServerUrl, documentServerJwtSecret };
+}
+
+const EXTERNAL_DECISION: DocumentServerDecision = {
+  mode: 'external',
+  containerId: null,
+  reason: null,
+};
+
+it.each([
+  [
+    'a bundled admitted peer',
+    ADMITTED,
+    NO_EXTERNAL,
+    CONFIGURED,
+    'network',
+    {
+      documentServerUrl: 'http://10.9.8.36',
+      jwtSecret: 'unit-test-bundled-jwt',
+      publicBaseUrl: PUBLIC_URL,
+    },
+  ],
+  [
+    'a bundled absent peer',
+    { mode: 'bundled', containerId: null, reason: 'absent' },
+    NO_EXTERNAL,
+    CONFIGURED,
+    'network',
+    null,
+  ],
+  [
+    'a bundled mismatched peer',
+    { mode: 'bundled', containerId: null, reason: 'identity-mismatch' },
+    NO_EXTERNAL,
+    CONFIGURED,
+    'network',
+    null,
+  ],
+  [
+    'an unconfigured bundled peer',
+    { mode: 'unconfigured', containerId: null, reason: null },
+    NO_EXTERNAL,
+    null,
+    'network',
+    null,
+  ],
+  ['a verified peer without its deployment config', ADMITTED, NO_EXTERNAL, null, 'network', null],
+  [
+    'a bundled published-loopback start',
+    { mode: 'bundled', containerId: null, reason: null },
+    NO_EXTERNAL,
+    CONFIGURED,
+    'published-loopback',
+    null,
+  ],
+  [
+    'a bundled published-loopback start with a verified peer',
+    ADMITTED,
+    NO_EXTERNAL,
+    CONFIGURED,
+    'published-loopback',
+    null,
+  ],
+  [
+    'an external server',
+    EXTERNAL_DECISION,
+    external('http://office.example/ds'),
+    CONFIGURED,
+    'network',
+    {
+      documentServerUrl: 'http://office.example/ds',
+      jwtSecret: 'unit-test-external-jwt',
+      publicBaseUrl: PUBLIC_URL,
+    },
+  ],
+  [
+    'an external server in published-loopback',
+    EXTERNAL_DECISION,
+    external('http://office.example'),
+    CONFIGURED,
+    'published-loopback',
+    null,
+  ],
+  [
+    'an external address with one trailing slash',
+    EXTERNAL_DECISION,
+    external('http://office.example/'),
+    null,
+    'network',
+    {
+      documentServerUrl: 'http://office.example',
+      jwtSecret: 'unit-test-external-jwt',
+      publicBaseUrl: PUBLIC_URL,
+    },
+  ],
+  [
+    'an external address with several trailing slashes',
+    EXTERNAL_DECISION,
+    external('http://office.example/ds///'),
+    null,
+    'network',
+    {
+      documentServerUrl: 'http://office.example/ds',
+      jwtSecret: 'unit-test-external-jwt',
+      publicBaseUrl: PUBLIC_URL,
+    },
+  ],
+  [
+    'an external server with an empty JWT',
+    EXTERNAL_DECISION,
+    external('http://office.example', ''),
+    CONFIGURED,
+    'network',
+    null,
+  ],
+] as const)(
+  'derives the Office overlay input for %s',
+  (_label, decision, settings, configured, upstreamMode, expected) => {
+    const office = officeOverlay(
+      decision,
+      settings,
+      configured,
+      upstreamMode,
+      '10.9.8.36',
+      PUBLIC_URL,
+    );
+
+    expect(office).toEqual(expected);
+  },
+);

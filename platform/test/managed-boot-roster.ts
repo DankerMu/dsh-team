@@ -78,6 +78,7 @@ export const MANAGED_BOOT_ROSTER = [
   '@dsh-team/zh-locale',
   // The image-default-enabled sidebar's client half (dsh.client in its released manifest).
   'dsh-better-sidebar',
-  // The image-default-enabled ONLYOFFICE plugin's client half (dsh.client in its released manifest).
-  'dsh-sidebar-onlyoffice',
+  // No 'dsh-sidebar-onlyoffice': its client half appears only when Office is available. These
+  // instances run no Document Server, so the overlay disables it and 0.2.1
+  // dsh-client-modules lib/index.js:855 skips `entry.disabled` entries when building the client table.
 ] as const;

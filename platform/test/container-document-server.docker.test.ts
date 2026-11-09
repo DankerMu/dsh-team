@@ -21,15 +21,18 @@ import {
   containerNetworks,
   dockerStep,
   documentServerConfig,
+  expectAdmittedOffice,
   expectDocumentServerAtLayout,
+  expectUnavailableOffice,
   gatewayStatus,
-  overlayKeys,
   userNetworkId,
 } from './container-document-server-docker-fixture.ts';
 import { NULL_RECORD, documentServerRecord } from './container-document-server-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 const AUTHORITY = 'document-server.example:8443';
+// The public origin `dockerStartInput` derives from the authority.
+const PUBLIC_URL = `https://${AUTHORITY}`;
 
 interface Context {
   readonly lifecycle: UserImageLifecycle;
@@ -117,6 +120,7 @@ async function attachAndRetire(context: Context): Promise<Record<string, unknown
     );
     expectDocumentServerAtLayout(lifecycle, standIn, userId, network);
     expectPlatformAtLayout(lifecycle, platformId, userId, network);
+    expectAdmittedOffice(lifecycle, userId, network, PUBLIC_URL, configured.jwtSecret);
     expect(documentServerRecord(database, userId)).toEqual({
       document_server_mode: 'bundled',
       document_server_container_id: standIn,
@@ -199,9 +203,7 @@ async function unavailable(context: Context): Promise<Record<string, unknown>> {
     const network = userNetworkId(lifecycle, started.containerId, userId);
     expect(bridgeEndpoints(lifecycle, network)).toEqual([started.containerId, platformId].sort());
     expect(gatewayStatus(lifecycle, database, platformId, userId, AUTHORITY)).toBe(200);
-    expect(
-      overlayKeys(lifecycle, userId).filter((key) => /onlyoffice|documentserver/i.test(key)),
-    ).toEqual([]);
+    expectUnavailableOffice(lifecycle, userId);
     expect(documentServerRecord(database, userId)).toEqual({
       document_server_mode: 'bundled',
       document_server_container_id: null,

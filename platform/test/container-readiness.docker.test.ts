@@ -133,6 +133,7 @@ async function readinessScenario(
           seccompProfilePath: lifecycle.seccomp,
           managedConfigDir: lifecycle.overlayDirectory,
           authority,
+          publicUrl: `https://${authority}`,
           subnetPool: '172.30.0.0/16',
           port: 8080,
           documentServer: null,

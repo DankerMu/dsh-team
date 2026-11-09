@@ -10,7 +10,7 @@ export const DS_ID = '9'.repeat(64);
 export const DS_NAME = 'dsh-team-documentserver';
 export const DS_PLATFORM = 'f'.repeat(64);
 export const DS_PLATFORM_NAME = 'dsh-team-test-platform';
-// Fixture-only configuration; the orchestrator never reads the JWT.
+// Fixture-only configuration; the JWT reaches only the written overlay of an admitted start.
 const DOCUMENT_SERVER = { containerName: DS_NAME, jwtSecret: 'fixture-not-a-jwt-secret' };
 
 /** A network-mode owner with a running platform and a running bundled Document Server stand-in. */

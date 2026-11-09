@@ -1,6 +1,7 @@
 import type { PlatformConfig } from '../config.ts';
 import { documentServerMode } from '../db/index.ts';
 import type { Settings } from '../db/index.ts';
+import type { ManagedOffice } from '../managed-config/index.ts';
 import { DockerHttpError } from './client.ts';
 import type { DockerClient } from './client.ts';
 import { containerId, object } from './identity.ts';
@@ -86,6 +87,40 @@ export async function documentServerDecision(
   )
     return { mode: 'bundled', containerId: null, reason: 'identity-mismatch' };
   return { mode: 'bundled', containerId: id, reason: null };
+}
+
+/**
+ * This start's ONLYOFFICE overlay input: a bundled peer this start verified for base+4, or a
+ * complete external server; anything else, published-loopback included, leaves Office unavailable.
+ */
+export function officeOverlay(
+  decision: DocumentServerDecision,
+  settings: Pick<Settings, 'documentServerUrl' | 'documentServerJwtSecret'>,
+  configured: PlatformConfig['documentServer'],
+  upstreamMode: PlatformConfig['upstreamMode'],
+  documentServerAddress: string,
+  publicUrl: string,
+): ManagedOffice | null {
+  // No instance bridge: neither server is reachable at the addresses the plugin would be given.
+  if (upstreamMode !== 'network') return null;
+  if (decision.mode === 'external') {
+    const { documentServerUrl, documentServerJwtSecret: jwtSecret } = settings;
+    if (jwtSecret === '') return null;
+    // Saved addresses are `isRagflowBaseUrl`-checked, so stripping leaves the origin at least.
+    let end = documentServerUrl.length;
+    while (end > 0 && documentServerUrl[end - 1] === '/') end -= 1;
+    return {
+      documentServerUrl: documentServerUrl.slice(0, end),
+      jwtSecret,
+      publicBaseUrl: publicUrl,
+    };
+  }
+  if (decision.containerId === null || configured === null) return null;
+  return {
+    documentServerUrl: `http://${documentServerAddress}`,
+    jwtSecret: configured.jwtSecret,
+    publicBaseUrl: publicUrl,
+  };
 }
 
 /** The recorded peer, named by its own document; a gone container is acceptable only off the bridge. */

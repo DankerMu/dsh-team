@@ -610,6 +610,7 @@ function startupInput(
       seccompProfilePath,
       managedConfigDir: join(root, 'managed'),
       authority: 'team.example:8443',
+      publicUrl: 'https://team.example:8443',
       subnetPool,
       port: 8080,
       documentServer: null,

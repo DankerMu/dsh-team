@@ -65,6 +65,15 @@ export interface ManagedConfigInput {
    * null in published-loopback mode, where no platform address exists inside the instance.
    */
   readonly platformPort: number | null;
+  /** This start's ONLYOFFICE configuration; null when Office is unavailable to the instance. */
+  readonly office: ManagedOffice | null;
+}
+
+/** The Document Server peer, its JWT and the platform's public origin, all nonempty. */
+export interface ManagedOffice {
+  readonly documentServerUrl: string;
+  readonly jwtSecret: string;
+  readonly publicBaseUrl: string;
 }
 
 interface ManagedBundle {
@@ -94,6 +103,8 @@ const PRESET_NAME = '@deepseek-ai/dsh-agent-preset';
 const PRESET_REGISTRY = 'agent-preset-registry';
 // The released default selection: dsh-web-app 0.2.1-rc.2 cordis.patch.yml:586-589.
 const RELEASE_DEFAULT_PRESET = 'standard';
+// The ONLYOFFICE sidebar plugin's catalog id, which is also its single inserted row id.
+const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
 
 function filterPlugins(plugins: readonly PluginEntry[]): PluginEntry[] {
   const filtered: PluginEntry[] = [];
@@ -184,6 +195,9 @@ function catalogRows(input: ManagedConfigInput): { rows: Json[]; disabled: Set<s
     }
     if (entry.state === 'employee') continue;
     const bundle = forcedBundle(entry, input.bundles);
+    // Validated first, so a forced state starts or fails regardless of Office availability; the
+    // single disabled row below replaces this plugin's rows and leaves no conflicting state.
+    if (entry.id === ONLYOFFICE && input.office === null) continue;
     if (entry.state === 'forced-on') {
       rows.push(...forcedOnRows(bundle.rows, bundle.present, input.webToolsEnabled));
       continue;
@@ -265,6 +279,27 @@ function isPlatformPort(value: unknown): value is number | null {
   );
 }
 
+function isOffice(value: unknown): value is ManagedOffice | null {
+  if (value === null) return true;
+  if (typeof value !== 'object') return false;
+  // Untyped fixture callers: read each member as unknown before trusting it.
+  const office = value as Partial<Record<keyof ManagedOffice, unknown>>;
+  return [office.documentServerUrl, office.jwtSecret, office.publicBaseUrl].every(
+    (field) => typeof field === 'string' && field !== '',
+  );
+}
+
+/** ONLYOFFICE's whole config when Office is available, else its single disabled row. */
+function officeRows(instanceAddress: string, office: ManagedOffice | null): Json[] {
+  if (office === null) return [{ id: ONLYOFFICE, disabled: true }];
+  const { documentServerUrl, jwtSecret, publicBaseUrl } = office;
+  // A row's config is whole: the plugin's other keys, legacy ones included, keep their defaults.
+  const internalBaseUrl = `http://${instanceAddress}:3080`;
+  return [
+    { id: ONLYOFFICE, config: { documentServerUrl, jwtSecret, internalBaseUrl, publicBaseUrl } },
+  ];
+}
+
 /** The knowledge-base plugin's whole config: only the platform's +3 address, never RAGFlow's. */
 function knowledgeBaseRows(instanceAddress: string, platformPort: number | null): Json[] {
   if (platformPort === null) return [];
@@ -301,6 +336,10 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
   // Untyped fixture callers can omit the port; never default it to either upstream mode.
   if (!isPlatformPort(input.platformPort)) {
     throw new TypeError('Managed overlay platform port must be null or an integer 1..65535');
+  }
+  // Untyped fixture callers can omit it; the message never names a value, the JWT included.
+  if (!isOffice(input.office)) {
+    throw new TypeError('Managed overlay Office config must be null or complete');
   }
   if (!hasCompleteModelSettings(input.modelSettings)) {
     return { outcome: 'unconfigured' };
@@ -346,6 +385,7 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
       // Managed policy is last: profile/home/locale edits cannot replace it.
       ...catalog.rows,
       // After the catalog rows, so a forced-on whole patch has already inserted the target.
+      ...officeRows(input.instanceAddress, input.office),
       ...knowledgeBaseRows(input.instanceAddress, input.platformPort),
       // Neither upstream row has a config; a row's config is whole, so this is all of it.
       { id: 'plugin-manager', config: { registry, fallbackRegistries } },
