@@ -5496,8 +5496,14 @@ Must preserve：
   - 自身 pid → 立即返回；
   - 非 `docker-isolated-network` 的指针 → 立即返回；
   - `requireStoppedDriver` 原有用例照常通过。
-- 包装器信号处理：在 `platform/test/verify-browser-runtime.integration.test.ts` 里沿用 stand-in vitest 的 `--help` 路径，连发两个 SIGTERM，断言包装器以 143 结束，且没有被第二个信号以默认处置杀死（退出不是由 signal 造成的）。
-- 接线证明的落点：包装器级的「`cleanup()` 在 driver 结算之后才读目录」需要 `prepare()`（包括 `requireLocalRuntime`、`docker info`、镜像构建），Docker-free 测试做不到，所以由 VPS 上的 `browser-wrapper.docker.test.ts` 加 exact-head `test:docker` 兜底。这与 #579 验收里「Docker-free 接线测试」的字面要求有偏差，在这里明确记录：Docker-free 的证明只覆盖 helper 和信号处理，包装器的调用顺序靠代码评审和 VPS 运行。
+- 包装器信号处理：`platform/test/vitest-stand-in-fixture.ts` 新增一个「收到信号后不立即退出」的模式，现有模式的行为保持不变。该模式下，stand-in 写出 `signal.json` 后要等测试写出 release 文件才退出。测试沿用 `--help` 路径，按下面的时序跑：
+  1. 发出第一个 SIGTERM；
+  2. 看到 `signal.json` 之后、写 release 之前，再发第二个 SIGTERM，断言此时包装器仍然存活；
+  3. 写 release，断言包装器 exit code 为 143，且 `signal === null`。
+
+  先红后绿的预期：`process.once` 版本下，包装器会被第二个信号以默认处置杀死（`signal === 'SIGTERM'`），测试变红。两次的输出都写进 PR。
+
+- 接线证明的落点：包装器级的「`cleanup()` 在 driver 结算之后才读目录」需要 `prepare()`（包括 `requireLocalRuntime`、`docker info`、镜像构建），Docker-free 测试做不到，所以 VPS 上的 `browser-wrapper.docker.test.ts` 加 exact-head `test:docker` 只能作为无回归证据：正常运行时指针已经是 `stopped`，等待会立即返回。这与 #579 验收里「Docker-free 接线测试」的字面要求有偏差，在这里明确记录：Docker-free 的证明只覆盖 helper 和信号处理，包装器的调用顺序靠代码评审和 VPS 运行。
 - VPS exact-head `test:docker` 和 `test:deploy` 都要求 cleanup confirmed；另外在本机 exact-head 跑 `pnpm test:stack`。
 
 Suggested fixture level: compact - 一个共享判定函数、一个有界等待、信号处理从 once 改 on；不改清理规则，不动 custody 和进程组
