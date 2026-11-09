@@ -282,15 +282,42 @@ async function rescueMissingReceipt(path, expectedNonce) {
   }
 }
 
-async function requireStoppedDriver(receipt) {
+/** The single relay-ownership judgment; observation failures propagate to the caller. */
+async function driverMayOwnRelays(receipt) {
   if (
     receipt.kind !== 'docker-isolated-network' ||
     receipt.state === 'stopped' ||
     receipt.driver?.pid === process.pid
   )
-    return;
-  if ((await liveProcessBirth(receipt.driver.pid)) === receipt.driver.birth)
+    return false;
+  return (await liveProcessBirth(receipt.driver.pid)) === receipt.driver.birth;
+}
+
+async function requireStoppedDriver(receipt) {
+  if (await driverMayOwnRelays(receipt))
     throw new Error('browser driver still owns relays; stop driver before external rescue');
+}
+
+async function registeredDriverMayOwnRelays(directory) {
+  for (const name of await readdir(directory)) {
+    if (!name.endsWith('.launch.json')) continue;
+    try {
+      if (await driverMayOwnRelays(await readReceipt(join(directory, name)))) return true;
+    } catch {
+      // Unreadable registrations and unobservable drivers stay with rescue, which fails closed.
+    }
+  }
+  return false;
+}
+
+/** Delays external rescue until registered drivers settle; `settled` never grants cleanup. */
+export async function awaitRegisteredDrivers(directory, limitMs) {
+  const deadline = performance.now() + limitMs;
+  while (await registeredDriverMayOwnRelays(directory)) {
+    if (performance.now() >= deadline) return { settled: false };
+    await new Promise((done) => setTimeout(done, 100));
+  }
+  return { settled: true };
 }
 
 async function recordStoppedReceipt(path, receipt) {

@@ -5,7 +5,13 @@ import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, writeFile } from
 import { arch, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromeDigest, readReceipt, rescueChrome, writeReceipt } from './probe-browser-runtime.mjs';
+import {
+  awaitRegisteredDrivers,
+  chromeDigest,
+  readReceipt,
+  rescueChrome,
+  writeReceipt,
+} from './probe-browser-runtime.mjs';
 import { connectPage, startChrome } from './probe-dsh-api-cdp.mjs';
 import { qualifyBrowserConfinement } from './probe-browser-confinement.mjs';
 import { qualificationDiagnostic, qualificationError } from './probe-browser-qualification.mjs';
@@ -287,7 +293,8 @@ for (const [signal, code] of [
   ['SIGINT', 130],
   ['SIGTERM', 143],
 ]) {
-  process.once(signal, () => {
+  // A repeated signal must not end the driver wait or cleanup with the default disposition.
+  process.on(signal, () => {
     if (!interrupted) {
       interrupted = true;
       status = code;
@@ -325,6 +332,8 @@ function verifiedImageIdentity() {
 
 async function cleanup() {
   if (!directory) return;
+  // Interrupted drivers get a bounded chance to stop their own relays before external rescue.
+  await awaitRegisteredDrivers(directory, 20_000);
   let complete = true;
   for (const name of await readdir(directory)) {
     if (!name.endsWith('.launch.json')) continue;

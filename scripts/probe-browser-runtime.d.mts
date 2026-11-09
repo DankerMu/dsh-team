@@ -42,6 +42,10 @@ export declare function isolatedBrowserRuntime(
   runId?: string,
 ): Extract<BrowserRuntime, { kind: 'docker-isolated-network' }>;
 export declare function rescueChrome(receiptFile: string, expectedNonce?: string): Promise<void>;
+export declare function awaitRegisteredDrivers(
+  directory: string,
+  limitMs: number,
+): Promise<{ settled: boolean }>;
 export declare function processBirth(pid: number): Promise<string>;
 export declare function browserDocker(args: readonly string[], ms?: number): string;
 export declare function chromeDigest(path: string): Promise<string>;

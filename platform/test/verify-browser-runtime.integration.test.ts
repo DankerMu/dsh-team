@@ -16,13 +16,24 @@ interface WrapperRun {
   readonly pid: number | undefined;
   readonly kill: (signal: NodeJS.Signals) => boolean;
   /** Settles on the wrapper's `exit`; `standInExited` is read synchronously inside that event. */
-  readonly exited: Promise<{ code: number | null; standInExited: boolean; output: string }>;
+  readonly exited: Promise<WrapperExit>;
 }
 
-async function startWrapper(args: string[], hold: boolean): Promise<WrapperRun> {
+interface WrapperExit {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly standInExited: boolean;
+  readonly output: string;
+}
+
+async function startWrapper(args: string[], hold: boolean, release?: string): Promise<WrapperRun> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-verify-browser-runtime-'));
   const standIn = join(root, 'vitest-stand-in.cjs');
-  await writeFile(standIn, vitestStandIn(root, hold), { mode: 0o600 });
+  await writeFile(
+    standIn,
+    vitestStandIn(root, hold, release === undefined ? undefined : join(root, release)),
+    { mode: 0o600 },
+  );
   const preload = join(root, 'preload.mjs');
   await writeFile(
     preload,
@@ -41,14 +52,12 @@ syncBuiltinESMExports();
   let output = '';
   child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
   child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
-  const exited = new Promise<{ code: number | null; standInExited: boolean; output: string }>(
-    (resolve, reject) => {
-      child.once('error', reject);
-      child.once('exit', (code) => {
-        resolve({ code, standInExited: existsSync(join(root, 'exit.json')), output });
-      });
-    },
-  );
+  const exited = new Promise<WrapperExit>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      resolve({ code, signal, standInExited: existsSync(join(root, 'exit.json')), output });
+    });
+  });
   return { root, pid: child.pid, kill: (signal) => child.kill(signal), exited };
 }
 
@@ -68,9 +77,11 @@ async function marker(run: WrapperRun, name: string): Promise<Record<string, unk
         join(run.root, name),
         AbortSignal.any([cancel.signal, AbortSignal.timeout(10_000)]),
       ),
-      run.exited.then(({ code, output }) => {
+      run.exited.then(({ code, signal, output }) => {
         if (existsSync(join(run.root, name))) return;
-        throw new Error(`Wrapper exited before ${name}: code=${String(code)}; output=${output}`);
+        throw new Error(
+          `Wrapper exited before ${name}: code=${String(code)}; signal=${String(signal)}; output=${output}`,
+        );
       }),
     ]);
     return JSON.parse(await readFile(join(run.root, name), 'utf8')) as Record<string, unknown>;
@@ -130,3 +141,29 @@ it.each([
     }
   },
 );
+
+it('keeps one idempotent handler for a second SIGTERM while vitest is still settling', async () => {
+  const run = await startWrapper(['docker', '--help'], true, 'release');
+  try {
+    await marker(run, 'started.json');
+    expect(run.kill('SIGTERM')).toBe(true);
+    expect(await marker(run, 'signal.json')).toMatchObject({ signal: 'SIGTERM' });
+    expect(run.kill('SIGTERM')).toBe(true);
+    // Only a live wrapper handler can forward the second signal to the held stand-in.
+    const second = await Promise.race([
+      run.exited.then(({ code, signal }) => ({ code, signal })),
+      marker(run, 'repeat.json').then(() => 'wrapper alive'),
+    ]);
+    expect(second).toBe('wrapper alive');
+    await writeFile(join(run.root, 'release'), '', { mode: 0o600 });
+    const { code, signal, standInExited } = await run.exited;
+    expect({ code, signal, standInExited }).toEqual({
+      code: 143,
+      signal: null,
+      standInExited: true,
+    });
+  } finally {
+    await killStandIn(run.root);
+    await rm(run.root, { recursive: true, force: true });
+  }
+}, 20_000);
