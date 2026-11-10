@@ -90,7 +90,8 @@ docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
   --build-context "office-agents=$(pwd)/plugins/office-agents" \
   --build-context "platform-nav=$(pwd)/plugins/platform-nav" \
-  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" images/dsh-user
+  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" \
+  --build-context "office-hints=$(pwd)/plugins/office-hints" images/dsh-user
 ```
 
 The image copies `package.json`, `index.js`, `client.js` and `cordis.patch.yml` to root-owned mode `0444` files in the mode `0555` directory `/opt/dsh-team/knowledge-base/`, outside the employee-writable `/data/home`. The catalog lists it as the manageable item `knowledge-base` (「知识库」) with `imageDefaultEnabled: true`, so `catalog-check.mjs register` copies it into the Web profile as the installed dependency `file:/opt/dsh-team/knowledge-base` and appends it to `dsh.profile.bundles` in catalog order, before the office bundle. The build fails unless the installed DSH satisfies `engines.dsh` and the profile copy equals the canonical copy byte for byte. Its enablement follows only the catalog's three states: `employee` (the default) leaves the employee's plugin-page switch in charge, and the overlay's catalog rows force `forced-on`/`forced-off` (#407).

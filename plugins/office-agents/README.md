@@ -79,7 +79,8 @@ docker build -f images/dsh-user/Dockerfile -t dsh-team-user \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
   --build-context "office-agents=$(pwd)/plugins/office-agents" \
   --build-context "platform-nav=$(pwd)/plugins/platform-nav" \
-  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" images/dsh-user
+  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" \
+  --build-context "office-hints=$(pwd)/plugins/office-hints" images/dsh-user
 ```
 
 Verification on giap-vps:
