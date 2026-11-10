@@ -3045,7 +3045,7 @@ not selected：
 - Concurrency：无。
 - 运行时资源：沿用夹具。
 
-Governing invariant：用户镜像中 `dsh-better-sidebar` 恰为 0.28.0，且未打补丁。它只交付到 `/opt/dsh-team/dsh-better-sidebar`，并按目录项登记一份 profile 副本。镜像默认启用，按可管理项参与三态。docx 由 better-sidebar 交还 DSH 自带的预览显示。
+Governing invariant：用户镜像中 `dsh-better-sidebar` 恰为 0.28.0，且未打补丁。它只交付到 `/opt/dsh-team/dsh-better-sidebar`，并按目录项登记一份 profile 副本。镜像默认启用，按可管理项参与三态。docx 由 better-sidebar 交还 DSH 自带的预览显示。（18.3 之后：代码文件带第 43 节的条件接手补丁，见该节。）
 
 Sibling surfaces：
 
@@ -3649,7 +3649,7 @@ Evidence (#556):
 
 - [ ] 18.1 用户镜像安装 `dsh-sidebar-onlyoffice@0.2.0`，作为可管理项加入 `catalog.json`，并用构建期补丁做两件事：文件令牌密钥改为读取 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，缺失或为空时拒绝签发和校验；文档 key 改为 `HMAC(文件令牌密钥, 原 key 输入)`，回调和编辑器打开只接受本实例密钥派生的 key。补丁钉住版本和输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Docker 用例在不注入该环境变量时直接请求 `file` 路由，任何令牌（包括公开常量签的）都被拒绝；注入后公开常量签的令牌和按原算法算出的 key 都被拒绝。
 - [ ] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
-- [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。
+- [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
 - [ ] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文，无 Session 打开 DOCX 时看到中文提示。
 - [ ] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
   - DOCX、XLSX、PPTX 编辑保存后写回原文件，Agent 读到最新内容；

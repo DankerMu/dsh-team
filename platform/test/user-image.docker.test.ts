@@ -174,8 +174,9 @@ interface SidebarFacts {
 }
 
 /**
- * The release's code unpatched (its manifest only gains `bundleDependencies`), nested without DSH
- * or React, only at its catalog location.
+ * The release with only the reviewed Office handoff patch of its two client bundles (judged by the
+ * better-sidebar patch case below) and a manifest that only gains `bundleDependencies`, nested
+ * without DSH or React, only at its catalog location.
  */
 function expectSidebarRelease(observed: Record<string, unknown>): string {
   const sidebar = observed.sidebar as SidebarFacts;
@@ -527,6 +528,72 @@ process.stdout.write(JSON.stringify({
     undefined,
     (lifecycle) =>
       Promise.resolve(execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-onlyoffice`, script)),
+  );
+});
+
+// dsh-better-sidebar@0.28.0: the reviewed build-time patch of lib/client.js (published
+// 53b70b1b…27e1) and lib/client-registry.js (published 9862678d…da85).
+const SIDEBAR_PATCHED_CLIENT_SHA256 =
+  'dbe401917803729e1d89a6e8cf504c5f0ce46e07a41b424967293317a3e1aeb6';
+const SIDEBAR_PATCHED_REGISTRY_SHA256 =
+  'ac9d9a748b775336747c03c734b1902432eace04efd0f96a01c7f18444559700';
+
+it('delivers dsh-better-sidebar 0.28.0 with the Office handoff patch in its canonical, profile and seed copies, root-owned and unwritable by uid1001, without the patch script', async () => {
+  if (platform() !== 'linux' || arch() !== 'x64') {
+    throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
+  }
+  const script = `
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+const root='/opt/dsh-team/dsh-better-sidebar';
+const sha=(path)=>createHash('sha256').update(readFileSync(path)).digest('hex');
+for(const path of [root,root+'/lib']) {
+  const stat=statSync(path); assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o555);
+}
+const copies={};
+for(const file of ['client.js','client-registry.js']) {
+  const target=root+'/lib/'+file;
+  const stat=statSync(target);
+  assert.equal(stat.uid,0); assert.equal(stat.gid,0); assert.equal(stat.mode & 0o777,0o444);
+  assert.throws(()=>writeFileSync(target,'employee code',{flag:'a'}),{code:'EACCES'});
+  assert.throws(()=>renameSync(target,root+'/lib/employee.js'),{code:'EACCES'});
+  copies[file]={
+    canonical:sha(target),
+    profile:sha('/data/home/profiles/web/node_modules/dsh-better-sidebar/lib/'+file),
+    seed:sha('/opt/dsh-team/profile-seed/web/node_modules/dsh-better-sidebar/lib/'+file),
+  };
+}
+assert.throws(()=>writeFileSync(root+'/lib/employee.js','employee code'),{code:'EACCES'});
+assert.equal(process.getuid(),1001);
+process.stdout.write(JSON.stringify({
+  version:JSON.parse(readFileSync(root+'/package.json','utf8')).version,
+  copies,
+  script:existsSync('/tmp/patch-package.mjs') || readdirSync('/opt/dsh-team').includes('patch-package.mjs'),
+  uid:1001,
+}));
+`;
+  const client = SIDEBAR_PATCHED_CLIENT_SHA256;
+  const registry = SIDEBAR_PATCHED_REGISTRY_SHA256;
+
+  await runUserImage(
+    'managed-policy',
+    (stdout) => {
+      expect(JSON.parse(stdout)).toEqual({
+        version: '0.28.0',
+        copies: {
+          'client.js': { canonical: client, profile: client, seed: client },
+          'client-registry.js': { canonical: registry, profile: registry, seed: registry },
+        },
+        script: false,
+        uid: 1001,
+      });
+    },
+    undefined,
+    (lifecycle) =>
+      Promise.resolve(
+        execScript(lifecycle, `dsh-team-test-${lifecycle.runId}-better-sidebar-patch`, script),
+      ),
   );
 });
 
