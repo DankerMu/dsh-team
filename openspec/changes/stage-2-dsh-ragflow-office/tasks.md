@@ -4935,3 +4935,98 @@ Must preserve：
 - 重置接口的确认、停止、恢复和审计顺序；
 - `volume-upgrade` 原有的重置后断言；
 - 员工侧状态回应仍不含 `last_error`，也不含新码。
+
+## 43. #437：better-sidebar 0.28.0 构建期补丁：有 Office 查看器时才接手 docx、xlsx、pptx（18.3）
+
+依赖：#429（better-sidebar 0.28.0）、#435（覆盖层 ONLYOFFICE）、#432（预览字体）均已合入。由 #437 承载。关键路径：`images/dsh-user/`。
+
+以下事实以 npm 发行包 `dsh-better-sidebar@0.28.0` 和 `dsh-sidebar-onlyoffice@0.2.0` 为准，编排者已下载为只读数据核对：
+
+- better-sidebar 原生界面（`src/client/native/index.ts:65-85`，打包后在 `lib/client.js` 与 `lib/client-registry.js` 的 `:29984-30013`）用 `HOST_OWNED_EXTS` 列出 DSH 自带预览负责的扩展名，其中包括 docx、xlsx、pptx。文件资源类型的 `canOpen`（两个文件 `:30182-30185`，各只出现一次）对这些扩展名返回 false，地址交还 DSH 自带预览：
+  - docx、pptx 由实例内的 `dsh-office-to-pdf` 转成 PDF；
+  - xlsx 由表格视图显示。
+- ONLYOFFICE 0.2.0 的客户端（`src/client/index.ts:80-101`）通过 `betterSidebar.registerFileViewer` 把 `onlyoffice:docx`、`onlyoffice:xlsx`、`onlyoffice:pptx` 三个查看器注册进 **better-sidebar 自己的查看器表**，priority 为 10。所以只有 better-sidebar 先接手地址，ONLYOFFICE 才能打开这三类文件。阶段 0 补丁（`verify/phase0/patch-better-sidebar.py`）就是为此去掉这三个扩展名。
+- 静态去掉三个扩展名有一个问题：Office 不可用时，覆盖层会把 ONLYOFFICE 写为停用（`generate.ts:294`），没有查看器认领这三个扩展名，better-sidebar 只能用 `code` 兜底（`exts: []`），结果是二进制下载面板（见 `native/index.ts:56-62` 注释）。DSH 自带的转换预览和表格视图也随之失效，与 18.3 要求的「Office 不可用时得到只读预览」矛盾。
+- better-sidebar 自带的查看器（`lib/client.js` 中 `builtinViewers` 位于 `:26851` 起）只有 markdown、html、jsonl、code，都不认领这三个扩展名。
+
+用户决定（2026-11-10）：采用条件补丁。docx、xlsx、pptx 只在 better-sidebar 的查看器表里有已启用、且声明了该扩展名的查看器时才由侧栏接手，否则仍交还 DSH 自带预览。
+
+- Office 可用时 ONLYOFFICE 已加载，三类文件由它打开。
+- Office 不可用时保持现状，即只读预览。
+- 平台不需要下发任何标志。
+- 补丁仍钉住版本以及每个文件的输入、输出哈希。
+- `specs/user-image/spec.md` 的「侧栏插件与 Office 扩展名补丁」随本节一起修改。
+- Office 不可用时没有查看器，依据是：ONLYOFFICE 被写为停用后，DSH 跳过停用条目的客户端（`dsh-client-modules/lib/index.js:855`，第 33 节已核实）。能推翻这一点的是现有的 better-sidebar Docker 用例。
+- DSH 加载的是 `lib/client.js`：`package.json` 的 `exports["./client"]` 指向它。`lib/client-registry.js` 带 `dsh-external/dsh-better-sidebar` 模块 id，是另一种交付构建，两份的 `canOpen` 区段逐字节相同。两份都打补丁，避免交付里留下一份未补的变体。
+
+- [ ] 43.1 better-sidebar 条件补丁：推广 `patch-package.mjs` 支持多文件，加入 better-sidebar 钉定项，并增加镜像步骤和测试。
+  - **补丁内容**：在 `lib/client.js`、`lib/client-registry.js` 中，各把下面这行替换一次（原文在每个文件中恰好出现一次）：
+    - 原文：`return file !== void 0 && !hostOwnedPath(file.path);`
+    - 替换为：`return file !== void 0 && (!hostOwnedPath(file.path) || ["docx", "xlsx", "pptx"].some((ext) => file.path.toLowerCase().endsWith("." + ext) && service.getFileViewers().some((viewer) => viewer.exts?.includes(ext) === true && service.isViewerEnabled(viewer.id))));`
+
+    `service` 来自 `registerNativeSurface` 解构出的 `deps`（两个文件 `:30121`），在 `canOpen` 闭包的作用域内。`getFileViewers` 和 `isViewerEnabled` 是 better-sidebar 服务的公开方法（`src/client/service.ts:621,673`）。`HOST_OWNED_EXTS` 与 `hostOwnedPath` 不改，其他扩展名（doc、xls、ppt、pdf、图片等）的去向不变。员工在侧栏设置里停用 ONLYOFFICE 的某个查看器后，对应扩展名回到 DSH 自带预览。
+
+  - **钉定值**：
+    - 版本：`0.28.0`
+    - 目录：`/opt/dsh-team/dsh-better-sidebar`
+    - 输入 SHA-256：
+      - `lib/client.js`：`53b70b1b5317205247c074b8121e1ececec1df2dc3771b0641f0a66b8fd127e1`
+      - `lib/client-registry.js`：`9862678d65831b031a72b54e560f5ad3dd94f00403429072a4c0a75c52d0da85`
+    - 输出 SHA-256：由实现者对发行包应用上面的替换后计算，写入钉定项，并在 PR 中贴出两个值供评审。实现者从 npm 下载发行 tarball，作为不可信数据解包，不执行包内任何代码。
+  - **`images/dsh-user/patch-package.mjs` 推广为多目标**（不新建脚本）：
+    - 钉定项把 `target`、`inputSha256`、`outputSha256` 改为 `targets: [{ target, inputSha256, outputSha256 }]`，`replacements` 对每个目标分别应用。onlyoffice 改写为只有一个目标，钉定值逐字不变。
+    - 检查顺序：
+      1. 发现副本：在 `/opt/dsh-team` 和全局 `node_modules` 中恰好一份真实副本，位于期望目录，版本相符；
+      2. 对每个目标：读取、比对输入哈希、替换（每段原文恰好出现一次）、比对输出哈希；
+      3. 全部目标都通过之后才开始写。
+    - 任一检查失败时，不写任何文件，并报出第一个失败项（已有的拒绝代码不变）。
+    - 写入：逐个目标按原有的同目录临时文件加 rename 写入，保留属主和权限。若第 k 个目标写入失败，用内存中的原文把已写入的前 k−1 个目标写回，然后报 `write`。即使写回本身失败，也报 `write`，镜像构建随之失败，该层不会留下来。
+    - `PINS` 新增 `'better-sidebar'`，`package` 和 `directory` 都是 `dsh-better-sidebar`。
+  - **Dockerfile**：紧接在 onlyoffice 补丁步骤（`Dockerfile:67-68`）之后，也就是两个版本检查之后、`COPY catalog.json`（`:95`）和 `catalog-check bundle`（`:104`）之前，加一步：
+    ```
+    RUN --mount=type=bind,source=patch-package.mjs,target=/tmp/patch-package.mjs \
+      node /tmp/patch-package.mjs better-sidebar /opt/dsh-team "$(npm root -g)"
+    ```
+    `:64-66` 的注释改写为同时说明两个补丁。规范副本保持归 root、`0444` 不变（rename 保留原文件的属主和权限）。之后 register、profile-seed 复制到的都是补过的文件。
+  - **测试**：
+    - `images/dsh-user/patch-package.test.mjs`：见下面三项。
+    - **钉定表测试**（仿照 onlyoffice 的 `:244` 用例）：`PINS['better-sidebar']` 的版本为 `0.28.0`，目录正确；恰好两个目标，输入哈希为上面两个值；恰好一条替换，原文是锚点；两个输出哈希都是 64 位十六进制。
+    - **替换表达式的行为测试**（同一文件）：
+      - 函数体为 `const file = parseFileAddress(address);\n` 加上从 `PINS['better-sidebar'].replacements[0][1]` 读出的替换文本，不在测试里重抄一遍。
+      - 不用 `new Function`（CI 跑 Semgrep `p/default --error`，仓库里没有先例）。把 `export const make = (parseFileAddress, hostOwnedPath, service) => (address) => { <函数体> };` 写进测试临时目录下的 `.mjs` 文件，再用 `import()` 加载。
+      - 用假的 `parseFileAddress`、`hostOwnedPath`（按发行版规则判断 docx、xlsx、pptx、doc、pdf）和 `service` 断言：
+        - 没有登记查看器时，`.docx`、`.XLSX`、`.pptx` 返回 false；
+        - 登记了一个声明 `docx` 的已启用查看器时，`.docx` 和 `.DOCX` 返回 true，`.xlsx` 仍为 false；
+        - 该查看器被停用后，`.docx` 返回 false；
+        - `.doc`、`.pdf` 始终为 false，`.md` 始终为 true。
+      - 不执行发行包里的代码。
+    - 新增的拒绝用例只覆盖多目标特有的行为，不为 better-sidebar 重复一整套共享代码的拒绝矩阵：第二个目标的输入哈希、锚点或输出哈希不符时，两个文件都不写；第二个目标写入失败时，第一个目标被写回原文。onlyoffice 的既有用例改用 `targets` 形式后全部通过。
+    - `patchCheck` 拆成发现副本、逐目标检查、写入与写回几个辅助函数，控制在复杂度门禁内。
+    - `platform/test/user-image.docker.test.ts`：仿照 onlyoffice 用例（`:464-502`），断言规范副本、profile 副本和 profile-seed 副本中两个文件的 sha256 都等于钉定的输出哈希；规范副本归 root、uid1001 不可写；镜像中没有补丁脚本（`/tmp/patch-package.mjs` 的断言复用）。`:184-187` 附近的版本和目录断言不变。
+    - `platform/test/better-sidebar.docker.test.ts`：VPS 的 Docker 用例里没有 Document Server，覆盖层把 ONLYOFFICE 写为停用，所以现有的「从文件区把 docx 交给 DSH 自带 Office 预览」断言原样成立，就是「Office 不可用时得到只读预览」的端到端证据，用例本身不改。`better-sidebar-browser-fixture.mjs:44` 的注释改为「没有登记 Office 查看器时 better-sidebar 不接手 docx」。
+    - Office 可用时由 ONLYOFFICE 打开 docx，这一点的端到端证据归 18.5（#440，本机 ONLYOFFICE 端到端）。本任务只提供上面的表达式行为测试和镜像哈希证据。
+  - **文档**（编排者在同一 PR 中修改）：
+    - `specs/user-image/spec.md` 的「侧栏插件与 Office 扩展名补丁」；
+    - 本文件 17.1 的 Governing invariant「未打补丁」一句（`:3048`），注明 18.3 之后改为补丁版；
+    - `docs/DEVELOPMENT_NOTES.md` 第 6 条及 AGENTS.md 的对应摘要：只改「补丁去掉 HOST_OWNED_EXTS」的描述，规则本身（版本不符时构建失败）保留；
+    - 仍声称「未打补丁」的现行描述：`images/dsh-user/Dockerfile:24-25` 注释、`platform/test/README.md:17`（「code is the unpatched npm release 0.28.0」，并补上 better-sidebar 补丁的说明）、`platform/test/user-image.docker.test.ts:176-178` 中 `expectSidebarRelease` 上方的注释（测试代码由实现者修改）；
+    - 静态删除的旧说法：`design.md:284`（决定 8）和本文件 18.3 任务原文（`:3652`），两处都加一句指向第 43 节。
+
+Suggested fixture level: expanded（关键路径 `images/dsh-user/`，第三方发行包的构建期代码补丁）
+Minimal mergeable slice: atomic：补丁模块推广、钉定项、Dockerfile 步骤和镜像断言必须一起合入。预计接近或超过 400 行，按需加 `diff-limit-exempt`。
+Risk packs (43.1): selected - Release（镜像内第三方代码改动，以哈希钉住）、Security（补丁只放宽 better-sidebar 对三种扩展名的认领条件，不碰 ONLYOFFICE 令牌补丁，不改文件路由）、Legacy compatibility（Office 不可用时 docx/xlsx/pptx 的去向不变，以现有 Docker 用例证明；onlyoffice 钉定值不变）、File IO（多目标原子性与写回）；not selected - Public API、Auth、Schema、Migration、Config（不新增变量）、Concurrency、Resource limits。
+
+人工白盒审查：关键路径 `images/dsh-user/`，PR 写明「人工白盒审查推迟到 Epic #380 完成时进行，本 PR 没有通过人工白盒审查」。
+
+剩余风险：
+
+- `canOpen` 在打开地址时求值。刷新页面恢复已打开的 docx 标签时，如果 ONLYOFFICE 的查看器还没注册，这个标签会交给 DSH 预览；重新打开即可恢复。本任务不处理。
+- 第二个目标写入失败后，如果写回也失败，规范副本会处于半补状态。镜像构建会因此失败，该层不会保留，所以交付的镜像里不会出现这种状态。
+- Office 可用时的端到端证据要等 18.5 才有。
+
+Must preserve：
+
+- onlyoffice 钉定项和它的拒绝代码；
+- better-sidebar 规范副本的属主、权限，以及登记和 seed 流程；
+- `HOST_OWNED_EXTS` 内容不变；
+- 未登记 Office 查看器时，所有扩展名的去向与 0.28.0 发行版相同。
