@@ -360,10 +360,11 @@ describe('settings', () => {
     );
 
     it('derives the mode from the stored address alone', () => {
+      // Whole settings with a JWT: the narrowed parameter still ignores every other field.
+      const jwtOnly: Settings = { ...DEFAULTS, documentServerJwtSecret: 'secret' };
+
       expect(documentServerMode(DEFAULTS)).toBe('bundled');
-      expect(documentServerMode({ ...DEFAULTS, documentServerJwtSecret: 'secret' })).toBe(
-        'bundled',
-      );
+      expect(documentServerMode(jwtOnly)).toBe('bundled');
       expect(
         documentServerMode({ ...DEFAULTS, documentServerUrl: 'https://office.internal/' }),
       ).toBe('external');

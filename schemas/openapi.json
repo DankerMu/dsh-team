@@ -2755,7 +2755,8 @@
                           "name",
                           "category",
                           "imageDefaultEnabled",
-                          "state"
+                          "state",
+                          "unavailableReason"
                         ],
                         "properties": {
                           "id": {
@@ -2783,6 +2784,18 @@
                               "employee",
                               "forced-on",
                               "forced-off"
+                            ]
+                          },
+                          "unavailableReason": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "enum": [
+                              "published-loopback",
+                              "external-jwt-missing",
+                              "bundled-unconfigured",
+                              null
                             ]
                           }
                         }
@@ -3018,7 +3031,8 @@
                           "name",
                           "category",
                           "imageDefaultEnabled",
-                          "state"
+                          "state",
+                          "unavailableReason"
                         ],
                         "properties": {
                           "id": {
@@ -3046,6 +3060,18 @@
                               "employee",
                               "forced-on",
                               "forced-off"
+                            ]
+                          },
+                          "unavailableReason": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "enum": [
+                              "published-loopback",
+                              "external-jwt-missing",
+                              "bundled-unconfigured",
+                              null
                             ]
                           }
                         }

@@ -89,6 +89,24 @@ export async function documentServerDecision(
   return { mode: 'bundled', containerId: id, reason: null };
 }
 
+/** Why Office is unavailable from configuration and saved settings alone; Docker is not consulted. */
+type OfficeUnavailableReason =
+  'published-loopback' | 'external-jwt-missing' | 'bundled-unconfigured';
+
+/** The first static reason Office is unavailable, in the order `officeOverlay` applies them. */
+export function officeUnavailableReason(
+  settings: Pick<Settings, 'documentServerUrl' | 'documentServerJwtSecret'>,
+  bundledConfigured: boolean,
+  upstreamMode: PlatformConfig['upstreamMode'],
+): OfficeUnavailableReason | null {
+  // No instance bridge: neither server is reachable at the addresses the plugin would be given.
+  if (upstreamMode !== 'network') return 'published-loopback';
+  const mode = documentServerMode(settings);
+  if (mode === 'external' && settings.documentServerJwtSecret === '') return 'external-jwt-missing';
+  if (mode === 'bundled' && !bundledConfigured) return 'bundled-unconfigured';
+  return null;
+}
+
 /**
  * This start's ONLYOFFICE overlay input: a bundled peer this start verified for base+4, or a
  * complete external server; anything else, published-loopback included, leaves Office unavailable.
@@ -101,11 +119,9 @@ export function officeOverlay(
   documentServerAddress: string,
   publicUrl: string,
 ): ManagedOffice | null {
-  // No instance bridge: neither server is reachable at the addresses the plugin would be given.
-  if (upstreamMode !== 'network') return null;
-  if (decision.mode === 'external') {
+  if (officeUnavailableReason(settings, configured !== null, upstreamMode) !== null) return null;
+  if (documentServerMode(settings) === 'external') {
     const { documentServerUrl, documentServerJwtSecret: jwtSecret } = settings;
-    if (jwtSecret === '') return null;
     // Saved addresses are `isRagflowBaseUrl`-checked, so stripping leaves the origin at least.
     let end = documentServerUrl.length;
     while (end > 0 && documentServerUrl[end - 1] === '/') end -= 1;

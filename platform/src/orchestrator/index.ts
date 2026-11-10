@@ -14,4 +14,5 @@ export { extractLaunchToken, launchTokenPresent } from './web-launch-token.ts';
 export { lastErrorCode, PROFILE_INCOMPATIBLE_ERROR } from './start-failure.ts';
 export { allocateSubnet, instanceAddressLayout, validateSubnetPool } from './subnet.ts';
 export { createInstanceService } from './instance-service.ts';
+export { officeUnavailableReason } from './document-server.ts';
 export type { InstanceService } from './instance-service.ts';

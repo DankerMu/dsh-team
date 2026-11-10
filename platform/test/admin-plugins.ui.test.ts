@@ -24,6 +24,9 @@ const DEFAULT_REGISTRIES = ['https://registry.npmjs.org/', 'https://registry.npm
 const LOCKED = '强制开（必启，不可修改）';
 const COUNT = '保存时运行中的实例数：0（非实时统计）。';
 const FORMS = ['预装插件', '插件安装源', '联网工具'] as const;
+const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+// withAdminUi runs in network mode without a bundled Document Server deployment pair.
+const OFFICE_REASON = 'Office 不可用：部署没有配置自带 Document Server，ONLYOFFICE 在实例中停用。';
 
 interface ImageCatalogEntry {
   id: string;
@@ -119,6 +122,18 @@ test('administrator sees the image catalog and saves each section through the re
           'employee',
         );
     }
+    const office = catalog.find((item) => item.id === ONLYOFFICE);
+    if (office === undefined) throw new Error('Image catalog lacks ONLYOFFICE');
+    const officeRow = rows.nth(catalog.indexOf(office));
+    const reason = form(page, '预装插件').getByTestId('office-unavailable-reason');
+    await expect(reason).toHaveCount(1);
+    await expect(officeRow.getByTestId('office-unavailable-reason')).toHaveText(OFFICE_REASON);
+    await observed.screenshot('plugins-office-unavailable');
+    const officeState = page.getByLabel(`${office.name} 的管理状态`, { exact: true });
+    await officeState.selectOption('forced-off');
+    await expect(reason).toHaveCount(0);
+    await officeState.selectOption('employee');
+    await expect(officeRow.getByTestId('office-unavailable-reason')).toHaveText(OFFICE_REASON);
     await expect(registries(page)).toHaveValue(DEFAULT_REGISTRIES.join('\n'));
     await expect(page.getByLabel('开启仓库探测', { exact: true })).toBeChecked();
     await expect(page.getByLabel('允许联网搜索与抓取工具', { exact: true })).not.toBeChecked();
@@ -132,7 +147,11 @@ test('administrator sees the image catalog and saves each section through the re
     const savedCatalog = await save(page, api.catalog, '保存插件目录');
     expect(savedCatalog.status()).toBe(200);
     expect(await savedCatalog.json()).toEqual({
-      entries: catalog.map((item) => ({ ...item, state: savedState(item) })),
+      entries: catalog.map((item) => ({
+        ...item,
+        state: savedState(item),
+        unavailableReason: item.id === ONLYOFFICE ? 'bundled-unconfigured' : null,
+      })),
       runningInstances: 0,
     });
     expect(savedCatalog.request().postDataJSON()).toEqual({

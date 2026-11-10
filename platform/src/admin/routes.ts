@@ -20,6 +20,7 @@ import { lastErrorCode } from '../orchestrator/index.ts';
 import type { InstanceService } from '../orchestrator/index.ts';
 import { readPluginCatalog } from '../plugin-catalog/index.ts';
 import type { PluginCatalog } from '../plugin-catalog/index.ts';
+import type { PlatformConfig } from '../config.ts';
 import type { DatabaseHandle } from '../db/index.ts';
 
 interface AccountQuery {
@@ -98,11 +99,20 @@ export const adminRoutes: FastifyPluginCallback<{
   resolveSourceAddress: SourceAddressResolver;
   subnetPool: string;
   documentServerBundled: boolean;
+  upstreamMode: PlatformConfig['upstreamMode'];
   shutdown: AbortSignal;
   service?: InstanceService;
 }> = (
   app,
-  { database, resolveSourceAddress, subnetPool, documentServerBundled, shutdown, service },
+  {
+    database,
+    resolveSourceAddress,
+    subnetPool,
+    documentServerBundled,
+    upstreamMode,
+    shutdown,
+    service,
+  },
   done,
 ) => {
   app.addHook('onRequest', (request, reply, next) => {
@@ -240,7 +250,13 @@ export const adminRoutes: FastifyPluginCallback<{
     done(error instanceof Error ? error : new Error('Plugin catalog unavailable'));
     return;
   }
-  app.register(pluginCatalogRoutes, { database, resolveSourceAddress, catalog });
+  app.register(pluginCatalogRoutes, {
+    database,
+    resolveSourceAddress,
+    catalog,
+    documentServerBundled,
+    upstreamMode,
+  });
   app.register(pluginSourcesRoutes, { database, resolveSourceAddress });
   app.register(webToolsRoutes, { database, resolveSourceAddress });
   app.register(ragflowConfigRoutes, { database, resolveSourceAddress });

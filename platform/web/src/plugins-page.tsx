@@ -4,6 +4,8 @@ import { useRequestOwner } from './request-owner.ts';
 
 type Section = 'catalog' | 'sources' | 'web';
 type CatalogState = 'employee' | 'forced-on' | 'forced-off';
+const REASONS = ['published-loopback', 'external-jwt-missing', 'bundled-unconfigured'] as const;
+type UnavailableReason = (typeof REASONS)[number];
 interface CatalogEntry {
   id: string;
   package: string;
@@ -11,6 +13,7 @@ interface CatalogEntry {
   category: 'required' | 'manageable';
   imageDefaultEnabled: boolean;
   state: CatalogState;
+  unavailableReason: UnavailableReason | null;
 }
 interface Drafts {
   catalog: CatalogEntry[];
@@ -37,6 +40,14 @@ const STATES = [
   ['forced-on', '强制开'],
   ['forced-off', '强制关'],
 ] as const;
+const UNAVAILABLE: Record<UnavailableReason, string> = {
+  'published-loopback':
+    'Office 不可用：上游模式为 published-loopback，实例连不到 Document Server，ONLYOFFICE 在实例中停用。',
+  'external-jwt-missing':
+    'Office 不可用：已填写外部 Document Server 地址，但没有填写 JWT 密钥，ONLYOFFICE 在实例中停用。',
+  'bundled-unconfigured':
+    'Office 不可用：部署没有配置自带 Document Server，ONLYOFFICE 在实例中停用。',
+};
 const HINT = '修改在每个实例下次启动时生效；保存不会重启正在运行的实例。';
 const LOAD_FAILURE = '插件目录加载失败，请重试。';
 const SAVE_FAILURE = '保存失败，请重试。';
@@ -73,12 +84,20 @@ function list(value: unknown): unknown[] {
 function readEntry(value: unknown): CatalogEntry {
   const item = record(
     value,
-    ['id', 'package', 'name', 'category', 'imageDefaultEnabled', 'state'],
+    ['id', 'package', 'name', 'category', 'imageDefaultEnabled', 'state', 'unavailableReason'],
     false,
   );
   const category = item.category;
   const state = STATES.find(([candidate]) => candidate === item.state)?.[0];
-  if ((category !== 'required' && category !== 'manageable') || state === undefined)
+  const reason =
+    item.unavailableReason === null
+      ? null
+      : REASONS.find((candidate) => candidate === item.unavailableReason);
+  if (
+    (category !== 'required' && category !== 'manageable') ||
+    state === undefined ||
+    reason === undefined
+  )
     throw new Error('Invalid catalog entry');
   return {
     id: text(item.id),
@@ -87,6 +106,7 @@ function readEntry(value: unknown): CatalogEntry {
     category,
     imageDefaultEnabled: flag(item.imageDefaultEnabled),
     state,
+    unavailableReason: reason,
   };
 }
 const READ: Record<Section, (value: unknown, saved: boolean) => Partial<Drafts>> = {
@@ -405,27 +425,35 @@ function CatalogTable({
                 {entry.category === 'required' ? (
                   '强制开（必启，不可修改）'
                 ) : (
-                  <select
-                    aria-label={`${entry.name} 的管理状态`}
-                    value={entry.state}
-                    onChange={(event) => {
-                      const state = STATES.find(
-                        ([value]) => value === event.currentTarget.value,
-                      )?.[0];
-                      if (state === undefined) return;
-                      change({
-                        catalog: entries.map((item) =>
-                          item.id === entry.id ? { ...item, state } : item,
-                        ),
-                      });
-                    }}
-                  >
-                    {STATES.map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
+                  <>
+                    <select
+                      aria-label={`${entry.name} 的管理状态`}
+                      value={entry.state}
+                      onChange={(event) => {
+                        const state = STATES.find(
+                          ([value]) => value === event.currentTarget.value,
+                        )?.[0];
+                        if (state === undefined) return;
+                        change({
+                          catalog: entries.map((item) =>
+                            item.id === entry.id ? { ...item, state } : item,
+                          ),
+                        });
+                      }}
+                    >
+                      {STATES.map(([value, label]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                    {/* A forced-off entry is disabled by the administrator, not by Office. */}
+                    {entry.unavailableReason !== null && entry.state !== 'forced-off' && (
+                      <p data-testid="office-unavailable-reason">
+                        {UNAVAILABLE[entry.unavailableReason]}
+                      </p>
+                    )}
+                  </>
                 )}
               </td>
             </tr>

@@ -35,7 +35,9 @@ export function isRagflowBaseUrl(value: string): boolean {
 }
 
 /** A stored external address selects the external Document Server; otherwise the bundled one. */
-export function documentServerMode(settings: Settings): 'bundled' | 'external' {
+export function documentServerMode(
+  settings: Pick<Settings, 'documentServerUrl'>,
+): 'bundled' | 'external' {
   return settings.documentServerUrl === '' ? 'bundled' : 'external';
 }
 
