@@ -85,6 +85,7 @@ const ENTRIES = [
     category: 'required',
     imageDefaultEnabled: false,
     state: 'forced-on',
+    unavailableReason: null,
   },
   {
     id: 'permission-tiers',
