@@ -89,13 +89,15 @@ describe('incompatible plugin user-image build rejection', () => {
       expect(fake.builds).toHaveLength(1);
       expect(fake.builds[0]?.range).toBe('>=0.3.0');
       const contexts = fake.builds[0]?.contexts ?? [];
-      expect(contexts).toHaveLength(5);
-      const [zhLocale, permissionTiers, officeAgents, platformNav, knowledgeBase] = contexts;
-      expect([zhLocale, permissionTiers, officeAgents, knowledgeBase]).toEqual([
+      expect(contexts).toHaveLength(6);
+      const [zhLocale, permissionTiers, officeAgents, platformNav, knowledgeBase, officeHints] =
+        contexts;
+      expect([zhLocale, permissionTiers, officeAgents, knowledgeBase, officeHints]).toEqual([
         repositoryPlugin('zh-locale'),
         repositoryPlugin('permission-tiers'),
         repositoryPlugin('office-agents'),
         repositoryPlugin('knowledge-base'),
+        repositoryPlugin('office-hints'),
       ]);
       expect(platformNav).not.toBe(repositoryPlugin('platform-nav'));
       expect(existsSync(platformNav?.slice(13) ?? '')).toBe(false);
@@ -162,9 +164,14 @@ describe('inconsistent catalog user-image build rejection', () => {
       expect(build?.catalog).not.toContain('@dsh-team/platform-nav');
       expect(build?.catalog).toContain('@dsh-team/zh-locale');
       expect(build?.contexts).toEqual(
-        ['zh-locale', 'permission-tiers', 'office-agents', 'platform-nav', 'knowledge-base'].map(
-          repositoryPlugin,
-        ),
+        [
+          'zh-locale',
+          'permission-tiers',
+          'office-agents',
+          'platform-nav',
+          'knowledge-base',
+          'office-hints',
+        ].map(repositoryPlugin),
       );
       expect(existsSync(build?.primary ?? '')).toBe(false);
       expect(repositoryBytes()).toEqual(before);

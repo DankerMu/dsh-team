@@ -12,6 +12,8 @@
         "plugins/platform-nav/*.test.js",
         "plugins/knowledge-base/index.js",
         "plugins/knowledge-base/*.test.js",
+        "plugins/office-hints/index.js",
+        "plugins/office-hints/*.test.js",
         "images/dsh-user/*.mjs"
       ],
       "project": [
@@ -25,6 +27,8 @@
         "plugins/platform-nav/*.d.ts",
         "plugins/knowledge-base/*.js",
         "plugins/knowledge-base/*.d.ts",
+        "plugins/office-hints/*.js",
+        "plugins/office-hints/*.d.ts",
         "images/dsh-user/*.mjs"
       ]
     },

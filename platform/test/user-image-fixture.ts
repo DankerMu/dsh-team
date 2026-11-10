@@ -516,6 +516,7 @@ const PLUGIN_CONTEXTS = [
   'office-agents',
   'platform-nav',
   'knowledge-base',
+  'office-hints',
 ] as const;
 type PluginContext = (typeof PLUGIN_CONTEXTS)[number];
 

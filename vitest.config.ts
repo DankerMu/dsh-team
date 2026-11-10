@@ -67,6 +67,7 @@ export default defineConfig({
         'plugins/office-agents/*.js',
         'plugins/platform-nav/*.js',
         'plugins/knowledge-base/*.js',
+        'plugins/office-hints/*.js',
         'images/dsh-user/*.mjs',
       ],
       // Exact process/browser bootstrap exemptions are registered in constraints.yaml.

@@ -13,11 +13,18 @@ import { waitDockerIdle, withDockerIdleInstance } from './instance-idle-docker-f
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
 import { runUserImage } from './user-image-fixture.ts';
 
-// Default catalog settings: the three required packages are forced on, the office bundle is the employee's.
+// Default catalog settings: the four required packages are forced on, the office bundle is the employee's.
 const REQUIRED_LOCKS = {
+  '@dsh-team/office-hints': 'forced-on',
   '@dsh-team/permission-tiers': 'forced-on',
   '@dsh-team/platform-nav': 'forced-on',
   '@dsh-team/zh-locale': 'forced-on',
+};
+// The fixed insert row beside the platform entry; it carries no config.
+const OFFICE_HINTS_ROW = {
+  id: 'office-hints',
+  name: '/opt/dsh-team/office-hints/index.js',
+  disabled: false,
 };
 
 it('keeps the running model selector unchanged after save and activates the new exact list and default on administrator restart', async () => {
@@ -252,7 +259,7 @@ it('keeps the running model selector unchanged after save and activates the new 
         expect(record(after.State).Running).toBe(true);
         expect(orderedMounts(after.Mounts)).toEqual(orderedMounts(before.Mounts));
         await observe('restarted', 'alpha,beta,gamma', 'gamma', await newSession());
-        const navigationRow = async (userId: string) => {
+        const fixedRows = async (userId: string) => {
           const text = await readFile(
             join(lifecycle.overlayDirectory, `${userId}.patch.yml`),
             'utf8',
@@ -265,15 +272,19 @@ it('keeps the running model selector unchanged after save and activates the new 
             const entries: readonly unknown[] = inserted;
             return entries;
           });
-          return inserts.filter((row) => record(row).id === 'platform-nav');
+          return inserts.filter((row) => {
+            const id = record(row).id;
+            return id === 'platform-nav' || id === 'office-hints';
+          });
         };
-        expect(await navigationRow(employee.id)).toEqual([
+        expect(await fixedRows(employee.id)).toEqual([
           {
             id: 'platform-nav',
             name: '/opt/dsh-team/platform-nav/index.js',
             disabled: false,
             config: { admin: false, pluginCatalog: REQUIRED_LOCKS },
           },
+          OFFICE_HINTS_ROW,
         ]);
         // The administrator's own instance carries the console flag from its launch-time role.
         const adminOwnership = { 'dsh-team.user': admin.id };
@@ -289,13 +300,14 @@ it('keeps the running model selector unchanged after save and activates the new 
           reason: 'starting',
         });
         await gateway.ready(admin.cookie);
-        expect(await navigationRow(admin.id)).toEqual([
+        expect(await fixedRows(admin.id)).toEqual([
           {
             id: 'platform-nav',
             name: '/opt/dsh-team/platform-nav/index.js',
             disabled: false,
             config: { admin: true, pluginCatalog: REQUIRED_LOCKS },
           },
+          OFFICE_HINTS_ROW,
         ]);
         await observeAdministrator();
         return secondId;

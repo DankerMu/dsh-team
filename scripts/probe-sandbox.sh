@@ -174,7 +174,8 @@ else
     --build-context "permission-tiers=${repo_root}/plugins/permission-tiers" \
     --build-context "office-agents=${repo_root}/plugins/office-agents" \
     --build-context "platform-nav=${repo_root}/plugins/platform-nav" \
-    --build-context "knowledge-base=${repo_root}/plugins/knowledge-base" "${repo_root}/images/dsh-user"
+    --build-context "knowledge-base=${repo_root}/plugins/knowledge-base" \
+    --build-context "office-hints=${repo_root}/plugins/office-hints" "${repo_root}/images/dsh-user"
 fi
 write_custom_seccomp
 

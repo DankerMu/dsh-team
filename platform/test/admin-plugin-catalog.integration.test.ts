@@ -18,7 +18,7 @@ const SENTINEL = 'PLUGIN_CATALOG_TCP_SENTINEL';
 const INVALID =
   'Invalid plugin catalog; provide exactly { entries: [{ id, state }] } covering every catalog entry once. ' +
   'Allowed states: employee | forced-on | forced-off; required entries must be forced-on';
-const REQUIRED = ['permission-tiers', 'platform-nav', 'zh-locale'];
+const REQUIRED = ['office-hints', 'permission-tiers', 'platform-nav', 'zh-locale'];
 const submission = (office: string, required = 'forced-on') => ({
   entries: [
     { id: 'dsh-better-sidebar', state: 'employee' },

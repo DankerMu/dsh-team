@@ -412,6 +412,8 @@ export function generateManagedConfig(input: ManagedConfigInput): ManagedConfigR
             disabled: false,
             config: { admin: input.admin, pluginCatalog: forcedPackageStates(input.pluginCatalog) },
           },
+          // Always on: its client half itself detects whether an ONLYOFFICE viewer is in effect.
+          { id: 'office-hints', name: '/opt/dsh-team/office-hints/index.js', disabled: false },
           {
             id: 'dsh-team-platform-credentials',
             name: '@deepseek-ai/dsh-credentials-local',

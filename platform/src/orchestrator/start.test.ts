@@ -258,12 +258,14 @@ it.each([
           config: {
             admin,
             pluginCatalog: {
+              '@dsh-team/office-hints': 'forced-on',
               '@dsh-team/permission-tiers': 'forced-on',
               '@dsh-team/platform-nav': 'forced-on',
               '@dsh-team/zh-locale': 'forced-on',
             },
           },
         },
+        { id: 'office-hints', name: '/opt/dsh-team/office-hints/index.js', disabled: false },
         {
           id: 'dsh-team-platform-credentials',
           name: '@deepseek-ai/dsh-credentials-local',
