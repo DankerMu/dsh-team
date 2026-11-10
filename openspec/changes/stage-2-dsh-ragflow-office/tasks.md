@@ -5126,3 +5126,120 @@ Must preserve：
 - 目录页的加载与保存状态机（401/403/失败态、pending 锁）；
 - `officeOverlay` 对同源输入的返回值；
 - 自带 JWT 不进 admin 的不变量。
+
+## 44. #438：office-hints 插件与镜像交付（18.4 插件部分）
+
+依赖：
+
+- #435（覆盖层 ONLYOFFICE）已合入；
+- #437（better-sidebar 条件补丁，第 43 节）须先合入。两者都改 `images/dsh-user/Dockerfile` 和 `platform/test/user-image.docker.test.ts`，所以按顺序合入。
+
+由 #438 承载。关键路径：`images/dsh-user/`。
+
+以下事实以 npm 发行包 `dsh-sidebar-onlyoffice@0.2.0`、`dsh-better-sidebar@0.28.0` 为准（编排者已下载为只读数据）：
+
+- ONLYOFFICE 的 `OnlyOfficeView`（`src/client/OnlyOfficeView.tsx`）没有任何插槽，只渲染自己的提示条、编辑器和错误面板。它用 `scope.sessionId` 取编辑配置，没有 Session 时打开会失败。
+- 规范要求不给 ONLYOFFICE 打第二个补丁（`specs/user-image/spec.md` 的「Office 提示插件随镜像交付」）。所以提示只能从外部叠加。
+- better-sidebar 的查看器按 priority 从高到低选择（`service.ts:1053-1080`），会跳过已停用的查看器。ONLYOFFICE 的三个查看器是 `onlyoffice:docx/xlsx/pptx`，priority 10，`fetchStrategy: 'none'`。
+- 服务提供 `registerFileViewer`、`getFileViewers`、`isViewerEnabled`、`subscribe`（登记变化）、`subscribeState`（偏好变化）（`service.ts:618-727`）。`FileViewerProps` 带 `scope`（含 `sessionId`）和 `path`。
+
+用户决定（2026-11-10，修订同日的「生成器写标志」）：
+
+- 生成器为 office-hints 写一条受管必启的启用行，不写标志。
+- 判断「ONLYOFFICE 生效」只靠客户端检测：`onlyoffice:<ext>` 查看器已登记且已启用。
+- 理由：ONLYOFFICE 是「员工自选」项，员工自行关闭时生成器无从知道。只按标志注册包装查看器，会让第 43 节的条件补丁接手 docx，却没有编辑器可以委托。
+
+- [ ] 44.1 新建 `plugins/office-hints/`，交付进用户镜像，并由覆盖层启用。
+  - **插件结构**：仿照 `plugins/platform-nav/` 与 `plugins/knowledge-base/`。
+    - `package.json`：逐字段仿照 `plugins/platform-nav/package.json`：`name: "@dsh-team/office-hints"`、`private: true`、`type: "module"`、`main: "index.js"`、`exports`（`.` → `./index.js`、`./client` → `./client.js`、`./package.json`）、`engines.dsh: ">=0.2.1-rc.2 <0.3.0"`、`dsh.bundle.patch: "./cordis.patch.yml"`、`dsh.client.platform: "web"`、`dsh.client.inject: ["dsh-better-sidebar"]`（包名列表）、`files`。`user-image.docker.test.ts:423-424` 断言 `exports['./client']` 与 `dsh.client.platform`。
+    - `cordis.patch.yml`：以 `#` 注释行开头，然后是 `[]`（`catalog-check.test.mjs:714` 的空层检查要求）。
+    - `index.js`：host 半边，只导出 `name` 和空的 `apply`。客户端半边由 host 行随 `package.json` 的 `dsh.client` 加载，host 不发布任何页面全局变量。
+    - `client.js`：经典脚本，React 取自 DSH 运行时 seed，与 knowledge-base 的 `client.js` 写法相同。
+    - `types.d.ts`、`client.types.d.ts`、`tsconfig.json`、`README.md`（README 由编排者写）。
+    - 成对单元测试：`index.test.js`、`client.test.js`。
+  - **客户端行为**（`inject: ['betterSidebar']`）：
+    - `sync()` 对 docx、xlsx、pptx 逐一判断：存在 id 为 `onlyoffice:<ext>` 的已登记查看器，且 `isViewerEnabled` 为 true，就登记包装查看器 `office-hints:<ext>`。包装查看器的参数为：`exts: [<ext>]`，`priority: 20`，`fetchStrategy: 'none'`，`title: 'Office 提示（<ext>）'`。条件不再成立时，用登记时得到的 disposer 撤销。
+    - **重入契约**：`registerFileViewer` 先存入查看器，再同步 `notify()`，最后才返回 disposer（`service.ts:926-937`；`notify` 在 `:889-891` 同步调用所有监听者，不捕获异常）；重复 id 会抛出 `file viewer "<id>" already registered`（`:928`）。`sync()` 经常在 ONLYOFFICE 自己的 `client.effect(() => betterSidebar.registerFileViewer(viewer))` 里被触发（onlyoffice `src/client/index.ts:111-113`），抛错会打断 ONLYOFFICE 后续查看器的登记。所以：
+      - (a) 用 `running`/`dirty` 防重入。`sync()` 运行期间再次调用只置 `dirty`，外层调用循环执行，直到 `dirty` 为假；
+      - (b) 「已登记」按 `getFileViewers()` 中是否已有 `office-hints:<ext>` 判断。撤销时先删本地记录，再调用 disposer；
+      - (c) 监听回调整体用 try/catch 包住，永不抛出。
+
+      `sync()` 在 `apply` 时运行一次，之后由 `subscribe`（登记变化）与 `subscribeState`（偏好变化，`service.ts:1337`）触发。全部订阅和 disposer 交给 `ctx.effect`，插件卸载时清理。
+
+    - 包装组件：better-sidebar 用 `createElement(load.viewer.component, …)` 挂载查看器（`EditorHost.tsx:657`），有时也直接调用 `descriptor.component(props)`（`lazy-chunk.tsx:9-17`）。所以包装组件**不使用任何 hook**，只返回元素。ONLYOFFICE 以元素形式渲染，写作 `h(onlyofficeDescriptor.component, props)`，不内联调用其函数，否则它的约 8 个 hook（`OnlyOfficeView.tsx:106-121`）会混进包装组件，并且只出现在编辑器分支上。查看器表变化时 EditorHost 不会重新挂载（`:485`），换到其他分支时会因为 hook 顺序变化而崩溃。外层用 flex 纵向布局并设 `minHeight: 0`，让 ONLYOFFICE 的 `height: 100%` 撑满。三个分支如下：
+      - `props.scope.sessionId` 为 `''` 或缺失时，只显示中文提示 `请先新建或进入一个会话（Session），再打开 Office 文件。`，不渲染编辑器，也不发出任何请求。
+      - 否则，顶部是提示条，内容为 F40 原文 `请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。`；下面是 `h(<当时 getFileViewers() 中 onlyoffice:<ext> 的 component>, props)`。
+      - 渲染时若 ONLYOFFICE 查看器不存在或已停用（落在两次通知之间），显示 `Office 编辑器未加载，请关闭后重新打开此文件。`。
+    - 两段提示都带 `data-dsh-team-office-hint="collab"` 或 `"no-session"`，供测试定位。
+    - ONLYOFFICE 不生效时（Office 不可用、管理员强制关、员工关闭、侧栏设置里停用该查看器），不登记任何包装查看器，第 43 节的条件补丁把文件交还 DSH 自带预览。
+  - **目录与覆盖层**：
+    - `images/dsh-user/catalog.json` 新增一项，五个键齐全（`catalog-check.mjs:36` 的 `ENTRY_KEYS`）：`id: "office-hints"`、`package: "@dsh-team/office-hints"`、`name: "Office 提示"`、`category: "required"`、`imageDefaultEnabled: false`。条目按 id 排序，放在 `office-agents` 之后。
+    - `platform/src/managed-config/generate.ts` 中 platform-nav 那组固定 insert 行（`:402-412`）里新增 `{ id: 'office-hints', name: '/opt/dsh-team/office-hints/index.js', disabled: false }`。生成器测试更新精确行断言。
+    - 写死目录或 insert 行的断言要同步更新（`forcedPackageStates` 会把每个必启项写进 platform-nav 的 `pluginCatalog`，`submittedStates` 要求覆盖每个目录 id）：
+      - `platform/src/plugin-catalog/catalog.test.ts:44-52`（id 列表）；
+      - `platform/src/managed-config/generate-catalog.test.ts:503-507`（`pluginCatalog` 字符串）；
+      - `platform/src/managed-config/generate.test.ts:635-652`（insert 行）；
+      - `platform/src/orchestrator/start.test.ts:247-270`（insert 行与 `pluginCatalog`，属关键路径）；
+      - `platform/test/admin-plugin-catalog.integration.test.ts:19`（`REQUIRED`）；
+      - `platform/test/admin-config-activation.docker.test.ts:17-21`（`REQUIRED_LOCKS`）及 `:268-295`；
+      - `images/dsh-user/catalog-check.test.mjs:340-360`（按下标引用条目的形状用例，插入后下标顺移）；
+      - `platform/test/managed-boot-roster.ts`（客户端半边进入 roster）；
+      - `first-use.docker.test.ts` 的期望由目录推导（`:230-242`），唯一变化是 `FIRST_LOCKED` 变为 `@dsh-team/office-hints`。
+    - 以下读取目录本身，不需要改：`admin-plugins.ui.test.ts`（`:37`）、`catalog-check-fixture.mjs`（`:28,155`）。
+  - **镜像**：
+    - Dockerfile 加 `COPY --from=office-hints --chown=root:root --chmod=0444 package.json index.js client.js cordis.patch.yml /opt/dsh-team/office-hints/`，`:97` 的 `chmod 0555` 清单加上该目录。
+    - 所有构建入口加 `office-hints` 命名上下文：
+      - `platform/test/user-image-fixture.ts` 的 `PLUGIN_CONTEXTS`（`:512-518`），`STAGE1_PLUGIN_CONTEXTS` 不加；
+      - `platform/test/user-image-rejection.integration.test.ts:98`、`:165`；
+      - `scripts/probe-dsh-api.sh:109-113`、`scripts/probe-first-run.sh:142-146`、`scripts/probe-sandbox.sh:173-177`；
+      - 文档中的构建命令（编排者改）：`docs/DEPLOY.md:42-46`、`images/seccomp/README.md:65-69`、`platform/test/README.md:17`、各插件 README。
+  - **门禁配置**（不改 `.dependency-cruiser.cjs` 与 ESLint）：
+    - `scripts/check-test-pairing.sh:41` 加 `-path '*/office-hints/*.js'`；
+    - `knip.json`：`entry` 加 `index.js`、`*.test.js`，`project` 加 `*.js`、`*.d.ts`；
+    - `vitest.config.ts:69` 的覆盖率 include；
+    - 根 `package.json` 的 `typecheck` 加 `tsc -p plugins/office-hints/tsconfig.json`；
+    - `scripts/test-guardrails.sh` 加孤儿用例（仿照 `:247-249`）。
+  - **测试**：
+    - `client.test.js`：用真实 React 和 `react-test-renderer`（仿照 `plugins/platform-nav/client.test.js:3-5`），假 betterSidebar 服务按 `service.ts` 的语义实现：`registerFileViewer` 内部同步 notify，重复 id 时抛错。
+      - 没有 ONLYOFFICE 查看器时不登记；登记 `onlyoffice:docx` 且启用后登记 `office-hints:docx`；
+      - 停用或撤销后撤销包装查看器，并且只登记了 docx 时不登记 xlsx；
+      - 重复通知不会重复登记；`registerFileViewer` 内同步触发的重入不会登记两次，也不会抛错；监听回调里的异常不会外泄；
+      - 无 Session 时只渲染 no-session 提示，不调用 ONLYOFFICE 组件；
+      - 无 Session 的两种情况（`''` 与缺失）都要覆盖；
+      - 有 Session 时，渲染树中有 F40 原文，以及一个类型为 ONLYOFFICE 组件、props 与传入相同的元素；
+      - 已挂载的树从编辑器分支重渲染到「未加载」分支时不抛错，显示「未加载」文案；
+      - 卸载时撤销全部。
+    - `index.test.js`：`name` 和 `apply` 的形状。
+    - `platform/test/user-image.docker.test.ts`：
+      - 把 `office-hints` 加入 `:411` 已有的 `['platform-nav','knowledge-base']` 循环：文件集合精确，归 root 所有、`0444`，uid1001 不可写，manifest 字段正确；
+      - 插件已登记，客户端半边在 boot roster 中，DSH 不报告未激活条目；
+      - ONLYOFFICE 包的代码文件哈希仍等于 18.1 的钉定值（没有第二个补丁）。
+    - 显示效果的浏览器证据归 #439（18.4 本机验证）。
+  - **文档**（编排者在同一 PR 中修改）：`plugins/office-hints/README.md`、上面列出的构建命令文档、`platform/src/managed-config/README.md`（固定 insert 行）。`docs/EMPLOYEE_GUIDE.md` 和本机通道的显示验证属于 #439（issue #438 的 Out of Scope 已写明），本任务不做。
+
+Suggested fixture level: expanded（关键路径 `images/dsh-user/`，新增受管必启插件）
+Minimal mergeable slice: atomic：插件、目录项、生成器行和镜像交付必须一起合入，否则目录门禁或「已加载」断言无法成立。预计超过 400 行，加 `diff-limit-exempt`。
+Risk packs (44.1):
+
+- selected：
+  - Release：新的镜像交付物和构建上下文。
+  - Legacy compatibility：ONLYOFFICE 不生效时 docx/xlsx/pptx 的去向不变；ONLYOFFICE 不打第二个补丁。
+  - Config：新增目录项和生成器固定行，不新增变量。
+  - Concurrency：订阅通知与幂等登记。
+- not selected：Public API、Auth、Schema、Migration、Security（不碰令牌与文件路由）、File IO、Resource limits。
+
+人工白盒审查：关键路径 `images/dsh-user/` 与 `platform/src/orchestrator/start.test.ts`。PR 写明「人工白盒审查推迟到 Epic #380 完成时进行，本 PR 没有通过人工白盒审查」。
+
+剩余风险：
+
+- 员工在侧栏设置里单独停用 `office-hints:<ext>` 时，ONLYOFFICE 直接打开文件，不显示提示。这是员工自己的显式选择，不处理。
+- 包装组件以元素 `h(onlyofficeDescriptor.component, props)` 渲染 ONLYOFFICE，props 原样透传，其中 `viewerId` 为 `office-hints:<ext>`。ONLYOFFICE 目前只读 `scope` 和 `path`（`OnlyOfficeView.tsx:105`），以后若依赖 `viewerId`，需要重新核对。
+- 真实浏览器中的显示验证在 #439。
+- `dsh-better-sidebar` 被管理员或员工关闭时，office-hints 仍然启用，但它的 `dsh.client.inject` 指向的包不在，预期客户端半边不会 apply，也不报告。这一点没有实测，Docker 用例只覆盖默认组合。
+
+Must preserve：
+
+- ONLYOFFICE 0.2.0 的代码文件只有 18.1 补丁；
+- 第 43 节的条件补丁语义；
+- 现有必启项的生成行；
+- 目录门禁（目录项与镜像一一对应）。
