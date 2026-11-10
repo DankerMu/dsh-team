@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { AdminNavigation } from './admin-navigation.tsx';
 import { adminRequest } from './admin-request.ts';
+import { useRequestOwner } from './request-owner.ts';
 
 /** The administrator Document Server answer; the bundled container name and JWT never appear. */
 interface Office {
@@ -102,22 +103,20 @@ async function exchange(payload: unknown, signal: AbortSignal): Promise<Settled>
 function useOffice() {
   const [view, setView] = useState<View>(INITIAL);
   const [jwt, setJwt] = useState('');
-  const owner = useRef<AbortController | null>(null);
+  const owner = useRequestOwner();
   const run = useCallback(async (payload?: unknown) => {
     // One page-level owner: no load or save starts while another is in flight.
-    if (owner.current !== null) return;
-    const attempt = new AbortController();
-    owner.current = attempt;
-    const current = () => owner.current === attempt && !attempt.signal.aborted;
+    const claim = owner.claim();
+    if (claim === null) return;
     // Every load and save clears the typed JWT.
     setJwt('');
     setView((previous) =>
       payload === undefined ? INITIAL : { ...previous, phase: 'save', notice: null, count: null },
     );
     try {
-      const settled = await exchange(payload, attempt.signal);
+      const settled = await exchange(payload, claim.signal);
       // A response for an aborted (departed) owner never touches the page.
-      if (!current()) return;
+      if (!claim.current()) return;
       if (typeof settled === 'function') setView(settled);
       else {
         setJwt('');
@@ -125,19 +124,15 @@ function useOffice() {
         if (settled === 'login') window.location.assign('/_platform/login');
       }
     } finally {
-      if (current()) owner.current = null;
+      claim.release();
     }
   }, []);
   useEffect(() => {
     void run();
-    return () => {
-      owner.current?.abort();
-      owner.current = null;
-    };
   }, [run]);
   function saveExternal(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    if (owner.current !== null || view.office === null) return;
+    if (owner.busy() || view.office === null) return;
     const url = view.address;
     const reject = (text: string) => {
       setView((previous) => ({ ...previous, notice: { text, alert: true } }));
