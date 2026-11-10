@@ -166,7 +166,7 @@ Max 10 entries, dated, pruned at milestones. Each records a verified development
 3. 2026-10-14 — Containerized platform admission needs a primary-network `gw_priority` above employee attachments; otherwise a gateway switch can drop an in-flight request while fresh health still succeeds.
 4. 2026-10-03 — Phase0 arm64 Docker Desktop required seccomp and `systempaths=unconfined` relaxations for DSH's shell sandbox; this is not a requirement for every Docker host.
 5. 2026-10-17 — Never use BuildKit history queries on the shared verification daemon: Docker29.1.3's filtered history query triggered a nil-pointer panic and automatic restart.
-6. 2026-10-03 — Office files open in ONLYOFFICE only with the build-time patch to `dsh-better-sidebar` (`HOST_OWNED_EXTS`). The patch must fail the image build when the version does not match.
+6. 2026-10-03 — Office files open in ONLYOFFICE only with the build-time patch to `dsh-better-sidebar`'s `HOST_OWNED_EXTS` handoff (#437: docx/xlsx/pptx are claimed only while an Office viewer is registered). The patch must fail the image build when the version does not match.
 7. 2026-10-08 — Never accept exit137 alone or alter victim priorities/limits to obtain proof; retain physical-touch, cgroup, pre-live and identity checks, and supplement only with trusted read-only host evidence.
 8. 2026-10-10 — Confirmed: DSH's composer chain selects the first non-null entry in ascending priority; a one-shot readonly seat can hide a valid native child approval. Verify the selected child's actual UI and decision/file/audit effects, not only host approval registration.
 9. 2026-10-11 — Consume mutation/error responses before UI settlement/navigation and never abort an already-answered authority read.

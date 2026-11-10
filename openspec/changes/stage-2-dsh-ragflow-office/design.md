@@ -281,7 +281,7 @@ B 能读到 Document Server 的 JWT，但不知道 A 的文件令牌密钥：
 
 - **better-sidebar 分两步**
   - 文件区组先装 `dsh-better-sidebar@0.28.0`，不打补丁。Office 文件仍由它的原生预览打开。
-  - Office 编辑组在 ONLYOFFICE 及其覆盖层配置合入之后再加补丁（同一组）：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py`，改为与 #375 同构的 Node 脚本，钉住 0.28.0 和两个文件的输入、输出哈希，只从 `HOST_OWNED_EXTS` 里去掉 docx、xlsx、pptx。
+  - Office 编辑组在 ONLYOFFICE 及其覆盖层配置合入之后再加补丁（同一组）：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py`，改为与 #375 同构的 Node 脚本，钉住 0.28.0 和两个文件的输入、输出哈希，只从 `HOST_OWNED_EXTS` 里去掉 docx、xlsx、pptx。（实现以 tasks.md 第 43 节为准：用户决定 2026-11-10 改为条件接手，只在已登记并启用 Office 查看器时接手这三类文件，否则仍交还 DSH 自带预览。）
 - **Office 提示**：新建镜像插件 `plugins/office-hints/`，承载三条界面提示：人机同写提示（F40）、无 Session 提示、满员提示和退回预览（F42）。不给第三方包加第二个补丁。它是受管必启项（决定 12），只在 ONLYOFFICE 生效时显示。员工文档放在新建的 `docs/EMPLOYEE_GUIDE.md`。
 - **只读预览的字体**（#554 诊断，用户决定 2026-11-07）：DSH 0.2.1 的 DOC、DOCX、PPT、PPTX 预览经 `dsh-office-to-pdf` 调 `@deepseek-ai/libreoffice-kit`，Linux 上只用随 DSH 安装的 `libreoffice-kit-wasm@0.1.5`，从不调用系统 soffice，所以镜像不装 LibreOffice。XLS、XLSX 由 DSH 的浏览器表格视图（`/excel` 预览）只读显示，不经转换，也不依赖镜像字体。转换失败的原因是镜像里没有任何字体（`unavailable`：「No usable fonts were found」）。处理分两层：
   - 用户镜像装 Debian 的 `fonts-noto-cjk` 和 `fonts-dejavu-core`，使 DOC、PPT，以及 Office 不可用或 Document Server 满员时的 DOCX、PPTX 在任何部署下都能在实例内、不联网地转成 PDF 只读显示。

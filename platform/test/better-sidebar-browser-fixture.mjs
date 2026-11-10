@@ -41,8 +41,9 @@ export const CONVERSION_MS = 240_000;
  *   `section[data-pdf-preview]` whose pages are `[data-pdf-page]` with a non-hidden
  *   `[data-document-zoom-surface]` canvas once rendered (client.pdf.js PdfPage), and the
  *   missing-font notice `data-office-font-warning` (FontNotice), which is not a failure.
- * Native handoff (src/client/native/index.ts HOST_OWNED_EXTS): better-sidebar refuses docx, so the
- * address falls to the built-in preview, which converts it to PDF inside the instance.
+ * Native handoff (src/client/native/index.ts HOST_OWNED_EXTS): without a registered Office viewer
+ * better-sidebar does not take docx, so the address falls to the built-in preview, which converts
+ * it to PDF inside the instance.
  * Tab strip (dockkit, bundled in dsh-web-frontend dist/assets/index-CN7NIWNw.js:188): `pZ` keeps
  * an inactive tab's body mounted but `hidden`/`aria-hidden`/inert, and only the active tab's pane
  * draws the strip (`ux`), whose `[role="tab"][data-dockkit-tab="<tab id>"]` carries

@@ -16,10 +16,10 @@
 
 ### Requirement: 侧栏插件与 Office 扩展名补丁
 
-用户镜像 MUST 预装 `dsh-better-sidebar` 0.28.0，并在构建时打补丁：只从其宿主自有扩展名表中去掉 docx、xlsx、pptx，使这三类文件交给 ONLYOFFICE 插件打开，其余行为不变。补丁 MUST 在以下任一情况下让构建失败且不写文件：
+用户镜像 MUST 预装 `dsh-better-sidebar` 0.28.0，并在构建时打补丁：docx、xlsx、pptx 只在侧栏的文件查看器表中有已启用、声明该扩展名的查看器（即 ONLYOFFICE 插件已加载）时由侧栏接手并交给该查看器打开，否则仍交还 DSH 自带预览（用户决定 2026-11-10）；宿主自有扩展名表本身和其余扩展名的去向不变。补丁 MUST 在以下任一情况下让构建失败且不写文件：
 
 - 该包版本不是 0.28.0；
-- 全局模块中该包不是恰好一份；
+- 在 `/opt/dsh-team` 与全局模块中，该包不是恰好一份，或不在 `/opt/dsh-team/dsh-better-sidebar`；
 - 任一被补文件的输入 SHA-256 不是评审过的值；
 - 补丁结果的 SHA-256 不是评审过的值。
 
@@ -29,6 +29,11 @@
 
 - **WHEN** 本次启动 Office 可用，员工在文件区打开一个 docx 文件
 - **THEN** 文件由 ONLYOFFICE 插件打开，而不是侧栏自带的预览
+
+#### Scenario: Office 不可用时保留只读预览
+
+- **WHEN** 本次启动 Office 不可用（ONLYOFFICE 被写为停用），员工在文件区打开一个 docx 文件
+- **THEN** 文件由 DSH 自带预览以只读方式显示，而不是侧栏的下载面板
 
 #### Scenario: 镜像中的文件是补过的
 

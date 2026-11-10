@@ -1,7 +1,8 @@
 // Build-time patches of released third-party packages: one pinned entry per package, one shared
 // implementation. Usage: node patch-package.mjs <pin> <opt-root> <global-root>. Any drift (version,
-// copies, location, input/output SHA-256, anchors) refuses before writing; the target is replaced
-// atomically or left byte-for-byte unchanged. A refusal names only the failed check.
+// copies, location, input/output SHA-256, anchors of any target) refuses before writing; each target
+// is replaced atomically, and a failed write puts the targets already written back. A refusal names
+// only the first failed check.
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -45,10 +46,14 @@ export const PINS = {
     package: 'dsh-sidebar-onlyoffice',
     directory: 'dsh-sidebar-onlyoffice',
     version: '0.2.0',
-    target: 'lib/index.js',
     // SHA-256 of the published lib/index.js (npm tarball) and of the reviewed patched result.
-    inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
-    outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
+    targets: [
+      {
+        target: 'lib/index.js',
+        inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
+        outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
+      },
+    ],
     replacements: [
       [
         'const FILE_TOKEN_SECRET = "dsh-sidebar-onlyoffice/file-token/v1";',
@@ -69,6 +74,37 @@ export const PINS = {
       ['const runtime = () => ctx.webRuntime;', 'const runtime = () => ctx.webStartup;'],
       [fence('config', '', 'webRuntime'), fence('config', '', 'webStartup')],
       [fence('watch', WATCH_OPENING, 'webRuntime'), fence('watch', WATCH_OPENING, 'webStartup')],
+    ],
+  },
+  // dsh-better-sidebar@0.28.0: the file editor's canOpen also takes docx, xlsx and pptx while the
+  // sidebar's own viewer table holds an enabled viewer declaring the extension (ONLYOFFICE when
+  // Office is available); otherwise they stay with DSH's own preview, as released. lib/client.js
+  // is the build DSH loads (exports["./client"]); lib/client-registry.js, the module-id build, is
+  // patched identically so no unpatched variant is delivered.
+  'better-sidebar': {
+    package: 'dsh-better-sidebar',
+    directory: 'dsh-better-sidebar',
+    version: '0.28.0',
+    // SHA-256 of each published file (npm tarball) and of its reviewed patched result.
+    targets: [
+      {
+        target: 'lib/client.js',
+        inputSha256: '53b70b1b5317205247c074b8121e1ececec1df2dc3771b0641f0a66b8fd127e1',
+        outputSha256: 'dbe401917803729e1d89a6e8cf504c5f0ce46e07a41b424967293317a3e1aeb6',
+      },
+      {
+        target: 'lib/client-registry.js',
+        inputSha256: '9862678d65831b031a72b54e560f5ad3dd94f00403429072a4c0a75c52d0da85',
+        outputSha256: 'ac9d9a748b775336747c03c734b1902432eace04efd0f96a01c7f18444559700',
+      },
+    ],
+    replacements: [
+      [
+        'return file !== void 0 && !hostOwnedPath(file.path);',
+        'return file !== void 0 && (!hostOwnedPath(file.path) || ["docx", "xlsx", "pptx"].some(' +
+          '(ext) => file.path.toLowerCase().endsWith("." + ext) && service.getFileViewers().some(' +
+          '(viewer) => viewer.exts?.includes(ext) === true && service.isViewerEnabled(viewer.id))));',
+      ],
     ],
   },
 };
@@ -128,42 +164,73 @@ function replaceFile(target, text, write) {
   }
 }
 
-/** The failed check, or undefined once the single real copy's target holds the reviewed output. */
-function patchCheck(options, write) {
-  const { name, expected, version, target, inputSha256, outputSha256, replacements, roots } =
-    options;
+/** The failed check, or the directory of the single real copy at the expected place and version. */
+function discoverCopy({ name, expected, version, roots }) {
   let copies;
   try {
     copies = roots.flatMap((root) => findCopies(root, name, []));
   } catch {
-    return 'discovery';
+    return { check: 'discovery' };
   }
-  if (copies.length !== 1) return 'copy-count';
+  if (copies.length !== 1) return { check: 'copy-count' };
   const [copy] = copies;
-  if (copy.directory !== expected) return 'location';
-  if (copy.version !== version) return 'version';
-  const path = join(copy.directory, target);
+  if (copy.directory !== expected) return { check: 'location' };
+  if (copy.version !== version) return { check: 'version' };
+  return { directory: copy.directory };
+}
+
+/** The failed check, or the target's path, released source and reviewed patched text. */
+function checkTarget(directory, { target, inputSha256, outputSha256 }, replacements) {
+  const path = join(directory, target);
   let source;
   try {
     source = readFileSync(path, 'utf8');
   } catch {
-    return 'input-read';
+    return { check: 'input-read' };
   }
-  if (sha256(source) !== inputSha256) return 'input-sha256';
+  if (sha256(source) !== inputSha256) return { check: 'input-sha256' };
   const patched = replaceAll(source, replacements);
-  if (patched === undefined) return 'anchor';
-  if (sha256(patched) !== outputSha256) return 'output-sha256';
-  try {
-    replaceFile(path, patched, write);
-  } catch {
-    return 'write';
+  if (patched === undefined) return { check: 'anchor' };
+  if (sha256(patched) !== outputSha256) return { check: 'output-sha256' };
+  return { path, source, patched };
+}
+
+/** Writes every checked target in order; on a failure, puts the ones already written back. */
+function writeTargets(checked, write) {
+  for (const [index, { path, patched }] of checked.entries()) {
+    try {
+      replaceFile(path, patched, write);
+    } catch {
+      for (const { path: written, source } of checked.slice(0, index)) {
+        try {
+          replaceFile(written, source, write);
+        } catch {
+          // A failed write-back still refuses `write`, which fails the image build and its layer.
+        }
+      }
+      return 'write';
+    }
   }
   return undefined;
 }
 
+/** The first failed check, or undefined once every target holds its reviewed output. */
+function patchCheck(options, write) {
+  const copy = discoverCopy(options);
+  if (copy.check !== undefined) return copy.check;
+  const checked = [];
+  for (const target of options.targets) {
+    const result = checkTarget(copy.directory, target, options.replacements);
+    if (result.check !== undefined) return result.check;
+    checked.push(result);
+  }
+  return writeTargets(checked, write);
+}
+
 /**
- * Patch the one real copy of `name` (found by manifest name under `roots`, which must be
- * `expected`); `write(descriptor, text)` fills the temporary file and `stderr` takes the refusal.
+ * Patch every target of the one real copy of `name` (found by manifest name under `roots`, which
+ * must be `expected`); `write(descriptor, text)` fills each temporary file and `stderr` takes the
+ * refusal.
  * @returns the process exit status.
  */
 export function patchPackage(options, io) {
@@ -191,9 +258,7 @@ export function main(argv, stderr, pins = PINS) {
       name: pin.package,
       expected: join(optRoot, pin.directory),
       version: pin.version,
-      target: pin.target,
-      inputSha256: pin.inputSha256,
-      outputSha256: pin.outputSha256,
+      targets: pin.targets,
       replacements: pin.replacements,
       roots: [optRoot, globalRoot],
     },

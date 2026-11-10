@@ -21,9 +21,10 @@ RUN npm install -g pnpm@10.34.6 @deepseek-ai/dsh@0.2.1-rc.2 \
 COPY --chmod=0444 catalog-check.mjs /opt/dsh-team/catalog-check.mjs
 RUN node /opt/dsh-team/catalog-check.mjs record /opt/dsh-team/npm-baseline.json
 
-# The third-party sidebar's code is the unpatched npm release; its manifest only gains
-# bundleDependencies (below). It is delivered like the repository plugins: a real root-owned
-# directory with its dependency closure nested below it, never a global package.
+# The third-party sidebar's code is the npm release with only the reviewed Office handoff patch,
+# and its manifest only gains bundleDependencies (both below). It is delivered like the repository
+# plugins: a real root-owned directory with its dependency closure nested below it, never a global
+# package.
 # --legacy-peer-deps keeps a second DSH and React out of that closure, --no-bin-links leaves no
 # symlink for registration to refuse, and --before pins every dependency to one resolution moment
 # (after the 0.28.0 release, older than the repository's 7-day minimum release age).
@@ -61,11 +62,16 @@ RUN installed="$(node -p 'require("/opt/dsh-team/dsh-sidebar-onlyoffice/package.
        echo "dsh-sidebar-onlyoffice version mismatch: installed=${installed} expected=${expected}" >&2; \
        exit 1; \
      fi
-# Before registration and the profile seed, so every later copy is the patched file: the file
-# token secret and document key derive from the per-instance DSH_TEAM_ONLYOFFICE_FILE_SECRET.
-# Any version, copy or hash drift fails the build; the bind mount keeps the script out of layers.
+# Before registration and the profile seed, so every later copy is a patched file: ONLYOFFICE's
+# file token secret and document key derive from the per-instance DSH_TEAM_ONLYOFFICE_FILE_SECRET,
+# and better-sidebar takes docx, xlsx and pptx only while an enabled viewer of its own declares the
+# extension, otherwise leaving them to DSH's own preview. Any version, copy or hash drift fails the
+# build; rename keeps each root-owned 0444 file's owner and mode; the bind mount keeps the script
+# out of layers.
 RUN --mount=type=bind,source=patch-package.mjs,target=/tmp/patch-package.mjs \
   node /tmp/patch-package.mjs onlyoffice /opt/dsh-team "$(npm root -g)"
+RUN --mount=type=bind,source=patch-package.mjs,target=/tmp/patch-package.mjs \
+  node /tmp/patch-package.mjs better-sidebar /opt/dsh-team "$(npm root -g)"
 
 # Each named context contains only canonical plugin sources, not the repository root.
 # /opt/dsh-team/<id> is every plugin's canonical copy, outside the employee-writable home.
