@@ -1,4 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
+import type { PlatformConfig } from '../config.ts';
+import { ONLYOFFICE } from '../managed-config/index.ts';
+import { officeUnavailableReason } from '../orchestrator/index.ts';
 import { CATALOG_STATES, catalogStates } from '../plugin-catalog/index.ts';
 import type { PluginCatalog } from '../plugin-catalog/index.ts';
 import { isPlainObject } from '../plain-object.ts';
@@ -33,7 +36,15 @@ const RESPONSE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'package', 'name', 'category', 'imageDefaultEnabled', 'state'],
+        required: [
+          'id',
+          'package',
+          'name',
+          'category',
+          'imageDefaultEnabled',
+          'state',
+          'unavailableReason',
+        ],
         properties: {
           id: { type: 'string' },
           package: { type: 'string' },
@@ -41,6 +52,10 @@ const RESPONSE_SCHEMA = {
           category: { type: 'string', enum: ['required', 'manageable'] },
           imageDefaultEnabled: { type: 'boolean' },
           state: STATE_SCHEMA,
+          unavailableReason: {
+            type: ['string', 'null'],
+            enum: ['published-loopback', 'external-jwt-missing', 'bundled-unconfigured', null],
+          },
         },
       },
     },
@@ -61,8 +76,12 @@ function submittedStates(body: unknown, size: number): Map<unknown, unknown> | n
 }
 
 export const pluginCatalogRoutes: FastifyPluginCallback<
-  AdminConfigOptions & { catalog: PluginCatalog }
-> = (app, { catalog, ...options }, done) => {
+  AdminConfigOptions & {
+    catalog: PluginCatalog;
+    documentServerBundled: boolean;
+    upstreamMode: PlatformConfig['upstreamMode'];
+  }
+> = (app, { catalog, documentServerBundled, upstreamMode, ...options }, done) => {
   registerConfigRoute(app, options, {
     name: 'plugin-catalog',
     path: '/_platform/api/admin/plugin-catalog',
@@ -88,7 +107,14 @@ export const pluginCatalogRoutes: FastifyPluginCallback<
       return { pluginCatalog };
     },
     project(settings) {
-      return { entries: catalogStates(catalog, settings) };
+      // Only the bundled deployment fact reaches admin; its container name and JWT never do.
+      const office = officeUnavailableReason(settings, documentServerBundled, upstreamMode);
+      return {
+        entries: catalogStates(catalog, settings).map((entry) => ({
+          ...entry,
+          unavailableReason: entry.id === ONLYOFFICE ? office : null,
+        })),
+      };
     },
   });
   done();

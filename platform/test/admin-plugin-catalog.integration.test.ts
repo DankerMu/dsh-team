@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { createSession } from '../src/auth/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
@@ -7,6 +8,7 @@ import {
   administrator,
   delayedConfigBody,
   loseAdministratorAuthority,
+  putConfig,
   SEEDED_SETTINGS,
   settingsRows,
 } from './admin-config-fixture.ts';
@@ -26,6 +28,18 @@ const submission = (office: string, required = 'forced-on') => ({
     ...REQUIRED.map((id) => ({ id, state: required })),
   ],
 });
+const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+const reasons = (body: unknown) =>
+  (body as { entries: { id: string; unavailableReason: unknown }[] }).entries.map(
+    ({ id, unavailableReason }) => [id, unavailableReason],
+  );
+const expectedReasons = (office: string | null) => [
+  ['dsh-better-sidebar', null],
+  [ONLYOFFICE, office],
+  ['knowledge-base', null],
+  ['office-agents', null],
+  ...REQUIRED.map((id) => [id, null]),
+];
 const states = (body: unknown) =>
   (body as { entries: { id: string; state: string }[] }).entries.map(({ id, state }) => [
     id,
@@ -146,5 +160,61 @@ it.each([
       expect(snapshot(database)).toEqual(before);
       expect(before.settings).toEqual(SEEDED_SETTINGS);
     });
+  },
+);
+
+it.each([
+  ['published-loopback', {}, 'published-loopback'],
+  [
+    'a saved external address without a JWT',
+    { upstreamMode: 'network', initialSettings: { documentServerUrl: 'http://office.example' } },
+    'external-jwt-missing',
+  ],
+  [
+    'a complete external server',
+    {
+      upstreamMode: 'network',
+      initialSettings: {
+        documentServerUrl: 'http://office.example',
+        documentServerJwtSecret: randomBytes(16).toString('hex'),
+      },
+    },
+    null,
+  ],
+  ['an unconfigured bundled server', { upstreamMode: 'network' }, 'bundled-unconfigured'],
+  [
+    'a configured bundled server',
+    {
+      upstreamMode: 'network',
+      documentServer: {
+        containerName: 'dsh-team-documentserver',
+        jwtSecret: randomBytes(16).toString('hex'),
+      },
+    },
+    null,
+  ],
+] as const)(
+  'derives the ONLYOFFICE reason for %s on GET and keeps it on a forced-off PUT',
+  async (_label, options, reason) => {
+    await withApp(
+      async (app, database) => {
+        const { cookie } = await administrator(app, database);
+        const body = submission('employee');
+        body.entries[1] = { id: ONLYOFFICE, state: 'forced-off' };
+
+        const read = await app.inject({ url: PATH, headers: { cookie } });
+        const saved = await putConfig(app, PATH, cookie, body);
+
+        expect(read.statusCode).toBe(200);
+        expect(reasons(read.json())).toEqual(expectedReasons(reason));
+        expect(saved.statusCode).toBe(200);
+        expect(states(saved.json())[1]).toEqual([ONLYOFFICE, 'forced-off']);
+        expect(reasons(saved.json())).toEqual(expectedReasons(reason));
+      },
+      false,
+      [],
+      undefined,
+      options,
+    );
   },
 );

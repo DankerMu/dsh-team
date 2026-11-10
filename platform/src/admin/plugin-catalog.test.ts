@@ -40,6 +40,7 @@ const INTERNAL_ERROR = {
   error: 'Internal Server Error',
   message: 'Internal Server Error',
 };
+// withApp defaults to published-loopback, which disables ONLYOFFICE before any other check.
 const ENTRIES = [
   {
     id: 'dsh-better-sidebar',
@@ -48,6 +49,7 @@ const ENTRIES = [
     category: 'manageable',
     imageDefaultEnabled: true,
     state: 'employee',
+    unavailableReason: null,
   },
   {
     id: 'dsh-sidebar-onlyoffice',
@@ -56,6 +58,7 @@ const ENTRIES = [
     category: 'manageable',
     imageDefaultEnabled: true,
     state: 'employee',
+    unavailableReason: 'published-loopback',
   },
   {
     id: 'knowledge-base',
@@ -64,6 +67,7 @@ const ENTRIES = [
     category: 'manageable',
     imageDefaultEnabled: true,
     state: 'employee',
+    unavailableReason: null,
   },
   {
     id: 'office-agents',
@@ -72,6 +76,7 @@ const ENTRIES = [
     category: 'manageable',
     imageDefaultEnabled: true,
     state: 'employee',
+    unavailableReason: null,
   },
   {
     id: 'permission-tiers',
@@ -80,6 +85,7 @@ const ENTRIES = [
     category: 'required',
     imageDefaultEnabled: false,
     state: 'forced-on',
+    unavailableReason: null,
   },
   {
     id: 'platform-nav',
@@ -88,6 +94,7 @@ const ENTRIES = [
     category: 'required',
     imageDefaultEnabled: false,
     state: 'forced-on',
+    unavailableReason: null,
   },
   {
     id: 'zh-locale',
@@ -96,6 +103,7 @@ const ENTRIES = [
     category: 'required',
     imageDefaultEnabled: false,
     state: 'forced-on',
+    unavailableReason: null,
   },
 ];
 const officeAs = (state: string) =>
@@ -207,6 +215,16 @@ it.each([
         id: 'office-agents',
         state: 'employee',
         [SENTINEL]: 1,
+      } as never),
+    },
+  ],
+  [
+    'an entry echoing the response-only unavailableReason',
+    {
+      entries: submission('employee').with(6, {
+        id: 'dsh-sidebar-onlyoffice',
+        state: 'employee',
+        unavailableReason: null,
       } as never),
     },
   ],

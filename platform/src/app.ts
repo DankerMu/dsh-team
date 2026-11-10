@@ -165,6 +165,7 @@ export async function buildApp(
       resolveSourceAddress,
       subnetPool: config.subnetPool,
       documentServerBundled: config.documentServer !== null,
+      upstreamMode: config.upstreamMode,
       shutdown: shutdown.signal,
       ...(instanceService === undefined ? {} : { service: instanceService }),
     });

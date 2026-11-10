@@ -15,6 +15,7 @@ const OFFICE = {
   category: 'manageable',
   imageDefaultEnabled: true,
   state: 'employee',
+  unavailableReason: null,
 };
 const LOCALE = {
   id: 'zh-locale',
@@ -23,6 +24,7 @@ const LOCALE = {
   category: 'required',
   imageDefaultEnabled: false,
   state: 'forced-on',
+  unavailableReason: null,
 };
 const CATALOG = { entries: [OFFICE, LOCALE] };
 const SOURCES = {
@@ -215,6 +217,8 @@ it.each([
   ['unknown state', loads(json({ entries: [{ ...OFFICE, state: 'private-data' }] }))],
   ['unknown category', loads(json({ entries: [{ ...OFFICE, category: 'private-data' }] }))],
   ['entry field type', loads(json({ entries: [{ ...OFFICE, imageDefaultEnabled: 'yes' }] }))],
+  ['unknown reason', loads(json({ entries: [{ ...OFFICE, unavailableReason: 'private-data' }] }))],
+  ['missing reason', loads(json({ entries: [{ ...OFFICE, unavailableReason: undefined }] }))],
   ['entries type', loads(json({ entries: 'private-data' }))],
   ['entry shape', loads(json({ entries: [null] }))],
   ['registry type', loads(json(CATALOG), json({ ...SOURCES, pluginRegistries: [1] }))],
@@ -268,6 +272,63 @@ it('saves the full catalog with required entries forced on and shows the running
     '保存时运行中的实例数：2（非实时统计）。',
   );
   expectCountOnlyUnder(view, '预装插件', 2);
+});
+
+const REASONS = [
+  [
+    'published-loopback',
+    'Office 不可用：上游模式为 published-loopback，实例连不到 Document Server，ONLYOFFICE 在实例中停用。',
+  ],
+  [
+    'external-jwt-missing',
+    'Office 不可用：已填写外部 Document Server 地址，但没有填写 JWT 密钥，ONLYOFFICE 在实例中停用。',
+  ],
+  [
+    'bundled-unconfigured',
+    'Office 不可用：部署没有配置自带 Document Server，ONLYOFFICE 在实例中停用。',
+  ],
+] as const;
+const REASON = '[data-testid="office-unavailable-reason"]';
+const withReason = (unavailableReason: string, state = 'employee') =>
+  json({ entries: [{ ...OFFICE, state, unavailableReason }, LOCALE] });
+
+it.each(REASONS)(
+  'shows the fixed %s text under the state control of that row',
+  async (reason, expected) => {
+    const { view } = await render(loads(withReason(reason)));
+
+    const shown = [...view.querySelectorAll(REASON)];
+
+    expect(shown.map((node) => node.textContent)).toEqual([expected]);
+    expect(shown[0]?.closest('td')?.querySelector('select')).not.toBeNull();
+    expect(shown[0]?.previousElementSibling?.tagName).toBe('SELECT');
+  },
+);
+
+it('shows no reason when every entry reports null', async () => {
+  const { view } = await render();
+
+  expect(view.querySelector(REASON)).toBeNull();
+  expect(view.textContent).not.toContain('Office 不可用');
+});
+
+it('hides the reason while the draft is forced-off and shows it again when switched back', async () => {
+  const { view } = await render(loads(withReason('bundled-unconfigured')));
+
+  await choose(view, 'forced-off');
+  const hidden = view.querySelector(REASON);
+  await choose(view, 'forced-on');
+  const restored = view.querySelector(REASON)?.textContent;
+
+  expect(hidden).toBeNull();
+  expect(restored).toBe(REASONS[2][1]);
+});
+
+it('shows no reason for an entry loaded as forced-off', async () => {
+  const { view } = await render(loads(withReason('published-loopback', 'forced-off')));
+
+  expect(element(view, 'select', HTMLSelectElement).value).toBe('forced-off');
+  expect(view.querySelector(REASON)).toBeNull();
 });
 
 it.each([
@@ -400,6 +461,11 @@ it.each([
   [SAVE[2], WEB_API, json({ webToolsEnabled: true, runningInstances: -1 })],
   [SAVE[1], SOURCES_API, json({ ...SOURCES, runningInstances: 0.5 })],
   [SAVE[0], CATALOG_API, json({ entries: [], runningInstances: 0 }, 409)],
+  [
+    SAVE[0],
+    CATALOG_API,
+    json({ entries: [{ ...OFFICE, unavailableReason: 'private-data' }], runningInstances: 0 }),
+  ],
 ])('reports a failed or malformed %s save without false success %#', async (label, api, reply) => {
   const request = serve({ ...loads(), [`PUT ${api}`]: [reply] });
   const { view } = renderAccountPage(<PluginsPage />, PATH, request);

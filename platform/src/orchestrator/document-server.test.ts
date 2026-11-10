@@ -21,7 +21,7 @@ import {
   rejectDocumentServer,
   stopDocumentServer,
 } from '../../test/container-document-server-fixture.ts';
-import { officeOverlay } from './document-server.ts';
+import { officeOverlay, officeUnavailableReason } from './document-server.ts';
 import type { DocumentServerDecision } from './document-server.ts';
 
 const fixtures: Awaited<ReturnType<typeof documentServerFixture>>[] = [];
@@ -600,5 +600,39 @@ it.each([
     );
 
     expect(office).toEqual(expected);
+  },
+);
+
+it.each([
+  [
+    'published-loopback before a complete external server',
+    external('http://office.example'),
+    true,
+    'published-loopback',
+    'published-loopback',
+  ],
+  [
+    'an external address without a JWT before an unconfigured bundled peer',
+    external('http://office.example', ''),
+    false,
+    'network',
+    'external-jwt-missing',
+  ],
+  ['a complete external server', external('http://office.example'), false, 'network', null],
+  ['an unconfigured bundled peer', NO_EXTERNAL, false, 'network', 'bundled-unconfigured'],
+  ['a configured bundled peer', NO_EXTERNAL, true, 'network', null],
+  [
+    'published-loopback before an unconfigured bundled peer',
+    NO_EXTERNAL,
+    false,
+    'published-loopback',
+    'published-loopback',
+  ],
+] as const)(
+  'names the first static Office unavailability for %s',
+  (_label, settings, bundledConfigured, upstreamMode, expected) => {
+    const reason = officeUnavailableReason(settings, bundledConfigured, upstreamMode);
+
+    expect(reason).toBe(expected);
   },
 );

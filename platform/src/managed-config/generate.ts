@@ -104,7 +104,7 @@ const PRESET_REGISTRY = 'agent-preset-registry';
 // The released default selection: dsh-web-app 0.2.1-rc.2 cordis.patch.yml:586-589.
 const RELEASE_DEFAULT_PRESET = 'standard';
 // The ONLYOFFICE sidebar plugin's catalog id, which is also its single inserted row id.
-const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
+export const ONLYOFFICE = 'dsh-sidebar-onlyoffice';
 
 function filterPlugins(plugins: readonly PluginEntry[]): PluginEntry[] {
   const filtered: PluginEntry[] = [];
