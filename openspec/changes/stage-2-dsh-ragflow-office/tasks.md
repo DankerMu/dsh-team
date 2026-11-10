@@ -4842,3 +4842,96 @@ Must preserve：
 - 不改 `platform/src/orchestrator/volumes.ts`。
 
 残留风险：CI 那次失败的第二个错误没有被抓到，这里修的是最可能的机制。下次如果还复现，新的诊断输出会直接给出错误的类名和消息。
+
+## 37. 旧版 profile 启动失败可诊断（#492）
+
+依赖：#393（PR #490，已合入）。由 #492 承载。改动范围是 `platform/src/managed-config/`、`platform/src/orchestrator/`（关键路径；PR 中注明人工白盒评审推迟到 Epic #380 完成时进行，当前未通过）、`platform/src/audit/`、`platform/src/admin/`，以及管理员实例页和审计页。不改 DSH 源码，不自动重置。重置会丢弃员工设置，只能由管理员确认后执行。
+
+用户决定（2026-11-08，PR #591 第 1 轮评审之后）：旧版 profile 在容器创建之前就会被受管组合拒绝，这个拒绝要记成 `error` 行，并写一条 `instance.start-failed` 审计（细节 `{code}`）。启动后读日志分类的做法删除。
+
+- [ ] 37.1 受管组合发现员工 profile 里有 bundle 被 0.2.1 跳过时，在创建容器之前拒绝启动，这时：
+  - 实例行写成 `error`，不关联容器，最近错误首行为封闭失败码 `profile-incompatible`；
+  - 同一事务写 `instance.start-failed`，细节为 `{"code":"profile-incompatible"}`；
+  - 管理员审计接口和审计页如实显示这条细节；
+  - 管理员实例列表在行状态为 `error` 时，回应 `lastErrorCode` 为该码。
+
+  其他创建前失败的行为不变：不改行，不写审计。创建后的失败（就绪、补偿、中断创建恢复）不变，审计细节仍为 `{}`。验证：单元测试覆盖组合拒绝的识别、持久化与围栏、审计投影和两个管理员路由；`pnpm test:ui`；VPS exact-head `test:docker` 中 `volume-upgrade.docker.test.ts` 用旧卷不重置直接启动。
+
+- [ ] 37.2 管理员实例页对 `lastErrorCode === 'profile-incompatible'` 的行显示固定提示「该用户的 DSH 配置来自旧版本，需要执行“重置配置”」，提示紧挨现有的「重置配置」按钮。审计页在细节列对带这个码的 `instance.start-failed` 显示「旧版 profile 不兼容」，列头为「细节」。验证：`instance-page.test.tsx`、`audit-page.test.tsx` 和 `pnpm test:ui` 截图。
+
+Suggested fixture level: expanded - 关键路径上新增一条创建前的持久化写入，同时改变审计的封闭细节和两个管理员 API 契约
+Minimal mergeable slice: atomic: 识别、持久化、审计、路由和页面提示是同一条诊断路径，拆开后任何一片都不能独立交付可见行为
+Risk packs (37.1–37.2): selected - Schema（实例列表加 `lastErrorCode`，审计 `details` 加 `code`，用 `pnpm contract:write` 重新生成 `schemas/openapi.json`）、Public API（同上，只加字段）、Security（失败码和最近错误都是固定文本，不回显 profile 内容、包名或日志）、Concurrency（创建前写入要与同一用户的其他生命周期写入互斥，靠 SQL 条件和账号复查保证）、Legacy compatibility（已有 `{}` 细节行照常可读，显示「—」；其他写入方不变；`DEPLOY.md:270` 的 19.7 口径加上这一个例外）、Migration（不加列，不加迁移，码由最近错误首行推出）；not selected - Config、Auth、Resource limits、Release。
+
+Evidence (37.1–37.2):
+
+- PR #591 第 1 轮两位评审都确认了以下事实，编排者又对照代码核实过：
+  - `startUserContainer` 在网络分配和容器创建之前执行 `stage = 'managed composition'`（`platform/src/orchestrator/start.ts` 约 `:698-700`）。这一步经 home helper 在员工 home 卷上调用 `loadProfileDirectory`（`platform/src/managed-config/read.ts` 中的 `managedCompositionCommand`）。
+  - `projectComposition` 只要发现 `skippedBundles` 非空就 `invalid()`（`read.ts:158-160`，由 `read.test.ts:93-99` 锁定）。
+  - 失败时 `confirmedStarted` 为 undefined，`failedStartup` 只回滚网络就抛错，不改行，也不写审计。
+  - 结果是旧卷启动后，行保持 `stopped`、`last_error` 为 NULL、没有审计，管理员什么也看不到。启动后的日志分类永远走不到：`dsh: skipping profile bundle` 在结构上不会出现在启动后的日志里。
+- 阶段 1 卷的 profile 列出 `@deepseek-ai/dsh-base`、`@deepseek-ai/dsh-web-app`、`@dsh-team/office-agents` 三个 bundle，0.2.1 全部跳过。PR #588 的 VPS 运行（`d483f788…`）中，`volume-upgrade` 摘要显示 `skippedBeforeReset: true`。
+- `loadProfileDirectory` 会把 profile 里每个装不上的 bundle 记进 `skippedBundles`，原因包括包解析不到、manifest 不可读、缺 `dsh.bundle`、兼容性不通过、patch 加载失败（`dsh-app-boot@0.2.1-rc.2` `lib/index.js:1000`、`:1016-1040`）。这些原因都来自 profile 自己的 bundle 列表，用镜像种子替换 `profiles/`（即「重置配置」）可以消除，所以映射为「需要重置配置」。
+- 先例：中断创建恢复（`creation-attempt.ts` 约 `:356-372`）已经在没有容器的情况下写 `status='error'`、`container_id=NULL` 和 `instance.start-failed`。`isTerminalInstance` 把 `error` 加无容器视为终态（`identity.ts:44`），重置和下次启动都接受这个状态。
+
+改动：
+
+- 失败码常量放在 audit：`platform/src/audit/record.ts` 导出 `PROFILE_INCOMPATIBLE = 'profile-incompatible'`，经 `audit/index.ts` 导出。orchestrator 已经引用 audit，放在 audit 不会成环。
+- `platform/src/managed-config/read.ts`：
+  - helper 脚本在 `loadProfileDirectory` 之后立即检查 `profile.skippedBundles.length > 0`。非空时只输出 `{"profileIncompatible":true}` 并正常退出，不再继续组合，也不输出包名或原因。这样后续步骤即使失败，也不会掩盖这个结论。
+  - `readManagedComposition` 遇到恰好是 `{ profileIncompatible: true }` 的输出（没有其他键）时，抛出新的 `ProfileIncompatibleError`，消息固定为 `Managed composition rejected: incompatible DSH profile`，经 `managed-config/index.ts` 导出。
+  - 其他输出照旧校验。`skippedBundles` 非空仍然 `invalid()`，作为纵深防御。
+- `platform/src/orchestrator/start-failure.ts`（新模块，带同名 `.test.ts`）：
+  - `PROFILE_INCOMPATIBLE_ERROR = 'profile-incompatible\nManaged composition rejected: incompatible DSH profile'`，最近错误的全文，固定文本；
+  - `lastErrorCode(lastError: string | null): typeof PROFILE_INCOMPATIBLE | null`：首行恰好等于该码时返回该码，否则返回 null；
+  - `recordProfileIncompatible(input, user)`：在一个事务里复查账号仍是当前那个 `active` 账号（id 和 email 都不变），然后执行 `INSERT INTO instances(user_id,status,last_error) VALUES (?, 'error', ?) ON CONFLICT(user_id) DO UPDATE SET status='error', last_error=excluded.last_error, dsh_cookie=NULL, instance_token_hash=NULL WHERE instances.container_id IS NULL AND instances.status IN ('stopped','error')`，并写 `instance.start-failed`，`details: { code: PROFILE_INCOMPATIBLE }`。写入条件不成立时（行已有容器，或处于 `starting`/`running`），不写行也不写审计。不论写入成功与否，都继续抛出原来的启动失败。
+- `start.ts`：`managed composition` 阶段捕获 `ProfileIncompatibleError` 后调用 `recordProfileIncompatible`，再照原样抛错（`startupFailure` 的阶段消息不变）。此时网络还没分配，`failedStartup` 的回滚路径不变。其他阶段的错误不变。
+- 撤销 PR #591 第 1 版的启动后分类。`readiness-logs.ts`、`readiness.ts` 的 `fail()`、`start.ts` 的 `compensateStarted()`、`start-compensation.test.ts`、`plugin-failure-markers.ts` 和 `volume-upgrade` 里内嵌的 Python 标记字面量，都恢复为 `origin/main` 的内容。`PROFILE_REJECTION_MARKERS` 和 `withFailureCode` 删除，不留死代码。
+- `platform/src/audit/record.ts`：`instance.start-failed` 的 `code` 是可选细节，取值只有 `profile-incompatible`。缺省时存 `{}`；存在但非法（其他字符串、null、对象、数组）时写入失败，行数不变，错误不回显输入。校验按字段分派，`instance.stopped` 的 `reason` 仍为必填，校验不变。保留 PR #591 第 1 版的实现和测试。
+- 管理员审计接口 `audit-events.ts`（`details` 的 schema 加 `code` 枚举，投影使用同一个封闭校验）、审计页（显示「旧版 profile 不兼容」，列头为「细节」）、管理员实例列表 `routes.ts`（必填 `lastErrorCode`，仅 `status === 'error'` 时取 `lastErrorCode(lastError)`，schema 为 `{ type: ['string','null'], enum: ['profile-incompatible', null] }`）、实例页提示：都保留 PR #591 第 1 版的实现和测试。
+- Docker（`platform/test/volume-upgrade.docker.test.ts`）：在 `skippedBeforeReset` 之后、第一次 `restore()` 之前，用同一个 `owner` 不重置直接启动该用户。
+  - 断言：启动以失败结束；实例行为 `status = 'error'`、`container_id` 为 null、`last_error` 恰为 `PROFILE_INCOMPATIBLE_ERROR`；最近一条 `instance.start-failed` 的细节为 `{"code":"profile-incompatible"}`；名为 `dsh-team-u-<id>` 的容器不存在；用户网络不存在。
+  - 然后不经停止，直接走原来的「重置 → 启动成功」流程（`error` 加无容器满足 `restoreUserProfiles` 的终态要求）。原有断言全部保留。启动成功时，`start.ts:566` 和就绪流程会清空最近错误。
+  - 摘要加 `startBeforeReset: { status, code }`，`it` 里用 `toMatchObject` 断言 `{ status: 'error', code: 'profile-incompatible' }`。
+
+- 重置后提示消失（PR #591 第 2 轮 P1）：管理员重置要先 `stop('admin')`，但 `error` 加无容器的行属于终态，`stop` 会直接跳过。`restoreUserProfiles` 原本不写实例行，所以重置之后这一行仍是 `error`，提示也还在。修复：`platform/src/orchestrator/profile-restore.ts` 在恢复成功、最后一次 `assertCurrent()` 之后，在同一个 owner FIFO 里执行一次 `UPDATE instances SET status='stopped' WHERE user_id=? AND status='error' AND container_id IS NULL`，保留 `last_error`，不写审计（因为没有容器被停止；`instance.config-reset` 审计仍由管理员动作写）。这样实例列表回应 `stopped`，`lastErrorCode` 为 null，提示消失；下次启动照常清空最近错误。`stopped` 行不变。instance-lifecycle 的「停止状态下只恢复 profiles」场景同步加上这一处例外。证明：
+  - 一个经 `InstanceService.resetConfig`（或管理员 reset 路由）的集成测试，起点是带码的 `error` 加无容器行，断言重置后管理员实例列表回应 `status: 'stopped'`、`lastErrorCode: null`，最近错误仍在；
+  - `profile-restore` 的单元测试覆盖 `error` 改为 `stopped`、`stopped` 保持不变、恢复失败时不改；
+  - `volume-upgrade.docker.test.ts` 在 `restore()` 之后读一次行，断言 `status === 'stopped'` 且 `container_id` 为 null。
+
+需要同步核对的现有测试：
+
+- `read.test.ts:93-99`：`skippedBundles` 非空仍被拒绝，期望不变；新增 `{profileIncompatible:true}` 抛出 `ProfileIncompatibleError` 的用例，以及多带一个键时 `invalid` 的用例。
+- `start.test.ts`：给组合阶段加三个用例：
+  - 组合 helper 报告不兼容时，行变为 `error` 并写入审计；
+  - 行已有容器或处于 `starting` 时不写；
+  - 账号已变化时不写。
+- 以下测试恢复为 `origin/main` 的版本：`readiness.test.ts`、`readiness-logs.test.ts`、`plugin-failure-markers.ts`。
+
+文档（编排者在同一 PR 里改）：
+
+- `docs/DEPLOY.md`，两处：
+  - 升级说明保留「受管组合被拒绝」，并补充：管理员实例页该行显示为出错，「重置配置」旁出现固定提示，审计页的细节显示「旧版 profile 不兼容」。
+  - `:270` 的 19.7 口径加一个例外：「profile 不兼容的创建前拒绝（37.1）除外」。
+- `platform/src/orchestrator/README.md`：改写第 1 版加的段落，说明这是创建前的写入，以及它的条件。
+
+验证：
+
+- `pnpm check`；
+- `pnpm test:ui`（实例页提示截图，零新增控制台错误）；
+- VPS exact-head `test:docker`（含旧卷用例）和 `test:deploy`，cleanup confirmed；
+- 本机 exact-head `pnpm test:stack` 满足合并门禁。
+
+剩余风险：
+
+- 员工自己装的 bundle 一旦失效，也会出现在 `skippedBundles` 里，同样被判为「需要重置配置」。重置确实能消除它，但会同时丢掉员工的其他设置。管理员确认前应先和员工沟通。
+- 如果将来某个 DSH 版本改变了 `skippedBundles` 的语义，Docker 用例能够发现。
+
+Must preserve：
+
+- 其他创建前失败不改行、不写审计；
+- 创建后各失败路径的最近错误和 `{}` 细节；
+- `instance.stopped` 的停止原因校验；
+- 重置接口的确认、停止、恢复和审计顺序；
+- `volume-upgrade` 原有的重置后断言；
+- 员工侧状态回应仍不含 `last_error`，也不含新码。

@@ -16,6 +16,7 @@ const INSERT_AUDIT =
 
 const UNKNOWN_EVENT_TYPE = 'Unknown audit event type';
 const INVALID_STOP_REASON = 'Invalid audit details field "reason"';
+const INVALID_FAILURE_CODE = 'Invalid audit details field "code"';
 
 const STOP_REASONS: Record<string, true> = {
   idle: true,
@@ -26,12 +27,45 @@ const STOP_REASONS: Record<string, true> = {
 
 export type InstanceStopReason = 'idle' | 'admin' | 'disabled' | 'error';
 
+/** The only closed `instance.start-failed` failure code; also the first line of its last error. */
+export const PROFILE_INCOMPATIBLE = 'profile-incompatible';
+
 export function validateStopReason(value: unknown): asserts value is InstanceStopReason {
   if (typeof value !== 'string' || !Object.hasOwn(STOP_REASONS, value))
     throw new Error(INVALID_STOP_REASON);
 }
 
-const EVENT_DETAIL_FIELDS: Record<string, readonly string[]> = {
+export function validateFailureCode(value: unknown): asserts value is typeof PROFILE_INCOMPATIBLE {
+  if (value !== PROFILE_INCOMPATIBLE) throw new Error(INVALID_FAILURE_CODE);
+}
+
+interface DetailField {
+  readonly name: string;
+  readonly required: boolean;
+  readonly validate: (value: unknown) => string;
+  readonly missing: string;
+}
+
+const STOP_REASON: DetailField = {
+  name: 'reason',
+  required: true,
+  validate: (value) => {
+    validateStopReason(value);
+    return value;
+  },
+  missing: INVALID_STOP_REASON,
+};
+const FAILURE_CODE: DetailField = {
+  name: 'code',
+  required: false,
+  validate: (value) => {
+    validateFailureCode(value);
+    return value;
+  },
+  missing: INVALID_FAILURE_CODE,
+};
+
+const EVENT_DETAIL_FIELDS: Record<string, readonly DetailField[]> = {
   'account.registered': [],
   'login.succeeded': [],
   'login.failed': [],
@@ -55,8 +89,8 @@ const EVENT_DETAIL_FIELDS: Record<string, readonly string[]> = {
   'instance.created': [],
   'instance.started': [],
   'instance.ready': [],
-  'instance.stopped': ['reason'],
-  'instance.start-failed': [],
+  'instance.stopped': [STOP_REASON],
+  'instance.start-failed': [FAILURE_CODE],
 };
 
 function projectDetails(type: string, details: Record<string, unknown> | undefined): string {
@@ -64,18 +98,15 @@ function projectDetails(type: string, details: Record<string, unknown> | undefin
   if (fields === undefined) {
     throw new Error(UNKNOWN_EVENT_TYPE);
   }
-  if (fields.length === 0) {
-    return '{}';
-  }
 
+  // Only validated closed strings are copied, so extra or unserializable fields are never read.
   const projected: Record<string, string> = {};
   for (const field of fields) {
-    if (details === undefined || !Object.hasOwn(details, field)) {
-      throw new Error(INVALID_STOP_REASON);
+    if (details === undefined || !Object.hasOwn(details, field.name)) {
+      if (field.required) throw new Error(field.missing);
+      continue;
     }
-    const value = details[field];
-    validateStopReason(value);
-    projected[field] = value;
+    projected[field.name] = field.validate(details[field.name]);
   }
   return JSON.stringify(projected);
 }

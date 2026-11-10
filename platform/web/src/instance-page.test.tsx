@@ -24,6 +24,7 @@ const ITEMS = STATES.map((status, index) => ({
   lastStartedAt: status === 'not-created' ? null : 1_900_000_000_000,
   lastActivityAt: status === 'not-created' ? null : 1_900_000_001_000,
   lastError: status === 'error' ? '安全日志：启动失败 <img src=x>' : null,
+  lastErrorCode: null,
 }));
 const TARGET = {
   userId: 'instance0004',
@@ -32,7 +33,12 @@ const TARGET = {
   lastStartedAt: 1,
   lastActivityAt: 2,
   lastError: '启动失败',
+  lastErrorCode: null,
 };
+const UNCODED_TARGET = Object.fromEntries(
+  Object.entries(TARGET).filter(([key]) => key !== 'lastErrorCode'),
+);
+const PROFILE_HINT = '该用户的 DSH 配置来自旧版本，需要执行“重置配置”';
 const receipt = createJsonReceipt({ items: [TARGET] });
 
 it('routes the administrator instance list with five states, nullable times and plain saved error details', async () => {
@@ -57,6 +63,46 @@ it('routes the administrator instance list with five states, nullable times and 
   expect(view.querySelector('details')?.textContent).toContain('安全日志：启动失败 <img src=x>');
   expect(view.querySelector('details')?.hasAttribute('open')).toBe(false);
   expect(view.querySelector('img')).toBeNull();
+});
+
+it('shows the fixed profile reset hint only beside the reset button of a profile-incompatible row', async () => {
+  const coded = {
+    ...TARGET,
+    lastError: 'profile-incompatible\nDSH readiness failed; container stopped\n需要升级',
+    lastErrorCode: 'profile-incompatible',
+  };
+  const plain = { ...TARGET, userId: 'instance0005', email: 'plain@example.test' };
+  const request = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(receipt({ items: [coded, plain] }))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    .mockResolvedValueOnce(
+      receipt({ items: [{ ...coded, status: 'stopped', lastErrorCode: null }, plain] }),
+    );
+  const { view } = await renderSettledAccountPage(<AccountPage />, PATH, request);
+
+  const [codedRow, plainRow] = [...view.querySelectorAll('tbody tr')];
+  const reset = [...(codedRow?.querySelectorAll('button') ?? [])].find(
+    (action) => action.textContent === '重置配置',
+  );
+  expect(reset?.nextElementSibling?.textContent).toBe(PROFILE_HINT);
+  expect(codedRow?.querySelector('details')?.textContent).toContain('需要升级');
+  expect(plainRow?.textContent).not.toContain(PROFILE_HINT);
+  expect(view.textContent.split(PROFILE_HINT)).toHaveLength(2);
+  expect(view.querySelector('[role="dialog"]')).toBeNull();
+  expect(request).toHaveBeenCalledTimes(1);
+
+  if (reset === undefined) throw new Error('Missing reset action');
+  await settle(() => {
+    reset.click();
+  });
+  await settleSubmit(view);
+
+  expect(request.mock.calls[1]?.[0]).toBe(
+    '/_platform/api/admin/instances/instance0004/reset-config',
+  );
+  expect(view.textContent).toContain('配置已重置');
+  expect(view.textContent).not.toContain(PROFILE_HINT);
 });
 
 it('confirms reset, cancels without mutation and retains one pending fence through the complete 204 body', async () => {
@@ -184,6 +230,9 @@ it.each([
   { items: [{ ...TARGET, lastActivityAt: 'yesterday' }] },
   { items: [{ ...TARGET, lastStartedAt: 8_640_000_000_000_001 }] },
   { items: [{ ...TARGET, lastError: { private: 'not-displayable' } }] },
+  { items: [UNCODED_TARGET] },
+  { items: [{ ...TARGET, lastErrorCode: 'other-code' }] },
+  { items: [{ ...TARGET, lastErrorCode: ['profile-incompatible'] }] },
 ])('rejects malformed list projection %# instead of exposing actions', async (value) => {
   const { view } = await renderSettledAccountPage(
     <AccountPage />,

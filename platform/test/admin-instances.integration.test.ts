@@ -181,6 +181,7 @@ it('lists all five persisted instance states without private metadata or mutatio
           lastStartedAt: null,
           lastActivityAt: null,
           lastError: null,
+          lastErrorCode: null,
         },
         {
           userId: 'stopped-user',
@@ -189,6 +190,7 @@ it('lists all five persisted instance states without private metadata or mutatio
           lastStartedAt: 1700000000111,
           lastActivityAt: null,
           lastError: 'Previous readiness timeout',
+          lastErrorCode: null,
         },
         {
           userId: 'starting-user',
@@ -197,6 +199,7 @@ it('lists all five persisted instance states without private metadata or mutatio
           lastStartedAt: null,
           lastActivityAt: 1700000000222,
           lastError: null,
+          lastErrorCode: null,
         },
         {
           userId: 'running-user',
@@ -205,6 +208,7 @@ it('lists all five persisted instance states without private metadata or mutatio
           lastStartedAt: 1700000000333,
           lastActivityAt: 1700000000444,
           lastError: null,
+          lastErrorCode: null,
         },
         {
           userId: 'error-user',
@@ -213,6 +217,7 @@ it('lists all five persisted instance states without private metadata or mutatio
           lastStartedAt: 1700000000555,
           lastActivityAt: 1700000000666,
           lastError: safeError,
+          lastErrorCode: null,
         },
       ],
     });

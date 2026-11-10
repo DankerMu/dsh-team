@@ -1,6 +1,6 @@
 import { rm } from 'node:fs/promises';
 import { setImmediate } from 'node:timers/promises';
-import { createDockerClient, createOrchestrator } from './index.ts';
+import { createDockerClient, createOrchestrator, PROFILE_INCOMPATIBLE_ERROR } from './index.ts';
 import type { DockerTransport } from './index.ts';
 import { afterEach, expect, it } from 'vitest';
 import {
@@ -44,6 +44,52 @@ it('restores through an owned helper without changing index, audit or allocating
   expect(daemon.containers.size).toBe(0);
   expect(daemon.requests.slice(count).some(({ path }) => path === '/volumes/create')).toBe(false);
 });
+
+function seedIncompatible(context: StartupOwnerFixture) {
+  context.database
+    .prepare("UPDATE instances SET status='error',last_error=? WHERE user_id=?")
+    .run(PROFILE_INCOMPATIBLE_ERROR, START_USER);
+  return context.database.prepare('SELECT * FROM instances WHERE user_id=?').get(START_USER);
+}
+
+it('turns a container-less error row stopped after success, keeping last_error and audits', async () => {
+  const context = await fixture();
+  const before = seedIncompatible(context);
+  const audits = context.database.prepare('SELECT * FROM audit_events').all();
+
+  await context.owner.restoreUserProfiles(context.input);
+
+  expect(context.database.prepare('SELECT * FROM instances').all()).toEqual([
+    { ...(before as Record<string, unknown>), status: 'stopped' },
+  ]);
+  expect(context.database.prepare('SELECT * FROM audit_events').all()).toEqual(audits);
+});
+
+it.each(['helper-exit', 'final-identity'])(
+  'leaves a container-less error row unchanged after %s failure',
+  async (failure) => {
+    const context = await fixture();
+    const { daemon, database } = context;
+    const before = seedIncompatible(context);
+    if (failure === 'helper-exit')
+      daemon.overrides.set(`POST /containers/${START_HELPER}/wait?condition=not-running`, {
+        status: 200,
+        document: { StatusCode: 1 },
+      });
+    else
+      daemon.beforeRequest(({ method, path }) => {
+        if (method === 'DELETE' && path === `/containers/${START_HELPER}?force=true`)
+          database.prepare("UPDATE users SET status='disabled' WHERE id=?").run(START_USER);
+      });
+
+    await expect(context.owner.restoreUserProfiles(context.input)).rejects.toThrow(
+      'Profile restoration failed',
+    );
+
+    expect(daemon.containers.size).toBe(0);
+    expect(database.prepare('SELECT * FROM instances').all()).toEqual([before]);
+  },
+);
 
 it.each(['running', 'starting'])(
   'rejects %s before a profile helper can mutate data',

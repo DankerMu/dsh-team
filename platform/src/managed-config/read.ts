@@ -6,6 +6,7 @@ export type ManagedComposition = Pick<ManagedConfigInput, 'presets' | 'localePat
 type PresetEntry = ManagedConfigInput['presets'][number];
 
 const INVALID_COMPOSITION = 'Invalid managed composition';
+const PROFILE_INCOMPATIBLE_OUTPUT = '{"profileIncompatible":true}';
 const PRESET_NAME = '@deepseek-ai/dsh-agent-preset';
 const INSTALL_ANCHOR = '/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json';
 const PROFILE_DIR = '/data/home/profiles/web';
@@ -37,31 +38,45 @@ try {
     bundlePatchPaths,
   } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-app-boot')).href);
   const profile = loadProfileDirectory('dsh', ${JSON.stringify(PROFILE_DIR)}, ${JSON.stringify(INSTALL_ANCHOR)});
-  const homePatch = loadOptionalPatches('dsh', ${JSON.stringify(HOME_PATCH)}) ?? [];
-  const entries = composeEntries(
-    [...profile.layers.map((layer) => layer.patches), profile.patches, homePatch],
-    () => {
-      throw new Error(FAIL);
-    },
-  );
-  const localePatch = loadOverlayPatches('dsh', ${JSON.stringify(CANONICAL_LOCALE_PATCH)});
-  const bundles = BUNDLE_IDS.map((id) => {
-    const directory = '/opt/dsh-team/' + id;
-    const manifest = JSON.parse(readFileSync(directory + '/package.json', 'utf8'));
-    // A missing dsh.bundle or patch declaration throws here, like any unreadable file.
-    const paths = bundlePatchPaths(directory, manifest.dsh?.bundle);
-    return { id, patch: paths.flatMap((path) => loadOverlayPatches('dsh', path)) };
-  });
-  process.stdout.write(JSON.stringify({
-    skippedBundles: profile.skippedBundles,
-    entries,
-    localePatch,
-    bundles,
-  }));
+  // A skipped bundle comes from the profile's own list; later steps must not mask that verdict,
+  // and bundle names and reasons never leave the helper.
+  if (profile.skippedBundles.length > 0) {
+    process.stdout.write('${PROFILE_INCOMPATIBLE_OUTPUT}');
+  } else {
+    const homePatch = loadOptionalPatches('dsh', ${JSON.stringify(HOME_PATCH)}) ?? [];
+    const entries = composeEntries(
+      [...profile.layers.map((layer) => layer.patches), profile.patches, homePatch],
+      () => {
+        throw new Error(FAIL);
+      },
+    );
+    const localePatch = loadOverlayPatches('dsh', ${JSON.stringify(CANONICAL_LOCALE_PATCH)});
+    const bundles = BUNDLE_IDS.map((id) => {
+      const directory = '/opt/dsh-team/' + id;
+      const manifest = JSON.parse(readFileSync(directory + '/package.json', 'utf8'));
+      // A missing dsh.bundle or patch declaration throws here, like any unreadable file.
+      const paths = bundlePatchPaths(directory, manifest.dsh?.bundle);
+      return { id, patch: paths.flatMap((path) => loadOverlayPatches('dsh', path)) };
+    });
+    process.stdout.write(JSON.stringify({
+      skippedBundles: profile.skippedBundles,
+      entries,
+      localePatch,
+      bundles,
+    }));
+  }
 } catch {
   fail();
 }
 `;
+
+/** The employee profile lists a bundle the installed DSH skips; only a profile reset clears it. */
+export class ProfileIncompatibleError extends Error {
+  constructor() {
+    super('Managed composition rejected: incompatible DSH profile');
+    this.name = 'ProfileIncompatibleError';
+  }
+}
 
 function invalid(): never {
   throw new Error(INVALID_COMPOSITION);
@@ -195,5 +210,7 @@ export async function readManagedComposition(
   } catch {
     invalid();
   }
+  if (JSON.stringify(observed) === PROFILE_INCOMPATIBLE_OUTPUT)
+    throw new ProfileIncompatibleError();
   return projectComposition(observed, bundleIds);
 }

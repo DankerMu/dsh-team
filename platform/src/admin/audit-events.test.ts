@@ -78,7 +78,7 @@ it('accepts safe boundary values and preserves an explicitly empty email filter'
   });
 });
 
-const DETAILS_CASES: readonly [string, { reason?: string }][] = [
+const DETAILS_CASES: readonly [string, { reason?: string; code?: string }][] = [
   ['null', {}],
   ['[]', {}],
   ['"private-content"', {}],
@@ -87,9 +87,13 @@ const DETAILS_CASES: readonly [string, { reason?: string }][] = [
     JSON.stringify({ reason, password: 'private-content' }),
     { reason },
   ]),
+  [
+    '{"code":"profile-incompatible","password":"private-content"}',
+    { code: 'profile-incompatible' },
+  ],
 ];
 it.each(DETAILS_CASES)(
-  'publishes only a validated stop reason from stored details %s',
+  'publishes only a validated stop reason or failure code from stored details %s',
   async (details, expected) => {
     await withApp(async (app, database) => {
       const { cookie } = await administrator(app, database);
@@ -108,30 +112,61 @@ it.each(DETAILS_CASES)(
   },
 );
 
-it.each(['private-content', '{"reason":"private-content"}', '{"reason":null}', 'storage'])(
-  'fails safely for corrupt audit details or storage: %s',
-  async (details) => {
-    await withApp(async (app, database, lines) => {
-      const { cookie } = await administrator(app, database);
-      if (details === 'storage')
-        database.exec('ALTER TABLE audit_events RENAME COLUMN details TO private_column');
-      else database.prepare('UPDATE audit_events SET details=?').run(details);
-      const before = snapshotAuthState(database).audits;
+it.each([
+  'private-content',
+  '{"reason":"private-content"}',
+  '{"reason":null}',
+  '{"code":"private-content"}',
+  '{"code":null}',
+  '{"code":["profile-incompatible"]}',
+  'storage',
+])('fails safely for corrupt audit details or storage: %s', async (details) => {
+  await withApp(async (app, database, lines) => {
+    const { cookie } = await administrator(app, database);
+    if (details === 'storage')
+      database.exec('ALTER TABLE audit_events RENAME COLUMN details TO private_column');
+    else database.prepare('UPDATE audit_events SET details=?').run(details);
+    const before = snapshotAuthState(database).audits;
 
-      const response = await app.inject({ url: PATH, headers: { cookie } });
+    const response = await app.inject({ url: PATH, headers: { cookie } });
 
-      expect(response.statusCode).toBe(500);
-      expect(response.json()).toEqual(FAILURE);
-      expect(snapshotAuthState(database).audits).toEqual(before);
-      expect(lines.join('')).toContain('Administrator audit query storage failure');
-      for (const secret of [
-        'private-content',
-        'private_column',
-        'SQLITE',
-        'no such column',
-        cookie,
-      ])
-        expect(response.body + lines.join('')).not.toContain(secret);
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual(FAILURE);
+    expect(snapshotAuthState(database).audits).toEqual(before);
+    expect(lines.join('')).toContain('Administrator audit query storage failure');
+    for (const secret of ['private-content', 'private_column', 'SQLITE', 'no such column', cookie])
+      expect(response.body + lines.join('')).not.toContain(secret);
+  });
+});
+
+it('returns written start-failure details with and without the closed code over HTTP', async () => {
+  await withApp(async (app, database) => {
+    const { cookie } = await administrator(app, database);
+    recordAuditEvent(database, {
+      type: 'instance.start-failed',
+      createdAt: 1,
+      target: 'abcdefghijkl',
+      details: { code: 'profile-incompatible' },
     });
-  },
-);
+    recordAuditEvent(database, {
+      type: 'instance.start-failed',
+      createdAt: 2,
+      target: 'abcdefghijkl',
+    });
+
+    const response = await app.inject({
+      url: `${PATH}?eventType=instance.start-failed`,
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      response
+        .json<{ items: { createdAt: number; details: unknown }[] }>()
+        .items.map(({ createdAt, details }) => ({ createdAt, details })),
+    ).toEqual([
+      { createdAt: 2, details: {} },
+      { createdAt: 1, details: { code: 'profile-incompatible' } },
+    ]);
+  });
+});

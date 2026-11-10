@@ -7,8 +7,14 @@ import { performance } from 'node:perf_hooks';
 import { expect, it } from 'vitest';
 import { loadConfig } from '../src/config.ts';
 import { applyMigrations, openDatabase } from '../src/db/index.ts';
+import type { DatabaseHandle } from '../src/db/index.ts';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
-import { createOrchestrator } from '../src/orchestrator/index.ts';
+import {
+  createOrchestrator,
+  lastErrorCode,
+  PROFILE_INCOMPATIBLE_ERROR,
+} from '../src/orchestrator/index.ts';
+import type { Orchestrator } from '../src/orchestrator/index.ts';
 import {
   bridgeAddress,
   createStandInPlatform,
@@ -311,6 +317,45 @@ print(json.dumps({"exit": run.returncode, "skippingBundle": any(line.startswith(
   );
 }
 
+/**
+ * The stage-1 volume started as-is on 0.2.1 is rejected by the managed composition before any
+ * network or container exists: an error row without a container and a coded audit, never an
+ * automatic reset. That terminal state is what the following reset accepts.
+ */
+async function startBeforeReset(
+  owner: Orchestrator,
+  lifecycle: UserImageLifecycle,
+  database: DatabaseHandle,
+  userId: string,
+): Promise<{ status: unknown; code: string | null }> {
+  const outcome = await startDockerInstance(owner, lifecycle, userId, AUTHORITY).then(
+    () => 'started',
+    () => 'failed',
+  );
+  expect(outcome).toBe('failed');
+  const row = record(database.prepare('SELECT * FROM instances WHERE user_id=?').get(userId));
+  expect(row.status).toBe('error');
+  expect(row.container_id).toBeNull();
+  expect(row.last_error).toBe(PROFILE_INCOMPATIBLE_ERROR);
+  const audit = record(
+    database
+      .prepare(
+        "SELECT details FROM audit_events WHERE event_type='instance.start-failed' AND target=? ORDER BY id DESC LIMIT 1",
+      )
+      .get(userId),
+  );
+  expect(audit.details).toBe('{"code":"profile-incompatible"}');
+  for (const [kind, name] of [
+    ['container', `dsh-team-u-${userId}`],
+    ['network', `dsh-team-net-${userId}`],
+  ] as const)
+    expect(isAbsentResource(lifecycle.command([kind, 'inspect', name], 15_000), kind, name)).toBe(
+      true,
+    );
+  const code = typeof row.last_error === 'string' ? lastErrorCode(row.last_error) : null;
+  return { status: row.status, code };
+}
+
 async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
   const userId = lifecycle.runId.replaceAll('-', '').slice(0, 12);
   const sources = mkdtempSync(join(tmpdir(), 'dsh-team-test-stage1-'));
@@ -342,12 +387,16 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
     // A stage-1 account at rest: a stopped row without a container, as retirement leaves it.
     database.prepare("INSERT INTO instances(user_id,status) VALUES (?,'stopped')").run(userId);
     createStandInPlatform(lifecycle, platformName);
+    const beforeReset = await startBeforeReset(owner, lifecycle, database, userId);
     const restore = () =>
       owner.restoreUserProfiles({
         userId,
         config: { userImage: lifecycle.imageId, seccompProfilePath: lifecycle.seccomp },
       });
     await restore();
+    const reset = record(database.prepare('SELECT * FROM instances WHERE user_id=?').get(userId));
+    expect(reset.status).toBe('stopped');
+    expect(reset.container_id).toBeNull();
     profileSeedOracle()(await volumeProbe(lifecycle, userId, profileSeedScript, 'fresh'));
     // The oracle's own uid1001 edit probe changed the live profile; reset it once more.
     await restore();
@@ -414,6 +463,7 @@ async function upgradeScenario(lifecycle: UserImageLifecycle): Promise<string> {
       },
       skippedBeforeReset: dump.skippingBundle,
       dumpExit: dump.exit,
+      startBeforeReset: beforeReset,
       profilesEqual: true,
       markerIntact: true,
       sessionReadable: true,
@@ -446,6 +496,7 @@ it('resets a stage-1 DSH 0.2.0-rc.2 volume pair to the 0.2.1-rc.2 seed and keeps
     expect(JSON.parse(summary)).toMatchObject({
       stage1: { dsh: '0.2.0-rc.2' },
       skippedBeforeReset: true,
+      startBeforeReset: { status: 'error', code: 'profile-incompatible' },
       profilesEqual: true,
       markerIntact: true,
       sessionReadable: true,

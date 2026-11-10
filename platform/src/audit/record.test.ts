@@ -69,6 +69,9 @@ interface AuditInput {
 
 // Object.create is typed as returning any; this object has no own "reason".
 const INHERITED_REASON_DETAILS = Object.create({ reason: 'idle' }) as Record<string, unknown>;
+// Object.create is typed as returning any; this object has no own "code".
+const INHERITED_CODE_DETAILS = Object.create({ code: 'other' }) as Record<string, unknown>;
+const INVALID_CODE_SENTINEL = 'profile-incompatible-SENTINEL';
 
 const THROWING_TOJSON_EXTRA = {
   content: {
@@ -265,6 +268,60 @@ describe('recordAuditEvent', () => {
       ...(details === undefined ? {} : { details }),
     };
     expect(rejectedMessage(db, event, [INVALID_REASON_SENTINEL, 'idle'])).toContain('reason');
+  });
+
+  it('keeps only the closed failure code of instance.start-failed and stores {} without one', () => {
+    recordAuditEvent(db, {
+      type: 'instance.start-failed',
+      createdAt: 1_700_000_011_000,
+      ...METADATA,
+      details: { code: 'profile-incompatible', reason: 'idle', ...SECRETS },
+    });
+    recordAuditEvent(db, { type: 'instance.start-failed', createdAt: 1_700_000_012_000 });
+    recordAuditEvent(db, {
+      type: 'instance.start-failed',
+      createdAt: 1_700_000_013_000,
+      details: INHERITED_CODE_DETAILS,
+    });
+    expect(db.prepare(SELECT_AUDIT).all()).toEqual([
+      expectedRow(
+        'instance.start-failed',
+        1_700_000_011_000,
+        '{"code":"profile-incompatible"}',
+        METADATA,
+      ),
+      expectedRow('instance.start-failed', 1_700_000_012_000, '{}', null),
+      expectedRow('instance.start-failed', 1_700_000_013_000, '{}', null),
+    ]);
+  });
+
+  it.each([
+    ['invalid string', { code: INVALID_CODE_SENTINEL }],
+    ['null code', { code: null }],
+    ['number code', { code: 1 }],
+    ['object code', { code: { 'profile-incompatible': true } }],
+    ['array code', { code: ['profile-incompatible'] }],
+    ['toJSON code', { code: { toJSON: () => 'profile-incompatible' } }],
+  ])('rejects instance.start-failed with %s without a row or echoing input', (_label, details) => {
+    const event: AuditInput = {
+      type: 'instance.start-failed',
+      createdAt: 1_700_000_014_000,
+      ...METADATA,
+      details,
+    };
+    expect(rejectedMessage(db, event, [INVALID_CODE_SENTINEL, 'profile-incompatible'])).toContain(
+      'code',
+    );
+  });
+
+  it('keeps the instance.stopped reason mandatory when a failure code is supplied', () => {
+    const event: AuditInput = {
+      type: 'instance.stopped',
+      createdAt: 1_700_000_015_000,
+      ...METADATA,
+      details: { code: 'profile-incompatible' },
+    };
+    expect(rejectedMessage(db, event, ['profile-incompatible'])).toContain('reason');
   });
 
   it('propagates a database write failure and inserts no row', () => {

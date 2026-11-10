@@ -66,7 +66,11 @@ function restorationFailure(error: unknown): Error {
     : new Error('Profile restoration failed');
 }
 
-/** Runs only in the owner's per-user FIFO; never stops, starts, allocates volumes or writes audits. */
+/**
+ * Runs only in the owner's per-user FIFO; never stops, starts, allocates volumes or writes audits.
+ * Its one index write follows success: a container-less error row becomes stopped, keeping
+ * last_error, so a reset clears the failure hint; any other row is left unchanged.
+ */
 export async function restoreUserProfiles(
   input: RestoreUserProfilesInput & {
     readonly client: DockerClient;
@@ -125,6 +129,11 @@ export async function restoreUserProfiles(
       (run) => run(RESTORE_PROFILES),
     );
     assertCurrent();
+    database
+      .prepare(
+        "UPDATE instances SET status='stopped' WHERE user_id=? AND status='error' AND container_id IS NULL",
+      )
+      .run(userId);
   } catch (error) {
     throw restorationFailure(error);
   }

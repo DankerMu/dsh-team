@@ -5,6 +5,7 @@ import type { Settings } from '../db/index.ts';
 import {
   generateManagedConfig,
   hasCompleteModelSettings,
+  ProfileIncompatibleError,
   readManagedComposition,
   writeManagedConfig,
 } from '../managed-config/index.ts';
@@ -58,18 +59,38 @@ import {
   recoverCreationAttempt,
 } from './creation-attempt.ts';
 import type { CreationAttempt } from './creation-attempt.ts';
+import { recordProfileIncompatible } from './start-failure.ts';
 
 // Composition may load the installed Web profile; a hung helper must not retain home access.
 const START_TIMEOUT_MS = 60_000;
 const CLEANUP_TIMEOUT_MS = 10_000;
 
-function composition(
+/** A profile rejection is persisted before any network/container exists; the failure is rethrown. */
+async function composition(
+  input: StartUserContainerInput,
+  user: Record<string, unknown>,
   helper: Omit<Parameters<typeof runHomeHelper>[0], 'role'>,
   bundleIds: readonly string[],
 ): Promise<ManagedComposition> {
-  return runHomeHelper({ ...helper, role: 'managed-composition' }, (execute) =>
-    readManagedComposition(execute, bundleIds),
-  );
+  const rejected = { incompatible: false };
+  try {
+    // The helper reports only closed categories, so the rejection is observed inside it.
+    return await runHomeHelper({ ...helper, role: 'managed-composition' }, (execute) =>
+      readManagedComposition(execute, bundleIds).catch((error: unknown) => {
+        rejected.incompatible = error instanceof ProfileIncompatibleError;
+        throw error;
+      }),
+    );
+  } catch (error) {
+    if (rejected.incompatible) {
+      try {
+        recordProfileIncompatible(input, user);
+      } catch {
+        // The original start failure below stays the reported outcome either way.
+      }
+    }
+    throw error;
+  }
 }
 
 /** Overlay catalog inputs; only forced-state manageable bundles are read and validated. */
@@ -702,7 +723,7 @@ export async function startUserContainer(
     const volumes = await ensureUserVolumes(client, userId);
     stage = 'managed composition';
     const helper = { client, cleanupClient, userId, home: volumes.home, imageId: image, seccomp };
-    const observed = await composition(helper, catalog.bundleIds);
+    const observed = await composition(input, user, helper, catalog.bundleIds);
     stage = 'network allocation';
     const cleanup = cleanupClient;
     network = await allocate(userId, () =>

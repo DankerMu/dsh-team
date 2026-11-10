@@ -1149,7 +1149,8 @@
                           "status",
                           "lastStartedAt",
                           "lastActivityAt",
-                          "lastError"
+                          "lastError",
+                          "lastErrorCode"
                         ],
                         "properties": {
                           "userId": {
@@ -1184,6 +1185,16 @@
                             "type": [
                               "null",
                               "string"
+                            ]
+                          },
+                          "lastErrorCode": {
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "enum": [
+                              "profile-incompatible",
+                              null
                             ]
                           }
                         }
@@ -1415,6 +1426,12 @@
                                   "admin",
                                   "disabled",
                                   "error"
+                                ]
+                              },
+                              "code": {
+                                "type": "string",
+                                "enum": [
+                                  "profile-incompatible"
                                 ]
                               }
                             }

@@ -62,8 +62,33 @@
 - **THEN** 持久化 JSON 只保留对应 `reason`
 - **AND** 缺失原因、非法字符串、对象或数组原因均导致写入失败，行数不变且错误不回显输入
 
+#### Scenario: 启动失败只保留可选的封闭失败码
+
+- **WHEN** 写入带失败码 `profile-incompatible` 并混入额外字段的 `instance.start-failed` 事件，以及不带细节的同一事件
+- **THEN** 前者持久化 JSON 只保留 `code`，后者保存空对象；`instance.stopped` 的停止原因仍必填且校验不变
+- **AND** 失败码为其他字符串、null、对象或数组时写入失败，行数不变且错误不回显输入
+
 #### Scenario: 超界邮箱拒绝且调用方事务回滚
 
 - **WHEN** 操作者或对象邮箱为255个码点，或NUL之后的字符使其超界
 - **THEN** 写入失败且错误不回显输入，无新增审计行，所属事务内其他写入回滚
 - **AND** 恰好254个码点（含补充平面字符）的元数据原样写入，缺省及空字符串语义不变
+
+### Requirement: 管理员审计HTTP查询边界
+
+平台 MUST 通过 `GET /_platform/api/admin/audit-events` 提供当前管理员专用查询，复用审计查询函数。回应 MUST 为 `{items,page,pageSize}`，页码默认1、页大小默认50且最多100；查询支持 `eventType,email,from,to`，时间使用包含端点的安全整数毫秒。HTTP邮箱筛选 MUST 去首尾空白并转小写后作精确匹配；未知条件和倒置时间范围返回空列表。非法分页、时间或不安全偏移 MUST 返回不回显输入的400。每条只返回既有审计元数据与闭合details对象，details只允许经过既有校验的停止reason和启动失败code（仅`profile-incompatible`）；存储/解析失败 MUST 安全500且不泄露原文。查询 MUST NOT 修改审计记录或引入审计写接口。
+
+#### Scenario: 当前权限先于查询参数
+
+- **WHEN** 未登录者或员工携带非法分页请求审计查询，或已有管理员会话的角色被降为员工
+- **THEN** 未登录者401、员工403，不能通过参数错误或旧角色取得记录
+
+#### Scenario: 筛选分页与安全详情经真实HTTP保持
+
+- **WHEN** 管理员查询混合操作者/对象/事件/时间记录并翻页，包括同毫秒记录、双重邮箱匹配和停止事件
+- **THEN** 结果保持筛选交集、邮箱OR不重复、包含时间端点和稳定倒序，每项只有允许元数据和安全reason或code，无内容或凭据字段，全部审计行不变
+
+#### Scenario: 启动失败码经HTTP如实返回
+
+- **WHEN** 管理员查询含`{"code":"profile-incompatible"}`细节和`{}`细节的`instance.start-failed`记录
+- **THEN** 前者details为`{"code":"profile-incompatible"}`，后者为空对象；存储中非法的code导致安全500且不回显原文

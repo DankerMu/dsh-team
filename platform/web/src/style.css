@@ -1002,6 +1002,16 @@ button:disabled {
   border-radius: 0.625rem;
 }
 
+/* A fixed diagnosis hint sits directly after the row action it refers to. */
+.admin td .instance-hint {
+  max-width: 16rem;
+  margin: 0.375rem 0 0;
+  color: var(--danger);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  word-break: normal;
+}
+
 .admin time {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;

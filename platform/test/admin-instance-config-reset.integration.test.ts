@@ -4,9 +4,14 @@ import { setImmediate } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { openDatabase } from '../src/db/index.ts';
-import { createDockerClient, createInstanceService } from '../src/orchestrator/index.ts';
+import {
+  createDockerClient,
+  createInstanceService,
+  PROFILE_INCOMPATIBLE_ERROR,
+} from '../src/orchestrator/index.ts';
+import { accountStatusFixture } from './account-status-fixture.ts';
 import { administrator } from './admin-config-fixture.ts';
-import { jsonRequestHeaders, PUBLIC_ORIGIN } from './auth-fixture.ts';
+import { jsonRequestHeaders, PUBLIC_ORIGIN, SOURCE } from './auth-fixture.ts';
 import {
   START_HELPER,
   START_USER,
@@ -123,3 +128,54 @@ it.each(['connected', 'disconnected'] as const)(
     }
   },
 );
+
+it('reset of a profile-incompatible error row lists it stopped without the hint but with the log', async () => {
+  const f = await accountStatusFixture();
+  try {
+    f.database
+      .prepare("INSERT INTO instances(user_id,status,last_error) VALUES (?,'error',?)")
+      .run(START_USER, PROFILE_INCOMPATIBLE_ERROR);
+    f.daemon.overrides.set(`GET /volumes/dsh-team-home-${START_USER}`, {
+      status: 200,
+      document: { Name: `dsh-team-home-${START_USER}`, Labels: { 'dsh-team.user': START_USER } },
+    });
+    const listed = async () => {
+      const response = await f.app.inject({
+        method: 'GET',
+        url: '/_platform/api/admin/instances',
+        remoteAddress: SOURCE,
+        headers: { cookie: f.admin.cookie },
+      });
+      expect(response.statusCode).toBe(200);
+      const { items } = response.json<{ items: { userId: string }[] }>();
+      return items.find((item) => item.userId === START_USER);
+    };
+    expect(await listed()).toMatchObject({
+      status: 'error',
+      lastErrorCode: 'profile-incompatible',
+    });
+
+    const reset = await f.app.inject({
+      method: 'POST',
+      url: `/_platform/api/admin/instances/${START_USER}/reset-config`,
+      remoteAddress: SOURCE,
+      headers: jsonRequestHeaders({ cookie: f.admin.cookie }),
+      payload: '{}',
+    });
+
+    expect(reset.statusCode).toBe(204);
+    expect(await listed()).toMatchObject({
+      status: 'stopped',
+      lastErrorCode: null,
+      lastError: PROFILE_INCOMPATIBLE_ERROR,
+    });
+    expect(f.daemon.containers.size).toBe(0);
+    expect(
+      f.database
+        .prepare("SELECT target FROM audit_events WHERE event_type='instance.config-reset'")
+        .all(),
+    ).toEqual([{ target: START_USER }]);
+  } finally {
+    await f.close();
+  }
+});
