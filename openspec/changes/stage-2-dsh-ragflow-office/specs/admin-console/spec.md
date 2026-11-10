@@ -77,7 +77,7 @@
 
 ### Requirement: 插件目录页
 
-后台 MUST 列出镜像预装的全部插件和插件包，接口为 `GET/PUT /_platform/api/admin/plugin-catalog`，保存写入 `plugin-catalog.updated` 审计。受管必启项 MUST 显示为“强制开”且不可修改。每个可管理项 MUST 可设为“员工自选”“强制开”或“强制关”之一（机器取值 `employee`、`forced-on`、`forced-off`）。“员工自选”时启用状态的默认值随镜像，员工可以自己开关；“强制开”和“强制关”经受管配置下发，员工侧显示为锁定。Office 不可用时，ONLYOFFICE 一项 MUST 显示其在实例中停用的原因。修改 MUST 在实例下次启动时生效，页面 MUST 写明这一点。
+后台 MUST 列出镜像预装的全部插件和插件包，接口为 `GET/PUT /_platform/api/admin/plugin-catalog`，保存写入 `plugin-catalog.updated` 审计。受管必启项 MUST 显示为“强制开”且不可修改。每个可管理项 MUST 可设为“员工自选”“强制开”或“强制关”之一（机器取值 `employee`、`forced-on`、`forced-off`）。“员工自选”时启用状态的默认值随镜像，员工可以自己开关；“强制开”和“强制关”经受管配置下发，员工侧显示为锁定。部署配置或已保存的设置决定 Office 不可用（上游模式为 published-loopback、外部 Document Server 缺少 JWT 密钥、没有配置自带 Document Server）且 ONLYOFFICE 不是“强制关”时，ONLYOFFICE 一项 MUST 显示其在实例中停用的原因；只有启动时才能确定的不可用（自带容器缺失或身份不符）不在目录页显示。修改 MUST 在实例下次启动时生效，页面 MUST 写明这一点。
 
 #### Scenario: 列表与镜像目录一致
 
@@ -88,6 +88,11 @@
 
 - **WHEN** 管理员把某个预装插件设为“强制关”，某员工随后重启实例
 - **THEN** 该员工插件页里这一项显示为关闭且不可切换；重启前已运行的其他实例不受影响，直到它们下次启动
+
+#### Scenario: 目录页显示 Office 不可用的原因
+
+- **WHEN** 部署没有配置自带 Document Server，也没有设置外部 Document Server，管理员打开插件目录页
+- **THEN** ONLYOFFICE 一项显示“部署没有配置自带 Document Server，ONLYOFFICE 在实例中停用”；管理员把它选为“强制关”后，这条原因不再显示
 
 #### Scenario: 非法状态被拒绝
 

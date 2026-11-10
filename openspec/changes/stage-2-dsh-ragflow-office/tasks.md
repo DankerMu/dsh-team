@@ -5030,3 +5030,99 @@ Must preserve：
 - better-sidebar 规范副本的属主、权限，以及登记和 seed 流程；
 - `HOST_OWNED_EXTS` 内容不变；
 - 未登记 Office 查看器时，所有扩展名的去向与 0.28.0 发行版相同。
+
+## 42. #436：插件目录页显示 ONLYOFFICE 停用的原因（18.2 目录页部分）
+
+依赖：#435（18.2 覆盖层部分）和 #408（插件目录页）均已合入。由 #436 承载。
+
+用户决定（2026-11-10）：原因只按部署配置和已保存的设置推导。不落库，打开页面时也不查询 Docker。可推导的原因有三种静态条件，与 `officeOverlay`（`platform/src/orchestrator/document-server.ts:96-124`）的静态分支一一对应：
+
+- published-loopback：`:105`
+- 外部缺 JWT：`:108`
+- 自带未配置：`:118`
+
+自带容器缺失或身份不符只有启动时才能知道，目录页不显示。`specs/admin-console/spec.md` 里「插件目录页」要求的 MUST 范围已按此收窄，并补了一条场景。
+
+- [ ] 42.1 推导原因，经 `plugin-catalog` 接口返回，由目录页显示。
+  - **唯一实现**：`platform/src/orchestrator/document-server.ts` 新增并导出纯函数 `officeUnavailableReason(settings: Pick<Settings, 'documentServerUrl' | 'documentServerJwtSecret'>, bundledConfigured: boolean, upstreamMode: PlatformConfig['upstreamMode'])`，按顺序返回第一个命中的原因：
+    1. `upstreamMode !== 'network'` → `'published-loopback'`
+    2. `documentServerMode(settings) === 'external'` 且 `settings.documentServerJwtSecret === ''` → `'external-jwt-missing'`
+    3. 自带模式且 `!bundledConfigured` → `'bundled-unconfigured'`
+    4. 以上都不成立 → `null`
+    - 为此，`platform/src/db/settings.ts:38` 的 `documentServerMode` 参数收窄为 `Pick<Settings, 'documentServerUrl'>`。现有调用方都传完整 `Settings`，不受影响。这样不在别处内联 `=== ''`，保持唯一实现。
+    - 自带的 JWT 和容器名仍不进入 admin 模块（`platform/src/admin/README.md:23`、本文件 `:2437` 的不变量）。admin 端传入已有的 `documentServerBundled` 布尔值；`officeOverlay` 传入 `configured !== null`。
+  - **`officeOverlay` 重构后的函数体**（逐行）：
+    1. `if (officeUnavailableReason(settings, configured !== null, upstreamMode) !== null) return null;`
+    2. `if (documentServerMode(settings) === 'external')`：返回外部 overlay（去掉末尾 `/` 的地址、`jwtSecret`、`publicBaseUrl`），JWT 缺失的情况已由第 1 步排除。外部分支从判断 `decision.mode` 改为判断 `documentServerMode(settings)`。两者等价的依据：`documentServerDecision` 本身就由 `documentServerMode(settings)` 推出 mode（`:67`），且 `start.ts` 在 `:689-692` 和 `:724` 把同一份 `settings` 传给两者。
+    3. 自带分支：保留 `if (decision.containerId === null || configured === null) return null;`。`configured` 的 null 检查用于类型收窄，不删。之后返回自带 overlay，与现在相同。
+
+    对于由同一份 settings 和 config 推出的 decision，返回值与现在完全相同；`document-server.test.ts` 和生成器的现有用例原样通过。函数经 `orchestrator/index.ts` 导出，`admin/` 从 index 做值导入，先例是 `platform/src/admin/runtime-config.ts:3`；depcruise 允许 admin 导入 orchestrator，不会成环。
+
+  - **接口**：`platform/src/admin/plugin-catalog.ts` 的 `RESPONSE_SCHEMA` 中，每个条目新增必填字段 `unavailableReason`，schema 为 `{ type: ['string', 'null'], enum: ['published-loopback', 'external-jwt-missing', 'bundled-unconfigured', null] }`。
+    - 只有 id 为 ONLYOFFICE 的条目可能非 null，其余条目恒为 `null`。这个 id 不在 admin 再写一份字面量：把 `platform/src/managed-config/generate.ts:107` 的 `ONLYOFFICE` 改为导出，经 `managed-config/index.ts` 暴露后，admin 和生成器共用。
+    - 该字段与管理状态无关，`forced-off` 时照常返回。
+    - GET 和 PUT 的响应都来自 `project(settings)`，两者一致。
+    - PUT body 的校验不变，仍恰为 `{ entries: [{ id, state }] }`；body 带 `unavailableReason` 仍返回 400。
+    - 接线：`pluginCatalogRoutes` 新增选项 `documentServerBundled: boolean` 和 `upstreamMode`。`adminRoutes` 只新增 `upstreamMode`，由 `platform/src/app.ts:163-168` 传入 `config.upstreamMode`；`documentServerBundled` 已经存在。
+    - `pnpm contract:write` 重新生成 `schemas/openapi.json`。
+  - **页面**：`platform/web/src/plugins-page.tsx`
+    - `readEntry`（`:74-78`）是封闭键表，在 `:76` 加入 `'unavailableReason'`。取值只接受 `null` 或上述三个字符串之一，其他值一律抛错。抛错按现有分支处理：出现在 GET 里是整页加载失败，出现在 PUT 响应里走 `save()` 的 catch，显示保存失败（`:218-219`）。`payload()`（`:122-129`）只发送 id 和 state，PUT body 不受影响。
+    - `CatalogEntry` 类型增加该字段。`CatalogTable` 在某行同时满足以下两个条件时显示原因：`unavailableReason !== null`；该行当前选择的状态（草稿）不是 `forced-off`。管理员已强制关闭时，Office 不可用不是停用的原因。页面不按 id 判断。
+    - 原因作为一行说明文字显示在状态单元格内的控件下方，带 `data-testid="office-unavailable-reason"`。固定中文：
+      - `published-loopback`：`Office 不可用：上游模式为 published-loopback，实例连不到 Document Server，ONLYOFFICE 在实例中停用。`
+      - `external-jwt-missing`：`Office 不可用：已填写外部 Document Server 地址，但没有填写 JWT 密钥，ONLYOFFICE 在实例中停用。`
+      - `bundled-unconfigured`：`Office 不可用：部署没有配置自带 Document Server，ONLYOFFICE 在实例中停用。`
+  - **测试**（先红后绿）：
+    - `document-server.test.ts`：`officeUnavailableReason` 共六例：
+      - published-loopback 同时配了外部地址和 JWT，结果仍是 published-loopback，证明 1 先于 2；
+      - 外部缺 JWT，且 `bundledConfigured=false`，结果是 external-jwt-missing，证明 2 先于 3；
+      - 外部 JWT 齐全 → null；
+      - 自带未配置；
+      - 自带已配置 → null；
+      - published-loopback 加 `bundledConfigured=false` → published-loopback，证明 1 先于 3。
+    - `platform/src/admin/plugin-catalog.test.ts`：`:130`、`:142-143`、`:166` 的完整 body 断言（`ENTRIES`/`officeAs`）补上新字段。
+    - `platform/test/admin-plugin-catalog.integration.test.ts`：
+      - 用 `withApp` 的 `upstreamMode`、`documentServer` 和 `initialSettings` 参数（`platform/test/auth-fixture.ts:132-143`）构造三种原因和 null 四种情况。外部缺 JWT 必须经 `initialSettings` 构造：`document-server-config.ts:70` 的接口拒绝只填一项，db 层不强制两项配对（`settings.ts:178-190`），所以这一支是防御性的。
+      - 断言 GET 中 ONLYOFFICE 的原因正确、其余条目为 `null`；PUT 成功的响应同样带该字段；`forced-off` 时仍返回原因。
+    - `platform/web/src/plugins-page.test.tsx`：
+      - 共享夹具 `OFFICE`/`LOCALE`（约 `:10-27`）补 `unavailableReason: null`，否则封闭键表让现有用例全部进入加载失败；保存测试（`:250-261`）对 PUT body 的精确断言顺带证明 body 仍只有 id/state；未知取值的用例加进 `:215-219` 的表；
+      - 三种原因的文案；`null` 时不显示；
+      - 切到 `forced-off` 后原因消失，切回后重新出现；
+      - 未知取值在 GET 时进入加载失败，在 PUT 响应中进入保存失败。
+    - `pnpm test:ui`（`platform/test/admin-plugins.ui.test.ts`）：
+      - `withAdminUi` 默认没有自带 Document Server（`account-ui-fixture.ts:315-316`），上游模式默认 `network`（`config.ts:262`），所以断言显示 `bundled-unconfigured` 的文案并截图；
+      - 再把 ONLYOFFICE 选为 `强制关`，断言原因消失；
+      - `:133-136` 的 PUT 响应 `toEqual` 补上新字段。
+  - **文档**（编排者在同一 PR 中修改）：
+    - `platform/src/admin/README.md:13`：plugin-catalog 响应字段；`:23` 的不变量保持不变；
+    - `platform/src/orchestrator/README.md`：`officeOverlay` 与 `officeUnavailableReason` 的关系；
+    - `specs/admin-console/spec.md`「插件目录页」：收窄 MUST，新增场景。
+
+Suggested fixture level: expanded（与 issue 一致）- 接口响应 schema 变化，并在关键路径 `orchestrator/` 中抽取纯函数
+Minimal mergeable slice: atomic：推导函数、接口字段和页面显示必须一起合入，缺一项就无法验证
+Risk packs (42.1):
+
+- selected
+  - Public API：响应 schema 新增必填字段，openapi 重新生成；PUT body 规则不变。
+  - Legacy compatibility：`officeOverlay` 对同源 decision 的返回值不变，由现有生成器和 `document-server` 测试保证。
+  - Security：不变量要求自带 JWT 不进 admin，所以 admin 只拿到布尔值；响应只含原因代码，不含 JWT 或地址。
+  - Config：新增的接线选项来自已有的 `config.upstreamMode`，不新增环境变量。
+- not selected
+  - Auth：沿用管理员会话钩子。
+  - Schema、Migration：不落库。
+  - Concurrency、File IO、Resource limits、Release。
+
+关键路径：`platform/src/orchestrator/document-server.ts`，只抽取纯函数，行为不变。PR 写明：人工白盒审查推迟到 Epic #380 完成时进行，本 PR 没有通过人工白盒审查。
+
+剩余风险：
+
+- 自带容器缺失或身份不符时，启动时会判定 Office 不可用，但目录页不显示原因（用户决定 2026-11-10，spec 已同步收窄）。
+- 目录页显示的是按当前配置推导的结果，不是某个实例最近一次启动的实际结果。
+
+Must preserve：
+
+- PUT body 校验和 400 文案；
+- 审计事件 `plugin-catalog.updated`；
+- 目录页的加载与保存状态机（401/403/失败态、pending 锁）；
+- `officeOverlay` 对同源输入的返回值；
+- 自带 JWT 不进 admin 的不变量。
