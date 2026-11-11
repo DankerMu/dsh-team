@@ -502,3 +502,56 @@ it('keeps the live plugin page probe value in parsed control evidence', () => {
     registryProbeEnabled: true,
   });
 });
+
+// Lease-scope tools with webToolsEnabled=true: only the three released presets that carry a
+// tool-web row (dsh-web-app presets standard/ptc/cordis) expose them; minimal has none.
+const WEB = ['web_search', 'web_fetch'];
+function webObservation(
+  tools: Partial<Record<'standard' | 'ptc' | 'minimal' | 'cordis', string[]>>,
+) {
+  const base = {
+    standard: ['bash', ...WEB],
+    ptc: ['bash', ...WEB],
+    minimal: ['bash'],
+    cordis: WEB,
+  };
+  return {
+    models: EXPECTED,
+    presets: Object.entries({ ...base, ...tools }).map(([id, toolNames]) => ({
+      id,
+      description: '',
+      toolNames,
+    })),
+    pluginPage: PLUGIN_PAGE,
+  };
+}
+const WEB_EXPECTED = { ...EXPECTED, presetIds: ['standard', 'ptc', 'minimal', 'cordis'] };
+
+it('accepts the web tools on exactly standard, ptc and cordis when web tools are enabled', () => {
+  assertManagedPolicyRuntime(webObservation({}), { ...WEB_EXPECTED, webToolsEnabled: true });
+});
+
+it.each([
+  { reason: 'standard without web_fetch', tools: { standard: ['bash', 'web_search'] } },
+  { reason: 'ptc without web_search', tools: { ptc: ['bash', 'web_fetch'] } },
+  { reason: 'cordis without either', tools: { cordis: ['bash'] } },
+  { reason: 'minimal with web_search', tools: { minimal: ['bash', 'web_search'] } },
+  { reason: 'minimal with web_fetch', tools: { minimal: ['bash', 'web_fetch'] } },
+])('rejects $reason when web tools are enabled', ({ tools }) => {
+  expect(() => {
+    assertManagedPolicyRuntime(webObservation(tools), { ...WEB_EXPECTED, webToolsEnabled: true });
+  }).toThrow('Invalid managed policy runtime observation');
+});
+
+it.each([{ webToolsEnabled: false }, {}])(
+  'rejects any web tool when web tools are disabled (%o)',
+  (switchValue) => {
+    expect(() => {
+      assertManagedPolicyRuntime(webObservation({}), { ...WEB_EXPECTED, ...switchValue });
+    }).toThrow('Invalid managed policy runtime observation');
+    assertManagedPolicyRuntime(
+      webObservation({ standard: ['bash'], ptc: ['bash'], cordis: ['bash'] }),
+      { ...WEB_EXPECTED, ...switchValue },
+    );
+  },
+);

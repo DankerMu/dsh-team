@@ -17,7 +17,10 @@ import {
   mappedFlags,
   mappedRpc,
 } from '../../scripts/probe-mapped-host.mjs';
-import type { MappedHostAcceptResult } from '../../scripts/probe-mapped-host.mjs';
+import type {
+  MappedHostAcceptResult,
+  MappedHostPluginPageOptions,
+} from '../../scripts/probe-mapped-host.mjs';
 import type { DockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
@@ -27,9 +30,9 @@ import type { WebNetwork } from './web-startup-fixture.ts';
 import { extractLaunchToken, instanceAddressLayout } from '../src/orchestrator/index.ts';
 import { rejectPluginFailures } from './plugin-failure-markers.ts';
 import {
-  browserEvidence,
   createManagedPolicyEvidence,
   managedPolicyEvidenceRoot,
+  recordBrowserObservation,
   type ManagedPolicyEvidence,
   type ManagedPolicyStage,
 } from './managed-policy-evidence.ts';
@@ -101,7 +104,7 @@ export function migrationOverlayInput(composition: ManagedComposition) {
   return { ...composition, ...MIGRATION_OVERLAY_SETTINGS, platformPort: null, office: null };
 }
 
-const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
+export const MANAGED_POLICY_EXPECTED: ManagedPolicyRuntimeExpectation = {
   intranetAddress: MANAGED_ADDRESS,
   defaultModel: 'beta',
   catalog: [{ id: 'intranet', models: ['alpha', 'beta'] }],
@@ -255,7 +258,7 @@ function repositoryCanonicalHash(): string {
   );
 }
 
-function installObserverScript(plugin: string): string {
+export function installObserverScript(plugin: string): string {
   return `
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -332,20 +335,22 @@ process.stdout.write(JSON.stringify({
 export async function collectComposition(
   lifecycle: UserImageLifecycle,
   name: string,
+  // Forced-state manageable bundle ids; the migration-5 catalog forces none.
+  bundleIds: readonly string[] = [],
 ): Promise<ManagedComposition> {
   let sequence = 0;
-  // The migration-5 catalog forces no manageable bundle, so none is requested.
   return readManagedComposition(
     (script) => Promise.resolve(execScript(lifecycle, `${name}-${String(sequence++)}`, script)),
-    [],
+    bundleIds,
   );
 }
 
-async function publishOverlay(
+export async function publishOverlay(
   directory: string,
   composition: ManagedComposition,
   apiKeyConfigured: boolean,
   network: WebNetwork,
+  settings: Partial<typeof MIGRATION_OVERLAY_SETTINGS> = {},
 ): Promise<string> {
   const generated = generateManagedConfig({
     admin: false,
@@ -359,6 +364,7 @@ async function publishOverlay(
     },
     defaultPermissionTier: 'yolo',
     ...migrationOverlayInput(composition),
+    ...settings,
     // After the spread, replacing its null: stands in for PLATFORM_PORT (knowledgeBaseLoaded).
     platformPort: 8080,
   });
@@ -480,25 +486,6 @@ function requireAccepted(
   if (result.screenshot?.screenshot !== screenshot) throw new Error(INVALID);
 }
 
-function recordBrowserObservation(
-  evidence: ManagedPolicyEvidence,
-  stage: 'start' | 'control' | 'restart',
-  result: MappedHostAcceptResult,
-): void {
-  const screenshot = result.screenshot?.screenshot;
-  evidence.record(
-    stage === 'start'
-      ? {
-          ...(screenshot === undefined ? {} : { startScreenshot: screenshot }),
-          startBrowser: browserEvidence(result),
-        }
-      : {
-          ...(screenshot === undefined ? {} : { restartScreenshot: screenshot }),
-          restartBrowser: browserEvidence(result),
-        },
-  );
-}
-
 export async function qualifyHostSession(
   hostPort: number,
   logs: string,
@@ -548,6 +535,7 @@ async function startWeb(
     profile: string;
     screenshot: string;
     roster: readonly string[];
+    pluginPage?: MappedHostPluginPageOptions;
   },
 ): Promise<{ hostPort: number; observation: unknown; browser?: MappedHostAcceptResult }> {
   lifecycle.registerContainer(name);
@@ -597,6 +585,7 @@ async function startWeb(
     workspace,
     preserveModels: 'alpha,beta',
     expectedDefault: 'beta',
+    ...(browser.pluginPage === undefined ? {} : { pluginPage: browser.pluginPage }),
   });
   recordBrowserObservation(evidence, stage, browserResult);
   profiles.capture(stage === 'start' ? 'start-browser' : 'restart-browser');
@@ -660,7 +649,7 @@ function assertPluginsLoaded(
     throw new Error(`${INVALID}: knowledge-base plugin row`);
 }
 
-async function acceptManaged(
+export async function acceptManaged(
   lifecycle: UserImageLifecycle,
   overlay: string,
   network: WebNetwork,
@@ -671,6 +660,7 @@ async function acceptManaged(
   profiles: ProfileRecorder,
   expected: ManagedPolicyRuntimeExpectation,
   label: 'start' | 'restart',
+  pluginPage?: MappedHostPluginPageOptions,
 ): Promise<{
   hostPort: number;
   observation: unknown;
@@ -693,6 +683,7 @@ async function acceptManaged(
       profile: join(work, `chrome-${label}`),
       screenshot,
       roster: MANAGED_BOOT_ROSTER,
+      ...(pluginPage === undefined ? {} : { pluginPage }),
     },
   );
   assertManagedPolicyRuntime(started.observation, expected);
