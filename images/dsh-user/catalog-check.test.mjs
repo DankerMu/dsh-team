@@ -337,22 +337,22 @@ it.each([
   [
     'a duplicate id',
     (entries) => entries.push({ ...entries[3], package: '@x/y' }),
-    'catalog entry 7 (office-agents) duplicates id office-agents',
+    'catalog entry 8 (office-agents) duplicates id office-agents',
   ],
   [
     'a duplicate package',
     (entries) => entries.push({ ...entries[3], id: 'other' }),
-    'catalog entry 7 (other) duplicates package @dsh-team/office-agents',
+    'catalog entry 8 (other) duplicates package @dsh-team/office-agents',
   ],
   [
     'an unknown key',
-    (entries) => Object.assign(entries[4], { extra: 1 }),
-    'catalog entry 4 (permission-tiers) has unknown key extra',
+    (entries) => Object.assign(entries[5], { extra: 1 }),
+    'catalog entry 5 (permission-tiers) has unknown key extra',
   ],
   [
     'a missing key',
-    (entries) => delete entries[5].category,
-    'catalog entry 5 (platform-nav) has invalid category',
+    (entries) => delete entries[6].category,
+    'catalog entry 6 (platform-nav) has invalid category',
   ],
   [
     'a category outside the closed set',
@@ -361,20 +361,20 @@ it.each([
   ],
   [
     'an empty name',
-    (entries) => Object.assign(entries[6], { name: ' ' }),
-    'catalog entry 6 (zh-locale) has invalid name',
+    (entries) => Object.assign(entries[7], { name: ' ' }),
+    'catalog entry 7 (zh-locale) has invalid name',
   ],
   [
     'a non-boolean default',
-    (entries) => Object.assign(entries[6], { imageDefaultEnabled: 'true' }),
-    'catalog entry 6 (zh-locale) has invalid imageDefaultEnabled',
+    (entries) => Object.assign(entries[7], { imageDefaultEnabled: 'true' }),
+    'catalog entry 7 (zh-locale) has invalid imageDefaultEnabled',
   ],
   [
     'a non-kebab-case id',
-    (entries) => Object.assign(entries[5], { id: 'Platform_Nav' }),
-    'catalog entry 5 (Platform_Nav) has invalid id',
+    (entries) => Object.assign(entries[6], { id: 'Platform_Nav' }),
+    'catalog entry 6 (Platform_Nav) has invalid id',
   ],
-  ['a missing id', (entries) => delete entries[5].id, 'catalog entry 5 has invalid id'],
+  ['a missing id', (entries) => delete entries[6].id, 'catalog entry 6 has invalid id'],
   [
     'an empty package',
     (entries) => Object.assign(entries[3], { package: '' }),
@@ -383,7 +383,7 @@ it.each([
   [
     'a non-object entry',
     (entries) => entries.push('zh-locale'),
-    'catalog entry 7 must be an object',
+    'catalog entry 8 must be an object',
   ],
 ])('fails the catalog shape for %s and names the entry', (_name, mutate, problem) => {
   const tree = imageTree();
@@ -711,7 +711,7 @@ it('declares a bundle patch layer in every repository plugin, empty for the over
     expect(existsSync(path)).toBe(true);
     if (Array.isArray(manifest.files)) expect(manifest.files).toContain(patch.replace(/^\.\//, ''));
   }
-  for (const plugin of ['platform-nav', 'permission-tiers']) {
+  for (const plugin of ['platform-nav', 'permission-tiers', 'office-hints']) {
     const content = readFileSync(join(repository, 'plugins', plugin, 'cordis.patch.yml'), 'utf8');
     const lines = content.split('\n').map((line) => line.replace(/#.*$/, '').trim());
     expect(lines.filter(Boolean)).toEqual(['[]']);

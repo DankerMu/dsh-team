@@ -79,6 +79,15 @@ const ENTRIES = [
     unavailableReason: null,
   },
   {
+    id: 'office-hints',
+    package: '@dsh-team/office-hints',
+    name: 'Office 提示',
+    category: 'required',
+    imageDefaultEnabled: false,
+    state: 'forced-on',
+    unavailableReason: null,
+  },
+  {
     id: 'permission-tiers',
     package: '@dsh-team/permission-tiers',
     name: '权限档',
@@ -117,6 +126,7 @@ const submission = (office: string, extra: { id: string; state: unknown }[] = []
   { id: 'knowledge-base', state: 'employee' },
   { id: 'dsh-better-sidebar', state: 'employee' },
   { id: 'dsh-sidebar-onlyoffice', state: 'employee' },
+  { id: 'office-hints', state: 'forced-on' },
   ...extra,
 ];
 const audits = (database: DatabaseHandle) =>

@@ -450,13 +450,14 @@ describe('generateManagedConfig platform entry catalog states', () => {
   }
 
   const REQUIRED_STATES = {
+    '@dsh-team/office-hints': 'forced-on',
     '@dsh-team/permission-tiers': 'forced-on',
     '@dsh-team/platform-nav': 'forced-on',
     '@dsh-team/zh-locale': 'forced-on',
   };
 
   it.each([undefined, 'employee'] as const)(
-    'publishes exactly the three required packages forced-on for office state %s',
+    'publishes exactly the four required packages forced-on for office state %s',
     (office) => {
       const config = navigationConfig(shipped(office));
 
@@ -503,7 +504,8 @@ describe('generateManagedConfig platform entry catalog states', () => {
     expect(content(structuredClone(input))).toBe(content(input));
     expect(content(input)).toContain(
       '"config":{"admin":false,"pluginCatalog":{"@dsh-team/office-agents":"forced-off",' +
-        '"@dsh-team/permission-tiers":"forced-on","@dsh-team/platform-nav":"forced-on",' +
+        '"@dsh-team/office-hints":"forced-on","@dsh-team/permission-tiers":"forced-on",' +
+        '"@dsh-team/platform-nav":"forced-on",' +
         '"@dsh-team/zh-locale":"forced-on"}}',
     );
   });

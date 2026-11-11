@@ -46,6 +46,7 @@ describe('readPluginCatalog', () => {
       'dsh-sidebar-onlyoffice',
       'knowledge-base',
       'office-agents',
+      'office-hints',
       'permission-tiers',
       'platform-nav',
       'zh-locale',

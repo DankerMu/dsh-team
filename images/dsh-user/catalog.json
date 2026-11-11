@@ -30,6 +30,13 @@
       "imageDefaultEnabled": true
     },
     {
+      "id": "office-hints",
+      "package": "@dsh-team/office-hints",
+      "name": "Office 提示",
+      "category": "required",
+      "imageDefaultEnabled": false
+    },
+    {
       "id": "permission-tiers",
       "package": "@dsh-team/permission-tiers",
       "name": "权限档",

@@ -97,12 +97,17 @@ COPY --from=platform-nav --chown=root:root --chmod=0444 \
 COPY --from=knowledge-base --chown=root:root --chmod=0444 \
   package.json index.js client.js cordis.patch.yml \
   /opt/dsh-team/knowledge-base/
+# The Office hints are a required overlay insert, like platform navigation; no ONLYOFFICE file changes.
+COPY --from=office-hints --chown=root:root --chmod=0444 \
+  package.json index.js client.js cordis.patch.yml \
+  /opt/dsh-team/office-hints/
 # The catalog is the single list of preinstalled items, read by registration and the gate below.
 COPY --chmod=0444 catalog.json /opt/dsh-team/catalog.json
 # COPY --chmod also applies to the directories it creates; restore traversal for uid1001.
 RUN chmod 0555 /opt/dsh-team /opt/dsh-team/zh-locale /opt/dsh-team/office-agents \
     /opt/dsh-team/office-agents/skills /opt/dsh-team/office-agents/skills/official-writing \
-    /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav /opt/dsh-team/knowledge-base
+    /opt/dsh-team/permission-tiers /opt/dsh-team/platform-nav /opt/dsh-team/knowledge-base \
+    /opt/dsh-team/office-hints
 # Every entry with dependencies declares them as bundleDependencies, so the employee's pnpm takes
 # the nested closure from the package instead of resolving it from a registry; a missing nested
 # dependency or an existing bundle field fails the build. It runs as root after the patch and the

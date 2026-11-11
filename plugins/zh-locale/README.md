@@ -26,8 +26,9 @@ The user-image Dockerfile keeps `images/dsh-user` as its primary build context a
 requires BuildKit named contexts `zh-locale=<repo>/plugins/zh-locale`,
 `permission-tiers=<repo>/plugins/permission-tiers`,
 `office-agents=<repo>/plugins/office-agents`,
-`platform-nav=<repo>/plugins/platform-nav`, and
-`knowledge-base=<repo>/plugins/knowledge-base`. The image retains its pinned base's
+`platform-nav=<repo>/plugins/platform-nav`,
+`knowledge-base=<repo>/plugins/knowledge-base`, and
+`office-hints=<repo>/plugins/office-hints`. The image retains its pinned base's
 official Debian ordinary and security sources without an auxiliary source-rewrite
 context. The image
 copies only `package.json`, `index.js`, `client.js`, and `cordis.patch.yml` from that

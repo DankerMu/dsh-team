@@ -248,6 +248,10 @@ echo "export const orphan = 1;" >plugins/knowledge-base/orphan.js
 expect_reject "knowledge-base plugin test pairing (JS behavior has no sibling test)" \
   "plugins/knowledge-base/orphan.js" pnpm lint:tests
 
+echo "export const orphan = 1;" >plugins/office-hints/orphan.js
+expect_reject "office-hints plugin test pairing (JS behavior has no sibling test)" \
+  "plugins/office-hints/orphan.js" pnpm lint:tests
+
 echo "export const orphan = 1;" >images/dsh-user/orphan.mjs
 expect_reject "user-image script test pairing (MJS behavior has no sibling test)" \
   "images/dsh-user/orphan.mjs" pnpm lint:tests

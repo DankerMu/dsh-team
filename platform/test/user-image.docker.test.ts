@@ -400,7 +400,7 @@ it('refuses to start DSH Web on a wildcard overlay: nonzero exit within 60s and 
   );
 });
 
-it('delivers the platform navigation and knowledge-base plugins and the empty credential store root-owned, read-only and compatible with the installed DSH', async () => {
+it('delivers the platform navigation, knowledge-base and Office hints plugins and the empty credential store root-owned, read-only and compatible with the installed DSH', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
@@ -409,7 +409,7 @@ import assert from 'node:assert/strict';
 import { opendirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 ${DSH_ENGINES_PRELUDE}
 const engines={};
-for(const id of ['platform-nav','knowledge-base']) {
+for(const id of ['platform-nav','knowledge-base','office-hints']) {
   const root='/opt/dsh-team/'+id;
   assert.deepEqual(readdirSync(root).sort(),['client.js','cordis.patch.yml','index.js','package.json']);
   const directory=statSync(root);
@@ -449,7 +449,11 @@ process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.n
     (stdout) => {
       expect(JSON.parse(stdout)).toEqual({
         immutable: true,
-        engines: { 'platform-nav': '>=0.2.1-rc.2 <0.3.0', 'knowledge-base': '>=0.2.1-rc.2 <0.3.0' },
+        engines: {
+          'platform-nav': '>=0.2.1-rc.2 <0.3.0',
+          'knowledge-base': '>=0.2.1-rc.2 <0.3.0',
+          'office-hints': '>=0.2.1-rc.2 <0.3.0',
+        },
         credentials: null,
         uid: 1001,
       });

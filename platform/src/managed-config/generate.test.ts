@@ -646,6 +646,11 @@ describe('generateManagedConfig', () => {
               disabled: false,
               config: { admin, pluginCatalog: {} },
             },
+            {
+              id: 'office-hints',
+              name: '/opt/dsh-team/office-hints/index.js',
+              disabled: false,
+            },
             PLATFORM_CREDENTIAL_STORE,
           ],
         },

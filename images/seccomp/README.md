@@ -66,7 +66,8 @@ docker build -t "$image" -f images/dsh-user/Dockerfile \
   --build-context "permission-tiers=$(pwd)/plugins/permission-tiers" \
   --build-context "office-agents=$(pwd)/plugins/office-agents" \
   --build-context "platform-nav=$(pwd)/plugins/platform-nav" \
-  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" images/dsh-user
+  --build-context "knowledge-base=$(pwd)/plugins/knowledge-base" \
+  --build-context "office-hints=$(pwd)/plugins/office-hints" images/dsh-user
 timeout --foreground 90 docker run --name "$container" --user 1001:1001 \
   --security-opt "seccomp=${profile}" \
   --mount "type=bind,src=${driver},dst=/probe/probe-sandbox-bash-tool.mjs,ro" \
