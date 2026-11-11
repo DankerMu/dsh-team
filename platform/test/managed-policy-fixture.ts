@@ -46,7 +46,11 @@ import {
   RETAINED_TOOLS,
   type ManagedPolicyRuntimeExpectation,
 } from './managed-policy-oracle.ts';
-import { customOfficeInsert, employeeHomePatch } from './managed-policy-employee-edit.ts';
+import {
+  customOfficeInsert,
+  employeeHomePatch,
+  PROFILE_ROWS_READ,
+} from './managed-policy-employee-edit.ts';
 import { createProfileRecorder, PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
 import type { ProfileRecorder } from './managed-policy-profile.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
@@ -259,19 +263,13 @@ function repositoryCanonicalHash(): string {
 }
 
 export function installObserverScript(plugin: string): string {
-  return `
-import { mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
-const { load, dump } = require('js-yaml');
+  return `${PROFILE_ROWS_READ}
+import { mkdirSync } from 'node:fs';
 mkdirSync('/data/home/profiles/web/node_modules/@dsh-team', { recursive: true });
 writeFileSync(${JSON.stringify(OBSERVER_PATH)}, ${JSON.stringify(plugin)});
 writeFileSync(${JSON.stringify(STATE_MARKER)}, ${JSON.stringify(STATE_MARKER_BODY)});
-const patchPath = ${JSON.stringify(PROFILE_PATCH)};
-const parsed = existsSync(patchPath) ? load(readFileSync(patchPath, 'utf8')) ?? [] : [];
-if (!Array.isArray(parsed)) throw new Error(${JSON.stringify(INVALID)});
 parsed.push({ insert: [${JSON.stringify(OBSERVER_INSERT)}] });
-writeFileSync(patchPath, dump(parsed, { lineWidth: -1 }));
+writeFileSync(profile, dump(parsed, { lineWidth: -1 }));
 process.stdout.write(JSON.stringify({ installed: true }));
 `;
 }
@@ -289,18 +287,11 @@ process.stdout.write(JSON.stringify({
 }
 
 function editAfterStopScript(): string {
-  return `
-import { writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-const require = createRequire('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json');
-const { load, dump } = require('js-yaml');
+  return `${PROFILE_ROWS_READ}
 const home = ${JSON.stringify(HOME_PATCH)};
 const live = ${JSON.stringify(LIVE_PATCH)};
-const profile = ${JSON.stringify(PROFILE_PATCH)};
 const seed = readFileSync(${JSON.stringify(CANONICAL_SEED)}, 'utf8');
 writeFileSync(home, ${JSON.stringify(EMPLOYEE_HOME)});
-const parsed = existsSync(profile) ? load(readFileSync(profile, 'utf8')) ?? [] : [];
-if (!Array.isArray(parsed)) throw new Error(${JSON.stringify(INVALID)});
 parsed.push({ insert: [${JSON.stringify(CUSTOM_INSERT)}] });
 const bytes = dump(parsed, { lineWidth: -1 });
 ${PROFILE_EDITOR_SERIALIZATION}
