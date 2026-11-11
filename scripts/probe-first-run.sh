@@ -18,7 +18,7 @@ same-port Unix-socket relays; no host policy change or native fallback.
 Runtime/qualification-failure locations are printed; browser timeout/signal
 rescue uses ownership receipts, never PID-only files. --help only prints usage.
 Leave DOCKER_HOST and DOCKER_CONTEXT unset; daemon overrides are rejected.
-Env: CHROME_BIN (complete pinned CfT140.0.7339.82
+Env: CHROME_BIN (complete pinned CfT156.0.8078.80
 chrome-headless-shell-linux64 distribution executable, no PATH search);
 PROBE_PORT (1024-65535); PROBE_STARTUP_SECONDS (1-180, default 60);
 PROBE_BROWSER_SECONDS (1-300, default 120);

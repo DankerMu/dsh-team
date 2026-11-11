@@ -370,7 +370,7 @@ const parseDebugger = (text) => {
 const requireDebugger = (info, runtime) => {
   if (
     runtime.kind === 'docker-isolated-network' &&
-    !/^(?:HeadlessChrome|Chrome)\/140\.0\.7339\.82$/.test(info.Browser ?? '')
+    !/^(?:HeadlessChrome|Chrome)\/156\.0\.8078\.80$/.test(info.Browser ?? '')
   ) {
     throw new Error('isolated browser version differs from pinned CfT');
   }

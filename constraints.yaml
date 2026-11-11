@@ -201,7 +201,7 @@ verification:
       required_at: "L3+"
     user_image_docker:
       command: "pnpm test:docker"
-      evidence: "trusted giap-vps final reviewed SHA and original discovery; pinned tools and DSH 0.2.1-rc.2; immutable CfT140 verification image/Chrome, stable internal isolated namespace, natural online/confinement, original auth/gateway first-use/reload and raw HTTP/WS/CDP pressure/FIN behavior; readable Chinese glyphs, bounded failure receipts; success/failure owned browser/container/network cleanup and unrelated sentinel preservation"
+      evidence: "trusted giap-vps final reviewed SHA and original discovery; pinned tools and DSH 0.2.1-rc.2; immutable CfT156 verification image/Chrome, stable internal isolated namespace, natural online/confinement, original auth/gateway first-use/reload and raw HTTP/WS/CDP pressure/FIN behavior; readable Chinese glyphs, bounded failure receipts; success/failure owned browser/container/network cleanup and unrelated sentinel preservation"
       required_at: "L3+"
     trusted_docker_custody:
       command: "pnpm --silent verify:docker start <reviewed-sha>"
@@ -225,7 +225,7 @@ verification:
       required_at: "L3+"
     dsh_permission_ui:
       command: "pnpm test:docker"
-      evidence: "root-provisioned isolated CfT140 image and complete CHROME_BIN distribution; exact three choices and two-Session independence; six root/one-shot-child reject/allow/cancel paths, native child identity/audit and exact file effects; readable Chinese screenshots, bounded request-failure evidence and receipt-owned browser/container/network cleanup"
+      evidence: "root-provisioned isolated CfT156 image and complete CHROME_BIN distribution; exact three choices and two-Session independence; six root/one-shot-child reject/allow/cancel paths, native child identity/audit and exact file effects; readable Chinese screenshots, bounded request-failure evidence and receipt-owned browser/container/network cleanup"
       required_at: "L3+"
     office_delegation_native:
       command: "pnpm test:docker"

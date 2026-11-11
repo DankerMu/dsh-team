@@ -176,7 +176,7 @@ async function prepare() {
   )
     throw new Error('browser isolation requires qualified local Linux Docker UID mapping');
   if (!process.env.CHROME_BIN)
-    throw new Error('CHROME_BIN must select pinned CfT 140.0.7339.82 chrome-headless-shell');
+    throw new Error('CHROME_BIN must select pinned CfT 156.0.8078.80 chrome-headless-shell');
   const bin = await realpath(process.env.CHROME_BIN);
   if (!bin.endsWith('/chrome-headless-shell'))
     throw new Error(
@@ -267,7 +267,7 @@ async function prepare() {
     invocation,
     imageId,
     base: 'sha256:a81a03dd965b4052269a57fac857004022b522a4bf06e7a739e25e18bce45af2',
-    chromeVersion: '140.0.7339.82',
+    chromeVersion: '156.0.8078.80',
     chromeSha256: sha256,
     uid: process.getuid(),
     gid: process.getgid(),
@@ -275,7 +275,7 @@ async function prepare() {
   };
   await writeFile(join(directory, 'runtime.json'), JSON.stringify(identities), { mode: 0o600 });
   process.stdout.write(
-    `browser runtime image=${imageId} Chrome=140.0.7339.82 sha256=${sha256} receipt=${join(directory, 'runtime.json')}\n`,
+    `browser runtime image=${imageId} Chrome=156.0.8078.80 sha256=${sha256} receipt=${join(directory, 'runtime.json')}\n`,
   );
   const env = {
     ...process.env,
@@ -405,7 +405,7 @@ try {
     'browser isolation requires trusted nonroot Linux amd64',
     'browser isolation requires the local default Docker daemon',
     'browser isolation requires qualified local Linux Docker UID mapping',
-    'CHROME_BIN must select pinned CfT 140.0.7339.82 chrome-headless-shell',
+    'CHROME_BIN must select pinned CfT 156.0.8078.80 chrome-headless-shell',
     'browser isolation requires the complete pinned CfT headless-shell distribution',
     'browser runtime provisioning failed',
     'browser runtime immutable image ID missing',

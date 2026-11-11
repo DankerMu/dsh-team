@@ -63,7 +63,7 @@ daemon, ordinary UID mapping and isolated IPv4 bridge gateway-mode support.
 Leave `DOCKER_HOST` and `DOCKER_CONTEXT` unset; root provisioning rejects daemon
 overrides rather than silently selecting a different context.
 `CHROME_BIN` must point to the executable in the complete pinned
-CfT140.0.7339.82 `chrome-headless-shell-linux64` distribution; no PATH search,
+CfT156.0.8078.80 `chrome-headless-shell-linux64` distribution; no PATH search,
 arbitrary-browser substitute, rootless/userns or silent native fallback.
 The root commands below provision/qualify the verification-only Node24 image
 with open-licensed Debian CJK fonts and a readonly browser distribution mount.
@@ -195,7 +195,7 @@ The parent owns this independent UI exercise and the API three-cycle regression.
 
 ## Verification contract
 
-Use the root first-run probe with DSH0.2.1-rc.2, Node24.13.1 and pinned CfT140.
+Use the root first-run probe with DSH0.2.1-rc.2, Node24.13.1 and pinned CfT156.
 Require both fresh non-loopback entry and reload: readable Chinese controls,
 no Notice, successful marker type/clear and zero console errors. The optional
 configured-model exercise must retain General settings and select both fixture
