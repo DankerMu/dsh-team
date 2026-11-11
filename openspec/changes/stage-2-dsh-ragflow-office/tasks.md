@@ -5433,8 +5433,14 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
   - 拆分记录（2026-11-11）：39.B 合计超过 400 行，已拆为两个 PR。
     - 39.B1 做锁定状态、员工往返和联网工具：新增 `catalog-policy.docker.test.ts`、`catalog-policy-fixture.ts`，并给 oracle 加 `webToolsEnabled` 开关。期望做了以下调整：
       - 重启后 minimal 也断言一个联网工具都没有，这是「全局 `tool-web` 行仍关闭」在运行时唯一能观察到的证据；
-      - live 的 profile manifest 不和 seed 比较，因为 DSH 重新启用 bundle 时会把它追加到末尾（`dsh-plugin-manager lib/index.js:340`），只比 seed 和覆盖层的 sha256。
+      - live 的 profile manifest 不和 seed 比较，因为 DSH 重新启用 bundle 时会把它追加到末尾（`dsh-plugin-manager lib/index.js:2280-2295`（`selectBundle`）），只比 seed 和覆盖层的 sha256。
     - 39.B2 做员工改写及其 observer 读取，以及 first-use 的 sibling 检查。另外补上 B1 没有观测的「预设回落到 `standard`」：observer 读取 `agent-preset-registry` 的 `default`，首启和重启都期望为 `standard`，员工改写成 `office-general` 也不能留下。B2 改写之后、重启之前，要像 managed-policy 那样重新收集一次 composition。
+    - B2 实现时的偏离（2026-11-11）：平台的 composition 读取器会把 `composeEntries` 的任何 warn 当成失败（`platform/src/managed-config/read.ts`），而 `zh-locale` 这一行一定没命中，所以不能把三组行写完再 recompose。改为分三步：
+      1. 先写入预设和 plugin-manager 两组，然后 recompose，期望没有 warning，且结果与首次的 composition 相同；
+      2. 再单独追加 `zh-locale` 行，此时离线组合只应报 `patch: entry "zh-locale" not found` 这一条；
+      3. 用 recompose 的结果重启，观察 DSH 怎样跳过这一行。
+
+      生产路径下，`start.ts` 每次启动前都会跑同一个读取器，这个状态会导致实例无法启动。这属于产品问题，已另开 issue 回报，本节不修。
 
 - [ ] 39.C1 插件页安装对话框（不抓包）：
   - `scripts/probe-plugin-page.mjs` 加安装驱动：
