@@ -5,9 +5,11 @@ const vitestEntry = fileURLToPath(new URL('../../node_modules/vitest/vitest.mjs'
 /**
  * CommonJS text of a stand-in vitest main process. Its signal handlers are installed before the
  * `started.json` marker ({ pid, args }); a signal publishes `signal.json` then `exit.json` and
- * exits zero. Without `hold` it exits zero right after `started.json`.
+ * exits zero. Without `hold` it exits zero right after `started.json`. With `release`, the first
+ * signal publishes `signal.json` and the stand-in exits zero only after the `release` file
+ * exists; every later signal publishes `repeat.json` instead.
  */
-export function vitestStandIn(markers: string, hold: boolean): string {
+export function vitestStandIn(markers: string, hold: boolean, release?: string): string {
   return `const fs = require('node:fs');
 const markers = ${JSON.stringify(markers)};
 function publish(name, value) {
@@ -15,16 +17,34 @@ function publish(name, value) {
   fs.writeFileSync(path + '.pending', JSON.stringify(value), { mode: 0o600 });
   fs.renameSync(path + '.pending', path);
 }
-for (const signal of ['SIGTERM', 'SIGINT']) {
+${release === undefined ? exitOnSignal : holdUntilRelease(release)}
+publish('started.json', { pid: process.pid, args: process.argv.slice(2) });
+if (${JSON.stringify(hold)}) setInterval(() => {}, 60000);
+`;
+}
+
+const exitOnSignal = `for (const signal of ['SIGTERM', 'SIGINT']) {
   process.once(signal, () => {
     publish('signal.json', { signal, pid: process.pid });
     publish('exit.json', { pid: process.pid });
     process.exit(0);
   });
-}
-publish('started.json', { pid: process.pid, args: process.argv.slice(2) });
-if (${JSON.stringify(hold)}) setInterval(() => {}, 60000);
-`;
+}`;
+
+function holdUntilRelease(release: string): string {
+  return `let signaled = false;
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    if (signaled) return publish('repeat.json', { signal, pid: process.pid });
+    signaled = true;
+    publish('signal.json', { signal, pid: process.pid });
+    setInterval(() => {
+      if (!fs.existsSync(${JSON.stringify(release)})) return;
+      publish('exit.json', { pid: process.pid });
+      process.exit(0);
+    }, 20);
+  });
+}`;
 }
 
 /**
