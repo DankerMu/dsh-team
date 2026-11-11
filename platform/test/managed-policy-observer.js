@@ -113,15 +113,21 @@ function pluginPage(ctx) {
   return { registryProbeEnabled: enabled };
 }
 
-/** The live package sources of the plugin manager row. */
+/**
+ * The live package sources of the plugin manager row; `null` where it holds none. dsh-base's row has
+ * no config and dsh-plugin-manager 0.2.1-rc.2 lib/index.js:1580-1581 gives `registry` no default
+ * (its constructor maps it to null, :1617), so a start without the overlay row reports it unset;
+ * `fallbackRegistries` defaults to the npmmirror registry there, so its `null` is outside the schema.
+ */
 function pluginManager(ctx) {
   const config = entryConfig(ctx, 'plugin-manager');
   const registry = resolved(config.registry);
   const fallbacks = resolved(config.fallbackRegistries);
-  if (typeof registry !== 'string' || !Array.isArray(fallbacks)) fail();
-  const fallbackRegistries = fallbacks.map(resolved);
-  if (!fallbackRegistries.every((value) => typeof value === 'string')) fail();
-  return { registry, fallbackRegistries };
+  if (registry !== undefined && typeof registry !== 'string') fail();
+  if (fallbacks !== undefined && !Array.isArray(fallbacks)) fail();
+  const fallbackRegistries = fallbacks?.map(resolved) ?? null;
+  if (fallbackRegistries?.some((value) => typeof value !== 'string')) fail();
+  return { registry: registry ?? null, fallbackRegistries };
 }
 
 /**
