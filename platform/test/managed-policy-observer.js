@@ -27,6 +27,16 @@ const PERSONA_MODULE = '@deepseek-ai/dsh-persona';
 const PLUGIN_PAGE_ID = 'ui-plugin-manager';
 // The knowledge-base bundle's insert row (plugins/knowledge-base/cordis.patch.yml).
 const KNOWLEDGE_BASE_ID = 'knowledge-base';
+// Catalog rows whose loader state is reported (#409): the office presets, the forced-on knowledge
+// base and the overlay's required inserts.
+const STATE_ENTRY_IDS = [
+  'preset-office-general',
+  'preset-office-writer',
+  KNOWLEDGE_BASE_ID,
+  'platform-nav',
+  'zh-locale',
+  'managed-permissions',
+];
 // dsh-system-prompt 0.2.1-rc.2 lib/index.js:59
 //   const PERSONA_PREFIX_SECTION = "deployment:persona-prefix";
 const PERSONA_PREFIX_SECTION = 'deployment:persona-prefix';
@@ -91,32 +101,65 @@ function defaultModelId(ctx) {
   return model;
 }
 
+/** A config value as the entry holds it, through a reactive reference when it is one. */
+function resolved(value) {
+  return typeof value?.get === 'function' ? value.get() : value;
+}
+
 /** Live validated plugin page config; only the registry probe switch is reported. */
 function pluginPage(ctx) {
-  const value = entryConfig(ctx, PLUGIN_PAGE_ID).registryProbeEnabled;
-  const enabled = typeof value?.get === 'function' ? value.get() : value;
+  const enabled = resolved(entryConfig(ctx, PLUGIN_PAGE_ID).registryProbeEnabled);
   if (typeof enabled !== 'boolean') fail();
   return { registryProbeEnabled: enabled };
 }
 
+/** The live package sources of the plugin manager row. */
+function pluginManager(ctx) {
+  const config = entryConfig(ctx, 'plugin-manager');
+  const registry = resolved(config.registry);
+  const fallbacks = resolved(config.fallbackRegistries);
+  if (typeof registry !== 'string' || !Array.isArray(fallbacks)) fail();
+  const fallbackRegistries = fallbacks.map(resolved);
+  if (!fallbackRegistries.every((value) => typeof value === 'string')) fail();
+  return { registry, fallbackRegistries };
+}
+
 /**
- * The knowledge-base bundle row as the loader holds it: present, not disabled, fiber state and the
- * validated config, which cordis passes to `apply` unchanged (the plugin declares no schema).
+ * The preset registry's configured default and the one new Sessions get: dsh-agent-preset-registry
+ * lib/index.js:463-465 `defaultId` prefers the volatile `selectedDefault` over `default`.
  */
-function knowledgeBase(ctx) {
+function presetRegistry(ctx, agentPresets) {
+  const configured = resolved(entryConfig(ctx, 'agent-preset-registry').default);
+  const effective = agentPresets.defaultId;
+  if (typeof configured !== 'string' || typeof effective !== 'string') fail();
+  return { default: configured, defaultId: effective };
+}
+
+/** The one top-level loader row with this id, if any (disabled rows included). */
+function topEntry(ctx, id) {
   const entries = [...ctx.loader.entries()].filter(
-    (entry) =>
-      !entry.options?.group &&
-      (entry.id === KNOWLEDGE_BASE_ID || entry.options?.id === KNOWLEDGE_BASE_ID),
+    (entry) => !entry.options?.group && (entry.id === id || entry.options?.id === id),
   );
   if (entries.length > 1) fail();
-  const entry = entries[0];
+  return entries[0];
+}
+
+/** Present, not disabled and the fiber state; a row disabled at boot never gets a fiber. */
+function entryState(entry) {
   return {
     present: entry !== undefined,
     enabled: entry !== undefined && !entry.disabled,
     fiberState: entry?.fiber?.state ?? null,
-    config: entry?.fiber?.config ?? null,
   };
+}
+
+/**
+ * The knowledge-base bundle row as the loader holds it: its state and the validated config, which
+ * cordis passes to `apply` unchanged (the plugin declares no schema).
+ */
+function knowledgeBase(ctx) {
+  const entry = topEntry(ctx, KNOWLEDGE_BASE_ID);
+  return { ...entryState(entry), config: entry?.fiber?.config ?? null };
 }
 
 function toolNames(schemas) {
@@ -319,6 +362,9 @@ async function observe(ctx) {
       pluginPage: pluginPage(ctx),
       permissions,
       knowledgeBase: knowledgeBase(ctx),
+      pluginManager: pluginManager(ctx),
+      presetRegistry: presetRegistry(ctx, agentPresets),
+      entries: Object.fromEntries(STATE_ENTRY_IDS.map((id) => [id, entryState(topEntry(ctx, id))])),
     })}\n`,
   );
 }
