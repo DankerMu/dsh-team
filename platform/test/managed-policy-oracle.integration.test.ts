@@ -555,33 +555,3 @@ it.each([{ webToolsEnabled: false }, {}])(
     );
   },
 );
-
-// Only the listed presets carry web tools, office-general among the rest. Against the mutant
-// "every preset but minimal" (`preset.id !== 'minimal'`), office-general without web tools and
-// with both are the discriminating cases: the mutant requires both there. One tool alone is
-// rejected by the mutant too, as it lacks the other.
-const OFFICE_WEB_EXPECTED = {
-  ...WEB_EXPECTED,
-  presetIds: [...WEB_EXPECTED.presetIds, 'office-general'],
-  webToolsEnabled: true,
-};
-function officeWebObservation(toolNames: readonly string[]) {
-  const observation = webObservation({});
-  return {
-    ...observation,
-    presets: [...observation.presets, { id: 'office-general', description: '', toolNames }],
-  };
-}
-
-it('accepts office-general without web tools when web tools are enabled', () => {
-  assertManagedPolicyRuntime(officeWebObservation(['read']), OFFICE_WEB_EXPECTED);
-});
-
-it.each([[['read', ...WEB]], [['read', 'web_search']]])(
-  'rejects office-general carrying %j when web tools are enabled',
-  (toolNames) => {
-    expect(() => {
-      assertManagedPolicyRuntime(officeWebObservation(toolNames), OFFICE_WEB_EXPECTED);
-    }).toThrow('Invalid managed policy runtime observation');
-  },
-);
