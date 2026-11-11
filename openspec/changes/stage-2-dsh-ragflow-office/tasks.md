@@ -5308,3 +5308,146 @@ Evidence (38.1–38.2):
 剩余风险：根因仍是 UNKNOWN。本 PR 只让复发时能够归因，不加重试，不改 deadline，不跳过用例，也不拿之后的绿色结果改写 #540 那次失败。#541 的最后一条验收是有条件的：合并时如果没有复发，就关闭 #541，原因记为 UNKNOWN；之后若复发，按投影出的类别码另开 issue 归因并修复，并附 failing-before/passing-after 证据。
 
 Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清语义、`buildFailureDiagnostic`、inspect 缺席判定、HTTPS 用例的全部业务断言、隐私用例的阶段证据和脱敏失败契约，以及完整的 Docker discovery。
+
+## 39. 11.6 插件目录 Docker 浏览器与出口观测用例（#409）
+
+依赖：#405、#406、#407、#444、#445、#509 已合入；#556（PR #572，离线安装替身）已合入。由 #409 承载。
+
+用户决定：
+
+- npm registry 替身跑在实例自己的 loopback 上，沿用 #556 的先例；
+- 出口观测允许用 tcpdump，只读抓包。
+
+改动范围：只改 `platform/test/` 下的 Docker 用例和夹具、`scripts/probe-plugin-page.mjs`（加安装对话框驱动）及其测试，以及文档。不改产品代码，不改镜像，不碰关键路径。
+
+拆成四个顺序 PR，每个都能独立合并：A → B → C1 → C2。行数上限照常 400；超出时按小节再拆，不用 `diff-limit-exempt` 硬塞。
+
+**共同约束（来自 fixture 评审，2026-11-09）**
+
+- 文件行数：
+  - `managed-policy-fixture.ts` 约 800 行，`user-image-fixture.ts` 约 792 行，`scripts/probe-mapped-host.mjs` 约 746 行，门禁是 `max-lines` 800。新代码放新文件，这几个文件的净行数不增加。
+  - `startWeb`、`acceptManaged` 要复用的话，改成导出并参数化，或者移到共享模块，不复制（jscpd 门禁 3%）。
+  - `collectComposition` 改为接收 bundle id 参数。`MIGRATION_OVERLAY_SETTINGS` 还有 `credential-priority-fixture.ts` 在用，不改它。
+- DSH 0.2.1 的事实（读的是同版本副本 `rel429`）：
+  - 打补丁顺序：bundle 层 → profile patch → home patch → `--patch` 覆盖层（`dsh-app-boot` `lib/index.js:1127-1133`）。没命中的行只告警后跳过（`:61-117`）。
+  - 安装对话框只在 `plugin-manager` 没有配 `registry` 时才调用 `pluginRegistryProbe.fastest()`（`dsh-client-ui-plugin-manager` `client.js:956-966,1282`）。覆盖层总会写 `registry`，所以 UI 永远不发探测。
+  - `registryPlan` 在只有一个源、`fallbackRegistries: []` 时只返回这一个源（`dsh-plugin-manager` `:969-988`）。
+  - `http://127.0.0.1:<port>/` 能通过 `db/settings.ts:11` 和 `dsh-plugin-manager:1580` 的 `REGISTRY_URL` 校验。
+- 「出现就停」条款：如果抓包看到发往公共仓库的 443/53（例如 pnpm 在没带 `--registry` 的路径上做版本检查），那是产品行为，本节不改产品代码。停下来，开 issue 回报，不放宽断言。
+
+- [ ] 39.A 把替身抽成共享模块：把 `user-image-fixture.ts` 里 `offlinePluginScript` 的 packument/tarball 服务抽到 `platform/test/registry-stand-in.ts`，`STAND_IN_REQUESTS`、`METADATA_REQUEST`、`TARBALL_REQUEST` 一并迁过去。
+  - 新增参数：监听端口（固定端口或 `0`）、请求日志写入的文件路径（可选）、就绪标记。
+  - 替身提供：packument（版本里带 `dsh.bundle` 和 `dist.integrity`）、tarball，`GET /pnpm` 和 `GET /npm` 返回 404。
+  - #556 的 `user-image.docker.test.ts:536-624` 改用共享模块，断言逐字不变。
+  - 验证：`pnpm check`；VPS `test:docker` 里的 #556 用例照常通过。
+
+- [ ] 39.B 锁定状态、联网工具、员工改写：新文件 `platform/test/catalog-policy.docker.test.ts` 和 `platform/test/catalog-policy-fixture.ts`，复用已导出的 `execScript`、`lifecycleWebNetwork`、`waitObservation`、`qualifyHostSession`、`migrationOverlayInput` 和参数化后的 `startWeb`/`acceptManaged`。
+  - 选项：
+
+    | 状态         | 项                       | 理由 / 说明                                                                                    |
+    | ------------ | ------------------------ | ---------------------------------------------------------------------------------------------- |
+    | `forced-off` | `office-agents`          | 没有 client 半边，启动名单不变；预设回落到 `standard`                                          |
+    | `forced-on`  | `knowledge-base`         | 已在 profile 中选中，覆盖层只写 `{id, disabled:false}`；observer 现成的 `knowledgeBase()` 能读 |
+    | 员工往返     | `dsh-sidebar-onlyoffice` | `leaveEnabled: true`                                                                           |
+
+    `office-agents` 强制关后，`SHIPPED_PRESET_IDS` 和 `officeNames` 的期望换成只有 standard、ptc、minimal、cordis 的一套。
+
+  - 插件页期望：
+    - 两个强制项的卡片 `enabled` 都期望为 `true`。`data-plugin-status` 反映的是 profile 是否选中，见 `plugins/platform-nav/README.md` 的 accepted residual。`forced-off` 卡片带「已关闭 · 由管理员设定」，`forced-on` 卡片带开启锁。
+    - `verifyLocks` 的指针和键盘检查作用在第一个带锁的卡片（knowledge-base）上；`forced-off` 卡片只经过列表级的 `lockedAs` 检查。
+    - 必启项照常锁定且开启。
+  - 时序（一次重启同时覆盖联网工具和员工改写）：
+    1. 首启 `webToolsEnabled=false`，断言三个预设的工具里都没有 `web_search`/`web_fetch`。
+    2. 停机，做员工改写。
+    3. 重启，覆盖层改为 `webToolsEnabled=true`，断言 standard、ptc、cordis 三个预设的 `toolNames` 都包含这两个工具。全局 `tool-web` 行由 `dsh-web-app/cordis.patch.yml:579` 写死为 disabled，仍应是关闭的。minimal 和 office 预设没有这一行。
+
+    门禁以 observer 的 `toolNames` 为准，截图只作证据。`managed-policy-oracle.ts:272` 加一个 `webToolsEnabled` 期望开关；它在关闭时的行为不变。
+
+  - 员工改写：沿用 `editAfterStopScript` 的读 → js-yaml 解析 → 追加 → 整份写回，不覆盖 observer 的 insert 行。在 `profiles/web/cordis.patch.yml` 追加三组行：
+    - 打开 forced-off 项：
+      ```yaml
+      - id: preset-office-general
+        disabled: false
+      - id: preset-office-writer
+        disabled: false
+      - id: agent-preset-registry
+        config:
+          default: office-general
+      ```
+      这几行真的会命中 bundle 层，然后被覆盖层更后面的行改回。
+    - 关闭必启项：
+      ```yaml
+      - id: zh-locale
+        disabled: true
+      ```
+      必启项只由覆盖层 insert，覆盖层在 profile 之后应用，所以这一行必然被「entry not found」跳过。如实写作「无从命中」。可观察的结果是：loader 里该条目存在、未禁用、fiber 2，启动名单不变，插件页锁标记照常出现。
+    - 改写安装源：
+      ```yaml
+      - id: plugin-manager
+        config:
+          registry: http://127.0.0.1:8/
+          fallbackRegistries: []
+      ```
+      这一行会生效，然后被覆盖层 `generate.ts:351` 的整份 config 替换回去。
+  - observer 增加两项读取：
+    - `entryConfig(ctx,'plugin-manager')` 的 `registry` 和 `fallbackRegistries`（兼容 `.get()` 引用）；
+    - 对 `preset-office-general`、`preset-office-writer`、`knowledge-base`、`platform-nav`、`zh-locale`、`managed-permissions` 各读 `{present, enabled, fiberState}`。
+
+    重启后的期望：覆盖层的值全部生效，员工改写一项都没留下。
+
+  - 「employee 项不影响他人」：在 `first-use.docker.test.ts` 中，plugins 员工完成 off 之后，对仍在运行的 sibling 实例调一次 `requireRegistration(profileManifests(sibling).live, true)`。standalone 用例另外断言：往返前后覆盖层文件的 sha256 和 seed manifest 都不变。
+  - 首轮 VPS 要确认两点：往返切换 onlyoffice 后不触发启动名单或控制台错误；被禁用的 `preset-office-*` 不会命中 `PLUGIN_FAILURE_MARKERS` 的 `did not activate`。任何一项红了就按实际原因回报。
+  - 验证：`pnpm check`；VPS exact-head `test:docker`（含新用例，有截图）和 `test:deploy`，cleanup confirmed。超过 400 行时，拆成 39.B1（锁定和联网工具）和 39.B2（员工改写）。
+
+- [ ] 39.C1 插件页安装对话框（不抓包）：
+  - `scripts/probe-plugin-page.mjs` 加安装驱动：
+    1. 点 `span[role=group][aria-label="添加插件"]` 内的主按钮；
+    2. 在 `input[aria-label="包名或地址"]` 里用 `Input.insertText` 输入包名（受控输入）；
+    3. 点宽按钮「安装」，触发 `pnpm view` 预检；
+    4. 在标题为「安装插件」的 Modal 里再点「安装」（`client.js:2101-2120,3247-3266`）；
+    5. 等标题变为「已安装」后点「立即启用」，期望卡片进入 running；
+    6. 最后断言 `[data-plugin-package="dsh-team-probe-plugin"]` 出现在已安装组。
+
+    `verifyPluginPage` 的 `roundTrip` 改为可选，或者把安装做成独立入口。`probe-plugin-page.integration.test.ts` 补上对话框各阶段的用例和失败分支。
+
+  - 替身在长驻实例里的运行方式：
+    - 覆盖层 `pluginRegistries = ['http://127.0.0.1:<固定端口>/']`，`registryProbeEnabled=false`。
+    - 每次启动之后、打开对话框之前，执行 `docker exec -d --user 1001 <实例> node --input-type=module -e <39.A 替身源码>`，监听固定的 `127.0.0.1:<port>`，请求日志写到容器内 `mkdtemp` 建出的 `/tmp/...` 文件。就绪用 `docker exec` 轮询该端口的就绪标记来判断；日志用 `docker exec cat` 读回。
+    - 替身随容器删除而消失，不新增清理目标。
+  - 断言：
+    - 替身日志正好落在 `STAND_IN_REQUESTS` 集合内，并且含 packument 和 tarball 的 GET；
+    - 首轮用日志确认对话框路径的 `installBundle` 没有重新解析预装闭包；
+    - live config 回读 `registryProbeEnabled: false`；
+    - 在实例里由 observer 调用 `ctx.get('pluginRegistryProbe').fastest()`，期望返回 `null`。只有 live config 回读到 `registryProbeEnabled === false` 时才调用。原因是 managed-policy 和 credential-priority 用例共用这个 observer，而它们的探测是开着的，无条件调用会多出一条公共出网路径。这条才是探测关闭的证据：UI 本来就不发探测，单看 UI 的断言是空转。
+  - 验证：同 39.B。
+
+- [ ] 39.C2 只读出口抓包：
+  - `runWebStartup` 加一个 `onStarted(container)` 钩子，改动限于 `platform/test/`。在钩子里：
+    1. 用 `docker inspect -f '{{.State.Pid}}'` 取 pid，要求大于 0 且容器在运行；
+    2. 启动抓包：
+       ```
+       /usr/bin/sudo -n /usr/bin/timeout -k 5 <bound>s /usr/bin/nsenter -t <pid> -n /usr/bin/tcpdump -i any -nn -l -s 128 'port 53 or port 80 or port 443 or udp port 9'
+       ```
+    3. 要求 stderr 里的 `listening on any` 先于 DSH 启动公告和 observer 的标记行出现。observer 在 `loader.await()` 之后就会输出，它调用的 `fastest()` 必须落在抓包窗口内。
+
+    每次启动都是新的 netns，所以每次启动单独抓。启动到挂上抓包之间的几毫秒空窗如实写进证据：探测是惰性的，这段空窗藏不住探测。
+
+  - 计数与断言：
+    - stdout 在内存里按「接口是否为 lo × 端口」计数，DNS 只保留查询名。不写文件，不用 `-w`、`-A`、`-X`。
+    - 门禁：任何接口上 port 53 的包数为 0；非 loopback 的 80/443 包数为 0。
+    - 正向对照：抓包期间用 `docker exec` 从实例向 bridge 网关的 `udp/9` 发一个金丝雀包，计数必须至少为 1。这同时证明 netns 对、过滤器对、解析器活着。
+  - 结束：发 SIGINT 之前，沿 `/proc/<sudo pid>/task/*/children` 找到并记下 tcpdump 的 pid（链路为 sudo → use_pty monitor → timeout → tcpdump，`nsenter -n` 直接 exec 成 tcpdump）。然后在 finally 里向 `sudo` 发 SIGINT，信号经 sudo 转给 timeout、再转给 tcpdump，在上限内等它 `close`；再确认 tcpdump 已退出，只有 ESRCH 算退出，EPERM 不算，与 `scripts/README.md` 口径一致。内层的 `timeout -k` 是唯一不依赖测试进程的硬上限，测试进程被 SIGKILL 时由它回收。
+  - 保管模型：root 的 tcpdump 不是 Docker 资源，不进登记目标，保管观察者不认它。测试自己确认退出并打印证据。lane 的主机围栏增加一项：运行后 `pgrep -x tcpdump` 和 `pgrep -x nsenter` 的结果与运行前的基线一致。抓包不碰 iptables、网络和文件。
+  - 首轮实测 `sudo -n` 能否在保管 owner 的分离会话里使用；命令全部写绝对路径。
+  - 验证：同 39.B，另加围栏前后的 `pgrep` 证据。
+
+Suggested fixture level: expanded - 新的 Docker 浏览器用例、首次在宿主上做只读抓包、新增插件页安装驱动
+Minimal mergeable slice: 39.A（替身抽取，行为不变）是第一刀；39.B、39.C1、39.C2 依次各一个 PR
+Risk packs (39.A–39.C2): selected - Security（抓包只计数，不落盘，不记载荷）、Resource limits（tcpdump 由 `timeout -k` 兜底，在 finally 里确认退出）、Legacy compatibility（#556 断言、managed-policy 用例、oracle 关闭行为、first-use 断言都不变）、Release（只用测试自有资源，前缀为 `dsh-team`）；not selected - Config、Schema、Auth、Public API、Concurrency、Migration。
+
+Must preserve：
+
+- 现有 managed-policy、first-use、#556 用例的全部断言；
+- `MIGRATION_OVERLAY_SETTINGS`；
+- 产品代码与镜像；
+- 保管和清理规则：不新增登记类别，cancel/retire 语义不变。

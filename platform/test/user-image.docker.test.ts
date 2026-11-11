@@ -9,10 +9,14 @@ import {
   assertDocxReadback,
   buildUserImageExpectingFailure,
   offlineDocxScript,
-  PROBE_PLUGIN,
-  PROBE_TARBALL,
   runUserImage,
 } from './user-image-fixture.ts';
+import {
+  METADATA_REQUEST,
+  PROBE_PLUGIN,
+  STAND_IN_REQUESTS,
+  TARBALL_REQUEST,
+} from './registry-stand-in.ts';
 import { assertOfficeConversion, runOfficeConvert } from './office-convert-fixture.ts';
 import { RENAMED_FONT, renamedFontDirectory } from './font-rename-fixture.ts';
 import { profileSeedOracle } from './profile-seed-fixture.ts';
@@ -637,16 +641,6 @@ interface OfflinePluginObservation {
 }
 
 const BUNDLED_ENTRIES = ['dsh-better-sidebar', 'dsh-sidebar-onlyoffice'];
-const METADATA_REQUEST = `GET /${PROBE_PLUGIN}`;
-const TARBALL_REQUEST = `GET ${PROBE_TARBALL}`;
-// The probe plugin's metadata (the preflight and pnpm) and tarball, and pnpm's own version check.
-const STAND_IN_REQUESTS = [
-  METADATA_REQUEST,
-  TARBALL_REQUEST,
-  'GET /pnpm',
-  // The add preflight's `pnpm view` runs npm, whose own version check fetches the npm packument.
-  'GET /npm',
-];
 
 /** The nested package names a request path names as segments, raw, `%2F`-encoded or decoded. */
 function namedPackages(request: string, names: readonly string[]): string[] {
