@@ -51,12 +51,17 @@ export interface ManagedPolicyRuntimeExpectation {
   readonly retainedTools?: Readonly<Record<string, readonly string[]>>;
   readonly readLimits?: Readonly<Record<string, number>>;
   readonly officeNames?: Readonly<Record<string, string>>;
+  /** The overlay's web tools switch; absent or false forbids web tools on every preset. */
+  readonly webToolsEnabled?: boolean;
 }
 
 const INVALID_RUNTIME = 'Invalid managed policy runtime observation';
 const RELEASED_BETA_CONTEXT_WINDOW = 262_144;
 const NETWORK_TOOLS = new Set(['web_search', 'web_fetch']);
 const PLUGIN_MANAGER_TOOL = 'plugin_manager';
+// dsh-web-app 0.2.1-rc.2 presets: standard.patch.yml:116, ptc.patch.yml:118 and cordis.patch.yml:115
+// carry a tool-web row, minimal has none; the global row stays disabled (cordis.patch.yml:579).
+const WEB_TOOL_PRESETS: ReadonlySet<string> = new Set(['standard', 'ptc', 'cordis']);
 
 export const SHIPPED_PRESET_IDS = [
   'standard',
@@ -234,6 +239,16 @@ function matchesOffice(preset: ManagedPolicyPresetObservation, name: string | un
   );
 }
 
+function hasExpectedNetworkTools(
+  preset: ManagedPolicyPresetObservation,
+  expected: ManagedPolicyRuntimeExpectation,
+): boolean {
+  if (expected.webToolsEnabled === true && WEB_TOOL_PRESETS.has(preset.id)) {
+    return [...NETWORK_TOOLS].every((name) => preset.toolNames.includes(name));
+  }
+  return !preset.toolNames.some((name) => NETWORK_TOOLS.has(name));
+}
+
 function matchesExpectedPreset(
   preset: ManagedPolicyPresetObservation,
   expected: ManagedPolicyRuntimeExpectation,
@@ -269,7 +284,7 @@ export function assertManagedPolicyRuntime(
     invalid();
   }
   for (const preset of observed.presets) {
-    if (preset.toolNames.some((name) => NETWORK_TOOLS.has(name))) {
+    if (!hasExpectedNetworkTools(preset, expected)) {
       invalid();
     }
     if (!matchesExpectedPreset(preset, expected)) {

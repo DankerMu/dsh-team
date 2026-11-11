@@ -296,3 +296,23 @@ export function createManagedPolicyEvidence(lifecycle: {
     },
   };
 }
+
+/** Stage-keyed browser evidence: start fields for start, restart fields for control and restart. */
+export function recordBrowserObservation(
+  evidence: ManagedPolicyEvidence,
+  stage: 'start' | 'control' | 'restart',
+  result: MappedHostAcceptResult,
+): void {
+  const screenshot = result.screenshot?.screenshot;
+  evidence.record(
+    stage === 'start'
+      ? {
+          ...(screenshot === undefined ? {} : { startScreenshot: screenshot }),
+          startBrowser: browserEvidence(result),
+        }
+      : {
+          ...(screenshot === undefined ? {} : { restartScreenshot: screenshot }),
+          restartBrowser: browserEvidence(result),
+        },
+  );
+}
