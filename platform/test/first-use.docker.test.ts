@@ -12,6 +12,7 @@ import { isAbsentResource } from './docker-command.ts';
 import { registerInstanceUser } from './instance-fixture.ts';
 import { startBrowserPlatform, startEmployeeInstance } from './instance-browser-docker-fixture.ts';
 import { MANAGED_BOOT_ROSTER } from './managed-boot-roster.ts';
+import { profileManifests } from './profile-manifests.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
@@ -239,25 +240,6 @@ function pluginExpectations(officeEnabled: boolean) {
     enabled: entry.package === OFFICE_AGENTS ? officeEnabled : entry.imageDefaultEnabled,
     ...(entry.category === 'required' ? { locked: 'forced-on' as const } : {}),
   }));
-}
-
-/** The live Web profile manifest and the image's seed copy, read inside the running instance. */
-async function profileManifests(lifecycle: UserImageLifecycle, id: string) {
-  const script = `import { readFileSync } from 'node:fs';
-process.stdout.write(JSON.stringify({
-  live: readFileSync('/data/home/profiles/web/package.json', 'utf8'),
-  seed: readFileSync('/opt/dsh-team/profile-seed/web/package.json', 'utf8'),
-}));`;
-  const result = await lifecycle.commandAsync(
-    ['exec', id, 'node', '--input-type=module', '-e', script],
-    15_000,
-  );
-  if (result.status !== 0 || result.error !== undefined)
-    throw new Error('Profile manifest observation failed');
-  const read = record(JSON.parse(result.stdout));
-  if (typeof read.live !== 'string' || typeof read.seed !== 'string')
-    throw new Error('Profile manifest observation is malformed');
-  return { live: read.live, seed: read.seed };
 }
 
 /** Every catalog entry is an installed `file:` dependency; the sidebar, ONLYOFFICE, the knowledge base and a switched-on office are selected. */
@@ -571,6 +553,8 @@ it('gives untouched employees automatic work Sessions and preserves employee sta
 
         // The switch state persists: off across a restart (the instance still starts), then on.
         expectPluginPage(await observePlugins('plugins-off', true, false), true, ['off']);
+        // The employee's switch is theirs alone: the still-running sibling keeps the image's selection.
+        requireRegistration((await profileManifests(lifecycle, siblingId)).live, true);
         await retire(pluginsId);
         pluginsId = await start(plugins);
         requireRegistration((await profileManifests(lifecycle, pluginsId)).live, false);

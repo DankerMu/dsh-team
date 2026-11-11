@@ -23,6 +23,7 @@ import {
 } from './managed-policy-fixture.ts';
 import { parseManagedPolicyRuntime } from './managed-policy-oracle.ts';
 import { createProfileRecorder, PROFILE_EDITOR_SERIALIZATION } from './managed-policy-profile.ts';
+import { profileManifests } from './profile-manifests.ts';
 import type { ManagedComposition } from '../src/managed-config/index.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -58,15 +59,6 @@ export const CATALOG_PLUGIN_PAGE = {
   ],
   roundTrip: { package: 'dsh-sidebar-onlyoffice', leaveEnabled: true },
 } as const satisfies MappedHostPluginPageOptions;
-
-// The image's seed profile manifest, shared by every new employee. The live copy is not compared:
-// DSH re-appends a re-enabled bundle (dsh-plugin-manager selectBundle, lib/index.js:2280-2295).
-const SEED_MANIFEST_SCRIPT = `
-import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-const bytes = readFileSync('/opt/dsh-team/profile-seed/web/package.json');
-process.stdout.write(createHash('sha256').update(bytes).digest('hex'));
-`;
 
 /**
  * The employee's profile-patch rewrite (39.B). Each row matches a bundle-layer entry (the office
@@ -156,6 +148,30 @@ function requireOverlayState(observation: unknown): void {
   }
 }
 
+/**
+ * Bundles as a sorted multiset: DSH re-appends a re-enabled bundle (dsh-plugin-manager
+ * lib/index.js:2280-2295 selectBundle), so the ONLYOFFICE round trip reorders the live list.
+ */
+function selection(manifest: string): { dependencies: unknown; bundles: string[] } {
+  const parsed = JSON.parse(manifest) as {
+    dependencies?: unknown;
+    dsh?: { profile?: { bundles?: unknown } };
+  };
+  const bundles = parsed.dsh?.profile?.bundles;
+  if (!Array.isArray(bundles) || !bundles.every((id): id is string => typeof id === 'string')) {
+    throw new Error(`${INVALID}: profile bundles`);
+  }
+  return { dependencies: parsed.dependencies, bundles: bundles.toSorted() };
+}
+
+/** The running instance's live profile manifest still selects and installs what the seed does. */
+async function requireSeedSelection(lifecycle: UserImageLifecycle, name: string): Promise<void> {
+  const { live, seed } = await profileManifests(lifecycle, name);
+  if (!isDeepStrictEqual(selection(live), selection(seed))) {
+    throw new Error(`${INVALID}: profile selection`);
+  }
+}
+
 function sha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
@@ -222,20 +238,12 @@ export async function runCatalogPolicyScenario(lifecycle: UserImageLifecycle): P
       // The overlay is mounted read-only: this only shows the start ran on the published bytes.
       if (sha256(overlay) !== published) throw new Error(`${INVALID}: overlay changed`);
       requireOverlayState(accepted.observation);
+      await requireSeedSelection(lifecycle, `${prefix}-${label}`);
       return stageSummary(accepted.observation, accepted.browser);
     };
-    const seed = execScript(
-      lifecycle,
-      `dsh-team-test-${lifecycle.runId}-seed`,
-      SEED_MANIFEST_SCRIPT,
-    );
     const start = await accept('start', false, composition);
     const stopped = lifecycle.command(['stop', `${prefix}-start`], 30_000);
     if (stopped.error !== undefined || stopped.status !== 0) throw new Error(`${INVALID}: stop`);
-    const reread = `dsh-team-test-${lifecycle.runId}-seed-reread`;
-    if (execScript(lifecycle, reread, SEED_MANIFEST_SCRIPT) !== seed) {
-      throw new Error(`${INVALID}: seed manifest changed`);
-    }
     profiles.capture('start-stopped');
     failedStage = 'restart';
     employeeRewrite(lifecycle, `${prefix}-rewrite`, EMPLOYEE_REWRITE, []);
