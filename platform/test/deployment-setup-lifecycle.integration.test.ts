@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest';
 import { waitForDeployment } from './deployment-account-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
 import { createDeploymentSetupEvidence } from './deployment-setup-evidence.ts';
+import { withTlsDeployment } from './deployment-tls-fixture.ts';
 import type * as ObserverModule from './deployment-observer-fixture.ts';
 import {
   substituteObservation,
@@ -72,11 +73,21 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-function deploymentDaemon(cleanupFails: boolean, drainFails = false, documentServer = false) {
+/** The TLS proxy's invocation-owned container name, whose middle is the run's ownership label. */
+const TLS_PROXY = /^dsh-team-test-(.+)-tls$/;
+
+function deploymentDaemon(
+  cleanupFails: boolean,
+  drainFails = false,
+  documentServer = false,
+  // One compose `up` fails, selected by whether it starts only the TLS proxy service.
+  composeFailure?: { readonly proxy: boolean; readonly stderr: string },
+) {
   const images = new Map<string, string>([['dsh-team-test-sentinel:kept', 'foreign-owner']]);
   const calls: string[][] = [];
   let platformOwner: string | undefined;
   let platformPresent = false;
+  let proxyPresent = false;
   let platformInspections = 0;
   const platformId = 'b'.repeat(64);
   const ok = (stdout = ''): DockerCommandResult => ({ status: 0, stdout, stderr: '' });
@@ -90,6 +101,17 @@ function deploymentDaemon(cleanupFails: boolean, drainFails = false, documentSer
   function compose(args: readonly string[]): DockerCommandResult {
     if (args[1] === 'version') return ok('2.39.1\n');
     if (args.includes('up')) {
+      const proxy = args.includes('proxy');
+      if (composeFailure?.proxy === proxy)
+        return {
+          status: 1,
+          stdout: 'private-compose-output-canary',
+          stderr: composeFailure.stderr,
+        };
+      if (proxy) {
+        proxyPresent = true;
+        return ok();
+      }
       platformOwner = [...images].find(([tag]) => tag.endsWith(':platform'))?.[1];
       platformPresent = true;
       return ok();
@@ -121,12 +143,29 @@ function deploymentDaemon(cleanupFails: boolean, drainFails = false, documentSer
           );
     return undefined;
   }
+  function inspectProxy(args: readonly string[], name: string): DockerCommandResult | undefined {
+    const owner = TLS_PROXY.exec(name)?.[1];
+    if (!proxyPresent || owner === undefined) return undefined;
+    if (args.includes('--format')) return ok(`${owner}\n`);
+    return ok(
+      JSON.stringify([
+        {
+          Id: 'd'.repeat(64),
+          Name: `/${name}`,
+          Config: { Labels: { 'dsh-team.test-run': owner } },
+          NetworkSettings: {
+            Networks: { [`dsh-team-test-${owner}_default`]: { IPAddress: '172.18.0.2' } },
+          },
+        },
+      ]),
+    );
+  }
   function inspect(kind: string, args: readonly string[], name: string): DockerCommandResult {
     // A foreign fixed-name Document Server: present, never adopted.
     if (documentServer && kind === 'container' && name === 'dsh-team-documentserver')
       return ok(JSON.stringify([{ Id: 'c'.repeat(64), Name: '/dsh-team-documentserver' }]));
     if (kind === 'container') {
-      const result = inspectPlatform(args, name);
+      const result = inspectProxy(args, name) ?? inspectPlatform(args, name);
       if (result !== undefined) return result;
     }
     if (kind === 'image' && images.has(name)) {
@@ -156,13 +195,20 @@ function deploymentDaemon(cleanupFails: boolean, drainFails = false, documentSer
     if (args[1] === 'inspect') return inspect(kind, args, name);
     if (kind === 'image' && args[1] === 'rm') return removeImage(name);
     if (kind === 'container' && args[1] === 'rm') {
-      platformPresent = false;
+      if (TLS_PROXY.test(name)) proxyPresent = false;
+      else platformPresent = false;
       return ok();
     }
     if (kind === 'network' && args[1] === 'ls') return ok();
     throw new Error('Unexpected external Docker operation in deployment setup regression');
   };
-  return { command, calls, images, platformPresent: () => platformPresent };
+  return {
+    command,
+    calls,
+    images,
+    platformPresent: () => platformPresent,
+    proxyPresent: () => proxyPresent,
+  };
 }
 
 it.each([
@@ -437,4 +483,99 @@ it('refuses a pre-existing fixed Document Server before any build without adopti
       evidence: 'retained',
     },
   ]);
+});
+
+function nestedMessages(error: unknown): string[] {
+  if (error instanceof AggregateError) return error.errors.flatMap(nestedMessages);
+  return [error instanceof Error ? error.message : String(error)];
+}
+
+async function tlsDeployment(daemon: ReturnType<typeof deploymentDaemon>) {
+  external.command = daemon.command;
+  external.observe = (event) => daemon.calls.push(['observer', event]);
+  const uid =
+    process.getuid === undefined ? undefined : vi.spyOn(process, 'getuid').mockReturnValue(1000);
+  const reports: DeploymentSetupSnapshot[] = [];
+  let observed: unknown;
+  try {
+    // The substitute keeps the real execFileSync, so the TLS certificate comes from the host's
+    // openssl: an integration host prerequisite.
+    await withTlsDeployment(
+      async (_lifecycle, start) => {
+        await start();
+      },
+      (snapshot) => {
+        reports.push(snapshot);
+      },
+    ).catch((error: unknown) => {
+      observed = error;
+    });
+  } finally {
+    external.command = undefined;
+    external.observe = undefined;
+    uid?.mockRestore();
+  }
+  return { reports, observed };
+}
+
+const ups = (calls: readonly string[][]) =>
+  calls.filter((args) => args[0] === 'compose' && args.includes('up'));
+
+it.each([
+  [
+    'scenario-preparation',
+    true,
+    'port-allocated',
+    ' Container dsh-team-test-private-tls  Starting\nError response from daemon: failed to set up container networking: driver failed programming external connectivity on endpoint dsh-team-test-private-tls (5c9a): failed to bind host port 127.0.0.1:41234/tcp: address already in use\n',
+  ],
+  [
+    'compose-creation',
+    false,
+    'container-name-conflict',
+    ' Container dsh-team-platform  Creating\nError response from daemon: Conflict. The container name "/dsh-team-platform" is already in use by container "private-41234". You have to remove (or rename) that container to be able to reuse that name.\n',
+  ],
+] as const)(
+  'attributes a failed TLS deployment compose up to %s with its closed category',
+  async (phase, proxy, code, stderr) => {
+    const daemon = deploymentDaemon(false, false, false, { proxy, stderr });
+
+    const { reports, observed } = await tlsDeployment(daemon);
+
+    // The proxy up precedes the stack up; only a successful proxy reaches the second.
+    expect(ups(daemon.calls).map((args) => args.includes('proxy'))).toEqual(
+      proxy ? [true] : [true, false],
+    );
+    expect(observed).toBeInstanceOf(AggregateError);
+    const messages = nestedMessages(observed);
+    expect(messages.filter((message) => message.includes(`compose-failure: ${code}`))).toHaveLength(
+      1,
+    );
+    expect(messages).toContain('Deployment generation was never bound');
+    for (const canary of ['private-', '41234'])
+      expect(JSON.stringify({ messages, reports })).not.toContain(canary);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      firstFailure: { phase, code: 'operation-failed', cause: 'unknown' },
+      operations: { 'deployment-creation': 'failed', [phase]: 'failed' },
+      cleanup: { resources: 'confirmed', observation: 'unconfirmed' },
+      evidence: 'retained',
+    });
+    // The original lifecycle error carries the snapshot its succeeding sink published.
+    expect((observed as { setup?: unknown }).setup).toEqual(reports[0]);
+    expect(daemon.proxyPresent()).toBe(false);
+    expect(daemon.platformPresent()).toBe(false);
+  },
+);
+
+it('publishes no setup evidence for a completed TLS deployment', async () => {
+  const daemon = deploymentDaemon(false);
+
+  const { reports, observed } = await tlsDeployment(daemon);
+
+  expect(observed).toBeUndefined();
+  expect(reports).toEqual([]);
+  expect(ups(daemon.calls).map((args) => args.includes('proxy'))).toEqual([true, false]);
+  expect(daemon.calls.at(-1)).toEqual(['observer', 'finish:true']);
+  expect(daemon.proxyPresent()).toBe(false);
+  expect(daemon.platformPresent()).toBe(false);
 });

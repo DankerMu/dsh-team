@@ -50,6 +50,7 @@ Model verification waits only while the live child's descriptor is absent, befor
 
 ## Verification notes
 
+- A nonzero `docker compose` result in the bounded Docker boundary keeps its fixed redaction plus one closed category line, `compose-failure: <code>` (`required-variable`, `port-allocated`, `image-missing`, `network-pool-exhausted`, `network-conflict`, `container-name-conflict`, else `unknown`); stderr is only classified, never echoed. The HTTPS/TLS proxy deployment case runs through `withTlsDeployment`: on failure it publishes the closed `deploymentSetup` snapshot (so a failed proxy `up` reports `scenario-preparation` and a failed stack `up` reports `compose-creation`) and rethrows the original error with that snapshot attached (#541).
 - `pnpm test:stack` is the local full-stack lane ([docs/LOCAL_STACK.md](../../docs/LOCAL_STACK.md)): Playwright Chromium drives real DSH through the gateway and the conversation model is the test-owned deterministic provider. It is local functional evidence, not the isolated CfT lane, provides no isolation evidence and adds no required CI check; giap-vps `pnpm test:docker` and `pnpm test:deploy` gates are unchanged. PRs touching RAGFlow or Office post its exact-head evidence comment before merge.
 
 - The DSH permission plugin UI has real Docker browser coverage (§ Evidence required: DSH permission UI); the platform-owned login baseline has independent Playwright coverage. No background-job surface exists yet.

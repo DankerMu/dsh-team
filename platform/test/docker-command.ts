@@ -94,6 +94,38 @@ function requiredVariable(
   return REQUIRED_VARIABLE.exec(result.stderr)?.[1];
 }
 
+/** Closed compose failure categories in their fixed precedence; each pattern searches one line. */
+const COMPOSE_FAILURES: readonly (readonly [string, RegExp])[] = [
+  ['required-variable', REQUIRED_VARIABLE],
+  ['port-allocated', /port is already allocated|address already in use/],
+  ['image-missing', /No such image|pull access denied/],
+  [
+    'network-pool-exhausted',
+    /could not find an available, non-overlapping IPv4 address pool|all predefined address pools have been fully subnetted/,
+  ],
+  [
+    'network-conflict',
+    /Pool overlaps with other one on this address space|network with name .* already exists/,
+  ],
+  ['container-name-conflict', /Conflict\. The container name .* is already in use/],
+];
+
+/** The first matching closed category; only the code, never any original text, is projected. */
+function composeFailureCode(stderr: string): string {
+  const lines = stderr.split(/\r?\n/);
+  return (
+    COMPOSE_FAILURES.find(([, pattern]) => lines.some((line) => pattern.test(line)))?.[0] ??
+    'unknown'
+  );
+}
+
+/** A normally exited, nonzero compose result's category, else nothing. */
+function composeFailure(args: readonly string[], result: DockerCommandResult): string | undefined {
+  if (args[0] !== 'compose' || result.error !== undefined || result.signal) return undefined;
+  if (typeof result.status !== 'number' || result.status === 0) return undefined;
+  return composeFailureCode(result.stderr);
+}
+
 function redactResult(
   args: readonly string[],
   result: DockerCommandResult,
@@ -117,12 +149,13 @@ function redactResult(
       stderr: `required variable ${variable} is missing a value`,
     };
   if (result.error !== undefined || result.status !== 0) {
+    const code = composeFailure(args, result);
     return {
       status: result.status === 0 ? 1 : result.status,
       stdout: '',
       stderr:
         buildStarted === undefined
-          ? 'Web Docker operation failed'
+          ? `Web Docker operation failed${code === undefined ? '' : `\ncompose-failure: ${code}`}`
           : `Web Docker operation failed\n${JSON.stringify(buildFailureDiagnostic(result, timeout, buildStarted))}`,
     };
   }

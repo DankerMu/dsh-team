@@ -27,7 +27,7 @@ import { verifyHttpIsolation } from './deployment-http-isolation-fixture.ts';
 import { verifyInternalIsolation } from './deployment-internal-isolation-fixture.ts';
 import { verifyStreamIsolation } from './deployment-stream-isolation-fixture.ts';
 import { verifyDeployedCredentialPrivacy } from './deployment-privacy-fixture.ts';
-import { prepareTlsDeployment, verifyTlsCarrier } from './deployment-tls-fixture.ts';
+import { verifyTlsCarrier, withTlsDeployment } from './deployment-tls-fixture.ts';
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
@@ -626,87 +626,81 @@ it('publishes only the platform port and mounts the Docker socket only there wit
 });
 
 it('serves native HTTPS and WSS behind an exact trusted TLS proxy with Secure cookies and client audit identity', async () => {
-  let tls: Awaited<ReturnType<typeof prepareTlsDeployment>> | undefined;
-  await withDeployment(
-    async (lifecycle, start) => {
-      const { deployment, employee, admin } = await configureDeployment(lifecycle, start);
-      if (tls === undefined) throw new Error('TLS preparation missing');
-      const correlation = randomUUID();
-      const login = await deployment.request(`${deployment.base}/_platform/api/login`, {
-        method: 'POST',
-        headers: {
-          origin: deployment.base,
-          'content-type': 'application/json',
-          'x-test-correlation': correlation,
-          'x-forwarded-for': '203.0.113.99',
+  await withTlsDeployment(async (lifecycle, start, setup, prepared) => {
+    const { deployment, employee, admin } = await configureDeployment(lifecycle, start, setup);
+    const tls = prepared();
+    const correlation = randomUUID();
+    const login = await deployment.request(`${deployment.base}/_platform/api/login`, {
+      method: 'POST',
+      headers: {
+        origin: deployment.base,
+        'content-type': 'application/json',
+        'x-test-correlation': correlation,
+        'x-forwarded-for': '203.0.113.99',
+      },
+      body: JSON.stringify({ email: employee.email, password: 'instance-acceptance-password' }),
+    });
+    expect(login.status).toBe(200);
+    expect(await login.json()).toMatchObject({ id: employee.id });
+    const setCookie = login.headers.get('set-cookie');
+    expect(
+      setCookie?.split(';').some((part) => part.trim() === 'Secure'),
+      'Secure session attribute',
+    ).toBe(true);
+    const cookie = setCookie?.split(';')[0];
+    if (cookie === undefined) throw new Error('TLS employee session missing');
+    const headers = { cookie, origin: deployment.base, 'content-type': 'application/json' };
+    const started = await deployment.request(`${deployment.base}/_platform/api/instance/start`, {
+      method: 'POST',
+      headers,
+      body: '{}',
+    });
+    expect(await started.json()).toEqual({ status: 'starting', reason: 'starting' });
+    await expect
+      .poll(
+        async () => {
+          const response = await deployment.request(`${deployment.base}/_platform/api/instance`, {
+            headers,
+          });
+          expect(response.status).toBe(200);
+          return response.json();
         },
-        body: JSON.stringify({ email: employee.email, password: 'instance-acceptance-password' }),
-      });
-      expect(login.status).toBe(200);
-      expect(await login.json()).toMatchObject({ id: employee.id });
-      const setCookie = login.headers.get('set-cookie');
-      expect(
-        setCookie?.split(';').some((part) => part.trim() === 'Secure'),
-        'Secure session attribute',
-      ).toBe(true);
-      const cookie = setCookie?.split(';')[0];
-      if (cookie === undefined) throw new Error('TLS employee session missing');
-      const headers = { cookie, origin: deployment.base, 'content-type': 'application/json' };
-      const started = await deployment.request(`${deployment.base}/_platform/api/instance/start`, {
-        method: 'POST',
-        headers,
-        body: '{}',
-      });
-      expect(await started.json()).toEqual({ status: 'starting', reason: 'starting' });
-      await expect
-        .poll(
-          async () => {
-            const response = await deployment.request(`${deployment.base}/_platform/api/instance`, {
-              headers,
-            });
-            expect(response.status).toBe(200);
-            return response.json();
-          },
-          { timeout: 60_000 },
-        )
-        .toEqual({ status: 'running', reason: null });
-      const page = await deployment.request(deployment.base, { headers });
-      expect(page.status).toBe(200);
-      expect(page.headers.get('content-type')).toContain('text/html');
-      const html = await page.text();
-      expect(html).toMatch(/<!doctype html/i);
-      expect(html).toMatch(/<script[^>]+src=/i);
-      await verifyTlsCarrier(deployment, tls.certificate, cookie);
-      const logs = ['logs', tls.name];
-      const peers = output(await lifecycle.commandAsync(logs, 30_000), logs)
-        .trim()
-        .split('\n')
-        .map((line) => record(JSON.parse(line) as unknown))
-        .filter((entry) => entry.correlation === correlation);
-      expect(peers).toHaveLength(1);
-      const client = peers[0]?.peer;
-      expect(typeof client).toBe('string');
-      expect(client).not.toBe(tls.address);
-      expect(client).not.toBe('203.0.113.99');
-      const audit = await deployment.request(
-        `${deployment.base}/_platform/api/admin/audit-events?pageSize=100`,
-        {
-          headers: { cookie: admin.cookie },
-        },
-      );
-      expect(audit.status).toBe(200);
-      const items = record(await audit.json()).items;
-      if (!Array.isArray(items)) throw new Error('Missing HTTPS audit inventory');
-      const logins = items
-        .map((item: unknown) => record(item))
-        .filter((item) => item.type === 'login.succeeded' && item.targetEmail === employee.email);
-      expect(logins).toHaveLength(2);
-      expect(logins[0]?.sourceAddress, 'Trusted proxy client audit source').toBe(client);
-    },
-    async (lifecycle, deployment) => {
-      tls = await prepareTlsDeployment(lifecycle, deployment);
-    },
-  );
+        { timeout: 60_000 },
+      )
+      .toEqual({ status: 'running', reason: null });
+    const page = await deployment.request(deployment.base, { headers });
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-type')).toContain('text/html');
+    const html = await page.text();
+    expect(html).toMatch(/<!doctype html/i);
+    expect(html).toMatch(/<script[^>]+src=/i);
+    await verifyTlsCarrier(deployment, tls.certificate, cookie);
+    const logs = ['logs', tls.name];
+    const peers = output(await lifecycle.commandAsync(logs, 30_000), logs)
+      .trim()
+      .split('\n')
+      .map((line) => record(JSON.parse(line) as unknown))
+      .filter((entry) => entry.correlation === correlation);
+    expect(peers).toHaveLength(1);
+    const client = peers[0]?.peer;
+    expect(typeof client).toBe('string');
+    expect(client).not.toBe(tls.address);
+    expect(client).not.toBe('203.0.113.99');
+    const audit = await deployment.request(
+      `${deployment.base}/_platform/api/admin/audit-events?pageSize=100`,
+      {
+        headers: { cookie: admin.cookie },
+      },
+    );
+    expect(audit.status).toBe(200);
+    const items = record(await audit.json()).items;
+    if (!Array.isArray(items)) throw new Error('Missing HTTPS audit inventory');
+    const logins = items
+      .map((item: unknown) => record(item))
+      .filter((item) => item.type === 'login.succeeded' && item.targetEmail === employee.email);
+    expect(logins).toHaveLength(2);
+    expect(logins[0]?.sourceAddress, 'Trusted proxy client audit source').toBe(client);
+  });
 });
 
 it('keeps hostile employee HTTP requests inside their own native instance and rejects administrator access', async () => {
