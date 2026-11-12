@@ -7,20 +7,23 @@ const FAIL = 'Invalid managed policy runtime observation';
 // dsh-plugin-manager 0.2.1-rc.2 lib/index.js:938 and :1580-1581: `registry` has no default, and
 // `fallbackRegistries` defaults to [NPMMIRROR_REGISTRY].
 const NPMMIRROR = 'https://registry.npmmirror.com/';
+const PROBED = 'DSH_TEAM_REGISTRY_PROBE_CALLED';
 
 /**
  * Runs the observer's `apply` in its own process (its `fail` exits) against a synthetic loader
  * holding the rows every observer user has, with `pluginManager` as the plugin-manager row's
- * resolved config. Real cordis/DSH services and their resolved configs need Docker proof.
+ * resolved config and the plugin page's probe switch. The registry probe service records each
+ * `fastest()` call on stdout and answers `null`; `probe: false` leaves it unregistered.
+ * Real cordis/DSH services and their resolved configs need Docker proof.
  */
-function observe(pluginManager: unknown) {
+function observe(pluginManager: unknown, registryProbeEnabled = true, probe = true) {
   const driver = `
 const { apply } = await import(${JSON.stringify(OBSERVER)});
 const row = (id, config) => ({ id, options: { id }, disabled: false, fiber: { state: 2, config } });
 const entries = [
   row('llm-pi-ai', { providers: { get: () => ({ intranet: { baseURL: 'http://127.0.0.1:9/v1' } }) } }),
   row('agent-default-model', { model: { get: () => 'beta' } }),
-  row('ui-plugin-manager', { registryProbeEnabled: true }),
+  row('ui-plugin-manager', { registryProbeEnabled: ${String(registryProbeEnabled)} }),
   row('plugin-manager', ${JSON.stringify(pluginManager)}),
   row('agent-preset-registry', { default: 'standard', selectedDefault: { get: () => undefined } }),
 ];
@@ -30,6 +33,7 @@ const services = {
   tools: {},
   systemPrompt: {},
   permissionPresets: { catalog: () => ({ defaultPreset: 'danger-full-access' }) },
+  ...(${String(probe)} ? { pluginRegistryProbe: { fastest: async () => { process.stdout.write(${JSON.stringify(`${PROBED}\n`)}); return null; } } } : {}),
 };
 apply({ loader: { await: async () => {}, entries: () => entries }, get: (name) => services[name] });
 `;
@@ -41,6 +45,7 @@ apply({ loader: { await: async () => {}, entries: () => entries }, get: (name) =
   return {
     status: run.status,
     stderr: run.stderr,
+    probed: run.stdout.split('\n').filter((text) => text === PROBED).length,
     observation:
       line === undefined
         ? undefined
@@ -76,6 +81,28 @@ it.each([
   { fallbackRegistries: [null] },
 ])('rejects a present plugin-manager value of the wrong type %j', (config) => {
   const run = observe(config);
+  expect(run.status).toBe(1);
+  expect(run.observation).toBeUndefined();
+  expect(run.stderr.startsWith(`${FAIL}\nFAIL Error: "observation check failed"\nat `)).toBe(true);
+});
+
+// managed-policy and credential-priority keep probing on: a call there would add a public egress.
+it('never asks the registry probe while probing is on', () => {
+  const run = observe({}, true);
+  expect(run.status).toBe(0);
+  expect(run.probed).toBe(0);
+  expect(run.observation?.pluginPage).toEqual({ registryProbeEnabled: true });
+});
+
+it('reports the disabled registry probe answering null once probing is off', () => {
+  const run = observe({}, false);
+  expect(run.status).toBe(0);
+  expect(run.probed).toBe(1);
+  expect(run.observation?.pluginPage).toEqual({ registryProbeEnabled: false, fastest: null });
+});
+
+it('rejects probing off without a registry probe service', () => {
+  const run = observe({}, false, false);
   expect(run.status).toBe(1);
   expect(run.observation).toBeUndefined();
   expect(run.stderr.startsWith(`${FAIL}\nFAIL Error: "observation check failed"\nat `)).toBe(true);
