@@ -5471,6 +5471,16 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
     - 在实例里由 observer 调用 `ctx.get('pluginRegistryProbe').fastest()`，期望返回 `null`。只有 live config 回读到 `registryProbeEnabled === false` 时才调用。原因是 managed-policy 和 credential-priority 用例共用这个 observer，而它们的探测是开着的，无条件调用会多出一条公共出网路径。这条才是探测关闭的证据：UI 本来就不发探测，单看 UI 的断言是空转。
   - 验证：同 39.B。
 
+  - 拆分与更正（2026-11-12）：C1 全部做完会超过 400 行，按小节拆成两个 PR。
+    - C1a：在 `scripts/probe-plugin-page.mjs` 里加安装驱动，作为 `verifyPluginPage` 的可选参数 `install: {package, prepare?}`，并补上类型声明和集成测试。`roundTrip` 仍是必填，C1b 调用时带一个未锁定的包往返即可。
+    - C1b：新开 `install-dialog.docker.test.ts` 和对应的 fixture，接上替身和 observer 的 `fastest()` 检查。不放进 catalog-policy，原因有两个：一是安装会改 live manifest，B3 的 live/seed 比较会因此变红；二是覆盖层的 registry 换成替身地址后，那边的 `OVERLAY_STATE` 也得跟着变。
+    - 同一份 profile 不能把同一个包装两次，第二次会提示「该插件已安装」（`client.js:1476-1486`）。所以「每次启动之后」改为：首启时启动替身并安装；重启后只断言这张卡片还在、仍在运行。
+    - 按 0.2.1-rc.2 发布包更正上面的步骤：
+      - 第 4 步并不存在。标题为「安装插件」的 Modal（`client.js:3247`）只有 `installFrom`（`:1045-1058`）会打开；手动输入包名走的是 `runInstall`（`:1464-1555`），预检完直接 `installBundle`。
+      - 判断完成要看 `data-install-phase="done"`（`:3592`），不能看「已安装」标题，因为它和「已安装」标签页同名（`:107,184`）。
+      - 宽按钮的类名经过 CSS module 哈希，改为在对话框内按文字「安装」精确匹配。
+    - 「必须含 packument 和 tarball 的 GET」这一条是承重断言。对话框初始选的是官方源（`:1230`），要等 `readRegistries` 对账后才换成覆盖层的源（`:1519`）。如果对账失败，请求会打到 npmjs，替身日志就是空的，这条断言会失败。
+
 - [ ] 39.C2 只读出口抓包：
   - `runWebStartup` 加一个 `onStarted(container)` 钩子，改动限于 `platform/test/`。在钩子里：
     1. 用 `docker inspect -f '{{.State.Pid}}'` 取 pid，要求大于 0 且容器在运行；
