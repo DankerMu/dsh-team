@@ -10,7 +10,7 @@ import { captureContainer, confirmExited, countEgress, findTcpdump } from './egr
 const FAKE_TCPDUMP = `
 const mode = process.argv[1];
 if (mode === 'refused') { process.stderr.write('sudo: a password is required\\n'); process.exit(1); }
-const lines = [
+const all = [
   '10:00:00.000001 lo    In  IP 127.0.0.1.41000 > 127.0.0.1.443: Flags [S], seq 1, length 0',
   '10:00:00.000002 eth0  Out IP 198.18.0.18.41001 > 104.16.0.1.443: Flags [S], seq 1, length 0',
   '10:00:00.000003 eth0  Out IP 198.18.0.18.41002 > 198.18.0.17.53: 4660+ A? registry.npmjs.org. (36)',
@@ -19,12 +19,14 @@ const lines = [
   '10:00:00.000006 lo    In  IP 127.0.0.1.41005 > 127.0.0.1.80: Flags [P.], length 39: HTTP: GET /payload-must-not-stay HTTP/1.1',
   '10:00:00.000007 eth0  Out IP 198.18.0.18.41004 > 198.18.0.17.9: UDP, length 8',
 ];
+const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'] }[mode] ?? all;
+const stat = (n, what) => n + ' packet' + (n === 1 ? '' : 's') + ' ' + what + '\\n';
 process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
 process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
 process.stdout.write(lines.join('\\n') + '\\n');
 process.on('SIGINT', () => {
-  const lost = mode === 'lossy' ? 1 : 0;
-  process.stderr.write('\\n' + (lines.length + lost) + ' packets captured\\n' + (lines.length + lost) + ' packets received by filter\\n' + lost + ' packets dropped by kernel\\n');
+  const [extra, lost] = [mode === 'extra' ? 1 : 0, mode === 'dropped' ? 1 : 0];
+  process.stderr.write('\\n' + stat(lines.length + extra, 'captured') + stat(lines.length + extra, 'received by filter') + stat(lost, 'dropped by kernel'));
   process.exit(0);
 });
 setTimeout(() => process.exit(3), 20000);
@@ -48,7 +50,7 @@ afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n') {
+function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bound = 90) {
   const directory = mkdtempSync(join(tmpdir(), 'dsh-team-egress-'));
   cleanup.push(directory);
   const pidFile = join(directory, 'tcpdump.pid');
@@ -60,7 +62,7 @@ function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n') {
     return { status: stdout === 'fail' ? 1 : 0, stdout, stderr: '' };
   };
   let sudo = -1;
-  const started = captureContainer(command, 'dsh-team-test-start', 90, BEFORE, {
+  const started = captureContainer(command, 'dsh-team-test-start', bound, BEFORE, {
     spawn: (argv) => {
       spawned.push(argv);
       const child = spawn(process.execPath, ['-e', FAKE_SUDO, mode, pidFile], {
@@ -103,15 +105,11 @@ it('counts packets by loopback and filter port, keeps DNS query names only and c
 });
 
 it.each([
-  ['sudo refuses to run unattended', 'refused', 'booting', 'never listened: sudo: a password is'],
+  ['sudo refuses unattended', 'refused', 'booting', /never listened: sudo: .*pid never recorded/],
   ['the link type names no interface', 'sll1', 'booting', 'link type LINUX_SLL names no interface'],
   ['DSH announced first', 'normal', 'dsh web: http://198.18.0.18:3080/', 'listened after the'],
-  [
-    'the observer marked first',
-    'normal',
-    'DSH_TEAM_MANAGED_POLICY_OBSERVATION{}',
-    'listened after',
-  ],
+  ['the observer marked', 'normal', 'DSH_TEAM_MANAGED_POLICY_OBSERVATION{}', 'listened after'],
+  ['the stop failed too', 'dropped', 'dsh web: http', /listened after the.*; stop: .*incomplete/],
 ])('refuses a capture when %s and leaves no tcpdump behind', async (_case, mode, logs, message) => {
   const { started, tcpdump } = fakeCapture(mode, logs);
 
@@ -120,17 +118,28 @@ it.each([
   expect(() => process.kill(tcpdump(), 0)).toThrow(/ESRCH/);
 });
 
-it('fails the stop when tcpdump reports packets it never printed or the kernel dropped', async () => {
-  const capture = await fakeCapture('lossy').started;
+it('accepts the singular `1 packet captured` of a capture holding only the canary', async () => {
+  const capture = await fakeCapture('one').started;
 
-  await expect(capture.stop()).rejects.toThrow('incomplete capture');
+  expect(await capture.stop()).toMatchObject({ captured: 1, other: { '9': 1, '443': 0 } });
 });
 
 it.each([
-  ['a stopped container', '0 false\n', 'container not running'],
-  ['a failed inspect', 'fail', 'docker inspect failed'],
-])('starts no capture for %s', async (_case, state, message) => {
-  const { started, spawned } = fakeCapture('normal', 'booting', state);
+  ['dropped', 'incomplete capture'],
+  ['extra', 'incomplete capture'],
+  ['garbled', 'unparseable packet line'],
+])('fails the stop when tcpdump reports %s packets', async (mode, message) => {
+  const capture = await fakeCapture(mode).started;
+
+  await expect(capture.stop()).rejects.toThrow(message);
+});
+
+it.each<readonly [string, string, string, number]>([
+  ['a stopped container', '0 false\n', 'container not running', 90],
+  ['a failed inspect', 'fail', 'docker inspect failed', 90],
+  ...[0, NaN, Infinity, -1, 1.5].map((b) => [`${String(b)}s`, '4242 true\n', 'bound', b] as const),
+])('starts no capture given %s', async (_case, state, message, bound) => {
+  const { started, spawned } = fakeCapture('normal', 'booting', state, bound);
 
   await expect(started).rejects.toThrow(message);
 

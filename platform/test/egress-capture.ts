@@ -174,8 +174,8 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
     if (early) throw new Error(`${INVALID}: capture ended before its stop`);
     if (malformed || partial !== '') throw new Error(`${INVALID}: unparseable packet line`);
     if (exitCode !== 0) throw new Error(`${INVALID}: capture exited ${String(exitCode)}`);
-    const captured = Number(/^(\d+) packets captured$/m.exec(stderr)?.[1]);
-    if (captured !== lines || !/^0 packets dropped by kernel$/m.test(stderr)) {
+    const captured = Number(/^(\d+) packets? captured$/m.exec(stderr)?.[1]);
+    if (captured !== lines || !/^0 packets? dropped by kernel$/m.test(stderr)) {
       throw new Error(`${INVALID}: incomplete capture`);
     }
     return { tcpdumpPid, attachMs, ...counts, captured, exitCode, exited: 'ESRCH' };
@@ -202,7 +202,9 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
       throw new Error(`${INVALID}: tcpdump listened after the instance announced`);
     }
   } catch (error) {
-    await capture.stop().catch(() => undefined);
+    await capture.stop().catch((stopError: unknown) => {
+      throw new AggregateError([error, stopError], `${String(error)}; stop: ${String(stopError)}`);
+    });
     throw error;
   }
   return capture;
@@ -220,6 +222,8 @@ export async function captureContainer(
   before: readonly string[],
   boundary: Partial<Boundary> = {},
 ): Promise<EgressCapture> {
+  if (!Number.isSafeInteger(boundSeconds) || boundSeconds < 1)
+    throw new Error(`${INVALID}: bound must be a positive integer of seconds`);
   const docker = (args: string[]): string => {
     const result = command(args, 10_000);
     if (result.error !== undefined || result.status !== 0) {
