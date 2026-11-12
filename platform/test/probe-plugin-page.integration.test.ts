@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { verifyPluginPage } from '../../scripts/probe-plugin-page.mjs';
+import { PROBE_PLUGIN } from './registry-stand-in.ts';
+
+type PluginPageInput = Parameters<typeof verifyPluginPage>[0];
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -73,7 +76,27 @@ interface FakeOptions {
   lockClickToggles?: boolean;
   /** The lock mark has no rendered box. */
   noMarkBox?: boolean;
+  /** The header has no 添加插件 group primary button. */
+  noAddGroup?: boolean;
+  /** The controlled spec input ignores inserted text. */
+  dropsInput?: boolean;
+  /** The 安装 precheck refuses the spec (an input error, the dialog stays at its spec). */
+  installRefused?: boolean;
+  /** pnpm fails: the wizard ends at `failed`. */
+  installFails?: boolean;
+  /** The finished install names no bundle, so the wizard offers 关闭 instead of 立即启用. */
+  installedWithoutBundle?: boolean;
+  /** 立即启用 closes the dialog but the card never runs. */
+  enableFails?: boolean;
+  /** The installed card's group. */
+  installedGroup?: string;
+  /** A console error is raised when the install finishes. */
+  errorOnInstall?: boolean;
+  /** The fixture's stand-in preparation rejects. */
+  prepareFails?: boolean;
 }
+
+type InstallPhase = 'idle' | 'checking' | 'starting' | 'running' | 'done' | 'failed';
 
 const lockedState = (name: string) => EXPECTED.find((entry) => entry.package === name)?.locked;
 /** Saved selection of an unlocked card other than the round-trip one: its catalog default. */
@@ -112,6 +135,9 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     /** Index into the card focus order; -1 when no catalog element has focus. */
     focus: -1,
     input: [] as string[],
+    dialog: null as { phase: InstallPhase; spec: string; alert: boolean } | null,
+    specFocused: false,
+    installed: null as { enabled: boolean } | null,
   };
   const openPanel = (): boolean => {
     state.panelAttempts += 1;
@@ -134,6 +160,11 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     state.clicks.push(text);
     if (text.includes('aria-label="插件"')) return openPanel();
     if (!state.panel || state.loading > 0) return false;
+    if (text.includes('role="group"')) {
+      if (options.noAddGroup === true || state.dialog !== null) return false;
+      state.dialog = { phase: 'idle', spec: '', alert: false };
+      return true;
+    }
     if (text.includes('查看 ')) {
       if (state.detail !== null) return false;
       state.detail = /查看 ([^"]+)"/.exec(text)?.[1] ?? null;
@@ -228,7 +259,64 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     state.shown = state.saved;
     return Promise.resolve();
   };
+  // Each read moves a started install one wizard phase on; the precheck may refuse instead.
+  const advance = (dialog: NonNullable<typeof state.dialog>) => {
+    if (dialog.phase === 'checking' && options.installRefused === true) {
+      Object.assign(dialog, { phase: 'idle', alert: true });
+    } else if (dialog.phase === 'checking') dialog.phase = 'starting';
+    else if (dialog.phase === 'starting') dialog.phase = 'running';
+    else if (dialog.phase === 'running') {
+      dialog.phase = options.installFails === true ? 'failed' : 'done';
+      if (dialog.phase === 'done') state.installed = { enabled: false };
+      if (dialog.phase === 'done' && options.errorOnInstall === true) errors.push('installed');
+    }
+  };
+  const enableOffered = () =>
+    state.dialog?.phase === 'done' && options.installedWithoutBundle !== true;
+  const observeInstall = () => {
+    const dialog = state.dialog;
+    if (dialog !== null) advance(dialog);
+    const atSpec = dialog !== null && (dialog.phase === 'idle' || dialog.phase === 'checking');
+    const enabled = state.installed?.enabled === true;
+    return {
+      open: dialog !== null,
+      phase: dialog === null || atSpec ? null : dialog.phase,
+      spec: atSpec ? dialog.spec : null,
+      alert: dialog?.alert === true,
+      run: dialog?.phase === 'idle' && dialog.spec !== '',
+      enable: enableOffered(),
+      card:
+        state.installed === null
+          ? null
+          : {
+              group: options.installedGroup ?? 'bundles',
+              status: enabled ? 'running' : 'disabled',
+              checked: String(enabled),
+            },
+    };
+  };
+  const clickInstall = (expression: string): boolean => {
+    const dialog = state.dialog;
+    if (expression.includes('"立即启用"')) {
+      state.clicks.push('立即启用');
+      if (!enableOffered()) return false;
+      state.dialog = null;
+      state.installed = { enabled: options.enableFails !== true };
+      return true;
+    }
+    state.clicks.push('安装');
+    if (dialog?.phase !== 'idle' || dialog.spec === '') return false;
+    Object.assign(dialog, { phase: 'checking', alert: false });
+    return true;
+  };
+  const evaluateInstall = (expression: string): unknown => {
+    if (expression.includes('.click()')) return clickInstall(expression);
+    if (!expression.includes('.focus()')) return observeInstall();
+    state.specFocused = state.dialog?.phase === 'idle';
+    return state.specFocused;
+  };
   const evaluate = (expression: string): unknown => {
+    if (expression.includes('[data-install-phase]')) return evaluateInstall(expression);
     if (expression.includes('el.click()')) return click(expression);
     if (expression.includes('first.focus()')) {
       if (!state.panel || state.detail !== null) return false;
@@ -240,13 +328,26 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
       return options.noMarkBox === true ? null : { x: 640, y: 360 };
     return observe();
   };
+  const prepare = (): Promise<void> => {
+    state.clicks.push('prepare');
+    return options.prepareFails === true
+      ? Promise.reject(new Error('stand-in not ready'))
+      : Promise.resolve();
+  };
   return {
     state,
     reload,
+    prepare,
     page: {
       send(method: string, params: Record<string, unknown>) {
         if (method === 'Page.captureScreenshot')
           return Promise.resolve({ data: Buffer.from('png').toString('base64') });
+        if (method === 'Input.insertText') {
+          state.input.push(`text:${String(params.text)}`);
+          if (state.specFocused && state.dialog?.phase === 'idle' && options.dropsInput !== true)
+            state.dialog.spec += String(params.text);
+          return Promise.resolve({});
+        }
         if (method === 'Input.dispatchMouseEvent') {
           state.input.push(`mouse:${String(params.type)}@${String(params.x)},${String(params.y)}`);
           if (params.type === 'mouseReleased' && options.lockClickToggles === true)
@@ -269,12 +370,16 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
 async function run(
   options: FakeOptions,
   ms = 3_000,
-  pluginPage = { expected: EXPECTED, roundTrip: { package: PACKAGE, leaveEnabled: true } },
+  pluginPage: Pick<PluginPageInput, 'expected' | 'roundTrip' | 'install'> = {
+    expected: EXPECTED,
+    roundTrip: { package: PACKAGE, leaveEnabled: true },
+  },
 ) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-plugin-page-'));
   roots.push(root);
   const errors: unknown[] = [];
-  const { page, state, reload } = fakePage(options, errors);
+  const { page, state, reload, prepare } = fakePage(options, errors);
+  const { install } = pluginPage;
   const result = verifyPluginPage({
     page,
     errors,
@@ -282,6 +387,7 @@ async function run(
     ms,
     reload,
     ...pluginPage,
+    ...(install === undefined ? {} : { install: { prepare, ...install } }),
   });
   return { result, state, root };
 }
@@ -573,6 +679,111 @@ it.each<[string, Record<string, unknown>]>([
     },
   ],
 ])('rejects options with %s before touching the page', async (_name, pluginPage) => {
+  const { result, state } = await run({}, 600, pluginPage as never);
+
+  await expect(result).rejects.toThrow(/^stage=plugin-page error=options$/);
+  expect(state.clicks).toEqual([]);
+});
+
+const ADD_PRIMARY = 'span[role="group"][aria-label="添加插件"] > button';
+const INSTALL = { package: PROBE_PLUGIN };
+const ROUND_TRIP = { package: PACKAGE, leaveEnabled: true };
+const INSTALLED = {
+  package: PROBE_PLUGIN,
+  card: { group: 'bundles', status: 'running', checked: true },
+};
+// The fixture's stand-in runs first, then 添加插件, the spec, 安装 and, once installed, 立即启用.
+const INSTALL_CLICKS = ['prepare', ADD_PRIMARY, '安装', '立即启用'];
+
+it('installs a package through the dialog after the round trip and enables it', async () => {
+  const { result, state, root } = await run({}, 3_000, {
+    expected: EXPECTED,
+    roundTrip: ROUND_TRIP,
+    install: INSTALL,
+  });
+
+  const evidence = await result;
+
+  expect(evidence).toMatchObject({
+    on: { checked: true, status: 'running' },
+    cards: cardsWith({ status: 'running', checked: true }),
+    install: INSTALLED,
+  });
+  expect(evidence.screenshots).toEqual(
+    shots(
+      root,
+      'list',
+      'locked',
+      'locked-detail',
+      'detail',
+      'off',
+      'on',
+      'install-done',
+      'installed',
+    ),
+  );
+  expect(state.clicks.slice(-INSTALL_CLICKS.length)).toEqual(INSTALL_CLICKS);
+  expect(state.input).toEqual([...LOCK_INPUT, `text:${PROBE_PLUGIN}`]);
+});
+
+it('runs the preparation before the dialog and stops at its rejection', async () => {
+  const { result, state } = await run({ prepareFails: true }, 600, {
+    expected: EXPECTED,
+    roundTrip: ROUND_TRIP,
+    install: INSTALL,
+  });
+
+  await expect(result).rejects.toThrow('stand-in not ready');
+  expect(state.clicks.slice(-1)).toEqual(['prepare']);
+  expect(state.dialog).toBeNull();
+});
+
+it.each<[string, FakeOptions, RegExp]>([
+  [
+    'a header without the 添加插件 group',
+    { noAddGroup: true },
+    /stage=plugin-install-open error=add observed=null/,
+  ],
+  [
+    'a spec input that drops the text',
+    { dropsInput: true },
+    /stage=plugin-install-spec error=timeout/,
+  ],
+  [
+    'a refused precheck',
+    { installRefused: true },
+    /stage=plugin-install-check error=refused observed=.*"alert":true/,
+  ],
+  ['a failed install', { installFails: true }, /stage=plugin-install-run error=failed/],
+  [
+    'an install without 立即启用',
+    { installedWithoutBundle: true },
+    /stage=plugin-install-done error=enable-now/,
+  ],
+  ['a card that never runs', { enableFails: true }, /stage=plugin-install-enabled error=timeout/],
+  [
+    'a card outside the 已安装 group',
+    { installedGroup: 'official' },
+    /stage=plugin-install-enabled error=card/,
+  ],
+  ['a console error while installing', { errorOnInstall: true }, /error=console count=1/],
+])('rejects an install with %s', async (_name, options, failure) => {
+  const { result } = await run(options, 600, {
+    expected: EXPECTED,
+    roundTrip: ROUND_TRIP,
+    install: INSTALL,
+  });
+
+  await expect(result).rejects.toThrow(failure);
+});
+
+it.each<[string, Record<string, unknown>]>([
+  ['a catalog package', { package: PACKAGE }],
+  ['no package', {}],
+  ['an empty package', { package: '' }],
+  ['a preparation that is not a function', { package: PROBE_PLUGIN, prepare: 'start' }],
+])('rejects install options with %s before touching the page', async (_name, install) => {
+  const pluginPage = { expected: EXPECTED, roundTrip: ROUND_TRIP, install };
   const { result, state } = await run({}, 600, pluginPage as never);
 
   await expect(result).rejects.toThrow(/^stage=plugin-page error=options$/);

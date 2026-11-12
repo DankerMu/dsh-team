@@ -632,8 +632,7 @@ const pluginPageEvidence = async (pluginPage, page, origin, errors, screenshot, 
           screenshot,
           ms,
           reload: () => navigateReady(page, origin, ms, true),
-          expected: pluginPage.expected,
-          roundTrip: pluginPage.roundTrip,
+          ...pluginPage,
         }),
       }
     : {};
