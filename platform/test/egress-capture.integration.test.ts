@@ -20,10 +20,11 @@ const all = [
   '10:00:00.000007 eth0  Out IP 198.18.0.18.41004 > 198.18.0.17.9: UDP, length 8',
 ];
 const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'] }[mode] ?? all;
+const tail = '10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443: Flags [P.], tail-must-not-stay';
 const stat = (n, what) => n + ' packet' + (n === 1 ? '' : 's') + ' ' + what + '\\n';
 process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
 process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
-process.stdout.write(lines.join('\\n') + '\\n');
+process.stdout.write(lines.join('\\n') + '\\n' + (mode === 'unterminated' ? tail : ''));
 process.on('SIGINT', () => {
   const [extra, lost] = [mode === 'extra' ? 1 : 0, mode === 'dropped' ? 1 : 0];
   process.stderr.write('\\n' + stat(lines.length + extra, 'captured') + stat(lines.length + extra, 'received by filter') + stat(lost, 'dropped by kernel'));
@@ -127,11 +128,28 @@ it('accepts the singular `1 packet captured` of a capture holding only the canar
 it.each([
   ['dropped', 'incomplete capture'],
   ['extra', 'incomplete capture'],
-  ['garbled', 'unparseable packet line'],
 ])('fails the stop when tcpdump reports %s packets', async (mode, message) => {
   const capture = await fakeCapture(mode).started;
 
   await expect(capture.stop()).rejects.toThrow(message);
+});
+
+it.each([
+  ['garbled', 'unparseable packet line "10:00:00 garbled"'],
+  [
+    'unterminated',
+    'unterminated packet line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443"',
+  ],
+])('fails the stop on a %s line, naming its header only', async (mode, message) => {
+  const capture = await fakeCapture(mode).started;
+
+  const error = await capture.stop().then(
+    () => undefined,
+    (stopError: unknown) => stopError,
+  );
+
+  expect(error).toEqual(new Error(`Invalid egress capture: ${message}`));
+  expect(String(error)).not.toContain('must-not-stay');
 });
 
 it.each<readonly [string, string, string, number]>([
@@ -146,11 +164,36 @@ it.each<readonly [string, string, string, number]>([
   expect(spawned).toEqual([]);
 });
 
+const LONG = `10:00:00 garbled ${'y'.repeat(100)}`;
+const HEAD = '10:00:00.000001 eth0  Out IP 1.2.3.4.5 > 5.6.7.8.443';
 it.each([
-  ['a pre-4.99 line without its interface', '10:00:00.000001 IP 1.2.3.4.5 > 5.6.7.8.443: x'],
-  ['a line on no filter port', '10:00:00.000001 eth0  Out IP 1.2.3.4.5 > 5.6.7.8.22: x'],
-])('rejects %s instead of bucketing it', (_case, line) => {
-  expect(() => countEgress([line])).toThrow('unparseable packet line');
+  [
+    'a line on no filter port by its header tokens',
+    '10:00:00.000001 eth0  Out IP6 fd00::2.41000 > fd00::1.22: Flags [P.], secret',
+    'eth0 Out IP6 fd00::2.41000 > fd00::1.22',
+  ],
+  [
+    'a pre-4.99 line up to the colon after its arrow',
+    '10:00:00.000001 IP 1.2.3.4.5 > 5.6.7.8.443: GET /secret: a > b: c',
+    '"10:00:00.000001 IP 1.2.3.4.5 > 5.6.7.8.443"',
+  ],
+  ['a line without an arrow up to its colon', 'tcpdump: secret > x', '"tcpdump"'],
+  ['a colon before the arrow at that colon', 'warn: secret > x: y', '"warn"'],
+  ['an empty line visibly', '', '""'],
+  ['a long line at 80 characters', LONG, JSON.stringify(LONG.slice(0, 80))],
+  ['a pty CR by its code point', `${HEAD}: secret\r`, `${JSON.stringify(HEAD)} (control U+000D)`],
+  ['a line without control characters with no suffix', 'warn \u00fc > x', '"warn \u00fc > x"'],
+])('rejects %s instead of bucketing it', (_case, line, header) => {
+  const thrown = (() => {
+    try {
+      return countEgress([line]);
+    } catch (error) {
+      return error;
+    }
+  })();
+
+  expect(thrown).toEqual(new Error(`Invalid egress capture: unparseable packet line ${header}`));
+  expect(String(thrown)).not.toContain('secret');
 });
 
 function tree(edges: Record<number, number[]>, names: Record<number, string>) {
