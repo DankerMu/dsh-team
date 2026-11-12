@@ -164,8 +164,16 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   const counts = emptyCounts();
   const listening = Promise.withResolvers<string>();
   const canary = Promise.withResolvers<undefined>();
-  let [stderr, partial, lines] = ['', '', 0];
+  let [stderr, partial, lines, blank] = ['', '', 0, false];
   let rejection: Error | undefined;
+  // tcpdump's SIGINT cleanup ends stdout with one bare newline: accepted only as the last line.
+  const take = (line: string): void => {
+    if (blank) throw new Error(`${INVALID}: line ${header(line)} after the interrupt newline`);
+    blank = line === '';
+    if (blank) return;
+    countEgress([line], counts);
+    lines += 1;
+  };
   const exited = (): null => null;
   const closed = once(child, 'close').then(([code]) => code as number | null, exited);
   child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
@@ -176,11 +184,12 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   child.stdout?.setEncoding('utf8').on('data', (chunk: string) => {
     const complete = (partial + chunk).split('\n');
     partial = complete.pop() ?? '';
-    lines += complete.length;
-    try {
-      countEgress(complete, counts);
-    } catch (error) {
-      rejection ??= error as Error; // countEgress throws Error only
+    for (const line of complete) {
+      try {
+        take(line);
+      } catch (error) {
+        rejection ??= error as Error; // take throws Error only
+      }
     }
     if (counts.other['9'] > 0) canary.resolve(undefined);
   });

@@ -5519,6 +5519,12 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
       - 进程链中的 use_pty monitor 只在有 pty 时才存在；stdio 走管道、没有控制终端时，链路是 sudo → timeout → tcpdump。两种形态都接受；
       - 区分 lo 和非 lo 依赖 LINUX_SLL2 链路类型，要求 tcpdump ≥ 4.99；遇到其他链路类型直接失败；
       - Docker 内嵌 DNS 在 netns 内经过 DNAT，lo 上那一段可能已不是 53 端口。所以「任何接口上 port 53 为 0」只能证明 netns 内没有发往 53 端口的流量，这是证明范围的限制。
+  - 首轮 VPS 实测更正（2026-11-12）：C2b 首跑时 `sudo -n` 可用，抓包早于公告就开始监听，但 stop 拒绝了一行空的 stdout。tcpdump 被中断时，会先补一个换行再输出统计。
+    - C2a.1 单独成一个 PR，只改 `egress-capture.ts`：
+      - 只接受一个空行，且必须是 stdout 的最后一行；它不算包，也不计入与 `N packets captured` 对比的行数；
+      - 第二个空行、空行之后再出现任何一行、流中间出现空行，都判为拒绝；
+      - 拒绝信息写出该行的报头（时间、接口、方向、地址），`: ` 之后的内容不写；还写出行内控制字符的码位，没有结尾换行的行单独报出。
+    - C2b 等 C2a.1 合并后 rebase，再跑确切 head 的 VPS lane。
 
 Suggested fixture level: expanded - 新的 Docker 浏览器用例、首次在宿主上做只读抓包、新增插件页安装驱动
 Minimal mergeable slice: 39.A（替身抽取，行为不变）是第一刀；39.B、39.C1、39.C2 依次各一个 PR

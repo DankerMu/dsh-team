@@ -6,7 +6,8 @@ import { afterEach, expect, it } from 'vitest';
 import type { DockerCommand } from './docker-command.ts';
 import { captureContainer, confirmExited, countEgress, findTcpdump } from './egress-capture.ts';
 
-// Stands in for `timeout`+`tcpdump`: canned `-i any` LINUX_SLL2 lines, tcpdump's stats on SIGINT.
+// Stands in for `timeout`+`tcpdump`: canned `-i any` LINUX_SLL2 lines; on SIGINT tcpdump's interrupt
+// newline on stdout, then its stats.
 const FAKE_TCPDUMP = `
 const mode = process.argv[1];
 if (mode === 'refused') { process.stderr.write('sudo: a password is required\\n'); process.exit(1); }
@@ -19,13 +20,15 @@ const all = [
   '10:00:00.000006 lo    In  IP 127.0.0.1.41005 > 127.0.0.1.80: Flags [P.], length 39: HTTP: GET /payload-must-not-stay HTTP/1.1',
   '10:00:00.000007 eth0  Out IP 198.18.0.18.41004 > 198.18.0.17.9: UDP, length 8',
 ];
-const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'] }[mode] ?? all;
+const middle = [...all.slice(0, 3), '', ...all.slice(3)];
+const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'], middle }[mode] ?? all;
 const tail = '10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443: Flags [P.], tail-must-not-stay';
 const stat = (n, what) => n + ' packet' + (n === 1 ? '' : 's') + ' ' + what + '\\n';
 process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
 process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
-process.stdout.write(lines.join('\\n') + '\\n' + (mode === 'unterminated' ? tail : ''));
+process.stdout.write(lines.join('\\n') + '\\n');
 process.on('SIGINT', () => {
+  process.stdout.write('\\n' + ({ blanks: '\\n', after: tail + '\\n', unterminated: tail }[mode] ?? ''));
   const [extra, lost] = [mode === 'extra' ? 1 : 0, mode === 'dropped' ? 1 : 0];
   process.stderr.write('\\n' + stat(lines.length + extra, 'captured') + stat(lines.length + extra, 'received by filter') + stat(lost, 'dropped by kernel'));
   process.exit(0);
@@ -139,6 +142,15 @@ it.each([
   [
     'unterminated',
     'unterminated packet line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443"',
+  ],
+  ['blanks', 'line "" after the interrupt newline'],
+  [
+    'after',
+    'line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443" after the interrupt newline',
+  ],
+  [
+    'middle',
+    'line "10:00:00.000004 eth0  In  IP 198.18.0.17.53 > 198.18.0.18.41002" after the interrupt newline',
   ],
 ])('fails the stop on a %s line, naming its header only', async (mode, message) => {
   const capture = await fakeCapture(mode).started;
