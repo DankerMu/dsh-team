@@ -5479,6 +5479,16 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
       - 第 4 步并不存在。标题为「安装插件」的 Modal（`client.js:3247`）只有 `installFrom`（`:1045-1058`）会打开；手动输入包名走的是 `runInstall`（`:1464-1555`），预检完直接 `installBundle`。
       - 判断完成要看 `data-install-phase="done"`（`:3592`），不能看「已安装」标题，因为它和「已安装」标签页同名（`:107,184`）。
       - 宽按钮的类名经过 CSS module 哈希，改为在对话框内按文字「安装」精确匹配。
+    - 「UI 永远不发探测」的依据要写完整（C1b 核对过，2026-11-12）：
+      - 发布版对话框只有同时满足以下四个条件时，才会在 `readRegistries` 里调用 `fastest()`（`client.js:956-966,1281-1282`）：没有记住的源、对账前选择没有被改过、解析出的 registry 是 npmjs、fallbacks 中含 npmmirror；
+      - 覆盖层总会写 `registry`（`generate.ts:391`），所以 `eligibleMirror` 直接返回 undefined，走不到这一步；
+      - 就算走到了，探测关闭时宿主服务也直接返回 null（`index.js:93-95`）。
+
+      C1b 的 Docker 用例新开 `install-dialog.docker.test.ts`：
+      - 首启时经由 `install.prepare` 启动替身，再安装 `dsh-team-probe-plugin`；
+      - 重启时不重装，只断言卡片仍在、仍在运行；
+      - 两次启动都断言 `fastest: null`，且 plugin-manager 只有单一来源。
+
     - 「必须含 packument 和 tarball 的 GET」这一条是承重断言。对话框初始选的是官方源（`:1230`），要等 `readRegistries` 对账后才换成覆盖层的源（`:1519`）。如果对账失败，请求会打到 npmjs，替身日志就是空的，这条断言会失败。
 
 - [ ] 39.C2 只读出口抓包：
