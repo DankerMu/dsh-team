@@ -69,7 +69,10 @@ async function execAs(
  * `mktemp -d` directory under its /tmp, and returns that directory once the ready marker names
  * the overlay's registry. It dies with the container; nothing else is left to clean up.
  */
-async function startStandIn(lifecycle: UserImageLifecycle, container: string): Promise<string> {
+export async function startStandIn(
+  lifecycle: UserImageLifecycle,
+  container: string,
+): Promise<string> {
   const made = await execAs(lifecycle, container, ['mktemp', '-d', '/tmp/dsh-team-install-XXXXXX']);
   const directory = made?.trim() ?? '';
   if (!/^\/tmp\/dsh-team-install-\w{6}$/.test(directory)) throw new Error(`${INVALID}: tmp`);
@@ -83,7 +86,9 @@ async function startStandIn(lifecycle: UserImageLifecycle, container: string): P
     throw new Error(`${INVALID}: stand-in start`);
   }
   const deadline = Date.now() + 30_000;
-  while ((await execAs(lifecycle, container, ['cat', `${directory}/ready`])) !== REGISTRY) {
+  // Only exit 0 settles a CLI exec (docker-command.mjs:32): an absent marker reads as empty.
+  const poll = ['sh', '-c', 'test ! -e "$1" || cat -- "$1"', 'sh', `${directory}/ready`];
+  while ((await execAs(lifecycle, container, poll)) !== REGISTRY) {
     if (Date.now() > deadline) throw new Error(`${INVALID}: stand-in not ready`);
     await delay(250);
   }
