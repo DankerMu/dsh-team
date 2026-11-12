@@ -239,6 +239,9 @@ print(json.dumps(found))
 `;
 }
 
+/** #409 egress capture: runs once `docker start` returned, before readiness is observed. */
+export type WebStartedHook = (container: string) => Promise<void>;
+
 export interface WebContainer {
   container: string;
   imageId: string;
@@ -253,6 +256,8 @@ export interface WebContainer {
   env?: Readonly<Record<string, string>>;
   /** Launch-line readiness; defaults to the released 0.2.1 line naming the base+2 address. */
   announced?: (logs: string) => boolean;
+  /** A rejection fails the startup; its time counts against the 60s acceptance deadline. */
+  onStarted?: WebStartedHook | undefined;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -576,6 +581,7 @@ export async function runWebStartup(
     return text;
   }
   bounded(['start', expected.container]);
+  await expected.onStarted?.(expected.container);
   const address = webAddress(expected.network);
   const inspect = () => {
     const snapshot = record(

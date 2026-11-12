@@ -11,6 +11,7 @@ import {
   hostRouteCidrs,
   observeWebEndpoint,
   runWebRejection,
+  runWebStartup,
 } from './web-startup-fixture.ts';
 import type { WebContainer, WebStartupBoundary } from './web-startup-fixture.ts';
 
@@ -831,4 +832,27 @@ it.each([
 
   expect(String(error)).toContain(message);
   expect(String(error)).not.toContain(privateToken);
+});
+
+it('runs the started hook right after docker start and before any readiness read', async () => {
+  const calls: string[] = [];
+  const command: DockerCommand = (args) => {
+    calls.push(args[0] ?? '');
+    const stdout = args[0] === 'volume' ? 'run1\n' : '';
+    return { status: args[0] === 'container' ? 1 : 0, stdout, stderr: '' };
+  };
+  const seen: unknown[] = [];
+  const network = { name: 'dsh-team-test-net-run1-start', subnet: '198.18.0.16/28' };
+
+  const started = runWebStartup(command, {
+    ...{ container: 'web', imageId: 'sha256:image', runId: 'run1', network },
+    ...{ stateVolume: 'state', workVolume: 'work', overlay: '/overlay', seccomp: '/seccomp' },
+    onStarted: (container) => {
+      seen.push([container, [...calls]]);
+      return Promise.resolve();
+    },
+  });
+
+  await expect(started).rejects.toThrow('Web Docker container failed');
+  expect(seen).toEqual([['web', ['volume', 'volume', 'create', 'start']]]);
 });

@@ -139,6 +139,11 @@ const PROFILE_KEYS = [
   'beforeDigest',
   'afterDigest',
 ] as const;
+// #409 39.C2: per-start egress counts only; packet text never reaches the capture's result.
+const EGRESS_KEYS = [
+  ...['lo', 'other', '53', '80', '443', '9', 'dnsQueries'],
+  ...['captured', 'attachMs', 'tcpdumpPid', 'exited'],
+] as const;
 const PACKAGE_KEYS = [
   'name',
   'expectedVersion',
@@ -205,6 +210,8 @@ interface ManagedPolicyEvidenceFields {
   restartBrowser?: Record<string, JsonValue>;
   profileStages?: JsonValue;
   installedPackages?: JsonValue;
+  startEgress?: JsonValue;
+  restartEgress?: JsonValue;
 }
 
 interface ManagedPolicyEvidenceRecord extends ManagedPolicyEvidenceFields {
@@ -228,6 +235,8 @@ interface ManagedPolicyEvidenceInput {
   restartBrowser?: Record<string, unknown>;
   profileStages?: unknown;
   installedPackages?: unknown;
+  startEgress?: unknown;
+  restartEgress?: unknown;
 }
 
 function allowlistedFields(fields: ManagedPolicyEvidenceInput): ManagedPolicyEvidenceFields {
@@ -253,6 +262,10 @@ function allowlistedFields(fields: ManagedPolicyEvidenceInput): ManagedPolicyEvi
   if (profileStages !== undefined) acquired.profileStages = profileStages;
   const installedPackages = jsonValue(fields.installedPackages, PACKAGE_KEYS);
   if (installedPackages !== undefined) acquired.installedPackages = installedPackages;
+  const startEgress = jsonValue(fields.startEgress, EGRESS_KEYS);
+  if (startEgress !== undefined) acquired.startEgress = startEgress;
+  const restartEgress = jsonValue(fields.restartEgress, EGRESS_KEYS);
+  if (restartEgress !== undefined) acquired.restartEgress = restartEgress;
   return acquired;
 }
 

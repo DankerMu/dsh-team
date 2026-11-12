@@ -767,6 +767,30 @@ it('retains bounded profile differences and installed pins when byte preservatio
   });
 });
 
+it('retains per-start egress counts without any packet text', async () => {
+  const runId = 'egress-evidence';
+  await withReviewedHead(() => {
+    const evidence = createManagedPolicyEvidence({ runId, imageId: IMAGE_ID });
+    const lo = { '53': 0, '80': 0, '443': 0, '9': 1 };
+    const egress = { lo, other: lo, dnsQueries: [], captured: 1, attachMs: 4 };
+    try {
+      evidence.record({
+        startEgress: { ...egress, tcpdumpPid: 701, exited: 'ESRCH', line: 'must-not-retain' },
+        restartEgress: egress,
+      });
+      const retained = JSON.parse(readFileSync(evidence.path, 'utf8')) as Record<string, unknown>;
+      expect(retained).toEqual({
+        ...{ imageId: IMAGE_ID, runId, reviewedHead: REVIEWED_HEAD },
+        startEgress: { ...egress, tcpdumpPid: 701, exited: 'ESRCH' },
+        restartEgress: egress,
+      });
+      return Promise.resolve();
+    } finally {
+      restoreEvidence(runId);
+    }
+  });
+});
+
 it('retains office capability evidence without retaining instruction or skill bodies', async () => {
   const runId = 'office-metadata-evidence';
   await withReviewedHead(() => {

@@ -26,7 +26,7 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
 import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
-import type { WebNetwork } from './web-startup-fixture.ts';
+import type { WebNetwork, WebStartedHook } from './web-startup-fixture.ts';
 import {
   extractLaunchToken,
   instanceAddressLayout,
@@ -66,7 +66,7 @@ const ALT_ADDRESS = 'http://127.0.0.1:8/v1';
 const HOSTNAME = 'dsh-team-managed.invalid';
 const CUSTOM_PRESET_ID = 'custom-office';
 const OBSERVER_ID = 'dsh-team-managed-policy-observer';
-const OBSERVER_MARK = 'DSH_TEAM_MANAGED_POLICY_OBSERVATION';
+export const OBSERVER_MARK = 'DSH_TEAM_MANAGED_POLICY_OBSERVATION';
 const INVALID = 'Invalid managed policy runtime observation';
 const API_KEY_ENV = 'DMXAPI_KEY';
 const API_KEY_VALUE = 'test-owned-nonsecret';
@@ -543,6 +543,7 @@ async function startWeb(
     screenshot: string;
     roster: readonly string[];
     pluginPage?: MappedHostPluginPageOptions;
+    onStarted?: WebStartedHook;
   },
 ): Promise<{ hostPort: number; observation: unknown; browser?: MappedHostAcceptResult }> {
   lifecycle.registerContainer(name);
@@ -559,6 +560,7 @@ async function startWeb(
       trustedHost: HOSTNAME,
       // The product's registry env for the overlay's registries (#608), not a hand copy.
       env: { [API_KEY_ENV]: API_KEY_VALUE, ...registryEnvironment(overlay.pluginRegistries) },
+      onStarted: browser?.onStarted,
     }),
   );
   const hostPort = requirePort(summary);
@@ -668,7 +670,7 @@ export async function acceptManaged(
   profiles: ProfileRecorder,
   expected: ManagedPolicyRuntimeExpectation,
   label: 'start' | 'restart',
-  pluginPage?: MappedHostPluginPageOptions,
+  options: { pluginPage?: MappedHostPluginPageOptions; onStarted?: WebStartedHook } = {},
 ): Promise<{
   hostPort: number;
   observation: unknown;
@@ -691,7 +693,7 @@ export async function acceptManaged(
       profile: join(work, `chrome-${label}`),
       screenshot,
       roster: MANAGED_BOOT_ROSTER,
-      ...(pluginPage === undefined ? {} : { pluginPage }),
+      ...options,
     },
   );
   assertManagedPolicyRuntime(started.observation, expected);
