@@ -56,6 +56,8 @@ const LINE = {
   loopDns: '10:00:00.000002 lo    In  IP 127.0.0.11.53 > 127.0.0.1.41001: 4660 0/0/0 (36)',
   https: '10:00:00.000003 eth0  Out IP 198.18.0.18.41002 > 104.16.0.1.443: Flags [S], length 0',
   query: '10:00:00.000004 eth0  Out IP 198.18.0.18.41003 > 198.18.0.17.53: 1+ A? x.test. (24)',
+  dnsSyn: '10:00:00.000005 eth0  Out IP 198.18.0.18.41004 > 198.18.0.17.53: Flags [S], length 0',
+  http: '10:00:00.000006 eth0  Out IP 198.18.0.18.41005 > 104.16.0.1.80: Flags [S], length 0',
 };
 const INSTANCE = 'dsh-team-test-run1-start';
 
@@ -129,7 +131,7 @@ function fakeEgress(
       },
       boundary,
     );
-  return { run, spawned, execs, recorded, stopped: () => interrupted };
+  return { run, boundary, spawned, execs, recorded, stopped: () => interrupted };
 }
 
 it('captures from the started instance, fires the gateway canary and gates the counts', async () => {
@@ -156,6 +158,8 @@ it('captures from the started instance, fires the gateway canary and gates the c
 it.each([
   ['a DNS query', [LINE.query], true, 'DNS query x.test.'],
   ['port 53 on loopback', [LINE.loopDns], true, 'port 53'],
+  ['port 53 beyond loopback without a query', [LINE.dnsSyn], true, 'port 53'],
+  ['80 beyond loopback', [LINE.http], true, 'port 80/443 beyond loopback'],
   ['443 beyond loopback', [LINE.https], true, 'port 80/443 beyond loopback'],
   ['no canary', [], false, 'canary not captured'],
 ])(
@@ -188,13 +192,16 @@ it.each([
 );
 
 it('fails a stage whose instance never started a capture', async () => {
-  const { spawned } = fakeEgress([]);
+  const { boundary, spawned } = fakeEgress([]);
   const lifecycle = {} as UserImageLifecycle;
   const stage = { label: 'start' as const, network: { name: 'n', subnet: '198.18.0.16/28' } };
   const evidence = { record: () => undefined };
 
-  const run = withEgress(lifecycle, { ...stage, remaining: () => 1, evidence }, () =>
-    Promise.resolve('accepted'),
+  const run = withEgress(
+    lifecycle,
+    { ...stage, remaining: () => 1, evidence },
+    () => Promise.resolve('accepted'),
+    boundary,
   );
 
   await expect(run).rejects.toThrow('egress capture never started');
