@@ -1,8 +1,9 @@
 /**
  * Real DSH sidebar plugin page evidence: every catalog package has its card in the expected state,
  * the released install and uninstall entries are present, every administrator-forced card shows the
- * platform lock instead of a reachable native switch, and one bundle switch stays usable and
- * round-trips across reloads. DOM facts only.
+ * platform lock instead of a reachable native switch, one bundle switch stays usable and
+ * round-trips across reloads, and a package typed into the install dialog installs and runs.
+ * DOM facts only.
  */
 import { captureSettledScreenshot, clickSelector, evalPage, waitFor } from './probe-dsh-api-ui.mjs';
 
@@ -195,11 +196,20 @@ const requireCards = (observed, expected, stage = 'plugin-page-list') => {
   if (!expected.every(matches)) fail(stage, 'catalog-card', observed.cards);
 };
 
-const validOptions = (expected, roundTrip) =>
+/** A package outside the catalog table and, when given, the fixture's preparation function. */
+const validInstall = (expected, install) =>
+  install === undefined ||
+  (typeof install?.package === 'string' &&
+    install.package !== '' &&
+    !expected.some((entry) => entry.package === install.package) &&
+    (install.prepare === undefined || typeof install.prepare === 'function'));
+
+const validOptions = (expected, roundTrip, install) =>
   Array.isArray(expected) &&
   typeof roundTrip?.leaveEnabled === 'boolean' &&
   expected.every(({ locked }) => locked === undefined || Object.hasOwn(LOCK_TEXT, locked)) &&
-  expected.some((entry) => entry.package === roundTrip.package && entry.locked === undefined);
+  expected.some((entry) => entry.package === roundTrip.package && entry.locked === undefined) &&
+  validInstall(expected, install);
 
 const press = async (page, name) => {
   await page.send('Input.dispatchKeyEvent', KEYS[name]);
@@ -312,11 +322,111 @@ const verifyLocks = async ({ page, probe, ms, reload, expected, listShot, shot }
   };
 };
 
+// Released 0.2.1-rc.2 install dialog (dsh-client-ui-plugin-manager lib/client.js): the
+// `addPlugin` group's primary button (:2101-2120), the spec input (`installSpecLabel`, :3337), the
+// spec screen's wide `installRun` (:3315-3323), then the wizard (:3584-3592) up to `done` and its
+// `installEnableNow` (:3791-3797). A typed spec never shows the 「安装插件」 confirmation (:3247),
+// which only `installFrom` (:1045-1058) opens: `runInstall` (:1464-1555) goes from the precheck
+// (`inspect`) straight to `installBundle`.
+const ADD_PRIMARY = 'span[role="group"][aria-label="添加插件"] > button';
+const SPEC_INPUT = 'input[aria-label="包名或地址"]';
+const INSTALL_RUN = ['安装'];
+const ENABLE_NOW = ['立即启用'];
+// Wizard phases that end the attempt without an install; `done` is the only success.
+const INSTALL_FAILED = ['failed', 'unknown'];
+
+/** The open install dialog: the spec screen holds the input, every wizard screen its phase. */
+const INSTALL_DIALOG = `[...document.querySelectorAll('[role="dialog"]')].find((el)=>el.querySelector('[data-install-phase],${SPEC_INPUT}'))`;
+const dialogButton = (labels) =>
+  `(dialog?[...dialog.querySelectorAll('button')]:[]).find((el)=>${JSON.stringify(labels)}.includes((el.textContent||'').trim())&&!el.disabled)`;
+
+/** Whether the dialog is open, its wizard phase, spec, input error and actions; the package's card. */
+const installExpression = (name) => `(function(){
+  const dialog=${INSTALL_DIALOG};
+  const phase=dialog&&dialog.querySelector('[data-install-phase]');
+  const input=dialog&&dialog.querySelector(${JSON.stringify(SPEC_INPUT)});
+  const card=document.querySelector(${JSON.stringify(`[data-plugin-package="${name}"]`)});
+  const group=card&&card.closest('[data-plugin-group]'),sw=card&&card.querySelector('button[role="switch"]');
+  return {open:Boolean(dialog),
+    phase:phase?phase.getAttribute('data-install-phase'):null,
+    spec:input?input.value:null,
+    alert:Boolean(dialog&&dialog.querySelector('[role="alert"]')),
+    run:Boolean(${dialogButton(INSTALL_RUN)}),
+    enable:Boolean(${dialogButton(ENABLE_NOW)}),
+    card:card?{group:group?group.getAttribute('data-plugin-group'):null,
+      status:card.getAttribute('data-plugin-status'),checked:sw?sw.getAttribute('aria-checked'):null}:null};
+})()`;
+
+const focusSpecExpression = `(function(){
+  const dialog=${INSTALL_DIALOG};
+  const input=dialog&&dialog.querySelector(${JSON.stringify(SPEC_INPUT)});
+  if(!input||input.disabled)return false;
+  input.focus();
+  return document.activeElement===input;
+})()`;
+
+const clickDialogButton = async (page, labels, stage) => {
+  const clicked = await evalPage(
+    page,
+    `(function(){const dialog=${INSTALL_DIALOG};const el=${dialogButton(labels)};if(!el)return false;el.click();return true;})()`,
+  );
+  if (!clicked) fail(stage, 'button');
+};
+
+/** The precheck refused the spec, or the wizard ended without an install: fail at once. */
+const installSettled = (state) => {
+  if (state.phase === null && state.alert) fail('plugin-install-check', 'refused', state);
+  if (INSTALL_FAILED.includes(state.phase)) fail('plugin-install-run', state.phase, state);
+  return state.phase === 'done';
+};
+
+/**
+ * After `install.prepare` (the fixture's registry stand-in), type `install.package` into the
+ * dialog, run the precheck and the install, enable it with 立即启用 and require its card to run
+ * in the 已安装 group. Only the controlled input takes text, through `Input.insertText`.
+ */
+const installPackage = async (page, ms, install, { shot, listShot }) => {
+  if (install.prepare) await install.prepare();
+  const probe = { observe: installExpression(install.package) };
+  await clickSelector(page, ADD_PRIMARY).catch(() => fail('plugin-install-open', 'add'));
+  await settle(page, probe, 'plugin-install-open', ms, (state) => state.spec === '');
+  if (!(await evalPage(page, focusSpecExpression))) fail('plugin-install-spec', 'focus');
+  await page.send('Input.insertText', { text: install.package });
+  await settle(
+    page,
+    probe,
+    'plugin-install-spec',
+    ms,
+    (state) => state.spec === install.package && state.run,
+  );
+  await clickDialogButton(page, INSTALL_RUN, 'plugin-install-run');
+  const done = await settle(page, probe, 'plugin-install-run', ms, installSettled);
+  if (!done.enable) fail('plugin-install-done', 'enable-now', done);
+  const screenshots = [await shot('install-done')];
+  await clickDialogButton(page, ENABLE_NOW, 'plugin-install-done');
+  const enabled = await settle(
+    page,
+    probe,
+    'plugin-install-enabled',
+    ms,
+    (state) => !state.open && state.card?.status === 'running',
+  );
+  const { card } = enabled;
+  if (card.group !== 'bundles' || card.checked !== 'true')
+    fail('plugin-install-enabled', 'card', enabled);
+  screenshots.push(await listShot('installed', [install.package]));
+  return {
+    evidence: { package: install.package, card: { ...card, checked: true } },
+    screenshots,
+  };
+};
+
 /**
  * Prove the plugin page lists every `expected` package with its state and offers its install and
  * uninstall entries, then switch `roundTrip.package` away from its expected state with a reload,
- * and back with another reload unless `roundTrip.leaveEnabled` is that away state. `reload`
- * re-navigates the same page.
+ * and back with another reload unless `roundTrip.leaveEnabled` is that away state; then, when
+ * given, install `install.package` through the dialog (`installPackage`). `reload` re-navigates
+ * the same page.
  */
 export const verifyPluginPage = async ({
   page,
@@ -326,8 +436,10 @@ export const verifyPluginPage = async ({
   reload,
   expected,
   roundTrip,
+  install,
 }) => {
-  if (!validOptions(expected, roundTrip)) throw new Error('stage=plugin-page error=options');
+  if (!validOptions(expected, roundTrip, install))
+    throw new Error('stage=plugin-page error=options');
   const name = roundTrip.package;
   const initial = expected.find((entry) => entry.package === name).enabled;
   const probe = {
@@ -342,8 +454,8 @@ export const verifyPluginPage = async ({
     captureSettledScreenshot(page, screenshot.replace(/\.png$/, `-plugin-page-${suffix}.png`));
   // The catalog group sits below the released built-in sections: bring its cards into the
   // viewport so every list screenshot shows them (DOM facts above are the gate, not the image).
-  const listShot = async (suffix) => {
-    await evalPage(page, scrollCardsExpression(expected.map((entry) => entry.package)));
+  const listShot = async (suffix, packages = expected.map((entry) => entry.package)) => {
+    await evalPage(page, scrollCardsExpression(packages));
     return shot(suffix);
   };
   const listed = await openList(page, probe, 'plugin-page-list', ms);
@@ -365,6 +477,8 @@ export const verifyPluginPage = async ({
     legs[stateName(initial)] = await leg(page, probe, ms, reload, 'inCard', initial);
     screenshots.push(await listShot(stateName(initial)));
   }
+  const installed = install && (await installPackage(page, ms, install, { shot, listShot }));
+  if (installed) screenshots.push(...installed.screenshots);
   if (errors.length) throw new Error(`stage=plugin-page error=console count=${errors.length}`);
   const card = cardOf(listed, name);
   return {
@@ -389,6 +503,7 @@ export const verifyPluginPage = async ({
       locked: card.lock,
     })),
     ...(locks ? { locked: locks.evidence } : {}),
+    ...(installed ? { install: installed.evidence } : {}),
     screenshots,
   };
 };

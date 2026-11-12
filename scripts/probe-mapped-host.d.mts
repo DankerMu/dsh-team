@@ -37,7 +37,7 @@ export type MappedHostAcceptInput = {
   readonly pluginPage?: MappedHostPluginPageOptions;
 };
 
-/** The plugin page's expected catalog cards and the bundle whose switch round-trips. */
+/** The plugin page's expected catalog cards, a bundle whose switch round-trips, a package to install. */
 export type MappedHostPluginPageOptions = {
   /**
    * Every catalog package, whether its card is selected in the profile (running) or disabled, and
@@ -50,6 +50,11 @@ export type MappedHostPluginPageOptions = {
   }[];
   /** Switch away from the expected state and back, unless `leaveEnabled` is the away state. */
   readonly roundTrip: { readonly package: string; readonly leaveEnabled: boolean };
+  /**
+   * After the round trip: type `package` (outside `expected`) into the install dialog, install
+   * and enable it. `prepare` runs first, before the dialog opens (the fixture's registry stand-in).
+   */
+  readonly install?: { readonly package: string; readonly prepare?: () => Promise<void> };
 };
 
 /** The round-trip bundle switch as read back from the card list after a reload. */
@@ -118,6 +123,11 @@ export type MappedHostAcceptResult = {
       /** The card read back after a pointer click on its mark, Enter, Space and a reload. */
       readonly input: { readonly checked: boolean; readonly lock: string | null };
       readonly detail: { readonly lock: string | null; readonly uninstallButtons: number };
+    };
+    /** Present with an install: the installed package's card after 立即启用. */
+    readonly install?: {
+      readonly package: string;
+      readonly card: { readonly group: string; readonly status: string; readonly checked: boolean };
     };
     readonly screenshots: readonly { readonly screenshot: string; readonly bytes: number }[];
   };

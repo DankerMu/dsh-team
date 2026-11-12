@@ -14,4 +14,5 @@ export declare function verifyPluginPage(input: {
   readonly reload: () => Promise<void>;
   readonly expected: MappedHostPluginPageOptions['expected'];
   readonly roundTrip: MappedHostPluginPageOptions['roundTrip'];
+  readonly install?: MappedHostPluginPageOptions['install'];
 }): Promise<NonNullable<MappedHostAcceptResult['pluginPage']>>;
