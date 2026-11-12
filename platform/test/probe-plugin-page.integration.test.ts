@@ -82,21 +82,23 @@ interface FakeOptions {
   dropsInput?: boolean;
   /** The 安装 precheck refuses the spec (an input error, the dialog stays at its spec). */
   installRefused?: boolean;
-  /** pnpm fails: the wizard ends at `failed`. */
-  installFails?: boolean;
+  /** The wizard ends without an install: pnpm failed, or its outcome is `unknown`. */
+  installEnds?: 'failed' | 'unknown';
   /** The finished install names no bundle, so the wizard offers 关闭 instead of 立即启用. */
   installedWithoutBundle?: boolean;
   /** 立即启用 closes the dialog but the card never runs. */
   enableFails?: boolean;
   /** The installed card's group. */
   installedGroup?: string;
+  /** The installed card runs while its switch reads unchecked. */
+  installedUnchecked?: boolean;
   /** A console error is raised when the install finishes. */
   errorOnInstall?: boolean;
   /** The fixture's stand-in preparation rejects. */
   prepareFails?: boolean;
 }
 
-type InstallPhase = 'idle' | 'checking' | 'starting' | 'running' | 'done' | 'failed';
+type InstallPhase = 'idle' | 'checking' | 'starting' | 'running' | 'done' | 'failed' | 'unknown';
 
 const lockedState = (name: string) => EXPECTED.find((entry) => entry.package === name)?.locked;
 /** Saved selection of an unlocked card other than the round-trip one: its catalog default. */
@@ -266,7 +268,7 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
     } else if (dialog.phase === 'checking') dialog.phase = 'starting';
     else if (dialog.phase === 'starting') dialog.phase = 'running';
     else if (dialog.phase === 'running') {
-      dialog.phase = options.installFails === true ? 'failed' : 'done';
+      dialog.phase = options.installEnds ?? 'done';
       if (dialog.phase === 'done') state.installed = { enabled: false };
       if (dialog.phase === 'done' && options.errorOnInstall === true) errors.push('installed');
     }
@@ -291,7 +293,7 @@ function fakePage(options: FakeOptions, errors: unknown[]) {
           : {
               group: options.installedGroup ?? 'bundles',
               status: enabled ? 'running' : 'disabled',
-              checked: String(enabled),
+              checked: String(enabled && options.installedUnchecked !== true),
             },
     };
   };
@@ -754,13 +756,23 @@ it.each<[string, FakeOptions, RegExp]>([
     { installRefused: true },
     /stage=plugin-install-check error=refused observed=.*"alert":true/,
   ],
-  ['a failed install', { installFails: true }, /stage=plugin-install-run error=failed/],
+  ['a failed install', { installEnds: 'failed' }, /stage=plugin-install-run error=failed/],
+  [
+    'an install of unknown outcome',
+    { installEnds: 'unknown' },
+    /stage=plugin-install-run error=unknown/,
+  ],
   [
     'an install without 立即启用',
     { installedWithoutBundle: true },
     /stage=plugin-install-done error=enable-now/,
   ],
   ['a card that never runs', { enableFails: true }, /stage=plugin-install-enabled error=timeout/],
+  [
+    'a running card whose switch reads unchecked',
+    { installedUnchecked: true },
+    /stage=plugin-install-enabled error=card observed=.*"checked":"false"/,
+  ],
   [
     'a card outside the 已安装 group',
     { installedGroup: 'official' },

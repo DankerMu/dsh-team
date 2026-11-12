@@ -106,11 +106,20 @@ function resolved(value) {
   return typeof value?.get === 'function' ? value.get() : value;
 }
 
-/** Live validated plugin page config; only the registry probe switch is reported. */
-function pluginPage(ctx) {
+/**
+ * Live validated plugin page config: the registry probe switch and, only while it is off (#409),
+ * what the host probe answers. dsh-client-ui-plugin-manager 0.2.1-rc.2 lib/index.js:93-95
+ * `fastest()` returns null before any request when `registryProbeEnabled` is false. With probing
+ * on it is never called: managed-policy and credential-priority share this observer, and a call
+ * there would add a public egress path.
+ */
+async function pluginPage(ctx) {
   const enabled = resolved(entryConfig(ctx, PLUGIN_PAGE_ID).registryProbeEnabled);
   if (typeof enabled !== 'boolean') fail();
-  return { registryProbeEnabled: enabled };
+  if (enabled) return { registryProbeEnabled: enabled };
+  const probe = ctx.get('pluginRegistryProbe');
+  if (typeof probe?.fastest !== 'function') fail();
+  return { registryProbeEnabled: enabled, fastest: await probe.fastest() };
 }
 
 /**
@@ -365,7 +374,7 @@ async function observe(ctx) {
     `${MARKER}${JSON.stringify({
       models,
       presets,
-      pluginPage: pluginPage(ctx),
+      pluginPage: await pluginPage(ctx),
       permissions,
       knowledgeBase: knowledgeBase(ctx),
       pluginManager: pluginManager(ctx),

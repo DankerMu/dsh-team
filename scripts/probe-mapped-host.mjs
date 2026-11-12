@@ -627,12 +627,12 @@ const pluginPageEvidence = async (pluginPage, page, origin, errors, screenshot, 
   pluginPage
     ? {
         pluginPage: await verifyPluginPage({
+          ...pluginPage,
           page,
           errors,
           screenshot,
           ms,
           reload: () => navigateReady(page, origin, ms, true),
-          ...pluginPage,
         }),
       }
     : {};
