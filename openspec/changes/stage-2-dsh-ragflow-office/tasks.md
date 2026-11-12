@@ -5511,6 +5511,15 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
   - 首轮实测 `sudo -n` 能否在保管 owner 的分离会话里使用；命令全部写绝对路径。
   - 验证：同 39.B，另加围栏前后的 `pgrep` 证据。
 
+  - 拆分与更正（2026-11-12）：C2 全部做完超过 400 行，按小节拆成两个 PR。
+    - C2a：抓包模块 `platform/test/egress-capture.ts`，附带不依赖 Docker 的集成测试。spawn、`/proc` 读取和 `process.kill` 都通过注入替换。
+    - C2b：给 `runWebStartup` 加 `onStarted` 钩子，经 `acceptManaged` 透传，并接入 install-dialog 的首启和重启。
+    - 只抓 install-dialog，不抓 catalog-policy：只有 install-dialog 关闭了探测，observer 会真正调用 `fastest()`；它也是唯一走 pnpm 安装的路径。catalog-policy 的探测是开着的。
+    - 按实际情况更正：
+      - 进程链中的 use_pty monitor 只在有 pty 时才存在；stdio 走管道、没有控制终端时，链路是 sudo → timeout → tcpdump。两种形态都接受；
+      - 区分 lo 和非 lo 依赖 LINUX_SLL2 链路类型，要求 tcpdump ≥ 4.99；遇到其他链路类型直接失败；
+      - Docker 内嵌 DNS 在 netns 内经过 DNAT，lo 上那一段可能已不是 53 端口。所以「任何接口上 port 53 为 0」只能证明 netns 内没有发往 53 端口的流量，这是证明范围的限制。
+
 Suggested fixture level: expanded - 新的 Docker 浏览器用例、首次在宿主上做只读抓包、新增插件页安装驱动
 Minimal mergeable slice: 39.A（替身抽取，行为不变）是第一刀；39.B、39.C1、39.C2 依次各一个 PR
 Risk packs (39.A–39.C2): selected - Security（抓包只计数，不落盘，不记载荷）、Resource limits（tcpdump 由 `timeout -k` 兜底，在 finally 里确认退出）、Legacy compatibility（#556 断言、managed-policy 用例、oracle 关闭行为、first-use 断言都不变）、Release（只用测试自有资源，前缀为 `dsh-team`）；not selected - Config、Schema、Auth、Public API、Concurrency、Migration。
