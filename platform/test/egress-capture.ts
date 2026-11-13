@@ -10,7 +10,7 @@ const INVALID = 'Invalid egress capture';
 const PORTS = ['53', '80', '443', '9'] as const;
 type PortCounts = Record<(typeof PORTS)[number], number>;
 // tcpdump >= 4.99 on `-i any` (LINUX_SLL2): time, interface, direction, then the IP header.
-const PACKET = /^\d\d:\d\d:\d\d\.\d{6} (\S+) +(?:In|Out|B|M|P) +IP6? (\S+) > (\S+): (.*)$/;
+const PACKET = /^\d\d:\d\d:\d\d\.\d{6} (\S+) +(In|Out|B|M|P) +(IP6?) (\S+) > (\S+): (.*)$/;
 const LISTENING = /^listening on any, link-type (\S+) /m;
 const LISTEN_MS = 15_000;
 // The relayed SIGINT arms `timeout -k 5`, so tcpdump is gone within 5s of it.
@@ -69,16 +69,37 @@ function emptyCounts(): EgressCounts {
 
 const port = (address: string): string => address.slice(address.lastIndexOf('.') + 1);
 
+/** A rejected line's distinct C0 and DEL code points, e.g. ` (control U+000D)` for a pty's CR. */
+function controls(line: string): string {
+  const found = [...new Set(line)].filter((c) => c < ' ' || c === '\x7f');
+  const points = found.map((c) => `U+${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  return points.length > 0 ? ` (control ${points.join(' ').toUpperCase()})` : '';
+}
+
+/**
+ * A rejected line's header, quoted, never its payload: up to the first ': ' after its first ' > '
+ * (when no ': ' precedes that arrow), else up to its first ': ' or 80 characters.
+ */
+function header(line: string): string {
+  const [arrow, colon] = [line.indexOf(' > '), line.indexOf(': ')];
+  const end = colon < 0 ? 80 : arrow >= 0 && arrow < colon ? colon : Math.min(colon, 80);
+  return JSON.stringify(line.slice(0, end)) + controls(line);
+}
+
 /**
  * Counts packet lines by loopback or not × filter port; a port-53 line keeps only its query name.
- * A line of any other shape fails instead of being bucketed; no line text is retained.
+ * A line of any other shape fails instead of being bucketed; the counts retain no line text, the
+ * failure names only the line's header tokens (or `header` prefix) and `controls`.
  */
 export function countEgress(lines: readonly string[], counts = emptyCounts()): EgressCounts {
   for (const line of lines) {
-    const [, face, source = '', target = '', rest = ''] = PACKET.exec(line) ?? [];
+    const [, face, direction, ip, source = '', target = '', rest = ''] = PACKET.exec(line) ?? [];
     const matched = PORTS.find((p) => p === port(target)) ?? PORTS.find((p) => p === port(source));
-    if (face === undefined || matched === undefined)
-      throw new Error(`${INVALID}: unparseable packet line`);
+    if (face === undefined) throw new Error(`${INVALID}: unparseable packet line ${header(line)}`);
+    if (matched === undefined) {
+      const tokens = `${face} ${String(direction)} ${String(ip)} ${source} > ${target}`;
+      throw new Error(`${INVALID}: unparseable packet line ${tokens}${controls(line)}`);
+    }
     counts[face === 'lo' ? 'lo' : 'other'][matched] += 1;
     const query = matched === '53' ? / \S+\? (\S+) /.exec(` ${rest}`)?.[1] : undefined;
     if (query !== undefined && !counts.dnsQueries.includes(query)) counts.dnsQueries.push(query);
@@ -143,7 +164,16 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   const counts = emptyCounts();
   const listening = Promise.withResolvers<string>();
   const canary = Promise.withResolvers<undefined>();
-  let [stderr, partial, lines, malformed] = ['', '', 0, false];
+  let [stderr, partial, lines, blank] = ['', '', 0, false];
+  let rejection: Error | undefined;
+  // tcpdump's SIGINT cleanup ends stdout with one bare newline: accepted only as the last line.
+  const take = (line: string): void => {
+    if (blank) throw new Error(`${INVALID}: line ${header(line)} after the interrupt newline`);
+    blank = line === '';
+    if (blank) return;
+    countEgress([line], counts);
+    lines += 1;
+  };
   const exited = (): null => null;
   const closed = once(child, 'close').then(([code]) => code as number | null, exited);
   child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
@@ -154,11 +184,12 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   child.stdout?.setEncoding('utf8').on('data', (chunk: string) => {
     const complete = (partial + chunk).split('\n');
     partial = complete.pop() ?? '';
-    lines += complete.length;
-    try {
-      countEgress(complete, counts);
-    } catch {
-      malformed = true;
+    for (const line of complete) {
+      try {
+        take(line);
+      } catch (error) {
+        rejection ??= error as Error; // take throws Error only
+      }
     }
     if (counts.other['9'] > 0) canary.resolve(undefined);
   });
@@ -172,7 +203,8 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
     if (tcpdumpPid === undefined) throw new Error(`${INVALID}: tcpdump pid never recorded`);
     await confirmExited(tcpdumpPid, boundary);
     if (early) throw new Error(`${INVALID}: capture ended before its stop`);
-    if (malformed || partial !== '') throw new Error(`${INVALID}: unparseable packet line`);
+    if (rejection !== undefined) throw rejection;
+    if (partial !== '') throw new Error(`${INVALID}: unterminated packet line ${header(partial)}`);
     if (exitCode !== 0) throw new Error(`${INVALID}: capture exited ${String(exitCode)}`);
     const captured = Number(/^(\d+) packets? captured$/m.exec(stderr)?.[1]);
     if (captured !== lines || !/^0 packets? dropped by kernel$/m.test(stderr)) {
