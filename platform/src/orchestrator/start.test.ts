@@ -811,8 +811,14 @@ function compositionScripts(requests: readonly StartupRequest[]): unknown[] {
 
 it('delivers saved sources, probe, web switch and forced-off office rows to the overlay', async () => {
   const { daemon, input } = await fixture();
+  const registry = 'http://npm.intranet:4873/';
+  const assistant = {
+    id: 'assistant',
+    name: '@deepseek-ai/dsh-agent-preset',
+    config: { id: 'assistant', plugins: [{ name: '@deepseek-ai/dsh-tool-web' }] },
+  };
   writeSettings(database, {
-    pluginRegistries: ['http://npm.intranet:4873/'],
+    pluginRegistries: [registry],
     registryProbeEnabled: false,
     webToolsEnabled: true,
     pluginCatalog: { 'office-agents': 'forced-off' },
@@ -820,14 +826,7 @@ it('delivers saved sources, probe, web switch and forced-off office rows to the 
   daemon.setComposition(
     JSON.stringify({
       skippedBundles: [],
-      entries: [
-        {
-          id: 'assistant',
-          name: '@deepseek-ai/dsh-agent-preset',
-          config: { id: 'assistant', plugins: [{ name: '@deepseek-ai/dsh-tool-web' }] },
-        },
-        OFFICE_PRESET,
-      ],
+      entries: [assistant, OFFICE_PRESET],
       localePatch: [{ id: 'locale', name: '@dsh-team/zh-locale' }],
       bundles: [
         {
@@ -846,19 +845,17 @@ it('delivers saved sources, probe, web switch and forced-off office rows to the 
   expect(compositionScripts(daemon.requests)).toEqual([
     expect.stringContaining('const BUNDLE_IDS = ["office-agents"];'),
   ]);
-  expect(rows).toContainEqual({
-    id: 'plugin-manager',
-    config: { registry: 'http://npm.intranet:4873/', fallbackRegistries: [] },
-  });
-  expect(rows).toContainEqual({ id: 'ui-plugin-manager', config: { registryProbeEnabled: false } });
+  expect([daemon.containers.get(START_CONTAINER)?.Config.Env, rows]).toEqual([
+    expect.arrayContaining([`npm_config_registry=${registry}`, 'npm_config_update_notifier=false']),
+    expect.arrayContaining([
+      { id: 'plugin-manager', config: { registry, fallbackRegistries: [] } },
+      { id: 'ui-plugin-manager', config: { registryProbeEnabled: false } },
+      assistant,
+      { id: 'preset-office-general', disabled: true },
+      { id: 'agent-preset-registry', config: { default: 'standard' } },
+    ]),
+  ]);
   expect(rows).not.toContainEqual({ id: 'tool-web', disabled: true });
-  expect(rows).toContainEqual({
-    id: 'assistant',
-    name: '@deepseek-ai/dsh-agent-preset',
-    config: { id: 'assistant', plugins: [{ name: '@deepseek-ai/dsh-tool-web' }] },
-  });
-  expect(rows).toContainEqual({ id: 'preset-office-general', disabled: true });
-  expect(rows).toContainEqual({ id: 'agent-preset-registry', config: { default: 'standard' } });
   expect(rows).not.toContainEqual(OFFICE_PRESET);
 });
 
