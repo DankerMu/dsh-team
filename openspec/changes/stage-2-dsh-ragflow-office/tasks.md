@@ -5367,13 +5367,13 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
   - `http://127.0.0.1:<port>/` 能通过 `db/settings.ts:11` 和 `dsh-plugin-manager:1580` 的 `REGISTRY_URL` 校验。
 - 「出现就停」条款：如果抓包看到发往公共仓库的 443/53（例如 pnpm 在没带 `--registry` 的路径上做版本检查），那是产品行为，本节不改产品代码。停下来，开 issue 回报，不放宽断言。
 
-- [ ] 39.A 把替身抽成共享模块：把 `user-image-fixture.ts` 里 `offlinePluginScript` 的 packument/tarball 服务抽到 `platform/test/registry-stand-in.ts`，`STAND_IN_REQUESTS`、`METADATA_REQUEST`、`TARBALL_REQUEST` 一并迁过去。
+- [x] 39.A 把替身抽成共享模块：把 `user-image-fixture.ts` 里 `offlinePluginScript` 的 packument/tarball 服务抽到 `platform/test/registry-stand-in.ts`，`STAND_IN_REQUESTS`、`METADATA_REQUEST`、`TARBALL_REQUEST` 一并迁过去。
   - 新增参数：监听端口（固定端口或 `0`）、请求日志写入的文件路径（可选）、就绪标记。
   - 替身提供：packument（版本里带 `dsh.bundle` 和 `dist.integrity`）、tarball，`GET /pnpm` 和 `GET /npm` 返回 404。
   - #556 的 `user-image.docker.test.ts:536-624` 改用共享模块，断言逐字不变。
   - 验证：`pnpm check`；VPS `test:docker` 里的 #556 用例照常通过。
 
-- [ ] 39.B 锁定状态、联网工具、员工改写：新文件 `platform/test/catalog-policy.docker.test.ts` 和 `platform/test/catalog-policy-fixture.ts`，复用已导出的 `execScript`、`lifecycleWebNetwork`、`waitObservation`、`qualifyHostSession`、`migrationOverlayInput` 和参数化后的 `startWeb`/`acceptManaged`。
+- [x] 39.B 锁定状态、联网工具、员工改写：新文件 `platform/test/catalog-policy.docker.test.ts` 和 `platform/test/catalog-policy-fixture.ts`，复用已导出的 `execScript`、`lifecycleWebNetwork`、`waitObservation`、`qualifyHostSession`、`migrationOverlayInput` 和参数化后的 `startWeb`/`acceptManaged`。
   - 选项：
 
     | 状态         | 项                       | 理由 / 说明                                                                                    |
@@ -5449,7 +5449,7 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
       - 换掉 B1 的 seed 重读：B1 是用同一个镜像新建容器去读 seed，结果必然一致。改为在仍在运行的 start 和 restart 实例里，用 `docker exec` 比较 live 与 seed 的 bundles（排序后按集合比）和 dependencies；
       - #599 评审提出的 oracle 区分用例：开启 `webToolsEnabled` 时，office-general 不带联网工具应接受，两个都带应拒绝。
 
-- [ ] 39.C1 插件页安装对话框（不抓包）：
+- [x] 39.C1 插件页安装对话框（不抓包）：
   - `scripts/probe-plugin-page.mjs` 加安装驱动：
     1. 点 `span[role=group][aria-label="添加插件"]` 内的主按钮；
     2. 在 `input[aria-label="包名或地址"]` 里用 `Input.insertText` 输入包名（受控输入）；
@@ -5491,7 +5491,7 @@ Must preserve：所有非 compose 结果的脱敏文本、声明投影和结清�
 
     - 「必须含 packument 和 tarball 的 GET」这一条是承重断言。对话框初始选的是官方源（`:1230`），要等 `readRegistries` 对账后才换成覆盖层的源（`:1519`）。如果对账失败，请求会打到 npmjs，替身日志就是空的，这条断言会失败。
 
-- [ ] 39.C2 只读出口抓包：
+- [x] 39.C2 只读出口抓包：
   - `runWebStartup` 加一个 `onStarted(container)` 钩子，改动限于 `platform/test/`。在钩子里：
     1. 用 `docker inspect -f '{{.State.Pid}}'` 取 pid，要求大于 0 且容器在运行；
     2. 启动抓包：

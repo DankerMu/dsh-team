@@ -233,7 +233,7 @@ export async function runCatalogPolicyScenario(lifecycle: UserImageLifecycle): P
         profiles,
         { ...CATALOG_EXPECTED, webToolsEnabled },
         label,
-        CATALOG_PLUGIN_PAGE,
+        { pluginPage: CATALOG_PLUGIN_PAGE },
       );
       // The overlay is mounted read-only: this only shows the start ran on the published bytes.
       if (sha256(overlay.path) !== published) throw new Error(`${INVALID}: overlay changed`);

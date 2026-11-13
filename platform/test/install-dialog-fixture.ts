@@ -5,9 +5,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
 import type { MappedHostPluginPageOptions } from '../../scripts/probe-mapped-host.mjs';
 import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
+import { instanceAddressLayout } from '../src/orchestrator/index.ts';
 import { catalogStates, readPluginCatalog } from '../src/plugin-catalog/index.ts';
+import { captureContainer } from './egress-capture.ts';
+import type { Boundary, EgressCapture } from './egress-capture.ts';
 import { createManagedPolicyEvidence } from './managed-policy-evidence.ts';
-import type { ManagedPolicyStage } from './managed-policy-evidence.ts';
+import type { ManagedPolicyEvidence, ManagedPolicyStage } from './managed-policy-evidence.ts';
 import {
   acceptManaged,
   collectComposition,
@@ -15,12 +18,14 @@ import {
   installObserverScript,
   lifecycleWebNetwork,
   MANAGED_POLICY_EXPECTED,
+  OBSERVER_MARK,
   publishOverlay,
 } from './managed-policy-fixture.ts';
 import { createProfileRecorder } from './managed-policy-profile.ts';
 import { profileManifests } from './profile-manifests.ts';
 import { PROBE_PLUGIN, registryStandInScript } from './registry-stand-in.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
+import type { WebNetwork, WebStartedHook } from './web-startup-fixture.ts';
 
 const INVALID = 'Invalid install dialog observation';
 // The image's runtime user (images/dsh-user/Dockerfile:117,121), as execWebScript execs.
@@ -106,6 +111,69 @@ async function standInRequests(
   return log.split('\n').filter((line) => line !== '');
 }
 
+// One datagram to the bridge gateway's discard port; the exec exits 0 only once it was sent.
+const CANARY = `const s = require('node:dgram').createSocket('udp4');
+s.send('1', 9, process.argv[1], (e) => { s.close(); process.exitCode = e ? 1 : 0; });`;
+
+interface EgressStage {
+  label: 'start' | 'restart';
+  network: WebNetwork;
+  remaining: () => number;
+  evidence: Pick<ManagedPolicyEvidence, 'record'>;
+}
+
+/**
+ * #409 39.C2: `run` hands `onStarted` to the instance's start, which attaches a read-only capture
+ * to its netns before DSH announces or the observer marks. Once `run` returned, a canary to the
+ * gateway's udp/9 proves the capture saw that netns; the counts are recorded, then gated.
+ */
+export async function withEgress<T>(
+  lifecycle: UserImageLifecycle,
+  stage: EgressStage,
+  run: (onStarted: WebStartedHook) => Promise<T>,
+  boundary: Partial<Boundary> = {},
+) {
+  let started: { container: string; capture: EgressCapture } | undefined;
+  const onStarted = async (container: string) => {
+    const bound = Math.ceil(stage.remaining() / 1000) + 30;
+    const before = ['dsh web: http', OBSERVER_MARK];
+    started = {
+      container,
+      capture: await captureContainer(lifecycle.command, container, bound, before, boundary),
+    };
+  };
+  try {
+    const result = await run(onStarted);
+    if (started === undefined) throw new Error(`${INVALID}: egress capture never started`);
+    const gateway = instanceAddressLayout(stage.network.subnet).gateway;
+    const sent = await execAs(lifecycle, started.container, ['node', '-e', CANARY, gateway]);
+    if (sent === undefined) throw new Error(`${INVALID}: egress canary not sent`);
+    await started.capture.drain();
+    const stopped = await started.capture.stop();
+    const { lo, other, dnsQueries, notable, notableDropped, captured } = stopped;
+    const { attachMs, tcpdumpPid, exited } = stopped;
+    const counts = { lo, other, dnsQueries, notable, notableDropped, captured };
+    const egress = { ...counts, attachMs, tcpdumpPid, exited };
+    stage.evidence.record(
+      stage.label === 'start' ? { startEgress: egress } : { restartEgress: egress },
+    );
+    const [query] = dnsQueries;
+    if (query !== undefined) throw new Error(`${INVALID}: egress DNS query ${query}`);
+    if (lo['53'] + other['53'] !== 0) throw new Error(`${INVALID}: egress on port 53`);
+    if (other['80'] + other['443'] !== 0)
+      throw new Error(`${INVALID}: egress on port 80/443 beyond loopback`);
+    if (other['9'] < 1) throw new Error(`${INVALID}: egress canary not captured`);
+    return { result, egress };
+  } catch (error) {
+    // stop() is memoized: its own rejection comes back as the same error, nothing to add.
+    await started?.capture.stop().catch((stopError: unknown) => {
+      if (stopError === error) return;
+      throw new AggregateError([error, stopError], `${String(error)}; stop: ${String(stopError)}`);
+    });
+    throw error;
+  }
+}
+
 /** Whether the live profile selects the probe plugin, and the dependency it records for it. */
 async function probeSelection(lifecycle: UserImageLifecycle, container: string) {
   const { live } = await profileManifests(lifecycle, container);
@@ -160,18 +228,20 @@ export async function runInstallDialogScenario(lifecycle: UserImageLifecycle): P
         network,
         OVERLAY_SETTINGS,
       );
-      return acceptManaged(
-        lifecycle,
-        overlay,
-        network,
-        remaining,
-        runtime,
-        work,
-        evidence,
-        profiles,
-        { ...MANAGED_POLICY_EXPECTED, registryProbeEnabled: false },
-        label,
-        pluginPage,
+      return withEgress(lifecycle, { label, network, remaining, evidence }, (onStarted) =>
+        acceptManaged(
+          lifecycle,
+          overlay,
+          network,
+          remaining,
+          runtime,
+          work,
+          evidence,
+          profiles,
+          { ...MANAGED_POLICY_EXPECTED, registryProbeEnabled: false },
+          label,
+          { pluginPage, onStarted },
+        ),
       );
     };
     const startName = `${prefix}-start`;
@@ -180,13 +250,18 @@ export async function runInstallDialogScenario(lifecycle: UserImageLifecycle): P
       directory = await startStandIn(lifecycle, startName);
     };
     const install = { package: PROBE_PLUGIN, prepare };
-    const started = await accept('start', { expected: CARDS, roundTrip: ROUND_TRIP, install });
+    const { result: started, egress: startEgress } = await accept('start', {
+      expected: CARDS,
+      roundTrip: ROUND_TRIP,
+      install,
+    });
     if (directory === undefined) throw new Error(`${INVALID}: stand-in never prepared`);
     const start = {
       ...liveSources(started.observation),
       requests: await standInRequests(lifecycle, startName, directory),
       install: started.browser.pluginPage?.install,
       installed: await probeSelection(lifecycle, startName),
+      egress: startEgress,
     };
     const stopped = lifecycle.command(['stop', startName], 30_000);
     if (stopped.error !== undefined || stopped.status !== 0) throw new Error(`${INVALID}: stop`);
@@ -196,11 +271,15 @@ export async function runInstallDialogScenario(lifecycle: UserImageLifecycle): P
     const recomposed = await collectComposition(lifecycle, `${prefix}-reread`);
     profiles.capture('recompose-read');
     if (!isDeepStrictEqual(recomposed, composition)) throw new Error(`${INVALID}: recomposed`);
-    const restarted = await accept('restart', { expected: RESTART_CARDS, roundTrip: ROUND_TRIP });
+    const { result: restarted, egress: restartEgress } = await accept('restart', {
+      expected: RESTART_CARDS,
+      roundTrip: ROUND_TRIP,
+    });
     const restart = {
       ...liveSources(restarted.observation),
       cards: restarted.browser.pluginPage?.cards,
       installed: await probeSelection(lifecycle, `${prefix}-restart`),
+      egress: restartEgress,
     };
     evidence.finish();
     return JSON.stringify({ registry: REGISTRY, start, restart, evidence: evidence.path });
