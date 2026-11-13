@@ -771,8 +771,8 @@ it('retains per-start egress counts without any packet text', async () => {
   const runId = 'egress-evidence';
   await withReviewedHead(() => {
     const evidence = createManagedPolicyEvidence({ runId, imageId: IMAGE_ID });
-    const lo = { '53': 0, '80': 0, '443': 0, '9': 1 };
-    const egress = { lo, other: lo, dnsQueries: [], captured: 1, attachMs: 4 };
+    const counts = { lo: { '53': 0, '80': 0, '443': 0, '9': 1 }, notable: ['a > b'], attachMs: 4 };
+    const egress = { ...counts, other: counts.lo, dnsQueries: [], notableDropped: 1, captured: 1 };
     try {
       evidence.record({
         startEgress: { ...egress, tcpdumpPid: 701, exited: 'ESRCH', line: 'must-not-retain' },

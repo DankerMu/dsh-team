@@ -150,6 +150,7 @@ it('captures from the started instance, fires the gateway canary and gates the c
   const zero = { '53': 0, '80': 0, '443': 0, '9': 0 };
   expect(egress).toEqual({
     ...{ lo: { ...zero, ptr: 0 }, other: { ...zero, '9': 1 }, dnsQueries: [], captured: 1 },
+    ...{ notable: [], notableDropped: 0 },
     ...{ attachMs: expect.any(Number) as unknown, tcpdumpPid: 701, exited: 'ESRCH' },
   });
   expect(recorded).toEqual([{ restartEgress: egress }]);
@@ -174,6 +175,16 @@ it.each([
   },
   10_000,
 );
+
+it('records the notable headers before gating them', async () => {
+  const { run, recorded } = fakeEgress([LINE.loopDns]);
+
+  await expect(run(() => Promise.resolve('accepted'))).rejects.toThrow('port 53');
+
+  const notable = ['lo In 127.0.0.11.53 > 127.0.0.1.41001 4660 0/0/0'];
+  const egress = expect.objectContaining({ notable, notableDropped: 0 }) as unknown;
+  expect(recorded).toEqual([{ restartEgress: egress }]);
+});
 
 it.each([
   ['the primary error', 0, /^browser failed$/],

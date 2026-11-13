@@ -149,9 +149,11 @@ export async function withEgress<T>(
     const sent = await execAs(lifecycle, started.container, ['node', '-e', CANARY, gateway]);
     if (sent === undefined) throw new Error(`${INVALID}: egress canary not sent`);
     await started.capture.drain();
-    const { lo, other, dnsQueries, captured, attachMs, tcpdumpPid, exited } =
-      await started.capture.stop();
-    const egress = { lo, other, dnsQueries, captured, attachMs, tcpdumpPid, exited };
+    const stopped = await started.capture.stop();
+    const { lo, other, dnsQueries, notable, notableDropped, captured } = stopped;
+    const { attachMs, tcpdumpPid, exited } = stopped;
+    const counts = { lo, other, dnsQueries, notable, notableDropped, captured };
+    const egress = { ...counts, attachMs, tcpdumpPid, exited };
     stage.evidence.record(
       stage.label === 'start' ? { startEgress: egress } : { restartEgress: egress },
     );

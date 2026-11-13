@@ -139,9 +139,9 @@ const PROFILE_KEYS = [
   'beforeDigest',
   'afterDigest',
 ] as const;
-// #409 39.C2: per-start egress counts only; packet text never reaches the capture's result.
+// #409 39.C2: per-start egress counts and header-level notes; packet payload never reaches them.
 const EGRESS_KEYS = [
-  ...['lo', 'other', '53', '80', '443', '9', 'dnsQueries'],
+  ...['lo', 'other', '53', '80', '443', '9', 'dnsQueries', 'notable', 'notableDropped'],
   ...['captured', 'attachMs', 'tcpdumpPid', 'exited'],
 ] as const;
 const PACKAGE_KEYS = [
