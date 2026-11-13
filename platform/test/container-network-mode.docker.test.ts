@@ -4,6 +4,7 @@ import { applyMigrations, openDatabase } from '../src/db/index.ts';
 import { loadConfig } from '../src/config.ts';
 import { createOrchestrator, instanceAddressLayout } from '../src/orchestrator/index.ts';
 import { isAbsentResource } from './docker-command.ts';
+import { runOneShot } from './one-shot-container.ts';
 import {
   inspect,
   inspectNetwork,
@@ -129,9 +130,9 @@ async function networkMode(lifecycle: UserImageLifecycle): Promise<string> {
       ).toBe(0);
     const reader = `dsh-team-test-network-data-${lifecycle.runId}`;
     lifecycle.registerResource('container', reader, { 'dsh-team.test-run': lifecycle.runId });
-    const data = lifecycle.command(
+    const data = runOneShot(
+      lifecycle.command,
       [
-        'run',
         '--name',
         reader,
         '--network',

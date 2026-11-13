@@ -17,6 +17,7 @@ import { START_MODEL } from './container-start-fixture.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 import { containerDocument, record } from './docker-cleanup.ts';
+import { runOneShotAsync } from './one-shot-container.ts';
 
 // Existing acceptance fixtures import the canonical inspect boundary through this module.
 export { record };
@@ -50,10 +51,9 @@ export async function volumeProbe(
 ): Promise<string> {
   const name = `dsh-team-test-${lifecycle.runId}-${randomUUID()}`;
   lifecycle.registerContainer(name);
-  const result = await lifecycle.commandAsync(
+  const result = await runOneShotAsync(
+    lifecycle.commandAsync,
     [
-      'run',
-      '--rm',
       '--name',
       name,
       '--label',

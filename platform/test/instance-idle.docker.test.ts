@@ -23,7 +23,7 @@ it('preserves the real gateway carrier while an owned volume observer is slow', 
     Object.assign(f.lifecycle, {
       commandAsync: (args: readonly string[], timeout: number) => {
         if (
-          args[0] === 'run' &&
+          args[0] === 'create' &&
           args.includes(`dsh-team-test-${f.lifecycle.runId}-idle-preservation`)
         ) {
           delayed++;

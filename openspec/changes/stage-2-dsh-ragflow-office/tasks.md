@@ -5687,7 +5687,7 @@ Must preserve：
 
 `diff-limit-exempt`：仅搬移就约 235 行，CI 口径（`ci.yml` 的 `--ignore-all-space … grep -c '^[+-][^+-]'`）把搬出和搬入各算一次，约 470 行，已超过上限。拆成不超过 400 行的 PR 至少需要三个顺序 PR，其中两个改动 Docker 套件，各需一次确切 head 的 VPS `pnpm test:docker`；合成一个 PR 只需一次。PR 给出 `git diff --color-moved=blocks --color-moved-ws=ignore-all-space` 的搬移审阅结果，并单独列出两个行数：新增文件 `offline-plugin.integration.test.ts` 的行数，以及其余非搬移改动的行数。两者之和低于 400。
 
-- [ ] 46.1 拆分（不改语义）：
+- [x] 46.1 拆分（不改语义）：
   - 新建 `platform/test/offline-plugin-fixture.ts`，原样移入 `PLUGIN_STEP_MS`、`PROFILE_DUMP_MS`、`OFFLINE_PLUGIN_DEADLINE_MS`、`offlinePluginScript` 和 `runOfflinePlugin`。三个常量在新文件里保持模块私有。需要的依赖（`registry-stand-in.ts` 的 `registryStandInScript`、`PROBE_PLUGIN`，以及 `docker-cleanup.ts` 的 `OWNER_LABEL`、`registerCleanupTarget` 等）从原处导入，不复制。
   - `user-image-fixture.ts` 只保留 `probe === 'offline-plugin'` 的分派，按 `max-lines` 口径明显低于 800 行。
   - 观测 oracle 移入新文件并导出：`user-image.docker.test.ts` 现有的观测类型、`BUNDLED_ENTRIES`、`namedPackages`、`expectStep`、`expectProfile`，以及 `runUserImage('offline-plugin', …)` 回调里的判定。导出形式为 `assertOfflinePluginObservation(stdout, packages): string`，返回现在的 evidence 字符串。Docker 用例改为 `evidence = assertOfflinePluginObservation(stdout, packages)`，断言语义和输出文本不变。用到的 `STAND_IN_REQUESTS`、`METADATA_REQUEST`、`TARBALL_REQUEST` 从 `registry-stand-in.ts` 导入。
@@ -5697,7 +5697,7 @@ Must preserve：
     - 其余（`offlinePluginScript`、`BUNDLED_ENTRIES`、`namedPackages`、`expectStep`、`expectProfile` 和三个常量）全部保持私有。
 
     `user-image.docker.test.ts` 里只给 offline-plugin 判定用的 import 一并删除，不留死引用。
-- [ ] 46.2 新增 `platform/test/offline-plugin.integration.test.ts`，用替身 `DockerCommand` 覆盖宿主侧，写法参照 `office-convert.integration.test.ts` 的替身 daemon：
+- [x] 46.2 新增 `platform/test/offline-plugin.integration.test.ts`，用替身 `DockerCommand` 覆盖宿主侧，写法参照 `office-convert.integration.test.ts` 的替身 daemon：
   - 经 `runUserImage('offline-plugin', …, fake.command)` 驱动，沿用 `office-convert.integration.test.ts` 的 sentinel 写法。
   - `create` 参数包含 `--user 1001 --network none`、所有者 label `<OWNER_LABEL>=<runId>` 和镜像 ID。
   - 清理目标在 create 之前登记：替身的 `create` 先登记资源再返回失败，断言 lifecycle 仍然删掉了该容器，运行结束后 `fake.resources` 只剩 sentinel。所有失败分支都断言 sentinel 不变。
@@ -5711,6 +5711,7 @@ Must preserve：
     - 缺少一个步骤；
     - 多出一个步骤；
     - 某个请求点名了嵌套闭包里的包。
+  - 结果：PR #610 在确切 head `7f30a40` 上跑 lane（invocation `2001d846-1f65-4f24-a38a-d16ad7141e4f`），`test:docker` 144/144、`test:deploy` 14/14，cleanup confirmed，offline-plugin 证据行格式不变。评审通过的 head 是 `9bff6df`，与 `7f30a40` 的 tree 相同，换 head 只是为了让首个 CI 带上豁免标签。#610 合并（b3b2bc6），#576 关闭。
 - 验证：
   - 新测试先红（文件和导出不存在）后绿；
   - `pnpm check`；
@@ -5722,3 +5723,81 @@ Suggested fixture level: standard - 纯测试代码的搬移，加替身层测�
 Minimal mergeable slice: 46.1 和 46.2 合成一个 PR（diff-limit-exempt，理由见上）
 Risk packs (46.x): selected - Legacy compatibility（Docker 用例的断言语义、超时期限和报错文本保持不变）；not selected - Security、Config、Schema、Auth、Public API、Concurrency、Migration、Resource limits。
 Must preserve：`wait` 期限 780_000 ms，即 `OFFLINE_PLUGIN_DEADLINE_MS` 的算式；`create`、`inspect`、`start`、`wait`、`logs` 的调用顺序和参数；非 0 退出时的报错文本；Docker 用例的 `process.stdout.write` 证据行。
+
+## 47. #584：Docker 夹具的一次性容器不再前台 `docker run`
+
+依赖：无。机制同第 31 节（#511 的 `start --attach`）。`docker run` 不带 `--detach` 时，CLI 退出码跟随容器退出码，而 `run` 会记账。所以容器一旦非 0 退出，`completeResult` 就留下一条未结清的 `run` 行，custody 判定为 `cleanup: unconfirmed`，遮住真正的失败原因。只改测试夹具，不改 `scripts/docker-command.mjs` 的结清规则，不碰关键路径。
+
+- [ ] 47.1 一次性容器的公共写法：`platform/test/one-shot-container.ts`
+  - 新模块导出同步的 `runOneShot(command, args, timeoutMs)` 和异步的 `runOneShotAsync(commandAsync, args, timeoutMs)`。参数是 `docker-command.ts` 的 `DockerCommand` 和 `AsyncDockerCommand`。两者共用一个流程，不写两份，`pnpm duplicate-code` 不得新增克隆。
+    - `args` 就是原 `run` 调用里 `run` 之后的参数，去掉 `--rm`，其余原样保留，包括 `--name <name>`、镜像和命令。这样各站点只删掉 `'run', '--rm',`、换一下调用，不拆参数，diff 最小。
+    - helper 从 `args` 里的 `--name` 取容器名；没有 `--name` 时直接抛错。
+    - `timeoutMs` 是 `wait` 的上限，取原 `run` 调用的超时。
+  - 顺序：`create <args>` → `start <name>` → `wait <name>`（`timeoutMs`）→ `logs <name>`。`create` 成功后，`finally` 里执行 `rm --force <name>`，helper 返回前容器已删除。
+  - 这里必须显式 `rm`，不能像 `runOfflinePlugin` 那样只靠登记清理，因为容器名会复用，以前由 `--rm` 保证不冲突：
+    - `container-create-recovery.docker.test.ts:363,403` 对同一个 userId 两次读 marker；
+    - `instance-idle-docker-fixture.ts:62` 的 `-idle-install` 在每次 `/containers/create` 拦截时都会执行。`create`、`start`、`logs`、`rm` 各 30s。这些动词的 CLI 退出码都和容器退出码无关，0 即结清。`wait`/`logs` 不记账。
+  - 返回值沿用 `DockerCommandResult` 的形状，各站点因此能原样保留现有判定：`if (result.status !== 0 || result.error !== undefined) throw new Error('<站点原有固定文本>')`。不另写报错文本，也不附带输出。`volume-upgrade.docker.test.ts` 的 `docker()` 有意不把 args 和输出放进报错，这一点不能破坏。返回规则：
+    - `create`、`start`、`wait`、`logs` 任一步状态不为 0 或带 `error` 时，原样返回这一步的结果，不再执行后续步骤；
+    - 都成功时返回 `{ ...logs, status: <wait 打印的退出码> }`；
+    - `wait` 的输出不是十进制整数时，返回 `status: null`，并带一个说明原因的 `error`。
+  - `rm` 失败时抛出 `One-shot container removal failed (status <s>, signal <g>)`，不带输出。如果此前的步骤已经抛错，则按 `install-dialog-fixture.ts` 的 `withEgress` 写法，用 `AggregateError` 把两个错误一起抛出。调用方原有的资源登记（`registerResource`/`registerResourceAsync`/`registerContainer`）都保留，作为 `create` 失败或 `rm` 失败时的兜底。
+  - 模块注释沿用 `managed-policy-fixture.ts` 里「Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.」的说法，改成说前台 `run`。
+- [ ] 47.2 改写 #584 表中的 8 处，各站点的 stdout 内容、固定报错文本和超时上限保持不变（超时只能放宽）：
+  - `container-create-recovery.docker.test.ts:88`：`runningId` 分支的 `exec` 不变；
+  - `container-network-mode.docker.test.ts:134`：原来就不带 `--rm`，靠 `registerResource` 清理；
+  - `container-start-docker-fixture.ts:55` `volumeProbe`：异步；
+  - `instance-idle-docker-fixture.ts:77`、`:148`：异步。
+    - 改为调用 `runOneShotAsync(lifecycle.commandAsync, …)`，必须在调用时读取 `lifecycle.commandAsync`，不能提前取出。原因是 `instance-idle.docker.test.ts:24-36` 用 `Object.assign` 替换了它。
+    - 判定和原来的 `command` 包装一致：抛 `Owned idle Docker operation failed`，返回 `stdout.trim()`。
+  - `instance-idle.docker.test.ts:26` 的拦截原来匹配 `args[0] === 'run'`，改成匹配 `create`。脚本仍是 `args.at(-1)`，`expect(delayed).toBe(1)` 不变；
+  - `volume-upgrade.docker.test.ts:106`、`:137`、`:294`：
+    - 把 `docker()`（`:58-66`）里的报错格式化抽成本文件私有的 `failure(verb, result, elapsed, timeout)`，`docker()` 和 3 个一次性站点共用；
+    - 一次性站点的 verb 固定为 `run`，timeout 取 `timeoutMs`，elapsed 现在跨 4 次 CLI 调用，可能超过 timeout；
+    - 报错仍然不带 args 和输出。
+
+  原参数里的 `run` 和 `--rm` 去掉，其余参数原样保留。目前没有集成层假 Docker 驱动这 8 处（`git grep` 已核实）。
+  - 不在本节：
+    - `platform-stack.stack.test.ts:116`：本地 stack 车道不设 `DSH_TEAM_VERIFICATION_SUBMISSIONS`，没有 custody 影响；
+    - `probe-cleanup.integration.test.ts:203`：只是 bash 假 Docker 的期望 argv；
+    - 已带 `--detach` 的 `run`；
+    - `runOfflinePlugin`、`runOfficeConvert`（不顺手重构）。
+
+- [ ] 47.3 测试：
+  - `platform/test/one-shot-container.integration.test.ts` 用替身 command 覆盖同步和异步两种。两种共用同一组用例（例如 `describe.each` 加一个同步转异步的适配），不逐条写两遍：
+    - 调用序列和参数，以及每步的 timeout；`wait` 的 timeout 等于 `timeoutMs`；没有 `--name` 时抛错；`rm` 出现在 helper 返回之前；
+    - 容器退出 0：返回值的 `status` 为 0，`stdout` 等于 `logs` 的 stdout；
+    - 容器退出非 0（`wait` 打印 `3`）：返回 `status: 3`，不抛错，`rm` 仍被调用；
+    - `create` 失败：原样返回，不调用 `start`/`rm`；
+    - `start` 失败、`wait` 超时（`createDockerCommands` 的超时形状，`status: null` 加 `ETIMEDOUT`）、`logs` 失败：都原样返回，并且 `rm --force` 被调用；
+    - `wait` 输出非整数：`status: null`，带 `error`；
+    - `rm` 失败时抛出的报错不带 logs 内容；
+    - `AggregateError`：替身 command 本身抛错（不是返回非 0），随后 `rm` 也失败；
+    - 真实记账：照 `submission-call-evidence.integration.test.ts:37-47` 的 `openJournal` 写法，设置 `DSH_TEAM_VERIFICATION_SUBMISSIONS`，用 `createDockerCommands('unused', 'unused', true, stub)` 包住替身，使调用真正经过 `runDockerCommand*` 记账。同步和异步各测一次：
+      - 正例：`wait` 打印 `3`，helper 返回 `status: 3`，并且 `requireVerificationSubmissionsSettled(dir)` 不抛错；
+      - 负例（先红）：同一套装置下，对 `['run', …]` 返回 status 3，日志里留下 `submitted` 行。
+  - 守卫 `platform/test/docker-foreground-run.integration.test.ts`（纯文本，不跑 Docker）：
+    - 读取 `platform/test/` 下的 `*.docker.test.ts` 和全部 `*-fixture.ts`，断言每个 `'run',` 后面紧跟（只隔空白）`'--detach'`，报错列出文件和行号；
+    - `e2e-command-fixture.ts:19`（`spawn('pnpm', ['run', 'e2e'])`，不是 Docker）按文件显式豁免，并写明原因；
+    - 先红：在 main 上会列出上面 8 处；
+    - `container-reconcile.docker.test.ts` 和 `container-start-docker-fixture.ts` 里的 `'run', '--detach'` 不会被误报；
+    - 守卫自带一个内联负例（一段带 `'run', '--rm'` 的文本）和一个正例，证明它确实会拦截；
+    - 覆盖不到 `-d` 短参数和 `.mjs`，算剩余风险。
+- 验证：
+  - 守卫和 helper 测试先红后绿；
+  - `pnpm check`；
+  - VPS exact-head `test:docker` 和 `test:deploy`：cleanup confirmed，custody 没有 `cleanup.unsettled`，8 处所在的用例，以及 `volumeProbe` 和 `withDockerIdleInstance` 的其他调用方（`profile-restore.docker.test.ts`、三个 `admin-*.docker.test.ts`）全部通过，其中 `instance-idle.docker.test.ts` 的 slow observer 拦截仍然恰好命中一次；
+  - 本机 exact-head `pnpm test:stack`：只为满足门禁。
+
+剩余风险：正常通过的运行里，这 8 个容器都以 0 退出，所以非 0 路径只有 helper 的替身测试保证，VPS 运行覆盖不到。
+
+Suggested fixture level: standard - 测试夹具里 8 处等待方式的统一改写，加一个公共 helper 和守卫
+Minimal mergeable slice: atomic，47.1–47.3 一个 PR（目标低于 400 行，按 CI 口径计，包含本节和 46.x 的 tasks.md 改动；超出就停下回报，不申请豁免）
+Risk packs (47.x): selected - Legacy compatibility（各调用方拿到的 stdout 和固定报错文本不变）、Resource limits（`wait` 有界，沿用原超时；容器在两条路径上都会回收）；not selected - Config、Schema、Auth、Public API、Concurrency、Migration、Security（报错仍不带输出，不新增泄露面）。
+Must preserve：
+
+- 各站点的 stdout 内容、固定报错文本、非 0 即失败的语义和超时上限；
+- volume-upgrade 报错不带 args 和输出；
+- 资源登记和清理；
+- instance-idle slow observer 拦截恰好命中一次；
+- `scripts/docker-command.mjs` 不改。
