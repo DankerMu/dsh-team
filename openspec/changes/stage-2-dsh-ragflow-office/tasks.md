@@ -5638,14 +5638,14 @@ Must preserve：`images/browser-verification/Dockerfile` 的基础镜像摘要�
 - 本节的 45.1 和 45.2 合成一个 PR，先合并。#606 原本带的诊断提交里 `egress-capture.ts` 的部分挪到本 PR；
 - #606 rebase 后，只保留接线、证据白名单和门禁。
 
-- [ ] 45.1 抓包证据保留报头级的「去向」，供诊断使用；门禁和计数口径不变。改动在 `platform/test/egress-capture.ts` 及其测试；证据白名单 `EGRESS_KEYS` 和 `withEgress` 的透传留在 #606。
+- [x] 45.1 抓包证据保留报头级的「去向」，供诊断使用；门禁和计数口径不变。改动在 `platform/test/egress-capture.ts` 及其测试；证据白名单 `EGRESS_KEYS` 和 `withEgress` 的透传留在 #606。
   - `countEgress` 新增 `notable: string[]`，只收两类行：
     - port 53 的非查询行（任何接口）；
     - 非 lo 的 80/443 行。
   - 每条的格式为 `<接口> <方向> <源> > <目的>`。port 53 行后面再加上应答摘要：取 `: ` 之后、第一个 ` (` 之前的解码文本，截到 120 字符。
   - 去重，最多 32 条，超出部分计入 `notableDropped`。
   - `-s` 由 128 提高到 512。不写原始行，不用 `-w/-A/-X`。
-- [ ] 45.2 源头修复和 PTR 口径：
+- [x] 45.2 源头修复和 PTR 口径：
   - **产品**：orchestrator 新增一个小模块，按 `pluginRegistries` 生成实例的 registry 环境：
     - `npm_config_registry=<pluginRegistries[0]>`；
     - `npm_config_update_notifier=false`。
@@ -5660,6 +5660,7 @@ Must preserve：`images/browser-verification/Dockerfile` 的基础镜像摘要�
     - 本 PR 的确切 head lane 证明没有回归，因为 main 上还没有抓包调用方；
     - #606 rebase 后的确切 head lane 中，install-dialog 的 start 和 restart 都通过门禁：`dnsQueries` 为空、`lo['53']+other['53']=0`、非 lo 的 80/443 为 0、金丝雀至少 1 个；`lo.ptr` 如实记录。
   - 如果设置默认 registry 后，npmjs 的出网仍然存在，就停下来回到用户，不放宽门禁。
+  - 结果：#609 合并（9ae48a0）。#606 rebase 后在确切 head a03f688 上跑 lane（invocation `97d16039-0927-4d34-90ed-89aa6bf20a7a`），install-dialog 的 start 和 restart 结果相同：`dnsQueries=[]`、`lo['53']=other['53']=0`、非 lo 的 80/443 为 0、金丝雀 `other['9']=1`、`lo.ptr=8`；`notable` 里只有网关的 PTR 应答，没有 npmjs 的查询或连接。#606 合并（15677ff），#409 关闭。
 
 Suggested fixture level: expanded - 产品容器环境变更（关键路径）加证据口径调整
 Minimal mergeable slice: 45.1 和 45.2 合成一个 PR，先于 #606 合并
@@ -5679,3 +5680,45 @@ Must preserve：
 - `dnsQueries` 的语义；
 - 门禁的顺序和文本；
 - 容器 `Env` 里已有的各项，以及它们的取值和顺序。
+
+## 46. #576：offline-plugin 探针拆出 `user-image-fixture.ts`，补替身 daemon 失败分支测试和观测 oracle
+
+依赖：#556（PR #572）已合并。`platform/test/user-image-fixture.ts` 有 833 行原始行，按 `max-lines` 口径贴近 800 行上限。`offline-plugin` 探针只有 `user-image.docker.test.ts` 的真 Docker 用例，宿主侧失败分支和观测判定在 `pnpm test:integration` 里都跑不到。
+
+`diff-limit-exempt`：仅搬移就约 235 行，CI 口径（`ci.yml` 的 `--ignore-all-space … grep -c '^[+-][^+-]'`）把搬出和搬入各算一次，约 470 行，已超过上限。拆成不超过 400 行的 PR 至少需要三个顺序 PR，其中两个改动 Docker 套件，各需一次确切 head 的 VPS `pnpm test:docker`；合成一个 PR 只需一次。PR 给出 `git diff --color-moved=blocks --color-moved-ws=ignore-all-space` 的搬移审阅结果，并单独列出两个行数：新增文件 `offline-plugin.integration.test.ts` 的行数，以及其余非搬移改动的行数。两者之和低于 400。
+
+- [ ] 46.1 拆分（不改语义）：
+  - 新建 `platform/test/offline-plugin-fixture.ts`，原样移入 `PLUGIN_STEP_MS`、`PROFILE_DUMP_MS`、`OFFLINE_PLUGIN_DEADLINE_MS`、`offlinePluginScript` 和 `runOfflinePlugin`。三个常量在新文件里保持模块私有。需要的依赖（`registry-stand-in.ts` 的 `registryStandInScript`、`PROBE_PLUGIN`，以及 `docker-cleanup.ts` 的 `OWNER_LABEL`、`registerCleanupTarget` 等）从原处导入，不复制。
+  - `user-image-fixture.ts` 只保留 `probe === 'offline-plugin'` 的分派，按 `max-lines` 口径明显低于 800 行。
+  - 观测 oracle 移入新文件并导出：`user-image.docker.test.ts` 现有的观测类型、`BUNDLED_ENTRIES`、`namedPackages`、`expectStep`、`expectProfile`，以及 `runUserImage('offline-plugin', …)` 回调里的判定。导出形式为 `assertOfflinePluginObservation(stdout, packages): string`，返回现在的 evidence 字符串。Docker 用例改为 `evidence = assertOfflinePluginObservation(stdout, packages)`，断言语义和输出文本不变。用到的 `STAND_IN_REQUESTS`、`METADATA_REQUEST`、`TARBALL_REQUEST` 从 `registry-stand-in.ts` 导入。
+  - 导出清单：
+    - 新文件只导出 `runOfflinePlugin`（供 `user-image-fixture.ts` 分派）和 `assertOfflinePluginObservation`（供 Docker 用例和集成测试）；
+    - 观测类型只在合成观测测试确实用到时才导出；
+    - 其余（`offlinePluginScript`、`BUNDLED_ENTRIES`、`namedPackages`、`expectStep`、`expectProfile` 和三个常量）全部保持私有。
+
+    `user-image.docker.test.ts` 里只给 offline-plugin 判定用的 import 一并删除，不留死引用。
+- [ ] 46.2 新增 `platform/test/offline-plugin.integration.test.ts`，用替身 `DockerCommand` 覆盖宿主侧，写法参照 `office-convert.integration.test.ts` 的替身 daemon：
+  - 经 `runUserImage('offline-plugin', …, fake.command)` 驱动，沿用 `office-convert.integration.test.ts` 的 sentinel 写法。
+  - `create` 参数包含 `--user 1001 --network none`、所有者 label `<OWNER_LABEL>=<runId>` 和镜像 ID。
+  - 清理目标在 create 之前登记：替身的 `create` 先登记资源再返回失败，断言 lifecycle 仍然删掉了该容器，运行结束后 `fake.resources` 只剩 sentinel。所有失败分支都断言 sentinel 不变。
+  - inspect 返回值不是 `none 1001` 时抛错，并且不再执行 `start`。
+  - `wait` 调用的 timeout 为字面量 `780_000`（4×150_000 + 2×60_000 + 60_000），写法同 `office-convert.integration.test.ts` 对 `300_000` 的断言。
+  - `wait` 超时：替身返回 `createDockerCommands` 的超时形状，即 `{ status: null, stdout: '', stderr: '', error: <code ETIMEDOUT>, signal: 'SIGKILL' }`。断言抛错，`logs` 没有被当作成功输出，容器已被清理。
+  - 容器非 0 退出时抛错，消息里能看到 logs 中带 `failure` 的部分观测 JSON。
+  - oracle：用合成观测测试。接受一份合法观测，返回 evidence 字符串。每个负例都由这份合法观测只改一处得到，并断言报错指向被改的那一项。分别拒绝以下情况：
+    - 带 `failure`；
+    - `uid !== 1001`；
+    - 缺少一个步骤；
+    - 多出一个步骤；
+    - 某个请求点名了嵌套闭包里的包。
+- 验证：
+  - 新测试先红（文件和导出不存在）后绿；
+  - `pnpm check`；
+  - Docker 用例改了调用方式，所以需要确切 head 的 VPS `pnpm test:docker`，证明 offline-plugin 用例语义不变。
+
+不在本节：容器内脚本自身的分支（步骤超时 kill 进程组、`profile copy not owned` 的 uid 检查、`chmodSync`），继续由 Docker 用例承担；其他 `PYTHON_PROBES` 不动；探针语义和 #556 的修复都不改。
+
+Suggested fixture level: standard - 纯测试代码的搬移，加替身层测试
+Minimal mergeable slice: 46.1 和 46.2 合成一个 PR（diff-limit-exempt，理由见上）
+Risk packs (46.x): selected - Legacy compatibility（Docker 用例的断言语义、超时期限和报错文本保持不变）；not selected - Security、Config、Schema、Auth、Public API、Concurrency、Migration、Resource limits。
+Must preserve：`wait` 期限 780_000 ms，即 `OFFLINE_PLUGIN_DEADLINE_MS` 的算式；`create`、`inspect`、`start`、`wait`、`logs` 的调用顺序和参数；非 0 退出时的报错文本；Docker 用例的 `process.stdout.write` 证据行。

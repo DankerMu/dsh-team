@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { profileSeedScript } from './profile-seed-fixture.ts';
-import { PROBE_PLUGIN, registryStandInScript } from './registry-stand-in.ts';
 import { runOfficeConvert } from './office-convert-fixture.ts';
+import { runOfflinePlugin } from './offline-plugin-fixture.ts';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebStartupBoundary } from './web-startup-fixture.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
@@ -94,134 +94,6 @@ function assertOfflineContainerConfiguration(command: DockerCommand, container: 
 }
 
 type Probe = 'version' | 'offline-docx' | 'profile-seed' | 'office-convert' | 'offline-plugin';
-
-// Each DSH/pnpm step is bounded above the CLI's 120s registry lookup; the profile dump at 60s.
-const PLUGIN_STEP_MS = 150_000;
-const PROFILE_DUMP_MS = 60_000;
-// Four steps and two dumps, plus the stand-in's setup and the container's own start and exit.
-const OFFLINE_PLUGIN_DEADLINE_MS = 4 * PLUGIN_STEP_MS + 2 * PROFILE_DUMP_MS + 60_000;
-
-/**
- * An employee's plugin install, uninstall and repair through the real DSH and pnpm entries
- * against a loopback registry stand-in that serves only the probe plugin, logging every request
- * per step; then the same install after the profile copies lose `bundleDependencies` (a home
- * volume seeded by an older image). Only facts leave the container; `--network none` outside.
- */
-const offlinePluginScript = `
-import { spawn } from 'node:child_process';
-import { chmodSync, lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-${registryStandInScript({ port: 0 })}
-const PROFILE = '/data/home/profiles/web';
-const NAME = ${JSON.stringify(PROBE_PLUGIN)};
-const { registry } = registryStandIn;
-const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
-// Each run is its own process group, killed whole at its bound with the pnpm DSH starts.
-const run = (file, args, bound, cwd) => new Promise((resolve) => {
-  const child = spawn(file, args, { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '';
-  let stderr = '';
-  let timedOut = false;
-  child.stdout.on('data', (chunk) => { stdout = (stdout + chunk).slice(-2000); });
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    try { process.kill(-child.pid, 'SIGKILL'); } catch {}
-  }, bound);
-  const settle = (status, signal, error) => { clearTimeout(timer); resolve({ status, signal, error, timedOut, stdout, stderr }); };
-  child.on('error', (error) => settle(null, null, error.code));
-  child.on('close', (status, signal) => settle(status, signal, undefined));
-});
-const catalog = read('/opt/dsh-team/catalog.json').entries;
-const bundled = catalog.filter((entry) => Object.keys(read('/opt/dsh-team/' + entry.id + '/package.json').dependencies ?? {}).length > 0);
-const closure = new Set(bundled.flatMap((entry) => Object.keys(read('/opt/dsh-team/' + entry.id + '/package.json').dependencies)));
-const visible = (path) => readdirSync(path).filter((name) => !name.startsWith('.'));
-const packagesIn = (path) => visible(path).flatMap((name) => name.startsWith('@')
-  ? visible(path + '/' + name).map((child) => name + '/' + child) : [name]);
-// Every package the canonical copies deliver nested, transitive ones included.
-const nestedNames = [...new Set(bundled.flatMap((entry) => packagesIn('/opt/dsh-team/' + entry.id + '/node_modules')))].sort();
-const state = async () => {
-  const top = packagesIn(PROFILE + '/node_modules').sort();
-  const dump = await run('dsh', ['--profile', 'web', '--dump-default-config'], ${String(PROFILE_DUMP_MS)});
-  return {
-    sidebar: { version: read(PROFILE + '/node_modules/dsh-better-sidebar/package.json').version,
-      directory: lstatSync(PROFILE + '/node_modules/dsh-better-sidebar').isDirectory() },
-    nested: Object.fromEntries(bundled.map((entry) => [entry.id, {
-      canonical: visible('/opt/dsh-team/' + entry.id + '/node_modules').length,
-      profile: visible(PROFILE + '/node_modules/' + entry.package + '/node_modules').length }])),
-    top,
-    dependencies: Object.keys(read(PROFILE + '/package.json').dependencies ?? {}).sort(),
-    hoisted: top.filter((name) => closure.has(name)),
-    dump: { status: dump.status, diagnostics: dump.stderr.split('\\n').filter((line) => /dsh: (skipping profile bundle|disabling profile plugin)/.test(line)) },
-  };
-};
-const step = async (name, file, args, cwd) => {
-  registryStandIn.requests.length = 0;
-  const result = await run(file, args, ${String(PLUGIN_STEP_MS)}, cwd);
-  const { status, signal, error, timedOut, stdout, stderr } = result;
-  return { name, status, signal, error, timedOut, requests: [...registryStandIn.requests].sort(), tail: (stdout + stderr).slice(-2000) };
-};
-const add = () => step('add', 'dsh', ['plugin', '--profile', 'web', 'add', NAME, '--registry=' + registry]);
-const steps = [];
-const observed = { uid: process.getuid(), bundled: bundled.map((entry) => entry.id), nestedNames, steps };
-// A throw still emits the steps done so far, with their request logs, and exits 1.
-let failure;
-try {
-  steps.push(await add());
-  if (steps[0].status === 0) steps.push(await step('remove', 'dsh', ['plugin', '--profile', 'web', 'remove', NAME, '--config.registry=' + registry]));
-  if (steps.at(-1).status === 0) steps.push(await step('install', 'pnpm', ['install', '--config.lockfile=false', '--config.registry=' + registry], PROFILE));
-  if (steps.length === 3 && steps[2].status === 0) {
-    observed.state = await state();
-    observed.stripped = [];
-    for (const entry of bundled) {
-      const path = PROFILE + '/node_modules/' + entry.package + '/package.json';
-      const copy = read(path);
-      if (!Object.hasOwn(copy, 'bundleDependencies')) continue;
-      // pnpm re-copies the 0444 canonical files; an older image's register copy is 0644.
-      const before = statSync(path);
-      if (before.uid !== process.getuid()) throw new Error('profile copy not owned by the employee: ' + path);
-      chmodSync(path, 0o644);
-      delete copy.bundleDependencies;
-      writeFileSync(path, JSON.stringify(copy, null, 2) + '\\n');
-      observed.stripped.push({ id: entry.id, uid: before.uid, modeBefore: before.mode & 0o777, modeAfter: statSync(path).mode & 0o777 });
-    }
-    observed.oldVolume = { step: await add() };
-    if (observed.oldVolume.step.status === 0) observed.oldVolume.state = await state();
-  }
-} catch (error) {
-  failure = error;
-  observed.failure = String(error?.stack ?? error);
-}
-registryStandIn.server.close();
-process.stdout.write(JSON.stringify(observed), () => process.exit(failure === undefined ? 0 : 1));
-`;
-
-/** Create, start and boundedly wait for the offline plugin probe as uid1001 without a network. */
-function runOfflinePlugin(
-  command: DockerCommand,
-  targets: CleanupTarget[],
-  run: { container: string; imageId: string; runId: string },
-): string {
-  const { container, imageId, runId } = run;
-  const label = `${OWNER_LABEL}=${runId}`;
-  const offline = ['--user', '1001', '--network', 'none', '--name', container, '--label', label];
-  const script = ['node', '--input-type=module', '-e', offlinePluginScript];
-  const create = ['create', ...offline, imageId, ...script];
-  registerCleanupTarget(targets, runId, { kind: 'container', name: container });
-  output(command(create, 30_000), create);
-  const format = '{{.HostConfig.NetworkMode}} {{.Config.User}}';
-  const inspect = ['container', 'inspect', '--format', format, container];
-  const identity = output(command(inspect, 30_000), inspect).trim();
-  if (identity !== 'none 1001')
-    throw new Error(`Expected network none and user 1001, got ${identity}`);
-  const start = ['start', container];
-  output(command(start, 30_000), start);
-  const wait = ['wait', container];
-  const exit = output(command(wait, OFFLINE_PLUGIN_DEADLINE_MS), wait).replace(/\r?\n$/, '');
-  const logs = command(['logs', container], 30_000);
-  if (exit !== '0')
-    throw new Error(`offline-plugin container exited ${exit}:\n${logs.stdout}\n${logs.stderr}`);
-  return output(logs, ['logs', container]);
-}
 
 // The python3 offline probes; `version` runs DSH itself, `office-convert` and `offline-plugin`
 // their own runners.
