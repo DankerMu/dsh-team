@@ -11,13 +11,8 @@ import {
   offlineDocxScript,
   runUserImage,
 } from './user-image-fixture.ts';
-import {
-  METADATA_REQUEST,
-  PROBE_PLUGIN,
-  STAND_IN_REQUESTS,
-  TARBALL_REQUEST,
-} from './registry-stand-in.ts';
 import { assertOfficeConversion, runOfficeConvert } from './office-convert-fixture.ts';
+import { assertOfflinePluginObservation } from './offline-plugin-fixture.ts';
 import { RENAMED_FONT, renamedFontDirectory } from './font-rename-fixture.ts';
 import { profileSeedOracle } from './profile-seed-fixture.ts';
 import { execScript, lifecycleWebNetwork } from './managed-policy-fixture.ts';
@@ -605,77 +600,6 @@ process.stdout.write(JSON.stringify({
   );
 });
 
-interface PluginStep {
-  readonly name: string;
-  readonly status: number | null;
-  readonly signal: string | null;
-  readonly error?: string;
-  readonly timedOut: boolean;
-  readonly requests: readonly string[];
-  readonly tail: string;
-}
-
-interface ProfileState {
-  readonly sidebar: { readonly version: string; readonly directory: boolean };
-  readonly nested: Record<string, { readonly canonical: number; readonly profile: number }>;
-  readonly top: readonly string[];
-  readonly dependencies: readonly string[];
-  readonly hoisted: readonly string[];
-  readonly dump: { readonly status: number | null; readonly diagnostics: readonly string[] };
-}
-
-interface OfflinePluginObservation {
-  readonly uid: number;
-  readonly bundled: readonly string[];
-  readonly nestedNames: readonly string[];
-  readonly steps: readonly PluginStep[];
-  readonly state?: ProfileState;
-  readonly stripped?: readonly {
-    readonly id: string;
-    readonly uid: number;
-    readonly modeBefore: number;
-    readonly modeAfter: number;
-  }[];
-  readonly failure?: string;
-  readonly oldVolume?: { readonly step: PluginStep; readonly state?: ProfileState };
-}
-
-const BUNDLED_ENTRIES = ['dsh-better-sidebar', 'dsh-sidebar-onlyoffice'];
-
-/** The nested package names a request path names as segments, raw, `%2F`-encoded or decoded. */
-function namedPackages(request: string, names: readonly string[]): string[] {
-  const raw = `${request.replace(/^\S+ /, '').replace(/[?#].*$/, '')}/`;
-  const forms = [raw, raw.toLowerCase(), decodeURIComponent(raw)];
-  return names.filter((name) =>
-    [name, name.replace('/', '%2f')].some((form) =>
-      forms.some((path) => path.includes(`/${form}/`)),
-    ),
-  );
-}
-
-/** One step exited 0 within its bound and asked the stand-in for nothing a preinstalled item needs. */
-function expectStep(step: PluginStep | undefined, name: string): void {
-  expect([step?.name, step?.status, step?.signal, step?.error, step?.timedOut], step?.tail).toEqual(
-    [name, 0, null, undefined, false],
-  );
-  for (const request of step?.requests ?? []) expect(STAND_IN_REQUESTS).toContain(request);
-}
-
-/** The preinstalled items stay as delivered: nothing re-resolved, hoisted or skipped by DSH. */
-function expectProfile(state: ProfileState | undefined, registered: readonly string[]): void {
-  if (state === undefined) throw new Error('Missing profile state');
-  expect(state.sidebar).toEqual({ version: '0.28.0', directory: true });
-  expect(Object.keys(state.nested)).toEqual(BUNDLED_ENTRIES);
-  for (const [id, { canonical, profile }] of Object.entries(state.nested)) {
-    expect([id, profile]).toEqual([id, canonical]);
-    expect(canonical).toBeGreaterThan(0);
-  }
-  expect(state.top).toEqual(registered);
-  expect(state.dependencies).toEqual(registered);
-  expect(state.hoisted).toEqual([]);
-  expect(state.dump).toEqual({ status: 0, diagnostics: [] });
-}
-
 it('installs, uninstalls and repairs an employee plugin offline from a registry holding only that plugin, without resolving any preinstalled dependency', () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
@@ -687,39 +611,7 @@ it('installs, uninstalls and repairs an employee plugin offline from a registry 
   let evidence = '';
 
   const result = runUserImage('offline-plugin', (stdout) => {
-    const observed = JSON.parse(stdout) as OfflinePluginObservation;
-    expect(observed.failure).toBeUndefined();
-    expect(observed.uid).toBe(1001);
-    expect(observed.bundled).toEqual(BUNDLED_ENTRIES);
-    expect(observed.nestedNames).toEqual(
-      expect.arrayContaining(['@deepseek-ai/schemastery', 'yaml']),
-    );
-    // The invariant itself: no request names any package of the canonical nested closures.
-    const requests = [...observed.steps, observed.oldVolume?.step].flatMap(
-      (step) => step?.requests ?? [],
-    );
-    expect(requests.flatMap((request) => namedPackages(request, observed.nestedNames))).toEqual([]);
-    const [add, remove, install, extra] = observed.steps;
-    expectStep(add, 'add');
-    expect(add?.requests).toEqual(expect.arrayContaining([METADATA_REQUEST, TARBALL_REQUEST]));
-    expectStep(remove, 'remove');
-    expectStep(install, 'install');
-    expect(extra).toBeUndefined();
-    expectProfile(observed.state, packages);
-    // A home volume seeded by an older image: profile copies without the field.
-    expect(observed.stripped?.map((copy) => copy.id)).toEqual(BUNDLED_ENTRIES);
-    for (const copy of observed.stripped ?? []) {
-      // pnpm's re-copy of the 0444 canonical file, or an older image's 0644 register copy.
-      expect([0o444, 0o644]).toContain(copy.modeBefore);
-      expect([copy.id, copy.uid, copy.modeAfter]).toEqual([copy.id, 1001, 0o644]);
-    }
-    expectStep(observed.oldVolume?.step, 'add');
-    expect(observed.oldVolume?.step.requests).toContain(METADATA_REQUEST);
-    expectProfile(observed.oldVolume?.state, [...packages, PROBE_PLUGIN].sort());
-    const counts = [...observed.steps, observed.oldVolume?.step].map(
-      (step) => `${String(step?.name)}=${String(step?.requests.length)}`,
-    );
-    evidence = `requests ${counts.join(' ')} nested=${JSON.stringify(observed.state?.nested)}`;
+    evidence = assertOfflinePluginObservation(stdout, packages);
   });
 
   process.stdout.write(
