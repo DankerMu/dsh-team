@@ -16,3 +16,4 @@ export { allocateSubnet, instanceAddressLayout, validateSubnetPool } from './sub
 export { createInstanceService } from './instance-service.ts';
 export { officeUnavailableReason } from './document-server.ts';
 export type { InstanceService } from './instance-service.ts';
+export { registryEnvironment } from './registry-environment.ts';

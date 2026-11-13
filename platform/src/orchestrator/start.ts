@@ -60,6 +60,7 @@ import {
 } from './creation-attempt.ts';
 import type { CreationAttempt } from './creation-attempt.ts';
 import { recordProfileIncompatible } from './start-failure.ts';
+import { isRegistryEnvironmentName, registryEnvironment } from './registry-environment.ts';
 
 // Composition may load the installed Web profile; a hung helper must not retain home access.
 const START_TIMEOUT_MS = 60_000;
@@ -93,7 +94,10 @@ async function composition(
   }
 }
 
-/** Overlay catalog inputs; only forced-state manageable bundles are read and validated. */
+/**
+ * Overlay catalog inputs and the instance registry env from the same registries; only
+ * forced-state manageable bundles are read and validated.
+ */
 function catalogInput(catalog: PluginCatalog, settings: Settings) {
   const pluginCatalog = catalogStates(catalog, settings);
   const { webToolsEnabled, pluginRegistries, registryProbeEnabled } = settings;
@@ -102,12 +106,14 @@ function catalogInput(catalog: PluginCatalog, settings: Settings) {
       .filter(({ category, state }) => category === 'manageable' && state !== 'employee')
       .map(({ id }) => id),
     overlay: { webToolsEnabled, pluginRegistries, registryProbeEnabled, pluginCatalog },
+    registry: registryEnvironment(pluginRegistries),
   };
 }
 
 function validateModelEnvironment(name: string, key: string): void {
   if (
     !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
+    isRegistryEnvironmentName(name) ||
     [
       'DSH_HOME',
       'DSH_TELEMETRY_DISABLED',
@@ -425,6 +431,7 @@ async function createInstance(
   memory: number,
   envName: string,
   modelKey: string,
+  registry: Readonly<Record<string, string>>,
   attempt: CreationAttempt,
   documentServer: string | null,
   inspecting: () => void,
@@ -447,6 +454,7 @@ async function createInstance(
         `${envName}=${modelKey}`,
         `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${fileTokenSecret}`,
         `DSH_TEAM_INSTANCE_TOKEN=${instanceToken}`,
+        ...Object.entries(registry).map(([key, value]) => `${key}=${value}`),
       ],
       Cmd: [
         'dsh',
@@ -656,8 +664,7 @@ export async function startUserContainer(
     const modelSettings = { ...input.modelSettings, apiKeyConfigured: true };
     if (!hasCompleteModelSettings(modelSettings)) return { outcome: 'unconfigured' };
     stage = 'model environment validation';
-    const envName = modelSettings.apiKeyEnv;
-    validateModelEnvironment(envName, input.modelKey);
+    validateModelEnvironment(modelSettings.apiKeyEnv, input.modelKey);
     stage = 'resource limits';
     const settings = readSettings(database);
     const { cpuCores, memoryMiB, defaultPermissionTier } = settings;
@@ -773,8 +780,9 @@ export async function startUserContainer(
       overlay,
       nanoCpus,
       memory,
-      envName,
+      modelSettings.apiKeyEnv,
       input.modelKey,
+      catalog.registry,
       pendingCreation,
       documentServer.containerId,
       () => {

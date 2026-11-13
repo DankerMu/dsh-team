@@ -7,7 +7,8 @@ import type { DockerCommand } from './docker-command.ts';
 import { captureContainer, confirmExited, countEgress, findTcpdump } from './egress-capture.ts';
 
 // Stands in for `timeout`+`tcpdump`: canned `-i any` LINUX_SLL2 lines; on SIGINT tcpdump's interrupt
-// newline on stdout, then its stats.
+// newline on stdout, then its stats. The handler precedes any output: a stop may follow the listening
+// line at once, and an unhandled SIGINT would kill the fake before it answers.
 const FAKE_TCPDUMP = `
 const mode = process.argv[1];
 if (mode === 'refused') { process.stderr.write('sudo: a password is required\\n'); process.exit(1); }
@@ -24,15 +25,15 @@ const middle = [...all.slice(0, 3), '', ...all.slice(3)];
 const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'], middle }[mode] ?? all;
 const tail = '10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443: Flags [P.], tail-must-not-stay';
 const stat = (n, what) => n + ' packet' + (n === 1 ? '' : 's') + ' ' + what + '\\n';
-process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
-process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
-process.stdout.write(lines.join('\\n') + '\\n');
 process.on('SIGINT', () => {
   process.stdout.write('\\n' + ({ blanks: '\\n', after: tail + '\\n', unterminated: tail }[mode] ?? ''));
   const [extra, lost] = [mode === 'extra' ? 1 : 0, mode === 'dropped' ? 1 : 0];
   process.stderr.write('\\n' + stat(lines.length + extra, 'captured') + stat(lines.length + extra, 'received by filter') + stat(lost, 'dropped by kernel'));
   process.exit(0);
 });
+process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
+process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
+process.stdout.write(lines.join('\\n') + '\\n');
 setTimeout(() => process.exit(3), 20000);
 `;
 // Stands in for sudo: records its child's pid where the injected /proc reader finds it, relays SIGINT.
@@ -44,7 +45,7 @@ child.on('exit', (code) => process.exit(code ?? 1));
 `;
 const ARGV = [
   ...['/usr/bin/sudo', '-n', '/usr/bin/timeout', '-k', '5', '90s', '/usr/bin/nsenter', '-t'],
-  ...['4242', '-n', '/usr/bin/tcpdump', '-i', 'any', '-nn', '-l', '-s', '128'],
+  ...['4242', '-n', '/usr/bin/tcpdump', '-i', 'any', '-nn', '-l', '-s', '512'],
   'port 53 or port 80 or port 443 or udp port 9',
 ];
 const BEFORE = ['dsh web: http', 'DSH_TEAM_MANAGED_POLICY_OBSERVATION'];
@@ -97,9 +98,15 @@ it('counts packets by loopback and filter port, keeps DNS query names only and c
   expect(evidence).toEqual({
     tcpdumpPid: tcpdump(),
     attachMs: expect.any(Number) as unknown,
-    lo: { '53': 0, '80': 1, '443': 1, '9': 0 },
+    lo: { '53': 0, '80': 1, '443': 1, '9': 0, ptr: 0 },
     other: { '53': 2, '80': 1, '443': 1, '9': 1 },
     dnsQueries: ['registry.npmjs.org.'],
+    notable: [
+      'eth0 Out 198.18.0.18.41001 > 104.16.0.1.443',
+      'eth0 In 198.18.0.17.53 > 198.18.0.18.41002 4660 1/0/0 A 104.16.0.1',
+      'eth0 Out fd00::2.41003 > fd00::1.80',
+    ],
+    notableDropped: 0,
     captured: 7,
     exitCode: 0,
     exited: 'ESRCH',
@@ -174,6 +181,58 @@ it.each<readonly [string, string, string, number]>([
   await expect(started).rejects.toThrow(message);
 
   expect(spawned).toEqual([]);
+});
+
+const ANSWER =
+  'lo In IP 127.0.0.11.53 > 127.0.0.1.40000: 4321 2/0/0 CNAME a.example., A 192.0.2.1 (68)';
+it('keeps each distinct port-53 non-query with its answer and off-loopback 80/443 header, at most 32', () => {
+  const syns = Array.from({ length: 30 }, (_, n) => `9.9.9.9.443 > 1.1.1.1.${String(40000 + n)}`);
+  const counts = countEgress(
+    [
+      ANSWER,
+      ANSWER,
+      'eth0 In IP 1.1.1.1.4 > 2.2.2.2.53: Flags [S], length 0',
+      `eth0 In IP 2.2.2.2.53 > 1.1.1.1.4: 7 1/0/0 TXT ${'t'.repeat(130)} (180)`,
+      'eth0 In IP 1.1.1.1.4 > 2.2.2.2.443: Flags [S], seq 1',
+      'lo In IP 127.0.0.1.4 > 127.0.0.1.80: GET /x',
+      'lo In IP 127.0.0.1.443 > 127.0.0.1.4: Flags [S.]',
+      'eth0 In IP 1.1.1.1.4 > 2.2.2.2.53: 1+ A? x.test. (24)',
+      'eth0 In IP 1.1.1.1.4 > 2.2.2.2.9: UDP, length 1',
+      ...syns.map((route) => `eth0 In IP ${route}: Flags [S]`),
+      ANSWER,
+    ].map((line) => `10:00:00.000001 ${line}`),
+  );
+
+  expect(counts.dnsQueries).toEqual(['x.test.']);
+  expect(counts.notable).toEqual([
+    'lo In 127.0.0.11.53 > 127.0.0.1.40000 4321 2/0/0 CNAME a.example., A 192.0.2.1',
+    'eth0 In 1.1.1.1.4 > 2.2.2.2.53 Flags [S], length 0',
+    `eth0 In 2.2.2.2.53 > 1.1.1.1.4 7 1/0/0 TXT ${'t'.repeat(108)}`,
+    'eth0 In 1.1.1.1.4 > 2.2.2.2.443',
+    ...syns.slice(0, 28).map((route) => `eth0 In ${route}`),
+  ]);
+  expect(counts.notableDropped).toBe(2);
+});
+
+const PTR = '35118*$ 2/0/1 PTR host., PTR host.local.';
+const EMBEDDED = '127.0.0.11.53';
+it.each([
+  ['a PTR-only embedded-DNS reply in lo.ptr', 'lo', EMBEDDED, PTR, [1, 1, 0]],
+  ['a PTR reply mixed with A in lo.53', 'lo', EMBEDDED, '7 2/0/0 PTR h., A 192.0.2.1', [0, 2, 0]],
+  ['an A-only reply in lo.53', 'lo', EMBEDDED, '36730 1/0/1 A 104.16.9.34', [0, 2, 0]],
+  ['fewer PTR records than answers in lo.53', 'lo', EMBEDDED, '7 2/0/0 PTR h.', [0, 2, 0]],
+  ['an rcode-flagged PTR reply in lo.53', 'lo', EMBEDDED, '7 NXDomain 1/0/0 PTR h.', [0, 2, 0]],
+  ['a PTR reply from another source in lo.53', 'lo', '127.0.0.1.53', PTR, [0, 2, 0]],
+  ['a PTR reply off loopback in other.53', 'eth0', EMBEDDED, PTR, [0, 1, 1]],
+])('counts %s, apart from the PTR query, and still notes it', (_case, face, from, answer, n) => {
+  const counts = countEgress([
+    `10:00:00.000001 ${face} In IP ${from} > 127.0.0.1.4: ${answer} (60)`,
+    '10:00:00.000002 lo Out IP 127.0.0.1.4 > 127.0.0.11.53: 5+ PTR? 1.0.18.198.in-addr.arpa. (42)',
+  ]);
+
+  expect([counts.lo.ptr, counts.lo['53'], counts.other['53']]).toEqual(n);
+  expect(counts.dnsQueries).toEqual(['1.0.18.198.in-addr.arpa.']);
+  expect(counts.notable).toEqual([`${face} In ${from} > 127.0.0.1.4 ${answer}`]);
 });
 
 const LONG = `10:00:00 garbled ${'y'.repeat(100)}`;

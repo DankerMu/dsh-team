@@ -5612,3 +5612,70 @@ Risk packs (41.1): selected - Release（受信验证工具链换版本）、Lega
 剩余风险：`test:model` 车道的 156 路径只有 `stat` 证据，要等下一次用户授权的 `test:model` 才有运行证据。
 
 Must preserve：`images/browser-verification/Dockerfile` 的基础镜像摘要和 apt 包集合；`CHROME_BIN` 的完整分发校验（`chrome-headless-shell` 文件名、同目录 `deb.deps`、sha256 收据）；浏览器以只读方式挂载、不进镜像；DSH 员工浏览器版本要求文字。
+
+## 45. #608：员工实例 start 阶段出网来源诊断（阻塞 #606 / #409 39.C2b）
+
+依赖：#605（C2a）和 #607（C2a.1）已合并。#606 在确切 head 2eedb31 上的 VPS 运行（invocation `2b9b77a9-ab72-4217-a71f-3d21d47ecdc1`）中，install-dialog start 阶段的抓包计数为 `lo.53=9`、`other.443=3`、`dnsQueries=[]`，门禁 `egress on port 53` 失败。抓包机制在那次运行中已证明可用。代码排查找不到确定来源，原因是证据只有计数。
+
+用户决定（2026-11-12）：先诊断、再在源头修复。门禁保持不变，#606 修好后才合并。
+
+事实：测试网络是普通 bridge（`web-startup-fixture.ts` 的 `createWebNetwork` 不带 `--internal`），Docker 内嵌 DNS 会从宿主侧向上游转发。所以那 9 个 lo 上的 53 端口包，是 DNAT 还原后的应答；查询本身已被改走 53 端口，看不到查询名。
+
+诊断结果（2026-11-12，#606 的确切 head `2a5357b`，VPS custody lane）：
+
+- 8 个 lo 上的 53 端口应答都是 PTR 反查，结果是宿主机名。问的应该是测试 bridge 的网关，也就是浏览器连接的对端，由宿主侧的解析器作答。
+- 1 个 A 记录应答，返回 12 个 `104.16.x.34`，这是 `registry.npmjs.org`。随后向 `104.16.9.34:443` 发起 1 次 TCP 连接，只有 SYN、SYN-ACK 和 1 个出向包，没有 TLS 数据。
+- 覆盖层只配了替身 registry。本地能读到的 DSH 0.2.1-rc.2 发行版里没有硬编码 `registry.npmjs.org`，也没有 DNS 反查调用。`registry.npmjs.org` 是 pnpm/npm 的默认 registry。
+- 详见 #608 的评论。
+
+用户决定（2026-11-12）：
+
+1. 实例的 pnpm/npm 默认 registry 指向受管源，即 `pluginRegistries[0]`，同时关闭 update-notifier；
+2. 对本地网关的 PTR 反查只记录、不拦截。
+
+#606 放不下这些改动：它已有 396 行，fixture 又不允许 `diff-limit-exempt`。所以重新拆分：
+
+- 本节的 45.1 和 45.2 合成一个 PR，先合并。#606 原本带的诊断提交里 `egress-capture.ts` 的部分挪到本 PR；
+- #606 rebase 后，只保留接线、证据白名单和门禁。
+
+- [ ] 45.1 抓包证据保留报头级的「去向」，供诊断使用；门禁和计数口径不变。改动在 `platform/test/egress-capture.ts` 及其测试；证据白名单 `EGRESS_KEYS` 和 `withEgress` 的透传留在 #606。
+  - `countEgress` 新增 `notable: string[]`，只收两类行：
+    - port 53 的非查询行（任何接口）；
+    - 非 lo 的 80/443 行。
+  - 每条的格式为 `<接口> <方向> <源> > <目的>`。port 53 行后面再加上应答摘要：取 `: ` 之后、第一个 ` (` 之前的解码文本，截到 120 字符。
+  - 去重，最多 32 条，超出部分计入 `notableDropped`。
+  - `-s` 由 128 提高到 512。不写原始行，不用 `-w/-A/-X`。
+- [ ] 45.2 源头修复和 PTR 口径：
+  - **产品**：orchestrator 新增一个小模块，按 `pluginRegistries` 生成实例的 registry 环境：
+    - `npm_config_registry=<pluginRegistries[0]>`；
+    - `npm_config_update_notifier=false`。
+
+    `start.ts` 把它并入容器的 `Env`。这是关键路径，PR 写明「human white-box review deferred to Epic #380 completion, not passed」。`start.test.ts` 已有 799 行，所以新测试放在新模块自己的测试文件里，`start.ts` 的接线由已有的 Env 断言覆盖或做最小更新。
+
+  - **测试 fixture**：`managed-policy-fixture.ts` 的 `startWeb` 用同一个函数，按覆盖层的 `pluginRegistries` 生成容器环境。这样 Docker 用例跑的就是产品的环境，不是手抄的副本。覆盖层输入由调用方传入。
+  - **PTR 口径**：`countEgress` 把一类行从 `lo['53']` 移出，计入新计数 `lo.ptr`：在 lo 上、源为 `127.0.0.11.53`、非查询、应答记录全部是 PTR（至少一条，没有 A/AAAA/CNAME 或其他类型）。这类行照样进 `notable`。其他 53 端口的行仍计入 `lo['53']`/`other['53']`，门禁文本不变。
+  - **验证**：
+    - 新模块和 PTR 分类先红后绿；
+    - `pnpm check`；
+    - 本 PR 的确切 head lane 证明没有回归，因为 main 上还没有抓包调用方；
+    - #606 rebase 后的确切 head lane 中，install-dialog 的 start 和 restart 都通过门禁：`dnsQueries` 为空、`lo['53']+other['53']=0`、非 lo 的 80/443 为 0、金丝雀至少 1 个；`lo.ptr` 如实记录。
+  - 如果设置默认 registry 后，npmjs 的出网仍然存在，就停下来回到用户，不放宽门禁。
+
+Suggested fixture level: expanded - 产品容器环境变更（关键路径）加证据口径调整
+Minimal mergeable slice: 45.1 和 45.2 合成一个 PR，先于 #606 合并
+Risk packs (45.x): selected：
+
+- Security：证据只有报头和 DNS 记录摘要；registry 地址不是秘密。
+- Config：实例环境新增两个变量，取值来自已校验的平台设置。
+- Legacy compatibility：
+  - C2a/C2a.1 的拒绝和计数规则不变，只把 PTR-only 应答从 `lo['53']` 移到 `lo.ptr`；
+  - 现有实例在下次启动时获得新环境，这和其他 Env 字段一致。
+
+not selected - Schema、Auth、Public API、Concurrency、Migration、Resource limits。
+
+Must preserve：
+
+- C2a/C2a.1 的全部拒绝规则、`captured` 对账和 ESRCH 收尾；
+- `dnsQueries` 的语义；
+- 门禁的顺序和文本；
+- 容器 `Env` 里已有的各项，以及它们的取值和顺序。

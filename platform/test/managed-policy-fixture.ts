@@ -27,7 +27,11 @@ import { isolatedBrowserRuntime, rescueChrome } from '../../scripts/probe-browse
 import type { BrowserRuntime } from '../../scripts/probe-browser-runtime.mjs';
 import { createWebNetwork, runWebStartup, webAddress } from './web-startup-fixture.ts';
 import type { WebNetwork } from './web-startup-fixture.ts';
-import { extractLaunchToken, instanceAddressLayout } from '../src/orchestrator/index.ts';
+import {
+  extractLaunchToken,
+  instanceAddressLayout,
+  registryEnvironment,
+} from '../src/orchestrator/index.ts';
 import { rejectPluginFailures } from './plugin-failure-markers.ts';
 import {
   createManagedPolicyEvidence,
@@ -336,13 +340,20 @@ export async function collectComposition(
   );
 }
 
+/** A written overlay and the registries it was generated from, which also set the start's env. */
+interface PublishedOverlay {
+  path: string;
+  pluginRegistries: readonly string[];
+}
+
 export async function publishOverlay(
   directory: string,
   composition: ManagedComposition,
   apiKeyConfigured: boolean,
   network: WebNetwork,
   settings: Partial<typeof MIGRATION_OVERLAY_SETTINGS> = {},
-): Promise<string> {
+): Promise<PublishedOverlay> {
+  const overlay = { ...migrationOverlayInput(composition), ...settings };
   const generated = generateManagedConfig({
     admin: false,
     instanceAddress: webAddress(network),
@@ -354,23 +365,28 @@ export async function publishOverlay(
       defaultModel: 'beta',
     },
     defaultPermissionTier: 'yolo',
-    ...migrationOverlayInput(composition),
-    ...settings,
+    ...overlay,
     // After the spread, replacing its null: stands in for PLATFORM_PORT (knowledgeBaseLoaded).
     platformPort: 8080,
   });
   if (generated.outcome !== 'configured') {
     throw new Error('Managed policy generation returned no document');
   }
-  return writeManagedConfig(directory, USER_ID, generated.content);
+  const path = await writeManagedConfig(directory, USER_ID, generated.content);
+  return { path, pluginRegistries: overlay.pluginRegistries };
 }
 
-async function publishTransportOverlay(directory: string, network: WebNetwork): Promise<string> {
-  return writeManagedConfig(
+/** The control's settings stay the migration-5 ones; only its overlay drops the managed policy. */
+async function publishTransportOverlay(
+  directory: string,
+  network: WebNetwork,
+): Promise<PublishedOverlay> {
+  const path = await writeManagedConfig(
     directory,
     'managedctrl1',
     JSON.stringify([{ id: 'webserver', config: { host: webAddress(network), port: 3080 } }]),
   );
+  return { path, pluginRegistries: MIGRATION_OVERLAY_SETTINGS.pluginRegistries };
 }
 
 function parseObservation(text: string): unknown {
@@ -515,7 +531,7 @@ export async function qualifyHostSession(
 async function startWeb(
   lifecycle: UserImageLifecycle,
   name: string,
-  overlay: string,
+  overlay: PublishedOverlay,
   network: WebNetwork,
   remaining: () => number,
   evidence: ManagedPolicyEvidence,
@@ -537,11 +553,12 @@ async function startWeb(
       runId: lifecycle.runId,
       stateVolume: lifecycle.stateVolume,
       workVolume: lifecycle.workVolume,
-      overlay,
+      overlay: overlay.path,
       seccomp: lifecycle.seccomp,
       network,
       trustedHost: HOSTNAME,
-      env: { [API_KEY_ENV]: API_KEY_VALUE },
+      // The product's registry env for the overlay's registries (#608), not a hand copy.
+      env: { [API_KEY_ENV]: API_KEY_VALUE, ...registryEnvironment(overlay.pluginRegistries) },
     }),
   );
   const hostPort = requirePort(summary);
@@ -588,7 +605,7 @@ async function prepareState(
   plugin: string,
 ): Promise<{
   composition: ManagedComposition;
-  overlay: string;
+  overlay: PublishedOverlay;
   network: WebNetwork;
   seedHash: string;
 }> {
@@ -642,7 +659,7 @@ function assertPluginsLoaded(
 
 export async function acceptManaged(
   lifecycle: UserImageLifecycle,
-  overlay: string,
+  overlay: PublishedOverlay,
   network: WebNetwork,
   remaining: () => number,
   runtime: BrowserRuntime,

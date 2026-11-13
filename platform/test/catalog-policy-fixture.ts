@@ -221,7 +221,7 @@ export async function runCatalogPolicyScenario(lifecycle: UserImageLifecycle): P
         webToolsEnabled,
         pluginCatalog: PLUGIN_CATALOG,
       });
-      const published = sha256(overlay);
+      const published = sha256(overlay.path);
       const accepted = await acceptManaged(
         lifecycle,
         overlay,
@@ -236,7 +236,7 @@ export async function runCatalogPolicyScenario(lifecycle: UserImageLifecycle): P
         CATALOG_PLUGIN_PAGE,
       );
       // The overlay is mounted read-only: this only shows the start ran on the published bytes.
-      if (sha256(overlay) !== published) throw new Error(`${INVALID}: overlay changed`);
+      if (sha256(overlay.path) !== published) throw new Error(`${INVALID}: overlay changed`);
       requireOverlayState(accepted.observation);
       await requireSeedSelection(lifecycle, `${prefix}-${label}`);
       return stageSummary(accepted.observation, accepted.browser);
