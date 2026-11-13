@@ -27,6 +27,7 @@ import {
   volumeProbe,
 } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
+import type { DockerCommandResult } from './docker-command.ts';
 import { lifecycleWebNetwork, qualifyHostSession } from './managed-policy-fixture.ts';
 import {
   completeOwnedTurn,
@@ -38,6 +39,7 @@ import {
   sessionEvents,
 } from './owned-completion-fixture.ts';
 import type { SessionRpc } from './owned-completion-fixture.ts';
+import { runOneShot } from './one-shot-container.ts';
 import { profileSeedOracle, profileSeedScript } from './profile-seed-fixture.ts';
 import { STAGE1_PLUGIN_CONTEXTS, userImageBuildArgs } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -61,14 +63,30 @@ function stage1Token(logs: string): string | undefined {
 }
 
 /** Failures report only the verb, exit facts and timing: args and output may carry credentials. */
+function failure(verb: string, result: DockerCommandResult, elapsed: number, timeout: number) {
+  return new Error(
+    `Volume upgrade Docker ${verb} failed (status ${String(result.status)}, signal ${result.signal ?? 'null'}, ${String(elapsed)}ms of ${String(timeout)}ms)`,
+  );
+}
+
 function docker(lifecycle: UserImageLifecycle, args: string[], timeout = 30_000): string {
   const started = performance.now();
   const result = lifecycle.command(args, timeout);
   const elapsed = Math.round(performance.now() - started);
   if (result.status !== 0 || result.error !== undefined)
-    throw new Error(
-      `Volume upgrade Docker ${args[0] ?? 'operation'} failed (status ${String(result.status)}, signal ${result.signal ?? 'null'}, ${String(elapsed)}ms of ${String(timeout)}ms)`,
-    );
+    throw failure(args[0] ?? 'operation', result, elapsed, timeout);
+  return result.stdout;
+}
+
+// One-shot failures keep the replaced foreground command's verb.
+const ONE_SHOT_VERB = 'run';
+
+/** Elapsed spans the four CLI calls, so it may exceed the `wait` bound. */
+function oneShot(lifecycle: UserImageLifecycle, args: string[], timeout = 30_000): string {
+  const started = performance.now();
+  const result = runOneShot(lifecycle.command, args, timeout);
+  if (result.status !== 0 || result.error !== undefined)
+    throw failure(ONE_SHOT_VERB, result, Math.round(performance.now() - started), timeout);
   return result.stdout;
 }
 
@@ -102,9 +120,7 @@ function buildStage1Image(lifecycle: UserImageLifecycle, sources: string): strin
   if (!/^sha256:[a-f0-9]{64}$/.test(imageId)) throw new Error('Stage-1 image identity missing');
   const probe = `dsh-team-test-${lifecycle.runId}-legacy-version`;
   lifecycle.registerContainer(probe);
-  const version = docker(lifecycle, [
-    'run',
-    '--rm',
+  const version = oneShot(lifecycle, [
     '--name',
     probe,
     '--label',
@@ -133,9 +149,7 @@ function initializeStage1Volumes(lifecycle: UserImageLifecycle, userId: string, 
   }
   const init = `dsh-team-test-${lifecycle.runId}-legacy-init`;
   lifecycle.registerContainer(init);
-  docker(lifecycle, [
-    'run',
-    '--rm',
+  oneShot(lifecycle, [
     '--name',
     init,
     '--label',
@@ -288,11 +302,9 @@ function skippedBeforeReset(lifecycle: UserImageLifecycle): Record<string, unkno
   lifecycle.registerContainer(name);
   return record(
     JSON.parse(
-      docker(
+      oneShot(
         lifecycle,
         [
-          'run',
-          '--rm',
           '--name',
           name,
           '--label',

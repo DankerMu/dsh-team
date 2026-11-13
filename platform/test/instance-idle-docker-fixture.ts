@@ -19,6 +19,7 @@ import {
   startupClient,
 } from './container-start-docker-fixture.ts';
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
+import { runOneShotAsync } from './one-shot-container.ts';
 import { runUserImage } from './user-image-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -39,6 +40,14 @@ export interface DockerIdleContext {
 }
 
 type IdleDockerCommand = (args: readonly string[], timeout?: number) => Promise<string>;
+
+/** Judged like the idle `command` wrapper; reads `commandAsync` at call time, as tests replace it. */
+async function oneShot(lifecycle: UserImageLifecycle, args: readonly string[]): Promise<string> {
+  const result = await runOneShotAsync(lifecycle.commandAsync, args, 30_000);
+  if (result.status !== 0 || result.error !== undefined)
+    throw new Error('Owned idle Docker operation failed');
+  return result.stdout.trim();
+}
 
 export async function waitDockerIdle(predicate: () => boolean | Promise<boolean>): Promise<void> {
   // Real deadline remains independent of the controlled platform Date.now policy clock.
@@ -73,9 +82,7 @@ async function installOwnedAdapter(
     ? "writeFileSync('/data/home/issue59-state.txt','idle state survives\\n'); writeFileSync('/data/work/issue59-work.txt','idle work survives\\n');"
     : '';
   const script = `import {writeFileSync} from 'node:fs'; writeFileSync('/data/home/issue83-ui-owned-protocol.mjs',${JSON.stringify(source)},{mode:0o644}); ${markers}`;
-  await command([
-    'run',
-    '--rm',
+  await oneShot(lifecycle, [
     '--name',
     helper,
     '--network',
@@ -144,9 +151,7 @@ async function verifyIdleVolumes(
     'dsh-team.test-run': lifecycle.runId,
   });
   expect(
-    await command([
-      'run',
-      '--rm',
+    await oneShot(lifecycle, [
       '--name',
       helper,
       '--network',

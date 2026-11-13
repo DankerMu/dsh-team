@@ -18,6 +18,7 @@ import {
   startupClient,
 } from './container-start-docker-fixture.ts';
 import { isAbsentResource } from './docker-command.ts';
+import { runOneShot } from './one-shot-container.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 type FailureWindow = 'response' | 'inspection';
@@ -85,8 +86,6 @@ print(json.dumps({'effectiveUid': os.geteuid(), 'home': home.read_bytes().decode
     const name = `dsh-team-test-recovery-${operation}-${userId}-${lifecycle.runId}`;
     lifecycle.registerResource('container', name, { 'dsh-team.test-run': lifecycle.runId });
     args = [
-      'run',
-      '--rm',
       '--name',
       name,
       '--network',
@@ -103,7 +102,10 @@ print(json.dumps({'effectiveUid': os.geteuid(), 'home': home.read_bytes().decode
       script,
     ];
   }
-  const result = lifecycle.command(args, 30_000);
+  const result =
+    runningId === undefined
+      ? runOneShot(lifecycle.command, args, 30_000)
+      : lifecycle.command(args, 30_000);
   if (result.status !== 0 || result.error !== undefined)
     throw new Error('Independent uid1001 marker observation failed');
   expect(JSON.parse(result.stdout)).toEqual(MARKERS);
