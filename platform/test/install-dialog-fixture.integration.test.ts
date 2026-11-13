@@ -58,6 +58,7 @@ const LINE = {
   query: '10:00:00.000004 eth0  Out IP 198.18.0.18.41003 > 198.18.0.17.53: 1+ A? x.test. (24)',
   dnsSyn: '10:00:00.000005 eth0  Out IP 198.18.0.18.41004 > 198.18.0.17.53: Flags [S], length 0',
   http: '10:00:00.000006 eth0  Out IP 198.18.0.18.41005 > 104.16.0.1.80: Flags [S], length 0',
+  ptr: '10:00:00.000007 lo    In  IP 127.0.0.11.53 > 127.0.0.1.41006: 7*$ 1/0/0 PTR h. (60)',
 };
 const INSTANCE = 'dsh-team-test-run1-start';
 
@@ -153,6 +154,17 @@ it('captures from the started instance, fires the gateway canary and gates the c
     ...{ notable: [], notableDropped: 0 },
     ...{ attachMs: expect.any(Number) as unknown, tcpdumpPid: 701, exited: 'ESRCH' },
   });
+  expect(recorded).toEqual([{ restartEgress: egress }]);
+});
+
+it('passes a start whose only port-53 traffic is a PTR-only embedded-DNS reply', async () => {
+  const { run, recorded } = fakeEgress([LINE.ptr]);
+
+  const { egress } = await run(() => Promise.resolve('accepted'));
+
+  expect([egress.lo.ptr, egress.lo['53'], egress.other['53'], egress.other['9']]).toEqual([
+    1, 0, 0, 1,
+  ]);
   expect(recorded).toEqual([{ restartEgress: egress }]);
 });
 

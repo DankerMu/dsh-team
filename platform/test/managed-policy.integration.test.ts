@@ -771,18 +771,18 @@ it('retains per-start egress counts without any packet text', async () => {
   const runId = 'egress-evidence';
   await withReviewedHead(() => {
     const evidence = createManagedPolicyEvidence({ runId, imageId: IMAGE_ID });
-    const counts = { lo: { '53': 0, '80': 0, '443': 0, '9': 1 }, notable: ['a > b'], attachMs: 4 };
-    const egress = { ...counts, other: counts.lo, dnsQueries: [], notableDropped: 1, captured: 1 };
+    const other = { '53': 0, '80': 0, '443': 0, '9': 1 };
+    const counts = { lo: { ...other, ptr: 2 }, other, notable: ['a > b'], attachMs: 4 };
+    const egress = { ...counts, dnsQueries: [], notableDropped: 1, captured: 1 };
     try {
       evidence.record({
         startEgress: { ...egress, tcpdumpPid: 701, exited: 'ESRCH', line: 'must-not-retain' },
-        restartEgress: egress,
+        restartEgress: { ...egress, lo: { ...counts.lo, line: 'must-not-retain' } },
       });
       const retained = JSON.parse(readFileSync(evidence.path, 'utf8')) as Record<string, unknown>;
       expect(retained).toEqual({
         ...{ imageId: IMAGE_ID, runId, reviewedHead: REVIEWED_HEAD },
-        startEgress: { ...egress, tcpdumpPid: 701, exited: 'ESRCH' },
-        restartEgress: egress,
+        ...{ startEgress: { ...egress, tcpdumpPid: 701, exited: 'ESRCH' }, restartEgress: egress },
       });
       return Promise.resolve();
     } finally {
