@@ -17,9 +17,12 @@ const LISTEN_MS = 15_000;
 const CLOSE_MS = 15_000;
 
 export interface EgressCounts {
-  lo: PortCounts;
+  /** `ptr`: Docker embedded-DNS replies whose answers are all PTR, counted apart from `53`. */
+  lo: PortCounts & { ptr: number };
   other: PortCounts;
   dnsQueries: string[];
+  notable: string[];
+  notableDropped: number;
 }
 interface EgressEvidence extends EgressCounts {
   tcpdumpPid: number;
@@ -64,10 +67,38 @@ const LIVE: Boundary = {
 
 function emptyCounts(): EgressCounts {
   const zero = (): PortCounts => ({ '53': 0, '80': 0, '443': 0, '9': 0 });
-  return { lo: zero(), other: zero(), dnsQueries: [] };
+  const lo = { ...zero(), ptr: 0 };
+  return { lo, other: zero(), dnsQueries: [], notable: [], notableDropped: 0 };
 }
 
 const port = (address: string): string => address.slice(address.lastIndexOf('.') + 1);
+
+/** A port-53 non-query or off-loopback 80/443 line's header tokens (+ its decoded DNS text). */
+function note(counts: EgressCounts, fields: string[], matched: string, query?: string): void {
+  const [face, direction, source, target, rest = ''] = fields;
+  const dns = matched === '53';
+  if (query !== undefined || (!dns && (face === 'lo' || matched === '9'))) return;
+  const answer = dns ? ` ${(rest.split(' (', 1)[0] ?? '').slice(0, 120)}` : '';
+  const entry = `${String(face)} ${String(direction)} ${String(source)} > ${String(target)}${answer}`;
+  if (counts.notable.includes(entry)) return;
+  if (counts.notable.length < 32) counts.notable.push(entry);
+  else counts.notableDropped += 1;
+}
+
+/** tcpdump's reply summary `<id><flags> <an>/<ns>/<ar> <answers> (<length>)`: every answer PTR. */
+function ptrOnly(rest: string): boolean {
+  const [, count, answers = ''] = /^\d+\*?-?\|?\$? (\d+)\/\d+\/\d+ (.+) \(\d+\)$/.exec(rest) ?? [];
+  const records = answers.split(', ');
+  return records.length === Number(count) && records.every((r) => /^PTR [^\s,]+$/.test(r));
+}
+
+/** Docker's embedded DNS answering on lo with PTR records only goes to `lo.ptr`, else face × port. */
+function tally(counts: EgressCounts, fields: string[], matched: keyof PortCounts, query?: string) {
+  const [face, source, rest = ''] = fields;
+  const embedded = matched === '53' && face === 'lo' && source === '127.0.0.11.53';
+  if (embedded && query === undefined && ptrOnly(rest)) counts.lo.ptr += 1;
+  else counts[face === 'lo' ? 'lo' : 'other'][matched] += 1;
+}
 
 /** A rejected line's distinct C0 and DEL code points, e.g. ` (control U+000D)` for a pty's CR. */
 function controls(line: string): string {
@@ -87,8 +118,8 @@ function header(line: string): string {
 }
 
 /**
- * Counts packet lines by loopback or not × filter port; a port-53 line keeps only its query name.
- * A line of any other shape fails instead of being bucketed; the counts retain no line text, the
+ * Counts packet lines by loopback or not × filter port, keeps DNS query names, `note`s the rest.
+ * A line of any other shape fails instead of being bucketed; the counts retain no payload, the
  * failure names only the line's header tokens (or `header` prefix) and `controls`.
  */
 export function countEgress(lines: readonly string[], counts = emptyCounts()): EgressCounts {
@@ -100,9 +131,10 @@ export function countEgress(lines: readonly string[], counts = emptyCounts()): E
       const tokens = `${face} ${String(direction)} ${String(ip)} ${source} > ${target}`;
       throw new Error(`${INVALID}: unparseable packet line ${tokens}${controls(line)}`);
     }
-    counts[face === 'lo' ? 'lo' : 'other'][matched] += 1;
     const query = matched === '53' ? / \S+\? (\S+) /.exec(` ${rest}`)?.[1] : undefined;
+    tally(counts, [face, source, rest], matched, query);
     if (query !== undefined && !counts.dnsQueries.includes(query)) counts.dnsQueries.push(query);
+    note(counts, [face, String(direction), source, target, rest], matched, query);
   }
   return counts;
 }
@@ -159,7 +191,7 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   const child = boundary.spawn([
     ...['/usr/bin/sudo', '-n', '/usr/bin/timeout', '-k', '5', `${String(target.boundSeconds)}s`],
     ...['/usr/bin/nsenter', '-t', String(target.pid), '-n', '/usr/bin/tcpdump', '-i', 'any'],
-    ...['-nn', '-l', '-s', '128', 'port 53 or port 80 or port 443 or udp port 9'],
+    ...['-nn', '-l', '-s', '512', 'port 53 or port 80 or port 443 or udp port 9'],
   ]);
   const counts = emptyCounts();
   const listening = Promise.withResolvers<string>();

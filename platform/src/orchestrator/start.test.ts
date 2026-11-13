@@ -124,6 +124,7 @@ it('starts the captured image with one readonly generated overlay, owned mounts 
       'DMXAPI_KEY=fixture-private-key',
       `DSH_TEAM_ONLYOFFICE_FILE_SECRET=${fileTokenSecret(daemon.requests)}`,
       `DSH_TEAM_INSTANCE_TOKEN=${instanceToken(daemon.requests)}`,
+      ...['npm_config_registry=https://registry.npmjs.org/', 'npm_config_update_notifier=false'],
     ],
     Cmd: [
       'dsh',
