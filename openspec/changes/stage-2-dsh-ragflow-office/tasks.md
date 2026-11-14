@@ -5823,7 +5823,7 @@ Must preserve：
 - [ ] 48.1 新增 `platform/test/office-hints-stack-fixture.ts`，导出 `officeHintsScenario(lane: ArchiveLane): Promise<OfficeHintsEvidence>`，写法照 `legacy-preview-stack-fixture.ts`：
   - 用 `withWorkFiles` 包住整个场景，结束时删除文件。
   - 以 uid 1001 在实例里用 python-docx 写一个只有一段文字的 `/data/work/同写提示.docx`（先例见 `office-convert-fixture.ts:63-66`），参数经 argv 传入，不经 shell。写完由实例读回字节数和 sha256。
-  - 打开浏览器之前，先在实例里用 `lane.exec` 轮询 `http://127.0.0.1:3080/sidebar/onlyoffice/ds/healthcheck`，直到返回 `true`，以 `session.timeout` 为上限。这样 Document Server 冷启动时的 502 不会落进浏览器的计数。如果信任检查拒绝这种调用，就停下回报。
+  - 打开浏览器之前，先在实例里用 `lane.exec` 轮询 Document Server 的 healthcheck（`/sidebar/onlyoffice/ds/healthcheck`），直到返回 `true`，以 `session.timeout` 为上限。实例内 3080 只在 base+2 地址上应答，回环地址上没有服务（`platform/src/managed-config/README.md:13`），所以连实例自己的地址，并带 `Host: 127.0.0.1:3080`，写法同 `onlyoffice-token-fixture.ts:50,250`。403 立即失败；502、503 和连接错误继续轮询。这样 Document Server 冷启动时的 502 不会落进浏览器的计数。如果信任检查拒绝这种调用，就停下回报。
   - 在 `workbenchSession` 的落地页（空白会话）里，用 `showSidebarRows`/`rowQuery` 打开这个文件，然后：
     - 等到 `[data-dsh-team-office-hint="collab"]` 出现，断言它的文本逐字等于 F40 原文 `请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。`；
     - 断言页面上没有 `[data-dsh-team-office-hint="no-session"]`，也没有「Office 编辑器未加载」文案；
@@ -5840,6 +5840,12 @@ Must preserve：
     - 实例里文件的字节数和 sha256 不变（只打开、不编辑，不应该有保存回调写回）；
     - provider 计数不变（`providerCounts`），没有模型请求和检索。
   - 浏览器证据和其他场景一样：零控制台错误、零页面错误、零失败请求、零对外请求。Document Server 编辑器 iframe 里的请求和控制台输出也计入（Playwright 的事件包含子 frame），例如资源 404、`ws` 升级失败、轮询被中止。Document Server 加载时如果出现任何一项，就停下回报，不放宽断言。
+  - 唯一的例外（实测后用户决定，2026-11-14）：Document Server 9.4 的编辑器会注册一个缓存用的 ServiceWorker，网关按既定设计对带 `Service-Worker` 头的请求一律回 403，不转发（`platform/src/gateway/README.md:9`：所有员工实例共用平台源）。所以本场景的 `consoleErrors` 必须恰好是下面两条，按顺序；多一条、少一条或内容不同都失败：
+    - `A bad HTTP response code (403) was received when fetching the script.`
+    - `Registration failed with TypeError: Failed to register a ServiceWorker for scope ('<平台源>/sidebar/onlyoffice/ds/<版本段>/') with script ('<平台源>/sidebar/onlyoffice/ds/<版本段>/document_editor_service_worker.js'): A bad HTTP response code (403) was received when fetching the script.`
+
+    其中 `<平台源>` 等于本次运行的平台 base，`<版本段>` 是 scope 和 script 共用的同一个路径段，不含 `/`。页面错误、失败请求和对外请求仍然必须是 0。
+
   - 读回在 `workbenchSession` 关闭浏览器之后进行，不额外等待。只打开不编辑时，Document Server 只发 status 4（关闭、无改动），不会写回。字节数或 sha256 变了就失败。
 - [ ] 48.2 接线和测试：
   - `platform-stack.stack.test.ts` 在 `legacyPreviewScenario` 之后调用 `officeHintsScenario(lane)`，并把 evidence 打印进 `stackEvidence.officeHints`：文件名、字节数、sha256、提示原文、截图名。断言都放在夹具里。

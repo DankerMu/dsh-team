@@ -5,6 +5,8 @@ export declare function rowQuery(name: string): string;
 export declare function explorerReselect(name: string): string;
 export declare const EXPAND_BUTTON: string;
 export declare const FILES_GUIDE: string;
+/** In-page function source `(el) => boolean`: laid out and not inside a hidden subtree. */
+export declare const visible: string;
 
 /**
  * In-page JS expressions over DSH's document preview of one file, evaluated by value. The
