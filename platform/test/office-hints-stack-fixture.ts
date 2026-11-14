@@ -1,11 +1,11 @@
-import type { Page } from '@playwright/test';
+import type { ConsoleMessage, Page } from '@playwright/test';
 import { expect } from 'vitest';
 import { previewOutcome, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
 import type { PreviewOutcome } from './better-sidebar-browser-fixture.mjs';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
-import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
+import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
 const NAME = '同写提示.docx';
 const PARAGRAPH = '同写提示探针：只打开，不编辑。';
@@ -52,14 +52,10 @@ except Exception as e:
     print(json.dumps({"status": 0, "body": type(e).__name__}))`;
 export const HEALTH_COMMAND = ['python3', '-c', HEALTH];
 
+type Hint = Record<'kind' | 'text', string | null> & Record<'visible' | 'nativeHost', boolean>;
 /** What the page shows of the hints and the wrapped editor; iframe paths carry no query. */
 interface OfficeFacts {
-  readonly hints: readonly {
-    kind: string | null;
-    text: string | null;
-    visible: boolean;
-    nativeHost: boolean;
-  }[];
+  readonly hints: readonly Hint[];
   readonly frames: number;
   readonly iframes: readonly { visible: boolean; sameOrigin: boolean; path: string }[];
   readonly texts: readonly string[];
@@ -120,53 +116,64 @@ export function officeHintsLine(evidence: OfficeHintsEvidence | undefined) {
   return { ...file, hint, screenshots: browser.screenshots };
 }
 
-/** Opens the file from the landing session's file area and checks the hinted editor mounted. */
-async function openHinted(page: Page, shoot: (name: string) => Promise<void>, timeout: number) {
+/** `until`, failing with `message` and the last observation `seen()`, the wait's error as cause. */
+const untilSeen = (seen: () => unknown, ...[check, timeout, message]: Parameters<typeof until>) =>
+  until(check, timeout, message).catch((cause: unknown) => {
+    throw new Error(`${message} ${JSON.stringify(seen())}`, { cause });
+  });
+
+type Shoot = (name: string) => Promise<void>;
+
+/**
+ * Opens the file from the landing session's file area, waits for the hinted editor and then for
+ * the ServiceWorker refusal, which ONLYOFFICE logs after its `ready` phase, and checks the page.
+ */
+async function openHinted(page: Page, shoot: Shoot, { base, timeout }: StackSession) {
   await until(() => showSidebarRows(page, [NAME]), timeout, `office hints ${NAME} row`);
   const row = await element(page, rowQuery(NAME));
   if (row === null) throw new Error(`Office hints ${NAME} row missing`);
-  await row.click();
+  // The text workbenchSession records for an error-type console message.
+  const errors: string[] = [];
+  const record = (message: ConsoleMessage) =>
+    message.type() === 'error' && errors.push(message.text());
+  page.on('console', record);
   let facts: OfficeFacts | undefined;
   const settled = async () => {
     facts = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
     return editorSettled(facts);
   };
-  await until(settled, timeout, 'office hints editor').catch((error: unknown) => {
-    throw new Error(`Office hints editor never settled, last seen ${JSON.stringify(facts)}`, {
-      cause: error,
-    });
-  });
-  if (facts === undefined) throw new Error('Office hints page never read');
+  const refused = () => Promise.resolve(serviceWorkerRefused(errors, base));
+  try {
+    await row.click();
+    await untilSeen(() => facts, settled, timeout, 'Office hints editor never settled, last seen');
+    await untilSeen(() => errors, refused, timeout, 'ServiceWorker refusal not logged, collected');
+  } finally {
+    page.off('console', record);
+  }
+  const final = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
   const native = await page.evaluate<PreviewOutcome>(previewOutcome(OFFICE_PREVIEW, NAME));
   await shoot('office-hints-collab');
-  const seen = JSON.stringify(facts);
+  const seen = JSON.stringify(final);
   const hint = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };
-  expect(facts.hints, `Office hints, seen ${seen}`).toEqual([hint]);
-  expect(facts.texts, 'ONLYOFFICE loading or failure text').toEqual([]);
-  const shown = facts.iframes.filter((frame) => frame.visible);
-  const mounted = shown.map(({ sameOrigin, path }) => ({
-    sameOrigin,
-    proxy: path.startsWith(MOUNT),
-  }));
-  expect(mounted, `Editor iframes, seen ${seen}`).toEqual([{ sameOrigin: true, proxy: true }]);
+  expect(final.hints, `Office hints, seen ${seen}`).toEqual([hint]);
+  expect(final.texts, 'ONLYOFFICE loading or failure text').toEqual([]);
+  // [sameOrigin, on the proxy path] of every visible iframe in the wrapper.
+  const shown = final.iframes.filter((frame) => frame.visible);
+  const mounted = shown.map(({ sameOrigin, path }) => [sameOrigin, path.startsWith(MOUNT)]);
+  expect(mounted, `Editor iframes, seen ${seen}`).toEqual([[true, true]]);
   expect(native.state, "DSH's own Office preview").toBeNull();
-  return COLLAB;
 }
 
 /** Waits for the Document Server through the instance's proxy, so a cold 502 never reaches the browser. */
 async function documentServerReady({ exec, session }: ArchiveLane) {
-  let seen: unknown = 'never polled';
+  let seen = { status: 0, body: 'never polled' };
   const healthy = async () => {
-    const health = JSON.parse(await exec(HEALTH_COMMAND)) as { status: number; body: string };
-    seen = health;
-    if (health.status === 403) throw new Error('Refused by the ONLYOFFICE trust fence');
-    return health.status === 200 && health.body === 'true';
+    seen = JSON.parse(await exec(HEALTH_COMMAND)) as typeof seen;
+    if (seen.status === 403) throw new Error('Refused by the ONLYOFFICE trust fence');
+    return seen.status === 200 && seen.body === 'true';
   };
-  await until(healthy, session.timeout, 'Document Server healthcheck').catch((error: unknown) => {
-    throw new Error(`Document Server healthcheck not true, last ${JSON.stringify(seen)}`, {
-      cause: error,
-    });
-  });
+  const message = 'Document Server healthcheck not true, last';
+  await untilSeen(() => seen, healthy, session.timeout, message);
 }
 
 /** The write, the browser session and every check of the lane; cleanup is the caller's. */
@@ -178,11 +185,10 @@ async function officeHints(lane: ArchiveLane): Promise<OfficeHintsEvidence> {
   expect(file.name).toBe(NAME);
   expect(file.size).toBeGreaterThan(0);
   await documentServerReady(lane);
-  let hint: string | undefined;
   const names = { label: 'office hints', failure: 'office-hints-failure' };
-  const browser = await workbenchSession(session, names, async (page, shoot) => {
-    hint = await openHinted(page, shoot, session.timeout);
-  });
+  const browser = await workbenchSession(session, names, (page, shoot) =>
+    openHinted(page, shoot, session),
+  );
   // Opened, never edited: the Document Server closes with status 4 and writes nothing back.
   const after: unknown = JSON.parse(await exec(docxCommand()));
   expect(after, 'Office hints file unchanged by opening it').toEqual(file);
@@ -197,8 +203,8 @@ async function officeHints(lane: ArchiveLane): Promise<OfficeHintsEvidence> {
     failedRequests: [],
     externalRequests: [],
   });
-  if (hint === undefined) throw new Error('Office hints hint missing');
-  return { browser, file, hint };
+  // openHinted asserted the shown hint verbatim.
+  return { browser, file, hint: COLLAB };
 }
 
 /**

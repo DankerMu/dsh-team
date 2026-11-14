@@ -105,6 +105,7 @@ it.each([
     false,
     [FETCH, register(BASE, VERSION, '9.4.1-x/document_editor_service_worker.js')],
   ],
+  ['an empty segment', false, [FETCH, register(BASE, '', '/document_editor_service_worker.js')]],
   [
     'a segment holding a slash',
     false,
