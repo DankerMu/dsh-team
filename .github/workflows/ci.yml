@@ -22,6 +22,8 @@ permissions:
 env:
   HURL_VERSION: "8.0.1"
   GITLEAKS_VERSION: "8.30.1"
+  SHELLCHECK_VERSION: "0.10.0"
+  SHELLCHECK_SHA256: "6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87"
 
 jobs:
   layer1-fast-checks:
@@ -37,6 +39,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm fmt:check
+      - name: Install shellcheck
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          sudo tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C /usr/local/bin --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION}"
       - run: pnpm lint
       - run: pnpm typecheck
 
@@ -177,6 +186,13 @@ jobs:
           curl -fsSL --retry 3 \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" |
             sudo tar -xz -C /usr/local/bin gitleaks
+      - name: Install shellcheck
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum -c -
+          sudo tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C /usr/local/bin --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION}"
       - run: pnpm test:guardrails
 
   docker-evidence:
