@@ -79,9 +79,35 @@ function ownedDelegation(value: unknown): { childMarker: string; question: strin
     throw new Error('Invalid owned model configuration');
   return { childMarker: value.childMarker, question: value.question };
 }
+/**
+ * Optional nonsecret read-back script: exactly `{ marker, command, nonce }`, non-empty strings.
+ * A marked turn without the nonce calls `bash` once; a tool message carrying the nonce is a hit.
+ */
+function ownedReadBack(
+  value: unknown,
+): { marker: string; command: string; nonce: string } | undefined {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Object.keys(value).sort().join() !== 'command,marker,nonce' ||
+    !('marker' in value) ||
+    typeof value.marker !== 'string' ||
+    value.marker === '' ||
+    !('command' in value) ||
+    typeof value.command !== 'string' ||
+    value.command === '' ||
+    !('nonce' in value) ||
+    typeof value.nonce !== 'string' ||
+    value.nonce === ''
+  )
+    throw new Error('Invalid owned model configuration');
+  return { marker: value.marker, command: value.command, nonce: value.nonce };
+}
 const hold = ownedHold('hold' in config ? config.hold : undefined);
 const delegation = ownedDelegation('delegation' in config ? config.delegation : undefined);
 const forbidden = ownedForbidden('forbidden' in config ? config.forbidden : undefined);
+const readBack = ownedReadBack('readBack' in config ? config.readBack : undefined);
 /** Held answers, released together by `POST /release`; at most one request is ever held. */
 const heldAnswers: (() => void)[] = [];
 let holding = hold !== undefined;
@@ -89,6 +115,8 @@ let forbiddenRequests = 0;
 
 let delegations = 0;
 let searches = 0;
+let readBacks = 0;
+let readBackHits = 0;
 let markedRequests = 0;
 let requests = 0;
 let toolResults = 0;
@@ -130,6 +158,49 @@ function scriptedCall(body: object, toolResult: boolean) {
   };
 }
 
+/** The read-back call's description, fixed like the delegated child's title. */
+const READ_BACK_TITLE = '读回文档';
+
+/** A tool message whose content carries the nonce, wherever it sits in the history. */
+const hitsReadBack = (messages: unknown[], nonce: string) =>
+  messages.some(
+    (message: unknown) =>
+      typeof message === 'object' &&
+      message !== null &&
+      'role' in message &&
+      message.role === 'tool' &&
+      'content' in message &&
+      JSON.stringify(message.content).includes(nonce),
+  );
+
+/**
+ * Counts a tool message carrying the nonce as a hit, then calls `bash` for the first marked request
+ * offered it whose text lacks the nonce, tool results or not; one-shot like the hold, so a failed
+ * read-back is answered with text, never a second `bash`.
+ */
+function readBackCall(body: object, messages: unknown[], text: string) {
+  if (readBack === undefined) return undefined;
+  if (hitsReadBack(messages, readBack.nonce)) readBackHits++;
+  if (
+    readBacks > 0 ||
+    !text.includes(readBack.marker) ||
+    text.includes(readBack.nonce) ||
+    !('tools' in body) ||
+    !offers(body.tools, 'bash')
+  )
+    return undefined;
+  readBacks++;
+  return {
+    index: 0,
+    id: 'owned-bash-1',
+    type: 'function',
+    function: {
+      name: 'bash',
+      arguments: JSON.stringify({ description: READ_BACK_TITLE, command: readBack.command }),
+    },
+  };
+}
+
 /** The delegated child's title: the browser lane finds the child Session by it. */
 const DELEGATION_TITLE = '检索知识库';
 
@@ -166,6 +237,10 @@ function delegatedCall(body: object, text: string, toolResult: boolean) {
     },
   };
 }
+
+/** Read-back first: its marker is in no other turn. Then delegation, keyed by the child marker. */
+const leadingCall = (body: object, messages: unknown[], text: string, toolResult: boolean) =>
+  readBackCall(body, messages, text) ?? delegatedCall(body, text, toolResult);
 
 function respond(response: ServerResponse, stream: boolean, call: object | undefined) {
   const common = { id: 'owned-completion', created: 1, model };
@@ -207,7 +282,7 @@ function holds(body: object, text: string, toolResult: boolean) {
   return 'tools' in body && offersWrite(body.tools);
 }
 
-/** Health stays byte-identical unless a hold, forbidden strings or a delegation are configured. */
+/** Health stays byte-identical unless hold, forbidden strings, delegation or read-back are set. */
 function health() {
   return JSON.stringify({
     ready: true,
@@ -217,6 +292,7 @@ function health() {
     ...(hold === undefined ? {} : { held: heldAnswers.length }),
     ...(forbidden === undefined ? {} : { forbiddenRequests }),
     ...(delegation === undefined ? {} : { delegations, searches }),
+    ...(readBack === undefined ? {} : { readBacks, readBackHits }),
   });
 }
 
@@ -268,10 +344,10 @@ const server = createServer((request, response) => {
       if (forbidden?.some((item) => whole.includes(item)) === true) forbiddenRequests++;
       const toolResult = hasToolResult(body.messages);
       if (toolResult) toolResults++;
-      // Before the script and the hold: both predicates require the child marker.
-      const delegated = delegatedCall(body, text, toolResult);
-      if (delegated !== undefined) {
-        respond(response, 'stream' in body && body.stream === true, delegated);
+      // Before the script and the hold: every leading predicate requires its own marker.
+      const leading = leadingCall(body, body.messages, text, toolResult);
+      if (leading !== undefined) {
+        respond(response, 'stream' in body && body.stream === true, leading);
         return;
       }
       const answer = () => {

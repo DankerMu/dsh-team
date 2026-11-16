@@ -6037,7 +6037,7 @@ Must preserve：已有 stack 场景和断言不变；ONLYOFFICE 和平台代码�
 - 改动需要碰关键路径 `images/dsh-user/`，超出 #440 的范围。
 - 本刀只做观测：重启后旧 key 仍在注册表里，同一文件用新密钥推出的 key 与旧 key 不同。
 
-- [ ] 50.1 新增 `platform/test/office-profile-stack-fixture.ts`，导出 `officeProfileScenario(lane)`，返回 `OfficeProfileEvidence`。lane 在 `OfficeIsolationLane` 的 `run`、`instance`、`platformRead` 之外加 `restart()`，即 stack 测试已有的 `restartInstance(lifecycle, administrator, employee)`。
+- [x] 50.1 新增 `platform/test/office-profile-stack-fixture.ts`，导出 `officeProfileScenario(lane)`，返回 `OfficeProfileEvidence`。lane 在 `OfficeIsolationLane` 的 `run`、`instance`、`platformRead` 之外加 `restart()`，即 stack 测试已有的 `restartInstance(lifecycle, administrator, employee)`。
   - 脚本：复用 `office-isolation-stack-fixture.ts` 的 `script` 包装和 `onlyoffice-probe-script.ts` 的片段，复用 `PROFILE_ROWS_READ` 和 `PROFILE_EDITOR_SERIALIZATION`，不复制。需要按文件参数化的地方，在原处抽成参数，不另写一份。
   - profile 编辑单独一次 exec，照 17.3 的写法：`PROFILE_ROWS_READ` 有顶层 import，和 `script()` 的 import 会重复，也不能放进 `try` 体。
     - 写回时，先 `dump` 再经 `PROFILE_EDITOR_SERIALIZATION` 处理（`better-sidebar.docker.test.ts:342`），再整文件写回。
@@ -6062,11 +6062,11 @@ Must preserve：已有 stack 场景和断言不变；ONLYOFFICE 和平台代码�
   - (d5) 收尾：在 A 的 exec 里把保存的原始字节原样写回（原来不存在就删除 profile），删掉备份文件，回读确认与原始字节一致。这一步不再重启：覆盖层本来就胜出，还原只是恢复员工卷。
   - provider 计数前后不变。
   - 证据只含状态码、`{ error }`、布尔值（改写行在不在、k1_old 在不在、新旧 key 是否不同）和 healthcheck 正文，不含 key、密钥或 URL 端口以外的改写内容。
-- [ ] 50.2 接线和测试：
+- [x] 50.2 接线和测试：
   - `platform-stack.stack.test.ts` 在 `officeIsolationScenario` 之后调用 `officeProfileScenario`，证据打印进 `stackEvidence.officeProfile`。stack 文件的 `max-lines` 余量约 48 行，接线控制在 15 行以内。
   - 多了一次重启（gateway ready 最长 180 秒）和若干 exec。要核对 `vitest.config.ts:48-57` 里 stack 用例超时的逐项预算：余量不够就按那里的写法加上这一项并更新注释，不能放宽别的项目。
   - 新增 `office-profile-stack-fixture.integration.test.ts`，覆盖脚本生成（改写行的形状、按原始字节还原、healthcheck 路径和 Host、两次回调的 JWT 密钥来源）、期望观测、步骤顺序（d1 → restart → d3 → d4 → d5）、失败时脱敏且不带 `cause`，以及 evidence 形状。
-- [ ] 50.3 文档：
+- [x] 50.3 文档：
   - `docs/LOCAL_STACK.md` 证据表加一行 `officeProfile`；
   - `platform/test/README.md` 本机全栈段落加一句。
 
@@ -6078,6 +6078,10 @@ Must preserve：已有 stack 场景和断言不变；ONLYOFFICE 和平台代码�
 
 行数：估计 300 到 380 行，实测 470 行（第 49 节夹具加集成测试共 490 行，可作参照）。用户决定（2026-11-16）：本刀不拆、不删，加 `diff-limit-exempt` 标签合入，PR 写明理由。
 
+结果（#617，合并提交 `cf4dd25`）：
+
+- 本机 exact-head `pnpm test:stack` 的 `stackEvidence.officeProfile` 逐项等于 `EXPECTED_PROFILE`，覆盖层胜出；VPS `test:docker` 144/144，`test:deploy` 14/14。按 CI 口径 479 行，带 `diff-limit-exempt` 标签合入。第 50 节全部交付。
+
 剩余风险：
 
 - `documentServerUrl` 只能间接观测：healthcheck 回 200 `true` 说明代理到了一个真实的 Document Server。理论上改写值也可能指向同一个 Document Server，所以改写值特意选了不可达的回环端口。
@@ -6088,3 +6092,169 @@ Suggested fixture level: expanded - 受管配置不可被员工覆盖、实例�
 Minimal mergeable slice: 50.1–50.3 一个 PR
 Risk packs: selected - Security（受管配置覆盖、JWT）、Legacy compatibility（已有 stack 场景不变）、Resource limits（多一次实例重启）；not selected - Schema、Public API、Migration、Concurrency、Auth（不改认证）。
 Must preserve：已有 stack 场景和断言不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索；任何密钥、JWT 和 key 都不进日志和证据；员工卷里的 profile 在场景结束时还原。
+
+## 51. #440 第三刀：编辑器驱动（18.5 的编辑、保存、写回和 Agent 读回）
+
+依赖：第 49、50 节已合入（#615、#616、#617）。只改 `platform/test/` 和文档，不碰关键路径。
+
+fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）：fixture 审查按行数估算后，编辑器驱动拆成三个顺序 PR，前一个合入后才开下一个。
+
+- 51-a（51.1）：确定性 provider 的读回脚本和它的集成测试。不配置时 provider 的行为和 `/health` 逐字节不变。
+  - stack 在 51-b 才配置它。这个分支由自己的集成测试覆盖，紧接着的顺序 PR 51-b 就会接上，所以不是死路径。
+- 51-b（51.2–51.3）：DOCX 在浏览器里编辑、保存、写回原文件，Agent 读到最新内容。
+- 51-c：
+  - XLSX 和 PPTX 走同一条路径；
+  - 两个员工的同名文件互不串写；
+  - 用猜出的 key 加入不了 A 正开着的编辑会话。
+- 51-c 的条目在 51-b 合入后补写进本节，再做 fixture 审查。字体和空闲是最后一刀，关闭 #440。
+
+已核实的事实：
+
+- **ONLYOFFICE `dsh-sidebar-onlyoffice@0.2.0`**：行号以发行版 `src/` 为准。
+  - 编辑器配置（`src/onlyoffice.ts`）：
+    - `documentType`：docx→`word`，xlsx→`cell`，pptx→`slide`（`:21-25`）；
+    - `customization.forcesave: true`（`:103`），编辑器自己的保存按钮发 status 6；
+    - `user.id` 恒为 `'dsh'`；
+    - 没有设 `autosave` 和 `coEditing`，按 Document Server 默认。
+  - 编辑模式：
+    - 覆盖层的 ONLYOFFICE 行只带 `documentServerUrl`、`jwtSecret`、`internalBaseUrl`、`publicBaseUrl` 四项（`platform/src/managed-config/generate.ts:299`）；
+    - `defaultMode` 因此取默认值 `'edit'`（插件 `src/config.ts:51`、`src/index.ts:231`）。
+  - 插件客户端没有自己的保存或关闭按钮。卸载时 `destroyEditor()` 删掉 iframe，Document Server 由此看到用户断开（`src/client/OnlyOfficeView.tsx:285-296`）。
+  - 回调（`src/index.ts:369-455`）：
+    - status 2 和 6 都经 `registry.saveFromCallback` 下载后原子替换文件，不忘记 key；
+    - status 4 忘记 key；status 7 只确认，不保存。
+  - 保存守卫（`src/registry.ts:224-262`）：
+    - 盘上文件的 size 和 mtime 与 key 记录的不一致，或文件已不存在，就拒绝保存，回 `{error:1}`；
+    - 保存成功后刷新记录的 size 和 mtime，所以同一会话可以再保存一次。
+- **Agent 读不了 docx 的文本**：
+  - DSH 的 `read` 只读 UTF-8 文本（`@deepseek-ai/dsh-tool-fs@0.2.1-rc.2` `lib/index.js:252`），对 docx 读不出段落文本。
+  - Agent 读回改用 `bash` 工具，参数是 `{ description, command }`（`@deepseek-ai/dsh-tool-bash@0.2.1-rc.2` `lib/index.js:493-505`）。
+  - 默认权限档是 yolo（`platform/src/db/settings.ts:89`）。它在覆盖层里对应 `sandbox: 'danger-full-access'`、`approval: 'never'`（`platform/src/managed-config/generate.ts:94`），所以 bash 调用不需要人工批准。
+- **确定性 provider**（`platform/test/deployment-model-wire.ts`）：
+  - 只有三种脚本：`write`、hold、`subagent`→`knowledge_base_search`；
+  - `text` 是整段 `messages` 的 JSON，包括历史（`:264`）；`hasToolResult` 也看整段历史（`:109-116`）；
+  - `scriptedCall` 对任何提供 `write` 且历史里没有工具结果的请求都发 `write` 调用（`:119-121`）；
+  - `/health` 只在配置了对应脚本时才带上它的计数（`:210-220`）。
+- **请求计数**：stack 主 lane 的一轮对话至少有 3 个请求，即调用、工具结果和标题（`platform-stack.stack.test.ts:546-551`）。各场景用 `providerCounts` 在自己的前后对比计数。读回那一轮如果有迟到的请求（例如标题），就会落进下一个场景的对比窗口。
+- **用户镜像**：只装了 `python3-docx`，没有 openpyxl 和 python-pptx（`images/dsh-user/Dockerfile:7`）。
+  - 51-c 的 XLSX 和 PPTX 在运行时取自固定版本的 Document Server 镜像自带的空白模板：`/var/www/onlyoffice/documentserver/document-templates/new/en-US/new.{xlsx,pptx}`，在 `onlyoffice/documentserver:9.4.0` 里已核实存在。
+  - 这些模板不进仓库。
+- **截图**：
+  - `converseInWorkbench` 的截图名固定为 `login`、`workbench`、`reply`（`stack-browser-fixture.ts:192,273`）；
+  - `openHinted` 固定为 `office-hints-collab`（`office-hints-stack-fixture.ts:155`）；
+  - 截图都写进同一个 `reports/stack/<runId>` 目录，同名会互相覆盖。
+- **预算**：
+  - `platform-stack.stack.test.ts` 按 ESLint `max-lines` 口径 756/800，最后一刀还要留余量；
+  - stack `testTimeout` 是 3480s（`vitest.config.ts:58`），注释逐项列出各段上限。
+
+未核实，由 51-b 第一次 exact-head stack 运行验证；做不到时停止并报告，不放宽断言：
+
+- Playwright 能经 iframe 链聚焦 Document Server 的文档区并键入文字。仓库里没有 `frameLocator` 的先例，编辑器 iframe 与页面同源（第 48 节已断言）。
+- 编辑器的保存（Ctrl+S 或工具栏保存按钮）触发 status 6 写回。
+- 本机 stack 的员工实例里，`bash` 工具能以 danger-full-access 执行 `python3`。
+- DSH 实际提供给模型的是哪一个 `bash`：
+  - `dsh-tool-bash` 要求 `{ description, command }`（`lib/index.js:493-505`）；
+  - `dsh-tool-bash-persistent@0.2.1-rc.2` 同样注册名为 `bash` 的工具，但参数只有 `{ command }`（`lib/index.js:337-343`）。
+  - 读回调用带着 `description`，如果被参数校验拒绝，就停止并报告，再按实际提供的工具 schema 调整 provider。
+- 读回那一轮的精确请求数 N（含不含标题请求）。由第一次运行实测后写进夹具；两次运行不一致就停止并报告。
+- 读回那一轮只有一个请求带着含 nonce 的工具消息，即 `readBackHits` 恰好加 1。不是 1 就停止并报告。
+- 读回会话登录后，ONLYOFFICE 的 tab 不会自动恢复。恢复了就停止并报告。
+
+- [ ] 51.1（51-a）确定性 provider 加读回脚本，改 `deployment-model-wire.ts`，不另写 provider：
+  - 配置加可选的 `readBack: { marker, command, nonce }`，三个字段都是非空字符串，键集合必须恰好是这三个，校验写法同 `ownedDelegation`；缺省时行为不变。
+  - 判定与消息顺序无关：
+    - 发起：同时满足四个条件时，回一个 `bash` 调用 `{ description, command: readBack.command }`，`readBacks` 加 1：
+      - 请求的 `text` 含 `readBack.marker`；
+      - `text` 不含 `readBack.nonce`；
+      - 请求提供 `bash` 工具；
+      - `readBacks === 0`。只发起一次，写法同 `holding`（`:87,284`）。读回失败时，后续请求照常回 `reply`，不会一轮接一轮地重发 `bash`。
+    - 命中：请求里有 role 为 `tool`、内容含 `readBack.nonce` 的消息时，`readBackHits` 加 1，再照常往下分派。
+    - 读回判定放在 delegation、hold 和 `write` 脚本之前。marker 只出现在读回那一轮的消息里，所以不影响已有脚本。
+  - `/health` 照 `:210-220` 的写法：`readBack === undefined ? {} : { readBacks, readBackHits }`，不配置时逐字节不变。
+  - `deployment-model-wire.integration.test.ts` 补四类用例：
+    - 配置校验，包括多键、空串、非字符串；
+    - 发起，包括历史里已有工具结果、别的 marker 的情形；
+    - 不发起：text 已含 nonce；请求不提供 `bash`；已发起过一次，工具结果不含 nonce 时回 `reply`，不发第二个 `bash`；
+    - 命中计数和 `/health` 形状，包括不配置时逐字节不变。
+- [ ] 51.2（51-b）新增 `platform/test/office-editor-stack-fixture.ts`，导出 `officeEditorScenario(lane)`，返回 `OfficeEditorEvidence`。lane 是 `ArchiveLane` 加 `reply` 和 `readBack`，两者都是 provider 配置里的同一份值。
+  - 复用，不复制：在 `office-hints-stack-fixture.ts` 里原地重构下面三个函数，office-hints 场景的行为、断言和截图名不变：
+    - `docxCommand` 改为接受文件名；
+    - `openHinted` 改为接受文件名和截图名，并导出；
+    - `documentServerReady` 导出。
+  - 读取器只写一份：本夹具导出一个 Python 常量，打印文件全部段落。写回轮询经 argv 运行它，`readBack.command` 也用它拼出来，`ownedModel` 从本夹具导入。
+  - 文件：用 `withWorkFiles` 包住整个场景。以 uid 1001 写 `/data/work/编辑写回.docx`，只有一段 `编辑写回探针。`，记下字节数和 sha256。
+  - 编辑和保存，放在一个 `workbenchSession` 里，截图写进子目录 `join(session.directory, 'office-editor')`：
+    1. 先 `documentServerReady`，再 `openHinted` 打开文件，截图名 `office-editor-open`。提示和编辑器挂载的断言照第 48 节。
+    2. 经 iframe 链聚焦文档区，键入 nonce，再保存（Ctrl+S 或工具栏保存按钮，以实测为准）。
+    3. 保存后在实例里轮询，最多 120 秒，直到文件 sha256 变化，且读取器读出的某一段包含 nonce。
+    4. 截图 `office-editor-saved.png`。
+  - 浏览器证据照第 48 节：
+    - 页面错误、失败请求、对外请求都为 0；
+    - `consoleErrors` 恰好是那两条 ServiceWorker 403（`serviceWorkerRefused`）；
+    - 编辑或保存带出任何别的错误，就停止并报告。
+  - 关闭浏览器后再读一次，文件仍含 nonce。迟到的 status 2 只会写同样的内容。
+  - Agent 读回：
+    - 另起一次 `converseInWorkbench`，`directory` 同样换成子目录 `office-editor`，消息为 `${readBack.marker} 请读取编辑后的文档`；
+    - `turnComplete` 等到 `readBackHits` 为前值加 1，且 `requests` 不少于前值加 N。
+  - 命令本身不含 nonce，所以工具结果里出现 nonce，说明 Agent 读到的是保存后的内容。
+  - 读回会话的浏览器证据：
+    - `consoleErrors`、`pageErrors`、`failedRequests`、`externalRequests` 都为 `[]`；
+    - 截图恰为 `login.png`、`workbench.png`、`reply.png`，都在子目录里。
+  - provider 计数前后精确对比：
+    - `readBacks` 和 `readBackHits` 各加 1；
+    - `requests` 加 N；
+    - `searches` 和 `delegations` 不变。
+    - 没有付费检索，每次运行仍然只有 5 次。
+  - evidence：
+    - 文件名；
+    - 编辑前后的字节数和 sha256；
+    - `saved: true`，表示保存后的段落含 nonce；
+    - provider 计数增量；
+    - 两次浏览器会话的截图名和错误计数。
+    - nonce 不是秘密，但也不进 evidence。
+- [ ] 51.3（51-b）接线、测试和文档：
+  - `platform-stack.stack.test.ts`：
+    - 在 `ownedModel` 里生成 `readBack`。nonce 取 `EDITOR` 加大写十六进制、不带连字符（`randomUUID()` 去掉 `-` 后转大写），避开编辑器自动更正改写句首字母。
+    - 在 `officeHintsScenario` 之后、`officeIsolationScenario` 之前调用 `officeEditorScenario`，放在 (d) 的重启之前；
+    - 证据打印进 `stackEvidence.officeEditor`；
+    - `:177` 注释里的「only the office-hints lane contacts it」改成「the Office lanes contact it」；
+    - 接线不超过 15 行，余量留给最后一刀。
+  - `vitest.config.ts`：stack `testTimeout` 加上本场景的上限：写回轮询 120 秒，加编辑器载入和 Agent 读回各一个 `session.timeout`。注释照现有写法逐项列出，余量重新计算。
+  - 新增 `office-editor-stack-fixture.integration.test.ts`，覆盖：
+    - 写入和读取器的 argv；
+    - 写回轮询的判定，包括 sha256 不变、sha256 变了但不含 nonce、两者都满足；
+    - provider 增量的判定；
+    - evidence 形状。
+  - 文档：
+    - `docs/LOCAL_STACK.md` 证据表加一行 `officeEditor`；
+    - `platform/test/README.md` 本机全栈段落加一句。
+
+验证：
+
+- 51-a：
+  - provider 集成测试先红后绿；`pnpm check`；
+  - 本机 exact-head `pnpm test:stack` 通过。这次运行只是回归检查：不配置时行为不变，已经由集成测试里 `/health` 逐字节不变的用例证明；
+  - VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
+- 51-b：
+  - 夹具集成测试先红后绿；`pnpm check`；
+  - 本机 exact-head `pnpm test:stack` 通过，并贴出证据评论；
+  - VPS 同上。
+
+行数：
+
+- 51-a 估计 150 到 200 行；
+- 51-b 估计 330 到 390 行，包括 office-hints 的原地重构和 vitest 注释。
+
+任何一个超过 400 行，都先停下报告。
+
+剩余风险：
+
+- Document Server 的编辑区是 canvas，键入依赖它隐藏的输入框。DS 升级可能改变 iframe 层级。
+- 只验证了一次编辑、一次保存，不验证协同编辑和多次保存。
+- Agent 读回经 `bash` 工具，不经 `read`。docx 的文本读取本来就只能这样做。
+- 清理和迟到的 status 2 之间有一个很小的竞态：`saveFromCallback` 先 stat、再下载、再原子改名（`registry.ts:229-241`）。清理的 unlink 恰好落在中间时，改名会重建文件。之后没有断言依赖这个文件。
+
+Suggested fixture level: expanded - 真实编辑器写回员工文件，provider 新脚本
+Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR
+Risk packs: selected - Legacy compatibility（已有 stack 场景、office-hints 断言和截图名、provider 已有脚本和 `/health` 不变）、Resource limits（新增有界等待，文件结束时删除）、Security（写回只发生在 A 自己的文件上，key 不进证据）；not selected - Schema、Public API、Migration、Auth、Concurrency。
+Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`、hold、delegation 行为、计数和 `/health` 不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索。
