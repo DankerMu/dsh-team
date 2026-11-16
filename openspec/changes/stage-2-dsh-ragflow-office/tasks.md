@@ -5920,7 +5920,7 @@ fixture 作者的拆分（在上面「多个 PR」的决定之内，不是另一
   - Host 为 A 的 +2 地址时，回 403 `{ ok: false, error: { code: "forbidden", message: "forbidden" } }`（`:1906-1914`）。
 - **file 路由**：只验令牌，不看 Host（`:2074-2118`）。
 
-- [ ] 49.1 新增 `platform/test/office-isolation-stack-fixture.ts`，导出 `officeIsolationScenario(lane)`，返回 `OfficeIsolationEvidence`。lane 在 `ArchiveLane` 之外加上：主机侧 `run`（docker）、A 的实例名、平台容器脚本执行 `platformRead`，以及 `secondEmployee()`（注册并启动 B，返回 B 的实例名）和 `retire()`（管理员停用 B，写法同 `unconfiguredEmployeePanel`）。
+- [x] 49.1 新增 `platform/test/office-isolation-stack-fixture.ts`，导出 `officeIsolationScenario(lane)`，返回 `OfficeIsolationEvidence`。lane 在 `ArchiveLane` 之外加上：主机侧 `run`（docker）、A 的实例名、平台容器脚本执行 `platformRead`，以及 `secondEmployee()`（注册并启动 B，返回 B 的实例名）和 `retire()`（管理员停用 B，写法同 `unconfiguredEmployeePanel`）。
   - 文件：
     - 用 `withWorkFiles` 包住整个场景；
     - 在 A 里以 uid 1001 写两个文件：目标 `/data/work/隔离目标.docx` 和来源 `/data/work/隔离来源.docx`，内容是不同的任意字节；
@@ -5948,12 +5948,12 @@ fixture 作者的拆分（在上面「多个 PR」的决定之内，不是另一
     4. 不带 JWT、用 k1 回调，回 403 `{ error: 4 }`。
     5. 最后做正向对照：带 JWT、用 k1 回调，回 200 `{ error: 0 }`，目标文件变成来源文件的字节。它排除了下载失败和 size/mtime 守卫这两种其他原因，所以前面的 `{ error: 1 }` 只能是 key 未登记造成的。
   - 收尾：provider 计数不变；B 的实例已退役。
-- [ ] 49.2 接线和测试：
+- [x] 49.2 接线和测试：
   - `platform-stack.stack.test.ts` 在 `officeHintsScenario` 之后调用 `officeIsolationScenario`。证据打印进 `stackEvidence.officeIsolation`，只放各步的状态码、`{ error }`、文件结果（unchanged/saved）和连接结果。
   - stack 文件 `max-lines` 实测 728/800，接线控制在 25 行以内；`secondEmployee`/`retire` 复用 `registerDeploymentEmployee`、`startInstance` 和停用请求。
   - `onlyoffice-token-fixture.ts` 的 `probeScript` 里的 `mint`、`exchange`、`text`/`json` 和 key 计算，抽成一个两边共用的脚本片段模块，不复制。
   - 新增 `office-isolation-stack-fixture.integration.test.ts`，覆盖脚本生成、期望观测和 evidence 形状，以及脱敏：给定 k1/T，构造出的错误消息不含它们。
-- [ ] 49.3 文档：
+- [x] 49.3 文档：
   - `docs/LOCAL_STACK.md` 证据表加一行 `officeIsolation`；
   - `platform/test/README.md` 本机全栈段落加一句，写明 (c3) 是特权位置。
 
@@ -5962,6 +5962,10 @@ fixture 作者的拆分（在上面「多个 PR」的决定之内，不是另一
 - 共享片段抽成 `platform/test/onlyoffice-probe-script.ts`（`KEY_JS`、`MINT_JS`、`exchangeJs`、`READ_JS`），18.1 的令牌探针生成的脚本逐字节不变，VPS `test:docker` 144/144。
 - 本机 exact-head `pnpm test:stack` 的 `stackEvidence.officeIsolation`：`a.config {200, signed}`、`a.registry {k0:false,k1:true}`；`b.connect {a:blocked,b:connected}`、`b.config {200, signed}`、`b.registry {k0:false,k1:true}`、`b.file {404, file not found}`。
 - 已有的形状：`script(body)` 包住整段，永远 exit 0；`bPosition` 收集失败、`retire()` 一定执行、抛出的错误对 k1 脱敏且不带 `cause`；`verify` 对给定的秘密列表脱敏。B 的 key 和令牌在 B 的 observation 里叫 `kB`、`tB`。`node -e` 的第一个额外参数是 `process.argv[1]`。
+
+49-b 结果（#616，合并提交 `18c2f08`）：
+
+- 本机 exact-head `pnpm test:stack` 的 `stackEvidence.officeIsolation.sign` 与 `attack` 逐项等于 `EXPECTED_ISOLATION.sign` 和 `EXPECTED_ATTACK`；VPS `test:docker` 144/144，`test:deploy` 14/14。第 49 节全部交付。
 
 49-b 在 49-a 的夹具上扩展，不重写已合入的部分：
 
@@ -6003,3 +6007,84 @@ Suggested fixture level: expanded - 跨用户隔离、第二个员工实例、�
 Minimal mergeable slice: 49.1–49.3 一个 PR
 Risk packs: selected - Security（跨实例令牌和 key）、Auth（JWT 和每实例密钥）、Resource limits（两个实例同时运行，场景有界）、Legacy compatibility（已有 stack 场景不变，`onlyoffice-token.docker.test.ts` 行为不变）；not selected - Schema、Public API、Migration、Concurrency。
 Must preserve：已有 stack 场景和断言不变；ONLYOFFICE 和平台代码不改；每次运行仍然只有 5 次付费检索；任何密钥、JWT、令牌和 key 都不进日志和证据。
+
+## 50. #440 第二刀：profile 改写 ONLYOFFICE 配置后重启（18.5 的 (d)）
+
+依赖：第 49 节（#615、#616）已合入。只改 `platform/test/` 和文档，不碰关键路径和产品代码。
+
+本刀覆盖 managed-config「员工不能覆盖受管配置」的场景「员工改写强制的插件状态和 Office 配置」里的 ONLYOFFICE 部分：员工在 profile 里改写 `documentServerUrl` 和 `jwtSecret`，重启后实际生效的仍是覆盖层的值。如果实测是改写值生效，用例就会失败，这时停止并报告，不改断言。
+
+已核实的事实：
+
+- **覆盖层**：`generate.ts:293-300` 写一整行 `{ id: 'dsh-sidebar-onlyoffice', config: { documentServerUrl, jwtSecret, internalBaseUrl, publicBaseUrl } }`，以 `--patch /managed/patch.yml` 只读挂载（`start.ts:486`）。bundled 模式下 `jwtSecret` 就是平台容器里的 `DOCUMENT_SERVER_JWT_SECRET`（第 49 节 (c3) 已用它签 JWT 并被 A 接受）。
+- **员工能写的地方**：`/data/home/profiles/web/cordis.patch.yml`。已有的写法是 `managed-policy-employee-edit.ts` 的 `PROFILE_ROWS_READ`：读出行列表，`push` 一行，整文件写回。17.3 就是这样给 `dsh-better-sidebar` 加 `config` 行的（`better-sidebar.docker.test.ts:338-344`）。
+- **设置卡片不是另一条通道**：
+  - DSH 0.2.1-rc.2 的 `settings` 服务是 `@deepseek-ai/dsh-settings` 的 `SettingsForms`，它没有 `register` 方法，只提供 `update`、`replace`、`mutate`，经 `configEditor` 写回 profile。`settings.yaml` 已经移除，启动时迁入 profile。
+  - 插件 0.2.0 的 `applySettingsSection`（`lib/index.js:928-950`）调用 `sctx.settings.register(...)` 会抛错，被插件自己捕获并记一条 warn，然后继续用 loader 解析出的 composition entry config。
+  - 所以 spec 和 issue 说的「profile 改写」就是改 profile 这一层。`/data/home/cordis.patch.yml` 员工也能写，但不在本刀范围内。profile 排在 `--patch` 覆盖层之前；tasks.md 第 263 行记录过「后到的覆盖层行胜出」，但那里没有演练，所以这是本用例要验证的假设，不是已核实的事实。
+- **文件密钥每次创建容器都重新生成**：`start.ts:441` 生成，`:455` 注入，不落盘。管理员的 restart 是先 stop 再 start（`admin/instance-actions.ts:88-96`）。
+- **注册表跨重启保留**：
+  - `DocumentRegistry` 启动时 `loadSync()` 读 `/data/home/plugins/dsh-sidebar-onlyoffice/registry.json`，只校验结构，不核对 key 能否用当前密钥推出。
+  - 重启前登记的 key 在重启后仍然有效，保存时只受 size/mtime 守卫约束。
+- **观测手段**：
+  - `documentServerUrl`：A 的 exec 以回环 Host 经 A 自己的 +2:3080 请求 `/sidebar/onlyoffice/ds/healthcheck`，写法同 `office-hints-stack-fixture.ts:48`。覆盖层指向的 Document Server 回 200 `true`；改写值指向 A 容器内一个没有监听的回环端口，代理会失败，不会回 200 `true`。
+  - `jwtSecret`：回调路由先验 JWT（`:2132-2138`），再查 key。用一个随机的、未登记的 key 发 status 2 回调：覆盖层密钥签的 JWT 回 200 `{ error: 1 }`，改写密钥签的回 403 `{ error: 4 }`。key 未登记，所以不会写任何文件。
+
+注册表跨重启的判定（tasks.md 第 3775 行交给 18.5，fixture 作者判定，不是用户决定）：保留，不改镜像补丁。理由：
+
+- 旧密钥只存在于已删除容器的环境里，从不落盘，推不出来，所以旧 key 不构成跨用户风险。
+- 保留旧 key，正开着的编辑会话在重启后仍能保存。
+- 改动需要碰关键路径 `images/dsh-user/`，超出 #440 的范围。
+- 本刀只做观测：重启后旧 key 仍在注册表里，同一文件用新密钥推出的 key 与旧 key 不同。
+
+- [ ] 50.1 新增 `platform/test/office-profile-stack-fixture.ts`，导出 `officeProfileScenario(lane)`，返回 `OfficeProfileEvidence`。lane 在 `OfficeIsolationLane` 的 `run`、`instance`、`platformRead` 之外加 `restart()`，即 stack 测试已有的 `restartInstance(lifecycle, administrator, employee)`。
+  - 脚本：复用 `office-isolation-stack-fixture.ts` 的 `script` 包装和 `onlyoffice-probe-script.ts` 的片段，复用 `PROFILE_ROWS_READ` 和 `PROFILE_EDITOR_SERIALIZATION`，不复制。需要按文件参数化的地方，在原处抽成参数，不另写一份。
+  - profile 编辑单独一次 exec，照 17.3 的写法：`PROFILE_ROWS_READ` 有顶层 import，和 `script()` 的 import 会重复，也不能放进 `try` 体。
+    - 写回时，先 `dump` 再经 `PROFILE_EDITOR_SERIALIZATION` 处理（`better-sidebar.docker.test.ts:342`），再整文件写回。
+    - 同一个脚本先把 profile 原始字节（或「不存在」）存到员工卷里的 `/data/home/profiles/web/cordis.patch.yml.dsh-team-office-profile`，d5 原样写回并删除这个文件，所以还原是逐字节一致的。
+  - 用 `withWorkFiles` 包住整个场景，工作文件是 `/data/work/重启登记.docx`。
+  - 改写值都由测试进程生成：
+    - `documentServerUrl` 设为 `http://127.0.0.1:<一个没有监听的端口>`；
+    - `jwtSecret` 设为随机 32 字节 hex。
+    - 端口固定为 9（discard）。d1 在 A 里先确认 `127.0.0.1:9` 没有监听，有监听就让用例失败。
+    - 两者都只经 argv 传入；失败信息照第 49 节的做法对改写的 `jwtSecret`、k1_old、新 k1 和随机 key 全部脱敏，不带 `cause`。
+  - (d1) 重启前，在 A 的 exec（uid 1001）里：
+    - 写工作文件，以回环 Host 请求 config 路由，回 200、`signed: true`，并登记 k1_old；轮询注册表，最多 5 秒；
+    - 用 `PROFILE_ROWS_READ` 读出 profile，`push` 一行 `{ id: 'dsh-sidebar-onlyoffice', config: { documentServerUrl: 改写值, jwtSecret: 改写值 } }`，整文件写回；
+    - 回读 profile，确认改写行在里面。
+  - (d2) `restart()`，然后重新取 A 的 +2 地址。
+  - (d3) 重启后，在 A 的 exec 里：
+    - 确认 profile 里仍有改写行，证明重启没有丢掉员工的改写；
+    - 经代理请求 healthcheck，回 200 `true`；
+    - 读注册表，k1_old 仍在；
+    - 对同一个文件，用新的每实例密钥重新算 key，与 k1_old 不同。stat 没有变，所以不同只能来自密钥。
+  - (d4) 特权位置，在平台容器里经 `platformRead`：用随机未登记 key 发两次回调，覆盖层 JWT 回 200 `{ error: 1 }`，改写密钥的 JWT 回 403 `{ error: 4 }`。改写密钥嵌在脚本里，失败时脱敏。
+  - (d5) 收尾：在 A 的 exec 里把保存的原始字节原样写回（原来不存在就删除 profile），删掉备份文件，回读确认与原始字节一致。这一步不再重启：覆盖层本来就胜出，还原只是恢复员工卷。
+  - provider 计数前后不变。
+  - 证据只含状态码、`{ error }`、布尔值（改写行在不在、k1_old 在不在、新旧 key 是否不同）和 healthcheck 正文，不含 key、密钥或 URL 端口以外的改写内容。
+- [ ] 50.2 接线和测试：
+  - `platform-stack.stack.test.ts` 在 `officeIsolationScenario` 之后调用 `officeProfileScenario`，证据打印进 `stackEvidence.officeProfile`。stack 文件的 `max-lines` 余量约 48 行，接线控制在 15 行以内。
+  - 多了一次重启（gateway ready 最长 180 秒）和若干 exec。要核对 `vitest.config.ts:48-57` 里 stack 用例超时的逐项预算：余量不够就按那里的写法加上这一项并更新注释，不能放宽别的项目。
+  - 新增 `office-profile-stack-fixture.integration.test.ts`，覆盖脚本生成（改写行的形状、删除时的匹配、healthcheck 路径和 Host、两次回调的 JWT 密钥来源）、期望观测、步骤顺序（d1 → restart → d3 → d4 → d5）、失败时脱敏且不带 `cause`，以及 evidence 形状。
+- [ ] 50.3 文档：
+  - `docs/LOCAL_STACK.md` 证据表加一行 `officeProfile`；
+  - `platform/test/README.md` 本机全栈段落加一句。
+
+验证：
+
+- 夹具集成测试先红后绿；`pnpm check`；
+- 本机 exact-head `pnpm test:stack` 通过，并贴出证据评论；
+- VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
+
+行数：估计 300 到 380 行，实测 470 行（第 49 节夹具加集成测试共 490 行，可作参照）。用户决定（2026-11-16）：本刀不拆、不删，加 `diff-limit-exempt` 标签合入，PR 写明理由。
+
+剩余风险：
+
+- `documentServerUrl` 只能间接观测：healthcheck 回 200 `true` 说明代理到了一个真实的 Document Server。理论上改写值也可能指向同一个 Document Server，所以改写值特意选了不可达的回环端口。
+- 改写行在运行中写入，DSH 可能在重启前就热重载 profile（`app-boot/config-reload`）。本刀只断言重启后的结果。
+- 重启会断开员工的连接，(d) 放在所有浏览器场景之后。
+
+Suggested fixture level: expanded - 受管配置不可被员工覆盖、实例重启、特权位置
+Minimal mergeable slice: 50.1–50.3 一个 PR
+Risk packs: selected - Security（受管配置覆盖、JWT）、Legacy compatibility（已有 stack 场景不变）、Resource limits（多一次实例重启）；not selected - Schema、Public API、Migration、Concurrency、Auth（不改认证）。
+Must preserve：已有 stack 场景和断言不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索；任何密钥、JWT 和 key 都不进日志和证据；员工卷里的 profile 在场景结束时还原。
