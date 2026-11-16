@@ -46,7 +46,7 @@ export default defineConfig({
           name: 'stack',
           include: ['platform/test/**/*.stack.test.ts'],
           fileParallelism: false,
-          // Two cold image builds (600s each, 1200s) leave 1800s for compose, health, the
+          // Two cold image builds (600s each, 1200s) leave 2280s for compose, health, the
           // conversation, 13 in-instance proxy calls (30s each at most), drainage, the RAGFlow
           // restore, which is bounded at 300s from before `docker start` (its 60s CLI bound lies
           // inside), and the legacy preview lane (#433), which raised the cap from 2400s by 600s:

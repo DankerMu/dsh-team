@@ -6065,7 +6065,7 @@ Must preserve：已有 stack 场景和断言不变；ONLYOFFICE 和平台代码�
 - [ ] 50.2 接线和测试：
   - `platform-stack.stack.test.ts` 在 `officeIsolationScenario` 之后调用 `officeProfileScenario`，证据打印进 `stackEvidence.officeProfile`。stack 文件的 `max-lines` 余量约 48 行，接线控制在 15 行以内。
   - 多了一次重启（gateway ready 最长 180 秒）和若干 exec。要核对 `vitest.config.ts:48-57` 里 stack 用例超时的逐项预算：余量不够就按那里的写法加上这一项并更新注释，不能放宽别的项目。
-  - 新增 `office-profile-stack-fixture.integration.test.ts`，覆盖脚本生成（改写行的形状、删除时的匹配、healthcheck 路径和 Host、两次回调的 JWT 密钥来源）、期望观测、步骤顺序（d1 → restart → d3 → d4 → d5）、失败时脱敏且不带 `cause`，以及 evidence 形状。
+  - 新增 `office-profile-stack-fixture.integration.test.ts`，覆盖脚本生成（改写行的形状、按原始字节还原、healthcheck 路径和 Host、两次回调的 JWT 密钥来源）、期望观测、步骤顺序（d1 → restart → d3 → d4 → d5）、失败时脱敏且不带 `cause`，以及 evidence 形状。
 - [ ] 50.3 文档：
   - `docs/LOCAL_STACK.md` 证据表加一行 `officeProfile`；
   - `platform/test/README.md` 本机全栈段落加一句。

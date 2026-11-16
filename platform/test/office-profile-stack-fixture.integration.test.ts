@@ -119,8 +119,8 @@ it('expects the overlay to win after the restart while the employee row and k1_o
   expect(() => officeProfileLine(undefined)).toThrow('Office profile evidence missing');
 });
 
-/** A answering as the stack does, at A2 after `restart`; `failing` rejects that step quoting argv as
- * `output()` would, or answers it with both keys and a differing observation. */
+/** A answering as the stack does, at A2 after `restart`; each `failing` step rejects quoting argv
+ * as `output()` would, or answers with both keys and a differing observation. */
 function fakeLane(
   events: string[],
   calls: Record<string, readonly string[]>,
@@ -131,7 +131,7 @@ function fakeLane(
   const answer = (label: string, args: readonly string[], reply: object) => {
     events.push(label);
     calls[label] = args;
-    if (label !== failing) return Promise.resolve(JSON.stringify(reply));
+    if (!failing.split(' ').includes(label)) return Promise.resolve(JSON.stringify(reply));
     if (how === 'differ')
       return Promise.resolve(
         JSON.stringify({ ...reply, ...SECRETS, rewritten: false, listener: true, restored: false }),
@@ -159,7 +159,7 @@ function fakeLane(
     },
     platformRead: (script) => parsed(answer('d4', [script], callback)),
     provider: () => parsed(answer('provider', [], { requests: 0, searches: 0, delegations: 0 })),
-    restart: () => Promise.resolve(void ((address = A2), events.push('restart'))),
+    restart: () => answer('restart', ['restart', SECRETS.k1], {}).then(() => void (address = A2)),
   };
   return lane;
 }
@@ -175,6 +175,7 @@ it('registers, rewrites, restarts, checks A and the platform, restores the profi
   expect(calls.d3?.slice(4)).toEqual([REWRITTEN_URL, secret, SECRETS.k1, SECRETS.k0]);
   expect(calls.d3?.[3]).toContain('request({ host: "10.0.2.2"');
   expect(calls.d4?.[0]).toContain(`jwtSecret = "${secret ?? ''}";`);
+  expect(calls.d4?.[0]).toContain("const headers = { host: '10.0.2.2:3080' };");
   expect(JSON.stringify(evidence)).not.toMatch(HEX);
 });
 
@@ -188,6 +189,9 @@ it.each([
   ['d3', 'differ', 'differs'],
   ['d4', 'differ', 'differs'],
   ['d5', 'differ', 'differs'],
+  ['restart', 'reject', 'docker restart <redacted> failed'],
+  ['d5', 'reject', 'profile restore failed'],
+  ['d3 d5', 'reject', /profile after failed[\s\S]*\nOffice isolation profile restore failed/],
 ])(
   'redacts every key and secret from the %s step answering %s and restores once the edit began',
   async (step, how, reason) => {
@@ -196,7 +200,7 @@ it.each([
     const error: unknown = await officeProfileScenario(lane).catch((caught: unknown) => caught);
 
     if (!(error instanceof Error)) throw new Error('Office profile scenario did not fail');
-    expect(error.message).toContain(reason);
+    expect(error.message).toMatch(reason);
     expect(error.message).not.toMatch(HEX);
     expect(error.message).not.toContain(SECRETS.k1.slice(0, 10));
     expect(error.cause).toBeUndefined();
