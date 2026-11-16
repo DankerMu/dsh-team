@@ -252,6 +252,7 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
 }
 
 const PASSWORD = 'instance-acceptance-password';
+const B_EMAIL = 'isolation@deployment.example.test';
 
 /** Starts one employee's instance through the platform API and waits until it is running. */
 async function startInstance(lifecycle: UserImageLifecycle, base: string, cookie: string) {
@@ -501,16 +502,13 @@ async function converse(
       run,
       instance: `dsh-team-u-${employee.id}`,
       secondEmployee: async () => {
-        const next = await registerDeploymentEmployee(
-          lifecycle,
-          { base, request: fetch },
-          'isolation@deployment.example.test',
-        );
+        const next = await registerDeploymentEmployee(lifecycle, { base, request: fetch }, B_EMAIL);
         secondId = next.id;
         await startInstance(lifecycle, base, next.cookie);
         return `dsh-team-u-${next.id}`;
       },
-      retire: () => disableEmployee(administrator, secondId),
+      retire: () =>
+        secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId),
     });
   });
 }

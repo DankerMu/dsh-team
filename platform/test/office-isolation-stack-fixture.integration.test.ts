@@ -4,6 +4,7 @@ import {
   bProbeScript,
   EXPECTED_ISOLATION,
   officeIsolationLine,
+  officeIsolationScenario,
   redactSecrets,
 } from './office-isolation-stack-fixture.ts';
 
@@ -38,10 +39,10 @@ it('probes A then B over TCP and signs T_B over the claims in argv[1] (c2)', () 
     'request({ host: "10.0.1.2", port: 3080',
     'const tB = mint(JSON.parse(process.argv[1]), secret);',
     "'/sidebar/onlyoffice/file?token=' + encodeURIComponent(tB)",
+    'observed.registry = seen;',
     'observed.kB = k1;',
   ])
     expect(script).toContain(part);
-  // Only the probe reaches A; every HTTP request goes to B's own address.
   expect(script).not.toContain('request({ host: "10.0.0.2"');
 });
 
@@ -51,6 +52,7 @@ it('expects A to register only k1 and B to reach only itself with a valid B toke
     b: {
       connect: { a: 'blocked', b: 'connected' },
       config: { status: 200, signed: true },
+      registry: { k0: false, k1: true },
       file: { status: 404, body: 'file not found' },
     },
   });
@@ -58,13 +60,9 @@ it('expects A to register only k1 and B to reach only itself with a valid B toke
 
 it('redacts k1, k1_B and T_B from an error text', () => {
   const [k1, kB, tB] = ['k1-value', 'kb-value', 'tb.value'];
-  const message = `observed={"k1":"${k1}","kB":"${kB}","tB":"${tB}"} again ${k1}`;
+  const redacted = redactSecrets(`${k1} ${kB} ${tB} ${k1}`, [k1, kB, tB, undefined, '']);
 
-  const redacted = redactSecrets(message, [k1, kB, tB, undefined, '']);
-
-  expect(redacted).toBe(
-    'observed={"k1":"<redacted>","kB":"<redacted>","tB":"<redacted>"} again <redacted>',
-  );
+  expect(redacted).toBe('<redacted> <redacted> <redacted> <redacted>');
 });
 
 it('prints the verified observations and fails when the scenario left none', () => {
@@ -72,4 +70,29 @@ it('prints the verified observations and fails when the scenario left none', () 
 
   expect(officeIsolationLine(evidence)).toBe(evidence);
   expect(() => officeIsolationLine(undefined)).toThrow('Office isolation evidence missing');
+});
+
+it("redacts k1 from a docker-layer failure of B's exec and still retires B", async () => {
+  const k1 = 'f'.repeat(64);
+  const setup = JSON.stringify({ ...EXPECTED_ISOLATION.a, k1 });
+  const address = { IPAddress: '10.0.0.2' };
+  let retired = 0;
+  // Inspect gives each bridge address; B's exec fails as `output()` reports it, argv included.
+  const run = (args: string[]) =>
+    args[0] === 'container'
+      ? Promise.resolve(JSON.stringify({ [(args[4] ?? '').replace('-u-', '-net-')]: address }))
+      : Promise.reject(new Error(`docker ${args.join(' ')} failed (null): ETIMEDOUT`));
+  const error: unknown = await officeIsolationScenario({
+    ...{ session: {} as never, instance: 'dsh-team-u-a', run },
+    exec: (args) => Promise.resolve(args[0] === 'node' ? setup : '[false, false]'),
+    provider: () => Promise.resolve({ requests: 0, searches: 0, delegations: 0 }),
+    secondEmployee: () => Promise.resolve('dsh-team-u-b'),
+    retire: () => Promise.resolve(void (retired += 1)),
+  }).catch((caught: unknown) => caught);
+
+  if (!(error instanceof Error)) throw new Error('Office isolation scenario did not fail');
+  expect(error.message).toContain('ETIMEDOUT');
+  expect(error.message).not.toContain(k1);
+  expect(error.cause).toBeUndefined();
+  expect(retired).toBe(1);
 });

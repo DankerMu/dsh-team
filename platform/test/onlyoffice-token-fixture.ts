@@ -1,12 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
-import {
-  exchangeFragment,
-  KEY_FRAGMENT,
-  MINT_FRAGMENT,
-  TEXT_JSON_FRAGMENT,
-} from './onlyoffice-probe-script.ts';
+import { exchangeJs, KEY_JS, MINT_JS, READ_JS } from './onlyoffice-probe-script.ts';
 import { record } from './docker-cleanup.ts';
 import { lifecycleWebNetwork } from './managed-policy-fixture.ts';
 import { rejectPluginFailures } from './plugin-failure-markers.ts';
@@ -44,10 +39,10 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 mkdirSync(dir, { recursive: true });
 writeFileSync(file, original);
 const info = statSync(file);
-${KEY_FRAGMENT}
-${MINT_FRAGMENT}
-${exchangeFragment(address, '127.0.0.1:3080')}
-${TEXT_JSON_FRAGMENT}
+${KEY_JS}
+${MINT_JS}
+${exchangeJs(address, '127.0.0.1:3080')}
+${READ_JS}
 const query = 'sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(dir);
 const claims = (key) => ({ key, path: file, cwd: dir, exp: Math.floor(Date.now() / 1000) + 600 });
 const fileWith = async (token) => text(await exchange('GET', '/sidebar/onlyoffice/file?token=' + encodeURIComponent(token)));
