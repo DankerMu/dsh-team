@@ -48,6 +48,8 @@ import type { SearchEvidence } from './knowledge-search-stack-fixture.ts';
 import { legacyPreviewScenario } from './legacy-preview-stack-fixture.ts';
 import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
+import { officeHintsLine, officeHintsScenario } from './office-hints-stack-fixture.ts';
+import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
 import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
   comparableRagflowStack,
@@ -159,14 +161,15 @@ interface ConversationEvidence {
   search?: SearchEvidence & { provider: Record<string, unknown> };
   archive?: ArchiveEvidence;
   legacyPreview?: LegacyPreviewEvidence;
+  officeHints?: OfficeHintsEvidence;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
 
 /**
  * The delivered Document Server runs the real image without a host publication over the
- * delivered read-only repository font bind; only started, never awaited or contacted. Returns
- * its anonymous (image `VOLUME`) volume names.
+ * delivered read-only repository font bind; only the office-hints lane contacts it, through the
+ * employee instance's proxy. Returns its anonymous (image `VOLUME`) volume names.
  */
 async function documentServerVolumes(lifecycle: UserImageLifecycle): Promise<string[]> {
   const server = containerDocument(
@@ -480,6 +483,8 @@ async function converse(
     evidence.archive = await archiveScenario(lane);
     // DOC, PPT converted in the instance and XLS in the browser, all read-only (#433).
     evidence.legacyPreview = await legacyPreviewScenario(lane);
+    // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
+    evidence.officeHints = await officeHintsScenario(lane);
   });
 }
 
@@ -670,6 +675,8 @@ it('builds both images, starts the delivered compose platform, converses through
   if (search === undefined) throw new Error('Knowledge search evidence missing');
   if (archive === undefined) throw new Error('Sidebar archive evidence missing');
   if (legacyPreview === undefined) throw new Error('Legacy preview evidence missing');
+  // Its presence is checked by `officeHintsLine`; one more branch here exceeds `complexity`.
+  const { officeHints } = evidence;
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -812,6 +819,7 @@ it('builds both images, starts the delivered compose platform, converses through
           files: legacyPreview.files,
           screenshots: legacyPreview.browser.screenshots,
         },
+        officeHints: officeHintsLine(officeHints),
       },
     })}\n`,
   );

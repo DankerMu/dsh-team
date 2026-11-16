@@ -57,7 +57,7 @@ const OFFICE_PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/offic
 const EXCEL_PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/excel';
 const PANEL = '[data-sidebar-right-open]';
 
-const visible = `(el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && el.closest('[hidden],[aria-hidden="true"]') === null; }`;
+export const visible = `(el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && el.closest('[hidden],[aria-hidden="true"]') === null; }`;
 
 const ROW = '[data-dsh-native-tab-host] [role="button"][title]';
 const titled = (name) =>

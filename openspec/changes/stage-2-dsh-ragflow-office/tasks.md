@@ -3650,7 +3650,7 @@ Evidence (#556):
 - [ ] 18.1 用户镜像安装 `dsh-sidebar-onlyoffice@0.2.0`，作为可管理项加入 `catalog.json`，并用构建期补丁做两件事：文件令牌密钥改为读取 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，缺失或为空时拒绝签发和校验；文档 key 改为 `HMAC(文件令牌密钥, 原 key 输入)`，回调和编辑器打开只接受本实例密钥派生的 key。补丁钉住版本和输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Docker 用例在不注入该环境变量时直接请求 `file` 路由，任何令牌（包括公开常量签的）都被拒绝；注入后公开常量签的令牌和按原算法算出的 key 都被拒绝。
 - [ ] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
 - [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
-- [ ] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文，无 Session 打开 DOCX 时看到中文提示。
+- [ ] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文；无 Session 提示由 `plugins/office-hints/client.test.js` 覆盖（发布版 UI 不可达，用户决定 2026-11-13，见第 48 节）。#439 合并后，由下一节 fixture 提交补结果时勾选本项（#438 的插件部分已合入）。
 - [ ] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
   - DOCX、XLSX、PPTX 编辑保存后写回原文件，Agent 读到最新内容；
   - 两个用户的同名文件互不串写；
@@ -5728,7 +5728,7 @@ Must preserve：`wait` 期限 780_000 ms，即 `OFFLINE_PLUGIN_DEADLINE_MS` 的�
 
 依赖：无。机制同第 31 节（#511 的 `start --attach`）。`docker run` 不带 `--detach` 时，CLI 退出码跟随容器退出码，而 `run` 会记账。所以容器一旦非 0 退出，`completeResult` 就留下一条未结清的 `run` 行，custody 判定为 `cleanup: unconfirmed`，遮住真正的失败原因。只改测试夹具，不改 `scripts/docker-command.mjs` 的结清规则，不碰关键路径。
 
-- [ ] 47.1 一次性容器的公共写法：`platform/test/one-shot-container.ts`
+- [x] 47.1 一次性容器的公共写法：`platform/test/one-shot-container.ts`
   - 新模块导出同步的 `runOneShot(command, args, timeoutMs)` 和异步的 `runOneShotAsync(commandAsync, args, timeoutMs)`。参数是 `docker-command.ts` 的 `DockerCommand` 和 `AsyncDockerCommand`。两者共用一个流程，不写两份，`pnpm duplicate-code` 不得新增克隆。
     - `args` 就是原 `run` 调用里 `run` 之后的参数，去掉 `--rm`，其余原样保留，包括 `--name <name>`、镜像和命令。这样各站点只删掉 `'run', '--rm',`、换一下调用，不拆参数，diff 最小。
     - helper 从 `args` 里的 `--name` 取容器名；没有 `--name` 时直接抛错。
@@ -5743,7 +5743,7 @@ Must preserve：`wait` 期限 780_000 ms，即 `OFFLINE_PLUGIN_DEADLINE_MS` 的�
     - `wait` 的输出不是十进制整数时，返回 `status: null`，并带一个说明原因的 `error`。
   - `rm` 失败时抛出 `One-shot container removal failed (status <s>, signal <g>)`，不带输出。如果此前的步骤已经抛错，则按 `install-dialog-fixture.ts` 的 `withEgress` 写法，用 `AggregateError` 把两个错误一起抛出。调用方原有的资源登记（`registerResource`/`registerResourceAsync`/`registerContainer`）都保留，作为 `create` 失败或 `rm` 失败时的兜底。
   - 模块注释沿用 `managed-policy-fixture.ts` 里「Not `--attach`: its CLI exit mirrors the container's, leaving a nonzero start unsettled.」的说法，改成说前台 `run`。
-- [ ] 47.2 改写 #584 表中的 8 处，各站点的 stdout 内容、固定报错文本和超时上限保持不变（超时只能放宽）：
+- [x] 47.2 改写 #584 表中的 8 处，各站点的 stdout 内容、固定报错文本和超时上限保持不变（超时只能放宽）：
   - `container-create-recovery.docker.test.ts:88`：`runningId` 分支的 `exec` 不变；
   - `container-network-mode.docker.test.ts:134`：原来就不带 `--rm`，靠 `registerResource` 清理；
   - `container-start-docker-fixture.ts:55` `volumeProbe`：异步；
@@ -5763,7 +5763,7 @@ Must preserve：`wait` 期限 780_000 ms，即 `OFFLINE_PLUGIN_DEADLINE_MS` 的�
     - 已带 `--detach` 的 `run`；
     - `runOfflinePlugin`、`runOfficeConvert`（不顺手重构）。
 
-- [ ] 47.3 测试：
+- [x] 47.3 测试：
   - `platform/test/one-shot-container.integration.test.ts` 用替身 command 覆盖同步和异步两种。两种共用同一组用例（例如 `describe.each` 加一个同步转异步的适配），不逐条写两遍：
     - 调用序列和参数，以及每步的 timeout；`wait` 的 timeout 等于 `timeoutMs`；没有 `--name` 时抛错；`rm` 出现在 helper 返回之前；
     - 容器退出 0：返回值的 `status` 为 0，`stdout` 等于 `logs` 的 stdout；
@@ -5783,6 +5783,7 @@ Must preserve：`wait` 期限 780_000 ms，即 `OFFLINE_PLUGIN_DEADLINE_MS` 的�
     - `container-reconcile.docker.test.ts` 和 `container-start-docker-fixture.ts` 里的 `'run', '--detach'` 不会被误报；
     - 守卫自带一个内联负例（一段带 `'run', '--rm'` 的文本）和一个正例，证明它确实会拦截；
     - 覆盖不到 `-d` 短参数和 `.mjs`，算剩余风险。
+  - 结果：PR #611 在确切 head `dd793ee` 上评审单席一轮 clean 并跑 lane（invocation `9a91e012-439c-47ee-87b3-b25815bc7260`）：`test:docker` 144/144、`test:deploy` 14/14，cleanup confirmed，custody 结果里没有 `unsettled`；8 处所在的用例和 `volumeProbe`/`withDockerIdleInstance` 的其他调用方全部通过；本机 exact-head `pnpm test:stack` 1/1；按 CI 口径 381 行。#611 合并（efa56c2），#584 关闭。
 - 验证：
   - 守卫和 helper 测试先红后绿；
   - `pnpm check`；
@@ -5801,3 +5802,80 @@ Must preserve：
 - 资源登记和清理；
 - instance-idle slow observer 拦截恰好命中一次；
 - `scripts/docker-command.mjs` 不改。
+
+## 48. #439：Office 提示的本机浏览器验证与员工指南（18.4 本机验证和文档部分）
+
+依赖：#438（第 44 节，office-hints 插件）、#437（第 43 节，better-sidebar 条件补丁）、#435（覆盖层 ONLYOFFICE）均已合入。只改 `platform/test/` 和文档，不碰关键路径。
+
+已核实的事实：
+
+- 本机通道里 ONLYOFFICE 对员工生效：
+  - 交付的 compose 设置 `PLATFORM_UPSTREAM_MODE: network`（`deploy/compose.yml:17`）和自带 Document Server（`:23-24`），默认 `documentServerUrl` 为空，即 bundled（`platform/src/db/settings.ts:104`）；
+  - 启动时 `dsh-team-documentserver` 在运行，`officeOverlay` 给出完整配置（`platform/src/orchestrator/document-server.ts:50-73,117-140`），生成器写出不带 `disabled` 的 ONLYOFFICE 行（`platform/src/managed-config/generate.ts:293-300`）；
+  - ONLYOFFICE 和 better-sidebar 在目录里默认 `employee` 状态，镜像默认开启；office-hints 是 required，经 `platform/src/plugin-catalog/catalog.ts:89` 成为 forced-on。
+- 无 Session 提示在发布版 UI 里不可达：
+  - DSH 0.2.1-rc.2 的 `ctx.sidebarRight.mounted` 只在没有选中 Session 或全局面板占据主栏时为 `undefined`（`@deepseek-ai/dsh-client-ui-sidebar-right` `lib/types/client/service.d.ts:140-148`）；
+  - 这时 better-sidebar 0.28.0 不渲染文件区（`src/client/Sidebar.tsx:562-568`）；
+  - 工作台首页本身就是一个带 id 的空白会话，原生 tab 取所在 seat 的 Session（`native/tab-adapter.tsx`）。
+  - 用户决定（2026-11-13）：浏览器只验同写提示。无 Session 提示由已合入的 `plugins/office-hints/client.test.js` 覆盖（`''` 和缺失两种），员工指南写明它是防御性提示。
+- 查看器 priority：office-hints 为 20，ONLYOFFICE 为 10，所以包装查看器先被选中。
+
+- [ ] 48.1 新增 `platform/test/office-hints-stack-fixture.ts`，导出 `officeHintsScenario(lane: ArchiveLane): Promise<OfficeHintsEvidence>`，写法照 `legacy-preview-stack-fixture.ts`：
+  - 用 `withWorkFiles` 包住整个场景，结束时删除文件。
+  - 以 uid 1001 在实例里用 python-docx 写一个只有一段文字的 `/data/work/同写提示.docx`（先例见 `office-convert-fixture.ts:63-66`），参数经 argv 传入，不经 shell。写完由实例读回字节数和 sha256。
+  - 打开浏览器之前，先在实例里用 `lane.exec` 轮询 Document Server 的 healthcheck（`/sidebar/onlyoffice/ds/healthcheck`），直到返回 `true`，以 `session.timeout` 为上限。实例内 3080 只在 base+2 地址上应答，回环地址上没有服务（`platform/src/managed-config/README.md:13`），所以连实例自己的地址，并带 `Host: 127.0.0.1:3080`，写法同 `onlyoffice-token-fixture.ts:50,250`。403 立即失败；502、503 和连接错误继续轮询。这样 Document Server 冷启动时的 502 不会落进浏览器的计数。如果信任检查拒绝这种调用，就停下回报。
+  - 在 `workbenchSession` 的落地页（空白会话）里，用 `showSidebarRows`/`rowQuery` 打开这个文件，然后：
+    - 等到 `[data-dsh-team-office-hint="collab"]` 出现，断言它的文本逐字等于 F40 原文 `请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。`；
+    - 断言页面上没有 `[data-dsh-team-office-hint="no-session"]`，也没有「Office 编辑器未加载」文案；
+    - 提示一出现，本身就证明 #437 的条件补丁把 docx 交给了包装查看器。另外两条佐证：
+      - 提示满足 `closest('[data-dsh-native-tab-host]') !== null`。这和 legacy 场景的 `nativeHost: false` 方向相反，不要照抄；
+      - 对这个文件，`previewOutcome(<DSH 原生 office 预览 id>, name).state === null`；
+    - 编辑器挂载：
+      - 提示用 `visible` 判定为可见，因为非活动 tab 会留在 DOM 里，只是 hidden；
+      - 包装查看器的容器 `[data-dsh-team-office-hints="docx"]`（`client.js` 的 `FRAME` 属性）内恰有一个可见的 `iframe`，`src` 解析后的 origin 等于 `location.origin`，pathname 以 `/sidebar/onlyoffice/ds/` 开头；
+      - 页面上没有 ONLYOFFICE 的 loading 和错误文案：按 `dsh-sidebar-onlyoffice@0.2.0` 的 `src/client/locales.ts`，中英两套的 `loading`、`loadFailed`、`errFetch`、`errApi`、`errEditor`、`errEditorEvent` 都不出现；
+    - 截图 `office-hints-collab.png`。
+    - 这只证明编辑器已挂载、iframe 指向 Document Server 代理，不证明文档已经载入。载入和保存归 18.5（#440）。
+  - 场景结束后：
+    - 实例里文件的字节数和 sha256 不变（只打开、不编辑，不应该有保存回调写回）；
+    - provider 计数不变（`providerCounts`），没有模型请求和检索。
+  - 浏览器证据和其他场景一样：零控制台错误、零页面错误、零失败请求、零对外请求。Document Server 编辑器 iframe 里的请求和控制台输出也计入（Playwright 的事件包含子 frame），例如资源 404、`ws` 升级失败、轮询被中止。Document Server 加载时如果出现任何一项，就停下回报，不放宽断言。
+  - 唯一的例外（实测后用户决定，2026-11-14）：Document Server 9.4 的编辑器会注册一个缓存用的 ServiceWorker，网关按既定设计对带 `Service-Worker` 头的请求一律回 403，不转发（`platform/src/gateway/README.md:9`：所有员工实例共用平台源）。所以本场景的 `consoleErrors` 必须恰好是下面两条，按顺序；多一条、少一条或内容不同都失败：
+    - `A bad HTTP response code (403) was received when fetching the script.`
+    - `Registration failed with TypeError: Failed to register a ServiceWorker for scope ('<平台源>/sidebar/onlyoffice/ds/<版本段>/') with script ('<平台源>/sidebar/onlyoffice/ds/<版本段>/document_editor_service_worker.js'): A bad HTTP response code (403) was received when fetching the script.`
+
+    其中 `<平台源>` 等于本次运行的平台 base，`<版本段>` 是 scope 和 script 共用的同一个路径段，不含 `/`。页面错误、失败请求和对外请求仍然必须是 0。
+
+  - 读回在 `workbenchSession` 关闭浏览器之后进行，不额外等待。只打开不编辑时，Document Server 只发 status 4（关闭、无改动），不会写回。字节数或 sha256 变了就失败。
+- [ ] 48.2 接线和测试：
+  - `platform-stack.stack.test.ts` 在 `legacyPreviewScenario` 之后调用 `officeHintsScenario(lane)`，并把 evidence 打印进 `stackEvidence.officeHints`：文件名、字节数、sha256、提示原文、截图名。断言都放在夹具里。
+    - `:658` 的解构不动，否则会超出 printWidth，被拆成每个属性一行。另起一行 `const { officeHints } = evidence;`，再判断它不为 undefined。
+    - 预计增加 12–15 行，`max-lines` 余量足够。
+    - `:168` 的注释「only started, never awaited or contacted」在本场景之后不再成立，同一 PR 改写。
+  - 新增 `platform/test/office-hints-stack-fixture.integration.test.ts`，覆盖夹具里的纯函数（页面求值表达式、写入脚本参数、evidence 形状），写法照 `legacy-preview-stack-fixture.integration.test.ts`。
+- [ ] 48.3 文档（编排者在同一 PR 中修改）：
+  - 新建 `docs/EMPLOYEE_GUIDE.md`（`docs/` 下没有已有的员工文档），写入两条提示的含义：
+    - 同写提示：AI 修改文件时不要同时编辑，人工保存完成后再让 AI 继续；
+    - 无 Session 提示：防御性提示，正常使用时不会出现，出现时先新建或进入一个会话。
+  - `docs/LOCAL_STACK.md`：第 9 步那一整段的末尾追加一句 Office 提示的步骤；证据表里加一行 `officeHints`，格式同旧格式预览那一行；
+  - `platform/test/README.md`：在本机全栈段落里加上这一步；
+  - 18.4 原条目的验证句按用户决定改写（本 PR 已改）。`specs/office-editing/spec.md` 里的无 Session 场景不改；PR 描述引用用户决定，并逐条对照 issue 验收标准，写明「触及关键路径」那一项不适用。
+- 验证：
+  - 夹具的集成测试先红后绿；
+  - `pnpm check`；
+  - 本机 exact-head `pnpm test:stack` 通过，并在 PR 里贴出证据评论（截图名、提示原文、浏览器证据计数）；
+  - VPS exact-head `test:docker` 和 `test:deploy`：只为满足门禁，本节不改 Docker 套件。
+
+剩余风险：
+
+- 只验证了提示出现、编辑器挂载，没有验证编辑、保存和写回，这些在 18.5（#440）。
+- 就绪轮询只证明 Document Server 的 healthcheck 返回 `true`，不证明编辑器内全部资源都可用；不可用时由浏览器零错误断言暴露。
+
+Suggested fixture level: standard - 一个新的本机通道浏览器场景，加员工文档；不改产品代码
+Minimal mergeable slice: atomic，48.1–48.3 一个 PR（按 CI 口径包含 tasks.md，目标低于 400 行；集成测试只测选择器字符串、写入脚本 argv 和 evidence 形状，保持精简）
+Risk packs (48.x): selected - Legacy compatibility（现有 stack 场景的顺序和断言不变；文件只读打开，不改字节）、Resource limits（场景有界等待，文件结束时删除）；not selected - Security、Config、Schema、Auth、Public API、Concurrency、Migration。
+Must preserve：
+
+- 现有 stack 场景和它们的浏览器证据断言不变；
+- `office-hints` 插件和 ONLYOFFICE 的代码不改；
+- 每次运行仍然只有 5 次付费检索。
