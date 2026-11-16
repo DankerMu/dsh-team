@@ -3650,7 +3650,7 @@ Evidence (#556):
 - [ ] 18.1 用户镜像安装 `dsh-sidebar-onlyoffice@0.2.0`，作为可管理项加入 `catalog.json`，并用构建期补丁做两件事：文件令牌密钥改为读取 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，缺失或为空时拒绝签发和校验；文档 key 改为 `HMAC(文件令牌密钥, 原 key 输入)`，回调和编辑器打开只接受本实例密钥派生的 key。补丁钉住版本和输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Docker 用例在不注入该环境变量时直接请求 `file` 路由，任何令牌（包括公开常量签的）都被拒绝；注入后公开常量签的令牌和按原算法算出的 key 都被拒绝。
 - [ ] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
 - [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
-- [ ] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文；无 Session 提示由 `plugins/office-hints/client.test.js` 覆盖（发布版 UI 不可达，用户决定 2026-11-13，见第 48 节）。#439 合并后，由下一节 fixture 提交补结果时勾选本项（#438 的插件部分已合入）。
+- [x] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文；无 Session 提示由 `plugins/office-hints/client.test.js` 覆盖（发布版 UI 不可达，用户决定 2026-11-13，见第 48 节）。#439 合并后，由下一节 fixture 提交补结果时勾选本项（#438 的插件部分已合入）。
 - [ ] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
   - DOCX、XLSX、PPTX 编辑保存后写回原文件，Agent 读到最新内容；
   - 两个用户的同名文件互不串写；
@@ -5820,7 +5820,7 @@ Must preserve：
   - 用户决定（2026-11-13）：浏览器只验同写提示。无 Session 提示由已合入的 `plugins/office-hints/client.test.js` 覆盖（`''` 和缺失两种），员工指南写明它是防御性提示。
 - 查看器 priority：office-hints 为 20，ONLYOFFICE 为 10，所以包装查看器先被选中。
 
-- [ ] 48.1 新增 `platform/test/office-hints-stack-fixture.ts`，导出 `officeHintsScenario(lane: ArchiveLane): Promise<OfficeHintsEvidence>`，写法照 `legacy-preview-stack-fixture.ts`：
+- [x] 48.1 新增 `platform/test/office-hints-stack-fixture.ts`，导出 `officeHintsScenario(lane: ArchiveLane): Promise<OfficeHintsEvidence>`，写法照 `legacy-preview-stack-fixture.ts`：
   - 用 `withWorkFiles` 包住整个场景，结束时删除文件。
   - 以 uid 1001 在实例里用 python-docx 写一个只有一段文字的 `/data/work/同写提示.docx`（先例见 `office-convert-fixture.ts:63-66`），参数经 argv 传入，不经 shell。写完由实例读回字节数和 sha256。
   - 打开浏览器之前，先在实例里用 `lane.exec` 轮询 Document Server 的 healthcheck（`/sidebar/onlyoffice/ds/healthcheck`），直到返回 `true`，以 `session.timeout` 为上限。实例内 3080 只在 base+2 地址上应答，回环地址上没有服务（`platform/src/managed-config/README.md:13`），所以连实例自己的地址，并带 `Host: 127.0.0.1:3080`，写法同 `onlyoffice-token-fixture.ts:50,250`。403 立即失败；502、503 和连接错误继续轮询。这样 Document Server 冷启动时的 502 不会落进浏览器的计数。如果信任检查拒绝这种调用，就停下回报。
@@ -5847,19 +5847,20 @@ Must preserve：
     其中 `<平台源>` 等于本次运行的平台 base，`<版本段>` 是 scope 和 script 共用的同一个路径段，不含 `/`。页面错误、失败请求和对外请求仍然必须是 0。
 
   - 读回在 `workbenchSession` 关闭浏览器之后进行，不额外等待。只打开不编辑时，Document Server 只发 status 4（关闭、无改动），不会写回。字节数或 sha256 变了就失败。
-- [ ] 48.2 接线和测试：
+- [x] 48.2 接线和测试：
   - `platform-stack.stack.test.ts` 在 `legacyPreviewScenario` 之后调用 `officeHintsScenario(lane)`，并把 evidence 打印进 `stackEvidence.officeHints`：文件名、字节数、sha256、提示原文、截图名。断言都放在夹具里。
     - `:658` 的解构不动，否则会超出 printWidth，被拆成每个属性一行。另起一行 `const { officeHints } = evidence;`，再判断它不为 undefined。
     - 预计增加 12–15 行，`max-lines` 余量足够。
     - `:168` 的注释「only started, never awaited or contacted」在本场景之后不再成立，同一 PR 改写。
   - 新增 `platform/test/office-hints-stack-fixture.integration.test.ts`，覆盖夹具里的纯函数（页面求值表达式、写入脚本参数、evidence 形状），写法照 `legacy-preview-stack-fixture.integration.test.ts`。
-- [ ] 48.3 文档（编排者在同一 PR 中修改）：
+- [x] 48.3 文档（编排者在同一 PR 中修改）：
   - 新建 `docs/EMPLOYEE_GUIDE.md`（`docs/` 下没有已有的员工文档），写入两条提示的含义：
     - 同写提示：AI 修改文件时不要同时编辑，人工保存完成后再让 AI 继续；
     - 无 Session 提示：防御性提示，正常使用时不会出现，出现时先新建或进入一个会话。
   - `docs/LOCAL_STACK.md`：第 9 步那一整段的末尾追加一句 Office 提示的步骤；证据表里加一行 `officeHints`，格式同旧格式预览那一行；
   - `platform/test/README.md`：在本机全栈段落里加上这一步；
   - 18.4 原条目的验证句按用户决定改写（本 PR 已改）。`specs/office-editing/spec.md` 里的无 Session 场景不改；PR 描述引用用户决定，并逐条对照 issue 验收标准，写明「触及关键路径」那一项不适用。
+  - 结果：PR #613 评审两轮（第 1 轮一个 P2 竞态加一个覆盖缺口，修复 1 次；第 2 轮 clean）。因 ubuntu-latest 切到 26.04 导致 CI 红，先合入 #614（CI 钉 shellcheck 0.10.0、`runs-on` 钉 ubuntu-24.04），本 PR 原样 rebase 到确切 head `7ad7be4` 后重跑 lane（invocation `211d7394-5a44-4619-a411-5fe962474b56`）：`test:docker` 144/144、`test:deploy` 14/14，cleanup confirmed；本机 exact-head `pnpm test:stack` 1/1，`stackEvidence.officeHints` 含同写提示原文和 `office-hints-collab.png`，控制台错误恰为两条 ServiceWorker 403；按 CI 口径 393 行。#613 合并（d221bd6），#439 关闭，18.4 随之勾选。
 - 验证：
   - 夹具的集成测试先红后绿；
   - `pnpm check`；
@@ -5879,3 +5880,97 @@ Must preserve：
 - 现有 stack 场景和它们的浏览器证据断言不变；
 - `office-hints` 插件和 ONLYOFFICE 的代码不改；
 - 每次运行仍然只有 5 次付费检索。
+
+## 49. #440 第一刀：跨用户攻击（18.5 的攻击部分）
+
+依赖：#439（第 48 节）已合入。只改 `platform/test/` 和文档，不碰关键路径。
+
+用户决定（2026-11-15）：
+
+- 18.5 在 #440 下用多个 PR 依次交付，前一个合入后才开下一个，最后一个关闭 #440。用户选这一项时给的参考顺序是三刀：攻击和 profile → 编辑器驱动 → 字体和空闲。
+- 攻击证据分三层：
+  - 从 B 的实例证明网络上到不了 A；
+  - 从平台容器这个特权位置直连 A，证明各种 key 和令牌都被拒绝；
+  - 夹具和 PR 都写明后者是特权位置。
+
+fixture 作者的拆分（在上面「多个 PR」的决定之内，不是另一项用户决定）：fixture 审查按行数估算后，把第一刀再拆成两刀，共四刀：
+
+1. 本节：(c) 跨用户攻击；
+2. (d) profile 改写后重启，加注册表跨重启的观测；
+3. 编辑器驱动：三种格式写回加 Agent 读回、同名不串写，以及「猜 key 加入 A 正开着的编辑会话」；
+4. 字体和空闲。
+
+用户决定（2026-11-16）：第一刀按本节完整实现后，按 CI 口径共 723 行（夹具 429 行），所以再拆成两个顺序 PR：
+
+- 49-a：共享片段抽取、(c1)、(c2)。B 侧的 k1_B、T_B 及其正向对照都在这个 PR 里。
+- 49-b：(c1') 和 (c3)，在同一个夹具上扩展，用 49-a 拿到的 k1_B 和 T_B。
+- 49.3 的文档随 49-b 一起改，那时证据才完整；49-a 的证据只进 PR 评论。
+
+两个 PR 都要不超过 400 行。49-b 合入后，本节才全部勾选。
+
+已核实的事实（`dsh-sidebar-onlyoffice@0.2.0` 发行版 `lib/index.js`，SHA-256 `e2148f01…`，行号以它为准；补丁后行号会偏移，文本不变）：
+
+- **网络可达性**：每个实例在自己的 /28 网桥上（`platform/src/orchestrator/networks.ts`）。同时接在所有实例网桥上的只有平台容器（+3）和 Document Server（+4）。B 的容器到不了 A 的 +2，但能到自己网桥上的 Document Server（+4）。
+- **JWT 不是实例间的边界**：覆盖层把同一个 `DOCUMENT_SERVER_JWT_SECRET` 写进每个实例（`generate.ts:293-300`），员工读得到（`platform/src/managed-config/README.md`）。B 因此能自己签编辑器配置，让 Document Server 以有效 JWT 向 A 的回调地址发 POST，key 由 B 任选，也能让 Document Server 用 B 构造的令牌去取 A 的 file 路由。回调只验这个 JWT（`:2131-2134`，从 `Authorization: Bearer` 或 body 的 `token` 取，`:1054-1061`）。所以实例之间唯一的边界是 18.1 的每实例 HMAC：key 和文件令牌都猜不出来。
+- **回调保存**：
+  - 未登记的 key 在下载之前就抛 `unknown document key`（`:1441`），路由回 200 `{ error: 1 }`；
+  - 已登记的 key 先过 size/mtime 守卫，再下载回调报来的 URL；URL 不在 public base 下时按原样下载，只记一条 warn（`:1253-1272`、`:2165-2166`），这条 warn 只进 cordis 内存缓冲（18.1 已核实）。
+- **config 路由**：
+  - 信任检查只看 Host、`sec-fetch-site` 和 Origin（`isTrustedApiRequest`，`:146-160`）。放行的 Host 是回环地址和平台公开 authority（`start.ts:466-467` 传 `--trusted-host`）。
+  - Host 为 A 的 +2 地址时，回 403 `{ ok: false, error: { code: "forbidden", message: "forbidden" } }`（`:1906-1914`）。
+- **file 路由**：只验令牌，不看 Host（`:2074-2118`）。
+
+- [ ] 49.1 新增 `platform/test/office-isolation-stack-fixture.ts`，导出 `officeIsolationScenario(lane)`，返回 `OfficeIsolationEvidence`。lane 在 `ArchiveLane` 之外加上：主机侧 `run`（docker）、A 的实例名、平台容器脚本执行 `platformRead`，以及 `secondEmployee()`（注册并启动 B，返回 B 的实例名）和 `retire()`（管理员停用 B，写法同 `unconfiguredEmployeePanel`）。
+  - 文件：
+    - 用 `withWorkFiles` 包住整个场景；
+    - 在 A 里以 uid 1001 写两个文件：目标 `/data/work/隔离目标.docx` 和来源 `/data/work/隔离来源.docx`，内容是不同的任意字节；
+    - 地址：A、B 的 +2 都取 `docker inspect` 里实例在自己网桥上的 IP，各用一个变量，后面所有步骤都用同一个变量。
+  - 秘密处理：
+    - 每段 exec 脚本都整体 try/catch，永远 exit 0，错误写进 observation 的 `error` 字段，照 `onlyoffice-token-fixture.ts` 的 `probeScript`。这样失败时 `output()` 不会把带 k1/T 的 argv 抛出来；外层再对 k1、k1_B、T、T_B 做 `replaceAll` 脱敏。
+    - 令牌的 claims 由测试进程在 (c1) 之后一次定好：`{ key: k1, path: 来源文件, cwd: /data/work, exp: 当前时间 + 600 秒 }`，和 `onlyoffice-token-fixture.ts` 一样取 600 秒。T 和 T_B 都签这同一份 claims。T 在 B 退役之后才签，紧接着跑 (c3)。
+    - JWT 和每实例密钥只在各自容器里从环境读取，不进 argv；密钥只留 SHA-256 前缀。
+    - k1、T 留在测试进程内存里，不打印、不进证据。
+  - (c1) A 自己（A 的 exec，回环 Host，读 A 自己环境里的密钥）：
+    - 对目标文件请求 config 路由，回 200、`signed: true`，并登记 k1；
+    - 轮询注册表文件，最多 5 秒（持久化有 500ms 去抖），直到其中有 k1、没有 k0（公开算法的 key）。
+  - (c2) B 的位置：先 `secondEmployee()`。B 的 exec（uid 1001）里依次做三件事：
+    - 连 A 的 +2:3080，3 秒内不得建立 TCP 连接：超时、拒绝、不可达都算。A 在 3080 上监听，所以「拒绝」只可能来自拦截规则，同样说明到不了。
+    - 正向对照：同一脚本连 B 自己的 +2:3080，能连上。
+    - 在 B 里写同路径、同名的 `/data/work/隔离目标.docx`，请求 B 的 config 路由登记 k1_B；再用 B 自己环境里的密钥，对那份 claims 签出 T_B（claims 经 argv 传入，在脱敏范围内）。正向对照：T_B 请求 B 自己的 file 路由，回 404 `file not found`（B 里没有 A 的来源文件），证明 T_B 是一张有效的 B 令牌。拿到 k1_B 和 T_B 后立即 `retire()`。B 的整段放在 try/finally 里，保证 `retire()` 一定执行。
+  - (c1') B 退役后，回到 A 的 exec，用 A 的密钥签那份 claims 得到 T，用 T 请求 file 路由，回 200，正文等于来源文件的字节。
+  - (c3) 特权位置：在平台容器里用 `platformRead` 跑脚本，JWT 从平台容器自己的环境变量 `DOCUMENT_SERVER_JWT_SECRET` 读。请求一律发到 A 的 +2，Host 带 A 的地址。这正是 B 让 Document Server 代发的请求的样子。
+    1. config 路由回上面那条 403。
+    2. file 路由。下面三个伪造令牌和 T 用同一份 claims，只有签名不同：公开常量、随机猜的 32 字节密钥、B 的密钥（即 T_B），都回 403 `invalid token: bad-signature`。正向对照：T 回 200，正文等于来源文件的字节。
+    3. 回调。带有效 JWT、status 2，url 为「A 的地址 + file 路由 + T」。依次用下面三个 key，都回 200 `{ error: 1 }`，目标文件字节不变：
+       - k0；
+       - HMAC(猜的密钥, A 的输入串)，输入串由 A 的 hostname `u-<id>`、路径、size、mtime 组成；
+       - k1_B。
+    4. 不带 JWT、用 k1 回调，回 403 `{ error: 4 }`。
+    5. 最后做正向对照：带 JWT、用 k1 回调，回 200 `{ error: 0 }`，目标文件变成来源文件的字节。它排除了下载失败和 size/mtime 守卫这两种其他原因，所以前面的 `{ error: 1 }` 只能是 key 未登记造成的。
+  - 收尾：provider 计数不变；B 的实例已退役。
+- [ ] 49.2 接线和测试：
+  - `platform-stack.stack.test.ts` 在 `officeHintsScenario` 之后调用 `officeIsolationScenario`。证据打印进 `stackEvidence.officeIsolation`，只放各步的状态码、`{ error }`、文件结果（unchanged/saved）和连接结果。
+  - stack 文件 `max-lines` 实测 728/800，接线控制在 25 行以内；`secondEmployee`/`retire` 复用 `registerDeploymentEmployee`、`startInstance` 和停用请求。
+  - `onlyoffice-token-fixture.ts` 的 `probeScript` 里的 `mint`、`exchange`、`text`/`json` 和 key 计算，抽成一个两边共用的脚本片段模块，不复制。
+  - 新增 `office-isolation-stack-fixture.integration.test.ts`，覆盖脚本生成、期望观测和 evidence 形状，以及脱敏：给定 k1/T，构造出的错误消息不含它们。
+- [ ] 49.3 文档：
+  - `docs/LOCAL_STACK.md` 证据表加一行 `officeIsolation`；
+  - `platform/test/README.md` 本机全栈段落加一句，写明 (c3) 是特权位置。
+
+验证：
+
+- 夹具集成测试先红后绿；`pnpm check`；
+- 本机 exact-head `pnpm test:stack` 通过并贴证据评论；
+- VPS exact-head `test:docker`（含抽出共享片段后的 `onlyoffice-token.docker.test.ts`）和 `test:deploy`。
+
+行数：原先估计约 370 行，实测 723 行，已按上面 2026-11-16 的用户决定拆成 49-a 和 49-b。每个 PR 超过 400 行就停下回报，不加 exempt 标签。
+
+剩余风险：
+
+- (c3) 用的是特权位置，覆盖的是 B 经 Document Server 能发出的三类请求：GET config 路由、带有效 JWT 的回调，和用伪造令牌取 file。平台容器或 Document Server 一旦被攻破，攻击者可以伪造回环 Host 或平台 authority，通过 config 路由的信任检查。这不在 18.5 的威胁模型内，只记录。
+- 本节第一次让两个员工实例和 Document Server、RAGFlow 同时运行；B 只活到拿到 k1_B 为止。
+
+Suggested fixture level: expanded - 跨用户隔离、第二个员工实例、特权位置
+Minimal mergeable slice: 49.1–49.3 一个 PR
+Risk packs: selected - Security（跨实例令牌和 key）、Auth（JWT 和每实例密钥）、Resource limits（两个实例同时运行，场景有界）、Legacy compatibility（已有 stack 场景不变，`onlyoffice-token.docker.test.ts` 行为不变）；not selected - Schema、Public API、Migration、Concurrency。
+Must preserve：已有 stack 场景和断言不变；ONLYOFFICE 和平台代码不改；每次运行仍然只有 5 次付费检索；任何密钥、JWT、令牌和 key 都不进日志和证据。

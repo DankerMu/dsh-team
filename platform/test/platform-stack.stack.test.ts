@@ -50,6 +50,8 @@ import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 import { officeHintsLine, officeHintsScenario } from './office-hints-stack-fixture.ts';
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
+import { officeIsolationLine, officeIsolationScenario } from './office-isolation-stack-fixture.ts';
+import type { OfficeIsolationEvidence } from './office-isolation-stack-fixture.ts';
 import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
   comparableRagflowStack,
@@ -162,6 +164,7 @@ interface ConversationEvidence {
   archive?: ArchiveEvidence;
   legacyPreview?: LegacyPreviewEvidence;
   officeHints?: OfficeHintsEvidence;
+  officeIsolation?: OfficeIsolationEvidence;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
@@ -249,6 +252,7 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
 }
 
 const PASSWORD = 'instance-acceptance-password';
+const B_EMAIL = 'isolation@deployment.example.test';
 
 /** Starts one employee's instance through the platform API and waits until it is running. */
 async function startInstance(lifecycle: UserImageLifecycle, base: string, cookie: string) {
@@ -287,13 +291,7 @@ async function unconfiguredEmployeePanel(
   await startInstance(lifecycle, base, second.cookie);
   const needles = await panelNeedles(lifecycle.commandAsync, second.id, stack);
   const panel = await notConfiguredPanel(panelSession(lifecycle, base, second.email), needles);
-  const disabled = await fetch(`${base}/_platform/api/admin/users/${second.id}/status`, {
-    method: 'PUT',
-    headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
-    body: JSON.stringify({ status: 'disabled' }),
-  });
-  await disabled.arrayBuffer();
-  expect(disabled.status).toBe(204);
+  await disableEmployee(administrator, second.id);
   return panel;
 }
 
@@ -301,6 +299,18 @@ const PROVIDER_HEALTH =
   "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());";
 const PROVIDER_RELEASE =
   "const r=await fetch('http://127.0.0.1:3099/release',{method:'POST'});process.stdout.write(await r.text());";
+
+/** The administrator disables one employee; the 204 arrives only after the instance is retired. */
+async function disableEmployee(administrator: { base: string; cookie: string }, id: string) {
+  const { base } = administrator;
+  const disabled = await fetch(`${base}/_platform/api/admin/users/${id}/status`, {
+    method: 'PUT',
+    headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'disabled' }),
+  });
+  await disabled.arrayBuffer();
+  expect(disabled.status).toBe(204);
+}
 
 /** The administrator restart of one employee's instance, awaited until it runs again. */
 async function restartInstance(
@@ -485,6 +495,21 @@ async function converse(
     evidence.legacyPreview = await legacyPreviewScenario(lane);
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
+    // 18.5 (#440): B's instance cannot reach A's; each registers only its own key.
+    let secondId = '';
+    evidence.officeIsolation = await officeIsolationScenario({
+      ...lane,
+      run,
+      instance: `dsh-team-u-${employee.id}`,
+      secondEmployee: async () => {
+        const next = await registerDeploymentEmployee(lifecycle, { base, request: fetch }, B_EMAIL);
+        secondId = next.id;
+        await startInstance(lifecycle, base, next.cookie);
+        return `dsh-team-u-${next.id}`;
+      },
+      retire: () =>
+        secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId),
+    });
   });
 }
 
@@ -675,8 +700,8 @@ it('builds both images, starts the delivered compose platform, converses through
   if (search === undefined) throw new Error('Knowledge search evidence missing');
   if (archive === undefined) throw new Error('Sidebar archive evidence missing');
   if (legacyPreview === undefined) throw new Error('Legacy preview evidence missing');
-  // Its presence is checked by `officeHintsLine`; one more branch here exceeds `complexity`.
-  const { officeHints } = evidence;
+  // Their presence is checked by the *Line helpers; one more branch here exceeds `complexity`.
+  const { officeHints, officeIsolation } = evidence;
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -820,6 +845,7 @@ it('builds both images, starts the delivered compose platform, converses through
           screenshots: legacyPreview.browser.screenshots,
         },
         officeHints: officeHintsLine(officeHints),
+        officeIsolation: officeIsolationLine(officeIsolation),
       },
     })}\n`,
   );
