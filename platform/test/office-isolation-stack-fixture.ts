@@ -212,13 +212,18 @@ async function bPosition(lane: OfficeIsolationLane, aAddress: string, claims: st
   throw new Error(redactSecrets(`Office isolation (c2) failed: ${messages.join('\n')}`, [k1]));
 }
 
-/** `step`'s result, or its failure redacted and without `cause`: docker quotes argv and scripts. */
+/** `step`'s parsed result, or its failure redacted and without `cause`: docker quotes argv and
+ * scripts; a JSON syntax error quotes an unredactable prefix of the output, so it is dropped. */
 async function guarded(label: string, secrets: Secrets, step: () => Promise<string>) {
   const output = await step().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(redactSecrets(`Office isolation ${label} failed: ${message}`, secrets));
   });
-  return JSON.parse(output) as Observed;
+  try {
+    return JSON.parse(output) as Observed;
+  } catch {
+    throw new Error(`Office isolation ${label} failed: output is not JSON`);
+  }
 }
 
 async function officeIsolation(lane: OfficeIsolationLane): Promise<OfficeIsolationEvidence> {
