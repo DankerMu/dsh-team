@@ -5957,6 +5957,35 @@ fixture 作者的拆分（在上面「多个 PR」的决定之内，不是另一
   - `docs/LOCAL_STACK.md` 证据表加一行 `officeIsolation`；
   - `platform/test/README.md` 本机全栈段落加一句，写明 (c3) 是特权位置。
 
+49-a 结果（#615，合并提交 `80f9919`）：
+
+- 共享片段抽成 `platform/test/onlyoffice-probe-script.ts`（`KEY_JS`、`MINT_JS`、`exchangeJs`、`READ_JS`），18.1 的令牌探针生成的脚本逐字节不变，VPS `test:docker` 144/144。
+- 本机 exact-head `pnpm test:stack` 的 `stackEvidence.officeIsolation`：`a.config {200, signed}`、`a.registry {k0:false,k1:true}`；`b.connect {a:blocked,b:connected}`、`b.config {200, signed}`、`b.registry {k0:false,k1:true}`、`b.file {404, file not found}`。
+- 已有的形状：`script(body)` 包住整段，永远 exit 0；`bPosition` 收集失败、`retire()` 一定执行、抛出的错误对 k1 脱敏且不带 `cause`；`verify` 对给定的秘密列表脱敏。B 的 key 和令牌在 B 的 observation 里叫 `kB`、`tB`。`node -e` 的第一个额外参数是 `process.argv[1]`。
+
+49-b 在 49-a 的夹具上扩展，不重写已合入的部分：
+
+- lane 加 `platformRead`，即 stack 测试里已有的 `privatePlatformRead` 包装；
+- (c1')：新增 A 侧签名脚本，经 `lane.exec` 运行，argv[1] 是 claims，argv[2] 是测试进程随机生成的 32 字节猜测密钥。target 的 stat 在 (c1) 之后没有变化，所以脚本按 `KEY_JS` 重新算出的 k0 和 k1 与 (c1) 相同。
+  - 脚本输出：
+    - T、公开常量令牌和猜测密钥令牌三种令牌；
+    - k0 和 HMAC(猜测密钥, 输入串)；
+    - 来源文件的 sha256；
+    - `fileWithT`：T 取 A 自己的 file 路由，得到 `{status:200, matches:true}`。
+  - 公开常量 `dsh-sidebar-onlyoffice/file-token/v1` 加进共享片段模块，供 18.1 的探针和这里共用，只保留一处定义。
+- (c3)：特权脚本把令牌和 key 以 JSON 形式嵌进脚本源码，经 `platformRead` 在平台容器里运行。
+  - 脚本整段 try/catch，永远 exit 0。
+  - 外层 `platformRead` 失败时，错误信息会带出 argv，因此对全部秘密 replaceAll 脱敏，不带 `cause`。全部秘密：k1、kB、tB、T、公开常量令牌、猜测密钥令牌、HMAC(猜测密钥)；k0 不是秘密，但一并脱敏。
+  - 回调的 JWT 放在 body 的 `token` 字段，由平台容器环境里的 `DOCUMENT_SERVER_JWT_SECRET` 签出，载荷只有 `exp`。0.2.0 只验签，key、status 和 url 都从原始 body 读取（`:2132-2147`）。
+  - 未登记的 key 在 `saveFromCallback` 里抛错，被 catch 后回 `{ error: 1 }`；`logger.error` 只记 key，这条日志只进 cordis 内存缓冲。
+- (c1') 的秘密列表：`lane.exec` 的 argv 里有 claims（含 k1），observation 里有三种令牌、k0 和 HMAC(猜测密钥)，exec 失败和 `verify` 失败都对 k1、kB、tB 加上这五个值脱敏。
+- 回调 JWT 的 header 必须逐字节等于 `{"alg":"HS256","typ":"JWT"}` 的 base64url（`:982-985`），否则判 `malformed`。
+- 收尾：A 回读 target，结果必须是 `saved`，即与来源文件字节相同。证据里的 `target` 只会是 `saved`，不为观测 `unchanged` 另签 TARGET 令牌。逐次「未登记 key 不写 target」由第 5 步推出：k1 回 `{ error: 0 }` 说明 `:1442` 的 mtime 守卫通过了，前面任何一次写入都会改 mtime，让 k1 回 `{ error: 1 }`。两个文件都是 32 字节，起作用的是 mtime。
+- `OfficeIsolationEvidence` 的键从 `'a'|'b'` 扩到并列的 `sign`、`attack`；provider 计数检查挪到 (c3) 和收尾回读之后。
+- 证据形状：在 `{a, b}` 上加 `sign`（`fileWithT`）和 `attack`（`config`、`file`、`callback`、`target`），只含状态码、`{ error }`、`matches` 和 `saved`/`unchanged`。
+- 49.3 的文档改动随本 PR 一起提交。
+- 集成测试补齐：新脚本的生成、`EXPECTED_ATTACK`、`platformRead` 被拒时的脱敏（错误里不含任一秘密、不带 `cause`），以及 evidence 形状。
+
 验证：
 
 - 夹具集成测试先红后绿；`pnpm check`；
