@@ -1,7 +1,13 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
-import { exchangeJs, KEY_JS, MINT_JS, READ_JS } from './onlyoffice-probe-script.ts';
+import {
+  exchangeJs,
+  FILE_TOKEN_PUBLIC,
+  KEY_JS,
+  MINT_JS,
+  READ_JS,
+} from './onlyoffice-probe-script.ts';
 import { record } from './docker-cleanup.ts';
 import { lifecycleWebNetwork } from './managed-policy-fixture.ts';
 import { rejectPluginFailures } from './plugin-failure-markers.ts';
@@ -30,7 +36,7 @@ import { hostname } from 'node:os';
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 const phase = ${JSON.stringify(phase)};
 const secret = process.env.${SECRET_ENV};
-const PUBLIC = 'dsh-sidebar-onlyoffice/file-token/v1';
+const PUBLIC = '${FILE_TOKEN_PUBLIC}';
 const dir = '/data/work/onlyoffice-' + phase;
 const file = dir + '/probe.docx';
 const original = Buffer.from('dsh-team onlyoffice token probe ' + phase);

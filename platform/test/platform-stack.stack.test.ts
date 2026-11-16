@@ -495,11 +495,12 @@ async function converse(
     evidence.legacyPreview = await legacyPreviewScenario(lane);
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
-    // 18.5 (#440): B's instance cannot reach A's; each registers only its own key.
+    // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
     let secondId = '';
     evidence.officeIsolation = await officeIsolationScenario({
       ...lane,
       run,
+      platformRead,
       instance: `dsh-team-u-${employee.id}`,
       secondEmployee: async () => {
         const next = await registerDeploymentEmployee(lifecycle, { base, request: fetch }, B_EMAIL);

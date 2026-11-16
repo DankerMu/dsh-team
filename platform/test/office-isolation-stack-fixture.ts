@@ -1,7 +1,14 @@
+import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
-import { exchangeJs, KEY_JS, MINT_JS, READ_JS } from './onlyoffice-probe-script.ts';
+import {
+  exchangeJs,
+  FILE_TOKEN_PUBLIC,
+  KEY_JS,
+  MINT_JS,
+  READ_JS,
+} from './onlyoffice-probe-script.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 
@@ -14,6 +21,8 @@ const NODE = ['node', '--input-type=module', '-e'];
 export interface OfficeIsolationLane extends ArchiveLane {
   readonly run: DockerOutput;
   readonly instance: string;
+  /** Runs a JSON-printing script in the platform container: the privileged position (c3). */
+  readonly platformRead: (script: string) => Promise<Record<string, unknown>>;
   readonly secondEmployee: () => Promise<string>;
   /** Disables B if it was registered; a no-op otherwise. */
   readonly retire: () => Promise<void>;
@@ -21,7 +30,7 @@ export interface OfficeIsolationLane extends ArchiveLane {
 
 /** The verified observations only; no key or token. */
 export type OfficeIsolationEvidence = Readonly<
-  Record<'a' | 'b', Readonly<Record<string, unknown>>>
+  Record<'a' | 'b' | 'sign' | 'attack', Readonly<Record<string, unknown>>>
 >;
 
 const CONFIG_OK = { status: 200, signed: true };
@@ -33,10 +42,30 @@ export const EXPECTED_ISOLATION = {
     registry: { k0: false, k1: true },
     file: { status: 404, body: 'file not found' },
   },
+  sign: { fileWithT: { status: 200, matches: true } },
 };
+const BAD_SIGNATURE = { status: 403, body: 'invalid token: bad-signature' };
+const UNKNOWN_KEY = { status: 200, error: 1 };
+/** (c3): only T reads and only the JWT-signed k1 saves; the read-back then finds the source bytes. */
+export const EXPECTED_ATTACK = {
+  config: { status: 403, body: { ok: false, error: { code: 'forbidden', message: 'forbidden' } } },
+  file: {
+    public: BAD_SIGNATURE,
+    guessed: BAD_SIGNATURE,
+    b: BAD_SIGNATURE,
+    t: { status: 200, matches: true },
+  },
+  callback: {
+    ...{ k0: UNKNOWN_KEY, hmacGuessed: UNKNOWN_KEY, kB: UNKNOWN_KEY },
+    ...{ noJwtK1: { status: 403, error: 4 }, jwtK1: { status: 200, error: 0 } },
+  },
+  target: 'saved',
+};
+const CONFIG_PATH = `'/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(${JSON.stringify(WORK)})`;
+const FILE_PATH = "'/sidebar/onlyoffice/file?token=' + encodeURIComponent";
 
-/** Runs as uid 1001 and always exits 0: an error becomes `observed.error`, so a failed exec never
- * echoes argv. The per-instance secret is read from the container environment only. */
+/** Always exits 0: an error becomes `observed.error`, so a failed exec never echoes argv. Instance
+ * scripts run as uid 1001 and read the per-instance secret from the container environment only. */
 const script = (body: string) => `import { createHash, createHmac } from 'node:crypto';
 import { request } from 'node:http';
 import { connect } from 'node:net';
@@ -57,7 +86,7 @@ const info = statSync(file);
 ${KEY_JS}
 ${exchangeJs(address, '127.0.0.1:3080')}
 ${READ_JS}
-const config = json(await exchange('GET', '/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(${JSON.stringify(WORK)})));
+const config = json(await exchange('GET', ${CONFIG_PATH}));
 observed.config = { status: config.status, signed: config.body?.signed === true };
 const registry = () => { try { const { entries } = JSON.parse(readFileSync('/data/home/plugins/dsh-sidebar-onlyoffice/registry.json', 'utf8')); return { k0: entries.some((e) => e.key === k0), k1: entries.some((e) => e.key === k1) }; } catch { return { k0: false, k1: false }; } };
 const deadline = Date.now() + 5000;
@@ -84,9 +113,49 @@ observed.connect = { a: await probe(${JSON.stringify(aAddress)}), b: await probe
 ${register(bAddress, 'dsh-team office isolation B target')}
 ${MINT_JS}
 const tB = mint(JSON.parse(process.argv[1]), secret);
-observed.file = text(await exchange('GET', '/sidebar/onlyoffice/file?token=' + encodeURIComponent(tB)));
+observed.file = text(await exchange('GET', ${FILE_PATH}(tB)));
 observed.kB = k1;
 observed.tB = tB;`);
+
+/** (c1') A after B retired: T over argv[1]'s claims, forgeries under the public constant and argv[2]'s
+ * guessed secret, k0 and the guessed-secret HMAC of the unchanged target; T reads A's source. */
+export const aSignScript = (address: string): string =>
+  script(`const claims = JSON.parse(process.argv[1]);
+const guessed = process.argv[2];
+const info = statSync(file);
+${KEY_JS}
+${MINT_JS}
+${exchangeJs(address, '127.0.0.1:3080')}
+const t = mint(claims, secret);
+const served = await exchange('GET', ${FILE_PATH}(t));
+observed.fileWithT = { status: served.status, matches: served.body.equals(readFileSync(${JSON.stringify(SOURCE)})) };
+Object.assign(observed, { t, k0, sourceSha: createHash('sha256').update(readFileSync(${JSON.stringify(SOURCE)})).digest('hex') });
+observed.tPublic = mint(claims, ${JSON.stringify(FILE_TOKEN_PUBLIC)});
+observed.tGuessed = mint(claims, guessed);
+observed.kGuessed = createHmac('sha256', guessed).update(input).digest('hex');`);
+
+/** (c3) in the platform container: each request goes to A's address with A's Host, as B's signed
+ * editor config would have the Document Server send it; callbacks carry a body-`token` JWT. */
+export const platformAttackScript = (address: string, inputs: object): string =>
+  script(`const inputs = ${JSON.stringify(inputs)};
+const jwtSecret = process.env.DOCUMENT_SERVER_JWT_SECRET;
+const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const jwt = () => { const signed = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ exp: Math.floor(Date.now() / 1000) + 600 }); return signed + '.' + createHmac('sha256', jwtSecret).update(signed).digest('base64url'); };
+${exchangeJs(address, `${address}:3080`)}
+${READ_JS}
+const forged = async (token) => text(await exchange('GET', ${FILE_PATH}(token)));
+const source = async (token) => { const r = await exchange('GET', ${FILE_PATH}(token)); return { status: r.status, matches: createHash('sha256').update(r.body).digest('hex') === inputs.sourceSha }; };
+const url = 'http://${address}:3080/sidebar/onlyoffice/file?token=' + encodeURIComponent(inputs.t);
+const callback = async (key, signed) => { const r = json(await exchange('POST', '/sidebar/onlyoffice/callback', { key, status: 2, url, ...(signed ? { token: jwt() } : {}) })); return { status: r.status, error: r.body?.error }; };
+observed.config = json(await exchange('GET', ${CONFIG_PATH}));
+observed.file = { public: await forged(inputs.tPublic), guessed: await forged(inputs.tGuessed), b: await forged(inputs.tB), t: await source(inputs.t) };
+observed.callback = { k0: await callback(inputs.k0, true), hmacGuessed: await callback(inputs.kGuessed, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };`);
+
+/** A's target after (c3): `saved` once it holds the source bytes. */
+export const aReadScript = (): string =>
+  script(
+    `observed.target = readFileSync(file).equals(readFileSync(${JSON.stringify(SOURCE)})) ? 'saved' : 'unchanged';`,
+  );
 
 type Secrets = readonly (string | undefined)[];
 
@@ -103,9 +172,8 @@ export function officeIsolationLine(evidence: OfficeIsolationEvidence | undefine
   return evidence;
 }
 
-type Observed = Readonly<
-  Record<string, unknown> & Partial<Record<'error' | 'k1' | 'kB' | 'tB', string>>
->;
+type Text = 'error' | 'k1' | 'kB' | 'tB' | 't' | 'tPublic' | 'tGuessed' | 'k0' | 'kGuessed';
+type Observed = Readonly<Record<string, unknown> & Partial<Record<Text, string>>>;
 
 /** The `expected` keys of `observed`, or a redacted failure carrying the whole observation. */
 function verify(label: string, observed: Observed, expected: object, secrets: Secrets) {
@@ -144,6 +212,15 @@ async function bPosition(lane: OfficeIsolationLane, aAddress: string, claims: st
   throw new Error(redactSecrets(`Office isolation (c2) failed: ${messages.join('\n')}`, [k1]));
 }
 
+/** `step`'s result, or its failure redacted and without `cause`: docker quotes argv and scripts. */
+async function guarded(label: string, secrets: Secrets, step: () => Promise<string>) {
+  const output = await step().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(redactSecrets(`Office isolation ${label} failed: ${message}`, secrets));
+  });
+  return JSON.parse(output) as Observed;
+}
+
 async function officeIsolation(lane: OfficeIsolationLane): Promise<OfficeIsolationEvidence> {
   const before = await providerCounts(lane);
   const aAddress = await instanceAddress(lane.run, lane.instance);
@@ -154,11 +231,25 @@ async function officeIsolation(lane: OfficeIsolationLane): Promise<OfficeIsolati
   const exp = Math.floor(Date.now() / 1000) + 600;
   const claims = JSON.stringify({ key: k1, path: SOURCE, cwd: WORK, exp });
   const probe = await bPosition(lane, aAddress, claims, k1);
-  const b = verify('(c2)', probe, EXPECTED_ISOLATION.b, [k1, probe.kB, probe.tB]);
+  const { kB, tB } = probe;
+  const b = verify('(c2)', probe, EXPECTED_ISOLATION.b, [k1, kB, tB]);
+  const guessed = randomBytes(32).toString('hex');
+  const signArgs = [...NODE, aSignScript(aAddress), claims, guessed];
+  const signed = await guarded("(c1')", [k1, kB, tB, guessed], () => lane.exec(signArgs));
+  const { t, tPublic, tGuessed, k0, kGuessed } = signed;
+  const secrets = [k1, kB, tB, guessed, t, tPublic, tGuessed, kGuessed, k0];
+  const sign = verify("(c1')", signed, EXPECTED_ISOLATION.sign, secrets);
+  const attackScript = platformAttackScript(aAddress, { ...signed, k1, kB, tB });
+  const attacked = await guarded('(c3)', secrets, async () =>
+    JSON.stringify(await lane.platformRead(attackScript)),
+  );
+  const read = JSON.parse(await lane.exec([...NODE, aReadScript()])) as Observed;
+  const attack = verify('(c3)', { ...attacked, ...read }, EXPECTED_ATTACK, secrets);
   expect(await providerCounts(lane), 'No model request or retrieval').toEqual(before);
-  return { a, b };
+  return { a, b, sign, attack };
 }
 
-/** 18.5 (#440), network layer: B cannot reach A; each instance registers only its own key. */
+/** 18.5 (#440): B cannot reach A and each instance registers only its own key; from the privileged
+ * platform position every forged token and unregistered key is refused, and only A's T and k1 work. */
 export const officeIsolationScenario = (lane: OfficeIsolationLane) =>
   withWorkFiles(lane, [TARGET_NAME, SOURCE_NAME], 'Office isolation', () => officeIsolation(lane));

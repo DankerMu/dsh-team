@@ -6,6 +6,9 @@ export const KEY_JS = `const input = hostname() + '\\0' + file + '\\0' + String(
 const k0 = createHash('sha256').update(input).digest('hex');
 const k1 = secret ? createHmac('sha256', secret).update(input).digest('hex') : undefined;`;
 
+/** The released plugin's public file-token key; 18.1's patch signs with the per-instance secret. */
+export const FILE_TOKEN_PUBLIC = 'dsh-sidebar-onlyoffice/file-token/v1';
+
 export const MINT_JS = `const mint = (claims, key) => {
   const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
   return payload + '.' + createHmac('sha256', key).update(payload).digest('base64url');

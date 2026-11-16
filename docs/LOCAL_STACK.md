@@ -190,6 +190,7 @@ pnpm test:stack
 | 打包下载 | 用例打印的 `stackEvidence.archive`：两个条目的名字、字节数与 sha256，头部格式（`gnu`）加 `.tar.gz`，截图名 `archive-menu.png`；`single`：单文件下载的名字、字节数、sha256、`csp`（`sandbox`）、`disposition`（`attachment`）与 `aborted`（`net::ERR_ABORTED`）；打包会话的控制台错误、页面错误与对外请求都是 0，失败请求恰好是单文件下载导航那一条；provider 计数前后不变 |
 | 旧格式预览 | 用例打印的 `stackEvidence.legacyPreview`：三个文件的名字、字节数、sha256 与预览类型（`office`/`excel`），DOC 和 PPT 的页数（各 1），XLS 的公式栏文字与键入后的 `{ cell, zIndex }`（值不变，`zIndex` 为 `-1`），截图 `legacy-doc.png`、`legacy-xls.png`、`legacy-xls-typed.png`、`legacy-ppt.png`；旧格式会话的控制台错误、页面错误、失败请求与对外请求都是 0（同源 `blob:` Worker 不算对外请求） |
 | Office 提示 | 用例打印的 `stackEvidence.officeHints`：文件名、字节数、sha256（打开前后相同）、同写提示原文与截图名 `office-hints-collab.png`；Office 提示会话的页面错误、失败请求与对外请求都是 0（Document Server iframe 内的事件也计入）；控制台错误恰好是 Document Server 编辑器注册 `document_editor_service_worker.js` 时被网关 403 拒绝的那两条（网关对带 `Service-Worker` 头的请求一律拒绝），别的控制台错误都是 0；provider 计数前后不变 |
+| Office 跨用户隔离 | 用例打印的 `stackEvidence.officeIsolation`，只有状态码、`{ error }`、连接结果和文件结果，没有任何 key、令牌或文件字节：A 自己的 config 回 200 并登记 k1、不登记 k0；第二个员工 B 在 3 秒内连不上 A 的 `:3080`，能连上自己的，B 也只登记自己的 key，B 的令牌在 B 的 file 路由回 404；`sign`：A 用自己的密钥签的令牌取来源文件，内容一致；`attack` 来自平台容器这个特权位置，不是 B 能直接站的位置，模拟 B 经 Document Server 代发的请求：A 的 config 回 403，公开常量、猜测密钥和 B 的令牌取 file 都回 403 `invalid token: bad-signature`，k0、猜测密钥的 HMAC 和 B 的 key 回调都回 `{ error: 1 }`，不带 JWT 回 403 `{ error: 4 }`，只有 A 的 k1 带 JWT 回调回 `{ error: 0 }`，`target` 为 `saved`；B 运行后被停用；provider 计数前后不变 |
 | 凭据 | 运行日志中没有密钥 |
 
 最后注明：本机 arm64 结果只作功能证据，不代表 amd64 生产环境，也不作隔离证据。
