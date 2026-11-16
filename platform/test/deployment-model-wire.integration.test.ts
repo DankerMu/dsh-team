@@ -411,3 +411,146 @@ it.each([
   expect(code).not.toBe(0);
   expect(stderr).toContain('Invalid owned model configuration');
 });
+
+const READ_BACK = { marker: 'read-back-5', command: 'python3 -c "print(1)"', nonce: 'EDITOR0A1B' };
+const BASH_TOOL = { type: 'function', function: { name: 'bash', parameters: {} } };
+const readBackTurn = (tools?: unknown[], extra: unknown[] = []) => ({
+  ...userTurn(tools, extra),
+  messages: [{ role: 'user', content: `please ${READ_BACK.marker}` }, ...extra],
+});
+const bashCall = {
+  index: 0,
+  id: 'owned-bash-1',
+  type: 'function',
+  function: {
+    name: 'bash',
+    arguments: JSON.stringify({ description: '读回文档', command: READ_BACK.command }),
+  },
+};
+const nonceResult = (content: unknown) => [
+  { role: 'assistant', content: null, tool_calls: [{ id: 'owned-bash-1', type: 'function' }] },
+  { role: 'tool', content, tool_call_id: 'owned-bash-1' },
+];
+
+it.each([
+  ['a non-object read-back', 'read'],
+  ['an extra read-back key', { ...READ_BACK, mode: 'bash' }],
+  ['a missing nonce', { marker: READ_BACK.marker, command: READ_BACK.command }],
+  ['an empty marker', { ...READ_BACK, marker: '' }],
+  ['an empty command', { ...READ_BACK, command: '' }],
+  ['an empty nonce', { ...READ_BACK, nonce: '' }],
+  ['a non-string command', { ...READ_BACK, command: 7 }],
+])('rejects %s before listening', async (_name, readBack) => {
+  const { closed } = await launch({ ...BASE, readBack }, await unusedPort());
+  const { code, stderr } = await closed;
+  expect(code).not.toBe(0);
+  expect(stderr).toContain('Invalid owned model configuration');
+});
+
+it.each([
+  ['a marked turn', readBackTurn([READ_TOOL, BASH_TOOL])],
+  ['a history with a tool result', readBackTurn([BASH_TOOL], toolResult)],
+  [
+    'a marker after the tool result',
+    userTurn([BASH_TOOL], [...toolResult, { role: 'user', content: READ_BACK.marker }]),
+  ],
+  [
+    'the delegation and hold markers with their tools',
+    {
+      ...readBackTurn([WRITE_TOOL, BASH_TOOL, SUBAGENT_TOOL, SEARCH_TOOL]),
+      messages: [
+        { role: 'user', content: `${READ_BACK.marker} ${DELEGATION.childMarker} ${HOLD}` },
+      ],
+    },
+  ],
+])('issues one bash read-back to %s before delegation, hold and script', async (_name, body) => {
+  const config = {
+    ...BASE,
+    script: SCRIPT,
+    hold: HOLD,
+    delegation: DELEGATION,
+    readBack: READ_BACK,
+  };
+  const origin = await start(config);
+  expect(await streamed(await complete(origin, body))).toEqual(callChunks(bashCall));
+  expect(await health(origin)).toMatchObject({
+    requests: 1,
+    held: 0,
+    delegations: 0,
+    searches: 0,
+    readBacks: 1,
+    readBackHits: 0,
+  });
+});
+
+it.each([
+  [
+    'a text that already carries the nonce',
+    readBackTurn([BASH_TOOL], [{ role: 'user', content: READ_BACK.nonce }]),
+  ],
+  ['a request without the bash tool', readBackTurn([READ_TOOL])],
+  ['the tool-free title request', readBackTurn()],
+  ['an unmarked turn', userTurn([BASH_TOOL])],
+])('replies with text to %s under a read-back', async (_name, body) => {
+  const origin = await start({ ...BASE, readBack: READ_BACK });
+  expect(await streamed(await complete(origin, body))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ readBacks: 0, readBackHits: 0 });
+});
+
+it('issues the read-back once and replies when its tool result lacks the nonce', async () => {
+  const origin = await start({ ...BASE, readBack: READ_BACK });
+  const plain = await complete(origin, { ...readBackTurn([BASH_TOOL]), stream: false });
+  expect(await plain.json()).toMatchObject({
+    choices: [{ message: { tool_calls: [bashCall] }, finish_reason: 'tool_calls' }],
+  });
+  for (const body of [
+    readBackTurn([BASH_TOOL], nonceResult('Traceback: no such file')),
+    readBackTurn([BASH_TOOL]),
+  ])
+    expect(await streamed(await complete(origin, body))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ readBacks: 1, readBackHits: 0, requests: 3 });
+});
+
+it('counts tool messages carrying the nonce as hits and dispatches them as usual', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, readBack: READ_BACK });
+  // A hit before any read-back is counted and, its text carrying the nonce, starts none.
+  const early = readBackTurn([BASH_TOOL], nonceResult(READ_BACK.nonce));
+  expect(await streamed(await complete(origin, early))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ readBacks: 0, readBackHits: 1 });
+  expect(await streamed(await complete(origin, readBackTurn([BASH_TOOL])))).toEqual(
+    callChunks(bashCall),
+  );
+  for (const content of [
+    `编辑写回探针。${READ_BACK.nonce}`,
+    [{ type: 'text', text: READ_BACK.nonce }],
+  ])
+    expect(
+      await streamed(await complete(origin, readBackTurn([BASH_TOOL], nonceResult(content)))),
+    ).toEqual(replyChunks);
+  // The nonce outside a tool message's content is no hit; an unmarked turn still gets the script.
+  const outside = [
+    { role: 'user', content: READ_BACK.nonce },
+    { role: 'tool', content: 'none', tool_call_id: READ_BACK.nonce },
+  ];
+  expect(await streamed(await complete(origin, userTurn([WRITE_TOOL], outside)))).toEqual(
+    replyChunks,
+  );
+  expect(await streamed(await complete(origin, userTurn([WRITE_TOOL])))).toEqual(
+    callChunks(writeCall),
+  );
+  expect(await (await fetch(`${origin}/health`)).text()).toBe(
+    '{"ready":true,"markedRequests":2,"requests":6,"toolResults":4,"readBacks":1,"readBackHits":3}',
+  );
+});
+
+it('keeps health byte-identical and ignores the read-back marker without a read-back', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT });
+  const tools = [BASH_TOOL];
+  expect(
+    await streamed(await complete(origin, readBackTurn(tools, nonceResult(READ_BACK.nonce)))),
+  ).toEqual(replyChunks);
+  expect(await streamed(await complete(origin, readBackTurn(tools)))).toEqual(replyChunks);
+  expect(await (await fetch(`${origin}/health`)).text()).toBe(
+    '{"ready":true,"markedRequests":0,"requests":2,"toolResults":1}',
+  );
+});
