@@ -51,6 +51,8 @@ import { awaitLocalModelReady, privatePlatformRead } from './local-model-readine
 import { officeHintsLine, officeHintsScenario } from './office-hints-stack-fixture.ts';
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
 import { officeIsolationLine, officeIsolationScenario } from './office-isolation-stack-fixture.ts';
+import { officeProfileLine, officeProfileScenario } from './office-profile-stack-fixture.ts';
+import type { OfficeProfileEvidence } from './office-profile-stack-fixture.ts';
 import type { OfficeIsolationEvidence } from './office-isolation-stack-fixture.ts';
 import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
@@ -165,6 +167,7 @@ interface ConversationEvidence {
   legacyPreview?: LegacyPreviewEvidence;
   officeHints?: OfficeHintsEvidence;
   officeIsolation?: OfficeIsolationEvidence;
+  officeProfile?: OfficeProfileEvidence;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
@@ -497,11 +500,9 @@ async function converse(
     evidence.officeHints = await officeHintsScenario(lane);
     // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
     let secondId = '';
+    const office = { ...lane, run, platformRead, instance: `dsh-team-u-${employee.id}` };
     evidence.officeIsolation = await officeIsolationScenario({
-      ...lane,
-      run,
-      platformRead,
-      instance: `dsh-team-u-${employee.id}`,
+      ...office,
       secondEmployee: async () => {
         const next = await registerDeploymentEmployee(lifecycle, { base, request: fetch }, B_EMAIL);
         secondId = next.id;
@@ -511,6 +512,9 @@ async function converse(
       retire: () =>
         secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId),
     });
+    // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
+    const restart = () => restartInstance(lifecycle, administrator, employee);
+    evidence.officeProfile = await officeProfileScenario({ ...office, restart });
   });
 }
 
@@ -702,7 +706,7 @@ it('builds both images, starts the delivered compose platform, converses through
   if (archive === undefined) throw new Error('Sidebar archive evidence missing');
   if (legacyPreview === undefined) throw new Error('Legacy preview evidence missing');
   // Their presence is checked by the *Line helpers; one more branch here exceeds `complexity`.
-  const { officeHints, officeIsolation } = evidence;
+  const { officeHints, officeIsolation, officeProfile } = evidence;
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -847,6 +851,7 @@ it('builds both images, starts the delivered compose platform, converses through
         },
         officeHints: officeHintsLine(officeHints),
         officeIsolation: officeIsolationLine(officeIsolation),
+        officeProfile: officeProfileLine(officeProfile),
       },
     })}\n`,
   );

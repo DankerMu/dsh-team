@@ -3,8 +3,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
+  CALLBACK_JS,
   exchangeJs,
   FILE_TOKEN_PUBLIC,
+  JWT_JS,
   KEY_JS,
   MINT_JS,
   READ_JS,
@@ -15,7 +17,7 @@ import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 const [TARGET_NAME, SOURCE_NAME] = ['隔离目标.docx', '隔离来源.docx'] as const;
 const [TARGET, SOURCE] = [`${WORK}/${TARGET_NAME}`, `${WORK}/${SOURCE_NAME}`] as const;
 // `node -e` hands the first extra argument to the script as process.argv[1].
-const NODE = ['node', '--input-type=module', '-e'];
+export const NODE = ['node', '--input-type=module', '-e'];
 
 /** The archive lane on A, the host docker `run`, A's container `dsh-team-u-<id>` and B's lifecycle. */
 export interface OfficeIsolationLane extends ArchiveLane {
@@ -63,16 +65,20 @@ export const EXPECTED_ATTACK = {
 };
 const CONFIG_PATH = `'/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(${JSON.stringify(WORK)})`;
 const FILE_PATH = "'/sidebar/onlyoffice/file?token=' + encodeURIComponent";
+export const REGISTRY = '/data/home/plugins/dsh-sidebar-onlyoffice/registry.json';
 
 /** Always exits 0: an error becomes `observed.error`, so a failed exec never echoes argv. Instance
  * scripts run as uid 1001 and read the per-instance secret from the container environment only. */
-const script = (body: string) => `import { createHash, createHmac } from 'node:crypto';
+export const script = (
+  body: string,
+  file: string = TARGET,
+) => `import { createHash, createHmac } from 'node:crypto';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { hostname } from 'node:os';
 import { readFileSync, statSync, writeFileSync } from 'node:fs';
 const secret = process.env.DSH_TEAM_ONLYOFFICE_FILE_SECRET;
-const file = ${JSON.stringify(TARGET)};
+const file = ${JSON.stringify(file)};
 const observed = {};
 try {
 ${body}
@@ -80,7 +86,7 @@ ${body}
 process.stdout.write(JSON.stringify(observed));`;
 
 /** Writes the target, then requests its config at `address` with a loopback Host, registering k1. */
-const register = (address: string, content: string) =>
+export const register = (address: string, content: string) =>
   `writeFileSync(file, ${JSON.stringify(content)});
 const info = statSync(file);
 ${KEY_JS}
@@ -88,7 +94,7 @@ ${exchangeJs(address, '127.0.0.1:3080')}
 ${READ_JS}
 const config = json(await exchange('GET', ${CONFIG_PATH}));
 observed.config = { status: config.status, signed: config.body?.signed === true };
-const registry = () => { try { const { entries } = JSON.parse(readFileSync('/data/home/plugins/dsh-sidebar-onlyoffice/registry.json', 'utf8')); return { k0: entries.some((e) => e.key === k0), k1: entries.some((e) => e.key === k1) }; } catch { return { k0: false, k1: false }; } };
+const registry = () => { try { const { entries } = JSON.parse(readFileSync('${REGISTRY}', 'utf8')); return { k0: entries.some((e) => e.key === k0), k1: entries.some((e) => e.key === k1) }; } catch { return { k0: false, k1: false }; } };
 const deadline = Date.now() + 5000;
 let seen = registry();
 while ((!seen.k1 || seen.k0) && Date.now() < deadline) { await new Promise((resolve) => setTimeout(resolve, 100)); seen = registry(); }
@@ -139,14 +145,13 @@ observed.kGuessed = createHmac('sha256', guessed).update(input).digest('hex');`)
 export const platformAttackScript = (address: string, inputs: object): string =>
   script(`const inputs = ${JSON.stringify(inputs)};
 const jwtSecret = process.env.DOCUMENT_SERVER_JWT_SECRET;
-const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-const jwt = () => { const signed = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ exp: Math.floor(Date.now() / 1000) + 600 }); return signed + '.' + createHmac('sha256', jwtSecret).update(signed).digest('base64url'); };
+${JWT_JS}
 ${exchangeJs(address, `${address}:3080`)}
 ${READ_JS}
 const forged = async (token) => text(await exchange('GET', ${FILE_PATH}(token)));
 const source = async (token) => { const r = await exchange('GET', ${FILE_PATH}(token)); return { status: r.status, matches: createHash('sha256').update(r.body).digest('hex') === inputs.sourceSha }; };
 const url = 'http://${address}:3080/sidebar/onlyoffice/file?token=' + encodeURIComponent(inputs.t);
-const callback = async (key, signed) => { const r = json(await exchange('POST', '/sidebar/onlyoffice/callback', { key, status: 2, url, ...(signed ? { token: jwt() } : {}) })); return { status: r.status, error: r.body?.error }; };
+${CALLBACK_JS}
 observed.config = json(await exchange('GET', ${CONFIG_PATH}));
 observed.file = { public: await forged(inputs.tPublic), guessed: await forged(inputs.tGuessed), b: await forged(inputs.tB), t: await source(inputs.t) };
 observed.callback = { k0: await callback(inputs.k0, true), hmacGuessed: await callback(inputs.kGuessed, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };`);
@@ -176,7 +181,7 @@ type Text = 'error' | 'k1' | 'kB' | 'tB' | 't' | 'tPublic' | 'tGuessed' | 'k0' |
 type Observed = Readonly<Record<string, unknown> & Partial<Record<Text, string>>>;
 
 /** The `expected` keys of `observed`, or a redacted failure carrying the whole observation. */
-function verify(label: string, observed: Observed, expected: object, secrets: Secrets) {
+export function verify(label: string, observed: Observed, expected: object, secrets: Secrets) {
   const seen = Object.fromEntries(Object.keys(expected).map((key) => [key, observed[key]]));
   if (observed.error === undefined && isDeepStrictEqual(seen, expected)) return seen;
   const detail = `observed=${JSON.stringify(observed)} expected=${JSON.stringify(expected)}`;
@@ -184,7 +189,7 @@ function verify(label: string, observed: Observed, expected: object, secrets: Se
 }
 
 /** The container's address on its own bridge, base+2. */
-async function instanceAddress(run: DockerOutput, name: string): Promise<string> {
+export async function instanceAddress(run: DockerOutput, name: string): Promise<string> {
   const raw = await run(['container', 'inspect', '-f', '{{json .NetworkSettings.Networks}}', name]);
   const networks = JSON.parse(raw) as Record<string, { IPAddress?: unknown } | undefined>;
   const ip = networks[name.replace('dsh-team-u-', 'dsh-team-net-')]?.IPAddress;
@@ -214,7 +219,7 @@ async function bPosition(lane: OfficeIsolationLane, aAddress: string, claims: st
 
 /** `step`'s parsed result, or its failure redacted and without `cause`: docker quotes argv and
  * scripts; a JSON syntax error quotes an unredactable prefix of the output, so it is dropped. */
-async function guarded(label: string, secrets: Secrets, step: () => Promise<string>) {
+export async function guarded(label: string, secrets: Secrets, step: () => Promise<string>) {
   const output = await step().catch((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(redactSecrets(`Office isolation ${label} failed: ${message}`, secrets));

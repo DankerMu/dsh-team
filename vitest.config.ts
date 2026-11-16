@@ -51,10 +51,11 @@ export default defineConfig({
           // restore, which is bounded at 300s from before `docker start` (its 60s CLI bound lies
           // inside), and the legacy preview lane (#433), which raised the cap from 2400s by 600s:
           // its preview waits are bounded at 540s (240s each for DOC and PPT, 60s for XLS), its
-          // 12 in-instance execs at 30s each. That remainder is a margin, not the sum of every
-          // per-step bound: a vitest timeout skips the restore `finally` and leaves ragflow-cpu
-          // stopped (LOCAL_STACK.md §5).
-          testTimeout: 3_000_000,
+          // 12 in-instance execs at 30s each, and the office profile lane (#440), which raised it
+          // by 480s: its instance restart waits 180s at most for the gateway, its 10 docker calls
+          // 30s each. That remainder is a margin, not the sum of every per-step bound: a vitest
+          // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5).
+          testTimeout: 3_480_000,
         },
       },
     ],
