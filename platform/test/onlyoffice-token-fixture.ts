@@ -1,6 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { writeManagedConfig } from '../src/managed-config/index.ts';
+import {
+  exchangeFragment,
+  KEY_FRAGMENT,
+  MINT_FRAGMENT,
+  TEXT_JSON_FRAGMENT,
+} from './onlyoffice-probe-script.ts';
 import { record } from './docker-cleanup.ts';
 import { lifecycleWebNetwork } from './managed-policy-fixture.ts';
 import { rejectPluginFailures } from './plugin-failure-markers.ts';
@@ -38,33 +44,10 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 mkdirSync(dir, { recursive: true });
 writeFileSync(file, original);
 const info = statSync(file);
-const input = hostname() + '\\0' + file + '\\0' + String(info.size) + '\\0' + String(Math.round(info.mtimeMs));
-const k0 = createHash('sha256').update(input).digest('hex');
-const k1 = secret ? createHmac('sha256', secret).update(input).digest('hex') : undefined;
-const mint = (claims, key) => {
-  const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
-  return payload + '.' + createHmac('sha256', key).update(payload).digest('base64url');
-};
-const exchange = (method, path, body, hold = 0) => new Promise((resolve, reject) => {
-  const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
-  const headers = { host: '127.0.0.1:3080' };
-  if (bytes !== undefined) Object.assign(headers, { 'content-type': 'application/json', 'content-length': String(bytes.length) });
-  const req = request({ host: ${JSON.stringify(address)}, port: 3080, method, path, headers }, (res) => {
-    const chunks = [];
-    res.on('data', (chunk) => chunks.push(chunk));
-    res.on('error', (error) => { if (hold === 0) reject(error); });
-    const done = () => resolve({ status: res.statusCode, type: res.headers['content-type'], body: Buffer.concat(chunks) });
-    if (hold === 0) res.on('end', done);
-    else setTimeout(() => { done(); req.destroy(); }, hold);
-  });
-  req.on('error', (error) => { if (!req.destroyed || hold === 0) reject(error); });
-  req.end(bytes);
-});
-const text = (response) => ({ status: response.status, body: response.body.toString('utf8') });
-const json = (response) => {
-  try { return { status: response.status, body: JSON.parse(response.body.toString('utf8')) }; }
-  catch { return text(response); }
-};
+${KEY_FRAGMENT}
+${MINT_FRAGMENT}
+${exchangeFragment(address, '127.0.0.1:3080')}
+${TEXT_JSON_FRAGMENT}
 const query = 'sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(dir);
 const claims = (key) => ({ key, path: file, cwd: dir, exp: Math.floor(Date.now() / 1000) + 600 });
 const fileWith = async (token) => text(await exchange('GET', '/sidebar/onlyoffice/file?token=' + encodeURIComponent(token)));
