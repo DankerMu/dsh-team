@@ -511,12 +511,26 @@ it('issues the read-back once and replies when its tool result lacks the nonce',
   expect(await health(origin)).toMatchObject({ readBacks: 1, readBackHits: 0, requests: 3 });
 });
 
+const afterNonce = (content: string) => [
+  ...nonceResult(READ_BACK.nonce),
+  { role: 'assistant', content: 'x' },
+  { role: 'user', content },
+];
+
 it('counts tool messages carrying the nonce as hits and dispatches them as usual', async () => {
   const origin = await start({ ...BASE, script: SCRIPT, readBack: READ_BACK });
   // A hit before any read-back is counted and, its text carrying the nonce, starts none.
   const early = readBackTurn([BASH_TOOL], nonceResult(READ_BACK.nonce));
   expect(await streamed(await complete(origin, early))).toEqual(replyChunks);
   expect(await health(origin)).toMatchObject({ readBacks: 0, readBackHits: 1 });
+  // Mid-history in an unmarked turn: still a hit; the tool result keeps the script out.
+  const unmarked = userTurn([WRITE_TOOL], afterNonce('follow-up'));
+  expect(await streamed(await complete(origin, unmarked))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ readBacks: 0, readBackHits: 2 });
+  // The nonce mid-history, the marker last: a hit that starts no read-back.
+  const marked = readBackTurn([BASH_TOOL], afterNonce(READ_BACK.marker));
+  expect(await streamed(await complete(origin, marked))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({ readBacks: 0, readBackHits: 3 });
   expect(await streamed(await complete(origin, readBackTurn([BASH_TOOL])))).toEqual(
     callChunks(bashCall),
   );
@@ -539,7 +553,7 @@ it('counts tool messages carrying the nonce as hits and dispatches them as usual
     callChunks(writeCall),
   );
   expect(await (await fetch(`${origin}/health`)).text()).toBe(
-    '{"ready":true,"markedRequests":2,"requests":6,"toolResults":4,"readBacks":1,"readBackHits":3}',
+    '{"ready":true,"markedRequests":3,"requests":8,"toolResults":6,"readBacks":1,"readBackHits":5}',
   );
 });
 

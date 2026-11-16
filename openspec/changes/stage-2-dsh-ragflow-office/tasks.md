@@ -6152,6 +6152,10 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - Playwright 能经 iframe 链聚焦 Document Server 的文档区并键入文字。仓库里没有 `frameLocator` 的先例，编辑器 iframe 与页面同源（第 48 节已断言）。
 - 编辑器的保存（Ctrl+S 或工具栏保存按钮）触发 status 6 写回。
 - 本机 stack 的员工实例里，`bash` 工具能以 danger-full-access 执行 `python3`。
+- DSH 实际提供给模型的是哪一个 `bash`：
+  - `dsh-tool-bash` 要求 `{ description, command }`（`lib/index.js:493-505`）；
+  - `dsh-tool-bash-persistent@0.2.1-rc.2` 同样注册名为 `bash` 的工具，但参数只有 `{ command }`（`lib/index.js:337-343`）。
+  - 读回调用带着 `description`，如果被参数校验拒绝，就停止并报告，再按实际提供的工具 schema 调整 provider。
 - 读回那一轮的精确请求数 N（含不含标题请求）。由第一次运行实测后写进夹具；两次运行不一致就停止并报告。
 - 读回那一轮只有一个请求带着含 nonce 的工具消息，即 `readBackHits` 恰好加 1。不是 1 就停止并报告。
 - 读回会话登录后，ONLYOFFICE 的 tab 不会自动恢复。恢复了就停止并报告。
