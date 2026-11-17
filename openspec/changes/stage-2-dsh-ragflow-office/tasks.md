@@ -6377,7 +6377,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
     - 再跑平台侧脚本，期望 `EXPECTED_INFO`：k1 和 kB 都是 `{ status: 200, error: 0, users: ['dsh'] }`，k0 和 kGuessed 都是 `{ status: 200, error: 1 }`；
     - 秘密：kA、kB、猜测密钥、k0、kGuessed。两步都经 `guarded` 和 `verify` 脱敏，不带 `cause`。
   - 编辑器夹具：
-    - `OfficeEditorLane` 加 `instance` 和 `platformRead`，类型取自 `OfficeIsolationLane`；
+    - `OfficeEditorLane` 加 `platformRead`，类型取自 `OfficeIsolationLane`；
     - `distinctKeys` 仍写 `met.distinct`，另外返回 `[kA, kB]`。`loaded` 的 `whenBoth` 在它之后调用 `guessedKeyInfo`，结果记进 `met.info`；
     - `allSettled` 之后断言 `met.info` 等于 `EXPECTED_INFO`；
     - evidence 的 `sameName` 加 `guessedKey`，取 `met.info`，不含任何 key。

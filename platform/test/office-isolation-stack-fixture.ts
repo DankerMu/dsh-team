@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
+import { DOCUMENT_SERVER } from './office-hints-stack-fixture.ts';
 import {
   CALLBACK_JS,
   exchangeJs,
@@ -63,6 +64,9 @@ export const EXPECTED_ATTACK = {
   },
   target: 'saved',
 };
+const EDITING = { status: 200, error: 0, users: ['dsh'] };
+/** Command Service `info`: A's and B's open sessions with their one editor; no session for the rest. */
+export const EXPECTED_INFO = { k1: EDITING, kB: EDITING, k0: UNKNOWN_KEY, kGuessed: UNKNOWN_KEY };
 const CONFIG_PATH = `'/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(${JSON.stringify(WORK)})`;
 const FILE_PATH = "'/sidebar/onlyoffice/file?token=' + encodeURIComponent";
 export const REGISTRY = '/data/home/plugins/dsh-sidebar-onlyoffice/registry.json';
@@ -155,6 +159,27 @@ ${CALLBACK_JS}
 observed.config = json(await exchange('GET', ${CONFIG_PATH}));
 observed.file = { public: await forged(inputs.tPublic), guessed: await forged(inputs.tGuessed), b: await forged(inputs.tB), t: await source(inputs.t) };
 observed.callback = { k0: await callback(inputs.k0, true), hmacGuessed: await callback(inputs.kGuessed, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };`);
+
+/** A's k1, k0 and the HMAC under argv[1]'s guessed secret over `file`'s current key input. */
+export const aGuessScript = (file: string): string =>
+  script(
+    `const info = statSync(file);
+${KEY_JS}
+Object.assign(observed, { k1, k0, kGuessed: createHmac('sha256', process.argv[1]).update(input).digest('hex') });`,
+    file,
+  );
+
+/** In the platform container: Command Service `info` for each of `keys` at `host`:`port` with Host
+ * `host` and a body-`token` JWT; each answer's status, error and users only, never its echoed key. */
+export const platformInfoScript = (host: string, keys: object, port = 80): string =>
+  script(`const jwtSecret = process.env.DOCUMENT_SERVER_JWT_SECRET;
+${JWT_JS}
+${exchangeJs(host, host, port)}
+${READ_JS}
+for (const [name, key] of Object.entries(${JSON.stringify(keys)})) {
+  const { status, body } = json(await exchange('POST', '/command', { c: 'info', key, token: jwt({ c: 'info', key }) }));
+  observed[name] = { status, ...Object.fromEntries(['error', 'users'].flatMap((field) => body?.[field] === undefined ? [] : [[field, body[field]]])) };
+}`);
 
 /** A's target after (c3): `saved` once it holds the source bytes. */
 export const aReadScript = (): string =>
@@ -263,3 +288,24 @@ async function officeIsolation(lane: OfficeIsolationLane): Promise<OfficeIsolati
  * platform position every forged token and unregistered key is refused, and only A's T and k1 work. */
 export const officeIsolationScenario = (lane: OfficeIsolationLane) =>
   withWorkFiles(lane, [TARGET_NAME, SOURCE_NAME], 'Office isolation', () => officeIsolation(lane));
+
+/** 18.5 (#440) from the platform position, while A and B edit: A's file recomputes A's registered
+ * key, and the Command Service knows A's and B's sessions but none under k0 or a guessed secret. */
+export async function guessedKeyInfo(
+  lane: Pick<OfficeIsolationLane, 'exec' | 'platformRead'>,
+  kA: string,
+  kB: string,
+  file: string,
+) {
+  const guessed = randomBytes(32).toString('hex');
+  const argv = [...NODE, aGuessScript(file), guessed];
+  const own = await guarded('(info A)', [kA, kB, guessed], () => lane.exec(argv));
+  const { k1, k0, kGuessed } = own;
+  const secrets = [kA, kB, guessed, k0, kGuessed, k1];
+  verify('(info A)', own, { k1: kA }, secrets);
+  const infoScript = platformInfoScript(DOCUMENT_SERVER, { k1: kA, kB, k0, kGuessed });
+  const info = await guarded('(info)', secrets, async () =>
+    JSON.stringify(await lane.platformRead(infoScript)),
+  );
+  return verify('(info)', info, EXPECTED_INFO, secrets);
+}

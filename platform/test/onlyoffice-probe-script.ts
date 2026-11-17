@@ -16,18 +16,18 @@ export const MINT_JS = `const mint = (claims, key) => {
 
 /** An HS256 JWT under the embedder's `jwtSecret` binding, read at each call. */
 export const JWT_JS = `const b64 = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-const jwt = () => { const signed = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ exp: Math.floor(Date.now() / 1000) + 600 }); return signed + '.' + createHmac('sha256', jwtSecret).update(signed).digest('base64url'); };`;
+const jwt = (claims = {}) => { const signed = b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ ...claims, exp: Math.floor(Date.now() / 1000) + 600 }); return signed + '.' + createHmac('sha256', jwtSecret).update(signed).digest('base64url'); };`;
 
 /** A status-2 callback for `key` saving the embedder's `url`, with a body-`token` JWT when `signed`. */
 export const CALLBACK_JS = `const callback = async (key, signed) => { const r = json(await exchange('POST', '/sidebar/onlyoffice/callback', { key, status: 2, url, ...(signed ? { token: jwt() } : {}) })); return { status: r.status, error: r.body?.error }; };`;
 
-/** HTTP to `address`:3080 with Host `hostHeader`; `hold` > 0 keeps a stream open that long. */
-export const exchangeJs = (address: string, hostHeader: string): string =>
+/** HTTP to `address`:`port` with Host `hostHeader`; `hold` > 0 keeps a stream open that long. */
+export const exchangeJs = (address: string, hostHeader: string, port = 3080): string =>
   `const exchange = (method, path, body, hold = 0) => new Promise((resolve, reject) => {
   const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
   const headers = { host: '${hostHeader}' };
   if (bytes !== undefined) Object.assign(headers, { 'content-type': 'application/json', 'content-length': String(bytes.length) });
-  const req = request({ host: ${JSON.stringify(address)}, port: 3080, method, path, headers }, (res) => {
+  const req = request({ host: ${JSON.stringify(address)}, port: ${String(port)}, method, path, headers }, (res) => {
     const chunks = [];
     res.on('data', (chunk) => chunks.push(chunk));
     res.on('error', (error) => { if (hold === 0) reject(error); });
