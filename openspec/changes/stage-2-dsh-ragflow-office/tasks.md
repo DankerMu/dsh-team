@@ -6554,7 +6554,7 @@ Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜�
   - `fontsShown(fonts, names)`：names 不是字符串数组时抛错；要求每个文件至少有一个 family 在 names 里，否则抛错，列出缺的文件和它们的 family；返回 `{ files: 去重后的文件数, families: 命中名字去重后排序 }`。
   - evidence 的 `officeIdle` 加 `fonts`。
 - [x] 51.13（51-g）测试和文档：
-  - 前提检查：`probeFonts` 改为目录存在且其中（含子目录）至少有一个扩展名为 `ttf`、`otf`、`ttc` 或 `otc`（不分大小写）的普通文件，并导出；原因文本改为 `assets/fonts directory missing or has no font file`。`test-stack.integration.test.ts` 对真实的 `probeFonts` 加用例：目录缺失、空目录、只有空子目录、只有 `.DS_Store` 各为 false，子目录里有一个 `.TTF` 文件为 true；原有的注入用例改用新原因文本。
+  - 前提检查：`probeFonts` 改为目录存在且其中（含子目录）至少有一个扩展名为 `ttf`、`otf`、`ttc` 或 `otc`（不分大小写）的普通文件，并导出；原因文本改为 `assets/fonts directory missing or has no font file`。新文件 `test-stack-fonts.integration.test.ts` 对真实的 `probeFonts` 加用例（`test-stack.integration.test.ts` 已近 800 行的 max-lines，所以另起一个文件），四种扩展名各有一例为 true；目录缺失、空目录、只有空子目录、只有 `.DS_Store` 各为 false，子目录里有一个 `.TTF` 文件为 true；原有的注入用例改用新原因文本。
   - 集成测试：
     - `operatorFonts`：解析多行、子目录、多语言 family、同一文件多行归并；空输出抛错；
     - `fontsShown`：全部命中；缺一个；names 不是字符串数组；
@@ -6576,6 +6576,9 @@ Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜�
 
 - 字体表证明编辑器载入了运营方字体的名字，不证明字形渲染正确；渲染不在 18.5 的验收范围内。
 - 一个文件只要有一个 family 命中即算出现；同一字体的其他语言名不要求命中。
+- `loaded` 里字体检查排在改空闲分钟数之前，这个顺序没有用例锁定：反过来时唯一的差别是检查失败后多一对 runtime-config 写入，`retiringOnError` 仍会恢复原值。
+
+结果（51-g，#627）：开发期本机 `pnpm test:stack` 1/1 通过。`officeIdle.fonts` 为 `files: 11`，命中 `FZXiaoBiaoSong-B05S`、`FangSong_GB2312`、`KaiTi_GB2312`、`SimHei` 和 6 个 `Source Han Sans SC` 字重，共 10 个名字，与临时容器的对照一致；「51-g 未核实」两项都已确认。修复 1 次：前提检查的四种扩展名各加一个用例。18.5 的六项至此都有本机证据。
 
 Suggested fixture level: expanded（同第 51 节）
 Minimal mergeable slice: 51-g 为 51.12–51.13 一个 PR，合入后关闭 #440
