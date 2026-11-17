@@ -1,7 +1,13 @@
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect } from 'vitest';
-import { counted, digest, editAndSave, editorNonce } from './office-editor-stack-fixture.ts';
+import {
+  counted,
+  digest,
+  editAndSave,
+  editorNonce,
+  retiringOnError,
+} from './office-editor-stack-fixture.ts';
 import type { Digest, Meeting, OfficeEditorLane } from './office-editor-stack-fixture.ts';
 import { withWorkFiles } from './sidebar-archive-stack-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
@@ -66,6 +72,7 @@ export async function heldRunning(admin: Admin, email: string, holdMs: number) {
   while (performance.now() - start < holdMs) await delay(holdMs - (performance.now() - start));
   const after = await instanceRow(admin, email);
   const heldMs = Math.round(performance.now() - start);
+  expect(heldMs, `${email} held for at least ${String(holdMs)}ms`).toBeGreaterThanOrEqual(holdMs);
   const restarted = after.lastStartedAt !== before.lastStartedAt;
   const idleStops = (await stopsAfter(admin, email, sinceId)).length;
   const held = { heldMs, status: after.status, restarted, idleStops };
@@ -138,12 +145,9 @@ async function officeIdle(lane: OfficeIdleLane, idle: { restore: () => Promise<v
  */
 export async function officeIdleScenario(lane: OfficeIdleLane): Promise<OfficeIdleEvidence> {
   const idle = { restore: () => Promise.resolve() };
-  const evidence = await officeIdle(lane, idle).catch(async (error: unknown) => {
-    await idle.restore().catch((failure: unknown) => {
-      throw new AggregateError([error, failure], 'Office idle lane and its restore failed');
-    });
-    throw error;
-  });
+  const failed = 'Office idle lane and its restore failed';
+  const run = () => officeIdle(lane, idle);
+  const evidence = await retiringOnError(run, () => idle.restore(), failed);
   await idle.restore();
   return evidence;
 }

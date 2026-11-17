@@ -276,12 +276,16 @@ export function gate(sides: readonly string[], timeout: number, whenBoth = passe
 }
 
 /** `body`'s result; when it fails, `retire` runs and the failure leaves first. */
-export async function retiringOnError<T>(body: () => Promise<T>, retire: () => Promise<void>) {
+export async function retiringOnError<T>(
+  body: () => Promise<T>,
+  retire: () => Promise<void>,
+  message = 'Office editor lane and retiring B failed',
+) {
   try {
     return await body();
   } catch (error) {
     await retire().catch((failure: unknown) => {
-      throw new AggregateError([error, failure], 'Office editor lane and retiring B failed');
+      throw new AggregateError([error, failure], message);
     });
     throw error;
   }
