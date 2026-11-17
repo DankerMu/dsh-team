@@ -213,6 +213,10 @@ it('retires B only when the lane fails, rethrowing the lane failure first', asyn
   const error: unknown = await both.catch((caught: unknown) => caught);
   expect(error).toBeInstanceOf(AggregateError);
   expect((error as AggregateError).errors).toEqual([lane, disable]);
+  expect((error as AggregateError).message).toBe('Office editor lane and retiring B failed');
+  const failing = () => Promise.reject(lane);
+  const named = retiringOnError(failing, () => Promise.reject(disable), 'Named');
+  await expect(named).rejects.toThrow(new AggregateError([lane, disable], 'Named'));
 });
 
 const session = (screenshots: string[], consoleErrors: string[]) => ({
