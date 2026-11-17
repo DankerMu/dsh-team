@@ -6324,3 +6324,51 @@ Suggested fixture level: expanded - 真实编辑器写回员工文件，provider
 Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景、office-hints 断言和截图名、provider 已有脚本和 `/health` 不变）、Resource limits（新增有界等待，文件结束时删除）、Security（写回只发生在 A 自己的文件上，key 不进证据）；not selected - Schema、Public API、Migration、Auth、Concurrency。
 Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`、hold、delegation 行为、计数和 `/health` 不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索。
+
+## 52. 技术债 #622：本机全栈等 Document Server 启动脚本跑完，再打开编辑器
+
+依赖：无。只改 `platform/test/`、`vitest.config.ts` 和文档，不碰关键路径和产品代码。阻塞 #440 的 51-d（PR #621）。
+
+已核实的事实（`onlyoffice/documentserver:9.4.0` 镜像内的脚本）：
+
+- `/app/ds/run-document-server.sh`：`GENERATE_FONTS` 默认 `true`（`:129`）；`service nginx start` 之后才 `start_process documentserver-generate-allfonts.sh`（`:837-839`）；之后依次是 static-gzip 和最后一步 `start_process bash -c "find … | xargs tail -F"`（`:841-845`）。`start_process` 前台等待子进程结束（`:5-8`），所以 `xargs tail -F` 进程出现时，allfonts 和它的重启都已结束。
+- `/usr/bin/documentserver-generate-allfonts.sh:75-81`：在 supervisord 下 `supervisorctl restart ds:docservice` 和 `ds:converter`，同一脚本里已经用了 `pgrep`。
+- 本仓库没有设置 `GENERATE_FONTS`（`deploy/compose.yml`、`platform/test/`）。不能关掉它：授权字体（#561）要靠这一步才进编辑器。
+- 实测（51-d 开发期，只读旁路记录本项目自己的 DS 容器）：容器 06:21:12Z 启动，restarts=0，supervisord 在 06:21:14 和 06:22:23 两次拉起 docservice；第二次正落在 XLSX 编辑会话里（`-open` 截图 06:22:22），写回 `unchanged`。另一次运行同一时段的协同 WebSocket 握手收到 502。插件 0.2.0 的 `proxyUpgrade` 原样转发上游响应（`lib/index.js:453-503`），所以 502 来自 DS 内部。
+- supervisord 日志在 `/var/log/supervisor/supervisord.log`，每次拉起写一行 `… INFO spawned: 'docservice' with pid <n>`（上面那次旁路实际读到）。`StartedAt` 是带九位小数的 RFC 3339 时间，集成测试用这种格式的样例覆盖 `startupMs` 的计算。
+- office-hints（#439）和编辑器 lane（51-b、51-c）也一直暴露在这个窗口里，只是时序碰巧避开了。
+
+- [ ] 52.1 等待和证据：
+  - `DOCUMENT_SERVER` 容器名仍只定义一处；为避免 office-hints 和 office-editor 两个夹具互相导入，挪到 `office-hints-stack-fixture.ts`，原来的导入方改为从那里导入。
+  - `office-hints-stack-fixture.ts` 导出 `documentServerStarted(run, timeout)`：
+    - 从宿主经 `run(['exec', DOCUMENT_SERVER, 'pgrep', '-f', 'xargs tail -F'])` 轮询。`until` 不捕获异常（`stack-browser-fixture.ts:130`），所以 check 内部 try/catch：`run` 抛错（`pgrep` 无匹配时退出 1）算「还没好」，记下错误消息，超时经 `untilSeen` 带出最后一次的错误消息；
+    - 返回 `{ startupMs, spawns }`：`startupMs` 从 `docker inspect -f '{{.State.StartedAt}}'` 的时刻算到等待结束；`spawns` 是这时 `/var/log/supervisor/supervisord.log` 里 `spawned: 'docservice'` 的行数（`docker exec … grep -c`）。
+  - 同一模块导出 `docserviceSpawns(run)` 只做后一项计数，两处共用。
+  - `platform-stack.stack.test.ts`：
+    - `ConversationEvidence` 加 `documentServer?: { startupMs: number; spawns: number }`；
+    - 在 `officeHintsScenario` 之前调用 `documentServerStarted(run, 300_000)`，写进 `evidence.documentServer`；
+    - 所有 Office lane 之后再数一次 `docserviceSpawns(run)`，断言等于等待结束时的值：等待之后 docservice 再没有被拉起；
+    - `stackEvidence` 打印 `documentServer`，打印处不加存在性分支（`:717` 的 complexity 上限）；
+    - 净增约 10 行，文件按 max-lines 口径仍小于 800。
+  - `vitest.config.ts`：stack `testTimeout` 加 300 秒，注释照现有写法加一句。
+- [ ] 52.2 测试和文档：
+  - `office-hints-stack-fixture.integration.test.ts`：argv 恰为上面几条；前几次 `run` 抛错、之后成功时返回 `startupMs` 和 `spawns`；一直抛错时按超时抛错，错误带最后一次的错误消息。
+  - 文档：
+    - `docs/LOCAL_STACK.md` 证据表加 `documentServer` 一行，写明等的是 DS 启动脚本跑完（allfonts 会重启 docservice），以及等待后 docservice 不再被拉起；
+    - `docs/LOCAL_STACK.md:144` 的流程叙述在 healthcheck 之前补「先等 DS 启动脚本跑完」；
+    - `platform/test/README.md` 本机全栈段落加一句。
+
+未核实，由第一次 stack 运行验证；做不到就停止并报告：
+
+- `pgrep` 在 DS 容器里以 `docker exec` 默认用户能看到 `xargs tail -F` 进程，等待在 300 秒内结束；
+- 51-d 开发期观察到的第二次 docservice 拉起来自 allfonts：等待结束时 `spawns` 为 2，Office lane 之后仍为 2；
+- `startupMs` 只做记录：它从容器启动算起，总大于 0，起区分作用的是 `spawns`。按当前 lane 顺序，DS 启动后约 70 秒就进入 Office lane。
+
+验证：集成测试先红后绿；`pnpm check`；本机 exact-head `pnpm test:stack` 通过，证据里有 `documentServer.startupMs` 和 `documentServer.spawns`，Office lane 之后的计数与它相等；VPS exact-head `test:docker` 和 `test:deploy`。估计 120 到 180 行。
+
+剩余风险：生产环境里 DS 容器启动后约 70 秒同样会重启 docservice，员工恰好在这时编辑会丢掉会话。这不在本节范围内，只报告。
+
+Suggested fixture level: compact - 测试内的启动等待
+Minimal mergeable slice: 52.1–52.2 一个 PR
+Risk packs: selected - Legacy compatibility（已有 stack 场景和断言不变）、Resource limits（有界等待）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency。
+Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不变；不改 `deploy/`、`.github/workflows/`、产品代码。
