@@ -6313,7 +6313,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
     - `fail(error)`：一方出错时调用，正在等待和之后到达的一方立即 reject，不空等超时。
     - `whenBoth` 可选，在两方都到达后、放行前只执行一次；它失败时两方都 reject。51-e 的 `info` 放在这里。
   - `editAndSave` 加一个可选参数 `{ nonce, loaded, saved }`。nonce 缺省为 `readBack.nonce`；`loaded`、`saved` 是两方共用的两道闸门：
-    - `typeAndSave` 在 `#loading-mask` 隐藏之后、点击之前 `loaded.arrive`，超时为 `session.timeout`；
+    - `typeAndSave` 在编辑器就绪之后、点击之前 `loaded.arrive`，超时为 `session.timeout`。就绪是 `#loading-mask` 和 `.asc-loadmask` 都已移除：DS 9.4 编辑模式下 `app:face` 先撤 `#loading-mask`，同一 tick 挂上挡住输入的 `.asc-loadmask`，到 `onDocumentContentReady` 才撤（web-apps v9.4.0.131 三个编辑器的 `Main.js`、`LoadMask.js:100,117-120`）。51-c 只等前者，51-d 开发期实跑 XLSX 的点击因此没有生效；
     - 写回轮询看到 `saved` 之后、截图 `-saved` 之前 `saved.arrive`，超时为写回轮询的上限 120 秒。这样两次保存都发生在两个编辑器都开着的时候；
     - 一方的 `editAndSave` 抛错时，对两道闸门都调用 `fail`。
   - DOCX 一步改为 A 和 B 并发：
@@ -6330,14 +6330,9 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
     - 判定是导出的纯函数 `sameNameState(read, own, other)`，看 `texts`，返回 `own`、`crossed` 或 `missing`；
     - 两边都必须是 `own`：含自己的 nonce，不含对方的。
     - `sameName.after` 取这次复读的结果。
-  - 清理顺序：B 的 `withWorkFiles` 清理完、两个浏览器都结束后，才轮到 `retire()`。
-    - 场景出错时调用 `retire()`，再抛原错误；`retire()` 自己也失败时，抛 `AggregateError`，原错误在前；
-    - 正常结束时不调用，B 留给隔离 lane。
+  - 清理顺序：B 的 `withWorkFiles` 清理完、两个浏览器都结束后，才轮到 `retire()`。场景出错时调用 `retire()`，再抛原错误；`retire()` 自己也失败时，抛 `AggregateError`，原错误在前。正常结束时不调用，B 留给隔离 lane。
   - XLSX、PPTX、Agent 读回和 provider 增量照 51-c 不变。B 不发消息，provider 增量仍是 `EXPECTED_DELTAS`。
-  - evidence 加 `sameName`，内容为：
-    - B 的 `{ file, before, after }`；
-    - B 编辑会话的截图名和错误计数；
-    - `distinctKeys: true`、`crossed: false`。
+  - evidence 加 `sameName`：B 的 `{ file, before, after }`，B 编辑会话的截图名和错误计数，`distinctKeys`、`crossed`。后两项取自观测：`distinctKeys` 只在 `whenBoth` 比较过两个 key 后写入，`crossed` 由两边的判定推出；两道闸门都确实放行过也在场景里断言。
 - [ ] 51.7（51-d）接线、测试和文档：
   - `platform-stack.stack.test.ts`：
     - `secondEmployee` 提到编辑 lane 之前，改为缓存第一次调用返回的 promise，而不是结果，所以并发或重复调用都不会再注册 B；`secondId` 照现在的写法在 `startInstance` 之前赋值；

@@ -31,7 +31,8 @@ export const writeArgv = (name: string, base64?: string) =>
 const editorFrame = (ext: Ext) =>
   `${hintsFrame(fileName(ext))} iframe[src*="/sidebar/onlyoffice/ds/"]`;
 const EDITOR_AREA = '#editor_sdk';
-const LOADING_MASK = '#loading-mask'; // Removed by DS 9.4 hidePreloader() on onDocumentContentReady.
+// DS 9.4 app:face drops #loading-mask and masks input with .asc-loadmask until the content is ready.
+const EDITOR_READY = 'body:not(:has(#loading-mask, .asc-loadmask))';
 const SAVE_KEY = 'ControlOrMeta+s';
 // Where the document area is clicked, as fractions of its box, and the keys after the nonce: the
 // centre puts the DOCX caret in the text and selects an XLSX cell, which Enter commits; the PPTX
@@ -120,8 +121,8 @@ export interface OfficeEditorEvidence {
   readonly sameName: {
     readonly b: FileDigests;
     readonly editor: StackBrowserEvidence;
-    readonly distinctKeys: true;
-    readonly crossed: false;
+    readonly distinctKeys: boolean;
+    readonly crossed: boolean;
   };
 }
 
@@ -192,7 +193,7 @@ async function typeAndSave(page: Page, ext: Ext, nonce: string, timeout: number,
     const editor = page.locator(editorFrame(ext)).visible().contentFrame();
     const area = editor.locator(EDITOR_AREA);
     await area.waitFor({ timeout });
-    await editor.locator(LOADING_MASK).waitFor({ state: 'hidden', timeout });
+    await editor.locator(EDITOR_READY).waitFor({ state: 'attached', timeout });
     await loaded();
     const box = await area.boundingBox({ timeout });
     if (box === null) throw new Error('Office editor area has no box');
@@ -347,7 +348,7 @@ const keysOf = (output: string) => {
 };
 
 /** Polls both registries for 5s until each has one entry for the DOCX; the keys stay in memory. */
-async function distinctKeys(lanes: readonly ArchiveLane[]) {
+async function distinctKeys(lanes: readonly ArchiveLane[], met: { distinct: boolean }) {
   const argv = ['python3', '-c', KEYS, REGISTRY, inWork('docx')];
   let keys: string[][] = [];
   const one = async () => {
@@ -364,6 +365,7 @@ async function distinctKeys(lanes: readonly ArchiveLane[]) {
   });
   const [kA, kB] = keys.map(([key]) => key);
   expect(kA !== kB, 'A and B edit the same-name DOCX under distinct keys').toBe(true);
+  met.distinct = kA !== kB;
 }
 
 /** A's and B's same-name DOCX edited at once, each with its own nonce, then read once more. */
@@ -374,10 +376,12 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
     exec: (args) => lane.run(['exec', '--user', '1001', instance, ...args]),
   };
   const [nonceA, nonceB] = [lane.readBack.nonce, editorNonce()];
-  const loaded = gate(SIDES, lane.session.timeout, () => distinctKeys([lane, b]));
+  const met = { distinct: false, A: false, B: false };
+  const loaded = gate(SIDES, lane.session.timeout, () => distinctKeys([lane, b], met));
   const saved = gate(SIDES, 120_000);
-  const edit = (side: OfficeEditorLane, name: string, nonce: string, where: string) => {
-    const meeting = { nonce, loaded: () => loaded.arrive(name), saved: () => saved.arrive(name) };
+  const edit = (side: OfficeEditorLane, name: 'A' | 'B', nonce: string, where: string) => {
+    const saving = () => saved.arrive(name).then(() => void (met[name] = true));
+    const meeting = { nonce, loaded: () => loaded.arrive(name), saved: saving };
     return editAndSave(side, 'docx', where, meeting).catch((error: unknown) => {
       loaded.fail(error);
       saved.fail(error);
@@ -398,9 +402,11 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
     const [aAfter, bAfter] = [await readWork(lane, 'docx'), await readWork(b, 'docx')];
     const states = [sameNameState(aAfter, nonceA, nonceB), sameNameState(bAfter, nonceB, nonceA)];
     expect(states, 'A and B same-name DOCX after both browsers closed').toEqual(['own', 'own']);
+    expect(met, 'A and B met at both gates').toEqual({ distinct: true, A: true, B: true });
     const { written, editor } = other.value;
     const file = { file: fileName('docx'), before: digest(written), after: digest(bAfter) };
-    const sameName = { b: file, editor, distinctKeys: true, crossed: false } as const;
+    const crossed = states.includes('crossed');
+    const sameName = { b: file, editor, distinctKeys: met.distinct, crossed };
     return { a: a.value, sameName };
   });
 }

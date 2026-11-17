@@ -181,6 +181,12 @@ it('rejects both sides when whenBoth fails', async () => {
   expect(calls).toBe(1);
 });
 
+it('keeps the release when whenBoth outlasts the timeout', async () => {
+  const { arrive } = gate(['A', 'B'], 30, () => new Promise((resolve) => setTimeout(resolve, 60)));
+  const later = new Promise((resolve) => setTimeout(resolve, 10)).then(() => settled(arrive('B')));
+  expect(await Promise.all([settled(arrive('A')), later])).toEqual(['released', 'released']);
+});
+
 const OTHER = editorNonce();
 it.each([
   ['its own nonce only', [`探针。${NONCE}`], 'own'],
