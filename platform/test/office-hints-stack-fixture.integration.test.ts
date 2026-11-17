@@ -10,8 +10,8 @@ import {
 } from './office-hints-stack-fixture.ts';
 
 it('writes the docx as uid 1001 through argv and reads it back without the paragraph', () => {
-  const write = docxCommand('一段文字');
-  const read = docxCommand();
+  const write = docxCommand('同写提示.docx', '一段文字');
+  const read = docxCommand('同写提示.docx');
 
   expect(write.slice(0, 2)).toEqual(['python3', '-c']);
   expect(write.slice(3)).toEqual(['/data/work/同写提示.docx', '一段文字']);
