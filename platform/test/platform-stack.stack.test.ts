@@ -524,21 +524,23 @@ async function converse(
     evidence.officeHints = await officeHintsScenario(lane);
     // 18.5 (#440): A edits and saves a DOCX, an XLSX and a PPTX; the Agent's bash reads all three.
     const { reply, readBack } = provider;
-    const office = { ...lane, run, platformRead, instance: `dsh-team-u-${employee.id}` };
-    evidence.officeEditor = await officeEditorScenario({ ...office, reply, readBack });
-    // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
+    // B starts once, for the editor's same-name DOCX, and runs until the isolation lane retires it.
     let secondId = '';
-    evidence.officeIsolation = await officeIsolationScenario({
-      ...office,
-      secondEmployee: async () => {
+    let second: Promise<string> | undefined;
+    const secondEmployee = () =>
+      (second ??= (async () => {
         const next = await registerDeploymentEmployee(lifecycle, { base, request: fetch }, B_EMAIL);
         secondId = next.id;
         await startInstance(lifecycle, base, next.cookie);
         return `dsh-team-u-${next.id}`;
-      },
-      retire: () =>
-        secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId),
-    });
+      })());
+    const retire = () =>
+      secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId);
+    const b = { secondEmployee, secondEmail: B_EMAIL, retire };
+    const office = { ...lane, ...b, run, platformRead, instance: `dsh-team-u-${employee.id}` };
+    evidence.officeEditor = await officeEditorScenario({ ...office, reply, readBack });
+    // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
+    evidence.officeIsolation = await officeIsolationScenario(office);
     // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });

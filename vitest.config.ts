@@ -58,8 +58,9 @@ export default defineConfig({
           // each, and the Document Server startup wait (#622), which raised it by 300s: one pgrep
           // poll bounded at 300s before the first Office lane. That remainder is a margin, not the
           // sum of every per-step bound: a vitest timeout skips the restore `finally` and leaves
-          // ragflow-cpu stopped (LOCAL_STACK.md §5).
-          testTimeout: 4_380_000,
+          // ragflow-cpu stopped (LOCAL_STACK.md §5). The concurrent same-name DOCX (#440) raised it
+          // by 180s: B's editor meets A's at load (60s at most) and after the save (120s at most).
+          testTimeout: 4_560_000,
         },
       },
     ],

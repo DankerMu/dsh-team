@@ -10,11 +10,14 @@ import {
   editorNonce,
   editorRefused,
   EXPECTED_DELTAS,
+  gate,
   NONCE_PATTERN,
   officeEditorLine,
   providerDeltas,
   READ_BACK_COMMAND,
   READER,
+  retiringOnError,
+  sameNameState,
   writeArgv,
   writeBackState,
 } from './office-editor-stack-fixture.ts';
@@ -126,13 +129,99 @@ it.each([
   expect(JSON.stringify(deltas) === JSON.stringify(EXACT)).toBe(exact);
 });
 
+const settled = (promise: Promise<unknown>) =>
+  promise.then(
+    () => 'released',
+    (error: unknown) => (error instanceof Error ? error.message : ''),
+  );
+
+it('releases both sides once both arrived, running whenBoth once before', async () => {
+  const events: string[] = [];
+  const { arrive } = gate(['A', 'B'], 1_000, () => Promise.resolve(void events.push('both')));
+  const a = arrive('A').then(() => events.push('A'));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(events).toEqual([]);
+  await Promise.all([a, arrive('B').then(() => events.push('B'))]);
+  expect(events).toEqual(['both', 'A', 'B']);
+});
+
+it('rejects a lone arrival after the timeout, naming the side that arrived', async () => {
+  const started = performance.now();
+  const lone = await settled(gate(['A', 'B'], 30).arrive('B'));
+  expect(lone).toMatch(/after 30ms, only B arrived/);
+  expect(performance.now() - started).toBeGreaterThanOrEqual(25);
+});
+
+it('rejects the waiting side and every later arrival at once after a failure', async () => {
+  const calls: string[] = [];
+  const { arrive, fail } = gate(['A', 'B'], 60_000, () => Promise.resolve(void calls.push('both')));
+  const started = performance.now();
+  const waiting = settled(arrive('A'));
+  fail(new Error('B opened nothing'));
+  expect(await waiting).toBe('Office editor gate closed: B opened nothing');
+  expect(await settled(arrive('B'))).toBe('Office editor gate closed: B opened nothing');
+  expect([performance.now() - started < 1_000, calls]).toEqual([true, []]);
+});
+
+it('ignores a failure after the release', async () => {
+  const { arrive, fail } = gate(['A', 'B'], 1_000);
+  await Promise.all([arrive('A'), arrive('B')]);
+  fail(new Error('late'));
+  expect(await settled(arrive('A'))).toBe('released');
+});
+
+it('rejects both sides when whenBoth fails', async () => {
+  let calls = 0;
+  const { arrive } = gate(['A', 'B'], 1_000, () => {
+    calls++;
+    return Promise.reject(new Error('Office editor keys equal'));
+  });
+  const sides = await Promise.all([settled(arrive('A')), settled(arrive('B'))]);
+  expect(sides).toEqual(['Office editor keys equal', 'Office editor keys equal']);
+  expect(calls).toBe(1);
+});
+
+it('keeps the release when whenBoth outlasts the timeout', async () => {
+  const { arrive } = gate(['A', 'B'], 30, () => new Promise((resolve) => setTimeout(resolve, 60)));
+  const later = new Promise((resolve) => setTimeout(resolve, 10)).then(() => settled(arrive('B')));
+  expect(await Promise.all([settled(arrive('A')), later])).toEqual(['released', 'released']);
+});
+
+const OTHER = editorNonce();
+it.each([
+  ['its own nonce only', [`探针。${NONCE}`], 'own'],
+  ['the other nonce', ['', OTHER], 'crossed'],
+  ['both nonces', [NONCE, OTHER], 'crossed'],
+  ['neither nonce', ['编辑写回探针。'], 'missing'],
+])('reads a same-name file holding %s', (_case, paragraphs, state) => {
+  expect(sameNameState(read(CHANGED, paragraphs), NONCE, OTHER)).toBe(state);
+});
+
+it('retires B only when the lane fails, rethrowing the lane failure first', async () => {
+  const retired: string[] = [];
+  const retire = () => Promise.resolve(void retired.push('retire'));
+  expect(await retiringOnError(() => Promise.resolve('evidence'), retire)).toBe('evidence');
+  expect(retired).toEqual([]);
+  const lane = new Error('Office editor lane failed');
+  await expect(retiringOnError(() => Promise.reject(lane), retire)).rejects.toBe(lane);
+  expect(retired).toEqual(['retire']);
+  const disable = new Error('disable failed');
+  const both = retiringOnError(
+    () => Promise.reject(lane),
+    () => Promise.reject(disable),
+  );
+  const error: unknown = await both.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(AggregateError);
+  expect((error as AggregateError).errors).toEqual([lane, disable]);
+});
+
 const session = (screenshots: string[], consoleErrors: string[]) => ({
   ...{ screenshots, consoleErrors, pageErrors: [], failedRequests: [], externalRequests: [] },
   ...{ requests: 40, websockets: 2 },
 });
 const quiet = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
 
-it('prints the three files, their digests, the deltas and each session by extension', () => {
+it('prints the three files, their digests, the deltas, each session by extension and the same-name file of B', () => {
   const files = EXTS.map((ext, size) => ({
     ...{ file: `编辑写回.${ext}`, before: { size, sha256: ORIGINAL } },
     after: { size: size + 400, sha256: CHANGED },
@@ -141,9 +230,13 @@ it('prints the three files, their digests, the deltas and each session by extens
   const replies = ['login.png', 'workbench.png', 'reply.png'];
   const errors = (ext: string) => ['sw fetch', 'sw register', ...(ext === 'xlsx' ? ['404'] : [])];
   const editors = EXTS.map((ext) => [ext, session(shots(ext), errors(ext))] as const);
+  const digests = { before: { size: 7, sha256: ORIGINAL }, after: { size: 9, sha256: CHANGED } };
+  const b = { file: '编辑写回.docx', ...digests };
+  const sameName = { b, editor: session(shots('docx'), errors('docx')) };
   const line = officeEditorLine({
     ...{ files, saved: true, provider: EXPECTED_DELTAS },
     ...{ editors: Object.fromEntries(editors), readBack: session(replies, []) },
+    sameName: { ...sameName, distinctKeys: true, crossed: false },
   });
 
   expect(line).toEqual({
@@ -154,6 +247,10 @@ it('prints the three files, their digests, the deltas and each session by extens
       pptx: { screenshots: shots('pptx'), consoleErrors: 2, ...quiet },
     },
     readBack: { screenshots: replies, consoleErrors: 0, ...quiet },
+    sameName: {
+      ...{ b, distinctKeys: true, crossed: false },
+      editor: { screenshots: shots('docx'), consoleErrors: 2, ...quiet },
+    },
   });
   expect(JSON.stringify(line)).not.toContain('sw fetch');
   expect(() => officeEditorLine(undefined)).toThrow('Office editor evidence missing');

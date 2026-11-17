@@ -6232,7 +6232,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）：51-b 按 CI 口径正好 400 行，原定 51-c 的三项合起来估计超过 400 行，所以：
 
 - 51-c（51.4–51.5）：XLSX 和 PPTX 走 51-b 的路径，Agent 在三个文件都保存后读回一次。
-- 51-d：两个员工的同名文件互不串写；用猜出的 key 加入不了 A 正开着的编辑会话。条目在 51-c 合入后补写进本节，再做 fixture 审查。
+- 51-d：两个员工的同名文件互不串写；用猜出的 key 加入不了 A 正开着的编辑会话。条目在 51-c 合入后补写进本节，再做 fixture 审查。后来再拆为 51-d 和 51-e，见下方「51-d 再拆」。
 
 51-c 开工前已核实（`onlyoffice/documentserver:9.4.0`，`document-templates/new/en-US/`）：
 
@@ -6240,7 +6240,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - 三种格式的正文都在本地名为 `t` 的元素里：`w:t`、`a:t`、表格的 `t`。
 - Document Server 容器里有 `base64`。
 
-- [ ] 51.4（51-c）`office-editor-stack-fixture.ts` 原地扩成三种格式，不另写夹具：
+- [x] 51.4（51-c）`office-editor-stack-fixture.ts` 原地扩成三种格式，不另写夹具：
   - 文件：
     - `编辑写回.docx` 照旧由 `docxCommand` 写一段；
     - `编辑写回.xlsx`、`编辑写回.pptx` 的字节在运行时取自 Document Server 容器（`docker exec dsh-team-documentserver base64 -w0 <模板>`），再以 uid 1001 经 argv 写进实例，记下字节数和 sha256；
@@ -6267,7 +6267,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
   - 浏览器证据：三个编辑会话各自照 51-b 判定，包括「精确放行这条 404」。放行的正则不变，每个会话至多一条；表格和演示编辑器请求的路径不同就会失败，这时停止并报告，不扩大放行。
   - Agent 读回照 51-b，只在三个文件都保存后读回一次；provider 增量仍是 `EXPECTED_DELTAS`。
   - evidence：`files` 是三项 `{ file, before, after }`，`after` 取关闭浏览器后那次读取；`saved: true`；provider 增量；`editors` 是三个编辑会话，evidence 行按扩展名给出截图名和错误计数；`readBack`。
-- [ ] 51.5（51-c）接线、测试和文档：
+- [x] 51.5（51-c）接线、测试和文档：
   - `platform-stack.stack.test.ts`：编辑 lane 传入 `run`（把 `office` 的定义提到 `officeEditorScenario` 之前），接线净增不超过 5 行。
   - `vitest.config.ts`：多出的两个编辑会话各加 120 秒写回轮询和一个 60 秒 `session.timeout`，共 360 秒；注释照现有写法改。
   - `office-editor-stack-fixture.integration.test.ts`：
@@ -6290,13 +6290,78 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - 换成 `zipfile` 读取器后，DS 保存的 DOCX 里 nonce 仍在 `document.xml` 拼出的文本里。
 - 读回那一轮仍是 N=3，`readBackHits` 加 1。
 
+51-d 再拆（同在 2026-11-15「多个 PR」的用户决定之内）：两项合起来估计超过 400 行，所以：
+
+- 51-d（51.6–51.7）：同名不串写。A 和 B 同时开着各自的 `编辑写回.docx`，各自键入、保存。
+- 51-e：猜 key 加入不了 A 正开着的编辑会话。用 51-d 的 `loaded` 闸门的 `whenBoth`，在两个编辑器都已载入时，从特权位置向 Document Server 的 Command Service 发 `info`。条目在 51-d 合入后补写进本节，再做 fixture 审查。
+
+51-d 开工前已核实：
+
+- `workbenchSession` 每次调用自己 `chromium.launch()`，没有模块级状态（`stack-browser-fixture.ts:144-196`）。两个会话可以并发，只要截图目录不同（`:192`）。
+- B 的登录只需要 `{ ...lane.session, email: B_EMAIL }`：员工共用 `PASSWORD`，`panelSession` 只换 email（`platform-stack.stack.test.ts:271-272,287-290`）。
+- 现有 `secondEmployee` 每次调用都注册 B（`:523-528`），隔离 lane 的 `bPosition` 拿到 k1_B 后立即 `retire()`（`office-isolation-stack-fixture.ts:214`）。
+- key 的输入串含 hostname、路径、size、mtime（`onlyoffice-probe-script.ts:5-7`），每实例密钥也不同，所以 A、B 的同名同内容文件 key 不同，Document Server 里是两个会话。产品里构造不出共享会话，51-d 只证明测试确实在两个会话下运行（`distinctKeys`）。
+- 插件 0.2.0 对 status 1 等未列出的状态只回 200 `{ error: 0 }`，没有副作用（`lib/index.js:2177`）。51-e 的 `info` 会让 Document Server 向 A 发一次 status 1。
+- Document Server 9.4.0 的 `docservice` 里有 POST 路由 `/coauthoring/CommandService.ashx` 和 `/command`。返回码由 51-e 首跑核实。
+
+- [ ] 51.6（51-d）`office-editor-stack-fixture.ts` 原地扩展，不另写夹具：
+  - lane 加三项：`secondEmployee: () => Promise<string>`（返回 B 的实例名）、`secondEmail` 和 `retire`。
+    - B 的 lane 由夹具拼出：`session` 换 email、截图目录换成 `office-editor/b`，`exec` 照 A 的写法以 uid 1001 进 B 的实例。
+    - `officeEditor` 先 `await secondEmployee()`，再读 `start = provider()`，所以 B 的启动不落进 provider 的对比窗口。
+  - 会合闸门只写一份，导出：`gate(sides, timeout, whenBoth?)`。
+    - `arrive(side)`：两方都到达后放行；超过 `timeout` 抛错，错误点名已到达的一方。
+    - `fail(error)`：一方出错时调用，正在等待和之后到达的一方立即 reject，不空等超时。
+    - `whenBoth` 可选，在两方都到达后、放行前只执行一次；它失败时两方都 reject。51-e 的 `info` 放在这里。
+  - `editAndSave` 加一个可选参数 `{ nonce, loaded, saved }`。nonce 缺省为 `readBack.nonce`；`loaded`、`saved` 是两方共用的两道闸门：
+    - `typeAndSave` 在编辑器就绪之后、点击之前 `loaded.arrive`，超时为 `session.timeout`。就绪是 `#loading-mask` 和 `.asc-loadmask` 都已移除：DS 9.4 编辑模式下 `app:face` 先撤 `#loading-mask`，同一 tick 挂上挡住输入的 `.asc-loadmask`，到 `onDocumentContentReady` 才撤（web-apps v9.4.0.131 三个编辑器的 `Main.js`、`LoadMask.js:100,117-120`）。51-c 只等前者，51-d 开发期实跑 XLSX 的点击因此没有生效；
+    - 写回轮询看到 `saved` 之后、截图 `-saved` 之前 `saved.arrive`，超时为写回轮询的上限 120 秒。这样两次保存都发生在两个编辑器都开着的时候；
+    - 一方的 `editAndSave` 抛错时，对两道闸门都调用 `fail`。
+  - DOCX 一步改为 A 和 B 并发：
+    - B 的 nonce 也用 `editorNonce()` 生成，和 A 的不同；
+    - B 的文件由同一个写入器写成同名、同内容的 `/data/work/编辑写回.docx`。B 的 `withWorkFiles` 包住整个 DOCX 并发步：`allSettled`、两边复读、`sameNameState` 和 B 的 `after` 都在里面，`retire()` 在它外面；
+    - 两个 `editAndSave` 用 `Promise.allSettled` 跑。有失败就抛 `AggregateError`，A 的错误在前；
+    - 两边各自照 51-b 判定写回、浏览器证据和「精确放行这条 404」。
+  - 两个会话确实不同：`loaded` 的 `whenBoth` 读 A、B 各自的 `REGISTRY`（从 `office-isolation-stack-fixture.ts` 导入）。
+    - 持久化格式是 `{ version: 1, entries: [{ key, entry: { path, … }, lastSeen }] }`（插件 0.2.0 `lib/index.js:1371-1375`）。按 `entries[].entry.path === '/data/work/编辑写回.docx'` 选条目，每边恰好一条；
+    - 最多轮询 5 秒，直到两边都恰好有一条。超时只报哪一边缺条目或多条，不打印条目；
+    - 比较写成布尔值 `expect(kA !== kB).toBe(true)`。exec 失败时对两个 key 调 `redactSecrets`，不带 `cause`，照第 49 节；
+    - key 只留在测试进程内存里，evidence 只放 `distinctKeys: true`。51-e 会用到 A 的这个 key。
+  - 串写判定在 `allSettled` 结束、两个浏览器都已关闭之后做，A、B 各再读一次文件：
+    - 判定是导出的纯函数 `sameNameState(read, own, other)`，看 `texts`，返回 `own`、`crossed` 或 `missing`；
+    - 两边都必须是 `own`：含自己的 nonce，不含对方的。
+    - `sameName.after` 取这次复读的结果。
+  - 清理顺序：B 的 `withWorkFiles` 清理完、两个浏览器都结束后，才轮到 `retire()`。场景出错时调用 `retire()`，再抛原错误；`retire()` 自己也失败时，抛 `AggregateError`，原错误在前。正常结束时不调用，B 留给隔离 lane。
+  - XLSX、PPTX、Agent 读回和 provider 增量照 51-c 不变。B 不发消息，provider 增量仍是 `EXPECTED_DELTAS`。
+  - evidence 加 `sameName`：B 的 `{ file, before, after }`，B 编辑会话的截图名和错误计数，`distinctKeys`、`crossed`。后两项取自观测：`distinctKeys` 只在 `whenBoth` 比较过两个 key 后写入，`crossed` 由两边的判定推出；两道闸门都确实放行过也在场景里断言。
+- [ ] 51.7（51-d）接线、测试和文档：
+  - `platform-stack.stack.test.ts`：
+    - `secondEmployee` 提到编辑 lane 之前，改为缓存第一次调用返回的 promise，而不是结果，所以并发或重复调用都不会再注册 B；`secondId` 照现在的写法在 `startInstance` 之前赋值；
+    - 编辑 lane 和隔离 lane 用同一个 `secondEmployee` 和 `retire`，B 在编辑 lane 里启动，到隔离 lane 的 `retire()` 才停用；
+    - 接线净增不超过 6 行。
+  - `vitest.config.ts`：B 的实例启动只是提前，不另加时间。B 的编辑会话与 A 的并发，多出的时间只有两次会合等待：`loaded` 最多 60 秒，`saved` 最多 120 秒，共加 180 秒。注释照现有写法改。
+  - `office-editor-stack-fixture.integration.test.ts`：
+    - 闸门：两方都到达后都放行；只到一方时按超时抛错，并点名已到达的一方；一方 `fail` 后，等待的一方立即 reject；`whenBoth` 只执行一次，它失败时两方都 reject；
+    - 串写判定：只含自己的、含对方的、两个都含、两个都不含；
+    - 场景出错时调用 `retire()` 并抛出原错误；`retire()` 也失败时原错误仍在第一位；
+    - evidence 形状。
+  - 文档：`docs/LOCAL_STACK.md` 的 `Office 编辑写回` 行和 `platform/test/README.md` 的那一句加上 B 的同名文件。
+
+51-d 未核实，由第一次 stack 运行验证；做不到时停止并报告，不放宽断言：
+
+- 两个浏览器并发编辑时，两个编辑器都能在 `session.timeout` 内载入，各自的 Ctrl+S 都写回各自的文件。
+- B 第一次在浏览器里登录自己的实例（第 49 节里 B 没开过 workbench），文件区能列出并打开 `/data/work/编辑写回.docx`。
+- B 的编辑会话照样进 office-hints 包装器，console 恰好是 ServiceWorker 两条 403，外加至多一条放行的 404。
+- 两个编辑器都载入后，A、B 的注册表在 5 秒内都有这个文件的条目。
+- B 的实例启动之后，DSH 不向 provider 发请求，`officeEditor` 的 provider 增量不变。
+- B 提前启动、一直运行到隔离 lane，`officeIsolation` 的证据不变。
+
 验证：
 
 - 51-a：
   - provider 集成测试先红后绿；`pnpm check`；
   - 本机 exact-head `pnpm test:stack` 通过。这次运行只是回归检查：不配置时行为不变，已经由集成测试里 `/health` 逐字节不变的用例证明；
   - VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
-- 51-b 和 51-c：
+- 51-b、51-c 和 51-d：
   - 夹具集成测试先红后绿；`pnpm check`；
   - 本机 exact-head `pnpm test:stack` 通过，并贴出证据评论；
   - VPS 同上。
@@ -6305,7 +6370,8 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 
 - 51-a 估计 150 到 200 行；
 - 51-b 估计 330 到 390 行，包括 office-hints 的原地重构和 vitest 注释；
-- 51-c 估计 300 到 380 行，包括本段夹具。
+- 51-c 估计 300 到 380 行，包括本段夹具；
+- 51-d 估计 300 到 380 行，包括本段夹具（规格 50 行）。
 
 任何一个超过 400 行，都先停下报告。
 
@@ -6313,15 +6379,18 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 
 结果（51-b，#619，合并提交 `896e171`）：DOCX 编辑写回和 Agent 读回合入，修复 1 次让编辑 lane 的 ServiceWorker 等待跳过放行的插件 404 文本，按 CI 口径 400 行。开发期和 exact-head 两次运行都是 N=3、`readBackHits` 加 1，读回会话没有恢复 ONLYOFFICE tab。
 
+结果（51-c，#620，合并提交 `46486ce`）：XLSX、PPTX 从 DS 自带的空白模板写入，三种格式各开一次编辑会话保存写回，标准库读取器取代 python-docx，一次 `bash` 读回只打印三份文件共有的 nonce。修复 1 次：DSH 预览断言改为不看 id，键入前等编辑器的 `#loading-mask` 隐藏（开发期第 2 次实跑 PPTX 的点击落在载入骨架上）。按 CI 口径 400 行。开发期第 3 次和 exact-head 两次运行都是 N=3、`readBackHits` 加 1，三个编辑会话各自 consoleErrors 3。
+
 剩余风险：
 
 - Document Server 的编辑区是 canvas，键入依赖它隐藏的输入框。DS 升级可能改变 iframe 层级。
 - 只验证了一次编辑、一次保存，不验证协同编辑和多次保存。
 - Agent 读回经 `bash` 工具，不经 `read`。docx 的文本读取本来就只能这样做。
 - 清理和迟到的 status 2 之间有一个很小的竞态：`saveFromCallback` 先 stat、再下载、再原子改名（`registry.ts:229-241`）。清理的 unlink 恰好落在中间时，改名会重建文件。之后没有断言依赖这个文件。
+- 51-d 起 B 从编辑 lane 一直运行到隔离 lane 的 `retire()`。编辑 lane 出错时由它自己停用 B；编辑 lane 成功、隔离 lane 在 `bPosition` 之前出错时，B 不会被停用。这是 51-d 新增的窗口（49-a 里 B 在 `bPosition` 内才注册），只记录。
 
 Suggested fixture level: expanded - 真实编辑器写回员工文件，provider 新脚本
-Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR
+Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR；51-d 为 51.6–51.7 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景、office-hints 断言和截图名、provider 已有脚本和 `/health` 不变）、Resource limits（新增有界等待，文件结束时删除）、Security（写回只发生在 A 自己的文件上，key 不进证据）；not selected - Schema、Public API、Migration、Auth、Concurrency。
 Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`、hold、delegation 行为、计数和 `/health` 不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索。
 
