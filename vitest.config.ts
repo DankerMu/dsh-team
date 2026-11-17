@@ -55,11 +55,13 @@ export default defineConfig({
           // by 480s: its instance restart waits 180s at most for the gateway, its 10 docker calls
           // 30s each, and the office editor lane (#440), which raised it by 600s: three 120s
           // write-back polls, three editor loads and the Agent read-back at one 60s session timeout
-          // each, and the Document Server startup wait (#622), which raised it by 300s: one pgrep
-          // poll bounded at 300s before the first Office lane. That remainder is a margin, not the
-          // sum of every per-step bound: a vitest timeout skips the restore `finally` and leaves
-          // ragflow-cpu stopped (LOCAL_STACK.md §5).
-          testTimeout: 4_380_000,
+          // each, its concurrent same-name DOCX (#440), which raised it by 180s: B's editor meets
+          // A's at load (60s at most) and after the save (120s at most), and the Document Server
+          // startup wait (#622), which raised it by 300s: one pgrep poll bounded at 300s before
+          // the first Office lane. That remainder is a margin, not the sum of every per-step
+          // bound: a vitest timeout skips the restore `finally` and leaves ragflow-cpu stopped
+          // (LOCAL_STACK.md §5).
+          testTimeout: 4_560_000,
         },
       },
     ],
