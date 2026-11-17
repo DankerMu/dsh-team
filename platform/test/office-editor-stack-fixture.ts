@@ -12,7 +12,13 @@ import {
   serviceWorkerRefused,
   untilSeen,
 } from './office-hints-stack-fixture.ts';
-import { redactSecrets, REGISTRY } from './office-isolation-stack-fixture.ts';
+import {
+  EXPECTED_INFO,
+  guessedKeyInfo,
+  redactSecrets,
+  REGISTRY,
+} from './office-isolation-stack-fixture.ts';
+import type { OfficeIsolationLane } from './office-isolation-stack-fixture.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, until, workbenchSession } from './stack-browser-fixture.ts';
@@ -123,6 +129,8 @@ export interface OfficeEditorEvidence {
     readonly editor: StackBrowserEvidence;
     readonly distinctKeys: boolean;
     readonly crossed: boolean;
+    /** Command Service `info` from the platform position for A's, B's, k0 and a guessed key (51.8). */
+    readonly guessedKey: Readonly<Record<string, unknown>>;
   };
 }
 
@@ -167,6 +175,7 @@ export function officeEditorLine(evidence: OfficeEditorEvidence | undefined) {
  * and B's: `secondEmployee` starts B once and yields its instance, `retire` disables it. */
 export type OfficeEditorLane = ArchiveLane & {
   readonly run: DockerOutput;
+  readonly platformRead: OfficeIsolationLane['platformRead'];
   readonly reply: string;
   readonly readBack: Readonly<Record<'marker' | 'command' | 'nonce', string>>;
   readonly secondEmployee: () => Promise<string>;
@@ -363,9 +372,10 @@ async function distinctKeys(lanes: readonly ArchiveLane[], met: { distinct: bool
     const failed = `Office editor registry entries per side ${counts}: ${message}`;
     throw new Error(redactSecrets(failed, keys.flat()));
   });
-  const [kA, kB] = keys.map(([key]) => key);
+  const [kA = '', kB = ''] = keys.map(([key]) => key);
   expect(kA !== kB, 'A and B edit the same-name DOCX under distinct keys').toBe(true);
   met.distinct = kA !== kB;
+  return [kA, kB] as const;
 }
 
 /** A's and B's same-name DOCX edited at once, each with its own nonce, then read once more. */
@@ -376,8 +386,12 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
     exec: (args) => lane.run(['exec', '--user', '1001', instance, ...args]),
   };
   const [nonceA, nonceB] = [lane.readBack.nonce, editorNonce()];
-  const met = { distinct: false, A: false, B: false };
-  const loaded = gate(SIDES, lane.session.timeout, () => distinctKeys([lane, b], met));
+  const met = { distinct: false, A: false, B: false, info: {} as Record<string, unknown> };
+  // With both editors open: one session per key, none under k0 or a guessed secret (51.8).
+  const loaded = gate(SIDES, lane.session.timeout, async () => {
+    const [kA, kB] = await distinctKeys([lane, b], met);
+    met.info = await guessedKeyInfo(lane, kA, kB, inWork('docx'));
+  });
   const saved = gate(SIDES, 120_000);
   const edit = (side: OfficeEditorLane, name: 'A' | 'B', nonce: string, where: string) => {
     const saving = () => saved.arrive(name).then(() => void (met[name] = true));
@@ -402,11 +416,12 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
     const [aAfter, bAfter] = [await readWork(lane, 'docx'), await readWork(b, 'docx')];
     const states = [sameNameState(aAfter, nonceA, nonceB), sameNameState(bAfter, nonceB, nonceA)];
     expect(states, 'A and B same-name DOCX after both browsers closed').toEqual(['own', 'own']);
-    expect(met, 'A and B met at both gates').toEqual({ distinct: true, A: true, B: true });
+    const all = { distinct: true, A: true, B: true, info: EXPECTED_INFO };
+    expect(met, 'A and B met at both gates, the Command Service as expected').toEqual(all);
     const { written, editor } = other.value;
     const file = { file: fileName('docx'), before: digest(written), after: digest(bAfter) };
     const crossed = states.includes('crossed');
-    const sameName = { b: file, editor, distinctKeys: met.distinct, crossed };
+    const sameName = { b: file, editor, distinctKeys: met.distinct, crossed, guessedKey: met.info };
     return { a: a.value, sameName };
   });
 }

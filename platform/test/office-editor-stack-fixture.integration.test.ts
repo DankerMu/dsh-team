@@ -221,7 +221,7 @@ const session = (screenshots: string[], consoleErrors: string[]) => ({
 });
 const quiet = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
 
-it('prints the three files, their digests, the deltas, each session by extension and the same-name file of B', () => {
+it("prints the three files, their digests, the deltas, each session by extension, B's same-name file and the guessed-key info", () => {
   const files = EXTS.map((ext, size) => ({
     ...{ file: `编辑写回.${ext}`, before: { size, sha256: ORIGINAL } },
     after: { size: size + 400, sha256: CHANGED },
@@ -233,10 +233,15 @@ it('prints the three files, their digests, the deltas, each session by extension
   const digests = { before: { size: 7, sha256: ORIGINAL }, after: { size: 9, sha256: CHANGED } };
   const b = { file: '编辑写回.docx', ...digests };
   const sameName = { b, editor: session(shots('docx'), errors('docx')) };
+  const [open, unknown] = [
+    { status: 200, error: 0, users: ['dsh'] },
+    { status: 200, error: 1 },
+  ];
+  const guessedKey = { k1: open, kB: open, k0: unknown, kGuessed: unknown };
   const line = officeEditorLine({
     ...{ files, saved: true, provider: EXPECTED_DELTAS },
     ...{ editors: Object.fromEntries(editors), readBack: session(replies, []) },
-    sameName: { ...sameName, distinctKeys: true, crossed: false },
+    sameName: { ...sameName, distinctKeys: true, crossed: false, guessedKey },
   });
 
   expect(line).toEqual({
@@ -248,7 +253,7 @@ it('prints the three files, their digests, the deltas, each session by extension
     },
     readBack: { screenshots: replies, consoleErrors: 0, ...quiet },
     sameName: {
-      ...{ b, distinctKeys: true, crossed: false },
+      ...{ b, distinctKeys: true, crossed: false, guessedKey },
       editor: { screenshots: shots('docx'), consoleErrors: 2, ...quiet },
     },
   });

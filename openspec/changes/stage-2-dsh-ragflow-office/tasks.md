@@ -6293,7 +6293,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 51-d 再拆（同在 2026-11-15「多个 PR」的用户决定之内）：两项合起来估计超过 400 行，所以：
 
 - 51-d（51.6–51.7）：同名不串写。A 和 B 同时开着各自的 `编辑写回.docx`，各自键入、保存。
-- 51-e：猜 key 加入不了 A 正开着的编辑会话。用 51-d 的 `loaded` 闸门的 `whenBoth`，在两个编辑器都已载入时，从特权位置向 Document Server 的 Command Service 发 `info`。条目在 51-d 合入后补写进本节，再做 fixture 审查。
+- 51-e（51.8–51.9）：猜 key 加入不了 A 正开着的编辑会话。用 51-d 的 `loaded` 闸门的 `whenBoth`，在两个编辑器都已载入时，从特权位置向 Document Server 的 Command Service 发 `info`。
 
 51-d 开工前已核实：
 
@@ -6304,7 +6304,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - 插件 0.2.0 对 status 1 等未列出的状态只回 200 `{ error: 0 }`，没有副作用（`lib/index.js:2177`）。51-e 的 `info` 会让 Document Server 向 A 发一次 status 1。
 - Document Server 9.4.0 的 `docservice` 里有 POST 路由 `/coauthoring/CommandService.ashx` 和 `/command`。返回码由 51-e 首跑核实。
 
-- [ ] 51.6（51-d）`office-editor-stack-fixture.ts` 原地扩展，不另写夹具：
+- [x] 51.6（51-d）`office-editor-stack-fixture.ts` 原地扩展，不另写夹具：
   - lane 加三项：`secondEmployee: () => Promise<string>`（返回 B 的实例名）、`secondEmail` 和 `retire`。
     - B 的 lane 由夹具拼出：`session` 换 email、截图目录换成 `office-editor/b`，`exec` 照 A 的写法以 uid 1001 进 B 的实例。
     - `officeEditor` 先 `await secondEmployee()`，再读 `start = provider()`，所以 B 的启动不落进 provider 的对比窗口。
@@ -6333,7 +6333,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
   - 清理顺序：B 的 `withWorkFiles` 清理完、两个浏览器都结束后，才轮到 `retire()`。场景出错时调用 `retire()`，再抛原错误；`retire()` 自己也失败时，抛 `AggregateError`，原错误在前。正常结束时不调用，B 留给隔离 lane。
   - XLSX、PPTX、Agent 读回和 provider 增量照 51-c 不变。B 不发消息，provider 增量仍是 `EXPECTED_DELTAS`。
   - evidence 加 `sameName`：B 的 `{ file, before, after }`，B 编辑会话的截图名和错误计数，`distinctKeys`、`crossed`。后两项取自观测：`distinctKeys` 只在 `whenBoth` 比较过两个 key 后写入，`crossed` 由两边的判定推出；两道闸门都确实放行过也在场景里断言。
-- [ ] 51.7（51-d）接线、测试和文档：
+- [x] 51.7（51-d）接线、测试和文档：
   - `platform-stack.stack.test.ts`：
     - `secondEmployee` 提到编辑 lane 之前，改为缓存第一次调用返回的 promise，而不是结果，所以并发或重复调用都不会再注册 B；`secondId` 照现在的写法在 `startInstance` 之前赋值；
     - 编辑 lane 和隔离 lane 用同一个 `secondEmployee` 和 `retire`，B 在编辑 lane 里启动，到隔离 lane 的 `retire()` 才停用；
@@ -6355,13 +6355,58 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - B 的实例启动之后，DSH 不向 provider 发请求，`officeEditor` 的 provider 增量不变。
 - B 提前启动、一直运行到隔离 lane，`officeIsolation` 的证据不变。
 
+51-e 开工前已核实（ONLYOFFICE server `v9.4.0.131` 源码；`run-document-server.sh` 取自 `onlyoffice/documentserver:9.4.0`）：
+
+- 路由：`POST /coauthoring/CommandService.ashx` 和 `POST /command` 都进 `commandFromServer`（`DocService/sources/server.js:234-236`），只过 IP 过滤，默认规则放行所有地址（`Common/config/default.json` `ipfilter.rules`）。
+- JWT：`deploy/compose.yml:59-60` 给 Document Server 设 `JWT_ENABLED: "true"` 和 `JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET}`，启动脚本据此打开 `token.enable.request.inbox`（`run-document-server.sh:110,387`）。`getRequestParams` 先看 body 的 `token`（`DocsCoServer.js:1697-1740`）；默认 `tokenRequiredParams: true`（`default.json:349`），请求参数整个换成 token 解出的字段，body 里的其他字段被丢弃，所以 token 的 payload 要带 `c` 和 `key`。签名不对回 `error: 6`（`:4538-4548`；`commondefines.js:1180-1189`）。
+- `info`（`DocsCoServer.js:4635-4648`）：
+  - `task_result` 里没有这个 key：回 `error: 1`（`DocumentIdError`），没有别的动作；
+  - 有：经 `bindEvents` → `sendStatusDocument` 向这个 key 登记的回调发一次状态，回 `error: 0` 和 `users`（`:1541-1570`、`:1401-1463`）。有在线编辑者时状态是 1，`users` 是他们的原始 user id（`:778-794`），插件 0.2.0 里恒为 `'dsh'`；没有在线编辑者也没有改动时状态是 4，插件收到 4 会忘记这个 key。所以 `info` 只在两个编辑器都开着时发。
+  - 回答带 `key` 原样回显（`:4753` 初始化，`:4763` `output.key = params.key`，在 token 校验之前，所以 token 坏了的回答也带 key），只能取 `error` 和 `users`。`error: 1` 的回答没有 `users`。
+- 地址：平台和 Document Server 都在 compose 的 `default` 网络上（`deploy/compose.yml:27-28`；`documentserver` 没有声明 `networks`），平台容器可以直接请求 `http://dsh-team-documentserver/command`，Document Server 监听 80，没有宿主端口。
+- 会话按 key 索引（auth 从编辑器配置的 JWT 取 docid，`DocsCoServer.js:2825`；查 `task_result`，`:2926`；绑定 `conn.docId`，`:3006`）：编辑器用某个 key 打开时，只有这个 key 在 `task_result` 里已有记录，才会进同一个会话。猜出的 key 在 `info` 里回 `error: 1`，就说明 Document Server 里没有这个会话，用它打开编辑器只会新开一个会话；新会话要取 A 的文件，又需要 A 的文件令牌，伪造的令牌第 49 节已证明被拒。
+
+- [ ] 51.8（51-e）`office-isolation-stack-fixture.ts` 加 Command Service 探测，`office-editor-stack-fixture.ts` 在 `loaded` 闸门的 `whenBoth` 里调用它：
+  - 共享片段原地扩展，现有调用不变：
+    - `onlyoffice-probe-script.ts` 的 `JWT_JS`：`jwt(claims = {})`，claims 放在 `exp` 前面；
+    - `exchangeJs(address, hostHeader, port = 3080)`。
+  - A 侧脚本 `aGuessScript(file)`：经 `lane.exec` 以 uid 1001 运行，argv[1] 是测试进程随机生成的 32 字节猜测密钥。按 `KEY_JS` 对 A 的 `编辑写回.docx` 算出 k1、k0 和 HMAC(猜测密钥, 输入串)，输出 `{ k1, k0, kGuessed }`。
+  - 平台侧脚本 `platformInfoScript(host, keys, port = 80)`：在平台容器里，对 k1、kB、k0、kGuessed 各 POST 一次 `http://<host>:<port>/command`，Host 头为 `host`，body 为 `{ c: 'info', key, token: jwt({ c: 'info', key }) }`，JWT 取平台环境的 `DOCUMENT_SERVER_JWT_SECRET`。每个回答只记 `{ status, error, users }`，没有的字段不写。stack 里 `host` 是 `DOCUMENT_SERVER`（从 `office-hints-stack-fixture.ts` 导入）。
+  - 导出 `guessedKeyInfo(lane, kA, kB, file)`：
+    - 先跑 A 侧脚本，断言重算的 k1 等于 51-d 从注册表读到的 kA。这证明 k0 和 kGuessed 是对同一个输入串算的；
+    - 再跑平台侧脚本，期望 `EXPECTED_INFO`：k1 和 kB 都是 `{ status: 200, error: 0, users: ['dsh'] }`，k0 和 kGuessed 都是 `{ status: 200, error: 1 }`；
+    - 秘密：kA、kB、猜测密钥、k0、kGuessed。两步都经 `guarded` 和 `verify` 脱敏，不带 `cause`。
+  - 编辑器夹具：
+    - `OfficeEditorLane` 加 `platformRead`，类型取自 `OfficeIsolationLane`；
+    - `distinctKeys` 仍写 `met.distinct`，另外返回 `[kA, kB]`。`loaded` 的 `whenBoth` 在它之后调用 `guessedKeyInfo`，结果记进 `met.info`；
+    - `allSettled` 之后断言 `met.info` 等于 `EXPECTED_INFO`；
+    - evidence 的 `sameName` 加 `guessedKey`，取 `met.info`，不含任何 key。
+- [ ] 51.9（51-e）测试和文档：
+  - `office-isolation-stack-fixture.integration.test.ts`：
+    - 用本机 `node` 真跑 `aGuessScript`：临时文件、环境里的每实例密钥、argv 里的猜测密钥，三个值与测试里按同一输入串算出的相同；
+    - 用本机 `node` 真跑 `platformInfoScript`，对一个监听随机端口的本机 HTTP 替身：替身只接受 `POST /command`，其余方法或路径回 404；它用同一个密钥校验 body token 的 HS256 签名，payload 里的 `c` 和 `key` 等于 body 的；按 key 回答 `{ key, error: 0, users: ['dsh'] }` 或 `{ key, error: 1 }`；observation 里没有 key；
+    - `guessedKeyInfo` 的假 lane：先 A 后平台；交给 `platformRead` 的脚本逐字等于 `platformInfoScript(DOCUMENT_SERVER, { k1: kA, kB, k0, kGuessed })`，k0 和 kGuessed 取 A 侧的输出；重算的 k1 不等于 kA、平台回答不符、exec 失败、输出不是 JSON 时都失败，错误信息里没有任何秘密，也没有 `cause`；
+    - `JWT_JS` 不带 claims 时，签出的 payload 与原来相同；
+    - 照现有 `EXPECTED_ISOLATION`、`EXPECTED_ATTACK` 的写法，逐字锁定 `EXPECTED_INFO`。
+  - `office-editor-stack-fixture.integration.test.ts`：evidence 形状加 `guessedKey`。
+  - `vitest.config.ts`：`whenBoth` 多出两次 docker 调用（A 的 exec 和平台的 exec），各 30 秒，共加 60 秒。注释照现有写法改。
+  - 文档：`docs/LOCAL_STACK.md` 的 `Office 编辑写回` 行和 `platform/test/README.md` 的那一句加上 Command Service 的 `info` 结果，写明这是特权位置。
+
+51-e 未核实，由第一次 stack 运行验证；做不到时停止并报告，不放宽断言：
+
+- 平台容器经 compose 的 `default` 网络解析 `dsh-team-documentserver`，连上 80 端口（Host 头为 `dsh-team-documentserver`），`/command` 接受 body token，k1 回 `error: 0`。回 6 或 7 就说明 JWT 不对。
+- k1 和 kB 的 `users` 都恰好是 `['dsh']`，k0 和 kGuessed 都是 `error: 1`。
+- `info` 让 Document Server 向 A、B 各发一次状态 1，之后两边照常保存，各自只含自己的 nonce。
+- A 侧重算的 k1 等于注册表里的 kA。
+- 插件对状态 1 的回答不是 `{ error: 0 }` 时，Document Server 会向编辑器推送「Error on save server subscription!」（`DocsCoServer.js:1481-1487`），之后的键入会显式失败。
+
 验证：
 
 - 51-a：
   - provider 集成测试先红后绿；`pnpm check`；
   - 本机 exact-head `pnpm test:stack` 通过。这次运行只是回归检查：不配置时行为不变，已经由集成测试里 `/health` 逐字节不变的用例证明；
   - VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
-- 51-b、51-c 和 51-d：
+- 51-b、51-c、51-d 和 51-e：
   - 夹具集成测试先红后绿；`pnpm check`；
   - 本机 exact-head `pnpm test:stack` 通过，并贴出证据评论；
   - VPS 同上。
@@ -6371,7 +6416,8 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - 51-a 估计 150 到 200 行；
 - 51-b 估计 330 到 390 行，包括 office-hints 的原地重构和 vitest 注释；
 - 51-c 估计 300 到 380 行，包括本段夹具；
-- 51-d 估计 300 到 380 行，包括本段夹具（规格 50 行）。
+- 51-d 估计 300 到 380 行，包括本段夹具（规格 50 行）；
+- 51-e 估计 220 到 300 行，包括本段夹具（规格 50 行）。
 
 任何一个超过 400 行，都先停下报告。
 
@@ -6381,6 +6427,8 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 
 结果（51-c，#620，合并提交 `46486ce`）：XLSX、PPTX 从 DS 自带的空白模板写入，三种格式各开一次编辑会话保存写回，标准库读取器取代 python-docx，一次 `bash` 读回只打印三份文件共有的 nonce。修复 1 次：DSH 预览断言改为不看 id，键入前等编辑器的 `#loading-mask` 隐藏（开发期第 2 次实跑 PPTX 的点击落在载入骨架上）。按 CI 口径 400 行。开发期第 3 次和 exact-head 两次运行都是 N=3、`readBackHits` 加 1，三个编辑会话各自 consoleErrors 3。
 
+结果（51-d，#621，合并提交 `abf3c3e`）：A、B 同时编辑同名 DOCX，各自只含自己的 nonce，两边 key 不同。修复 1 次：`distinctKeys` 和两个保存标志改为取自观测，补上闸门 `clearTimeout` 的用例，键入前改等 `#loading-mask` 和 `.asc-loadmask` 都已移除。开发期第 3、4 次运行失败的根因是 Document Server 启动后约 70 秒重启 docservice，由 #622（PR #623）修复。按 CI 口径 396 行。
+
 剩余风险：
 
 - Document Server 的编辑区是 canvas，键入依赖它隐藏的输入框。DS 升级可能改变 iframe 层级。
@@ -6388,9 +6436,10 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - Agent 读回经 `bash` 工具，不经 `read`。docx 的文本读取本来就只能这样做。
 - 清理和迟到的 status 2 之间有一个很小的竞态：`saveFromCallback` 先 stat、再下载、再原子改名（`registry.ts:229-241`）。清理的 unlink 恰好落在中间时，改名会重建文件。之后没有断言依赖这个文件。
 - 51-d 起 B 从编辑 lane 一直运行到隔离 lane 的 `retire()`。编辑 lane 出错时由它自己停用 B；编辑 lane 成功、隔离 lane 在 `bPosition` 之前出错时，B 不会被停用。这是 51-d 新增的窗口（49-a 里 B 在 `bPosition` 内才注册），只记录。
+- 51-e 的 `info` 只在两个编辑器都开着时发。如果某一边的编辑器在 `info` 之前已断开，又没有改动，Document Server 会向它的回调发状态 4，插件因此忘记这个 key。之后这个文件要重新登记 key，夹具不依赖它。
 
 Suggested fixture level: expanded - 真实编辑器写回员工文件，provider 新脚本
-Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR；51-d 为 51.6–51.7 一个 PR
+Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR；51-d 为 51.6–51.7 一个 PR；51-e 为 51.8–51.9 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景、office-hints 断言和截图名、provider 已有脚本和 `/health` 不变）、Resource limits（新增有界等待，文件结束时删除）、Security（写回只发生在 A 自己的文件上，key 不进证据）；not selected - Schema、Public API、Migration、Auth、Concurrency。
 Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`、hold、delegation 行为、计数和 `/health` 不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索。
 

@@ -60,7 +60,8 @@ export default defineConfig({
           // sum of every per-step bound: a vitest timeout skips the restore `finally` and leaves
           // ragflow-cpu stopped (LOCAL_STACK.md §5). The concurrent same-name DOCX (#440) raised it
           // by 180s: B's editor meets A's at load (60s at most) and after the save (120s at most).
-          testTimeout: 4_560_000,
+          // The guessed-key info at that load (#440) raised it by 60s: two docker execs, 30s each.
+          testTimeout: 4_620_000,
         },
       },
     ],
