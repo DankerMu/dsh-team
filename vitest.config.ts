@@ -61,7 +61,9 @@ export default defineConfig({
           // ragflow-cpu stopped (LOCAL_STACK.md §5). The concurrent same-name DOCX (#440) raised it
           // by 180s: B's editor meets A's at load (60s at most) and after the save (120s at most).
           // The guessed-key info at that load (#440) raised it by 60s: two docker execs, 30s each.
-          testTimeout: 4_620_000,
+          // The office idle lane (#440) raised it by 660s: a 60s editor load, the 210s hold, the
+          // 120s write-back, the 240s idle-stop bound and 30s for the file's write and removal.
+          testTimeout: 5_280_000,
         },
       },
     ],

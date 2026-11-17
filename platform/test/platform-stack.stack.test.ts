@@ -63,6 +63,8 @@ import {
   officeHintsScenario,
 } from './office-hints-stack-fixture.ts';
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
+import { officeIdleLine, officeIdleScenario } from './office-idle-stack-fixture.ts';
+import type { OfficeIdleEvidence } from './office-idle-stack-fixture.ts';
 import { officeIsolationLine, officeIsolationScenario } from './office-isolation-stack-fixture.ts';
 import { officeProfileLine, officeProfileScenario } from './office-profile-stack-fixture.ts';
 import type { OfficeProfileEvidence } from './office-profile-stack-fixture.ts';
@@ -181,6 +183,7 @@ interface ConversationEvidence {
   officeEditor?: OfficeEditorEvidence;
   officeIsolation?: OfficeIsolationEvidence;
   officeProfile?: OfficeProfileEvidence;
+  officeIdle?: OfficeIdleEvidence;
   /** Waited for before the first Office lane (#622). */
   documentServer?: { startupMs: number; spawns: number };
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
@@ -537,13 +540,16 @@ async function converse(
     const retire = () =>
       secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId);
     const b = { secondEmployee, secondEmail: B_EMAIL, retire };
-    const office = { ...lane, ...b, run, platformRead, instance: `dsh-team-u-${employee.id}` };
+    const instance = `dsh-team-u-${employee.id}`;
+    const office = { ...lane, ...b, run, platformRead, instance, administrator };
     evidence.officeEditor = await officeEditorScenario({ ...office, reply, readBack });
     // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
     evidence.officeIsolation = await officeIsolationScenario(office);
     // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });
+    // 18.5 (#440): A's open editor outlasts one idle minute; once it closes, A is idle-stopped.
+    evidence.officeIdle = await officeIdleScenario({ ...office, reply, readBack });
     const spawns = await docserviceSpawns(run);
     expect(spawns, 'docservice spawned again during the Office lanes').toBe(documentServer.spawns);
   });
@@ -884,6 +890,7 @@ it('builds both images, starts the delivered compose platform, converses through
         officeEditor: officeEditorLine(officeEditor),
         officeIsolation: officeIsolationLine(officeIsolation),
         officeProfile: officeProfileLine(officeProfile),
+        officeIdle: officeIdleLine(evidence.officeIdle),
         documentServer,
       },
     })}\n`,

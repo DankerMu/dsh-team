@@ -337,6 +337,7 @@ async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string, 
   if (saved === undefined) throw new Error('Office editor save not observed');
   return { editor, written, after };
 }
+export { counted, digest, editAndSave, type Digest, type Meeting };
 
 type Edited = Awaited<ReturnType<typeof editAndSave>>;
 const SIDES = ['A', 'B'] as const;
