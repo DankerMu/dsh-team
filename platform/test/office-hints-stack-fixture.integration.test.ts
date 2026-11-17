@@ -1,7 +1,10 @@
-import { expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { previewIds, visible } from './better-sidebar-browser-fixture.mjs';
 import {
   COLLAB,
+  DOCUMENT_SERVER,
+  docserviceSpawns,
+  documentServerStarted,
   docxCommand,
   editorSettled,
   HEALTH_COMMAND,
@@ -122,4 +125,87 @@ it.each([
   ],
 ])('allows %s: %s', (_case, allowed, errors) => {
   expect(serviceWorkerRefused(errors, `${BASE}/`)).toBe(allowed);
+});
+
+const PGREP = ['exec', 'dsh-team-documentserver', 'pgrep', '-f', 'xargs tail -F'];
+const INSPECT = ['inspect', '-f', '{{.State.StartedAt}}', 'dsh-team-documentserver'];
+const LOG = '/var/log/supervisor/supervisord.log';
+const SPAWNS = ['exec', 'dsh-team-documentserver', 'grep', '-c', "spawned: 'docservice'", LOG];
+
+/** A docker `run` whose pgrep fails `failures` times; every argv it saw, in order. */
+function fakeDocker(failures: number, spawns = '2\n') {
+  const calls: string[][] = [];
+  let pgrep = 0;
+  const run = (args: string[]) => {
+    calls.push(args);
+    if (args[2] === 'pgrep') {
+      pgrep += 1;
+      if (pgrep <= failures)
+        return Promise.reject(
+          new Error(`docker ${args.join(' ')} failed (1): poll ${String(pgrep)}`),
+        );
+      return Promise.resolve('412\n');
+    }
+    if (args[0] === 'inspect') return Promise.resolve('2026-11-17T06:21:12.08079575Z\n');
+    return Promise.resolve(spawns);
+  };
+  return { calls, run };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+it('names the delivered Document Server container', () => {
+  expect(DOCUMENT_SERVER).toBe('dsh-team-documentserver');
+});
+
+it('polls pgrep until the startup script tails its logs, then reads StartedAt and the spawns', async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(new Date('2026-11-17T06:22:22.5Z'));
+  const { calls, run } = fakeDocker(3);
+
+  // 06:21:12.080 (nine-digit fraction) to 06:22:22.500.
+  expect(await documentServerStarted(run, 10_000)).toEqual({ startupMs: 70_420, spawns: 2 });
+  expect(calls).toEqual([PGREP, PGREP, PGREP, PGREP, INSPECT, SPAWNS]);
+});
+
+it('fails on timeout with the last pgrep error and reads nothing else', async () => {
+  const { calls, run } = fakeDocker(Number.POSITIVE_INFINITY);
+
+  const waited = documentServerStarted(run, 300);
+  await expect(waited).rejects.toThrow('Document Server startup script not finished, last');
+  const last = calls.length;
+  await expect(waited).rejects.toThrow(`poll ${String(last)}"`);
+  expect(last).toBeGreaterThan(1);
+  expect(calls).toEqual(Array.from({ length: last }, () => PGREP));
+});
+
+it('fails when StartedAt is not a timestamp', async () => {
+  const calls: string[][] = [];
+  const run = (args: string[]) => {
+    calls.push(args);
+    return Promise.resolve(args[0] === 'inspect' ? '<no value>\n' : '1\n');
+  };
+
+  await expect(documentServerStarted(run, 1_000)).rejects.toThrow(
+    'Document Server StartedAt unreadable: "<no value>"',
+  );
+  expect(calls).toEqual([PGREP, INSPECT]);
+});
+
+it.each([
+  ['2\n', 2],
+  ['13', 13],
+])('counts the docservice spawns in %j as %d', async (stdout, count) => {
+  const { calls, run } = fakeDocker(0, stdout);
+
+  expect(await docserviceSpawns(run)).toBe(count);
+  expect(calls).toEqual([SPAWNS]);
+});
+
+it.each(['', 'x\n', '-1', '2 3'])('fails on an unreadable spawn count %j', async (stdout) => {
+  const { run } = fakeDocker(0, stdout);
+
+  await expect(docserviceSpawns(run)).rejects.toThrow('docservice spawn count unreadable');
 });
