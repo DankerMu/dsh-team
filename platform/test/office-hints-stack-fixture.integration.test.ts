@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import { previewIds, visible } from './better-sidebar-browser-fixture.mjs';
 import {
   COLLAB,
   docxCommand,
@@ -48,6 +49,12 @@ it('reads hints, the wrapper frame, its iframes and the ONLYOFFICE texts of 0.2.
     expect(officeFacts('同写提示.docx')).toContain(part);
   for (const ext of ['xlsx', 'pptx'])
     expect(officeFacts(`编辑写回.${ext}`)).toContain(`'[data-dsh-team-office-hints="${ext}"]'`);
+});
+
+it('names the id of every visible preview container, of any id, whose address ends in /<name>', () => {
+  expect(previewIds('编辑写回.xlsx')).toBe(
+    `[...document.querySelectorAll("[data-document-preview]")].filter((el) => (${visible})(el) && decodeURIComponent(el.getAttribute('data-textpreview-url') ?? '').endsWith("/编辑写回.xlsx")).map((el) => el.getAttribute('data-document-preview'))`,
+  );
 });
 
 const collab = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };

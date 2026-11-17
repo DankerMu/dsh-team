@@ -30,6 +30,7 @@ export const writeArgv = (name: string, base64?: string) =>
 const editorFrame = (ext: Ext) =>
   `${hintsFrame(fileName(ext))} iframe[src*="/sidebar/onlyoffice/ds/"]`;
 const EDITOR_AREA = '#editor_sdk';
+const LOADING_MASK = '#loading-mask'; // Removed by DS 9.4 hidePreloader() on onDocumentContentReady.
 const SAVE_KEY = 'ControlOrMeta+s';
 // Where the document area is clicked, as fractions of its box, and the keys after the nonce: the
 // centre puts the DOCX caret in the text and selects an XLSX cell, which Enter commits; the PPTX
@@ -161,6 +162,7 @@ async function typeAndSave(page: Page, ext: Ext, nonce: string, timeout: number)
     const editor = page.locator(editorFrame(ext)).visible().contentFrame();
     const area = editor.locator(EDITOR_AREA);
     await area.waitFor({ timeout });
+    await editor.locator(LOADING_MASK).waitFor({ state: 'hidden', timeout });
     const box = await area.boundingBox({ timeout });
     if (box === null) throw new Error('Office editor area has no box');
     await area.click({ position: { x: box.width * at[0], y: box.height * at[1] }, timeout });
@@ -222,10 +224,11 @@ async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string) 
     ...{ pageErrors: 0, failedRequests: 0, externalRequests: 0 },
   });
   // A late status 2 may rewrite the bytes, never without the nonce.
-  const closed = writeBackState(written.sha256, await read(), readBack.nonce);
+  const after = await read();
+  const closed = writeBackState(written.sha256, after, readBack.nonce);
   expect(closed, `Office editor ${ext} file after the browser closed`).toBe('saved');
   if (saved === undefined) throw new Error('Office editor save not observed');
-  return { editor, written, saved };
+  return { editor, written, after };
 }
 
 /** The Agent's turn, done once the provider counted the hit and the turn's requests. */
@@ -255,8 +258,8 @@ async function officeEditor(lane: OfficeEditorLane): Promise<OfficeEditorEvidenc
   const files: OfficeEditorEvidence['files'][number][] = [];
   const editors: Record<string, StackBrowserEvidence> = {};
   for (const ext of EXTS) {
-    const { editor, written, saved } = await editAndSave(lane, ext, directory);
-    files.push({ file: fileName(ext), before: digest(written), after: digest(saved) });
+    const { editor, written, after } = await editAndSave(lane, ext, directory);
+    files.push({ file: fileName(ext), before: digest(written), after: digest(after) });
     editors[ext] = editor;
   }
   const readBack = await agentReadBack(lane, start, directory);

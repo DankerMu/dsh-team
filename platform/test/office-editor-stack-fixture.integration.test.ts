@@ -57,7 +57,7 @@ it('writes the one-paragraph docx, or the base64 bytes of a template, and reads 
 });
 
 const DOCUMENT = (...runs: string[]) =>
-  `<w:document xmlns:w="urn:w"><w:body><w:p>${runs.map((run) => `<w:r><w:t>${run}</w:t></w:r>`).join('<w:tab/>')}</w:p></w:body></w:document>`;
+  `<w:document xmlns:w="urn:w"><w:body><w:p>${runs.map((run) => `<w:r><w:t>${run}</w:t></w:r>`).join('<w:tab/><w:instrText> PAGE </w:instrText>')}</w:p></w:body></w:document>`;
 const RELS = '<Relationships xmlns="urn:r"><Relationship Id="t" Target="t"/></Relationships>';
 
 it('joins the text of every element named t in each XML part and skips other parts', () => {

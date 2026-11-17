@@ -1,8 +1,7 @@
 import { extname } from 'node:path';
 import type { ConsoleMessage, Page } from '@playwright/test';
 import { expect } from 'vitest';
-import { previewOutcome, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
-import type { PreviewOutcome } from './better-sidebar-browser-fixture.mjs';
+import { previewIds, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
@@ -12,7 +11,6 @@ const NAME = '同写提示.docx';
 const PARAGRAPH = '同写提示探针：只打开，不编辑。';
 /** Baseline F40, verbatim: plugins/office-hints/client.js `COLLAB`. */
 export const COLLAB = '请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。';
-const PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/';
 const MOUNT = '/sidebar/onlyoffice/ds/';
 // dsh-sidebar-onlyoffice@0.2.0 src/client/locales.ts, zh then en: `loading`; then `loadFailed`,
 // `errFetch`, `errApi`, `errEditor`, `errEditorEvent`; last office-hints' own `UNAVAILABLE`.
@@ -168,8 +166,6 @@ export async function openHinted(
     page.off('console', record);
   }
   const final = await page.evaluate<OfficeFacts>(officeFacts(name));
-  const preview = `${PREVIEW}${extname(name) === '.xlsx' ? 'excel' : 'office'}`;
-  const native = await page.evaluate<PreviewOutcome>(previewOutcome(preview, name));
   await shoot(screenshot);
   const seen = JSON.stringify(final);
   const hint = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };
@@ -179,7 +175,7 @@ export async function openHinted(
   const shown = final.iframes.filter((frame) => frame.visible);
   const mounted = shown.map(({ sameOrigin, path }) => [sameOrigin, path.startsWith(MOUNT)]);
   expect(mounted, `Editor iframes, seen ${seen}`).toEqual([[true, true]]);
-  expect(native.state, "DSH's own Office preview").toBeNull();
+  expect(await page.evaluate<string[]>(previewIds(name)), "DSH's preview, any id").toEqual([]);
 }
 
 /** Waits for the Document Server through the instance's proxy, so a cold 502 never reaches the browser. */

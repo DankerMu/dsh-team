@@ -6263,15 +6263,10 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
     - 每种格式都照 51-b 轮询写回，最多 120 秒；关闭浏览器后再读一次。
   - 按扩展名取，ext 在 `openHinted` 内部由文件名推出，office-hints 场景的调用、断言和截图名不变：
     - `OFFICE_FACTS` 里的 `[data-dsh-team-office-hints="docx"]` 和编辑器 iframe 的定位；
-    - 「DSH 自带预览为空」用的预览 id：xlsx 用 `excel`，docx 和 pptx 用 `office`。
+    - 「DSH 自带预览为空」改为不看 id：页面上没有任何可见的 `[data-document-preview]` 容器，其地址以 `/<文件名>` 结尾。评审发现按 id 查时，xlsx 的检查恒真（`excel` 预览的「已绘制」要求 sheet 名为 `报表`）。office-hints 场景的这条断言随之变严。
   - 浏览器证据：三个编辑会话各自照 51-b 判定，包括「精确放行这条 404」。放行的正则不变，每个会话至多一条；表格和演示编辑器请求的路径不同就会失败，这时停止并报告，不扩大放行。
   - Agent 读回照 51-b，只在三个文件都保存后读回一次；provider 增量仍是 `EXPECTED_DELTAS`。
-  - evidence：
-    - `files` 是三项 `{ file, before, after }`；
-    - `saved: true`；
-    - provider 增量；
-    - `editors` 是三个编辑会话，evidence 行按扩展名给出截图名和错误计数；
-    - `readBack`。
+  - evidence：`files` 是三项 `{ file, before, after }`，`after` 取关闭浏览器后那次读取；`saved: true`；provider 增量；`editors` 是三个编辑会话，evidence 行按扩展名给出截图名和错误计数；`readBack`。
 - [ ] 51.5（51-c）接线、测试和文档：
   - `platform-stack.stack.test.ts`：编辑 lane 传入 `run`（把 `office` 的定义提到 `officeEditorScenario` 之前），接线净增不超过 5 行。
   - `vitest.config.ts`：多出的两个编辑会话各加 120 秒写回轮询和一个 60 秒 `session.timeout`，共 360 秒；注释照现有写法改。
@@ -6291,7 +6286,6 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - PPTX：点击标题占位符能进入文字编辑，Ctrl+S 触发写回。
 - XLSX 和 PPTX 从文件区打开后进 office-hints 包装器：提示可见，恰好一个可见的同源 iframe，`FRAME` 为 `xlsx` 或 `pptx`。
 - 第二、三个编辑会话登录后不恢复上一个编辑器 tab。
-- DSH 自带的预览：xlsx 归 `…/documentpreview/excel`，docx 和 pptx 归 `…/documentpreview/office`。出处只有参考仓库（`ui-sidebar-documentpreview/src/client/excel/index.ts:18`、`office/index.ts:33`），本机没有装这个发行版。
 - 表格和演示编辑器的 console 恰好有 ServiceWorker 那两条 403，外加至多一条放行的 404，且请求的是同一个插件路径。
 - 换成 `zipfile` 读取器后，DS 保存的 DOCX 里 nonce 仍在 `document.xml` 拼出的文本里。
 - 读回那一轮仍是 N=3，`readBackHits` 加 1。

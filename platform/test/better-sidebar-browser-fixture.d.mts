@@ -22,6 +22,7 @@ export interface PreviewOutcome {
   readonly fontWarning: boolean;
 }
 export declare function previewOutcome(previewId: string, name: string): string;
+export declare function previewIds(name: string): string;
 /** Yields null without a matched container. */
 export interface PreviewFacts {
   readonly labels: readonly string[];
