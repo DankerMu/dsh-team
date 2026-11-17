@@ -6189,6 +6189,8 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
     - 页面错误、失败请求、对外请求都为 0；
     - `consoleErrors` 恰好是那两条 ServiceWorker 403（`serviceWorkerRefused`）；
     - 编辑或保存带出任何别的错误，就停止并报告。
+    - 用户决定（2026-11-16，「精确放行这条 404」）：51-b 首跑多出一条 `Failed to load resource: … 404 (Not Found)`。来源是 DS 启动脚本（镜像内 `run-document-server.sh:808`）在后台按 `plugin-list-default.json` 从插件市场装默认插件，其中 AI 插件 `{9DC93CDB-B576-4F0C-B55E-FCC9C48DD007}` 在中文界面下请求上游缺失的 `translations/helpers/zh-ZH.json`。生产内网装不上插件，不会出现这一条；插件是后台安装的，所以时有时无。
+      - 放行：≥400 的响应只能是那条 ServiceWorker 403，外加至多一条路径恰为 `/sidebar/onlyoffice/ds/<版本>/sdkjs-plugins/%7B9DC93CDB-B576-4F0C-B55E-FCC9C48DD007%7D/translations/helpers/zh-ZH.json` 的 404；`consoleErrors` 是那两条 ServiceWorker 403，外加至多一条这个 404 的通用文本，且只在响应里确有这条 404 时放行。别的错误照旧停止；「DS 在本地联网安装插件」只报告，不在 51-b 修。
   - 关闭浏览器后再读一次，文件仍含 nonce。迟到的 status 2 只会写同样的内容。
   - Agent 读回：
     - 另起一次 `converseInWorkbench`，`directory` 同样换成子目录 `office-editor`，消息为 `${readBack.marker} 请读取编辑后的文档`；
