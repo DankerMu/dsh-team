@@ -3651,7 +3651,7 @@ Evidence (#556):
 - [ ] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
 - [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
 - [x] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文；无 Session 提示由 `plugins/office-hints/client.test.js` 覆盖（发布版 UI 不可达，用户决定 2026-11-13，见第 48 节）。#439 合并后，由下一节 fixture 提交补结果时勾选本项（#438 的插件部分已合入）。
-- [ ] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
+- [x] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
   - DOCX、XLSX、PPTX 编辑保存后写回原文件，Agent 读到最新内容；
   - 两个用户的同名文件互不串写；
   - 跨用户攻击被拒：伪造的文件令牌、跨实例回调、已知 A 的 host 和路径时用猜测的 key 回调或打开编辑器、对 config 路由的访问；
@@ -6546,14 +6546,14 @@ Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜�
 - 前提检查只看目录是否存在：`scripts/test-stack.mjs:99-105` 的 `probeFonts` 是 `statSync(path).isDirectory()`，原因文本为 `assets/fonts directory missing`（`scripts/test-stack-prerequisites.mjs:98`）。空目录会通过前提，要到最后一个 Office lane 才失败。
 - 编辑器夹具的 `typeAndSave`（`office-editor-stack-fixture.ts:199-216`）在等到 `EDITOR_READY` 后调用 `loaded()`，此时手里有可见编辑器 iframe 的 `FrameLocator`（`editor`）。`loaded` 里抛出的错误会被同一个 `catch` 包成带 `frameChain` 的错误。
 
-- [ ] 51.12（51-g）`office-idle-stack-fixture.ts` 加字体检查：
+- [x] 51.12（51-g）`office-idle-stack-fixture.ts` 加字体检查：
   - `OPERATOR_FONTS` 是 argv `['exec', DOCUMENT_SERVER, 'fc-scan', '--format', '%{file}\t%{family}\n', '/usr/share/fonts/truetype/custom']`，在 `withWorkFiles` 之前经 `lane.run` 运行一次。
   - `operatorFonts(output)`：按 file 分组，families 取并集，得到 `{ file, families }[]`。一个文件都没有时抛错，说明运营方字体目录为空。
   - 编辑器夹具只改 `Meeting.loaded` 的签名（接收可见编辑器 iframe 的 `FrameLocator`）、`typeAndSave` 的参数类型和 `:206` 的调用（传入 `editor`），以及 `FrameLocator` 的 type import；51-d、51-e 的调用忽略这个参数，行为不变。
   - `loaded` 里先读字体表并调用 `fontsShown`，通过后才调空闲分钟数：用 `editor.locator('#editor_sdk').evaluate(函数)` 在这个 frame 里取 `AscFonts.g_font_infos` 的 `Name` 列表，参数传函数，不用字符串、`eval` 或 `new Function`。读不到数组时抛错。字体检查失败时空闲分钟数还没改，错误由 `typeAndSave` 的 `catch` 带上 `frameChain`。
   - `fontsShown(fonts, names)`：names 不是字符串数组时抛错；要求每个文件至少有一个 family 在 names 里，否则抛错，列出缺的文件和它们的 family；返回 `{ files: 去重后的文件数, families: 命中名字去重后排序 }`。
   - evidence 的 `officeIdle` 加 `fonts`。
-- [ ] 51.13（51-g）测试和文档：
+- [x] 51.13（51-g）测试和文档：
   - 前提检查：`probeFonts` 改为目录存在且其中（含子目录）至少有一个扩展名为 `ttf`、`otf`、`ttc` 或 `otc`（不分大小写）的普通文件，并导出；原因文本改为 `assets/fonts directory missing or has no font file`。`test-stack.integration.test.ts` 对真实的 `probeFonts` 加用例：目录缺失、空目录、只有空子目录、只有 `.DS_Store` 各为 false，子目录里有一个 `.TTF` 文件为 true；原有的注入用例改用新原因文本。
   - 集成测试：
     - `operatorFonts`：解析多行、子目录、多语言 family、同一文件多行归并；空输出抛错；
