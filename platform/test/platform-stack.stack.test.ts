@@ -48,6 +48,12 @@ import type { SearchEvidence } from './knowledge-search-stack-fixture.ts';
 import { legacyPreviewScenario } from './legacy-preview-stack-fixture.ts';
 import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
+import {
+  officeEditorLine,
+  officeEditorScenario,
+  READ_BACK_COMMAND,
+} from './office-editor-stack-fixture.ts';
+import type { OfficeEditorEvidence } from './office-editor-stack-fixture.ts';
 import { officeHintsLine, officeHintsScenario } from './office-hints-stack-fixture.ts';
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
 import { officeIsolationLine, officeIsolationScenario } from './office-isolation-stack-fixture.ts';
@@ -166,6 +172,7 @@ interface ConversationEvidence {
   archive?: ArchiveEvidence;
   legacyPreview?: LegacyPreviewEvidence;
   officeHints?: OfficeHintsEvidence;
+  officeEditor?: OfficeEditorEvidence;
   officeIsolation?: OfficeIsolationEvidence;
   officeProfile?: OfficeProfileEvidence;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
@@ -174,7 +181,7 @@ interface ConversationEvidence {
 
 /**
  * The delivered Document Server runs the real image without a host publication over the
- * delivered read-only repository font bind; only the office-hints lane contacts it, through the
+ * delivered read-only repository font bind; the Office lanes contact it, through the
  * employee instance's proxy. Returns its anonymous (image `VOLUME`) volume names.
  */
 async function documentServerVolumes(lifecycle: UserImageLifecycle): Promise<string[]> {
@@ -250,6 +257,12 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
       hold: `stack-hold-${randomUUID()}`,
       forbidden: ['kb-scope', '知识库范围', ...seedIds.map(({ id }) => id)],
       delegation: { childMarker: `stack-child-${randomUUID()}`, question: SEARCH_QUESTION },
+      // The nonce is uppercase hex, so the editor's autocorrect leaves its first letter alone.
+      readBack: {
+        marker: `stack-readback-${randomUUID()}`,
+        command: READ_BACK_COMMAND,
+        nonce: `EDITOR${randomUUID().replaceAll('-', '').toUpperCase()}`,
+      },
     },
   };
 }
@@ -498,6 +511,9 @@ async function converse(
     evidence.legacyPreview = await legacyPreviewScenario(lane);
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
+    // 18.5 (#440): A edits and saves a DOCX in ONLYOFFICE; the Agent's bash reads the saved text.
+    const { reply, readBack } = provider;
+    evidence.officeEditor = await officeEditorScenario({ ...lane, reply, readBack });
     // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
     let secondId = '';
     const office = { ...lane, run, platformRead, instance: `dsh-team-u-${employee.id}` };
@@ -706,7 +722,7 @@ it('builds both images, starts the delivered compose platform, converses through
   if (archive === undefined) throw new Error('Sidebar archive evidence missing');
   if (legacyPreview === undefined) throw new Error('Legacy preview evidence missing');
   // Their presence is checked by the *Line helpers; one more branch here exceeds `complexity`.
-  const { officeHints, officeIsolation, officeProfile } = evidence;
+  const { officeHints, officeEditor, officeIsolation, officeProfile } = evidence;
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -850,6 +866,7 @@ it('builds both images, starts the delivered compose platform, converses through
           screenshots: legacyPreview.browser.screenshots,
         },
         officeHints: officeHintsLine(officeHints),
+        officeEditor: officeEditorLine(officeEditor),
         officeIsolation: officeIsolationLine(officeIsolation),
         officeProfile: officeProfileLine(officeProfile),
       },

@@ -6129,6 +6129,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - **Agent 读不了 docx 的文本**：
   - DSH 的 `read` 只读 UTF-8 文本（`@deepseek-ai/dsh-tool-fs@0.2.1-rc.2` `lib/index.js:252`），对 docx 读不出段落文本。
   - Agent 读回改用 `bash` 工具，参数是 `{ description, command }`（`@deepseek-ai/dsh-tool-bash@0.2.1-rc.2` `lib/index.js:493-505`）。
+  - 员工默认的 `office-general` 预设挂的是 `@deepseek-ai/dsh-tool-bash`（`plugins/office-agents/cordis.patch.yml:3,34-35`），不是只收 `{ command }` 的 `dsh-tool-bash-persistent`（`lib/index.js:337-343`）。51-b 开工前已核实，读回调用带 `description` 符合实际 schema。
   - 默认权限档是 yolo（`platform/src/db/settings.ts:89`）。它在覆盖层里对应 `sandbox: 'danger-full-access'`、`approval: 'never'`（`platform/src/managed-config/generate.ts:94`），所以 bash 调用不需要人工批准。
 - **确定性 provider**（`platform/test/deployment-model-wire.ts`）：
   - 只有三种脚本：`write`、hold、`subagent`→`knowledge_base_search`；
@@ -6152,7 +6153,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - Playwright 能经 iframe 链聚焦 Document Server 的文档区并键入文字。仓库里没有 `frameLocator` 的先例，编辑器 iframe 与页面同源（第 48 节已断言）。
 - 编辑器的保存（Ctrl+S 或工具栏保存按钮）触发 status 6 写回。
 - 本机 stack 的员工实例里，`bash` 工具能以 danger-full-access 执行 `python3`。
-- DSH 实际提供给模型的是哪一个 `bash`：
+- 已核实（51-b 开工前，见上方「Agent 读不了 docx 的文本」）：DSH 实际提供给模型的是哪一个 `bash`：
   - `dsh-tool-bash` 要求 `{ description, command }`（`lib/index.js:493-505`）；
   - `dsh-tool-bash-persistent@0.2.1-rc.2` 同样注册名为 `bash` 的工具，但参数只有 `{ command }`（`lib/index.js:337-343`）。
   - 读回调用带着 `description`，如果被参数校验拒绝，就停止并报告，再按实际提供的工具 schema 调整 provider。
@@ -6160,7 +6161,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - 读回那一轮只有一个请求带着含 nonce 的工具消息，即 `readBackHits` 恰好加 1。不是 1 就停止并报告。
 - 读回会话登录后，ONLYOFFICE 的 tab 不会自动恢复。恢复了就停止并报告。
 
-- [ ] 51.1（51-a）确定性 provider 加读回脚本，改 `deployment-model-wire.ts`，不另写 provider：
+- [x] 51.1（51-a）确定性 provider 加读回脚本，改 `deployment-model-wire.ts`，不另写 provider：
   - 配置加可选的 `readBack: { marker, command, nonce }`，三个字段都是非空字符串，键集合必须恰好是这三个，校验写法同 `ownedDelegation`；缺省时行为不变。
   - 判定与消息顺序无关：
     - 发起：同时满足四个条件时，回一个 `bash` 调用 `{ description, command: readBack.command }`，`readBacks` 加 1：
@@ -6192,6 +6193,8 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
     - 页面错误、失败请求、对外请求都为 0；
     - `consoleErrors` 恰好是那两条 ServiceWorker 403（`serviceWorkerRefused`）；
     - 编辑或保存带出任何别的错误，就停止并报告。
+    - 用户决定（2026-11-16，「精确放行这条 404」）：51-b 首跑多出一条 `Failed to load resource: … 404 (Not Found)`。来源是 DS 启动脚本（镜像内 `run-document-server.sh:808`）在后台按 `plugin-list-default.json` 从插件市场装默认插件，其中 AI 插件 `{9DC93CDB-B576-4F0C-B55E-FCC9C48DD007}` 在中文界面下请求上游缺失的 `translations/helpers/zh-ZH.json`。生产内网装不上插件，不会出现这一条；插件是后台安装的，所以时有时无。
+      - 放行：≥400 的响应只能是那条 ServiceWorker 403，外加至多一条路径恰为 `/sidebar/onlyoffice/ds/<版本>/sdkjs-plugins/%7B9DC93CDB-B576-4F0C-B55E-FCC9C48DD007%7D/translations/helpers/zh-ZH.json` 的 404；`consoleErrors` 是那两条 ServiceWorker 403，外加至多一条这个 404 的通用文本，且只在响应里确有这条 404 时放行。别的错误照旧停止；「DS 在本地联网安装插件」只报告，不在 51-b 修。
   - 关闭浏览器后再读一次，文件仍含 nonce。迟到的 status 2 只会写同样的内容。
   - Agent 读回：
     - 另起一次 `converseInWorkbench`，`directory` 同样换成子目录 `office-editor`，消息为 `${readBack.marker} 请读取编辑后的文档`；
@@ -6246,6 +6249,8 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - 51-b 估计 330 到 390 行，包括 office-hints 的原地重构和 vitest 注释。
 
 任何一个超过 400 行，都先停下报告。
+
+结果（51-a，#618，合并提交 `19159b3`）：provider 读回脚本和 18 个集成用例合入，修复 1 次补上命中计数与 nonce 排除的历史位置用例，按 CI 口径 352 行。
 
 剩余风险：
 

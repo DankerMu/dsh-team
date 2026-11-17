@@ -35,8 +35,8 @@ if len(sys.argv) > 2:
     document.save(path)
 data = path.read_bytes()
 print(json.dumps({"name": path.name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}))`;
-export const docxCommand = (paragraph?: string) => [
-  ...['python3', '-c', DOCX, `${WORK}/${NAME}`],
+export const docxCommand = (name: string, paragraph?: string) => [
+  ...['python3', '-c', DOCX, `${WORK}/${name}`],
   ...(paragraph === undefined ? [] : [paragraph]),
 ];
 
@@ -117,7 +117,10 @@ export function officeHintsLine(evidence: OfficeHintsEvidence | undefined) {
 }
 
 /** `until`, failing with `message` and the last observation `seen()`, the wait's error as cause. */
-const untilSeen = (seen: () => unknown, ...[check, timeout, message]: Parameters<typeof until>) =>
+export const untilSeen = (
+  seen: () => unknown,
+  ...[check, timeout, message]: Parameters<typeof until>
+) =>
   until(check, timeout, message).catch((cause: unknown) => {
     throw new Error(`${message} ${JSON.stringify(seen())}`, { cause });
   });
@@ -128,10 +131,17 @@ type Shoot = (name: string) => Promise<void>;
  * Opens the file from the landing session's file area, waits for the hinted editor and then for
  * the ServiceWorker refusal, which ONLYOFFICE logs after its `ready` phase, and checks the page.
  */
-async function openHinted(page: Page, shoot: Shoot, { base, timeout }: StackSession) {
-  await until(() => showSidebarRows(page, [NAME]), timeout, `office hints ${NAME} row`);
-  const row = await element(page, rowQuery(NAME));
-  if (row === null) throw new Error(`Office hints ${NAME} row missing`);
+export async function openHinted(
+  page: Page,
+  shoot: Shoot,
+  { base, timeout }: StackSession,
+  name: string,
+  screenshot: string,
+  refusal = serviceWorkerRefused,
+) {
+  await until(() => showSidebarRows(page, [name]), timeout, `office hints ${name} row`);
+  const row = await element(page, rowQuery(name));
+  if (row === null) throw new Error(`Office hints ${name} row missing`);
   // The text workbenchSession records for an error-type console message.
   const errors: string[] = [];
   const record = (message: ConsoleMessage) =>
@@ -142,7 +152,7 @@ async function openHinted(page: Page, shoot: Shoot, { base, timeout }: StackSess
     facts = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
     return editorSettled(facts);
   };
-  const refused = () => Promise.resolve(serviceWorkerRefused(errors, base));
+  const refused = () => Promise.resolve(refusal(errors, base));
   try {
     await row.click();
     await untilSeen(() => facts, settled, timeout, 'Office hints editor never settled, last seen');
@@ -151,8 +161,8 @@ async function openHinted(page: Page, shoot: Shoot, { base, timeout }: StackSess
     page.off('console', record);
   }
   const final = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
-  const native = await page.evaluate<PreviewOutcome>(previewOutcome(OFFICE_PREVIEW, NAME));
-  await shoot('office-hints-collab');
+  const native = await page.evaluate<PreviewOutcome>(previewOutcome(OFFICE_PREVIEW, name));
+  await shoot(screenshot);
   const seen = JSON.stringify(final);
   const hint = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };
   expect(final.hints, `Office hints, seen ${seen}`).toEqual([hint]);
@@ -165,7 +175,7 @@ async function openHinted(page: Page, shoot: Shoot, { base, timeout }: StackSess
 }
 
 /** Waits for the Document Server through the instance's proxy, so a cold 502 never reaches the browser. */
-async function documentServerReady({ exec, session }: ArchiveLane) {
+export async function documentServerReady({ exec, session }: ArchiveLane) {
   let seen = { status: 0, body: 'never polled' };
   const healthy = async () => {
     seen = JSON.parse(await exec(HEALTH_COMMAND)) as typeof seen;
@@ -181,16 +191,16 @@ async function officeHints(lane: ArchiveLane): Promise<OfficeHintsEvidence> {
   const { exec, session } = lane;
   const before = await providerCounts(lane);
   // The instance's own size and digest of the file it has just written.
-  const file = JSON.parse(await exec(docxCommand(PARAGRAPH))) as ArchiveEntry;
+  const file = JSON.parse(await exec(docxCommand(NAME, PARAGRAPH))) as ArchiveEntry;
   expect(file.name).toBe(NAME);
   expect(file.size).toBeGreaterThan(0);
   await documentServerReady(lane);
   const names = { label: 'office hints', failure: 'office-hints-failure' };
   const browser = await workbenchSession(session, names, (page, shoot) =>
-    openHinted(page, shoot, session),
+    openHinted(page, shoot, session, NAME, 'office-hints-collab'),
   );
   // Opened, never edited: the Document Server closes with status 4 and writes nothing back.
-  const after: unknown = JSON.parse(await exec(docxCommand()));
+  const after: unknown = JSON.parse(await exec(docxCommand(NAME)));
   expect(after, 'Office hints file unchanged by opening it').toEqual(file);
   expect(await providerCounts(lane), 'No model request or retrieval').toEqual(before);
   // The editor iframe's own requests and console output count too.
