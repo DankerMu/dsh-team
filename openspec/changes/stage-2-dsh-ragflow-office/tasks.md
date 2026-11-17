@@ -6366,7 +6366,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 - 地址：平台和 Document Server 都在 compose 的 `default` 网络上（`deploy/compose.yml:27-28`；`documentserver` 没有声明 `networks`），平台容器可以直接请求 `http://dsh-team-documentserver/command`，Document Server 监听 80，没有宿主端口。
 - 会话按 key 索引（auth 从编辑器配置的 JWT 取 docid，`DocsCoServer.js:2825`；查 `task_result`，`:2926`；绑定 `conn.docId`，`:3006`）：编辑器用某个 key 打开时，只有这个 key 在 `task_result` 里已有记录，才会进同一个会话。猜出的 key 在 `info` 里回 `error: 1`，就说明 Document Server 里没有这个会话，用它打开编辑器只会新开一个会话；新会话要取 A 的文件，又需要 A 的文件令牌，伪造的令牌第 49 节已证明被拒。
 
-- [ ] 51.8（51-e）`office-isolation-stack-fixture.ts` 加 Command Service 探测，`office-editor-stack-fixture.ts` 在 `loaded` 闸门的 `whenBoth` 里调用它：
+- [x] 51.8（51-e）`office-isolation-stack-fixture.ts` 加 Command Service 探测，`office-editor-stack-fixture.ts` 在 `loaded` 闸门的 `whenBoth` 里调用它：
   - 共享片段原地扩展，现有调用不变：
     - `onlyoffice-probe-script.ts` 的 `JWT_JS`：`jwt(claims = {})`，claims 放在 `exp` 前面；
     - `exchangeJs(address, hostHeader, port = 3080)`。
@@ -6381,7 +6381,7 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
     - `distinctKeys` 仍写 `met.distinct`，另外返回 `[kA, kB]`。`loaded` 的 `whenBoth` 在它之后调用 `guessedKeyInfo`，结果记进 `met.info`；
     - `allSettled` 之后断言 `met.info` 等于 `EXPECTED_INFO`；
     - evidence 的 `sameName` 加 `guessedKey`，取 `met.info`，不含任何 key。
-- [ ] 51.9（51-e）测试和文档：
+- [x] 51.9（51-e）测试和文档：
   - `office-isolation-stack-fixture.integration.test.ts`：
     - 用本机 `node` 真跑 `aGuessScript`：临时文件、环境里的每实例密钥、argv 里的猜测密钥，三个值与测试里按同一输入串算出的相同；
     - 用本机 `node` 真跑 `platformInfoScript`，对一个监听随机端口的本机 HTTP 替身：替身只接受 `POST /command`，其余方法或路径回 404；它用同一个密钥校验 body token 的 HS256 签名，payload 里的 `c` 和 `key` 等于 body 的；按 key 回答 `{ key, error: 0, users: ['dsh'] }` 或 `{ key, error: 1 }`；observation 里没有 key；
@@ -6429,6 +6429,8 @@ fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）�
 
 结果（51-d，#621，合并提交 `abf3c3e`）：A、B 同时编辑同名 DOCX，各自只含自己的 nonce，两边 key 不同。修复 1 次：`distinctKeys` 和两个保存标志改为取自观测，补上闸门 `clearTimeout` 的用例，键入前改等 `#loading-mask` 和 `.asc-loadmask` 都已移除。开发期第 3、4 次运行失败的根因是 Document Server 启动后约 70 秒重启 docservice，由 #622（PR #623）修复。按 CI 口径 396 行。
 
+结果（51-e，#625，合并提交 `42a5eb2`）：A、B 两个编辑器都开着时，平台向 Document Server 的 Command Service 发 `info`：A、B 的 key 回 `error: 0`、`users` 为 `['dsh']`，按公开算法算出的 k0 和随机猜的 HMAC key 都回 `error: 1`。评审 1 轮 clean，按 CI 口径 306 行。
+
 剩余风险：
 
 - Document Server 的编辑区是 canvas，键入依赖它隐藏的输入框。DS 升级可能改变 iframe 层级。
@@ -6442,6 +6444,93 @@ Suggested fixture level: expanded - 真实编辑器写回员工文件，provider
 Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR；51-d 为 51.6–51.7 一个 PR；51-e 为 51.8–51.9 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景、office-hints 断言和截图名、provider 已有脚本和 `/health` 不变）、Resource limits（新增有界等待，文件结束时删除）、Security（写回只发生在 A 自己的文件上，key 不进证据）；not selected - Schema、Public API、Migration、Auth、Concurrency。
 Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`、hold、delegation 行为、计数和 `/health` 不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索。
+
+51-f、51-g：空闲和字体（18.5 的最后两项）。fixture 作者的拆分（同在 2026-11-15「多个 PR」的用户决定之内）：两项合起来估计超过 400 行，所以拆成两个顺序 PR。字体检查要借空闲 lane 的编辑会话，所以空闲在前。51-g 合入后关闭 #440。
+
+- 51-f（51.10–51.11）：空闲分钟数调到 1，A 只开着 DOCX 编辑器。越过空闲判定窗口后，实例仍在运行、没有空闲停止审计，随后同一会话保存并写回。正向对照：关掉浏览器后，同一实例在时限内被空闲停止。
+- 51-g（51.12–51.13）：在 51-f 的同一个编辑会话里读编辑器载入的字体表。运营方字体目录里的每个字体文件，都至少有一个 family 名在表中。条目在 51-f 合入后补写进本节，再做 fixture 审查。
+
+51-f 开工前已核实：
+
+- 空闲判定：平台每 60 秒扫一次 `checkIdle`（`platform/src/app.ts:251-258`）。`IdleChecks.checkUser`（`platform/src/orchestrator/idle.ts`）的逻辑：
+  - 网关上该用户有活连接（`liveCount !== 0`，`:219`）时，丢掉连续性记录，直接返回；
+  - 没有活连接时，先问 DSH 的任务状态（`readTaskState`，`:262`）。空闲时第一次扫描把 `since` 记为 `readTaskState` 返回后的时刻（`:270-276`）；之后某次扫描满足 `(now - since) / 60000 >= idleMinutes`（`:243-250`）才停止。
+  - 第二次扫描与 `since` 只差 60 秒加两次 `readTaskState` 耗时之差，后一次更快时就不到期，要等第三次。所以空闲分钟数为 1 时，从最后一个连接关闭算起，最坏约 180 秒（最多 60 秒才轮到第一次扫描，再加两个周期），再加停止本身的耗时（`platform/src/orchestrator/stop.ts`：`stop?t=1`、DELETE 和两次 inspect）。
+  - 网关连接（`platform/src/gateway/connections.ts:32-79,98-101`）：经网关的每个 HTTP 响应和 WebSocket，从建立到 `close` 都计入 `liveCount`。编辑器和 DSH 页面都经网关，并且同源（第 48 节）。
+- 先例：`deployment-audit-fixture.ts:161-179` 在 VPS 的 compose 部署上把空闲分钟数设为 1，以 185 秒为上限、5 秒间隔轮询到 `stopped`。按上面的最坏界，185 秒只是碰巧够用，本节不沿用。
+- 非空跑的依据：保持时长 210 秒大于上面的结构性最坏界（180 秒加停止耗时），所以没有编辑器的连接时，实例在保持结束前就会停止；对照又证明这个 stack 里扫描确实在跑、空闲分钟数确实生效。
+- Document Server 的会话：`expire.sessionidle` 为 `1h`，socket.io 每 25 秒 ping 一次（`Common/config/default.json:450,532`）。210 秒的保持不会让编辑会话过期。
+- 管理员 API：
+  - `GET` 和 `PUT /_platform/api/admin/runtime-config`：PUT 必须带全部字段（`platform/src/admin/runtime-config.ts:48-55`），所以先 GET，再整体 PUT。每次写入记一条 `runtime-config.updated` 审计。变更请求带 `origin` 和 `content-type`，照 `disableEmployee`（`platform-stack.stack.test.ts:328-338`）。
+  - `GET /_platform/api/admin/instances` 返回 `{ items }`，每项有 `email`、`status`、`lastStartedAt`（`platform/src/admin/routes.ts:38-46,196`）。
+  - `GET /_platform/api/admin/audit-events?eventType=instance.stopped&email=<A>`：
+    - 按 `actor_email` 或 `target_email` 过滤（`platform/src/audit/query.ts:70-72`）；
+    - 空闲停止是自动事件：与 `status='stopped'` 同一事务写入，`targetEmail` 为 A，`actorEmail` 为 null，`details` 为 `{ reason: 'idle' }`（`platform/src/orchestrator/stop.ts:213-238`，`reason` 来自 `platform/src/orchestrator/orchestrator.ts:64`）；
+    - A 之前已有 profile lane 管理员重启留下的停止审计，所以按 id 取新增，不用 `from`：宿主和平台容器的时钟可能不一致。
+- 编辑器夹具的 `editAndSave(lane, ext, directory, meeting)`（`office-editor-stack-fixture.ts:298`）：
+  - 写入新文件，打开编辑器；在 `meeting.loaded()` 之后点击、键入、保存，等写回；关掉浏览器后再读一次。
+  - 截图写进 `directory`，所以用 `office-idle` 子目录就不会覆盖 51-b 的截图。
+  - `withWorkFiles` 结束时经 `docker exec` 进 A 删除文件（`sidebar-archive-stack-fixture.ts:236-250`），所以空闲停止的对照必须放在它之后。
+- lane 顺序：profile lane 之后 A 仍在运行；B 和 `knowledge@` 员工都已停用。之后只剩 `docserviceSpawns` 的计数，没有步骤再进 A。
+
+- [ ] 51.10（51-f）新增 `platform/test/office-idle-stack-fixture.ts`：
+  - 编辑器夹具只做最小改动：导出 `editAndSave` 和 `Meeting`，其余不变。
+  - 管理员请求经 `{ base, cookie }`。非 200 时抛错，错误信息带方法、路径和状态码，不带 cookie。
+  - `idleMinutes(admin, minutes)`：GET runtime-config，PUT `{ ...原值, idleMinutes: minutes }`，返回一个恢复函数，它把原值整体 PUT 回去。
+  - `heldRunning(admin, email, holdMs)`：
+    - 先取 A 的实例行（恰好一行，`status` 为 `running`），以及 `instance.stopped` 审计的最大 id；
+    - 等 `holdMs`；
+    - 再取一次：`status` 仍为 `running`；`lastStartedAt` 不变，即没有停止后再启动；id 大于原最大 id 的 `instance.stopped` 审计为 0 条；
+    - 返回 `{ heldMs, status, restarted: false, idleStops: 0 }` 和那个最大 id；`heldMs` 是两次读取之间实测的经过时间，不是回填的 `holdMs`。
+  - `idleRetired(admin, email, sinceId, timeoutMs)`：
+    - 每 5 秒取一次实例行，要在 `timeoutMs` 内看到 `stopped`，超时错误带最后一次看到的状态；
+    - 然后 id 大于 `sinceId` 的 `instance.stopped` 审计恰好 1 条，`details` 等于 `{ reason: 'idle' }`，`actorEmail` 为 null；
+    - 返回 `{ stoppedMs, reason: 'idle' }`，`stoppedMs` 从调用时实测到看见 `stopped`。
+  - `officeIdleScenario(lane)`，lane 是 `OfficeEditorLane` 加 `administrator`：
+    - 在 `withWorkFiles(lane, ['编辑写回.docx'], 'Office idle', …)` 里调用 `editAndSave(lane, 'docx', join(session.directory, 'office-idle'), meeting)`；
+    - meeting 的 nonce 新生成；`loaded` 里先 `idleMinutes(admin, 1)`，再 `heldRunning(admin, A, 210_000)`；`saved` 什么都不做；
+    - `withWorkFiles` 返回之后（浏览器已关、文件已删），调用 `idleRetired(admin, A, sinceId, 240_000)`；
+    - `finally` 里调用恢复函数。恢复失败时，和原错误一起抛 `AggregateError`；
+    - evidence 为 `{ held, file: { before, after }, editor, stopped }`，其中 `editor` 用 `counted` 的形状；`officeIdleLine` 照 `officeEditorLine` 写。
+  - `platform-stack.stack.test.ts`：
+    - 在 profile lane 之后、`docserviceSpawns` 之前调用；
+    - `office` 加 `administrator`；
+    - `ConversationEvidence` 加 `officeIdle`，`stackEvidence` 直接打印 `officeIdleLine(evidence.officeIdle)`，不进 `:740` 的解构；
+    - 按 max-lines 口径仍小于 800。
+- [ ] 51.11（51-f）测试和文档：
+  - `office-idle-stack-fixture.integration.test.ts`，对象是监听随机端口的本机 HTTP 替身。它只认带固定 cookie 的请求；审计查询必须带 `eventType=instance.stopped` 和 `email=<A>`，否则回 400；每个用例都先放一条 id 不大于 `sinceId`、`reason: 'admin'` 的旧审计，证明它被忽略。失败用例表驱动：
+    - `idleMinutes`：PUT 的 body 是原值、只改了 `idleMinutes`，请求带 `origin` 和 `content-type`；恢复函数 PUT 回原值；
+    - `heldRunning`（`holdMs` 很小）：
+      - 一直运行时返回 evidence，且替身记录的第二次取实例距第一次至少 `holdMs`，`heldMs` 不小于 `holdMs`；
+      - `status` 变化、`lastStartedAt` 变化、新增停止审计、A 的行缺失或重复，各自失败；
+    - `idleRetired`（`timeoutMs` 很小）：
+      - 先 `running`、后 `stopped` 并有一条空闲审计时返回；
+      - 一直 `running` 时超时，错误带最后的状态；
+      - 审计为 0 条或 2 条、`reason` 为 `admin`、`actorEmail` 非 null，各自失败；
+    - 非 200 的错误信息里没有 cookie。
+  - `vitest.config.ts`：stack `testTimeout` 加 660 秒，即编辑器打开 60 秒、保持 210 秒、写回 120 秒、对照 240 秒，再加文件的写入和删除。注释照现有写法加一句。
+  - 文档：
+    - `docs/LOCAL_STACK.md` 的证据表加 `officeIdle` 一行，写明证据的含义、正向对照，以及保持时长 210 秒大于空闲停止的最坏界（三个 60 秒扫描周期加停止耗时）；
+    - `platform/test/README.md` 的本机全栈段落加一句。
+
+51-f 未核实，由第一次 stack 运行验证；做不到时停止并报告，不放宽断言：
+
+- 编辑器开着时，`heldRunning` 期间 A 一直是 `running`，没有新的停止审计。
+- 保持 210 秒之后，编辑器仍能键入、保存，写回的文件含新 nonce；保持期间没有新增 `editorErrorsAllowed` 之外的控制台错误或失败请求。
+- 浏览器关闭后 240 秒内，A 被空闲停止，并恰好有一条 `reason: idle` 的审计。
+- A 停止后，stack 的收尾不依赖 A 运行。
+
+行数：51-f 估计 330 到 400 行，包括本段规格约 70 行。超过 400 行就先停下报告。
+
+剩余风险：
+
+- 保持期间，网关上可能同时有 DSH 页面自己的连接和编辑器的连接。夹具不区分是哪一个让实例保持运行。需求描述的是员工开着编辑器的场景，两种连接都属于这个场景。
+- 空闲停止对照让 A 在 stack 结束前停止。以后新增的 lane 如果要进 A，须排在它前面。
+
+Suggested fixture level: expanded（同第 51 节）
+Minimal mergeable slice: 51-f 为 51.10–51.11 一个 PR
+Risk packs: selected - Legacy compatibility（已有 stack 场景、截图和编辑器夹具的现有调用不变）、Resource limits（有界等待，文件在结束时删除）、Config（运行期改空闲分钟数，结束时恢复）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency。
+Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜像代码不改；每次运行仍然只有 5 次付费检索；空闲分钟数在 lane 结束时恢复。
 
 ## 52. 技术债 #622：本机全栈等 Document Server 启动脚本跑完，再打开编辑器
 
