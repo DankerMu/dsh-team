@@ -2,11 +2,14 @@ import { extname } from 'node:path';
 import type { ConsoleMessage, Page } from '@playwright/test';
 import { expect } from 'vitest';
 import { previewIds, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
+import type { DockerOutput } from './deployment-compose-fixture.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
+/** The delivered Document Server container (deploy/compose.yml). */
+export const DOCUMENT_SERVER = 'dsh-team-documentserver';
 const NAME = '同写提示.docx';
 const PARAGRAPH = '同写提示探针：只打开，不编辑。';
 /** Baseline F40, verbatim: plugins/office-hints/client.js `COLLAB`. */
@@ -188,6 +191,41 @@ export async function documentServerReady({ exec, session }: ArchiveLane) {
   };
   const message = 'Document Server healthcheck not true, last';
   await untilSeen(() => seen, healthy, session.timeout, message);
+}
+
+/** How many times supervisord has spawned docservice since the Document Server started. */
+export async function docserviceSpawns(run: DockerOutput): Promise<number> {
+  const grep = ['grep', '-c', "spawned: 'docservice'", '/var/log/supervisor/supervisord.log'];
+  const count = (await run(['exec', DOCUMENT_SERVER, ...grep])).trim();
+  if (!/^\d+$/.test(count)) throw new Error(`docservice spawn count unreadable: ${count}`);
+  return Number(count);
+}
+
+/**
+ * Waits for run-document-server.sh's last step, `xargs tail -F`, which starts only after
+ * documentserver-generate-allfonts.sh has restarted docservice and converter (#622). Returns the
+ * time since the container started and the docservice spawns so far.
+ */
+export async function documentServerStarted(run: DockerOutput, timeout: number) {
+  let seen = 'never polled';
+  // `until` does not catch: pgrep without a match exits 1, which `run` throws as not yet.
+  const started = async () => {
+    try {
+      await run(['exec', DOCUMENT_SERVER, 'pgrep', '-f', 'xargs tail -F']);
+      return true;
+    } catch (error) {
+      seen = error instanceof Error ? error.message : String(error);
+      return false;
+    }
+  };
+  const message = 'Document Server startup script not finished, last';
+  await untilSeen(() => seen, started, timeout, message);
+  // RFC 3339 with nine fractional digits; Date.parse keeps the milliseconds.
+  const startedAt = (await run(['inspect', '-f', '{{.State.StartedAt}}', DOCUMENT_SERVER])).trim();
+  const since = Date.parse(startedAt);
+  if (Number.isNaN(since))
+    throw new Error(`Document Server StartedAt unreadable: ${JSON.stringify(startedAt)}`);
+  return { startupMs: Date.now() - since, spawns: await docserviceSpawns(run) };
 }
 
 /** The write, the browser session and every check of the lane; cleanup is the caller's. */

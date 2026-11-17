@@ -49,14 +49,19 @@ import { legacyPreviewScenario } from './legacy-preview-stack-fixture.ts';
 import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 import {
-  DOCUMENT_SERVER,
   editorNonce,
   officeEditorLine,
   officeEditorScenario,
   READ_BACK_COMMAND,
 } from './office-editor-stack-fixture.ts';
 import type { OfficeEditorEvidence } from './office-editor-stack-fixture.ts';
-import { officeHintsLine, officeHintsScenario } from './office-hints-stack-fixture.ts';
+import {
+  DOCUMENT_SERVER,
+  docserviceSpawns,
+  documentServerStarted,
+  officeHintsLine,
+  officeHintsScenario,
+} from './office-hints-stack-fixture.ts';
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
 import { officeIsolationLine, officeIsolationScenario } from './office-isolation-stack-fixture.ts';
 import { officeProfileLine, officeProfileScenario } from './office-profile-stack-fixture.ts';
@@ -176,6 +181,8 @@ interface ConversationEvidence {
   officeEditor?: OfficeEditorEvidence;
   officeIsolation?: OfficeIsolationEvidence;
   officeProfile?: OfficeProfileEvidence;
+  /** Waited for before the first Office lane (#622). */
+  documentServer?: { startupMs: number; spawns: number };
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
@@ -510,6 +517,9 @@ async function converse(
     evidence.archive = await archiveScenario(lane);
     // DOC, PPT converted in the instance and XLS in the browser, all read-only (#433).
     evidence.legacyPreview = await legacyPreviewScenario(lane);
+    // The startup script's allfonts step restarts docservice; no editor opens before it ends (#622).
+    const documentServer = await documentServerStarted(run, 300_000);
+    evidence.documentServer = documentServer;
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
     // 18.5 (#440): A edits and saves a DOCX, an XLSX and a PPTX; the Agent's bash reads all three.
@@ -532,6 +542,8 @@ async function converse(
     // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });
+    const spawns = await docserviceSpawns(run);
+    expect(spawns, 'docservice spawned again during the Office lanes').toBe(documentServer.spawns);
   });
 }
 
@@ -723,7 +735,7 @@ it('builds both images, starts the delivered compose platform, converses through
   if (archive === undefined) throw new Error('Sidebar archive evidence missing');
   if (legacyPreview === undefined) throw new Error('Legacy preview evidence missing');
   // Their presence is checked by the *Line helpers; one more branch here exceeds `complexity`.
-  const { officeHints, officeEditor, officeIsolation, officeProfile } = evidence;
+  const { documentServer, officeHints, officeEditor, officeIsolation, officeProfile } = evidence;
   // IDs, states and volumes unchanged; only ragflow-cpu's StartedAt and RestartCount may move
   // (`docker start` resets the latter).
   expect(comparableRagflowStack(ragflow.after)).toEqual(comparableRagflowStack(ragflow.before));
@@ -870,6 +882,7 @@ it('builds both images, starts the delivered compose platform, converses through
         officeEditor: officeEditorLine(officeEditor),
         officeIsolation: officeIsolationLine(officeIsolation),
         officeProfile: officeProfileLine(officeProfile),
+        documentServer,
       },
     })}\n`,
   );

@@ -4,6 +4,7 @@ import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
+  DOCUMENT_SERVER,
   docxCommand,
   documentServerReady,
   hintsFrame,
@@ -16,7 +17,6 @@ import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.
 import { converseInWorkbench, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
-export const DOCUMENT_SERVER = 'dsh-team-documentserver';
 // The pinned Document Server's own blank templates (§51.4); they never enter the repository.
 const TEMPLATES = '/var/www/onlyoffice/documentserver/document-templates/new/en-US/new';
 const EXTS = ['docx', 'xlsx', 'pptx'] as const;
