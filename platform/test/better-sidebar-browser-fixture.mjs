@@ -203,9 +203,12 @@ async function observeMarkdown(page, evidence, markdown) {
   });
 }
 
-/** The visible preview container of `previewId` whose address ends in `/<name>`, or undefined. */
-const previewContainer = (previewId, name) =>
-  `[...document.querySelectorAll(${JSON.stringify(`[data-document-preview="${previewId}"]`)})].find((el) => (${visible})(el) && decodeURIComponent(el.getAttribute('data-textpreview-url') ?? '').endsWith(${JSON.stringify(`/${name}`)}))`;
+/** The visible preview container of `previewId`, any id if undefined, whose address ends in `/<name>`, or undefined; all of them with `pick` 'filter'. */
+const previewContainer = (previewId, name, pick = 'find') =>
+  `[...document.querySelectorAll(${JSON.stringify(`[data-document-preview${previewId === undefined ? '' : `="${previewId}"`}]`)})].${pick}((el) => (${visible})(el) && decodeURIComponent(el.getAttribute('data-textpreview-url') ?? '').endsWith(${JSON.stringify(`/${name}`)}))`;
+
+export const previewIds = (name) =>
+  `${previewContainer(undefined, name, 'filter')}.map((el) => el.getAttribute('data-document-preview'))`;
 
 // The probe workbook's one sheet (platform/test/office-legacy/README.md).
 const SHEET = '报表';

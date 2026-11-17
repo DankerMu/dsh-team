@@ -1,9 +1,12 @@
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
+import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   docxCommand,
   documentServerReady,
+  hintsFrame,
   openHinted,
   serviceWorkerRefused,
   untilSeen,
@@ -13,38 +16,73 @@ import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.
 import { converseInWorkbench, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
-const NAME = '编辑写回.docx';
+export const DOCUMENT_SERVER = 'dsh-team-documentserver';
+// The pinned Document Server's own blank templates (§51.4); they never enter the repository.
+const TEMPLATES = '/var/www/onlyoffice/documentserver/document-templates/new/en-US/new';
+const EXTS = ['docx', 'xlsx', 'pptx'] as const;
+type Ext = (typeof EXTS)[number];
+const fileName = (ext: Ext) => `编辑写回.${ext}`;
 const PARAGRAPH = '编辑写回探针。';
-export const WRITE_ARGV = docxCommand(NAME, PARAGRAPH);
+/** The docx gets the one paragraph, an xlsx or pptx a template's bytes as base64. */
+export const writeArgv = (name: string, base64?: string) =>
+  docxCommand(name, ...(base64 === undefined ? [PARAGRAPH] : ['--base64', base64]));
 // Adjustable without touching an assertion: §48's one visible editor iframe, its document area, save.
-const EDITOR_FRAME = '[data-dsh-team-office-hints="docx"] iframe[src*="/sidebar/onlyoffice/ds/"]';
+const editorFrame = (ext: Ext) =>
+  `${hintsFrame(fileName(ext))} iframe[src*="/sidebar/onlyoffice/ds/"]`;
 const EDITOR_AREA = '#editor_sdk';
+const LOADING_MASK = '#loading-mask'; // Removed by DS 9.4 hidePreloader() on onDocumentContentReady.
 const SAVE_KEY = 'ControlOrMeta+s';
+// Where the document area is clicked, as fractions of its box, and the keys after the nonce: the
+// centre puts the DOCX caret in the text and selects an XLSX cell, which Enter commits; the PPTX
+// point is meant for slide 1's title placeholder (§51.4, measured on the first stack run).
+const EDITING: Record<Ext, { at: readonly [number, number]; keys: readonly string[] }> = {
+  docx: { at: [0.5, 0.5], keys: [SAVE_KEY] },
+  xlsx: { at: [0.5, 0.5], keys: ['Enter', SAVE_KEY] },
+  pptx: { at: [0.5, 0.4], keys: [SAVE_KEY] },
+};
 /** The read-back turn's requests: the bash call, the tool-result round and the title request. */
 const READ_BACK_REQUESTS = 3;
 
-// python-docx from the image prints every paragraph of argv[1]; no single quote, see below.
-export const READER = `import hashlib, json, sys
-from docx import Document
-data = open(sys.argv[1], "rb").read()
-paragraphs = [paragraph.text for paragraph in Document(sys.argv[1]).paragraphs]
-print(json.dumps({"paragraphs": paragraphs, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}))`;
-export const READER_ARGV = ['python3', '-c', READER, `${WORK}/${NAME}`];
-/** The Agent's bash read-back: the same argv, each word single-quoted; never the nonce. */
+/** The typed nonce: uppercase hex, so the editor's autocorrect leaves its first letter alone. */
+export const NONCE_PATTERN = /EDITOR[0-9A-F]{32}/;
+export const editorNonce = () => `EDITOR${randomUUID().replaceAll('-', '').toUpperCase()}`;
+
+// Python stdlib, no single quote (see below). One path: the text of the elements named t in each
+// XML part, joined per part, with size and digest. Several: only the nonces all of them hold.
+export const READER = `import hashlib, json, re, sys, zipfile
+from xml.etree import ElementTree
+def read(path):
+    data = open(path, "rb").read()
+    with zipfile.ZipFile(path) as archive:
+        parts = {name: ElementTree.fromstring(archive.read(name)) for name in archive.namelist() if name.endswith((".xml", ".rels"))}
+    texts = {name: "".join(el.text or "" for el in root.iter() if el.tag.rpartition("}")[2] == "t") for name, root in parts.items()}
+    return {"texts": texts, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+if len(sys.argv) == 2:
+    print(json.dumps(read(sys.argv[1])))
+else:
+    found = [{nonce for text in read(path)["texts"].values() for nonce in re.findall("${NONCE_PATTERN.source}", text)} for path in sys.argv[1:]]
+    common = sorted(set.intersection(*found))
+    if common:
+        print("\\n".join(common))`;
+const inWork = (ext: Ext) => `${WORK}/${fileName(ext)}`;
+const PYTHON = ['python3', '-c', READER];
+const READER_ARGV = [...PYTHON, ...EXTS.map(inWork)];
+/** The Agent's bash read-back: the reader over all three files, each word single-quoted. */
 export const READ_BACK_COMMAND = READER_ARGV.map((word) => {
   if (word.includes("'")) throw new Error('Read-back word holds a single quote');
   return `'${word}'`;
 }).join(' ');
 
 type Digest = Pick<ArchiveEntry, 'size' | 'sha256'>;
-interface DocxRead extends Digest {
-  readonly paragraphs: readonly string[];
+interface OfficeRead extends Digest {
+  readonly texts: Readonly<Record<string, string>>;
 }
 
-/** Saved once the bytes differ from `original` and a paragraph holds the typed nonce. */
-export function writeBackState(original: string, read: DocxRead, nonce: string) {
+/** Saved once the bytes differ from `original` and a part's text holds the typed nonce. */
+export function writeBackState(original: string, read: OfficeRead, nonce: string) {
   if (read.sha256 === original) return 'unchanged';
-  return read.paragraphs.some((text) => text.includes(nonce)) ? 'saved' : 'changed-without-nonce';
+  const typed = Object.values(read.texts).some((text) => text.includes(nonce));
+  return typed ? 'saved' : 'changed-without-nonce';
 }
 
 const ONCE = { readBacks: 1, readBackHits: 1, requests: READ_BACK_REQUESTS };
@@ -55,14 +93,12 @@ const COUNTERS = Object.keys(EXPECTED_DELTAS);
 export const providerDeltas = (before: Record<string, unknown>, after: Record<string, unknown>) =>
   Object.fromEntries(COUNTERS.map((key) => [key, Number(after[key]) - Number(before[key])]));
 
-/** No nonce, marker or key: digests, counter deltas and both browser sessions. */
+/** No nonce, marker or key: digests, counter deltas and every browser session. */
 export interface OfficeEditorEvidence {
-  readonly file: string;
-  readonly before: Digest;
-  readonly after: Digest;
+  readonly files: readonly { file: string; before: Digest; after: Digest }[];
   readonly saved: true;
   readonly provider: Record<string, number>;
-  readonly editor: StackBrowserEvidence;
+  readonly editors: Readonly<Record<string, StackBrowserEvidence>>;
   readonly readBack: StackBrowserEvidence;
 }
 
@@ -97,12 +133,14 @@ const counted = (browser: StackBrowserEvidence) => ({
 /** The stack evidence line: each session by its screenshots and error counts. */
 export function officeEditorLine(evidence: OfficeEditorEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office editor evidence missing');
-  const { editor, readBack, ...rest } = evidence;
-  return { ...rest, editor: counted(editor), readBack: counted(readBack) };
+  const { editors, readBack, ...rest } = evidence;
+  const sessions = Object.entries(editors).map(([ext, editor]) => [ext, counted(editor)] as const);
+  return { ...rest, editors: Object.fromEntries(sessions), readBack: counted(readBack) };
 }
 
 /** A's lane plus the provider's own reply and read-back script, the values it was configured with. */
 export type OfficeEditorLane = ArchiveLane & {
+  readonly run: DockerOutput;
   readonly reply: string;
   readonly readBack: Readonly<Record<'marker' | 'command' | 'nonce', string>>;
 };
@@ -118,12 +156,18 @@ const frameChain = (page: Page) =>
   );
 
 /** Clicks the document area through the iframe, types the nonce and saves. */
-async function typeAndSave(page: Page, nonce: string, timeout: number) {
+async function typeAndSave(page: Page, ext: Ext, nonce: string, timeout: number) {
+  const { at, keys } = EDITING[ext];
   try {
-    const editor = page.locator(EDITOR_FRAME).visible().contentFrame();
-    await editor.locator(EDITOR_AREA).click({ timeout });
+    const editor = page.locator(editorFrame(ext)).visible().contentFrame();
+    const area = editor.locator(EDITOR_AREA);
+    await area.waitFor({ timeout });
+    await editor.locator(LOADING_MASK).waitFor({ state: 'hidden', timeout });
+    const box = await area.boundingBox({ timeout });
+    if (box === null) throw new Error('Office editor area has no box');
+    await area.click({ position: { x: box.width * at[0], y: box.height * at[1] }, timeout });
     await page.keyboard.type(nonce);
-    await page.keyboard.press(SAVE_KEY);
+    for (const key of keys) await page.keyboard.press(key);
   } catch (cause) {
     const frames = JSON.stringify(await frameChain(page));
     throw new Error(`Office editor typing or saving failed, frames ${frames}`, { cause });
@@ -131,34 +175,40 @@ async function typeAndSave(page: Page, nonce: string, timeout: number) {
 }
 
 /** Polls the instance's file for at most 120s; a timeout names the state it ended in. */
-async function writtenBack(read: () => Promise<DocxRead>, original: string, nonce: string) {
-  let last: DocxRead | undefined;
+async function writtenBack(read: () => Promise<OfficeRead>, original: string, nonce: string) {
+  let last: OfficeRead | undefined;
   let state: ReturnType<typeof writeBackState> = 'unchanged';
   const saved = async () => {
     last = await read();
     state = writeBackState(original, last, nonce);
     return state === 'saved';
   };
-  const seen = () => ({ state, paragraphs: last?.paragraphs });
+  const seen = () => ({ state, texts: last?.texts });
   await untilSeen(seen, saved, 120_000, 'Office editor write-back not saved, ended');
   if (last === undefined) throw new Error('Office editor write-back never read');
   return last;
 }
 
 /** One browser session opens, types, saves and sees the write-back; the file is read once more. */
-async function editAndSave(lane: OfficeEditorLane, written: ArchiveEntry, directory: string) {
-  const { exec, session, readBack } = lane;
-  const read = async () => JSON.parse(await exec(READER_ARGV)) as DocxRead;
-  const { paragraphs, sha256 } = await read();
-  expect({ paragraphs, sha256 }).toEqual({ paragraphs: [PARAGRAPH], sha256: written.sha256 });
+async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string) {
+  const { exec, run, session, readBack } = lane;
+  const template = ['exec', DOCUMENT_SERVER, 'base64', '-w0', `${TEMPLATES}.${ext}`];
+  const base64 = ext === 'docx' ? undefined : (await run(template)).trim();
+  const written = JSON.parse(await exec(writeArgv(fileName(ext), base64))) as ArchiveEntry;
+  const read = async () => JSON.parse(await exec([...PYTHON, inWork(ext)])) as OfficeRead;
+  const { texts, sha256 } = await read();
+  const typed = Object.values(texts).some((text) => text.includes(readBack.nonce));
+  expect({ sha256, typed }, ext).toEqual({ sha256: written.sha256, typed: false });
+  if (ext === 'docx') expect(texts['word/document.xml'], 'DOCX text').toBe(PARAGRAPH);
   await documentServerReady(lane);
-  const names = { label: 'office editor', failure: 'office-editor-failure' };
-  let saved: DocxRead | undefined;
+  const shot = `office-editor-${ext}`;
+  const names = { label: `office editor ${ext}`, failure: `${shot}-failure` };
+  let saved: OfficeRead | undefined;
   const body: Parameters<typeof workbenchSession>[2] = async (page, shoot) => {
-    await openHinted(page, shoot, session, NAME, 'office-editor-open', editorRefused);
-    await typeAndSave(page, readBack.nonce, session.timeout);
+    await openHinted(page, shoot, session, fileName(ext), `${shot}-open`, editorRefused);
+    await typeAndSave(page, ext, readBack.nonce, session.timeout);
     saved = await writtenBack(read, written.sha256, readBack.nonce);
-    await shoot('office-editor-saved');
+    await shoot(`${shot}-saved`);
   };
   // Status and path of every failed response; the query and hash may carry keys.
   const failed: string[] = [];
@@ -170,14 +220,15 @@ async function editAndSave(lane: OfficeEditorLane, written: ArchiveEntry, direct
   const seen = `consoleErrors, responses ${JSON.stringify([editor.consoleErrors, failed])}`;
   expect(editorErrorsAllowed(editor.consoleErrors, failed, session.base), seen).toBe(true);
   expect(counted(editor), seen).toMatchObject({
-    screenshots: ['office-editor-open.png', 'office-editor-saved.png'],
+    screenshots: [`${shot}-open.png`, `${shot}-saved.png`],
     ...{ pageErrors: 0, failedRequests: 0, externalRequests: 0 },
   });
   // A late status 2 may rewrite the bytes, never without the nonce.
-  const closed = writeBackState(written.sha256, await read(), readBack.nonce);
-  expect(closed, 'Office editor file after the browser closed').toBe('saved');
+  const after = await read();
+  const closed = writeBackState(written.sha256, after, readBack.nonce);
+  expect(closed, `Office editor ${ext} file after the browser closed`).toBe('saved');
   if (saved === undefined) throw new Error('Office editor save not observed');
-  return { editor, saved };
+  return { editor, written, after };
 }
 
 /** The Agent's turn, done once the provider counted the hit and the turn's requests. */
@@ -199,10 +250,18 @@ function agentReadBack(lane: OfficeEditorLane, start: Record<string, unknown>, d
 async function officeEditor(lane: OfficeEditorLane): Promise<OfficeEditorEvidence> {
   const start = await lane.provider();
   expect([start.readBacks, start.readBackHits], 'Read-back script configured').toEqual([0, 0]);
-  expect(lane.readBack.command.includes(lane.readBack.nonce), 'Command holds nonce').toBe(false);
-  const written = JSON.parse(await lane.exec(WRITE_ARGV)) as ArchiveEntry;
+  const { command, nonce } = lane.readBack;
+  expect(nonce, 'Lane nonce').toMatch(new RegExp(`^${NONCE_PATTERN.source}$`));
+  expect(command, 'Read-back command holds a nonce').not.toMatch(NONCE_PATTERN);
   const directory = join(lane.session.directory, 'office-editor');
-  const { editor, saved } = await editAndSave(lane, written, directory);
+  const digest = ({ size, sha256 }: Digest) => ({ size, sha256 });
+  const files: OfficeEditorEvidence['files'][number][] = [];
+  const editors: Record<string, StackBrowserEvidence> = {};
+  for (const ext of EXTS) {
+    const { editor, written, after } = await editAndSave(lane, ext, directory);
+    files.push({ file: fileName(ext), before: digest(written), after: digest(after) });
+    editors[ext] = editor;
+  }
   const readBack = await agentReadBack(lane, start, directory);
   expect(counted(readBack)).toEqual({
     screenshots: ['login.png', 'workbench.png', 'reply.png'],
@@ -210,14 +269,12 @@ async function officeEditor(lane: OfficeEditorLane): Promise<OfficeEditorEvidenc
   });
   const provider = providerDeltas(start, await lane.provider());
   expect(provider, 'Provider deltas over the Office editor lane').toEqual(EXPECTED_DELTAS);
-  const digest = ({ size, sha256 }: Digest) => ({ size, sha256 });
-  const [before, after] = [digest(written), digest(saved)];
-  return { file: NAME, before, after, saved: true, provider, editor, readBack };
+  return { files, saved: true, provider, editors, readBack };
 }
 
 /**
- * 18.5 (#440): A types into 编辑写回.docx in the ONLYOFFICE editor and saves; the instance's file
- * then holds the typed text and the Agent's `bash` read-back sees it. The file is then removed.
+ * 18.5 (#440): A types into 编辑写回.docx, .xlsx and .pptx in ONLYOFFICE and saves each; the
+ * instance's files then hold the typed text and the Agent's `bash` read-back sees it in all three.
  */
 export const officeEditorScenario = (lane: OfficeEditorLane): Promise<OfficeEditorEvidence> =>
-  withWorkFiles(lane, [NAME], 'Office editor', () => officeEditor(lane));
+  withWorkFiles(lane, EXTS.map(fileName), 'Office editor', () => officeEditor(lane));

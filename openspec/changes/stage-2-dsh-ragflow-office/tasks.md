@@ -6102,10 +6102,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - 51-a（51.1）：确定性 provider 的读回脚本和它的集成测试。不配置时 provider 的行为和 `/health` 逐字节不变。
   - stack 在 51-b 才配置它。这个分支由自己的集成测试覆盖，紧接着的顺序 PR 51-b 就会接上，所以不是死路径。
 - 51-b（51.2–51.3）：DOCX 在浏览器里编辑、保存、写回原文件，Agent 读到最新内容。
-- 51-c：
-  - XLSX 和 PPTX 走同一条路径；
-  - 两个员工的同名文件互不串写；
-  - 用猜出的 key 加入不了 A 正开着的编辑会话。
+- 51-c：XLSX 和 PPTX 走同一条路径。同名不串写和猜 key 两项后来移到 51-d，见下方「再拆」。
 - 51-c 的条目在 51-b 合入后补写进本节，再做 fixture 审查。字体和空闲是最后一刀，关闭 #440。
 
 已核实的事实：
@@ -6177,7 +6174,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
     - 发起，包括历史里已有工具结果、别的 marker 的情形；
     - 不发起：text 已含 nonce；请求不提供 `bash`；已发起过一次，工具结果不含 nonce 时回 `reply`，不发第二个 `bash`；
     - 命中计数和 `/health` 形状，包括不配置时逐字节不变。
-- [ ] 51.2（51-b）新增 `platform/test/office-editor-stack-fixture.ts`，导出 `officeEditorScenario(lane)`，返回 `OfficeEditorEvidence`。lane 是 `ArchiveLane` 加 `reply` 和 `readBack`，两者都是 provider 配置里的同一份值。
+- [x] 51.2（51-b）新增 `platform/test/office-editor-stack-fixture.ts`，导出 `officeEditorScenario(lane)`，返回 `OfficeEditorEvidence`。lane 是 `ArchiveLane` 加 `reply` 和 `readBack`，两者都是 provider 配置里的同一份值。
   - 复用，不复制：在 `office-hints-stack-fixture.ts` 里原地重构下面三个函数，office-hints 场景的行为、断言和截图名不变：
     - `docxCommand` 改为接受文件名；
     - `openHinted` 改为接受文件名和截图名，并导出；
@@ -6215,7 +6212,7 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
     - provider 计数增量；
     - 两次浏览器会话的截图名和错误计数。
     - nonce 不是秘密，但也不进 evidence。
-- [ ] 51.3（51-b）接线、测试和文档：
+- [x] 51.3（51-b）接线、测试和文档：
   - `platform-stack.stack.test.ts`：
     - 在 `ownedModel` 里生成 `readBack`。nonce 取 `EDITOR` 加大写十六进制、不带连字符（`randomUUID()` 去掉 `-` 后转大写），避开编辑器自动更正改写句首字母。
     - 在 `officeHintsScenario` 之后、`officeIsolationScenario` 之前调用 `officeEditorScenario`，放在 (d) 的重启之前；
@@ -6232,13 +6229,74 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
     - `docs/LOCAL_STACK.md` 证据表加一行 `officeEditor`；
     - `platform/test/README.md` 本机全栈段落加一句。
 
+fixture 作者再拆（同在 2026-11-15「多个 PR」的用户决定之内）：51-b 按 CI 口径正好 400 行，原定 51-c 的三项合起来估计超过 400 行，所以：
+
+- 51-c（51.4–51.5）：XLSX 和 PPTX 走 51-b 的路径，Agent 在三个文件都保存后读回一次。
+- 51-d：两个员工的同名文件互不串写；用猜出的 key 加入不了 A 正开着的编辑会话。条目在 51-c 合入后补写进本节，再做 fixture 审查。
+
+51-c 开工前已核实（`onlyoffice/documentserver:9.4.0`，`document-templates/new/en-US/`）：
+
+- `new.xlsx` 5731 字节，`sheet1` 没有单元格文本；`new.pptx` 34699 字节，`slide1` 有 `ctrTitle` 和 `subTitle` 两个占位符，本身没有文本，版式和母版里有 `Click to edit Master title style` 之类的文本。
+- 三种格式的正文都在本地名为 `t` 的元素里：`w:t`、`a:t`、表格的 `t`。
+- Document Server 容器里有 `base64`。
+
+- [ ] 51.4（51-c）`office-editor-stack-fixture.ts` 原地扩成三种格式，不另写夹具：
+  - 文件：
+    - `编辑写回.docx` 照旧由 `docxCommand` 写一段；
+    - `编辑写回.xlsx`、`编辑写回.pptx` 的字节在运行时取自 Document Server 容器（`docker exec dsh-team-documentserver base64 -w0 <模板>`），再以 uid 1001 经 argv 写进实例，记下字节数和 sha256；
+    - 写入器只有一份：`docxCommand` 用的脚本原地扩展，argv 为 `[路径, '--base64', 数据]` 时按字节写入，其余用法不变；
+    - 容器名只定义一处，`platform-stack.stack.test.ts` 改为导入；
+    - `withWorkFiles` 包住三个文件。
+  - 读取器只写一份：
+    - 改用标准库 `zipfile` 和 `xml.etree`，把每个 XML 部件里本地名为 `t` 的元素文本拼成一串，三种格式共用，不再依赖 python-docx；
+    - 只解析 `.xml` 和 `.rels` 部件，跳过其他文件；
+    - 输出 `{ texts, size, sha256 }`，`texts` 以部件名为键，值是该部件拼出的文本；`writeBackState` 改看 `texts` 的值。
+  - 编辑前断言：sha256 等于写入时的值，没有任何 `texts` 值含 nonce；DOCX 的 `word/document.xml` 文本等于那一段。
+  - 读回命令：
+    - 同一个读取函数，另一个入口：接三个路径，只打印三个文件共有的、形如 nonce 的串（`EDITOR` 加 32 位大写十六进制），不打印别的文本；
+    - 命令本身不含 nonce，所以工具结果里出现 nonce，说明三个文件保存后的内容都含它；
+    - nonce 的生成函数和这个模式由本夹具导出，`ownedModel` 改为调用它；Python 里的模式由导出的同一份 `source` 插值得到；场景开头断言 lane 的 nonce 符合模式。
+  - 编辑和保存：三种格式依次各开一次 `workbenchSession`，都在子目录 `office-editor` 里，截图名为 `office-editor-<ext>-open` 和 `office-editor-<ext>-saved`。
+    - DOCX：照 51-b。
+    - XLSX：点 `#editor_sdk` 选中一个单元格，键入 nonce，按 Enter 提交，再保存。
+    - PPTX：点第一张幻灯片的标题占位符进入文字编辑，键入 nonce，再保存。点击位置以首跑实测为准。
+    - 每种格式都照 51-b 轮询写回，最多 120 秒；关闭浏览器后再读一次。
+  - 按扩展名取，ext 在 `openHinted` 内部由文件名推出，office-hints 场景的调用、断言和截图名不变：
+    - `OFFICE_FACTS` 里的 `[data-dsh-team-office-hints="docx"]` 和编辑器 iframe 的定位；
+    - 「DSH 自带预览为空」改为不看 id：页面上没有任何可见的 `[data-document-preview]` 容器，其地址以 `/<文件名>` 结尾。评审发现按 id 查时，xlsx 的检查恒真（`excel` 预览的「已绘制」要求 sheet 名为 `报表`）。office-hints 场景的这条断言随之变严。
+  - 浏览器证据：三个编辑会话各自照 51-b 判定，包括「精确放行这条 404」。放行的正则不变，每个会话至多一条；表格和演示编辑器请求的路径不同就会失败，这时停止并报告，不扩大放行。
+  - Agent 读回照 51-b，只在三个文件都保存后读回一次；provider 增量仍是 `EXPECTED_DELTAS`。
+  - evidence：`files` 是三项 `{ file, before, after }`，`after` 取关闭浏览器后那次读取；`saved: true`；provider 增量；`editors` 是三个编辑会话，evidence 行按扩展名给出截图名和错误计数；`readBack`。
+- [ ] 51.5（51-c）接线、测试和文档：
+  - `platform-stack.stack.test.ts`：编辑 lane 传入 `run`（把 `office` 的定义提到 `officeEditorScenario` 之前），接线净增不超过 5 行。
+  - `vitest.config.ts`：多出的两个编辑会话各加 120 秒写回轮询和一个 60 秒 `session.timeout`，共 360 秒；注释照现有写法改。
+  - `office-editor-stack-fixture.integration.test.ts`：
+    - 用本机 `python3 -I` 运行读取器和读回命令，输入由 Python 标准库现场生成的最小 zip；
+    - 读取器把拆成多段的 `t` 文本拼起来；
+    - 读回命令在三个文件都含 nonce 时只打印 nonce；两个含、一个不含时什么都不打印；
+    - 读回用例的 nonce 由导出的生成函数生成，输出符合模式；
+    - 现有「`READ_BACK_COMMAND` 不含 `'EDITOR'`」改为「命令里没有任何匹配导出模式的串」；
+    - 写入命令的 argv（含 `--base64`）、`writeBackState` 改看 `texts` 后的判定行、evidence 形状。
+  - `office-hints-stack-fixture.integration.test.ts` 里对 `OFFICE_FACTS` 字面选择器的断言随按扩展名取一起改。
+  - 文档：`docs/LOCAL_STACK.md` 的 `Office 编辑写回` 行和 `platform/test/README.md` 的那一句改成三种格式，「python-docx」「某一段」改成新读取器的说法。
+
+51-c 未核实，由第一次 stack 运行验证；做不到时停止并报告，不放宽断言：
+
+- XLSX：点 `#editor_sdk` 后键入落进一个单元格，Enter 后 Ctrl+S 触发写回，nonce 出现在某个 `t` 元素里。
+- PPTX：点击标题占位符能进入文字编辑，Ctrl+S 触发写回。
+- XLSX 和 PPTX 从文件区打开后进 office-hints 包装器：提示可见，恰好一个可见的同源 iframe，`FRAME` 为 `xlsx` 或 `pptx`。
+- 第二、三个编辑会话登录后不恢复上一个编辑器 tab。
+- 表格和演示编辑器的 console 恰好有 ServiceWorker 那两条 403，外加至多一条放行的 404，且请求的是同一个插件路径。
+- 换成 `zipfile` 读取器后，DS 保存的 DOCX 里 nonce 仍在 `document.xml` 拼出的文本里。
+- 读回那一轮仍是 N=3，`readBackHits` 加 1。
+
 验证：
 
 - 51-a：
   - provider 集成测试先红后绿；`pnpm check`；
   - 本机 exact-head `pnpm test:stack` 通过。这次运行只是回归检查：不配置时行为不变，已经由集成测试里 `/health` 逐字节不变的用例证明；
   - VPS exact-head `test:docker` 和 `test:deploy`，cleanup confirmed，只是满足合并门禁。
-- 51-b：
+- 51-b 和 51-c：
   - 夹具集成测试先红后绿；`pnpm check`；
   - 本机 exact-head `pnpm test:stack` 通过，并贴出证据评论；
   - VPS 同上。
@@ -6246,11 +6304,14 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 行数：
 
 - 51-a 估计 150 到 200 行；
-- 51-b 估计 330 到 390 行，包括 office-hints 的原地重构和 vitest 注释。
+- 51-b 估计 330 到 390 行，包括 office-hints 的原地重构和 vitest 注释；
+- 51-c 估计 300 到 380 行，包括本段夹具。
 
 任何一个超过 400 行，都先停下报告。
 
 结果（51-a，#618，合并提交 `19159b3`）：provider 读回脚本和 18 个集成用例合入，修复 1 次补上命中计数与 nonce 排除的历史位置用例，按 CI 口径 352 行。
+
+结果（51-b，#619，合并提交 `896e171`）：DOCX 编辑写回和 Agent 读回合入，修复 1 次让编辑 lane 的 ServiceWorker 等待跳过放行的插件 404 文本，按 CI 口径 400 行。开发期和 exact-head 两次运行都是 N=3、`readBackHits` 加 1，读回会话没有恢复 ONLYOFFICE tab。
 
 剩余风险：
 
@@ -6260,6 +6321,6 @@ fixture 作者的拆分（在 2026-11-15「多个 PR」的用户决定之内）�
 - 清理和迟到的 status 2 之间有一个很小的竞态：`saveFromCallback` 先 stat、再下载、再原子改名（`registry.ts:229-241`）。清理的 unlink 恰好落在中间时，改名会重建文件。之后没有断言依赖这个文件。
 
 Suggested fixture level: expanded - 真实编辑器写回员工文件，provider 新脚本
-Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR
+Minimal mergeable slice: 51-a 为 51.1 一个 PR；51-b 为 51.2–51.3 一个 PR；51-c 为 51.4–51.5 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景、office-hints 断言和截图名、provider 已有脚本和 `/health` 不变）、Resource limits（新增有界等待，文件结束时删除）、Security（写回只发生在 A 自己的文件上，key 不进证据）；not selected - Schema、Public API、Migration、Auth、Concurrency。
 Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`、hold、delegation 行为、计数和 `/health` 不变；ONLYOFFICE、平台和镜像代码不改；每次运行仍然只有 5 次付费检索。
