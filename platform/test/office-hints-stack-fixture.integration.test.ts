@@ -4,7 +4,7 @@ import {
   docxCommand,
   editorSettled,
   HEALTH_COMMAND,
-  OFFICE_FACTS,
+  officeFacts,
   officeHintsLine,
   serviceWorkerRefused,
 } from './office-hints-stack-fixture.ts';
@@ -45,7 +45,9 @@ it('reads hints, the wrapper frame, its iframes and the ONLYOFFICE texts of 0.2.
     '"The ONLYOFFICE editor reported an error"',
     '"Office 编辑器未加载"',
   ])
-    expect(OFFICE_FACTS).toContain(part);
+    expect(officeFacts('同写提示.docx')).toContain(part);
+  for (const ext of ['xlsx', 'pptx'])
+    expect(officeFacts(`编辑写回.${ext}`)).toContain(`'[data-dsh-team-office-hints="${ext}"]'`);
 });
 
 const collab = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };

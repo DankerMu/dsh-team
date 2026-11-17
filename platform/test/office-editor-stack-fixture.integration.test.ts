@@ -1,44 +1,99 @@
 import { execFileSync } from 'node:child_process';
-import { expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, expect, it } from 'vitest';
 import { docxCommand } from './office-hints-stack-fixture.ts';
 import {
   editorErrorsAllowed,
+  editorNonce,
   editorRefused,
   EXPECTED_DELTAS,
+  NONCE_PATTERN,
   officeEditorLine,
   providerDeltas,
   READ_BACK_COMMAND,
   READER,
-  READER_ARGV,
-  WRITE_ARGV,
+  writeArgv,
   writeBackState,
 } from './office-editor-stack-fixture.ts';
 
-const FILE = '/data/work/编辑写回.docx';
-const NONCE = 'EDITOR0123456789ABCDEF0123456789ABCD';
+const NONCE = editorNonce();
+const EXTS = ['docx', 'xlsx', 'pptx'];
+const PATHS = EXTS.map((ext) => `/data/work/编辑写回.${ext}`);
+const DIR = mkdtempSync(join(tmpdir(), 'dsh-team-office-editor-'));
+afterAll(() => {
+  rmSync(DIR, { recursive: true, force: true });
+});
+const python = (...argv: string[]) => execFileSync('python3', ['-I', '-c', ...argv]).toString();
+const sha256 = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
+// A zip of `parts` (a name, then its content) written by Python's own zipfile.
+const ZIP = `import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as archive:
+    for name, text in zip(sys.argv[2::2], sys.argv[3::2]):
+        archive.writestr(name, text)`;
+const zipped = (file: string, ...parts: string[]) => {
+  python(ZIP, join(DIR, file), ...parts);
+  return join(DIR, file);
+};
 
-it('writes the one-paragraph docx, then reads every paragraph, the size and the digest via argv', () => {
-  expect(WRITE_ARGV).toEqual(docxCommand('编辑写回.docx', '编辑写回探针。'));
-  expect(WRITE_ARGV.slice(3)).toEqual([FILE, '编辑写回探针。']);
-  expect(READER_ARGV).toEqual(['python3', '-c', READER, FILE]);
-  for (const part of [
-    'Document(sys.argv[1]).paragraphs',
-    '"paragraphs": paragraphs, "size": len(data)',
-    'hashlib.sha256(data).hexdigest()',
-  ])
-    expect(READER).toContain(part);
+it('generates EDITOR and 32 uppercase hex digits, which the exported pattern matches', () => {
+  expect(NONCE).toMatch(/^EDITOR[0-9A-F]{32}$/);
+  expect(editorNonce()).not.toBe(NONCE);
+  expect(NONCE.match(NONCE_PATTERN)?.[0]).toBe(NONCE);
+  expect(`EDITOR${'A'.repeat(31)}`).not.toMatch(NONCE_PATTERN);
+  expect(NONCE.toLowerCase()).not.toMatch(NONCE_PATTERN);
 });
 
-it('hands bash the same argv as single-quoted words, which a POSIX shell splits back', () => {
+it('writes the one-paragraph docx, or the base64 bytes of a template, and reads the digest', () => {
+  expect(writeArgv('编辑写回.docx')).toEqual(docxCommand('编辑写回.docx', '编辑写回探针。'));
+  expect(writeArgv('编辑写回.xlsx', 'UEsD').slice(3)).toEqual([PATHS[1], '--base64', 'UEsD']);
+  const [, , script = ''] = writeArgv('编辑写回.pptx', '');
+  const bytes = Buffer.from([0x50, 0x4b, 0, 255, 10]);
+  const out = python(script, join(DIR, 'w.pptx'), '--base64', bytes.toString('base64'));
+  expect(readFileSync(join(DIR, 'w.pptx'))).toEqual(bytes);
+  expect(JSON.parse(out)).toEqual({ name: 'w.pptx', size: 5, sha256: sha256(join(DIR, 'w.pptx')) });
+});
+
+const DOCUMENT = (...runs: string[]) =>
+  `<w:document xmlns:w="urn:w"><w:body><w:p>${runs.map((run) => `<w:r><w:t>${run}</w:t></w:r>`).join('<w:tab/>')}</w:p></w:body></w:document>`;
+const RELS = '<Relationships xmlns="urn:r"><Relationship Id="t" Target="t"/></Relationships>';
+
+it('joins the text of every element named t in each XML part and skips other parts', () => {
+  const cell = '<sst xmlns="urn:s"><si><t>甲</t></si><c t="s"><v>0</v></c><si><t>乙</t></si></sst>';
+  const parts = ['word/document.xml', DOCUMENT('编辑写回', '探针。'), '_rels/.rels', RELS];
+  const docx = zipped('reader.docx', ...parts, 'xl/x.xml', cell, 'media/x.bin', '<not xml');
+  const texts = { 'word/document.xml': '编辑写回探针。', '_rels/.rels': '', 'xl/x.xml': '甲乙' };
+  const digest = { size: readFileSync(docx).length, sha256: sha256(docx) };
+  expect(JSON.parse(python(READER, docx))).toEqual({ texts, ...digest });
+});
+
+it('hands bash the reader over the three paths as single-quoted words, never a nonce', () => {
   expect(READER).not.toContain("'");
-  expect(READ_BACK_COMMAND).toBe(`'python3' '-c' '${READER}' '${FILE}'`);
+  expect(READ_BACK_COMMAND).toBe(`'python3' '-c' '${READER}' '${PATHS.join("' '")}'`);
   const words = execFileSync('sh', ['-c', `printf '%s\\0' ${READ_BACK_COMMAND}`]).toString();
-  expect(words.split('\0')).toEqual([...READER_ARGV, '']);
-  expect(READ_BACK_COMMAND).not.toContain('EDITOR');
+  expect(words.split('\0')).toEqual(['python3', '-c', READER, ...PATHS, '']);
+  expect(READ_BACK_COMMAND).not.toMatch(NONCE_PATTERN);
+});
+
+it('prints only the nonce-shaped strings all three files hold', () => {
+  const other = editorNonce();
+  const [head, tail] = [NONCE.slice(0, 10), NONCE.slice(10)];
+  const docx = zipped('a.docx', 'word/document.xml', DOCUMENT('探针。', head, tail));
+  const xlsx = zipped('a.xlsx', 'xl/sharedStrings.xml', `<t>${other} ${NONCE}</t>`);
+  const slide = (text: string) => `<a:p xmlns:a="urn:a"><a:t>Click</a:t><a:t>${text}</a:t></a:p>`;
+  const pptx = zipped('a.pptx', 'ppt/slides/slide1.xml', slide(`${NONCE}${other.slice(0, 6)}`));
+  expect(python(READER, docx, xlsx, pptx)).toBe(`${NONCE}\n`);
+  const without = zipped('b.pptx', 'ppt/slides/slide1.xml', slide(other));
+  expect(python(READER, docx, xlsx, without)).toBe('');
 });
 
 const [ORIGINAL, CHANGED] = ['a'.repeat(64), 'b'.repeat(64)];
-const read = (sha256: string, paragraphs: string[]) => ({ paragraphs, size: 9_000, sha256 });
+// Each paragraph as one part's text.
+const read = (sha256: string, paragraphs: string[]) => ({
+  ...{ texts: Object.fromEntries(paragraphs.entries()), size: 9_000, sha256 },
+});
 
 it.each([
   ['the digest unchanged', read(ORIGINAL, ['编辑写回探针。']), 'unchanged'],
@@ -77,20 +132,27 @@ const session = (screenshots: string[], consoleErrors: string[]) => ({
 });
 const quiet = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
 
-it('prints the file, both digests, the deltas and each session by screenshots and error counts', () => {
-  const file = { file: '编辑写回.docx', before: { size: 9_000, sha256: ORIGINAL } };
-  const evidence = { ...file, after: { size: 9_400, sha256: CHANGED }, saved: true as const };
-  const editor = ['office-editor-open.png', 'office-editor-saved.png'];
+it('prints the three files, their digests, the deltas and each session by extension', () => {
+  const files = EXTS.map((ext, size) => ({
+    ...{ file: `编辑写回.${ext}`, before: { size, sha256: ORIGINAL } },
+    after: { size: size + 400, sha256: CHANGED },
+  }));
+  const shots = (ext: string) => ['open', 'saved'].map((at) => `office-editor-${ext}-${at}.png`);
   const replies = ['login.png', 'workbench.png', 'reply.png'];
+  const errors = (ext: string) => ['sw fetch', 'sw register', ...(ext === 'xlsx' ? ['404'] : [])];
+  const editors = EXTS.map((ext) => [ext, session(shots(ext), errors(ext))] as const);
   const line = officeEditorLine({
-    ...{ ...evidence, provider: EXPECTED_DELTAS },
-    editor: session(editor, ['sw fetch', 'sw register']),
-    readBack: session(replies, []),
+    ...{ files, saved: true, provider: EXPECTED_DELTAS },
+    ...{ editors: Object.fromEntries(editors), readBack: session(replies, []) },
   });
 
   expect(line).toEqual({
-    ...{ ...evidence, provider: EXACT },
-    editor: { screenshots: editor, consoleErrors: 2, ...quiet },
+    ...{ files, saved: true, provider: EXACT },
+    editors: {
+      docx: { screenshots: shots('docx'), consoleErrors: 2, ...quiet },
+      xlsx: { screenshots: shots('xlsx'), consoleErrors: 3, ...quiet },
+      pptx: { screenshots: shots('pptx'), consoleErrors: 2, ...quiet },
+    },
     readBack: { screenshots: replies, consoleErrors: 0, ...quiet },
   });
   expect(JSON.stringify(line)).not.toContain('sw fetch');

@@ -49,6 +49,8 @@ import { legacyPreviewScenario } from './legacy-preview-stack-fixture.ts';
 import type { LegacyPreviewEvidence } from './legacy-preview-stack-fixture.ts';
 import { awaitLocalModelReady, privatePlatformRead } from './local-model-readiness.ts';
 import {
+  DOCUMENT_SERVER,
+  editorNonce,
   officeEditorLine,
   officeEditorScenario,
   READ_BACK_COMMAND,
@@ -84,7 +86,6 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 type Stack = NonNullable<ReturnType<typeof configuredStack>>;
 const PLATFORM = 'dsh-team-platform';
-const DOCUMENT_SERVER = 'dsh-team-documentserver';
 const DOCUMENT_SERVER_FONTS = '/usr/share/fonts/truetype/custom';
 const FIXED_CONTAINERS = [
   [PLATFORM, 'Platform'],
@@ -261,7 +262,7 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
       readBack: {
         marker: `stack-readback-${randomUUID()}`,
         command: READ_BACK_COMMAND,
-        nonce: `EDITOR${randomUUID().replaceAll('-', '').toUpperCase()}`,
+        nonce: editorNonce(),
       },
     },
   };
@@ -511,12 +512,12 @@ async function converse(
     evidence.legacyPreview = await legacyPreviewScenario(lane);
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
-    // 18.5 (#440): A edits and saves a DOCX in ONLYOFFICE; the Agent's bash reads the saved text.
+    // 18.5 (#440): A edits and saves a DOCX, an XLSX and a PPTX; the Agent's bash reads all three.
     const { reply, readBack } = provider;
-    evidence.officeEditor = await officeEditorScenario({ ...lane, reply, readBack });
+    const office = { ...lane, run, platformRead, instance: `dsh-team-u-${employee.id}` };
+    evidence.officeEditor = await officeEditorScenario({ ...office, reply, readBack });
     // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
     let secondId = '';
-    const office = { ...lane, run, platformRead, instance: `dsh-team-u-${employee.id}` };
     evidence.officeIsolation = await officeIsolationScenario({
       ...office,
       secondEmployee: async () => {

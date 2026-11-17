@@ -46,18 +46,18 @@ export default defineConfig({
           name: 'stack',
           include: ['platform/test/**/*.stack.test.ts'],
           fileParallelism: false,
-          // Two cold image builds (600s each, 1200s) leave 2520s for compose, health, the
+          // Two cold image builds (600s each, 1200s) leave 2880s for compose, health, the
           // conversation, 13 in-instance proxy calls (30s each at most), drainage, the RAGFlow
           // restore, which is bounded at 300s from before `docker start` (its 60s CLI bound lies
           // inside), and the legacy preview lane (#433), which raised the cap from 2400s by 600s:
           // its preview waits are bounded at 540s (240s each for DOC and PPT, 60s for XLS), its
           // 12 in-instance execs at 30s each, and the office profile lane (#440), which raised it
           // by 480s: its instance restart waits 180s at most for the gateway, its 10 docker calls
-          // 30s each, and the office editor lane (#440), which raised it by 240s: its write-back
-          // poll waits 120s at most, the editor load and the Agent read-back one 60s session
-          // timeout each. That remainder is a margin, not the sum of every per-step bound: a vitest
+          // 30s each, and the office editor lane (#440), which raised it by 600s: three 120s
+          // write-back polls, three editor loads and the Agent read-back at one 60s session timeout
+          // each. That remainder is a margin, not the sum of every per-step bound: a vitest
           // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5).
-          testTimeout: 3_720_000,
+          testTimeout: 4_080_000,
         },
       },
     ],

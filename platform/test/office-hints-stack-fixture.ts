@@ -1,3 +1,4 @@
+import { extname } from 'node:path';
 import type { ConsoleMessage, Page } from '@playwright/test';
 import { expect } from 'vitest';
 import { previewOutcome, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
@@ -11,7 +12,7 @@ const NAME = '同写提示.docx';
 const PARAGRAPH = '同写提示探针：只打开，不编辑。';
 /** Baseline F40, verbatim: plugins/office-hints/client.js `COLLAB`. */
 export const COLLAB = '请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。';
-const OFFICE_PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/office';
+const PREVIEW = '@deepseek-ai/dsh-client-ui-sidebar-documentpreview/';
 const MOUNT = '/sidebar/onlyoffice/ds/';
 // dsh-sidebar-onlyoffice@0.2.0 src/client/locales.ts, zh then en: `loading`; then `loadFailed`,
 // `errFetch`, `errApi`, `errEditor`, `errEditorEvent`; last office-hints' own `UNAVAILABLE`.
@@ -26,18 +27,21 @@ const FAILURES = [
 
 // Python in the instance as uid 1001 with python-docx from the image; every value arrives as argv.
 // With a paragraph it writes the one-paragraph document first; it always reads the file back.
-const DOCX = `import hashlib, json, pathlib, sys
+// With `--base64 <data>` it writes those bytes instead.
+const DOCX = `import base64, hashlib, json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
-if len(sys.argv) > 2:
+if sys.argv[2:3] == ["--base64"]:
+    path.write_bytes(base64.b64decode(sys.argv[3]))
+elif len(sys.argv) > 2:
     from docx import Document
     document = Document()
     document.add_paragraph(sys.argv[2])
     document.save(path)
 data = path.read_bytes()
 print(json.dumps({"name": path.name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}))`;
-export const docxCommand = (name: string, paragraph?: string) => [
+export const docxCommand = (name: string, ...content: string[]) => [
   ...['python3', '-c', DOCX, `${WORK}/${name}`],
-  ...(paragraph === undefined ? [] : [paragraph]),
+  ...content,
 ];
 
 // DSH Web answers only at the instance's own bridge address, never at its loopback
@@ -61,9 +65,12 @@ interface OfficeFacts {
   readonly texts: readonly string[];
 }
 
-export const OFFICE_FACTS = `(() => {
+/** The office-hints wrapper around the editor of `name`, by its extension. */
+export const hintsFrame = (name: string) =>
+  `[data-dsh-team-office-hints="${extname(name).slice(1)}"]`;
+export const officeFacts = (name: string) => `(() => {
   const visible = ${visible};
-  const frames = [...document.querySelectorAll('[data-dsh-team-office-hints="docx"]')];
+  const frames = [...document.querySelectorAll('${hintsFrame(name)}')];
   const text = document.body.innerText;
   return {
     hints: [...document.querySelectorAll('[data-dsh-team-office-hint]')].map((el) => ({ kind: el.getAttribute('data-dsh-team-office-hint'), text: el.textContent, visible: visible(el), nativeHost: el.closest('[data-dsh-native-tab-host]') !== null })),
@@ -149,7 +156,7 @@ export async function openHinted(
   page.on('console', record);
   let facts: OfficeFacts | undefined;
   const settled = async () => {
-    facts = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
+    facts = await page.evaluate<OfficeFacts>(officeFacts(name));
     return editorSettled(facts);
   };
   const refused = () => Promise.resolve(refusal(errors, base));
@@ -160,8 +167,9 @@ export async function openHinted(
   } finally {
     page.off('console', record);
   }
-  const final = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
-  const native = await page.evaluate<PreviewOutcome>(previewOutcome(OFFICE_PREVIEW, name));
+  const final = await page.evaluate<OfficeFacts>(officeFacts(name));
+  const preview = `${PREVIEW}${extname(name) === '.xlsx' ? 'excel' : 'office'}`;
+  const native = await page.evaluate<PreviewOutcome>(previewOutcome(preview, name));
   await shoot(screenshot);
   const seen = JSON.stringify(final);
   const hint = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };
