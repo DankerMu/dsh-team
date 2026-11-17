@@ -128,9 +128,8 @@ export const untilSeen = (
 type Shoot = (name: string) => Promise<void>;
 
 /**
- * Opens `name` from the landing session's file area, waits for the hinted editor and then for the
- * ServiceWorker refusal, which ONLYOFFICE logs after its `ready` phase, checks the page and takes
- * the `screenshot`.
+ * Opens the file from the landing session's file area, waits for the hinted editor and then for
+ * the ServiceWorker refusal, which ONLYOFFICE logs after its `ready` phase, and checks the page.
  */
 export async function openHinted(
   page: Page,
@@ -138,6 +137,7 @@ export async function openHinted(
   { base, timeout }: StackSession,
   name: string,
   screenshot: string,
+  refusal = serviceWorkerRefused,
 ) {
   await until(() => showSidebarRows(page, [name]), timeout, `office hints ${name} row`);
   const row = await element(page, rowQuery(name));
@@ -152,7 +152,7 @@ export async function openHinted(
     facts = await page.evaluate<OfficeFacts>(OFFICE_FACTS);
     return editorSettled(facts);
   };
-  const refused = () => Promise.resolve(serviceWorkerRefused(errors, base));
+  const refused = () => Promise.resolve(refusal(errors, base));
   try {
     await row.click();
     await untilSeen(() => facts, settled, timeout, 'Office hints editor never settled, last seen');

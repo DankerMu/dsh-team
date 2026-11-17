@@ -3,6 +3,7 @@ import { expect, it } from 'vitest';
 import { docxCommand } from './office-hints-stack-fixture.ts';
 import {
   editorErrorsAllowed,
+  editorRefused,
   EXPECTED_DELTAS,
   officeEditorLine,
   providerDeltas,
@@ -45,6 +46,7 @@ it.each([
   ['a new digest without the nonce', read(CHANGED, ['编辑写回探针。']), 'changed-without-nonce'],
   ['a new digest without paragraphs', read(CHANGED, []), 'changed-without-nonce'],
   ['a new digest and the nonce in a paragraph', read(CHANGED, [`探针。${NONCE}`]), 'saved'],
+  ['the nonce in a middle paragraph', read(CHANGED, ['编辑写回探针。', NONCE, '']), 'saved'],
 ])('reads the write-back as %s', (_case, observed, state) => {
   expect(writeBackState(ORIGINAL, observed, NONCE)).toBe(state);
 });
@@ -105,19 +107,26 @@ const plugin = (file: string, guid = '9DC93CDB-B576-4F0C-B55E-FCC9C48DD007') =>
   `404 ${DS}/sdkjs-plugins/%7B${guid}%7D/translations/helpers/${file}`;
 const AI = plugin('zh-ZH.json');
 
+const SW = [FETCH, REGISTER];
+const SW404 = [...SW, NOT_FOUND];
+
 it.each([
-  ['both ServiceWorker refusals only', true, [FETCH, REGISTER], [WORKER]],
-  ['the AI plugin 404 and its text', true, [FETCH, NOT_FOUND, REGISTER], [WORKER, AI]],
-  ['the AI plugin 404 without a text', true, [FETCH, REGISTER], [AI, WORKER]],
-  ['the 404 text without the plugin response', false, [FETCH, REGISTER, NOT_FOUND], [WORKER]],
-  ['another plugin GUID', false, [FETCH, REGISTER, NOT_FOUND], [WORKER, plugin('zh-ZH.json', '0')]],
-  ['another AI plugin file', false, [FETCH, REGISTER, NOT_FOUND], [WORKER, plugin('en-EN.json')]],
-  ['two 404 texts', false, [FETCH, REGISTER, NOT_FOUND, NOT_FOUND], [WORKER, AI]],
-  ['two plugin 404 responses', false, [FETCH, REGISTER, NOT_FOUND], [WORKER, AI, AI]],
-  ['an unrelated console error', false, [FETCH, REGISTER, 'Uncaught TypeError: x'], [WORKER]],
-  ['a 404 for another path', false, [FETCH, REGISTER], [WORKER, `404 ${DS}/x.json`]],
-  ['the ServiceWorker response missing', false, [FETCH, REGISTER], []],
-  ['a ServiceWorker refusal missing', false, [REGISTER, NOT_FOUND], [WORKER, AI]],
-])('allows the editing session %s: %s', (_case, allowed, consoleErrors, responses) => {
+  ['the SW refusals only', true, true, SW, [WORKER]],
+  ['the AI plugin 404 and its text', true, true, [FETCH, NOT_FOUND, REGISTER], [WORKER, AI]],
+  ['the 404 text first', true, true, [NOT_FOUND, FETCH, REGISTER], [WORKER, AI]],
+  ['the AI plugin 404 without a text', true, true, SW, [AI, WORKER]],
+  ['the 404 text without its response', false, true, SW404, [WORKER]],
+  ['another plugin', false, true, SW404, [WORKER, plugin('zh-ZH.json', '0')]],
+  ['another AI plugin file', false, true, SW404, [WORKER, plugin('en-EN.json')]],
+  ['two 404 texts', false, true, [...SW404, NOT_FOUND], [WORKER, AI]],
+  ['two plugin 404 responses', false, true, SW404, [WORKER, AI, AI]],
+  ['an unrelated console error', false, false, [...SW, 'Uncaught TypeError: x'], [WORKER]],
+  ['a 404 for another path', false, true, SW, [WORKER, `404 ${DS}/x.json`]],
+  ['another 403', false, true, SW, [`403 ${DS}/x/document_editor_service_worker.js`]],
+  ['the SW response missing', false, true, SW, []],
+  ['a SW refusal missing', false, false, [REGISTER, NOT_FOUND], [WORKER, AI]],
+  ['the fetch refusal alone', false, false, [FETCH], [WORKER]],
+])('allows the editing session %s: %s', (_case, allowed, refused, consoleErrors, responses) => {
   expect(editorErrorsAllowed(consoleErrors, responses, `${BASE}/`)).toBe(allowed);
+  expect(editorRefused(consoleErrors, `${BASE}/`), 'openHinted wait').toBe(refused);
 });

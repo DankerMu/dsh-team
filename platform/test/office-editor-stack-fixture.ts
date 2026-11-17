@@ -47,13 +47,8 @@ export function writeBackState(original: string, read: DocxRead, nonce: string) 
   return read.paragraphs.some((text) => text.includes(nonce)) ? 'saved' : 'changed-without-nonce';
 }
 
-export const EXPECTED_DELTAS = {
-  readBacks: 1,
-  readBackHits: 1,
-  requests: READ_BACK_REQUESTS,
-  searches: 0,
-  delegations: 0,
-};
+const ONCE = { readBacks: 1, readBackHits: 1, requests: READ_BACK_REQUESTS };
+export const EXPECTED_DELTAS = { ...ONCE, searches: 0, delegations: 0 };
 const COUNTERS = Object.keys(EXPECTED_DELTAS);
 
 /** Each counter's delta from `before` to `after`; a counter missing from either yields NaN. */
@@ -78,15 +73,19 @@ const AI_PLUGIN_404 =
   /^404 \/sidebar\/onlyoffice\/ds\/[^/]+\/sdkjs-plugins\/%7B9DC93CDB-B576-4F0C-B55E-FCC9C48DD007%7D\/translations\/helpers\/zh-ZH\.json$/;
 const NOT_FOUND = 'Failed to load resource: the server responded with a status of 404 (Not Found)';
 
+/** openHinted's wait in the editing session: §48's two refusals, the AI plugin 404 text aside. */
+const refusals = (errors: readonly string[]) => errors.filter((error) => error !== NOT_FOUND);
+export const editorRefused = (errors: readonly string[], base: string) =>
+  serviceWorkerRefused(refusals(errors), base);
+
 /** The editing session's console errors and `status path` responses >= 400: §48's ServiceWorker
  * refusal plus at most one AI plugin 404 and, only with that response, its console text. */
 export function editorErrorsAllowed(errors: readonly string[], responses: string[], base: string) {
   const plugin = responses.filter((response) => AI_PLUGIN_404.test(response)).length;
   const [worker, ...others] = responses.filter((response) => !AI_PLUGIN_404.test(response));
-  const texts = errors.filter((error) => error === NOT_FOUND).length;
-  const refusals = errors.filter((error) => error !== NOT_FOUND);
+  const texts = errors.length - refusals(errors).length;
   const workerOnly = others.length === 0 && WORKER_403.test(worker ?? '');
-  return workerOnly && plugin <= 1 && texts <= plugin && serviceWorkerRefused(refusals, base);
+  return workerOnly && plugin <= 1 && texts <= plugin && editorRefused(errors, base);
 }
 
 const LISTS = ['consoleErrors', 'pageErrors', 'failedRequests', 'externalRequests'] as const;
@@ -156,7 +155,7 @@ async function editAndSave(lane: OfficeEditorLane, written: ArchiveEntry, direct
   const names = { label: 'office editor', failure: 'office-editor-failure' };
   let saved: DocxRead | undefined;
   const body: Parameters<typeof workbenchSession>[2] = async (page, shoot) => {
-    await openHinted(page, shoot, session, NAME, 'office-editor-open');
+    await openHinted(page, shoot, session, NAME, 'office-editor-open', editorRefused);
     await typeAndSave(page, readBack.nonce, session.timeout);
     saved = await writtenBack(read, written.sha256, readBack.nonce);
     await shoot('office-editor-saved');
@@ -199,8 +198,7 @@ function agentReadBack(lane: OfficeEditorLane, start: Record<string, unknown>, d
 
 async function officeEditor(lane: OfficeEditorLane): Promise<OfficeEditorEvidence> {
   const start = await lane.provider();
-  // Fails at once when the read-back script never reached the provider.
-  expect([start.readBacks, start.readBackHits], 'readBacks, readBackHits').toEqual([0, 0]);
+  expect([start.readBacks, start.readBackHits], 'Read-back script configured').toEqual([0, 0]);
   expect(lane.readBack.command.includes(lane.readBack.nonce), 'Command holds nonce').toBe(false);
   const written = JSON.parse(await lane.exec(WRITE_ARGV)) as ArchiveEntry;
   const directory = join(lane.session.directory, 'office-editor');
