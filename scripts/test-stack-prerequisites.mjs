@@ -95,7 +95,9 @@ function dockerToolFailure(facts) {
       reason: `Document Server image ${DOCUMENT_SERVER_IMAGE} missing; docker pull it first`,
     };
   if (facts.fonts === undefined) return { ok: undefined };
-  return facts.fonts ? undefined : { ok: false, reason: 'assets/fonts directory missing' };
+  return facts.fonts
+    ? undefined
+    : { ok: false, reason: 'assets/fonts directory missing or has no font file' };
 }
 
 /**

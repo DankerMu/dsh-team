@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import type { Page, Response } from '@playwright/test';
+import type { FrameLocator, Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
@@ -196,14 +196,20 @@ const frameChain = (page: Page) =>
 const passed = () => Promise.resolve();
 
 /** Clicks the document area through the iframe once `loaded` passed, types the nonce and saves. */
-async function typeAndSave(page: Page, ext: Ext, nonce: string, timeout: number, loaded = passed) {
+async function typeAndSave(
+  page: Page,
+  ext: Ext,
+  nonce: string,
+  timeout: number,
+  loaded: Meeting['loaded'] = passed,
+) {
   const { at, keys } = EDITING[ext];
   try {
     const editor = page.locator(editorFrame(ext)).visible().contentFrame();
     const area = editor.locator(EDITOR_AREA);
     await area.waitFor({ timeout });
     await editor.locator(EDITOR_READY).waitFor({ state: 'attached', timeout });
-    await loaded();
+    await loaded(editor);
     const box = await area.boundingBox({ timeout });
     if (box === null) throw new Error('Office editor area has no box');
     await area.click({ position: { x: box.width * at[0], y: box.height * at[1] }, timeout });
@@ -294,7 +300,7 @@ export async function retiringOnError<T>(
 /** One side's nonce and its arrivals at the two shared gates. */
 interface Meeting {
   readonly nonce: string;
-  readonly loaded: () => Promise<void>;
+  readonly loaded: (editor: FrameLocator) => Promise<void>;
   readonly saved: () => Promise<void>;
 }
 
