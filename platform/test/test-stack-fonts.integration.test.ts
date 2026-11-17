@@ -16,6 +16,9 @@ it.each<[string, boolean, (fonts: string) => Promise<unknown>]>([
   ['only an empty subdirectory', false, nested('')],
   ['only .DS_Store', false, (fonts) => writeFile(join(fonts, '.DS_Store'), '')],
   ['a .TTF file in a subdirectory', true, nested('SimHei.TTF')],
+  ['a top-level .otf file', true, (fonts) => writeFile(join(fonts, 'x.otf'), '')],
+  ['a .ttc file in a subdirectory', true, nested('x.ttc')],
+  ['a top-level .OTC file', true, (fonts) => writeFile(join(fonts, 'x.OTC'), '')],
 ])('probes the font directory with %s as %s', async (_case, expected, arrange) => {
   const fonts = await mkdtemp(join(tmpdir(), 'dsh-team-stack-fonts-'));
   try {
