@@ -6731,7 +6731,7 @@ Must preserve：所有现有断言；被测脚本 `scripts/verify-browser-runtim
 - [ ] 54.2 发信号：
   - 新增导出 `ownedCancellation(signal, report, { retryMs = 1000, now = Date.now } = {})`，取代 `:205-216` 的闭包。返回对象：
     - `cancel(kind)`：第一次记下 `interruption`，之后不改；把 `signal()` 串在一条链上；`signal()` 返回 true 后不再调用；距上次**抛错**的尝试落定不足 `retryMs` 时本次不尝试（节流）；时间只在 `signal()` 抛错、并在它落定之后记（`last = now()` 放在 catch 里），返回 false 或 true 都不记；
-    - `interruption`、`signalled`、`failed`（尝试过、抛过错、且至今未发出信号）三个只读值；
+    - `interruption`、`signalled`、`failed`（尝试过、抛过错、且至今未发出信号）三个只读值；`retry()`：有挂起的取消时以原 `interruption` 再 `cancel` 一次，否则不动作（owner 的周期读取和 `:302` 都调它；它不经包装的 close 早退，close 之后包装的 `signal` 返回 false，效果相同）；
     - `settled()`：等链上已排队的尝试落定，取代 `:313` 的 `await cancellation`。
   - `signal()` 抛错时：调用 `report(message)` 留痕，只在第一次失败和失败信息变化时调用，`message` 只取固定前缀加 `error.message`，不含 error 对象、stack 或环境；不放弃，下一次 `cancel` 再试。
   - `executeOwnedCommand` 里的包装：
