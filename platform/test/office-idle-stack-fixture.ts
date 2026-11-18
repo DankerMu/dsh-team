@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import type { FrameLocator } from '@playwright/test';
 import { expect } from 'vitest';
 import {
   counted,
@@ -9,6 +10,7 @@ import {
   retiringOnError,
 } from './office-editor-stack-fixture.ts';
 import type { Digest, Meeting, OfficeEditorLane } from './office-editor-stack-fixture.ts';
+import { DOCUMENT_SERVER } from './office-hints-stack-fixture.ts';
 import { withWorkFiles } from './sidebar-archive-stack-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
@@ -17,6 +19,17 @@ const NAME = '编辑写回.docx';
 // Above the idle stop's worst case at one minute: three 60s sweeps plus the stop (§51-f).
 const HOLD_MS = 210_000;
 const CONTROL_MS = 240_000;
+const CUSTOM_FONTS = '/usr/share/fonts/truetype/custom';
+/** The operator fonts compose binds into the Document Server: one `file<TAB>families` line per
+ * face, subdirectories included (§51-g). */
+export const OPERATOR_FONTS = [
+  'exec',
+  DOCUMENT_SERVER,
+  'fc-scan',
+  '--format',
+  '%{file}\t%{family}\n',
+  CUSTOM_FONTS,
+];
 
 type Admin = Readonly<Record<'base' | 'cookie', string>>;
 type InstanceRow = Readonly<{ email: string; status: string; lastStartedAt: number | null }>;
@@ -101,9 +114,48 @@ export async function idleRetired(admin: Admin, email: string, sinceId: number, 
   return { stoppedMs, reason: 'idle' as const };
 }
 
-/** No nonce or key: the hold, the DOCX's digests, the editor session and the idle stop. */
+type OperatorFont = Readonly<{ file: string; families: readonly string[] }>;
+
+/** fc-scan's faces grouped by file, each with the union of its comma-separated families. */
+export function operatorFonts(output: string): OperatorFont[] {
+  const files = new Map<string, Set<string>>();
+  for (const line of output.split('\n').filter((text) => text !== '')) {
+    const [file = '', names = ''] = line.split('\t');
+    const families = files.get(file) ?? new Set<string>();
+    for (const name of names.split(',')) if (name !== '') families.add(name);
+    files.set(file, families);
+  }
+  if (files.size === 0) throw new Error(`Operator font directory ${CUSTOM_FONTS} has no font file`);
+  return [...files].map(([file, families]) => ({ file, families: [...families] }));
+}
+
+/** Every operator font file has a family among the editor's font `names`: the file count and the
+ * matched names, deduplicated and sorted. */
+export function fontsShown(fonts: readonly OperatorFont[], names: unknown) {
+  if (!Array.isArray(names) || !(names as unknown[]).every((name) => typeof name === 'string'))
+    throw new Error('Office editor font names (AscFonts.g_font_infos) are not a string array');
+  const shown = new Set<unknown>(names);
+  const missing = fonts.filter(({ families }) => !families.some((name) => shown.has(name)));
+  if (missing.length > 0) {
+    const lines = missing.map(({ file, families }) => `${file}: ${families.join(', ')}`);
+    throw new Error(`Operator fonts missing from the editor's font list: ${lines.join('; ')}`);
+  }
+  const families = new Set(fonts.flatMap(({ families }) => families.filter((n) => shown.has(n))));
+  return { files: new Set(fonts.map(({ file }) => file)).size, families: [...families].sort() };
+}
+
+/** The Name of every font the editor frame loaded from AllFonts.js; not an array when unreadable. */
+const editorFontNames = (editor: FrameLocator) =>
+  editor.locator('#editor_sdk').evaluate(() => {
+    const loaded = globalThis as { AscFonts?: { g_font_infos?: unknown } };
+    const infos = loaded.AscFonts?.g_font_infos;
+    return Array.isArray(infos) ? infos.map((info: { Name?: unknown }) => info.Name) : null;
+  });
+
+/** No nonce or key: the hold, the fonts, the DOCX's digests, the editor session and the idle stop. */
 export interface OfficeIdleEvidence {
   readonly held: Awaited<ReturnType<typeof heldRunning>>['held'];
+  readonly fonts: ReturnType<typeof fontsShown>;
   readonly file: Readonly<Record<'before' | 'after', Digest>>;
   readonly editor: StackBrowserEvidence;
   readonly stopped: Awaited<ReturnType<typeof idleRetired>>;
@@ -121,8 +173,12 @@ type OfficeIdleLane = OfficeEditorLane & { readonly administrator: Admin };
 
 async function officeIdle(lane: OfficeIdleLane, idle: { restore: () => Promise<void> }) {
   const { administrator: admin, session } = lane;
+  const operator = operatorFonts(await lane.run(OPERATOR_FONTS));
+  let fonts: ReturnType<typeof fontsShown> | undefined;
   let hold: Awaited<ReturnType<typeof heldRunning>> | undefined;
-  const loaded = async () => {
+  const loaded = async (editor: FrameLocator) => {
+    // Before the idle minutes change: a failed font check leaves them as they were.
+    fonts = fontsShown(operator, await editorFontNames(editor));
     idle.restore = await idleMinutes(admin, 1);
     hold = await heldRunning(admin, session.email, HOLD_MS);
   };
@@ -131,11 +187,11 @@ async function officeIdle(lane: OfficeIdleLane, idle: { restore: () => Promise<v
   const { editor, written, after } = await withWorkFiles(lane, [NAME], 'Office idle', () =>
     editAndSave(lane, 'docx', directory, meeting),
   );
-  if (hold === undefined) throw new Error('Office idle hold not observed');
+  if (hold === undefined || fonts === undefined) throw new Error('Office idle hold not observed');
   // The browser has closed and the file is gone: nothing holds a gateway connection to A now.
   const stopped = await idleRetired(admin, session.email, hold.sinceId, CONTROL_MS);
   const file = { before: digest(written), after: digest(after) };
-  return { held: hold.held, file, editor, stopped };
+  return { held: hold.held, fonts, file, editor, stopped };
 }
 
 /**

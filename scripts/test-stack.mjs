@@ -1,9 +1,9 @@
 /** Local full-stack verification entry: prerequisites before any resource, exact-owned retirement. */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, realpathSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { arch, homedir, platform, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
 import { createDockerCommands } from '../platform/test/docker-command.ts';
@@ -92,13 +92,18 @@ function probeChromium() {
   }
 }
 
+const FONT_EXTENSIONS = new Set(['.ttf', '.otf', '.ttc', '.otc']);
+
 /**
- * The operator font directory the delivered compose binds read-only; never created here.
+ * The operator font directory the delivered compose binds read-only, holding a regular font file
+ * in it or a subdirectory; never created here.
  * @param {string} path
  */
-function probeFonts(path) {
+export function probeFonts(path) {
   try {
-    return statSync(path).isDirectory();
+    return readdirSync(path, { recursive: true, withFileTypes: true }).some(
+      (entry) => entry.isFile() && FONT_EXTENSIONS.has(extname(entry.name).toLowerCase()),
+    );
   } catch {
     return false;
   }

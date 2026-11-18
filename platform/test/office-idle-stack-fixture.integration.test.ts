@@ -3,10 +3,13 @@ import type { IncomingHttpHeaders, Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it } from 'vitest';
 import {
+  fontsShown,
   heldRunning,
   idleMinutes,
   idleRetired,
   officeIdleLine,
+  OPERATOR_FONTS,
+  operatorFonts,
 } from './office-idle-stack-fixture.ts';
 
 const A = 'office@deployment.example.test';
@@ -171,11 +174,70 @@ it('prints the editor session by its screenshots and error counts', () => {
   };
   const held = { heldMs: 210_004, status: 'running', restarted: false, idleStops: 0 };
   const file = { before: { size: 1, sha256: 'a' }, after: { size: 2, sha256: 'b' } };
-  const evidence = { held, file, editor, stopped: { stoppedMs: 95_000, reason: 'idle' as const } };
+  const fonts = { files: 11, families: ['SimHei'] };
+  const stopped = { stoppedMs: 95_000, reason: 'idle' as const };
+  const evidence = { held, fonts, file, editor, stopped };
 
   const line = officeIdleLine(evidence);
 
   const counts = { consoleErrors: 2, pageErrors: 0, failedRequests: 0, externalRequests: 0 };
   expect(line).toEqual({ ...evidence, editor: { screenshots: editor.screenshots, ...counts } });
   expect(() => officeIdleLine(undefined)).toThrow('Office idle evidence missing');
+});
+
+const CUSTOM = '/usr/share/fonts/truetype/custom';
+// fc-scan's lines as the pinned Document Server prints them (§51-g): one per face, a .ttc twice.
+const SCANNED = [
+  `${CUSTOM}/simhei.ttf\tSimHei,黑体`,
+  `${CUSTOM}/gb2312/fangsong.ttf\tFangSong_GB2312,仿宋_GB2312`,
+  `${CUSTOM}/SourceHanSans.ttc\tSource Han Sans SC,思源黑体`,
+  `${CUSTOM}/SourceHanSans.ttc\tSource Han Sans TC,思源黑體`,
+  '',
+].join('\n');
+const FONTS = [
+  { file: `${CUSTOM}/simhei.ttf`, families: ['SimHei', '黑体'] },
+  { file: `${CUSTOM}/gb2312/fangsong.ttf`, families: ['FangSong_GB2312', '仿宋_GB2312'] },
+  {
+    file: `${CUSTOM}/SourceHanSans.ttc`,
+    families: ['Source Han Sans SC', '思源黑体', 'Source Han Sans TC', '思源黑體'],
+  },
+];
+
+it('runs fc-scan over the bound operator font directory inside the Document Server', () => {
+  expect(OPERATOR_FONTS).toEqual([
+    'exec',
+    'dsh-team-documentserver',
+    'fc-scan',
+    '--format',
+    '%{file}\t%{family}\n',
+    '/usr/share/fonts/truetype/custom',
+  ]);
+});
+
+it("groups fc-scan's faces by file with every family of each face", () => {
+  expect(operatorFonts(SCANNED)).toEqual(FONTS);
+  expect(() => operatorFonts('')).toThrow(/font directory .*custom has no font file/);
+});
+
+it('counts the files and sorts the matched families when every file has one in the editor', () => {
+  const names = ['Arial', '黑体', 'FangSong_GB2312', 'Source Han Sans TC', 'SimHei', 'SimHei'];
+
+  const shown = fontsShown(FONTS, names);
+
+  expect(shown).toEqual({
+    files: 3,
+    families: ['FangSong_GB2312', 'SimHei', 'Source Han Sans TC', '黑体'],
+  });
+});
+
+it.each([
+  [
+    'a file has no family among the names',
+    ['SimHei', 'Source Han Sans SC'],
+    /fangsong\.ttf.*FangSong_GB2312, 仿宋_GB2312/,
+  ],
+  ['the names are not an array', { Name: 'SimHei' }, /not a string array/],
+  ['a name is not a string', ['SimHei', 7], /not a string array/],
+])('fails the font check when %s', (_case, names, message) => {
+  expect(() => fontsShown(FONTS, names)).toThrow(message);
 });

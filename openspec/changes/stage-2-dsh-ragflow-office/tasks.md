@@ -3651,7 +3651,7 @@ Evidence (#556):
 - [ ] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
 - [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
 - [x] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文；无 Session 提示由 `plugins/office-hints/client.test.js` 覆盖（发布版 UI 不可达，用户决定 2026-11-13，见第 48 节）。#439 合并后，由下一节 fixture 提交补结果时勾选本项（#438 的插件部分已合入）。
-- [ ] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
+- [x] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
   - DOCX、XLSX、PPTX 编辑保存后写回原文件，Agent 读到最新内容；
   - 两个用户的同名文件互不串写；
   - 跨用户攻击被拒：伪造的文件令牌、跨实例回调、已知 A 的 host 和路径时用猜测的 key 回调或打开编辑器、对 config 路由的访问；
@@ -6448,7 +6448,7 @@ Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`�
 51-f、51-g：空闲和字体（18.5 的最后两项）。fixture 作者的拆分（同在 2026-11-15「多个 PR」的用户决定之内）：两项合起来估计超过 400 行，所以拆成两个顺序 PR。字体检查要借空闲 lane 的编辑会话，所以空闲在前。51-g 合入后关闭 #440。
 
 - 51-f（51.10–51.11）：空闲分钟数调到 1，A 只开着 DOCX 编辑器。越过空闲判定窗口后，实例仍在运行、没有空闲停止审计，随后同一会话保存并写回。正向对照：关掉浏览器后，同一实例在时限内被空闲停止。
-- 51-g（51.12–51.13）：在 51-f 的同一个编辑会话里读编辑器载入的字体表。运营方字体目录里的每个字体文件，都至少有一个 family 名在表中。条目在 51-f 合入后补写进本节，再做 fixture 审查。
+- 51-g（51.12–51.13）：在 51-f 的同一个编辑会话里读编辑器载入的字体表。运营方字体目录里的每个字体文件，都至少有一个 family 名在表中。
 
 51-f 开工前已核实：
 
@@ -6473,7 +6473,7 @@ Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`�
   - `withWorkFiles` 结束时经 `docker exec` 进 A 删除文件（`sidebar-archive-stack-fixture.ts:236-250`），所以空闲停止的对照必须放在它之后。
 - lane 顺序：profile lane 之后 A 仍在运行；B 和 `knowledge@` 员工都已停用。之后只剩 `docserviceSpawns` 的计数，没有步骤再进 A。
 
-- [ ] 51.10（51-f）新增 `platform/test/office-idle-stack-fixture.ts`：
+- [x] 51.10（51-f）新增 `platform/test/office-idle-stack-fixture.ts`：
   - 编辑器夹具只做最小改动：导出 `editAndSave` 和 `Meeting`，其余不变。
   - 管理员请求经 `{ base, cookie }`。非 200 时抛错，错误信息带方法、路径和状态码，不带 cookie。
   - `idleMinutes(admin, minutes)`：GET runtime-config，PUT `{ ...原值, idleMinutes: minutes }`，返回一个恢复函数，它把原值整体 PUT 回去。
@@ -6497,7 +6497,7 @@ Must preserve：已有 stack 场景和断言不变；provider 已有的 `write`�
     - `office` 加 `administrator`；
     - `ConversationEvidence` 加 `officeIdle`，`stackEvidence` 直接打印 `officeIdleLine(evidence.officeIdle)`，不进 `:740` 的解构；
     - 按 max-lines 口径仍小于 800。
-- [ ] 51.11（51-f）测试和文档：
+- [x] 51.11（51-f）测试和文档：
   - `office-idle-stack-fixture.integration.test.ts`，对象是监听随机端口的本机 HTTP 替身。它只认带固定 cookie 的请求；审计查询必须带 `eventType=instance.stopped` 和 `email=<A>`，否则回 400；每个用例都先放一条 id 不大于 `sinceId`、`reason: 'admin'` 的旧审计，证明它被忽略。失败用例表驱动：
     - `idleMinutes`：PUT 的 body 是原值、只改了 `idleMinutes`，请求带 `origin` 和 `content-type`；恢复函数 PUT 回原值；
     - `heldRunning`（`holdMs` 很小）：
@@ -6531,6 +6531,59 @@ Suggested fixture level: expanded（同第 51 节）
 Minimal mergeable slice: 51-f 为 51.10–51.11 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景、截图和编辑器夹具的现有调用不变）、Resource limits（有界等待，文件在结束时删除）、Config（运行期改空闲分钟数，结束时恢复）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency。
 Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜像代码不改；每次运行仍然只有 5 次付费检索；空闲分钟数在 lane 结束时恢复。
+
+结果（51-f，#626，合并提交 `86819f6`）：A 的 DOCX 编辑器开着时，一分钟空闲阈值下保持 210006 毫秒仍为 `running`，没有空闲停止审计，随后保存写回；浏览器关闭后 175158 毫秒内被空闲停止，审计 `reason: idle`。修复 1 次：断言实测的 `heldMs`，阈值恢复改走 `retiringOnError`。按 CI 口径 390 行。
+
+51-g 开工前已核实（`onlyoffice/documentserver:9.4.0`，在本机临时容器里，`--network none`，只读挂载 `assets/fonts`）：
+
+- 启动脚本的 allfonts 步骤（第 52 节）运行 `allfontsgen --use-system=true`。它扫描系统字体目录，其中包括 compose 只读挂载的 `/usr/share/fonts/truetype/custom`（`deploy/compose.yml:63-66`），生成 `sdkjs/common/AllFonts.js`。
+- 编辑器页面 `web-apps/apps/documenteditor/main/index.html` 用 script 载入 `AllFonts.js`。`sdk-all.js` 读完 `window.__fonts_infos` 就删掉它，字体表留在 `AscFonts.g_font_infos`，其中每项是一个 `CFontInfo`，有 `Name` 字段。
+- 同一镜像的对照：
+  - 挂载本机 `assets/fonts` 时，`__fonts_infos` 有 154 项，包括 `SimHei`、`FangSong_GB2312`、`KaiTi_GB2312`、`FZXiaoBiaoSong-B05S`、`Source Han Sans SC` 等 10 个名字；
+  - 不挂载时只有 144 项，这些名字一个都没有。
+- 镜像里有 `fc-scan`。`fc-scan --format '%{file}\t%{family}\n' /usr/share/fonts/truetype/custom` 会递归子目录，每个 face 输出一行（本机 11 个文件各一行；`.ttc` 和可变字体会有同一文件的多行）。family 以逗号分隔多语言名，例如 `FangSong_GB2312,仿宋_GB2312`。本机共 11 个文件，每个文件都至少有一个 family 在 `__fonts_infos` 里。
+- `assets/fonts` 由运营方提供，不入库，内容因部署而异。所以期望值在运行时取自 DS 容器，不写死。
+- 前提检查只看目录是否存在：`scripts/test-stack.mjs:99-105` 的 `probeFonts` 是 `statSync(path).isDirectory()`，原因文本为 `assets/fonts directory missing`（`scripts/test-stack-prerequisites.mjs:98`）。空目录会通过前提，要到最后一个 Office lane 才失败。
+- 编辑器夹具的 `typeAndSave`（`office-editor-stack-fixture.ts:199-216`）在等到 `EDITOR_READY` 后调用 `loaded()`，此时手里有可见编辑器 iframe 的 `FrameLocator`（`editor`）。`loaded` 里抛出的错误会被同一个 `catch` 包成带 `frameChain` 的错误。
+
+- [x] 51.12（51-g）`office-idle-stack-fixture.ts` 加字体检查：
+  - `OPERATOR_FONTS` 是 argv `['exec', DOCUMENT_SERVER, 'fc-scan', '--format', '%{file}\t%{family}\n', '/usr/share/fonts/truetype/custom']`，在 `withWorkFiles` 之前经 `lane.run` 运行一次。
+  - `operatorFonts(output)`：按 file 分组，families 取并集，得到 `{ file, families }[]`。一个文件都没有时抛错，说明运营方字体目录为空。
+  - 编辑器夹具只改 `Meeting.loaded` 的签名（接收可见编辑器 iframe 的 `FrameLocator`）、`typeAndSave` 的参数类型和 `:206` 的调用（传入 `editor`），以及 `FrameLocator` 的 type import；51-d、51-e 的调用忽略这个参数，行为不变。
+  - `loaded` 里先读字体表并调用 `fontsShown`，通过后才调空闲分钟数：用 `editor.locator('#editor_sdk').evaluate(函数)` 在这个 frame 里取 `AscFonts.g_font_infos` 的 `Name` 列表，参数传函数，不用字符串、`eval` 或 `new Function`。读不到数组时抛错。字体检查失败时空闲分钟数还没改，错误由 `typeAndSave` 的 `catch` 带上 `frameChain`。
+  - `fontsShown(fonts, names)`：names 不是字符串数组时抛错；要求每个文件至少有一个 family 在 names 里，否则抛错，列出缺的文件和它们的 family；返回 `{ files: 去重后的文件数, families: 命中名字去重后排序 }`。
+  - evidence 的 `officeIdle` 加 `fonts`。
+- [x] 51.13（51-g）测试和文档：
+  - 前提检查：`probeFonts` 改为目录存在且其中（含子目录）至少有一个扩展名为 `ttf`、`otf`、`ttc` 或 `otc`（不分大小写）的普通文件，并导出；原因文本改为 `assets/fonts directory missing or has no font file`。新文件 `test-stack-fonts.integration.test.ts` 对真实的 `probeFonts` 加用例（`test-stack.integration.test.ts` 已近 800 行的 max-lines，所以另起一个文件），四种扩展名各有一例为 true；目录缺失、空目录、只有空子目录、只有 `.DS_Store` 各为 false，子目录里有一个 `.TTF` 文件为 true；原有的注入用例改用新原因文本。
+  - 集成测试：
+    - `operatorFonts`：解析多行、子目录、多语言 family、同一文件多行归并；空输出抛错；
+    - `fontsShown`：全部命中；缺一个；names 不是字符串数组；
+    - 逐字锁定 `OPERATOR_FONTS`。
+  - `vitest.config.ts`：`fc-scan` 是一次 docker exec，stack `testTimeout` 从 5_280_000 改为 5_310_000，注释照现有写法加一句。
+  - 文档：
+    - `docs/LOCAL_STACK.md` 前提第 7 条写明 `assets/fonts/` 里至少要有一个字体文件，否则前提检查失败；证据表的 Office 空闲行加上 `fonts`：`{ files, families }`，即运营方字体文件数，以及在编辑器字体表里命中的 family（去重排序），并说明保持开始前就检查；
+    - `platform/test/README.md` 本机全栈段落里空闲 lane 那一句补上字体。
+  - 勾选 18.5。
+
+51-g 未核实，由第一次 stack 运行验证；做不到时停止并报告，不放宽断言：
+
+- 经 DSH 插件代理的编辑器 frame 里能读到 `AscFonts.g_font_infos`，内容与临时容器生成的一致。
+- stack 的 DS 以 `docker exec` 的默认用户运行 `fc-scan`，能读只读挂载。
+
+行数：51-g 估计 170 到 270 行，包括本段规格约 50 行。
+
+剩余风险：
+
+- 字体表证明编辑器载入了运营方字体的名字，不证明字形渲染正确；渲染不在 18.5 的验收范围内。
+- 一个文件只要有一个 family 命中即算出现；同一字体的其他语言名不要求命中。
+- `loaded` 里字体检查排在改空闲分钟数之前，这个顺序没有用例锁定：反过来时唯一的差别是检查失败后多一对 runtime-config 写入，`retiringOnError` 仍会恢复原值。
+
+结果（51-g，#627）：开发期本机 `pnpm test:stack` 1/1 通过。`officeIdle.fonts` 为 `files: 11`，命中 `FZXiaoBiaoSong-B05S`、`FangSong_GB2312`、`KaiTi_GB2312`、`SimHei` 和 6 个 `Source Han Sans SC` 字重，共 10 个名字，与临时容器的对照一致；「51-g 未核实」两项都已确认。修复 1 次：前提检查的四种扩展名各加一个用例。18.5 的六项至此都有本机证据。
+
+Suggested fixture level: expanded（同第 51 节）
+Minimal mergeable slice: 51-g 为 51.12–51.13 一个 PR，合入后关闭 #440
+Risk packs: selected - Legacy compatibility（编辑器夹具 `Meeting.loaded` 的现有调用和截图不变；前提检查对已有非空字体目录行为不变）、Resource limits（只多一次 docker exec 和一次 frame 求值）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency、Config。
+Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜像代码不改；每次运行仍然只有 5 次付费检索；空闲 lane 的保持、写回和对照不变。
 
 ## 52. 技术债 #622：本机全栈等 Document Server 启动脚本跑完，再打开编辑器
 
