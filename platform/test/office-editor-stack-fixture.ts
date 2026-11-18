@@ -195,13 +195,15 @@ const frameChain = (page: Page) =>
 
 const passed = () => Promise.resolve();
 
-/** Clicks the document area through the iframe once `loaded` passed, types the nonce and saves. */
+/** Clicks the document area through the iframe once `loaded` passed, types the nonce and, unless
+ * `save` is false, saves (an unsaved edit is what the forgotten lane (#624) needs). */
 async function typeAndSave(
   page: Page,
   ext: Ext,
   nonce: string,
   timeout: number,
   loaded: Meeting['loaded'] = passed,
+  save = true,
 ) {
   const { at, keys } = EDITING[ext];
   try {
@@ -214,7 +216,7 @@ async function typeAndSave(
     if (box === null) throw new Error('Office editor area has no box');
     await area.click({ position: { x: box.width * at[0], y: box.height * at[1] }, timeout });
     await page.keyboard.type(nonce);
-    for (const key of keys) await page.keyboard.press(key);
+    for (const key of keys) if (save || key !== SAVE_KEY) await page.keyboard.press(key);
   } catch (cause) {
     const frames = JSON.stringify(await frameChain(page));
     throw new Error(`Office editor typing or saving failed, frames ${frames}`, { cause });
@@ -347,7 +349,7 @@ async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string, 
   if (saved === undefined) throw new Error('Office editor save not observed');
   return { editor, written, after };
 }
-export { counted, digest, editAndSave, type Digest, type Meeting };
+export { counted, digest, editAndSave, typeAndSave, type Digest, type Meeting };
 
 type Edited = Awaited<ReturnType<typeof editAndSave>>;
 const SIDES = ['A', 'B'] as const;
