@@ -6669,8 +6669,9 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
   - 取值写死：`RETIRE_MS = 30_000`，`CASE_TIMEOUT_MS` 从 90_000 改为 120_000。注释写明算式：`status` 的硬超时 15 秒，加上 fixture 收尾（最多 4 个 settle：fake platform、可能的 group member、child 进程组、owner）在正常退出时的耗时，共 30 秒；每个 settle 的理论硬上限约 22 秒（两次 `observeProcess` 各 5 秒、`ps` 2 秒、`waitForAbsence` 约 10 秒），全取上限不现实，不按它算。等待的期限因此约为用例开始后 90 秒，不短于原来的「初始化后 60 秒」。调大 `CASE_TIMEOUT_MS` 是因为等待已按 owner 存活来走，预算只是 owner 活着时的上限，不是单纯放宽。
   - `child-ready.json` 的 10 秒等待和其余断言不变。
 - [ ] 53.3 测试：
+  - verify-browser-runtime：`settled` 的到期分支另有一个确定性用例：hold 的 stand-in 就绪后不发信号，以约 1 秒的期限调用 `settled`，断言错误写明 wrapper 未在期限内退出、stand-in 存活。
   - verify-browser-runtime：新增一个确定性用例，用例预算 `SIGNAL_CASE_MS`。用 `hold` 的 stand-in 启动 wrapper，按用例期限 `marker(run, 'started.json', deadline)` 等到 `started.json` 后不发信号，再以约 1 秒的短期限等 `signal.json`。断言错误信息含 `signal.json`、wrapper 未退出、`started.json` 存在、stand-in 存活；结束时照常 `killStandIn` 并删目录。
-  - trusted-docker-retirement：新增一个确定性用例，走 `retirementCase`，用例预算 `CASE_TIMEOUT_MS`。照 custody `:486-505` 的做法：start，等 `child-ready.json`，不 cancel，直接 `killOwner`；然后以 `retirementCase` 给的期限调用 `awaitResult`，断言它在 5000 毫秒内以「owner 已退出但没有发布 result.json」失败。fixture 收尾照常通过。
+  - trusted-docker-retirement：新增一个确定性用例，走 `retirementCase`，用例预算 `CASE_TIMEOUT_MS`。照 custody `:486-505` 的做法：start，等 `child-ready.json`，不 cancel，直接 `killOwner`；然后以 `retirementCase` 给的期限调用 `awaitResult`，断言它在 15000 毫秒内以「owner 已退出但没有发布 result.json」失败（上限盖住一次轮询和一次最长 5 秒的身份复核；旧实现要等满 60 秒）。fixture 收尾照常通过。
   - TDD 顺序（retirement）：
     1. 先把现有的 `vi.waitFor` 原样提取为 `awaitResult(directory, owner, deadline)`，只重构、不改行为，现有用例照过；
     2. 加新用例，此时它要等满 60 秒才以笼统错误失败，「5000 毫秒内」的断言或 vitest 超时都算红灯，记录下来；

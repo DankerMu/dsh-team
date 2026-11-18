@@ -261,3 +261,27 @@ it(
   },
   SIGNAL_CASE_MS,
 );
+
+it(
+  'attributes a wrapper that does not exit by the deadline to the live stand-in',
+  async () => {
+    const deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS;
+    const run = await startWrapper(['docker', '--help'], true);
+    try {
+      await marker(run, 'started.json', deadline);
+      // No signal is sent, so the held stand-in keeps the wrapper alive past this short deadline.
+      const pending: unknown = await settled(run, Date.now() + 1000).catch(
+        (error: unknown) => error,
+      );
+      expect(pending).toBeInstanceOf(Error);
+      const { message } = pending as Error;
+      expect(message).toContain('Wrapper did not exit by the case deadline');
+      expect(message).toContain('wrapper not exited');
+      expect(message).toMatch(/stand-in \d+ alive/);
+    } finally {
+      await killStandIn(run.root);
+      await rm(run.root, { recursive: true, force: true });
+    }
+  },
+  SIGNAL_CASE_MS,
+);

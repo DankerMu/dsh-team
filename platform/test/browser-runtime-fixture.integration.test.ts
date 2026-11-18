@@ -10,6 +10,7 @@ const PUBLICATIONS = 50;
 it('sees a file published at any moment after the wait begins, before or after the watcher is live', async () => {
   const root = await mkdtemp(join(tmpdir(), 'dsh-team-await-file-'));
   try {
+    // Only macOS can turn this red (FSEvents' window before the watcher is live); Linux inotify is live when watch() returns.
     // Each publication lands 0-49 ms in, across the window before a macOS watcher delivers events.
     for (let index = 0; index < PUBLICATIONS; index++) {
       const path = join(root, `marker-${String(index)}.json`);

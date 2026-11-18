@@ -360,7 +360,8 @@ it(
       await expect(awaitResult(directory, owner, deadline, fixture.observeProcess)).rejects.toThrow(
         'owner exited without publishing result.json',
       );
-      expect(Date.now() - since).toBeLessThan(5000);
+      // One poll plus one identity recheck of up to 5 s; the old fixed wait took 60 s.
+      expect(Date.now() - since).toBeLessThan(15_000);
     });
   },
   CASE_TIMEOUT_MS,
