@@ -24,7 +24,7 @@
     "lint": "eslint . --max-warnings 0 && pnpm lint:deps && pnpm lint:tests && pnpm lint:shell && pnpm lint:agents && pnpm lint:config && pnpm lint:ci",
     "lint:deps": "depcruise platform $([ -d plugins ] && echo plugins) --config .dependency-cruiser.cjs",
     "lint:tests": "bash scripts/check-test-pairing.sh",
-    "lint:shell": "shellcheck scripts/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
+    "lint:shell": "shellcheck scripts/*.sh deploy/*.sh .git-hooks/*.sh .husky/pre-commit .husky/commit-msg",
     "lint:agents": "bash scripts/check-agents-commands.sh",
     "lint:config": "node scripts/check-config.mjs",
     "lint:ci": "node scripts/check-ci-concurrency.mjs",

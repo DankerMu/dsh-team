@@ -7,7 +7,6 @@ import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isDeepStrictEqual, promisify } from 'node:util';
 import { expect, it } from 'vitest';
-import { DOCUMENT_SERVER } from './office-hints-stack-fixture.ts';
 import {
   aGuessScript,
   aReadScript,
@@ -22,7 +21,7 @@ import {
   officeIsolationLine,
   officeIsolationScenario,
   platformAttackScript,
-  platformInfoScript,
+  namespaceInfoScript,
   redactSecrets,
 } from './office-isolation-stack-fixture.ts';
 import { JWT_JS } from './onlyoffice-probe-script.ts';
@@ -255,13 +254,11 @@ it("expects A's and B's keys to name their one editor, k0 and the guessed key no
 
 const [nodeBinary = 'node', ...nodeFlags] = NODE;
 /** The script under the local `node` as the containers run it; stdout parsed as JSON. */
-const local = async (script: string, argv: string[], env: Record<string, string>) => {
+const local = async (script: string, argv: string[], env: Record<string, string>, input = '') => {
   const options = { env: { ...process.env, ...env } };
-  const { stdout } = await promisify(execFile)(
-    nodeBinary,
-    [...nodeFlags, script, ...argv],
-    options,
-  );
+  const pending = promisify(execFile)(nodeBinary, [...nodeFlags, script, ...argv], options);
+  pending.child.stdin?.end(input);
+  const { stdout } = await pending;
   return JSON.parse(stdout) as unknown;
 };
 const hex = () => randomBytes(32).toString('hex');
@@ -341,34 +338,35 @@ async function commandStub(open: readonly string[]) {
 
 const INFO_KEYS = { k1: SECRETS.k1, kB: SECRETS.kB, k0: SECRETS.k0, kGuessed: SECRETS.kGuessed };
 
-it('posts info for each key to the Command Service with a body-token JWT and keeps no key', async () => {
+it('posts info for each key over loopback with a body-token JWT read from stdin and keeps no key', async () => {
   const stub = await commandStub([SECRETS.k1, SECRETS.kB]);
   try {
-    const script = platformInfoScript('127.0.0.1', INFO_KEYS, stub.port);
-    const observed = await local(script, [], { DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET });
+    const script = namespaceInfoScript(INFO_KEYS, stub.port);
+    const env = { DOCUMENT_SERVER_JWT_SECRET: hex() };
+    const observed = await local(script, [], env, JWT_SECRET);
     expect(observed).toEqual(EXPECTED_INFO);
     expect(stub.seen).toEqual(Array(4).fill('127.0.0.1 info true'));
     for (const key of Object.values(INFO_KEYS)) expect(JSON.stringify(observed)).not.toContain(key);
-    const forged = await local(script, [], { DOCUMENT_SERVER_JWT_SECRET: hex() });
+    const forged = await local(script, [], { DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET }, hex());
     const refused = { status: 200, error: 6 };
     expect(forged).toEqual({ k1: refused, kB: refused, k0: refused, kGuessed: refused });
   } finally {
     await stub.close();
   }
-  const delivered = platformInfoScript(DOCUMENT_SERVER, INFO_KEYS);
-  expect(delivered).toContain('request({ host: "dsh-team-documentserver", port: 80, method');
-  expect(delivered).toContain("const headers = { host: 'dsh-team-documentserver' };");
-  expect(delivered).toContain('const jwtSecret = process.env.DOCUMENT_SERVER_JWT_SECRET;');
+  const delivered = namespaceInfoScript(INFO_KEYS);
+  expect(delivered).toContain('request({ host: "127.0.0.1", port: 80, method');
+  expect(delivered).toContain("const headers = { host: '127.0.0.1' };");
+  expect(delivered).toContain("const jwtSecret = readFileSync(0, 'utf8');");
 });
 
 const FILE = '/data/work/编辑写回.docx';
 const OTHER_K1 = 'e1'.repeat(32);
 const DIFFERS: Record<string, object> = {
   A: { k1: OTHER_K1, k0: SECRETS.k0, kGuessed: SECRETS.kGuessed },
-  platform: { ...EXPECTED_INFO, kGuessed: { ...OPEN, key: SECRETS.kGuessed } },
+  holder: { ...EXPECTED_INFO, kGuessed: { ...OPEN, key: SECRETS.kGuessed } },
 };
 
-/** A's exec and the platform answering as the stack does; `failing` rejects quoting argv, answers
+/** A's exec and the holder answering as the stack does; `failing` rejects quoting argv, answers
  * `DIFFERS`, or answers a key as non-JSON text. `seen` gets each step's label and argv. */
 function guessLane(seen: string[][], failing = '', how = 'reject') {
   const answer = (label: string, args: readonly string[], reply: object) => {
@@ -381,29 +379,29 @@ function guessLane(seen: string[][], failing = '', how = 'reject') {
   const own = { k1: SECRETS.k1, k0: SECRETS.k0, kGuessed: SECRETS.kGuessed };
   return {
     exec: (args: readonly string[]) => answer('A', args, own),
-    platformRead: async (script: string) =>
-      record(JSON.parse(await answer('platform', [script], EXPECTED_INFO))),
+    namespaceRead: async (script: string) =>
+      record(JSON.parse(await answer('holder', [script], EXPECTED_INFO))),
   };
 }
 
-it("recomputes k1 in A, then asks about A's, B's, k0 and the guessed key from the platform", async () => {
+it("recomputes k1 in A, then asks about A's, B's, k0 and the guessed key from the holder", async () => {
   const seen: string[][] = [];
   const info = await guessedKeyInfo(guessLane(seen), SECRETS.k1, SECRETS.kB, FILE);
 
   expect(info).toEqual(EXPECTED_INFO);
   const [[, ...argv] = [], [, script] = []] = seen;
-  expect(seen.map(([label]) => label)).toEqual(['A', 'platform']);
+  expect(seen.map(([label]) => label)).toEqual(['A', 'holder']);
   expect(argv.slice(0, -1)).toEqual([...NODE, aGuessScript(FILE)]);
   expect(argv.at(-1)).toMatch(/^[0-9a-f]{64}$/);
-  expect(script).toBe(platformInfoScript(DOCUMENT_SERVER, INFO_KEYS));
+  expect(script).toBe(namespaceInfoScript(INFO_KEYS));
 });
 
 it.each([
   ['A', 'reject', 'ETIMEDOUT', ['A']],
   ['A', 'differ', 'differs', ['A']],
   ['A', 'text', 'output is not JSON', ['A']],
-  ['platform', 'reject', 'ETIMEDOUT', ['A', 'platform']],
-  ['platform', 'differ', 'differs', ['A', 'platform']],
+  ['holder', 'reject', 'ETIMEDOUT', ['A', 'holder']],
+  ['holder', 'differ', 'differs', ['A', 'holder']],
 ])('fails the %s step answering %s without a key or cause', async (step, how, reason, steps) => {
   const seen: string[][] = [];
   const lane = guessLane(seen, step, how);

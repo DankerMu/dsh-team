@@ -75,11 +75,13 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 /** The TLS proxy's invocation-owned container name, whose middle is the run's ownership label. */
 const TLS_PROXY = /^dsh-team-test-(.+)-tls$/;
+const FIXED = ['dsh-team-platform', 'dsh-team-documentserver', 'dsh-team-documentserver-net'];
 
 function deploymentDaemon(
   cleanupFails: boolean,
   drainFails = false,
-  documentServer = false,
+  /** A foreign fixed-name container present before admission; never adopted. */
+  foreign?: string,
   // One compose `up` fails, selected by whether it starts only the TLS proxy service.
   composeFailure?: { readonly proxy: boolean; readonly stderr: string },
 ) {
@@ -161,9 +163,8 @@ function deploymentDaemon(
     );
   }
   function inspect(kind: string, args: readonly string[], name: string): DockerCommandResult {
-    // A foreign fixed-name Document Server: present, never adopted.
-    if (documentServer && kind === 'container' && name === 'dsh-team-documentserver')
-      return ok(JSON.stringify([{ Id: 'c'.repeat(64), Name: '/dsh-team-documentserver' }]));
+    if (kind === 'container' && name === foreign)
+      return ok(JSON.stringify([{ Id: 'c'.repeat(64), Name: `/${name}` }]));
     if (kind === 'container') {
       const result = inspectProxy(args, name) ?? inspectPlatform(args, name);
       if (result !== undefined) return result;
@@ -417,73 +418,78 @@ it('records completed deployment setup separately from actual owned drainage and
   expect([...daemon.images]).toEqual([['dsh-team-test-sentinel:kept', 'foreign-owner']]);
 });
 
-it('refuses a pre-existing fixed Document Server before any build without adopting or removing it', async () => {
-  const daemon = deploymentDaemon(false, false, true);
-  external.command = daemon.command;
-  external.observe = (event) => daemon.calls.push(['observer', event]);
-  const uid =
-    process.getuid === undefined ? undefined : vi.spyOn(process, 'getuid').mockReturnValue(1000);
-  const reports: DeploymentSetupSnapshot[] = [];
-  const setup = createDeploymentSetupEvidence((snapshot) => {
-    reports.push(snapshot);
-  });
-  let observed: unknown;
-
-  try {
-    await withDeployment(
-      async (_lifecycle, start) => {
-        await start();
-      },
-      undefined,
-      setup,
-    ).catch((error: unknown) => {
-      observed = error;
+// The holder is admitted last, so its refusal also proves the Document Server was admitted absent.
+it.each([
+  ['dsh-team-documentserver', 'Document Server'],
+  ['dsh-team-documentserver-net', 'Document Server namespace holder'],
+])(
+  'refuses a pre-existing fixed %s before any build without adopting or removing it',
+  async (name, subject) => {
+    const daemon = deploymentDaemon(false, false, name);
+    external.command = daemon.command;
+    external.observe = (event) => daemon.calls.push(['observer', event]);
+    const uid =
+      process.getuid === undefined ? undefined : vi.spyOn(process, 'getuid').mockReturnValue(1000);
+    const reports: DeploymentSetupSnapshot[] = [];
+    const setup = createDeploymentSetupEvidence((snapshot) => {
+      reports.push(snapshot);
     });
-    await setup.publish();
-  } finally {
-    external.command = undefined;
-    external.observe = undefined;
-    uid?.mockRestore();
-  }
+    let observed: unknown;
 
-  expect(observed).toBeInstanceOf(Error);
-  expect((observed as Error).message).toBe(
-    'Document Server container already exists or absence is unproven; refusing deployment',
-  );
-  // Both fixed names are admitted in order; nothing past admission ran.
-  expect(
-    daemon.calls
-      .filter((args) => args[0] === 'container' && args[1] === 'inspect')
-      .map((args) => args.at(-1)),
-  ).toEqual(['dsh-team-platform', 'dsh-team-documentserver']);
-  expect(
-    daemon.calls.some((args) => args[0] === 'compose' || args.includes('platform/Dockerfile')),
-  ).toBe(false);
-  expect(daemon.calls.some((args) => args[0] === 'observer')).toBe(false);
-  expect(
-    daemon.calls.some((args) => args[1] === 'rm' && args.at(-1) === 'dsh-team-documentserver'),
-  ).toBe(false);
-  expect(reports).toEqual([
-    {
-      current: 'fixed-name-admission',
-      lastCompleted: 'user-image-preparation',
-      firstFailure: { phase: 'fixed-name-admission', code: 'operation-failed', cause: 'unknown' },
-      operations: {
-        'deployment-host-admission': 'completed',
-        'deployment-lock-admission': 'completed',
-        'user-image-preparation': 'completed',
-        'deployment-creation': 'failed',
-        'fixed-name-admission': 'failed',
+    try {
+      await withDeployment(
+        async (_lifecycle, start) => {
+          await start();
+        },
+        undefined,
+        setup,
+      ).catch((error: unknown) => {
+        observed = error;
+      });
+      await setup.publish();
+    } finally {
+      external.command = undefined;
+      external.observe = undefined;
+      uid?.mockRestore();
+    }
+
+    expect(observed).toBeInstanceOf(Error);
+    expect((observed as Error).message).toBe(
+      `${subject} container already exists or absence is unproven; refusing deployment`,
+    );
+    // Fixed names are admitted in order up to the foreign one; nothing past admission ran.
+    expect(
+      daemon.calls
+        .filter((args) => args[0] === 'container' && args[1] === 'inspect')
+        .map((args) => args.at(-1)),
+    ).toEqual(FIXED.slice(0, FIXED.indexOf(name) + 1));
+    expect(
+      daemon.calls.some((args) => args[0] === 'compose' || args.includes('platform/Dockerfile')),
+    ).toBe(false);
+    expect(daemon.calls.some((args) => args[0] === 'observer')).toBe(false);
+    expect(daemon.calls.some((args) => args[1] === 'rm' && args.at(-1) === name)).toBe(false);
+    expect(reports).toEqual([
+      {
+        current: 'fixed-name-admission',
+        lastCompleted: 'user-image-preparation',
+        firstFailure: { phase: 'fixed-name-admission', code: 'operation-failed', cause: 'unknown' },
+        operations: {
+          'deployment-host-admission': 'completed',
+          'deployment-lock-admission': 'completed',
+          'user-image-preparation': 'completed',
+          'deployment-creation': 'failed',
+          'fixed-name-admission': 'failed',
+        },
+        cleanup: {
+          deploymentDrain: 'not-required',
+          resources: 'confirmed',
+          observation: 'not-required',
+        },
+        evidence: 'retained',
       },
-      cleanup: {
-        deploymentDrain: 'not-required',
-        resources: 'confirmed',
-        observation: 'not-required',
-      },
-      evidence: 'retained',
-    },
-  ]);
-});
+    ]);
+  },
+);
 
 function nestedMessages(error: unknown): string[] {
   if (error instanceof AggregateError) return error.errors.flatMap(nestedMessages);
@@ -537,7 +543,7 @@ it.each([
 ] as const)(
   'attributes a failed TLS deployment compose up to %s with its closed category',
   async (phase, proxy, code, stderr) => {
-    const daemon = deploymentDaemon(false, false, false, { proxy, stderr });
+    const daemon = deploymentDaemon(false, false, undefined, { proxy, stderr });
 
     const { reports, observed } = await tlsDeployment(daemon);
 

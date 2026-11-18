@@ -8,6 +8,7 @@ import { writeComposeConfiguration } from './deployment-compose-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
+import { DOCUMENT_SERVER_NET } from './document-server-net-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -73,9 +74,10 @@ it('starts the bundled Document Server stand-in unpublished, with the fixture JW
       jwtSha256: expected,
     });
 
+    // The platform attaches the namespace holder, which the Document Server joins (#624).
     const platform = await inspectAsync(lifecycle, PLATFORM);
     expect(environmentFacts(platform)).toMatchObject({
-      containerName: DOCUMENT_SERVER,
+      containerName: DOCUMENT_SERVER_NET,
       platformJwtSha256: expected,
     });
   });
@@ -83,7 +85,7 @@ it('starts the bundled Document Server stand-in unpublished, with the fixture JW
 
 /** The same fixed-name admission the deployment fixture performs, in the same order. */
 async function admitFixedNames(lifecycle: UserImageLifecycle) {
-  for (const name of [PLATFORM, DOCUMENT_SERVER]) {
+  for (const name of [PLATFORM, DOCUMENT_SERVER, DOCUMENT_SERVER_NET]) {
     const existing = await lifecycle.commandAsync(['container', 'inspect', name], 30_000);
     if (!isAbsentResource(existing, 'container', name))
       throw new Error(`${name} already exists or absence is unproven; refusing rejection case`);
@@ -100,6 +102,7 @@ it('fails compose before creating any container when the JWT is unset or empty',
     for (const [kind, name] of [
       ['container', PLATFORM],
       ['container', DOCUMENT_SERVER],
+      ['container', DOCUMENT_SERVER_NET],
       ['network', network],
     ] as const)
       await lifecycle.registerResourceAsync(kind, name, ownership);
@@ -144,6 +147,7 @@ it('fails compose before creating any container when the JWT is unset or empty',
       for (const [kind, name] of [
         ['container', PLATFORM],
         ['container', DOCUMENT_SERVER],
+        ['container', DOCUMENT_SERVER_NET],
         ['network', network],
       ] as const)
         expect(

@@ -6778,3 +6778,68 @@ Suggested fixture level: compact - 受信 custody 取消路径
 Minimal mergeable slice: 54.1–54.3 一个 PR
 Risk packs: selected - Legacy compatibility（终态 `interruption`、`failure` 的取值和现有 custody、retirement 断言不变）、Resource limits（周期读取有间隔，命令 close 后停止）、Concurrency（事件、周期读取和 SIGINT 处理器可能同时触发 `cancel`）；not selected - Security、Auth、Schema、Public API、Migration。
 Must preserve：`cancel` CLI 的输出和退出码；`result.json` 的结构和 `interruption`/`failure` 取值；`signalOwnedGroup` 的身份复核；已有断言。
+
+## 55. #624：员工不能经 Command Service 拿到别人的 forgotten 文档
+
+依赖：无。用户决定（2026-11-17 / 2026-11-18）：方向 A；Command Service 只允许 Document Server 网络命名空间内的回环调用（平台产品代码没有调用方，只有测试探针在用）；docservice 的 8000 用「防火墙容器持有网络命名空间、DS 加入它」的方式对实例关闭。拆成两个顺序 PR：55-a（关端口和路由，含各车道的适配）、55-b（forgotten 攻击用例与文档）。55-b 的攻击用例在 55-a 动工**之前**先在修复前的代码上跑一遍并记录结果。
+
+已核实（`main` `7c1ad44`，镜像 `onlyoffice/documentserver:9.4.0` 在断网一次性容器里实测，上游源码 tag v9.4.0.131）：
+
+- 实例拿得到 DS 的共享 JWT：受管覆盖层把 `jwtSecret` 交给插件签编辑器配置（`platform/src/managed-config/generate.ts:295-299`）；`docs/DEPLOY.md` 第 7 节已把它列为共享凭据。DS 9.4 校验编辑器 token（Browser）和 Command Service（Inbox）都取 `secret.inbox`（`Common/sources/tenantManager.js:174-177`、`:216-219`），`secret.browser` 不被读取，所以不能靠拆密钥把 Command Service 和编辑器分开（实测：拆开后编辑器握手 4006 invalid signature）。
+- `ipfilter` 按 `forwarded(req)` 的最后一项判断，也就是请求方自己写的 `X-Forwarded-For` 最左项（`Common/sources/utils.js:1051-1071`），可伪造；无效值不命中任何规则时默认放行；开 `useforrequest` 会连 `/healthcheck` 一起拦。不用。
+- docservice `server.listen(port)` 不带 host（`DocService/sources/server.js:181`），镜像内 `*:8000`；nginx 在 `0.0.0.0:80`/`[::]:80`；Docker 内嵌 DNS 只在回环。实例网桥是普通 bridge（`platform/src/orchestrator/networks.ts:309-316`），实例 +2 能直连 `+4:8000/command`（实测进 handler）。
+- nginx：`/command` 和 `/coauthoring/CommandService.ashx` 都落进 `location /` → `http://docservice`（`ds-docservice.conf:86-97`），带版本前缀的通配规则（`:108-111`）同样转发；Express 还接受大小写变体、尾斜杠、版本前缀和 GET 的 CommandService。镜像已有先例 `/internal`、`/info`：`~*` 加可选版本前缀，`allow 127.0.0.1; deny all;`（`:61-76`）。`/etc/nginx/includes/ds-*.conf` 由 `ds.conf:8` glob 引入，启动脚本不重写这个目录里的其他文件；文件名必须排在 `ds-docservice.conf` 之前。
+- 实测规则（在 `ds-acl-command.conf`）：`location ~* ^(\/[\d]+\.[\d]+\.[\d]+[\.|-][\w]+)?\/(command|coauthoring\/commandservice\.ashx)\/?$ { allow 127.0.0.1; deny all; proxy_pass http://docservice; }`，全部变体 403，`/healthcheck`、api.js、ConvertService 仍 200。`allow 127.0.0.1` 不含 `::1`。
+- DS 必须主动连实例：插件给 DS 的 `documentUrl`、`callbackUrl` 都在 `internalBaseUrl = http://<+2>:3080`（`generate.ts:297`，插件 `index.ts:301-302`），所以 DS 不能退出实例网桥。
+- 网络命名空间防火墙（Docker Desktop 29.1.3 实测）：规则 `-i lo` 放行、`ESTABLISHED,RELATED` 放行、`tcp dport 80` 放行、`INPUT` 默认 DROP（IPv6 另放行 ipv6-icmp）。客户端到 80 正常、到 8000 超时；DS 内 nginx→`127.0.0.1:8000` 正常；DS 出站到客户端 3080 收到回包；规则装好后再接入的网络同样受约束；DS 容器没有 `NET_ADMIN`，在 DS 里或另一个默认权限容器里都清不掉规则。DS 自己持有命名空间时，`docker restart` DS 会换新命名空间、规则悄悄消失；反过来由防火墙容器持有、DS 用 `network_mode` 加入时，DS 重启不换命名空间。`docker network connect` 不能连加入别人命名空间的容器，所以平台要接的是持有者。
+- 平台按 `DOCUMENT_SERVER_CONTAINER_NAME` 找要接到 +4 的容器，只核对 ID、名字和 `Running`（`platform/src/orchestrator/document-server.ts:33-47`、`:61-91`），不关心它跑的是什么镜像，所以改指持有者不需要改 orchestrator。
+- forgotten 存储在 `App_Data/cache/files/forgotten/<key>/`；列出、取地址、删除只走 Command Service（`DocsCoServer.js:4695-4731`）；下载要 secure_link 签名，密钥每次启动随机生成。A 重新打开时 `commandOpen` 直接读存储（`canvasservice.js:577-586`），不经 Command Service。
+- 现有调用方只有测试：51-e 的 `platformInfoScript`（`platform/test/office-isolation-stack-fixture.ts:173-183`）在平台容器里请求 `http://dsh-team-documentserver:80/command`。插件代理转发挂载点下任意路径（`dsProxy.ts:210-216`），`/sidebar/onlyoffice/ds/command` 能到 DS，DS 看到的来源是 +2。
+- compose 里没有任何 `restart` 策略（`deploy/compose.yml`）；`test:deploy` 在 giap-vps 上用平台镜像跑 DS 替身（`platform/test/deployment-compose-fixture.ts:72-93`），真镜像只在本机 `test:stack`。
+
+### 55-a 关端口和路由
+
+- [ ] 55.1 compose（`deploy/compose.yml`）：
+  - 新服务 `documentserver-net`，`container_name: dsh-team-documentserver-net`。镜像用已有的 `dsh-team-platform:local`，不新增镜像。代价：以后每次重建平台镜像再 `up -d` 都会重建持有者，命名空间随之换新、DS 跟着重启，见 55.4。`user: root`，`cap_add: [NET_ADMIN]`，不挂卷、不发布端口，接 `default` 网络，不加网络别名（55.3 之后没有按名字解析 DS 的调用方，生产代码只用 +4 的 IP）。`tmpfs: /run/dsh-team`。`entrypoint` 是 55.2 的脚本。
+  - `healthcheck`：`test: ["CMD", "test", "-f", "/run/dsh-team/firewall-ready"]`，`interval: 30s`，`start_period: 30s`，`start_interval: 1s`，`retries: 3`。
+  - `documentserver`：`network_mode: service:documentserver-net`，`depends_on: { documentserver-net: { condition: service_healthy, restart: true } }`；其余不变；新增只读 bind：`deploy/document-server-command.conf` → `/etc/nginx/includes/ds-acl-command.conf`，内容即上面实测的规则。
+  - `platform`：`DOCUMENT_SERVER_CONTAINER_NAME` 改为 `dsh-team-documentserver-net`。`.env.example` 的示例值同步改为 `-net`（`.env.example:54`，及 `platform/src/config.test.ts:475,489`、`docs/DEPLOY.md:111`）；`lint:config` 只匹配变量名，不受影响。
+- [ ] 55.2 防火墙脚本 `deploy/document-server-net.sh`，由 `platform/Dockerfile` 的 runtime 阶段复制进镜像，并在该阶段装 `iptables`（只装二进制；平台容器本身没有 `NET_ADMIN`，行为不变）。`package.json` 的 `lint:shell` 加上 `deploy/*.sh`。
+  - `set -eu`；先删掉就绪标记；装 IPv4 规则；`/proc/net/if_inet6` 存在时装 IPv6 规则（只有内核没有 IPv6 时才跳过，其余 IPv6 失败一律退出）；装完逐条 `iptables -C`/`ip6tables -C` 自检。任何一步失败就非零退出，不写标记、不进入保持阶段（失败方向：DS 起不来，不是暴露）。
+  - 自检通过后才写 `/run/dsh-team/firewall-ready`，再长驻保持命名空间（`exec sleep infinity` 之类），收到 SIGTERM 正常退出。
+- [ ] 55.3 车道适配（既有断言内容不变；新增的拦截断言见下）：
+  - 两条车道的 compose 覆盖（`platform/test/deployment-compose-fixture.ts:137-141`，stack 车道同类位置）给 `documentserver-net` 设 `image` 为本次捕获的平台镜像 ID、`labels` 为 ownership；`deployment-compose-fixture.integration.test.ts:94-126` 同步，delivered volumes 的 `toEqual`（`:126`）加上新的 command.conf bind。
+  - 固定名容器 `dsh-team-documentserver-net` 与 `dsh-team-documentserver` 同等对待：`deployment-fixture.ts:45,84`，`deployment-document-server.docker.test.ts:86`、`:100-105`、`:144-148` 的准入、登记、缺席检查，`platform-stack.stack.test.ts:97-100`、`:628-633` 的 FIXED_CONTAINERS 和登记；`deployment-document-server.docker.test.ts:76-80` 的平台 `containerName` 断言改为 `-net`。
+  - 51-e `guessedKeyInfo` 的正向探针改为 `docker exec -i dsh-team-documentserver-net node …` 对 `127.0.0.1:80/command` 发出：持有者就是平台镜像，自带 node，与 DS 共享命名空间；JWT 取车道内存里的值经 stdin 传入，不经 argv、不进日志或证据。`office-isolation-stack-fixture.integration.test.ts:358-360` 的 `host` 断言同步。
+  - `test:deploy`：
+    - 暴露验收（`deployment.docker.test.ts:598` 一带）：除平台外仍不允许共享网络命名空间，唯一例外是 `dsh-team-documentserver` 的 `NetworkMode` 恰为 `container:<dsh-team-documentserver-net 的 ID>`；新增检查：`CapAdd` 只有持有者含 `NET_ADMIN`，持有者没有端口发布、不挂 Docker socket。
+    - DS 替身改为在 80 和 8000 上各起一个最小 HTTP 应答（仍以平台镜像的 `USER node` 运行；绑 80 依赖 Docker 在容器命名空间里默认的 `ip_unprivileged_port_start=0`，由实现核实）。
+    - 先做命名空间内正向对照：在持有者里请求 `127.0.0.1:8000` 和 `127.0.0.1:80` 都得到应答。再从两个就绪实例的容器（uid1001）访问自己网桥上的 `+4:80` 得到应答、`+4:8000` 在 3 秒上限内超时；超时与 `ECONNREFUSED` 分开记录，refused 判失败（那说明没有监听，不是被防火墙拦）。这是 Linux 上的防火墙证据。
+  - `test:stack`（真实 DS）：命名空间内正向对照同上（持有者里 `127.0.0.1:8000/command` 得到 docservice 应答）；从一个实例容器（uid1001）对自己的 +4：`:80/healthcheck` 200，`:8000/command` 3 秒超时（同样区分 refused），`:80/command` 403。路由变体矩阵和插件代理路径归 55.5。证据只记状态码和布尔值。
+- [ ] 55.4 文档：`deploy/README.md:11,21,35`、`docs/LOCAL_STACK.md:151`、`docs/DEPLOY.md`（第 3 节自带 Document Server、第 7 节隔离）写明：持有者容器和规则；`DOCUMENT_SERVER_CONTAINER_NAME` 现在指持有者；持有者重启后 DS 断网，须 `docker compose … up -d`（失败方向是 Office 不可用）；这次升级以及以后每次平台镜像更新，`up -d` 都会重建持有者和 DS，运行中的实例在下次启动前用不了 Office（选择复用平台镜像的代价）；外部 Document Server 由运营方自行保证 8000 和两条命令路由对实例不可达。
+- TDD：先写 55.3 里新增的拦截断言，在修复前的代码上记录红灯（本机 stack 的 `/command` 403 和 8000 超时、VPS 的 8000 超时），再做 55.1–55.2 转绿。
+
+### 55-b forgotten 攻击用例与文档
+
+- [ ] 55.5 `test:stack` 新增用例（按 issue #624 的验收标准）：
+  - A 编辑一份文档后让保存失败，使 forgotten 存储里有 A 的文档。具体触发方式由实现核实（例如编辑后让 A 的回调不可达；DS 的回调重试次数和间隔查 DS 默认配置），但不能重启 A、也不能改动该文件：文档 key 的输入含 size 和 mtime（`patch-package.mjs:25`），实例重启会换每实例密钥（`office-profile-stack-fixture.ts:189-190`），否则重新打开用的不是同一个 key，恢复断言做不到。
+  - 正向对照：在 DS 命名空间内回环（同 55.3 的持有者探针）发 `getForgottenList`，能看到 A 的 key（只比较是否包含，不打印 key）。
+  - B 的实例容器（uid1001）用覆盖层里的 JWT，对自己网桥上的 `+4:80`、`+4:8000` 和插件代理 `/sidebar/onlyoffice/ds/` 三条路径，分别发 `getForgottenList`、`getForgotten`、`deleteForgotten`；`:80` 和插件代理上同时覆盖 `/coauthoring/CommandService.ashx`、大小写、尾斜杠、版本前缀变体和伪造的 `X-Forwarded-For: 127.0.0.1`。都被拒或连接失败，拿不到 A 的 key 和内容；之后 A 的 forgotten 副本仍在。
+  - A 重新打开该文档时从 forgotten 副本恢复，内容含 A 失败前的编辑。
+  - 证据不含 key、JWT、文档内容，只有状态、布尔值和摘要比较结果。
+- [ ] 55.6 修复前复现（55-a 动工前）：在 `7c1ad44` 上加 55.5 的用例跑 `test:stack`，如实记录 B 侧是否真能列出 A 的 key、取到内容或删掉副本；记录进 PR 和本节。修复前还没有持有者，正向对照沿用现有平台容器的位置（`platformRead`）。
+- [ ] 55.7 `docs/DEPLOY.md` 第 7 节（`:265-279`）补写 Command Service 的处理和 forgotten 恢复保留。
+
+未核实，由实现确认；做不到时停下报告，不放宽断言：
+
+- 平台镜像（bookworm）里的 iptables 在 giap-vps 内核上能在容器命名空间里装 nf_tables 和 conntrack 规则；AppArmor 不拦。VPS 走 `DSH_TEAM_VERIFICATION_IMAGES` 预制 OCI（`scripts/verification-image.mjs:72-95`）：预制的平台镜像须按新 Dockerfile 重建、含 iptables，否则车道起不来。
+- 持有者重启后 compose 的 `restart: true` 只对 compose 发起的操作生效；`docker restart dsh-team-documentserver-net` 之后 DS 确实断网而不是暴露。
+- 平台接入持有者到 +4 后，DS 的 nginx/docservice 照常监听在新接口上（命名空间共享，预期无需重启 DS）。
+- 触发 forgotten 的最短可靠方式和所需时长。
+
+不做的事：改 orchestrator（关键路径）、改 DS 镜像、新增镜像、用 ipfilter 或拆密钥、给 DS 本身加 `NET_ADMIN`、放宽现有暴露验收的其他部分。
+
+Suggested fixture level: expanded - 安全边界（跨用户数据）、部署拓扑、两条 Docker 车道
+Minimal mergeable slice: 55-a（55.1–55.4）一个 PR；55-b（55.5–55.7）一个 PR；55.6 的复现在 55-a 之前跑。55-a 预计接近 400 计数行（含本节）：超限时先把可移的断言挪到 55-b，仍超限再问用户是否加 `diff-limit-exempt`
+Risk packs: selected - Security（跨用户读取、伪造 XFF、路径变体）、Legacy compatibility（已部署主机升级、`DOCUMENT_SERVER_CONTAINER_NAME` 语义）、Resource lifecycle（固定名容器登记与清理、命名空间持有者重启）、Network（防火墙只管入站，DS 出站和回包不受影响）；not selected - Schema、Public API、Migration、Auth。
+Must preserve：编辑器打开、保存回调、取文件、`/healthcheck`；平台按名字接 +4 的行为和三端点布局；`test:deploy` 其余暴露验收；A 的 forgotten 恢复。

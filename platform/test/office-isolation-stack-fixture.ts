@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
-import { DOCUMENT_SERVER } from './office-hints-stack-fixture.ts';
+import type { NamespaceRead } from './document-server-net-fixture.ts';
 import {
   CALLBACK_JS,
   exchangeJs,
@@ -169,12 +169,12 @@ Object.assign(observed, { k1, k0, kGuessed: createHmac('sha256', process.argv[1]
     file,
   );
 
-/** In the platform container: Command Service `info` for each of `keys` at `host`:`port` with Host
- * `host` and a body-`token` JWT; each answer's status, error and users only, never its echoed key. */
-export const platformInfoScript = (host: string, keys: object, port = 80): string =>
-  script(`const jwtSecret = process.env.DOCUMENT_SERVER_JWT_SECRET;
+/** In the Document Server's namespace: Command Service `info` for each of `keys` at loopback `port`
+ * with a body-`token` JWT signed by the secret on stdin; each answer's status, error and users only. */
+export const namespaceInfoScript = (keys: object, port = 80): string =>
+  script(`const jwtSecret = readFileSync(0, 'utf8');
 ${JWT_JS}
-${exchangeJs(host, host, port)}
+${exchangeJs('127.0.0.1', '127.0.0.1', port)}
 ${READ_JS}
 for (const [name, key] of Object.entries(${JSON.stringify(keys)})) {
   const { status, body } = json(await exchange('POST', '/command', { c: 'info', key, token: jwt({ c: 'info', key }) }));
@@ -289,10 +289,10 @@ async function officeIsolation(lane: OfficeIsolationLane): Promise<OfficeIsolati
 export const officeIsolationScenario = (lane: OfficeIsolationLane) =>
   withWorkFiles(lane, [TARGET_NAME, SOURCE_NAME], 'Office isolation', () => officeIsolation(lane));
 
-/** 18.5 (#440) from the platform position, while A and B edit: A's file recomputes A's registered
- * key, and the Command Service knows A's and B's sessions but none under k0 or a guessed secret. */
+/** 18.5 (#440) from the Document Server's own loopback (#624), while A and B edit: A's file recomputes
+ * A's registered key, and the Command Service knows A's and B's sessions but none under k0 or a guessed secret. */
 export async function guessedKeyInfo(
-  lane: Pick<OfficeIsolationLane, 'exec' | 'platformRead'>,
+  lane: Pick<OfficeIsolationLane, 'exec'> & { readonly namespaceRead: NamespaceRead },
   kA: string,
   kB: string,
   file: string,
@@ -303,9 +303,9 @@ export async function guessedKeyInfo(
   const { k1, k0, kGuessed } = own;
   const secrets = [kA, kB, guessed, k0, kGuessed, k1];
   verify('(info A)', own, { k1: kA }, secrets);
-  const infoScript = platformInfoScript(DOCUMENT_SERVER, { k1: kA, kB, k0, kGuessed });
+  const infoScript = namespaceInfoScript({ k1: kA, kB, k0, kGuessed });
   const info = await guarded('(info)', secrets, async () =>
-    JSON.stringify(await lane.platformRead(infoScript)),
+    JSON.stringify(await lane.namespaceRead(infoScript)),
   );
   return verify('(info)', info, EXPECTED_INFO, secrets);
 }

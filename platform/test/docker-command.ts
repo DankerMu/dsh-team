@@ -29,10 +29,14 @@ export type DockerCommand = (
   acceptedStatus?: number,
 ) => DockerCommandResult;
 
-/** Live Docker process boundary; settlement includes child closure after cancellation. */
+/**
+ * Live Docker process boundary; settlement includes child closure after cancellation. `input` is
+ * written to the CLI's stdin (for `exec -i`); an injected boundary never receives it.
+ */
 export type AsyncDockerCommand = (
   args: readonly string[],
   timeout: number,
+  input?: string,
 ) => Promise<DockerCommandResult>;
 
 export interface DockerCommands {
@@ -213,6 +217,7 @@ export function createDockerCommands(
     args: readonly string[],
     timeout: number,
     execution: DockerExecution,
+    input?: string,
   ): Promise<DockerCommandResult> => {
     if (injectedCommand !== undefined)
       return Promise.resolve().then(() => injectedCommand(args, timeout));
@@ -220,8 +225,8 @@ export function createDockerCommands(
     const { promise, resolve } = Promise.withResolvers<DockerCommandResult>();
     // Native spawn timeout cannot itself tell us whether closure has settled.
     const child = spawn(execution.file, execution.args, { cwd: options.cwd, env: options.env });
-    // Match synchronous no-input execution rather than leaving a writable stdin pipe open.
-    child.stdin.end();
+    // Write any declared input, then close: never leave a writable stdin pipe open.
+    child.stdin.end(input);
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let bytes = 0;
@@ -271,9 +276,9 @@ export function createDockerCommands(
     });
     return promise;
   };
-  const externalAsync: AsyncDockerCommand = (args, timeout) =>
+  const externalAsync: AsyncDockerCommand = (args, timeout, input) =>
     runDockerCommandAsync(selectDockerExecution(args), (execution) =>
-      rawAsync(args, timeout, execution),
+      rawAsync(args, timeout, execution, input),
     );
   if (!bounded) return { command: externalCommand, commandAsync: externalAsync };
   return {
@@ -291,10 +296,10 @@ export function createDockerCommands(
         throw commandFailure(error, timeout, started);
       }
     },
-    commandAsync: async (args, timeout) => {
+    commandAsync: async (args, timeout, input) => {
       const started = args[0] === 'build' ? performance.now() : undefined;
       try {
-        return redactResult(args, await externalAsync(args, timeout), timeout, started);
+        return redactResult(args, await externalAsync(args, timeout, input), timeout, started);
       } catch (error) {
         throw commandFailure(error, timeout, started);
       }

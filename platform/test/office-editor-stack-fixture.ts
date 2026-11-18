@@ -18,7 +18,7 @@ import {
   redactSecrets,
   REGISTRY,
 } from './office-isolation-stack-fixture.ts';
-import type { OfficeIsolationLane } from './office-isolation-stack-fixture.ts';
+import type { NamespaceRead } from './document-server-net-fixture.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, until, workbenchSession } from './stack-browser-fixture.ts';
@@ -175,7 +175,7 @@ export function officeEditorLine(evidence: OfficeEditorEvidence | undefined) {
  * and B's: `secondEmployee` starts B once and yields its instance, `retire` disables it. */
 export type OfficeEditorLane = ArchiveLane & {
   readonly run: DockerOutput;
-  readonly platformRead: OfficeIsolationLane['platformRead'];
+  readonly namespaceRead: NamespaceRead;
   readonly reply: string;
   readonly readBack: Readonly<Record<'marker' | 'command' | 'nonce', string>>;
   readonly secondEmployee: () => Promise<string>;

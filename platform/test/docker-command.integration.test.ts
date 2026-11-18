@@ -1,3 +1,4 @@
+import type * as ChildProcess from 'node:child_process';
 import type * as Fs from 'node:fs';
 import { readdirSync, readFileSync, statSync, utimesSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -33,7 +34,20 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...original, realpathSync, default: { ...original, realpathSync } };
 });
 
+// Docker-free: an echoing Node child stands in for the CLI so its stdin becomes observable.
+const echo = vi.hoisted(() => ({ enabled: false }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const original = await importOriginal<typeof ChildProcess>();
+  // The overloaded signature cannot be restated; this forwards the one form docker-command uses.
+  const spawn = ((file: string, args: string[], options: ChildProcess.SpawnOptions) =>
+    echo.enabled
+      ? original.spawn(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], options)
+      : original.spawn(file, args, options)) as typeof original.spawn;
+  return { ...original, spawn, default: { ...original, spawn } };
+});
+
 afterEach(() => {
+  echo.enabled = false;
   host.platform = 'darwin';
   host.docker = undefined;
   host.resolved.length = 0;
@@ -115,6 +129,21 @@ it('neither writes nor throws when the private configuration directory is unwrit
     const missing = join(directory, 'absent');
     expect(() => construct(missing)).not.toThrow();
     expect(readdirSync(directory)).toEqual([]);
+  });
+});
+
+it('writes the declared input to a live command and closes stdin empty otherwise', async () => {
+  echo.enabled = true;
+  await privateConfig(async (directory) => {
+    const { commandAsync } = createDockerCommands('/', directory, true);
+
+    const piped = await commandAsync(['exec', '-i', 'holder', 'node'], 10_000, 'stdin-only');
+    const plain = await commandAsync(['exec', 'holder', 'node'], 10_000);
+
+    expect({ piped, plain }).toEqual({
+      piped: { status: 0, stdout: 'stdin-only', stderr: '' },
+      plain: { status: 0, stdout: '', stderr: '' },
+    });
   });
 });
 

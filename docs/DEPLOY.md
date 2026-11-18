@@ -98,7 +98,7 @@ stat -c %g /var/run/docker.sock
 
 ### 自带 Document Server（Office）
 
-同一条 Compose 命令会启动自带的 Document Server：镜像 `onlyoffice/documentserver:9.4.0`，固定容器名 `dsh-team-documentserver`，开启 JWT，不发布宿主端口。员工实例每次启动时，平台在该实例网络的子网基址 +4 上接入它。
+同一条 Compose 命令会启动自带的 Document Server：镜像 `onlyoffice/documentserver:9.4.0`，固定容器名 `dsh-team-documentserver`，开启 JWT，不发布宿主端口。它没有自己的网络，而是加入防火墙容器 `dsh-team-documentserver-net` 的网络命名空间（#624）：防火墙容器用平台镜像，以 root 加 `NET_ADMIN` 运行 `deploy/document-server-net.sh`，入站只放行回环、已建立连接的回包和 TCP 80（IPv6 另放行 ICMPv6），规则逐条自检通过后才就绪，Document Server 等它就绪才启动；任何一步失败，Document Server 都不启动（Office 不可用），不会无防护运行。Command Service 路由由 `deploy/document-server-command.conf` 限定为命名空间内回环访问。员工实例每次启动时，平台在该实例网络的子网基址 +4 上接入防火墙容器，Document Server 随之可达。
 
 - **JWT 必须填写**：`.env` 里的 `DOCUMENT_SERVER_JWT_SECRET` 要填一个足够长的随机值。Compose 把这一个值同时交给 Document Server 和平台；该值未设置或为空时，Compose 在创建任何容器之前就失败。可以用下面的命令就地写入，命令不会打印密钥（GNU sed）：
 
@@ -108,7 +108,7 @@ stat -c %g /var/run/docker.sock
   ```
 
   第二条命令输出 `1`，说明该行已写入 64 位十六进制值。不要用 `cat` 或 `grep` 打印这一行。
-- **容器名不用改**：`DOCUMENT_SERVER_CONTAINER_NAME` 保持示例里的 `dsh-team-documentserver`。容器名由 Compose 固定，Compose 不读这一行，平台读。
+- **容器名不用改**：`DOCUMENT_SERVER_CONTAINER_NAME` 保持示例里的 `dsh-team-documentserver-net`，即平台接入实例网络的防火墙容器。容器名由 Compose 固定，Compose 不读这一行，平台读。
 - **字体目录必须存在**：Compose 把仓库根目录下的 `assets/fonts/` 只读挂载到 `/usr/share/fonts/truetype/custom`，并且不会自动创建这个目录。目录缺失时 Document Server 无法创建。这个目录已被 git 忽略，运营方自行放入有授权的字体文件：
 
   ```sh
@@ -118,8 +118,10 @@ stat -c %g /var/run/docker.sock
 - **同一组授权字体交给员工实例（可选，#561）**：把 `.env` 里的 `PLATFORM_INSTANCE_FONTS_DIR` 设为 `assets/fonts` 的宿主绝对路径（例如 `$(pwd)/assets/fonts`，写入时展开为字面路径）。Compose 把它按同一路径只读挂进平台容器（不会自动创建：宿主上没有这个目录时，`up -d` 在创建平台容器时就失败，报错来自 Docker，会带出路径）；目录存在但不是可读目录时，平台在监听前启动失败并点名该变量，不回显取值。之后每个新创建的员工实例都会把它只读挂到 `/usr/share/fonts/truetype/custom`，DSH 自带的只读预览引擎会扫描到其中的字体；员工不能写入或替换它。留空表示不挂载，实例只用镜像自带的 `fonts-noto-cjk` 和 `fonts-dejavu-core`。改了这个变量后，已在运行的实例保持原有挂载，要等它下次重新创建（管理员重启、空闲回收后重新打开）才生效；不要在实例正在创建时修改它。授权字体文件不入库。
 
 - **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
-- **Document Server 重建后，已运行的实例要重启才能重新接入**。例如重新执行 `up -d` 换掉了 `dsh-team-documentserver`：平台不会给已运行的实例补接新容器，这些实例在下次启动前不接入新的 Document Server，聊天和文件功能不受影响（Office 在线编辑本身见 §7 末尾的交付状态）。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
-- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙。
+- **防火墙容器重建后，已运行的实例要重启才能重新接入**。实例网络上 +4 接的是防火墙容器 `dsh-team-documentserver-net`：只重建 `dsh-team-documentserver` 时实例的 +4 接入不变；重建防火墙容器（例如重新执行 `up -d` 换掉了它）才会让已运行的实例断开，平台不会给它们补接新容器，这些实例在下次启动前用不了 Office，聊天和文件功能不受影响（Office 在线编辑本身见 §7 末尾的交付状态）。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
+- **防火墙容器重启后要重启 Document Server**：单独重启 `dsh-team-documentserver-net`（例如 `docker restart`）会换掉网络命名空间，Document Server 仍留在旧命名空间里断网，Office 不可用但不会暴露 8000；执行 `docker restart dsh-team-documentserver` 让它加入新命名空间，在此之前 Office 不可用。`docker compose … up -d` 不会处理这种情况（Compose 的 `restart: true` 只对 Compose 发起的操作生效）。
+- **平台镜像每次更新都会重建防火墙容器和 Document Server**：防火墙容器复用平台镜像，所以这次升级以及以后每次换平台镜像再 `up -d`，都会重建它和 Document Server，运行中的实例在下次启动前用不了 Office，处理方式见上面「防火墙容器重建后」一条。这是复用平台镜像、不新增镜像的代价。
+- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙；外部 Document Server 的 docservice 端口（默认 8000）和 `/command`、`/coauthoring/CommandService.ashx` 两条 Command Service 路由对实例不可达，也由运营方保证。
 - **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。缺 JWT 时，升级后的 `up -d` 在创建任何容器之前就失败；缺字体目录时，要到创建 Document Server 容器时才失败，`up -d` 返回非零，平台可能已经用新镜像启动，但 Office 不可用。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。
 
 ## 4. 在目标主机运行真实沙箱探针
@@ -263,6 +265,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - 每个实例只加入自己的bridge网络；实例间地址/主机名不可达，平台分别接入各实例网络。停止一个实例不应影响兄弟实例。
 - 实例网络端点（网络方式）：员工容器在子网基址+2，平台在+3。使用自带 Document Server 且本次启动接入成功时，再加 Document Server 在+4，恰好三个端点；外部 Document Server 或自带的不可用时没有+4。网络身份不可信，或出现既不是已验证平台端点、也不是已记录 Document Server 端点的不明端点时，操作失败，不强制删除。验收：三端点与地址由 `container-network.docker.test.ts` 的 network 用例断言，自带不可用时无+4 由 `container-document-server.docker.test.ts` 断言（均在 `test:docker`），外部模式不接入由编排器单元测试断言。
 - Document Server 是除平台外唯一接入各实例网络的对端，能直连每个实例的+2:3080（用例的正向对照断言了这一点）。网络层：B 向 A 网络上+2/+3/+4 的 3080、3099、22、80、443、3000、8080 发起的连接全部失败，原因是 Docker 的跨 bridge 隔离，而 B 以 uid1001 运行，不能改路由，也不能把 Document Server 当作下一跳；这不是65535端口穷举。应用层：持有 Document Server JWT 的人可以让它代为请求任何实例。跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护由第18组随 Office 在线编辑一起交付，并由跨用户攻击用例验证；在那之前实例内不启用 ONLYOFFICE，也没有经 Document Server 取文件的路径。
+- 自带 Document Server 的 Command Service（`/command`、`/coauthoring/CommandService.ashx` 及大小写、尾斜杠、版本前缀变体）只接受它自己网络命名空间内的回环请求，其余来源 403；docservice 的 8000 由防火墙容器对实例丢弃（#624）。验收：`test:deploy` 暴露用例中两个实例到 +4:8000 超时、+4:80 有应答；`test:stack` 中实例到 +4:80 的 `/command` 及带版本前缀、末尾编码 `%3F`/`%23` 的变体为 403、+4:8000 超时。实例网络只有 IPv4，这些探测只覆盖 IPv4；IPv6 规则会安装并逐条自检，但没有探测。
 - 部署实例不发布宿主端口、不挂Docker socket、不使用特权模式；uid1001运行。只有平台持有Docker控制权限。`published-loopback`只是显式宿主开发方式，不满足部署无端口映射边界。
 - 实例不持有平台数据库、密码哈希、平台session或管理员凭据；A的DSH凭据不能在B使用。平台API在来自实例的请求上仍鉴权：无平台session为401，员工调用管理接口为403。
 - 19.4直接对真实原生端点验证：各自cookie返回200、启动令牌换出的cookie可用，A cookie/令牌在B返回401且不签发cookie，B仍可正常访问。另在B内以uid1001遍历可读普通文件和进程环境，查找本次全部注册/登录平台session值及存储摘要、密码哈希、A原生凭据；同时检查平台DB名称/SQLite schema/挂载来源。扫描先于凭据互换，探针参数不作为应用数据扫描；文件/环境正向标记必须命中。虚拟设备、sysfs和proc内存不扫描，proc仅读取进程environ；权限拒绝和已消失条目计数，未知错误或250000文件/4GiB/60秒边界超限即失败，不截断后通过。该有限可读视图不是原子文件系统快照或内核内存保密证明，也不把共用模型密钥列为禁止项。
