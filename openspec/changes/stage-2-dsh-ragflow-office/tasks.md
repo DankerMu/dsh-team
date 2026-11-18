@@ -6632,3 +6632,77 @@ Suggested fixture level: compact - 测试内的启动等待
 Minimal mergeable slice: 52.1–52.2 一个 PR
 Risk packs: selected - Legacy compatibility（已有 stack 场景和断言不变）、Resource limits（有界等待）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency。
 Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不变；不改 `deploy/`、`.github/workflows/`、产品代码。
+
+## 53. 技术债 #628：多进程集成用例的等待和用例预算挂钩，失败可归因
+
+依赖：无。只改 `platform/test/verify-browser-runtime.integration.test.ts`、`platform/test/trusted-docker-retirement.integration.test.ts`、`platform/test/browser-runtime-fixture.ts` 的 `awaitFile`，并新增它的集成测试；不碰关键路径、产品代码、`scripts/`、`vitest.config.ts` 和 `trusted-docker-fixture.ts`。
+
+已核实（`main` `6c294a3`）：
+
+- `vitest.config.ts:23` 的 `integration` project 没有 `testTimeout`，没写第三个参数的用例按 vitest 默认 5000 毫秒。
+- `verify-browser-runtime.integration.test.ts`：
+  - `:122-143` 的 SIGTERM/SIGINT 两个 `it.each` 没写用例预算，按 5 秒；`:145-169` 走同一条 spawn 链的第二次 SIGTERM 用例写的是 `20_000`。`:105-120` 的三个 `launches` 用例同样冷启动两个 Node、按 5 秒，本节不改，只报告。
+  - `:72-91` 的 `marker()` 每次都用 `AbortSignal.timeout(10_000)`。在 5 秒的用例里它不会先到，卡住时只报 `Test timed out in 5000ms`。`awaitFile` 被中止时报的 `Owned creation fixture completion missing`（`browser-runtime-fixture.ts:494-499`）不说是哪个文件、wrapper 是否还活着。`AbortSignal.timeout` 收到负数会抛 `ERR_OUT_OF_RANGE`。
+  - 三个信号用例都直接 `await run.exited`，wrapper 不退出时同样只有 vitest 超时。`WrapperRun` 只有 `exited` 这个 promise，没有同步可读的退出状态。
+  - stand-in 依次写 `started.json`（含 `pid`）、`signal.json`、`exit.json`，第二次 SIGTERM 用例还有 `repeat.json`。
+- `trusted-docker-retirement.integration.test.ts`：
+  - `:87-92` 用 `vi.waitFor` 固定等 `RESULT_WAIT_MS = 60_000`（`:24`），只看 `result.json` 是否存在，不看 owner 是否还活着；用例预算 `CASE_TIMEOUT_MS = 90_000`（`:26`）。
+  - `cancelRetirement` 已解析 `manifest.json`（`:72`），其中的 owner 与 `launch.json` 的 owner 是同一个 `{ pid, birth }`（`scripts/trusted-docker-owner.mjs:136-137,372,381`）。只有这个 owner 写 `result.json`（`:383-384`）。
+  - fixture 对象上有 `observeProcess(pid)` 和 `killOwner`（`trusted-docker-fixture.ts:520-524,576`）。`observeProcess` 每次 `spawnSync` 冷启动一个 Node，超过 5 秒抛 `Fixture process observation unavailable`，不适合在负载下频繁调用。
+  - 先例：`trusted-docker-custody.integration.test.ts:486-505` 在 leaf 就绪后直接 `killOwner`；此时 leaf 仍被 hold，owner 停在等待里，不可能发布结果。`:93-103` 用 `process.kill(pid, 0)` 判断存活。
+  - fixture 收尾（`withTrustedDockerFixture`）在失败路径上要依次 settle 已记录的成员、child 进程组和 owner；每个 settle 的 `waitForAbsence` 上限 5 秒，期间每次 `observeProcess` 最长 5 秒（`trusted-docker-fixture.ts:276-304`）。`status` 命令的硬超时 15 秒。
+- 2026-11-17 本机：`main` 上两次完整 `pnpm test:integration` 各挂 2 个 verify-browser-runtime 信号用例（1 分钟负载约 6–7）；PR #627 的 head 上四次完整 `pnpm check` 都失败，挂的是这两个文件，第四次另有 `trusted-docker-custody` 两例和 `dev-watch` 一例。单独跑这两个文件时稳定通过。
+
+- [ ] 53.1 verify-browser-runtime 的信号用例：
+  - 三个信号用例共用用例预算常量 `SIGNAL_CASE_MS = 20_000`，作为第三个参数传给 vitest；与已有的第二次 SIGTERM 用例一致。
+  - 每个用例开头算期限 `deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS`，`SETTLE_MS = 3000` 留给 `finally` 里的 `killStandIn` 和删目录。
+  - `startWrapper` 在 `exit` 回调里同步记下退出码和信号（例如 `run.state`），供错误信息读取。
+  - `marker(run, name, deadline)`：`Date.now() >= deadline` 时直接抛归因错误；否则用正的剩余毫秒数作为 `awaitFile` 的中止期限，到期同样抛归因错误。归因错误写明：等的文件名；wrapper 是否已退出及退出码和信号；`started.json`、`signal.json`、`exit.json` 各自是否存在；按 `started.json` 的 pid 用 `process.kill(pid, 0)` 判断的 stand-in 是否还活着。wrapper 提前退出的现有分支不变。
+  - `settled(run, deadline)`：等 `run.exited`，到期（含剩余时间已不为正）时抛归因错误，写明 wrapper 未在期限内退出，以及上面同样的 stand-in 状态。三个用例里原来直接 `await run.exited` 的地方都改用它，第二次 SIGTERM 用例里与 `repeat.json` 赛跑的那一处除外。
+  - 所有现有断言不变。
+- [ ] 53.2 trusted-docker-retirement 等 `result.json`：
+  - 等待逻辑拆成独立 helper `awaitResult(directory, owner, deadline)`，owner 取自 `cancelRetirement` 已解析的 `manifest.json`。`RESULT_WAIT_MS` 删除。
+  - 循环：先看 `result.json`，有就返回；没有就用 `process.kill(owner.pid, 0)` 看 owner 是否还在（只把 ESRCH 当作不在），在就隔约 1 秒再看，直到期限。
+  - owner 不在时，再看一次 `result.json`；仍没有就立即失败，错误写明「owner 已退出但没有发布 result.json」，并附一次 `observeProcess` 的结果作为身份复核；`observeProcess` 自己抛错时捕获它，错误信息写「身份复核不可用」，不改抛它的异常。顺序必须是先确认 owner 不在、再看结果，不能反过来。
+  - 到期时失败，错误写明「owner 仍在运行」和已等的毫秒数。
+  - 现场记录（PR #629 评审后补充）：两种失败（owner 已退出、到期）在抛错前都附上现场：调用目录的文件列表；`owner.log`（`scripts/trusted-docker-owner.mjs:115`）的末尾约 2 KB；owner 的子孙进程树，由一次 `ps -axo pid,ppid,pgid,stat,etime,command`（带短超时）按 ppid 从 owner 往下筛出。每一项读取失败时写「不可用」，不改抛它的异常。依据：2026-11-17 exact-head `pnpm check`（负载 2.67 开跑）里，`retires every journal registration …` 以 `owner still running without result.json after 88432ms` 失败；实现期一次合跑里 4 个 retirement 用例都这样等满窗口。这是宿主上间歇出现的条件，不是整机变慢，原因要靠现场来判断。
+  - 期限的传递：`retirementCase` 在进入 `withTrustedDockerFixture` 之前算 `deadline = Date.now() + CASE_TIMEOUT_MS - RETIRE_MS`，经 run 回调的第二个参数传给用例，用例再传给 `cancelRetirement`。
+  - 取值写死：`RETIRE_MS = 30_000`，`CASE_TIMEOUT_MS` 从 90_000 改为 120_000。注释写明算式：`status` 的硬超时 15 秒，加上 fixture 收尾（最多 4 个 settle：fake platform、可能的 group member、child 进程组、owner）在正常退出时的耗时，共 30 秒；每个 settle 的理论硬上限约 22 秒（两次 `observeProcess` 各 5 秒、`ps` 2 秒、`waitForAbsence` 约 10 秒），全取上限不现实，不按它算。等待的期限因此约为用例开始后 90 秒，不短于原来的「初始化后 60 秒」。调大 `CASE_TIMEOUT_MS` 是因为等待已按 owner 存活来走，预算只是 owner 活着时的上限，不是单纯放宽。
+  - `child-ready.json` 的 10 秒等待和其余断言不变。
+- [ ] 53.3 测试：
+  - verify-browser-runtime：`settled` 的到期分支另有一个确定性用例：hold 的 stand-in 就绪后不发信号，以约 1 秒的期限调用 `settled`，断言错误写明 wrapper 未在期限内退出、stand-in 存活。
+  - verify-browser-runtime：新增一个确定性用例，用例预算 `SIGNAL_CASE_MS`。用 `hold` 的 stand-in 启动 wrapper，按用例期限 `marker(run, 'started.json', deadline)` 等到 `started.json` 后不发信号，再以约 1 秒的短期限等 `signal.json`。断言错误信息含 `signal.json`、wrapper 未退出、`started.json` 存在、stand-in 存活；结束时照常 `killStandIn` 并删目录。
+  - trusted-docker-retirement：新增一个确定性用例，走 `retirementCase`，用例预算 `CASE_TIMEOUT_MS`。照 custody `:486-505` 的做法：start，等 `child-ready.json`，不 cancel，直接 `killOwner`；然后以 `retirementCase` 给的期限调用 `awaitResult`，断言它在 15000 毫秒内以「owner 已退出但没有发布 result.json」失败（上限盖住一次轮询和一次最长 5 秒的身份复核；旧实现要等满 60 秒）。fixture 收尾照常通过。
+  - TDD 顺序（retirement）：
+    1. 先把现有的 `vi.waitFor` 原样提取为 `awaitResult(directory, owner, deadline)`，只重构、不改行为，现有用例照过；
+    2. 加新用例，此时它要等满 60 秒才以笼统错误失败，「5000 毫秒内」的断言或 vitest 超时都算红灯，记录下来；
+    3. 再改成按存活等待，新用例转绿。
+  - TDD 顺序（verify-browser-runtime）：先加新用例，此时只能等满固定 10 秒或撞上 vitest 超时、错误信息不含阶段和存活状态，算红灯；再改 `marker` 和 `settled`。
+- [ ] 53.4 `awaitFile` 丢事件（53.1 实现时查明的根因）：
+  - 事实：
+    - `browser-runtime-fixture.ts:494-521` 的 `awaitFile` 先建 `fs.watch`，再只 `lstat` 一次。macOS 上 watcher 生效前有一段空窗，文件在空窗里落地时，事件和那次 `lstat` 都错过它，等待只能到期。
+    - 实现方的独立实验（`fs.watch` 后 0–50 毫秒内用 `.pending` 加 rename 发布）每 60 次漏 8 到 15 次。
+    - 53.1 的归因错误实测为 `signal.json not observed by the case deadline; wrapper not exited; … signal.json present`。改动前同一用例 3 次都以笼统的 `Owned creation fixture completion missing` 失败。
+  - 修复：watcher 之外，每 50 毫秒补一次 `lstat`，看到文件就 resolve；定时器在 `finally` 里清掉。中止、ENOENT 以外的错误、最后的 `lstat` 校验都不变。注释改写为说明这次复查是为了补上 watcher 生效前的空窗，不是猜测的 sleep。
+  - 新增 `platform/test/browser-runtime-fixture.integration.test.ts`：循环 50 次，每次先调 `awaitFile(path, AbortSignal.timeout(2000))`，再在 0–50 毫秒后用 `.pending` 加 rename 发布文件，50 次都要 resolve。修复前在 macOS 上应以很高概率失败（按实测漏率，50 次全中的概率约万分之三），记下红灯；修复后转绿。另有一例：文件始终不出现时，按中止信号以原错误信息拒绝。
+  - `awaitFile` 的其他调用方（`browser-acquisition.docker.test.ts`、`browser-wrapper-docker-fixture.ts`）行为只会更稳，由 VPS 的 `test:docker` 覆盖。
+  - 负载验证（由编排方在提 PR 前做，实现方不做）：外加 CPU 压力、1 分钟负载不低于 7 时，连跑 5 次完整 `pnpm test:integration`，这两个文件不再失败；记下每次的负载和结果。
+
+未核实，由实现和负载验证确认；做不到时停下报告，不放宽断言：
+
+- 20 秒预算和按存活等待，足以让这两个文件在上述负载下 5 次全过。
+- retire 模式下 `killOwner` 之后 fixture 收尾能通过。
+
+不做的事：只调大预算、加重试、跳过用例、删减断言；改 `integration` project 的并发设置；改 `dev-watch.integration.test.ts`、`trusted-docker-custody.integration.test.ts`、`trusted-docker-fixture.ts` 里的其他固定期限，以及 `launches` 三个用例。这些同类问题只在 PR 里报告。
+
+行数：估计 140 到 220 行，包括本段规格约 60 行。
+
+剩余风险：
+
+- 同一模式在 `dev-watch`、`trusted-docker-custody` 和 `launches` 用例里还有，本节不修。
+- 「owner 存活加期限」的循环这是仓库里第三份（另两份在 custody 的 `awaitReadiness`、`issuedInvocation`）。测试文件不在 jscpd 范围内；是否提到 fixture 里共用，留给以后。
+
+Suggested fixture level: compact - 测试内的等待和期限
+Minimal mergeable slice: 53.1–53.3 一个 PR
+Risk packs: selected - Legacy compatibility（现有断言和用例名不变）、Resource limits（等待有界，期限早于用例超时）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency。
+Must preserve：所有现有断言；被测脚本 `scripts/verify-browser-runtime.mjs`、`scripts/trusted-docker-owner.mjs` 不改；`vitest.config.ts` 和 `trusted-docker-fixture.ts` 不改。
