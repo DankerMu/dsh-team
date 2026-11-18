@@ -6665,6 +6665,7 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
   - 循环：先看 `result.json`，有就返回；没有就用 `process.kill(owner.pid, 0)` 看 owner 是否还在（只把 ESRCH 当作不在），在就隔约 1 秒再看，直到期限。
   - owner 不在时，再看一次 `result.json`；仍没有就立即失败，错误写明「owner 已退出但没有发布 result.json」，并附一次 `observeProcess` 的结果作为身份复核；`observeProcess` 自己抛错时捕获它，错误信息写「身份复核不可用」，不改抛它的异常。顺序必须是先确认 owner 不在、再看结果，不能反过来。
   - 到期时失败，错误写明「owner 仍在运行」和已等的毫秒数。
+  - 现场记录（PR #629 评审后补充）：两种失败（owner 已退出、到期）在抛错前都附上现场：调用目录的文件列表；`owner.log`（`scripts/trusted-docker-owner.mjs:115`）的末尾约 2 KB；owner 的子孙进程树，由一次 `ps -axo pid,ppid,pgid,stat,etime,command`（带短超时）按 ppid 从 owner 往下筛出。每一项读取失败时写「不可用」，不改抛它的异常。依据：2026-11-17 exact-head `pnpm check`（负载 2.67 开跑）里，`retires every journal registration …` 以 `owner still running without result.json after 88432ms` 失败；实现期一次合跑里 4 个 retirement 用例都这样等满窗口。这是宿主上间歇出现的条件，不是整机变慢，原因要靠现场来判断。
   - 期限的传递：`retirementCase` 在进入 `withTrustedDockerFixture` 之前算 `deadline = Date.now() + CASE_TIMEOUT_MS - RETIRE_MS`，经 run 回调的第二个参数传给用例，用例再传给 `cancelRetirement`。
   - 取值写死：`RETIRE_MS = 30_000`，`CASE_TIMEOUT_MS` 从 90_000 改为 120_000。注释写明算式：`status` 的硬超时 15 秒，加上 fixture 收尾（最多 4 个 settle：fake platform、可能的 group member、child 进程组、owner）在正常退出时的耗时，共 30 秒；每个 settle 的理论硬上限约 22 秒（两次 `observeProcess` 各 5 秒、`ps` 2 秒、`waitForAbsence` 约 10 秒），全取上限不现实，不按它算。等待的期限因此约为用例开始后 90 秒，不短于原来的「初始化后 60 秒」。调大 `CASE_TIMEOUT_MS` 是因为等待已按 owner 存活来走，预算只是 owner 活着时的上限，不是单纯放宽。
   - `child-ready.json` 的 10 秒等待和其余断言不变。

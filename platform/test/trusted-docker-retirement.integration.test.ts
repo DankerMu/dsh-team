@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
@@ -83,6 +83,29 @@ function ownerPresent(pid: number) {
   return true;
 }
 
+/** A failed wait's scene; the tree walk relies on for-of visiting rows pushed during it. */
+function retirementScene(directory: string, ownerPid: number) {
+  const options = { encoding: 'utf8', timeout: 2000, maxBuffer: 1 << 20 } as const;
+  const piece = (name: string, read: () => string) => {
+    try {
+      return `\n${name}:\n${read()}`;
+    } catch {
+      return `\n${name} unavailable`;
+    }
+  };
+  return [
+    piece('invocation files', () => execFileSync('/bin/ls', ['-R', directory], options)),
+    piece('owner.log tail', () => readFileSync(join(directory, 'owner.log'), 'utf8').slice(-2048)),
+    piece('owner process tree', () => {
+      const ps = execFileSync('/bin/ps', ['-axo', 'pid,ppid,pgid,stat,etime,command'], options);
+      const rows = ps.split('\n').map((line) => line.trim().split(/\s+/));
+      const own = rows.filter((row) => Number(row[0]) === ownerPid);
+      for (const parent of own) own.push(...rows.filter((row) => row[1] === parent[0]));
+      return own.map((row) => row.join(' ').slice(0, 200)).join('\n');
+    }),
+  ].join('');
+}
+
 /** Wait for the owner's result.json while the owner lives, failing at once if it exits first. */
 async function awaitResult(
   directory: string,
@@ -104,13 +127,13 @@ async function awaitResult(
         identity = 'identity recheck unavailable';
       }
       throw new Error(
-        `Retirement owner exited without publishing result.json: pid=${String(owner.pid)}; birth=${owner.birth}; ${identity}`,
+        `Retirement owner exited without publishing result.json: pid=${String(owner.pid)}; birth=${owner.birth}; ${identity}${retirementScene(directory, owner.pid)}`,
       );
     }
     const remaining = deadline - Date.now();
     if (remaining <= 0)
       throw new Error(
-        `Retirement owner still running without result.json after ${String(Date.now() - since)}ms: pid=${String(owner.pid)}`,
+        `Retirement owner still running without result.json after ${String(Date.now() - since)}ms: pid=${String(owner.pid)}${retirementScene(directory, owner.pid)}`,
       );
     await delay(Math.min(1000, remaining));
   }
@@ -358,7 +381,7 @@ it(
       const since = Date.now();
 
       await expect(awaitResult(directory, owner, deadline, fixture.observeProcess)).rejects.toThrow(
-        'owner exited without publishing result.json',
+        /owner exited without publishing result\.json[\s\S]*invocation files:\n[\s\S]*manifest\.json[\s\S]*owner\.log tail[\s\S]*owner process tree/,
       );
       // One poll plus one identity recheck of up to 5 s; the old fixed wait took 60 s.
       expect(Date.now() - since).toBeLessThan(15_000);
