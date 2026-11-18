@@ -1,7 +1,7 @@
 import { deepStrictEqual } from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { watch } from 'node:fs';
+import { watch as watchDirectory } from 'node:fs';
 import { chmod, lstat, mkdir, mkdtemp, open, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -171,6 +171,82 @@ export async function signalOwnedGroup(child, identity) {
   return true;
 }
 
+/** @typedef {{ on(event: 'error', listener: () => void): unknown, close(): void }} Watcher */
+
+/**
+ * Re-read cancellation authority on every directory event and every interval: watch events may be
+ * late, coalesced, or carry no file name or only the watched directory's name.
+ * @param {string} directory
+ * @param {() => Promise<void>} read
+ * @param {() => void} onError
+ * @param {{ watch?: (directory: string, listener: () => void) => Watcher, intervalMs?: number }} [options]
+ * @returns {() => void} closes the watcher and the interval
+ */
+export function watchCancellation(
+  directory,
+  read,
+  onError,
+  { watch = watchDirectory, intervalMs = 250 } = {},
+) {
+  const watcher = watch(directory, () => void read());
+  watcher.on('error', onError);
+  const interval = setInterval(() => void read(), intervalMs);
+  return () => {
+    clearInterval(interval);
+    watcher.close();
+  };
+}
+
+/**
+ * Serialize group-signal attempts for the first recorded interruption. A thrown attempt is traced
+ * once per distinct message and retried by a later cancel no sooner than `retryMs` after it.
+ * @param {() => Promise<boolean>} signal true only when the group signal was actually sent
+ * @param {(message: string) => void} report
+ * @param {{ retryMs?: number, now?: () => number }} [options]
+ */
+export function ownedCancellation(signal, report, { retryMs = 1000, now = Date.now } = {}) {
+  let interruption = 'none';
+  let signalled = false;
+  /** @type {string | undefined} */
+  let reported;
+  /** @type {number | undefined} */
+  let last;
+  let chain = Promise.resolve();
+  return {
+    /** @param {string} kind */
+    cancel(kind) {
+      if (interruption === 'none') interruption = kind;
+      chain = chain.then(async () => {
+        if (signalled || (last !== undefined && now() - last < retryMs)) return;
+        try {
+          signalled = await signal();
+        } catch (error) {
+          last = now();
+          const message = `Trusted Docker cancellation signal failed: ${error instanceof Error ? error.message : String(error)}`;
+          if (message === reported) return;
+          reported = message;
+          try {
+            report(message);
+          } catch {
+            // A lost trace neither stops later attempts nor clears `failed`.
+          }
+        }
+      });
+    },
+    get interruption() {
+      return interruption;
+    },
+    get signalled() {
+      return signalled;
+    },
+    /** Attempted, threw, and no group signal sent since. */
+    get failed() {
+      return reported !== undefined && !signalled;
+    },
+    settled: () => chain,
+  };
+}
+
 /**
  * Only the owner's own settled cancellation retires registrations its child never could.
  * Failures stay with this step: only their count is recorded beside the unchanged terminal.
@@ -198,21 +274,15 @@ async function executeOwnedCommand(context) {
   let producers;
   let producerCleanupConfirmed = true;
   let closed = false;
-  let signalled = false;
-  let interruption = 'none';
   let failure = null;
-  let cancellation = Promise.resolve();
+  const cancellation = ownedCancellation(
+    async () =>
+      !child || !childIdentity || closed ? false : signalOwnedGroup(child, childIdentity),
+    (message) => process.stderr.write(`${message}\n`),
+  );
   const cancel = (kind) => {
     if (closed && kind !== 'capture-failed') return;
-    if (interruption === 'none') interruption = kind;
-    cancellation = cancellation
-      .then(async () => {
-        if (!child || !childIdentity || signalled || closed) return;
-        signalled = await signalOwnedGroup(child, childIdentity);
-      })
-      .catch(() => {
-        failure = 'identity';
-      });
+    cancellation.cancel(kind);
   };
   const readCancellation = async () => {
     try {
@@ -229,12 +299,21 @@ async function executeOwnedCommand(context) {
       if (error.code !== 'ENOENT') failure = 'control';
     }
   };
-  const watcher = watch(directory, (_event, name) => {
-    if (name?.toString() === 'cancel.json') void readCancellation();
-  });
-  watcher.on('error', () => {
-    failure = 'control';
-  });
+  // Every other failure source keeps precedence over a group signal that was never sent.
+  const settleCancellation = async () => {
+    await cancellation.settled();
+    if (cancellation.failed) failure ??= 'identity';
+  };
+  const close = watchCancellation(
+    directory,
+    async () => {
+      await readCancellation();
+      if (cancellation.interruption !== 'none') cancel(cancellation.interruption);
+    },
+    () => {
+      failure = 'control';
+    },
+  );
   const onSignal = () => cancel('owner-signal');
   process.on('SIGINT', onSignal);
   process.on('SIGTERM', onSignal);
@@ -243,7 +322,7 @@ async function executeOwnedCommand(context) {
     let command = { exitCode: null, signal: null, settled: true };
     let stdout;
     let stderr;
-    if (interruption === 'none' && failure === null) {
+    if (cancellation.interruption === 'none' && failure === null) {
       const finished = Promise.withResolvers();
       const spawned = Promise.withResolvers();
       let spawnFailed = false;
@@ -299,7 +378,7 @@ async function executeOwnedCommand(context) {
             manifestDigest: digest,
             owner: childIdentity,
           });
-          if (interruption !== 'none') cancel(interruption);
+          if (cancellation.interruption !== 'none') cancel(cancellation.interruption);
         } catch {
           failure = 'identity';
         }
@@ -310,7 +389,8 @@ async function executeOwnedCommand(context) {
       producerCleanupConfirmed = producerOutcome.cleanupConfirmed;
       command.settled &&= await trustedDockerBrowserProducersSettled(request);
       [stdout, stderr] = await outputs;
-      await cancellation;
+      await settleCancellation();
+      const { signalled } = cancellation;
       await retireAfterCancellation(context, signalled, command.settled, producerCleanupConfirmed);
     } else {
       [stdout, stderr] = await Promise.all(
@@ -339,7 +419,7 @@ async function executeOwnedCommand(context) {
       manifestDigest: digest,
       state: 'failed',
       command,
-      interruption,
+      interruption: cancellation.interruption,
       failure,
       output,
       cleanup,
@@ -347,7 +427,7 @@ async function executeOwnedCommand(context) {
     if (hasPassingOutcome(result)) result.state = 'passed';
     return result;
   } finally {
-    watcher.close();
+    close();
     process.removeListener('SIGINT', onSignal);
     process.removeListener('SIGTERM', onSignal);
     await producers?.finish();
