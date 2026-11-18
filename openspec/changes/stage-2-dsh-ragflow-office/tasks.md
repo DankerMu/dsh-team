@@ -6706,3 +6706,75 @@ Suggested fixture level: compact - 测试内的等待和期限
 Minimal mergeable slice: 53.1–53.3 一个 PR
 Risk packs: selected - Legacy compatibility（现有断言和用例名不变）、Resource limits（等待有界，期限早于用例超时）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency。
 Must preserve：所有现有断言；被测脚本 `scripts/verify-browser-runtime.mjs`、`scripts/trusted-docker-owner.mjs` 不改；`vitest.config.ts` 和 `trusted-docker-fixture.ts` 不改。
+
+## 54. 技术债 #631：trusted Docker owner 的取消不再只靠一次按文件名过滤的 watch 事件
+
+依赖：#628（PR #629，已合并）。改 `scripts/trusted-docker-owner.mjs` 的取消路径，新增一个集成测试文件；不改 `writeReceipt`、`vitest.config.ts`、`trusted-docker-fixture.ts` 和关键路径。`scripts/` 不在 Critical Paths 表里，但这里是受信 custody 车道的取消语义，PR 里写明建议白盒评审。
+
+已核实（`main` `39ac796`）：
+
+- `scripts/trusted-docker-owner.mjs`：
+  - `executeOwnedCommand` 只在两处读 `cancel.json`：启动时一次 `await readCancellation()`（`:242`），以及 `fs.watch(directory)` 回调里文件名恰为 `cancel.json` 时（`:232-234`）。之后在 `:307` 无期限地 `await finished.promise`。
+  - `cancel(kind)`（`:205-216`）用 `interruption` 记第一次的原因，用一条 promise 链串行地调 `signalOwnedGroup`。链上异常只设 `failure = 'identity'`，链本身仍可用，之后每次 `cancel()` 都会再试一次；但除了 `cancel.json` 的 watch 事件和 `:302`，没有任何东西会再触发 `cancel()`，`failure` 一旦设上也去不掉，失败当时不留痕，直到命令 close 才写进 `result.json`。调用点：`:227`（readCancellation）、`:238`（owner 收到 SIGINT/SIGTERM）、`:286`（输出捕获失败）、`:302`（`child.json` 发布后补发先到的取消）。`readCancellation` 遇到 ENOENT 以外的错误只设 `failure = 'control'`（`:228-230`）。
+  - `signalOwnedGroup`（`:154-172`）先复核 child 身份，再用 `spawnSync('/bin/ps', …, { timeout: 2000 })` 核对进程组，任一不符就抛错，不发信号。
+  - owner 进程的 stdout 和 stderr 都写进调用目录的 `owner.log`（`:115-125`）。
+- `cancel.json` 由 `cancelTrustedDocker`（`:428-447`）经 `writeReceipt`（`scripts/probe-browser-receipt.mjs:7-29`）先写临时文件再 rename 发布，CLI 随即以 0 退出并报告 `cancellation-requested`。
+- macOS 本机探针（#631）：FSEvents 会延迟数秒、分批送达，也会合并成以被监视目录自身 basename 命名的事件。cancel 后观察 1 秒，30 次里有 16 次没收到 `cancel.json`。Node 文档写明回调的 `filename` 不保证提供。
+- 现场（PR #629 的 exact-head `pnpm check`）：两个 retirement 用例在 cancel 后约 89 秒，`cancel.json` 已在，leaf 仍活着，`owner.log` 为空。owner 没有发出 SIGINT，具体是 watch 没送到、读取出错，还是发信号出错，分不出来。
+
+- [ ] 54.1 监听取消：
+  - 新增导出 `watchCancellation(directory, read, onError, { watch = fs.watch, intervalMs = 250 } = {})`：建 watcher，**任何**事件（文件名为 null、目录名或其他文件名都算）都调用一次 `read()`；另以 `intervalMs` 周期调用 `read()`；watcher 的 `error` 调 `onError()`。返回 `close()`，同时关掉 watcher 和定时器。
+  - `executeOwnedCommand` 用它替换 `:232-237`：
+    - `read` 先 `await readCancellation()`，再在 `interruption !== 'none'` 时 `cancel(interruption)`，与 `:302` 同构。这样不论取消来自 `cancel.json`、owner 收到的信号还是输出捕获失败，挂起的取消都会被周期地重新驱动。
+    - `onError` 仍设 `failure = 'control'`，与原来一致。
+    - 原来关 watcher 的 `finally` 改为调用 `close()`。启动时那一次 `await readCancellation()` 保留。
+- [ ] 54.2 发信号：
+  - 新增导出 `ownedCancellation(signal, report, { retryMs = 1000, now = Date.now } = {})`，取代 `:205-216` 的闭包。返回对象：
+    - `cancel(kind)`：第一次记下 `interruption`，之后不改；把 `signal()` 串在一条链上；`signal()` 返回 true 后不再调用；距上次**抛错**的尝试落定不足 `retryMs` 时本次不尝试（节流）；时间只在 `signal()` 抛错、并在它落定之后记（`last = now()` 放在 catch 里），返回 false 或 true 都不记；
+    - `interruption`、`signalled`、`failed`（尝试过、抛过错、且至今未发出信号）三个只读值；`retry()`：有挂起的取消时以原 `interruption` 再 `cancel` 一次，否则不动作（owner 的周期读取和 `:302` 都调它；它不经包装的 close 早退，close 之后包装的 `signal` 返回 false，效果相同）；
+    - `settled()`：等链上已排队的尝试落定，取代 `:313` 的 `await cancellation`。
+  - `signal()` 抛错时：调用 `report(message)` 留痕，只在第一次失败和失败信息变化时调用，`message` 只取固定前缀加 `error.message`，不含 error 对象、stack 或环境；不放弃，下一次 `cancel` 再试。
+  - `executeOwnedCommand` 里的包装：
+    - `:206` 的 `closed && kind !== 'capture-failed'` 早退留在包装里；
+    - 传给 `ownedCancellation` 的 `signal` 在 `!child || !childIdentity || closed` 时返回 false，不抛错，所以 `launch` 路径和 close 之后的 `capture-failed` 不会被误记成 `identity`；否则调用 `signalOwnedGroup(child, childIdentity)`；
+    - `report` 写一行到 stderr，也就是 `owner.log`；
+    - `:313` 之后：`if (cancellation.failed) failure ??= 'identity'`。其他来源的 `failure`（`:272`、`:332` 等）优先，不被覆盖。
+  - 读 `interruption`、`signalled` 的地方（`:246`、`:302`、`:314`、`:342`）改读返回对象，取值不变。`readCancellation` 的错误处理不变。
+- [ ] 54.3 测试，新增 `platform/test/trusted-docker-cancellation.integration.test.ts`：
+  - `watchCancellation`，全部用 `vi.useFakeTimers()` 加 `advanceTimersByTime`：
+    - 注入一个从不送事件的 watch：推进一个 `intervalMs` 后 `read` 被调用一次，推进 N 个后为 N 次；
+    - 注入只送 `name = null`、只送目录名的 watch（`intervalMs` 取很大的值）：每个事件都调用一次 `read`；
+    - `close()` 之后推进 N 个周期并触发事件，`read` 次数不变；watcher `error` 调 `onError`。
+  - `ownedCancellation`（注入 `now`，不靠真实时间）：
+    - `signal` 第一次抛错、第二次返回 true：两次 `cancel('cancelled')`（中间推进 `retryMs`）后 `signalled` 为 true、`failed` 为 false，`report` 恰好一条；
+    - 一直抛同一个错：每次推进 `retryMs` 后的 `cancel` 都再试，`report` 只有一条，`failed` 为 true；
+    - 不足 `retryMs` 的连续 `cancel` 只尝试一次；
+    - 发出信号后再 `cancel`：`signal` 不再被调用；
+    - `cancel('owner-signal')` 第一次抛错，之后的 `cancel('owner-signal')` 成功：`interruption` 为 `owner-signal`；先 `owner-signal` 再 `cancelled` 时 `interruption` 仍是 `owner-signal`；
+    - `signal` 返回 false（无 child 或已 close）：不记失败，不调 `report`；紧接着再 `cancel` 时 `signal` 立即再被调用，不受节流。
+  - 组合：两个函数各证一半，「owner 在 watch 不送事件时仍对 leaf 进程组发出 SIGINT」由现有走 cancel 的 custody、retirement 用例在验证里证明。另加一个组合用例，形状同 `trusted-docker-retirement.integration.test.ts:407`「reports the group signal it actually sent to a live owned child」（detached 子进程、`once(child, 'close')`、finally 里 SIGKILL 清理），用真实定时器、`intervalMs` 取 20，等子进程 close 时用 `Promise.race` 给出明确期限，让修复前的红灯快速失败：起一个 detached 子进程，watch 注入成从不送事件，`signal` 用 `signalOwnedGroup(child, identity)`，用 `writeReceipt` 发布 `cancel.json` 后，断言子进程以 `SIGINT` 结束。
+  - TDD：
+    1. 先把现有逻辑原样提取成这两个函数（按文件名过滤、无周期读取、无节流、失败即设 `failure`）。闸门：不走 cancel 的 custody 用例和 `signalOwnedGroup` 的用例通过；走 cancel 的用例在 macOS 上修复前本来就会间歇失败，不作闸门。
+    2. 加上面的用例，记录红灯。如实记录红在哪里：周期读取、null/目录名事件和组合用例会红在 `read` 未被调用或子进程未收到 SIGINT；「第一次抛错、第二次成功」红在 `failed` 和 `report` 条数上，原逻辑也会发出信号；「一直抛错」在原逻辑上就是绿的，只起锁定作用。
+    3. 改实现转绿。
+  - 现有 custody 的重复 cancel 断言（`trusted-docker-custody.integration.test.ts:548`、`:588`）不变。
+- 验证（编排方做）：完整 `pnpm check` 在本机连跑 5 次，记录负载和结果；`trusted-docker-retirement` 和 `trusted-docker-custody` 里走 cancel 的用例不再出现「cancel 后 leaf 仍存活、owner 等满窗口」。#630 里其余的失败照常归 #630。
+
+未核实，由实现和验证确认；做不到时停下报告，不放宽断言：
+
+- 89 秒的现场属于 watch 没送到、读取出错和发信号出错中的哪一种；修复后，后两种会在 `owner.log` 里留下一行。
+- 每 250 毫秒读一次 `cancel.json` 不会给 VPS 上的真实运行带来可见开销（它只是一次小文件读取；`ps` 只在已有取消请求且尚未发出信号时才会跑）。
+
+不做的事：调大任何墙钟期限、加测试级重试、跳过用例、删减断言；改 `writeReceipt` 的发布方式；#630 的其他期限。
+
+行数：估计 200 到 300 行，包括本段规格约 75 行。
+
+剩余风险：
+
+- Linux 上按 libuv 源码推断 inotify 会报出 `cancel.json`，没有在 giap-vps 上实测；修复后不再依赖文件名，这一点不再影响结果。
+- 身份变了时，`signalOwnedGroup` 在 `ps` 之前就抛错；只有身份未变但进程组不符或 `ps` 超时时才会重跑 `ps`。每次 `spawnSync` 最多阻塞事件循环 2 秒，节流保证两次尝试之间至少隔 `retryMs`（1 秒），owner 仍能读 child 的输出管道。`owner.log` 只在第一次失败和失败信息变化时多一行。
+
+Suggested fixture level: compact - 受信 custody 取消路径
+Minimal mergeable slice: 54.1–54.3 一个 PR
+Risk packs: selected - Legacy compatibility（终态 `interruption`、`failure` 的取值和现有 custody、retirement 断言不变）、Resource limits（周期读取有间隔，命令 close 后停止）、Concurrency（事件、周期读取和 SIGINT 处理器可能同时触发 `cancel`）；not selected - Security、Auth、Schema、Public API、Migration。
+Must preserve：`cancel` CLI 的输出和退出码；`result.json` 的结构和 `interruption`/`failure` 取值；`signalOwnedGroup` 的身份复核；已有断言。
