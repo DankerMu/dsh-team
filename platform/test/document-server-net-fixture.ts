@@ -85,14 +85,17 @@ export function holderRead(command: AsyncDockerCommand, jwt: string | undefined)
 
 const COMMAND = { path: '/command', method: 'POST' } as const;
 const ANSWERED = (status: number) => ({ outcome: 'answered', status });
+// nginx matches the decoded path: these reached docservice through the version-prefix catch-all.
+const ENCODED = ['command%3F', 'command%23', 'coauthoring/CommandService.ashx%3F'];
 const EXPECTED_COMMAND = {
   inside: ['answered'],
-  outside: [ANSWERED(200), { outcome: 'timeout' }, ANSWERED(403)],
+  outside: [ANSWERED(200), { outcome: 'timeout' }, ...Array<object>(4).fill(ANSWERED(403))],
 };
 
 /**
  * 55.3 (#624) on the real Document Server: docservice answers its own loopback 8000; from
- * `instance`, +4:80 serves `/healthcheck`, 8000 times out and nginx refuses `/command` with 403.
+ * `instance`, +4:80 serves `/healthcheck`, 8000 times out and nginx refuses `/command` and the
+ * version-prefixed encoded-suffix variants with 403.
  * Vitest-free (the deployment fixture imports this module); fails with the outcomes only.
  */
 export async function commandReach(run: DockerOutput, instance: string) {
@@ -101,6 +104,7 @@ export async function commandReach(run: DockerOutput, instance: string) {
     { port: 80, path: '/healthcheck' },
     { port: 8000, ...COMMAND },
     { port: 80, ...COMMAND },
+    ...ENCODED.map((path) => ({ port: 80, ...COMMAND, path: `/9.4.0-1/${path}` })),
   ];
   const seen = await firewallReach(run, instance, inside, outside);
   const observed = { inside: seen.inside.map(({ outcome }) => outcome), outside: seen.outside };

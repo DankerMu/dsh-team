@@ -4,7 +4,9 @@
 # docservice's 8000. Any failure exits before the ready marker, so the Document Server never starts
 # (Office unavailable) rather than starting exposed.
 set -eu
-READY=/run/dsh-team/firewall-ready
+# Overridable only so the Docker-free test can run this script against stubs; compose sets neither.
+READY=${DSH_TEAM_FIREWALL_READY:-/run/dsh-team/firewall-ready}
+IF_INET6=${DSH_TEAM_IF_INET6:-/proc/net/if_inet6}
 rm -f "$READY"
 
 # $1 is iptables or ip6tables; each further argument is one more accepted match.
@@ -23,10 +25,11 @@ firewall() {
 
 firewall iptables
 # Skipped only on a kernel without IPv6; any other IPv6 failure stops the holder.
-if [ -e /proc/net/if_inet6 ]; then firewall ip6tables "-p ipv6-icmp"; fi
-touch "$READY"
+if [ -e "$IF_INET6" ]; then firewall ip6tables "-p ipv6-icmp"; fi
 
-# PID 1 ignores an untrapped SIGTERM: exit at once on `docker stop`.
+# PID 1 ignores an untrapped SIGTERM: exit at once on `docker stop`. Trapped before the marker, so
+# a stop that follows readiness never lands between the two.
 trap 'exit 0' TERM INT
+touch "$READY"
 sleep infinity &
 wait

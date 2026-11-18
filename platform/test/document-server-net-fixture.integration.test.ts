@@ -118,7 +118,9 @@ it('needs the in-memory JWT before any exec', () => {
 const OK = { outcome: 'answered', status: 200 };
 const TIMEOUT = { outcome: 'timeout' };
 const FORBIDDEN = { outcome: 'answered', status: 403 };
-const COMMAND_OK = [OK, TIMEOUT, FORBIDDEN];
+// nginx decodes `%3F`/`%23` before matching; the image's version-prefix catch-all would pass them on.
+const ENCODED = ['command%3F', 'command%23', 'coauthoring/CommandService.ashx%3F'];
+const COMMAND_OK = [OK, TIMEOUT, ...Array<object>(4).fill(FORBIDDEN)];
 
 /** The holder answers 404 on loopback 8000; the instance answers `outside`. */
 const commandLane = (outside: object[], calls: string[][]) => (args: string[]) => {
@@ -129,7 +131,7 @@ const commandLane = (outside: object[], calls: string[][]) => (args: string[]) =
   return Promise.resolve(JSON.stringify(args[3] === DOCUMENT_SERVER_NET ? inside : outside));
 };
 
-it('requires healthcheck 200, an unanswered 8000 and a 403 Command Service from the instance', async () => {
+it('requires healthcheck 200, an unanswered 8000 and 403 on every Command Service path from the instance', async () => {
   const calls: string[][] = [];
 
   const seen = await commandReach(commandLane(COMMAND_OK, calls), 'dsh-team-u-1');
@@ -142,13 +144,23 @@ it('requires healthcheck 200, an unanswered 8000 and a 403 Command Service from 
       { host: '10.0.0.4', port: 80, path: '/healthcheck' },
       { host: '10.0.0.4', port: 8000, ...post },
       { host: '10.0.0.4', port: 80, ...post },
+      ...ENCODED.map((path) => ({ host: '10.0.0.4', port: 80, ...post, path: `/9.4.0-1/${path}` })),
     ],
   ]);
 });
 
 it.each([
-  ['a refused 8000', [OK, { outcome: 'refused' }, FORBIDDEN], '"refused"'],
-  ['an answered Command Service', [OK, TIMEOUT, OK], '"status":200}]'],
+  ['a refused 8000', [OK, { outcome: 'refused' }, ...COMMAND_OK.slice(2)], '"refused"'],
+  [
+    'an answered Command Service',
+    [OK, TIMEOUT, OK, ...COMMAND_OK.slice(3)],
+    '"timeout"},{"outcome":"answered","status":200}',
+  ],
+  [
+    'an answered encoded suffix',
+    [...COMMAND_OK.slice(0, 5), OK],
+    '"status":403},{"outcome":"answered","status":200}]',
+  ],
 ])('fails on %s, naming the outcomes', async (_case, outside, needle) => {
   await expect(commandReach(commandLane(outside, []), 'dsh-team-u-1')).rejects.toThrow(needle);
 });
