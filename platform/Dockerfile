@@ -22,6 +22,10 @@ RUN pnpm build \
   && rm -rf prebuilds
 
 FROM node:24.13.1-bookworm-slim AS runtime
+# Only the dsh-team-documentserver-net holder runs these, as root with NET_ADMIN (#624).
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends iptables \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /production/package.json ./platform/package.json
 COPY --from=build /production/node_modules ./platform/node_modules
@@ -29,6 +33,7 @@ COPY --from=build /app/platform/dist ./platform/dist
 COPY --from=build /app/platform/web/dist ./platform/web/dist
 COPY images/seccomp/dsh-user.json ./images/seccomp/dsh-user.json
 COPY images/dsh-user/catalog.json ./images/dsh-user/catalog.json
+COPY --chmod=0755 deploy/document-server-net.sh ./deploy/document-server-net.sh
 RUN mkdir /app/data && chown node:node /app/data
 USER node
 EXPOSE 8080

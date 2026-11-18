@@ -20,7 +20,7 @@ services:
       PLATFORM_COOKIE_SECURE: ${PLATFORM_COOKIE_SECURE-false}
       PLATFORM_TRUSTED_PROXIES: ${PLATFORM_TRUSTED_PROXIES:-}
       PLATFORM_INSTANCE_FONTS_DIR: ${PLATFORM_INSTANCE_FONTS_DIR:-}
-      DOCUMENT_SERVER_CONTAINER_NAME: dsh-team-documentserver
+      DOCUMENT_SERVER_CONTAINER_NAME: dsh-team-documentserver-net
       DOCUMENT_SERVER_JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET:?Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server}
     ports:
       - "${PLATFORM_PORT:?}:${PLATFORM_PORT:?}"
@@ -52,9 +52,36 @@ services:
         read_only: true
         bind:
           create_host_path: false
+  # Owns the Document Server's network namespace (#624): inbound only loopback, replies and TCP 80,
+  # so instances never reach docservice's 8000. The platform attaches this container to instances.
+  documentserver-net:
+    image: dsh-team-platform:local
+    container_name: dsh-team-documentserver-net
+    user: root
+    cap_add:
+      - NET_ADMIN
+    entrypoint:
+      - /app/deploy/document-server-net.sh
+    tmpfs:
+      - /run/dsh-team
+    healthcheck:
+      test:
+        - CMD
+        - test
+        - -f
+        - /run/dsh-team/firewall-ready
+      interval: 30s
+      start_period: 30s
+      start_interval: 1s
+      retries: 3
   documentserver:
     image: onlyoffice/documentserver:9.4.0
     container_name: dsh-team-documentserver
+    network_mode: service:documentserver-net
+    depends_on:
+      documentserver-net:
+        condition: service_healthy
+        restart: true
     environment:
       JWT_ENABLED: "true"
       JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET:?Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server}
@@ -64,6 +91,13 @@ services:
       - type: bind
         source: ./assets/fonts
         target: /usr/share/fonts/truetype/custom
+        read_only: true
+        bind:
+          create_host_path: false
+      # Command Service only from this namespace's loopback (#624); sorts before ds-docservice.conf.
+      - type: bind
+        source: ./deploy/document-server-command.conf
+        target: /etc/nginx/includes/ds-acl-command.conf
         read_only: true
         bind:
           create_host_path: false

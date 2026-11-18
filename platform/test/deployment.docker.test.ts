@@ -31,6 +31,7 @@ import { verifyTlsCarrier, withTlsDeployment } from './deployment-tls-fixture.ts
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
+import { DOCUMENT_SERVER_NET, firewallReach } from './document-server-net-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 it('refuses a pre-existing fixed platform identity without adopting or removing it', async () => {
@@ -538,6 +539,8 @@ async function expectSocketIsolation(
   }
 }
 
+const ANSWERED = { outcome: 'answered', status: 200 };
+
 it('publishes only the platform port and mounts the Docker socket only there with two native instances', async () => {
   await withDeployment(async (lifecycle, start) => {
     const { deployment, employee } = await configureDeployment(lifecycle, start);
@@ -564,7 +567,9 @@ it('publishes only the platform port and mounts the Docker socket only there wit
         expectedIds.push(instance.Id);
       }
       const platform = await inspectAsync(lifecycle, 'dsh-team-platform');
-      expectedIds.push(platform.Id);
+      const server = await inspectAsync(lifecycle, 'dsh-team-documentserver');
+      const holder = await inspectAsync(lifecycle, DOCUMENT_SERVER_NET);
+      expectedIds.push(platform.Id, server.Id, holder.Id);
       const project = record(record(platform.Config).Labels)['com.docker.compose.project'];
       if (typeof project !== 'string') throw new Error('Missing deployment project identity');
       const ids = new Set<string>();
@@ -592,10 +597,16 @@ it('publishes only the platform port and mounts the Docker socket only there wit
       for (const id of ids) {
         const container = await inspectAsync(lifecycle, id);
         const host = record(container.HostConfig);
-        const ports = record(record(container.NetworkSettings).Ports);
+        // A container joined to another namespace may report null ports: nothing published.
+        const ports = record(record(container.NetworkSettings).Ports ?? {});
         const isPlatform = id === platform.Id;
         expect(host.PublishAllPorts).toBe(false);
-        expect(host.NetworkMode).not.toMatch(/^(?:host$|container:)/);
+        // #624: the one shared namespace is the Document Server joining its firewall holder.
+        if (id === server.Id) expect(host.NetworkMode).toBe(`container:${String(holder.Id)}`);
+        else expect(host.NetworkMode).not.toMatch(/^(?:host$|container:)/);
+        const added: unknown[] = Array.isArray(host.CapAdd) ? host.CapAdd : [];
+        const netAdmin = added.some((cap) => cap === 'NET_ADMIN' || cap === 'CAP_NET_ADMIN');
+        expect(netAdmin, 'NET_ADMIN only on the holder').toBe(id === holder.Id);
         const configured = record(host.PortBindings ?? {});
         if (isPlatform) {
           const portKey = `${String(deployment.port)}/tcp`;
@@ -619,6 +630,17 @@ it('publishes only the platform port and mounts the Docker socket only there wit
         await expectSocketIsolation(container, isPlatform, socketSource);
       }
       expect([...publications]).toEqual([`${String(deployment.port)}/tcp`]);
+      // Linux firewall evidence (#624): both stand-in ports answer inside the namespace; from
+      // each instance (uid 1001) only +4:80 does, while 8000 times out rather than being refused.
+      const run = async (args: string[]) =>
+        output(await lifecycle.commandAsync(args, 30_000), args);
+      const inside = [80, 8000].map((port) => ({ host: '127.0.0.1', port, path: '/' }));
+      const outside = [80, 8000].map((port) => ({ port, path: '/' }));
+      for (const user of [employee, second])
+        expect(await firewallReach(run, `dsh-team-u-${user.id}`, inside, outside)).toEqual({
+          inside: [ANSWERED, ANSWERED],
+          outside: [ANSWERED, { outcome: 'timeout' }],
+        });
     } finally {
       gateway.close();
     }

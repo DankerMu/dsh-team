@@ -32,6 +32,7 @@ import {
   record,
 } from './docker-cleanup.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
+import { commandReach, DOCUMENT_SERVER_NET, holderRead } from './document-server-net-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import {
@@ -97,6 +98,7 @@ const DOCUMENT_SERVER_FONTS = '/usr/share/fonts/truetype/custom';
 const FIXED_CONTAINERS = [
   [PLATFORM, 'Platform'],
   [DOCUMENT_SERVER, 'Document Server'],
+  [DOCUMENT_SERVER_NET, 'Document Server namespace holder'],
 ] as const;
 
 /** The RAGFlow origin and key come only from the private file; nothing here may print them. */
@@ -186,6 +188,8 @@ interface ConversationEvidence {
   officeIdle?: OfficeIdleEvidence;
   /** Waited for before the first Office lane (#622). */
   documentServer?: { startupMs: number; spawns: number };
+  /** Outcomes and statuses only (#624). */
+  commandService?: Awaited<ReturnType<typeof commandReach>>;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
   documentServerVolumes?: readonly string[];
 }
@@ -448,7 +452,7 @@ async function converse(
   run: DockerOutput,
   target: { base: string; directory: string; dataDir: string; compose: string[] },
   model: ReturnType<typeof ownedModel>,
-  context: { evidence: ConversationEvidence; ragflow: RagflowContext },
+  context: { evidence: ConversationEvidence; ragflow: RagflowContext; jwt: string | undefined },
 ): Promise<void> {
   const { evidence, ragflow } = context;
   const { base } = target;
@@ -523,6 +527,9 @@ async function converse(
     // The startup script's allfonts step restarts docservice; no editor opens before it ends (#622).
     const documentServer = await documentServerStarted(run, 300_000);
     evidence.documentServer = documentServer;
+    const instance = `dsh-team-u-${employee.id}`;
+    // 55.3 (#624): docservice and the Command Service answer only on the holder's own loopback.
+    evidence.commandService = await commandReach(run, instance);
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
     // 18.5 (#440): A edits and saves a DOCX, an XLSX and a PPTX; the Agent's bash reads all three.
@@ -540,8 +547,9 @@ async function converse(
     const retire = () =>
       secondId === '' ? Promise.resolve() : disableEmployee(administrator, secondId);
     const b = { secondEmployee, secondEmail: B_EMAIL, retire };
-    const instance = `dsh-team-u-${employee.id}`;
-    const office = { ...lane, ...b, run, platformRead, instance, administrator };
+    // The Command Service probes run in the holder, with the JWT on stdin (#624).
+    const namespaceRead = holderRead(lifecycle.commandAsync, context.jwt);
+    const office = { ...lane, ...b, run, platformRead, namespaceRead, instance, administrator };
     evidence.officeEditor = await officeEditorScenario({ ...office, reply, readBack });
     // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
     evidence.officeIsolation = await officeIsolationScenario(office);
@@ -630,6 +638,7 @@ async function composeScenario(
       ['container', `dsh-team-test-${runId}-socket-probe`],
       ['container', PLATFORM],
       ['container', DOCUMENT_SERVER],
+      ['container', DOCUMENT_SERVER_NET],
       ['network', network],
     ] as const)
       await lifecycle.registerResourceAsync(kind, name, ownership);
@@ -649,7 +658,7 @@ async function composeScenario(
       directory,
       model.provider,
     );
-    const { base, compose } = await writeComposeConfiguration({
+    const { base, compose, documentServerJwt } = await writeComposeConfiguration({
       repositoryRoot: lifecycle.repositoryRoot,
       directory,
       dataDir,
@@ -667,7 +676,8 @@ async function composeScenario(
     await run([...compose, 'up', '-d', '--no-build', '--pull', 'never'], 120_000);
     evidence.documentServerVolumes = await documentServerVolumes(lifecycle);
     await pollHealth(fetch, base, 60_000);
-    await converse(lifecycle, run, { base, directory, dataDir, compose }, model, context);
+    const target = { base, directory, dataDir, compose };
+    await converse(lifecycle, run, target, model, { ...context, jwt: documentServerJwt });
   } catch (error) {
     failures.push(error);
   }
@@ -892,6 +902,7 @@ it('builds both images, starts the delivered compose platform, converses through
         officeProfile: officeProfileLine(officeProfile),
         officeIdle: officeIdleLine(evidence.officeIdle),
         documentServer,
+        commandService: evidence.commandService,
       },
     })}\n`,
   );

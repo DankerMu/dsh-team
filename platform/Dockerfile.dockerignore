@@ -17,6 +17,7 @@ platform/web/src/**/*.test.ts
 platform/web/src/**/*.test.tsx
 !images/seccomp/dsh-user.json
 !images/dsh-user/catalog.json
+!deploy/document-server-net.sh
 # Keep nested local-only files out even beneath an allowed source directory.
 **/.env
 **/.env.*

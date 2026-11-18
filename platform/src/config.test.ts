@@ -472,7 +472,7 @@ describe('loadConfig Document Server inputs', () => {
   it('rejects the repository .env.example copied verbatim at its empty JWT', () => {
     const example = exampleEnvironment();
 
-    expect(example[CONTAINER_NAME]).toBe('dsh-team-documentserver');
+    expect(example[CONTAINER_NAME]).toBe('dsh-team-documentserver-net');
     expect(example[JWT_SECRET]).toBe('');
     expect(example.PLATFORM_INSTANCE_FONTS_DIR).toBe('');
     expect(() => loadConfig(example)).toThrow(/^DOCUMENT_SERVER_JWT_SECRET must not be empty$/);
@@ -486,7 +486,7 @@ describe('loadConfig Document Server inputs', () => {
     const filled = loadConfig({ ...example, [JWT_SECRET]: JWT_MARKER });
 
     expect(filled.documentServer).toStrictEqual({
-      containerName: 'dsh-team-documentserver',
+      containerName: 'dsh-team-documentserver-net',
       jwtSecret: JWT_MARKER,
     });
     expect(loadConfig(removed)).toStrictEqual({ ...filled, documentServer: null });

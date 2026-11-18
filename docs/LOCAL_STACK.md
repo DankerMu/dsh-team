@@ -148,7 +148,7 @@ pnpm test:stack
 
 **清理规则：**
 - 资源都使用 `dsh-team` 前缀，并在创建之前写进账本，每条账本记录带着该资源的所有权标签：
-  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform`、固定名 Document Server `dsh-team-documentserver`（退休时连同它的匿名卷一起删除）和 compose 网络，带 `dsh-team.test-run=<runId>`。
+  - 本次运行直接创建的镜像、探测容器、固定名平台 `dsh-team-platform`、固定名 Document Server `dsh-team-documentserver`（退休时连同它的匿名卷一起删除）、它的固定名防火墙容器 `dsh-team-documentserver-net` 和 compose 网络，带 `dsh-team.test-run=<runId>`。
   - 平台为员工创建的实例资源 `dsh-team-u-<id>`、`dsh-team-home-<id>`、`dsh-team-work-<id>`、`dsh-team-net-<id>`，带 `dsh-team.user=<id>`，不带运行标签。
 - vitest 自己结束后，它的进程组要在 2 秒内结算。没有结算、清理失败，或退休后按 `dsh-team.test-run` 标签清点仍有残留时，运行目录和账本会保留，命令以非零状态结束。按运行标签的清点看不到员工实例资源，它们由账本的精确退休删除。
 - 账本保留后没有可以重新进入的退休入口，按以下顺序手工恢复：

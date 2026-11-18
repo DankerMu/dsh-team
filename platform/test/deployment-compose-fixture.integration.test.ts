@@ -12,6 +12,9 @@ import { OWNER_LABEL } from './docker-cleanup.ts';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const KEY = 'DOCUMENT_SERVER_JWT_SECRET';
 const RUN = 'run-under-test';
+// Plain responders, as the platform image's `node` user, behind the holder's firewall.
+const STAND_IN =
+  "for (const port of [80, 8000]) require('node:http').createServer((_, res) => res.end()).listen(port)";
 const directories: string[] = [];
 
 afterEach(async () => {
@@ -86,16 +89,17 @@ it.each([
   },
 );
 
-it('labels the bundled Document Server for ownership and keeps its delivered image and fonts', async () => {
+it('labels the bundled Document Server and runs its namespace holder from the captured platform image', async () => {
   const { override } = await configure();
 
   expect(override.services).toEqual({
     platform: { image: 'sha256:platform', labels: { [OWNER_LABEL]: RUN } },
+    'documentserver-net': { image: 'sha256:platform', labels: { [OWNER_LABEL]: RUN } },
     documentserver: { labels: { [OWNER_LABEL]: RUN } },
   });
 });
 
-it('replaces the Document Server with the captured image, an idle entrypoint and private fonts', async () => {
+it('replaces the Document Server with the captured image answering on 80 and 8000 and private fonts', async () => {
   const fontsDir = '/private/owned/document-server-fonts';
   const { override } = await configure({
     documentServer: { image: 'sha256:platform', fontsDir },
@@ -103,7 +107,7 @@ it('replaces the Document Server with the captured image, an idle entrypoint and
 
   expect(override.services.documentserver).toEqual({
     image: 'sha256:platform',
-    entrypoint: ['node', '-e', 'setInterval(() => {}, 1 << 30)'],
+    entrypoint: ['node', '-e', STAND_IN],
     volumes: [
       {
         type: 'bind',
@@ -118,20 +122,47 @@ it('replaces the Document Server with the captured image, an idle entrypoint and
 });
 
 // The VPS stand-in rewrites this mount by target, so only the delivered file itself proves it.
-it('delivers the operator fonts as one read-only, never-created repository-root bind', async () => {
+it('delivers the operator fonts and the Command Service rule as read-only, never-created binds', async () => {
   const delivered = parse(await readFile(join(root, 'deploy/compose.yml'), 'utf8')) as {
     services: Record<string, { volumes?: unknown }>;
   };
 
-  expect(delivered.services.documentserver?.volumes).toEqual([
-    {
+  expect(delivered.services.documentserver?.volumes).toEqual(
+    [
+      ['./assets/fonts', '/usr/share/fonts/truetype/custom'],
+      ['./deploy/document-server-command.conf', '/etc/nginx/includes/ds-acl-command.conf'],
+    ].map(([source, target]) => ({
       type: 'bind',
-      source: './assets/fonts',
-      target: '/usr/share/fonts/truetype/custom',
+      source,
+      target,
       read_only: true,
       bind: { create_host_path: false },
-    },
-  ]);
+    })),
+  );
+});
+
+// #624: the Document Server joins the holder's namespace, and the platform attaches the holder.
+it('runs the Document Server in the firewall holder namespace the platform attaches', async () => {
+  const delivered = parse(await readFile(join(root, 'deploy/compose.yml'), 'utf8')) as {
+    services: Record<string, Record<string, unknown>>;
+  };
+  const { platform, documentserver } = delivered.services;
+
+  expect(delivered.services['documentserver-net']).toMatchObject({
+    image: 'dsh-team-platform:local',
+    container_name: 'dsh-team-documentserver-net',
+    user: 'root',
+    cap_add: ['NET_ADMIN'],
+    entrypoint: ['/app/deploy/document-server-net.sh'],
+    healthcheck: { test: ['CMD', 'test', '-f', '/run/dsh-team/firewall-ready'] },
+  });
+  expect(documentserver).toMatchObject({
+    network_mode: 'service:documentserver-net',
+    depends_on: { 'documentserver-net': { condition: 'service_healthy', restart: true } },
+  });
+  expect(platform?.environment).toMatchObject({
+    DOCUMENT_SERVER_CONTAINER_NAME: 'dsh-team-documentserver-net',
+  });
 });
 
 // No inventory gate reads compose interpolation; only the delivered file proves the passthrough.

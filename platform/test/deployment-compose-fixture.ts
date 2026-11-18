@@ -55,8 +55,8 @@ export interface ComposeConfiguration {
   /** Additional override files appended after the ownership override. */
   readonly overrides: readonly string[];
   /**
-   * The VPS stand-in for the bundled Document Server: an already captured owned image idling in
-   * place of the real 8.7 GB image, with an empty private font directory. The local lane omits
+   * The VPS stand-in for the bundled Document Server: an already captured owned image answering on
+   * 80 and 8000 in place of the real 8.7 GB image, with an empty private font directory. The local lane omits
    * it and runs the delivered image over the repository's `assets/fonts`.
    */
   readonly documentServer?: { readonly image: string; readonly fontsDir: string };
@@ -76,8 +76,13 @@ function documentServerOverride(
   if (standIn === undefined) return { labels: ownership };
   return {
     image: standIn.image,
-    // Compose clears the image's default command when the entrypoint is set.
-    entrypoint: ['node', '-e', 'setInterval(() => {}, 1 << 30)'],
+    // Compose clears the image's default command when the entrypoint is set. Plain responders on
+    // the real image's nginx and docservice ports, as `node` behind the holder's firewall (#624).
+    entrypoint: [
+      'node',
+      '-e',
+      "for (const port of [80, 8000]) require('node:http').createServer((_, res) => res.end()).listen(port)",
+    ],
     // Merged by target; every field is restated rather than inherited from the delivered entry.
     volumes: [
       {
@@ -137,6 +142,7 @@ export async function writeComposeConfiguration(
     JSON.stringify({
       services: {
         platform: { image: configuration.platformImage, labels: ownership },
+        'documentserver-net': { image: configuration.platformImage, labels: ownership },
         documentserver: documentServerOverride(ownership, configuration.documentServer),
       },
       networks: { default: { name: network, labels: ownership } },
