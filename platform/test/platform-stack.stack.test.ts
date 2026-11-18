@@ -66,7 +66,8 @@ import {
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
 import { officeIdleLine, officeIdleScenario } from './office-idle-stack-fixture.ts';
 import type { OfficeIdleEvidence } from './office-idle-stack-fixture.ts';
-import { officeIsolationLine, officeIsolationScenario } from './office-isolation-stack-fixture.ts';
+import { officeIsolationWithForgotten } from './office-forgotten-stack-fixture.ts';
+import { officeIsolationLine } from './office-isolation-stack-fixture.ts';
 import { officeProfileLine, officeProfileScenario } from './office-profile-stack-fixture.ts';
 import type { OfficeProfileEvidence } from './office-profile-stack-fixture.ts';
 import type { OfficeIsolationEvidence } from './office-isolation-stack-fixture.ts';
@@ -551,8 +552,9 @@ async function converse(
     const namespaceRead = holderRead(lifecycle.commandAsync, context.jwt);
     const office = { ...lane, ...b, run, platformRead, namespaceRead, instance, administrator };
     evidence.officeEditor = await officeEditorScenario({ ...office, reply, readBack });
+    // #624 §55.5: A's failed save leaves a forgotten copy B cannot list, fetch or delete; A recovers it.
     // 18.5 (#440): B cannot reach A; from the platform only A's own token and key work.
-    evidence.officeIsolation = await officeIsolationScenario(office);
+    evidence.officeIsolation = await officeIsolationWithForgotten(office);
     // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });

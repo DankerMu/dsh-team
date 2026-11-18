@@ -64,7 +64,10 @@ export default defineConfig({
           // The office idle lane (#440) raised it by 660s: a 60s editor load, the 210s hold, the
           // 120s write-back, the 240s idle-stop bound and 30s for the file's write and removal.
           // The operator font check (#440) raised it by 30s: one docker exec of fc-scan.
-          testTimeout: 5_310_000,
+          // The forgotten attack lane (#624 §55.5) raised it by 420s: two editor loads (60s each)
+          // for the failing edit and the recovery, a 60s forgotten-store wait, the B-container
+          // attack exec (30s), a 60s recovery read-back poll and the two positive-control reads.
+          testTimeout: 5_730_000,
         },
       },
     ],
