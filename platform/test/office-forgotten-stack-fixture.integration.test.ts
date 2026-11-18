@@ -6,7 +6,7 @@ import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
+import { inspect, promisify } from 'node:util';
 import { afterAll, expect, it } from 'vitest';
 import {
   bForgottenScript,
@@ -16,7 +16,8 @@ import {
   forgottenRows,
   namespaceForgottenListScript,
   proxyControl,
-  recoverFailure,
+  scrub,
+  sessionFailure,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
 import { NODE } from './office-isolation-stack-fixture.ts';
@@ -334,7 +335,7 @@ it('attributes a failed reopen to the alert it showed and the console errors, wi
   const failure = new StackWorkbenchFailure(blocked, session, 'office forgotten recover');
   const alert = { shown: true, value: '-104', text: 'opened from the backup copy' } as const;
 
-  const error = recoverFailure(failure, alert, KA);
+  const error = sessionFailure('recover', failure, { alert }, KA);
 
   expect(error.message).toContain('Timeout 60000ms exceeded');
   expect(error.message).toContain('"value":"-104","text":"opened from the backup copy"');
@@ -342,8 +343,42 @@ it('attributes a failed reopen to the alert it showed and the console errors, wi
     '"consoleErrors":["socket <redacted> closed","ServiceWorker 403"]',
   );
   expect(error.message).not.toContain(KA);
-  expect(error.cause).toBe(failure);
-  expect(recoverFailure(blocked, undefined, KA).message).toContain(
-    'scene={"alert":"not reached","consoleErrors":[]}',
+  expect(error.cause).toBeUndefined();
+  expect(sessionFailure('recover', blocked, { alert: 'not reached' }, KA).message).toContain(
+    'scene={"alert":"not reached","consoleErrors":[],"failedRequests":[]}',
   );
+});
+
+/** Everything vitest could print for `error`: the inspected cause chain and own properties, and JSON. */
+const printed = (error: Error) => `${inspect(error, { depth: 20 })}\n${JSON.stringify(error)}`;
+
+it.each([
+  ['recover', KA],
+  ['edit', null],
+] as const)(
+  'leaves a %s failure without cause and with no trace of A key anywhere, known or not',
+  (label, known) => {
+    const blocked = new Error(`locator.click: Timeout on /doc/${KA}/c/?EIO=4`, {
+      cause: new Error(`frame /doc/${KA}/c/`),
+    });
+    const session = {
+      ...{ screenshots: [], pageErrors: [], externalRequests: [], requests: 1, websockets: 1 },
+      ...{ consoleErrors: [`socket /doc/${KA}/c/ closed`], failedRequests: [`GET /doc/${KA}/c/`] },
+    };
+    const failure = new StackWorkbenchFailure(blocked, session, `office forgotten ${label}`);
+
+    const error = sessionFailure(label, failure, { keyRead: known !== null }, known);
+
+    expect(error.cause).toBeUndefined();
+    expect(printed(error)).not.toContain(KA);
+    expect(error.message).toContain(
+      'Timeout on /doc/<redacted>/c/?EIO=4 <- frame /doc/<redacted>/c/;',
+    );
+    expect(error.message).toContain('"failedRequests":["GET /doc/<redacted>/c/"]');
+  },
+);
+
+it('scrubs A key, and any document key, from the reopen alert text', () => {
+  expect(scrub(`restored ${KA} copy`, KA)).toBe('restored <redacted> copy');
+  expect(scrub(`restored ${'b2'.repeat(32)} copy`, null)).toBe('restored <redacted> copy');
 });

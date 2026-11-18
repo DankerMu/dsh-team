@@ -353,7 +353,11 @@ async function editIntoForgotten(
     await delay(3000);
     await shoot('office-forgotten-edit-typed');
   };
-  const editor = await workbenchSession({ ...lane.session, directory }, names, body);
+  const editor = await workbenchSession({ ...lane.session, directory }, names, body).catch(
+    (error: unknown) => {
+      throw sessionFailure('edit', error, { keyRead: kA !== null }, kA);
+    },
+  );
   return { kA, closed: editor.screenshots.includes('office-forgotten-edit-typed.png') };
 }
 
@@ -379,7 +383,7 @@ async function awaitForgotten(lane: OfficeForgottenLane, kA: string) {
 /** What the reopened editor showed: DS 9.4 opens a key whose only copy is in the forgotten store
  * from that copy and raises a modal "opened from the server backup copy" alert (seen as
  * `data-value="-104"`) that blocks the document until dismissed. Fixed UI text, no key. */
-export type ReopenAlert =
+type ReopenAlert =
   | { readonly shown: false }
   | {
       readonly shown: true;
@@ -387,22 +391,39 @@ export type ReopenAlert =
       readonly text: string;
     };
 
-/** A recovery failure that names the reopen alert and the session's console error texts, A's key
- * redacted from both; the browser failure stays the cause. */
-export function recoverFailure(error: unknown, alert: ReopenAlert | undefined, kA: string) {
-  const consoleErrors = error instanceof StackWorkbenchFailure ? error.evidence.consoleErrors : [];
-  const reason = error instanceof Error ? error.message : String(error);
-  const scene = JSON.stringify({ alert: alert ?? 'not reached', consoleErrors });
+/** `text` with A's key and, since it may not be known yet, every document key (a sha256 hex digest,
+ * plugin `onlyoffice.ts:37`) redacted. */
+export const scrub = (text: string, kA: string | null) =>
+  redactSecrets(text, [kA ?? undefined]).replace(/[0-9a-f]{64}/g, '<redacted>');
+
+/** A failed browser session as ONE redacted error without `cause`: vitest prints cause chains and
+ * own properties, and the session's console errors and failed requests can carry the Document
+ * Server socket path `/doc/<key>/…`. The cause chain's messages, those lists and `scene` are folded
+ * into the message instead (as `guarded` does). */
+export function sessionFailure(label: string, error: unknown, scene: object, kA: string | null) {
+  const reasons: string[] = [];
+  let current: unknown = error;
+  while (current !== undefined && reasons.length < 8) {
+    reasons.push(current instanceof Error ? current.message : JSON.stringify(current));
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  const evidence = error instanceof StackWorkbenchFailure ? error.evidence : undefined;
+  const lists = {
+    consoleErrors: evidence?.consoleErrors ?? [],
+    failedRequests: evidence?.failedRequests ?? [],
+  };
+  const detail = JSON.stringify({ ...scene, ...lists });
   return new Error(
-    redactSecrets(`Office forgotten recover failed: ${reason}; scene=${scene}`, [kA]),
-    {
-      cause: error,
-    },
+    scrub(`Office forgotten ${label} failed: ${reasons.join(' <- ')}; scene=${detail}`, kA),
   );
 }
 
 /** Dismisses the reopen alert inside `editor` (waiting up to 20s for it) and returns what it said. */
-async function dismissAlert(editor: FrameLocator, timeout: number): Promise<ReopenAlert> {
+async function dismissAlert(
+  editor: FrameLocator,
+  timeout: number,
+  kA: string,
+): Promise<ReopenAlert> {
   const alert = editor.locator('.asc-window.modal.alert').first();
   const shown = await alert.waitFor({ state: 'visible', timeout: 20_000 }).then(
     () => true,
@@ -410,7 +431,7 @@ async function dismissAlert(editor: FrameLocator, timeout: number): Promise<Reop
   );
   if (!shown) return { shown };
   const value = await alert.getAttribute('data-value', { timeout });
-  const text = (await alert.innerText({ timeout })).trim().slice(0, 300);
+  const text = scrub((await alert.innerText({ timeout })).trim(), kA).slice(0, 300);
   await alert.locator('button[result="ok"]').click({ timeout });
   await alert.waitFor({ state: 'hidden', timeout });
   return { shown, value, text };
@@ -426,7 +447,7 @@ async function recover(lane: OfficeForgottenLane, nonce: string, directory: stri
   const { timeout } = lane.session;
   let alert: ReopenAlert | undefined;
   const loaded = async (editor: FrameLocator) => {
-    alert = await dismissAlert(editor, timeout);
+    alert = await dismissAlert(editor, timeout, kA);
   };
   const body: Parameters<typeof workbenchSession>[2] = async (page, shoot) => {
     await openHinted(page, shoot, lane.session, NAME, 'office-forgotten-recover-open');
@@ -435,7 +456,7 @@ async function recover(lane: OfficeForgottenLane, nonce: string, directory: stri
   };
   const editor = await workbenchSession({ ...lane.session, directory }, names, body).catch(
     (error: unknown) => {
-      throw recoverFailure(error, alert, kA);
+      throw sessionFailure('recover', error, { alert: alert ?? 'not reached' }, kA);
     },
   );
   const deadline = Date.now() + timeout;
