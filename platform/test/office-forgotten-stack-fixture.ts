@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import type { FrameLocator } from '@playwright/test';
 import { expect } from 'vitest';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
 import {
@@ -25,7 +26,7 @@ import type {
 } from './office-isolation-stack-fixture.ts';
 import { exchangeJs, JWT_JS, READ_JS } from './onlyoffice-probe-script.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
-import { workbenchSession } from './stack-browser-fixture.ts';
+import { StackWorkbenchFailure, workbenchSession } from './stack-browser-fixture.ts';
 
 const NAME = '忘记恢复.docx';
 const FILE = `${WORK}/${NAME}`;
@@ -261,6 +262,7 @@ interface OfficeForgottenEvidence {
   readonly attack: ReturnType<typeof expectedAttack>;
   readonly present: Readonly<Record<string, unknown>>;
   readonly recovered: 'recovered' | 'lost';
+  readonly reopenAlert: ReopenAlert;
 }
 
 /** A's lane plus B (started by the editor lane) and the Document Server namespace position. */
@@ -374,27 +376,75 @@ async function awaitForgotten(lane: OfficeForgottenLane, kA: string) {
   return seen;
 }
 
+/** What the reopened editor showed: DS 9.4 opens a key whose only copy is in the forgotten store
+ * from that copy and raises a modal "opened from the server backup copy" alert (seen as
+ * `data-value="-104"`) that blocks the document until dismissed. Fixed UI text, no key. */
+export type ReopenAlert =
+  | { readonly shown: false }
+  | {
+      readonly shown: true;
+      readonly value: string | null;
+      readonly text: string;
+    };
+
+/** A recovery failure that names the reopen alert and the session's console error texts, A's key
+ * redacted from both; the browser failure stays the cause. */
+export function recoverFailure(error: unknown, alert: ReopenAlert | undefined, kA: string) {
+  const consoleErrors = error instanceof StackWorkbenchFailure ? error.evidence.consoleErrors : [];
+  const reason = error instanceof Error ? error.message : String(error);
+  const scene = JSON.stringify({ alert: alert ?? 'not reached', consoleErrors });
+  return new Error(
+    redactSecrets(`Office forgotten recover failed: ${reason}; scene=${scene}`, [kA]),
+    {
+      cause: error,
+    },
+  );
+}
+
+/** Dismisses the reopen alert inside `editor` (waiting up to 20s for it) and returns what it said. */
+async function dismissAlert(editor: FrameLocator, timeout: number): Promise<ReopenAlert> {
+  const alert = editor.locator('.asc-window.modal.alert').first();
+  const shown = await alert.waitFor({ state: 'visible', timeout: 20_000 }).then(
+    () => true,
+    () => false,
+  );
+  if (!shown) return { shown };
+  const value = await alert.getAttribute('data-value', { timeout });
+  const text = (await alert.innerText({ timeout })).trim().slice(0, 300);
+  await alert.locator('button[result="ok"]').click({ timeout });
+  await alert.waitFor({ state: 'hidden', timeout });
+  return { shown, value, text };
+}
+
 /** Reopens A's DOCX (mtime now restored, so the key is A's original): the Document Server opens it
- * from the forgotten copy, a fresh marker edit forces a genuine save that writes the recovered bytes
- * back, and the file then holds A's pre-failure nonce. */
-async function recover(lane: OfficeForgottenLane, nonce: string, directory: string) {
+ * from the forgotten copy and raises its backup-copy alert, which is dismissed; a fresh marker edit
+ * then forces a genuine save that writes the reassembled document back. The file holding A's
+ * pre-failure nonce (absent before the reopen) can only come from the forgotten copy. */
+async function recover(lane: OfficeForgottenLane, nonce: string, directory: string, kA: string) {
   await documentServerReady(lane);
   const names = { label: 'office forgotten recover', failure: 'office-forgotten-recover-failure' };
+  const { timeout } = lane.session;
+  let alert: ReopenAlert | undefined;
+  const loaded = async (editor: FrameLocator) => {
+    alert = await dismissAlert(editor, timeout);
+  };
   const body: Parameters<typeof workbenchSession>[2] = async (page, shoot) => {
     await openHinted(page, shoot, lane.session, NAME, 'office-forgotten-recover-open');
-    // A throwaway marker makes the editor dirty so the save actually runs; the nonce it writes back
-    // can only come from the forgotten reassembly, which is what proves the recovery.
-    await typeAndSave(page, 'docx', editorNonce(), lane.session.timeout);
+    await typeAndSave(page, 'docx', editorNonce(), timeout, loaded);
     await shoot('office-forgotten-recover-saved');
   };
-  const editor = await workbenchSession({ ...lane.session, directory }, names, body);
-  const deadline = Date.now() + lane.session.timeout;
+  const editor = await workbenchSession({ ...lane.session, directory }, names, body).catch(
+    (error: unknown) => {
+      throw recoverFailure(error, alert, kA);
+    },
+  );
+  const deadline = Date.now() + timeout;
   let held = false;
   while (!held && Date.now() < deadline) {
     held = await fileHasNonce(lane, nonce);
     if (!held) await delay(2000);
   }
-  return { editor, recovered: held ? ('recovered' as const) : ('lost' as const) };
+  return { editor, alert, recovered: held ? ('recovered' as const) : ('lost' as const) };
 }
 
 async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgottenEvidence> {
@@ -441,9 +491,12 @@ async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgott
   expect(JSON.stringify(present), 'present check free of A key').not.toContain(kA);
   // The nonce is not on disk yet, so a recovered nonce can only come from the forgotten reassembly.
   expect(await fileHasNonce(lane, nonce), "A's file lacks the nonce before reopening").toBe(false);
-  const { recovered } = await recover(lane, nonce, directory);
-  expect(recovered, 'A recovers its pre-failure edit from the forgotten copy').toBe('recovered');
-  return { positive, attack, present, recovered };
+  const { recovered, alert } = await recover(lane, nonce, directory, kA);
+  const seen = `reopen alert ${JSON.stringify(alert)}`;
+  expect(recovered, `A recovers its pre-failure edit from the forgotten copy, ${seen}`).toBe(
+    'recovered',
+  );
+  return { positive, attack, present, recovered, reopenAlert: alert ?? { shown: false } };
 }
 
 /**

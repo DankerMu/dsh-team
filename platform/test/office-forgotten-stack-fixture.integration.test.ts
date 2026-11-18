@@ -16,9 +16,11 @@ import {
   forgottenRows,
   namespaceForgottenListScript,
   proxyControl,
+  recoverFailure,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
 import { NODE } from './office-isolation-stack-fixture.ts';
+import { StackWorkbenchFailure } from './stack-browser-fixture.ts';
 
 const KA = 'a1'.repeat(32);
 const [nodeBinary = 'node', ...nodeFlags] = NODE;
@@ -321,4 +323,27 @@ it('treats a <key>/output entry as present via contains, and a 403 or empty list
   expect(forgottenPresent({ status: 200, listed: false, contains: true })).toBe(true);
   expect(forgottenPresent({ status: 200, listed: false, contains: false })).toBe(false);
   expect(forgottenPresent({ status: 403, listed: true, contains: true })).toBe(false);
+});
+
+it('attributes a failed reopen to the alert it showed and the console errors, with A key redacted', () => {
+  const blocked = new Error('locator.click: Timeout 60000ms exceeded');
+  const session = {
+    ...{ screenshots: [], pageErrors: [], failedRequests: [], externalRequests: [] },
+    ...{ consoleErrors: [`socket ${KA} closed`, 'ServiceWorker 403'], requests: 1, websockets: 1 },
+  };
+  const failure = new StackWorkbenchFailure(blocked, session, 'office forgotten recover');
+  const alert = { shown: true, value: '-104', text: 'opened from the backup copy' } as const;
+
+  const error = recoverFailure(failure, alert, KA);
+
+  expect(error.message).toContain('Timeout 60000ms exceeded');
+  expect(error.message).toContain('"value":"-104","text":"opened from the backup copy"');
+  expect(error.message).toContain(
+    '"consoleErrors":["socket <redacted> closed","ServiceWorker 403"]',
+  );
+  expect(error.message).not.toContain(KA);
+  expect(error.cause).toBe(failure);
+  expect(recoverFailure(blocked, undefined, KA).message).toContain(
+    'scene={"alert":"not reached","consoleErrors":[]}',
+  );
 });
