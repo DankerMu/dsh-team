@@ -6635,7 +6635,7 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
 
 ## 53. 技术债 #628：多进程集成用例的等待和用例预算挂钩，失败可归因
 
-依赖：无。只改 `platform/test/verify-browser-runtime.integration.test.ts` 和 `platform/test/trusted-docker-retirement.integration.test.ts`；不碰关键路径、产品代码、`scripts/`、`vitest.config.ts` 和 `trusted-docker-fixture.ts`。
+依赖：无。只改 `platform/test/verify-browser-runtime.integration.test.ts`、`platform/test/trusted-docker-retirement.integration.test.ts`、`platform/test/browser-runtime-fixture.ts` 的 `awaitFile`，并新增它的集成测试；不碰关键路径、产品代码、`scripts/`、`vitest.config.ts` 和 `trusted-docker-fixture.ts`。
 
 已核实（`main` `6c294a3`）：
 
@@ -6676,6 +6676,14 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
     2. 加新用例，此时它要等满 60 秒才以笼统错误失败，「5000 毫秒内」的断言或 vitest 超时都算红灯，记录下来；
     3. 再改成按存活等待，新用例转绿。
   - TDD 顺序（verify-browser-runtime）：先加新用例，此时只能等满固定 10 秒或撞上 vitest 超时、错误信息不含阶段和存活状态，算红灯；再改 `marker` 和 `settled`。
+- [ ] 53.4 `awaitFile` 丢事件（53.1 实现时查明的根因）：
+  - 事实：
+    - `browser-runtime-fixture.ts:494-521` 的 `awaitFile` 先建 `fs.watch`，再只 `lstat` 一次。macOS 上 watcher 生效前有一段空窗，文件在空窗里落地时，事件和那次 `lstat` 都错过它，等待只能到期。
+    - 实现方的独立实验（`fs.watch` 后 0–50 毫秒内用 `.pending` 加 rename 发布）每 60 次漏 8 到 15 次。
+    - 53.1 的归因错误实测为 `signal.json not observed by the case deadline; wrapper not exited; … signal.json present`。改动前同一用例 3 次都以笼统的 `Owned creation fixture completion missing` 失败。
+  - 修复：watcher 之外，每 50 毫秒补一次 `lstat`，看到文件就 resolve；定时器在 `finally` 里清掉。中止、ENOENT 以外的错误、最后的 `lstat` 校验都不变。注释改写为说明这次复查是为了补上 watcher 生效前的空窗，不是猜测的 sleep。
+  - 新增 `platform/test/browser-runtime-fixture.integration.test.ts`：循环 50 次，每次先调 `awaitFile(path, AbortSignal.timeout(2000))`，再在 0–50 毫秒后用 `.pending` 加 rename 发布文件，50 次都要 resolve。修复前在 macOS 上应以很高概率失败（按实测漏率，50 次全中的概率约万分之三），记下红灯；修复后转绿。另有一例：文件始终不出现时，按中止信号以原错误信息拒绝。
+  - `awaitFile` 的其他调用方（`browser-acquisition.docker.test.ts`、`browser-wrapper-docker-fixture.ts`）行为只会更稳，由 VPS 的 `test:docker` 覆盖。
   - 负载验证（由编排方在提 PR 前做，实现方不做）：外加 CPU 压力、1 分钟负载不低于 7 时，连跑 5 次完整 `pnpm test:integration`，这两个文件不再失败；记下每次的负载和结果。
 
 未核实，由实现和负载验证确认；做不到时停下报告，不放宽断言：
