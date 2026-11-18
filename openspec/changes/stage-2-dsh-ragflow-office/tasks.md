@@ -6823,16 +6823,17 @@ Must preserve：`cancel` CLI 的输出和退出码；`result.json` 的结构和 
 
 ### 55-b forgotten 攻击用例与文档
 
-- [ ] 55.5 `test:stack` 新增用例（按 issue #624 的验收标准）：
+- [x] 55.5 `test:stack` 新增用例（按 issue #624 的验收标准）：
   - A 编辑一份文档后让保存失败，使 forgotten 存储里有 A 的文档。具体触发方式由实现核实（例如编辑后让 A 的回调不可达；DS 的回调重试次数和间隔查 DS 默认配置），但不能重启 A、也不能改动该文件：文档 key 的输入含 size 和 mtime（`patch-package.mjs:25`），实例重启会换每实例密钥（`office-profile-stack-fixture.ts:189-190`），否则重新打开用的不是同一个 key，恢复断言做不到。
   - 正向对照：在 DS 命名空间内回环（同 55.3 的持有者探针）发 `getForgottenList`，能看到 A 的 key（只比较是否包含，不打印 key）。
   - B 的实例容器（uid1001）用覆盖层里的 JWT，对自己网桥上的 `+4:80`、`+4:8000` 和插件代理 `/sidebar/onlyoffice/ds/` 三条路径，分别发 `getForgottenList`、`getForgotten`、`deleteForgotten`；`:80` 和插件代理上同时覆盖 `/coauthoring/CommandService.ashx`、大小写、尾斜杠、版本前缀变体和伪造的 `X-Forwarded-For: 127.0.0.1`。都被拒或连接失败，拿不到 A 的 key 和内容；之后 A 的 forgotten 副本仍在。
   - A 重新打开该文档时从 forgotten 副本恢复，内容含 A 失败前的编辑。
   - 证据不含 key、JWT、文档内容，只有状态、布尔值和摘要比较结果。
+  - 实现偏离（PR #634）：触发时改了 mtime，确认 forgotten 副本存在后、重新打开之前还原（`stat %y` 精度），文件字节和文档 key 的输入不变；恢复断言端到端证明 key 未变。55.5 的勾以 PR #634 exact head 的 `test:stack` 通过为前提，证据不过不合并。
 - [x] 55.6 修复前复现（55-a 动工前）：在 `7c1ad44` 上加 55.5 的用例跑 `test:stack`，如实记录 B 侧是否真能列出 A 的 key、取到内容或删掉副本；记录进 PR 和本节。修复前还没有持有者，正向对照沿用现有平台容器的位置（`platformRead`）。
   - 结果（`de770f0`，本机 `test:stack`）：B 用覆盖层 JWT，经直连 80、直连 8000、插件代理三条路径和全部变体（含 `/9.4.0-1/` 版本前缀、伪造 `X-Forwarded-For`），`getForgottenList`、`getForgotten` 都是 `error:0`：列表（3 条）含 A 的 key，拿到下载地址，直连两条取回非空内容（200；未核对是否即 A 的编辑），插件代理给出的地址没取回内容；第一次 `deleteForgotten`（`:80/command`）删掉了 A 的副本，其后都是 `error:1`。比 issue 原写法多了「删除」这一破坏面。
   - 用例自身前三次修复（同一检查的 3 轮上限内）：forgotten 未产生（mtime 还原过早、改 mtime 时编辑器未脏导致重签 key），`kA` 改为读插件注册表里实际签发的 key 并先 Ctrl+S 把编辑推给 DS；B 的 JWT 改为直接解析只读覆盖层 `/managed/patch.yml`，读不到即报错。
-- [ ] 55.7 `docs/DEPLOY.md` 第 7 节（`:265-279`）补写 Command Service 的处理和 forgotten 恢复保留。
+- [x] 55.7 `docs/DEPLOY.md` 第 7 节（`:265-279`）补写 Command Service 的处理和 forgotten 恢复保留。
 
 未核实，由实现确认；做不到时停下报告，不放宽断言：
 

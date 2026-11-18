@@ -1,17 +1,21 @@
-import { createServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { createHmac, randomBytes } from 'node:crypto';
-import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
-import { expect, it } from 'vitest';
+import { createHmac, randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { ServerResponse } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import { afterAll, expect, it } from 'vitest';
 import {
   bForgottenScript,
   documentServerAddress,
   expectedAttack,
-  FORGOTTEN_ATTACK_JS,
   forgottenPresent,
   forgottenRows,
   namespaceForgottenListScript,
+  proxyControl,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
 import { NODE } from './office-isolation-stack-fixture.ts';
@@ -39,21 +43,43 @@ const signedWithSecret = (token: unknown) => {
   return signature === expected.digest('base64url');
 };
 
-/** The attack body as the container runs it, but with the JWT from the environment and `rows`/`kA`
- * baked in, so the pure HTTP and classification logic can run against a local Document Server stub. */
-const probe = (rows: readonly AttackRow[], kA: string) => `import { request } from 'node:http';
-import { createHmac } from 'node:crypto';
-const jwtSecret = process.env.DOCUMENT_SERVER_JWT_SECRET;
-const rows = ${JSON.stringify(rows)};
-const kA = ${JSON.stringify(kA)};
-const observed = {};
-${FORGOTTEN_ATTACK_JS}
-process.stdout.write(JSON.stringify(observed));`;
+/** Managed overlays as instances get them (a JSON array): the stand-in's secret, another secret,
+ * and an ONLYOFFICE row without one. */
+const DIR = mkdtempSync(join(tmpdir(), 'dsh-team-forgotten-'));
+afterAll(() => {
+  rmSync(DIR, { recursive: true, force: true });
+});
+const overlay = (name: string, config: object) => {
+  const path = join(DIR, `${name}.json`);
+  writeFileSync(
+    path,
+    JSON.stringify([{ id: 'webserver' }, { id: 'dsh-sidebar-onlyoffice', config }]),
+  );
+  return path;
+};
+const OVERLAY = overlay('managed', { documentServerUrl: 'http://ds', jwtSecret: JWT_SECRET });
+const WRONG = overlay('wrong', { documentServerUrl: 'http://ds', jwtSecret: hex() });
+const NO_SECRET = overlay('none', { documentServerUrl: 'http://ds' });
 
-/** A Command Service stand-in: `blocked` 403s every path (the post-fix ACL); `open` answers the
- * forgotten commands as the unpatched Document Server would; `hang` accepts but never replies;
- * `bad-token` reaches the handler but rejects every command with error 6. */
-function dsStub(mode: 'blocked' | 'open' | 'hang' | 'bad-token') {
+/** B's real container script against `port`, the JWT read from `from`, the proxy healthcheck as
+ * the positive control. */
+const attack = (rows: readonly AttackRow[], port: number, from = OVERLAY) => {
+  const control = { ...proxyControl('127.0.0.1'), port, host: '127.0.0.1' };
+  return local(bForgottenScript(from), [JSON.stringify({ rows, kA: KA, control })], {});
+};
+
+type Mode = 'blocked' | 'open' | 'hang' | 'fence' | 'missing';
+const json = (res: ServerResponse, status: number, body: object) => {
+  res.writeHead(status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+};
+
+/** A Command Service stand-in. The proxy healthcheck answers `true` in every mode. `blocked` 403s
+ * (the post-fix ACL); `fence` 403s with the plugin proxy's own body; `missing` 404s; `hang` never
+ * answers; `open` answers as the unpatched Document Server: error 6 unless the body token is an
+ * HS256 JWT under JWT_SECRET whose payload repeats the body's `c` and `key`, error 1 when
+ * `getForgotten`/`deleteForgotten` name another key, else the forgotten `keys`, URL or deletion. */
+function dsStub(mode: Mode, keys: readonly string[] = [KA]) {
   const server = createServer((req, res) => {
     const path = (req.url ?? '').split('?')[0] ?? '';
     if (req.method === 'GET' && path === '/forgotten-bytes') {
@@ -61,41 +87,41 @@ function dsStub(mode: 'blocked' | 'open' | 'hang' | 'bad-token') {
       res.end(Buffer.from('forgotten-docx-bytes'));
       return;
     }
+    if (req.method === 'GET' && path === '/sidebar/onlyoffice/ds/healthcheck') {
+      res.writeHead(200);
+      res.end('true');
+      return;
+    }
     if (mode === 'hang') return;
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
-      if (mode === 'blocked') {
-        res.writeHead(403);
-        res.end('forbidden');
+      if (mode !== 'open') {
+        const status = mode === 'missing' ? 404 : 403;
+        res.writeHead(status, { 'content-type': 'text/plain' });
+        res.end(mode === 'fence' ? 'dsh-sidebar-onlyoffice: cross-site request refused' : 'no');
         return;
       }
-      if (mode === 'bad-token') {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 6 }));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+      const [, payload = ''] = String(body.token).split('.');
+      const claims = JSON.parse(
+        Buffer.from(payload, 'base64url').toString('utf8') || '{}',
+      ) as Record<string, unknown>;
+      if (!signedWithSecret(body.token) || claims.c !== body.c || claims.key !== body.key) {
+        json(res, 200, { error: 6 });
         return;
       }
-      const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as {
-        c?: string;
-        token?: unknown;
-      };
       const { port } = server.address() as AddressInfo;
-      if (!signedWithSecret(body.token)) {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ error: 6 }));
-        return;
-      }
       // The unpatched Document Server sets error 0 (NoError) on success for all three commands.
-      const reply =
-        body.c === 'getForgottenList'
-          ? { error: 0, keys: [KA] }
-          : body.c === 'getForgotten'
-            ? { error: 0, key: KA, url: `http://127.0.0.1:${String(port)}/forgotten-bytes` }
-            : body.c === 'deleteForgotten'
-              ? { error: 0, key: KA }
-              : { error: 1 };
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(reply));
+      if (body.c === 'getForgottenList') json(res, 200, { error: 0, keys });
+      else if (body.key !== KA) json(res, 200, { error: 1 });
+      else if (body.c === 'getForgotten')
+        json(res, 200, {
+          error: 0,
+          key: KA,
+          url: `http://127.0.0.1:${String(port)}/forgotten-bytes`,
+        });
+      else json(res, 200, { error: 0, key: KA });
     });
   });
   return server;
@@ -105,6 +131,16 @@ async function listening(server: ReturnType<typeof dsStub>) {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return { port, close: () => new Promise((resolve) => server.close(resolve)) };
+}
+
+/** Runs `body` against a stand-in in `mode`, closing it afterwards. */
+async function withStub(mode: Mode, body: (port: number) => Promise<void>, keys?: string[]) {
+  const { port, close } = await listening(dsStub(mode, keys));
+  try {
+    await body(port);
+  } finally {
+    await close();
+  }
 }
 
 const row = (overrides: Partial<AttackRow>, port: number): AttackRow => ({
@@ -149,82 +185,92 @@ it('covers both commands, case, trailing slash, the version prefix and a forged 
   ]);
 });
 
+type Rows = Record<'list' | 'get' | 'delete', Record<string, unknown>[]>;
+
 it('refuses every row, learns no key, downloads nothing and deletes nothing against the post-fix ACL', async () => {
-  const stub = dsStub('blocked');
-  const { port, close } = await listening(stub);
-  const rows = [
-    row({ id: '80', path: '/command' }, port),
-    row({ id: '80', path: '/coauthoring/CommandService.ashx' }, port),
-    row({ id: '80', path: '/command', xff: true }, port),
-    row({ id: 'proxy', path: '/sidebar/onlyoffice/ds/command' }, port),
-  ];
-  try {
-    const observed = await local(probe(rows, KA), [], { DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET });
+  await withStub('blocked', async (port) => {
+    const rows = [
+      row({ id: '80', path: '/command' }, port),
+      row({ id: '80', path: '/coauthoring/CommandService.ashx' }, port),
+      row({ id: '80', path: '/command', xff: true }, port),
+      row({ id: 'proxy', path: '/sidebar/onlyoffice/ds/command' }, port),
+    ];
+    const observed = await attack(rows, port);
     expect(observed).toEqual(expectedAttack(rows));
     expect(JSON.stringify(observed)).not.toContain(KA);
-  } finally {
-    await close();
-  }
+  });
 });
 
-it('records that B would list A key, download content and delete the copy against the pre-fix server', async () => {
-  const stub = dsStub('open');
-  const { port, close } = await listening(stub);
-  const rows = [row({ id: '80', path: '/command' }, port)];
-  try {
-    const observed = (await local(probe(rows, KA), [], {
-      DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET,
-    })) as { list: unknown[]; get: unknown[]; delete: unknown[] };
+it('signs with the overlay JWT and records that B lists, downloads and deletes against the pre-fix server', async () => {
+  await withStub('open', async (port) => {
+    const observed = (await attack([row({}, port)], port)) as Rows;
     expect(observed.list[0]).toMatchObject({
       outcome: 'reached',
       error: 0,
       length: 1,
       listedKa: true,
     });
-    expect(observed.get[0]).toMatchObject({
-      outcome: 'reached',
-      error: 0,
-      gotUrl: true,
-      fetched: { status: 200, bytes: true },
-    });
+    const reached = { outcome: 'reached', error: 0, gotUrl: true };
+    expect(observed.get[0]).toMatchObject({ ...reached, fetched: { status: 200, bytes: true } });
     expect(observed.delete[0]).toMatchObject({ outcome: 'reached', error: 0, deleted: true });
     expect(JSON.stringify(observed)).not.toContain(KA);
-  } finally {
-    await close();
-  }
+  });
 });
 
-it('records DS error 6 (bad token) on a reached-but-rejected row, distinct from a silent list', async () => {
-  const stub = dsStub('bad-token');
-  const { port, close } = await listening(stub);
-  const rows = [row({ id: '80', path: '/command' }, port)];
-  try {
-    const observed = (await local(probe(rows, KA), [], {
-      DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET,
-    })) as { list: { outcome: string; error: number | null; listedKa: boolean }[] };
+it('records DS error 6 when B signs with a secret the Document Server does not hold', async () => {
+  await withStub('open', async (port) => {
+    const observed = (await attack([row({}, port)], port, WRONG)) as Rows;
     expect(observed.list[0]).toMatchObject({ outcome: 'reached', error: 6, listedKa: false });
-  } finally {
-    await close();
-  }
+    expect(observed.get[0]).toMatchObject({ error: 6, gotUrl: false });
+  });
+});
+
+it('fails loudly when the overlay has no ONLYOFFICE JWT, and reads /managed/patch.yml by default', async () => {
+  await withStub('open', async (port) => {
+    await expect(attack([row({}, port)], port, NO_SECRET)).rejects.toThrow(
+      'no jwtSecret in the managed overlay',
+    );
+  });
+  const delivered = bForgottenScript();
+  expect(delivered).toContain(`readFileSync("/managed/patch.yml", 'utf8')`);
+  expect(delivered).not.toContain('js-yaml');
+  expect(delivered.toLowerCase()).not.toContain('authorization');
+});
+
+it('marks a plugin-fence 403 so it fails the expectation, with the proxy healthcheck answering', async () => {
+  await withStub('fence', async (port) => {
+    const rows = [row({ id: 'proxy', path: '/sidebar/onlyoffice/ds/command' }, port)];
+    const observed = (await attack(rows, port)) as Rows & { control: unknown };
+    expect(observed.control).toEqual({ status: 200, body: 'true' });
+    expect(observed.list[0]).toMatchObject({ outcome: 'refused', fence: true });
+    expect(observed).not.toEqual(expectedAttack(rows));
+  });
+});
+
+it('classifies a 404 as status-404 and a closed port as refused-conn, neither meeting the expectation', async () => {
+  await withStub('missing', async (port) => {
+    const rows = [row({}, port)];
+    const observed = (await attack(rows, port)) as Rows;
+    expect(observed.list[0]).toMatchObject({ outcome: 'status-404' });
+    expect(observed).not.toEqual(expectedAttack(rows));
+  });
+  const closed = await listening(dsStub('blocked'));
+  await closed.close();
+  const rows = [row({}, closed.port)];
+  const observed = (await attack(rows, closed.port)) as Rows;
+  expect(observed.list[0]).toMatchObject({ outcome: 'refused-conn' });
+  expect(observed).not.toEqual(expectedAttack(rows));
 });
 
 it('classifies an accepting but silent Document Server as a timeout, not a refusal', async () => {
-  const stub = dsStub('hang');
-  const { port, close } = await listening(stub);
-  const rows = [row({ id: '8000', port, path: '/command' }, port)];
-  try {
-    const observed = (await local(probe(rows, KA), [], {
-      DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET,
-    })) as { list: { outcome: string }[] };
+  await withStub('hang', async (port) => {
+    const observed = (await attack([row({ id: '8000' }, port)], port)) as Rows;
     expect(observed.list[0]?.outcome).toBe('timeout');
-  } finally {
-    await close();
-  }
+  });
 }, 20_000);
 
 it('lists over loopback with a JWT from stdin, reports error/listed/contains/length/shape, never keys', async () => {
-  const stub = dsStub('open');
-  const { port, close } = await listening(stub);
+  const { port, close } = await listening(dsStub('open'));
   try {
     const script = namespaceForgottenListScript(KA, port);
     // A decoy secret in the environment must not be used: only stdin signs.
@@ -254,6 +300,20 @@ it('lists over loopback with a JWT from stdin, reports error/listed/contains/len
   expect(delivered).toContain("const headers = { host: '127.0.0.1' };");
   expect(delivered).toContain("const jwtSecret = readFileSync(0, 'utf8');");
   expect(delivered).not.toContain('DOCUMENT_SERVER_JWT_SECRET');
+  // Only the key's digest is embedded: a failed docker exec quoting the script cannot leak it.
+  expect(delivered).not.toContain(KA);
+});
+
+it('finds A key inside a <key>/output entry by digest, without listing it as a bare key', async () => {
+  await withStub(
+    'open',
+    async (port) => {
+      const observed = await local(namespaceForgottenListScript(KA, port), [], {}, JWT_SECRET);
+      expect(observed).toMatchObject({ listed: false, contains: true, length: 1 });
+      expect(observed.shape).toEqual({ type: 'string', slash: true, dotExt: true });
+    },
+    [`${KA}/output.docx`],
+  );
 });
 
 it('treats a <key>/output entry as present via contains, and a 403 or empty list as absent', () => {
@@ -261,25 +321,4 @@ it('treats a <key>/output entry as present via contains, and a 403 or empty list
   expect(forgottenPresent({ status: 200, listed: false, contains: true })).toBe(true);
   expect(forgottenPresent({ status: 200, listed: false, contains: false })).toBe(false);
   expect(forgottenPresent({ status: 403, listed: true, contains: true })).toBe(false);
-});
-
-it("reads B's JWT from the managed overlay, takes the key from argv and never logs authorization", () => {
-  const script = bForgottenScript();
-
-  for (const part of [
-    "const overlay = JSON.parse(readFileSync('/managed/patch.yml', 'utf8'));",
-    "row.id === 'dsh-sidebar-onlyoffice'",
-    'const jwtSecret = onlyoffice?.config?.jwtSecret;',
-    "if (typeof jwtSecret !== 'string' || jwtSecret === '') throw new Error(",
-    'const { rows, kA } = JSON.parse(process.argv[1]);',
-    "await attempt(row, { c: 'getForgottenList'",
-    "await attempt(row, { c: 'getForgotten', key: kA",
-    "await attempt(row, { c: 'deleteForgotten', key: kA",
-    "headers['x-forwarded-for'] = '127.0.0.1';",
-  ])
-    expect(script).toContain(part);
-  // No js-yaml require: the overlay is JSON, so a read bug cannot silently yield an empty secret.
-  expect(script).not.toContain('js-yaml');
-  expect(script.toLowerCase()).not.toContain('authorization');
-  expect(script).not.toContain(KA);
 });

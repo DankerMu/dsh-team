@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { expect } from 'vitest';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
@@ -100,17 +101,20 @@ export function forgottenRows(instance: string, ds: string): AttackRow[] {
   return rows;
 }
 
-/** Shared attack body: with `jwtSecret`, `rows` and `kA` in scope and `node:http` imported, posts
- * `getForgottenList` and `getForgotten` down every row (recorded), then `deleteForgotten` down every
- * row LAST, so A's forgotten copy is only ever removed after the read attempts are already recorded;
- * pre-fix a reached delete does remove it and the recovery check then fails (red), the expected
- * pre-fix outcome. Each result is an outcome token plus booleans — never a key, token or URL. */
-export const FORGOTTEN_ATTACK_JS = `${JWT_JS}
-const attempt = (row, body) => new Promise((resolve) => {
-  const payload = Buffer.from(JSON.stringify(body));
-  const headers = { host: row.host, 'content-type': 'application/json', 'content-length': String(payload.length) };
+/** Shared attack body: with `jwtSecret`, `rows`, `kA` and `control` in scope and `node:http`
+ * imported. First a positive control (a GET of the plugin proxy's healthcheck through the same mount
+ * and Host as the proxy rows), then `getForgottenList` and `getForgotten` down every row (recorded),
+ * then `deleteForgotten` down every row LAST, so A's forgotten copy is only ever removed after the
+ * read attempts are already recorded; pre-fix a reached delete does remove it and the recovery check
+ * then fails (red), the expected pre-fix outcome. Each result is an outcome token plus booleans —
+ * never a key, token or URL. */
+const FORGOTTEN_ATTACK_JS = `${JWT_JS}
+const attempt = (row, body, method = 'POST') => new Promise((resolve) => {
+  const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
+  const headers = { host: row.host };
+  if (payload !== undefined) Object.assign(headers, { 'content-type': 'application/json', 'content-length': String(payload.length) });
   if (row.xff) headers['x-forwarded-for'] = '127.0.0.1';
-  const req = request({ host: row.address, port: row.port, method: 'POST', path: row.path, headers }, (res) => {
+  const req = request({ host: row.address, port: row.port, method, path: row.path, headers }, (res) => {
     const chunks = [];
     res.on('data', (chunk) => chunks.push(chunk));
     res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks) }));
@@ -133,35 +137,50 @@ const parse = (r) => { try { return JSON.parse(r.body.toString('utf8')); } catch
 // DS's numeric error for a reached row (0 = authenticated OK, 6 = bad token), else null: it tells
 // 55.6 whether B's call was accepted or rejected, which 'reached' alone cannot.
 const errorOf = (r, o) => { const data = o === 'reached' ? parse(r) : undefined; return typeof data?.error === 'number' ? data.error : null; };
-const place = (row) => ({ id: row.id, path: row.path, xff: !!row.xff });
+// The plugin proxy's own fence 403 (dsProxy.ts) is not the Document Server ACL: a fenced row fails.
+const fenced = (r) => r.status === 403 && r.body.toString('utf8').includes('cross-site request refused');
+const place = (row, r) => ({ id: row.id, path: row.path, xff: !!row.xff, fence: fenced(r) });
+const c = await attempt(control, undefined, 'GET');
+observed.control = { status: c.status ?? null, body: c.body === undefined ? null : c.body.toString('utf8').trim() };
 const list = []; const get = []; const del = [];
 for (const row of rows) {
   const r = await attempt(row, { c: 'getForgottenList', token: jwt({ c: 'getForgottenList' }) });
   const o = outcome(r); const keys = o === 'reached' && Array.isArray(parse(r)?.keys) ? parse(r).keys : null;
-  list.push({ ...place(row), outcome: o, error: errorOf(r, o), length: keys === null ? null : keys.length, listedKa: keys !== null && keys.some((k) => typeof k === 'string' && k.includes(kA)) });
+  list.push({ ...place(row, r), outcome: o, error: errorOf(r, o), length: keys === null ? null : keys.length, listedKa: keys !== null && keys.some((k) => typeof k === 'string' && k.includes(kA)) });
   const g = await attempt(row, { c: 'getForgotten', key: kA, token: jwt({ c: 'getForgotten', key: kA }) });
   const go = outcome(g); const url = go === 'reached' && typeof parse(g)?.url === 'string' ? parse(g).url : undefined;
-  get.push({ ...place(row), outcome: go, error: errorOf(g, go), gotUrl: url !== undefined, fetched: url === undefined ? null : await fetchUrl(url) });
+  get.push({ ...place(row, g), outcome: go, error: errorOf(g, go), gotUrl: url !== undefined, fetched: url === undefined ? null : await fetchUrl(url) });
 }
 for (const row of rows) {
   const d = await attempt(row, { c: 'deleteForgotten', key: kA, token: jwt({ c: 'deleteForgotten', key: kA }) });
   const dout = outcome(d);
-  del.push({ ...place(row), outcome: dout, error: errorOf(d, dout), deleted: errorOf(d, dout) === 0 });
+  del.push({ ...place(row, d), outcome: dout, error: errorOf(d, dout), deleted: errorOf(d, dout) === 0 });
 }
 observed.list = list; observed.get = get; observed.delete = del;`;
 
+/** The plugin proxy's healthcheck from B, through the same mount and Host the proxy rows use. */
+export const proxyControl = (instance: string) => ({
+  address: instance,
+  port: 3080,
+  host: '127.0.0.1:3080',
+  path: `${PROXY_MOUNT}/healthcheck`,
+});
+
 /** B's container script (uid 1001): the JWT comes from B's managed overlay (`/managed/patch.yml`,
- * a JSON array mounted read-only into every instance), `rows` and A's key `kA` from argv[1] (a JSON
- * blob, so a failed exec never echoes kA in the script source). A missing or empty secret THROWS,
- * so a read/sign bug fails loudly instead of masquerading as a DS refusal (§55.6). */
-export const bForgottenScript = (): string => `import { request } from 'node:http';
+ * a JSON array mounted read-only into every instance; `overlay` only for local execution), `rows`,
+ * A's key `kA` and the `control` target from argv[1] (a JSON blob; the exec is guarded so a failure
+ * never echoes kA). A missing or empty secret THROWS, so a read/sign bug fails loudly instead of
+ * masquerading as a DS refusal (§55.6). */
+export const bForgottenScript = (
+  overlay = '/managed/patch.yml',
+): string => `import { request } from 'node:http';
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-const overlay = JSON.parse(readFileSync('/managed/patch.yml', 'utf8'));
-const onlyoffice = Array.isArray(overlay) ? overlay.find((row) => row && row.id === '${ONLYOFFICE}') : undefined;
+const parsed = JSON.parse(readFileSync(${JSON.stringify(overlay)}, 'utf8'));
+const onlyoffice = Array.isArray(parsed) ? parsed.find((row) => row && row.id === '${ONLYOFFICE}') : undefined;
 const jwtSecret = onlyoffice?.config?.jwtSecret;
-if (typeof jwtSecret !== 'string' || jwtSecret === '') throw new Error('office forgotten: no jwtSecret in managed overlay /managed/patch.yml');
-const { rows, kA } = JSON.parse(process.argv[1]);
+if (typeof jwtSecret !== 'string' || jwtSecret === '') throw new Error('office forgotten: no jwtSecret in the managed overlay');
+const { rows, kA, control } = JSON.parse(process.argv[1]);
 const observed = {};
 try {
 ${FORGOTTEN_ATTACK_JS}
@@ -169,33 +188,37 @@ ${FORGOTTEN_ATTACK_JS}
 process.stdout.write(JSON.stringify(observed));`;
 
 /** In the Document Server's namespace (the holder's loopback, as 51-e's `info` probe): one
- * `getForgottenList` with a body-`token` JWT signed by the secret on stdin. Reports DS's numeric
- * `error`, whether A's key `kA` is a returned entry (`listed`) or inside one (`contains`, in case
- * entries carry a `<key>/output` shape), the list length and the first entry's shape — never a key
- * or token value (§55.5 positive control, with §55.6 attribution diagnostics). */
+ * `getForgottenList` with a body-`token` JWT signed by the secret on stdin. Only A's key's SHA-256
+ * is embedded, so the script (docker argv, quoted by a failed exec) never carries the key. Reports
+ * DS's numeric `error`, whether an entry is A's key (`listed`) or a `<key>/…` path under it
+ * (`contains`), the list length and the first entry's shape — never a key or token value (§55.5
+ * positive control, with §55.6 attribution diagnostics). */
 export const namespaceForgottenListScript = (kA: string, port = 80): string =>
   script(`const jwtSecret = readFileSync(0, 'utf8');
 ${JWT_JS}
 ${exchangeJs('127.0.0.1', '127.0.0.1', port)}
 ${READ_JS}
-const key = ${JSON.stringify(kA)};
+const digest = ${JSON.stringify(createHash('sha256').update(kA).digest('hex'))};
+const isKey = (entry) => typeof entry === 'string' && createHash('sha256').update(entry).digest('hex') === digest;
 const { status, body } = json(await exchange('POST', '/command', { c: 'getForgottenList', token: jwt({ c: 'getForgottenList' }) }));
 const keys = Array.isArray(body?.keys) ? body.keys : [];
 const first = keys[0];
 Object.assign(observed, { status, error: typeof body?.error === 'number' ? body.error : null });
-observed.listed = keys.includes(key);
-observed.contains = keys.some((entry) => typeof entry === 'string' && entry.includes(key));
+observed.listed = keys.some(isKey);
+observed.contains = keys.some((entry) => typeof entry === 'string' && isKey(entry.split('/')[0]));
 observed.length = keys.length;
 observed.shape = typeof first === 'string'
   ? { type: 'string', slash: first.includes('/'), dotExt: /\\.[a-z0-9]+$/i.test(first) }
   : { type: typeof first };`);
 
 // `error` and `length` are DS's numeric error and list length when a row reaches the handler, and
-// null when it is refused/timed out — null across the board post-fix (nothing reaches DS).
+// null when it is refused/timed out — null across the board post-fix (nothing reaches DS); `fence`
+// marks the plugin proxy's own 403, which must never be what refuses a row.
 type Outcome = Readonly<{
   id: string;
   path: string;
   xff: boolean;
+  fence: boolean;
   outcome: string;
   error: number | null;
 }>;
@@ -203,19 +226,22 @@ type ListRow = Outcome & { length: number | null; listedKa: boolean };
 type GetRow = Outcome & { gotUrl: boolean; fetched: unknown };
 type DeleteRow = Outcome & { deleted: boolean };
 
-/** The §55.5 secure expectation: every row refused (`:80`, plugin proxy) or timed out (`:8000`),
- * nothing reaching DS (`error`/`length` null), B learning no key, no download URL and deleting
- * nothing. Run pre-fix (§55.6) it is red. */
+/** The §55.5 secure expectation: the proxy healthcheck answers through the same mount (`control`),
+ * and every row is refused by the Document Server (`:80`, plugin proxy; never the plugin's fence) or
+ * times out (`:8000`), nothing reaching DS (`error`/`length` null), B learning no key, no download
+ * URL and deleting nothing. Run pre-fix (§55.6) it is red. */
 export function expectedAttack(rows: readonly AttackRow[]) {
   const outcomeOf = (row: AttackRow) => (row.id === '8000' ? 'timeout' : 'refused');
   const place = (row: AttackRow) => ({
     id: row.id,
     path: row.path,
     xff: row.xff,
+    fence: false,
     outcome: outcomeOf(row),
     error: null,
   });
   return {
+    control: { status: 200, body: 'true' },
     list: rows.map((row): ListRow => ({ ...place(row), length: null, listedKa: false })),
     get: rows.map((row): GetRow => ({ ...place(row), gotUrl: false, fetched: null })),
     delete: rows.map((row): DeleteRow => ({ ...place(row), deleted: false })),
@@ -331,8 +357,14 @@ async function editIntoForgotten(
 
 /** Waits up to `lane.session.timeout` for the platform position to show A's forgotten copy; it
  * appears a few seconds after the browser closes (HTTP-200 `{error:1}` needs no callback retry). */
+/** One namespace `getForgottenList` for A's key; guarded, so no failure path quotes A's key. */
+const forgottenList = (lane: OfficeForgottenLane, label: string, kA: string) =>
+  guarded(label, [kA], async () =>
+    JSON.stringify(await lane.namespaceRead(namespaceForgottenListScript(kA))),
+  );
+
 async function awaitForgotten(lane: OfficeForgottenLane, kA: string) {
-  const read = () => lane.namespaceRead(namespaceForgottenListScript(kA));
+  const read = () => forgottenList(lane, '(positive)', kA);
   const deadline = Date.now() + lane.session.timeout;
   let seen = await read();
   while (!forgottenPresent(seen) && Date.now() < deadline) {
@@ -397,16 +429,18 @@ async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgott
   const bInstance = await lane.secondEmployee();
   const bAddress = await instanceAddress(lane.run, bInstance);
   const rows = forgottenRows(bAddress, documentServerAddress(bAddress));
-  const argv = JSON.stringify({ rows, kA });
+  const argv = JSON.stringify({ rows, kA, control: proxyControl(bAddress) });
   const observed = await guarded('(attack)', [kA], () =>
     lane.run(['exec', '--user', '1001', bInstance, ...NODE, bForgottenScript(), argv]),
   );
   const attack = verify('(attack)', observed, expectedAttack(rows), [
     kA,
   ]) as OfficeForgottenEvidence['attack'];
-  const present = await lane.namespaceRead(namespaceForgottenListScript(kA));
+  const present = await forgottenList(lane, '(present)', kA);
   expect(forgottenPresent(present), "A's forgotten copy still present after B's attack").toBe(true);
   expect(JSON.stringify(present), 'present check free of A key').not.toContain(kA);
+  // The nonce is not on disk yet, so a recovered nonce can only come from the forgotten reassembly.
+  expect(await fileHasNonce(lane, nonce), "A's file lacks the nonce before reopening").toBe(false);
   const { recovered } = await recover(lane, nonce, directory);
   expect(recovered, 'A recovers its pre-failure edit from the forgotten copy').toBe('recovered');
   return { positive, attack, present, recovered };
