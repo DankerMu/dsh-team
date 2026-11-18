@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
 import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it, vi } from 'vitest';
 import { processBirth, processIdentity } from '../../scripts/probe-browser-native.mjs';
 import { signalOwnedGroup } from '../../scripts/trusted-docker-owner.mjs';
@@ -21,9 +22,15 @@ const LOCK_ARGS: unknown[] =
   LOCK_HOLDER === 'flock'
     ? ['--nonblock', LOCK, expect.any(String), '-e', expect.any(String)]
     : ['-I', '-c', expect.any(String), LOCK];
-const RESULT_WAIT_MS = 60_000;
-// Readiness, the cancelled result wait and fixture-owned retirement share one case bound.
-const CASE_TIMEOUT_MS = 90_000;
+// Readiness, the cancelled result wait and fixture-owned retirement share one case bound. The
+// result wait ends RETIRE_MS before it: `status`'s 15s hard timeout plus the fixture's settles
+// (fake platform, a possible group member, the child group, the owner) on a normal exit, 30s in
+// all. A settle's theoretical ceiling is about 22s (two 5s observations, a 2s `ps`, about 10s of
+// absence wait); all of them at once is unrealistic and not budgeted. The wait thus ends about
+// 90s into the case, no sooner than the former 60s after setup; it follows the owner's liveness,
+// so the case bound only caps an owner that is still running.
+const CASE_TIMEOUT_MS = 120_000;
+const RETIRE_MS = 30_000;
 
 function daemonEvidence(repository: string) {
   const root = join(repository, '.run/fake-daemon');
@@ -61,8 +68,56 @@ function daemonEvidence(repository: string) {
   };
 }
 
-/** Start a held retirement child, cancel it once ready, and return its settled terminal. */
-async function cancelRetirement(fixture: CustodyFixture) {
+interface Owner {
+  readonly pid: number;
+  readonly birth: string;
+}
+
+function ownerPresent(pid: number) {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    // Only ESRCH is absence; any other observation error leaves the wait running.
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+  }
+  return true;
+}
+
+/** Wait for the owner's result.json while the owner lives, failing at once if it exits first. */
+async function awaitResult(
+  directory: string,
+  owner: Owner,
+  deadline: number,
+  observe: CustodyFixture['observeProcess'],
+) {
+  const since = Date.now();
+  const result = join(directory, 'result.json');
+  for (;;) {
+    if (existsSync(result)) return;
+    if (!ownerPresent(owner.pid)) {
+      // Absence before the result: an owner that published and then exited is not a failure.
+      if (existsSync(result)) return;
+      let identity: string;
+      try {
+        identity = `identity recheck birth=${JSON.stringify(observe(owner.pid))}`;
+      } catch {
+        identity = 'identity recheck unavailable';
+      }
+      throw new Error(
+        `Retirement owner exited without publishing result.json: pid=${String(owner.pid)}; birth=${owner.birth}; ${identity}`,
+      );
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      throw new Error(
+        `Retirement owner still running without result.json after ${String(Date.now() - since)}ms: pid=${String(owner.pid)}`,
+      );
+    await delay(Math.min(1000, remaining));
+  }
+}
+
+/** Start a held retirement child and return its invocation once the child is ready. */
+async function startRetirement(fixture: CustodyFixture) {
   const started = await fixture.start();
   expect(started.status, started.stderr).toBe(0);
   const invocation = record(JSON.parse(started.stdout) as unknown).invocation;
@@ -70,26 +125,36 @@ async function cancelRetirement(fixture: CustodyFixture) {
   const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
   const manifestPath = join(directory, 'manifest.json');
   const manifest = readFileSync(manifestPath, 'utf8');
-  const temporary = record(JSON.parse(manifest) as unknown).temporary;
+  const parsed = record(JSON.parse(manifest) as unknown);
+  const temporary = parsed.temporary;
+  const owner = record(parsed.owner);
   if (typeof temporary !== 'string') throw new Error('Missing owned temporary root');
+  if (typeof owner.pid !== 'number' || typeof owner.birth !== 'string')
+    throw new Error('Missing owner identity');
   await vi.waitFor(
     () => {
       expect(existsSync(join(temporary, 'child-ready.json'))).toBe(true);
     },
     { timeout: 10_000, interval: 50 },
   );
+  return {
+    invocation,
+    directory,
+    manifestPath,
+    manifest,
+    owner: { pid: owner.pid, birth: owner.birth },
+  };
+}
 
+/** Start a held retirement child, cancel it once ready, and return its settled terminal. */
+async function cancelRetirement(fixture: CustodyFixture, deadline: number) {
+  const { invocation, directory, manifestPath, manifest, owner } = await startRetirement(fixture);
   const cancelled = fixture.command(['cancel', invocation], true);
 
   expect(cancelled.status, cancelled.stderr).toBe(0);
   // Under full parallel integration load, real pnpm's SIGINT-to-close alone took 15-30s;
   // the retirement and assessment after close completed within 1s in every observation.
-  await vi.waitFor(
-    () => {
-      expect(existsSync(join(directory, 'result.json'))).toBe(true);
-    },
-    { timeout: RESULT_WAIT_MS, interval: 50 },
-  );
+  await awaitResult(directory, owner, deadline, fixture.observeProcess);
   // The changed-identity variant rewrote these bytes; status reads only the original authority.
   writeFileSync(manifestPath, manifest);
   const status = fixture.command(['status', invocation]);
@@ -116,16 +181,20 @@ async function cancelRetirement(fixture: CustodyFixture) {
 
 function retirementCase(
   scenario: RetirementScenario,
-  run: (fixture: CustodyFixture) => Promise<void>,
+  run: (fixture: CustodyFixture, deadline: number) => Promise<void>,
 ) {
-  return withTrustedDockerFixture('retire', run, scenario);
+  const deadline = Date.now() + CASE_TIMEOUT_MS - RETIRE_MS;
+  return withTrustedDockerFixture('retire', (fixture) => run(fixture, deadline), scenario);
 }
 
 it(
   'retires every journal registration after cancellation, draining the platform first',
   async () => {
-    await retirementCase('green', async (fixture) => {
-      const { terminal, daemon, submissions, retirement } = await cancelRetirement(fixture);
+    await retirementCase('green', async (fixture, deadline) => {
+      const { terminal, daemon, submissions, retirement } = await cancelRetirement(
+        fixture,
+        deadline,
+      );
 
       expect(terminal).toMatchObject({
         state: 'failed',
@@ -168,8 +237,8 @@ it(
 it(
   'preserves a registered name whose live labels changed and leaves cleanup unconfirmed',
   async () => {
-    await retirementCase('mismatch', async (fixture) => {
-      const { terminal, daemon, retirement } = await cancelRetirement(fixture);
+    await retirementCase('mismatch', async (fixture, deadline) => {
+      const { terminal, daemon, retirement } = await cancelRetirement(fixture, deadline);
 
       expect(terminal).toMatchObject({
         state: 'failed',
@@ -198,8 +267,8 @@ it.each([
 ] as const)(
   'mutates nothing after cancellation with %s',
   async (_case, scenario, failure) => {
-    await retirementCase(scenario, async (fixture) => {
-      const { terminal, daemon, retirement } = await cancelRetirement(fixture);
+    await retirementCase(scenario, async (fixture, deadline) => {
+      const { terminal, daemon, retirement } = await cancelRetirement(fixture, deadline);
 
       expect(terminal).toMatchObject({
         state: 'failed',
@@ -219,8 +288,8 @@ it.each([
 it(
   'mutates nothing while a same-group member keeps the cancelled command unsettled',
   async () => {
-    await retirementCase('member', async (fixture) => {
-      const { terminal, daemon, retirement } = await cancelRetirement(fixture);
+    await retirementCase('member', async (fixture, deadline) => {
+      const { terminal, daemon, retirement } = await cancelRetirement(fixture, deadline);
 
       expect(terminal).toMatchObject({
         state: 'unknown',
@@ -239,8 +308,8 @@ it(
 it(
   'removes nothing of a drained platform run whose reservation remains pending',
   async () => {
-    await retirementCase('unsettled', async (fixture) => {
-      const { terminal, daemon, retirement } = await cancelRetirement(fixture);
+    await retirementCase('unsettled', async (fixture, deadline) => {
+      const { terminal, daemon, retirement } = await cancelRetirement(fixture, deadline);
 
       expect(terminal).toMatchObject({
         state: 'failed',
@@ -259,8 +328,8 @@ it(
 it(
   'mutates nothing of a platform run while the host deployment lock is held elsewhere',
   async () => {
-    await retirementCase('lock-unavailable', async (fixture) => {
-      const { terminal, daemon, retirement } = await cancelRetirement(fixture);
+    await retirementCase('lock-unavailable', async (fixture, deadline) => {
+      const { terminal, daemon, retirement } = await cancelRetirement(fixture, deadline);
 
       expect(terminal).toMatchObject({
         state: 'failed',
@@ -274,6 +343,24 @@ it(
       expect(daemon.mutations).toEqual([]);
       expect(daemon.calls.some((call) => call[0] === 'unlink')).toBe(false);
       expect(daemon.names).toHaveLength(5);
+    });
+  },
+  CASE_TIMEOUT_MS,
+);
+
+it(
+  'fails the result wait at once when the owner exits without publishing result.json',
+  async () => {
+    await retirementCase('green', async (fixture, deadline) => {
+      const { invocation, directory, owner } = await startRetirement(fixture);
+      // The leaf is still held and nothing cancels it, so the owner cannot publish a result.
+      await fixture.killOwner(invocation);
+      const since = Date.now();
+
+      await expect(awaitResult(directory, owner, deadline, fixture.observeProcess)).rejects.toThrow(
+        'owner exited without publishing result.json',
+      );
+      expect(Date.now() - since).toBeLessThan(5000);
     });
   },
   CASE_TIMEOUT_MS,

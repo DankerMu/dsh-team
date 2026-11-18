@@ -494,7 +494,8 @@ socket.on('error', () => process.exit(1));
 export async function awaitFile(path: string, signal = AbortSignal.timeout(15000)): Promise<void> {
   if (signal.aborted) throw signal.reason;
   const { promise, resolve, reject } = Promise.withResolvers<undefined>();
-  // Real filesystem/process completion is bounded; this signal is not a guessed sleep.
+  // The signal bounds the wait. The 50 ms lstat re-check covers a file published before the
+  // watcher is live (macOS delivers no event for it); it is not a guessed sleep.
   const aborted = () => {
     reject(new Error('Owned creation fixture completion missing'));
   };
@@ -503,7 +504,7 @@ export async function awaitFile(path: string, signal = AbortSignal.timeout(15000
     if (name === basename(path)) resolve(undefined);
   });
   watcher.once('error', reject);
-  try {
+  const check = () => {
     void lstat(path).then(
       () => {
         resolve(undefined);
@@ -513,9 +514,14 @@ export async function awaitFile(path: string, signal = AbortSignal.timeout(15000
           reject(error);
       },
     );
+  };
+  const recheck = setInterval(check, 50);
+  try {
+    check();
     await promise;
     await lstat(path);
   } finally {
+    clearInterval(recheck);
     watcher.close();
     signal.removeEventListener('abort', aborted);
   }
