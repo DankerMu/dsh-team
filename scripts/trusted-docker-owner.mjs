@@ -174,8 +174,7 @@ export async function signalOwnedGroup(child, identity) {
 /** @typedef {{ on(event: 'error', listener: () => void): unknown, close(): void }} Watcher */
 
 /**
- * Re-read cancellation authority on every directory event and every interval: watch events may be
- * late, coalesced, or carry no file name or only the watched directory's name.
+ * Re-read cancellation on every interval and every directory event, whatever name it carries.
  * @param {string} directory
  * @param {() => Promise<void>} read
  * @param {() => void} onError
@@ -198,8 +197,7 @@ export function watchCancellation(
 }
 
 /**
- * Serialize group-signal attempts for the first recorded interruption. A thrown attempt is traced
- * once per distinct message and retried by a later cancel no sooner than `retryMs` after it.
+ * Serialize group signals; a thrown attempt is traced once per message and retried after `retryMs`.
  * @param {() => Promise<boolean>} signal true only when the group signal was actually sent
  * @param {(message: string) => void} report
  * @param {{ retryMs?: number, now?: () => number }} [options]
@@ -207,9 +205,7 @@ export function watchCancellation(
 export function ownedCancellation(signal, report, { retryMs = 1000, now = Date.now } = {}) {
   let interruption = 'none';
   let signalled = false;
-  /** @type {string | undefined} */
   let reported;
-  /** @type {number | undefined} */
   let last;
   let chain = Promise.resolve();
   return {
@@ -232,6 +228,10 @@ export function ownedCancellation(signal, report, { retryMs = 1000, now = Date.n
           }
         }
       });
+    },
+    /** Re-drive a pending interruption; nothing is pending before the first cancel. */
+    retry() {
+      if (interruption !== 'none') this.cancel(interruption);
     },
     get interruption() {
       return interruption;
@@ -299,7 +299,6 @@ async function executeOwnedCommand(context) {
       if (error.code !== 'ENOENT') failure = 'control';
     }
   };
-  // Every other failure source keeps precedence over a group signal that was never sent.
   const settleCancellation = async () => {
     await cancellation.settled();
     if (cancellation.failed) failure ??= 'identity';
@@ -308,7 +307,7 @@ async function executeOwnedCommand(context) {
     directory,
     async () => {
       await readCancellation();
-      if (cancellation.interruption !== 'none') cancel(cancellation.interruption);
+      cancellation.retry();
     },
     () => {
       failure = 'control';
@@ -378,7 +377,7 @@ async function executeOwnedCommand(context) {
             manifestDigest: digest,
             owner: childIdentity,
           });
-          if (cancellation.interruption !== 'none') cancel(cancellation.interruption);
+          cancellation.retry();
         } catch {
           failure = 'identity';
         }

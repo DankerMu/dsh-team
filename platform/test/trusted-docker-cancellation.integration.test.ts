@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +15,6 @@ import {
 
 type Listener = (event: string, name: string | Buffer | null) => void;
 
-const DIRECTORY = '/private/custody/invocation';
 const INTERVAL_MS = 250;
 const RETRY_MS = 1000;
 const FAILURE = 'Trusted Docker cancellation signal failed: ';
@@ -33,14 +33,14 @@ function watched(intervalMs: number) {
   };
   const read = vi.fn(() => Promise.resolve());
   const onError = vi.fn();
-  const close = watchCancellation(DIRECTORY, read, onError, { watch, intervalMs });
+  const directory = '/private/custody/invocation';
+  const close = watchCancellation(directory, read, onError, { watch, intervalMs });
   const emit = (name: string | null) => {
     listener('rename', name);
   };
   return { watcher, read, onError, close, emit };
 }
 
-// Fake timers are dropped with any interval a failed case left running.
 describe('watchCancellation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -91,6 +91,11 @@ describe('ownedCancellation', () => {
   let time = 0;
   const now = () => time;
   const failing = (message: string) => () => Promise.reject(new Error(message));
+  const failsOnce = (message: string) =>
+    vi
+      .fn<() => Promise<boolean>>()
+      .mockImplementationOnce(failing(message))
+      .mockResolvedValue(true);
   const settle = async (cancellation: ReturnType<typeof ownedCancellation>, kind: string) => {
     cancellation.cancel(kind);
     await cancellation.settled();
@@ -101,10 +106,7 @@ describe('ownedCancellation', () => {
   });
 
   it('retries a thrown attempt after retryMs and keeps one trace, even an unwritable one', async () => {
-    const signal = vi
-      .fn<() => Promise<boolean>>()
-      .mockImplementationOnce(failing('child group identity changed'))
-      .mockResolvedValueOnce(true);
+    const signal = failsOnce('child group identity changed');
     const report = vi.fn(() => {
       throw new Error('owner.log unavailable');
     });
@@ -121,13 +123,19 @@ describe('ownedCancellation', () => {
   });
 
   it('keeps retrying a persistent failure and traces only a changed message', async () => {
-    const signal = vi.fn(failing('child group identity changed'));
+    const signal = vi.fn(() => {
+      time += RETRY_MS / 2;
+      return failing('child group identity changed')();
+    });
     const report = vi.fn();
     const cancellation = ownedCancellation(signal, report, { retryMs: RETRY_MS, now });
 
     await settle(cancellation, 'cancelled');
     for (let attempt = 2; attempt <= 4; attempt += 1) {
-      time += RETRY_MS;
+      time += RETRY_MS - 1; // The throttle counts from when the thrown attempt settled.
+      await settle(cancellation, 'cancelled');
+      expect(signal).toHaveBeenCalledTimes(attempt - 1);
+      time += 1;
       await settle(cancellation, 'cancelled');
       expect(signal).toHaveBeenCalledTimes(attempt);
     }
@@ -171,22 +179,22 @@ describe('ownedCancellation', () => {
     expect(cancellation.signalled).toBe(true);
   });
 
-  it('keeps the first interruption across failed, later and successful attempts', async () => {
-    const retried = ownedCancellation(
-      vi
-        .fn<() => Promise<boolean>>()
-        .mockImplementationOnce(failing('child identity changed'))
-        .mockResolvedValueOnce(true),
-      vi.fn(),
-      { retryMs: RETRY_MS, now },
-    );
+  it('keeps the first interruption and re-drives only a pending one', async () => {
+    const opts = { retryMs: RETRY_MS, now };
+    const retried = ownedCancellation(failsOnce('child identity changed'), vi.fn(), opts);
     await settle(retried, 'owner-signal');
     time += RETRY_MS;
-    await settle(retried, 'owner-signal');
+    retried.retry();
+    await retried.settled();
     expect(retried.interruption).toBe('owner-signal');
     expect(retried.signalled).toBe(true);
 
-    const ordered = ownedCancellation(() => Promise.resolve(true), vi.fn(), { now });
+    const sent = vi.fn(() => Promise.resolve(true));
+    const ordered = ownedCancellation(sent, vi.fn(), { now });
+    ordered.retry();
+    await ordered.settled();
+    expect(sent).not.toHaveBeenCalled();
+    expect(ordered.interruption).toBe('none');
     await settle(ordered, 'owner-signal');
     await settle(ordered, 'cancelled');
     expect(ordered.interruption).toBe('owner-signal');
@@ -224,13 +232,9 @@ it('signals a live owned child group after cancel.json is published to a silent 
     const report = vi.fn();
     const cancellation = ownedCancellation(() => signalOwnedGroup(child, identity), report);
     const silent = () => ({ on: vi.fn(), close: vi.fn() });
-    const read = async () => {
-      try {
-        await access(join(directory, 'cancel.json'));
-      } catch {
-        return;
-      }
-      cancellation.cancel('cancelled');
+    const read = () => {
+      if (existsSync(join(directory, 'cancel.json'))) cancellation.cancel('cancelled');
+      return Promise.resolve();
     };
     close = watchCancellation(directory, read, vi.fn(), { watch: silent, intervalMs: 20 });
 
