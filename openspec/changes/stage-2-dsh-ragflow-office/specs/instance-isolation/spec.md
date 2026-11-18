@@ -78,6 +78,11 @@
 - **WHEN** B 已知 A 实例的 host 和某文件路径，用按公开算法推算或猜测的文档 key，经 Document Server 向 A 的回调接口提交保存，或让编辑器以该 key 打开 A 的文件
 - **THEN** A 实例拒绝回调和打开请求，A 的文件字节不变，B 得不到文件内容
 
+#### Scenario: 经 Command Service 拿不到他人的 forgotten 文档
+
+- **WHEN** A 的一次保存失败使自带 Document Server 的 forgotten 存储里有 A 的文档，B 用覆盖层里的 Document Server JWT，从自己的实例经直连 80、直连 docservice 端口或插件代理调用 Command Service 的 `getForgottenList`、`getForgotten`、`deleteForgotten`，路径可带大小写、尾斜杠、版本前缀变体或伪造的 `X-Forwarded-For`
+- **THEN** 每次调用都被拒绝或连接失败，B 得不到 A 的文档 key 和内容；A 的 forgotten 副本仍在，A 重新打开该文档时仍能恢复
+
 #### Scenario: 他人实例的配置接口不可用
 
 - **WHEN** B 从自己的实例直接请求 A 实例的 ONLYOFFICE 配置接口
