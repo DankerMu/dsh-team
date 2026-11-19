@@ -77,6 +77,8 @@ Child tests use owned working/data directories and explicit environment allowlis
 
 - Tests share no mutable state and do not depend on order. Each integration test binds port 0 and closes what it opens.
 - A flaky test is a bug: quarantine it with a linked issue, fix or delete it within 7 days.
+- An integration-test wait derives its deadline from the case budget (dev-watch `caseEnd - CLEANUP_MS`, custody `CASE_MS - RESERVE_MS`).
+  Where none applies, use a named constant commented with its relation to the case timeout; ESLint rejects `const deadline = Date.now() + 5000` (#630).
 
 ### Forbidden
 

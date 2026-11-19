@@ -288,6 +288,7 @@ Strictness profile: **L3** (see `constraints.yaml`). Levels: `advice` < `review-
 | Dead code                    | `knip.json`                                                 | `pnpm dead-code` + pre-commit + CI                    | block       |
 | Module boundaries and cycles | `.dependency-cruiser.cjs`                                   | `pnpm lint:deps` + CI                                 | block       |
 | Test pairing (TDD)           | `scripts/check-test-pairing.sh`                             | `pnpm lint:tests` + pre-commit + CI                   | block       |
+| Integration-test deadlines   | `eslint.config.mjs` (`no-restricted-syntax`)                | `pnpm lint` + pre-commit + CI                         | block       |
 | Forbidden naming, scratchpad | `.git-hooks/check-naming.sh`                                | pre-commit hook                                       | block       |
 | Conventional commits         | `commitlint.config.cjs`                                     | commit-msg hook                                       | block       |
 | Secrets in commits           | gitleaks                                                    | pre-commit + CI                                       | block       |
@@ -315,5 +316,7 @@ When a rule has no enforcement entry, it is a wish, not a rule. Wire it up or re
 - Coverage gate: proves lines ran, not that assertions are meaningful — review checks test strength.
 - Test pairing: proves a test file exists, not that it was written first or tests the right behavior.
 - Contract snapshot: catches drift in routes that declare a schema, never routes without one.
+- Integration-test deadlines: the lint rejects only `const x = Date.now() + <literal>` in `*.integration.test.ts`; budget derivation is review-only.
+  Unchecked forms: `constraints.yaml` `testing.integration_deadline_from_case_budget.blind_spots`.
 - Pre-commit hooks are local and skippable; CI and branch protection are the authoritative layer.
 - Claude Code write-time hooks are not installed: `.claude/` is untracked local tooling.

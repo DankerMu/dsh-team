@@ -72,5 +72,21 @@ export default tseslint.config(
     files: ['**/*.test.ts', '**/*.test.tsx', '**/*.test.mjs'],
     rules: { 'max-lines-per-function': 'off' },
   },
+  {
+    // A fixed deadline that ignores its case timeout let vitest kill load-slowed cases without
+    // attribution (#321, #324, #628, #630).
+    files: ['platform/test/**/*.integration.test.ts'],
+    rules: {
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "VariableDeclarator > BinaryExpression[operator='+'][left.callee.object.name='Date'][left.callee.property.name='now'][right.type='Literal']",
+          message:
+            'Bare integration-test deadline: derive it from the case budget (dev-watch caseEnd - CLEANUP_MS, custody CASE_MS - RESERVE_MS); otherwise use a named constant commented with its relation to the case timeout (#630).',
+        },
+      ],
+    },
+  },
   prettier,
 );

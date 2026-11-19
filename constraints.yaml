@@ -111,6 +111,12 @@ testing:
     value: "required"
     description: "Every production source file has a sibling test file"
     enforced_by: "scripts/check-test-pairing.sh"
+  integration_deadline_from_case_budget:
+    value: true
+    description: "Integration-test waits derive their deadline from the case budget or a named constant tied to the case timeout, never a bare Date.now() + literal (#321, #324, #628, #630)"
+    severity: "block"
+    enforced_by: "eslint.config.mjs no-restricted-syntax on platform/test/**/*.integration.test.ts (variable initializer form only)"
+    blind_spots: "Named constants, 5 * 1000, reversed or nested arithmetic; assignments, arguments, defaults, properties, returns; fixed waits without Date.now() (setTimeout, spawn timeout); *-fixture.ts, *.docker.test.ts and .mjs helpers"
   forbid_mock_of_system_under_test:
     value: true
     description: "Mock dependencies, never the system under test"

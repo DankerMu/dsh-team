@@ -669,6 +669,10 @@ it('ends a held terminal wait at the case deadline with its attribution and stil
 const ownerOf = (path: string) =>
   Number(record(record(JSON.parse(readFileSync(path, 'utf8')) as unknown).owner).pid);
 
+// The command wait below starts at the 5s fixture deadline (after the killed start) and ends near
+// 15s, below the 20_000 case bound. It cannot derive from fixture.deadline: that has passed.
+const COMMAND_LAUNCH_MS = 10_000;
+
 // The slow owner sleeps 4s before its manifest; its start gets 2.5s of the 5s case deadline, so
 // the start is killed with the owner up, and the owner then launches the held command.
 it('settles the owner and held command of a start killed at the case deadline', async () => {
@@ -683,7 +687,7 @@ it('settles the owner and held command of a start killed at the case deadline', 
         const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
         const root = join(base, readdirSync(base)[0] ?? 'missing');
         pids.owner = ownerOf(join(root, 'launch.json'));
-        for (const until = Date.now() + 10_000; !existsSync(join(root, 'child.json'));) {
+        for (const until = Date.now() + COMMAND_LAUNCH_MS; !existsSync(join(root, 'child.json'));) {
           if (Date.now() >= until) throw new Error('Slow owner launched no command');
           await delay(50);
         }

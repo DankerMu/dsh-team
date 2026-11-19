@@ -40,8 +40,12 @@ async function portListening(port: number): Promise<boolean> {
   return promise;
 }
 
+// Equals the vitest default 5s timeout of the receipt-fault case that awaits it, so a load-slowed
+// acknowledgement can let vitest kill the case first; tracked as a #630 follow-up.
+const ACK_WAIT_MS = 5_000;
+
 async function failAcknowledgedReceipt(spawnedPid: number): Promise<never> {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + ACK_WAIT_MS;
   const { ackPidFile, ackPortFile } = receiptWriteFault;
   if (ackPidFile === undefined || ackPortFile === undefined)
     throw new Error('pid write fault missing child acknowledgement paths');
