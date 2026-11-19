@@ -6,6 +6,7 @@ import { expect, it } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
 import {
   awaitResult,
+  caseBudget,
   CUSTODY_PROXY,
   GROUP_MEMBER_RECORD,
   ownerPresent,
@@ -16,9 +17,24 @@ import { browserExecRetirementSummary } from '../../scripts/verification-submiss
 
 type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
 
+// Each held case's literal 20_000 vitest bound. Inner waits end RESERVE_MS before it: the reserve keeps the
+// terminal evidence (one `status`) and cleanup (member, child group, owner and observer settles,
+// each about two cold observations and a `ps`) outside the budget, so they never leave orphans.
+// Measured green cleanup: at most 672ms, mean 286ms (23 cases, load 7). A settle's theoretical
+// ceiling is about 22s; all of them at once is unrealistic and not budgeted.
+const CASE_MS = 20_000;
+const RESERVE_MS = 5000;
+
+function custodyCase(
+  mode: Parameters<typeof withTrustedDockerFixture>[0],
+  run: Parameters<typeof withTrustedDockerFixture>[1],
+) {
+  return withTrustedDockerFixture(mode, run, undefined, Date.now() + CASE_MS - RESERVE_MS);
+}
+
 // Assertion messages carry only sanitized terminal facts, never output, paths or credentials.
 function terminalEvidence(fixture: CustodyFixture, invocation: string, stderr: string): string {
-  const queried = fixture.command(['status', invocation]);
+  const queried = fixture.inspect(['status', invocation]);
   if (queried.status !== 0) return `${stderr}status exit ${String(queried.status)}`;
   const value = record(JSON.parse(queried.stdout) as unknown);
   const command = value.command === undefined ? undefined : record(value.command);
@@ -80,7 +96,7 @@ function issuedInvocation(
   fixture: CustodyFixture,
   started: { status: number | null; stdout: string; stderr: string },
 ) {
-  const deadline = Date.now() + LEAF_READINESS_MS;
+  const deadline = Math.min(Date.now() + LEAF_READINESS_MS, fixture.deadline);
   expect(started.status, started.stderr).toBe(0);
   const invocation = record(JSON.parse(started.stdout) as unknown).invocation;
   if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
@@ -129,13 +145,21 @@ function leafState(temporary: string) {
   return ownerPresent(leaf.pid) ? 'alive' : 'absent';
 }
 
+// The post-close member's own exit timing, against the product's 2000ms settlement window.
+function memberTiming(temporary: string) {
+  const path = join(temporary, 'member-exit.json');
+  if (!existsSync(path)) return '';
+  const { vanished, exited } = record(JSON.parse(readFileSync(path, 'utf8')) as unknown);
+  return `; member exited ${String(Number(exited) - Number(vanished))}ms after the command vanished; settlement window 2000ms`;
+}
+
 // The former 10s status poll bound; a published terminal never changes, so a mismatch fails at once.
 const TERMINAL_WAIT_MS = 10_000;
 
 async function awaitTerminal(issued: Issued, expected: Record<string, unknown>) {
   const { fixture, invocation, directory, owner, temporary } = issued;
   const scene = () => `; phase=terminal; leaf=${leafState(temporary)}`;
-  const deadline = Date.now() + TERMINAL_WAIT_MS;
+  const deadline = Math.min(Date.now() + TERMINAL_WAIT_MS, fixture.deadline);
   await awaitResult(directory, owner, deadline, fixture.observeProcess, scene, 50);
   const result = fixture.command(['status', invocation]);
   try {
@@ -144,7 +168,8 @@ async function awaitTerminal(issued: Issued, expected: Record<string, unknown>) 
     expect(terminal).toMatchObject(expected);
     return terminal;
   } catch (error) {
-    throw new Error(terminalEvidence(fixture, invocation, 'terminal-mismatch '), { cause: error });
+    const evidence = terminalEvidence(fixture, invocation, 'terminal-mismatch ');
+    throw new Error(evidence + memberTiming(temporary), { cause: error });
   }
 }
 
@@ -170,7 +195,7 @@ async function cancelHeldCommand(fixture: CustodyFixture, expected: Record<strin
 }
 
 it('publishes reviewed launch authority before work and preserves a real nonzero command result', async () => {
-  await withTrustedDockerFixture('fail', async (fixture) => {
+  await custodyCase('fail', async (fixture) => {
     const started = await fixture.start({ DOCKER_HOST: '', DOCKER_CONTEXT: '' });
 
     expect(started.status, started.stderr).toBe(0);
@@ -389,7 +414,7 @@ it.each(['DOCKER_HOST', 'DOCKER_CONTEXT'])(
 it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-record'] as const)(
   'refuses changed %s without interrupting owned live work',
   async (fault) => {
-    await withTrustedDockerFixture('hold', async (fixture) => {
+    await custodyCase('hold', async (fixture) => {
       const issued = issuedInvocation(fixture, await fixture.start());
       const { invocation, directory, manifestPath, original, manifest, temporary } = issued;
       const ready = await issued.leafReady();
@@ -430,10 +455,10 @@ it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-recor
 );
 
 it('survives loss of the launching observer group and reconnects to the same real failed invocation', async () => {
-  await withTrustedDockerFixture('hold', async (fixture) => {
+  await custodyCase('hold', async (fixture) => {
     const sentinel = await fixture.startSentinel();
     await awaitReadiness(
-      Date.now() + SENTINEL_READINESS_MS,
+      Math.min(Date.now() + SENTINEL_READINESS_MS, fixture.deadline),
       () => (existsSync(sentinel.ready) ? true : undefined),
       () =>
         fixture.observeProcess(sentinel.identity.pid) === sentinel.identity.birth
@@ -476,7 +501,7 @@ it('survives loss of the launching observer group and reconnects to the same rea
 }, 20_000);
 
 it('reports lost owner authority as unknown while its child is live and refuses cancellation or takeover', async () => {
-  await withTrustedDockerFixture('hold', async (fixture) => {
+  await custodyCase('hold', async (fixture) => {
     const issued = issuedInvocation(fixture, await fixture.start());
     const { invocation, directory } = issued;
     const ready = await issued.leafReady();
@@ -497,7 +522,7 @@ it('reports lost owner authority as unknown while its child is live and refuses 
 }, 20_000);
 
 it('fails a readiness wait at once with its cause when the leaf exits before readiness', async () => {
-  await withTrustedDockerFixture('early-exit', async (fixture) => {
+  await custodyCase('early-exit', async (fixture) => {
     const started = await fixture.start();
     const since = Date.now();
     const issued = issuedInvocation(fixture, started);
@@ -523,7 +548,7 @@ it.each([
 ] as const)(
   'completes a held command whose release only the leaf watch %s sees',
   async (_, mode) => {
-    await withTrustedDockerFixture(mode, async (fixture) => {
+    await custodyCase(mode, async (fixture) => {
       const issued = issuedInvocation(fixture, await fixture.start());
       await issued.leafReady();
       if (mode === 'release-blind') writeFileSync(join(issued.temporary, 'release'), 'release');
@@ -539,7 +564,7 @@ it.each([
 );
 
 it('fails a terminal wait at once with its evidence when the published terminal differs', async () => {
-  await withTrustedDockerFixture('early-exit', async (fixture) => {
+  await custodyCase('early-exit', async (fixture) => {
     const issued = issuedInvocation(fixture, await fixture.start());
     const since = Date.now();
 
@@ -551,7 +576,7 @@ it('fails a terminal wait at once with its evidence when the published terminal 
 }, 20_000);
 
 it('fails a terminal wait at once when the owner exits without publishing a terminal', async () => {
-  await withTrustedDockerFixture('hold', async (fixture) => {
+  await custodyCase('hold', async (fixture) => {
     const issued = issuedInvocation(fixture, await fixture.start());
     await issued.leafReady();
     await fixture.killOwner(issued.invocation);
@@ -566,8 +591,46 @@ it('fails a terminal wait at once when the owner exits without publishing a term
   });
 }, 20_000);
 
+it('kills a fixture spawn cut to the case deadline and refuses one after it, naming the phase', () => {
+  const budget = caseBudget(Date.now() + 200);
+  const sleep = () =>
+    budget.run('fixture sleep', process.execPath, ['-e', 'setTimeout(() => {}, 5000);'], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+
+  expect(sleep).toThrow(/^fixture sleep: killed at the case deadline after \d+ms$/);
+  expect(sleep).toThrow(/^fixture sleep: case deadline passed before it started$/);
+});
+
+// Setup fits well inside 8s, so the held terminal wait starts with less than its own 10s cap left.
+const SPENT_CASE_MS = 8000;
+
+it('ends a held terminal wait at the case deadline with its attribution and still cleans up', async () => {
+  await withTrustedDockerFixture(
+    'hold',
+    async (fixture) => {
+      const issued = issuedInvocation(fixture, await fixture.start());
+      await issued.leafReady();
+      const since = Date.now();
+      const left = fixture.deadline - since;
+
+      await expect(awaitTerminal(issued, { state: 'failed' })).rejects.toThrow(
+        /^Trusted Docker owner still running without result\.json after \d+ms: pid=\d+; phase=terminal; leaf=alive$/,
+      );
+      expect(Date.now() - since).toBeLessThan(left + 1000);
+      expect(() => fixture.command(['status', issued.invocation])).toThrow(
+        /^command status: case deadline passed before it started$/,
+      );
+      expect(fixture.inspect(['status', issued.invocation]).status).toBe(0);
+    },
+    undefined,
+    Date.now() + SPENT_CASE_MS,
+  );
+}, 20_000);
+
 it('cancels the actual pnpm child tree and preserves the terminal result on late cancellation', async () => {
-  await withTrustedDockerFixture('hold', async (fixture) => {
+  await custodyCase('hold', async (fixture) => {
     const sentinel = await fixture.startSentinel();
     const issued = issuedInvocation(fixture, await fixture.start());
     const { invocation, temporary } = issued;
@@ -604,12 +667,15 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
 }, 20_000);
 
 it('settles a cancelled command whose same-group member exits shortly after close', async () => {
-  await withTrustedDockerFixture('post-close-member', async (fixture) => {
-    const { invocation, terminal } = await cancelHeldCommand(fixture, {
+  await custodyCase('post-close-member', async (fixture) => {
+    const { invocation, temporary, terminal } = await cancelHeldCommand(fixture, {
       state: 'failed',
       command: { settled: true },
       cleanup: { state: 'confirmed', browserExec: null },
     });
+    expect(memberTiming(temporary)).toMatch(
+      /^; member exited \d+ms after the command vanished; settlement window 2000ms$/,
+    );
 
     const duplicate = fixture.command(['cancel', invocation], true);
     expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
@@ -618,7 +684,7 @@ it('settles a cancelled command whose same-group member exits shortly after clos
 }, 20_000);
 
 it('keeps a cancelled command unsettled while a same-group member outlives the observation window', async () => {
-  await withTrustedDockerFixture('past-expiry-member', async (fixture) => {
+  await custodyCase('past-expiry-member', async (fixture) => {
     const { invocation, temporary, terminal } = await cancelHeldCommand(fixture, {
       state: 'unknown',
       command: { settled: false },
@@ -644,7 +710,7 @@ it('keeps a cancelled command unsettled while a same-group member outlives the o
 }, 20_000);
 
 it('retains a nonpassing result and refuses partial logs after actual output storage failure', async () => {
-  await withTrustedDockerFixture('output-failed', async (fixture) => {
+  await custodyCase('output-failed', async (fixture) => {
     const started = await fixture.start();
     expect(started.status, started.stderr).toBe(0);
     const issued = issuedInvocation(fixture, started);
@@ -701,7 +767,7 @@ it.each([
 ] as const)(
   '$title',
   async ({ mode, expected, cancelStatus }) => {
-    await withTrustedDockerFixture(mode, async (fixture) => {
+    await custodyCase(mode, async (fixture) => {
       const started = await fixture.start();
       expect(started.status, started.stderr).toBe(0);
       const issued = issuedInvocation(fixture, started);
