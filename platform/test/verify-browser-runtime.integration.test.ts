@@ -11,8 +11,9 @@ import { vitestSpawnInterception, vitestStandIn } from './vitest-stand-in-fixtur
 
 const wrapper = fileURLToPath(new URL('../../scripts/verify-browser-runtime.mjs', import.meta.url));
 const vitest = fileURLToPath(new URL('../../node_modules/vitest/vitest.mjs', import.meta.url));
-// Each signal case cold-starts two Node processes; SETTLE_MS is left for its `finally`.
-const SIGNAL_CASE_MS = 20_000;
+// Every case cold-starts two Node processes, the wrapper and the stand-in, so each gets this budget
+// (the launch cases inherited vitest's 5000 ms before); SETTLE_MS is left for its `finally`.
+const CASE_MS = 20_000;
 const SETTLE_MS = 3000;
 
 interface WrapperRun {
@@ -168,18 +169,24 @@ it.each([
   ['docker', '--help'],
   ['model', '--help'],
   ['docker', '-h'],
-])('launches %s %s as vitest directly under this Node', async (lane, flag) => {
-  const run = await startWrapper([lane, flag], false);
-  try {
-    const { code } = await run.exited;
-    expect(await spawns(run.root)).toEqual([
-      { file: process.execPath, args: [vitest, 'run', '--project', lane, flag] },
-    ]);
-    expect(code).toBe(0);
-  } finally {
-    await rm(run.root, { recursive: true, force: true });
-  }
-});
+])(
+  'launches %s %s as vitest directly under this Node',
+  async (lane, flag) => {
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
+    const run = await startWrapper([lane, flag], false);
+    try {
+      const { code } = await settled(run, deadline);
+      expect(await spawns(run.root)).toEqual([
+        { file: process.execPath, args: [vitest, 'run', '--project', lane, flag] },
+      ]);
+      expect(code).toBe(0);
+    } finally {
+      await killStandIn(run.root);
+      await rm(run.root, { recursive: true, force: true });
+    }
+  },
+  CASE_MS,
+);
 
 it.each([
   ['SIGTERM', 143],
@@ -187,7 +194,7 @@ it.each([
 ] as const)(
   'forwards %s to vitest and settles only after vitest has exited',
   async (signal, expected) => {
-    const deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS;
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true);
     try {
       const started = await marker(run, 'started.json', deadline);
@@ -203,13 +210,13 @@ it.each([
       await rm(run.root, { recursive: true, force: true });
     }
   },
-  SIGNAL_CASE_MS,
+  CASE_MS,
 );
 
 it(
   'keeps one idempotent handler for a second SIGTERM while vitest is still settling',
   async () => {
-    const deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS;
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true, 'release');
     try {
       await marker(run, 'started.json', deadline);
@@ -234,13 +241,13 @@ it(
       await rm(run.root, { recursive: true, force: true });
     }
   },
-  SIGNAL_CASE_MS,
+  CASE_MS,
 );
 
 it(
   'attributes a missing marker to its file, the wrapper and the live stand-in',
   async () => {
-    const deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS;
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true);
     try {
       await marker(run, 'started.json', deadline);
@@ -259,13 +266,13 @@ it(
       await rm(run.root, { recursive: true, force: true });
     }
   },
-  SIGNAL_CASE_MS,
+  CASE_MS,
 );
 
 it(
   'attributes a wrapper that does not exit by the deadline to the live stand-in',
   async () => {
-    const deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS;
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true);
     try {
       await marker(run, 'started.json', deadline);
@@ -283,5 +290,5 @@ it(
       await rm(run.root, { recursive: true, force: true });
     }
   },
-  SIGNAL_CASE_MS,
+  CASE_MS,
 );
