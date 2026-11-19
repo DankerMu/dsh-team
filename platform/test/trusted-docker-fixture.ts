@@ -59,8 +59,19 @@ export type RetirementScenario =
   | 'unbound'
   | 'lock-unavailable';
 
-// The leaf of a member mode publishes the past-expiry member identity here before readiness.
+// The leaf of a member mode publishes its pre-started member identity here before readiness.
 export const GROUP_MEMBER_RECORD = 'group-member.json';
+// The post-close member announces its handlers; on SIGUSR2 it waits until the command pid in
+// child.json vanishes, exits a fixed delay later and atomically records both times. The delay is
+// re-armed on Date.now(), the clock both recorded times use; a timer alone can end a few ms early.
+export const CLOSE_MEMBER_DELAY_MS = 300;
+const CLOSE_MEMBER = `const fs=require('node:fs');const [record,exit]=process.argv.slice(1);let closing=false;
+process.on('SIGINT',()=>{});process.on('SIGTERM',()=>{});
+process.on('SIGUSR2',()=>{if(closing)return;closing=true;const pid=JSON.parse(fs.readFileSync(record,'utf8')).owner.pid;
+const poll=setInterval(()=>{try{process.kill(pid,0);}catch{clearInterval(poll);const vanished=Date.now();
+const until=vanished+${String(CLOSE_MEMBER_DELAY_MS)};const wait=()=>{const now=Date.now();if(now<until)return setTimeout(wait,until-now);
+fs.writeFileSync(exit+'.pending',JSON.stringify({vanished,exited:now}));fs.renameSync(exit+'.pending',exit);process.exit(0);};wait();}},10);});
+process.stdout.write('ready');setInterval(()=>{},1000);`;
 // The retirement setup publishes its detached fixture platform identity here.
 const FAKE_PLATFORM_RECORD = 'fake-platform.json';
 
@@ -143,9 +154,10 @@ export function caseBudget(deadline?: number) {
       );
     return result;
   };
-  const stalled = (phase: string, since: number, pid: unknown) =>
+  // A group wait also reports its group, which members can keep present after the leader is gone.
+  const stalled = (phase: string, since: number, pid: unknown, group = false) =>
     new Error(
-      `${phase} after ${String(Date.now() - since)}ms: pid=${String(pid)} present=${String(ownerPresent(Number(pid)))}`,
+      `${phase} after ${String(Date.now() - since)}ms: pid=${String(pid)} present=${String(ownerPresent(Number(pid)))}${group ? ` group present=${String(ownerPresent(-Number(pid)))}` : ''}`,
     );
   // Terminal evidence is synchronous, so its full bounds end with it.
   const unbounded = <T>(operation: () => T) => {
@@ -288,8 +300,9 @@ const release=join(temporary,'release');
 // Readers poll these records, so each appears complete or not at all.
 const publish=(name,value)=>{const path=join(temporary,name);writeFileSync(path+'.pending',JSON.stringify(value),{mode:0o600});renameSync(path+'.pending',path);};
 // One group signal plus pnpm's native forwarding may deliver SIGINT twice.
-// The post-close member outlives this leaf's exit, without being awaited, for a few hundred ms.
-process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')member(500);process.exitCode=27;process.exit(27);});
+// The pre-started post-close member outlives this leaf's exit by its own short, recorded delay.
+let retained;
+process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')process.kill(retained.pid,'SIGUSR2');process.exitCode=27;process.exit(27);});
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
 // Watch events may be late, coalesced or missing, so the watch also checks at once and every 50ms.
@@ -300,9 +313,10 @@ const held=['hold','post-close-member','past-expiry-member','release-blind','ret
 // This leaf releases itself and watches 500ms after its last write: Darwin FSEvents replayed
 // writes made just before watch() (8/8 probes) but none made 100ms or more before it (0/8).
 if(mode==='release-early')writeFileSync(release,'release');
-if(mode==='past-expiry-member'||scenario==='member'){
-  const retained=member(30000);
+if(['past-expiry-member','post-close-member'].includes(mode)||scenario==='member'){
+  retained=mode==='post-close-member'?spawn(process.execPath,['-e',${JSON.stringify(CLOSE_MEMBER)},join(custody,'child.json'),join(temporary,'member-exit.json')],{stdio:['ignore','pipe','ignore']}):member(30000);
   await once(retained,'spawn');
+  if(retained.stdout)await once(retained.stdout,'data');
   publish(${JSON.stringify(GROUP_MEMBER_RECORD)},{pid:retained.pid,birth:await processBirth(retained.pid)});
 }
 // The early-exit leaf ends before readiness, so readiness waits must fail fast.
@@ -413,7 +427,7 @@ function fixtureProcessCustody(
         if (!live() && closures.get(pid)?.closed !== false && (!group || groupIsAbsent(pid)))
           return;
         if (Date.now() >= until)
-          throw budget.stalled('Owned custody fixture process did not retire', since, pid);
+          throw budget.stalled('Owned custody fixture process did not retire', since, pid, group);
         await delay(20);
       }
     };
