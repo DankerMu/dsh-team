@@ -6848,3 +6848,56 @@ Suggested fixture level: expanded - 安全边界（跨用户数据）、部署�
 Minimal mergeable slice: 55-a（55.1–55.4）一个 PR；55-b（55.5–55.7）一个 PR；55.6 的复现在 55-a 之前跑。55-a 预计接近 400 计数行（含本节）：超限时先把可移的断言挪到 55-b，仍超限再问用户是否加 `diff-limit-exempt`
 Risk packs: selected - Security（跨用户读取、伪造 XFF、路径变体）、Legacy compatibility（已部署主机升级、`DOCUMENT_SERVER_CONTAINER_NAME` 语义）、Resource lifecycle（固定名容器登记与清理、命名空间持有者重启）、Network（防火墙只管入站，DS 出站和回包不受影响）；not selected - Schema、Public API、Migration、Auth。
 Must preserve：编辑器打开、保存回调、取文件、`/healthcheck`；平台按名字接 +4 的行为和三端点布局；`test:deploy` 其余暴露验收；A 的 forgotten 恢复。
+
+## 56. 技术债 #630：custody 与 dev-watch 的等待和用例预算挂钩，失败可归因
+
+依赖：#628（PR #629）、#631（PR #632），均已合并。只改测试与 fixture，不改 `scripts/trusted-docker-*.mjs`、`scripts/dev-watch.sh` 和任何断言内容。拆成三个顺序 PR：56-a1（custody：56.1、56.2、56.5）、56-a2（custody：56.3、56.4）、56-b（dev-watch 与 `launches`）。56-a 原定一个 PR，实测超出 400 计数行（fixture 的期限截断层单独就约 226 行，`createTrustedDockerFixture` 在 `main` 上已 197 行、函数长度上限 200，56.3 须先搬出一段代码），所以再拆。守卫规则（同类事件第四次，用户 2026-11-18 决定另开 PR）在 56-b 之后单独做，不在本节。
+
+已核实（`main` `d662e44`）：
+
+- custody 不走 cancel 的失败形态（来源：PR #634 期间本机完整 `pnpm check` 的日志，2026-11-18，负载 2–4，共 4 次）：「refuses changed owner-birth / obsolete-birth / record-permissions / malformed-record without interrupting owned live work」和「survives loss of the launching observer group …」在写出 `release` 后等 10 秒，`status` 仍是 `state: "running"`，期望的 `failed`/exit 17 没有出现。走 cancel 的用例在 #631 之后不再失败。
+- leaf 等 `release` 只靠 `fs.watch(temporary, …)` 的事件回调检查一次 `existsSync(release)`（`platform/test/trusted-docker-fixture.ts:179-180`、`:191`），建 watcher 时不先查、之后不复查。macOS FSEvents 会延迟、分批、合并事件（#628、#631 已实测），与 #629 修掉的 `awaitFile`、#631 修掉的 owner 读 `cancel.json` 同类。
+- custody 用例在写 `release` 或 cancel 之后用 `vi.waitFor(…, { timeout: 10_000, interval: 50 })` 轮询 `status`（`trusted-docker-custody.integration.test.ts:136-150`、`:178-193`、`:415-427`、`:464-479`、`:518-531`、`:551-566`、`:629-643`、`:695-703`，共 8 处），每次轮询 `spawnSync` 一个 Node；看不出终态已写出但不符、owner 已消失这两种不必再等的情况。`issuedInvocation` 的 `ended()`（`:93-103`）已实现这两个快速失败原因，只用于就绪等待（`awaitReadiness`，`:45-58`）。
+- 用例预算 20 秒（`:354`、`:430`、`:485` 等），内层固定期限互相独立：git 的 `spawnSync` 每次 10 秒、共 4 次（`trusted-docker-fixture.ts:219-232`，在 `run` 之前），`ps` 2 秒（`:289-293`），`command()` 的 `spawnSync` 15 秒（`:398-417`）、observer 外层 15 秒加内层 `spawnSync` 15 秒（`:349`、`:490-492`）、`captureStart` 10 秒（`:463-468`）、`waitForAbsence` 5 秒且每次探测是 5 秒的冷 Node（`:247-285`）、`LEAF_READINESS_MS = 5000`、`SENTINEL_READINESS_MS = 2000`（custody `:37-40`）。
+- `status` 输出不是 `result.json` 原文：`scripts/trusted-docker-owner.mjs:477` 为 `state: result.command.settled ? result.state : 'unknown'`，另加 `head`/`root`；`past-expiry-member`（custody `:597`）和 `groupIdentityFailure`（`:655`）期望 `state: 'unknown'`。owner 先写结果再退出（`owner.mjs:463`）。retirement 的 `awaitResult`（`trusted-docker-retirement.integration.test.ts:109-140`）已有「结果是否存在、owner 是否 ESRCH 并复查、超时带已等时长」这段逻辑；retirement 自己按用例算期限（`:209-210`），它 `:157-162` 的固定 10 秒就绪等待属 #628 范围，本节不动。
+- `post-close-member`：leaf 在 SIGINT 处理器里才冷启动 member（`trusted-docker-fixture.ts:177`，`member(500)`），产品的 `GROUP_SETTLEMENT_WINDOW_MS = 2000` 从命令 close 起算（`scripts/trusted-docker-record.mjs:173`）。
+- dev-watch：`until()` 固定 10 秒、每 20 毫秒轮询（`dev-watch.integration.test.ts:10-17`），用在拒绝、首次启动、源码重载和 `finally` 等组退出（`:136`、`:141-144`、`:153-156`、`:171`）；用例预算 30 秒（`:176`）；stdout/stderr 直接 `resume()` 丢弃（`:124-125`）；`finally` 的 `await closed` 无界（`:169`）。失败形态：「Timed out waiting for source reload」，只出现在 absent/present 两例。`scripts/dev-watch.sh` 是 `exec node --watch [--env-file=.env] platform/src/main.ts`。
+- `verify-browser-runtime.integration.test.ts` 的「launches %s %s as vitest directly under this Node」没有第三个超时参数（继承 5000 毫秒），`await run.exited` 无界。
+
+### 56-a custody
+
+- [ ] 56.1 leaf 的 `release` 等待：建好 watcher 后立即检查一次，并以 50 毫秒间隔复查，任一命中即 `ready()`；`ready()` 之后关掉 watcher 和定时器。复查只在 `:180` 现有的几种模式里开。确定性证明：给 fixture 加一个变体，让 leaf 自己在 `watch()` 之前写出 `release`，期望 `failed`、exit 17；修复前卡到期限（红），修复后通过。
+- [ ] 56.2 终态等待：
+  - 把 retirement `awaitResult` 的结果门提到 `trusted-docker-fixture.ts`，两边共用一份（Code Canonicality）：`awaitResult(directory, owner, deadline, observe, scene)` 只管 `result.json` 是否出现、owner ESRCH 后复查一次 `result.json`（同 retirement `:120-122`）、超时消息带已等时长，不跑 `status`。retirement 照旧传入自己的 `retirementScene`；它 `:180-183` 先等结果、再恢复 manifest、再跑 `status` 的顺序和 `:383-386` 的断言文本都不变。
+  - custody 新增 `awaitTerminal(fixture, invocation, deadline, expected)`：先调 `awaitResult`，再跑一次 `fixture.command(['status', invocation])`，用原期望对象 `toMatchObject`；不符或 `status` 退出非 0 → 立即失败，消息带 `terminalEvidence`（终态不可变，再等无用）；相符 → 返回解析值，供 `:152`、`:570`、`:574`、`:590` 继续使用。owner 身份在 `start` 之后立刻从 manifest 读出保存，不在等待时重读。
+  - 超时消息写明阶段、已等毫秒数、owner/leaf 是否存活、终态是否已写出。
+  - 取代 custody 里列出的 8 处 `vi.waitFor`；期望对象逐字不变。
+- [ ] 56.3 期限来源：
+  - `withTrustedDockerFixture(mode, run, scenario?, deadline?)` 增加可选截止时刻，不传时行为不变；custody 每个用例开头取「用例预算 − 命名余量」传入；retirement 不传，行为不变（它的 `deadline` 是结果等待的截止，`RETIRE_MS` 留给其后的 `status` 和清理，`:25-33`、`:209-210`，不在 #630 范围）。
+  - fixture 内部把 `command()`、observer、`captureStart`、`waitForAbsence`/`observeProcess`、git 与 `ps` 的 `spawnSync` 超时截断为 `min(原值, 剩余)`，下限 1 毫秒；剩余 ≤ 0 时不再 spawn，直接抛带阶段的错误。就绪期限为 `min(LEAF_READINESS_MS, 剩余)`（`:517` 的断言不变）。
+  - 清理（`cleanup()`，`:525-565`）和终态取证（`terminalEvidence`）用命名余量里预留的固定份额，不按剩余预算截断，避免把 owner/leaf/member 留成孤儿；余量按最坏清理链路取值，理由仿 retirement `:25-33` 写在常量旁。
+  - 每个被截断的内层等待超时，信息都带阶段、已等毫秒数和相关进程是否存活；observer 内外两个期限的失败消息可区分。
+  - 用例预算先保留 20 秒；负载验证里若出现可归因的「owner 存活、无结果、超时」，按归因信息调整预算并写明来源（不算「只靠调大」）。
+- [ ] 56.4 `post-close-member`：member 在就绪前起好并写入 `GROUP_MEMBER_RECORD`（否则清理收不到它）；leaf 在 SIGINT 处理器里给它发 `SIGUSR2`（member 照旧忽略 SIGINT/SIGTERM）；member 收到后轮询 `child.json` 里的命令 pid 直到 ESRCH，再等固定的短延时退出，把这两个时间写进 `member-exit.json`。失败信息写明「命令消失后 N 毫秒退出，结算窗口 2000 毫秒」。`child-interrupted` 内容仍是 `'SIGINT'`（`:151`、`:568` 断言它）。
+- [ ] 56.5 测试（TDD：先红后绿，红在哪里如实记录）：
+  - 不符立即失败：用 `early-exit`（exit 23）去等 `exitCode: 17`，断言很快失败并带 `terminalEvidence`；
+  - owner 已退出：仿 `:494` 用 `fixture.killOwner`（不写结果，见 `:502`）后等终态，断言以 owner-absent 很快失败；
+  - 56.1 的「release 先于 watcher」变体；
+  - 现有 custody、retirement 用例照常通过，断言一条不改。
+- 验证（编排方做）：在人为负载下（1 分钟负载 ≥ 13，4 个 CPU 压力进程）连续 5 次 `pnpm test:integration`，记录每次负载和结果，custody 文件不再失败；再按合并门禁跑 exact-head 车道。
+- 56-a1 的取舍：`awaitTerminal` 的期限取等待开始时的 `Date.now() + 10_000`，与现在 `vi.waitFor` 的上限相同；只改「终态不符或 owner 已消失立即失败」和超时归因。它接收 `issuedInvocation` 的返回值（`start` 之后立刻从 manifest 读出 owner `{pid, birth}` 并保存），不用 `(fixture, invocation, …)` 签名。56.1 的确定性红灯：leaf 现在先建 watcher、再在同一目录发布 `child-ready.json`，这次 rename 本身会触发 watch 事件，「release 先于 watcher」变体在修复前只会慢、不会卡住；变体里把 watcher 建在 `child-ready.json` 发布之后，修复前才确定地卡到期限。
+- 56-a2 的提醒：清理期限用设了就不再复原的预留（`reserve()`），不要在异步 `cleanup` 外包一层临时置位又复原的标志（复原发生在第一次 `await` 之前，之后的清理会被剩余预算截断）；同步的终态取证可以临时置位。「rejects a different reviewed revision …」和 `DOCKER_HOST`/`DOCKER_CONTEXT` 两组沿用 vitest 默认 5 秒的用例不传期限。
+
+### 56-b dev-watch 与 `launches`
+
+- [ ] 56.6 dev-watch：`until()` 的期限改为从 30 秒用例预算的剩余部分推出；超时消息写明阶段、已等毫秒数、receipt 当前内容（或「不存在」）、pnpm 进程组是否存活，以及截断后的 stdout/stderr 尾部（不再 `resume()` 丢弃）；`finally` 的清理有界，且不覆盖、不挂住原始错误。
+- [ ] 56.7 先归因再修：用 56.6 的信息在负载下确认「源码重载」失败属于哪一种——`node --watch` 对 `revision.ts` 的监视尚未生效就写入（改动被漏掉，组仍存活、receipt 停在 1），还是重启本身慢于预算。前者若唯一的办法是重复写入，停下报告，不自行决定；后者按预算处理。
+- [ ] 56.8 `launches`：声明显式用例预算（命名常量注明来源），`run.exited` 改为有界等待，超时带归因信息。
+- 验证同 56-a 的负载方式，针对 dev-watch 与 verify-browser-runtime。
+
+不做的事：调大墙钟预算作为唯一修法、加测试级重试、跳过用例、删减或改动断言；改产品脚本；改 `integration` project 的并发策略。
+
+Suggested fixture level: compact - 测试可靠性，只改测试与 fixture
+Minimal mergeable slice: 56-a（56.1–56.5）一个 PR；56-b（56.6–56.8）一个 PR
+Risk packs: selected - Concurrency（watch 事件、复查定时器与终态写出并发）、Resource limits（复查间隔、spawnSync 不越过用例期限）、Legacy compatibility（retirement 共用 fixture，断言不变）；not selected - Security、Auth、Schema、Public API、Migration。
+Must preserve：所有既有断言；`trusted-docker-retirement` 通过；产品脚本不变。

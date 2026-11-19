@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expect, it, vi } from 'vitest';
+import { expect, it } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
 import {
+  awaitResult,
   CUSTODY_PROXY,
   GROUP_MEMBER_RECORD,
+  ownerPresent,
   withTrustedDockerFixture,
 } from './trusted-docker-fixture.ts';
 import { hasPassingOutcome, validateTerminal } from '../../scripts/trusted-docker-record.mjs';
@@ -87,19 +89,13 @@ function issuedInvocation(
   const original = readFileSync(manifestPath, 'utf8');
   const manifest = record(JSON.parse(original) as unknown);
   const temporary = manifest.temporary;
-  const ownerPid = record(manifest.owner).pid;
+  const { pid, birth } = record(manifest.owner);
   if (typeof temporary !== 'string') throw new Error('Missing owned temporary root');
-  if (typeof ownerPid !== 'number') throw new Error('Missing owner identity');
+  if (typeof pid !== 'number' || typeof birth !== 'string')
+    throw new Error('Missing owner identity');
   const ended = (): ReadinessCause | undefined => {
     if (existsSync(join(directory, 'result.json'))) return 'terminal-published';
-    try {
-      process.kill(ownerPid, 0);
-    } catch (error) {
-      // Only ESRCH is absence; any other observation error leaves the wait running.
-      if (error instanceof Error && 'code' in error && error.code === 'ESRCH')
-        return 'owner-absent';
-    }
-    return undefined;
+    return ownerPresent(pid) ? undefined : 'owner-absent';
   };
   const awaitIssued = <T>(ready: () => T | undefined) =>
     awaitReadiness(deadline, ready, ended, (cause) =>
@@ -107,7 +103,9 @@ function issuedInvocation(
     );
   const stdout = join(directory, 'stdout.log');
   return {
+    fixture,
     invocation,
+    owner: { pid, birth },
     directory,
     manifestPath,
     original,
@@ -123,31 +121,50 @@ function issuedInvocation(
   };
 }
 
+type Issued = ReturnType<typeof issuedInvocation>;
+
+function leafState(temporary: string) {
+  const leaf = leafRecord(temporary);
+  if (leaf === undefined) return 'unpublished';
+  return ownerPresent(leaf.pid) ? 'alive' : 'absent';
+}
+
+// The former 10s status poll bound; a published terminal never changes, so a mismatch fails at once.
+const TERMINAL_WAIT_MS = 10_000;
+
+async function awaitTerminal(issued: Issued, expected: Record<string, unknown>) {
+  const { fixture, invocation, directory, owner, temporary } = issued;
+  const scene = () => `; phase=terminal; leaf=${leafState(temporary)}`;
+  const deadline = Date.now() + TERMINAL_WAIT_MS;
+  await awaitResult(directory, owner, deadline, fixture.observeProcess, scene, 50);
+  const result = fixture.command(['status', invocation]);
+  try {
+    expect(result.status, result.stderr).toBe(0);
+    const terminal = JSON.parse(result.stdout) as unknown;
+    expect(terminal).toMatchObject(expected);
+    return terminal;
+  } catch (error) {
+    throw new Error(terminalEvidence(fixture, invocation, 'terminal-mismatch '), { cause: error });
+  }
+}
+
 async function cancelHeldCommand(fixture: CustodyFixture, expected: Record<string, unknown>) {
-  const { invocation, temporary, leafReady } = issuedInvocation(fixture, await fixture.start());
-  await leafReady();
+  const issued = issuedInvocation(fixture, await fixture.start());
+  const { invocation, temporary } = issued;
+  await issued.leafReady();
   const cancelled = fixture.command(['cancel', invocation], true);
   expect(cancelled.status, cancelled.stderr).toBe(0);
   expect(JSON.parse(cancelled.stdout) as unknown).toMatchObject({
     invocation,
     state: 'cancellation-requested',
   });
-  let terminal: unknown;
-  await vi.waitFor(
-    () => {
-      const result = fixture.command(['status', invocation]);
-      expect(result.status, result.stderr).toBe(0);
-      terminal = JSON.parse(result.stdout) as unknown;
-      expect(terminal).toMatchObject({
-        invocation,
-        interruption: 'cancelled',
-        failure: null,
-        output: { complete: true },
-        ...expected,
-      });
-    },
-    { timeout: 10_000, interval: 50 },
-  );
+  const terminal = await awaitTerminal(issued, {
+    invocation,
+    interruption: 'cancelled',
+    failure: null,
+    output: { complete: true },
+    ...expected,
+  });
   expect(readFileSync(join(temporary, 'child-interrupted'), 'utf8')).toBe('SIGINT');
   return { invocation, temporary, terminal };
 }
@@ -157,11 +174,9 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
     const started = await fixture.start({ DOCKER_HOST: '', DOCKER_CONTEXT: '' });
 
     expect(started.status, started.stderr).toBe(0);
-    const startValue: unknown = JSON.parse(started.stdout);
-    const invocation = record(startValue).invocation;
+    const issued = issuedInvocation(fixture, started);
+    const { invocation, directory } = issued;
     expect(invocation).toEqual(expect.any(String));
-    if (typeof invocation !== 'string') throw new Error('Missing invocation identity');
-    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
     const manifestPath = join(directory, 'manifest.json');
     const manifestValue: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
     expect(manifestValue).toMatchObject({
@@ -175,22 +190,14 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
     expect(owner.birth).toEqual(expect.any(String));
     expect(statSync(directory).mode & 0o777).toBe(0o700);
     expect(statSync(manifestPath).mode & 0o777).toBe(0o600);
-    await vi.waitFor(
-      () => {
-        const queried = fixture.command(['status', invocation]);
-        expect(queried.status, queried.stderr).toBe(0);
-        const value: unknown = JSON.parse(queried.stdout);
-        expect(value).toMatchObject({
-          invocation,
-          head: fixture.head,
-          state: 'failed',
-          command: { exitCode: 17, signal: null, settled: true },
-          output: { complete: true },
-          cleanup: { state: 'confirmed', browserExec: null },
-        });
-      },
-      { timeout: 10_000, interval: 50 },
-    );
+    await awaitTerminal(issued, {
+      invocation,
+      head: fixture.head,
+      state: 'failed',
+      command: { exitCode: 17, signal: null, settled: true },
+      output: { complete: true },
+      cleanup: { state: 'confirmed', browserExec: null },
+    });
     const stdout = fixture.command(['logs', invocation, 'stdout']);
     const stderr = fixture.command(['logs', invocation, 'stderr']);
     expect(stdout.status).toBe(0);
@@ -412,19 +419,11 @@ it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-recor
         chmodSync(manifestPath, 0o600);
       }
       writeFileSync(join(temporary, 'release'), 'release');
-      await vi.waitFor(
-        () => {
-          const result = fixture.command(['status', invocation]);
-          expect(result.status, result.stderr).toBe(0);
-          const value: unknown = JSON.parse(result.stdout);
-          expect(value).toMatchObject({
-            state: 'failed',
-            command: { exitCode: 17, settled: true },
-            interruption: 'none',
-          });
-        },
-        { timeout: 10_000, interval: 50 },
-      );
+      await awaitTerminal(issued, {
+        state: 'failed',
+        command: { exitCode: 17, settled: true },
+        interruption: 'none',
+      });
     });
   },
   20_000,
@@ -461,22 +460,14 @@ it('survives loss of the launching observer group and reconnects to the same rea
     const current: unknown = JSON.parse(reconnected.stdout);
     expect(current).toMatchObject({ invocation, head: fixture.head, state: 'running' });
     writeFileSync(join(temporary, 'release'), 'release');
-    await vi.waitFor(
-      () => {
-        const result = fixture.command(['status', invocation]);
-        expect(result.status, result.stderr).toBe(0);
-        const value: unknown = JSON.parse(result.stdout);
-        expect(value).toMatchObject({
-          invocation,
-          state: 'failed',
-          command: { exitCode: 17, settled: true },
-          interruption: 'none',
-          output: { complete: true },
-          cleanup: { state: 'confirmed', browserExec: null },
-        });
-      },
-      { timeout: 10_000, interval: 50 },
-    );
+    await awaitTerminal(issued, {
+      invocation,
+      state: 'failed',
+      command: { exitCode: 17, settled: true },
+      interruption: 'none',
+      output: { complete: true },
+      cleanup: { state: 'confirmed', browserExec: null },
+    });
     const log = fixture.command(['logs', invocation, 'stdout'], true);
     expect(log.status, log.stderr).toBe(0);
     expect(log.stdout).toContain('fixture-begin\nfixture-end\n');
@@ -509,34 +500,78 @@ it('fails a readiness wait at once with its cause when the leaf exits before rea
   await withTrustedDockerFixture('early-exit', async (fixture) => {
     const started = await fixture.start();
     const since = Date.now();
-    const { invocation, leafReady } = issuedInvocation(fixture, started);
+    const issued = issuedInvocation(fixture, started);
+    const { invocation, leafReady } = issued;
 
     const waited = leafReady();
 
     await expect(waited).rejects.toThrow(/^(terminal-published|owner-absent) /);
     expect(Date.now() - since).toBeLessThan(LEAF_READINESS_MS);
-    await vi.waitFor(
-      () => {
-        const result = fixture.command(['status', invocation]);
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout) as unknown).toMatchObject({
-          invocation,
-          state: 'failed',
-          command: { exitCode: 23, signal: null, settled: true },
-          interruption: 'none',
-          cleanup: { state: 'confirmed' },
-        });
-      },
-      { timeout: 10_000, interval: 50 },
+    await awaitTerminal(issued, {
+      invocation,
+      state: 'failed',
+      command: { exitCode: 23, signal: null, settled: true },
+      interruption: 'none',
+      cleanup: { state: 'confirmed' },
+    });
+  });
+}, 20_000);
+
+it.each([
+  ['initial check', 'release-early'],
+  ['50ms recheck', 'release-blind'],
+] as const)(
+  'completes a held command whose release only the leaf watch %s sees',
+  async (_, mode) => {
+    await withTrustedDockerFixture(mode, async (fixture) => {
+      const issued = issuedInvocation(fixture, await fixture.start());
+      await issued.leafReady();
+      if (mode === 'release-blind') writeFileSync(join(issued.temporary, 'release'), 'release');
+
+      await awaitTerminal(issued, {
+        state: 'failed',
+        command: { exitCode: 17, settled: true },
+        interruption: 'none',
+      });
+    });
+  },
+  20_000,
+);
+
+it('fails a terminal wait at once with its evidence when the published terminal differs', async () => {
+  await withTrustedDockerFixture('early-exit', async (fixture) => {
+    const issued = issuedInvocation(fixture, await fixture.start());
+    const since = Date.now();
+
+    const waited = awaitTerminal(issued, { command: { exitCode: 17 } });
+
+    await expect(waited).rejects.toThrow(/^terminal-mismatch .*"exitCode":23/);
+    expect(Date.now() - since).toBeLessThan(TERMINAL_WAIT_MS);
+  });
+}, 20_000);
+
+it('fails a terminal wait at once when the owner exits without publishing a terminal', async () => {
+  await withTrustedDockerFixture('hold', async (fixture) => {
+    const issued = issuedInvocation(fixture, await fixture.start());
+    await issued.leafReady();
+    await fixture.killOwner(issued.invocation);
+    const since = Date.now();
+
+    const waited = awaitTerminal(issued, { state: 'failed' });
+
+    await expect(waited).rejects.toThrow(
+      /owner exited without publishing result\.json[\s\S]*phase=terminal; leaf=alive/,
     );
+    expect(Date.now() - since).toBeLessThan(TERMINAL_WAIT_MS);
   });
 }, 20_000);
 
 it('cancels the actual pnpm child tree and preserves the terminal result on late cancellation', async () => {
   await withTrustedDockerFixture('hold', async (fixture) => {
     const sentinel = await fixture.startSentinel();
-    const { invocation, temporary, leafReady } = issuedInvocation(fixture, await fixture.start());
-    const leaf = await leafReady();
+    const issued = issuedInvocation(fixture, await fixture.start());
+    const { invocation, temporary } = issued;
+    const leaf = await issued.leafReady();
     expect(fixture.observeProcess(leaf.pid)).toBe(leaf.birth);
 
     const cancelled = fixture.command(['cancel', invocation], true);
@@ -547,23 +582,14 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
     });
     const duplicate = fixture.command(['cancel', invocation]);
     expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
-    let terminal: unknown;
-    await vi.waitFor(
-      () => {
-        const result = fixture.command(['status', invocation]);
-        expect(result.status, result.stderr).toBe(0);
-        terminal = JSON.parse(result.stdout) as unknown;
-        expect(terminal).toMatchObject({
-          invocation,
-          state: 'failed',
-          command: { settled: true },
-          interruption: 'cancelled',
-          output: { complete: true },
-          cleanup: { state: 'confirmed', browserExec: null },
-        });
-      },
-      { timeout: 10_000, interval: 50 },
-    );
+    const terminal = await awaitTerminal(issued, {
+      invocation,
+      state: 'failed',
+      command: { settled: true },
+      interruption: 'cancelled',
+      output: { complete: true },
+      cleanup: { state: 'confirmed', browserExec: null },
+    });
 
     expect(readFileSync(join(temporary, 'child-interrupted'), 'utf8')).toBe('SIGINT');
     expect(fixture.observeProcess(leaf.pid)).toBeNull();
@@ -621,26 +647,16 @@ it('retains a nonpassing result and refuses partial logs after actual output sto
   await withTrustedDockerFixture('output-failed', async (fixture) => {
     const started = await fixture.start();
     expect(started.status, started.stderr).toBe(0);
-    const value: unknown = JSON.parse(started.stdout);
-    const invocation = record(value).invocation;
-    if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
-    const directory = join(fixture.home, '.local/share/dsh-team/docker-verification', invocation);
+    const issued = issuedInvocation(fixture, started);
+    const { invocation, directory } = issued;
 
-    await vi.waitFor(
-      () => {
-        const status = fixture.command(['status', invocation]);
-        expect(status.status, status.stderr).toBe(0);
-        const result: unknown = JSON.parse(status.stdout);
-        expect(result).toMatchObject({
-          state: 'failed',
-          command: { settled: true },
-          interruption: 'capture-failed',
-          output: { complete: false, stdout: null },
-          cleanup: { state: 'confirmed', browserExec: null },
-        });
-      },
-      { timeout: 10_000, interval: 50 },
-    );
+    await awaitTerminal(issued, {
+      state: 'failed',
+      command: { settled: true },
+      interruption: 'capture-failed',
+      output: { complete: false, stdout: null },
+      cleanup: { state: 'confirmed', browserExec: null },
+    });
 
     expect(statSync(join(directory, 'stdout.log')).size).toBeLessThanOrEqual(4096);
     const logs = fixture.command(['logs', invocation, 'stdout']);
@@ -688,19 +704,10 @@ it.each([
     await withTrustedDockerFixture(mode, async (fixture) => {
       const started = await fixture.start();
       expect(started.status, started.stderr).toBe(0);
-      const value: unknown = JSON.parse(started.stdout);
-      const invocation = record(value).invocation;
-      if (typeof invocation !== 'string') throw new Error('Missing owned invocation');
+      const issued = issuedInvocation(fixture, started);
+      const { invocation } = issued;
 
-      await vi.waitFor(
-        () => {
-          const status = fixture.command(['status', invocation]);
-          expect(status.status, status.stderr).toBe(0);
-          const result: unknown = JSON.parse(status.stdout);
-          expect(result).toMatchObject({ ...expected, output: { complete: true } });
-        },
-        { timeout: 10_000, interval: 50 },
-      );
+      await awaitTerminal(issued, { ...expected, output: { complete: true } });
       const cancelled = fixture.command(['cancel', invocation]);
       expect(cancelled.status, terminalEvidence(fixture, invocation, cancelled.stderr)).toBe(
         cancelStatus,

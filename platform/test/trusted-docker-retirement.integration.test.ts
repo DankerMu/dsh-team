@@ -3,12 +3,11 @@ import { once } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
 import { join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it, vi } from 'vitest';
 import { processBirth, processIdentity } from '../../scripts/probe-browser-native.mjs';
 import { signalOwnedGroup } from '../../scripts/trusted-docker-owner.mjs';
 import { record } from './container-start-docker-fixture.ts';
-import { withTrustedDockerFixture } from './trusted-docker-fixture.ts';
+import { awaitResult, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
 import type { RetirementScenario } from './trusted-docker-fixture.ts';
 
 type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
@@ -68,21 +67,6 @@ function daemonEvidence(repository: string) {
   };
 }
 
-interface Owner {
-  readonly pid: number;
-  readonly birth: string;
-}
-
-function ownerPresent(pid: number) {
-  try {
-    process.kill(pid, 0);
-  } catch (error) {
-    // Only ESRCH is absence; any other observation error leaves the wait running.
-    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
-  }
-  return true;
-}
-
 /** A failed wait's scene; the tree walk relies on for-of visiting rows pushed during it. */
 function retirementScene(directory: string, ownerPid: number) {
   const options = { encoding: 'utf8', timeout: 2000, maxBuffer: 1 << 20 } as const;
@@ -104,39 +88,6 @@ function retirementScene(directory: string, ownerPid: number) {
       return own.map((row) => row.join(' ').slice(0, 200)).join('\n');
     }),
   ].join('');
-}
-
-/** Wait for the owner's result.json while the owner lives, failing at once if it exits first. */
-async function awaitResult(
-  directory: string,
-  owner: Owner,
-  deadline: number,
-  observe: CustodyFixture['observeProcess'],
-) {
-  const since = Date.now();
-  const result = join(directory, 'result.json');
-  for (;;) {
-    if (existsSync(result)) return;
-    if (!ownerPresent(owner.pid)) {
-      // Absence before the result: an owner that published and then exited is not a failure.
-      if (existsSync(result)) return;
-      let identity: string;
-      try {
-        identity = `identity recheck birth=${JSON.stringify(observe(owner.pid))}`;
-      } catch {
-        identity = 'identity recheck unavailable';
-      }
-      throw new Error(
-        `Retirement owner exited without publishing result.json: pid=${String(owner.pid)}; birth=${owner.birth}; ${identity}${retirementScene(directory, owner.pid)}`,
-      );
-    }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0)
-      throw new Error(
-        `Retirement owner still running without result.json after ${String(Date.now() - since)}ms: pid=${String(owner.pid)}${retirementScene(directory, owner.pid)}`,
-      );
-    await delay(Math.min(1000, remaining));
-  }
 }
 
 /** Start a held retirement child and return its invocation once the child is ready. */
@@ -177,7 +128,7 @@ async function cancelRetirement(fixture: CustodyFixture, deadline: number) {
   expect(cancelled.status, cancelled.stderr).toBe(0);
   // Under full parallel integration load, real pnpm's SIGINT-to-close alone took 15-30s;
   // the retirement and assessment after close completed within 1s in every observation.
-  await awaitResult(directory, owner, deadline, fixture.observeProcess);
+  await awaitResult(directory, owner, deadline, fixture.observeProcess, retirementScene, 1000);
   // The changed-identity variant rewrote these bytes; status reads only the original authority.
   writeFileSync(manifestPath, manifest);
   const status = fixture.command(['status', invocation]);
@@ -380,7 +331,15 @@ it(
       await fixture.killOwner(invocation);
       const since = Date.now();
 
-      await expect(awaitResult(directory, owner, deadline, fixture.observeProcess)).rejects.toThrow(
+      const waited = awaitResult(
+        directory,
+        owner,
+        deadline,
+        fixture.observeProcess,
+        retirementScene,
+        1000,
+      );
+      await expect(waited).rejects.toThrow(
         /owner exited without publishing result\.json[\s\S]*invocation files:\n[\s\S]*manifest\.json[\s\S]*owner\.log tail[\s\S]*owner process tree/,
       );
       // One poll plus one identity recheck of up to 5 s; the old fixed wait took 60 s.

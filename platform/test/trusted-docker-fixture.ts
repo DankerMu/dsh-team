@@ -41,6 +41,8 @@ type CustodyMode =
   | 'post-close-member'
   | 'past-expiry-member'
   | 'early-exit'
+  | 'release-early'
+  | 'release-blind'
   | 'retire';
 
 /** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
@@ -60,6 +62,56 @@ export type RetirementScenario =
 export const GROUP_MEMBER_RECORD = 'group-member.json';
 // The retirement setup publishes its detached fixture platform identity here.
 const FAKE_PLATFORM_RECORD = 'fake-platform.json';
+
+interface OwnerIdentity {
+  readonly pid: number;
+  readonly birth: string;
+}
+
+export function ownerPresent(pid: number) {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    // Only ESRCH is absence; any other observation error leaves the wait running.
+    if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+  }
+  return true;
+}
+
+/** Wait for the owner's result.json while the owner lives, failing at once if it exits first. */
+export async function awaitResult(
+  directory: string,
+  owner: OwnerIdentity,
+  deadline: number,
+  observe: (pid: number) => string | null,
+  scene: (directory: string, ownerPid: number) => string,
+  pollMs: number,
+) {
+  const since = Date.now();
+  const result = join(directory, 'result.json');
+  for (;;) {
+    if (existsSync(result)) return;
+    if (!ownerPresent(owner.pid)) {
+      // Absence before the result: an owner that published and then exited is not a failure.
+      if (existsSync(result)) return;
+      let identity: string;
+      try {
+        identity = `identity recheck birth=${JSON.stringify(observe(owner.pid))}`;
+      } catch {
+        identity = 'identity recheck unavailable';
+      }
+      throw new Error(
+        `Trusted Docker owner exited without publishing result.json: pid=${String(owner.pid)}; birth=${owner.birth}; ${identity}${scene(directory, owner.pid)}`,
+      );
+    }
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      throw new Error(
+        `Trusted Docker owner still running without result.json after ${String(Date.now() - since)}ms: pid=${String(owner.pid)}${scene(directory, owner.pid)}`,
+      );
+    await delay(Math.min(pollMs, remaining));
+  }
+}
 
 function prepareCustodyRepository(
   repository: string,
@@ -153,7 +205,7 @@ process.kill=(pid,signal)=>{
     `import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {readFileSync,renameSync,writeFileSync,watch,existsSync} from 'node:fs';
+import {mkdirSync,readFileSync,renameSync,writeFileSync,watch,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {processBirth} from './scripts/probe-browser-native.mjs';
 const mode=${JSON.stringify(mode)};
@@ -177,7 +229,14 @@ const publish=(name,value)=>{const path=join(temporary,name);writeFileSync(path+
 process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')member(500);process.exitCode=27;process.exit(27);});
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
-const watcher=['hold','post-close-member','past-expiry-member','retire'].includes(mode)?watch(temporary,()=>{if(existsSync(release))ready();}):undefined;
+// Watch events may be late, coalesced or missing, so the watch also checks at once and every 50ms.
+const watchRelease=(directory=temporary)=>{const check=()=>{if(existsSync(release))ready();};const watcher=watch(directory,check);const recheck=setInterval(check,50);check();return released.then(()=>{watcher.close();clearInterval(recheck);});};
+// The release-blind leaf watches an empty directory, so only its 50ms recheck sees the release.
+const blind=mode==='release-blind'?mkdirSync(join(temporary,'blind'),{recursive:true}):undefined;
+const held=['hold','post-close-member','past-expiry-member','release-blind','retire'].includes(mode)?watchRelease(blind):undefined;
+// This leaf releases itself and watches 500ms after its last write: Darwin FSEvents replayed
+// writes made just before watch() (8/8 probes) but none made 100ms or more before it (0/8).
+if(mode==='release-early')writeFileSync(release,'release');
 if(mode==='past-expiry-member'||scenario==='member'){
   const retained=member(30000);
   await once(retained,'spawn');
@@ -188,7 +247,7 @@ if(mode==='early-exit')process.exit(23);
 if(mode==='retire')await import('./platform/test/trusted-docker-fake-setup.mjs');
 publish('child-ready.json',{pid:process.pid,birth:await processBirth(process.pid)});
 process.stdout.write('fixture-begin\\n');
-if(watcher){await released;watcher.close();}
+await (mode==='release-early'?new Promise(resolve=>setTimeout(resolve,500)).then(watchRelease):held);
 if(mode==='output-failed')process.stdout.write(Buffer.alloc(8192,120));
 process.stdout.write('fixture-end\\n');
 if(process.env.HTTP_PROXY!==undefined){
