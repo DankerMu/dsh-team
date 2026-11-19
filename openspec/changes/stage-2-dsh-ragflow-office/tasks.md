@@ -6851,7 +6851,7 @@ Must preserve：编辑器打开、保存回调、取文件、`/healthcheck`；�
 
 ## 56. 技术债 #630：custody 与 dev-watch 的等待和用例预算挂钩，失败可归因
 
-依赖：#628（PR #629）、#631（PR #632），均已合并。只改测试与 fixture，不改 `scripts/trusted-docker-*.mjs`、`scripts/dev-watch.sh` 和任何断言内容。拆成两个顺序 PR：56-a（custody）、56-b（dev-watch 与 `launches`）。守卫规则（同类事件第四次，用户 2026-11-18 决定另开 PR）在 56-b 之后单独做，不在本节。
+依赖：#628（PR #629）、#631（PR #632），均已合并。只改测试与 fixture，不改 `scripts/trusted-docker-*.mjs`、`scripts/dev-watch.sh` 和任何断言内容。拆成三个顺序 PR：56-a1（custody：56.1、56.2、56.5）、56-a2（custody：56.3、56.4）、56-b（dev-watch 与 `launches`）。56-a 原定一个 PR，实测超出 400 计数行（fixture 的期限截断层单独就约 226 行，`createTrustedDockerFixture` 在 `main` 上已 197 行、函数长度上限 200，56.3 须先搬出一段代码），所以再拆。守卫规则（同类事件第四次，用户 2026-11-18 决定另开 PR）在 56-b 之后单独做，不在本节。
 
 已核实（`main` `d662e44`）：
 
@@ -6885,7 +6885,8 @@ Must preserve：编辑器打开、保存回调、取文件、`/healthcheck`；�
   - 56.1 的「release 先于 watcher」变体；
   - 现有 custody、retirement 用例照常通过，断言一条不改。
 - 验证（编排方做）：在人为负载下（1 分钟负载 ≥ 13，4 个 CPU 压力进程）连续 5 次 `pnpm test:integration`，记录每次负载和结果，custody 文件不再失败；再按合并门禁跑 exact-head 车道。
-- 超过 400 计数行时，56.4 单独成 PR，先合 56.1–56.3 与 56.5。
+- 56-a1 的取舍：`awaitTerminal` 的期限取等待开始时的 `Date.now() + 10_000`，与现在 `vi.waitFor` 的上限相同；只改「终态不符或 owner 已消失立即失败」和超时归因。它接收 `issuedInvocation` 的返回值（`start` 之后立刻从 manifest 读出 owner `{pid, birth}` 并保存），不用 `(fixture, invocation, …)` 签名。56.1 的确定性红灯：leaf 现在先建 watcher、再在同一目录发布 `child-ready.json`，这次 rename 本身会触发 watch 事件，「release 先于 watcher」变体在修复前只会慢、不会卡住；变体里把 watcher 建在 `child-ready.json` 发布之后，修复前才确定地卡到期限。
+- 56-a2 的提醒：清理期限用设了就不再复原的预留（`reserve()`），不要在异步 `cleanup` 外包一层临时置位又复原的标志（复原发生在第一次 `await` 之前，之后的清理会被剩余预算截断）；同步的终态取证可以临时置位。「rejects a different reviewed revision …」和 `DOCKER_HOST`/`DOCKER_CONTEXT` 两组沿用 vitest 默认 5 秒的用例不传期限。
 
 ### 56-b dev-watch 与 `launches`
 
