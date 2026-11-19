@@ -130,10 +130,13 @@ function leafState(temporary: string) {
 }
 
 // The former 10s status poll bound; a published terminal never changes, so a mismatch fails at once.
+const TERMINAL_WAIT_MS = 10_000;
+
 async function awaitTerminal(issued: Issued, expected: Record<string, unknown>) {
   const { fixture, invocation, directory, owner, temporary } = issued;
   const scene = () => `; phase=terminal; leaf=${leafState(temporary)}`;
-  await awaitResult(directory, owner, Date.now() + 10_000, fixture.observeProcess, scene, 50);
+  const deadline = Date.now() + TERMINAL_WAIT_MS;
+  await awaitResult(directory, owner, deadline, fixture.observeProcess, scene, 50);
   const result = fixture.command(['status', invocation]);
   try {
     expect(result.status, result.stderr).toBe(0);
@@ -514,17 +517,26 @@ it('fails a readiness wait at once with its cause when the leaf exits before rea
   });
 }, 20_000);
 
-it('completes a held command whose leaf released itself before it watched for the release', async () => {
-  await withTrustedDockerFixture('release-early', async (fixture) => {
-    const issued = issuedInvocation(fixture, await fixture.start());
+it.each([
+  ['initial check', 'release-early'],
+  ['50ms recheck', 'release-blind'],
+] as const)(
+  'completes a held command whose release only the leaf watch %s sees',
+  async (_, mode) => {
+    await withTrustedDockerFixture(mode, async (fixture) => {
+      const issued = issuedInvocation(fixture, await fixture.start());
+      await issued.leafReady();
+      if (mode === 'release-blind') writeFileSync(join(issued.temporary, 'release'), 'release');
 
-    await awaitTerminal(issued, {
-      state: 'failed',
-      command: { exitCode: 17, settled: true },
-      interruption: 'none',
+      await awaitTerminal(issued, {
+        state: 'failed',
+        command: { exitCode: 17, settled: true },
+        interruption: 'none',
+      });
     });
-  });
-}, 20_000);
+  },
+  20_000,
+);
 
 it('fails a terminal wait at once with its evidence when the published terminal differs', async () => {
   await withTrustedDockerFixture('early-exit', async (fixture) => {
@@ -534,7 +546,7 @@ it('fails a terminal wait at once with its evidence when the published terminal 
     const waited = awaitTerminal(issued, { command: { exitCode: 17 } });
 
     await expect(waited).rejects.toThrow(/^terminal-mismatch .*"exitCode":23/);
-    expect(Date.now() - since).toBeLessThan(LEAF_READINESS_MS);
+    expect(Date.now() - since).toBeLessThan(TERMINAL_WAIT_MS);
   });
 }, 20_000);
 
@@ -550,7 +562,7 @@ it('fails a terminal wait at once when the owner exits without publishing a term
     await expect(waited).rejects.toThrow(
       /owner exited without publishing result\.json[\s\S]*phase=terminal; leaf=alive/,
     );
-    expect(Date.now() - since).toBeLessThan(LEAF_READINESS_MS);
+    expect(Date.now() - since).toBeLessThan(TERMINAL_WAIT_MS);
   });
 }, 20_000);
 

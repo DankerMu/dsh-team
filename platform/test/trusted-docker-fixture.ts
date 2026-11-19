@@ -42,6 +42,7 @@ type CustodyMode =
   | 'past-expiry-member'
   | 'early-exit'
   | 'release-early'
+  | 'release-blind'
   | 'retire';
 
 /** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
@@ -62,7 +63,7 @@ export const GROUP_MEMBER_RECORD = 'group-member.json';
 // The retirement setup publishes its detached fixture platform identity here.
 const FAKE_PLATFORM_RECORD = 'fake-platform.json';
 
-export interface OwnerIdentity {
+interface OwnerIdentity {
   readonly pid: number;
   readonly birth: string;
 }
@@ -204,7 +205,7 @@ process.kill=(pid,signal)=>{
     `import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
-import {readFileSync,renameSync,writeFileSync,watch,existsSync} from 'node:fs';
+import {mkdirSync,readFileSync,renameSync,writeFileSync,watch,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {processBirth} from './scripts/probe-browser-native.mjs';
 const mode=${JSON.stringify(mode)};
@@ -229,8 +230,10 @@ process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGI
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
 // Watch events may be late, coalesced or missing, so the watch also checks at once and every 50ms.
-const watchRelease=()=>{const check=()=>{if(existsSync(release))ready();};const watcher=watch(temporary,check);const recheck=setInterval(check,50);check();return released.then(()=>{watcher.close();clearInterval(recheck);});};
-const held=['hold','post-close-member','past-expiry-member','retire'].includes(mode)?watchRelease():undefined;
+const watchRelease=(directory=temporary)=>{const check=()=>{if(existsSync(release))ready();};const watcher=watch(directory,check);const recheck=setInterval(check,50);check();return released.then(()=>{watcher.close();clearInterval(recheck);});};
+// The release-blind leaf watches an empty directory, so only its 50ms recheck sees the release.
+const blind=mode==='release-blind'?mkdirSync(join(temporary,'blind'),{recursive:true}):undefined;
+const held=['hold','post-close-member','past-expiry-member','release-blind','retire'].includes(mode)?watchRelease(blind):undefined;
 // This leaf releases itself and watches 500ms after its last write: Darwin FSEvents replayed
 // writes made just before watch() (8/8 probes) but none made 100ms or more before it (0/8).
 if(mode==='release-early')writeFileSync(release,'release');
