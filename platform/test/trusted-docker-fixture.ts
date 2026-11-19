@@ -62,13 +62,15 @@ export type RetirementScenario =
 // The leaf of a member mode publishes its pre-started member identity here before readiness.
 export const GROUP_MEMBER_RECORD = 'group-member.json';
 // The post-close member announces its handlers; on SIGUSR2 it waits until the command pid in
-// child.json vanishes, exits a fixed delay later and atomically records both times.
+// child.json vanishes, exits a fixed delay later and atomically records both times. The delay is
+// re-armed on Date.now(), the clock both recorded times use; a timer alone can end a few ms early.
 export const CLOSE_MEMBER_DELAY_MS = 300;
 const CLOSE_MEMBER = `const fs=require('node:fs');const [record,exit]=process.argv.slice(1);let closing=false;
 process.on('SIGINT',()=>{});process.on('SIGTERM',()=>{});
 process.on('SIGUSR2',()=>{if(closing)return;closing=true;const pid=JSON.parse(fs.readFileSync(record,'utf8')).owner.pid;
 const poll=setInterval(()=>{try{process.kill(pid,0);}catch{clearInterval(poll);const vanished=Date.now();
-setTimeout(()=>{fs.writeFileSync(exit+'.pending',JSON.stringify({vanished,exited:Date.now()}));fs.renameSync(exit+'.pending',exit);process.exit(0);},${String(CLOSE_MEMBER_DELAY_MS)});}},10);});
+const until=vanished+${String(CLOSE_MEMBER_DELAY_MS)};const wait=()=>{const now=Date.now();if(now<until)return setTimeout(wait,until-now);
+fs.writeFileSync(exit+'.pending',JSON.stringify({vanished,exited:now}));fs.renameSync(exit+'.pending',exit);process.exit(0);};wait();}},10);});
 process.stdout.write('ready');setInterval(()=>{},1000);`;
 // The retirement setup publishes its detached fixture platform identity here.
 const FAKE_PLATFORM_RECORD = 'fake-platform.json';
