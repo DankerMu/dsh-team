@@ -286,6 +286,10 @@ expect_reject "eslint complexity ($((max_complexity + 2)) paths)" "Maximum allow
 echo "console.log('debug');" >platform/src/noisy.ts
 expect_reject "eslint no-console" "no-console" lint_file platform/src/noisy.ts
 
+echo "export const deadline = Date.now() + 5000;" >platform/test/bare-deadline.integration.test.ts
+expect_reject "eslint bare integration deadline" "Bare integration-test deadline" \
+  lint_file platform/test/bare-deadline.integration.test.ts
+
 echo "export const session_v2 = 1;" >platform/src/renamed.ts
 expect_reject "eslint identifier suffix (session_v2)" "naming-convention" \
   lint_file platform/src/renamed.ts

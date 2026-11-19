@@ -6902,3 +6902,55 @@ Suggested fixture level: compact - 测试可靠性，只改测试与 fixture
 Minimal mergeable slice: 56-a（56.1–56.5）一个 PR；56-b（56.6–56.8）一个 PR
 Risk packs: selected - Concurrency（watch 事件、复查定时器与终态写出并发）、Resource limits（复查间隔、spawnSync 不越过用例期限）、Legacy compatibility（retirement 共用 fixture，断言不变）；not selected - Security、Auth、Schema、Public API、Migration。
 Must preserve：所有既有断言；`trusted-docker-retirement` 通过；产品脚本不变。
+
+## 57. #630 后续：集成用例禁止裸「`Date.now()` + 字面量」期限
+
+来源：custody/dev-watch 因负载间歇失败已第四次立 issue（#321、#324、#628、#630）。AGENTS.md 规定同类问题第三次就要变成 lint 规则或 hook，并在 `scripts/test-guardrails.sh` 加拒绝用例。用户 2026-11-18 决定在 #630 之后另开 PR。
+
+已核实（`main` `3a859ce`）：
+
+- 这类问题的写法是 `const deadline = Date.now() + 5000`：期限是固定字面量，和所在用例的超时无关。期限等于或超过用例超时时，vitest 会先杀掉用例，失败信息里没有归因。
+- 用 `pnpm exec eslint --rule` 试了两个选择器，只扫 `platform/test/*.integration.test.ts`，不改配置：
+  - 「变量初始化 `Date.now() + 字面量`」（`VariableDeclarator > BinaryExpression`）命中 5 处：`chrome-start.integration.test.ts:44`、`instance-lifecycle.integration.test.ts:32`、`:434`、`instance.integration.test.ts:383`、`trusted-docker-custody.integration.test.ts:686`（`for` 初始化，是实际代码）。
+  - 不限位置的写法另外还命中 8 处：
+    - `admin-instance-restart-lifecycle.integration.test.ts:123` 和 `admin-instance-restart.integration.test.ts:615` 的 `f.setNow(Date.now() + 60000)` 是拨假时钟，不是期限；
+    - `dev-watch:314`、`:340`，`verify-browser-runtime:255`、`:280`，`trusted-docker-custody:632`、`:693` 是 #630 刚合入的有意短探针，以实参形式传入。
+- 现有 lint 块：`eslint.config.mjs` 的 `**/*.test.ts` 块只关了 `max-lines-per-function`。
+- guardrail 自测：
+  - 在仓库副本里放违例文件，跑 `lint_file`（`scripts/test-guardrails.sh:96-98`）；
+  - `restore()` 用 `git reset --hard` 加 `git clean` 清掉副本里的违例文件；
+  - `noisy.ts`/`no-console`（`:286-287`）是这类用例的现成模板。
+
+- [x] 57.1 门禁：在 `eslint.config.mjs` 新增一个只作用于 `platform/test/**/*.integration.test.ts` 的块，用 `no-restricted-syntax` 拒绝选择器 `VariableDeclarator > BinaryExpression[operator='+'][left.callee.object.name='Date'][left.callee.property.name='now'][right.type='Literal']`。
+  - 消息写一句固定短语，并说明该怎么改：期限从用例预算推出（参照 dev-watch 的 `caseEnd − CLEANUP_MS` 或 custody 的 `CASE_MS − RESERVE_MS`）；推不出时用命名常量，并注释它和所在用例超时的关系。
+  - 实参位置的探针和 `setNow` 不在规则内。
+- [x] 57.2 自测：在 `scripts/test-guardrails.sh` 的 ESLint 段放一个 `platform/test/<名字>.integration.test.ts`，内容是 `export const deadline = Date.now() + 5000;`（加 `export`，免得混进 `no-unused-vars`），用 `expect_reject` 断言 ESLint 拒绝它并打出这句短语。根 `tsconfig.json` 的 `include` 含 `platform/test`，typed lint 能解析新文件；实现时仍要确认报的是本规则。
+- [x] 57.3 现有 5 处命中一律改为命名常量，数值不变，旁边注释它和所在用例超时的关系，使干净树通过 `expect_accept "eslint"`。
+  - 没有一处能在不改行为的前提下从预算推出。
+  - `trusted-docker-custody.integration.test.ts:686` 不得从 `fixture.deadline` 推出：该期限在等待开始前已过（slow owner 让 `start` 在期限处被杀，之后才轮询 `child.json`）。它约 2.5 + 10 秒，低于用例的 20 秒。
+  - `instance-lifecycle.integration.test.ts:32`、`:434` 被 30–60 秒的多个用例共用，可以共用一个常量，不超时。
+  - 等待大于等于用例超时的有两处，只记入 PR 的 Risk 和 #630 后续，不在本 PR 改行为：
+    - `chrome-start.integration.test.ts:44`（用例 `:128`，默认 5 秒）；
+    - `instance.integration.test.ts:383`（`it.each` `:357`，默认 5 秒）。
+- [x] 57.4 记账（编排方做）：
+  - `constraints.yaml` `testing` 加一项，写明 `enforced_by`；
+  - `AGENTS.md` 的 Enforcement Index 加一行；
+  - `platform/AGENTS.md` 的测试约定加一句；
+  - `AGENTS.md` 的 Known blind spots 加一行，写明「期限是否从用例预算推出只靠评审」，以及规则抓不到的写法：
+    - 命名常量、`5 * 1000`、操作数颠倒、嵌套算式（如 `Date.now() + 5000 - 100`）；
+    - 赋值、实参、默认参数、对象属性、`return`、三元表达式等位置；
+    - 不经 `Date.now()` 的固定等待（`setTimeout`、spawn `timeout`、`settleMs` 一类）；
+    - `*-fixture.ts`、`*.docker.test.ts` 和 `.mjs` 辅助文件。
+
+不做的事：
+
+- 不扩到 `*-fixture.ts`、`*.docker.test.ts` 和栈 fixture。它们有同样的写法，记入 PR 的 Risk。
+- 不改用例超时和断言，不重写用例的等待逻辑。
+
+Suggested fixture level: compact - 加 lint 规则并做机械改名，不改行为
+Minimal mergeable slice: 57.1–57.4 一个 PR
+Risk packs: selected - Legacy compatibility（干净树必须通过 eslint 与 guardrail 的 accept）；not selected - Security、Auth、Schema、Public API、Migration、Concurrency、Resource limits。
+Must preserve：
+
+- 所有既有断言和用例超时；
+- `pnpm test:guardrails` 其余用例全部通过。

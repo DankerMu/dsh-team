@@ -23,13 +23,17 @@ import {
 import { observeHttp, reader, withUpstream } from './gateway-http-fixture.ts';
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 
+// Shared by eventually() and ownershipEventually(); well inside the 30-60s timeouts of the cases
+// that wait on them. The default-5s release-failure cases start no main, so cleanup skips the wait.
+const EVENTUALLY_MS = 5_000;
+
 // Promoted from the issue56 diagnostic: synchronize on real Engine/socket/process events.
 // Time bounds protect cleanup; neither raw subprocess output nor cookies enter assertions.
 async function eventually(
   predicate: () => boolean | Promise<boolean>,
   label: string,
 ): Promise<void> {
-  const until = Date.now() + 5_000;
+  const until = Date.now() + EVENTUALLY_MS;
   while (Date.now() < until) {
     if (await predicate()) return;
     await delay(20);
@@ -431,7 +435,7 @@ async function ownershipEventually(
     mainLog: null,
   };
   const pidfile = lifecycle.pidfile;
-  const until = Date.now() + 5_000;
+  const until = Date.now() + EVENTUALLY_MS;
   while (Date.now() < until) {
     if ((await pidAt(pidfile)) !== undefined) return;
     for (const [fact, path] of watched)

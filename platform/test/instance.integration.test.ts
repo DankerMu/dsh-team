@@ -354,6 +354,10 @@ it('projects a durable create quarantine through HTTP and refuses false cleanup 
   }
 });
 
+// Equals the vitest default 5s timeout of the case below, so a load-slowed readiness projection can
+// let vitest kill the case first; tracked as a #630 follow-up.
+const READINESS_FAILURE_WAIT_MS = 5000;
+
 it.each([false, true])(
   'projects completed readiness failure truthfully with error persistence blocked=%s',
   async (blocked) => {
@@ -380,7 +384,7 @@ it.each([false, true])(
         body: '{}',
       });
       expect(await started.json()).toEqual({ status: 'starting', reason: 'starting' });
-      const deadline = Date.now() + 5000;
+      const deadline = Date.now() + READINESS_FAILURE_WAIT_MS;
       for (;;) {
         const status = await fetch(`${f.base}/_platform/api/instance`, {
           headers: { cookie: user.cookie },
