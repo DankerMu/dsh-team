@@ -15,6 +15,7 @@ import { record } from './container-start-docker-fixture.ts';
 import {
   awaitResult,
   caseBudget,
+  CLOSE_MEMBER_DELAY_MS,
   CUSTODY_PROXY,
   GROUP_MEMBER_RECORD,
   ownerPresent,
@@ -157,6 +158,36 @@ function leafState(temporary: string) {
   return ownerPresent(leaf.pid) ? 'alive' : 'absent';
 }
 
+// The post-close member's own exit timing, against the product's 2000ms settlement window.
+function memberExit(temporary: string) {
+  try {
+    const path = join(temporary, 'member-exit.json');
+    const { vanished, exited } = record(JSON.parse(readFileSync(path, 'utf8')) as unknown);
+    return typeof vanished === 'number' && typeof exited === 'number'
+      ? exited - vanished
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Never masks the failure it annotates: an unreadable record only adds a note.
+function memberTiming(temporary: string) {
+  if (!existsSync(join(temporary, 'member-exit.json'))) return '';
+  const elapsed = memberExit(temporary);
+  return elapsed === undefined
+    ? '; member timing unavailable'
+    : `; member exited ${String(elapsed)}ms after the command vanished; settlement window 2000ms`;
+}
+
+function liveMember(fixture: CustodyFixture, temporary: string) {
+  const path = join(temporary, GROUP_MEMBER_RECORD);
+  const member = record(JSON.parse(readFileSync(path, 'utf8')) as unknown);
+  if (typeof member.pid !== 'number') throw new Error('Missing owned group member identity');
+  expect(fixture.observeProcess(member.pid)).toBe(member.birth);
+  return member.pid;
+}
+
 // The former 10s status poll bound; a published terminal never changes, so a mismatch fails at once.
 const TERMINAL_WAIT_MS = 10_000;
 
@@ -172,14 +203,17 @@ async function awaitTerminal(issued: Issued, expected: Record<string, unknown>) 
     expect(terminal).toMatchObject(expected);
     return terminal;
   } catch (error) {
-    throw new Error(terminalEvidence(fixture, invocation, 'terminal-mismatch '), { cause: error });
+    const evidence = terminalEvidence(fixture, invocation, 'terminal-mismatch ');
+    throw new Error(evidence + memberTiming(temporary), { cause: error });
   }
 }
 
+// Both held member modes register their member before readiness; it must be alive at cancel.
 async function cancelHeldCommand(fixture: CustodyFixture, expected: Record<string, unknown>) {
   const issued = issuedInvocation(fixture, await fixture.start());
   const { invocation, temporary } = issued;
   await issued.leafReady();
+  liveMember(fixture, temporary);
   const cancelled = fixture.command(['cancel', invocation], true);
   expect(cancelled.status, cancelled.stderr).toBe(0);
   expect(JSON.parse(cancelled.stdout) as unknown).toMatchObject({
@@ -718,16 +752,40 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
 
 it('settles a cancelled command whose same-group member exits shortly after close', async () => {
   await custodyCase('post-close-member', async (fixture) => {
-    const { invocation, terminal } = await cancelHeldCommand(fixture, {
+    const { invocation, temporary, terminal } = await cancelHeldCommand(fixture, {
       state: 'failed',
       command: { settled: true },
       cleanup: { state: 'confirmed', browserExec: null },
     });
+    expect(memberTiming(temporary)).toMatch(
+      /^; member exited \d+ms after the command vanished; settlement window 2000ms$/,
+    );
+    expect(memberExit(temporary)).toBeGreaterThanOrEqual(CLOSE_MEMBER_DELAY_MS);
 
     const duplicate = fixture.command(['cancel', invocation], true);
     expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
     expect(JSON.parse(duplicate.stdout) as unknown).toEqual(terminal);
   });
+}, 20_000);
+
+// Killing the leaf skips its SIGINT handler, so the member is never told to exit and outlives the
+// command; only its registration lets cleanup retire it.
+it('retires a pre-started post-close member that was never told to exit', async () => {
+  let member = 0;
+  try {
+    await custodyCase('post-close-member', async (fixture) => {
+      const issued = issuedInvocation(fixture, await fixture.start());
+      const leaf = await issued.leafReady();
+      member = liveMember(fixture, issued.temporary);
+      process.kill(leaf.pid, 'SIGKILL');
+
+      await awaitTerminal(issued, { state: 'unknown', command: { settled: false } });
+    });
+
+    expect(ownerPresent(member)).toBe(false);
+  } finally {
+    if (member && ownerPresent(member)) process.kill(member, 'SIGKILL');
+  }
 }, 20_000);
 
 it('keeps a cancelled command unsettled while a same-group member outlives the observation window', async () => {

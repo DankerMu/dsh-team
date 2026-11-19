@@ -6851,7 +6851,7 @@ Must preserve：编辑器打开、保存回调、取文件、`/healthcheck`；�
 
 ## 56. 技术债 #630：custody 与 dev-watch 的等待和用例预算挂钩，失败可归因
 
-依赖：#628（PR #629）、#631（PR #632），均已合并。只改测试与 fixture，不改 `scripts/trusted-docker-*.mjs`、`scripts/dev-watch.sh` 和任何断言内容。拆成四个顺序 PR：56-a1（custody：56.1、56.2、56.5）、56-a2（custody：56.3）、56-a3（custody：56.4）、56-b（dev-watch 与 `launches`）。56-a2 连同评审要求的「`start` 在截止时被杀后清理收掉未捕获的 owner」实测 463 计数行、custody 文件 802 行（上限 800），所以 56.4 再拆出；56-a3 的新用例放进 custody 的同级测试文件。56-a 原定一个 PR，实测超出 400 计数行（fixture 的期限截断层单独就约 226 行，`createTrustedDockerFixture` 在 `main` 上已 197 行、函数长度上限 200，56.3 须先搬出一段代码），所以再拆。守卫规则（同类事件第四次，用户 2026-11-18 决定另开 PR）在 56-b 之后单独做，不在本节。
+依赖：#628（PR #629）、#631（PR #632），均已合并。只改测试与 fixture，不改 `scripts/trusted-docker-*.mjs`、`scripts/dev-watch.sh` 和任何断言内容。拆成四个顺序 PR：56-a1（custody：56.1、56.2、56.5）、56-a2（custody：56.3）、56-a3（custody：56.4）、56-b（dev-watch 与 `launches`）。56-a2 连同评审要求的「`start` 在截止时被杀后清理收掉未捕获的 owner」实测 463 计数行、custody 文件 802 行（上限 800），所以 56.4 再拆出。56-a3 原计划把用例挪进同级测试文件，但这些用例依赖 custody 文件内约 175 行共用辅助函数，挪出会超出 fixture 自身的行数上限和 400 行预算、或者复制逻辑；改为就地压缩 56.4 的写法，把 custody 文件保持在 800 行以内，三条 member 断言（已登记且存活、退出时刻不早于命令消失后的固定延时、失败路径清理掉 member）都保留。56-a 原定一个 PR，实测超出 400 计数行（fixture 的期限截断层单独就约 226 行，`createTrustedDockerFixture` 在 `main` 上已 197 行、函数长度上限 200，56.3 须先搬出一段代码），所以再拆。守卫规则（同类事件第四次，用户 2026-11-18 决定另开 PR）在 56-b 之后单独做，不在本节。
 
 已核实（`main` `d662e44`）：
 
