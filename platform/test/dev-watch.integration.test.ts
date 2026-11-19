@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -9,11 +9,15 @@ const repository = resolve(import.meta.dirname, '../..');
 
 // The it.each budget below; every wait in a case derives its deadline from it.
 const CASE_MS = 30_000;
-// Fixed `finally` share, never cut by the remaining budget: SIGTERM and the wait for pnpm to
-// close and its group to vanish (STOP_MS), then a SIGKILL escalation, removing the fixture tree
-// and vitest reporting the attributed failure before its hard timeout would replace it.
+// Cleanup reserve kept off every body wait. After SIGTERM, a passed case lets pnpm close and its
+// group vanish until KILL_MS + REPORT_MS before the case end, so a slow but clean exit does not
+// fail it; a failed case already has its verdict and waits at most STOP_MS, keeping its report
+// prompt. SIGKILL then gets KILL_MS for the group to vanish, and REPORT_MS covers removing the
+// fixture tree and vitest reporting the failure before its hard timeout would replace it.
 const STOP_MS = 4000;
-const CLEANUP_MS = STOP_MS + 1000;
+const KILL_MS = 1000;
+const REPORT_MS = 1000;
+const CLEANUP_MS = STOP_MS + KILL_MS + REPORT_MS;
 // Characters kept from each output stream; enough for `node --watch`'s restart lines.
 const TAIL_CHARS = 4096;
 
@@ -67,7 +71,8 @@ async function receipt(root: string) {
   return value;
 }
 
-// Darwin answers EPERM, not ESRCH, while every member left in the group has exited unreaped.
+// Darwin answers EPERM, not ESRCH, while every member left in the group has exited unreaped;
+// on Linux such a zombie group still answers kill(-pgid, 0), which reads as alive.
 function signalGroup(pid: number, signal: NodeJS.Signals | 0): 'alive' | 'exiting' | 'absent' {
   try {
     process.kill(-pid, signal);
@@ -101,9 +106,12 @@ interface Input {
   readonly present: boolean;
   readonly unreadable: boolean;
   readonly invalid: boolean;
+  /** The app ignores SIGTERM, so `node --watch` keeps waiting on it and the group stays alive. */
+  readonly ignoreTerm?: boolean;
 }
 
-async function startWatch(root: string, { present, unreadable, invalid }: Input): Promise<Watch> {
+async function startWatch(root: string, input: Input): Promise<Watch> {
+  const { present, unreadable, invalid, ignoreTerm = false } = input;
   const manifest = await developmentManifest();
   // Keep the actual package entry and native watcher. Only unrelated build/app payloads
   // are fixtures; trusted source-main smoke separately proves actual platform health.
@@ -122,6 +130,7 @@ async function startWatch(root: string, { present, unreadable, invalid }: Input)
     join(root, 'platform/src/main.ts'),
     `import { writeFileSync, renameSync } from 'node:fs';
 import { revision } from './revision.ts';
+${ignoreTerm ? "process.on('SIGTERM', () => {});" : ''}
 writeFileSync('receipt.pending', JSON.stringify({pid: process.pid, revision,
   configured: process.env.WATCH_CONFIGURED ?? 'external',
   precedence: process.env.WATCH_PRECEDENCE}));
@@ -185,24 +194,32 @@ setInterval(() => {}, 1000);
 }
 
 /** Bounded stop of the pnpm group; returns what is left behind instead of throwing. */
-async function stop(watch: Watch): Promise<string | undefined> {
+async function stop(watch: Watch, caseEnd: number, failed: boolean): Promise<string | undefined> {
+  const settle = caseEnd - KILL_MS - REPORT_MS;
+  const deadline = failed ? Math.min(Date.now() + STOP_MS, settle) : settle;
   try {
     signalGroup(watch.pid, 'SIGTERM');
     const gone = () => watch.exited() && signalGroup(watch.pid, 0) === 'absent';
-    await until(gone, 'owned watcher group exit', Date.now() + STOP_MS, watch.attribute);
+    await until(gone, 'owned watcher group exit', deadline, watch.attribute);
     return undefined;
   } catch (error) {
     try {
       signalGroup(watch.pid, 'SIGKILL');
+      const absent = () => signalGroup(watch.pid, 0) === 'absent';
+      await until(absent, 'group exit after SIGKILL', Date.now() + KILL_MS, watch.attribute);
     } catch (kill) {
-      return `${String(error)}; SIGKILL failed: ${String(kill)}`;
+      return `${String(error)}; ${String(kill)}`;
     }
     return String(error);
   }
 }
 
 /** Runs `body` against a started watcher; cleanup never hangs nor replaces the case's failure. */
-async function withWatch(input: Input, body: (watch: Watch) => Promise<void>): Promise<void> {
+async function withWatch(
+  input: Input,
+  caseEnd: number,
+  body: (watch: Watch) => Promise<void>,
+): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-dev-watch-'));
   let watch: Watch | undefined;
   let failure: { error: unknown } | undefined;
@@ -212,7 +229,7 @@ async function withWatch(input: Input, body: (watch: Watch) => Promise<void>): P
   } catch (error) {
     failure = { error };
   }
-  const residual = watch === undefined ? undefined : await stop(watch);
+  const residual = watch && (await stop(watch, caseEnd, failure !== undefined));
   await rm(root, { recursive: true, force: true });
   if (failure === undefined) {
     if (residual !== undefined) throw new Error(residual);
@@ -231,9 +248,10 @@ it.each([
 ])(
   'dev preserves native startup and reload with $name environment input',
   async (input) => {
-    const deadline = Date.now() + CASE_MS - CLEANUP_MS;
+    const caseEnd = Date.now() + CASE_MS;
+    const deadline = caseEnd - CLEANUP_MS;
     const { present, invalid } = input;
-    await withWatch(input, async ({ root, exited, closed, attribute }) => {
+    await withWatch(input, caseEnd, async ({ root, exited, closed, attribute }) => {
       if (invalid) {
         await until(exited, 'invalid environment rejection', deadline, attribute);
         expect(await closed).toBeGreaterThan(0);
@@ -283,9 +301,10 @@ it.each([
 it(
   'attributes a missed source reload to its phase, receipt, live group and output tails',
   async () => {
-    const deadline = Date.now() + CASE_MS - CLEANUP_MS;
+    const caseEnd = Date.now() + CASE_MS;
+    const deadline = caseEnd - CLEANUP_MS;
     const input = { present: false, unreadable: false, invalid: false };
-    await withWatch(input, async ({ root, attribute }) => {
+    await withWatch(input, caseEnd, async ({ root, attribute }) => {
       const revision = async (value: number) => (await receipt(root))?.revision === value;
       await until(() => revision(1), 'initial watcher boot', deadline, attribute);
       // revision.ts is never rewritten, so the reload can only time out at this short deadline.
@@ -301,9 +320,33 @@ it(
       expect(message).toContain('"revision":1');
       expect(message).toContain('pnpm not closed; pnpm group alive');
       // `build:web` runs `node --version`, so the kept stdout tail names that version.
-      expect(message).toMatch(/stdout tail "[^"]*v\d+\.\d+\.\d+/);
-      expect(message).toContain('stderr tail "');
+      expect(message).toMatch(/; stdout tail ".*v\d+\.\d+\.\d+.*"; stderr tail "/);
     });
+  },
+  CASE_MS,
+);
+
+it(
+  'keeps the case failure and kills a group that ignores SIGTERM within the case budget',
+  async () => {
+    const caseEnd = Date.now() + CASE_MS;
+    const input = { present: false, unreadable: false, invalid: false, ignoreTerm: true };
+    const seen: { watch?: Watch } = {};
+    const failure: unknown = await withWatch(input, caseEnd, async (watch) => {
+      seen.watch = watch;
+      const revision = async (value: number) => (await receipt(watch.root))?.revision === value;
+      await until(() => revision(1), 'initial watcher boot', caseEnd - CLEANUP_MS, watch.attribute);
+      // revision.ts is never rewritten, so the case body fails here on purpose.
+      await until(() => revision(2), 'source reload', Date.now() + 500, watch.attribute);
+    }).catch((error: unknown) => error);
+    expect(Date.now()).toBeLessThan(caseEnd);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(
+      /^Timed out waiting for source reload after \d+ ms; .*; cleanup: Error: Timed out waiting for owned watcher group exit after \d+ ms; .*; pnpm group alive; /,
+    );
+    if (seen.watch === undefined) throw new Error('watcher never started');
+    expect(signalGroup(seen.watch.pid, 0)).toBe('absent');
+    await expect(stat(seen.watch.root)).rejects.toMatchObject({ code: 'ENOENT' });
   },
   CASE_MS,
 );
