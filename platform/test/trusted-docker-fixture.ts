@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
+import type { ChildProcess, SpawnSyncOptionsWithStringEncoding } from 'node:child_process';
 import { once } from 'node:events';
 import { createInterface } from 'node:readline';
 import {
@@ -43,6 +43,7 @@ type CustodyMode =
   | 'early-exit'
   | 'release-early'
   | 'release-blind'
+  | 'slow-owner'
   | 'retire';
 
 /** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
@@ -113,10 +114,69 @@ export async function awaitResult(
   }
 }
 
+/** Inner fixture waits end by the case deadline; cleanup and terminal evidence keep full bounds. */
+export function caseBudget(deadline?: number) {
+  let reserved = false;
+  const limit = (phase: string, milliseconds: number) => {
+    if (reserved || deadline === undefined) return milliseconds;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`${phase}: case deadline passed before it started`);
+    return Math.min(milliseconds, remaining);
+  };
+  // A spawnSync whose own timeout is cut to the case deadline; a cut kill names its phase and wait.
+  const run = (
+    phase: string,
+    file: string,
+    args: string[],
+    options: SpawnSyncOptionsWithStringEncoding & { timeout: number },
+  ) => {
+    const timeout = limit(phase, options.timeout);
+    const since = Date.now();
+    const result = spawnSync(file, args, { ...options, timeout });
+    // Only the cut timeout is the deadline's kill; ENOENT, ENOBUFS and the like pass through.
+    if (
+      timeout < options.timeout &&
+      (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+    )
+      throw new Error(
+        `${phase}: killed at the case deadline after ${String(Date.now() - since)}ms`,
+      );
+    return result;
+  };
+  const stalled = (phase: string, since: number, pid: unknown) =>
+    new Error(
+      `${phase} after ${String(Date.now() - since)}ms: pid=${String(pid)} present=${String(ownerPresent(Number(pid)))}`,
+    );
+  // Terminal evidence is synchronous, so its full bounds end with it.
+  const unbounded = <T>(operation: () => T) => {
+    const outer = reserved;
+    reserved = true;
+    try {
+      return operation();
+    } finally {
+      reserved = outer;
+    }
+  };
+  // Cleanup awaits, so a restoring flag would lapse at its first await: this one stays set.
+  const reserve = () => {
+    reserved = true;
+  };
+  return {
+    deadline: deadline ?? Number.POSITIVE_INFINITY,
+    limit,
+    run,
+    stalled,
+    unbounded,
+    reserve,
+  };
+}
+type CaseBudget = ReturnType<typeof caseBudget>;
+
 function prepareCustodyRepository(
   repository: string,
   environment: NodeJS.ProcessEnv,
   mode: CustodyMode,
+  budget: CaseBudget,
   scenario?: RetirementScenario,
 ) {
   const files = [
@@ -156,11 +216,13 @@ function prepareCustodyRepository(
   }
   const packageValue: unknown = JSON.parse(readFileSync(join(sourceRoot, 'package.json'), 'utf8'));
   // Count and code of owner kill(-pid, 0) observations failed before deferring to the real call.
+  // The slow owner denies none; it sleeps 4s before publishing, holding its start past a deadline.
   const deniedGroupObservations = (
     {
       'group-observation-failed': ['Infinity', 'EPERM'],
       'group-observation-transient': ['3', 'EPERM'],
       'group-observation-invalid': ['1', 'EINVAL'],
+      'slow-owner': ['0', 'EPERM'],
     } as Partial<Record<CustodyMode, [string, string]>>
   )[mode];
   const verificationScript =
@@ -183,6 +245,7 @@ childProcess.spawn=(command,args,options)=>{
   return spawn(command,args,options);
 };
 syncBuiltinESMExports();
+${mode === 'slow-owner' ? "if(process.argv.includes('own'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,4000);" : ''}
 const kill=process.kill.bind(process);
 let denied=${deniedGroupObservations[0]};
 process.kill=(pid,signal)=>{
@@ -233,7 +296,7 @@ const released=new Promise(resolve=>{ready=resolve;});
 const watchRelease=(directory=temporary)=>{const check=()=>{if(existsSync(release))ready();};const watcher=watch(directory,check);const recheck=setInterval(check,50);check();return released.then(()=>{watcher.close();clearInterval(recheck);});};
 // The release-blind leaf watches an empty directory, so only its 50ms recheck sees the release.
 const blind=mode==='release-blind'?mkdirSync(join(temporary,'blind'),{recursive:true}):undefined;
-const held=['hold','post-close-member','past-expiry-member','release-blind','retire'].includes(mode)?watchRelease(blind):undefined;
+const held=['hold','post-close-member','past-expiry-member','release-blind','retire','slow-owner'].includes(mode)?watchRelease(blind):undefined;
 // This leaf releases itself and watches 500ms after its last write: Darwin FSEvents replayed
 // writes made just before watch() (8/8 probes) but none made 100ms or more before it (0/8).
 if(mode==='release-early')writeFileSync(release,'release');
@@ -275,7 +338,7 @@ process.exitCode=${mode === 'output-failed' ? '0' : '17'};
       'test: owned custody fixture',
     ],
   ]) {
-    const result = spawnSync('git', args, {
+    const result = budget.run('git', 'git', args, {
       cwd: repository,
       env: environment,
       encoding: 'utf8',
@@ -283,12 +346,14 @@ process.exitCode=${mode === 'output-failed' ? '0' : '17'};
     });
     if (result.status !== 0) throw new Error('Could not create owned custody repository');
   }
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd: repository,
-    env: environment,
-    encoding: 'utf8',
-    timeout: 10_000,
-  }).stdout.trim();
+  const head = budget
+    .run('git', 'git', ['rev-parse', 'HEAD'], {
+      cwd: repository,
+      env: environment,
+      encoding: 'utf8',
+      timeout: 10_000,
+    })
+    .stdout.trim();
   return head;
 }
 
@@ -301,18 +366,25 @@ function recordedProcesses(temporary: string) {
   });
 }
 
-function fixtureProcessCustody(environment: NodeJS.ProcessEnv, directory: string) {
+function fixtureProcessCustody(
+  environment: NodeJS.ProcessEnv,
+  directory: string,
+  budget: CaseBudget,
+) {
   const closures = new Map<number, { closed: boolean }>();
   const observeProcess = (pid: number): string | null => {
     const source = `import {liveProcessBirth} from ${JSON.stringify(birthModule)};process.stdout.write(JSON.stringify(await liveProcessBirth(Number(process.argv[1]))));`;
-    const result = spawnSync(process.execPath, ['--input-type=module', '-e', source, String(pid)], {
+    const args = ['--input-type=module', '-e', source, String(pid)];
+    const result = budget.run('process observation', process.execPath, args, {
       env: { ...environment, LANG: 'C.UTF-8' },
       encoding: 'utf8',
       timeout: 5000,
       maxBuffer: 65_536,
     });
     if (result.error || result.status !== 0)
-      throw new Error('Fixture process observation unavailable');
+      throw new Error(
+        `Fixture process observation unavailable: pid=${String(pid)} present=${String(ownerPresent(pid))}`,
+      );
     const value: unknown = JSON.parse(result.stdout);
     if (value !== null && typeof value !== 'string')
       throw new Error('Invalid fixture process observation');
@@ -333,19 +405,21 @@ function fixtureProcessCustody(environment: NodeJS.ProcessEnv, directory: string
       return current !== null;
     };
     const waitForAbsence = async () => {
-      const until = Date.now() + 5000;
+      const since = Date.now();
+      const until = since + budget.limit('process retirement', 5000);
       for (;;) {
         // A synchronous observer can see Darwin ESRCH while this parent's child is
         // still unreaped. Its group may return EPERM until the actual close event.
         if (!live() && closures.get(pid)?.closed !== false && (!group || groupIsAbsent(pid)))
           return;
-        if (Date.now() >= until) throw new Error('Owned custody fixture process did not retire');
+        if (Date.now() >= until)
+          throw budget.stalled('Owned custody fixture process did not retire', since, pid);
         await delay(20);
       }
     };
     if (!live()) return waitForAbsence();
     if (group) {
-      const observed = spawnSync('/bin/ps', ['-p', String(pid), '-o', 'pgid='], {
+      const observed = budget.run('process group', '/bin/ps', ['-p', String(pid), '-o', 'pgid='], {
         encoding: 'utf8',
         timeout: 2000,
         maxBuffer: 65_536,
@@ -403,17 +477,63 @@ function fixtureProcessCustody(environment: NodeJS.ProcessEnv, directory: string
   return { observeProcess, settle, track, cleanup };
 }
 
-function launchCustodyObserver(repository: string, environment: NodeJS.ProcessEnv, head: string) {
+function launchCustodyObserver(
+  repository: string,
+  environment: NodeJS.ProcessEnv,
+  head: string,
+  budget: CaseBudget,
+) {
+  // Under a case deadline the inner start ends a second before the outer publication, so the two
+  // fail distinguishably; without one both keep their original 15s.
+  const outer = budget.limit('observer publication', 15_000);
+  const inner = Number.isFinite(budget.deadline) ? Math.max(1, outer - 1000) : outer;
   const source = `const {spawnSync}=require('node:child_process');
-const result=spawnSync('pnpm',['--silent','verify:docker','start',${JSON.stringify(head)}],{cwd:${JSON.stringify(repository)},encoding:'utf8',timeout:15000});
-process.stdout.write(JSON.stringify({status:result.status,stdout:result.stdout,stderr:result.stderr})+String.fromCharCode(10));
+const result=spawnSync('pnpm',['--silent','verify:docker','start',${JSON.stringify(head)}],{cwd:${JSON.stringify(repository)},encoding:'utf8',timeout:${String(inner)}});
+process.stdout.write(JSON.stringify({status:result.status,stdout:result.stdout,stderr:result.stderr,error:result.error?.code})+String.fromCharCode(10));
 setInterval(()=>{},1000);`;
-  return spawn(process.execPath, ['-e', source], {
+  const observer = spawn(process.execPath, ['-e', source], {
     cwd: repository,
     env: { ...environment, LANG: 'C.UTF-8' },
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  return { observer, outer, inner };
+}
+
+/** The observer's single published start row, bounded by its own publication deadline. */
+async function observerPublication(
+  { observer, outer, inner }: ReturnType<typeof launchCustodyObserver>,
+  budget: CaseBudget,
+) {
+  const since = Date.now();
+  const lines = createInterface({ input: observer.stdout });
+  const ready = Promise.withResolvers<string>();
+  lines.once('line', ready.resolve);
+  observer.once('close', () => {
+    ready.reject(new Error('Owned observer closed before publication'));
+  });
+  observer.stderr.resume();
+  const deadline = setTimeout(() => {
+    ready.reject(budget.stalled('Owned observer publication deadline', since, observer.pid));
+  }, outer);
+  let row: string;
+  try {
+    row = await ready.promise;
+  } finally {
+    clearTimeout(deadline);
+    lines.close();
+  }
+  const parsed: unknown = JSON.parse(row);
+  const value = record(parsed);
+  if (
+    (value.status !== null && typeof value.status !== 'number') ||
+    typeof value.stdout !== 'string' ||
+    typeof value.stderr !== 'string'
+  )
+    throw new Error('Invalid owned observer publication');
+  if (value.error === 'ETIMEDOUT')
+    throw budget.stalled(`Observer inner start timeout ${String(inner)}ms`, since, observer.pid);
+  return { status: value.status, stdout: value.stdout, stderr: value.stderr };
 }
 
 function launchCustodySentinel(directory: string, environment: NodeJS.ProcessEnv) {
@@ -431,6 +551,22 @@ fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`;
   return { child, ready, interrupted };
 }
 
+/** The authority of an invocation whose start died before capture, read once its owner is gone. */
+function uncapturedAuthority(root: string, owner: Readonly<Record<string, unknown>>) {
+  const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
+  const temporary = realpathSync(String(request.temporary));
+  const { dev, ino } = lstatSync(temporary);
+  const childPath = join(root, 'child.json');
+  const child = existsSync(childPath)
+    ? {
+        child: Object.freeze({
+          ...record(record(JSON.parse(readFileSync(childPath, 'utf8'))).owner),
+        }),
+      }
+    : {};
+  return { owner, temporary, device: dev, inode: ino, ...child };
+}
+
 function fixtureDirectories() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-team-docker-custody-')));
   const repository = join(directory, 'repository');
@@ -439,7 +575,7 @@ function fixtureDirectories() {
   return { directory, repository, home };
 }
 
-function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScenario) {
+function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScenario, at?: number) {
   const { directory, repository, home } = fixtureDirectories();
   const environment = {
     PATH: process.env.PATH,
@@ -447,14 +583,16 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
     // Only the complete-output case supplies a proxy; held-output fences have no secret tail.
     HTTP_PROXY: mode === 'fail' ? CUSTODY_PROXY : undefined,
   };
-  const processes = fixtureProcessCustody(environment, directory);
+  const budget = caseBudget(at);
+  const processes = fixtureProcessCustody(environment, directory, budget);
   const { observeProcess, settle } = processes;
-  const head = prepareCustodyRepository(repository, environment, mode, scenario);
+  const head = prepareCustodyRepository(repository, environment, mode, budget, scenario);
   const entry = join(repository, 'scripts/trusted-docker-run.mjs');
   const command = (args: string[], wrapper = false, extraEnvironment: NodeJS.ProcessEnv = {}) => {
     const executable = wrapper ? 'pnpm' : process.execPath;
     const commandArguments = wrapper ? ['--silent', 'verify:docker', ...args] : [entry, ...args];
-    return spawnSync(
+    return budget.run(
+      `command ${args[0] ?? ''}`,
       mode === 'output-failed' ? 'python3' : executable,
       mode === 'output-failed'
         ? ['-c', FILE_SIZE_LIMIT_PROGRAM, executable, ...commandArguments]
@@ -519,10 +657,12 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
       inode: temporaryIdentity.ino,
     };
     issued.set(invocation, authority);
-    const until = Date.now() + 10_000;
+    const since = Date.now();
+    const until = since + budget.limit('command identity', 10_000);
     const childPath = join(invocationRoot, 'child.json');
     while (!existsSync(childPath) && !existsSync(join(invocationRoot, 'result.json'))) {
-      if (Date.now() >= until) throw new Error('Owned fixture command identity was not published');
+      if (Date.now() >= until)
+        throw budget.stalled('Command identity unpublished', since, authority.owner.pid);
       await delay(20);
     }
     if (existsSync(childPath)) {
@@ -537,38 +677,9 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
   const start = (extraEnvironment: NodeJS.ProcessEnv = {}) =>
     captureStart(command(['start', head], true, extraEnvironment));
   const startObserved = async () => {
-    const observer = launchCustodyObserver(repository, environment, head);
-    const identity = await processes.track(observer);
-    const lines = createInterface({ input: observer.stdout });
-    const ready = Promise.withResolvers<string>();
-    lines.once('line', ready.resolve);
-    observer.once('close', () => {
-      ready.reject(new Error('Owned observer closed before publication'));
-    });
-    observer.stderr.resume();
-    const deadline = setTimeout(() => {
-      ready.reject(new Error('Owned observer publication deadline'));
-    }, 15_000);
-    let row: string;
-    try {
-      row = await ready.promise;
-    } finally {
-      clearTimeout(deadline);
-      lines.close();
-    }
-    const parsed: unknown = JSON.parse(row);
-    const value = record(parsed);
-    if (
-      (value.status !== null && typeof value.status !== 'number') ||
-      typeof value.stdout !== 'string' ||
-      typeof value.stderr !== 'string'
-    )
-      throw new Error('Invalid owned observer publication');
-    const started = await captureStart({
-      status: value.status,
-      stdout: value.stdout,
-      stderr: value.stderr,
-    });
+    const launched = launchCustodyObserver(repository, environment, head, budget);
+    const identity = await processes.track(launched.observer);
+    const started = await captureStart(await observerPublication(launched, budget));
     return { started, identity, disconnect: () => settle(identity, true, 'SIGTERM') };
   };
   const startSentinel = async () => {
@@ -582,6 +693,7 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
     await settle(authority.owner, false);
   };
   const cleanup = async () => {
+    budget.reserve();
     const failures: unknown[] = [];
     const attempt = async (operation: () => void | Promise<void>) => {
       try {
@@ -592,8 +704,20 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
         return false;
       }
     };
-    if (existsSync(custodyBase) && readdirSync(custodyBase).some((name) => !issued.has(name)))
+    const names = existsSync(custodyBase) ? readdirSync(custodyBase) : [];
+    const uncaptured = names.filter((name) => !issued.has(name));
+    if (uncaptured.length)
       failures.push(new Error('Uncaptured custody fixture authority retained'));
+    // A start killed at the deadline never captured its owner: settle that owner first, so it can
+    // launch no command after child.json is read, then retire it like a captured invocation.
+    for (const name of uncaptured)
+      await attempt(async () => {
+        const root = join(custodyBase, name);
+        const launched = record(JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8')));
+        const owner = Object.freeze({ ...record(launched.owner) });
+        await settle(owner, false);
+        issued.set(name, uncapturedAuthority(root, owner));
+      });
     for (const authority of issued.values()) {
       // Retire recorded members and the detached platform before the group is observed absent.
       const memberSettled = await attempt(async () => {
@@ -627,7 +751,9 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
     repository,
     home,
     head,
+    deadline: budget.deadline,
     command,
+    inspect: (args: string[]) => budget.unbounded(() => command(args)),
     start,
     startObserved,
     startSentinel,
@@ -641,8 +767,9 @@ export async function withTrustedDockerFixture(
   mode: CustodyMode,
   run: (fixture: ReturnType<typeof createTrustedDockerFixture>) => void | Promise<void>,
   scenario?: RetirementScenario,
+  deadline?: number,
 ) {
-  const fixture = createTrustedDockerFixture(mode, scenario);
+  const fixture = createTrustedDockerFixture(mode, scenario, deadline);
   const failures: unknown[] = [];
   try {
     await run(fixture);
