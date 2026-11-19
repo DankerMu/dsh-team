@@ -96,6 +96,11 @@
 - **WHEN** 某可管理 bundle 为 `forced-on`，而观测到的组成中没有它规范 patch 插入的任何一行
 - **THEN** 输出按原顺序写出该 bundle 规范 patch 的全部行，其中的预设条目经与观测预设相同的联网工具规则处理；若组成中只出现其中一部分行，读取器拒绝该组成，实例不启动
 
+#### Scenario: profile 里目标不存在的行不阻止启动
+
+- **WHEN** 员工 profile 或 home patch 里有一行，应用到该行时其 id 在此前的 bundle、profile、home 行组成中不存在（例如经 DSH 插件管理写出、指向覆盖层插入行的停用行），实例下次启动
+- **THEN** 组成读取器按 DSH 语义跳过该行，实例照常启动，覆盖层状态不变；bundle 层的任何告警，以及 profile/home 层的 name mismatch、`patch insert` 目标不存在或不是 group、缺 id，读取器仍拒绝该组成，实例不启动
+
 #### Scenario: 强制关的 bundle 覆盖了默认预设
 
 - **WHEN** 某可管理 bundle 为 `forced-off`，其规范 patch 把预设注册表的默认预设改为它自己的预设，分别以它在观测组成中存在和缺席调用生成函数

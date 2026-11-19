@@ -42,7 +42,7 @@ The lock is display only. The sandbox guarantee is the preview route's own CSP (
 Accepted residuals:
 
 - The install wizard's `enableInstalled` and the update reinstall path call `setBundleEnabled(name, true)`. An employee can reach them by uninstalling a forced item through the retained native uninstall entry and adding it back. The effective state is still the overlay's; only the display and the profile list change.
-- The row switches on a forced bundle's detail page remain clickable. The overlay is applied last at the next start and on runtime recomposition, so the change has no effect.
+- The row switches on a forced bundle's detail page remain clickable. The overlay is applied last at the next start and on runtime recomposition, so the change has no effect; a row it writes for an overlay-inserted entry is skipped like in DSH and does not block the next start (#601).
 - The native uninstall entry stays on forced items; uninstalling a forced-on item's profile copy does not stop its overlay activation.
 - A card's `data-plugin-status` still reflects profile membership, not the effective state.
 - A plugin that renders a switch inside its own container in the `plugins.detail.actions` slot, as that container's last `<button>`, would also be hidden. No delivered plugin does.

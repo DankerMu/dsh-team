@@ -44,12 +44,16 @@ try {
     process.stdout.write('${PROFILE_INCOMPATIBLE_OUTPUT}');
   } else {
     const homePatch = loadOptionalPatches('dsh', ${JSON.stringify(HOME_PATCH)}) ?? [];
-    const entries = composeEntries(
-      [...profile.layers.map((layer) => layer.patches), profile.patches, homePatch],
-      () => {
-        throw new Error(FAIL);
-      },
-    );
+    const bundleLayers = profile.layers.map((layer) => layer.patches);
+    composeEntries(bundleLayers, () => {
+      throw new Error(FAIL);
+    });
+    // Rows apply in order, so bundle rows meet the same state as in the bundle-only pass, which
+    // threw on any skip: a skip here is a profile/home row. Like DSH, only a row whose target is
+    // absent (e.g. an overlay-inserted id) is skipped; every other skip still fails.
+    const entries = composeEntries([...bundleLayers, profile.patches, homePatch], (message) => {
+      if (!/^patch: entry ".*" not found$/.test(message)) throw new Error(FAIL);
+    });
     const localePatch = loadOverlayPatches('dsh', ${JSON.stringify(CANONICAL_LOCALE_PATCH)});
     const bundles = BUNDLE_IDS.map((id) => {
       const directory = '/opt/dsh-team/' + id;

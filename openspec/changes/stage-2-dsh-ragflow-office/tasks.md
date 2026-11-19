@@ -6954,3 +6954,75 @@ Must preserve：
 
 - 所有既有断言和用例超时；
 - `pnpm test:guardrails` 其余用例全部通过。
+
+## 58. #601：组成读取器容忍 profile/home 层目标不存在的 patch 行
+
+依赖：无。用户 2026-11-17 分诊选方向 A。组成读取器只容忍 profile/home 层的 `patch: entry … not found` 这一类跳过告警，与 DSH 语义一致；预设缺失、bundle 只出现一部分、结构非法、bundle 被跳过仍然大声失败。只改读取器、它的测试和 #409 夹具的绕行写法；不改 `start.ts`（关键路径）、生成器、DSH 源码，不加失败码。
+
+已核实（`main` `3a859ce`；DSH 为已安装的 npm 发行版 `@deepseek-ai/dsh-app-boot@0.2.1-rc.2`，不是 `resource/`）：
+
+- 读取脚本：
+  - `platform/src/managed-config/read.ts:47-52` 调用 `composeEntries([...bundle 层, profile.patches, homePatch], () => { throw new Error(FAIL); })`，任何告警都会让读取失败，输出 `Invalid managed composition`。
+  - 外层 `catch` 把它变成 `fail()`，即 exit 1（`:27-30`、`:68-70`）。
+- DSH 的组成方式：
+  - `composeEntries`（`dsh-app-boot lib/index.js:1084-1089`）把各层 `flat()` 后交给一次 `applyEntryPatches`，并把 `%C` 替换为 `JSON.stringify(id)` 后再调用告警回调。回调拿不到层号。
+  - `applyEntryPatches`（`:61-104`）按顺序逐行处理，可能发出 5 种告警，遇到告警就 `continue` 跳过该行：
+    - `patch insert: entry %C not found`
+    - `patch insert: entry %C is not a group`
+    - `patch: id is required for non-insert patches`
+    - `patch: entry %C not found`
+    - `patch: name mismatch for %C …`
+- 被跳过的行不改变组成结果；`presets`（`read.ts:120-139`、`:185-190`）和 bundle `present`（`:161-167`）都从组成结果推出；`localePatch` 与 bundle 规范 patch 读自 root 拥有的 `/opt` 文件（`:53-60`），与 profile 无关。所以容忍这类行不会改变覆盖层生成的输入。
+- DSH 的应用顺序：DSH 自己组成时也是 bundle → profile → home → 覆盖层（`:1127-1132`）。profile 里指向覆盖层插入行的那一行在 DSH 里同样找不到目标，被告警跳过。
+- 真实告警原文已有 Docker 证据：
+  - `platform/test/catalog-policy-fixture.ts:78-79` 的 `REQUIRED_OFF = [{ id: 'zh-locale', disabled: true }]` 在镜像内用真实 DSH 组成，得到 `['patch: entry "zh-locale" not found']`（`employeeRewrite` 在 `:140` 断言告警列表）。
+  - 夹具目前绕开读取器：重新读取（`:251-253`）之后才写这一行（`:254-260`），并在 `:73-77` 的注释里说明原因。
+- 现有单元测试只断言脚本文本：`read.test.ts:130-145` 断言语句顺序，没有覆盖告警路径。
+
+设计：
+
+- 读取脚本分两步组成：
+  1. 只用 bundle 层组成一次，告警回调照旧抛错。bundle 层的任何告警仍然失败，行为不变。
+  2. 再用全部层组成，告警回调只放行与 `/^patch: entry ".*" not found$/` 整行匹配的消息，其余照旧抛错。输出取第 2 步的结果。
+- 为什么第 2 步的告警只会来自 profile/home 层：`applyEntryPatches` 是顺序的，bundle 层的行在两次组成里看到的状态完全相同。第 1 步已经证明它们不告警，所以第 2 步的告警只可能来自其后的 profile/home 行。
+- 不容忍的告警：`patch insert` 两类、缺 id、name mismatch。范围按用户决定，不扩大。
+- 放行的告警不输出、不记录，与 DSH 运行时一致：DSH 只记日志，读取器的 stdout 只有组成结果。
+- 非字符串 id（YAML 写 `id: 5`）得到 `patch: entry 5 not found`，不匹配，仍然失败，比 DSH 更严，可以接受。`JSON.stringify` 转义引号和换行，构造的 id 无法让别的模板匹配这个正则。
+
+- [x] 58.1 读取脚本改为上面的两步组成，消息匹配用整行正则。脚本仍在镜像内运行，不新增宿主依赖。
+- [x] 58.2 测试（TDD，先红后绿；执行生成的脚本）：要真正执行生成的脚本，不能只断言脚本文本；子进程等待按 #630 规则从用例预算推出或用带注释的命名常量。
+  - 做法：在调用方自有的临时根目录放一个假的 `@deepseek-ai/dsh-app-boot`（`package.json` 带 `"type": "module"`，能被 `require.resolve` 解析、也能被 `import()` 加载），`loadProfileDirectory` 等返回受控的层。
+  - 假 `composeEntries` 按 DSH 的顺序语义逐行处理，每次跳过都单独回调，消息与真 `composeEntries` 相同，即 `%C` 已替换为 `JSON.stringify(id)`，如 `patch: entry "zh-locale" not found`。
+  - 测试把脚本里两处安装锚点（`read.ts:32`、`:40`）都换成临时路径，用 `process.execPath` 执行，环境变量用显式白名单，`finally` 删除临时根目录。不能用 `NODE_PATH`：按锚点查找会先命中宿主全局安装。
+  - `bundleIds` 必须是 `[]`：脚本会真实读取 `/opt/dsh-team/<id>/package.json`，宿主上无法假造。
+  - 假造的是 DSH 依赖，不是被测系统。`platform/src/**` 的单元测试目前没有起子进程的先例，按 `platform/AGENTS.md` 放进 `platform/test/managed-composition.integration.test.ts`。`read.ts` 的覆盖率仍由 `read.test.ts` 负责。
+  - 要钉死的情况：
+    - profile 层与 home 层各有一行 `patch: entry … not found`：读取成功，输出与没有这一行时相同。
+    - profile 层同时有一行命中的行（在根插入一个预设）和一行 not-found：输出包含该预设，证明输出取自全部层组成，而不是第 1 步只含 bundle 层的结果。
+    - profile 层的 name mismatch、`patch insert` 目标不存在、`patch insert` 目标不是 group、缺 id：仍是 `Invalid managed composition`。
+    - bundle 层自身的 `patch: entry … not found`：仍然失败。
+    - 现有 `read.test.ts` 用例全部不改。
+- [x] 58.3 Docker（`catalog-policy`，giap-vps `pnpm test:docker`）：去掉绕行，改为正向断言。
+  - 改为 `employeeRewrite(..., [...EMPLOYEE_REWRITE, ...REQUIRED_OFF], UNMATCHED_REQUIRED)`，删掉 `${prefix}-required` 那次执行；告警断言保持真实原文。
+  - `profiles.capture('employee-edited', written)` 移到 `profiles.capture('recompose-read')` 之前（同 `managed-policy-fixture.ts:724` 先于 `:820`），使 `recompose-read` 阶段能证明读取器确实读到了这一行。
+  - 断言重新读取的组成与首次读取 `isDeepStrictEqual`，且 `restart` 被接受，覆盖层状态 `OVERLAY_STATE`（含 `zh-locale: ACTIVE`）不变。
+  - 更新 `:73-77` 和 `:250` 的注释。
+- [x] 58.4 文档（编排方做；spec 场景已随本 fixture 加入 managed-config spec delta 的「预装插件的强制状态经覆盖层下发」）：
+  - `platform/src/managed-config/README.md` 写明读取器容忍 profile/home 层的目标不存在行，其余告警仍拒绝。
+  - 核对 `plugins/platform-nav/README.md:45` 和 tasks.md 11.4 的残余描述与新行为一致，不一致就改。
+
+不做的事：
+
+- 不加失败码，不改 `start.ts`、审计和管理员页。这是方向 B，已否决。
+- 不容忍 `patch: entry … not found` 以外的告警。
+- 不自动重置配置，不改 DSH 插件管理器的写入行为。
+
+Suggested fixture level: standard - 读取器的容错边界变化，影响每次启动
+Minimal mergeable slice: 58.1–58.4 一个 PR
+Risk packs: selected - Legacy compatibility（现有拒绝情况全部保持）、Security（容忍范围不能掩盖平台要检测的篡改：只放行与 DSH 自身语义相同的跳过行）；not selected - Auth、Schema、Public API、Migration、Concurrency、Resource limits。
+Must preserve：
+
+- `read.test.ts` 现有断言；
+- `ProfileIncompatibleError` 路径；
+- bundle 部分出现、预设缺失、结构非法仍然拒绝；
+- 输出 JSON 的形状。
