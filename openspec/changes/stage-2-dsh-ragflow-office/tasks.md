@@ -6927,7 +6927,7 @@ Must preserve：所有既有断言；`trusted-docker-retirement` 通过；产品
 - [x] 57.2 自测：在 `scripts/test-guardrails.sh` 的 ESLint 段放一个 `platform/test/<名字>.integration.test.ts`，内容是 `export const deadline = Date.now() + 5000;`（加 `export`，免得混进 `no-unused-vars`），用 `expect_reject` 断言 ESLint 拒绝它并打出这句短语。根 `tsconfig.json` 的 `include` 含 `platform/test`，typed lint 能解析新文件；实现时仍要确认报的是本规则。
 - [x] 57.3 现有 5 处命中一律改为命名常量，数值不变，旁边注释它和所在用例超时的关系，使干净树通过 `expect_accept "eslint"`。
   - 没有一处能在不改行为的前提下从预算推出。
-  - `trusted-docker-custody.integration.test.ts:686` 不得从 `fixture.deadline` 推出：该期限在等待开始前已过（slow owner 让 `start` 在期限处被杀，之后才轮询 `child.json`）。它约 2.5 + 10 秒，低于用例的 20 秒。
+  - `trusted-docker-custody.integration.test.ts:686` 不得从 `fixture.deadline` 推出：该期限在等待开始前已过（slow owner 让 `start` 在期限处被杀，之后才轮询 `child.json`）。等待从 5 秒的 fixture 期限开始、约 15 秒结束，低于用例的 20 秒。
   - `instance-lifecycle.integration.test.ts:32`、`:434` 被 30–60 秒的多个用例共用，可以共用一个常量，不超时。
   - 等待大于等于用例超时的有两处，只记入 PR 的 Risk 和 #630 后续，不在本 PR 改行为：
     - `chrome-start.integration.test.ts:44`（用例 `:128`，默认 5 秒）；

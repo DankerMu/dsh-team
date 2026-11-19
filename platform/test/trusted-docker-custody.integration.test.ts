@@ -669,8 +669,8 @@ it('ends a held terminal wait at the case deadline with its attribution and stil
 const ownerOf = (path: string) =>
   Number(record(record(JSON.parse(readFileSync(path, 'utf8')) as unknown).owner).pid);
 
-// The command wait below starts about 2.5s into its case and ends near 12.5s, below the 20_000
-// case bound. It cannot derive from fixture.deadline: that deadline has passed before it starts.
+// The command wait below starts at the 5s fixture deadline (after the killed start) and ends near
+// 15s, below the 20_000 case bound. It cannot derive from fixture.deadline: that has passed.
 const COMMAND_LAUNCH_MS = 10_000;
 
 // The slow owner sleeps 4s before its manifest; its start gets 2.5s of the 5s case deadline, so
