@@ -99,7 +99,7 @@
 #### Scenario: profile 里目标不存在的行不阻止启动
 
 - **WHEN** 员工 profile 或 home patch 里有一行，应用到该行时其 id 在此前的 bundle、profile、home 行组成中不存在（例如经 DSH 插件管理写出、指向覆盖层插入行的停用行），实例下次启动
-- **THEN** 组成读取器按 DSH 语义跳过该行，实例照常启动，覆盖层状态不变；bundle 层的任何告警，以及 profile/home 层的 name mismatch、`patch insert` 目标不存在或不是 group、缺 id，读取器仍拒绝该组成，实例不启动
+- **THEN** 组成读取器按 DSH 语义跳过该行，实例照常启动，覆盖层状态不变；bundle 层的任何告警，以及 profile/home 层的 name mismatch、`patch insert` 目标不存在或不是 group、缺 id，以及 id 不是字符串的行，读取器仍拒绝该组成，实例不启动
 
 #### Scenario: 强制关的 bundle 覆盖了默认预设
 
