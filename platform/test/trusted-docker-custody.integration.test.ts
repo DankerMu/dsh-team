@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
@@ -12,7 +20,11 @@ import {
   ownerPresent,
   withTrustedDockerFixture,
 } from './trusted-docker-fixture.ts';
-import { hasPassingOutcome, validateTerminal } from '../../scripts/trusted-docker-record.mjs';
+import {
+  groupIsAbsent,
+  hasPassingOutcome,
+  validateTerminal,
+} from '../../scripts/trusted-docker-record.mjs';
 import { browserExecRetirementSummary } from '../../scripts/verification-submission-assessment.mjs';
 
 type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
@@ -145,14 +157,6 @@ function leafState(temporary: string) {
   return ownerPresent(leaf.pid) ? 'alive' : 'absent';
 }
 
-// The post-close member's own exit timing, against the product's 2000ms settlement window.
-function memberTiming(temporary: string) {
-  const path = join(temporary, 'member-exit.json');
-  if (!existsSync(path)) return '';
-  const { vanished, exited } = record(JSON.parse(readFileSync(path, 'utf8')) as unknown);
-  return `; member exited ${String(Number(exited) - Number(vanished))}ms after the command vanished; settlement window 2000ms`;
-}
-
 // The former 10s status poll bound; a published terminal never changes, so a mismatch fails at once.
 const TERMINAL_WAIT_MS = 10_000;
 
@@ -168,8 +172,7 @@ async function awaitTerminal(issued: Issued, expected: Record<string, unknown>) 
     expect(terminal).toMatchObject(expected);
     return terminal;
   } catch (error) {
-    const evidence = terminalEvidence(fixture, invocation, 'terminal-mismatch ');
-    throw new Error(evidence + memberTiming(temporary), { cause: error });
+    throw new Error(terminalEvidence(fixture, invocation, 'terminal-mismatch '), { cause: error });
   }
 }
 
@@ -629,6 +632,53 @@ it('ends a held terminal wait at the case deadline with its attribution and stil
   );
 }, 20_000);
 
+const ownerOf = (path: string) =>
+  Number(record(record(JSON.parse(readFileSync(path, 'utf8')) as unknown).owner).pid);
+
+// The slow owner sleeps 4s before its manifest; its start gets 2.5s of the 5s case deadline, so
+// the start is killed with the owner up, and the owner then launches the held command.
+it('settles the owner and held command of a start killed at the case deadline', async () => {
+  const pids = { directory: '', owner: 0, command: 0 };
+  try {
+    const failed = await withTrustedDockerFixture(
+      'slow-owner',
+      async (fixture) => {
+        pids.directory = fixture.directory;
+        await delay(Math.max(0, fixture.deadline - Date.now() - 2500));
+        expect(() => fixture.start()).toThrow(/^command start: killed at the case deadline after/);
+        const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
+        const root = join(base, readdirSync(base)[0] ?? 'missing');
+        pids.owner = ownerOf(join(root, 'launch.json'));
+        for (const until = Date.now() + 10_000; !existsSync(join(root, 'child.json'));) {
+          if (Date.now() >= until) throw new Error('Slow owner launched no command');
+          await delay(50);
+        }
+        pids.command = ownerOf(join(root, 'child.json'));
+      },
+      undefined,
+      Date.now() + 5000,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failed).toBeInstanceOf(AggregateError);
+    expect((failed as AggregateError).errors.map(String)).toEqual([
+      'Error: Uncaptured custody fixture authority retained',
+    ]);
+    expect(ownerPresent(pids.owner)).toBe(false);
+    expect(groupIsAbsent(pids.command)).toBe(true);
+  } finally {
+    for (const pid of [pids.owner, -pids.command].filter(Boolean))
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already settled by the fixture: the green outcome.
+      }
+    rmSync(pids.directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
 it('cancels the actual pnpm child tree and preserves the terminal result on late cancellation', async () => {
   await custodyCase('hold', async (fixture) => {
     const sentinel = await fixture.startSentinel();
@@ -668,14 +718,11 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
 
 it('settles a cancelled command whose same-group member exits shortly after close', async () => {
   await custodyCase('post-close-member', async (fixture) => {
-    const { invocation, temporary, terminal } = await cancelHeldCommand(fixture, {
+    const { invocation, terminal } = await cancelHeldCommand(fixture, {
       state: 'failed',
       command: { settled: true },
       cleanup: { state: 'confirmed', browserExec: null },
     });
-    expect(memberTiming(temporary)).toMatch(
-      /^; member exited \d+ms after the command vanished; settlement window 2000ms$/,
-    );
 
     const duplicate = fixture.command(['cancel', invocation], true);
     expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);

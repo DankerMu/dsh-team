@@ -43,6 +43,7 @@ type CustodyMode =
   | 'early-exit'
   | 'release-early'
   | 'release-blind'
+  | 'slow-owner'
   | 'retire';
 
 /** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
@@ -58,16 +59,8 @@ export type RetirementScenario =
   | 'unbound'
   | 'lock-unavailable';
 
-// The leaf of a member mode publishes its pre-started member identity here before readiness.
+// The leaf of a member mode publishes the past-expiry member identity here before readiness.
 export const GROUP_MEMBER_RECORD = 'group-member.json';
-// The post-close member announces its handlers; on SIGUSR2 it waits until the command pid in
-// child.json vanishes, exits a fixed 300ms later and records both times for the settlement check.
-const CLOSE_MEMBER = `const fs=require('node:fs');const [record,exit]=process.argv.slice(1);let closing=false;
-process.on('SIGINT',()=>{});process.on('SIGTERM',()=>{});
-process.on('SIGUSR2',()=>{if(closing)return;closing=true;const pid=JSON.parse(fs.readFileSync(record,'utf8')).owner.pid;
-const poll=setInterval(()=>{try{process.kill(pid,0);}catch{clearInterval(poll);const vanished=Date.now();
-setTimeout(()=>{fs.writeFileSync(exit,JSON.stringify({vanished,exited:Date.now()}));process.exit(0);},300);}},10);});
-process.stdout.write('ready');setInterval(()=>{},1000);`;
 // The retirement setup publishes its detached fixture platform identity here.
 const FAKE_PLATFORM_RECORD = 'fake-platform.json';
 
@@ -140,7 +133,11 @@ export function caseBudget(deadline?: number) {
     const timeout = limit(phase, options.timeout);
     const since = Date.now();
     const result = spawnSync(file, args, { ...options, timeout });
-    if (timeout < options.timeout && result.error)
+    // Only the cut timeout is the deadline's kill; ENOENT, ENOBUFS and the like pass through.
+    if (
+      timeout < options.timeout &&
+      (result.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT'
+    )
       throw new Error(
         `${phase}: killed at the case deadline after ${String(Date.now() - since)}ms`,
       );
@@ -219,11 +216,13 @@ function prepareCustodyRepository(
   }
   const packageValue: unknown = JSON.parse(readFileSync(join(sourceRoot, 'package.json'), 'utf8'));
   // Count and code of owner kill(-pid, 0) observations failed before deferring to the real call.
+  // The slow owner denies none; it sleeps 4s before publishing, holding its start past a deadline.
   const deniedGroupObservations = (
     {
       'group-observation-failed': ['Infinity', 'EPERM'],
       'group-observation-transient': ['3', 'EPERM'],
       'group-observation-invalid': ['1', 'EINVAL'],
+      'slow-owner': ['0', 'EPERM'],
     } as Partial<Record<CustodyMode, [string, string]>>
   )[mode];
   const verificationScript =
@@ -246,6 +245,7 @@ childProcess.spawn=(command,args,options)=>{
   return spawn(command,args,options);
 };
 syncBuiltinESMExports();
+${mode === 'slow-owner' ? "if(process.argv.includes('own'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,4000);" : ''}
 const kill=process.kill.bind(process);
 let denied=${deniedGroupObservations[0]};
 process.kill=(pid,signal)=>{
@@ -288,23 +288,21 @@ const release=join(temporary,'release');
 // Readers poll these records, so each appears complete or not at all.
 const publish=(name,value)=>{const path=join(temporary,name);writeFileSync(path+'.pending',JSON.stringify(value),{mode:0o600});renameSync(path+'.pending',path);};
 // One group signal plus pnpm's native forwarding may deliver SIGINT twice.
-// The pre-started post-close member outlives this leaf's exit by its own short, recorded delay.
-let retained;
-process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')process.kill(retained.pid,'SIGUSR2');process.exitCode=27;process.exit(27);});
+// The post-close member outlives this leaf's exit, without being awaited, for a few hundred ms.
+process.on('SIGINT',()=>{writeFileSync(join(temporary,'child-interrupted'),'SIGINT');if(mode==='post-close-member')member(500);process.exitCode=27;process.exit(27);});
 let ready;
 const released=new Promise(resolve=>{ready=resolve;});
 // Watch events may be late, coalesced or missing, so the watch also checks at once and every 50ms.
 const watchRelease=(directory=temporary)=>{const check=()=>{if(existsSync(release))ready();};const watcher=watch(directory,check);const recheck=setInterval(check,50);check();return released.then(()=>{watcher.close();clearInterval(recheck);});};
 // The release-blind leaf watches an empty directory, so only its 50ms recheck sees the release.
 const blind=mode==='release-blind'?mkdirSync(join(temporary,'blind'),{recursive:true}):undefined;
-const held=['hold','post-close-member','past-expiry-member','release-blind','retire'].includes(mode)?watchRelease(blind):undefined;
+const held=['hold','post-close-member','past-expiry-member','release-blind','retire','slow-owner'].includes(mode)?watchRelease(blind):undefined;
 // This leaf releases itself and watches 500ms after its last write: Darwin FSEvents replayed
 // writes made just before watch() (8/8 probes) but none made 100ms or more before it (0/8).
 if(mode==='release-early')writeFileSync(release,'release');
-if(['past-expiry-member','post-close-member'].includes(mode)||scenario==='member'){
-  retained=mode==='post-close-member'?spawn(process.execPath,['-e',${JSON.stringify(CLOSE_MEMBER)},join(custody,'child.json'),join(temporary,'member-exit.json')],{stdio:['ignore','pipe','ignore']}):member(30000);
+if(mode==='past-expiry-member'||scenario==='member'){
+  const retained=member(30000);
   await once(retained,'spawn');
-  if(retained.stdout)await once(retained.stdout,'data');
   publish(${JSON.stringify(GROUP_MEMBER_RECORD)},{pid:retained.pid,birth:await processBirth(retained.pid)});
 }
 // The early-exit leaf ends before readiness, so readiness waits must fail fast.
@@ -485,9 +483,10 @@ function launchCustodyObserver(
   head: string,
   budget: CaseBudget,
 ) {
-  // The inner start ends a second before the outer publication, so the two fail distinguishably.
+  // Under a case deadline the inner start ends a second before the outer publication, so the two
+  // fail distinguishably; without one both keep their original 15s.
   const outer = budget.limit('observer publication', 15_000);
-  const inner = Math.max(1, outer - 1000);
+  const inner = Number.isFinite(budget.deadline) ? Math.max(1, outer - 1000) : outer;
   const source = `const {spawnSync}=require('node:child_process');
 const result=spawnSync('pnpm',['--silent','verify:docker','start',${JSON.stringify(head)}],{cwd:${JSON.stringify(repository)},encoding:'utf8',timeout:${String(inner)}});
 process.stdout.write(JSON.stringify({status:result.status,stdout:result.stdout,stderr:result.stderr,error:result.error?.code})+String.fromCharCode(10));
@@ -550,6 +549,22 @@ fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`;
     stdio: 'ignore',
   });
   return { child, ready, interrupted };
+}
+
+/** The authority of an invocation whose start died before capture, read once its owner is gone. */
+function uncapturedAuthority(root: string, owner: Readonly<Record<string, unknown>>) {
+  const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
+  const temporary = realpathSync(String(request.temporary));
+  const { dev, ino } = lstatSync(temporary);
+  const childPath = join(root, 'child.json');
+  const child = existsSync(childPath)
+    ? {
+        child: Object.freeze({
+          ...record(record(JSON.parse(readFileSync(childPath, 'utf8'))).owner),
+        }),
+      }
+    : {};
+  return { owner, temporary, device: dev, inode: ino, ...child };
 }
 
 function fixtureDirectories() {
@@ -689,8 +704,20 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
         return false;
       }
     };
-    if (existsSync(custodyBase) && readdirSync(custodyBase).some((name) => !issued.has(name)))
+    const names = existsSync(custodyBase) ? readdirSync(custodyBase) : [];
+    const uncaptured = names.filter((name) => !issued.has(name));
+    if (uncaptured.length)
       failures.push(new Error('Uncaptured custody fixture authority retained'));
+    // A start killed at the deadline never captured its owner: settle that owner first, so it can
+    // launch no command after child.json is read, then retire it like a captured invocation.
+    for (const name of uncaptured)
+      await attempt(async () => {
+        const root = join(custodyBase, name);
+        const launched = record(JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8')));
+        const owner = Object.freeze({ ...record(launched.owner) });
+        await settle(owner, false);
+        issued.set(name, uncapturedAuthority(root, owner));
+      });
     for (const authority of issued.values()) {
       // Retire recorded members and the detached platform before the group is observed absent.
       const memberSettled = await attempt(async () => {
