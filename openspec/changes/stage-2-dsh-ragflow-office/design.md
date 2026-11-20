@@ -282,9 +282,9 @@ B 能读到 Document Server 的 JWT，但不知道 A 的文件令牌密钥：
 - **better-sidebar 分两步**
   - 文件区组先装 `dsh-better-sidebar@0.28.0`，不打补丁。Office 文件仍由它的原生预览打开。
   - Office 编辑组在 ONLYOFFICE 及其覆盖层配置合入之后再加补丁（同一组）：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py`，改为与 #375 同构的 Node 脚本，钉住 0.28.0 和两个文件的输入、输出哈希，只从 `HOST_OWNED_EXTS` 里去掉 docx、xlsx、pptx。（实现以 tasks.md 第 43 节为准：用户决定 2026-11-10 改为条件接手，只在已登记并启用 Office 查看器时接手这三类文件，否则仍交还 DSH 自带预览。）
-- **Office 提示**：新建镜像插件 `plugins/office-hints/`，承载三条界面提示：人机同写提示（F40）、无 Session 提示、满员提示和退回预览（F42）。不给第三方包加第二个补丁。它是受管必启项（决定 12），只在 ONLYOFFICE 生效时显示。员工文档放在新建的 `docs/EMPLOYEE_GUIDE.md`。
+- **Office 提示**：新建镜像插件 `plugins/office-hints/`，承载两条界面提示：人机同写提示（F40）和无 Session 提示。原定的满员提示和退回预览（F42）不适用：Document Server 9.4.0 社区版没有连接上限（tasks.md 第 59 节）。不给第三方包加第二个补丁。它是受管必启项（决定 12），只在 ONLYOFFICE 生效时显示。员工文档放在新建的 `docs/EMPLOYEE_GUIDE.md`。
 - **只读预览的字体**（#554 诊断，用户决定 2026-11-07）：DSH 0.2.1 的 DOC、DOCX、PPT、PPTX 预览经 `dsh-office-to-pdf` 调 `@deepseek-ai/libreoffice-kit`，Linux 上只用随 DSH 安装的 `libreoffice-kit-wasm@0.1.5`，从不调用系统 soffice，所以镜像不装 LibreOffice。XLS、XLSX 由 DSH 的浏览器表格视图（`/excel` 预览）只读显示，不经转换，也不依赖镜像字体。转换失败的原因是镜像里没有任何字体（`unavailable`：「No usable fonts were found」）。处理分两层：
-  - 用户镜像装 Debian 的 `fonts-noto-cjk` 和 `fonts-dejavu-core`，使 DOC、PPT，以及 Office 不可用或 Document Server 满员时的 DOCX、PPTX 在任何部署下都能在实例内、不联网地转成 PDF 只读显示。
+  - 用户镜像装 Debian 的 `fonts-noto-cjk` 和 `fonts-dejavu-core`，使 DOC、PPT，以及 Office 不可用时的 DOCX、PPTX 在任何部署下都能在实例内、不联网地转成 PDF 只读显示。
   - 部署配置了 D13 授权字体目录时，平台把它只读挂载进每个实例的 `/usr/share/fonts/truetype/custom`（与 Document Server 相同的目标路径）。引擎默认扫描 `/usr/share/fonts`，不需要覆盖层配置，公文字体按原样显示。
   - #554 本机实测的 cgroup 峰值：单次转换 docx 约 1.56GB，同一转换器连续转三个旧格式约 2.14GB；都不含 DSH 常驻内存，DSH 默认最多两路并发转换。转换在 DSH 进程的 Worker 里运行，被 OOM 终止会连带整个 DSH 进程，部署文档写明实测数值。
 - HTML 预览沙箱（F36，用户决定 2026-11-07）：better-sidebar 0.28.0 的预览路由 `/sidebar/html` 始终下发 `Content-Security-Policy: sandbox allow-scripts allow-popups allow-downloads allow-modals`（不含 `allow-same-origin`），预览脚本总在不透明源中运行，`htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 和状态栏的临时解除都只改 iframe 属性，不能解除它。覆盖层不写 better-sidebar 的 `config`：DSH 0.2.1 对行的 `config` 整体替换，员工此后对该行的任何设置写入都会被拒绝（`dsh-config-editor` 的 overlay 检查），钉一个字段就会冻结全部侧栏偏好。两个开关由 `platform-nav` 客户端显示为受管锁定。
@@ -337,7 +337,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 
 **两类目录项**
 
-- 受管必启项：`platform-nav`（平台入口）、`permission-tiers`（权限档）、`zh-locale`（中文界面）、`office-hints`（Office 提示，F40、F42 要求的界面提示）。
+- 受管必启项：`platform-nav`（平台入口）、`permission-tiers`（权限档）、`zh-locale`（中文界面）、`office-hints`（Office 提示，F40 的同写提示和无 Session 提示）。
   - 在后台目录页和员工插件页显示，固定为 `forced-on` 并锁定。
   - 后台不可改：PUT 提交其他状态返回 400。
 - 可管理项：知识库、办公 Agent bundle、better-sidebar、ONLYOFFICE，以及镜像额外预装的其他包，走三态。
@@ -450,7 +450,7 @@ Docker 用例必须证明：员工在 `.credentials.yaml` 里写入别的密钥�
 - [预览字体让镜像变大（约 +78MB），转换消耗实例 CPU 和约 1.5GB 内存] → 受实例 CPU 和内存上限约束；记录镜像大小的变化；部署文档写明实测内存，不给阈值。
 - [Document Server 接入所有实例网络，成为共享对端] → 每实例的文件令牌密钥和文档 key，加上回调查注册表，加上攻击验证。
 - [Document Server 被重建后，已运行实例的 Office 不可用，直到实例下次启动] → 不热补接，部署文档写明；重启实例即恢复。
-- [Document Server 满员时可观测的信号未知：F42 规定了提示和退路，但插件或 Document Server 会给出哪种错误还没有实测] → 先在本机通道制造满员、记录实际信号，再实现提示和退路；信号不可区分时停下来报告。
+- [Document Server 满员时可观测的信号未知：F42 规定了提示和退路，但插件或 Document Server 会给出哪种错误还没有实测] → 已实测（tasks.md 第 59 节）：9.4.0 社区版没有连接上限，满员不会发生，F42 和 18.6 不适用（用户决定 2026-11-19）。
 - [本机内存 15.6 GiB 刚到 RAGFlow 推荐值的下限] → 种子数据保持很少；MemTotal 低于 14 GiB 时 `test:stack` 明确失败，不降级。
 
 ## Migration Plan

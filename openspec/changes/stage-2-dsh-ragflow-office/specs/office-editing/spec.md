@@ -83,19 +83,14 @@
 - **WHEN** 员工打开 `总结.docx` 后，Agent 改写该文件，员工按文档说明刷新或重新打开编辑器
 - **THEN** 编辑器显示 Agent 写入的内容
 
-### Requirement: 旧格式只读预览与满员退路
+### Requirement: 旧格式只读预览
 
-DOC、XLS、PPT MUST 只能只读预览，不能编辑。Document Server 达到连接上限时，员工 MUST 看到明确的提示，并且可以退回到同一文件的只读预览。DOC、PPT 的预览 MUST 在员工自己的实例内转换；XLS 由 DSH 的浏览器表格视图显示；两者都 MUST NOT 访问外部服务。
+DOC、XLS、PPT MUST 只能只读预览，不能编辑。DOC、PPT 的预览 MUST 在员工自己的实例内转换；XLS 由 DSH 的浏览器表格视图显示；两者都 MUST NOT 访问外部服务。
 
 #### Scenario: 旧格式只读
 
 - **WHEN** 员工在真实浏览器中分别打开 `旧报表.xls`、一个 DOC 和一个 PPT
 - **THEN** 每个都显示只读预览，没有编辑和保存入口，原文件不变
-
-#### Scenario: 满员时有提示和退路
-
-- **WHEN** Document Server 已达到连接上限，员工再打开一个 DOCX
-- **THEN** 员工看到「编辑服务已满」类的明确提示，并能查看该文件的只读预览
 
 ### Requirement: 文件区下载
 

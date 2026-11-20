@@ -197,7 +197,7 @@
 
 ### 3.5 ONLYOFFICE 集成
 
-- **Document Server**：内网没有，随项目部署。社区版 9.4.0，AGPL v3，20 个并发连接上限（项目方已接受，满员时界面提示）。
+- **Document Server**：内网没有，随项目部署。社区版 9.4.0，AGPL v3，20 个并发连接上限（项目方已接受，满员时界面提示）。2026-11-19 实测：9.4.0 社区版没有这个上限，见基线 D11。
 - **插件配置**由平台覆盖层下发：`documentServerUrl`、`jwtSecret`、`internalBaseUrl`（该用户容器在 Docker 网络上的地址）、`publicBaseUrl`（平台对外地址）。
 - **跨用户不串写的保证**：
   - 文档 key 含主机名，**编排器必须给每个容器设唯一 `--hostname`**。否则两个用户同路径、同大小、同 mtime 的文件会得到同一个 key，被 Document Server 当成同一份文档协同编辑。
@@ -219,7 +219,7 @@
   | B 容器向 A 的保存回调接口发伪造请求（无 JWT） | 403 |
   | Document Server 识别项目字体 | 通过，仿宋_GB2312、楷体_GB2312、方正小标宋、黑体、思源黑体都在字体表里 |
 
-- **未测**：XLSX 和 PPTX 的编辑、编辑器开着时 Agent 改文件后的自动刷新、人机同时写的覆盖表现、网关断开重连、20 连接上限的实际表现、amd64 上的 Document Server。
+- **未测**：XLSX 和 PPTX 的编辑、编辑器开着时 Agent 改文件后的自动刷新、人机同时写的覆盖表现、网关断开重连、20 连接上限的实际表现（2026-11-19 已测：没有这个上限）、amd64 上的 Document Server。
 - **使用上的约束**：编辑器要求当前有 Session，没有 Session 时打不开 Office 文件。
 - **附带发现**：
   - DSH 自带的 Office 只读预览需要镜像里有 LibreOffice，否则报不可用。打了上面的补丁后 docx/xlsx/pptx 不再走它，但旧 DOC/XLS/PPT 仍走它。（2026-11-07 #554 更正：DSH 0.2.1 的 DOC/PPT 预览只用随 DSH 安装的 WASM LibreOffice，不用系统 LibreOffice，缺的是字体；XLS/XLSX 在浏览器表格视图里显示，不经转换。）
@@ -371,7 +371,7 @@
 | 新 Session 知识库 | 默认全选 |
 | 账号 | 自助注册，无审批，无域名限制 |
 | 实例 | 按需启动，空闲停止 |
-| ONLYOFFICE | 随项目部署社区版，接受 20 连接上限 |
+| ONLYOFFICE | 随项目部署社区版，接受 20 连接上限（2026-11-19 实测没有这个上限） |
 
 ### 7.3 与需求的偏离（项目方决定）
 
