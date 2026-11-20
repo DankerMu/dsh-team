@@ -25,11 +25,11 @@
 依赖：无。关键路径 `platform/src/orchestrator/`，每行都要人工白盒评审。
 
 - [x] 1.1 扩展 `platform/src/orchestrator/subnet.ts`：新增一个纯函数，由一个对齐的 /28 子网得出 +1 网关、+2 员工容器、+3 平台、+4 Document Server 四个地址；输入不是规范的 /28 时明确拒绝。验证：单元测试覆盖池首、池尾、非 /28 和非规范输入。
-- [ ] 1.2a network 模式下，创建容器时用 `IPAMConfig` 把员工容器固定在 +2。创建后检查实际地址，与布局不符时按现有失配路径退役，数据卷保留。DSH 监听地址仍为 `0.0.0.0`。验证：单元测试覆盖创建请求体和地址不符的处理；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言新建容器在 +2。
-- [ ] 1.2b 平台接入实例 bridge 时请求 +3，接入后检查实际地址，不符时按现有失配路径处理。平台重建后的对账修复：容器在 +2 的实例以 +3 补接平台；容器不在 +2 的阶段 1 存量实例按阶段 1 方式补接，不指定地址、接入后不按布局核对，也不因此失败或停止。验证：单元测试覆盖两类补接的请求体；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言平台在 +3；`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 覆盖平台重建后两类实例的补接。
-- [ ] 1.2c 阶段 1 存量实例的对账用例：用测试自有的方式造一个容器地址不在 +2 的运行中实例，在删除并重建 stand-in 平台后（或所造实例尚未接入平台时）运行新版对账，使对账走到 `restorePlatform` 的 connect。断言它保持运行、可经网关访问、没有新增审计，connect 请求体不带 `EndpointConfig`，补接后的平台端点没有 `IPAMConfig` 且地址在 (基址, 基址+15) 内；随后以空闲或管理员方式停止它，再次启动时容器在 +2，数据卷中的标记仍在。验证：`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 中的新用例通过，自有资源已清理。
-- [ ] 1.3 published-loopback 模式改为：建本实例自有的带标签 bridge，容器固定在 +2，再把 3080 发布到 127.0.0.1 的随机端口；不接入平台。退役时删除这个 bridge 的条件与 network 模式相同。验证：`pnpm test:docker platform/test/container-network.docker.test.ts`（published-loopback 用例所在文件）断言自有 bridge、+2 地址、仅回环发布，以及退役后网络不存在。
-- [ ] 1.4 更新 AGENTS.md 的环境说明：`PLATFORM_UPSTREAM_MODE` 两种模式的地址布局，published-loopback 下 RAGFlow 和 Office 不可用，阶段 1 存量实例保持运行到自然停止。验证：`pnpm lint:agents` 通过；exact-head 全量 `test:docker` 和 `test:deploy` 通过，清理已确认。
+- [x] 1.2a network 模式下，创建容器时用 `IPAMConfig` 把员工容器固定在 +2。创建后检查实际地址，与布局不符时按现有失配路径退役，数据卷保留。DSH 监听地址仍为 `0.0.0.0`。验证：单元测试覆盖创建请求体和地址不符的处理；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言新建容器在 +2。
+- [x] 1.2b 平台接入实例 bridge 时请求 +3，接入后检查实际地址，不符时按现有失配路径处理。平台重建后的对账修复：容器在 +2 的实例以 +3 补接平台；容器不在 +2 的阶段 1 存量实例按阶段 1 方式补接，不指定地址、接入后不按布局核对，也不因此失败或停止。验证：单元测试覆盖两类补接的请求体；`pnpm test:docker platform/test/container-network.docker.test.ts` 断言平台在 +3；`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 覆盖平台重建后两类实例的补接。
+- [x] 1.2c 阶段 1 存量实例的对账用例：用测试自有的方式造一个容器地址不在 +2 的运行中实例，在删除并重建 stand-in 平台后（或所造实例尚未接入平台时）运行新版对账，使对账走到 `restorePlatform` 的 connect。断言它保持运行、可经网关访问、没有新增审计，connect 请求体不带 `EndpointConfig`，补接后的平台端点没有 `IPAMConfig` 且地址在 (基址, 基址+15) 内；随后以空闲或管理员方式停止它，再次启动时容器在 +2，数据卷中的标记仍在。验证：`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 中的新用例通过，自有资源已清理。
+- [x] 1.3 published-loopback 模式改为：建本实例自有的带标签 bridge，容器固定在 +2，再把 3080 发布到 127.0.0.1 的随机端口；不接入平台。退役时删除这个 bridge 的条件与 network 模式相同。验证：`pnpm test:docker platform/test/container-network.docker.test.ts`（published-loopback 用例所在文件）断言自有 bridge、+2 地址、仅回环发布，以及退役后网络不存在。
+- [x] 1.4 更新 AGENTS.md 的环境说明：`PLATFORM_UPSTREAM_MODE` 两种模式的地址布局，published-loopback 下 RAGFlow 和 Office 不可用，阶段 1 存量实例保持运行到自然停止。验证：`pnpm lint:agents` 通过；exact-head 全量 `test:docker` 和 `test:deploy` 通过，清理已确认。
 
 Suggested fixture level: expanded - 关键路径，改变每个实例的网络创建和对账，失配处理涉及数据卷保留，还要兼容阶段 1 存量实例
 Minimal mergeable slice: 1.1 地址布局纯函数和单元测试单独合入（没有调用方之前不改变任何运行行为）
@@ -161,8 +161,8 @@ Evidence (8.1–8.2): 修复点——把 `worker()` 里的 `importlib.util.spec_
 
 依赖：无。Stage 5 新建 issue。
 
-- [ ] 9.1 `platform/test/e2e-engine-fixture.py:513` 的 `capture()` 中，读 `/proc/<pid>/ns/net` 遇到 `ENOENT`/`ESRCH` 时，先重新核对出生身份，确认进程已经退出，才在本次观察中跳过这个候选。只有它的所有检查都完成后，才记录它的根目录和命名空间结论。仍存在的进程照常检查，权限错误仍然失败。验证：Docker-free 的 fixture 测试注入两次读取之间进程退出的情形，断言跳过；注入权限错误时断言失败。
-- [ ] 9.2 验证：exact-head 全量 `test:docker` 中 `e2e-engine.docker.test.ts` 通过，清理已确认。
+- [x] 9.1 `platform/test/e2e-engine-fixture.py:513` 的 `capture()` 中，读 `/proc/<pid>/ns/net` 遇到 `ENOENT`/`ESRCH` 时，先重新核对出生身份，确认进程已经退出，才在本次观察中跳过这个候选。只有它的所有检查都完成后，才记录它的根目录和命名空间结论。仍存在的进程照常检查，权限错误仍然失败。验证：Docker-free 的 fixture 测试注入两次读取之间进程退出的情形，断言跳过；注入权限错误时断言失败。
+- [x] 9.2 验证：exact-head 全量 `test:docker` 中 `e2e-engine.docker.test.ts` 通过，清理已确认。
 
 Suggested fixture level: compact - 验证 fixture 的观察逻辑，身份核验不放宽
 Minimal mergeable slice: atomic: 只改一个函数，加它的回归测试
@@ -173,7 +173,7 @@ Evidence (9.1–9.2): **现状**（`platform/test/e2e-engine-fixture.py`）：`c
 
 依赖：4。
 
-- [ ] 10.1 新增根脚本 `pnpm test:stack`，先做前提检查，任何一项不满足就在创建资源前失败：
+- [x] 10.1 新增根脚本 `pnpm test:stack`，先做前提检查，任何一项不满足就在创建资源前失败：
   - 主机是 macOS arm64，本机 Docker 可用；
   - `docker info` 报告的 MemTotal ≥ 14 GiB；
   - 私有配置文件存在，归当前用户所有且权限为 0600；
@@ -183,16 +183,16 @@ Evidence (9.1–9.2): **现状**（`platform/test/e2e-engine-fixture.py`）：`c
 
   验证：Docker-free 的集成测试覆盖每一种前提缺失时的拒绝（包括 MemTotal 为 13.9 GiB 时拒绝），且错误信息里没有配置内容；`pnpm lint:shell` 通过。
 
-- [ ] 10.2 新增种子脚本，只对私有配置中的本机 RAGFlow 写入。它建立固定的 3 个库和少量小文件并解析；已经存在的不重复上传或解析；地址与配置不一致时拒绝执行。验证：对本机测试栈连续运行两次，第二次没有上传或解析请求；用一个与配置不一致的地址运行时被拒绝。
-- [ ] 10.3 首个端到端用例：在本机构建平台和员工镜像，用交付的 compose 拉起平台（16.1 合入后，本机通道为 compose 注入本次运行自有、每次新生成的非机密 `DOCUMENT_SERVER_JWT_SECRET`，不进入日志和报告），检查 health，并确认种子数据可读。验证：`pnpm test:stack` 在干净检出上通过，事后没有自有资源残留，RAGFlow 测试栈不变。
-- [ ] 10.4 建立本机浏览器和模型运行时：
+- [x] 10.2 新增种子脚本，只对私有配置中的本机 RAGFlow 写入。它建立固定的 3 个库和少量小文件并解析；已经存在的不重复上传或解析；地址与配置不一致时拒绝执行。验证：对本机测试栈连续运行两次，第二次没有上传或解析请求；用一个与配置不一致的地址运行时被拒绝。
+- [x] 10.3 首个端到端用例：在本机构建平台和员工镜像，用交付的 compose 拉起平台（16.1 合入后，本机通道为 compose 注入本次运行自有、每次新生成的非机密 `DOCUMENT_SERVER_JWT_SECRET`，不进入日志和报告），检查 health，并确认种子数据可读。验证：`pnpm test:stack` 在干净检出上通过，事后没有自有资源残留，RAGFlow 测试栈不变。
+- [x] 10.4 建立本机浏览器和模型运行时：
   - 浏览器用仓库已钉定的 Playwright Chromium 1.63（arm64），经平台网关登录员工、打开真实 DSH 工作台，保留截图并收集控制台错误；
   - 对话模型用测试自有的确定性 provider（经管理员 model-config 调用的 `platform/test/deployment-model-wire.ts`，复用第 3 组和 `office-delegation` 已有确定性协议适配器的脚本约定），由它驱动工具调用和写文件；子 Agent 委派由任务 15.4 扩展同一 provider 承接；
   - 管理员模型配置在用例中指向这个 provider，不调用外部模型。
 
   验证：`pnpm test:stack` 中的用例让员工发一条消息，确定性 provider 收到请求、工作台显示回复、Agent 按脚本写出一个文件；截图留存，零意外控制台错误，没有发往外部模型的请求。
 
-- [ ] 10.5 补充文档：
+- [x] 10.5 补充文档：
   - 本机 RAGFlow 测试栈（`infiniflow/ragflow:v1.0.0-rc2`）的部署步骤和私有配置文件格式；
   - AGENTS.md 验证矩阵新增 `test:stack` 一行，写明它用 Playwright Chromium 经网关驱动真实 DSH、模型是确定性 provider，是本机功能证据通道，不是隔离 CfT 通道，不提供隔离证据；`constraints.yaml` 的 `verification` 同步；
   - 证据评论的格式。
@@ -219,7 +219,7 @@ Evidence (10.4，#402): **现状**：`deployment-model-wire.ts`（89 行）只�
 
 依赖：2、4。关键路径 `images/dsh-user/`（11.1 目录文件、11.2 profile 初始副本），以及 `platform/src/orchestrator/`（11.4 把目录、安装源和联网工具设置传入启动时的覆盖层输入）。
 
-- [ ] 11.1 新增 `images/dsh-user/catalog.json`，列出每个预装项的标识、包名、中文名、类别和镜像默认值。当前的预装项是：受管必启项 `platform-nav`、`permission-tiers`、`zh-locale`；可管理项办公 Agent bundle。后续组加入的插件在各自的组里登记。
+- [x] 11.1 新增 `images/dsh-user/catalog.json`，列出每个预装项的标识、包名、中文名、类别和镜像默认值。当前的预装项是：受管必启项 `platform-nav`、`permission-tiers`、`zh-locale`；可管理项办公 Agent bundle。后续组加入的插件在各自的组里登记。
   - 预装项的定义：镜像构建在 DSH 发行包之外额外加入的仓库插件、第三方全局包和办公 Agent bundle。DSH 发行包自带的 bundle 不在目录内。
   - 枚举来源：镜像的全局 npm 顶层包，减去只装 DSH 的构建阶段记录下来的全局包集合；加上 `/opt/dsh-team/` 下的仓库插件；加上 profile 初始副本中登记的办公 bundle。
   - 对比方法：按包名集合比较目录和枚举结果，任一方向多出都让构建失败，并列出差异。
@@ -227,15 +227,15 @@ Evidence (10.4，#402): **现状**：`deployment-model-wire.ts`（89 行）只�
 
   验证：用户镜像 Docker 用例中，目录缺一项时构建失败、镜像多装一个全局包时构建失败，两者都列出差异；DSH 发行包自带的 bundle 不触发失败；平台镜像用例能读到与用户镜像逐字节相同的清单。
 
-- [ ] 11.2 profile 初始副本把每个预装项登记成 DSH 0.2.1 视为「已安装」的形式（按 `listBundles` 核实），使员工插件页每项都有开关卡片，办公 Agent bundle 也在内。验证：首次使用的浏览器用例截图中，每个清单项都有卡片。
-- [ ] 11.3 新增设置迁移：可管理项的三态（初始 `employee`）、安装源列表、仓库探测、联网工具开关。安装源和仓库探测的初始值取 DSH 0.2.1-rc.2 的默认值（默认公共源列表、探测开启），单元测试钉住这份值。新增三组后台接口，body 读完后重新核对当前管理员，保存和审计在同一事务里：
+- [x] 11.2 profile 初始副本把每个预装项登记成 DSH 0.2.1 视为「已安装」的形式（按 `listBundles` 核实），使员工插件页每项都有开关卡片，办公 Agent bundle 也在内。验证：首次使用的浏览器用例截图中，每个清单项都有卡片。
+- [x] 11.3 新增设置迁移：可管理项的三态（初始 `employee`）、安装源列表、仓库探测、联网工具开关。安装源和仓库探测的初始值取 DSH 0.2.1-rc.2 的默认值（默认公共源列表、探测开启），单元测试钉住这份值。新增三组后台接口，body 读完后重新核对当前管理员，保存和审计在同一事务里：
   - `GET/PUT /_platform/api/admin/plugin-catalog` → `plugin-catalog.updated`；受管必启项固定为 `forced-on`，提交其他状态返回 400；
   - `GET/PUT /_platform/api/admin/plugin-sources`（安装源和仓库探测一个保存单元）→ `plugin-sources.updated`；
   - `GET/PUT /_platform/api/admin/web-tools` → `web-tools.updated`。
 
   验证：集成测试覆盖权限、校验（包括必启项的 400）、回滚和审计，以及迁移账本断言；`pnpm contract:check` 通过。
 
-- [ ] 11.4 覆盖层生成器按设置输出：
+- [x] 11.4 覆盖层生成器按设置输出：
   - 受管必启项总是写为启用；
   - `forced-on`、`forced-off` 的项写入启用状态，`employee` 不写；
   - 总是写出安装源列表和仓库探测开关，替换第 2 组保留的钉死值；
@@ -243,10 +243,10 @@ Evidence (10.4，#402): **现状**：`deployment-model-wire.ts`（89 行）只�
 
   验证：生成器单元测试覆盖每种组合，包括初始设置下输出的安装源等于 DSH 默认值、探测开启；相同输入得到逐字节相同的输出。
 
-- [ ] 11.4b 员工插件页强制状态的锁定显示（#509）：覆盖层把强制项的有效状态随 `platform-nav` 行的 `config` 发布；`platform-nav` 客户端半边据此在 DSH 插件页把强制项显示为锁定的开或关并标明「由管理员设定」，员工点不到原生开关。验证：platform-nav 单元测试覆盖三态与无状态；`pnpm test:docker` 的 first-use 插件页用例断言三张必启项卡片锁定开启、办公 bundle 在 `employee` 下仍可切换，截图留存。
+- [x] 11.4b 员工插件页强制状态的锁定显示（#509）：覆盖层把强制项的有效状态随 `platform-nav` 行的 `config` 发布；`platform-nav` 客户端半边据此在 DSH 插件页把强制项显示为锁定的开或关并标明「由管理员设定」，员工点不到原生开关。验证：platform-nav 单元测试覆盖三态与无状态；`pnpm test:docker` 的 first-use 插件页用例断言三张必启项卡片锁定开启、办公 bundle 在 `employee` 下仍可切换，截图留存。
 
-- [ ] 11.5 后台「插件目录」页：必启项显示为锁定的强制开；可管理项的三态选择；安装源和仓库探测一个保存区；联网工具开关另一个保存区；提示「实例下次启动生效」。验证：`pnpm test:ui` 中真实接口的保存效果、权限拒绝和截图都通过。
-- [ ] 11.6 Docker 浏览器用例：
+- [x] 11.5 后台「插件目录」页：必启项显示为锁定的强制开；可管理项的三态选择；安装源和仓库探测一个保存区；联网工具开关另一个保存区；提示「实例下次启动生效」。验证：`pnpm test:ui` 中真实接口的保存效果、权限拒绝和截图都通过。
+- [x] 11.6 Docker 浏览器用例：
   - 必启项锁定且开启；`forced-off` 的项锁定且关闭，`forced-on` 的项锁定且开启，`employee` 的项可以切换且不影响他人；
   - 打开联网工具并重启实例后，Agent 的工具中出现这两类工具；
   - 出口观测：用测试自有的 npm registry 替身作为安装源、关闭仓库探测并重启实例，观察到实例只向替身发请求，没有发往公共仓库的探测；
@@ -303,9 +303,9 @@ Evidence (12.2): 生成与注入——`createInstance` 在生成文件令牌密�
 
 依赖：10（RAGFlow 相关 PR 的本机证据）。
 
-- [ ] 13.1 新增设置迁移，保存 RAGFlow 地址、密钥和检索参数：top_k、相似度阈值、关键词权重、rerank。新增后台接口 `GET/PUT /_platform/api/admin/ragflow-config`（审计 `ragflow-config.updated`）和 `GET/PUT /_platform/api/admin/retrieval-config`（审计 `retrieval-config.updated`）：密钥只返回「已配置」，省略时保留原值，空值拒绝；保存与审计同在一个事务内。密钥加入日志脱敏。验证：集成测试覆盖校验、权限、回滚、审计和迁移账本；`pnpm contract:check` 通过。
-- [ ] 13.2 「测试连接」接口 `POST /_platform/api/admin/ragflow-config/test` 调用版本接口，再用已存密钥做一次只读库列表查询验证密钥（design 决定 3），按响应体 `code` 判断成败，不写审计。请求固定超时、不跟随重定向、限制响应体大小；结果为 `ok` 或 `not-configured`、`unavailable`、`timeout`、`upstream-error` 之一，不含上游内容和密钥。`ok` 时回应带版本字符串（不超过 64 个字符的可打印 ASCII），版本缺失、类型不对或超长时结果为 `upstream-error`，失败结果不带版本。验证：集成测试用自有的假 RAGFlow HTTP 服务覆盖成功（回应含版本）、版本缺失、版本非字符串、版本超长、HTTP 200 加非零 code、密钥被拒、超时、拒绝连接、重定向，并断言审计行数不变，回应中没有地址和密钥。
-- [ ] 13.3 后台「知识库」页：连接配置、检索参数、测试连接（每个结果取值一条不同的中文说明，成功时显示 RAGFlow 版本），提示「保存即生效」。验证：`pnpm test:ui` 通过，断言成功结果显示版本，有截图。
+- [x] 13.1 新增设置迁移，保存 RAGFlow 地址、密钥和检索参数：top_k、相似度阈值、关键词权重、rerank。新增后台接口 `GET/PUT /_platform/api/admin/ragflow-config`（审计 `ragflow-config.updated`）和 `GET/PUT /_platform/api/admin/retrieval-config`（审计 `retrieval-config.updated`）：密钥只返回「已配置」，省略时保留原值，空值拒绝；保存与审计同在一个事务内。密钥加入日志脱敏。验证：集成测试覆盖校验、权限、回滚、审计和迁移账本；`pnpm contract:check` 通过。
+- [x] 13.2 「测试连接」接口 `POST /_platform/api/admin/ragflow-config/test` 调用版本接口，再用已存密钥做一次只读库列表查询验证密钥（design 决定 3），按响应体 `code` 判断成败，不写审计。请求固定超时、不跟随重定向、限制响应体大小；结果为 `ok` 或 `not-configured`、`unavailable`、`timeout`、`upstream-error` 之一，不含上游内容和密钥。`ok` 时回应带版本字符串（不超过 64 个字符的可打印 ASCII），版本缺失、类型不对或超长时结果为 `upstream-error`，失败结果不带版本。验证：集成测试用自有的假 RAGFlow HTTP 服务覆盖成功（回应含版本）、版本缺失、版本非字符串、版本超长、HTTP 200 加非零 code、密钥被拒、超时、拒绝连接、重定向，并断言审计行数不变，回应中没有地址和密钥。
+- [x] 13.3 后台「知识库」页：连接配置、检索参数、测试连接（每个结果取值一条不同的中文说明，成功时显示 RAGFlow 版本），提示「保存即生效」。验证：`pnpm test:ui` 通过，断言成功结果显示版本，有截图。
 
 Suggested fixture level: expanded - 新增外部凭据的保管和后台写入口
 Minimal mergeable slice: 13.1 设置和接口单独合入（还没有消费者，不改变运行行为）
@@ -941,16 +941,16 @@ Evidence (13.3 后台「知识库」页，#412):
 
 依赖：1（来源 IP 核对需要 +2 地址）、10（含 10.2 种子）、12、13。
 
-- [ ] 14.1 新增 `platform/src/ragflow-proxy/` 模块和实例专用前缀 `/_platform/instance-api/ragflow/`，先只有鉴权和 `GET version` 路由及其 schema。
+- [x] 14.1 新增 `platform/src/ragflow-proxy/` 模块和实例专用前缀 `/_platform/instance-api/ragflow/`，先只有鉴权和 `GET version` 路由及其 schema。
   - 该前缀在网关保留路径下，不要求平台会话，不转发给 DSH；它不在 `/_platform/api/` 下，不受 Origin/JSON 变更守卫约束，由 Bearer 鉴权代替。
   - 鉴权只认 Bearer 实例令牌，按令牌哈希找到运行中的实例行，并核对来源 IP 等于该实例的 +2 地址。
   - AGENTS.md 记录这个前缀是 Origin/JSON 守卫的例外及其理由。
 
   验证：集成测试覆盖有效令牌、平台会话被拒、旧令牌被拒、他人 IP 被拒、无令牌无 Origin 的 POST 被拒，所有拒绝都是不区分原因的 401；网关不把该前缀重定向到登录页或转发给 DSH；前缀下未声明的路径和方法返回 404 或 405；`pnpm contract:check`、`pnpm lint:agents` 通过。
 
-- [ ] 14.2 `GET datasets` 库列表路由：schema、按每次请求读取的设置调用 RAGFlow、按 `code` 映射结果取值、未配置时返回 `not-configured` 且不发外部请求。验证：集成测试用自有的假 RAGFlow 服务覆盖成功、未配置、HTTP 200 加非零 code、超时、拒绝连接。
-- [ ] 14.3 `GET datasets/{id}/documents` 库内文件路由：schema、分页参数校验、结果映射同 14.2。验证：集成测试覆盖成功、分页、非法 ID 和参数的 `invalid-request`、上游错误映射。
-- [ ] 14.4 `POST retrieval` 检索路由：
+- [x] 14.2 `GET datasets` 库列表路由：schema、按每次请求读取的设置调用 RAGFlow、按 `code` 映射结果取值、未配置时返回 `not-configured` 且不发外部请求。验证：集成测试用自有的假 RAGFlow 服务覆盖成功、未配置、HTTP 200 加非零 code、超时、拒绝连接。
+- [x] 14.3 `GET datasets/{id}/documents` 库内文件路由：schema、分页参数校验、结果映射同 14.2。验证：集成测试覆盖成功、分页、非法 ID 和参数的 `invalid-request`、上游错误映射。
+- [x] 14.4 `POST retrieval` 检索路由：
   - 要求 JSON 请求体，否则 415；
   - 请求体带检索参数字段时拒绝为 `invalid-request`；
   - 每次请求读取最新设置；
@@ -962,7 +962,7 @@ Evidence (13.3 后台「知识库」页，#412):
 
   验证：集成测试用自有的假 RAGFlow 服务逐条覆盖 `ragflow-proxy` spec 中检索相关的场景。
 
-- [ ] 14.5 本机通道用例：用真实 RAGFlow 种子数据分别调用四个接口；管理员修改参数后立即生效；停掉 RAGFlow 后平台其他功能照常、代理返回 `unavailable`。验证：`pnpm test:stack` 通过，并贴出证据评论。
+- [x] 14.5 本机通道用例：用真实 RAGFlow 种子数据分别调用四个接口；管理员修改参数后立即生效；停掉 RAGFlow 后平台其他功能照常、代理返回 `unavailable`。验证：`pnpm test:stack` 通过，并贴出证据评论。
 
 Suggested fixture level: expanded - 新的对外数据通道，包括鉴权、越界和错误映射
 Minimal mergeable slice: 14.1 鉴权加版本查询路由单独合入（只读、无检索，可以独立验证）
@@ -1755,10 +1755,10 @@ Evidence (14.5 本机通道 RAGFlow 代理用例，#417):
 
 依赖：4、10（含 10.2 种子和 10.4 本机浏览器）、11、14。关键路径 `images/dsh-user/`（15.1 镜像交付）。
 
-- [ ] 15.1 新建 `plugins/knowledge-base/`，包含 host 和 client 两半、`engines.dsh` 和成对单元测试。插件以 root 所有、只读的方式随用户镜像交付，并作为可管理项加入 `catalog.json`；三处探测构建和文档中的构建示例都加入 BuildKit 命名上下文。覆盖层在网络方式下给插件平台地址（+3 加平台端口），published-loopback 下不给；插件启用状态只服从目录三态。验证：用户镜像 Docker 用例断言插件只读、已加载，环境、覆盖层和插件目录中都没有 RAGFlow 密钥；生成器单元测试覆盖三种目录状态和两种上游方式。
-- [ ] 15.2 左侧栏「知识库」面板：库列表、展开文件、搜索、筛选、分页、刷新，以及加载中、空库、无匹配、失败可重试、知识库未配置五种状态。浏览器请求经插件自己的路由转发到代理。验证：插件单元测试覆盖状态机和取值到状态的映射；本机通道 Playwright 用例在真实种子数据上通过，并有截图，包括未配置 RAGFlow 时的「知识库未配置」。
-- [ ] 15.3 输入区范围控件：多选、全选、取消全选；选择记在 Session 日志中（经插件命令的 `command/run`/`command/done`，见下方 #420 fixture），新 Session 默认全选；提交时快照本轮范围（在 `turn/start` 折叠）。验证：单元测试覆盖快照语义；本机通道 Playwright 用例用确定性 provider 驱动任务，覆盖刷新和重开后恢复、两个 Session 互相独立、提交后修改不影响进行中的任务。
-- [ ] 15.4 检索工具：沿父 Session 回溯到根 Session，取本轮快照；范围为空时不发请求；展示来源；对被剔除的库、`no-results` 和每个失败取值分别给出互不相同的中文提示。验证：单元测试覆盖回溯和六种取值的提示；本机通道用例由确定性 provider 驱动综合办公委派给子 Agent 并调用检索，断言范围不变，以及删除一个库后出现提示。
+- [x] 15.1 新建 `plugins/knowledge-base/`，包含 host 和 client 两半、`engines.dsh` 和成对单元测试。插件以 root 所有、只读的方式随用户镜像交付，并作为可管理项加入 `catalog.json`；三处探测构建和文档中的构建示例都加入 BuildKit 命名上下文。覆盖层在网络方式下给插件平台地址（+3 加平台端口），published-loopback 下不给；插件启用状态只服从目录三态。验证：用户镜像 Docker 用例断言插件只读、已加载，环境、覆盖层和插件目录中都没有 RAGFlow 密钥；生成器单元测试覆盖三种目录状态和两种上游方式。
+- [x] 15.2 左侧栏「知识库」面板：库列表、展开文件、搜索、筛选、分页、刷新，以及加载中、空库、无匹配、失败可重试、知识库未配置五种状态。浏览器请求经插件自己的路由转发到代理。验证：插件单元测试覆盖状态机和取值到状态的映射；本机通道 Playwright 用例在真实种子数据上通过，并有截图，包括未配置 RAGFlow 时的「知识库未配置」。
+- [x] 15.3 输入区范围控件：多选、全选、取消全选；选择记在 Session 日志中（经插件命令的 `command/run`/`command/done`，见下方 #420 fixture），新 Session 默认全选；提交时快照本轮范围（在 `turn/start` 折叠）。验证：单元测试覆盖快照语义；本机通道 Playwright 用例用确定性 provider 驱动任务，覆盖刷新和重开后恢复、两个 Session 互相独立、提交后修改不影响进行中的任务。
+- [x] 15.4 检索工具：沿父 Session 回溯到根 Session，取本轮快照；范围为空时不发请求；展示来源；对被剔除的库、`no-results` 和每个失败取值分别给出互不相同的中文提示。验证：单元测试覆盖回溯和六种取值的提示；本机通道用例由确定性 provider 驱动综合办公委派给子 Agent 并调用检索，断言范围不变，以及删除一个库后出现提示。
 
 Suggested fixture level: expanded - 新插件，涉及 Session 状态、子 Agent 继承和外部数据展示
 Minimal mergeable slice: 15.1 插件骨架和镜像交付单独合入（没有界面和工具，不影响现有行为）
@@ -2341,11 +2341,11 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
 
 依赖：1、10（Office 相关 PR 的本机证据）。关键路径 `platform/src/orchestrator/`（16.3）。
 
-- [ ] 16.1 `deploy/compose.yml` 新增 `documentserver` 服务：9.4.0、固定容器名 `dsh-team-documentserver`、开启 JWT、运营方字体只读挂载、不发布宿主端口、设置 `ALLOW_PRIVATE_IP_ADDRESS=true`。`.env.example` 新增有效赋值 `DOCUMENT_SERVER_JWT_SECRET=`（空值，不放任何密钥或占位密钥），注释写明 compose 部署必须填写、留空时 compose 启动前失败。compose 照 `PLATFORM_CONTAINER_NAME` 的先例把容器名写成字面量：`documentserver` 的 `container_name` 和传给平台的 `DOCUMENT_SERVER_CONTAINER_NAME` 都是 `dsh-team-documentserver`；JWT 以 `${DOCUMENT_SERVER_JWT_SECRET:?…}` 必填插值，同时传给 Document Server 和平台。`pnpm test:deploy` 在 VPS 上用自有的小替身镜像代替 Document Server：VPS 磁盘放不下 8.7 GB 的镜像，真实镜像只在本机通道上运行。`platform/test/deployment-fixture.ts` 把 `.env.example` 解析后写入 `--env-file`，示例中的空 JWT 会让 `:?` 插值失败，所以夹具在正常用例中注入本次调用自有、每次新生成的非机密 JWT（不来自任何真实密钥，不进入日志和报告）；只有下面的未设置或为空用例不注入。`scripts/check-config.mjs` 目前只核对 `PLATFORM_*` 读取和 `DEPLOY_*` 插值，本任务把 compose 中的 `DOCUMENT_SERVER_*` 插值纳入核对，`pnpm test:guardrails` 增加未列出和未消费两个拒绝用例。验证：`pnpm lint:config` 通过（`DOCUMENT_SERVER_JWT_SECRET` 计为 compose 插值；compose 中的容器名是字面量，不计入插值）；`pnpm test:guardrails` 通过；`pnpm test:deploy` 断言这个服务没有发布端口、平台收到的容器名是该字面量、Document Server 和平台收到的 JWT 都是夹具注入的值，并新增用例：`.env` 中 `DOCUMENT_SERVER_JWT_SECRET` 未设置或为空时，启动命令在创建任何容器前失败、错误指出该变量、不留下自有资源；自有资源都已清理。 「JWT 未设置」用例要从夹具的环境中删除该键，而不只是不注入（示例文件本身带有空值行）。
-- [ ] 16.2a 平台启动时读取并校验两项 Document Server 输入，平台不为容器名提供默认值：两项都不存在为「自带未配置」，平台照常启动；只存在一项，或任一项显式为空时，在监听前失败并指出配置项，不回显取值，空值不当作未配置。现有 test、e2e、UI 入口自己构造环境、不读 `.env`，不新增变量。读取 `.env` 的本地入口（`pnpm dev`、`pnpm dev:bg`、`pnpm start`）照原样复制示例时，带非空容器名和空 JWT，按设计在监听前失败并指出 `DOCUMENT_SERVER_JWT_SECRET`；本地运行须删去两行（Office 不可用）或两项都填非空值。`.env.example` 在同一变更中新增有效赋值 `DOCUMENT_SERVER_CONTAINER_NAME=dsh-team-documentserver`（取值与 compose 字面量相同），注释写明容器名由 compose 固定；文件开头的复制说明写明：不经 compose 的本地运行要么删去两行 Document Server 配置，要么两项都填非空值，原样复制会因空 JWT 启动失败。JWT 加入日志脱敏。`scripts/check-config.mjs` 同时接受并核对配置模块中字面量的 `DOCUMENT_SERVER_*` 读取。同一变更更新 AGENTS.md：Environment 中 `lint:config` 的说明从「平台读取」和「只给 Compose 的插值」两类改为三类，新增平台读取与 compose 插值共用的 `DOCUMENT_SERVER_*`（`DOCUMENT_SERVER_CONTAINER_NAME` 只计平台读取，compose 中是字面量；`DOCUMENT_SERVER_JWT_SECRET` 两边都计）；「Copy it to `.env`」和本地运行说明写明不经 compose 时删去两行或两项都填，原样复制会在监听前失败。验证：配置单元测试和集成测试覆盖都不存在（照常启动、Office 不可用）、都给出非空值、只存在容器名、只存在 JWT、容器名为空、JWT 为空、两项都为空，失败用例断言错误指出对应变量且不含取值、监听前退出；配置测试读取仓库中真实的 `.env.example`：原样载入时平台在监听前失败、错误指出 `DOCUMENT_SERVER_JWT_SECRET` 且不含取值，删去两行后照常启动且 Office 不可用；`pnpm lint:config` 通过（`DOCUMENT_SERVER_CONTAINER_NAME` 计为平台读取，`DOCUMENT_SERVER_JWT_SECRET` 同时计为平台读取和 compose 插值）；`pnpm test:guardrails` 通过；`pnpm lint:agents` 通过。 同一变更同步 `constraints.yaml` 中 `lint:config` 的 description，写入第三类 `DOCUMENT_SERVER_*`。
-- [ ] 16.2b 外部 Document Server 设置：新增迁移保存外部地址和 JWT；后台 `GET/PUT /_platform/api/admin/document-server`，返回当前模式和自带配置是否齐全，JWT 只显示「已配置」；切回自带时清除外部值；保存和审计 `document-server-config.updated` 同在一个事务内。验证：集成测试覆盖权限、校验、保存、切回、回滚、审计和迁移账本；`pnpm contract:write` 后 `pnpm contract:check` 通过。
-- [ ] 16.2c 后台「Office」页：显示当前模式、自带配置是否齐全（未配置时显示 Office 不可用），可填写外部地址和 JWT 或切回自带，提示「实例下次启动生效」。验证：`pnpm test:ui` 通过，有截图。
-- [ ] 16.3 编排器接入 Document Server：
+- [x] 16.1 `deploy/compose.yml` 新增 `documentserver` 服务：9.4.0、固定容器名 `dsh-team-documentserver`、开启 JWT、运营方字体只读挂载、不发布宿主端口、设置 `ALLOW_PRIVATE_IP_ADDRESS=true`。`.env.example` 新增有效赋值 `DOCUMENT_SERVER_JWT_SECRET=`（空值，不放任何密钥或占位密钥），注释写明 compose 部署必须填写、留空时 compose 启动前失败。compose 照 `PLATFORM_CONTAINER_NAME` 的先例把容器名写成字面量：`documentserver` 的 `container_name` 和传给平台的 `DOCUMENT_SERVER_CONTAINER_NAME` 都是 `dsh-team-documentserver`；JWT 以 `${DOCUMENT_SERVER_JWT_SECRET:?…}` 必填插值，同时传给 Document Server 和平台。`pnpm test:deploy` 在 VPS 上用自有的小替身镜像代替 Document Server：VPS 磁盘放不下 8.7 GB 的镜像，真实镜像只在本机通道上运行。`platform/test/deployment-fixture.ts` 把 `.env.example` 解析后写入 `--env-file`，示例中的空 JWT 会让 `:?` 插值失败，所以夹具在正常用例中注入本次调用自有、每次新生成的非机密 JWT（不来自任何真实密钥，不进入日志和报告）；只有下面的未设置或为空用例不注入。`scripts/check-config.mjs` 目前只核对 `PLATFORM_*` 读取和 `DEPLOY_*` 插值，本任务把 compose 中的 `DOCUMENT_SERVER_*` 插值纳入核对，`pnpm test:guardrails` 增加未列出和未消费两个拒绝用例。验证：`pnpm lint:config` 通过（`DOCUMENT_SERVER_JWT_SECRET` 计为 compose 插值；compose 中的容器名是字面量，不计入插值）；`pnpm test:guardrails` 通过；`pnpm test:deploy` 断言这个服务没有发布端口、平台收到的容器名是该字面量、Document Server 和平台收到的 JWT 都是夹具注入的值，并新增用例：`.env` 中 `DOCUMENT_SERVER_JWT_SECRET` 未设置或为空时，启动命令在创建任何容器前失败、错误指出该变量、不留下自有资源；自有资源都已清理。 「JWT 未设置」用例要从夹具的环境中删除该键，而不只是不注入（示例文件本身带有空值行）。
+- [x] 16.2a 平台启动时读取并校验两项 Document Server 输入，平台不为容器名提供默认值：两项都不存在为「自带未配置」，平台照常启动；只存在一项，或任一项显式为空时，在监听前失败并指出配置项，不回显取值，空值不当作未配置。现有 test、e2e、UI 入口自己构造环境、不读 `.env`，不新增变量。读取 `.env` 的本地入口（`pnpm dev`、`pnpm dev:bg`、`pnpm start`）照原样复制示例时，带非空容器名和空 JWT，按设计在监听前失败并指出 `DOCUMENT_SERVER_JWT_SECRET`；本地运行须删去两行（Office 不可用）或两项都填非空值。`.env.example` 在同一变更中新增有效赋值 `DOCUMENT_SERVER_CONTAINER_NAME=dsh-team-documentserver`（取值与 compose 字面量相同），注释写明容器名由 compose 固定；文件开头的复制说明写明：不经 compose 的本地运行要么删去两行 Document Server 配置，要么两项都填非空值，原样复制会因空 JWT 启动失败。JWT 加入日志脱敏。`scripts/check-config.mjs` 同时接受并核对配置模块中字面量的 `DOCUMENT_SERVER_*` 读取。同一变更更新 AGENTS.md：Environment 中 `lint:config` 的说明从「平台读取」和「只给 Compose 的插值」两类改为三类，新增平台读取与 compose 插值共用的 `DOCUMENT_SERVER_*`（`DOCUMENT_SERVER_CONTAINER_NAME` 只计平台读取，compose 中是字面量；`DOCUMENT_SERVER_JWT_SECRET` 两边都计）；「Copy it to `.env`」和本地运行说明写明不经 compose 时删去两行或两项都填，原样复制会在监听前失败。验证：配置单元测试和集成测试覆盖都不存在（照常启动、Office 不可用）、都给出非空值、只存在容器名、只存在 JWT、容器名为空、JWT 为空、两项都为空，失败用例断言错误指出对应变量且不含取值、监听前退出；配置测试读取仓库中真实的 `.env.example`：原样载入时平台在监听前失败、错误指出 `DOCUMENT_SERVER_JWT_SECRET` 且不含取值，删去两行后照常启动且 Office 不可用；`pnpm lint:config` 通过（`DOCUMENT_SERVER_CONTAINER_NAME` 计为平台读取，`DOCUMENT_SERVER_JWT_SECRET` 同时计为平台读取和 compose 插值）；`pnpm test:guardrails` 通过；`pnpm lint:agents` 通过。 同一变更同步 `constraints.yaml` 中 `lint:config` 的 description，写入第三类 `DOCUMENT_SERVER_*`。
+- [x] 16.2b 外部 Document Server 设置：新增迁移保存外部地址和 JWT；后台 `GET/PUT /_platform/api/admin/document-server`，返回当前模式和自带配置是否齐全，JWT 只显示「已配置」；切回自带时清除外部值；保存和审计 `document-server-config.updated` 同在一个事务内。验证：集成测试覆盖权限、校验、保存、切回、回滚、审计和迁移账本；`pnpm contract:write` 后 `pnpm contract:check` 通过。
+- [x] 16.2c 后台「Office」页：显示当前模式、自带配置是否齐全（未配置时显示 Office 不可用），可填写外部地址和 JWT 或切回自带，提示「实例下次启动生效」。验证：`pnpm test:ui` 通过，有截图。
+- [x] 16.3 编排器接入 Document Server：
   - 每次启动把配置的容器名重新解析为当前容器 ID，身份核验通过后以 +4 接入实例 bridge，复用平台接入的路径和 fence；
   - 容器不存在或身份不符：不接入、该次启动的覆盖层不写 Office 配置、实例照常就绪，实例行记录安全原因；
   - 接入调用失败或结果无法确认：按现有启动失败路径处理；
@@ -2356,8 +2356,8 @@ Evidence (15.4 知识库检索工具与来源展示，#421):
 
   验证：单元测试覆盖每个分支；`pnpm test:docker` 用自有的替身容器断言：+4 接入和停止时断开；替身不存在或身份不符时实例照常就绪且没有 Office 配置；接入失败时启动失败；以自带启动、切到外部后停止，按记录断开；替身重建后已运行实例不被补接、新启动接入新容器；带 Document Server 端点的孤儿网络被回收。`pnpm test:docker platform/test/container-reconcile.docker.test.ts` 新增平台重启和平台容器重建两个用例：各有两个以自带模式启动的运行中实例，一个记录的替身端点仍在，另一个的替身端点已消失（替身已删除）；断言对账后两者都仍为运行且可经网关访问、没有额外启动或停止审计、没有补接或新增任何 Document Server 端点、平台端点在 +3（重建用例中由对账以 +3 补接），仍在的替身端点保留不变。现有 Docker 用例不需要 Document Server 前提：未配置时 Office 不可用，其余断言不变。
 
-- [ ] 16.4 `docs/DEPLOY.md` 补充：字体目录；compose 固定容器名、`.env` 必须填写 `DOCUMENT_SERVER_JWT_SECRET`（未填时 compose 启动前失败）；「两项都不填则 Office 不可用」只适用于不经 compose 的开发、测试入口，显式空值或只给一项会使平台启动失败，照原样复制示例的本地运行因此须删去两行或两项都填；Document Server 重建后已运行实例要重启才恢复 Office；外部 Document Server 的网络可达由运营方负责；阶段 1 的 compose 部署升级时要在 `.env` 新增 `DOCUMENT_SERVER_JWT_SECRET`。验证：文档中的命令照写可以运行。
-- [ ] 16.5 隔离验证和文档：更新隔离 Docker 用例，接入 Document Server 替身后每个实例网络恰好有员工容器、平台和替身三个端点，从 B 的实例访问 A 的 +2 地址 3080 和其他常见端口全部失败；部署文档的隔离一节写明 Document Server 的 JWT 在实例内可读、Document Server 是共享对端、插件安装和联网工具不改变隔离边界。验证：`pnpm test:docker platform/test/container-network.docker.test.ts` 通过；隔离一节与测试断言逐条对应。
+- [x] 16.4 `docs/DEPLOY.md` 补充：字体目录；compose 固定容器名、`.env` 必须填写 `DOCUMENT_SERVER_JWT_SECRET`（未填时 compose 启动前失败）；「两项都不填则 Office 不可用」只适用于不经 compose 的开发、测试入口，显式空值或只给一项会使平台启动失败，照原样复制示例的本地运行因此须删去两行或两项都填；Document Server 重建后已运行实例要重启才恢复 Office；外部 Document Server 的网络可达由运营方负责；阶段 1 的 compose 部署升级时要在 `.env` 新增 `DOCUMENT_SERVER_JWT_SECRET`。验证：文档中的命令照写可以运行。
+- [x] 16.5 隔离验证和文档：更新隔离 Docker 用例，接入 Document Server 替身后每个实例网络恰好有员工容器、平台和替身三个端点，从 B 的实例访问 A 的 +2 地址 3080 和其他常见端口全部失败；部署文档的隔离一节写明 Document Server 的 JWT 在实例内可读、Document Server 是共享对端、插件安装和联网工具不改变隔离边界。验证：`pnpm test:docker platform/test/container-network.docker.test.ts` 通过；隔离一节与测试断言逐条对应。
 
 Suggested fixture level: expanded - 新的部署组件、启动配置契约和编排器接入路径
 Minimal mergeable slice: 16.1 compose 服务和 JWT 变量单独合入（平台还不读取这两项，平台行为不变，原样复制示例的本地运行也照常启动；compose 部署从此必须在 `.env` 填写 `DOCUMENT_SERVER_JWT_SECRET`）
@@ -2896,10 +2896,10 @@ Evidence (16.5 Document Server 接入后的隔离验证与文档，#428):
 
 依赖：4、10（本机通道用例）、11。关键路径 `images/dsh-user/`。
 
-- [ ] 17.1 用户镜像安装 `dsh-better-sidebar@0.28.0`，不打补丁，并作为可管理项加入 `catalog.json`。版本不符时构建失败。验证：用户镜像 Docker 用例断言版本和目录一致；Docker 浏览器用例打开一个 docx，由 better-sidebar 的原生预览显示。
-- [ ] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
-- [ ] 17.3 HTML 预览沙箱（用户决定 2026-11-07：靠预览路由的 CSP，不钉 better-sidebar 配置）：`platform-nav` 客户端把 better-sidebar 的 `htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 两个开关显示为受管锁定。验证：platform-nav 单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明两个开关显示为受管锁定，经网关的预览文档带不含 `allow-same-origin` 的 CSP sandbox，HTML 预览中的脚本无法访问父页面；默认设置下点状态栏临时解锁后，以及员工在自己的 profile 中把两个键写为开启并重启实例后，结果不变。
-- [ ] 17.4 DOC、XLS、PPT 只读预览（#554 诊断，用户决定 2026-11-07：DSH 0.2.1 的 DOC/PPT 预览只用自带的 WASM 引擎在实例内转换，缺的是字体，不装 LibreOffice；XLS 由 DSH 的浏览器表格视图显示，不经转换）。分三部分：
+- [x] 17.1 用户镜像安装 `dsh-better-sidebar@0.28.0`，不打补丁，并作为可管理项加入 `catalog.json`。版本不符时构建失败。验证：用户镜像 Docker 用例断言版本和目录一致；Docker 浏览器用例打开一个 docx，由 better-sidebar 的原生预览显示。
+- [x] 17.2 文件区的「打包下载」。验证：本机通道的浏览器用例选中两个文件下载，压缩包内容与工作目录一致。
+- [x] 17.3 HTML 预览沙箱（用户决定 2026-11-07：靠预览路由的 CSP，不钉 better-sidebar 配置）：`platform-nav` 客户端把 better-sidebar 的 `htmlViewerNoSandbox`、`htmlViewerDefaultUnsafe` 两个开关显示为受管锁定。验证：platform-nav 单元测试；`pnpm test:docker` 中的 Docker 浏览器用例证明两个开关显示为受管锁定，经网关的预览文档带不含 `allow-same-origin` 的 CSP sandbox，HTML 预览中的脚本无法访问父页面；默认设置下点状态栏临时解锁后，以及员工在自己的 profile 中把两个键写为开启并重启实例后，结果不变。
+- [x] 17.4 DOC、XLS、PPT 只读预览（#554 诊断，用户决定 2026-11-07：DSH 0.2.1 的 DOC/PPT 预览只用自带的 WASM 引擎在实例内转换，缺的是字体，不装 LibreOffice；XLS 由 DSH 的浏览器表格视图显示，不经转换）。分三部分：
   - （镜像，#432）用户镜像装 `fonts-noto-cjk`、`fonts-dejavu-core`。验证：Docker 用例在 `--network none`、实例同等限制下，用 DSH 自带的引擎把 DOC、PPT、DOCX 转成含中文内容的 PDF；17.1 的 docx 交接用例改为断言转换成功（页数至少 1、没有缺字体提示），渲染成功的要求见 #565；记录镜像大小的变化。
   - （授权字体挂载，#561）部署配置授权字体目录时，平台把它只读挂载进每个实例的 `/usr/share/fonts/truetype/custom`。验证：Docker 用例证明实例内可读不可写，转换使用其中的字体；未配置时实例照常启动。
   - （本机预览，#433）本机通道 Playwright 用例分别打开 DOC、XLS、PPT，显示只读预览、没有编辑和保存入口，原文件字节不变。
@@ -3647,9 +3647,9 @@ Evidence (#556):
 
 依赖：10（含 10.4 本机浏览器）、11、12、16、17。关键路径 `images/dsh-user/`。
 
-- [ ] 18.1 用户镜像安装 `dsh-sidebar-onlyoffice@0.2.0`，作为可管理项加入 `catalog.json`，并用构建期补丁做两件事：文件令牌密钥改为读取 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，缺失或为空时拒绝签发和校验；文档 key 改为 `HMAC(文件令牌密钥, 原 key 输入)`，回调和编辑器打开只接受本实例密钥派生的 key。补丁钉住版本和输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Docker 用例在不注入该环境变量时直接请求 `file` 路由，任何令牌（包括公开常量签的）都被拒绝；注入后公开常量签的令牌和按原算法算出的 key 都被拒绝。
-- [ ] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
-- [ ] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
+- [x] 18.1 用户镜像安装 `dsh-sidebar-onlyoffice@0.2.0`，作为可管理项加入 `catalog.json`，并用构建期补丁做两件事：文件令牌密钥改为读取 `DSH_TEAM_ONLYOFFICE_FILE_SECRET`，缺失或为空时拒绝签发和校验；文档 key 改为 `HMAC(文件令牌密钥, 原 key 输入)`，回调和编辑器打开只接受本实例密钥派生的 key。补丁钉住版本和输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Docker 用例在不注入该环境变量时直接请求 `file` 路由，任何令牌（包括公开常量签的）都被拒绝；注入后公开常量签的令牌和按原算法算出的 key 都被拒绝。
+- [x] 18.2 覆盖层写入 ONLYOFFICE 配置，只在本次启动 Office 可用时写：Document Server 地址（+4 或外部地址）、`internalBaseUrl`（+2:3080）、`publicBaseUrl`、JWT。Office 不可用（自带未配置、本次未接入、published-loopback）时不写任何 Office 配置，并把 ONLYOFFICE 写为停用，不论目录状态；后台插件目录页显示原因。验证：生成器单元测试覆盖自带已接入、外部、自带未配置、本次未接入、published-loopback，以及三种目录状态下的 ONLYOFFICE 启用结果；`pnpm test:ui` 覆盖目录页的原因显示。
+- [x] 18.3 better-sidebar 构建期补丁：移植阶段 0 的 `verify/phase0/patch-better-sidebar.py` 为 Node 脚本，从 `HOST_OWNED_EXTS` 中只去掉 docx、xlsx、pptx。补丁钉住 0.28.0 和两个文件的输入、输出哈希，只认唯一一份真实副本，原子写入，归 root 所有。验证：集成测试覆盖版本不符、哈希不符、多个副本时的拒绝，以及拒绝时文件不变；用户镜像 Docker 用例断言补丁后的哈希；Office 不可用的实例打开 docx 得到只读预览。 实现与验证以第 43 节为准（用户决定 2026-11-10：条件接手，不静态删除）。
 - [x] 18.4 新建镜像插件 `plugins/office-hints/`（host 和 client 两半、`engines.dsh`、成对单元测试），作为受管必启项加入 `catalog.json`，以 root 所有、只读的方式交付，所有用户镜像构建入口加入 `office-hints` 命名上下文。它只在 ONLYOFFICE 生效时显示：编辑器中的人机同写提示原文（F40），以及没有 Session 时的中文提示。新建 `docs/EMPLOYEE_GUIDE.md`（先检索 `docs/` 确认没有已有的员工文档），写入这两条提示的含义。验证：单元测试覆盖显示条件；用户镜像 Docker 用例断言插件只读、已加载、ONLYOFFICE 包没有第二个补丁；本机通道 Playwright 用例看到同写提示原文；无 Session 提示由 `plugins/office-hints/client.test.js` 覆盖（发布版 UI 不可达，用户决定 2026-11-13，见第 48 节）。#439 合并后，由下一节 fixture 提交补结果时勾选本项（#438 的插件部分已合入）。
 - [x] 18.5 本机通道端到端用例（Playwright Chromium，Agent 动作由确定性 provider 驱动）：
   - DOCX、XLSX、PPTX 编辑保存后写回原文件，Agent 读到最新内容；
@@ -3662,7 +3662,7 @@ Evidence (#556):
   验证：`pnpm test:stack` 通过，并贴出证据评论。
 
 - [x] 18.6 **不适用**（用户决定 2026-11-19）：9.4.0 社区版没有连接上限，满员造不出来，见第 59 节。原文：先在本机通道制造 Document Server 满员，记录可观测的信号；再在 `office-hints` 中实现「编辑服务已满」提示，以及退回 17.4 的只读预览。验证：本机通道用例覆盖满员时的提示和预览；信号无法区分时停止并报告。
-- [ ] 18.7 实测编辑器打开期间 Agent（由确定性 provider 驱动）改写同一文件时的表现，写进 `docs/EMPLOYEE_GUIDE.md`；员工保存时遵守后写覆盖。验证：本机通道用例与文档描述一致。
+- [x] 18.7 实测编辑器打开期间 Agent（由确定性 provider 驱动）改写同一文件时的表现，写进 `docs/EMPLOYEE_GUIDE.md`；员工保存时遵守后写覆盖。验证：本机通道用例与文档描述一致。
 
 Suggested fixture level: expanded - 跨用户隔离和新的共享对端
 Minimal mergeable slice: 18.1 插件和补丁单独合入（插件路由会注册，但补丁保证缺少或不匹配密钥时 `file` 路由拒绝一切令牌；用直接请求 `file` 路由的拒绝测试证明，端到端证明在 18.5）
@@ -3799,7 +3799,7 @@ Minimal mergeable slice: atomic: 只有验证和记录，没有可合并的代�
 
 依赖：无。由 #568 承载，处理方式同第 6 组。
 
-- [ ] 20.1 `platform/test/admin-instances.integration.test.ts` 的泄漏检查中，种子端口 `49173` 对日志行的检查不再受日志运行时字段的取值影响；对响应正文的检查和其他密钥的检查不变。验证：Docker-free 用例证明日志运行时字段含 `49173` 时不误报，`msg` 或其他字段、响应正文含 `49173` 时仍然失败。
+- [x] 20.1 `platform/test/admin-instances.integration.test.ts` 的泄漏检查中，种子端口 `49173` 对日志行的检查不再受日志运行时字段的取值影响；对响应正文的检查和其他密钥的检查不变。验证：Docker-free 用例证明日志运行时字段含 `49173` 时不误报，`msg` 或其他字段、响应正文含 `49173` 时仍然失败。
 
 Suggested fixture level: compact - 只改一个测试的断言方式，产品代码不变
 Minimal mergeable slice: atomic: 一个测试文件加一个小 helper
@@ -3827,7 +3827,7 @@ Must preserve：`:59` 的种子值，以及 `:150-166` 列表中其他各项和�
 
 依赖：无。由 #508 承载，处理方式同第 6 组。issue 正文同步改为本节的清单与验收。
 
-- [ ] 21.1 `platform/test/admin-config-fixture.ts` 的 `putConfig` 增加可选的来源地址，`payload` 放宽为 `unknown`：字符串原样发送，其他值先 `JSON.stringify` 再发送。下面清单中的 14 处注入改为调用它。验证：所有 `source_address` 断言不变且通过；`grep -n "method: 'PUT'" platform/src/admin/*.test.ts` 只剩下面的保留项；`pnpm test`（每文件 80% 覆盖率）、`pnpm lint`、`pnpm typecheck`、`pnpm dead-code` 通过。
+- [x] 21.1 `platform/test/admin-config-fixture.ts` 的 `putConfig` 增加可选的来源地址，`payload` 放宽为 `unknown`：字符串原样发送，其他值先 `JSON.stringify` 再发送。下面清单中的 14 处注入改为调用它。验证：所有 `source_address` 断言不变且通过；`grep -n "method: 'PUT'" platform/src/admin/*.test.ts` 只剩下面的保留项；`pnpm test`（每文件 80% 覆盖率）、`pnpm lint`、`pnpm typecheck`、`pnpm dead-code` 通过。
 
 Suggested fixture level: compact - 只改测试辅助函数和调用方，产品代码不变
 Minimal mergeable slice: atomic: 一个 fixture 加它的调用方
@@ -3874,7 +3874,7 @@ Must preserve：每个用例的断言，包括 `source_address: SOURCE`、状态
 
 依赖：无。由 #504 承载，处理方式同第 6 组。用户决定（2026-11-08）：走路线 A，建一个共享叶子模块；orchestrator（关键路径）不改。
 
-- [ ] 22.1 backend 的「普通 JSON 对象」判断（`typeof value === 'object' && value !== null && !Array.isArray(value)`，以及它的取反写法）只保留一份实现。auth、admin、gateway、plugin-catalog、db、managed-config 都改为调用它，删掉各自的副本和内联写法。验证：`grep -rnE "function isPlainObject|isPlainObject =" platform/src` 只剩 1 处；`pnpm lint:deps`、`pnpm dead-code`、`pnpm lint:tests`、`pnpm test`、`pnpm test:integration` 都通过；HTTP 400 的语义不变。
+- [x] 22.1 backend 的「普通 JSON 对象」判断（`typeof value === 'object' && value !== null && !Array.isArray(value)`，以及它的取反写法）只保留一份实现。auth、admin、gateway、plugin-catalog、db、managed-config 都改为调用它，删掉各自的副本和内联写法。验证：`grep -rnE "function isPlainObject|isPlainObject =" platform/src` 只剩 1 处；`pnpm lint:deps`、`pnpm dead-code`、`pnpm lint:tests`、`pnpm test`、`pnpm test:integration` 都通过；HTTP 400 的语义不变。
 
 Suggested fixture level: compact - 纯重构，运行时行为逐字不变
 Minimal mergeable slice: atomic: 一个新叶子文件加它的调用方
@@ -3915,7 +3915,7 @@ Must preserve：所有 400 响应、错误消息和审计行为；所有现有�
 
 依赖：无。由 #525 承载，处理方式同第 6 组。用户决定（2026-11-08）：换成不返回头像的接口 `GET /api/v1/users/me/models`；如果真实 rc2 上 API token 用不了这个接口，就停下来报告。
 
-- [ ] 23.1 `platform/src/ragflow-proxy/client.ts` 的 `testRagflowConnection` 改用 `GET /api/v1/users/me/models` 校验密钥，不再读单行库列表。验证：
+- [x] 23.1 `platform/src/ragflow-proxy/client.ts` 的 `testRagflowConnection` 改用 `GET /api/v1/users/me/models` 校验密钥，不再读单行库列表。验证：
   - `client.test.ts` 用替身覆盖：rc2 形状的回答返回 `ok` 和版本号，且从未请求 `/api/v1/datasets`；401 和 `code: 401` 返回 `not-configured`；非 JSON、`code` 非 0、超限返回 `upstream-error`；超时和传输失败的分类不变。
   - 本机 `pnpm test:stack` 的连接测试用例（`ragflow-stack-fixture.ts:671`，真实 rc2、真实密钥）仍返回 `{ result: 'ok', version }`。
 
@@ -3960,7 +3960,7 @@ Must preserve：连接测试路由（`admin/ragflow-connection.ts`）的鉴权�
 
 依赖：无。由 #519 承载，处理方式同第 6 组。
 
-- [ ] 24.1 `scripts/test-stack.mjs` 的 `requireEmptyInventory`：除了每个 `runId` 的运行标签，还要按账本每条记录自己的所有权标签清点。任一查询非空，就以非零结束并保留账本。验证：`platform/test/test-stack.integration.test.ts` 新增用例，员工资源（只带 `dsh-team.user=<id>`）在退休后仍残留时，命令以非零结束并保留账本。旧代码上命令以 0 结束，断言失败为红；修复后以 1 结束，转绿。
+- [x] 24.1 `scripts/test-stack.mjs` 的 `requireEmptyInventory`：除了每个 `runId` 的运行标签，还要按账本每条记录自己的所有权标签清点。任一查询非空，就以非零结束并保留账本。验证：`platform/test/test-stack.integration.test.ts` 新增用例，员工资源（只带 `dsh-team.user=<id>`）在退休后仍残留时，命令以非零结束并保留账本。旧代码上命令以 0 结束，断言失败为红；修复后以 1 结束，转绿。
 
 Suggested fixture level: compact - 一个只读清点函数的过滤条件
 Minimal mergeable slice: atomic: 一个函数加一个集成用例
@@ -4002,7 +4002,7 @@ Must preserve：`retire` 的行为、账本格式、`requireSettled` 和锁的�
 
 依赖：无。由 #517 承载，处理方式同第 6 组。用户决定（2026-11-08，复核后改选）：用页面内的 `MutationObserver` 锁定 STOP，保留「UI 确实走过一个回合」的证明，不改成只以 provider 完成为准。理由：DSH 会在回合开始前，因为生成会话标题，先把同一段回复渲染进 transcript（stub 用例 `stack-browser-fixture.integration.test.ts:131` 模拟的就是这种情况），所以单凭 provider 完成加上回复可见，不能证明 UI 渲染过这个回合。
 
-- [ ] 25.1 `platform/test/stack-browser-fixture.ts` 的 `converseInWorkbench`：点击 SEND 之前，用 `page.evaluate` 在页面里装一个 `MutationObserver`，并立即检查一次。STOP（`STOP` 选择器）只要出现过一次，就在 `window` 上设置一个标志。点击后用 `page.waitForFunction` 等这个标志，超时用 `conversation.timeout`。其余顺序不变：`turnComplete()`，然后 transcript 中的回复可见，然后 STOP 消失、SEND 出现。`:236-241` 处的注释改为如实描述。验证：stub 用例覆盖三点：短回合（STOP 落在旧轮询的采样间隙里）也能锁定；STOP 从未出现时失败；现有三条性质保持不变（早到的回复不放行、header 里的回复不算、失败时保留原错误）。另外本机 `pnpm test:stack` 连续 3 次通过。
+- [x] 25.1 `platform/test/stack-browser-fixture.ts` 的 `converseInWorkbench`：点击 SEND 之前，用 `page.evaluate` 在页面里装一个 `MutationObserver`，并立即检查一次。STOP（`STOP` 选择器）只要出现过一次，就在 `window` 上设置一个标志。点击后用 `page.waitForFunction` 等这个标志，超时用 `conversation.timeout`。其余顺序不变：`turnComplete()`，然后 transcript 中的回复可见，然后 STOP 消失、SEND 出现。`:236-241` 处的注释改为如实描述。验证：stub 用例覆盖三点：短回合（STOP 落在旧轮询的采样间隙里）也能锁定；STOP 从未出现时失败；现有三条性质保持不变（早到的回复不放行、header 里的回复不算、失败时保留原错误）。另外本机 `pnpm test:stack` 连续 3 次通过。
 
 Suggested fixture level: compact - 测试夹具的等待方式，产品代码不变
 Minimal mergeable slice: atomic: 一个函数加 stub 用例
@@ -4044,7 +4044,7 @@ Must preserve：`turnComplete` 的判定、transcript 范围、失败截图与�
 
 依赖：#558（#555，已合入）、#430（17.2，已合入）。由 #559 承载，处理方式同第 6 组。只改测试，不改网关规则、镜像和插件；不碰关键路径。用户决定（2026-11-08）：这次下载导航必然产生的那一条 `net::ERR_ABORTED` 失败请求，按「精确断言那一条」处理：会话的失败请求必须恰好是它，其余仍为空；不改 `workbenchSession`，也不加通用过滤。
 
-- [ ] 26.1 在 17.2 的打包下载会话（`platform/test/sidebar-archive-stack-fixture.ts`）里，打包下载完成后，再用文件区右键菜单的「下载」下载 `archive-b.bin` 一次。断言：下载完成，字节数和 sha256 与 uid1001 在实例内写入的值一致；这次下载自己的响应带 `content-security-policy: sandbox` 和 `content-disposition: attachment`；页面没有被导航走；该会话的失败请求恰好是这次下载导航的那一条（`net::ERR_ABORTED`），控制台错误、页面错误、对外请求都为空。验证：本机 exact-head `pnpm test:stack` 的 `stackEvidence.archive.single` 给出比对结果。
+- [x] 26.1 在 17.2 的打包下载会话（`platform/test/sidebar-archive-stack-fixture.ts`）里，打包下载完成后，再用文件区右键菜单的「下载」下载 `archive-b.bin` 一次。断言：下载完成，字节数和 sha256 与 uid1001 在实例内写入的值一致；这次下载自己的响应带 `content-security-policy: sandbox` 和 `content-disposition: attachment`；页面没有被导航走；该会话的失败请求恰好是这次下载导航的那一条（`net::ERR_ABORTED`），控制台错误、页面错误、对外请求都为空。验证：本机 exact-head `pnpm test:stack` 的 `stackEvidence.archive.single` 给出比对结果。
 
 Suggested fixture level: compact - 在已有 stack 会话里加一次下载，产品代码不变
 Minimal mergeable slice: atomic: 一个 fixture 函数、stack 证据字段和文档
@@ -4084,7 +4084,7 @@ Must preserve：17.2 打包下载的全部步骤和断言、两个工作文件�
 
 依赖：#432（字体，17.4 镜像部分）、#402，均已合入。由 #433 承载。用户决定（2026-11-07，见 17.4）：DOC 和 PPT 预览只用 DSH 0.2.1 自带的 WASM 引擎在实例内转换；XLS 由 DSH 的浏览器表格视图显示，不经转换。本机 `pnpm test:stack` 使用 Playwright Chromium 153，能渲染 PDF 查看器；VPS 的验证浏览器后来由 #565 升级到 CfT 156（第 41 节），本节的渲染断言仍只放在本机通道。
 
-- [ ] 34.1 stack 浏览器用例在员工自己的实例里，从侧栏文件区依次打开 `旧通知.doc`、`旧报表.xls`、`旧汇报.ppt`。每个文件都显示只读预览，没有编辑或保存入口；预览结束后，实例里的原文件字节不变。验证：本机 exact-head `pnpm test:stack`。
+- [x] 34.1 stack 浏览器用例在员工自己的实例里，从侧栏文件区依次打开 `旧通知.doc`、`旧报表.xls`、`旧汇报.ppt`。每个文件都显示只读预览，没有编辑或保存入口；预览结束后，实例里的原文件字节不变。验证：本机 exact-head `pnpm test:stack`。
 
 Suggested fixture level: expanded - 真实浏览器、真实实例内转换和新的 stack 分支；不改产品代码
 Minimal mergeable slice: atomic: 一个新 stack 夹具及其成对的集成测试、stack 用例接线、共享取行和预览判定的辅助函数，以及文档
@@ -4175,7 +4175,7 @@ Evidence (34.1):
 
 依赖：无。由 #495 承载，处理方式同第 6 组。VPS lane 本身就是实验：rebind 重启后，首次启动时 readiness 写进行里的 cookie 是否仍对新地址返回 200。
 
-- [ ] 32.1 `platform/test/container-reconcile.docker.test.ts` 的 `survivorScenario` 不再自己换 cookie，200 断言改用 `rowCookie` 读出的生产 cookie。验证：giap-vps exact-head custody `test:docker` 中该文件全部 4 个用例通过，summary 的 `authenticatedAfterRecreation` 为 200。
+- [x] 32.1 `platform/test/container-reconcile.docker.test.ts` 的 `survivorScenario` 不再自己换 cookie，200 断言改用 `rowCookie` 读出的生产 cookie。验证：giap-vps exact-head custody `test:docker` 中该文件全部 4 个用例通过，summary 的 `authenticatedAfterRecreation` 为 200。
 
 Suggested fixture level: compact - 一个 Docker 测试文件内删去 fixture 自有的重复实现
 Minimal mergeable slice: atomic: 一个测试文件和一处 README 措辞
@@ -4220,7 +4220,7 @@ Evidence (32.1):
 
 依赖：#434（18.1）、#426（16.3）、#407（11.4），均已合入。由 #435 承载。用户决定（2026-11-07）：允许小改 `platform/src/orchestrator/start.ts`，把「本次启动 Office 是否可用」传给生成器。后台目录页显示原因属于 #436，不在本节。
 
-- [ ] 33.1 生成器按本次启动的 Office 可用性写 ONLYOFFICE 行；编排器从 16.3 的 Document Server 决定推导可用性并传入。验证：
+- [x] 33.1 生成器按本次启动的 Office 可用性写 ONLYOFFICE 行；编排器从 16.3 的 Document Server 决定推导可用性并传入。验证：
   - 生成器单元测试覆盖 Office 可用与不可用，各自在三种目录状态下的输出；
   - 推导函数单元测试覆盖自带已接入、外部、自带未配置、本次未接入（absent、identity-mismatch）、published-loopback（自带和外部各一例）；
   - VPS 上 Document Server 的 Docker 用例断言真实覆盖层的 Office 行。
@@ -4316,7 +4316,7 @@ Evidence (33.1):
 
 依赖：无。由 #494 承载，处理方式同第 6 组。
 
-- [ ] 36.1 `runUserVolumes` 的清理请求改用独立期限，不再沿用验收阶段的 `requestTimeoutMs`。聚合错误的长度断言在失败时打印每个错误的类名和消息。验证：新增一个先红后绿的集成用例，确定性地复现「清理阶段慢于停滞预算」时多出来的第二个错误。
+- [x] 36.1 `runUserVolumes` 的清理请求改用独立期限，不再沿用验收阶段的 `requestTimeoutMs`。聚合错误的长度断言在失败时打印每个错误的类名和消息。验证：新增一个先红后绿的集成用例，确定性地复现「清理阶段慢于停滞预算」时多出来的第二个错误。
 
 Suggested fixture level: compact - 测试夹具的期限参数和诊断输出
 Minimal mergeable slice: atomic: 一个夹具、一个集成测试文件
@@ -4390,7 +4390,7 @@ Must preserve：
 
 依赖：无。由 #497 承载，处理方式同第 6 组。改 `scripts/verify-browser-runtime.mjs`、两个伪造 `pnpm` 的测试夹具和一个新的 Docker-free 集成测试；不放宽任何清理或 rescue 规则，不碰关键路径。（22–26 节在其他未合并的 PR 分支上。）
 
-- [ ] 27.1 `docker`/`model` 车道不经 pnpm，改为 `spawn(process.execPath, [join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--project', <lane>, ...forwarded])`。SIGINT/SIGTERM 由包装器直接转发给 vitest 主进程，包装器的结果取自 vitest 本身；退出码映射（130/143）、转发参数和 `--help`/`-h` 行为不变。两个用 PATH 上的假 `pnpm` 测试包装器的夹具改为在 preload 里拦截这次 spawn，测试口径不变。验证：新增 `platform/test/verify-browser-runtime.integration.test.ts`，先红后绿；`browser-build.integration.test.ts` 通过；VPS `browser-wrapper.docker.test.ts` 通过。
+- [x] 27.1 `docker`/`model` 车道不经 pnpm，改为 `spawn(process.execPath, [join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--project', <lane>, ...forwarded])`。SIGINT/SIGTERM 由包装器直接转发给 vitest 主进程，包装器的结果取自 vitest 本身；退出码映射（130/143）、转发参数和 `--help`/`-h` 行为不变。两个用 PATH 上的假 `pnpm` 测试包装器的夹具改为在 preload 里拦截这次 spawn，测试口径不变。验证：新增 `platform/test/verify-browser-runtime.integration.test.ts`，先红后绿；`browser-build.integration.test.ts` 通过；VPS `browser-wrapper.docker.test.ts` 通过。
 
 Suggested fixture level: compact - 子进程启动方式，行为口径不变
 Minimal mergeable slice: atomic: 一处启动命令、两个夹具的接缝和一个集成测试
@@ -4473,7 +4473,7 @@ Must preserve：
 
 依赖：无。由 #499 承载，处理方式同第 6 组。改 `platform/Dockerfile.dockerignore`，另加一个 Docker-free 的守卫测试；`platform/Dockerfile` 的 COPY 和运行时镜像内容不变；不碰关键路径。（22–27 节在其他未合并的 PR 分支上。）
 
-- [ ] 28.1 删去 `platform/Dockerfile.dockerignore` 中七条目录级重新包含：`!platform/`、`!platform/src/`、`!platform/web/`、`!platform/web/src/`、`!images/`、`!images/seccomp/`、`!images/dsh-user/`。精确文件行、`!platform/src/**`、`!platform/web/src/**`、测试排除和末尾的全局排除保持不变。新增 `platform/test/platform-dockerignore.integration.test.ts`：首条有效规则是 `**`；每条 `!` 规则要么是 git 跟踪的精确文件，要么属于固定的子树集合 `{platform/src/**, platform/web/src/**}`；最后 5 条是全局排除。验证：守卫测试先红后绿；用探针在本机和 giap-vps 上比对修改前后的实际构建上下文；VPS `platform-image.docker.test.ts` 通过。
+- [x] 28.1 删去 `platform/Dockerfile.dockerignore` 中七条目录级重新包含：`!platform/`、`!platform/src/`、`!platform/web/`、`!platform/web/src/`、`!images/`、`!images/seccomp/`、`!images/dsh-user/`。精确文件行、`!platform/src/**`、`!platform/web/src/**`、测试排除和末尾的全局排除保持不变。新增 `platform/test/platform-dockerignore.integration.test.ts`：首条有效规则是 `**`；每条 `!` 规则要么是 git 跟踪的精确文件，要么属于固定的子树集合 `{platform/src/**, platform/web/src/**}`；最后 5 条是全局排除。验证：守卫测试先红后绿；用探针在本机和 giap-vps 上比对修改前后的实际构建上下文；VPS `platform-image.docker.test.ts` 通过。
 
 Suggested fixture level: compact - 一个构建上下文配置文件加一个守卫测试
 Minimal mergeable slice: atomic
@@ -4519,7 +4519,7 @@ Must preserve：`platform/Dockerfile` 的全部 COPY 能成功；运行时镜像
 
 依赖：无。由 #483 承载，处理方式同第 6 组。只加测试，不改生产代码。`platform/src/orchestrator/stop.test.ts` 在关键路径目录内，PR 说明逐行人工白盒审查推迟到 Epic #380 完成，尚未通过。（23–28 节在其他未合并的 PR 分支上。）
 
-- [ ] 29.1 published-loopback 模式，在精确用户容器已确认移除之后、`DELETE /networks/<START_NETWORK>` 之前，中止调用方信号。断言：
+- [x] 29.1 published-loopback 模式，在精确用户容器已确认移除之后、`DELETE /networks/<START_NETWORK>` 之前，中止调用方信号。断言：
   - `stopUserContainer` 以 `User container retirement failed` 拒绝；
   - `DELETE /networks/<START_NETWORK>` 已发出，网络已不存在；
   - 行与审计不变；
@@ -4571,7 +4571,7 @@ Must preserve：`stop.ts`、`networks.ts`、`reconcile.ts` 的生产代码；所
 
 依赖：#432（已合入）。由 #561 承载。用户决定（2026-11-08）：新增一个可选配置变量，未设置时不挂载。改动涉及 `platform/src/orchestrator/`（关键路径），PR 说明逐行人工白盒审查推迟到 Epic #380 完成，尚未通过。预计超过 400 行，加 `diff-limit-exempt` 标签并说明理由。（23–29 节在其他未合并的 PR 分支上。）
 
-- [ ] 30.1 新变量 `PLATFORM_INSTANCE_FONTS_DIR`：
+- [x] 30.1 新变量 `PLATFORM_INSTANCE_FONTS_DIR`：
   - 值非空时，平台创建实例容器时把它只读 bind 到 `/usr/share/fonts/truetype/custom`，与 Document Server 的目标路径相同。
   - 值为空或未设置时不挂载，与 #432 一致。
   - 值非空但不是绝对路径、含 NUL，或不是可读目录时，启动失败；报错点名变量，不回显值。
@@ -4681,7 +4681,7 @@ Must preserve：
 
 依赖：#572（#556，已合入；`user-image-fixture.ts` 的行数余量以合入后为准）。由 #511 承载，处理方式同第 6 组。只改测试夹具，不改 `scripts/docker-command.mjs` 的结清规则，不碰关键路径。（24–30 节在其他未合并的 PR 分支上。）
 
-- [ ] 31.1 下面四处一次性容器的 `docker start --attach <name>`，统一改成 `start <name>`、有界的 `wait <name>`（退出码不是 `0` 时抛错，并带上 `logs`），需要 stdout 的再用 `logs <name>` 读。写法照同文件现成的 `user-image-fixture.ts:243-250`（`runOfflinePlugin`：同一个 `output()`，保留原错误文本），注释照 `managed-policy-fixture.ts:211`。同步改 `docker-version.integration.test.ts` 的假 Docker。新增一个守卫测试：`platform/test/` 下的 `.ts` 文件里不得出现 `'start', '--attach'`。验证：守卫测试先红后绿；VPS exact-head `test:docker` 和 `test:deploy` 通过，cleanup confirmed，并且没有 `cleanup.unsettled`。
+- [x] 31.1 下面四处一次性容器的 `docker start --attach <name>`，统一改成 `start <name>`、有界的 `wait <name>`（退出码不是 `0` 时抛错，并带上 `logs`），需要 stdout 的再用 `logs <name>` 读。写法照同文件现成的 `user-image-fixture.ts:243-250`（`runOfflinePlugin`：同一个 `output()`，保留原错误文本），注释照 `managed-policy-fixture.ts:211`。同步改 `docker-version.integration.test.ts` 的假 Docker。新增一个守卫测试：`platform/test/` 下的 `.ts` 文件里不得出现 `'start', '--attach'`。验证：守卫测试先红后绿；VPS exact-head `test:docker` 和 `test:deploy` 通过，cleanup confirmed，并且没有 `cleanup.unsettled`。
 
 Suggested fixture level: compact - 测试夹具的等待方式
 Minimal mergeable slice: atomic: 四处改写、一个假 Docker 的同步和一个守卫
@@ -4762,7 +4762,7 @@ Must preserve：
 
 依赖：无。由 #546 承载，处理方式同第 6 组。
 
-- [ ] 35.1 在 `platform/web/src/request-owner.ts` 新建 `useRequestOwner`，A 组四个页面原地改用它；B 组五个页面逐页评估，保留的写明理由。验证：新 hook 的成对单元测试；四个页面现有的卸载、过期响应、并发栅栏测试一行不改，照样通过；`pnpm test:ui`。
+- [x] 35.1 在 `platform/web/src/request-owner.ts` 新建 `useRequestOwner`，A 组四个页面原地改用它；B 组五个页面逐页评估，保留的写明理由。验证：新 hook 的成对单元测试；四个页面现有的卸载、过期响应、并发栅栏测试一行不改，照样通过；`pnpm test:ui`。
 
 Suggested fixture level: compact - 浏览器侧一个 hook 和四处机械替换，行为不变
 Minimal mergeable slice: atomic: 一个新模块及其测试、四个页面的替换
@@ -4849,7 +4849,7 @@ Must preserve：
 
 用户决定（2026-11-08，PR #591 第 1 轮评审之后）：旧版 profile 在容器创建之前就会被受管组合拒绝，这个拒绝要记成 `error` 行，并写一条 `instance.start-failed` 审计（细节 `{code}`）。启动后读日志分类的做法删除。
 
-- [ ] 37.1 受管组合发现员工 profile 里有 bundle 被 0.2.1 跳过时，在创建容器之前拒绝启动，这时：
+- [x] 37.1 受管组合发现员工 profile 里有 bundle 被 0.2.1 跳过时，在创建容器之前拒绝启动，这时：
   - 实例行写成 `error`，不关联容器，最近错误首行为封闭失败码 `profile-incompatible`；
   - 同一事务写 `instance.start-failed`，细节为 `{"code":"profile-incompatible"}`；
   - 管理员审计接口和审计页如实显示这条细节；
@@ -4857,7 +4857,7 @@ Must preserve：
 
   其他创建前失败的行为不变：不改行，不写审计。创建后的失败（就绪、补偿、中断创建恢复）不变，审计细节仍为 `{}`。验证：单元测试覆盖组合拒绝的识别、持久化与围栏、审计投影和两个管理员路由；`pnpm test:ui`；VPS exact-head `test:docker` 中 `volume-upgrade.docker.test.ts` 用旧卷不重置直接启动。
 
-- [ ] 37.2 管理员实例页对 `lastErrorCode === 'profile-incompatible'` 的行显示固定提示「该用户的 DSH 配置来自旧版本，需要执行“重置配置”」，提示紧挨现有的「重置配置」按钮。审计页在细节列对带这个码的 `instance.start-failed` 显示「旧版 profile 不兼容」，列头为「细节」。验证：`instance-page.test.tsx`、`audit-page.test.tsx` 和 `pnpm test:ui` 截图。
+- [x] 37.2 管理员实例页对 `lastErrorCode === 'profile-incompatible'` 的行显示固定提示「该用户的 DSH 配置来自旧版本，需要执行“重置配置”」，提示紧挨现有的「重置配置」按钮。审计页在细节列对带这个码的 `instance.start-failed` 显示「旧版 profile 不兼容」，列头为「细节」。验证：`instance-page.test.tsx`、`audit-page.test.tsx` 和 `pnpm test:ui` 截图。
 
 Suggested fixture level: expanded - 关键路径上新增一条创建前的持久化写入，同时改变审计的封闭细节和两个管理员 API 契约
 Minimal mergeable slice: atomic: 识别、持久化、审计、路由和页面提示是同一条诊断路径，拆开后任何一片都不能独立交付可见行为
@@ -4934,7 +4934,7 @@ Evidence (37.1–37.2):
 - 另一个确实存在的风险会被等待放大：包装器的信号处理是 `process.once`（`verify-browser-runtime.mjs:290`），第二个 SIGINT/SIGTERM 会用默认处置杀死包装器，回执和镜像清理都会被跳过。第二个信号可能来自人连按两次 Ctrl-C，也可能来自 custody 下 pnpm 的再转发（`procInterrupt`）。等待把这个窗口拉长到最多 20 s。
 - custody 发信号之后，到 close 之前没有期限，也不会升级到 SIGKILL（`trusted-docker-owner.mjs:205-216,307`）。`groupSettlesAfterClose` 的 2000 ms 窗口要等 close 之后才开始。所以 20 s 的等待不会让 custody 杀掉包装器。
 
-- [ ] 40.1 在 `scripts/probe-browser-runtime.mjs` 抽出唯一的判定函数 `driverMayOwnRelays(receipt)`。判定为真的条件：`kind === 'docker-isolated-network'`、`state !== 'stopped'`、`driver.pid !== process.pid`，并且 `liveProcessBirth(driver.pid) === driver.birth`。`requireStoppedDriver` 改用这个函数，判定结果和改动前完全一致。
+- [x] 40.1 在 `scripts/probe-browser-runtime.mjs` 抽出唯一的判定函数 `driverMayOwnRelays(receipt)`。判定为真的条件：`kind === 'docker-isolated-network'`、`state !== 'stopped'`、`driver.pid !== process.pid`，并且 `liveProcessBirth(driver.pid) === driver.birth`。`requireStoppedDriver` 改用这个函数，判定结果和改动前完全一致。
 
   同一模块新增并导出 `awaitRegisteredDrivers(directory, limitMs)`：
   - 每 100 ms 重读一次目录里的 `*.launch.json` 指针，直到没有一个指针满足 `driverMayOwnRelays`，或者到达上限；
@@ -4943,7 +4943,7 @@ Evidence (37.1–37.2):
 
   包装器 `cleanup()` 在逐个 rescue 之前调用 `awaitRegisteredDrivers(directory, 20_000)`；到上限后照原样进入 rescue，结果如实记录。
 
-- [ ] 40.2 包装器的 SIGINT/SIGTERM 处理从 `process.once` 改为 `process.on`。现有处理体已经幂等（有 `if (!interrupted)` 守卫，并继续转发 `child?.kill(signal)`），130/143 退出码不变。这样第二个信号不会再在等待或清理期间杀死包装器。
+- [x] 40.2 包装器的 SIGINT/SIGTERM 处理从 `process.once` 改为 `process.on`。现有处理体已经幂等（有 `if (!interrupted)` 守卫，并继续转发 `child?.kill(signal)`），130/143 退出码不变。这样第二个信号不会再在等待或清理期间杀死包装器。
 
 验证：
 
@@ -4991,7 +4991,7 @@ Must preserve：
 - Office 不可用时没有查看器，依据是：ONLYOFFICE 被写为停用后，DSH 跳过停用条目的客户端（`dsh-client-modules/lib/index.js:855`，第 33 节已核实）。能推翻这一点的是现有的 better-sidebar Docker 用例。
 - DSH 加载的是 `lib/client.js`：`package.json` 的 `exports["./client"]` 指向它。`lib/client-registry.js` 带 `dsh-external/dsh-better-sidebar` 模块 id，是另一种交付构建，两份的 `canOpen` 区段逐字节相同。两份都打补丁，避免交付里留下一份未补的变体。
 
-- [ ] 43.1 better-sidebar 条件补丁：推广 `patch-package.mjs` 支持多文件，加入 better-sidebar 钉定项，并增加镜像步骤和测试。
+- [x] 43.1 better-sidebar 条件补丁：推广 `patch-package.mjs` 支持多文件，加入 better-sidebar 钉定项，并增加镜像步骤和测试。
   - **补丁内容**：在 `lib/client.js`、`lib/client-registry.js` 中，各把下面这行替换一次（原文在每个文件中恰好出现一次）：
     - 原文：`return file !== void 0 && !hostOwnedPath(file.path);`
     - 替换为：`return file !== void 0 && (!hostOwnedPath(file.path) || ["docx", "xlsx", "pptx"].some((ext) => file.path.toLowerCase().endsWith("." + ext) && service.getFileViewers().some((viewer) => viewer.exts?.includes(ext) === true && service.isViewerEnabled(viewer.id))));`
@@ -5075,7 +5075,7 @@ Must preserve：
 
 自带容器缺失或身份不符只有启动时才能知道，目录页不显示。`specs/admin-console/spec.md` 里「插件目录页」要求的 MUST 范围已按此收窄，并补了一条场景。
 
-- [ ] 42.1 推导原因，经 `plugin-catalog` 接口返回，由目录页显示。
+- [x] 42.1 推导原因，经 `plugin-catalog` 接口返回，由目录页显示。
   - **唯一实现**：`platform/src/orchestrator/document-server.ts` 新增并导出纯函数 `officeUnavailableReason(settings: Pick<Settings, 'documentServerUrl' | 'documentServerJwtSecret'>, bundledConfigured: boolean, upstreamMode: PlatformConfig['upstreamMode'])`，按顺序返回第一个命中的原因：
     1. `upstreamMode !== 'network'` → `'published-loopback'`
     2. `documentServerMode(settings) === 'external'` 且 `settings.documentServerJwtSecret === ''` → `'external-jwt-missing'`
@@ -5181,7 +5181,7 @@ Must preserve：
 - 判断「ONLYOFFICE 生效」只靠客户端检测：`onlyoffice:<ext>` 查看器已登记且已启用。
 - 理由：ONLYOFFICE 是「员工自选」项，员工自行关闭时生成器无从知道。只按标志注册包装查看器，会让第 43 节的条件补丁接手 docx，却没有编辑器可以委托。
 
-- [ ] 44.1 新建 `plugins/office-hints/`，交付进用户镜像，并由覆盖层启用。
+- [x] 44.1 新建 `plugins/office-hints/`，交付进用户镜像，并由覆盖层启用。
   - **插件结构**：仿照 `plugins/platform-nav/` 与 `plugins/knowledge-base/`。
     - `package.json`：逐字段仿照 `plugins/platform-nav/package.json`：`name: "@dsh-team/office-hints"`、`private: true`、`type: "module"`、`main: "index.js"`、`exports`（`.` → `./index.js`、`./client` → `./client.js`、`./package.json`）、`engines.dsh: ">=0.2.1-rc.2 <0.3.0"`、`dsh.bundle.patch: "./cordis.patch.yml"`、`dsh.client.platform: "web"`、`dsh.client.inject: ["dsh-better-sidebar"]`（包名列表）、`files`。`user-image.docker.test.ts:423-424` 断言 `exports['./client']` 与 `dsh.client.platform`。
     - `cordis.patch.yml`：以 `#` 注释行开头，然后是 `[]`（`catalog-check.test.mjs:714` 的空层检查要求）。
@@ -5280,8 +5280,8 @@ Must preserve：
 
 依赖：无（相关 #303、#422、#511）。由 #541 承载，处理方式同第 6 组。只改测试夹具和测试，不改 `deploy/`、compose 文件、生产代码和 `scripts/docker-command.mjs` 的结清规则；不碰关键路径。
 
-- [ ] 38.1 非 0 退出的 `docker compose` 结果在脱敏后带一个封闭的失败类别码，不回显原文。验证：`docker-command.integration.test.ts` 覆盖每个类别的正例、`unknown` 兜底和带秘密样式内容的 canary，`REQUIRED_VARIABLE`/`acceptedStatus` 的声明投影和结清语义不变。
-- [ ] 38.2 HTTPS/TLS 代理部署用例接入 `DeploymentSetupEvidence`：失败时输出闭集 `deploymentSetup` 阶段，原错误链里带 compose 类别码。验证：integration 层用注入的失败 compose，分别在 `scenario-preparation`（代理 `up`）和 `compose-creation`（主栈 `up`）两处失败，断言输出的阶段和类别码；VPS exact-head `test:docker` 全绿。
+- [x] 38.1 非 0 退出的 `docker compose` 结果在脱敏后带一个封闭的失败类别码，不回显原文。验证：`docker-command.integration.test.ts` 覆盖每个类别的正例、`unknown` 兜底和带秘密样式内容的 canary，`REQUIRED_VARIABLE`/`acceptedStatus` 的声明投影和结清语义不变。
+- [x] 38.2 HTTPS/TLS 代理部署用例接入 `DeploymentSetupEvidence`：失败时输出闭集 `deploymentSetup` 阶段，原错误链里带 compose 类别码。验证：integration 层用注入的失败 compose，分别在 `scenario-preparation`（代理 `up`）和 `compose-creation`（主栈 `up`）两处失败，断言输出的阶段和类别码；VPS exact-head `test:docker` 全绿。
 
 Suggested fixture level: compact - 只改验证夹具的诊断投影，产品行为不变
 Minimal mergeable slice: atomic: 类别投影和阶段接线一起才能回答「哪一次 `up`、什么原因」
@@ -5593,7 +5593,7 @@ Must preserve：
 - 受信主机已安装（编排者，2026-11-09）：从 `storage.googleapis.com/chrome-for-testing-public/156.0.8078.80/linux64/chrome-headless-shell-linux64.zip` 下载，文件 md5 与存储返回的 `x-goog-hash` 一致，zip sha256 `547dcd37…2a0b3eb4`；解压到 `~/.local/share/dsh-team/toolchain/chrome-156.0.8078.80/chrome-headless-shell-linux64/`，可执行文件 sha256 `d34f5d19…8fd2b73fa`。旧的 `chrome-140.0.7339.82` 目录保留，供未合并分支的 lane 使用。
 - `deb.deps` 与 140 相比包集合不变，只有四个最低版本提高（`libc6 >= 2.25`、`libcairo2 >= 1.14.0`、`libcups2 >= 1.7.0`、`libglib2.0-0 >= 2.49.3`），bookworm 的版本都满足。所以 `images/browser-verification/Dockerfile` 的 apt 行不变，只改第 3 行注释里的版本号。
 
-- [ ] 41.1 把仓库里所有 `140.0.7339.82` 版本字面量改成 `156.0.8078.80`，并收紧 better-sidebar 的 docx 断言。
+- [x] 41.1 把仓库里所有 `140.0.7339.82` 版本字面量改成 `156.0.8078.80`，并收紧 better-sidebar 的 docx 断言。
   - 代码字面量：`scripts/verify-browser-runtime.mjs:173`、`:264`、`:272`、`:399`；`scripts/probe-dsh-api-cdp.mjs:373` 的正则（这是唯一真正比对版本的地方，比对 CDP `Browser` 字符串）；`platform/test/ci-vps-worker.ts:260` 的 toolchain 路径段；`scripts/probe-dsh-api.sh:22`、`scripts/probe-first-run.sh:21` 的帮助文字；`images/browser-verification/Dockerfile:3` 注释。
   - 文档字面量：`.env.example:40`、`AGENTS.md:46` Stack 表、`scripts/README.md:60`、`plugins/zh-locale/README.md:65`、`:197`、`platform/test/README.md:65`、`:71`、`constraints.yaml:204`、`:228` 里的 `CfT140` 简写改成 `CfT156`。`openspec/changes/archive/**` 是历史，不改。
   - `platform/test/better-sidebar.docker.test.ts:159-164`：删掉 `getOrInsertComputed` 的三行注释和正则断言，在 `:152` 的 `toMatchObject` 里加 `state: 'rendered'`；`:148` 的注释同步改写（转换成功并显示出来）。`pages >= 1`、`code` 为 undefined、`consoleErrors` 为空、报告行不变。
@@ -6598,7 +6598,7 @@ Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜�
 - supervisord 日志在 `/var/log/supervisor/supervisord.log`，每次拉起写一行 `… INFO spawned: 'docservice' with pid <n>`（上面那次旁路实际读到）。`StartedAt` 是带九位小数的 RFC 3339 时间，集成测试用这种格式的样例覆盖 `startupMs` 的计算。
 - office-hints（#439）和编辑器 lane（51-b、51-c）也一直暴露在这个窗口里，只是时序碰巧避开了。
 
-- [ ] 52.1 等待和证据：
+- [x] 52.1 等待和证据：
   - `DOCUMENT_SERVER` 容器名仍只定义一处；为避免 office-hints 和 office-editor 两个夹具互相导入，挪到 `office-hints-stack-fixture.ts`，原来的导入方改为从那里导入。
   - `office-hints-stack-fixture.ts` 导出 `documentServerStarted(run, timeout)`：
     - 从宿主经 `run(['exec', DOCUMENT_SERVER, 'pgrep', '-f', 'xargs tail -F'])` 轮询。`until` 不捕获异常（`stack-browser-fixture.ts:130`），所以 check 内部 try/catch：`run` 抛错（`pgrep` 无匹配时退出 1）算「还没好」，记下错误消息，超时经 `untilSeen` 带出最后一次的错误消息；
@@ -6611,7 +6611,7 @@ Must preserve：已有 stack 场景和断言不变；平台、ONLYOFFICE 和镜�
     - `stackEvidence` 打印 `documentServer`，打印处不加存在性分支（`:717` 的 complexity 上限）；
     - 净增约 10 行，文件按 max-lines 口径仍小于 800。
   - `vitest.config.ts`：stack `testTimeout` 加 300 秒，注释照现有写法加一句。
-- [ ] 52.2 测试和文档：
+- [x] 52.2 测试和文档：
   - `office-hints-stack-fixture.integration.test.ts`：argv 恰为上面几条；前几次 `run` 抛错、之后成功时返回 `startupMs` 和 `spawns`；一直抛错时按超时抛错，错误带最后一次的错误消息。
   - 文档：
     - `docs/LOCAL_STACK.md` 证据表加 `documentServer` 一行，写明等的是 DS 启动脚本跑完（allfonts 会重启 docservice），以及等待后 docservice 不再被拉起；
@@ -6653,14 +6653,14 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
   - fixture 收尾（`withTrustedDockerFixture`）在失败路径上要依次 settle 已记录的成员、child 进程组和 owner；每个 settle 的 `waitForAbsence` 上限 5 秒，期间每次 `observeProcess` 最长 5 秒（`trusted-docker-fixture.ts:276-304`）。`status` 命令的硬超时 15 秒。
 - 2026-11-17 本机：`main` 上两次完整 `pnpm test:integration` 各挂 2 个 verify-browser-runtime 信号用例（1 分钟负载约 6–7）；PR #627 的 head 上四次完整 `pnpm check` 都失败，挂的是这两个文件，第四次另有 `trusted-docker-custody` 两例和 `dev-watch` 一例。单独跑这两个文件时稳定通过。
 
-- [ ] 53.1 verify-browser-runtime 的信号用例：
+- [x] 53.1 verify-browser-runtime 的信号用例：
   - 三个信号用例共用用例预算常量 `SIGNAL_CASE_MS = 20_000`，作为第三个参数传给 vitest；与已有的第二次 SIGTERM 用例一致。
   - 每个用例开头算期限 `deadline = Date.now() + SIGNAL_CASE_MS - SETTLE_MS`，`SETTLE_MS = 3000` 留给 `finally` 里的 `killStandIn` 和删目录。
   - `startWrapper` 在 `exit` 回调里同步记下退出码和信号（例如 `run.state`），供错误信息读取。
   - `marker(run, name, deadline)`：`Date.now() >= deadline` 时直接抛归因错误；否则用正的剩余毫秒数作为 `awaitFile` 的中止期限，到期同样抛归因错误。归因错误写明：等的文件名；wrapper 是否已退出及退出码和信号；`started.json`、`signal.json`、`exit.json` 各自是否存在；按 `started.json` 的 pid 用 `process.kill(pid, 0)` 判断的 stand-in 是否还活着。wrapper 提前退出的现有分支不变。
   - `settled(run, deadline)`：等 `run.exited`，到期（含剩余时间已不为正）时抛归因错误，写明 wrapper 未在期限内退出，以及上面同样的 stand-in 状态。三个用例里原来直接 `await run.exited` 的地方都改用它，第二次 SIGTERM 用例里与 `repeat.json` 赛跑的那一处除外。
   - 所有现有断言不变。
-- [ ] 53.2 trusted-docker-retirement 等 `result.json`：
+- [x] 53.2 trusted-docker-retirement 等 `result.json`：
   - 等待逻辑拆成独立 helper `awaitResult(directory, owner, deadline)`，owner 取自 `cancelRetirement` 已解析的 `manifest.json`。`RESULT_WAIT_MS` 删除。
   - 循环：先看 `result.json`，有就返回；没有就用 `process.kill(owner.pid, 0)` 看 owner 是否还在（只把 ESRCH 当作不在），在就隔约 1 秒再看，直到期限。
   - owner 不在时，再看一次 `result.json`；仍没有就立即失败，错误写明「owner 已退出但没有发布 result.json」，并附一次 `observeProcess` 的结果作为身份复核；`observeProcess` 自己抛错时捕获它，错误信息写「身份复核不可用」，不改抛它的异常。顺序必须是先确认 owner 不在、再看结果，不能反过来。
@@ -6669,7 +6669,7 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
   - 期限的传递：`retirementCase` 在进入 `withTrustedDockerFixture` 之前算 `deadline = Date.now() + CASE_TIMEOUT_MS - RETIRE_MS`，经 run 回调的第二个参数传给用例，用例再传给 `cancelRetirement`。
   - 取值写死：`RETIRE_MS = 30_000`，`CASE_TIMEOUT_MS` 从 90_000 改为 120_000。注释写明算式：`status` 的硬超时 15 秒，加上 fixture 收尾（最多 4 个 settle：fake platform、可能的 group member、child 进程组、owner）在正常退出时的耗时，共 30 秒；每个 settle 的理论硬上限约 22 秒（两次 `observeProcess` 各 5 秒、`ps` 2 秒、`waitForAbsence` 约 10 秒），全取上限不现实，不按它算。等待的期限因此约为用例开始后 90 秒，不短于原来的「初始化后 60 秒」。调大 `CASE_TIMEOUT_MS` 是因为等待已按 owner 存活来走，预算只是 owner 活着时的上限，不是单纯放宽。
   - `child-ready.json` 的 10 秒等待和其余断言不变。
-- [ ] 53.3 测试：
+- [x] 53.3 测试：
   - verify-browser-runtime：`settled` 的到期分支另有一个确定性用例：hold 的 stand-in 就绪后不发信号，以约 1 秒的期限调用 `settled`，断言错误写明 wrapper 未在期限内退出、stand-in 存活。
   - verify-browser-runtime：新增一个确定性用例，用例预算 `SIGNAL_CASE_MS`。用 `hold` 的 stand-in 启动 wrapper，按用例期限 `marker(run, 'started.json', deadline)` 等到 `started.json` 后不发信号，再以约 1 秒的短期限等 `signal.json`。断言错误信息含 `signal.json`、wrapper 未退出、`started.json` 存在、stand-in 存活；结束时照常 `killStandIn` 并删目录。
   - trusted-docker-retirement：新增一个确定性用例，走 `retirementCase`，用例预算 `CASE_TIMEOUT_MS`。照 custody `:486-505` 的做法：start，等 `child-ready.json`，不 cancel，直接 `killOwner`；然后以 `retirementCase` 给的期限调用 `awaitResult`，断言它在 15000 毫秒内以「owner 已退出但没有发布 result.json」失败（上限盖住一次轮询和一次最长 5 秒的身份复核；旧实现要等满 60 秒）。fixture 收尾照常通过。
@@ -6678,7 +6678,7 @@ Must preserve：已有 stack 场景和断言不变；`documentServerReady` 不�
     2. 加新用例，此时它要等满 60 秒才以笼统错误失败，「5000 毫秒内」的断言或 vitest 超时都算红灯，记录下来；
     3. 再改成按存活等待，新用例转绿。
   - TDD 顺序（verify-browser-runtime）：先加新用例，此时只能等满固定 10 秒或撞上 vitest 超时、错误信息不含阶段和存活状态，算红灯；再改 `marker` 和 `settled`。
-- [ ] 53.4 `awaitFile` 丢事件（53.1 实现时查明的根因）：
+- [x] 53.4 `awaitFile` 丢事件（53.1 实现时查明的根因）：
   - 事实：
     - `browser-runtime-fixture.ts:494-521` 的 `awaitFile` 先建 `fs.watch`，再只 `lstat` 一次。macOS 上 watcher 生效前有一段空窗，文件在空窗里落地时，事件和那次 `lstat` 都错过它，等待只能到期。
     - 实现方的独立实验（`fs.watch` 后 0–50 毫秒内用 `.pending` 加 rename 发布）每 60 次漏 8 到 15 次。
@@ -6722,13 +6722,13 @@ Must preserve：所有现有断言；被测脚本 `scripts/verify-browser-runtim
 - macOS 本机探针（#631）：FSEvents 会延迟数秒、分批送达，也会合并成以被监视目录自身 basename 命名的事件。cancel 后观察 1 秒，30 次里有 16 次没收到 `cancel.json`。Node 文档写明回调的 `filename` 不保证提供。
 - 现场（PR #629 的 exact-head `pnpm check`）：两个 retirement 用例在 cancel 后约 89 秒，`cancel.json` 已在，leaf 仍活着，`owner.log` 为空。owner 没有发出 SIGINT，具体是 watch 没送到、读取出错，还是发信号出错，分不出来。
 
-- [ ] 54.1 监听取消：
+- [x] 54.1 监听取消：
   - 新增导出 `watchCancellation(directory, read, onError, { watch = fs.watch, intervalMs = 250 } = {})`：建 watcher，**任何**事件（文件名为 null、目录名或其他文件名都算）都调用一次 `read()`；另以 `intervalMs` 周期调用 `read()`；watcher 的 `error` 调 `onError()`。返回 `close()`，同时关掉 watcher 和定时器。
   - `executeOwnedCommand` 用它替换 `:232-237`：
     - `read` 先 `await readCancellation()`，再在 `interruption !== 'none'` 时 `cancel(interruption)`，与 `:302` 同构。这样不论取消来自 `cancel.json`、owner 收到的信号还是输出捕获失败，挂起的取消都会被周期地重新驱动。
     - `onError` 仍设 `failure = 'control'`，与原来一致。
     - 原来关 watcher 的 `finally` 改为调用 `close()`。启动时那一次 `await readCancellation()` 保留。
-- [ ] 54.2 发信号：
+- [x] 54.2 发信号：
   - 新增导出 `ownedCancellation(signal, report, { retryMs = 1000, now = Date.now } = {})`，取代 `:205-216` 的闭包。返回对象：
     - `cancel(kind)`：第一次记下 `interruption`，之后不改；把 `signal()` 串在一条链上；`signal()` 返回 true 后不再调用；距上次**抛错**的尝试落定不足 `retryMs` 时本次不尝试（节流）；时间只在 `signal()` 抛错、并在它落定之后记（`last = now()` 放在 catch 里），返回 false 或 true 都不记；
     - `interruption`、`signalled`、`failed`（尝试过、抛过错、且至今未发出信号）三个只读值；`retry()`：有挂起的取消时以原 `interruption` 再 `cancel` 一次，否则不动作（owner 的周期读取和 `:302` 都调它；它不经包装的 close 早退，close 之后包装的 `signal` 返回 false，效果相同）；
@@ -6740,7 +6740,7 @@ Must preserve：所有现有断言；被测脚本 `scripts/verify-browser-runtim
     - `report` 写一行到 stderr，也就是 `owner.log`；
     - `:313` 之后：`if (cancellation.failed) failure ??= 'identity'`。其他来源的 `failure`（`:272`、`:332` 等）优先，不被覆盖。
   - 读 `interruption`、`signalled` 的地方（`:246`、`:302`、`:314`、`:342`）改读返回对象，取值不变。`readCancellation` 的错误处理不变。
-- [ ] 54.3 测试，新增 `platform/test/trusted-docker-cancellation.integration.test.ts`：
+- [x] 54.3 测试，新增 `platform/test/trusted-docker-cancellation.integration.test.ts`：
   - `watchCancellation`，全部用 `vi.useFakeTimers()` 加 `advanceTimersByTime`：
     - 注入一个从不送事件的 watch：推进一个 `intervalMs` 后 `read` 被调用一次，推进 N 个后为 N 次；
     - 注入只送 `name = null`、只送目录名的 watch（`intervalMs` 取很大的值）：每个事件都调用一次 `read`；
@@ -7178,3 +7178,21 @@ Diff 估计约 480–520 行，按 CI 口径计（只排除 lockfile 和 openapi
 - 场景约 220 行，`rewriteState` 测试约 40 行；
 - 接线和 README 约 20 行，指南约 30 行；
 - 本节约 70 行。
+
+## 61. #443：阶段 2 集成验收（19.1、19.2）与任务勾选核对
+
+依赖：1–18 和 20–60 对应的 issue 都已关闭。用户决定（2026-11-20）：先核对任务勾选，再在这个 PR 的 head 上取得 19.1 的证据，最后由项目方完成 19.2 的人工验收。
+
+核对（`main` `80a5698`）：
+
+- 1–18 节和 20–60 节共有 82 项任务没有勾选，原因都是 PR 合入后没有回头勾选。两个只读核查逐项对照了已合并的 PR、关闭评论和现行代码。
+  - 81 项已交付；18.3 由第 43 节取代（`#597`）。
+  - 没有未交付或无法判定的任务。
+  - 逐项对照表（行号、任务、PR、合并提交、依据）贴在本 PR 的描述里。
+- 只核对到「点名的文件和符号存在」、没有逐条读断言或运行结果的有：32.1、35.1、36.1、37.2、43.1、44.1。它们的 PR 上有运行证据评论。
+
+- [x] 61.1 勾选上述 82 项（本 PR）。验证：`openspec list` 显示 stage-2 只剩 19.1、19.2 未勾选；`openspec validate --strict` 通过。
+- [ ] 61.2 19.1 的证据在本 PR 的 exact-head 上取得：`pnpm check`、`pnpm test:ui`、`pnpm test:stack`（证据评论），以及 VPS 的 `pnpm test:docker` 和 `pnpm test:deploy`（清理已确认，`dsh-team/docker` 状态）。`pnpm ci:model` 要等项目方对这个 SHA 单独授权后才能跑。
+- [ ] 61.3 19.2 的人工验收由项目方逐项完成：插件页、办公预设与委派、三档权限，以及基线第 7 节验收 5–11。结果记录在 #443。
+
+合并前，项目方还需要对阶段 2 触及关键路径的 PR 做人工白盒审查。这些 PR 都写明「推迟到 Epic #380 完成时」，涉及 `platform/src/orchestrator/`、`images/dsh-user/` 和 `images/seccomp/`。这一项不由本 PR 代办。
