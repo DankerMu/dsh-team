@@ -69,7 +69,7 @@
 
 #### Scenario: 用户新增预设后重新生成受管策略
 
-- **WHEN** 用户持久化另一模型地址/默认模型，并新增带重命名嵌套联网组件的非默认预设，然后平台重新收集组成、生成覆盖层并重启实例
+- **WHEN** 联网工具开关关闭时，用户持久化另一模型地址/默认模型，并新增带重命名嵌套联网组件的非默认预设，然后平台重新收集组成、生成覆盖层并重启实例
 - **THEN** 实际生效地址/模型清单/默认模型仍为管理员值，每个实际预设都被完整覆盖且不含联网工具，其他插件及表达式语义保留
 - **AND** 重启复用原状态，不以忽略用户文件、新建空状态或仅检查生成文本代替真实生效验证
 
@@ -77,6 +77,11 @@
 
 - **WHEN** 用户改写自己的中文插件patch副本，再生成覆盖层并重启
 - **THEN** 覆盖层仍取自可信canonical artifact，实际中文/无公告策略保持，模型选择和通用设置仍可用
+
+#### Scenario: 员工改写强制的插件状态和 Office 配置
+
+- **WHEN** 员工在自己的 profile 中打开一个强制关的预装插件、关闭一个受管必启项、改写 ONLYOFFICE 插件的 Document Server 地址或 JWT、或改写插件安装源，然后实例重启
+- **THEN** 实际生效的值仍是覆盖层规定的值
 
 ### Requirement: 模型不可用时明确报错
 
@@ -95,12 +100,17 @@
 
 ### Requirement: 配置变更在下次启动时生效
 
-受管配置的变更 MUST 在实例下次启动时生效，MUST NOT 打断正在运行的实例。管理员 MUST 能通过重启实例让变更立即生效。
+受管配置的变更 MUST 在实例下次启动时生效，MUST NOT 打断正在运行的实例。管理员 MUST 能通过重启实例让变更立即生效。经覆盖层下发的设置包括模型、默认权限档、联网工具开关、预装插件的强制状态、插件安装源和仓库探测、Office 配置；它们都遵循本要求。RAGFlow 连接和检索参数不经覆盖层下发，不受本要求约束。
 
 #### Scenario: 改模型清单
 
 - **WHEN** 管理员在清单里增加一个模型，此时员工的实例正在运行
 - **THEN** 该员工的模型选择器不变且任务不被打断；管理员重启该实例后，选择器里出现新增的模型
+
+#### Scenario: 改插件目录或安装源
+
+- **WHEN** 管理员把一个预装插件改为强制关，或修改安装源，此时员工的实例正在运行
+- **THEN** 运行中的实例不变且任务不被打断；该实例下次启动后按新设置生效
 
 #### Scenario: 保存回应中的运行实例快照
 
@@ -108,15 +118,6 @@
 - **THEN** 写接口在原安全配置回应中增加非负整数 `runningInstances`，表示本次保存时仍保持其启动配置的运行中实例数；启动中、已停止、出错和未创建的实例不计入
 - **AND** 该值是保存时快照，不是持续更新的配置差异统计；相同内容再次保存也返回当次运行数，读取接口保持原契约
 - **AND** 保存失败时不得返回成功快照或留下部分配置/审计；容量和空闲参数已有的即时读取行为不改变
-
-### Requirement: 去掉联网工具
-
-每个实例里的每个预设 MUST NOT 包含联网搜索和网页抓取工具。
-
-#### Scenario: Agent 没有联网工具
-
-- **WHEN** 员工在任一预设下要求 Agent 搜索网页或抓取一个网址
-- **THEN** Agent 的可用工具里没有这两项，无法执行
 
 ### Requirement: 默认权限档由管理员设定
 
@@ -201,7 +202,7 @@
 
 ### Requirement: 纯生成受管覆盖层
 
-生成函数 MUST 仅依据显式输入生成一个完整覆盖层文档，不执行文件、数据库或环境变量访问。模型密钥 MUST 仅由环境变量名引用。调用方 MUST 提供完整的预设组成和可信的 canonical 中文插件 patch 数据；生成器 MUST NOT 自行复制另一套插件 patch 或读取用户可写文件作为策略。
+生成函数 MUST 仅依据显式输入生成一个完整覆盖层文档，不执行文件、数据库或环境变量访问。模型密钥 MUST 仅由环境变量名引用。调用方 MUST 提供完整的预设组成、可信的 canonical 中文插件 patch 数据，以及每个强制态可管理 bundle 的 canonical patch 与其在组成中的出现情况；生成器 MUST NOT 自行复制另一套插件 patch 或读取用户可写文件作为策略。显式输入还包括：实例子网、上游方式（网络或 published-loopback）、联网工具开关、预装插件目录及各项的类别和管理员状态、插件安装源和仓库探测开关、本次启动的 Office 可用性与 Office 配置、平台端口。
 
 #### Scenario: 模型和权限配置序列化
 
@@ -211,9 +212,14 @@
 
 #### Scenario: 每个输入预设移除联网工具
 
-- **WHEN** 完整输入预设含任意标识及嵌套group中的DSH联网工具组件
+- **WHEN** 联网工具开关关闭，完整输入预设含任意标识及嵌套group中的DSH联网工具组件
 - **THEN** 所有这些组件从输出预设组成中移除，其他插件、顺序和预设元数据保留，输入不被修改
 - **AND** canonical中文插件patch随同一文档交付，不以无效locale配置键替代
+
+#### Scenario: 相同输入得到相同文档
+
+- **WHEN** 以完全相同的显式输入调用两次生成函数
+- **THEN** 两次输出逐字节相同，且不访问文件、数据库或环境变量
 
 ### Requirement: Trusted retirement distinguishes observation failure from canonical host cleanup
 
@@ -311,13 +317,18 @@ The restricted real-model worker SHALL look for an operator-staged image mapping
 
 ### Requirement: 受管覆盖层启用平台入口插件
 
-受管覆盖层 MUST 为每个员工实例插入并启用 `/opt/dsh-team/platform-nav/index.js`，并以 `config.admin` 传入生成覆盖层时该账号是否为管理员；其他受管行及其顺序不变；实例启动后浏览器收到的启动模块清单 MUST 恰好包含该插件。
+受管覆盖层 MUST 为每个员工实例插入并启用 `/opt/dsh-team/platform-nav/index.js`，其 `config` 恰为 `{ admin, pluginCatalog }`：`admin` 是生成覆盖层时该账号是否为管理员；`pluginCatalog` 以目录项包名为键、按目录文件顺序列出每个状态为 `forced-on` 或 `forced-off` 的目录项及其状态（受管必启项恒为 `forced-on`，`employee` 项不出现）。其他受管行及其顺序不变；实例启动后浏览器收到的启动模块清单 MUST 恰好包含该插件。平台入口插件 MUST 把这两个值发布给它的客户端半边，客户端半边据此在员工插件页把强制项显示为锁定（见 plugin-catalog「员工插件页每个预装项都有开关」）。
 
 #### Scenario: 实例加载平台入口插件
 
 - **WHEN** 员工实例按受管覆盖层启动并在真实浏览器中打开工作台
 - **THEN** 启动模块清单与预期精确一致且包含 `@dsh-team/platform-nav`，侧栏底部出现平台入口，原有插件和受管设置不变
 - **AND** 员工账号的覆盖层 `config.admin` 为 false，管理员账号为 true；直接打开 DSH 的验证通道仍无控制台错误
+
+#### Scenario: 目录强制状态随平台入口行下发
+
+- **WHEN** 目录设置为默认（三个受管必启项、办公 Agent bundle 为 `employee`），以及办公 Agent bundle 改为 `forced-off`
+- **THEN** 前者的 `config.pluginCatalog` 恰为三个必启项包名各对 `forced-on`，后者在目录顺序上多出办公 Agent 包名对 `forced-off`；相同输入逐字节相同
 
 ### Requirement: 工作台页面资源压缩传输
 
@@ -333,24 +344,177 @@ The restricted real-model worker SHALL look for an operator-staged image mapping
 - **WHEN** 浏览器经平台网关打开 `/plugins/events`
 - **THEN** 响应为 `text/event-stream` 且没有 `Content-Encoding`，首个事件帧可直接解析为模块图
 
-### Requirement: Agent 不能安装插件
+### Requirement: 实例 Web 服务监听实例固定地址
 
-每个实例里的每个预设，包括员工自己添加或改名的预设和嵌套 group，MUST NOT 包含 DSH 插件管理工具 `@deepseek-ai/dsh-plugin-manager/tools`。按包名匹配，与联网工具的去除方式相同。
+受管覆盖层的 `webserver` 行 MUST 把监听地址写为该实例在自己 /28 子网内的固定员工容器地址（子网基址 +2），端口保持 3080。覆盖层 MUST NOT 写入 `0.0.0.0`、`::` 或其他通配地址，因为 DSH 0.2.1-rc.2 拒绝通配监听地址。开发用的 published-loopback 模式同样写该实例自建 bridge 内的固定地址。
 
-受管覆盖层 MUST 把插件页的仓库探测关掉，即 `ui-plugin-manager` 的 `registryProbeEnabled: false`。这样实例运行时不会主动访问公共 npm 仓库。
+#### Scenario: 生成的监听地址是实例固定地址
 
-#### Scenario: Agent 没有插件管理工具
+- **WHEN** 生成函数收到编排器按该实例 /28 子网布局求出的员工容器固定地址（基址 +2）
+- **THEN** 输出的 `webserver` 行 `host` 等于该地址，端口为 3080，文档中没有任何通配监听地址
 
-- **WHEN** 员工在任一预设下要求 Agent 安装、卸载或列出插件包
-- **THEN** 实际生效的预设工具里没有 `plugin_manager`，Agent 无法执行
+#### Scenario: 非法地址输入被拒绝
 
-#### Scenario: 员工改名的插件管理工具也被去掉
+- **WHEN** 生成函数收到的地址不是规范点分 IPv4、是通配地址，或不是任何对齐 /28 的基址 +2
+- **THEN** 生成失败且不产出覆盖层文档，而不是退回通配地址
 
-- **WHEN** 员工在自己的 profile 中新增一个非默认预设，其嵌套 group 里含有改了 id 的 `@deepseek-ai/dsh-plugin-manager/tools`，平台随后重新生成覆盖层并重启实例
-- **THEN** 该预设实际生效时不含 `plugin_manager`，其他插件和顺序保留
+#### Scenario: 实例按固定地址启动
 
-#### Scenario: 生成器移除插件管理工具并关闭仓库探测
+- **WHEN** 员工实例在 DSH 0.2.1-rc.2 上按该覆盖层启动
+- **THEN** DSH Web 在固定地址的 3080 端口就绪，启动令牌行中的地址就是该固定地址，平台据此完成令牌交换
 
-- **WHEN** 输入的预设在顶层和嵌套 group 中，以任意 id 含有 `@deepseek-ai/dsh-plugin-manager/tools` 和联网工具
-- **THEN** 输出预设中两者都被移除，其他插件、顺序和预设元数据保留，输入不被修改
-- **AND** 输出恰好包含一行 `{ id: 'ui-plugin-manager', config: { registryProbeEnabled: false } }`，其余各行不变
+### Requirement: 联网工具默认关闭并由管理员开关控制
+
+平台 MUST 提供一个管理员设置的联网工具开关，初始值为关闭。开关关闭时，每个实例里的每个预设，包括员工新增或改名的预设和嵌套 group，MUST NOT 包含联网搜索和网页抓取工具。开关打开时，覆盖层 MUST NOT 再移除这两个工具，各预设按其自身组成保留它们。开关的变化按“配置变更在下次启动时生效”生效。
+
+#### Scenario: 默认没有联网工具
+
+- **WHEN** 管理员从未改动联网工具开关，员工在任一预设下要求 Agent 搜索网页或抓取一个网址
+- **THEN** Agent 实际生效的工具里没有这两项，无法执行
+
+#### Scenario: 员工改名的联网工具也被去掉
+
+- **WHEN** 开关关闭，员工在自己的 profile 中新增一个非默认预设，其嵌套 group 里含有改了 id 的联网工具组件，平台随后重新生成覆盖层并重启实例
+- **THEN** 该预设实际生效时不含联网工具，其他插件和顺序保留
+
+#### Scenario: 管理员为联网部署打开
+
+- **WHEN** 管理员打开联网工具开关并重启某员工实例
+- **THEN** 该实例里组成中带有联网工具的预设实际生效时包含这两项；未重启的实例保持原状
+
+#### Scenario: 生成器按开关处理联网工具
+
+- **WHEN** 输入的预设在顶层和嵌套 group 中以任意 id 含有联网工具组件，分别以开关关闭和打开调用生成函数
+- **THEN** 关闭时输出预设中这些组件全部移除，打开时全部保留；两种情况下其他插件、顺序和预设元数据都保留，输入不被修改
+
+### Requirement: 插件安装入口保留且安装源由管理员配置
+
+覆盖层 MUST NOT 从任何预设中移除 DSH 插件管理工具，MUST NOT 钉死插件页的仓库探测。安装源列表和仓库探测开关始终受管：覆盖层 MUST 总是按管理员保存的值写出这两项。设置的初始值 MUST 等于 DSH 0.2.1-rc.2 的默认值（默认公共源列表、探测开启）；内网部署由管理员改为内网镜像或关闭探测。
+
+#### Scenario: Agent 保留插件管理工具
+
+- **WHEN** 员工在默认预设下要求 Agent 列出已安装的插件包
+- **THEN** 实际生效的预设工具里有 `plugin_manager`，Agent 能执行该操作
+
+#### Scenario: 内网部署指向内网安装源并关闭探测
+
+- **WHEN** 管理员把安装源设为一个内网 npm 镜像地址、关闭仓库探测，然后员工实例重启
+- **THEN** 该实例生效的插件安装源只有这个内网地址，插件页不主动探测公共仓库
+
+#### Scenario: 生成器总是写出安装源和探测开关
+
+- **WHEN** 分别以“初始设置（DSH 默认源、探测开启）”和“两个内网安装源、探测关闭”调用生成函数
+- **THEN** 前者输出的安装源列表等于 DSH 默认源列表、仓库探测为开启；后者输出恰好包含这两个安装源（顺序不变）且仓库探测为关闭；两种情况下输出都含这两项，预设中的插件管理工具都保留
+
+#### Scenario: 安装源写入 DSH 的两个配置键
+
+- **WHEN** 以安装源列表 `[A, B, C]` 调用生成函数
+- **THEN** 输出对插件管理器宿主行写入 `registry: A`、`fallbackRegistries: [B, C]`，对插件页行写入 `registryProbeEnabled`；两行都是整配置替换，值原样写出不做规范化；空列表被拒绝
+
+### Requirement: 预装插件的强制状态经覆盖层下发
+
+插件目录中的每一项属于两类之一。受管必启项（平台入口、权限档、中文界面、Office 提示）MUST 总是由覆盖层写为启用。可管理项按管理员设定的三态写入：`forced-on` 写为启用，`forced-off` 写为停用，`employee` MUST NOT 写入任何启用状态，由员工 profile 中来自镜像的默认值和员工自己的选择决定。ONLYOFFICE 插件例外：本次启动 Office 不可用时，覆盖层 MUST 把它写为停用，不论其目录状态。目录之外的插件 MUST NOT 被覆盖层写入启用状态。
+
+#### Scenario: 强制关的插件员工打不开
+
+- **WHEN** 管理员把一个可管理的预装插件设为 `forced-off` 并重启员工实例，员工在插件页尝试打开它
+- **THEN** 该插件在实例里实际处于停用状态，重启实例后仍是停用
+
+#### Scenario: 员工自选保留员工的选择
+
+- **WHEN** 某预装插件为 `employee`，员工把它关掉并重启实例
+- **THEN** 它仍是关闭；另一个从未改动它的员工看到的是镜像默认状态
+
+#### Scenario: 生成器只写强制项和必启项
+
+- **WHEN** 输入目录中有一个受管必启项，以及三个可管理项分别为 `employee`、`forced-on`、`forced-off`
+- **THEN** 输出对必启项和 `forced-on` 项写为启用、对 `forced-off` 项写为停用，对 `employee` 项不写任何启用状态
+
+#### Scenario: Office 不可用时 ONLYOFFICE 停用
+
+- **WHEN** ONLYOFFICE 的目录状态为 `employee` 或 `forced-on`，而本次启动 Office 不可用
+- **THEN** 输出把 ONLYOFFICE 写为停用，其他目录项的输出不变
+
+#### Scenario: 强制开的 bundle 已被员工取消勾选
+
+- **WHEN** 某可管理 bundle 为 `forced-on`，而观测到的组成中没有它规范 patch 插入的任何一行
+- **THEN** 输出按原顺序写出该 bundle 规范 patch 的全部行，其中的预设条目经与观测预设相同的联网工具规则处理；若组成中只出现其中一部分行，读取器拒绝该组成，实例不启动
+
+#### Scenario: profile 里目标不存在的行不阻止启动
+
+- **WHEN** 员工 profile 或 home patch 里有一行，应用到该行时其 id 在此前的 bundle、profile、home 行组成中不存在（例如经 DSH 插件管理写出、指向覆盖层插入行的停用行），实例下次启动
+- **THEN** 组成读取器按 DSH 语义跳过该行，实例照常启动，覆盖层状态不变；bundle 层的任何告警，以及 profile/home 层的 name mismatch、`patch insert` 目标不存在或不是 group、缺 id，以及 id 不是字符串的行，读取器仍拒绝该组成，实例不启动
+
+#### Scenario: 强制关的 bundle 覆盖了默认预设
+
+- **WHEN** 某可管理 bundle 为 `forced-off`，其规范 patch 把预设注册表的默认预设改为它自己的预设，分别以它在观测组成中存在和缺席调用生成函数
+- **THEN** 两种情况输出相同：对它插入的每一行写为停用、这些预设不再整行写出，并把预设注册表的默认预设还原为 DSH 发行默认 `standard`，使员工运行中勾选它时这些行立即生效；规范 patch 若覆盖了别的行，生成器拒绝
+
+#### Scenario: 必启项状态异常或强制项无法激活
+
+- **WHEN** 输入目录中某受管必启项的状态不是 `forced-on`，或某可管理项处于强制态而其规范 patch 没有任何行
+- **THEN** 生成函数抛出错误，不产出覆盖层
+
+### Requirement: Office 插件配置经覆盖层下发
+
+本次启动 Office 可用时，覆盖层 MUST 为 ONLYOFFICE 侧栏插件写入以下配置：
+
+- Document Server 地址：使用自带 Document Server 时为该实例子网内的 Document Server 固定地址（基址 +4），使用外部 Document Server 时为管理员配置的地址；
+- 实例内部地址：该实例的固定员工容器地址加 3080 端口；
+- 对外地址：平台对外地址；
+- Document Server 的 JWT 密钥。
+
+Office 可用是指：使用外部 Document Server 且地址和 JWT 已配置；或使用自带 Document Server、部署配置齐全、且本次启动已把它接入该实例网络。其他情况（自带未配置、容器不存在或身份不符、published-loopback 方式）MUST 视为不可用：覆盖层 MUST NOT 写出任何 Office 配置，ONLYOFFICE 插件在该实例中不启用，模型、权限和其他受管行保持完整。
+
+#### Scenario: 自带 Document Server
+
+- **WHEN** 部署使用自带 Document Server，且本次启动已把它接入实例网络，平台为该实例生成覆盖层
+- **THEN** ONLYOFFICE 插件的 Document Server 地址是该实例子网基址 +4，内部地址是基址 +2 的 3080 端口，对外地址等于平台对外地址，JWT 与部署配置一致
+
+#### Scenario: 外部 Document Server
+
+- **WHEN** 管理员改用外部 Document Server 地址和 JWT，并重启员工实例
+- **THEN** 该实例的 ONLYOFFICE 插件使用管理员配置的地址和 JWT；未重启的实例保持原配置
+
+#### Scenario: Office 不可用
+
+- **WHEN** 既没有自带 Document Server 的配置，也没有外部 Document Server 的配置；或自带 Document Server 本次没有接入；或实例以 published-loopback 方式启动
+- **THEN** 生成的覆盖层中没有 Office 配置，ONLYOFFICE 插件不启用，模型、权限和其他受管行保持完整
+
+### Requirement: 知识库插件取得平台地址
+
+覆盖层 MUST 只给知识库插件一个平台地址：该实例子网内平台的固定地址（基址 +3）加平台监听端口。知识库插件的启用状态 MUST 完全服从插件目录的三态，覆盖层 MUST NOT 另行启用它。published-loopback 方式下覆盖层 MUST NOT 给出平台地址，知识库在该实例不可用。覆盖层 MUST NOT 包含 RAGFlow 地址、RAGFlow 密钥或检索参数。
+
+#### Scenario: 覆盖层中的知识库配置
+
+- **WHEN** 平台以网络方式为某实例生成覆盖层
+- **THEN** 知识库插件的配置只有平台地址且等于该实例子网基址 +3 加平台端口；文档中没有 RAGFlow 地址、密钥或检索参数
+
+#### Scenario: 启用状态服从目录
+
+- **WHEN** 知识库的目录状态分别为 `employee`、`forced-on`、`forced-off` 时生成覆盖层
+- **THEN** 前者不写启用状态，后两者分别写为启用和停用；三种情况下平台地址配置相同
+
+#### Scenario: 回环方式不给平台地址
+
+- **WHEN** 平台以 published-loopback 方式为某实例生成覆盖层
+- **THEN** 覆盖层中没有知识库的平台地址
+
+### Requirement: 受管模型密钥优先于员工凭据
+
+对受管模型，实例 MUST 始终使用平台注入的模型密钥。员工在自己状态目录的凭据文件里为同一模型地址或 provider 写入的任何密钥 MUST NOT 生效，即使 DSH 0.2.1-rc.2 中凭据文件的优先级高于环境变量。
+
+#### Scenario: 员工在凭据文件中写入别的密钥
+
+- **WHEN** 员工在自己的凭据文件中为受管 provider 写入另一个密钥，重启实例后发送一条消息
+- **THEN** 一个确定性的自有模型服务观察到的 Authorization 头对应平台密钥，而不是员工写入的密钥
+- **AND** 该验证在真实 Docker 中用真实 DSH 运行，不以检查生成文本代替
+
+### Requirement: 受管行为在 DSH 0.2.1-rc.2 上保持
+
+DSH 升级到 0.2.1-rc.2 后，本能力既有的受管行为 MUST 保持不变，包括：模型清单和默认模型、模型未配置不启动、员工不能覆盖、模型不可用不回退、默认权限档、整份写入、密钥不外露、平台入口插件和页面资源压缩。DSH 0.2.1 新增的预设行和 bundle MUST 与覆盖层逐项核对，确认不会绕过上述受管值。
+
+#### Scenario: 升级后全量重跑
+
+- **WHEN** 对 DSH 升级的精确提交执行完整的 `pnpm test:docker` 和 `pnpm test:deploy`，并经单独授权执行 `pnpm test:model`
+- **THEN** 本能力的既有验收全部通过，没有被跳过或放宽的用例

@@ -8,7 +8,7 @@ Define native office Agent delegation behavior so a general-office parent create
 
 ### Requirement: Native writer child composition precedes work
 
-When an employee requests writing or revision of an office notice or material under office-general, the general Agent MUST delegate to a genuine native office-writer child rather than only claim delegation. For DOCX acceptance, that child MUST execute structured document construction for the requested destination through the production construction operation; copying an already-completed document MUST NOT count as construction. Parent-provided facts and drafts MAY be used. This contract proves construction by the writer Session, not independent authorship of the content. The employee MUST NOT need to name a tool, preset or delegation mechanism. A fresh direct one-shot child delegated by office-general MUST use the office-writer preset before its first turn. Its effective identity, instructions and tools MUST agree; its actual parent linkage and workspace MUST remain intact. Creation metadata MUST NOT be falsified to represent a later selection. General coordination, ordinary file operations and subsequent verification or edits MUST remain available without changing managed permissions.
+When an employee requests writing or revision of an office notice or material under office-general, the general Agent MUST delegate to a genuine native office-writer child rather than only claim delegation. For DOCX acceptance, that child MUST execute structured document construction for the requested destination through the production construction operation; copying an already-completed document MUST NOT count as construction. Parent-provided facts and drafts MAY be used. This contract proves construction by the writer Session, not independent authorship of the content. The employee MUST NOT need to name a tool, preset or delegation mechanism. A fresh direct child delegated by office-general for writing MUST run under the office-writer preset from its first turn, whatever native child mode DSH assigns. Its effective identity, instructions and tools MUST agree; its actual parent linkage and workspace MUST remain intact. Creation metadata MUST NOT be falsified to represent a different selection. General coordination, ordinary file operations and subsequent verification or edits MUST remain available without changing managed permissions.
 
 #### Scenario: Natural notice request uses the writer child
 
@@ -18,8 +18,8 @@ When an employee requests writing or revision of an office notice or material un
 
 #### Scenario: General delegates a fresh writer child
 
-- **WHEN** office-general starts a fresh direct unseeded one-shot child
-- **THEN** the child has genuine subagent origin and parent linkage, selects office-writer before starting its turn, and uses writer instructions and tools without the general delegation tool
+- **WHEN** office-general starts a fresh direct unseeded child for a writing task
+- **THEN** the child has genuine subagent origin and parent linkage, runs under office-writer before starting its turn, and uses writer instructions and tools without the general delegation tool
 - **AND** the parent and concurrently active siblings keep their independent presets
 
 #### Scenario: General retains ordinary file work and verification
@@ -53,18 +53,22 @@ When an employee requests writing or revision of an office notice or material un
 
 ### Requirement: Delegation selection remains reconstructable and bounded
 
-The effective writer selection MUST survive native persisted transcript reconstruction. The plugin MUST NOT rebind unrelated roots or presets, seeded forks, continuable children, resumed Agents or children already using writer.
+The effective writer selection MUST survive native persisted transcript reconstruction and resume. Writer delegation MUST NOT change the preset of unrelated roots, children of other presets, seeded forks, resumed Agents or children already using writer.
 
 #### Scenario: Cold child transcript remains writer
 
-- **WHEN** the live one-shot child is disposed and its native subagent address is read
-- **THEN** the persisted selection and effective preset projection identify office-writer, and the original parent relationship is still validated
-- **AND** an immutable header retaining its earlier creation preset is not treated as the current preset
+- **WHEN** the live writer child is disposed and its native subagent address is read
+- **THEN** the persisted delegation and effective preset projection identify office-writer, and the original parent relationship is still validated
+
+#### Scenario: Resumed writer child stays writer
+
+- **WHEN** a writer child that finished its turn is resumed with a follow-up message
+- **THEN** it continues under office-writer with the same parent linkage, and the follow-up runs under the child's current permission tier
 
 #### Scenario: Unrelated and resumed Agents retain their composition
 
-- **WHEN** a root, other-preset child, seeded fork, continuable child, resumed Agent or already-writer child is created or attached
-- **THEN** this plugin adds no new preset selection and preserves its existing composition
+- **WHEN** a root, other-preset child, seeded fork, resumed Agent or already-writer child is created or attached
+- **THEN** writer delegation adds no new preset selection and preserves its existing composition
 
 ### Requirement: Writer selection preserves managed child authority and native lifecycle
 
@@ -115,12 +119,17 @@ Target-preset selection MUST preserve the child's managed permission tier, model
 
 ### Requirement: 办公 Agent 没有联网工具
 
-两个预设的工具清单 MUST NOT 包含联网搜索和网页抓取。
+联网工具开关关闭时（默认），两个预设实际生效的工具清单 MUST NOT 包含联网搜索和网页抓取。开关打开时，两个预设与其他预设遵循同一受管规则，不另作例外。
 
 #### Scenario: 工具清单检查
 
-- **WHEN** 查看两个预设在实例里实际生效的工具清单
+- **WHEN** 联网工具开关关闭，查看两个预设在实例里实际生效的工具清单
 - **THEN** 都不含联网搜索和网页抓取
+
+#### Scenario: 管理员打开联网工具
+
+- **WHEN** 管理员打开联网工具开关并重启实例，查看两个预设实际生效的工具清单
+- **THEN** 两个预设与其他预设一样，按各自组成保留联网工具，不被覆盖层单独移除
 
 ### Requirement: 每个 Agent 有可执行的验收任务
 
@@ -130,3 +139,31 @@ Target-preset selection MUST preserve the child's managed permission tier, model
 
 - **WHEN** 在配置了开发模型的环境里运行两个预设的验收任务
 - **THEN** 每个任务都产出符合其检查项的真实文件；模型密钥缺失时任务明确失败，而不是跳过
+
+### Requirement: Writer delegation uses native preset delegation
+
+Office-general MUST delegate writing work through DSH's native child preset delegation, with office-writer as the only child preset office-general may request for that delegation. The image-delivered office bundle MUST NOT select or rebind a child's preset after creation. Delegation by other presets and by employees MUST keep DSH's native behavior.
+
+#### Scenario: Native delegation names the writer preset
+
+- **WHEN** office-general delegates a notice-writing task
+- **THEN** the native delegation record for the new child names office-writer as the requested preset, and the child runs under office-writer from its first turn
+
+#### Scenario: Office-general cannot delegate to another preset
+
+- **WHEN** office-general attempts to delegate to a preset other than office-writer
+- **THEN** DSH rejects that delegation and no child runs under the other preset
+
+#### Scenario: No post-creation rebinding
+
+- **WHEN** a child of any preset is created, attached or resumed
+- **THEN** the office bundle adds no preset selection of its own; the child's effective preset is the one native delegation assigned
+
+### Requirement: Office delegation acceptance holds on DSH 0.2.1-rc.2
+
+After the upgrade to DSH 0.2.1-rc.2, where every subagent child is continuable, the existing office delegation acceptance MUST hold unchanged: the effective writer, construction receipts, permission-tier effects, cold reads and resume, and cancellation and failed-creation settlement.
+
+#### Scenario: Full re-verification after the upgrade
+
+- **WHEN** the DSH upgrade's exact commit runs the full `pnpm test:docker`, and the separately authorized `pnpm test:model`
+- **THEN** every existing office delegation case passes without skipped or relaxed cases, and both the manual writer and the natural-language delegation real-model cases pass
