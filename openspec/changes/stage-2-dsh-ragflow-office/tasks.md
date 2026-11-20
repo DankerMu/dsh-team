@@ -3789,8 +3789,8 @@ Evidence (18.1):
 
 依赖：1–4、6–18。
 
-- [ ] 19.1 在最终提交上：exact-head 全量 `test:docker` 和 `test:deploy` 通过，清理已确认；`pnpm test:stack` 全量通过，并贴证据评论。另取得单独的 SHA 授权后，`pnpm ci:model` 通过。验证：PR 中有三份证据，和 `dsh-team/docker` 状态。
-- [ ] 19.2 按 B10，人工重做受影响的阶段 1 验收项：插件页、办公预设与委派、三档权限；在本机通道上逐项人工验收基线第 7 节的验收 5–11。验证：项目方逐项确认，结果记录在阶段 2 的验收 issue 中。
+- [x] 19.1 在最终提交上：exact-head 全量 `test:docker` 和 `test:deploy` 通过，清理已确认；`pnpm test:stack` 全量通过，并贴证据评论。另取得单独的 SHA 授权后，`pnpm ci:model` 通过。验证：PR 中有三份证据，和 `dsh-team/docker` 状态。
+- [x] 19.2 按 B10，人工重做受影响的阶段 1 验收项：插件页、办公预设与委派、三档权限；在本机通道上逐项人工验收基线第 7 节的验收 5–11。验证：项目方逐项确认，结果记录在阶段 2 的验收 issue 中。
 
 Suggested fixture level: none - 只做集成验证，不改代码
 Minimal mergeable slice: atomic: 只有验证和记录，没有可合并的代码
@@ -7192,7 +7192,14 @@ Diff 估计约 480–520 行，按 CI 口径计（只排除 lockfile 和 openapi
 - 只核对到「点名的文件和符号存在」、没有逐条读断言或运行结果的有：32.1、35.1、36.1、37.2、43.1、44.1。它们的 PR 上有运行证据评论。
 
 - [x] 61.1 勾选上述 82 项（本 PR）。验证：`openspec list` 显示 stage-2 只剩 19.1、19.2 未勾选；`openspec validate --strict` 通过。
-- [ ] 61.2 19.1 的证据在本 PR 的 exact-head 上取得：`pnpm check`、`pnpm test:ui`、`pnpm test:stack`（证据评论），以及 VPS 的 `pnpm test:docker` 和 `pnpm test:deploy`（清理已确认，`dsh-team/docker` 状态）。`pnpm ci:model` 要等项目方对这个 SHA 单独授权后才能跑。
-- [ ] 61.3 19.2 的人工验收由项目方逐项完成：插件页、办公预设与委派、三档权限，以及基线第 7 节验收 5–11。结果记录在 #443。
+- [x] 61.2 19.1 的证据在本 PR 的 exact-head 上取得：`pnpm check`、`pnpm test:ui`、`pnpm test:stack`（证据评论），以及 VPS 的 `pnpm test:docker` 和 `pnpm test:deploy`（清理已确认，`dsh-team/docker` 状态）。`pnpm ci:model` 要等项目方对这个 SHA 单独授权后才能跑。
+- [x] 61.3 19.2 的人工验收由项目方逐项完成：插件页、办公预设与委派、三档权限，以及基线第 7 节验收 5–11。结果记录在 #443。
+
+实测（2026-11-20）：#645 在 exact head `d4bb08e` 上合并（merge commit `76134f6`）。
+
+- 19.1：`pnpm check` 通过（unit 4446、integration 3133），`pnpm test:ui` 78 个用例通过，`pnpm test:stack` 通过（679.83s）；VPS 上 `pnpm test:docker` 144 个用例、`pnpm test:deploy` 14 个用例通过，清理已确认，`dsh-team/docker` 状态已贴。证据评论见 #645。
+- `pnpm ci:model`：项目负责人对这个 SHA 单独授权后执行，`model` 检查结果为 SUCCESS（run 44731981486，用 `--rerun` 重跑），SHA 专用 secret 已收回。VPS 上没有预构建镜像映射，走的是原生构建。
+- 19.2：项目负责人 2026-11-20 答复「接受通过」，签收记录在 #443。本条只记录这个结论，不代为描述逐项验收的过程。
+- 关键路径人工白盒审查：项目负责人 2026-11-20 同样答复「接受通过」，签收记录在 #380。
 
 合并前，项目方还需要对阶段 2 触及关键路径的 PR 做人工白盒审查。这些 PR 都写明「推迟到 Epic #380 完成时」，涉及 `platform/src/orchestrator/`、`images/dsh-user/` 和 `images/seccomp/`。这一项不由本 PR 代办。
