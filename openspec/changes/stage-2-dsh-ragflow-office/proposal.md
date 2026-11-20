@@ -56,7 +56,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
   - 用户镜像预装 `dsh-better-sidebar@0.28.0` 和 `dsh-sidebar-onlyoffice@0.2.0`，并带两个构建期补丁：
     - better-sidebar 的 Office 扩展名表；
     - ONLYOFFICE 文件令牌和文档 key 改用每个实例单独的密钥，防止借 Document Server 跨用户取文件或推算 key。
-  - 新增镜像插件「Office 提示」，显示人机同写、无 Session、满员三条提示；员工文档新建 `docs/EMPLOYEE_GUIDE.md`。
+  - 新增镜像插件「Office 提示」，显示人机同写、无 Session 两条提示（满员提示不适用，9.4.0 社区版没有连接上限，见 tasks.md 第 59 节）；员工文档新建 `docs/EMPLOYEE_GUIDE.md`。
   - 用户镜像装中西文字体（DSH 自带的 WASM 转换引擎缺字体时不能工作），部署的授权字体目录只读挂载进实例，供 DOC、PPT 只读预览（XLS 由 DSH 的浏览器表格视图显示），以及 Document Server 满员时的退路。
   - 覆盖层下发 Office 配置；HTML 预览沙箱由预览路由的 CSP 保证，两个沙箱开关显示为受管锁定。
   - 文件区的下载由 better-sidebar 的「打包下载」提供。
@@ -77,7 +77,7 @@ Office 编辑依赖 `dsh-better-sidebar`，而 0.28.x 的 peer 依赖要求 DSH 
 
 - `ragflow-proxy`：平台的 RAGFlow 只读代理、实例令牌鉴权、连接与检索参数配置、错误映射和越界校验。
 - `knowledge-base`：「知识库」DSH 插件，包括面板、Session 范围选择与快照、检索工具和范围继承、来源展示、错误提示。
-- `office-editing`：Document Server 部署与网络接入、两个侧栏插件及补丁、Office 提示、编辑保存回读、跨用户隔离、Office 不可用时的退路、并发和满员提示、旧格式预览、文件下载、HTML 预览沙箱。
+- `office-editing`：Document Server 部署与网络接入、两个侧栏插件及补丁、Office 提示、编辑保存回读、跨用户隔离、Office 不可用时的退路、并发提示、旧格式预览、文件下载、HTML 预览沙箱。
 - `plugin-catalog`：预装项定义、受管必启项、可管理项的三态、员工开关、安装源与仓库探测配置、保留的安装入口。
 - `stack-verification`：本机 arm64 全栈验证通道、本机浏览器与确定性模型、RAGFlow 测试栈种子、证据规则。
 

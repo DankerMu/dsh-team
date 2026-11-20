@@ -99,7 +99,7 @@
 
 ### Requirement: Office 提示插件随镜像交付
 
-用户镜像 MUST 把仓库插件 `office-hints` 以 root 所有、只读方式放在 `/opt/dsh-team/office-hints/`；所有构建用户镜像的入口 MUST 提供 `office-hints` 命名构建上下文。它是受管必启项，只在 ONLYOFFICE 生效时显示人机同写、无 Session 和满员三条提示，不修改任何第三方包。
+用户镜像 MUST 把仓库插件 `office-hints` 以 root 所有、只读方式放在 `/opt/dsh-team/office-hints/`；所有构建用户镜像的入口 MUST 提供 `office-hints` 命名构建上下文。它是受管必启项，只在 ONLYOFFICE 生效时显示人机同写和无 Session 两条提示，不修改任何第三方包。
 
 #### Scenario: 插件文件只读且不改第三方包
 

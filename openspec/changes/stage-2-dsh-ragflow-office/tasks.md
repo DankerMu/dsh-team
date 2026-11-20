@@ -3541,7 +3541,7 @@ Sibling surfaces：
 
 - 17.1 的 docx 交接用例；
 - `offline-docx` probe；
-- 18.6 满员退路（退回本预览）。
+- 18.6 满员退路（退回本预览；已不适用，见第 59 节）。
 
 Evidence (17.4 镜像部分，#432):
 
@@ -3661,7 +3661,7 @@ Evidence (#556):
 
   验证：`pnpm test:stack` 通过，并贴出证据评论。
 
-- [ ] 18.6 先在本机通道制造 Document Server 满员，记录可观测的信号；再在 `office-hints` 中实现「编辑服务已满」提示，以及退回 17.4 的只读预览。验证：本机通道用例覆盖满员时的提示和预览；信号无法区分时停止并报告。
+- [x] 18.6 **不适用**（用户决定 2026-11-19）：9.4.0 社区版没有连接上限，满员造不出来，见第 59 节。原文：先在本机通道制造 Document Server 满员，记录可观测的信号；再在 `office-hints` 中实现「编辑服务已满」提示，以及退回 17.4 的只读预览。验证：本机通道用例覆盖满员时的提示和预览；信号无法区分时停止并报告。
 - [ ] 18.7 实测编辑器打开期间 Agent（由确定性 provider 驱动）改写同一文件时的表现，写进 `docs/EMPLOYEE_GUIDE.md`；员工保存时遵守后写覆盖。验证：本机通道用例与文档描述一致。
 
 Suggested fixture level: expanded - 跨用户隔离和新的共享对端
@@ -4754,7 +4754,7 @@ Must preserve：
 - DSH 设置服务的 `describe()`（`dsh-settings/lib/index.js:430-457`）会把 `jwtSecret` 原样返回给员工浏览器，因为插件 schema 没有把它标成密钥。这和 design :30「覆盖层 0444、实例内可读」是同一条边界，JWT 本来就对实例内可见。
 - `readiness-logs.ts:13` 的脱敏规则不匹配 `secret`/`jwt`。目前没有发现 DSH 打印插件配置值的路径。
 
-- 外部 Document Server 的地址按原样保存，平台不探测它。地址写错时，Office 打开失败的提示属于 18.6。
+- 外部 Document Server 的地址按原样保存，平台不探测它。地址写错时，Office 打开失败的提示属于 18.6。18.6 已不适用（第 59 节），这条提示不再有归属，见第 59 节的剩余风险。
 - 目录状态为 `forced-on`、旧 home 卷的 profile 里又没有该包时，停用行指向缺席的目标，只产生一条警告；这和知识库的先例相同。
 - Office 不可用时，员工插件页上 ONLYOFFICE 的开关仍按目录三态显示，但实际不生效。后台目录页显示原因属于 #436；员工页的锁定显示另行跟进，本节不做。
 
@@ -7026,3 +7026,23 @@ Must preserve：
 - `ProfileIncompatibleError` 路径；
 - bundle 部分出现、预设缺失、结构非法仍然拒绝；
 - 输出 JSON 的形状。
+
+## 59. #441：Document Server 满员实测（18.6 不适用）
+
+依赖：无。18.6 要求先在本机通道制造 Document Server 满员、记录信号，再实现提示和退路；信号无法区分时停止并报告。实测造不出满员。用户决定（2026-11-19）：F42 和 18.6 改为不适用，只改文档和 spec，不写插件代码。
+
+实测（本机 arm64，`onlyoffice/documentserver:9.4.0`，与本机通道同一镜像；一次性容器 `dsh-team-research-ds-full`，`JWT_ENABLED=true`、`ALLOW_PRIVATE_IP_ADDRESS=true`，与 `deploy/compose.yml` 相同，用后已删除）：
+
+- 许可：Command Service 的 `license` 命令返回 `connections` 和 `connections_view` 都是 `2147483647`，`users_count` 为 0，`resultType` 为 3；容器内 `/info/info.json` 的 `licenseInfo` 给出同样的值。`default.json` 的 `license` 段只有 `license_file: ""`、`warning_limit_percents: 70`，没有可配置的连接上限。
+- 并发：Playwright Chromium 依次打开 25 个编辑器，每个用不同的文档 key 和用户 id、`mode: edit`、JWT 签名，全部保持打开。25 个都在父页面收到 `onInfo {"mode":"edit"}` 和 `onDocumentReady`，没有 `onWarning` 或 `onError`；第 25 个的截图是正常的编辑界面，没有弹窗。
+- 对照：同一页面能区分其他失败。令牌签错得到 `onError {"errorCode":-20}`，文档下载 404 得到 `onError {"errorCode":-4}`；`mode: view` 得到 `onInfo {"mode":"view"}`。
+- 语言包里有 `warnNoResources`（「服务器没有足够的资源…将仅以查看模式打开」），本次没有找到触发它的配置或条件。
+
+结论：自带的 9.4.0 社区版没有 D11 假定的 20 连接上限，满员不会发生，F42 的提示没有触发条件。
+
+- [x] 59.1 修订基线 D11、F42 和实施计划 2.8，在架构分析中补注实测结果；从 `office-editing` spec 删除「满员时有提示和退路」场景和对应要求句；`user-image` spec、proposal、design 改为两条提示；18.6 标为不适用。验证：`openspec validate stage-2-dsh-ragflow-office --strict --no-interactive`、`pnpm fmt:check`。
+
+剩余风险（只报告）：
+
+- 外部 Document Server（运营方自备、可能带商业许可）可能有连接上限，满员时由 Document Server 自己的界面处理，本项目不另加提示。
+- 外部地址写错时的「Office 打开失败」提示原先归 18.6（本文件「地址写错时，Office 打开失败的提示属于 18.6」一句），现在没有归属。按插件源码（`dsh-sidebar-onlyoffice@0.2.0` `src/client/OnlyOfficeView.tsx`），api.js 加载失败或编辑器报错时插件自己显示错误面板；本项目未另行实测。

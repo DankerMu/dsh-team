@@ -192,7 +192,7 @@ docs/  verify/  resource/（只读参考，不入库）
 | 2.5 RAGFlow 插件：检索工具 | 沿 `parentSession` 回溯取范围；来源展示 | F25、F32 |
 | 2.6 Document Server 部署 | 并入交付的 compose；JWT 和地址以部署 `.env` 为准，后台可切外部；字体；接入每个员工网络 | F41、D11 |
 | 2.7 Office 接入 | 用户镜像加入两个插件和补丁（`better-sidebar` 的扩展名表；ONLYOFFICE 文件令牌改为每实例密钥）；覆盖层加入 Office 配置；文件区的下载入口和 Office 文件预览 | F35、F37–F39、T6 |
-| 2.8 Office 体验 | 没有 Session 时的提示；并发覆盖提示；连接数满的提示；XLSX、PPTX 验证；编辑器打开时 Agent 改文件的刷新 | F40、F42 |
+| 2.8 Office 体验 | 没有 Session 时的提示；并发覆盖提示；连接数满的提示（不适用，见基线 D11、F42 的 2026-11-19 修订）；XLSX、PPTX 验证；编辑器打开时 Agent 改文件的刷新 | F40、F42 |
 | 2.9 HTML 预览验证 | 沙箱行为验证；受管配置钉死 | F36 |
 | 2.10 插件目录与部署形态 | 后台把每个预装插件和 bundle 设为员工自选（默认值随镜像）、强制开或强制关，员工插件页每个预装项都有开关，强制的项锁定；后台配置插件安装源和仓库探测、联网搜索和抓取工具开关；经覆盖层下发，实例下次启动生效 | F24、F46、F47、D9、D25 |
 | 2.11 本机验证通道 | 本机 arm64 全栈（平台、员工镜像、Document Server、RAGFlow 测试栈）；`pnpm test:stack`；本机 RAGFlow 测试数据的种子脚本 | D16 例外 |
