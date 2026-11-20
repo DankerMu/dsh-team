@@ -7046,3 +7046,135 @@ Must preserve：
 
 - 外部 Document Server（运营方自备、可能带商业许可）可能有连接上限，满员时由 Document Server 自己的界面处理，本项目不另加提示。
 - 外部地址写错时的「Office 打开失败」提示原先归 18.6（本文件「地址写错时，Office 打开失败的提示属于 18.6」一句），现在没有归属。按插件源码（`dsh-sidebar-onlyoffice@0.2.0` `src/client/OnlyOfficeView.tsx`），api.js 加载失败或编辑器报错时插件自己显示错误面板；本项目未另行实测。
+
+## 60. #442：编辑器打开时 Agent 改写同一文件（18.7）
+
+依赖：#439（第 48 节）、#440（第 49–51 节）均已合入。fixture level expanded。只改 `platform/test/`（确定性 provider、stack 场景、接线和配套测试）和 `docs/EMPLOYEE_GUIDE.md`；不改插件、镜像、平台源码，不碰关键路径。用户决定（2026-11-19）：单个 PR，加 `diff-limit-exempt`（估计约 500 行，见末尾）。
+
+已核实（`main` `e62df5e`；ONLYOFFICE 插件为 npm 发行版 `dsh-sidebar-onlyoffice@0.2.0`）：
+
+- 插件对磁盘变化的处理（`src/client/OnlyOfficeView.tsx`、`src/index.ts`、`src/watch.ts`）：
+  - 编辑器打开后，视图订阅 `/sidebar/onlyoffice/watch`（inotify）。文件被外部改写时推送 `change` 事件，带新的文档 key。
+  - `dirtyRef` 为 `false` 时，视图重新请求 `/sidebar/onlyoffice/config` 并调用 `docEditor.refreshFile(config)`，不重载页面。`dirtyRef` 跟随 `onDocumentStateChange`：修改送达 Document Server 时变为 `false`，不一定是保存。
+  - `dirtyRef` 为 `true` 时不刷新，而是在编辑器上方显示提示条「文件已被外部修改（可能是 AI）——重新加载将丢弃未保存的修改」和按钮「重新加载」（`src/client/locales.ts:25-26`）。`onDocumentStateChange(false)` 只清掉提示条，不补一次刷新。
+  - 回调 status 2、6 把 Document Server 的字节原子替换进文件：先在同目录写 `<path>.tmp-*` 再改名，失败时可能留下 `.abandoned`（`src/registry.ts:162-164`、`:291-306`）。插件自己的保存不会触发刷新（`noteSelfSave`）。插件强制开启 `forcesave`（`src/onlyoffice.ts:103`），Ctrl+S 走 status 6。
+  - 以下三点只能实测：快速协同模式下键入多久后 `dirtyRef` 回到 `false`；没有新修改时 Ctrl+S 是否发 status 6；`refreshFile` 之后旧 key 的会话是否还会发 status 2，把旧内容写回文件。
+- 确定性 provider（`platform/test/deployment-model-wire.ts`）：
+  - 已有一次性的 `readBack` 脚本 `{ marker, command, nonce }`（`:83-110`、`:161-202`）：带 marker、文本里没有 nonce、提供了 `bash` 的请求调用一次 `bash`；之后每个请求的历史里只要有带 nonce 的 tool 消息就记一次命中（`:183`）。health 报告 `readBacks`、`readBackHits`。`READ_BACK_COMMAND` 刻意不含 nonce（`office-editor-stack-fixture.ts:464`）。
+  - stack 用例在 `ownedModel`（`platform-stack.stack.test.ts:263-283`）里配置 provider。`EXPECTED_DELTAS` 只在 18.5 编辑器用例内部从开始算到结束（`office-editor-stack-fixture.ts:460`、`:480-481`）；隔离和 profile 用例各自前后比较，空闲用例不断言计数，最终检查都用 `>=`（`platform-stack.stack.test.ts:774-776`）。所以新增的 Agent 回合不影响这些断言。
+  - `script` 只能用 `write` 工具写文本（`:28-46`），写不出 docx。
+- 可复用的 stack 工具：
+  - `workbenchSession`、`converseInWorkbench`（`stack-browser-fixture.ts:144`、`:268`）：后者另开一个浏览器重新登录，在新会话里发一条消息；
+  - `openHinted`、`documentServerReady`（`office-hints-stack-fixture.ts:142`、`:185`）；
+  - `typeAndSave`（`save = false` 时只键入；frame 选择器只看扩展名）、`READER`、`writeArgv`、`editorErrorsAllowed`（`office-editor-stack-fixture.ts`）；
+  - `withWorkFiles`（`sidebar-archive-stack-fixture.ts:236`）；
+  - `readWork` 未导出，且路径固定为 `编辑写回.<ext>`（`office-editor-stack-fixture.ts:77`）。
+- 默认权限档为 `yolo`（`platform/src/db/settings.ts:89`），Agent 的 bash 不需要审批。用户镜像里有 python-docx。
+
+设计：
+
+- provider 新增可选配置 `rewrites`：非空数组，每项与 `readBack` 同形 `{ marker, command, nonce }`，校验规则与 `ownedReadBack` 相同。
+  - 每项各自一次性：带本项 marker、文本里没有本项 nonce、提供了 `bash` 的第一个请求调用一次 `bash`，description 固定为 `改写文档`。历史里有带本项 nonce 的 tool 消息时，记本项一次命中。
+  - 并入 `leadingCall`，顺序为 readBack → rewrites → delegation。
+  - health 增加 `rewriteCalls`、`rewriteHits` 两个数组，按项计数。没有配置 `rewrites` 时 health 不变；`readBack` 的行为和 health 字段不变。
+- Agent 改写命令：`python3 -c <脚本> <文件> <nonce>`，用 python-docx 打开文件、追加一段 nonce、原地保存，再打印 nonce。命令本身含 nonce，所以 `rewriteHits` 只证明回合完成；是否写入以读文件为准。
+- 场景 `platform/test/office-rewrite-stack-fixture.ts`，导出 `officeRewriteScenario(lane)`。
+  - 位置：接在 `officeProfileScenario` 之后、`officeIdleScenario` 之前，这时 B 已退役。
+  - 文件：员工 A 的 `/data/work` 下每个情形一个 docx，开头只有一段固定文字，用 `withWorkFiles` 包住。
+  - 读文件：`readWork` 改为接收文件名并导出，原调用点照旧传 `编辑写回.<ext>`。
+  - Agent 回合：在编辑器所在 `workbenchSession` 的 body 里直接 `await converseInWorkbench(...)`，编辑器页面保持打开。每个回合在新会话里只发一次。断言该回合 `rewriteCalls[i]` 和 `rewriteHits[i]` 各增 1，`requests` 增 3（bash、tool 结果、标题）。等待都用 `session.timeout`；固定的观察窗口用带注释的命名常量，并写明与用例超时的关系（#630）。
+- 情形：
+  1. 干净（`干净改写.docx`）：打开编辑器，不键入 → Agent 改写 1 → 观察窗口 → 键入 E1 并保存。
+  2. 键入未保存（`未保存改写.docx`）：打开编辑器 → 键入 E2，不保存 → Agent 改写 2 → 观察窗口 → 键入 E2b 并保存。保存前再键入一个新 nonce，保证保存一定会发回调。
+  3. 重新加载：只有前两个情形实测出现了提示条，step 2 才加入。键入 E3 不保存 → Agent 改写 → 出现提示条后点「重新加载」 → 键入 E4 并保存 → 断言文件含 Agent nonce 和 E4、不含 E3。没出现提示条时，指南不写「重新加载」的后果。
+- 每个情形记录的观测：
+  - Agent 改写后，观察窗口内是否出现提示条（编辑器外的 DOM 文字）；
+  - 页面重新请求 `config` 的次数（只记路径）；
+  - Agent 改写后、员工保存后、关闭编辑器并再等一个观察窗口后，各读一次文件，判定 `rewriteState`；
+  - `/data/work` 在 Agent 改写前和保存后的全部条目差异；
+  - 情形 2 的三次读文件另外记录 E2 是否在文本里，指南按实测写明未保存的修改是保留还是丢失。E2 丢失不触发停止条件，spec 只约束随后的保存；
+  - consoleErrors、≥400 响应（照 `office-editor-stack-fixture.ts:332-337`，只记 status 和 path）、failedRequests。
+- 纯函数 `rewriteState(texts, agentNonce, employeeNonce)` 返回 `both` / `employee-only` / `agent-only` / `neither`，先例为 `writeBackState`、`sameNameState`。配套测试 `office-rewrite-stack-fixture.integration.test.ts` 覆盖四种结果。四种结果的含义（以员工最后保存的那个 nonce 判定）：
+  - `both`：编辑器已经显示 Agent 的内容，员工在其上保存，后写覆盖成立。
+  - `employee-only`：编辑器停在旧内容，员工的保存覆盖了 Agent 的修改。这也是后写覆盖，指南要写明。
+  - `agent-only`：员工的保存丢了，或者旧 key 的 status 2 迟到并改写了文件。
+  - `neither`：旧 key 的 status 2 把旧内容写回。
+- 分两步交付，同一个 PR：
+  1. 先实现 provider、`rewriteState` 和只记录的场景。断言只针对事先已知的事实：Agent 回合完成（provider 计数）、`pageErrors: 0`、`externalRequests: 0`、文件开头的内容。编排者跑一次 `pnpm test:stack`，把观测写进本节「实测」。
+  2. 按实测把断言改成精确值，允许清单也按实测定。如果「干净」情形没有自动刷新，就把指南要求的动作（关闭后重开）加进用例再断言，不能只改断言的值。把表现写进 `docs/EMPLOYEE_GUIDE.md`。
+- 停止条件：员工最后一次保存后的最终文件不是 `both` 或 `employee-only`，或者 `/data/work` 多出本用例以外的条目（副本、`.tmp-*`、`.abandoned`）时，违反 spec 的 MUST（后写覆盖、不产生副本）。这时停下来问用户，不能只写进指南和 PR 风险。时序导致结果不稳定时也停下来报告。
+
+实测（step 1，`c27c4e7`，本机 `pnpm test:stack` exit 0，耗时 687.53s；两个情形各一次）：
+
+- 两个情形的观察窗口内都没有出现提示条（`bar` 三个值都是 `false`）。Agent 改写后，页面各重新请求了一次 `config`（`open` 1、`window` 2、`saved` 2），说明插件调用了 `refreshFile`。
+- Agent 改写后读文件，两个情形都是 `agent-only`。保存后读和关闭编辑器 15 秒后读，`rewriteState` 都报 `employee-only`，但这是判定方法的缺陷：
+  - 保存后的截图里，第二段是 Agent 的 nonce，员工的 nonce 被插进了它的中间（`EDITORCE8B6` + 员工 nonce + `…E6B8012`）。
+  - 原因是 `typeAndSave` 点击在编辑区中央，刷新后那里正是 Agent 新加的段落。Agent 的内容并没有丢。
+  - `READER` 把每个部件的文字拼成一串，所以先去掉员工 nonce 再找 Agent nonce，就能正确判定。
+- 情形 2 先键入的 E2，在三次读文件里都不在文本中（`typed` 都是 `false`），截图里第一段也没有它。自动刷新丢弃了已键入、未保存的修改，没有提示条；旧 key 也没有把它写回来。
+- `/data/work` 在保存后和关闭后都没有新增或缺少条目，没有副本、`.tmp-*` 或 `.abandoned`。
+- 编辑器会话的错误只有 18.5 允许的那几条：Service Worker 的 403 和 AI 插件翻译文件的 404（`allowed` 为 `true`）。两个会话的 `pageErrors`、`failedRequests`、`externalRequests` 都是 0。每个 Agent 回合的 provider 增量都是 `{ rewriteCalls: 1, rewriteHits: 1, requests: 3 }`。
+
+结论：
+
+- 编辑器没有未保存修改时，Agent 改写后编辑器会自动换成 Agent 的版本。员工随后保存，文件同时含 Agent 和员工的内容，后写覆盖成立，没有副本。
+- 有已键入、未保存的修改时，也是同样自动刷新，那部分修改会被丢弃，界面没有提示。
+- 提示条没有出现，所以不加情形 3，指南也不写「重新加载」。
+- 没有触发停止条件。
+
+step 2 的改动：
+
+- `rewriteState` 先从文字里去掉员工 nonce，再找 Agent nonce，并补一个员工 nonce 插在 Agent nonce 中间的用例；
+- 把断言收紧为上面的观测值；
+- 指南写明「会自动刷新、刷新会丢弃未保存的修改、先保存再让 AI 改」。
+
+实测（评审第 1 轮之后，`d86e6e0`，exact-head `pnpm test:stack` exit 1）：
+
+- 干净情形的断言全部通过。
+- 未保存情形，三条提示的锁存里，「保存未写回文件（文档服务会重试；…）」（`saveFailed`）在观察窗口内出现，一直到保存落盘都记为出现过（`window`、`saved` 均为 `true`）。另外两条没有出现。
+- 其余观测与 step 1 相同：
+  - `config` 为 1/2/2；
+  - 三次读文件为 `agent-only` → `both` → `both`；
+  - E2 三次都不在文件里；
+  - 目录条目没有变化，`allowed` 为 `true`。
+- 原因与插件源码一致：自动刷新后，旧 key 的会话带着 E2 关闭，Document Server 发回 status 2，插件的过期检查拒绝了这次保存，并推送 `save-error`（`src/index.ts`、`src/registry.ts`）。
+- step 1 只锁存 `staleChanged`，所以那一次没有记录这条提示。
+- 未触发停止条件。处理（评审修复第 2 轮）：
+  - 未保存情形断言 `saveFailed` 在窗口内出现，并且员工保存落盘后这条提示消失；干净情形仍断言三条都不出现。
+  - 指南写明：之前未保存的内容被丢弃时，会出现这条提示；再保存一次，提示消失。
+
+- [x] 60.1 provider `rewrites`（TDD）：`platform/test/deployment-model-wire.integration.test.ts` 覆盖以下各项：
+  - 非法配置在监听前被拒：不是数组、空数组、某项缺字段或多字段、空字符串；
+  - 两项各自只调用一次 `bash`；
+  - 命中按项计数；
+  - 没有配置时 health 不含新字段；
+  - `readBack` 照旧。
+- [x] 60.2 `rewriteState` 及其测试；`readWork` 改为接收文件名并导出。记录型场景和接线：`ownedModel` 增加 rewrite，场景按上面的设计记录观测；`platform/test/README.md` 的本机全栈证据段补一行。
+- [x] 60.3 编排者跑 `pnpm test:stack`，把观测写进本节「实测」。只写观测，不写密钥、key、cookie。
+- [x] 60.4 按实测收紧断言（必要时加情形 3 或重开动作）；`docs/EMPLOYEE_GUIDE.md` 新增「AI 改写正在编辑的文件」一节，与断言一致。
+
+Risk packs:
+
+- selected:
+  - Concurrency：inotify、`refreshFile` 和回调的先后，结果依赖时序；断言只用实测稳定的事实。
+  - File IO：员工文件被覆盖；场景只碰自己创建的文件；比较目录条目差异。
+  - Legacy compatibility：`readBack` 的行为、health 字段、18.5 的计数断言不变；`readWork` 原调用点的行为不变。
+  - Documentation：指南与断言一致。
+- not selected：Auth、Data migration、Public API、Performance。
+
+Must preserve：18.5 编辑器、隔离、profile、空闲各用例的断言；provider 已有脚本的行为。stack 用例的总时长只增加两到三次编辑器会话和 Agent 回合。
+
+Evidence：
+
+- `pnpm check`；
+- exact-head `pnpm test:stack` 证据评论，含各情形的观测；
+- VPS exact-head `pnpm test:docker` 和 `pnpm test:deploy`，清理已确认。
+
+不触及关键路径，issue 验收里「触及 `images/dsh-user/`」一项不适用，PR 中写明。
+
+Diff 估计约 480–520 行，按 CI 口径计（只排除 lockfile 和 openapi）：
+
+- provider 约 50 行，其测试约 70 行；
+- 场景约 220 行，`rewriteState` 测试约 40 行；
+- 接线和 README 约 20 行，指南约 30 行；
+- 本节约 70 行。
