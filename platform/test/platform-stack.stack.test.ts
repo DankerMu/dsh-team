@@ -70,6 +70,7 @@ import { officeIsolationWithForgotten } from './office-forgotten-stack-fixture.t
 import { officeIsolationLine } from './office-isolation-stack-fixture.ts';
 import { officeProfileLine, officeProfileScenario } from './office-profile-stack-fixture.ts';
 import type { OfficeProfileEvidence } from './office-profile-stack-fixture.ts';
+import * as rewrite from './office-rewrite-stack-fixture.ts';
 import type { OfficeIsolationEvidence } from './office-isolation-stack-fixture.ts';
 import { mappedSessionRpc } from './owned-completion-fixture.ts';
 import {
@@ -186,6 +187,7 @@ interface ConversationEvidence {
   officeEditor?: OfficeEditorEvidence;
   officeIsolation?: OfficeIsolationEvidence;
   officeProfile?: OfficeProfileEvidence;
+  officeRewrite?: Awaited<ReturnType<typeof rewrite.officeRewriteScenario>>;
   officeIdle?: OfficeIdleEvidence;
   /** Waited for before the first Office lane (#622). */
   documentServer?: { startupMs: number; spawns: number };
@@ -279,6 +281,8 @@ function ownedModel(runId: string, seedIds: readonly { id: string }[]) {
         command: READ_BACK_COMMAND,
         nonce: editorNonce(),
       },
+      // One bash rewrite per Agent-rewrite case (#442), each with its own marker and nonce.
+      rewrites: rewrite.ownedRewrites(),
     },
   };
 }
@@ -460,14 +464,8 @@ async function converse(
   const { provider } = model;
   const platformRead = (script: string) =>
     privatePlatformRead(async (args) => ({ stdout: await run(args) }), script);
-  await run([
-    'exec',
-    '--detach',
-    PLATFORM,
-    'node',
-    '/verification/model.ts',
-    '/verification/model.json',
-  ]);
+  const wire = ['node', '/verification/model.ts', '/verification/model.json'];
+  await run(['exec', '--detach', PLATFORM, ...wire]);
   await awaitLocalModelReady(platformRead);
   const { employee, admin } = await prepareDeploymentAccounts(
     lifecycle,
@@ -534,7 +532,7 @@ async function converse(
     // F40's hint over the mounted ONLYOFFICE editor, opened read-only (#439).
     evidence.officeHints = await officeHintsScenario(lane);
     // 18.5 (#440): A edits and saves a DOCX, an XLSX and a PPTX; the Agent's bash reads all three.
-    const { reply, readBack } = provider;
+    const { reply, readBack, rewrites } = provider;
     // B starts once, for the editor's same-name DOCX, and runs until the isolation lane retires it.
     let secondId = '';
     let second: Promise<string> | undefined;
@@ -558,6 +556,8 @@ async function converse(
     // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });
+    // 18.7 (#442): the Agent rewrites A's open DOCX; the editor refreshes and the save keeps both.
+    evidence.officeRewrite = await rewrite.officeRewriteScenario({ ...lane, reply, rewrites });
     // 18.5 (#440): A's open editor outlasts one idle minute; once it closes, A is idle-stopped.
     evidence.officeIdle = await officeIdleScenario({ ...office, reply, readBack });
     const spawns = await docserviceSpawns(run);
@@ -902,6 +902,7 @@ it('builds both images, starts the delivered compose platform, converses through
         officeEditor: officeEditorLine(officeEditor),
         officeIsolation: officeIsolationLine(officeIsolation),
         officeProfile: officeProfileLine(officeProfile),
+        officeRewrite: rewrite.officeRewriteLine(evidence.officeRewrite),
         officeIdle: officeIdleLine(evidence.officeIdle),
         documentServer,
         commandService: evidence.commandService,

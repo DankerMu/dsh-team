@@ -80,13 +80,10 @@ function ownedDelegation(value: unknown): { childMarker: string; question: strin
   return { childMarker: value.childMarker, question: value.question };
 }
 /**
- * Optional nonsecret read-back script: exactly `{ marker, command, nonce }`, non-empty strings.
- * A marked turn without the nonce calls `bash` once; a tool message carrying the nonce is a hit.
+ * A nonsecret bash script: exactly `{ marker, command, nonce }`, non-empty strings. A marked turn
+ * without the nonce calls `bash` once; a tool message carrying the nonce is a hit.
  */
-function ownedReadBack(
-  value: unknown,
-): { marker: string; command: string; nonce: string } | undefined {
-  if (value === undefined) return undefined;
+function ownedBash(value: unknown): { marker: string; command: string; nonce: string } {
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -104,10 +101,20 @@ function ownedReadBack(
     throw new Error('Invalid owned model configuration');
   return { marker: value.marker, command: value.command, nonce: value.nonce };
 }
+/** Optional read-back script, absent by default. */
+const ownedReadBack = (value: unknown) => (value === undefined ? undefined : ownedBash(value));
+/** Optional rewrite scripts: a non-empty array of read-back-shaped items, each one-shot. */
+function ownedRewrites(value: unknown) {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0)
+    throw new Error('Invalid owned model configuration');
+  return value.map((item: unknown) => ownedBash(item));
+}
 const hold = ownedHold('hold' in config ? config.hold : undefined);
 const delegation = ownedDelegation('delegation' in config ? config.delegation : undefined);
 const forbidden = ownedForbidden('forbidden' in config ? config.forbidden : undefined);
 const readBack = ownedReadBack('readBack' in config ? config.readBack : undefined);
+const rewrites = ownedRewrites('rewrites' in config ? config.rewrites : undefined);
 /** Held answers, released together by `POST /release`; at most one request is ever held. */
 const heldAnswers: (() => void)[] = [];
 let holding = hold !== undefined;
@@ -117,6 +124,8 @@ let delegations = 0;
 let searches = 0;
 let readBacks = 0;
 let readBackHits = 0;
+const rewriteCalls = rewrites?.map(() => 0) ?? [];
+const rewriteHits = rewrites?.map(() => 0) ?? [];
 let markedRequests = 0;
 let requests = 0;
 let toolResults = 0;
@@ -201,6 +210,36 @@ function readBackCall(body: object, messages: unknown[], text: string) {
   };
 }
 
+/** The rewrite call's description, fixed like the read-back's. */
+const REWRITE_TITLE = '改写文档';
+
+/** Every rewrite whose nonce a tool message carries counts a hit, whichever call the request gets. */
+function countRewriteHits(messages: unknown[]) {
+  for (const [index, { nonce }] of (rewrites ?? []).entries())
+    if (hitsReadBack(messages, nonce)) rewriteHits[index] = (rewriteHits[index] ?? 0) + 1;
+}
+
+/** `bash` for the first rewrite not yet called whose marker the text holds and nonce it lacks. */
+function rewriteCall(body: object, text: string) {
+  if (rewrites === undefined || !('tools' in body) || !offers(body.tools, 'bash')) return undefined;
+  const index = rewrites.findIndex(
+    ({ marker, nonce }, at) =>
+      rewriteCalls[at] === 0 && text.includes(marker) && !text.includes(nonce),
+  );
+  const item = rewrites[index];
+  if (item === undefined) return undefined;
+  rewriteCalls[index] = 1;
+  return {
+    index: 0,
+    id: `owned-rewrite-${String(index + 1)}`,
+    type: 'function',
+    function: {
+      name: 'bash',
+      arguments: JSON.stringify({ description: REWRITE_TITLE, command: item.command }),
+    },
+  };
+}
+
 /** The delegated child's title: the browser lane finds the child Session by it. */
 const DELEGATION_TITLE = '检索知识库';
 
@@ -238,9 +277,16 @@ function delegatedCall(body: object, text: string, toolResult: boolean) {
   };
 }
 
-/** Read-back first: its marker is in no other turn. Then delegation, keyed by the child marker. */
-const leadingCall = (body: object, messages: unknown[], text: string, toolResult: boolean) =>
-  readBackCall(body, messages, text) ?? delegatedCall(body, text, toolResult);
+/** Read-back first: its marker is in no other turn. Then the rewrites, each keyed by its own
+ * marker, and the delegation, keyed by the child marker. */
+function leadingCall(body: object, messages: unknown[], text: string, toolResult: boolean) {
+  countRewriteHits(messages);
+  return (
+    readBackCall(body, messages, text) ??
+    rewriteCall(body, text) ??
+    delegatedCall(body, text, toolResult)
+  );
+}
 
 function respond(response: ServerResponse, stream: boolean, call: object | undefined) {
   const common = { id: 'owned-completion', created: 1, model };
@@ -282,7 +328,8 @@ function holds(body: object, text: string, toolResult: boolean) {
   return 'tools' in body && offersWrite(body.tools);
 }
 
-/** Health stays byte-identical unless hold, forbidden strings, delegation or read-back are set. */
+/** Health stays byte-identical unless hold, forbidden strings, delegation, read-back or rewrites
+ * are set. */
 function health() {
   return JSON.stringify({
     ready: true,
@@ -293,6 +340,7 @@ function health() {
     ...(forbidden === undefined ? {} : { forbiddenRequests }),
     ...(delegation === undefined ? {} : { delegations, searches }),
     ...(readBack === undefined ? {} : { readBacks, readBackHits }),
+    ...(rewrites === undefined ? {} : { rewriteCalls, rewriteHits }),
   });
 }
 

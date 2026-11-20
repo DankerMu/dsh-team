@@ -74,21 +74,26 @@ else:
         print("\\n".join(common))`;
 const inWork = (ext: Ext) => `${WORK}/${fileName(ext)}`;
 const PYTHON = ['python3', '-c', READER];
-const readWork = async ({ exec }: ArchiveLane, ext: Ext) =>
-  JSON.parse(await exec([...PYTHON, inWork(ext)])) as OfficeRead;
+export const readWork = async ({ exec }: ArchiveLane, name: string) =>
+  JSON.parse(await exec([...PYTHON, `${WORK}/${name}`])) as OfficeRead;
 const READER_ARGV = [...PYTHON, ...EXTS.map(inWork)];
+/** A bash command of `argv`, each word single-quoted; a word holding a single quote is refused. */
+export const singleQuoted = (argv: readonly string[]) =>
+  argv
+    .map((word) => {
+      if (word.includes("'")) throw new Error('Bash word holds a single quote');
+      return `'${word}'`;
+    })
+    .join(' ');
 /** The Agent's bash read-back: the reader over all three files, each word single-quoted. */
-export const READ_BACK_COMMAND = READER_ARGV.map((word) => {
-  if (word.includes("'")) throw new Error('Read-back word holds a single quote');
-  return `'${word}'`;
-}).join(' ');
+export const READ_BACK_COMMAND = singleQuoted(READER_ARGV);
 
 type Digest = Pick<ArchiveEntry, 'size' | 'sha256'>;
 const digest = ({ size, sha256 }: Digest) => ({ size, sha256 });
 interface OfficeRead extends Digest {
   readonly texts: Readonly<Record<string, string>>;
 }
-const holds = (texts: OfficeRead['texts'], nonce: string) =>
+export const holds = (texts: OfficeRead['texts'], nonce: string) =>
   Object.values(texts).some((text) => text.includes(nonce));
 
 /** Saved once the bytes differ from `original` and a part's text holds the typed nonce. */
@@ -313,7 +318,7 @@ async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string, 
   const template = ['exec', DOCUMENT_SERVER, 'base64', '-w0', `${TEMPLATES}.${ext}`];
   const base64 = ext === 'docx' ? undefined : (await run(template)).trim();
   const written = JSON.parse(await exec(writeArgv(fileName(ext), base64))) as ArchiveEntry;
-  const read = () => readWork(lane, ext);
+  const read = () => readWork(lane, fileName(ext));
   const { texts, sha256 } = await read();
   const typed = holds(texts, nonce);
   expect({ sha256, typed }, ext).toEqual({ sha256: written.sha256, typed: false });
@@ -426,7 +431,10 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
       );
       throw new AggregateError(failures, 'Office editor same-name DOCX failed');
     }
-    const [aAfter, bAfter] = [await readWork(lane, 'docx'), await readWork(b, 'docx')];
+    const [aAfter, bAfter] = [
+      await readWork(lane, fileName('docx')),
+      await readWork(b, fileName('docx')),
+    ];
     const states = [sameNameState(aAfter, nonceA, nonceB), sameNameState(bAfter, nonceB, nonceA)];
     expect(states, 'A and B same-name DOCX after both browsers closed').toEqual(['own', 'own']);
     const all = { distinct: true, A: true, B: true, info: EXPECTED_INFO };

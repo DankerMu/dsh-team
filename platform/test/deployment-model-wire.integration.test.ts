@@ -568,3 +568,124 @@ it('keeps health byte-identical and ignores the read-back marker without a read-
     '{"ready":true,"markedRequests":0,"requests":2,"toolResults":1}',
   );
 });
+
+const REWRITES = [
+  { marker: 'rewrite-a7', command: "python3 -c 'x' REWRITE0A", nonce: 'REWRITE0A' },
+  { marker: 'rewrite-b8', command: "python3 -c 'x' REWRITE0B", nonce: 'REWRITE0B' },
+] as const;
+const [FIRST, SECOND] = REWRITES;
+const rewriteTurn = (index: 0 | 1, tools?: unknown[], extra: unknown[] = []) => ({
+  ...userTurn(tools, extra),
+  messages: [{ role: 'user', content: `please ${REWRITES[index].marker}` }, ...extra],
+});
+const rewriteCall = (index: 0 | 1) => ({
+  index: 0,
+  id: `owned-rewrite-${String(index + 1)}`,
+  type: 'function',
+  function: {
+    name: 'bash',
+    arguments: JSON.stringify({ description: '改写文档', command: REWRITES[index].command }),
+  },
+});
+
+it.each([
+  ['a non-array rewrites', 'rewrite'],
+  ['a single rewrite object', FIRST],
+  ['an empty rewrites array', []],
+  ['a rewrite missing its nonce', [FIRST, { marker: SECOND.marker, command: SECOND.command }]],
+  ['a rewrite with an extra key', [{ ...FIRST, mode: 'bash' }]],
+  ['a rewrite with an empty marker', [{ ...FIRST, marker: '' }]],
+  ['a rewrite with an empty command', [FIRST, { ...SECOND, command: '' }]],
+  ['a rewrite with an empty nonce', [{ ...FIRST, nonce: '' }]],
+  ['a non-string rewrite nonce', [{ ...FIRST, nonce: 7 }]],
+  ['a non-object rewrite', ['rewrite']],
+  ['a null rewrite', [null]],
+])('rejects %s before listening', async (_name, rewrites) => {
+  const { closed } = await launch({ ...BASE, rewrites }, await unusedPort());
+  const { code, stderr } = await closed;
+  expect(code).not.toBe(0);
+  expect(stderr).toContain('Invalid owned model configuration');
+});
+
+it('calls bash once per rewrite, on its first marked request offered bash whose text lacks its nonce', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT, rewrites: REWRITES });
+  for (const body of [
+    rewriteTurn(0, [READ_TOOL, WRITE_TOOL]),
+    rewriteTurn(0),
+    rewriteTurn(0, [BASH_TOOL], [{ role: 'user', content: FIRST.nonce }]),
+  ])
+    expect(await streamed(await complete(origin, body))).toHaveLength(2);
+  expect(await health(origin)).toMatchObject({ rewriteCalls: [0, 0], rewriteHits: [0, 0] });
+  expect(await streamed(await complete(origin, rewriteTurn(0, [WRITE_TOOL, BASH_TOOL])))).toEqual(
+    callChunks(rewriteCall(0)),
+  );
+  expect(await streamed(await complete(origin, rewriteTurn(0, [BASH_TOOL])))).toEqual(replyChunks);
+  const plain = await complete(origin, { ...rewriteTurn(1, [BASH_TOOL]), stream: false });
+  expect(await plain.json()).toMatchObject({
+    choices: [{ message: { tool_calls: [rewriteCall(1)] }, finish_reason: 'tool_calls' }],
+  });
+  expect(await streamed(await complete(origin, rewriteTurn(1, [BASH_TOOL])))).toEqual(replyChunks);
+  expect(await health(origin)).toMatchObject({
+    requests: 7,
+    rewriteCalls: [1, 1],
+    rewriteHits: [0, 0],
+  });
+});
+
+it('leads with the read-back, then the rewrites, then the delegation', async () => {
+  const config = { ...BASE, readBack: READ_BACK, delegation: DELEGATION, rewrites: REWRITES };
+  const origin = await start(config);
+  const tools = [BASH_TOOL, SUBAGENT_TOOL, SEARCH_TOOL];
+  const markers = (...names: string[]) => ({
+    ...userTurn(tools),
+    messages: [{ role: 'user', content: names.join(' ') }],
+  });
+  const all = markers(READ_BACK.marker, FIRST.marker, DELEGATION.childMarker);
+  expect(await streamed(await complete(origin, all))).toEqual(callChunks(bashCall));
+  const rewrite = markers(FIRST.marker, SECOND.marker, DELEGATION.childMarker);
+  expect(await streamed(await complete(origin, rewrite))).toEqual(callChunks(rewriteCall(0)));
+  expect(await streamed(await complete(origin, rewrite))).toEqual(callChunks(rewriteCall(1)));
+  expect(await streamed(await complete(origin, rewrite))).toEqual(callChunks(subagentCall));
+  expect(await health(origin)).toMatchObject({
+    ...{ readBacks: 1, delegations: 1 },
+    ...{ rewriteCalls: [1, 1], rewriteHits: [0, 0] },
+  });
+});
+
+const rewriteResult = (...contents: unknown[]) => [
+  { role: 'assistant', content: null, tool_calls: [{ id: 'owned-rewrite-1', type: 'function' }] },
+  ...contents.map((content) => ({ role: 'tool', content, tool_call_id: 'owned-rewrite-1' })),
+];
+
+it('counts a hit per rewrite whose nonce a tool message carries, the read-back apart', async () => {
+  const origin = await start({ ...BASE, readBack: READ_BACK, rewrites: REWRITES });
+  for (const extra of [
+    rewriteResult(`${FIRST.nonce}\n`),
+    rewriteResult([{ type: 'text', text: FIRST.nonce }], `改写 ${SECOND.nonce}`),
+    rewriteResult(READ_BACK.nonce),
+    [
+      { role: 'user', content: SECOND.nonce },
+      { role: 'tool', content: 'none', tool_call_id: SECOND.nonce },
+    ],
+  ])
+    expect(await streamed(await complete(origin, userTurn([BASH_TOOL], extra)))).toEqual(
+      replyChunks,
+    );
+  // The request the read-back takes still counts the rewrite's hit.
+  const taken = readBackTurn([BASH_TOOL], rewriteResult(SECOND.nonce));
+  expect(await streamed(await complete(origin, taken))).toEqual(callChunks(bashCall));
+  expect(await (await fetch(`${origin}/health`)).text()).toBe(
+    '{"ready":true,"markedRequests":4,"requests":5,"toolResults":5,"readBacks":1,"readBackHits":1,"rewriteCalls":[0,0],"rewriteHits":[2,2]}',
+  );
+});
+
+it('keeps health byte-identical and ignores the rewrite markers without rewrites', async () => {
+  const origin = await start({ ...BASE, script: SCRIPT });
+  expect(
+    await streamed(await complete(origin, rewriteTurn(0, [BASH_TOOL], rewriteResult(FIRST.nonce)))),
+  ).toEqual(replyChunks);
+  expect(await streamed(await complete(origin, rewriteTurn(1, [BASH_TOOL])))).toEqual(replyChunks);
+  expect(await (await fetch(`${origin}/health`)).text()).toBe(
+    '{"ready":true,"markedRequests":0,"requests":2,"toolResults":1}',
+  );
+});

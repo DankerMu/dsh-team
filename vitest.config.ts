@@ -67,7 +67,14 @@ export default defineConfig({
           // The forgotten attack lane (#624 §55.5) raised it by 420s: two editor loads (60s each)
           // for the failing edit and the recovery, a 60s forgotten-store wait, the B-container
           // attack exec (30s), a 60s recovery read-back poll and the two positive-control reads.
-          testTimeout: 5_730_000,
+          // The office rewrite lane (#442) raised it by 1500s: per case the Document Server
+          // healthcheck wait, an editor load, an Agent turn, the save's typing, a save poll and the
+          // wait for the editor's notices to clear at one 60s session timeout each, two 15s
+          // observation windows, the unsaved case's extra typing (60s), and 22 docker execs at 30s
+          // each: per case the write, four file reads (start, after the rewrite, the save poll's
+          // first, after the close), two provider reads and three listings, once the
+          // configured-scripts read and the cleanup.
+          testTimeout: 7_230_000,
         },
       },
     ],
