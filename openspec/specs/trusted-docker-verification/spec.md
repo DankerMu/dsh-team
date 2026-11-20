@@ -107,9 +107,15 @@ Custody SHALL distinguish actual shared-Engine mutations from observations and n
 
 #### Scenario: A qualified rejection is observed at canonical response headers
 
-- **WHEN** the original client rejects `POST /networks/create` with403, `POST /containers/<target>/stop` with304, or exact `DELETE /containers/<target>`, `/networks/<target>` or `/volumes/<target>` with404
+- **WHEN** the original client rejects `POST /networks/create` with403, `POST /networks/<target>/connect` with400, `POST /containers/<target>/stop` with304, or exact `DELETE /containers/<target>`, `/networks/<target>` or `/volumes/<target>` with404
 - **THEN** only that request's submission may settle at the canonical header-error boundary while the same error object is rethrown
 - **AND** independent resource-state checks remain mandatory and no earlier unresolved request is completed by that rejection
+
+#### Scenario: A network connect is refused by validation
+
+- **WHEN** the original client's `POST /networks/<target>/connect` is rejected with400, for example because the container shares another container's network namespace
+- **THEN** only that submission settles at the canonical header-error boundary and the same error object is rethrown; the 400 is a definitive Docker reply, a partially created endpoint is Docker's to roll back, and independent resource-state checks remain the backstop
+- **AND** a connect rejected with any other status, a lost connect response, and a400 on a sibling endpoint such as `POST /networks/<target>/disconnect` remain unresolved
 
 #### Scenario: A status matches but its request or error provenance does not
 
