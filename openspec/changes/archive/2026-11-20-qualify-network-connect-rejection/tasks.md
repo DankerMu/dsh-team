@@ -7,7 +7,7 @@ Governing invariant: a submission settles without a successful response only for
 
 ## 1. Implementation
 
-- [ ] 1.1 Add the clause to `isDefinitiveRejection`. Add matrix cases to `platform/test/docker-client.integration.test.ts`, following the existing table:
+- [x] 1.1 Add the clause to `isDefinitiveRejection`. Add matrix cases to `platform/test/docker-client.integration.test.ts`, following the existing table:
   - settles `POST /networks/<id>/connect` 400, rethrowing the original error;
   - keeps connect 403, 404, 409 and 500 unresolved;
   - keeps `POST /networks/<id>/disconnect` 400 unresolved;
@@ -18,10 +18,10 @@ Governing invariant: a submission settles without a successful response only for
 
   Red before green for the settle case.
 
-- [ ] 1.2 No other consumer enumerates the matrix: `scripts/README.md`, `scripts/test-guardrails.sh` and `platform/test/README.md` were checked by grep, so none of them changes.
+- [x] 1.2 No other consumer enumerates the matrix: `scripts/README.md`, `scripts/test-guardrails.sh` and `platform/test/README.md` were checked by grep, so none of them changes.
 
 ## 2. Verification
 
-- [ ] 2.1 `pnpm check`.
-- [ ] 2.2 VPS exact-head `pnpm test:docker` + `pnpm test:deploy`, cleanup confirmed; local exact-head `pnpm test:stack`.
-- [ ] 2.3 After merge, rebase #548: its exact-head `pnpm test:docker` cleanup is `confirmed`.
+- [x] 2.1 `pnpm check`.
+- [x] 2.2 VPS exact-head `pnpm test:docker` + `pnpm test:deploy`, cleanup confirmed; local exact-head `pnpm test:stack`.
+- [x] 2.3 After merge, rebase #548: its exact-head `pnpm test:docker` cleanup is `confirmed`.
