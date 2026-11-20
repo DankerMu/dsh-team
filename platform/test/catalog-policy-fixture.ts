@@ -72,8 +72,8 @@ const EMPLOYEE_REWRITE = [
 ];
 /**
  * Required entries are inserted only by the overlay, which applies after the profile, so this row
- * can match nothing. It is appended after the recompose: the composition reader rejects any
- * unmatched row (managed-config read.ts), so with it the platform would refuse to start at all.
+ * matches nothing in the pre-overlay composition. DSH skips it with this warning, and so does the
+ * composition reader (managed-config read.ts, #601): the platform still starts, composing the same.
  */
 const REQUIRED_OFF = [{ id: 'zh-locale', disabled: true }];
 const UNMATCHED_REQUIRED = ['patch: entry "zh-locale" not found'];
@@ -246,18 +246,18 @@ export async function runCatalogPolicyScenario(lifecycle: UserImageLifecycle): P
     if (stopped.error !== undefined || stopped.status !== 0) throw new Error(`${INVALID}: stop`);
     profiles.capture('start-stopped');
     failedStage = 'restart';
-    employeeRewrite(lifecycle, `${prefix}-rewrite`, EMPLOYEE_REWRITE, []);
-    // Like the platform before every start; the rewrite changes nothing it composes.
-    const recomposed = await collectComposition(lifecycle, `${prefix}-reread`, BUNDLE_IDS);
-    profiles.capture('recompose-read');
-    if (!isDeepStrictEqual(recomposed, composition)) throw new Error(`${INVALID}: recomposed`);
     const written = employeeRewrite(
       lifecycle,
-      `${prefix}-required`,
-      REQUIRED_OFF,
+      `${prefix}-rewrite`,
+      [...EMPLOYEE_REWRITE, ...REQUIRED_OFF],
       UNMATCHED_REQUIRED,
     );
     profiles.capture('employee-edited', written);
+    // Like the platform before every start: the reader reads the rewrite, skips the unmatched
+    // required row, and the bundle-matching rows change nothing it composes.
+    const recomposed = await collectComposition(lifecycle, `${prefix}-reread`, BUNDLE_IDS);
+    profiles.capture('recompose-read');
+    if (!isDeepStrictEqual(recomposed, composition)) throw new Error(`${INVALID}: recomposed`);
     const restart = await accept('restart', true, recomposed);
     evidence.finish();
     return JSON.stringify({ start, restart, evidence: evidence.path });
