@@ -124,6 +124,11 @@
 - **THEN** 原空闲候选失效，不按陈旧观察停止活跃实例或替换后的实例
 - **AND** 已经准入的空闲停止期间新请求不转发到正在退役的端点，停止仍保留原有精确归属、审计和卷保护
 
+#### Scenario: 只打开 Office 编辑器时不回收
+
+- **WHEN** 员工在 DSH 工作台只保持一个 ONLYOFFICE 编辑器打开，不发消息、没有运行中的任务，编辑器流量经 DSH 和平台网关的 HTTP 与 WebSocket 连接，时间超过空闲分钟数
+- **THEN** 实例保持运行，没有空闲停止审计；编辑会话和 Document Server 连接不中断，之后仍能保存并写回原文件
+
 ### Requirement: 停止和重建后数据恢复
 
 实例停止后再启动，或容器被删除后重建，用户的文件、Session 和设置 MUST 保持不变。平台 MUST NOT 承诺被中断的任务继续执行。
@@ -223,19 +228,30 @@
 
 ### Requirement: 重置实例配置
 
-管理员 MUST 能把指定实例的 DSH 配置恢复为镜像里的初始状态。重置 MUST NOT 改动用户的文件和 Session。
+管理员 MUST 能把指定实例的 DSH 配置恢复为镜像里的初始状态。重置 MUST NOT 改动用户的文件和 Session。阶段 1 创建的员工卷在升级到 DSH 0.2.1-rc.2 的镜像后，MUST 能通过重置配置获得新镜像的 profile。
 
 #### Scenario: 配置被写坏后恢复
 
 - **WHEN** 某实例的 DSH 配置文件被写成无法解析的内容导致启动失败，管理员执行重置实例配置
 - **THEN** 该实例能正常启动，工作目录里的文件和已有的 Session 都还在
 
+#### Scenario: 旧卷在升级后经重置获得新 profile
+
+- **WHEN** 一个由 DSH 0.2.0-rc.2 镜像初始化的员工状态卷，在平台换用 DSH 0.2.1-rc.2 镜像后由管理员执行重置实例配置并重新启动
+- **THEN** 该卷的 `profiles/` 与新镜像种子逐文件一致，实例认证就绪，已有工作区文件和 Session 仍可读取
+
+#### Scenario: 旧卷不重置直接启动时给出 profile 不兼容码
+
+- **WHEN** 同一个由 DSH 0.2.0-rc.2 初始化的状态卷不经重置，直接在 DSH 0.2.1-rc.2 镜像上启动，受管组合发现该 profile 里有 bundle 被跳过
+- **THEN** 平台 MUST 在创建容器之前拒绝启动；实例为 error 且不关联容器，最近错误首行 MUST 为封闭失败码 `profile-incompatible`，其后是固定说明，不含 profile 内容；同一事务 MUST 写入 `instance.start-failed`，细节为 `{"code":"profile-incompatible"}`
+- **AND** 该行已有容器或处于启动中、运行中，或账号已变化时，MUST NOT 写行或审计；其他创建前失败仍不改行、不写审计；平台 MUST NOT 自动重置配置
+
 #### Scenario: 停止状态下只恢复 profiles
 
 - **WHEN** 已完成退休的实例通过编排器恢复配置目录
 - **THEN** 平台 MUST 在同一用户生命周期队列内，验证当前账号、终态索引、实例容器缺席及状态卷归属后，使用捕获的用户镜像运行一次性恢复容器
 - **AND** `profiles/` MUST 与镜像种子逐文件一致且仍可由uid1001修改；现有符号链接 MUST NOT 导致修改该目录外的数据
-- **AND** 其他状态目录、工作卷、平台索引和审计 MUST 保持不变；成功只可在恢复容器已清理后返回
+- **AND** 其他状态目录、工作卷和审计 MUST 保持不变；平台索引只有一处例外：恢复前为 error 且不关联容器的行，在恢复成功后、同一用户队列内 MUST 改为 stopped，最近错误保留，其余列不变。其他行的平台索引 MUST 保持不变；成功只可在恢复容器已清理后返回
 
 #### Scenario: 恢复目录的身份或执行不可信
 
@@ -268,6 +284,7 @@
 
 - **WHEN** 新平台进程的编排器对两个原有就绪实例恢复网络连接并重复对账
 - **THEN** 实例容器、上游地址、有效DSH cookie和数据卷保持不变，平台可访问两个实例，健康实例不产生额外启动或停止审计
+- **AND** 容器在基址+2 的实例，平台端点以基址+3 恢复；实例网络上已记录的 Document Server 端点保留，已消失的不补接
 
 #### Scenario: 网络恢复失败后的出错状态可重试
 
@@ -277,11 +294,11 @@
 #### Scenario: 无对应容器的受管网络被回收
 
 - **WHEN** 对账发现带正确用户标签和规范名称的实例bridge，且重新检查确认没有对应规范容器或索引容器
-- **THEN** 仅在端点为空或只有验证过的平台端点时断开该平台端点并删除该网络，不修改数据卷或其他网络
+- **THEN** 仅在端点为空，或只有验证过的平台端点和该用户实例记录中的 Document Server 端点时，断开这些端点并删除该网络，不修改数据卷或其他网络
 
 #### Scenario: 网络清理遇到不可信状态
 
-- **WHEN** 网络身份或当前索引改变、存在对应容器或不明端点，或Docker查询结果无法确认不存在
+- **WHEN** 网络身份或当前索引改变、存在对应容器或不明端点（包括与记录不符的 Document Server 端点），或Docker查询结果无法确认不存在
 - **THEN** 平台不强制清理该网络或端点，错误明确；不得将未知查询结果当作孤儿资源
 
 ### Requirement: 平台经显式 Unix socket 访问 Docker
@@ -321,13 +338,31 @@
 
 ### Requirement: 安全创建并启动用户容器
 
-平台 MUST 使用同一用户镜像的完整受管配置输入和该用户的两个持久卷，创建名称 `dsh-team-u-<id>`、主机名 `u-<id>`、用户标签匹配的非特权容器；覆盖层只读挂载，seccomp配置以文件内容交给Docker，DSH信任的平台authority取自平台配置。
+平台 MUST 使用同一用户镜像的完整受管配置输入和该用户的两个持久卷，创建名称 `dsh-team-u-<id>`、主机名 `u-<id>`、用户标签匹配的非特权容器；覆盖层只读挂载，seccomp配置以文件内容交给Docker，DSH信任的平台authority取自平台配置。容器 MUST 以其独立 /28 子网内的固定地址（子网基址+2）接入实例网络，DSH MUST 只监听该地址的 3080 端口，MUST NOT 使用通配监听地址。
+部署配置了授权字体目录时，平台 MUST 把它只读挂载到容器的 `/usr/share/fonts/truetype/custom`；未配置时 MUST NOT 挂载，容器照常创建（#561）。
+
+#### Scenario: 授权字体进入实例
+
+- **WHEN** 部署配置了授权字体目录，平台启动一个员工实例
+- **THEN** 该目录只读出现在实例的 `/usr/share/fonts/truetype/custom`，预览转换使用其中的字体；员工不能写入或替换它
 
 #### Scenario: 创建并启动后索引真实回环端点
 
-- **WHEN** 用户容器成功创建、启动且Docker检查返回其3080端口的回环绑定
+- **WHEN** 以显式 published-loopback 方式，用户容器成功创建、启动，Docker检查确认其在自建实例网络上的地址为子网基址+2，且返回其3080端口的回环绑定
 - **THEN** 仅发布到127.0.0.1的随机端口被存入instances，容器标识和镜像信息一致，审计存在实例创建和实例启动事件
 - **AND** 状态仍为starting，启动接口不宣称DSH已经就绪，不挂载Docker socket且不启用特权或未受限沙箱
+- **AND** 平台和 Document Server 都不接入该网络，文档写明此方式下知识库和 Office 编辑不可用
+
+#### Scenario: 网络方式下索引固定地址端点
+
+- **WHEN** 以默认网络方式，用户容器成功创建、启动且Docker检查确认其在实例网络上的地址正是子网基址+2
+- **THEN** 该地址的3080端口被存入instances作为上游，容器没有任何宿主端口映射，审计存在实例创建和实例启动事件，状态仍为starting
+
+#### Scenario: 固定地址与覆盖层监听地址一致
+
+- **WHEN** 平台为一个新分配的 /28 子网生成受管覆盖层并创建容器
+- **THEN** 覆盖层中的监听地址、容器在实例网络上的实际地址和平台记录的上游地址三者相同，均为子网基址+2
+- **AND** 覆盖层中不出现 `0.0.0.0` 或其他通配地址
 
 #### Scenario: 重建保留稳定身份
 
@@ -336,17 +371,22 @@
 
 #### Scenario: 启动或索引失败不伪造成功
 
-- **WHEN** Docker创建、启动、检查或对应数据库与审计事务失败
+- **WHEN** Docker创建、启动、检查或对应数据库与审计事务失败，或检查得到的实例地址不是子网基址+2
 - **THEN** 操作返回失败，不返回未经验证的端点或伪造就绪状态，不删除用户持久卷，不在Docker动作成功前记录其成功审计
 
 ### Requirement: 平台托管当前实例的DSH认证cookie
 
-平台 MUST 从当前用户实例的真实启动日志提取令牌，经node:http显式设置平台authority为Host换取DSH cookie，并仅将cookie保存在该当前实例的数据库记录中；令牌和cookie不得出现在平台日志、审计或公共返回值中。
+平台 MUST 从当前用户实例的真实启动日志提取令牌，经node:http显式设置平台authority为Host换取DSH cookie，并仅将cookie保存在该当前实例的数据库记录中；令牌和cookie不得出现在平台日志、审计或公共返回值中。启动日志中的令牌 MUST 只从以该实例固定地址（子网基址+2）和3080端口组成的启动 URL 行中提取。
 
 #### Scenario: Host绑定的实例认证
 
 - **WHEN** 平台为当前实例换取cookie并使用同一Host请求首页
 - **THEN** DSH返回200，而同一cookie换另一个Host请求首页返回401
+
+#### Scenario: 只认当前实例地址的启动 URL
+
+- **WHEN** 启动日志里的启动 URL 行地址不是当前实例的固定地址，或格式不符合 DSH 0.2.1-rc.2 的启动输出
+- **THEN** 不提取令牌，实例按未就绪处理，最终记录启动失败而不是用错误地址换取cookie
 
 #### Scenario: 过期交换结果不能覆盖新实例
 
@@ -416,7 +456,7 @@
 
 ### Requirement: 对账修正失配且保留健康实例
 
-平台启动对账 MUST 以验证过的容器身份与实际状态修正实例索引；不能把 Docker 错误当成容器不存在，不能因重建编排器而重启健康实例或丢弃其凭据。
+平台启动对账 MUST 以验证过的容器身份与实际状态修正实例索引；不能把 Docker 错误当成容器不存在，不能因重建编排器而重启健康实例或丢弃其凭据。地址不在固定布局上的阶段 1 存量运行实例 MUST 被视为健康实例保留，直到其自然停止。
 
 #### Scenario: 索引中的运行容器实际不存在
 
@@ -432,6 +472,12 @@
 
 - **WHEN** 两个已就绪实例运行时重建编排器并等待对账完成
 - **THEN** 两者仍为原实例，凭据和地址保留，认证请求仍成功且没有额外启动或停止审计
+
+#### Scenario: 阶段 1 存量实例地址不在布局上
+
+- **WHEN** 固定地址布局上线后对账，发现一个按阶段 1 方式创建、容器地址不是子网基址+2 的已验证运行实例
+- **THEN** 对账不停止它、不写额外审计，它保持运行并可访问；需要补接平台端点时按阶段 1 方式不指定地址
+- **AND** 它在空闲、管理员停止或账号禁用后停止，下次启动按固定布局创建，数据卷保留
 
 ### Requirement: 认证实例启动与状态入口
 
@@ -564,3 +610,82 @@ The verification Docker boundary SHALL retain nonsecret process termination fact
 - **WHEN** structural build progress is observed, interleaved, incomplete or absent
 - **THEN** only allowlisted fixed phases/instructions and bounded numeric identities may survive as last-observed progress, never arbitrary vertex descriptions or a claim that the last vertex caused failure
 - **AND** the historical failure without such metadata remains unclassified even after a later passing acceptance run
+
+### Requirement: 实例子网内的固定地址布局
+
+在分配给实例的 /28 子网内，平台 MUST 按固定偏移使用地址：基址+1 为 Docker 网关，+2 为员工容器，+3 为平台容器，+4 为 Document Server。对按布局创建的实例（员工容器在基址+2），平台 MUST 在接入时请求对应地址，并在使用前核实实际地址与布局一致。阶段 1 存量实例（员工容器不在基址+2）的平台补接除外：平台 MUST 按阶段 1 方式不指定地址补接，MUST NOT 因地址不在布局上而让对账失败或停止该实例，见「对账修正失配且保留健康实例」。
+
+#### Scenario: 网络方式下三方地址固定
+
+- **WHEN** 以默认网络方式启动实例，且使用自带 Document Server
+- **THEN** 员工容器、平台端点和 Document Server 端点在该实例网络上的地址分别是基址+2、+3、+4
+
+#### Scenario: 实际地址与布局不符
+
+- **WHEN** 启动按布局创建的实例，或为员工容器在基址+2 的实例补接平台时，任一接入后检查到的地址与布局不一致，或目标地址已被其他端点占用
+- **THEN** 启动或补接明确失败，不记录就绪，不把不明端点当作可强制断开或删除的对象
+
+#### Scenario: 阶段 1 存量实例的平台补接不套用布局
+
+- **WHEN** 平台重建后对账，一个已验证的运行实例的员工容器不在基址+2，且需要补接平台端点
+- **THEN** 平台按阶段 1 方式补接、不请求基址+3，接入后不按布局核对平台地址；该实例保持运行、可经网关访问，不写额外审计
+
+### Requirement: 每次启动生成实例令牌和文件令牌密钥
+
+平台 MUST 在每次启动实例时各生成一个密码学随机的实例令牌和 ONLYOFFICE 文件令牌密钥，只经环境变量注入该实例容器。平台 MUST 只持久化实例令牌的哈希，MUST NOT 持久化文件令牌密钥原文；两者 MUST NOT 出现在日志、审计、接口回应或错误信息中。
+
+#### Scenario: 启动注入且仅存哈希
+
+- **WHEN** 实例启动完成
+- **THEN** 容器环境中有本次的实例令牌和文件令牌密钥，平台数据库只有实例令牌的哈希，没有两者的原文
+
+#### Scenario: 停止清除、重启轮换
+
+- **WHEN** 实例经空闲、管理员、禁用、出错或对账中任一种路径被停止，随后再次启动
+- **THEN** 停止后旧令牌哈希被清除，旧令牌访问平台代理被拒绝；重新启动得到与上次不同的实例令牌和文件令牌密钥
+
+#### Scenario: 凭据不进入可观察输出
+
+- **WHEN** 启动成功、启动失败和管理员查看实例状态时检查平台日志、审计、实例列表回应和保存的错误日志
+- **THEN** 都不含实例令牌、令牌哈希或文件令牌密钥
+
+### Requirement: Document Server 接入实例网络
+
+使用自带 Document Server 且部署配置齐全时，平台 MUST 在每次启动实例时把配置的容器名重新解析为当前容器，核实身份后在实例就绪前以基址+4 接入该实例网络，接入前后的身份和端点核验规则与平台容器接入相同。实例启动 MUST NOT 依赖 Document Server 可用：容器不存在或身份不符时，平台 MUST NOT 接入，本次启动的覆盖层不写 Office 配置，实例照常就绪，并在实例记录中保存不含凭据的安全原因。接入调用本身失败或结果无法确认时，平台 MUST 按现有启动失败路径处理，不留下未确认的端点。
+
+平台 MUST 为每个实例记录本次启动的 Document Server 模式（自带、外部、未配置）和接入的容器身份。退役 MUST 按该记录只断开已记录的端点，再删除已确认为空的网络，不依据当前设置。平台 MUST NOT 为已运行的实例热补接 Document Server。选择外部 Document Server、自带未配置或以 published-loopback 方式启动时，平台 MUST NOT 做任何接入。
+
+#### Scenario: 启动时接入、停止时断开
+
+- **WHEN** 以网络方式启动并随后停止一个实例
+- **THEN** 运行期间 Document Server 在该实例网络上有且只有一个端点；停止后该端点被断开、空网络被删除，Document Server 在其他实例网络和自己主网络上的端点不变
+
+#### Scenario: Document Server 缺失或身份不符时实例照常就绪
+
+- **WHEN** 配置名对应的容器不存在，或其身份与核验要求不符，员工启动实例
+- **THEN** 平台不接入任何 Document Server 端点，实例照常就绪且聊天和文件功能可用，覆盖层中没有 Office 配置，实例记录保存不含凭据的原因
+
+#### Scenario: 接入结果无法确认时启动失败
+
+- **WHEN** 对已核验的 Document Server 发出的接入调用失败，或接入后的端点无法确认
+- **THEN** 实例启动按现有失败路径明确失败，不标记就绪，不留下未确认的端点；平台不强制断开不明端点
+
+#### Scenario: 外部或未配置时不接入
+
+- **WHEN** 管理员已选择外部 Document Server，或自带 Document Server 的部署配置两项都缺省，然后启动实例
+- **THEN** 实例网络上只有员工容器和平台两个端点；前者覆盖层中的 Document Server 地址为后台配置的外部地址，后者覆盖层中没有 Office 配置
+
+#### Scenario: 退役按启动时的记录断开
+
+- **WHEN** 实例以自带模式启动后，管理员切换到外部 Document Server，随后该实例被停止
+- **THEN** 平台按记录断开该实例网络上的 Document Server 端点并删除空网络，不因当前设置为外部而遗留端点
+
+#### Scenario: Document Server 重建后下次启动接入新容器
+
+- **WHEN** 实例 A 运行期间 Document Server 容器被删除并以同名重建，随后员工 B 启动实例，再停止 A
+- **THEN** B 的实例网络接入的是新容器；A 不被补接，A 停止时记录中已消失的端点不需断开，A 的网络被删除
+
+#### Scenario: 对账不补接 Document Server
+
+- **WHEN** 平台重启对账时，一个已验证的运行中实例网络上记录的 Document Server 端点已经消失
+- **THEN** 对账把该实例视为健康、不补接也不停止它；它下次启动时重新接入
