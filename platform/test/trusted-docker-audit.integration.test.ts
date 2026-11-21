@@ -731,7 +731,7 @@ it.each(
       await writeFile(
         join(binaries, 'docker'),
         `#!${process.execPath}
-// The untimed warm-up exits before the witness or submission journal is touched.
+// The warm-up exits at once, before the witness or submission journal is touched.
 if(process.argv[2]==='warm-up')process.exit(0);
 const {writeFileSync}=require('node:fs');
 // This owned executable is the external Docker boundary, not a mocked ledger.
@@ -748,7 +748,7 @@ void import(${JSON.stringify(submissionsModule)}).then(({requireVerificationSubm
         { mode: 0o700, flag: 'wx' },
       );
       // Darwin admits a freshly written executable's first exec slowly and system-wide; that cost
-      // is paid once here, outside the timed dispatch, whose bound is unchanged.
+      // is paid once here, inside the case budget, so the dispatch's own 2s bound never pays it.
       const warmUp = spawnChild('warm-up', join(binaries, 'docker'), ['warm-up'], {
         stdio: 'ignore',
         encoding: 'utf8',

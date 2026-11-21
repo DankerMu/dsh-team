@@ -40,8 +40,10 @@ const save=()=>{writeFileSync(file+'.pending',JSON.stringify(state));renameSync(
 if(args[0]==='--user')process.stdout.write('LoadState=not-found\n');
 else if(args[0]==='info')process.stdout.write(JSON.stringify({OSType:'linux',Architecture:'amd64',SecurityOptions:[]}));
 else if(args[0]==='build') {
- // A build can outlive its killed verifier: record who it is before it can hang.
- appendFileSync(join(root,'descendants.jsonl'),JSON.stringify({pid:process.pid,birth:await processBirth(process.pid)})+'\n');
+ // A build can outlive its killed verifier: record who it is before it can hang. A failed
+ // self-observation records no birth (never killed after a cut) and leaves the build unchanged.
+ const birth=await processBirth(process.pid).catch(()=>null);
+ appendFileSync(join(root,'descendants.jsonl'),JSON.stringify({pid:process.pid,birth})+'\n');
  if(state.mode==='absent'){
   // The invocation-private build context is runtime-selected; load its delivered import closure.
   const context=args.find(value=>value.startsWith('browser-runtime=')).slice('browser-runtime='.length);
@@ -86,25 +88,25 @@ save();
 `;
 
 /** After a cut: report each recorded stand-in still alive, killing it only if its birth matches. */
-function retireDescendants(root: string, budget: ReturnType<typeof caseSpawn>['budget']) {
+export function retireDescendants(root: string, budget: ReturnType<typeof caseSpawn>['budget']) {
   const path = join(root, 'descendants.jsonl');
   if (!existsSync(path)) return 'none recorded';
   const recorded = readFileSync(path, 'utf8')
     .trimEnd()
     .split('\n')
     .map((line) => {
+      // JSON.parse is untyped: the stand-in's own record, whose fields are checked below.
+      const entry = JSON.parse(line) as { pid?: unknown; birth?: unknown };
+      // A stand-in that could not observe itself recorded no birth: it is reported, never killed.
+      if (entry.birth === null) return { pid: Number(entry.pid), birth: null };
       // processIdentity validates both fields; its untyped module leaves them untyped.
-      const identity = processIdentity(JSON.parse(line) as unknown);
+      const identity = processIdentity(entry);
       return { pid: Number(identity.pid), birth: String(identity.birth) };
     });
+  const known = recorded.flatMap(({ pid, birth }) => (birth === null ? [] : [pid]));
   const source = `import {liveProcessBirth} from ${JSON.stringify(native)};
 process.stdout.write(JSON.stringify(await Promise.all(JSON.parse(process.argv[1]).map(liveProcessBirth))));`;
-  const args = [
-    '--input-type=module',
-    '-e',
-    source,
-    JSON.stringify(recorded.map(({ pid }) => pid)),
-  ];
+  const args = ['--input-type=module', '-e', source, JSON.stringify(known)];
   // Terminal evidence keeps its own bound once the case deadline has cut the verifier.
   const observed = budget.unbounded(() =>
     budget.run('descendant identity', process.execPath, args, {
@@ -113,12 +115,14 @@ process.stdout.write(JSON.stringify(await Promise.all(JSON.parse(process.argv[1]
       killSignal: 'SIGKILL',
     }),
   );
-  if (observed.status !== 0) return 'unobservable';
-  const births = JSON.parse(observed.stdout) as unknown[];
+  // The observer answers each known pid's live birth, or null once it is gone, in order.
+  const births = observed.status === 0 ? (JSON.parse(observed.stdout) as unknown[]) : undefined;
   return recorded
-    .map(({ pid, birth }, index) => {
-      if (births[index] === null) return `pid=${String(pid)} gone`;
-      if (births[index] !== birth) return `pid=${String(pid)} reused, retained`;
+    .map(({ pid, birth }) => {
+      if (birth === null || births === undefined) return `pid=${String(pid)} unobservable`;
+      const live = births[known.indexOf(pid)];
+      if (live === null) return `pid=${String(pid)} gone`;
+      if (live !== birth) return `pid=${String(pid)} reused, retained`;
       try {
         process.kill(pid, 'SIGKILL');
       } catch (error) {

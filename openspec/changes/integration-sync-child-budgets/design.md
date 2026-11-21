@@ -28,7 +28,7 @@
 
 In scope, because they are the same family:
 
-- `trusted-docker-audit-fixture.ts` `freshSubmissionAssessment` (`:32-46`), `ordinarySubmission` (`:61-84`) and `withAuditReceipt` (`:119-138`);
+- `trusted-docker-audit-fixture.ts` `freshSubmissionAssessment` (`:32-46`) and `withAuditReceipt` (`:119-138`). `ordinarySubmission` (`:61-84`) is not called by any budgeted case, so it stays unchanged;
 - the finalizer in `browser-build-fixture.ts:126-130`.
 
-Other `*.integration.test.ts` cases that run sync children are recorded as verdicts in the PR, not changed. That includes the remaining 18 trusted-Docker audit cases, whose `withAuditReceipt` registration child has a fixed 5000 ms limit. The requirement binds only cases that declare a budget, plus the named suites and cases.
+Other `*.integration.test.ts` cases that run sync children are recorded as verdicts in the PR, not changed. That includes the remaining 18 trusted-Docker audit cases, whose `withAuditReceipt` registration child has a fixed 5000 ms limit. The requirement binds only the named suites and cases. It is not a repository-wide invariant: other budgeted cases, such as the custody cases that use `caseBudget.run` with SIGTERM, keep their own rules.

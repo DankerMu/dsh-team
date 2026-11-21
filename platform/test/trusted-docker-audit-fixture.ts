@@ -62,18 +62,12 @@ process.stdout.write(JSON.stringify({state})+'\\n');`,
   return assessor.stdout;
 }
 
-export function ordinarySubmission(
-  journal: string,
-  interrupted: boolean,
-  exitCode = 0,
-  spawn = unbudgeted,
-) {
+export function ordinarySubmission(journal: string, interrupted: boolean, exitCode = 0) {
   const cleanupModule = new URL('./docker-cleanup.ts', import.meta.url).href;
   const commandModule = new URL('./docker-command.ts', import.meta.url).href;
   const runId = randomUUID();
   const name = `dsh-team-submission-${runId}`;
-  return spawn(
-    'ordinary submission',
+  return spawnSync(
     process.execPath,
     [
       '--input-type=module',
@@ -96,6 +90,7 @@ process.exitCode=${String(exitCode)};`,
         DSH_TEAM_VERIFICATION_SUBMISSIONS: join(journal, '..', SUBMISSION_JOURNAL),
       },
       encoding: 'utf8',
+      timeout: 5000,
     },
   );
 }

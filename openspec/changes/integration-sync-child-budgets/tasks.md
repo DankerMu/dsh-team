@@ -26,7 +26,7 @@
 - [x] 1.2 Every synchronous child of these suites runs through `caseBudget(deadline).run`:
   - the verifier and finalizer in `browser-build-fixture.ts`;
   - the spawn in `ci-vps-proxy-fixture.ts`;
-  - the writers and warm-up in `trusted-docker-audit.integration.test.ts`, and the `freshSubmissionAssessment`/`ordinarySubmission`/`withAuditReceipt` helpers in `trusted-docker-audit-fixture.ts`;
+  - the writers and warm-up in `trusted-docker-audit.integration.test.ts`, and the `freshSubmissionAssessment`/`withAuditReceipt` helpers in `trusted-docker-audit-fixture.ts`;
   - both cases' `python3` in `profile-seed.integration.test.ts`.
 
   How each child is bounded:
@@ -43,6 +43,14 @@
 
 - [x] 1.3 Record a verdict, in the PR, for any other `platform/test/*.integration.test.ts` case found to inherit 5 s around a synchronous child (`grep -n spawnSync`). Do not change those cases here.
 - [x] 1.4 Red→green at one sync site with a child that completes normally but slower than `CASE_MS`. Before the fix: bare `Test timed out`. After: the cut kill with its attribution. Record both texts in the PR. The temporary slow child is not committed.
+
+- [x] 1.5 Fix pass 1:
+  - the stand-in tolerates a failed `processBirth` (it records `birth: null`, which is reported as `unobservable` and never killed), so recording never changes a build;
+  - committed tests for `caseSpawn`: the cut always applies, SIGKILL is used against a SIGTERM-trapping child, the reserve is honoured, and the message and `cause` are shaped correctly;
+  - committed tests for `retireDescendants`: alive/killed, gone, reused/retained and unobservable;
+  - a failing descendants callback keeps the cut message;
+  - `ordinarySubmission` returns to its original form, because no budgeted case calls it;
+  - stale comments are fixed.
 
 ## 2. Verification
 

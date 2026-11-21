@@ -205,9 +205,14 @@ export function caseSpawn(
       return budget.run(phase, file, args, { ...options, timeout: caseMs, killSignal: 'SIGKILL' });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`${message}; descendants: ${descendants?.(budget) ?? 'not observed'}`, {
-        cause: error,
-      });
+      let observed: string;
+      try {
+        observed = descendants?.(budget) ?? 'not observed';
+      } catch (failure) {
+        // A failed observation must not replace the cut; only its kind is named, never its text.
+        observed = `unobservable (${failure instanceof Error ? failure.name : typeof failure})`;
+      }
+      throw new Error(`${message}; descendants: ${observed}`, { cause: error });
     }
   };
   return { budget, spawn };
