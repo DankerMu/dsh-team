@@ -57,7 +57,7 @@ interface StubOptions {
   console?: readonly ConsoleStub[];
 }
 
-/** Playwright 1.63's `waitFor` re-query back-off: 0, 20, 50, 100, 100ms, then every 500ms. */
+/** Playwright 1.65's `waitFor` re-query back-off: 0, 20, 50, 100, 100ms, then every 500ms. */
 const BACKOFF = [0, 20, 50, 100, 100];
 const backoff = (attempt: number) => BACKOFF[attempt] ?? 500;
 
