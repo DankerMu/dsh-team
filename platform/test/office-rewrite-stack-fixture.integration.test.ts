@@ -6,9 +6,11 @@ import { afterAll, expect, it } from 'vitest';
 import { editorNonce, NONCE_PATTERN } from './office-editor-stack-fixture.ts';
 import {
   EXPECTED_REWRITE,
+  heldApart,
   officeRewriteLine,
   ownedRewrites,
   REWRITER,
+  rewriteArgv,
   rewriteCommand,
   rewriteFacts,
   rewriteState,
@@ -48,6 +50,15 @@ it.each([
   expect(rewriteState(read, AGENT, EMPLOYEE)).toBe(state);
 });
 
+it.each([
+  ['whole', texts(`${AGENT}www`), true],
+  ['split by the other nonce', texts(`${AGENT.slice(0, 9)}${EMPLOYEE}${AGENT.slice(9)}`), true],
+  ['split over two parts', texts(AGENT.slice(0, 9), AGENT.slice(9)), false],
+  ['absent', texts(EMPLOYEE), false],
+])('reads a nonce %s as held apart from the other', (_case, read, held) => {
+  expect(heldApart(read, AGENT, EMPLOYEE)).toBe(held);
+});
+
 const PATH = '/data/work/干净改写.docx';
 
 it('hands bash python3, the rewriter, the file and the nonce as single-quoted words', () => {
@@ -56,6 +67,7 @@ it('hands bash python3, the rewriter, the file and the nonce as single-quoted wo
   const words = execFileSync('sh', ['-c', `printf '%s\\0' ${command}`]).toString();
 
   expect(REWRITER).not.toContain("'");
+  expect(rewriteArgv('干净改写.docx', AGENT)).toEqual(['python3', '-c', REWRITER, PATH, AGENT]);
   expect(command).toBe(`'python3' '-c' '${REWRITER}' '${PATH}' '${AGENT}'`);
   expect(words.split('\0')).toEqual(['python3', '-c', REWRITER, PATH, AGENT, '']);
   expect(() => rewriteCommand("x'.docx", AGENT)).toThrow('Bash word holds a single quote');
@@ -143,7 +155,26 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   const reads = { rewritten: { ...read, typed: true }, saved: read, closed: read };
   const unsaved = { ...clean, file: '未保存改写.docx', reads };
 
-  const line = officeRewriteLine({ clean, unsaved });
+  const shown = { staleChanged: false, staleRemoved: false, saveFailed: true };
+  const typingObserved = {
+    ...{ file: '键入改写.docx', provider: { requests: 9, searches: 0, delegations: 0 } },
+    window: {
+      ...{ execStart: 5, execEnd: 900, lastKey: 1_400 },
+      ...{ staleLatched: 1_300, staleCleared: null, dirtyFalse: 'unavailable' },
+    },
+    ...{ notices: { before: shown, window: shown, saved: shown, end: shown } },
+    ...{ latched: { window: shown, end: shown }, cleared: false },
+    config: { open: 1, window: 1, saved: 1, end: 1 },
+    dirty: { available: false, control: { messages: 3, parsed: 3, malformed: 0, stateChanges: 0 } },
+    watch: { available: true, kinds: { change: 1, 'save-error': 2 }, saveErrors: [20, 30] },
+    host: { available: false, reason: 'no earlier line' },
+    reads: { rewritten: read, saved: read, closed: read },
+    entries: { saved: unchanged, closed: unchanged },
+    allowed: true,
+  } as const;
+  const typing = { ...typingObserved, responses, editor };
+
+  const line = officeRewriteLine({ clean, unsaved, typing });
 
   const printed = {
     ...observed,
@@ -162,6 +193,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   expect(line).toEqual({
     clean: printed,
     unsaved: { ...printed, file: '未保存改写.docx', reads },
+    typing: { ...typingObserved, responses: printed.responses, editor: printed.editor },
   });
   for (const secret of [LONG_RUN, AGENT, 'token'])
     expect(JSON.stringify(line)).not.toContain(secret);

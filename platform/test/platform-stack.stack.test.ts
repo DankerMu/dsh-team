@@ -546,7 +546,7 @@ async function converse(
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });
     // 18.7 (#442): the Agent rewrites A's open DOCX; the editor refreshes and the save keeps both.
-    evidence.officeRewrite = await rewrite.officeRewriteScenario({ ...lane, reply, rewrites });
+    evidence.officeRewrite = await rewrite.officeRewriteScenario({ ...office, reply, rewrites });
     // 18.5 (#440): A's open editor outlasts one idle minute; once it closes, A is idle-stopped.
     evidence.officeIdle = await officeIdleScenario({ ...office, reply, readBack });
     // #649: from idle-stopped A, a refused external Document Server shows the plugin's failure.
