@@ -1,11 +1,12 @@
 # Office hints
 
-This dependency-free host plugin and classic-script Web client support **DSH `0.2.1-rc.2`** through the manifest range `engines.dsh: >=0.2.1-rc.2 <0.3.0`. They show the two Office editor hints the baseline requires (F40 and the no-Session hint) around the released ONLYOFFICE editor (`dsh-sidebar-onlyoffice@0.2.0`) without a second patch to that package and without a DSH source change (D1).
+This dependency-free host plugin and classic-script Web client support **DSH `0.2.1-rc.2`** through the manifest range `engines.dsh: >=0.2.1-rc.2 <0.3.0`. They show the two Office editor hints the baseline requires (F40 and the no-Session hint), plus a static note on the bundled Document Server's startup window (#648), around the released ONLYOFFICE editor (`dsh-sidebar-onlyoffice@0.2.0`) without a second patch to that package and without a DSH source change (D1).
 
-| Hint                | Text                                                                   | Shown when                                                                       |
-| ------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Collaboration (F40) | 请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。 | above the ONLYOFFICE editor of a docx, xlsx or pptx opened in a Session          |
-| No Session          | 请先新建或进入一个会话（Session），再打开 Office 文件。                | instead of the editor when the tab has no Session (`sessionId` empty or missing) |
+| Hint                  | Text                                                                                                         | Shown when                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| Collaboration (F40)   | 请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。                                       | above the ONLYOFFICE editor of a docx, xlsx or pptx opened in a Session          |
+| No Session            | 请先新建或进入一个会话（Session），再打开 Office 文件。                                                      | instead of the editor when the tab has no Session (`sessionId` empty or missing) |
+| Restart window (#648) | Office 服务刚启动或重启后约 2 分钟内，编辑器可能断开；如果断开，请稍后重新打开此文件，未保存的修改可能丢失。 | below the collaboration hint, in the same view only                              |
 
 ## Activation
 
@@ -17,7 +18,7 @@ The image delivers the plugin read-only under `/opt/dsh-team/office-hints` and t
 
 ## Wrapper viewer
 
-The wrapper component uses no hooks and only returns elements; ONLYOFFICE is rendered as the element `h(onlyofficeViewer.component, props)` with the props passed through, so its own hooks stay in its own component. If the ONLYOFFICE viewer is missing at render time (between two notifications), the wrapper shows 「Office 编辑器未加载，请关闭后重新打开此文件。」. The hints carry `data-dsh-team-office-hint="collab"` or `"no-session"`.
+The wrapper component uses no hooks and only returns elements; ONLYOFFICE is rendered as the element `h(onlyofficeViewer.component, props)` with the props passed through, so its own hooks stay in its own component. If the ONLYOFFICE viewer is missing at render time (between two notifications), the wrapper shows 「Office 编辑器未加载，请关闭后重新打开此文件。」. The hints carry `data-dsh-team-office-hint="collab"`, `"restart"` or `"no-session"`. The restart note is static: the bundled Document Server restarts docservice once more about 70–135 s after every container start, while its same-origin `/healthcheck` already answers `true`, and the editor's connection state stays inside `dsh-sidebar-onlyoffice`, so the browser cannot tell when the window is over (operators wait for the container's Docker health instead, `docs/DEPLOY.md`). It is never shown in the no-Session view or the not-loaded notice.
 
 Accepted residuals:
 

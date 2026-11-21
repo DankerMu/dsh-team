@@ -83,6 +83,22 @@ export function holderRead(command: AsyncDockerCommand, jwt: string | undefined)
   };
 }
 
+/**
+ * The exit of a Docker exec-form healthcheck `test` run unchanged in the holder (#648), printed by
+ * an outer sh so `docker exec` itself exits 0: its custody submission settles, and a daemon
+ * failure such as a missing container throws instead of reading as the probe's own answer.
+ */
+export async function holderProbeExit(command: AsyncDockerCommand, test: readonly unknown[]) {
+  const [kind, ...argv] = test;
+  if (kind !== 'CMD' || argv.length === 0 || !argv.every((arg) => typeof arg === 'string'))
+    throw new Error('Healthcheck test is not an exec-form CMD');
+  const args = ['exec', DOCUMENT_SERVER_NET, 'sh', '-c', '"$@"; echo "$?"', 'sh', ...argv];
+  const code = output(await command(args, 30_000), args);
+  if (!/^\d+\n$/.test(code))
+    throw new Error(`Holder probe exit unreadable: ${JSON.stringify(code)}`);
+  return Number(code);
+}
+
 const COMMAND = { path: '/command', method: 'POST' } as const;
 const ANSWERED = (status: number) => ({ outcome: 'answered', status });
 // nginx matches the decoded path: these reached docservice through the version-prefix catch-all.
