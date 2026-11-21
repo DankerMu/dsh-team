@@ -19,7 +19,7 @@
 - Bundled mode is restored (admin `PUT {mode:'bundled'}`, then instance restart) on every exit path of the scenario, and the restore itself is asserted (config reads back bundled; the restarted instance reaches the bundled Document Server).
 - The random JWT never appears in logs, evidence, screenshots or failure messages.
 - No change under `platform/src/`, `plugins/`, `images/`; the "Office 不可用时的退路" requirement text is unchanged.
-- The lane's zero-console-error and external-request rules stay global: the scenario's one expected failure (the proxied `api.js` 502) is accepted only by the exact paired console/response match in task 1.4, recorded in the evidence, never by widening an existing allowlist.
+- The lane's zero-console-error and external-request rules stay global: the scenario's one expected failure (the proxied `api.js` 502) is accepted only by the exact console/response/requestfailed triple in task 1.4, recorded in the evidence, never by widening an existing allowlist.
 - No lengthened per-step wait; the failure wait is bounded by the plugin's own timeout plus a stated margin. The stack `testTimeout` cap grows only by this lane's derived upper bound, recorded in `vitest.config.ts` per that file's convention.
 
 ## 1. Implementation
@@ -42,5 +42,5 @@
 ## 2. Verification
 
 - [ ] 2.1 `openspec validate external-document-server-failure --strict --no-interactive`, `openspec validate --specs --strict --no-interactive` after archive; `pnpm check`.
-- [ ] 2.2 Local exact-head `pnpm test:stack`: the new scenario's evidence (failure text, time, restore), console errors limited to the scenario's expected failure, inventory fence clean.
+- [x] 2.2 Local exact-head `pnpm test:stack`: the new scenario's evidence (failure text, time, restore), console errors limited to the scenario's expected failure, inventory fence clean.
 - [ ] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required because `platform/test/` changes), confirmed cleanup.
