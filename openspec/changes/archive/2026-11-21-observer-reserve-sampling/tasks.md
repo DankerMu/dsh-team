@@ -27,4 +27,4 @@
 ## 2. Verification
 
 - [x] 2.1 The file repeated (≥ 10 runs); 5 full `pnpm check` runs with 1-minute load ≥ 13 (generate parallel load if needed), recording load and result for each; `pnpm check`.
-- [ ] 2.2 CI; exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, confirmed cleanup.
+- [x] 2.2 CI; exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, confirmed cleanup.

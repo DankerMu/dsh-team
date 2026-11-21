@@ -41,6 +41,6 @@
 
 ## 2. Verification
 
-- [ ] 2.1 `openspec validate external-document-server-failure --strict --no-interactive`, `openspec validate --specs --strict --no-interactive` after archive; `pnpm check`.
+- [x] 2.1 `openspec validate external-document-server-failure --strict --no-interactive`, `openspec validate --specs --strict --no-interactive` after archive; `pnpm check`.
 - [x] 2.2 Local exact-head `pnpm test:stack`: the new scenario's evidence (failure text, time, restore), console errors limited to the scenario's expected failure, inventory fence clean.
-- [ ] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required because `platform/test/` changes), confirmed cleanup.
+- [x] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required because `platform/test/` changes), confirmed cleanup.

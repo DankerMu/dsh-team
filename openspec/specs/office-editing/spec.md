@@ -144,3 +144,26 @@ ONLYOFFICE 插件实际使用的 Document Server 地址、JWT 和实例地址 MU
 
 - **WHEN** 检查 Document Server 容器的端口发布
 - **THEN** 没有任何宿主端口发布
+
+### Requirement: Document Server 启动窗口的静态说明
+
+在 Session 中打开 docx、xlsx 或 pptx 的 Office 编辑器时，界面 MUST 在协作提示旁显示固定说明：「Office 服务刚启动或重启后约 2 分钟内，编辑器可能断开；如果断开，请稍后重新打开此文件，未保存的修改可能丢失。」该说明 MUST NOT 改变既有的协作提示和无 Session 提示的文字，也 MUST NOT 出现在无 Session 视图或编辑器未加载的退路视图中。
+
+#### Scenario: 编辑器旁显示启动窗口说明
+
+- **WHEN** 员工在 Session 中打开 docx、xlsx 或 pptx
+- **THEN** 编辑器上方同时显示协作提示和启动窗口说明，两段文字与规定一致
+
+#### Scenario: 无 Session 时不显示启动窗口说明
+
+- **WHEN** 标签页没有 Session
+- **THEN** 只显示无 Session 提示，不显示编辑器，也不显示启动窗口说明
+
+### Requirement: 外部 Document Server 失效时的提示
+
+平台不探测管理员填写的外部 Document Server 地址。实例经实例网络接入 Document Server 时（非 published-loopback），地址不可达、拒绝连接或应答的不是 Document Server，本次启动的 ONLYOFFICE 插件照常启用，「Office 不可用时的退路」不适用。员工在 Session 中打开 DOCX、XLSX、PPTX 时 MUST 在有限等待后看到 ONLYOFFICE 插件的打开失败提示（「打开失败」及 `dsh-sidebar-onlyoffice` 的一条失败说明），MUST NOT 停在空白页或一直显示「正在打开 ONLYOFFICE …」；原文件 MUST 不变，实例的聊天和文件操作 MUST 照常可用。外部 Document Server 若带商业许可，其连接上限和满员时的提示由该 Document Server 自身处理，容量由运营方负责，本项目 MUST NOT 另加满员提示。可达的 Document Server 因 JWT 不符、版本不兼容或编辑器内部出错而显示的界面，属于 Document Server 或插件自身的行为，本要求不作承诺。
+
+#### Scenario: 外部 Document Server 拒绝连接时打开 DOCX
+
+- **WHEN** 管理员在后台把 Office 切到外部 Document Server，填写一个在实例内拒绝连接的地址和 JWT，员工实例重启后在 Session 中从文件区打开一个 DOCX
+- **THEN** 员工在有限等待后看到「打开失败」和「无法加载 ONLYOFFICE 编辑器脚本」，不是空白页，也不再显示「正在打开 ONLYOFFICE …」；该 DOCX 的内容不变，聊天输入框可用，文件区仍列出该文件

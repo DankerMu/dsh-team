@@ -12,4 +12,4 @@
 ## 2. Verification
 
 - [x] 2.1 Mutant, on an otherwise idle machine: temporarily make `awaitRegisteredDrivers` return immediately (`settled: true`) and show both cases fail on the retained state assertions (pre-change `:101` process state, `:135` pointer `stopped`; `:100`, `:133` after the deletion), not on `settled` or an upper bound; restore. On macOS, run the file ≥ 10 times while `pnpm check` runs in parallel: no lower-bound failure. `pnpm check`.
-- [ ] 2.2 CI `pnpm test:integration`; exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required for any `platform/test/` change), confirmed cleanup.
+- [x] 2.2 CI `pnpm test:integration`; exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required for any `platform/test/` change), confirmed cleanup.
