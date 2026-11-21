@@ -20,7 +20,7 @@
 - The random JWT never appears in logs, evidence, screenshots or failure messages.
 - No change under `platform/src/`, `plugins/`, `images/`; the "Office 不可用时的退路" requirement text is unchanged.
 - The lane's zero-console-error and external-request rules stay global: the scenario's one expected failure (the proxied `api.js` 502) is accepted only by the exact paired console/response match in task 1.4, recorded in the evidence, never by widening an existing allowlist.
-- No lengthened stack deadline; the failure wait is bounded by the plugin's own timeout plus a stated margin.
+- No lengthened per-step wait; the failure wait is bounded by the plugin's own timeout plus a stated margin. The stack `testTimeout` cap grows only by this lane's derived upper bound, recorded in `vitest.config.ts` per that file's convention.
 
 ## 1. Implementation
 
@@ -31,11 +31,13 @@
   - Precondition: GET `/_platform/api/admin/document-server` reads `mode: 'bundled'` with `bundledConfigured: true` (so restoring bundled restores the original state); reuse the office-profile lane's `REWRITTEN_URL` (`http://127.0.0.1:9`) and its no-listener check inside the instance (`platform/test/office-profile-stack-fixture.ts:22-23, :51-57`; the check is inline in `registerScript`, so first extract it into a shared exported helper used by both lanes) — never copy.
   - PUT `{mode:'external', url: REWRITTEN_URL, jwtSecret: <random>}`; restart through the existing `restartInstance`; write a DOCX for this scenario and open it.
   - Assert, in the lane's locale, exactly the plugin's `loadFailed` heading plus `errApi` text (export `LOADING`/`FAILURES` from `office-hints-stack-fixture.ts`, never copy); no `LOADING`, no office-hints `UNAVAILABLE`, no `errFetch`/`errEditor`/`errEditorEvent`; the DOCX bytes unchanged; then the composer reaches `ready` (existing `composerState`) and the file row is still listed.
-  - Console scoping: exactly one console error equal to Chromium's 502 resource message, paired with exactly one 502 response on `${base}/sidebar/onlyoffice/ds/web-apps/apps/api/documents/api.js` captured through `workbenchSession`'s `onResponse`; `pageErrors`, `failedRequests` and `externalRequests` empty. No existing allowlist is widened.
+  - Console scoping: exactly one console error equal to Chromium's 502 resource message, exactly one 502 response on `${base}/sidebar/onlyoffice/ds/web-apps/apps/api/documents/api.js` captured through `workbenchSession`'s `onResponse`, and exactly one `requestfailed` entry `GET` for that same URL (Chromium reports the 502'd script as failed too; observed in the exact-head stack run of `bf7c058`); `pageErrors` and `externalRequests` empty. No existing allowlist is widened.
   - If the observed UI differs from this (other key, timeout path, blank), stop and report — the spec is revised, the assertion is never loosened.
   - Restore on every path, following `officeIdleScenario`'s pattern (`office-idle-stack-fixture.ts:205-207`: `retiringOnError` for the failure path, then the same restore called again on success), so a failed restore never hides the scenario's own failure: `PUT {mode:'bundled'}`, GET reads it back, restart, then `documentServerReady` (`office-hints-stack-fixture.ts`) proves the bundled Document Server is reached again; restoration failures fail the lane.
   - Evidence line: failure keys, the office-hints `hints` shown above the panel, time to failure, restore confirmed; the JWT never appears anywhere. If the restart receipt of an idle-stopped instance differs from `restartInstance`'s expected `{status:'starting'}`, stop and report rather than loosening it.
     Update `docs/LOCAL_STACK.md` (:144 list, :194-199 evidence table) and `platform/test/README.md` stack evidence.
+
+- [x] 1.5 Fix pass 1: the pairing judge covers console + response + `requestfailed` (each exactly one, same URL); stack `testTimeout` raised by this lane's derived upper bound with the derivation in `vitest.config.ts`, per that file's convention; integration cases for surviving mutants (two paired 502s, non-conforming listener/file/provider fakes, the failure-key verdict as a pure helper); the guide's 「打开失败」 advice distinguishes a just-restarted bundled Office service (reopen shortly) from a persistent failure (tell the administrator).
 
 ## 2. Verification
 

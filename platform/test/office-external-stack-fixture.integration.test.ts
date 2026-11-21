@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, it } from 'vitest';
 import {
+  apiScriptFailed,
   BAD_GATEWAY,
   badGatewayPaired,
   failureKeys,
@@ -49,32 +50,71 @@ it("pins the 502 console text to Chromium's resource-failure wording with Node's
 });
 
 const PAIR = [`502 ${BASE}${API_JS}`];
+const FAILED = [`GET ${BASE}${API_JS}`];
 
-it('accepts exactly the one 502 console error paired with the one proxied api.js 502', () => {
-  expect(badGatewayPaired([BAD_GATEWAY], PAIR, BASE)).toBe(true);
-  expect(badGatewayPaired([BAD_GATEWAY], PAIR, `${BASE}/`)).toBe(true);
+it('accepts exactly the 502 console error, the proxied api.js 502 and its failed GET seen in the stack', () => {
+  expect(badGatewayPaired([BAD_GATEWAY], PAIR, FAILED, BASE)).toBe(true);
+  expect(badGatewayPaired([BAD_GATEWAY], PAIR, FAILED, `${BASE}/`)).toBe(true);
 });
 
 const NOT_FOUND = 'Failed to load resource: the server responded with a status of 404 (Not Found)';
 
 it.each([
-  ['no console error', [], PAIR],
-  ['no response', [BAD_GATEWAY], []],
-  ['a second console error', [BAD_GATEWAY, BAD_GATEWAY], PAIR],
-  ['a different console error', [NOT_FOUND], PAIR],
-  ['a second response', [BAD_GATEWAY], [...PAIR, `404 ${BASE}/favicon.ico`]],
-  ['a 502 on another path', [BAD_GATEWAY], [`502 ${BASE}/sidebar/onlyoffice/config`]],
-  ['api.js answered 503', [BAD_GATEWAY], [`503 ${BASE}${API_JS}`]],
-  ['api.js on another origin', [BAD_GATEWAY], [`502 http://127.0.0.1:9${API_JS}`]],
-])('rejects %s', (_name, errors: string[], responses: string[]) => {
-  expect(badGatewayPaired(errors, responses, BASE)).toBe(false);
+  ['no console error', [], PAIR, FAILED],
+  ['no response', [BAD_GATEWAY], [], FAILED],
+  ['a second console error', [BAD_GATEWAY, BAD_GATEWAY], PAIR, FAILED],
+  ['a different console error', [NOT_FOUND], PAIR, FAILED],
+  ['a second response', [BAD_GATEWAY], [...PAIR, `404 ${BASE}/favicon.ico`], FAILED],
+  ['two api.js 502s', [BAD_GATEWAY], [...PAIR, ...PAIR], FAILED],
+  ['two paired 502s', [BAD_GATEWAY, BAD_GATEWAY], [...PAIR, ...PAIR], [...FAILED, ...FAILED]],
+  ['a 502 on another path', [BAD_GATEWAY], [`502 ${BASE}/sidebar/onlyoffice/config`], FAILED],
+  ['api.js answered 503', [BAD_GATEWAY], [`503 ${BASE}${API_JS}`], FAILED],
+  ['api.js on another origin', [BAD_GATEWAY], [`502 http://127.0.0.1:9${API_JS}`], FAILED],
+  ['no failed request', [BAD_GATEWAY], PAIR, []],
+  ['two failed api.js GETs', [BAD_GATEWAY], PAIR, [...FAILED, ...FAILED]],
+  ['a second failed request', [BAD_GATEWAY], PAIR, [...FAILED, `GET ${BASE}/favicon.ico`]],
+  ['another failed URL', [BAD_GATEWAY], PAIR, [`GET ${BASE}/sidebar/onlyoffice/config`]],
+  ['api.js failing on another origin', [BAD_GATEWAY], PAIR, [`GET http://127.0.0.1:9${API_JS}`]],
+  ['api.js failing with a query', [BAD_GATEWAY], PAIR, [`GET ${BASE}${API_JS}?v=1`]],
+  ['a failed POST of api.js', [BAD_GATEWAY], PAIR, [`POST ${BASE}${API_JS}`]],
+])('rejects %s', (_name, errors: string[], responses: string[], failed: string[]) => {
+  expect(badGatewayPaired(errors, responses, failed, BASE)).toBe(false);
+});
+
+it("accepts exactly the plugin's loadFailed heading followed by errApi", () => {
+  expect(apiScriptFailed(['打开失败', '无法加载 ONLYOFFICE 编辑器脚本'])).toBe(true);
+});
+
+it.each([
+  ['the heading alone', ['打开失败']],
+  ['errApi alone', ['无法加载 ONLYOFFICE 编辑器脚本']],
+  ['the loading text', [LOADING[0] ?? '']],
+  [
+    'the loading text with the failure',
+    [LOADING[0] ?? '', '打开失败', '无法加载 ONLYOFFICE 编辑器脚本'],
+  ],
+  ["office-hints' UNAVAILABLE", ['Office 编辑器未加载']],
+  [
+    'UNAVAILABLE with the failure',
+    ['打开失败', '无法加载 ONLYOFFICE 编辑器脚本', 'Office 编辑器未加载'],
+  ],
+  ['errFetch', ['打开失败', '无法获取编辑器配置']],
+  ['errFetch besides errApi', ['打开失败', '无法获取编辑器配置', '无法加载 ONLYOFFICE 编辑器脚本']],
+  [
+    'errEditor after errApi',
+    ['打开失败', '无法加载 ONLYOFFICE 编辑器脚本', 'ONLYOFFICE 编辑器初始化失败'],
+  ],
+  ['the English failure', ['Failed to open', 'Could not load the ONLYOFFICE editor script']],
+  ['nothing', []],
+])('rejects as the failure %s', (_name, texts: string[]) => {
+  expect(apiScriptFailed(texts)).toBe(false);
 });
 
 const BROWSER: StackBrowserEvidence = {
   screenshots: ['office-external-failed.png'],
   consoleErrors: [BAD_GATEWAY],
   pageErrors: [],
-  failedRequests: [],
+  failedRequests: [`GET ${BASE}${API_JS}`],
   externalRequests: [],
   requests: 40,
   websockets: 2,
@@ -123,13 +163,22 @@ afterEach(async () => {
   }
 });
 
+/** What A answers otherwise: a listener at the address, the file read after the open, counters. */
+interface Deviation {
+  readonly listener?: boolean;
+  readonly reread?: typeof FILE;
+  readonly requests?: readonly number[];
+}
+
 /** A instance answering each command the lane sends, recorded in `events` in order. */
-function fakeLane(base: string, events: string[]): OfficeExternalLane {
+function fakeLane(base: string, events: string[], deviation: Deviation = {}): OfficeExternalLane {
+  const { listener = false, reread = FILE, requests = [3, 3] } = deviation;
+  let reads = 0;
   const exec = (args: readonly string[]) => {
     const [, , , target = ''] = args;
     if (args[0] === 'node' && (args.at(-1) ?? '').includes(LISTENER_JS)) {
       events.push('listener');
-      return Promise.resolve(JSON.stringify({ listener: false }));
+      return Promise.resolve(JSON.stringify({ listener }));
     }
     if (args.join(' ') === HEALTH_COMMAND.join(' ')) {
       events.push('health');
@@ -139,13 +188,14 @@ function fakeLane(base: string, events: string[]): OfficeExternalLane {
       events.push('remove');
       return Promise.resolve(JSON.stringify([false]));
     }
-    events.push(args.length === 5 ? 'write' : 'read');
-    return Promise.resolve(JSON.stringify(FILE));
+    const written = args.length === 5;
+    events.push(written ? 'write' : 'read');
+    return Promise.resolve(JSON.stringify(written ? FILE : reread));
   };
   return {
     session: { base, directory: '/tmp', email: 'a@example.test', password: 'p', timeout: 1_000 },
     exec,
-    provider: () => Promise.resolve({ requests: 3, searches: 0, delegations: 0 }),
+    provider: () => Promise.resolve({ requests: requests[reads++], searches: 0, delegations: 0 }),
     administrator: { base, cookie: 'dsh_team_session=admin' },
     restart: () => {
       events.push('restart');
@@ -159,8 +209,10 @@ const opening =
   (events: string[], observed: Partial<ExternalOpen> = {}) =>
   (session: { base: string }): Promise<ExternalOpen> => {
     events.push('open');
-    const responses = [`502 ${new URL(session.base).origin}${API_JS}`];
-    return Promise.resolve({ browser: BROWSER, responses, failure: OPENED, ...observed });
+    const { origin } = new URL(session.base);
+    const responses = [`502 ${origin}${API_JS}`];
+    const browser = { ...BROWSER, failedRequests: [`GET ${origin}${API_JS}`] };
+    return Promise.resolve({ browser, responses, failure: OPENED, ...observed });
   };
 
 /** The JWT the lane PUT, read back from the fake's request log. */
@@ -197,9 +249,10 @@ it('switches to the refused external address, opens the DOCX and restores bundle
     file: FILE,
     consoleErrors: [BAD_GATEWAY],
     responses: [`502 ${admin.base}${API_JS}`],
+    failedRequests: [`GET ${admin.base}${API_JS}`],
     browser: {
       screenshots: ['office-external-failed.png'],
-      ...{ consoleErrors: 1, pageErrors: 0, failedRequests: 0, externalRequests: 0 },
+      ...{ consoleErrors: 1, pageErrors: 0, failedRequests: 1, externalRequests: 0 },
     },
     restored: { config: 'bundled', healthcheck: true },
   });
@@ -244,9 +297,49 @@ it('fails on any console error or response beyond the paired 502, after restorin
 
   const run = officeExternalScenario(fakeLane(admin.base, events), opening(events, { browser }));
 
-  await expect(run).rejects.toThrow(/consoleErrors, responses/);
+  await expect(run).rejects.toThrow(/consoleErrors, responses, failedRequests/);
   expect(events.slice(-3)).toEqual(['remove', 'restart', 'health']);
   expect(admin.state.mode).toBe('bundled');
+});
+
+it.each([
+  ['no failed request', []],
+  ['a second failed request', [`GET {base}${API_JS}`, `GET {base}/favicon.ico`]],
+  ['another failed URL', [`GET {base}/sidebar/onlyoffice/config`]],
+])('fails on %s beside the paired 502, after restoring bundled mode', async (_name, failed) => {
+  const admin = await adminServer();
+  const events: string[] = [];
+  const failedRequests = failed.map((entry) => entry.replace('{base}', admin.base));
+  const browser = { ...BROWSER, failedRequests };
+
+  const run = officeExternalScenario(fakeLane(admin.base, events), opening(events, { browser }));
+
+  await expect(run).rejects.toThrow(/consoleErrors, responses, failedRequests/);
+  expect(events.slice(-3)).toEqual(['remove', 'restart', 'health']);
+  expect(admin.state.mode).toBe('bundled');
+});
+
+it.each([
+  [
+    'something listens at the refused address',
+    { listener: true },
+    `Nothing listens at ${REWRITTEN_URL} in A`,
+  ],
+  [
+    'the file changed by opening it',
+    { reread: { ...FILE, sha256: 'cd'.repeat(32) } },
+    'Office external file unchanged by opening it',
+  ],
+  ['a model request during the open', { requests: [3, 4] }, 'No model request or retrieval'],
+])('fails when %s, after restoring bundled mode', async (_name, deviation: Deviation, message) => {
+  const admin = await adminServer();
+  const events: string[] = [];
+
+  const run = officeExternalScenario(fakeLane(admin.base, events, deviation), opening(events));
+
+  await expect(run).rejects.toThrow(message);
+  expect(events.slice(-3)).toEqual(['remove', 'restart', 'health']);
+  expect(admin.state).toEqual({ mode: 'bundled', url: '' });
 });
 
 it('restores bundled mode when saving the external server fails, naming only method, path and status', async () => {

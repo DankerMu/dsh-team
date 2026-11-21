@@ -21,7 +21,7 @@ The platform stores an external Document Server address verbatim and never probe
   - It runs last among the Office scenarios: after `officeIdleScenario` and before the spawn check.
   - It starts from the idle-stopped instance.
   - It restores bundled mode on every path, using the `officeIdleScenario` restore pattern, and then proves the bundled Document Server is reachable again.
-- **Console scoping.** The one expected 502 is accepted only as an exact console/response pair on the `api.js` URL. The global rules for zero errors, failed requests and external requests stay unchanged.
+- **Console scoping.** The one expected 502 is accepted only as an exact console/response/`requestfailed` triple on the `api.js` URL (Chromium reports a 502'd script as a failed request too). The global rules for zero errors, failed requests and external requests stay unchanged.
 - **Not promised:**
   - wrong JWT, incompatible version, and errors inside the editor iframe of a reachable Document Server;
   - a licensed server's connection limit, which belongs to that server and its operator.

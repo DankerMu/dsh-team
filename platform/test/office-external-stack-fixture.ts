@@ -39,7 +39,7 @@ const FAILURE_MS = 30_000;
 /**
  * Chromium's console text for the proxied api.js answered 502: the gateway forwards the status
  * with Node's default reason (platform/src/gateway/http.ts `writeHead`), as office-editor's 404
- * `NOT_FOUND`. Read from that source, not yet observed in the stack.
+ * `NOT_FOUND`. Observed verbatim in the exact-head `pnpm test:stack` of bf7c058.
  */
 export const BAD_GATEWAY =
   'Failed to load resource: the server responded with a status of 502 (Bad Gateway)';
@@ -52,16 +52,28 @@ const KEYS = ['loadFailed', 'errFetch', 'errApi', 'errEditor', 'errEditorEvent']
 export const failureKeys = (texts: readonly string[]) =>
   texts.map((text) => KEYS[FAILURES.indexOf(text)] ?? text);
 
+/** The settled editor shows exactly the plugin's `loadFailed` heading and its `errApi` text. */
+export const apiScriptFailed = (texts: readonly string[]) =>
+  isDeepStrictEqual(failureKeys(texts), ['loadFailed', 'errApi']);
+
 /**
- * The refused upstream's only trace allowed in the session: exactly Chromium's one 502 console
- * error and exactly one `status URL` response >= 400, the 502 of api.js on `base`'s origin.
+ * The refused upstream's only trace allowed in the session, as observed in the exact-head
+ * `pnpm test:stack` of bf7c058: exactly Chromium's one 502 console error, exactly one `status URL`
+ * response >= 400, the 502 of api.js on `base`'s origin, and exactly one failed request, the
+ * `GET` of that same URL (Chromium reports the 502'd script as failed too).
  */
 export const badGatewayPaired = (
   errors: readonly string[],
   responses: readonly string[],
+  failed: readonly string[],
   base: string,
-) =>
-  isDeepStrictEqual([errors, responses], [[BAD_GATEWAY], [`502 ${new URL(base).origin}${API_JS}`]]);
+) => {
+  const url = `${new URL(base).origin}${API_JS}`;
+  return isDeepStrictEqual(
+    [errors, responses, failed],
+    [[BAD_GATEWAY], [`502 ${url}`], [`GET ${url}`]],
+  );
+};
 
 /** A's archive lane plus the administrator and the restart of A, awaited until it runs. */
 export type OfficeExternalLane = ArchiveLane & {
@@ -89,6 +101,7 @@ export interface OfficeExternalEvidence extends Failure {
   readonly browser: StackBrowserEvidence;
   readonly consoleErrors: readonly string[];
   readonly responses: readonly string[];
+  readonly failedRequests: readonly string[];
   readonly restored: { readonly config: 'bundled'; readonly healthcheck: true };
 }
 
@@ -131,7 +144,9 @@ async function openFailing(page: Page, shoot: (name: string) => Promise<void>, t
   const final = await page.evaluate<OfficeFacts>(officeFacts(NAME));
   await shoot(SCREENSHOT);
   const keys = failureKeys(final.texts);
-  expect(keys, `ONLYOFFICE texts, seen ${JSON.stringify(final)}`).toEqual(['loadFailed', 'errApi']);
+  expect(apiScriptFailed(final.texts), `ONLYOFFICE texts, seen ${JSON.stringify(final)}`).toBe(
+    true,
+  );
   const ready = async () => (await composerState(page)) === 'ready';
   await until(ready, timeout, 'office external composer after the failure');
   await until(
@@ -180,14 +195,15 @@ async function failedOpen(lane: OfficeExternalLane, open: typeof openInBrowser) 
   const after: unknown = JSON.parse(await exec(docxCommand(NAME)));
   expect(after, 'Office external file unchanged by opening it').toEqual(file);
   expect(await providerCounts(lane), 'No model request or retrieval').toEqual(before);
-  const { consoleErrors } = browser;
-  const seen = `consoleErrors, responses ${JSON.stringify([consoleErrors, responses])}`;
-  expect(badGatewayPaired(consoleErrors, responses, session.base), seen).toBe(true);
+  const { consoleErrors, failedRequests } = browser;
+  const trace = JSON.stringify([consoleErrors, responses, failedRequests]);
+  const seen = `consoleErrors, responses, failedRequests ${trace}`;
+  expect(badGatewayPaired(consoleErrors, responses, failedRequests, session.base), seen).toBe(true);
   expect(browser, seen).toMatchObject({
     screenshots: [`${SCREENSHOT}.png`],
-    ...{ pageErrors: [], failedRequests: [], externalRequests: [] },
+    ...{ pageErrors: [], externalRequests: [] },
   });
-  return { ...failure, file, browser, consoleErrors, responses };
+  return { ...failure, file, browser, consoleErrors, responses, failedRequests };
 }
 
 /** The refused address and a random JWT, which leaves only in this PUT's body; then A restarts. */
