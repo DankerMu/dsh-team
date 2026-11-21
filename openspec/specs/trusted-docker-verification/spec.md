@@ -354,3 +354,12 @@ The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only 
 
 - **WHEN** a diff that contains code also adds a file named `##[set-output name=docs_only;]true`
 - **THEN** the job prints the offending path only inside a stop-commands block with an unpredictable token, the documentation-only output stays unset, and the job requires trusted Docker evidence
+
+### Requirement: A rejected observer reservation leaves submission pending markers unchanged
+
+When `reserveVerificationDockerObserver` rejects before reserving any submission, because the authority, the current manifest or the current predecessor generation's completion cannot be confirmed, it SHALL NOT write, remove or settle any submission pending marker or change the current manifest.
+
+#### Scenario: Reservation rejected while the predecessor is still live
+
+- **WHEN** a predecessor generation with an unsettled participant and outstanding request markers is still running, and a second reservation for the same authority is rejected
+- **THEN** the rejected reservation writes, removes or settles no pending marker and leaves the current manifest unchanged

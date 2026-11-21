@@ -25,5 +25,5 @@
 
 ## 2. Verification
 
-- [ ] 2.1 Red/green run of the integration file; `openspec validate composition-line-separator-ids --strict --no-interactive`; `pnpm check`.
-- [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, confirmed cleanup.
+- [x] 2.1 Red/green run of the integration file; `openspec validate composition-line-separator-ids --strict --no-interactive`; `pnpm check`.
+- [x] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, confirmed cleanup.

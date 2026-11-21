@@ -36,8 +36,8 @@ See `design.md`.
 ## 2. Verification
 
 - [x] 2.1 `pnpm check` (unit + integration incl. office-hints and compose fixture tests).
-- [ ] 2.2 Local exact-head `pnpm test:stack`: health timeline, restart-note screenshot, zero new console errors, inventory/volume fence.
-- [ ] 2.3 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy` (stand-in healthy) with confirmed cleanup; CI green.
+- [x] 2.2 Local exact-head `pnpm test:stack`: health timeline, restart-note screenshot, zero new console errors, inventory/volume fence.
+- [x] 2.3 Exact-head VPS `pnpm test:docker` + `pnpm test:deploy` (stand-in healthy) with confirmed cleanup; CI green.
 
 ## Non-goals
 
