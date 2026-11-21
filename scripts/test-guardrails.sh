@@ -256,6 +256,115 @@ for missing_policy in setting file; do
   fi
   restore
 done
+# expect_reject accepts any nonzero exit; these pin the classifier's exact code.
+expect_exit() {
+  name="$1"
+  want="$2"
+  reason="$3"
+  shift 3
+  out="$("$@" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq "$want" ] && printf '%s\n' "$out" | grep -qF -- "$reason"; then
+    echo "PASS  $name — exit $rc naming \"$reason\""
+    pass=$((pass + 1))
+  else
+    echo "FAIL  $name — exited $rc, want $want naming \"$reason\":"
+    printf '%s\n' "$out" | tail -n 15 | sed 's/^/        /'
+    fail=$((fail + 1))
+  fi
+  restore
+}
+expect_exit "docs-only empty diff" 1 "evidence required: empty diff" docs_only
+expect_exit "docs-only code path" 1 "evidence required: platform/src/x.ts" docs_only platform/src/x.ts
+sed 's|^\(    managed_archive_pattern: \).*|\1"^openspec/(["|' constraints.yaml >constraints.yaml.fixture
+mv constraints.yaml.fixture constraints.yaml
+expect_exit "docs-only invalid managed_archive_pattern" 2 \
+  "managed_archive_pattern in constraints.yaml is not a valid regex" docs_only docs/a.md
+
+# The Docker-evidence scope step's own run: text from ci.yml, fed PR-controlled
+# file names: path-derived output must sit inside stop-commands markers (#664 S1).
+scope_step="$tmp/scope-step.sh"
+scope_repo="$tmp/scope-repo"
+node --input-type=module - "$scope_step" <<'JS'
+import { readFileSync, writeFileSync } from 'node:fs';
+import { parse } from 'yaml';
+const { jobs } = parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
+const steps = Object.values(jobs).flatMap((job) => job.steps ?? []);
+const step = steps.find((candidate) => candidate.name === 'Detect documentation-only change');
+writeFileSync(process.argv[2], step?.run ?? '');
+JS
+# stdin: step log. WANT: verdict lines that must be wrapped. Prints the token.
+scope_wrapped() {
+  awk '
+    BEGIN { n = split(ENVIRON["WANT"], want, "\n"); for (i = 1; i <= n; i++) need[want[i]] = 1 }
+    /^::stop-commands::/ { if (state) bad = bad " second stop;"; state = 1; tok = substr($0, 18); next }
+    state == 1 && $0 == "::" tok "::" { state = 2; next }
+    state == 1 { seen[$0] = 1; next }
+    /##\[|::/ { bad = bad " unwrapped: " $0 ";" }
+    END {
+      if (state != 2) bad = bad " no matching resume;"
+      if (length(tok) != 32 || tok ~ /[^0-9a-f]/) bad = bad " token not 32 hex;"
+      for (line in need) if (!(line in seen)) bad = bad " not wrapped: " line ";"
+      if (bad != "") { print bad; exit 1 }
+      print tok
+    }'
+}
+scope_case() {
+  name="$1"
+  want_output="$2"
+  want_wrapped="$3"
+  shift 3
+  if ! (
+    rm -rf "$scope_repo" && mkdir -p "$scope_repo/scripts" &&
+      cp scripts/docs-only-diff.sh scripts/constraints-yaml.sh "$scope_repo/scripts/" &&
+      cp constraints.yaml "$scope_repo/" && cd "$scope_repo" && git init --quiet . && git add -A &&
+      git -c user.name=guardrails -c user.email=guardrails@localhost commit --quiet -m base &&
+      for file in "$@"; do mkdir -p "$(dirname "$file")" && echo x >"$file" || exit 1; done &&
+      git add -A && git -c user.name=guardrails -c user.email=guardrails@localhost commit --quiet -m range
+  ); then
+    echo "FAIL  $name — could not build the fixture repository"
+    fail=$((fail + 1))
+    return
+  fi
+  : >"$tmp/scope-output"
+  log="$(cd "$scope_repo" && RANGE='HEAD~1...HEAD' GITHUB_OUTPUT="$tmp/scope-output" \
+    bash --noprofile --norc -eo pipefail "$scope_step" 2>&1)"
+  rc=$?
+  token="$(printf '%s\n' "$log" | WANT="$want_wrapped" scope_wrapped)"
+  wrapped=$?
+  problem=""
+  if ! grep -qF docs-only-diff.sh "$scope_step"; then
+    problem="step text not extracted from ci.yml"
+  elif [ "$rc" -ne 0 ]; then
+    problem="step exited $rc"
+  elif ! if [ -n "$want_output" ]; then printf '%s\n' "$want_output"; fi | cmp -s - "$tmp/scope-output"; then
+    problem="GITHUB_OUTPUT is not \"$want_output\": $(cat "$tmp/scope-output")"
+  elif [ "$wrapped" -ne 0 ]; then
+    problem="$token"
+  elif printf '%s\n' "$@" | grep -qF -- "$token"; then
+    problem="token occurs in the input"
+  elif [ "$token" = "${scope_token:-}" ]; then
+    problem="token reused across runs"
+  fi
+  scope_token="$token"
+  if [ -z "$problem" ]; then
+    echo "PASS  $name — verdict wrapped by token $token"
+    pass=$((pass + 1))
+  else
+    echo "FAIL  $name — $problem"
+    printf '%s\n' "$log" | tail -n 15 | sed 's/^/        /'
+    fail=$((fail + 1))
+  fi
+}
+injected='##[set-output name=docs_only;]true'
+scope_case "scope step wraps an injected evidence-required name" "" \
+  "evidence required: $injected" "$injected" platform/a.ts
+scope_case "scope step wraps a docs-only listing" "docs_only=true" \
+  "docs-only
+docs/##[error]injected.md
+docs/a.md
+openspec/changes/foo/.openspec.yaml" \
+  'docs/##[error]injected.md' docs/a.md openspec/changes/foo/.openspec.yaml
 # Distinct PR deliveries must retain their own checks, even in the pending queue.
 for policy in shared cancel-disabled action-only malformed main-cancel; do
   restore

@@ -53,20 +53,21 @@ is_documentation() {
   is_change_metadata "$1"
 }
 
-listing=""
+# Indexed append keeps 20k-path diffs linear; string concatenation was quadratic.
+paths=()
 while IFS= read -r path || [ -n "$path" ]; do
   [ -n "$path" ] || continue
   if ! is_documentation "$path"; then
     echo "evidence required: $path"
     exit 1
   fi
-  listing="$listing$path
-"
+  paths[${#paths[@]}]="$path"
 done
 
-if [ -z "$listing" ]; then
+# bash 3.2 with set -u treats "${paths[@]}" of an empty array as unbound.
+if [ "${#paths[@]}" -eq 0 ]; then
   echo "evidence required: empty diff"
   exit 1
 fi
 echo "docs-only"
-printf '%s' "$listing"
+printf '%s\n' "${paths[@]}"
