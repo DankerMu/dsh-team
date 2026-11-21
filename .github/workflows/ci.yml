@@ -208,10 +208,17 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      # Markdown outside plugins/ and images/ cannot change what the Docker suites
-      # build or run, so a diff made only of it needs no trusted Docker evidence.
-      # Plugin and image Markdown (skills, prompts) ships in images: never exempt.
-      # The job still runs and succeeds, so the aggregator never sees "skipped".
+      # Markdown outside plugins/ and images/, and the OpenSpec CLI's change
+      # metadata (.openspec.yaml directly in openspec/changes/<change>/ or
+      # openspec/changes/archive/YYYY-MM-DD-<change>/), cannot change what the
+      # Docker suites build or run, so a diff made only of them needs no trusted
+      # Docker evidence (scripts/docs-only-diff.sh). Plugin and image Markdown
+      # (skills, prompts) ships in images: never exempt. Classifier exit 1 means
+      # evidence required; any other failure fails the step. The job still runs
+      # and succeeds, so the aggregator never sees "skipped". File names are
+      # PR-controlled and the runner parses `##[...]` anywhere in a line, so the
+      # verdict is printed only between stop-commands markers with a fresh
+      # random token (scripts/test-guardrails.sh runs this step's text).
       - name: Detect documentation-only change
         id: scope
         env:
@@ -221,12 +228,20 @@ jobs:
             || format('{0}..{1}', github.event.before, github.event.after) }}
         run: |
           changed="$(git diff --no-renames --name-only "$RANGE")"
-          code="$(printf '%s\n' "$changed" | grep -Ev '\.md$' || true)"
-          shipped="$(printf '%s\n' "$changed" | grep -E '^(plugins|images)/' || true)"
-          if [ -n "$changed" ] && [ -z "$code" ] && [ -z "$shipped" ]; then
+          token="$(od -An -N16 -tx1 /dev/urandom | tr -dc '0-9a-f')"
+          [ "${#token}" -eq 32 ] || exit 2
+          if verdict="$(printf '%s\n' "$changed" | bash scripts/docs-only-diff.sh)"; then
             echo "docs_only=true" >> "$GITHUB_OUTPUT"
             echo "Documentation-only change ($RANGE); trusted Docker evidence not required:"
-            printf '%s\n' "$changed"
+            echo "::stop-commands::$token"
+            printf '%s\n' "$verdict"
+            echo "::$token::"
+          else
+            rc=$?
+            echo "::stop-commands::$token"
+            printf '%s\n' "$verdict"
+            echo "::$token::"
+            [ "$rc" -eq 1 ] || exit "$rc"
           fi
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         if: steps.scope.outputs.docs_only != 'true'

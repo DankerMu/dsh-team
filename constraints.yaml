@@ -1,7 +1,8 @@
 # constraints.yaml — machine-readable engineering constraints.
 # Canonical source for every numeric threshold and naming pattern. Lint, coverage,
 # duplicate-code and hook scripts read this file at runtime (scripts/constraints.mjs,
-# .git-hooks/check-naming.sh); do not hardcode duplicates elsewhere.
+# scripts/constraints-yaml.sh for .git-hooks/check-naming.sh and scripts/docs-only-diff.sh);
+# do not hardcode duplicates elsewhere.
 # Enforcement vocabulary: advice < review-only < warn < block < gate.
 
 strictness_profile:
@@ -243,7 +244,7 @@ verification:
       required_at: "L3+"
     docker_ci_evidence:
       command: "pnpm verify:docker-evidence"
-      evidence: "read-only latest exact-head DankerMu success or associated merged PR exact-merge-SHA/tree-equivalent reuse; missing/invalid evidence fails; documentation-only diffs (Markdown outside plugins/ and images/) are exempt"
+      evidence: "read-only latest exact-head DankerMu success or associated merged PR exact-merge-SHA/tree-equivalent reuse; missing/invalid evidence fails; documentation-only diffs (Markdown outside plugins/ and images/, plus OpenSpec change metadata .openspec.yaml directly in openspec/changes/<change>/ or openspec/changes/archive/YYYY-MM-DD-<change>/; scripts/docs-only-diff.sh) are exempt"
       required_at: "L3+"
   enforced_by: "scripts/check-agents-commands.sh + AGENTS.md Verification Matrix + PR Runtime evidence section"
 

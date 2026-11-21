@@ -18,36 +18,8 @@ DEFAULT_SCRATCH_DIR_RE='(^|/)(tmp|scratch|backup|_old|deprecated|archive|wip)(/|
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 constraints_file="$repo_root/constraints.yaml"
 
-yaml_get() {
-  local path="${1:?yaml path required}"
-  local file="${2:?yaml file required}"
-
-  [ -f "$file" ] || return 1
-
-  case "$path" in
-    code_canonicality.forbidden_suffixes.patterns)
-      sed -n '/^code_canonicality:/,/^size_limits:/p' "$file" \
-        | sed -n '/^  forbidden_suffixes:/,/^  scratchpad_directories:/p' \
-        | grep -E '^[[:space:]]*-[[:space:]]*' \
-        | sed -E "s/^[[:space:]]*-[[:space:]]*//; s/[[:space:]]*$//; s/^[\\\"']//; s/[\\\"']$//"
-      ;;
-    code_canonicality.scratchpad_directories.paths)
-      sed -n '/^code_canonicality:/,/^size_limits:/p' "$file" \
-        | sed -n '/^  scratchpad_directories:/,/^size_limits:/p' \
-        | grep -m 1 -E '^[[:space:]]*paths:' \
-        | sed -E 's/^[[:space:]]*paths:[[:space:]]*//; s/[[:space:]]*$//'
-      ;;
-    code_canonicality.scratchpad_directories.managed_archive_pattern)
-      sed -n '/^code_canonicality:/,/^size_limits:/p' "$file" \
-        | sed -n '/^  scratchpad_directories:/,/^size_limits:/p' \
-        | grep -m 1 -E '^[[:space:]]*managed_archive_pattern:' \
-        | sed -E "s/^[[:space:]]*managed_archive_pattern:[[:space:]]*//; s/[[:space:]]*$//; s/^[\\\"']//; s/[\\\"']$//"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
+# shellcheck source=scripts/constraints-yaml.sh
+. "$(dirname "${BASH_SOURCE[0]}")/../scripts/constraints-yaml.sh"
 
 FORBIDDEN_SUFFIX_RE="$DEFAULT_FORBIDDEN_SUFFIX_RE"
 SCRATCH_DIR_RE="$DEFAULT_SCRATCH_DIR_RE"
