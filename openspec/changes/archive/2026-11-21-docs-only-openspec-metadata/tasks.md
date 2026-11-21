@@ -26,7 +26,7 @@ See `design.md`.
 
 - [x] 2.1 `pnpm lint:shell`, `pnpm lint:ci`, `pnpm lint:agents`, `pnpm lint:config`, `pnpm fmt:check`, `pnpm test:guardrails` (bash 3.2 on macOS) pass.
 - [x] 2.2 Replays from `design.md`: #647 range (`b21fc5e...305df10`) exit 0; #644 range (`f481c0e9...d8588664`) exit 0; main-push range `b21fc5e..be168db` exit 0; this branch's range exit 1.
-- [ ] 2.3 `pnpm check`; exact-head VPS `pnpm test:docker` + `pnpm test:deploy` with confirmed cleanup (this diff contains code, so the gate still requires evidence); CI green, and this PR's "Detect documentation-only change" log shows no docs-only verdict.
+- [x] 2.3 `pnpm check`; exact-head VPS `pnpm test:docker` + `pnpm test:deploy` with confirmed cleanup (this diff contains code, so the gate still requires evidence); CI green, and this PR's "Detect documentation-only change" log shows no docs-only verdict.
 
 ## Non-goals
 
