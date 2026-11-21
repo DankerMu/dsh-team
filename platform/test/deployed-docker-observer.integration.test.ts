@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -47,6 +47,11 @@ import {
   observerScenarioSource,
   formatObserverCreateDiagnostic,
 } from './deployed-docker-observer-fixture.ts';
+import {
+  generationEngineStub,
+  expectRejectedReserveUnchanged,
+  samplePending,
+} from './deployed-docker-generation-fixture.ts';
 import type { ObserverFaultBehavior } from './deployed-docker-observer-fixture.ts';
 import { assessTrustedDockerCleanup } from '../../scripts/trusted-docker-audit.mjs';
 import type { CleanupAssessmentRequest } from '../../scripts/trusted-docker-audit.mjs';
@@ -418,64 +423,28 @@ it.each([false, true])(
   'isolates same-authority process generations with predecessor uncertainty=%s',
   async (stalls) => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-obs-'));
-    const socket = join(directory, 'e.sock');
-    const requests: string[] = [];
-    const requestGenerations: string[][] = [];
-    const seenMarkers = new Set<string>();
-    let dispatched = Promise.withResolvers<undefined>();
-    let bound = Promise.withResolvers<undefined>();
-    const server = createServer((request, response) => {
-      request.resume();
-      request.on('end', () => {
-        requests.push(`${request.method ?? ''} ${request.url ?? ''}`);
-        const markers = readdirSync(join(directory, SUBMISSION_PENDING)).map(
-          (name) =>
-            JSON.parse(readFileSync(join(directory, SUBMISSION_PENDING, name), 'utf8')) as {
-              id: string;
-              observer: string;
-            },
-        );
-        requestGenerations.push(
-          markers.filter((marker) => !seenMarkers.has(marker.id)).map((marker) => marker.observer),
-        );
-        for (const marker of markers) seenMarkers.add(marker.id);
-        dispatched.resolve(undefined);
-        if (stalls && requests.length === 1) {
-          response.writeHead(201).write('{');
-        } else {
-          void bound.promise.then(() => {
-            if (!response.destroyed) response.writeHead(201).end('{}');
-          });
-        }
-      });
-    });
+    const stub = generationEngineStub(directory, stalls);
+    const { requests, requestGenerations, seenMarkers } = stub;
     try {
-      initializeVerificationSubmissions(directory);
-      const clientPath = await writeCompiledClient(directory, emittedClient);
-      const options = { moduleUrl: pathToFileURL(clientPath).href, socketPath: socket };
-      const authority = createVerificationDockerObserverAuthority(directory, options);
-      const first = await reserveVerificationDockerObserver(authority);
-      seenMarkers.add(first.participant);
-      seenMarkers.add(first.bindingApproval.id);
-      const source = (abort: boolean) => `import assert from 'node:assert/strict';
-import {createDockerClient,DockerHttpError} from ${JSON.stringify(options.moduleUrl)};
-const client=createDockerClient(${JSON.stringify(socket)});
-const create=client.json('POST','/networks/create',{},AbortSignal.timeout(${String(abort ? 200 : 2000)}));
-${abort ? 'await assert.rejects(create,error=>error instanceof Error&&!(error instanceof DockerHttpError));' : 'assert.deepEqual(await create,{});'}
-await client.json('DELETE','/networks/owned-effect',undefined,AbortSignal.timeout(2000));`;
-      server.listen(socket);
-      await once(server, 'listening');
+      const { authority, first, source } = await stub.start(emittedClient);
       const currentPath = join(authority.bootstrap, 'current.json');
       const originalManifest = await readFile(currentPath);
       const firstOutcome = await runObserverChild(first, source(stalls), {
-        bindingGate: dispatched.promise,
-        releaseResponse: () => {
-          bound.resolve(undefined);
-        },
-        beforeRelease: async () => {
-          const pending = await readdir(join(directory, SUBMISSION_PENDING));
-          await expect(reserveVerificationDockerObserver(authority)).rejects.toThrow();
-          expect(await readdir(join(directory, SUBMISSION_PENDING))).toEqual(pending);
+        ...stub.childGates(),
+        beforeRelease: async (exited) => {
+          // With stalls=false the create response waits for `bound`, so the child is already still.
+          await expectRejectedReserveUnchanged(
+            {
+              quiescent: stalls ? () => stub.quiescent(exited) : () => Promise.resolve(),
+              sample: () => samplePending(directory),
+              reserve: () => reserveVerificationDockerObserver(authority),
+              requests: stalls
+                ? ['POST /networks/create', 'DELETE /networks/owned-effect']
+                : ['POST /networks/create'],
+            },
+            stub,
+            first,
+          );
           expect(await readFile(currentPath)).toEqual(originalManifest);
           // A live process must keep its captured generation even if the parent manifest changes.
           await writeFile(
@@ -505,14 +474,8 @@ await client.json('DELETE','/networks/owned-effect',undefined,AbortSignal.timeou
       expect(second.generation).not.toBe(first.generation);
       expect(second.participant).not.toBe(first.participant);
       expect(second.bindingApproval.id).not.toBe(first.bindingApproval.id);
-      dispatched = Promise.withResolvers<undefined>();
-      bound = Promise.withResolvers<undefined>();
-      const secondOutcome = await runObserverChild(second, source(false), {
-        bindingGate: dispatched.promise,
-        releaseResponse: () => {
-          bound.resolve(undefined);
-        },
-      });
+      stub.nextGeneration();
+      const secondOutcome = await runObserverChild(second, source(false), stub.childGates());
       expect(secondOutcome, secondOutcome.stderr).toMatchObject({ code: 0, signal: null });
       expect(requests).toEqual([
         'POST /networks/create',
@@ -561,23 +524,56 @@ await client.json('DELETE','/networks/owned-effect',undefined,AbortSignal.timeou
       );
       expect(freshObserverAssessment(directory)).toBe('unconfirmed');
     } finally {
-      server.closeAllConnections();
-      bound.resolve(undefined);
-      try {
-        if (server.listening) {
-          const stopped = Promise.withResolvers<undefined>();
-          server.close((error) => {
-            if (error) stopped.reject(error);
-            else stopped.resolve(undefined);
-          });
-          await stopped.promise;
-        }
-      } finally {
-        await rm(directory, { recursive: true, force: true });
-      }
+      await stub.close();
     }
   },
 );
+
+it('keeps a rejected predecessor reserve exact when the stalled child adds a marker late', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'dsh-obs-'));
+  const stub = generationEngineStub(directory, true);
+  try {
+    const { authority, first, source } = await stub.start(emittedClient);
+
+    const outcome = await runObserverChild(first, source(true, true), {
+      ...stub.childGates(),
+      beforeRelease: (exited) => {
+        // The held observation writes no marker; the oracle's first action releases it, so the
+        // create marker exists, and the delete marker is written 200 ms later on the child's clock.
+        const opening =
+          <T>(action: () => Promise<T>) =>
+          async () => {
+            await stub.openGate(exited);
+            return action();
+          };
+        return expectRejectedReserveUnchanged(
+          {
+            quiescent: opening(() => stub.quiescent(exited)),
+            sample: opening(() => samplePending(directory)),
+            reserve: () => reserveVerificationDockerObserver(authority),
+            requests: [
+              'GET /networks/owned-effect',
+              'POST /networks/create',
+              'DELETE /networks/owned-effect',
+            ],
+          },
+          stub,
+          first,
+        );
+      },
+    });
+
+    expect(outcome, outcome.stderr).toMatchObject({ code: 0, signal: null });
+    expect(stub.requests).toEqual([
+      'GET /networks/owned-effect',
+      'POST /networks/create',
+      'DELETE /networks/owned-effect',
+    ]);
+    expect(stub.requestGenerations).toEqual([[], [first.generation], [first.generation]]);
+  } finally {
+    await stub.close();
+  }
+});
 
 type ObserverScenarioInputs = ReturnType<typeof observerScenarioInputs>;
 
