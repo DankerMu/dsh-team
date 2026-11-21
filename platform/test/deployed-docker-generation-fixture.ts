@@ -30,7 +30,7 @@ const DELETE_REQUEST = 'DELETE /networks/owned-effect';
 /**
  * Same-authority generation engine: each request records the pending markers first seen at its
  * arrival. With `stalls` the first create gets a partial body that never finishes; a GET waits for
- * `openGate(exited)`; every other request waits for the current generation's `bound`.
+ * `openGate()`; every other request waits for the current generation's `bound`.
  */
 export function generationEngineStub(directory: string, stalls: boolean) {
   const socket = join(directory, 'e.sock');
@@ -43,7 +43,6 @@ export function generationEngineStub(directory: string, stalls: boolean) {
     bound: Promise.withResolvers<undefined>(),
   };
   const gate = Promise.withResolvers<undefined>();
-  const created = Promise.withResolvers<undefined>();
   const deleted = Promise.withResolvers<undefined>();
   let stalled = false;
   const server = createServer((request, response) => {
@@ -64,7 +63,6 @@ export function generationEngineStub(directory: string, stalls: boolean) {
       requestGenerations.push(fresh.map((marker) => marker.observer));
       for (const marker of fresh) seenMarkers.add(marker.id);
       phase.dispatched.resolve(undefined);
-      if (line === CREATE_REQUEST) created.resolve(undefined);
       if (line === DELETE_REQUEST) deleted.resolve(undefined);
       const answer = (status: number) => () => {
         if (!response.destroyed) response.writeHead(status).end('{}');
@@ -115,10 +113,9 @@ await client.json('DELETE','/networks/owned-effect',undefined,AbortSignal.timeou
       phase.dispatched = Promise.withResolvers<undefined>();
       phase.bound = Promise.withResolvers<undefined>();
     },
-    /** Releases a held GET; resolves once the child's following create has arrived. */
-    async openGate(exited: Promise<ObserverChildOutput>) {
+    /** Releases a held GET. */
+    openGate() {
       gate.resolve(undefined);
-      await arrivalOrExit(created.promise, exited, requests);
     },
     /** The DELETE has arrived, so its marker exists. */
     async quiescent(exited: Promise<ObserverChildOutput>) {

@@ -537,19 +537,17 @@ it('keeps a rejected predecessor reserve exact when the stalled child adds a mar
 
     const outcome = await runObserverChild(first, source(true, true), {
       ...stub.childGates(),
-      beforeRelease: (exited) => {
-        // The held observation writes no marker; the oracle's first action releases it, so the
-        // create marker exists, and the delete marker is written 200 ms later on the child's clock.
-        const opening =
-          <T>(action: () => Promise<T>) =>
-          async () => {
-            await stub.openGate(exited);
-            return action();
-          };
-        return expectRejectedReserveUnchanged(
+      beforeRelease: (exited) =>
+        // The held observation writes no marker and only quiescent() releases it, so a sample taken
+        // before quiescent() sees the participant alone; the create and the delete markers (written
+        // 200 ms later on the child's clock) exist once quiescent() has seen the delete arrive.
+        expectRejectedReserveUnchanged(
           {
-            quiescent: opening(() => stub.quiescent(exited)),
-            sample: opening(() => samplePending(directory)),
+            quiescent: () => {
+              stub.openGate();
+              return stub.quiescent(exited);
+            },
+            sample: () => samplePending(directory),
             reserve: () => reserveVerificationDockerObserver(authority),
             requests: [
               'GET /networks/owned-effect',
@@ -559,8 +557,7 @@ it('keeps a rejected predecessor reserve exact when the stalled child adds a mar
           },
           stub,
           first,
-        );
-      },
+        ),
     });
 
     expect(outcome, outcome.stderr).toMatchObject({ code: 0, signal: null });

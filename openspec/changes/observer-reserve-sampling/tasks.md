@@ -22,6 +22,8 @@
 - [x] 1.1 Extract the stalls=true `beforeRelease` oracle into one test-local helper (`quiescent()`, then two `sample()`s around the rejected reserve). `quiescent()` awaits a stub-server resolver that fires on the second request (`DELETE /networks/owned-effect`), raced against the child's exit through the fixture's existing `observed.closed` pattern (exit → immediate failure with the request list and stderr; no new deadline). Then assert the request list is exactly POST + DELETE and the first sample is exactly: the participant file (name equal to `first.participant`) plus the POST and DELETE markers identified by the per-request marker ids the server handler already computes (`${first.generation}.${id}`, content `observer === first.generation`). On mismatch at the second sample, report each added or missing marker id with its `observer`.
 - [x] 1.2 Separate deterministic regression case using the same helper: the child first issues a GET held by the stub server (observations write no marker), and the helper's first observable action opens it. It passes with 1.1's order; record in the PR a red run with the old order (`sample()` before `quiescent()`), which must fail on the second sample (3 vs 2). The old oracle is not committed. The regression case asserts its own request list (GET + POST + DELETE) and does not change `:517`/`:554`.
 
+- [x] 1.3 Fix pass 1: only `quiescent()` opens the regression case's GET gate (the old order then fails deterministically, first sample = participant only); record a repeated old-order red under load ≥ 13.
+
 ## 2. Verification
 
 - [x] 2.1 The file repeated (≥ 10 runs); 5 full `pnpm check` runs with 1-minute load ≥ 13 (generate parallel load if needed), recording load and result for each; `pnpm check`.
