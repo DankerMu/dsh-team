@@ -184,6 +184,41 @@ export function caseBudget(deadline?: number) {
 }
 type CaseBudget = ReturnType<typeof caseBudget>;
 
+/**
+ * Synchronous children of a case that started now with `caseMs` (#656). Each is capped at the
+ * whole budget, above what remains before `reserveMs`, so the case deadline always cuts it, with
+ * an uncatchable kill; a failure keeps the budget's message and adds its site's descendants.
+ */
+export function caseSpawn(
+  caseMs: number,
+  reserveMs: number,
+  descendants?: (budget: CaseBudget) => string,
+) {
+  const budget = caseBudget(Date.now() + caseMs - reserveMs);
+  const spawn = (
+    phase: string,
+    file: string,
+    args: string[],
+    options: SpawnSyncOptionsWithStringEncoding,
+  ) => {
+    try {
+      return budget.run(phase, file, args, { ...options, timeout: caseMs, killSignal: 'SIGKILL' });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      let observed: string;
+      try {
+        observed = descendants?.(budget) ?? 'not observed';
+      } catch (failure) {
+        // A failed observation must not replace the cut; only its kind is named, never its text.
+        observed = `unobservable (${failure instanceof Error ? failure.name : typeof failure})`;
+      }
+      throw new Error(`${message}; descendants: ${observed}`, { cause: error });
+    }
+  };
+  return { budget, spawn };
+}
+export type CaseSpawn = ReturnType<typeof caseSpawn>['spawn'];
+
 function prepareCustodyRepository(
   repository: string,
   environment: NodeJS.ProcessEnv,

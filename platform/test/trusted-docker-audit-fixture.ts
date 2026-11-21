@@ -12,6 +12,14 @@ import {
 } from '../../scripts/verification-submission-storage.mjs';
 import { record } from './container-start-docker-fixture.ts';
 import type { DockerCommand } from './docker-command.ts';
+import { caseSpawn } from './trusted-docker-fixture.ts';
+import type { CaseSpawn } from './trusted-docker-fixture.ts';
+
+// After a budgeted case's last child: its async assessments, journal reads, the root's removal.
+const RESERVE_MS = 2000;
+/** Without a case budget a helper child keeps its original 5s SIGTERM bound. */
+const unbudgeted: CaseSpawn = (_phase, file, args, options) =>
+  spawnSync(file, args, { ...options, timeout: 5000 });
 
 export interface AuditContext {
   pointer: string;
@@ -19,6 +27,7 @@ export interface AuditContext {
   temporary: string;
   journal: string;
   command: DockerCommand;
+  spawnChild: CaseSpawn;
   assess: (
     settled?: boolean,
     external?: DockerCommand,
@@ -26,10 +35,11 @@ export interface AuditContext {
 }
 
 /** A separate process sees only durable evidence, never this process's memory. */
-export function freshSubmissionAssessment(directory: string): string {
+export function freshSubmissionAssessment(directory: string, spawn = unbudgeted): string {
   const module = new URL('../../scripts/verification-submission-assessment.mjs', import.meta.url)
     .href;
-  const assessor = spawnSync(
+  const assessor = spawn(
+    'fresh assessment',
     process.execPath,
     [
       '--input-type=module',
@@ -43,7 +53,6 @@ process.stdout.write(JSON.stringify({state})+'\\n');`,
     {
       env: { PATH: process.env.PATH, HOME: tmpdir() },
       encoding: 'utf8',
-      timeout: 5000,
     },
   );
   expect(assessor.error).toBeUndefined();
@@ -86,7 +95,12 @@ process.exitCode=${String(exitCode)};`,
   );
 }
 
-export async function withAuditReceipt(run: (context: AuditContext) => Promise<void> | void) {
+export async function withAuditReceipt(
+  run: (context: AuditContext) => Promise<void> | void,
+  caseMs?: number,
+) {
+  // The case started now: its children share one deadline.
+  const spawn = caseMs === undefined ? unbudgeted : caseSpawn(caseMs, RESERVE_MS).spawn;
   const root = await realpath(await mkdtemp(join(tmpdir(), 'dsh-team-custody-audit-')));
   try {
     const directory = join(root, 'custody');
@@ -116,7 +130,8 @@ export async function withAuditReceipt(run: (context: AuditContext) => Promise<v
     const cleanupModule = new URL('./docker-cleanup.ts', import.meta.url).href;
     const runId = randomUUID();
     const target = { kind: 'network', name: `dsh-team-audit-${runId}` };
-    const registered = spawnSync(
+    const registered = spawn(
+      'browser registration',
       process.execPath,
       [
         '--input-type=module',
@@ -135,7 +150,6 @@ await registerChrome(${JSON.stringify(input)});`,
           DSH_TEAM_CI_RESOURCE_JOURNAL: join(directory, 'resources.jsonl'),
         },
         encoding: 'utf8',
-        timeout: 5000,
       },
     );
     expect(registered.status, registered.stderr).toBe(0);
@@ -180,6 +194,7 @@ await registerChrome(${JSON.stringify(input)});`,
       temporary,
       journal: join(directory, 'resources.jsonl'),
       command,
+      spawnChild: spawn,
       assess: (settled = true, external = command) =>
         assessTrustedDockerCleanup(request, directory, settled, external),
     });
