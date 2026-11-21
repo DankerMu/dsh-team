@@ -7,9 +7,9 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Delete `expect(elapsed).toBeGreaterThanOrEqual(400)` (`:99`) and `expect(elapsed).toBeGreaterThanOrEqual(300)` (`:133`) in `platform/test/browser-driver-settlement.integration.test.ts`; remove `elapsed`/`started` bookkeeping only if nothing else uses it (upper bounds do); nothing else changes.
+- [x] 1.1 Delete `expect(elapsed).toBeGreaterThanOrEqual(400)` (`:99`) and `expect(elapsed).toBeGreaterThanOrEqual(300)` (`:133`) in `platform/test/browser-driver-settlement.integration.test.ts`; remove `elapsed`/`started` bookkeeping only if nothing else uses it (upper bounds do); nothing else changes.
 
 ## 2. Verification
 
-- [ ] 2.1 Mutant, on an otherwise idle machine: temporarily make `awaitRegisteredDrivers` return immediately (`settled: true`) and show both cases fail on the retained state assertions (`:101` process state, `:135` pointer `stopped`), not on `settled` or an upper bound; restore. On macOS, run the file ≥ 10 times while `pnpm check` runs in parallel: no lower-bound failure. `pnpm check`.
+- [x] 2.1 Mutant, on an otherwise idle machine: temporarily make `awaitRegisteredDrivers` return immediately (`settled: true`) and show both cases fail on the retained state assertions (`:101` process state, `:135` pointer `stopped`), not on `settled` or an upper bound; restore. On macOS, run the file ≥ 10 times while `pnpm check` runs in parallel: no lower-bound failure. `pnpm check`.
 - [ ] 2.2 CI `pnpm test:integration`; exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (required for any `platform/test/` change), confirmed cleanup.

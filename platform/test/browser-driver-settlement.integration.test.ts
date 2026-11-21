@@ -96,7 +96,6 @@ it('returns once a registered driver exits', async () => {
   const { settled, elapsed } = await timedWait(10_000);
 
   expect(settled).toBe(true);
-  expect(elapsed).toBeGreaterThanOrEqual(400);
   expect(elapsed).toBeLessThan(5_000);
   expect(processState(live.pid)).toMatch(/^(Z.*)?$/);
 }, 20_000);
@@ -130,7 +129,6 @@ setTimeout(() => {
   const { settled, elapsed } = await timedWait(10_000);
 
   expect(settled).toBe(true);
-  expect(elapsed).toBeGreaterThanOrEqual(300);
   expect(elapsed).toBeLessThan(5_000);
   expect((await readReceipt(path)).state).toBe('stopped');
   expect(processState(live.pid)).toMatch(/^[^Z]/);
