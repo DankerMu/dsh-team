@@ -32,13 +32,17 @@ export interface ObserverChildOptions {
   bindingFailure?: boolean;
   alterBinding?: 'replace' | 'change' | undefined;
   alterInitialization?: 'missing' | 'replace' | 'extra-link' | undefined;
-  beforeRelease?: () => Promise<void>;
+  beforeRelease?: (exited: Promise<ObserverChildOutput>) => Promise<void>;
   inspectContainer?:
     (() => Promise<{ id: string; imageId: string; startedAt: string }>) | undefined;
 }
 interface ObserverChildExit {
   code: number | null;
   signal: NodeJS.Signals | null;
+}
+export interface ObserverChildOutput extends ObserverChildExit {
+  stdout: string;
+  stderr: string;
 }
 
 export function compileDockerClient(): CompiledDockerClient {
@@ -217,6 +221,7 @@ async function bindObserverChild(
   reserved: DockerObserverReservation,
   pid: number,
   options: ObserverChildOptions,
+  exited: Promise<ObserverChildOutput>,
 ): Promise<void> {
   const witness: DockerObserverWitness =
     options.inspectContainer !== undefined
@@ -233,7 +238,7 @@ async function bindObserverChild(
     await alterObserverBinding(reserved, options.alterBinding);
   if (options.alterInitialization !== undefined)
     await alterObserverInitialization(reserved, options.alterInitialization);
-  await options.beforeRelease?.();
+  await options.beforeRelease?.(exited);
 }
 
 function startObserverChild(
@@ -289,6 +294,8 @@ function observeChildProcess(child: ChildProcess) {
   return {
     ready: ready.promise,
     closed: closed.promise,
+    // Never rejects: a pre-release wait races it to fail at once with the child's own output.
+    exited: closed.promise.then((outcome) => ({ ...outcome, stdout, stderr })),
     result(outcome: ObserverChildExit) {
       if (spawnFailure) throw spawnFailure;
       return { ...outcome, stdout, stderr };
@@ -312,7 +319,8 @@ export async function runObserverChild(
           options.bindingGate.then(() => true),
           observed.closed.then(() => false),
         ]));
-      if (mayBind && options.bind !== false) await bindObserverChild(reserved, child.pid, options);
+      if (mayBind && options.bind !== false)
+        await bindObserverChild(reserved, child.pid, options, observed.exited);
       options.releaseResponse?.();
     }
     return observed.result(await observed.closed);
