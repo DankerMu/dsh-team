@@ -207,6 +207,31 @@ describe('managed composition script', () => {
     CASE_MS * 2,
   );
 
+  // JSON.stringify leaves U+2028/U+2029 unescaped, so DSH's warning carries them raw (#651).
+  it.each([
+    [
+      'profile',
+      { bundles: BUNDLES, profile: [{ id: 'a\u2028b', disabled: true }] },
+      'patch: entry "a\u2028b" not found',
+    ],
+    [
+      'home',
+      { bundles: BUNDLES, profile: [], home: [{ id: 'a\u2029b', disabled: true }] },
+      'patch: entry "a\u2029b" not found',
+    ],
+  ])(
+    'skips a %s row whose absent target id contains a line separator',
+    async (_layer, layers: Layers, warning: string) => {
+      const baseline = accepted(await compose({ bundles: BUNDLES, profile: [] }));
+      const composed = await compose(layers);
+      const { observed, composition } = accepted(composed);
+      expect(composed.warnings).toEqual([warning]);
+      expect(observed).toEqual(baseline.observed);
+      expect(composition).toEqual(baseline.composition);
+    },
+    CASE_MS * 2,
+  );
+
   it(
     'returns the composition of all layers, keeping profile rows that apply around a skipped one',
     async () => {
@@ -251,6 +276,26 @@ describe('managed composition script', () => {
     ],
   ])(
     'rejects a profile row with %s',
+    async (_label, profile: readonly object[], warnings: readonly string[]) => {
+      rejected(await compose({ bundles: BUNDLES, profile }), warnings);
+    },
+    CASE_MS,
+  );
+
+  // A line separator in the id must not let any other warning through the whitelist (#651).
+  it.each([
+    [
+      'a name mismatch',
+      [{ insert: [{ id: 'a\u2028b', name: 'x' }] }, { id: 'a\u2028b', name: 'y' }],
+      ['patch: name mismatch for "a\u2028b" (expected "x", got "y"), skipping'],
+    ],
+    [
+      'an insert into an absent group',
+      [{ id: 'a\u2028b', insert: [WRITER] }],
+      ['patch insert: entry "a\u2028b" not found'],
+    ],
+  ])(
+    'rejects a profile row with %s whose id contains a line separator',
     async (_label, profile: readonly object[], warnings: readonly string[]) => {
       rejected(await compose({ bundles: BUNDLES, profile }), warnings);
     },
