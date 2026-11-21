@@ -1,9 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { readPrivateJsonFile } from '../../scripts/docker-proxy-environment.mjs';
 import { SEED_DATASETS, readSeedDatasetIds, readSeedDatasets } from '../../scripts/seed-stack.mjs';
@@ -31,7 +30,7 @@ import {
   OWNER_LABEL,
   record,
 } from './docker-cleanup.ts';
-import { createDockerCommands, isAbsentResource } from './docker-command.ts';
+import { isAbsentResource } from './docker-command.ts';
 import { commandReach, DOCUMENT_SERVER_NET, holderRead } from './document-server-net-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
@@ -60,8 +59,11 @@ import {
   DOCUMENT_SERVER,
   docserviceSpawns,
   documentServerStarted,
+  expectVolumesRetired,
+  healthTimelineLine,
   officeHintsLine,
   officeHintsScenario,
+  sampleDocumentServerHealth,
 } from './office-hints-stack-fixture.ts';
 import type { OfficeHintsEvidence } from './office-hints-stack-fixture.ts';
 import { officeIdleLine, officeIdleScenario } from './office-idle-stack-fixture.ts';
@@ -97,6 +99,9 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 type Stack = NonNullable<ReturnType<typeof configuredStack>>;
 const PLATFORM = 'dsh-team-platform';
 const DOCUMENT_SERVER_FONTS = '/usr/share/fonts/truetype/custom';
+// The Document Server startup wait (#622), budgeted in the stack timeout; the health sampler
+// started at `compose up` (#648) ends within the same bound, before that wait would.
+const DOCUMENT_SERVER_STARTUP_MS = 300_000;
 const FIXED_CONTAINERS = [
   [PLATFORM, 'Platform'],
   [DOCUMENT_SERVER, 'Document Server'],
@@ -164,6 +169,8 @@ interface Timings {
 }
 
 type RagflowStack = Awaited<ReturnType<typeof ragflowStackSnapshot>>;
+type HealthSampler = ReturnType<typeof sampleDocumentServerHealth>;
+type HealthLine = ReturnType<typeof healthTimelineLine>;
 
 /** The 「知识库」 panel's three observed sessions, kept apart from the conversation's. */
 interface PanelEvidence {
@@ -189,8 +196,8 @@ interface ConversationEvidence {
   officeProfile?: OfficeProfileEvidence;
   officeRewrite?: Awaited<ReturnType<typeof rewrite.officeRewriteScenario>>;
   officeIdle?: OfficeIdleEvidence;
-  /** Waited for before the first Office lane (#622). */
-  documentServer?: { startupMs: number; spawns: number };
+  /** Waited for before the first Office lane (#622), with the health timeline (#648). */
+  documentServer?: { startupMs: number; spawns: number; health: HealthLine };
   /** Outcomes and statuses only (#624). */
   commandService?: Awaited<ReturnType<typeof commandReach>>;
   /** The delivered Document Server's anonymous volumes, checked absent after retirement. */
@@ -230,22 +237,6 @@ async function documentServerVolumes(lifecycle: UserImageLifecycle): Promise<str
       if (typeof Name !== 'string' || Name === '') throw new Error('Anonymous volume unnamed');
       return Name;
     });
-}
-
-/** After the lifecycle's own exact retirement, `--volumes` must have taken each one with it. */
-async function expectVolumesRetired(volumes: readonly string[]): Promise<void> {
-  const config = await mkdtemp(join(tmpdir(), 'dsh-team-test-docker-'));
-  try {
-    const root = fileURLToPath(new URL('../../', import.meta.url));
-    const { command } = createDockerCommands(root, config, true);
-    for (const volume of volumes)
-      expect(
-        isAbsentResource(command(['volume', 'inspect', volume], 30_000), 'volume', volume),
-        'Document Server anonymous volume retired',
-      ).toBe(true);
-  } finally {
-    await rm(config, { recursive: true, force: true });
-  }
 }
 
 /** The private RAGFlow test stack and its seed snapshot taken before any Docker work. */
@@ -457,7 +448,12 @@ async function converse(
   run: DockerOutput,
   target: { base: string; directory: string; dataDir: string; compose: string[] },
   model: ReturnType<typeof ownedModel>,
-  context: { evidence: ConversationEvidence; ragflow: RagflowContext; jwt: string | undefined },
+  context: {
+    evidence: ConversationEvidence;
+    ragflow: RagflowContext;
+    jwt: string | undefined;
+    health: HealthSampler;
+  },
 ): Promise<void> {
   const { evidence, ragflow } = context;
   const { base } = target;
@@ -524,8 +520,10 @@ async function converse(
     // DOC, PPT converted in the instance and XLS in the browser, all read-only (#433).
     evidence.legacyPreview = await legacyPreviewScenario(lane);
     // The startup script's allfonts step restarts docservice; no editor opens before it ends (#622).
-    const documentServer = await documentServerStarted(run, 300_000);
-    evidence.documentServer = documentServer;
+    // The sampler since `compose up` is joined first: healthy never before that step (#648).
+    const health = healthTimelineLine(await context.health.settle());
+    const documentServer = await documentServerStarted(run, DOCUMENT_SERVER_STARTUP_MS);
+    evidence.documentServer = { ...documentServer, health };
     const instance = `dsh-team-u-${employee.id}`;
     // 55.3 (#624): docservice and the Command Service answer only on the holder's own loopback.
     evidence.commandService = await commandReach(run, instance);
@@ -562,6 +560,7 @@ async function converse(
     evidence.officeIdle = await officeIdleScenario({ ...office, reply, readBack });
     const spawns = await docserviceSpawns(run);
     expect(spawns, 'docservice spawned again during the Office lanes').toBe(documentServer.spawns);
+    expect(health.spawns, 'docservice spawned again after the first healthy sample').toBe(spawns);
   });
 }
 
@@ -624,6 +623,7 @@ async function composeScenario(
   // exact-owned retirement, so an undrained platform never loses its bind sources while alive.
   const directory = realpathSync(dirname(lifecycle.overlayDirectory));
   let submitted = false;
+  let health: HealthSampler | undefined;
   let ragflowBefore: RagflowStack | undefined;
   const failures: unknown[] = [];
   try {
@@ -676,13 +676,16 @@ async function composeScenario(
     });
     submitted = true;
     await run([...compose, 'up', '-d', '--no-build', '--pull', 'never'], 120_000);
+    health = sampleDocumentServerHealth(run, DOCUMENT_SERVER_STARTUP_MS);
     evidence.documentServerVolumes = await documentServerVolumes(lifecycle);
     await pollHealth(fetch, base, 60_000);
     const target = { base, directory, dataDir, compose };
-    await converse(lifecycle, run, target, model, { ...context, jwt: documentServerJwt });
+    await converse(lifecycle, run, target, model, { ...context, jwt: documentServerJwt, health });
   } catch (error) {
     failures.push(error);
   }
+  // Never rejects; no sample runs against a container drainage retires.
+  await health?.abort();
   // Drain this run's verified platform by exact-ID SIGTERM before exact-owned removal.
   if (submitted) {
     try {

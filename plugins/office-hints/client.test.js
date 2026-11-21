@@ -11,6 +11,9 @@ const EXTS = ['docx', 'xlsx', 'pptx'];
 const COLLAB = '请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。';
 const NO_SESSION = '请先新建或进入一个会话（Session），再打开 Office 文件。';
 const UNAVAILABLE = 'Office 编辑器未加载，请关闭后重新打开此文件。';
+// proposal.md of bundled-document-server-readiness, verbatim.
+const RESTART =
+  'Office 服务刚启动或重启后约 2 分钟内，编辑器可能断开；如果断开，请稍后重新打开此文件，未保存的修改可能丢失。';
 const HINT = 'data-dsh-team-office-hint';
 
 /**
@@ -304,8 +307,8 @@ it('puts the collaboration hint above the ONLYOFFICE editor element rendered wit
 
   const view = render(sidebar.viewer('office-hints:docx').component, input);
 
-  expect(hints(view).map((node) => node.props[HINT])).toEqual(['collab']);
-  expect(text(view)).toEqual([COLLAB, 'onlyoffice-mounted']);
+  expect(hints(view).map((node) => node.props[HINT])).toEqual(['collab', 'restart']);
+  expect(text(view)).toEqual([COLLAB, RESTART, 'onlyoffice-mounted']);
   const editor = view.root.findByType(OnlyOfficeView);
   expect(editor.props).toEqual(input);
   expect(onlyofficeRenders).toEqual([input]);
@@ -318,6 +321,22 @@ it('puts the collaboration hint above the ONLYOFFICE editor element rendered wit
   });
   expect(editor.parent.props.style).toMatchObject({ flex: '1 1 0', minHeight: 0 });
 });
+
+it.each(EXTS)(
+  'shows the restart note as its own element after the collaboration hint for a %s in a Session',
+  (ext) => {
+    const { sidebar } = applyPlugin();
+    sidebar.service.registerFileViewer(onlyoffice(ext));
+
+    const view = render(sidebar.viewer(`office-hints:${ext}`).component, props('session-1'));
+
+    expect(hints(view).map((node) => [node.props[HINT], node.props.role, node.children])).toEqual([
+      ['collab', 'note', [COLLAB]],
+      ['restart', 'note', [RESTART]],
+    ]);
+    expect(view.root.findAllByType(OnlyOfficeView)).toHaveLength(1);
+  },
+);
 
 it('can be called directly as a render function, as better-sidebar does outside the editor host', () => {
   const { sidebar } = applyPlugin();
@@ -364,7 +383,7 @@ it('re-renders a mounted not-loaded notice into the editor once ONLYOFFICE is en
   expect(() => act(() => view.update(React.createElement(component, input)))).not.toThrow();
 
   expect(before).toEqual([UNAVAILABLE]);
-  expect(text(view)).toEqual([COLLAB, 'onlyoffice-mounted']);
+  expect(text(view)).toEqual([COLLAB, RESTART, 'onlyoffice-mounted']);
   expect(view.root.findByType(OnlyOfficeView).props).toEqual(input);
 });
 

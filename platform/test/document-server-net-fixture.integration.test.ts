@@ -9,8 +9,10 @@ import {
   commandReach,
   DOCUMENT_SERVER_NET,
   firewallReach,
+  holderProbeExit,
   holderRead,
 } from './document-server-net-fixture.ts';
+import type { AsyncDockerCommand } from './docker-command.ts';
 
 async function listening(answer?: number) {
   const seen: string[] = [];
@@ -164,3 +166,52 @@ it.each([
 ])('fails on %s, naming the outcomes', async (_case, outside, needle) => {
   await expect(commandReach(commandLane(outside, []), 'dsh-team-u-1')).rejects.toThrow(needle);
 });
+
+/** The holder's `docker exec` replayed by this host: the argv after the container name. */
+function hostExec(calls: unknown[][]): AsyncDockerCommand {
+  return async (args, timeout) => {
+    calls.push([args, timeout]);
+    const [file = '', ...rest] = args.slice(2);
+    const { stdout, stderr } = await promisify(execFile)(file, rest);
+    return { status: 0, stdout, stderr };
+  };
+}
+
+it.each([
+  ['exit 1', 1],
+  ['exit 2', 2],
+  ['exit 0', 0],
+  // Quotes and `$` reach the delivered shell verbatim, never expanded by the outer one.
+  ["x='a b'; test \"$x\" = 'a b' || exit 3; exit 2", 2],
+])('runs the delivered argv %j in the holder and reads its exit %d', async (script, code) => {
+  const calls: unknown[][] = [];
+
+  expect(await holderProbeExit(hostExec(calls), ['CMD', 'sh', '-c', script])).toBe(code);
+  const outer = ['sh', '-c', '"$@"; echo "$?"', 'sh'];
+  expect(calls).toEqual([[['exec', DOCUMENT_SERVER_NET, ...outer, 'sh', '-c', script], 30_000]]);
+});
+
+it('fails on a failed docker exec rather than reading it as the probe exit', async () => {
+  const missing: AsyncDockerCommand = () =>
+    Promise.resolve({ status: 1, stdout: '', stderr: 'Error: No such container' });
+
+  await expect(holderProbeExit(missing, ['CMD', 'sh', '-c', 'exit 1'])).rejects.toThrow(
+    'failed (1)',
+  );
+  const silent: AsyncDockerCommand = () => Promise.resolve({ status: 0, stdout: '', stderr: '' });
+  await expect(holderProbeExit(silent, ['CMD', 'true'])).rejects.toThrow(
+    'Holder probe exit unreadable: ""',
+  );
+});
+
+it.each([[['CMD-SHELL', 'exit 1']], [['NONE']], [['CMD']], [['CMD', 'sh', 1]]])(
+  'refuses the healthcheck test %j before any exec',
+  async (test) => {
+    const calls: unknown[][] = [];
+
+    await expect(holderProbeExit(hostExec(calls), test)).rejects.toThrow(
+      'Healthcheck test is not an exec-form CMD',
+    );
+    expect(calls).toEqual([]);
+  },
+);

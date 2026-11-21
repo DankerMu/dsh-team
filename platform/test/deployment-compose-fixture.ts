@@ -77,11 +77,13 @@ function documentServerOverride(
   return {
     image: standIn.image,
     // Compose clears the image's default command when the entrypoint is set. Plain responders on
-    // the real image's nginx and docservice ports, as `node` behind the holder's firewall (#624).
+    // the real image's nginx and docservice ports, as `node` behind the holder's firewall (#624),
+    // then the real startup script's final step, which the inherited healthcheck waits for (#648).
+    // No `$`: Compose interpolates override files too.
     entrypoint: [
-      'node',
-      '-e',
-      "for (const port of [80, 8000]) require('node:http').createServer((_, res) => res.end()).listen(port)",
+      'sh',
+      '-c',
+      `node -e "for (const port of [80, 8000]) require('node:http').createServer((_, res) => res.end()).listen(port)" & exec xargs tail -F /dev/null </dev/null`,
     ],
     // Merged by target; every field is restated rather than inherited from the delivered entry.
     volumes: [

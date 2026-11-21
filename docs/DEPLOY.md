@@ -120,6 +120,14 @@ stat -c %g /var/run/docker.sock
 - **「两项都不填则 Office 不可用」只适用于不经 Compose 的入口**，例如开发和测试用的 `pnpm dev`、`pnpm start`。这两项是指 `DOCUMENT_SERVER_CONTAINER_NAME` 和 `DOCUMENT_SERVER_JWT_SECRET`。显式写成空值，或只给其中一项，都会让平台在监听前失败，并指出是哪个变量，但不回显取值。示例文件里容器名有值、JWT 为空，所以原样复制示例做本地运行时，要么删掉这两行，要么两项都填。
 - **防火墙容器重建后，已运行的实例要重启才能重新接入**。实例网络上 +4 接的是防火墙容器 `dsh-team-documentserver-net`：只重建 `dsh-team-documentserver` 时实例的 +4 接入不变；重建防火墙容器（例如重新执行 `up -d` 换掉了它）才会让已运行的实例断开，平台不会给它们补接新容器，这些实例在下次启动前用不了 Office，聊天和文件功能不受影响（Office 在线编辑本身见 §7 末尾的交付状态）。管理员在后台实例页「重启」该实例，或空闲回收后由员工重新打开，下次启动时就会接入新容器。
 - **防火墙容器重启后要重启 Document Server**：单独重启 `dsh-team-documentserver-net`（例如 `docker restart`）会换掉网络命名空间，Document Server 仍留在旧命名空间里断网，Office 不可用但不会暴露 8000；执行 `docker restart dsh-team-documentserver` 让它加入新命名空间，在此之前 Office 不可用。`docker compose … up -d` 不会处理这种情况（Compose 的 `restart: true` 只对 Compose 发起的操作生效）。
+- **启动或重启后，等 Document Server 变为 `healthy` 再通知员工使用 Office（#648）**：`onlyoffice/documentserver:9.4.0` 的启动脚本在 nginx 已经服务、`/healthcheck` 已经返回 `true` 之后，才运行 `documentserver-generate-allfonts.sh` 重新生成字体列表（授权字体靠这一步才进得了编辑器，不能关），这一步最后会再重启一次 docservice 和 converter，然后脚本才进入最后一步 `xargs tail -F`。实测这个窗口在容器启动后约 70–135 秒。窗口内打开的编辑器可能断开、写回失败，未保存的修改可能丢失；员工在编辑器上方会看到固定说明「Office 服务刚启动或重启后约 2 分钟内，编辑器可能断开；如果断开，请稍后重新打开此文件，未保存的修改可能丢失。」。会触发这个窗口的操作：首次 `docker compose … up -d`；每次更新平台镜像后的 `up -d`（会重建防火墙容器和 Document Server，见下一条）；防火墙容器重启后执行的 `docker restart dsh-team-documentserver`（这时已打开的编辑器也会受影响）；宿主机重启。Compose 给 `dsh-team-documentserver` 配了健康检查，只有启动脚本的最后一步已在运行时才报告 `healthy`；启动后 300 秒内未就绪显示 `starting`；300 秒后仍未就绪，再连续 3 次探测失败（每 30 秒一次，约 90 秒）后显示 `unhealthy`。平台不等这个状态，实例照常启动、照常下发 Office。上述操作之后，每隔几秒执行一次下面的命令，输出 `healthy` 后再通知员工：
+
+  ```sh
+  docker inspect --format '{{.State.Health.Status}}' dsh-team-documentserver
+  ```
+
+  输出 `unhealthy` 时用 `docker logs --tail 50 dsh-team-documentserver` 查看启动脚本卡在哪一步。注意不要用 `/healthcheck` 判断：它在这个窗口里已经返回 `true`。
+
 - **平台镜像每次更新都会重建防火墙容器和 Document Server**：防火墙容器复用平台镜像，所以这次升级以及以后每次换平台镜像再 `up -d`，都会重建它和 Document Server，运行中的实例在下次启动前用不了 Office，处理方式见上面「防火墙容器重建后」一条。这是复用平台镜像、不新增镜像的代价。
 - **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙；外部 Document Server 的 docservice 端口（默认 8000）和 `/command`、`/coauthoring/CommandService.ashx` 两条 Command Service 路由对实例不可达，也由运营方保证。
 - **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。缺 JWT 时，升级后的 `up -d` 在创建任何容器之前就失败；缺字体目录时，要到创建 Document Server 容器时才失败，`up -d` 返回非零，平台可能已经用新镜像启动，但 Office 不可用。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。

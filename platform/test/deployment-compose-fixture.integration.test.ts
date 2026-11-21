@@ -15,6 +15,10 @@ const RUN = 'run-under-test';
 // Plain responders, as the platform image's `node` user, behind the holder's firewall.
 const STAND_IN =
   "for (const port of [80, 8000]) require('node:http').createServer((_, res) => res.end()).listen(port)";
+// The startup script's final step, long-lived on an empty stdin (#648).
+const FINAL_STEP = 'exec xargs tail -F /dev/null </dev/null';
+// argv[0] exactly `xargs`, then `tail` and `-F`, from each /proc cmdline (#648).
+const PROBE = String.raw`grep -qsaP '^xargs\x00tail\x00-F\x00' /proc/*/cmdline`;
 const directories: string[] = [];
 
 afterEach(async () => {
@@ -107,7 +111,7 @@ it('replaces the Document Server with the captured image answering on 80 and 800
 
   expect(override.services.documentserver).toEqual({
     image: 'sha256:platform',
-    entrypoint: ['node', '-e', STAND_IN],
+    entrypoint: ['sh', '-c', `node -e "${STAND_IN}" & ${FINAL_STEP}`],
     volumes: [
       {
         type: 'bind',
@@ -119,6 +123,26 @@ it('replaces the Document Server with the captured image answering on 80 and 800
     ],
     labels: { [OWNER_LABEL]: RUN },
   });
+  // The delivered healthcheck is inherited, never overridden or disabled.
+  expect(Object.hasOwn(override.services.documentserver ?? {}, 'healthcheck')).toBe(false);
+});
+
+it('reports the Document Server healthy only once a process runs the startup script final step', async () => {
+  const delivered = parse(await readFile(join(root, 'deploy/compose.yml'), 'utf8')) as {
+    services: Record<string, { healthcheck?: { test?: string[] } }>;
+  };
+  const healthcheck = delivered.services.documentserver?.healthcheck;
+
+  expect(healthcheck).toEqual({
+    test: ['CMD', 'sh', '-c', PROBE],
+    interval: '30s',
+    timeout: '10s',
+    start_period: '300s',
+    start_interval: '5s',
+    retries: 3,
+  });
+  // The stack oracle `pgrep -f 'xargs tail -F'` must never see the probe as the final step.
+  expect(healthcheck?.test?.some((part) => part.includes('xargs tail -F'))).toBe(false);
 });
 
 // The VPS stand-in rewrites this mount by target, so only the delivered file itself proves it.
