@@ -54,6 +54,18 @@ export async function registerDeploymentEmployee(
   return { ...employee, email };
 }
 
+/** The administrator disables one employee; the 204 arrives only after the instance is retired. */
+export async function disableEmployee(administrator: { base: string; cookie: string }, id: string) {
+  const { base } = administrator;
+  const disabled = await fetch(`${base}/_platform/api/admin/users/${id}/status`, {
+    method: 'PUT',
+    headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ status: 'disabled' }),
+  });
+  await disabled.arrayBuffer();
+  expect(disabled.status).toBe(204);
+}
+
 /**
  * Lane-independent accounts on a healthy deployed platform: administrator through the container
  * CLI's real PTY, login, shared model configuration, and one registered employee whose instance

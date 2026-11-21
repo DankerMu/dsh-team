@@ -26,8 +26,8 @@ export const RESTART =
 const MOUNT = '/sidebar/onlyoffice/ds/';
 // dsh-sidebar-onlyoffice@0.2.0 src/client/locales.ts, zh then en: `loading`; then `loadFailed`,
 // `errFetch`, `errApi`, `errEditor`, `errEditorEvent`; last office-hints' own `UNAVAILABLE`.
-const LOADING = ['正在打开 ONLYOFFICE …', 'Opening in ONLYOFFICE …'];
-const FAILURES = [
+export const LOADING = ['正在打开 ONLYOFFICE …', 'Opening in ONLYOFFICE …'];
+export const FAILURES = [
   ...['打开失败', '无法获取编辑器配置', '无法加载 ONLYOFFICE 编辑器脚本'],
   ...['ONLYOFFICE 编辑器初始化失败', 'ONLYOFFICE 编辑器发生错误', 'Failed to open'],
   ...['Could not fetch the editor config', 'Could not load the ONLYOFFICE editor script'],
@@ -68,7 +68,7 @@ export const HEALTH_COMMAND = ['python3', '-c', HEALTH];
 
 type Hint = Record<'kind' | 'text', string | null> & Record<'visible' | 'nativeHost', boolean>;
 /** What the page shows of the hints and the wrapped editor; iframe paths carry no query. */
-interface OfficeFacts {
+export interface OfficeFacts {
   readonly hints: readonly Hint[];
   readonly frames: number;
   readonly iframes: readonly { visible: boolean; sameOrigin: boolean; path: string }[];

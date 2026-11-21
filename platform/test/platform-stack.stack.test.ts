@@ -11,6 +11,7 @@ import {
   configuredStack,
 } from '../../scripts/test-stack-prerequisites.mjs';
 import {
+  disableEmployee,
   prepareDeploymentAccounts,
   registerDeploymentEmployee,
 } from './deployment-account-fixture.ts';
@@ -55,6 +56,7 @@ import {
   READ_BACK_COMMAND,
 } from './office-editor-stack-fixture.ts';
 import type { OfficeEditorEvidence } from './office-editor-stack-fixture.ts';
+import { officeExternalLine, officeExternalScenario } from './office-external-stack-fixture.ts';
 import {
   DOCUMENT_SERVER,
   docserviceSpawns,
@@ -196,6 +198,7 @@ interface ConversationEvidence {
   officeProfile?: OfficeProfileEvidence;
   officeRewrite?: Awaited<ReturnType<typeof rewrite.officeRewriteScenario>>;
   officeIdle?: OfficeIdleEvidence;
+  officeExternal?: Awaited<ReturnType<typeof officeExternalScenario>>;
   /** Waited for before the first Office lane (#622), with the health timeline (#648). */
   documentServer?: { startupMs: number; spawns: number; health: HealthLine };
   /** Outcomes and statuses only (#624). */
@@ -326,18 +329,6 @@ const PROVIDER_HEALTH =
   "const r=await fetch('http://127.0.0.1:3099/health');process.stdout.write(await r.text());";
 const PROVIDER_RELEASE =
   "const r=await fetch('http://127.0.0.1:3099/release',{method:'POST'});process.stdout.write(await r.text());";
-
-/** The administrator disables one employee; the 204 arrives only after the instance is retired. */
-async function disableEmployee(administrator: { base: string; cookie: string }, id: string) {
-  const { base } = administrator;
-  const disabled = await fetch(`${base}/_platform/api/admin/users/${id}/status`, {
-    method: 'PUT',
-    headers: { origin: base, cookie: administrator.cookie, 'content-type': 'application/json' },
-    body: JSON.stringify({ status: 'disabled' }),
-  });
-  await disabled.arrayBuffer();
-  expect(disabled.status).toBe(204);
-}
 
 /** The administrator restart of one employee's instance, awaited until it runs again. */
 async function restartInstance(
@@ -558,6 +549,8 @@ async function converse(
     evidence.officeRewrite = await rewrite.officeRewriteScenario({ ...lane, reply, rewrites });
     // 18.5 (#440): A's open editor outlasts one idle minute; once it closes, A is idle-stopped.
     evidence.officeIdle = await officeIdleScenario({ ...office, reply, readBack });
+    // #649: from idle-stopped A, a refused external Document Server shows the plugin's failure.
+    evidence.officeExternal = await officeExternalScenario({ ...office, restart });
     const spawns = await docserviceSpawns(run);
     expect(spawns, 'docservice spawned again during the Office lanes').toBe(documentServer.spawns);
     expect(health.spawns, 'docservice spawned again after the first healthy sample').toBe(spawns);
@@ -907,6 +900,7 @@ it('builds both images, starts the delivered compose platform, converses through
         officeProfile: officeProfileLine(officeProfile),
         officeRewrite: rewrite.officeRewriteLine(evidence.officeRewrite),
         officeIdle: officeIdleLine(evidence.officeIdle),
+        officeExternal: officeExternalLine(evidence.officeExternal),
         documentServer,
         commandService: evidence.commandService,
       },

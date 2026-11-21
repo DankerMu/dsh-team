@@ -4,6 +4,7 @@ import {
   afterScript,
   callbackScript,
   EXPECTED_PROFILE,
+  LISTENER_JS,
   officeProfileLine,
   officeProfileScenario,
   PROFILE_EDIT,
@@ -33,6 +34,17 @@ it('checks that port 9 has no listener in A before registering k1_old for the re
   ]);
   expect(script.indexOf('port: 9')).toBeLessThan(script.indexOf('writeFileSync(file'));
   expect(REWRITTEN_URL).toBe('http://127.0.0.1:9');
+});
+
+it("shares (d1)'s no-listener check on REWRITTEN_URL's port as one statement setting observed.listener", () => {
+  contains(LISTENER_JS, [
+    'observed.listener = await new Promise((resolve) => {',
+    "const probe = connect({ host: '127.0.0.1', port: 9 });",
+    "probe.on('connect', () => { probe.destroy(); resolve(true); });",
+    "probe.on('error', () => resolve(false));",
+  ]);
+  expect(new URL(REWRITTEN_URL).port).toBe('9');
+  expect(registerScript(A)).toContain(LISTENER_JS);
 });
 
 it('backs the profile bytes up, then pushes the argv row and writes the file back in the editor dialect (d1)', () => {

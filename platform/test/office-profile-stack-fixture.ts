@@ -48,14 +48,17 @@ export const EXPECTED_PROFILE = {
   restore: { restored: true, backup: false },
 };
 
-/** (d1) In A: nothing listens on 127.0.0.1:9; the target is written and k1_old registered. */
-export const registerScript = (address: string): string =>
-  script(
-    `observed.listener = await new Promise((resolve) => {
+/** A `script` statement: `observed.listener` is whether REWRITTEN_URL's port accepts TCP in A. */
+export const LISTENER_JS = `observed.listener = await new Promise((resolve) => {
   const probe = connect({ host: '127.0.0.1', port: 9 });
   probe.on('connect', () => { probe.destroy(); resolve(true); });
   probe.on('error', () => resolve(false));
-});
+});`;
+
+/** (d1) In A: nothing listens on 127.0.0.1:9; the target is written and k1_old registered. */
+export const registerScript = (address: string): string =>
+  script(
+    `${LISTENER_JS}
 ${register(address, 'dsh-team office profile target')}
 Object.assign(observed, { k0, k1 });`,
     FILE,
