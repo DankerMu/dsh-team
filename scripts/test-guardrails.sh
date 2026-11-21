@@ -195,6 +195,67 @@ for missing_policy in setting file; do
     fi
   done
 done
+
+# Docker-evidence docs-only classifier: stdin is the changed-path list (#664).
+docs_only() {
+  printf '%s\n' "$@" | bash scripts/docs-only-diff.sh
+}
+
+stage2_change="stage-2-dsh-ragflow-office"
+expect_accept "docs-only (OpenSpec archive with change metadata)" docs_only \
+  "openspec/changes/archive/2026-11-20-$stage2_change/.openspec.yaml" \
+  "openspec/changes/archive/2026-11-20-$stage2_change/proposal.md" \
+  "openspec/changes/archive/2026-11-20-$stage2_change/specs/trusted-docker-verification/spec.md" \
+  "openspec/changes/$stage2_change/.openspec.yaml" \
+  "openspec/changes/$stage2_change/proposal.md" \
+  "openspec/specs/trusted-docker-verification/spec.md"
+expect_accept "docs-only (active change with metadata)" docs_only \
+  openspec/changes/foo-bar/.openspec.yaml openspec/changes/foo-bar/proposal.md
+expect_accept "docs-only (Markdown outside plugins/ and images/)" docs_only \
+  docs/X.md docs/plugins/x.md
+
+for offending in \
+  plugins/x/README.md \
+  images/dsh-user/x.md \
+  images/dsh-user/openspec/changes/foo/.openspec.yaml \
+  docs/openspec/changes/foo/.openspec.yaml \
+  docs/openspec/changes/archive/2026-11-20-foo/.openspec.yaml \
+  openspec/config.yaml \
+  openspec/changes/foo/fixture.yaml \
+  openspec/changes/archive/.openspec.yaml \
+  openspec/changes/archive/2026-11-20-foo/specs/.openspec.yaml \
+  openspec/changes/archive/2026-1-1-x/.openspec.yaml \
+  openspec/changes/foo/specs/.openspec.yaml \
+  openspec/changes/Foo/.openspec.yaml \
+  openspec/changes/bad--name/.openspec.yaml \
+  docs/.openspec.yaml; do
+  expect_reject "docs-only rejects $offending" "evidence required: $offending" \
+    docs_only docs/a.md "$offending"
+done
+expect_reject "docs-only rejects a mixed code list" "evidence required: platform/src/x.ts" \
+  docs_only docs/a.md platform/src/x.ts
+expect_reject "docs-only rejects an empty diff" "evidence required: empty diff" docs_only
+
+# expect_reject cannot tell "evidence required" (1) from a classifier failure (2).
+for missing_policy in setting file; do
+  if [ "$missing_policy" = file ]; then
+    rm constraints.yaml
+  else
+    grep -v 'managed_archive_pattern:' constraints.yaml >constraints.yaml.fixture
+    mv constraints.yaml.fixture constraints.yaml
+  fi
+  err="$(docs_only docs/a.md 2>&1 >/dev/null)"
+  rc=$?
+  if [ "$rc" -eq 2 ] && printf '%s\n' "$err" | grep -qF managed_archive_pattern; then
+    echo "PASS  docs-only missing $missing_policy — failed as configuration error (exit 2)"
+    pass=$((pass + 1))
+  else
+    echo "FAIL  docs-only missing $missing_policy — exited $rc, want 2 naming managed_archive_pattern:"
+    printf '%s\n' "$err" | tail -n 15 | sed 's/^/        /'
+    fail=$((fail + 1))
+  fi
+  restore
+done
 # Distinct PR deliveries must retain their own checks, even in the pending queue.
 for policy in shared cancel-disabled action-only malformed main-cancel; do
   restore
