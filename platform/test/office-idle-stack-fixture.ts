@@ -31,12 +31,17 @@ export const OPERATOR_FONTS = [
   CUSTOM_FONTS,
 ];
 
-type Admin = Readonly<Record<'base' | 'cookie', string>>;
+export type Admin = Readonly<Record<'base' | 'cookie', string>>;
 type InstanceRow = Readonly<{ email: string; status: string; lastStartedAt: number | null }>;
 type StopAudit = Readonly<{ id: number; actorEmail: string | null; details: unknown }>;
 
 /** One administrator request; a non-200 answer throws with the method, path and status only. */
-async function request<T>({ base, cookie }: Admin, method: string, path: string, body?: unknown) {
+export async function request<T>(
+  { base, cookie }: Admin,
+  method: string,
+  path: string,
+  body?: unknown,
+) {
   const sent = body === undefined ? {} : { origin: base, 'content-type': 'application/json' };
   const response = await fetch(`${base}${path}`, {
     ...{ method, headers: { cookie, ...sent } },

@@ -74,7 +74,13 @@ export default defineConfig({
           // each: per case the write, four file reads (start, after the rewrite, the save poll's
           // first, after the close), two provider reads and three listings, once the
           // configured-scripts read and the cleanup.
-          testTimeout: 7_230_000,
+          // The office external lane (#649) raised it by 960s: two instance restarts (to the
+          // external address, then the bundled restore) at the gateway's 180s each, five waits at
+          // one 60s session timeout each (the login, the composer, the file row, and the composer
+          // and the row after the failure), the 30s failure wait, the bundled healthcheck wait
+          // (60s plus its last 30s exec) and six docker execs at 30s each: the listener check, the
+          // file's write, read-back and removal, and the two provider reads.
+          testTimeout: 8_190_000,
         },
       },
     ],

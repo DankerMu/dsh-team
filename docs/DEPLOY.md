@@ -129,7 +129,7 @@ stat -c %g /var/run/docker.sock
   输出 `unhealthy` 时用 `docker logs --tail 50 dsh-team-documentserver` 查看启动脚本卡在哪一步。注意不要用 `/healthcheck` 判断：它在这个窗口里已经返回 `true`。
 
 - **平台镜像每次更新都会重建防火墙容器和 Document Server**：防火墙容器复用平台镜像，所以这次升级以及以后每次换平台镜像再 `up -d`，都会重建它和 Document Server，运行中的实例在下次启动前用不了 Office，处理方式见上面「防火墙容器重建后」一条。这是复用平台镜像、不新增镜像的代价。
-- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙；外部 Document Server 的 docservice 端口（默认 8000）和 `/command`、`/coauthoring/CommandService.ashx` 两条 Command Service 路由对实例不可达，也由运营方保证。
+- **外部 Document Server**：管理员在后台「Office」页填写外部地址和 JWT 后，实例从下次启动起不再接入自带容器；已运行的实例在重启前仍接着自带容器。实例能否访问外部地址，由运营方的网络负责，平台不做接入，也不改防火墙；外部 Document Server 的 docservice 端口（默认 8000）和 `/command`、`/coauthoring/CommandService.ashx` 两条 Command Service 路由对实例不可达，也由运营方保证。平台保存外部地址时不探测它。地址写错、那台服务连不上，或者应答的不是 Document Server 时，员工在会话里打开 DOCX、XLSX、PPTX，编辑器的位置会显示 ONLYOFFICE 插件的「打开失败」面板（例如「无法加载 ONLYOFFICE 编辑器脚本」，说明见 [EMPLOYEE_GUIDE.md](EMPLOYEE_GUIDE.md) 的「打开失败」），文件不变，聊天和文件操作照常；改正地址后，在后台实例页「重启」受影响的实例，否则它们要到下次启动才用上新地址。外部 Document Server 若带商业许可，它的连接上限和满员时的提示由这台 Document Server 自己处理，容量由运营方负责，本项目不另加提示。JWT 填错时，可达的 Document Server 会显示什么，本项目没有验证过。
 - **从阶段 1 的 Compose 部署升级**：要在现有 `.env` 里新增 `DOCUMENT_SERVER_JWT_SECRET=` 这一行，然后用上面的 `sed` 命令写入密钥；同时创建 `assets/fonts/`。缺 JWT 时，升级后的 `up -d` 在创建任何容器之前就失败；缺字体目录时，要到创建 Document Server 容器时才失败，`up -d` 返回非零，平台可能已经用新镜像启动，但 Office 不可用。`DOCUMENT_SERVER_CONTAINER_NAME` 由 Compose 直接传给平台，不需要加到 `.env`。
 
 ## 4. 在目标主机运行真实沙箱探针
