@@ -19,9 +19,9 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 `platform/src/managed-config/read.ts`: tolerated-warning regex gains the `s` flag (nothing else in the whitelist changes). The regex lives inside the non-raw template literal at `read.ts:20`: only add the flag. `[\s\S]` would emit `[sS]` and a `\u2028` escape would emit a raw line terminator that breaks the generated script; check the emitted text, not only the TypeScript source.
-- [ ] 1.2 `platform/test/managed-composition.integration.test.ts`: red first — profile row `{ id: 'a\u2028b', disabled: true }` and home row `{ id: 'a\u2029b', disabled: true }` (write the escapes in source, never raw characters) are tolerated with output equal to the composition without them; then regressions — a name mismatch needs an existing target, so the profile first inserts `{ id: 'a\u2028b', name: 'x' }` and a later row `{ id: 'a\u2028b', name: 'y' }` must reject; a `patch insert` row `{ id: 'a\u2028b', insert: [...] }` whose target is absent must reject. Existing cases untouched.
-- [ ] 1.3 `platform/src/managed-config/README.md:9`: confirm it describes "any string id"; adjust wording only if it does not.
+- [x] 1.1 `platform/src/managed-config/read.ts`: tolerated-warning regex gains the `s` flag (nothing else in the whitelist changes). The regex lives inside the non-raw template literal at `read.ts:20`: only add the flag. `[\s\S]` would emit `[sS]` and a `\u2028` escape would emit a raw line terminator that breaks the generated script; check the emitted text, not only the TypeScript source.
+- [x] 1.2 `platform/test/managed-composition.integration.test.ts`: red first — profile row `{ id: 'a\u2028b', disabled: true }` and home row `{ id: 'a\u2029b', disabled: true }` (write the escapes in source, never raw characters) are tolerated with output equal to the composition without them; then regressions — a name mismatch needs an existing target, so the profile first inserts `{ id: 'a\u2028b', name: 'x' }` and a later row `{ id: 'a\u2028b', name: 'y' }` must reject; a `patch insert` row `{ id: 'a\u2028b', insert: [...] }` whose target is absent must reject. Existing cases untouched.
+- [x] 1.3 `platform/src/managed-config/README.md:9`: confirm it describes "any string id"; adjust wording only if it does not.
 
 ## 2. Verification
 
