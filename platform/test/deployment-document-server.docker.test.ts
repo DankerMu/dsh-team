@@ -10,7 +10,7 @@ import { writeComposeConfiguration } from './deployment-compose-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { DOCUMENT_SERVER_NET } from './document-server-net-fixture.ts';
+import { DOCUMENT_SERVER_NET, holderProbeExit } from './document-server-net-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -108,11 +108,11 @@ it('starts the bundled Document Server stand-in unpublished, with the fixture JW
     const healthcheck = await deliveredHealthcheck(lifecycle.repositoryRoot);
     expect(record(record(server.Config).Healthcheck).Test).toEqual(healthcheck.test);
     await healthyWithinStartPeriod(lifecycle, healthcheck.startPeriodMs);
-    // Negative control: the same command in the holder, the same image without the final step.
-    const probe = ['exec', DOCUMENT_SERVER_NET, ...healthcheck.test.slice(1).map(String)];
-    const control = await lifecycle.commandAsync(probe, 30_000);
-    // grep's own "no match" (1, or 2 when a process vanished mid-scan), never an exec failure.
-    expect([1, 2], `holder probe exit ${String(control.status)}`).toContain(control.status);
+    // Negative control: the same command in the running holder, the same image without the final
+    // step: grep's own "no match" (1, or 2 when a process vanished mid-scan).
+    expect(record((await inspectAsync(lifecycle, DOCUMENT_SERVER_NET)).State).Running).toBe(true);
+    const control = await holderProbeExit(lifecycle.commandAsync, healthcheck.test);
+    expect([1, 2], `holder probe exit ${String(control)}`).toContain(control);
 
     // The platform attaches the namespace holder, which the Document Server joins (#624).
     const platform = await inspectAsync(lifecycle, PLATFORM);

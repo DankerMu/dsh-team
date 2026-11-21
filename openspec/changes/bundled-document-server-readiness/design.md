@@ -45,6 +45,7 @@ Sibling surfaces:
 
 - `documentServerStarted`/`docserviceSpawns` in `office-hints-stack-fixture.ts`. These stay as the test's independent oracle; the product signal is the compose healthcheck, and the duplication is deliberate: the test verifies the product signal against the oracle.
 - `office-rewrite-stack-fixture.ts`/`office-editor-stack-fixture.ts` `documentServerReady` waits, which are unchanged.
+- `docs/EMPLOYEE_GUIDE.md` §「Office 在线编辑的提示」 (employee-facing hint catalogue; must list the restart note).
 - Docs that change with this: `deploy/README.md:23` (stand-in description), `deploy/README.md:43` (Compose evidence row: stand-in healthy through the inherited healthcheck plus the negative check), `platform/test/README.md:92` (local full-stack evidence row: restart note and health timeline), `docs/LOCAL_STACK.md:144` (hint lane shows two hints; disambiguate DS `/healthcheck` from Docker health).
 - `container-document-server-fixture.ts` / `deployment-fixture.ts` (the stand-in image).
 - External Document Server mode is out of scope.
@@ -60,7 +61,7 @@ Required evidence:
 
 - **Unit:** opening a docx/xlsx/pptx in a Session renders both `collab` (F40 text unchanged) and `restart` (exact text). The no-Session view renders neither `restart` nor the editor. The unloaded fallback renders no `restart`. Red: the `restart` assertions fail before the change.
 - **Integration:** the override has no `healthcheck` key and its entrypoint ends in the `xargs tail -F` step. Red against the old override.
-- **VPS `pnpm test:deploy`:** the stand-in's `State.Health.Status` becomes `healthy`, its `Config.Healthcheck.Test` equals `documentserver.healthcheck.test` in the delivered `deploy/compose.yml` (inherited, not overridden), and that exact command run with `docker exec` in `dsh-team-documentserver-net` (same platform image, no final step) exits nonzero. All existing checks pass.
+- **VPS `pnpm test:deploy`:** the stand-in's `State.Health.Status` becomes `healthy`, its `Config.Healthcheck.Test` equals `documentserver.healthcheck.test` in the delivered `deploy/compose.yml` (inherited, not overridden), and that exact command run inside `dsh-team-documentserver-net` (same platform image, no final step) under an outer `sh` that prints its exit code reports 1 or 2, while the `docker exec` CLI exits 0 (a nonzero CLI exit would leave the custody submission unsettled, and a daemon failure such as a missing container would be indistinguishable from grep's no-match). All existing checks pass.
 - **Local `pnpm test:stack`:**
   - A sampler starts concurrently right after `compose up` (`platform-stack.stack.test.ts` ~:678), not at the existing `documentServerStarted` call (~:527, which runs after several lanes when the window is long over). It adds no deadline and is joined/settled before the existing wait.
   - Each sampler iteration reads `State.Health.Status` FIRST and runs the oracle `pgrep` SECOND. Assertion: a `healthy` sample implies that iteration's pgrep succeeds; reading in the other order produces false failures.

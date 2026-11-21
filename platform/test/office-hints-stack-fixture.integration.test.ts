@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { previewIds, visible } from './better-sidebar-browser-fixture.mjs';
 import {
@@ -281,18 +282,19 @@ it('reads the health before the final step every sample and the spawns at the fi
   });
 });
 
-it('keeps sampling after the first healthy sample until settled, reading the spawns once', async () => {
-  const { calls, run } = fakeTimeline(ordered);
+it('ends at its first healthy sample, never sampling the container again', async () => {
+  // A later sample whose oracle exec failed would read as healthy without the final step.
+  const { calls, run } = fakeTimeline([...ordered, [state('healthy', 1, 1, 0, 0), false]]);
   const sampler = sampleDocumentServerHealth(run, 10_000, 1);
   await vi.waitFor(() => {
-    expect(calls.filter((call) => call[0] === 'inspect').length).toBeGreaterThan(6);
+    expect(calls).toContainEqual(SPAWNS);
   });
+  await delay(20);
 
   const timeline = await sampler.settle();
 
-  expect(timeline.samples.length).toBeGreaterThan(6);
-  expect(timeline.samples.slice(3).every(({ status }) => status === 'healthy')).toBe(true);
-  expect(calls.filter((call) => call.includes('grep')).length).toBe(1);
+  expect(calls).toEqual([STATE, PGREP, STATE, PGREP, STATE, PGREP, STATE, PGREP, SPAWNS]);
+  expect(healthTimelineLine(timeline)).toMatchObject({ samples: 4, healthy: 1, spawns: 2 });
 });
 
 it('waits for a healthy sample when settled first, within its own timeout only', async () => {
@@ -398,6 +400,11 @@ it.each([
   [
     'a failed probe only once the final step runs',
     [sample('starting', false, 0), sample('starting', true, 1), sample('healthy', true, 1)],
+    'No failed Document Server probe sampled before its final step',
+  ],
+  [
+    'only a healthy sample once the final step runs',
+    [sample('healthy', true, 3)],
     'No failed Document Server probe sampled before its final step',
   ],
 ])('fails the timeline on %s', (_case, samples, message) => {

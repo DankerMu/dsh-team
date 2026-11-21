@@ -29,7 +29,9 @@ See `design.md`.
 - [x] 1.3 `plugins/office-hints/client.js` adds the `restart` note (exact text from proposal.md, `data-dsh-team-office-hint="restart"`) beside the collaboration hint only; `client.test.js` covers presence with each Office ext in a Session and absence in the no-Session and unloaded views (red first; `:307,308,367` grow, `:293` unchanged); `README.md` hint table gains the row. Stack consumers: `openHinted`'s exact assertion becomes `[collab, restart]` for all four lanes (editor, rewrite, forgotten ×2, hints) and the integration `mounted` mock is updated.
 - [x] 1.4 Stack lane health timeline per design.md: concurrent sampler from `compose up`, health read before pgrep, ≥1 `starting` sample with pgrep missing plus a nonzero-ExitCode `Health.Log` entry, healthy ⇒ pgrep, spawns at first healthy = final count; counts in the evidence line; the office-hints lane asserts the `restart` note is visible. No deadline lengthened, no PR #623 assertion removed.
 - [x] 1.5 `docs/DEPLOY.md` §「自带 Document Server（Office）」: cause, triggering operations, `docker inspect --format '{{.State.Health.Status}}' dsh-team-documentserver` until `healthy` before announcing Office. Also required: `deploy/README.md:23` and `:43`, `platform/test/README.md:92`, `docs/LOCAL_STACK.md:144` (see design.md sibling surfaces).
-- [ ] 1.6 PR description states the chosen direction and why blocking-at-start and docs-only were rejected (issue AC1), plus the static-note reinterpretation of AC4 below.
+- [x] 1.6 PR description states the chosen direction and why blocking-at-start and docs-only were rejected (issue AC1), plus the static-note reinterpretation of AC4 below.
+
+- [x] 1.7 Fix pass 1 (round 1): holder negative control via in-container exit capture (CLI exit 0, printed code ∈ {1,2}, holder Running asserted); `docs/EMPLOYEE_GUIDE.md` restart-note section; timeline-judge unit case with no pre-final-step samples; sampler stops at its first healthy sample.
 
 ## 2. Verification
 

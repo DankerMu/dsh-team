@@ -311,15 +311,15 @@ async function healthState(run: DockerOutput) {
 /**
  * Samples the delivered Document Server from `compose up` on (#648): each sample reads Docker's
  * health first and runs the oracle second, so a healthy sample whose oracle fails is a real
- * violation, never the probe's lag. Sampling ends once settled after a healthy sample, at an
- * `unhealthy` report, when aborted, or `timeout` after it began; the result never rejects.
+ * violation, never the probe's lag. Sampling ends at the first healthy sample, whose spawns it
+ * reads, at an `unhealthy` report, when aborted, or `timeout` after it began; the result never
+ * rejects. No later exec can then fail into a healthy sample without the final step.
  * Docker probes every 5 s while starting (deploy/compose.yml); the 1 s default `interval` places
  * each status change within a second without crowding the daemon.
  */
 export function sampleDocumentServerHealth(run: DockerOutput, timeout: number, interval = 1_000) {
   const deadline = performance.now() + timeout;
   const samples: HealthSample[] = [];
-  let settling = false;
   let aborted = false;
   let healthySpawns: number | undefined;
   const sampling = async (): Promise<HealthTimeline> => {
@@ -328,9 +328,8 @@ export function sampleDocumentServerHealth(run: DockerOutput, timeout: number, i
       const step = await finalStepRunning(run);
       const seen = step === true ? {} : { oracle: step };
       samples.push({ status, finalStep: step === true, failedProbes, ms, ...seen });
-      if (status === 'healthy') healthySpawns ??= await docserviceSpawns(run);
-      const settled = settling && healthySpawns !== undefined;
-      if (settled || status === 'unhealthy' || performance.now() >= deadline) break;
+      if (status === 'healthy') healthySpawns = await docserviceSpawns(run);
+      if (status === 'healthy' || status === 'unhealthy' || performance.now() >= deadline) break;
       await delay(interval);
     }
     return { samples, ...(healthySpawns === undefined ? {} : { healthySpawns }) };
@@ -340,11 +339,8 @@ export function sampleDocumentServerHealth(run: DockerOutput, timeout: number, i
     error: failure(error),
   }));
   return {
-    /** Joins the sampler once it has a healthy sample (or has ended). */
-    settle: () => {
-      settling = true;
-      return timeline;
-    },
+    /** Joins the sampler: its first healthy sample, or how it ended without one. */
+    settle: () => timeline,
     /** Ends it after the current sample, healthy or not: the failure path, before drainage. */
     abort: () => {
       aborted = true;
