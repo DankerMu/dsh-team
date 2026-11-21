@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -18,6 +18,11 @@ import {
   ordinarySubmission,
   withAuditReceipt,
 } from './trusted-docker-audit-fixture.ts';
+
+// The six cases that run their own writer: a cold registration, an optional warm-up, the writer
+// (itself starting Node, sometimes a nested child or HTTP server) and a cold fresh assessor, under
+// a loaded host; unloaded each takes under 1s.
+const CASE_MS = 20_000;
 
 it.each(['driver', 'producer'])(
   'refuses missing browser %s authority despite empty resource observations',
@@ -155,7 +160,7 @@ it.each([
 ])(
   'settles a mutation exit $exit only when it is the caller-declared status $declared',
   async ({ exit, declared, status, state }) => {
-    await withAuditReceipt(async ({ journal, assess }) => {
+    await withAuditReceipt(async ({ journal, assess, spawnChild }) => {
       const commandModule = new URL('./docker-command.ts', import.meta.url).href;
       const behavior =
         exit === 'signal' ? "process.kill(process.pid,'SIGKILL')" : `process.exit(${exit})`;
@@ -167,7 +172,8 @@ it.each([
             : undefined;
       // The bounded Web command seam used by the OOM pressure exec, with a real child outcome
       // (or a synthetic collector result for the 137-with-* rows).
-      const writer = spawnSync(
+      const writer = spawnChild(
+        'writer',
         process.execPath,
         [
           '--input-type=module',
@@ -187,7 +193,6 @@ process.stdout.write(JSON.stringify({status:result.status})+'\\n');`,
             DSH_TEAM_VERIFICATION_SUBMISSIONS: join(journal, '..', SUBMISSION_JOURNAL),
           },
           encoding: 'utf8',
-          timeout: 5000,
         },
       );
 
@@ -208,19 +213,23 @@ process.stdout.write(JSON.stringify({status:result.status})+'\\n');`,
               },
             },
       );
-      expect(freshSubmissionAssessment(join(journal, '..'))).toBe(`${JSON.stringify({ state })}\n`);
-    });
+      expect(freshSubmissionAssessment(join(journal, '..'), spawnChild)).toBe(
+        `${JSON.stringify({ state })}\n`,
+      );
+    }, CASE_MS);
   },
+  CASE_MS,
 );
 
 it.each(['fsync', 'close', 'write', 'unlink', 'death'])(
   'rejects visible settlement after completion %s fails and its writer exits',
   async (fault) => {
-    await withAuditReceipt(async ({ journal }) => {
+    await withAuditReceipt(async ({ journal, spawnChild }) => {
       const module = new URL('../../scripts/verification-submissions.mjs', import.meta.url).href;
       const directory = join(journal, '..');
       const submissions = join(directory, SUBMISSION_JOURNAL);
-      const writer = spawnSync(
+      const writer = spawnChild(
+        'writer',
         process.execPath,
         [
           '--input-type=module',
@@ -269,7 +278,6 @@ process.exitCode=17;`,
             DSH_TEAM_VERIFICATION_SUBMISSIONS: submissions,
           },
           encoding: 'utf8',
-          timeout: 5000,
         },
       );
       expect(writer.error).toBeUndefined();
@@ -292,9 +300,10 @@ process.exitCode=17;`,
       if (fault !== 'write') expect(rows[1]?.id).toBe(rows[0]?.id);
 
       // The writer has exited; a separate, unfaulted process must not trust its visible row.
-      expect(freshSubmissionAssessment(directory)).toBe('{"state":"unconfirmed"}\n');
-    });
+      expect(freshSubmissionAssessment(directory, spawnChild)).toBe('{"state":"unconfirmed"}\n');
+    }, CASE_MS);
   },
+  CASE_MS,
 );
 
 it.each([
@@ -310,16 +319,19 @@ it.each([
   'marker-replaced',
   'marker-missing',
   'marker-malformed',
-])('rejects changed submission authority %s in the writer and a fresh assessor', async (fault) => {
-  await withAuditReceipt(async ({ journal, assess }) => {
-    const directory = join(journal, '..');
-    const module = new URL('../../scripts/verification-submissions.mjs', import.meta.url).href;
-    const writer = spawnSync(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `import fs from 'node:fs';
+])(
+  'rejects changed submission authority %s in the writer and a fresh assessor',
+  async (fault) => {
+    await withAuditReceipt(async ({ journal, assess, spawnChild }) => {
+      const directory = join(journal, '..');
+      const module = new URL('../../scripts/verification-submissions.mjs', import.meta.url).href;
+      const writer = spawnChild(
+        'writer',
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import fs from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {beginVerificationSubmission} from ${JSON.stringify(module)};
@@ -360,48 +372,49 @@ let rejected=false;
 try{complete();}catch{rejected=true;}
 if(!rejected)throw new Error('Changed submission authority was accepted');
 process.stdout.write('authority-change-rejected\\n');`,
-      ],
-      {
-        env: {
-          PATH: process.env.PATH,
-          HOME: tmpdir(),
-          DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
-        },
-        encoding: 'utf8',
-        timeout: 5000,
-      },
-    );
-
-    try {
-      expect(writer.error).toBeUndefined();
-      expect(writer.signal).toBeNull();
-      expect(writer.status, writer.stderr).toBe(0);
-      expect(writer.stdout).toBe('authority-change-rejected\n');
-      expect(freshSubmissionAssessment(directory)).toBe('{"state":"unconfirmed"}\n');
-      // Unlabelled rows behind intact authority: the row and its marker count once, while a
-      // retired marker name is unattributable. Other faults fail authority before projection.
-      const unlabelled = (
+        ],
         {
-          'anchor-changed': 1,
-          'marker-replaced': 2,
-          'marker-missing': 1,
-          'marker-malformed': 1,
-        } as Partial<Record<string, number>>
-      )[fault];
-      expect(await assess()).toStrictEqual(
-        unlabelled === undefined
-          ? { state: 'unconfirmed', browserExec: null }
-          : {
-              state: 'unconfirmed',
-              browserExec: null,
-              unsettled: { labels: [], unlabelled, truncated: false },
-            },
+          env: {
+            PATH: process.env.PATH,
+            HOME: tmpdir(),
+            DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
+          },
+          encoding: 'utf8',
+        },
       );
-    } finally {
-      if (fault === 'pending-mode') await chmod(join(directory, SUBMISSION_PENDING), 0o700);
-    }
-  });
-});
+
+      try {
+        expect(writer.error).toBeUndefined();
+        expect(writer.signal).toBeNull();
+        expect(writer.status, writer.stderr).toBe(0);
+        expect(writer.stdout).toBe('authority-change-rejected\n');
+        expect(freshSubmissionAssessment(directory, spawnChild)).toBe('{"state":"unconfirmed"}\n');
+        // Unlabelled rows behind intact authority: the row and its marker count once, while a
+        // retired marker name is unattributable. Other faults fail authority before projection.
+        const unlabelled = (
+          {
+            'anchor-changed': 1,
+            'marker-replaced': 2,
+            'marker-missing': 1,
+            'marker-malformed': 1,
+          } as Partial<Record<string, number>>
+        )[fault];
+        expect(await assess()).toStrictEqual(
+          unlabelled === undefined
+            ? { state: 'unconfirmed', browserExec: null }
+            : {
+                state: 'unconfirmed',
+                browserExec: null,
+                unsettled: { labels: [], unlabelled, truncated: false },
+              },
+        );
+      } finally {
+        if (fault === 'pending-mode') await chmod(join(directory, SUBMISSION_PENDING), 0o700);
+      }
+    }, CASE_MS);
+  },
+  CASE_MS,
+);
 
 it.each(['journal', 'pending'])(
   'refuses substituted %s authority even when every visible row is settled',
@@ -424,16 +437,19 @@ it.each(['journal', 'pending'])(
   },
 );
 
-it('rejects repeated initialization and completion without rewriting settled evidence', async () => {
-  await withAuditReceipt(({ journal }) => {
-    const directory = join(journal, '..');
-    const module = new URL('../../scripts/verification-submissions.mjs', import.meta.url).href;
-    const writer = spawnSync(
-      process.execPath,
-      [
-        '--input-type=module',
-        '-e',
-        `import assert from 'node:assert/strict';
+it(
+  'rejects repeated initialization and completion without rewriting settled evidence',
+  async () => {
+    await withAuditReceipt(({ journal, spawnChild }) => {
+      const directory = join(journal, '..');
+      const module = new URL('../../scripts/verification-submissions.mjs', import.meta.url).href;
+      const writer = spawnChild(
+        'writer',
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {beginVerificationSubmission} from ${JSON.stringify(module)};
 import {initializeVerificationSubmissions} from ${JSON.stringify(new URL('../../scripts/verification-submission-storage.mjs', import.meta.url).href)};
@@ -444,34 +460,36 @@ const evidence=readFileSync(process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS,'utf8'
 assert.throws(complete);
 assert.equal(readFileSync(process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS,'utf8'),evidence);
 process.stdout.write('replay-rejected\\n');`,
-      ],
-      {
-        env: {
-          PATH: process.env.PATH,
-          HOME: tmpdir(),
-          DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
+        ],
+        {
+          env: {
+            PATH: process.env.PATH,
+            HOME: tmpdir(),
+            DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
+          },
+          encoding: 'utf8',
         },
-        encoding: 'utf8',
-        timeout: 5000,
-      },
-    );
+      );
 
-    expect(writer.error).toBeUndefined();
-    expect(writer.signal).toBeNull();
-    expect(writer.status, writer.stderr).toBe(0);
-    expect(writer.stdout).toBe('replay-rejected\n');
-    expect(freshSubmissionAssessment(directory)).toBe('{"state":"confirmed"}\n');
-  });
-});
+      expect(writer.error).toBeUndefined();
+      expect(writer.signal).toBeNull();
+      expect(writer.status, writer.stderr).toBe(0);
+      expect(writer.stdout).toBe('replay-rejected\n');
+      expect(freshSubmissionAssessment(directory, spawnChild)).toBe('{"state":"confirmed"}\n');
+    }, CASE_MS);
+  },
+  CASE_MS,
+);
 
 it.each(['marker-create', 'success', 'qualified-rejection'])(
   'preserves canonical HTTP outcome and custody after publication failure at %s',
   async (fault) => {
-    await withAuditReceipt(async ({ journal, assess }) => {
+    await withAuditReceipt(async ({ journal, assess, spawnChild }) => {
       const directory = join(journal, '..');
       const module = new URL('../../scripts/verification-submissions.mjs', import.meta.url).href;
       const clientModule = new URL('../src/orchestrator/index.ts', import.meta.url).href;
-      const writer = spawnSync(
+      const writer = spawnChild(
+        'writer',
         process.execPath,
         [
           '--input-type=module',
@@ -566,7 +584,6 @@ try{
             DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
           },
           encoding: 'utf8',
-          timeout: 5000,
         },
       );
 
@@ -576,7 +593,9 @@ try{
       expect(writer.stdout).toBe('publication-failure-preserved\n');
       expect(writer.stderr).toBe('');
       const state = fault === 'marker-create' ? 'confirmed' : 'unconfirmed';
-      expect(freshSubmissionAssessment(directory)).toBe(`${JSON.stringify({ state })}\n`);
+      expect(freshSubmissionAssessment(directory, spawnChild)).toBe(
+        `${JSON.stringify({ state })}\n`,
+      );
       // The settled row is visible but its retained marker keeps the labelled call unsettled.
       expect(await assess()).toStrictEqual(
         fault === 'marker-create'
@@ -598,8 +617,9 @@ try{
               },
             },
       );
-    });
+    }, CASE_MS);
   },
+  CASE_MS,
 );
 
 it.each(['missing', 'malformed'])(
@@ -698,7 +718,7 @@ it.each(
 )(
   'tracks actual selected Docker dispatch before its $mode $outcome process',
   async ({ mode, outcome }) => {
-    await withAuditReceipt(async ({ journal }) => {
+    await withAuditReceipt(async ({ journal, spawnChild }) => {
       const directory = join(journal, '..');
       const binaries = join(directory, 'bin');
       const witness = join(directory, 'dispatched');
@@ -729,18 +749,18 @@ void import(${JSON.stringify(submissionsModule)}).then(({requireVerificationSubm
       );
       // Darwin admits a freshly written executable's first exec slowly and system-wide; that cost
       // is paid once here, outside the timed dispatch, whose bound is unchanged.
-      const warmUp = spawn(join(binaries, 'docker'), ['warm-up'], { stdio: 'ignore' });
-      const [warmUpStatus, warmUpSignal] = (await once(warmUp, 'close')) as [
-        number | null,
-        NodeJS.Signals | null,
-      ];
-      expect({ status: warmUpStatus, signal: warmUpSignal }).toEqual({ status: 0, signal: null });
+      const warmUp = spawnChild('warm-up', join(binaries, 'docker'), ['warm-up'], {
+        stdio: 'ignore',
+        encoding: 'utf8',
+      });
+      expect({ status: warmUp.status, signal: warmUp.signal }).toEqual({ status: 0, signal: null });
       if (outcome === 'missing-authority')
         await rename(
           join(directory, SUBMISSION_AUTHORITY),
           join(directory, `${SUBMISSION_AUTHORITY}.retired`),
         );
-      const writer = spawnSync(
+      const writer = spawnChild(
+        'writer',
         process.execPath,
         [
           '--input-type=module',
@@ -788,7 +808,6 @@ try{
             DSH_TEAM_VERIFICATION_SUBMISSIONS: join(directory, SUBMISSION_JOURNAL),
           },
           encoding: 'utf8',
-          timeout: 5000,
         },
       );
 
@@ -809,9 +828,12 @@ try{
       }
       const state =
         outcome === 'nonzero' || outcome === 'missing-authority' ? 'unconfirmed' : 'confirmed';
-      expect(freshSubmissionAssessment(directory)).toBe(`${JSON.stringify({ state })}\n`);
+      expect(freshSubmissionAssessment(directory, spawnChild)).toBe(
+        `${JSON.stringify({ state })}\n`,
+      );
       if (outcome === 'observation')
         expect(await readFile(join(directory, SUBMISSION_JOURNAL), 'utf8')).toBe('');
-    });
+    }, CASE_MS);
   },
+  CASE_MS,
 );

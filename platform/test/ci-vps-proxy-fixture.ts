@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -6,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { networkRegistration } from '../../scripts/probe-browser-network.mjs';
+import { caseSpawn } from './trusted-docker-fixture.ts';
 
+// After the worker: its receipt and journal reads, the proxy worker's stop, the home's removal.
+const RESERVE_MS = 2000;
 const repository = resolve(import.meta.dirname, '../..');
 const executable = String.raw`import fs from 'node:fs';
 import cp from 'node:child_process';
@@ -79,7 +81,9 @@ else if(role==='pnpm'){
 
 export async function runWorkerProxyScenario(
   mode: 'execute' | 'finalize-locked' | 'browser-rescue',
+  caseMs: number,
 ) {
+  const { spawn } = caseSpawn(caseMs, RESERVE_MS);
   const home = await mkdtemp(join(tmpdir(), 'dsh-worker-proxy-'));
   const invocation = randomUUID();
   const canary = randomUUID();
@@ -195,7 +199,8 @@ cp.spawnSync=(binary,args,options)=>{
         );
       }
     }
-    const result = spawnSync(
+    const result = spawn(
+      'worker',
       process.execPath,
       [
         '--import',
@@ -204,7 +209,7 @@ cp.spawnSync=(binary,args,options)=>{
         mode === 'execute' ? mode : 'finalize-locked',
         invocation,
       ],
-      { env: { HOME: home, PATH: bin }, encoding: 'utf8', timeout: 10_000, maxBuffer: 16_384 },
+      { env: { HOME: home, PATH: bin }, encoding: 'utf8', maxBuffer: 16_384 },
     );
     if (result.error || result.signal !== null)
       throw new Error('Owned worker proxy fixture did not settle');

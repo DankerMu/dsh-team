@@ -22,8 +22,8 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Every case in `browser-build.integration.test.ts`, `trusted-docker-audit.integration.test.ts` (#2 and the five sibling cases), `ci-vps-proxy.integration.test.ts` and `profile-seed.integration.test.ts` (both cases) declares a named `CASE_MS` with its basis.
-- [ ] 1.2 Every synchronous child of these suites runs through `caseBudget(deadline).run`:
+- [x] 1.1 Every case in `browser-build.integration.test.ts`, `trusted-docker-audit.integration.test.ts` (#2 and the five sibling cases), `ci-vps-proxy.integration.test.ts` and `profile-seed.integration.test.ts` (both cases) declares a named `CASE_MS` with its basis.
+- [x] 1.2 Every synchronous child of these suites runs through `caseBudget(deadline).run`:
   - the verifier and finalizer in `browser-build-fixture.ts`;
   - the spawn in `ci-vps-proxy-fixture.ts`;
   - the writers and warm-up in `trusted-docker-audit.integration.test.ts`, and the `freshSubmissionAssessment`/`ordinarySubmission`/`withAuditReceipt` helpers in `trusted-docker-audit-fixture.ts`;
@@ -41,10 +41,10 @@
 
   At #1 the `docker.mjs` stand-in records its pid and start identity in a fixture-owned log. After a cut the fixture identity-checks each recorded pid, reports the live ones and kills only the matching ones. #4 reports "descendants: not observed".
 
-- [ ] 1.3 Record a verdict, in the PR, for any other `platform/test/*.integration.test.ts` case found to inherit 5 s around a synchronous child (`grep -n spawnSync`). Do not change those cases here.
-- [ ] 1.4 Red→green at one sync site with a child that completes normally but slower than `CASE_MS`. Before the fix: bare `Test timed out`. After: the cut kill with its attribution. Record both texts in the PR. The temporary slow child is not committed.
+- [x] 1.3 Record a verdict, in the PR, for any other `platform/test/*.integration.test.ts` case found to inherit 5 s around a synchronous child (`grep -n spawnSync`). Do not change those cases here.
+- [x] 1.4 Red→green at one sync site with a child that completes normally but slower than `CASE_MS`. Before the fix: bare `Test timed out`. After: the cut kill with its attribution. Record both texts in the PR. The temporary slow child is not committed.
 
 ## 2. Verification
 
-- [ ] 2.1 Five full `pnpm test:integration` runs with 1-minute load ≥ 13, using bounded load generators that are stopped afterwards; record the load and result of each. Also `pnpm check`.
+- [x] 2.1 Five full `pnpm test:integration` runs with 1-minute load ≥ 13, using bounded load generators that are stopped afterwards; record the load and result of each. Also `pnpm check`.
 - [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.

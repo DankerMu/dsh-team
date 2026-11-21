@@ -1,5 +1,5 @@
-import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import {
   cp,
   mkdtemp,
@@ -13,12 +13,19 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { processIdentity } from '../../scripts/probe-browser-native.mjs';
+import { caseSpawn } from './trusted-docker-fixture.ts';
+import type { CaseSpawn } from './trusted-docker-fixture.ts';
 import { vitestSpawnInterception } from './vitest-stand-in-fixture.ts';
 
+const native = new URL('../../scripts/probe-browser-native.mjs', import.meta.url).href;
+// After the last child: receipt reads, a cut's descendant check and kill, the root's removal.
+const RESERVE_MS = 5000;
 const verifier = resolve(import.meta.dirname, '../../scripts/verify-browser-runtime.mjs');
-const executable = String.raw`import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+const executable = String.raw`import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { processBirth } from ${JSON.stringify(native)};
 const root=dirname(fileURLToPath(import.meta.url));
 const file=join(root,'daemon.json');
 const state=JSON.parse(readFileSync(file,'utf8'));
@@ -33,6 +40,8 @@ const save=()=>{writeFileSync(file+'.pending',JSON.stringify(state));renameSync(
 if(args[0]==='--user')process.stdout.write('LoadState=not-found\n');
 else if(args[0]==='info')process.stdout.write(JSON.stringify({OSType:'linux',Architecture:'amd64',SecurityOptions:[]}));
 else if(args[0]==='build') {
+ // A build can outlive its killed verifier: record who it is before it can hang.
+ appendFileSync(join(root,'descendants.jsonl'),JSON.stringify({pid:process.pid,birth:await processBirth(process.pid)})+'\n');
  if(state.mode==='absent'){
   // The invocation-private build context is runtime-selected; load its delivered import closure.
   const context=args.find(value=>value.startsWith('browser-runtime=')).slice('browser-runtime='.length);
@@ -76,6 +85,52 @@ else if(args[0]==='build') {
 save();
 `;
 
+/** After a cut: report each recorded stand-in still alive, killing it only if its birth matches. */
+function retireDescendants(root: string, budget: ReturnType<typeof caseSpawn>['budget']) {
+  const path = join(root, 'descendants.jsonl');
+  if (!existsSync(path)) return 'none recorded';
+  const recorded = readFileSync(path, 'utf8')
+    .trimEnd()
+    .split('\n')
+    .map((line) => {
+      // processIdentity validates both fields; its untyped module leaves them untyped.
+      const identity = processIdentity(JSON.parse(line) as unknown);
+      return { pid: Number(identity.pid), birth: String(identity.birth) };
+    });
+  const source = `import {liveProcessBirth} from ${JSON.stringify(native)};
+process.stdout.write(JSON.stringify(await Promise.all(JSON.parse(process.argv[1]).map(liveProcessBirth))));`;
+  const args = [
+    '--input-type=module',
+    '-e',
+    source,
+    JSON.stringify(recorded.map(({ pid }) => pid)),
+  ];
+  // Terminal evidence keeps its own bound once the case deadline has cut the verifier.
+  const observed = budget.unbounded(() =>
+    budget.run('descendant identity', process.execPath, args, {
+      encoding: 'utf8',
+      timeout: 3000,
+      killSignal: 'SIGKILL',
+    }),
+  );
+  if (observed.status !== 0) return 'unobservable';
+  const births = JSON.parse(observed.stdout) as unknown[];
+  return recorded
+    .map(({ pid, birth }, index) => {
+      if (births[index] === null) return `pid=${String(pid)} gone`;
+      if (births[index] !== birth) return `pid=${String(pid)} reused, retained`;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch (error) {
+        // Only absence since the observation is tolerated; anything else is reported as is.
+        if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
+        return `pid=${String(pid)} gone`;
+      }
+      return `pid=${String(pid)} alive, killed`;
+    })
+    .join(', ');
+}
+
 async function optionalJson(path: string): Promise<unknown> {
   try {
     return JSON.parse(await readFile(path, 'utf8')) as unknown;
@@ -92,6 +147,7 @@ async function finalizeFailedBuild(
   directory: string,
   tool: string,
   mode: RescueMode,
+  spawn: CaseSpawn,
 ) {
   const invocation = randomUUID();
   const workerRoot = join(root, '.local/share/dsh-team/ci', invocation);
@@ -123,10 +179,11 @@ cp.spawnSync=(binary,args,options)=>original(['docker','systemctl'].includes(bin
 syncBuiltinESMExports();`,
   );
   const worker = resolve(import.meta.dirname, 'ci-vps-worker.ts');
-  const result = spawnSync(
+  const result = spawn(
+    'finalizer',
     process.execPath,
     ['--import', preload, worker, 'finalize-locked', invocation],
-    { env: { HOME: root, PATH: join(root, 'bin') }, encoding: 'utf8', timeout: 10_000 },
+    { env: { HOME: root, PATH: join(root, 'bin') }, encoding: 'utf8' },
   );
   if (result.error || result.signal !== null) throw new Error('Owned finalizer did not settle');
   return {
@@ -137,6 +194,7 @@ syncBuiltinESMExports();`,
 }
 
 export async function runBrowserBuildFailure(
+  caseMs: number,
   mode:
     | 'absent'
     | 'changed-after-publication'
@@ -157,6 +215,7 @@ export async function runBrowserBuildFailure(
   artifactRuntime?: string,
 ) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-browser-build-'));
+  const { spawn } = caseSpawn(caseMs, RESERVE_MS, (budget) => retireDescendants(root, budget));
   const canary = `private-${randomUUID()}`;
   try {
     const bin = join(root, 'bin');
@@ -205,7 +264,7 @@ cp.spawnSync=(binary,args,options)=>{
  return original(state.mode==='spawn-failed'?${JSON.stringify(join(root, 'absent-docker'))}:binary,args,state.mode==='deadline'?{...options,timeout:50}:options);
 };${vitestSpawnInterception(vitest, join(root, 'spawns.jsonl'))}syncBuiltinESMExports();`,
     );
-    const result = spawnSync(process.execPath, ['--import', preload, verifier, 'docker'], {
+    const result = spawn('verifier', process.execPath, ['--import', preload, verifier, 'docker'], {
       env: {
         PATH: bin,
         HOME: root,
@@ -214,7 +273,6 @@ cp.spawnSync=(binary,args,options)=>{
         ...(artifactRuntime === undefined ? {} : { DSH_TEAM_VERIFICATION_IMAGES: artifactRuntime }),
       },
       encoding: 'utf8',
-      timeout: 10_000,
       maxBuffer: 65_536,
     });
     if (result.error || result.signal !== null) throw new Error('Owned verifier did not settle');
@@ -232,7 +290,9 @@ cp.spawnSync=(binary,args,options)=>{
         return undefined;
       throw error;
     });
-    const rescued = rescue ? await finalizeFailedBuild(root, directory, tool, rescue) : undefined;
+    const rescued = rescue
+      ? await finalizeFailedBuild(root, directory, tool, rescue, spawn)
+      : undefined;
     return {
       exit: result.status,
       rescued,

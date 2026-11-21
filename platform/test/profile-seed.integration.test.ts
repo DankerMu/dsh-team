@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -13,6 +12,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { profileSeedOracle, profileSeedScript } from './profile-seed-fixture.ts';
+import { caseSpawn } from './trusted-docker-fixture.ts';
+
+// One cold python3 observer that walks, hashes and stats a small tree (the complete case also
+// runs one stand-in node), under a loaded host; unloaded each case takes under 1.5s.
+const CASE_MS = 20_000;
+// After the observer: parsing its readback, the assertions and the synchronous tree removal.
+const RESERVE_MS = 2000;
 
 /** Independent observations at the Python JSON seam, not a mock claiming Docker capability. */
 function observations() {
@@ -232,10 +238,11 @@ describe('profile seed observed-behavior oracle', () => {
   });
 });
 
-describe('profile seed filesystem observer', () => {
+describe('profile seed filesystem observer', { timeout: CASE_MS }, () => {
   it.each(['missing', 'empty', 'partial'] as const)(
     'fails on an actual %s seed tree rather than emitting a success observation',
     (kind) => {
+      const { spawn } = caseSpawn(CASE_MS, RESERVE_MS);
       const directory = mkdtempSync(join(tmpdir(), 'dsh-team-test-seed-observer-'));
       const seed = join(directory, 'seed');
       const live = join(directory, 'live');
@@ -253,13 +260,16 @@ describe('profile seed filesystem observer', () => {
           );
         }
 
-        const result = spawnSync('python3', ['-c', profileSeedScript, 'reuse', seed, live], {
-          env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
-          encoding: 'utf8',
-          timeout: 10_000,
-          killSignal: 'SIGKILL',
-          maxBuffer: 1024 * 1024,
-        });
+        const result = spawn(
+          'observer',
+          'python3',
+          ['-c', profileSeedScript, 'reuse', seed, live],
+          {
+            env: { PATH: '/usr/local/bin:/usr/bin:/bin' },
+            encoding: 'utf8',
+            maxBuffer: 1024 * 1024,
+          },
+        );
 
         expect(result.error).toBeUndefined();
         expect(result.status).toBe(1);
@@ -279,6 +289,7 @@ describe('profile seed filesystem observer', () => {
   );
 
   it('judges a complete tree inside the observer and reports only digests, counts and the exact differences', () => {
+    const { spawn } = caseSpawn(CASE_MS, RESERVE_MS);
     const directory = mkdtempSync(join(tmpdir(), 'dsh-team-test-seed-observer-'));
     const opt = join(directory, 'opt');
     const seed = join(opt, 'dsh-team/profile-seed');
@@ -325,11 +336,9 @@ describe('profile seed filesystem observer', () => {
       // One writable seed file is the single permission violation the observer must count.
       chmodSync(join(seed, 'web/cordis.yml'), 0o644);
 
-      const result = spawnSync('python3', ['-c', profileSeedScript, 'reuse', seed, live], {
+      const result = spawn('observer', 'python3', ['-c', profileSeedScript, 'reuse', seed, live], {
         env: { PATH: `${bin}:/usr/local/bin:/usr/bin:/bin` },
         encoding: 'utf8',
-        timeout: 10_000,
-        killSignal: 'SIGKILL',
         maxBuffer: 1024 * 1024,
       });
 

@@ -8,7 +8,7 @@
 
 - **One primitive, unchanged messages.** Each child runs through `caseBudget(deadline).run(phase, file, args, options)` (`trusted-docker-fixture.ts:129-156`).
   - Its existing message `"<phase>: killed at the case deadline after <n>ms"` stays byte-identical, because `trusted-docker-custody.integration.test.ts:639` anchors it with `$`.
-  - Extra attribution, such as live descendants, goes in the site fixture's own wrapping error or in `error.cause`, never as a suffix to that message.
+  - Extra attribution, such as live descendants, goes in a wrapping error (`caseSpawn`, beside `caseBudget`): its message repeats the cut message and appends `; descendants: …`, and the original `caseBudget` error is kept byte-identical as its `cause`. The `caseBudget` message itself never gains a suffix.
   - If `caseBudget` gains a kill-signal option, its default is unchanged for its existing `run` callers (`trusted-docker-fixture.ts:355,392,436,608`), and `custody:639,640,660,686` keep passing.
 - **The cut always applies.** At these sites the child's own `timeout` default is set to at least the case budget (for example `CASE_MS`), so `min(default, deadline − now − RESERVE_MS)` is always the cut and `caseBudget` always attributes it.
   - Every timeout at these sites uses `killSignal: 'SIGKILL'`.
@@ -31,4 +31,4 @@ In scope, because they are the same family:
 - `trusted-docker-audit-fixture.ts` `freshSubmissionAssessment` (`:32-46`), `ordinarySubmission` (`:61-84`) and `withAuditReceipt` (`:119-138`);
 - the finalizer in `browser-build-fixture.ts:126-130`.
 
-Other `*.integration.test.ts` files that run sync children are recorded as verdicts in the PR, not changed. The requirement is scoped to the four suites.
+Other `*.integration.test.ts` cases that run sync children are recorded as verdicts in the PR, not changed. That includes the remaining 18 trusted-Docker audit cases, whose `withAuditReceipt` registration child has a fixed 5000 ms limit. The requirement binds only cases that declare a budget, plus the named suites and cases.
