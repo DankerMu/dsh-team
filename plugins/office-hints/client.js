@@ -2,9 +2,9 @@
 /**
  * Classic-script client half of the Office hints plugin. While an ONLYOFFICE viewer
  * (`onlyoffice:<ext>`) is registered and enabled in better-sidebar, a higher-priority wrapper
- * viewer `office-hints:<ext>` shows the collaboration hint above the ONLYOFFICE editor, or only
- * the Session hint when the tab has no Session. Otherwise nothing is registered and the file
- * goes wherever it went without this plugin.
+ * viewer `office-hints:<ext>` shows the collaboration hint and the restart note above the
+ * ONLYOFFICE editor, or only the Session hint when the tab has no Session. Otherwise nothing is
+ * registered and the file goes wherever it went without this plugin.
  */
 (() => {
   const EXTS = ['docx', 'xlsx', 'pptx'];
@@ -14,6 +14,9 @@
   const COLLAB = '请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。';
   const NO_SESSION = '请先新建或进入一个会话（Session），再打开 Office 文件。';
   const UNAVAILABLE = 'Office 编辑器未加载，请关闭后重新打开此文件。';
+  // The bundled Document Server restarts docservice once more after it starts (#648).
+  const RESTART =
+    'Office 服务刚启动或重启后约 2 分钟内，编辑器可能断开；如果断开，请稍后重新打开此文件，未保存的修改可能丢失。';
   const NOTICE = {
     padding: '6px 12px',
     fontSize: '12px',
@@ -79,6 +82,7 @@
             if (viewer === undefined) return frame(h('div', { style: NOTICE }, UNAVAILABLE));
             return frame(
               h('div', { [HINT]: 'collab', role: 'note', style: NOTICE }, COLLAB),
+              h('div', { [HINT]: 'restart', role: 'note', style: NOTICE }, RESTART),
               h('div', { style: { flex: '1 1 0', minHeight: 0 } }, h(viewer.component, props)),
             );
           };

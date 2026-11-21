@@ -1,8 +1,14 @@
-import { extname } from 'node:path';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { extname, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import type { ConsoleMessage, Page } from '@playwright/test';
 import { expect } from 'vitest';
 import { previewIds, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
+import { record } from './docker-cleanup.ts';
+import { createDockerCommands, isAbsentResource } from './docker-command.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
@@ -14,6 +20,9 @@ const NAME = '同写提示.docx';
 const PARAGRAPH = '同写提示探针：只打开，不编辑。';
 /** Baseline F40, verbatim: plugins/office-hints/client.js `COLLAB`. */
 export const COLLAB = '请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。';
+/** The Document Server startup-window note, verbatim: plugins/office-hints/client.js `RESTART`. */
+export const RESTART =
+  'Office 服务刚启动或重启后约 2 分钟内，编辑器可能断开；如果断开，请稍后重新打开此文件，未保存的修改可能丢失。';
 const MOUNT = '/sidebar/onlyoffice/ds/';
 // dsh-sidebar-onlyoffice@0.2.0 src/client/locales.ts, zh then en: `loading`; then `loadFailed`,
 // `errFetch`, `errApi`, `errEditor`, `errEditorEvent`; last office-hints' own `UNAVAILABLE`.
@@ -115,13 +124,14 @@ export interface OfficeHintsEvidence {
   readonly browser: StackBrowserEvidence;
   readonly file: ArchiveEntry;
   readonly hint: string;
+  readonly restart: string;
 }
 
-/** The stack evidence line: the file, the hint text and the screenshot names. */
+/** The stack evidence line: the file, the hint and note texts and the screenshot names. */
 export function officeHintsLine(evidence: OfficeHintsEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office hints evidence missing');
-  const { browser, file, hint } = evidence;
-  return { ...file, hint, screenshots: browser.screenshots };
+  const { browser, file, hint, restart } = evidence;
+  return { ...file, hint, restart, screenshots: browser.screenshots };
 }
 
 /** `until`, failing with `message` and the last observation `seen()`, the wait's error as cause. */
@@ -171,8 +181,12 @@ export async function openHinted(
   const final = await page.evaluate<OfficeFacts>(officeFacts(name));
   await shoot(screenshot);
   const seen = JSON.stringify(final);
-  const hint = { kind: 'collab', text: COLLAB, visible: true, nativeHost: true };
-  expect(final.hints, `Office hints, seen ${seen}`).toEqual([hint]);
+  const shownHint = { visible: true, nativeHost: true };
+  const hints = [
+    { kind: 'collab', text: COLLAB, ...shownHint },
+    { kind: 'restart', text: RESTART, ...shownHint },
+  ];
+  expect(final.hints, `Office hints, seen ${seen}`).toEqual(hints);
   expect(final.texts, 'ONLYOFFICE loading or failure text').toEqual([]);
   // [sameOrigin, on the proxy path] of every visible iframe in the wrapper.
   const shown = final.iframes.filter((frame) => frame.visible);
@@ -193,12 +207,46 @@ export async function documentServerReady({ exec, session }: ArchiveLane) {
   await untilSeen(() => seen, healthy, session.timeout, message);
 }
 
+/**
+ * The delivered Document Server's anonymous volumes: after the lifecycle's own exact retirement,
+ * `--volumes` must have taken each one with it.
+ */
+export async function expectVolumesRetired(volumes: readonly string[]): Promise<void> {
+  const config = await mkdtemp(join(tmpdir(), 'dsh-team-test-docker-'));
+  try {
+    const root = fileURLToPath(new URL('../../', import.meta.url));
+    const { command } = createDockerCommands(root, config, true);
+    for (const volume of volumes)
+      expect(
+        isAbsentResource(command(['volume', 'inspect', volume], 30_000), 'volume', volume),
+        'Document Server anonymous volume retired',
+      ).toBe(true);
+  } finally {
+    await rm(config, { recursive: true, force: true });
+  }
+}
+
 /** How many times supervisord has spawned docservice since the Document Server started. */
 export async function docserviceSpawns(run: DockerOutput): Promise<number> {
   const grep = ['grep', '-c', "spawned: 'docservice'", '/var/log/supervisor/supervisord.log'];
   const count = (await run(['exec', DOCUMENT_SERVER, ...grep])).trim();
   if (!/^\d+$/.test(count)) throw new Error(`docservice spawn count unreadable: ${count}`);
   return Number(count);
+}
+
+const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * The test's own oracle for run-document-server.sh's last step, `xargs tail -F`: `true` once it
+ * runs, else why not. pgrep without a match exits 1, which `run` throws as not yet.
+ */
+async function finalStepRunning(run: DockerOutput): Promise<true | string> {
+  try {
+    await run(['exec', DOCUMENT_SERVER, 'pgrep', '-f', 'xargs tail -F']);
+    return true;
+  } catch (error) {
+    return failure(error);
+  }
 }
 
 /**
@@ -208,15 +256,12 @@ export async function docserviceSpawns(run: DockerOutput): Promise<number> {
  */
 export async function documentServerStarted(run: DockerOutput, timeout: number) {
   let seen = 'never polled';
-  // `until` does not catch: pgrep without a match exits 1, which `run` throws as not yet.
+  // `until` does not catch.
   const started = async () => {
-    try {
-      await run(['exec', DOCUMENT_SERVER, 'pgrep', '-f', 'xargs tail -F']);
-      return true;
-    } catch (error) {
-      seen = error instanceof Error ? error.message : String(error);
-      return false;
-    }
+    const step = await finalStepRunning(run);
+    if (step === true) return true;
+    seen = step;
+    return false;
   };
   const message = 'Document Server startup script not finished, last';
   await untilSeen(() => seen, started, timeout, message);
@@ -226,6 +271,117 @@ export async function documentServerStarted(run: DockerOutput, timeout: number) 
   if (Number.isNaN(since))
     throw new Error(`Document Server StartedAt unreadable: ${JSON.stringify(startedAt)}`);
   return { startupMs: Date.now() - since, spawns: await docserviceSpawns(run) };
+}
+
+/** One sample: Docker's health status, then the oracle, and the failed probes Docker still keeps. */
+export interface HealthSample {
+  readonly status: string;
+  readonly finalStep: boolean;
+  /** `Health.Log` entries (Docker keeps the last five) whose probe ran and exited nonzero. */
+  readonly failedProbes: number;
+  /** Since the container's StartedAt. */
+  readonly ms: number;
+  /** Why the oracle did not see the final step: a real absence or a failed exec. */
+  readonly oracle?: string;
+}
+
+export interface HealthTimeline {
+  readonly samples: readonly HealthSample[];
+  /** docservice spawns read right after the first healthy sample. */
+  readonly healthySpawns?: number;
+  readonly error?: string;
+}
+
+/** One State read: the health status, the failed probes kept in its log and the time since start. */
+async function healthState(run: DockerOutput) {
+  const state = record(
+    JSON.parse(await run(['inspect', '--format', '{{json .State}}', DOCUMENT_SERVER])),
+  );
+  const health: unknown = state.Health;
+  const since = Date.parse(String(state.StartedAt));
+  if (typeof health !== 'object' || health === null || Number.isNaN(since))
+    throw new Error('Document Server health unreadable');
+  const { Status: status, Log: log } = record(health);
+  if (typeof status !== 'string' || !Array.isArray(log))
+    throw new Error('Document Server health unreadable');
+  const failedProbes = log.filter((entry) => Number(record(entry).ExitCode) > 0).length;
+  return { status, failedProbes, ms: Date.now() - since };
+}
+
+/**
+ * Samples the delivered Document Server from `compose up` on (#648): each sample reads Docker's
+ * health first and runs the oracle second, so a healthy sample whose oracle fails is a real
+ * violation, never the probe's lag. Sampling ends once settled after a healthy sample, at an
+ * `unhealthy` report, when aborted, or `timeout` after it began; the result never rejects.
+ * Docker probes every 5 s while starting (deploy/compose.yml); the 1 s default `interval` places
+ * each status change within a second without crowding the daemon.
+ */
+export function sampleDocumentServerHealth(run: DockerOutput, timeout: number, interval = 1_000) {
+  const deadline = performance.now() + timeout;
+  const samples: HealthSample[] = [];
+  let settling = false;
+  let aborted = false;
+  let healthySpawns: number | undefined;
+  const sampling = async (): Promise<HealthTimeline> => {
+    while (!aborted) {
+      const { status, failedProbes, ms } = await healthState(run);
+      const step = await finalStepRunning(run);
+      const seen = step === true ? {} : { oracle: step };
+      samples.push({ status, finalStep: step === true, failedProbes, ms, ...seen });
+      if (status === 'healthy') healthySpawns ??= await docserviceSpawns(run);
+      const settled = settling && healthySpawns !== undefined;
+      if (settled || status === 'unhealthy' || performance.now() >= deadline) break;
+      await delay(interval);
+    }
+    return { samples, ...(healthySpawns === undefined ? {} : { healthySpawns }) };
+  };
+  const timeline = sampling().catch((error: unknown): HealthTimeline => ({
+    samples,
+    error: failure(error),
+  }));
+  return {
+    /** Joins the sampler once it has a healthy sample (or has ended). */
+    settle: () => {
+      settling = true;
+      return timeline;
+    },
+    /** Ends it after the current sample, healthy or not: the failure path, before drainage. */
+    abort: () => {
+      aborted = true;
+      return timeline;
+    },
+  };
+}
+
+/**
+ * The health timeline's evidence line; throws on the first broken claim: never healthy before the
+ * oracle saw the final step, a probe that ran and said no while it was missing, a healthy sample.
+ */
+export function healthTimelineLine({ samples, healthySpawns, error }: HealthTimeline) {
+  const seen = (subset: readonly HealthSample[]) => JSON.stringify(subset.slice(-5));
+  if (error !== undefined) throw new Error(`Document Server health sampling failed: ${error}`);
+  const early = samples.filter(({ status, finalStep }) => status === 'healthy' && !finalStep);
+  if (early.length > 0)
+    throw new Error(`Document Server healthy before its final step: ${seen(early)}`);
+  const before = samples.filter(({ finalStep }) => !finalStep);
+  if (!before.some(({ status, failedProbes }) => status === 'starting' && failedProbes > 0))
+    throw new Error(
+      `No failed Document Server probe sampled before its final step: ${seen(before)}`,
+    );
+  const healthy = samples.filter(({ status }) => status === 'healthy');
+  const [first] = healthy;
+  if (first === undefined || healthySpawns === undefined)
+    throw new Error(`Document Server never sampled healthy, last ${seen(samples)}`);
+  // Every healthy sample saw the final step, so one exists; the first is never after `first`.
+  const step = samples.find(({ finalStep }) => finalStep) ?? first;
+  return {
+    samples: samples.length,
+    beforeFinalStep: before.length,
+    healthy: healthy.length,
+    finalStepMs: step.ms,
+    healthyMs: first.ms,
+    spawns: healthySpawns,
+  };
 }
 
 /** The write, the browser session and every check of the lane; cleanup is the caller's. */
@@ -255,8 +411,8 @@ async function officeHints(lane: ArchiveLane): Promise<OfficeHintsEvidence> {
     failedRequests: [],
     externalRequests: [],
   });
-  // openHinted asserted the shown hint verbatim.
-  return { browser, file, hint: COLLAB };
+  // openHinted asserted the shown hint and note verbatim.
+  return { browser, file, hint: COLLAB, restart: RESTART };
 }
 
 /**

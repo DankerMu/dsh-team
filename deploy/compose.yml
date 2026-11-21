@@ -86,6 +86,27 @@ services:
       JWT_ENABLED: "true"
       JWT_SECRET: ${DOCUMENT_SERVER_JWT_SECRET:?Set DOCUMENT_SERVER_JWT_SECRET for the bundled Document Server}
       ALLOW_PRIVATE_IP_ADDRESS: "true"
+    # Ready only once run-document-server.sh reaches its final step, `xargs tail -F`: the allfonts
+    # step before it restarts docservice and converter after /healthcheck already answers (#648).
+    # The platform image the deploy stand-in runs has no pgrep, so grep scans each /proc cmdline
+    # for argv[0] exactly `xargs`, then `tail` and `-F`. NUL-separated, the pattern never matches
+    # its own sh or grep, the startup script's bash line, or the stack lane's `pgrep -f`, and never
+    # spells the final step with spaces for that pgrep to see. Nothing waits on it: it is the operator's signal.
+    # start_period covers the measured 70-135 s window with room for a first allfonts run on a
+    # slow host; start_interval reports healthy within 5 s of the final step. Afterwards Docker's
+    # default interval and retries (30 s, 3) turn a vanished final step unhealthy within ~90 s;
+    # the probe is one grep over /proc, so 10 s of timeout only absorbs a loaded host.
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - -c
+        - grep -qsaP '^xargs\x00tail\x00-F\x00' /proc/*/cmdline
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      start_interval: 5s
+      retries: 3
     volumes:
       # Operator-supplied fonts, resolved from --project-directory (the repository root).
       - type: bind
