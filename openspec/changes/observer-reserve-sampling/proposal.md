@@ -9,7 +9,7 @@
 - With stalls=true, `beforeRelease` first waits until the stub server has received both the `POST /networks/create` and the `DELETE /networks/owned-effect` request (a resolver keyed on that request line in the stub server), then asserts the first sample is exactly the participant, POST and DELETE markers, so both samples observe a quiescent child: the DELETE marker is written before its request leaves, its response is held by `bound` (released only after `beforeRelease`), POST and DELETE aborts are not `DockerHttpError` and never settle, and `finish()` runs only on a zero exit. The wait races the child's exit (the fixture's existing `observed.closed` pattern) and fails at once with the request list and stderr, adding no deadline.
 - `:478`'s failure message names every added or missing marker id with its `observer` field.
 - The `beforeRelease` oracle becomes one test-local helper taking `quiescent()` and `sample()`, used by the real case and a separate deterministic regression case. In the regression case the child first issues a GET (an observation: no marker) that the stub server holds; the oracle's first observable action opens that gate. Only `quiescent()` opens the gate, so with the fixed order both samples see three markers, while with the old order (`sample()` first) the first sample sees only the participant and the case fails deterministically on the second sample. The red run against the old order is PR evidence only; the old oracle is not kept in the repo.
-- Spec: a requirement that a rejected observer reservation leaves the submission journal unchanged.
+- Spec: a requirement that a reservation rejected before any submission is reserved leaves the submission pending markers and the current manifest unchanged.
 - Nothing else: no change to the 200 ms abort, any wall-clock deadline, sleeps/retries, product scripts, or the assertions at `:498`, `:517-535`, `:555-562`; stalls=false unchanged.
 
 ## Triage
@@ -29,7 +29,7 @@ Evidence floor: deterministic red→green regression; the file repeated; 5 full 
 
 ### Modified Capabilities
 
-- `trusted-docker-verification`: adds the rejected-reservation journal invariant.
+- `trusted-docker-verification`: adds the rejected-reservation pending-marker invariant.
 
 ## Impact
 
