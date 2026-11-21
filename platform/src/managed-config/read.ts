@@ -52,7 +52,7 @@ try {
     // threw on any skip: a skip here is a profile/home row. Like DSH, only a row whose target is
     // absent (e.g. an overlay-inserted id) is skipped; every other skip still fails.
     const entries = composeEntries([...bundleLayers, profile.patches, homePatch], (message) => {
-      if (!/^patch: entry ".*" not found$/.test(message)) throw new Error(FAIL);
+      if (!/^patch: entry ".*" not found$/s.test(message)) throw new Error(FAIL);
     });
     const localePatch = loadOverlayPatches('dsh', ${JSON.stringify(CANONICAL_LOCALE_PATCH)});
     const bundles = BUNDLE_IDS.map((id) => {
