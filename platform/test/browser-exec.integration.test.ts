@@ -62,7 +62,9 @@ vi.mock('node:child_process', async (importOriginal) => {
       if (!execution.docker) throw new Error('Unexpected Docker process in browser exec control');
       return execution.docker(args);
     },
-    spawn(binary: string, args: readonly string[]) {
+    spawn(binary: string, args: readonly string[], options: ChildProcess.SpawnOptions) {
+      // Darwin process birth observation is real; no other external process is.
+      if (binary === '/usr/bin/python3') return actual.spawn(binary, args, options);
       if (binary !== 'docker' || args[0] !== 'exec')
         throw new Error('Unexpected external process in browser exec control');
       const child = actual.spawn(
