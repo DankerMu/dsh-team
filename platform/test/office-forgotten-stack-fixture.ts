@@ -16,7 +16,7 @@ import {
   NODE,
   officeIsolationScenario,
   redactSecrets,
-  REGISTRY,
+  registryKeys,
   script,
   verify,
 } from './office-isolation-stack-fixture.ts';
@@ -276,16 +276,6 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 text = ''.join(el.text or '' for el in ElementTree.fromstring(body).iter() if el.tag.rpartition('}')[2] == 't')
 print(json.dumps({'text': text}))`;
 
-/** The registered document key for `path` — the exact docId the Document Server uses, so the
- * forgotten copy is keyed by it. `null` when no entry names the path yet. */
-const REGISTRY_KEY = `import json, sys
-try:
-    entries = json.load(open(sys.argv[1]))["entries"]
-except (OSError, ValueError):
-    entries = []
-keys = [e["key"] for e in entries if (e.get("entry") or {}).get("path") == sys.argv[2]]
-print(json.dumps({"key": keys[0] if keys else None}))`;
-
 // The delivered Document Server's forgotten store (fs storage, default folderPath).
 const FORGOTTEN_DIR = '/var/lib/onlyoffice/documentserver/App_Data/cache/files/forgotten';
 // ControlOrMeta+s drives the editor's forcesave (office-editor-stack-fixture's SAVE_KEY).
@@ -310,16 +300,14 @@ async function fileHasNonce(lane: OfficeForgottenLane, nonce: string): Promise<b
   return text.includes(nonce);
 }
 
-/** Polls A's registry for the key the plugin minted for the open DOCX (up to 10s); `null` if none. */
-async function registeredKey(lane: OfficeForgottenLane): Promise<string | null> {
+/** Polls A's registry for the key the plugin minted for the open DOCX — the exact docId the
+ * Document Server uses, so the forgotten copy is keyed by it (up to 10s); `null` if none. A failed
+ * or malformed registry read rejects, never counting as no key. */
+export async function registeredKey(lane: Pick<OfficeForgottenLane, 'exec'>) {
   const deadline = Date.now() + 10_000;
   for (;;) {
-    const { key } = JSON.parse(
-      await lane.exec(['python3', '-c', REGISTRY_KEY, REGISTRY, FILE]),
-    ) as {
-      key: unknown;
-    };
-    if (typeof key === 'string' && key !== '') return key;
+    const key = (await registryKeys(lane, FILE))[0] ?? null;
+    if (key !== null) return key;
     if (Date.now() >= deadline) return null;
     await delay(500);
   }

@@ -16,7 +16,7 @@ import {
   EXPECTED_INFO,
   guessedKeyInfo,
   redactSecrets,
-  REGISTRY,
+  registryKeys,
 } from './office-isolation-stack-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
@@ -358,29 +358,13 @@ export { counted, digest, editAndSave, typeAndSave, type Digest, type Meeting };
 
 type Edited = Awaited<ReturnType<typeof editAndSave>>;
 const SIDES = ['A', 'B'] as const;
-// The registry's keys for one path (plugin 0.2.0: `{ version, entries: [{ key, entry: { path } }] }`);
-// a registry not yet written, or half written, holds none yet.
-const KEYS = `import json, sys
-try:
-    entries = json.load(open(sys.argv[1]))["entries"]
-except (OSError, ValueError):
-    entries = []
-print(json.dumps([e["key"] for e in entries if (e.get("entry") or {}).get("path") == sys.argv[2]]))`;
-const keysOf = (output: string) => {
-  try {
-    return JSON.parse(output) as string[];
-  } catch {
-    return [];
-  }
-};
-
 type Exec = Pick<ArchiveLane, 'exec'>;
-/** Polls both registries for 5s until each has one entry for the DOCX; the keys stay in memory. */
+/** Polls both registries for 5s until each has one entry for the DOCX; the keys stay in memory. A
+ * failed or malformed registry read fails at once, never counting as no entry. */
 async function distinctKeys(lanes: readonly Exec[], met: { distinct: boolean }) {
-  const argv = ['python3', '-c', KEYS, REGISTRY, inWork('docx')];
   let keys: string[][] = [];
   const one = async () => {
-    keys = await Promise.all(lanes.map(async ({ exec }) => keysOf(await exec(argv))));
+    keys = await Promise.all(lanes.map((lane) => registryKeys(lane, inWork('docx'))));
     return keys.every((side) => side.length === 1);
   };
   await until(one, 5_000, 'registry entries').catch((error: unknown) => {
