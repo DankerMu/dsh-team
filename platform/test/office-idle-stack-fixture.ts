@@ -157,13 +157,15 @@ const editorFontNames = (editor: FrameLocator) =>
     return Array.isArray(infos) ? infos.map((info: { Name?: unknown }) => info.Name) : null;
   });
 
-/** No nonce or key: the hold, the fonts, the DOCX's digests, the editor session and the idle stop. */
+/** No nonce or key: the hold, the fonts, the DOCX's digests, the editor session, the idle stop and
+ * the runtime configuration read back equal to its snapshot. */
 export interface OfficeIdleEvidence {
   readonly held: Awaited<ReturnType<typeof heldRunning>>['held'];
   readonly fonts: ReturnType<typeof fontsShown>;
   readonly file: Readonly<Record<'before' | 'after', Digest>>;
   readonly editor: StackBrowserEvidence;
   readonly stopped: Awaited<ReturnType<typeof idleRetired>>;
+  readonly restored: true;
 }
 
 /** The stack evidence line: the editor session by its screenshots and error counts. */
@@ -175,24 +177,48 @@ export function officeIdleLine(evidence: OfficeIdleEvidence | undefined) {
 
 /** A's editor lane plus the administrator, who sets and restores the idle minutes. */
 type OfficeIdleLane = OfficeEditorLane & { readonly administrator: Admin };
+/** Holds the restore of the idle minutes; a no-op until they change. */
+interface IdleRestore {
+  restore: () => Promise<void>;
+}
 
-async function officeIdle(lane: OfficeIdleLane, idle: { restore: () => Promise<void> }) {
+/** Once the editor has loaded: the font check, then one idle minute (its restore left in `idle`),
+ * then `hold` of `email` for HOLD_MS. */
+export async function loaded(
+  admin: Admin,
+  email: string,
+  operator: readonly OperatorFont[],
+  idle: IdleRestore,
+  readFonts: () => Promise<unknown>,
+  hold: typeof heldRunning = heldRunning,
+) {
+  // Before the idle minutes change: a failed font check leaves them as they were.
+  const fonts = fontsShown(operator, await readFonts());
+  idle.restore = await idleMinutes(admin, 1);
+  return { fonts, hold: await hold(admin, email, HOLD_MS) };
+}
+
+async function officeIdle(
+  lane: OfficeIdleLane,
+  idle: IdleRestore,
+): Promise<Omit<OfficeIdleEvidence, 'restored'>> {
   const { administrator: admin, session } = lane;
   const operator = operatorFonts(await lane.run(OPERATOR_FONTS));
-  let fonts: ReturnType<typeof fontsShown> | undefined;
-  let hold: Awaited<ReturnType<typeof heldRunning>> | undefined;
-  const loaded = async (editor: FrameLocator) => {
-    // Before the idle minutes change: a failed font check leaves them as they were.
-    fonts = fontsShown(operator, await editorFontNames(editor));
-    idle.restore = await idleMinutes(admin, 1);
-    hold = await heldRunning(admin, session.email, HOLD_MS);
+  let shown: Awaited<ReturnType<typeof loaded>> | undefined;
+  const meeting: Meeting = {
+    nonce: editorNonce(),
+    loaded: async (editor: FrameLocator) => {
+      const readFonts = () => editorFontNames(editor);
+      shown = await loaded(admin, session.email, operator, idle, readFonts);
+    },
+    saved: () => Promise.resolve(),
   };
-  const meeting: Meeting = { nonce: editorNonce(), loaded, saved: () => Promise.resolve() };
   const directory = join(session.directory, 'office-idle');
   const { editor, written, after } = await withWorkFiles(lane, [NAME], 'Office idle', () =>
     editAndSave(lane, 'docx', directory, meeting),
   );
-  if (hold === undefined || fonts === undefined) throw new Error('Office idle hold not observed');
+  if (shown === undefined) throw new Error('Office idle hold not observed');
+  const { fonts, hold } = shown;
   // The browser has closed and the file is gone: nothing holds a gateway connection to A now.
   const stopped = await idleRetired(admin, session.email, hold.sinceId, CONTROL_MS);
   const file = { before: digest(written), after: digest(after) };
@@ -200,15 +226,23 @@ async function officeIdle(lane: OfficeIdleLane, idle: { restore: () => Promise<v
 }
 
 /**
- * 18.5 (#440): with one idle minute, A's open DOCX editor keeps the instance running past the idle
- * window and still saves; once the browser closes, the platform idle-stops A. The idle minutes are
- * restored either way; a restore failure follows the lane's.
+ * 18.5 (#440): with one idle minute, A's workbench with its open DOCX editor keeps the instance
+ * running past the idle window and still saves; once the browser closes, the platform idle-stops A. The idle minutes are
+ * restored either way; a restore failure follows the lane's. On success the runtime configuration
+ * read back after the restore equals the snapshot taken before `body`.
  */
-export async function officeIdleScenario(lane: OfficeIdleLane): Promise<OfficeIdleEvidence> {
+export async function officeIdleScenario(
+  lane: OfficeIdleLane,
+  body = officeIdle,
+): Promise<OfficeIdleEvidence> {
+  const path = `${ADMIN}/runtime-config`;
+  const snapshot = await request<unknown>(lane.administrator, 'GET', path);
   const idle = { restore: () => Promise.resolve() };
   const failed = 'Office idle lane and its restore failed';
-  const run = () => officeIdle(lane, idle);
+  const run = () => body(lane, idle);
   const evidence = await retiringOnError(run, () => idle.restore(), failed);
   await idle.restore();
-  return evidence;
+  const current = await request<unknown>(lane.administrator, 'GET', path);
+  expect(current, 'runtime-config restored to its snapshot').toEqual(snapshot);
+  return { ...evidence, restored: true };
 }
