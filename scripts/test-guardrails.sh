@@ -64,6 +64,8 @@ range_restore() {
   git clean -fdq -e node_modules
 }
 
+fixture_commit() { git -c user.name=guardrails -c user.email=guardrails@localhost commit --quiet -m "$1"; }
+
 # range_commit <message> <path>...: appends to each path (A when new, M when tracked).
 range_commit() {
   message="$1"
@@ -71,8 +73,7 @@ range_commit() {
   for file in "$@"; do
     mkdir -p "$(dirname "$file")" && printf 'fixture\n' >>"$file" || return 1
   done
-  git add -- "$@" &&
-    git -c user.name=guardrails -c user.email=guardrails@localhost commit --quiet -m "$message"
+  git add -- "$@" && fixture_commit "$message"
 }
 
 expect_accept() {
@@ -143,6 +144,13 @@ mkdir -p scratch
 echo "note" >scratch/note.txt
 git add scratch/note.txt
 expect_reject "scratchpad guard (scratch/)" "scratchpad directory" \
+  bash .git-hooks/check-naming.sh
+
+# A non-ASCII name is C-quoted unless the hook reads NUL-delimited names (#665).
+mkdir -p tmp
+echo "note" >"tmp/笔记.md"
+git add "tmp/笔记.md"
+expect_reject "scratchpad guard (tmp/笔记.md)" "scratchpad directory:    tmp/笔记.md" \
   bash .git-hooks/check-naming.sh
 
 archive_root="openspec/changes/archive/2026-10-13-stabilize-browser-runtime-verification"
@@ -431,36 +439,46 @@ expect_reject "commit message (\"bad message\")" "type may not be empty" \
 
 # The CI layer: `pnpm lint:pr <base> <head>` gates only the range's own commits
 # and added/renamed paths, and fails closed on an unreadable range (#665).
-# range_case <name> <setup> <expect_* args...>: a failed setup is a failure, and
-# the fixture never outlives the case.
+# range_case <setup> <expect_accept|expect_reject> <name> [reason]: lints
+# range_base (the baseline unless setup sets it) to setup's tip with HEAD parked
+# at the baseline, so the head is never read from HEAD. A failed setup is a
+# failure, and the fixture never outlives the case.
 range_case() {
-  name="$1"
-  setup="$2"
-  shift 2
-  if "$setup"; then
-    "$@"
+  setup="$1"
+  shift
+  range_base="$baseline"
+  if "$setup" && tip="$(git rev-parse HEAD)" && git reset --quiet --hard "$baseline"; then
+    "$@" lint_tip
   else
-    echo "FAIL  $name — could not build the fixture range"
+    echo "FAIL  $2 — could not build the fixture range"
     fail=$((fail + 1))
   fi
   range_restore
 }
+lint_tip() { pnpm lint:pr "$range_base" "$tip"; }
 long_subject="feat(platform): add a commit subject that deliberately runs well past the seventy-two character limit"
-range_overlong() { range_commit "$long_subject" docs/guardrails-range.md; }
+# The overlong commit is not the tip.
+range_overlong() {
+  range_commit "$long_subject" docs/guardrails-range.md &&
+    range_commit "docs(repo): extend the range note" docs/guardrails-range.md
+}
 range_suffix() { range_commit "feat(platform): add a session fixture" platform/src/session_v2.ts; }
 range_scratch() { range_commit "docs(repo): add a note" tmp/note.md; }
-range_archive() { range_commit "docs(openspec): archive a change" "$archive_root/tasks.md"; }
-range_case "PR range (overlong subject)" range_overlong \
-  expect_reject "PR range (overlong subject)" "subject-max-length" pnpm lint:pr "$baseline" HEAD
-range_case "PR range (adds session_v2.ts)" range_suffix \
-  expect_reject "PR range (adds session_v2.ts)" "forbidden naming suffix" pnpm lint:pr "$baseline" HEAD
-range_case "PR range (adds tmp/)" range_scratch \
-  expect_reject "PR range (adds tmp/)" "scratchpad directory" pnpm lint:pr "$baseline" HEAD
-range_case "PR range (adds a managed archive file)" range_archive \
-  expect_accept "PR range (adds a managed archive file)" pnpm lint:pr "$baseline" HEAD
+range_cjk() { range_commit "docs(repo): add a note" "tmp/笔记.md"; }
+range_nested() { range_commit "docs(openspec): archive a change" "$archive_root/scratch/proposal.md"; }
+range_rename() { mkdir -p tmp && git mv docs/DEPLOY.md tmp/ && fixture_commit "docs(repo): move the guide"; }
+range_archive() { range_commit "docs(openspec): archive a change" "$archive_root/tasks.md" "$archive_root/笔记.md"; }
+range_case range_overlong expect_reject "PR range (overlong subject)" "subject-max-length"
+range_case range_suffix expect_reject "PR range (adds session_v2.ts)" "forbidden naming suffix"
+range_case range_scratch expect_reject "PR range (adds tmp/)" "scratchpad directory"
+range_case range_cjk expect_reject "PR range (adds tmp/笔记.md)" "scratchpad directory:    tmp/笔记.md"
+range_case range_nested expect_reject "PR range (archive scratch/)" "scratchpad directory"
+range_case range_rename expect_reject "PR range (renames into tmp/)" "scratchpad directory:    tmp/DEPLOY.md"
+range_case range_archive expect_accept "PR range (adds managed archive files)"
 
 # Base history holds an overlong subject and a forbidden path; the range modifies
 # that path (M), merges a side commit under a default-ignored message, and conforms.
+# The base diverges by deleting the path, so only base...head reads it as M.
 range_history() {
   range_commit "$long_subject" tmp/session_v2.md || return 1
   history_base="$(git rev-parse HEAD)" || return 1
@@ -469,12 +487,13 @@ range_history() {
   git reset --quiet --hard "$history_base" &&
     range_commit "docs(repo): extend the base note" tmp/session_v2.md &&
     git -c user.name=guardrails -c user.email=guardrails@localhost \
-      merge --quiet --no-ff -m "Merge branch 'side'" "$side"
+      merge --quiet --no-ff -m "Merge branch 'side'" "$side" || return 1
+  history_tip="$(git rev-parse HEAD)" || return 1
+  git reset --quiet --hard "$history_base" && git rm --quiet tmp/session_v2.md &&
+    fixture_commit "docs(repo): drop the base note" && range_base="$(git rev-parse HEAD)" &&
+    git reset --quiet --hard "$history_tip"
 }
-# Reads history_base when run, after range_history has set it.
-lint_history() { pnpm lint:pr "$history_base" HEAD; }
-range_case "PR range (base history is not the range's)" range_history \
-  expect_accept "PR range (base history is not the range's)" lint_history
+range_case range_history expect_accept "PR range (base history is not the range's)"
 
 # Unreadable ranges fail closed with the fixed reason; never read as empty.
 if ! orphan="$(printf 'chore: unrelated root\n' |
@@ -486,8 +505,13 @@ missing_sha="0000000000000000000000000000000000000000"
 expect_reject "PR range (one argument)" "lint:pr: unreadable range" pnpm lint:pr "$baseline"
 expect_reject "PR range (unknown head)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$missing_sha"
 expect_reject "PR range (no merge base)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$orphan"
+expect_reject "PR range (unknown base)" "lint:pr: unreadable range" pnpm lint:pr "$missing_sha" "$baseline"
 expect_reject "naming range (unknown head)" "check-naming.sh: unreadable range" \
   bash .git-hooks/check-naming.sh --range "$baseline" "$missing_sha"
+expect_reject "naming range (unknown base)" "check-naming.sh: unreadable range" \
+  bash .git-hooks/check-naming.sh --range "$missing_sha" "$baseline"
+expect_reject "naming range (empty arguments)" "check-naming.sh: unreadable range" \
+  bash .git-hooks/check-naming.sh --range "" ""
 
 # ── 3. Test pairing ──────────────────────────────────────────────────────────
 echo "export const orphan = 1;" >platform/src/orphan.ts

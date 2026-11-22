@@ -25,7 +25,8 @@
 - **Fail-closed `check-pr-range.sh`.** See proposal § What Changes.
 - **`check-naming.sh --range <base> <head>`.**
   - It is parsed before the `$# -gt 0` path-argument branch, so `--range` is never classified as a path.
-  - It checks the status of its own `git diff` and fails on error.
+  - It checks the status of its own `git diff` and fails on error; an empty `<base>` or `<head>` is unreadable too.
+  - Range and staged modes read names NUL-delimited (`git diff -z`), so `core.quotePath` never C-quotes a name past the rules.
   - It keeps the staged mode's exit code 1 and the violation text (`forbidden naming suffix` / `scratchpad directory`).
 - **The `pr-range` CI job.**
   - Its actions are pinned to the same SHAs as the other jobs.

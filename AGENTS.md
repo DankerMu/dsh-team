@@ -270,7 +270,7 @@ Agents may commit to feature branches, open PRs targeting `main`, run every loca
 - Checkpoint commit at every green state. One task = one branch.
 - Parallel agents use separate git worktrees. Rebase onto `main` before opening or updating a PR.
 - Lockfile conflicts are resolved by re-running `pnpm install`, never by hand.
-- CI failures: classify the failing job (`layer1-fast-checks`, `layer2-unit-tests`, `layer3-integration`, `layer4-anti-drift`, `layer5-secret-scan`, `sast`, `guardrails`), read the first actionable error, reproduce locally with the same `pnpm` script, fix the root cause, re-run that script.
+- CI failures: classify the failing job (`layer1-fast-checks`, `layer2-unit-tests`, `layer3-integration`, `layer4-anti-drift`, `layer5-secret-scan`, `sast`, `guardrails`, `pr-range`), read the first actionable error, reproduce locally with the same `pnpm` script, fix the root cause, re-run that script.
 - A non-obvious lesson costing more than 30 minutes becomes a dated entry in `## Important Development Notes`.
 - The third incident of the same class becomes a lint rule or a hook, with its rejection case added to `scripts/test-guardrails.sh`.
 

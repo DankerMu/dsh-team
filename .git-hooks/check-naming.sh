@@ -98,14 +98,15 @@ path_violations() {
 }
 
 # Range mode (CI): parsed before the path argument so `--range` is never a path.
-# An unreadable range fails; it is never read as an empty list.
+# An unreadable or empty range fails; it is never read as an empty list.
 if [ "${1:-}" = "--range" ]; then
   if [ "$#" -ne 3 ]; then
     echo "check-naming.sh: usage: --range <base> <head>" >&2
     exit 2
   fi
-  if ! changed="$(git diff --name-only --diff-filter=AR --end-of-options "$2...$3" --)"; then
-    echo "check-naming.sh: unreadable range $2...$3" >&2
+  range="$2...$3"
+  if [ -z "$2" ] || [ -z "$3" ]; then
+    echo "check-naming.sh: unreadable range $range" >&2
     exit 2
   fi
 # Path-argument mode (agent write-time check): validate one path directly
@@ -117,20 +118,30 @@ elif [ "$#" -gt 0 ]; then
     exit 2
   fi
   exit 0
+fi
+
+# Names are read NUL-delimited (-z): otherwise core.quotePath C-quotes non-ASCII,
+# quote and newline names, and no rule matches them. Command substitution drops
+# NULs, so the list goes through a file.
+changed="$(mktemp)" || exit 2
+trap 'rm -f "$changed"' EXIT
+if [ "${1:-}" = "--range" ]; then
+  if ! git diff -z --name-only --diff-filter=AR --end-of-options "$range" -- >"$changed"; then
+    echo "check-naming.sh: unreadable range $range" >&2
+    exit 2
+  fi
 else
   # Read added or renamed files (cached).
-  changed="$(git diff --cached --name-only --diff-filter=AR 2>/dev/null || true)"
+  git diff --cached -z --name-only --diff-filter=AR >"$changed" 2>/dev/null || true
 fi
 
 # Avoid `mapfile` so the script works on macOS default bash 3.2 as well as bash 4+.
 violations=()
-while IFS= read -r f; do
+while IFS= read -r -d '' f; do
   [[ -z "$f" ]] && continue
   found="$(path_violations "$f")"
   [ -z "$found" ] || violations+=("$found")
-done <<EOF
-$changed
-EOF
+done <"$changed"
 
 if [ "${#violations[@]}" -gt 0 ]; then
   cat <<EOF
