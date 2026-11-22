@@ -82,6 +82,12 @@
     - the `onDocumentStateChange` clean branch (`:316-320`) refreshes once and clears the flag when the flag is set, and otherwise clears the banner as released.
   - The `removed` banner and the clean-editor branch are unchanged.
   - Sibling unit tests in the `patch-package` test cover the new target: the anchors, sha mismatch refusal, and per-target replacement isolation.
+- Patched measurement (orchestrator). Two local `pnpm test:stack` runs on `6f43c7e` both passed and agreed (VOL-SAME; inventory unchanged apart from the authorised RAGFlow restart), in 702.26 s and 688.08 s.
+  - The stale banner latched in the window (at 1433 and 1886 ms). At dirty→false (2582 and 2818 ms) the editor refreshed once: `config` went 1 to 2, and the banner cleared (2594 and 2832 ms).
+  - The refreshed-away session's status 2 was refused, so 「保存未写回文件」 appeared in the window. `save-error` arrived at 7956 and 8181 ms.
+  - The employee's next Ctrl+S was saved: one `saved` event. It cleared the notice, and no notice was shown after the save or at the end.
+  - File state was `agent-only` after the rewrite, then `both` after the save and `both` after the close, with `typed: false` throughout. The in-window typing was discarded, as in `unsaved`.
+  - No copy, `onRequestRefreshFile` 0. The MUST holds.
 - [ ] 2.1b Tighten `EXPECTED` for `typing` to the patched behaviour, shown by two agreeing exact-head stack runs:
   - the stale banner latched in the window;
   - one refresh (`config` 2) at dirty→false;
