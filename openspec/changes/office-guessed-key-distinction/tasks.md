@@ -26,14 +26,14 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Isolation lane:
+- [x] 1.1 Isolation lane:
   - `aSetupScript` emits A's `input` after `register()`.
   - A shared `CROSS_JS` fragment does the HMAC: B's env secret, JSON-decoded input, no `KEY_JS`. `bProbeScript` embeds it and receives A's input as its own argument, never inside `claims`, then outputs `kCross`.
   - `bPosition` parses guarded and adds `kCross` to its redaction.
   - Assert `kCross ≠ k1`.
   - `(c3)`'s `hmacGuessed` callback becomes `kCross`.
   - Delete `tGuessed`, `EXPECTED_ATTACK.file.guessed`, `aSignScript`'s random-secret argument and `randomBytes`: `tB` (`bProbeScript:125`) is already B's signature over A's claims.
-- [ ] 1.2 Same-name lane:
+- [x] 1.2 Same-name lane:
   - `guessedKeyInfo(lane, b, kA, kB, file)`, in order:
     - A recompute emits the input;
     - a standalone B cross script, embedding `CROSS_JS`, runs through `b.exec`, under `guarded` with its own label and a secrets list that includes `kCross`;
@@ -42,11 +42,11 @@
   - Rename in `office-editor-stack-fixture.integration.test.ts:244` and `:260`.
   - `docs/LOCAL_STACK.md:195`: rename the guessed key.
   - `docs/LOCAL_STACK.md:196`: remove 「猜测密钥」 from the 403 file list, because `tGuessed` is deleted with no replacement. Rename the guessed-key callback in the callback list to the key B's secret produced.
-- [ ] 1.3 Extract `sameNameDocx`'s `loaded` gate body into an exported function and pass `b.exec`. Add an integration case on a stand-in lane that asserts:
+- [x] 1.3 Extract `sameNameDocx`'s `loaded` gate body into an exported function and pass `b.exec`. Add an integration case on a stand-in lane that asserts:
   - the order A registry, B registry, A recompute, B cross, holder query;
   - the argument flow;
   - `met.info`.
-- [ ] 1.4 Stand-ins:
+- [x] 1.4 Stand-ins:
   - **Script layer:** A's key script and the standalone B cross script run locally (temp files and env, as in the `local()` precedent). With the same secret `kCross === k1`; with different secrets they differ. The input's host name differs from the local `hostname()`. A string case asserts that `bProbeScript` embeds `CROSS_JS`.
   - **Fixture layer:** `fakeLane`/`guessLane` answer `kCross = k1`, or the holder answers EDITING for `kCross`, and the fixture throws with no value in the message.
   - Show the B2 mutants red: the call deleted, `kA`/`kB` swapped, B not given A's input.
