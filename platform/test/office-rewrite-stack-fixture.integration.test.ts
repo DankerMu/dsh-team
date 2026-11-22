@@ -2,13 +2,15 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, expect, it } from 'vitest';
-import { editorNonce, NONCE_PATTERN } from './office-editor-stack-fixture.ts';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { editorNonce, NONCE_PATTERN, READER } from './office-editor-stack-fixture.ts';
+import { docxCommand, HEALTH_COMMAND } from './office-hints-stack-fixture.ts';
 import {
   EXPECTED_REWRITE,
   EXPECTED_TYPING,
   heldApart,
   officeRewriteLine,
+  officeRewriteScenario,
   ownedRewrites,
   REWRITER,
   rewriteArgv,
@@ -17,6 +19,21 @@ import {
   rewriteState,
   typingFacts,
 } from './office-rewrite-stack-fixture.ts';
+import {
+  everythingPrinted,
+  StackWorkbenchFailure,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
+import type * as StackBrowser from './stack-browser-fixture.ts';
+
+// Only the browser session is a stand-in; the lane runs as written around it.
+vi.mock('./stack-browser-fixture.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof StackBrowser>();
+  return { ...actual, workbenchSession: vi.fn(actual.workbenchSession) };
+});
+afterEach(() => {
+  vi.mocked(workbenchSession).mockReset();
+});
 
 const [AGENT, EMPLOYEE] = [editorNonce(), editorNonce()];
 const DIR = mkdtempSync(join(tmpdir(), 'dsh-team-office-rewrite-'));
@@ -493,4 +510,50 @@ it.each([
   ['an unallowed editor error', patchedWith({ allowed: false })],
 ] as const)('rejects a typing case unlike the patched runs: %s', (_case, evidence) => {
   expect(typingFacts(evidence)).not.toEqual(EXPECTED_TYPING);
+});
+
+const KEY = 'e5'.repeat(32);
+const SOCKET = `${BASE}/doc/${KEY}/c/?EIO=4&transport=polling`;
+const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
+const fresh = { size: 9, sha256: 'a'.repeat(64) };
+/** A's instance as the rewrite lane drives it before and after the clean case's browser session. */
+const rewriteLane = {
+  session: { base: BASE, directory: DIR, email: 'a@x.test', password: 'p', timeout: 500 },
+  exec: (args: readonly string[]) => {
+    const [, , script, path = '', ...rest] = args;
+    if (script === HEALTH_COMMAND[2]) return reply({ status: 200, body: 'true' });
+    if (script === READER)
+      return reply({ texts: { 'word/document.xml': '改写探针：开头只有这一段。' }, ...fresh });
+    if (script === docxCommand('')[2]) return reply({ name: path.split('/').pop(), ...fresh });
+    // withWorkFiles' removal: the work directory, then each name.
+    return reply(rest.map(() => false));
+  },
+  run: () => Promise.reject(new Error('no host Docker before the typing case')),
+  provider: () => Promise.resolve({ rewriteCalls: [0, 0], rewriteHits: [0, 0], requests: 0 }),
+  ...{ instance: 'dsh-team-u-a', reply: 'reply', rewrites: ownedRewrites() },
+};
+
+it('leaves a failed rewrite session without the key or query anywhere it is printed', async () => {
+  const cause = new Error(`page.goto: net::ERR_ABORTED at ${SOCKET}`, {
+    cause: new Error(`frame ${SOCKET}`),
+  });
+  const evidence = {
+    ...session(['office-rewrite-clean-failure.png'], [`WebSocket ${SOCKET} failed`], []),
+    ...{ failedRequests: [`GET ${SOCKET}`], externalRequests: [SOCKET] },
+  };
+  vi.mocked(workbenchSession).mockImplementation((_session, names) =>
+    Promise.reject(new StackWorkbenchFailure(cause, evidence, names.label)),
+  );
+
+  const error = await officeRewriteScenario(rewriteLane).catch((caught: unknown) => caught);
+
+  const printed = everythingPrinted(error);
+  for (const secret of [KEY, 'EIO=4', 'transport=']) expect(printed).not.toContain(secret);
+  const counts = 'consoleErrors=1 pageErrors=0 failedRequests=1 externalRequests=1';
+  const socket = `${BASE}/doc/<redacted>/c/`;
+  expect(error).toBeInstanceOf(StackWorkbenchFailure);
+  expect(error).toHaveProperty(
+    'message',
+    `Stack workbench office rewrite clean failed (${counts}): page.goto: net::ERR_ABORTED at ${socket} <- frame ${socket}`,
+  );
 });

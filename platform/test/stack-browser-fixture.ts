@@ -1,5 +1,6 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { inspect } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium } from '@playwright/test';
 import type { Browser, ElementHandle, Page, Request, Response } from '@playwright/test';
@@ -62,7 +63,71 @@ export interface StackSessionNames {
   readonly masked?: readonly string[];
 }
 
-/** A failed session: the original failure as `cause`, plus everything observed so far. */
+export type Secrets = readonly (string | undefined)[];
+
+/** Replaces each non-empty secret with a marker so no key or token survives in an error. */
+export function redactSecrets(message: string, secrets: Secrets): string {
+  let output = message;
+  for (const secret of secrets)
+    if (secret !== undefined && secret !== '') output = output.replaceAll(secret, '<redacted>');
+  return output;
+}
+
+// A document key: a sha256 hex digest (dsh-sidebar-onlyoffice `onlyoffice.ts:37`).
+const DOCUMENT_KEY = /[0-9a-f]{64}/g;
+// A URL's query or hash: after a scheme's or a path's `/`, up to whitespace, a quote or a JSON
+// delimiter, so free-text `#` (`BODY#`, `locator('#editor_sdk')`) and JSON structure survive.
+const URL_QUERY = /(\/[^\s"'`,{}[\]?#]*)[?#][^\s"'`,{}[\]]*/g;
+// Any 20-character word run is a key, token or nonce, but a lowercase word or a Chromium `ERR_*`.
+const LONG_RUN = /[\w-]{20,}/g;
+const READABLE_RUN = /^(?:[a-z_-]+|[A-Z]+(?:_[A-Z]+)+)$/;
+
+/** `text` without `secrets`, document keys, URL queries and hashes, or long non-word runs. */
+export const scrub = (text: string, secrets: Secrets = []) =>
+  redactSecrets(text, secrets)
+    .replace(DOCUMENT_KEY, '<redacted>')
+    .replace(URL_QUERY, '$1')
+    .replace(LONG_RUN, (run) => (READABLE_RUN.test(run) ? run : '<redacted>'));
+
+/** Everything vitest prints of `error`: the JSON of each own property, enumerable or not, the
+ * inspected whole with hidden properties, and so on for each error an AggregateError holds. */
+export function everythingPrinted(error: unknown): string {
+  if (!(error instanceof Error)) return inspect(error, { showHidden: true, depth: 20 });
+  const names = Object.getOwnPropertyNames(error);
+  const own = JSON.stringify(
+    Object.fromEntries(names.map((name) => [name, Reflect.get(error, name)])),
+  );
+  // AggregateError types its entries as any; each is printed whatever it is.
+  const entries = error instanceof AggregateError ? (error.errors as unknown[]) : [];
+  const inspected = inspect(error, { showHidden: true, depth: 20 });
+  return [own, inspected, ...entries.map(everythingPrinted)].join('\n');
+}
+
+export const scrubEach = (texts: readonly string[]) => texts.map((text) => scrub(text));
+
+/** `evidence` with every element of its lists scrubbed, in new arrays; the counts stay. */
+export const scrubbedEvidence = (evidence: StackBrowserEvidence): StackBrowserEvidence => ({
+  ...evidence,
+  screenshots: scrubEach(evidence.screenshots),
+  consoleErrors: scrubEach(evidence.consoleErrors),
+  pageErrors: scrubEach(evidence.pageErrors),
+  failedRequests: scrubEach(evidence.failedRequests),
+  externalRequests: scrubEach(evidence.externalRequests),
+});
+
+/** The messages of `cause` and its causes, each scrubbed, at most eight; a non-Error is unknown. */
+function scrubbedChain(cause: unknown) {
+  const reasons: string[] = [];
+  let current = cause;
+  do {
+    reasons.push(current instanceof Error ? scrub(current.message) : 'unknown failure');
+    current = current instanceof Error ? current.cause : undefined;
+  } while (current !== undefined && reasons.length < 8);
+  return reasons.join(' <- ');
+}
+
+/** A failed session, safe to print: vitest prints the cause chain and every own property, so the
+ * scrubbed chain is folded into the message, no `cause` is kept and `evidence` is scrubbed. */
 export class StackWorkbenchFailure extends Error {
   readonly evidence: StackBrowserEvidence;
 
@@ -70,10 +135,9 @@ export class StackWorkbenchFailure extends Error {
     const counts = (['consoleErrors', 'pageErrors', 'failedRequests', 'externalRequests'] as const)
       .map((key) => `${key}=${String(evidence[key].length)}`)
       .join(' ');
-    const reason = cause instanceof Error ? cause.message : 'unknown failure';
-    super(`Stack workbench ${label} failed (${counts}): ${reason}`, { cause });
+    super(`Stack workbench ${label} failed (${counts}): ${scrubbedChain(cause)}`);
     this.name = 'StackWorkbenchFailure';
-    this.evidence = evidence;
+    this.evidence = scrubbedEvidence(evidence);
   }
 }
 

@@ -18,14 +18,14 @@ See design.md § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 Shared code in `stack-browser-fixture.ts`:
+- [x] 1.1 Shared code in `stack-browser-fixture.ts`:
   - Move `redactSecrets` and `Secrets` here, and update every importer.
   - Export `scrub` within the design.md rule constraints.
   - Change `StackWorkbenchFailure` so that it folds the scrubbed cause chain into its message, sets no `cause`, and stores `evidence` already scrubbed.
   - Delete the forgotten and rewrite copies of `scrub`. In `sessionFailure`, scrub each part before joining.
-- [ ] 1.2 Editor lane: scrub each element of `seen`.
-- [ ] 1.3 Hints lane: scrub `:403`, and make `:404-409` match a scrubbed projection.
-- [ ] 1.4 Add the cases listed in design.md § Seams under test and § Required evidence:
+- [x] 1.2 Editor lane: scrub each element of `seen`.
+- [x] 1.3 Hints lane: scrub `:403`, and make `:404-409` match a scrubbed projection.
+- [x] 1.4 Add the cases listed in design.md § Seams under test and § Required evidence:
   - leak checks over all own properties plus `inspect(showHidden)`, including the red case for unscrubbed evidence;
   - lane drivers through the `vi.mock` seam, the editor one through `AggregateError` or `retiringOnError`;
   - the hints matcher diff;

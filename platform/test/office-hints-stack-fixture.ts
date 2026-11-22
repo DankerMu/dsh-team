@@ -11,7 +11,13 @@ import { record } from './docker-cleanup.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
-import { element, showSidebarRows, until, workbenchSession } from './stack-browser-fixture.ts';
+import {
+  element,
+  scrubbedEvidence,
+  showSidebarRows,
+  until,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
 /** The delivered Document Server container (deploy/compose.yml). */
@@ -397,11 +403,11 @@ async function officeHints(lane: ArchiveLane): Promise<OfficeHintsEvidence> {
   const after: unknown = JSON.parse(await exec(docxCommand(NAME)));
   expect(after, 'Office hints file unchanged by opening it').toEqual(file);
   expect(await providerCounts(lane), 'No model request or retrieval').toEqual(before);
-  // The editor iframe's own requests and console output count too.
-  const { consoleErrors } = browser;
-  const refusal = serviceWorkerRefused(consoleErrors, session.base);
-  expect(refusal, `consoleErrors ${JSON.stringify(consoleErrors)}`).toBe(true);
-  expect(browser).toMatchObject({
+  // The editor iframe's own requests and console output count too; a failure prints them scrubbed.
+  const shown = scrubbedEvidence(browser);
+  const refusal = serviceWorkerRefused(browser.consoleErrors, session.base);
+  expect(refusal, `consoleErrors ${JSON.stringify(shown.consoleErrors)}`).toBe(true);
+  expect(shown).toMatchObject({
     screenshots: ['office-hints-collab.png'],
     pageErrors: [],
     failedRequests: [],

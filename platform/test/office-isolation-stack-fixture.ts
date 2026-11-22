@@ -13,6 +13,8 @@ import {
 } from './onlyoffice-probe-script.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
+import { redactSecrets } from './stack-browser-fixture.ts';
+import type { Secrets } from './stack-browser-fixture.ts';
 
 const [TARGET_NAME, SOURCE_NAME] = ['隔离目标.docx', '隔离来源.docx'] as const;
 const [TARGET, SOURCE] = [`${WORK}/${TARGET_NAME}`, `${WORK}/${SOURCE_NAME}`] as const;
@@ -254,16 +256,6 @@ export const aReadScript = (): string =>
   script(
     `observed.target = readFileSync(file).equals(readFileSync(${JSON.stringify(SOURCE)})) ? 'saved' : 'unchanged';`,
   );
-
-type Secrets = readonly (string | undefined)[];
-
-/** Replaces each non-empty secret with a marker so no key or token survives in an error. */
-export function redactSecrets(message: string, secrets: Secrets): string {
-  let output = message;
-  for (const secret of secrets)
-    if (secret !== undefined && secret !== '') output = output.replaceAll(secret, '<redacted>');
-  return output;
-}
 
 export function officeIsolationLine(evidence: OfficeIsolationEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office isolation evidence missing');

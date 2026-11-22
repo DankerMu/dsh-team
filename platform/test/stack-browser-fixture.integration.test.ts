@@ -12,6 +12,8 @@ import {
 } from './better-sidebar-browser-fixture.mjs';
 import {
   converseInWorkbench,
+  everythingPrinted,
+  scrub,
   showSidebarRows,
   StackWorkbenchFailure,
   workbenchSession,
@@ -339,7 +341,7 @@ it('keeps the original failure and its browser evidence when closing the browser
   const [first, second] = (error as AggregateError).errors as unknown[];
   expect(first).toBeInstanceOf(StackWorkbenchFailure);
   const failure = first as StackWorkbenchFailure;
-  expect(failure.cause).toBe(original);
+  expect(failure.cause).toBeUndefined();
   expect(second).toBe(closeFailure);
   expect(failure.message).toContain('stub navigation failure');
   expect(failure.message).toContain('consoleErrors=1 pageErrors=1 failedRequests=1');
@@ -522,4 +524,120 @@ it('takes no step when no row, expand button, guide or reselectable tab is shown
   expect(await showSidebarRows(page, ['旧通知.doc'])).toBe(false);
 
   expect(clicks).toEqual([]);
+});
+
+// A letters-only document key: it is a lowercase word too, so only the key rule can catch it.
+const KEY = 'ab'.repeat(32);
+const SOCKET = `ws://127.0.0.1:1/doc/${KEY}/c/?EIO=4&transport=websocket`;
+const POLL = `http://127.0.0.1:1/doc/${KEY}/c/?EIO=4&transport=polling`;
+const LEAKED = [KEY, 'EIO=4', 'transport='];
+/** A session that saw the Document Server socket fail: its key and query in every list. */
+const leaky = () => ({
+  screenshots: ['office-editor-docx-failure.png'],
+  consoleErrors: [`WebSocket connection to '${SOCKET}' failed: net::ERR_CONNECTION_REFUSED`],
+  pageErrors: [`Uncaught Error: socket /doc/${KEY}/c/ closed`],
+  failedRequests: [`GET ${POLL}`],
+  externalRequests: [`http://127.0.0.2:1/doc/${KEY}/c/?EIO=4`],
+  ...{ requests: 9, websockets: 1 },
+});
+const expectNoLeak = (printed: string) => {
+  for (const secret of LEAKED) expect(printed).not.toContain(secret);
+};
+
+const DS = 'http://127.0.0.1:1/sidebar/onlyoffice/ds/9.4.0-c83aecd3de42866b80ccf786af6354d6';
+const FRAMES = (version: string) =>
+  `Office editor typing or saving failed, frames [{"path":"${version}/web-apps/apps/documenteditor/main/index.html","focus":"BODY#"},{"path":"about:blank","focus":"DIV#area_id"}]`;
+const LOCATOR = `locator.waitFor: Timeout 30000ms exceeded.\n  - waiting for locator('[data-dsh-team-office-hints="docx"] iframe[src*="/sidebar/onlyoffice/ds/"]').contentFrame().locator('#editor_sdk') to be visible`;
+const REFUSED = 'Failed to load resource: net::ERR_CONNECTION_REFUSED';
+
+it.each([
+  [
+    'a typeAndSave frames JSON',
+    FRAMES(DS),
+    FRAMES('http://127.0.0.1:1/sidebar/onlyoffice/ds/9.4.<redacted>'),
+  ],
+  ['a Playwright #id locator', LOCATOR, LOCATOR],
+  ['a Chromium ERR_* code', REFUSED, REFUSED],
+])('keeps %s readable', (_case, text, readable) => {
+  expect(scrub(text)).toBe(readable);
+});
+
+it.each([
+  ['a known secret', 'token s3cr3t-value used', ['s3cr3t-value'], 'token <redacted> used'],
+  ['a letters-only document key', `/doc/${KEY}/c/`, [], '/doc/<redacted>/c/'],
+  [
+    'a query, up to whitespace',
+    `GET ${POLL} 502`,
+    [],
+    'GET http://127.0.0.1:1/doc/<redacted>/c/ 502',
+  ],
+  [
+    'a query and a hash, up to a quote or a JSON delimiter',
+    `{"url":"/a?t=1","list":[/b#c,'/d?e']}`,
+    [],
+    `{"url":"/a","list":[/b,'/d']}`,
+  ],
+  [
+    'an EDITOR nonce of letters only',
+    `typed EDITOR${'ABCDEF'.repeat(5)}AB`,
+    [],
+    'typed <redacted>',
+  ],
+  [
+    'a mixed 20-character run in a path',
+    `/cache/files/${'Ab1'.repeat(7)}/x`,
+    [],
+    '/cache/files/<redacted>/x',
+  ],
+])('removes %s', (_case, text, secrets, scrubbed) => {
+  expect(scrub(text, secrets)).toBe(scrubbed);
+});
+
+it('finds a key in an unscrubbed property, enumerable or not, and in an AggregateError entry', () => {
+  const raw = Object.defineProperty(new Error('Stack workbench failed'), 'evidence', {
+    value: leaky(),
+    enumerable: false,
+  });
+
+  const printed = [everythingPrinted(raw), everythingPrinted(new AggregateError([raw], 'both'))];
+
+  for (const text of printed) for (const secret of LEAKED) expect(text).toContain(secret);
+});
+
+it('folds the scrubbed cause chain into its message and keeps no cause and no raw list', () => {
+  const evidence = leaky();
+  const cause = new Error(`locator.click: Timeout on ${POLL}`, {
+    cause: new Error(`frame /doc/${KEY}/c/`, { cause: 'a thrown string' }),
+  });
+
+  const failure = new StackWorkbenchFailure(cause, evidence, 'office editor docx');
+
+  const counts = 'consoleErrors=1 pageErrors=1 failedRequests=1 externalRequests=1';
+  expect(failure.message).toBe(
+    `Stack workbench office editor docx failed (${counts}): locator.click: Timeout on http://127.0.0.1:1/doc/<redacted>/c/ <- frame /doc/<redacted>/c/ <- unknown failure`,
+  );
+  expect(Object.hasOwn(failure, 'cause')).toBe(false);
+  expect(failure.evidence).toEqual({
+    screenshots: ['office-editor-docx-failure.png'],
+    consoleErrors: [
+      "WebSocket connection to 'ws://127.0.0.1:1/doc/<redacted>/c/' failed: net::ERR_CONNECTION_REFUSED",
+    ],
+    pageErrors: ['Uncaught Error: socket /doc/<redacted>/c/ closed'],
+    failedRequests: ['GET http://127.0.0.1:1/doc/<redacted>/c/'],
+    externalRequests: ['http://127.0.0.2:1/doc/<redacted>/c/'],
+    ...{ requests: 9, websockets: 1 },
+  });
+  expectNoLeak(everythingPrinted(failure));
+  expect(evidence).toEqual(leaky());
+});
+
+it('folds at most eight messages of the cause chain', () => {
+  let cause = new Error('level 10');
+  for (let level = 9; level > 0; level--) cause = new Error(`level ${String(level)}`, { cause });
+
+  const failure = new StackWorkbenchFailure(cause, { ...leaky(), consoleErrors: [] });
+
+  const chain = Array.from({ length: 8 }, (_, index) => `level ${String(index + 1)}`);
+  expect(failure.message).toMatch(/^Stack workbench conversation failed \(consoleErrors=0 /);
+  expect(failure.message.endsWith(`: ${chain.join(' <- ')}`)).toBe(true);
 });

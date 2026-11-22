@@ -17,12 +17,11 @@ import {
   namespaceForgottenListScript,
   proxyControl,
   registeredKey,
-  scrub,
   sessionFailure,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
 import { NODE, REGISTRY } from './office-isolation-stack-fixture.ts';
-import { StackWorkbenchFailure } from './stack-browser-fixture.ts';
+import { scrub, StackWorkbenchFailure } from './stack-browser-fixture.ts';
 
 const KA = 'a1'.repeat(32);
 const [nodeBinary = 'node', ...nodeFlags] = NODE;
@@ -372,16 +371,31 @@ it.each([
 
     expect(error.cause).toBeUndefined();
     expect(printed(error)).not.toContain(KA);
-    expect(error.message).toContain(
-      'Timeout on /doc/<redacted>/c/?EIO=4 <- frame /doc/<redacted>/c/;',
-    );
+    expect(error.message).toContain('Timeout on /doc/<redacted>/c/ <- frame /doc/<redacted>/c/;');
     expect(error.message).toContain('"failedRequests":["GET /doc/<redacted>/c/"]');
   },
 );
 
+it('scrubs each part of a failure that never passed through a workbench session', () => {
+  const blocked = new Error(`page.goto: ws://127.0.0.1:1/doc/${KA}/c/?EIO=4`, {
+    cause: new Error('frame s3cret-of-a'),
+  });
+
+  const error = sessionFailure(
+    'edit',
+    blocked,
+    { note: `copy /doc/${KA}/c/?sid=1` },
+    's3cret-of-a',
+  );
+
+  expect(error.message).toBe(
+    'Office forgotten edit failed: page.goto: ws://127.0.0.1:1/doc/<redacted>/c/ <- frame <redacted>; scene={"note":"copy /doc/<redacted>/c/","consoleErrors":[],"failedRequests":[]}',
+  );
+});
+
 it('scrubs A key, and any document key, from the reopen alert text', () => {
-  expect(scrub(`restored ${KA} copy`, KA)).toBe('restored <redacted> copy');
-  expect(scrub(`restored ${'b2'.repeat(32)} copy`, null)).toBe('restored <redacted> copy');
+  expect(scrub(`restored ${KA} copy`, [KA])).toBe('restored <redacted> copy');
+  expect(scrub(`restored ${'b2'.repeat(32)} copy`)).toBe('restored <redacted> copy');
 });
 
 /** A's registry query answering `replies` in turn; each call's argv goes to `calls`. */

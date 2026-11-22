@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, expect, it } from 'vitest';
-import { docxCommand } from './office-hints-stack-fixture.ts';
+import type { Response } from '@playwright/test';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { docxCommand, HEALTH_COMMAND } from './office-hints-stack-fixture.ts';
 import {
   bothOpen,
   editorErrorsAllowed,
@@ -14,6 +15,7 @@ import {
   gate,
   NONCE_PATTERN,
   officeEditorLine,
+  officeEditorScenario,
   providerDeltas,
   READ_BACK_COMMAND,
   READER,
@@ -22,6 +24,7 @@ import {
   writeArgv,
   writeBackState,
 } from './office-editor-stack-fixture.ts';
+import type { OfficeEditorLane } from './office-editor-stack-fixture.ts';
 import {
   aGuessScript,
   bCrossScript,
@@ -29,6 +32,21 @@ import {
   namespaceInfoScript,
   NODE,
 } from './office-isolation-stack-fixture.ts';
+import {
+  everythingPrinted,
+  StackWorkbenchFailure,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
+import type * as StackBrowser from './stack-browser-fixture.ts';
+
+// Only the browser session is a stand-in; the lane runs as written around it.
+vi.mock('./stack-browser-fixture.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof StackBrowser>();
+  return { ...actual, workbenchSession: vi.fn(actual.workbenchSession) };
+});
+afterEach(() => {
+  vi.mocked(workbenchSession).mockReset();
+});
 
 const NONCE = editorNonce();
 const EXTS = ['docx', 'xlsx', 'pptx'];
@@ -366,4 +384,91 @@ it.each([
 ])('allows the editing session %s: %s', (_case, allowed, refused, consoleErrors, responses) => {
   expect(editorErrorsAllowed(consoleErrors, responses, `${BASE}/`)).toBe(allowed);
   expect(editorRefused(consoleErrors, `${BASE}/`), 'openHinted wait').toBe(refused);
+});
+
+const KEY = 'c3'.repeat(32);
+const SOCKET = `/doc/${KEY}/c/?EIO=4&transport=polling`;
+const LEAKED = [KEY, 'EIO=4', 'transport='];
+const leaky = {
+  ...session(['office-editor-docx-open.png'], [`WebSocket ${BASE}${SOCKET} failed`]),
+  failedRequests: [`GET ${BASE}${SOCKET}`],
+};
+const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
+const written = { size: 9, sha256: ORIGINAL };
+/** A's instance as the editor lane drives it around its browser sessions; B's `docker exec` too. */
+function editorLane(retire: () => Promise<void>): OfficeEditorLane {
+  const exec = (args: readonly string[]) => {
+    const [, , script, path = '', ...rest] = args;
+    if (script === HEALTH_COMMAND[2]) return reply({ status: 200, body: 'true' });
+    if (script === READER)
+      return reply({ texts: { 'word/document.xml': '编辑写回探针。' }, ...written });
+    if (script === docxCommand('')[2]) return reply({ name: path.split('/').pop(), ...written });
+    // withWorkFiles' removal: the work directory, then each name.
+    return reply(rest.map(() => false));
+  };
+  return {
+    session: { base: BASE, directory: DIR, email: 'a@x.test', password: 'p', timeout: 500 },
+    ...{ exec, run: (args) => exec(args.slice(4)), retire },
+    provider: () => Promise.resolve({ readBacks: 0, readBackHits: 0, requests: 0 }),
+    namespaceRead: () => Promise.reject(new Error('no holder read before both editors open')),
+    ...{ reply: 'reply', readBack: { marker: 'marker', command: 'read', nonce: NONCE } },
+    ...{ secondEmployee: () => Promise.resolve('dsh-team-u-b'), secondEmail: 'b@x.test' },
+  };
+}
+const DISABLE = new Error('disable B failed');
+/** The lane's failure and every error it holds, A's and B's sessions included. */
+const errorTree = (error: unknown): unknown[] => [
+  error,
+  // AggregateError types its entries as any; each is walked whatever it is.
+  ...(error instanceof AggregateError ? (error.errors as unknown[]).flatMap(errorTree) : []),
+];
+/** A's and B's session failures, once no error of the tree prints the key or query. */
+const sides = (error: unknown) => {
+  const tree = errorTree(error);
+  for (const entry of tree)
+    for (const secret of LEAKED) expect(everythingPrinted(entry)).not.toContain(secret);
+  return tree.filter(
+    (entry): entry is Error =>
+      entry instanceof Error && !(entry instanceof AggregateError) && entry !== DISABLE,
+  );
+};
+
+it.each([
+  ['the same-name DOCX', () => Promise.resolve(), 3],
+  ["B's retirement as well", () => Promise.reject(DISABLE), 5],
+])(
+  'fails both editing sessions of %s without the key or query anywhere',
+  async (_case, retire, size) => {
+    const cause = new Error(`page.goto: ${BASE}${SOCKET}`);
+    vi.mocked(workbenchSession).mockImplementation((_session, names) =>
+      Promise.reject(new StackWorkbenchFailure(cause, leaky, names.label)),
+    );
+
+    const error = await officeEditorScenario(editorLane(retire)).catch((caught: unknown) => caught);
+
+    expect(errorTree(error)).toHaveLength(size);
+    const reasons = sides(error).map((side) => side.message);
+    const counts = 'consoleErrors=1 pageErrors=0 failedRequests=1 externalRequests=0';
+    const failure = `Stack workbench office editor docx failed (${counts}): page.goto: ${BASE}/doc/<redacted>/c/`;
+    expect(reasons).toEqual([failure, failure]);
+  },
+);
+
+it('names the console errors and failed responses of an editing session scrubbed', async () => {
+  // Only `status` and `url` are read of a response; the stand-in answers both.
+  const response = { status: () => 502, url: () => `${BASE}${SOCKET}` } as unknown as Response;
+  vi.mocked(workbenchSession).mockImplementation((_session, _names, _body, _launch, onResponse) => {
+    onResponse?.(response);
+    return Promise.resolve(leaky);
+  });
+
+  const error = await officeEditorScenario(editorLane(() => Promise.resolve())).catch(
+    (caught: unknown) => caught,
+  );
+
+  const seen = `consoleErrors, responses [["WebSocket ${BASE}/doc/<redacted>/c/ failed"],["502 /doc/<redacted>/c/"]]`;
+  const messages = sides(error).map((side) => side.message);
+  expect(messages).toEqual(
+    [1, 2].map(() => `${seen}: expected false to be true // Object.is equality`),
+  );
 });
