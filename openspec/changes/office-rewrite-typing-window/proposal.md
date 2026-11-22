@@ -12,7 +12,7 @@ The window where the employee's typing has not yet reached the Document Server h
 
 So the code suggests the employee's last save never reaches the file. That would contradict `office-editing` 「编辑器打开时 Agent 改文件的表现」 (后写覆盖). `docs/EMPLOYEE_GUIDE.md` §「AI 改写正在编辑的文件」 says this case is unverified.
 
-Owner direction (#652 triage, 2026-11-21): do the ready part, which is the stack case and the measurement, then the owner decides the mitigation. A build-time patch under `images/dsh-user/` is a critical path, so this change writes no mitigation code.
+Owner direction (#652 triage, 2026-11-21): do the ready part (the stack case and the measurement) first; the owner then decides the mitigation. Measured result (tasks 2.1): the MUST is violated. Owner decision (2026-11-21): a pinned build-time patch of `lib/client.js` that refreshes once when the editor turns clean after a change arrived while it was dirty, plus an upstream issue. This is a critical path (`images/dsh-user/`) and needs a human line-by-line review.
 
 **Expected path.** From the code, unless a refused save triggers `onRequestRefreshFile` (#652 (b)), K1's saves are refused and the MUST cannot hold in this change. The owner stop at task 2.1 is therefore the expected outcome, not an exception.
 

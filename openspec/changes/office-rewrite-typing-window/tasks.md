@@ -5,7 +5,8 @@
 - **File IO / path safety / overwrite — selected.** No copy, `.tmp-*` or `.abandoned` in `/data/work`; 后写覆盖. Tasks 1.1, 2.1.
 - **Auth / permissions / secrets — selected.** The save-error banner carries K1, a path and sizes. Screenshots mask it; evidence keeps no banner, watch-payload or log text. Task 1.2.
 - **Documentation / migration notes — selected.** The guide is rewritten only after a measured, MUST-satisfying outcome. Task 2.2.
-- **Not selected:** product code and release. No image, plugin or `platform/src/` change in this change.
+- **Release / packaging / dependency compatibility — selected after 2.1:** the build-time patch pins `dsh-sidebar-onlyoffice@0.2.0` `lib/client.js` by sha256, and a mismatch fails the image build. Task 2.1a.
+- **Not selected:** `platform/src/`.
 
 ## Acceptance-criteria mapping (#652)
 
@@ -14,14 +15,14 @@
 - **AC3** (final file `both`/`employee-only` with no copy, or violation evidence and an owner decision; never docs only) → 2.1.
 - **AC4** (guide matches; `:61` no longer "unverified") → 2.2, only when the MUST holds.
 - **AC5** (stack `testTimeout` by convention; nothing else lengthened, skipped or removed) → 1.3.
-- **AC6** (`images/dsh-user/` patch) → not in this change; the owner decides at 2.1.
+- **AC6** (`images/dsh-user/` patch with sha256 pin, build fails on mismatch, critical-path review, exact-head `pnpm test:docker` and `pnpm test:stack`) → 2.1a, 2.1b, 2.3, 2.4. The owner decided on 2026-11-21.
 
 ## Must preserve
 
 - `clean` and `unsaved`, `CASES`, `ownedRewrites`, the `Rewrite scripts configured` assertion, `EXPECTED_REWRITE` facts and screenshots.
 - `platform/test/platform-stack.stack.test.ts` changes only `:549`, in place from `...lane` to `...office`, a net change of 0 lines. Wiring goes through `officeRewriteScenario` and `officeRewriteLine`.
 - Every other lane's assertions and deadlines.
-- No DSH or plugin source change; nothing under `images/`.
+- No DSH source change. The plugin is changed only by the pinned build-time patch (2.1a); `images/dsh-user/` changes only in `patch-package.mjs` and its test.
 - No key, token, cookie, banner or log filesystem path, banner text, watch payload, log line or conversation content in evidence, assertion messages or screenshots. The existing file names and `status path` response lines stay as they are.
 - The 800-line, function-length and complexity limits.
 
@@ -58,15 +59,39 @@
 
 ## 2. Measurement, decision, tightening, docs
 
-- [ ] 2.1 The orchestrator runs local `pnpm test:stack` twice on the step-1 head and records (a), (b) and (c), the facts and the masked screenshots in the PR.
-  - **Window precondition not met:** stop and report it with the timestamps.
-  - **Runs disagree:** stop and report both runs.
-  - **Employee's last same-editor save lands** (`both` or `employee-only`, no copy): the implementer tightens the `typing` expectation to the observed facts.
-  - **Save does not land (expected):** stop.
-    - Post the evidence to the owner.
-    - The change stays open, and the record-only case is not merged as a terminal state.
-    - 2.2–2.4 do not run until the owner decides (an upstream issue, a pinned build-time patch on the critical path, or another direction) and a follow-up makes the MUST hold.
-    - Record the decision here.
+- [x] 2.1 The orchestrator ran local `pnpm test:stack` twice on the step-1 head `f95bb48`. Both passed and agreed (inventory unchanged apart from the authorised RAGFlow restart, VOL-SAME), in 748.78 s and 808.64 s.
+  - **Window precondition met.** The rewrite exec ran from 606 to 703 ms (run b: 423 to 520 ms). The stale banner latched at 1509 ms (1067 ms). Dirty went true at 709 ms (466 ms) and false at 2499 ms (2272 ms). The banner cleared at 2500 ms (2272 ms), at the dirty→false transition, without a refresh. This confirms `OnlyOfficeView.tsx:218-222`.
+  - **(a) Window width:** about 1.8 s, from the first dirty=true to dirty=false.
+  - **(b) Refresh:** `onRequestRefreshFile` fired 0 times, including after the refused save. The `config` count stayed at 1 from open through end, so nothing refreshed.
+  - **(c) Retries:** exactly one `save-error` watch event, after Ctrl+S (17142 ms; 16701 ms). No further retry arrived while the editor stayed open. The host-log signal was unavailable ("no earlier line"): the plugin's cordis logs stay in memory and never reach `docker logs`.
+  - **Outcome:**
+    - The employee's Ctrl+S was refused: 「保存未写回文件」 was shown at save and at end, together with ONLYOFFICE's own 「保存文件时出错」 dialog.
+    - `rewriteState` was `agent-only` after the rewrite, after the save and after the close, with `typed: false` in all three reads. Neither the in-window typing nor the later saved nonce reached the file.
+    - No copy appeared in `/data/work`. The masked screenshots were checked visually.
+    - **The MUST (后写覆盖) is violated.**
+  - **Owner decision, 2026-11-21:** a build-time patch plus an upstream issue.
+    - Pin `dsh-sidebar-onlyoffice@0.2.0` `lib/client.js` in `images/dsh-user/patch-package.mjs` with input and output sha256. A version mismatch fails the build.
+    - The patch behaviour: when the editor turns clean (dirty→false) while a `change` arrived during the dirty state, refresh once (`refreshNow`) instead of only clearing the banner.
+    - File an issue upstream at `chendefine/dsh-sidebar-onlyoffice`.
+    - This is a critical path (`images/dsh-user/`): the PR asks for a human line-by-line review.
+- [ ] 2.1a Patch (implementer):
+  - Per-target replacements in `PINS.onlyoffice`. The engine applies one replacement list to every target, so each target gets its own list, with the existing `lib/index.js` list unchanged.
+  - The `lib/client.js` target (input sha256 `13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc`) gets three replacements, each anchored on text that occurs exactly once:
+    - a pending-change flag scoped to `run`;
+    - the flag is set in the `es.onmessage` dirty branch (`client.js:357-359`);
+    - the `onDocumentStateChange` clean branch (`:316-320`) refreshes once and clears the flag when the flag is set, and otherwise clears the banner as released.
+  - The `removed` banner and the clean-editor branch are unchanged.
+  - Sibling unit tests in the `patch-package` test cover the new target: the anchors, sha mismatch refusal, and per-target replacement isolation.
+- [ ] 2.1b Tighten `EXPECTED` for `typing` to the patched behaviour, shown by two agreeing exact-head stack runs:
+  - the stale banner latched in the window;
+  - one refresh (`config` 2) at dirty→false;
+  - after the save, the file is `both` for the employee's last save, and the in-window typing is gone, as in `unsaved`;
+  - no copy;
+  - `saveFailed` behaves as the stack runs show for the refused K1 session.
+
+  Keep the record-only facts as evidence.
+
+- [ ] 2.1c Orchestrator: file the upstream issue on `chendefine/dsh-sidebar-onlyoffice` with the measured facts. It contains no deployment, user, key or path details.
 - [ ] 2.2 Only when the MUST holds:
   - Rewrite `docs/EMPLOYEE_GUIDE.md` §「AI 改写正在编辑的文件」 (`:61` no longer "unverified", the `:67` bullet, the advice) to the measured behaviour, including where in-window typing goes.
   - Add a `stackEvidence.officeRewrite` row to `docs/LOCAL_STACK.md`.
