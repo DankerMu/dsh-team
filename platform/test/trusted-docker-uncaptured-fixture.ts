@@ -155,6 +155,14 @@ function uncapturedAuthority(root: string, owner: Identity, child?: Identity) {
   return { owner, temporary, device: dev, inode: ino, ...(child ? { child } : {}) };
 }
 
+function observedLive(identity: Identity, custody: UncapturedCustody) {
+  try {
+    return custody.live(identity);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Freeze an uncaptured invocation's owner, bind its command, then kill and settle the owner on
  * every path. Only a bound command or none started yields an authority, whose group the caller
@@ -183,9 +191,11 @@ export async function claimUncaptured(root: string, custody: UncapturedCustody) 
       return { report };
     } finally {
       await custody.settle(owner).catch((error: unknown) => {
-        // A settle that could not observe a stopped owner must still not leave it stopped.
+        // A failed settle must not leave a stopped owner stopped, yet only a pid still observed
+        // under the owner's birth is signalled: a changed or unobservable identity is not killed.
         try {
-          if (stop.sent) custody.signal(Number(owner.pid), 'SIGKILL');
+          if (stop.sent && observedLive(owner, custody))
+            custody.signal(Number(owner.pid), 'SIGKILL');
         } catch (killed) {
           if (!absent(killed)) throw killed;
         }

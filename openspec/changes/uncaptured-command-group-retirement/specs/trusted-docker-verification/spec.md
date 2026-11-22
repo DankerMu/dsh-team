@@ -6,7 +6,7 @@ When the trusted custody fixture's cleanup finds an invocation whose start was n
 
 While the owner is frozen, cleanup SHALL bind the identity of the command the owner started. The identity comes from the command receipt, or, when no receipt exists, from the owner's direct child that leads its own process group and runs the verification command.
 
-Cleanup SHALL then retire the owner, and SHALL retire the command's group after the owner. It SHALL NOT leave the owner stopped.
+Cleanup SHALL then retire the owner, and SHALL retire the command's group after the owner. It SHALL NOT leave the owner stopped, except when the owner's identity can no longer be confirmed after its retirement failed. In that case it SHALL NOT signal the unconfirmed pid, and SHALL report the retirement failure.
 
 Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence.
 

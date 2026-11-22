@@ -118,15 +118,19 @@ it.each<[string, ProcessRow[], object]>([
 });
 
 interface Stub {
-  live?: boolean;
+  /** Answers of live() in call order, the last repeating; a string is thrown, as a reused pid. */
+  live?: (boolean | string)[];
   stop?: string;
   stat?: string;
   rows?: ProcessRow[];
+  /** The rows of every scan after the first. */
+  rescan?: ProcessRow[];
   scanStatus?: number;
   birth?: string | null;
   receipt?: boolean;
   launch?: boolean;
-  settle?: boolean;
+  /** The message settle rejects with. */
+  settle?: string;
 }
 
 async function claim(stub: Stub) {
@@ -143,25 +147,43 @@ async function claim(stub: Stub) {
     if (stub.receipt)
       writeFileSync(join(root, 'child.json'), JSON.stringify({ owner: { pid: 7, birth: 'r' } }));
     const events: string[] = [];
-    const listed = (stub.rows ?? [owner]).map(
-      (row) => `${String(row.pid)} ${String(row.ppid)} ${String(row.pgid)} ${row.command}`,
-    );
+    // A bounded wait polls a load-dependent number of times, so repeats collapse to `<event> …`.
+    const note = (event: string) => {
+      const last = events.at(-1);
+      if (last === event || last === `${event} …`) events[events.length - 1] = `${event} …`;
+      else events.push(event);
+    };
+    const listed = (rows: ProcessRow[]) =>
+      rows.map(
+        (row) => `${String(row.pid)} ${String(row.ppid)} ${String(row.pgid)} ${row.command}`,
+      );
+    const answers = [...(stub.live ?? [true])];
+    let scans = 0;
     const claimed = await claimUncaptured(root, {
-      live: () => stub.live ?? true,
+      live: () => {
+        const answer = (answers.length > 1 ? answers.shift() : answers[0]) ?? true;
+        if (typeof answer === 'string') throw new Error(answer);
+        return answer;
+      },
       observe: () => (stub.birth === undefined ? 'b' : stub.birth),
-      run: (_file, args) =>
-        args.includes('stat=')
-          ? { status: 0, stdout: stub.stat ?? 'T\n' }
-          : { status: stub.scanStatus ?? 0, stdout: listed.join('\n') },
+      run: (_file, args) => {
+        if (args.includes('stat=')) {
+          note('ps stat');
+          return { status: 0, stdout: stub.stat ?? 'T\n' };
+        }
+        note('ps scan');
+        const rows = (scans++ === 0 ? stub.rows : (stub.rescan ?? stub.rows)) ?? [owner];
+        return { status: stub.scanStatus ?? 0, stdout: listed(rows).join('\n') };
+      },
       signal: (pid, signal) => {
-        events.push(`${signal} ${String(pid)}`);
+        note(`${signal} ${String(pid)}`);
         if (stub.stop) throw Object.assign(new Error('stop'), { code: stub.stop });
       },
       settle: (identity) => {
-        events.push(`settle ${String(identity.pid)}`);
-        return stub.settle === false
-          ? Promise.reject(new Error('owner unsettled'))
-          : Promise.resolve();
+        note(`settle ${String(identity.pid)}`);
+        return stub.settle === undefined
+          ? Promise.resolve()
+          : Promise.reject(new Error(stub.settle));
       },
     });
     const failure = claimed.failure instanceof Error ? claimed.failure.message : claimed.failure;
@@ -177,12 +199,19 @@ async function claim(stub: Stub) {
   }
 }
 
-const frozen = ['SIGSTOP 900001', 'settle 900001'];
+const stopped = ['SIGSTOP 900001', 'ps stat'];
+// Stop confirmation precedes the first scan; the owner is settled after the last one.
+const frozen = [...stopped, 'ps scan', 'settle 900001'];
+const polled = [...stopped, 'ps scan …', 'settle 900001'];
+const receiptOnly = [...stopped, 'settle 900001'];
+const unstopped = ['SIGSTOP 900001', 'settle 900001'];
 const gone = ['settle 900001'];
 const killed = [...frozen, 'SIGKILL 900001'];
 const scanned = { child: { pid: 7, birth: 'b' } };
 const receipted = { child: { pid: 7, birth: 'r' } };
 const unsettled = { failure: 'owner unsettled' };
+const CHANGED = 'Fixture identity changed; retaining authority';
+const UNOBSERVED = 'Fixture process observation unavailable';
 const unread = { failure: expect.stringMatching(/^ENOENT/) as unknown };
 const unbound = (reason: string) => `command unidentified (${reason})`;
 // Two rows wait the full 2s identification bound of the fixture; 10s leaves room under load.
@@ -191,7 +220,15 @@ const CLAIM_CASE_MS = 10_000;
 it.each<[string, Stub, string, boolean, string[], object?]>([
   ['one command', { rows: [owner, pnpm] }, 'command 7', false, frozen, scanned],
   ['zero children', {}, 'no command started', false, frozen],
-  ['in flight', { rows: [owner, forked] }, unbound('in-flight child 7'), true, frozen],
+  ['in flight', { rows: [owner, forked] }, unbound('in-flight child 7'), true, polled],
+  [
+    'in flight, then a command',
+    { rows: [owner, forked], rescan: [owner, pnpm] },
+    'command 7',
+    false,
+    polled,
+    scanned,
+  ],
   ['ambiguous', { rows: [owner, child(7, 7, 'sh')] }, unbound('ambiguous child 7'), true, frozen],
   ['a failed scan', { scanStatus: 1 }, unbound('scan failed'), true, frozen],
   ['an unlisted owner', { rows: [pnpm] }, unbound('owner unlisted'), true, frozen],
@@ -202,30 +239,68 @@ it.each<[string, Stub, string, boolean, string[], object?]>([
     true,
     frozen,
   ],
-  ['an unconfirmed stop', { stat: 'S\n' }, unbound('owner stop unconfirmed'), true, frozen],
+  [
+    'an unconfirmed stop',
+    { stat: 'S\n' },
+    unbound('owner stop unconfirmed'),
+    true,
+    ['SIGSTOP 900001', 'ps stat …', 'settle 900001'],
+  ],
   [
     'frozen, receipt',
     { receipt: true, rows: [owner, pnpm] },
     'command 7',
     false,
-    frozen,
+    receiptOnly,
     receipted,
   ],
-  ['gone, receipt', { live: false, receipt: true }, 'command 7', false, gone, receipted],
-  ['gone, no receipt', { live: false }, unbound('owner gone without receipt'), true, gone],
-  ['gone at its stop', { stop: 'ESRCH' }, unbound('owner gone without receipt'), true, frozen],
+  ['gone, receipt', { live: [false], receipt: true }, 'command 7', false, gone, receipted],
+  ['gone, no receipt', { live: [false] }, unbound('owner gone without receipt'), true, gone],
+  ['gone at its stop', { stop: 'ESRCH' }, unbound('owner gone without receipt'), true, unstopped],
   [
     'a failed stop',
     { stop: 'EPERM' },
     unbound('cleanup failed'),
     true,
-    frozen,
+    unstopped,
     { failure: 'stop' },
   ],
-  ['unsettled', { rows: [owner, pnpm], settle: false }, 'command 7', true, killed, unsettled],
+  [
+    'unsettled',
+    { rows: [owner, pnpm], settle: 'owner unsettled' },
+    'command 7',
+    true,
+    killed,
+    unsettled,
+  ],
+  // The backstop signals only an owner it still observes under its bound identity.
+  [
+    'unsettled, then gone',
+    { rows: [owner, pnpm], live: [true, false], settle: 'owner unsettled' },
+    'command 7',
+    true,
+    frozen,
+    unsettled,
+  ],
+  [
+    'unsettled, its pid reused',
+    { rows: [owner, pnpm], live: [true, CHANGED], settle: CHANGED },
+    'command 7',
+    true,
+    frozen,
+    { failure: CHANGED },
+  ],
+  [
+    'unsettled, unobservable',
+    { rows: [owner, pnpm], live: [true, UNOBSERVED], settle: UNOBSERVED },
+    'command 7',
+    true,
+    frozen,
+    { failure: UNOBSERVED },
+  ],
   [
     'gone, unsettled',
-    { live: false, settle: false },
+    { live: [false], settle: 'owner unsettled' },
     unbound('owner gone without receipt'),
     true,
     gone,

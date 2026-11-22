@@ -25,7 +25,7 @@ Uncaptured cleanup signals only processes it has bound to an identity it owns:
 - the owner, from `launch.json`;
 - the owner's direct child that leads its own group and runs the verification command.
 
-It never claims that the command group is absent while that is uncertain. It never leaves the owner stopped.
+It never claims that the command group is absent while that is uncertain. It never leaves the owner stopped, with one exception: if the owner's settle fails and a fresh identity check then cannot confirm the owner, the SIGKILL backstop is skipped and the settle failure is reported. A visible stopped process is preferred to signalling a pid that may have been reused (review round 1).
 
 ## Decisions
 
