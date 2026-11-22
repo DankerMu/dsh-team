@@ -7,10 +7,13 @@ import {
   heldRunning,
   idleMinutes,
   idleRetired,
+  loaded,
   officeIdleLine,
+  officeIdleScenario,
   OPERATOR_FONTS,
   operatorFonts,
 } from './office-idle-stack-fixture.ts';
+import type { Admin } from './office-idle-stack-fixture.ts';
 
 const A = 'office@deployment.example.test';
 const COOKIE = 'dsh_team_session=stub-administrator-cookie';
@@ -176,7 +179,7 @@ it('prints the editor session by its screenshots and error counts', () => {
   const file = { before: { size: 1, sha256: 'a' }, after: { size: 2, sha256: 'b' } };
   const fonts = { files: 11, families: ['SimHei'] };
   const stopped = { stoppedMs: 95_000, reason: 'idle' as const };
-  const evidence = { held, fonts, file, editor, stopped };
+  const evidence = { held, fonts, file, editor, stopped, restored: true as const };
 
   const line = officeIdleLine(evidence);
 
@@ -240,4 +243,123 @@ it.each([
   ['a name is not a string', ['SimHei', 7], /not a string array/],
 ])('fails the font check when %s', (_case, names, message) => {
   expect(() => fontsShown(FONTS, names)).toThrow(message);
+});
+
+const HELD = { heldMs: 210_004, status: 'running', restarted: false, idleStops: 0 };
+const NAMES = ['SimHei', 'FangSong_GB2312', 'Source Han Sans SC'];
+const SHOWN = { files: 3, families: ['FangSong_GB2312', 'SimHei', 'Source Han Sans SC'] };
+const noRestore = () => Promise.resolve();
+const putBodies = (seen: Seen[]) =>
+  seen.filter(({ method }) => method === 'PUT').map(({ body }): unknown => JSON.parse(body));
+
+/** A stand-in hold recording its arguments and how many requests the platform had seen by then. */
+function standInHold(seen: Seen[]) {
+  const calls: unknown[] = [];
+  const hold = (admin: Admin, email: string, holdMs: number) => {
+    calls.push({ admin, email, holdMs, requestsBefore: seen.length });
+    return Promise.resolve({ held: HELD, sinceId: SINCE });
+  };
+  return { calls, hold };
+}
+
+it("sets one idle minute after the font check, holds for 210s and leaves the original's restore", async () => {
+  const { admin, seen } = await platform([[RUNNING]]);
+  const { calls, hold } = standInHold(seen);
+  const idle = { restore: noRestore };
+
+  const shown = await loaded(admin, A, FONTS, idle, () => Promise.resolve(NAMES), hold);
+  const putsBefore = putBodies(seen);
+  await idle.restore();
+
+  expect(shown).toEqual({ fonts: SHOWN, hold: { held: HELD, sinceId: SINCE } });
+  expect(calls).toEqual([{ admin, email: A, holdMs: 210_000, requestsBefore: 2 }]);
+  expect(putsBefore).toEqual([{ ...CONFIG, idleMinutes: 1 }]);
+  expect(putBodies(seen)).toEqual([{ ...CONFIG, idleMinutes: 1 }, CONFIG]);
+});
+
+it('leaves the runtime configuration and the restore untouched when the font check fails', async () => {
+  const { admin, seen } = await platform([[RUNNING]]);
+  const { calls, hold } = standInHold(seen);
+  const idle = { restore: noRestore };
+
+  const failed = loaded(admin, A, FONTS, idle, () => Promise.resolve(['SimHei']), hold);
+
+  await expect(failed).rejects.toThrow(/fangsong\.ttf/);
+  expect(putBodies(seen)).toEqual([]);
+  expect(idle.restore).toBe(noRestore);
+  expect(calls).toEqual([]);
+});
+
+const unused = () => Promise.reject(new Error('the stand-in body reads only the administrator'));
+const RUN = {
+  held: HELD,
+  fonts: SHOWN,
+  file: { before: { size: 1, sha256: 'a' }, after: { size: 2, sha256: 'b' } },
+  editor: {
+    ...{ screenshots: [], consoleErrors: [], pageErrors: [], failedRequests: [] },
+    ...{ externalRequests: [], requests: 0, websockets: 0 },
+  },
+  stopped: { stoppedMs: 95_000, reason: 'idle' as const },
+};
+
+/** A full idle lane whose members, but the administrator, reject: only the stand-in body runs. */
+function idleLane(admin: Admin) {
+  const session = { base: admin.base, directory: '', email: A, password: '', timeout: 1 };
+  const readBack = { marker: '', command: '', nonce: '' };
+  return {
+    ...{ session, exec: unused, provider: unused, run: unused, namespaceRead: unused },
+    ...{ reply: '', readBack, secondEmployee: unused, secondEmail: '', retire: unused },
+    administrator: admin,
+  };
+}
+
+/** A stand-in body that sets one idle minute through the real helper and counts its restores;
+ * `restores: false` keeps the no-op restore, `fails` throws after the idle change. */
+function standIn(options: { restores?: boolean; fails?: boolean } = {}) {
+  const restored = { count: 0 };
+  const body = async (lane: { administrator: Admin }, idle: { restore: () => Promise<void> }) => {
+    const restore = await idleMinutes(lane.administrator, 1);
+    if (options.restores !== false)
+      idle.restore = () =>
+        restore().then(() => {
+          restored.count += 1;
+        });
+    if (options.fails === true) throw new Error('Office idle body failed');
+    return RUN;
+  };
+  return { restored, body };
+}
+
+it('snapshots the runtime configuration, restores it once on success and reads it back equal', async () => {
+  const { admin, seen } = await platform([[RUNNING]]);
+  const { restored, body } = standIn();
+
+  const evidence = await officeIdleScenario(idleLane(admin), body);
+
+  expect(evidence).toEqual({ ...RUN, restored: true });
+  expect(restored.count).toBe(1);
+  const config = `${ADMIN}/runtime-config`;
+  expect(seen.map(({ method, url }) => `${method} ${url}`)).toEqual(
+    ['GET', 'GET', 'PUT', 'PUT', 'GET'].map((method) => `${method} ${config}`),
+  );
+  expect(putBodies(seen)).toEqual([{ ...CONFIG, idleMinutes: 1 }, CONFIG]);
+});
+
+it('fails when the read-back differs from the snapshot', async () => {
+  const { admin } = await platform([[RUNNING]]);
+
+  const run = officeIdleScenario(idleLane(admin), standIn({ restores: false }).body);
+
+  await expect(run).rejects.toThrow(/runtime-config restored to its snapshot/);
+});
+
+it('restores the runtime configuration once and rethrows when the body fails', async () => {
+  const { admin, seen } = await platform([[RUNNING]]);
+  const { restored, body } = standIn({ fails: true });
+
+  const run = officeIdleScenario(idleLane(admin), body);
+
+  await expect(run).rejects.toThrow('Office idle body failed');
+  expect(restored.count).toBe(1);
+  expect(putBodies(seen)).toEqual([{ ...CONFIG, idleMinutes: 1 }, CONFIG]);
 });

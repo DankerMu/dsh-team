@@ -21,19 +21,19 @@ See `design.md` § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 C1:
+- [x] 1.1 C1:
   - `officeIdleScenario(lane, body = officeIdle)`: snapshot `runtime-config` before, then read back and deep-compare after its restore, recording `restored: true`.
   - Integration cases:
     - C1-a: `loaded`'s success path, with a stand-in hold and a recording admin, leaves a restore that PUTs the original configuration.
     - C1-b: `officeIdleScenario` with a stand-in body calls the body-assigned restore exactly once on success.
-- [ ] 1.2 C3:
+- [x] 1.2 C3:
   - Export `loaded(admin, email, operator, idle, readFonts, hold = heldRunning)` (`officeIdle` passes `() => editorFontNames(editor)`), returning `{ fonts, hold }`, and use it from `officeIdle`.
   - Integration case: when `fontsShown` fails, zero PUTs are made and the restore stays the no-op.
-- [ ] 1.3 Show red, then green:
+- [x] 1.3 Show red, then green:
   - the `:187` restore dropped;
   - the `:212` call deleted;
   - `:186` and `:187` swapped.
-- [ ] 1.4 Evidence:
+- [x] 1.4 Evidence:
   - add `restored` to `officeIdleLine`;
   - update the integration test `:162-186`;
   - update `docs/LOCAL_STACK.md:199`, adding `restored`, keeping the existing fields and the 210 s argument, and correcting "只开着 DOCX 编辑器" (the workbench is also open; C2 is a later slice).
