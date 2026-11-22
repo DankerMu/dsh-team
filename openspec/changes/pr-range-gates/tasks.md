@@ -47,6 +47,6 @@ See design.md § Must preserve.
 
 ## 2. Verification
 
-- [ ] 2.1 Make sure this PR's own commits pass commitlint: subject ≤72 characters, header and body lines ≤100, and a blank line before the trailer. Run `pnpm lint` (including `lint:ci`, `lint:agents` and `lint:shell`), `pnpm test:guardrails` and `pnpm check`. Also run `pnpm lint:pr` on this branch's own range (green) and on a scratch range with a bad commit (red), and record both.
+- [x] 2.1 Make sure this PR's own commits pass commitlint: subject ≤72 characters, header and body lines ≤100, and a blank line before the trailer. Run `pnpm lint` (including `lint:ci`, `lint:agents` and `lint:shell`), `pnpm test:guardrails` and `pnpm check`. Also run `pnpm lint:pr` on this branch's own range (green) and on a scratch range with a bad commit (red), and record both.
 - [ ] 2.2 This PR's CI shows `pr-range` running on its range. After merge, a reviewer checks the push run, where the step is skipped and the job is green. This item is reported, not a merge gate.
 - [ ] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`.
