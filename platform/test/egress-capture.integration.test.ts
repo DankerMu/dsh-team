@@ -4,13 +4,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DockerCommand } from './docker-command.ts';
-import { captureContainer, confirmExited, countEgress, findTcpdump } from './egress-capture.ts';
+import {
+  captureContainer,
+  confirmExited,
+  countEgress,
+  DRAIN_MS,
+  EXIT_CONFIRM_MS,
+  findTcpdump,
+  liveness,
+} from './egress-capture.ts';
 import type { Boundary } from './egress-capture.ts';
 
 // Stands in for `timeout`+`tcpdump`: canned `-i any` LINUX_SLL2 lines; on SIGINT tcpdump's interrupt
 // newline on stdout, then its stats. The handler precedes any output: a stop may follow the listening
 // line at once, and an unhandled SIGINT would kill the fake before it answers. Its pid file, which
-// the injected /proc reader finds, is written first too: the listening line means it exists.
+// the injected /proc reader finds, is written first too: the listening line means it exists. Mode
+// `silent` never listens; mode `stuck` listens but ignores SIGINT, so its capture never closes.
 const FAKE_TCPDUMP = `
 require('node:fs').writeFileSync(process.argv[2], String(process.pid));
 const mode = process.argv[1];
@@ -29,13 +38,14 @@ const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'], middl
 const tail = '10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443: Flags [P.], tail-must-not-stay';
 const stat = (n, what) => n + ' packet' + (n === 1 ? '' : 's') + ' ' + what + '\\n';
 process.on('SIGINT', () => {
+  if (mode === 'stuck') return;
   process.stdout.write('\\n' + ({ blanks: '\\n', after: tail + '\\n', unterminated: tail }[mode] ?? ''));
   const [extra, lost] = [mode === 'extra' ? 1 : 0, mode === 'dropped' ? 1 : 0];
   process.stderr.write('\\n' + stat(lines.length + extra, 'captured') + stat(lines.length + extra, 'received by filter') + stat(lost, 'dropped by kernel'));
   process.exit(0);
 });
 process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
-process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
+if (mode !== 'silent') process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
 process.stdout.write(lines.join('\\n') + '\\n');
 setTimeout(() => process.exit(3), 20000);
 `;
@@ -65,7 +75,6 @@ afterEach(() => {
 const CAPTURE_CASE_MS = 30_000;
 // The case's own assertions after the capture settled.
 const CAPTURE_RESERVE_MS = 2_000;
-const [DRAIN_MS, EXIT_CONFIRM_MS] = [5_000, 2_000];
 /** Listen and close each take half of what the deadline leaves after drain and confirmExited. */
 function captureBounds(deadline: number): Pick<Boundary, 'listenMs' | 'closeMs' | 'exitConfirmMs'> {
   const phase = Math.floor((deadline - Date.now() - DRAIN_MS - EXIT_CONFIRM_MS) / 2);
@@ -73,7 +82,13 @@ function captureBounds(deadline: number): Pick<Boundary, 'listenMs' | 'closeMs' 
 }
 
 /** Called first in a case of CAPTURE_CASE_MS, so its bounds derive from that case's deadline. */
-function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bound = 90) {
+function fakeCapture(
+  mode: string,
+  logs = 'booting\n',
+  state = '4242 true\n',
+  bound = 90,
+  bounds: Partial<Boundary> = {},
+) {
   const deadline = Date.now() + CAPTURE_CASE_MS - CAPTURE_RESERVE_MS;
   const directory = mkdtempSync(join(tmpdir(), 'dsh-team-egress-'));
   cleanup.push(directory);
@@ -88,6 +103,7 @@ function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bo
   let sudo = -1;
   const started = captureContainer(command, 'dsh-team-test-start', bound, BEFORE, {
     ...captureBounds(deadline),
+    ...bounds,
     spawn: (argv) => {
       spawned.push(argv);
       const child = spawn(process.execPath, ['-e', FAKE_SUDO, mode, pidFile], {
@@ -100,7 +116,8 @@ function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bo
     children: (pid) => (pid === sudo ? [Number(readFileSync(pidFile, 'utf8'))] : []),
     comm: (pid) => (pid === sudo ? 'timeout' : 'tcpdump'),
   });
-  return { started, spawned, docker, tcpdump: () => Number(readFileSync(pidFile, 'utf8')) };
+  const tcpdump = () => Number(readFileSync(pidFile, 'utf8'));
+  return { started, spawned, docker, tcpdump, sudo: () => sudo };
 }
 
 describe('a capture against fake sudo and tcpdump', { timeout: CAPTURE_CASE_MS }, () => {
@@ -164,6 +181,60 @@ describe('a capture against fake sudo and tcpdump', { timeout: CAPTURE_CASE_MS }
       expect(() => process.kill(tcpdump(), 0)).toThrow(/ESRCH/);
     },
   );
+
+  // A wait this short expires far below the ~10.5s derived and 15s live bounds.
+  const SHORT_WAIT_MS = 1_000;
+  const waited = (message: string, phase: string) =>
+    Number(new RegExp(`; ${phase} wait expired at (\\d+)ms`).exec(message)?.[1]);
+
+  it('names the listen wait, its elapsed time and sudo alive when tcpdump never listens', async () => {
+    const { started } = fakeCapture('silent', 'booting', '4242 true\n', 90, {
+      listenMs: SHORT_WAIT_MS,
+    });
+
+    const message = String(
+      await started.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    );
+
+    expect(message).toMatch(
+      /never listened: [^;]*; listen wait expired at \d+ms: sudo pid=\d+ alive exitCode=null signalCode=null; stop: /,
+    );
+    expect(message).not.toContain('listened after');
+    expect(waited(message, 'listen')).toBeLessThan(5_000);
+  });
+
+  it('names the close wait, its elapsed time and both processes alive when tcpdump ignores the stop', async () => {
+    const { started, tcpdump, sudo } = fakeCapture('stuck', 'booting', '4242 true\n', 90, {
+      closeMs: SHORT_WAIT_MS,
+    });
+    const capture = await started;
+    try {
+      const message = String(
+        await capture.stop().then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+
+      const [tcpdumpPid, sudoPid] = [String(tcpdump()), String(sudo())];
+      expect(message).toMatch(
+        new RegExp(
+          `: capture did not close; close wait expired at \\d+ms: tcpdump pid=${tcpdumpPid} alive; sudo pid=${sudoPid} alive exitCode=null signalCode=null$`,
+        ),
+      );
+      expect(waited(message, 'close')).toBeLessThan(5_000);
+    } finally {
+      // Neither fake exits on its own for 20s: the fake sudo leads their process group.
+      process.kill(-sudo(), 'SIGKILL');
+      await confirmExited(tcpdump(), {
+        kill: (pid, signal) => void process.kill(pid, signal),
+        now: Date.now,
+      });
+    }
+  });
 
   it('accepts the singular `1 packet captured` of a capture holding only the canary', async () => {
     const capture = await fakeCapture('one').started;
@@ -335,4 +406,14 @@ it('confirms an exit only on ESRCH: EPERM and a live answer are observed again u
   await expect(confirmExited(7, signals(['alive', 'EPERM', 'ESRCH']))).resolves.toBeUndefined();
   await expect(confirmExited(7, signals([]))).rejects.toThrow('tcpdump exit unconfirmed');
   await expect(confirmExited(7, signals(['EINVAL']))).rejects.toThrow('EINVAL');
+});
+
+it.each<readonly [string, number | undefined, string[], string]>([
+  ['an unrecorded pid, never probed', undefined, [], 'unrecorded'],
+  ['a live answer', 7, ['alive'], 'alive'],
+  ['EPERM, a live root process', 7, ['EPERM'], 'alive'],
+  ['ESRCH', 7, ['ESRCH'], 'gone'],
+  ['any other code', 7, ['EINVAL'], 'unobservable EINVAL'],
+])('reports %s the way confirmExited reads it', (_case, pid, codes, expected) => {
+  expect(liveness(pid, signals(codes))).toBe(expected);
 });

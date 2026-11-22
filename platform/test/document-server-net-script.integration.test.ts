@@ -79,20 +79,21 @@ async function holder(options: {
   });
   const exited = once(child, 'exit');
   const running = () => child.exitCode === null && child.signalCode === null;
-  // Each phase's bound starts with it (#656): a slow marker cannot shorten the TERM exit.
+  // Each phase's bound starts with it (#656): a slow marker cannot shorten the TERM exit. Returns
+  // the deadline it polled against, so the exit bound is observed where it is used.
   const settle = async (done: () => boolean, until: number) => {
     while (running() && !done() && Date.now() < until)
       await new Promise((resolve) => setTimeout(resolve, 20));
+    return until;
   };
   await settle(() => existsSync(ready), Date.now() + READY_MS);
   const held = running() && existsSync(ready);
   let timedOut: false | 'ready' | 'exit' = running() && !held ? 'ready' : false;
   if (held) {
     const termAt = Date.now();
-    const exitDeadline = termAt + EXIT_MS;
     child.kill('SIGTERM');
-    options.exitBound?.(exitDeadline - termAt);
-    await settle(() => false, exitDeadline);
+    const polledUntil = await settle(() => false, termAt + EXIT_MS);
+    options.exitBound?.(polledUntil - termAt);
     if (running()) timedOut = 'exit';
   }
   const [code, signal] = [child.exitCode, child.signalCode];

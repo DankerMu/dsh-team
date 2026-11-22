@@ -15,7 +15,9 @@ const LISTENING = /^listening on any, link-type (\S+) /m;
 const LISTEN_MS = 15_000;
 // The relayed SIGINT arms `timeout -k 5`, so tcpdump is gone within 5s of it.
 const CLOSE_MS = 15_000;
-const EXIT_CONFIRM_MS = 2_000;
+export const EXIT_CONFIRM_MS = 2_000;
+/** drain's bound on the canary. */
+export const DRAIN_MS = 5_000;
 
 export interface EgressCounts {
   /** `ptr`: Docker embedded-DNS replies whose answers are all PTR, counted apart from `53`. */
@@ -34,7 +36,7 @@ interface EgressEvidence extends EgressCounts {
   exited: 'ESRCH';
 }
 export interface EgressCapture {
-  /** Resolves once the udp/9 canary was printed (or after 5s): every earlier packet was too. */
+  /** Resolves once the udp/9 canary was printed (or after DRAIN_MS): every earlier packet was too. */
   drain: () => Promise<unknown>;
   /** Idempotent: SIGINT to sudo, bounded close, then tcpdump's exit confirmed. */
   stop: () => Promise<EgressEvidence>;
@@ -170,7 +172,7 @@ const expired = (phase: string, milliseconds: number): string =>
   `; ${phase} wait expired at ${String(Math.round(milliseconds))}ms`;
 
 /** `kill(pid, 0)` read as confirmExited reads it: ESRCH is gone, success or EPERM is alive. */
-function liveness(pid: number | undefined, os: Pick<Boundary, 'kill'>): string {
+export function liveness(pid: number | undefined, os: Pick<Boundary, 'kill'>): string {
   if (pid === undefined) return 'unrecorded';
   try {
     os.kill(pid, 0);
@@ -286,7 +288,7 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   }
   let stopped: Promise<EgressEvidence> | undefined;
   const capture: EgressCapture = {
-    drain: () => within(canary.promise, 5_000),
+    drain: () => within(canary.promise, DRAIN_MS),
     stop: () => (stopped ??= finish()),
   };
   try {

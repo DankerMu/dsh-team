@@ -16,10 +16,11 @@ import { caseBudget } from './trusted-docker-fixture.ts';
 
 const mainPath = fileURLToPath(new URL('../src/main.ts', import.meta.url));
 // One observeStartup per case of this budget (#656): setup (its 5s signal) and the listener wait
-// end STARTUP_RESERVE_MS before it, leaving the exercise and afterExit signals (2s each) and the
-// stop, which the spawn's 6s SIGKILL bounds.
+// end STARTUP_RESERVE_MS before it, at 10s; the last in-flight health fetch (200ms), the exercise
+// and afterExit signals (2s each) reach 14.2s, so the graceful stop, which the spawn's 6s SIGKILL
+// backs, keeps 0.8s of the 15s.
 export const STARTUP_CASE_MS = 15_000;
-const STARTUP_RESERVE_MS = 4_000;
+const STARTUP_RESERVE_MS = 5_000;
 // Main listening or exiting, cut to that case deadline.
 const LISTENER_MS = 5_000;
 
@@ -118,7 +119,7 @@ export async function settleMainProcess(
   return outcome.observation;
 }
 
-async function observeMainListener(
+export async function observeMainListener(
   child: ChildProcess,
   closed: Promise<StartupExit>,
   base: string,

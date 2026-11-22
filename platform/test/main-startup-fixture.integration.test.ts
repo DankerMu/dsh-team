@@ -1,8 +1,15 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { expect, it, vi } from 'vitest';
-import { settleMainProcess, watchMainProcess } from './main-startup-fixture.ts';
+import { unusedPort } from './gateway-http-fixture.ts';
+import {
+  observeMainListener,
+  settleMainProcess,
+  STARTUP_CASE_MS,
+  watchMainProcess,
+} from './main-startup-fixture.ts';
 import type { StartupObservation } from './main-startup-fixture.ts';
+import { caseBudget } from './trusted-docker-fixture.ts';
 
 // Each child announces readiness on stdout only after its SIGTERM handler is installed.
 const KEEP_ALIVE = 'const keep = setInterval(() => {}, 1000);';
@@ -134,3 +141,30 @@ it('rethrows the original observation error after a successful stop', async () =
   expect(error).toBe(original);
   expect(afterStop).toHaveBeenCalledOnce();
 });
+
+// A case deadline this close cuts the 5s listener wait (#656).
+const LISTENER_CUT_MS = 500;
+it(
+  'names the listener phase, its elapsed time and the live pid when main neither listens nor exits by the case deadline',
+  async () => {
+    const main = await mainChild(STOP_CLEANLY);
+    const base = `http://127.0.0.1:${String(await unusedPort())}`;
+    try {
+      const budget = caseBudget(Date.now() + LISTENER_CUT_MS);
+      const error = await rejection(
+        observeMainListener(main.child, main.closed, base, main.stderr, undefined, budget),
+      );
+
+      const pattern = new RegExp(
+        `^Startup neither exited nor served health before its deadline \\(main listener after (\\d+)ms: pid=${String(main.child.pid)} present=true\\): $`,
+      );
+      expect(error.message).toMatch(pattern);
+      // Far below the uncut 5s wait.
+      expect(Number(pattern.exec(error.message)?.[1])).toBeLessThan(2_500);
+    } finally {
+      main.child.kill('SIGKILL');
+      await main.closed;
+    }
+  },
+  STARTUP_CASE_MS,
+);

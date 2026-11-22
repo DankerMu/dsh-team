@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import type { ClientRequest, IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expect, it } from 'vitest';
@@ -18,10 +19,9 @@ import {
   startupBarrier,
   startupUnixOwnerFixture,
 } from './container-start-fixture.ts';
-import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
+import { instanceConfig, readinessPolls, registerInstanceUser } from './instance-fixture.ts';
 import { seedReconciliation } from './container-reconcile-fixture.ts';
 import { observeHttp, withUpstream } from './gateway-http-fixture.ts';
-import { caseBudget } from './trusted-docker-fixture.ts';
 
 async function fixture() {
   const f = await startupUnixOwnerFixture({
@@ -359,45 +359,6 @@ it('projects a durable create quarantine through HTTP and refuses false cleanup 
 // wait end READINESS_RESERVE_MS before READINESS_CASE_MS, leaving the gateway fetch and f.close().
 const READINESS_CASE_MS = 15_000;
 const READINESS_RESERVE_MS = 5_000;
-// The readiness wait from the start's answer; caseBudget cuts each poll fetch to the case deadline.
-const READINESS_FAILURE_WAIT_MS = 5000;
-
-/** Bounded readiness polls; each timeout exit names its elapsed ms, poll count and DB status. */
-function readinessPolls(f: Awaited<ReturnType<typeof fixture>>, cookie: string, deadline: number) {
-  const budget = caseBudget(deadline);
-  const since = Date.now();
-  let polls = 0;
-  const stalled = (reason: string, cause?: unknown) => {
-    const row: unknown = f.database.prepare('SELECT status FROM instances').get();
-    const seen = `${String(Date.now() - since)}ms: polls=${String(polls)} db=${JSON.stringify(row)}`;
-    const api = 'Readiness failure was not reflected by the public API';
-    return new Error(`${api} (${reason}) after ${seen}`, { cause });
-  };
-  return async () => {
-    // The wait's own deadline, checked before each further poll as the loop once checked it.
-    if (Date.now() >= since + READINESS_FAILURE_WAIT_MS) throw stalled('wait expired');
-    let signal: AbortSignal;
-    try {
-      signal = AbortSignal.timeout(budget.limit('readiness poll', READINESS_FAILURE_WAIT_MS));
-    } catch (error) {
-      throw stalled('case deadline passed', error);
-    }
-    polls += 1;
-    try {
-      const response = await fetch(`${f.base}/_platform/api/instance`, {
-        headers: { cookie },
-        signal,
-      });
-      const current: unknown = await response.json();
-      return { status: response.status, current };
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'TimeoutError')
-        throw stalled('poll aborted', error);
-      throw error;
-    }
-  };
-}
-
 it.each([false, true])(
   'projects completed readiness failure truthfully with error persistence blocked=%s',
   async (blocked) => {
@@ -460,6 +421,44 @@ it.each([false, true])(
       });
       expect(f.lines.join('')).not.toMatch(/readiness-private-key|private-write-diagnostic/);
     } finally {
+      await f.close();
+    }
+  },
+  READINESS_CASE_MS,
+);
+
+// A case deadline this near cuts the 5s readiness poll.
+const POLL_CUT_MS = 500;
+it.each([
+  ['a near case deadline aborts the poll', POLL_CUT_MS, 'poll aborted', 1],
+  ['a passed case deadline leaves no poll', 0, 'case deadline passed', 0],
+])(
+  'names the readiness wait, elapsed time, polls and DB status when %s',
+  async (_case, offset, reason, polls) => {
+    const f = await fixture();
+    const unanswered = createServer(() => undefined);
+    try {
+      await new Promise<void>((resolve) => unanswered.listen(0, '127.0.0.1', resolve));
+      const { port } = unanswered.address() as AddressInfo;
+      const base = `http://127.0.0.1:${String(port)}`;
+      const poll = readinessPolls({ base, database: f.database }, '', Date.now() + offset);
+
+      const message = String(
+        await poll().then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+
+      const pattern = new RegExp(
+        `\\(${reason}\\) after (\\d+)ms: polls=${String(polls)} db=undefined$`,
+      );
+      expect(message).toMatch(pattern);
+      // Far below the wait's own 5s.
+      expect(Number(pattern.exec(message)?.[1])).toBeLessThan(2_500);
+    } finally {
+      unanswered.closeAllConnections();
+      unanswered.close();
       await f.close();
     }
   },

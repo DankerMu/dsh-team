@@ -214,6 +214,56 @@ process.stderr.write(${JSON.stringify(SECRET)});
   RECEIPT_CASE_MS,
 );
 
+// A case deadline this near cuts the 5s acknowledgement wait.
+const ACK_CUT_MS = 1_500;
+it.each([
+  ['a near case deadline cuts it', ACK_CUT_MS, /^child acknowledgement after (\d+)ms: pid=(\d+)/],
+  [
+    'a passed case deadline leaves none of it',
+    0,
+    /^Error: child acknowledgement: case deadline passed before it started; child acknowledgement after (\d+)ms: pid=(\d+)/,
+  ],
+])(
+  'records the acknowledgement wait, its elapsed time and the live child before stopping it when %s',
+  async (_case, offset, attribution) => {
+    receiptWriteFault.deadline = Date.now() + offset;
+    const { bin, work } = fakeChrome('setInterval(() => {}, 1000);');
+    const profile = join(work, 'profile');
+    mkdirSync(profile);
+    const receiptFile = join(work, 'chrome.receipt.json');
+    receiptWriteFault.path = receiptFile;
+    receiptWriteFault.ackPidFile = join(work, 'observed.pid');
+    receiptWriteFault.ackPortFile = join(work, 'observed.port');
+    try {
+      const error = await startChrome({
+        runtime: { kind: 'native', bin },
+        origin: 'http://127.0.0.1:12345',
+        profile,
+        receiptFile,
+      }).then(
+        () => undefined,
+        (launchError: unknown) => launchError,
+      );
+
+      expect(String(error)).toMatch(/^Error: chrome-start /);
+      const ack = receiptWriteFault.ackTimeout ?? '';
+      expect(ack).toMatch(new RegExp(`${attribution.source} present=true$`));
+      const [, elapsed, pid] = attribution.exec(ack) ?? [];
+      expect(Number(pid)).toBe(receiptWriteFault.capturedPid);
+      expect(Number(elapsed)).toBeLessThan(ACK_WAIT_MS);
+      expect(() => process.kill(Number(pid), 0)).toThrow();
+    } finally {
+      if (receiptWriteFault.capturedReceipt) {
+        const capturedFile = join(work, 'failed-receipt.json');
+        writeFileSync(capturedFile, receiptWriteFault.capturedReceipt, { mode: 0o600 });
+        await rescueChrome(capturedFile);
+      }
+      rmSync(work, { recursive: true, force: true });
+    }
+  },
+  RECEIPT_CASE_MS,
+);
+
 it('stops the spawned child when debugger discovery returns invalid JSON', async () => {
   const { bin, work } = fakeChrome(`
 const fs = require('node:fs');

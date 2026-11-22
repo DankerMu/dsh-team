@@ -1,6 +1,6 @@
 # Design
 
-Change surface: the five files in the proposal's Impact list.
+Change surface: the files in the proposal's Impact list (the five original files, plus `main-startup-fixture.ts` and its three callers from task 1.8).
 
 Must preserve:
 
@@ -43,7 +43,7 @@ Budgets (values chosen in implementation, each stated with its basis in a commen
   - `READY_MS` is the existing settle headroom (`SETTLE_MS`, whose basis is the `:22` comment) plus the injected delay D = 1 s.
   - `EXIT_MS` is about 3 s, because a TERM exit comes milliseconds after the marker.
   - `CASE_TIMEOUT_MS = READY_MS + EXIT_MS + reserve`.
-  - The observed exit bound is `exitDeadline − termAt`. `termAt` is read once when SIGTERM is sent, and `exitDeadline = termAt + EXIT_MS`. The case asserts `toBe(EXIT_MS)`.
+  - (Review round 1: `settle` returns the deadline it actually polled against, and the case reports that minus `termAt`, so a shared deadline turns it red: 8047 vs 3000.) The observed exit bound was first `exitDeadline − termAt`. `termAt` is read once when SIGTERM is sent, and `exitDeadline = termAt + EXIT_MS`. The case asserts `toBe(EXIT_MS)`.
   - The bound leaves through an options callback or a separate out-parameter, never the result object.
   - Red run: the same observation, ported temporarily into the shared-deadline holder, gives `deadline − termAt`. That value varies with t and practically never equals `EXIT_MS`. The case is deterministically red because of this inequality, not because the value is smaller (being smaller would need t > `SETTLE_MS − EXIT_MS`). The port is not committed.
   - If the marker is never held, there is no exit wait. A ready-phase timeout gives `timedOut: 'ready'`. The existing failure cases, where the script exits first, still give `timedOut: false`.
@@ -56,7 +56,7 @@ Sibling surfaces:
 
 Seams under test:
 
-- **#3:** a temporary never-listening fake mode for red/green. It is not committed.
+- **#3:** a temporary never-listening fake mode for red/green. It is not committed. (Review round 1 added committed `silent` and `stuck` fake modes with small injected bounds, plus `liveness()` branch cases; #5, #6 and main-startup gained committed short-deadline attribution cases.)
 - **#7:** `STUB_DELAY` on one `-S` call, using `/bin/sleep` after the log write, plus the test-only exit-bound observation.
 
 Required evidence:

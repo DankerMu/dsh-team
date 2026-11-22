@@ -67,5 +67,6 @@ Evidence floor: #3 red→green with a temporary never-listening fake mode (befor
 - `platform/test/egress-capture.integration.test.ts`
 - `platform/test/egress-capture.ts`
 - `platform/test/chrome-start.integration.test.ts`
-- `platform/test/instance.integration.test.ts` (761/800 lines)
+- `platform/test/instance.integration.test.ts` (797/800 lines after review round 1; `readinessPolls` moved to `instance-fixture.ts`)
 - `platform/test/document-server-net-script.integration.test.ts`
+- `platform/test/main-startup-fixture.ts` and its callers `subnet-startup`, `document-server-startup` and `quarantine-bootstrap` integration tests (task 1.8)
