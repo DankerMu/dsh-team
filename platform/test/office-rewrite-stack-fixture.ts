@@ -15,13 +15,26 @@ import {
   typeAndSave,
 } from './office-editor-stack-fixture.ts';
 import type { Digest } from './office-editor-stack-fixture.ts';
+import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   docxCommand,
   documentServerReady,
   openHinted,
   untilSeen,
 } from './office-hints-stack-fixture.ts';
-import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
+import {
+  FRAME_LISTENER,
+  FRAMES_SEEN,
+  frameSignal,
+  hostSignal,
+  saveLines,
+  WATCH_SEEN,
+  WATCH_WRAPPER,
+  watchSignal,
+  windowFacts,
+} from './office-rewrite-observers.ts';
+import type { FrameRecord, NoticeTimes, WatchRecord } from './office-rewrite-observers.ts';
+import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
@@ -33,6 +46,10 @@ const CASES = [
   { id: 'unsaved', name: '未保存改写.docx', typeFirst: true },
 ] as const;
 type CaseId = (typeof CASES)[number]['id'];
+/** #652: the rewrite lands while A is still typing, before the typing reached the Document Server. */
+const TYPING = { id: 'typing', name: '键入改写.docx' } as const;
+/** Letters only: no space or punctuation for autocorrect to act on, nothing NONCE_PATTERN matches. */
+const FILLER = 'w';
 // Every notice dsh-sidebar-onlyoffice@0.2.0 shows above the editor, zh: src/client/locales.ts:25
 // `staleChanged`, :27 `staleRemoved`, :28 `saveFailed`.
 const NOTICES = {
@@ -74,6 +91,28 @@ export const EXPECTED_REWRITE = {
   clean: CLEAN,
   unsaved: { ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
 };
+const NONE_SHOWN = { staleChanged: false, staleRemoved: false, saveFailed: false };
+const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
+/**
+ * #652's measurement with the patched lib/client.js (two runs on 6f43c7e). The stale banner latched
+ * in the window; at dirty false the editor refreshed once (config 1, 2, 2, 2), clearing it, and the
+ * refreshed-away session's status 2 was refused: 「保存未写回文件」 at the window's end. The next
+ * save landed (one `saved`), and no notice showed after it; one `change`, one `save-error`, no
+ * refresh request; the file the Agent's after the rewrite and both sides' after the save and the
+ * close, the in-window typing in no read; no new or missing work entry; 18.5's allowed errors.
+ */
+export const EXPECTED_TYPING = {
+  notices: { before: NONE_SHOWN, window: SAVE_FAILED, saved: NONE_SHOWN, end: NONE_SHOWN },
+  latched: { window: { ...SAVE_FAILED, staleChanged: true } },
+  cleared: true,
+  config: { open: 1, window: 2, saved: 2, end: 2 },
+  dirty: { available: true, cleanThenCleared: true, refreshRequests: 0 },
+  watch: { available: true, kinds: { change: 1, removed: 0, saved: 1, 'save-error': 1, other: 0 } },
+  states: ['agent-only', 'both', 'both'],
+  typed: [false, false, false],
+  entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
+  allowed: true,
+};
 
 // python-docx from the user image; the file and the nonce arrive as argv. No single quote (below).
 export const REWRITER = `import sys
@@ -83,9 +122,14 @@ document = Document(path)
 document.add_paragraph(nonce)
 document.save(path)
 print(nonce)`;
+/** The rewrite of `name` in the work directory as argv. */
+export const rewriteArgv = (name: string, nonce: string) => [
+  ...['python3', '-c', REWRITER],
+  ...[`${WORK}/${name}`, nonce],
+];
 /** The Agent's bash rewrite of `name` in the work directory, each word single-quoted. */
 export const rewriteCommand = (name: string, nonce: string) =>
-  singleQuoted(['python3', '-c', REWRITER, `${WORK}/${name}`, nonce]);
+  singleQuoted(rewriteArgv(name, nonce));
 
 /** The provider's rewrite scripts, one per case in order; every value is a nonsecret nonce. */
 export const ownedRewrites = () =>
@@ -95,6 +139,15 @@ export const ownedRewrites = () =>
   });
 
 type OfficeRead = Awaited<ReturnType<typeof readWork>>;
+
+/** Whether a part's text holds `nonce` once `other` is removed: a click can type it inside. */
+export const heldApart = (texts: OfficeRead['texts'], nonce: string, other: string) =>
+  holds(
+    Object.fromEntries(
+      Object.entries(texts).map(([part, text]) => [part, text.replaceAll(other, '')]),
+    ),
+    nonce,
+  );
 
 /**
  * Whose nonce a part's text holds: the Agent's, the employee's last saved one, both or neither. The
@@ -106,20 +159,27 @@ export function rewriteState(
   agentNonce: string,
   employeeNonce: string,
 ) {
-  const parts = Object.entries(texts).map(([part, text]): [string, string] => [
-    part,
-    text.replaceAll(employeeNonce, ''),
-  ]);
-  const agent = holds(Object.fromEntries(parts), agentNonce);
+  const agent = heldApart(texts, agentNonce, employeeNonce);
   if (holds(texts, employeeNonce)) return agent ? 'both' : 'employee-only';
   return agent ? 'agent-only' : 'neither';
 }
 
 type Observed = Digest & { readonly state: ReturnType<typeof rewriteState>; typed?: boolean };
 type EntryDiff = Readonly<Record<'added' | 'removed', readonly string[]>>;
-/** No nonce, marker or key: states, digests, entry names, `status path` lines and sessions. */
-interface RewriteCaseEvidence {
+/** Every case's file and editing session: no nonce, marker or key. */
+interface EditedEvidence {
   readonly file: string;
+  readonly reads: Readonly<Record<'rewritten' | 'saved' | 'closed', Observed>>;
+  /** `/data/work` against its listing before the rewrite. */
+  readonly entries: Readonly<Record<'saved' | 'closed', EntryDiff>>;
+  /** `status path` of every failed response. */
+  readonly responses: readonly string[];
+  /** The editing session's errors are 18.5's allowed ones (`editorErrorsAllowed`). */
+  readonly allowed: boolean;
+  readonly editor: StackBrowserEvidence;
+}
+/** States, digests, entry names, `status path` lines and sessions. */
+interface RewriteCaseEvidence extends EditedEvidence {
   readonly provider: Readonly<Record<string, number>>;
   /** Each notice: shown before the Agent turn, latched from then to the window's end, latched from
    * then until the save landed. */
@@ -130,34 +190,78 @@ interface RewriteCaseEvidence {
   readonly cleared: boolean;
   /** The page's config fetches so far: before the Agent turn, after the window, after the save. */
   readonly config: Readonly<Record<'open' | 'window' | 'saved', number>>;
-  readonly reads: Readonly<Record<'rewritten' | 'saved' | 'closed', Observed>>;
-  /** `/data/work` against its listing before the Agent turn. */
-  readonly entries: Readonly<Record<'saved' | 'closed', EntryDiff>>;
-  readonly responses: readonly string[];
-  /** The editing session's errors are 18.5's allowed ones (`editorErrorsAllowed`). */
-  readonly allowed: boolean;
-  readonly editor: StackBrowserEvidence;
   readonly agent: StackBrowserEvidence;
 }
-type OfficeRewriteEvidence = Readonly<Record<CaseId, RewriteCaseEvidence>>;
+type NoticePoints<K extends string> = Readonly<Record<K, NoticeFlags>>;
+/** #652's record: names, booleans, counts and times only; times in ms from the first keystroke. */
+interface TypingEvidence extends EditedEvidence {
+  /** The provider's counters, the same before and after the case: no Agent turn. */
+  readonly provider: Readonly<Record<string, unknown>>;
+  /** (a) The exec, the last keystroke, the stale banner and dirty false. */
+  readonly window: ReturnType<typeof windowFacts>;
+  /** Each notice shown before typing, at the window's end, after the save poll, at the end. */
+  readonly notices: NoticePoints<'before' | 'window' | 'saved' | 'end'>;
+  /** Each notice latched from before typing until the window's end and until the end. */
+  readonly latched: NoticePoints<'window' | 'end'>;
+  /** No notice shown within a session timeout after the save poll. */
+  readonly cleared: boolean;
+  readonly config: Readonly<Record<'open' | 'window' | 'saved' | 'end', number>>;
+  /** (a)(b) The dirty transitions and refresh requests. */
+  readonly dirty: ReturnType<typeof frameSignal>;
+  /** (c) The page's watch events while the editor is open. */
+  readonly watch: ReturnType<typeof watchSignal>;
+  /** (c) The instance's save log lines before and after the close. */
+  readonly host: ReturnType<typeof hostSignal>;
+}
+type OfficeRewriteEvidence = Readonly<Record<CaseId, RewriteCaseEvidence>> & {
+  readonly typing: TypingEvidence;
+};
 
 const READS = ['rewritten', 'saved', 'closed'] as const;
+const readFacts = (reads: EditedEvidence['reads']) => ({
+  states: READS.map((at) => reads[at].state),
+  typed: READS.map((at) => reads[at].typed ?? false),
+});
 /** What EXPECTED_REWRITE fixes of one case; `typed` is false where nothing was typed first. */
 export function rewriteFacts(evidence: RewriteCaseEvidence) {
   const { notices, cleared, config, reads, entries, allowed, editor, agent } = evidence;
   const sessions = [editor, agent].map((browser) =>
     Object.fromEntries(SESSION_LISTS.map((key) => [key, browser[key].length])),
   );
-  const states = READS.map((at) => reads[at].state);
+  return { notices, cleared, config, ...readFacts(reads), entries, allowed, sessions };
+}
+
+type Transitions = Extract<TypingEvidence['dirty'], { available: true }>['transitions'];
+type StaleSpan = Pick<TypingEvidence['window'], 'staleLatched' | 'staleCleared'>;
+/** Whether a dirty true→false falls within the stale banner's span: the patched refresh clears it. */
+const cleanThenCleared = ({ staleLatched, staleCleared }: StaleSpan, transitions: Transitions) =>
+  staleLatched !== null &&
+  staleCleared !== null &&
+  transitions.some(
+    ([at, dirty], index) =>
+      !dirty && transitions[index - 1]?.[1] === true && staleLatched <= at && at <= staleCleared,
+  );
+
+/** What a typing case's evidence must have: the timing-variable fields only by their order. */
+type TypingFactsInput = Pick<
+  TypingEvidence,
+  'notices' | 'latched' | 'cleared' | 'config' | 'dirty' | 'watch' | 'reads' | 'entries' | 'allowed'
+> & { readonly window: StaleSpan };
+
+/** What EXPECTED_TYPING fixes of the typing case; times, the host log and digests stay evidence. */
+export function typingFacts(evidence: TypingFactsInput) {
+  const { notices, latched, cleared, config, dirty, watch, reads, entries, allowed } = evidence;
   return {
-    notices,
-    cleared,
-    config,
-    states,
-    typed: READS.map((at) => reads[at].typed ?? false),
-    entries,
-    allowed,
-    sessions,
+    ...{ notices, latched: { window: latched.window }, cleared, config },
+    dirty: dirty.available
+      ? {
+          available: true,
+          cleanThenCleared: cleanThenCleared(evidence.window, dirty.transitions),
+          refreshRequests: dirty.refreshRequests.total,
+        }
+      : { available: false },
+    watch: watch.available ? { available: true, kinds: watch.kinds } : { available: false },
+    ...{ ...readFacts(reads), entries, allowed },
   };
 }
 
@@ -167,23 +271,30 @@ const scrub = (text: string) =>
     .replace(/[?#]\S*/g, '')
     .replace(/[\w-]{20,}/g, (run) => (/^[a-z_-]+$/.test(run) ? run : '<redacted>'));
 
+const editorLine = (editor: StackBrowserEvidence) => ({
+  ...counted(editor),
+  ...{ errors: editor.consoleErrors.map(scrub), failed: editor.failedRequests.map(scrub) },
+});
 const caseLine = ({ editor, agent, responses, ...rest }: RewriteCaseEvidence) => ({
   ...{ ...rest, responses: responses.map(scrub) },
-  editor: {
-    ...counted(editor),
-    ...{ errors: editor.consoleErrors.map(scrub), failed: editor.failedRequests.map(scrub) },
-  },
-  agent: counted(agent),
+  ...{ editor: editorLine(editor), agent: counted(agent) },
+});
+const typingLine = ({ editor, responses, ...rest }: TypingEvidence) => ({
+  ...{ ...rest, responses: responses.map(scrub) },
+  editor: editorLine(editor),
 });
 
 /** The stack evidence line: sessions counted, the editor's errors and failures scrubbed. */
 export function officeRewriteLine(evidence: OfficeRewriteEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office rewrite evidence missing');
-  return { clean: caseLine(evidence.clean), unsaved: caseLine(evidence.unsaved) };
+  const { clean, unsaved, typing } = evidence;
+  return { clean: caseLine(clean), unsaved: caseLine(unsaved), typing: typingLine(typing) };
 }
 
-/** A's lane plus the provider's reply and its rewrite scripts, one per case in order. */
+/** A's lane plus the host's Docker, A's instance, the provider's reply and its rewrite scripts. */
 type OfficeRewriteLane = ArchiveLane & {
+  readonly run: DockerOutput;
+  readonly instance: string;
   readonly reply: string;
   readonly rewrites: readonly Readonly<Record<'marker' | 'command' | 'nonce', string>>[];
 };
@@ -198,19 +309,28 @@ const entryDiff = (before: readonly string[], after: readonly string[]): EntryDi
 });
 
 // Latches each notice's rendered text sighted in the page, outside the editor iframe, as STOP_LATCH
-// does; innerText, as officeFacts reads it, leaves script and style text out. A second install
-// starts the latch afresh.
+// does, with its first sighting's and first later absence's Date.now(); innerText, as officeFacts
+// reads it, leaves script and style text out. A second install starts the latch afresh.
 const NOTICE_LATCH = `(() => {
   const notices = ${JSON.stringify(NOTICES)};
   window.__dshTeamNotices = Object.fromEntries(Object.keys(notices).map((id) => [id, false]));
+  window.__dshTeamNoticeTimes = Object.fromEntries(Object.keys(notices).map((id) => [id, { shown: null, cleared: null }]));
   const check = () => {
     const text = document.body.innerText;
-    for (const [id, notice] of Object.entries(notices)) if (text.includes(notice)) window.__dshTeamNotices[id] = true;
+    for (const [id, notice] of Object.entries(notices)) {
+      const times = window.__dshTeamNoticeTimes[id];
+      if (text.includes(notice)) {
+        window.__dshTeamNotices[id] = true;
+        times.shown ??= Date.now();
+      } else if (times.shown !== null) times.cleared ??= Date.now();
+    }
   };
   check();
   new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
 })()`;
 const NOTICES_SEEN = '({ ...window.__dshTeamNotices })';
+const NOTICE_TIMES = '({ ...window.__dshTeamNoticeTimes })';
+const STALE_LATCHED = 'window.__dshTeamNotices.staleChanged === true';
 const NOTICES_SHOWN = `Object.fromEntries(Object.entries(${JSON.stringify(NOTICES)}).map(([id, notice]) => [id, document.body.innerText.includes(notice)]))`;
 type NoticeFlags = Readonly<Record<string, boolean>>;
 /** Each notice's three flags; a flag the page did not report counts as seen, so it fails. */
@@ -272,23 +392,21 @@ async function agentRewrite(lane: OfficeRewriteLane, index: 0 | 1, marker: strin
   return { agent, provider };
 }
 
-/** One case: open, maybe type unsaved, the Agent's rewrite, a window, type and save, then close. */
-async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) {
-  const { session } = lane;
-  const { id, name, typeFirst } = CASES[index];
-  const script = lane.rewrites[index];
-  if (script === undefined) throw new Error('Office rewrite script missing');
+/** Writes a case's one-paragraph DOCX, checks it and waits for the Document Server; its reader. */
+async function freshDocx(lane: OfficeRewriteLane, id: string, name: string) {
   const written = JSON.parse(await lane.exec(docxCommand(name, PARAGRAPH))) as ArchiveEntry;
   const read = () => readWork(lane, name);
   const { texts, sha256 } = await read();
   const first = { sha256, text: texts['word/document.xml'] };
   expect(first, `Office rewrite ${id} file`).toEqual({ sha256: written.sha256, text: PARAGRAPH });
   await documentServerReady(lane);
-  const [typed, saved] = [editorNonce(), editorNonce()];
-  const directory = join(root, id);
-  const shot = `office-rewrite-${id}`;
+  return read;
+}
+
+/** The page's config fetches, and status and path of every failed response: the query and hash
+ * may carry keys. */
+function responseLog() {
   const fetched = { config: 0 };
-  // Status and path of every failed response; the query and hash may carry keys.
   const responses: string[] = [];
   const record = (response: Response) => {
     const { pathname } = new URL(response.url());
@@ -296,6 +414,24 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
     const status = response.status();
     if (status >= 400) responses.push(`${String(status)} ${pathname}`);
   };
+  return { fetched, responses, record };
+}
+
+// A successful save's `saved` event clears 「保存未写回文件」 (OnlyOfficeView.tsx `saveError`).
+const noneShown = (page: Page) => async () =>
+  Object.values(await page.evaluate<NoticeFlags>(NOTICES_SHOWN)).every((on) => !on);
+
+/** One case: open, maybe type unsaved, the Agent's rewrite, a window, type and save, then close. */
+async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) {
+  const { session } = lane;
+  const { id, name, typeFirst } = CASES[index];
+  const script = lane.rewrites[index];
+  if (script === undefined) throw new Error('Office rewrite script missing');
+  const read = await freshDocx(lane, id, name);
+  const [typed, saved] = [editorNonce(), editorNonce()];
+  const directory = join(root, id);
+  const shot = `office-rewrite-${id}`;
+  const { fetched, responses, record } = responseLog();
   const observe = (file: OfficeRead): Observed => ({
     state: rewriteState(file.texts, script.nonce, saved),
     ...(typeFirst ? { typed: holds(file.texts, typed) } : {}),
@@ -324,10 +460,7 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
     await typeAndSave(page, 'docx', saved, session.timeout);
     const afterSave = observe(await readUntil(read, saved, session.timeout));
     const notices = noticeFlags(shown, latched, await page.evaluate<NoticeFlags>(NOTICES_SEEN));
-    // A successful save's `saved` event clears 「保存未写回文件」 (OnlyOfficeView.tsx `saveError`).
-    const none = async () =>
-      Object.values(await page.evaluate<NoticeFlags>(NOTICES_SHOWN)).every((on) => !on);
-    const cleared = await heldWithin(none, session.timeout);
+    const cleared = await heldWithin(noneShown(page), session.timeout);
     const entries = { saved: entryDiff(before, await listing(lane)) };
     await shoot(`${shot}-saved`);
     const config = { open, window, saved: fetched.config };
@@ -356,19 +489,164 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
   return evidence;
 }
 
+/** A's instance log since `since`; `undefined` when the read failed, whose redacted error carries
+ * no log text (the log holds the launch token and document keys). */
+const hostLog = ({ run, instance }: OfficeRewriteLane, since: number) =>
+  run(['logs', '--timestamps', '--since', new Date(since).toISOString(), instance]).catch(
+    () => undefined,
+  );
+
+type Nonces = Readonly<Record<'typed' | 'agent' | 'saved', string>>;
+
+/**
+ * The unsaved nonce, then the rewrite with filler typed alongside until the stale banner latched or
+ * a session timeout passed. The rewrite's outcome is handled at once and joined after the typing.
+ */
+async function typeThroughRewrite(page: Page, lane: OfficeRewriteLane, nonces: Nonces) {
+  const { timeout } = lane.session;
+  const origin = Date.now();
+  await typeAndSave(page, 'docx', nonces.typed, timeout, undefined, false);
+  const execStart = Date.now();
+  const rewrite = lane.exec(rewriteArgv(TYPING.name, nonces.agent)).then(
+    () => ({ execEnd: Date.now() }),
+    (error: unknown) => ({ error }),
+  );
+  // The nonce's last keystroke when no filler follows.
+  let lastKey = execStart;
+  const latched = () => page.evaluate<boolean>(STALE_LATCHED);
+  const bound = performance.now() + timeout;
+  while (!(await latched()) && performance.now() < bound) {
+    await page.keyboard.type(FILLER);
+    lastKey = Date.now();
+  }
+  const done = await rewrite;
+  if ('error' in done) throw done.error;
+  return { marks: { origin, execStart, execEnd: done.execEnd, lastKey }, latched: await latched() };
+}
+
+interface TypingSteps {
+  readonly lane: OfficeRewriteLane;
+  readonly nonces: Nonces;
+  readonly read: () => Promise<OfficeRead>;
+  readonly observe: (file: OfficeRead) => Observed;
+  readonly fetched: { readonly config: number };
+}
+
+/** The typing session: observers, the window, its precondition, the save, the page's signals. */
+async function typingBrowse(
+  page: Page,
+  shoot: (name: string) => Promise<void>,
+  steps: TypingSteps,
+) {
+  const { lane, read, observe, fetched } = steps;
+  const { timeout } = lane.session;
+  const shot = `office-rewrite-${TYPING.id}`;
+  const shown = () => page.evaluate<NoticeFlags>(NOTICES_SHOWN);
+  await page.evaluate(WATCH_WRAPPER);
+  await openHinted(page, shoot, lane.session, TYPING.name, `${shot}-open`, editorRefused);
+  await page.evaluate(NOTICE_LATCH);
+  await page.evaluate(FRAME_LISTENER);
+  const before = await listing(lane);
+  const [open, beforeShown] = [fetched.config, await shown()];
+  const { marks, latched } = await typeThroughRewrite(page, lane, steps.nonces);
+  const frames = () => page.evaluate<FrameRecord | null>(FRAMES_SEEN);
+  const facts = async () => {
+    const times = await page.evaluate<Readonly<Record<string, NoticeTimes>>>(NOTICE_TIMES);
+    const stale = times.staleChanged ?? { shown: null, cleared: null };
+    return windowFacts(marks, stale, await frames());
+  };
+  const missed = `Office rewrite typing: stale banner not latched within the window, (a)`;
+  expect(latched, `${missed} ${JSON.stringify(await facts())}`).toBe(true);
+  const rewritten = observe(await read());
+  await delay(OBSERVE_MS);
+  const held = { shown: await shown(), latched: await page.evaluate<NoticeFlags>(NOTICES_SEEN) };
+  const config = { open, window: fetched.config };
+  await shoot(`${shot}-window`);
+  const savedAt = Date.now();
+  await typeAndSave(page, 'docx', steps.nonces.saved, timeout);
+  const saved = { read: observe(await readUntil(read, steps.nonces.saved, timeout)) };
+  const [savedShown, savedConfig] = [await shown(), fetched.config];
+  const cleared = await heldWithin(noneShown(page), timeout);
+  const entries = { saved: entryDiff(before, await listing(lane)) };
+  const hostBefore = saveLines(await hostLog(lane, marks.origin), marks.origin);
+  const watch = watchSignal(await page.evaluate<WatchRecord | null>(WATCH_SEEN), marks.origin);
+  await shoot(`${shot}-saved`);
+  return {
+    ...{ before, origin: marks.origin, rewritten, saved: saved.read, entries, hostBefore },
+    notices: { before: beforeShown, window: held.shown, saved: savedShown, end: await shown() },
+    latched: { window: held.latched, end: await page.evaluate<NoticeFlags>(NOTICES_SEEN) },
+    config: { ...config, saved: savedConfig, end: fetched.config },
+    ...{ cleared, window: await facts(), watch },
+    dirty: frameSignal(await frames(), marks.origin, savedAt),
+  };
+}
+
+/**
+ * #652: A types into an open DOCX and keeps typing while the file is rewritten in the instance,
+ * without an Agent turn, until the plugin's stale banner latches; then A types and saves again in
+ * the same editor and closes it. Asserted: the window precondition first, the provider untouched,
+ * EXPECTED_TYPING and the screenshots; the times and the host log are recorded (#652 (a)(b)(c)).
+ */
+async function typingCase(lane: OfficeRewriteLane, root: string, since: number) {
+  const { session } = lane;
+  const provider = await providerCounts(lane);
+  const control = saveLines(await hostLog(lane, since), since);
+  const read = await freshDocx(lane, TYPING.id, TYPING.name);
+  const nonces = { typed: editorNonce(), agent: editorNonce(), saved: editorNonce() };
+  const { fetched, responses, record } = responseLog();
+  const observe = (file: OfficeRead): Observed => ({
+    state: rewriteState(file.texts, nonces.agent, nonces.saved),
+    typed: heldApart(file.texts, nonces.typed, nonces.saved),
+    ...digest(file),
+  });
+  const shot = `office-rewrite-${TYPING.id}`;
+  const names = { label: 'office rewrite typing', failure: `${shot}-failure` };
+  let browsed: Awaited<ReturnType<typeof typingBrowse>> | undefined;
+  const editor = await workbenchSession(
+    { ...session, directory: join(root, TYPING.id) },
+    // The save-error notice renders the guard's message: the old key, the path and sizes.
+    { ...names, masked: [NOTICES.saveFailed] },
+    async (page, shoot) => {
+      browsed = await typingBrowse(page, shoot, { lane, nonces, read, observe, fetched });
+    },
+    undefined,
+    record,
+  );
+  if (browsed === undefined) throw new Error('Office rewrite typing case not observed');
+  await delay(OBSERVE_MS);
+  const { before, origin, rewritten, saved, entries, hostBefore, ...page } = browsed;
+  const afterClose = saveLines(await hostLog(lane, origin), origin);
+  const evidence: TypingEvidence = {
+    ...{ file: TYPING.name, provider: await providerCounts(lane), ...page },
+    host: hostSignal(control, hostBefore, afterClose),
+    reads: { rewritten, saved, closed: observe(await read()) },
+    entries: { ...entries, closed: entryDiff(before, await listing(lane)) },
+    ...{ responses, editor },
+    allowed: editorErrorsAllowed(editor.consoleErrors, responses, session.base),
+  };
+  const seen = `Office rewrite typing, observed ${JSON.stringify(typingLine(evidence))}`;
+  expect(evidence.provider, seen).toEqual(provider);
+  expect(typingFacts(evidence), seen).toEqual(EXPECTED_TYPING);
+  const shots = ['open', 'window', 'saved'].map((at) => `${shot}-${at}.png`);
+  expect(editor.screenshots, seen).toEqual(shots);
+  return evidence;
+}
+
 /**
  * 18.7 (#442): with A's DOCX open in ONLYOFFICE, clean or with an unsaved edit, the Agent's `bash`
  * rewrites the same file. The editor refreshes to the Agent's version; the clean case shows no
  * plugin notice, the unsaved one drops its edit and shows 「保存未写回文件」 until A's save lands. A
  * then types and saves, and the file holds both sides' text, with no copy left in `/data/work`,
- * still after the editor closes.
+ * still after the editor closes. The typing case (#652) follows: with the rewrite in its window, the
+ * editor refreshes once it turns clean, and A's next save holds both sides' text.
  */
 export const officeRewriteScenario = (lane: OfficeRewriteLane): Promise<OfficeRewriteEvidence> =>
   withWorkFiles(
     lane,
-    CASES.map(({ name }) => name),
+    [...CASES.map(({ name }) => name), TYPING.name],
     'Office rewrite',
     async () => {
+      const since = Date.now();
       const start = await lane.provider();
       const configured = [start.rewriteCalls, start.rewriteHits];
       expect(configured, 'Rewrite scripts configured').toEqual([
@@ -377,6 +655,7 @@ export const officeRewriteScenario = (lane: OfficeRewriteLane): Promise<OfficeRe
       ]);
       const root = join(lane.session.directory, 'office-rewrite');
       const clean = await rewriteCase(lane, 0, root);
-      return { clean, unsaved: await rewriteCase(lane, 1, root) };
+      const unsaved = await rewriteCase(lane, 1, root);
+      return { clean, unsaved, typing: await typingCase(lane, root, since) };
     },
   );

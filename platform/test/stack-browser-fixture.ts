@@ -58,6 +58,8 @@ export interface StackSessionNames {
   readonly login?: string;
   /** Best-effort screenshot of a failed session. */
   readonly failure: string;
+  /** Texts whose element every screenshot of the session masks, the failure's included. */
+  readonly masked?: readonly string[];
 }
 
 /** A failed session: the original failure as `cause`, plus everything observed so far. */
@@ -189,7 +191,10 @@ export async function workbenchSession(
   let page: Page | undefined;
   const shoot = async (name: string) => {
     if (page === undefined) throw new Error('Stack workbench page not open');
-    await page.screenshot({ path: join(directory, `${name}.png`), fullPage: true });
+    const shown = page;
+    const masked = names.masked?.map((text) => shown.getByText(text));
+    const options = { path: join(directory, `${name}.png`), fullPage: true };
+    await shown.screenshot(masked === undefined ? options : { ...options, mask: masked });
     screenshots.push(`${name}.png`);
   };
   try {

@@ -30,7 +30,7 @@ const REPLACEMENTS = [
 const PATCHED =
   `// ${MARK}\nconst SECRET = process.env.SYNTHETIC_SECRET ?? "";\n` +
   'function derive(input) {\n\tif (SECRET === "") return null;\n\treturn input;\n}\n';
-// A second target of the same package; the replacements apply to every target.
+// A second target of the same package; the pin's replacements apply to every target without its own.
 const SECOND = 'lib/client.js';
 const SECOND_SOURCE = `// second\n${SOURCE}`;
 const SECOND_PATCHED = `// second\n${PATCHED}`;
@@ -308,6 +308,37 @@ it('still refuses the write when writing the first target back fails as well', (
   expect(readdirSync(join(tree.copy, 'lib')).sort()).toEqual(['client.js', 'index.js']);
 });
 
+// A list of the second target's own, disjoint from the pin's REPLACEMENTS.
+const OWN = [['// second\n', '// own\n']];
+const ownTarget = (overrides = {}) => ({
+  target: SECOND,
+  inputSha256: sha256(SECOND_SOURCE),
+  outputSha256: sha256(`// own\n${SOURCE}`),
+  replacements: OWN,
+  ...overrides,
+});
+
+it('applies a target its own replacements and the pin replacements to the others only', () => {
+  const tree = imageTree({ source: `${SOURCE}// second\n`, second: SECOND_SOURCE });
+  const first = target({
+    inputSha256: sha256(`${SOURCE}// second\n`),
+    outputSha256: sha256(`${PATCHED}// second\n`),
+  });
+
+  const result = run(options(tree, { targets: [first, ownTarget()] }));
+
+  expect(result).toEqual({ status: 0, stderr: '' });
+  expect(readFileSync(tree.target, 'utf8')).toBe(`${PATCHED}// second\n`);
+  expect(readFileSync(tree.second, 'utf8')).toBe(`// own\n${SOURCE}`);
+});
+
+it('writes neither target when an anchor of the second target own list is missing', () => {
+  const tree = imageTree({ second: SECOND_SOURCE });
+  const second = ownTarget({ replacements: [['// absent\n', '// own\n']] });
+
+  expectRefused(tree, options(tree, { targets: [target(), second] }), 'anchor');
+});
+
 it('applies the onlyoffice table when each original occurs exactly once', () => {
   const pin = PINS.onlyoffice;
   const source = pin.replacements.map(([original]) => `${original}\n// ${MARK}\n`).join('');
@@ -351,11 +382,208 @@ it('pins exactly nine distinct onlyoffice replacements for the released lib/inde
         inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
         outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
       },
+      {
+        target: 'lib/client.js',
+        inputSha256: '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc',
+        outputSha256: 'ada60b402c53807580111a3c833d65574a37ef09f7acf08494b0e5896dafd246',
+      },
     ],
   });
-  expect(pin.targets).toHaveLength(1);
+  expect(pin.targets).toHaveLength(2);
+  expect(pin.targets[0].replacements).toBeUndefined();
   expect(originals).toHaveLength(9);
   expect(new Set(originals).size).toBe(9);
+});
+
+// The released lib/client.js lines the client.js replacements anchor on, at their indentation.
+const CLIENT_RUN = [
+  '\t\t\t\tconst refreshNow = async () => {',
+  '\t\t\t\t\tif (cancelled) return;',
+  '\t\t\t\t\tconst fetched = await fetchConfig();',
+  '\t\t\t\t\tif (cancelled) return;',
+  '\t\t\t\t\tif (!fetched.ok) {',
+  '\t\t\t\t\t\tsetStale({ kind: "changed" });',
+  '\t\t\t\t\t\treturn;',
+  '\t\t\t\t\t}',
+  '\t\t\t\t\tconst key = fetched.config.document?.key;',
+  '\t\t\t\t\tif (typeof key === "string") currentKeyRef.current = key;',
+  '\t\t\t\t\teditorRef.current?.refreshFile(fetched.config);',
+  '\t\t\t\t\tsetStale(null);',
+  '\t\t\t\t};',
+  '\t\t\t\trefreshRef.current = () => {',
+  '\t\t\t\t\trefreshNow();',
+  '\t\t\t\t};',
+  '\t\t\t\tconst run = async () => {',
+  '\t\t\t\t\tconst events = {',
+  '\t\t\t\t\t\t\tonDocumentStateChange: (event) => {',
+  '\t\t\t\t\t\t\t\tconst dirty = event?.data === true;',
+  '\t\t\t\t\t\t\t\tdirtyRef.current = dirty;',
+  '\t\t\t\t\t\t\t\tif (!dirty) setStale(null);',
+  '\t\t\t\t\t\t\t}',
+  '\t\t\t\t\t};',
+  '\t\t\t\t\tconst onmessage = (parsed) => {',
+  '\t\t\t\t\t\t\tif (parsed.kind === "removed") {',
+  '\t\t\t\t\t\t\t\tsetStale({ kind: "removed" });',
+  '\t\t\t\t\t\t\t\treturn;',
+  '\t\t\t\t\t\t\t}',
+  '\t\t\t\t\t\t\tif (parsed.kind !== "change" || typeof parsed.key !== "string") return;',
+  '\t\t\t\t\t\t\tif (parsed.key === currentKeyRef.current) return;',
+  '\t\t\t\t\t\t\tif (dirtyRef.current) {',
+  '\t\t\t\t\t\t\t\tsetStale({ kind: "changed" });',
+  '\t\t\t\t\t\t\t\treturn;',
+  '\t\t\t\t\t\t\t}',
+  '\t\t\t\t\t\t\trefreshNow();',
+  '\t\t\t\t\t};',
+  '\t\t\t\t\texpose(events, onmessage);',
+  '\t\t\t\t};',
+  '\t\t\t\trun();',
+  '',
+].join('\n');
+// The reviewed result, written out by hand rather than derived by the code under test.
+const CLIENT_RUN_PATCHED = CLIENT_RUN.replace(
+  '\t\t\t\tconst refreshNow = async () => {\n',
+  '\t\t\t\tlet pendingChange = false;\n' +
+    '\t\t\t\tconst refreshNow = async () => {\n\t\t\t\t\tpendingChange = false;\n',
+)
+  .replace(
+    '\t\t\t\t\t\t\t\tif (!dirty) setStale(null);\n',
+    '\t\t\t\t\t\t\t\tif (!dirty) {\n' +
+      '\t\t\t\t\t\t\t\t\tif (pendingChange) refreshNow();\n' +
+      '\t\t\t\t\t\t\t\t\telse setStale(null);\n' +
+      '\t\t\t\t\t\t\t\t}\n',
+  )
+  .replace(
+    '\t\t\t\t\t\t\tif (dirtyRef.current) {\n',
+    '\t\t\t\t\t\t\tif (dirtyRef.current) {\n\t\t\t\t\t\t\t\tpendingChange = true;\n',
+  )
+  .replace(
+    '\t\t\t\t\tif (!fetched.ok) {\n',
+    '\t\t\t\t\tif (!fetched.ok) {\n\t\t\t\t\t\tpendingChange = true;\n',
+  );
+
+it('pins four distinct onlyoffice replacements of its own for the released lib/client.js', () => {
+  const [, client] = PINS.onlyoffice.targets;
+
+  const originals = client.replacements.map(([original]) => original);
+
+  expect(originals).toHaveLength(4);
+  expect(new Set(originals).size).toBe(4);
+  const shared = new Set(PINS.onlyoffice.replacements.map(([original]) => original));
+  for (const original of originals) expect(shared.has(original)).toBe(false);
+});
+
+/**
+ * The released client.js lines patched by the pinned client.js target, loaded from an owned module
+ * so no release code runs. Each step settles before returning; `failNext` makes the next config
+ * fetch fail, otherwise a fetch returns the file's new key `rewritten`.
+ */
+async function loadClientRun() {
+  const tree = imageTree({ second: CLIENT_RUN });
+  const [, client] = PINS.onlyoffice.targets;
+  const pinned = {
+    ...client,
+    inputSha256: sha256(CLIENT_RUN),
+    outputSha256: sha256(CLIENT_RUN_PATCHED),
+  };
+  expect(run(options(tree, { targets: [target(), pinned] }))).toEqual({ status: 0, stderr: '' });
+  const module = join(tree.base, 'client-run.mjs');
+  writeFileSync(
+    module,
+    'export const make = (dirtyRef, currentKeyRef, refreshRef, editorRef, setStale, fetchConfig, expose) => {\n' +
+      `let cancelled = false;\n${readFileSync(tree.second, 'utf8')}};\n`,
+  );
+  const { make } = await import(pathToFileURL(module).href);
+  const calls = [];
+  const failures = [];
+  let handlers;
+  const refreshRef = { current: null };
+  make(
+    { current: false },
+    { current: 'opened' },
+    refreshRef,
+    { current: { refreshFile: () => calls.push('refresh') } },
+    (stale) => calls.push(stale === null ? 'clear' : stale.kind),
+    async () => {
+      calls.push('fetch');
+      return failures.shift() ?? { ok: true, config: { document: { key: 'rewritten' } } };
+    },
+    (events, onmessage) => (handlers = { events, onmessage }),
+  );
+  const step =
+    (action) =>
+    async (...args) => {
+      action(...args);
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+  return {
+    calls,
+    failNext: () => failures.push({ ok: false, message: 'unavailable' }),
+    dirty: step((data) => handlers.events.onDocumentStateChange({ data })),
+    watch: step((kind, key = 'rewritten') => handlers.onmessage({ kind, key })),
+    reload: step(() => refreshRef.current()),
+  };
+}
+
+it('refreshes once when the editor turns clean after a change arrived while it was dirty', async () => {
+  const { calls, dirty, watch } = await loadClientRun();
+
+  await dirty(true);
+  await watch('change');
+  await watch('change');
+  await dirty(false);
+  await dirty(true);
+  await dirty(false);
+
+  expect(calls).toEqual(['changed', 'changed', 'fetch', 'refresh', 'clear', 'clear']);
+});
+
+it('retries the refresh at the next clean transition after a refresh failed', async () => {
+  const { calls, dirty, watch, failNext } = await loadClientRun();
+
+  await dirty(true);
+  await watch('change');
+  failNext();
+  await dirty(false);
+  await dirty(true);
+  await dirty(false);
+
+  expect(calls).toEqual(['changed', 'fetch', 'changed', 'fetch', 'refresh', 'clear']);
+});
+
+it('keeps a failed manual reload as released and retries it once at the next clean transition', async () => {
+  const { calls, dirty, reload, failNext } = await loadClientRun();
+
+  failNext();
+  await reload();
+  await dirty(true);
+  await dirty(false);
+  await dirty(true);
+  await dirty(false);
+
+  expect(calls).toEqual(['fetch', 'changed', 'fetch', 'refresh', 'clear', 'clear']);
+});
+
+it('clears the banner as released when a manual reload already took the pending change', async () => {
+  const { calls, dirty, watch, reload } = await loadClientRun();
+
+  await dirty(true);
+  await watch('change');
+  await reload();
+  await dirty(false);
+
+  expect(calls).toEqual(['changed', 'fetch', 'refresh', 'clear', 'clear']);
+});
+
+it('keeps the released clean, same-key and removed behaviour', async () => {
+  const { calls, dirty, watch } = await loadClientRun();
+
+  await watch('change');
+  await dirty(true);
+  await watch('change', 'rewritten');
+  await watch('removed');
+  await dirty(false);
+
+  expect(calls).toEqual(['fetch', 'refresh', 'clear', 'removed', 'clear']);
 });
 
 const SIDEBAR_ANCHOR = 'return file !== void 0 && !hostOwnedPath(file.path);';
@@ -375,6 +603,7 @@ it('pins one better-sidebar 0.28.0 replacement for both released client bundles'
     ['lib/client-registry.js', '9862678d65831b031a72b54e560f5ad3dd94f00403429072a4c0a75c52d0da85'],
   ]);
   for (const { outputSha256 } of pin.targets) expect(outputSha256).toMatch(/^[0-9a-f]{64}$/);
+  for (const { replacements } of pin.targets) expect(replacements).toBeUndefined();
   expect(pin.replacements).toHaveLength(1);
   expect(pin.replacements[0][0]).toBe(SIDEBAR_ANCHOR);
 });
@@ -468,6 +697,23 @@ it('selects the pin by name and expects its copy directly below the first root',
   expect(runMain(['synthetic', tree.opt, tree.global], pins)).toEqual({ status: 0, stderr: '' });
   expect(readFileSync(tree.target, 'utf8')).toBe(PATCHED);
   expect(readFileSync(tree.second, 'utf8')).toBe(SECOND_PATCHED);
+});
+
+it('passes a pin target its own replacements', () => {
+  const tree = imageTree({ second: SECOND_SOURCE });
+  const pins = {
+    synthetic: {
+      package: NAME,
+      directory: NAME,
+      version: '1.0.0',
+      targets: [target(), ownTarget()],
+      replacements: REPLACEMENTS,
+    },
+  };
+
+  expect(runMain(['synthetic', tree.opt, tree.global], pins)).toEqual({ status: 0, stderr: '' });
+  expect(readFileSync(tree.target, 'utf8')).toBe(PATCHED);
+  expect(readFileSync(tree.second, 'utf8')).toBe(`// own\n${SOURCE}`);
 });
 
 it.each(['onlyoffice', 'better-sidebar'])(

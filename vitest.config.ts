@@ -80,7 +80,15 @@ export default defineConfig({
           // and the row after the failure), the 30s failure wait, the bundled healthcheck wait
           // (60s plus its last 30s exec) and six docker execs at 30s each: the listener check, the
           // file's write, read-back and removal, and the two provider reads.
-          testTimeout: 8_190_000,
+          // The office rewrite typing case (#652) raised it by 870s: the Document Server healthcheck
+          // wait, the editor load, the unsaved nonce's typing, the typing until the stale banner
+          // latches, the second typing, the save poll and the notice-clear wait at one 60s session
+          // timeout each, two 15s
+          // observation windows (the hold after the latch, the wait after the close), and 14
+          // docker execs at 30s each: the write, four file reads (start, after the rewrite, the save
+          // poll's first, after the close), the rewrite, three listings, three instance log reads
+          // (the earlier cases' control, before and after the close) and two provider reads.
+          testTimeout: 9_060_000,
         },
       },
     ],

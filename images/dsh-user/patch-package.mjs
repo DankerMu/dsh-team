@@ -2,7 +2,7 @@
 // implementation. Usage: node patch-package.mjs <pin> <opt-root> <global-root>. Any drift (version,
 // copies, location, input/output SHA-256, anchors of any target) refuses before writing; each target
 // is replaced atomically, and a failed write puts the targets already written back. A refusal names
-// only the first failed check.
+// only the first failed check. A target's own `replacements` take the place of the pin's list.
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -42,16 +42,47 @@ export const PINS = {
   // is minted, verified, registered or derived, and the watch hub treats the file as absent.
   // DSH 0.2.1-rc.2 provides webStartup (with trustedHosts) instead of webRuntime, so the injected
   // service and its three trustedHosts reads are remapped; comments naming webRuntime stay.
+  // lib/client.js, with its own list: an editor turning clean after a file change arrived while it
+  // was dirty refreshes once to the file instead of only clearing the stale banner; a failed
+  // refresh keeps the change pending, so the next clean transition retries.
   onlyoffice: {
     package: 'dsh-sidebar-onlyoffice',
     directory: 'dsh-sidebar-onlyoffice',
     version: '0.2.0',
-    // SHA-256 of the published lib/index.js (npm tarball) and of the reviewed patched result.
+    // SHA-256 of each published file (npm tarball) and of its reviewed patched result.
     targets: [
       {
         target: 'lib/index.js',
         inputSha256: 'e2148f01c2740c464eb39eaf6b9547f773a7b1a172039e9554e03da617d4b29b',
         outputSha256: '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef',
+      },
+      {
+        target: 'lib/client.js',
+        inputSha256: '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc',
+        outputSha256: 'ada60b402c53807580111a3c833d65574a37ef09f7acf08494b0e5896dafd246',
+        replacements: [
+          [
+            'const refreshNow = async () => {\n',
+            'let pendingChange = false;\n\t\t\t\tconst refreshNow = async () => {\n' +
+              '\t\t\t\t\tpendingChange = false;\n',
+          ],
+          [
+            'if (!fetched.ok) {\n\t\t\t\t\t\tsetStale({ kind: "changed" });',
+            'if (!fetched.ok) {\n\t\t\t\t\t\tpendingChange = true;\n' +
+              '\t\t\t\t\t\tsetStale({ kind: "changed" });',
+          ],
+          [
+            'if (dirtyRef.current) {\n\t\t\t\t\t\t\t\tsetStale({ kind: "changed" });',
+            'if (dirtyRef.current) {\n\t\t\t\t\t\t\t\tpendingChange = true;\n' +
+              '\t\t\t\t\t\t\t\tsetStale({ kind: "changed" });',
+          ],
+          [
+            'dirtyRef.current = dirty;\n\t\t\t\t\t\t\t\tif (!dirty) setStale(null);',
+            'dirtyRef.current = dirty;\n\t\t\t\t\t\t\t\tif (!dirty) {\n' +
+              '\t\t\t\t\t\t\t\t\tif (pendingChange) refreshNow();\n' +
+              '\t\t\t\t\t\t\t\t\telse setStale(null);\n\t\t\t\t\t\t\t\t}',
+          ],
+        ],
       },
     ],
     replacements: [
@@ -220,7 +251,7 @@ function patchCheck(options, write) {
   if (copy.check !== undefined) return copy.check;
   const checked = [];
   for (const target of options.targets) {
-    const result = checkTarget(copy.directory, target, options.replacements);
+    const result = checkTarget(copy.directory, target, target.replacements ?? options.replacements);
     if (result.check !== undefined) return result.check;
     checked.push(result);
   }

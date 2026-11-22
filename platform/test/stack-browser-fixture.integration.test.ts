@@ -72,6 +72,8 @@ function stubBrowser(options: StubOptions) {
     header: [],
   };
   const events: string[] = [];
+  // Each screenshot's name and the text of every locator it masks.
+  const masks: [string, string[] | undefined][] = [];
   const evaluations: Evaluation[] = [];
   const clicks: number[] = [];
   let sequence = 0;
@@ -141,8 +143,9 @@ function stubBrowser(options: StubOptions) {
       handlers.get('requestfailed')?.({ method: () => 'GET', url: () => 'http://stub/asset.js' });
       return Promise.reject(options.gotoFailure);
     },
-    screenshot({ path }: { path: string }) {
+    screenshot({ path, mask }: { path: string; mask?: { text: string }[] }) {
       events.push(`screenshot:${basename(path)}`);
+      masks.push([basename(path), mask?.map(({ text }) => text)]);
       return Promise.resolve();
     },
     reload() {
@@ -155,8 +158,10 @@ function stubBrowser(options: StubOptions) {
     evaluate,
     waitForFunction,
     keyboard: { insertText: () => Promise.resolve() },
-    getByText: (text: string) =>
-      visible(() => dom.transcript.includes(text) || dom.header.includes(text)),
+    getByText: (text: string) => ({
+      ...visible(() => dom.transcript.includes(text) || dom.header.includes(text)),
+      text,
+    }),
     locator(selector: string) {
       if (selector === '[data-chat-flow]')
         return { getByText: (text: string) => visible(() => dom.transcript.includes(text)) };
@@ -185,6 +190,7 @@ function stubBrowser(options: StubOptions) {
   const emit = (name: string, value: unknown) => handlers.get(name)?.(value);
   return {
     events,
+    masks,
     evaluations,
     clicks,
     emit,
@@ -429,6 +435,42 @@ it('counts only requests and WebSockets off the platform origin, a same-origin b
     urls.wss,
   ]);
   expect([evidence.requests, evidence.websockets]).toEqual([5, 3]);
+});
+
+it('masks the named text in every screenshot of a session, the failure screenshot included', async () => {
+  const stub = stubBrowser({ onSend: () => undefined });
+  const masked = ['保存未写回文件（文档服务会重试'];
+  const names = { label: 'masked', login: 'login', failure: 'masked-failure', masked };
+
+  const failure = workbenchSession(
+    await conversation(() => Promise.resolve()),
+    names,
+    async (_page, shoot) => {
+      await shoot('editor');
+      throw new Error('stub body failure');
+    },
+    stub.launch,
+  );
+
+  await expect(failure).rejects.toThrow('stub body failure');
+  expect(stub.masks).toEqual([
+    ['login.png', masked],
+    ['editor.png', masked],
+    ['masked-failure.png', masked],
+  ]);
+});
+
+it('passes no mask in a session that names no text', async () => {
+  const stub = stubBrowser({ onSend: () => undefined });
+
+  await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'plain', failure: 'plain-failure' },
+    (_page, shoot) => shoot('editor'),
+    stub.launch,
+  );
+
+  expect(stub.masks).toEqual([['editor.png', undefined]]);
 });
 
 /** A page whose in-page expressions answer from `shown`; clicks are recorded by expression. */
