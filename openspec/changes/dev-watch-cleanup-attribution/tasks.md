@@ -19,10 +19,10 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Make `stop()` return phase-labelled residuals, as specified in the proposal. Tell a SIGKILL call failure apart from a SIGKILL wait that timed out by where the error came from. In the same step, update the regex at `:345` to the labelled form, anchored `; SIGKILL: retired$`, so that 1.1 stays green.
-- [ ] 1.2a Add the optional `remove = rm` parameter to `withWatch`. Add no guard yet; behaviour is unchanged.
-- [ ] 1.3 Add the `rm` failure case as the proposal describes, and record its red output: the error thrown is the `EBUSY` remover error. Also add the parameterized real-`stop` case with the stub `Watch` and the no-call-through `process.kill` spy, which goes green with 1.1.
-- [ ] 1.2b Add the guard: an `rm` rejection becomes a `rm: <error>` residual segment, and the decision rules then apply. The `rm` case turns green.
+- [x] 1.1 Make `stop()` return phase-labelled residuals, as specified in the proposal. Tell a SIGKILL call failure apart from a SIGKILL wait that timed out by where the error came from. In the same step, update the regex at `:345` to the labelled form, anchored `; SIGKILL: retired$`, so that 1.1 stays green.
+- [x] 1.2a Add the optional `remove = rm` parameter to `withWatch`. Add no guard yet; behaviour is unchanged.
+- [x] 1.3 Add the `rm` failure case as the proposal describes, and record its red output: the error thrown is the `EBUSY` remover error. Also add the parameterized real-`stop` case with the stub `Watch` and the no-call-through `process.kill` spy, which goes green with 1.1.
+- [x] 1.2b Add the guard: an `rm` rejection becomes a `rm: <error>` residual segment, and the decision rules then apply. The `rm` case turns green.
 
 ## 2. Verification
 

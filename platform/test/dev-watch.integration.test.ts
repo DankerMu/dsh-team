@@ -3,7 +3,7 @@ import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
 const repository = resolve(import.meta.dirname, '../..');
 
@@ -193,7 +193,10 @@ setInterval(() => {}, 1000);
   return { root, pid, exited: () => exited, closed, attribute };
 }
 
-/** Bounded stop of the pnpm group; returns what is left behind instead of throwing. */
+/**
+ * Bounded stop of the pnpm group; returns what is left behind, labelled by phase, instead of
+ * throwing: `SIGTERM: <error>; SIGKILL: retired | <wait error> | failed: <call error>`.
+ */
 async function stop(watch: Watch, caseEnd: number, failed: boolean): Promise<string | undefined> {
   const settle = caseEnd - KILL_MS - REPORT_MS;
   const deadline = failed ? Math.min(Date.now() + STOP_MS, settle) : settle;
@@ -203,14 +206,19 @@ async function stop(watch: Watch, caseEnd: number, failed: boolean): Promise<str
     await until(gone, 'owned watcher group exit', deadline, watch.attribute);
     return undefined;
   } catch (error) {
+    const term = `SIGTERM: ${String(error)}`;
     try {
       signalGroup(watch.pid, 'SIGKILL');
+    } catch (kill) {
+      return `${term}; SIGKILL: failed: ${String(kill)}`;
+    }
+    try {
       const absent = () => signalGroup(watch.pid, 0) === 'absent';
       await until(absent, 'group exit after SIGKILL', Date.now() + KILL_MS, watch.attribute);
-    } catch (kill) {
-      return `${String(error)}; ${String(kill)}`;
+    } catch (wait) {
+      return `${term}; SIGKILL: ${String(wait)}`;
     }
-    return String(error);
+    return `${term}; SIGKILL: retired`;
   }
 }
 
@@ -219,6 +227,7 @@ async function withWatch(
   input: Input,
   caseEnd: number,
   body: (watch: Watch) => Promise<void>,
+  remove: (path: string, options: { recursive: true; force: true }) => Promise<void> = rm,
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'dsh-dev-watch-'));
   let watch: Watch | undefined;
@@ -229,8 +238,16 @@ async function withWatch(
   } catch (error) {
     failure = { error };
   }
-  const residual = watch && (await stop(watch, caseEnd, failure !== undefined));
-  await rm(root, { recursive: true, force: true });
+  const parts: string[] = [];
+  const stopped = watch && (await stop(watch, caseEnd, failure !== undefined));
+  if (stopped !== undefined) parts.push(stopped);
+  try {
+    await remove(root, { recursive: true, force: true });
+  } catch (error) {
+    // A live group may still be writing under root; the removal failure joins the residual.
+    parts.push(`rm: ${String(error)}`);
+  }
+  const residual = parts.length > 0 ? parts.join('; ') : undefined;
   if (failure === undefined) {
     if (residual !== undefined) throw new Error(residual);
     return;
@@ -342,11 +359,99 @@ it(
     expect(Date.now()).toBeLessThan(caseEnd);
     expect(failure).toBeInstanceOf(Error);
     expect((failure as Error).message).toMatch(
-      /^Timed out waiting for source reload after \d+ ms; .*; cleanup: Error: Timed out waiting for owned watcher group exit after \d+ ms; .*; pnpm group alive; /,
+      /^Timed out waiting for source reload after \d+ ms; .*; cleanup: SIGTERM: Error: Timed out waiting for owned watcher group exit after \d+ ms; .*; pnpm group alive; .*; SIGKILL: retired$/,
     );
     if (seen.watch === undefined) throw new Error('watcher never started');
     expect(signalGroup(seen.watch.pid, 0)).toBe('absent');
     await expect(stat(seen.watch.root)).rejects.toMatchObject({ code: 'ENOENT' });
+  },
+  CASE_MS,
+);
+
+it(
+  'keeps the case failure and names the fixture tree removal that failed after it',
+  async () => {
+    const caseEnd = Date.now() + CASE_MS;
+    const input = { present: false, unreadable: false, invalid: false };
+    const removed: { root?: string } = {};
+    const busy = (root: string) => {
+      removed.root = root;
+      const error = new Error(`EBUSY: resource busy or locked, rm '${root}'`);
+      return Promise.reject(Object.assign(error, { code: 'EBUSY' }));
+    };
+    const thrown = new Error('case body failed on purpose');
+    try {
+      const failure: unknown = await withWatch(
+        input,
+        caseEnd,
+        () => Promise.reject(thrown),
+        busy,
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      // toBeInstanceOf narrows only at run time; the compiler still sees `unknown`.
+      const { message } = failure as Error;
+      expect(message).toMatch(/^case body failed on purpose; /);
+      expect(message).toContain('; cleanup: ');
+      // A slow stop may legitimately put a `SIGTERM:` segment before the removal one.
+      expect(message).toMatch(
+        /; cleanup: (?:.*; )?rm: Error: EBUSY: resource busy or locked, rm '[^']+'$/,
+      );
+      expect(failure).toBe(thrown);
+      expect(removed.root).toMatch(/dsh-dev-watch-/);
+    } finally {
+      if (removed.root !== undefined) await rm(removed.root, { recursive: true, force: true });
+    }
+  },
+  CASE_MS,
+);
+
+it.each([
+  {
+    name: 'a failed SIGKILL call',
+    killFails: true,
+    present: '; SIGKILL: failed: Error: kill EINVAL',
+    absent: 'group exit after SIGKILL',
+  },
+  {
+    name: 'a group still present after SIGKILL',
+    killFails: false,
+    present: '; SIGKILL: Error: Timed out waiting for group exit after SIGKILL',
+    absent: 'failed:',
+  },
+])(
+  'labels $name apart from the SIGTERM timeout',
+  async ({ killFails, present, absent }) => {
+    const caseEnd = Date.now() + CASE_MS;
+    // Above every platform's pid range; the spy below never calls through to a real group.
+    const pid = 2 ** 31 - 1;
+    const watch: Watch = {
+      root: tmpdir(),
+      pid,
+      exited: () => false,
+      closed: new Promise<number | null>(() => undefined),
+      attribute: (phase, elapsedMs) =>
+        Promise.resolve(new Error(`Timed out waiting for ${phase} after ${String(elapsedMs)} ms`)),
+    };
+    const kill = vi.spyOn(process, 'kill').mockImplementation((_target, signal) => {
+      if (killFails && signal === 'SIGKILL')
+        throw Object.assign(new Error('kill EINVAL'), { code: 'EINVAL' });
+      return true;
+    });
+    try {
+      const residual = await stop(watch, caseEnd, true);
+
+      expect(Date.now()).toBeLessThan(caseEnd);
+      expect(residual).toMatch(
+        /^SIGTERM: Error: Timed out waiting for owned watcher group exit after \d+ ms; SIGKILL: /,
+      );
+      expect(residual).toContain(present);
+      expect(residual).not.toContain(absent);
+      expect(kill.mock.calls.map(([target]) => target)).toEqual(kill.mock.calls.map(() => -pid));
+      expect(kill.mock.calls.map(([, signal]) => signal)).toContain('SIGKILL');
+    } finally {
+      kill.mockRestore();
+    }
   },
   CASE_MS,
 );
