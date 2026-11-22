@@ -19,6 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { record } from './container-start-docker-fixture.ts';
+import { CLOSE_RECEIPT_PRELOAD } from './trusted-docker-close-fixture.ts';
 import { groupIsAbsent } from '../../scripts/trusted-docker-record.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -264,12 +265,14 @@ function prepareCustodyRepository(
   const packageValue: unknown = JSON.parse(readFileSync(join(sourceRoot, 'package.json'), 'utf8'));
   // Count and code of owner kill(-pid, 0) observations failed before deferring to the real call.
   // The slow owner denies none; it sleeps 4s before publishing, holding its start past a deadline.
+  // The post-close member denies none; its owner records its close and group observations.
   const deniedGroupObservations = (
     {
       'group-observation-failed': ['Infinity', 'EPERM'],
       'group-observation-transient': ['3', 'EPERM'],
       'group-observation-invalid': ['1', 'EINVAL'],
       'slow-owner': ['0', 'EPERM'],
+      'post-close-member': ['0', 'EPERM'],
     } as Partial<Record<CustodyMode, [string, string]>>
   )[mode];
   const verificationScript =
@@ -299,7 +302,7 @@ process.kill=(pid,signal)=>{
   if(pid<0&&signal===0&&denied>0){denied-=1;throw Object.assign(new Error('owned-group-observation-denied'),{code:${JSON.stringify(deniedGroupObservations[1])}});}
   return kill(pid,signal);
 };
-`,
+${mode === 'post-close-member' ? CLOSE_RECEIPT_PRELOAD : ''}`,
     );
   writeFileSync(
     join(repository, 'package.json'),

@@ -21,6 +21,7 @@ import {
   ownerPresent,
   withTrustedDockerFixture,
 } from './trusted-docker-fixture.ts';
+import { expectMemberOutlivedClose } from './trusted-docker-close-fixture.ts';
 import {
   groupIsAbsent,
   hasPassingOutcome,
@@ -765,6 +766,7 @@ it('settles a cancelled command whose same-group member exits shortly after clos
       /^; member exited \d+ms after the command vanished; settlement window 2000ms$/,
     );
     expect(memberExit(temporary)).toBeGreaterThanOrEqual(CLOSE_MEMBER_DELAY_MS);
+    expectMemberOutlivedClose(fixture.repository, temporary);
 
     const duplicate = fixture.command(['cancel', invocation], true);
     expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
