@@ -14,6 +14,7 @@ const native = vi.hoisted<{
   child: ChildProcess.ChildProcess | undefined;
   limit: NodeJS.Timeout | undefined;
   limitFired: boolean;
+  emfile: boolean;
 }>(() => {
   const answer = (stdout: string) => `process.stdout.write(${JSON.stringify(stdout)})`;
   return {
@@ -23,6 +24,7 @@ const native = vi.hoisted<{
     child: undefined,
     limit: undefined,
     limitFired: false,
+    emfile: false,
   };
 });
 vi.mock('node:os', async (importOriginal) => ({
@@ -31,10 +33,18 @@ vi.mock('node:os', async (importOriginal) => ({
 }));
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
+  const { EventEmitter } = await import('node:events');
   return {
     ...actual,
     spawn(binary: string, _args: readonly string[], options: ChildProcess.SpawnOptions) {
       if (binary !== '/usr/bin/python3') throw new Error('Unexpected native observer process');
+      if (native.emfile) {
+        // Node's EMFILE/ENFILE path: no stdio is assigned, and `error` arrives on the next tick.
+        const failed = Object.assign(new EventEmitter(), { kill: () => false });
+        const error = Object.assign(new Error('spawn EMFILE'), { code: 'EMFILE' });
+        process.nextTick(() => failed.emit('error', error));
+        return failed;
+      }
       const child = actual.spawn(native.binary, ['-e', native.script], options);
       native.child = child;
       // The cap characterization's 1000 ms limit starts when the stand-in really exists.
@@ -61,7 +71,12 @@ afterEach(() => {
   native.child = undefined;
   native.limit = undefined;
   native.limitFired = false;
+  native.emfile = false;
 });
+
+const activeTimeouts = () =>
+  process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+const nextTurn = () => new Promise((done) => setImmediate(done));
 
 it('retains generation identity while a live Darwin process becomes a zombie', async () => {
   const before = await processBirth(42);
@@ -106,6 +121,41 @@ it.each([
   expect(error).toHaveProperty('message', UNAVAILABLE);
   expect(error).not.toHaveProperty('code');
   await expect(liveProcessBirth(42)).rejects.toThrow(UNAVAILABLE);
+});
+
+it('reports a spawn without stdio (EMFILE) as unavailable without crashing or leaking a timer', async () => {
+  native.emfile = true;
+  let uncaught: unknown;
+  const onUncaught = (error: unknown) => {
+    uncaught = error;
+  };
+  process.on('uncaughtException', onUncaught);
+  try {
+    const timeouts = activeTimeouts();
+
+    const error = await processBirth(42).catch((caught: unknown) => caught);
+    await nextTurn();
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toHaveProperty('message', UNAVAILABLE);
+    expect(error).not.toHaveProperty('code');
+    expect(uncaught).toBeUndefined();
+    expect(activeTimeouts()).toBe(timeouts);
+    await expect(liveProcessBirth(42)).rejects.toThrow(UNAVAILABLE);
+    await nextTurn();
+    expect(uncaught).toBeUndefined();
+  } finally {
+    process.off('uncaughtException', onUncaught);
+  }
+});
+
+it('clears its time bound once an observation settles', async () => {
+  const timeouts = activeTimeouts();
+
+  expect(await processBirth(42)).toBe('darwin:42:1700000000:123456');
+  clearTimeout(native.limit);
+
+  expect(activeTimeouts()).toBe(timeouts);
 });
 
 it('keeps the event loop running while a hung native query is bounded and killed', async () => {

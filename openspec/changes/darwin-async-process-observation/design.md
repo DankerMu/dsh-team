@@ -24,6 +24,7 @@
 - Settling exactly once, on the first of `error` or `close`. The settlement is guarded, the timer is cleared, and later events are ignored. Node does not promise `close` after every `error`.
 - Clearing the timer on every path.
 - On a synchronous `spawn` throw or an `error` event, rejecting with a fresh `Error('browser process birth identity unavailable')` that has no `code`. Otherwise a spawn ENOENT would leak through, and `liveProcessBirth` (`probe-browser-native.mjs:112`) would turn unavailable into absence.
+- If the child has no stdout (Node's EMFILE/ENFILE path, which returns no stdio and emits `error` on the next tick), the observation settles as unavailable. The `error` listener is attached before any stdio access, so the deferred `error` is absorbed (review round 1).
 
 ## Governing invariant
 

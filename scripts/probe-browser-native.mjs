@@ -81,20 +81,26 @@ else:
     killed = true;
     child.kill('SIGKILL');
   };
-  const timer = setTimeout(kill, 2000);
+  let timer;
   const settle = (outcome) => {
     if (settled) return;
     settled = true;
     clearTimeout(timer);
     outcome();
   };
+  // Attached first: an EMFILE/ENFILE spawn returns without stdio and emits `error` next tick.
+  child.on('error', () => settle(unavailable));
+  if (!child.stdout) {
+    settle(unavailable);
+    return promise;
+  }
+  timer = setTimeout(kill, 2000);
   child.stdout.on('data', (chunk) => {
     if (killed) return;
     bytes += chunk.length;
     if (bytes > 4096) kill();
     else chunks.push(chunk);
   });
-  child.on('error', () => settle(unavailable));
   child.on('close', (code) =>
     settle(() => {
       if (killed || code !== 0) unavailable();

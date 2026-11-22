@@ -50,6 +50,6 @@ See design.md § Must preserve.
 
 ## 2. Verification
 
-- [ ] 2.1 Locally on macOS, three times in a row: `browser-native`, `browser-exec`, `trusted-docker-custody`, `trusted-docker-retirement` and `trusted-docker-cancellation` integration. Then `pnpm lint`, `pnpm typecheck` and `pnpm check`.
-- [ ] 2.2 State in the PR that the archived 2 s argument holds again; the archive stays unchanged.
+- [x] 2.1 Locally on macOS, three times in a row: `browser-native`, `browser-exec`, `trusted-docker-custody`, `trusted-docker-retirement` and `trusted-docker-cancellation` integration. Then `pnpm lint`, `pnpm typecheck` and `pnpm check`.
+- [x] 2.2 State in the PR that the archived 2 s argument holds again; the archive stays unchanged.
 - [ ] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`.
