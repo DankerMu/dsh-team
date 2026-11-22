@@ -1,7 +1,7 @@
 ## Risk packs
 
 - **Concurrency / shared state / ordering — selected.** The owner is frozen before anything is read, and kill/settle ordering is fixed. Tasks 1.1, 1.3.
-- **Error handling / rollback / partial outputs — selected.** Covers no match, an ambiguous match and a failed scan, and guarantees the owner never stays stopped. Tasks 1.1, 1.3.
+- **Error handling / rollback / partial outputs — selected.** Covers no match, an ambiguous match and a failed scan, and guarantees the owner never stays stopped, except when its identity can no longer be confirmed after a failed settle. That exception is reported (design § Governing invariant). Tasks 1.1, 1.3.
 - **File IO / path safety — selected.** `child.json` is read while the owner is frozen. Task 1.1.
 - **Auth / permissions / secrets — selected.** Only an own descendant bound to an identity is signalled. Task 1.1.
 - **Not selected:** product scripts, config, release.

@@ -65,7 +65,7 @@ See proposal.md § What Changes for the sequence, the classifier and the outcome
   - The aggregate has exactly one entry, `…: command <published pid>`.
 - **The existing deadline case** passes with its suffixed message.
 - **Each classifier outcome** has a stub case.
-- **No stopped process remains.**
+- **No stopped process remains** in the window case and in every row where the owner identity is still confirmable. The exception is in § Governing invariant.
 - **Load.** Five loaded `pnpm test:integration` runs (§56), plus the custody and retirement files.
 
 ## Non-goals

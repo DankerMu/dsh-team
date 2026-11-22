@@ -27,7 +27,7 @@ No case reaches this window. The existing deadline case (`trusted-docker-custody
      - **in flight:** the command line is identical to the owner's own. A fork that has not exec'd yet (Linux libuv fork → setsid → exec) looks like this. Rescan within a bound; if it persists, the authority is retained.
      - **ignored:** not detached (`pgid` equals the owner's pgid) and not in flight. Examples are the Darwin birth `python3` and `/bin/ps`.
      - **anything else:** ambiguous, so the authority is retained.
-  4. SIGKILL and settle the owner, in a `finally` on every path, so the owner is never left stopped. The birth check in `settle` guards against pid reuse.
+  4. SIGKILL and settle the owner, in a `finally` on every path, so the owner is never left stopped. The one exception: when a fresh identity check after a failed settle cannot confirm the owner, it is not signalled (design § Governing invariant). The birth check in `settle` guards against pid reuse.
   5. Hand the bound command identity to `uncapturedAuthority` as `child`. The existing retirement loop then settles members, the command group and the owner in the captured path's order. The group can reach absence only once its zombie leader is reaped, which happens when the owner dies (probed on Darwin).
 
   `no command started` is reported only when the owner was confirmed live, stopped and identity-bound, and no child is a command, in flight or ambiguous.
