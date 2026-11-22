@@ -36,7 +36,7 @@ import {
 import type { FrameRecord, NoticeTimes, WatchRecord } from './office-rewrite-observers.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
-import { converseInWorkbench, workbenchSession } from './stack-browser-fixture.ts';
+import { converseInWorkbench, scrubEach, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
 const PARAGRAPH = '改写探针：开头只有这一段。';
@@ -265,22 +265,16 @@ export function typingFacts(evidence: TypingFactsInput) {
   };
 }
 
-/** A query or hash, then any 20-character word run but lowercase words: keys, tokens, nonces. */
-const scrub = (text: string) =>
-  text
-    .replace(/[?#]\S*/g, '')
-    .replace(/[\w-]{20,}/g, (run) => (/^[a-z_-]+$/.test(run) ? run : '<redacted>'));
-
 const editorLine = (editor: StackBrowserEvidence) => ({
   ...counted(editor),
-  ...{ errors: editor.consoleErrors.map(scrub), failed: editor.failedRequests.map(scrub) },
+  ...{ errors: scrubEach(editor.consoleErrors), failed: scrubEach(editor.failedRequests) },
 });
 const caseLine = ({ editor, agent, responses, ...rest }: RewriteCaseEvidence) => ({
-  ...{ ...rest, responses: responses.map(scrub) },
+  ...{ ...rest, responses: scrubEach(responses) },
   ...{ editor: editorLine(editor), agent: counted(agent) },
 });
 const typingLine = ({ editor, responses, ...rest }: TypingEvidence) => ({
-  ...{ ...rest, responses: responses.map(scrub) },
+  ...{ ...rest, responses: scrubEach(responses) },
   editor: editorLine(editor),
 });
 

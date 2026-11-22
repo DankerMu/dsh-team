@@ -12,16 +12,17 @@ import {
   serviceWorkerRefused,
   untilSeen,
 } from './office-hints-stack-fixture.ts';
-import {
-  EXPECTED_INFO,
-  guessedKeyInfo,
-  redactSecrets,
-  registryKeys,
-} from './office-isolation-stack-fixture.ts';
+import { EXPECTED_INFO, guessedKeyInfo, registryKeys } from './office-isolation-stack-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
-import { converseInWorkbench, until, workbenchSession } from './stack-browser-fixture.ts';
+import {
+  converseInWorkbench,
+  redactSecrets,
+  scrubEach,
+  until,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
 // The pinned Document Server's own blank templates (§51.4); they never enter the repository.
@@ -341,7 +342,9 @@ async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string, 
     if (status >= 400) failed.push(`${String(status)} ${new URL(response.url()).pathname}`);
   };
   const editor = await workbenchSession({ ...session, directory }, names, body, undefined, record);
-  const seen = `consoleErrors, responses ${JSON.stringify([editor.consoleErrors, failed])}`;
+  // A path still holds a key (`/doc/<key>/c/`), so each element is scrubbed for the message.
+  const shown = [scrubEach(editor.consoleErrors), scrubEach(failed)];
+  const seen = `consoleErrors, responses ${JSON.stringify(shown)}`;
   expect(editorErrorsAllowed(editor.consoleErrors, failed, session.base), seen).toBe(true);
   expect(counted(editor), seen).toMatchObject({
     screenshots: [`${shot}-open.png`, `${shot}-saved.png`],

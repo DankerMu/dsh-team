@@ -12,11 +12,24 @@ import {
   healthTimelineLine,
   officeFacts,
   officeHintsLine,
+  officeHintsScenario,
   RESTART,
   sampleDocumentServerHealth,
   serviceWorkerRefused,
 } from './office-hints-stack-fixture.ts';
 import type { HealthSample } from './office-hints-stack-fixture.ts';
+import {
+  everythingPrinted,
+  StackWorkbenchFailure,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
+import type * as StackBrowser from './stack-browser-fixture.ts';
+
+// Only the browser session is a stand-in; the lane runs as written around it.
+vi.mock('./stack-browser-fixture.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof StackBrowser>();
+  return { ...actual, workbenchSession: vi.fn(actual.workbenchSession) };
+});
 
 it('writes the docx as uid 1001 through argv and reads it back without the paragraph', () => {
   const write = docxCommand('同写提示.docx', '一段文字');
@@ -167,6 +180,7 @@ function fakeDocker(failures: number, spawns = '2\n') {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.mocked(workbenchSession).mockReset();
 });
 
 it('names the delivered Document Server container', () => {
@@ -409,4 +423,81 @@ it.each([
   ],
 ])('fails the timeline on %s', (_case, samples, message) => {
   expect(() => healthTimelineLine({ samples, healthySpawns: 2 })).toThrow(message);
+});
+
+const KEY = 'd4'.repeat(32);
+const SOCKET = `${BASE}/doc/${KEY}/c/?EIO=4&transport=polling`;
+const LEAKED = [KEY, 'EIO=4', 'transport='];
+const quietSession = {
+  ...{ screenshots: ['office-hints-collab.png'], consoleErrors: refused, pageErrors: [] },
+  ...{ failedRequests: [], externalRequests: [], requests: 30, websockets: 1 },
+};
+const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
+/** The instance as the hints lane drives it before and after its browser session. */
+const hintsLane = {
+  session: {
+    base: BASE,
+    directory: '/nonexistent',
+    email: 'a@x.test',
+    password: 'p',
+    timeout: 500,
+  },
+  exec: (args: readonly string[]) => {
+    const [, , script, path = '', ...rest] = args;
+    if (script === HEALTH_COMMAND[2]) return reply({ status: 200, body: 'true' });
+    if (script === docxCommand('')[2]) return reply({ name: path.split('/').pop(), size: 9 });
+    // withWorkFiles' removal: the work directory, then each name.
+    return reply(rest.map(() => false));
+  },
+  provider: () => Promise.resolve({ requests: 0, searches: 0, delegations: 0 }),
+};
+const failed = (error: unknown) => {
+  expect(error).toBeInstanceOf(Error);
+  const printed = everythingPrinted(error);
+  for (const secret of LEAKED) expect(printed).not.toContain(secret);
+  return error as Error;
+};
+
+it('leaves a failed hints session without the key or query anywhere it is printed', async () => {
+  const cause = new Error(`page.goto: net::ERR_CONNECTION_REFUSED at ${SOCKET}`);
+  const evidence = {
+    ...{ ...quietSession, consoleErrors: [...refused, `WebSocket ${SOCKET} failed`] },
+    failedRequests: [`GET ${SOCKET}`],
+  };
+  vi.mocked(workbenchSession).mockRejectedValue(
+    new StackWorkbenchFailure(cause, evidence, 'office hints'),
+  );
+
+  const error = await officeHintsScenario(hintsLane).catch((caught: unknown) => caught);
+
+  expect(failed(error).message).toBe(
+    'Stack workbench office hints failed (consoleErrors=3 pageErrors=0 failedRequests=1 externalRequests=0): page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:64694/doc/<redacted>/c/',
+  );
+});
+
+it('names the console errors of a session without the refusal scrubbed', async () => {
+  const consoleErrors = [`WebSocket connection to '${SOCKET.replace('http', 'ws')}' failed`];
+  vi.mocked(workbenchSession).mockResolvedValue({ ...quietSession, consoleErrors });
+
+  const error = await officeHintsScenario(hintsLane).catch((caught: unknown) => caught);
+
+  expect(failed(error).message).toContain(
+    `consoleErrors ["WebSocket connection to 'ws://127.0.0.1:64694/doc/<redacted>/c/' failed"]`,
+  );
+});
+
+it('diffs the failed and external requests of the session scrubbed', async () => {
+  const lists = { failedRequests: [`GET ${SOCKET}`], externalRequests: [`${SOCKET}#t`] };
+  vi.mocked(workbenchSession).mockResolvedValue({ ...quietSession, ...lists });
+
+  const error = failed(await officeHintsScenario(hintsLane).catch((caught: unknown) => caught));
+
+  // The matcher's AssertionError carries the matched subset and the expectation.
+  const { actual, expected } = error as Error & Record<'actual' | 'expected', unknown>;
+  for (const shown of [error.message, JSON.stringify(actual), JSON.stringify(expected)])
+    for (const secret of LEAKED) expect(shown).not.toContain(secret);
+  expect(actual).toMatchObject({
+    failedRequests: ['GET http://127.0.0.1:64694/doc/<redacted>/c/'],
+    externalRequests: ['http://127.0.0.1:64694/doc/<redacted>/c/'],
+  });
 });

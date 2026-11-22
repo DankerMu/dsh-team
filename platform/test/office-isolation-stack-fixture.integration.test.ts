@@ -24,13 +24,13 @@ import {
   officeIsolationScenario,
   platformAttackScript,
   namespaceInfoScript,
-  redactSecrets,
   REGISTRY,
   registryKeys,
 } from './office-isolation-stack-fixture.ts';
 import { JWT_JS } from './onlyoffice-probe-script.ts';
 import type { OfficeIsolationLane } from './office-isolation-stack-fixture.ts';
 import { record } from './docker-cleanup.ts';
+import { redactSecrets } from './stack-browser-fixture.ts';
 
 const A = '10.0.0.2';
 const B = '10.0.1.2';

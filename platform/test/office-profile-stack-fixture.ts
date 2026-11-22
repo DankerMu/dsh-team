@@ -6,7 +6,6 @@ import {
   guarded,
   instanceAddress,
   NODE,
-  redactSecrets,
   register,
   REGISTRY,
   script,
@@ -16,6 +15,8 @@ import type { OfficeIsolationLane } from './office-isolation-stack-fixture.ts';
 import { CALLBACK_JS, exchangeJs, JWT_JS, KEY_JS, READ_JS } from './onlyoffice-probe-script.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
+import { redactSecrets } from './stack-browser-fixture.ts';
+import type { Secrets } from './stack-browser-fixture.ts';
 
 const NAME = '重启登记.docx';
 const FILE = `${WORK}/${NAME}`;
@@ -129,8 +130,6 @@ export function officeProfileLine(evidence: OfficeProfileEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office profile evidence missing');
   return evidence;
 }
-
-type Secrets = readonly (string | undefined)[];
 
 type Step = keyof typeof EXPECTED_PROFILE;
 

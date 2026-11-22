@@ -15,7 +15,6 @@ import {
   instanceAddress,
   NODE,
   officeIsolationScenario,
-  redactSecrets,
   registryKeys,
   script,
   verify,
@@ -26,7 +25,12 @@ import type {
 } from './office-isolation-stack-fixture.ts';
 import { exchangeJs, JWT_JS, READ_JS } from './onlyoffice-probe-script.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
-import { StackWorkbenchFailure, workbenchSession } from './stack-browser-fixture.ts';
+import {
+  redactSecrets,
+  scrub,
+  StackWorkbenchFailure,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
 
 const NAME = '忘记恢复.docx';
 const FILE = `${WORK}/${NAME}`;
@@ -379,20 +383,16 @@ type ReopenAlert =
       readonly text: string;
     };
 
-/** `text` with A's key and, since it may not be known yet, every document key (a sha256 hex digest,
- * plugin `onlyoffice.ts:37`) redacted. */
-export const scrub = (text: string, kA: string | null) =>
-  redactSecrets(text, [kA ?? undefined]).replace(/[0-9a-f]{64}/g, '<redacted>');
-
 /** A failed browser session as ONE redacted error without `cause`: vitest prints cause chains and
  * own properties, and the session's console errors and failed requests can carry the Document
  * Server socket path `/doc/<key>/…`. The cause chain's messages, those lists and `scene` are folded
- * into the message instead (as `guarded` does). */
+ * into the message instead (as `guarded` does), each part scrubbed of A's key on its own. */
 export function sessionFailure(label: string, error: unknown, scene: object, kA: string | null) {
+  const clean = (text: string) => scrub(text, [kA ?? undefined]);
   const reasons: string[] = [];
   let current: unknown = error;
   while (current !== undefined && reasons.length < 8) {
-    reasons.push(current instanceof Error ? current.message : JSON.stringify(current));
+    reasons.push(clean(current instanceof Error ? current.message : JSON.stringify(current)));
     current = current instanceof Error ? current.cause : undefined;
   }
   const evidence = error instanceof StackWorkbenchFailure ? error.evidence : undefined;
@@ -400,10 +400,11 @@ export function sessionFailure(label: string, error: unknown, scene: object, kA:
     consoleErrors: evidence?.consoleErrors ?? [],
     failedRequests: evidence?.failedRequests ?? [],
   };
-  const detail = JSON.stringify({ ...scene, ...lists });
-  return new Error(
-    scrub(`Office forgotten ${label} failed: ${reasons.join(' <- ')}; scene=${detail}`, kA),
-  );
+  // Every string of the scene and the lists, never the serialized whole.
+  const strings = (_key: string, value: unknown) =>
+    typeof value === 'string' ? clean(value) : value;
+  const detail = JSON.stringify({ ...scene, ...lists }, strings);
+  return new Error(`Office forgotten ${label} failed: ${reasons.join(' <- ')}; scene=${detail}`);
 }
 
 /** Dismisses the reopen alert inside `editor` (waiting up to 20s for it) and returns what it said. */
@@ -419,7 +420,7 @@ async function dismissAlert(
   );
   if (!shown) return { shown };
   const value = await alert.getAttribute('data-value', { timeout });
-  const text = scrub((await alert.innerText({ timeout })).trim(), kA).slice(0, 300);
+  const text = scrub((await alert.innerText({ timeout })).trim(), [kA]).slice(0, 300);
   await alert.locator('button[result="ok"]').click({ timeout });
   await alert.waitFor({ state: 'hidden', timeout });
   return { shown, value, text };
