@@ -68,6 +68,66 @@ export const EXPECTED_INFO = { k1: EDITING, kB: EDITING, k0: UNKNOWN_KEY, kCross
 const CONFIG_PATH = `'/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(${JSON.stringify(WORK)})`;
 const FILE_PATH = "'/sidebar/onlyoffice/file?token=' + encodeURIComponent";
 export const REGISTRY = '/data/home/plugins/dsh-sidebar-onlyoffice/registry.json';
+// The keys of argv[1]'s records whose entry.path is argv[2], in file order, printed once after every
+// record passed the plugin 0.2.0 format (`{ version: 1, entries: [{ key, entry: { path } }] }`).
+// The plugin renames a whole temporary file over it and never deletes it: no file means not written
+// yet, so []. Anything else fails with exit 2 and a fixed message that names no key or path.
+const REGISTRY_KEYS = `import json, sys
+class Refused(Exception):
+    pass
+def check(ok, kind):
+    if not ok:
+        raise Refused("registry format mismatch: " + kind)
+def keys(name, path):
+    try:
+        with open(name, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        raise Refused("registry unreadable")
+    try:
+        registry = json.loads(raw)
+    except (ValueError, RecursionError):
+        raise Refused("registry format mismatch: json")
+    check(isinstance(registry, dict), "object")
+    version = registry.get("version")
+    check(type(version) is int and version == 1, "version")
+    entries = registry.get("entries")
+    check(isinstance(entries, list), "entries")
+    found = []
+    for record in entries:
+        check(isinstance(record, dict), "record")
+        key = record.get("key")
+        check(isinstance(key, str) and key != "", "key")
+        entry = record.get("entry")
+        check(isinstance(entry, dict), "entry")
+        check(isinstance(entry.get("path"), str), "path")
+        if entry["path"] == path:
+            found.append(key)
+    return found
+try:
+    found = keys(sys.argv[1], sys.argv[2])
+except Refused as refused:
+    sys.stderr.write(str(refused) + "\\n")
+    sys.exit(2)
+print(json.dumps(found))`;
+const isKeys = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((key) => typeof key === 'string' && key !== '');
+
+/** The keys A's registry maps to `path`; [] until it is written. A failed query rejects through
+ * `exec`; output that is not a list of keys rejects with a fixed message that never quotes it. */
+export async function registryKeys(lane: Pick<ArchiveLane, 'exec'>, path: string) {
+  const output = await lane.exec(['python3', '-I', '-c', REGISTRY_KEYS, REGISTRY, path]);
+  let keys: unknown;
+  try {
+    keys = JSON.parse(output);
+  } catch {
+    // A syntax error quotes the output, which may hold keys: the fixed message below replaces it.
+  }
+  if (!isKeys(keys)) throw new Error('Office registry keys output is not a list of keys');
+  return keys;
+}
 
 /** Always exits 0: an error becomes `observed.error`, so a failed exec never echoes argv. Instance
  * scripts run as uid 1001 and read the per-instance secret from the container environment only. */

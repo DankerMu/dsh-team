@@ -24,9 +24,9 @@ See design.md § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 Export `registryKeys(lane, path)` from `office-isolation-stack-fixture.ts`, next to `REGISTRY`. Give it a module-private `REGISTRY_KEYS` script that follows the proposal's contract table, and parse its output strictly. Correct the "half written" comment.
-- [ ] 1.2 Make `distinctKeys` and `registeredKey` call `registryKeys` and nothing else. `registeredKey` uses `[0] ?? null`. Delete `KEYS`, `keysOf` and `REGISTRY_KEY`.
-- [ ] 1.3 Add integration cases:
+- [x] 1.1 Export `registryKeys(lane, path)` from `office-isolation-stack-fixture.ts`, next to `REGISTRY`. Give it a module-private `REGISTRY_KEYS` script that follows the proposal's contract table, and parse its output strictly. Correct the "half written" comment.
+- [x] 1.2 Make `distinctKeys` and `registeredKey` call `registryKeys` and nothing else. `registeredKey` uses `[0] ?? null`. Delete `KEYS`, `keysOf` and `REGISTRY_KEY`.
+- [x] 1.3 Add integration cases:
   - The script, run with real `python3 -I`. Capture stdout, stderr and status. Cover each row of the contract table with real 64-hex keys, and state each expected result. The mismatch and unreadable cases assert that stdout is empty, and that stdout+stderr contain no key or path.
   - `registryKeys` strict parsing, once: non-JSON, non-list, a non-string element, an empty string.
   - One propagation case per caller: a rejection passes through and is not counted as zero.
@@ -34,7 +34,7 @@ See design.md § Must preserve.
     - `registeredKey` is exported for its test; knip treats test files as entry points.
   - The strict-parse error is a fixed message and never includes the raw stdout.
   - The PR notes that the container argv gains `-I`.
-- [ ] 1.4 Run every mutant in design.md § Required evidence. Each must turn a case red; record the text.
+- [x] 1.4 Run every mutant in design.md § Required evidence. Each must turn a case red; record the text.
 
 ## 2. Verification
 

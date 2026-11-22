@@ -236,6 +236,26 @@ it("with both editors open reads A's then B's registry, recomputes A, derives kC
   expect(met).toEqual({ distinct: true, info: EXPECTED_INFO });
 });
 
+it("fails bothOpen with A's registry query rejection, never as zero keys, and asks no holder", async () => {
+  const calls: string[][] = [];
+  const [a, b] = openSides(calls);
+  // Only the first registry read fails: a caller that counted it as zero keys would pass on retry.
+  let failed = false;
+  const exec = (args: readonly string[]) => {
+    if (args[0] !== 'python3' || failed) return a.exec(args);
+    failed = true;
+    return Promise.reject(new Error('registry unreadable'));
+  };
+  const met = { distinct: false, info: {} };
+
+  const opened = bothOpen({ ...a, exec }, b, met);
+
+  const message = 'Office editor registry entries per side {}: registry unreadable';
+  await expect(opened).rejects.toThrow(new Error(message));
+  expect(calls.map(([step]) => step)).toEqual(['B registry']);
+  expect(met).toEqual({ distinct: false, info: {} });
+});
+
 const OTHER = editorNonce();
 it.each([
   ['its own nonce only', [`探针。${NONCE}`], 'own'],

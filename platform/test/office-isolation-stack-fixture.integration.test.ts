@@ -1,12 +1,12 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isDeepStrictEqual, promisify } from 'node:util';
-import { expect, it } from 'vitest';
+import { inspect, isDeepStrictEqual, promisify } from 'node:util';
+import { afterAll, expect, it } from 'vitest';
 import {
   aGuessScript,
   aReadScript,
@@ -25,6 +25,8 @@ import {
   platformAttackScript,
   namespaceInfoScript,
   redactSecrets,
+  REGISTRY,
+  registryKeys,
 } from './office-isolation-stack-fixture.ts';
 import { JWT_JS } from './onlyoffice-probe-script.ts';
 import type { OfficeIsolationLane } from './office-isolation-stack-fixture.ts';
@@ -460,4 +462,131 @@ it.each([
     expect(error.message).not.toContain(secret);
   expect(error.message).not.toMatch(/[0-9a-f]{64}/);
   expect(error.cause).toBeUndefined();
+});
+
+const REGISTRIES = mkdtempSync(join(tmpdir(), 'dsh-team-office-registry-'));
+afterAll(() => {
+  rmSync(REGISTRIES, { recursive: true, force: true });
+});
+const WANTED = '/data/work/编辑写回.docx';
+const [K1, K2, K3, K4] = [hex(), hex(), hex(), hex()];
+// A record as plugin 0.2.0 writes it (`{ key, entry: DocumentEntry, lastSeen }`, `src/registry.ts`).
+const row = (key: unknown, path: unknown = WANTED) => {
+  const entry = { path, title: 'x.docx', ext: 'docx', cwd: '/data/work', dsBase: '/ds', size: 9 };
+  return { key, entry: { ...entry, mtimeMs: 1_700_000_000_000 }, lastSeen: 1_700_000_000_000 };
+};
+const registryFile = (name: string, content: unknown) => {
+  const file = join(REGISTRIES, `${name.replaceAll(' ', '-')}.json`);
+  const raw =
+    typeof content === 'string' || Buffer.isBuffer(content) ? content : JSON.stringify(content);
+  writeFileSync(file, raw);
+  return file;
+};
+
+// registryKeys' argv around its script: python3 isolated, the container registry, the path.
+const ARGV = ['python3', '-I', '-c', REGISTRY, WANTED];
+/** registryKeys' own argv under the local `python3 -I`, the registry at `file`: the run's status,
+ * stdout and stderr, then registryKeys' keys or its rejection message. */
+async function query(file: string) {
+  const run = { status: -1, stdout: '', stderr: '' };
+  const exec = (argv: readonly string[]) => {
+    const [command, isolated, flag, source = '', registry, path = '', ...rest] = argv;
+    expect([command, isolated, flag, registry, path, ...rest]).toEqual(ARGV);
+    const done = spawnSync('python3', ['-I', '-c', source, file, path], { encoding: 'utf8' });
+    Object.assign(run, { status: done.status ?? -1, stdout: done.stdout, stderr: done.stderr });
+    const failed = new Error(`exit ${String(done.status)}: ${done.stderr}`);
+    return done.status === 0 ? Promise.resolve(done.stdout) : Promise.reject(failed);
+  };
+  const keys = await registryKeys({ exec }, WANTED).catch((error: unknown) => ({
+    rejected: error instanceof Error ? error.message : String(error),
+  }));
+  return { ...run, keys };
+}
+
+/** A refusal: exit 2, nothing on stdout, exactly `message` on stderr, which registryKeys rejects
+ * with; neither stream names a key, the queried path or the registry file. */
+async function refused(file: string, message: string) {
+  const result = await query(file);
+  expect(result).toEqual({
+    status: 2,
+    stdout: '',
+    stderr: `${message}\n`,
+    keys: { rejected: `exit 2: ${message}\n` },
+  });
+  for (const text of [K1, K2, WANTED, file])
+    expect(result.stdout + result.stderr).not.toContain(text);
+}
+
+it('lists the keys of the records naming the path exactly, in file order, and no other key', async () => {
+  const other = [row(K2, '/data/work/其他.docx'), row(K4, `${WANTED}.bak`)];
+  const file = registryFile('valid', { version: 1, entries: [row(K1), ...other, row(K3)] });
+
+  const result = await query(file);
+
+  const stdout = `["${K1}", "${K3}"]\n`;
+  expect(result).toEqual({ status: 0, stdout, stderr: '', keys: [K1, K3] });
+});
+
+it.each([
+  ['a missing file', join(REGISTRIES, 'absent.json')],
+  ['a missing parent directory', join(REGISTRIES, 'absent', 'registry.json')],
+  ['records of other paths only', registryFile('other', { version: 1, entries: [row(K2, '/x')] })],
+  ['no records', registryFile('none', { version: 1, entries: [] })],
+])(
+  'answers [] with exit 0 for %s: not written yet, or no key for the path',
+  async (_case, file) => {
+    const result = await query(file);
+
+    expect(result).toEqual({ status: 0, stdout: '[]\n', stderr: '', keys: [] });
+  },
+);
+
+it('refuses a directory at the registry path as unreadable', async () => {
+  const file = join(REGISTRIES, 'directory.json');
+  mkdirSync(file);
+
+  await refused(file, 'registry unreadable');
+});
+
+const VALID = row(K1);
+it.each([
+  ['json', 'invalid JSON', `{"version": 1, "entries": [${JSON.stringify(VALID)}`],
+  ['json', 'non-UTF-8 bytes', Buffer.from([0x7b, 0xff, 0x7d])],
+  ['object', 'a top-level list', [VALID]],
+  ['version', 'version 2', { version: 2, entries: [VALID] }],
+  ['version', 'no version', { entries: [VALID] }],
+  ['version', 'version true', { version: true, entries: [VALID] }],
+  ['entries', 'no entries', { version: 1 }],
+  ['entries', 'an entries object', { version: 1, entries: { [K1]: VALID } }],
+  ['record', 'a string record', { version: 1, entries: [VALID, K2] }],
+  ['key', 'a record without key', { version: 1, entries: [VALID, { entry: { path: WANTED } }] }],
+  ['key', 'a numeric key', { version: 1, entries: [VALID, row(7)] }],
+  ['key', 'an empty key', { version: 1, entries: [VALID, row('')] }],
+  ['entry', 'a record without entry', { version: 1, entries: [VALID, { key: K2 }] }],
+  ['entry', 'a null entry', { version: 1, entries: [VALID, { key: K2, entry: null }] }],
+  ['path', 'an entry without path', { version: 1, entries: [VALID, { key: K2, entry: {} }] }],
+  ['path', 'a numeric path', { version: 1, entries: [VALID, row(K2, 7)] }],
+])(
+  'refuses with format mismatch: %s, after a valid matching record, for %s',
+  async (kind, name, content) => {
+    const file = registryFile(name, content);
+
+    await refused(file, `registry format mismatch: ${kind}`);
+  },
+);
+
+it.each([
+  ['non-JSON', `[${K1}`],
+  ['a non-list', JSON.stringify({ key: K1 })],
+  ['a non-string element', JSON.stringify([K1, 7])],
+  ['an empty string', JSON.stringify([K1, ''])],
+  ['null', 'null'],
+])('rejects %s query output with the fixed message, never quoting it', async (_case, output) => {
+  const exec = () => Promise.resolve(output);
+
+  const error: unknown = await registryKeys({ exec }, WANTED).catch((caught: unknown) => caught);
+
+  expect(error).toBeInstanceOf(Error);
+  expect(error).toHaveProperty('message', 'Office registry keys output is not a list of keys');
+  expect(inspect(error)).not.toContain(K1);
 });

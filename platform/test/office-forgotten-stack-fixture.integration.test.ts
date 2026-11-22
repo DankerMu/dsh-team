@@ -16,11 +16,12 @@ import {
   forgottenRows,
   namespaceForgottenListScript,
   proxyControl,
+  registeredKey,
   scrub,
   sessionFailure,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
-import { NODE } from './office-isolation-stack-fixture.ts';
+import { NODE, REGISTRY } from './office-isolation-stack-fixture.ts';
 import { StackWorkbenchFailure } from './stack-browser-fixture.ts';
 
 const KA = 'a1'.repeat(32);
@@ -381,4 +382,38 @@ it.each([
 it('scrubs A key, and any document key, from the reopen alert text', () => {
   expect(scrub(`restored ${KA} copy`, KA)).toBe('restored <redacted> copy');
   expect(scrub(`restored ${'b2'.repeat(32)} copy`, null)).toBe('restored <redacted> copy');
+});
+
+/** A's registry query answering `replies` in turn; each call's argv goes to `calls`. */
+const registryLane = (calls: (readonly string[])[], ...replies: (() => Promise<string>)[]) => ({
+  exec: (args: readonly string[]) => {
+    calls.push(args);
+    return (replies.shift() ?? (() => Promise.reject(new Error('no reply'))))();
+  },
+});
+const FORGOTTEN_ARGV = ['python3', '-I', '-c', REGISTRY, '/data/work/忘记恢复.docx'];
+
+it("polls A's registry until it names the DOCX and returns the first of its keys", async () => {
+  const calls: (readonly string[])[] = [];
+  const replies = [() => Promise.resolve('[]'), () => Promise.resolve(JSON.stringify([KA, hex()]))];
+
+  const key = await registeredKey(registryLane(calls, ...replies));
+
+  expect(key).toBe(KA);
+  expect(calls.map((args) => args.filter((_, i) => i !== 3))).toEqual([
+    FORGOTTEN_ARGV,
+    FORGOTTEN_ARGV,
+  ]);
+});
+
+it('fails with the registry query rejection instead of polling it as no key', async () => {
+  const calls: (readonly string[])[] = [];
+  const refused = () => Promise.reject(new Error('registry format mismatch: version'));
+  // A caller that counted the failure as no key would poll again and return KA.
+  const lane = registryLane(calls, refused, () => Promise.resolve(JSON.stringify([KA])));
+
+  const key = registeredKey(lane);
+
+  await expect(key).rejects.toThrow(new Error('registry format mismatch: version'));
+  expect(calls).toHaveLength(1);
 });
