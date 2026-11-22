@@ -22,7 +22,7 @@
 - `clean` and `unsaved`, `CASES`, `ownedRewrites`, the `Rewrite scripts configured` assertion, `EXPECTED_REWRITE` facts and screenshots.
 - `platform/test/platform-stack.stack.test.ts` changes only `:549`, in place from `...lane` to `...office`, a net change of 0 lines. Wiring goes through `officeRewriteScenario` and `officeRewriteLine`.
 - Every other lane's assertions and deadlines.
-- No DSH source change. The plugin is changed only by the pinned build-time patch (2.1a); `images/dsh-user/` changes only in `patch-package.mjs` and its test.
+- No DSH source change. The plugin is changed only by the pinned build-time patch (2.1a). `images/dsh-user/` changes only in `patch-package.mjs` and its test. `platform/test/user-image.docker.test.ts` updates the delivered `lib/client.js` hash to the patched output (`9a3d7610…`).
 - No key, token, cookie, banner or log filesystem path, banner text, watch payload, log line or conversation content in evidence, assertion messages or screenshots. The existing file names and `status path` response lines stay as they are.
 - The 800-line, function-length and complexity limits.
 
@@ -74,7 +74,7 @@
     - The patch behaviour: when the editor turns clean (dirty→false) while a `change` arrived during the dirty state, refresh once (`refreshNow`) instead of only clearing the banner.
     - File an issue upstream at `chendefine/dsh-sidebar-onlyoffice`.
     - This is a critical path (`images/dsh-user/`): the PR asks for a human line-by-line review.
-- [ ] 2.1a Patch (implementer):
+- [x] 2.1a Patch (implementer):
   - Per-target replacements in `PINS.onlyoffice`. The engine applies one replacement list to every target, so each target gets its own list, with the existing `lib/index.js` list unchanged.
   - The `lib/client.js` target (input sha256 `13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc`) gets three replacements, each anchored on text that occurs exactly once:
     - a pending-change flag scoped to `run`;
@@ -91,7 +91,7 @@
 
   Keep the record-only facts as evidence.
 
-- [ ] 2.1c Orchestrator: file the upstream issue on `chendefine/dsh-sidebar-onlyoffice` with the measured facts. It contains no deployment, user, key or path details.
+- [x] 2.1c Orchestrator: filed https://github.com/chendefine/dsh-sidebar-onlyoffice/issues/1 with the measured facts and the suggested fix. It contains no deployment, user, key or path details.
 - [ ] 2.2 Only when the MUST holds:
   - Rewrite `docs/EMPLOYEE_GUIDE.md` §「AI 改写正在编辑的文件」 (`:61` no longer "unverified", the `:67` bullet, the advice) to the measured behaviour, including where in-window typing goes.
   - Add a `stackEvidence.officeRewrite` row to `docs/LOCAL_STACK.md`.

@@ -465,15 +465,15 @@ process.stdout.write(JSON.stringify({immutable:true,engines,credentials:entry?.n
   );
 });
 
-// dsh-sidebar-onlyoffice@0.2.0: the reviewed build-time patch of lib/index.js (published
-// e2148f01…b29b) and the unpatched published lib/client.js; its manifest only gains
+// dsh-sidebar-onlyoffice@0.2.0: the reviewed build-time patches of lib/index.js (published
+// e2148f01…b29b) and lib/client.js (published 13df10ce…0cbc); its manifest only gains
 // `bundleDependencies`.
 const ONLYOFFICE_PATCHED_INDEX_SHA256 =
   '30c3ffd21bda284e9daa205bd3f71ec08eeb61dfad999080608a9a81d49196ef';
-const ONLYOFFICE_RELEASED_CLIENT_SHA256 =
-  '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc';
+const ONLYOFFICE_PATCHED_CLIENT_SHA256 =
+  '9a3d7610f576e73688d82939390f650e066f0b017dee21a39cf94236f79c78c0';
 
-it('delivers dsh-sidebar-onlyoffice 0.2.0 with only the file-token code patch and bundleDependencies, root-owned and unwritable by uid1001, without the patch script', async () => {
+it('delivers dsh-sidebar-onlyoffice 0.2.0 with only the file-token and refresh code patches and bundleDependencies, root-owned and unwritable by uid1001, without the patch script', async () => {
   if (platform() !== 'linux' || arch() !== 'x64') {
     throw new Error('Docker verification requires the trusted giap-vps Linux amd64 environment');
   }
@@ -522,7 +522,7 @@ process.stdout.write(JSON.stringify({
         index: ONLYOFFICE_PATCHED_INDEX_SHA256,
         profileIndex: ONLYOFFICE_PATCHED_INDEX_SHA256,
         seedIndex: ONLYOFFICE_PATCHED_INDEX_SHA256,
-        client: ONLYOFFICE_RELEASED_CLIENT_SHA256,
+        client: ONLYOFFICE_PATCHED_CLIENT_SHA256,
         global: false,
         script: false,
         uid: 1001,
