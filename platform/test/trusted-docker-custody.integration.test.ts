@@ -703,7 +703,7 @@ it('settles the owner and held command of a start killed at the case deadline', 
 
     expect(failed).toBeInstanceOf(AggregateError);
     expect((failed as AggregateError).errors.map(String)).toEqual([
-      'Error: Uncaptured custody fixture authority retained',
+      `Error: Uncaptured custody fixture authority retained: command ${String(pids.command)}`,
     ]);
     expect(ownerPresent(pids.owner)).toBe(false);
     expect(groupIsAbsent(pids.command)).toBe(true);

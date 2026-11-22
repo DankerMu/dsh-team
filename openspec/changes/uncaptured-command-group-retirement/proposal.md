@@ -72,6 +72,7 @@ Evidence floor: new window case red before / green after; existing deadline case
 ## Impact
 
 - `platform/test/trusted-docker-fixture.ts`
-- `platform/test/trusted-docker-custody.integration.test.ts`
+- `platform/test/trusted-docker-custody.integration.test.ts` (one `toEqual` only)
+- `platform/test/trusted-docker-uncaptured-fixture.ts` and its integration test. These are new: the custody test file is at 797 of its 800 effective lines, so the window case and the stub cases live here.
 
 No change to `scripts/trusted-docker-*.mjs`. The PR asks for white-box review, because this touches custody process-ownership semantics.

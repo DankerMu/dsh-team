@@ -18,7 +18,7 @@ See design.md § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 In a sibling `*-fixture.ts`, add these module-level functions:
+- [x] 1.1 In a sibling `*-fixture.ts`, add these module-level functions:
   - freeze and stop confirmation;
   - the `ps -ww` scan, plus a pure classifier;
   - binding through `observeProcess`.
@@ -31,12 +31,12 @@ See design.md § Must preserve.
 
   Push one suffixed entry per name after the loop. In-flight, ambiguous, scan failure and owner-gone outcomes throw before `issued.set` (retained).
 
-- [ ] 1.2 Add the `unpublished-command` mode:
+- [x] 1.2 Add the `unpublished-command` mode:
   - slow-owner's pre-manifest wait;
   - a post-spawn `Atomics.wait` hold that publishes `child.pid` to `.run/` first;
   - a `deniedGroupObservations` entry;
   - membership in the held list of `fixture-child.mjs`.
-- [ ] 1.3 Add the window case:
+- [x] 1.3 Add the window case:
   - prove the window from the published pid;
   - assert the group and the owner are absent and that the aggregate is exactly `[…: command <pid>]`;
   - its `finally` kills the owner and `-command`.
