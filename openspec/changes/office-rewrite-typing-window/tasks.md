@@ -28,7 +28,7 @@
 
 ## 1. Implementation (step 1: record only)
 
-- [ ] 1.1 Add the `typing` case as its own function, outside `CASES`, with no Agent turn. Provider counts are asserted unchanged across it, and its file name joins `withWorkFiles`. Sequence:
+- [x] 1.1 Add the `typing` case as its own function, outside `CASES`, with no Agent turn. Provider counts are asserted unchanged across it, and its file name joins `withWorkFiles`. Sequence:
   1. Write a fresh DOCX and wait for DS ready.
   2. Install the `EventSource` wrapper (task 1.2), then open the editor.
   3. Install the remaining observers (task 1.2) and take the pre-rewrite `listing`.
@@ -42,7 +42,7 @@
 
   Read `rewriteState` and `typed` after the rewrite, after the save and after the close. Record work-entry diffs and console, page and failed-request counts. Expect record-only: the window precondition, no copy/`.tmp-*`/`.abandoned`, allowed console errors, the screenshot list. Put the facts in the case's evidence through `officeRewriteLine`.
 
-- [ ] 1.2 Observers and measurements:
+- [x] 1.2 Observers and measurements:
   - **Dirty timeline:** a top-window `message` listener recording only the event name (`onDocumentStateChange`/`onRequestRefreshFile`), the boolean and a timestamp. Verify the DS message shape; report it if it differs.
   - **Watch events:** before `openHinted`, a `page.evaluate` wrapper around `window.EventSource` records only `kind` and a timestamp.
   - **Positive controls:** one wrapped instance has received at least one event, and at least one `onDocumentStateChange(true)` is seen after the first keystroke. If a control fails, the signal is reported as unavailable, never as 0.
@@ -55,7 +55,7 @@
     - (b): `onRequestRefreshFile` count and `config` refetches after the refused save;
     - (c): `save-error` watch events while open, and host log-line count after close.
   - Sibling unit tests cover any new pure helper.
-- [ ] 1.3 Raise the stack `testTimeout` in `vitest.config.ts` by the bound itemized in `design.md` § Budget, with a comment naming each term.
+- [x] 1.3 Raise the stack `testTimeout` in `vitest.config.ts` by the bound itemized in `design.md` § Budget, with a comment naming each term.
 
 ## 2. Measurement, decision, tightening, docs
 
@@ -88,7 +88,7 @@
   - The employee's next Ctrl+S was saved: one `saved` event. It cleared the notice, and no notice was shown after the save or at the end.
   - File state was `agent-only` after the rewrite, then `both` after the save and `both` after the close, with `typed: false` throughout. The in-window typing was discarded, as in `unsaved`.
   - No copy, `onRequestRefreshFile` 0. The MUST holds.
-- [ ] 2.1b Tighten `EXPECTED` for `typing` to the patched behaviour, shown by two agreeing exact-head stack runs:
+- [x] 2.1b Tighten `EXPECTED` for `typing` to the patched behaviour, shown by two agreeing exact-head stack runs:
   - the stale banner latched in the window;
   - one refresh (`config` 2) at dirty→false;
   - after the save, the file is `both` for the employee's last save, and the in-window typing is gone, as in `unsaved`;
@@ -98,7 +98,7 @@
   Keep the record-only facts as evidence.
 
 - [x] 2.1c Orchestrator: filed https://github.com/chendefine/dsh-sidebar-onlyoffice/issues/1 with the measured facts and the suggested fix. It contains no deployment, user, key or path details.
-- [ ] 2.2 Only when the MUST holds:
+- [x] 2.2 Only when the MUST holds:
   - Rewrite `docs/EMPLOYEE_GUIDE.md` §「AI 改写正在编辑的文件」 (`:61` no longer "unverified", the `:67` bullet, the advice) to the measured behaviour, including where in-window typing goes.
   - Add a `stackEvidence.officeRewrite` row to `docs/LOCAL_STACK.md`.
   - Update `platform/test/README.md:92`.

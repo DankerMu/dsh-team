@@ -6,6 +6,7 @@ import { afterAll, expect, it } from 'vitest';
 import { editorNonce, NONCE_PATTERN } from './office-editor-stack-fixture.ts';
 import {
   EXPECTED_REWRITE,
+  EXPECTED_TYPING,
   heldApart,
   officeRewriteLine,
   ownedRewrites,
@@ -14,6 +15,7 @@ import {
   rewriteCommand,
   rewriteFacts,
   rewriteState,
+  typingFacts,
 } from './office-rewrite-stack-fixture.ts';
 
 const [AGENT, EMPLOYEE] = [editorNonce(), editorNonce()];
@@ -328,4 +330,167 @@ it.each([
 ] as const)('expects each case as §60 measured it: %s', (_case, id, evidence, exact) => {
   expect(EXPECTED_REWRITE).toEqual(MEASURED);
   expect(JSON.stringify(rewriteFacts(evidence)) === JSON.stringify(MEASURED[id])).toBe(exact);
+});
+
+// #652's typing case as the two patched runs on 6f43c7e measured it (tasks.md 「Patched
+// measurement」), written out rather than read from the fixture.
+const NONE = { staleChanged: false, staleRemoved: false, saveFailed: false };
+const SAVE_FAILED = { ...NONE, saveFailed: true };
+const STALE_AND_FAILED = { ...SAVE_FAILED, staleChanged: true };
+const MEASURED_TYPING = {
+  notices: { before: NONE, window: SAVE_FAILED, saved: NONE, end: NONE },
+  latched: { window: STALE_AND_FAILED },
+  cleared: true,
+  config: { open: 1, window: 2, saved: 2, end: 2 },
+  dirty: { available: true, cleanThenCleared: true, refreshRequests: 0 },
+  watch: {
+    available: true,
+    kinds: { change: 1, removed: 0, saved: 1, 'save-error': 1, other: 0 },
+  },
+  states: ['agent-only', 'both', 'both'],
+  typed: [false, false, false],
+  entries: { saved: unchanged, closed: unchanged },
+  allowed: true,
+};
+const typingReads = (saved: 'agent-only' | 'both') => ({
+  rewritten: at('agent-only', false),
+  saved: at(saved, false),
+  closed: at(saved, false),
+});
+// tasks.md records the stale latch, dirty false and the banner's clear for each run; the first dirty
+// true of a patched run, and the transitions of the second typing, are not recorded and left out:
+// only the true→false pair inside the banner's span is asserted.
+const UNRECORDED_TRUE = 0;
+const typingRun = (stale: readonly [number, number], dirtyFalse: number, saveError: number) =>
+  ({
+    window: { staleLatched: stale[0], staleCleared: stale[1], dirtyFalse },
+    notices: MEASURED_TYPING.notices,
+    latched: { window: STALE_AND_FAILED, end: STALE_AND_FAILED },
+    ...{ cleared: true, config: MEASURED_TYPING.config },
+    dirty: {
+      available: true,
+      transitions: [
+        [UNRECORDED_TRUE, true],
+        [dirtyFalse, false],
+      ],
+      transitionCount: 2,
+      refreshRequests: { total: 0, afterSave: 0 },
+    },
+    watch: { available: true, kinds: MEASURED_TYPING.watch.kinds, saveErrors: [saveError] },
+    host: { available: false, reason: 'no earlier line' },
+    ...{ reads: typingReads('both'), entries: { saved: unchanged, closed: unchanged } },
+    allowed: true,
+  }) as const;
+const PATCHED = [typingRun([1433, 2594], 2582, 7956), typingRun([1886, 2832], 2818, 8181)] as const;
+const [PATCHED_A] = PATCHED;
+// Step 1 on f95bb48, unpatched. Transcribed from tasks.md 2.1: the times, config 1 throughout, no
+// refresh request, one save-error after Ctrl+S, 「保存未写回文件」 at the save and the end, the file the
+// Agent's in all three reads, no copy. Derived from that record, not printed in it: no notice at the
+// window's end (the banner cleared at dirty false, the save error came later), so none latched
+// there but the banner, `cleared` false, and watch kinds `change` 1, `saved` 0. The rejection does
+// not rest on them: config, the states and the saved and end notices differ alone.
+const unpatched = (times: readonly [number, number, number, number], saveError: number) => {
+  const [dirtyTrue, staleLatched, dirtyFalse, staleCleared] = times;
+  const latchedStale = { ...NONE, staleChanged: true };
+  return {
+    ...PATCHED_A,
+    window: { staleLatched, staleCleared, dirtyFalse },
+    notices: { before: NONE, window: NONE, saved: SAVE_FAILED, end: SAVE_FAILED },
+    latched: { window: latchedStale, end: STALE_AND_FAILED },
+    ...{ cleared: false, config: { open: 1, window: 1, saved: 1, end: 1 } },
+    dirty: {
+      ...PATCHED_A.dirty,
+      transitions: [
+        [dirtyTrue, true],
+        [dirtyFalse, false],
+      ] as const,
+    },
+    watch: {
+      ...{ available: true as const, kinds: { ...MEASURED_TYPING.watch.kinds, saved: 0 } },
+      saveErrors: [saveError],
+    },
+    reads: typingReads('agent-only'),
+  };
+};
+const UNPATCHED = [
+  unpatched([709, 1509, 2499, 2500], 17142),
+  unpatched([466, 1067, 2272, 2272], 16701),
+] as const;
+const patchedWith = (overrides: object) => ({ ...PATCHED_A, ...overrides });
+const dirtyWith = (overrides: object) =>
+  patchedWith({ dirty: { ...PATCHED_A.dirty, ...overrides } });
+const kindsWith = (overrides: object) =>
+  patchedWith({
+    watch: { ...PATCHED_A.watch, kinds: { ...MEASURED_TYPING.watch.kinds, ...overrides } },
+  });
+
+it.each([
+  ['patched run a', PATCHED_A],
+  ['patched run b, other times in the same order', PATCHED[1]],
+  [
+    'with the host signal available',
+    patchedWith({ host: { available: true, control: 1, beforeClose: 'read failed' } }),
+  ],
+  [
+    'another first dirty true',
+    dirtyWith({
+      transitions: [
+        [2000, true],
+        [2582, false],
+      ],
+    }),
+  ],
+] as const)('expects the typing case as the patched runs measured it: %s', (_case, evidence) => {
+  expect(EXPECTED_TYPING).toEqual(MEASURED_TYPING);
+  expect(typingFacts(evidence)).toEqual(EXPECTED_TYPING);
+});
+
+it.each([
+  ['step-1 run a, unpatched', UNPATCHED[0]],
+  ['step-1 run b, unpatched', UNPATCHED[1]],
+  ['no refresh', patchedWith({ config: { open: 1, window: 1, saved: 1, end: 1 } })],
+  ['a second refresh', patchedWith({ config: { open: 1, window: 2, saved: 2, end: 3 } })],
+  ['a refresh request', dirtyWith({ refreshRequests: { total: 1, afterSave: 1 } })],
+  ['the dirty signal unavailable', patchedWith({ dirty: { available: false, control: {} } })],
+  ['no true→false transition', dirtyWith({ transitions: [[UNRECORDED_TRUE, true]] })],
+  [
+    'dirty false after the banner cleared',
+    patchedWith({ window: { ...PATCHED_A.window, staleCleared: 2581 } }),
+  ],
+  [
+    'dirty false before the banner latched',
+    patchedWith({ window: { ...PATCHED_A.window, staleLatched: 2583 } }),
+  ],
+  [
+    'the banner never cleared',
+    patchedWith({ window: { ...PATCHED_A.window, staleCleared: null } }),
+  ],
+  ['the watch signal unavailable', patchedWith({ watch: { available: false, control: {} } })],
+  ['a second save error', kindsWith({ 'save-error': 2 })],
+  ['no saved event', kindsWith({ saved: 0 })],
+  ['a removed event', kindsWith({ removed: 1 })],
+  ['the stale banner not latched', patchedWith({ latched: { window: SAVE_FAILED } })],
+  [
+    'no save-failed bar in the window',
+    patchedWith({ notices: { ...MEASURED_TYPING.notices, window: NONE } }),
+  ],
+  [
+    'the save-failed bar after the save',
+    patchedWith({ notices: { ...MEASURED_TYPING.notices, saved: SAVE_FAILED } }),
+  ],
+  ['the notices not cleared', patchedWith({ cleared: false })],
+  ["the saved file the Agent's only", patchedWith({ reads: typingReads('agent-only') })],
+  [
+    'the in-window typing kept',
+    patchedWith({ reads: { ...typingReads('both'), saved: at('both', true) } }),
+  ],
+  [
+    'a copy left',
+    patchedWith({
+      entries: { saved: { added: ['键入改写 (1).docx'], removed: [] }, closed: unchanged },
+    }),
+  ],
+  ['an unallowed editor error', patchedWith({ allowed: false })],
+] as const)('rejects a typing case unlike the patched runs: %s', (_case, evidence) => {
+  expect(typingFacts(evidence)).not.toEqual(EXPECTED_TYPING);
 });

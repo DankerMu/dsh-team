@@ -91,6 +91,28 @@ export const EXPECTED_REWRITE = {
   clean: CLEAN,
   unsaved: { ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
 };
+const NONE_SHOWN = { staleChanged: false, staleRemoved: false, saveFailed: false };
+const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
+/**
+ * #652's measurement with the patched lib/client.js (two runs on 6f43c7e). The stale banner latched
+ * in the window; at dirty false the editor refreshed once (config 1, 2, 2, 2), clearing it, and the
+ * refreshed-away session's status 2 was refused: 「保存未写回文件」 at the window's end. The next
+ * save landed (one `saved`), and no notice showed after it; one `change`, one `save-error`, no
+ * refresh request; the file the Agent's after the rewrite and both sides' after the save and the
+ * close, the in-window typing in no read; no new or missing work entry; 18.5's allowed errors.
+ */
+export const EXPECTED_TYPING = {
+  notices: { before: NONE_SHOWN, window: SAVE_FAILED, saved: NONE_SHOWN, end: NONE_SHOWN },
+  latched: { window: { ...SAVE_FAILED, staleChanged: true } },
+  cleared: true,
+  config: { open: 1, window: 2, saved: 2, end: 2 },
+  dirty: { available: true, cleanThenCleared: true, refreshRequests: 0 },
+  watch: { available: true, kinds: { change: 1, removed: 0, saved: 1, 'save-error': 1, other: 0 } },
+  states: ['agent-only', 'both', 'both'],
+  typed: [false, false, false],
+  entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
+  allowed: true,
+};
 
 // python-docx from the user image; the file and the nonce arrive as argv. No single quote (below).
 export const REWRITER = `import sys
@@ -196,22 +218,50 @@ type OfficeRewriteEvidence = Readonly<Record<CaseId, RewriteCaseEvidence>> & {
 };
 
 const READS = ['rewritten', 'saved', 'closed'] as const;
+const readFacts = (reads: EditedEvidence['reads']) => ({
+  states: READS.map((at) => reads[at].state),
+  typed: READS.map((at) => reads[at].typed ?? false),
+});
 /** What EXPECTED_REWRITE fixes of one case; `typed` is false where nothing was typed first. */
 export function rewriteFacts(evidence: RewriteCaseEvidence) {
   const { notices, cleared, config, reads, entries, allowed, editor, agent } = evidence;
   const sessions = [editor, agent].map((browser) =>
     Object.fromEntries(SESSION_LISTS.map((key) => [key, browser[key].length])),
   );
-  const states = READS.map((at) => reads[at].state);
+  return { notices, cleared, config, ...readFacts(reads), entries, allowed, sessions };
+}
+
+type Transitions = Extract<TypingEvidence['dirty'], { available: true }>['transitions'];
+type StaleSpan = Pick<TypingEvidence['window'], 'staleLatched' | 'staleCleared'>;
+/** Whether a dirty true→false falls within the stale banner's span: the patched refresh clears it. */
+const cleanThenCleared = ({ staleLatched, staleCleared }: StaleSpan, transitions: Transitions) =>
+  staleLatched !== null &&
+  staleCleared !== null &&
+  transitions.some(
+    ([at, dirty], index) =>
+      !dirty && transitions[index - 1]?.[1] === true && staleLatched <= at && at <= staleCleared,
+  );
+
+/** What a typing case's evidence must have: the timing-variable fields only by their order. */
+type TypingFactsInput = Pick<
+  TypingEvidence,
+  'notices' | 'latched' | 'cleared' | 'config' | 'dirty' | 'watch' | 'reads' | 'entries' | 'allowed'
+> & { readonly window: StaleSpan };
+
+/** What EXPECTED_TYPING fixes of the typing case; times, the host log and digests stay evidence. */
+export function typingFacts(evidence: TypingFactsInput) {
+  const { notices, latched, cleared, config, dirty, watch, reads, entries, allowed } = evidence;
   return {
-    notices,
-    cleared,
-    config,
-    states,
-    typed: READS.map((at) => reads[at].typed ?? false),
-    entries,
-    allowed,
-    sessions,
+    ...{ notices, latched: { window: latched.window }, cleared, config },
+    dirty: dirty.available
+      ? {
+          available: true,
+          cleanThenCleared: cleanThenCleared(evidence.window, dirty.transitions),
+          refreshRequests: dirty.refreshRequests.total,
+        }
+      : { available: false },
+    watch: watch.available ? { available: true, kinds: watch.kinds } : { available: false },
+    ...{ ...readFacts(reads), entries, allowed },
   };
 }
 
@@ -532,11 +582,10 @@ async function typingBrowse(
 }
 
 /**
- * #652, record only: A types into an open DOCX and keeps typing while the file is rewritten in the
- * instance, without an Agent turn, until the plugin's stale banner latches; then A types and saves
- * again in the same editor and closes it. Asserted: the window precondition first, the provider
- * untouched, no new work entry (copy, `.tmp-*`, `.abandoned`), 18.5's allowed errors and the
- * screenshots; everything else is recorded for the owner (#652 (a)(b)(c)).
+ * #652: A types into an open DOCX and keeps typing while the file is rewritten in the instance,
+ * without an Agent turn, until the plugin's stale banner latches; then A types and saves again in
+ * the same editor and closes it. Asserted: the window precondition first, the provider untouched,
+ * EXPECTED_TYPING and the screenshots; the times and the host log are recorded (#652 (a)(b)(c)).
  */
 async function typingCase(lane: OfficeRewriteLane, root: string, since: number) {
   const { session } = lane;
@@ -577,10 +626,9 @@ async function typingCase(lane: OfficeRewriteLane, root: string, since: number) 
   };
   const seen = `Office rewrite typing, observed ${JSON.stringify(typingLine(evidence))}`;
   expect(evidence.provider, seen).toEqual(provider);
-  const added = [evidence.entries.saved.added, evidence.entries.closed.added];
+  expect(typingFacts(evidence), seen).toEqual(EXPECTED_TYPING);
   const shots = ['open', 'window', 'saved'].map((at) => `${shot}-${at}.png`);
-  const checks = { added, allowed: evidence.allowed, screenshots: editor.screenshots };
-  expect(checks, seen).toEqual({ added: [[], []], allowed: true, screenshots: shots });
+  expect(editor.screenshots, seen).toEqual(shots);
   return evidence;
 }
 
@@ -589,7 +637,8 @@ async function typingCase(lane: OfficeRewriteLane, root: string, since: number) 
  * rewrites the same file. The editor refreshes to the Agent's version; the clean case shows no
  * plugin notice, the unsaved one drops its edit and shows 「保存未写回文件」 until A's save lands. A
  * then types and saves, and the file holds both sides' text, with no copy left in `/data/work`,
- * still after the editor closes. The typing case (#652) follows, recorded rather than fixed.
+ * still after the editor closes. The typing case (#652) follows: with the rewrite in its window, the
+ * editor refreshes once it turns clean, and A's next save holds both sides' text.
  */
 export const officeRewriteScenario = (lane: OfficeRewriteLane): Promise<OfficeRewriteEvidence> =>
   withWorkFiles(
