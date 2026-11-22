@@ -46,23 +46,27 @@ export default defineConfig({
           name: 'stack',
           include: ['platform/test/**/*.stack.test.ts'],
           fileParallelism: false,
-          // Two cold image builds (600s each, 1200s) leave 2880s for compose, health, the
-          // conversation, 13 in-instance proxy calls (30s each at most), drainage, the RAGFlow
-          // restore, which is bounded at 300s from before `docker start` (its 60s CLI bound lies
-          // inside), and the legacy preview lane (#433), which raised the cap from 2400s by 600s:
-          // its preview waits are bounded at 540s (240s each for DOC and PPT, 60s for XLS), its
-          // 12 in-instance execs at 30s each, and the office profile lane (#440), which raised it
-          // by 480s: its instance restart waits 180s at most for the gateway, its 10 docker calls
-          // 30s each, and the office editor lane (#440), which raised it by 600s: three 120s
-          // write-back polls, three editor loads and the Agent read-back at one 60s session timeout
-          // each, and the Document Server startup wait (#622), which raised it by 300s: one pgrep
-          // poll bounded at 300s before the first Office lane. That remainder is a margin, not the
-          // sum of every per-step bound: a vitest timeout skips the restore `finally` and leaves
-          // ragflow-cpu stopped (LOCAL_STACK.md §5). The concurrent same-name DOCX (#440) raised it
-          // by 180s: B's editor meets A's at load (60s at most) and after the save (120s at most).
+          // One ledger: the 2400s base, then each lane's increment in order, summed at the end.
+          // The base: two cold image builds (600s each, 1200s), compose, health, the conversation,
+          // 13 in-instance proxy calls (30s each at most), drainage and the RAGFlow restore, which
+          // is bounded at 300s from before `docker start` (its 60s CLI bound lies inside).
+          // The legacy preview lane (#433) raised it by 600s: its preview waits are bounded at
+          // 540s (240s each for DOC and PPT, 60s for XLS), its 12 in-instance execs at 30s each.
+          // The office profile lane (#440) raised it by 480s: its instance restart waits 180s at
+          // most for the gateway, its 10 docker calls 30s each.
+          // The office editor lane (#440) raised it by 600s: three 120s write-back polls, three
+          // editor loads and the Agent read-back at one 60s session timeout each.
+          // The Document Server startup wait (#622) raised it by 300s: one pgrep poll bounded at
+          // 300s before the first Office lane.
+          // The concurrent same-name DOCX (#440) raised it by 180s: B's editor meets A's at load
+          // (60s at most) and after the save (120s at most).
           // The guessed-key info at that load (#440) raised it by 60s: two docker execs, 30s each.
-          // The office idle lane (#440) raised it by 660s: a 60s editor load, the 210s hold, the
-          // 120s write-back, the 240s idle-stop bound and 30s for the file's write and removal.
+          // The office idle lane (#440) raised it by 660s: openHinted's 60s editor load (the
+          // session timeout), documentServerReady's 60s healthcheck wait plus its last 30s exec,
+          // the 210s hold (HOLD_MS), writtenBack's 120s write-back, the 240s idle-stop bound
+          // (CONTROL_MS) and four 30s execs (lane.exec): editAndSave's write, its reads before the
+          // edit and after the close, and withWorkFiles' removal. These sum to 840s, 180s over the
+          // 660s added; the margin below covers the difference.
           // The operator font check (#440) raised it by 30s: one docker exec of fc-scan.
           // The forgotten attack lane (#624 §55.5) raised it by 420s: two editor loads (60s each)
           // for the failing edit and the recovery, a 60s forgotten-store wait, the B-container
@@ -88,6 +92,14 @@ export default defineConfig({
           // docker execs at 30s each: the write, four file reads (start, after the rewrite, the save
           // poll's first, after the close), the rewrite, three listings, three instance log reads
           // (the earlier cases' control, before and after the close) and two provider reads.
+          // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 =
+          // 9060s, the 1200s of cold builds plus 7860s for everything else. That remainder is a
+          // margin, not the sum of every per-step bound: a vitest timeout skips the restore
+          // `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll bounded by a
+          // deadline (the 120s write-back, for one) checks it only after its exec returns, so it
+          // can overrun by that last exec; the margin covers that too. The two rewrite lines
+          // (#442, #652) still count the Document Server healthcheck wait at its 60s deadline
+          // only, in the older deadline-only notation.
           testTimeout: 9_060_000,
         },
       },

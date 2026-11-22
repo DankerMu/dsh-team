@@ -32,6 +32,7 @@ import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-
 import { observeHttp } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
 import {
+  DOCUMENT_SERVER,
   DOCUMENT_SERVER_NET,
   firewallReach,
   holderRestartSequence,
@@ -577,7 +578,7 @@ it('publishes only the platform port and mounts the Docker socket only there wit
         expectedIds.push(instance.Id);
       }
       const platform = await inspectAsync(lifecycle, 'dsh-team-platform');
-      const server = await inspectAsync(lifecycle, 'dsh-team-documentserver');
+      const server = await inspectAsync(lifecycle, DOCUMENT_SERVER);
       const holder = await inspectAsync(lifecycle, DOCUMENT_SERVER_NET);
       expectedIds.push(platform.Id, server.Id, holder.Id);
       const project = record(record(platform.Config).Labels)['com.docker.compose.project'];

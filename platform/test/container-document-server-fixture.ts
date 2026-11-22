@@ -5,9 +5,10 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { RECONCILE_COOKIE } from './container-reconcile-fixture.ts';
 import { START_USER, seedPlatform, startupOwnerFixture } from './container-start-fixture.ts';
 import type { StartupDaemon, StartupRequest } from './container-start-fixture.ts';
+import { DOCUMENT_SERVER as DS_NAME } from './document-server-net-fixture.ts';
 
 export const DS_ID = '9'.repeat(64);
-export const DS_NAME = 'dsh-team-documentserver';
+export { DS_NAME };
 export const DS_PLATFORM = 'f'.repeat(64);
 export const DS_PLATFORM_NAME = 'dsh-team-test-platform';
 // Fixture-only configuration; the JWT reaches only the written overlay of an admitted start.

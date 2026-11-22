@@ -30,14 +30,14 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Rewrite `docs/DEPLOY.md` `:212`, `:275` and `:295` as described in the proposal.
+- [x] 1.1 Rewrite `docs/DEPLOY.md` `:212`, `:275` and `:295` as described in the proposal.
   - Reverse-grep `docs/DEPLOY.md`, `deploy/README.md` and `docs/EMPLOYEE_GUIDE.md` for `尚未|未交付|第 ?18 ?组|上线之前|在那之前|交付之前`. Only non-Office hits may remain, such as `:238`'s 「尚未签结」. `:121` is kept, as described in the proposal.
-- [ ] 1.2 Rewrite the comment in `vitest.config.ts` as one ledger, as described in the proposal.
+- [x] 1.2 Rewrite the comment in `vitest.config.ts` as one ledger, as described in the proposal.
   - Verify that each listed idle bound points at its code location, and record those locations in the PR.
   - The value is unchanged.
-- [ ] 1.3 Fix the fraction comment in `office-hints-stack-fixture.integration.test.ts`.
-- [ ] 1.4 Consolidate the `DOCUMENT_SERVER` constant into `document-server-net-fixture.ts` and rewire every importer and inline use, as described in the proposal.
-- [ ] 1.5 Add the exactly-once assertion for E, as described in the proposal.
+- [x] 1.3 Fix the fraction comment in `office-hints-stack-fixture.integration.test.ts`.
+- [x] 1.4 Consolidate the `DOCUMENT_SERVER` constant into `document-server-net-fixture.ts` and rewire every importer and inline use, as described in the proposal.
+- [x] 1.5 Add the exactly-once assertion for E, as described in the proposal.
   - Show it red with `{ cause }` temporarily restored in `stack-browser-fixture.ts:138`; the failure should show two occurrences.
   - Revert, then show it green.
 

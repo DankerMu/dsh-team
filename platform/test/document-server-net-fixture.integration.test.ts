@@ -9,6 +9,7 @@ import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   commandReach,
   deliveredHealthcheck,
+  DOCUMENT_SERVER,
   DOCUMENT_SERVER_NET,
   firewallReach,
   healthyWithinStartPeriod,
@@ -18,6 +19,10 @@ import {
   holderRestartSequence,
 } from './document-server-net-fixture.ts';
 import type { AsyncDockerCommand } from './docker-command.ts';
+
+it('names the delivered Document Server container', () => {
+  expect(DOCUMENT_SERVER).toBe('dsh-team-documentserver');
+});
 
 async function listening(answer?: number) {
   const seen: string[] = [];

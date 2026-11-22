@@ -32,7 +32,12 @@ import {
   record,
 } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { commandReach, DOCUMENT_SERVER_NET, holderRead } from './document-server-net-fixture.ts';
+import {
+  commandReach,
+  DOCUMENT_SERVER,
+  DOCUMENT_SERVER_NET,
+  holderRead,
+} from './document-server-net-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture } from './instance-gateway-docker-fixture.ts';
 import {
@@ -58,7 +63,6 @@ import {
 import type { OfficeEditorEvidence } from './office-editor-stack-fixture.ts';
 import { officeExternalLine, officeExternalScenario } from './office-external-stack-fixture.ts';
 import {
-  DOCUMENT_SERVER,
   docserviceSpawns,
   documentServerStarted,
   expectVolumesRetired,

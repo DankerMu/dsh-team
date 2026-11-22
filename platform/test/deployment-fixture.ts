@@ -2,7 +2,7 @@ import { mkdir, stat } from 'node:fs/promises';
 import { arch, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isAbsentResource } from './docker-command.ts';
-import { DOCUMENT_SERVER_NET } from './document-server-net-fixture.ts';
+import { DOCUMENT_SERVER, DOCUMENT_SERVER_NET } from './document-server-net-fixture.ts';
 import {
   acquireDeploymentLock,
   drainDeploymentPlatform,
@@ -43,7 +43,7 @@ export interface Deployment {
 /** Fixed names the delivered compose creates; all are admitted absent before any build. */
 const FIXED_CONTAINERS = [
   ['dsh-team-platform', 'Platform'],
-  ['dsh-team-documentserver', 'Document Server'],
+  [DOCUMENT_SERVER, 'Document Server'],
   [DOCUMENT_SERVER_NET, 'Document Server namespace holder'],
 ] as const;
 
@@ -83,7 +83,7 @@ async function startDeployment(
       for (const [kind, name] of [
         ['image', image],
         ['container', 'dsh-team-platform'],
-        ['container', 'dsh-team-documentserver'],
+        ['container', DOCUMENT_SERVER],
         ['container', DOCUMENT_SERVER_NET],
         ['network', network],
       ] as const)

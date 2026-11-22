@@ -3,7 +3,6 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { previewIds, visible } from './better-sidebar-browser-fixture.mjs';
 import {
   COLLAB,
-  DOCUMENT_SERVER,
   docserviceSpawns,
   documentServerStarted,
   docxCommand,
@@ -183,16 +182,13 @@ afterEach(() => {
   vi.mocked(workbenchSession).mockReset();
 });
 
-it('names the delivered Document Server container', () => {
-  expect(DOCUMENT_SERVER).toBe('dsh-team-documentserver');
-});
-
 it('polls pgrep until the startup script tails its logs, then reads StartedAt and the spawns', async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-17T06:22:22.5Z'));
   const { calls, run } = fakeDocker(3);
 
-  // 06:21:12.080 (nine-digit fraction) to 06:22:22.500.
+  // 06:21:12.080 (RFC 3339 Nano: up to nine fraction digits, trailing zeros trimmed; eight here)
+  // to 06:22:22.500.
   expect(await documentServerStarted(run, 10_000)).toEqual({ startupMs: 70_420, spawns: 2 });
   expect(calls).toEqual([PGREP, PGREP, PGREP, PGREP, INSPECT, SPAWNS]);
 });

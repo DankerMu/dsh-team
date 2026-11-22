@@ -4,7 +4,6 @@ import type { FrameLocator, Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
-  DOCUMENT_SERVER,
   docxCommand,
   documentServerReady,
   hintsFrame,
@@ -13,6 +12,7 @@ import {
   untilSeen,
 } from './office-hints-stack-fixture.ts';
 import { EXPECTED_INFO, guessedKeyInfo, registryKeys } from './office-isolation-stack-fixture.ts';
+import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
