@@ -20,6 +20,10 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { record } from './container-start-docker-fixture.ts';
 import { CLOSE_RECEIPT_PRELOAD } from './trusted-docker-close-fixture.ts';
+import {
+  claimUncaptured,
+  UNPUBLISHED_COMMAND_PRELOAD,
+} from './trusted-docker-uncaptured-fixture.ts';
 import { groupIsAbsent } from '../../scripts/trusted-docker-record.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -45,6 +49,7 @@ type CustodyMode =
   | 'release-early'
   | 'release-blind'
   | 'slow-owner'
+  | 'unpublished-command'
   | 'retire';
 
 /** Retirement variants of the `retire` mode; the owner preload answers from a fake daemon. */
@@ -265,6 +270,7 @@ function prepareCustodyRepository(
   const packageValue: unknown = JSON.parse(readFileSync(join(sourceRoot, 'package.json'), 'utf8'));
   // Count and code of owner kill(-pid, 0) observations failed before deferring to the real call.
   // The slow owner denies none; it sleeps 4s before publishing, holding its start past a deadline.
+  // The unpublished-command owner sleeps the same, then holds after spawning its command.
   // The post-close member denies none; its owner records its close and group observations.
   const deniedGroupObservations = (
     {
@@ -272,6 +278,7 @@ function prepareCustodyRepository(
       'group-observation-transient': ['3', 'EPERM'],
       'group-observation-invalid': ['1', 'EINVAL'],
       'slow-owner': ['0', 'EPERM'],
+      'unpublished-command': ['0', 'EPERM'],
       'post-close-member': ['0', 'EPERM'],
     } as Partial<Record<CustodyMode, [string, string]>>
   )[mode];
@@ -295,14 +302,15 @@ childProcess.spawn=(command,args,options)=>{
   return spawn(command,args,options);
 };
 syncBuiltinESMExports();
-${mode === 'slow-owner' ? "if(process.argv.includes('own'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,4000);" : ''}
+${['slow-owner', 'unpublished-command'].includes(mode) ? "if(process.argv.includes('own'))Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,4000);" : ''}
 const kill=process.kill.bind(process);
 let denied=${deniedGroupObservations[0]};
 process.kill=(pid,signal)=>{
   if(pid<0&&signal===0&&denied>0){denied-=1;throw Object.assign(new Error('owned-group-observation-denied'),{code:${JSON.stringify(deniedGroupObservations[1])}});}
   return kill(pid,signal);
 };
-${mode === 'post-close-member' ? CLOSE_RECEIPT_PRELOAD : ''}`,
+${mode === 'post-close-member' ? CLOSE_RECEIPT_PRELOAD : ''}
+${mode === 'unpublished-command' ? UNPUBLISHED_COMMAND_PRELOAD : ''}`,
     );
   writeFileSync(
     join(repository, 'package.json'),
@@ -347,7 +355,7 @@ const released=new Promise(resolve=>{ready=resolve;});
 const watchRelease=(directory=temporary)=>{const check=()=>{if(existsSync(release))ready();};const watcher=watch(directory,check);const recheck=setInterval(check,50);check();return released.then(()=>{watcher.close();clearInterval(recheck);});};
 // The release-blind leaf watches an empty directory, so only its 50ms recheck sees the release.
 const blind=mode==='release-blind'?mkdirSync(join(temporary,'blind'),{recursive:true}):undefined;
-const held=['hold','post-close-member','past-expiry-member','release-blind','retire','slow-owner'].includes(mode)?watchRelease(blind):undefined;
+const held=['hold','post-close-member','past-expiry-member','release-blind','retire','slow-owner','unpublished-command'].includes(mode)?watchRelease(blind):undefined;
 // This leaf releases itself and watches 500ms after its last write: Darwin FSEvents replayed
 // writes made just before watch() (8/8 probes) but none made 100ms or more before it (0/8).
 if(mode==='release-early')writeFileSync(release,'release');
@@ -442,20 +450,22 @@ function fixtureProcessCustody(
       throw new Error('Invalid fixture process observation');
     return value;
   };
+  const identityLive = (identity: Readonly<Record<string, unknown>>) => {
+    const pid = identity.pid;
+    if (typeof pid !== 'number' || typeof identity.birth !== 'string')
+      throw new Error('Invalid owned fixture identity');
+    const current = observeProcess(pid);
+    if (current !== null && current !== identity.birth)
+      throw new Error('Fixture identity changed; retaining authority');
+    return current !== null;
+  };
   const settle = async (
     identity: Record<string, unknown>,
     group: boolean,
     signal: NodeJS.Signals = 'SIGKILL',
   ) => {
-    const pid = identity.pid;
-    if (typeof pid !== 'number' || typeof identity.birth !== 'string')
-      throw new Error('Invalid owned fixture identity');
-    const live = () => {
-      const current = observeProcess(pid);
-      if (current !== null && current !== identity.birth)
-        throw new Error('Fixture identity changed; retaining authority');
-      return current !== null;
-    };
+    const live = () => identityLive(identity);
+    const pid = Number(identity.pid);
     const waitForAbsence = async () => {
       const since = Date.now();
       const until = since + budget.limit('process retirement', 5000);
@@ -526,7 +536,7 @@ function fixtureProcessCustody(
     if (failures.length)
       throw new AggregateError(failures, 'Owned fixture observers did not retire');
   };
-  return { observeProcess, settle, track, cleanup };
+  return { observeProcess, identityLive, settle, track, cleanup };
 }
 
 function launchCustodyObserver(
@@ -601,22 +611,6 @@ fs.writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000);`;
     stdio: 'ignore',
   });
   return { child, ready, interrupted };
-}
-
-/** The authority of an invocation whose start died before capture, read once its owner is gone. */
-function uncapturedAuthority(root: string, owner: Readonly<Record<string, unknown>>) {
-  const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
-  const temporary = realpathSync(String(request.temporary));
-  const { dev, ino } = lstatSync(temporary);
-  const childPath = join(root, 'child.json');
-  const child = existsSync(childPath)
-    ? {
-        child: Object.freeze({
-          ...record(record(JSON.parse(readFileSync(childPath, 'utf8'))).owner),
-        }),
-      }
-    : {};
-  return { owner, temporary, device: dev, inode: ino, ...child };
 }
 
 function fixtureDirectories() {
@@ -757,19 +751,27 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
       }
     };
     const names = existsSync(custodyBase) ? readdirSync(custodyBase) : [];
-    const uncaptured = names.filter((name) => !issued.has(name));
-    if (uncaptured.length)
-      failures.push(new Error('Uncaptured custody fixture authority retained'));
-    // A start killed at the deadline never captured its owner: settle that owner first, so it can
-    // launch no command after child.json is read, then retire it like a captured invocation.
-    for (const name of uncaptured)
-      await attempt(async () => {
-        const root = join(custodyBase, name);
-        const launched = record(JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8')));
-        const owner = Object.freeze({ ...record(launched.owner) });
-        await settle(owner, false);
-        issued.set(name, uncapturedAuthority(root, owner));
+    const reports: string[] = [];
+    // A start killed at the deadline never captured its owner: freeze it, bind its command, then
+    // settle it, so the loop below retires that command's group like a captured invocation's.
+    for (const name of names.filter((candidate) => !issued.has(candidate))) {
+      const { report, authority, failure } = await claimUncaptured(join(custodyBase, name), {
+        live: processes.identityLive,
+        observe: observeProcess,
+        run: (file, args) =>
+          budget.run('uncaptured owner', file, args, {
+            encoding: 'utf8',
+            timeout: 2000,
+            maxBuffer: 4 * 1024 * 1024,
+          }),
+        signal: (pid, signal) => process.kill(pid, signal),
+        settle: (identity) => settle(identity, false),
       });
+      reports.push(`Uncaptured custody fixture authority retained: ${report}`);
+      if (failure !== undefined) failures.push(failure);
+      if (authority) issued.set(name, authority);
+    }
+    failures.push(...reports.map((report) => new Error(report)));
     for (const authority of issued.values()) {
       // Retire recorded members and the detached platform before the group is observed absent.
       const memberSettled = await attempt(async () => {
