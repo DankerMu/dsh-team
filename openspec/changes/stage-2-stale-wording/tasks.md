@@ -43,7 +43,7 @@
 
 ## 2. Verification
 
-- [ ] 2.1 Run `pnpm lint` (including `lint:deps`), `pnpm dead-code`, `pnpm typecheck` and `pnpm check`.
+- [x] 2.1 Run `pnpm lint` (including `lint:deps`), `pnpm dead-code`, `pnpm typecheck` and `pnpm check`.
   - `git grep "'dsh-team-documentserver'" platform/test` must show one definition, and every other hit must be one of the listed assertion or config-input literals.
   - Record the CI-method line count.
 - [ ] 2.2 Exact-head local `pnpm test:stack`, with the inventory and volume fence (stack-verification evidence rule).

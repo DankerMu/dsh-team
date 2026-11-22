@@ -209,7 +209,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
   - cookie 总量超过请求头上限（431）时平台无法自愈，需要清除站点数据；只种在工作台 WebSocket 路径上的遮蔽 cookie，若浏览器不接受被拒绝握手里的 Set-Cookie，也需要清除站点数据。
 - 建议每人使用自己的浏览器配置；交接时先登出，并关闭上一位用户的全部标签页。
 
-**Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑开启且已接入 Document Server 时，DOCX、XLSX、PPTX 在 ONLYOFFICE 编辑器里打开；关闭或未接入时，DOCX、PPTX 仍走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS、XLSX 在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；配置 `PLATFORM_INSTANCE_FONTS_DIR` 后，授权字体也会挂进实例，用于预览（见 §3 字体目录）。
+**Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑开启且已接入 Document Server 时，DOCX、XLSX、PPTX 在 ONLYOFFICE 编辑器里打开；关闭或未接入时，DOCX、PPTX 仍走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS，以及未用 ONLYOFFICE 打开时的 XLSX，在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；配置 `PLATFORM_INSTANCE_FONTS_DIR` 后，授权字体也会挂进实例，用于预览（见 §3 字体目录）。
 
 **预览对员工浏览器版本的要求**：DSH 0.2.1 显示转换结果所用的 PDF 查看器需要浏览器支持 `Map.prototype.getOrInsertComputed`，即 Chrome 或 Edge 145 及以上、Firefox 144 及以上、Safari 26.2 及以上。更旧的浏览器能完成转换，但页面显示「无法显示 PDF」。内网员工的浏览器要先升级到这些版本。
 

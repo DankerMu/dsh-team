@@ -29,7 +29,7 @@ Issue #666. Line numbers below refer to main `ffaa137`; the issue cited `be168db
 
 ## What Changes
 
-- **A.** Rewrite the three `docs/DEPLOY.md` statements as described in the issue. `:212` becomes a conditional: with Office online editing enabled and the Document Server connected, DOCX, XLSX and PPTX open in ONLYOFFICE; when it is off or not connected, DOCX and PPTX still take the WASM preview path. DOC and PPT are always converted in the instance, and XLS/XLSX always use the browser table view; those parts of the sentence stay. This is consistent with `docs/EMPLOYEE_GUIDE.md:38`.
+- **A.** Rewrite the three `docs/DEPLOY.md` statements as described in the issue. `:212` becomes a conditional: with Office online editing enabled and the Document Server connected, DOCX, XLSX and PPTX open in ONLYOFFICE; when it is off or not connected, DOCX and PPTX still take the WASM preview path. DOC and PPT are always converted in the instance. XLS, and XLSX when it is not opened in ONLYOFFICE, use the browser table view and are never converted in the instance; that sentence is narrowed to say so. This is consistent with `docs/EMPLOYEE_GUIDE.md:38`.
   - `:275` becomes 「跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护随 Office 在线编辑交付，由跨用户攻击用例验证。」, without 「第18组」 or 「在那之前……」.
   - `:295` states that Office online editing is delivered, and drops 「尚未交付」 and the redundant key half-sentence.
   - `:121` 「（Office 在线编辑本身见 §7 末尾的交付状态）」 is kept, because after the `:295` change it points at the delivered statement.
