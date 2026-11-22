@@ -22,6 +22,7 @@ The plugin keeps `dirtyRef` true while the editor holds edits that have not reac
 
 ## Decisions
 
+- **Mitigation (owner, 2026-11-21, after step 1 measured the MUST violated).** A pinned build-time patch of `dsh-sidebar-onlyoffice@0.2.0` `lib/client.js`, applied by the existing `patch-package.mjs` engine with input and output sha256, so a version mismatch fails the image build. A change that arrives while the editor is dirty sets an effect-scoped `pendingChange`; when the editor turns clean it refreshes once instead of only clearing the banner. Every refresh clears the flag first, and a failed refresh sets it again so the next clean transition retries. An upstream issue carries the same facts.
 - **Landing in the window is probabilistic, so it is forced and checked.**
   - All observers and the pre-rewrite `listing` are installed before the first keystroke.
   - The rewrite exec starts while the employee keeps typing filler, and the typing continues until the stale banner latches, bounded by one session timeout. The editor is expected, not known, to stay dirty while keys keep arriving; the precondition below is what checks it.

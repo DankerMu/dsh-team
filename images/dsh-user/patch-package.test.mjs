@@ -385,7 +385,7 @@ it('pins exactly nine distinct onlyoffice replacements for the released lib/inde
       {
         target: 'lib/client.js',
         inputSha256: '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc',
-        outputSha256: '9a3d7610f576e73688d82939390f650e066f0b017dee21a39cf94236f79c78c0',
+        outputSha256: 'ada60b402c53807580111a3c833d65574a37ef09f7acf08494b0e5896dafd246',
       },
     ],
   });
@@ -399,7 +399,16 @@ it('pins exactly nine distinct onlyoffice replacements for the released lib/inde
 const CLIENT_RUN = [
   '\t\t\t\tconst refreshNow = async () => {',
   '\t\t\t\t\tif (cancelled) return;',
-  '\t\t\t\t\trefresh();',
+  '\t\t\t\t\tconst fetched = await fetchConfig();',
+  '\t\t\t\t\tif (cancelled) return;',
+  '\t\t\t\t\tif (!fetched.ok) {',
+  '\t\t\t\t\t\tsetStale({ kind: "changed" });',
+  '\t\t\t\t\t\treturn;',
+  '\t\t\t\t\t}',
+  '\t\t\t\t\tconst key = fetched.config.document?.key;',
+  '\t\t\t\t\tif (typeof key === "string") currentKeyRef.current = key;',
+  '\t\t\t\t\teditorRef.current?.refreshFile(fetched.config);',
+  '\t\t\t\t\tsetStale(null);',
   '\t\t\t\t};',
   '\t\t\t\trefreshRef.current = () => {',
   '\t\t\t\t\trefreshNow();',
@@ -446,22 +455,27 @@ const CLIENT_RUN_PATCHED = CLIENT_RUN.replace(
   .replace(
     '\t\t\t\t\t\t\tif (dirtyRef.current) {\n',
     '\t\t\t\t\t\t\tif (dirtyRef.current) {\n\t\t\t\t\t\t\t\tpendingChange = true;\n',
+  )
+  .replace(
+    '\t\t\t\t\tif (!fetched.ok) {\n',
+    '\t\t\t\t\tif (!fetched.ok) {\n\t\t\t\t\t\tpendingChange = true;\n',
   );
 
-it('pins three distinct onlyoffice replacements of its own for the released lib/client.js', () => {
+it('pins four distinct onlyoffice replacements of its own for the released lib/client.js', () => {
   const [, client] = PINS.onlyoffice.targets;
 
   const originals = client.replacements.map(([original]) => original);
 
-  expect(originals).toHaveLength(3);
-  expect(new Set(originals).size).toBe(3);
+  expect(originals).toHaveLength(4);
+  expect(new Set(originals).size).toBe(4);
   const shared = new Set(PINS.onlyoffice.replacements.map(([original]) => original));
   for (const original of originals) expect(shared.has(original)).toBe(false);
 });
 
 /**
  * The released client.js lines patched by the pinned client.js target, loaded from an owned module
- * so no release code runs; returns the editor and watch handlers with what they called.
+ * so no release code runs. Each step settles before returning; `failNext` makes the next config
+ * fetch fail, otherwise a fetch returns the file's new key `rewritten`.
  */
 async function loadClientRun() {
   const tree = imageTree({ second: CLIENT_RUN });
@@ -475,60 +489,101 @@ async function loadClientRun() {
   const module = join(tree.base, 'client-run.mjs');
   writeFileSync(
     module,
-    'export const make = (dirtyRef, currentKeyRef, refreshRef, setStale, refresh, expose) => {\n' +
+    'export const make = (dirtyRef, currentKeyRef, refreshRef, editorRef, setStale, fetchConfig, expose) => {\n' +
       `let cancelled = false;\n${readFileSync(tree.second, 'utf8')}};\n`,
   );
   const { make } = await import(pathToFileURL(module).href);
   const calls = [];
+  const failures = [];
   let handlers;
   const refreshRef = { current: null };
   make(
     { current: false },
     { current: 'opened' },
     refreshRef,
+    { current: { refreshFile: () => calls.push('refresh') } },
     (stale) => calls.push(stale === null ? 'clear' : stale.kind),
-    () => calls.push('refresh'),
+    async () => {
+      calls.push('fetch');
+      return failures.shift() ?? { ok: true, config: { document: { key: 'rewritten' } } };
+    },
     (events, onmessage) => (handlers = { events, onmessage }),
   );
-  const dirty = (data) => handlers.events.onDocumentStateChange({ data });
-  const watch = (kind, key = 'rewritten') => handlers.onmessage({ kind, key });
-  return { calls, dirty, watch, reload: () => refreshRef.current() };
+  const step =
+    (action) =>
+    async (...args) => {
+      action(...args);
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+  return {
+    calls,
+    failNext: () => failures.push({ ok: false, message: 'unavailable' }),
+    dirty: step((data) => handlers.events.onDocumentStateChange({ data })),
+    watch: step((kind, key = 'rewritten') => handlers.onmessage({ kind, key })),
+    reload: step(() => refreshRef.current()),
+  };
 }
 
 it('refreshes once when the editor turns clean after a change arrived while it was dirty', async () => {
   const { calls, dirty, watch } = await loadClientRun();
 
-  dirty(true);
-  watch('change');
-  watch('change');
-  dirty(false);
-  dirty(true);
-  dirty(false);
+  await dirty(true);
+  await watch('change');
+  await watch('change');
+  await dirty(false);
+  await dirty(true);
+  await dirty(false);
 
-  expect(calls).toEqual(['changed', 'changed', 'refresh', 'clear']);
+  expect(calls).toEqual(['changed', 'changed', 'fetch', 'refresh', 'clear', 'clear']);
+});
+
+it('retries the refresh at the next clean transition after a refresh failed', async () => {
+  const { calls, dirty, watch, failNext } = await loadClientRun();
+
+  await dirty(true);
+  await watch('change');
+  failNext();
+  await dirty(false);
+  await dirty(true);
+  await dirty(false);
+
+  expect(calls).toEqual(['changed', 'fetch', 'changed', 'fetch', 'refresh', 'clear']);
+});
+
+it('keeps a failed manual reload as released and retries it once at the next clean transition', async () => {
+  const { calls, dirty, reload, failNext } = await loadClientRun();
+
+  failNext();
+  await reload();
+  await dirty(true);
+  await dirty(false);
+  await dirty(true);
+  await dirty(false);
+
+  expect(calls).toEqual(['fetch', 'changed', 'fetch', 'refresh', 'clear', 'clear']);
 });
 
 it('clears the banner as released when a manual reload already took the pending change', async () => {
   const { calls, dirty, watch, reload } = await loadClientRun();
 
-  dirty(true);
-  watch('change');
-  reload();
-  dirty(false);
+  await dirty(true);
+  await watch('change');
+  await reload();
+  await dirty(false);
 
-  expect(calls).toEqual(['changed', 'refresh', 'clear']);
+  expect(calls).toEqual(['changed', 'fetch', 'refresh', 'clear', 'clear']);
 });
 
 it('keeps the released clean, same-key and removed behaviour', async () => {
   const { calls, dirty, watch } = await loadClientRun();
 
-  watch('change');
-  dirty(true);
-  watch('change', 'opened');
-  watch('removed');
-  dirty(false);
+  await watch('change');
+  await dirty(true);
+  await watch('change', 'rewritten');
+  await watch('removed');
+  await dirty(false);
 
-  expect(calls).toEqual(['refresh', 'removed', 'clear']);
+  expect(calls).toEqual(['fetch', 'refresh', 'clear', 'removed', 'clear']);
 });
 
 const SIDEBAR_ANCHOR = 'return file !== void 0 && !hostOwnedPath(file.path);';

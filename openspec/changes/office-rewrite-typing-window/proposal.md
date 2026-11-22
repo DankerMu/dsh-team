@@ -39,7 +39,7 @@ Owner direction (#652 triage, 2026-11-21): do the ready part (the stack case and
   1. Step 1 commits the case as record-only: the window precondition, the lane's no-copy invariants, the allowed console errors, the screenshot list and the recorded facts.
   2. After two orchestrator `pnpm test:stack` runs agree, step 2 depends on the outcome:
      - If the employee's last save lands, tighten to the observed facts and correct the guide.
-     - Otherwise stop. The change stays open with the record-only case unmerged, and the owner decides the mitigation.
+     - Otherwise stop. The change stays open with the record-only case unmerged, and the owner decides the mitigation. This happened: the owner chose a pinned build-time patch of the plugin's `lib/client.js` plus an upstream issue (tasks 2.1, 2.1a–c).
 - **Docs and budget** (step 2 only):
   - Rewrite `docs/EMPLOYEE_GUIDE.md` §「AI 改写正在编辑的文件」.
   - Add a `stackEvidence.officeRewrite` row to `docs/LOCAL_STACK.md`; none exists yet.
@@ -49,7 +49,7 @@ Owner direction (#652 triage, 2026-11-21): do the ready part (the stack case and
 ## Triage
 
 ```text
-Issue type: test (+docs)
+Issue type: bug (test + build-time patch + docs)
 Fixture level: expanded
 Upstream suggested level: absent
 Blast radius: stack lane only (local, ~11 min); a mis-tightened assertion fails the lane; the guide is employee-visible; screenshots/logs could leak K1 if unmasked; a wrong measurement misleads the owner's mitigation decision
@@ -69,4 +69,4 @@ Evidence floor: two agreeing step-1 stack runs recording (a)(b)(c) with masked s
 - `platform/test/stack-browser-fixture.ts`: a session-level screenshot mask option, with its sibling test.
 - Host-side log-count wiring for (c).
 - `vitest.config.ts`, `docs/EMPLOYEE_GUIDE.md`, `docs/LOCAL_STACK.md` and `platform/test/README.md`.
-- Nothing under `images/`, `plugins/` or `platform/src/`.
+- After the owner's decision: `images/dsh-user/patch-package.mjs` and its test (the pinned `lib/client.js` patch; critical path), `images/dsh-user/Dockerfile` (a comment), and the delivered hash in `platform/test/user-image.docker.test.ts`. Nothing under `plugins/` or `platform/src/`.

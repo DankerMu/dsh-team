@@ -64,10 +64,11 @@ RUN installed="$(node -p 'require("/opt/dsh-team/dsh-sidebar-onlyoffice/package.
      fi
 # Before registration and the profile seed, so every later copy is a patched file: ONLYOFFICE's
 # file token secret and document key derive from the per-instance DSH_TEAM_ONLYOFFICE_FILE_SECRET,
-# and better-sidebar takes docx, xlsx and pptx only while an enabled viewer of its own declares the
-# extension, otherwise leaving them to DSH's own preview. Any version, copy or hash drift fails the
-# build; rename keeps each root-owned 0444 file's owner and mode; the bind mount keeps the script
-# out of layers.
+# ONLYOFFICE's lib/client.js refreshes an editor that turns clean after a file change arrived while
+# it was dirty, and retries a failed refresh at the next clean transition, and better-sidebar takes
+# docx, xlsx and pptx only while an enabled viewer of its own declares the extension, otherwise
+# leaving them to DSH's own preview. Any version, copy or hash drift fails the build; rename keeps
+# each root-owned 0444 file's owner and mode; the bind mount keeps the script out of layers.
 RUN --mount=type=bind,source=patch-package.mjs,target=/tmp/patch-package.mjs \
   node /tmp/patch-package.mjs onlyoffice /opt/dsh-team "$(npm root -g)"
 RUN --mount=type=bind,source=patch-package.mjs,target=/tmp/patch-package.mjs \

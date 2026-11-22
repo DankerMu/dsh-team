@@ -22,7 +22,7 @@
 - `clean` and `unsaved`, `CASES`, `ownedRewrites`, the `Rewrite scripts configured` assertion, `EXPECTED_REWRITE` facts and screenshots.
 - `platform/test/platform-stack.stack.test.ts` changes only `:549`, in place from `...lane` to `...office`, a net change of 0 lines. Wiring goes through `officeRewriteScenario` and `officeRewriteLine`.
 - Every other lane's assertions and deadlines.
-- No DSH source change. The plugin is changed only by the pinned build-time patch (2.1a). `images/dsh-user/` changes only in `patch-package.mjs` and its test. `platform/test/user-image.docker.test.ts` updates the delivered `lib/client.js` hash to the patched output (`9a3d7610…`).
+- No DSH source change. The plugin is changed only by the pinned build-time patch (2.1a). `images/dsh-user/` changes only in `patch-package.mjs`, its test and one `Dockerfile` comment. `platform/test/user-image.docker.test.ts` updates the delivered `lib/client.js` hash to the patched output (`ada60b40…`).
 - No key, token, cookie, banner or log filesystem path, banner text, watch payload, log line or conversation content in evidence, assertion messages or screenshots. The existing file names and `status path` response lines stay as they are.
 - The 800-line, function-length and complexity limits.
 
@@ -76,10 +76,11 @@
     - This is a critical path (`images/dsh-user/`): the PR asks for a human line-by-line review.
 - [x] 2.1a Patch (implementer):
   - Per-target replacements in `PINS.onlyoffice`. The engine applies one replacement list to every target, so each target gets its own list, with the existing `lib/index.js` list unchanged.
-  - The `lib/client.js` target (input sha256 `13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc`) gets three replacements, each anchored on text that occurs exactly once:
-    - a pending-change flag scoped to `run`;
+  - The `lib/client.js` target (input sha256 `13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc`) gets four replacements, each anchored on text that occurs exactly once:
+    - a pending-change flag in the effect scope, declared beside `refreshNow`, which clears it first;
     - the flag is set in the `es.onmessage` dirty branch (`client.js:357-359`);
-    - the `onDocumentStateChange` clean branch (`:316-320`) refreshes once and clears the flag when the flag is set, and otherwise clears the banner as released.
+    - the `onDocumentStateChange` clean branch (`:316-320`) refreshes once when the flag is set, and otherwise clears the banner as released;
+    - `refreshNow`'s failed-fetch branch sets the flag again, so the next clean transition retries (review round 1).
   - The `removed` banner and the clean-editor branch are unchanged.
   - Sibling unit tests in the `patch-package` test cover the new target: the anchors, sha mismatch refusal, and per-target replacement isolation.
 - Patched measurement (orchestrator). Two local `pnpm test:stack` runs on `6f43c7e` both passed and agreed (VOL-SAME; inventory unchanged apart from the authorised RAGFlow restart), in 702.26 s and 688.08 s.

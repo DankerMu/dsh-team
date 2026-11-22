@@ -43,7 +43,8 @@ export const PINS = {
   // DSH 0.2.1-rc.2 provides webStartup (with trustedHosts) instead of webRuntime, so the injected
   // service and its three trustedHosts reads are remapped; comments naming webRuntime stay.
   // lib/client.js, with its own list: an editor turning clean after a file change arrived while it
-  // was dirty refreshes once to the file instead of only clearing the stale banner.
+  // was dirty refreshes once to the file instead of only clearing the stale banner; a failed
+  // refresh keeps the change pending, so the next clean transition retries.
   onlyoffice: {
     package: 'dsh-sidebar-onlyoffice',
     directory: 'dsh-sidebar-onlyoffice',
@@ -58,12 +59,17 @@ export const PINS = {
       {
         target: 'lib/client.js',
         inputSha256: '13df10ce7e4d94ae2951f184c54f69b47d7d7a04f8c50b2f6c201602a7fa0cbc',
-        outputSha256: '9a3d7610f576e73688d82939390f650e066f0b017dee21a39cf94236f79c78c0',
+        outputSha256: 'ada60b402c53807580111a3c833d65574a37ef09f7acf08494b0e5896dafd246',
         replacements: [
           [
             'const refreshNow = async () => {\n',
             'let pendingChange = false;\n\t\t\t\tconst refreshNow = async () => {\n' +
               '\t\t\t\t\tpendingChange = false;\n',
+          ],
+          [
+            'if (!fetched.ok) {\n\t\t\t\t\t\tsetStale({ kind: "changed" });',
+            'if (!fetched.ok) {\n\t\t\t\t\t\tpendingChange = true;\n' +
+              '\t\t\t\t\t\tsetStale({ kind: "changed" });',
           ],
           [
             'if (dirtyRef.current) {\n\t\t\t\t\t\t\t\tsetStale({ kind: "changed" });',
