@@ -27,18 +27,18 @@ See design.md § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 Add `scripts/check-pr-range.sh <base> <head>` and the root script `lint:pr`.
+- [x] 1.1 Add `scripts/check-pr-range.sh <base> <head>` and the root script `lint:pr`.
   - The script runs commitlint over `base..head`.
   - It runs naming over the paths that `base...head` adds or renames.
   - It runs a preflight before either check: two args, both SHAs verified, and a merge base found. Otherwise it fails with `lint:pr: unreadable range`.
-- [ ] 1.2 Add `--range <base> <head>` to `check-naming.sh`, following design.md § Must add/change: parse it before the path branch, check its own `git diff` status, and keep exit code 1 and the existing text. It shares `path_violations`, and the existing modes are unchanged.
-- [ ] 1.3 Add the CI job `pr-range` and include it in `all-checks-passed`.
+- [x] 1.2 Add `--range <base> <head>` to `check-naming.sh`, following design.md § Must add/change: parse it before the path branch, check its own `git diff` status, and keep exit code 1 and the existing text. It shares `path_violations`, and the existing modes are unchanged.
+- [x] 1.3 Add the CI job `pr-range` and include it in `all-checks-passed`.
   - Check out with `fetch-depth: 0`, then set up node and pnpm and install.
   - On `pull_request`, run `pnpm lint:pr "$BASE_SHA" "$HEAD_SHA"` with `base.sha` and `head.sha`.
   - On push, the step is skipped and the job succeeds.
   - `pnpm lint:ci` must pass.
-- [ ] 1.4 Add the guardrail cases listed in the proposal, using the `$wt` mechanism in design.md § Seams under test with a reset in a `finally`-equivalent. Run them under both Bash 3.2 and Bash 5. Add `range` to the missing-policy loop (`test-guardrails.sh:180`).
-- [ ] 1.5 Update the docs:
+- [x] 1.4 Add the guardrail cases listed in the proposal, using the `$wt` mechanism in design.md § Seams under test with a reset in a `finally`-equivalent. Run them under both Bash 3.2 and Bash 5. Add `range` to the missing-policy loop (`test-guardrails.sh:180`).
+- [x] 1.5 Update the docs:
   - AGENTS.md `:292-293` (hook files plus `pnpm lint:pr` in CI), Local setup (`core.hooksPath` is `.husky/_` via `prepare`; do not override it), and `:321`;
   - `scripts/README.md` `:11`, `:15`, `:16`, `:20`, and the `check-naming.sh` header;
   - the AGENTS.md Daily commands "CI gates" line;

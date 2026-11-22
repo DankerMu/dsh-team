@@ -48,6 +48,7 @@ if ! { git init --quiet . && git add -A &&
   echo "FATAL: could not create the fixture repository" >&2
   exit 1
 fi
+baseline="$(git rev-parse HEAD)"
 
 pass=0
 fail=0
@@ -55,6 +56,23 @@ fail=0
 restore() {
   git reset --quiet --hard
   git clean -fdq -e node_modules
+}
+
+# PR-range fixtures commit on top of the recorded baseline; every case resets to it.
+range_restore() {
+  git reset --quiet --hard "$baseline"
+  git clean -fdq -e node_modules
+}
+
+# range_commit <message> <path>...: appends to each path (A when new, M when tracked).
+range_commit() {
+  message="$1"
+  shift
+  for file in "$@"; do
+    mkdir -p "$(dirname "$file")" && printf 'fixture\n' >>"$file" || return 1
+  done
+  git add -- "$@" &&
+    git -c user.name=guardrails -c user.email=guardrails@localhost commit --quiet -m "$message"
 }
 
 expect_accept() {
@@ -177,7 +195,7 @@ expect_reject "allowed archive never accepts a mixed invalid index" \
   "scratchpad directory:    zzz/archive/unrelated.md" bash .git-hooks/check-naming.sh
 
 for missing_policy in setting file; do
-  for mode in argument staged; do
+  for mode in argument staged range; do
     if [ "$missing_policy" = file ]; then
       rm constraints.yaml
     else
@@ -186,6 +204,16 @@ for missing_policy in setting file; do
     if [ "$mode" = argument ]; then
       expect_reject "archive missing $missing_policy argument" "naming violation" \
         bash .git-hooks/check-naming.sh "$archive_root/tasks.md"
+    elif [ "$mode" = range ]; then
+      # Commits only the archive file: the policy edit stays in the working tree.
+      if range_commit "docs(openspec): archive a change" "$archive_root/tasks.md"; then
+        expect_reject "archive missing $missing_policy range" "scratchpad directory" \
+          bash .git-hooks/check-naming.sh --range "$baseline" HEAD
+      else
+        echo "FAIL  archive missing $missing_policy range — could not build the fixture range"
+        fail=$((fail + 1))
+      fi
+      range_restore
     else
       mkdir -p "$archive_root"
       printf 'fixture\n' >"$archive_root/tasks.md"
@@ -400,6 +428,66 @@ expect_accept "CI concurrency (restored)" pnpm lint:ci
 # ── 2. Commit message ────────────────────────────────────────────────────────
 expect_reject "commit message (\"bad message\")" "type may not be empty" \
   sh -c 'echo "bad message" | pnpm exec commitlint'
+
+# The CI layer: `pnpm lint:pr <base> <head>` gates only the range's own commits
+# and added/renamed paths, and fails closed on an unreadable range (#665).
+# range_case <name> <setup> <expect_* args...>: a failed setup is a failure, and
+# the fixture never outlives the case.
+range_case() {
+  name="$1"
+  setup="$2"
+  shift 2
+  if "$setup"; then
+    "$@"
+  else
+    echo "FAIL  $name — could not build the fixture range"
+    fail=$((fail + 1))
+  fi
+  range_restore
+}
+long_subject="feat(platform): add a commit subject that deliberately runs well past the seventy-two character limit"
+range_overlong() { range_commit "$long_subject" docs/guardrails-range.md; }
+range_suffix() { range_commit "feat(platform): add a session fixture" platform/src/session_v2.ts; }
+range_scratch() { range_commit "docs(repo): add a note" tmp/note.md; }
+range_archive() { range_commit "docs(openspec): archive a change" "$archive_root/tasks.md"; }
+range_case "PR range (overlong subject)" range_overlong \
+  expect_reject "PR range (overlong subject)" "subject-max-length" pnpm lint:pr "$baseline" HEAD
+range_case "PR range (adds session_v2.ts)" range_suffix \
+  expect_reject "PR range (adds session_v2.ts)" "forbidden naming suffix" pnpm lint:pr "$baseline" HEAD
+range_case "PR range (adds tmp/)" range_scratch \
+  expect_reject "PR range (adds tmp/)" "scratchpad directory" pnpm lint:pr "$baseline" HEAD
+range_case "PR range (adds a managed archive file)" range_archive \
+  expect_accept "PR range (adds a managed archive file)" pnpm lint:pr "$baseline" HEAD
+
+# Base history holds an overlong subject and a forbidden path; the range modifies
+# that path (M), merges a side commit under a default-ignored message, and conforms.
+range_history() {
+  range_commit "$long_subject" tmp/session_v2.md || return 1
+  history_base="$(git rev-parse HEAD)" || return 1
+  range_commit "docs(repo): add a side note" docs/guardrails-side.md || return 1
+  side="$(git rev-parse HEAD)" || return 1
+  git reset --quiet --hard "$history_base" &&
+    range_commit "docs(repo): extend the base note" tmp/session_v2.md &&
+    git -c user.name=guardrails -c user.email=guardrails@localhost \
+      merge --quiet --no-ff -m "Merge branch 'side'" "$side"
+}
+# Reads history_base when run, after range_history has set it.
+lint_history() { pnpm lint:pr "$history_base" HEAD; }
+range_case "PR range (base history is not the range's)" range_history \
+  expect_accept "PR range (base history is not the range's)" lint_history
+
+# Unreadable ranges fail closed with the fixed reason; never read as empty.
+if ! orphan="$(printf 'chore: unrelated root\n' |
+  git -c user.name=guardrails -c user.email=guardrails@localhost commit-tree "$baseline^{tree}")"; then
+  echo "FAIL  PR range (no merge base) — could not build the unrelated root"
+  fail=$((fail + 1))
+fi
+missing_sha="0000000000000000000000000000000000000000"
+expect_reject "PR range (one argument)" "lint:pr: unreadable range" pnpm lint:pr "$baseline"
+expect_reject "PR range (unknown head)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$missing_sha"
+expect_reject "PR range (no merge base)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$orphan"
+expect_reject "naming range (unknown head)" "check-naming.sh: unreadable range" \
+  bash .git-hooks/check-naming.sh --range "$baseline" "$missing_sha"
 
 # ── 3. Test pairing ──────────────────────────────────────────────────────────
 echo "export const orphan = 1;" >platform/src/orphan.ts

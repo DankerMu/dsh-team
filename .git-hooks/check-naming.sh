@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # .git-hooks/check-naming.sh
 # Rejects commits that add files whose names violate code-canonicality rules.
-# Wired into pre-commit via .husky/pre-commit or .pre-commit-config.yaml.
+# Entrypoints, one classifier (path_violations):
+#   <path>                 one path (agent write-time check), exit 2 on violation;
+#   (no arguments)         the staged index, from .husky/pre-commit, exit 1;
+#   --range <base> <head>  paths base...head adds or renames, from CI through
+#                          scripts/check-pr-range.sh (`pnpm lint:pr`), exit 1.
+# .git-hooks/ is not a hooks directory: core.hooksPath stays husky's .husky/_.
 #
 # See AGENTS.md § Code Canonicality.
 
@@ -92,25 +97,40 @@ path_violations() {
   fi
 }
 
+# Range mode (CI): parsed before the path argument so `--range` is never a path.
+# An unreadable range fails; it is never read as an empty list.
+if [ "${1:-}" = "--range" ]; then
+  if [ "$#" -ne 3 ]; then
+    echo "check-naming.sh: usage: --range <base> <head>" >&2
+    exit 2
+  fi
+  if ! changed="$(git diff --name-only --diff-filter=AR --end-of-options "$2...$3" --)"; then
+    echo "check-naming.sh: unreadable range $2...$3" >&2
+    exit 2
+  fi
 # Path-argument mode (agent write-time check): validate one path directly
 # instead of reading the staged index.
-if [ "$#" -gt 0 ]; then
+elif [ "$#" -gt 0 ]; then
   f="$1"
   if [ -n "$(path_violations "$f")" ]; then
     echo "naming violation (write-time): $f — see AGENTS.md § Code Canonicality" >&2
     exit 2
   fi
   exit 0
+else
+  # Read added or renamed files (cached).
+  changed="$(git diff --cached --name-only --diff-filter=AR 2>/dev/null || true)"
 fi
 
-# Read added or renamed files (cached).
 # Avoid `mapfile` so the script works on macOS default bash 3.2 as well as bash 4+.
 violations=()
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue
   found="$(path_violations "$f")"
   [ -z "$found" ] || violations+=("$found")
-done < <(git diff --cached --name-only --diff-filter=AR 2>/dev/null || true)
+done <<EOF
+$changed
+EOF
 
 if [ "${#violations[@]}" -gt 0 ]; then
   cat <<EOF

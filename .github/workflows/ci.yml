@@ -258,6 +258,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: pnpm verify:docker-evidence
 
+  # The CI layer of the commit-message and naming gates (#665): the PR's own
+  # commits (base..head) and added/renamed paths (base...head). The head is the
+  # PR head, not the synthetic merge checkout. Only the steps are PR-only: on
+  # push the job runs, skips them and succeeds, so the aggregator never sees
+  # "skipped" and main history is never re-checked.
+  pr-range:
+    name: PR range (commit messages + naming)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: github.event_name == 'pull_request'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          node-version-file: .tool-versions
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+        if: github.event_name == 'pull_request'
+      - name: Lint the PR's commit messages and added paths
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: pnpm lint:pr "$BASE_SHA" "$HEAD_SHA"
+
   # Outside the aggregator: these two run only on pull_request events and would
   # report "skipped" on push builds.
   lockfile-consistency:
@@ -324,6 +354,7 @@ jobs:
       - sast
       - guardrails
       - docker-evidence
+      - pr-range
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

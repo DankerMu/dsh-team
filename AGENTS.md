@@ -102,6 +102,7 @@ resource/, assets/fonts/    local only, gitignored: upstream reference repos, li
 ### Local setup
 
 - Run `pnpm install` after clone. It needs Node and pnpm at the versions in `.tool-versions`, plus `hurl`, `shellcheck`, and `gitleaks` on `PATH`.
+- Git hooks: husky's `prepare` (run by `pnpm install`) sets `core.hooksPath` to `.husky/_`; never override it. `.git-hooks/` holds `check-naming.sh`, not hooks: pointing `core.hooksPath` there silently skips every hook.
 - Python 3 with standard-library `pty`/`termios` support is required for administrator CLI terminal integration verification on POSIX hosts; missing prerequisites fail rather than skip that coverage.
 - `pnpm dev` builds the web package and runs the native Node watcher; a missing `.env` is optional (`platform/README.md` § Local development).
 - The source and built entrypoints need a real Docker Unix socket and await reconciliation; `pnpm e2e` provisions its own private Docker/containerd runtime on a nonroot Linux host with sudo (`scripts/README.md` § Fresh-data e2e runtime).
@@ -116,7 +117,7 @@ All commands route through the root `package.json` scripts. Do not invent ad-hoc
 - Browser and CLI lanes: `pnpm test:ui:install` then `pnpm test:ui`; `pnpm test:cli`; administrator command `pnpm --silent cli admin create <email>`.
 - Trusted giap-vps lanes: `pnpm test:docker` (user image), `pnpm test:deploy` (Compose), `pnpm test:model` (real model), `pnpm --silent verify:docker start <reviewed-sha>` (durable Docker owner).
 - Local full stack: `pnpm seed:stack` seeds the local RAGFlow stack; `pnpm test:stack` runs the lane.
-- CI gates: `pnpm verify:docker-evidence` (Docker evidence), `pnpm lint:ci` (event concurrency).
+- CI gates: `pnpm verify:docker-evidence` (Docker evidence), `pnpm lint:ci` (event concurrency), `pnpm lint:pr <base> <head>` (PR commit messages and added paths).
 
 ### Environment
 
@@ -289,8 +290,8 @@ Strictness profile: **L3** (see `constraints.yaml`). Levels: `advice` < `review-
 | Module boundaries and cycles | `.dependency-cruiser.cjs`                                   | `pnpm lint:deps` + CI                                 | block       |
 | Test pairing (TDD)           | `scripts/check-test-pairing.sh`                             | `pnpm lint:tests` + pre-commit + CI                   | block       |
 | Integration-test deadlines   | `eslint.config.mjs` (`no-restricted-syntax`)                | `pnpm lint` + pre-commit + CI                         | block       |
-| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh`                                | pre-commit hook                                       | block       |
-| Conventional commits         | `commitlint.config.cjs`                                     | commit-msg hook                                       | block       |
+| Forbidden naming, scratchpad | `.git-hooks/check-naming.sh` via `.husky/pre-commit`        | pre-commit hook + `pnpm lint:pr` in CI                | block       |
+| Conventional commits         | `commitlint.config.cjs` via `.husky/commit-msg`             | commit-msg hook + `pnpm lint:pr` in CI                | block       |
 | Secrets in commits           | gitleaks                                                    | pre-commit + CI                                       | block       |
 | Static security analysis     | Semgrep in `.github/workflows/ci.yml`                       | CI                                                    | block       |
 | API contract drift           | `schemas/openapi.json`                                      | `pnpm contract:check` + CI                            | block       |
@@ -318,5 +319,5 @@ When a rule has no enforcement entry, it is a wish, not a rule. Wire it up or re
 - Contract snapshot: catches drift in routes that declare a schema, never routes without one.
 - Integration-test deadlines: the lint rejects only `const x = Date.now() + <literal>` in `*.integration.test.ts`; budget derivation is review-only.
   Unchecked forms: `constraints.yaml` `testing.integration_deadline_from_case_budget.blind_spots`.
-- Pre-commit hooks are local and skippable; CI and branch protection are the authoritative layer.
+- Pre-commit hooks are local and skippable; CI and branch protection are the authoritative layer. Naming and commitlint have that CI layer over the PR range (`pnpm lint:pr`), never over history before the PR's base.
 - Claude Code write-time hooks are not installed: `.claude/` is untracked local tooling.
