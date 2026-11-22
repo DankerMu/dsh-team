@@ -1,5 +1,5 @@
 /** Native ownership is the issued ChildProcess capability, not a mutable ps command. */
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { platform } from 'node:os';
 
@@ -34,6 +34,7 @@ export const alive = (pid) => {
   }
 };
 
+/** @returns {Promise<{ birth: string, state: string | undefined }>} */
 function darwinObservation(pid) {
   // SDK proc_bsdinfo: preserve the complete declared layout, not ps display or command text.
   const program = `
@@ -59,18 +60,54 @@ elif count == ctypes.sizeof(info) and info.pid == pid:
 else:
     sys.exit(1)
 `;
-  const result = spawnSync('/usr/bin/python3', ['-I', '-c', program, String(pid)], {
-    env: { PATH: '/usr/bin:/bin', LC_ALL: 'C' },
-    encoding: 'utf8',
-    timeout: 2000,
-    killSignal: 'SIGKILL',
-    maxBuffer: 4096,
+  const { promise, resolve, reject } = Promise.withResolvers();
+  // A fresh error: a spawn failure's own code (ENOENT) would read as process absence.
+  const unavailable = () => reject(new Error('browser process birth identity unavailable'));
+  let child;
+  try {
+    child = spawn('/usr/bin/python3', ['-I', '-c', program, String(pid)], {
+      env: { PATH: '/usr/bin:/bin', LC_ALL: 'C' },
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    unavailable();
+    return promise;
+  }
+  const chunks = [];
+  let bytes = 0;
+  let killed = false;
+  let settled = false;
+  const kill = () => {
+    killed = true;
+    child.kill('SIGKILL');
+  };
+  const timer = setTimeout(kill, 2000);
+  const settle = (outcome) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    outcome();
+  };
+  child.stdout.on('data', (chunk) => {
+    if (killed) return;
+    bytes += chunk.length;
+    if (bytes > 4096) kill();
+    else chunks.push(chunk);
   });
-  if (result.error || result.status !== 0)
-    throw new Error('browser process birth identity unavailable');
-  if (result.stdout === 'gone\n')
+  child.on('error', () => settle(unavailable));
+  child.on('close', (code) =>
+    settle(() => {
+      if (killed || code !== 0) unavailable();
+      else resolve(Buffer.concat(chunks).toString('utf8'));
+    }),
+  );
+  return promise.then((stdout) => darwinResult(pid, stdout));
+}
+
+function darwinResult(pid, stdout) {
+  if (stdout === 'gone\n')
     throw Object.assign(new Error('browser process absent'), { code: 'ESRCH' });
-  const match = /^ok ([1-5]) ([1-9][0-9]*) (0|[1-9][0-9]*)\n$/.exec(result.stdout);
+  const match = /^ok ([1-5]) ([1-9][0-9]*) (0|[1-9][0-9]*)\n$/.exec(stdout);
   if (!match || !Number.isSafeInteger(Number(match[2])) || Number(match[3]) > 999999)
     throw new Error('browser process birth identity unavailable');
   return {

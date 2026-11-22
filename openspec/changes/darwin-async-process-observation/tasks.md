@@ -20,21 +20,21 @@ See design.md § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 Make `darwinObservation` asynchronous, per design.md § Must add/change:
+- [x] 1.1 Make `darwinObservation` asynchronous, per design.md § Must add/change:
   - stdio `['ignore','pipe','ignore']`;
   - a byte cap above 4096 that kills the child;
   - a 2000 ms SIGKILL timer that takes precedence;
   - exactly one settlement on `close`, with the timer cleared on every path;
   - a fresh `Error` with no `code` on spawn throw or `error`;
   - no production seam.
-- [ ] 1.2 Add the hung-observation case, using the real stand-in through the mock. Assert:
+- [x] 1.2 Add the hung-observation case, using the real stand-in through the mock. Assert:
   - the 50 ms timer fires before the observation settles;
   - the rejection is unavailable and comes no earlier than the bound;
   - the captured child shows `signalCode === 'SIGKILL'`, then ESRCH.
 
   Red before the fix: route `spawnSync` to the hung stand-in through `actual.spawnSync`. Green after: the `spawnSync` branch for the observer throws.
 
-- [ ] 1.3 Move the existing native cases from the `spawnSync` mock to a `spawn` mock, keeping their assertions:
+- [x] 1.3 Move the existing native cases from the `spawnSync` mock to a `spawn` mock, keeping their assertions:
   - zombie;
   - gone;
   - missing interpreter;
@@ -46,7 +46,7 @@ See design.md § Must preserve.
   - an oversized-output case: the rejection comes before a 1000 ms timer, SIGKILL is recorded, and it is a characterization of the cap;
   - a missing-interpreter case: no `code`, and `liveProcessBirth` rejects instead of returning `null`.
 
-- [ ] 1.4 `browser-exec.integration.test.ts`: its `spawn` mock passes `/usr/bin/python3`, and only that, through to the real `spawn`. No assertion changes.
+- [x] 1.4 `browser-exec.integration.test.ts`: its `spawn` mock passes `/usr/bin/python3`, and only that, through to the real `spawn`. No assertion changes.
 
 ## 2. Verification
 
