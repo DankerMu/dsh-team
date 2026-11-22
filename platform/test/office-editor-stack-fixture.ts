@@ -134,7 +134,7 @@ export interface OfficeEditorEvidence {
     readonly editor: StackBrowserEvidence;
     readonly distinctKeys: boolean;
     readonly crossed: boolean;
-    /** Command Service `info` from the platform position for A's, B's, k0 and a guessed key (51.8). */
+    /** Command Service `info` from the holder for A's, B's, k0 and B's secret over A's input (51.8). */
     readonly guessedKey: Readonly<Record<string, unknown>>;
   };
 }
@@ -374,8 +374,9 @@ const keysOf = (output: string) => {
   }
 };
 
+type Exec = Pick<ArchiveLane, 'exec'>;
 /** Polls both registries for 5s until each has one entry for the DOCX; the keys stay in memory. */
-async function distinctKeys(lanes: readonly ArchiveLane[], met: { distinct: boolean }) {
+async function distinctKeys(lanes: readonly Exec[], met: { distinct: boolean }) {
   const argv = ['python3', '-c', KEYS, REGISTRY, inWork('docx')];
   let keys: string[][] = [];
   const one = async () => {
@@ -396,6 +397,17 @@ async function distinctKeys(lanes: readonly ArchiveLane[], met: { distinct: bool
   return [kA, kB] as const;
 }
 
+/** The `loaded` gate with both editors open: one registry key per side, distinct, then the Command
+ * Service `info` (51.8) for A's, B's, k0 and B's secret over A's key input, kept in `met.info`. */
+export async function bothOpen(
+  lane: Exec & Pick<OfficeEditorLane, 'namespaceRead'>,
+  b: Exec,
+  met: { distinct: boolean; info: Record<string, unknown> },
+) {
+  const [kA, kB] = await distinctKeys([lane, b], met);
+  met.info = await guessedKeyInfo(lane, b, kA, kB, inWork('docx'));
+}
+
 /** A's and B's same-name DOCX edited at once, each with its own nonce, then read once more. */
 async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory: string) {
   const b: OfficeEditorLane = {
@@ -405,11 +417,7 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
   };
   const [nonceA, nonceB] = [lane.readBack.nonce, editorNonce()];
   const met = { distinct: false, A: false, B: false, info: {} as Record<string, unknown> };
-  // With both editors open: one session per key, none under k0 or a guessed secret (51.8).
-  const loaded = gate(SIDES, lane.session.timeout, async () => {
-    const [kA, kB] = await distinctKeys([lane, b], met);
-    met.info = await guessedKeyInfo(lane, kA, kB, inWork('docx'));
-  });
+  const loaded = gate(SIDES, lane.session.timeout, () => bothOpen(lane, b, met));
   const saved = gate(SIDES, 120_000);
   const edit = (side: OfficeEditorLane, name: 'A' | 'B', nonce: string, where: string) => {
     const saving = () => saved.arrive(name).then(() => void (met[name] = true));

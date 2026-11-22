@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterAll, expect, it } from 'vitest';
 import { docxCommand } from './office-hints-stack-fixture.ts';
 import {
+  bothOpen,
   editorErrorsAllowed,
   editorNonce,
   editorRefused,
@@ -21,6 +22,13 @@ import {
   writeArgv,
   writeBackState,
 } from './office-editor-stack-fixture.ts';
+import {
+  aGuessScript,
+  bCrossScript,
+  EXPECTED_INFO,
+  namespaceInfoScript,
+  NODE,
+} from './office-isolation-stack-fixture.ts';
 
 const NONCE = editorNonce();
 const EXTS = ['docx', 'xlsx', 'pptx'];
@@ -187,6 +195,47 @@ it('keeps the release when whenBoth outlasts the timeout', async () => {
   expect(await Promise.all([settled(arrive('A')), later])).toEqual(['released', 'released']);
 });
 
+const KEYS = {
+  kA: 'a1'.repeat(32),
+  kB: 'b1'.repeat(32),
+  k0: 'c0'.repeat(32),
+  kCross: 'd1'.repeat(32),
+};
+const INPUT = ['dsh-team-u-a', PATHS[0], '9', '1700000000000'].join('\0');
+/** A and B answering their registry with one key each, A's recompute and B's kCross; each call's
+ * step and argv go to `calls` in call order. */
+function openSides(calls: string[][]) {
+  const side = (name: 'A' | 'B', key: string, reply: object) => ({
+    exec: (args: readonly string[]) => {
+      const registry = args[0] === 'python3';
+      calls.push([`${name} ${registry ? 'registry' : 'script'}`, ...args]);
+      return Promise.resolve(JSON.stringify(registry ? [key] : reply));
+    },
+  });
+  const holder = (script: string) => {
+    calls.push(['holder', script]);
+    return Promise.resolve({ ...EXPECTED_INFO });
+  };
+  const a = side('A', KEYS.kA, { k1: KEYS.kA, k0: KEYS.k0, input: INPUT });
+  return [{ ...a, namespaceRead: holder }, side('B', KEYS.kB, { kCross: KEYS.kCross })] as const;
+}
+
+it("with both editors open reads A's then B's registry, recomputes A, derives kCross in B and asks the holder", async () => {
+  const calls: string[][] = [];
+  const met = { distinct: false, info: {} };
+
+  await bothOpen(...openSides(calls), met);
+
+  const steps = ['A registry', 'B registry', 'A script', 'B script', 'holder'];
+  expect(calls.map(([step]) => step)).toEqual(steps);
+  const [, , [, ...recompute] = [], [, ...cross] = [], [, script] = []] = calls;
+  expect(recompute).toEqual([...NODE, aGuessScript(PATHS[0] ?? '')]);
+  expect(cross).toEqual([...NODE, bCrossScript(), JSON.stringify(INPUT)]);
+  const { kA: k1, kB, k0, kCross } = KEYS;
+  expect(script).toBe(namespaceInfoScript({ k1, kB, k0, kCross }));
+  expect(met).toEqual({ distinct: true, info: EXPECTED_INFO });
+});
+
 const OTHER = editorNonce();
 it.each([
   ['its own nonce only', [`探针。${NONCE}`], 'own'],
@@ -241,7 +290,7 @@ it("prints the three files, their digests, the deltas, each session by extension
     { status: 200, error: 0, users: ['dsh'] },
     { status: 200, error: 1 },
   ];
-  const guessedKey = { k1: open, kB: open, k0: unknown, kGuessed: unknown };
+  const guessedKey = { k1: open, kB: open, k0: unknown, kCross: unknown };
   const line = officeEditorLine({
     ...{ files, saved: true, provider: EXPECTED_DELTAS },
     ...{ editors: Object.fromEntries(editors), readBack: session(replies, []) },

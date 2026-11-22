@@ -12,7 +12,9 @@ import {
   aReadScript,
   aSetupScript,
   aSignScript,
+  bCrossScript,
   bProbeScript,
+  CROSS_JS,
   EXPECTED_ATTACK,
   EXPECTED_INFO,
   EXPECTED_ISOLATION,
@@ -31,9 +33,11 @@ import { record } from './docker-cleanup.ts';
 const A = '10.0.0.2';
 const B = '10.0.1.2';
 const SECRETS = {
-  ...{ k1: 'a1'.repeat(32), kB: 'b1'.repeat(32), k0: 'c0'.repeat(32), kGuessed: 'd1'.repeat(32) },
-  ...{ t: 'tok-t', tPublic: 'tok-p', tGuessed: 'tok-g', tB: 'tok-b' },
+  ...{ k1: 'a1'.repeat(32), kB: 'b1'.repeat(32), k0: 'c0'.repeat(32), kCross: 'd1'.repeat(32) },
+  ...{ t: 'tok-t', tPublic: 'tok-p', tB: 'tok-b' },
 };
+// A's key input as A's script emits it: A's host name, never the local one, and NUL separators.
+const INPUT = ['dsh-team-u-a', '/data/work/隔离目标.docx', '31', '1700000000000'].join('\0');
 
 it("writes both files, requests A's config with a loopback Host and waits for k1 without k0 (c1)", () => {
   const script = aSetupScript(A);
@@ -48,12 +52,13 @@ it("writes both files, requests A's config with a loopback Host and waits for k1
     "'/data/home/plugins/dsh-sidebar-onlyoffice/registry.json'",
     'while ((!seen.k1 || seen.k0) && Date.now() < deadline)',
     'observed.k1 = k1;',
+    'observed.input = input;',
   ])
     expect(script).toContain(part);
   expect(script).not.toContain('process.argv');
 });
 
-it('probes A then B over TCP and signs T_B over the claims in argv[1] (c2)', () => {
+it("probes A then B over TCP, signs T_B over argv[1]'s claims and derives kCross from argv[2] (c2)", () => {
   const script = bProbeScript(A, B);
 
   for (const part of [
@@ -65,27 +70,27 @@ it('probes A then B over TCP and signs T_B over the claims in argv[1] (c2)', () 
     "'/sidebar/onlyoffice/file?token=' + encodeURIComponent(tB)",
     'observed.registry = seen;',
     'observed.kB = k1;',
+    CROSS_JS,
+    'observed.kCross = cross(process.argv[2]);',
   ])
     expect(script).toContain(part);
   expect(script).not.toContain('request({ host: "10.0.0.2"');
 });
 
-it("signs T, the public-constant and guessed-key tokens over argv[1] and reads the source with T (c1')", () => {
+it("signs T and the public-constant token over argv[1] and reads the source with T (c1')", () => {
   const script = aSignScript(A);
 
   for (const part of [
     'const claims = JSON.parse(process.argv[1]);',
-    'const guessed = process.argv[2];',
     'const info = statSync(file);',
     'request({ host: "10.0.0.2", port: 3080',
     "const headers = { host: '127.0.0.1:3080' };",
     'const t = mint(claims, secret);',
     'observed.tPublic = mint(claims, "dsh-sidebar-onlyoffice/file-token/v1");',
-    'observed.tGuessed = mint(claims, guessed);',
-    "observed.kGuessed = createHmac('sha256', guessed).update(input).digest('hex');",
     'served.body.equals(readFileSync("/data/work/隔离来源.docx"))',
   ])
     expect(script).toContain(part);
+  expect(script).not.toContain('process.argv[2]');
 });
 
 it("sends every (c3) request to A's address with A's Host and a body-token JWT from the platform env", () => {
@@ -100,8 +105,8 @@ it("sends every (c3) request to A's address with A's Host and a body-token JWT f
     "b64({ alg: 'HS256', typ: 'JWT' }) + '.' + b64({ ...claims, exp: Math.floor(Date.now() / 1000) + 600 })",
     "'http://10.0.0.2:3080/sidebar/onlyoffice/file?token=' + encodeURIComponent(inputs.t)",
     "'/sidebar/onlyoffice/callback', { key, status: 2, url, ...(signed ? { token: jwt() } : {}) }",
-    'observed.file = { public: await forged(inputs.tPublic), guessed: await forged(inputs.tGuessed), b: await forged(inputs.tB), t: await source(inputs.t) };',
-    'observed.callback = { k0: await callback(inputs.k0, true), hmacGuessed: await callback(inputs.kGuessed, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };',
+    'observed.file = { public: await forged(inputs.tPublic), b: await forged(inputs.tB), t: await source(inputs.t) };',
+    'observed.callback = { k0: await callback(inputs.k0, true), kCross: await callback(inputs.kCross, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };',
     `observed.config = json(await exchange('GET', '/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent("/data/work")));`,
     "matches: createHash('sha256').update(r.body).digest('hex') === inputs.sourceSha };",
   ])
@@ -135,12 +140,11 @@ it('expects the privileged position to be refused everything but T and the JWT-s
     },
     file: {
       public: badSignature,
-      guessed: badSignature,
       b: badSignature,
       t: { status: 200, matches: true },
     },
     callback: {
-      ...{ k0: unknownKey, hmacGuessed: unknownKey, kB: unknownKey },
+      ...{ k0: unknownKey, kCross: unknownKey, kB: unknownKey },
       ...{ noJwtK1: { status: 403, error: 4 }, jwtK1: { status: 200, error: 0 } },
     },
     target: 'saved',
@@ -165,30 +169,32 @@ const DIFFER: Record<string, object> = {
 
 /** A, B and the platform answering as the stack does; `failing` rejects that step as `output()` would,
  * argv included, or answers it with every secret but `DIFFER`ent, or with a secret as non-JSON `text`. */
-function fakeLane(events: string[], failing = '', how = 'reject'): OfficeIsolationLane {
-  const { k1, kB, tB, ...signed } = SECRETS;
+function fakeLane(events: string[], failing = '', how = 'reject', argvs: string[][] = []) {
+  const { k1, kB, tB, kCross, ...signed } = SECRETS;
   const { config, file, callback } = EXPECTED_ATTACK;
   const answer = (label: string, args: readonly string[], reply: object) => {
     events.push(label);
+    argvs.push([label, ...args]);
     if (label !== failing) return Promise.resolve(JSON.stringify(reply));
     if (how === 'text') return Promise.resolve(`${SECRETS.k1} is no JSON`);
+    if (how === 'shared') return Promise.resolve(JSON.stringify({ ...reply, kCross: k1 }));
     if (how === 'differ')
       return Promise.resolve(JSON.stringify({ ...reply, ...SECRETS, ...DIFFER[label] }));
     return Promise.reject(new Error(`docker ${args.join(' ')} failed (null): ETIMEDOUT`));
   };
   const replies = [
-    ['observed.k1 = k1', 'setup', { ...EXPECTED_ISOLATION.a, k1 }],
+    ['observed.k1 = k1', 'setup', { ...EXPECTED_ISOLATION.a, k1, input: INPUT }],
     ['fileWithT', 'sign', { ...EXPECTED_ISOLATION.sign, ...signed, sourceSha: 'sha-of-source' }],
     ['observed.target', 'read', { target: 'saved' }],
   ] as const;
   const address = { IPAddress: A };
   const parsed = async (reply: Promise<string>) => record(JSON.parse(await reply));
-  return {
+  const lane: OfficeIsolationLane = {
     ...{ session: {} as never, instance: 'dsh-team-u-a' },
     run: (args) =>
       args[0] === 'container'
         ? Promise.resolve(JSON.stringify({ [(args[4] ?? '').replace('-u-', '-net-')]: address }))
-        : answer('b', args, { ...EXPECTED_ISOLATION.b, kB, tB }),
+        : answer('b', args, { ...EXPECTED_ISOLATION.b, kB, tB, kCross }),
     exec: (args) => {
       const [, label, reply] = replies.find(([part]) => args[3]?.includes(part)) ?? [
         '',
@@ -202,14 +208,22 @@ function fakeLane(events: string[], failing = '', how = 'reject'): OfficeIsolati
     secondEmployee: () => Promise.resolve('dsh-team-u-b'),
     retire: () => Promise.resolve(void events.push('retire')),
   };
+  return lane;
 }
 
 it('signs T after B retires, attacks from the platform, reads the target back, then counts the provider', async () => {
-  const events: string[] = [];
-  const evidence = officeIsolationLine(await officeIsolationScenario(fakeLane(events)));
+  const [events, argvs]: [string[], string[][]] = [[], []];
+  const evidence = officeIsolationLine(
+    await officeIsolationScenario(fakeLane(events, '', '', argvs)),
+  );
 
   expect(evidence).toEqual({ ...EXPECTED_ISOLATION, attack: EXPECTED_ATTACK });
   expect(events.join(' ')).toBe('provider setup b retire sign attack read provider clean');
+  const exec = argvs.find(([label]) => label === 'b') ?? [];
+  expect(exec.slice(-2, -1)[0]).toContain(`"key":"${SECRETS.k1}"`);
+  expect(exec.at(-1), "A's key input, JSON-encoded, after B's claims").toBe(JSON.stringify(INPUT));
+  const attack = argvs.find(([label]) => label === 'attack')?.[1] ?? '';
+  expect(attack).toContain(`"kCross":"${SECRETS.kCross}"`);
   for (const secret of Object.values(SECRETS))
     expect(JSON.stringify(evidence)).not.toContain(secret);
 });
@@ -224,6 +238,8 @@ it.each([
     ['sign', 'differ', 'differs'],
     ['attack', 'differ', 'differs'],
     ['sign', 'text', 'output is not JSON'],
+    ['b', 'text', 'output is not JSON'],
+    ['b', 'shared', "B's secret over A's key input"],
   ],
 ])(
   'redacts every key and token from the %s step answering %s and still retires B',
@@ -248,8 +264,8 @@ const [OPEN, UNKNOWN] = [
   { status: 200, error: 1 },
 ];
 
-it("expects A's and B's keys to name their one editor, k0 and the guessed key no session", () => {
-  expect(EXPECTED_INFO).toEqual({ k1: OPEN, kB: OPEN, k0: UNKNOWN, kGuessed: UNKNOWN });
+it("expects A's and B's keys to name their one editor, k0 and B's secret over A's input no session", () => {
+  expect(EXPECTED_INFO).toEqual({ k1: OPEN, kB: OPEN, k0: UNKNOWN, kCross: UNKNOWN });
 });
 
 const [nodeBinary = 'node', ...nodeFlags] = NODE;
@@ -281,22 +297,41 @@ process.stdout.write(JSON.stringify([jwt(), jwt({ c: 'info', key: 'K' })]));`;
   expect(payloads[1]).toMatchObject({ c: 'info', key: 'K' });
 });
 
-it("recomputes A's k1, k0 and the guessed-secret HMAC over the file's key input", async () => {
+const hmac = (key: string, input: string) => createHmac('sha256', key).update(input).digest('hex');
+const secretEnv = (secret: string) => ({ DSH_TEAM_ONLYOFFICE_FILE_SECRET: secret });
+const cross = async (input: string, secret: string) =>
+  record(await local(bCrossScript(), [JSON.stringify(input)], secretEnv(secret))).kCross;
+
+it("recomputes A's k1 and k0 and emits the file's key input", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-team-office-guess-'));
   const file = join(dir, '编辑写回.docx');
-  const [secret, guessed] = [hex(), hex()];
+  const secret = hex();
   try {
-    writeFileSync(file, 'dsh-team office guessed key');
-    const env = { DSH_TEAM_ONLYOFFICE_FILE_SECRET: secret };
-    const observed = await local(aGuessScript(file), [guessed], env);
+    writeFileSync(file, 'dsh-team office cross key');
+    const observed = await local(aGuessScript(file), [], secretEnv(secret));
     const { size, mtimeMs } = statSync(file);
     const input = [hostname(), file, String(size), String(Math.round(mtimeMs))].join('\0');
-    const hmac = (key: string) => createHmac('sha256', key).update(input).digest('hex');
     const k0 = createHash('sha256').update(input).digest('hex');
-    expect(observed).toEqual({ k1: hmac(secret), k0, kGuessed: hmac(guessed) });
+    expect(observed).toEqual({ k1: hmac(secret, input), k0, input });
+    expect((await cross(input, secret)) === record(observed).k1, 'B sharing A secret').toBe(true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("derives kCross in B from A's JSON-encoded input with B's secret: A's key only if they share it", async () => {
+  const [a, b] = [hex(), hex()];
+
+  const [shared, own] = [await cross(INPUT, a), await cross(INPUT, b)];
+
+  expect(hostname()).not.toBe('dsh-team-u-a');
+  expect({
+    shared: shared === hmac(a, INPUT),
+    own: own === hmac(b, INPUT),
+    differ: own !== shared,
+  }).toEqual({ shared: true, own: true, differ: true });
+  expect(bCrossScript()).toContain(CROSS_JS);
+  expect(record(await local(bCrossScript(), [JSON.stringify(INPUT)], {}))).toHaveProperty('error');
 });
 
 const JWT_SECRET = hex();
@@ -336,7 +371,7 @@ async function commandStub(open: readonly string[]) {
   return { port, seen, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
-const INFO_KEYS = { k1: SECRETS.k1, kB: SECRETS.kB, k0: SECRETS.k0, kGuessed: SECRETS.kGuessed };
+const INFO_KEYS = { k1: SECRETS.k1, kB: SECRETS.kB, k0: SECRETS.k0, kCross: SECRETS.kCross };
 
 it('posts info for each key over loopback with a body-token JWT read from stdin and keeps no key', async () => {
   const stub = await commandStub([SECRETS.k1, SECRETS.kB]);
@@ -349,7 +384,7 @@ it('posts info for each key over loopback with a body-token JWT read from stdin 
     for (const key of Object.values(INFO_KEYS)) expect(JSON.stringify(observed)).not.toContain(key);
     const forged = await local(script, [], { DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET }, hex());
     const refused = { status: 200, error: 6 };
-    expect(forged).toEqual({ k1: refused, kB: refused, k0: refused, kGuessed: refused });
+    expect(forged).toEqual({ k1: refused, kB: refused, k0: refused, kCross: refused });
   } finally {
     await stub.close();
   }
@@ -361,13 +396,15 @@ it('posts info for each key over loopback with a body-token JWT read from stdin 
 
 const FILE = '/data/work/编辑写回.docx';
 const OTHER_K1 = 'e1'.repeat(32);
+// A answering another key; B under a shared secret; the holder knowing B's key for A's file.
 const DIFFERS: Record<string, object> = {
-  A: { k1: OTHER_K1, k0: SECRETS.k0, kGuessed: SECRETS.kGuessed },
-  holder: { ...EXPECTED_INFO, kGuessed: { ...OPEN, key: SECRETS.kGuessed } },
+  A: { k1: OTHER_K1, k0: SECRETS.k0, input: INPUT },
+  B: { kCross: SECRETS.k1 },
+  holder: { ...EXPECTED_INFO, kCross: { ...OPEN, key: SECRETS.kCross } },
 };
 
-/** A's exec and the holder answering as the stack does; `failing` rejects quoting argv, answers
- * `DIFFERS`, or answers a key as non-JSON text. `seen` gets each step's label and argv. */
+/** A's and B's execs and the holder answering as the stack does; `failing` rejects quoting argv,
+ * answers `DIFFERS`, or answers a key as non-JSON text. `seen` gets each step's label and argv. */
 function guessLane(seen: string[][], failing = '', how = 'reject') {
   const answer = (label: string, args: readonly string[], reply: object) => {
     seen.push([label, ...args]);
@@ -376,23 +413,27 @@ function guessLane(seen: string[][], failing = '', how = 'reject') {
     if (how === 'differ') return Promise.resolve(JSON.stringify(DIFFERS[label]));
     return Promise.reject(new Error(`docker ${args.join(' ')} failed (null): ETIMEDOUT`));
   };
-  const own = { k1: SECRETS.k1, k0: SECRETS.k0, kGuessed: SECRETS.kGuessed };
-  return {
+  const own = { k1: SECRETS.k1, k0: SECRETS.k0, input: INPUT };
+  const lane = {
     exec: (args: readonly string[]) => answer('A', args, own),
     namespaceRead: async (script: string) =>
       record(JSON.parse(await answer('holder', [script], EXPECTED_INFO))),
   };
+  return [
+    lane,
+    { exec: (args: readonly string[]) => answer('B', args, { kCross: SECRETS.kCross }) },
+  ] as const;
 }
 
-it("recomputes k1 in A, then asks about A's, B's, k0 and the guessed key from the holder", async () => {
+it("recomputes k1 in A, derives kCross in B from A's input, then asks the holder about all four", async () => {
   const seen: string[][] = [];
-  const info = await guessedKeyInfo(guessLane(seen), SECRETS.k1, SECRETS.kB, FILE);
+  const info = await guessedKeyInfo(...guessLane(seen), SECRETS.k1, SECRETS.kB, FILE);
 
   expect(info).toEqual(EXPECTED_INFO);
-  const [[, ...argv] = [], [, script] = []] = seen;
-  expect(seen.map(([label]) => label)).toEqual(['A', 'holder']);
-  expect(argv.slice(0, -1)).toEqual([...NODE, aGuessScript(FILE)]);
-  expect(argv.at(-1)).toMatch(/^[0-9a-f]{64}$/);
+  const [[, ...argv] = [], [, ...crossArgv] = [], [, script] = []] = seen;
+  expect(seen.map(([label]) => label)).toEqual(['A', 'B', 'holder']);
+  expect(argv).toEqual([...NODE, aGuessScript(FILE)]);
+  expect(crossArgv).toEqual([...NODE, bCrossScript(), JSON.stringify(INPUT)]);
   expect(script).toBe(namespaceInfoScript(INFO_KEYS));
 });
 
@@ -400,20 +441,22 @@ it.each([
   ['A', 'reject', 'ETIMEDOUT', ['A']],
   ['A', 'differ', 'differs', ['A']],
   ['A', 'text', 'output is not JSON', ['A']],
-  ['holder', 'reject', 'ETIMEDOUT', ['A', 'holder']],
-  ['holder', 'differ', 'differs', ['A', 'holder']],
+  ['B', 'reject', 'ETIMEDOUT', ['A', 'B']],
+  ['B', 'differ', "B's secret over A's key input", ['A', 'B']],
+  ['B', 'text', 'output is not JSON', ['A', 'B']],
+  ['holder', 'reject', 'ETIMEDOUT', ['A', 'B', 'holder']],
+  ['holder', 'differ', 'differs', ['A', 'B', 'holder']],
 ])('fails the %s step answering %s without a key or cause', async (step, how, reason, steps) => {
   const seen: string[][] = [];
-  const lane = guessLane(seen, step, how);
-  const error: unknown = await guessedKeyInfo(lane, SECRETS.k1, SECRETS.kB, FILE).catch(
+  const lanes = guessLane(seen, step, how);
+  const error: unknown = await guessedKeyInfo(...lanes, SECRETS.k1, SECRETS.kB, FILE).catch(
     (caught: unknown) => caught,
   );
 
-  if (!(error instanceof Error)) throw new Error('Guessed-key info did not fail');
+  if (!(error instanceof Error)) throw new Error('Cross-key info did not fail');
   expect(error.message).toContain(reason);
   expect(seen.map(([label]) => label)).toEqual(steps);
-  const guessed = seen[0]?.at(-1) ?? '';
-  for (const secret of [...Object.values(INFO_KEYS), guessed, OTHER_K1])
+  for (const secret of [...Object.values(INFO_KEYS), OTHER_K1])
     expect(error.message).not.toContain(secret);
   expect(error.message).not.toMatch(/[0-9a-f]{64}/);
   expect(error.cause).toBeUndefined();

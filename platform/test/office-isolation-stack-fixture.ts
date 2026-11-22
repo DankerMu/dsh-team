@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { expect } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
@@ -54,19 +53,18 @@ export const EXPECTED_ATTACK = {
   config: { status: 403, body: { ok: false, error: { code: 'forbidden', message: 'forbidden' } } },
   file: {
     public: BAD_SIGNATURE,
-    guessed: BAD_SIGNATURE,
     b: BAD_SIGNATURE,
     t: { status: 200, matches: true },
   },
   callback: {
-    ...{ k0: UNKNOWN_KEY, hmacGuessed: UNKNOWN_KEY, kB: UNKNOWN_KEY },
+    ...{ k0: UNKNOWN_KEY, kCross: UNKNOWN_KEY, kB: UNKNOWN_KEY },
     ...{ noJwtK1: { status: 403, error: 4 }, jwtK1: { status: 200, error: 0 } },
   },
   target: 'saved',
 };
 const EDITING = { status: 200, error: 0, users: ['dsh'] };
 /** Command Service `info`: A's and B's open sessions with their one editor; no session for the rest. */
-export const EXPECTED_INFO = { k1: EDITING, kB: EDITING, k0: UNKNOWN_KEY, kGuessed: UNKNOWN_KEY };
+export const EXPECTED_INFO = { k1: EDITING, kB: EDITING, k0: UNKNOWN_KEY, kCross: UNKNOWN_KEY };
 const CONFIG_PATH = `'/sidebar/onlyoffice/config?sessionId=t&path=' + encodeURIComponent(file) + '&cwd=' + encodeURIComponent(${JSON.stringify(WORK)})`;
 const FILE_PATH = "'/sidebar/onlyoffice/file?token=' + encodeURIComponent";
 export const REGISTRY = '/data/home/plugins/dsh-sidebar-onlyoffice/registry.json';
@@ -104,14 +102,25 @@ let seen = registry();
 while ((!seen.k1 || seen.k0) && Date.now() < deadline) { await new Promise((resolve) => setTimeout(resolve, 100)); seen = registry(); }
 observed.registry = seen;`;
 
-/** (c1) A writes both files and registers k1. */
+/** (c1) A writes both files and registers k1; its key input holds no secret. */
 export const aSetupScript = (address: string): string =>
   script(`writeFileSync(${JSON.stringify(SOURCE)}, 'dsh-team office isolation source');
 ${register(address, 'dsh-team office isolation target')}
-observed.k1 = k1;`);
+observed.k1 = k1;
+observed.input = input;`);
+
+/** In B: the HMAC under B's own secret over A's key input, JSON-encoded because argv cannot carry
+ * its NULs; A's key only if all instances share one secret. Never KEY_JS, which reads B's host. */
+export const CROSS_JS = `const cross = (encoded) => createHmac('sha256', secret).update(JSON.parse(encoded)).digest('hex');`;
+
+/** B's kCross over argv[1], A's JSON-encoded key input. */
+export const bCrossScript = (): string =>
+  script(`${CROSS_JS}
+observed.kCross = cross(process.argv[1]);`);
 
 /** (c2) B: no TCP to A's listening :3080 within 3s, but to B's own; B registers k1_B for a same-named
- * target and signs T_B over argv[1]'s claims, which B's file route answers 404 (valid, no source). */
+ * target, signs T_B over argv[1]'s claims, which B's file route answers 404 (valid, no source), and
+ * derives kCross from argv[2], A's JSON-encoded key input. */
 export const bProbeScript = (aAddress: string, bAddress: string): string =>
   script(`const probe = (host) => new Promise((resolve) => {
   const socket = connect({ host, port: 3080 });
@@ -125,13 +134,14 @@ ${MINT_JS}
 const tB = mint(JSON.parse(process.argv[1]), secret);
 observed.file = text(await exchange('GET', ${FILE_PATH}(tB)));
 observed.kB = k1;
-observed.tB = tB;`);
+observed.tB = tB;
+${CROSS_JS}
+observed.kCross = cross(process.argv[2]);`);
 
-/** (c1') A after B retired: T over argv[1]'s claims, forgeries under the public constant and argv[2]'s
- * guessed secret, k0 and the guessed-secret HMAC of the unchanged target; T reads A's source. */
+/** (c1') A after B retired: T over argv[1]'s claims, a forgery under the public constant and k0 of
+ * the unchanged target; T reads A's source. */
 export const aSignScript = (address: string): string =>
   script(`const claims = JSON.parse(process.argv[1]);
-const guessed = process.argv[2];
 const info = statSync(file);
 ${KEY_JS}
 ${MINT_JS}
@@ -140,9 +150,7 @@ const t = mint(claims, secret);
 const served = await exchange('GET', ${FILE_PATH}(t));
 observed.fileWithT = { status: served.status, matches: served.body.equals(readFileSync(${JSON.stringify(SOURCE)})) };
 Object.assign(observed, { t, k0, sourceSha: createHash('sha256').update(readFileSync(${JSON.stringify(SOURCE)})).digest('hex') });
-observed.tPublic = mint(claims, ${JSON.stringify(FILE_TOKEN_PUBLIC)});
-observed.tGuessed = mint(claims, guessed);
-observed.kGuessed = createHmac('sha256', guessed).update(input).digest('hex');`);
+observed.tPublic = mint(claims, ${JSON.stringify(FILE_TOKEN_PUBLIC)});`);
 
 /** (c3) in the platform container: each request goes to A's address with A's Host, as B's signed
  * editor config would have the Document Server send it; callbacks carry a body-`token` JWT. */
@@ -157,15 +165,15 @@ const source = async (token) => { const r = await exchange('GET', ${FILE_PATH}(t
 const url = 'http://${address}:3080/sidebar/onlyoffice/file?token=' + encodeURIComponent(inputs.t);
 ${CALLBACK_JS}
 observed.config = json(await exchange('GET', ${CONFIG_PATH}));
-observed.file = { public: await forged(inputs.tPublic), guessed: await forged(inputs.tGuessed), b: await forged(inputs.tB), t: await source(inputs.t) };
-observed.callback = { k0: await callback(inputs.k0, true), hmacGuessed: await callback(inputs.kGuessed, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };`);
+observed.file = { public: await forged(inputs.tPublic), b: await forged(inputs.tB), t: await source(inputs.t) };
+observed.callback = { k0: await callback(inputs.k0, true), kCross: await callback(inputs.kCross, true), kB: await callback(inputs.kB, true), noJwtK1: await callback(inputs.k1, false), jwtK1: await callback(inputs.k1, true) };`);
 
-/** A's k1, k0 and the HMAC under argv[1]'s guessed secret over `file`'s current key input. */
+/** A's k1, k0 and key input for `file` as it is now. */
 export const aGuessScript = (file: string): string =>
   script(
     `const info = statSync(file);
 ${KEY_JS}
-Object.assign(observed, { k1, k0, kGuessed: createHmac('sha256', process.argv[1]).update(input).digest('hex') });`,
+Object.assign(observed, { k1, k0, input });`,
     file,
   );
 
@@ -202,7 +210,7 @@ export function officeIsolationLine(evidence: OfficeIsolationEvidence | undefine
   return evidence;
 }
 
-type Text = 'error' | 'k1' | 'kB' | 'tB' | 't' | 'tPublic' | 'tGuessed' | 'k0' | 'kGuessed';
+type Text = 'error' | 'k1' | 'kB' | 'tB' | 't' | 'tPublic' | 'k0' | 'kCross' | 'input';
 type Observed = Readonly<Record<string, unknown> & Partial<Record<Text, string>>>;
 
 /** The `expected` keys of `observed`, or a redacted failure carrying the whole observation. */
@@ -225,21 +233,28 @@ export async function instanceAddress(run: DockerOutput, name: string): Promise<
 
 /** B's whole segment, then `retire` regardless. A docker failure quotes argv, whose claims hold k1:
  * failures leave redacted and without `cause`, B's own first, a retirement failure after it. */
-async function bPosition(lane: OfficeIsolationLane, aAddress: string, claims: string, k1: string) {
+async function bPosition(lane: OfficeIsolationLane, aAddress: string, claims: string, a: Observed) {
   const failures: unknown[] = [];
   let probe: Observed | undefined;
   try {
     const name = await lane.secondEmployee();
     const bProbe = bProbeScript(aAddress, await instanceAddress(lane.run, name));
-    const stdout = await lane.run(['exec', '--user', '1001', name, ...NODE, bProbe, claims]);
-    probe = JSON.parse(stdout) as Observed;
+    const argv = ['exec', '--user', '1001', name, ...NODE, bProbe, claims, JSON.stringify(a.input)];
+    probe = await guarded('B', [a.k1], () => lane.run(argv));
   } catch (error) {
     failures.push(error);
   }
   await lane.retire().catch((error: unknown) => failures.push(error));
   if (probe !== undefined && failures.length === 0) return probe;
   const messages = failures.map((f) => (f instanceof Error ? f.message : String(f)));
-  throw new Error(redactSecrets(`Office isolation (c2) failed: ${messages.join('\n')}`, [k1]));
+  const failed = `Office isolation (c2) failed: ${messages.join('\n')}`;
+  throw new Error(redactSecrets(failed, [a.k1, probe?.kCross]));
+}
+
+/** B's secret over A's key input must not give A's key: a shared secret would. No value is printed. */
+function crossDiffers(kCross: string | undefined, kA: string) {
+  const differs = typeof kCross === 'string' && /^[0-9a-f]{64}$/.test(kCross) && kCross !== kA;
+  expect(differs, "B's secret over A's key input gives a key other than A's").toBe(true);
 }
 
 /** `step`'s parsed result, or its failure redacted and without `cause`: docker quotes argv and
@@ -262,19 +277,20 @@ async function officeIsolation(lane: OfficeIsolationLane): Promise<OfficeIsolati
   const setup = JSON.parse(await lane.exec([...NODE, aSetupScript(aAddress)])) as Observed;
   const { k1 } = setup;
   const a = verify('(c1)', setup, EXPECTED_ISOLATION.a, [k1]);
-  if (k1 === undefined) throw new Error('Office isolation (c1) returned no k1');
+  if (k1 === undefined || typeof setup.input !== 'string')
+    throw new Error('Office isolation (c1) returned no k1 or key input');
   const exp = Math.floor(Date.now() / 1000) + 600;
   const claims = JSON.stringify({ key: k1, path: SOURCE, cwd: WORK, exp });
-  const probe = await bPosition(lane, aAddress, claims, k1);
-  const { kB, tB } = probe;
-  const b = verify('(c2)', probe, EXPECTED_ISOLATION.b, [k1, kB, tB]);
-  const guessed = randomBytes(32).toString('hex');
-  const signArgs = [...NODE, aSignScript(aAddress), claims, guessed];
-  const signed = await guarded("(c1')", [k1, kB, tB, guessed], () => lane.exec(signArgs));
-  const { t, tPublic, tGuessed, k0, kGuessed } = signed;
-  const secrets = [k1, kB, tB, guessed, t, tPublic, tGuessed, kGuessed, k0];
+  const probe = await bPosition(lane, aAddress, claims, setup);
+  const { kB, tB, kCross } = probe;
+  const b = verify('(c2)', probe, EXPECTED_ISOLATION.b, [k1, kB, tB, kCross]);
+  crossDiffers(kCross, k1);
+  const signArgs = [...NODE, aSignScript(aAddress), claims];
+  const signed = await guarded("(c1')", [k1, kB, tB, kCross], () => lane.exec(signArgs));
+  const { t, tPublic, k0 } = signed;
+  const secrets = [k1, kB, tB, kCross, t, tPublic, k0];
   const sign = verify("(c1')", signed, EXPECTED_ISOLATION.sign, secrets);
-  const attackScript = platformAttackScript(aAddress, { ...signed, k1, kB, tB });
+  const attackScript = platformAttackScript(aAddress, { ...signed, k1, kB, tB, kCross });
   const attacked = await guarded('(c3)', secrets, async () =>
     JSON.stringify(await lane.platformRead(attackScript)),
   );
@@ -290,20 +306,27 @@ export const officeIsolationScenario = (lane: OfficeIsolationLane) =>
   withWorkFiles(lane, [TARGET_NAME, SOURCE_NAME], 'Office isolation', () => officeIsolation(lane));
 
 /** 18.5 (#440) from the Document Server's own loopback (#624), while A and B edit: A's file recomputes
- * A's registered key, and the Command Service knows A's and B's sessions but none under k0 or a guessed secret. */
+ * A's registered key, and the Command Service knows A's and B's sessions but none under k0 or under
+ * B's own secret over A's key input (kCross, computed in B). */
 export async function guessedKeyInfo(
   lane: Pick<OfficeIsolationLane, 'exec'> & { readonly namespaceRead: NamespaceRead },
+  b: Pick<OfficeIsolationLane, 'exec'>,
   kA: string,
   kB: string,
   file: string,
 ) {
-  const guessed = randomBytes(32).toString('hex');
-  const argv = [...NODE, aGuessScript(file), guessed];
-  const own = await guarded('(info A)', [kA, kB, guessed], () => lane.exec(argv));
-  const { k1, k0, kGuessed } = own;
-  const secrets = [kA, kB, guessed, k0, kGuessed, k1];
-  verify('(info A)', own, { k1: kA }, secrets);
-  const infoScript = namespaceInfoScript({ k1: kA, kB, k0, kGuessed });
+  const own = await guarded('(info A)', [kA, kB], () => lane.exec([...NODE, aGuessScript(file)]));
+  const { k1, k0, input } = own;
+  const known = [kA, kB, k0, k1];
+  verify('(info A)', own, { k1: kA }, known);
+  if (typeof input !== 'string') throw new Error('Office isolation (info A) returned no key input');
+  const argv = [...NODE, bCrossScript(), JSON.stringify(input)];
+  const crossed = await guarded('(info B)', known, () => b.exec(argv));
+  const { kCross } = crossed;
+  const secrets = [...known, kCross];
+  verify('(info B)', crossed, {}, secrets);
+  crossDiffers(kCross, kA);
+  const infoScript = namespaceInfoScript({ k1: kA, kB, k0, kCross });
   const info = await guarded('(info)', secrets, async () =>
     JSON.stringify(await lane.namespaceRead(infoScript)),
   );
