@@ -9,6 +9,7 @@ import { createInstanceService } from '../src/orchestrator/index.ts';
 import type { DockerClient } from '../src/orchestrator/index.ts';
 import { startupOwnerFixture } from './container-start-fixture.ts';
 import { sessionCookieToken } from './auth-fixture.ts';
+import { caseBudget } from './trusted-docker-fixture.ts';
 
 export function instanceConfig(
   root: string,
@@ -127,5 +128,48 @@ export function heldReadinessLogs(message: string) {
         },
       };
     },
+  };
+}
+
+// The readiness wait from the start's answer; caseBudget cuts each poll fetch to the case deadline.
+const READINESS_FAILURE_WAIT_MS = 5000;
+
+/** Bounded readiness polls; each timeout exit names its elapsed ms, poll count and DB status. */
+export function readinessPolls(
+  f: { readonly base: string; readonly database: DatabaseHandle },
+  cookie: string,
+  deadline: number,
+) {
+  const budget = caseBudget(deadline);
+  const since = Date.now();
+  let polls = 0;
+  const stalled = (reason: string, cause?: unknown) => {
+    const row: unknown = f.database.prepare('SELECT status FROM instances').get();
+    const seen = `${String(Date.now() - since)}ms: polls=${String(polls)} db=${JSON.stringify(row)}`;
+    const api = 'Readiness failure was not reflected by the public API';
+    return new Error(`${api} (${reason}) after ${seen}`, { cause });
+  };
+  return async () => {
+    // The wait's own deadline, checked before each further poll as the loop once checked it.
+    if (Date.now() >= since + READINESS_FAILURE_WAIT_MS) throw stalled('wait expired');
+    let signal: AbortSignal;
+    try {
+      signal = AbortSignal.timeout(budget.limit('readiness poll', READINESS_FAILURE_WAIT_MS));
+    } catch (error) {
+      throw stalled('case deadline passed', error);
+    }
+    polls += 1;
+    try {
+      const response = await fetch(`${f.base}/_platform/api/instance`, {
+        headers: { cookie },
+        signal,
+      });
+      const current: unknown = await response.json();
+      return { status: response.status, current };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError')
+        throw stalled('poll aborted', error);
+      throw error;
+    }
   };
 }

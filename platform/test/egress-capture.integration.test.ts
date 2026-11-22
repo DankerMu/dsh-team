@@ -2,14 +2,26 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { DockerCommand } from './docker-command.ts';
-import { captureContainer, confirmExited, countEgress, findTcpdump } from './egress-capture.ts';
+import {
+  captureContainer,
+  confirmExited,
+  countEgress,
+  DRAIN_MS,
+  EXIT_CONFIRM_MS,
+  findTcpdump,
+  liveness,
+} from './egress-capture.ts';
+import type { Boundary } from './egress-capture.ts';
 
 // Stands in for `timeout`+`tcpdump`: canned `-i any` LINUX_SLL2 lines; on SIGINT tcpdump's interrupt
 // newline on stdout, then its stats. The handler precedes any output: a stop may follow the listening
-// line at once, and an unhandled SIGINT would kill the fake before it answers.
+// line at once, and an unhandled SIGINT would kill the fake before it answers. Its pid file, which
+// the injected /proc reader finds, is written first too: the listening line means it exists. Mode
+// `silent` never listens; mode `stuck` listens but ignores SIGINT, so its capture never closes.
 const FAKE_TCPDUMP = `
+require('node:fs').writeFileSync(process.argv[2], String(process.pid));
 const mode = process.argv[1];
 if (mode === 'refused') { process.stderr.write('sudo: a password is required\\n'); process.exit(1); }
 const all = [
@@ -26,21 +38,23 @@ const lines = { one: all.slice(-1), garbled: [...all, '10:00:00 garbled'], middl
 const tail = '10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443: Flags [P.], tail-must-not-stay';
 const stat = (n, what) => n + ' packet' + (n === 1 ? '' : 's') + ' ' + what + '\\n';
 process.on('SIGINT', () => {
+  if (mode === 'stuck') return;
   process.stdout.write('\\n' + ({ blanks: '\\n', after: tail + '\\n', unterminated: tail }[mode] ?? ''));
   const [extra, lost] = [mode === 'extra' ? 1 : 0, mode === 'dropped' ? 1 : 0];
   process.stderr.write('\\n' + stat(lines.length + extra, 'captured') + stat(lines.length + extra, 'received by filter') + stat(lost, 'dropped by kernel'));
   process.exit(0);
 });
 process.stderr.write('tcpdump: verbose output suppressed, use -v[v]... for full protocol decode\\n');
-process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
+if (mode !== 'silent') process.stderr.write('listening on any, link-type ' + (mode === 'sll1' ? 'LINUX_SLL' : 'LINUX_SLL2') + ' (Linux cooked v2), snapshot length 128 bytes\\n');
 process.stdout.write(lines.join('\\n') + '\\n');
 setTimeout(() => process.exit(3), 20000);
 `;
-// Stands in for sudo: records its child's pid where the injected /proc reader finds it, relays SIGINT.
+// Stands in for sudo, relaying SIGINT. The relay precedes the spawn: the child's listening line can
+// reach the stop before this script runs on, and an unhandled SIGINT would kill it, orphaning
+// tcpdump (seen at load ~100).
 const FAKE_SUDO = `
-const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(FAKE_TCPDUMP)}, process.argv[1]], { stdio: ['ignore', 'inherit', 'inherit'] });
-require('node:fs').writeFileSync(process.argv[2], String(child.pid));
 process.on('SIGINT', () => child.kill('SIGINT'));
+const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(FAKE_TCPDUMP)}, ...process.argv.slice(1, 3)], { stdio: ['ignore', 'inherit', 'inherit'] });
 child.on('exit', (code) => process.exit(code ?? 1));
 `;
 const ARGV = [
@@ -55,7 +69,27 @@ afterEach(() => {
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
-function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bound = 90) {
+// A fake capture awaits two cold Node starts (fake sudo, then fake tcpdump) inside the listen
+// wait, at most drain's 5s canary wait, the SIGINT round trip inside the close wait, then
+// confirmExited's 2s: PR #637 saw a refusal outlast the 5s default at load 84.5.
+const CAPTURE_CASE_MS = 30_000;
+// The case's own assertions after the capture settled.
+const CAPTURE_RESERVE_MS = 2_000;
+/** Listen and close each take half of what the deadline leaves after drain and confirmExited. */
+function captureBounds(deadline: number): Pick<Boundary, 'listenMs' | 'closeMs' | 'exitConfirmMs'> {
+  const phase = Math.floor((deadline - Date.now() - DRAIN_MS - EXIT_CONFIRM_MS) / 2);
+  return { listenMs: phase, closeMs: phase, exitConfirmMs: EXIT_CONFIRM_MS };
+}
+
+/** Called first in a case of CAPTURE_CASE_MS, so its bounds derive from that case's deadline. */
+function fakeCapture(
+  mode: string,
+  logs = 'booting\n',
+  state = '4242 true\n',
+  bound = 90,
+  bounds: Partial<Boundary> = {},
+) {
+  const deadline = Date.now() + CAPTURE_CASE_MS - CAPTURE_RESERVE_MS;
   const directory = mkdtempSync(join(tmpdir(), 'dsh-team-egress-'));
   cleanup.push(directory);
   const pidFile = join(directory, 'tcpdump.pid');
@@ -68,6 +102,8 @@ function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bo
   };
   let sudo = -1;
   const started = captureContainer(command, 'dsh-team-test-start', bound, BEFORE, {
+    ...captureBounds(deadline),
+    ...bounds,
     spawn: (argv) => {
       spawned.push(argv);
       const child = spawn(process.execPath, ['-e', FAKE_SUDO, mode, pidFile], {
@@ -80,107 +116,181 @@ function fakeCapture(mode: string, logs = 'booting\n', state = '4242 true\n', bo
     children: (pid) => (pid === sudo ? [Number(readFileSync(pidFile, 'utf8'))] : []),
     comm: (pid) => (pid === sudo ? 'timeout' : 'tcpdump'),
   });
-  return { started, spawned, docker, tcpdump: () => Number(readFileSync(pidFile, 'utf8')) };
+  const tcpdump = () => Number(readFileSync(pidFile, 'utf8'));
+  return { started, spawned, docker, tcpdump, sudo: () => sudo };
 }
 
-it('counts packets by loopback and filter port, keeps DNS query names only and confirms tcpdump exited', async () => {
-  const { started, spawned, docker, tcpdump } = fakeCapture('normal');
+describe('a capture against fake sudo and tcpdump', { timeout: CAPTURE_CASE_MS }, () => {
+  it('counts packets by loopback and filter port, keeps DNS query names only and confirms tcpdump exited', async () => {
+    const { started, spawned, docker, tcpdump } = fakeCapture('normal');
 
-  const capture = await started;
-  await capture.drain();
-  const evidence = await capture.stop();
+    const capture = await started;
+    await capture.drain();
+    const evidence = await capture.stop();
 
-  expect(spawned).toEqual([ARGV]);
-  expect(docker).toEqual([
-    'inspect -f {{.State.Pid}} {{.State.Running}} dsh-team-test-start',
-    'logs dsh-team-test-start',
-  ]);
-  expect(evidence).toEqual({
-    tcpdumpPid: tcpdump(),
-    attachMs: expect.any(Number) as unknown,
-    lo: { '53': 0, '80': 1, '443': 1, '9': 0, ptr: 0 },
-    other: { '53': 2, '80': 1, '443': 1, '9': 1 },
-    dnsQueries: ['registry.npmjs.org.'],
-    notable: [
-      'eth0 Out 198.18.0.18.41001 > 104.16.0.1.443',
-      'eth0 In 198.18.0.17.53 > 198.18.0.18.41002 4660 1/0/0 A 104.16.0.1',
-      'eth0 Out fd00::2.41003 > fd00::1.80',
-    ],
-    notableDropped: 0,
-    captured: 7,
-    exitCode: 0,
-    exited: 'ESRCH',
+    expect(spawned).toEqual([ARGV]);
+    expect(docker).toEqual([
+      'inspect -f {{.State.Pid}} {{.State.Running}} dsh-team-test-start',
+      'logs dsh-team-test-start',
+    ]);
+    expect(evidence).toEqual({
+      tcpdumpPid: tcpdump(),
+      attachMs: expect.any(Number) as unknown,
+      lo: { '53': 0, '80': 1, '443': 1, '9': 0, ptr: 0 },
+      other: { '53': 2, '80': 1, '443': 1, '9': 1 },
+      dnsQueries: ['registry.npmjs.org.'],
+      notable: [
+        'eth0 Out 198.18.0.18.41001 > 104.16.0.1.443',
+        'eth0 In 198.18.0.17.53 > 198.18.0.18.41002 4660 1/0/0 A 104.16.0.1',
+        'eth0 Out fd00::2.41003 > fd00::1.80',
+      ],
+      notableDropped: 0,
+      captured: 7,
+      exitCode: 0,
+      exited: 'ESRCH',
+    });
+    expect(JSON.stringify(evidence)).not.toContain('payload-must-not-stay');
+    expect(await capture.stop()).toBe(evidence);
   });
-  expect(JSON.stringify(evidence)).not.toContain('payload-must-not-stay');
-  expect(await capture.stop()).toBe(evidence);
-});
 
-it.each([
-  ['sudo refuses unattended', 'refused', 'booting', /never listened: sudo: .*pid never recorded/],
-  ['the link type names no interface', 'sll1', 'booting', 'link type LINUX_SLL names no interface'],
-  ['DSH announced first', 'normal', 'dsh web: http://198.18.0.18:3080/', 'listened after the'],
-  ['the observer marked', 'normal', 'DSH_TEAM_MANAGED_POLICY_OBSERVATION{}', 'listened after'],
-  ['the stop failed too', 'dropped', 'dsh web: http', /listened after the.*; stop: .*incomplete/],
-])('refuses a capture when %s and leaves no tcpdump behind', async (_case, mode, logs, message) => {
-  const { started, tcpdump } = fakeCapture(mode, logs);
+  it.each([
+    ['sudo refuses unattended', 'refused', 'booting', /never listened: sudo: .*pid never recorded/],
+    [
+      'the link type names no interface',
+      'sll1',
+      'booting',
+      'link type LINUX_SLL names no interface',
+    ],
+    ['DSH announced first', 'normal', 'dsh web: http://198.18.0.18:3080/', 'listened after the'],
+    ['the observer marked', 'normal', 'DSH_TEAM_MANAGED_POLICY_OBSERVATION{}', 'listened after'],
+    ['the stop failed too', 'dropped', 'dsh web: http', /listened after the.*; stop: .*incomplete/],
+  ])(
+    'refuses a capture when %s and leaves no tcpdump behind',
+    async (_case, mode, logs, message) => {
+      const { started, tcpdump } = fakeCapture(mode, logs);
 
-  await expect(started).rejects.toThrow(message);
+      const refusal = await started.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
 
-  expect(() => process.kill(tcpdump(), 0)).toThrow(/ESRCH/);
-});
+      // An expired wait is never a refusal, though its message may still hold the matched text.
+      expect(String(refusal)).not.toContain('wait expired');
+      await expect(started).rejects.toThrow(message);
 
-it('accepts the singular `1 packet captured` of a capture holding only the canary', async () => {
-  const capture = await fakeCapture('one').started;
-
-  expect(await capture.stop()).toMatchObject({ captured: 1, other: { '9': 1, '443': 0 } });
-});
-
-it.each([
-  ['dropped', 'incomplete capture'],
-  ['extra', 'incomplete capture'],
-])('fails the stop when tcpdump reports %s packets', async (mode, message) => {
-  const capture = await fakeCapture(mode).started;
-
-  await expect(capture.stop()).rejects.toThrow(message);
-});
-
-it.each([
-  ['garbled', 'unparseable packet line "10:00:00 garbled"'],
-  [
-    'unterminated',
-    'unterminated packet line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443"',
-  ],
-  ['blanks', 'line "" after the interrupt newline'],
-  [
-    'after',
-    'line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443" after the interrupt newline',
-  ],
-  [
-    'middle',
-    'line "10:00:00.000004 eth0  In  IP 198.18.0.17.53 > 198.18.0.18.41002" after the interrupt newline',
-  ],
-])('fails the stop on a %s line, naming its header only', async (mode, message) => {
-  const capture = await fakeCapture(mode).started;
-
-  const error = await capture.stop().then(
-    () => undefined,
-    (stopError: unknown) => stopError,
+      expect(() => process.kill(tcpdump(), 0)).toThrow(/ESRCH/);
+    },
   );
 
-  expect(error).toEqual(new Error(`Invalid egress capture: ${message}`));
-  expect(String(error)).not.toContain('must-not-stay');
-});
+  // A wait this short expires far below the ~10.5s derived and 15s live bounds.
+  const SHORT_WAIT_MS = 1_000;
+  const waited = (message: string, phase: string) =>
+    Number(new RegExp(`; ${phase} wait expired at (\\d+)ms`).exec(message)?.[1]);
 
-it.each<readonly [string, string, string, number]>([
-  ['a stopped container', '0 false\n', 'container not running', 90],
-  ['a failed inspect', 'fail', 'docker inspect failed', 90],
-  ...[0, NaN, Infinity, -1, 1.5].map((b) => [`${String(b)}s`, '4242 true\n', 'bound', b] as const),
-])('starts no capture given %s', async (_case, state, message, bound) => {
-  const { started, spawned } = fakeCapture('normal', 'booting', state, bound);
+  it('names the listen wait, its elapsed time and sudo alive when tcpdump never listens', async () => {
+    const { started } = fakeCapture('silent', 'booting', '4242 true\n', 90, {
+      listenMs: SHORT_WAIT_MS,
+    });
 
-  await expect(started).rejects.toThrow(message);
+    const message = String(
+      await started.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+    );
 
-  expect(spawned).toEqual([]);
+    expect(message).toMatch(
+      /never listened: [^;]*; listen wait expired at \d+ms: sudo pid=\d+ alive exitCode=null signalCode=null; stop: /,
+    );
+    expect(message).not.toContain('listened after');
+    expect(waited(message, 'listen')).toBeLessThan(5_000);
+  });
+
+  it('names the close wait, its elapsed time and both processes alive when tcpdump ignores the stop', async () => {
+    const { started, tcpdump, sudo } = fakeCapture('stuck', 'booting', '4242 true\n', 90, {
+      closeMs: SHORT_WAIT_MS,
+    });
+    const capture = await started;
+    try {
+      const message = String(
+        await capture.stop().then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+
+      const [tcpdumpPid, sudoPid] = [String(tcpdump()), String(sudo())];
+      expect(message).toMatch(
+        new RegExp(
+          `: capture did not close; close wait expired at \\d+ms: tcpdump pid=${tcpdumpPid} alive; sudo pid=${sudoPid} alive exitCode=null signalCode=null$`,
+        ),
+      );
+      expect(waited(message, 'close')).toBeLessThan(5_000);
+    } finally {
+      // Neither fake exits on its own for 20s: the fake sudo leads their process group.
+      process.kill(-sudo(), 'SIGKILL');
+      await confirmExited(tcpdump(), {
+        kill: (pid, signal) => void process.kill(pid, signal),
+        now: Date.now,
+      });
+    }
+  });
+
+  it('accepts the singular `1 packet captured` of a capture holding only the canary', async () => {
+    const capture = await fakeCapture('one').started;
+
+    expect(await capture.stop()).toMatchObject({ captured: 1, other: { '9': 1, '443': 0 } });
+  });
+
+  it.each([
+    ['dropped', 'incomplete capture'],
+    ['extra', 'incomplete capture'],
+  ])('fails the stop when tcpdump reports %s packets', async (mode, message) => {
+    const capture = await fakeCapture(mode).started;
+
+    await expect(capture.stop()).rejects.toThrow(message);
+  });
+
+  it.each([
+    ['garbled', 'unparseable packet line "10:00:00 garbled"'],
+    [
+      'unterminated',
+      'unterminated packet line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443"',
+    ],
+    ['blanks', 'line "" after the interrupt newline'],
+    [
+      'after',
+      'line "10:00:00.000008 eth0  Out IP 198.18.0.18.41006 > 104.16.0.1.443" after the interrupt newline',
+    ],
+    [
+      'middle',
+      'line "10:00:00.000004 eth0  In  IP 198.18.0.17.53 > 198.18.0.18.41002" after the interrupt newline',
+    ],
+  ])('fails the stop on a %s line, naming its header only', async (mode, message) => {
+    const capture = await fakeCapture(mode).started;
+
+    const error = await capture.stop().then(
+      () => undefined,
+      (stopError: unknown) => stopError,
+    );
+
+    expect(error).toEqual(new Error(`Invalid egress capture: ${message}`));
+    expect(String(error)).not.toContain('must-not-stay');
+  });
+
+  it.each<readonly [string, string, string, number]>([
+    ['a stopped container', '0 false\n', 'container not running', 90],
+    ['a failed inspect', 'fail', 'docker inspect failed', 90],
+    ...[0, NaN, Infinity, -1, 1.5].map(
+      (b) => [`${String(b)}s`, '4242 true\n', 'bound', b] as const,
+    ),
+  ])('starts no capture given %s', async (_case, state, message, bound) => {
+    const { started, spawned } = fakeCapture('normal', 'booting', state, bound);
+
+    await expect(started).rejects.toThrow(message);
+
+    expect(spawned).toEqual([]);
+  });
 });
 
 const ANSWER =
@@ -296,4 +406,14 @@ it('confirms an exit only on ESRCH: EPERM and a live answer are observed again u
   await expect(confirmExited(7, signals(['alive', 'EPERM', 'ESRCH']))).resolves.toBeUndefined();
   await expect(confirmExited(7, signals([]))).rejects.toThrow('tcpdump exit unconfirmed');
   await expect(confirmExited(7, signals(['EINVAL']))).rejects.toThrow('EINVAL');
+});
+
+it.each<readonly [string, number | undefined, string[], string]>([
+  ['an unrecorded pid, never probed', undefined, [], 'unrecorded'],
+  ['a live answer', 7, ['alive'], 'alive'],
+  ['EPERM, a live root process', 7, ['EPERM'], 'alive'],
+  ['ESRCH', 7, ['ESRCH'], 'gone'],
+  ['any other code', 7, ['EINVAL'], 'unobservable EINVAL'],
+])('reports %s the way confirmExited reads it', (_case, pid, codes, expected) => {
+  expect(liveness(pid, signals(codes))).toBe(expected);
 });

@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startChrome } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
+import { caseBudget } from './trusted-docker-fixture.ts';
 
 const SECRET = 'sk-chrome-discovery-secret';
 
@@ -17,6 +18,8 @@ const receiptWriteFault: {
   capturedPid: number | undefined;
   capturedPort: number | undefined;
   capturedReceipt: string | undefined;
+  deadline: number | undefined;
+  ackTimeout: string | undefined;
 } = {
   path: undefined,
   ackPidFile: undefined,
@@ -24,6 +27,8 @@ const receiptWriteFault: {
   capturedPid: undefined,
   capturedPort: undefined,
   capturedReceipt: undefined,
+  deadline: undefined,
+  ackTimeout: undefined,
 };
 
 async function portListening(port: number): Promise<boolean> {
@@ -40,15 +45,28 @@ async function portListening(port: number): Promise<boolean> {
   return promise;
 }
 
-// Equals the vitest default 5s timeout of the receipt-fault case that awaits it, so a load-slowed
-// acknowledgement can let vitest kill the case first; tracked as a #630 follow-up.
+// The receipt-fault case's setup and acknowledgement wait end RECEIPT_RESERVE_MS before its budget,
+// leaving stopChild's SIGKILL path (8s, scripts/probe-browser-native.mjs) plus 2s for assertGone and
+// rescueChrome; stopChild's own 11s reject is a separate failure that names itself.
+const RECEIPT_CASE_MS = 20_000;
+const RECEIPT_RESERVE_MS = 10_000;
+// The child's acknowledgement wait, which caseBudget cuts to that case deadline.
 const ACK_WAIT_MS = 5_000;
+const ACK_PHASE = 'child acknowledgement';
 
 async function failAcknowledgedReceipt(spawnedPid: number): Promise<never> {
-  const deadline = Date.now() + ACK_WAIT_MS;
+  const since = Date.now();
+  const budget = caseBudget(receiptWriteFault.deadline);
   const { ackPidFile, ackPortFile } = receiptWriteFault;
   if (ackPidFile === undefined || ackPortFile === undefined)
     throw new Error('pid write fault missing child acknowledgement paths');
+  let [deadline, cut] = [since, ''];
+  try {
+    deadline += budget.limit(ACK_PHASE, ACK_WAIT_MS);
+  } catch (error) {
+    // The case deadline already passed: no wait, attributed below like an expired one.
+    cut = `${String(error)}; `;
+  }
   while (Date.now() < deadline) {
     try {
       const childPid = Number(readFileSync(ackPidFile, 'utf8').trim());
@@ -62,6 +80,8 @@ async function failAcknowledgedReceipt(spawnedPid: number): Promise<never> {
     }
     await delay(10);
   }
+  // Recorded before the launcher's stopChild, since launchFailure drops this rejection's message.
+  receiptWriteFault.ackTimeout = cut + budget.stalled(ACK_PHASE, since, spawnedPid).message;
   throw new Error('child pid/listener did not acknowledge before pid write');
 }
 
@@ -127,10 +147,15 @@ afterEach(() => {
   receiptWriteFault.capturedPid = undefined;
   receiptWriteFault.capturedPort = undefined;
   receiptWriteFault.capturedReceipt = undefined;
+  receiptWriteFault.deadline = undefined;
+  receiptWriteFault.ackTimeout = undefined;
 });
 
-it('stops the spawned child when lifecycle receipt writing fails after start', async () => {
-  const { bin, work } = fakeChrome(`
+it(
+  'stops the spawned child when lifecycle receipt writing fails after start',
+  async () => {
+    receiptWriteFault.deadline = Date.now() + RECEIPT_CASE_MS - RECEIPT_RESERVE_MS;
+    const { bin, work } = fakeChrome(`
 const fs = require('node:fs');
 const http = require('node:http');
 const portFlag = process.argv.find((arg) => arg.startsWith('--remote-debugging-port='));
@@ -140,48 +165,104 @@ fs.writeFileSync(process.env.DSH_TEAM_PORT_FILE, String(port));
 http.createServer().listen(port, '127.0.0.1');
 process.stderr.write(${JSON.stringify(SECRET)});
 `);
-  const profile = join(work, 'profile');
-  mkdirSync(profile);
-  const receiptFile = join(work, 'chrome.receipt.json');
-  const observedPidFile = join(work, 'observed.pid');
-  const observedPortFile = join(work, 'observed.port');
-  process.env.DSH_TEAM_PID_FILE = observedPidFile;
-  process.env.DSH_TEAM_PORT_FILE = observedPortFile;
-  receiptWriteFault.path = receiptFile;
-  receiptWriteFault.ackPidFile = observedPidFile;
-  receiptWriteFault.ackPortFile = observedPortFile;
-  try {
-    await startChrome({
-      runtime: { kind: 'native', bin },
-      origin: 'http://127.0.0.1:12345',
-      profile,
-      receiptFile,
-    });
-    throw new Error('must reject lifecycle receipt write failure');
-  } catch (error) {
-    expect(String(error)).toMatch(/^Error: chrome-start /);
-    expect(String(error)).not.toContain(SECRET);
-    expect(error).not.toHaveProperty('cause');
-    const pid = receiptWriteFault.capturedPid;
-    const port = receiptWriteFault.capturedPort;
-    if (pid === undefined) {
-      throw new Error('expected captured child pid before pid write failure', { cause: error });
+    const profile = join(work, 'profile');
+    mkdirSync(profile);
+    const receiptFile = join(work, 'chrome.receipt.json');
+    const observedPidFile = join(work, 'observed.pid');
+    const observedPortFile = join(work, 'observed.port');
+    process.env.DSH_TEAM_PID_FILE = observedPidFile;
+    process.env.DSH_TEAM_PORT_FILE = observedPortFile;
+    receiptWriteFault.path = receiptFile;
+    receiptWriteFault.ackPidFile = observedPidFile;
+    receiptWriteFault.ackPortFile = observedPortFile;
+    try {
+      await startChrome({
+        runtime: { kind: 'native', bin },
+        origin: 'http://127.0.0.1:12345',
+        profile,
+        receiptFile,
+      });
+      throw new Error('must reject lifecycle receipt write failure');
+    } catch (error) {
+      expect(String(error)).toMatch(/^Error: chrome-start /);
+      expect(String(error)).not.toContain(SECRET);
+      expect(error).not.toHaveProperty('cause');
+      const pid = receiptWriteFault.capturedPid;
+      const port = receiptWriteFault.capturedPort;
+      if (pid === undefined) {
+        throw new Error('expected captured child pid before pid write failure', { cause: error });
+      }
+      if (port === undefined) {
+        const ack = receiptWriteFault.ackTimeout;
+        const timeout = ack === undefined ? '' : `: ${ack}`;
+        throw new Error(`expected captured listener port before pid write failure${timeout}`, {
+          cause: error,
+        });
+      }
+      await assertGone(pid, port);
+    } finally {
+      if (receiptWriteFault.capturedReceipt) {
+        const capturedFile = join(work, 'failed-receipt.json');
+        writeFileSync(capturedFile, receiptWriteFault.capturedReceipt, { mode: 0o600 });
+        await rescueChrome(capturedFile);
+      }
+      delete process.env.DSH_TEAM_PID_FILE;
+      delete process.env.DSH_TEAM_PORT_FILE;
+      rmSync(work, { recursive: true, force: true });
     }
-    if (port === undefined) {
-      throw new Error('expected captured listener port before pid write failure', { cause: error });
+  },
+  RECEIPT_CASE_MS,
+);
+
+// A case deadline this near cuts the 5s acknowledgement wait.
+const ACK_CUT_MS = 1_500;
+it.each([
+  ['a near case deadline cuts it', ACK_CUT_MS, /^child acknowledgement after (\d+)ms: pid=(\d+)/],
+  [
+    'a passed case deadline leaves none of it',
+    0,
+    /^Error: child acknowledgement: case deadline passed before it started; child acknowledgement after (\d+)ms: pid=(\d+)/,
+  ],
+])(
+  'records the acknowledgement wait, its elapsed time and the live child before stopping it when %s',
+  async (_case, offset, attribution) => {
+    receiptWriteFault.deadline = Date.now() + offset;
+    const { bin, work } = fakeChrome('setInterval(() => {}, 1000);');
+    const profile = join(work, 'profile');
+    mkdirSync(profile);
+    const receiptFile = join(work, 'chrome.receipt.json');
+    receiptWriteFault.path = receiptFile;
+    receiptWriteFault.ackPidFile = join(work, 'observed.pid');
+    receiptWriteFault.ackPortFile = join(work, 'observed.port');
+    try {
+      const error = await startChrome({
+        runtime: { kind: 'native', bin },
+        origin: 'http://127.0.0.1:12345',
+        profile,
+        receiptFile,
+      }).then(
+        () => undefined,
+        (launchError: unknown) => launchError,
+      );
+
+      expect(String(error)).toMatch(/^Error: chrome-start /);
+      const ack = receiptWriteFault.ackTimeout ?? '';
+      expect(ack).toMatch(new RegExp(`${attribution.source} present=true$`));
+      const [, elapsed, pid] = attribution.exec(ack) ?? [];
+      expect(Number(pid)).toBe(receiptWriteFault.capturedPid);
+      expect(Number(elapsed)).toBeLessThan(ACK_WAIT_MS);
+      expect(() => process.kill(Number(pid), 0)).toThrow();
+    } finally {
+      if (receiptWriteFault.capturedReceipt) {
+        const capturedFile = join(work, 'failed-receipt.json');
+        writeFileSync(capturedFile, receiptWriteFault.capturedReceipt, { mode: 0o600 });
+        await rescueChrome(capturedFile);
+      }
+      rmSync(work, { recursive: true, force: true });
     }
-    await assertGone(pid, port);
-  } finally {
-    if (receiptWriteFault.capturedReceipt) {
-      const capturedFile = join(work, 'failed-receipt.json');
-      writeFileSync(capturedFile, receiptWriteFault.capturedReceipt, { mode: 0o600 });
-      await rescueChrome(capturedFile);
-    }
-    delete process.env.DSH_TEAM_PID_FILE;
-    delete process.env.DSH_TEAM_PORT_FILE;
-    rmSync(work, { recursive: true, force: true });
-  }
-});
+  },
+  RECEIPT_CASE_MS,
+);
 
 it('stops the spawned child when debugger discovery returns invalid JSON', async () => {
   const { bin, work } = fakeChrome(`

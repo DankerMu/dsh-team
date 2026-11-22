@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { request } from 'node:http';
+import { createServer, request } from 'node:http';
 import type { ClientRequest, IncomingMessage } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { expect, it } from 'vitest';
@@ -18,7 +19,7 @@ import {
   startupBarrier,
   startupUnixOwnerFixture,
 } from './container-start-fixture.ts';
-import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
+import { instanceConfig, readinessPolls, registerInstanceUser } from './instance-fixture.ts';
 import { seedReconciliation } from './container-reconcile-fixture.ts';
 import { observeHttp, withUpstream } from './gateway-http-fixture.ts';
 
@@ -354,13 +355,14 @@ it('projects a durable create quarantine through HTTP and refuses false cleanup 
   }
 });
 
-// Equals the vitest default 5s timeout of the case below, so a load-slowed readiness projection can
-// let vitest kill the case first; tracked as a #630 follow-up.
-const READINESS_FAILURE_WAIT_MS = 5000;
-
+// The readiness-failure cases' deadline is taken before fixture(): setup, start and the readiness
+// wait end READINESS_RESERVE_MS before READINESS_CASE_MS, leaving the gateway fetch and f.close().
+const READINESS_CASE_MS = 15_000;
+const READINESS_RESERVE_MS = 5_000;
 it.each([false, true])(
   'projects completed readiness failure truthfully with error persistence blocked=%s',
   async (blocked) => {
+    const deadline = Date.now() + READINESS_CASE_MS - READINESS_RESERVE_MS;
     const f = await fixture();
     try {
       const user = await registerInstanceUser(f.base, f.config.publicUrl, 'readiness@example.test');
@@ -384,13 +386,10 @@ it.each([false, true])(
         body: '{}',
       });
       expect(await started.json()).toEqual({ status: 'starting', reason: 'starting' });
-      const deadline = Date.now() + READINESS_FAILURE_WAIT_MS;
+      const poll = readinessPolls(f, user.cookie, deadline);
       for (;;) {
-        const status = await fetch(`${f.base}/_platform/api/instance`, {
-          headers: { cookie: user.cookie },
-        });
-        const current: unknown = await status.json();
-        if (status.status === 500) {
+        const { status, current } = await poll();
+        if (status === 500) {
           expect(blocked).toBe(true);
           expect(current).toEqual({
             statusCode: 500,
@@ -399,7 +398,7 @@ it.each([false, true])(
           });
           break;
         }
-        expect(status.status).toBe(200);
+        expect(status).toBe(200);
         if (
           typeof current === 'object' &&
           current !== null &&
@@ -411,8 +410,6 @@ it.each([false, true])(
           break;
         }
         expect(current).toEqual({ status: 'starting', reason: 'starting' });
-        if (Date.now() >= deadline)
-          throw new Error('Readiness failure was not reflected by the public API');
       }
       const gateway = await fetch(`${f.base}/`, {
         headers: { cookie: user.cookie, accept: 'application/json' },
@@ -427,6 +424,45 @@ it.each([false, true])(
       await f.close();
     }
   },
+  READINESS_CASE_MS,
+);
+
+// A case deadline this near cuts the 5s readiness poll.
+const POLL_CUT_MS = 500;
+it.each([
+  ['a near case deadline aborts the poll', POLL_CUT_MS, 'poll aborted', 1],
+  ['a passed case deadline leaves no poll', 0, 'case deadline passed', 0],
+])(
+  'names the readiness wait, elapsed time, polls and DB status when %s',
+  async (_case, offset, reason, polls) => {
+    const f = await fixture();
+    const unanswered = createServer(() => undefined);
+    try {
+      await new Promise<void>((resolve) => unanswered.listen(0, '127.0.0.1', resolve));
+      const { port } = unanswered.address() as AddressInfo;
+      const base = `http://127.0.0.1:${String(port)}`;
+      const poll = readinessPolls({ base, database: f.database }, '', Date.now() + offset);
+
+      const message = String(
+        await poll().then(
+          () => undefined,
+          (error: unknown) => error,
+        ),
+      );
+
+      const pattern = new RegExp(
+        `\\(${reason}\\) after (\\d+)ms: polls=${String(polls)} db=undefined$`,
+      );
+      expect(message).toMatch(pattern);
+      // Far below the wait's own 5s.
+      expect(Number(pattern.exec(message)?.[1])).toBeLessThan(2_500);
+    } finally {
+      unanswered.closeAllConnections();
+      unanswered.close();
+      await f.close();
+    }
+  },
+  READINESS_CASE_MS,
 );
 
 it.each(['missing', 'replaced'] as const)(
