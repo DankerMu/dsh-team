@@ -25,17 +25,17 @@ See design.md § Must preserve.
 
 ## 1. Implementation
 
-- [ ] 1.1 (1A) and (1B).
+- [x] 1.1 (1A) and (1B).
   - (1A): the three `:\n` success forms; `owner process tree:\n$`; the negative check limited to those three names.
   - (1B): a positive tree case on a live root with a known child, sharing one walk implementation with `retirementScene`.
-- [ ] 1.2 (2): the preload's `post-close-member` mode, scoped to `own`.
+- [x] 1.2 (2): the preload's `post-close-member` mode, scoped to `own`.
   - The command child, matched exactly as `pnpm test:docker` with a match count of 1, records `closedAt` through `once('close')`.
   - It counts negative-pid, signal-0 calls: `firstObservedAt`, `presentPolls` for calls that returned normally, and `preClosePolls`.
   - Each update is written synchronously and atomically to a receipt under `.run/`.
   - Assertions, in one helper in the new `-fixture.ts`: match count 1, `preClosePolls === 0`, `closedAt <= firstObservedAt`, `firstPresent === true`, `presentPolls >= 1` and `exited > firstObservedAt`.
   - A missing or partial receipt fails explicitly.
   - The second post-close case is unchanged.
-- [ ] 1.3 Mutants. Record each before/after text.
+- [x] 1.3 Mutants. Record each before/after text.
   - (a) `/bin/ps` replaced with a missing path: killOwner green before, red after.
   - (b) A walk returning `''`: the positive tree case is red.
   - (c) Old oracle green, new oracle red:
