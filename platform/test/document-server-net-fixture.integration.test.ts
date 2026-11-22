@@ -2,15 +2,20 @@ import { execFile } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import {
   commandReach,
+  deliveredHealthcheck,
   DOCUMENT_SERVER_NET,
   firewallReach,
+  healthyWithinStartPeriod,
+  holderIpv6Rules,
   holderProbeExit,
   holderRead,
+  holderRestartSequence,
 } from './document-server-net-fixture.ts';
 import type { AsyncDockerCommand } from './docker-command.ts';
 
@@ -215,3 +220,201 @@ it.each([[['CMD-SHELL', 'exit 1']], [['NONE']], [['CMD']], [['CMD', 'sh', 1]]])(
     expect(calls).toEqual([]);
   },
 );
+
+const repositoryRoot = fileURLToPath(new URL('../..', import.meta.url));
+
+it('reads each delivered service healthcheck argv and start period from deploy/compose.yml', async () => {
+  const holder = await deliveredHealthcheck(repositoryRoot, 'documentserver-net');
+  const server = await deliveredHealthcheck(repositoryRoot, 'documentserver');
+
+  expect(holder).toEqual({
+    test: ['CMD', 'test', '-f', '/run/dsh-team/firewall-ready'],
+    startPeriodMs: 30_000,
+  });
+  expect(server).toEqual({
+    test: ['CMD', 'sh', '-c', "grep -qsaP '^xargs\\x00tail\\x00-F\\x00' /proc/*/cmdline"],
+    startPeriodMs: 300_000,
+  });
+  await expect(deliveredHealthcheck(repositoryRoot, 'absent')).rejects.toThrow(
+    'Delivered absent healthcheck unreadable',
+  );
+});
+
+/** `container inspect` answering each state in turn, the last one repeated. */
+function inspecting(states: object[], calls: unknown[][]): AsyncDockerCommand {
+  return (args, timeout) => {
+    calls.push([args, timeout]);
+    const state = states[Math.min(calls.length, states.length) - 1];
+    return Promise.resolve({ status: 0, stdout: JSON.stringify([{ State: state }]), stderr: '' });
+  };
+}
+
+it('polls the named container until healthy', async () => {
+  const now = new Date().toISOString();
+  const calls: unknown[][] = [];
+  const states = ['starting', 'healthy'].map((Status) => ({ StartedAt: now, Health: { Status } }));
+
+  await healthyWithinStartPeriod(inspecting(states, calls), 'dsh-team-x', 30_000);
+
+  expect(calls).toEqual(Array<unknown>(2).fill([['container', 'inspect', 'dsh-team-x'], 15_000]));
+}, 10_000);
+
+it.each([
+  ['past its start period', new Date(Date.now() - 30_000).toISOString()],
+  ['with an unreadable StartedAt', 'never'],
+])('fails a container still starting %s, naming it and its status', async (_case, StartedAt) => {
+  const calls: unknown[][] = [];
+  const states = [{ StartedAt, Health: { Status: 'starting' } }];
+
+  await expect(
+    healthyWithinStartPeriod(inspecting(states, calls), 'dsh-team-x', 30_000),
+  ).rejects.toThrow('dsh-team-x not healthy within its start period: starting');
+  expect(calls).toHaveLength(1);
+});
+
+// The #654 measurement on giap-vps (task 0.1): the kernel prints conntrack states reordered.
+const IPV6_RULES = [
+  '-P INPUT DROP',
+  '-A INPUT -i lo -j ACCEPT',
+  '-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT',
+  '-A INPUT -p tcp -m tcp --dport 80 -j ACCEPT',
+  '-A INPUT -p ipv6-icmp -j ACCEPT',
+];
+const READBACK = ['exec', '--user', 'root', DOCUMENT_SERVER_NET, 'sh', '-c'];
+const IF_INET6 = 'test -e /proc/net/if_inet6 && ip6tables -S INPUT';
+const answering =
+  (stdout: string, status = 0, calls: unknown[][] = []): AsyncDockerCommand =>
+  (args, timeout) => {
+    calls.push([args, timeout]);
+    return Promise.resolve({ status, stdout, stderr: '' });
+  };
+
+it('reads the IPv6 INPUT rules back in the holder in one exec', async () => {
+  const calls: unknown[][] = [];
+
+  await holderIpv6Rules(answering(`${IPV6_RULES.join('\n')}\n`, 0, calls));
+
+  expect(calls).toEqual([[[...READBACK, IF_INET6], 30_000]]);
+});
+
+it.each([
+  ['a missing rule', IPV6_RULES.slice(0, 4)],
+  ['an extra rule', [...IPV6_RULES, '-A INPUT -p tcp -m tcp --dport 8000 -j ACCEPT']],
+  ['an ACCEPT policy', ['-P INPUT ACCEPT', ...IPV6_RULES.slice(1)]],
+])('fails on %s, naming the observed rules', async (_case, rules) => {
+  await expect(holderIpv6Rules(answering(`${rules.join('\n')}\n`))).rejects.toThrow(
+    `Holder IPv6 INPUT rules differ: observed=${JSON.stringify([...rules, ''])}`,
+  );
+});
+
+it('fails when the holder has no /proc/net/if_inet6', async () => {
+  await expect(holderIpv6Rules(answering('', 1))).rejects.toThrow('failed (1)');
+});
+
+const INSTANCES = ['dsh-team-u-a', 'dsh-team-u-b'];
+const NAMES = [...INSTANCES, 'dsh-team-platform', 'dsh-team-documentserver', DOCUMENT_SERVER_NET];
+const IDS = NAMES.map((name) => `id-${name}`);
+const REFUSED = { outcome: 'refused' };
+
+/**
+ * The deployment as Docker would answer it: a holder restart traps the Document Server, whose
+ * own restart rejoins it unless `rejoin` is false; `up -d` changes nothing unless told to.
+ */
+function restartLane({
+  traps = true,
+  rejoin = true,
+  upRestarts = false,
+  holderId = IDS[4],
+  serverMode = `container:${String(IDS[4])}`,
+} = {}) {
+  const calls: string[] = [];
+  const bounds = new Set<number>();
+  let trapped = false;
+  const started = new Map(NAMES.map((name) => [name, '2026-11-21T00:00:00.000000001Z']));
+  const container = (name: string, index: number) => ({
+    Id: name === DOCUMENT_SERVER_NET && trapped ? holderId : IDS[index],
+    State: { StartedAt: started.get(name), Health: { Status: 'healthy' } },
+    HostConfig: { NetworkMode: name === NAMES[3] ? serverMode : 'bridge' },
+    NetworkSettings: { Networks: { 'dsh-team-net-a': { IPAddress: '10.0.0.4', MacAddress: 'm' } } },
+  });
+  const inspect = (args: readonly string[]) => {
+    if (args.length === 5) {
+      calls.push('networks');
+      const address = { IPAddress: '10.0.0.4' };
+      return { 'dsh-team-net-a': address, 'dsh-team-net-b': address };
+    }
+    calls.push(`inspect ${String(args[2])}`);
+    return [container(String(args[2]), NAMES.indexOf(String(args[2])))];
+  };
+  const answer = (args: readonly string[]) => {
+    const [verb = '', , , name = ''] = args;
+    if (verb === 'container') return inspect(args);
+    calls.push(
+      verb === 'compose'
+        ? args.join(' ')
+        : `${verb} ${verb === 'exec' ? name : String(args.at(-1))}`,
+    );
+    if (verb === 'restart') trapped = args[1] === DOCUMENT_SERVER_NET ? traps : !rejoin;
+    if (verb === 'compose' && upRestarts) started.set(NAMES[2] ?? '', 'later');
+    if (args[4] === 'sh') return `${IPV6_RULES.join('\n')}\n`;
+    if (name === DOCUMENT_SERVER_NET) return trapped ? [REFUSED, REFUSED] : [OK, OK];
+    return [trapped ? REFUSED : OK, TIMEOUT];
+  };
+  const commandAsync: AsyncDockerCommand = (args, timeout) => {
+    bounds.add(timeout);
+    const stdout = answer(args);
+    return Promise.resolve({
+      status: 0,
+      stdout: typeof stdout === 'string' ? stdout : JSON.stringify(stdout),
+      stderr: '',
+    });
+  };
+  const holder = {
+    Id: IDS[4],
+    NetworkSettings: { Networks: { 'dsh-team-net-a': { MacAddress: 'b' } } },
+  };
+  const sequence = () =>
+    holderRestartSequence({ commandAsync, repositoryRoot }, ['compose'], holder, INSTANCES, IDS);
+  return { calls, bounds, sequence };
+}
+
+it('restarts the holder, runs up -d and restarts the Document Server, probing each moment', async () => {
+  const lane = restartLane();
+
+  const macs = await lane.sequence();
+
+  expect(macs).toEqual({ before: { 'dsh-team-net-a': 'b' }, after: { 'dsh-team-net-a': 'm' } });
+  const reach = INSTANCES.flatMap((name) => [
+    'networks',
+    `exec ${DOCUMENT_SERVER_NET}`,
+    `exec ${name}`,
+  ]);
+  const inspects = NAMES.map((name) => `inspect ${name}`);
+  const readback = `exec ${DOCUMENT_SERVER_NET}`;
+  expect(lane.calls).toEqual([
+    readback,
+    `restart ${DOCUMENT_SERVER_NET}`,
+    `inspect ${DOCUMENT_SERVER_NET}`,
+    ...inspects,
+    readback,
+    ...reach,
+    'compose up -d --no-build --pull never',
+    ...inspects,
+    ...reach,
+    'restart dsh-team-documentserver',
+    'inspect dsh-team-documentserver',
+    ...reach,
+  ]);
+  // Health polls at 15s, every other call at the 30s the case budget counts.
+  expect([...lane.bounds].sort()).toEqual([15_000, 30_000]);
+});
+
+it.each([
+  ['a holder restart that leaves the stand-in reachable', { traps: false }, 'trapped differs'],
+  ['a Document Server restart that does not rejoin', { rejoin: false }, 'joined differs'],
+  ['an up -d that restarts a container', { upRestarts: true }, 'up -d changed'],
+  ['a holder restart that changes its ID', { holderId: 'id-other' }, 'IDs differ'],
+  ['a Document Server outside the holder', { serverMode: 'bridge' }, 'left the holder: bridge'],
+])('fails on %s', async (_case, options, message) => {
+  await expect(restartLane(options).sequence()).rejects.toThrow(message);
+});

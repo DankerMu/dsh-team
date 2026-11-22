@@ -31,7 +31,11 @@ import { verifyTlsCarrier, withTlsDeployment } from './deployment-tls-fixture.ts
 import { activityUpgradeRequest, connectActivityPeer } from './gateway-activity-fixture.ts';
 import { observeHttp } from './gateway-http-fixture.ts';
 import { instanceGatewayFixture, orderedMounts } from './instance-gateway-docker-fixture.ts';
-import { DOCUMENT_SERVER_NET, firewallReach } from './document-server-net-fixture.ts';
+import {
+  DOCUMENT_SERVER_NET,
+  firewallReach,
+  holderRestartSequence,
+} from './document-server-net-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 it('refuses a pre-existing fixed platform identity without adopting or removing it', async () => {
@@ -541,6 +545,12 @@ async function expectSocketIsolation(
 
 const ANSWERED = { outcome: 'answered', status: 200 };
 
+// 2_280_000: the docker project's 900_000 plus 1_380_000 for the holder restart sequence (#654),
+// a literal so the case keeps its layout. Every call at its 30s bound: three reach rounds x two
+// instances x (1 inspect + 2 execs) = 540s; five identity inspects before and after `up -d` =
+// 300s; two restarts and `up -d` = 90s; the holder health wait (30s start period plus its last
+// 30s inspect) = 60s; the Document Server health wait (300s plus its last 30s inspect) = 330s;
+// two IPv6 readback execs = 60s.
 it('publishes only the platform port and mounts the Docker socket only there with two native instances', async () => {
   await withDeployment(async (lifecycle, start) => {
     const { deployment, employee } = await configureDeployment(lifecycle, start);
@@ -641,11 +651,13 @@ it('publishes only the platform port and mounts the Docker socket only there wit
           inside: [ANSWERED, ANSWERED],
           outside: [ANSWERED, { outcome: 'timeout' }],
         });
+      const instances = [employee, second].map((user) => `dsh-team-u-${user.id}`);
+      await holderRestartSequence(lifecycle, deployment.compose, holder, instances, expectedIds);
     } finally {
       gateway.close();
     }
   });
-});
+}, 2_280_000);
 
 it('serves native HTTPS and WSS behind an exact trusted TLS proxy with Secure cookies and client audit identity', async () => {
   await withTlsDeployment(async (lifecycle, start, setup, prepared) => {
