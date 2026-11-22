@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
-import { parse } from 'yaml';
 import { inspectAsync, record } from './container-start-docker-fixture.ts';
 import { waitForDeployment } from './deployment-account-fixture.ts';
 import { writeComposeConfiguration } from './deployment-compose-fixture.ts';
 import { withDeployment } from './deployment-fixture.ts';
 import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
-import { DOCUMENT_SERVER_NET, holderProbeExit } from './document-server-net-fixture.ts';
+import {
+  deliveredHealthcheck,
+  DOCUMENT_SERVER_NET,
+  healthyWithinStartPeriod,
+  holderProbeExit,
+} from './document-server-net-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -42,34 +45,6 @@ function environmentFacts(container: Record<string, unknown>) {
     jwtSha256: digest('JWT_SECRET'),
     platformJwtSha256: digest(JWT),
   };
-}
-
-/** The delivered `documentserver.healthcheck`: its argv and its start period in milliseconds. */
-async function deliveredHealthcheck(repositoryRoot: string) {
-  const delivered = parse(await readFile(join(repositoryRoot, 'deploy/compose.yml'), 'utf8')) as {
-    services: Record<string, { healthcheck?: { test?: unknown; start_period?: unknown } }>;
-  };
-  const { test, start_period: period } = delivered.services.documentserver?.healthcheck ?? {};
-  const seconds = typeof period === 'string' ? /^(\d+)s$/.exec(period)?.[1] : undefined;
-  if (!Array.isArray(test) || seconds === undefined)
-    throw new Error('Delivered Document Server healthcheck unreadable');
-  const argv: unknown[] = test;
-  return { test: argv, startPeriodMs: Number(seconds) * 1_000 };
-}
-
-/** Polls `State.Health` until `healthy`, failing once the start period since StartedAt is over. */
-async function healthyWithinStartPeriod(lifecycle: UserImageLifecycle, startPeriodMs: number) {
-  for (;;) {
-    const state = record((await inspectAsync(lifecycle, DOCUMENT_SERVER)).State);
-    const status = record(state.Health).Status;
-    if (status === 'healthy') return;
-    const startedAt = Date.parse(String(state.StartedAt));
-    if (Number.isNaN(startedAt) || Date.now() - startedAt >= startPeriodMs)
-      throw new Error(
-        `Document Server stand-in not healthy within its start period: ${String(status)}`,
-      );
-    await delay(1_000);
-  }
 }
 
 it('starts the bundled Document Server stand-in unpublished, with the fixture JWT reaching it and the platform', async () => {
@@ -105,9 +80,13 @@ it('starts the bundled Document Server stand-in unpublished, with the fixture JW
     });
     // #648: the stand-in runs the startup script's final step and so becomes healthy through the
     // delivered definition, inherited rather than overridden.
-    const healthcheck = await deliveredHealthcheck(lifecycle.repositoryRoot);
+    const healthcheck = await deliveredHealthcheck(lifecycle.repositoryRoot, 'documentserver');
     expect(record(record(server.Config).Healthcheck).Test).toEqual(healthcheck.test);
-    await healthyWithinStartPeriod(lifecycle, healthcheck.startPeriodMs);
+    await healthyWithinStartPeriod(
+      lifecycle.commandAsync,
+      DOCUMENT_SERVER,
+      healthcheck.startPeriodMs,
+    );
     // Negative control: the same command in the running holder, the same image without the final
     // step: grep's own "no match" (1, or 2 when a process vanished mid-scan).
     expect(record((await inspectAsync(lifecycle, DOCUMENT_SERVER_NET)).State).Running).toBe(true);

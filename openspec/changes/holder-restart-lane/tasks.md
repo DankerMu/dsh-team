@@ -42,7 +42,7 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Add a holder-restart sequence helper to `document-server-net-fixture.ts`, called from `deployment.docker.test.ts` after the initial reach. Steps:
+- [x] 1.1 Add a holder-restart sequence helper to `document-server-net-fixture.ts`, called from `deployment.docker.test.ts` after the initial reach. Steps:
   - restart the holder and wait for it to be healthy (bounded);
   - assert the same ID and the DS `NetworkMode`;
   - assert `firewallReach` `{inside: [refused, refused], outside: [refused, timeout]}` for both instances;
@@ -50,9 +50,9 @@
   - run `[...deployment.compose, 'up', '-d', '--no-build', '--pull', 'never']`, then assert that `Id` and `State.StartedAt` of `expectedIds` are unchanged and the reach is unchanged;
   - restart the DS and wait for it to be healthy (bounded);
   - assert `firewallReach` is back to the original outcomes for both instances.
-- [ ] 1.2 Move `deliveredHealthcheck` (parameterised by compose service) and `healthyWithinStartPeriod` (parameterised by container name) into `document-server-net-fixture.ts`. Rewrite them Vitest-free against `AsyncDockerCommand`/`DockerOutput` and `docker-cleanup.ts`, throwing instead of using `expect`, and update the caller at `deployment-document-server.docker.test.ts:108-110`. The holder and Document Server waits are two call sites of the same function, each bounded by its delivered `start_period`.
-- [ ] 1.3 Not started if 0.1(a) shows no `if_inet6` on giap-vps: AC3 cannot be met as written, so the owner decides. Otherwise add the IPv6 readback, one exec each time (`sh -c 'test -e /proc/net/if_inet6 && ip6tables -S INPUT'`), run before and after the holder restart: `if_inet6` exists in the holder, and `ip6tables -S INPUT` equals the named exact list from 0.1.
-- [ ] 1.4 Add the case's own timeout `900_000 + 1_380_000`, with the itemised comment from design.md § Budget. Sibling unit or integration tests cover any new pure helper (outcome parsing, readback comparison).
+- [x] 1.2 Move `deliveredHealthcheck` (parameterised by compose service) and `healthyWithinStartPeriod` (parameterised by container name) into `document-server-net-fixture.ts`. Rewrite them Vitest-free against `AsyncDockerCommand`/`DockerOutput` and `docker-cleanup.ts`, throwing instead of using `expect`, and update the caller at `deployment-document-server.docker.test.ts:108-110`. The holder and Document Server waits are two call sites of the same function, each bounded by its delivered `start_period`.
+- [x] 1.3 Not started if 0.1(a) shows no `if_inet6` on giap-vps: AC3 cannot be met as written, so the owner decides. Otherwise add the IPv6 readback, one exec each time (`sh -c 'test -e /proc/net/if_inet6 && ip6tables -S INPUT'`), run before and after the holder restart: `if_inet6` exists in the holder, and `ip6tables -S INPUT` equals the named exact list from 0.1.
+- [x] 1.4 Add the case's own timeout `900_000 + 1_380_000`, with the itemised comment from design.md § Budget. Sibling unit or integration tests cover any new pure helper (outcome parsing, readback comparison).
 
 ## 2. Verification and docs
 
