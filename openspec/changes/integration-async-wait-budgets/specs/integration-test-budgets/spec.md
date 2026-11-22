@@ -12,12 +12,12 @@ These cases SHALL each declare an explicit case budget:
 
 Every inner wait in them SHALL have a deadline strictly below the case timeout. The deadline is either derived from the case budget, or is a named constant whose relation to the budget is stated.
 
-When an inner wait times out, the failure SHALL name the phase and the elapsed milliseconds, and SHALL add per site:
+When an inner wait times out, the failure SHALL name the phase and, except for the holder script, the elapsed milliseconds, and SHALL add per site:
 
 - egress-capture: whether the awaited capture process is alive;
 - chrome-start: whether the spawned child is alive;
 - instance: the poll count and the observed instance status;
-- holder: which phase timed out, each phase's elapsed time being bounded by that phase's own fixed deadline;
+- holder: which phase timed out (`ready` or `exit`); each phase is bounded by its own fixed deadline, so the phase name determines the bound and no elapsed time is reported;
 - main-process startup: whether the source process is still present.
 
 A wait made of two phases SHALL give each phase its own deadline.
