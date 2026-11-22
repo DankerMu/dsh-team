@@ -72,10 +72,26 @@ afterEach(() => {
   native.limit = undefined;
   native.limitFired = false;
   native.emfile = false;
+  vi.restoreAllMocks();
 });
 
-const activeTimeouts = () =>
-  process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+// The probe's own 2000 ms bound, tracked by handle: the runner keeps its own timers, so a
+// process-wide Timeout count would also see vitest's throttle and fail under load.
+const timeBounds = () => {
+  const set = vi.spyOn(globalThis, 'setTimeout');
+  const clear = vi.spyOn(globalThis, 'clearTimeout');
+  const created = () =>
+    set.mock.calls.flatMap((call, index) =>
+      call[1] === 2000 ? [set.mock.results[index]?.value as unknown] : [],
+    );
+  return {
+    created,
+    uncleared: () => {
+      const cleared = new Set<unknown>(clear.mock.calls.map(([handle]) => handle));
+      return created().filter((handle) => !cleared.has(handle));
+    },
+  };
+};
 const nextTurn = () => new Promise((done) => setImmediate(done));
 
 it('retains generation identity while a live Darwin process becomes a zombie', async () => {
@@ -131,7 +147,7 @@ it('reports a spawn without stdio (EMFILE) as unavailable without crashing or le
   };
   process.on('uncaughtException', onUncaught);
   try {
-    const timeouts = activeTimeouts();
+    const bounds = timeBounds();
 
     const error = await processBirth(42).catch((caught: unknown) => caught);
     await nextTurn();
@@ -140,7 +156,7 @@ it('reports a spawn without stdio (EMFILE) as unavailable without crashing or le
     expect(error).toHaveProperty('message', UNAVAILABLE);
     expect(error).not.toHaveProperty('code');
     expect(uncaught).toBeUndefined();
-    expect(activeTimeouts()).toBe(timeouts);
+    expect(bounds.uncleared()).toEqual([]);
     await expect(liveProcessBirth(42)).rejects.toThrow(UNAVAILABLE);
     await nextTurn();
     expect(uncaught).toBeUndefined();
@@ -150,12 +166,12 @@ it('reports a spawn without stdio (EMFILE) as unavailable without crashing or le
 });
 
 it('clears its time bound once an observation settles', async () => {
-  const timeouts = activeTimeouts();
+  const bounds = timeBounds();
 
   expect(await processBirth(42)).toBe('darwin:42:1700000000:123456');
-  clearTimeout(native.limit);
 
-  expect(activeTimeouts()).toBe(timeouts);
+  expect(bounds.created()).toHaveLength(1);
+  expect(bounds.uncleared()).toEqual([]);
 });
 
 it('keeps the event loop running while a hung native query is bounded and killed', async () => {
