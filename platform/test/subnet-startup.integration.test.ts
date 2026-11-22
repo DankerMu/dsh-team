@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { observeStartup } from './main-startup-fixture.ts';
+import { observeStartup, STARTUP_CASE_MS } from './main-startup-fixture.ts';
 
-describe('subnet pool validation in the actual source process', () => {
+const STARTUP_CASE = { timeout: STARTUP_CASE_MS };
+
+describe('subnet pool validation in the actual source process', STARTUP_CASE, () => {
   it('rejects a pool one subnet short of the persisted running limit before serving health', async () => {
     const result = await observeStartup('172.30.0.0/27', 3);
 
     expect(result.health).toBeNull();
     expect(result.exitCode, JSON.stringify(result)).toBeGreaterThan(0);
     expect(result.stderr).toContain('PLATFORM_SUBNET_POOL');
-  }, 10000);
+  });
 
   it('serves health when the pool exactly fits the persisted running limit', async () => {
     const result = await observeStartup('172.30.0.0/27', 2);
@@ -16,7 +18,7 @@ describe('subnet pool validation in the actual source process', () => {
     expect(result.exitCode).toBeNull();
     expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
     expect(result.stderr).toBe('');
-  }, 10000);
+  });
 
   it('checks the canonical default running limit when SQLite has no override', async () => {
     const result = await observeStartup('172.30.0.0/23');
@@ -24,18 +26,22 @@ describe('subnet pool validation in the actual source process', () => {
     expect(result.health).toBeNull();
     expect(result.exitCode).toBeGreaterThan(0);
     expect(result.stderr).toMatch(/PLATFORM_SUBNET_POOL.*maxRunningInstances=60/);
-  }, 10000);
+  });
 
-  it('uses the default pool only when the environment key is absent', async () => {
-    const absent = await observeStartup(undefined, 4096);
-    const empty = await observeStartup('', 1);
+  it(
+    'uses the default pool only when the environment key is absent',
+    async () => {
+      const absent = await observeStartup(undefined, 4096);
+      const empty = await observeStartup('', 1);
 
-    expect(absent.health).toEqual({ status: 200, body: { status: 'ok' } });
-    expect(absent.exitCode).toBeNull();
-    expect(empty.health).toBeNull();
-    expect(empty.exitCode).toBeGreaterThan(0);
-    expect(empty.stderr).toContain('PLATFORM_SUBNET_POOL');
-  }, 15000);
+      expect(absent.health).toEqual({ status: 200, body: { status: 'ok' } });
+      expect(absent.exitCode).toBeNull();
+      expect(empty.health).toBeNull();
+      expect(empty.exitCode).toBeGreaterThan(0);
+      expect(empty.stderr).toContain('PLATFORM_SUBNET_POOL');
+    },
+    2 * STARTUP_CASE_MS,
+  );
 
   it.each([
     ['PLATFORM_UPSTREAM_MODE', 'host'],
@@ -49,7 +55,7 @@ describe('subnet pool validation in the actual source process', () => {
       expect(result.exitCode).toBeGreaterThan(0);
       expect(result.stderr).toContain(key);
     },
-    10000,
+    STARTUP_CASE_MS,
   );
 
   it('fails before serving when real reconciliation cannot reach the configured Docker socket', async () => {
@@ -62,7 +68,7 @@ describe('subnet pool validation in the actual source process', () => {
     expect(result.health).toBeNull();
     expect(result.exitCode).toBeGreaterThan(0);
     expect(result.stderr).toContain('Instance reconciliation failed');
-  }, 10000);
+  });
 
   it('does not listen while the real owner reconciliation is held at the Engine boundary', async () => {
     const result = await observeStartup(undefined, undefined, {}, async (url) => {
@@ -72,7 +78,7 @@ describe('subnet pool validation in the actual source process', () => {
     expect(result.exitCode).toBeNull();
     expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
     expect(result.stderr).toBe('');
-  }, 10000);
+  });
   it('settles held startup reconciliation after SIGTERM without subsequently listening', async () => {
     const result = await observeStartup(undefined, undefined, {}, async (url, terminate) => {
       terminate();
@@ -82,5 +88,5 @@ describe('subnet pool validation in the actual source process', () => {
     expect(result.exitCode).toBe(0);
     expect(result.health).toBeNull();
     expect(result.stderr).toBe('');
-  }, 10000);
+  });
 });

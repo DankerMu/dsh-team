@@ -27,32 +27,36 @@ See `design.md` § Must preserve. Also: the 800-line and complexity limits. `ins
 
 ## 1. Implementation
 
-- [ ] 1.1 #3: the egress-capture refusal cases.
+- [x] 1.1 #3: the egress-capture refusal cases.
   - Add optional bounds on `Boundary`, with `LIVE` defaults.
   - Refusal cases declare `CASE_MS` and pass derived bounds.
   - Attribution is appended at the end of the message and never contains `listened after`.
   - The listen phase reports the spawned child's liveness. The close phase reports the tcpdump pid's liveness. Liveness comes from `boundary.kill(pid, 0)`: EPERM means alive, ESRCH means gone.
   - `exitConfirmMs` defaults to 2000. The `confirmExited` test at `:295-299` is unchanged.
-- [ ] 1.2 #5: the receipt-fault case.
+- [x] 1.2 #5: the receipt-fault case.
   - Take the case deadline before setup and store it in `receiptWriteFault.deadline`, cleared in `afterEach`.
   - Bound the ack wait with `caseBudget(deadline).limit`.
   - On every timeout exit (including `limit`'s deadline-passed throw), record phase, elapsed and liveness before `stopChild`. The case's own throw carries them.
   - State the reserve.
-- [ ] 1.3 #6: the readiness-failure cases.
+- [x] 1.3 #6: the readiness-failure cases.
   - Take the deadline before `fixture()`.
   - Bound each fetch by the remaining budget.
   - The reserve covers the gateway fetch and `f.close()`.
   - Every timeout exit reports elapsed, the poll count and the DB status: the `limit` throw, an aborted fetch and the loop's deadline.
-- [ ] 1.4 #7: the holder script.
+- [x] 1.4 #7: the holder script.
   - Add `READY_MS` and `EXIT_MS`, each started per phase. `timedOut` becomes `false | 'ready' | 'exit'`, with no new key in the result. `CASE_TIMEOUT_MS = READY_MS + EXIT_MS + reserve`.
   - Add a `STUB_DELAY` stub on one `-S` call (`/bin/sleep`, after the log line) and a test-only exit-bound observation.
   - New case: after a slow marker (D = 1 s), the observed exit bound `exitDeadline − termAt` is `toBe(EXIT_MS)`. Show it red with the observation ported temporarily into the shared-deadline holder (`deadline − termAt` ≠ `EXIT_MS`), and green after. Existing failure cases keep `timedOut: false`.
-- [ ] 1.5 Rewrite the two stale `#630` comments.
-- [ ] 1.6 Give a verdict for each of `main-startup-fixture.ts:120`, `onlyoffice-token-fixture.ts:80` and `ci-vps-worker-fixture.ts:149`: change it under the same rule, or record why not. The verdicts go in the PR.
-- [ ] 1.7 #3 red→green: add a temporary never-listening fake mode, which is not committed. Before: bare `Test timed out in 5000ms`. After: the attributed listen-phase message. Record both texts.
+- [x] 1.5 Rewrite the two stale `#630` comments.
+- [x] 1.6 Give a verdict for each of `main-startup-fixture.ts:120`, `onlyoffice-token-fixture.ts:80` and `ci-vps-worker-fixture.ts:149`: change it under the same rule, or record why not. The verdicts go in the PR.
+- [x] 1.7 #3 red→green: add a temporary never-listening fake mode, which is not committed. Before: bare `Test timed out in 5000ms`. After: the attributed listen-phase message. Record both texts.
+- [x] 1.8 (added after the first loaded runs) Give every remaining `fakeCapture` case in `egress-capture.integration.test.ts` a declared budget and derived bounds, as for the refusal cases; and change `main-startup-fixture.ts:120` under the same rule, since its 5 s listener wait equals its callers' default 5 s budget (`subnet-startup`, `document-server-startup`). Each red→green. Failures of the loaded runs outside the issue's eight files are filed as their own issue.
 
 ## 2. Verification
 
-- [ ] 2.1 Each changed file is green. Run `pnpm lint`, `pnpm typecheck` and `pnpm check`.
-- [ ] 2.2 Five full `pnpm test:integration` runs at 1-minute load ≥ 13, using bounded generators that are stopped afterwards. Record the load and result of each run.
+- [x] 2.1 Each changed file is green. Run `pnpm lint`, `pnpm typecheck` and `pnpm check`.
+- [x] 2.2 Five full `pnpm test:integration` runs at 1-minute load ≥ 13, using bounded generators that are stopped afterwards. Record the load and result of each run.
+  - First loaded runs (implementer, before 1.8): 4/5 green and then 2/5 green. Failures included `egress-capture.integration.test.ts:196` (a non-refusal `fakeCapture` case on the 5 s default, AC5), which led to task 1.8. Two fake races then showed at load ~100: sudo registered SIGINT forwarding after the spawn, and the pid file was written after the spawn. Both were fixed in the fakes.
+  - Final tree, 14 bounded generators per run, every run 177/177 files and 3266/3266 tests: run 1 load 15.7→41.6, run 2 30.7→46.5, run 3 35.2→45.4, run 4 33.9→49.6, run 5 37.2→45.5. No residue (`pgrep`).
+  - Load-sensitive failures in files outside the issue's eight are filed separately.
 - [ ] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.

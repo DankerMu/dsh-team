@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { observeStartup } from './main-startup-fixture.ts';
+import { observeStartup, STARTUP_CASE_MS } from './main-startup-fixture.ts';
 
 const CONTAINER_NAME = 'DOCUMENT_SERVER_CONTAINER_NAME';
 const JWT_SECRET = 'DOCUMENT_SERVER_JWT_SECRET';
@@ -28,7 +28,7 @@ describe('Document Server configuration in the actual source process', () => {
       expect(result.stderr).not.toContain(NAME_MARKER);
       expect(result.stderr).not.toContain(JWT_MARKER);
     },
-    10000,
+    STARTUP_CASE_MS,
   );
 
   it.each([
@@ -46,6 +46,6 @@ describe('Document Server configuration in the actual source process', () => {
       expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
       expect(result.stderr).toBe('');
     },
-    10000,
+    STARTUP_CASE_MS,
   );
 });

@@ -21,6 +21,7 @@ import {
 import { instanceConfig, registerInstanceUser } from './instance-fixture.ts';
 import { seedReconciliation } from './container-reconcile-fixture.ts';
 import { observeHttp, withUpstream } from './gateway-http-fixture.ts';
+import { caseBudget } from './trusted-docker-fixture.ts';
 
 async function fixture() {
   const f = await startupUnixOwnerFixture({
@@ -354,13 +355,53 @@ it('projects a durable create quarantine through HTTP and refuses false cleanup 
   }
 });
 
-// Equals the vitest default 5s timeout of the case below, so a load-slowed readiness projection can
-// let vitest kill the case first; tracked as a #630 follow-up.
+// The readiness-failure cases' deadline is taken before fixture(): setup, start and the readiness
+// wait end READINESS_RESERVE_MS before READINESS_CASE_MS, leaving the gateway fetch and f.close().
+const READINESS_CASE_MS = 15_000;
+const READINESS_RESERVE_MS = 5_000;
+// The readiness wait from the start's answer; caseBudget cuts each poll fetch to the case deadline.
 const READINESS_FAILURE_WAIT_MS = 5000;
+
+/** Bounded readiness polls; each timeout exit names its elapsed ms, poll count and DB status. */
+function readinessPolls(f: Awaited<ReturnType<typeof fixture>>, cookie: string, deadline: number) {
+  const budget = caseBudget(deadline);
+  const since = Date.now();
+  let polls = 0;
+  const stalled = (reason: string, cause?: unknown) => {
+    const row: unknown = f.database.prepare('SELECT status FROM instances').get();
+    const seen = `${String(Date.now() - since)}ms: polls=${String(polls)} db=${JSON.stringify(row)}`;
+    const api = 'Readiness failure was not reflected by the public API';
+    return new Error(`${api} (${reason}) after ${seen}`, { cause });
+  };
+  return async () => {
+    // The wait's own deadline, checked before each further poll as the loop once checked it.
+    if (Date.now() >= since + READINESS_FAILURE_WAIT_MS) throw stalled('wait expired');
+    let signal: AbortSignal;
+    try {
+      signal = AbortSignal.timeout(budget.limit('readiness poll', READINESS_FAILURE_WAIT_MS));
+    } catch (error) {
+      throw stalled('case deadline passed', error);
+    }
+    polls += 1;
+    try {
+      const response = await fetch(`${f.base}/_platform/api/instance`, {
+        headers: { cookie },
+        signal,
+      });
+      const current: unknown = await response.json();
+      return { status: response.status, current };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError')
+        throw stalled('poll aborted', error);
+      throw error;
+    }
+  };
+}
 
 it.each([false, true])(
   'projects completed readiness failure truthfully with error persistence blocked=%s',
   async (blocked) => {
+    const deadline = Date.now() + READINESS_CASE_MS - READINESS_RESERVE_MS;
     const f = await fixture();
     try {
       const user = await registerInstanceUser(f.base, f.config.publicUrl, 'readiness@example.test');
@@ -384,13 +425,10 @@ it.each([false, true])(
         body: '{}',
       });
       expect(await started.json()).toEqual({ status: 'starting', reason: 'starting' });
-      const deadline = Date.now() + READINESS_FAILURE_WAIT_MS;
+      const poll = readinessPolls(f, user.cookie, deadline);
       for (;;) {
-        const status = await fetch(`${f.base}/_platform/api/instance`, {
-          headers: { cookie: user.cookie },
-        });
-        const current: unknown = await status.json();
-        if (status.status === 500) {
+        const { status, current } = await poll();
+        if (status === 500) {
           expect(blocked).toBe(true);
           expect(current).toEqual({
             statusCode: 500,
@@ -399,7 +437,7 @@ it.each([false, true])(
           });
           break;
         }
-        expect(status.status).toBe(200);
+        expect(status).toBe(200);
         if (
           typeof current === 'object' &&
           current !== null &&
@@ -411,8 +449,6 @@ it.each([false, true])(
           break;
         }
         expect(current).toEqual({ status: 'starting', reason: 'starting' });
-        if (Date.now() >= deadline)
-          throw new Error('Readiness failure was not reflected by the public API');
       }
       const gateway = await fetch(`${f.base}/`, {
         headers: { cookie: user.cookie, accept: 'application/json' },
@@ -427,6 +463,7 @@ it.each([false, true])(
       await f.close();
     }
   },
+  READINESS_CASE_MS,
 );
 
 it.each(['missing', 'replaced'] as const)(

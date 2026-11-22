@@ -12,8 +12,16 @@ import type { DatabaseHandle } from '../src/db/index.ts';
 import { startupBarrier, startupDaemon, startupUnixServer } from './container-start-fixture.ts';
 import type { StartupDaemon } from './container-start-fixture.ts';
 import { unusedPort } from './gateway-http-fixture.ts';
+import { caseBudget } from './trusted-docker-fixture.ts';
 
 const mainPath = fileURLToPath(new URL('../src/main.ts', import.meta.url));
+// One observeStartup per case of this budget (#656): setup (its 5s signal) and the listener wait
+// end STARTUP_RESERVE_MS before it, leaving the exercise and afterExit signals (2s each) and the
+// stop, which the spawn's 6s SIGKILL bounds.
+export const STARTUP_CASE_MS = 15_000;
+const STARTUP_RESERVE_MS = 4_000;
+// Main listening or exiting, cut to that case deadline.
+const LISTENER_MS = 5_000;
 
 interface StartupContext {
   readonly directory: string;
@@ -116,8 +124,10 @@ async function observeMainListener(
   base: string,
   stderr: () => string,
   exercise: StartupOptions['exercise'],
+  budget: ReturnType<typeof caseBudget>,
 ): Promise<StartupObservation> {
-  const deadline = Date.now() + 5000;
+  const since = Date.now();
+  const deadline = since + budget.limit('main listener', LISTENER_MS);
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       const exit = await closed;
@@ -140,7 +150,10 @@ async function observeMainListener(
     }
     await delay(20);
   }
-  throw new Error(`Startup neither exited nor served health before its deadline: ${stderr()}`);
+  const stalled = budget.stalled('main listener', since, child.pid).message;
+  throw new Error(
+    `Startup neither exited nor served health before its deadline (${stalled}): ${stderr()}`,
+  );
 }
 
 /** The actual source process, with only owned external Engine/HTTP boundaries supplied by tests. */
@@ -151,6 +164,7 @@ export async function observeStartup(
   beforeReconcile?: (healthUrl: string, terminate: () => void) => Promise<void>,
   options: StartupOptions = {},
 ): Promise<StartupObservation> {
+  const budget = caseBudget(Date.now() + STARTUP_CASE_MS - STARTUP_RESERVE_MS);
   const directory = await mkdtemp(join(tmpdir(), 'dsh-team-subnet-'));
   const daemon = startupDaemon();
   const gate = startupBarrier();
@@ -215,7 +229,7 @@ export async function observeStartup(
           gate.release();
         }
       }
-      return await observeMainListener(child, closed, base, stderr, options.exercise);
+      return await observeMainListener(child, closed, base, stderr, options.exercise, budget);
     };
     return await settleMainProcess(child, closed, stderr, observe, async () => {
       await options.afterExit?.({ ...context, signal: AbortSignal.timeout(2000) });

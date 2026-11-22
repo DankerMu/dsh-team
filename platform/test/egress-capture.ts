@@ -15,6 +15,7 @@ const LISTENING = /^listening on any, link-type (\S+) /m;
 const LISTEN_MS = 15_000;
 // The relayed SIGINT arms `timeout -k 5`, so tcpdump is gone within 5s of it.
 const CLOSE_MS = 15_000;
+const EXIT_CONFIRM_MS = 2_000;
 
 export interface EgressCounts {
   /** `ptr`: Docker embedded-DNS replies whose answers are all PTR, counted apart from `53`. */
@@ -44,6 +45,10 @@ export interface Boundary {
   comm: (pid: number) => string;
   kill: (pid: number, signal: 0) => void;
   now: () => number;
+  /** Bounds of the listen wait, the close wait and confirmExited; LIVE's are 15s, 15s and 2s. */
+  listenMs: number;
+  closeMs: number;
+  exitConfirmMs: number;
 }
 
 const SPAWN: SpawnOptions = {
@@ -63,6 +68,9 @@ const LIVE: Boundary = {
   comm: (pid) => read(pid, 'comm').trim(),
   kill: (pid, signal) => void process.kill(pid, signal),
   now: () => performance.now(),
+  listenMs: LISTEN_MS,
+  closeMs: CLOSE_MS,
+  exitConfirmMs: EXIT_CONFIRM_MS,
 };
 
 function emptyCounts(): EgressCounts {
@@ -157,9 +165,33 @@ export function findTcpdump(root: number, tree: Pick<Boundary, 'children' | 'com
   return pid;
 }
 
-/** Only ESRCH is absence; EPERM is a live root process, observed again within 2000ms at 20ms. */
-export async function confirmExited(pid: number, os: Pick<Boundary, 'kill' | 'now'>) {
-  const endsAt = os.now() + 2_000;
+/** A timed-out wait's suffix (#656); never "listened after", which refusal cases match. */
+const expired = (phase: string, milliseconds: number): string =>
+  `; ${phase} wait expired at ${String(Math.round(milliseconds))}ms`;
+
+/** `kill(pid, 0)` read as confirmExited reads it: ESRCH is gone, success or EPERM is alive. */
+function liveness(pid: number | undefined, os: Pick<Boundary, 'kill'>): string {
+  if (pid === undefined) return 'unrecorded';
+  try {
+    os.kill(pid, 0);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code; // kill throws only errno errors
+    if (code === 'ESRCH') return 'gone';
+    if (code !== 'EPERM') return `unobservable ${String(code)}`;
+  }
+  return 'alive';
+}
+
+/**
+ * Only ESRCH is absence; EPERM is a live root process, observed again at 20ms until exitConfirmMs
+ * (2000ms unless given) ends.
+ */
+export async function confirmExited(
+  pid: number,
+  os: Pick<Boundary, 'kill' | 'now'> & Partial<Pick<Boundary, 'exitConfirmMs'>>,
+) {
+  const since = os.now();
+  const endsAt = since + (os.exitConfirmMs ?? EXIT_CONFIRM_MS);
   for (;;) {
     try {
       os.kill(pid, 0);
@@ -168,7 +200,8 @@ export async function confirmExited(pid: number, os: Pick<Boundary, 'kill' | 'no
       if (code === 'ESRCH') return;
       if (code !== 'EPERM') throw error;
     }
-    if (os.now() >= endsAt) throw new Error(`${INVALID}: tcpdump exit unconfirmed`);
+    if (os.now() >= endsAt)
+      throw new Error(`${INVALID}: tcpdump exit unconfirmed${expired('exit', os.now() - since)}`);
     await delay(20);
   }
 }
@@ -227,11 +260,18 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
   });
   let tcpdumpPid: number | undefined;
   let attachMs = 0;
+  const sudo = (): string =>
+    `sudo pid=${String(child.pid)} ${liveness(child.pid, boundary)} exitCode=${String(child.exitCode)} signalCode=${String(child.signalCode)}`;
   async function finish(): Promise<EgressEvidence> {
     const early = child.exitCode !== null || child.signalCode !== null;
     if (!early) child.kill('SIGINT');
-    const exitCode = await within(closed, CLOSE_MS);
-    if (exitCode === undefined) throw new Error(`${INVALID}: capture did not close`);
+    const closing = boundary.now();
+    const exitCode = await within(closed, boundary.closeMs);
+    if (exitCode === undefined) {
+      const tcpdump = `tcpdump pid=${String(tcpdumpPid)} ${liveness(tcpdumpPid, boundary)}`;
+      const waited = expired('close', boundary.now() - closing);
+      throw new Error(`${INVALID}: capture did not close${waited}: ${tcpdump}; ${sudo()}`);
+    }
     if (tcpdumpPid === undefined) throw new Error(`${INVALID}: tcpdump pid never recorded`);
     await confirmExited(tcpdumpPid, boundary);
     if (early) throw new Error(`${INVALID}: capture ended before its stop`);
@@ -250,13 +290,17 @@ async function startCapture(target: CaptureTarget, boundary: Boundary): Promise<
     stop: () => (stopped ??= finish()),
   };
   try {
+    const listen = boundary.now();
     const linkType = await within(
       Promise.race([listening.promise, closed.then(exited)]),
-      LISTEN_MS,
+      boundary.listenMs,
     );
     const first = stderr.split('\n', 1)[0]?.slice(0, 120) ?? '';
+    // Undefined is the expired wait; null an early close, which keeps its message unchanged.
+    const waited =
+      linkType === undefined ? `${expired('listen', boundary.now() - listen)}: ${sudo()}` : '';
     if (typeof linkType !== 'string')
-      throw new Error(`${INVALID}: tcpdump never listened: ${first}`);
+      throw new Error(`${INVALID}: tcpdump never listened: ${first}${waited}`);
     attachMs = Math.round(boundary.now() - startedAt);
     tcpdumpPid = findTcpdump(child.pid ?? 0, boundary);
     if (linkType !== 'LINUX_SLL2')

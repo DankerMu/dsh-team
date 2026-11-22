@@ -12,7 +12,7 @@ import {
 } from './container-reconcile-fixture.ts';
 import { withUpstream } from './gateway-http-fixture.ts';
 import { configureInstanceModel } from './instance-fixture.ts';
-import { observeStartup } from './main-startup-fixture.ts';
+import { observeStartup, STARTUP_CASE_MS } from './main-startup-fixture.ts';
 import type { StartupObservation } from './main-startup-fixture.ts';
 
 const SIBLING = 'mnopqrstuvwx';
@@ -279,15 +279,19 @@ async function quarantineBootstrap(discoveryFailure: boolean, missingBridge = fa
   return { ...result, exercised, authenticatedUpstreamRequests };
 }
 
-it('listens and routes a healthy sibling while retaining an unknown-ID absent creation as a per-user quarantine', async () => {
-  const result = await quarantineBootstrap(false);
+it(
+  'listens and routes a healthy sibling while retaining an unknown-ID absent creation as a per-user quarantine',
+  async () => {
+    const result = await quarantineBootstrap(false);
 
-  expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
-  expect(result.exitCode).toBeNull();
-  expect(result.stderr).toBe('');
-  expect(result.exercised).toBe(true);
-  expect(result.authenticatedUpstreamRequests).toBe(2);
-}, 10000);
+    expect(result.health).toEqual({ status: 200, body: { status: 'ok' } });
+    expect(result.exitCode).toBeNull();
+    expect(result.stderr).toBe('');
+    expect(result.exercised).toBe(true);
+    expect(result.authenticatedUpstreamRequests).toBe(2);
+  },
+  STARTUP_CASE_MS,
+);
 
 it.each([
   {
@@ -311,5 +315,5 @@ it.each([
     expect(result.exercised).toBe(false);
     expect(result.authenticatedUpstreamRequests).toBe(0);
   },
-  10000,
+  STARTUP_CASE_MS,
 );
