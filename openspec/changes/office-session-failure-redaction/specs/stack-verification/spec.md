@@ -8,7 +8,7 @@
 - 全部自有属性；
 - 编辑器、改写和提示车道中失败匹配器的 diff。
 
-失败消息 SHALL 仍然给出会话标签、计数和经过脱敏的失败原因，并且保持可读。仓库 SHALL 只保留一份脱敏实现。`officeEditorLine` 与 `officeRewriteLine` SHALL 只包含计数和经过该实现脱敏的列表。
+失败消息 SHALL 仍然给出会话标签、计数和经过脱敏的失败原因，并且保持可读。仓库 SHALL 只保留一份脱敏实现。Office 车道成功 evidence 行中的会话证据 SHALL 只以计数，或经该实现脱敏的列表形式出现。
 
 #### Scenario: Office 会话因 Document Server socket 错误失败
 
