@@ -89,12 +89,14 @@ const COPY = { copies: 1, listed: true, cleared: true };
  * case's typed nonce gone from every read; no new or missing work entry; 18.5's allowed errors.
  * #657 A's predictions, for the exact-head stack to confirm: the unsaved case's 「保存未写回文件」
  * still shown at the instant before the save, and in both cases no notice and no refetch in the
- * quiet window after the save's clear.
+ * quiet window after the save's clear. Each awaited positive arrived within a session timeout: the
+ * refetch in both cases, 「保存未写回文件」 in the unsaved one.
  */
 const CLEAN = {
   notices: { staleChanged: UNSEEN, staleRemoved: UNSEEN, saveFailed: UNSEEN },
   cleared: true,
   config: { open: 1, window: 2, saved: 2 },
+  arrived: { config: true, saveFailed: false },
   states: ['agent-only', 'both', 'both'],
   typed: [false, false, false],
   entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
@@ -105,7 +107,10 @@ const CLEAN = {
 const REFUSED = { before: false, window: true, atSave: true, saved: true, quiet: false };
 export const EXPECTED_REWRITE = {
   clean: CLEAN,
-  unsaved: { ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED }, forgotten: COPY },
+  unsaved: {
+    ...{ ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
+    ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
+  },
 };
 const NONE_SHOWN = { staleChanged: false, staleRemoved: false, saveFailed: false };
 const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
@@ -211,7 +216,7 @@ interface RewriteCaseEvidence extends EditedEvidence {
    * quiet window after the save. */
   readonly config: Readonly<Record<'open' | 'window' | 'saved', number>>;
   /** Ms from the Agent turn's `rewritten` read until each awaited positive held; null when it did not
-   * within a session timeout, or was not awaited. Recorded, not fixed. */
+   * within a session timeout, or was not awaited. Whether each arrived is fixed, the ms recorded. */
   readonly arrived: Readonly<Record<'config' | 'saveFailed', number | null>>;
   readonly agent: StackBrowserEvidence;
 }
@@ -245,13 +250,22 @@ const readFacts = (reads: EditedEvidence['reads']) => ({
   states: READS.map((at) => reads[at].state),
   typed: READS.map((at) => reads[at].typed ?? false),
 });
-/** What EXPECTED_REWRITE fixes of one case; `typed` is false where nothing was typed first. */
+/**
+ * What EXPECTED_REWRITE fixes of one case; `typed` is false where nothing was typed first. Of
+ * `arrived` only whether each positive held within the bound: one landing past it, still inside the
+ * negative window, leaves `config.window` and the window latch as if it had arrived.
+ */
 export function rewriteFacts(evidence: RewriteCaseEvidence) {
   const { notices, cleared, config, reads, entries, allowed, editor, agent, forgotten } = evidence;
   const sessions = [editor, agent].map((browser) =>
     Object.fromEntries(SESSION_LISTS.map((key) => [key, browser[key].length])),
   );
-  return { notices, cleared, config, ...readFacts(reads), entries, allowed, sessions, forgotten };
+  const { arrived } = evidence;
+  return {
+    ...{ notices, cleared, config },
+    arrived: { config: arrived.config !== null, saveFailed: arrived.saveFailed !== null },
+    ...{ ...readFacts(reads), entries, allowed, sessions, forgotten },
+  };
 }
 
 type Transitions = Extract<TypingEvidence['dirty'], { available: true }>['transitions'];

@@ -247,6 +247,8 @@ const CLEAN = {
   notices: NOTICES,
   cleared: true,
   config: { open: 1, window: 2, saved: 2 },
+  // The stack on 47f4f86: the refetch at 250ms and 253ms, the unsaved notice at 5561ms.
+  arrived: { config: true, saveFailed: false },
   states: ['agent-only', 'both', 'both'],
   typed: [false, false, false],
   entries: { saved: unchanged, closed: unchanged },
@@ -257,7 +259,10 @@ const CLEAN = {
 // The old key's status 2 with the discarded edit is refused: 「保存未写回文件」 shows until the save,
 // at its instant too, and not after the save's clear.
 const REFUSED = { before: false, window: true, atSave: true, saved: true, quiet: false };
-const UNSAVED = { ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED }, forgotten: COPY };
+const UNSAVED = {
+  ...{ ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED } },
+  ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
+};
 const MEASURED = { clean: CLEAN, unsaved: UNSAVED };
 const at = (state: 'agent-only' | 'both' | 'employee-only', typed?: boolean) => ({
   ...read,
@@ -281,6 +286,9 @@ const measured = (id: 'clean' | 'unsaved', overrides: object = {}) => {
     ...overrides,
   };
 };
+/** The ms from the Agent turn until the refetch and 「保存未写回文件」 arrived; null when they did not. */
+type Ms = number | null;
+const ms = (config: Ms, saveFailed: Ms) => ({ arrived: { config, saveFailed } });
 const typedReads = (typed: boolean) => ({
   reads: {
     rewritten: at('agent-only', typed),
@@ -312,12 +320,9 @@ it.each([
     measured('clean', { notices: { ...NOTICES, staleChanged: { ...unseen, quiet: true } } }),
     false,
   ],
-  [
-    'other arrival times, recorded and not fixed',
-    'unsaved',
-    measured('unsaved', { arrived: { config: 14_750, saveFailed: null } }),
-    true,
-  ],
+  ['other arrival ms, recorded not fixed', 'unsaved', measured('unsaved', ms(14_750, 5_561)), true],
+  ['the refetch not within the bound', 'clean', measured('clean', ms(null, null)), false],
+  ['the save-failed bar past the bound', 'unsaved', measured('unsaved', ms(253, null)), false],
   [
     'the save-failed bar first seen after the window',
     'unsaved',
@@ -402,10 +407,14 @@ it.each([
   expect(JSON.stringify(rewriteFacts(evidence)) === JSON.stringify(MEASURED[id])).toBe(exact);
 });
 
-// The seam's stand-in session timeout and window. Each scripted instant is a timer set no later
-// than the seam's own delay it must precede or outlast, so timer order, not load, decides each case.
-const TIMEOUT = 500;
+// The seam's stand-in session timeout and window, and heldWithin's poll. Each scripted instant is a
+// timer set no later than the seam's own delay it must precede or outlast, those the wait must see
+// at most 450ms in, far inside TIMEOUT, so timer order, not load, decides each case. A past-bound
+// act fires from the first read at which the stand-in's clock, never ahead of the seam's, passed
+// TIMEOUT: the wait's last poll. TIMEOUT sits 100ms short of a poll, so no poll falls on the bound.
+const TIMEOUT = 1_900;
 const WINDOW_MS = 100;
+const POLL_MS = 250;
 type NoticeId = keyof typeof NOTICE_TEXTS;
 const flagsOf = (ids: ReadonlySet<string>) =>
   Object.fromEntries(Object.keys(NOTICE_TEXTS).map((id) => [id, ids.has(id)]));
@@ -419,9 +428,25 @@ const flagsOf = (ids: ReadonlySet<string>) =>
 function standIn() {
   const showing = new Set<string>();
   let seen = new Set<string>();
-  const installed: (() => void)[] = [];
-  const fetched = { config: 1 };
+  const installed: (() => unknown)[] = [];
+  const pastBound: (() => unknown)[] = [];
+  let configs = 1;
+  // Started by the seam's first read, after its own clock: never ahead of the seam's elapsed time.
+  let clock: number | undefined;
+  const touched = () => {
+    clock ??= performance.now();
+    if (performance.now() - clock < TIMEOUT) return;
+    // A read this late is the wait's last poll; the act lands before the seam's next timer.
+    for (const act of pastBound.splice(0)) setTimeout(act, 0);
+  };
+  const fetched = {
+    get config() {
+      touched();
+      return configs;
+    },
+  };
   const answer = (expression: string): unknown => {
+    touched();
     if (expression === NOTICES_SEEN) return flagsOf(seen);
     if (expression === NOTICES_SHOWN) return flagsOf(showing);
     if (expression !== NOTICE_LATCH) throw new Error('unscripted page expression');
@@ -435,31 +460,35 @@ function standIn() {
   };
   const show = (id: NoticeId) => {
     showing.add(id);
-    seen.add(id);
+    return seen.add(id);
   };
-  const hide = (id: NoticeId) => {
-    showing.delete(id);
+  return {
+    ...{
+      page,
+      fetched,
+      show,
+      hide: (id: NoticeId) => showing.delete(id),
+      refresh: () => configs++,
+    },
+    onInstall: (hook: () => unknown) => installed.push(hook),
+    /** `act` once the positive wait's bound passed, inside the negative window. */
+    onPastBound: (act: () => unknown) => pastBound.push(act),
   };
-  const refresh = () => {
-    fetched.config++;
-  };
-  const onInstall = (hook: () => void) => {
-    installed.push(hook);
-  };
-  return { page, fetched, show, hide, refresh, onInstall };
 }
 type StandIn = ReturnType<typeof standIn>;
-const after = (ms: number, act: () => void) => {
-  setTimeout(act, ms);
-};
+const after = (ms: number, act: () => unknown) => setTimeout(act, ms);
 type Id = 'clean' | 'unsaved';
 
-/** The seam over `stand` after case `id`'s Agent turn; `onSave` is what the save brings about. */
-const span = (id: Id, stand: StandIn, onSave?: () => void) =>
+/**
+ * The seam over `stand` after case `id`'s Agent turn. The save's `saved` event clears
+ * 「保存未写回文件」; `onSave` is what else the save brings about.
+ */
+const span = (id: Id, stand: StandIn, onSave?: () => unknown) =>
   noticeSpan(stand.page, {
     ...{ fetched: stand.fetched, open: 1, shown: flagsOf(new Set()) },
     waitSaveFailed: id === 'unsaved',
     save: () => {
+      stand.hide('saveFailed');
       onSave?.();
       return Promise.resolve(at('both'));
     },
@@ -468,8 +497,8 @@ const span = (id: Id, stand: StandIn, onSave?: () => void) =>
   });
 type Span = Awaited<ReturnType<typeof span>>;
 /** What EXPECTED_REWRITE fixes of a case whose post-turn span the seam assembled. */
-const spanFacts = (id: Id, { notices, config, cleared }: Span) =>
-  rewriteFacts(measured(id, { notices, config, cleared }));
+const spanFacts = (id: Id, { notices, config, arrived, cleared }: Span) =>
+  rewriteFacts(measured(id, { notices, config, arrived, cleared }));
 /** MEASURED[id] with one notice's one flag changed. */
 const flipped = (id: Id, notice: NoticeId, flag: keyof typeof unseen, value: boolean) => {
   const { notices } = MEASURED[id];
@@ -479,12 +508,11 @@ const flipped = (id: Id, notice: NoticeId, flag: keyof typeof unseen, value: boo
   };
 };
 // The editor refetches its config, and the unsaved case's notice shows, soon after the turn.
-const refreshed = (stand: StandIn, id: Id) => {
+const refreshed = (stand: StandIn, id: Id) =>
   after(10, () => {
     stand.refresh();
     if (id === 'unsaved') stand.show('saveFailed');
   });
-};
 
 it.each(['clean', 'unsaved'] as const)(
   'assembles the %s case as measured once its refresh and notice arrived',
@@ -492,10 +520,7 @@ it.each(['clean', 'unsaved'] as const)(
     const stand = standIn();
     refreshed(stand, id);
 
-    // A successful save's `saved` event clears 「保存未写回文件」.
-    const result = await span(id, stand, () => {
-      stand.hide('saveFailed');
-    });
+    const result = await span(id, stand);
 
     expect(spanFacts(id, result)).toEqual(EXPECTED_REWRITE[id]);
     expect(result.arrived.config).toBeGreaterThanOrEqual(10);
@@ -515,15 +540,9 @@ it.each([
     const stand = standIn();
     refreshed(stand, id);
     // The re-install opens the quiet window; the notice returns halfway through its hold.
-    stand.onInstall(() => {
-      after(WINDOW_MS / 2, () => {
-        stand.show(notice);
-      });
-    });
+    stand.onInstall(() => after(WINDOW_MS / 2, () => stand.show(notice)));
 
-    const result = await span(id, stand, () => {
-      stand.hide('saveFailed');
-    });
+    const result = await span(id, stand);
 
     expect(spanFacts(id, result)).toEqual(flipped(id, notice, 'quiet', true));
   },
@@ -532,35 +551,40 @@ it.each([
 it('fails the unsaved case once 「保存未写回文件」 is gone before the save', async () => {
   const stand = standIn();
   refreshed(stand, 'unsaved');
-  after(30, () => {
-    stand.hide('saveFailed');
-  });
+  after(30, () => stand.hide('saveFailed'));
 
   const result = await span('unsaved', stand);
 
   expect(spanFacts('unsaved', result)).toEqual(flipped('unsaved', 'saveFailed', 'atSave', false));
 });
 
-// After the window, and before the positive wait's second poll at 250ms.
+// After the window, and before the positive wait's second poll.
 const LATE = 2 * WINDOW_MS;
-
-// After the window and the positive wait's second poll at 250ms, and within the timeout.
-const LATE_NOTICE = TIMEOUT - WINDOW_MS / 2;
+// After the positive wait's second poll and the window that would follow it, within the timeout.
+const LATE_NOTICE = POLL_MS + 2 * WINDOW_MS;
 
 it('waits for 「保存未写回文件」 later than the refetch and the window, within the timeout', async () => {
   const stand = standIn();
   after(10, stand.refresh);
-  after(LATE_NOTICE, () => {
-    stand.show('saveFailed');
-  });
+  after(LATE_NOTICE, () => stand.show('saveFailed'));
 
-  const result = await span('unsaved', stand, () => {
-    stand.hide('saveFailed');
-  });
+  const result = await span('unsaved', stand);
 
   expect(spanFacts('unsaved', result)).toEqual(EXPECTED_REWRITE.unsaved);
   expect(result.arrived.saveFailed).toBeGreaterThanOrEqual(LATE_NOTICE);
   expect(result.arrived.saveFailed).toBeGreaterThan(result.arrived.config ?? Infinity);
+});
+
+it('waits for the unsaved refresh after its notice already latched', async () => {
+  const stand = standIn();
+  // Shown at the seam's start, so a wait for the notice alone would end at its first poll.
+  stand.show('saveFailed');
+  after(LATE, stand.refresh);
+
+  const result = await span('unsaved', stand);
+
+  expect(spanFacts('unsaved', result)).toEqual(EXPECTED_REWRITE.unsaved);
+  expect(result.arrived.config).toBeGreaterThanOrEqual(LATE);
 });
 
 it('waits for a refresh later than the window, within the timeout, and records its arrival', async () => {
@@ -579,10 +603,30 @@ it('fails a refresh that misses the timeout and lands only with the save, record
 
   const result = await span('clean', stand, stand.refresh);
 
-  const config = { open: 1, window: 1, saved: 2 };
-  expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config });
+  const [config, arrived] = [
+    { open: 1, window: 1, saved: 2 },
+    { config: false, saveFailed: false },
+  ];
+  expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config, arrived });
   expect(result.arrived).toEqual({ config: null, saveFailed: null });
   expect(performance.now() - started).toBeGreaterThanOrEqual(TIMEOUT);
+});
+
+it.each([
+  ['clean', { config: false, saveFailed: false }],
+  ['unsaved', { config: true, saveFailed: false }],
+] as const)('fails %s with a positive past the timeout, in the window', async (id, arrived) => {
+  const stand = standIn();
+  // The clean case's refresh, or the unsaved notice after an early refresh.
+  if (id === 'clean') stand.onPastBound(stand.refresh);
+  else {
+    after(10, stand.refresh);
+    stand.onPastBound(() => stand.show('saveFailed'));
+  }
+
+  const result = await span(id, stand);
+
+  expect(spanFacts(id, result)).toEqual({ ...MEASURED[id], arrived });
 });
 
 it('fails a second refresh inside the window after the awaited one', async () => {
@@ -595,6 +639,17 @@ it('fails a second refresh inside the window after the awaited one', async () =>
   const config = { open: 1, window: 3, saved: 3 };
   expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config });
   expect(result.arrived.config).toBeLessThan(WINDOW_MS / 2);
+});
+
+it('fails a refresh inside the quiet window after the save cleared the notices', async () => {
+  const stand = standIn();
+  refreshed(stand, 'clean');
+  stand.onInstall(() => after(WINDOW_MS / 2, stand.refresh));
+
+  const result = await span('clean', stand);
+
+  const config = { open: 1, window: 2, saved: 3 };
+  expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config });
 });
 
 // #652's typing case as the two patched runs on 6f43c7e measured it (tasks.md 「Patched

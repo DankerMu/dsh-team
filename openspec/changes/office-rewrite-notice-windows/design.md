@@ -7,7 +7,7 @@
   - `noticeFlags`;
   - `RewriteCaseEvidence`;
   - `EXPECTED_REWRITE`;
-  - `rewriteFacts` (which carries `arrived` out of the fixed facts).
+  - `rewriteFacts`, which fixes whether each awaited positive arrived within the bound, never its milliseconds.
 - Its integration test:
   - the three-flag `unseen`, `REFUSED` and `MEASURED` constants and `measured()` (`:155-157`, `:239-275`);
   - the `:162` print case, which gains `arrived`;
@@ -70,7 +70,10 @@
   - The issue suggested redefining `REFUSED.saved` to mean "shown at the instant before the save". This fixture adds `atSave` instead, for two reasons:
     - it removes no existing assertion (#657's shared AC);
     - in the clean case, the cumulative `saved` latch still covers the span from the window's end until the save landed.
-- **`rewriteFacts`** carries `arrived` in the evidence and leaves it out of the fixed facts.
+- **`rewriteFacts`** fixes `arrived` as booleans: `{ config: ms !== null, saveFailed: ms !== null }`.
+  - Clean expects `{ config: true, saveFailed: false }`; unsaved expects `{ config: true, saveFailed: true }`.
+  - The milliseconds stay evidence only.
+  - Without this, a positive that misses the bound but lands inside the negative window would still match (review round 1, P1).
 
 ## Governing invariant
 
@@ -117,7 +120,11 @@ Each mutant below keeps the field and weakens only the mechanism. It is shown re
   - **Late refresh, after `windowMs` but within `timeout`:** the facts match and `arrived.config` is a number. Mutant (d) is the pre-change fixed delay alone, without the positive wait.
   - **No refresh within `timeout`:** the refresh lands after the negative window and before the quiet window. That changes `config` to `{ open: 1, window: 1, saved: 2 }`, and `arrived.config` is `null`. This also shows that the positive wait times out.
   - **A second refresh inside the negative window:** `config` becomes `{ open: 1, window: 3, saved: 3 }` (the counts only grow).
-- **Table rows:** the `:283` `it.each` gains rows for `atSave: false` and `quiet: true`, plus one case proving `rewriteFacts` ignores `arrived`.
+- **A3, added in review round 1:**
+  - **Positive past the bound:** the refresh lands, or in the unsaved case the notice latches, after `timeout` but inside the negative window. Only `arrived.<positive>` flips to false; `config.window` alone would still read 2. Mutant: drop the `arrived` booleans from `rewriteFacts`.
+  - **Unsaved, notice first and refresh later:** the notice latches early and the refresh comes after `windowMs`. The facts must match `EXPECTED_REWRITE.unsaved`. Mutant: in the unsaved case, wait for `saveFailed` only.
+  - **A refresh inside the quiet window:** `config` becomes `{ open: 1, window: 2, saved: 3 }`. Mutant (f): read `config.saved` before the quiet window.
+- **Table rows:** the `:283` `it.each` gains rows for `atSave: false` and `quiet: true`, plus rows proving that `rewriteFacts` keeps the `arrived` booleans and ignores the milliseconds.
 - **Stack:** exact-head green, with `atSave`, `quiet` and `arrived` in `stackEvidence.officeRewrite`.
   - The values `atSave.saveFailed: true`, `quiet` all false and `config.saved: 2` are predictions.
   - If the stack shows `config.saved: 3` or a `quiet` notice, that is a product finding to report. It must not be absorbed by moving the read back.
