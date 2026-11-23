@@ -29,57 +29,43 @@ export interface ForgottenKey {
 
 const digestOf = (key: string) => createHash('sha256').update(key).digest('hex');
 
-/** In the Document Server (sh, find; no node): the store's directory count. The server creates
- * `cache/files` at startup but `forgotten` only with its first copy, so a missing leaf counts 0 and
- * a missing parent or an unreadable store exits nonzero. */
-const COUNT_SH = `test -d "$(dirname "$1")" || exit 3
-test -d "$1" || { echo 0; exit 0; }
-found=$(find "$1" -mindepth 1 -maxdepth 1 -type d -exec printf . ';') || exit 4
-echo "\${#found}"`;
-
-/** The current directory count under the Document Server's forgotten store (a delta across the
- * trigger attributes a copy to this scenario). An unreadable store or count rejects. */
-export async function forgottenDirs(lane: StoreLane): Promise<number> {
-  const output = await lane.run([
-    'exec',
-    DOCUMENT_SERVER,
-    'sh',
-    '-c',
-    COUNT_SH,
-    'sh',
-    FORGOTTEN_DIR,
-  ]);
-  if (!/^\d+$/.test(output.trim()))
-    throw new Error('Document Server forgotten store count unreadable');
-  return Number(output.trim());
-}
-
-/** In the Document Server: removes every store entry whose name hashes to `digest` and prints how
- * many (none before the store's first copy). Only the digest is in the script; stderr is
- * discarded, since it would name the entry. */
-const removeSh = (digest: string) => `exec 2>/dev/null
-test -d "$1" || { printf '{"removed":0}\\n'; exit 0; }
+/** In the Document Server (sh, find; no node): counts, or with `remove` removes, the store entries
+ * whose name hashes to `digest`, and prints how many. Counts are per key: other sessions close
+ * asynchronously and land their own copies at any time. None before the store's first copy; an
+ * unreadable store exits nonzero. Only the digest is in the script; stderr is discarded, since it
+ * would name the entry. */
+const keyedSh = (digest: string, remove: boolean) => `exec 2>/dev/null
+test -d "$1" || { printf '{"matched":0}\\n'; exit 0; }
 list=$(find "$1" -mindepth 1 -maxdepth 1) || exit 4
-removed=0
+matched=0
 while IFS= read -r entry; do
   [ -n "$entry" ] || continue
   [ "$(printf %s "$(basename "$entry")" | sha256sum | cut -d ' ' -f 1)" = '${digest}' ] || continue
-  rm -rf "$entry" || exit 5
-  removed=$((removed + 1))
+  ${remove ? 'rm -rf "$entry" || exit 5' : ':'}
+  matched=$((matched + 1))
 done <<EOF
 $list
 EOF
-printf '{"removed":%s}\\n' "$removed"`;
+printf '{"matched":%s}\\n' "$matched"`;
 
-/** Removes `key`'s copy from the store and returns the number of entries removed; guarded, so no
- * failure carries the key (the directory name is the key). */
-export async function removeForgotten(lane: StoreLane, key: string, label: string) {
-  const args = ['exec', DOCUMENT_SERVER, 'sh', '-c', removeSh(digestOf(key)), 'sh', FORGOTTEN_DIR];
-  const { removed } = await guarded(label, [key], () => lane.run(args));
-  if (typeof removed !== 'number' || !Number.isInteger(removed) || removed < 0)
-    throw new Error('Document Server forgotten removal count unreadable');
-  return removed;
+/** `key`'s entries in the store, counted or removed; guarded, so no failure carries the key (the
+ * directory name is the key). */
+async function keyed(lane: StoreLane, key: string, label: string, remove: boolean) {
+  const script = keyedSh(digestOf(key), remove);
+  const args = ['exec', DOCUMENT_SERVER, 'sh', '-c', script, 'sh', FORGOTTEN_DIR];
+  const { matched } = await guarded(label, [key], () => lane.run(args));
+  if (typeof matched !== 'number' || !Number.isInteger(matched) || matched < 0)
+    throw new Error('Document Server forgotten key count unreadable');
+  return matched;
 }
+
+/** The number of `key`'s copies in the store (one directory named by the key, as measured). */
+export const forgottenCopies = (lane: StoreLane, key: string, label: string) =>
+  keyed(lane, key, label, false);
+
+/** Removes `key`'s copies from the store and returns how many entries went. */
+export const removeForgotten = (lane: StoreLane, key: string, label: string) =>
+  keyed(lane, key, label, true);
 
 /** In the Document Server (python3; no node): each store entry's shape, oldest first. A 64-hex run
  * in any name prints as `<hex64>`; only the key's digest is in the script, and stderr (a traceback
@@ -163,41 +149,34 @@ async function listed(lane: ForgottenLane, key: string, label: string) {
   return forgottenPresent(seen);
 }
 
-/** `key`'s copy against the store's `baseline`: the directory delta and whether the list holds it. */
-export async function forgottenCopy(
-  lane: ForgottenLane,
-  key: string,
-  baseline: number,
-  label: string,
-) {
+/** `key`'s copies in the store and whether the list holds it. */
+export async function forgottenCopy(lane: ForgottenLane, key: string, label: string) {
   return {
-    added: (await forgottenDirs(lane)) - baseline,
+    copies: await forgottenCopies(lane, key, label),
     listed: await listed(lane, key, label),
   };
 }
 
-/** `key`'s copy observed, then removed: `cleared` when exactly `added` entries went, the store is
- * back at `baseline` and the list no longer holds the key. Counts and booleans only. */
-export async function forgottenRecord(
-  lane: ForgottenLane,
-  key: string,
-  baseline: number,
-  label: string,
-) {
-  const copy = await forgottenCopy(lane, key, baseline, label);
+/** `key`'s copy observed, then removed: `cleared` when exactly `copies` entries went, none of the
+ * key's remain and the list no longer holds it. Counts and booleans only. */
+export async function forgottenRecord(lane: ForgottenLane, key: string, label: string) {
+  const copy = await forgottenCopy(lane, key, label);
   const removed = await removeForgotten(lane, key, label);
-  const back = (await forgottenDirs(lane)) === baseline;
-  const cleared = removed === copy.added && back && !(await listed(lane, key, label));
+  const none = (await forgottenCopies(lane, key, label)) === 0;
+  const cleared = removed === copy.copies && none && !(await listed(lane, key, label));
   return { ...copy, cleared };
 }
 
-/** `body`'s result. When it fails once it has set `held.key`: waits `settle` for the refused
+/** The settle window: the refused close-time save lands seconds after the session closes. */
+export const settleForgotten = () => delay(OBSERVE_MS);
+
+/** `body`'s result. When it fails once it has set `held.key`: awaits `settle` for the refused
  * close-time save, removes that key's copy best-effort and rethrows the same error untouched. */
 export async function clearingForgottenOnError<T>(
   lane: StoreLane,
   label: string,
   body: (held: ForgottenKey) => Promise<T>,
-  settle = OBSERVE_MS,
+  settle: () => Promise<unknown> = settleForgotten,
 ): Promise<T> {
   const held: ForgottenKey = { key: null };
   try {
@@ -205,7 +184,7 @@ export async function clearingForgottenOnError<T>(
   } catch (error) {
     const { key } = held;
     if (key !== null) {
-      await delay(settle);
+      await settle();
       // Swallowed: the case's own failure is the one to report; this cleanup is best-effort.
       await removeForgotten(lane, key, label).catch(() => undefined);
     }

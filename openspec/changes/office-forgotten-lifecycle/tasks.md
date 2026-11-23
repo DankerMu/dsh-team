@@ -31,7 +31,7 @@
 
 ## 3. Fix pass 1 (exact-head measurement and review round 1)
 
-- [ ] 3.1 Key-scoped counting: `forgottenCopies(lane, key)` replaces the global `forgottenDirs` count everywhere (anchor `=== 1`, `copies` in place of `added`, `cleared` = removed === copies, copies then 0, re-list false); drop `forgottenDirs`, its baseline and the parent check if unused; evidence fields renamed; docs and README wording follow.
-- [ ] 3.2 `vitest.config.ts` stack `testTimeout` ledger: one line for #650's added docker execs, namespace reads, registry polling and settle windows, with `testTimeout` and the Sum line updated.
-- [ ] 3.3 `platform/test/README.md:92`: the `forgotten`/`residue` evidence fields and the key-scoped cleanup assertion.
-- [ ] 3.4 `document-server-forgotten-fixture.integration.test.ts:270`: prove settle-then-remove by call order, not a 40 ms wall-clock bound.
+- [x] 3.1 Key-scoped counting: `forgottenCopies(lane, key)` replaces the global `forgottenDirs` count everywhere (anchor `=== 1`, `copies` in place of `added`, `cleared` = removed === copies, copies then 0, re-list false); drop `forgottenDirs`, its baseline and the parent check if unused; evidence fields renamed; docs and README wording follow.
+- [x] 3.2 `vitest.config.ts` stack `testTimeout` ledger: one line for #650's added docker execs, namespace reads, registry polling and settle windows, with `testTimeout` and the Sum line updated.
+- [x] 3.3 `platform/test/README.md:92`: the `forgotten`/`residue` evidence fields and the key-scoped cleanup assertion.
+- [x] 3.4 `document-server-forgotten-fixture.integration.test.ts:270`: prove settle-then-remove by call order, not a 40 ms wall-clock bound.

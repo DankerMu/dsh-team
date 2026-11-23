@@ -92,15 +92,23 @@ export default defineConfig({
           // docker execs at 30s each: the write, four file reads (start, after the rewrite, the save
           // poll's first, after the close), the rewrite, three listings, three instance log reads
           // (the earlier cases' control, before and after the close) and two provider reads.
-          // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 =
-          // 9060s, the 1200s of cold builds plus 7860s for everything else. That remainder is a
+          // The forgotten-copy lifecycle (#650) raised it by 870s. Each of the three rewrite cases
+          // (clean, unsaved, typing) adds 190s: registeredKey's 10s registry poll plus its last
+          // 30s exec, and the record's five calls at 30s each (key count, namespace list read,
+          // removal, key count, namespace list read); its settle reuses the case's existing wait
+          // after the close. The forgotten case adds 255s: the store shape before the trigger, the
+          // shape and the key count at the anchor (three 30s execs), the 15s settle after the
+          // recovery and the same five-call record. A failing case's cleanup, once: its 15s settle
+          // and a 30s removal (45s).
+          // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 +
+          // 870 = 9930s, the 1200s of cold builds plus 8730s for everything else. That remainder is a
           // margin, not the sum of every per-step bound: a vitest timeout skips the restore
           // `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll bounded by a
           // deadline (the 120s write-back, for one) checks it only after its exec returns, so it
           // can overrun by that last exec; the margin covers that too. The two rewrite lines
           // (#442, #652) still count the Document Server healthcheck wait at its 60s deadline
           // only, in the older deadline-only notation.
-          testTimeout: 9_060_000,
+          testTimeout: 9_930_000,
         },
       },
     ],

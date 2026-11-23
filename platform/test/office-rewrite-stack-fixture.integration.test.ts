@@ -172,7 +172,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
       cleared: true,
       config: { open: 1, window: 2, saved: 2 },
     },
-    forgotten: { added: 0, listed: false, cleared: true },
+    forgotten: { copies: 0, listed: false, cleared: true },
     reads: { rewritten: { ...read, state: 'agent-only' as const }, saved: read, closed: read },
     entries: { saved: { added: ['干净改写.docx.tmp-1'], removed: [] }, closed: unchanged },
     allowed: false,
@@ -201,7 +201,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
     reads: { rewritten: read, saved: read, closed: read },
     entries: { saved: unchanged, closed: unchanged },
     allowed: true,
-    forgotten: { added: 1, listed: true, cleared: true },
+    forgotten: { copies: 1, listed: true, cleared: true },
   } as const;
   const typing = { ...typingObserved, responses, editor };
 
@@ -233,8 +233,8 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
 
 // #650's source prediction: a session closed with its save refused leaves one forgotten copy
 // under its key, listed; one closed without a change leaves none; the lane clears either.
-const NO_COPY = { added: 0, listed: false, cleared: true };
-const COPY = { added: 1, listed: true, cleared: true };
+const NO_COPY = { copies: 0, listed: false, cleared: true };
+const COPY = { copies: 1, listed: true, cleared: true };
 // §60's measured values (step 1 and review round 1), written out rather than read from the fixture.
 const CLEAN = {
   notices: NOTICES,
@@ -562,7 +562,9 @@ const rewriteLane = {
   run: (args: string[]) => {
     if (args.slice(0, 3).join(' ') !== `exec ${DOCUMENT_SERVER} sh`)
       return Promise.reject(new Error('no host Docker before the typing case'));
-    return Promise.resolve(args[4]?.includes('sha256sum') === true ? '{"removed":1}' : '0\n');
+    return Promise.resolve(
+      args[4]?.includes('rm -rf') === true ? '{"matched":1}' : '{"matched":0}',
+    );
   },
   namespaceRead: () => Promise.reject(new Error('no namespace read before the session closes')),
   provider: () => Promise.resolve({ rewriteCalls: [0, 0], rewriteHits: [0, 0], requests: 0 }),
@@ -632,13 +634,15 @@ it('clears the open key after a failed clean session and rethrows its failure un
     throw failure;
   });
 
-  const error = await officeRewriteScenario(lane, 0).catch((caught: unknown) => caught);
+  const error = await officeRewriteScenario(lane, () => Promise.resolve()).catch(
+    (caught: unknown) => caught,
+  );
 
   expect(failure).toBeDefined();
   expect(error).toBe(failure);
   expect(error).toBeInstanceOf(StackWorkbenchFailure);
   expect(everythingPrinted(error)).not.toContain(KEY);
-  const removals = calls.filter((args) => args[4]?.includes('sha256sum') === true);
+  const removals = calls.filter((args) => args[4]?.includes('rm -rf') === true);
   expect(removals).toHaveLength(1);
   expect(JSON.stringify(calls)).not.toContain(KEY);
 });

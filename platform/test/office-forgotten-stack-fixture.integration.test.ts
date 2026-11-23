@@ -434,7 +434,7 @@ const forgottenLane: Parameters<typeof officeIsolationWithForgotten>[0] = {
   run: (args) => {
     const store = args.slice(0, 3).join(' ');
     if (store === `exec ${DOCUMENT_SERVER} python3`) return reply({ entries: [] });
-    if (store === `exec ${DOCUMENT_SERVER} sh`) return Promise.resolve('0\n');
+    if (store === `exec ${DOCUMENT_SERVER} sh`) return reply({ matched: 0 });
     return Promise.reject(new Error('no host Docker before the edit session'));
   },
   retire: () => Promise.resolve(),
@@ -464,8 +464,8 @@ it("clears A's copy after a failed edit through the caller's holder, printing no
     exec: (args) => (args[4] === REGISTRY ? reply([KA]) : forgottenLane.exec(args)),
     run: (args) => {
       calls.push(args);
-      const removal = args[4]?.includes('sha256sum') === true;
-      return removal ? Promise.resolve('{"removed":1}') : forgottenLane.run(args);
+      const removal = args[4]?.includes('rm -rf') === true;
+      return removal ? reply({ matched: 1 }) : forgottenLane.run(args);
     },
   };
   const session = {
@@ -484,13 +484,15 @@ it("clears A's copy after a failed edit through the caller's holder, printing no
     throw new StackWorkbenchFailure(failure, session, names.label);
   });
 
-  const error = (await officeIsolationWithForgotten(lane, 0).catch((e: unknown) => e)) as Error;
+  const error = (await officeIsolationWithForgotten(lane, () => Promise.resolve()).catch(
+    (e: unknown) => e,
+  )) as Error;
 
   expect(error.message).toContain('Office forgotten edit failed:');
   expect(error.message).toContain('"keyRead":true');
   expect(printed(error)).not.toContain(KA);
   expect(Object.keys(error)).toEqual([]);
-  const removals = calls.filter((args) => args[4]?.includes('sha256sum') === true);
+  const removals = calls.filter((args) => args[4]?.includes('rm -rf') === true);
   expect(removals).toHaveLength(1);
   expect(JSON.stringify(calls)).not.toContain(KA);
 });

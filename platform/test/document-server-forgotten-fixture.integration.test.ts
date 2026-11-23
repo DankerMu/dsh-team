@@ -12,12 +12,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, expect, it } from 'vitest';
+import { afterAll, expect, it, vi } from 'vitest';
 import {
   clearingForgottenOnError,
   FORGOTTEN_DIR,
+  forgottenCopies,
   forgottenCopy,
-  forgottenDirs,
   forgottenPresent,
   forgottenRecord,
   forgottenShape,
@@ -85,46 +85,43 @@ const answering = (output: string) => ({ run: () => Promise.resolve(output) });
 const secretFree = (lane: ReturnType<typeof storeLane>) =>
   JSON.stringify([lane.calls, lane.scripts]);
 
-it('counts the directories in the store through host Docker, never its files', async () => {
-  const dir = store(KA, OTHER);
+it("counts only the entries named by the key, carrying only the key's digest", async () => {
+  const dir = store(KA, OTHER, hex());
   writeFileSync(join(dir, 'stray'), 'not a copy');
   const lane = storeLane(dir);
 
-  const count = await forgottenDirs(lane);
+  const copies = await forgottenCopies(lane, KA, '(count)');
+  const others = await forgottenCopies(storeLane(store(OTHER)), KA, '(count)');
 
-  expect(count).toBe(2);
+  expect([copies, others]).toEqual([1, 0]);
+  expect(readdirSync(dir)).toHaveLength(4);
   expect(lane.calls).toEqual([
     ['exec', DOCUMENT_SERVER, 'sh', '-c', expect.any(String), 'sh', FORGOTTEN_DIR],
   ]);
+  expect(secretFree(lane)).not.toContain(KA);
+  expect(secretFree(lane)).toContain(createHash('sha256').update(KA).digest('hex'));
 });
 
 it('counts 0 while the started server has not yet created its forgotten directory', async () => {
   const files = join(ROOT, String(stores++), 'files');
   mkdirSync(files, { recursive: true });
 
-  const count = await forgottenDirs(storeLane(join(files, 'forgotten')));
+  const copies = await forgottenCopies(storeLane(join(files, 'forgotten')), KA, '(count)');
 
-  expect(count).toBe(0);
+  expect(copies).toBe(0);
 });
 
-it('fails loudly when the store parent is missing or the store is unreadable', async () => {
+it('fails loudly, without the key or the store error text, when the store is unreadable', async () => {
   const dir = store(KA);
 
-  const missing = forgottenDirs(storeLane(join(ROOT, 'absent', 'files', 'forgotten')));
-  const unreadable = sealed(dir, 0o000, () => forgottenDirs(storeLane(dir)));
+  const error = (await sealed(dir, 0o000, () =>
+    forgottenCopies(storeLane(dir), KA, '(count)').catch((caught: unknown) => caught),
+  )) as Error;
 
-  await expect(missing).rejects.toThrow();
-  await expect(unreadable).rejects.toThrow();
+  expect(error.message).toContain('Office isolation (count) failed');
+  expect(everythingPrinted(error)).not.toContain(KA);
+  expect(error.message).not.toMatch(/permission denied/i);
 });
-
-it.each(['NaN\n', '\n', '-1\n', '1.5\n', '2 3\n'])(
-  'rejects a store count %j that is not a non-negative integer',
-  async (output) => {
-    await expect(forgottenDirs(answering(output))).rejects.toThrow(
-      'Document Server forgotten store count unreadable',
-    );
-  },
-);
 
 it("removes only the entry named by the key, reports the count and carries only the key's digest", async () => {
   const dir = store(KA, OTHER);
@@ -163,12 +160,12 @@ it('removes nothing while the started server has not yet created its forgotten d
   expect(removed).toBe(0);
 });
 
-it.each(['{"removed":"1"}', '{"removed":-1}', '{}'])(
-  'rejects a removal report %s that is not a non-negative count',
+it.each(['{"matched":"1"}', '{"matched":-1}', '{"matched":1.5}', '{}'])(
+  'rejects a key count %s that is not a non-negative integer, counting or removing',
   async (output) => {
-    await expect(removeForgotten(answering(output), KA, '(cleanup)')).rejects.toThrow(
-      'Document Server forgotten removal count unreadable',
-    );
+    const unreadable = 'Document Server forgotten key count unreadable';
+    await expect(forgottenCopies(answering(output), KA, '(count)')).rejects.toThrow(unreadable);
+    await expect(removeForgotten(answering(output), KA, '(cleanup)')).rejects.toThrow(unreadable);
   },
 );
 
@@ -238,21 +235,21 @@ it.each(['{}', '{"entries":{}}'])(
   },
 );
 
-it('records the directory delta over the baseline and whether the list holds the key', async () => {
+it("records the key's copies and whether the list holds it", async () => {
   const lane = storeLane(store(KA, OTHER));
 
-  const copy = await forgottenCopy(lane, KA, 1, '(observe)');
+  const copy = await forgottenCopy(lane, KA, '(observe)');
 
-  expect(copy).toEqual({ added: 1, listed: true });
+  expect(copy).toEqual({ copies: 1, listed: true });
   expect(secretFree(lane)).not.toContain(KA);
 });
 
 it('counts a <key>/output list entry as the key listed', async () => {
   const lane = storeLane(store(), [{ status: 200, error: 0, listed: false, contains: true }]);
 
-  const copy = await forgottenCopy(lane, KA, 0, '(observe)');
+  const copy = await forgottenCopy(lane, KA, '(observe)');
 
-  expect(copy).toEqual({ added: 0, listed: true });
+  expect(copy).toEqual({ copies: 0, listed: true });
 });
 
 it.each([
@@ -262,39 +259,44 @@ it.each([
 ])('throws on %s from the list instead of reading it as not listed', async (_case, answer) => {
   const lane = storeLane(store(), [answer]);
 
-  const error = (await forgottenCopy(lane, KA, 0, '(observe)').catch((e: unknown) => e)) as Error;
+  const error = (await forgottenCopy(lane, KA, '(observe)').catch((e: unknown) => e)) as Error;
 
   expect(error.message).toContain('Document Server forgotten list (observe) unreadable');
   expect(everythingPrinted(error)).not.toContain(KA);
 });
 
-it('removes the copy it observed, returning the store to its baseline and the key unlisted', async () => {
-  const dir = store(OTHER);
-  const lane = storeLane(dir);
-  mkdirSync(join(dir, KA));
-
-  const record = await forgottenRecord(lane, KA, 1, '(rewrite)');
-
-  expect(record).toEqual({ added: 1, listed: true, cleared: true });
-  expect(readdirSync(dir)).toEqual([OTHER]);
-});
-
-it('records an absent copy as nothing added, not listed and cleared', async () => {
-  const dir = store(OTHER);
-
-  const record = await forgottenRecord(storeLane(dir), KA, 1, '(rewrite)');
-
-  expect(record).toEqual({ added: 0, listed: false, cleared: true });
-  expect(readdirSync(dir)).toEqual([OTHER]);
-});
-
-it('is not cleared when another copy keeps the store above its baseline', async () => {
+it("removes the key's copy it observed, leaving none and the key unlisted", async () => {
   const dir = store(KA, OTHER);
 
-  const record = await forgottenRecord(storeLane(dir), KA, 0, '(rewrite)');
+  const record = await forgottenRecord(storeLane(dir), KA, '(rewrite)');
 
-  expect(record).toEqual({ added: 2, listed: true, cleared: false });
+  expect(record).toEqual({ copies: 1, listed: true, cleared: true });
   expect(readdirSync(dir)).toEqual([OTHER]);
+});
+
+it('records an absent copy as none, not listed and cleared', async () => {
+  const dir = store(OTHER);
+
+  const record = await forgottenRecord(storeLane(dir), KA, '(rewrite)');
+
+  expect(record).toEqual({ copies: 0, listed: false, cleared: true });
+  expect(readdirSync(dir)).toEqual([OTHER]);
+});
+
+it("is cleared while other sessions' late copies land in the store meanwhile", async () => {
+  const dir = store(KA);
+  const lane = storeLane(dir);
+  const late = [hex(), hex()];
+  // Another lane's refused close-time save lands at each list read.
+  const namespaceRead = (script: string) => {
+    mkdirSync(join(dir, late.shift() ?? hex()));
+    return lane.namespaceRead(script);
+  };
+
+  const record = await forgottenRecord({ ...lane, namespaceRead }, KA, '(rewrite)');
+
+  expect(record).toEqual({ copies: 1, listed: true, cleared: true });
+  expect(readdirSync(dir)).toHaveLength(2);
 });
 
 it('is not cleared when the copy landed after the store was counted', async () => {
@@ -309,40 +311,66 @@ it('is not cleared when the copy landed after the store was counted', async () =
   };
   const landing = { ...lane, namespaceRead };
 
-  const record = await forgottenRecord(landing, KA, 0, '(rewrite)');
+  const record = await forgottenRecord(landing, KA, '(rewrite)');
 
-  expect(record).toEqual({ added: 0, listed: true, cleared: false });
+  expect(record).toEqual({ copies: 0, listed: true, cleared: false });
   expect(readdirSync(dir)).toEqual([]);
+});
+
+it("is not cleared when the key's copy is still in the store after the removal", async () => {
+  const listed = { status: 200, error: 0, listed: true };
+  // The list drops the key, so only the store's own count shows the copy left behind.
+  const lane = storeLane(store(KA), [listed, { ...listed, listed: false }]);
+  // A removal that reports its entry gone but leaves it in place.
+  const run = (args: string[]) =>
+    args[4]?.includes('rm -rf') === true ? Promise.resolve('{"matched":1}') : lane.run(args);
+
+  const record = await forgottenRecord({ ...lane, run }, KA, '(rewrite)');
+
+  expect(record).toEqual({ copies: 1, listed: true, cleared: false });
 });
 
 it('is not cleared when the list still holds the key after the removal', async () => {
   const listed = { status: 200, error: 0, listed: true };
   const lane = storeLane(store(KA), [listed, listed]);
 
-  const record = await forgottenRecord(lane, KA, 0, '(rewrite)');
+  const record = await forgottenRecord(lane, KA, '(rewrite)');
 
-  expect(record).toEqual({ added: 1, listed: true, cleared: false });
+  expect(record).toEqual({ copies: 1, listed: true, cleared: false });
 });
 
 it("removes a known key's copy after the settle window and rethrows the same error", async () => {
   const dir = store(KA, OTHER);
+  const order: string[] = [];
   const lane = storeLane(dir);
+  const run = (args: string[]) => {
+    order.push('remove');
+    return lane.run(args);
+  };
+  // The window ends a macrotask later: a removal not awaiting it would come first.
+  const settle = () =>
+    new Promise<void>((resolve) => {
+      order.push('settle');
+      setTimeout(() => {
+        order.push('settled');
+        resolve();
+      }, 0);
+    });
   const original = new Error('case failed after its key was read');
-  const started = performance.now();
 
   const caught = await clearingForgottenOnError(
-    lane,
+    { run },
     '(failed case)',
     (held) => {
       held.key = KA;
       return Promise.reject(original);
     },
-    40,
+    settle,
   ).catch((error: unknown) => error);
 
   expect(caught).toBe(original);
   expect(caught).toHaveProperty('message', 'case failed after its key was read');
-  expect(performance.now() - started).toBeGreaterThanOrEqual(40);
+  expect(order).toEqual(['settle', 'settled', 'remove']);
   expect(readdirSync(dir)).toEqual([OTHER]);
   expect(everythingPrinted(caught)).not.toContain(KA);
   expect(secretFree(lane)).not.toContain(KA);
@@ -359,7 +387,7 @@ it('rethrows the original error unchanged when the best-effort cleanup fails', a
       held.key = KA;
       return Promise.reject(original);
     },
-    0,
+    () => Promise.resolve(),
   ).catch((error: unknown) => error);
 
   expect(caught).toBe(original);
@@ -370,21 +398,23 @@ it('rethrows the original error unchanged when the best-effort cleanup fails', a
 it('neither waits nor touches the store when the case failed before its key was known', async () => {
   const lane = storeLane(store(KA));
   const original = new Error('browser failed before the key');
+  const settle = vi.fn(() => Promise.resolve());
 
-  // A settle window longer than the test timeout: waiting at all would time the test out.
   const caught = await clearingForgottenOnError(
     lane,
     '(failed case)',
     () => Promise.reject(original),
-    60_000,
+    settle,
   ).catch((error: unknown) => error);
 
   expect(caught).toBe(original);
+  expect(settle).not.toHaveBeenCalled();
   expect(lane.calls).toEqual([]);
 });
 
 it('returns the case evidence and leaves the store to the case on success', async () => {
   const lane = storeLane(store(KA));
+  const settle = vi.fn(() => Promise.resolve());
 
   const evidence = await clearingForgottenOnError(
     lane,
@@ -393,10 +423,11 @@ it('returns the case evidence and leaves the store to the case on success', asyn
       held.key = KA;
       return Promise.resolve('evidence');
     },
-    60_000,
+    settle,
   );
 
   expect(evidence).toBe('evidence');
+  expect(settle).not.toHaveBeenCalled();
   expect(lane.calls).toEqual([]);
 });
 

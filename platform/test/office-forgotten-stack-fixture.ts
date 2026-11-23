@@ -3,13 +3,13 @@ import type { FrameLocator } from '@playwright/test';
 import { expect } from 'vitest';
 import {
   clearingForgottenOnError,
-  forgottenDirs,
+  forgottenCopies,
   forgottenList,
   forgottenPresent,
   forgottenRecord,
   forgottenShape,
-  OBSERVE_MS,
   registeredKey,
+  settleForgotten,
 } from './document-server-forgotten-fixture.ts';
 import type { ForgottenKey } from './document-server-forgotten-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
@@ -247,7 +247,7 @@ interface OfficeForgottenEvidence {
   readonly present: Readonly<Record<string, unknown>>;
   readonly recovered: 'recovered' | 'lost';
   readonly reopenAlert: ReopenAlert;
-  readonly residue: Readonly<{ added: number; listed: boolean }>;
+  readonly residue: Readonly<{ copies: number; listed: boolean }>;
 }
 
 /** A's lane plus B (started by the editor lane) and the Document Server namespace position. */
@@ -422,7 +422,6 @@ async function officeForgotten(
   const directory = join(lane.session.directory, 'office-forgotten');
   await lane.exec(writeArgv(NAME));
   const origin = (await lane.exec(['stat', '-c', '%y', FILE])).trim();
-  const beforeDirs = await forgottenDirs(lane);
   // The store before the trigger, A's key not yet known: the anchor's attribution if it fails.
   const beforeShape = await forgottenShape(lane, null, '(shape before)');
   const { kA, closed } = await editIntoForgotten(lane, nonce, directory, held);
@@ -430,11 +429,10 @@ async function officeForgotten(
     throw new Error('Office forgotten: the plugin minted no key for A (editor open)');
   const positive = await awaitForgotten(lane, kA);
   if (!forgottenPresent(positive)) {
-    // Secret-free attribution (§55.6): the forgotten-store delta over the trigger, whether the
+    // Secret-free attribution (§55.6): A's copies in the forgotten store, whether the
     // edit session closed, and whether A's file took the nonce (save succeeded → trigger inert).
     const scene = {
-      beforeDirs,
-      afterDirs: await forgottenDirs(lane),
+      copies: await forgottenCopies(lane, kA, '(positive scene)'),
       editorClosed: closed,
       fileHasNonce: await fileHasNonce(lane, nonce),
     };
@@ -446,13 +444,13 @@ async function officeForgotten(
     );
   }
   expect(JSON.stringify(positive), 'positive control free of A key').not.toContain(kA);
-  // The anchor: the store path is right and A's copy is one directory, named by A's key. The
-  // shapes before and after the trigger attribute a mismatch; they carry no key.
+  // The anchor: the store path is right and A's copy is one directory, named by A's key; counted
+  // by key, as other lanes' late copies land meanwhile. The shapes attribute a mismatch, no key.
   const shapes = { before: beforeShape, after: await forgottenShape(lane, kA, '(shape after)') };
   const shaped = redactSecrets(`one forgotten directory for A key, ${JSON.stringify(shapes)}`, [
     kA,
   ]);
-  expect(await forgottenDirs(lane), shaped).toBe(beforeDirs + 1);
+  expect(await forgottenCopies(lane, kA, '(anchor)'), shaped).toBe(1);
   // The copy is stored; restoring the mtime makes the reopen recompute A's original key.
   await lane.exec(['touch', '-m', '-d', origin, FILE]);
   const bInstance = await lane.secondEmployee();
@@ -476,8 +474,8 @@ async function officeForgotten(
     'recovered',
   );
   // The recover session's close-time save runs seconds after it closes (PR #634's question).
-  await delay(OBSERVE_MS);
-  const { cleared, ...residue } = await forgottenRecord(lane, kA, beforeDirs, '(residue)');
+  await settleForgotten();
+  const { cleared, ...residue } = await forgottenRecord(lane, kA, '(residue)');
   const left = `residue ${JSON.stringify(residue)}`;
   expect(cleared, `forgotten store back at its baseline, A key unlisted, ${left}`).toBe(true);
   return { positive, attack, present, recovered, reopenAlert: alert ?? { shown: false }, residue };
@@ -494,7 +492,7 @@ async function officeForgotten(
  */
 export async function officeIsolationWithForgotten(
   lane: OfficeForgottenLane,
-  settle = OBSERVE_MS,
+  settle = settleForgotten,
 ): Promise<OfficeIsolationEvidence & { readonly forgotten: OfficeForgottenEvidence }> {
   const cleared = (held: ForgottenKey) => officeForgotten(lane, held);
   const forgotten = await retiringOnError(

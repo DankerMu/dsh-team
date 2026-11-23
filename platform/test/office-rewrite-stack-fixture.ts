@@ -5,10 +5,10 @@ import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import {
   clearingForgottenOnError,
-  forgottenDirs,
   forgottenRecord,
   OBSERVE_MS,
   registeredKey,
+  settleForgotten,
 } from './document-server-forgotten-fixture.ts';
 import type { ForgottenKey } from './document-server-forgotten-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
@@ -77,8 +77,8 @@ const QUIET = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
 const UNSEEN = { before: false, window: false, saved: false };
 // #650's source prediction: a session closed with its save refused leaves one forgotten copy under
 // its key, listed; one closed without a change leaves none; the lane removes either.
-const NO_COPY = { added: 0, listed: false, cleared: true };
-const COPY = { added: 1, listed: true, cleared: true };
+const NO_COPY = { copies: 0, listed: false, cleared: true };
+const COPY = { copies: 1, listed: true, cleared: true };
 /**
  * §60's measurement (step 1, review round 1). Clean: no notice above the editor from before the
  * Agent turn until the save landed. Unsaved: the refreshed-away session's status 2 with the
@@ -454,7 +454,6 @@ async function rewriteCase(
   const script = lane.rewrites[index];
   if (script === undefined) throw new Error('Office rewrite script missing');
   const read = await freshDocx(lane, id, name);
-  const baseline = await forgottenDirs(lane);
   const [typed, saved] = [editorNonce(), editorNonce()];
   const directory = join(root, id);
   const shot = `office-rewrite-${id}`;
@@ -515,7 +514,7 @@ async function rewriteCase(
     reads: { rewritten, saved: afterSave, closed: observe(await read()) },
     entries: { ...entries, closed: entryDiff(before, await listing(lane)) },
     allowed: editorErrorsAllowed(editor.consoleErrors, responses, session.base),
-    forgotten: await forgottenRecord(lane, held.key, baseline, `(rewrite ${id})`),
+    forgotten: await forgottenRecord(lane, held.key, `(rewrite ${id})`),
   };
   const seen = `Office rewrite ${id}, observed ${JSON.stringify(caseLine(evidence))}`;
   expect(rewriteFacts(evidence), seen).toEqual(EXPECTED_REWRITE[id]);
@@ -634,7 +633,6 @@ async function typingCase(
   const provider = await providerCounts(lane);
   const control = saveLines(await hostLog(lane, since), since);
   const read = await freshDocx(lane, TYPING.id, TYPING.name);
-  const baseline = await forgottenDirs(lane);
   const nonces = { typed: editorNonce(), agent: editorNonce(), saved: editorNonce() };
   const { fetched, responses, record } = responseLog();
   const observe = (file: OfficeRead): Observed => ({
@@ -667,7 +665,7 @@ async function typingCase(
     entries: { ...entries, closed: entryDiff(before, await listing(lane)) },
     ...{ responses, editor },
     allowed: editorErrorsAllowed(editor.consoleErrors, responses, session.base),
-    forgotten: await forgottenRecord(lane, held.key, baseline, '(rewrite typing)'),
+    forgotten: await forgottenRecord(lane, held.key, '(rewrite typing)'),
   };
   const seen = `Office rewrite typing, observed ${JSON.stringify(typingLine(evidence))}`;
   expect(evidence.provider, seen).toEqual(provider);
@@ -689,7 +687,7 @@ async function typingCase(
  */
 export const officeRewriteScenario = (
   lane: OfficeRewriteLane,
-  settle = OBSERVE_MS,
+  settle = settleForgotten,
 ): Promise<OfficeRewriteEvidence> =>
   withWorkFiles(
     lane,
