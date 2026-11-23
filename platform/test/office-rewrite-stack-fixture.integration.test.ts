@@ -12,7 +12,11 @@ import {
   EXPECTED_REWRITE,
   EXPECTED_TYPING,
   heldApart,
+  NOTICE_LATCH,
   NOTICES as NOTICE_TEXTS,
+  NOTICES_SEEN,
+  NOTICES_SHOWN,
+  noticeSpan,
   officeRewriteLine,
   officeRewriteScenario,
   ownedRewrites,
@@ -153,8 +157,9 @@ const session = (screenshots: string[], consoleErrors: string[], failedRequests:
 });
 const read = { state: 'both', size: 9_000, sha256: 'b'.repeat(64) } as const;
 const unchanged = { added: [], removed: [] };
-const unseen = { before: false, window: false, saved: false };
-// The plugin's three notices above the editor, none shown, latched or seen until the save landed.
+const unseen = { before: false, window: false, atSave: false, saved: false, quiet: false };
+// The plugin's three notices above the editor: none shown before the turn, latched in the window,
+// shown at the save, latched until the save landed or seen in the quiet window after its clear.
 const NOTICES = { staleChanged: unseen, staleRemoved: unseen, saveFailed: unseen };
 const replies = ['login.png', 'workbench.png', 'reply.png'];
 const quiet = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
@@ -171,6 +176,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
       notices: NOTICES,
       cleared: true,
       config: { open: 1, window: 2, saved: 2 },
+      arrived: { config: 250, saveFailed: null },
     },
     forgotten: { copies: 0, listed: false, cleared: true },
     reads: { rewritten: { ...read, state: 'agent-only' as const }, saved: read, closed: read },
@@ -235,11 +241,14 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
 // under its key, listed; one closed without a change leaves none; the lane clears either.
 const NO_COPY = { copies: 0, listed: false, cleared: true };
 const COPY = { copies: 1, listed: true, cleared: true };
-// §60's measured values (step 1 and review round 1), written out rather than read from the fixture.
+// §60's measured values (step 1 and review round 1), written out rather than read from the fixture;
+// #657 A's `atSave` and `quiet` flags are predictions, confirmed by the exact-head stack.
 const CLEAN = {
   notices: NOTICES,
   cleared: true,
   config: { open: 1, window: 2, saved: 2 },
+  // The stack on 47f4f86: the refetch at 250ms and 253ms, the unsaved notice at 5561ms.
+  arrived: { config: true, saveFailed: false },
   states: ['agent-only', 'both', 'both'],
   typed: [false, false, false],
   entries: { saved: unchanged, closed: unchanged },
@@ -247,9 +256,13 @@ const CLEAN = {
   sessions: [quiet, quiet],
   forgotten: NO_COPY,
 };
-// The old key's status 2 with the discarded edit is refused: 「保存未写回文件」 shows until the save.
-const REFUSED = { before: false, window: true, saved: true };
-const UNSAVED = { ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED }, forgotten: COPY };
+// The old key's status 2 with the discarded edit is refused: 「保存未写回文件」 shows until the save,
+// at its instant too, and not after the save's clear.
+const REFUSED = { before: false, window: true, atSave: true, saved: true, quiet: false };
+const UNSAVED = {
+  ...{ ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED } },
+  ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
+};
 const MEASURED = { clean: CLEAN, unsaved: UNSAVED };
 const at = (state: 'agent-only' | 'both' | 'employee-only', typed?: boolean) => ({
   ...read,
@@ -261,6 +274,7 @@ const measured = (id: 'clean' | 'unsaved', overrides: object = {}) => {
   return {
     ...{ file: `${id}.docx`, provider: { rewriteCalls: 1, rewriteHits: 1, requests: 3 } },
     ...{ notices: MEASURED[id].notices, cleared: true, config: CLEAN.config, responses: [] },
+    arrived: { config: 250, saveFailed: id === 'unsaved' ? 250 : null },
     reads: {
       rewritten: at('agent-only', typed),
       saved: at('both', typed),
@@ -272,6 +286,9 @@ const measured = (id: 'clean' | 'unsaved', overrides: object = {}) => {
     ...overrides,
   };
 };
+/** The ms from the Agent turn until the refetch and 「保存未写回文件」 arrived; null when they did not. */
+type Ms = number | null;
+const ms = (config: Ms, saveFailed: Ms) => ({ arrived: { config, saveFailed } });
 const typedReads = (typed: boolean) => ({
   reads: {
     rewritten: at('agent-only', typed),
@@ -291,6 +308,21 @@ it.each([
     false,
   ],
   ['the save-failed bar not cleared', 'unsaved', measured('unsaved', { cleared: false }), false],
+  [
+    'the save-failed bar gone at the save',
+    'unsaved',
+    measured('unsaved', { notices: { ...NOTICES, saveFailed: { ...REFUSED, atSave: false } } }),
+    false,
+  ],
+  [
+    'a notice back after the save',
+    'clean',
+    measured('clean', { notices: { ...NOTICES, staleChanged: { ...unseen, quiet: true } } }),
+    false,
+  ],
+  ['other arrival ms, recorded not fixed', 'unsaved', measured('unsaved', ms(14_750, 5_561)), true],
+  ['the refetch not within the bound', 'clean', measured('clean', ms(null, null)), false],
+  ['the save-failed bar past the bound', 'unsaved', measured('unsaved', ms(253, null)), false],
   [
     'the save-failed bar first seen after the window',
     'unsaved',
@@ -373,6 +405,251 @@ it.each([
 ] as const)('expects each case as §60 measured it: %s', (_case, id, evidence, exact) => {
   expect(EXPECTED_REWRITE).toEqual(MEASURED);
   expect(JSON.stringify(rewriteFacts(evidence)) === JSON.stringify(MEASURED[id])).toBe(exact);
+});
+
+// The seam's stand-in session timeout and window, and heldWithin's poll. Each scripted instant is a
+// timer set no later than the seam's own delay it must precede or outlast, those the wait must see
+// at most 450ms in, far inside TIMEOUT, so timer order, not load, decides each case. A past-bound
+// act fires from the first read at which the stand-in's clock, never ahead of the seam's, passed
+// TIMEOUT: the wait's last poll. TIMEOUT sits 100ms short of a poll, so no poll falls on the bound.
+const TIMEOUT = 1_900;
+const WINDOW_MS = 100;
+const POLL_MS = 250;
+type NoticeId = keyof typeof NOTICE_TEXTS;
+const flagsOf = (ids: ReadonlySet<string>) =>
+  Object.fromEntries(Object.keys(NOTICE_TEXTS).map((id) => [id, ids.has(id)]));
+
+/**
+ * A page after the Agent turn: `show` and `hide` set what is on screen, `refresh` counts a config
+ * fetch. NOTICE_LATCH restarts the latch with what shows at install, as the real one's first check
+ * does, then runs the install hooks; NOTICES_SEEN answers what showed since, NOTICES_SHOWN what
+ * shows now.
+ */
+function standIn() {
+  const showing = new Set<string>();
+  let seen = new Set<string>();
+  const installed: (() => unknown)[] = [];
+  const pastBound: (() => unknown)[] = [];
+  let configs = 1;
+  // Started by the seam's first read, after its own clock: never ahead of the seam's elapsed time.
+  let clock: number | undefined;
+  const touched = () => {
+    clock ??= performance.now();
+    if (performance.now() - clock < TIMEOUT) return;
+    // A read this late is the wait's last poll; the act lands before the seam's next timer.
+    for (const act of pastBound.splice(0)) setTimeout(act, 0);
+  };
+  const fetched = {
+    get config() {
+      touched();
+      return configs;
+    },
+  };
+  const answer = (expression: string): unknown => {
+    touched();
+    if (expression === NOTICES_SEEN) return flagsOf(seen);
+    if (expression === NOTICES_SHOWN) return flagsOf(showing);
+    if (expression !== NOTICE_LATCH) throw new Error('unscripted page expression');
+    seen = new Set(showing);
+    for (const hook of installed) hook();
+    return undefined;
+  };
+  const page = {
+    // The stand-in answers only the three expressions, each with the shape the seam reads.
+    evaluate: <R>(expression: string) => Promise.resolve().then(() => answer(expression) as R),
+  };
+  const show = (id: NoticeId) => {
+    showing.add(id);
+    return seen.add(id);
+  };
+  return {
+    ...{
+      page,
+      fetched,
+      show,
+      hide: (id: NoticeId) => showing.delete(id),
+      refresh: () => configs++,
+    },
+    onInstall: (hook: () => unknown) => installed.push(hook),
+    /** `act` once the positive wait's bound passed, inside the negative window. */
+    onPastBound: (act: () => unknown) => pastBound.push(act),
+  };
+}
+type StandIn = ReturnType<typeof standIn>;
+const after = (ms: number, act: () => unknown) => setTimeout(act, ms);
+type Id = 'clean' | 'unsaved';
+
+/**
+ * The seam over `stand` after case `id`'s Agent turn. The save's `saved` event clears
+ * 「保存未写回文件」; `onSave` is what else the save brings about.
+ */
+const span = (id: Id, stand: StandIn, onSave?: () => unknown) =>
+  noticeSpan(stand.page, {
+    ...{ fetched: stand.fetched, open: 1, shown: flagsOf(new Set()) },
+    waitSaveFailed: id === 'unsaved',
+    save: () => {
+      stand.hide('saveFailed');
+      onSave?.();
+      return Promise.resolve(at('both'));
+    },
+    afterCleared: () => Promise.resolve(),
+    ...{ timeout: TIMEOUT, windowMs: WINDOW_MS },
+  });
+type Span = Awaited<ReturnType<typeof span>>;
+/** What EXPECTED_REWRITE fixes of a case whose post-turn span the seam assembled. */
+const spanFacts = (id: Id, { notices, config, arrived, cleared }: Span) =>
+  rewriteFacts(measured(id, { notices, config, arrived, cleared }));
+/** MEASURED[id] with one notice's one flag changed. */
+const flipped = (id: Id, notice: NoticeId, flag: keyof typeof unseen, value: boolean) => {
+  const { notices } = MEASURED[id];
+  return {
+    ...MEASURED[id],
+    notices: { ...notices, [notice]: { ...notices[notice], [flag]: value } },
+  };
+};
+// The editor refetches its config, and the unsaved case's notice shows, soon after the turn.
+const refreshed = (stand: StandIn, id: Id) =>
+  after(10, () => {
+    stand.refresh();
+    if (id === 'unsaved') stand.show('saveFailed');
+  });
+
+it.each(['clean', 'unsaved'] as const)(
+  'assembles the %s case as measured once its refresh and notice arrived',
+  async (id) => {
+    const stand = standIn();
+    refreshed(stand, id);
+
+    const result = await span(id, stand);
+
+    expect(spanFacts(id, result)).toEqual(EXPECTED_REWRITE[id]);
+    expect(result.arrived.config).toBeGreaterThanOrEqual(10);
+    // Awaited only in the unsaved case, where it shows with the refetch.
+    if (id === 'unsaved') expect(result.arrived.saveFailed).toBeGreaterThanOrEqual(10);
+    else expect(result.arrived.saveFailed).toBeNull();
+    expect(result.afterSave).toEqual(at('both'));
+  },
+);
+
+it.each([
+  ['unsaved', 'saveFailed'],
+  ['clean', 'staleChanged'],
+] as const)(
+  'fails the %s case once %s comes back after the save cleared it',
+  async (id, notice) => {
+    const stand = standIn();
+    refreshed(stand, id);
+    // The re-install opens the quiet window; the notice returns halfway through its hold.
+    stand.onInstall(() => after(WINDOW_MS / 2, () => stand.show(notice)));
+
+    const result = await span(id, stand);
+
+    expect(spanFacts(id, result)).toEqual(flipped(id, notice, 'quiet', true));
+  },
+);
+
+it('fails the unsaved case once 「保存未写回文件」 is gone before the save', async () => {
+  const stand = standIn();
+  refreshed(stand, 'unsaved');
+  after(30, () => stand.hide('saveFailed'));
+
+  const result = await span('unsaved', stand);
+
+  expect(spanFacts('unsaved', result)).toEqual(flipped('unsaved', 'saveFailed', 'atSave', false));
+});
+
+// After the window, and before the positive wait's second poll.
+const LATE = 2 * WINDOW_MS;
+// After the positive wait's second poll and the window that would follow it, within the timeout.
+const LATE_NOTICE = POLL_MS + 2 * WINDOW_MS;
+
+it('waits for 「保存未写回文件」 later than the refetch and the window, within the timeout', async () => {
+  const stand = standIn();
+  after(10, stand.refresh);
+  after(LATE_NOTICE, () => stand.show('saveFailed'));
+
+  const result = await span('unsaved', stand);
+
+  expect(spanFacts('unsaved', result)).toEqual(EXPECTED_REWRITE.unsaved);
+  expect(result.arrived.saveFailed).toBeGreaterThanOrEqual(LATE_NOTICE);
+  expect(result.arrived.saveFailed).toBeGreaterThan(result.arrived.config ?? Infinity);
+});
+
+it('waits for the unsaved refresh after its notice already latched', async () => {
+  const stand = standIn();
+  // Shown at the seam's start, so a wait for the notice alone would end at its first poll.
+  stand.show('saveFailed');
+  after(LATE, stand.refresh);
+
+  const result = await span('unsaved', stand);
+
+  expect(spanFacts('unsaved', result)).toEqual(EXPECTED_REWRITE.unsaved);
+  expect(result.arrived.config).toBeGreaterThanOrEqual(LATE);
+});
+
+it('waits for a refresh later than the window, within the timeout, and records its arrival', async () => {
+  const stand = standIn();
+  after(LATE, stand.refresh);
+
+  const result = await span('clean', stand);
+
+  expect(spanFacts('clean', result)).toEqual(EXPECTED_REWRITE.clean);
+  expect(result.arrived.config).toBeGreaterThanOrEqual(LATE);
+});
+
+it('fails a refresh that misses the timeout and lands only with the save, recording none', async () => {
+  const stand = standIn();
+  const started = performance.now();
+
+  const result = await span('clean', stand, stand.refresh);
+
+  const [config, arrived] = [
+    { open: 1, window: 1, saved: 2 },
+    { config: false, saveFailed: false },
+  ];
+  expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config, arrived });
+  expect(result.arrived).toEqual({ config: null, saveFailed: null });
+  expect(performance.now() - started).toBeGreaterThanOrEqual(TIMEOUT);
+});
+
+it.each([
+  ['clean', { config: false, saveFailed: false }],
+  ['unsaved', { config: true, saveFailed: false }],
+] as const)('fails %s with a positive past the timeout, in the window', async (id, arrived) => {
+  const stand = standIn();
+  // The clean case's refresh, or the unsaved notice after an early refresh.
+  if (id === 'clean') stand.onPastBound(stand.refresh);
+  else {
+    after(10, stand.refresh);
+    stand.onPastBound(() => stand.show('saveFailed'));
+  }
+
+  const result = await span(id, stand);
+
+  expect(spanFacts(id, result)).toEqual({ ...MEASURED[id], arrived });
+});
+
+it('fails a second refresh inside the window after the awaited one', async () => {
+  const stand = standIn();
+  stand.refresh();
+  after(WINDOW_MS / 2, stand.refresh);
+
+  const result = await span('clean', stand);
+
+  const config = { open: 1, window: 3, saved: 3 };
+  expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config });
+  expect(result.arrived.config).toBeLessThan(WINDOW_MS / 2);
+});
+
+it('fails a refresh inside the quiet window after the save cleared the notices', async () => {
+  const stand = standIn();
+  refreshed(stand, 'clean');
+  stand.onInstall(() => after(WINDOW_MS / 2, stand.refresh));
+
+  const result = await span('clean', stand);
+
+  const config = { open: 1, window: 2, saved: 3 };
+  expect(spanFacts('clean', result)).toEqual({ ...MEASURED.clean, config });
 });
 
 // #652's typing case as the two patched runs on 6f43c7e measured it (tasks.md 「Patched
