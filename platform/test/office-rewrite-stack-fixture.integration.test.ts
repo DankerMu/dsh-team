@@ -1,5 +1,4 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
@@ -8,6 +7,7 @@ import { editorNonce, NONCE_PATTERN, READER } from './office-editor-stack-fixtur
 import { docxCommand, HEALTH_COMMAND, openHinted } from './office-hints-stack-fixture.ts';
 import type * as OfficeHints from './office-hints-stack-fixture.ts';
 import { REGISTRY } from './office-isolation-stack-fixture.ts';
+import { rewriteCommand } from './office-rewrite-formats.ts';
 import {
   EXPECTED_REWRITE,
   EXPECTED_TYPING,
@@ -20,9 +20,6 @@ import {
   officeRewriteLine,
   officeRewriteScenario,
   ownedRewrites,
-  REWRITER,
-  rewriteArgv,
-  rewriteCommand,
   rewriteFacts,
   rewriteState,
   typingFacts,
@@ -92,58 +89,21 @@ it.each([
   expect(heldApart(read, AGENT, EMPLOYEE)).toBe(held);
 });
 
-const PATH = '/data/work/干净改写.docx';
-
-it('hands bash python3, the rewriter, the file and the nonce as single-quoted words', () => {
-  const command = rewriteCommand('干净改写.docx', AGENT);
-
-  const words = execFileSync('sh', ['-c', `printf '%s\\0' ${command}`]).toString();
-
-  expect(REWRITER).not.toContain("'");
-  expect(rewriteArgv('干净改写.docx', AGENT)).toEqual(['python3', '-c', REWRITER, PATH, AGENT]);
-  expect(command).toBe(`'python3' '-c' '${REWRITER}' '${PATH}' '${AGENT}'`);
-  expect(words.split('\0')).toEqual(['python3', '-c', REWRITER, PATH, AGENT, '']);
-  expect(() => rewriteCommand("x'.docx", AGENT)).toThrow('Bash word holds a single quote');
-});
-
-// A stand-in for python-docx, which the CI host lacks: a document is its lines, one per paragraph.
-const FAKE_DOCX = `class Document:
-    def __init__(self, path):
-        self.paragraphs = open(path, encoding="utf-8").read().splitlines()
-    def add_paragraph(self, text):
-        self.paragraphs.append(text)
-    def save(self, path):
-        open(path, "w", encoding="utf-8").write("\\n".join(self.paragraphs) + "\\n")`;
-
-it('appends the nonce as a paragraph, saves the file in place and prints the nonce', () => {
-  writeFileSync(join(DIR, 'docx.py'), FAKE_DOCX);
-  const file = join(DIR, '改写.docx');
-  writeFileSync(file, '改写探针。\n');
-
-  // `-c` puts the working directory first on the module path: the stand-in shadows python-docx.
-  const out = execFileSync('python3', ['-c', REWRITER, file, AGENT], { cwd: DIR }).toString();
-
-  expect(out).toBe(`${AGENT}\n`);
-  expect(readFileSync(file, 'utf8')).toBe(`改写探针。\n${AGENT}\n`);
-});
-
 it('scripts one rewrite per case file, each with its own marker and nonce', () => {
   const scripts = ownedRewrites();
 
-  const [clean, unsaved] = scripts;
   const fresh = ownedRewrites().map(({ nonce }) => nonce);
 
-  expect(scripts).toHaveLength(2);
-  expect([clean?.command, unsaved?.command]).toEqual([
-    rewriteCommand('干净改写.docx', clean?.nonce ?? ''),
-    rewriteCommand('未保存改写.docx', unsaved?.nonce ?? ''),
-  ]);
+  const names = ['干净改写.docx', '未保存改写.docx', '干净改写.xlsx', '干净改写.pptx'];
+  const commands = scripts.map(({ nonce }, index) => rewriteCommand(names[index] ?? '', nonce));
+  expect(scripts.map(({ command }) => command)).toEqual(commands);
+  expect(scripts).toHaveLength(4);
   for (const { marker, nonce } of scripts) {
     expect(nonce).toMatch(new RegExp(`^${NONCE_PATTERN.source}$`));
     expect(marker).toMatch(/^stack-rewrite-[0-9a-f-]{36}$/);
   }
   const values = scripts.flatMap(({ marker, nonce }) => [marker, nonce]);
-  expect(new Set([...values, ...fresh]).size).toBe(6);
+  expect(new Set([...values, ...fresh]).size).toBe(12);
 });
 
 const BASE = 'http://127.0.0.1:64694';
@@ -190,6 +150,10 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   const clean = { ...observed, responses, editor, agent: session(replies, [], []) };
   const reads = { rewritten: { ...read, typed: true }, saved: read, closed: read };
   const unsaved = { ...clean, file: '未保存改写.docx', reads };
+  const [xlsx, pptx] = [
+    { ...clean, file: 'x.xlsx' },
+    { ...clean, file: 'p.pptx' },
+  ];
 
   const shown = { staleChanged: false, staleRemoved: false, saveFailed: true };
   const typingObserved = {
@@ -211,7 +175,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   } as const;
   const typing = { ...typingObserved, responses, editor };
 
-  const line = officeRewriteLine({ clean, unsaved, typing });
+  const line = officeRewriteLine({ clean, unsaved, xlsx, pptx, typing });
 
   const printed = {
     ...observed,
@@ -230,6 +194,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   expect(line).toEqual({
     clean: printed,
     unsaved: { ...printed, file: '未保存改写.docx', reads },
+    ...{ xlsx: { ...printed, file: 'x.xlsx' }, pptx: { ...printed, file: 'p.pptx' } },
     typing: { ...typingObserved, responses: printed.responses, editor: printed.editor },
   });
   for (const secret of [LONG_RUN, AGENT, 'token'])
@@ -263,13 +228,15 @@ const UNSAVED = {
   ...{ ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED } },
   ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
 };
-const MEASURED = { clean: CLEAN, unsaved: UNSAVED };
+// #657 A4's prediction for the clean XLSX and PPTX cases, for the stack to confirm.
+const MEASURED = { clean: CLEAN, unsaved: UNSAVED, xlsx: CLEAN, pptx: CLEAN };
+type Id = keyof typeof MEASURED;
 const at = (state: 'agent-only' | 'both' | 'employee-only', typed?: boolean) => ({
   ...read,
   state,
   ...(typed === undefined ? {} : { typed }),
 });
-const measured = (id: 'clean' | 'unsaved', overrides: object = {}) => {
+const measured = (id: Id, overrides: object = {}) => {
   const typed = id === 'unsaved' ? false : undefined;
   return {
     ...{ file: `${id}.docx`, provider: { rewriteCalls: 1, rewriteHits: 1, requests: 3 } },
@@ -300,6 +267,9 @@ const typedReads = (typed: boolean) => ({
 it.each([
   ['the clean case as measured', 'clean', measured('clean'), true],
   ['the unsaved case as measured', 'unsaved', measured('unsaved'), true],
+  ['the XLSX case as predicted', 'xlsx', measured('xlsx'), true],
+  ['the PPTX case as predicted', 'pptx', measured('pptx'), true],
+  ['a PPTX save-failed bar', 'pptx', measured('pptx', { notices: UNSAVED.notices }), false],
   ['the typed nonce kept', 'unsaved', measured('unsaved', typedReads(true)), false],
   [
     'the unsaved case without the save-failed bar',
@@ -477,7 +447,6 @@ function standIn() {
 }
 type StandIn = ReturnType<typeof standIn>;
 const after = (ms: number, act: () => unknown) => setTimeout(act, ms);
-type Id = 'clean' | 'unsaved';
 
 /**
  * The seam over `stand` after case `id`'s Agent turn. The save's `saved` event clears
@@ -514,7 +483,7 @@ const refreshed = (stand: StandIn, id: Id) =>
     if (id === 'unsaved') stand.show('saveFailed');
   });
 
-it.each(['clean', 'unsaved'] as const)(
+it.each(['clean', 'unsaved', 'xlsx', 'pptx'] as const)(
   'assembles the %s case as measured once its refresh and notice arrived',
   async (id) => {
     const stand = standIn();
@@ -844,7 +813,8 @@ const rewriteLane = {
     );
   },
   namespaceRead: () => Promise.reject(new Error('no namespace read before the session closes')),
-  provider: () => Promise.resolve({ rewriteCalls: [0, 0], rewriteHits: [0, 0], requests: 0 }),
+  provider: () =>
+    Promise.resolve({ rewriteCalls: [0, 0, 0, 0], rewriteHits: [0, 0, 0, 0], requests: 0 }),
   ...{ instance: 'dsh-team-u-a', reply: 'reply', rewrites: ownedRewrites() },
 };
 

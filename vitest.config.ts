@@ -104,15 +104,20 @@ export default defineConfig({
           // cases adds 75s: the wait for its positives after the Agent turn (the refetch, and the
           // unsaved case's 「保存未写回文件」) at one 60s session timeout, and the 15s quiet window
           // after the save's clear.
+          // The rewrite XLSX and PPTX cases (#657 A4) raised it by 1970s, 985s each, counted as a
+          // clean DOCX case is: #442's 690s (six waits at one 60s session timeout: the healthcheck
+          // wait, the editor load, the Agent turn, the save's typing, the save poll and the notice
+          // clear; two 15s windows; ten 30s execs: the write, four reads, two provider reads and
+          // three listings), #650's 190s, #657 A's 75s and the 30s template read.
           // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 +
-          // 870 + 150 = 10080s, the 1200s of cold builds plus 8880s for everything else. That
-          // remainder is a margin, not the sum of every per-step bound: a vitest timeout skips the
-          // restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll bounded by
-          // a deadline (the 120s write-back, for one) checks it only after its exec returns, so it
-          // can overrun by that last exec; the margin covers that too. The two rewrite lines
-          // (#442, #652) still count the Document Server healthcheck wait at its 60s deadline
-          // only, in the older deadline-only notation.
-          testTimeout: 10_080_000,
+          // 870 + 150 + 1970 = 12050s, the 1200s of cold builds plus 10850s for everything else.
+          // That remainder is a margin, not the sum of every per-step bound: a vitest timeout skips
+          // the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll
+          // bounded by a deadline (the 120s write-back, for one) checks it only after its exec
+          // returns, so it can overrun by that last exec; the margin covers that too. The three
+          // rewrite lines (#442, #652, #657 A4) still count the Document Server healthcheck wait
+          // at its 60s deadline only, in the older deadline-only notation.
+          testTimeout: 12_050_000,
         },
       },
     ],

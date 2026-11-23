@@ -31,6 +31,9 @@ const EXTS = ['docx', 'xlsx', 'pptx'] as const;
 type Ext = (typeof EXTS)[number];
 const fileName = (ext: Ext) => `编辑写回.${ext}`;
 const PARAGRAPH = '编辑写回探针。';
+/** The Document Server's blank `ext` template as base64, read through the host's Docker. */
+export const templateBase64 = async (run: DockerOutput, ext: Exclude<Ext, 'docx'>) =>
+  (await run(['exec', DOCUMENT_SERVER, 'base64', '-w0', `${TEMPLATES}.${ext}`])).trim();
 /** The docx gets the one paragraph, an xlsx or pptx a template's bytes as base64. */
 export const writeArgv = (name: string, base64?: string) =>
   docxCommand(name, ...(base64 === undefined ? [PARAGRAPH] : ['--base64', base64]));
@@ -316,8 +319,7 @@ interface Meeting {
 async function editAndSave(lane: OfficeEditorLane, ext: Ext, directory: string, meeting?: Meeting) {
   const { exec, run, session } = lane;
   const nonce = meeting?.nonce ?? lane.readBack.nonce;
-  const template = ['exec', DOCUMENT_SERVER, 'base64', '-w0', `${TEMPLATES}.${ext}`];
-  const base64 = ext === 'docx' ? undefined : (await run(template)).trim();
+  const base64 = ext === 'docx' ? undefined : await templateBase64(run, ext);
   const written = JSON.parse(await exec(writeArgv(fileName(ext), base64))) as ArchiveEntry;
   const read = () => readWork(lane, fileName(ext));
   const { texts, sha256 } = await read();

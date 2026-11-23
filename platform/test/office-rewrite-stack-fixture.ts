@@ -19,18 +19,12 @@ import {
   editorNonce,
   editorRefused,
   holds,
-  readWork,
-  singleQuoted,
   typeAndSave,
 } from './office-editor-stack-fixture.ts';
-import type { Digest } from './office-editor-stack-fixture.ts';
+import type { Digest, readWork } from './office-editor-stack-fixture.ts';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
-import {
-  docxCommand,
-  documentServerReady,
-  openHinted,
-  untilSeen,
-} from './office-hints-stack-fixture.ts';
+import { openHinted, untilSeen } from './office-hints-stack-fixture.ts';
+import { freshFile, rewriteArgv, rewriteCommand } from './office-rewrite-formats.ts';
 import {
   FRAME_LISTENER,
   FRAMES_SEEN,
@@ -44,19 +38,24 @@ import {
 } from './office-rewrite-observers.ts';
 import type { FrameRecord, NoticeTimes, WatchRecord } from './office-rewrite-observers.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
-import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
+import type { ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import { converseInWorkbench, scrubEach, workbenchSession } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
-const PARAGRAPH = '改写探针：开头只有这一段。';
-/** §60's cases in order: the second types a nonce, unsaved, before the Agent rewrites the file. */
+/**
+ * §60's DOCX cases in order, the second typing a nonce, unsaved, before the Agent rewrites the
+ * file; then #657 A4's clean XLSX and PPTX, each from the Document Server's blank template.
+ */
 const CASES = [
-  { id: 'clean', name: '干净改写.docx', typeFirst: false },
-  { id: 'unsaved', name: '未保存改写.docx', typeFirst: true },
+  { id: 'clean', name: '干净改写.docx', ext: 'docx', typeFirst: false },
+  { id: 'unsaved', name: '未保存改写.docx', ext: 'docx', typeFirst: true },
+  { id: 'xlsx', name: '干净改写.xlsx', ext: 'xlsx', typeFirst: false },
+  { id: 'pptx', name: '干净改写.pptx', ext: 'pptx', typeFirst: false },
 ] as const;
 type CaseId = (typeof CASES)[number]['id'];
+type CaseIndex = 0 | 1 | 2 | 3;
 /** #652: the rewrite lands while A is still typing, before the typing reached the Document Server. */
-const TYPING = { id: 'typing', name: '键入改写.docx' } as const;
+const TYPING = { id: 'typing', name: '键入改写.docx', ext: 'docx' } as const;
 /** Letters only: no space or punctuation for autocorrect to act on, nothing NONCE_PATTERN matches. */
 const FILLER = 'w';
 // Every notice dsh-sidebar-onlyoffice@0.2.0 shows above the editor, zh: src/client/locales.ts:25
@@ -69,7 +68,7 @@ export const NOTICES = {
 const CONFIG = '/sidebar/onlyoffice/config';
 // Each case waits up to a session timeout for its positives after the Agent turn, then spends three
 // OBSERVE_MS windows (the negative window, the quiet window after the save's clear, and after the
-// editor closes, which settles the forgotten store): 90s for both cases on top of their sessions.
+// editor closes, which settles the forgotten store): 45s per case on top of its session.
 /** One Agent turn: its rewrite's call and hit, and the bash, tool-result and title requests. */
 const TURN = { rewriteCalls: 1, rewriteHits: 1, requests: 3 };
 const SESSION_LISTS = ['pageErrors', 'failedRequests', 'externalRequests'] as const;
@@ -90,7 +89,8 @@ const COPY = { copies: 1, listed: true, cleared: true };
  * #657 A's predictions, for the exact-head stack to confirm: the unsaved case's 「保存未写回文件」
  * still shown at the instant before the save, and in both cases no notice and no refetch in the
  * quiet window after the save's clear. Each awaited positive arrived within a session timeout: the
- * refetch in both cases, 「保存未写回文件」 in the unsaved one.
+ * refetch in both cases, 「保存未写回文件」 in the unsaved one. #657 A4's prediction, for the stack
+ * to confirm: the clean XLSX and PPTX cases equal the clean DOCX one.
  */
 const CLEAN = {
   notices: { staleChanged: UNSEEN, staleRemoved: UNSEEN, saveFailed: UNSEEN },
@@ -111,6 +111,8 @@ export const EXPECTED_REWRITE = {
     ...{ ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
     ...{ arrived: { config: true, saveFailed: true }, forgotten: COPY },
   },
+  xlsx: CLEAN,
+  pptx: CLEAN,
 };
 const NONE_SHOWN = { staleChanged: false, staleRemoved: false, saveFailed: false };
 const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
@@ -135,23 +137,6 @@ export const EXPECTED_TYPING = {
   allowed: true,
   forgotten: COPY,
 };
-
-// python-docx from the user image; the file and the nonce arrive as argv. No single quote (below).
-export const REWRITER = `import sys
-from docx import Document
-path, nonce = sys.argv[1:]
-document = Document(path)
-document.add_paragraph(nonce)
-document.save(path)
-print(nonce)`;
-/** The rewrite of `name` in the work directory as argv. */
-export const rewriteArgv = (name: string, nonce: string) => [
-  ...['python3', '-c', REWRITER],
-  ...[`${WORK}/${name}`, nonce],
-];
-/** The Agent's bash rewrite of `name` in the work directory, each word single-quoted. */
-export const rewriteCommand = (name: string, nonce: string) =>
-  singleQuoted(rewriteArgv(name, nonce));
 
 /** The provider's rewrite scripts, one per case in order; every value is a nonsecret nonce. */
 export const ownedRewrites = () =>
@@ -320,8 +305,11 @@ const typingLine = ({ editor, responses, ...rest }: TypingEvidence) => ({
 /** The stack evidence line: sessions counted, the editor's errors and failures scrubbed. */
 export function officeRewriteLine(evidence: OfficeRewriteEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office rewrite evidence missing');
-  const { clean, unsaved, typing } = evidence;
-  return { clean: caseLine(clean), unsaved: caseLine(unsaved), typing: typingLine(typing) };
+  const { clean, unsaved, xlsx, pptx, typing } = evidence;
+  return {
+    ...{ clean: caseLine(clean), unsaved: caseLine(unsaved) },
+    ...{ xlsx: caseLine(xlsx), pptx: caseLine(pptx), typing: typingLine(typing) },
+  };
 }
 
 /** A's lane plus the host's Docker, the Document Server namespace position, A's instance, the
@@ -419,7 +407,12 @@ const turnDeltas = (before: Record<string, unknown>, after: typeof before, index
 });
 
 /** The Agent's turn in a new browser, done once the provider counted its hit and requests. */
-async function agentRewrite(lane: OfficeRewriteLane, index: 0 | 1, marker: string, dir: string) {
+async function agentRewrite(
+  lane: OfficeRewriteLane,
+  index: CaseIndex,
+  marker: string,
+  dir: string,
+) {
   const start = await lane.provider();
   let deltas = turnDeltas(start, start, index);
   const served = async () => {
@@ -435,17 +428,6 @@ async function agentRewrite(lane: OfficeRewriteLane, index: 0 | 1, marker: strin
   const provider = turnDeltas(start, await lane.provider(), index);
   expect(provider, `Office rewrite Agent turn ${String(index + 1)}`).toEqual(TURN);
   return { agent, provider };
-}
-
-/** Writes a case's one-paragraph DOCX, checks it and waits for the Document Server; its reader. */
-async function freshDocx(lane: OfficeRewriteLane, id: string, name: string) {
-  const written = JSON.parse(await lane.exec(docxCommand(name, PARAGRAPH))) as ArchiveEntry;
-  const read = () => readWork(lane, name);
-  const { texts, sha256 } = await read();
-  const first = { sha256, text: texts['word/document.xml'] };
-  expect(first, `Office rewrite ${id} file`).toEqual({ sha256: written.sha256, text: PARAGRAPH });
-  await documentServerReady(lane);
-  return read;
 }
 
 /** The page's config fetches, and status and path of every failed response: the query and hash
@@ -535,15 +517,15 @@ async function openKey(lane: OfficeRewriteLane, name: string) {
 /** One case: open, maybe type unsaved, the Agent's rewrite, a window, type and save, then close. */
 async function rewriteCase(
   lane: OfficeRewriteLane,
-  index: 0 | 1,
+  index: CaseIndex,
   root: string,
   held: ForgottenKey,
 ) {
   const { session } = lane;
-  const { id, name, typeFirst } = CASES[index];
+  const { id, name, ext, typeFirst } = CASES[index];
   const script = lane.rewrites[index];
   if (script === undefined) throw new Error('Office rewrite script missing');
-  const read = await freshDocx(lane, id, name);
+  const read = await freshFile(lane, CASES[index], script.nonce);
   const [typed, saved] = [editorNonce(), editorNonce()];
   const directory = join(root, id);
   const shot = `office-rewrite-${id}`;
@@ -557,7 +539,7 @@ async function rewriteCase(
     await openHinted(page, shoot, session, name, `${shot}-open`, editorRefused);
     held.key = await openKey(lane, name);
     if (typeFirst) {
-      await typeAndSave(page, 'docx', typed, session.timeout, undefined, false);
+      await typeAndSave(page, ext, typed, session.timeout, undefined, false);
       await shoot(`${shot}-typed`);
     }
     const open = fetched.config;
@@ -575,7 +557,7 @@ async function rewriteCase(
     const span = await noticeSpan(page, {
       ...{ fetched, open, shown, waitSaveFailed: typeFirst },
       save: async () => {
-        await typeAndSave(page, 'docx', saved, session.timeout);
+        await typeAndSave(page, ext, saved, session.timeout);
         return observe(await readUntil(read, saved, session.timeout));
       },
       afterCleared: async () => {
@@ -727,8 +709,8 @@ async function typingCase(
   const { session } = lane;
   const provider = await providerCounts(lane);
   const control = saveLines(await hostLog(lane, since), since);
-  const read = await freshDocx(lane, TYPING.id, TYPING.name);
   const nonces = { typed: editorNonce(), agent: editorNonce(), saved: editorNonce() };
+  const read = await freshFile(lane, TYPING, nonces.agent);
   const { fetched, responses, record } = responseLog();
   const observe = (file: OfficeRead): Observed => ({
     state: rewriteState(file.texts, nonces.agent, nonces.saved),
@@ -771,14 +753,15 @@ async function typingCase(
 }
 
 /**
- * 18.7 (#442): with A's DOCX open in ONLYOFFICE, clean or with an unsaved edit, the Agent's `bash`
- * rewrites the same file. The editor refreshes to the Agent's version, awaited up to a session
- * timeout with its arrival recorded; the clean case shows no plugin notice, the unsaved one drops
- * its edit and shows 「保存未写回文件」 until A's save lands, still at the instant before it. A then
- * types and saves, no notice or refresh comes in the quiet window after the save's clear, and the
- * file holds both sides' text, with no copy left in `/data/work`, still after the editor closes
- * (#657 A). The typing case (#652) follows: with the rewrite in its window, the
- * editor refreshes once it turns clean, and A's next save holds both sides' text. Each case
+ * 18.7 (#442): with A's DOCX open in ONLYOFFICE, clean or with an unsaved edit, and then a clean
+ * XLSX and PPTX (#657 A4), the Agent's `bash` rewrites the same file: python-docx for the DOCX, a
+ * stdlib zipfile part rewrite for the others. The editor refreshes to the Agent's version, awaited
+ * up to a session timeout with its arrival recorded; a clean case shows no plugin notice, the
+ * unsaved one drops its edit and shows 「保存未写回文件」 until A's save lands, still at the instant
+ * before it. A then types and saves, no notice or refresh comes in the quiet window after the
+ * save's clear, and the file holds both sides' text, with no copy left in `/data/work`, still after
+ * the editor closes (#657 A). The DOCX typing case (#652) follows: with the rewrite in its window,
+ * the editor refreshes once it turns clean, and A's next save holds both sides' text. Each case
  * records and then removes the forgotten copy its open key left (#650); a case failing once that
  * key was read clears it after `settle` and rethrows its own failure.
  */
@@ -795,15 +778,17 @@ export const officeRewriteScenario = (
       const start = await lane.provider();
       const configured = [start.rewriteCalls, start.rewriteHits];
       expect(configured, 'Rewrite scripts configured').toEqual([
-        [0, 0],
-        [0, 0],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
       ]);
       const root = join(lane.session.directory, 'office-rewrite');
       const cleared = <T>(id: string, body: (held: ForgottenKey) => Promise<T>) =>
         clearingForgottenOnError(lane, `(rewrite ${id} cleanup)`, body, settle);
       const clean = await cleared('clean', (held) => rewriteCase(lane, 0, root, held));
       const unsaved = await cleared('unsaved', (held) => rewriteCase(lane, 1, root, held));
+      const xlsx = await cleared('xlsx', (held) => rewriteCase(lane, 2, root, held));
+      const pptx = await cleared('pptx', (held) => rewriteCase(lane, 3, root, held));
       const typing = await cleared('typing', (held) => typingCase(lane, root, since, held));
-      return { clean, unsaved, typing };
+      return { clean, unsaved, xlsx, pptx, typing };
     },
   );
