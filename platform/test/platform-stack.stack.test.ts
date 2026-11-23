@@ -549,7 +549,8 @@ async function converse(
     // 18.5 (d): a profile rewrite of the ONLYOFFICE row loses to the overlay after a restart.
     const restart = () => restartInstance(lifecycle, administrator, employee);
     evidence.officeProfile = await officeProfileScenario({ ...office, restart });
-    // 18.7 (#442): the Agent rewrites A's open DOCX; the editor refreshes and the save keeps both.
+    // 18.7 (#442, #657 A4): the Agent rewrites A's open DOCX, XLSX and PPTX; the editor refreshes
+    // and the save keeps both.
     evidence.officeRewrite = await rewrite.officeRewriteScenario({ ...office, reply, rewrites });
     // 18.5 (#440): A's open editor outlasts one idle minute; once it closes, A is idle-stopped.
     evidence.officeIdle = await officeIdleScenario({ ...office, reply, readBack });
