@@ -8,16 +8,16 @@ Moved verbatim from the root `AGENTS.md`; normative behaviour lives in the OpenS
 
 | Rule                         | Enforced by                                                                                                                                                            |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Forbidden suffixes (paths)   | `.git-hooks/check-naming.sh` (pre-commit hook)                                                                                                                         |
+| Forbidden suffixes (paths)   | `.git-hooks/check-naming.sh` via `.husky/pre-commit`; `pnpm lint:pr` in CI over the PR range                                                                           |
 | Forbidden suffixes (code)    | ESLint `@typescript-eslint/naming-convention` in `pnpm lint`                                                                                                           |
 | Duplicate code               | `jscpd` (`jscpd.json`) in `pnpm duplicate-code` — fails above 3% of ts/js/tsx lines under `platform/`; `*.test.ts`/`*.test.tsx` excluded, test-support modules counted |
 | Dead code and unused exports | `knip` (`knip.json`) in pre-commit and `pnpm dead-code`                                                                                                                |
-| Scratchpad directories       | `.git-hooks/check-naming.sh` (pre-commit hook)                                                                                                                         |
-| Conventional commits         | `commitlint` (`commitlint.config.cjs`) in the commit-msg hook                                                                                                          |
+| Scratchpad directories       | `.git-hooks/check-naming.sh` via `.husky/pre-commit`; `pnpm lint:pr` in CI over the PR range                                                                           |
+| Conventional commits         | `commitlint` (`commitlint.config.cjs`) via `.husky/commit-msg`; `pnpm lint:pr` in CI over the PR range                                                                 |
 
 Commented-out code has no machine check; it is listed as `review-only` in the Enforcement Index.
 
-User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed. The dated change name follows OpenSpec's lowercase alphanumeric, single-hyphen grammar. Other scratchpad components, forbidden suffixes, dot-segment aliases and unrelated staged violations remain rejected. The pattern lives in `constraints.yaml`; both hook entrypoints share one classifier, and `pnpm test:guardrails` proves acceptance and rejection.
+User-authorized OpenSpec exception (#199): only the managed `archive` component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` is allowed. The dated change name follows OpenSpec's lowercase alphanumeric, single-hyphen grammar. Other scratchpad components, forbidden suffixes, dot-segment aliases and unrelated staged violations remain rejected. The pattern lives in `constraints.yaml`; the path-argument, staged-index and `--range` (CI, `pnpm lint:pr`) entrypoints share one classifier, and `pnpm test:guardrails` proves acceptance and rejection.
 
 The duplicate-code guardrail self-test sizes its planted copies from the ts/js/tsx files under `platform/` that `jscpd.json` does not ignore (never fewer than the gate scans) and the configured percentage, with margin for clone accounting. Repository growth therefore does not silently dilute the canary; the threshold is unchanged.
 
