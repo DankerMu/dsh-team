@@ -10,6 +10,7 @@ import { output, OWNER_LABEL } from './docker-cleanup.ts';
 import { isAbsentResource } from './docker-command.ts';
 import {
   deliveredHealthcheck,
+  DOCUMENT_SERVER,
   DOCUMENT_SERVER_NET,
   healthyWithinStartPeriod,
   holderProbeExit,
@@ -18,7 +19,6 @@ import { unusedPort } from './gateway-http-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 const PLATFORM = 'dsh-team-platform';
-const DOCUMENT_SERVER = 'dsh-team-documentserver';
 const JWT = 'DOCUMENT_SERVER_JWT_SECRET';
 const FONTS = '/usr/share/fonts/truetype/custom';
 

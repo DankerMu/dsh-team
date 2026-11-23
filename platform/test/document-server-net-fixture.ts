@@ -10,7 +10,8 @@ import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 /** The firewall holder owning the bundled Document Server's network namespace (#624). */
 export const DOCUMENT_SERVER_NET = 'dsh-team-documentserver-net';
-const DOCUMENT_SERVER = 'dsh-team-documentserver';
+/** The delivered Document Server container (deploy/compose.yml). */
+export const DOCUMENT_SERVER = 'dsh-team-documentserver';
 const NODE = ['node', '--input-type=module', '-e'];
 
 /** One HTTP request; `POST` sends `{}`. */

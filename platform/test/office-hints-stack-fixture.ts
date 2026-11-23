@@ -9,6 +9,7 @@ import { previewIds, rowQuery, visible } from './better-sidebar-browser-fixture.
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import { record } from './docker-cleanup.ts';
 import { createDockerCommands, isAbsentResource } from './docker-command.ts';
+import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
 import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import {
@@ -20,8 +21,6 @@ import {
 } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence, StackSession } from './stack-browser-fixture.ts';
 
-/** The delivered Document Server container (deploy/compose.yml). */
-export const DOCUMENT_SERVER = 'dsh-team-documentserver';
 const NAME = '同写提示.docx';
 const PARAGRAPH = '同写提示探针：只打开，不编辑。';
 /** Baseline F40, verbatim: plugins/office-hints/client.js `COLLAB`. */

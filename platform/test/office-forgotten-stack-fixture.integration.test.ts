@@ -338,6 +338,7 @@ it('attributes a failed reopen to the alert it showed and the console errors, wi
   const error = sessionFailure('recover', failure, { alert }, KA);
 
   expect(error.message).toContain('Timeout 60000ms exceeded');
+  expect(error.message.split(blocked.message)).toHaveLength(2);
   expect(error.message).toContain('"value":"-104","text":"opened from the backup copy"');
   expect(error.message).toContain(
     '"consoleErrors":["socket <redacted> closed","ServiceWorker 403"]',

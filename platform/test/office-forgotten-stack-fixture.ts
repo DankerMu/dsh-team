@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { FrameLocator } from '@playwright/test';
 import { expect } from 'vitest';
+import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
 import {
   editorNonce,
@@ -9,7 +10,7 @@ import {
   typeAndSave,
   writeArgv,
 } from './office-editor-stack-fixture.ts';
-import { DOCUMENT_SERVER, documentServerReady, openHinted } from './office-hints-stack-fixture.ts';
+import { documentServerReady, openHinted } from './office-hints-stack-fixture.ts';
 import {
   guarded,
   instanceAddress,

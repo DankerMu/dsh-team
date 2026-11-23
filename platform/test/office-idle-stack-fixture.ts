@@ -10,7 +10,7 @@ import {
   retiringOnError,
 } from './office-editor-stack-fixture.ts';
 import type { Digest, Meeting, OfficeEditorLane } from './office-editor-stack-fixture.ts';
-import { DOCUMENT_SERVER } from './office-hints-stack-fixture.ts';
+import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
 import { withWorkFiles } from './sidebar-archive-stack-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 

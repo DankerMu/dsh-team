@@ -209,7 +209,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
   - cookie 总量超过请求头上限（431）时平台无法自愈，需要清除站点数据；只种在工作台 WebSocket 路径上的遮蔽 cookie，若浏览器不接受被拒绝握手里的 Set-Cookie，也需要清除站点数据。
 - 建议每人使用自己的浏览器配置；交接时先登出，并关闭上一位用户的全部标签页。
 
-**Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑（第 18 组）上线之前，DOCX、PPTX 也都走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS、XLSX 在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；配置 `PLATFORM_INSTANCE_FONTS_DIR` 后，授权字体也会挂进实例，用于预览（见 §3 字体目录）。
+**Office 只读预览占用实例内存（#554）**：DOC、PPT、DOCX、PPTX 的只读预览由 DSH 自带的 WASM LibreOffice 在员工实例内转成 PDF；Office 在线编辑开启且已接入 Document Server 时，DOCX、XLSX、PPTX 在 ONLYOFFICE 编辑器里打开；关闭或未接入时，DOCX、PPTX 仍走这条路径。转换在 DSH 进程的 Worker 里运行，DSH 默认最多两路并发。#554 本机实测（arm64，4GiB 内存上限，不含 DSH 常驻内存）：单次转换 docx 的 cgroup 峰值约 1.56GB；同一转换器连续转三个旧格式文件，峰值约 2.14GB。VPS 的实测数值见 #432 的 PR 证据。转换被 OOM 终止时整个 DSH 进程会一起退出，员工正在进行的回合也会丢失；把运行参数 `memoryMiB` 调低前，要把这一点算进去。XLS，以及未用 ONLYOFFICE 打开时的 XLSX，在浏览器的表格视图里显示，不在实例内转换。用户镜像自带 `fonts-noto-cjk` 和 `fonts-dejavu-core` 作为预览字体；配置 `PLATFORM_INSTANCE_FONTS_DIR` 后，授权字体也会挂进实例，用于预览（见 §3 字体目录）。
 
 **预览对员工浏览器版本的要求**：DSH 0.2.1 显示转换结果所用的 PDF 查看器需要浏览器支持 `Map.prototype.getOrInsertComputed`，即 Chrome 或 Edge 145 及以上、Firefox 144 及以上、Safari 26.2 及以上。更旧的浏览器能完成转换，但页面显示「无法显示 PDF」。内网员工的浏览器要先升级到这些版本。
 
@@ -272,7 +272,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - 19.3在B内以uid1001执行真实命令：A已读回的home/work标记在B的同路径及A的宿主卷路径均不可读，Docker socket不存在且读取/调用失败；A的3080/3099在本机、IP和别名持续可达，B按IP/别名均连接失败。B能写自己的工作区、访问平台health200，但无平台会话访问管理用户接口为401；覆盖层覆盖写返回EROFS，删除/替换失败且摘要不变。跨卷rename可先返回EXDEV，不能把该结果单独归因为只读挂载。这里不是65535端口穷举、平台数据全扫描或真实Yolo Agent验收；后两项分别属于19.4/19.5。
 - 每个实例只加入自己的bridge网络；实例间地址/主机名不可达，平台分别接入各实例网络。停止一个实例不应影响兄弟实例。
 - 实例网络端点（网络方式）：员工容器在子网基址+2，平台在+3。使用自带 Document Server 且本次启动接入成功时，再加 Document Server 在+4，恰好三个端点；外部 Document Server 或自带的不可用时没有+4。网络身份不可信，或出现既不是已验证平台端点、也不是已记录 Document Server 端点的不明端点时，操作失败，不强制删除。验收：三端点与地址由 `container-network.docker.test.ts` 的 network 用例断言，自带不可用时无+4 由 `container-document-server.docker.test.ts` 断言（均在 `test:docker`），外部模式不接入由编排器单元测试断言。
-- Document Server 是除平台外唯一接入各实例网络的对端，能直连每个实例的+2:3080（用例的正向对照断言了这一点）。网络层：B 向 A 网络上+2/+3/+4 的 3080、3099、22、80、443、3000、8080 发起的连接全部失败，原因是 Docker 的跨 bridge 隔离，而 B 以 uid1001 运行，不能改路由，也不能把 Document Server 当作下一跳；这不是65535端口穷举。应用层：持有 Document Server JWT 的人可以让它代为请求任何实例。跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护由第18组随 Office 在线编辑一起交付，并由跨用户攻击用例验证；在那之前实例内不启用 ONLYOFFICE，也没有经 Document Server 取文件的路径。
+- Document Server 是除平台外唯一接入各实例网络的对端，能直连每个实例的+2:3080（用例的正向对照断言了这一点）。网络层：B 向 A 网络上+2/+3/+4 的 3080、3099、22、80、443、3000、8080 发起的连接全部失败，原因是 Docker 的跨 bridge 隔离，而 B 以 uid1001 运行，不能改路由，也不能把 Document Server 当作下一跳；这不是65535端口穷举。应用层：持有 Document Server JWT 的人可以让它代为请求任何实例。跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护随 Office 在线编辑交付，由跨用户攻击用例验证。
 - 自带 Document Server 的 Command Service（`/command`、`/coauthoring/CommandService.ashx` 及大小写、尾斜杠、版本前缀变体）只接受它自己网络命名空间内的回环请求，其余来源 403；docservice 的 8000 由防火墙容器对实例丢弃（#624）。验收：`test:deploy` 暴露用例中两个实例到 +4:8000 超时、+4:80 有应答；`test:stack` 中实例到 +4:80 的 `/command` 及带版本前缀、末尾编码 `%3F`/`%23` 的变体为 403、+4:8000 超时。实例网络只有 IPv4，这些探测只覆盖 IPv4；IPv6 规则会安装并逐条自检，但没有探测。
 - 因此员工拿不到别人的 forgotten 副本（某次保存失败后 Document Server 留下的未保存编辑）：列出、取回、删除（`getForgottenList`、`getForgotten`、`deleteForgotten`）只走 Command Service，员工实例发出的都被拒。员工自己的恢复不受影响：重新打开同一个未改动的文件时，Document Server 直接读存储，不经 Command Service。验收：`test:stack` 的 forgotten 用例。
 - 部署实例不发布宿主端口、不挂Docker socket、不使用特权模式；uid1001运行。只有平台持有Docker控制权限。`published-loopback`只是显式宿主开发方式，不满足部署无端口映射边界。
@@ -292,7 +292,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - 员工可以在自己的实例里安装插件，开启的联网工具可以访问外网。这些**不改变隔离边界**：员工本来就有终端和完全访问权限，插件只在员工自己的实例内运行。
 - 共享单机内核不是独立虚拟机；管理员与Docker操作者是可信边界。没有多机HA或已认证的60并发容量保证。
 
-RAGFlow 知识库检索通过后台配置交付（本文档不含 RAGFlow 部署说明）；自带 Document Server 已随部署交付并接入实例网络，Office 在线编辑（ONLYOFFICE 插件及其基于每实例文件令牌密钥的校验）尚未交付；该密钥本身已在每次启动时注入实例。本文档不覆盖离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
+RAGFlow 知识库检索通过后台配置交付（本文档不含 RAGFlow 部署说明）；自带 Document Server 已随部署交付并接入实例网络；Office 在线编辑（ONLYOFFICE 插件及其基于每实例文件令牌密钥的校验）已随阶段 2 交付。本文档不覆盖离线包、升级回滚、备份恢复和生产TLS证书管理。需求与边界来源：[instance-isolation规格](../openspec/specs/instance-isolation/spec.md)、[基线](REQUIREMENTS_BASELINE.md)、[实施计划](IMPLEMENTATION_PLAN.md)。
 
 ## 8. 停止与一次性验收清理
 
