@@ -21,7 +21,7 @@
 #### Scenario: AI 改写丢弃了未保存的编辑
 
 - **WHEN** 员工在 ONLYOFFICE 中有未保存的编辑，Agent 改写了同一个 DOCX，编辑器换到改写后的版本
-- **THEN** 车道在结算窗口后记录旧 key 的 forgotten 副本是否存在（目录增量和列表布尔值），随后移除它，该 key 的副本数为 0，列表不再含该 key
+- **THEN** 车道在结算窗口后记录旧 key 的 forgotten 副本是否存在（该 key 的副本数和列表布尔值），随后移除它，该 key 的副本数为 0，列表不再含该 key
 
 #### Scenario: forgotten 用例成功结束
 

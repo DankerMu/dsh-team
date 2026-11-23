@@ -22,6 +22,8 @@ The issue's recommended direction: measure, document, clean up. No production co
 
 ### One forgotten-store module
 
+The global-count wording in this section (`forgottenDirs`, its baseline and the `cache/files` parent check) is superseded by § Key-scoped counting (measured) below.
+
 New `platform/test/document-server-forgotten-fixture.ts`. The rewrite fixture must use the store helpers, and the forgotten fixture already imports the rewrite fixture (`NOTICES`), so the helpers move out of the forgotten fixture, unchanged where possible, with every importer updated and no re-export:
 
 - moved: `FORGOTTEN_DIR`, `forgottenDirs`, `namespaceForgottenListScript`, `forgottenPresent`, the guarded `forgottenList` call, and `registeredKey` generalised to `registeredKey(lane, path)` (it polls the plugin registry, which is written with a 500 ms debounce; a single `registryKeys` read would race);

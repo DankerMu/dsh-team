@@ -477,7 +477,7 @@ async function officeForgotten(
   await settleForgotten();
   const { cleared, ...residue } = await forgottenRecord(lane, kA, '(residue)');
   const left = `residue ${JSON.stringify(residue)}`;
-  expect(cleared, `forgotten store back at its baseline, A key unlisted, ${left}`).toBe(true);
+  expect(cleared, `none of A key's copies left, A key unlisted, ${left}`).toBe(true);
   return { positive, attack, present, recovered, reopenAlert: alert ?? { shown: false }, residue };
 }
 

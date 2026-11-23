@@ -187,12 +187,19 @@ it("describes each store entry oldest first by shape and age, carrying only the 
   const shape = await forgottenShape(lane, KA, '(shape)');
 
   // Oldest first: OTHER's copy, then KA's, then the stray file.
+  const entries = shape as Record<string, unknown>[]; // the printed JSON objects, as asserted here
   const entry = { hex64: true, length: 64, dir: true };
-  expect(shape).toEqual([
-    { ...entry, matchesKey: false, files: ['output.docx'], ageSeconds: 600 },
-    { ...entry, matchesKey: true, files: ['<hex64>.bin', 'output.docx'], ageSeconds: 120 },
-    { hex64: false, length: 5, dir: false, matchesKey: false, files: [], ageSeconds: 5 },
+  const ageless = entries.map((record) => ({ ...record, ageSeconds: 0 }));
+  expect(ageless).toEqual([
+    { ...entry, matchesKey: false, files: ['output.docx'], ageSeconds: 0 },
+    { ...entry, matchesKey: true, files: ['<hex64>.bin', 'output.docx'], ageSeconds: 0 },
+    { hex64: false, length: 5, dir: false, matchesKey: false, files: [], ageSeconds: 0 },
   ]);
+  // python3 rounds time.time() - mtime: a slow start can read one second older.
+  const ages = entries.map(({ ageSeconds }) => Number(ageSeconds));
+  [600, 120, 5].forEach((age, index) => {
+    expect(Math.abs((ages[index] ?? Number.NaN) - age)).toBeLessThanOrEqual(1);
+  });
   for (const secret of [KA, OTHER]) {
     expect(JSON.stringify(shape)).not.toContain(secret);
     expect(secretFree(lane)).not.toContain(secret);
