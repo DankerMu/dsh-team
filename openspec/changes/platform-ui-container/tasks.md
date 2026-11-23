@@ -47,7 +47,6 @@
   - The real record hidden with `--tmpfs`, or replaced by an empty file: exit 1.
 - [ ] 2.2 Collect at least 5 `platform-ui` executions on this PR (reruns of the job). For each, record:
   - the guard step's seconds (which include the image pull), the test step's seconds and the job's seconds;
-  - for at least one cold-cache run, the host install log line for better-sqlite3 (a build or a bundled prebuild);
   - whether the pnpm cache hit or missed;
   - that no `archive.ubuntu.com` or `Fetched` line appears in the log;
   - that the screenshots artifact was uploaded.

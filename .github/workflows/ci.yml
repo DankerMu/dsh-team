@@ -107,7 +107,7 @@ jobs:
     needs: layer1-fast-checks
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Install and the better-sqlite3 build run on the host; the tests run in the image, which ships
+    # pnpm install runs on the host, which has the toolchain node-gyp needs; the tests run in the image, which ships
     # Chromium and its system libraries in /ms-playwright. Move the digest together with
     # @playwright/test (platform/web/README.md). Dependabot does not bump it.
     env:
@@ -143,7 +143,7 @@ jobs:
             }
             console.log(`Playwright image matches: ${found}`);
           '
-      # Host Node runs the host-built binding; $PNPM_HOME holds the pnpm shim and the package it runs.
+      # Host Node keeps the .tool-versions release; $PNPM_HOME holds the pnpm shim and the package it runs.
       # --init reaps Chromium's orphaned children and forwards signals (PID 1 ignores them).
       - name: Run the UI tests in the image with the host Node and pnpm
         run: |
