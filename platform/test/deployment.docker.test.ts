@@ -35,6 +35,7 @@ import {
   DOCUMENT_SERVER,
   DOCUMENT_SERVER_NET,
   firewallReach,
+  holderIpv6Reach,
   holderRestartSequence,
 } from './document-server-net-fixture.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
@@ -546,12 +547,17 @@ async function expectSocketIsolation(
 
 const ANSWERED = { outcome: 'answered', status: 200 };
 
-// 2_280_000: the docker project's 900_000 plus 1_380_000 for the holder restart sequence (#654),
-// a literal so the case keeps its layout. Every call at its 30s bound: three reach rounds x two
-// instances x (1 inspect + 2 execs) = 540s; five identity inspects before and after `up -d` =
-// 300s; two restarts and `up -d` = 90s; the holder health wait (30s start period plus its last
-// 30s inspect) = 60s; the Document Server health wait (300s plus its last 30s inspect) = 330s;
-// two IPv6 readback execs = 60s.
+// 2_880_000 = 900_000 + 1_380_000 + 600_000: the docker project's 900_000, plus 1_380_000 for the
+// holder restart sequence (#654), plus 600_000 for the IPv6 behaviour probe (#654 AC4); a numeric
+// literal so the case keeps its layout. Every call at its 30s bound. Restart sequence: three
+// reach rounds x two instances x (1 inspect + 2 execs) = 540s; five identity inspects before and
+// after `up -d` = 300s; two restarts and `up -d` = 90s; the holder health wait (30s start period
+// plus its last 30s inspect) = 60s; the Document Server health wait (300s plus its last 30s
+// inspect) = 330s; two IPv6 readback execs = 60s. IPv6 probe, twenty calls = 600s: two
+// registration inspects; the holder's networks before, network create, connect, the address
+// inspect and the network inspect for context (failure path only, counted anyway); run
+// --detach, two DROP counter reads and two reach execs; rm -f and the disconnect (or its fallback
+// inspect); removeNetwork's five calls; the holder's networks after.
 it('publishes only the platform port and mounts the Docker socket only there with two native instances', async () => {
   await withDeployment(async (lifecycle, start) => {
     const { deployment, employee } = await configureDeployment(lifecycle, start);
@@ -654,11 +660,15 @@ it('publishes only the platform port and mounts the Docker socket only there wit
         });
       const instances = [employee, second].map((user) => `dsh-team-u-${user.id}`);
       await holderRestartSequence(lifecycle, deployment.compose, holder, instances, expectedIds);
+      const image = String(holder.Image);
+      expect(image).toMatch(/^sha256:[a-f0-9]{64}$/);
+      const ipv6 = await holderIpv6Reach(lifecycle, image, { [OWNER_LABEL]: lifecycle.runId });
+      process.stdout.write(`Holder IPv6 reach verified: ${JSON.stringify(ipv6)}\n`);
     } finally {
       gateway.close();
     }
   });
-}, 2_280_000);
+}, 2_880_000);
 
 it('serves native HTTPS and WSS behind an exact trusted TLS proxy with Secure cookies and client audit identity', async () => {
   await withTlsDeployment(async (lifecycle, start, setup, prepared) => {

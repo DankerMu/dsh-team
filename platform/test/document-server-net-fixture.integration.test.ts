@@ -13,12 +13,14 @@ import {
   DOCUMENT_SERVER_NET,
   firewallReach,
   healthyWithinStartPeriod,
+  holderIpv6Reach,
   holderIpv6Rules,
   holderProbeExit,
   holderRead,
   holderRestartSequence,
 } from './document-server-net-fixture.ts';
 import type { AsyncDockerCommand } from './docker-command.ts';
+import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 it('names the delivered Document Server container', () => {
   expect(DOCUMENT_SERVER).toBe('dsh-team-documentserver');
@@ -422,4 +424,260 @@ it.each([
   ['a Document Server outside the holder', { serverMode: 'bridge' }, 'left the holder: bridge'],
 ])('fails on %s', async (_case, options, message) => {
   await expect(restartLane(options).sequence()).rejects.toThrow(message);
+});
+
+const V6_NET = 'dsh-team-v6-net';
+const NET_ID = 'a'.repeat(64);
+const PROBE_ID = 'b'.repeat(64);
+const PLATFORM_IMAGE = `sha256:${'c'.repeat(64)}`;
+const V6_ADDRESS = 'fd8a:1b2c:3d4e:1::2';
+const V6_ENDPOINT = { IPAddress: '172.30.0.2', GlobalIPv6Address: V6_ADDRESS };
+const dropLine = (packets: number) =>
+  `Chain INPUT (policy DROP ${String(packets)} packets, ${String(packets * 80)} bytes)`;
+
+interface V6Script {
+  readonly endpoint?: object;
+  readonly inside?: readonly object[];
+  readonly outside?: readonly object[];
+  readonly drops?: readonly string[];
+  /** Calls whose argv starts with one of these fail as the daemon would. */
+  readonly failing?: readonly string[];
+  readonly keepAttached?: boolean;
+}
+
+/**
+ * The holder, its temporary IPv6 network and the probe container as Docker would answer them;
+ * `commandAsync`, `registerResourceAsync` and `removeNetwork` share one call log.
+ */
+function v6Lane({
+  endpoint = V6_ENDPOINT,
+  inside = [OK, OK],
+  outside = [OK, TIMEOUT],
+  drops = [dropLine(7), dropLine(9)],
+  failing = [],
+  keepAttached = false,
+}: V6Script = {}) {
+  const calls: string[] = [];
+  const bounds = new Set<number>();
+  let attached = false;
+  let counters = 0;
+  const answer = (args: readonly string[]) => {
+    const [verb, action, , , program] = args;
+    if (verb === 'container') {
+      const networks = { 'dsh-team-test_default': {}, 'dsh-team-net-a': {} };
+      return JSON.stringify(attached ? { ...networks, [V6_NET]: endpoint } : networks);
+    }
+    if (action === 'create') return `${NET_ID}\n`;
+    if (action === 'connect') attached = true;
+    if (action === 'disconnect') attached = keepAttached;
+    if (action === 'inspect')
+      return '[{"Subnet":"172.30.0.0/16"},{"Subnet":"fd8a:1b2c:3d4e:1::/64"}]\n';
+    if (verb === 'run') return `${PROBE_ID}\n`;
+    if (program === 'ip6tables') return `${String(drops[counters++])}\npkts bytes target\n`;
+    if (program === 'node')
+      return JSON.stringify(args[3] === DOCUMENT_SERVER_NET ? inside : outside);
+    return '';
+  };
+  const lifecycle: Pick<
+    UserImageLifecycle,
+    'commandAsync' | 'registerResourceAsync' | 'removeNetwork'
+  > = {
+    commandAsync: (args, timeout) => {
+      bounds.add(timeout);
+      const line = args.join(' ');
+      calls.push(
+        args[4] === 'node'
+          ? `reach ${String(args[2])} ${String(args[3])} ${String(args.at(-1))}`
+          : line,
+      );
+      if (failing.some((prefix) => line.startsWith(prefix)))
+        return Promise.resolve({
+          status: 1,
+          stdout: '',
+          stderr: 'Error response from daemon: stand-in',
+        });
+      return Promise.resolve({ status: 0, stdout: answer(args), stderr: '' });
+    },
+    registerResourceAsync: (kind, name, ownership) => {
+      calls.push(`register ${kind} ${name} ${JSON.stringify(ownership)}`);
+      return Promise.resolve();
+    },
+    removeNetwork: (name, id) => {
+      calls.push(`removeNetwork ${name} ${id}`);
+    },
+  };
+  const probe = () => holderIpv6Reach(lifecycle, PLATFORM_IMAGE, { 'dsh-team.test-run': 'run-1' });
+  return { calls, bounds, probe };
+}
+
+const NETWORKS = `container inspect -f {{json .NetworkSettings.Networks}} ${DOCUMENT_SERVER_NET}`;
+const COUNTER = `exec --user root ${DOCUMENT_SERVER_NET} ip6tables -L INPUT -v -x -n`;
+const V6_TARGETS =
+  '[{"host":"fd8a:1b2c:3d4e:1::2","port":80,"path":"/"},{"host":"fd8a:1b2c:3d4e:1::2","port":8000,"path":"/"}]';
+const SETUP = [
+  'register network dsh-team-v6-net {"dsh-team.test-run":"run-1"}',
+  'register container dsh-team-v6-probe {"dsh-team.test-run":"run-1"}',
+  NETWORKS,
+  'network create --ipv6 --internal --label dsh-team.test-run=run-1 dsh-team-v6-net',
+  'network connect dsh-team-v6-net dsh-team-documentserver-net',
+  NETWORKS,
+];
+const RUN = `run --detach --name dsh-team-v6-probe --label dsh-team.test-run=run-1 --network dsh-team-v6-net --user 1001 --entrypoint sleep ${PLATFORM_IMAGE} infinity`;
+const PROBES = [
+  COUNTER,
+  `reach root dsh-team-documentserver-net ${V6_TARGETS}`,
+  `reach 1001 dsh-team-v6-probe ${V6_TARGETS}`,
+  COUNTER,
+];
+const SUBNETS = 'network inspect -f {{json .IPAM.Config}} dsh-team-v6-net';
+const RM = `rm -f ${PROBE_ID}`;
+const DISCONNECT = 'network disconnect --force dsh-team-v6-net dsh-team-documentserver-net';
+const REMOVE = `removeNetwork dsh-team-v6-net ${NET_ID}`;
+const CONTEXT =
+  'address=fd8a:1b2c:3d4e:1::2 family=6 subnets=[{"Subnet":"172.30.0.0/16"},{"Subnet":"fd8a:1b2c:3d4e:1::/64"}]';
+
+it('probes the holder over a registered internal IPv6 network from uid 1001 and restores its networks', async () => {
+  const lane = v6Lane();
+
+  const seen = await lane.probe();
+
+  expect(seen).toEqual({
+    address: 'fd8a:1b2c:3d4e:1::2',
+    inside: [OK, OK],
+    outside: [OK, TIMEOUT],
+    dropped: { before: 7, after: 9 },
+  });
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, REMOVE, NETWORKS]);
+  // Every docker call at the 30s the case budget counts.
+  expect([...lane.bounds]).toEqual([30_000]);
+});
+
+it.each([
+  [
+    'a refused outside 8000',
+    { outside: [OK, REFUSED] },
+    '"outside":[{"outcome":"answered","status":200},{"outcome":"refused"}],"dropped":true',
+  ],
+  [
+    'an answered outside 8000',
+    { outside: [OK, OK] },
+    '"outside":[{"outcome":"answered","status":200},{"outcome":"answered","status":200}],"dropped":true',
+  ],
+  [
+    'an inside 8000 not listening on IPv6',
+    { inside: [OK, TIMEOUT] },
+    '"inside":[{"outcome":"answered","status":200},{"outcome":"timeout"}]',
+  ],
+  [
+    'an outside path down for both ports',
+    { outside: [TIMEOUT, TIMEOUT] },
+    '"outside":[{"outcome":"timeout"},{"outcome":"timeout"}],"dropped":true',
+  ],
+  [
+    'an outside 80 failing',
+    { outside: [{ outcome: 'failed', code: 'EHOSTUNREACH' }, TIMEOUT] },
+    '"outside":[{"outcome":"failed","code":"EHOSTUNREACH"},{"outcome":"timeout"}],"dropped":true',
+  ],
+  [
+    'a DROP counter that does not rise',
+    { drops: [dropLine(7), dropLine(7)] },
+    '"outside":[{"outcome":"answered","status":200},{"outcome":"timeout"}],"dropped":false',
+  ],
+])(
+  'fails on %s after cleanup, naming the outcomes, address and subnet',
+  async (_case, script, observed) => {
+    const lane = v6Lane(script);
+
+    const failure = lane.probe();
+
+    await expect(failure).rejects.toThrow(`Holder IPv6 reach differs: observed={`);
+    await expect(failure).rejects.toThrow(observed);
+    await expect(failure).rejects.toThrow(CONTEXT);
+    expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, SUBNETS, RM, DISCONNECT, REMOVE]);
+  },
+);
+
+it.each([
+  [
+    'an empty address beside an IPv4 one',
+    { IPAddress: '172.30.0.2', GlobalIPv6Address: '' },
+    'observed="" family=0',
+  ],
+  ['an IPv4 literal', { GlobalIPv6Address: '172.30.0.2' }, 'observed="172.30.0.2" family=4'],
+])(
+  'fails before any probe on %s, then disconnects and removes the network',
+  async (_case, endpoint, observed) => {
+    const lane = v6Lane({ endpoint });
+
+    await expect(lane.probe()).rejects.toThrow(
+      `Document Server holder has no IPv6 address on dsh-team-v6-net: ${observed} subnets=[{"Subnet":"172.30.0.0/16"},{"Subnet":"fd8a:1b2c:3d4e:1::/64"}]`,
+    );
+    expect(lane.calls).toEqual([...SETUP, SUBNETS, DISCONNECT, REMOVE]);
+  },
+);
+
+it('fails when the holder keeps the IPv6 network after cleanup', async () => {
+  const lane = v6Lane({ keepAttached: true });
+
+  await expect(lane.probe()).rejects.toThrow(
+    'Holder networks differ after the IPv6 probe: before=["dsh-team-net-a","dsh-team-test_default"] after=["dsh-team-net-a","dsh-team-test_default","dsh-team-v6-net"]',
+  );
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, REMOVE, NETWORKS]);
+});
+
+it('still disconnects and removes the network when rm -f fails, and reports it', async () => {
+  const lane = v6Lane({ failing: ['rm'] });
+
+  await expect(lane.probe()).rejects.toThrow(`docker ${RM} failed (1)`);
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, REMOVE]);
+});
+
+it('throws both the probe failure and the cleanup failure together', async () => {
+  const lane = v6Lane({ outside: [OK, OK], failing: ['rm'] });
+
+  const failure: unknown = await lane.probe().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  expect(failure).toBeInstanceOf(AggregateError);
+  const messages = (failure as AggregateError).errors.map((error) => String(error));
+  expect(messages).toHaveLength(2);
+  expect(messages[0]).toContain('Holder IPv6 reach differs');
+  expect(messages[1]).toContain(`docker ${RM} failed (1)`);
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, SUBNETS, RM, DISCONNECT, REMOVE]);
+});
+
+it('counts a failed disconnect as done once the holder no longer has the network', async () => {
+  const lane = v6Lane({ failing: ['network connect', 'network disconnect'] });
+
+  await expect(lane.probe()).rejects.toThrow(
+    'docker network connect dsh-team-v6-net dsh-team-documentserver-net failed (1)',
+  );
+  expect(lane.calls).toEqual([...SETUP.slice(0, 5), DISCONNECT, NETWORKS, REMOVE]);
+});
+
+it('fails on a DROP policy line of another shape', async () => {
+  const lane = v6Lane({ drops: ['Chain INPUT (policy ACCEPT 7 packets, 560 bytes)'] });
+
+  await expect(lane.probe()).rejects.toThrow(
+    'Holder IPv6 INPUT policy unreadable: "Chain INPUT (policy ACCEPT 7 packets, 560 bytes)"',
+  );
+  expect(lane.calls).toEqual([...SETUP, RUN, COUNTER, RM, DISCONNECT, REMOVE]);
+});
+
+it('leaves a probe container without an ID to the lifecycle, never removing it by name', async () => {
+  const lane = v6Lane({ failing: ['run'] });
+
+  await expect(lane.probe()).rejects.toThrow(`docker ${RUN} failed (1)`);
+  expect(lane.calls).toEqual([...SETUP, RUN, DISCONNECT, REMOVE]);
+});
+
+it('leaves a network without an ID to the lifecycle, neither disconnecting nor removing it', async () => {
+  const lane = v6Lane({ failing: ['network create'] });
+
+  await expect(lane.probe()).rejects.toThrow(
+    'docker network create --ipv6 --internal --label dsh-team.test-run=run-1 dsh-team-v6-net failed (1)',
+  );
+  expect(lane.calls).toEqual(SETUP.slice(0, 4));
 });
