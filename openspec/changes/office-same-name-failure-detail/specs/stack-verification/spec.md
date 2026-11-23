@@ -2,7 +2,7 @@
 
 ### Requirement: 同名 DOCX 失败给出每一侧的原因
 
-编辑器车道的同名 DOCX 情形中，A、B 两个编辑会话同时进行。任一侧失败时，抛出错误的消息 SHALL 依次给出每个失败侧的标签（`A` 或 `B`）和该侧经过脱敏的失败原因链，只列出失败的一侧。消息 SHALL NOT 含有文档 key 或 URL 查询串。错误 SHALL 仍是 `AggregateError`，`errors` 保留两侧原始的失败。
+编辑器车道的同名 DOCX 情形中，A、B 两个编辑会话同时进行。任一侧失败时，抛出错误的消息 SHALL 依次给出每个失败侧的标签（`A` 或 `B`）和该侧经过脱敏的失败原因链，只列出失败的一侧。消息 SHALL NOT 含有文档 key 或 URL 查询串。错误 SHALL 仍是 `AggregateError`，`errors` 保留每个失败侧原始的失败，A 在前。
 
 #### Scenario: 两侧都失败
 
