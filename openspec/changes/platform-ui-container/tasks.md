@@ -28,21 +28,21 @@
 
 ## 1. Implementation
 
-- [ ] 1.1 Add `container: image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27` to `platform-ui`.
+- [x] 1.1 Add `container: image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27` to `platform-ui`.
   - Check that the existing steps work inside the container. These can only be proven by the CI runs in 2.2:
     - checkout, and husky `prepare`, running as root;
     - the pnpm store and its cache;
     - the artifact upload.
   - Check that `pnpm test:ui` runs Chromium from `/ms-playwright` without downloading it.
-- [ ] 1.2 Replace the `pnpm test:ui:install` step with a named inline guard step, as described in proposal § What Changes.
+- [x] 1.2 Replace the `pnpm test:ui:install` step with a named inline guard step, as described in proposal § What Changes.
   - The step compares `@playwright/test` with the `driverVersion` in `/ms-playwright/.docker-info`.
   - A mismatch, a missing file or an unparsable file exits 1 and prints both versions and `dockerImageName`.
   - No `playwright install` call remains.
-- [ ] 1.3 Update `platform/web/README.md:11` as described in proposal § What Changes.
+- [x] 1.3 Update `platform/web/README.md:11` as described in proposal § What Changes.
 
 ## 2. Verification
 
-- [ ] 2.1 Run `pnpm fmt:check` and `pnpm lint` (including `lint:ci`), then exercise the guard step locally.
+- [x] 2.1 Run `pnpm fmt:check` and `pnpm lint` (including `lint:ci`), then exercise the guard step locally.
   - Negative: run the step text inside another published image, `docker run --rm -v "$PWD:/w" -w /w mcr.microsoft.com/playwright:v1.62.0-noble bash -c '<step>'`, after `pnpm install`. Record the nonzero exit and both printed versions.
   - Missing record: run the step inside the pinned digest with `--tmpfs /ms-playwright` hiding the record. Record the nonzero exit and its message.
   - Unreadable record (optional): bind an empty file onto `/ms-playwright/.docker-info`.

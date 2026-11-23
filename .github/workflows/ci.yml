@@ -107,6 +107,10 @@ jobs:
     needs: layer1-fast-checks
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # The image ships Chromium and its system libraries in /ms-playwright; move the digest together
+    # with @playwright/test (platform/web/README.md). Dependabot does not bump it.
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble@sha256:eff16c30e6f3f4af0a03fa4b706120d5e9b0891c344a27d64559aff5900a4a27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -115,7 +119,24 @@ jobs:
           node-version-file: .tool-versions
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test:ui:install
+      - name: Check the image Playwright matches @playwright/test
+        run: |
+          node -e '
+            const expected = require("@playwright/test/package.json").version;
+            let info = {};
+            let problem = "";
+            try {
+              info = Object(JSON.parse(require("node:fs").readFileSync("/ms-playwright/.docker-info", "utf8")));
+            } catch (error) {
+              problem = ` (/ms-playwright/.docker-info: ${error.message})`;
+            }
+            const found = `@playwright/test ${expected}, image driverVersion ${info.driverVersion}, dockerImageName ${info.dockerImageName}${problem}`;
+            if (info.driverVersion !== expected) {
+              console.error(`Playwright image drift: ${found}`);
+              process.exit(1);
+            }
+            console.log(`Playwright image matches: ${found}`);
+          '
       - run: pnpm test:ui
       - name: Retain browser screenshot evidence
         if: always()
