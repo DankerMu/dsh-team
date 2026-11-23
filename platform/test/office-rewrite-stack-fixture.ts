@@ -67,14 +67,15 @@ export const NOTICES = {
   saveFailed: '保存未写回文件（文档服务会重试；请勿只关闭标签页，必要时用“下载文件”备份）',
 };
 const CONFIG = '/sidebar/onlyoffice/config';
-// Each case spends two OBSERVE_MS windows (after the Agent turn and after the editor closes, which
-// settles the forgotten store), so both cases add 60s to the stack case on top of their sessions.
+// Each case waits up to a session timeout for its positives after the Agent turn, then spends three
+// OBSERVE_MS windows (the negative window, the quiet window after the save's clear, and after the
+// editor closes, which settles the forgotten store): 90s for both cases on top of their sessions.
 /** One Agent turn: its rewrite's call and hit, and the bash, tool-result and title requests. */
 const TURN = { rewriteCalls: 1, rewriteHits: 1, requests: 3 };
 const SESSION_LISTS = ['pageErrors', 'failedRequests', 'externalRequests'] as const;
 const NO_ENTRIES = { added: [], removed: [] };
 const QUIET = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
-const UNSEEN = { before: false, window: false, saved: false };
+const UNSEEN = { before: false, window: false, atSave: false, saved: false, quiet: false };
 // #650's source prediction: a session closed with its save refused leaves one forgotten copy under
 // its key, listed; one closed without a change leaves none; the lane removes either.
 const NO_COPY = { copies: 0, listed: false, cleared: true };
@@ -86,6 +87,9 @@ const COPY = { copies: 1, listed: true, cleared: true };
  * landed. Both: no notice shown once the save landed; one config refetch, the plugin's refreshFile;
  * the file the Agent's after the rewrite and both sides' after the save and the close; the unsaved
  * case's typed nonce gone from every read; no new or missing work entry; 18.5's allowed errors.
+ * #657 A's predictions, for the exact-head stack to confirm: the unsaved case's 「保存未写回文件」
+ * still shown at the instant before the save, and in both cases no notice and no refetch in the
+ * quiet window after the save's clear.
  */
 const CLEAN = {
   notices: { staleChanged: UNSEEN, staleRemoved: UNSEEN, saveFailed: UNSEEN },
@@ -98,7 +102,7 @@ const CLEAN = {
   sessions: [QUIET, QUIET],
   forgotten: NO_COPY,
 };
-const REFUSED = { before: false, window: true, saved: true };
+const REFUSED = { before: false, window: true, atSave: true, saved: true, quiet: false };
 export const EXPECTED_REWRITE = {
   clean: CLEAN,
   unsaved: { ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED }, forgotten: COPY },
@@ -197,15 +201,18 @@ interface EditedEvidence {
 /** States, digests, entry names, `status path` lines and sessions. */
 interface RewriteCaseEvidence extends EditedEvidence {
   readonly provider: Readonly<Record<string, number>>;
-  /** Each notice: shown before the Agent turn, latched from then to the window's end, latched from
-   * then until the save landed. */
-  readonly notices: Readonly<
-    Record<string, Readonly<Record<'before' | 'window' | 'saved', boolean>>>
-  >;
+  /** Each notice: shown before the Agent turn, latched from then to the window's end, shown at the
+   * instant before the save, latched until the save landed, latched in the quiet window after the
+   * save's clear. */
+  readonly notices: Readonly<Record<string, Readonly<Record<NoticeFlag, boolean>>>>;
   /** No notice shown within a session timeout once the save landed. */
   readonly cleared: boolean;
-  /** The page's config fetches so far: before the Agent turn, after the window, after the save. */
+  /** The page's config fetches so far: before the Agent turn, after the window, at the end of the
+   * quiet window after the save. */
   readonly config: Readonly<Record<'open' | 'window' | 'saved', number>>;
+  /** Ms from the Agent turn's `rewritten` read until each awaited positive held; null when it did not
+   * within a session timeout, or was not awaited. Recorded, not fixed. */
+  readonly arrived: Readonly<Record<'config' | 'saveFailed', number | null>>;
   readonly agent: StackBrowserEvidence;
 }
 type NoticePoints<K extends string> = Readonly<Record<K, NoticeFlags>>;
@@ -325,7 +332,7 @@ const entryDiff = (before: readonly string[], after: readonly string[]): EntryDi
 // Latches each notice's rendered text sighted in the page, outside the editor iframe, as STOP_LATCH
 // does, with its first sighting's and first later absence's Date.now(); innerText, as officeFacts
 // reads it, leaves script and style text out. A second install starts the latch afresh.
-const NOTICE_LATCH = `(() => {
+export const NOTICE_LATCH = `(() => {
   const notices = ${JSON.stringify(NOTICES)};
   window.__dshTeamNotices = Object.fromEntries(Object.keys(notices).map((id) => [id, false]));
   window.__dshTeamNoticeTimes = Object.fromEntries(Object.keys(notices).map((id) => [id, { shown: null, cleared: null }]));
@@ -342,17 +349,27 @@ const NOTICE_LATCH = `(() => {
   check();
   new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
 })()`;
-const NOTICES_SEEN = '({ ...window.__dshTeamNotices })';
+export const NOTICES_SEEN = '({ ...window.__dshTeamNotices })';
 const NOTICE_TIMES = '({ ...window.__dshTeamNoticeTimes })';
 const STALE_LATCHED = 'window.__dshTeamNotices.staleChanged === true';
-const NOTICES_SHOWN = `Object.fromEntries(Object.entries(${JSON.stringify(NOTICES)}).map(([id, notice]) => [id, document.body.innerText.includes(notice)]))`;
+export const NOTICES_SHOWN = `Object.fromEntries(Object.entries(${JSON.stringify(NOTICES)}).map(([id, notice]) => [id, document.body.innerText.includes(notice)]))`;
 type NoticeFlags = Readonly<Record<string, boolean>>;
-/** Each notice's three flags; a flag the page did not report counts as seen, so it fails. */
-const noticeFlags = (before: NoticeFlags, window: NoticeFlags, saved: NoticeFlags) =>
+type NoticeFlag = 'before' | 'window' | 'atSave' | 'saved' | 'quiet';
+/** Each notice's five flags; a flag the page did not report counts as seen, so it fails. */
+const noticeFlags = (
+  before: NoticeFlags,
+  window: NoticeFlags,
+  atSave: NoticeFlags,
+  saved: NoticeFlags,
+  quiet: NoticeFlags,
+) =>
   Object.fromEntries(
     Object.keys(NOTICES).map((id) => [
       id,
-      { before: before[id] !== false, window: window[id] !== false, saved: saved[id] !== false },
+      {
+        ...{ before: before[id] !== false, window: window[id] !== false },
+        ...{ atSave: atSave[id] !== false, saved: saved[id] !== false, quiet: quiet[id] !== false },
+      },
     ]),
   );
 
@@ -431,9 +448,68 @@ function responseLog() {
   return { fetched, responses, record };
 }
 
+/** The page calls the notice span makes; Playwright's Page is one. */
+interface NoticePage {
+  evaluate<R>(expression: string): Promise<R>;
+}
+
 // A successful save's `saved` event clears 「保存未写回文件」 (OnlyOfficeView.tsx `saveError`).
-const noneShown = (page: Page) => async () =>
+const noneShown = (page: NoticePage) => async () =>
   Object.values(await page.evaluate<NoticeFlags>(NOTICES_SHOWN)).every((on) => !on);
+
+/** What the notice span needs of its case: the counts, the pre-turn notices and its two steps. */
+interface NoticeSteps<T> {
+  readonly fetched: { readonly config: number };
+  /** The config fetches before the Agent turn. */
+  readonly open: number;
+  /** The notices shown before the Agent turn. */
+  readonly shown: NoticeFlags;
+  /** Whether 「保存未写回文件」 latching is a positive to await, as the config refetch always is. */
+  readonly waitSaveFailed: boolean;
+  /** Types, saves and polls the read until the save landed. */
+  readonly save: () => Promise<T>;
+  /** The listing and screenshot after the save, run inside the quiet window. */
+  readonly afterCleared: () => Promise<void>;
+  readonly timeout: number;
+  readonly windowMs: number;
+}
+
+/**
+ * #657 A: from the Agent turn's `rewritten` read to the end of the editing session. The positives
+ * (the refetch; 「保存未写回文件」 latched where awaited) are awaited up to `timeout`, their first
+ * hold recorded in `arrived`; then a fixed window for the negatives; the notices shown at the
+ * instant before the save; the save; the latch until it landed; the clear; and, with the latch
+ * re-installed, a quiet window in which no notice and no refetch may come.
+ */
+export async function noticeSpan<T>(page: NoticePage, steps: NoticeSteps<T>) {
+  const { fetched, open, timeout, windowMs } = steps;
+  const seen = () => page.evaluate<NoticeFlags>(NOTICES_SEEN);
+  const start = performance.now();
+  const arrived: Record<'config' | 'saveFailed', number | null> = {
+    config: null,
+    saveFailed: null,
+  };
+  const since = () => Math.round(performance.now() - start);
+  await heldWithin(async () => {
+    if (arrived.config === null && fetched.config > open) arrived.config = since();
+    if (steps.waitSaveFailed && arrived.saveFailed === null && (await seen()).saveFailed === true)
+      arrived.saveFailed = since();
+    return arrived.config !== null && (!steps.waitSaveFailed || arrived.saveFailed !== null);
+  }, timeout);
+  await delay(windowMs);
+  const [latched, window] = [await seen(), fetched.config];
+  const atSave = await page.evaluate<NoticeFlags>(NOTICES_SHOWN);
+  const afterSave = await steps.save();
+  const savedLatch = await seen();
+  const cleared = await heldWithin(noneShown(page), timeout);
+  await page.evaluate(NOTICE_LATCH);
+  await steps.afterCleared();
+  await delay(windowMs);
+  const quiet = await seen();
+  const config = { open, window, saved: fetched.config };
+  const notices = noticeFlags(steps.shown, latched, atSave, savedLatch, quiet);
+  return { notices, config, arrived, cleared, afterSave };
+}
 
 /** The key the plugin minted for the open `name`, read before anything changes the file. */
 async function openKey(lane: OfficeRewriteLane, name: string) {
@@ -481,17 +557,21 @@ async function rewriteCase(
       join(directory, 'agent'),
     );
     const rewritten = observe(await read());
-    await delay(OBSERVE_MS);
-    const latched = await page.evaluate<NoticeFlags>(NOTICES_SEEN);
-    const window = fetched.config;
-    await typeAndSave(page, 'docx', saved, session.timeout);
-    const afterSave = observe(await readUntil(read, saved, session.timeout));
-    const notices = noticeFlags(shown, latched, await page.evaluate<NoticeFlags>(NOTICES_SEEN));
-    const cleared = await heldWithin(noneShown(page), session.timeout);
-    const entries = { saved: entryDiff(before, await listing(lane)) };
-    await shoot(`${shot}-saved`);
-    const config = { open, window, saved: fetched.config };
-    return { agent, provider, notices, cleared, config, rewritten, afterSave, entries, before };
+    let entries: { saved: EntryDiff } | undefined;
+    const span = await noticeSpan(page, {
+      ...{ fetched, open, shown, waitSaveFailed: typeFirst },
+      save: async () => {
+        await typeAndSave(page, 'docx', saved, session.timeout);
+        return observe(await readUntil(read, saved, session.timeout));
+      },
+      afterCleared: async () => {
+        entries = { saved: entryDiff(before, await listing(lane)) };
+        await shoot(`${shot}-saved`);
+      },
+      ...{ timeout: session.timeout, windowMs: OBSERVE_MS },
+    });
+    if (entries === undefined) throw new Error('Office rewrite listing after the save missing');
+    return { agent, provider, ...span, rewritten, entries, before };
   };
   let browsed: Awaited<ReturnType<typeof browse>> | undefined;
   const names = {
@@ -507,10 +587,11 @@ async function rewriteCase(
   if (browsed === undefined || held.key === null)
     throw new Error('Office rewrite case not observed');
   await delay(OBSERVE_MS);
-  const { agent, provider, notices, cleared, config, rewritten, afterSave, entries, before } =
+  const { agent, provider, notices, cleared, config, arrived, rewritten, afterSave, entries } =
     browsed;
+  const { before } = browsed;
   const evidence: RewriteCaseEvidence = {
-    ...{ file: name, provider, notices, cleared, config, responses, editor, agent },
+    ...{ file: name, provider, notices, cleared, config, arrived, responses, editor, agent },
     reads: { rewritten, saved: afterSave, closed: observe(await read()) },
     entries: { ...entries, closed: entryDiff(before, await listing(lane)) },
     allowed: editorErrorsAllowed(editor.consoleErrors, responses, session.base),
@@ -677,10 +758,12 @@ async function typingCase(
 
 /**
  * 18.7 (#442): with A's DOCX open in ONLYOFFICE, clean or with an unsaved edit, the Agent's `bash`
- * rewrites the same file. The editor refreshes to the Agent's version; the clean case shows no
- * plugin notice, the unsaved one drops its edit and shows 「保存未写回文件」 until A's save lands. A
- * then types and saves, and the file holds both sides' text, with no copy left in `/data/work`,
- * still after the editor closes. The typing case (#652) follows: with the rewrite in its window, the
+ * rewrites the same file. The editor refreshes to the Agent's version, awaited up to a session
+ * timeout with its arrival recorded; the clean case shows no plugin notice, the unsaved one drops
+ * its edit and shows 「保存未写回文件」 until A's save lands, still at the instant before it. A then
+ * types and saves, no notice or refresh comes in the quiet window after the save's clear, and the
+ * file holds both sides' text, with no copy left in `/data/work`, still after the editor closes
+ * (#657 A). The typing case (#652) follows: with the rewrite in its window, the
  * editor refreshes once it turns clean, and A's next save holds both sides' text. Each case
  * records and then removes the forgotten copy its open key left (#650); a case failing once that
  * key was read clears it after `settle` and rethrows its own failure.

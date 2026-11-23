@@ -100,15 +100,19 @@ export default defineConfig({
           // shape and the key count at the anchor (three 30s execs), the 15s settle after the
           // recovery and the same five-call record. A failing case's cleanup, once: its 15s settle
           // and a 30s removal (45s).
+          // The rewrite notice windows (#657 A) raised it by 150s. Each of the clean and unsaved
+          // cases adds 75s: the wait for its positives after the Agent turn (the refetch, and the
+          // unsaved case's 「保存未写回文件」) at one 60s session timeout, and the 15s quiet window
+          // after the save's clear.
           // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 +
-          // 870 = 9930s, the 1200s of cold builds plus 8730s for everything else. That remainder is a
-          // margin, not the sum of every per-step bound: a vitest timeout skips the restore
-          // `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll bounded by a
-          // deadline (the 120s write-back, for one) checks it only after its exec returns, so it
+          // 870 + 150 = 10080s, the 1200s of cold builds plus 8880s for everything else. That
+          // remainder is a margin, not the sum of every per-step bound: a vitest timeout skips the
+          // restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll bounded by
+          // a deadline (the 120s write-back, for one) checks it only after its exec returns, so it
           // can overrun by that last exec; the margin covers that too. The two rewrite lines
           // (#442, #652) still count the Document Server healthcheck wait at its 60s deadline
           // only, in the older deadline-only notation.
-          testTimeout: 9_930_000,
+          testTimeout: 10_080_000,
         },
       },
     ],
