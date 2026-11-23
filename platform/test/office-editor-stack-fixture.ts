@@ -407,6 +407,7 @@ export function sameNameFailure(
 ) {
   const sides = [['A', a] as const, ['B', other] as const];
   const failed = sides.flatMap(([name, side]) =>
+    // PromiseRejectedResult types its reason as any; it is kept as the unknown it is.
     side.status === 'rejected' ? [{ name, reason: side.reason as unknown }] : [],
   );
   if (failed.length === 0) return undefined;

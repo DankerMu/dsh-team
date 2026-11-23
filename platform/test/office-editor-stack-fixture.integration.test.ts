@@ -440,22 +440,25 @@ it.each([
 ])(
   'fails both editing sessions of %s without the key or query anywhere',
   async (_case, retire, size) => {
-    const cause = new Error(`page.goto: ${BASE}${SOCKET}`);
-    vi.mocked(workbenchSession).mockImplementation((_session, names) =>
-      Promise.reject(new StackWorkbenchFailure(cause, leaky, names.label)),
-    );
+    // Each side's cause names its employee, so A's reason cannot pass for B's.
+    vi.mocked(workbenchSession).mockImplementation((session, names) => {
+      const cause = new Error(`page.goto ${session.email}: ${BASE}${SOCKET}`);
+      return Promise.reject(new StackWorkbenchFailure(cause, leaky, names.label));
+    });
 
     const error = await officeEditorScenario(editorLane(retire)).catch((caught: unknown) => caught);
 
     expect(errorTree(error)).toHaveLength(size);
     const reasons = sides(error).map((side) => side.message);
     const counts = 'consoleErrors=1 pageErrors=0 failedRequests=1 externalRequests=0';
-    const failure = `Stack workbench office editor docx failed (${counts}): page.goto: ${BASE}/doc/<redacted>/c/`;
-    expect(reasons).toEqual([failure, failure]);
+    const failed = (email: string) =>
+      `Stack workbench office editor docx failed (${counts}): page.goto ${email}: ${BASE}/doc/<redacted>/c/`;
+    const [failureA, failureB] = [failed('a@x.test'), failed('b@x.test')];
+    expect(reasons).toEqual([failureA, failureB]);
     const sameName = errorTree(error).find(
       (entry) => entry instanceof AggregateError && entry.message.startsWith(SAME_NAME),
     );
-    expect(sameName).toHaveProperty('message', `${SAME_NAME}: A: ${failure}; B: ${failure}`);
+    expect(sameName).toHaveProperty('message', `${SAME_NAME}: A: ${failureA}; B: ${failureB}`);
   },
 );
 
