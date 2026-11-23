@@ -31,7 +31,7 @@
 
 - [ ] Touches a critical path listed in `AGENTS.md` (`## Critical Paths`) — needs line-by-line human review
 - [ ] Changes `.github/workflows/` or a gate script
-- [ ] Changes a build-time patch under `images/dsh-user/` or a delivered file of a preinstalled `plugins/<id>/` that loads from the employee profile — existing employees need 「重置配置」 (`docs/DEPLOY.md` upgrade notes); say so in the PR
+- [ ] Changes a build-time patch under `images/dsh-user/` a delivered file of a preinstalled `plugins/<id>/` that loads from the employee profile, or an `imageDefaultEnabled` default in `images/dsh-user/catalog.json` — existing employees need 「重置配置」 (`docs/DEPLOY.md` upgrade notes); say so in the PR
 
 ## Canonicality check
 
