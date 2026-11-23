@@ -557,7 +557,9 @@ const ANSWERED = { outcome: 'answered', status: 200 };
 // registration inspects; the holder's networks before, network create, connect, the address
 // inspect and the network inspect for context (failure path only, counted anyway); run
 // --detach, two DROP counter reads and two reach execs; rm -f and the disconnect (or its fallback
-// inspect); removeNetwork's five calls; the holder's networks after.
+// inspect); removeNetwork's five calls; the holder's networks after. The lifecycle's `finish()`
+// then retires the two registered targets (the network and the probe container, about three
+// inspects at 30s); the docker project's 900_000 base bears that, not the 600_000.
 it('publishes only the platform port and mounts the Docker socket only there with two native instances', async () => {
   await withDeployment(async (lifecycle, start) => {
     const { deployment, employee } = await configureDeployment(lifecycle, start);

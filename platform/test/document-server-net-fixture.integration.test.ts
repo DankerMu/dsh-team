@@ -19,7 +19,7 @@ import {
   holderRead,
   holderRestartSequence,
 } from './document-server-net-fixture.ts';
-import type { AsyncDockerCommand } from './docker-command.ts';
+import type { AsyncDockerCommand, DockerCommandResult } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
 it('names the delivered Document Server container', () => {
@@ -443,6 +443,8 @@ interface V6Script {
   /** Calls whose argv starts with one of these fail as the daemon would. */
   readonly failing?: readonly string[];
   readonly keepAttached?: boolean;
+  /** A result replacing the stand-in's answer for a call, given the calls so far. */
+  readonly override?: (line: string, calls: readonly string[]) => DockerCommandResult | undefined;
 }
 
 /**
@@ -456,6 +458,7 @@ function v6Lane({
   drops = [dropLine(7), dropLine(9)],
   failing = [],
   keepAttached = false,
+  override = () => undefined,
 }: V6Script = {}) {
   const calls: string[] = [];
   const bounds = new Set<number>();
@@ -490,6 +493,8 @@ function v6Lane({
           ? `reach ${String(args[2])} ${String(args[3])} ${String(args.at(-1))}`
           : line,
       );
+      const replaced = override(line, calls);
+      if (replaced !== undefined) return Promise.resolve(replaced);
       if (failing.some((prefix) => line.startsWith(prefix)))
         return Promise.resolve({
           status: 1,
@@ -680,4 +685,81 @@ it('leaves a network without an ID to the lifecycle, neither disconnecting nor r
     'docker network create --ipv6 --internal --label dsh-team.test-run=run-1 dsh-team-v6-net failed (1)',
   );
   expect(lane.calls).toEqual(SETUP.slice(0, 4));
+});
+
+const daemonError = (stderr: string) => ({ status: 1, stdout: '', stderr: `${stderr}\n` });
+
+it('rethrows a failed disconnect while the holder still has the network', async () => {
+  const lane = v6Lane({ failing: ['network disconnect'] });
+
+  const failure: unknown = await lane.probe().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  expect(failure).not.toBeInstanceOf(AggregateError);
+  expect(String(failure)).toContain(`docker ${DISCONNECT} failed (1)`);
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, NETWORKS, REMOVE]);
+});
+
+it('reports a failed disconnect as unproven when the holder cannot be read back', async () => {
+  const lane = v6Lane({
+    failing: ['network disconnect'],
+    override: (line, calls) =>
+      line === NETWORKS && calls.includes(DISCONNECT)
+        ? daemonError('Error response from daemon: stand-in')
+        : undefined,
+  });
+
+  const failure: unknown = await lane.probe().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).message).toBe('Holder IPv6 disconnect unproven');
+  const messages = (failure as AggregateError).errors.map((error) => String(error));
+  expect(messages).toHaveLength(2);
+  expect(messages[0]).toContain(`docker ${DISCONNECT} failed (1)`);
+  expect(messages[1]).toContain(`docker ${NETWORKS} failed (1)`);
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, NETWORKS, REMOVE]);
+});
+
+it.each([
+  [
+    'network create',
+    'IPv6 network create returned no ID: ""',
+    // Nothing to undo: no disconnect, no removeNetwork.
+    SETUP.slice(0, 4),
+  ],
+  // The network is undone; the unnamed probe container is left to the lifecycle, never `rm -f`.
+  ['run', 'IPv6 probe run returned no ID: ""', [...SETUP, RUN, DISCONNECT, REMOVE]],
+])(
+  'fails when %s prints no 64-hex ID, undoing only the attempted steps',
+  async (prefix, message, calls) => {
+    const lane = v6Lane({
+      override: (line) =>
+        line.startsWith(prefix) ? { status: 0, stdout: '\n', stderr: '' } : undefined,
+    });
+
+    await expect(lane.probe()).rejects.toThrow(message);
+    expect(lane.calls).toEqual(calls);
+  },
+);
+
+it('counts a probe container the daemon no longer has as removed', async () => {
+  const lane = v6Lane({
+    override: (line) =>
+      line === RM
+        ? daemonError(`Error response from daemon: No such container: ${PROBE_ID}`)
+        : undefined,
+  });
+
+  expect(await lane.probe()).toEqual({
+    address: V6_ADDRESS,
+    inside: [OK, OK],
+    outside: [OK, TIMEOUT],
+    dropped: { before: 7, after: 9 },
+  });
+  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, REMOVE, NETWORKS]);
 });
