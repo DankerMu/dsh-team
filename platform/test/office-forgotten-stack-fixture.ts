@@ -7,6 +7,7 @@ import {
   forgottenList,
   forgottenPresent,
   forgottenRecord,
+  forgottenShape,
   OBSERVE_MS,
   registeredKey,
 } from './document-server-forgotten-fixture.ts';
@@ -422,6 +423,8 @@ async function officeForgotten(
   await lane.exec(writeArgv(NAME));
   const origin = (await lane.exec(['stat', '-c', '%y', FILE])).trim();
   const beforeDirs = await forgottenDirs(lane);
+  // The store before the trigger, A's key not yet known: the anchor's attribution if it fails.
+  const beforeShape = await forgottenShape(lane, null, '(shape before)');
   const { kA, closed } = await editIntoForgotten(lane, nonce, directory, held);
   if (kA === null)
     throw new Error('Office forgotten: the plugin minted no key for A (editor open)');
@@ -443,8 +446,13 @@ async function officeForgotten(
     );
   }
   expect(JSON.stringify(positive), 'positive control free of A key').not.toContain(kA);
-  // The anchor: the store path is right and A's copy is one directory, named by A's key.
-  expect(await forgottenDirs(lane), 'one forgotten directory for A key').toBe(beforeDirs + 1);
+  // The anchor: the store path is right and A's copy is one directory, named by A's key. The
+  // shapes before and after the trigger attribute a mismatch; they carry no key.
+  const shapes = { before: beforeShape, after: await forgottenShape(lane, kA, '(shape after)') };
+  const shaped = redactSecrets(`one forgotten directory for A key, ${JSON.stringify(shapes)}`, [
+    kA,
+  ]);
+  expect(await forgottenDirs(lane), shaped).toBe(beforeDirs + 1);
   // The copy is stored; restoring the mtime makes the reopen recompute A's original key.
   await lane.exec(['touch', '-m', '-d', origin, FILE]);
   const bInstance = await lane.secondEmployee();

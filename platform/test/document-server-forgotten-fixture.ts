@@ -81,6 +81,36 @@ export async function removeForgotten(lane: StoreLane, key: string, label: strin
   return removed;
 }
 
+/** In the Document Server (python3; no node): each store entry's shape, oldest first. A 64-hex run
+ * in any name prints as `<hex64>`; only the key's digest is in the script, and stderr (a traceback
+ * would quote a path) goes to /dev/null. */
+const shapePy = (digest: string | null) => `import hashlib, json, os, re, sys, time
+sys.stderr = open(os.devnull, 'w')
+root, digest = sys.argv[1], ${digest === null ? 'None' : `'${digest}'`}
+HEX = re.compile(r'[0-9a-f]{64}')
+name_digest = lambda name: hashlib.sha256(name.encode('utf-8', 'surrogateescape')).hexdigest()
+entries = []
+for name in os.listdir(root) if os.path.isdir(root) else []:
+    path = os.path.join(root, name)
+    inside = os.path.isdir(path) and not os.path.islink(path)
+    entries.append({'hex64': HEX.fullmatch(name) is not None, 'length': len(name),
+        'matchesKey': digest is not None and name_digest(name) == digest, 'dir': inside,
+        'files': sorted(HEX.sub('<hex64>', f) for f in os.listdir(path)) if inside else [],
+        'ageSeconds': round(time.time() - os.lstat(path).st_mtime)})
+entries.sort(key=lambda entry: -entry['ageSeconds'])
+print(json.dumps({'entries': entries}))`;
+
+/** A diagnostic of the store for a failure message: per entry whether its name is 64 hex, its
+ * length, whether it is `key`'s (never when `key` is null), whether it is a directory, the names
+ * inside and its age in seconds; guarded, so no failure carries the key. */
+export async function forgottenShape(lane: StoreLane, key: string | null, label: string) {
+  const digest = key === null ? null : digestOf(key);
+  const args = ['exec', DOCUMENT_SERVER, 'python3', '-I', '-c', shapePy(digest), FORGOTTEN_DIR];
+  const { entries } = await guarded(label, [key ?? undefined], () => lane.run(args));
+  if (!Array.isArray(entries)) throw new Error('Document Server forgotten store shape unreadable');
+  return entries as unknown[]; // printed only, never asserted field by field
+}
+
 /** In the Document Server's namespace (the holder's loopback, as 51-e's `info` probe): one
  * `getForgottenList` with a body-`token` JWT signed by the secret on stdin. Only A's key's SHA-256
  * is embedded, so the script (docker argv, quoted by a failed exec) never carries the key. Reports

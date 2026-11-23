@@ -430,11 +430,13 @@ const forgottenLane: Parameters<typeof officeIsolationWithForgotten>[0] = {
     // writeArgv's DOCX write (stdout unread), then withWorkFiles' removal: each name after WORK.
     return reply(args.slice(4).map(() => false));
   },
-  // The forgotten store's directory count through host Docker; nothing else before the session.
-  run: (args) =>
-    args.slice(0, 3).join(' ') === `exec ${DOCUMENT_SERVER} sh`
-      ? Promise.resolve('0\n')
-      : Promise.reject(new Error('no host Docker before the edit session')),
+  // The forgotten store's count and shape through host Docker; nothing else before the session.
+  run: (args) => {
+    const store = args.slice(0, 3).join(' ');
+    if (store === `exec ${DOCUMENT_SERVER} python3`) return reply({ entries: [] });
+    if (store === `exec ${DOCUMENT_SERVER} sh`) return Promise.resolve('0\n');
+    return Promise.reject(new Error('no host Docker before the edit session'));
+  },
   retire: () => Promise.resolve(),
   provider: () => Promise.reject(new Error('no provider read before the edit session')),
   platformRead: () => Promise.reject(new Error('no platform read before the edit session')),
@@ -463,7 +465,7 @@ it("clears A's copy after a failed edit through the caller's holder, printing no
     run: (args) => {
       calls.push(args);
       const removal = args[4]?.includes('sha256sum') === true;
-      return Promise.resolve(removal ? '{"removed":1}' : '0\n');
+      return removal ? Promise.resolve('{"removed":1}') : forgottenLane.run(args);
     },
   };
   const session = {

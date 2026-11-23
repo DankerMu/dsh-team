@@ -1,6 +1,14 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -12,6 +20,7 @@ import {
   forgottenDirs,
   forgottenPresent,
   forgottenRecord,
+  forgottenShape,
   registeredKey,
   removeForgotten,
 } from './document-server-forgotten-fixture.ts';
@@ -60,10 +69,10 @@ function storeLane(dir: string, answers: Record<string, unknown>[] = []) {
   const run = async (args: string[]) => {
     calls.push(args);
     const [verb, container, shell, ...rest] = args;
-    if (verb !== 'exec' || container !== DOCUMENT_SERVER || shell !== 'sh')
-      throw new Error('stand-in answers only sh in the Document Server');
+    if (verb !== 'exec' || container !== DOCUMENT_SERVER || (shell !== 'sh' && shell !== 'python3'))
+      throw new Error('stand-in answers only sh and python3 in the Document Server');
     const local = rest.map((arg) => (arg === FORGOTTEN_DIR ? dir : arg));
-    return (await promisify(execFile)('sh', local)).stdout;
+    return (await promisify(execFile)(shell, local)).stdout;
   };
   const namespaceRead = (script: string) => {
     scripts.push(script);
@@ -159,6 +168,72 @@ it.each(['{"removed":"1"}', '{"removed":-1}', '{}'])(
   async (output) => {
     await expect(removeForgotten(answering(output), KA, '(cleanup)')).rejects.toThrow(
       'Document Server forgotten removal count unreadable',
+    );
+  },
+);
+
+/** Sets `path`'s mtime `seconds` into the past. */
+const aged = (path: string, seconds: number) => {
+  const at = Date.now() / 1000 - seconds;
+  utimesSync(path, at, at);
+};
+
+it("describes each store entry oldest first by shape and age, carrying only the key's digest", async () => {
+  const dir = store(KA, OTHER);
+  writeFileSync(join(dir, KA, `${OTHER}.bin`), 'another key inside');
+  writeFileSync(join(dir, 'stray'), 'not a copy');
+  aged(join(dir, KA), 120);
+  aged(join(dir, OTHER), 600);
+  aged(join(dir, 'stray'), 5);
+  const lane = storeLane(dir);
+
+  const shape = await forgottenShape(lane, KA, '(shape)');
+
+  // Oldest first: OTHER's copy, then KA's, then the stray file.
+  const entry = { hex64: true, length: 64, dir: true };
+  expect(shape).toEqual([
+    { ...entry, matchesKey: false, files: ['output.docx'], ageSeconds: 600 },
+    { ...entry, matchesKey: true, files: ['<hex64>.bin', 'output.docx'], ageSeconds: 120 },
+    { hex64: false, length: 5, dir: false, matchesKey: false, files: [], ageSeconds: 5 },
+  ]);
+  for (const secret of [KA, OTHER]) {
+    expect(JSON.stringify(shape)).not.toContain(secret);
+    expect(secretFree(lane)).not.toContain(secret);
+  }
+  expect(secretFree(lane)).toContain(createHash('sha256').update(KA).digest('hex'));
+  expect(lane.calls.map((args) => args.at(-1))).toEqual([FORGOTTEN_DIR]);
+});
+
+it('describes the store as empty before its first copy, and matches no key when none is known', async () => {
+  const files = join(ROOT, String(stores++), 'files');
+  mkdirSync(files, { recursive: true });
+  const dir = store(KA);
+
+  const absent = await forgottenShape(storeLane(join(files, 'forgotten')), KA, '(shape)');
+  const unknown = await forgottenShape(storeLane(dir), null, '(shape)');
+
+  expect(absent).toEqual([]);
+  expect(unknown).toMatchObject([{ hex64: true, matchesKey: false, files: ['output.docx'] }]);
+});
+
+it('fails without the key or the reader error text when an entry cannot be read', async () => {
+  const dir = store(KA);
+  const lane = storeLane(dir);
+
+  const error = (await sealed(join(dir, KA), 0o000, () =>
+    forgottenShape(lane, KA, '(shape)').catch((caught: unknown) => caught),
+  )) as Error;
+
+  expect(error.message).toContain('Office isolation (shape) failed');
+  expect(everythingPrinted(error)).not.toContain(KA);
+  expect(error.message).not.toMatch(/traceback|permission/i);
+});
+
+it.each(['{}', '{"entries":{}}'])(
+  'rejects a shape report %s that is not a list',
+  async (output) => {
+    await expect(forgottenShape(answering(output), KA, '(shape)')).rejects.toThrow(
+      'Document Server forgotten store shape unreadable',
     );
   },
 );
