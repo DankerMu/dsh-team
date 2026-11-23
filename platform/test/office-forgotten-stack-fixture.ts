@@ -24,6 +24,7 @@ import type {
   OfficeIsolationEvidence,
   OfficeIsolationLane,
 } from './office-isolation-stack-fixture.ts';
+import { NOTICES } from './office-rewrite-stack-fixture.ts';
 import { exchangeJs, JWT_JS, READ_JS } from './onlyoffice-probe-script.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import {
@@ -331,7 +332,12 @@ async function editIntoForgotten(
   directory: string,
 ): Promise<{ kA: string | null; closed: boolean }> {
   await documentServerReady(lane);
-  const names = { label: 'office forgotten edit', failure: 'office-forgotten-edit-failure' };
+  const names = {
+    label: 'office forgotten edit',
+    failure: 'office-forgotten-edit-failure',
+    // The refused forcesave shows the save-error notice: the guard's message, A's key and path.
+    masked: [NOTICES.saveFailed],
+  };
   let kA: string | null = null;
   const body: Parameters<typeof workbenchSession>[2] = async (page, shoot) => {
     await openHinted(page, shoot, lane.session, NAME, 'office-forgotten-edit-open');

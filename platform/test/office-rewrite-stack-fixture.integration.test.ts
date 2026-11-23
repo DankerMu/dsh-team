@@ -9,6 +9,7 @@ import {
   EXPECTED_REWRITE,
   EXPECTED_TYPING,
   heldApart,
+  NOTICES as NOTICE_TEXTS,
   officeRewriteLine,
   officeRewriteScenario,
   ownedRewrites,
@@ -556,4 +557,15 @@ it('leaves a failed rewrite session without the key or query anywhere it is prin
     'message',
     `Stack workbench office rewrite clean failed (${counts}): page.goto: net::ERR_ABORTED at ${socket} <- frame ${socket}`,
   );
+});
+
+it('masks the save-error notice in every screenshot of the clean and unsaved sessions', async () => {
+  vi.mocked(workbenchSession).mockRejectedValue(new Error('stand-in browser'));
+
+  await expect(officeRewriteScenario(rewriteLane)).rejects.toThrow('stand-in browser');
+
+  // `clean` and `unsaved` pass the same `names` expression; the clean case is the one reached.
+  const [[, names] = []] = vi.mocked(workbenchSession).mock.calls;
+  expect(names?.label).toBe('office rewrite clean');
+  expect(names?.masked ?? []).toContain(NOTICE_TEXTS.saveFailed);
 });

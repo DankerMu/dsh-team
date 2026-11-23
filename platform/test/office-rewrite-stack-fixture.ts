@@ -52,7 +52,7 @@ const TYPING = { id: 'typing', name: '键入改写.docx' } as const;
 const FILLER = 'w';
 // Every notice dsh-sidebar-onlyoffice@0.2.0 shows above the editor, zh: src/client/locales.ts:25
 // `staleChanged`, :27 `staleRemoved`, :28 `saveFailed`.
-const NOTICES = {
+export const NOTICES = {
   staleChanged: '文件已被外部修改（可能是 AI）——重新加载将丢弃未保存的修改',
   staleRemoved: '文件已从磁盘删除',
   saveFailed: '保存未写回文件（文档服务会重试；请勿只关闭标签页，必要时用“下载文件”备份）',
@@ -461,7 +461,12 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
     return { agent, provider, notices, cleared, config, rewritten, afterSave, entries, before };
   };
   let browsed: Awaited<ReturnType<typeof browse>> | undefined;
-  const names = { label: `office rewrite ${id}`, failure: `${shot}-failure` };
+  const names = {
+    label: `office rewrite ${id}`,
+    failure: `${shot}-failure`,
+    // The save-error notice renders the guard's message: the old key, the path and sizes.
+    masked: [NOTICES.saveFailed],
+  };
   const body = async (page: Page, shoot: (name: string) => Promise<void>) => {
     browsed = await browse(page, shoot);
   };
