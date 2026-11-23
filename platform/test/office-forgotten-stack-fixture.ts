@@ -1,8 +1,17 @@
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { FrameLocator } from '@playwright/test';
 import { expect } from 'vitest';
-import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
+import {
+  clearingForgottenOnError,
+  forgottenCopies,
+  forgottenList,
+  forgottenPresent,
+  forgottenRecord,
+  forgottenShape,
+  registeredKey,
+  settleForgotten,
+} from './document-server-forgotten-fixture.ts';
+import type { ForgottenKey } from './document-server-forgotten-fixture.ts';
 import type { NamespaceRead } from './document-server-net-fixture.ts';
 import {
   editorNonce,
@@ -16,8 +25,6 @@ import {
   instanceAddress,
   NODE,
   officeIsolationScenario,
-  registryKeys,
-  script,
   verify,
 } from './office-isolation-stack-fixture.ts';
 import type {
@@ -25,7 +32,7 @@ import type {
   OfficeIsolationLane,
 } from './office-isolation-stack-fixture.ts';
 import { NOTICES } from './office-rewrite-stack-fixture.ts';
-import { exchangeJs, JWT_JS, READ_JS } from './onlyoffice-probe-script.ts';
+import { JWT_JS } from './onlyoffice-probe-script.ts';
 import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import {
   redactSecrets,
@@ -194,30 +201,6 @@ ${FORGOTTEN_ATTACK_JS}
 } catch (error) { observed.error = error instanceof Error ? error.message : String(error); }
 process.stdout.write(JSON.stringify(observed));`;
 
-/** In the Document Server's namespace (the holder's loopback, as 51-e's `info` probe): one
- * `getForgottenList` with a body-`token` JWT signed by the secret on stdin. Only A's key's SHA-256
- * is embedded, so the script (docker argv, quoted by a failed exec) never carries the key. Reports
- * DS's numeric `error`, whether an entry is A's key (`listed`) or a `<key>/…` path under it
- * (`contains`), the list length and the first entry's shape — never a key or token value (§55.5
- * positive control, with §55.6 attribution diagnostics). */
-export const namespaceForgottenListScript = (kA: string, port = 80): string =>
-  script(`const jwtSecret = readFileSync(0, 'utf8');
-${JWT_JS}
-${exchangeJs('127.0.0.1', '127.0.0.1', port)}
-${READ_JS}
-const digest = ${JSON.stringify(createHash('sha256').update(kA).digest('hex'))};
-const isKey = (entry) => typeof entry === 'string' && createHash('sha256').update(entry).digest('hex') === digest;
-const { status, body } = json(await exchange('POST', '/command', { c: 'getForgottenList', token: jwt({ c: 'getForgottenList' }) }));
-const keys = Array.isArray(body?.keys) ? body.keys : [];
-const first = keys[0];
-Object.assign(observed, { status, error: typeof body?.error === 'number' ? body.error : null });
-observed.listed = keys.some(isKey);
-observed.contains = keys.some((entry) => typeof entry === 'string' && isKey(entry.split('/')[0]));
-observed.length = keys.length;
-observed.shape = typeof first === 'string'
-  ? { type: 'string', slash: first.includes('/'), dotExt: /\\.[a-z0-9]+$/i.test(first) }
-  : { type: typeof first };`);
-
 // `error` and `length` are DS's numeric error and list length when a row reaches the handler, and
 // null when it is refused/timed out — null across the board post-fix (nothing reaches DS); `fence`
 // marks the plugin proxy's own 403, which must never be what refuses a row.
@@ -255,20 +238,16 @@ export function expectedAttack(rows: readonly AttackRow[]) {
   };
 }
 
-/** A forgotten copy A key names is present: either a bare-key entry (`listed`) or a `<key>/output`
- * entry (`contains`); the shape diagnostics stay in evidence but are not asserted. */
-export function forgottenPresent(observed: Record<string, unknown>): boolean {
-  return observed.status === 200 && (observed.listed === true || observed.contains === true);
-}
-
 /** No key, JWT, token or document bytes: the positive control, the refused attack matrix, the copy
- * still present after the attack, and the recovered file state. */
+ * still present after the attack, the recovered file state, and what A's key left in the store
+ * once the recover session closed (PR #634). */
 interface OfficeForgottenEvidence {
   readonly positive: Readonly<Record<string, unknown>>;
   readonly attack: ReturnType<typeof expectedAttack>;
   readonly present: Readonly<Record<string, unknown>>;
   readonly recovered: 'recovered' | 'lost';
   readonly reopenAlert: ReopenAlert;
+  readonly residue: Readonly<{ copies: number; listed: boolean }>;
 }
 
 /** A's lane plus B (started by the editor lane) and the Document Server namespace position. */
@@ -282,20 +261,9 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 text = ''.join(el.text or '' for el in ElementTree.fromstring(body).iter() if el.tag.rpartition('}')[2] == 't')
 print(json.dumps({'text': text}))`;
 
-// The delivered Document Server's forgotten store (fs storage, default folderPath).
-const FORGOTTEN_DIR = '/var/lib/onlyoffice/documentserver/App_Data/cache/files/forgotten';
 // ControlOrMeta+s drives the editor's forcesave (office-editor-stack-fixture's SAVE_KEY).
 const SAVE_KEY = 'ControlOrMeta+s';
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-/** The current directory count under the Document Server's forgotten store (a delta across the
- * trigger attributes a copy to this scenario). `NaN` when the store is unreadable. */
-async function forgottenDirs(lane: OfficeForgottenLane): Promise<number> {
-  const find = `find ${FORGOTTEN_DIR} -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l`;
-  return Number(
-    (await lane.run(['exec', DOCUMENT_SERVER, 'sh', '-c', find]).catch(() => 'NaN')).trim(),
-  );
-}
 
 /** Whether A's file holds `nonce`: a nonce on disk means the save succeeded, so the trigger was
  * ineffective (no forgotten copy) rather than refused. */
@@ -306,30 +274,19 @@ async function fileHasNonce(lane: OfficeForgottenLane, nonce: string): Promise<b
   return text.includes(nonce);
 }
 
-/** Polls A's registry for the key the plugin minted for the open DOCX — the exact docId the
- * Document Server uses, so the forgotten copy is keyed by it (up to 10s); `null` if none. A failed
- * or malformed registry read rejects, never counting as no key. */
-export async function registeredKey(lane: Pick<OfficeForgottenLane, 'exec'>) {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    const key = (await registryKeys(lane, FILE))[0] ?? null;
-    if (key !== null) return key;
-    if (Date.now() >= deadline) return null;
-    await delay(500);
-  }
-}
-
 /** Opens A's DOCX, reads the key the plugin actually minted, types the nonce (so the editor is
  * dirty — a dirty editor is never auto-refreshed, so the mtime bump does not re-mint the entry),
  * bumps the mtime, then forcesaves (ControlOrMeta+s): the forcesave flushes the typed change to the
  * Document Server and fails the staleness guard without writing disk. The mtime is deliberately NOT
  * restored here — the restore waits until the asynchronous session-close save has run, else the
- * guard would pass and no copy is stored. Returns the key and whether the edit screenshot was taken.
+ * guard would pass and no copy is stored. Leaves the key in `held` and returns it with whether the
+ * edit screenshot was taken.
  */
 async function editIntoForgotten(
   lane: OfficeForgottenLane,
   nonce: string,
   directory: string,
+  held: ForgottenKey,
 ): Promise<{ kA: string | null; closed: boolean }> {
   await documentServerReady(lane);
   const names = {
@@ -338,10 +295,9 @@ async function editIntoForgotten(
     // The refused forcesave shows the save-error notice: the guard's message, A's key and path.
     masked: [NOTICES.saveFailed],
   };
-  let kA: string | null = null;
   const body: Parameters<typeof workbenchSession>[2] = async (page, shoot) => {
     await openHinted(page, shoot, lane.session, NAME, 'office-forgotten-edit-open');
-    kA = await registeredKey(lane);
+    held.key = await registeredKey(lane, FILE);
     // Type without the save key: the unsaved edit makes the editor dirty before the mtime bump.
     await typeAndSave(page, 'docx', nonce, lane.session.timeout, undefined, false);
     // A fixed, different mtime trips the plugin's staleness guard; content and size are untouched.
@@ -354,20 +310,14 @@ async function editIntoForgotten(
   };
   const editor = await workbenchSession({ ...lane.session, directory }, names, body).catch(
     (error: unknown) => {
-      throw sessionFailure('edit', error, { keyRead: kA !== null }, kA);
+      throw sessionFailure('edit', error, { keyRead: held.key !== null }, held.key);
     },
   );
-  return { kA, closed: editor.screenshots.includes('office-forgotten-edit-typed.png') };
+  return { kA: held.key, closed: editor.screenshots.includes('office-forgotten-edit-typed.png') };
 }
 
 /** Waits up to `lane.session.timeout` for the platform position to show A's forgotten copy; it
  * appears a few seconds after the browser closes (HTTP-200 `{error:1}` needs no callback retry). */
-/** One namespace `getForgottenList` for A's key; guarded, so no failure path quotes A's key. */
-const forgottenList = (lane: OfficeForgottenLane, label: string, kA: string) =>
-  guarded(label, [kA], async () =>
-    JSON.stringify(await lane.namespaceRead(namespaceForgottenListScript(kA))),
-  );
-
 async function awaitForgotten(lane: OfficeForgottenLane, kA: string) {
   const read = () => forgottenList(lane, '(positive)', kA);
   const deadline = Date.now() + lane.session.timeout;
@@ -464,22 +414,25 @@ async function recover(lane: OfficeForgottenLane, nonce: string, directory: stri
   return { editor, alert, recovered: held ? ('recovered' as const) : ('lost' as const) };
 }
 
-async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgottenEvidence> {
+async function officeForgotten(
+  lane: OfficeForgottenLane,
+  held: ForgottenKey,
+): Promise<OfficeForgottenEvidence> {
   const nonce = editorNonce();
   const directory = join(lane.session.directory, 'office-forgotten');
   await lane.exec(writeArgv(NAME));
   const origin = (await lane.exec(['stat', '-c', '%y', FILE])).trim();
-  const beforeDirs = await forgottenDirs(lane);
-  const { kA, closed } = await editIntoForgotten(lane, nonce, directory);
+  // The store before the trigger, A's key not yet known: the anchor's attribution if it fails.
+  const beforeShape = await forgottenShape(lane, null, '(shape before)');
+  const { kA, closed } = await editIntoForgotten(lane, nonce, directory, held);
   if (kA === null)
     throw new Error('Office forgotten: the plugin minted no key for A (editor open)');
   const positive = await awaitForgotten(lane, kA);
   if (!forgottenPresent(positive)) {
-    // Secret-free attribution (§55.6): the forgotten-store delta over the trigger, whether the
+    // Secret-free attribution (§55.6): A's copies in the forgotten store, whether the
     // edit session closed, and whether A's file took the nonce (save succeeded → trigger inert).
     const scene = {
-      beforeDirs,
-      afterDirs: await forgottenDirs(lane),
+      copies: await forgottenCopies(lane, kA, '(positive scene)'),
       editorClosed: closed,
       fileHasNonce: await fileHasNonce(lane, nonce),
     };
@@ -491,6 +444,13 @@ async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgott
     );
   }
   expect(JSON.stringify(positive), 'positive control free of A key').not.toContain(kA);
+  // The anchor: the store path is right and A's copy is one directory, named by A's key; counted
+  // by key, as other lanes' late copies land meanwhile. The shapes attribute a mismatch, no key.
+  const shapes = { before: beforeShape, after: await forgottenShape(lane, kA, '(shape after)') };
+  const shaped = redactSecrets(`one forgotten directory for A key, ${JSON.stringify(shapes)}`, [
+    kA,
+  ]);
+  expect(await forgottenCopies(lane, kA, '(anchor)'), shaped).toBe(1);
   // The copy is stored; restoring the mtime makes the reopen recompute A's original key.
   await lane.exec(['touch', '-m', '-d', origin, FILE]);
   const bInstance = await lane.secondEmployee();
@@ -513,7 +473,12 @@ async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgott
   expect(recovered, `A recovers its pre-failure edit from the forgotten copy, ${seen}`).toBe(
     'recovered',
   );
-  return { positive, attack, present, recovered, reopenAlert: alert ?? { shown: false } };
+  // The recover session's close-time save runs seconds after it closes (PR #634's question).
+  await settleForgotten();
+  const { cleared, ...residue } = await forgottenRecord(lane, kA, '(residue)');
+  const left = `residue ${JSON.stringify(residue)}`;
+  expect(cleared, `none of A key's copies left, A key unlisted, ${left}`).toBe(true);
+  return { positive, attack, present, recovered, reopenAlert: alert ?? { shown: false }, residue };
 }
 
 /**
@@ -522,13 +487,19 @@ async function officeForgotten(lane: OfficeForgottenLane): Promise<OfficeForgott
  * container every Command Service path — the +4 bridge on :80 and :8000, and the plugin proxy — is
  * refused across the route variants, encoded suffixes and a forged X-Forwarded-For, so B lists no
  * key, downloads nothing and deletes nothing; A's copy survives and A recovers its edit on reopen.
- * The forgotten evidence rides on the isolation line as `forgotten`. A forgotten failure retires B.
+ * The forgotten evidence rides on the isolation line as `forgotten`. A forgotten failure retires B,
+ * and once A's key was read, clears A's copy after `settle`.
  */
 export async function officeIsolationWithForgotten(
   lane: OfficeForgottenLane,
+  settle = settleForgotten,
 ): Promise<OfficeIsolationEvidence & { readonly forgotten: OfficeForgottenEvidence }> {
+  const cleared = (held: ForgottenKey) => officeForgotten(lane, held);
   const forgotten = await retiringOnError(
-    () => withWorkFiles(lane, [NAME], 'Office forgotten', () => officeForgotten(lane)),
+    () =>
+      withWorkFiles(lane, [NAME], 'Office forgotten', () =>
+        clearingForgottenOnError(lane, '(forgotten cleanup)', cleared, settle),
+      ),
     lane.retire,
     'Office forgotten lane and retiring B failed',
   );

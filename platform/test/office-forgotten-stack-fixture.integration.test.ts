@@ -9,19 +9,22 @@ import { join } from 'node:path';
 import { inspect, promisify } from 'node:util';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import {
+  forgottenPresent,
+  namespaceForgottenListScript,
+} from './document-server-forgotten-fixture.ts';
+import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
+import {
   bForgottenScript,
   documentServerAddress,
   expectedAttack,
-  forgottenPresent,
   forgottenRows,
-  namespaceForgottenListScript,
   officeIsolationWithForgotten,
   proxyControl,
-  registeredKey,
   sessionFailure,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
-import { HEALTH_COMMAND } from './office-hints-stack-fixture.ts';
+import { HEALTH_COMMAND, openHinted } from './office-hints-stack-fixture.ts';
+import type * as OfficeHints from './office-hints-stack-fixture.ts';
 import { NODE, REGISTRY } from './office-isolation-stack-fixture.ts';
 import { NOTICES } from './office-rewrite-stack-fixture.ts';
 import { scrub, StackWorkbenchFailure, workbenchSession } from './stack-browser-fixture.ts';
@@ -32,8 +35,14 @@ vi.mock('./stack-browser-fixture.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof StackBrowser>();
   return { ...actual, workbenchSession: vi.fn(actual.workbenchSession) };
 });
+// The editor opening is a stand-in where a case needs the edit body to reach A's registry read.
+vi.mock('./office-hints-stack-fixture.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof OfficeHints>();
+  return { ...actual, openHinted: vi.fn(actual.openHinted) };
+});
 afterEach(() => {
   vi.mocked(workbenchSession).mockReset();
+  vi.mocked(openHinted).mockReset();
 });
 
 const KA = 'a1'.repeat(32);
@@ -332,13 +341,6 @@ it('finds A key inside a <key>/output entry by digest, without listing it as a b
   );
 });
 
-it('treats a <key>/output entry as present via contains, and a 403 or empty list as absent', () => {
-  expect(forgottenPresent({ status: 200, listed: true, contains: false })).toBe(true);
-  expect(forgottenPresent({ status: 200, listed: false, contains: true })).toBe(true);
-  expect(forgottenPresent({ status: 200, listed: false, contains: false })).toBe(false);
-  expect(forgottenPresent({ status: 403, listed: true, contains: true })).toBe(false);
-});
-
 it('attributes a failed reopen to the alert it showed and the console errors, with A key redacted', () => {
   const blocked = new Error('locator.click: Timeout 60000ms exceeded');
   const session = {
@@ -412,40 +414,6 @@ it('scrubs A key, and any document key, from the reopen alert text', () => {
   expect(scrub(`restored ${'b2'.repeat(32)} copy`)).toBe('restored <redacted> copy');
 });
 
-/** A's registry query answering `replies` in turn; each call's argv goes to `calls`. */
-const registryLane = (calls: (readonly string[])[], ...replies: (() => Promise<string>)[]) => ({
-  exec: (args: readonly string[]) => {
-    calls.push(args);
-    return (replies.shift() ?? (() => Promise.reject(new Error('no reply'))))();
-  },
-});
-const FORGOTTEN_ARGV = ['python3', '-I', '-c', REGISTRY, '/data/work/忘记恢复.docx'];
-
-it("polls A's registry until it names the DOCX and returns the first of its keys", async () => {
-  const calls: (readonly string[])[] = [];
-  const replies = [() => Promise.resolve('[]'), () => Promise.resolve(JSON.stringify([KA, hex()]))];
-
-  const key = await registeredKey(registryLane(calls, ...replies));
-
-  expect(key).toBe(KA);
-  expect(calls.map((args) => args.filter((_, i) => i !== 3))).toEqual([
-    FORGOTTEN_ARGV,
-    FORGOTTEN_ARGV,
-  ]);
-});
-
-it('fails with the registry query rejection instead of polling it as no key', async () => {
-  const calls: (readonly string[])[] = [];
-  const refused = () => Promise.reject(new Error('registry format mismatch: version'));
-  // A caller that counted the failure as no key would poll again and return KA.
-  const lane = registryLane(calls, refused, () => Promise.resolve(JSON.stringify([KA])));
-
-  const key = registeredKey(lane);
-
-  await expect(key).rejects.toThrow(new Error('registry format mismatch: version'));
-  expect(calls).toHaveLength(1);
-});
-
 const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
 /** A's instance as the forgotten lane drives it up to the edit session. */
 const forgottenLane: Parameters<typeof officeIsolationWithForgotten>[0] = {
@@ -462,8 +430,13 @@ const forgottenLane: Parameters<typeof officeIsolationWithForgotten>[0] = {
     // writeArgv's DOCX write (stdout unread), then withWorkFiles' removal: each name after WORK.
     return reply(args.slice(4).map(() => false));
   },
-  // forgottenDirs reads the store through host Docker; a refusal records NaN.
-  run: () => Promise.reject(new Error('no host Docker before the edit session')),
+  // The forgotten store's count and shape through host Docker; nothing else before the session.
+  run: (args) => {
+    const store = args.slice(0, 3).join(' ');
+    if (store === `exec ${DOCUMENT_SERVER} python3`) return reply({ entries: [] });
+    if (store === `exec ${DOCUMENT_SERVER} sh`) return reply({ matched: 0 });
+    return Promise.reject(new Error('no host Docker before the edit session'));
+  },
   retire: () => Promise.resolve(),
   provider: () => Promise.reject(new Error('no provider read before the edit session')),
   platformRead: () => Promise.reject(new Error('no platform read before the edit session')),
@@ -481,4 +454,45 @@ it('masks the save-error notice in every screenshot of the forgotten edit sessio
   const calls = vi.mocked(workbenchSession).mock.calls;
   const edit = calls.find(([, names]) => names.label === 'office forgotten edit');
   expect(edit?.[1].masked ?? []).toContain(NOTICES.saveFailed);
+});
+
+it("clears A's copy after a failed edit through the caller's holder, printing no key", async () => {
+  const calls: string[][] = [];
+  const lane: typeof forgottenLane = {
+    ...forgottenLane,
+    // A's registry names the DOCX once the editor is open.
+    exec: (args) => (args[4] === REGISTRY ? reply([KA]) : forgottenLane.exec(args)),
+    run: (args) => {
+      calls.push(args);
+      const removal = args[4]?.includes('rm -rf') === true;
+      return removal ? reply({ matched: 1 }) : forgottenLane.run(args);
+    },
+  };
+  const session = {
+    ...{ screenshots: [], pageErrors: [], externalRequests: [], requests: 1, websockets: 1 },
+    ...{ consoleErrors: [`socket /doc/${KA}/c/ closed`], failedRequests: [`GET /doc/${KA}/c/`] },
+  };
+  vi.mocked(openHinted).mockResolvedValue(undefined);
+  // The edit body runs: the editor opens, A's key is read, then the typing fails on a dead page.
+  vi.mocked(workbenchSession).mockImplementation(async (_session, names, body) => {
+    const page = {} as Parameters<typeof body>[0]; // a page whose every call fails
+    const shoot = () => Promise.resolve();
+    const failure = await body(page, shoot, shoot).then(
+      () => new Error('edit body did not fail'),
+      (e: unknown) => e,
+    );
+    throw new StackWorkbenchFailure(failure, session, names.label);
+  });
+
+  const error = (await officeIsolationWithForgotten(lane, () => Promise.resolve()).catch(
+    (e: unknown) => e,
+  )) as Error;
+
+  expect(error.message).toContain('Office forgotten edit failed:');
+  expect(error.message).toContain('"keyRead":true');
+  expect(printed(error)).not.toContain(KA);
+  expect(Object.keys(error)).toEqual([]);
+  const removals = calls.filter((args) => args[4]?.includes('rm -rf') === true);
+  expect(removals).toHaveLength(1);
+  expect(JSON.stringify(calls)).not.toContain(KA);
 });
