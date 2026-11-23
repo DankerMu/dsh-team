@@ -19,6 +19,7 @@ import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.
 import {
   converseInWorkbench,
   redactSecrets,
+  scrubbedChain,
   scrubEach,
   until,
   workbenchSession,
@@ -397,6 +398,26 @@ export async function bothOpen(
   met.info = await guessedKeyInfo(lane, b, kA, kB, inWork('docx'));
 }
 
+/** The failure of A's and B's settled same-name sessions, each rejected reason as it is, A's
+ * first, its message naming each rejected side with its scrubbed chain; undefined when both are
+ * fulfilled. */
+export function sameNameFailure(
+  a: PromiseSettledResult<unknown>,
+  other: PromiseSettledResult<unknown>,
+) {
+  const sides = [['A', a] as const, ['B', other] as const];
+  const failed = sides.flatMap(([name, side]) =>
+    side.status === 'rejected' ? [{ name, reason: side.reason as unknown }] : [],
+  );
+  if (failed.length === 0) return undefined;
+  const named = failed.map(({ name, reason }) => `${name}: ${scrubbedChain(reason)}`);
+  const message = `Office editor same-name DOCX failed: ${named.join('; ')}`;
+  return new AggregateError(
+    failed.map(({ reason }) => reason),
+    message,
+  );
+}
+
 /** A's and B's same-name DOCX edited at once, each with its own nonce, then read once more. */
 async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory: string) {
   const b: OfficeEditorLane = {
@@ -418,16 +439,14 @@ async function sameNameDocx(lane: OfficeEditorLane, instance: string, directory:
     });
   };
   return withWorkFiles(b, [fileName('docx')], 'Office editor B', async () => {
-    const [a, other] = await Promise.allSettled([
+    const settled = await Promise.allSettled([
       edit(lane, 'A', nonceA, directory),
       edit(b, 'B', nonceB, join(directory, 'b')),
     ]);
-    if (a.status === 'rejected' || other.status === 'rejected') {
-      const failures = [a, other].flatMap((side) =>
-        side.status === 'rejected' ? [side.reason as unknown] : [],
-      );
-      throw new AggregateError(failures, 'Office editor same-name DOCX failed');
-    }
+    const failure = sameNameFailure(...settled);
+    if (failure !== undefined) throw failure;
+    // sameNameFailure is undefined only when both sides are fulfilled.
+    const [a, other] = settled as [PromiseFulfilledResult<Edited>, PromiseFulfilledResult<Edited>];
     const [aAfter, bAfter] = [
       await readWork(lane, fileName('docx')),
       await readWork(b, fileName('docx')),

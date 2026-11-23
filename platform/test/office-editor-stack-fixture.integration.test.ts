@@ -20,6 +20,7 @@ import {
   READ_BACK_COMMAND,
   READER,
   retiringOnError,
+  sameNameFailure,
   sameNameState,
   writeArgv,
   writeBackState,
@@ -451,8 +452,43 @@ it.each([
     const counts = 'consoleErrors=1 pageErrors=0 failedRequests=1 externalRequests=0';
     const failure = `Stack workbench office editor docx failed (${counts}): page.goto: ${BASE}/doc/<redacted>/c/`;
     expect(reasons).toEqual([failure, failure]);
+    const sameName = errorTree(error).find(
+      (entry) => entry instanceof AggregateError && entry.message.startsWith(SAME_NAME),
+    );
+    expect(sameName).toHaveProperty('message', `${SAME_NAME}: A: ${failure}; B: ${failure}`);
   },
 );
+
+const SAME_NAME = 'Office editor same-name DOCX failed';
+const saved = { status: 'fulfilled', value: {} } as const;
+const rejected = (reason: unknown) => ({ status: 'rejected', reason }) as const;
+// An unscrubbed reason: its message and its cause's carry the key and query.
+const raw = new Error(`page.goto: ${BASE}${SOCKET}`, { cause: new Error(`GET ${BASE}${SOCKET}`) });
+const rawChain = `page.goto: ${BASE}/doc/<redacted>/c/ <- GET ${BASE}/doc/<redacted>/c/`;
+
+it('has no same-name failure when both editing sessions are fulfilled', () => {
+  expect(sameNameFailure(saved, saved)).toBeUndefined();
+});
+
+it.each([
+  ['B', saved, rejected(raw), [raw], `B: ${rawChain}`],
+  ['A', rejected(raw), saved, [raw], `A: ${rawChain}`],
+  [
+    'a non-Error A and B',
+    rejected(KEY),
+    rejected(raw),
+    [KEY, raw],
+    `A: unknown failure; B: ${rawChain}`,
+  ],
+])('names each rejected side by its scrubbed chain, only %s', (_case, a, other, errors, named) => {
+  const failure = sameNameFailure(a, other);
+
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect(failure?.errors).toEqual(errors);
+  expect(failure?.errors.at(-1)).toBe(raw);
+  expect(failure?.message).toBe(`${SAME_NAME}: ${named}`);
+  for (const secret of LEAKED) expect(failure?.message).not.toContain(secret);
+});
 
 it('names the console errors and failed responses of an editing session scrubbed', async () => {
   // Only `status` and `url` are read of a response; the stand-in answers both.
