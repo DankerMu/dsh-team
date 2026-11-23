@@ -1,12 +1,12 @@
 ## 1. Implementation
 
-- [ ] 1.1 Export `NOTICES` from `office-rewrite-stack-fixture.ts`. `rewriteCase` passes `masked: [NOTICES.saveFailed]` in its `names`, with the typing case's reason comment.
-- [ ] 1.2 `editIntoForgotten` (`office-forgotten-stack-fixture.ts`) imports `NOTICES` and passes `masked: [NOTICES.saveFailed]` in its `names`.
-- [ ] 1.3 Stand-in cases through the `vi.mock('./stack-browser-fixture.ts')` seam:
+- [x] 1.1 Export `NOTICES` from `office-rewrite-stack-fixture.ts`. `rewriteCase` passes `masked: [NOTICES.saveFailed]` in its `names`, with the typing case's reason comment.
+- [x] 1.2 `editIntoForgotten` (`office-forgotten-stack-fixture.ts`) imports `NOTICES` and passes `masked: [NOTICES.saveFailed]` in its `names`.
+- [x] 1.3 Stand-in cases through the `vi.mock('./stack-browser-fixture.ts')` seam:
   - rewrite: the `office rewrite clean` session's `names.masked` includes `NOTICES.saveFailed`;
   - forgotten: the `office forgotten edit` session's `names.masked` includes `NOTICES.saveFailed`;
   - each recorded red with its `masked` removed.
-- [ ] 1.4 `platform/test/README.md:92`: the Agent rewrite (`clean`/`unsaved` screenshots) and forgotten copy (edit session) evidence say the save-error span is masked in every screenshot of the session.
+- [x] 1.4 `platform/test/README.md:92`: the Agent rewrite (`clean`/`unsaved` screenshots) and forgotten copy (edit session) evidence say the save-error span is masked in every screenshot of the session.
 
 ## 2. Verification
 

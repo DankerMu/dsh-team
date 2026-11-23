@@ -7,7 +7,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect, promisify } from 'node:util';
-import { afterAll, expect, it } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import {
   bForgottenScript,
   documentServerAddress,
@@ -15,13 +15,26 @@ import {
   forgottenPresent,
   forgottenRows,
   namespaceForgottenListScript,
+  officeIsolationWithForgotten,
   proxyControl,
   registeredKey,
   sessionFailure,
 } from './office-forgotten-stack-fixture.ts';
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
+import { HEALTH_COMMAND } from './office-hints-stack-fixture.ts';
 import { NODE, REGISTRY } from './office-isolation-stack-fixture.ts';
-import { scrub, StackWorkbenchFailure } from './stack-browser-fixture.ts';
+import { NOTICES } from './office-rewrite-stack-fixture.ts';
+import { scrub, StackWorkbenchFailure, workbenchSession } from './stack-browser-fixture.ts';
+import type * as StackBrowser from './stack-browser-fixture.ts';
+
+// Only the browser session is a stand-in; scrub and StackWorkbenchFailure stay the real ones.
+vi.mock('./stack-browser-fixture.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof StackBrowser>();
+  return { ...actual, workbenchSession: vi.fn(actual.workbenchSession) };
+});
+afterEach(() => {
+  vi.mocked(workbenchSession).mockReset();
+});
 
 const KA = 'a1'.repeat(32);
 const [nodeBinary = 'node', ...nodeFlags] = NODE;
@@ -431,4 +444,41 @@ it('fails with the registry query rejection instead of polling it as no key', as
 
   await expect(key).rejects.toThrow(new Error('registry format mismatch: version'));
   expect(calls).toHaveLength(1);
+});
+
+const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
+/** A's instance as the forgotten lane drives it up to the edit session. */
+const forgottenLane: Parameters<typeof officeIsolationWithForgotten>[0] = {
+  session: {
+    base: 'http://127.0.0.1:9',
+    directory: DIR,
+    email: 'a@x.test',
+    password: 'p',
+    timeout: 500,
+  },
+  exec: (args) => {
+    if (args[0] === 'stat') return Promise.resolve('2026-11-22 00:00:00.000000000 +0000\n');
+    if (args[2] === HEALTH_COMMAND[2]) return reply({ status: 200, body: 'true' });
+    // writeArgv's DOCX write (stdout unread), then withWorkFiles' removal: each name after WORK.
+    return reply(args.slice(4).map(() => false));
+  },
+  // forgottenDirs reads the store through host Docker; a refusal records NaN.
+  run: () => Promise.reject(new Error('no host Docker before the edit session')),
+  retire: () => Promise.resolve(),
+  provider: () => Promise.reject(new Error('no provider read before the edit session')),
+  platformRead: () => Promise.reject(new Error('no platform read before the edit session')),
+  secondEmployee: () => Promise.reject(new Error('no B before the edit session')),
+  namespaceRead: () => Promise.reject(new Error('no namespace read before the edit session')),
+  instance: 'dsh-team-u-a',
+};
+
+it('masks the save-error notice in every screenshot of the forgotten edit session', async () => {
+  vi.mocked(workbenchSession).mockRejectedValue(new Error('stand-in browser'));
+
+  const scenario = officeIsolationWithForgotten(forgottenLane);
+
+  await expect(scenario).rejects.toThrow('Office forgotten edit failed: stand-in browser');
+  const calls = vi.mocked(workbenchSession).mock.calls;
+  const edit = calls.find(([, names]) => names.label === 'office forgotten edit');
+  expect(edit?.[1].masked ?? []).toContain(NOTICES.saveFailed);
 });
