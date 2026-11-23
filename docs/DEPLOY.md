@@ -58,6 +58,13 @@ docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:lo
 
 **升级说明（本手册其余部分仍只覆盖全新安装）。** 已有员工卷的主机换用 `0.2.1-rc.2` 用户镜像后，每个现有员工的状态卷仍保存阶段 1 的 profile：DSH 0.2.1 会跳过其中的 bundle，受管组合被拒绝，该员工的实例启动失败，直到管理员在实例页面为其执行「重置配置」。这次拒绝发生在创建容器之前：实例行记为出错（不关联容器），最近错误首行为 `profile-incompatible`，并写一条细节为 `{"code":"profile-incompatible"}` 的 `instance.start-failed`。实例页在该行「重置配置」按钮旁显示「该用户的 DSH 配置来自旧版本，需要执行“重置配置”」，审计页的细节列显示「旧版 profile 不兼容」。平台不会自动重置。这是必须的运维步骤，需对每个现有员工执行；重置只恢复 DSH 设置，文件和对话保留，重置后实例保持停止，下次需显式启动。仍在运行的 `0.2.0` 实例继续运行，直到空闲回收或重启。
 
+**从员工 profile 副本加载的预装插件，更新不会自动到达已有员工。** 换用新的用户镜像时，如果某个从员工 profile 副本加载的插件有任何文件变化（`images/dsh-user/` 的构建期补丁、`plugins/<id>/` 中预装插件的交付文件，或 `images/dsh-user/catalog.json` 中的镜像默认开关，版本号变不变都一样），已有员工的实例照常启动：不报错、平台不提示、没有失败审计，员工继续使用卷内的旧副本，直到管理员在实例页为其执行「重置配置」，需对每个现有员工逐一执行。会报错的只有上一段的 `profile-incompatible` 和下文「用户镜像基础层更新」中强制态 bundle 行 id 变化两种情况。按插件分：
+
+- 实例下次启动即生效（覆盖层在启动时生成，按镜像路径加载，无需重置）：`permission-tiers`、`platform-nav`、`office-hints`；`knowledge-base` 的代码（`index.js`、`client.js`：插入行指向 `/opt/dsh-team/knowledge-base/index.js`，客户端部分随同目录的清单交付）；`zh-locale` 的补丁行（从镜像内 `/opt/dsh-team/profile-seed` 读取）；覆盖层中 ONLYOFFICE 和知识库的配置行。
+- 只经员工 profile 副本生效（重置前保持旧版）：`dsh-better-sidebar` 和 `dsh-sidebar-onlyoffice`，包括它们的全部构建期补丁（如 Office 文件交给 ONLYOFFICE 打开、AI 改写后编辑器刷新、按每实例密钥派生文件令牌和文档 key）；`knowledge-base` 的 `cordis.patch.yml` 和清单中的 bundle 声明；`office-agents` 的预设、`skills` 和 `docx-construction`；`zh-locale` 的代码（`index.js`、`client.js`，按包名从 profile 解析；此项为推断，未在旧卷上实测）。
+
+「重置配置」有代价：平台先断开该员工的连接并停止实例，再用镜像种子整体替换 `profiles/`，员工自己安装的 bundle 被移除，插件开关恢复为镜像默认；文件、对话和凭据保留；重置后实例保持停止，需员工或管理员再次启动（见 § 8「停止与一次性验收清理」）。阶段 2 不提供自动同步。
+
 ### 用户镜像基础层更新
 
 生产用户镜像的基础身份以 [`images/dsh-user/Dockerfile`](../images/dsh-user/Dockerfile) 的 `FROM` 为唯一来源：精确 Node24补丁版本、Bookworm-slim标签和不可变多架构 index 摘要同时保留。部署验收仍只覆盖现有 Linux amd64；index 内包含其他架构不代表已验证这些架构。不要退回 major-only 标签，也不要把浏览器或平台镜像的基础引用自动套到用户镜像。
