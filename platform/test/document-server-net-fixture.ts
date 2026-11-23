@@ -1,10 +1,12 @@
 import { readFile } from 'node:fs/promises';
+import { isIP } from 'node:net';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'yaml';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import { containerDocument, output, record } from './docker-cleanup.ts';
+import { isAbsentResource } from './docker-command.ts';
 import type { AsyncDockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -38,6 +40,12 @@ const reach = ({ host, port, path, method = 'GET' }) => new Promise((resolve) =>
 });
 process.stdout.write(JSON.stringify(await Promise.all(JSON.parse(process.argv[1]).map(reach))));`;
 
+/** The holder's network endpoints only: its full inspect also carries the JWT in `Config.Env`. */
+async function holderNetworks(run: DockerOutput) {
+  const format = '{{json .NetworkSettings.Networks}}';
+  return record(JSON.parse(await run(['container', 'inspect', '-f', format, DOCUMENT_SERVER_NET])));
+}
+
 async function reach(
   run: DockerOutput,
   container: string,
@@ -59,10 +67,7 @@ export async function firewallReach(
   inside: readonly ReachTarget[],
   outside: readonly Omit<ReachTarget, 'host'>[],
 ) {
-  const format = '{{json .NetworkSettings.Networks}}';
-  const networks = record(
-    JSON.parse(await run(['container', 'inspect', '-f', format, DOCUMENT_SERVER_NET])),
-  );
+  const networks = await holderNetworks(run);
   const network = instance.replace('dsh-team-u-', 'dsh-team-net-');
   const host = networks[network] === undefined ? undefined : record(networks[network]).IPAddress;
   if (typeof host !== 'string' || host === '')
@@ -285,4 +290,155 @@ export async function holderRestartSequence(
   await healthyWithinStartPeriod(command, DOCUMENT_SERVER, server.startPeriodMs);
   await standInReach(run, instances, 'joined', macs);
   return macs;
+}
+
+const V6_NET = 'dsh-team-v6-net';
+const V6_PROBE = 'dsh-team-v6-probe';
+const DOCKER_ID = /^[a-f0-9]{64}$/;
+const DROP_POLICY = /^Chain INPUT \(policy DROP (\d+) packets, \d+ bytes\)$/;
+const IPV6_REACH = { inside: [OK, OK], outside: [OK, TIMEOUT], dropped: true };
+type Ipv6Lifecycle = Pick<
+  UserImageLifecycle,
+  'commandAsync' | 'registerResourceAsync' | 'removeNetwork'
+>;
+type Undo = () => Promise<void> | void;
+
+/** The packet count of the holder's IPv6 INPUT DROP policy, read as root. */
+async function dropCount(run: DockerOutput) {
+  const list = ['ip6tables', '-L', 'INPUT', '-v', '-x', '-n'];
+  const [first = ''] = (await run(['exec', '--user', 'root', DOCUMENT_SERVER_NET, ...list])).split(
+    '\n',
+  );
+  const packets = DROP_POLICY.exec(first)?.[1];
+  if (packets === undefined)
+    throw new Error(`Holder IPv6 INPUT policy unreadable: ${JSON.stringify(first)}`);
+  return Number(packets);
+}
+
+/** Failure context only: the temporary network's subnets, never masking the failure itself. */
+async function ipv6Subnets(run: DockerOutput) {
+  const args = ['network', 'inspect', '-f', '{{json .IPAM.Config}}', V6_NET];
+  return run(args).then(
+    (stdout) => stdout.trim(),
+    (error: unknown) => `unreadable (${error instanceof Error ? error.message : String(error)})`,
+  );
+}
+
+async function removeProbe(command: AsyncDockerCommand, id: string) {
+  const args = ['rm', '-f', id];
+  const result = await command(args, 30_000);
+  if (!isAbsentResource(result, 'container', id)) output(result, args);
+}
+
+async function disconnectHolder(command: AsyncDockerCommand, run: DockerOutput) {
+  const args = ['network', 'disconnect', '--force', V6_NET, DOCUMENT_SERVER_NET];
+  const result = await command(args, 30_000);
+  try {
+    output(result, args);
+  } catch (disconnect) {
+    // A failed or timed-out disconnect is done once the holder no longer has the network.
+    const networks = await holderNetworks(run).catch((inspect: unknown) => {
+      throw new AggregateError([disconnect, inspect], 'Holder IPv6 disconnect unproven');
+    });
+    if (V6_NET in networks) throw disconnect;
+  }
+}
+
+/**
+ * Steps 1-10 of the probe (openspec holder-ipv6-probe). Each creating step pushes its undo onto
+ * `undo` once attempted: the network once create returned its ID, the disconnect before the
+ * connect, the probe container once run returned its ID.
+ */
+async function ipv6Probe(
+  lifecycle: Ipv6Lifecycle,
+  run: DockerOutput,
+  image: string,
+  ownership: Readonly<Record<string, string>>,
+  undo: Undo[],
+) {
+  for (const [kind, name] of [
+    ['network', V6_NET],
+    ['container', V6_PROBE],
+  ] as const)
+    await lifecycle.registerResourceAsync(kind, name, ownership);
+  const networks = Object.keys(await holderNetworks(run)).sort();
+  const labels = Object.entries(ownership).flatMap(([key, value]) => [
+    '--label',
+    `${key}=${value}`,
+  ]);
+  // --internal: no gateway, so the holder's default route does not change.
+  const networkId = (
+    await run(['network', 'create', '--ipv6', '--internal', ...labels, V6_NET])
+  ).trim();
+  if (!DOCKER_ID.test(networkId))
+    throw new Error(`IPv6 network create returned no ID: ${JSON.stringify(networkId)}`);
+  undo.push(() => {
+    lifecycle.removeNetwork(V6_NET, networkId);
+  });
+  undo.push(() => disconnectHolder(lifecycle.commandAsync, run));
+  await run(['network', 'connect', V6_NET, DOCUMENT_SERVER_NET]);
+  const endpoint = (await holderNetworks(run))[V6_NET];
+  const address = endpoint === undefined ? undefined : record(endpoint).GlobalIPv6Address;
+  if (typeof address !== 'string' || isIP(address) !== 6)
+    throw new Error(
+      `Document Server holder has no IPv6 address on ${V6_NET}: observed=${JSON.stringify(address)} family=${String(isIP(String(address)))} subnets=${await ipv6Subnets(run)}`,
+    );
+  const probe = ['--network', V6_NET, '--user', '1001', '--entrypoint', 'sleep', image, 'infinity'];
+  const probeId = (await run(['run', '--detach', '--name', V6_PROBE, ...labels, ...probe])).trim();
+  if (!DOCKER_ID.test(probeId))
+    throw new Error(`IPv6 probe run returned no ID: ${JSON.stringify(probeId)}`);
+  undo.push(() => removeProbe(lifecycle.commandAsync, probeId));
+  const targets = [80, 8000].map((port) => ({ host: address, port, path: '/' }));
+  const before = await dropCount(run);
+  const inside = await reach(run, DOCUMENT_SERVER_NET, 'root', targets);
+  const outside = await reach(run, V6_PROBE, '1001', targets);
+  const after = await dropCount(run);
+  const observed = { inside, outside, dropped: after > before };
+  if (!isDeepStrictEqual(observed, IPV6_REACH))
+    throw new Error(
+      `Holder IPv6 reach differs: observed=${JSON.stringify(observed)} expected=${JSON.stringify(IPV6_REACH)} drops=${String(before)}->${String(after)} address=${address} family=6 subnets=${await ipv6Subnets(run)}`,
+    );
+  return { networks, seen: { address, inside, outside, dropped: { before, after } } };
+}
+
+/**
+ * #654 AC4, once the Document Server has rejoined the holder: over an owned, internal IPv6
+ * network, both ports answer inside the holder's namespace (root), while from an owned probe
+ * container (uid 1001, `image`) 80 answers and 8000 times out as the holder's DROP counter rises.
+ * The probe container, the connection and the network are removed in `finally` on every path;
+ * the holder then has exactly its networks from before. Twenty docker calls at most, 30s each.
+ */
+export async function holderIpv6Reach(
+  lifecycle: Ipv6Lifecycle,
+  image: string,
+  ownership: Readonly<Record<string, string>>,
+) {
+  const run: DockerOutput = async (args) =>
+    output(await lifecycle.commandAsync(args, 30_000), args);
+  const undo: Undo[] = [];
+  const failures: unknown[] = [];
+  let probed: Awaited<ReturnType<typeof ipv6Probe>> | undefined;
+  try {
+    probed = await ipv6Probe(lifecycle, run, image, ownership, undo);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    // Reverse order; each runs even after an earlier failure, and none masks the probe's own.
+    for (const step of undo.reverse()) {
+      try {
+        await step();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  if (failures.length > 1)
+    throw new AggregateError(failures, 'Holder IPv6 probe and its cleanup failed');
+  if (probed === undefined || failures.length === 1) throw failures[0];
+  const networks = Object.keys(await holderNetworks(run)).sort();
+  if (!isDeepStrictEqual(networks, probed.networks))
+    throw new Error(
+      `Holder networks differ after the IPv6 probe: before=${JSON.stringify(probed.networks)} after=${JSON.stringify(networks)}`,
+    );
+  return probed.seen;
 }
