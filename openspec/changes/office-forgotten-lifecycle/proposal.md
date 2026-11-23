@@ -31,22 +31,26 @@ New `platform/test/document-server-forgotten-fixture.ts`. The rewrite fixture mu
 - new observation `forgottenCopy(lane, key, baseline)` → `{ added, listed }`: the `forgottenDirs` delta and whether the namespace list holds the key (`listed || contains`); a list read that is not `status 200, error 0` throws, so a failed read never counts as "not listed";
 - a settle wait before observing: the refused close-time callback runs seconds after the session closes, so observation and cleanup run after a 15 s window (today's `OBSERVE_MS`), on success and failure paths alike. The constant and the wait live in the new module (the rewrite fixture imports it, never the reverse); the window is an injectable parameter so stand-ins do not sleep 15 s.
 
+### Key-scoped counting (measured)
+
+The first exact-head stack run (`4a63aa5`) showed that the store's total directory count is not a usable baseline: earlier Office lanes' sessions close asynchronously and their refused callbacks land copies (an `output.docx` before the forgotten case, an `output.pptx` during its trigger) while later cases run. The same run proved the layout: after the trigger exactly one directory, a 64-hex name, matched A's key digest and held `output.docx`. So every count in this change is scoped to the key: `forgottenCopies(lane, key)` counts the entries whose name's SHA-256 equals the key's digest. The global `forgottenDirs` count and its baseline are dropped, along with the `cache/files` parent check that guarded it; `forgottenCopies` keeps the loud failures (unreadable store, non-integer count). The secret-free `forgottenShape` diagnostic stays in the anchor's failure message.
+
 ### Anchor (proves the path and "directory name = key")
 
-The forgotten case, once its positive control holds, asserts `forgottenDirs === beforeDirs + 1`. Every cleanup asserts that `removeForgotten` removed exactly `added` entries, and re-lists to confirm `listed` is now false. Together these prove on the real 9.4.0 server that the store path is right, a key's copy is one directory named by the key, and removing it is what `getForgottenList` sees.
+The forgotten case, once its positive control holds, asserts `forgottenCopies(kA) === 1`. Every cleanup asserts that `removeForgotten` removed exactly `copies` entries, that `forgottenCopies` is then 0, and re-lists to confirm `listed` is now false. Together these prove on the real 9.4.0 server that the store path is right, a key's copy is one directory named by the key, and removing it is what `getForgottenList` sees.
 
 ### Rewrite cases (`clean`, `unsaved`) and the typing case
 
-For each: take the `forgottenDirs` baseline before the session; read the open key with `registeredKey(lane, path)` before the Agent turn (or the typing); after `OBSERVE_MS`, record `forgotten: { added, listed, cleared }`, where `cleared` means `removeForgotten` removed `added` entries, the dirs are back to the baseline, and the re-list no longer holds the key.
+For each: read the open key with `registeredKey(lane, path)` before the Agent turn (or the typing); after `OBSERVE_MS`, record `forgotten: { copies, listed, cleared }`, where `copies` is `forgottenCopies` for that key and `cleared` means `removeForgotten` removed `copies` entries, `forgottenCopies` is then 0, and the re-list no longer holds the key.
 
 - `forgotten` joins `RewriteCaseEvidence`/`rewriteFacts`/`EXPECTED_REWRITE` and the typing evidence/`typingFacts`/`EXPECTED_TYPING`.
-- Source prediction: `unsaved` and typing `{ added: 1, listed: true, cleared: true }`, `clean` `{ added: 0, listed: false, cleared: true }`.
-- The first exact-head stack run is the measurement. Only `added` and `listed` may follow it (with the docs); `cleared: true` and the baseline are this spec's SHALL and never change to make a run green. The PR records the measurement.
+- Source prediction: `unsaved` and typing `{ copies: 1, listed: true, cleared: true }`, `clean` `{ copies: 0, listed: false, cleared: true }`.
+- The first exact-head stack run is the measurement. Only `copies` and `listed` may follow it (with the docs); `cleared: true` is this spec's SHALL and never change to make a run green. The PR records the measurement.
 - `OfficeRewriteLane` (`:289-294`) declares `namespaceRead`; the integration test's `rewriteLane` stand-in (`office-rewrite-stack-fixture.integration.test.ts:521-535`) gains it. The stack wiring already passes it (`platform-stack.stack.test.ts:546`, `:553`).
 
 ### Forgotten case
 
-After `recover` and the settle window, record `residue: { added, listed }` for `kA` against `beforeDirs` (PR #634's question), then clean up and assert the baseline as above. On failure `kA` reaches the caller through a holder (or callback) the caller passes in, never on the error object, whose own properties and cause chain vitest prints; a stand-in asserts that a failed edit's printed error holds no key. The #624 attack, `present`, `recovered` and `reopenAlert` assertions are unchanged.
+After `recover` and the settle window, record `residue: { copies, listed }` for `kA` (PR #634's question), then clean up and assert `cleared` as above. On failure `kA` reaches the caller through a holder (or callback) the caller passes in, never on the error object, whose own properties and cause chain vitest prints; a stand-in asserts that a failed edit's printed error holds no key. The #624 attack, `present`, `recovered` and `reopenAlert` assertions are unchanged.
 
 ### Failure paths
 
