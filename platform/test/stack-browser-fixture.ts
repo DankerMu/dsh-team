@@ -116,7 +116,7 @@ export const scrubbedEvidence = (evidence: StackBrowserEvidence): StackBrowserEv
 });
 
 /** The messages of `cause` and its causes, each scrubbed, at most eight; a non-Error is unknown. */
-function scrubbedChain(cause: unknown) {
+export function scrubbedChain(cause: unknown) {
   const reasons: string[] = [];
   let current = cause;
   do {
