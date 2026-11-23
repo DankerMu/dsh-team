@@ -54,5 +54,6 @@ Evidence floor: an integration case red before the change (message without the i
 
 - **AC4** (a `sameNameDocx` failure shows each side's scrubbed inner text in the vitest report, proven by an integration case) → 1.1–1.3, 2.1–2.2, **partly**. Two nested paths still show only a fixed outer message, and both are reported as out-of-scope findings:
   - B's retirement also fails: `retiringOnError` wraps the lane failure in `Office editor lane and retiring B failed` (`office-editor-stack-fixture.ts:295-309`);
-  - a side's session and its `browser.close` both fail: that side rejects with `AggregateError('Stack workbench … and browser close failed')` (`stack-browser-fixture.ts:327-328`), which has no `cause`, and `scrubbedChain` walks only `.cause`, so that side's `<chain>` is the fixed text. The stack run shows it only when the lane fails; on main it passes, so 2.2 proves no regression and the runtime proof comes from the Playwright 1.65 measuring run in #671's next step.
+  - a side's session and its `browser.close` both fail: that side rejects with `AggregateError('Stack workbench … and browser close failed')` (`stack-browser-fixture.ts:327-328`), which has no `cause`, and `scrubbedChain` walks only `.cause`, so that side's `<chain>` is the fixed text.
+- **AC4 runtime proof.** The stack run shows the new message only when the lane fails. On main it passes, so 2.2 proves no regression, and the runtime proof comes from the Playwright 1.65 measuring run in #671's next step.
 - AC1–AC3 and AC5 stay open in #671.
