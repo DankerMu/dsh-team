@@ -282,6 +282,7 @@ docker compose --project-name "$DEPLOY_PROJECT" --project-directory . \
 - Document Server 是除平台外唯一接入各实例网络的对端，能直连每个实例的+2:3080（用例的正向对照断言了这一点）。网络层：B 向 A 网络上+2/+3/+4 的 3080、3099、22、80、443、3000、8080 发起的连接全部失败，原因是 Docker 的跨 bridge 隔离，而 B 以 uid1001 运行，不能改路由，也不能把 Document Server 当作下一跳；这不是65535端口穷举。应用层：持有 Document Server JWT 的人可以让它代为请求任何实例。跨用户取文件和回调由每实例文件令牌密钥阻止，这项保护随 Office 在线编辑交付，由跨用户攻击用例验证。
 - 自带 Document Server 的 Command Service（`/command`、`/coauthoring/CommandService.ashx` 及大小写、尾斜杠、版本前缀变体）只接受它自己网络命名空间内的回环请求，其余来源 403；docservice 的 8000 由防火墙容器对实例丢弃（#624）。验收：`test:deploy` 暴露用例中两个实例到 +4:8000 超时、+4:80 有应答；`test:stack` 中实例到 +4:80 的 `/command` 及带版本前缀、末尾编码 `%3F`/`%23` 的变体为 403、+4:8000 超时。实例网络只有 IPv4，这些探测只覆盖 IPv4；IPv6 规则会安装并逐条自检，但没有探测。
 - 因此员工拿不到别人的 forgotten 副本（某次保存失败后 Document Server 留下的未保存编辑）：列出、取回、删除（`getForgottenList`、`getForgotten`、`deleteForgotten`）只走 Command Service，员工实例发出的都被拒。员工自己的恢复不受影响：重新打开同一个未改动的文件时，Document Server 直接读存储，不经 Command Service。验收：`test:stack` 的 forgotten 用例。
+- forgotten 副本存在自带 Document Server 容器内的 `/var/lib/onlyoffice/documentserver/App_Data/cache/files/forgotten/<key>/`，每个文档 key 一个目录；`/var/lib/onlyoffice` 是镜像声明的匿名卷，Compose 没有给它命名。9.4.0 不会让副本过期，也没有过期设置：只有之后同一 key 的一次成功保存或 Command Service 的 `deleteForgotten` 会删掉它。员工够不到这个目录，只有运营方（`docker exec`）能访问。员工自己的恢复只在文件没有改动时有效：key 由文件大小和修改时间算出，文件一旦被改写（例如员工指南「AI 改写正在编辑的文件」中被丢弃的未保存修改），旧 key 不会再出现，那份副本只能由运营方清理（第 8 节）。`docker compose ... up -d` 重建容器时重新挂上这些匿名卷（不加 `-V`），副本还在；`down` 后卷留在磁盘上，但下次 `up` 新建匿名卷，旧卷成为孤立卷。Compose 的这两条行为按其语义写出，没有用例验证。验收：`test:stack` 的 forgotten 用例断言副本出现时该目录多出一个子目录，并在 AI 改写、键入和 forgotten 用例结束时清理各自 key 的副本，断言目录数回到用例开始前的基线。
 - 部署实例不发布宿主端口、不挂Docker socket、不使用特权模式；uid1001运行。只有平台持有Docker控制权限。`published-loopback`只是显式宿主开发方式，不满足部署无端口映射边界。
 - 实例不持有平台数据库、密码哈希、平台session或管理员凭据；A的DSH凭据不能在B使用。平台API在来自实例的请求上仍鉴权：无平台session为401，员工调用管理接口为403。
 - 19.4直接对真实原生端点验证：各自cookie返回200、启动令牌换出的cookie可用，A cookie/令牌在B返回401且不签发cookie，B仍可正常访问。另在B内以uid1001遍历可读普通文件和进程环境，查找本次全部注册/登录平台session值及存储摘要、密码哈希、A原生凭据；同时检查平台DB名称/SQLite schema/挂载来源。扫描先于凭据互换，探针参数不作为应用数据扫描；文件/环境正向标记必须命中。虚拟设备、sysfs和proc内存不扫描，proc仅读取进程environ；权限拒绝和已消失条目计数，未知错误或250000文件/4GiB/60秒边界超限即失败，不截断后通过。该有限可读视图不是原子文件系统快照或内核内存保密证明，也不把共用模型密钥列为禁止项。
@@ -311,15 +312,18 @@ RAGFlow 知识库检索通过后台配置交付（本文档不含 RAGFlow 部署
 
 恢复时禁用Docker空卷copy-up，避免凭空重建`storages/`等非profile路径；首次普通启动仍保留镜像种子填充。恢复或清理失败必须报告失败结果；部分复制不承诺原配置回滚。无论是配置组合还是恢复helper，未确认的创建/清理都会在当前owner内阻止该用户后续启动和恢复，避免新的工作与潜在写入重叠。需要运营者按精确实例与invocation身份确认资源已结清；仅重启平台、找不到某个名字或按前缀删除都不是恢复完成证明。
 
+**日常清理 forgotten 副本。** 副本不过期，会一直占用 Document Server 匿名卷的空间。运营方可以定期删除写入超过一定时长的副本，例如 7 天（10080 分钟）：`docker exec dsh-team-documentserver find /var/lib/onlyoffice/documentserver/App_Data/cache/files/forgotten -mindepth 1 -maxdepth 1 -type d -mmin +10080 -exec rm -rf {} +`。`-mmin +10080` 按秒比较，只匹配最后修改时间早于 10080 分钟之前的副本目录。代价：它也会删掉员工重新打开未改动文件时本可以恢复的副本。使用外部 Document Server 时，副本在那台服务器自己的存储里，由它的运营方处理。
+
 一次性干净主机验收结束时，按以下顺序清理；这不是生产卸载脚本：
 
 1. 保留本次创建的员工ID、平台ID、两个image ID、Compose project及数据根目录记录。开始前即存在的资源一律不删。
 2. 通过上面的管理员状态接口禁用本次员工，关闭测试HTTP/WebSocket连接；确认该员工容器和网络已退役。若操作失败，保留错误并按精确ID及`dsh-team.user=<id>`标签核对后处理，不按名字前缀强制接管。
 3. 校验固定平台名称的ID与记录一致、`com.docker.compose.project`等于本次project。`docker kill --signal SIGTERM <平台ID>`，然后 `timeout 30 docker wait <平台ID>`；要求输出0，并inspect确认已停止、ExitCode0且未OOM。
-4. 用同一project/env-file/compose文件执行 `docker compose ... down`，移除已停止的平台和本次Compose网络；不要加 `--remove-orphans` 或 `--volumes`。
-5. 对本次每个员工的 `dsh-team-home-<id>`、`dsh-team-work-<id>`，确认标签`dsh-team.user`精确匹配、无任何容器引用后，逐个 `docker volume rm <精确卷名>`。卷含员工数据；只有明确的一次性验收才执行。
-6. 检查两个本次构建标签仍指向记录的image ID且`dsh-team.deploy-run`等于本次标识，再 `docker image rm dsh-team-user:local dsh-team-platform:local`；不使用force，不删除别人的标签/镜像。
-7. 检查容器、镜像、卷、网络中所有`dsh-team`前缀项；它们只是残留告警，不是删除授权。只处理已证明本次创建的资源；任何不明项都使“干净结束”验收阻塞。禁止`docker system prune`、全局volume prune或按前缀批量删除。
-8. 最后删除本次私有配置副本和已记录的测试数据目录。生产数据/既有配置不在此清理范围，不能复用本节进行升级或恢复。
+4. 记录 Document Server 容器的卷名：`docker inspect -f '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{.Destination}}{{println}}{{end}}{{end}}' dsh-team-documentserver`。应列出 `/var/lib/onlyoffice`（含 forgotten 副本）、`/var/log/onlyoffice` 和 `/var/www/onlyoffice/Data` 三个匿名卷；字体目录是绑定挂载，不在其中。
+5. 用同一project/env-file/compose文件执行 `docker compose ... down`，移除已停止的平台和本次Compose网络；不要加 `--remove-orphans` 或 `--volumes`。`down` 之后，对第 4 步记录的每个卷名逐个 `docker volume rm <精确卷名>`。这些卷名不带 `dsh-team` 前缀，第 8 步的前缀检查看不到它们。
+6. 对本次每个员工的 `dsh-team-home-<id>`、`dsh-team-work-<id>`，确认标签`dsh-team.user`精确匹配、无任何容器引用后，逐个 `docker volume rm <精确卷名>`。卷含员工数据；只有明确的一次性验收才执行。
+7. 检查两个本次构建标签仍指向记录的image ID且`dsh-team.deploy-run`等于本次标识，再 `docker image rm dsh-team-user:local dsh-team-platform:local`；不使用force，不删除别人的标签/镜像。
+8. 检查容器、镜像、卷、网络中所有`dsh-team`前缀项；它们只是残留告警，不是删除授权。只处理已证明本次创建的资源；任何不明项都使“干净结束”验收阻塞。禁止`docker system prune`、全局volume prune或按前缀批量删除。
+9. 最后删除本次私有配置副本和已记录的测试数据目录。生产数据/既有配置不在此清理范围，不能复用本节进行升级或恢复。
 
 本指南的干净检出演练、完整命令结果和最终资源清单随对应PR发布；不能用`pnpm test:deploy`自报替代本指南逐步演练。

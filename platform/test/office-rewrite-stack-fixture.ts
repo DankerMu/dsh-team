@@ -4,6 +4,15 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Page, Response } from '@playwright/test';
 import { expect } from 'vitest';
 import {
+  clearingForgottenOnError,
+  forgottenDirs,
+  forgottenRecord,
+  OBSERVE_MS,
+  registeredKey,
+} from './document-server-forgotten-fixture.ts';
+import type { ForgottenKey } from './document-server-forgotten-fixture.ts';
+import type { NamespaceRead } from './document-server-net-fixture.ts';
+import {
   counted,
   digest,
   editorErrorsAllowed,
@@ -58,16 +67,18 @@ export const NOTICES = {
   saveFailed: '保存未写回文件（文档服务会重试；请勿只关闭标签页，必要时用“下载文件”备份）',
 };
 const CONFIG = '/sidebar/onlyoffice/config';
-// A notice, the refresh or a late status 2 follow the rewrite within seconds. 15s is a quarter of
-// the 60s session timeout; each case spends two windows (after the Agent turn and after the editor
-// closes), so both cases add 60s to the stack case on top of their session waits.
-const OBSERVE_MS = 15_000;
+// Each case spends two OBSERVE_MS windows (after the Agent turn and after the editor closes, which
+// settles the forgotten store), so both cases add 60s to the stack case on top of their sessions.
 /** One Agent turn: its rewrite's call and hit, and the bash, tool-result and title requests. */
 const TURN = { rewriteCalls: 1, rewriteHits: 1, requests: 3 };
 const SESSION_LISTS = ['pageErrors', 'failedRequests', 'externalRequests'] as const;
 const NO_ENTRIES = { added: [], removed: [] };
 const QUIET = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
 const UNSEEN = { before: false, window: false, saved: false };
+// #650's source prediction: a session closed with its save refused leaves one forgotten copy under
+// its key, listed; one closed without a change leaves none; the lane removes either.
+const NO_COPY = { added: 0, listed: false, cleared: true };
+const COPY = { added: 1, listed: true, cleared: true };
 /**
  * §60's measurement (step 1, review round 1). Clean: no notice above the editor from before the
  * Agent turn until the save landed. Unsaved: the refreshed-away session's status 2 with the
@@ -85,11 +96,12 @@ const CLEAN = {
   entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
   allowed: true,
   sessions: [QUIET, QUIET],
+  forgotten: NO_COPY,
 };
 const REFUSED = { before: false, window: true, saved: true };
 export const EXPECTED_REWRITE = {
   clean: CLEAN,
-  unsaved: { ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED } },
+  unsaved: { ...CLEAN, notices: { ...CLEAN.notices, saveFailed: REFUSED }, forgotten: COPY },
 };
 const NONE_SHOWN = { staleChanged: false, staleRemoved: false, saveFailed: false };
 const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
@@ -112,6 +124,7 @@ export const EXPECTED_TYPING = {
   typed: [false, false, false],
   entries: { saved: NO_ENTRIES, closed: NO_ENTRIES },
   allowed: true,
+  forgotten: COPY,
 };
 
 // python-docx from the user image; the file and the nonce arrive as argv. No single quote (below).
@@ -165,6 +178,8 @@ export function rewriteState(
 }
 
 type Observed = Digest & { readonly state: ReturnType<typeof rewriteState>; typed?: boolean };
+/** The open key's forgotten copy once the editor closed: counts and booleans, never the key. */
+type ForgottenRecord = Awaited<ReturnType<typeof forgottenRecord>>;
 type EntryDiff = Readonly<Record<'added' | 'removed', readonly string[]>>;
 /** Every case's file and editing session: no nonce, marker or key. */
 interface EditedEvidence {
@@ -177,6 +192,7 @@ interface EditedEvidence {
   /** The editing session's errors are 18.5's allowed ones (`editorErrorsAllowed`). */
   readonly allowed: boolean;
   readonly editor: StackBrowserEvidence;
+  readonly forgotten: ForgottenRecord;
 }
 /** States, digests, entry names, `status path` lines and sessions. */
 interface RewriteCaseEvidence extends EditedEvidence {
@@ -224,11 +240,11 @@ const readFacts = (reads: EditedEvidence['reads']) => ({
 });
 /** What EXPECTED_REWRITE fixes of one case; `typed` is false where nothing was typed first. */
 export function rewriteFacts(evidence: RewriteCaseEvidence) {
-  const { notices, cleared, config, reads, entries, allowed, editor, agent } = evidence;
+  const { notices, cleared, config, reads, entries, allowed, editor, agent, forgotten } = evidence;
   const sessions = [editor, agent].map((browser) =>
     Object.fromEntries(SESSION_LISTS.map((key) => [key, browser[key].length])),
   );
-  return { notices, cleared, config, ...readFacts(reads), entries, allowed, sessions };
+  return { notices, cleared, config, ...readFacts(reads), entries, allowed, sessions, forgotten };
 }
 
 type Transitions = Extract<TypingEvidence['dirty'], { available: true }>['transitions'];
@@ -245,12 +261,14 @@ const cleanThenCleared = ({ staleLatched, staleCleared }: StaleSpan, transitions
 /** What a typing case's evidence must have: the timing-variable fields only by their order. */
 type TypingFactsInput = Pick<
   TypingEvidence,
-  'notices' | 'latched' | 'cleared' | 'config' | 'dirty' | 'watch' | 'reads' | 'entries' | 'allowed'
-> & { readonly window: StaleSpan };
+  'notices' | 'latched' | 'cleared' | 'config' | 'dirty' | 'watch' | 'reads' | 'entries'
+> &
+  Pick<TypingEvidence, 'allowed' | 'forgotten'> & { readonly window: StaleSpan };
 
 /** What EXPECTED_TYPING fixes of the typing case; times, the host log and digests stay evidence. */
 export function typingFacts(evidence: TypingFactsInput) {
-  const { notices, latched, cleared, config, dirty, watch, reads, entries, allowed } = evidence;
+  const { notices, latched, cleared, config, dirty, watch, reads, entries, allowed, forgotten } =
+    evidence;
   return {
     ...{ notices, latched: { window: latched.window }, cleared, config },
     dirty: dirty.available
@@ -261,7 +279,7 @@ export function typingFacts(evidence: TypingFactsInput) {
         }
       : { available: false },
     watch: watch.available ? { available: true, kinds: watch.kinds } : { available: false },
-    ...{ ...readFacts(reads), entries, allowed },
+    ...{ ...readFacts(reads), entries, allowed, forgotten },
   };
 }
 
@@ -285,9 +303,11 @@ export function officeRewriteLine(evidence: OfficeRewriteEvidence | undefined) {
   return { clean: caseLine(clean), unsaved: caseLine(unsaved), typing: typingLine(typing) };
 }
 
-/** A's lane plus the host's Docker, A's instance, the provider's reply and its rewrite scripts. */
+/** A's lane plus the host's Docker, the Document Server namespace position, A's instance, the
+ * provider's reply and its rewrite scripts. */
 type OfficeRewriteLane = ArchiveLane & {
   readonly run: DockerOutput;
+  readonly namespaceRead: NamespaceRead;
   readonly instance: string;
   readonly reply: string;
   readonly rewrites: readonly Readonly<Record<'marker' | 'command' | 'nonce', string>>[];
@@ -415,13 +435,26 @@ function responseLog() {
 const noneShown = (page: Page) => async () =>
   Object.values(await page.evaluate<NoticeFlags>(NOTICES_SHOWN)).every((on) => !on);
 
+/** The key the plugin minted for the open `name`, read before anything changes the file. */
+async function openKey(lane: OfficeRewriteLane, name: string) {
+  const key = await registeredKey(lane, `${WORK}/${name}`);
+  if (key === null) throw new Error(`Office rewrite: the plugin minted no key for ${name}`);
+  return key;
+}
+
 /** One case: open, maybe type unsaved, the Agent's rewrite, a window, type and save, then close. */
-async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) {
+async function rewriteCase(
+  lane: OfficeRewriteLane,
+  index: 0 | 1,
+  root: string,
+  held: ForgottenKey,
+) {
   const { session } = lane;
   const { id, name, typeFirst } = CASES[index];
   const script = lane.rewrites[index];
   if (script === undefined) throw new Error('Office rewrite script missing');
   const read = await freshDocx(lane, id, name);
+  const baseline = await forgottenDirs(lane);
   const [typed, saved] = [editorNonce(), editorNonce()];
   const directory = join(root, id);
   const shot = `office-rewrite-${id}`;
@@ -433,6 +466,7 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
   });
   const browse = async (page: Page, shoot: (name: string) => Promise<void>) => {
     await openHinted(page, shoot, session, name, `${shot}-open`, editorRefused);
+    held.key = await openKey(lane, name);
     if (typeFirst) {
       await typeAndSave(page, 'docx', typed, session.timeout, undefined, false);
       await shoot(`${shot}-typed`);
@@ -471,7 +505,8 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
     browsed = await browse(page, shoot);
   };
   const editor = await workbenchSession({ ...session, directory }, names, body, undefined, record);
-  if (browsed === undefined) throw new Error('Office rewrite case not observed');
+  if (browsed === undefined || held.key === null)
+    throw new Error('Office rewrite case not observed');
   await delay(OBSERVE_MS);
   const { agent, provider, notices, cleared, config, rewritten, afterSave, entries, before } =
     browsed;
@@ -480,6 +515,7 @@ async function rewriteCase(lane: OfficeRewriteLane, index: 0 | 1, root: string) 
     reads: { rewritten, saved: afterSave, closed: observe(await read()) },
     entries: { ...entries, closed: entryDiff(before, await listing(lane)) },
     allowed: editorErrorsAllowed(editor.consoleErrors, responses, session.base),
+    forgotten: await forgottenRecord(lane, held.key, baseline, `(rewrite ${id})`),
   };
   const seen = `Office rewrite ${id}, observed ${JSON.stringify(caseLine(evidence))}`;
   expect(rewriteFacts(evidence), seen).toEqual(EXPECTED_REWRITE[id]);
@@ -529,6 +565,7 @@ interface TypingSteps {
   readonly read: () => Promise<OfficeRead>;
   readonly observe: (file: OfficeRead) => Observed;
   readonly fetched: { readonly config: number };
+  readonly held: ForgottenKey;
 }
 
 /** The typing session: observers, the window, its precondition, the save, the page's signals. */
@@ -545,6 +582,7 @@ async function typingBrowse(
   await openHinted(page, shoot, lane.session, TYPING.name, `${shot}-open`, editorRefused);
   await page.evaluate(NOTICE_LATCH);
   await page.evaluate(FRAME_LISTENER);
+  steps.held.key = await openKey(lane, TYPING.name);
   const before = await listing(lane);
   const [open, beforeShown] = [fetched.config, await shown()];
   const { marks, latched } = await typeThroughRewrite(page, lane, steps.nonces);
@@ -586,11 +624,17 @@ async function typingBrowse(
  * the same editor and closes it. Asserted: the window precondition first, the provider untouched,
  * EXPECTED_TYPING and the screenshots; the times and the host log are recorded (#652 (a)(b)(c)).
  */
-async function typingCase(lane: OfficeRewriteLane, root: string, since: number) {
+async function typingCase(
+  lane: OfficeRewriteLane,
+  root: string,
+  since: number,
+  held: ForgottenKey,
+) {
   const { session } = lane;
   const provider = await providerCounts(lane);
   const control = saveLines(await hostLog(lane, since), since);
   const read = await freshDocx(lane, TYPING.id, TYPING.name);
+  const baseline = await forgottenDirs(lane);
   const nonces = { typed: editorNonce(), agent: editorNonce(), saved: editorNonce() };
   const { fetched, responses, record } = responseLog();
   const observe = (file: OfficeRead): Observed => ({
@@ -606,12 +650,13 @@ async function typingCase(lane: OfficeRewriteLane, root: string, since: number) 
     // The save-error notice renders the guard's message: the old key, the path and sizes.
     { ...names, masked: [NOTICES.saveFailed] },
     async (page, shoot) => {
-      browsed = await typingBrowse(page, shoot, { lane, nonces, read, observe, fetched });
+      browsed = await typingBrowse(page, shoot, { lane, nonces, read, observe, fetched, held });
     },
     undefined,
     record,
   );
-  if (browsed === undefined) throw new Error('Office rewrite typing case not observed');
+  if (browsed === undefined || held.key === null)
+    throw new Error('Office rewrite typing case not observed');
   await delay(OBSERVE_MS);
   const { before, origin, rewritten, saved, entries, hostBefore, ...page } = browsed;
   const afterClose = saveLines(await hostLog(lane, origin), origin);
@@ -622,6 +667,7 @@ async function typingCase(lane: OfficeRewriteLane, root: string, since: number) 
     entries: { ...entries, closed: entryDiff(before, await listing(lane)) },
     ...{ responses, editor },
     allowed: editorErrorsAllowed(editor.consoleErrors, responses, session.base),
+    forgotten: await forgottenRecord(lane, held.key, baseline, '(rewrite typing)'),
   };
   const seen = `Office rewrite typing, observed ${JSON.stringify(typingLine(evidence))}`;
   expect(evidence.provider, seen).toEqual(provider);
@@ -637,9 +683,14 @@ async function typingCase(lane: OfficeRewriteLane, root: string, since: number) 
  * plugin notice, the unsaved one drops its edit and shows 「保存未写回文件」 until A's save lands. A
  * then types and saves, and the file holds both sides' text, with no copy left in `/data/work`,
  * still after the editor closes. The typing case (#652) follows: with the rewrite in its window, the
- * editor refreshes once it turns clean, and A's next save holds both sides' text.
+ * editor refreshes once it turns clean, and A's next save holds both sides' text. Each case
+ * records and then removes the forgotten copy its open key left (#650); a case failing once that
+ * key was read clears it after `settle` and rethrows its own failure.
  */
-export const officeRewriteScenario = (lane: OfficeRewriteLane): Promise<OfficeRewriteEvidence> =>
+export const officeRewriteScenario = (
+  lane: OfficeRewriteLane,
+  settle = OBSERVE_MS,
+): Promise<OfficeRewriteEvidence> =>
   withWorkFiles(
     lane,
     [...CASES.map(({ name }) => name), TYPING.name],
@@ -653,8 +704,11 @@ export const officeRewriteScenario = (lane: OfficeRewriteLane): Promise<OfficeRe
         [0, 0],
       ]);
       const root = join(lane.session.directory, 'office-rewrite');
-      const clean = await rewriteCase(lane, 0, root);
-      const unsaved = await rewriteCase(lane, 1, root);
-      return { clean, unsaved, typing: await typingCase(lane, root, since) };
+      const cleared = <T>(id: string, body: (held: ForgottenKey) => Promise<T>) =>
+        clearingForgottenOnError(lane, `(rewrite ${id} cleanup)`, body, settle);
+      const clean = await cleared('clean', (held) => rewriteCase(lane, 0, root, held));
+      const unsaved = await cleared('unsaved', (held) => rewriteCase(lane, 1, root, held));
+      const typing = await cleared('typing', (held) => typingCase(lane, root, since, held));
+      return { clean, unsaved, typing };
     },
   );

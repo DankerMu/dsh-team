@@ -3,8 +3,11 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
+import { DOCUMENT_SERVER } from './document-server-net-fixture.ts';
 import { editorNonce, NONCE_PATTERN, READER } from './office-editor-stack-fixture.ts';
-import { docxCommand, HEALTH_COMMAND } from './office-hints-stack-fixture.ts';
+import { docxCommand, HEALTH_COMMAND, openHinted } from './office-hints-stack-fixture.ts';
+import type * as OfficeHints from './office-hints-stack-fixture.ts';
+import { REGISTRY } from './office-isolation-stack-fixture.ts';
 import {
   EXPECTED_REWRITE,
   EXPECTED_TYPING,
@@ -32,8 +35,14 @@ vi.mock('./stack-browser-fixture.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof StackBrowser>();
   return { ...actual, workbenchSession: vi.fn(actual.workbenchSession) };
 });
+// The editor opening is a stand-in where a case needs the session body to reach the key read.
+vi.mock('./office-hints-stack-fixture.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof OfficeHints>();
+  return { ...actual, openHinted: vi.fn(actual.openHinted) };
+});
 afterEach(() => {
   vi.mocked(workbenchSession).mockReset();
+  vi.mocked(openHinted).mockReset();
 });
 
 const [AGENT, EMPLOYEE] = [editorNonce(), editorNonce()];
@@ -163,6 +172,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
       cleared: true,
       config: { open: 1, window: 2, saved: 2 },
     },
+    forgotten: { added: 0, listed: false, cleared: true },
     reads: { rewritten: { ...read, state: 'agent-only' as const }, saved: read, closed: read },
     entries: { saved: { added: ['干净改写.docx.tmp-1'], removed: [] }, closed: unchanged },
     allowed: false,
@@ -191,6 +201,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
     reads: { rewritten: read, saved: read, closed: read },
     entries: { saved: unchanged, closed: unchanged },
     allowed: true,
+    forgotten: { added: 1, listed: true, cleared: true },
   } as const;
   const typing = { ...typingObserved, responses, editor };
 
@@ -220,6 +231,10 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
   expect(() => officeRewriteLine(undefined)).toThrow('Office rewrite evidence missing');
 });
 
+// #650's source prediction: a session closed with its save refused leaves one forgotten copy
+// under its key, listed; one closed without a change leaves none; the lane clears either.
+const NO_COPY = { added: 0, listed: false, cleared: true };
+const COPY = { added: 1, listed: true, cleared: true };
 // §60's measured values (step 1 and review round 1), written out rather than read from the fixture.
 const CLEAN = {
   notices: NOTICES,
@@ -230,10 +245,11 @@ const CLEAN = {
   entries: { saved: unchanged, closed: unchanged },
   allowed: true,
   sessions: [quiet, quiet],
+  forgotten: NO_COPY,
 };
 // The old key's status 2 with the discarded edit is refused: 「保存未写回文件」 shows until the save.
 const REFUSED = { before: false, window: true, saved: true };
-const UNSAVED = { ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED } };
+const UNSAVED = { ...CLEAN, notices: { ...NOTICES, saveFailed: REFUSED }, forgotten: COPY };
 const MEASURED = { clean: CLEAN, unsaved: UNSAVED };
 const at = (state: 'agent-only' | 'both' | 'employee-only', typed?: boolean) => ({
   ...read,
@@ -252,6 +268,7 @@ const measured = (id: 'clean' | 'unsaved', overrides: object = {}) => {
     },
     entries: { saved: unchanged, closed: unchanged },
     ...{ allowed: true, editor: session([], ['sw'], []), agent: session(replies, [], []) },
+    forgotten: MEASURED[id].forgotten,
     ...overrides,
   };
 };
@@ -338,6 +355,14 @@ it.each([
     false,
   ],
   ['an unallowed editor error', 'clean', measured('clean', { allowed: false }), false],
+  ['no copy of the old key', 'unsaved', measured('unsaved', { forgotten: NO_COPY }), false],
+  ['a copy from the clean case', 'clean', measured('clean', { forgotten: COPY }), false],
+  [
+    'the copy not cleared',
+    'unsaved',
+    measured('unsaved', { forgotten: { ...COPY, cleared: false } }),
+    false,
+  ],
   ['a failed request', 'clean', measured('clean', { editor: session([], [], ['GET /x']) }), false],
   [
     'an Agent page error',
@@ -369,6 +394,7 @@ const MEASURED_TYPING = {
   typed: [false, false, false],
   entries: { saved: unchanged, closed: unchanged },
   allowed: true,
+  forgotten: COPY,
 };
 const typingReads = (saved: 'agent-only' | 'both') => ({
   rewritten: at('agent-only', false),
@@ -398,6 +424,7 @@ const typingRun = (stale: readonly [number, number], dirtyFalse: number, saveErr
     host: { available: false, reason: 'no earlier line' },
     ...{ reads: typingReads('both'), entries: { saved: unchanged, closed: unchanged } },
     allowed: true,
+    forgotten: COPY,
   }) as const;
 const PATCHED = [typingRun([1433, 2594], 2582, 7956), typingRun([1886, 2832], 2818, 8181)] as const;
 const [PATCHED_A] = PATCHED;
@@ -509,6 +536,8 @@ it.each([
     }),
   ],
   ['an unallowed editor error', patchedWith({ allowed: false })],
+  ['no copy of the refreshed-away key', patchedWith({ forgotten: NO_COPY })],
+  ['the copy not cleared', patchedWith({ forgotten: { ...COPY, cleared: false } })],
 ] as const)('rejects a typing case unlike the patched runs: %s', (_case, evidence) => {
   expect(typingFacts(evidence)).not.toEqual(EXPECTED_TYPING);
 });
@@ -529,7 +558,13 @@ const rewriteLane = {
     // withWorkFiles' removal: the work directory, then each name.
     return reply(rest.map(() => false));
   },
-  run: () => Promise.reject(new Error('no host Docker before the typing case')),
+  // The forgotten store through host Docker: its count, and one removal; nothing else.
+  run: (args: string[]) => {
+    if (args.slice(0, 3).join(' ') !== `exec ${DOCUMENT_SERVER} sh`)
+      return Promise.reject(new Error('no host Docker before the typing case'));
+    return Promise.resolve(args[4]?.includes('sha256sum') === true ? '{"removed":1}' : '0\n');
+  },
+  namespaceRead: () => Promise.reject(new Error('no namespace read before the session closes')),
   provider: () => Promise.resolve({ rewriteCalls: [0, 0], rewriteHits: [0, 0], requests: 0 }),
   ...{ instance: 'dsh-team-u-a', reply: 'reply', rewrites: ownedRewrites() },
 };
@@ -568,4 +603,42 @@ it('masks the save-error notice in every screenshot of the clean and unsaved ses
   const [[, names] = []] = vi.mocked(workbenchSession).mock.calls;
   expect(names?.label).toBe('office rewrite clean');
   expect(names?.masked ?? []).toContain(NOTICE_TEXTS.saveFailed);
+});
+
+it('clears the open key after a failed clean session and rethrows its failure unchanged', async () => {
+  const calls: string[][] = [];
+  const lane = {
+    ...rewriteLane,
+    // A's registry names the DOCX once the editor is open.
+    exec: (args: readonly string[]) =>
+      args[4] === REGISTRY ? reply([KEY]) : rewriteLane.exec(args),
+    run: (args: string[]) => {
+      calls.push(args);
+      return rewriteLane.run(args);
+    },
+  };
+  const evidence = session([], [`WebSocket ${SOCKET} failed`], [`GET ${SOCKET}`]);
+  let failure: StackWorkbenchFailure | undefined;
+  vi.mocked(openHinted).mockResolvedValue(undefined);
+  // The body runs: the editor opens and its key is read, then the page dies before the Agent turn.
+  vi.mocked(workbenchSession).mockImplementation(async (_session, names, body) => {
+    const page = {} as Parameters<typeof body>[0]; // a page whose every call fails
+    const passed = () => Promise.resolve();
+    const cause = await body(page, passed, passed).then(
+      () => new Error('session body did not fail'),
+      (error: unknown) => error,
+    );
+    failure = new StackWorkbenchFailure(cause, evidence, names.label);
+    throw failure;
+  });
+
+  const error = await officeRewriteScenario(lane, 0).catch((caught: unknown) => caught);
+
+  expect(failure).toBeDefined();
+  expect(error).toBe(failure);
+  expect(error).toBeInstanceOf(StackWorkbenchFailure);
+  expect(everythingPrinted(error)).not.toContain(KEY);
+  const removals = calls.filter((args) => args[4]?.includes('sha256sum') === true);
+  expect(removals).toHaveLength(1);
+  expect(JSON.stringify(calls)).not.toContain(KEY);
 });
