@@ -17,6 +17,7 @@ import {
   claimUncaptured,
   classifyOwnerChildren,
   publishedCommand,
+  UNPUBLISHED_COMMAND_RELEASE,
 } from './trusted-docker-uncaptured-fixture.ts';
 import type { ProcessRow } from './trusted-docker-uncaptured-fixture.ts';
 import { groupIsAbsent, groupSettlesAfterClose } from '../../scripts/trusted-docker-record.mjs';
@@ -81,6 +82,132 @@ it('retires the command group of a start killed before its owner published the c
     rmSync(pids.directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+// #692 budgets, shared by (a) and (b); (a) never spends LATE_RECEIPT_MS. The start window is the
+// owner's 4s pre-manifest hold, 3s of CLI start margin and at least 2s of identity wait, so the
+// captured start returns and its identity wait expires before the deadline cuts either. The
+// fixture deadline adds 3s of fixture preparation before the window. Measured locally: the
+// preparation took under 0.1s and the start about 4.5s, leaving about 4.5s of identity wait.
+const IDENTITY_START_WINDOW_MS = 4000 + 3000 + 2000;
+const IDENTITY_FIXTURE_MS = 3000 + IDENTITY_START_WINDOW_MS;
+// After the expiry: the held leaf's readiness and (b)'s late child.json, each bounded.
+const HELD_LEAF_MS = 5000;
+const LATE_RECEIPT_MS = 5000;
+// The case: the fixture deadline, both waits above, the claim's 2s stop confirmation and 2s scan,
+// the owner's and the command group's 5s settles, the 2s group check below, and 4s of margin.
+const IDENTITY_CASE_MS =
+  IDENTITY_FIXTURE_MS + HELD_LEAF_MS + LATE_RECEIPT_MS + 2000 + 2000 + 5000 + 5000 + 2000 + 4000;
+
+const errorTree = (error: unknown): unknown =>
+  error instanceof AggregateError
+    ? { message: error.message, errors: error.errors.map(errorTree) }
+    : String(error);
+
+async function waitFor(path: string, milliseconds: number, missing: string) {
+  for (const until = Date.now() + milliseconds; !existsSync(path);) {
+    if (Date.now() >= until) throw new Error(missing);
+    await delay(50);
+  }
+}
+
+/**
+ * A captured start whose owner spawned its command but published no child.json within the
+ * identity wait. With `release`, the owner is released after the expiry and writes child.json
+ * before cleanup. Pids are read inside the callback, so a failed case still kills them.
+ */
+async function unpublishedIdentity(release: boolean) {
+  const pids = { directory: '', owner: 0, command: 0, receipt: '' };
+  try {
+    const failed = await withTrustedDockerFixture(
+      'unpublished-command',
+      async (fixture) => {
+        pids.directory = fixture.directory;
+        await delay(Math.max(0, fixture.deadline - Date.now() - IDENTITY_START_WINDOW_MS));
+        let expired: Error | undefined;
+        try {
+          await fixture.start();
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          expired = error;
+        }
+        if (expired === undefined) throw new Error('Held owner published its command identity');
+        const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
+        const root = join(base, readdirSync(base)[0] ?? 'missing');
+        pids.receipt = join(root, 'child.json');
+        pids.owner = Number(
+          record(record(JSON.parse(readFileSync(join(root, 'launch.json'), 'utf8'))).owner).pid,
+        );
+        const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
+        // A ready leaf has passed its owner checks and holds, so only a retirement ends its group.
+        const leaf = join(String(request.temporary), 'child-ready.json');
+        await waitFor(leaf, HELD_LEAF_MS, 'Held owner launched no ready command');
+        const command = publishedCommand(fixture.repository);
+        if (command === undefined) throw new Error('Held owner published no command');
+        pids.command = command;
+        expect(groupIsAbsent(pids.command)).toBe(false);
+        if (release) {
+          writeFileSync(join(fixture.repository, UNPUBLISHED_COMMAND_RELEASE), 'release');
+          await waitFor(pids.receipt, LATE_RECEIPT_MS, 'Released owner wrote no child.json');
+        }
+        expect(existsSync(pids.receipt)).toBe(release);
+        throw expired;
+      },
+      undefined,
+      Date.now() + IDENTITY_FIXTURE_MS,
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    return {
+      failure: errorTree(failed),
+      groupSettled: await groupSettlesAfterClose(pids.command),
+      ownerPresent: ownerPresent(pids.owner),
+      receipt: existsSync(pids.receipt) ? 'kept' : 'absent',
+      expected: {
+        failure: {
+          message: 'Custody scenario and cleanup failed',
+          errors: [
+            expect.stringMatching(
+              new RegExp(
+                `^Error: Command identity unpublished after \\d+ms: pid=${String(pids.owner)} present=true$`,
+              ),
+            ) as unknown,
+            {
+              message: 'Owned custody fixture cleanup unconfirmed',
+              errors: [
+                `Error: Uncaptured custody fixture authority retained: command ${String(pids.command)}`,
+              ],
+            },
+          ],
+        },
+        groupSettled: true,
+        ownerPresent: false,
+        receipt: release ? 'kept' : 'absent',
+      },
+    };
+  } finally {
+    for (const pid of [pids.owner, -pids.command].filter(Boolean))
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already settled by the fixture: the green outcome.
+      }
+    rmSync(pids.directory, { recursive: true, force: true });
+  }
+}
+
+it.each([
+  ['spawned but never published', false],
+  ['published only after the identity wait', true],
+])(
+  'claims a captured start whose command identity was %s',
+  async (_scene, release) => {
+    const { expected, ...outcome } = await unpublishedIdentity(release);
+
+    expect(outcome).toEqual(expected);
+  },
+  IDENTITY_CASE_MS,
+);
 
 // Stub pids are never signalled: every seam below is injected.
 const OWNER = 900_001;

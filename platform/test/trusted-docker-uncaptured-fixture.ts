@@ -5,15 +5,18 @@ import { record } from './container-start-docker-fixture.ts';
 
 type Identity = Readonly<Record<string, unknown>>;
 
-// Gitignored in the fixture repository, so the reviewed-checkout check never sees it.
+// Gitignored in the fixture repository, so the reviewed-checkout check never sees them.
 const UNPUBLISHED_COMMAND = '.run/unpublished-command.json';
+/** A case that writes this file under the fixture repository releases the held owner (#692). */
+export const UNPUBLISHED_COMMAND_RELEASE = '.run/unpublished-command-release';
 
 /**
  * The unpublished-command owner's preload fragment (#661). Only the owner (`own`) is held: once
- * its `pnpm test:docker` spawn returns, it publishes the command pid, then blocks 30s, past the
- * 20s case, so neither the spawn event nor child.json can follow.
+ * its `pnpm test:docker` spawn returns, it publishes the command pid, then blocks until the
+ * release file appears or 30s pass, so neither the spawn event nor child.json can follow before.
+ * Its event loop is blocked inside spawn, so the release is polled synchronously in 50ms slices.
  */
-export const UNPUBLISHED_COMMAND_PRELOAD = `import {mkdirSync,renameSync,writeFileSync} from 'node:fs';
+export const UNPUBLISHED_COMMAND_PRELOAD = `import {existsSync,mkdirSync,renameSync,writeFileSync} from 'node:fs';
 if(process.argv.includes('own')){
   const unpublished=childProcess.spawn;
   childProcess.spawn=(command,args,options)=>{
@@ -23,7 +26,9 @@ if(process.argv.includes('own')){
       mkdirSync(new URL('.run/',import.meta.url),{recursive:true});
       writeFileSync(new URL(path.href+'.pending'),JSON.stringify({pid:child.pid}));
       renameSync(new URL(path.href+'.pending'),path);
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,30000);
+      const release=new URL(${JSON.stringify(UNPUBLISHED_COMMAND_RELEASE)},import.meta.url);
+      for(const until=Date.now()+30000;!existsSync(release)&&Date.now()<until;)
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,50);
     }
     return child;
   };
