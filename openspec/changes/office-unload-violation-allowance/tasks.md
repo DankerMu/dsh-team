@@ -7,7 +7,7 @@
     - an ordinary error returns `{ error }` and a non-error type returns `undefined`;
     - these return `{ error }`: the exact text with a character appended, a truncated text, another origin, version `9.4.1`, an unknown script, a known script at another line, and an empty location URL.
 - [ ] 1.2 `StackBrowserEvidence.unloadViolations`:
-  - `workbenchSession`'s handler (`:283-285`) routes through `recordedError`;
+  - `workbenchSession`'s handler (`:284-286`) routes through `recordedError`;
   - `scrubbedEvidence` maps the list;
   - every evidence literal in the tests is updated;
   - the routing case of design § Seams under test, with the stand-in browser's new message option.

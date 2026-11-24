@@ -37,7 +37,7 @@ Issue #671, decision (b). Line numbers are on main `200ed94`. Measurement and de
   The source table, `DS_UNLOAD_SOURCES`, lives next to it, with a comment naming #671 and the user decision.
 
 - **Both console collectors call it and nothing else:**
-  - `workbenchSession`'s handler (`stack-browser-fixture.ts:283-285`) puts `unload` results into a new list, `StackBrowserEvidence.unloadViolations`, and `error` results into `consoleErrors` as today. Each lane's exact matcher is unchanged and still rejects an unknown source.
+  - `workbenchSession`'s handler (`stack-browser-fixture.ts:284-286`) puts `unload` results into a new list, `StackBrowserEvidence.unloadViolations`, and `error` results into `consoleErrors` as today. Each lane's exact matcher is unchanged and still rejects an unknown source.
   - `openHinted`'s collector (`office-hints-stack-fixture.ts:168-172`) keeps only `error` results, so its §48 wait sees what `consoleErrors` will hold.
 - **Evidence prints each source.**
   - `counted` (`office-editor-stack-fixture.ts:170-173`) gains `unloadViolations: browser.unloadViolations`, the list itself, as `screenshots` is. That reaches the editor, rewrite (editor and agent sessions), idle and external lines, which all go through `counted`.
