@@ -44,7 +44,7 @@ Issue #687 lists 13 integration sites, outside #656's eight files, that failed i
   - After the window, the wait continues until the facts each case requires have been observed:
     - held preflight: `lock` and `webBuild`;
     - failed preflight: those two, plus the command closed.
-  - A hard cap ends the wait. The induced cases declare a named budget whose ledger (setup, cap, the held command's own preflight exit, cleanup, reserve) stays strictly under it. Past the cap, the timeout still throws its evidence, so a missing fact fails attributably rather than as `Test timed out`.
+  - A hard cap ends the wait. The induced cases declare a named budget whose ledger of code bounds (the cap and the commands settlement bound on the held command's exit) stays strictly under it, the rest covering the unbounded setup and cleanup. Past the cap, the timeout still throws its evidence, so a missing fact fails attributably rather than as `Test timed out`.
   - `closedMs < 5_000` is relaxed on purpose. Under load the failed preflight closes only after `build:web`, so after any 5 s window. `waitedMs >= 5_000` still carries "an early exit does not shorten the wait" (design § #4).
   - One new committed case runs the held preflight with a 100 ms window. It is red under the mutant that ignores `awaited` (`webBuild` null) and green after.
 

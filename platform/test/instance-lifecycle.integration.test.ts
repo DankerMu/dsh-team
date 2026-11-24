@@ -562,11 +562,12 @@ const RETIRED = {
 // The induced timeouts keep the 5s window as their lower bound and then wait for the facts each
 // case requires, at most until this cap from the wait's start.
 const INDUCED_CAP_MS = 15_000;
-// Ledger (s): setup (runtime copy and migrations) 5, the cap 15, then the held command's own
-// exit, which bounds its retirement (the rest of build:web, node start and the script's 10s
-// preflight) 15; about 35 with root removal, so a cap reached with a fact still missing fails
-// with the ownership evidence rather than as a vitest timeout.
-const INDUCED_CASE_MS = 50_000;
+// Ledger of code bounds (s): the cap 15, then cleanup's commands settlement, settleMs 35, which
+// bounds the held command's exit; 50 in all. No induced start publishes a PID, so the main step
+// spawns no dev:stop. Setup (runtime copy, migrations), Engine closure and root removal have no
+// code bound and share the remaining 10, so a cap reached with a fact still missing fails with
+// the ownership evidence rather than as a vitest timeout.
+const INDUCED_CASE_MS = 60_000;
 const held: NonNullable<OwnershipWait['awaited']> = (seen) =>
   seen.lock !== null && seen.webBuild !== null;
 const heldWait = (windowMs: number): OwnershipWait => ({
@@ -653,7 +654,7 @@ async function retiredOwnershipTimeout(
   const { evidence, cleanup } = ownershipTimeout(induced);
   expect(cleanup).toEqual({ cleanup: RETIRED });
   expect(induced.surfaced.root).toBe(false);
-  return { evidence, code: await induced.started.result };
+  return { evidence, code: await induced.started.result, waitedMs: induced.waitedMs };
 }
 
 function heldPreflightEngine() {
@@ -699,32 +700,70 @@ it(
   INDUCED_CASE_MS,
 );
 
+// A fact that never holds: only the cap ends the wait, still through the ownership evidence.
+it(
+  'the ownership cap ends a wait whose awaited facts never hold',
+  async () => {
+    const { evidence, code, waitedMs } = await retiredOwnershipTimeout(heldPreflightEngine(), {
+      windowMs: 100,
+      capMs: 1_000,
+      awaited: () => false,
+    });
+    expect(waitedMs).toBeGreaterThanOrEqual(1_000);
+    // lock and webBuild depend on how far build:web got within 1s; the held preflight fixes the rest.
+    const { mainLog, pid, command: settled, pidfile } = evidence;
+    expect({ mainLog, pid, command: settled, pidfile }).toStrictEqual({
+      mainLog: null,
+      pid: null,
+      command: { state: 'running', code: null, signal: null, closedMs: null },
+      pidfile: 'missing',
+    });
+    expect(code).toBe(1);
+  },
+  INDUCED_CASE_MS,
+);
+
+/** A failed Engine preflight: the wait, from its window on, also awaits the command's close. */
+async function failedPreflightTimeout(windowMs: number) {
+  const engine = startupUnixServer(
+    () => ({ status: 500 }),
+    () => undefined,
+  );
+  const { evidence, code, waitedMs } = await retiredOwnershipTimeout(engine, {
+    ...heldWait(windowMs),
+    awaited: (seen, command) => held(seen, command) && command.state === 'closed',
+  });
+  const {
+    lock,
+    webBuild,
+    command: { closedMs, ...settled },
+    ...unobserved
+  } = evidence;
+  expect([typeof lock, typeof webBuild, typeof closedMs]).toEqual(['number', 'number', 'number']);
+  expect(settled).toStrictEqual({ state: 'closed', code: 1, signal: null });
+  expect(unobserved).toStrictEqual({ mainLog: null, pid: null, pidfile: 'missing' });
+  expect(code).toBe(1);
+  return { closedMs: closedMs ?? Number.NaN, waitedMs };
+}
+
 it(
   'initial ownership timeout retains the early command exit when the Engine preflight fails',
   async () => {
-    const engine = startupUnixServer(
-      () => ({ status: 500 }),
-      () => undefined,
-    );
-
-    const { evidence, code } = await retiredOwnershipTimeout(engine, {
-      ...heldWait(EVENTUALLY_MS),
-      awaited: (seen, command) => held(seen, command) && command.state === 'closed',
-    });
-
-    const {
-      lock,
-      webBuild,
-      command: { closedMs, ...settled },
-      ...unobserved
-    } = evidence;
-    expect([typeof lock, typeof webBuild, typeof closedMs]).toEqual(['number', 'number', 'number']);
-    expect(settled).toStrictEqual({ state: 'closed', code: 1, signal: null });
-    expect(unobserved).toStrictEqual({ mainLog: null, pid: null, pidfile: 'missing' });
     // No closedMs < 5_000: the failed preflight closes only after build:web, so under load after any
     // 5s window. ownershipTimeout's waitedMs >= windowMs still proves an early exit does not
     // shorten the wait.
-    expect(code).toBe(1);
+    await failedPreflightTimeout(EVENTUALLY_MS);
+  },
+  INDUCED_CASE_MS,
+);
+
+// The close lands long after a 100ms window, so only the awaited close keeps the wait open to it.
+it(
+  'a 100ms ownership window still waits for the failed preflight to close the command',
+  async () => {
+    const { closedMs, waitedMs } = await failedPreflightTimeout(100);
+    expect(closedMs).toBeGreaterThanOrEqual(100);
+    expect(waitedMs).toBeGreaterThanOrEqual(closedMs);
   },
   INDUCED_CASE_MS,
 );
