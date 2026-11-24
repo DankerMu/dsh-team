@@ -78,11 +78,11 @@ Evidence floor: the measuring pass (5 loaded runs, budgets raised to 60 s, instr
 
 ## Impact
 
-`platform/test/trusted-docker-custody.integration.test.ts`; `platform/test/trusted-docker-fixture.ts` (the moved `waitFor` export); `platform/test/trusted-docker-uncaptured-fixture.integration.test.ts` (its local `waitFor` replaced by the import).
+`platform/test/trusted-docker-custody.integration.test.ts`; `platform/test/trusted-docker-uncaptured-fixture.ts`, which gains the moved `waitFor` and `ownerOf` exports (F has no room); `platform/test/trusted-docker-uncaptured-fixture.integration.test.ts`, whose local `waitFor` is replaced by the import.
 
 ## Acceptance-criteria mapping (#687)
 
-- **D rows #5–#7:** the fixed bounds are re-derived from loaded measurement, with the basis in the comments.
+- **D rows #5–#7:** the fixed bounds are re-checked against loaded measurement. They are kept, because none binds in the measured range, and each states its basis in a comment.
 - **C row #8:** the read synchronizes on the start CLI's invocation files, with a distinguishing mutant.
 - **The five loaded runs:** recorded for the custody file, alongside slice 1's.
 
@@ -98,7 +98,9 @@ Five loaded full `pnpm test:integration` runs, with both budgets at 60 s and 1-m
 | #7 setup to leaf ready                                   | 1835 ms                      | `SPENT_CASE_MS` 8 s     |
 | C:521 / :554 / :729 / :771 step                          | 590 / 339 / 537 / 595 ms     | —                       |
 
-**#5–#7 did not reproduce in this range.** #687 recorded its cuts under load up to 116, which is above the acceptance range (< 67).
+**#5–#7 did not reproduce in this range.** #687 records no load for its custody failures; its loaded runs as a whole spanned 15–116.
+
+All five measuring runs exited with rc=1: #7 failed in each one at its `command status` assertion. That failure is by construction. With `SPENT_CASE_MS` at 60 s, the 10 s cap, not the case deadline, ends the wait, and the assertion rejects exactly that. The held-case data is unaffected: all 20 cases passed in all five runs.
 
 **Decisions, deviating from the text above:**
 
