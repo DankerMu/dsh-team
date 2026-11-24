@@ -42,7 +42,7 @@ Enforcement: `## Enforcement Index`; per-rule table and guardrail self-test deta
 | Persistence              | SQLite                            | 3             | better-sqlite3; `PLATFORM_DATA_DIR/platform.db` (D8, D19) |
 | Test runner              | Vitest + v8 coverage              | 5             |                                                           |
 | Platform UI              | React + Vite                      | 18, 8         | local static build served by the same Fastify origin      |
-| Platform UI browser      | Playwright Chromium               | 1.63          | pinned verification-only platform UI lane                 |
+| Platform UI browser      | Playwright Chromium               | 1.65          | pinned verification-only platform UI lane                 |
 | DSH verification browser | Chrome for Testing headless shell | 156.0.8078.80 | verification-only isolated Docker runtime                 |
 | Linter                   | ESLint, typescript-eslint         | 10, 8         | strict type-checked rule set                              |
 | Formatter                | Prettier                          | 3             |                                                           |
