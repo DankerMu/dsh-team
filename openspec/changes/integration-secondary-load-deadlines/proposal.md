@@ -126,3 +126,27 @@ Evidence floor: the measuring pass (60 s budgets, 5 runs at load ≥ 67, duratio
 - **#11:** the default's measured basis, and websocket budgets above its sum.
 - **Load ≥ 67:** the measuring pass records it, as the secondary goal.
 - **The five loaded full runs:** across all nine files.
+
+## Outcome of the measuring pass (recorded at implementation)
+
+Two measuring passes, each five runs of the four files alone at 1-minute load 68–84, with the budgets at 60 s. 56 `yes` generators were needed. All 70 cases passed in all 10 runs. In the first pass, a concurrent `tsc` overlapped runs 1–2; the second pass is clean.
+
+| case                                                           | max (pass 1 / pass 2)                               |
+| -------------------------------------------------------------- | --------------------------------------------------- |
+| ragflow #13, 11 apps                                           | 2933 / 2874 ms (about 267 ms per app)               |
+| browser-exec, slowest (#9 `none`)                              | 2019 / 2089 ms                                      |
+| login-throttle, slowest (:69)                                  | 1395 / 1202 ms                                      |
+| websocket, slowest (`resume` backpressure)                     | 1420 / 1307 ms                                      |
+| websocket "streams both" (12 sequential observations)          | 995 / 911 ms                                        |
+| `observeHttp`: every site except :498                          | 87 / 53 ms                                          |
+| `observeHttp` at websocket :498 (32 MiB backpressure transfer) | 1139 / 1080 ms (above 1 s in 1 and 3 of the 5 runs) |
+
+**The #11 stop rule fired. It fired only at :498, which is the only site to exceed half of the 2 s default.**
+
+That site awaits the arrival of a whole 32 MiB transfer, not a single peer event. **Decision:**
+
+- `HTTP_OBSERVATION_MS` stays 2000 ms. Its basis is the 87 ms maximum over every single-event site, about 23×.
+- :498 passes its own named bound, `BACKPRESSURE_TRANSFER_MS`. Its basis is the 1139 ms maximum with a stated margin, and it stays strictly below the websocket file's declared budget. A stalled transfer still fails with `observeHttp`'s own error.
+- No other caller's default changes.
+
+**#10 did not reproduce.** A probe on `execBrowser`'s `close` catch saw only the publication failures that :458 and :496 inject on purpose. Nothing was masked. The statement-only treatment stands.
