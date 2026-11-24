@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
 import {
   awaitResult,
@@ -22,6 +22,7 @@ import {
   withTrustedDockerFixture,
 } from './trusted-docker-fixture.ts';
 import { expectMemberOutlivedClose } from './trusted-docker-close-fixture.ts';
+import { ownerOf, waitFor } from './trusted-docker-uncaptured-fixture.ts';
 import {
   groupSettlesAfterClose,
   hasPassingOutcome,
@@ -31,13 +32,19 @@ import { browserExecRetirementSummary } from '../../scripts/verification-submiss
 
 type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
 
-// Each held case's literal 20_000 vitest bound. Inner waits end RESERVE_MS before it: the reserve keeps the
-// terminal evidence (one `status`) and cleanup (member, child group, owner and observer settles,
-// each about two cold observations and a `ps`) outside the budget, so they never leave orphans.
-// Measured green cleanup: at most 672ms, mean 286ms (23 cases, load 7). A settle's theoretical
-// ceiling is about 22s; all of them at once is unrealistic and not budgeted.
+// Each held case's vitest bound (the file default set below; it.each cases pass it) and the start
+// of its fixture deadline. Cases outside custodyCase state their own bound.
+// Inner waits end RESERVE_MS before it: the reserve keeps the terminal evidence (one `status`) and
+// cleanup (member, child group, owner and observer settles, each about two cold observations and
+// a `ps`) outside the budget, so they never leave orphans. A settle's theoretical ceiling is about
+// 22s; all of them at once is unrealistic and not budgeted. Measured (#687) with both budgets at
+// 60s, 5 loaded full integration runs, 1-minute load 14-77 (runs 4 and 5 started at 64 and 74):
+// case start to the callback's end at most 6312ms against the 15s fixture deadline, a 2.4x
+// margin; cleanup at most 1433ms, mean 599ms, p95 1067ms (100 cases) against RESERVE_MS. #687
+// recorded held cases cut at these values under load it did not record, so neither is lowered.
 const CASE_MS = 20_000;
 const RESERVE_MS = 5000;
+vi.setConfig({ testTimeout: CASE_MS });
 
 function custodyCase(
   mode: Parameters<typeof withTrustedDockerFixture>[0],
@@ -67,7 +74,8 @@ function terminalEvidence(fixture: CustodyFixture, invocation: string, stderr: s
 }
 
 // Loaded #324 maxima: leaf readiness 1799ms after start() returns and sentinel readiness 183ms;
-// fixture-begin follows the leaf within 82ms and shares its deadline. Both fit the 20s test bound.
+// fixture-begin follows the leaf within 82ms and shares its deadline. Both fit CASE_MS. #687's
+// loaded runs (load 14-77) measured leaf readiness at most 1032ms: LEAF_READINESS_MS never binds.
 const LEAF_READINESS_MS = 5000;
 const SENTINEL_READINESS_MS = 2000;
 
@@ -421,7 +429,7 @@ it('publishes reviewed launch authority before work and preserves a real nonzero
       );
     }).toThrow(new Error('Inconsistent trusted Docker terminal outcome'));
   });
-}, 20_000);
+});
 
 it('rejects a different reviewed revision before creating custody or starting work', async () => {
   await withTrustedDockerFixture('fail', (fixture) => {
@@ -431,7 +439,7 @@ it('rejects a different reviewed revision before creating custody or starting wo
     expect(result.stdout).toBe('');
     expect(existsSync(join(fixture.home, '.local/share/dsh-team/docker-verification'))).toBe(false);
   });
-});
+}, 5000);
 
 it.each(['DOCKER_HOST', 'DOCKER_CONTEXT'])(
   'rejects nonempty %s before creating custody or launching verification',
@@ -447,6 +455,7 @@ it.each(['DOCKER_HOST', 'DOCKER_CONTEXT'])(
       );
     });
   },
+  5000,
 );
 
 it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-record'] as const)(
@@ -489,7 +498,7 @@ it.each(['owner-birth', 'obsolete-birth', 'record-permissions', 'malformed-recor
       });
     });
   },
-  20_000,
+  CASE_MS,
 );
 
 it('survives loss of the launching observer group and reconnects to the same real failed invocation', async () => {
@@ -536,7 +545,7 @@ it('survives loss of the launching observer group and reconnects to the same rea
     expect(log.stdout).toContain('fixture-begin\nfixture-end\n');
     expect(fixture.observeProcess(sentinel.identity.pid)).toBe(sentinel.identity.birth);
   });
-}, 20_000);
+});
 
 it('reports lost owner authority as unknown while its child is live and refuses cancellation or takeover', async () => {
   await custodyCase('hold', async (fixture) => {
@@ -557,7 +566,7 @@ it('reports lost owner authority as unknown while its child is live and refuses 
     expect(existsSync(join(directory, 'cancel.json'))).toBe(false);
     expect(fixture.observeProcess(ready.pid)).toBe(ready.birth);
   });
-}, 20_000);
+});
 
 it('fails a readiness wait at once with its cause when the leaf exits before readiness', async () => {
   await custodyCase('early-exit', async (fixture) => {
@@ -578,7 +587,7 @@ it('fails a readiness wait at once with its cause when the leaf exits before rea
       cleanup: { state: 'confirmed' },
     });
   });
-}, 20_000);
+});
 
 it.each([
   ['initial check', 'release-early'],
@@ -598,7 +607,7 @@ it.each([
       });
     });
   },
-  20_000,
+  CASE_MS,
 );
 
 it('fails a terminal wait at once with its evidence when the published terminal differs', async () => {
@@ -611,7 +620,7 @@ it('fails a terminal wait at once with its evidence when the published terminal 
     await expect(waited).rejects.toThrow(/^terminal-mismatch .*"exitCode":23/);
     expect(Date.now() - since).toBeLessThan(TERMINAL_WAIT_MS);
   });
-}, 20_000);
+});
 
 it('fails a terminal wait at once when the owner exits without publishing a terminal', async () => {
   await custodyCase('hold', async (fixture) => {
@@ -627,7 +636,7 @@ it('fails a terminal wait at once when the owner exits without publishing a term
     );
     expect(Date.now() - since).toBeLessThan(TERMINAL_WAIT_MS);
   });
-}, 20_000);
+});
 
 it('kills a fixture spawn cut to the case deadline and refuses one after it, naming the phase', () => {
   const budget = caseBudget(Date.now() + 200);
@@ -639,9 +648,13 @@ it('kills a fixture spawn cut to the case deadline and refuses one after it, nam
 
   expect(sleep).toThrow(/^fixture sleep: killed at the case deadline after \d+ms$/);
   expect(sleep).toThrow(/^fixture sleep: case deadline passed before it started$/);
-});
+}, 5000);
 
-// Setup fits well inside 8s, so the held terminal wait starts with less than its own 10s cap left.
+// The case deadline, taken before the fixture is prepared, is below TERMINAL_WAIT_MS, so the held
+// terminal wait always starts with less than its own 10s cap left and the deadline ends it.
+// Measured (#687, 5 loaded runs, load 14-77): setup to leaf readiness at most 1835ms, about 750ms
+// unloaded, leaving 6.2s of margin. #687 recorded this case failing at readiness under load it
+// did not record, so the budget is not lowered to the measured maximum.
 const SPENT_CASE_MS = 8000;
 
 it('ends a held terminal wait at the case deadline with its attribution and still cleans up', async () => {
@@ -667,15 +680,15 @@ it('ends a held terminal wait at the case deadline with its attribution and stil
   );
 }, 20_000);
 
-const ownerOf = (path: string) =>
-  Number(record(record(JSON.parse(readFileSync(path, 'utf8')) as unknown).owner).pid);
-
-// The command wait below starts at the 5s fixture deadline (after the killed start) and ends near
-// 15s, below the 20_000 case bound. It cannot derive from fixture.deadline: that has passed.
+// The launch and command waits below share one window from the 5s fixture deadline (after the
+// killed start) that ends near 15s, below the 20_000 case bound. It cannot derive from
+// fixture.deadline: that has passed.
 const COMMAND_LAUNCH_MS = 10_000;
 
 // The slow owner sleeps 4s before its manifest; its start gets 2.5s of the 5s case deadline, so
-// the start is killed with the owner up, and the owner then launches the held command.
+// the start is killed with the owner up, and the owner then launches the held command. The kill
+// reaches only the start's pnpm: its orphaned start CLI may create the invocation and write
+// launch.json after it, so both are awaited, never read at once.
 it('settles the owner and held command of a start killed at the case deadline', async () => {
   const pids = { directory: '', owner: 0, command: 0 };
   try {
@@ -686,13 +699,15 @@ it('settles the owner and held command of a start killed at the case deadline', 
         await delay(Math.max(0, fixture.deadline - Date.now() - 2500));
         expect(() => fixture.start()).toThrow(/^command start: killed at the case deadline after/);
         const base = join(fixture.home, '.local/share/dsh-team/docker-verification');
-        const root = join(base, readdirSync(base)[0] ?? 'missing');
-        pids.owner = ownerOf(join(root, 'launch.json'));
-        for (const until = Date.now() + COMMAND_LAUNCH_MS; !existsSync(join(root, 'child.json'));) {
-          if (Date.now() >= until) throw new Error('Slow owner launched no command');
-          await delay(50);
-        }
-        pids.command = ownerOf(join(root, 'child.json'));
+        const invocation = () => (existsSync(base) ? readdirSync(base)[0] : undefined) ?? 'missing';
+        const launch = () => join(base, invocation(), 'launch.json');
+        const until = Date.now() + COMMAND_LAUNCH_MS;
+        const left = () => until - Date.now();
+        await waitFor(() => existsSync(launch()), left(), 'Slow start published no launch');
+        pids.owner = ownerOf(launch());
+        const child = join(base, invocation(), 'child.json');
+        await waitFor(() => existsSync(child), left(), 'Slow owner launched no command');
+        pids.command = ownerOf(child);
       },
       undefined,
       Date.now() + 5000,
@@ -753,7 +768,7 @@ it('cancels the actual pnpm child tree and preserves the terminal result on late
     expect(fixture.observeProcess(sentinel.identity.pid)).toBe(sentinel.identity.birth);
     expect(existsSync(sentinel.interrupted)).toBe(false);
   });
-}, 20_000);
+});
 
 it('settles a cancelled command whose same-group member exits shortly after close', async () => {
   await custodyCase('post-close-member', async (fixture) => {
@@ -772,7 +787,7 @@ it('settles a cancelled command whose same-group member exits shortly after clos
     expect(duplicate.status, terminalEvidence(fixture, invocation, duplicate.stderr)).toBe(0);
     expect(JSON.parse(duplicate.stdout) as unknown).toEqual(terminal);
   });
-}, 20_000);
+});
 
 // Killing the leaf skips its SIGINT handler, so the member is never told to exit and outlives the
 // command; only its registration lets cleanup retire it.
@@ -792,7 +807,7 @@ it('retires a pre-started post-close member that was never told to exit', async 
   } finally {
     if (member && ownerPresent(member)) process.kill(member, 'SIGKILL');
   }
-}, 20_000);
+});
 
 it('keeps a cancelled command unsettled while a same-group member outlives the observation window', async () => {
   await custodyCase('past-expiry-member', async (fixture) => {
@@ -818,7 +833,7 @@ it('keeps a cancelled command unsettled while a same-group member outlives the o
     expect(late.status, terminalEvidence(fixture, invocation, late.stderr)).toBe(1);
     expect(late.stdout).toBe('');
   });
-}, 20_000);
+});
 
 it('retains a nonpassing result and refuses partial logs after actual output storage failure', async () => {
   await custodyCase('output-failed', async (fixture) => {
@@ -840,7 +855,7 @@ it('retains a nonpassing result and refuses partial logs after actual output sto
     expect(logs.status).toBe(1);
     expect(logs.stdout).toBe('');
   });
-}, 20_000);
+});
 
 // An unsettled group observation preserves the original exit with an identity failure.
 const groupIdentityFailure = {
@@ -891,5 +906,5 @@ it.each([
       );
     });
   },
-  20_000,
+  CASE_MS,
 );

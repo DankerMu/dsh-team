@@ -85,3 +85,29 @@ Evidence floor: the measuring pass (5 loaded runs, budgets raised to 60 s, instr
 - **D rows #5–#7:** the fixed bounds are re-derived from loaded measurement, with the basis in the comments.
 - **C row #8:** the read synchronizes on the start CLI's invocation files, with a distinguishing mutant.
 - **The five loaded runs:** recorded for the custody file, alongside slice 1's.
+
+## Outcome of the measuring pass (recorded at implementation)
+
+Five loaded full `pnpm test:integration` runs, with both budgets at 60 s and 1-minute load 14–77. Runs 4 and 5 started at 64 and 74. The raw records are in the PR.
+
+| measure                                                  | max                          | budget                  |
+| -------------------------------------------------------- | ---------------------------- | ----------------------- |
+| held case, start to callback end (20 cases, 100 samples) | 6312 ms                      | 15 s fixture deadline   |
+| cleanup                                                  | 1433 ms (mean 599, p95 1067) | `RESERVE_MS` 5 s        |
+| start to leaf ready                                      | 1032 ms                      | `LEAF_READINESS_MS` 5 s |
+| #7 setup to leaf ready                                   | 1835 ms                      | `SPENT_CASE_MS` 8 s     |
+| C:521 / :554 / :729 / :771 step                          | 590 / 339 / 537 / 595 ms     | —                       |
+
+**#5–#7 did not reproduce in this range.** #687 recorded its cuts under load up to 116, which is above the acceptance range (< 67).
+
+**Decisions, deviating from the text above:**
+
+- **The constants are unchanged.** `CASE_MS`, `RESERVE_MS`, `SPENT_CASE_MS` and `LEAF_READINESS_MS` keep their values, and each now carries its measured basis: load range, maximum and margin. Lowering any of them toward the measured maximum would move toward the recorded failures. "Smallest `SPENT_CASE_MS`" is therefore not applied.
+- **#7's precondition wait is not added.** Unloaded, the case has 7141–7282 ms left after leaf readiness, below `TERMINAL_WAIT_MS` minus 2 s. `SPENT_CASE_MS` (8 s) is itself below the 10 s cap, so the precondition holds structurally, and the wait would be dead code. The comment states this argument, and #7 keeps its literal `20_000` bound.
+- **Binding the vitest bound to `CASE_MS`.** The file sets `vi.setConfig({ testTimeout: CASE_MS })`, which vitest resets after each file. The held `it` cases drop their literal, and the `it.each` cases pass `CASE_MS`. The three cases that relied on the 5 s default pin `5000`.
+  - An identifier as the third argument makes Prettier reflow C to 854 lines, past `max-lines`.
+  - A 50 ms probe confirmed the default applies.
+- **`waitFor` (with the predicate parameter) and `ownerOf` move into `trusted-docker-uncaptured-fixture.ts`, not F.** F is at 799 counted lines. C ends at exactly 800.
+- **#8 is unchanged from the design:** one shared `until`; `Slow start published no launch`.
+  - With a temporary 4 s block in the start CLI, `launch.json` appeared 1906 ms after the kill. That confirms the orphaned CLI writes it.
+  - Without the wait, the same block yields ENOENT in the `AggregateError`. That is the mutant.
