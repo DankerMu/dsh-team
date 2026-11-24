@@ -30,9 +30,9 @@ const TOO_MANY_LOGIN_ATTEMPTS = {
 // Each case: at most two registrations and 13 logins over real TCP, each hashing with real scrypt.
 // Measured (#687) with a 60s budget, 10 runs of the secondary-table files at 1-minute load 68-84:
 // a case took at most 1395ms (11 logins and a registration, about 116ms per hash), so the largest
-// case's 15 hashes need about 1.8s; CASE_MS is about 5.5x that. Each request is cut to the case
-// deadline, RESERVE_MS before the budget, which keeps the response reads, the audit query and the
-// app's close (all inside the measured case time) outside the requests' share.
+// case's 15 hashes need about 1.8s; CASE_MS is about 5.5x that. Each request, its response read
+// included, is cut to the case deadline, RESERVE_MS before the budget; only the request itself is
+// named, a cut read is not. The reserve covers the audit query and the app's close.
 const CASE_MS = 10_000;
 const RESERVE_MS = 2000;
 vi.setConfig({ testTimeout: CASE_MS });

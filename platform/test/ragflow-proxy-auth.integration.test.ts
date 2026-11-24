@@ -116,47 +116,6 @@ async function withProxy(
 }
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
-it('answers not-configured for a valid token without contacting RAGFlow', async () => {
-  await withProxy(
-    async ({ send, token }) => {
-      const answer = await send(VERSION, { headers: bearer(token) });
-
-      expect([answer.status, JSON.parse(answer.body)]).toEqual([200, { result: 'not-configured' }]);
-      expect(upstream.requests).toEqual([]);
-    },
-    { configured: false },
-  );
-});
-
-it('reads the configured RAGFlow version once, without the RAGFlow key', async () => {
-  await withProxy(async ({ send, token }) => {
-    const answer = await send(VERSION, { headers: bearer(token) });
-
-    expect([answer.status, JSON.parse(answer.body)]).toEqual([
-      200,
-      { result: 'ok', version: 'v1.0.0-rc2' },
-    ]);
-    expect(upstream.requests.map(({ method, path }) => [method, path])).toEqual([
-      ['GET', RAGFLOW_VERSION_PATH],
-    ]);
-    expect(upstream.requests[0]?.headers.authorization).toBeUndefined();
-  });
-});
-
-it('ignores a platform session cookie that accompanies a valid token', async () => {
-  await withProxy(async ({ send, token, database }) => {
-    const cookie = `platform_session=${createSession(database, 'owner', Date.now())}`;
-
-    const answer = await send(VERSION, { headers: { ...bearer(token), cookie } });
-
-    expect([answer.status, JSON.parse(answer.body)]).toEqual([
-      200,
-      { result: 'ok', version: 'v1.0.0-rc2' },
-    ]);
-    expect(resolutions).toBe(0);
-  });
-});
-
 type Rejection = [label: string, options: ProxyOptions, request: (proxy: Proxy) => Promise<Answer>];
 const rejections: Rejection[] = [
   ['no token', {}, ({ send }) => send(VERSION)],
@@ -223,12 +182,53 @@ const rejections: Rejection[] = [
 ];
 
 // One app's start, request and close. Measured (#687) with a 60s budget, 10 runs of the
-// secondary-table files at 1-minute load 68-84: the 11 apps below took at most 2933ms, about 267ms
-// per app; APP_MS is about 7.5x that. Every case of this file runs under the rejection case's
+// secondary-table files at 1-minute load 68-84: the rejection case's 11 apps took at most 2933ms,
+// about 267ms per app; APP_MS is about 7.5x that. Every case of this file runs under the rejection case's
 // budget, one APP_MS per reason; the single-app cases need one.
 const APP_MS = 2000;
 const CASE_MS = APP_MS * rejections.length;
 vi.setConfig({ testTimeout: CASE_MS });
+
+it('answers not-configured for a valid token without contacting RAGFlow', async () => {
+  await withProxy(
+    async ({ send, token }) => {
+      const answer = await send(VERSION, { headers: bearer(token) });
+
+      expect([answer.status, JSON.parse(answer.body)]).toEqual([200, { result: 'not-configured' }]);
+      expect(upstream.requests).toEqual([]);
+    },
+    { configured: false },
+  );
+});
+
+it('reads the configured RAGFlow version once, without the RAGFlow key', async () => {
+  await withProxy(async ({ send, token }) => {
+    const answer = await send(VERSION, { headers: bearer(token) });
+
+    expect([answer.status, JSON.parse(answer.body)]).toEqual([
+      200,
+      { result: 'ok', version: 'v1.0.0-rc2' },
+    ]);
+    expect(upstream.requests.map(({ method, path }) => [method, path])).toEqual([
+      ['GET', RAGFLOW_VERSION_PATH],
+    ]);
+    expect(upstream.requests[0]?.headers.authorization).toBeUndefined();
+  });
+});
+
+it('ignores a platform session cookie that accompanies a valid token', async () => {
+  await withProxy(async ({ send, token, database }) => {
+    const cookie = `platform_session=${createSession(database, 'owner', Date.now())}`;
+
+    const answer = await send(VERSION, { headers: { ...bearer(token), cookie } });
+
+    expect([answer.status, JSON.parse(answer.body)]).toEqual([
+      200,
+      { result: 'ok', version: 'v1.0.0-rc2' },
+    ]);
+    expect(resolutions).toBe(0);
+  });
+});
 
 it('answers every rejection reason with one byte-identical 401 and no RAGFlow request', async () => {
   // Each request is cut to this deadline, one app before the budget: the last close stays inside.

@@ -4,7 +4,7 @@
 
 The browser-exec, login-throttle, ragflow-proxy-auth and gateway-websocket integration cases SHALL each run under a declared, named case budget, never vitest's implicit default. Each budget's comment SHALL state its measured basis.
 
-Each of the following waits SHALL end strictly before the case budget, so that a stall fails with an error naming the stalled step, not with the runner's timeout: synchronous children, the browser client timer, each fetch or HTTP request, and each HTTP peer observation. The remaining waits (listener start and close, in-process hashing, directory removal) are covered by the measured budget.
+Each of the following waits SHALL end strictly before the case budget, so that a stall fails with an error naming the stalled step, not with the runner's timeout: synchronous children, the browser client timer, each login and identity request of the throttle cases, each rejection request of the proxy rejection case, and each HTTP peer observation. The remaining waits (other single-request proxy cases, response body reads, listener start and close, in-process hashing, directory removal) are covered by the declared budget alone.
 
 #### Scenario: A browser client hangs
 
