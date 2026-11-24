@@ -169,6 +169,7 @@ export function editorErrorsAllowed(errors: readonly string[], responses: string
 const LISTS = ['consoleErrors', 'pageErrors', 'failedRequests', 'externalRequests'] as const;
 const counted = (browser: StackBrowserEvidence) => ({
   screenshots: browser.screenshots,
+  unloadViolations: browser.unloadViolations,
   ...Object.fromEntries(LISTS.map((key) => [key, browser[key].length])),
 });
 
@@ -500,6 +501,7 @@ async function officeEditor(lane: OfficeEditorLane): Promise<OfficeEditorEvidenc
   const readBack = await agentReadBack(lane, start, directory);
   expect(counted(readBack)).toEqual({
     screenshots: ['login.png', 'workbench.png', 'reply.png'],
+    unloadViolations: [],
     ...{ consoleErrors: 0, pageErrors: 0, failedRequests: 0, externalRequests: 0 },
   });
   const provider = providerDeltas(start, await lane.provider());

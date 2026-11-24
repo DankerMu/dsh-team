@@ -113,6 +113,7 @@ it.each([
 const BROWSER: StackBrowserEvidence = {
   screenshots: ['office-external-failed.png'],
   consoleErrors: [BAD_GATEWAY],
+  unloadViolations: [],
   pageErrors: [],
   failedRequests: [`GET ${BASE}${API_JS}`],
   externalRequests: [],
@@ -252,6 +253,7 @@ it('switches to the refused external address, opens the DOCX and restores bundle
     failedRequests: [`GET ${admin.base}${API_JS}`],
     browser: {
       screenshots: ['office-external-failed.png'],
+      unloadViolations: [],
       ...{ consoleErrors: 1, pageErrors: 0, failedRequests: 1, externalRequests: 0 },
     },
     restored: { config: 'bundled', healthcheck: true },

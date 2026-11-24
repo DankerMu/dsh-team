@@ -307,11 +307,19 @@ it('retires B only when the lane fails, rethrowing the lane failure first', asyn
   await expect(named).rejects.toThrow(new AggregateError([lane, disable], 'Named'));
 });
 
-const session = (screenshots: string[], consoleErrors: string[]) => ({
+const session = (
+  screenshots: string[],
+  consoleErrors: string[],
+  unloadViolations: string[] = [],
+) => ({
   ...{ screenshots, consoleErrors, pageErrors: [], failedRequests: [], externalRequests: [] },
-  ...{ requests: 40, websockets: 2 },
+  ...{ unloadViolations, requests: 40, websockets: 2 },
 });
-const quiet = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
+const UNLOADS = [
+  'web-apps/apps/documenteditor/main/app/controller/Main.js:2145',
+  'sdkjs-plugins/v1/plugins.js:39',
+];
+const quiet = { unloadViolations: [], pageErrors: 0, failedRequests: 0, externalRequests: 0 };
 
 it("prints the three files, their digests, the deltas, each session by extension, B's same-name file and the guessed-key info", () => {
   const files = EXTS.map((ext, size) => ({
@@ -321,10 +329,11 @@ it("prints the three files, their digests, the deltas, each session by extension
   const shots = (ext: string) => ['open', 'saved'].map((at) => `office-editor-${ext}-${at}.png`);
   const replies = ['login.png', 'workbench.png', 'reply.png'];
   const errors = (ext: string) => ['sw fetch', 'sw register', ...(ext === 'xlsx' ? ['404'] : [])];
-  const editors = EXTS.map((ext) => [ext, session(shots(ext), errors(ext))] as const);
+  const unloads = (ext: string) => (ext === 'docx' ? UNLOADS : []);
+  const editors = EXTS.map((ext) => [ext, session(shots(ext), errors(ext), unloads(ext))] as const);
   const digests = { before: { size: 7, sha256: ORIGINAL }, after: { size: 9, sha256: CHANGED } };
   const b = { file: '编辑写回.docx', ...digests };
-  const sameName = { b, editor: session(shots('docx'), errors('docx')) };
+  const sameName = { b, editor: session(shots('docx'), errors('docx'), UNLOADS) };
   const [open, unknown] = [
     { status: 200, error: 0, users: ['dsh'] },
     { status: 200, error: 1 },
@@ -339,14 +348,14 @@ it("prints the three files, their digests, the deltas, each session by extension
   expect(line).toEqual({
     ...{ files, saved: true, provider: EXACT },
     editors: {
-      docx: { screenshots: shots('docx'), consoleErrors: 2, ...quiet },
+      docx: { screenshots: shots('docx'), consoleErrors: 2, ...quiet, unloadViolations: UNLOADS },
       xlsx: { screenshots: shots('xlsx'), consoleErrors: 3, ...quiet },
       pptx: { screenshots: shots('pptx'), consoleErrors: 2, ...quiet },
     },
     readBack: { screenshots: replies, consoleErrors: 0, ...quiet },
     sameName: {
       ...{ b, distinctKeys: true, crossed: false, guessedKey },
-      editor: { screenshots: shots('docx'), consoleErrors: 2, ...quiet },
+      editor: { screenshots: shots('docx'), consoleErrors: 2, ...quiet, unloadViolations: UNLOADS },
     },
   });
   expect(JSON.stringify(line)).not.toContain('sw fetch');

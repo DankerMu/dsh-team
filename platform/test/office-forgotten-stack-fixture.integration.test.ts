@@ -345,6 +345,7 @@ it('attributes a failed reopen to the alert it showed and the console errors, wi
   const blocked = new Error('locator.click: Timeout 60000ms exceeded');
   const session = {
     ...{ screenshots: [], pageErrors: [], failedRequests: [], externalRequests: [] },
+    unloadViolations: [],
     ...{ consoleErrors: [`socket ${KA} closed`, 'ServiceWorker 403'], requests: 1, websockets: 1 },
   };
   const failure = new StackWorkbenchFailure(blocked, session, 'office forgotten recover');
@@ -379,6 +380,7 @@ it.each([
     });
     const session = {
       ...{ screenshots: [], pageErrors: [], externalRequests: [], requests: 1, websockets: 1 },
+      unloadViolations: [],
       ...{ consoleErrors: [`socket /doc/${KA}/c/ closed`], failedRequests: [`GET /doc/${KA}/c/`] },
     };
     const failure = new StackWorkbenchFailure(blocked, session, `office forgotten ${label}`);
@@ -470,6 +472,7 @@ it("clears A's copy after a failed edit through the caller's holder, printing no
   };
   const session = {
     ...{ screenshots: [], pageErrors: [], externalRequests: [], requests: 1, websockets: 1 },
+    unloadViolations: [],
     ...{ consoleErrors: [`socket /doc/${KA}/c/ closed`], failedRequests: [`GET /doc/${KA}/c/`] },
   };
   vi.mocked(openHinted).mockResolvedValue(undefined);

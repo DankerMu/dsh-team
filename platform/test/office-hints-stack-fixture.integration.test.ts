@@ -1,6 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import type { Page } from '@playwright/test';
 import { afterEach, expect, it, vi } from 'vitest';
-import { previewIds, visible } from './better-sidebar-browser-fixture.mjs';
+import { previewIds, rowQuery, visible } from './better-sidebar-browser-fixture.mjs';
 import {
   COLLAB,
   docserviceSpawns,
@@ -12,6 +13,7 @@ import {
   officeFacts,
   officeHintsLine,
   officeHintsScenario,
+  openHinted,
   RESTART,
   sampleDocumentServerHealth,
   serviceWorkerRefused,
@@ -99,12 +101,19 @@ it.each([
   expect(editorSettled(facts)).toBe(settled);
 });
 
-it('prints the file, the hint and the screenshots, never the browser lists', () => {
+it('prints the file, the hint, the screenshots and the unload sources, no other browser list', () => {
   const file = { name: '同写提示.docx', size: 36_000, sha256: 'a'.repeat(64) };
-  const lists = { consoleErrors: [], pageErrors: [], failedRequests: [], externalRequests: [] };
+  const lists = {
+    consoleErrors: ['x'],
+    pageErrors: ['y'],
+    failedRequests: [],
+    externalRequests: [],
+  };
+  const sources = ['web-apps/apps/documenteditor/main/app/controller/Main.js:2145'];
   const browser = {
     ...lists,
     screenshots: ['office-hints-collab.png'],
+    unloadViolations: sources,
     requests: 9,
     websockets: 1,
   };
@@ -114,6 +123,7 @@ it('prints the file, the hint and the screenshots, never the browser lists', () 
     hint: '请勿在 AI 修改此文件时同时编辑；人工修改保存完成后，再让 AI 继续处理。',
     restart: RESTART,
     screenshots: ['office-hints-collab.png'],
+    unloadViolations: ['web-apps/apps/documenteditor/main/app/controller/Main.js:2145'],
   });
 });
 
@@ -426,6 +436,7 @@ const SOCKET = `${BASE}/doc/${KEY}/c/?EIO=4&transport=polling`;
 const LEAKED = [KEY, 'EIO=4', 'transport='];
 const quietSession = {
   ...{ screenshots: ['office-hints-collab.png'], consoleErrors: refused, pageErrors: [] },
+  unloadViolations: [],
   ...{ failedRequests: [], externalRequests: [], requests: 30, websockets: 1 },
 };
 const reply = (value: unknown) => Promise.resolve(JSON.stringify(value));
@@ -496,4 +507,65 @@ it('diffs the failed and external requests of the session scrubbed', async () =>
     failedRequests: ['GET http://127.0.0.1:64694/doc/<redacted>/c/'],
     externalRequests: ['http://127.0.0.1:64694/doc/<redacted>/c/'],
   });
+});
+
+const UNLOAD = 'Permissions policy violation: unload is not allowed in this document.';
+/** A console message as Playwright 1.63 hands it over: type, text and 0-based location. */
+const consoleMessage = (text: string, url = '', line = 0) => ({
+  type: () => 'error',
+  text: () => text,
+  location: () => ({ url, line, column: 0 }),
+});
+type ConsoleStub = ReturnType<typeof consoleMessage>;
+const NAME = '同写提示.docx';
+const unloadAt = (script: string) =>
+  consoleMessage(UNLOAD, `${BASE}/sidebar/onlyoffice/ds/${VERSION}/${script}`, 2145);
+
+/** The page openHinted drives: the row shown, the editor mounted; the row's click logs `logged`. */
+function hintedPage(logged: readonly ConsoleStub[]) {
+  const listeners = new Set<(message: ConsoleStub) => void>();
+  const row = {
+    click() {
+      for (const message of logged) for (const listener of listeners) listener(message);
+      return Promise.resolve();
+    },
+  };
+  const answer = (expression: string): unknown => {
+    if (expression === `Boolean(${rowQuery(NAME)})`) return true;
+    if (expression === officeFacts(NAME)) return mounted;
+    if (expression === previewIds(NAME)) return [];
+    throw new Error('unscripted page expression');
+  };
+  const page = {
+    on: (_event: string, listener: (message: ConsoleStub) => void) => listeners.add(listener),
+    off: (_event: string, listener: (message: ConsoleStub) => void) => listeners.delete(listener),
+    evaluate: (expression: string) => Promise.resolve().then(() => answer(expression)),
+    evaluateHandle: (expression: string) =>
+      Promise.resolve({ asElement: () => (expression === rowQuery(NAME) ? row : null) }),
+  };
+  // openHinted calls only these four, each with the shape it reads.
+  return { listeners, page: page as unknown as Page };
+}
+const refusals = refused.map((text) => consoleMessage(text));
+const shoot = () => Promise.resolve();
+
+it("satisfies openHinted's refusal wait when an allowed unload report arrives before §48's refusals", async () => {
+  const { listeners, page } = hintedPage([
+    unloadAt('web-apps/apps/documenteditor/main/app/controller/Main.js'),
+    ...refusals,
+  ]);
+
+  await openHinted(page, shoot, hintsLane.session, NAME, 'office-hints-collab');
+
+  expect(listeners.size).toBe(0);
+});
+
+it("fails openHinted's refusal wait with the collected errors on an unknown-source unload report", async () => {
+  const { page } = hintedPage([unloadAt('sdkjs/word/sdk-all.js'), ...refusals]);
+
+  await expect(
+    openHinted(page, shoot, hintsLane.session, NAME, 'office-hints-collab'),
+  ).rejects.toThrow(
+    `ServiceWorker refusal not logged, collected ${JSON.stringify([UNLOAD, ...refused])}`,
+  );
 });
