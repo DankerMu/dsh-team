@@ -16,6 +16,6 @@
 
 ## 2. Verification
 
-- [ ] 2.1 The trusted-docker fixture, custody, retirement and uncaptured-fixture integration files green; `pnpm lint`, `pnpm typecheck`, `pnpm check`.
-- [ ] 2.2 PR with `Closes #690`.
-- [ ] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.
+- [x] 2.1 The trusted-docker fixture, custody, retirement and uncaptured-fixture integration files green; `pnpm lint`, `pnpm typecheck`, `pnpm check`.
+- [x] 2.2 PR with `Closes #690`.
+- [x] 2.3 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.
