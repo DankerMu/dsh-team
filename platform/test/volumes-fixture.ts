@@ -9,20 +9,22 @@ import {
 import { registerCleanupTarget } from './docker-cleanup.ts';
 import type { CleanupTarget } from './docker-cleanup.ts';
 
-// The stall budget (requestTimeoutMs) bounds acceptance requests only; cleanup has its
-// own bounded deadline so a slow cleanup request is not misreported as a second failure.
+// The stall budget (requestTimeoutMs) bounds each acceptance mutation only. cleanupTimeoutMs
+// bounds each cleanup request and each acceptance read, so neither a slow cleanup request nor a
+// slow collision probe or inspection is misreported in place of the stalled mutation.
 export async function runUserVolumes(
   socketPath: string,
   requestTimeoutMs = 10_000,
   cleanupTimeoutMs = 10_000,
 ): Promise<void> {
   const rawClient = trackVerificationDockerClient(createDockerClient(socketPath), DockerHttpError);
-  // Every acceptance request gets a fresh deadline, including requests made
-  // inside ensureUserVolumes. Forward documents/errors and retain caller cancellation.
+  // Every acceptance request gets a fresh deadline, including requests made inside
+  // ensureUserVolumes, keyed on the HTTP method rather than on that function's call order.
+  // Forward documents/errors and retain caller cancellation.
   const client: typeof rawClient = {
     ...rawClient,
     json(method, path, body, signal, maxBytes) {
-      const deadline = AbortSignal.timeout(requestTimeoutMs);
+      const deadline = AbortSignal.timeout(method === 'GET' ? cleanupTimeoutMs : requestTimeoutMs);
       return rawClient.json(
         method,
         path,

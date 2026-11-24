@@ -55,26 +55,40 @@ function describeErrors(errors: unknown[]): string[] {
   });
 }
 
+// The stall bound covers acceptance mutations, the read bound acceptance reads and cleanup.
+const STALL_MS = 200;
+const READ_MS = 1_000;
+// Watchdog headroom past a case's worst legitimate path, for timers firing late under load.
+const WATCHDOG_MARGIN_MS = 2_000;
+// Each case's watchdog is its worst legitimate path, every request at its full bound, plus the
+// margin. A stalled case: four collision GETs, the stalled create, then cleanup of user 00 only
+// (work's GET; home's GET, DELETE and GET).
+const STALLED_WATCHDOG_MS = 4 * READ_MS + STALL_MS + 4 * READ_MS + WATCHDOG_MARGIN_MS;
+// Strictly above the largest watchdog (the success case's, 30s) plus setup, assertions and close.
+const VOLUMES_CASE_MS = 35_000;
+
 interface DelayedRequest {
   method: string | undefined;
   path: string | undefined;
   status?: number;
 }
 
-// The injected delay must hit cleanup's first GET (the absent work volume of the
-// stalled user) and still be answered, proving the slow request was in cleanup.
-function expectDelayedCleanup(
+// The injected delay must hit the intended GET and still be answered, proving the slow request
+// was that one: cleanup's first GET is the absent work volume of the stalled user, and the
+// first collision GET is the absent home volume the create later persists.
+function expectDelayed(
   delayed: DelayedRequest | undefined,
-  delaysCleanup: boolean,
+  delays: 'cleanup' | 'probe' | undefined,
   persistedName: string | undefined,
 ): void {
-  if (!delaysCleanup) {
+  if (delays === undefined) {
     expect(delayed).toBeUndefined();
     return;
   }
+  const name = persistedName ?? '';
   expect(delayed).toEqual({
     method: 'GET',
-    path: `/volumes/${persistedName?.replace('-home-', '-work-') ?? ''}`,
+    path: `/volumes/${delays === 'cleanup' ? name.replace('-home-', '-work-') : name}`,
     status: 404,
   });
 }
@@ -83,19 +97,35 @@ it.each([
   {
     name: 'aborts a persisted stalled create and reaches exact-owned cleanup without watchdog rescue',
     stalls: true,
-    delaysCleanup: false,
+    delays: undefined,
+    stallMs: STALL_MS,
+    watchdogMs: STALLED_WATCHDOG_MS,
   },
   {
     name: 'cleanup slower than the stall budget still aggregates only the cancellation',
     stalls: true,
-    delaysCleanup: true,
+    delays: 'cleanup',
+    stallMs: STALL_MS,
+    watchdogMs: STALLED_WATCHDOG_MS,
+  },
+  {
+    name: 'a collision probe slower than the stall budget still aggregates only the cancellation',
+    stalls: true,
+    delays: 'probe',
+    stallMs: STALL_MS,
+    watchdogMs: STALLED_WATCHDOG_MS,
   },
   {
     name: 'settles successful volume creation and exact-owned cleanup while preserving unrelated volumes',
     stalls: false,
-    delaysCleanup: false,
+    delays: undefined,
+    // No stall is under test here, and a 200ms POST under load would be the same false failure.
+    stallMs: READ_MS,
+    // Four collision GETs, eight POSTs, four post-create inspections and twelve cleanup
+    // requests (GET, DELETE, GET per target).
+    watchdogMs: (4 + 8 + 4 + 12) * READ_MS + WATCHDOG_MARGIN_MS,
   },
-])('$name', async ({ stalls, delaysCleanup }) => {
+] as const)('$name', { timeout: VOLUMES_CASE_MS }, async ({ stalls, delays, ...bounds }) => {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-volumes-'));
   const socket = join(directory, 'engine.sock');
   const submissions = join(directory, SUBMISSION_JOURNAL);
@@ -109,10 +139,11 @@ it.each([
   let stalled: ServerResponse | undefined;
   let connectionClosed: Promise<unknown> | undefined;
   let persistedName: string | undefined;
-  // The first request after the stalled create is cleanup's first GET; delaying it past
-  // the 200 ms stall budget reproduces a slow runner deterministically.
-  let delayedCleanup: DelayedRequest | undefined;
-  let cleanupTimer: NodeJS.Timeout | undefined;
+  // The first request after the stalled create is cleanup's first GET, and the very first
+  // request is the first collision GET; delaying either past the stall bound, inside the read
+  // bound, reproduces a slow runner deterministically.
+  let delayedRequest: DelayedRequest | undefined;
+  let delayTimer: NodeJS.Timeout | undefined;
   function answer(request: IncomingMessage, response: ServerResponse): void {
     const name = request.url?.slice('/volumes/'.length) ?? '';
     if (!volumes.has(name)) {
@@ -153,13 +184,14 @@ it.each([
       });
       return;
     }
-    if (delaysCleanup && stalled !== undefined && delayedCleanup === undefined) {
+    const due = delays === 'cleanup' ? stalled !== undefined : delays === 'probe';
+    if (due && delayedRequest === undefined) {
       const delayed: DelayedRequest = {
         method: request.method,
         path: request.url,
       };
-      delayedCleanup = delayed;
-      cleanupTimer = setTimeout(() => {
+      delayedRequest = delayed;
+      delayTimer = setTimeout(() => {
         if (response.destroyed) return;
         answer(request, response);
         delayed.status = response.statusCode;
@@ -175,7 +207,7 @@ it.each([
     process.env.DSH_TEAM_CI_RESOURCE_JOURNAL = resources;
     server.listen(socket);
     await once(server, 'listening');
-    const settled = runUserVolumes(socket, 200, 1_000).then(
+    const settled = runUserVolumes(socket, bounds.stallMs, READ_MS).then(
       () => ({ error: undefined }),
       (error: unknown) => ({ error }),
     );
@@ -187,7 +219,7 @@ it.each([
         if (connectionClosed !== undefined) await connectionClosed;
         return false;
       }),
-      delay(2_000, true, { signal: watchdog.signal }),
+      delay(bounds.watchdogMs, true, { signal: watchdog.signal }),
     ]);
     watchdog.abort();
     // The pre-fix RED also releases its hung fixture, so this test never leaves a socket/resource behind.
@@ -219,7 +251,7 @@ it.each([
       expect(requests.filter(({ method }) => method === 'DELETE')).toEqual([
         { method: 'DELETE', path: `/volumes/${persistedName ?? ''}` },
       ]);
-      expectDelayedCleanup(delayedCleanup, delaysCleanup, persistedName);
+      expectDelayed(delayedRequest, delays, persistedName);
     } else {
       expect(error).toBeUndefined();
       expect(requests.filter(({ method }) => method === 'POST')).toEqual(
@@ -255,7 +287,7 @@ it.each([
       }).not.toThrow();
     }
   } finally {
-    clearTimeout(cleanupTimer);
+    clearTimeout(delayTimer);
     cancellations.delete(socket);
     if (previousSubmissions === undefined) delete process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
     else process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS = previousSubmissions;
