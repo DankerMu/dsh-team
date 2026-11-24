@@ -16,6 +16,12 @@ import {
   withApp,
 } from './auth-fixture.ts';
 
+// observeHttp's default bound on one peer event; it fails a stalled peer, never stands in for one.
+// Measured (#687) with a 60s bound, 10 runs of the secondary-table files at 1-minute load 68-84:
+// every single-event site settled within 87ms, about 23x below this. An aggregate observation (a
+// whole transfer) passes its own named bound.
+const HTTP_OBSERVATION_MS = 2000;
+
 export async function unusedPort(): Promise<number> {
   const server = createTcpServer();
   server.listen(0, '127.0.0.1');
@@ -104,9 +110,9 @@ export async function withUpstream(
     if (server.listening) {
       const closed = once(server, 'close');
       server.close();
-      await observeHttp(closed, 2_000);
+      await observeHttp(closed, HTTP_OBSERVATION_MS);
     }
-    await observeHttp(Promise.all(socketClosures), 2_000);
+    await observeHttp(Promise.all(socketClosures), HTTP_OBSERVATION_MS);
   } catch (error) {
     cleanup.push(error);
   }
@@ -204,7 +210,10 @@ export async function sendHttp(
   }
 }
 
-export async function observeHttp<T>(observation: Promise<T>, timeoutMs = 2_000): Promise<T> {
+export async function observeHttp<T>(
+  observation: Promise<T>,
+  timeoutMs = HTTP_OBSERVATION_MS,
+): Promise<T> {
   const { promise, reject } = Promise.withResolvers<never>();
   // A deadline fails a stalled real peer; it never stands in for an event.
   const deadline = setTimeout(() => {

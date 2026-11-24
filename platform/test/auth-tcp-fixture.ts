@@ -95,16 +95,41 @@ export async function postJson(
   url: string,
   payload: unknown,
   extraHeaders: Readonly<Record<string, string | undefined>> = {},
+  signal: AbortSignal | null = null,
 ): Promise<Response> {
   return fetch(url, {
     method: 'POST',
     headers: jsonRequestHeaders(extraHeaders),
     body: JSON.stringify(payload),
+    signal,
   });
 }
 
-export async function getIdentity(baseUrl: string, cookie: string): Promise<Response> {
-  return fetch(`${baseUrl}${IDENTITY_PATH}`, { headers: { cookie } });
+export async function getIdentity(
+  baseUrl: string,
+  cookie: string,
+  signal: AbortSignal | null = null,
+): Promise<Response> {
+  return fetch(`${baseUrl}${IDENTITY_PATH}`, { headers: { cookie }, signal });
+}
+
+/**
+ * One request of a case, cut to the case's deadline on the monotonic clock (`performance.now()`:
+ * some cases fake `Date`). A stall or a failure is rethrown naming the step, never as the runner's
+ * bare timeout.
+ */
+export async function boundedStep<T>(
+  step: string,
+  deadline: number,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const remaining = Math.floor(deadline - performance.now());
+  if (remaining <= 0) throw new Error(`${step}: case deadline passed before it started`);
+  try {
+    return await request(AbortSignal.timeout(remaining));
+  } catch (error) {
+    throw new Error(`${step}: ${String(error)}`, { cause: error });
+  }
 }
 
 export async function registerAccount(

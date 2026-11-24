@@ -19,6 +19,15 @@ import { record } from './container-start-docker-fixture.ts';
 import { ordinarySubmission, withAuditReceipt } from './trusted-docker-audit-fixture.ts';
 import type { AuditContext } from './trusted-docker-audit-fixture.ts';
 
+// Every case, and the deadline of its audit children (withAuditReceipt kills a registration or
+// submission child at CASE_MS less its 2s reserve, naming the phase). It is above execBrowser's
+// 15s client timer plus the setup and cleanup around it, so a hung client fails at that timer with
+// its own message. Measured (#687) with a 60s budget, 10 runs of the secondary-table files at
+// 1-minute load 68-84: a whole case took at most 2089ms, which bounds that setup and cleanup; the
+// remaining 10s are about 4.8x it.
+const CASE_MS = 25_000;
+vi.setConfig({ testTimeout: CASE_MS });
+
 const execution = vi.hoisted<{
   child: ChildProcess.ChildProcess | undefined;
   closed: boolean;
@@ -145,7 +154,7 @@ async function withBoundExec(
       execution.succeeds = false;
       execution.missingExecutable = undefined;
     }
-  });
+  }, CASE_MS);
 }
 
 it('joins the actual exec client close before reporting a protocol callback failure', async () => {
@@ -174,7 +183,7 @@ it('joins the actual exec client close before reporting a protocol callback fail
       else process.env.DSH_TEAM_BROWSER_RECEIPT_DIRECTORY = previousPointers;
       await closeIssuedClient();
     }
-  });
+  }, CASE_MS);
 });
 
 it.each([
@@ -191,7 +200,7 @@ it.each([
     live: 'producer',
   },
 ])('$name', async ({ live }) => {
-  await withAuditReceipt(async ({ pointer, receipt, journal, command, assess }) => {
+  await withAuditReceipt(async ({ pointer, receipt, journal, command, assess, spawnChild }) => {
     const directory = dirname(journal);
     const submissions = join(directory, SUBMISSION_JOURNAL);
     const previousJournal = process.env.DSH_TEAM_VERIFICATION_SUBMISSIONS;
@@ -312,6 +321,9 @@ it.each([
       ).rejects.toBe(failure);
       expect(progress).toBe('ready');
       expect(execution.closed).toBe(true);
+      // No wait: `close` publishes synchronously (through the marker's unlinkSync) before
+      // execBrowser rejects. A marker left here means publish threw inside `close` and that error
+      // was replaced by `failure` above.
       expect(await readdir(join(directory, SUBMISSION_PENDING))).toEqual([]);
 
       // Fully published client failure is still not daemon-operation settlement.
@@ -422,7 +434,7 @@ it.each([
             sha256: createHash('sha256').update(JSON.stringify(attempts)).digest('hex'),
           },
         });
-        const ordinary = ordinarySubmission(journal, true);
+        const ordinary = ordinarySubmission(journal, true, 0, spawnChild);
         expect(ordinary.status, ordinary.stderr).toBe(0);
         expect(ordinary.stdout).toBe('submission-accepted\n');
         expect(await assess()).toStrictEqual({
@@ -445,7 +457,7 @@ it.each([
       await closeIssuedClient();
       execution.docker = undefined;
     }
-  });
+  }, CASE_MS);
 });
 
 // A retained marker of a browser exec row, which carries no call label.

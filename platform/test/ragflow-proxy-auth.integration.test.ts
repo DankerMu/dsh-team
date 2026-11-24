@@ -1,13 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeEach, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createSession, createSourceAddressResolver } from '../src/auth/index.ts';
 import type { PlatformConfig } from '../src/config.ts';
 import { writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import type { GatewayUpstreamResolver } from '../src/gateway/index.ts';
 import { withApp } from './auth-fixture.ts';
+import { boundedStep } from './auth-tcp-fixture.ts';
 import { rejectedUpgrade } from './gateway-http-fixture.ts';
 import { instanceToken, instanceTokenHash, seedInstance } from './instance-token-fixture.ts';
 import { startModelUpstream } from './model-upstream-fixture.ts';
@@ -221,11 +222,24 @@ const rejections: Rejection[] = [
   ],
 ];
 
+// One app's start, request and close. Measured (#687) with a 60s budget, 10 runs of the
+// secondary-table files at 1-minute load 68-84: the 11 apps below took at most 2933ms, about 267ms
+// per app; APP_MS is about 7.5x that. Every case of this file runs under the rejection case's
+// budget, one APP_MS per reason; the single-app cases need one.
+const APP_MS = 2000;
+const CASE_MS = APP_MS * rejections.length;
+vi.setConfig({ testTimeout: CASE_MS });
+
 it('answers every rejection reason with one byte-identical 401 and no RAGFlow request', async () => {
+  // Each request is cut to this deadline, one app before the budget: the last close stays inside.
+  const deadline = performance.now() + CASE_MS - APP_MS;
   const answers: Answer[] = [];
-  for (const [, options, request] of rejections)
+  for (const [label, options, request] of rejections)
     await withProxy(async (proxy) => {
-      answers.push(await request(proxy));
+      const answer = await boundedStep(`ragflow rejection ${label}`, deadline, (signal) =>
+        request({ ...proxy, send: (path, init) => proxy.send(path, { ...init, signal }) }),
+      );
+      answers.push(answer);
     }, options);
 
   expect(answers).toHaveLength(rejections.length);

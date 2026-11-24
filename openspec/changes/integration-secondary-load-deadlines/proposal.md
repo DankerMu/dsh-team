@@ -150,3 +150,22 @@ That site awaits the arrival of a whole 32 MiB transfer, not a single peer event
 - No other caller's default changes.
 
 **#10 did not reproduce.** A probe on `execBrowser`'s `close` catch saw only the publication failures that :458 and :496 inject on purpose. Nothing was masked. The statement-only treatment stands.
+
+**Constants and deviations at implementation:**
+
+- **Budgets.**
+  - browser-exec `CASE_MS` 25 s: the 15 s client timer plus 10 s, about 4.8× the 2089 ms case maximum.
+  - login-throttle `CASE_MS` 10 s, with `RESERVE_MS` 2 s: about 5.5× the largest case's 15 hashes at 116 ms each.
+  - ragflow `APP_MS` 2 s, about 7.5× the 267 ms per app; `CASE_MS = APP_MS * rejections.length` (22 s).
+  - websocket `CASE_MS` 30 s: 12 × 2 s of observations plus 6 s. `BACKPRESSURE_TRANSFER_MS` is 5 s, about 4.4× 1139 ms.
+- **ragflow runs every case under #13's budget through `vi.setConfig`.** A third argument made Prettier reflow the whole `it` call.
+- **The shared per-step bound is `boundedStep` in `auth-tcp-fixture.ts`, which ragflow now imports.** `AbortSignal.timeout` needs an integer, so the remaining time is floored.
+- **login-throttle's `getIdentity` request is bounded too, named `identity request`,** per the spec's "each fetch or HTTP request". `getIdentity` gains an optional `signal`, as `postJson` does.
+- **websocket's counted lines go from 782 to 785** (limit 800).
+- **Red probes, each reverted:**
+  - a hung client: `Owned browser protocol client timeout` at 15.2 s;
+  - a stalled registration: `browser registration: killed at the case deadline after 22999ms`;
+  - login 7 stalled: `login attempt 7: TimeoutError` at 8.0 s;
+  - a stalled peer read: `HTTP peer observation did not settle` at 2.2 s;
+  - each file's `vi.setConfig` at 50 ms: `Test timed out in 50ms`.
+- **The stalled-proxy probe pointed that label's requests at a silent TCP listener.** An added `onRequest` hook never runs, because instance-auth's hook answers first. Result: `ragflow rejection another instance address: TimeoutError` at 20.0 s.
