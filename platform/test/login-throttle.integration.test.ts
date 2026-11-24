@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryAuditEvents } from '../src/audit/index.ts';
 import { sessionCookieHeader, snapshotAuthState } from './auth-fixture.ts';
 import {
+  boundedStep,
   getIdentity,
   LOOPBACK_ADDRESSES,
   PASSWORD,
@@ -26,8 +27,33 @@ const TOO_MANY_LOGIN_ATTEMPTS = {
   message: 'Too many login attempts',
 } as const;
 
-function loginUrl(baseUrl: string): string {
-  return `${baseUrl}/_platform/api/login`;
+// Each case: at most two registrations and 13 logins over real TCP, each hashing with real scrypt.
+// Measured (#687) with a 60s budget, 10 runs of the secondary-table files at 1-minute load 68-84:
+// a case took at most 1395ms (11 logins and a registration, about 116ms per hash), so the largest
+// case's 15 hashes need about 1.8s; CASE_MS is about 5.5x that. Each request, its response read
+// included, is cut to the case deadline, RESERVE_MS before the budget; only the request itself is
+// named, a cut read is not. The reserve covers the audit query and the app's close.
+const CASE_MS = 10_000;
+const RESERVE_MS = 2000;
+vi.setConfig({ testTimeout: CASE_MS });
+
+// Monotonic: the cases fake `Date` and jump it with setSystemTime.
+let deadline = 0;
+let logins = 0;
+beforeEach(() => {
+  deadline = performance.now() + CASE_MS - RESERVE_MS;
+  logins = 0;
+});
+
+function login(
+  baseUrl: string,
+  payload: unknown,
+  extraHeaders: Readonly<Record<string, string>> = {},
+): Promise<Response> {
+  logins += 1;
+  return boundedStep(`login attempt ${String(logins)}`, deadline, (signal) =>
+    postJson(`${baseUrl}/_platform/api/login`, payload, extraHeaders, signal),
+  );
 }
 
 async function withControlledDate(run: () => Promise<void>): Promise<void> {
@@ -45,11 +71,7 @@ async function failWrongPassword(
   email: string,
   extraHeaders: Readonly<Record<string, string>> = {},
 ): Promise<void> {
-  const failed = await postJson(
-    loginUrl(baseUrl),
-    { email, password: WRONG_PASSWORD },
-    extraHeaders,
-  );
+  const failed = await login(baseUrl, { email, password: WRONG_PASSWORD }, extraHeaders);
   expect(failed.status).toBe(401);
   await failed.json();
 }
@@ -76,7 +98,7 @@ describe('login failure throttling over a real TCP port', () => {
           await failWrongPassword(baseUrl, EMAIL);
         }
 
-        const blocked = await postJson(loginUrl(baseUrl), { email: EMAIL, password: PASSWORD });
+        const blocked = await login(baseUrl, { email: EMAIL, password: PASSWORD });
         await expectBlocked(blocked, database, sessions);
       });
     });
@@ -90,21 +112,23 @@ describe('login failure throttling over a real TCP port', () => {
           await failWrongPassword(baseUrl, EMAIL);
         }
 
-        const succeeded = await postJson(loginUrl(baseUrl), { email: EMAIL, password: PASSWORD });
+        const succeeded = await login(baseUrl, { email: EMAIL, password: PASSWORD });
         expect(succeeded.status).toBe(200);
         const cookie = sessionCookieHeader(succeeded.headers.getSetCookie());
         await succeeded.json();
         const sessions = snapshotAuthState(database).sessions;
 
         await failWrongPassword(baseUrl, EMAIL);
-        const blocked = await postJson(loginUrl(baseUrl), { email: EMAIL, password: PASSWORD });
+        const blocked = await login(baseUrl, { email: EMAIL, password: PASSWORD });
         const blockedBody = await blocked.json();
         expect(blocked.status).toBe(429);
         expect(blockedBody).toEqual(TOO_MANY_LOGIN_ATTEMPTS);
         expect(blocked.headers.getSetCookie()).toEqual([]);
         expect(snapshotAuthState(database).sessions).toEqual(sessions);
 
-        const identity = await getIdentity(baseUrl, cookie);
+        const identity = await boundedStep('identity request', deadline, (signal) =>
+          getIdentity(baseUrl, cookie, signal),
+        );
         expect(identity.status).toBe(200);
         const failed = queryAuditEvents(database, {
           page: 1,
@@ -131,21 +155,21 @@ describe('login failure throttling over a real TCP port', () => {
         }
         const sessions = snapshotAuthState(database).sessions;
 
-        const blockedEarly = await postJson(loginUrl(baseUrl), {
+        const blockedEarly = await login(baseUrl, {
           email: EMAIL,
           password: PASSWORD,
         });
         await expectBlocked(blockedEarly, database, sessions);
 
         vi.setSystemTime(new Date(NOW.getTime() + WINDOW_MS - 1));
-        const stillBlocked = await postJson(loginUrl(baseUrl), {
+        const stillBlocked = await login(baseUrl, {
           email: EMAIL,
           password: PASSWORD,
         });
         await expectBlocked(stillBlocked, database, sessions);
 
         vi.setSystemTime(new Date(NOW.getTime() + WINDOW_MS));
-        const recovered = await postJson(loginUrl(baseUrl), { email: EMAIL, password: PASSWORD });
+        const recovered = await login(baseUrl, { email: EMAIL, password: PASSWORD });
         expect(recovered.status).toBe(200);
         expect(recovered.headers.getSetCookie()).toHaveLength(1);
         await recovered.json();
@@ -174,23 +198,23 @@ describe('login failure throttling over a real TCP port', () => {
           }
           const sessions = snapshotAuthState(database).sessions;
 
-          const blocked = await postJson(
-            loginUrl(baseUrl),
+          const blocked = await login(
+            baseUrl,
             { email: EMAIL, password: PASSWORD },
             { 'X-Forwarded-For': CLIENT_A },
           );
           await expectBlocked(blocked, database, sessions);
 
-          const otherEmail = await postJson(
-            loginUrl(baseUrl),
+          const otherEmail = await login(
+            baseUrl,
             { email: OTHER_EMAIL, password: PASSWORD },
             { 'X-Forwarded-For': CLIENT_A },
           );
           expect(otherEmail.status).toBe(200);
           await otherEmail.json();
 
-          const otherSource = await postJson(
-            loginUrl(baseUrl),
+          const otherSource = await login(
+            baseUrl,
             { email: EMAIL, password: PASSWORD },
             { 'X-Forwarded-For': CLIENT_B },
           );
@@ -212,8 +236,8 @@ describe('login failure throttling over a real TCP port', () => {
         }
         const sessions = snapshotAuthState(database).sessions;
 
-        const blocked = await postJson(
-          loginUrl(baseUrl),
+        const blocked = await login(
+          baseUrl,
           { email: EMAIL, password: PASSWORD },
           { 'X-Forwarded-For': CLIENT_B },
         );

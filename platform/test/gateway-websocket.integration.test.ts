@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { connect } from 'node:net';
 import { Duplex } from 'node:stream';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import {
   PUBLIC_ORIGIN,
   cookieHeaders,
@@ -33,6 +33,17 @@ const CLIENT_HEAD = Buffer.from([0x82, 0x82, 5, 6, 7, 8, 0xfa, 6]);
 const SERVER_HEAD = Buffer.from([0x81, 5, 104, 101, 108, 108, 111]);
 const EXTENSION_OFFER = 'permessage-deflate; client_max_window_bits';
 const EXTENSION_SELECTED = 'permessage-deflate; server_no_context_takeover';
+// The whole 32 MiB pending transfer of the backpressure case, an aggregate observation. Measured
+// (#687) with a 60s bound, 10 runs of the secondary-table files at 1-minute load 68-84: at most
+// 1139ms, over half of observeHttp's 2s single-event default; this is about 4.4x that.
+const BACKPRESSURE_TRANSFER_MS = 5000;
+// Every case. The largest sum of sequential observations at their bounds is 12 at observeHttp's 2s
+// default (24s: "streams both", reader() reads and withUpstream's cleanup included; the backpressure
+// case's 8 plus the transfer is 21s). The other 6s cover the rest: in the same runs the slowest
+// case took at most 1420ms whole, observations included, "streams both" 995ms. A stalled
+// observation fails with its own error first.
+const CASE_MS = 30_000;
+vi.setConfig({ testTimeout: CASE_MS });
 
 it('streams both WebSocket frame directions with private handshake credentials', async () => {
   await withUpstream(
@@ -495,7 +506,7 @@ it.each(['resume', 'app'])(
               };
               peer.on('data', receive);
               peer.resume();
-              await observeHttp(received.promise);
+              await observeHttp(received.promise, BACKPRESSURE_TRANSFER_MS);
               expect(await observeHttp(sendOutcome)).toBeUndefined();
               expect(count).toBe(payloadSize);
               peer.removeListener('data', receive);
