@@ -56,7 +56,7 @@ Issue #671, decision (b). Line numbers are on main `200ed94`. Measurement and de
 Issue type: test (verification lane allowance, user-decided)
 Fixture level: expanded
 Upstream suggested level: absent
-Blast radius: every stack browser session's console handling (StackBrowserEvidence gains a field); Office lanes' console matchers see the allowed reports removed; evidence lines gain a count
+Blast radius: every stack browser session's console handling (StackBrowserEvidence gains a field); Office lanes' console matchers see the allowed reports removed; evidence lines gain the `unloadViolations` source list
 Selected risk packs: Contract / compatibility (StackBrowserEvidence shape, evidence lines); Error handling (an unknown-source violation must still fail the lane)
 Evidence floor: recordedError cases (each measured source allowed; extended, truncated text, other origin, version, path, line, empty URL and non-error type handled); workbenchSession and openHinted stand-in cases that route an allowed report out and keep an unknown-source one; mutants (a)-(f) per design.md, each red; pnpm check; exact-head pnpm test:stack (Chromium 153: no allowed report) and VPS lane
 ```
@@ -77,7 +77,7 @@ Evidence floor: recordedError cases (each measured source allowed; extended, tru
 
 ## Risk packs
 
-- **Contract / compatibility — selected.** `StackBrowserEvidence` gains a required field, so every literal in the tests gains it. The evidence lines change only by the new count. Tasks 1.2, 1.4.
+- **Contract / compatibility — selected.** `StackBrowserEvidence` gains a required field, so every literal in the tests gains it. The evidence lines change only by the new list. Tasks 1.2, 1.4.
 - **Error handling — selected.** A report from any other source, line or version stays a console error and fails the lane as today. Tasks 1.1, 1.3.
 - **Not selected:** secrets (a source is a fixed script path and a line, with no key or query; the hash segment is dropped), product, concurrency.
 
