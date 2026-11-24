@@ -19,7 +19,7 @@ import {
   publishedCommand,
 } from './trusted-docker-uncaptured-fixture.ts';
 import type { ProcessRow } from './trusted-docker-uncaptured-fixture.ts';
-import { groupIsAbsent } from '../../scripts/trusted-docker-record.mjs';
+import { groupIsAbsent, groupSettlesAfterClose } from '../../scripts/trusted-docker-record.mjs';
 
 // As in the custody deadline case: the wait starts at the 5s fixture deadline and ends near 15s,
 // below the 20_000 case bound; fixture.deadline has passed by then.
@@ -64,13 +64,13 @@ it('retires the command group of a start killed before its owner published the c
       (error: unknown) => error,
     );
 
-    expect(groupIsAbsent(pids.command)).toBe(true);
-    expect(ownerPresent(pids.owner)).toBe(false);
-    expect(existsSync(pids.receipt)).toBe(false);
     expect(failed).toBeInstanceOf(AggregateError);
     expect((failed as AggregateError).errors.map(String)).toEqual([
       `Error: Uncaptured custody fixture authority retained: command ${String(pids.command)}`,
     ]);
+    expect(await groupSettlesAfterClose(pids.command)).toBe(true);
+    expect(ownerPresent(pids.owner)).toBe(false);
+    expect(existsSync(pids.receipt)).toBe(false);
   } finally {
     for (const pid of [pids.owner, -pids.command].filter(Boolean))
       try {

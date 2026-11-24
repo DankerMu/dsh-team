@@ -23,7 +23,7 @@ import {
 } from './trusted-docker-fixture.ts';
 import { expectMemberOutlivedClose } from './trusted-docker-close-fixture.ts';
 import {
-  groupIsAbsent,
+  groupSettlesAfterClose,
   hasPassingOutcome,
   validateTerminal,
 } from '../../scripts/trusted-docker-record.mjs';
@@ -706,7 +706,7 @@ it('settles the owner and held command of a start killed at the case deadline', 
       `Error: Uncaptured custody fixture authority retained: command ${String(pids.command)}`,
     ]);
     expect(ownerPresent(pids.owner)).toBe(false);
-    expect(groupIsAbsent(pids.command)).toBe(true);
+    expect(await groupSettlesAfterClose(pids.command)).toBe(true);
   } finally {
     for (const pid of [pids.owner, -pids.command].filter(Boolean))
       try {

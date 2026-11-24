@@ -86,6 +86,9 @@ interface OwnerIdentity {
   readonly birth: string;
 }
 
+const errorCode = (error: unknown) =>
+  error instanceof Error && 'code' in error ? error.code : undefined;
+
 export function ownerPresent(pid: number) {
   try {
     process.kill(pid, 0);
@@ -160,10 +163,12 @@ export function caseBudget(deadline?: number) {
       );
     return result;
   };
-  // A group wait also reports its group, which members can keep present after the leader is gone.
-  const stalled = (phase: string, since: number, pid: unknown, group = false) =>
+  // A group wait also reports its group, which members can keep present after the leader is gone;
+  // a `cause` (the last observation error the wait tolerated) is kept on the error.
+  const stalled = (phase: string, since: number, pid: unknown, group = false, cause?: unknown) =>
     new Error(
       `${phase} after ${String(Date.now() - since)}ms: pid=${String(pid)} present=${String(ownerPresent(Number(pid)))}${group ? ` group present=${String(ownerPresent(-Number(pid)))}` : ''}`,
+      cause === undefined ? undefined : { cause },
     );
   // Terminal evidence is synchronous, so its full bounds end with it.
   const unbounded = <T>(operation: () => T) => {
@@ -426,7 +431,7 @@ function recordedProcesses(temporary: string) {
   });
 }
 
-function fixtureProcessCustody(
+export function fixtureProcessCustody(
   environment: NodeJS.ProcessEnv,
   directory: string,
   budget: CaseBudget,
@@ -466,16 +471,24 @@ function fixtureProcessCustody(
   ) => {
     const live = () => identityLive(identity);
     const pid = Number(identity.pid);
-    const waitForAbsence = async () => {
+    const phase = 'Owned custody fixture process did not retire';
+    // `denied` is the last group EPERM, seeded by the group kill: the stalled error's cause.
+    const waitForAbsence = async (denied?: unknown) => {
       const since = Date.now();
       const until = since + budget.limit('process retirement', 5000);
       for (;;) {
-        // A synchronous observer can see Darwin ESRCH while this parent's child is
-        // still unreaped. Its group may return EPERM until the actual close event.
-        if (!live() && closures.get(pid)?.closed !== false && (!group || groupIsAbsent(pid)))
-          return;
-        if (Date.now() >= until)
-          throw budget.stalled('Owned custody fixture process did not retire', since, pid, group);
+        // A synchronous observer can see Darwin ESRCH while this parent's child is still
+        // unreaped. Its group, unreaped orphan zombies, answers EPERM until it is reaped: that
+        // is still retiring and observed again; a probe without EPERM drops the last one.
+        if (!live() && closures.get(pid)?.closed !== false)
+          try {
+            if (!group || groupIsAbsent(pid)) return;
+            denied = undefined;
+          } catch (error) {
+            if (errorCode(error) !== 'EPERM') throw error;
+            denied = error;
+          }
+        if (Date.now() >= until) throw budget.stalled(phase, since, pid, group, denied);
         await delay(20);
       }
     };
@@ -493,7 +506,9 @@ function fixtureProcessCustody(
     try {
       process.kill(group ? -pid : pid, signal);
     } catch (error) {
-      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ESRCH') throw error;
+      // A retiring zombie group answers EPERM too; a single process still tolerates only ESRCH.
+      if (group && errorCode(error) === 'EPERM') return waitForAbsence(error);
+      if (errorCode(error) !== 'ESRCH') throw error;
     }
     await waitForAbsence();
   };
