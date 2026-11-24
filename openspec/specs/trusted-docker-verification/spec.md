@@ -221,12 +221,13 @@ The custody entrypoint SHALL run the unchanged original full Docker discovery an
 
 ### Requirement: Command settlement waits a bounded window for genuine group absence
 
-After the owned command's actual close, trusted custody SHALL observe its process group within one bounded observation window and SHALL record the command settled only on a genuine process-group absence (`ESRCH`). A group still present when the window expires SHALL remain unsettled. An EPERM observation SHALL never count as absence and SHALL be observed again within the window; if the final observation at expiry is EPERM the existing identity failure SHALL be recorded. Any other non-absence error SHALL keep the existing immediate identity failure. The window SHALL NOT retry, re-run or signal the command.
+After the owned command's actual close, trusted custody SHALL observe its process group within one bounded observation window and SHALL record the command settled only on a genuine process-group absence (`ESRCH`). A group still present when the window expires SHALL remain unsettled. An EPERM observation SHALL never count as absence and SHALL be observed again within the window; if the final observation at expiry is EPERM the existing identity failure SHALL be recorded. Any other non-absence error SHALL keep the existing immediate identity failure. The window SHALL NOT retry, re-run or signal the command. The custody regression for a briefly outliving member SHALL prove that the owner's first post-close group observation saw the group present (returned without error) and that the member exited after it.
 
 #### Scenario: A group member briefly outlives the command
 
 - **WHEN** the command closes while a member of its process group is still running or not yet reaped, and that member exits within the window
 - **THEN** the published terminal records `settled: true`, cleanup is assessed normally, and a duplicate cancellation reports the terminal result with exit 0
+- **AND** the regression observes at least one post-close group poll that returned without error, no group poll before close, and a member exit later than the first post-close observation; a member that exits before close fails the regression
 
 #### Scenario: The group does not become absent
 
@@ -363,3 +364,44 @@ When `reserveVerificationDockerObserver` rejects before reserving any submission
 
 - **WHEN** a predecessor generation with an unsettled participant and outstanding request markers is still running, and a second reservation for the same authority is rejected
 - **THEN** the rejected reservation writes, removes or settles no pending marker and leaves the current manifest unchanged
+
+### Requirement: Process birth observation does not block the owner
+
+On Darwin, the trusted-verification process birth observation SHALL run without blocking the observing process's event loop, and SHALL keep the native query's bounded timeout, its forced kill on timeout or oversized output, and its existing outcomes and fail-closed rule.
+
+#### Scenario: A hung native observation does not freeze the owner
+
+- **WHEN** the native birth query does not answer
+- **THEN** a short timer in the same process fires before the observation settles
+- **AND** the observation rejects as unavailable no earlier than its bound, and the query process has been killed
+
+#### Scenario: A missing interpreter is not absence
+
+- **WHEN** the native query cannot be started
+- **THEN** the observation rejects as unavailable without an absence code, and a liveness check does not report the process gone
+
+### Requirement: Uncaptured custody cleanup retires an unpublished command group
+
+When the trusted custody fixture's cleanup finds an invocation whose start was never captured, it SHALL first confirm the owner's identity and freeze the owner.
+
+While the owner is frozen, cleanup SHALL bind the identity of the command the owner started. The identity comes from the command receipt, or, when no receipt exists, from the owner's direct child that leads its own process group and runs the verification command.
+
+Cleanup SHALL then retire the owner, and SHALL retire the command's group after the owner. It SHALL NOT leave the owner stopped, except when the owner's identity can no longer be confirmed after its retirement failed. In that case it SHALL NOT signal the unconfirmed pid, and SHALL report the retirement failure.
+
+Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence.
+
+#### Scenario: Owner killed after starting its command but before publishing it
+
+- **WHEN** a start is abandoned at the case deadline while its owner has started the command but not yet written its receipt
+- **THEN** cleanup retires the owner and then the command's process group
+- **AND** the uncaptured entry names the command
+
+#### Scenario: No command was started
+
+- **WHEN** the frozen, identity-bound owner has no started or in-flight command
+- **THEN** cleanup retires the owner and reports that no command was started
+
+#### Scenario: Identification is uncertain
+
+- **WHEN** a child of the owner is still in flight, a child is ambiguous, the scan fails, or the owner is gone before it is frozen and no receipt exists
+- **THEN** cleanup keeps the authority, still kills an identity-bound owner, and does not report the command group absent

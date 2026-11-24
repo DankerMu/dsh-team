@@ -207,3 +207,65 @@ A deployment verification test whose scenario failure is a deliberately injected
 
 - **WHEN** 部署验证用替身替换 Document Server 镜像
 - **THEN** 替身继承交付的健康检查定义，并在启动期限内达到 `healthy`
+
+### Requirement: Document Server 防火墙的 IPv6 行为探测
+
+部署车道 MUST 在 giap-vps 上用一个临时的、只属于本次运行的内部 IPv6 网络，从行为上证明防火墙持有者的 IPv6 规则生效：
+
+- 持有者接入该网络后，从持有者自己的命名空间访问它在该网络上的 IPv6 地址，80 和 8000 都 MUST 有应答（对照）；
+- 从同一网络上的探测容器（uid 1001）访问同一地址，80 MUST 有应答，8000 MUST 超时，而不是被拒绝；
+- 目标地址 MUST 是 IPv6 字面量，且探测前后持有者 IPv6 `INPUT` 的 DROP 策略计数 MUST 增加；
+- 无论成败，探测容器、网络连接和网络 MUST 被清理，持有者的网络 MUST 恢复为探测前的集合。
+
+#### Scenario: IPv6 下 8000 被丢弃
+
+- **WHEN** 探测容器经临时 IPv6 网络访问持有者的 8000
+- **THEN** 请求在上界内超时，80 有应答，车道通过
+
+#### Scenario: 8000 经 IPv6 可达或被拒绝
+
+- **WHEN** 探测容器经 IPv6 访问 8000 得到应答或连接被拒绝
+- **THEN** 车道失败，并在清理之后报告观测到的结果
+
+#### Scenario: 持有者没有 IPv6 地址
+
+- **WHEN** 持有者接入临时网络后没有 IPv6 地址
+- **THEN** 车道在任何探测之前失败，并清理临时网络
+
+### Requirement: Document Server 防火墙持有者重启的验证
+
+部署验证 MUST 覆盖 Document Server 防火墙持有者的重启：持有者单独重启后，Document Server 留在旧命名空间、实例访问不到它，而新命名空间重新装上入站规则；`docker compose up -d` 不改变这一状态；按运维手册重启 Document Server 后，它回到持有者的新命名空间，实例只能访问其 80 端口。持有者的 IPv6 入站规则 MUST 在真实内核上读回，并与脚本安装的规则逐条一致。
+
+#### Scenario: 持有者重启与手册恢复
+
+- **WHEN** 部署验证依次重启持有者、执行一次 `docker compose up -d`、再重启 Document Server
+- **THEN** 持有者重启后，持有者 ID 和 Document Server 的网络归属不变，但持有者命名空间内 80 与 8000 都无人监听，实例对持有者 80 端口的连接被拒绝、对 8000 端口超时；`up -d` 之后各容器 ID 与启动时间不变、状态不变；Document Server 重启后，实例访问 80 有应答、8000 超时
+
+#### Scenario: IPv6 规则读回
+
+- **WHEN** 部署验证在持有者内读取 IPv6 入站规则
+- **THEN** 持有者具备 IPv6，默认策略是 DROP，且恰好包含回环、已建立连接、TCP 80 和 ICMPv6 四条放行规则；持有者重启后的新命名空间同样如此
+
+### Requirement: 升级说明写明 profile 加载的预装插件变化需重置配置
+
+部署文档的升级说明 SHALL 写明：镜像更新改变了从员工 profile 副本加载的预装插件的任何文件（构建期补丁或预装插件的交付文件，无论版本是否变化）时，已有员工实例不报错、平台不提示，员工继续使用卷内旧副本，直到管理员对该员工执行「重置配置」。文档 SHALL 按插件列出只随 profile 副本生效的部分，以及由覆盖层按镜像路径加载、镜像更新后实例下次启动即生效的部分，并写明重置的代价（实例停止、员工自装插件被移除、需重新启动）。员工指南的 Office 章节 SHALL 注明依赖 profile 副本的行为以新账号或已重置配置为前提。
+
+#### Scenario: 管理员升级只改插件补丁的镜像
+
+- **WHEN** 管理员换用只改变 `dsh-sidebar-onlyoffice` 构建期补丁的用户镜像
+- **THEN** 部署文档告诉管理员现有员工不会报错、需要逐人「重置配置」才能获得新行为，以及重置会停止实例并移除员工自装插件
+
+#### Scenario: 员工看到的行为与指南不一致
+
+- **WHEN** 员工在升级后看到的 Office 打开方式或改写后的刷新行为与员工指南不同
+- **THEN** 员工指南提示其联系管理员重置配置
+
+### Requirement: The deployment guide states the delivered Office editing
+
+The operator deployment guide SHALL describe Office online editing and its per-instance file token protection as delivered. It SHALL state that DOCX and PPTX take the in-instance preview path only when Office online editing is off or the Document Server is not connected.
+
+#### Scenario: An operator reads the Office statements of the deployment guide
+
+- **WHEN** the operator reads the Office statements of the deployment guide
+- **THEN** no statement describes Office online editing or the per-instance file token protection as undelivered or pending
+- **AND** the DOCX and PPTX preview-path statement is conditional on editing being off or the Document Server not being connected

@@ -94,3 +94,215 @@ RAGFlow 地址、密钥和嵌入模型密钥 MUST 只从开发机上的私有配
 
 - **WHEN** 一个修改 `platform/src/ragflow-proxy/` 的 PR 没有对应 head 的本机证据评论
 - **THEN** 该 PR 不满足合并条件
+
+### Requirement: Office 全栈车道检验用另一实例密钥算出的 key
+
+本机全栈 Office 车道 MUST 在员工 B 的实例内，用 B 自己的每实例密钥，为员工 A 的文件算出 key；只要这个 key 被接受，车道 MUST 失败。如果所有实例共用同一个密钥，每一项这样的检验 MUST 失败。
+
+#### Scenario: 跨实例 key 的 Command Service 查询
+
+- **WHEN** A 和 B 都在编辑同名 DOCX，车道向 Command Service 查询 B 的密钥为 A 的文件算出的 key
+- **THEN** 这个 key 与 A 的 key 不同，Command Service 回答未知 key；如果 A 和 B 的密钥相同，这项检验失败
+
+#### Scenario: 跨实例 key 的保存回调
+
+- **WHEN** 隔离车道用 B 的密钥为 A 的文件算出的 key，向 A 发送保存回调
+- **THEN** A 把它当作未知 key；如果 A 和 B 的密钥相同，这项检验失败
+
+### Requirement: Office 空闲车道的保活不归因到编辑器
+
+本机全栈 Office 空闲车道的保持断言证明的是：工作台和其中打开的编辑器一起，在空闲分钟数为 1 时保持实例运行。
+
+- 它 MUST NOT 被表述为「编辑器的连接让实例保活」。
+- 这是用户接受的残余（#657 C2，2026-11-23）。实测：只开工作台、不开编辑器，同样保持 210 秒，实例仍在运行，没有空闲停止，期间没有 Document Server 连接。
+- 工作台自己的连接已经足以保活：两条 WebSocket（`/api/remote.mux`、`/sidebar/ws`）、一条 SSE（`/plugins/events`），以及约每秒一次的 `/sidebar/api` 请求。
+
+#### Scenario: 只开工作台也保持运行
+
+- **WHEN** 空闲分钟数为 1，员工只开着 DSH 工作台，没有打开编辑器，保持 210 秒
+- **THEN** 实例保持运行，没有空闲停止审计，所以车道的保持断言不能区分保活来自编辑器还是工作台
+
+### Requirement: Office 空闲车道恢复运行配置并先查字体
+
+本机全栈 Office 空闲车道 MUST 在结束后把平台运行配置恢复到车道开始前的快照，并读回核对；车道 MUST 先完成字体检查，再修改空闲分钟数。
+
+#### Scenario: 车道结束后运行配置复原
+
+- **WHEN** 空闲车道把空闲分钟数改为 1，完成保活和空闲停止后结束
+- **THEN** 读回的运行配置与车道开始前的快照完全一致
+
+#### Scenario: 字体检查失败时不改运行配置
+
+- **WHEN** 编辑器的字体列表缺少运营方字体，字体检查失败
+- **THEN** 车道没有写运行配置，恢复函数仍为空操作
+
+### Requirement: Office 车道按路径查注册表 key 只有一份并且格式不符时失败
+
+本机全栈 Office 车道按路径读取插件注册表 key 时 MUST 共用同一份查询。
+
+- 注册表文件尚不存在时，MUST 视为还没写入，返回空列表。
+- 文件存在但不可读，或者不符合插件 0.2.0 的格式时，查询 MUST 以非零退出。查询自身的输出只报出失败种类，不带任何 key 或路径。
+- 车道 MUST 以该错误失败，不得把它当作 0 个 key。
+
+#### Scenario: 合法注册表
+
+- **WHEN** `registry.json` 合法，含有多个路径的记录
+- **THEN** 查询按文件顺序只返回 `entry.path` 等于给定路径的 key
+
+#### Scenario: 注册表尚未写入
+
+- **WHEN** 员工实例里还没有 `registry.json`
+- **THEN** 查询返回空列表，车道继续在期限内轮询
+
+#### Scenario: 注册表不可读或格式不符
+
+- **WHEN** 出现以下任一情况：
+  - `registry.json` 不可读；
+  - 内容不是合法 JSON；
+  - `version` 不是 1；
+  - `entries` 缺失或不是列表；
+  - 某条记录不是对象；
+  - 某条记录的 `key` 不是非空字符串；
+  - 某条记录的 `entry` 不是对象；
+  - 某条记录的 `entry.path` 不是字符串
+- **THEN** 查询以非零退出，标准输出为空，自身输出只含失败种类
+- **AND** 车道以该错误失败
+
+### Requirement: Office 改写车道的提示条断言有区分力
+
+本机全栈 Office 改写车道的 `clean`、`unsaved` 两个情形：
+
+- MUST 在 Agent 改写后，以会话超时为上界等待正向条件成立（编辑器刷新；`unsaved` 情形还要等「保存未写回文件」出现），并记录实测延迟；
+- 正向条件之后，MUST 用固定窗口断言负向条件（不再刷新、不出现其他提示条）；
+- `unsaved` 情形 MUST 证明该提示条在员工保存前一刻仍然显示；
+- 两个情形 MUST 证明保存后提示条消失，并且在随后的固定窗口内没有任何提示条再出现。
+
+#### Scenario: 提示条在保存前已经消失
+
+- **WHEN** `unsaved` 情形的「保存未写回文件」在窗口内出现，但在员工保存前消失
+- **THEN** 车道的事实与期望不符，用例失败
+
+#### Scenario: 保存后提示条又出现
+
+- **WHEN** 保存成功、提示条清掉之后，又有提示条出现
+- **THEN** 车道的事实与期望不符，用例失败
+
+#### Scenario: 刷新晚于固定窗口到达
+
+- **WHEN** 编辑器的刷新在 Agent 改写后超过固定窗口、但在会话超时以内到达
+- **THEN** 车道等到刷新，记录延迟，用例通过
+
+#### Scenario: 刷新始终没有到达
+
+- **WHEN** 会话超时以内编辑器都没有刷新
+- **THEN** 车道记录未到达，事实与期望不符，用例失败
+
+### Requirement: Office 改写车道覆盖 XLSX 与 PPTX
+
+本机全栈 Office 改写车道除两个 DOCX 情形外，还 MUST 各有一个 XLSX、一个 PPTX 的干净改写情形：
+
+- 初始文件取自 Document Server 自带的空白模板；
+- Agent 的 `bash` 只用 Python 标准库 `zipfile` 原地改写其中一个 XML 部件，不改用户镜像；
+- 断言的事实与 DOCX 干净情形一致：提示条、刷新次数、改写后/保存后/关闭后文件里各方的 nonce、`/data/work` 条目、允许的错误和 forgotten 副本；
+- 锚点找不到或出现不止一次时，改写 MUST 以非零退出，且文件字节不变。
+
+#### Scenario: 打开的 XLSX 被 Agent 改写
+
+- **WHEN** 员工打开空白模板复制出的 `干净改写.xlsx`，Agent 改写它，员工随后键入并保存
+- **THEN** 编辑器刷新一次，没有提示条；改写后文件只有 Agent 的 nonce，保存后和关闭后两方的 nonce 都在，`/data/work` 没有副本
+
+#### Scenario: 打开的 PPTX 被 Agent 改写
+
+- **WHEN** 员工打开空白模板复制出的 `干净改写.pptx`，Agent 改写它，员工随后键入并保存
+- **THEN** 事实与 XLSX 情形、DOCX 干净情形相同
+
+#### Scenario: 改写锚点不唯一
+
+- **WHEN** 要改写的部件里锚点不存在或出现两次
+- **THEN** 改写脚本非零退出，文件字节不变
+
+### Requirement: 同名 DOCX 失败给出每一侧的原因
+
+编辑器车道的同名 DOCX 情形中，A、B 两个编辑会话同时进行。任一侧失败时，抛出错误的消息 SHALL 依次给出每个失败侧的标签（`A` 或 `B`）和该侧经过脱敏的失败原因链，只列出失败的一侧。消息 SHALL NOT 含有文档 key 或 URL 查询串。错误 SHALL 仍是 `AggregateError`，`errors` 保留每个失败侧原始的失败，A 在前。
+
+#### Scenario: 两侧都失败
+
+- **WHEN** A、B 两个编辑会话都因带 `/doc/<key>/c/` 路径和查询串的错误失败
+- **THEN** 抛出错误的消息依次给出 `A:` 和 `B:` 各自脱敏后的失败原因
+- **AND** 该错误的消息和全部自有属性中都不出现 key 和查询串
+
+#### Scenario: 只有一侧失败
+
+- **WHEN** A 的会话成功，B 的会话失败
+- **THEN** 消息只给出 `B:` 和它脱敏后的失败原因
+
+### Requirement: Stack workbench failures carry no document key or query
+
+本机全栈车道的浏览器会话失败，在 vitest 会打印的任何位置，都 SHALL NOT 出现文档 key 或 URL 查询串。这里的位置包括：
+
+- 错误消息；
+- 全部自有属性；
+- 编辑器、改写和提示车道中失败匹配器的 diff。
+
+失败消息 SHALL 仍然给出会话标签、计数和经过脱敏的失败原因，并且保持可读。仓库 SHALL 只保留一份脱敏实现。Office 车道成功 evidence 行中的会话证据 SHALL 只以计数，或经该实现脱敏的列表形式出现。
+
+#### Scenario: Office 会话因 Document Server socket 错误失败
+
+- **WHEN** 编辑器、改写或提示车道的会话失败，并且会话的 console 错误、失败请求和 ≥400 响应中带有 `/doc/<key>/c/` 路径和带查询串的 URL
+- **THEN** 抛出的错误的消息和全部自有属性中都不出现该 key 和查询串
+- **AND** 消息仍然给出会话标签、计数和可读的脱敏失败原因
+
+#### Scenario: 失败诊断保持可读
+
+- **WHEN** 失败原因中含有 `#id` 定位器、焦点描述或 `ERR_*` 网络错误码
+- **THEN** 脱敏后这些内容仍然保留
+
+### Requirement: Office session screenshots mask the save-error notice
+
+本机全栈车道里，会出现「保存未写回文件」提示条的 Office 浏览器会话（改写车道的 `clean`、`unsaved` 和 `typing` 用例，forgotten 车道的 edit 会话），其所有截图（包括失败截图）SHALL 遮罩该提示条。提示条显示的是插件 staleness guard 的原文，带有文档 key，截图像素中 SHALL NOT 留下这段文字。stack fixture 代码中的提示条文本 SHALL 只有一份定义。
+
+#### Scenario: 改写会话截图遮罩提示条
+
+- **WHEN** 改写车道的 `clean` 或 `unsaved` 用例打开编辑会话
+- **THEN** 传给会话的截图遮罩里含有「保存未写回文件」提示条文本
+
+#### Scenario: forgotten edit 会话截图遮罩提示条
+
+- **WHEN** forgotten 车道打开刻意让保存被拒的 edit 会话
+- **THEN** 传给会话的截图遮罩里含有「保存未写回文件」提示条文本
+
+### Requirement: Document Server 的 unload 违规按来源放行
+
+本机全栈车道的浏览器会话中，控制台消息 `Permissions policy violation: unload is not allowed in this document.` SHALL 只在同时满足以下三个条件时放行：
+
+- 来源在平台自身的 origin 上；
+- 路径是 Document Server 9.4.0 挂载点下已实测的脚本之一：三个编辑器的 `Main.js`、`sdkjs/cell/sdk-all.js`、`sdkjs-plugins/v1/plugins.js`；
+- 行号是该脚本已实测的行号。
+
+放行的报告 SHALL NOT 计入 `consoleErrors`，SHALL 以 `<脚本路径>:<行号>` 记入该会话的 `unloadViolations`，不限次数。其他来源、行号或版本的同文本消息 SHALL 仍计入 `consoleErrors`，由各车道原有的精确白名单拒绝。这是用户在 #671 的决定（2026-11-23）。
+
+#### Scenario: 已实测来源的违规被放行并记录
+
+- **WHEN** Document Server 9.4.0 的 DOCX 编辑器在 `documenteditor/main/app/controller/Main.js` 的已实测行号上报告这条违规
+- **THEN** 该会话的 `consoleErrors` 不含它
+- **AND** `unloadViolations` 记录它的来源
+
+#### Scenario: 未知来源的同文本违规被拒绝
+
+- **WHEN** 同一文本来自其他脚本、其他行号、其他版本或其他 origin
+- **THEN** 它计入 `consoleErrors`，车道原有的白名单使车道失败
+
+#### Scenario: Chromium 153 下没有放行
+
+- **WHEN** 浏览器不报告这条违规
+- **THEN** 每个会话的 `unloadViolations` 为空，车道行为与之前一致
+
+### Requirement: A stack session failure folds each cause once
+
+When an Office stack session failure wraps a stack workbench failure, the cause-chain part of its message SHALL contain each cause's message exactly once.
+
+#### Scenario: A forgotten-lane failure wraps a workbench failure
+
+- **WHEN** an Office forgotten lane failure is built from a workbench failure whose cause is a locator timeout
+- **AND** neither the scene nor the evidence lists contain that timeout text
+- **THEN** the timeout message appears exactly once in the resulting message
