@@ -169,8 +169,10 @@ it('prints the editor session by its screenshots and error counts', () => {
     failedRequests: [],
     externalRequests: [],
   };
+  const unloadViolations = ['web-apps/apps/documenteditor/main/app/controller/Main.js:2145'];
   const editor = {
     screenshots: ['office-editor-docx-saved.png'],
+    unloadViolations,
     ...lists,
     requests: 9,
     websockets: 2,
@@ -184,7 +186,8 @@ it('prints the editor session by its screenshots and error counts', () => {
   const line = officeIdleLine(evidence);
 
   const counts = { consoleErrors: 2, pageErrors: 0, failedRequests: 0, externalRequests: 0 };
-  expect(line).toEqual({ ...evidence, editor: { screenshots: editor.screenshots, ...counts } });
+  const printed = { screenshots: editor.screenshots, unloadViolations, ...counts };
+  expect(line).toEqual({ ...evidence, editor: printed });
   expect(() => officeIdleLine(undefined)).toThrow('Office idle evidence missing');
 });
 
@@ -297,7 +300,7 @@ const RUN = {
   file: { before: { size: 1, sha256: 'a' }, after: { size: 2, sha256: 'b' } },
   editor: {
     ...{ screenshots: [], consoleErrors: [], pageErrors: [], failedRequests: [] },
-    ...{ externalRequests: [], requests: 0, websockets: 0 },
+    ...{ unloadViolations: [], externalRequests: [], requests: 0, websockets: 0 },
   },
   stopped: { stoppedMs: 95_000, reason: 'idle' as const },
 };

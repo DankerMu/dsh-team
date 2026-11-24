@@ -113,7 +113,7 @@ const LONG_RUN = 'Ab1'.repeat(8);
 const FETCH = 'A bad HTTP response code (403) was received when fetching the script.';
 const session = (screenshots: string[], consoleErrors: string[], failedRequests: string[]) => ({
   ...{ screenshots, consoleErrors, pageErrors: [], failedRequests, externalRequests: [] },
-  ...{ requests: 40, websockets: 2 },
+  ...{ unloadViolations: [], requests: 40, websockets: 2 },
 });
 const read = { state: 'both', size: 9_000, sha256: 'b'.repeat(64) } as const;
 const unchanged = { added: [], removed: [] };
@@ -123,13 +123,17 @@ const unseen = { before: false, window: false, atSave: false, saved: false, quie
 const NOTICES = { staleChanged: unseen, staleRemoved: unseen, saveFailed: unseen };
 const replies = ['login.png', 'workbench.png', 'reply.png'];
 const quiet = { pageErrors: 0, failedRequests: 0, externalRequests: 0 };
+const UNLOADS = ['sdkjs-plugins/v1/plugins.js:39'];
 
 it('prints each case without nonces, keys or queries: errors and failures scrubbed, sessions counted', () => {
-  const editor = session(
-    ['office-rewrite-clean-open.png', 'office-rewrite-clean-saved.png'],
-    [FETCH, `GET ${BASE}/sidebar/onlyoffice/file?token=${LONG_RUN} ${AGENT}`],
-    [`GET ${BASE}${DS}/x.json#${LONG_RUN}`],
-  );
+  const editor = {
+    ...session(
+      ['office-rewrite-clean-open.png', 'office-rewrite-clean-saved.png'],
+      [FETCH, `GET ${BASE}/sidebar/onlyoffice/file?token=${LONG_RUN} ${AGENT}`],
+      [`GET ${BASE}${DS}/x.json#${LONG_RUN}`],
+    ),
+    unloadViolations: UNLOADS,
+  };
   const observed = {
     ...{ file: '干净改写.docx', provider: { rewriteCalls: 1, rewriteHits: 1, requests: 3 } },
     ...{
@@ -185,11 +189,12 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
     ],
     editor: {
       ...{ screenshots: editor.screenshots, consoleErrors: 2, pageErrors: 0 },
+      unloadViolations: UNLOADS,
       ...{ failedRequests: 1, externalRequests: 0 },
       errors: [FETCH, `GET ${BASE}/sidebar/onlyoffice/file <redacted>`],
       failed: [`GET ${BASE}/sidebar/onlyoffice/ds/9.4.<redacted>/x.json`],
     },
-    agent: { screenshots: replies, consoleErrors: 0, ...quiet },
+    agent: { screenshots: replies, unloadViolations: [], consoleErrors: 0, ...quiet },
   };
   expect(line).toEqual({
     clean: printed,

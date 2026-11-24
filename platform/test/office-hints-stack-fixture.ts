@@ -14,6 +14,7 @@ import { providerCounts, withWorkFiles, WORK } from './sidebar-archive-stack-fix
 import type { ArchiveEntry, ArchiveLane } from './sidebar-archive-stack-fixture.ts';
 import {
   element,
+  recordedError,
   scrubbedEvidence,
   showSidebarRows,
   until,
@@ -132,11 +133,13 @@ export interface OfficeHintsEvidence {
   readonly restart: string;
 }
 
-/** The stack evidence line: the file, the hint and note texts and the screenshot names. */
+/** The stack evidence line: the file, the hint and note texts, the screenshot names and the
+ * allowed unload reports' sources. */
 export function officeHintsLine(evidence: OfficeHintsEvidence | undefined) {
   if (evidence === undefined) throw new Error('Office hints evidence missing');
   const { browser, file, hint, restart } = evidence;
-  return { ...file, hint, restart, screenshots: browser.screenshots };
+  const { screenshots, unloadViolations } = browser;
+  return { ...file, hint, restart, screenshots, unloadViolations };
 }
 
 /** `until`, failing with `message` and the last observation `seen()`, the wait's error as cause. */
@@ -165,10 +168,13 @@ export async function openHinted(
   await until(() => showSidebarRows(page, [name]), timeout, `office hints ${name} row`);
   const row = await element(page, rowQuery(name));
   if (row === null) throw new Error(`Office hints ${name} row missing`);
-  // The text workbenchSession records for an error-type console message.
+  // What workbenchSession records as a console error; an allowed unload report is not one.
   const errors: string[] = [];
-  const record = (message: ConsoleMessage) =>
-    message.type() === 'error' && errors.push(message.text());
+  const origin = new URL(base).origin;
+  const record = (message: ConsoleMessage) => {
+    const recorded = recordedError(message, origin);
+    if (recorded !== undefined && 'error' in recorded) errors.push(recorded.error);
+  };
   page.on('console', record);
   let facts: OfficeFacts | undefined;
   const settled = async () => {

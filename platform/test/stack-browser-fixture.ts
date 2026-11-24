@@ -25,12 +25,54 @@ const TRANSCRIPT = '[data-chat-flow]';
 export interface StackBrowserEvidence {
   readonly screenshots: readonly string[];
   readonly consoleErrors: readonly string[];
+  /** The allowed Document Server unload reports, one `<script>:<line>` each, in arrival order. */
+  readonly unloadViolations: readonly string[];
   readonly pageErrors: readonly string[];
   readonly failedRequests: readonly string[];
   /** Requests and WebSockets whose origin is not the platform's public origin. */
   readonly externalRequests: readonly string[];
   readonly requests: number;
   readonly websockets: number;
+}
+
+// Chromium 158 reports this each time ONLYOFFICE 9.4.0 registers `unload` (#671). User decision
+// 2026-11-23 (option A): allowed only from these measured script lines, with no count limit; the
+// same text from any other source stays a console error. Lines are `location().line`, 0-based.
+const UNLOAD_VIOLATION = 'Permissions policy violation: unload is not allowed in this document.';
+export const DS_UNLOAD_SOURCES: ReadonlyMap<string, number> = new Map([
+  ['web-apps/apps/documenteditor/main/app/controller/Main.js', 2145],
+  ['web-apps/apps/spreadsheeteditor/main/app/controller/Main.js', 1785],
+  ['web-apps/apps/presentationeditor/main/app/controller/Main.js', 1638],
+  ['sdkjs/cell/sdk-all.js', 465226],
+  ['sdkjs-plugins/v1/plugins.js', 39],
+]);
+// The Document Server 9.4.0 mount `9.4.0-<hash>`; the script path after it, never the hash.
+const DS_SCRIPT = /^\/sidebar\/onlyoffice\/ds\/9\.4\.0-[^/]+\/(.+)$/;
+
+/** What recordedError reads of a Playwright `ConsoleMessage`. */
+interface ConsoleReport {
+  readonly type: () => string;
+  readonly text: () => string;
+  readonly location: () => { readonly url: string; readonly line: number };
+}
+
+/**
+ * How a session records one console message: nothing unless it is an error, the measured unload
+ * report on `origin` by its source, any other error by its text.
+ */
+export function recordedError(
+  message: ConsoleReport,
+  origin: string,
+): { readonly unload: string } | { readonly error: string } | undefined {
+  if (message.type() !== 'error') return undefined;
+  const text = message.text();
+  if (text !== UNLOAD_VIOLATION) return { error: text };
+  const { url, line } = message.location();
+  // Parsed only when parseable: a listener never throws on an empty or malformed location URL.
+  const target = URL.canParse(url) ? new URL(url) : undefined;
+  const script = target?.origin === origin ? DS_SCRIPT.exec(target.pathname)?.[1] : undefined;
+  const measured = script !== undefined && DS_UNLOAD_SOURCES.get(script) === line;
+  return measured ? { unload: `${script}:${String(line)}` } : { error: text };
 }
 
 /** One employee's observed browser session on the platform's public origin. */
@@ -110,6 +152,7 @@ export const scrubbedEvidence = (evidence: StackBrowserEvidence): StackBrowserEv
   ...evidence,
   screenshots: scrubEach(evidence.screenshots),
   consoleErrors: scrubEach(evidence.consoleErrors),
+  unloadViolations: scrubEach(evidence.unloadViolations),
   pageErrors: scrubEach(evidence.pageErrors),
   failedRequests: scrubEach(evidence.failedRequests),
   externalRequests: scrubEach(evidence.externalRequests),
@@ -222,6 +265,7 @@ export async function workbenchSession(
   const platform = new URL(base);
   const screenshots: string[] = [];
   const consoleErrors: string[] = [];
+  const unloadViolations: string[] = [];
   const pageErrors: string[] = [];
   const failedRequests: string[] = [];
   const externalRequests: string[] = [];
@@ -243,6 +287,7 @@ export async function workbenchSession(
   const evidence = (): StackBrowserEvidence => ({
     screenshots,
     consoleErrors,
+    unloadViolations,
     pageErrors,
     failedRequests,
     externalRequests,
@@ -282,7 +327,10 @@ export async function workbenchSession(
     });
     page = await context.newPage();
     page.on('console', (message) => {
-      if (observing && message.type() === 'error') consoleErrors.push(message.text());
+      const recorded = observing ? recordedError(message, platform.origin) : undefined;
+      if (recorded === undefined) return;
+      if ('unload' in recorded) unloadViolations.push(recorded.unload);
+      else consoleErrors.push(recorded.error);
     });
     page.on('pageerror', (error) => {
       if (observing) pageErrors.push(error.message);

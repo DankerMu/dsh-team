@@ -12,7 +12,9 @@ import {
 } from './better-sidebar-browser-fixture.mjs';
 import {
   converseInWorkbench,
+  DS_UNLOAD_SOURCES,
   everythingPrinted,
+  recordedError,
   scrub,
   showSidebarRows,
   StackWorkbenchFailure,
@@ -37,12 +39,22 @@ interface Dom {
 
 type Handler = (value: unknown) => void;
 
+/** A console message as Playwright 1.63 hands it over: type, text and 0-based location. */
+const consoleMessage = (text: string, url = '', line = 0, type = 'error') => ({
+  type: () => type,
+  text: () => text,
+  location: () => ({ url, line, column: 0 }),
+});
+type ConsoleStub = ReturnType<typeof consoleMessage>;
+
 interface StubOptions {
   /** Runs when the employee clicks SEND; schedules the stub's turn. */
   onSend: (dom: Dom, events: string[]) => void;
   /** Rejects the login navigation after emitting browser failures. */
   gotoFailure?: Error;
   closeFailure?: Error;
+  /** Emitted in order by the login navigation. */
+  console?: readonly ConsoleStub[];
 }
 
 /** Playwright 1.63's `waitFor` re-query back-off: 0, 20, 50, 100, 100ms, then every 500ms. */
@@ -139,8 +151,9 @@ function stubBrowser(options: StubOptions) {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     goto() {
       handlers.get('response')?.('login document');
+      for (const message of options.console ?? []) handlers.get('console')?.(message);
       if (options.gotoFailure === undefined) return Promise.resolve();
-      handlers.get('console')?.({ type: () => 'error', text: () => 'stub console failure' });
+      handlers.get('console')?.(consoleMessage('stub console failure'));
       handlers.get('pageerror')?.(new Error('stub page failure'));
       handlers.get('requestfailed')?.({ method: () => 'GET', url: () => 'http://stub/asset.js' });
       return Promise.reject(options.gotoFailure);
@@ -354,6 +367,82 @@ it('keeps the original failure and its browser evidence when closing the browser
   expect(JSON.stringify(failure.evidence)).not.toContain('stub-password');
 });
 
+const UNLOAD = 'Permissions policy violation: unload is not allowed in this document.';
+const ORIGIN = 'http://127.0.0.1:1';
+const MOUNT = `${ORIGIN}/sidebar/onlyoffice/ds/9.4.0-c83aecd3de42866b80ccf786af6354d6/`;
+const DOCX_MAIN = 'web-apps/apps/documenteditor/main/app/controller/Main.js';
+/** #671's measured sources: 0-based `location().line`, the issue's 1-based line minus one. */
+const MEASURED = [
+  [DOCX_MAIN, 2145],
+  ['web-apps/apps/spreadsheeteditor/main/app/controller/Main.js', 1785],
+  ['web-apps/apps/presentationeditor/main/app/controller/Main.js', 1638],
+  ['sdkjs/cell/sdk-all.js', 465226],
+  ['sdkjs-plugins/v1/plugins.js', 39],
+] as const;
+// A Document Server script URL as Chromium reports it, its cache query included.
+const script = (path: string) => `${MOUNT}${path}?_dc=0`;
+
+it('pins the measured Document Server unload sources', () => {
+  expect(DS_UNLOAD_SOURCES).toEqual(new Map(MEASURED));
+});
+
+it.each(MEASURED)('allows the unload report from %s at line %d by its source', (path, line) => {
+  const source = `${path}:${String(line)}`;
+
+  expect(recordedError(consoleMessage(UNLOAD, script(path), line), ORIGIN)).toEqual({
+    unload: source,
+  });
+  expect(scrub(source)).toBe(source);
+});
+
+it.each([
+  ['the text with a character appended', consoleMessage(`${UNLOAD}x`, script(DOCX_MAIN), 2145)],
+  ['a truncated text', consoleMessage(UNLOAD.slice(0, -1), script(DOCX_MAIN), 2145)],
+  [
+    'another origin',
+    consoleMessage(UNLOAD, script(DOCX_MAIN).replace(ORIGIN, 'http://127.0.0.2:1'), 2145),
+  ],
+  ['version 9.4.1', consoleMessage(UNLOAD, script(DOCX_MAIN).replace('/9.4.0-', '/9.4.1-'), 2145)],
+  [
+    'an unknown script at a measured line',
+    consoleMessage(UNLOAD, script('web-apps/apps/pdfeditor/main/app/controller/Main.js'), 2145),
+  ],
+  ['a known script at another measured line', consoleMessage(UNLOAD, script(DOCX_MAIN), 1785)],
+  ['an empty location URL', consoleMessage(UNLOAD, '', 2145)],
+  ['an ordinary error', consoleMessage('Uncaught TypeError: x', script(DOCX_MAIN), 2145)],
+])('keeps %s a console error', (_case, message) => {
+  expect(recordedError(message, ORIGIN)).toEqual({ error: message.text() });
+});
+
+it('records nothing of a message that is not an error', () => {
+  const warning = consoleMessage(UNLOAD, script(DOCX_MAIN), 2145, 'warning');
+
+  expect(recordedError(warning, ORIGIN)).toBeUndefined();
+});
+
+it('routes an allowed unload report out of the console errors and keeps every other in order', async () => {
+  const stub = stubBrowser({
+    onSend: () => undefined,
+    console: [
+      consoleMessage(UNLOAD, script(DOCX_MAIN), 2145),
+      consoleMessage(UNLOAD, script('sdkjs/word/sdk-all.js'), 2145),
+      consoleMessage(UNLOAD, script(DOCX_MAIN), 2146),
+      consoleMessage('stub info', '', 0, 'info'),
+      consoleMessage('Uncaught TypeError: x'),
+    ],
+  });
+
+  const evidence = await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'unload', failure: 'unload-failure' },
+    () => Promise.resolve(),
+    stub.launch,
+  );
+
+  expect(evidence.unloadViolations).toEqual([`${DOCX_MAIN}:2145`]);
+  expect(evidence.consoleErrors).toEqual([UNLOAD, UNLOAD, 'Uncaught TypeError: x']);
+});
+
 it('hands every response of the observed session to the observer, and none after teardown', async () => {
   const stub = stubBrowser({ onSend: () => undefined });
   const seen: unknown[] = [];
@@ -535,6 +624,7 @@ const LEAKED = [KEY, 'EIO=4', 'transport='];
 const leaky = () => ({
   screenshots: ['office-editor-docx-failure.png'],
   consoleErrors: [`WebSocket connection to '${SOCKET}' failed: net::ERR_CONNECTION_REFUSED`],
+  unloadViolations: ['sdkjs/cell/sdk-all.js:465226', 'sdkjs-plugins/v1/plugins.js:39'],
   pageErrors: [`Uncaught Error: socket /doc/${KEY}/c/ closed`],
   failedRequests: [`GET ${POLL}`],
   externalRequests: [`http://127.0.0.2:1/doc/${KEY}/c/?EIO=4`],
@@ -622,6 +712,7 @@ it('folds the scrubbed cause chain into its message and keeps no cause and no ra
     consoleErrors: [
       "WebSocket connection to 'ws://127.0.0.1:1/doc/<redacted>/c/' failed: net::ERR_CONNECTION_REFUSED",
     ],
+    unloadViolations: ['sdkjs/cell/sdk-all.js:465226', 'sdkjs-plugins/v1/plugins.js:39'],
     pageErrors: ['Uncaught Error: socket /doc/<redacted>/c/ closed'],
     failedRequests: ['GET http://127.0.0.1:1/doc/<redacted>/c/'],
     externalRequests: ['http://127.0.0.2:1/doc/<redacted>/c/'],
