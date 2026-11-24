@@ -18,6 +18,7 @@ import {
   classifyOwnerChildren,
   publishedCommand,
   UNPUBLISHED_COMMAND_RELEASE,
+  waitFor,
 } from './trusted-docker-uncaptured-fixture.ts';
 import type { ProcessRow } from './trusted-docker-uncaptured-fixture.ts';
 import { groupIsAbsent, groupSettlesAfterClose } from '../../scripts/trusted-docker-record.mjs';
@@ -103,13 +104,6 @@ const errorTree = (error: unknown): unknown =>
     ? { message: error.message, errors: error.errors.map(errorTree) }
     : String(error);
 
-async function waitFor(path: string, milliseconds: number, missing: string) {
-  for (const until = Date.now() + milliseconds; !existsSync(path);) {
-    if (Date.now() >= until) throw new Error(missing);
-    await delay(50);
-  }
-}
-
 /**
  * A captured start whose owner spawned its command but published no child.json within the
  * identity wait. With `release`, the owner is released after the expiry and writes child.json
@@ -140,14 +134,18 @@ async function unpublishedIdentity(release: boolean) {
         const request = record(JSON.parse(readFileSync(join(root, 'request.json'), 'utf8')));
         // A ready leaf has passed its owner checks and holds, so only a retirement ends its group.
         const leaf = join(String(request.temporary), 'child-ready.json');
-        await waitFor(leaf, HELD_LEAF_MS, 'Held owner launched no ready command');
+        await waitFor(() => existsSync(leaf), HELD_LEAF_MS, 'Held owner launched no ready command');
         const command = publishedCommand(fixture.repository);
         if (command === undefined) throw new Error('Held owner published no command');
         pids.command = command;
         expect(groupIsAbsent(pids.command)).toBe(false);
         if (release) {
           writeFileSync(join(fixture.repository, UNPUBLISHED_COMMAND_RELEASE), 'release');
-          await waitFor(pids.receipt, LATE_RECEIPT_MS, 'Released owner wrote no child.json');
+          await waitFor(
+            () => existsSync(pids.receipt),
+            LATE_RECEIPT_MS,
+            'Released owner wrote no child.json',
+          );
         }
         expect(existsSync(pids.receipt)).toBe(release);
         throw expired;

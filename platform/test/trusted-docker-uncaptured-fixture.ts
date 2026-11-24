@@ -42,6 +42,18 @@ export function publishedCommand(repository: string) {
   return existsSync(path) ? Number(record(JSON.parse(readFileSync(path, 'utf8'))).pid) : undefined;
 }
 
+/** The `owner.pid` a custody receipt (launch.json, child.json) records. */
+export const ownerOf = (path: string) =>
+  Number(record(record(JSON.parse(readFileSync(path, 'utf8')) as unknown).owner).pid);
+
+/** Polls every 50ms until `ready` holds; throws `missing` once `milliseconds` pass without it. */
+export async function waitFor(ready: () => boolean, milliseconds: number, missing: string) {
+  for (const until = Date.now() + milliseconds; !ready();) {
+    if (Date.now() >= until) throw new Error(missing);
+    await delay(50);
+  }
+}
+
 export interface ProcessRow {
   readonly pid: number;
   readonly ppid: number;
