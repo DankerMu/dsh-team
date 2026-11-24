@@ -37,6 +37,8 @@ Issue #690. Line numbers refer to main `139a261`; the issue cited `5102bbe`.
   - **(d) Single-process kill EPERM.** `settle(identity, false)` with `kill(pid, 'SIGKILL')` throwing EPERM still rejects with that EPERM.
   - **(e) Another code (EINVAL) from the group probe** still rejects at once.
   - **(f) The group kill throws EINVAL**, and `settle(identity, true)` rejects at once with it.
+  - **(g) The group kill throws EPERM and leaves the group alive.** The leader stays live, so the probes short-circuit. `settle` rejects at the 5 s window with the stalled message, with the kill's EPERM as `cause`. This was added during implementation, because no other case falsified the kill-seeded `denied`.
+  - **Timing.** The "at once" cases (d)–(f) assert the error's identity, not an elapsed bound. Correct code can exceed a fixed bound under load, and a mutant that tolerated the code would wait the 5 s window out and then fail the identity assertion.
   - **Spy rules.**
     - The spy matches the exact pid sign and signal, and passes every other call through to the real `process.kill`.
     - It is restored in `finally`, before the case's real cleanup retires the tracked group.
@@ -52,7 +54,7 @@ Fixture level: standard
 Upstream suggested level: absent
 Blast radius: the custody fixture's process retirement; a too-broad EPERM tolerance would wait out the budget on a real permission error (bounded, attributed), and must never apply to the single-process kill
 Selected risk packs: Concurrency / shared state / ordering (process-group retirement on Darwin); Error handling / rollback / partial outputs (the expiry keeps the EPERM as cause, other codes still throw)
-Evidence floor: cases (a)–(b) red before the fix and green after; (c)–(f) green, and red under mutants (EPERM tolerated for the single-process kill; any code tolerated in the probe; any code tolerated by the group kill; cause dropped); trusted-docker fixture, custody, retirement and uncaptured integration files green; pnpm check; exact-head VPS lane
+Evidence floor: cases (a)–(b) red before the fix and green after; (c)–(g) green, and red under mutants (EPERM tolerated for the single-process kill; any code tolerated in the probe; any code tolerated by the group kill; cause dropped; the kill's EPERM not seeded); trusted-docker fixture, custody, retirement and uncaptured integration files green; pnpm check; exact-head VPS lane
 ```
 
 ## Capabilities
@@ -67,7 +69,7 @@ Evidence floor: cases (a)–(b) red before the fix and green after; (c)–(f) gr
 
 ## Acceptance-criteria mapping (#690)
 
-- `settle(identity, true)` with an EPERM group kill does not throw and enters the wait: (a). At expiry, the stalled error with pid and phase, the EPERM as cause: (c).
+- `settle(identity, true)` with an EPERM group kill does not throw and enters the wait: (a). At expiry, the stalled error with pid and phase, the EPERM as cause: (c), (g).
 - The absence wait tolerates EPERM as present, and other codes still throw: (b), (e).
 - `:709` (and its sibling, uncaptured `:67`) does not throw EPERM on a zombie group: `groupSettlesAfterClose`.
 - A deterministic regression case, red before and green after; the single-process EPERM still throws: (a), (b), (d); the group kill's other codes still throw: (f).

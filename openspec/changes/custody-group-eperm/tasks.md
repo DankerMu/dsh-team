@@ -1,6 +1,6 @@
 ## 1. Implementation
 
-- [x] 1.1 Cases (a)–(f) in `trusted-docker-fixture.integration.test.ts`, with `fixtureProcessCustody` exported and the spy rules of the proposal. Run (a) and (b) red against the unchanged `settle` and record them.
+- [x] 1.1 Cases (a)–(g) in `trusted-docker-fixture.integration.test.ts`, with `fixtureProcessCustody` exported and the spy rules of the proposal. Run (a) and (b) red against the unchanged `settle` and record them.
 - [x] 1.2 `settle` and `stalled`:
   - the group kill treats EPERM as retiring and seeds `denied`;
   - the group probe treats EPERM as present;
@@ -11,7 +11,8 @@
   - EPERM tolerated for the single-process kill → (d);
   - every code tolerated by the probe → (e);
   - every code tolerated by the group kill → (f);
-  - `cause` dropped → (c).
+  - `cause` dropped → (c);
+  - the kill's EPERM not seeded into `denied` → (g).
 
 ## 2. Verification
 
