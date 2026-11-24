@@ -221,12 +221,13 @@ The custody entrypoint SHALL run the unchanged original full Docker discovery an
 
 ### Requirement: Command settlement waits a bounded window for genuine group absence
 
-After the owned command's actual close, trusted custody SHALL observe its process group within one bounded observation window and SHALL record the command settled only on a genuine process-group absence (`ESRCH`). A group still present when the window expires SHALL remain unsettled. An EPERM observation SHALL never count as absence and SHALL be observed again within the window; if the final observation at expiry is EPERM the existing identity failure SHALL be recorded. Any other non-absence error SHALL keep the existing immediate identity failure. The window SHALL NOT retry, re-run or signal the command.
+After the owned command's actual close, trusted custody SHALL observe its process group within one bounded observation window and SHALL record the command settled only on a genuine process-group absence (`ESRCH`). A group still present when the window expires SHALL remain unsettled. An EPERM observation SHALL never count as absence and SHALL be observed again within the window; if the final observation at expiry is EPERM the existing identity failure SHALL be recorded. Any other non-absence error SHALL keep the existing immediate identity failure. The window SHALL NOT retry, re-run or signal the command. The custody regression for a briefly outliving member SHALL prove that the owner's first post-close group observation saw the group present (returned without error) and that the member exited after it.
 
 #### Scenario: A group member briefly outlives the command
 
 - **WHEN** the command closes while a member of its process group is still running or not yet reaped, and that member exits within the window
 - **THEN** the published terminal records `settled: true`, cleanup is assessed normally, and a duplicate cancellation reports the terminal result with exit 0
+- **AND** the regression observes at least one post-close group poll that returned without error, no group poll before close, and a member exit later than the first post-close observation; a member that exits before close fails the regression
 
 #### Scenario: The group does not become absent
 
@@ -363,3 +364,82 @@ When `reserveVerificationDockerObserver` rejects before reserving any submission
 
 - **WHEN** a predecessor generation with an unsettled participant and outstanding request markers is still running, and a second reservation for the same authority is rejected
 - **THEN** the rejected reservation writes, removes or settles no pending marker and leaves the current manifest unchanged
+
+### Requirement: Process birth observation does not block the owner
+
+On Darwin, the trusted-verification process birth observation SHALL run without blocking the observing process's event loop, and SHALL keep the native query's bounded timeout, its forced kill on timeout or oversized output, and its existing outcomes and fail-closed rule.
+
+#### Scenario: A hung native observation does not freeze the owner
+
+- **WHEN** the native birth query does not answer
+- **THEN** a short timer in the same process fires before the observation settles
+- **AND** the observation rejects as unavailable no earlier than its bound, and the query process has been killed
+
+#### Scenario: A missing interpreter is not absence
+
+- **WHEN** the native query cannot be started
+- **THEN** the observation rejects as unavailable without an absence code, and a liveness check does not report the process gone
+
+### Requirement: Uncaptured custody cleanup retires an unpublished command group
+
+When the trusted custody fixture's cleanup finds an invocation whose start was never captured, it SHALL first confirm the owner's identity and freeze the owner.
+
+While the owner is frozen, cleanup SHALL bind the identity of the command the owner started. The identity comes from the command receipt, or, when no receipt exists, from the owner's direct child that leads its own process group and runs the verification command.
+
+Cleanup SHALL then retire the owner, and SHALL retire the command's group after the owner. It SHALL NOT leave the owner stopped, except when the owner's identity can no longer be confirmed after its retirement failed. In that case it SHALL NOT signal the unconfirmed pid, and SHALL report the retirement failure.
+
+Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence.
+
+#### Scenario: Owner killed after starting its command but before publishing it
+
+- **WHEN** a start is abandoned at the case deadline while its owner has started the command but not yet written its receipt
+- **THEN** cleanup retires the owner and then the command's process group
+- **AND** the uncaptured entry names the command
+
+#### Scenario: No command was started
+
+- **WHEN** the frozen, identity-bound owner has no started or in-flight command
+- **THEN** cleanup retires the owner and reports that no command was started
+
+#### Scenario: Identification is uncertain
+
+- **WHEN** a child of the owner is still in flight, a child is ambiguous, the scan fails, or the owner is gone before it is frozen and no receipt exists
+- **THEN** cleanup keeps the authority, still kills an identity-bound owner, and does not report the command group absent
+
+### Requirement: custody fixture 把僵尸进程组的 EPERM 当作正在退出
+
+custody fixture 结算进程组时，MUST 把组信号和组探测返回的 EPERM 当作「组还在、正在退出」，在现有的 `process retirement` 预算内继续等待：
+
+- 完整的 `process retirement` 窗口到期时（cleanup 已预留预算），抛出带 phase、pid 和组状态的 stalled 错误，最后一次 EPERM 作为 `cause`；用例期限先到时，报的是 budget 自己带 phase 的期限错误；
+- 其他错误码不再等待，直接以该错误失败；
+- 单进程的 kill 仍然只容忍 ESRCH。
+
+#### Scenario: 组信号返回 EPERM
+
+- **WHEN** 结算一个组，`kill(-pid)` 返回 EPERM，组随后消失
+- **THEN** 结算成功，不抛出 `kill EPERM`
+
+#### Scenario: 组探测短暂返回 EPERM
+
+- **WHEN** 组探测先返回几次 EPERM，随后组消失
+- **THEN** 结算在预算内成功
+
+#### Scenario: 组探测持续返回 EPERM
+
+- **WHEN** 组探测在完整的 `process retirement` 窗口内都返回 EPERM
+- **THEN** 结算以 stalled 错误失败，错误带 phase 和 pid，`cause` 是那次 EPERM
+
+#### Scenario: 组信号返回 EPERM 而组没有退出
+
+- **WHEN** 结算一个组，`kill(-pid)` 返回 EPERM，组在完整窗口内一直存在
+- **THEN** 结算以 stalled 错误失败，`cause` 是这次 kill 的 EPERM
+
+#### Scenario: 组信号或组探测返回其他错误码
+
+- **WHEN** 组信号或组探测返回 EPERM、ESRCH 以外的错误码
+- **THEN** 结算不再等待，以该错误失败
+
+#### Scenario: 单进程 kill 返回 EPERM
+
+- **WHEN** 结算单个进程时 kill 返回 EPERM
+- **THEN** 结算不再等待，以该 EPERM 失败

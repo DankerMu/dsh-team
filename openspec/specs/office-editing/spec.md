@@ -78,12 +78,17 @@
 
 ### Requirement: 编辑器打开时 Agent 改文件的表现
 
-编辑器打开期间 Agent 改写同一文件时，系统的表现 MUST 被验证并写入员工文档：编辑器是否刷新到 Agent 写入的内容，或员工需要重新打开。无论哪种表现，员工随后保存时 MUST 遵守后写覆盖的规则，不产生副本。
+编辑器打开期间 Agent 改写同一文件时，系统的表现 MUST 被验证并写入员工文档：编辑器是否刷新到 Agent 写入的内容，或员工需要重新打开。验证 MUST 包括员工键入的内容尚未送达编辑服务时文件被改写的情形。无论哪种表现，员工随后保存时 MUST 遵守后写覆盖的规则，不产生副本。
 
 #### Scenario: Agent 写入后员工可以看到新内容
 
 - **WHEN** 员工打开 `总结.docx` 后，Agent 改写该文件，员工按文档说明刷新或重新打开编辑器
 - **THEN** 编辑器显示 Agent 写入的内容
+
+#### Scenario: 键入尚未送达时文件被改写
+
+- **WHEN** 员工在编辑器里键入、内容还没有送达编辑服务时该文件被改写，员工随后在同一编辑器里继续键入并按 Ctrl+S 保存
+- **THEN** 最终文件包含员工最后一次保存的内容，`/data/work` 中没有副本，员工文档写明改写前已键入的内容去向
 
 ### Requirement: 旧格式只读预览
 
@@ -167,3 +172,36 @@ ONLYOFFICE 插件实际使用的 Document Server 地址、JWT 和实例地址 MU
 
 - **WHEN** 管理员在后台把 Office 切到外部 Document Server，填写一个在实例内拒绝连接的地址和 JWT，员工实例重启后在 Session 中从文件区打开一个 DOCX
 - **THEN** 员工在有限等待后看到「打开失败」和「无法加载 ONLYOFFICE 编辑器脚本」，不是空白页，也不再显示「正在打开 ONLYOFFICE …」；该 DOCX 的内容不变，聊天输入框可用，文件区仍列出该文件
+
+### Requirement: Forgotten 副本的去向有实测并写入文档
+
+本机全栈车道 SHALL 在保存被拒后会话关闭的 Office 用例中，记录该会话的 key 是否在自带 Document Server 的 forgotten 存储里留下副本：
+
+- 「AI 改写正在编辑的文件」的 `clean`、`unsaved` 和 typing 用例；
+- forgotten 用例的恢复会话。
+
+证据只含计数和布尔值，SHALL NOT 含 key、JWT 或文件内容。
+
+这些用例成功结束时 SHALL 移除自己留下的副本，并断言该 key 的副本数为 0、列表不再含该 key。计数按 key 统计：其他车道的会话异步关闭，会在任意时刻往存储里落下自己的副本，全局目录数不能作基线。失败时 SHALL 尽力清理，并原样抛出原错误。
+
+员工指南和部署文档 SHALL 与实测一致，写明：
+
+- 副本的位置；
+- 副本没有过期；
+- 只有运营方能访问；
+- 运营方的清理办法，包括 Document Server 匿名卷在一次性清理中的处置。
+
+#### Scenario: AI 改写丢弃了未保存的编辑
+
+- **WHEN** 员工在 ONLYOFFICE 中有未保存的编辑，Agent 改写了同一个 DOCX，编辑器换到改写后的版本
+- **THEN** 车道在结算窗口后记录旧 key 的 forgotten 副本是否存在（该 key 的副本数和列表布尔值），随后移除它，该 key 的副本数为 0，列表不再含该 key
+
+#### Scenario: forgotten 用例成功结束
+
+- **WHEN** forgotten 用例完成恢复
+- **THEN** 用例记录恢复会话关闭后 A 的 key 是否仍有副本，移除后该 key 的副本数为 0
+
+#### Scenario: 用例在已知 key 之后失败
+
+- **WHEN** 改写、typing 或 forgotten 用例在读到会话 key 之后失败
+- **THEN** 用例在结算窗口后尽力移除该 key 的副本，并原样抛出原错误，不包装、不改写消息

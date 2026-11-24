@@ -8,12 +8,12 @@ Allow the repository's standard OpenSpec completion records without permitting u
 
 ### Requirement: Standard managed archive component is accepted
 
-The naming gate MUST allow the managed archive component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` paths in both path-argument and staged-index modes. The exception MUST be explicitly configured in the existing canonical policy source and MUST NOT apply to dot-segment aliases, missing descendants or other archive layouts.
+The naming gate MUST allow the managed archive component in root-relative `openspec/changes/archive/YYYY-MM-DD-<kebab-change>/<file>` paths in every entrypoint: path-argument, staged-index and commit-range. The exception MUST be explicitly configured in the existing canonical policy source. It MUST NOT apply to dot-segment aliases, missing descendants or other archive layouts.
 
 #### Scenario: Normal OpenSpec completion artifacts
 
 - **WHEN** proposal, tasks, metadata or nested capability specification files are checked beneath a standard dated OpenSpec change archive
-- **THEN** the managed archive component does not cause rejection in either entrypoint
+- **THEN** the managed archive component does not cause rejection in any entrypoint
 
 #### Scenario: Similar but noncanonical archive location
 
@@ -22,12 +22,18 @@ The naming gate MUST allow the managed archive component in root-relative `opens
 
 ### Requirement: An archive exception never bypasses other restrictions
 
-The naming gate MUST continue to reject forbidden suffixes in the original full path, other scratchpad components below an otherwise valid archive, and unrelated invalid staged files. Both entrypoints MUST share the same path-policy decision while preserving their existing diagnostics and exit codes. An absent exception configuration MUST retain existing strict rejection.
+The naming gate MUST continue to reject:
+
+- forbidden suffixes in the original full path;
+- other scratchpad components below an otherwise valid archive;
+- unrelated invalid staged files.
+
+Every entrypoint MUST share the same path-policy decision while preserving its existing diagnostics and exit codes. The entrypoints are path-argument, staged-index, and the commit-range mode used by CI. An absent exception configuration MUST retain existing strict rejection.
 
 #### Scenario: Forbidden artifact inside an otherwise eligible archive
 
 - **WHEN** a standard archive contains a nested scratchpad directory or forbidden file suffix
-- **THEN** both entrypoints reject the path for the applicable original restriction
+- **THEN** every entrypoint rejects the path for the applicable original restriction
 
 #### Scenario: Valid archive mixed with an unrelated violation
 
