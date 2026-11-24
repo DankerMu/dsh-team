@@ -10,7 +10,7 @@
 
 ## 2. Verification
 
-- [ ] 2.1 The custody, retirement and uncaptured integration files green; `pnpm lint` (`max-lines` counts for C and F reported), `pnpm typecheck`, `pnpm check`.
-- [ ] 2.2 Five loaded full `pnpm test:integration` runs on the final constants (load ≥ 13 and < 67), with each run's load and result in the PR.
-- [ ] 2.3 PR with `Refs #687`, naming slice 3.
-- [ ] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.
+- [x] 2.1 The custody, retirement and uncaptured integration files green; `pnpm lint` (`max-lines` counts for C and F reported), `pnpm typecheck`, `pnpm check`.
+- [x] 2.2 Five loaded full `pnpm test:integration` runs on the final constants (load ≥ 13 and < 67), with each run's load and result in the PR.
+- [x] 2.3 PR with `Refs #687`, naming slice 3.
+- [x] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.

@@ -71,3 +71,53 @@ Docker evidence 门禁、用户卷验收和 `dev:bg` 归属这三组集成用例
 
 - **WHEN** 诱导归属超时的用例里，`build:web` 在 5 s 窗口之后才产出 `index.html`
 - **THEN** 等待持续到 `lock` 与 `webBuild` 都被观察到（预检失败的用例还要等到命令关闭），再抛出超时证据；held 预检的命令此时仍在运行
+
+### Requirement: Custody held cases keep budgets with a measured basis, and the slow-owner case waits for the start's files
+
+The trusted-docker custody held cases SHALL share one case budget constant for both their fixture deadline and their runner bound.
+
+- That constant SHALL NOT be lower than the measured maximum under load of a held case's whole callback, plus a stated margin. Its comment SHALL state the load range, the maximum and the margin.
+- Cleanup SHALL fit within the reserve.
+- The terminal-wait case's fixture deadline SHALL be shorter than the terminal wait's own cap.
+- The slow-owner case SHALL read the invocation's files only after a bounded wait observes them.
+
+#### Scenario: Setup is slow under load
+
+- **WHEN** the integration project runs at a 1-minute load within the measured range
+- **THEN** each held case's step under test and the steps after it complete inside the case budget
+
+#### Scenario: The terminal-wait case reaches leaf readiness
+
+- **WHEN** the terminal-wait case reaches leaf readiness
+- **THEN** less than the terminal wait's cap remains, because its deadline is below that cap, and the case deadline, not the cap, ends the terminal wait
+
+#### Scenario: The killed start has not yet written its files
+
+- **WHEN** the slow-owner case's start is killed before the start CLI has created the invocation directory and `launch.json`
+- **THEN** the case waits for them inside its launch window and reads them afterwards, or fails with `Slow start published no launch`
+
+### Requirement: Secondary-table integration cases declare measured budgets and name their stalls
+
+The browser-exec, login-throttle, ragflow-proxy-auth and gateway-websocket integration cases SHALL each run under a declared, named case budget, never vitest's implicit default. Each budget's comment SHALL state its measured basis.
+
+Each of the following waits SHALL end strictly before the case budget, so that a stall fails with an error naming the stalled step, not with the runner's timeout: synchronous children, the browser client timer, each login and identity request of the throttle cases, each rejection request of the proxy rejection case, and each HTTP peer observation. The remaining waits (other single-request proxy cases, response body reads, listener start and close, in-process hashing, directory removal) are covered by the declared budget alone.
+
+#### Scenario: A browser client hangs
+
+- **WHEN** a browser-exec case's client never exits
+- **THEN** the client timer fails the case with `Owned browser protocol client timeout` before the case budget ends
+
+#### Scenario: A browser-exec registration child stalls
+
+- **WHEN** the audit registration child of a browser-exec case does not exit
+- **THEN** it is killed at the case deadline, and the failure names the registration phase
+
+#### Scenario: A login or a proxy request stalls
+
+- **WHEN** one login in a throttle case, or one rejection's proxy request, never answers
+- **THEN** the case fails naming that attempt or that rejection label before its budget ends
+
+#### Scenario: A websocket peer stalls
+
+- **WHEN** an HTTP peer observation in a websocket case never settles
+- **THEN** the observation fails with its own error before the case budget ends

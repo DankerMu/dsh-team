@@ -10,7 +10,7 @@
 
 ## 2. Verification
 
-- [ ] 2.1 The four files green; `pnpm lint` (`max-lines` for the websocket file), `pnpm typecheck`, `pnpm check`.
-- [ ] 2.2 Five loaded full `pnpm test:integration` runs (load ≥ 13 and < 67), with each run's load and result in the PR.
-- [ ] 2.3 PR with `Closes #687`, opened after #712 merges.
-- [ ] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.
+- [x] 2.1 The four files green; `pnpm lint` (`max-lines` for the websocket file), `pnpm typecheck`, `pnpm check`.
+- [x] 2.2 Five loaded full `pnpm test:integration` runs (load ≥ 13 and < 67), with each run's load and result in the PR.
+- [x] 2.3 PR with `Closes #687`, opened after #712 merges.
+- [x] 2.4 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`, with confirmed cleanup.
