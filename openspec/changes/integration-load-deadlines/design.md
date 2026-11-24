@@ -105,7 +105,7 @@ The shape may differ. The behaviour is fixed:
 - **`:644`, `closedMs < 5_000`, is relaxed on purpose.**
   - The failed preflight closes the command only after `build:web`, so under load the close is necessarily after a 5 s window, whatever the fix.
   - Kept: `:589`'s `waitedMs >= windowMs`, which every run asserts and which carries the property "an early exit does not shorten the wait"; `closedMs` is a number; the state is `closed`.
-  - Lost: the guarantee that a given run closed before the window ended. The loaded and unloaded runs record each `closedMs`, so the PR shows that the unloaded runs still close inside 5 s.
+  - Lost: the guarantee that a given run closed before the window ended. The unloaded timing run records `closedMs`, so the PR shows that an unloaded run still closes inside 5 s.
   - `closedMs <= waitedMs` is not added: it would always hold.
 - **New committed case, the distinguishing proof for #4.**
   - The held preflight with `windowMs: 100` and the held `awaited`.
@@ -129,7 +129,7 @@ The shape may differ. The behaviour is fixed:
    - (b) #1's `runGate` back to a bare `spawnSync` with `timeout: 5000`, keeping `hangGitHub` → the hang case shows `status: null` and no phase;
    - (c) #4's `awaited` ignored → the 100 ms-window case.
 3. **Static checks.** The three files green alone; `pnpm lint`, `pnpm typecheck`, `pnpm check`.
-4. **Five loaded runs** of the full `pnpm test:integration`. Load is generated as in #656 slice 2: bounded `yes` generators, with the 1-minute load ≥ 13 at each start and < 67. For each run record the load before and after, the result, and the induced cases' `waitedMs` and `closedMs`. One unloaded run of `instance-lifecycle.integration.test.ts` records the same two values. Any failure in the three files stops the slice and is reported.
+4. **Five loaded runs** of the full `pnpm test:integration`. Load is generated as in #656 slice 2: bounded `yes` generators, with the 1-minute load ≥ 13 at each start and < 67. For each run record the load before and after, and the result. The committed cases print no timings when they pass, so the induced cases' `waitedMs` and `closedMs` are recorded once, in an unloaded run with temporary stderr instrumentation that is then reverted. Any failure in the three files stops the slice and is reported.
 5. **Trusted VPS.** Exact-head `pnpm test:docker` + `pnpm test:deploy`.
 
 ## Limits
