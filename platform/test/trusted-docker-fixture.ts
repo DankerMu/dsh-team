@@ -717,7 +717,6 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
       device: temporaryIdentity.dev,
       inode: temporaryIdentity.ino,
     };
-    issued.set(invocation, authority);
     const since = Date.now();
     const until = since + budget.limit('command identity', 10_000);
     const childPath = join(invocationRoot, 'child.json');
@@ -726,13 +725,15 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
         throw budget.stalled('Command identity unpublished', since, authority.owner.pid);
       await delay(20);
     }
-    if (existsSync(childPath)) {
-      const child: unknown = JSON.parse(readFileSync(childPath, 'utf8'));
-      issued.set(invocation, {
-        ...authority,
-        child: Object.freeze({ ...record(record(child).owner) }),
-      });
-    }
+    // Recorded only now: a throw above leaves the owner to cleanup's uncaptured claim (#692).
+    const receipt = existsSync(childPath)
+      ? {
+          child: Object.freeze({
+            ...record(record(JSON.parse(readFileSync(childPath, 'utf8'))).owner),
+          }),
+        }
+      : {};
+    issued.set(invocation, { ...authority, ...receipt });
     return result;
   };
   const start = (extraEnvironment: NodeJS.ProcessEnv = {}) =>
@@ -767,8 +768,9 @@ function createTrustedDockerFixture(mode: CustodyMode, scenario?: RetirementScen
     };
     const names = existsSync(custodyBase) ? readdirSync(custodyBase) : [];
     const reports: string[] = [];
-    // A start killed at the deadline never captured its owner: freeze it, bind its command, then
-    // settle it, so the loop below retires that command's group like a captured invocation's.
+    // A start killed at the deadline, or a captured start whose command identity was never
+    // recorded, is not issued: freeze its owner, bind its command, then settle the owner, so the
+    // loop below retires that command's group like a captured invocation's.
     for (const name of names.filter((candidate) => !issued.has(candidate))) {
       const { report, authority, failure } = await claimUncaptured(join(custodyBase, name), {
         live: processes.identityLive,
