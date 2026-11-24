@@ -211,6 +211,6 @@ unload 违规放行（#671，用户 2026-11-23 决定）：Chromium 158 起，ON
 | `sdkjs/cell/sdk-all.js` | 465226 | XLSX，每次重新拉取时再报 |
 | `sdkjs-plugins/v1/plugins.js` | 39 | 每个编辑器 |
 
-同一文本来自其他脚本、行号、版本或 origin，仍计入控制台错误，由各场景原有的白名单拒绝；Document Server 升级后要重新实测、重新决定。Chromium 158（Playwright 1.65）在 hints、编辑器、forgotten、改写和 idle 会话报这条，external 会话不报。
+同一文本来自其他脚本、行号、版本或 origin，仍计入控制台错误，由各场景原有的白名单拒绝；Document Server 升级后要重新实测、重新决定。Chromium 158（Playwright 1.65）在编辑器、forgotten、改写和 idle 会话报这条；hints 会话只在关闭前编辑器已注册时报（d721634 的 exact-head 运行为空，此前的测量运行有）；external 会话不报。
 
 最后注明：本机 arm64 结果只作功能证据，不代表 amd64 生产环境，也不作隔离证据。
