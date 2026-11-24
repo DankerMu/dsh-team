@@ -510,7 +510,7 @@ it('diffs the failed and external requests of the session scrubbed', async () =>
 });
 
 const UNLOAD = 'Permissions policy violation: unload is not allowed in this document.';
-/** A console message as Playwright 1.63 hands it over: type, text and 0-based location. */
+/** A console message as Playwright 1.65 hands it over: type, text and 0-based location. */
 const consoleMessage = (text: string, url = '', line = 0) => ({
   type: () => 'error',
   text: () => text,
