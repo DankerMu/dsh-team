@@ -6,8 +6,8 @@ Issue #671, decision (b). Line numbers are on main `200ed94`. Measurement and de
 
 - **Chromium 158 breaks the Office stack lanes.** With Playwright 1.65 (#670), ONLYOFFICE 9.4.0 reports `Permissions policy violation: unload is not allowed in this document.` as a console error in every Document Server editing session. The report comes when `unload` is registered, about 0.3–1 s after the editor config arrives, not when the session closes. The lanes' exact console-error allowlists reject it:
   - hints: `serviceWorkerRefused` (`office-hints-stack-fixture.ts:117`, checked at `:407`). The measuring run 1 failed here.
-  - editor and rewrite: `editorErrorsAllowed` (`office-editor-stack-fixture.ts:157-163`).
-  - `openHinted`'s own collector (`office-hints-stack-fixture.ts:168-170`) feeds the same matchers while waiting for the §48 refusal.
+  - editor, rewrite and idle: `editorErrorsAllowed` (`office-editor-stack-fixture.ts:161-167`).
+  - `openHinted`'s own collector (`office-hints-stack-fixture.ts:168-172`) feeds the same matchers while waiting for the §48 refusal. The report can arrive before the two §48 refusals, and `serviceWorkerRefused` then never holds, so the wait times out.
 - **Measured sources.** Each one is a Playwright `ConsoleMessage.location()` under the Document Server mount `/sidebar/onlyoffice/ds/9.4.0-<hash>/`, with a 0-based line:
 
   | script                                                         | line   | sessions                    |
@@ -25,21 +25,27 @@ Issue #671, decision (b). Line numbers are on main `200ed94`. Measurement and de
 
 ## What Changes
 
-- **One classifier in `stack-browser-fixture.ts`:** `documentServerUnload(text, location, origin)`. It returns the source as `<script path after the version segment>:<line>` when all of these hold:
-  - the text is the exact violation text;
-  - the location's origin is the platform's;
-  - its path is the mount with version `9.4.0` followed by one of the five measured scripts;
-  - its line is that script's measured line.
+- **One per-message classifier in `stack-browser-fixture.ts`:** `recordedError(message, origin)`. It takes a Playwright `ConsoleMessage` and returns one of three results:
+  - `undefined` for a message that is not `error`-type;
+  - `{ unload: '<script path after the version segment>:<line>' }` when all of these hold:
+    - the text is exactly the violation text;
+    - `location().url` is non-empty and its origin is the platform's;
+    - its pathname is the mount with version `9.4.0` followed by one of the five measured scripts;
+    - `location().line` is that script's measured line;
+  - `{ error: text }` otherwise.
 
-  Otherwise it returns `undefined`. The table lives next to it, with a comment naming #671 and the user decision.
+  The source table, `DS_UNLOAD_SOURCES`, lives next to it, with a comment naming #671 and the user decision.
 
-- **`workbenchSession` moves allowed reports out of `consoleErrors`.** Its console handler puts each allowed report's source into a new list, `StackBrowserEvidence.unloadViolations`. Every other error stays in `consoleErrors` as today, so each lane's existing exact matcher is unchanged and still rejects an unknown source.
-- **`openHinted`'s collector** drops allowed reports through the same classifier, so its §48 wait sees what `consoleErrors` will hold.
-- **Evidence:**
-  - `scrubbedEvidence` maps the new list like the others.
-  - Every Office evidence line that counts a session's lists also counts `unloadViolations`. These are `counted` in the editor fixture, which the editor and idle lines use, and the rewrite and hints lines' session summaries.
+- **Both console collectors call it and nothing else:**
+  - `workbenchSession`'s handler (`stack-browser-fixture.ts:283-285`) puts `unload` results into a new list, `StackBrowserEvidence.unloadViolations`, and `error` results into `consoleErrors` as today. Each lane's exact matcher is unchanged and still rejects an unknown source.
+  - `openHinted`'s collector (`office-hints-stack-fixture.ts:168-172`) keeps only `error` results, so its §48 wait sees what `consoleErrors` will hold.
+- **Evidence prints each source.**
+  - `counted` (`office-editor-stack-fixture.ts:170-173`) gains `unloadViolations: browser.unloadViolations`, the list itself, as `screenshots` is. That reaches the editor, rewrite (editor and agent sessions), idle and external lines, which all go through `counted`.
+  - `officeHintsLine` (`office-hints-stack-fixture.ts:136-140`), which prints no list today, gains `unloadViolations` as well. Its "never the browser lists" test changes its contract to that one list.
+  - Sources are fixed script paths with a line, the hash segment dropped. `scrub` leaves them unchanged, and `scrubbedEvidence` maps the list like the others.
   - `StackWorkbenchFailure`'s counts prefix is unchanged.
-- **Docs.** The `platform/test/README.md:92` evidence contract and `docs/LOCAL_STACK.md` § Office rows state the allowance, its source table and the decision.
+- **One lane assertion changes:** the read-back session's `counted(readBack)` `toEqual` (`office-editor-stack-fixture.ts:501-504`) expects `unloadViolations: []`. The read-back is a conversation and opens no Document Server.
+- **Docs.** The `platform/test/README.md:92` evidence contract and `docs/LOCAL_STACK.md`'s Office rows state the allowance, its source table and the decision.
 - **Not changed:**
   - the §48 ServiceWorker matcher, the §51.2 AI plugin allowance and every other lane matcher;
   - product code and the Playwright version. The bump stays #670's, which then runs `pnpm test:stack` on 1.65 (#671 AC5).
@@ -52,7 +58,7 @@ Fixture level: expanded
 Upstream suggested level: absent
 Blast radius: every stack browser session's console handling (StackBrowserEvidence gains a field); Office lanes' console matchers see the allowed reports removed; evidence lines gain a count
 Selected risk packs: Contract / compatibility (StackBrowserEvidence shape, evidence lines); Error handling (an unknown-source violation must still fail the lane)
-Evidence floor: classifier cases (each measured source allowed; wrong text, origin, version, path, line and a missing location rejected); workbenchSession and openHinted stand-in cases that route an allowed report to unloadViolations and keep an unknown-source one in consoleErrors; mutants per design.md; pnpm check; exact-head pnpm test:stack (Chromium 153: zero allowed reports) and VPS lane
+Evidence floor: recordedError cases (each measured source allowed; extended, truncated text, other origin, version, path, line, empty URL and non-error type handled); workbenchSession and openHinted stand-in cases that route an allowed report out and keep an unknown-source one; mutants (a)-(f) per design.md, each red; pnpm check; exact-head pnpm test:stack (Chromium 153: no allowed report) and VPS lane
 ```
 
 ## Capabilities
@@ -64,7 +70,9 @@ Evidence floor: classifier cases (each measured source allowed; wrong text, orig
 ## Impact
 
 - `platform/test/stack-browser-fixture.ts` and its integration test.
-- `platform/test/office-hints-stack-fixture.ts` (`openHinted`, the hints line), `office-editor-stack-fixture.ts` (`counted`), `office-rewrite-stack-fixture.ts` (its session line), plus the integration tests whose evidence literals gain the field.
+- `platform/test/office-hints-stack-fixture.ts` (`openHinted`, `officeHintsLine`) and its integration test, which gains a minimal stand-in page for `openHinted`.
+- `platform/test/office-editor-stack-fixture.ts` (`counted`, the read-back assertion).
+- The integration tests whose evidence literals or line expectations gain the field: editor, rewrite, idle, external, forgotten and hints.
 - `platform/test/README.md:92`, `docs/LOCAL_STACK.md`.
 
 ## Risk packs
@@ -76,7 +84,7 @@ Evidence floor: classifier cases (each measured source allowed; wrong text, orig
 ## Must preserve
 
 - Every other console error reaches `consoleErrors` unchanged, in order.
-- The §48 and §51.2 matchers and every lane's assertions, apart from the evidence literals gaining the field.
+- The §48 and §51.2 matchers and every lane's assertions. The exceptions are the evidence literals gaining the field and the read-back `toEqual` gaining `unloadViolations: []`.
 - On Chromium 153 (main's Playwright 1.63) no report is allowed, so `unloadViolations` is empty and every lane behaves as today.
 
 ## Acceptance-criteria mapping (#671)
@@ -84,5 +92,5 @@ Evidence floor: classifier cases (each measured source allowed; wrong text, orig
 - **AC1** (the hints session's mode and when the violation is reported) → done by measurement, recorded in the issue.
 - **AC2** (product impact of leaving without saving) → done by measurement: no impact.
 - **AC3** (the user's decision recorded; for A, integration cases cover allowing and rejecting) → this change, 1.1–1.3. The decision is source-bound rather than "at most once": the measured counts are 2–4 per session, and the user chose no count limit.
-- **AC4** (same-name failure detail) → done in #706, partly.
+- **AC4** (same-name failure detail) → done in #706. Two nested paths that still show a fixed outer message were reported there as out-of-scope findings.
 - **AC5** (`pnpm test:stack` green on Playwright 1.65) → after this merges, on #670's rebased exact head.
