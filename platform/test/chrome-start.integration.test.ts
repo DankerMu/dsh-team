@@ -19,6 +19,7 @@ const receiptWriteFault: {
   capturedPort: number | undefined;
   capturedReceipt: string | undefined;
   deadline: number | undefined;
+  offset: number | undefined;
   ackTimeout: string | undefined;
 } = {
   path: undefined,
@@ -28,6 +29,7 @@ const receiptWriteFault: {
   capturedPort: undefined,
   capturedReceipt: undefined,
   deadline: undefined,
+  offset: undefined,
   ackTimeout: undefined,
 };
 
@@ -56,8 +58,9 @@ const ACK_PHASE = 'child acknowledgement';
 
 async function failAcknowledgedReceipt(spawnedPid: number): Promise<never> {
   const since = Date.now();
-  const budget = caseBudget(receiptWriteFault.deadline);
-  const { ackPidFile, ackPortFile } = receiptWriteFault;
+  // An offset is measured from here, so preparation inside startChrome cannot use it up.
+  const { offset, ackPidFile, ackPortFile } = receiptWriteFault;
+  const budget = caseBudget(offset === undefined ? receiptWriteFault.deadline : since + offset);
   if (ackPidFile === undefined || ackPortFile === undefined)
     throw new Error('pid write fault missing child acknowledgement paths');
   let [deadline, cut] = [since, ''];
@@ -148,6 +151,7 @@ afterEach(() => {
   receiptWriteFault.capturedPort = undefined;
   receiptWriteFault.capturedReceipt = undefined;
   receiptWriteFault.deadline = undefined;
+  receiptWriteFault.offset = undefined;
   receiptWriteFault.ackTimeout = undefined;
 });
 
@@ -214,7 +218,7 @@ process.stderr.write(${JSON.stringify(SECRET)});
   RECEIPT_CASE_MS,
 );
 
-// A case deadline this near cuts the 5s acknowledgement wait.
+// A case deadline this near the acknowledgement wait's start cuts that 5s wait.
 const ACK_CUT_MS = 1_500;
 it.each([
   ['a near case deadline cuts it', ACK_CUT_MS, /^child acknowledgement after (\d+)ms: pid=(\d+)/],
@@ -226,7 +230,7 @@ it.each([
 ])(
   'records the acknowledgement wait, its elapsed time and the live child before stopping it when %s',
   async (_case, offset, attribution) => {
-    receiptWriteFault.deadline = Date.now() + offset;
+    receiptWriteFault.offset = offset;
     const { bin, work } = fakeChrome('setInterval(() => {}, 1000);');
     const profile = join(work, 'profile');
     mkdirSync(profile);

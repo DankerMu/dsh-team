@@ -8,7 +8,7 @@ import { writeSettings } from '../src/db/index.ts';
 import type { DatabaseHandle } from '../src/db/index.ts';
 import type { GatewayUpstreamResolver } from '../src/gateway/index.ts';
 import { withApp } from './auth-fixture.ts';
-import { boundedStep } from './auth-tcp-fixture.ts';
+import { boundedStep, untilAborted } from './auth-tcp-fixture.ts';
 import { rejectedUpgrade } from './gateway-http-fixture.ts';
 import { instanceToken, instanceTokenHash, seedInstance } from './instance-token-fixture.ts';
 import { startModelUpstream } from './model-upstream-fixture.ts';
@@ -330,18 +330,35 @@ it('answers a token store failure with the fixed 500, not a rejected token', asy
   });
 });
 
+// From the close to the upstream socket's close. Measured (#719) with a 60s budget, 5 runs at
+// 1-minute load 67-91: at most 16ms. Half the proxy's own RAGFLOW_TIMEOUT_MS (10s), so a read
+// answered by that timer instead of the close fails here.
+const CLOSE_ABORT_MS = 5_000;
+
 it('application close aborts an in-flight version read with the fixed 500', async () => {
   upstream.setHandler(() => undefined);
   await withProxy(async ({ send, token, app }) => {
-    const pending = send(VERSION, { headers: bearer(token) });
-    await upstream.received(1);
+    // Every step is cut to this deadline, one app before the budget: the teardown close stays inside.
+    const deadline = performance.now() + CASE_MS - APP_MS;
+    const pending = boundedStep('close-abort: pending answer', deadline, (signal) =>
+      send(VERSION, { headers: bearer(token), signal }),
+    );
+    // A step that fails before the answer is awaited leaves this rejection observed, not unhandled.
+    pending.catch(() => undefined);
+    await boundedStep('close-abort: upstream received', deadline, (signal) =>
+      untilAborted(upstream.received(1), signal),
+    );
     const started = performance.now();
 
-    await app.close();
+    await boundedStep('close-abort: application close', deadline, (signal) =>
+      untilAborted(app.close(), signal),
+    );
     const answer = await pending;
-    await upstream.socketClosed(1);
+    await boundedStep('close-abort: upstream socket closed', deadline, (signal) =>
+      untilAborted(upstream.socketClosed(1), signal),
+    );
 
-    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(performance.now() - started).toBeLessThan(CLOSE_ABORT_MS);
     expect([answer.status, JSON.parse(answer.body)]).toEqual([500, FAILURE]);
   });
 });
