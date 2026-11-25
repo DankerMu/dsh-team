@@ -6,7 +6,7 @@ The RAGFlow proxy close-abort case, the canonical dev-stop lifecycle case's user
 
 #### Scenario: A step stalls under its case budget
 
-- **WHEN** the upstream never receives or never closes, the application close never answers, the start route's engine call is held, or the registration never answers
+- **WHEN** the upstream never receives or never closes, the application close outlasts its step bound but still finishes within the case budget, the start route's engine call is held, or the registration never answers
 - **THEN** the case fails below its budget with a message naming that step, not with the runner's timeout
 
 #### Scenario: Slow preparation before a near deadline
