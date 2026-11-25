@@ -128,8 +128,7 @@ const SAVE_FAILED = { ...NONE_SHOWN, saveFailed: true };
  * save landed (one `saved`), and no notice showed after it; one `change`, one `save-error`, no
  * refresh request; the file the Agent's after the rewrite and both sides' after the save and the
  * close, the in-window typing in no read; no new or missing work entry; 18.5's allowed errors.
- * #716's prediction, for the exact-head stack to confirm: no notice in the quiet window after the
- * clear.
+ * #716, as the stack on b35c876 measured it: no notice in the quiet window after the clear.
  */
 export const EXPECTED_TYPING = {
   notices: { before: NONE_SHOWN, window: SAVE_FAILED, saved: NONE_SHOWN, end: NONE_SHOWN },

@@ -577,7 +577,7 @@ const MEASURED_TYPING = {
   entries: { saved: unchanged, closed: unchanged },
   allowed: true,
   forgotten: COPY,
-  // #716's prediction, for the exact-head stack to confirm: no notice in the quiet window.
+  // #716, as the stack on b35c876 measured it: no notice in the quiet window.
   quietWindow: NONE,
 };
 const typingReads = (saved: 'agent-only' | 'both') => ({
