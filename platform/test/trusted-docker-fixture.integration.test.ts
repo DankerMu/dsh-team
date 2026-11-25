@@ -3,12 +3,8 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
-import {
-  caseBudget,
-  caseSpawn,
-  fixtureProcessCustody,
-  ownerPresent,
-} from './trusted-docker-fixture.ts';
+import { caseBudget, caseSpawn, ownerPresent } from './case-budget-fixture.ts';
+import { fixtureProcessCustody } from './trusted-docker-process-fixture.ts';
 
 // A 3s case keeps 1.5s in reserve, so its child is cut at 1.5s; the kill and the throw take far
 // less than the 1s slack, so a cut that ignored the reserve (3s) or waited for a trapped SIGTERM

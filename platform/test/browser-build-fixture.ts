@@ -14,8 +14,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { processIdentity } from '../../scripts/probe-browser-native.mjs';
-import { caseSpawn } from './trusted-docker-fixture.ts';
-import type { CaseSpawn } from './trusted-docker-fixture.ts';
+import { caseSpawn } from './case-budget-fixture.ts';
+import type { CaseSpawn } from './case-budget-fixture.ts';
 import { vitestSpawnInterception } from './vitest-stand-in-fixture.ts';
 
 const native = new URL('../../scripts/probe-browser-native.mjs', import.meta.url).href;

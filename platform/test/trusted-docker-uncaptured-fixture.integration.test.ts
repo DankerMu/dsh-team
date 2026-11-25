@@ -12,7 +12,8 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { expect, it } from 'vitest';
 import { record } from './container-start-docker-fixture.ts';
-import { ownerPresent, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
+import { ownerPresent } from './case-budget-fixture.ts';
+import { withTrustedDockerFixture } from './trusted-docker-fixture.ts';
 import {
   claimUncaptured,
   classifyOwnerChildren,

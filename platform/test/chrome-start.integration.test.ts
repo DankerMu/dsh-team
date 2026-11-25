@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, it, vi } from 'vitest';
 import { startChrome } from '../../scripts/probe-dsh-api-cdp.mjs';
 import { rescueChrome } from '../../scripts/probe-browser-runtime.mjs';
-import { caseBudget } from './trusted-docker-fixture.ts';
+import { caseBudget } from './case-budget-fixture.ts';
 
 const SECRET = 'sk-chrome-discovery-secret';
 
