@@ -63,6 +63,8 @@ docker image inspect --format '{{.Id}}' dsh-team-user:local dsh-team-platform:lo
 - 实例下次启动即生效（覆盖层在启动时生成，按镜像路径加载，无需重置）：`permission-tiers`、`platform-nav`、`office-hints`；`knowledge-base` 的代码（`index.js`、`client.js`：插入行指向 `/opt/dsh-team/knowledge-base/index.js`，客户端部分随同目录的清单交付）；`zh-locale` 的补丁行（从镜像内 `/opt/dsh-team/profile-seed` 读取）；覆盖层中 ONLYOFFICE 和知识库的配置行。
 - 只经员工 profile 副本生效（重置前保持旧版）：`dsh-better-sidebar` 和 `dsh-sidebar-onlyoffice`，包括它们的全部构建期补丁（如 Office 文件交给 ONLYOFFICE 打开、AI 改写后编辑器刷新、按每实例密钥派生文件令牌和文档 key）；`knowledge-base` 的 `cordis.patch.yml` 和清单中的 bundle 声明；`office-agents` 的预设、`skills` 和 `docx-construction`；`zh-locale` 的代码（`index.js`、`client.js`，按包名从 profile 解析；此项为推断，未在旧卷上实测）。
 
+**新增的员工态预装插件不会出现在已有员工卷里。** 新镜像如果多了一个镜像默认为 `employee` 态（员工可自行开关）的预装插件，它只存在于镜像内的 profile 种子中。受管覆盖层不为员工态插件生成任何行（`platform/src/managed-config/generate.ts` 的 `catalogRows` 对 `employee` 直接跳过），已有员工卷里的 profile 副本也不会补入它。所以已有员工看不到这个插件，实例照常启动：不报错，平台不提示，也没有审计。新注册的员工会从种子得到它。要让已有员工拿到新插件，管理员需在实例页为其执行「重置配置」，代价见下段。强制态（`forced-on`、`forced-off`）的新插件由覆盖层在实例下次启动时下发，不受此限。
+
 「重置配置」有代价：平台先断开该员工的连接并停止实例，再用镜像种子整体替换 `profiles/`，员工自己安装的 bundle 被移除，插件开关恢复为镜像默认；文件、对话和凭据保留；重置后实例保持停止，需员工或管理员再次启动（见 § 8「停止与一次性验收清理」）。阶段 2 不提供自动同步。
 
 ### 用户镜像基础层更新
