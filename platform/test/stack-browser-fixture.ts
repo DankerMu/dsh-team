@@ -158,16 +158,45 @@ export const scrubbedEvidence = (evidence: StackBrowserEvidence): StackBrowserEv
   externalRequests: scrubEach(evidence.externalRequests),
 });
 
-/** The messages of `cause` and its causes, each scrubbed, at most eight; a non-Error is unknown. */
-export function scrubbedChain(cause: unknown) {
+/** A thrown value that is no Error: its JSON, else a fixed text; never undefined, never throws. */
+function rendered(value: unknown) {
+  try {
+    // Typed string, yet undefined for undefined, a function or a symbol, which have no JSON text.
+    return (JSON.stringify(value) as string | undefined) ?? 'unknown failure';
+  } catch {
+    // Swallows what JSON cannot render: a circular value, a BigInt, a throwing toJSON or getter.
+    return 'unknown failure';
+  }
+}
+
+/** One reason: an Error's scrubbed message, an AggregateError's followed by its members' chains
+ * in brackets, but those its message already names and any aggregate already expanded. */
+function reason(value: unknown, secrets: Secrets, expanded: Set<unknown>): string {
+  if (!(value instanceof Error)) return scrub(rendered(value), secrets);
+  const message = scrub(value.message, secrets);
+  if (!(value instanceof AggregateError) || expanded.has(value)) return message;
+  expanded.add(value);
+  // AggregateError types its members as any; each is rendered whatever it is.
+  const members = (value.errors as unknown[])
+    .map((member) => chain(member, secrets, expanded))
+    .filter((member) => !message.includes(member));
+  return members.length === 0 ? message : `${message} [${members.join('; ')}]`;
+}
+
+function chain(cause: unknown, secrets: Secrets, expanded: Set<unknown>) {
   const reasons: string[] = [];
   let current = cause;
   do {
-    reasons.push(current instanceof Error ? scrub(current.message) : 'unknown failure');
+    reasons.push(reason(current, secrets, expanded));
     current = current instanceof Error ? current.cause : undefined;
   } while (current !== undefined && reasons.length < 8);
   return reasons.join(' <- ');
 }
+
+/** The reasons of `cause` and its causes, each scrubbed of `secrets`, at most eight per branch;
+ * an aggregate's members are branches of their own. */
+export const scrubbedChain = (cause: unknown, secrets: Secrets = []) =>
+  chain(cause, secrets, new Set());
 
 /** A failed session, safe to print: vitest prints the cause chain and every own property, so the
  * scrubbed chain is folded into the message, no `cause` is kept and `evidence` is scrubbed. */
@@ -234,6 +263,11 @@ export async function showSidebarRows(page: Page, names: readonly string[]): Pro
   return false;
 }
 
+// The released dsh-client-locale@0.2.1-rc.2 sets `<html lang>` whenever it applies a locale
+// (lib/client.js:1172-1175, zh as zh-CN); plugins/zh-locale selects zh. The root config has no DOM lib.
+const chinese = (page: Page) => async () =>
+  (await page.evaluate<string>('document.documentElement.lang')).startsWith('zh');
+
 export async function until(check: () => Promise<boolean>, timeout: number, label: string) {
   const deadline = performance.now() + timeout;
   while (!(await check())) {
@@ -296,7 +330,9 @@ export async function workbenchSession(
   });
   await mkdir(directory, { recursive: true });
   const browser = await launch();
-  const failures: unknown[] = [];
+  let failed: { readonly error: unknown } | undefined;
+  // Set while a masked session's page may show the notice unmasked: no failure screenshot then.
+  let unmaskable = false;
   let page: Page | undefined;
   const shoot = async (name: string) => {
     if (page === undefined) throw new Error('Stack workbench page not open');
@@ -353,6 +389,11 @@ export async function workbenchSession(
     const ready = () =>
       until(async () => (await composerState(workbench)) === 'ready', timeout, 'composer');
     await ready();
+    if (names.masked !== undefined) {
+      unmaskable = true;
+      await until(chinese(workbench), timeout, 'Chinese UI');
+      unmaskable = false;
+    }
     await body(workbench, shoot, async () => {
       for (const request of open) cancelled.add(request);
       await workbench.reload({ waitUntil: 'load', timeout });
@@ -360,20 +401,27 @@ export async function workbenchSession(
     });
   } catch (error) {
     // Best effort: a failed screenshot must not replace the session's own failure.
-    await shoot(names.failure).catch(() => undefined);
-    failures.push(new StackWorkbenchFailure(error, evidence(), names.label));
+    if (!unmaskable) await shoot(names.failure).catch(() => undefined);
+    failed = { error };
   }
   // Teardown aborts are not part of the observed session.
   observing = false;
-  try {
-    await browser.close();
-  } catch (error) {
-    failures.push(error);
+  const closing = await browser.close().then(
+    () => undefined,
+    (error: unknown) => ({ error }),
+  );
+  // vitest prints every raw member of an error: the close reason is folded in after the session's.
+  if (failed !== undefined) {
+    const cause =
+      closing === undefined
+        ? failed.error
+        : new AggregateError([failed.error, closing.error], 'session and browser close failed');
+    throw new StackWorkbenchFailure(cause, evidence(), names.label);
   }
-  // The session's failure stays first; a close failure follows it.
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1)
-    throw new AggregateError(failures, `Stack workbench ${names.label} and browser close failed`);
+  if (closing !== undefined)
+    throw new Error(
+      `Stack workbench ${names.label} browser close failed: ${scrubbedChain(closing.error)}`,
+    );
   return evidence();
 }
 

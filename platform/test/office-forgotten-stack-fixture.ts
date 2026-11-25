@@ -37,9 +37,12 @@ import { withWorkFiles, WORK } from './sidebar-archive-stack-fixture.ts';
 import {
   redactSecrets,
   scrub,
+  scrubbedChain,
+  scrubEach,
   StackWorkbenchFailure,
   workbenchSession,
 } from './stack-browser-fixture.ts';
+import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
 const NAME = '忘记恢复.docx';
 const FILE = `${WORK}/${NAME}`;
@@ -248,7 +251,15 @@ interface OfficeForgottenEvidence {
   readonly recovered: 'recovered' | 'lost';
   readonly reopenAlert: ReopenAlert;
   readonly residue: Readonly<{ copies: number; listed: boolean }>;
+  /** The allowed Document Server unload sources each session recorded, scrubbed. */
+  readonly unloadViolations: Readonly<{ edit: string[]; recover: string[] }>;
 }
+
+/** The edit and recover sessions' allowed unload sources, scrubbed, for the evidence line. */
+export const forgottenUnloads = (edit: StackBrowserEvidence, recover: StackBrowserEvidence) => ({
+  edit: scrubEach(edit.unloadViolations),
+  recover: scrubEach(recover.unloadViolations),
+});
 
 /** A's lane plus B (started by the editor lane) and the Document Server namespace position. */
 type OfficeForgottenLane = OfficeIsolationLane & { readonly namespaceRead: NamespaceRead };
@@ -279,15 +290,15 @@ async function fileHasNonce(lane: OfficeForgottenLane, nonce: string): Promise<b
  * bumps the mtime, then forcesaves (ControlOrMeta+s): the forcesave flushes the typed change to the
  * Document Server and fails the staleness guard without writing disk. The mtime is deliberately NOT
  * restored here — the restore waits until the asynchronous session-close save has run, else the
- * guard would pass and no copy is stored. Leaves the key in `held` and returns it with whether the
- * edit screenshot was taken.
+ * guard would pass and no copy is stored. Leaves the key in `held` and returns it with the edit
+ * session's evidence.
  */
 async function editIntoForgotten(
   lane: OfficeForgottenLane,
   nonce: string,
   directory: string,
   held: ForgottenKey,
-): Promise<{ kA: string | null; closed: boolean }> {
+): Promise<{ kA: string | null; editor: StackBrowserEvidence }> {
   await documentServerReady(lane);
   const names = {
     label: 'office forgotten edit',
@@ -313,7 +324,7 @@ async function editIntoForgotten(
       throw sessionFailure('edit', error, { keyRead: held.key !== null }, held.key);
     },
   );
-  return { kA: held.key, closed: editor.screenshots.includes('office-forgotten-edit-typed.png') };
+  return { kA: held.key, editor };
 }
 
 /** Waits up to `lane.session.timeout` for the platform position to show A's forgotten copy; it
@@ -345,13 +356,8 @@ type ReopenAlert =
  * Server socket path `/doc/<key>/…`. The cause chain's messages, those lists and `scene` are folded
  * into the message instead (as `guarded` does), each part scrubbed of A's key on its own. */
 export function sessionFailure(label: string, error: unknown, scene: object, kA: string | null) {
-  const clean = (text: string) => scrub(text, [kA ?? undefined]);
-  const reasons: string[] = [];
-  let current: unknown = error;
-  while (current !== undefined && reasons.length < 8) {
-    reasons.push(clean(current instanceof Error ? current.message : JSON.stringify(current)));
-    current = current instanceof Error ? current.cause : undefined;
-  }
+  const secrets = [kA ?? undefined];
+  const clean = (text: string) => scrub(text, secrets);
   const evidence = error instanceof StackWorkbenchFailure ? error.evidence : undefined;
   const lists = {
     consoleErrors: evidence?.consoleErrors ?? [],
@@ -361,7 +367,9 @@ export function sessionFailure(label: string, error: unknown, scene: object, kA:
   const strings = (_key: string, value: unknown) =>
     typeof value === 'string' ? clean(value) : value;
   const detail = JSON.stringify({ ...scene, ...lists }, strings);
-  return new Error(`Office forgotten ${label} failed: ${reasons.join(' <- ')}; scene=${detail}`);
+  return new Error(
+    `Office forgotten ${label} failed: ${scrubbedChain(error, secrets)}; scene=${detail}`,
+  );
 }
 
 /** Dismisses the reopen alert inside `editor` (waiting up to 20s for it) and returns what it said. */
@@ -424,7 +432,7 @@ async function officeForgotten(
   const origin = (await lane.exec(['stat', '-c', '%y', FILE])).trim();
   // The store before the trigger, A's key not yet known: the anchor's attribution if it fails.
   const beforeShape = await forgottenShape(lane, null, '(shape before)');
-  const { kA, closed } = await editIntoForgotten(lane, nonce, directory, held);
+  const { kA, editor } = await editIntoForgotten(lane, nonce, directory, held);
   if (kA === null)
     throw new Error('Office forgotten: the plugin minted no key for A (editor open)');
   const positive = await awaitForgotten(lane, kA);
@@ -433,7 +441,7 @@ async function officeForgotten(
     // edit session closed, and whether A's file took the nonce (save succeeded → trigger inert).
     const scene = {
       copies: await forgottenCopies(lane, kA, '(positive scene)'),
-      editorClosed: closed,
+      editorClosed: editor.screenshots.includes('office-forgotten-edit-typed.png'),
       fileHasNonce: await fileHasNonce(lane, nonce),
     };
     throw new Error(
@@ -468,7 +476,7 @@ async function officeForgotten(
   expect(JSON.stringify(present), 'present check free of A key').not.toContain(kA);
   // The nonce is not on disk yet, so a recovered nonce can only come from the forgotten reassembly.
   expect(await fileHasNonce(lane, nonce), "A's file lacks the nonce before reopening").toBe(false);
-  const { recovered, alert } = await recover(lane, nonce, directory, kA);
+  const { recovered, alert, editor: reopened } = await recover(lane, nonce, directory, kA);
   const seen = `reopen alert ${JSON.stringify(alert)}`;
   expect(recovered, `A recovers its pre-failure edit from the forgotten copy, ${seen}`).toBe(
     'recovered',
@@ -478,7 +486,9 @@ async function officeForgotten(
   const { cleared, ...residue } = await forgottenRecord(lane, kA, '(residue)');
   const left = `residue ${JSON.stringify(residue)}`;
   expect(cleared, `none of A key's copies left, A key unlisted, ${left}`).toBe(true);
-  return { positive, attack, present, recovered, reopenAlert: alert ?? { shown: false }, residue };
+  const unloadViolations = forgottenUnloads(editor, reopened);
+  const reopenAlert = alert ?? { shown: false as const };
+  return { positive, attack, present, recovered, reopenAlert, residue, unloadViolations };
 }
 
 /**

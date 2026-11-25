@@ -14,6 +14,7 @@ import {
   operatorFonts,
 } from './office-idle-stack-fixture.ts';
 import type { Admin } from './office-idle-stack-fixture.ts';
+import { everythingPrinted } from './stack-browser-fixture.ts';
 
 const A = 'office@deployment.example.test';
 const COOKIE = 'dsh_team_session=stub-administrator-cookie';
@@ -365,4 +366,29 @@ it('restores the runtime configuration once and rethrows when the body fails', a
   await expect(run).rejects.toThrow('Office idle body failed');
   expect(restored.count).toBe(1);
   expect(putBodies(seen)).toEqual([{ ...CONFIG, idleMinutes: 1 }, CONFIG]);
+});
+
+it('folds the body failure and the failed restore, both scrubbed, into one plain error', async () => {
+  const { admin } = await platform([[RUNNING]]);
+  const key = 'd6'.repeat(32);
+  const keyed = (text: string) => new Error(`${text} /doc/${key}/c/?EIO=4`);
+  const body = (_lane: unknown, idle: { restore: () => Promise<void> }) => {
+    idle.restore = () => Promise.reject(keyed('restore failed'));
+    return Promise.reject(keyed('Office idle body failed'));
+  };
+
+  const error: unknown = await officeIdleScenario(idleLane(admin), body).catch(
+    (caught: unknown) => caught,
+  );
+
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(Object.hasOwn(error as Error, 'cause')).toBe(false);
+  const reasons = ['Office idle body failed', 'restore failed'].map(
+    (text) => `${text} /doc/<redacted>/c/`,
+  );
+  expect(error).toHaveProperty(
+    'message',
+    `Office idle lane and its restore failed [${reasons.join('; ')}]`,
+  );
+  for (const secret of [key, 'EIO=4']) expect(everythingPrinted(error)).not.toContain(secret);
 });

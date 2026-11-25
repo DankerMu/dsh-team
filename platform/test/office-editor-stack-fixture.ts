@@ -294,7 +294,8 @@ export function gate(sides: readonly string[], timeout: number, whenBoth = passe
   return { arrive, fail };
 }
 
-/** `body`'s result; when it fails, `retire` runs and the failure leaves first. */
+/** `body`'s result; when it fails, `retire` runs and the failure leaves first. When both fail, one
+ * plain error: `message`, then both scrubbed chains; vitest prints a nested aggregate's raw members. */
 export async function retiringOnError<T>(
   body: () => Promise<T>,
   retire: () => Promise<void>,
@@ -304,7 +305,7 @@ export async function retiringOnError<T>(
     return await body();
   } catch (error) {
     await retire().catch((failure: unknown) => {
-      throw new AggregateError([error, failure], message);
+      throw new Error(scrubbedChain(new AggregateError([error, failure], message)));
     });
     throw error;
   }

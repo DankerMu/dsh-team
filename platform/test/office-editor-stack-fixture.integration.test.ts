@@ -293,18 +293,54 @@ it('retires B only when the lane fails, rethrowing the lane failure first', asyn
   const lane = new Error('Office editor lane failed');
   await expect(retiringOnError(() => Promise.reject(lane), retire)).rejects.toBe(lane);
   expect(retired).toEqual(['retire']);
-  const disable = new Error('disable failed');
-  const both = retiringOnError(
+});
+
+// A Document Server socket URL: its key and query are what no failure may print.
+const RETIRE_KEY = 'e4'.repeat(32);
+const keyed = (text: string) => new Error(`${text} /doc/${RETIRE_KEY}/c/?EIO=4`);
+const keyedShown = (text: string) => `${text} /doc/<redacted>/c/`;
+/** The thrown error: plain, holding no raw member, cause or key anywhere vitest prints. */
+const plainScrubbed = (error: unknown) => {
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(error).toBeInstanceOf(Error);
+  expect(Object.hasOwn(error as Error, 'cause')).toBe(false);
+  expect(Object.hasOwn(error as Error, 'errors')).toBe(false);
+  for (const secret of [RETIRE_KEY, 'EIO=4'])
+    expect(everythingPrinted(error)).not.toContain(secret);
+  return (error as Error).message;
+};
+
+it.each([
+  [undefined, 'Office editor lane and retiring B failed'],
+  ['Named', 'Named'],
+])(
+  'folds the lane and the retirement failure, both scrubbed, into one plain error (%s)',
+  async (name, prefix) => {
+    const lane = keyed('Office editor lane failed');
+    const disable = keyed('disable failed');
+
+    const error: unknown = await retiringOnError(
+      () => Promise.reject(lane),
+      () => Promise.reject(disable),
+      name,
+    ).catch((caught: unknown) => caught);
+
+    const reasons = [keyedShown('Office editor lane failed'), keyedShown('disable failed')];
+    expect(plainScrubbed(error)).toBe(`${prefix} [${reasons.join('; ')}]`);
+  },
+);
+
+it('keeps the retirement reason after a lane chain deeper than eight', async () => {
+  let lane = keyed('level 10');
+  for (let level = 9; level > 0; level--)
+    lane = new Error(`level ${String(level)}`, { cause: lane });
+
+  const error: unknown = await retiringOnError(
     () => Promise.reject(lane),
-    () => Promise.reject(disable),
-  );
-  const error: unknown = await both.catch((caught: unknown) => caught);
-  expect(error).toBeInstanceOf(AggregateError);
-  expect((error as AggregateError).errors).toEqual([lane, disable]);
-  expect((error as AggregateError).message).toBe('Office editor lane and retiring B failed');
-  const failing = () => Promise.reject(lane);
-  const named = retiringOnError(failing, () => Promise.reject(disable), 'Named');
-  await expect(named).rejects.toThrow(new AggregateError([lane, disable], 'Named'));
+    () => Promise.reject(keyed('disable failed')),
+  ).catch((caught: unknown) => caught);
+
+  expect(plainScrubbed(error).endsWith(`level 8; ${keyedShown('disable failed')}]`)).toBe(true);
 });
 
 const session = (
@@ -443,33 +479,43 @@ const sides = (error: unknown) => {
   );
 };
 
-it.each([
-  ['the same-name DOCX', () => Promise.resolve(), 3],
-  ["B's retirement as well", () => Promise.reject(DISABLE), 5],
-])(
-  'fails both editing sessions of %s without the key or query anywhere',
-  async (_case, retire, size) => {
-    // Each side's cause names its employee, so A's reason cannot pass for B's.
-    vi.mocked(workbenchSession).mockImplementation((session, names) => {
-      const cause = new Error(`page.goto ${session.email}: ${BASE}${SOCKET}`);
-      return Promise.reject(new StackWorkbenchFailure(cause, leaky, names.label));
-    });
+// Each side's cause names its employee, so A's reason cannot pass for B's.
+const failingSessions = () =>
+  vi.mocked(workbenchSession).mockImplementation((session, names) => {
+    const cause = new Error(`page.goto ${session.email}: ${BASE}${SOCKET}`);
+    return Promise.reject(new StackWorkbenchFailure(cause, leaky, names.label));
+  });
+const counts = 'consoleErrors=1 pageErrors=0 failedRequests=1 externalRequests=0';
+const failed = (email: string) =>
+  `Stack workbench office editor docx failed (${counts}): page.goto ${email}: ${BASE}/doc/<redacted>/c/`;
+const [failureA, failureB] = [failed('a@x.test'), failed('b@x.test')];
 
-    const error = await officeEditorScenario(editorLane(retire)).catch((caught: unknown) => caught);
+it('fails both editing sessions of the same-name DOCX without the key or query anywhere', async () => {
+  failingSessions();
 
-    expect(errorTree(error)).toHaveLength(size);
-    const reasons = sides(error).map((side) => side.message);
-    const counts = 'consoleErrors=1 pageErrors=0 failedRequests=1 externalRequests=0';
-    const failed = (email: string) =>
-      `Stack workbench office editor docx failed (${counts}): page.goto ${email}: ${BASE}/doc/<redacted>/c/`;
-    const [failureA, failureB] = [failed('a@x.test'), failed('b@x.test')];
-    expect(reasons).toEqual([failureA, failureB]);
-    const sameName = errorTree(error).find(
-      (entry) => entry instanceof AggregateError && entry.message.startsWith(SAME_NAME),
-    );
-    expect(sameName).toHaveProperty('message', `${SAME_NAME}: A: ${failureA}; B: ${failureB}`);
-  },
-);
+  const error = await officeEditorScenario(editorLane(() => Promise.resolve())).catch(
+    (caught: unknown) => caught,
+  );
+
+  expect(errorTree(error)).toHaveLength(3);
+  const reasons = sides(error).map((side) => side.message);
+  expect(reasons).toEqual([failureA, failureB]);
+  expect(error).toHaveProperty('message', `${SAME_NAME}: A: ${failureA}; B: ${failureB}`);
+});
+
+it("prints each side's reason once when B's retirement fails as well", async () => {
+  failingSessions();
+
+  const error = await officeEditorScenario(editorLane(() => Promise.reject(DISABLE))).catch(
+    (caught: unknown) => caught,
+  );
+
+  const sameName = `${SAME_NAME}: A: ${failureA}; B: ${failureB}`;
+  const message = plainScrubbed(error);
+  expect(message).toBe(`Office editor lane and retiring B failed [${sameName}; disable B failed]`);
+  for (const reason of [failureA, failureB]) expect(message.split(reason)).toHaveLength(2);
+  for (const secret of LEAKED) expect(everythingPrinted(error)).not.toContain(secret);
+});
 
 const SAME_NAME = 'Office editor same-name DOCX failed';
 const saved = { status: 'fulfilled', value: {} } as const;
@@ -490,7 +536,7 @@ it.each([
     rejected(KEY),
     rejected(raw),
     [KEY, raw],
-    `A: unknown failure; B: ${rawChain}`,
+    `A: "<redacted>"; B: ${rawChain}`,
   ],
 ])('names each rejected side by its scrubbed chain, only %s', (_case, a, other, errors, named) => {
   const failure = sameNameFailure(a, other);

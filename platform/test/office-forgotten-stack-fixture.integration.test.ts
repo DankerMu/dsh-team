@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -6,7 +5,8 @@ import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inspect, promisify } from 'node:util';
+import { inspect } from 'node:util';
+import type { Browser } from '@playwright/test';
 import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import {
   forgottenPresent,
@@ -18,6 +18,7 @@ import {
   documentServerAddress,
   expectedAttack,
   forgottenRows,
+  forgottenUnloads,
   officeIsolationWithForgotten,
   proxyControl,
   sessionFailure,
@@ -25,9 +26,15 @@ import {
 import type { AttackRow } from './office-forgotten-stack-fixture.ts';
 import { HEALTH_COMMAND, openHinted } from './office-hints-stack-fixture.ts';
 import type * as OfficeHints from './office-hints-stack-fixture.ts';
-import { NODE, REGISTRY } from './office-isolation-stack-fixture.ts';
+import { localScript } from './local-script.ts';
+import { REGISTRY } from './office-isolation-stack-fixture.ts';
 import { NOTICES } from './office-rewrite-stack-fixture.ts';
-import { scrub, StackWorkbenchFailure, workbenchSession } from './stack-browser-fixture.ts';
+import {
+  everythingPrinted,
+  scrub,
+  StackWorkbenchFailure,
+  workbenchSession,
+} from './stack-browser-fixture.ts';
 import type * as StackBrowser from './stack-browser-fixture.ts';
 
 // Only the browser session is a stand-in; scrub and StackWorkbenchFailure stay the real ones.
@@ -46,20 +53,14 @@ afterEach(() => {
 });
 
 const KA = 'a1'.repeat(32);
-const [nodeBinary = 'node', ...nodeFlags] = NODE;
 const hex = () => randomBytes(32).toString('hex');
 /** The stand-in Document Server's inbox secret; any other signer gets error 6, as DS answers. */
 const JWT_SECRET = hex();
 
-/** Runs a container-shaped ESM script under the local node, `input` on stdin as `docker exec -i`
- * delivers it; stdout is parsed as the observation. */
-const local = async (source: string, argv: string[], env: Record<string, string>, input = '') => {
-  const options = { env: { ...process.env, ...env } };
-  const pending = promisify(execFile)(nodeBinary, [...nodeFlags, source, ...argv], options);
-  pending.child.stdin?.end(input);
-  const { stdout } = await pending;
-  return JSON.parse(stdout) as Record<string, unknown>;
-};
+/** The shared runner's observation: every script here prints one JSON object. */
+const local = async (...args: Parameters<typeof localScript>) =>
+  // The scripts under test print a JSON object, which the runner cannot know.
+  (await localScript(...args)) as Record<string, unknown>;
 
 /** Whether a body `token` is an HS256 JWT signed with JWT_SECRET. */
 const signedWithSecret = (token: unknown) => {
@@ -498,4 +499,94 @@ it("clears A's copy after a failed edit through the caller's holder, printing no
   const removals = calls.filter((args) => args[4]?.includes('rm -rf') === true);
   expect(removals).toHaveLength(1);
   expect(JSON.stringify(calls)).not.toContain(KA);
+});
+
+/** No key or query of A's anywhere vitest prints, no raw member, no cause. */
+const plainScrubbed = (error: unknown) => {
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(error).toBeInstanceOf(Error);
+  expect(Object.hasOwn(error as Error, 'cause')).toBe(false);
+  for (const secret of [KA, 'EIO=4']) expect(everythingPrinted(error)).not.toContain(secret);
+  return (error as Error).message;
+};
+const keyed = (text: string) => new Error(`${text} /doc/${KA}/c/?EIO=4`);
+
+it("folds the edit failure and B's failed retirement into one scrubbed plain error", async () => {
+  vi.mocked(workbenchSession).mockRejectedValue(keyed('stand-in browser'));
+  const lane = { ...forgottenLane, retire: () => Promise.reject(keyed('retire B')) };
+
+  const error: unknown = await officeIsolationWithForgotten(lane).catch((e: unknown) => e);
+
+  const edit =
+    'Office forgotten edit failed: stand-in browser /doc/<redacted>/c/; scene={"keyRead":false,"consoleErrors":[],"failedRequests":[]}';
+  expect(plainScrubbed(error)).toBe(
+    `Office forgotten lane and retiring B failed [${edit}; retire B /doc/<redacted>/c/]`,
+  );
+});
+
+/** A browser whose login navigation fails after one console error and whose close fails too, each
+ * text holding A's key and query. */
+function closingBrowser() {
+  const handlers = new Map<string, (value: unknown) => void>();
+  const page = {
+    on: (name: string, handler: (value: unknown) => void) => handlers.set(name, handler),
+    goto() {
+      handlers.get('console')?.({
+        type: () => 'error',
+        text: () => `socket /doc/${KA}/c/?EIO=4 closed`,
+        location: () => ({ url: '', line: 0 }),
+      });
+      return Promise.reject(keyed('page.goto'));
+    },
+    screenshot: () => Promise.resolve(),
+    getByText: (text: string) => ({ text }),
+  };
+  const context = { on: () => undefined, newPage: () => Promise.resolve(page) };
+  const browser = {
+    newContext: () => Promise.resolve(context),
+    close: () => Promise.reject(keyed('browser close')),
+  };
+  // Only the calls workbenchSession makes before the navigation fails are answered.
+  return () => Promise.resolve(browser as unknown as Browser);
+}
+
+it('folds a failed session and its failed browser close through sessionFailure, lists kept', async () => {
+  const actual = await vi.importActual<typeof StackBrowser>('./stack-browser-fixture.ts');
+  vi.mocked(workbenchSession).mockImplementation((session, names, body) =>
+    actual.workbenchSession(session, names, body, closingBrowser()),
+  );
+
+  const error: unknown = await officeIsolationWithForgotten(forgottenLane).catch((e: unknown) => e);
+
+  const message = plainScrubbed(error);
+  const counts = 'consoleErrors=1 pageErrors=0 failedRequests=0 externalRequests=0';
+  const reasons = ['page.goto /doc/<redacted>/c/', 'browser close /doc/<redacted>/c/'];
+  expect(message).toContain(
+    `Office forgotten edit failed: Stack workbench office forgotten edit failed (${counts}): session and browser close failed [${reasons.join('; ')}]; scene=`,
+  );
+  expect(message).toContain('"consoleErrors":["socket /doc/<redacted>/c/ closed"]');
+  for (const reason of reasons) expect(message.split(reason)).toHaveLength(2);
+});
+
+it("lists each session's allowed unload sources scrubbed, in new arrays", () => {
+  const quiet = {
+    ...{ screenshots: [], consoleErrors: [], pageErrors: [], failedRequests: [] },
+    ...{ externalRequests: [], requests: 1, websockets: 1 },
+  };
+  const edit = {
+    ...quiet,
+    unloadViolations: ['web-apps/apps/documenteditor/main/app/controller/Main.js:2145'],
+  };
+  const recover = {
+    ...quiet,
+    unloadViolations: ['sdkjs-plugins/v1/plugins.js:39', `cache/${KA}/sdk.js:1`],
+  };
+
+  const unloads = forgottenUnloads(edit, recover);
+
+  expect(unloads).toEqual({
+    edit: ['web-apps/apps/documenteditor/main/app/controller/Main.js:2145'],
+    recover: ['sdkjs-plugins/v1/plugins.js:39', 'cache/<redacted>/sdk.js:1'],
+  });
+  expect(unloads.edit).not.toBe(edit.unloadViolations);
 });

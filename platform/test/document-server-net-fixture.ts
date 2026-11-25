@@ -6,7 +6,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { parse } from 'yaml';
 import type { DockerOutput } from './deployment-compose-fixture.ts';
 import { containerDocument, output, record } from './docker-cleanup.ts';
-import { isAbsentResource } from './docker-command.ts';
 import type { AsyncDockerCommand } from './docker-command.ts';
 import type { UserImageLifecycle } from './user-image-fixture.ts';
 
@@ -326,8 +325,7 @@ async function ipv6Subnets(run: DockerOutput) {
 
 async function removeProbe(command: AsyncDockerCommand, id: string) {
   const args = ['rm', '-f', id];
-  const result = await command(args, 30_000);
-  if (!isAbsentResource(result, 'container', id)) output(result, args);
+  output(await command(args, 30_000), args);
 }
 
 async function disconnectHolder(command: AsyncDockerCommand, run: DockerOutput) {
