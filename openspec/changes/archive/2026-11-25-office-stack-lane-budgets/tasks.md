@@ -42,4 +42,4 @@ Write each case first and record its red output.
 ## 2. Verification
 
 - [x] 2.1 Record each red before and green after. Run `pnpm test:integration`, `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
-- [ ] 2.2 One green `pnpm test:stack` on the final head (the typing `quietWindow` all `false` on real DSH). Then run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.2 One green `pnpm test:stack` on the final head (the typing `quietWindow` all `false` on real DSH). Then run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.

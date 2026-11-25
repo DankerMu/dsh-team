@@ -35,4 +35,4 @@
 ## 2. Verification
 
 - [x] 2.1 Red run (new case, fix reverted) and green run; `pnpm test:integration platform/test/trusted-docker-retirement.integration.test.ts platform/test/trusted-docker-cancellation.integration.test.ts` plus the new case's file; `pnpm lint`, `pnpm typecheck`, `pnpm fmt:check`, `pnpm dead-code`.
-- [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (non-docs change; `dsh-team/docker` status).
+- [x] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy` (non-docs change; `dsh-team/docker` status).

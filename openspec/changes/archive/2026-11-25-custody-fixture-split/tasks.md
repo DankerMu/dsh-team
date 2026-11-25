@@ -33,4 +33,4 @@
   - **Moved blocks:** `git diff --color-moved=zebra --color-moved-ws=allow-indentation-change` shows that case bodies and helpers moved verbatim.
   - **Single definition:** grep each moved symbol and confirm it is defined once in the repo. `jscpd` ignores `*.test.ts`, so this is the only duplicate check covering the test files.
   - **Full suites:** `pnpm test:integration` passes with no deadline case cut. Also run `pnpm lint`, `pnpm typecheck`, `pnpm fmt:check`, `pnpm dead-code`, `pnpm duplicate-code` and `pnpm lint:deps`.
-- [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`.
+- [x] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`.

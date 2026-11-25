@@ -45,4 +45,4 @@
 ## 2. Verification
 
 - [x] 2.1 Red and green runs of the new case; `pnpm test:integration platform/test/verify-browser-runtime.integration.test.ts`; full `pnpm test:integration`; `pnpm lint`, `pnpm typecheck`, `pnpm fmt:check`, `pnpm duplicate-code`.
-- [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`.
+- [x] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`.

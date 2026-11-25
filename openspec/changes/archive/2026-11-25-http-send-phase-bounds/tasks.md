@@ -42,4 +42,4 @@ Write each probe first and record its red output.
 ## 2. Verification
 
 - [x] 2.1 Run `pnpm test:integration` 5 times in a row at load ≥ 13 and < 67, then `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
-- [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` (instance-idle on the named slow bound) and `pnpm test:deploy`.
+- [x] 2.2 Exact-head trusted VPS `pnpm test:docker` (instance-idle on the named slow bound) and `pnpm test:deploy`.
