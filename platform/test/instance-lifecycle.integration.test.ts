@@ -13,6 +13,7 @@ import { expect, it } from 'vitest';
 import { buildApp } from '../src/app.ts';
 import { applyMigrations, openDatabase, writeSettings } from '../src/db/index.ts';
 import { createDockerClient, createInstanceService } from '../src/orchestrator/index.ts';
+import { boundedStep } from './auth-tcp-fixture.ts';
 import {
   START_CONTAINER,
   startupBarrier,
@@ -478,10 +479,15 @@ async function ownershipEventually(
 // dev:bg publishes .run/dev.pid only after the lock, `pnpm build:web` and the script's own 10s
 // Engine preflight bound (scripts/dev-server.sh), so the window must fit all three under load.
 const OWNERSHIP_MS = 20_000;
-// Pass path (s): ownership 20, first start 10, the start POST's readiness 2, the shutdown fence 5,
-// the restart 2, the stop 5, the graceful exit 5, the successor 20 and the final stop 5: about
-// 74. Cleanup: commands settlement 35, then dev:stop 35 and its main exit 5; about 149 in all.
-// The user registration and the start fetch are unbounded and outside this ledger.
+// Measured (#719), 5 runs at 1-minute load 67-91: the user registration (register and login) took
+// at most 116ms and the start POST with its body at most 71ms; each bound is about 13x that.
+const REGISTRATION_MS = 1_500;
+const START_MS = 1_000;
+// Pass path (s): ownership 20, first start 10, registration 1.5, the start POST 1, its readiness 2,
+// the shutdown fence 5, the restart 2, the stop 5, the graceful exit 5, the successor 20 and the
+// final stop 5: about 76.5. Cleanup: commands settlement 35, then dev:stop 35 and its main exit 5;
+// about 151.5 in all. The remaining 8.5 is for the unbounded setup and closure: everything before
+// the registration, ownership and first start included, took at most 8.0 in those runs.
 const OWNERSHIP_CASE_MS = 160_000;
 
 it(
@@ -506,14 +512,29 @@ it(
       lifecycle.mainPid = await pidAt(pidfile);
       if (lifecycle.mainPid === undefined) throw new Error('Missing main PID');
       expect(await observeHttp(started.result, 10_000)).toBe(0);
-      const user = await registerInstanceUser(base, base, 'process-held@example.test');
-      const response = await fetch(`${base}/_platform/api/instance/start`, {
-        method: 'POST',
-        headers: { cookie: user.cookie, origin: base, 'content-type': 'application/json' },
-        body: '{}',
-      });
+      const user = await boundedStep(
+        'user registration',
+        performance.now() + REGISTRATION_MS,
+        (signal) =>
+          registerInstanceUser(base, base, 'process-held@example.test', (url, init) =>
+            fetch(url, { ...init, signal }),
+          ),
+      );
+      const response = await boundedStep(
+        'instance start',
+        performance.now() + START_MS,
+        async (signal) => {
+          const answer = await fetch(`${base}/_platform/api/instance/start`, {
+            method: 'POST',
+            headers: { cookie: user.cookie, origin: base, 'content-type': 'application/json' },
+            body: '{}',
+            signal,
+          });
+          await answer.arrayBuffer();
+          return answer;
+        },
+      );
       expect(response.status).toBe(200);
-      await response.arrayBuffer();
       await observeHttp(readiness.reached);
       const stopped = lifecycle.run('dev:stop');
       await eventually(async () => {
