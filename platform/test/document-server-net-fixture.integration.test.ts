@@ -746,20 +746,3 @@ it.each([
     expect(lane.calls).toEqual(calls);
   },
 );
-
-it('counts a probe container the daemon no longer has as removed', async () => {
-  const lane = v6Lane({
-    override: (line) =>
-      line === RM
-        ? daemonError(`Error response from daemon: No such container: ${PROBE_ID}`)
-        : undefined,
-  });
-
-  expect(await lane.probe()).toEqual({
-    address: V6_ADDRESS,
-    inside: [OK, OK],
-    outside: [OK, TIMEOUT],
-    dropped: { before: 7, after: 9 },
-  });
-  expect(lane.calls).toEqual([...SETUP, RUN, ...PROBES, RM, DISCONNECT, REMOVE, NETWORKS]);
-});

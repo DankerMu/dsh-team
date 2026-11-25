@@ -38,7 +38,7 @@
 
 Write each case first and record its red output, then change the code.
 
-- [ ] 1.1 Scrubbed chain and plain double failures.
+- [x] 1.1 Scrubbed chain and plain double failures.
   - **Code:**
     - Extend `scrubbedChain`: expand aggregate members, bound each branch at 8, use a total non-`Error` renderer.
     - Delete `sessionFailure`'s own loop.
@@ -52,21 +52,21 @@ Write each case first and record its red output, then change the code.
     - close-only;
     - same-name editor plus retire (exact message, each reason once).
   - **Updates:** the tests that asserted raw `.errors`, and the `unknown failure` expectation at `office-editor-stack-fixture.integration.test.ts:493`.
-- [ ] 1.2 One shared stdin runner (non-test module plus sibling test) replaces both `local` runners.
+- [x] 1.2 One shared stdin runner (non-test module plus sibling test) replaces both `local` runners.
   - It ignores only `EPIPE` and rejects any other stdin error.
   - Evidence: a child that never reads 8 MB of input. The file's vitest rc goes from 1 (uncaught `write EPIPE`) to 0.
   - A non-EPIPE stdin error rejects.
-- [ ] 1.3 `OfficeForgottenEvidence.unloadViolations: { edit; recover }` via `scrubEach`.
+- [x] 1.3 `OfficeForgottenEvidence.unloadViolations: { edit; recover }` via `scrubEach`.
   - Prove it with a pure assembler or a success-path mock: a non-empty source appears scrubbed.
   - The existing tests reach only the edit session.
-- [ ] 1.4 Locale wait in `workbenchSession` for masked sessions (after `ready()`, before `body`, bounded `until`).
+- [x] 1.4 Locale wait in `workbenchSession` for masked sessions (after `ready()`, before `body`, bounded `until`).
   - A locale failure skips the failure screenshot.
   - Case: call `workbenchSession` directly with `masked` set and no `login` (`converseInWorkbench` sets `login` and no mask, so it cannot be used). A stub page with `lang="en"` fails with a named reason and takes zero screenshots, and `zh-CN` proceeds. Every existing stub that sets `masked` must answer the `lang` read.
-- [ ] 1.5 Mutants and dead code.
+- [x] 1.5 Mutants and dead code.
   - Add the prefixed `DS_SCRIPT` counterexample and the `scrubbedEvidence` `not.toBe` assertion; show each mutant red.
   - Delete the `isAbsentResource` branch, its import and its test.
 
 ## 2. Verification
 
-- [ ] 2.1 Record each red before the change and green after. Run `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code` and `pnpm duplicate-code`.
+- [x] 2.1 Record each red before the change and green after. Run `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code` and `pnpm duplicate-code`.
 - [ ] 2.2 Run one local `pnpm test:stack` on the final head (locale wait passes on real DSH; forgotten evidence line has the new field). Then run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.

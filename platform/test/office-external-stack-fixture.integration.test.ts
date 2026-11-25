@@ -13,6 +13,7 @@ import {
 import type { ExternalOpen, OfficeExternalLane } from './office-external-stack-fixture.ts';
 import { FAILURES, HEALTH_COMMAND, LOADING } from './office-hints-stack-fixture.ts';
 import { LISTENER_JS, REWRITTEN_URL } from './office-profile-stack-fixture.ts';
+import { everythingPrinted } from './stack-browser-fixture.ts';
 import type { StackBrowserEvidence } from './stack-browser-fixture.ts';
 
 const API_JS = '/sidebar/onlyoffice/ds/web-apps/apps/api/documents/api.js';
@@ -289,7 +290,7 @@ it('restores bundled mode when the open fails, the open failure first and no JWT
   expect(failureText(error)).toBe('ONLYOFFICE texts, seen errFetch');
   expect(events).toEqual(['restart', 'listener', 'write', 'open', 'remove', 'restart', 'health']);
   expect(admin.state).toEqual({ mode: 'bundled', url: '' });
-  expect(failureText(error)).not.toContain(secretOf(admin.calls));
+  expect(everythingPrinted(error)).not.toContain(secretOf(admin.calls));
 });
 
 it('fails on any console error or response beyond the paired 502, after restoring bundled mode', async () => {
@@ -362,7 +363,7 @@ it('restores bundled mode when saving the external server fails, naming only met
     ['GET', undefined],
   ]);
   expect(events).toEqual(['restart', 'health']);
-  expect(failureText(error)).not.toContain(secretOf(admin.calls));
+  expect(everythingPrinted(error)).not.toContain(secretOf(admin.calls));
 });
 
 it('keeps the open failure first and the failed restore after it', async () => {
@@ -375,14 +376,42 @@ it('keeps the open failure first and the failed restore after it', async () => {
     (caught: unknown) => caught,
   );
 
-  expect(error).toBeInstanceOf(AggregateError);
-  expect(failureText(error).split('\n')).toEqual([
-    'Office external lane and its bundled restore failed',
-    'ONLYOFFICE never failed',
-    `Administrator PUT ${PATH} answered 500`,
-  ]);
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(failureText(error)).toBe(
+    `Office external lane and its bundled restore failed [ONLYOFFICE never failed; Administrator PUT ${PATH} answered 500]`,
+  );
   expect(events).toEqual(['restart', 'listener', 'write', 'remove']);
-  expect(failureText(error)).not.toContain(secretOf(admin.calls));
+  expect(everythingPrinted(error)).not.toContain(secretOf(admin.calls));
+});
+
+it('scrubs a document key and query from both the open and the restore failure', async () => {
+  const admin = await adminServer();
+  const events: string[] = [];
+  const key = 'f5'.repeat(32);
+  const keyed = (text: string) => new Error(`${text} /doc/${key}/c/?EIO=4`);
+  const lane = fakeLane(admin.base, events);
+  const restart = lane.restart;
+  // The second restart is the restore's.
+  let restarts = 0;
+  const flaky = {
+    ...lane,
+    restart: () => (++restarts === 2 ? Promise.reject(keyed('A not ready')) : restart()),
+  };
+
+  const error: unknown = await officeExternalScenario(flaky, () =>
+    Promise.reject(keyed('ONLYOFFICE never failed')),
+  ).catch((caught: unknown) => caught);
+
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(Object.hasOwn(error as Error, 'cause')).toBe(false);
+  const reasons = ['ONLYOFFICE never failed', 'A not ready'].map(
+    (text) => `${text} /doc/<redacted>/c/`,
+  );
+  expect(failureText(error)).toBe(
+    `Office external lane and its bundled restore failed [${reasons.join('; ')}]`,
+  );
+  const printed = everythingPrinted(error);
+  for (const secret of [key, 'EIO=4', secretOf(admin.calls)]) expect(printed).not.toContain(secret);
 });
 
 it('fails the lane when the restore after a passing open fails', async () => {

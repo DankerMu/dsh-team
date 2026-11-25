@@ -16,6 +16,7 @@ import {
   everythingPrinted,
   recordedError,
   scrub,
+  scrubbedChain,
   showSidebarRows,
   StackWorkbenchFailure,
   workbenchSession,
@@ -55,6 +56,8 @@ interface StubOptions {
   closeFailure?: Error;
   /** Emitted in order by the login navigation. */
   console?: readonly ConsoleStub[];
+  /** The workbench document's `<html lang>`; the released zh locale sets `zh-CN`. */
+  lang?: string;
 }
 
 /** Playwright 1.65's `waitFor` re-query back-off: 0, 20, 50, 100, 100ms, then every 500ms. */
@@ -118,6 +121,10 @@ function stubBrowser(options: StubOptions) {
     return locator;
   };
   const evaluate = (expression: string) => {
+    if (expression === 'document.documentElement.lang') {
+      events.push('lang');
+      return Promise.resolve(options.lang ?? 'zh-CN');
+    }
     if (expression.includes('[contenteditable="true"]')) {
       evaluations.push({ script: 'composer', order: sequence++ });
       return Promise.resolve('ready');
@@ -342,22 +349,33 @@ it('does not accept the reply outside the conversation transcript', async () => 
   await expect(failure).rejects.toBeInstanceOf(StackWorkbenchFailure);
 });
 
+// A Document Server socket URL: its key and query are what no failure may print.
+const CLOSE_KEY = 'cd'.repeat(32);
+const keyed = (text: string) => new Error(`${text} ws://127.0.0.1:1/doc/${CLOSE_KEY}/c/?EIO=4`);
+const keyedShown = (text: string) => `${text} ws://127.0.0.1:1/doc/<redacted>/c/`;
+const expectNoKey = (error: unknown) => {
+  const printed = everythingPrinted(error);
+  for (const secret of [CLOSE_KEY, 'EIO=4']) expect(printed).not.toContain(secret);
+};
+
 it('keeps the original failure and its browser evidence when closing the browser also fails', async () => {
-  const original = new Error('stub navigation failure');
-  const closeFailure = new Error('stub close failure');
+  const original = keyed('stub navigation failure');
+  const closeFailure = keyed('stub close failure');
   const stub = stubBrowser({ onSend: () => undefined, gotoFailure: original, closeFailure });
   const error: unknown = await converseInWorkbench(
     await conversation(() => Promise.resolve()),
     stub.launch,
   ).catch((caught: unknown) => caught);
-  expect(error).toBeInstanceOf(AggregateError);
-  const [first, second] = (error as AggregateError).errors as unknown[];
-  expect(first).toBeInstanceOf(StackWorkbenchFailure);
-  const failure = first as StackWorkbenchFailure;
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(error).toBeInstanceOf(StackWorkbenchFailure);
+  const failure = error as StackWorkbenchFailure;
   expect(failure.cause).toBeUndefined();
-  expect(second).toBe(closeFailure);
-  expect(failure.message).toContain('stub navigation failure');
-  expect(failure.message).toContain('consoleErrors=1 pageErrors=1 failedRequests=1');
+  expect(Object.hasOwn(failure, 'errors')).toBe(false);
+  const counts = 'consoleErrors=1 pageErrors=1 failedRequests=1 externalRequests=0';
+  const reasons = [keyedShown('stub navigation failure'), keyedShown('stub close failure')];
+  expect(failure.message).toBe(
+    `Stack workbench conversation failed (${counts}): session and browser close failed [${reasons.join('; ')}]`,
+  );
   expect(failure.evidence).toMatchObject({
     screenshots: ['failure.png'],
     consoleErrors: ['stub console failure'],
@@ -365,6 +383,27 @@ it('keeps the original failure and its browser evidence when closing the browser
     failedRequests: ['GET http://stub/asset.js'],
   });
   expect(JSON.stringify(failure.evidence)).not.toContain('stub-password');
+  expectNoKey(error);
+});
+
+it('rethrows a failed browser close of a passing session scrubbed, as a plain error', async () => {
+  const stub = stubBrowser({ onSend: () => undefined, closeFailure: keyed('stub close failure') });
+
+  const error: unknown = await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'plain', failure: 'plain-failure' },
+    () => Promise.resolve(),
+    stub.launch,
+  ).catch((caught: unknown) => caught);
+
+  expect(error).not.toBeInstanceOf(AggregateError);
+  expect(error).not.toBeInstanceOf(StackWorkbenchFailure);
+  expect(error).toHaveProperty(
+    'message',
+    `Stack workbench plain browser close failed: ${keyedShown('stub close failure')}`,
+  );
+  expect(Object.hasOwn(error as Error, 'cause')).toBe(false);
+  expectNoKey(error);
 });
 
 const UNLOAD = 'Permissions policy violation: unload is not allowed in this document.';
@@ -403,6 +442,10 @@ it.each([
     consoleMessage(UNLOAD, script(DOCX_MAIN).replace(ORIGIN, 'http://127.0.0.2:1'), 2145),
   ],
   ['version 9.4.1', consoleMessage(UNLOAD, script(DOCX_MAIN).replace('/9.4.0-', '/9.4.1-'), 2145)],
+  [
+    'the mount under another path',
+    consoleMessage(UNLOAD, script(DOCX_MAIN).replace('/sidebar/', '/x/sidebar/'), 2145),
+  ],
   [
     'an unknown script at a measured line',
     consoleMessage(UNLOAD, script('web-apps/apps/pdfeditor/main/app/controller/Main.js'), 2145),
@@ -564,6 +607,54 @@ it('passes no mask in a session that names no text', async () => {
   expect(stub.masks).toEqual([['editor.png', undefined]]);
 });
 
+it('fails a masked session whose page never turns Chinese, by name and without any screenshot', async () => {
+  const stub = stubBrowser({ onSend: () => undefined, lang: 'en' });
+  const masked = ['保存未写回文件（文档服务会重试'];
+  const body = { ran: false };
+
+  const failure = workbenchSession(
+    await conversation(() => Promise.resolve(), 600),
+    { label: 'masked', failure: 'masked-failure', masked },
+    () => Promise.resolve(void (body.ran = true)),
+    stub.launch,
+  );
+
+  await expect(failure).rejects.toThrow(
+    /^Stack workbench masked failed \(.*\): Stack workbench Chinese UI not reached$/,
+  );
+  expect(body.ran).toBe(false);
+  expect(stub.masks).toEqual([]);
+  expect(stub.events.filter((event) => event.startsWith('screenshot:'))).toEqual([]);
+});
+
+it('runs a masked session once its page is Chinese, reading the language before the body', async () => {
+  const stub = stubBrowser({ onSend: () => undefined, lang: 'zh-CN' });
+  const masked = ['保存未写回文件（文档服务会重试'];
+
+  await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'masked', failure: 'masked-failure', masked },
+    (_page, shoot) => shoot('editor'),
+    stub.launch,
+  );
+
+  expect(stub.events).toEqual(['lang', 'screenshot:editor.png']);
+  expect(stub.masks).toEqual([['editor.png', masked]]);
+});
+
+it('reads no language in a session that masks nothing', async () => {
+  const stub = stubBrowser({ onSend: () => undefined, lang: 'en' });
+
+  await workbenchSession(
+    await conversation(() => Promise.resolve()),
+    { label: 'plain', failure: 'plain-failure' },
+    () => Promise.resolve(),
+    stub.launch,
+  );
+
+  expect(stub.events).toEqual([]);
+});
+
 /** A page whose in-page expressions answer from `shown`; clicks are recorded by expression. */
 function sidebarPage(shown: Set<string>) {
   const clicks: string[] = [];
@@ -704,7 +795,7 @@ it('folds the scrubbed cause chain into its message and keeps no cause and no ra
 
   const counts = 'consoleErrors=1 pageErrors=1 failedRequests=1 externalRequests=1';
   expect(failure.message).toBe(
-    `Stack workbench office editor docx failed (${counts}): locator.click: Timeout on http://127.0.0.1:1/doc/<redacted>/c/ <- frame /doc/<redacted>/c/ <- unknown failure`,
+    `Stack workbench office editor docx failed (${counts}): locator.click: Timeout on http://127.0.0.1:1/doc/<redacted>/c/ <- frame /doc/<redacted>/c/ <- "a thrown string"`,
   );
   expect(Object.hasOwn(failure, 'cause')).toBe(false);
   expect(failure.evidence).toEqual({
@@ -720,6 +811,7 @@ it('folds the scrubbed cause chain into its message and keeps no cause and no ra
   });
   expectNoLeak(everythingPrinted(failure));
   expect(evidence).toEqual(leaky());
+  expect(failure.evidence.unloadViolations).not.toBe(evidence.unloadViolations);
 });
 
 it('folds at most eight messages of the cause chain', () => {
@@ -731,4 +823,62 @@ it('folds at most eight messages of the cause chain', () => {
   const chain = Array.from({ length: 8 }, (_, index) => `level ${String(index + 1)}`);
   expect(failure.message).toMatch(/^Stack workbench conversation failed \(consoleErrors=0 /);
   expect(failure.message.endsWith(`: ${chain.join(' <- ')}`)).toBe(true);
+});
+
+it('expands an aggregate error into its members, each by its own chain, after its message', () => {
+  const lane = new Error(`lane ${POLL}`, { cause: new Error(`frame /doc/${KEY}/c/`) });
+  const aggregate = new AggregateError([lane, `retire ${KEY}`], 'lane and retire failed', {
+    cause: new Error('root'),
+  });
+
+  expect(scrubbedChain(aggregate)).toBe(
+    'lane and retire failed [lane http://127.0.0.1:1/doc/<redacted>/c/ <- frame /doc/<redacted>/c/; "retire <redacted>"] <- root',
+  );
+});
+
+it('omits a member its aggregate message already names, and an aggregate holding itself', () => {
+  const side = new Error(`side ${POLL}`);
+  const named = new AggregateError([side], `both failed: A: ${scrubbedChain(side)}`);
+  const looped = new AggregateError([], 'looped');
+  looped.errors.push(looped, new Error('other'));
+
+  expect(scrubbedChain(named)).toBe('both failed: A: side http://127.0.0.1:1/doc/<redacted>/c/');
+  expect(scrubbedChain(looped)).toBe('looped [other]');
+});
+
+it('bounds each branch at eight reasons, so a deep first member keeps the second', () => {
+  let deep = new Error('level 10');
+  for (let level = 9; level > 0; level--)
+    deep = new Error(`level ${String(level)}`, { cause: deep });
+
+  const chain = scrubbedChain(new AggregateError([deep, new Error('second')], 'both'));
+
+  const eight = Array.from({ length: 8 }, (_, index) => `level ${String(index + 1)}`);
+  expect(chain).toBe(`both [${eight.join(' <- ')}; second]`);
+});
+
+it.each([
+  ['a string', `socket ${KEY}`, '"socket <redacted>"'],
+  ['a plain object', { url: POLL }, '{"url":"http://127.0.0.1:1/doc/<redacted>/c/"}'],
+  ['undefined', undefined, 'unknown failure'],
+  ['a function', () => KEY, 'unknown failure'],
+  ['a symbol', Symbol(KEY), 'unknown failure'],
+  ['a BigInt', 10n, 'unknown failure'],
+  [
+    'a circular object',
+    (() => {
+      const value: Record<string, unknown> = {};
+      value.self = value;
+      return value;
+    })(),
+    'unknown failure',
+  ],
+])('renders %s that is no error totally and scrubbed', (_case, value, rendered) => {
+  expect(scrubbedChain(value)).toBe(rendered);
+});
+
+it('scrubs the given secrets out of every reason', () => {
+  const cause = new AggregateError([new Error('member s3cret-of-a')], 'failed s3cret-of-a');
+
+  expect(scrubbedChain(cause, ['s3cret-of-a'])).toBe('failed <redacted> [member <redacted>]');
 });

@@ -1,11 +1,11 @@
-import { execFile, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { inspect, isDeepStrictEqual, promisify } from 'node:util';
+import { inspect, isDeepStrictEqual } from 'node:util';
 import { afterAll, expect, it } from 'vitest';
 import {
   aGuessScript,
@@ -30,6 +30,7 @@ import {
 import { JWT_JS } from './onlyoffice-probe-script.ts';
 import type { OfficeIsolationLane } from './office-isolation-stack-fixture.ts';
 import { record } from './docker-cleanup.ts';
+import { localScript } from './local-script.ts';
 import { redactSecrets } from './stack-browser-fixture.ts';
 
 const A = '10.0.0.2';
@@ -270,15 +271,6 @@ it("expects A's and B's keys to name their one editor, k0 and B's secret over A'
   expect(EXPECTED_INFO).toEqual({ k1: OPEN, kB: OPEN, k0: UNKNOWN, kCross: UNKNOWN });
 });
 
-const [nodeBinary = 'node', ...nodeFlags] = NODE;
-/** The script under the local `node` as the containers run it; stdout parsed as JSON. */
-const local = async (script: string, argv: string[], env: Record<string, string>, input = '') => {
-  const options = { env: { ...process.env, ...env } };
-  const pending = promisify(execFile)(nodeBinary, [...nodeFlags, script, ...argv], options);
-  pending.child.stdin?.end(input);
-  const { stdout } = await pending;
-  return JSON.parse(stdout) as unknown;
-};
 const hex = () => randomBytes(32).toString('hex');
 
 it('signs a JWT whose payload is only exp without claims, and the claims before exp with them', async () => {
@@ -286,7 +278,7 @@ it('signs a JWT whose payload is only exp without claims, and the claims before 
 const jwtSecret = 'jwt-secret';
 ${JWT_JS}
 process.stdout.write(JSON.stringify([jwt(), jwt({ c: 'info', key: 'K' })]));`;
-  const tokens = (await local(signer, [], {})) as string[];
+  const tokens = (await localScript(signer, [], {})) as string[];
   const now = Math.floor(Date.now() / 1000);
   const payloads = tokens.map((token) => {
     const [header = '', payload = '', signature] = token.split('.');
@@ -302,7 +294,7 @@ process.stdout.write(JSON.stringify([jwt(), jwt({ c: 'info', key: 'K' })]));`;
 const hmac = (key: string, input: string) => createHmac('sha256', key).update(input).digest('hex');
 const secretEnv = (secret: string) => ({ DSH_TEAM_ONLYOFFICE_FILE_SECRET: secret });
 const cross = async (input: string, secret: string) =>
-  record(await local(bCrossScript(), [JSON.stringify(input)], secretEnv(secret))).kCross;
+  record(await localScript(bCrossScript(), [JSON.stringify(input)], secretEnv(secret))).kCross;
 
 it("recomputes A's k1 and k0 and emits the file's key input", async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-team-office-guess-'));
@@ -310,7 +302,7 @@ it("recomputes A's k1 and k0 and emits the file's key input", async () => {
   const secret = hex();
   try {
     writeFileSync(file, 'dsh-team office cross key');
-    const observed = await local(aGuessScript(file), [], secretEnv(secret));
+    const observed = await localScript(aGuessScript(file), [], secretEnv(secret));
     const { size, mtimeMs } = statSync(file);
     const input = [hostname(), file, String(size), String(Math.round(mtimeMs))].join('\0');
     const k0 = createHash('sha256').update(input).digest('hex');
@@ -333,7 +325,9 @@ it("derives kCross in B from A's JSON-encoded input with B's secret: A's key onl
     differ: own !== shared,
   }).toEqual({ shared: true, own: true, differ: true });
   expect(bCrossScript()).toContain(CROSS_JS);
-  expect(record(await local(bCrossScript(), [JSON.stringify(INPUT)], {}))).toHaveProperty('error');
+  expect(record(await localScript(bCrossScript(), [JSON.stringify(INPUT)], {}))).toHaveProperty(
+    'error',
+  );
 });
 
 const JWT_SECRET = hex();
@@ -380,11 +374,11 @@ it('posts info for each key over loopback with a body-token JWT read from stdin 
   try {
     const script = namespaceInfoScript(INFO_KEYS, stub.port);
     const env = { DOCUMENT_SERVER_JWT_SECRET: hex() };
-    const observed = await local(script, [], env, JWT_SECRET);
+    const observed = await localScript(script, [], env, JWT_SECRET);
     expect(observed).toEqual(EXPECTED_INFO);
     expect(stub.seen).toEqual(Array(4).fill('127.0.0.1 info true'));
     for (const key of Object.values(INFO_KEYS)) expect(JSON.stringify(observed)).not.toContain(key);
-    const forged = await local(script, [], { DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET }, hex());
+    const forged = await localScript(script, [], { DOCUMENT_SERVER_JWT_SECRET: JWT_SECRET }, hex());
     const refused = { status: 200, error: 6 };
     expect(forged).toEqual({ k1: refused, kB: refused, k0: refused, kCross: refused });
   } finally {
