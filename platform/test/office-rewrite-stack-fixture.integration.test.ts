@@ -12,10 +12,7 @@ import {
   EXPECTED_REWRITE,
   EXPECTED_TYPING,
   heldApart,
-  NOTICE_LATCH,
   NOTICES as NOTICE_TEXTS,
-  NOTICES_SEEN,
-  NOTICES_SHOWN,
   noticeSpan,
   officeRewriteLine,
   officeRewriteScenario,
@@ -23,7 +20,10 @@ import {
   rewriteFacts,
   rewriteState,
   typingFacts,
+  typingSaved,
 } from './office-rewrite-stack-fixture.ts';
+import { flagsOf, POLL_MS, standIn, TIMEOUT, WINDOW_MS } from './office-rewrite-stand-in.ts';
+import type { NoticeId, StandIn } from './office-rewrite-stand-in.ts';
 import {
   everythingPrinted,
   StackWorkbenchFailure,
@@ -167,7 +167,7 @@ it('prints each case without nonces, keys or queries: errors and failures scrubb
       ...{ staleLatched: 1_300, staleCleared: null, dirtyFalse: 'unavailable' },
     },
     ...{ notices: { before: shown, window: shown, saved: shown, end: shown } },
-    ...{ latched: { window: shown, end: shown }, cleared: false },
+    ...{ latched: { window: shown, end: shown }, cleared: false, quietWindow: shown },
     config: { open: 1, window: 1, saved: 1, end: 1 },
     dirty: { available: false, control: { messages: 3, parsed: 3, malformed: 0, stateChanges: 0 } },
     watch: { available: true, kinds: { change: 1, 'save-error': 2 }, saveErrors: [20, 30] },
@@ -382,75 +382,6 @@ it.each([
   expect(JSON.stringify(rewriteFacts(evidence)) === JSON.stringify(MEASURED[id])).toBe(exact);
 });
 
-// The seam's stand-in session timeout and window, and heldWithin's poll. Each scripted instant is a
-// timer set no later than the seam's own delay it must precede or outlast, those the wait must see
-// at most 450ms in, far inside TIMEOUT, so timer order, not load, decides each case. A past-bound
-// act fires from the first read at which the stand-in's clock, never ahead of the seam's, passed
-// TIMEOUT: the wait's last poll. TIMEOUT sits 100ms short of a poll, so no poll falls on the bound.
-const TIMEOUT = 1_900;
-const WINDOW_MS = 100;
-const POLL_MS = 250;
-type NoticeId = keyof typeof NOTICE_TEXTS;
-const flagsOf = (ids: ReadonlySet<string>) =>
-  Object.fromEntries(Object.keys(NOTICE_TEXTS).map((id) => [id, ids.has(id)]));
-
-/**
- * A page after the Agent turn: `show` and `hide` set what is on screen, `refresh` counts a config
- * fetch. NOTICE_LATCH restarts the latch with what shows at install, as the real one's first check
- * does, then runs the install hooks; NOTICES_SEEN answers what showed since, NOTICES_SHOWN what
- * shows now.
- */
-function standIn() {
-  const showing = new Set<string>();
-  let seen = new Set<string>();
-  const installed: (() => unknown)[] = [];
-  const pastBound: (() => unknown)[] = [];
-  let configs = 1;
-  // Started by the seam's first read, after its own clock: never ahead of the seam's elapsed time.
-  let clock: number | undefined;
-  const touched = () => {
-    clock ??= performance.now();
-    if (performance.now() - clock < TIMEOUT) return;
-    // A read this late is the wait's last poll; the act lands before the seam's next timer.
-    for (const act of pastBound.splice(0)) setTimeout(act, 0);
-  };
-  const fetched = {
-    get config() {
-      touched();
-      return configs;
-    },
-  };
-  const answer = (expression: string): unknown => {
-    touched();
-    if (expression === NOTICES_SEEN) return flagsOf(seen);
-    if (expression === NOTICES_SHOWN) return flagsOf(showing);
-    if (expression !== NOTICE_LATCH) throw new Error('unscripted page expression');
-    seen = new Set(showing);
-    for (const hook of installed) hook();
-    return undefined;
-  };
-  const page = {
-    // The stand-in answers only the three expressions, each with the shape the seam reads.
-    evaluate: <R>(expression: string) => Promise.resolve().then(() => answer(expression) as R),
-  };
-  const show = (id: NoticeId) => {
-    showing.add(id);
-    return seen.add(id);
-  };
-  return {
-    ...{
-      page,
-      fetched,
-      show,
-      hide: (id: NoticeId) => showing.delete(id),
-      refresh: () => configs++,
-    },
-    onInstall: (hook: () => unknown) => installed.push(hook),
-    /** `act` once the positive wait's bound passed, inside the negative window. */
-    onPastBound: (act: () => unknown) => pastBound.push(act),
-  };
-}
-type StandIn = ReturnType<typeof standIn>;
 const after = (ms: number, act: () => unknown) => setTimeout(act, ms);
 
 /**
@@ -646,6 +577,8 @@ const MEASURED_TYPING = {
   entries: { saved: unchanged, closed: unchanged },
   allowed: true,
   forgotten: COPY,
+  // #716, as the stack on b35c876 measured it: no notice in the quiet window.
+  quietWindow: NONE,
 };
 const typingReads = (saved: 'agent-only' | 'both') => ({
   rewritten: at('agent-only', false),
@@ -676,6 +609,7 @@ const typingRun = (stale: readonly [number, number], dirtyFalse: number, saveErr
     ...{ reads: typingReads('both'), entries: { saved: unchanged, closed: unchanged } },
     allowed: true,
     forgotten: COPY,
+    quietWindow: NONE,
   }) as const;
 const PATCHED = [typingRun([1433, 2594], 2582, 7956), typingRun([1886, 2832], 2818, 8181)] as const;
 const [PATCHED_A] = PATCHED;
@@ -683,8 +617,9 @@ const [PATCHED_A] = PATCHED;
 // refresh request, one save-error after Ctrl+S, 「保存未写回文件」 at the save and the end, the file the
 // Agent's in all three reads, no copy. Derived from that record, not printed in it: no notice at the
 // window's end (the banner cleared at dirty false, the save error came later), so none latched
-// there but the banner, `cleared` false, and watch kinds `change` 1, `saved` 0. The rejection does
-// not rest on them: config, the states and the saved and end notices differ alone.
+// there but the banner, `cleared` false, watch kinds `change` 1, `saved` 0, and the notice still
+// shown at the re-arm seen in the quiet window. The rejection does not rest on them: config, the
+// states and the saved and end notices differ alone.
 const unpatched = (times: readonly [number, number, number, number], saveError: number) => {
   const [dirtyTrue, staleLatched, dirtyFalse, staleCleared] = times;
   const latchedStale = { ...NONE, staleChanged: true };
@@ -706,6 +641,7 @@ const unpatched = (times: readonly [number, number, number, number], saveError: 
       saveErrors: [saveError],
     },
     reads: typingReads('agent-only'),
+    quietWindow: SAVE_FAILED,
   };
 };
 const UNPATCHED = [
@@ -787,10 +723,69 @@ it.each([
     }),
   ],
   ['an unallowed editor error', patchedWith({ allowed: false })],
+  ['a notice in the quiet window', patchedWith({ quietWindow: SAVE_FAILED })],
   ['no copy of the refreshed-away key', patchedWith({ forgotten: NO_COPY })],
   ['the copy not cleared', patchedWith({ forgotten: { ...COPY, cleared: false } })],
 ] as const)('rejects a typing case unlike the patched runs: %s', (_case, evidence) => {
   expect(typingFacts(evidence)).not.toEqual(EXPECTED_TYPING);
+});
+
+const STATE = 'onDocumentStateChange';
+/**
+ * The typing case on `stand` from its save on, as the patched runs measured it: the stale banner
+ * latched and cleared around the editor's dirty true→false, 「保存未写回文件」 shown until the save
+ * landed. The seam's span, in a patched run's evidence, as EXPECTED_TYPING fixes it.
+ */
+async function typedSave(stand: StandIn) {
+  const origin = Date.now();
+  stand.refresh();
+  stand.show('staleChanged');
+  stand.show('saveFailed');
+  const dirtyFalse = Date.now();
+  stand.hide('staleChanged');
+  const dirty = (value: boolean, time: number) => ({ event: STATE, dirty: value, at: time });
+  const events = [dirty(true, origin), dirty(false, dirtyFalse)];
+  stand.frames({ messages: 2, parsed: 2, malformed: 0, events });
+  const result = await typingSaved(stand.page, {
+    marks: { origin, execStart: origin, execEnd: origin, lastKey: origin },
+    ...{ savedAt: Date.now(), fetched: stand.fetched },
+    landed: () => {
+      stand.hide('saveFailed');
+      return Promise.resolve(at('both', false));
+    },
+    afterCleared: () => Promise.resolve('listed'),
+    ...{ timeout: TIMEOUT, windowMs: WINDOW_MS },
+  });
+  const { notices, latched, config, cleared, window, quietWindow } = result;
+  const facts = typingFacts({
+    ...{ ...PATCHED_A, notices: { ...PATCHED_A.notices, ...notices } },
+    ...{
+      latched: { ...PATCHED_A.latched, ...latched },
+      config: { ...PATCHED_A.config, ...config },
+    },
+    ...{ cleared, window, dirty: result.dirty, quietWindow },
+  });
+  return { result, facts };
+}
+
+it('assembles the typing case after its save as measured, its facts read before the re-arm', async () => {
+  const stand = standIn();
+
+  const { result, facts } = await typedSave(stand);
+
+  expect(facts).toEqual(EXPECTED_TYPING);
+  expect(result.latched.end).toEqual(STALE_AND_FAILED);
+  expect(result.after).toBe('listed');
+});
+
+it('fails the typing case once a notice comes back in the quiet window after the clear', async () => {
+  const stand = standIn();
+  // The re-arm opens the quiet window; the notice returns halfway through its hold.
+  stand.onInstall(() => after(WINDOW_MS / 2, () => stand.show('saveFailed')));
+
+  const { facts } = await typedSave(stand);
+
+  expect(facts).toEqual({ ...EXPECTED_TYPING, quietWindow: SAVE_FAILED });
 });
 
 const KEY = 'e5'.repeat(32);

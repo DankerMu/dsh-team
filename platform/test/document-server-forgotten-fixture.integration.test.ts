@@ -61,9 +61,9 @@ const sealed = async (dir: string, mode: number, step: () => Promise<unknown>) =
  * Host Docker and the namespace holder as the delivered Document Server answers them: `docker exec
  * dsh-team-documentserver sh …` runs the same sh locally with the store at `dir`, and the namespace
  * list reports the key while `dir` holds its directory, unless `answers` says otherwise. Every
- * docker argv and namespace script is recorded.
+ * docker argv and namespace script is recorded as sent; `prelude` runs before a python3 script.
  */
-function storeLane(dir: string, answers: Record<string, unknown>[] = []) {
+function storeLane(dir: string, answers: Record<string, unknown>[] = [], prelude = '') {
   const calls: string[][] = [];
   const scripts: string[] = [];
   const run = async (args: string[]) => {
@@ -71,7 +71,10 @@ function storeLane(dir: string, answers: Record<string, unknown>[] = []) {
     const [verb, container, shell, ...rest] = args;
     if (verb !== 'exec' || container !== DOCUMENT_SERVER || (shell !== 'sh' && shell !== 'python3'))
       throw new Error('stand-in answers only sh and python3 in the Document Server');
-    const local = rest.map((arg) => (arg === FORGOTTEN_DIR ? dir : arg));
+    const local = rest.map((arg, index) => {
+      if (arg === FORGOTTEN_DIR) return dir;
+      return shell === 'python3' && rest[index - 1] === '-c' ? `${prelude}${arg}` : arg;
+    });
     return (await promisify(execFile)(shell, local)).stdout;
   };
   const namespaceRead = (script: string) => {
@@ -219,6 +222,45 @@ it('describes the store as empty before its first copy, and matches no key when 
   expect(absent).toEqual([]);
   expect(unknown).toMatchObject([{ hex64: true, matchesKey: false, files: ['output.docx'] }]);
 });
+
+// The entry named VANISH goes once, between two of the shape script's steps: (a) right after the
+// store's listing, before the entry is inspected; (b) once `isdir` found it a directory, before its
+// own listing. The originals are kept, so the removal itself runs unpatched.
+const VANISH = OTHER;
+const VANISHING = {
+  'after the listing': `import os, shutil
+_listdir = os.listdir
+def _vanishing(path):
+    names = _listdir(path)
+    if os.path.isdir(os.path.join(path, '${VANISH}')):
+        shutil.rmtree(os.path.join(path, '${VANISH}'))
+    return names
+os.listdir = _vanishing
+`,
+  'after isdir': `import os, shutil
+_isdir = os.path.isdir
+def _vanishing(path):
+    found = _isdir(path)
+    if found and os.path.basename(path) == '${VANISH}':
+        shutil.rmtree(path)
+    return found
+os.path.isdir = _vanishing
+`,
+};
+
+it.each(Object.keys(VANISHING) as (keyof typeof VANISHING)[])(
+  'describes the remaining entries when one vanishes %s',
+  async (window) => {
+    const dir = store(KA, VANISH);
+    const lane = storeLane(dir, [], VANISHING[window]);
+
+    const shape = await forgottenShape(lane, KA, '(shape)');
+
+    expect(readdirSync(dir)).toEqual([KA]);
+    expect(shape).toMatchObject([{ hex64: true, matchesKey: true, files: ['output.docx'] }]);
+    expect(shape).toHaveLength(1);
+  },
+);
 
 it('fails without the key or the reader error text when an entry cannot be read', async () => {
   const dir = store(KA);

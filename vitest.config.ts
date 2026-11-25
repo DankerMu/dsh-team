@@ -84,14 +84,14 @@ export default defineConfig({
           // and the row after the failure), the 30s failure wait, the bundled healthcheck wait
           // (60s plus its last 30s exec) and six docker execs at 30s each: the listener check, the
           // file's write, read-back and removal, and the two provider reads.
-          // The office rewrite typing case (#652) raised it by 870s: the Document Server healthcheck
-          // wait, the editor load, the unsaved nonce's typing, the typing until the stale banner
-          // latches, the second typing, the save poll and the notice-clear wait at one 60s session
-          // timeout each, two 15s
-          // observation windows (the hold after the latch, the wait after the close), and 14
-          // docker execs at 30s each: the write, four file reads (start, after the rewrite, the save
-          // poll's first, after the close), the rewrite, three listings, three instance log reads
-          // (the earlier cases' control, before and after the close) and two provider reads.
+          // The office rewrite typing case (#652) raised it by 870s: the Document Server
+          // healthcheck wait, the editor load, the unsaved nonce's typing, the typing until the
+          // stale banner latches, the second typing, the save poll and the notice-clear wait at one
+          // 60s session timeout each, two 15s observation windows (the hold after the latch, the
+          // wait after the close), and 14 docker execs at 30s each: the write, four file reads
+          // (start, after the rewrite, the save poll's first, after the close), the rewrite, three
+          // listings, three instance log reads (the earlier cases' control, before and after the
+          // close) and two provider reads.
           // The forgotten-copy lifecycle (#650) raised it by 870s. Each of the three rewrite cases
           // (clean, unsaved, typing) adds 190s: registeredKey's 10s registry poll plus its last
           // 30s exec, and the record's five calls at 30s each (key count, namespace list read,
@@ -109,15 +109,43 @@ export default defineConfig({
           // wait, the editor load, the Agent turn, the save's typing, the save poll and the notice
           // clear; two 15s windows; ten 30s execs: the write, four reads, two provider reads and
           // three listings), #650's 190s, #657 A's 75s and the 30s template read.
+          // The Office opening and typing helpers (#716) raised it by 5275s, counting every call at
+          // the bounds of its serial waits (the call-site table of the office-stack-lane-budgets
+          // change). openHinted: the row, the settled editor and the refusal at one 60s session
+          // timeout each, the row click and its screenshot at Playwright's 30s default action
+          // timeout (the stack browser sets none), 240s. typeAndSave: the area, ready, box and
+          // click at 60s each, 240s, plus the caller's `loaded` hook. Per call site, executions x
+          // 240s, plus its hooks, less the one 60s load or typing a line above already counts:
+          //   hints openHinted (#439)                       1 x 240       =  240
+          //   editAndSave openHinted (editor A 3, idle 1)   4 x 240 - 240 =  720
+          //   editAndSave typeAndSave (the same four)       4 x 240 + 95  = 1055
+          //   rewrite openHinted (four cases)               4 x 240 - 240 =  720
+          //   rewrite unsaved typing                        1 x 240 - 60  =  180
+          //   rewrite save typing (four cases)              4 x 240 - 240 =  720
+          //   typing case typing, openHinted, save typing   3 x 240 - 180 =  540
+          //   forgotten edit openHinted and typing          2 x 240 - 60  =  420
+          //   forgotten recover openHinted                  1 x 240 - 60  =  180
+          //   forgotten recover typeAndSave                 1 x 240 + 260 =  500
+          // The 95s: the same-name hook's distinctKeys (a 5s poll plus its last 30s exec), the
+          // third 30s call of its guessed-key info (the namespace holder's read; the 60s line
+          // counts two) and the idle hook's font read (30s default). The gate's 60s (the 180s
+          // line) and HOLD_MS (the idle line) are counted above; the idle hook's administrator
+          // fetches pass no timeout and stay in the margin. The 260s: the recovery hook's
+          // dismissAlert, a 20s wait and four 60s waits.
+          // The masked sessions' Chinese UI wait (#717) raised it by 360s: one 60s session timeout
+          // for each of six (rewrite clean, unsaved, xlsx, pptx and typing; the forgotten edit).
+          // The rewrite typing case's quiet window (#716) raised it by 15s.
           // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 +
-          // 870 + 150 + 1970 = 12050s, the 1200s of cold builds plus 10850s for everything else.
-          // That remainder is a margin, not the sum of every per-step bound: a vitest timeout skips
-          // the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5). A poll
-          // bounded by a deadline (the 120s write-back, for one) checks it only after its exec
-          // returns, so it can overrun by that last exec; the margin covers that too. The three
-          // rewrite lines (#442, #652, #657 A4) still count the Document Server healthcheck wait
-          // at its 60s deadline only, in the older deadline-only notation.
-          testTimeout: 12_050_000,
+          // 870 + 150 + 1970 + 5275 + 360 + 15 = 17700s, the 1200s of cold builds plus 16500s for
+          // everything else. Outside the opening and typing helpers, which it counts at every
+          // bound, that remainder is a margin, not the sum of every per-step bound: a vitest
+          // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5),
+          // and a stalled helper wait fails with its own label first. A poll bounded by a deadline
+          // (the 120s write-back, for one) checks it only after its exec returns, so it can overrun
+          // by that last exec; the margin covers that too. The three rewrite lines (#442, #652,
+          // #657 A4) still count the Document Server healthcheck wait at its 60s deadline only, in
+          // the older deadline-only notation.
+          testTimeout: 17_700_000,
         },
       },
     ],
