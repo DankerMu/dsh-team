@@ -25,11 +25,11 @@
 ## 1. Implementation
 
 - [x] 1.1 In `signalOwnedGroup`, add `if (child.exitCode !== null || child.signalCode !== null) return false;` after the final identity check and immediately before `process.kill`, with no await in between.
-- [x] 1.2 Add one case using a real detached child.
-  - Intercept only the second `ownerIsLive` call (`:167`, imported from `./trusted-docker-record.mjs`): it SIGKILLs the child, awaits its `exit`, then resolves `true`. The first call (`:156`) uses the real implementation.
+- [x] 1.2 Add one case using a real detached child, with two rows: exit-by-code (stdin closed, the child exits 23) and exit-by-signal (SIGKILL). Each row sets one half of the recheck and asserts its `exitCode`/`signalCode`.
+  - Intercept only the second `ownerIsLive` call (`:167`, imported from `./trusted-docker-record.mjs`): it ends the child per row, awaits its `exit`, then resolves `true`. The first call (`:156`) uses the real implementation.
   - Scope the mock so other cases keep the real `ownerIsLive`, for example with a passthrough `vi.mock` plus a one-time implementation, or a separate test file.
   - Have the `process.kill` spy stub negative-pid calls, so no real group signal is sent.
-  - **Red** (1.1 reverted): it resolves `true`, and the stubbed spy records `(-pid, 'SIGINT')`.
+  - **Red** (1.1 reverted): it resolves `true`, and the stubbed spy records `(-pid, 'SIGINT')`. Dropping only the `exitCode` half turns only the exit-by-code row red; dropping only the `signalCode` half, only the exit-by-signal row.
   - **Green:** it resolves `false`, and the spy saw no negative-pid call.
 
 ## 2. Verification

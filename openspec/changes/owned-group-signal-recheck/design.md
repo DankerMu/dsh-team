@@ -25,11 +25,12 @@
 - `externalSignal` in `scripts/probe-browser-native.mjs:208-212` uses the same `await processBirth` → `process.kill` shape. It is a non-goal: the target is not a child of this process, so no synchronous exit state exists to re-read, and the birth check is the only available guard. It is recorded as out of scope, not fixed.
 - `groupIsAbsent` in `scripts/trusted-docker-record.mjs:162-171`: none. It sends only signal 0.
 
-**Seams under test:** the exported `signalOwnedGroup`, with a real detached child. Only the second `ownerIsLive` call (`:167`) is intercepted; the first uses the real implementation.
+**Seams under test:** the exported `signalOwnedGroup`, with a real detached child. Only the second `ownerIsLive` call (`:167`) is intercepted; the first uses the real implementation. Two rows end the child there: exit-by-code (exit 23) and exit-by-signal (SIGKILL).
 
 **Required evidence:**
 
 - **Red (fix reverted):** `signalOwnedGroup` resolves `true`, and the stubbed spy records `(-pid, 'SIGINT')`.
+- **Per-half red:** dropping only the `exitCode` half reddens only the exit-by-code row; dropping only the `signalCode` half, only the exit-by-signal row.
 - **Green:** it resolves `false`, and the spy saw no negative-pid call.
 - The spy stubs negative-pid calls, so even the red run never sends a real SIGINT to a reaped group number.
 

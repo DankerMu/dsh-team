@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { platform } from 'node:os';
@@ -430,46 +431,60 @@ it('reports the group signal it actually sent to a live owned child', async () =
 });
 
 // A child reaped while the final identity read is pending frees its group number for reuse.
-it('sends no group signal when the owned child ends during the final identity check', async () => {
-  const actual = await vi.importActual<typeof TrustedDockerRecord>(
-    '../../scripts/trusted-docker-record.mjs',
-  );
-  const live = vi.mocked(ownerIsLive);
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  const closed = once(child, 'close');
-  const realKill = process.kill.bind(process);
-  // Group signals are recorded, never sent: a reaped group number may already name a stranger.
-  const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
-    if (pid >= 0) realKill(pid, signal);
-    return true;
-  });
-  try {
-    await once(child, 'spawn');
-    if (child.pid === undefined) throw new Error('Missing owned signal fixture');
-    const identity = processIdentity({ pid: child.pid, birth: await processBirth(child.pid) });
-    live
-      .mockClear()
-      .mockImplementationOnce(actual.ownerIsLive)
-      .mockImplementationOnce(async () => {
-        const exited = once(child, 'exit');
-        child.kill('SIGKILL');
-        await exited;
-        return true;
-      });
+// Each row sets exactly one half of the exit recheck: an exit code, or a terminating signal.
+it.each([
+  ['exits with a code', (c: ChildProcess) => c.stdin?.end(), { exitCode: 23, signalCode: null }],
+  [
+    'dies by a signal',
+    (c: ChildProcess) => c.kill('SIGKILL'),
+    { exitCode: null, signalCode: 'SIGKILL' },
+  ],
+] as const)(
+  'sends no group signal when the owned child %s during the final identity check',
+  async (_case, end, ended) => {
+    const actual = await vi.importActual<typeof TrustedDockerRecord>(
+      '../../scripts/trusted-docker-record.mjs',
+    );
+    const live = vi.mocked(ownerIsLive);
+    // Exit on stdin end, not on a catchable signal: a pipe end cannot arrive before the listener.
+    const child = spawn(
+      process.execPath,
+      ['-e', "process.stdin.on('end', () => process.exit(23)).resume();"],
+      { detached: true, stdio: ['pipe', 'ignore', 'ignore'] },
+    );
+    const closed = once(child, 'close');
+    const realKill = process.kill.bind(process);
+    // Group signals are recorded, never sent: a reaped group number may already name a stranger.
+    const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (pid >= 0) realKill(pid, signal);
+      return true;
+    });
+    try {
+      await once(child, 'spawn');
+      if (child.pid === undefined) throw new Error('Missing owned signal fixture');
+      const identity = processIdentity({ pid: child.pid, birth: await processBirth(child.pid) });
+      live
+        .mockClear()
+        .mockImplementationOnce(actual.ownerIsLive)
+        .mockImplementationOnce(async () => {
+          const exited = once(child, 'exit');
+          end(child);
+          await exited;
+          return true;
+        });
 
-    const signalled = await signalOwnedGroup(child, identity);
-    expect({
-      signalled,
-      identityChecks: live.mock.calls.length,
-      groupSignals: kill.mock.calls.filter(([pid]) => pid < 0),
-    }).toEqual({ signalled: false, identityChecks: 2, groupSignals: [] });
-  } finally {
-    kill.mockRestore();
-    live.mockReset();
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    await closed;
-  }
-});
+      const signalled = await signalOwnedGroup(child, identity);
+      expect({
+        signalled,
+        identityChecks: live.mock.calls.length,
+        groupSignals: kill.mock.calls.filter(([pid]) => pid < 0),
+        ended: { exitCode: child.exitCode, signalCode: child.signalCode },
+      }).toEqual({ signalled: false, identityChecks: 2, groupSignals: [], ended });
+    } finally {
+      kill.mockRestore();
+      live.mockReset();
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await closed;
+    }
+  },
+);
