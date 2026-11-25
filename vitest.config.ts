@@ -109,7 +109,7 @@ export default defineConfig({
           // wait, the editor load, the Agent turn, the save's typing, the save poll and the notice
           // clear; two 15s windows; ten 30s execs: the write, four reads, two provider reads and
           // three listings), #650's 190s, #657 A's 75s and the 30s template read.
-          // The Office opening and typing helpers (#716) raised it by 5275s, counting every call at
+          // The Office opening and typing helpers (#716) raised it by 6355s, counting every call at
           // the bounds of its serial waits (the call-site table of the office-stack-lane-budgets
           // change). openHinted: the row, the settled editor and the refusal at one 60s session
           // timeout each, the row click and its screenshot at Playwright's 30s default action
@@ -119,9 +119,9 @@ export default defineConfig({
           //   hints openHinted (#439)                       1 x 240       =  240
           //   editAndSave openHinted (editor A 3, idle 1)   4 x 240 - 240 =  720
           //   editAndSave typeAndSave (the same four)       4 x 240 + 95  = 1055
-          //   rewrite openHinted (four cases)               4 x 240 - 240 =  720
-          //   rewrite unsaved typing                        1 x 240 - 60  =  180
-          //   rewrite save typing (four cases)              4 x 240 - 240 =  720
+          //   rewrite openHinted (six cases)                6 x 240 - 360 = 1080
+          //   rewrite unsaved typing (three cases)          3 x 240 - 180 =  540
+          //   rewrite save typing (six cases)               6 x 240 - 360 = 1080
           //   typing case typing, openHinted, save typing   3 x 240 - 180 =  540
           //   forgotten edit openHinted and typing          2 x 240 - 60  =  420
           //   forgotten recover openHinted                  1 x 240 - 60  =  180
@@ -132,20 +132,26 @@ export default defineConfig({
           // line) and HOLD_MS (the idle line) are counted above; the idle hook's administrator
           // fetches pass no timeout and stay in the margin. The 260s: the recovery hook's
           // dismissAlert, a 20s wait and four 60s waits.
-          // The masked sessions' Chinese UI wait (#717) raised it by 360s: one 60s session timeout
-          // for each of six (rewrite clean, unsaved, xlsx, pptx and typing; the forgotten edit).
+          // The masked sessions' Chinese UI wait (#717) raised it by 480s: one 60s session timeout
+          // for each of eight (rewrite clean, unsaved, xlsx, pptx, unsaved-xlsx, unsaved-pptx and
+          // typing; the forgotten edit).
           // The rewrite typing case's quiet window (#716) raised it by 15s.
+          // The unsaved XLSX and PPTX rewrite cases (#716 item 4) raised it by 2090s, 1045s each:
+          // the 985s an #657 A4 case counts (above) and the unsaved typing's 60s session timeout.
+          // Their 540s each of helper rows (openHinted, the unsaved typing and the save typing at
+          // 180s) are in the #716 table, and their masked session's 60s in the #717 line: 1645s
+          // per case in all.
           // Sum: 2400 + 600 + 480 + 600 + 300 + 180 + 60 + 660 + 30 + 420 + 1500 + 960 + 870 +
-          // 870 + 150 + 1970 + 5275 + 360 + 15 = 17700s, the 1200s of cold builds plus 16500s for
-          // everything else. Outside the opening and typing helpers, which it counts at every
-          // bound, that remainder is a margin, not the sum of every per-step bound: a vitest
+          // 870 + 150 + 1970 + 6355 + 480 + 15 + 2090 = 20990s, the 1200s of cold builds plus
+          // 19790s for everything else. Outside the opening and typing helpers, which it counts at
+          // every bound, that remainder is a margin, not the sum of every per-step bound: a vitest
           // timeout skips the restore `finally` and leaves ragflow-cpu stopped (LOCAL_STACK.md §5),
           // and a stalled helper wait fails with its own label first. A poll bounded by a deadline
           // (the 120s write-back, for one) checks it only after its exec returns, so it can overrun
-          // by that last exec; the margin covers that too. The three rewrite lines (#442, #652,
-          // #657 A4) still count the Document Server healthcheck wait at its 60s deadline only, in
-          // the older deadline-only notation.
-          testTimeout: 17_700_000,
+          // by that last exec; the margin covers that too. The four rewrite lines (#442, #652,
+          // #657 A4, #716 item 4) still count the Document Server healthcheck wait at its 60s
+          // deadline only, in the older deadline-only notation.
+          testTimeout: 20_990_000,
         },
       },
     ],
