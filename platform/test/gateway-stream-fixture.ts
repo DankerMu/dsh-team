@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import { readSessionCookie } from '../src/auth/index.ts';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
 import { observeHttp, sendHttp, withUpstream } from './gateway-http-fixture.ts';
+import { failureReport, traceTimeline, transferRecorder } from './gateway-stream-trace.ts';
+import type { FailurePhase, StreamDirection, TransferRecorder } from './gateway-stream-trace.ts';
 
 export type StreamMode = 'stream' | 'buffer-upload' | 'buffer-download';
 export type StreamSurface = 'src' | 'dist';
@@ -25,7 +27,7 @@ interface Integrity {
   sha256: string;
 }
 interface StreamMeasurement extends Integrity {
-  direction: 'upload' | 'download';
+  direction: StreamDirection;
   pid: number;
   baseline: number;
   peak: number;
@@ -46,7 +48,11 @@ interface StreamOptions {
     child?: ChildProcess;
     port?: number;
   }) => void;
+  // Attribution probes only: reject the download pipeline after its response finished, or
+  // destroy the upstream's incoming upload after its first chunk.
+  fault?: 'download-pipeline' | 'upload-incoming';
 }
+type Recorders = Partial<Record<StreamDirection, TransferRecorder>>;
 
 interface PayloadState {
   uploaded?: Integrity;
@@ -57,18 +63,22 @@ interface PayloadState {
 interface PayloadResources {
   state: PayloadState;
   pipelines: Set<Promise<void>>;
-  errors: unknown[];
+  errors: { direction: StreamDirection; error: unknown }[];
   handler: (incoming: IncomingMessage, response: ServerResponse) => void;
-  upload: (base: string, cookie: string) => Promise<Integrity>;
+  upload: (base: string, cookie: string, recorder: TransferRecorder) => Promise<Integrity>;
   stored: () => Promise<Integrity>;
 }
 
-function preserve(primary: unknown, cleanup: unknown[]): never {
+function preserve(primary: unknown, cleanup: unknown[]): unknown {
   if (cleanup.length !== 0)
-    throw new AggregateError([primary, ...cleanup], 'Gateway stream operation and cleanup failed', {
-      cause: primary,
-    });
-  throw primary;
+    return new AggregateError(
+      [primary, ...cleanup],
+      'Gateway stream operation and cleanup failed',
+      {
+        cause: primary,
+      },
+    );
+  return primary;
 }
 function send(child: ChildProcess, value: string | Record<string, unknown>): Promise<void> {
   const { promise, resolve, reject } = Promise.withResolvers<undefined>();
@@ -182,6 +192,7 @@ function ownStreamChild() {
     resourcesSettled: false,
     ipcErrors: 0,
     stderrBytes: 0,
+    escalated: false,
     diagnostics,
   };
   let stderr = '';
@@ -258,6 +269,7 @@ function ownStreamChild() {
         await observeHttp(settled.promise, 2_000);
       } catch {
         if (!state.exited && !state.spawnFailed) {
+          state.escalated = true;
           try {
             child.kill('SIGKILL');
           } catch (error) {
@@ -281,14 +293,18 @@ async function measured(
   target: GatewayUpstream,
   mode: StreamMode,
   surface: StreamSurface,
-  direction: 'upload' | 'download',
+  direction: StreamDirection,
   signal: AbortSignal,
   observe: (phase: 'child' | 'child-settled', child: ChildProcess) => void,
+  recorder: TransferRecorder,
   work: (base: string, cookie: string) => Promise<Integrity>,
 ): Promise<StreamMeasurement> {
   signal.throwIfAborted();
   const lifecycle = ownStreamChild();
   const { child, state } = lifecycle;
+  child.once('exit', (exitCode, exitSignal) => {
+    recorder.exited(exitCode, exitSignal);
+  });
   let result: StreamMeasurement | undefined;
   let primary: unknown;
   let failed = false;
@@ -352,6 +368,7 @@ async function measured(
     failed = true;
   }
   const cleanup = await lifecycle.shutdown();
+  recorder.trace.child.escalated = state.escalated;
   if (state.resourcesSettled) {
     try {
       observe('child-settled', child);
@@ -371,7 +388,7 @@ async function measured(
     const error = new Error(`Gateway stream child failure ${JSON.stringify(evidence)}`, {
       cause: failed ? primary : cleanup.shift(),
     });
-    preserve(error, cleanup);
+    throw preserve(error, cleanup);
   }
   assert.ok(result !== undefined, 'Missing stream measurement');
   return result;
@@ -382,9 +399,11 @@ async function transfer(
   method: 'POST' | 'GET',
   cookie: string,
   signal: AbortSignal,
+  recorder: TransferRecorder,
   source?: Readable,
 ): Promise<Integrity> {
   signal.throwIfAborted();
+  const { client } = recorder.trace;
   const operation = AbortSignal.any([signal, AbortSignal.timeout(30_000)]);
   const completed = Promise.withResolvers<Integrity>();
   let responseWork: Promise<void> | undefined;
@@ -400,6 +419,8 @@ async function transfer(
       signal: operation,
     },
     (response) => {
+      client.status = response.statusCode ?? null;
+      recorder.observe('client', 'response', response, ['end', 'close', 'aborted']);
       const hash = createHash('sha256');
       let bytes = 0;
       responseWork = pipeline(
@@ -408,6 +429,7 @@ async function transfer(
           write(chunk: Buffer, _encoding, done) {
             hash.update(chunk);
             bytes += chunk.length;
+            client.read += chunk.length;
             done();
           },
         }),
@@ -422,6 +444,10 @@ async function transfer(
       }, completed.reject);
     },
   );
+  recorder.observe('client', 'request', call, ['finish', 'close']);
+  call.once('socket', (socket) => {
+    recorder.observe('client', 'socket', socket, ['finish', 'end', 'close']);
+  });
   call.on('error', completed.reject);
   call.once('close', () => {
     closed.resolve(undefined);
@@ -470,6 +496,8 @@ function payloadResources(
   file: string,
   signal: AbortSignal,
   observe: (phase: 'upload' | 'download') => void,
+  recorders: Recorders,
+  fault: StreamOptions['fault'],
 ): PayloadResources {
   const producer = createHash('sha256');
   const state: PayloadState = {
@@ -478,24 +506,82 @@ function payloadResources(
     downloadObserved: false,
   };
   const pipelines = new Set<Promise<void>>();
-  const errors: unknown[] = [];
-  const track = (work: Promise<void>) => {
+  const errors: PayloadResources['errors'] = [];
+  const track = (work: Promise<void>, direction: StreamDirection) => {
     const settled = work.catch((error: unknown) => {
-      if (!signal.aborted) errors.push(error);
+      if (!signal.aborted) errors.push({ direction, error });
     });
     pipelines.add(settled);
     void settled.then(() => {
       pipelines.delete(settled);
     });
   };
-  function* chunks(): Generator<Buffer> {
+  function* chunks(recorder: TransferRecorder): Generator<Buffer> {
     for (let offset = 0; offset < STREAM_BYTES; offset += 65536) {
       signal.throwIfAborted();
       const chunk = Buffer.alloc(Math.min(65536, STREAM_BYTES - offset), (offset / 65536) % 251);
       chunk.writeUInt32LE(offset, 0);
       producer.update(chunk);
+      // Bytes produced into the request stream, ahead of the socket by its buffered chunks.
+      recorder.trace.client.written += chunk.length;
       yield chunk;
     }
+  }
+  function receive(
+    incoming: IncomingMessage,
+    response: ServerResponse,
+    recorder: TransferRecorder,
+  ) {
+    const hash = createHash('sha256');
+    let bytes = 0;
+    incoming.on('data', (chunk: Buffer) => {
+      hash.update(chunk);
+      bytes += chunk.length;
+      recorder.trace.upstream.received += chunk.length;
+      if (!state.uploadObserved) {
+        state.uploadObserved = true;
+        observe('upload');
+        if (fault === 'upload-incoming') incoming.destroy();
+      }
+    });
+    track(
+      pipeline(incoming, createWriteStream(file, { flags: 'wx', signal }), { signal })
+        .then(() => {
+          state.uploaded = { bytes, sha256: hash.digest('hex') };
+          response.writeHead(201).end('stored');
+        })
+        .catch((error: unknown) => {
+          response.destroy();
+          throw error;
+        }),
+      'upload',
+    );
+  }
+  function send(response: ServerResponse, recorder: TransferRecorder) {
+    const source = createReadStream(file, { signal });
+    source.on('data', (chunk: Buffer | string) => {
+      recorder.trace.upstream.sent += chunk.length;
+      if (!state.downloadObserved) {
+        state.downloadObserved = true;
+        observe('download');
+      }
+    });
+    response.writeHead(200, { 'content-length': String(STREAM_BYTES) });
+    const work = pipeline(source, response, { signal }).catch((error: unknown) => {
+      response.destroy();
+      throw error;
+    });
+    track(
+      fault !== 'download-pipeline'
+        ? work
+        : work.then(() => {
+            // The CI signature: one tracked download pipeline rejecting after the response finished.
+            const injected = new Error('Injected download pipeline rejection');
+            recorder.record('upstream', 'response', 'error', injected);
+            throw injected;
+          }),
+      'download',
+    );
   }
   return {
     state,
@@ -515,47 +601,20 @@ function payloadResources(
         response.end('ready');
         return;
       }
-      if (incoming.method === 'POST') {
-        const hash = createHash('sha256');
-        let bytes = 0;
-        incoming.on('data', (chunk: Buffer) => {
-          hash.update(chunk);
-          bytes += chunk.length;
-          if (!state.uploadObserved) {
-            state.uploadObserved = true;
-            observe('upload');
-          }
-        });
-        track(
-          pipeline(incoming, createWriteStream(file, { flags: 'wx', signal }), { signal })
-            .then(() => {
-              state.uploaded = { bytes, sha256: hash.digest('hex') };
-              response.writeHead(201).end('stored');
-            })
-            .catch((error: unknown) => {
-              response.destroy();
-              throw error;
-            }),
-        );
-      } else {
-        const source = createReadStream(file, { signal });
-        source.once('data', () => {
-          if (!state.downloadObserved) {
-            state.downloadObserved = true;
-            observe('download');
-          }
-        });
-        response.writeHead(200, { 'content-length': String(STREAM_BYTES) });
-        track(
-          pipeline(source, response, { signal }).catch((error: unknown) => {
-            response.destroy();
-            throw error;
-          }),
-        );
+      const recorder = recorders[incoming.method === 'POST' ? 'upload' : 'download'];
+      if (incoming.url !== '/payload' || recorder === undefined) {
+        response.writeHead(404).end();
+        return;
       }
+      recorder.observe('upstream', 'request', incoming, ['end', 'close', 'aborted']);
+      recorder.observe('upstream', 'response', response, ['finish', 'close']);
+      recorder.observe('upstream', 'socket', incoming.socket, ['finish', 'end', 'close']);
+      if (incoming.method === 'POST') receive(incoming, response, recorder);
+      else send(response, recorder);
     },
-    async upload(base: string, cookie: string): Promise<Integrity> {
-      await transfer(base, 'POST', cookie, signal, Readable.from(chunks(), { objectMode: false }));
+    async upload(base: string, cookie: string, recorder: TransferRecorder): Promise<Integrity> {
+      const source = Readable.from(chunks(recorder), { objectMode: false });
+      await transfer(base, 'POST', cookie, signal, recorder, source);
       signal.throwIfAborted();
       const expected = { bytes: STREAM_BYTES, sha256: producer.digest('hex') };
       assert.deepEqual(state.uploaded, expected);
@@ -584,12 +643,44 @@ function payloadResources(
   };
 }
 
+// Temp-dir removal and its observer, after the invocation-owned file pipelines settled.
+async function removePayload(
+  directory: string | undefined,
+  observe: StreamOptions['observe'],
+): Promise<unknown[]> {
+  const cleanup: unknown[] = [];
+  if (directory === undefined) return cleanup;
+  try {
+    await rm(directory, { recursive: true, force: true });
+  } catch (error) {
+    cleanup.push(error);
+    return cleanup;
+  }
+  try {
+    observe?.({ phase: 'cleaned', directory, file: join(directory, 'payload.bin') });
+  } catch {
+    cleanup.push(new Error('Stream cleanup observer failed'));
+  }
+  return cleanup;
+}
+
 export async function runLargeTransfer(
   mode: StreamMode = 'stream',
   surface: StreamSurface = 'src',
   options: StreamOptions = {},
 ): Promise<StreamMeasurement[]> {
-  const operation = streamOperation(options);
+  const timeline = traceTimeline();
+  const recorders: Recorders = {};
+  let phase: FailurePhase = 'resources';
+  // A plain Error: Vitest prints only an AggregateError's members, never its own message.
+  const failure = (cause: unknown, at: FailurePhase) =>
+    new Error(`Gateway stream failure ${JSON.stringify(failureReport(at, recorders))}`, { cause });
+  let operation: ReturnType<typeof streamOperation>;
+  try {
+    operation = streamOperation(options);
+  } catch (error) {
+    throw failure(error, phase);
+  }
   const { signal, controller } = operation;
   let directory: string | undefined;
   let payload: PayloadResources | undefined;
@@ -620,43 +711,48 @@ export async function runLargeTransfer(
     };
     observe('resources');
     signal.throwIfAborted();
-    const ownedPayload = payloadResources(file, signal, observe);
+    const ownedPayload = payloadResources(file, signal, observe, recorders, options.fault);
     payload = ownedPayload;
     await withUpstream(
       ownedPayload.handler,
       async (target) => {
         ownedPayload.state.expectedCookie = target.cookie;
-        measurements.push(
-          await measured(
+        const direction = (
+          name: StreamDirection,
+          work: (recorder: TransferRecorder, base: string, cookie: string) => Promise<Integrity>,
+        ) => {
+          phase = name;
+          const recorder = transferRecorder(timeline);
+          recorders[name] = recorder;
+          const directionMode = mode === `buffer-${name}` ? mode : 'stream';
+          return measured(
             target,
-            mode === 'buffer-upload' ? mode : 'stream',
+            directionMode,
             surface,
-            'upload',
+            name,
             signal,
-            (phase, child) => {
-              observe(phase, child, target.port);
+            (childPhase, child) => {
+              observe(childPhase, child, target.port);
             },
-            ownedPayload.upload,
+            recorder,
+            (base, cookie) => work(recorder, base, cookie),
+          );
+        };
+        measurements.push(
+          await direction('upload', (recorder, base, cookie) =>
+            ownedPayload.upload(base, cookie, recorder),
           ),
         );
+        phase = 'stored';
         const stored = await ownedPayload.stored();
         measurements.push(
-          await measured(
-            target,
-            mode === 'buffer-download' ? mode : 'stream',
-            surface,
-            'download',
-            signal,
-            (phase, child) => {
-              observe(phase, child, target.port);
-            },
-            async (base, cookie) => {
-              const result = await transfer(base, 'GET', cookie, signal);
-              assert.deepEqual(result, stored);
-              return result;
-            },
-          ),
+          await direction('download', async (recorder, base, cookie) => {
+            const result = await transfer(base, 'GET', cookie, signal, recorder);
+            assert.deepEqual(result, stored);
+            return result;
+          }),
         );
+        phase = 'upstream-cleanup';
       },
       signal,
     );
@@ -669,24 +765,18 @@ export async function runLargeTransfer(
   }
   // File pipelines are invocation-owned; server closure is not proof their descriptors settled.
   await Promise.allSettled(payload === undefined ? [] : [...payload.pipelines]);
-  const cleanup = payload === undefined ? [] : [...payload.errors];
-  if (directory !== undefined) {
-    let removed = false;
-    try {
-      await rm(directory, { recursive: true, force: true });
-      removed = true;
-    } catch (error) {
-      cleanup.push(error);
-    }
-    if (removed) {
-      try {
-        options.observe?.({ phase: 'cleaned', directory, file: join(directory, 'payload.bin') });
-      } catch {
-        cleanup.push(new Error('Stream cleanup observer failed'));
-      }
-    }
+  const pipelineErrors = payload?.errors ?? [];
+  const cleanup = [
+    ...pipelineErrors.map((entry) => entry.error),
+    ...(await removePayload(directory, options.observe)),
+  ];
+  if (failed) throw failure(preserve(primary, cleanup), phase);
+  if (cleanup.length !== 0) {
+    const first = pipelineErrors[0];
+    throw failure(
+      new AggregateError(cleanup, 'Gateway stream cleanup failed'),
+      first === undefined ? 'payload-cleanup' : `upstream-pipeline:${first.direction}`,
+    );
   }
-  if (failed) preserve(primary, cleanup);
-  if (cleanup.length !== 0) throw new AggregateError(cleanup, 'Gateway stream cleanup failed');
   return measurements;
 }
