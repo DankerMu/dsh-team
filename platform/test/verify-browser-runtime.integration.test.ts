@@ -12,7 +12,7 @@ import { vitestSpawnInterception, vitestStandIn } from './vitest-stand-in-fixtur
 const wrapper = fileURLToPath(new URL('../../scripts/verify-browser-runtime.mjs', import.meta.url));
 const vitest = fileURLToPath(new URL('../../node_modules/vitest/vitest.mjs', import.meta.url));
 // Every case cold-starts two Node processes, the wrapper and the stand-in, so each gets this budget
-// (the launch cases inherited vitest's 5000 ms before); SETTLE_MS is left for its `finally`.
+// (the launch cases inherited vitest's 5000 ms before); SETTLE_MS is left for its `withCleanup`.
 const CASE_MS = 20_000;
 const SETTLE_MS = 3000;
 
@@ -165,6 +165,45 @@ async function killStandIn(root: string): Promise<void> {
   }
 }
 
+type Remove = (path: string, options: { recursive: true; force: true }) => Promise<void>;
+
+/**
+ * Runs `body`, then stops the held stand-in and removes the case tree under `root`, each step
+ * attempted even when the other fails. A cleanup failure joins the case failure as its residual.
+ */
+async function withCleanup(
+  root: string,
+  body: () => Promise<void>,
+  kill: (root: string) => Promise<void> = killStandIn,
+  remove: Remove = rm,
+): Promise<void> {
+  let failure: { error: unknown } | undefined;
+  try {
+    await body();
+  } catch (error) {
+    failure = { error };
+  }
+  const parts: string[] = [];
+  try {
+    await kill(root);
+  } catch (error) {
+    parts.push(`kill: ${String(error)}`);
+  }
+  try {
+    await remove(root, { recursive: true, force: true });
+  } catch (error) {
+    parts.push(`rm: ${String(error)}`);
+  }
+  const residual = parts.length > 0 ? parts.join('; ') : undefined;
+  if (failure === undefined) {
+    if (residual !== undefined) throw new Error(residual);
+    return;
+  }
+  if (residual !== undefined && failure.error instanceof Error)
+    failure.error.message += `; cleanup: ${residual}`;
+  throw failure.error;
+}
+
 it.each([
   ['docker', '--help'],
   ['model', '--help'],
@@ -174,16 +213,13 @@ it.each([
   async (lane, flag) => {
     const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper([lane, flag], false);
-    try {
+    await withCleanup(run.root, async () => {
       const { code } = await settled(run, deadline);
       expect(await spawns(run.root)).toEqual([
         { file: process.execPath, args: [vitest, 'run', '--project', lane, flag] },
       ]);
       expect(code).toBe(0);
-    } finally {
-      await killStandIn(run.root);
-      await rm(run.root, { recursive: true, force: true });
-    }
+    });
   },
   CASE_MS,
 );
@@ -196,7 +232,7 @@ it.each([
   async (signal, expected) => {
     const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true);
-    try {
+    await withCleanup(run.root, async () => {
       const started = await marker(run, 'started.json', deadline);
       expect(started.args).toEqual(['run', '--project', 'docker', '--help']);
       expect(run.kill(signal)).toBe(true);
@@ -205,10 +241,7 @@ it.each([
         signal,
       });
       expect({ code, standInExited }).toEqual({ code: expected, standInExited: true });
-    } finally {
-      await killStandIn(run.root);
-      await rm(run.root, { recursive: true, force: true });
-    }
+    });
   },
   CASE_MS,
 );
@@ -218,7 +251,7 @@ it(
   async () => {
     const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true, 'release');
-    try {
+    await withCleanup(run.root, async () => {
       await marker(run, 'started.json', deadline);
       expect(run.kill('SIGTERM')).toBe(true);
       expect(await marker(run, 'signal.json', deadline)).toMatchObject({ signal: 'SIGTERM' });
@@ -236,10 +269,7 @@ it(
         signal: null,
         standInExited: true,
       });
-    } finally {
-      await killStandIn(run.root);
-      await rm(run.root, { recursive: true, force: true });
-    }
+    });
   },
   CASE_MS,
 );
@@ -249,7 +279,7 @@ it(
   async () => {
     const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true);
-    try {
+    await withCleanup(run.root, async () => {
       await marker(run, 'started.json', deadline);
       // No signal is sent, so signal.json can only be missing at this short deadline.
       const missing: unknown = await marker(run, 'signal.json', Date.now() + 1000).catch(
@@ -261,10 +291,7 @@ it(
       expect(message).toContain('wrapper not exited');
       expect(message).toContain('started.json present');
       expect(message).toMatch(/stand-in \d+ alive/);
-    } finally {
-      await killStandIn(run.root);
-      await rm(run.root, { recursive: true, force: true });
-    }
+    });
   },
   CASE_MS,
 );
@@ -274,7 +301,7 @@ it(
   async () => {
     const deadline = Date.now() + CASE_MS - SETTLE_MS;
     const run = await startWrapper(['docker', '--help'], true);
-    try {
+    await withCleanup(run.root, async () => {
       await marker(run, 'started.json', deadline);
       // No signal is sent, so the held stand-in keeps the wrapper alive past this short deadline.
       const pending: unknown = await settled(run, Date.now() + 1000).catch(
@@ -285,9 +312,109 @@ it(
       expect(message).toContain('Wrapper did not exit by the case deadline');
       expect(message).toContain('wrapper not exited');
       expect(message).toMatch(/stand-in \d+ alive/);
+    });
+  },
+  CASE_MS,
+);
+
+function failing(code: string, root: string): Promise<never> {
+  const error = new Error(`${code}: operation failed on purpose, '${root}'`);
+  return Promise.reject(Object.assign(error, { code }));
+}
+
+it(
+  'keeps the case failure and names the case tree removal that failed after it',
+  async () => {
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
+    const run = await startWrapper(['docker', '--help'], true);
+    const recorded: { root?: string; pid?: number | undefined } = {};
+    const thrown = new Error('case body failed on purpose');
+    try {
+      const failure: unknown = await withCleanup(
+        run.root,
+        async () => {
+          await marker(run, 'started.json', deadline);
+          recorded.pid = await standInPid(run.root);
+          throw thrown;
+        },
+        killStandIn,
+        (root) => {
+          recorded.root = root;
+          return failing('EBUSY', root);
+        },
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBe(thrown);
+      expect(thrown.message).toMatch(/^case body failed on purpose; cleanup: rm: /);
+      expect(thrown.message).toContain('rm: Error: EBUSY: ');
+      // The stand-in is the wrapper's child, so its absence is observable only after the wrapper reaped it.
+      await settled(run, deadline);
+      if (recorded.pid === undefined) throw new Error('stand-in pid unpublished');
+      const probe = recorded.pid;
+      expect(() => process.kill(probe, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
     } finally {
-      await killStandIn(run.root);
-      await rm(run.root, { recursive: true, force: true });
+      if (recorded.root !== undefined) await rm(recorded.root, { recursive: true, force: true });
+    }
+  },
+  CASE_MS,
+);
+
+it(
+  'keeps the case failure and still removes the case tree after the stand-in kill failed',
+  async () => {
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
+    const run = await startWrapper(['docker', '--help'], true);
+    const recorded: { root?: string } = {};
+    const thrown = new Error('case body failed on purpose');
+    try {
+      const failure: unknown = await withCleanup(
+        run.root,
+        async () => {
+          await marker(run, 'started.json', deadline);
+          throw thrown;
+        },
+        async (root) => {
+          recorded.root = root;
+          await killStandIn(root);
+          return failing('EPERM', root);
+        },
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBe(thrown);
+      expect(thrown.message).toMatch(/^case body failed on purpose; cleanup: kill: Error: EPERM: /);
+      expect(recorded.root).toBe(run.root);
+      expect(existsSync(run.root)).toBe(false);
+    } finally {
+      if (recorded.root !== undefined) await rm(recorded.root, { recursive: true, force: true });
+    }
+  },
+  CASE_MS,
+);
+
+it(
+  'fails a passing case with the case tree removal that failed after it',
+  async () => {
+    const deadline = Date.now() + CASE_MS - SETTLE_MS;
+    const run = await startWrapper(['docker', '--help'], true);
+    const recorded: { root?: string } = {};
+    try {
+      const failure: unknown = await withCleanup(
+        run.root,
+        async () => {
+          await marker(run, 'started.json', deadline);
+        },
+        killStandIn,
+        (root) => {
+          recorded.root = root;
+          return failing('EBUSY', root);
+        },
+      ).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(Error);
+      // toBeInstanceOf narrows only at run time; the compiler still sees `unknown`.
+      expect((failure as Error).message).toMatch(/^rm: Error: EBUSY: /);
+    } finally {
+      if (recorded.root !== undefined) await rm(recorded.root, { recursive: true, force: true });
     }
   },
   CASE_MS,

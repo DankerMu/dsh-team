@@ -126,7 +126,8 @@ process.stdout.write(JSON.stringify(await Promise.all(JSON.parse(process.argv[1]
       try {
         process.kill(pid, 'SIGKILL');
       } catch (error) {
-        // Only absence since the observation is tolerated; anything else is reported as is.
+        // Only absence since the observation is tolerated. Any other kill error leaves the map and
+        // propagates; caseSpawn then reports only its kind, as `unobservable (<name>)`.
         if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
         return `pid=${String(pid)} gone`;
       }
