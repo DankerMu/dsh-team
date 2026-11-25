@@ -4,7 +4,9 @@
 # Entrypoints, one classifier (path_violations):
 #   <path>                 one path (agent write-time check), exit 2 on violation;
 #   (no arguments)         the staged index, from .husky/pre-commit, exit 1;
-#   --range <base> <head>  paths base...head adds or renames, from CI through
+#   --range <base> <head>  paths base...head adds or renames, plus every path any
+#                          base..head commit adds or renames (a later deletion
+#                          does not hide it), from CI through
 #                          scripts/check-pr-range.sh (`pnpm lint:pr`), exit 1.
 # .git-hooks/ is not a hooks directory: core.hooksPath stays husky's .husky/_.
 #
@@ -126,7 +128,11 @@ fi
 changed="$(mktemp)" || exit 2
 trap 'rm -f "$changed"' EXIT
 if [ "${1:-}" = "--range" ]; then
-  if ! git diff -z --name-only --diff-filter=AR --end-of-options "$range" -- >"$changed"; then
+  # The union (#715): `git log` lists each commit's own paths, so a path added and
+  # later deleted inside the range is still seen, but it lists none for a merge
+  # commit; the net diff still names paths only a merge adds.
+  if ! git diff -z --name-only --diff-filter=AR --end-of-options "$range" -- >"$changed" ||
+    ! git log -z --format= --name-only --diff-filter=AR --end-of-options "$2..$3" -- >>"$changed"; then
     echo "check-naming.sh: unreadable range $range" >&2
     exit 2
   fi
@@ -140,7 +146,12 @@ violations=()
 while IFS= read -r -d '' f; do
   [[ -z "$f" ]] && continue
   found="$(path_violations "$f")"
-  [ -z "$found" ] || violations+=("$found")
+  [ -n "$found" ] || continue
+  # A path in both range sets is reported once (bash 3.2: no associative arrays).
+  for seen in "${violations[@]+"${violations[@]}"}"; do
+    [ "$seen" != "$found" ] || continue 2
+  done
+  violations+=("$found")
 done <"$changed"
 
 if [ "${#violations[@]}" -gt 0 ]; then
