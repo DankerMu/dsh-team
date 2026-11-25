@@ -13,7 +13,7 @@ import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import { readSessionCookie } from '../src/auth/index.ts';
 import type { GatewayUpstream } from '../src/gateway/index.ts';
-import { observeHttp, sendHttp, withUpstream } from './gateway-http-fixture.ts';
+import { HTTP_SEND_SLOW_MS, observeHttp, sendHttp, withUpstream } from './gateway-http-fixture.ts';
 import { failureReport, traceTimeline, transferRecorder } from './gateway-stream-trace.ts';
 import type { FailurePhase, StreamDirection, TransferRecorder } from './gateway-stream-trace.ts';
 
@@ -334,7 +334,14 @@ async function measured(
     const cookie = identity.cookie;
     phase = 'warmup';
     assert.equal(
-      (await sendHttp(base, { path: '/warmup', headers: { cookie }, signal })).status,
+      (
+        await sendHttp(
+          base,
+          { path: '/warmup', headers: { cookie }, signal },
+          undefined,
+          HTTP_SEND_SLOW_MS,
+        )
+      ).status,
       200,
     );
     phase = 'baseline';

@@ -19,8 +19,40 @@ import {
 // observeHttp's default bound on one peer event; it fails a stalled peer, never stands in for one.
 // Measured (#687) with a 60s bound, 10 runs of the secondary-table files at 1-minute load 68-84:
 // every single-event site settled within 87ms, about 23x below this. An aggregate observation (a
-// whole transfer) passes its own named bound.
+// whole transfer) passes its own named bound. It is a fixed bound below vitest's default 5s case
+// budget, not one derived from it; sendHttp's close wait spends it after HTTP_SEND_MS (see there).
 const HTTP_OBSERVATION_MS = 2000;
+
+// sendHttp's default bound on one send, response end included; it fails a stalled peer.
+// Measured (#719) over the seven gateway caller files and the ragflow-proxy datasets, documents and
+// retrieval files, 5 runs at 1-minute load 67-85 (745 sends, 0 failed): the largest successful send
+// took 400.2ms, so this is about 6x above it. 10x (4002ms) does not fit: 4002 + 2000 > 5000. This
+// is the largest value that keeps HTTP_SEND_MS + HTTP_OBSERVATION_MS (the close wait) = 4500ms
+// below vitest's default 5s case budget, which these callers run under.
+export const HTTP_SEND_MS = 2500;
+
+// The send bound for callers with far larger case budgets whose sends are legitimately slower:
+// instance-idle.docker.test.ts (real DSH and cold container starts, 900s case budget) and the
+// stream warmup (first request to a new child beside a 400MiB transfer, 60s case budget). It keeps
+// those callers' send bound at today's 5s, well inside those budgets.
+export const HTTP_SEND_SLOW_MS = 5000;
+
+/**
+ * Settles an operation whose cleanup ran regardless: a cleanup failure never hides the
+ * operation's failure, which leaves first as the cause of the aggregate.
+ */
+export function settleWithCleanup<T>(
+  message: string,
+  outcome: { value: T } | { error: unknown },
+  cleanup: { error: unknown } | undefined,
+): T {
+  if ('error' in outcome) {
+    if (cleanup === undefined) throw outcome.error;
+    throw new AggregateError([outcome.error, cleanup.error], message, { cause: outcome.error });
+  }
+  if (cleanup !== undefined) throw cleanup.error;
+  return outcome.value;
+}
 
 export async function unusedPort(): Promise<number> {
   const server = createTcpServer();
@@ -53,8 +85,7 @@ export async function withUpstream(
     for (const socket of sockets) socket.destroy();
   };
   signal?.addEventListener('abort', abort, { once: true });
-  let primary: unknown;
-  let failed = false;
+  let outcome: { value: undefined } | { error: unknown } = { value: undefined };
   try {
     signal?.throwIfAborted();
     // Acquire the actual listener before observing cancellation: racing a rejected listening
@@ -93,11 +124,10 @@ export async function withUpstream(
       server,
     );
   } catch (error) {
-    primary = error;
-    failed = true;
+    outcome = { error };
   }
   signal?.removeEventListener('abort', abort);
-  const cleanup: unknown[] = [];
+  let cleanup: { error: unknown } | undefined;
   try {
     const socketClosures = [...sockets].map((socket) => {
       const closed = Promise.withResolvers<undefined>();
@@ -110,20 +140,13 @@ export async function withUpstream(
     if (server.listening) {
       const closed = once(server, 'close');
       server.close();
-      await observeHttp(closed, HTTP_OBSERVATION_MS);
+      await observeHttp(closed, HTTP_OBSERVATION_MS, 'upstream server close');
     }
-    await observeHttp(Promise.all(socketClosures), HTTP_OBSERVATION_MS);
+    await observeHttp(Promise.all(socketClosures), HTTP_OBSERVATION_MS, 'upstream sockets close');
   } catch (error) {
-    cleanup.push(error);
+    cleanup = { error };
   }
-  if (cleanup.length !== 0) {
-    if (failed)
-      throw new AggregateError([primary, ...cleanup], 'Upstream operation and cleanup failed', {
-        cause: primary,
-      });
-    throw cleanup[0];
-  }
-  if (failed) throw primary;
+  settleWithCleanup('Upstream operation and cleanup failed', outcome, cleanup);
 }
 
 export async function withForwardingApp(
@@ -154,29 +177,31 @@ export async function withForwardingApp(
   );
 }
 
-export async function sendHttp(
-  base: string,
-  options: RequestOptions,
-  body?: string | Buffer,
-): Promise<{
+interface SentHttp {
   status: number;
   headers: IncomingHttpHeaders;
   trailers: IncomingHttpHeaders;
   body: Buffer;
-}> {
-  const { promise, resolve, reject } = Promise.withResolvers<{
-    status: number;
-    headers: IncomingHttpHeaders;
-    trailers: IncomingHttpHeaders;
-    body: Buffer;
-  }>();
+}
+
+/**
+ * Sends one request and reads its whole response within `sendMs`. An aborted send fails naming the
+ * request and its phase, with Node's AbortError as the cause; other request errors pass unchanged.
+ */
+export async function sendHttp(
+  base: string,
+  options: RequestOptions,
+  body?: string | Buffer,
+  sendMs = HTTP_SEND_MS,
+): Promise<SentHttp> {
+  const { promise, resolve, reject } = Promise.withResolvers<SentHttp>();
   // A failed real peer must be bounded; successful completion is response end.
-  const signal =
-    options.signal === undefined
-      ? AbortSignal.timeout(5_000)
-      : AbortSignal.any([options.signal, AbortSignal.timeout(5_000)]);
-  let responseClosed: Promise<void> | undefined;
+  const bound = AbortSignal.timeout(sendMs);
+  const signal = options.signal === undefined ? bound : AbortSignal.any([options.signal, bound]);
+  let phase = 'response headers';
+  let responseClosed: Promise<undefined> | undefined;
   const call = request(base, { ...options, signal }, (response) => {
+    phase = 'response body';
     const closed = Promise.withResolvers<undefined>();
     responseClosed = closed.promise;
     response.once('close', () => {
@@ -202,22 +227,42 @@ export async function sendHttp(
     closed.resolve(undefined);
   });
   call.end(body);
+  // Node's own method and path, so a call that gives neither names GET /.
+  const name = `sendHttp ${call.method} ${call.path}`;
+  let outcome: { value: SentHttp } | { error: unknown };
   try {
-    return await promise;
-  } finally {
-    call.destroy();
-    await Promise.all([closed.promise, responseClosed]);
+    outcome = { value: await promise };
+  } catch (error) {
+    const aborted = signal.aborted && error instanceof Error && error.name === 'AbortError';
+    const why = bound.aborted
+      ? `exceeded the ${String(sendMs)}ms send bound`
+      : 'aborted by the caller';
+    outcome = { error: aborted ? new Error(`${name}: ${phase} ${why}`, { cause: error }) : error };
   }
+  call.destroy();
+  let cleanup: { error: unknown } | undefined;
+  try {
+    await observeHttp(
+      Promise.all([closed.promise, responseClosed]),
+      HTTP_OBSERVATION_MS,
+      `${name}: close`,
+    );
+  } catch (error) {
+    cleanup = { error };
+  }
+  return settleWithCleanup(`${name}: send and close failed`, outcome, cleanup);
 }
 
 export async function observeHttp<T>(
   observation: Promise<T>,
   timeoutMs = HTTP_OBSERVATION_MS,
+  label?: string,
 ): Promise<T> {
   const { promise, reject } = Promise.withResolvers<never>();
+  const message = 'HTTP peer observation did not settle';
   // A deadline fails a stalled real peer; it never stands in for an event.
   const deadline = setTimeout(() => {
-    reject(new Error('HTTP peer observation did not settle'));
+    reject(new Error(label === undefined ? message : `${message}: ${label}`));
   }, timeoutMs);
   deadline.unref();
   return Promise.race([observation, promise]).finally(() => {
@@ -257,7 +302,7 @@ export function reader(socket: Duplex, head = Buffer.alloc(0)): ReadPeer {
     notify = check;
     check();
     try {
-      return await observeHttp(pending.promise);
+      return await observeHttp(pending.promise, HTTP_OBSERVATION_MS, 'peer read');
     } finally {
       notify = undefined;
     }
@@ -283,7 +328,7 @@ export async function rejectedUpgrade(
       `GET ${path} HTTP/1.1\r\nHost: ${address.host}\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n${fields.join('\r\n')}\r\n\r\n`,
     );
     const headers = (await read('\r\n\r\n')).toString();
-    await observeHttp(closed);
+    await observeHttp(closed, HTTP_OBSERVATION_MS, 'rejected upgrade close');
     return headers;
   } finally {
     socket.destroy();
