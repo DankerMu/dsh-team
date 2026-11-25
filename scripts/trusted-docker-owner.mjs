@@ -167,6 +167,7 @@ export async function signalOwnedGroup(child, identity) {
     !(await ownerIsLive(identity))
   )
     throw new Error('Trusted Docker child group identity changed');
+  if (child.exitCode !== null || child.signalCode !== null) return false;
   process.kill(-identity.pid, 'SIGINT');
   return true;
 }

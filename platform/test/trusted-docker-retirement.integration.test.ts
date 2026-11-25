@@ -6,9 +6,17 @@ import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { processBirth, processIdentity } from '../../scripts/probe-browser-native.mjs';
 import { signalOwnedGroup } from '../../scripts/trusted-docker-owner.mjs';
+import { ownerIsLive } from '../../scripts/trusted-docker-record.mjs';
+import type * as TrustedDockerRecord from '../../scripts/trusted-docker-record.mjs';
 import { record } from './container-start-docker-fixture.ts';
 import { awaitResult, withTrustedDockerFixture } from './trusted-docker-fixture.ts';
 import type { RetirementScenario } from './trusted-docker-fixture.ts';
+
+// Passthrough: every case reads the real identity; one case queues a single-call substitute.
+vi.mock('../../scripts/trusted-docker-record.mjs', async (importOriginal) => {
+  const actual = await importOriginal<typeof TrustedDockerRecord>();
+  return { ...actual, ownerIsLive: vi.fn(actual.ownerIsLive) };
+});
 
 type CustodyFixture = Parameters<Parameters<typeof withTrustedDockerFixture>[1]>[0];
 
@@ -416,6 +424,51 @@ it('reports the group signal it actually sent to a live owned child', async () =
     await expect(signalOwnedGroup(child, identity)).resolves.toBe(true);
     expect(await closed).toEqual([null, 'SIGINT']);
   } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await closed;
+  }
+});
+
+// A child reaped while the final identity read is pending frees its group number for reuse.
+it('sends no group signal when the owned child ends during the final identity check', async () => {
+  const actual = await vi.importActual<typeof TrustedDockerRecord>(
+    '../../scripts/trusted-docker-record.mjs',
+  );
+  const live = vi.mocked(ownerIsLive);
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000);'], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  const closed = once(child, 'close');
+  const realKill = process.kill.bind(process);
+  // Group signals are recorded, never sent: a reaped group number may already name a stranger.
+  const kill = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+    if (pid >= 0) realKill(pid, signal);
+    return true;
+  });
+  try {
+    await once(child, 'spawn');
+    if (child.pid === undefined) throw new Error('Missing owned signal fixture');
+    const identity = processIdentity({ pid: child.pid, birth: await processBirth(child.pid) });
+    live
+      .mockClear()
+      .mockImplementationOnce(actual.ownerIsLive)
+      .mockImplementationOnce(async () => {
+        const exited = once(child, 'exit');
+        child.kill('SIGKILL');
+        await exited;
+        return true;
+      });
+
+    const signalled = await signalOwnedGroup(child, identity);
+    expect({
+      signalled,
+      identityChecks: live.mock.calls.length,
+      groupSignals: kill.mock.calls.filter(([pid]) => pid < 0),
+    }).toEqual({ signalled: false, identityChecks: 2, groupSignals: [] });
+  } finally {
+    kill.mockRestore();
+    live.mockReset();
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await closed;
   }
