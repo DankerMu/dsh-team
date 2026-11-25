@@ -100,7 +100,7 @@ size_limits:
     value: 400
     description: "PRs exceeding this are split, or carry the diff-limit-exempt label with a justification"
     severity: "block"
-    enforced_by: ".github/workflows/ci.yml job diff-size-guard"
+    enforced_by: ".github/workflows/ci.yml job diff-size-guard (scripts/pr-diff-lines.sh over the merge ref's HEAD^1...HEAD^2)"
 
 testing:
   min_line_coverage:

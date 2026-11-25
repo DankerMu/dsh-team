@@ -232,9 +232,9 @@ for missing_policy in setting file; do
   done
 done
 
-# Docker-evidence docs-only classifier: stdin is the changed-path list (#664).
+# Docker-evidence docs-only classifier: stdin is the NUL-delimited changed-path list (#664, #715).
 docs_only() {
-  printf '%s\n' "$@" | bash scripts/docs-only-diff.sh
+  printf '%s\0' "$@" | bash scripts/docs-only-diff.sh
 }
 
 stage2_change="stage-2-dsh-ragflow-office"
@@ -321,14 +321,19 @@ expect_exit "docs-only invalid managed_archive_pattern" 2 \
 # file names: path-derived output must sit inside stop-commands markers (#664 S1).
 scope_step="$tmp/scope-step.sh"
 scope_repo="$tmp/scope-repo"
-node --input-type=module - "$scope_step" <<'JS'
+# ci_step_field <step name> <field> <file>: writes that ci.yml step's field ("" when absent).
+ci_step_field() {
+  node --input-type=module - "$@" <<'JS'
 import { readFileSync, writeFileSync } from 'node:fs';
 import { parse } from 'yaml';
+const [name, field, file] = process.argv.slice(2);
 const { jobs } = parse(readFileSync('.github/workflows/ci.yml', 'utf8'));
 const steps = Object.values(jobs).flatMap((job) => job.steps ?? []);
-const step = steps.find((candidate) => candidate.name === 'Detect documentation-only change');
-writeFileSync(process.argv[2], step?.run ?? '');
+const step = steps.find((candidate) => candidate.name === name);
+writeFileSync(file, String(step?.[field] ?? ''));
 JS
+}
+ci_step_field 'Detect documentation-only change' run "$scope_step"
 # stdin: step log. WANT: verdict lines that must be wrapped. Prints the token.
 scope_wrapped() {
   awk '
@@ -401,6 +406,12 @@ docs/##[error]injected.md
 docs/a.md
 openspec/changes/foo/.openspec.yaml" \
   'docs/##[error]injected.md' docs/a.md openspec/changes/foo/.openspec.yaml
+# Real git output (#715): a non-ASCII name arrives byte-exact, not C-quoted, and
+# git's sorted doc, code, doc order must never be read as one docs-only entry.
+scope_case "scope step reads a non-ASCII Markdown name" "docs_only=true" "docs-only
+docs/笔记.md" "docs/笔记.md"
+scope_case "scope step never joins NUL-delimited paths" "" "evidence required: platform/x.ts" \
+  docs/a.md platform/x.ts z.md
 # Distinct PR deliveries must retain their own checks, even in the pending queue.
 for policy in shared cancel-disabled action-only malformed main-cancel; do
   restore
@@ -436,6 +447,37 @@ expect_accept "CI concurrency (restored)" pnpm lint:ci
 # ── 2. Commit message ────────────────────────────────────────────────────────
 expect_reject "commit message (\"bad message\")" "type may not be empty" \
   sh -c 'echo "bad message" | pnpm exec commitlint'
+
+# Dependabot's version-update messages skip commit linting only with both its
+# subject shape and its signed-off trailer (#715). #612's real message:
+dependabot_message="$tmp/dependabot-612.txt"
+cat >"$dependabot_message" <<'EOF'
+build(deps): Bump pnpm/action-setup from 6.1.0 to 6.1.1
+
+Bumps [pnpm/action-setup](https://github.com/pnpm/action-setup) from 6.1.0 to 6.1.1.
+- [Release notes](https://github.com/pnpm/action-setup/releases)
+- [Commits](https://github.com/pnpm/action-setup/compare/ea17c68df8912ef543352723c149a84f56e3d413...73e46992e05b19abd31f2f3c20e0e7370d762115)
+
+---
+updated-dependencies:
+- dependency-name: pnpm/action-setup
+  dependency-version: 6.1.1
+  dependency-type: direct:production
+  update-type: version-update:semver-patch
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
+EOF
+dependabot_signoff='Signed-off-by: dependabot[bot] <support@github.com>'
+# commit_lines <line>...: lints the message made of these lines.
+commit_lines() { printf '%s\n' "$@" | pnpm exec commitlint; }
+expect_accept "commit message (Dependabot #612)" commit_lines "$(cat "$dependabot_message")"
+expect_reject "commit message (Dependabot subject without its trailer)" "subject-case" \
+  commit_lines "build(deps): Bump x from 1 to 2"
+expect_reject "commit message (Dependabot trailer on another subject)" "subject-case" \
+  commit_lines "feat(x): Add y" "" "$dependabot_signoff"
+expect_reject "commit message (Dependabot shape with a bad type)" "type-enum" \
+  commit_lines "oops(deps): Bump x from 1 to 2" "" "$dependabot_signoff"
 
 # The CI layer: `pnpm lint:pr <base> <head>` gates only the range's own commits
 # and added/renamed paths, and fails closed on an unreadable range (#665).
@@ -475,6 +517,49 @@ range_case range_cjk expect_reject "PR range (adds tmp/笔记.md)" "scratchpad d
 range_case range_nested expect_reject "PR range (archive scratch/)" "scratchpad directory"
 range_case range_rename expect_reject "PR range (renames into tmp/)" "scratchpad directory:    tmp/DEPLOY.md"
 range_case range_archive expect_accept "PR range (adds managed archive files)"
+# A commit's own added path counts even when a later commit deletes it (#715).
+range_add_delete() {
+  range_commit "docs(repo): add a note" tmp/x.md && git rm --quiet tmp/x.md &&
+    fixture_commit "docs(repo): drop the note"
+}
+range_case range_add_delete expect_reject "PR range (adds then deletes tmp/x.md)" \
+  "scratchpad directory:    tmp/x.md"
+# merge_adding <path>: a merge commit whose own resolution adds <path>.
+merge_adding() {
+  range_commit "docs(repo): add a side note" docs/guardrails-side.md || return 1
+  side="$(git rev-parse HEAD)" || return 1
+  git reset --quiet --hard "$baseline" && range_commit "docs(repo): add a main note" docs/guardrails-main.md &&
+    git -c user.name=guardrails -c user.email=guardrails@localhost \
+      merge --quiet --no-ff --no-commit "$side" >/dev/null 2>&1 && mkdir -p "$(dirname "$1")" &&
+    printf 'fixture\n' >"$1" && git add -- "$1" && fixture_commit "Merge branch 'side'"
+}
+# Only a merge adds wip/x.md; the net diff and the merge's dense combined diff name it.
+range_merge_only() { merge_adding wip/x.md; }
+range_case range_merge_only expect_reject "PR range (only a merge adds wip/x.md)" \
+  "scratchpad directory:    wip/x.md"
+# The dense combined diff names what a merge itself adds, so a later commit
+# deleting or renaming that path does not hide it.
+range_merge_delete() {
+  merge_adding wip/x.md && git rm --quiet wip/x.md && fixture_commit "docs(repo): drop the merge note"
+}
+range_case range_merge_delete expect_reject "PR range (a merge adds wip/x.md, a later commit deletes it)" \
+  "scratchpad directory:    wip/x.md"
+range_merge_rename() {
+  merge_adding tmp/evil.md && git mv tmp/evil.md clean.md && fixture_commit "docs(repo): rename the merge note"
+}
+range_case range_merge_rename expect_reject "PR range (a merge adds tmp/evil.md, a later commit renames it)" \
+  "scratchpad directory:    tmp/evil.md"
+# A clean sync merge of the base adds no merge-side path: the base's own
+# tmp/old.md is not the PR's.
+range_sync_merge() {
+  range_commit "docs(repo): add a pr note" docs/guardrails-pr.md || return 1
+  pr_tip="$(git rev-parse HEAD)" || return 1
+  git reset --quiet --hard "$baseline" && range_commit "docs(repo): add a base note" tmp/old.md &&
+    range_base="$(git rev-parse HEAD)" && git reset --quiet --hard "$pr_tip" &&
+    git -c user.name=guardrails -c user.email=guardrails@localhost \
+      merge --quiet --no-ff -m "Merge branch 'main'" "$range_base" >/dev/null
+}
+range_case range_sync_merge expect_accept "PR range (a clean sync merge of the base)"
 
 # Base history holds an overlong subject and a forbidden path; the range modifies
 # that path (M), merges a side commit under a default-ignored message, and conforms.
@@ -506,12 +591,141 @@ expect_reject "PR range (one argument)" "lint:pr: unreadable range" pnpm lint:pr
 expect_reject "PR range (unknown head)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$missing_sha"
 expect_reject "PR range (no merge base)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$orphan"
 expect_reject "PR range (unknown base)" "lint:pr: unreadable range" pnpm lint:pr "$missing_sha" "$baseline"
+expect_reject "PR range (base equals head)" "lint:pr: unreadable range" pnpm lint:pr "$baseline" "$baseline"
 expect_reject "naming range (unknown head)" "check-naming.sh: unreadable range" \
   bash .git-hooks/check-naming.sh --range "$baseline" "$missing_sha"
 expect_reject "naming range (unknown base)" "check-naming.sh: unreadable range" \
   bash .git-hooks/check-naming.sh --range "$missing_sha" "$baseline"
 expect_reject "naming range (empty arguments)" "check-naming.sh: unreadable range" \
   bash .git-hooks/check-naming.sh --range "" ""
+
+# PR diff size (#715): the `Enforce max PR diff lines` step text from ci.yml runs
+# under the default `bash -e` (no pipefail) in a fixture whose HEAD is a real
+# merge ref and whose payload BASE_SHA is stale; it must count only the PR's lines.
+size_step="$tmp/size-step.sh"
+size_repo="$tmp/size-repo"
+size_limit="$(node scripts/constraints.mjs size_limits max_pr_diff_lines)"
+ci_step_field 'Enforce max PR diff lines' run "$size_step"
+ci_step_field 'Enforce max PR diff lines' if "$tmp/size-if"
+size_merge() { git -c user.name=guardrails -c user.email=guardrails@localhost merge --quiet --no-ff -m merge "$@" >/dev/null; }
+# A PR branch with Markdown lines starting with + or -, and blank lines; main stays put.
+size_dash() {
+  git checkout --quiet -b pr && printf '+- foo\n-- bar\n\n\n' >notes.md && git add notes.md &&
+    fixture_commit "docs: dash lines" && git checkout --quiet main && size_merge pr
+}
+# Main gains two plain-text commits after the PR branched.
+size_stale() {
+  git checkout --quiet -b pr && printf 'one\ntwo\nthree\n' >pr.txt && git add pr.txt &&
+    fixture_commit "feat: pr lines" && git checkout --quiet main &&
+    printf 'm1\nm2\nm3\nm4\nm5\n' >m1.txt && git add m1.txt && fixture_commit "feat: main one" &&
+    printf 'n1\nn2\nn3\nn4\nn5\n' >m2.txt && git add m2.txt && fixture_commit "feat: main two" &&
+    size_merge pr
+}
+size_flat() { printf 'one\n' >pr.txt && git add pr.txt && fixture_commit "feat: pr lines"; }
+size_octopus() {
+  git checkout --quiet -b pr && printf 'one\n' >pr.txt && git add pr.txt && fixture_commit "feat: pr" &&
+    git checkout --quiet -b pr2 main && printf 'two\n' >pr2.txt && git add pr2.txt &&
+    fixture_commit "feat: pr2" && git checkout --quiet main && size_merge pr pr2
+}
+size_binary() {
+  printf '\000\001\002' >blob.dat && printf 'one\n' >pr.txt && git add blob.dat pr.txt &&
+    fixture_commit "feat: binary"
+}
+# size_fixture <setup>: base commit holds the gate's own files; BASE_SHA stays there.
+size_fixture() {
+  rm -rf "$size_repo" && mkdir -p "$size_repo/scripts" &&
+    cp scripts/constraints.mjs "$size_repo/scripts/" && cp constraints.yaml "$size_repo/" &&
+    if [ -e scripts/pr-diff-lines.sh ]; then cp scripts/pr-diff-lines.sh "$size_repo/scripts/"; fi &&
+    (cd "$size_repo" && git init --quiet -b main . && git add -A && fixture_commit "chore: base" &&
+      git rev-parse HEAD >"$tmp/size-base" && "$1")
+}
+# size_case <name> <setup> <want: exact log line, or "fail:<reason>">
+size_case() {
+  if ! size_fixture "$2"; then
+    echo "FAIL  $1 — could not build the fixture repository"
+    fail=$((fail + 1))
+    return
+  fi
+  log="$(cd "$size_repo" && BASE_SHA="$(cat "$tmp/size-base")" \
+    bash --noprofile --norc -e "$size_step" 2>&1)"
+  rc=$?
+  case "$3" in
+    fail:*)
+      if [ "$rc" -ne 0 ] && printf '%s\n' "$log" | grep -qF -- "${3#fail:}" &&
+        ! printf '%s\n' "$log" | grep -q '^Changed lines'; then
+        problem=""
+      else
+        problem="exited $rc, want failure naming \"${3#fail:}\" and no count"
+      fi
+      ;;
+    *)
+      if [ "$rc" -eq 0 ] && printf '%s\n' "$log" | grep -qxF -- "$3"; then
+        problem=""
+      else
+        problem="exited $rc, want 0 with \"$3\""
+      fi
+      ;;
+  esac
+  if [ -z "$problem" ]; then
+    echo "PASS  $1"
+    pass=$((pass + 1))
+  else
+    echo "FAIL  $1 — $problem"
+    printf '%s\n' "$log" | tail -n 15 | sed 's/^/        /'
+    fail=$((fail + 1))
+  fi
+}
+size_line="Changed lines (excluding lockfile and generated contract)"
+size_case "diff size counts dash-leading and blank lines" size_dash "$size_line: 4 (limit: $size_limit)"
+size_case "diff size ignores a stale payload base" size_stale "$size_line: 3 (limit: $size_limit)"
+size_case "diff size fails when HEAD is not a merge" size_flat "fail:HEAD is not a two-parent merge"
+size_case "diff size fails on an octopus HEAD" size_octopus "fail:HEAD is not a two-parent merge"
+size_if="\${{ !contains(github.event.pull_request.labels.*.name, 'diff-limit-exempt') }}"
+if [ "$(cat "$tmp/size-if")" = "$size_if" ]; then
+  echo "PASS  diff size step is still skipped by the diff-limit-exempt label"
+  pass=$((pass + 1))
+else
+  echo "FAIL  diff size step if: is \"$(cat "$tmp/size-if")\", want \"$size_if\""
+  fail=$((fail + 1))
+fi
+# The script itself: binary files count 0; anything uncountable fails with its
+# fixed reason and prints no count.
+size_script() { (cd "$size_repo" && bash scripts/pr-diff-lines.sh "$@"); }
+size_fixture size_binary && size_out="$(size_script HEAD~1 HEAD 2>&1)"
+if [ "${size_out:-}" = 1 ]; then
+  echo "PASS  pr-diff-lines.sh counts a binary file as 0"
+  pass=$((pass + 1))
+else
+  echo "FAIL  pr-diff-lines.sh binary fixture printed \"${size_out:-}\", want 1"
+  fail=$((fail + 1))
+fi
+size_unrelated="$(cd "$size_repo" && printf 'chore: unrelated root\n' |
+  git -c user.name=guardrails -c user.email=guardrails@localhost commit-tree 'HEAD^{tree}')"
+size_rejects() {
+  name="$1"
+  shift
+  out="$(size_script "$@" 2>"$tmp/size-err")"
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 126 ] && [ "$rc" -ne 127 ] && [ -z "$out" ] &&
+    grep -qF "pr-diff-lines.sh: cannot count the PR diff" "$tmp/size-err"; then
+    echo "PASS  pr-diff-lines.sh fails closed ($name, exit $rc)"
+    pass=$((pass + 1))
+  else
+    echo "FAIL  pr-diff-lines.sh ($name) exited $rc with stdout \"$out\":"
+    tail -n 15 "$tmp/size-err" | sed 's/^/        /'
+    fail=$((fail + 1))
+  fi
+}
+size_rejects "one argument" HEAD
+size_rejects "three arguments" HEAD~1 HEAD HEAD
+size_rejects "unknown ref" "$missing_sha" HEAD
+size_rejects "no second parent" 'HEAD^1' 'HEAD^2'
+if [ -n "$size_unrelated" ]; then
+  size_rejects "no merge base" "$size_unrelated" HEAD
+else
+  echo "FAIL  pr-diff-lines.sh (no merge base) — could not build the unrelated root"
+  fail=$((fail + 1))
+fi
 
 # ── 3. Test pairing ──────────────────────────────────────────────────────────
 echo "export const orphan = 1;" >platform/src/orphan.ts

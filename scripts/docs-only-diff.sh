@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # scripts/docs-only-diff.sh — decides whether a diff needs no trusted Docker evidence.
-# Stdin: `git diff --no-renames --name-only` output (blank lines ignored).
+# Stdin: `git diff -z --no-renames --name-only` output: NUL-delimited, byte-exact
+# paths (#715; without -z git C-quotes non-ASCII names). Empty entries are ignored.
 # Exit 0, `docs-only` plus the paths: non-empty and every path is documentation.
 # Exit 1, `evidence required: <first offending path>` or `evidence required: empty diff`.
 # Exit 2: classifier configuration unreadable; callers must fail, never exempt.
@@ -55,7 +56,7 @@ is_documentation() {
 
 # Indexed append keeps 20k-path diffs linear; string concatenation was quadratic.
 paths=()
-while IFS= read -r path || [ -n "$path" ]; do
+while IFS= read -r -d '' path || [ -n "$path" ]; do
   [ -n "$path" ] || continue
   if ! is_documentation "$path"; then
     echo "evidence required: $path"
