@@ -44,4 +44,4 @@
 ## 2. Verification
 
 - [x] 2.1 Run `pnpm test:integration`, `pnpm typecheck`, `pnpm lint`, `pnpm dead-code` and `pnpm duplicate-code`.
-- [ ] 2.2 Run one green `pnpm test:stack` on the final head, then the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.2 Run one green `pnpm test:stack` on the final head, then the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
