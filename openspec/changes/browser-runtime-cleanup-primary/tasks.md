@@ -24,7 +24,7 @@
 - [x] 1.2 Add three regression rows. Each starts the wrapper with `startWrapper(['docker', '--help'], true)`, so a live, held stand-in exists. Record each row's red output against 1.1a. Every row records the root its helper was given and removes it with the real `rm` in its own `finally`, so no row leaves a temp directory, red or green.
   - **(a) Case failure, `rm` fails.** The body throws `new Error('case body failed on purpose')`. The remover records the root it was given and rejects with an `EBUSY`-shaped error.
     - Expected: the thrown value is that same case error object, and its message matches `^case body failed on purpose; cleanup: rm: `.
-    - The recorded stand-in pid is absent (`process.kill(pid, 0)` gives ESRCH), which shows the kill ran first.
+    - The recorded stand-in pid is absent (`process.kill(pid, 0)` gives ESRCH), which shows the kill ran (the kill-then-rm order itself is review-only, unchanged from before).
     - The case removes the recorded root with the real `rm` in its own `finally`.
     - Red: the thrown value is the injected `EBUSY` error.
   - **(b) Case failure, kill fails.** The injected kill first runs the real `killStandIn`, then rejects with a `EPERM`-shaped error.
