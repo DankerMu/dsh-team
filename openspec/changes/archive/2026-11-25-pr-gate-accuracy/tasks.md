@@ -31,7 +31,7 @@ Write each guardrail case first, run it against the unchanged code, and record i
 ## 2. Verification
 
 - [x] 2.1 Record each new case red before its change and green after. Then run `pnpm test:guardrails`, `pnpm lint:shell`, `pnpm lint:ci`, `pnpm lint` and `pnpm fmt:check`. Also run `pnpm lint:pr origin/main HEAD` on the branch.
-- [ ] 2.2 In the PR:
+- [x] 2.2 In the PR:
   - flag the `.github/workflows/` change;
   - record #6 as unchanged by maintainer decision;
   - list the stale sibling ranges as reported, not changed;

@@ -39,4 +39,4 @@
 
   Then run full `pnpm test:integration` 5 times. Each run starts at a 1-minute load ≥ 13 and < 67, with 12 bounded `yes` generators that are confirmed gone afterwards. Also run `pnpm lint`, `pnpm typecheck` and `pnpm fmt:check`.
 
-- [ ] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`. The PR body says `Refs #719`.
+- [x] 2.2 Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`. The PR body says `Refs #719`.

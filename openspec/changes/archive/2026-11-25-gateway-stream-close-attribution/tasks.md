@@ -45,4 +45,4 @@ See design.md § Must preserve.
 ## 2. Verification
 
 - [x] 2.1 Run `pnpm test:integration platform/test/gateway-stream.integration.test.ts platform/test/gateway-stream-attribution.integration.test.ts` five consecutive times. Also run `pnpm test:integration`, `pnpm lint`, `pnpm typecheck` and `pnpm check`.
-- [ ] 2.2 PR carries `diff-limit-exempt` with the justification from proposal.md § Impact. Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`. Comment on #250 with what the next failure will report. Do not close #250.
+- [x] 2.2 PR carries `diff-limit-exempt` with the justification from proposal.md § Impact. Exact-head trusted VPS `pnpm test:docker` + `pnpm test:deploy`. Comment on #250 with what the next failure will report. Do not close #250.

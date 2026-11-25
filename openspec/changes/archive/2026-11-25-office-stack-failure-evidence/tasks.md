@@ -69,4 +69,4 @@ Write each case first and record its red output, then change the code.
 ## 2. Verification
 
 - [x] 2.1 Record each red before the change and green after. Run `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code` and `pnpm duplicate-code`.
-- [ ] 2.2 Run one local `pnpm test:stack` on the final head (locale wait passes on real DSH; forgotten evidence line has the new field). Then run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.2 Run one local `pnpm test:stack` on the final head (locale wait passes on real DSH; forgotten evidence line has the new field). Then run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.

@@ -334,7 +334,7 @@ When the cleanup assessment is unconfirmed because one or more submissions remai
 
 ### Requirement: Documentation-only diffs are classified exactly
 
-The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only when the diff is non-empty and every changed path (`git diff --no-renames --name-only`, for both the PR range and the main-push range) is either Markdown outside `plugins/` and `images/`, or exactly the OpenSpec change metadata file `.openspec.yaml` directly inside `openspec/changes/<change>/` or `openspec/changes/archive/YYYY-MM-DD-<change>/`, with the date and name grammar taken from `constraints.yaml` `managed_archive_pattern`. Any other path, any path under `plugins/` or `images/`, an empty diff, an unreadable range and an unreadable classifier configuration MUST keep the evidence requirement or fail the job; none of them may produce a documentation-only verdict. Path-derived text the job prints MUST NOT be interpretable as a workflow command, so a crafted file name cannot set the job's outputs.
+The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only when the diff is non-empty and every changed path (`git diff -z --no-renames --name-only`, NUL-delimited and byte-exact, for both the PR range and the main-push range) is either Markdown outside `plugins/` and `images/`, or exactly the OpenSpec change metadata file `.openspec.yaml` directly inside `openspec/changes/<change>/` or `openspec/changes/archive/YYYY-MM-DD-<change>/`, with the date and name grammar taken from `constraints.yaml` `managed_archive_pattern`. Any other path, any path under `plugins/` or `images/`, an empty diff, an unreadable range and an unreadable classifier configuration MUST keep the evidence requirement or fail the job; none of them may produce a documentation-only verdict. Path-derived text the job prints MUST NOT be interpretable as a workflow command, so a crafted file name cannot set the job's outputs.
 
 #### Scenario: OpenSpec archive with change metadata is documentation-only
 
@@ -355,6 +355,16 @@ The docker-evidence CI job MUST exempt a diff from trusted Docker evidence only 
 
 - **WHEN** a diff that contains code also adds a file named `##[set-output name=docs_only;]true`
 - **THEN** the job prints the offending path only inside a stop-commands block with an unpredictable token, the documentation-only output stays unset, and the job requires trusted Docker evidence
+
+#### Scenario: A non-ASCII Markdown path
+
+- **WHEN** a diff changes only `docs/笔记.md`
+- **THEN** the job reports a documentation-only change
+
+#### Scenario: Paths are never joined
+
+- **WHEN** a diff changes `docs/a.md`, `platform/x.ts` and `z.md`
+- **THEN** the classifier names `platform/x.ts` and the job requires trusted Docker evidence
 
 ### Requirement: A rejected observer reservation leaves submission pending markers unchanged
 
@@ -388,7 +398,7 @@ While the owner is frozen, cleanup SHALL bind the identity of the command the ow
 
 Cleanup SHALL then retire the owner, and SHALL retire the command's group after the owner. It SHALL NOT leave the owner stopped, except when the owner's identity can no longer be confirmed after its retirement failed. In that case it SHALL NOT signal the unconfirmed pid, and SHALL report the retirement failure.
 
-Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence.
+Cleanup SHALL report the command it bound, or that no command was started. In-flight, ambiguous or failed identification, and an owner already gone with no command receipt, SHALL keep the authority and SHALL NOT be reported as absence. The one exception is an owner already gone whose validated `result.json` records a settled command: cleanup SHALL claim it as a finished command, report `command finished`, and hand back the authority.
 
 #### Scenario: Owner killed after starting its command but before publishing it
 
@@ -403,7 +413,7 @@ Cleanup SHALL report the command it bound, or that no command was started. In-fl
 
 #### Scenario: Identification is uncertain
 
-- **WHEN** a child of the owner is still in flight, a child is ambiguous, the scan fails, or the owner is gone before it is frozen and no receipt exists
+- **WHEN** a child of the owner is still in flight, a child is ambiguous, the scan fails, or the owner is gone before it is frozen and neither a command receipt nor a valid settled `result.json` exists
 - **THEN** cleanup keeps the authority, still kills an identity-bound owner, and does not report the command group absent
 
 ### Requirement: custody fixture 把僵尸进程组的 EPERM 当作正在退出
@@ -454,7 +464,9 @@ The custody fixture SHALL record a captured start's authority only after its com
 - settle the bound command's group;
 - report the command pid or that no command started.
 
-A captured start that ends with `result.json` and no command SHALL keep its current handling.
+A captured start whose identity wait itself ends on `result.json` with no command SHALL keep its current handling.
+
+When the owner has exited without a `child.json` receipt, its `result.json` — validated against this invocation's id and manifest digest — records a settled command (`command.settled` true) and cleanup reaches that check only after confirming the owner gone and finding no command receipt, cleanup SHALL claim the invocation as a finished command: it SHALL hand back the authority, report `command finished`, delete the invocation's temporary root, and add no "authority retained" failure. A `result.json` that is missing, unreadable, invalid, or records an unsettled command SHALL keep the authority retained exactly as before.
 
 #### Scenario: The owner started a command but never published it
 
@@ -465,3 +477,32 @@ A captured start that ends with `result.json` and no command SHALL keep its curr
 
 - **WHEN** the owner writes `child.json` after the identity wait expired and before cleanup
 - **THEN** cleanup settles the command's group from that receipt and reports its pid
+
+#### Scenario: The owner finished after the identity wait expired
+
+- **WHEN** a captured start's identity wait expires and the owner then writes a valid `result.json` with a settled command and exits without `child.json`
+- **THEN** cleanup reports `command finished`, hands back the authority and deletes the invocation's temporary root
+- **AND** the case reports only its own failure
+
+#### Scenario: An unsettled or invalid result keeps the authority
+
+- **WHEN** the owner exits without `child.json` and its `result.json` records an unsettled command, or does not validate for this invocation
+- **THEN** the authority stays retained with the report `command unidentified (owner gone without receipt)`
+
+### Requirement: Custody verification fixtures stay within the file size gate by responsibility
+
+The trusted custody fixture and its integration cases SHALL be organised so that each file stays within the repository's file size gate with headroom. Generic case-deadline utilities, process-custody accounting and deadline cases SHALL each have exactly one home. Splitting SHALL NOT drop, rename or alter any verification case.
+
+#### Scenario: Split keeps every case
+
+- **WHEN** the custody fixture and custody cases are split by responsibility
+- **THEN** the integration suite lists the same case titles as before, and every file passes the size gate with headroom
+
+### Requirement: Owner group signal rechecks the command's exit immediately before signalling
+
+When trusted custody signals its captured command group, it SHALL re-read the command's exit and signal state synchronously after the last identity check and immediately before sending the signal, with no asynchronous step in between. If the command has already ended, it SHALL NOT signal the group and SHALL report that no signal was sent.
+
+#### Scenario: Command ends during the final identity check
+
+- **WHEN** the captured command exits while the owner's final identity check is still pending
+- **THEN** the owner sends no group signal and reports that it did not signal

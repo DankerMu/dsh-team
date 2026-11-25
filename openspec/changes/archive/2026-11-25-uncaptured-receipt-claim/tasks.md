@@ -29,4 +29,4 @@ Write each case first and record its red output.
 ## 2. Verification
 
 - [x] 2.1 Record each red before the change and green after. Run the touched files, then `pnpm test:integration`, `pnpm lint`, `pnpm typecheck`, `pnpm dead-code` and `pnpm duplicate-code`.
-- [ ] 2.2 Name-list leak diff (design.md § Leak measurement) around one green full `pnpm test:integration` on the final head, with nothing else running. Report the diff on #718. If it is non-empty, the PR uses `Refs` and a follow-up issue is filed. Run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
+- [x] 2.2 Name-list leak diff (design.md § Leak measurement) around one green full `pnpm test:integration` on the final head, with nothing else running. Report the diff on #718. If it is non-empty, the PR uses `Refs` and a follow-up issue is filed. Run the exact-head trusted VPS `pnpm test:docker` and `pnpm test:deploy`.
