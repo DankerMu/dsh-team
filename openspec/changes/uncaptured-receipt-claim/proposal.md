@@ -47,6 +47,9 @@ Evidence floor: stub rows (settled, unsettled, wrong digest, wrong invocation, u
 ### Modified Capabilities
 
 - `trusted-docker-verification`: an owner that is already gone, whose validated `result.json` records a settled command, is claimed as a finished command. Both uncaptured-cleanup requirements are amended consistently.
+  - Two existing SHALL wordings are rewritten, because the new exception would otherwise contradict them:
+    - In "Identification is uncertain", the WHEN clause "no receipt exists" becomes "neither a command receipt nor a valid settled `result.json` exists".
+    - The sentence "A captured start that ends with `result.json` and no command SHALL keep its current handling" is narrowed to a start "whose identity wait itself ends on `result.json`".
 
 ## Impact
 
